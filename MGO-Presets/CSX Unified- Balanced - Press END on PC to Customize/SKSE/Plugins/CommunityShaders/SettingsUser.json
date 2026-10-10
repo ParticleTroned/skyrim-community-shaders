@@ -79,8 +79,8 @@
       "maximumVersionExclusive": "3.21"
     },
     "settingsContract": {
-      "revision": 9,
-      "sourceTreeSha256": "0561CCEEE3B3EA546A29A78CF6B5D626D97560F698C6F4F9B032DE0DA15AFED4"
+      "revision": 10,
+      "sourceTreeSha256": "F8BA78FC07325DBFFD40FABAD1FBDD097626826B00AACA34FAC4028A24E19A9D"
     }
   },
   "Upscaling": {
@@ -178,88 +178,6 @@
     }
   },
   "CS Editor": null,
-  "CS Utility": {
-    "enabled": false,
-    "fixUnderwaterFogDofBlur": false,
-    "sceneDof": {
-      "baseline": {
-        "autoFocus": false,
-        "autoFocusSettings": {
-          "blurMultiplier": 1.0,
-          "farBlur": 0.0,
-          "farDistance": 0.0,
-          "farRange": 0.0,
-          "nearBlur": 0.0,
-          "nearDistance": 0.0,
-          "nearRange": 0.0
-        },
-        "blurRadius": 2,
-        "distance": 0.0,
-        "excludeSky": false,
-        "mode": 2,
-        "range": 0.0,
-        "strength": 0.0
-      },
-      "locked": false,
-      "values": {
-        "autoFocus": false,
-        "autoFocusSettings": {
-          "blurMultiplier": 1.0,
-          "farBlur": 0.0,
-          "farDistance": 0.0,
-          "farRange": 0.0,
-          "nearBlur": 0.0,
-          "nearDistance": 0.0,
-          "nearRange": 0.0
-        },
-        "blurRadius": 2,
-        "distance": 0.0,
-        "excludeSky": false,
-        "mode": 2,
-        "range": 0.0,
-        "strength": 0.0
-      }
-    },
-    "underwaterDof": {
-      "baseline": {
-        "autoFocus": false,
-        "autoFocusSettings": {
-          "blurMultiplier": 1.0,
-          "farBlur": 0.0,
-          "farDistance": 0.0,
-          "farRange": 0.0,
-          "nearBlur": 0.0,
-          "nearDistance": 0.0,
-          "nearRange": 0.0
-        },
-        "blurRadius": 2,
-        "distance": 0.0,
-        "excludeSky": false,
-        "mode": 2,
-        "range": 0.0,
-        "strength": 0.0
-      },
-      "locked": false,
-      "values": {
-        "autoFocus": false,
-        "autoFocusSettings": {
-          "blurMultiplier": 1.0,
-          "farBlur": 0.0,
-          "farDistance": 0.0,
-          "farRange": 0.0,
-          "nearBlur": 0.0,
-          "nearDistance": 0.0,
-          "nearRange": 0.0
-        },
-        "blurRadius": 2,
-        "distance": 0.0,
-        "excludeSky": false,
-        "mode": 2,
-        "range": 0.0,
-        "strength": 0.0
-      }
-    }
-  },
   "Performance Overlay": {
     "BackgroundOpacity": 0.5,
     "FrameHistorySize": 600,
@@ -517,6 +435,89 @@
     "SubsurfaceScatteringAmount": 1.0
   },
   "Adaptive Balance": {
+    "godrayFinalBrightness": 1.0,
+    "depthOfField": {
+      "enabled": false,
+      "fixUnderwaterFogDofBlur": false,
+      "sceneDof": {
+        "baseline": {
+          "autoFocus": false,
+          "autoFocusSettings": {
+            "blurMultiplier": 1.0,
+            "farBlur": 0.0,
+            "farDistance": 0.0,
+            "farRange": 0.0,
+            "nearBlur": 0.0,
+            "nearDistance": 0.0,
+            "nearRange": 0.0
+          },
+          "blurRadius": 2,
+          "distance": 0.0,
+          "excludeSky": false,
+          "mode": 2,
+          "range": 0.0,
+          "strength": 0.0
+        },
+        "locked": false,
+        "values": {
+          "autoFocus": false,
+          "autoFocusSettings": {
+            "blurMultiplier": 1.0,
+            "farBlur": 0.0,
+            "farDistance": 0.0,
+            "farRange": 0.0,
+            "nearBlur": 0.0,
+            "nearDistance": 0.0,
+            "nearRange": 0.0
+          },
+          "blurRadius": 2,
+          "distance": 0.0,
+          "excludeSky": false,
+          "mode": 2,
+          "range": 0.0,
+          "strength": 0.0
+        }
+      },
+      "underwaterDof": {
+        "baseline": {
+          "autoFocus": false,
+          "autoFocusSettings": {
+            "blurMultiplier": 1.0,
+            "farBlur": 0.0,
+            "farDistance": 0.0,
+            "farRange": 0.0,
+            "nearBlur": 0.0,
+            "nearDistance": 0.0,
+            "nearRange": 0.0
+          },
+          "blurRadius": 2,
+          "distance": 0.0,
+          "excludeSky": false,
+          "mode": 2,
+          "range": 0.0,
+          "strength": 0.0
+        },
+        "locked": false,
+        "values": {
+          "autoFocus": false,
+          "autoFocusSettings": {
+            "blurMultiplier": 1.0,
+            "farBlur": 0.0,
+            "farDistance": 0.0,
+            "farRange": 0.0,
+            "nearBlur": 0.0,
+            "nearDistance": 0.0,
+            "nearRange": 0.0
+          },
+          "blurRadius": 2,
+          "distance": 0.0,
+          "excludeSky": false,
+          "mode": 2,
+          "range": 0.0,
+          "strength": 0.0
+        }
+      }
+    },
     "useAmbientEffectLighting": false,
     "dayStartHour": 6.0,
     "enabled": true,

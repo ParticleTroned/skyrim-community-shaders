@@ -1,7 +1,7 @@
 #include "UnderwaterDepthOfField.h"
 
+#include "AdaptiveBalanceDepthOfField.h"
 #include "Buffer.h"
-#include "CSUtility.h"
 #include "Deferred.h"
 #include "Globals.h"
 #include "GpuPass.h"
@@ -82,8 +82,7 @@ namespace
 
 	bool IsCorrectionEnabled()
 	{
-		const auto& csUtility = globals::features::csUtility;
-		return csUtility.IsRuntimeEnabled() && csUtility.settings.fixUnderwaterFogDofBlur;
+		return AdaptiveBalanceDepthOfField::IsCorrectionEnabled();
 	}
 
 	constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 4> kDepthOfFieldInputTargets{

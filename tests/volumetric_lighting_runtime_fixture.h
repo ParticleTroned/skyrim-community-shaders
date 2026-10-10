@@ -38,6 +38,8 @@ namespace Runtime
 			Appearance appearance;
 		} effective;
 		bool enabled = true;
+		float finalBrightness = 1.0f;
+		float GetEffectiveGodrayFinalBrightness() const { return enabled ? finalBrightness : 1.0f; }
 		EffectiveSettings GetEffectiveSharedLightingSettings() const { return enabled ? effective : EffectiveSettings{}; }
 	};
 

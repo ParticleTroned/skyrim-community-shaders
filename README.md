@@ -23,6 +23,20 @@ includes both standard and Horizon Fix Water variants. Optional integrations
 still require their companion plugins. GitHub's source archives are for
 development, not installation.
 
+Depth of field controls are under **Adaptive Balance > Global > Depth of field**.
+Scene and underwater overrides are global and default to off. Underwater fog
+blur correction has its own toggle; Adaptive Balance's Enabled control gates
+both. Existing CS Utility settings migrate with their saved values, and
+supported legacy CSUtility/OSUtility settings access redirects to Adaptive
+Balance. See [utility compatibility](API.md#legacy-utility-settings)
+for the supported settings and remaining Open Shaders differences.
+
+**Adaptive Balance > Global > Lighting** also includes **Final godray
+brightness**, a global multiplier from 0 to 5 with a neutral default of 1.
+It scales the completed godray colour after gamma conversion and remains
+separate from profile godray intensity. Legacy `vlIntensity` settings map
+to this control; Adaptive Balance's Enabled switch gates both.
+
 ## Requirements
 
 -   Any terminal of your choice (e.g., PowerShell)

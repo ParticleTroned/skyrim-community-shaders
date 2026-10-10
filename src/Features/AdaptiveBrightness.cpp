@@ -6,6 +6,7 @@
 #include "LocationContext.h"
 #include "SettingsMigrations.h"
 #include "State.h"
+#include "UnderwaterDepthOfField.h"
 #include "Utils/D3D.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Finite.h"
@@ -103,10 +104,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::Settings,
 	enabled,
 	useAmbientEffectLighting,
+	godrayFinalBrightness,
 	dayStartHour,
 	nightStartHour,
 	transitionHours,
 	globalProfile,
+	depthOfField,
 	profiles,
 	locationOverrides)
 
@@ -796,6 +799,8 @@ namespace
 
 	void NormalizeBaseSettings(AdaptiveBrightness::Settings& a_settings)
 	{
+		a_settings.godrayFinalBrightness = AdaptiveBalanceGodray::SanitizeFinalBrightness(a_settings.godrayFinalBrightness);
+		AdaptiveBalanceDepthOfField::SanitizeSettings(a_settings.depthOfField);
 		ClampProfileSettings(a_settings.globalProfile);
 		a_settings.globalProfile.waterWind.overrideEnabled = true;
 		NormalizeExteriorTimeSettings(a_settings);
@@ -1264,7 +1269,9 @@ namespace
 	{
 		return {
 			{ "useAmbientEffectLighting", a_settings.useAmbientEffectLighting },
+			{ "godrayFinalBrightness", a_settings.godrayFinalBrightness },
 			{ "globalProfile", a_settings.globalProfile },
+			{ "depthOfField", a_settings.depthOfField },
 			{ "dayStartHour", a_settings.dayStartHour },
 			{ "nightStartHour", a_settings.nightStartHour },
 			{ "transitionHours", a_settings.transitionHours },
@@ -1395,7 +1402,11 @@ namespace
 			if (const auto it = migratedPreset.find("globalProfile"); it != migratedPreset.end() && it->is_object())
 				importedSettings.globalProfile = it->get<AdaptiveBrightness::ProfileSettings>();
 
+			if (const auto it = migratedPreset.find("depthOfField"); it != migratedPreset.end())
+				importedSettings.depthOfField = it->get<AdaptiveBalanceDepthOfField::Settings>();
+
 			importedSettings.useAmbientEffectLighting = GetOptionalBool(migratedPreset, "useAmbientEffectLighting", false);
+			importedSettings.godrayFinalBrightness = GetOptionalFloat(migratedPreset, "godrayFinalBrightness", AdaptiveBalanceGodray::kDefault);
 			importedSettings.dayStartHour = GetOptionalFloat(migratedPreset, "dayStartHour", importedSettings.dayStartHour);
 			importedSettings.nightStartHour = GetOptionalFloat(migratedPreset, "nightStartHour", importedSettings.nightStartHour);
 			importedSettings.transitionHours = GetOptionalFloat(migratedPreset, "transitionHours", importedSettings.transitionHours);
@@ -1606,7 +1617,7 @@ void AdaptiveBrightness::DrawSettingsHeaderControls()
 void AdaptiveBrightness::DrawSettings()
 {
 	MenuUI::SettingsPage page("AdaptiveBrightness", {
-														{ "global", "Global", "Start with shared lighting, colour, bloom and water.", "Shared lighting, colour, bloom and water", true, true, "Build the shared look" },
+														{ "global", "Global", "Start with shared lighting, colour, bloom, water and depth of field.", "Shared appearance and depth of field", true, true, "Build the shared look" },
 														{ "profiles", "Profiles", "Refine the shared look for time and location types.", "Time and location profiles", true, true, nullptr },
 														{ "locations", "Locations", "Add precise changes for individual places.", "Exact places and cells", true, true, "Refine local changes" },
 														{ "presets", "Presets", "Save or load complete appearances and location collections.", "Complete looks and collections", true, true, nullptr },
@@ -1694,9 +1705,9 @@ void AdaptiveBrightness::DrawProfileControls(
 	const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
 	auto* storage = ImGui::GetStateStorage();
 	const auto selectionId = ImGui::GetID("AdjustmentGroup");
-	int selected = std::clamp(storage->GetInt(selectionId), 0, 3);
-	constexpr const char* groups[] = { "Lighting", "Colour", "Bloom", "Water" };
-	if (MenuUI::ChoiceSetting("Adjust", &selected, groups, IM_ARRAYSIZE(groups)))
+	int selected = std::clamp(storage->GetInt(selectionId), 0, a_globalLayer ? 4 : 3);
+	constexpr const char* groups[] = { "Lighting", "Colour", "Bloom", "Water", "Depth of field" };
+	if (MenuUI::ChoiceSetting("Adjust", &selected, groups, a_globalLayer ? 5 : 4))
 		storage->SetInt(selectionId, selected);
 	const auto disabled = Util::DisableGuard(!a_allowEdits);
 	switch (selected) {
@@ -1711,6 +1722,9 @@ void AdaptiveBrightness::DrawProfileControls(
 		break;
 	case 3:
 		DrawWaterSettings(a_profile, a_showAdvancedControls, a_globalLayer);
+		break;
+	case 4:
+		AdaptiveBalanceDepthOfField::DrawSettings();
 		break;
 	}
 }
@@ -1738,7 +1752,9 @@ json AdaptiveBrightness::CapturePerformanceSettingsState() const
 	return {
 		{ "enabled", settings.enabled },
 		{ "useAmbientEffectLighting", settings.useAmbientEffectLighting },
-		{ "globalProfile", settings.globalProfile }
+		{ "godrayFinalBrightness", settings.godrayFinalBrightness },
+		{ "globalProfile", settings.globalProfile },
+		{ "depthOfField", settings.depthOfField }
 	};
 }
 
@@ -2123,6 +2139,10 @@ void AdaptiveBrightness::DrawLightingSettings(
 		ImGui::Text("Master lighting adjustment for this %s layer.", a_globalLayer ? "global" : "profile");
 
 	if (a_globalLayer) {
+		Util::Widgets::SliderFloat("Final Godray Brightness", &settings.godrayFinalBrightness,
+			AdaptiveBalanceGodray::kMin, AdaptiveBalanceGodray::kMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextWrapped("Scale final godray brightness after colour correction. One is neutral; zero hides godrays while retaining lens flare. This global control is independent of detailed lighting.");
 		Util::Widgets::Checkbox("Ambient Lighting for Effects and Sky Statics", &settings.useAmbientEffectLighting);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("Replaces weather lighting on effect meshes and sky statics with ambient light, including IBL when enabled, and shadowed directional light. Effect and Sky Static Brightness still apply. This global switch is independent of detailed lighting controls.");
@@ -2307,7 +2327,7 @@ void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool 
 void AdaptiveBrightness::DrawGlobalPresetControls()
 {
 	ImGui::SeparatorText("Global Presets");
-	DrawHintText("Global presets store the shared Lighting, Color, Bloom, Water, and wind adjustment layer, the five profiles, and exterior timing.");
+	DrawHintText("Global presets store the shared Lighting, Color, Bloom, Water and wind layer, global depth of field, five profiles and exterior timing.");
 	DrawHintText("Import overwrites those profiles in the current settings. Saved location overrides are not changed.");
 	ImGui::PushID("GlobalPresetControls");
 
@@ -2333,7 +2353,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ExportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export the global adjustment layer, exterior timing, and the five Lighting, Color, Bloom, and Water profiles. Location overrides are not included.");
+		ImGui::Text("Export the global layer, global depth of field, exterior timing and five Lighting, Color, Bloom and Water profiles. Excludes location overrides.");
 	}
 
 	if (keepControlsOnOneLine || keepButtonsOnOneLine)
@@ -2342,7 +2362,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ImportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace the global adjustment layer, exterior timing, and the five Lighting, Color, Bloom, and Water profiles. Saved location overrides stay unchanged.");
+		ImGui::Text("Replace the global layer, global depth of field, exterior timing and five Lighting, Color, Bloom and Water profiles. Keeps location overrides.");
 	}
 
 	if (!globalPresetStatus.empty())
@@ -2431,8 +2451,8 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 		DrawLocationOverridePresetControls();
 	ImGui::SeparatorText("Saved Overrides");
 	DrawHintText(a_allowEdits ?
-					 "These saved overrides are matched by worldspace, regional location, city, specific location, or cell. Click a row to edit it." :
-					 "These saved overrides are matched by worldspace, regional location, city, specific location, or cell. Click a row to review it.");
+					 "Overrides match worldspace, region, city, specific location or cell. Select a row to edit it." :
+					 "Overrides match worldspace, region, city, specific location or cell. Select a row to review it.");
 
 	if (settings.locationOverrides.empty()) {
 		ClearLocationOverrideSelection();
@@ -3042,6 +3062,11 @@ void AdaptiveBrightness::SetEnabled(bool a_enabled)
 bool AdaptiveBrightness::IsRuntimeEnabled() const
 {
 	return settings.enabled && performanceCostMeasurementEnabled && IsRuntimeAvailable();
+}
+
+float AdaptiveBrightness::GetEffectiveGodrayFinalBrightness() const
+{
+	return IsRuntimeEnabled() ? AdaptiveBalanceGodray::SanitizeFinalBrightness(settings.godrayFinalBrightness) : AdaptiveBalanceGodray::kDefault;
 }
 
 AdaptiveBrightness::Profile AdaptiveBrightness::GetInteriorProfile() const
@@ -4092,4 +4117,10 @@ struct AdaptiveBrightness::Hooks
 void AdaptiveBrightness::PostPostLoad()
 {
 	Hooks::Install();
+	AdaptiveBalanceDepthOfField::InstallHooks();
+}
+
+void AdaptiveBrightness::DataLoaded()
+{
+	UnderwaterDepthOfField::InstallHooks();
 }

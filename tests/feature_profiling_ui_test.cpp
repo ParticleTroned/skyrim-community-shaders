@@ -260,7 +260,8 @@ int main()
 
 		Draw("ImageBasedLighting", 1);
 		Check(Draw("ImageBasedLighting", 1).contains("EnvDiffuseIBL"), "IBL page does not display its mapped timer");
-		Check(Draw("CSUtility", 1).contains("InputFog"), "CS Utility does not display underwater DOF timing");
+		const auto adaptiveBalance = Draw("AdaptiveBrightness", 1);
+		Check(adaptiveBalance.contains("InputFog") && adaptiveBalance.contains("DOF correction only"), "Adaptive Balance does not label its underwater DOF timing scope");
 		const auto gpuWetness = Draw("Wetterness", 1);
 		Check(gpuWetness.contains("Shared GPU pass timings") && gpuWetness.contains("SharedScene::World") && !gpuWetness.contains("Instrumented subtotal") && !gpuWetness.contains("UpdateWeatherState"), "wetness shared GPU passes were presented as owned cost");
 		const auto cpuWetness = Draw("Wetterness", 2);
@@ -325,8 +326,8 @@ int main()
 		globals::source.initialized = false;
 		const auto unavailableRequests = globals::source.requests;
 		Check(Draw("Wetterness", 1).contains("Profiler is unavailable"), "uninitialized profiler requested capture");
-		Check(!ProfilingRenderer::HasFeatureTimers("CSUtility"), "uninitialized profiler exposed retained samples");
-		Check(ProfilingRenderer::CollectFeatureTimingData(std::string("CSUtility"), false).entries.empty(), "uninitialized profiler returned stale samples");
+		Check(!ProfilingRenderer::HasFeatureTimers("AdaptiveBrightness"), "uninitialized profiler exposed retained samples");
+		Check(ProfilingRenderer::CollectFeatureTimingData(std::string("AdaptiveBrightness"), false).entries.empty(), "uninitialized profiler returned stale samples");
 		globals::profiler = nullptr;
 		Check(Draw("ImageBasedLighting", 1).contains("Profiler is unavailable"), "missing profiler crashed a registered view");
 		Check(Draw("ImageBasedLighting", -1).contains("Profiler is unavailable"), "missing profiler crashed the integrated summary");

@@ -752,7 +752,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
             root = Path(temporary)
             features_dir = root / "stage" / "Features"
             features_dir.mkdir(parents=True)
-            for feature_name in ("CSUtility", "HorizonFix"):
+            for feature_name in ("AdaptiveBrightness", "HorizonFix"):
                 (features_dir / f"{feature_name}.ini").write_text(
                     "[Info]\nVersion = 1-2-3\n",
                     encoding="utf-8",
@@ -773,7 +773,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 )
                 states = BUILDER.read_feature_states(cache_dir)
                 self.assertIs(states["HorizonFix"], enabled)
-                self.assertTrue(states["CSUtility"])
+                self.assertTrue(states["AdaptiveBrightness"])
                 info = configparser.ConfigParser(interpolation=None)
                 info.read(cache_dir / BUILDER.INFO_FILE_NAME, encoding="utf-8-sig")
                 self.assertFalse(info.has_option("HorizonFix", "ShaderCacheABI"))
@@ -878,7 +878,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
             cache_dir.mkdir()
             features_dir.mkdir(parents=True)
             feature_names = sorted(
-                BUILDER.PATKA_DISABLED_FEATURES | {"CSUtility"}
+                BUILDER.PATKA_DISABLED_FEATURES | {"AdaptiveBrightness"}
             )
             for feature_name in feature_names:
                 (features_dir / f"{feature_name}.ini").write_text(
@@ -903,7 +903,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 config.read_file(stream)
 
             self.assertEqual(config.get("Cache", "PluginVersion"), "CSX 12.345-VR")
-            self.assertTrue(config.getboolean("CSUtility", "Enabled"))
+            self.assertTrue(config.getboolean("AdaptiveBrightness", "Enabled"))
             for feature_name in BUILDER.PATKA_DISABLED_FEATURES:
                 with self.subTest(feature=feature_name):
                     self.assertFalse(config.getboolean(feature_name, "Enabled"))
@@ -945,7 +945,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
             features_dir = root / "stage" / "Features"
             cache_dir.mkdir()
             features_dir.mkdir(parents=True)
-            (features_dir / "CSUtility.ini").write_text(
+            (features_dir / "AdaptiveBrightness.ini").write_text(
                 "[Info]\nVersion = 1-2-3\n",
                 encoding="utf-8",
             )

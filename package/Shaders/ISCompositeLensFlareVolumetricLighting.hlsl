@@ -40,7 +40,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float volumetricLightingPower = VolumetricLighting::ApplyOpacity(VLSourceTex.Sample(VLSourceSampler, screenPosition).x, SharedData::VolumetricLightingOpacity);
 	float3 godrayColor = VolumetricLighting::ApplyColor(VolumetricLightingColor.xyz,
 		SharedData::VolumetricLightingSaturation, SharedData::VolumetricLightingCustomColor);
-	color += godrayColor * Color::VolumetricLighting(volumetricLightingPower.xxx).x;
+	color += godrayColor * Color::VolumetricLighting(volumetricLightingPower.xxx).x * SharedData::GodrayFinalBrightness;
 #	endif
 
 #	if defined(LENS_FLARE)

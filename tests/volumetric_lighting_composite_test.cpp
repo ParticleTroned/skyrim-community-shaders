@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include "Features/AdaptiveBalanceGodraySettings.h"
 #include "Features/VolumetricLightingTuning.h"
 #include "Utils/ShaderInclude.h"
 #include "adaptive_balance_test_settings.h"
@@ -128,6 +129,7 @@ namespace
 				Require(shared->bytes.size() == sizeof(SharedDataCB), "SharedDataCB size mismatch");
 				Require(shared->Offset("SharedData::VolumetricLightingSaturation") == offsetof(SharedDataCB, VolumetricLightingSaturation), "Saturation offset mismatch");
 				Require(shared->Offset("SharedData::VolumetricLightingOpacity") == offsetof(SharedDataCB, VolumetricLightingOpacity), "Opacity offset mismatch");
+				Require(shared->Offset("SharedData::GodrayFinalBrightness") == offsetof(SharedDataCB, GodrayFinalBrightness), "Final brightness offset mismatch");
 				Require(shared->Offset("SharedData::VolumetricLightingCustomColor") == offsetof(SharedDataCB, VolumetricLightingCustomColor), "Custom color offset mismatch");
 				geometry = std::make_unique<Buffer>(device, reflection.Get(), "PerGeometry");
 				frame = std::make_unique<Buffer>(device, reflection.Get(), "FrameBuffer::PerFrame");
@@ -136,20 +138,21 @@ namespace
 			}
 		}
 
-		float4 Draw(float4 authored, float saturation = 1, float4 custom = {}, float opacity = 1, bool linear = false)
+		float4 Draw(float4 authored, float saturation = 1, float4 custom = {}, float opacity = 1, bool linear = false, float finalBrightness = 1, float gamma = 1)
 		{
 			SharedDataCB data{};
+			data.GodrayFinalBrightness = finalBrightness;
 			data.VolumetricLightingSaturation = saturation;
 			data.VolumetricLightingOpacity = opacity;
 			data.VolumetricLightingCustomColor = custom;
-			return Draw(authored, data, linear);
+			return Draw(authored, data, linear, gamma);
 		}
 
-		float4 Draw(float4 authored, const SharedDataCB& data, bool linear = false)
+		float4 Draw(float4 authored, const SharedDataCB& data, bool linear = false, float gamma = 1)
 		{
 			context->ClearState();
 			feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", uint(linear));
-			feature->SetMember("SharedData::linearLightingSettings", "vlGamma", 1.0f);
+			feature->SetMember("SharedData::linearLightingSettings", "vlGamma", gamma);
 			feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", AdaptiveBalanceTest::NeutralAppearance());
 			feature->Bind(context, D3D11ShaderTest::Stage::Pixel);
 			if (volumetric) {
@@ -199,7 +202,9 @@ namespace
 		const float4 lens = fixture.lensFlare ? Fixture::flarePixels[0] : float4{};
 		const auto addLens = [&](float4 color) { return float4{ color.x + lens.x, color.y + lens.y, color.z + lens.z, 0 }; };
 		if (!fixture.volumetric) {
-			Expect(fixture.Draw(authored, 0, { 0, 1, 0, 1 }, 0), lens, "Godray tuning affected lens flare");
+			for (float brightness : { 0.0f, 0.5f, 1.0f, 2.0f, 5.0f }) {
+				Expect(fixture.Draw(authored, 0, { 0, 1, 0, 1 }, 0, false, brightness), lens, "Godray tuning affected lens flare");
+			}
 			return;
 		}
 		Expect(fixture.Draw(authored), addLens({ 1, 0.3f, 0.1f, 0 }), "Neutral settings changed weather color");
@@ -234,6 +239,16 @@ namespace
 		const float4 linearLens = fixture.lensFlare ? float4{ std::pow(0.1f, 1.6f), std::pow(0.2f, 1.6f), std::pow(0.3f, 1.6f), 0 } : float4{};
 		Expect(fixture.Draw(authored, 1, { 0, 1, 0, 1 }, 1, true), { linearLens.x, linearLens.y + 0.5f, linearLens.z, 0 }, "Linear lighting lost custom color or changed flare conversion");
 
+		for (bool linear : { false, true }) {
+			for (float brightness : { 0.0f, 0.5f, 1.0f, 2.0f, 5.0f }) {
+				const float power = (linear ? 0.25f : 0.5f) * brightness;
+				const float4 expectedLens = linear ? linearLens : lens;
+				Expect(fixture.Draw(authored, 1, {}, 1, linear, brightness, 2),
+					{ authored.x * power + expectedLens.x, authored.y * power + expectedLens.y, authored.z * power + expectedLens.z, 0 },
+					"Final brightness did not scale after gamma or changed lens flare");
+			}
+		}
+
 		auto& feature = Runtime::globals::features::volumetricLighting;
 		auto& state = Runtime::globals::replacementState;
 		feature.settings = {};
@@ -254,6 +269,14 @@ namespace
 			Expect(fixture.Draw(authored, Runtime::Upload(inWorld)), addLens(expected), message);
 		};
 		const float4 neutral{ 1, 0.3f, 0.1f, 0 };
+		balance.finalBrightness = 2.0f;
+		expectRuntime({ 2, 0.6f, 0.2f, 0 }, "Final brightness did not reach composite");
+		balance.enabled = false;
+		expectRuntime(neutral, "Disabled Adaptive Balance retained final brightness");
+		balance.enabled = true;
+		expectRuntime(neutral, "Final brightness affected a non-world pass", false);
+		balance = {};
+
 		feature.settings.ExteriorGodrays.Saturation = 0;
 		expectRuntime({ grey, grey, grey, 0 }, "Exterior saturation did not reach composite");
 		feature.settings.ExteriorGodrays = { .Opacity = 2, .CustomColorContribution = 1, .CustomColorRed = 0, .CustomColorBlue = 0 };

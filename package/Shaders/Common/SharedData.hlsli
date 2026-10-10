@@ -29,7 +29,7 @@ namespace SharedData
 		float PBRMetalHighlightScale;   // Global scale for direct PBR metal highlights (1.0 = default)
 		uint HasDirectionalShadows;     // Exterior or Interior Sun directional shadow availability
 		float VolumetricLightingSaturation;
-		float PBRMetalReflectionScalePad1;
+		float GodrayFinalBrightness;
 		float SSSHumanMaleIntensity;
 		float SSSHumanMaleSaturation;
 		float SSSHumanMaleBrightness;

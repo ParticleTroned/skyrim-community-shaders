@@ -42,9 +42,10 @@ namespace
 	{
 		using namespace Util::FeatureProfiling;
 		const auto* ibl = Find("ImageBasedLighting");
-		const auto* utility = Find("CSUtility");
+		const auto* balance = Find("AdaptiveBrightness");
 		Check(ibl && Matches("IBL::EnvDiffuseIBL", ibl->ownedRoot) && Matches("IBL::SkyDiffuseIBL", ibl->ownedRoot), "IBL page lost its existing GPU timers");
-		Check(utility && Matches("UnderwaterDepthOfField::InputFog", utility->ownedRoot), "DOF timer is not available on CS Utility");
+		Check(balance && Matches("UnderwaterDepthOfField::InputFog", balance->ownedRoot), "DOF timer is not available on Adaptive Balance");
+		Check(!Find("CSUtility") && balance && std::string_view(balance->OwnedCoverage()).starts_with("DOF correction only"), "DOF ownership and coverage must follow Adaptive Balance");
 		Check(!Find("Screenshot") && !Find("WeatherPicker") && !Find("Unknown"), "unprofiled utilities gained a view");
 		Check(!Matches("IBLExtra::Pass", "IBL") && !Matches("IBL::Pass", "") && Matches("DeferredComposite", "DeferredComposite"), "timer matching crosses namespace boundaries");
 		for (const auto feature : { "Wetterness", "InteriorSun" }) {

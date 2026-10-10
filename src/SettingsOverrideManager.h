@@ -265,12 +265,13 @@ private:
 
 	std::vector<OverrideInfo> overrides;
 	std::unordered_map<std::string, std::vector<size_t>> featureOverrideMap;  // Maps feature name to override indices
-	// Renderer values retained from a legacy CSUtility.user.json remain the
-	// recoverable source until their AdaptiveBrightness destination is durable.
-	json pendingLegacyCSUtilityUserData = json::object();
-	bool legacyCSUtilityUserMigrationPending = false;
-	bool adaptiveBalanceUserMigrationApplied = false;
-	bool adaptiveBalanceUserMigrationPersisted = false;
+	bool DeleteUserOverrideFile(const std::string& featureName);
+	/** Clean unchanged legacy sources after their destination has been persisted. */
+	bool CompleteLegacyUtilityUserMigration();
+	/** Removes supported values while preserving unknown fields and inactive presets. */
+	bool RetireLegacyUtilityUserSource(const std::string& a_name, const json* a_expected = nullptr);
+	std::unordered_map<std::string, json> pendingLegacyUtilityUserSources;
+	json pendingLegacyUtilityUserPatch = json::object();
 	bool enabled = true;
 	bool discovered = false;
 

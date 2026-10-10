@@ -2,7 +2,7 @@
 
 #include "AdaptiveBalanceAppearance.h"
 
-// Composed renderer-light state shared by Adaptive Balance and CS Utility's
+// Composed renderer-light state shared by Adaptive Balance and the
 // shader-buffer plumbing. Adaptive Balance builds it from the global and
 // active time/location adjustment layers.
 struct SharedLightingSettings

@@ -11,6 +11,7 @@
 #include <iomanip>
 #include <regex>
 #include <sstream>
+#include <stdexcept>
 
 using namespace SKSE;
 
@@ -24,6 +25,61 @@ namespace
 		std::ostringstream oss;
 		oss << std::hex << hash;
 		return oss.str();
+	}
+
+	bool IsLegacyUtilityFeature(const std::string& a_name)
+	{
+		return std::ranges::find(SettingsMigrations::kLegacyUtilityFeatureNames, a_name) != SettingsMigrations::kLegacyUtilityFeatureNames.end();
+	}
+
+	Util::FileHelpers::JsonFileReadResult ReadUserSettingsLayer(const std::filesystem::path& a_path, json& a_json, std::string& a_error)
+	{
+		using Result = Util::FileHelpers::JsonFileReadResult;
+		std::error_code error;
+		if (!std::filesystem::exists(a_path, error) && !error)
+			return Result::NotFound;
+		const auto size = std::filesystem::file_size(a_path, error);
+		if (error || size == 0 || size > 1024 * 1024) {
+			a_error = error ? error.message() : "User settings file has an invalid size";
+			return Result::Error;
+		}
+		const auto result = Util::FileHelpers::ReadJsonFile(a_path, a_json, a_error);
+		if (result == Result::Success && !a_json.is_object()) {
+			a_error = "User settings must be an object";
+			return Result::Error;
+		}
+		return result;
+	}
+
+	json CaptureMigratedUserValues(const json& a_current, const json& a_migrated)
+	{
+		json captured = a_migrated;
+		for (auto& [key, value] : captured.items()) {
+			const auto current = a_current.find(key);
+			if (current == a_current.end())
+				continue;
+			value = value.is_object() && current->is_object() ? CaptureMigratedUserValues(*current, value) : *current;
+		}
+		return captured;
+	}
+
+	json CaptureUnprovidedUserValues(const json& a_current, const json& a_saved, const json& a_providers)
+	{
+		json captured = json::object();
+		for (const auto& [key, value] : a_saved.items()) {
+			const auto current = a_current.find(key);
+			if (current == a_current.end())
+				continue;
+			const auto provider = a_providers.find(key);
+			if (provider == a_providers.end()) {
+				captured[key] = value.is_object() && current->is_object() ? CaptureMigratedUserValues(*current, value) : *current;
+			} else if (value.is_object() && current->is_object() && provider->is_object()) {
+				auto child = CaptureUnprovidedUserValues(*current, value, *provider);
+				if (!child.empty())
+					captured[key] = std::move(child);
+			}
+		}
+		return captured;
 	}
 
 	json BuildUserOverride(const json& a_current, const json& a_override)
@@ -64,10 +120,8 @@ size_t SettingsOverrideManager::DiscoverOverrides()
 
 	overrides.clear();
 	featureOverrideMap.clear();
-	pendingLegacyCSUtilityUserData = json::object();
-	legacyCSUtilityUserMigrationPending = false;
-	adaptiveBalanceUserMigrationApplied = false;
-	adaptiveBalanceUserMigrationPersisted = false;
+	pendingLegacyUtilityUserSources.clear();
+	pendingLegacyUtilityUserPatch = json::object();
 
 	auto overridesDir = GetOverridesDirectory();
 
@@ -561,13 +615,13 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 			if (auto adaptiveIt = overrideInfo->overrideData.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
 				adaptiveIt != overrideInfo->overrideData.end())
 				SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
-		} else if (overrideInfo->featureName == SettingsMigrations::kCSUtilityFeatureName) {
+		} else if (IsLegacyUtilityFeature(overrideInfo->featureName)) {
 			auto adaptiveBalancePatch = SettingsMigrations::ExtractAdaptiveBalanceFeaturePatch(overrideInfo->overrideData);
 			if (!adaptiveBalancePatch.empty()) {
 				overrideInfo->routedFeatureData.emplace(
 					std::string(SettingsMigrations::kAdaptiveBalanceFeatureName),
 					std::move(adaptiveBalancePatch));
-				logger::info("Routed legacy CS Utility renderer settings in {} to Adaptive Balance", filePath.string());
+				logger::info("Routed legacy utility settings in {} to Adaptive Balance", filePath.string());
 			}
 		} else if (overrideInfo->featureName == SettingsMigrations::kUnifiedWaterFeatureName) {
 			auto adaptiveBalancePatch = SettingsMigrations::ExtractAdaptiveBalanceWaterFeaturePatch(overrideInfo->overrideData);
@@ -1032,77 +1086,37 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 	}
 
 	const auto readUserLayer = [&](const std::string& a_sourceFeature, json& o_userJson) {
-		const auto userFilePath = GetUserOverridesDirectory() / (a_sourceFeature + ".user.json");
-		std::error_code ec;
-		if (!std::filesystem::exists(userFilePath, ec) || ec)
-			return false;
-
-		try {
-			const auto fileSize = std::filesystem::file_size(userFilePath, ec);
-			if (ec || fileSize == 0 || fileSize > 1024 * 1024) {
-				logger::info("User override file invalid size: {}", userFilePath.string());
-				return false;
-			}
-
-			std::ifstream file(userFilePath);
-			if (!file.is_open())
-				return false;
-
-			file >> o_userJson;
-			if (!o_userJson.is_object()) {
-				logger::info("User override file is not a JSON object: {}", userFilePath.string());
-				return false;
-			}
-			return true;
-		} catch (const std::exception& e) {
-			logger::info("Error loading user override for {}: {}", a_sourceFeature, e.what());
-			return false;
-		}
+		std::string error;
+		const auto result = ReadUserSettingsLayer(GetUserOverridesDirectory() / (a_sourceFeature + ".user.json"), o_userJson, error);
+		if (result == Util::FileHelpers::JsonFileReadResult::Error)
+			logger::warn("Cannot load user settings for {}: {}", a_sourceFeature, error);
+		return result == Util::FileHelpers::JsonFileReadResult::Success;
 	};
-	const auto retainLegacyRendererSource = [&](const json& a_originalSource, const json& a_cleanedSource) {
-		json retainedLegacyData = json::object();
-		for (const auto& [key, value] : a_originalSource.items()) {
-			if (!a_cleanedSource.contains(key))
-				retainedLegacyData[key] = value;
-		}
-		if (const auto enabledIt = a_originalSource.find("enabled");
-			enabledIt != a_originalSource.end() && enabledIt->is_boolean()) {
-			retainedLegacyData["enabled"] = *enabledIt;
-		}
-
-		const bool samePendingMigration = legacyCSUtilityUserMigrationPending &&
-		                                  retainedLegacyData == pendingLegacyCSUtilityUserData;
-		pendingLegacyCSUtilityUserData = std::move(retainedLegacyData);
-		legacyCSUtilityUserMigrationPending = true;
-		if (!samePendingMigration) {
-			adaptiveBalanceUserMigrationApplied = false;
-			adaptiveBalanceUserMigrationPersisted = false;
-		}
-	};
-
 	bool applied = false;
-
-	// Preserve user customizations made against legacy CSUtility renderer
-	// overrides. Apply them before the native destination user layer so an
-	// explicitly saved AdaptiveBrightness.user.json has final precedence.
-	const bool hasRoutedCSUtilityOverride = std::ranges::any_of(overrides, [](const OverrideInfo& a_override) {
-		return a_override.enabled &&
-		       !a_override.isGlobal &&
-		       a_override.featureName == SettingsMigrations::kCSUtilityFeatureName &&
-		       a_override.routedFeatureData.contains(std::string(SettingsMigrations::kAdaptiveBalanceFeatureName));
-	});
-	if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName && hasRoutedCSUtilityOverride) {
-		json legacyCSUtilityUser;
-		if (readUserLayer(std::string(SettingsMigrations::kCSUtilityFeatureName), legacyCSUtilityUser)) {
-			const json originalLegacyCSUtilityUser = legacyCSUtilityUser;
-			auto adaptiveBalancePatch = SettingsMigrations::ExtractAdaptiveBalanceFeaturePatch(legacyCSUtilityUser);
-			if (!adaptiveBalancePatch.empty()) {
-				retainLegacyRendererSource(originalLegacyCSUtilityUser, legacyCSUtilityUser);
-				MergeJson(featureJson, adaptiveBalancePatch);
-				adaptiveBalanceUserMigrationApplied = true;
-				applied = true;
-				logger::info("Loaded legacy CS Utility user renderer settings for Adaptive Balance");
-			}
+	if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
+		// Destination user choices win over both legacy aliases in this layer.
+		for (const auto alias : SettingsMigrations::kLegacyUtilityFeatureNames) {
+			const bool hasProvider = std::ranges::any_of(overrides, [&](const OverrideInfo& a_override) {
+				return !a_override.isGlobal && a_override.featureName == alias;
+			});
+			const bool hasEnabledProvider = std::ranges::any_of(overrides, [&](const OverrideInfo& a_override) {
+				return a_override.enabled && !a_override.isGlobal && a_override.featureName == alias &&
+				       a_override.routedFeatureData.contains(std::string(SettingsMigrations::kAdaptiveBalanceFeatureName));
+			});
+			if (hasProvider && !hasEnabledProvider)
+				continue;
+			json legacyUser;
+			if (!readUserLayer(std::string(alias), legacyUser))
+				continue;
+			const json original = legacyUser;
+			auto patch = SettingsMigrations::ExtractAdaptiveBalanceFeaturePatch(legacyUser);
+			if (patch.empty())
+				continue;
+			pendingLegacyUtilityUserSources[std::string(alias)] = original;
+			MergeJson(pendingLegacyUtilityUserPatch, patch);
+			MergeJson(featureJson, patch);
+			applied = true;
+			logger::info("Loaded legacy {} user settings for Adaptive Balance", alias);
 		}
 	}
 
@@ -1137,13 +1151,8 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 		if (auto adaptiveIt = userJson.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
 			adaptiveIt != userJson.end())
 			SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
-	} else if (featureName == SettingsMigrations::kCSUtilityFeatureName) {
-		// The routed portion was applied while loading AdaptiveBrightness. Keep
-		// only the source feature's enabled/DOF values here. Retain a recoverable
-		// copy even when Adaptive Balance is disabled and never loaded this session.
-		const json originalLegacyCSUtilityUser = userJson;
-		if (!SettingsMigrations::ExtractAdaptiveBalanceFeaturePatch(userJson).empty())
-			retainLegacyRendererSource(originalLegacyCSUtilityUser, userJson);
+	} else if (IsLegacyUtilityFeature(featureName)) {
+		SettingsMigrations::ExtractAdaptiveBalanceFeaturePatch(userJson);
 	} else if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
 		SettingsMigrations::MigrateCloudSettingsLayer(userJson);
 		SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(userJson);
@@ -1162,39 +1171,35 @@ bool SettingsOverrideManager::SaveUserOverride(const std::string& featureName, c
 
 	json userOverride = BuildUserOverride(currentSettings, overrideSettings);
 	const bool isAdaptiveBalance = featureName == SettingsMigrations::kAdaptiveBalanceFeatureName;
-	const bool isCSUtility = featureName == SettingsMigrations::kCSUtilityFeatureName;
-
-	if (isCSUtility && legacyCSUtilityUserMigrationPending && !adaptiveBalanceUserMigrationPersisted) {
-		// Keep the old renderer values recoverable until the destination write has
-		// succeeded. Current source-feature values win for shared keys such as
-		// enabled, so a new DOF edit is not overwritten by the retained snapshot.
-		for (const auto& [key, value] : pendingLegacyCSUtilityUserData.items()) {
-			if (!userOverride.contains(key))
-				userOverride[key] = value;
+	if (isAdaptiveBalance) {
+		const auto path = GetUserOverridesDirectory() / (featureName + ".user.json");
+		try {
+			if (std::filesystem::exists(path)) {
+				if (std::filesystem::file_size(path) > 1024 * 1024)
+					throw std::runtime_error("Saved user settings exceed the size limit");
+				json saved;
+				std::ifstream input(path);
+				input >> saved;
+				if (!saved.is_object())
+					throw std::runtime_error("Saved user settings must be an object");
+				MergeJson(userOverride, CaptureUnprovidedUserValues(currentSettings, saved, overrideSettings));
+			}
+		} catch (const std::exception& error) {
+			logger::warn("Cannot preserve existing Adaptive Balance user settings {}: {}", path.string(), error.what());
+			return false;
 		}
 	}
-
-	const auto markDestinationPersisted = [&]() {
-		if (isAdaptiveBalance && legacyCSUtilityUserMigrationPending && adaptiveBalanceUserMigrationApplied)
-			adaptiveBalanceUserMigrationPersisted = true;
-	};
-	const auto markSourceCleaned = [&]() {
-		if (isCSUtility && legacyCSUtilityUserMigrationPending && adaptiveBalanceUserMigrationPersisted) {
-			pendingLegacyCSUtilityUserData = json::object();
-			legacyCSUtilityUserMigrationPending = false;
-			adaptiveBalanceUserMigrationApplied = false;
-			adaptiveBalanceUserMigrationPersisted = false;
-		}
-	};
+	if (isAdaptiveBalance && !pendingLegacyUtilityUserPatch.empty()) {
+		// Persist every moved choice, including keys absent from today's providers.
+		MergeJson(userOverride, CaptureMigratedUserValues(currentSettings, pendingLegacyUtilityUserPatch));
+	}
 
 	if (userOverride.empty()) {
 		// User hasn't changed any overridden settings, delete user file if it exists
-		if (!DeleteUserOverride(featureName))
+		if (!DeleteUserOverrideFile(featureName))
 			return false;
 
-		markDestinationPersisted();
-		markSourceCleaned();
-		return true;
+		return !isAdaptiveBalance || CompleteLegacyUtilityUserMigration();
 	}
 
 	try {
@@ -1217,16 +1222,57 @@ bool SettingsOverrideManager::SaveUserOverride(const std::string& featureName, c
 			logger::warn(
 				"Saved user override for {}, but could not persist its tracking state",
 				featureName);
-		markDestinationPersisted();
-		markSourceCleaned();
-
 		logger::info("Saved user override for {}", featureName);
-		return true;
+		return !isAdaptiveBalance || CompleteLegacyUtilityUserMigration();
 
 	} catch (const std::exception& e) {
 		logger::warn("Error saving user override for {}: {}", featureName, e.what());
 		return false;
 	}
+}
+
+bool SettingsOverrideManager::RetireLegacyUtilityUserSource(const std::string& a_name, const json* a_expected)
+{
+	const auto path = GetUserOverridesDirectory() / (a_name + ".user.json");
+	try {
+		json current;
+		std::string readError;
+		const auto result = ReadUserSettingsLayer(path, current, readError);
+		if (result == Util::FileHelpers::JsonFileReadResult::NotFound)
+			return a_expected == nullptr;
+		if (result == Util::FileHelpers::JsonFileReadResult::Error)
+			throw std::runtime_error(readError);
+		if (a_expected && current != *a_expected) {
+			logger::warn("Legacy user settings changed during migration; preserving {}", path.string());
+			return false;
+		}
+		const auto original = current;
+		SettingsMigrations::RetireAdaptiveBalanceFeaturePatch(current);
+		if (current.empty())
+			return DeleteUserOverrideFile(a_name);
+		if (current == original)
+			return true;
+		std::string error;
+		if (!Util::FileHelpers::WriteTextFileAtomic(path, current.dump(1), error)) {
+			logger::warn("Cannot retire legacy user settings {}: {}", path.string(), error);
+			return false;
+		}
+		return true;
+	} catch (const std::exception& error) {
+		logger::warn("Cannot retire legacy user settings {}: {}", path.string(), error.what());
+		return false;
+	}
+}
+
+bool SettingsOverrideManager::CompleteLegacyUtilityUserMigration()
+{
+	for (auto source = pendingLegacyUtilityUserSources.begin(); source != pendingLegacyUtilityUserSources.end();) {
+		if (!RetireLegacyUtilityUserSource(source->first, &source->second))
+			return false;
+		source = pendingLegacyUtilityUserSources.erase(source);
+	}
+	pendingLegacyUtilityUserPatch = json::object();
+	return true;
 }
 
 bool SettingsOverrideManager::HasUserOverride(const std::string& featureName) const
@@ -1237,7 +1283,25 @@ bool SettingsOverrideManager::HasUserOverride(const std::string& featureName) co
 
 	auto userFilePath = GetUserOverridesDirectory() / (featureName + ".user.json");
 	std::error_code ec;
-	return std::filesystem::exists(userFilePath, ec);
+	if (std::filesystem::exists(userFilePath, ec))
+		return true;
+	if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
+		for (const auto alias : SettingsMigrations::kLegacyUtilityFeatureNames) {
+			const auto path = GetUserOverridesDirectory() / (std::string(alias) + ".user.json");
+			try {
+				json legacy;
+				std::string error;
+				const auto result = ReadUserSettingsLayer(path, legacy, error);
+				if (result == Util::FileHelpers::JsonFileReadResult::Error)
+					logger::warn("Cannot inspect legacy user settings {}: {}", path.string(), error);
+				if (result == Util::FileHelpers::JsonFileReadResult::Success && !SettingsMigrations::ExtractAdaptiveBalanceFeaturePatch(legacy).empty())
+					return true;
+			} catch (const std::exception& error) {
+				logger::warn("Cannot inspect legacy user settings {}: {}", path.string(), error.what());
+			}
+		}
+	}
+	return false;
 }
 
 bool SettingsOverrideManager::DeleteUserOverride(const std::string& featureName)
@@ -1246,6 +1310,19 @@ bool SettingsOverrideManager::DeleteUserOverride(const std::string& featureName)
 		return false;
 	}
 
+	if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
+		for (const auto alias : SettingsMigrations::kLegacyUtilityFeatureNames) {
+			if (!RetireLegacyUtilityUserSource(std::string(alias)))
+				return false;
+		}
+		pendingLegacyUtilityUserSources.clear();
+		pendingLegacyUtilityUserPatch = json::object();
+	}
+	return DeleteUserOverrideFile(featureName);
+}
+
+bool SettingsOverrideManager::DeleteUserOverrideFile(const std::string& featureName)
+{
 	try {
 		auto userFilePath = GetUserOverridesDirectory() / (featureName + ".user.json");
 		std::error_code ec;
@@ -1354,7 +1431,11 @@ void SettingsOverrideManager::CleanupStaleUserOverrides()
 			// combined hash as the presence check.
 			const bool hasProviderOverride = featureName == "Global" ?
 			                                     !GetCombinedOverrideHash(featureName).empty() :
-			                                     HasFeatureOverrides(featureName);
+			                                     HasFeatureOverrides(featureName) ||
+			                                         (IsLegacyUtilityFeature(featureName) && HasFeatureOverrides(std::string(SettingsMigrations::kAdaptiveBalanceFeatureName)));
+			// Migrated utility choices remain global preferences after providers leave.
+			if (!hasProviderOverride && (IsLegacyUtilityFeature(featureName) || featureName == SettingsMigrations::kAdaptiveBalanceFeatureName))
+				continue;
 			if (!hasProviderOverride) {
 				// Override was removed, delete user file
 				logger::info("Cleaning up orphaned user override: {}", featureName);

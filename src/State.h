@@ -451,7 +451,7 @@ public:
 		float PBRMetalHighlightScale;   // matches HLSL SharedData::PBRMetalHighlightScale
 		uint HasDirectionalShadows;     // Exterior or interior sun directional shadow availability
 		float VolumetricLightingSaturation;
-		float PBRMetalReflectionScalePad1;
+		float GodrayFinalBrightness;
 		float SSSHumanMaleIntensity;
 		float SSSHumanMaleSaturation;
 		float SSSHumanMaleBrightness;
@@ -477,6 +477,9 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(SharedDataCB);
 	static_assert(offsetof(SharedDataCB, RefractionScale) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VolumetricLightingSaturation) % 16 == 0);
+	static_assert(offsetof(SharedDataCB, GodrayFinalBrightness) == 516);
+	static_assert(offsetof(SharedDataCB, SSSHumanMaleIntensity) == 520);
+	static_assert(sizeof(SharedDataCB) == 672);
 	static_assert(offsetof(SharedDataCB, VolumetricShadowsEnabled) == offsetof(SharedDataCB, SSSHumanFemaleBaseSaturation) + sizeof(float));
 	static_assert(offsetof(SharedDataCB, VolumetricLightingOpacity) == offsetof(SharedDataCB, VolumetricShadowsEnabled) + sizeof(uint));
 	static_assert(offsetof(SharedDataCB, AmbientSHR) % 16 == 0);

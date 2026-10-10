@@ -2,6 +2,8 @@
 #	undef NDEBUG
 #endif
 
+#include "Features/AdaptiveBalanceDepthOfField.h"
+#include "Features/AdaptiveBalanceGodraySettings.h"
 #include "SettingsMigrations.h"
 #include <algorithm>
 #include <array>
@@ -133,6 +135,7 @@ struct AdaptiveBrightness
 
 	bool IsRuntimeAvailable() const;
 	bool IsRuntimeEnabled() const;
+	float GetEffectiveGodrayFinalBrightness() const;
 	void SetEnabled(bool enabled);
 	PerFrameData GetCommonBufferData() const;
 	bool NeedsVanillaPointLightData() const;
@@ -1119,8 +1122,57 @@ void CheckSkyGradientOwnership()
 	balance = {};
 }
 
+void CheckFinalGodrayBrightness()
+{
+	AdaptiveBrightness balance;
+	assert(balance.settings.godrayFinalBrightness == 1.0f);
+	balance.settings.globalProfile.advanced = false;
+	balance.throwProfileResolution = true;
+	balance.settings.godrayFinalBrightness = 4.5f;
+	for (unsigned flags = 0; flags < 32; ++flags) {
+		balance.loaded = (flags & 1) != 0;
+		balance.SetEnabled((flags & 2) != 0);
+		balance.SetPerformanceCostMeasurementEnabled((flags & 4) != 0);
+		globals::state->menuOpen = (flags & 8) != 0;
+		RE::PlayerCharacter::GetSingleton()->hasCell = (flags & 16) != 0;
+		const bool active = (flags & 7) == 7 && !(flags & 8) && (flags & 16);
+		assert(balance.GetEffectiveGodrayFinalBrightness() == (active ? 4.5f : 1.0f));
+		assert(balance.settings.godrayFinalBrightness == 4.5f);
+	}
+	globals::state->menuOpen = false;
+	RE::PlayerCharacter::GetSingleton()->hasCell = true;
+	balance.loaded = true;
+	balance.SetEnabled(true);
+	balance.SetPerformanceCostMeasurementEnabled(true);
+	struct BrightnessCase
+	{
+		float input;
+		float expected;
+		bool valid;
+	};
+	for (const auto& [input, expected, valid] : std::array<BrightnessCase, 8>{ { { 0.0f, 0.0f, true }, { 1.0f, 1.0f, true }, { 5.0f, 5.0f, true },
+			 { -0.01f, 0.0f, false }, { 5.01f, 5.0f, false },
+			 { std::numeric_limits<float>::infinity(), 1.0f, false },
+			 { -std::numeric_limits<float>::infinity(), 1.0f, false },
+			 { std::numeric_limits<float>::quiet_NaN(), 1.0f, false } } }) {
+		// Runtime inputs keep nonfinite cases meaningful under /fp:fast.
+		volatile float runtimeInput = input;
+		balance.settings.godrayFinalBrightness = runtimeInput;
+		assert(balance.GetEffectiveGodrayFinalBrightness() == expected);
+		assert(AdaptiveBalanceGodray::SanitizeFinalBrightness(runtimeInput) == expected);
+		assert(AdaptiveBalanceGodray::IsValidFinalBrightness(runtimeInput) == valid);
+	}
+	assert(balance.profileResolutions == 0);
+	for (const auto value : { 0.0, 1.0, 5.0 })
+		assert(ValidateAdaptiveBalanceVisuals({ { "godrayFinalBrightness", value } }).empty());
+	for (const auto& value : std::vector<json>{ -0.01, 5.01, true, nullptr, "1",
+			 std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN() })
+		assert(!ValidateAdaptiveBalanceVisuals({ { "godrayFinalBrightness", value } }).empty());
+}
+
 int main()
 {
+	CheckFinalGodrayBrightness();
 	CheckAppearanceProfiles();
 	CheckSkyGradientOwnership();
 	CheckWeatherColors();

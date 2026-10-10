@@ -3,7 +3,6 @@
 #include "Deferred.h"
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
-#include "Features/CSUtility.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
@@ -104,7 +103,6 @@ namespace globals
 		ScreenshotFeature screenshotFeature{};
 		CSEditor csEditor{};
 		WeatherPicker weatherPicker{};
-		CSUtility csUtility{};
 		TruePBR truePBR{};
 
 		namespace llf

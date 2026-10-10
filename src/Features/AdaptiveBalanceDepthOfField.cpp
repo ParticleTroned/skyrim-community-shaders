@@ -1,4 +1,5 @@
-#include "CSUtility.h"
+#include "AdaptiveBalanceDepthOfField.h"
+#include "AdaptiveBrightness.h"
 #include "Menu/SettingsPage.h"
 
 #include "Globals.h"
@@ -10,34 +11,35 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <string_view>
 
 namespace
 {
-	constexpr float kDofStrengthMin = 0.0f;
-	constexpr float kDofStrengthMax = 1.0f;
-	constexpr float kDofDistanceMin = 0.0f;
-	constexpr float kDofDistanceMax = 50000.0f;
-	constexpr float kDofRangeMin = 0.0f;
-	constexpr float kDofRangeMax = 50000.0f;
-	constexpr float kDofAutoFocusDepthMax = 10000.0f;
-	constexpr float kDofAutoFocusBlurMin = 0.0f;
-	constexpr float kDofAutoFocusBlurMax = 1.0f;
-	constexpr float kDofAutoFocusBlurMultiplierMin = 0.0f;
-	constexpr float kDofAutoFocusBlurMultiplierMax = 1.0f;
+	using AdaptiveBalanceDepthOfField::kDofAutoFocusBlurMax;
+	using AdaptiveBalanceDepthOfField::kDofAutoFocusBlurMin;
+	using AdaptiveBalanceDepthOfField::kDofAutoFocusBlurMultiplierMax;
+	using AdaptiveBalanceDepthOfField::kDofAutoFocusBlurMultiplierMin;
+	using AdaptiveBalanceDepthOfField::kDofAutoFocusDepthMax;
+	using AdaptiveBalanceDepthOfField::kDofDistanceMax;
+	using AdaptiveBalanceDepthOfField::kDofDistanceMin;
+	using AdaptiveBalanceDepthOfField::kDofRangeMax;
+	using AdaptiveBalanceDepthOfField::kDofRangeMin;
+	using AdaptiveBalanceDepthOfField::kDofStrengthMax;
+	using AdaptiveBalanceDepthOfField::kDofStrengthMin;
 	constexpr float kDofLockButtonWidth = 120.0f;
-	constexpr uint32_t kDofModeMask = 0x3;
+	using AdaptiveBalanceDepthOfField::kDofModeMask;
 	constexpr uint32_t kDofNoSkyFlag = 0x4;
 	constexpr uint32_t kDofBlurRadiusShift = 3;
-	constexpr uint32_t kDofBlurRadiusMax = 7;
+	using AdaptiveBalanceDepthOfField::kDofBlurRadiusMax;
 	constexpr uint32_t kDofAutoFocusFlag = 0x80;
 	constexpr uint32_t kDofModeBack = 2;
 	constexpr float kDofFloatEpsilon = 0.0001f;
 
-	using DofAutoFocusSettings = CSUtility::DepthOfFieldAutoFocusSettings;
-	using DofSettings = CSUtility::DepthOfFieldSettings;
-	using DofOverride = CSUtility::DepthOfFieldOverride;
+	using DofAutoFocusSettings = AdaptiveBalanceDepthOfField::DepthOfFieldAutoFocusSettings;
+	using DofSettings = AdaptiveBalanceDepthOfField::DepthOfFieldSettings;
+	using DofOverride = AdaptiveBalanceDepthOfField::DepthOfFieldOverride;
 	using DepthOfField = RE::ImageSpaceBaseData::DepthOfField;
 	using SkyBlurRadius = DepthOfField::SkyBlurRadius;
 	using DofAutoFocusMember = float DofAutoFocusSettings::*;
@@ -122,7 +124,8 @@ namespace
 	DofSettings DecodeDofPackedValue(float a_strength, float a_distance, float a_range, float a_packedValue)
 	{
 		uint32_t packedValue = 0;
-		if (std::isfinite(a_packedValue) && a_packedValue > 0.0f) {
+		if (std::isfinite(a_packedValue) && a_packedValue > 0.0f &&
+			static_cast<double>(a_packedValue) <= std::numeric_limits<uint32_t>::max()) {
 			packedValue = static_cast<uint32_t>(a_packedValue);
 		}
 
@@ -134,7 +137,7 @@ namespace
 		result.excludeSky = (packedValue & kDofNoSkyFlag) != 0;
 		result.autoFocus = (packedValue & kDofAutoFocusFlag) != 0;
 		result.blurRadius = ClampDofBlurRadius((packedValue >> kDofBlurRadiusShift) & 0xF);
-		CSUtility::SanitizeDepthOfFieldSettings(result);
+		AdaptiveBalanceDepthOfField::SanitizeDepthOfFieldSettings(result);
 		return result;
 	}
 
@@ -151,18 +154,18 @@ namespace
 			if (rawRadius == kSkyBlurRadiusValues[index]) {
 				result.excludeSky = false;
 				result.blurRadius = index;
-				CSUtility::SanitizeDepthOfFieldSettings(result);
+				AdaptiveBalanceDepthOfField::SanitizeDepthOfFieldSettings(result);
 				return result;
 			}
 			if (rawRadius == kNoSkyBlurRadiusValues[index]) {
 				result.excludeSky = true;
 				result.blurRadius = index;
-				CSUtility::SanitizeDepthOfFieldSettings(result);
+				AdaptiveBalanceDepthOfField::SanitizeDepthOfFieldSettings(result);
 				return result;
 			}
 		}
 
-		CSUtility::SanitizeDepthOfFieldSettings(result);
+		AdaptiveBalanceDepthOfField::SanitizeDepthOfFieldSettings(result);
 		return result;
 	}
 
@@ -270,7 +273,7 @@ namespace
 	void WriteSceneDepthOfField(RE::ImageSpaceModData& a_modData, const DofSettings& a_settings)
 	{
 		DofSettings sanitizedSettings = a_settings;
-		CSUtility::SanitizeDepthOfFieldSettings(sanitizedSettings);
+		AdaptiveBalanceDepthOfField::SanitizeDepthOfFieldSettings(sanitizedSettings);
 
 		a_modData.data[RE::ImageSpaceModData::kDOFStrength] = sanitizedSettings.strength;
 		a_modData.data[RE::ImageSpaceModData::kDOFDistance] = sanitizedSettings.distance;
@@ -281,7 +284,7 @@ namespace
 	void WriteUnderwaterDepthOfField(DepthOfField& a_depthOfField, const DofSettings& a_settings)
 	{
 		DofSettings sanitizedSettings = a_settings;
-		CSUtility::SanitizeDepthOfFieldSettings(sanitizedSettings);
+		AdaptiveBalanceDepthOfField::SanitizeDepthOfFieldSettings(sanitizedSettings);
 		sanitizedSettings.mode = kDofModeBack;
 		sanitizedSettings.autoFocus = false;
 
@@ -394,25 +397,25 @@ namespace
 	bool DrawDofAutoFocusControls(DofAutoFocusSettings& a_values)
 	{
 		bool changed = false;
-		ImGui::SeparatorText("Auto Focus Settings");
-		DrawDofTooltip("Auto Focus uses Skyrim's cached dynamic DOF values. The vanilla Display Depth of Field slider maps to Game Slider / Multiplier.");
-
-		changed |= Util::Widgets::SliderFloat("Near Distance", &a_values.nearDistance, kDofDistanceMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-		DrawDofTooltip("Offset before pixels nearer than the sampled focus depth begin to blur.");
-		changed |= Util::Widgets::SliderFloat("Far Distance", &a_values.farDistance, kDofDistanceMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-		DrawDofTooltip("Offset before pixels farther than the sampled focus depth begin to blur.");
-		changed |= Util::Widgets::SliderFloat("Near Range", &a_values.nearRange, kDofRangeMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-		DrawDofTooltip("Fade width for near-side blur. Higher values make the transition into blur more gradual.");
-		changed |= Util::Widgets::SliderFloat("Far Range", &a_values.farRange, kDofRangeMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-		DrawDofTooltip("Fade width for far-side blur. Higher values make the transition into blur more gradual.");
-
 		changed |= Util::Widgets::SliderFloat("Near Blur", &a_values.nearBlur, kDofAutoFocusBlurMin, kDofAutoFocusBlurMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		DrawDofTooltip("Near-side blur amount before the game slider multiplier is applied.");
 		changed |= Util::Widgets::SliderFloat("Far Blur", &a_values.farBlur, kDofAutoFocusBlurMin, kDofAutoFocusBlurMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		DrawDofTooltip("Far-side blur amount before the game slider multiplier is applied.");
 
 		changed |= Util::Widgets::SliderFloat("Game Slider / Multiplier", &a_values.blurMultiplier, kDofAutoFocusBlurMultiplierMin, kDofAutoFocusBlurMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		DrawDofTooltip("Scales Near Blur and Far Blur. This matches Skyrim's Settings > Display > Depth of Field slider and fDynamicDOFBlurMultiplier.");
+		DrawDofTooltip("Scale Near Blur and Far Blur. Matches Settings > Display > Depth of Field and fDynamicDOFBlurMultiplier.");
+
+		if (auto fineTuning = Util::SectionWrapper("Fine tuning")) {
+			DrawDofTooltip("Auto Focus uses Skyrim's dynamic DOF. Game Slider / Multiplier matches Settings > Display > Depth of Field.");
+			changed |= Util::Widgets::SliderFloat("Near Distance", &a_values.nearDistance, kDofDistanceMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+			DrawDofTooltip("Offset before pixels nearer than the sampled focus depth begin to blur.");
+			changed |= Util::Widgets::SliderFloat("Far Distance", &a_values.farDistance, kDofDistanceMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+			DrawDofTooltip("Offset before pixels farther than the sampled focus depth begin to blur.");
+			changed |= Util::Widgets::SliderFloat("Near Range", &a_values.nearRange, kDofRangeMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+			DrawDofTooltip("Near-blur fade width. Higher makes the transition more gradual.");
+			changed |= Util::Widgets::SliderFloat("Far Range", &a_values.farRange, kDofRangeMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+			DrawDofTooltip("Far-blur fade width. Higher makes the transition more gradual.");
+		}
 
 		if (changed) {
 			SanitizeDepthOfFieldAutoFocusSettings(a_values);
@@ -427,36 +430,33 @@ namespace
 
 		if (a_allowAutoFocus) {
 			changed |= Util::Widgets::Checkbox("Auto Focus", &a_values.autoFocus);
-			DrawDofTooltip("Uses Skyrim's dynamic DOF path, which shifts focus from the sampled scene depth. bDoDepthOfField can still disable the effect, and fDDOFFocusCenterweightExt changes sample weighting.");
-		} else {
-			a_values.autoFocus = false;
+			DrawDofTooltip("Focus follows sampled scene depth. bDoDepthOfField can disable DOF; fDDOFFocusCenterweightExt controls sample weighting.");
 		}
 
-		if (a_values.autoFocus) {
+		if (a_allowAutoFocus && a_values.autoFocus) {
 			changed |= DrawDofAutoFocusControls(a_values.autoFocusSettings);
 		} else {
 			changed |= Util::Widgets::SliderFloat("Strength", &a_values.strength, kDofStrengthMin, kDofStrengthMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			changed |= Util::Widgets::SliderFloat("Distance", &a_values.distance, kDofDistanceMin, kDofDistanceMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-			DrawDofTooltip("Static focus distance. Mode decides whether blur applies in front of it, behind it, both, or neither.");
+			DrawDofTooltip("Fixed focus distance. Mode chooses blur in front, behind, both or neither.");
 			changed |= Util::Widgets::SliderFloat("Range", &a_values.range, kDofRangeMin, kDofRangeMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-			DrawDofTooltip("Static transition width around Distance. Higher values make blur fade in more gradually.");
+			DrawDofTooltip("Blur transition width around Distance. Higher fades blur in more gradually.");
 		}
 
 		if (a_allowMode) {
 			changed |= DrawDofModeCombo(a_values.mode);
 		} else {
 			uint32_t fixedMode = kDofModeBack;
-			ImGui::BeginDisabled();
+			Util::DisableGuard fixedModeDisabled(true);
 			DrawDofModeCombo(fixedMode);
-			ImGui::EndDisabled();
 		}
 
 		changed |= Util::Widgets::Checkbox("Exclude Sky", &a_values.excludeSky);
-		DrawDofTooltip("Sets the No Sky flag so the sky is excluded from the DOF blur pass.");
+		DrawDofTooltip("Exclude the sky from DOF blur using the No Sky flag.");
 		changed |= DrawDofBlurRadiusCombo(a_values.blurRadius);
 
 		if (changed) {
-			CSUtility::SanitizeDepthOfFieldSettings(a_values);
+			AdaptiveBalanceDepthOfField::SanitizeDepthOfFieldSettings(a_values);
 		}
 		return changed;
 	}
@@ -491,13 +491,12 @@ namespace
 		}
 
 		{
-			ImGui::BeginDisabled(!hasLiveValues);
+			Util::DisableGuard missingDataDisabled(!hasLiveValues);
 			if (Util::SuccessButton("Unlock", buttonSize) && hasLiveValues) {
 				a_override.values = *a_liveValues;
 				a_override.baseline = *a_liveValues;
 				a_override.locked = true;
 			}
-			ImGui::EndDisabled();
 		}
 
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -520,6 +519,7 @@ namespace
 		MenuUI::SectionHeading(a_label);
 
 		ImGui::PushID(a_id);
+		const SKSE::stl::scope_exit popId([] { ImGui::PopID(); });
 		SetDepthOfFieldPopupText(a_popup, a_id);
 		if (a_popup.Draw()) {
 			a_override.locked = false;
@@ -538,8 +538,6 @@ namespace
 		} else {
 			DrawDepthOfFieldControls(displayValues, false, a_allowMode, a_allowAutoFocus);
 		}
-
-		ImGui::PopID();
 	}
 
 	bool IsCurrentUnderwaterImageSpace(RE::ImageSpaceManager* a_imageSpaceManager)
@@ -552,10 +550,11 @@ namespace
 	class DepthOfFieldOverrideScope
 	{
 	public:
-		explicit DepthOfFieldOverrideScope(CSUtility& a_csUtility)
+		DepthOfFieldOverrideScope()
 		{
-			if (!a_csUtility.IsRuntimeEnabled() ||
-				(!a_csUtility.settings.sceneDof.locked && !a_csUtility.settings.underwaterDof.locked))
+			const auto& settings = globals::features::adaptiveBrightness.settings.depthOfField;
+			if (!AdaptiveBalanceDepthOfField::IsRuntimeEnabled() ||
+				(!settings.sceneDof.locked && !settings.underwaterDof.locked))
 				return;
 
 			auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
@@ -564,14 +563,14 @@ namespace
 
 			const bool currentUnderwater = IsCurrentUnderwaterImageSpace(imageSpaceManager);
 			const DofOverride* autoFocusOverride = nullptr;
-			if (!currentUnderwater && a_csUtility.settings.sceneDof.locked) {
-				autoFocusOverride = &a_csUtility.settings.sceneDof;
+			if (!currentUnderwater && settings.sceneDof.locked) {
+				autoFocusOverride = &settings.sceneDof;
 			}
 			if (autoFocusOverride && autoFocusOverride->values.autoFocus) {
 				ApplyAutoFocusOverride(autoFocusOverride->values.autoFocusSettings);
 			}
 
-			if (a_csUtility.settings.sceneDof.locked) {
+			if (settings.sceneDof.locked) {
 				GET_INSTANCE_MEMBER(data, imageSpaceManager);
 				sceneModData = &data.modData;
 				sceneBackup = {
@@ -580,15 +579,15 @@ namespace
 					sceneModData->data[RE::ImageSpaceModData::kDOFRange],
 					sceneModData->data[RE::ImageSpaceModData::kDOFMode],
 				};
-				WriteSceneDepthOfField(*sceneModData, a_csUtility.settings.sceneDof.values);
+				WriteSceneDepthOfField(*sceneModData, settings.sceneDof.values);
 			}
 
-			if (a_csUtility.settings.underwaterDof.locked) {
+			if (settings.underwaterDof.locked) {
 				GET_INSTANCE_MEMBER(underwaterBaseData, imageSpaceManager);
 				if (underwaterBaseData) {
 					underwaterDepthOfField = &underwaterBaseData->depthOfField;
 					underwaterBackup = *underwaterDepthOfField;
-					WriteUnderwaterDepthOfField(*underwaterDepthOfField, a_csUtility.settings.underwaterDof.values);
+					WriteUnderwaterDepthOfField(*underwaterDepthOfField, settings.underwaterDof.values);
 				}
 			}
 		}
@@ -655,8 +654,7 @@ namespace
 	{
 		static bool thunk(RE::ImageSpaceEffectDepthOfField* a_effect)
 		{
-			auto& csUtility = globals::features::csUtility;
-			DepthOfFieldOverrideScope overrideScope(csUtility);
+			DepthOfFieldOverrideScope overrideScope;
 			return func(a_effect);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -679,8 +677,7 @@ namespace
 	{
 		static bool thunk(RE::ImageSpaceEffectDepthOfField* a_effect, RE::ImageSpaceEffectParam* a_param)
 		{
-			auto& csUtility = globals::features::csUtility;
-			DepthOfFieldOverrideScope overrideScope(csUtility);
+			DepthOfFieldOverrideScope overrideScope;
 			const bool result = func(a_effect, a_param);
 			UnderwaterDepthOfField::RecordShaderConstants(a_effect, a_param);
 			return result;
@@ -689,7 +686,7 @@ namespace
 	};
 }
 
-void CSUtility::SanitizeDepthOfFieldSettings(DepthOfFieldSettings& a_settings)
+void AdaptiveBalanceDepthOfField::SanitizeDepthOfFieldSettings(DepthOfFieldSettings& a_settings)
 {
 	const DepthOfFieldSettings defaults{};
 	a_settings.strength = Util::ClampFinite(a_settings.strength, kDofStrengthMin, kDofStrengthMax, defaults.strength);
@@ -700,56 +697,83 @@ void CSUtility::SanitizeDepthOfFieldSettings(DepthOfFieldSettings& a_settings)
 	a_settings.blurRadius = ClampDofBlurRadius(a_settings.blurRadius);
 }
 
-void CSUtility::SanitizeDepthOfFieldOverride(DepthOfFieldOverride& a_override)
+void AdaptiveBalanceDepthOfField::SanitizeDepthOfFieldOverride(DepthOfFieldOverride& a_override)
 {
 	SanitizeDepthOfFieldSettings(a_override.values);
 	SanitizeDepthOfFieldSettings(a_override.baseline);
 }
 
-void CSUtility::DrawDepthOfFieldSettings()
+void AdaptiveBalanceDepthOfField::DrawSettings()
 {
-	ImGui::SeparatorText("Vanilla Depth of Field");
+	auto& settings = globals::features::adaptiveBrightness.settings.depthOfField;
 	static Util::ConfirmationPopup sceneLockPopup;
 	static Util::ConfirmationPopup underwaterLockPopup;
 
-	Util::Widgets::Checkbox("Enable Underwater Fog DOF Blur Fix", &settings.fixUnderwaterFogDofBlur);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Correctly blurs underwater fog with vanilla DOF. This affects only the fix and takes effect immediately.");
-	}
-	ImGui::Separator();
+	Util::Widgets::Checkbox("Enable depth-of-field overrides", &settings.enabled);
+	DrawDofTooltip("Apply the unlocked scene and underwater controls globally. Adaptive Balance must also be enabled.");
 
-	if (!IsRuntimeEnabled()) {
-		Util::TextUnformattedDisabled("CS Utility is disabled. Saved DOF settings and the fog-blur fix are not applied.");
+	{
+		Util::DisableGuard overridesDisabled(!settings.enabled);
+		DrawDepthOfFieldSection(
+			"Scene",
+			"Scene",
+			settings.sceneDof,
+			ReadSceneDepthOfField(),
+			sceneLockPopup,
+			true,
+			true,
+			"No live scene image space data is available.");
+
 		ImGui::Separator();
+
+		DrawDepthOfFieldSection(
+			"Underwater",
+			"Underwater",
+			settings.underwaterDof,
+			ReadUnderwaterDepthOfField(),
+			underwaterLockPopup,
+			false,
+			false,
+			"No underwater image space record is currently applied.");
 	}
 
-	DrawDepthOfFieldSection(
-		"Scene",
-		"Scene",
-		settings.sceneDof,
-		ReadSceneDepthOfField(),
-		sceneLockPopup,
-		true,
-		true,
-		"No live scene image space data is available.");
-
 	ImGui::Separator();
-
-	DrawDepthOfFieldSection(
-		"Underwater",
-		"Underwater",
-		settings.underwaterDof,
-		ReadUnderwaterDepthOfField(),
-		underwaterLockPopup,
-		false,
-		false,
-		"No underwater image space record is currently applied.");
+	Util::Widgets::Checkbox("Underwater fog blur correction", &settings.fixUnderwaterFogDofBlur);
+	DrawDofTooltip("Blur underwater fog correctly with vanilla DOF. Applies immediately and controls only the correction. Independent of manual DOF overrides; Adaptive Balance must be enabled.");
 }
 
-void CSUtility::InstallDepthOfFieldHooks()
+void AdaptiveBalanceDepthOfField::InstallHooks()
 {
 	stl::write_vfunc<0x1, ImageSpaceEffectDepthOfField_Render>(RE::VTABLE_ImageSpaceEffectDepthOfField[0]);
 	stl::write_vfunc<0x6, ImageSpaceEffectDepthOfField_IsActive>(RE::VTABLE_ImageSpaceEffectDepthOfField[0]);
 	stl::write_vfunc<0x7, ImageSpaceEffectDepthOfField_UpdateParams>(RE::VTABLE_ImageSpaceEffectDepthOfField[0]);
-	logger::info("[CSUtility] Installed vanilla depth of field hooks");
+	logger::info("[Adaptive Balance] Installed vanilla depth of field hooks");
+}
+
+bool AdaptiveBalanceDepthOfField::IsRuntimeEnabled()
+{
+	const auto& adaptiveBalance = globals::features::adaptiveBrightness;
+	return adaptiveBalance.IsRuntimeEnabled() && adaptiveBalance.settings.depthOfField.enabled;
+}
+
+bool AdaptiveBalanceDepthOfField::IsCorrectionEnabled()
+{
+	const auto& adaptiveBalance = globals::features::adaptiveBrightness;
+	return adaptiveBalance.IsRuntimeEnabled() && adaptiveBalance.settings.depthOfField.fixUnderwaterFogDofBlur;
+}
+
+void AdaptiveBalanceDepthOfField::SanitizeSettings(Settings& a_settings)
+{
+	SanitizeDepthOfFieldOverride(a_settings.sceneDof);
+	SanitizeDepthOfFieldOverride(a_settings.underwaterDof);
+}
+
+std::optional<AdaptiveBalanceDepthOfField::DepthOfFieldSettings> AdaptiveBalanceDepthOfField::GetLiveSceneSettings()
+{
+	return ReadSceneDepthOfField();
+}
+
+std::optional<AdaptiveBalanceDepthOfField::DepthOfFieldSettings> AdaptiveBalanceDepthOfField::GetLiveUnderwaterSettings()
+{
+	return ReadUnderwaterDepthOfField();
 }

@@ -32,6 +32,8 @@ class CsxDistributionTests(unittest.TestCase):
         for name in ("TruePBR", "Screenshot", "Wetterness", "UnifiedWater", "ImageBasedLighting", "PerformanceTuning"):
             self.assertIn(name, by_short_name)
         self.assertNotIn("WetnessEffects", by_short_name)
+        self.assertNotIn("CSUtility", by_short_name)
+        self.assertNotIn("OSUtility", by_short_name)
         self.assertEqual(by_short_name["AdaptiveBrightness"]["display_name"], "Adaptive Balance")
         for name in ("TruePBR", "Screenshot", "ScreenSpaceGI"):
             self.assertTrue(by_short_name[name]["description"])

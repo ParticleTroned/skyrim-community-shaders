@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "AdaptiveBalanceDepthOfField.h"
+#include "AdaptiveBalanceGodraySettings.h"
 #include "Bloom.h"
 #include "Buffer.h"
 #include "LinearLighting.h"
@@ -53,7 +55,8 @@ struct AdaptiveBrightness : Feature
 			{ "Separate exterior day and night balance profiles",
 				"Separate interior, dungeon, and dwelling profiles",
 				"Hierarchical worldspace, region, city, location, and cell profiles with COC codes",
-				"Unified global and per-profile Lighting, Color, Bloom, Water, and wind adjustment layers" }
+				"Unified global and per-profile Lighting, Color, Bloom, Water, and wind adjustment layers",
+				"Global scene and underwater depth of field with independent underwater fog blur correction" }
 		};
 	}
 
@@ -163,10 +166,12 @@ struct AdaptiveBrightness : Feature
 	{
 		bool enabled = true;
 		bool useAmbientEffectLighting = false;
+		float godrayFinalBrightness = AdaptiveBalanceGodray::kDefault;
 		float dayStartHour = 9.0f;
 		float nightStartHour = 21.0f;
 		float transitionHours = 1.0f;
 		ProfileSettings globalProfile = ProfileSettings::GlobalDefaults();
+		AdaptiveBalanceDepthOfField::Settings depthOfField;
 		std::array<ProfileSettings, kProfileCount> profiles{};
 		std::vector<LocationOverride> locationOverrides;
 	} settings;
@@ -325,11 +330,14 @@ struct AdaptiveBrightness : Feature
 	virtual void RestoreDefaultSettings() override;
 	virtual void SetupResources() override;
 	virtual void PostPostLoad() override;
+	virtual void DataLoaded() override;
 
 	bool IsRuntimeAvailable() const;
 	/// Enables only Adaptive Balance adjustments; independent renderer features retain their state.
 	void SetEnabled(bool a_enabled);
 	bool IsRuntimeEnabled() const;
+	/** Return the global final godray multiplier, or neutral while Adaptive Balance is bypassed. */
+	float GetEffectiveGodrayFinalBrightness() const;
 	PerFrameData GetCommonBufferData() const;
 	bool NeedsVanillaPointLightData() const;
 	void UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount, uint32_t a_bufferRegister);

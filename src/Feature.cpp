@@ -8,7 +8,6 @@
 #include "FeatureVersions.h"
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
-#include "Features/CSUtility.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
@@ -49,6 +48,7 @@
 #include "Features/WeatherPicker.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
+#include "LegacyUtilityCompatibility.h"
 #include "Menu.h"
 #include "SettingsOverrideManager.h"
 #include "Utils/Format.h"
@@ -299,8 +299,7 @@ namespace
 			&globals::features::screenshotFeature,
 			&globals::features::linearLighting,
 			&globals::features::unifiedWater,
-			&globals::features::horizonFix,
-			&globals::features::csUtility
+			&globals::features::horizonFix
 		};
 		return features;
 	}
@@ -340,6 +339,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 
 Feature* Feature::FindFeatureByShortName(const std::string& shortName)
 {
+	if (auto* legacy = LegacyUtilityCompatibility::Find(shortName, true))
+		return legacy;
 	for (auto* feature : GetFeatureList()) {
 		if (feature->loaded && feature->GetShortName() == shortName)
 			return feature;
@@ -349,6 +350,8 @@ Feature* Feature::FindFeatureByShortName(const std::string& shortName)
 
 Feature* Feature::FindRegisteredFeatureByShortName(const std::string& shortName)
 {
+	if (auto* legacy = LegacyUtilityCompatibility::Find(shortName, false))
+		return legacy;
 	for (auto* feature : GetAllFeatures()) {
 		if (feature->GetShortName() == shortName)
 			return feature;
@@ -499,6 +502,8 @@ void Feature::DrawUnloadedUI()
 
 std::string Feature::GetFeatureRequiredVersion(const std::string& shortName)
 {
+	if (LegacyUtilityCompatibility::IsAlias(shortName))
+		return "1.6.0";
 	if (shortName.empty()) {
 		return "unknown";
 	}
@@ -512,6 +517,11 @@ std::string Feature::GetFeatureRequiredVersion(const std::string& shortName)
 
 bool Feature::IsFeatureKnown(const std::string& shortName, REL::Version* outVersion)
 {
+	if (LegacyUtilityCompatibility::IsAlias(shortName)) {
+		if (outVersion)
+			*outVersion = REL::Version{ 1, 6, 0 };
+		return true;
+	}
 	if (shortName.empty()) {
 		return false;
 	}
@@ -541,7 +551,7 @@ void Feature::DrawSettings()
 		for (const auto& benefit : keyFeatures)
 			MenuUI::DetailNote(benefit.c_str());
 		MenuUI::DetailNote(SupportsPerformanceCostMeasurement() ?
-							   "This feature has no additional tuning controls. Use Enabled in the header to control it." :
-							   "This feature has no additional tuning controls. Change its startup setting in Advanced > Startup, save settings and restart the game.");
+							   "No further tuning. Use Enabled in the header to control this feature." :
+							   "No further tuning. Change the startup setting in Advanced > Startup, save settings and restart.");
 	}
 }

@@ -173,9 +173,9 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 
 `VRUpscalingTransitionProfileDecision` values returned by the revision-4 target-aware preflight:
 
--   `VRUpscalingTransitionProfileDecision::kBlocked` — retain the latest valid target and retry; invalid enum/configuration input must instead be treated as a terminal caller error
--   `VRUpscalingTransitionProfileDecision::kNoChange` — the requested settings and physical contract already match; do not call the setter
--   `VRUpscalingTransitionProfileDecision::kApply` — immediately call the method-specific atomic setter synchronously
+-   `VRUpscalingTransitionProfileDecision::kBlocked` â€” retain the latest valid target and retry; invalid enum/configuration input must instead be treated as a terminal caller error
+-   `VRUpscalingTransitionProfileDecision::kNoChange` â€” the requested settings and physical contract already match; do not call the setter
+-   `VRUpscalingTransitionProfileDecision::kApply` â€” immediately call the method-specific atomic setter synchronously
 
 The former advisory timed-fade constants remain as deprecated, zero-valued source-compatibility aliases. They must not be used to schedule a separate transition fade; CSX now owns render-change coverage. Build 11 identifies this behavior at runtime because already-compiled consumers retain the former inline values until rebuilt.
 
@@ -216,3 +216,73 @@ The former advisory timed-fade constants remain as deprecated, zero-valued sourc
 -   `GetVRUpscalingTransitionProfileDecision` and atomic Stabilizer door-profile staging while only soft LoadingMenu blockers remain require interface revision `4` and `getBuildNumber() >= 10`. Revision-3 queries and individual setters retain their fail-closed behavior.
 -   `getBuildNumber() >= 12` accepts configured current-cell profiles outside LoadingMenu and checks completed requests before profile admission. Retry `kBlocked` on a later game frame/task, never in a loop that occupies the game thread. Log the four target arguments and `GetVRUpscalingApplyBlockReasons()` to distinguish renderer safety blockers from invalid or unconfigured targets; those targets require correction instead of endless retries.
 -   Treat missing API as optional integration and continue without hard failure.
+
+## Legacy utility settings
+
+Adaptive Balance owns the former CS Utility runtime controls. Its stable
+feature identifier remains `AdaptiveBrightness`; its global DOF object is
+`depthOfField`. The master `enabled` flag gates all Adaptive Balance
+adjustments. `depthOfField.enabled` gates manual scene and underwater
+DOF overrides, and `depthOfField.fixUnderwaterFogDofBlur` independently
+selects underwater correction.
+
+Legacy `CSUtility`, `CS Utility`, `OSUtility`, and `OS Utility` settings
+lookups are compatibility adapters, absent from the feature catalog and
+sidebar. Reads expose the former utility settings shape; writes forward
+supported lighting, atmosphere, water, selected Bloom, and DOF values to
+Adaptive Balance. They retain its master enable state and existing profile
+gates. Feature-API boot mutations must use `AdaptiveBrightness`, since
+utility aliases do not own an independent boot feature. The DevBench
+`communityshaders.menu` action `set_adaptive_balance_dof` accepts a partial
+`depthOfField` object, validates all fields before changing settings, and
+returns live scene and underwater availability. It stages settings without
+saving them; `status.adaptiveBalanceDepthOfField` provides inspection.
+Underwater rendering always uses Back mode with autofocus off; reading or
+viewing the controls preserves the stored compatibility values.
+
+Migration consumes only valid, supported DOF values. Unknown, malformed,
+and out-of-range legacy values remain in their source for recovery. Native
+utility updates validate DOF with the same bounds as DevBench and reject
+an invalid patch before changing any settings. Successful user-file
+migration and Apply Override retain inactive Bloom presets and unknown
+fields; `_adaptiveBalanceMigrated` in the retained Bloom object prevents
+those presets from replaying after reset. A legacy utility boot-disable
+choice turns off manual DOF and correction during migration, preserving
+blur values and the Adaptive Balance master gate. Explicit canonical
+DOF flags take precedence.
+
+Open Shaders uses `OS Utility` as the display name of its existing
+`CSUtility` feature and `CS Utility` settings root. Source layers without a
+manual enable field infer enabled DOF from a locked scene or underwater
+snapshot; an explicit saved manual enable flag takes precedence. The
+legacy settings adapter likewise retains an explicit flag on live
+read/modify/write operations.
+
+Settings compatibility does not provide compatibility for arbitrary Open
+Shaders native extensions or replacement shaders. In particular, Open
+Shaders' `CS_UTILITY` shared-buffer layout and wind API extensions are
+separate contracts; settings redirection does not guarantee identical
+rendered pixels across the two renderers.
+
+Legacy `vlIntensity` maps to Adaptive Balance's global-only
+`godrayFinalBrightness`: a finite multiplier from 0 to 5, default 1,
+applied to the completed godray colour after its existing gamma conversion.
+The master/runtime gate bypasses it to 1. It is independent of Linear
+Lighting, the Global detailed-lighting switch, and the composed profile
+`appearance.godrayIntensity` control; it does not enable godrays.
+`communityshaders.menu` action `set_adaptive_balance_visuals` accepts it as
+`visuals.godrayFinalBrightness`, stages it without saving, and rejects an
+invalid value before applying any part of the update. Inspection exposes
+it under `status.adaptiveBalanceVisuals.global.godrayFinalBrightness`
+and `.effective.godrayFinalBrightness` as saved and gate-adjusted values.
+
+Bloom inspection exposes the current Global
+profile as the legacy Default preset; the original inactive custom preset
+bank has no runtime equivalent in Adaptive Balance. Live writes may change
+only the selected Bloom profile; changes to inactive presets reject the
+whole update, while unchanged read/modify/write snapshots remain valid.
+Disabling Bloom clears its intensity. Re-enabling requires supplying or
+selecting a profile with positive `EnhancementIntensity`; an enable-only
+update after disabling is rejected because no separate intensity is kept.
+Check the consumer's actual API and shader requirements before treating it
+as compatible.

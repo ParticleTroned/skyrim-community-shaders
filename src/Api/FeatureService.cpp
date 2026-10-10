@@ -7,6 +7,7 @@
 #include "Feature.h"
 #include "FeatureConstraints.h"
 #include "Globals.h"
+#include "LegacyUtilityCompatibility.h"
 #include "State.h"
 
 #include <algorithm>
@@ -75,6 +76,8 @@ namespace
 
 	Feature* FindFeature(std::string_view a_shortName)
 	{
+		if (auto* legacy = LegacyUtilityCompatibility::Find(a_shortName, false))
+			return legacy;
 		for (auto* feature : Catalog())
 			if (feature && feature->GetShortName() == a_shortName)
 				return feature;
@@ -197,6 +200,8 @@ namespace
 				return FillPreflight(a_output, Status::kRevisionConflict, "revision_conflict", "state changed; request a fresh snapshot");
 			if (mutation.action != CSX::FeatureAPI::MutationAction::kSetDisabledAtBoot)
 				return FillPreflight(a_output, Status::kInvalidArgument, "invalid_action", "mutation action is unknown");
+			if (LegacyUtilityCompatibility::IsAlias(mutation.featureShortName))
+				return FillPreflight(a_output, Status::kInvalidArgument, "legacy_settings_alias", "Legacy utility names address appearance and DOF settings only; use AdaptiveBrightness for the feature boot gate");
 			if (!FindFeature(mutation.featureShortName))
 				return FillPreflight(a_output, Status::kFeatureNotFound, "feature_not_found", "featureShortName is unknown");
 			auto* state = globals::state;
@@ -241,6 +246,8 @@ namespace
 			auto* state = globals::state;
 			if (!state || state->IsPersistentMutationBlocked())
 				return FillReceipt(a_output, Status::kBlocked, "persistent mutations are currently blocked");
+			if (LegacyUtilityCompatibility::IsAlias(mutation.featureShortName))
+				return FillReceipt(a_output, Status::kInvalidArgument, "Legacy utility names address appearance and DOF settings only; use AdaptiveBrightness for the feature boot gate");
 			if (!FindFeature(mutation.featureShortName))
 				return FillReceipt(a_output, Status::kFeatureNotFound, "featureShortName is unknown");
 			const bool previous = state->IsFeatureDisabled(mutation.featureShortName);

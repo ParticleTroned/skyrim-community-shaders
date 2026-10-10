@@ -1,11 +1,14 @@
 #include "SettingsMigrations.h"
 
+#include "Features/AdaptiveBalanceDepthOfFieldSettingsPolicy.h"
+#include "Features/AdaptiveBalanceGodraySettings.h"
 #include "Features/Bloom.h"
 #include "Features/WaterAppearanceMigration.h"
 
 #include <algorithm>
 #include <string>
 #include <utility>
+#include <vector>
 
 bool SettingsMigrations::MatchesJsonSchema(const nlohmann::json& a_value, const nlohmann::json& a_schema)
 {
@@ -96,6 +99,7 @@ namespace
 	using json = nlohmann::json;
 
 	constexpr std::string_view kLegacyBloomKey = "bloomEnhancement";
+	constexpr std::string_view kLegacyBloomMigratedKey = "_adaptiveBalanceMigrated";
 	constexpr std::string_view kGlobalLightingEnabledKey = "globalLightingEnabled";
 	constexpr std::string_view kLightingKey = "lighting";
 	constexpr std::string_view kEnabledKey = "enabled";
@@ -133,17 +137,16 @@ namespace
 		if (!a_csUtility.is_object())
 			return false;
 
-		return a_csUtility.contains(kLegacyBloomKey.data()) ||
-		       std::ranges::any_of(SettingsMigrations::kLegacyCSUtilityLightingKeys, [&](std::string_view a_key) {
-				   return a_csUtility.contains(a_key.data());
-			   });
+		return std::ranges::any_of(SettingsMigrations::kLegacyCSUtilityLightingKeys, [&](std::string_view a_key) {
+			return a_csUtility.contains(a_key.data());
+		});
 	}
 
 	bool HasValidLegacyLightingSettings(const json& a_csUtility)
 	{
 		return std::ranges::any_of(SettingsMigrations::kLegacyCSUtilityLightingKeys, [&](std::string_view a_key) {
 			const auto legacyIt = a_csUtility.find(a_key.data());
-			return legacyIt != a_csUtility.end() && legacyIt->is_number();
+			return legacyIt != a_csUtility.end() && SettingsMigrations::IsFiniteUtilityNumber(*legacyIt);
 		});
 	}
 
@@ -177,7 +180,9 @@ namespace
 					changed = true;
 				}
 			} else if (SettingsMigrations::MatchesJsonSchema(fallbackValue, *schemaIt) &&
-					   (targetIt == candidate.end() || !SettingsMigrations::MatchesJsonSchema(*targetIt, *schemaIt))) {
+					   (!schemaIt->is_number() || SettingsMigrations::IsFiniteUtilityNumber(fallbackValue)) &&
+					   (targetIt == candidate.end() || !SettingsMigrations::MatchesJsonSchema(*targetIt, *schemaIt) ||
+						   (schemaIt->is_number() && !SettingsMigrations::IsFiniteUtilityNumber(*targetIt)))) {
 				// Only a schema-valid legacy value may repair a missing or malformed
 				// destination. A valid explicit new value always wins.
 				candidate[key] = fallbackValue;
@@ -295,6 +300,246 @@ namespace
 		json migratedBloom = json::object();
 		return MergeValidFallback(migratedBloom, *bloomIt, GetBloomSchema());
 	}
+
+	bool MigrateLegacyUtilityAlias(json& a_layer)
+	{
+		auto alias = a_layer.find(SettingsMigrations::kOSUtilitySettingsName.data());
+		if (alias == a_layer.end())
+			return false;
+		auto legacy = a_layer.find(SettingsMigrations::kCSUtilitySettingsName.data());
+		if (legacy == a_layer.end() || !legacy->is_object()) {
+			if (!alias->is_object())
+				return false;
+			a_layer[std::string(SettingsMigrations::kCSUtilitySettingsName)] = *alias;
+		} else if (alias->is_object()) {
+			MergeMissingObjectMembers(*legacy, *alias);
+		}
+		a_layer.erase(SettingsMigrations::kOSUtilitySettingsName.data());
+		return true;
+	}
+
+	bool MigrateLegacyUtilityAppearanceRoot(json& a_layer)
+	{
+		auto legacy = a_layer.find(SettingsMigrations::kCSUtilitySettingsName.data());
+		if (legacy == a_layer.end() || !legacy->is_object())
+			return false;
+
+		const auto canonical = a_layer.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+		json fallback = json::object();
+		std::vector<json::json_pointer> consumed;
+		bool hasLighting = false;
+		for (const auto& [sourceName, destinationName] : SettingsMigrations::kLegacyUtilityAppearanceFields) {
+			const json::json_pointer sourcePath{ std::string(sourceName) };
+			if (!legacy->contains(sourcePath))
+				continue;
+			const auto& value = legacy->at(sourcePath);
+			const bool isBoolean = sourceName == "/useAmbientEffectLighting";
+			if (isBoolean ? !value.is_boolean() : !SettingsMigrations::IsFiniteUtilityNumber(value))
+				continue;
+			if (sourceName == "/water/parallaxQuality" && !SettingsMigrations::IsUtilityUnsignedInteger(value))
+				continue;
+			if (sourceName == "/vlIntensity" && !AdaptiveBalanceGodray::IsValidFinalBrightness(value.get<double>()))
+				continue;
+			json migratedValue = value;
+			if (canonical != a_layer.end() && canonical->is_object() &&
+				std::ranges::find(SettingsMigrations::kLegacyCSUtilityLightingKeys, sourcePath.back()) != SettingsMigrations::kLegacyCSUtilityLightingKeys.end()) {
+				const auto lighting = canonical->find(kLightingKey.data());
+				if (lighting != canonical->end() && lighting->is_object()) {
+					const auto existing = lighting->find(sourcePath.back());
+					if (existing != lighting->end() && SettingsMigrations::IsFiniteUtilityNumber(*existing))
+						migratedValue = *existing;
+				}
+			}
+			fallback[json::json_pointer{ std::string(destinationName) }] = std::move(migratedValue);
+			consumed.push_back(sourcePath);
+			hasLighting |= destinationName.starts_with("/globalProfile/") && !sourceName.starts_with("/water/");
+		}
+		if (fallback.empty())
+			return false;
+
+		if (hasLighting) {
+			const auto enabled = legacy->find("enabled");
+			fallback["globalProfile"]["advanced"] = enabled != legacy->end() && enabled->is_boolean() ? *enabled : json(true);
+			if (canonical != a_layer.end() && canonical->is_object()) {
+				const auto existing = canonical->find(kGlobalLightingEnabledKey.data());
+				if (existing != canonical->end() && existing->is_boolean())
+					fallback["globalProfile"]["advanced"] = *existing;
+			}
+		}
+		auto adaptive = a_layer.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+		json destination = adaptive != a_layer.end() ? *adaptive : json::object();
+		if (fallback.contains("godrayFinalBrightness") && destination.is_object()) {
+			const auto existing = destination.find("godrayFinalBrightness");
+			if (existing != destination.end() && (!existing->is_number() || !AdaptiveBalanceGodray::IsValidFinalBrightness(existing->get<double>())))
+				destination.erase(existing);
+		}
+		MergeValidFallback(destination, fallback, fallback);
+		a_layer[std::string(SettingsMigrations::kAdaptiveBalanceSettingsName)] = std::move(destination);
+		for (const auto& path : consumed) {
+			if (path.parent_pointer().empty())
+				legacy->erase(path.back());
+			else
+				legacy->at(path.parent_pointer()).erase(path.back());
+		}
+		if (const auto water = legacy->find("water"); water != legacy->end() && water->is_object() && water->empty())
+			legacy->erase(water);
+		if (legacy->empty())
+			a_layer.erase(legacy);
+		return true;
+	}
+
+	bool MigrateLegacyUtilityBloomRoot(json& a_layer)
+	{
+		const auto legacy = a_layer.find(SettingsMigrations::kCSUtilitySettingsName.data());
+		if (legacy == a_layer.end() || !legacy->is_object())
+			return false;
+		const auto bloom = legacy->find(kLegacyBloomKey.data());
+		if (bloom == legacy->end() || !bloom->is_object())
+			return false;
+		if (const auto migrated = bloom->find(kLegacyBloomMigratedKey.data());
+			migrated != bloom->end() && migrated->is_boolean() && migrated->get<bool>())
+			return false;
+		const auto canonical = a_layer.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+		if (canonical != a_layer.end() && canonical->is_object()) {
+			const auto existing = canonical->find(kLegacyBloomKey.data());
+			if (existing != canonical->end() && existing->is_object())
+				return false;
+		}
+
+		unsigned preset = 0;
+		if (const auto selected = bloom->find("SelectedPreset"); selected != bloom->end() && selected->is_number_integer())
+			preset = static_cast<unsigned>(std::clamp(selected->get<double>(), 0.0, 2.0));
+		const char* name = preset == 1 ? "Fantasy" : preset == 2 ? "Dreamy" :
+		                                                           "Default";
+		const auto& defaults = GetBloomSchema().at(name);
+		const auto profile = bloom->find(name);
+		json selected = profile != bloom->end() && profile->is_object() ? *profile : json::object();
+		MergeValidFallback(selected, defaults, defaults);
+		const auto enabled = bloom->find("Enabled");
+		const bool isEnabled = enabled != bloom->end() &&
+		                       (enabled->is_boolean() ? enabled->get<bool>() : enabled->is_number() && enabled->get<double>() != 0.0);
+		if (!isEnabled)
+			selected["EnhancementIntensity"] = 0.0f;
+		const json fallback = { { "globalProfile", { { "bloom", std::move(selected) } } } };
+		auto adaptive = a_layer.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+		json destination = adaptive != a_layer.end() ? *adaptive : json::object();
+		if (!MergeValidFallback(destination, fallback, fallback))
+			return false;
+		a_layer[std::string(SettingsMigrations::kAdaptiveBalanceSettingsName)] = std::move(destination);
+		// Inactive presets have no canonical slot; retain their complete source blob.
+		return true;
+	}
+
+	bool MigrateDepthOfFieldMembers(json& a_target, json& a_legacy, const json& a_schema)
+	{
+		if (!a_legacy.is_object())
+			return false;
+		using AdaptiveBalanceDepthOfFieldSettingsPolicy::IsValidValue;
+		bool consumed = false;
+		const auto& properties = a_schema.at("properties");
+		for (auto source = a_legacy.begin(); source != a_legacy.end();) {
+			const auto schema = properties.find(source.key());
+			if (schema == properties.end()) {
+				++source;
+				continue;
+			}
+			if (schema->at("type") == "object") {
+				json child = a_target.is_object() && a_target.contains(source.key()) ? a_target.at(source.key()) : json::object();
+				if (MigrateDepthOfFieldMembers(child, *source, *schema)) {
+					if (!a_target.is_object())
+						a_target = json::object();
+					a_target[source.key()] = std::move(child);
+					consumed = true;
+					if (source->empty()) {
+						source = a_legacy.erase(source);
+						continue;
+					}
+				}
+			} else if (IsValidValue(*source, *schema)) {
+				if (!a_target.is_object())
+					a_target = json::object();
+				const auto destination = a_target.find(source.key());
+				if (destination == a_target.end() || !IsValidValue(*destination, *schema))
+					a_target[source.key()] = *source;
+				source = a_legacy.erase(source);
+				consumed = true;
+				continue;
+			}
+			++source;
+		}
+		return consumed;
+	}
+
+	bool MigrateLegacyUtilityBootState(json& a_layer)
+	{
+		const auto boot = a_layer.find("Disable at Boot");
+		if (boot == a_layer.end() || !boot->is_object())
+			return false;
+		bool disabled = false;
+		for (const auto alias : SettingsMigrations::kLegacyUtilityFeatureNames) {
+			if (const auto value = boot->find(alias.data()); value != boot->end() && value->is_boolean())
+				disabled = value->get<bool>();
+		}
+		if (!disabled)
+			return false;
+		const auto adaptive = a_layer.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+		json target = json::object();
+		if (adaptive != a_layer.end() && adaptive->is_object()) {
+			if (const auto depth = adaptive->find(SettingsMigrations::kDepthOfFieldSettingsKey.data()); depth != adaptive->end() && depth->is_object())
+				target = *depth;
+		}
+		bool changed = false;
+		for (const auto* flag : { "enabled", "fixUnderwaterFogDofBlur" }) {
+			if (!target.contains(flag) || !target.at(flag).is_boolean()) {
+				target[flag] = false;
+				changed = true;
+			}
+		}
+		if (changed) {
+			if (adaptive == a_layer.end() || !adaptive->is_object())
+				a_layer[std::string(SettingsMigrations::kAdaptiveBalanceSettingsName)] = json::object();
+			a_layer[std::string(SettingsMigrations::kAdaptiveBalanceSettingsName)][std::string(SettingsMigrations::kDepthOfFieldSettingsKey)] = std::move(target);
+		}
+		return changed;
+	}
+
+	bool MigrateLegacyDepthOfFieldRoot(json& a_layer)
+	{
+		auto legacy = a_layer.find(SettingsMigrations::kCSUtilitySettingsName.data());
+		if (legacy == a_layer.end() || !legacy->is_object())
+			return false;
+
+		bool inferEnabled = false;
+		if (!legacy->contains("enabled")) {
+			for (const auto* scope : { "sceneDof", "underwaterDof" }) {
+				const auto dof = legacy->find(scope);
+				if (dof != legacy->end() && dof->is_object()) {
+					const auto locked = dof->find("locked");
+					inferEnabled |= locked != dof->end() && locked->is_boolean() && locked->get<bool>();
+				}
+			}
+		}
+		auto adaptive = a_layer.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+		json target = json::object();
+		if (adaptive != a_layer.end() && adaptive->is_object()) {
+			if (const auto depth = adaptive->find(SettingsMigrations::kDepthOfFieldSettingsKey.data()); depth != adaptive->end())
+				target = *depth;
+		}
+		static const auto schema = AdaptiveBalanceDepthOfFieldSettingsPolicy::Schema();
+		if (!MigrateDepthOfFieldMembers(target, *legacy, schema))
+			return false;
+		if (inferEnabled && (!target.contains("enabled") || !target.at("enabled").is_boolean()))
+			target["enabled"] = true;
+
+		// Only supported valid leaves are consumed; malformed and future fields remain recoverable.
+		if (adaptive == a_layer.end() || !adaptive->is_object())
+			a_layer[std::string(SettingsMigrations::kAdaptiveBalanceSettingsName)] = json::object();
+		a_layer[std::string(SettingsMigrations::kAdaptiveBalanceSettingsName)][std::string(SettingsMigrations::kDepthOfFieldSettingsKey)] = std::move(target);
+		if (legacy->empty())
+			a_layer.erase(legacy);
+		return true;
+	}
+
 }
 
 bool SettingsMigrations::MigrateAdaptiveBalanceRootLayer(
@@ -305,18 +550,27 @@ bool SettingsMigrations::MigrateAdaptiveBalanceRootLayer(
 		return false;
 
 	auto migratedLayer = a_layer;
-	bool migrated = MigrateLegacyAdaptiveBrightnessRoot(migratedLayer);
+	bool migrated = MigrateLegacyUtilityAlias(migratedLayer);
+	migrated |= MigrateLegacyUtilityBootState(migratedLayer);
+	migrated |= MigrateLegacyAdaptiveBrightnessRoot(migratedLayer);
 	migrated |= MigrateLegacyUnifiedWaterAppearanceRoot(migratedLayer, a_forceLegacyWaterAppearance);
+	migrated |= MigrateLegacyUtilityAppearanceRoot(migratedLayer);
+	migrated |= MigrateLegacyUtilityBloomRoot(migratedLayer);
 	if (auto adaptive = migratedLayer.find(kAdaptiveBalanceSettingsName.data()); adaptive != migratedLayer.end())
 		migrated |= MigrateCloudSettingsLayer(*adaptive);
+
+	const auto finalizeLayer = [&]() {
+		migrated |= MigrateLegacyDepthOfFieldRoot(migratedLayer);
+		if (migrated)
+			a_layer = std::move(migratedLayer);
+		return migrated;
+	};
 
 	const auto sourceCSUtilityIt = migratedLayer.find(kCSUtilitySettingsName.data());
 	if (sourceCSUtilityIt == migratedLayer.end() ||
 		!sourceCSUtilityIt->is_object() ||
 		!HasLegacyRendererSettings(*sourceCSUtilityIt)) {
-		if (migrated)
-			a_layer = std::move(migratedLayer);
-		return migrated;
+		return finalizeLayer();
 	}
 
 	// Work on the candidate so a layer is never partially rewritten when its
@@ -329,9 +583,7 @@ bool SettingsMigrations::MigrateAdaptiveBalanceRootLayer(
 		adaptiveIt = migratedLayer.find(kAdaptiveBalanceSettingsName.data());
 	} else if (!adaptiveIt->is_object()) {
 		if (!HasRecoverableLegacyRendererSettings(*csUtilityIt)) {
-			if (migrated)
-				a_layer = std::move(migratedLayer);
-			return migrated;
+			return finalizeLayer();
 		}
 		// A malformed destination cannot represent any valid explicit setting.
 		// Recover into a clean object when the legacy layer contains usable data.
@@ -361,11 +613,11 @@ bool SettingsMigrations::MigrateAdaptiveBalanceRootLayer(
 		if (lightingIt != adaptiveIt->end() && lightingIt->is_object()) {
 			for (const auto key : kLegacyCSUtilityLightingKeys) {
 				auto legacyIt = csUtilityIt->find(key.data());
-				if (legacyIt == csUtilityIt->end())
+				if (legacyIt == csUtilityIt->end() || !IsFiniteUtilityNumber(*legacyIt))
 					continue;
 
 				auto targetIt = lightingIt->find(key.data());
-				if (targetIt != lightingIt->end() && targetIt->is_number()) {
+				if (targetIt != lightingIt->end() && IsFiniteUtilityNumber(*targetIt)) {
 					// A valid explicit destination value wins within this source.
 					csUtilityIt->erase(legacyIt);
 					migrated = true;
@@ -378,30 +630,8 @@ bool SettingsMigrations::MigrateAdaptiveBalanceRootLayer(
 		}
 	}
 
-	auto legacyBloomIt = csUtilityIt->find(kLegacyBloomKey.data());
-	if (legacyBloomIt != csUtilityIt->end()) {
-		auto adaptiveBloomIt = adaptiveIt->find(kLegacyBloomKey.data());
-		if (legacyBloomIt->is_object()) {
-			const bool hasValidDestination = adaptiveBloomIt != adaptiveIt->end() && adaptiveBloomIt->is_object();
-			json mergedBloom = hasValidDestination ? *adaptiveBloomIt : json::object();
-			const bool repaired = MergeValidFallback(mergedBloom, *legacyBloomIt, GetBloomSchema());
-			if (hasValidDestination || repaired) {
-				if (repaired)
-					(*adaptiveIt)[std::string(kLegacyBloomKey)] = std::move(mergedBloom);
-				csUtilityIt->erase(legacyBloomIt);
-				migrated = true;
-			}
-		} else if (adaptiveBloomIt != adaptiveIt->end() && adaptiveBloomIt->is_object()) {
-			// A valid destination Bloom object supersedes an unusable legacy one.
-			csUtilityIt->erase(legacyBloomIt);
-			migrated = true;
-		}
-	}
-
 	migrated |= MigrateCloudSettingsLayer(*adaptiveIt);
-	if (migrated)
-		a_layer = std::move(migratedLayer);
-	return migrated;
+	return finalizeLayer();
 }
 
 bool SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(nlohmann::json& a_adaptiveBalanceLayer)
@@ -486,7 +716,8 @@ nlohmann::json SettingsMigrations::ExtractAdaptiveBalanceFeaturePatch(nlohmann::
 	if (!MigrateAdaptiveBalanceRootLayer(rootLayer))
 		return json::object();
 
-	a_csUtilityLayer = std::move(rootLayer[std::string(kCSUtilitySettingsName)]);
+	const auto legacyIt = rootLayer.find(kCSUtilitySettingsName.data());
+	a_csUtilityLayer = legacyIt != rootLayer.end() ? std::move(*legacyIt) : json::object();
 	auto adaptiveIt = rootLayer.find(kAdaptiveBalanceSettingsName.data());
 	return adaptiveIt != rootLayer.end() && adaptiveIt->is_object() ? std::move(*adaptiveIt) : json::object();
 }
@@ -504,4 +735,13 @@ nlohmann::json SettingsMigrations::ExtractAdaptiveBalanceWaterFeaturePatch(nlohm
 	a_unifiedWaterLayer = std::move(rootLayer[std::string(kUnifiedWaterSettingsName)]);
 	auto adaptiveIt = rootLayer.find(kAdaptiveBalanceSettingsName.data());
 	return adaptiveIt != rootLayer.end() && adaptiveIt->is_object() ? std::move(*adaptiveIt) : json::object();
+}
+
+void SettingsMigrations::RetireAdaptiveBalanceFeaturePatch(nlohmann::json& a_legacyLayer)
+{
+	const auto patch = ExtractAdaptiveBalanceFeaturePatch(a_legacyLayer);
+	if (patch.contains(json::json_pointer("/globalProfile/bloom"))) {
+		if (auto bloom = a_legacyLayer.find(kLegacyBloomKey.data()); bloom != a_legacyLayer.end() && bloom->is_object())
+			(*bloom)[std::string(kLegacyBloomMigratedKey)] = true;
+	}
 }

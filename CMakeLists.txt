@@ -2051,6 +2051,81 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(ShadowBatchInstall PROPERTIES TIMEOUT 30)
 
+    set(_adaptive_balance_dof_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/adaptive-balance-dof"
+    )
+    set(_adaptive_balance_dof_test_headers
+        "${_adaptive_balance_dof_test_dir}/adaptive_balance_dof_engine_types.h"
+        "${_adaptive_balance_dof_test_dir}/adaptive_balance_dof_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_adaptive_balance_dof_test_headers}
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extract_adaptive_balance_dof.py"
+            --source-dir "${PROJECT_SOURCE_DIR}" --output-dir
+            "${_adaptive_balance_dof_test_dir}"
+        DEPENDS
+            src/Features/AdaptiveBalanceDepthOfField.cpp
+            src/Features/AdaptiveBalanceDepthOfField.h
+            src/Features/AdaptiveBrightness.cpp
+            extern/CommonLibSSE-NG/include/RE/I/ImageSpaceData.h
+            tests/extract_adaptive_balance_dof.py
+            tests/extract_adaptive_balance_toggle.py
+        VERBATIM
+    )
+    add_controller_test(adaptive_balance_dof_test AdaptiveBalanceDepthOfField tests/adaptive_balance_dof_test.cpp)
+    target_sources(
+        adaptive_balance_dof_test
+        PRIVATE ${_adaptive_balance_dof_test_headers}
+    )
+    target_include_directories(
+        adaptive_balance_dof_test
+        PRIVATE "${_adaptive_balance_dof_test_dir}"
+    )
+    target_link_libraries(
+        adaptive_balance_dof_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
+    set(_legacy_utility_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/legacy-utility-compatibility"
+    )
+    set(_legacy_utility_test_header
+        "${_legacy_utility_test_dir}/legacy_utility_compatibility_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_legacy_utility_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_legacy_utility_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_legacy_utility_compatibility.cmake"
+        DEPENDS
+            src/LegacyUtilityCompatibility.cpp
+            src/LegacyUtilityCompatibility.h
+            src/SettingsMigrations.h
+            src/Features/AdaptiveBalanceDepthOfField.h
+            tests/extract_legacy_utility_compatibility.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        legacy_utility_compatibility_test
+        LegacyUtilityCompatibility
+        tests/legacy_utility_compatibility_test.cpp
+    )
+    target_sources(
+        legacy_utility_compatibility_test
+        PRIVATE "${_legacy_utility_test_header}"
+    )
+    target_include_directories(
+        legacy_utility_compatibility_test
+        PRIVATE "${_legacy_utility_test_dir}"
+    )
+    target_link_libraries(
+        legacy_utility_compatibility_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
     set(_adaptive_balance_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/adaptive-balance-toggle"
     )
@@ -2595,6 +2670,19 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(
         SkylightingSettings
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT
+                "CXX=${CMAKE_CXX_COMPILER};CSX_JSON_INCLUDE=$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
+    add_test(
+        NAME DepthOfFieldMigration
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/depth_of_field_migration_test.py"
+    )
+    set_tests_properties(
+        DepthOfFieldMigration
         PROPERTIES
             LABELS "ControllerTests"
             ENVIRONMENT
@@ -3581,6 +3669,19 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(
         menu_depth_culling_settings_policy_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_controller_test(
+        menu_depth_of_field_settings_policy_test
+        MenuDepthOfFieldSettingsPolicy
+        tests/menu_depth_of_field_settings_policy_test.cpp
+    )
+    target_compile_definitions(
+        menu_depth_of_field_settings_policy_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    target_link_libraries(
+        menu_depth_of_field_settings_policy_test
         PRIVATE nlohmann_json::nlohmann_json
     )
     add_controller_test(

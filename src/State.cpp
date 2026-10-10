@@ -26,7 +26,6 @@
 #include "FeatureIssues.h"
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
-#include "Features/CSUtility.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/FoveatedCommon.h"
@@ -78,7 +77,8 @@ namespace
 			std::string featureName = "<unknown>";
 			try {
 				featureName = feature->GetShortName();
-				if (!feature->loaded || !overrideManager->HasFeatureOverrides(featureName))
+				if (!feature->loaded || (!overrideManager->HasFeatureOverrides(featureName) &&
+											(featureName != SettingsMigrations::kAdaptiveBalanceFeatureName || !overrideManager->HasUserOverride(featureName))))
 					continue;
 
 				json currentSettings;
@@ -1392,7 +1392,8 @@ void State::Load(
 					feature->RegisterWeatherVariables();
 
 					// Apply feature-specific overrides on top (overrides take priority over user settings)
-					if (overridesDiscovered > 0 && overrideManager->HasFeatureOverrides(featureName)) {
+					if (overrideManager->HasFeatureOverrides(featureName) ||
+						(featureName == SettingsMigrations::kAdaptiveBalanceFeatureName && overrideManager->HasUserOverride(featureName))) {
 						json featureJson;
 						feature->SaveSettings(featureJson);  // Get current settings as JSON
 
@@ -2239,6 +2240,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		const auto& volumetricShadows = globals::features::volumetricShadows;
 		data.VolumetricShadowsEnabled = volumetricShadows.loaded && volumetricShadows.settings.Enabled;
 		const auto godrayProfile = a_inWorld ? globals::features::volumetricLighting.GetRuntimeGodrayProfile() : VolumetricLighting::GodrayProfile{};
+		data.GodrayFinalBrightness = a_inWorld ? globals::features::adaptiveBrightness.GetEffectiveGodrayFinalBrightness() : AdaptiveBalanceGodray::kDefault;
 		data.VolumetricLightingOpacity = godrayProfile.Opacity;
 		data.VolumetricLightingSaturation = godrayProfile.Saturation;
 		data.VolumetricLightingCustomColor = {

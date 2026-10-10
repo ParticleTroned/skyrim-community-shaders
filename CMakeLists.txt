@@ -309,6 +309,8 @@ find_library(DETOURS_LIBRARY detours REQUIRED)
 include(FidelityFX-SDK)
 include(FidelityFX-Runtime)
 include(Streamline-Runtime)
+include(ValidateNeuralColor)
+csx_validate_neural_color("${CMAKE_CURRENT_SOURCE_DIR}")
 csx_configure_runtime_payload()
 
 string(
@@ -331,7 +333,7 @@ target_compile_definitions(
 include(TracySupport)
 csx_configure_tracy(${PROJECT_NAME})
 if(WIN32)
-    target_link_libraries(${PROJECT_NAME} PRIVATE bcrypt shell32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE bcrypt shell32 wintrust)
 endif()
 
 file(
@@ -355,6 +357,7 @@ target_include_directories(
         ${BSHOSHANY_THREAD_POOL_INCLUDE_DIRS}
         ${CLIB_UTIL_INCLUDE_DIRS}
         "${CMAKE_SOURCE_DIR}/package/Shaders"
+        "${CMAKE_SOURCE_DIR}/extern/nvapi"
         ${DETOURS_INCLUDE_DIRS}
 )
 
@@ -751,6 +754,7 @@ install(
     DESTINATION .
     COMPONENT Shaders
     PATTERN "Tests" EXCLUDE
+    PATTERN "Streamline" EXCLUDE
 )
 install(
     FILES ${FFX_RUNTIME_PAYLOAD_FILES}
@@ -762,7 +766,16 @@ install(
     DESTINATION Shaders/Upscaling/Streamline
     COMPONENT StreamlineRuntime
 )
+install(
+    SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/nr_release_install_guard.cmake"
+    COMPONENT StreamlineRuntime
+)
 install(CODE "file(REMOVE \${CMAKE_INSTALL_PREFIX}/Core)" COMPONENT Shaders)
+install(
+    CODE
+        "set(NR_PACKAGE_ROOT \"\${CMAKE_INSTALL_PREFIX}\")\ninclude(\"${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake\")"
+    ALL_COMPONENTS
+)
 
 # #######################################################################################################################
 # # Automatic AIO preparation (incremental copy system)
@@ -1342,6 +1355,9 @@ if(ZIP_TO_DIST)
         TARGET ${PROJECT_NAME}
         POST_BUILD
         COMMAND
+            ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${ZIP_DIR}" -P
+            "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
+        COMMAND
             ${CMAKE_COMMAND} -E tar cf ${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP}
             --format=7zip -- .
         WORKING_DIRECTORY ${ZIP_DIR}
@@ -1374,6 +1390,9 @@ if(ZIP_TO_DIST)
                     ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
                     "${FEATURE_ZIP_STAGE}" --component StreamlineRuntime
                 COMMAND
+                    ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_ZIP_STAGE}" -P
+                    "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
+                COMMAND
                     ${CMAKE_COMMAND} -E chdir "${FEATURE_ZIP_STAGE}"
                     ${CMAKE_COMMAND} -E tar cf
                     ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${CSX_PACKAGE_STAMP}.7z
@@ -1383,6 +1402,9 @@ if(ZIP_TO_DIST)
             add_custom_command(
                 TARGET ${PROJECT_NAME}
                 POST_BUILD
+                COMMAND
+                    ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_PATH}" -P
+                    "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
                 COMMAND
                     ${CMAKE_COMMAND} -E tar cf
                     ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${CSX_PACKAGE_STAMP}.7z
@@ -1443,7 +1465,16 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
 endforeach()
 
 # Core package
-list(APPEND CORE_SOURCES "${CSX_RUNTIME_INSTALL_GUARD}")
+list(
+    APPEND CORE_SOURCES
+    "${CSX_RUNTIME_INSTALL_GUARD}"
+    "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
+)
+list(
+    APPEND CORE_SOURCES
+    "${CMAKE_CURRENT_BINARY_DIR}/nr_release_install_guard.cmake"
+    "${CMAKE_SOURCE_DIR}/cmake/VerifyNrReleasePayload.cmake"
+)
 set(FEATURE_PATH "${CMAKE_BINARY_DIR}/Core")
 file(MAKE_DIRECTORY ${FEATURE_PATH})
 add_custom_command(
@@ -1468,6 +1499,9 @@ add_custom_command(
         --component StreamlineRuntime
     COMMAND ${CMAKE_COMMAND} -E rm -f -- ${FEATURE_PATH}/Core
     COMMAND ${CMAKE_COMMAND} -E remove_directory "${FEATURE_PATH}/Shaders/Tests"
+    COMMAND
+        ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_PATH}" -P
+        "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
     COMMAND ${CMAKE_COMMAND} -E tar cfv ${CORE_PACKAGE} --format=7zip -- .
     WORKING_DIRECTORY ${FEATURE_PATH}
     COMMENT "Creating Core zip package"
@@ -1505,12 +1539,16 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
                 ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
                 "${FEATURE_PACKAGE_STAGE}" --component StreamlineRuntime
             COMMAND
+                ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_PACKAGE_STAGE}" -P
+                "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
+            COMMAND
                 ${CMAKE_COMMAND} -E chdir "${FEATURE_PACKAGE_STAGE}"
                 ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip --
                 .
             DEPENDS
                 ${FEATURE_SOURCES}
                 ${CSX_RUNTIME_INSTALL_GUARD}
+                "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
                 ${FFX_RUNTIME_FILES}
                 ${STREAMLINE_RUNTIME_FILES}
             COMMENT "Creating ${FEATURE} zip package"
@@ -1519,10 +1557,15 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
         add_custom_command(
             OUTPUT ${FEATURE_PACKAGE}
             COMMAND
+                ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_PATH}" -P
+                "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
+            COMMAND
                 ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip --
                 .
             WORKING_DIRECTORY "${FEATURE_PATH}"
-            DEPENDS ${FEATURE_SOURCES}
+            DEPENDS
+                ${FEATURE_SOURCES}
+                "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
             COMMENT "Creating ${FEATURE} zip package"
         )
     endif()
@@ -1563,6 +1606,9 @@ add_custom_command(
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
         --config $<CONFIG>
+    COMMAND
+        ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${AIO_DIR}" -P
+        "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
     COMMAND
         ${CMAKE_COMMAND} -E chdir ${AIO_DIR} ${CMAKE_COMMAND} -E tar cfv
         ${AIO_PACKAGE} --format=7zip -- .
@@ -2359,6 +2405,18 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
+    add_d3d_shader_test(
+        actor_blending_shader_test ActorBlendingShader
+        tests/actor_blending_shader_test.cpp
+    )
+    target_sources(
+        actor_blending_shader_test
+        PRIVATE src/Utils/ShaderInclude.cpp
+    )
+    target_link_libraries(
+        actor_blending_shader_test
+        PRIVATE spdlog::spdlog windowsapp.lib
+    )
     include("${PROJECT_SOURCE_DIR}/tests/vr_depth_encode.cmake")
     add_d3d_shader_test(grass_batch_shader_test GrassBatchShader tests/grass_batch_shader_test.cpp)
     target_sources(grass_batch_shader_test PRIVATE src/Utils/ShaderInclude.cpp)
@@ -3148,6 +3206,8 @@ if(BUILD_CONTROLLER_TESTS)
         volumetric_lighting_tuning_policy_test
         PRIVATE nlohmann_json::nlohmann_json
     )
+    include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_runtime.cmake")
+    add_controller_test(runtime_toggle_test RuntimeToggle tests/runtime_toggle_test.cpp)
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_composite.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/shader_include.cmake")
     add_controller_test(
@@ -3219,50 +3279,9 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
     add_controller_test(
-        menu_depth_culling_diagnostics_test
-        MenuDepthCullingDiagnostics
-        tests/menu_depth_culling_diagnostics_test.cpp
-    )
-    target_compile_definitions(
-        menu_depth_culling_diagnostics_test
-        PRIVATE DEVBENCH_BRIDGE_ENABLED
-    )
-    target_link_libraries(
-        menu_depth_culling_diagnostics_test
-        PRIVATE nlohmann_json::nlohmann_json
-    )
-    add_controller_test(
         vr_depth_culling_temporal_policy_test
         VRDepthCullingTemporalPolicy
         tests/vr_depth_culling_temporal_policy_test.cpp
-    )
-    add_controller_test(
-        vr_hybrid_culling_policy_test
-        VRHybridCullingPolicy
-        tests/vr_hybrid_culling_policy_test.cpp
-    )
-    add_controller_test(
-        vr_hybrid_culling_history_test
-        VRHybridCullingHistory
-        tests/vr_hybrid_culling_history_test.cpp
-    )
-    add_d3d_shader_test(
-        vr_hybrid_culling_shader_test
-        VRHybridCullingShader
-        tests/vr_hybrid_culling_shader_test.cpp
-    )
-    set_tests_properties(VRHybridCullingShader PROPERTIES TIMEOUT 180)
-    target_compile_definitions(
-        vr_hybrid_culling_shader_test
-        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
-    )
-    target_sources(
-        vr_hybrid_culling_shader_test
-        PRIVATE src/Utils/ShaderInclude.cpp
-    )
-    target_link_libraries(
-        vr_hybrid_culling_shader_test
-        PRIVATE dxguid.lib spdlog::spdlog
     )
     add_controller_test(
         vr_wand_interaction_policy_test
@@ -3928,6 +3947,8 @@ if(BUILD_CONTROLLER_TESTS)
     )
     add_test(NAME ApiFeatureContract COMMAND api_feature_contract_test)
     set_tests_properties(ApiFeatureContract PROPERTIES LABELS "ControllerTests")
+
+    include(NeuralRenderingTests)
 
     # Derive the aggregate from this block so new test executables cannot be omitted.
     get_property(_controller_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)

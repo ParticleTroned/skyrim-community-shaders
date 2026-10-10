@@ -1,3 +1,4 @@
+#include "Utils/RuntimeToggle.h"
 
 #include <algorithm>
 #include <array>
@@ -7,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -61,6 +63,7 @@ namespace RE
 	namespace RENDER_TARGETS_DEPTHSTENCIL
 	{
 		constexpr uint kSHADOWMAPS_ESRAM = 0;
+		constexpr uint kPRECIPITATION_OCCLUSION_MAP = 1;
 	}
 }
 struct ID3D11ComputeShader
@@ -68,6 +71,12 @@ struct ID3D11ComputeShader
 struct ID3D11SamplerState
 {};
 struct ID3D11ShaderResourceView
+{
+	template <class Desc>
+	void GetDesc(Desc*) const
+	{}
+};
+struct ID3D11DepthStencilView : ID3D11ShaderResourceView
 {};
 struct ID3D11UnorderedAccessView
 {
@@ -79,6 +88,7 @@ struct View
 {
 	T* value = nullptr;
 	T* get() const { return value; }
+	T** put() { return &value; }
 	View& operator=(std::nullptr_t)
 	{
 		value = nullptr;
@@ -86,8 +96,108 @@ struct View
 	}
 	explicit operator bool() const { return value != nullptr; }
 };
+namespace winrt
+{
+	template <class T>
+	using com_ptr = View<T>;
+}
+namespace SKSE::stl
+{
+	template <class F>
+	struct scope_exit
+	{
+		F run;
+		explicit scope_exit(F f) : run(std::move(f)) {}
+		~scope_exit() { run(); }
+	};
+}
+struct D3D11_TEXTURE2D_DESC
+{};
+struct D3D11_DEPTH_STENCIL_VIEW_DESC
+{};
+struct D3D11_TEXTURE3D_DESC
+{
+	uint Width, Height, Depth, MipLevels, Format, Usage, BindFlags, CPUAccessFlags, MiscFlags;
+};
+struct D3D11_SHADER_RESOURCE_VIEW_DESC
+{
+	uint Format, ViewDimension;
+	struct
+	{
+		uint MostDetailedMip, MipLevels;
+	} Texture3D;
+};
+struct D3D11_UNORDERED_ACCESS_VIEW_DESC
+{
+	uint Format, ViewDimension;
+	struct
+	{
+		uint MipSlice, FirstWSlice, WSize;
+	} Texture3D;
+};
+struct D3D11_SAMPLER_DESC
+{
+	uint Filter, AddressU, AddressV, AddressW, ComparisonFunc;
+	float MinLOD, MaxLOD;
+};
+constexpr uint DXGI_FORMAT_R16G16B16A16_FLOAT = 1, DXGI_FORMAT_R16_UINT = 2, DXGI_FORMAT_R32_UINT = 3, DXGI_FORMAT_R8_UNORM = 4;
+constexpr uint D3D11_USAGE_DEFAULT = 0, D3D11_BIND_SHADER_RESOURCE = 1, D3D11_BIND_UNORDERED_ACCESS = 2;
+constexpr uint D3D11_SRV_DIMENSION_TEXTURE3D = 0, D3D11_UAV_DIMENSION_TEXTURE3D = 0;
+constexpr uint D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR = 0, D3D11_TEXTURE_ADDRESS_CLAMP = 0, D3D11_COMPARISON_LESS_EQUAL = 0;
+constexpr float D3D11_FLOAT32_MAX = 1e38f;
+namespace Allocation
+{
+	inline unsigned calls = 0, failAt = 0, liveTextures = 0;
+	inline std::function<void()> duringCreate;
+	void Step()
+	{
+		if (++calls == failAt)
+			throw std::runtime_error("injected resource creation failure");
+		if (duringCreate) {
+			auto callback = std::move(duringCreate);
+			duringCreate = {};
+			callback();
+		}
+	}
+}
+struct ID3D11Device
+{
+	ID3D11SamplerState sampler;
+	int CreateSamplerState(const D3D11_SAMPLER_DESC*, ID3D11SamplerState** output)
+	{
+		Allocation::Step();
+		*output = &sampler;
+		return 0;
+	}
+};
+namespace DX
+{
+	void ThrowIfFailed(int result)
+	{
+		if (result)
+			throw std::runtime_error("resource creation failed");
+	}
+}
 struct Texture3D
 {
+	Texture3D() { ++Allocation::liveTextures; }
+	template <class Desc>
+	Texture3D(const Desc&, const char*)
+	{
+		Allocation::Step();
+		++Allocation::liveTextures;
+	}
+	~Texture3D() { --Allocation::liveTextures; }
+	template <class Desc>
+	void CreateSRV(const Desc&)
+	{
+		Allocation::Step();
+	}
+	void CreateUAV(const D3D11_UNORDERED_ACCESS_VIEW_DESC&) { Allocation::Step(); }
+	void CreateDSV(const D3D11_DEPTH_STENCIL_VIEW_DESC&) { Allocation::Step(); }
+	template <class Desc>
+	void GetDesc(Desc*) const
+	{}
 	ID3D11ShaderResourceView srvObject;
 	ID3D11UnorderedAccessView uavObject;
 	View<ID3D11ShaderResourceView> srv{ &srvObject };
@@ -111,6 +221,7 @@ struct RecordingContext
 	unsigned clearCount = 0;
 	std::vector<UINT> unboundSlots;
 	std::function<void()> duringClear;
+	void PSGetShaderResources(UINT slot, UINT, ID3D11ShaderResourceView** views) { *views = pixelResources[slot]; }
 	void PSSetShaderResources(UINT slot, UINT count, ID3D11ShaderResourceView* const* views)
 	{
 		if (count != 1)
@@ -143,6 +254,12 @@ struct RecordingContext
 };
 struct RecordingState
 {
+	uint32_t frameCount = 1;
+	bool blocked = false;
+	bool pendingPostLoadRuntimeReset = false;
+	bool IsSaveLoadSafeModeActive() const { return blocked; }
+	bool IsEngineSaveLoadActivityActive() const { return false; }
+	bool IsMainOrLoadingMenuOpen() const { return false; }
 	bool isMapMenuOpen = false;
 	unsigned updates = 0;
 	std::function<void()> update;
@@ -160,8 +277,10 @@ struct Renderer
 	{
 		struct
 		{
+			Texture2D* texture = nullptr;
 			ID3D11ShaderResourceView* depthSRV = nullptr;
-		} depthStencils[1];
+			ID3D11DepthStencilView* views[1]{};
+		} depthStencils[2];
 	} data;
 	Data& GetDepthStencilData() { return data; }
 };
@@ -181,11 +300,20 @@ namespace globals
 	namespace d3d
 	{
 		inline RecordingContext* context = nullptr;
-		inline void* device = nullptr;
+		inline ID3D11Device* device = nullptr;
 	}
 }
 namespace Util
 {
+	void SetResourceName(ID3D11SamplerState*, const char*) {}
+	inline bool rendererAvailable = true;
+	bool GetRendererContextLock(Renderer* renderer, RecordingContext* context) { return renderer && context && rendererAvailable; }
+	struct RendererOwnership
+	{
+		bool owned;
+		explicit RendererOwnership(bool available) : owned(available) {}
+		explicit operator bool() const { return owned; }
+	};
 	inline bool interior = false;
 	inline float3 eye;
 	float3 GetEyePosition(uint) { return eye; }
@@ -200,23 +328,38 @@ struct Skylighting
 	Texture2D* texOcclusion = nullptr;
 	View<ID3D11ComputeShader> probeUpdateCompute;
 	View<ID3D11SamplerState> comparisonSampler;
-	bool IsRuntimeActive() const { return loaded && settings.EnableSkylighting; }
 	bool HasCurrentShadowData() const { return false; }
 	bool HasProbeUpdateResources() const;
 	SkylightingCB GetCommonBufferData(bool inWorld);
 	void Prepass();
 	void SetupRenderTargetResources();
-	void SetupResources() { throw std::runtime_error("unexpected volume replacement"); }
+	void SetupResources();
+	void ApplyProbeGridQuality();
+	const char* GetPerformanceCostMeasurementWaitText() const;
+	unsigned compilations = 0;
+	void CompileComputeShaders() { ++compilations; }
 	Texture3D* texProbeArray = nullptr;
 	Texture3D* texAccumFramesArray = nullptr;
 	Texture3D* texShadowBitmask = nullptr;
 	Texture3D* texShadowVisibility = nullptr;
 	UINT probeArrayDims[3] = { 192, 192, 96 };
-	void QueueResetSkylighting();
+	void QueueResetSkylighting(bool rebuild = false);
+	bool HasPendingReset() const;
+	void EarlyPrepass();
 	bool UpdateInteriorState();
 	void ResetSkylighting();
 };
 
+struct ProbeGridPreset
+{
+	uint Width, Height, Depth;
+};
+uint ClampProbeGridQuality(uint quality) { return std::min(quality, 2u); }
+const ProbeGridPreset& GetProbeGridPreset(uint quality)
+{
+	static constexpr ProbeGridPreset presets[] = { { 128, 128, 64 }, { 192, 192, 96 }, { 256, 256, 128 } };
+	return presets[ClampProbeGridQuality(quality)];
+}
 #include "skylighting_lifecycle_under_test.h"
 
 void Require(bool value, const char* message)
@@ -233,10 +376,15 @@ struct Fixture
 	RE::Sky sky;
 	ID3D11ComputeShader compute;
 	ID3D11SamplerState sampler;
+	ID3D11DepthStencilView dsv;
+	ID3D11Device device;
 	Skylighting::SkylightingCB published{};
 	Skylighting feature;
 	Fixture()
 	{
+		Allocation::calls = Allocation::failAt = 0;
+		Allocation::duringCreate = {};
+		globals::d3d::device = nullptr;
 		globals::d3d::context = &context;
 		Util::interior = false;
 		Util::eye = {};
@@ -251,6 +399,28 @@ struct Fixture
 		feature.texAccumFramesArray = &confidence;
 		feature.texShadowBitmask = &mask;
 		feature.texShadowVisibility = &visibility;
+		auto& precipitation = renderer.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
+		precipitation.texture = &occlusion;
+		precipitation.depthSRV = &occlusion.srvObject;
+		precipitation.views[0] = &dsv;
+	}
+	void OwnResources()
+	{
+		feature.texOcclusion = new Texture2D;
+		feature.texProbeArray = new Texture3D;
+		feature.texAccumFramesArray = new Texture3D;
+		feature.texShadowBitmask = new Texture3D;
+		feature.texShadowVisibility = new Texture3D;
+		feature.resourceDevice = &device;
+		globals::d3d::device = &device;
+	}
+	void ReleaseResources()
+	{
+		delete feature.texOcclusion;
+		delete feature.texProbeArray;
+		delete feature.texAccumFramesArray;
+		delete feature.texShadowBitmask;
+		delete feature.texShadowVisibility;
 	}
 	void Ready()
 	{
@@ -265,6 +435,135 @@ struct Fixture
 int main()
 try {
 	unsigned scenarios = 0;
+	for (unsigned failure = 1; failure <= 16; ++failure) {
+		Fixture f;
+		f.OwnResources();
+		f.Ready();
+		const auto* probes = f.feature.texProbeArray;
+		const auto* occlusion = f.feature.texOcclusion;
+		const auto liveTextures = Allocation::liveTextures;
+		const auto clears = f.context.clearCount;
+		f.feature.settings.ProbeGridQuality = 0;
+		f.feature.QueueResetSkylighting(true);
+		Allocation::failAt = failure;
+		f.feature.EarlyPrepass();
+		Require(f.feature.resourceRebuildFailed && f.feature.HasPendingReset(), "allocation failure must retain an explicit failed state");
+		Require(!f.feature.IsRuntimeActive(), "failed rebuild must select the vanilla precipitation fallback");
+		Require(f.feature.texProbeArray == probes && f.feature.texOcclusion == occlusion && f.feature.probeArrayDims[2] == 96, "partial rebuild must retain the active resources and grid");
+		Require(Allocation::liveTextures == liveTextures && f.context.clearCount == clears, "partial replacements must be released without clearing active history");
+		Require(std::string(f.feature.GetPerformanceCostMeasurementWaitText()).find("failed") != std::string::npos, "rebuild failure must be visible without logging");
+		f.Publish();
+		Require(!f.published.Enabled, "failed rebuild must block sampling");
+		++f.state.frameCount;
+		f.feature.EarlyPrepass();
+		Require(Allocation::calls == failure, "failed allocations must not retry every frame");
+		Allocation::failAt = 0;
+		f.feature.QueueResetSkylighting();
+		++f.state.frameCount;
+		f.feature.EarlyPrepass();
+		Require(!f.feature.resourceRebuildFailed && !f.feature.HasPendingReset() && f.feature.probeArrayDims[2] == 64, "fresh reset request must retry and publish the complete replacement");
+		Require(Allocation::liveTextures == liveTextures && f.feature.needsOcclusionRefresh, "successful rebuild must release old resources and require fresh capture");
+		f.ReleaseResources();
+		++scenarios;
+	}
+	for (unsigned missing = 0; missing < 6; ++missing) {
+		Fixture f;
+		f.OwnResources();
+		auto& precipitation = f.renderer.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
+		if (missing == 0)
+			globals::d3d::device = nullptr;
+		if (missing == 1)
+			globals::d3d::context = nullptr;
+		if (missing == 2)
+			globals::game::renderer = nullptr;
+		if (missing == 3)
+			precipitation.texture = nullptr;
+		if (missing == 4)
+			precipitation.depthSRV = nullptr;
+		if (missing == 5)
+			precipitation.views[0] = nullptr;
+		f.feature.SetupResources();
+		Require(Allocation::calls == 0 && f.feature.queuedRebuildSkylighting, "missing rebuild inputs must preserve pending work without allocating");
+		f.ReleaseResources();
+		++scenarios;
+	}
+	{
+		Fixture f;
+		f.OwnResources();
+		Allocation::duringCreate = [&] { f.feature.QueueResetSkylighting(true); };
+		Allocation::failAt = 2;
+		f.feature.SetupResources();
+		Require(f.feature.resourceRebuildFailed && f.feature.queuedRebuildSkylighting, "request during a failed rebuild must survive");
+		Allocation::failAt = 0;
+		f.feature.EarlyPrepass();
+		Require(!f.feature.HasPendingReset(), "retained request must recover a failed rebuild");
+		Allocation::duringCreate = [&] { f.feature.QueueResetSkylighting(true); };
+		f.feature.SetupResources();
+		Require(f.feature.queuedRebuildSkylighting && !f.feature.resourceRebuildFailed, "request during a successful rebuild must survive publication");
+		f.ReleaseResources();
+		++scenarios;
+	}
+	{
+		Fixture f;
+		f.Ready();
+		f.Publish();
+		Require(f.published.Enabled, "fixture must publish active probes before late invalidation");
+		f.feature.QueueResetSkylighting();
+		f.feature.EarlyPrepass();
+		Require(!f.published.Enabled && !f.feature.probeUpdateBufferEnabled && f.state.updates == 1, "early reset must invalidate already-published probe data");
+		f.feature.needsOcclusionRefresh = false;
+		f.feature.Prepass();
+		Require(f.context.dispatchCount == 0, "fresh capture must not authorize dispatch with stale probe constants");
+		f.Publish();
+		f.feature.Prepass();
+		Require(f.context.dispatchCount == 1, "fresh publication must resume probe dispatch");
+		++scenarios;
+	}
+	{
+		Fixture f;
+		f.Ready();
+		f.feature.QueueResetSkylighting(true);
+		f.feature.ResetSkylighting();
+		Require(!f.feature.queuedResetSkylighting && f.feature.queuedRebuildSkylighting, "history reset must leave resource rebuild pending");
+		f.feature.needsOcclusionRefresh = false;
+		f.Publish();
+		Require(!f.published.Enabled, "pending resource rebuild must block probe sampling");
+		f.feature.EarlyPrepass();
+		Require(Allocation::calls == 0 && f.feature.HasPendingReset(), "missing device must retain resource rebuild");
+		f.OwnResources();
+		++f.state.frameCount;
+		f.feature.EarlyPrepass();
+		Require(Allocation::calls == 16 && !f.feature.HasPendingReset(), "resource rebuild must survive consumption of its reset flag");
+		f.ReleaseResources();
+		globals::d3d::device = nullptr;
+		++scenarios;
+	}
+	{
+		Fixture f;
+		f.state.blocked = true;
+		f.feature.EarlyPrepass();
+		Require(f.context.clearCount == 0 && f.feature.queuedResetSkylighting, "load guard must retain reset");
+		f.state.blocked = false;
+		Util::rendererAvailable = false;
+		++f.state.frameCount;
+		f.feature.EarlyPrepass();
+		Require(f.context.clearCount == 0 && f.feature.queuedResetSkylighting, "renderer contention must retain reset");
+		Util::rendererAvailable = true;
+		++f.state.frameCount;
+		f.context.pixelResources[50] = &f.probes.srvObject;
+		f.context.pixelResources[53] = &f.visibility.srvObject;
+		f.feature.EarlyPrepass();
+		Require(f.context.clearCount == 4 && !f.feature.queuedResetSkylighting, "safe frame must apply reset once");
+		Require(f.context.pixelResources[50] == &f.probes.srvObject && f.context.pixelResources[53] == &f.visibility.srvObject, "reset must restore pixel bindings");
+		f.feature.QueueResetSkylighting();
+		f.feature.EarlyPrepass();
+		Require(f.context.clearCount == 4 && f.feature.queuedResetSkylighting, "late request must wait for next frame");
+		++f.state.frameCount;
+		f.feature.EarlyPrepass();
+		Require(f.context.clearCount == 8, "next frame must consume late reset");
+		++scenarios;
+	}
+
 	{
 		Fixture f;
 		f.feature.QueueResetSkylighting();
@@ -274,7 +573,7 @@ try {
 		Require(f.context.clearCount == 4, "duplicate requests must coalesce into one reset");
 		Require(!f.feature.queuedResetSkylighting, "completed reset must consume its request");
 		Require(f.feature.needsOcclusionRefresh, "cleared probes still require a fresh capture");
-		Require(f.context.unboundSlots == std::vector<UINT>{ 50, 53 }, "history SRVs must be unbound before clears");
+		Require(f.context.unboundSlots == std::vector<UINT>{ 50, 53, 50, 53 }, "history SRVs must be unbound before clears");
 		Require(f.probes.uavObject.floats[0] > 3.54f && f.probes.uavObject.floats[1] == 0, "SH clear must be neutral");
 		Require(f.confidence.uavObject.uints == std::array<UINT, 4>{ 0, 0, 0, 0 }, "confidence and jitter must reset");
 		Require(f.mask.uavObject.uints[0] == UINT32_MAX, "shadow history must start fully lit");

@@ -56,7 +56,7 @@ powershell.exe -Command "./BuildRelease.bat [PRESET_NAME]"
 Set `CommunityShadersOutputDir` environment variable to semicolon-separated Skyrim Data directories:
 
 ```
-CommunityShadersOutputDir=F:/MySkyrimModpack/mods/CommunityShaders;F:/SteamLibrary/steamapps/common/SkyrimVR/Data;F:/SteamLibrary/steamapps/common/Skyrim Special Edition/Data
+CommunityShadersOutputDir=<CSX-mod-directory>;<Skyrim-VR-installation>/Data;<Skyrim-SE-installation>/Data
 ```
 
 ### Shader Development and Testing
@@ -458,8 +458,9 @@ Feature versions are automatically extracted from `.ini` files and compiled into
 
 ### Pull request and commit standards
 
-`AGENTS.md` is canonical for PR targets, title/body format, release-aware type
-selection, the mandatory `Rationale:`/`Implementation:` commit body, commit
+`AGENTS.md` is canonical for explicit PR authorization and targets, title/body
+format, release-aware type selection, the mandatory
+`Rationale:`/`Implementation:` commit body, commit
 hygiene, and attribution. Keep those rules in one place so Claude, Codex, and
 Copilot cannot drift onto different release semantics.
 

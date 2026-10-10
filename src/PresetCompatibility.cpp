@@ -67,9 +67,9 @@ namespace
 
 	bool IsCompatibleLegacyUnifiedPreset(const PresetCompatibility::Evaluation& a_evaluation, const Version& a_current)
 	{
-		// Bundled revision-5 settings support both the 3.19 and 3.20 version lines.
+		// Bundled revision-8 NR settings support both the 3.19 and 3.20 version lines.
 		return a_current.major == 3 && a_current.minor == 20 && a_current.runtime == "VR" &&
-		       a_evaluation.settingsContractRevision == 5 &&
+		       a_evaluation.settingsContractRevision == 8 &&
 		       a_evaluation.minimumVersion == "3.19" && a_evaluation.maximumVersionExclusive == "3.20" &&
 		       (a_evaluation.presetId == "csx-unified-performance" ||
 				   a_evaluation.presetId == "csx-unified-balanced" ||

@@ -25,7 +25,6 @@
 #include "VRDepthCullingEnablePolicy.h"
 #include "VRDepthCullingSettings.h"
 #include "VRDepthCullingTemporal.h"
-#include "VRHybridCulling.h"
 #include "WaterEffects.h"
 #include "WetnessEffects.h"
 #include "Wetterness.h"
@@ -444,7 +443,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VR::Settings,
 	EnableDepthBufferCullingInterior,
 	EnableDepthBufferCullingExterior,
-	DepthCullingMethod,
 	DepthCullingLegacyMode,
 	MinOccludeeBoxExtentExterior,
 	MinOccludeeBoxExtentInterior,
@@ -468,6 +466,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VRMenuCloseKeys,
 	VROverlayOpenKeys,
 	VROverlayCloseKeys,
+	VRNeuralRenderingToggleKeys,
 	comboTimeout,
 	EnableDragToReposition,
 	kAutoHideSeconds,
@@ -512,6 +511,7 @@ void VR::LoadSettings(json& o_json)
 	LoadVRControllerBinding(o_json, "VRMenuCloseKeys", settings.VRMenuCloseKeys);
 	LoadVRControllerBinding(o_json, "VROverlayOpenKeys", settings.VROverlayOpenKeys);
 	LoadVRControllerBinding(o_json, "VROverlayCloseKeys", settings.VROverlayCloseKeys);
+	LoadVRControllerBinding(o_json, "VRNeuralRenderingToggleKeys", settings.VRNeuralRenderingToggleKeys);
 	if (!settings.UnlockMenuPositionAndSize &&
 		o_json.is_object() &&
 		o_json.contains("VRMenuOffsetZ") &&
@@ -542,6 +542,7 @@ void VR::SaveSettings(json& o_json)
 	SaveVRControllerBinding(o_json, "VRMenuCloseKeys", settings.VRMenuCloseKeys);
 	SaveVRControllerBinding(o_json, "VROverlayOpenKeys", settings.VROverlayOpenKeys);
 	SaveVRControllerBinding(o_json, "VROverlayCloseKeys", settings.VROverlayCloseKeys);
+	SaveVRControllerBinding(o_json, "VRNeuralRenderingToggleKeys", settings.VRNeuralRenderingToggleKeys);
 	o_json["VRControllerBindingsVersion"] = kVRControllerBindingsVersion;
 }
 
@@ -658,7 +659,6 @@ json VR::CapturePerformanceCostMeasurementState() const
 	return {
 		{ "EnableDepthBufferCullingExterior", settings.EnableDepthBufferCullingExterior },
 		{ "EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior },
-		{ "DepthCullingMethod", settings.DepthCullingMethod },
 		{ "DepthCullingLegacyMode", settings.DepthCullingLegacyMode },
 		{ "MinOccludeeBoxExtentExterior", settings.MinOccludeeBoxExtentExterior },
 		{ "MinOccludeeBoxExtentInterior", settings.MinOccludeeBoxExtentInterior },
@@ -691,10 +691,6 @@ void VR::RestorePerformanceCostMeasurementState(const json& a_state)
 	settings.EnableDepthBufferCullingExterior = a_state.value("EnableDepthBufferCullingExterior", settings.EnableDepthBufferCullingExterior);
 	settings.EnableDepthBufferCullingInterior = a_state.value("EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior);
 	settings.DepthCullingLegacyMode = a_state.value("DepthCullingLegacyMode", settings.DepthCullingLegacyMode);
-	settings.DepthCullingMethod = a_state.value("DepthCullingMethod",
-		a_state.contains("DepthCullingLegacyMode") ?
-			static_cast<int>(VRDepthCullingTemporal::SelectMode(settings.DepthCullingLegacyMode)) :
-			settings.DepthCullingMethod);
 	settings.MinOccludeeBoxExtentExterior = a_state.value("MinOccludeeBoxExtentExterior", settings.MinOccludeeBoxExtentExterior);
 	settings.MinOccludeeBoxExtentInterior = a_state.value("MinOccludeeBoxExtentInterior", settings.MinOccludeeBoxExtentInterior);
 	globals::features::screenSpaceShadows.bendSettings.EnableFoveated =
@@ -755,13 +751,11 @@ void VR::SetupResources()
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	EmitVRPipelineEnvironmentDiagnosticsOnce(*this);
 #endif
-	VRHybridCulling::PrewarmShaders();
 }
 
 void VR::ClearShaderCache()
 {
 	stereoBlendCS = nullptr;
-	VRHybridCulling::ClearShaderCache();
 }
 
 bool VR::AnyScreenSpaceEffectActive()
@@ -929,9 +923,6 @@ void VR::DrawStereoBlend()
 void VR::PostPostLoad()
 {
 	gDepthBufferCulling = reinterpret_cast<bool*>(REL::Offset(0x1EC6B88).address());
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	depthCullingEngineGateBound = globals::game::isVR && gDepthBufferCulling != nullptr;
-#endif
 	if (!gDepthBufferCulling) {
 		static bool s_defaultDepthBufferCulling = false;  // safe fallback
 		gDepthBufferCulling = &s_defaultDepthBufferCulling;
@@ -939,9 +930,6 @@ void VR::PostPostLoad()
 	}
 
 	gMinOccludeeBoxExtent = reinterpret_cast<float*>(REL::Offset(0x1ED64E8).address());
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	depthCullingEngineExtentBound = globals::game::isVR && gMinOccludeeBoxExtent != nullptr;
-#endif
 	if (!gMinOccludeeBoxExtent) {
 		static float s_defaultMinOccludeeBoxExtent = VRDepthCullingEnablePolicy::kDefaultMinimumExtent;
 		gMinOccludeeBoxExtent = &s_defaultMinOccludeeBoxExtent;
@@ -1264,6 +1252,10 @@ void VR::DrawSettings()
 				case VR::ComboType::OverlayOpen:
 					settings.VROverlayOpenKeys = this->recordedCombo;
 					break;
+				case VR::ComboType::NeuralRenderingToggle:
+					settings.VRNeuralRenderingToggleKeys = this->recordedCombo;
+					UpdateNeuralRenderingToggleFromInput(false);
+					break;
 				case VR::ComboType::OverlayClose:
 					settings.VROverlayCloseKeys = this->recordedCombo;
 					break;
@@ -1527,19 +1519,22 @@ namespace
 		if (ImGui::BeginCombo("##UpscaleMethod", preview)) {
 			for (int option = 0; option < static_cast<int>(kVRFpsStabilizerMethodNames.size()); ++option) {
 				const bool selected = methodConfigured && option == method;
+				auto disabledGuard = Util::DisableGuard(!globals::features::upscaling.IsNeuralRenderingUpscalingProfileAllowed(static_cast<Upscaling::UpscaleMethod>(option), Upscaling::kQualityModeMaxIndex, true));
 				if (ImGui::Selectable(kVRFpsStabilizerMethodNames[option], selected)) {
 					changed = !selected || profile.hasLegacyMethodSelection;
 					profile.upscaleMethod = static_cast<Upscaling::UpscaleMethod>(option);
 					profile.hasUpscaleMethod = true;
 					profile.hasLegacyMethodSelection = false;
 				}
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Selects this profile's upscaling method. Choices incompatible with enabled NR are unavailable.");
 				if (selected)
 					ImGui::SetItemDefaultFocus();
 			}
 			ImGui::EndCombo();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("AMD FSR profiles keep the current AMD FSR3 or AMD FSR4 selection.");
+			ImGui::TextUnformatted("Selects the profile's upscaling method. Renderscale NR requires DLSS; turn NR off or change its rendering mode to use another method.");
 		}
 
 		return changed;
@@ -1563,10 +1558,25 @@ namespace
 		{
 			auto disabledGuard = Util::DisableGuard(!vendorUpscaling);
 			ImGui::SetNextItemWidth(-std::numeric_limits<float>::min());
-			if (ImGui::Combo("##UpscalePreset", &qualityMode, presetNames.data(), static_cast<int>(presetNames.size()))) {
-				profile.qualityMode = static_cast<uint32_t>(qualityMode);
-				profile.hasQualityMode = true;
-				changed = true;
+			const bool open = ImGui::BeginCombo("##UpscalePreset", presetNames[qualityMode]);
+			if (!open) {
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Chooses image quality and performance. Renderscale NR requires a below-native DLSS preset.");
+			}
+			if (open) {
+				for (int option = 0; option < static_cast<int>(presetNames.size()); ++option) {
+					auto optionGuard = Util::DisableGuard(option == 0 && globals::features::upscaling.IsNeuralRenderingRenderScaleRequired());
+					if (ImGui::Selectable(presetNames[option], option == qualityMode)) {
+						profile.qualityMode = static_cast<uint32_t>(option);
+						profile.hasQualityMode = true;
+						changed = true;
+					}
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted(option == 0 ? "Uses native resolution. Unavailable with Renderscale NR." : "Uses a smaller render image to improve performance.");
+					if (option == qualityMode)
+						ImGui::SetItemDefaultFocus();
+				}
+				ImGui::EndCombo();
 			}
 		}
 		return changed;
@@ -1590,6 +1600,8 @@ namespace
 				changed = true;
 			}
 		}
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Chooses the DLSS image reconstruction preset for this profile.");
 		return changed;
 	}
 
@@ -1606,14 +1618,15 @@ namespace
 			changed = true;
 		}
 		{
-			auto disabledGuard = Util::DisableGuard(!renderScaleEligible);
+			auto disabledGuard = Util::DisableGuard(!renderScaleEligible ||
+													(profile.renderScaleMode && globals::features::upscaling.IsNeuralRenderingRenderScaleRequired()));
 			if (ImGui::Checkbox("Enable##RenderScale", &profile.renderScaleMode)) {
 				profile.hasRenderScaleMode = true;
 				changed = true;
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Available with AMD FSR or NVIDIA DLSS and a below-native preset.");
+			ImGui::TextUnformatted("Uses a smaller render image. Renderscale NR requires this on in both profiles. Turn NR off or change its rendering mode to turn this off.");
 		}
 		return changed;
 	}
@@ -1723,6 +1736,22 @@ namespace
 				drawProfileCells([](auto& profile) { return DrawVRFpsStabilizerRenderScale(profile); });
 
 			ImGui::EndTable();
+		}
+
+		const auto& upscaling = globals::features::upscaling;
+		if (config.upscalingSwitchingEnabled && !showNotConfigured && upscaling.IsNeuralRenderingEnabled()) {
+			const auto blocker = [&](const auto& profile) {
+				return upscaling.GetNeuralRenderingUpscalingProfileBlocker(upscaling.GetNeuralRenderingMode(), profile.upscaleMethod, profile.qualityMode, profile.renderScaleMode);
+			};
+			const char* modeName = upscaling.IsNeuralRenderingRenderScaleRequired() ? "Renderscale NR" : "NR";
+			const char* interiorBlocker = blocker(config.interior);
+			const char* exteriorBlocker = blocker(config.exterior);
+			if (interiorBlocker)
+				Util::Text::WrappedWarning("Interior profile is incompatible with %s: %s.", modeName, interiorBlocker);
+			if (exteriorBlocker)
+				Util::Text::WrappedWarning("Exterior profile is incompatible with %s: %s.", modeName, exteriorBlocker);
+			if (interiorBlocker || exteriorBlocker)
+				ImGui::TextWrapped("These profiles cannot be applied with the selected NR mode. Choose compatible upscaling in both profiles, turn NR off, or change its rendering mode. Renderscale NR requires scaled DLSS with Render Scale.");
 		}
 
 		ImGui::Spacing();
@@ -2016,34 +2045,28 @@ namespace
 			ImGui::EndTable();
 		}
 
-		ImGui::TextUnformatted("Culling Method");
-		auto mode = a_vr.GetDepthCullingMode();
-		if (ImGui::BeginTable("##TemporalPolicy", 3, ImGuiTableFlags_SizingStretchSame)) {
-			ImGui::TableNextColumn();
-			if (ImGui::RadioButton("Advanced (Default)", mode == VRDepthCullingTemporal::Mode::Balanced)) {
-				mode = VRDepthCullingTemporal::Mode::Balanced;
-				a_vr.SetDepthCullingMode(mode);
+		if (globals::state && globals::state->IsDeveloperMode()) {
+			ImGui::TextUnformatted("Culling Method");
+			auto mode = a_vr.GetDepthCullingMode();
+			if (ImGui::BeginTable("##TemporalPolicy", 2, ImGuiTableFlags_SizingStretchSame)) {
+				ImGui::TableNextColumn();
+				if (ImGui::RadioButton("Advanced (Default)", mode == VRDepthCullingTemporal::Mode::Balanced)) {
+					mode = VRDepthCullingTemporal::Mode::Balanced;
+					a_vr.SetDepthCullingMode(mode);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Adds bounded recovery for objects that may become visible during head motion. This selection stays active when you leave Debug mode.");
+				}
+				ImGui::TableNextColumn();
+				if (ImGui::RadioButton("Legacy", mode == VRDepthCullingTemporal::Mode::Legacy)) {
+					mode = VRDepthCullingTemporal::Mode::Legacy;
+					a_vr.SetDepthCullingMode(mode);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Uses Skyrim's native visibility results without temporal recovery. Save settings to keep Legacy after restarting; leaving Debug mode does not change it.");
+				}
+				ImGui::EndTable();
 			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Recommended for most players. Keeps good performance and helps prevent objects briefly disappearing when you move your head.");
-			}
-			ImGui::TableNextColumn();
-			if (ImGui::RadioButton("Hi-Z", mode == VRDepthCullingTemporal::Mode::Hybrid)) {
-				mode = VRDepthCullingTemporal::Mode::Hybrid;
-				a_vr.SetDepthCullingMode(mode);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("An alternative that costs a little more performance than Advanced or Legacy, so your frame rate may be lower.");
-			}
-			ImGui::TableNextColumn();
-			if (ImGui::RadioButton("Legacy", mode == VRDepthCullingTemporal::Mode::Legacy)) {
-				mode = VRDepthCullingTemporal::Mode::Legacy;
-				a_vr.SetDepthCullingMode(mode);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Original game behavior with similar performance to Advanced. Objects may briefly disappear when you move your head. Try this if another method causes problems.");
-			}
-			ImGui::EndTable();
 		}
 
 		if (changed) {
@@ -3050,13 +3073,14 @@ namespace
 			VR::ComboType comboType;
 			const char* description;
 		};
-		const std::array<VRKeyBindingConfig, 4> keyBindingConfigs = {
+		const std::array<VRKeyBindingConfig, 5> keyBindingConfigs = {
 			VRKeyBindingConfig{ "Open CSX Menu", &settings.VRMenuOpenKeys, VR::ComboType::MenuOpen, "Open CSX settings from Main or Tween; also during gameplay with the SteamVR overlay path." },
 			VRKeyBindingConfig{ "Close CSX Menu", &settings.VRMenuCloseKeys, VR::ComboType::MenuClose, "Close CSX settings while its VR menu session is open." },
 			VRKeyBindingConfig{ "Show Performance Overlay", &settings.VROverlayOpenKeys, VR::ComboType::OverlayOpen, "Show the standalone performance panel during gameplay or menus." },
-			VRKeyBindingConfig{ "Hide Performance Overlay", &settings.VROverlayCloseKeys, VR::ComboType::OverlayClose, "Hide the standalone performance panel during gameplay or menus." }
+			VRKeyBindingConfig{ "Hide Performance Overlay", &settings.VROverlayCloseKeys, VR::ComboType::OverlayClose, "Hide the standalone performance panel during gameplay or menus." },
+			VRKeyBindingConfig{ "Toggle Neural Rendering", &settings.VRNeuralRenderingToggleKeys, VR::ComboType::NeuralRenderingToggle, "Turn NR on or off, retaining its settings. Off removes NR rendering cost. Requires the NR DLL." }
 		};
-		std::array<const char*, 4> comboTypes{};
+		std::array<const char*, 5> comboTypes{};
 		for (size_t i = 0; i < keyBindingConfigs.size(); ++i) {
 			comboTypes[i] = keyBindingConfigs[i].label;
 		}
@@ -3142,6 +3166,7 @@ namespace
 			settings.VRMenuCloseKeys = VR::Settings::DefaultVRMenuCloseKeys();
 			settings.VROverlayOpenKeys = VR::Settings::DefaultVROverlayOpenKeys();
 			settings.VROverlayCloseKeys = VR::Settings::DefaultVROverlayCloseKeys();
+			settings.VRNeuralRenderingToggleKeys.clear();
 			vr.ResetComboRecordingState();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -4644,16 +4669,15 @@ void VR::UpdateDepthBufferCulling()
 
 void VR::SetDepthCullingMode(VRDepthCullingTemporal::Mode a_mode)
 {
-	const auto mode = VRDepthCullingTemporal::NormalizeMode(a_mode);
-	settings.DepthCullingMethod = static_cast<int>(mode);
-	settings.DepthCullingLegacyMode = mode == VRDepthCullingTemporal::Mode::Legacy;
-	VRDepthCullingTemporal::SetMode(mode);
+	settings.DepthCullingLegacyMode = a_mode == VRDepthCullingTemporal::Mode::Legacy;
+	VRDepthCullingTemporal::SetMode(VRDepthCullingTemporal::SelectMode(
+		settings.DepthCullingLegacyMode));
 }
 
 VRDepthCullingTemporal::Mode VR::GetDepthCullingMode() const
 {
-	return VRDepthCullingTemporal::NormalizeMode(
-		static_cast<VRDepthCullingTemporal::Mode>(settings.DepthCullingMethod));
+	return VRDepthCullingTemporal::SelectMode(
+		settings.DepthCullingLegacyMode);
 }
 
 void VR::SetDepthCullingLegacyMode(bool a_enabled)

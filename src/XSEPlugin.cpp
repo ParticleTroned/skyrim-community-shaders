@@ -86,6 +86,7 @@ namespace
 	void ResetRuntimeStateAfterGameLoad()
 	{
 		globals::features::skylighting.QueueResetSkylighting();
+		globals::features::volumetricLighting.RequestRuntimeReset();
 		if (globals::state) {
 			globals::state->pendingPostLoadRuntimeReset = true;
 		}

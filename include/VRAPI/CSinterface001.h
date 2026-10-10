@@ -102,6 +102,7 @@ namespace CSPluginAPI
 		// existing entries changes vtable slots for already-compiled consumers.
 		virtual unsigned int getBuildNumber() = 0;
 
+		// Feature setters stage the latest preference from any thread; getters include pending requests.
 		// SSS here means Screen Space Shadows.
 		virtual bool GetSSSEnabled() = 0;
 		virtual void SetSSSEnabled(bool enabled) = 0;
@@ -109,9 +110,13 @@ namespace CSPluginAPI
 		virtual bool GetSSGIEnabled() = 0;
 		virtual void SetSSGIEnabled(bool enabled) = 0;
 
+		/** @return The requested exterior preference, including pending changes. */
 		virtual bool GetVolumetricLightingExteriorEnabled() = 0;
+		/** @brief Stage a preference from any thread; applied at the next safe render boundary. */
 		virtual void SetVolumetricLightingExteriorEnabled(bool enabled) = 0;
 
+		// Upscaling admission runs on the caller to preserve preflight/setter ordering.
+		// Callers can hold plugin locks needed by the SKSE task queue.
 		// Controls the shared DLSS/FSR/FSR4 upscaler preset.
 		virtual UpscalePreset GetUpscalePreset() = 0;
 		virtual void SetUpscalePreset(UpscalePreset preset) = 0;

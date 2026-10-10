@@ -28,11 +28,9 @@ The setup is idempotent. It:
 -   validates the pre-commit configuration and pre-installs hook environments;
 -   configures this repository to use OpenSSL for HTTPS and explicit SSH URLs for GitHub remotes.
 
-When the shared Codex SSH key exists under the adjacent
-`skyrim-vr-automation/artifacts/github-auth` directory, setup also records its
-command in this repository's local Git config. This lets the isolated Codex
-account push without reading the interactive user's `.gitconfig` or credential
-vault. Set `CSX_GITHUB_SSH_COMMAND` before setup to supply another command.
+Set `CSX_GITHUB_SSH_COMMAND` before setup when an isolated environment needs
+an explicit repository-local SSH command. Keep credentials and authentication
+locations local.
 
 The initial hook-environment installation can take several minutes. Let it finish; later commits reuse the same environments.
 

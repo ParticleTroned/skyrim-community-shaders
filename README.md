@@ -175,7 +175,7 @@ For those who prefer to not install Visual Studio or other build dependencies on
 2. In a shell of your choice run to switch to Windows containers and create the build container:
 
 ```pwsh
-& 'C:\Program Files\Docker\Docker\DockerCli.exe' -SwitchWindowsEngine; `
+& '<Docker-installation>/DockerCli.exe' -SwitchWindowsEngine; `
 docker build -t skyrim-community-shaders .
 ```
 
@@ -207,9 +207,9 @@ docker run -it --rm --isolation=process -v .:C:/skyrim-community-shaders skyrim-
 
 ```pwsh
 # Change Working Directory
-cd "C:/Program Files (x86)/Steam/steamapps/common/Skyrim Special Edition"
+cd "<Skyrim-SE-installation>"
 # Launch SKSE with MO2
-ModOrganizer.exe --log run "C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\skse64_loader.exe"
+ModOrganizer.exe --log run "<Skyrim-SE-installation>/skse64_loader.exe"
 ```
 
 ### Capture with RenderDoc
@@ -217,8 +217,8 @@ ModOrganizer.exe --log run "C:\Program Files (x86)\Steam\steamapps\common\Skyrim
 In Launch Application Menu, use the following settings:
 
 -   Executable Path: `PATH/TO/ModOrganizer.exe`
--   Working Directory: `C:/Program Files (x86)/Steam/steamapps/common/Skyrim Special Edition`
--   Command-line Arguments: `--log run "C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\skse64_loader.exe"`
+-   Working Directory: `<Skyrim-SE-installation>`
+-   Command-line Arguments: `--log run "<Skyrim-SE-installation>/skse64_loader.exe"`
 -   [x] **Capture Child Process**
 
 ## License

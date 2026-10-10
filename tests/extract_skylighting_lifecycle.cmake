@@ -22,18 +22,22 @@ endfunction()
 
 extract_between("${_header}" "struct Settings" "static_assert(sizeof(SkylightingCB)" _buffer)
 extract_between("${_header}" "// cached variables" "/** @brief Queues a render-thread" _state)
+extract_between("${_header}" "bool IsRuntimeActive() const" "bool HasCurrentShadowData() const" _active)
 file(
     WRITE "${OUTPUT_DIRECTORY}/skylighting_buffer_under_test.h"
-    "${_buffer}\n${_state}"
+    "${_buffer}\n${_state}\n${_active}"
 )
 
 extract_between("${_source}" "uint ClampStableSliceCount(" "void ApplyOcclusionCornerFrustum(" _probe_policy)
 extract_between("${_source}" "bool ShouldRunPeriodicUpdate(" "void ApplyPlatformDefaults(" _cadence)
-extract_between("${_source}" "void Skylighting::QueueResetSkylighting()" "void Skylighting::SetPerformanceCostMeasurementEnabled(" _lifecycle)
+extract_between("${_source}" "void Skylighting::QueueResetSkylighting(" "void Skylighting::SetPerformanceCostMeasurementEnabled(" _lifecycle)
 extract_between("${_source}" "bool Skylighting::HasProbeUpdateResources()" "void Skylighting::PostPostLoad()" _probe_pass)
+extract_between("${_source}" "void Skylighting::SetupResources()" "void Skylighting::SetupRenderTargetResources()" _resources)
+extract_between("${_source}" "void Skylighting::ApplyProbeGridQuality()" "void Skylighting::QueueResetSkylighting(" _grid)
+extract_between("${_source}" "const char* Skylighting::GetPerformanceCostMeasurementWaitText() const" "double Skylighting::GetPerformanceCostMeasurementSettleSeconds(" _wait)
 # Exercise the volume retention policy before the unrelated capture allocation.
 extract_between("${_source}" "void Skylighting::SetupRenderTargetResources()" "\n\tdelete texOcclusion;" _target_policy)
 file(
     WRITE "${OUTPUT_DIRECTORY}/skylighting_lifecycle_under_test.h"
-    "${_probe_policy}\n${_cadence}\n${_lifecycle}\n${_probe_pass}\n${_target_policy}\n(void)renderer;\n}\n"
+    "${_probe_policy}\n${_cadence}\n${_lifecycle}\n${_probe_pass}\n${_resources}\n${_grid}\n${_wait}\n${_target_policy}\n(void)renderer;\n}\n"
 )

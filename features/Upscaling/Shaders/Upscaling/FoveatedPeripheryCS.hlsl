@@ -1,4 +1,5 @@
 #include "Common/FoveatedMask.hlsli"
+#include "Upscaling/FoveatedMaskVisualization.hlsli"
 
 cbuffer FoveatedPeripheryCB : register(b0)
 {
@@ -12,6 +13,9 @@ cbuffer FoveatedPeripheryCB : register(b0)
 	float2 Jitter;
 	float4 CenterAndMask;  // xy=centerOffset, z=visualizeMask, w=showThreeZoneMask
 	float4 Tuning0;        // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=taaOuterScale
+	float4 Preview;        // xy=other eye offset, z=eye index, w=full-image coverage
+	row_major float4x4 PreviewClipToOtherEye;
+	float4 PreviewArea;  // x=percentage of full eye area saved
 };
 
 Texture2D<float4> InputColor : register(t0);
@@ -23,8 +27,7 @@ float2 ClampToSourceRegion(float2 uv, float2 regionMin, float2 regionMax)
 	return clamp(uv, regionMin, regionMax);
 }
 
-[numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
-{
+[numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
 	uint2 localPos = dispatchID.xy;
 	if (any(localPos >= uint2(DispatchDim)))
 		return;
@@ -45,30 +48,6 @@ float2 ClampToSourceRegion(float2 uv, float2 regionMin, float2 regionMax)
 	const float minOuterScale = centerScale * (1.0 + taaNormalizedFeather);
 	const float taaOuterScale = min(max(Tuning0.w, minOuterScale), 1.0);
 
-	if (visualizeMask > 0.5) {
-		const float normalizedFeather = FoveatedComputeNormalizedFeather(centerScale, centerFeather, centerHorizontalScale);
-		const float centerDistance = FoveatedComputeMaskDistance(uv, centerScale, centerHorizontalScale, centerOffset);
-
-		static const float3 kCenterZoneColor = float3(0.22, 0.68, 0.53);
-		static const float3 kTaaZoneColor = float3(0.95, 0.76, 0.33);
-		static const float3 kOuterZoneColor = float3(0.36, 0.50, 0.86);
-		static const float3 kBaseOutsideColor = float3(0.17, 0.22, 0.31);
-
-		float3 maskColor;
-		if (showThreeZoneMask > 0.5) {
-			const bool inCenterZone = centerDistance <= (1.0 + normalizedFeather);
-			const float outerDistance = FoveatedComputeMaskDistance(uv, taaOuterScale, centerHorizontalScale, centerOffset);
-			const bool inTaaZone = !inCenterZone && outerDistance <= 1.0;
-			maskColor = inCenterZone ? kCenterZoneColor : (inTaaZone ? kTaaZoneColor : kOuterZoneColor);
-		} else {
-			const bool inBaseCenterMask = centerDistance <= (1.0 + normalizedFeather);
-			maskColor = inBaseCenterMask ? kCenterZoneColor : kBaseOutsideColor;
-		}
-
-		OutColor[outputPos] = float4(maskColor, 1.0);
-		return;
-	}
-
 	float2 sourceRegionMin = SourceOffset;
 	float2 sourceRegionMax = SourceOffset + SourceScale;
 	float2 halfTexel = InvSourceDim * 0.5;
@@ -78,5 +57,35 @@ float2 ClampToSourceRegion(float2 uv, float2 regionMin, float2 regionMax)
 	float2 sourceUV = (uv * SourceScale + SourceOffset) - (Jitter * InvSourceDim);
 	sourceUV = ClampToSourceRegion(sourceUV, sourceRegionMin, sourceRegionMax);
 
-	OutColor[outputPos] = InputColor.SampleLevel(LinearSampler, sourceUV, 0.0);
+	float4 color = InputColor.SampleLevel(LinearSampler, sourceUV, 0.0);
+	if (visualizeMask > 0.5) {
+		const bool fullCoverage = Preview.w > 0.5;
+		const bool inCenter = fullCoverage || FoveatedComputeMaskDistance(uv, centerScale, centerHorizontalScale, centerOffset) <= 1.0 + taaNormalizedFeather;
+		const bool inTaa = showThreeZoneMask > 0.5 && FoveatedComputeMaskDistance(uv, taaOuterScale, centerHorizontalScale, centerOffset) <= 1.0;
+
+		const float4 otherClip = mul(PreviewClipToOtherEye, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.5, 1.0));
+		const float2 otherUV = otherClip.xy / max(otherClip.w, 1e-6) * float2(0.5, -0.5) + 0.5;
+		const bool projectionKnown = all(isfinite(otherClip)) && any(abs(otherClip) > 1e-6);
+		const bool otherVisible = projectionKnown && otherClip.w > 1e-6 && all(otherUV >= 0.0) && all(otherUV <= 1.0);
+		const bool inOtherCenter = otherVisible && (fullCoverage || FoveatedComputeMaskDistance(otherUV, centerScale, centerHorizontalScale, Preview.xy) <= 1.0 + taaNormalizedFeather);
+		const bool inOtherTaa = otherVisible && showThreeZoneMask > 0.5 && FoveatedComputeMaskDistance(otherUV, taaOuterScale, centerHorizontalScale, Preview.xy) <= 1.0;
+		// In the shared view, both masks must cover this direction; the other eye cannot conceal a gap.
+		if (!projectionKnown || (!inCenter && !inTaa) || (otherVisible && !inOtherCenter && !inOtherTaa)) {
+			static const float3 kUncoveredColor = float3(0.55, 0.5, 0.0);
+			OutColor[outputPos] = float4(kUncoveredColor, 1.0);
+			return;
+		}
+
+		// Magenta/green separate along blue as well as red-green; overlap is neutral and brighter.
+		static const float3 kLeftColor = float3(1.0, 0.1, 1.0);
+		static const float3 kRightColor = float3(0.1, 1.0, 0.1);
+		static const float3 kOverlapColor = float3(1.0, 1.0, 1.0);
+		static const float3 kTaaColor = float3(0.04, 0.04, 0.04);
+		static const float kTintAlpha = 0.35;
+		const float3 tint = inCenter ? (inOtherCenter ? kOverlapColor : (Preview.z < 0.5 ? kLeftColor : kRightColor)) : kTaaColor;
+		color.rgb = lerp(color.rgb, tint, kTintAlpha);
+		color.rgb = FoveatedPreviewAreaLabel(color.rgb, float2(outputPos) + 0.5, OutputDim,
+			fullCoverage ? float2(0.5, 0.5) : FoveatedComputeCenterUV(centerOffset), PreviewArea.x);
+	}
+	OutColor[outputPos] = color;
 }

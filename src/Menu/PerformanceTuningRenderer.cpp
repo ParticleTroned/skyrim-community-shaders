@@ -731,7 +731,6 @@ namespace
 		if (shortName == "VR") {
 			json mask = MakeJsonMask({ "EnableDepthBufferCullingExterior",
 				"EnableDepthBufferCullingInterior",
-				"DepthCullingMethod",
 				"DepthCullingLegacyMode",
 				"MinOccludeeBoxExtentExterior",
 				"MinOccludeeBoxExtentInterior",

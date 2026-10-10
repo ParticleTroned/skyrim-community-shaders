@@ -140,6 +140,19 @@
                 "AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES": "ON",
                 "CSX_VERSION": "3.15-SE"
             }
+        },
+        {
+            "name": "Package-nr",
+            "description": "Build an NR-ready AIO with the optional NR DLL excluded.",
+            "inherits": "ALL",
+            "cacheVariables": {
+                "DEVBENCH_BRIDGE": "OFF",
+                "TRACY_SUPPORT": "OFF",
+                "BUILD_SHADER_TESTS": "OFF",
+                "BUILD_CONTROLLER_TESTS": "ON",
+                "ZIP_TO_DIST": "OFF",
+                "AIO_ZIP_TO_DIST": "OFF"
+            }
         }
     ],
     "buildPresets": [
@@ -198,6 +211,13 @@
             "configurePreset": "AIO-Release",
             "configuration": "Release",
             "targets": ["CommunityShaders", "AIO"]
+        },
+        {
+            "name": "Package-nr",
+            "description": "Build an NR-ready AIO with the optional NR DLL excluded.",
+            "configurePreset": "Package-nr",
+            "configuration": "Release",
+            "targets": ["Package-AIO-Manual"]
         }
     ]
 }

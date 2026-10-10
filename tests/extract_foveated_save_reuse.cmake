@@ -3,21 +3,21 @@ if(NOT DEFINED PROJECT_ROOT OR NOT DEFINED OUTPUT_DIRECTORY)
 endif()
 
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling.cpp" _source)
-string(FIND "${_source}" "bool Upscaling::EnsureFoveatedTexture(" _start)
-if(_start EQUAL -1)
-    message(
-        FATAL_ERROR
-        "Foveated save reuse test cannot find EnsureFoveatedTexture"
-    )
-endif()
-string(SUBSTRING "${_source}" ${_start} -1 _tail)
-string(FIND "${_tail}" "bool Upscaling::BuildPeripheryTAATileList(" _length)
-if(_length LESS_EQUAL 0)
-    message(
-        FATAL_ERROR
-        "Foveated save reuse test cannot find BuildPeripheryTAATileList"
-    )
-endif()
-string(SUBSTRING "${_tail}" 0 ${_length} _section)
+set(_section "")
+foreach(_function IN ITEMS EnsureFoveatedTexture EnsureFoveatedDispatchShaders
+        EnsurePeripheryTAAResources EnsurePeripheryTAATileBuffer)
+    string(FIND "${_source}" "bool Upscaling::${_function}(" _start)
+    if(_start EQUAL -1)
+        message(FATAL_ERROR "Foveated save reuse test cannot find ${_function}")
+    endif()
+    string(SUBSTRING "${_source}" ${_start} -1 _tail)
+    string(FIND "${_tail}" "\n}\n" _length)
+    if(_length LESS_EQUAL 0)
+        message(FATAL_ERROR "Foveated save reuse test cannot delimit ${_function}")
+    endif()
+    math(EXPR _length "${_length} + 3")
+    string(SUBSTRING "${_tail}" 0 ${_length} _function_source)
+    string(APPEND _section "${_function_source}\n")
+endforeach()
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(WRITE "${OUTPUT_DIRECTORY}/foveated_save_reuse_under_test.h" "${_section}")

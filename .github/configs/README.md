@@ -68,7 +68,7 @@ previously observed valid permutations absent from the new modlist.
 
 ```powershell
 .\.github\configs\generate-shader-configs.ps1 `
-    -LogFile "C:\Path\To\CommunityShaders.log" `
+    -LogFile "<log-directory>/CommunityShaders.log" `
     -OutputDir ".\.github\configs" `
     -OutputName "shader-validation-vr.yaml" `
     -Force

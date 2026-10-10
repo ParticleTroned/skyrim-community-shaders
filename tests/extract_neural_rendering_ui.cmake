@@ -1,0 +1,84 @@
+if(NOT DEFINED PROJECT_ROOT OR NOT DEFINED OUTPUT_DIRECTORY)
+    message(FATAL_ERROR "PROJECT_ROOT and OUTPUT_DIRECTORY are required")
+endif()
+
+function(extract path start_marker end_marker output)
+    file(READ "${PROJECT_ROOT}/${path}" source)
+    string(FIND "${source}" "${start_marker}" start)
+    string(FIND "${source}" "${end_marker}" end)
+    if(start EQUAL -1 OR end EQUAL -1 OR end LESS_EQUAL start)
+        message(FATAL_ERROR "Neural Rendering UI extraction boundaries are missing")
+    endif()
+    math(EXPR length "${end} - ${start}")
+    string(SUBSTRING "${source}" ${start} ${length} result)
+    set(${output} "${result}" PARENT_SCOPE)
+endfunction()
+
+extract("src/Features/NeuralRenderingFeature.cpp"
+    "void NeuralRenderingFeature::DrawSettings()"
+    "void NeuralRenderingFeature::DataLoaded()" draw_settings)
+extract("src/State.cpp"
+    "bool State::IsDeveloperMode()"
+    "void State::ModifyRenderTarget(" developer_mode)
+extract("src/Features/Upscaling.cpp"
+    "\tbool SupportsFoveatedVendorDispatch("
+    "\tbool ShouldUseReducedResolutionForUpscaling(" fov_request)
+extract("src/Features/Upscaling.cpp"
+    "\tstruct FoveatedMaskProfileParams"
+    "\tfloat FoveatedMaskDistanceUV(" fov_profile)
+extract("src/Features/Upscaling.cpp"
+    "bool Upscaling::IsNeuralRenderingFovConfigurationAvailable()"
+    "const char* Upscaling::GetFoveatedUpscalingModeName(" fov_readiness)
+extract("src/Features/Upscaling.cpp"
+    "bool Upscaling::ToggleNeuralRendering("
+    "void Upscaling::DrawNeuralRenderingSettings(" master_control)
+extract("src/Features/Upscaling.cpp"
+    "\t\tconst bool fovAvailable = IsNeuralRenderingFovConfigurationAvailable(a_upscaleMethod);"
+    "\t\tconst bool routeAvailable =" selection_controls)
+extract("src/Features/Upscaling.cpp"
+    "bool Upscaling::IsNeuralRenderingEnabled("
+    "void Upscaling::DrawPeripheryTAAControl(" availability_policy)
+extract("src/Features/Upscaling.cpp"
+    "bool Upscaling::ApplyNeuralRenderingPreset("
+    "bool Upscaling::HasSameNeuralRenderingSettingsKey(" image_preset)
+extract("src/Features/Upscaling.cpp"
+    "\t\tDrawNeuralRenderingSharedImageSettings(settings);"
+    "\t\t\tif (settings.neuralCharacterRenderingEnabled) {" appearance_controls)
+extract("src/Features/Upscaling.cpp"
+    "bool Upscaling::IsNeuralRenderingHardwareSupported() const noexcept"
+    "NeuralRendering::RenderingMode Upscaling::GetNeuralRenderingMode()" execution_gate)
+extract("src/Features/Upscaling.cpp"
+    "bool Upscaling::IsFoveatedVendorDispatchEnabled("
+    "bool Upscaling::IsFSRRuntimePathActive(" dispatch_gate)
+extract("src/Features/Upscaling.cpp"
+    "bool Upscaling::IsActiveUpscalingFoveatedProfileAvailable()"
+    "bool Upscaling::IsNeuralRenderingFovConfigurationAvailable()" profile_gate)
+file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+file(WRITE "${OUTPUT_DIRECTORY}/neural_rendering_ui_under_test.h"
+    "${fov_profile}\n${fov_request}\n${fov_readiness}\n${developer_mode}\n${draw_settings}\n${availability_policy}\n${execution_gate}\n${dispatch_gate}\n${profile_gate}\n${image_preset}\n${master_control}\nvoid Upscaling::DrawSelectionControls(bool a_essentialsOnly) {\nconst auto a_upscaleMethod = GetUpscaleMethod();\nconst bool showDiagnostics = !a_essentialsOnly && globals::state && globals::state->IsDeveloperMode();\nconst std::function<void()> a_drawColourSettings;\n${selection_controls}\n(void)missingRenderScale;\n${appearance_controls}\n}\n}\n")
+
+extract("src/Features/VR/Input.cpp"
+    "bool VR::IsControllerComboPressed("
+    "void VR::UpdateOverlayMenuStateFromInput()" controller_toggle)
+extract("src/Features/VR/Input.cpp"
+    "void VR::ProcessVREvents("
+    "void VR::ProcessVRButtonEvent(" controller_events)
+file(WRITE "${OUTPUT_DIRECTORY}/neural_controller_toggle_under_test.h" "${controller_toggle}\n${controller_events}\n")
+
+extract("src/Features/VR.cpp"
+    "\t\tconst auto& upscaling = globals::features::upscaling;"
+    "\t\tImGui::Spacing();\n\t\tImGui::SeparatorText(\"Features\");" stabilizer_warning)
+file(APPEND "${OUTPUT_DIRECTORY}/neural_rendering_ui_under_test.h"
+    "\nvoid DrawStabilizerNRWarnings(const Upscaling::VRFpsStabilizerConfig& config, bool showNotConfigured) {\n${stabilizer_warning}\n}\n")
+
+extract("src/Features/VR.cpp"
+    "\tconstexpr std::array<const char*, 4> kVRFpsStabilizerMethodNames"
+    "\tstruct VRFpsStabilizerUIState" stabilizer_names)
+extract("src/Features/VR.cpp"
+    "\tbool DrawVRFpsStabilizerUpscaleMethod("
+    "\tbool DrawVRFpsStabilizerFeatureToggle(" stabilizer_selectors)
+extract("src/Features/Upscaling.cpp"
+    "\tbool DrawUpscalingMethodSelection("
+    "void Upscaling::DrawSettingsHeaderControls()" method_selection)
+file(APPEND "${OUTPUT_DIRECTORY}/neural_rendering_ui_under_test.h"
+    "\nnamespace {\n${stabilizer_names}\n${stabilizer_selectors}\n${method_selection}\n")

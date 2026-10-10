@@ -6,9 +6,11 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Features/ScreenshotReferencePolicy.h"
 #endif
+#include "Features/Upscaling.h"
 #include "Globals.h"
 #include "ScreenshotDevBenchBridge.h"
 #include "State.h"
+#include "Utils/CaptureRetention.h"
 #include "Utils/StringUtils.h"
 #include "Utils/WinApi.h"
 #include "VRAPI/CSpluginapi.h"
@@ -1124,6 +1126,10 @@ ScreenshotApi::json ScreenshotApi::BuildCapabilities(const ScreenshotFeature&) c
 	return {
 		{ "schema", "urn:csx:devbench:screenshot:1" },
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		{ "nrCaptureDiagnostics", { { "schemaVersion", 1 }, { "location", "actual.captureDiagnostics" },
+									  { "retention", "capture_owned_until_terminal_then_immutable" }, { "cpuOnly", true },
+									  { "maximumPinnedMeasurementBatches", Util::kCaptureRetentionCapacity },
+									  { "maximumPinnedExposures", Util::kCaptureRetentionCapacity } } },
 		{ "burst", { { "maximumFrames", ScreenshotBurst::MaximumFrames }, { "maximumBytes", ScreenshotBurst::MaximumBytes },
 					   { "maximumRegions", ScreenshotBurst::MaximumRegions }, { "nativeRegionAtlas", true }, { "deferredEncoding", true } } },
 #endif
@@ -1135,6 +1141,7 @@ ScreenshotApi::json ScreenshotApi::BuildCapabilities(const ScreenshotFeature&) c
 		{ "pathPolicies", { "settings_default", "game_relative", "absolute" } },
 		{ "optional", {
 						  { "separateEyeArtifacts", true },
+						  { "nrCaptureEvidenceSchemaVersion", 1 },
 						  { "clipboardFileReference", true },
 						  { "previewVideo", { { "available", false }, { "encoders", json::array() }, { "runsAfterFrameFinalization", true } } },
 					  } },
@@ -1282,6 +1289,7 @@ void ScreenshotApi::TransitionLocked(RequestRecord& a_record, std::string a_stat
 		return;
 	a_record.state = std::move(a_state);
 	if (IsTerminal(a_record.state)) {
+		CSX::ScreenshotPolicy::FinalizeNeuralDiagnostics(a_record.diagnosticSnapshot, a_record.actual);
 		a_record.terminalUtc = CSX::Api::ServiceFoundation::TimestampUtc();
 		a_record.terminalAt = std::chrono::steady_clock::now();
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -1470,6 +1478,21 @@ void ScreenshotApi::OnSourceAcquired(std::string_view a_requestId, json a_acquis
 		}
 #endif
 		record.actual["acquisition"] = a_acquisition;
+		const auto evidence = a_acquisition.value("nrEvidence", json::object());
+		const auto transaction = evidence.is_object() && evidence.contains("sourceTransactionId") &&
+		                                 evidence.at("sourceTransactionId").is_number_unsigned() ?
+		                             evidence.at("sourceTransactionId").get<uint64_t>() :
+		                             0;
+		const auto publication = evidence.is_object() && evidence.contains("publicationSequence") &&
+		                                 evidence.at("publicationSequence").is_number_unsigned() ?
+		                             evidence.at("publicationSequence").get<uint64_t>() :
+		                             0;
+		try {
+			record.diagnosticSnapshot = CSX::ScreenshotPolicy::RetainNeuralDiagnostics(evidence,
+				transaction && publication ? globals::features::upscaling.PinNeuralExecutionDiagnostics(transaction, publication) : CSX::ScreenshotPolicy::DiagnosticSnapshot{});
+		} catch (...) {
+			record.actual["captureDiagnostics"] = { { "schemaVersion", 1 }, { "finalized", true }, { "available", false }, { "reason", "companion_retention_failed" } };
+		}
 		AppendEventLocked(record, "source.acquired", std::move(a_acquisition));
 	}
 }

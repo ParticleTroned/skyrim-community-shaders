@@ -9,8 +9,9 @@ contradict this policy.
 
 ## Quick checklist
 
+-   **PR authorization:** Create a PR, including a draft, only when the user explicitly requests it for the change and names the repository and target base branch. Ask for any missing authorization or destination before publishing.
 -   **PR identity:** Format PR titles as `type(scope): description (#<number>)`. A branch created for an already-numbered PR must contain `pr<number>`; do not rename an open PR's head merely to retrofit the number.
--   **PR title:** Keep the descriptive portion at or below 50 characters when practical, target `main-VR`, and keep the title current because squash merge and release automation consume it.
+-   **PR title:** Keep the descriptive portion at or below 50 characters when practical and keep the title current because squash merge and release automation consume it.
 -   **PR body:** Wrap prose at 72 columns where practical and use `Why`, `What changed`, applicable safety/failure behavior, and exact validation evidence. Update stale text before merge.
 -   **Release-aware type:** Use `feat`, `fix`, or `perf` only for user-visible release changes. Developer tooling and build infrastructure are `build`; CI is `ci`; documentation and agent guidance are `docs`.
 -   **Commits:** Use the same Conventional Commit format. Every agent-created or rewritten commit must have a wrapped body with explicit `Rationale:` and `Implementation:` sections and accurate attribution. Stage only in-scope files.
@@ -21,7 +22,7 @@ contradict this policy.
 -   **Runtime safety:** Evaluate SE, AE, and VR behavior. Keep runtime-specific divergence small, explicit, and localized.
 -   **Graphics safety:** Name every new D3D11 resource with the existing `Util::SetResourceName` path and use RAII for graphics and ImGui state.
 -   **Validation:** Test in proportion to risk, record exact evidence, and never claim validation that did not run.
--   **Git safety:** Never force-push or rebase shared branches. Preserve user changes, build outputs, and shader caches.
+-   **Git safety:** Create direct commits locally before pushing. Use the requested GitHub merge method for PRs, then synchronize the local destination branch. Never force-push or rebase shared branches. Preserve user changes, build outputs, and shader caches.
 
 ## Code Review Rules
 
@@ -38,9 +39,17 @@ contradict this policy.
 
 ## Pull requests and commits
 
+### Explicit authorization
+
+-   Create a pull request, including a draft, only when the user explicitly requests that PR for the change and explicitly names its repository and target base branch. A request to "make a PR" without a target branch is incomplete; ask for the missing destination before publishing a branch or opening the PR.
+-   Never infer PR creation or its destination from the checked-out branch, repository defaults, integration conventions, attached task documents, previous unrelated PRs, or completion of implementation and tests. Repository guidance describes how to prepare an authorized PR; it does not authorize one.
+-   Authorization applies only to the named change and repository. A CSX PR request does not authorize a separate DevBench or automation PR, and a request for fixes or local commits does not authorize any PR.
+-   Continue authorized local implementation, tests, builds, and review while PR authorization is incomplete. Keep the proposed work local until the user supplies the missing instruction.
+-   Permission to create a PR does not authorize merging it, retargeting it, or pushing directly to a shared branch. Each requires a separate explicit user instruction identifying the affected PR or repository and branch.
+
 ### Target and title
 
--   Target the repository's integration branch, currently `main-VR`. Do not target `main`, `dev`, or another release line unless the user explicitly directs it.
+-   Use only the target base branch explicitly named by the user. `main-VR` is the repository's integration branch, but is not an authorized default PR destination.
 -   Use `type(scope): description (#<number>)` for GitHub PR titles and `type(scope): description` for commits. The scope should identify the affected domain, such as `shaders`, `water`, `vr`, `tooling`, `build`, or `ci`.
 -   Every local and remote branch created for work on an already-numbered PR must contain its lowercase `pr<number>` identity, for example `codex/pr58-focused-forward-port`. A new PR needs a stable descriptive head because GitHub assigns its number only after creation; append the assigned number to its title immediately. Never rename or delete an open PR's head solely to retrofit its number because GitHub closes the PR instead of retargeting it.
 -   Use an imperative, specific description. Keep titles at or below 50 characters when practical; never shorten them into ambiguity merely to satisfy the limit.
@@ -72,14 +81,14 @@ contradict this policy.
 -   Start with `## Why`: describe the current problem, user/developer impact, and relevant constraints.
 -   Use `## What changed`: describe observable behavior and architectural decisions, not a file-by-file diff transcript.
 -   Add a focused section for runtime behavior, compatibility, safety, migration, or failure behavior when the change needs it.
--   End with `## Validation`: list exact commands, tests, runtime scenarios, measurements, and results. Distinguish passed, not run, and blocked checks.
+-   End with `## Validation`: summarize exact checks, runtime scenarios, measurements, and results; include commands only when portable and useful. Distinguish passed, not run, and blocked checks.
 -   Wrap prose at 72 columns where practical. Do not break commands, paths, tables, identifiers, or URLs solely to meet the column target.
 -   Keep the body synchronized with the final diff. Remove abandoned plans and include material follow-up fixes made during review.
 
 ### Commit hygiene
 
 -   Commit only files required by the requested change. Leave unrelated tracked changes and untracked user files untouched.
--   Keep implementation-related documentation, investigation notes, and validation records in the same commit as the change they explain. Fold later documentation updates into that commit instead of publishing separate documentation-only follow-ups. Preserve the exact measured source commits and Build IDs when folding evidence. Standalone documentation work may have its own `docs` commit; rewriting a shared branch still requires explicit user authorization.
+-   Commit reusable build, fork, and shader guides with the changes they explain. Keep implementation notes, feature setup, investigations, run reports, and detailed validation provenance in ignored local documentation. Preserve exact measured source commits and Build IDs locally. Do not add those records to a PR or rewrite shared history to publish them.
 -   Every commit created or rewritten by an agent must use this structure, even when the change is small:
 
     ```text
@@ -100,6 +109,20 @@ contradict this policy.
 
 ## Comments and documentation
 
+-   Never publish machine-specific absolute paths or usernames in PR bodies,
+    comments or committed documentation. Public validation summaries must
+    also omit local evidence locations. Use repository-relative paths or
+    generic placeholders only for reusable build and shader instructions.
+-   Do not hardcode machine-specific filesystem paths in code, scripts,
+    configuration, test fixtures, or documentation. Discover tool and
+    installation locations or accept explicit configuration instead.
+-   Keep `docs/development/` limited to reusable instructions for building
+    shaders and working with this repository or a fork. Feature setup notes,
+    fix explanations, investigations, handovers, run reports, and detailed
+    provenance belong in `.local-docs/`, which must remain ignored by Git.
+    Never force-add local documentation or attach its contents to a PR.
+    This policy applies to every file format, including CSV ledgers, JSON
+    summaries, text handovers, and supporting scripts in evidence folders.
 -   Public declarations and API methods should have concise Doxygen documentation, especially for graphics-facing behavior and non-obvious contracts.
 -   Inline comments should explain a constraint, invariant, safety condition, or surprising choice. Do not paraphrase the following statements.
 -   Do not leave comments that refer to a commit, PR, temporary debugging incident, or a tool session. State the durable invariant instead.
@@ -148,85 +171,36 @@ contradict this policy.
 -   The Astra depth-culling campaign compares native culling off, Legacy,
     Advanced and Hybrid in every repeated performance and stereo-visual
     condition. Legacy is required in every matched set.
--   A PR that changes VR render-scale code or behavior must include the generated
-    `csx-render-scale-pr-v1` summary described in
-    `docs/development/render-scale-pr-qualification.md`. Preserve the complete
-    evidence directory; missing or inconclusive unattended visual review, or an
-    unmatched performance baseline, is not a pass. Human completion is not part
-    of this protocol.
--   Every `main-VR` commit that changes or evaluates VR render-scale behavior
-    must include any corresponding updates to the durable cross-machine record:
-    the numbered ledgers indexed by `docs/development/vr-render-scale-ledger.md`,
-    `docs/development/vr-render-scale-iteration.md`, and the relevant compact
-    tuning or failure summary. If runtime evidence follows an implementation
-    commit, fold its documentation into that implementation commit before
-    starting the next render-scale change, preserving the original measured
-    source identity and following the shared-branch rewrite authorization
-    rules. Do not version raw per-run evidence trees merely to preserve a
-    measurement.
--   Create a new immutable numbered ledger for every finalized measurement
-    and whenever publishing measurements for a different PR. Use
-    `docs/development/vr-render-scale-ledger-NNNN-prNUMBER.csv`, increasing
-    the repository-wide sequence from its current maximum; never reuse a
-    number or overwrite an earlier snapshot. Each new ledger contains only
-    the explicitly selected baseline runs and measurements made for the PR
-    that commits it. Include that PR's earlier measurements when relevant;
-    unrelated run history remains in earlier ledgers. Commit the snapshot,
-    index and corresponding report with that PR. The initial `0001` and
-    `0002` history archives preserve the pre-numbering record unchanged.
-    Keep each CSV below 100 MiB; if one PR needs more space, split its run
-    columns into consecutive numbered files with the same PR identity.
-    Follow `docs/development/vr-render-scale-comparison-reporting.md`.
-    Every render-scale run update must preserve numeric per-transition
-    timings in that ledger for each pass or repeat, including the transition
-    ordinal, source-to-destination route, timing definition, units, and
-    unambiguous run/build commit identity. Aggregates and links to local
-    evidence are insufficient. Preserve interrupted repeat segments and
-    distinguish missing receipts, failed measurements, and transitions not
-    run with explicit reasons; never substitute zero or an inferred timing.
-    Before finalizing the update, verify every available measured timing is
-    represented and historical cells remain intact. Reports must reference
-    this ledger, and raw evidence trees remain local.
--   The canonical ledger must contain the complete run results, with no
-    omitted available information. Preserve every field of the finalized
-    summary, including every transition and pass, terminal and Task 2
-    classifications, retries and reasons, recoveries, counters, health gates
-    with observed values/limits/applicability, memory, resource and profiler
-    details, provenance, and evidence gaps. Include the per-transition and
-    per-pass comparison deltas and assessment. Reports, aggregates, and links
-    to local evidence do not substitute for these ledger contents. Use
-    structured detail cells where needed and append missing metric rows
-    without changing historical cells. Verify field-for-field reconstruction
-    against the complete saved summary and comparison details, in addition
-    to the numeric timing audit. Preserve false, zero, null and empty values;
-    unavailable data require explicit reasons, never a generic placeholder
-    in place of available evidence. Missing ledger coverage means reporting
-    is incomplete. Follow the complete-ledger contract in
-    `docs/development/vr-render-scale-comparison-reporting.md`.
--   Every upscaling/render-scale ledger update automatically includes a detailed
-    side-by-side analysis under
-    `docs/development/vr-render-scale-comparison-reporting.md`. Compare every
-    retained transition and pass with the pinned reference, preserving exact
-    compiled source, renderer base, main-VR base/equivalence, and Build IDs.
-    Report completion, terminal results, full-history health, and whether the
-    change meets the improvement-or-neutral standard separately. Recovered
-    failures and applicable cumulative gate failures must remain visible.
-    Report actual relatch/strict-completion frames and milliseconds, stretch
-    frames and duration; the fixed stretch cutoff is not a health gate when
-    settling imposes the stretch. Keep its raw result as a labeled diagnostic.
-    PR inclusion of this comparison is solely the user's decision. Do not make
-    it a PR requirement, publication default, or merge gate; this does not
-    change the separate existing release-qualification protocol.
--   Keep routine render-scale reporting fast: use the maintained single-command
-    workflow in `docs/development/vr-render-scale-comparison-reporting.md`.
-    Generate the comparison once after preparing the ledger update. Reuse
-    outputs only after evidence, code, deployment inputs and output hashes
-    match; always audit ledger timings. Preserve full evidence and missing-data
-    limitations. Brief progress lines are welcome, but do not add polling,
-    repeated extraction, tests, packaging or prose rewrites to a normal run
-    without a change, failure or unresolved concern that requires them.
-    Retain stage timings in the result; surface material findings, blockers and
-    unexpected delays promptly.
+-   VR render-scale changes still require the maintained qualification
+    protocol. Keep its generated summary and complete evidence local.
+    Missing or inconclusive unattended visual review, or an unmatched
+    performance baseline, is not a pass; human completion does not replace
+    the protocol. Public PRs contain a concise outcome and coverage summary.
+-   Preserve render-scale ledgers, iteration notes, tuning reports, and
+    failure summaries locally. Create immutable numbered snapshots for
+    finalized measurements; never overwrite earlier records. Do not commit
+    new measurement ledgers or reports, and do not rewrite shared history
+    merely to fold local evidence into an implementation commit.
+-   Local ledgers must preserve every available per-transition and per-pass
+    timing, ordinal, route, definition, unit, and exact run/build identity.
+    Retain interrupted repeats, retries, recoveries, cumulative health gates,
+    observed values and limits, memory, resource and profiler details, and
+    evidence gaps. Preserve false, zero, null, and empty values; distinguish
+    missing receipts, failed measurements, and conditions not run. Audit
+    every measurement and field against the complete saved summaries without
+    changing historical cells. Aggregates and evidence links are insufficient.
+-   Keep the detailed side-by-side comparison with those local records.
+    Preserve exact compiled source, renderer base, main-VR equivalence, and
+    Build IDs. Assess completion, full-history health, and improvement or
+    neutrality separately. Retain actual completion frames and milliseconds,
+    stretch frames and duration, comparison deltas, and recovered failures.
+    A settling-related stretch cutoff remains a labeled diagnostic. Do not
+    make publication of the detailed comparison a PR or merge requirement.
+-   Use the maintained local reporting workflow once per finalized run.
+    Reuse outputs only after matching evidence, source, deployment inputs,
+    and hashes; always audit the timings. Preserve stage timings and missing
+    data limitations. Do not add repeated polling, extraction, testing, or
+    packaging without a new change, failure, or unresolved concern.
 -   Scope pre-commit to staged files or the changed revision range. Do not use `--all-files` merely to validate a focused change; legacy third-party files preserve intentional formatting.
 -   Never interrupt shader compilation or cache generation because output is temporarily silent. Check process and cache activity and allow the documented build window.
 -   Preserve user-owned build outputs and shader caches unless the task explicitly requires their removal or regeneration.
@@ -249,7 +223,8 @@ contradict this policy.
 ## Repository tooling
 
 -   When the user invokes `gameft-sw`, follow
-    `docs/development/gameft-sw.md`: ask its exact save-number question and
+    the maintained automation protocol and its locally retained guide: ask
+    its exact save-number question and
     use the maintained `skyrim-vr-automation/tools/gameft-sw` wrapper and
     versioned `game-ft` runner. Local ignored legacy copies remain historical.
     Stack/wait tracing is explicit and DevBench-only. Present timing and health
@@ -268,6 +243,18 @@ contradict this policy.
 
 -   CSX public releases publish only the complete `CSX_AIO-*.7z` installer. Keep split core, feature and cache packages as internal workflow artifacts. Release notes must describe CSX's bundled features and built-in systems; never inherit upstream Nexus upload destinations. Follow [the CSX distribution contract](docs/development/csx-release-distribution.md).
 -   Never push directly to, force-push, or rebase shared branches such as `main`, `main-VR`, `dev`, or `hotfix/*` without explicit user direction. Use `--force-with-lease` only when rewriting an owned feature branch is necessary and authorized.
+-   For direct commits to this repository, create the commit locally and
+    update the matching local destination branch before an authorized push.
+    Integrate work from another branch or linked worktree by merge or
+    fast-forward first. Never leave the local destination branch behind a
+    direct remote update. Verify local and remote commit IDs afterward.
+    A request to commit locally does not authorize a push.
+-   Publish PRs through the normal GitHub workflow. Use the user's requested
+    merge method on GitHub, then synchronize the local destination branch.
+    Do not substitute a direct branch push for a normal PR merge unless the
+    user explicitly requests that method. The direct-commit local-first rule
+    does not govern normal PR merges or user-authorized contributions to an
+    existing PR in another repository; follow that PR's workflow instead.
 -   Do not manually create `v*` release tags or hand-edit the CMake project version; release automation owns them.
 -   Synchronize upstream histories by merge rather than cherry-picking individual commits. Preserve VR-specific behavior during conflict resolution and verify upstream ancestry after the merge.
 -   Do not squash upstream-sync PRs when the merge ancestry is itself part of the synchronization contract.
@@ -276,5 +263,5 @@ contradict this policy.
 
 -   Update this file in the same PR that changes a convention; do not leave instruction drift for a follow-up.
 -   Keep `AGENTS.md` canonical. Tool-specific instruction files should import or point here and contain only tool-specific additions.
--   Prefer a focused link into `docs/development/` when a topic needs more than a short policy summary.
+-   Link public build and shader guides from `docs/development/`. Keep feature-specific procedures and investigation details in the ignored local documentation.
 -   Periodically remove stale absolutes that no longer match repository behavior, and verify all named tools, paths, branches, and APIs still exist.

@@ -13,6 +13,7 @@ inline constexpr HRESULT S_FALSE = 1;
 inline constexpr HRESULT E_FAIL = -1;
 inline constexpr HRESULT DXGI_STATUS_OCCLUDED = 0x087A0001;
 inline constexpr UINT DXGI_PRESENT_TEST = 1;
+inline bool FAILED(HRESULT value) { return value < 0; }
 inline constexpr UINT D3D11_ASYNC_GETDATA_DONOTFLUSH = 1;
 enum D3D11_QUERY
 {
@@ -71,6 +72,7 @@ struct ID3D11Device
 
 struct ID3D11DeviceContext
 {
+	void GetDevice(ID3D11Device** output) { *output = new ID3D11Device; }
 	bool pending = false;
 	bool disjoint = false;
 	bool failed = false;

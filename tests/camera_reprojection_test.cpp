@@ -1,8 +1,10 @@
 #define NOMINMAX
 #include "Features/Upscaling/CameraReprojection.h"
+#include "Features/Upscaling/DLSSViewportCrop.h"
 #include "Features/Upscaling/VRSubmitTemporalSnapshot.h"
 
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <iostream>
@@ -123,6 +125,36 @@ namespace
 		RequireMatrixNear(repeatedLeft.prevClipToClip, left.prevClipToClip);
 	}
 
+	void CroppedCameraHistory()
+	{
+		using UpscalingDLSS::BuildClipCropAffine;
+		using UpscalingDLSS::ViewportCrop;
+		const Matrix projection(DirectX::XMMatrixPerspectiveOffCenterLH(-10.0f, 13.0f, -8.0f, 9.0f, 15.0f, 370000.0f));
+		const Matrix previousProjection(DirectX::XMMatrixPerspectiveOffCenterLH(-11.0f, 12.0f, -9.0f, 8.0f, 15.0f, 370000.0f));
+		const auto view = Matrix::CreateRotationY(0.1f);
+		const auto previousView = Matrix::CreateRotationY(0.08f);
+		const Vector3 originDelta(4.0f, -3.0f, 2.0f);
+		const auto camera = UpscalingCamera::BuildReprojection(view.Invert(), view * projection, previousView * previousProjection, originDelta);
+		const ViewportCrop previousCrop{ { 800, 600 }, { 80, 60, 640, 480 }, { 1200, 900 }, { 120, 90, 960, 720 } };
+		const auto previousAffine = BuildClipCropAffine(previousCrop);
+		Check(previousAffine.valid, "previous crop is invalid");
+		const auto previousMatrix = std::bit_cast<Matrix>(previousAffine.fullClipToCrop);
+		for (const ViewportCrop crop : {
+				 ViewportCrop{ { 800, 600 }, { 120, 40, 720, 520 }, { 1200, 900 }, { 180, 60, 1080, 780 } },
+				 ViewportCrop{ { 800, 600 }, { 40, 80, 640, 560 }, { 1200, 900 }, { 60, 120, 960, 840 } } }) {
+			const auto affine = BuildClipCropAffine(crop);
+			Check(affine.valid, "current crop is invalid");
+			const auto currentMatrix = std::bit_cast<Matrix>(affine.fullClipToCrop);
+			const auto reprojection = std::bit_cast<Matrix>(affine.cropClipToFull) * camera.clipToPrevClip * previousMatrix;
+			for (const Vector4 point : { Vector4(10.0f, 5.0f, 100.0f, 1.0f), Vector4(-30.0f, 20.0f, 500.0f, 1.0f) }) {
+				const auto currentClip = Vector4::Transform(point, view * projection * currentMatrix);
+				const auto previousClip = Vector4::Transform(point + Vector4(originDelta.x, originDelta.y, originDelta.z, 0.0f), previousView * previousProjection * previousMatrix);
+				RequireVectorNear(Vector4::Transform(currentClip, reprojection), previousClip);
+				RequireVectorNear(Vector4::Transform(previousClip, reprojection.Invert()), currentClip);
+			}
+		}
+	}
+
 	void RepairedHistory()
 	{
 		const Matrix projection(DirectX::XMMatrixPerspectiveFovLH(1.2f, 16.0f / 9.0f, 15.0f, 370000.0f));
@@ -155,6 +187,7 @@ int main()
 		CapturedAEProjection();
 		MovementAndProjectionChanges();
 		FrozenStereoHistory();
+		CroppedCameraHistory();
 		RepairedHistory();
 		std::cout << "Camera reprojection checks passed\n";
 		return 0;

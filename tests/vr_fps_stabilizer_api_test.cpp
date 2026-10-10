@@ -1,12 +1,16 @@
+#include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Features/Upscaling/VRRenderScaleModePolicy.h"
+#include <future>
 
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <iostream>
+#include <mutex>
 #include <source_location>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 struct Upscaling
 {
@@ -49,10 +53,22 @@ struct Upscaling
 		VRFpsStabilizerProfile interior, exterior;
 	} config;
 	VRFpsStabilizerProfile current;
+	struct Settings
+	{
+		bool neuralRenderingFovOnly = false, foveatedVendorDispatch = false;
+	} settings;
+	bool neuralEnabled = false;
+	NeuralRendering::RenderingMode neuralMode = NeuralRendering::RenderingMode::ReducedResolution;
+	bool IsNeuralRenderingEnabled() const noexcept { return neuralEnabled; }
+	NeuralRendering::RenderingMode GetNeuralRenderingMode() const noexcept { return neuralMode; }
+	const char* GetNeuralRenderingUpscalingProfileBlocker(NeuralRendering::RenderingMode, UpscaleMethod, uint32_t, bool) const noexcept;
+	bool IsNeuralRenderingUpscalingProfileAllowed(UpscaleMethod, uint32_t, bool) const noexcept;
+
 	bool syncActive = true;
 	uint32_t blockReasons = 0;
-	uint64_t availableSerial = 0, clearedSerial = 0;
+	uint64_t availableSerial = 0, clearedSerial = 0, appliedSerial = 0;
 	unsigned int applications = 0;
+	std::thread::id applyingThread;
 	bool latched = false, converged = true;
 	bool pendingVendorReset = false, pendingTransition = false;
 	VRRenderScaleTransitionState controllerState = VRRenderScaleTransitionState::Active;
@@ -67,6 +83,7 @@ struct Upscaling
 	bool IsVRFpsStabilizerSyncActive() const { return syncActive; }
 	const Config& GetVRFpsStabilizerSessionConfig() const { return config; }
 	UpscaleMethod GetConfiguredUpscaleMethodForTransition() const { return current.upscaleMethod; }
+	UpscaleMethod GetUpscaleMethod() const { return current.upscaleMethod; }
 	UpscaleMethod GetLegacyDLSSPreferredUpscaleMethodForAPI() const { return UpscaleMethod::kDLSS; }
 	uint32_t GetEffectiveUpscalingQualityMode() const { return current.qualityMode; }
 	uint32_t GetEffectiveDLSSPreset() const { return current.dlssPreset; }
@@ -87,9 +104,11 @@ struct Upscaling
 	void ClearVRFpsStabilizerAPITransitionProfileAdmission(uint64_t serial) { clearedSerial = serial; }
 	bool IsVRFpsStabilizerAPITransitionProfileAllowed(UpscaleMethod, bool, uint32_t, uint32_t, uint64_t) const;
 	bool IsVRUpscalingTransitionProfileNoOp(UpscaleMethod, bool, uint32_t, uint32_t) const;
-	void ApplyCSMenuUpscalingTransition(UpscaleMethod method, bool scale, uint32_t quality, uint32_t dlss, const char*, VRUpscalingTransitionOrigin, uint64_t)
+	void ApplyCSMenuUpscalingTransition(UpscaleMethod method, bool scale, uint32_t quality, uint32_t dlss, const char*, VRUpscalingTransitionOrigin, uint64_t serial)
 	{
 		++applications;
+		applyingThread = std::this_thread::get_id();
+		appliedSerial = serial;
 		current.upscaleMethod = method;
 		current.renderScaleMode = VRRenderScaleModePolicy::Resolve(method == UpscaleMethod::kFSR || method == UpscaleMethod::kDLSS, quality != 0, scale).preference;
 		current.qualityMode = quality;
@@ -173,6 +192,8 @@ namespace CSPluginAPI
 	};
 	struct CSInterface001
 	{
+		uint32_t GetVRUpscalingApplyBlockReasons();
+		bool IsVRUpscalingProfileApplyAllowed();
 		VRUpscalingTransitionProfileDecision GetVRUpscalingTransitionProfileDecision(UpscaleMethod, bool, UpscalePreset, DLSSProfile);
 		void SetVRUpscalingTransitionProfileForMethod(UpscaleMethod, bool, UpscalePreset, DLSSProfile);
 	};
@@ -197,6 +218,60 @@ int main()
 	CSInterface001 api;
 	auto& upscaling = globals::features::upscaling;
 	try {
+		upscaling.neuralEnabled = true;
+		upscaling.syncActive = false;
+		for (const auto method : { Upscaling::UpscaleMethod::kNONE, Upscaling::UpscaleMethod::kTAA,
+				 Upscaling::UpscaleMethod::kFSR, Upscaling::UpscaleMethod::kDLSS }) {
+			for (const unsigned quality : { 0u, 3u }) {
+				for (const bool renderScale : { false, true }) {
+					const bool compatible = method == Upscaling::UpscaleMethod::kDLSS && quality != 0 && renderScale;
+					Require(upscaling.IsVRFpsStabilizerAPITransitionProfileAllowed(method, renderScale, quality, 1, 0) == compatible);
+				}
+			}
+		}
+		api.SetVRUpscalingTransitionProfileForMethod(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
+		Require(upscaling.applications == 0);
+		Require(api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ) == Decision::kBlocked);
+		upscaling.neuralEnabled = false;
+		upscaling.syncActive = true;
+		// Plugin callers can hold a configuration lock that queued reset tasks need.
+		std::recursive_mutex configMutex;
+		auto worker = std::async(std::launch::async, [&] {
+			std::lock_guard lock(configMutex);
+			upscaling.blockReasons = 4;
+			Require(api.GetVRUpscalingApplyBlockReasons() == 4);
+			Require(!api.IsVRUpscalingProfileApplyAllowed());
+			Require(api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ) == Decision::kBlocked);
+			api.SetVRUpscalingTransitionProfileForMethod(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
+			Require(upscaling.applications == 0);
+			upscaling.blockReasons = 0;
+			upscaling.config.exterior.upscaleMethod = Upscaling::UpscaleMethod::kFSR;
+			upscaling.config.exterior.qualityMode = 3;
+			upscaling.config.exterior.renderScaleMode = true;
+			Require(api.IsVRUpscalingProfileApplyAllowed());
+			Require(api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ) == Decision::kApply);
+			api.SetVRUpscalingTransitionProfileForMethod(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
+			Require(upscaling.applications == 1 && upscaling.current.upscaleMethod == Upscaling::UpscaleMethod::kFSR);
+			Require(upscaling.applyingThread == std::this_thread::get_id());
+			Require(api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ) == Decision::kNoChange);
+
+			upscaling.current = {};
+			upscaling.latched = false;
+			upscaling.blockReasons = 4;
+			upscaling.availableSerial = 42;
+			Require(!api.IsVRUpscalingProfileApplyAllowed());
+			Require(api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ) == Decision::kApply);
+			api.SetVRUpscalingTransitionProfileForMethod(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
+			Require(upscaling.applications == 2 && upscaling.appliedSerial == 42 && upscaling.clearedSerial == 42);
+			Require(upscaling.applyingThread == std::this_thread::get_id());
+			upscaling.blockReasons = 0;
+			upscaling.availableSerial = 0;
+		});
+		worker.get();
+		upscaling.config = {};
+		upscaling.current = {};
+		upscaling.latched = false;
+		upscaling.applications = 0;
 		// The reported exterior request must apply while standing outdoors.
 		upscaling.config.exterior.qualityMode = 1;
 		upscaling.config.exterior.renderScaleMode = true;
@@ -234,7 +309,7 @@ int main()
 							Require(upscaling.applications == 1 && upscaling.current.qualityMode == quality);
 							Require(upscaling.latched == (eligible && quality != 0 && scale != 0));
 							Require(api.GetVRUpscalingTransitionProfileDecision(apiMethod, scale != 0, apiPreset, apiDLSS) == Decision::kNoChange);
-							Require(upscaling.clearedSerial == upscaling.availableSerial);
+							Require(upscaling.appliedSerial == upscaling.availableSerial && upscaling.clearedSerial == upscaling.availableSerial);
 							if (method != 3)
 								Require(api.GetVRUpscalingTransitionProfileDecision(apiMethod, scale != 0, apiPreset, static_cast<DLSSProfile>((dlss + 1) % 5)) == Decision::kNoChange);
 							// A pre-move call uses the same configured target on the other side.

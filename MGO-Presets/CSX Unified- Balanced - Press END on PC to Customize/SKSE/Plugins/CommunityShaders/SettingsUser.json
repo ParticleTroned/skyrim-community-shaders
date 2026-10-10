@@ -49,7 +49,8 @@
     "UnifiedWater": false,
     "Upscaling": false,
     "VolumetricLighting": false,
-    "Wetterness": false
+    "Wetterness": false,
+    "NeuralRendering": false
   },
   "RenderDoc": {
     "Capture Frame Count": 20,
@@ -71,15 +72,15 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-balanced",
-    "presetVersion": "d2026.10.04.1",
+    "presetVersion": "d2026.10.07.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.20",
       "maximumVersionExclusive": "3.21"
     },
     "settingsContract": {
-      "revision": 5,
-      "sourceTreeSha256": "F33CE65C178AF31E19A7D925CD0A6CE560BCA320D1299918061DEC05DEC6E05A"
+      "revision": 8,
+      "sourceTreeSha256": "B278CE8B216DFC1F073CB98EC74D200B9216A6DE922BF1EBE4B1F2873D2BEE4D"
     }
   },
   "Upscaling": {
@@ -118,6 +119,63 @@
     "streamlineLogLevel": 0,
     "upscaleMethod": 3,
     "upscaleMethodNoDLSS": 2
+  },
+  "Neural Rendering": {
+    "schemaVersion": 1,
+    "rendering": {
+      "neuralCharacterAdaptiveRoiSelectionEnabled": false,
+      "neuralCharacterArmorEnabled": false,
+      "neuralCharacterWeaponsEnabled": false,
+      "neuralCharacterFocusScale": 0.75,
+      "neuralCharacterDepthAwareFeatherEnabled": false,
+      "neuralCharacterDepthThreshold": 0.0020000000949949026,
+      "neuralCharacterFaceStrength": 1.0,
+      "neuralCharacterFacesEnabled": true,
+      "neuralCharacterHumansEnabled": true,
+      "neuralCharacterOtherHumanoidsEnabled": true,
+      "neuralCharacterCreaturesEnabled": true,
+      "neuralCharacterAnimalsEnabled": true,
+      "neuralCharacterOtherActorsEnabled": true,
+      "neuralCharacterFeatherRadius": 1,
+      "neuralCharacterHairEnabled": true,
+      "neuralCharacterHairStrength": 0.6499999761581421,
+      "neuralCharacterMaximumDistanceMeters": 10.0,
+      "neuralCharacterMinimumFacePixelSize": 64,
+      "neuralCharacterRenderingEnabled": false,
+      "neuralCharacterCropMode": 1,
+      "neuralCharacterRoiHoldFrames": 3,
+      "neuralCharacterRoiMargin": 0.25,
+      "neuralCharacterSkinEnabled": true,
+      "neuralCharacterSkinStrength": 1.0,
+      "neuralCharacterVisibilityDepthTestEnabled": true,
+      "neuralCharacterVisualIsolationEnabled": true,
+      "neuralRenderingAutoMask": true,
+      "neuralRenderingBatchedStereo": true,
+      "neuralRenderingBlendFeather": 0.05000000074505806,
+      "neuralRenderingDirectCommit": true,
+      "neuralRenderingEnabled": false,
+      "neuralRenderingFovOnly": false,
+      "neuralRenderingRenderscaleFov": false,
+      "neuralRenderingInsertionPoint": 0,
+      "neuralRenderingIntensity": 0.800000011920929,
+      "neuralRenderingLocalStructure": 0.8999999761581421,
+      "neuralRenderingLocalTone": 0.75,
+      "neuralRenderingMode": 2,
+      "neuralRenderingPreset": 3,
+      "neuralRenderingSingleSubrectScale": 1.0,
+      "neuralRenderingSkinStructure": 0.8999999761581421,
+      "neuralRenderingStyle": 3,
+      "neuralRenderingUICorrection": false
+    },
+    "colour": {
+      "schemaVersion": 1,
+      "enabled": true,
+      "mode": "legacy_raw",
+      "detailStrength": 1.0,
+      "appearanceMix": 0.0,
+      "maximumDetailStops": 1.0,
+      "lightingPreservation": 1.0
+    }
   },
   "CS Editor": null,
   "CS Utility": {
@@ -454,13 +512,13 @@
     "EnableWrappedLighting": 0,
     "Enabled": 1,
     "Glossiness": 20.0,
-    "OverrideComplexGrassSettings": 1,
+    "OverrideComplexGrassSettings": 0,
     "SpecularStrength": 0.5,
     "SubsurfaceScatteringAmount": 1.0
   },
   "Adaptive Balance": {
     "useAmbientEffectLighting": false,
-    "dayStartHour": 9.0,
+    "dayStartHour": 6.0,
     "enabled": true,
     "globalProfile": {
       "advanced": true,
@@ -522,7 +580,7 @@
       }
     },
     "locationOverrides": [],
-    "nightStartHour": 21.0,
+    "nightStartHour": 19.0,
     "profiles": [
       {
         "advanced": true,
@@ -625,13 +683,13 @@
           "CausticsTiling": 1.0,
           "FresnelMax": 1.0,
           "FresnelMin": 0.25,
-          "GlobalReflectionAmount": 1.25,
-          "Muddiness": 1.0,
+          "GlobalReflectionAmount": 2.0,
+          "Muddiness": 0.7,
           "ParallaxQuality": 16,
           "ParallaxStrength": 1.0,
           "RefractionAmount": 1.0,
           "SunSpecularMultiplier": 1.0,
-          "WaterBrightness": 0.7,
+          "WaterBrightness": 1.0,
           "WaveAmplitude": 1.0
         },
         "waterAdvanced": true,
@@ -821,7 +879,7 @@
         }
       }
     ],
-    "transitionHours": 1.0
+    "transitionHours": 2.0
   },
   "Foliage Lighting": {
     "EnableFoliageAmbientBoost": 0,

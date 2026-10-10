@@ -170,13 +170,13 @@ public:
 	virtual void EarlyPrepass() override;
 
 	void UpdateDepthBufferCulling();
-	/** Select one depth-culling method and synchronize its compatibility preference. */
+	/** Select one effective depth-culling policy and synchronize persisted toggles. */
 	void SetDepthCullingMode(VRDepthCullingTemporal::Mode a_mode);
-	/** Return the normalized method represented by persisted settings. */
+	/** Return the effective policy represented by the persisted toggles. */
 	[[nodiscard]] VRDepthCullingTemporal::Mode GetDepthCullingMode() const;
 	/** Select Legacy when enabled, or Advanced when disabled. */
 	void SetDepthCullingLegacyMode(bool a_enabled);
-	/** Normalize persisted settings and publish one effective depth-culling method. */
+	/** Normalize persisted toggles and publish one effective temporal policy. */
 	void ApplyDepthCullingMode();
 	void TryApplyDepthBufferCullingCacheRefresh();
 	void DrawStereoBlend();
@@ -233,8 +233,7 @@ public:
 		// Performance optimization settings
 		bool EnableDepthBufferCullingExterior = true;  ///< Enable native depth culling outdoors
 		bool EnableDepthBufferCullingInterior = true;  ///< Enable native depth culling indoors
-		int DepthCullingMethod = 0;                    ///< Stable method identity: Advanced 0, Legacy 2, Hybrid Hi-Z 3
-		bool DepthCullingLegacyMode = false;           ///< Legacy compatibility preference, synchronized with the method
+		bool DepthCullingLegacyMode = false;           ///< Use native results without temporal pose capture or recovery
 		float MinOccludeeBoxExtentExterior = VRDepthCullingEnablePolicy::kDefaultMinimumExtent;
 		float MinOccludeeBoxExtentInterior = VRDepthCullingEnablePolicy::kDefaultMinimumExtent;
 
@@ -333,9 +332,10 @@ public:
 		}
 
 		// Key binding configurations
-		std::vector<ButtonCombo> VRMenuOpenKeys = DefaultVRMenuOpenKeys();          ///< Button combos to open VR menu
-		std::vector<ButtonCombo> VRMenuCloseKeys = DefaultVRMenuCloseKeys();        ///< Button combos to close VR menu
-		std::vector<ButtonCombo> VROverlayOpenKeys = DefaultVROverlayOpenKeys();    ///< Button combos to show the Performance Overlay
+		std::vector<ButtonCombo> VRMenuOpenKeys = DefaultVRMenuOpenKeys();        ///< Button combos to open VR menu
+		std::vector<ButtonCombo> VRMenuCloseKeys = DefaultVRMenuCloseKeys();      ///< Button combos to close VR menu
+		std::vector<ButtonCombo> VROverlayOpenKeys = DefaultVROverlayOpenKeys();  ///< Button combos to show the Performance Overlay
+		std::vector<ButtonCombo> VRNeuralRenderingToggleKeys{};
 		std::vector<ButtonCombo> VROverlayCloseKeys = DefaultVROverlayCloseKeys();  ///< Button combos to hide the Performance Overlay
 
 		// General interaction settings
@@ -343,7 +343,7 @@ public:
 		int kAutoHideSeconds = Config::kDefaultAutoHideSeconds;  ///< Auto-hide timeout for overlay messages (>0 shows overlay, <=0 hides it)
 		bool EnableDragToReposition = false;                     ///< Allow drag-and-drop overlay repositioning
 
-		float VRMenuAutoResetDistance = 1000.0f;  // Default: 1000 units ≈ 14.3 meters
+		float VRMenuAutoResetDistance = 1000.0f;  // Default: 1000 units ÃƒÂ¢Ã¢â‚¬Â°Ã‹â€  14.3 meters
 
 		/**
 		 * @brief Validates if the current menu scale is within acceptable range
@@ -467,6 +467,10 @@ public:
 	void UpdateWandHoverFeedback();
 	void ResetWandPointingRuntimeState();
 	void UpdateOverlayMenuStateFromInput();
+	/** Tests a binding against the current physical controller states. */
+	bool IsControllerComboPressed(const std::vector<ButtonCombo>& a_combos) const;
+	/** Latches every input event; only a fresh press may activate the binding. */
+	void UpdateNeuralRenderingToggleFromInput(bool a_allowActivation);
 	void ProcessVRButtonEvent(const Menu::KeyEvent& event);
 	void UpdateControllerState(const Menu::KeyEvent& event);
 	void ProcessThumbstickScroll(RE::VRControllerState& controllerState, size_t thumbstickIndex, float deadzone, ImGuiIO& io);
@@ -584,11 +588,6 @@ public:
 	// Engine hook integration points
 	bool* gDepthBufferCulling = nullptr;
 	float* gMinOccludeeBoxExtent = nullptr;
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	// Local fallback storage cannot establish the engine's observed state.
-	bool depthCullingEngineGateBound = false;
-	bool depthCullingEngineExtentBound = false;
-#endif
 	std::atomic<bool> depthCullingCacheRefreshPending = false;
 	std::atomic<bool> depthCullingCacheRefreshCompleted = false;
 
@@ -660,9 +659,11 @@ public:
 		MenuOpen,
 		MenuClose,
 		OverlayOpen,
-		OverlayClose
+		OverlayClose,
+		NeuralRenderingToggle
 	};
 
+	bool neuralRenderingToggleHeld = false;
 	bool isCapturingCombo = false;
 	ComboType currentComboType = ComboType::None;
 	const char* currentComboName = nullptr;

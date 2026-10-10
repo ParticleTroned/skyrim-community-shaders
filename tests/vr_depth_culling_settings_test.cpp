@@ -1,6 +1,5 @@
 #include "Features/VRDepthCullingSettings.h"
 
-#include <cstdint>
 #include <limits>
 
 namespace
@@ -15,7 +14,6 @@ namespace
 			!defaults["EnableDepthBufferCullingExterior"].get<bool>() ||
 			!defaults["EnableDepthBufferCullingInterior"].get<bool>() ||
 			defaults["DepthCullingLegacyMode"].get<bool>() ||
-			defaults["DepthCullingMethod"] != 0 ||
 			defaults["MinOccludeeBoxExtentExterior"] != 10.0f ||
 			defaults["MinOccludeeBoxExtentInterior"] != 10.0f)
 			return false;
@@ -25,7 +23,7 @@ namespace
 		       old["MinOccludeeBoxExtentExterior"] == 83.5f &&
 		       old["MinOccludeeBoxExtentInterior"] == 83.5f &&
 		       !old.contains("MinOccludeeBoxExtent") &&
-		       old["DepthCullingLegacyMode"].get<bool>() && old["DepthCullingMethod"] == 2;
+		       old["DepthCullingLegacyMode"].get<bool>();
 	}
 
 	bool CoversIndependentRoundTripAndDisabledMasterMigration()
@@ -42,7 +40,7 @@ namespace
 			return false;
 
 		json split = { { "EnableDepthBufferCullingExterior", false },
-			{ "EnableDepthBufferCullingInterior", true }, { "DepthCullingLegacyMode", true }, { "DepthCullingMethod", 2 },
+			{ "EnableDepthBufferCullingInterior", true }, { "DepthCullingLegacyMode", true },
 			{ "MinOccludeeBoxExtentExterior", 70.0f }, { "MinOccludeeBoxExtentInterior", 12.0f } };
 		const json original = split;
 		if (NormalizeLoadedSettings(split) || split != original)
@@ -72,28 +70,27 @@ namespace
 		       !settings["DepthCullingLegacyMode"].get<bool>();
 	}
 
-	bool CoversMethodMigrationAndValidation()
+	bool CoversRetiredMethodSettings()
 	{
-		for (const int method : { 0, 2, 3 }) {
-			json settings = { { "DepthCullingMethod", method }, { "DepthCullingLegacyMode", method != 2 },
-				{ "EnableDepthBufferCullingExterior", false }, { "EnableDepthBufferCullingInterior", true } };
-			if (NormalizeLoadedSettings(settings) || settings["DepthCullingMethod"] != method ||
-				settings["DepthCullingLegacyMode"] != (method == 2) || !settings["EnableDepthBufferCullingInterior"].get<bool>())
-				return false;
-			const auto restored = json::parse(settings.dump());
-			if (NormalizeLoadedSettings(settings) || settings != restored)
-				return false;
+		for (const bool legacy : { false, true }) {
+			for (const auto& retiredMethod : json::array({ 0, 2, 3, -1, "invalid", nullptr })) {
+				json saved = {
+					{ "DepthCullingMethod", retiredMethod },
+					{ "DepthCullingLegacyMode", legacy },
+					{ "EnableDepthBufferCullingExterior", false },
+					{ "EnableDepthBufferCullingInterior", true },
+					{ "MinOccludeeBoxExtentExterior", 31.0f },
+					{ "MinOccludeeBoxExtentInterior", 7.0f }
+				};
+				const auto original = saved;
+				if (NormalizeLoadedSettings(saved) || saved != original)
+					return false;
+				json roundTrip = json::parse(saved.dump());
+				if (NormalizeLoadedSettings(roundTrip) || roundTrip != original)
+					return false;
+			}
 		}
-		const json invalidMethods[] = { nullptr, true, "hybrid", 1, -1, 4, 3.0,
-			std::numeric_limits<std::uint64_t>::max(), json::object(), json::array() };
-		for (const auto& method : invalidMethods) {
-			json settings = { { "DepthCullingMethod", method }, { "DepthCullingLegacyMode", true } };
-			if (!NormalizeLoadedSettings(settings) || settings["DepthCullingMethod"] != 0 ||
-				settings["DepthCullingLegacyMode"].get<bool>())
-				return false;
-		}
-		json retired = { { "DepthCullingPerformanceMode", true } };
-		return !NormalizeLoadedSettings(retired) && retired["DepthCullingMethod"] == 0;
+		return true;
 	}
 }
 
@@ -102,7 +99,7 @@ int main()
 	return CoversDefaultsAndSharedThresholdMigration() &&
 	               CoversIndependentRoundTripAndDisabledMasterMigration() &&
 	               CoversInvalidExtentsAndIndependentPrecedence() &&
-	               CoversMethodMigrationAndValidation() ?
+	               CoversRetiredMethodSettings() ?
 	           0 :
 	           1;
 }

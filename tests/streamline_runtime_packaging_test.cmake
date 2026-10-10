@@ -6,7 +6,15 @@ foreach(_required IN ITEMS BUILD_ROOT SDK_ROOT TEST_CONFIG)
     endif()
 endforeach()
 
-set(_prefix "${BUILD_ROOT}/Testing/StreamlineRuntime")
+string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef _run_id)
+set(_prefix "${BUILD_ROOT}/Testing/StreamlineRuntime/${_run_id}")
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" --install "${BUILD_ROOT}" --config "${TEST_CONFIG}"
+        --prefix "${_prefix}" --component Shaders
+    RESULT_VARIABLE _shader_result OUTPUT_VARIABLE _shader_output ERROR_VARIABLE _shader_error)
+if(NOT _shader_result EQUAL 0)
+    message(FATAL_ERROR "NR release shader install failed: ${_shader_output}${_shader_error}")
+endif()
 execute_process(
     COMMAND
         "${CMAKE_COMMAND}" --install "${BUILD_ROOT}" --config "${TEST_CONFIG}"
@@ -22,25 +30,11 @@ if(NOT _install_result EQUAL 0)
     )
 endif()
 
-# The component manifest proves completeness without a preceding Shaders install.
+# The component manifest independently proves runtime payload completeness.
 file(STRINGS "${BUILD_ROOT}/install_manifest_StreamlineRuntime.txt" _installed)
 set(_expected "")
-foreach(
-    _relative_path
-    IN
-    ITEMS
-        bin/x64/nvngx_dlss.dll
-        bin/x64/sl.common.dll
-        bin/x64/sl.dlss.dll
-        bin/x64/sl.interposer.dll
-        bin/x64/sl.pcl.dll
-        bin/x64/sl.reflex.dll
-        license.txt
-        bin/x64/nvngx_dlss.license.txt
-        bin/x64/reflex.license.txt
-        3rd-party-licenses.md
-        "NVIDIA Nsight Graphics SDK License (Apache 2.0).txt"
-)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/StreamlineRuntimeFiles.cmake")
+foreach(_relative_path IN LISTS STREAMLINE_OFFICIAL_RUNTIME_PATHS)
     get_filename_component(_filename "${_relative_path}" NAME)
     set(_destination "${_prefix}/Shaders/Upscaling/Streamline/${_filename}")
     list(APPEND _expected "${_destination}")
@@ -65,7 +59,19 @@ if(NOT _installed STREQUAL _expected)
         "StreamlineRuntime installed unexpected or duplicate files: ${_installed}"
     )
 endif()
+set(_streamline_root "${_prefix}/Shaders/Upscaling/Streamline")
+file(GLOB_RECURSE _actual RELATIVE "${_streamline_root}" "${_streamline_root}/*")
+set(_relative_expected "")
+foreach(_file IN LISTS _expected)
+    file(RELATIVE_PATH _relative "${_streamline_root}" "${_file}")
+    list(APPEND _relative_expected "${_relative}")
+endforeach()
+list(SORT _actual)
+list(SORT _relative_expected)
+if(NOT _actual STREQUAL _relative_expected)
+    message(FATAL_ERROR "NR release contains unexpected physical files: ${_actual}")
+endif()
 message(
     STATUS
-    "StreamlineRuntime installs all six production DLLs and five original notices"
+    "StreamlineRuntime installs the exact configured DLLs and five original notices"
 )

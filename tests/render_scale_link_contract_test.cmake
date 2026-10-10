@@ -45,9 +45,11 @@ endfunction()
 require_contract("${_header}" [[bool renderScaleLinkedToUpscaling = true;]] "default")
 require_contract("${_header}" [[UpscalingTransitionApplyResult ApplyCSMenuUpscalingTransition(]]
     "structured transition acceptance result")
-section("${_source}" [[NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT( Upscaling::Settings,]]
+section("${_source}" [[#define UPSCALING_SETTINGS_JSON_FIELDS(OP)]]
     [[decltype(&D3D11CreateDeviceAndSwapChain)]] _serializer)
-require_contract("${_serializer}" [[renderScaleLinkedToUpscaling,]] "JSON persistence")
+require_contract("${_serializer}" [[OP(renderScaleLinkedToUpscaling)]] "JSON persistence")
+require_contract("${_serializer}" [[UPSCALING_SETTINGS_JSON_FIELDS(UPSCALING_WRITE_JSON_FIELD)]] "JSON write field coverage")
+require_contract("${_serializer}" [[UPSCALING_SETTINGS_JSON_FIELDS(UPSCALING_READ_JSON_FIELD)]] "JSON read field coverage")
 section("${_source}" [[void ResetVRSpecificUpscalingSettings(]]
     [[void StripVRSpecificUpscalingSettings(]] _non_vr_reset)
 require_contract("${_non_vr_reset}" [[settings.renderScaleLinkedToUpscaling = false;]] "non-VR reset")

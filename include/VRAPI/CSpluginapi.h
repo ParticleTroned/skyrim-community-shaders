@@ -15,8 +15,8 @@
 #include <atomic>
 #include <cstdint>
 
-// Build 12 admits configured current-cell profiles after live settings reloads.
-inline constexpr unsigned int CSBuildNumber = 12;
+// Build 13 stages feature switches; upscaling admission stays synchronous.
+inline constexpr unsigned int CSBuildNumber = 13;
 
 namespace CSPluginAPI
 {
@@ -81,12 +81,6 @@ namespace CSPluginAPI
 			       message->type == CSMessage::kMessage_GetInterface &&
 			       message->data &&
 			       message->dataLen >= sizeof(CSMessage);
-		}
-
-		template <class TFlag>
-		constexpr TFlag BoolToFlag(bool enabled)
-		{
-			return enabled ? static_cast<TFlag>(1) : static_cast<TFlag>(0);
 		}
 
 		inline bool IsValidUpscalePreset(UpscalePreset preset)
@@ -280,23 +274,22 @@ namespace CSPluginAPI
 
 	inline bool CSInterface001::GetSSSEnabled()
 	{
-		return globals::features::screenSpaceShadows.bendSettings.Enable != 0;
+		return globals::features::screenSpaceShadows.IsEnabledRequested();
 	}
 
 	inline void CSInterface001::SetSSSEnabled(bool enabled)
 	{
-		using EnableFlag = decltype(globals::features::screenSpaceShadows.bendSettings.Enable);
-		globals::features::screenSpaceShadows.bendSettings.Enable = detail::BoolToFlag<EnableFlag>(enabled);
+		globals::features::screenSpaceShadows.SetEnabled(enabled);
 	}
 
 	inline bool CSInterface001::GetSSGIEnabled()
 	{
-		return globals::features::screenSpaceGI.settings.Enabled;
+		return globals::features::screenSpaceGI.IsEnabledRequested();
 	}
 
 	inline void CSInterface001::SetSSGIEnabled(bool enabled)
 	{
-		globals::features::screenSpaceGI.settings.Enabled = enabled;
+		globals::features::screenSpaceGI.SetEnabled(enabled);
 	}
 
 	inline bool CSInterface001::GetVolumetricLightingExteriorEnabled()
@@ -342,12 +335,12 @@ namespace CSPluginAPI
 
 	inline bool CSInterface001::GetLightLimitFixContactShadowsEnabled()
 	{
-		return globals::features::lightLimitFix.settings.EnableContactShadows;
+		return globals::features::lightLimitFix.IsContactShadowsRequested();
 	}
 
 	inline void CSInterface001::SetLightLimitFixContactShadowsEnabled(bool enabled)
 	{
-		globals::features::lightLimitFix.settings.EnableContactShadows = enabled;
+		globals::features::lightLimitFix.SetContactShadowsEnabled(enabled);
 	}
 
 	inline DLSSProfile CSInterface001::GetDLSSProfile()

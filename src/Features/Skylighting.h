@@ -39,6 +39,7 @@ public:
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override;
+	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual const char* GetPerformanceCostMeasurementWaitText() const override;
 	virtual double GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const override;
@@ -55,6 +56,7 @@ public:
 	void CompileComputeShaders();
 
 	virtual void Prepass() override;
+	virtual void EarlyPrepass() override;
 
 	virtual void PostPostLoad() override;
 	virtual bool IsCore() const override { return true; };
@@ -108,7 +110,7 @@ public:
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 
 	SkylightingCB GetCommonBufferData(bool a_inWorld);
-	bool IsRuntimeActive() const { return loaded && settings.EnableSkylighting; }
+	bool IsRuntimeActive() const { return loaded && settings.EnableSkylighting && !resourceRebuildFailed.load(std::memory_order_acquire); }
 	bool HasCurrentShadowData() const;
 
 	winrt::com_ptr<ID3D11SamplerState> comparisonSampler = nullptr;
@@ -126,6 +128,9 @@ public:
 	uint probeArrayDims[3] = { 256, 256, 128 };
 
 	// cached variables
+	std::atomic_bool queuedRebuildSkylighting{ false };
+	std::atomic_bool resourceRebuildFailed{ false };
+	std::optional<uint32_t> runtimeSettingsFrame;
 	std::atomic_bool queuedResetSkylighting{ true };
 	bool needsOcclusionRefresh = true;
 	std::optional<bool> previousInteriorState;
@@ -146,7 +151,9 @@ public:
 	uint occlusionUpdateFrameCounter = 0;
 
 	/** @brief Queues a render-thread history rebuild without touching graphics resources. */
-	void QueueResetSkylighting();
+	void QueueResetSkylighting(bool rebuild = false);
+	/** @brief Block sampling while reset/rebuild work is pending or failed. */
+	bool HasPendingReset() const;
 	/** @brief Clears probe history on the render thread and requires a fresh occlusion capture. */
 	void ResetSkylighting();
 	/** @brief Checks the render-thread location state and invalidates history on transitions. */

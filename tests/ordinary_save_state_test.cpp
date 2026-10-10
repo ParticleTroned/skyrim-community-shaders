@@ -71,6 +71,8 @@ namespace logger
 	}
 }
 
+#include "Utils/WorldLoadTransitionPolicy.h"
+
 #include "ordinary_save_state_under_test.h"
 
 namespace
@@ -116,6 +118,8 @@ namespace
 		f.Save(10);
 		const uint64_t token = f.state.GetOrdinarySaveRenderRecoveryToken();
 		Check(token != 0, "A completed save notification must admit stereo qualification");
+		Check(!f.state.IsWorldLoadTransitionActive(),
+			"An ordinary save must not block neural rendering as a world replacement");
 		Check(f.state.saveLoadSafeModeEndFrame == 130, "Saving must retain 120-frame mutation grace");
 		for (uint32_t frame = 11; frame < 130; ++frame) {
 			f.Tick(frame);

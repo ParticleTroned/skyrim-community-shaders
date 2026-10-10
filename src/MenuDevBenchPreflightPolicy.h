@@ -19,6 +19,7 @@ namespace MenuDevBenchPreflightPolicy
 		bool inGame = false;
 		bool stabilizerActiveForSession = false;
 		bool developerMode = false;
+		bool neuralRenderingEnabled = false;
 		bool foveatedVendorDispatch = false;
 		double foveatedCenterArea = 0.0;
 		bool peripheryTAAEnabled = false;
@@ -43,7 +44,7 @@ namespace MenuDevBenchPreflightPolicy
 
 	[[nodiscard]] constexpr bool CanApplyRuntimeSettings(const State& a_state, Preparation a_preparation = Preparation::Coc) noexcept
 	{
-		return a_state.vr && a_state.inGame &&
+		return a_state.vr && a_state.inGame && !a_state.neuralRenderingEnabled &&
 		       (a_preparation == Preparation::Tuning || a_state.stabilizerActiveForSession);
 	}
 

@@ -3,12 +3,16 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <memory>
+#include <utility>
 
 #include "Deferred.h"
 #include "GpuPass.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
+#include "Utils/RendererContextAccess.h"
+#include "Utils/RuntimeToggle.h"
 
 namespace
 {
@@ -249,12 +253,7 @@ namespace
 		if (a_previousEnabled == a_skylighting.settings.EnableSkylighting)
 			return;
 
-		a_skylighting.inOcclusion = false;
-
-		if (globals::d3d::device && globals::game::renderer)
-			a_skylighting.ResetSkylighting();
-		else
-			a_skylighting.QueueResetSkylighting();
+		a_skylighting.QueueResetSkylighting();
 	}
 
 	void DrawSkylightingRuntimeToggle(Skylighting& a_skylighting)
@@ -267,6 +266,8 @@ namespace
 			ImGui::Text("Runtime-safe toggle. Keeps shaders and hooks loaded, but disables Skylighting updates and shading until re-enabled.");
 			ImGui::Text("The performance profiler compares against this Off state, not against a lower Skylighting preset.");
 		}
+		if (a_skylighting.resourceRebuildFailed.load(std::memory_order_acquire))
+			ImGui::TextWrapped("%s", a_skylighting.GetPerformanceCostMeasurementWaitText());
 	}
 
 	float GetPresetProbeFieldSize(const SkylightingPerformancePreset& a_preset)
@@ -297,18 +298,7 @@ namespace
 	{
 		NormalizeSettingsForRuntime(a_skylighting.settings);
 		a_skylighting.settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(a_skylighting.settings, a_skylighting.settings.ProbeUpdateInterval);
-		a_skylighting.ApplyProbeGridQuality();
-
-		const bool probeGridChanged = a_previousProbeGridQuality != a_skylighting.settings.ProbeGridQuality;
-		const bool canResetRuntimeResources = globals::d3d::device && globals::game::renderer;
-
-		if (canResetRuntimeResources && probeGridChanged)
-			a_skylighting.SetupResources();
-
-		if (canResetRuntimeResources)
-			a_skylighting.ResetSkylighting();
-		else
-			a_skylighting.QueueResetSkylighting();
+		a_skylighting.QueueResetSkylighting(a_previousProbeGridQuality != a_skylighting.settings.ProbeGridQuality);
 	}
 
 	void ApplySkylightingPerformancePreset(
@@ -412,7 +402,7 @@ namespace
 		float probeFieldSizeCells = ClampProbeFieldSize(settings.ProbeFieldSize) / Skylighting::Settings::kWorldCellSize;
 		if (ImGui::SliderFloat("Skylighting Distance", &probeFieldSizeCells, Skylighting::Settings::kMinProbeFieldSizeCells, Skylighting::Settings::kMaxProbeFieldSizeCells, "%.1f cells", ImGuiSliderFlags_AlwaysClamp)) {
 			settings.ProbeFieldSize = ClampProbeFieldSize(probeFieldSizeCells * Skylighting::Settings::kWorldCellSize);
-			a_skylighting.ResetSkylighting();
+			a_skylighting.QueueResetSkylighting();
 		}
 	}
 
@@ -463,6 +453,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void Skylighting::LoadSettings(json& o_json)
 {
+	const uint previousProbeGridQuality = settings.ProbeGridQuality;
 	ApplyPlatformDefaults(settings);
 
 	LoadIfPresent(o_json, "MaxZenith", settings.MaxZenith);
@@ -479,13 +470,12 @@ void Skylighting::LoadSettings(json& o_json)
 	LoadIfPresent(o_json, "IncludeMarkedRoofOccluders", settings.IncludeMarkedRoofOccluders);
 
 	NormalizeSettingsForRuntime(settings);
-	ApplyProbeGridQuality();
+	QueueResetSkylighting(previousProbeGridQuality != settings.ProbeGridQuality);
 }
 
 void Skylighting::SaveSettings(json& o_json)
 {
 	NormalizeSettingsForRuntime(settings);
-	ApplyProbeGridQuality();
 	o_json = settings;
 }
 
@@ -506,9 +496,40 @@ void Skylighting::ApplyProbeGridQuality()
 	settings.StableSliceCount = ClampStableSliceCount(settings.StableSliceCount, probeArrayDims[2]);
 }
 
-void Skylighting::QueueResetSkylighting()
+void Skylighting::QueueResetSkylighting(bool rebuild)
 {
+	if (rebuild || resourceRebuildFailed.load(std::memory_order_acquire))
+		queuedRebuildSkylighting.store(true, std::memory_order_release);
 	queuedResetSkylighting.store(true, std::memory_order_release);
+}
+
+bool Skylighting::HasPendingReset() const
+{
+	return queuedResetSkylighting.load(std::memory_order_acquire) || queuedRebuildSkylighting.load(std::memory_order_acquire) ||
+	       resourceRebuildFailed.load(std::memory_order_acquire);
+}
+
+void Skylighting::EarlyPrepass()
+{
+	auto* state = globals::state;
+	if (!HasPendingReset() || !state || runtimeSettingsFrame == state->frameCount)
+		return;
+	runtimeSettingsFrame = state->frameCount;
+	if (Util::IsRuntimeToggleBlocked(state))
+		return;
+	Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
+	if (!ownership)
+		return;
+	inOcclusion = false;
+	if (queuedRebuildSkylighting.load(std::memory_order_acquire)) {
+		if (!globals::d3d::device)
+			return;
+		SetupResources();
+	} else if (!resourceRebuildFailed.load(std::memory_order_acquire))
+		ResetSkylighting();
+	// A reset after world publication must revoke its probe-dispatch permission.
+	if (probeUpdateBufferEnabled)
+		state->UpdateFeatureData(true);
 }
 
 bool Skylighting::UpdateInteriorState()
@@ -536,6 +557,15 @@ void Skylighting::ResetSkylighting()
 		return;
 	}
 
+	winrt::com_ptr<ID3D11ShaderResourceView> previousProbes, previousVisibility;
+	context->PSGetShaderResources(50, 1, previousProbes.put());
+	context->PSGetShaderResources(53, 1, previousVisibility.put());
+	const SKSE::stl::scope_exit restoreBindings([&]() noexcept {
+		auto* probes = previousProbes.get();
+		auto* visibility = previousVisibility.get();
+		context->PSSetShaderResources(50, 1, &probes);
+		context->PSSetShaderResources(53, 1, &visibility);
+	});
 	std::array<ID3D11ShaderResourceView*, 2> nullPixelSRVs{};
 	context->PSSetShaderResources(50, 1, nullPixelSRVs.data());
 	context->PSSetShaderResources(53, 1, nullPixelSRVs.data() + 1);
@@ -571,6 +601,12 @@ void Skylighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 	ApplySkylightingRuntimeEnabledChange(*this, previousEnabled);
 }
 
+bool Skylighting::IsPerformanceCostMeasurementReady() const
+{
+	return !Util::IsRuntimeToggleBlocked(globals::state) &&
+	       !HasPendingReset();
+}
+
 bool Skylighting::IsPerformanceCostMeasurementEnabled() const
 {
 	return IsRuntimeActive();
@@ -578,6 +614,8 @@ bool Skylighting::IsPerformanceCostMeasurementEnabled() const
 
 const char* Skylighting::GetPerformanceCostMeasurementWaitText() const
 {
+	if (resourceRebuildFailed.load(std::memory_order_acquire))
+		return "Skylighting rebuild failed. Rebuild or change probe quality to retry.";
 	return "Waiting for Skylighting state to settle";
 }
 
@@ -597,24 +635,8 @@ void Skylighting::RestorePerformanceCostMeasurementState(const json& a_state)
 		return;
 
 	const uint previousProbeGridQuality = settings.ProbeGridQuality;
-	const bool previousEnabled = settings.EnableSkylighting;
 	settings = a_state.get<Settings>();
-	NormalizeSettingsForRuntime(settings);
-	ApplyProbeGridQuality();
-
-	const bool probeGridChanged = previousProbeGridQuality != settings.ProbeGridQuality;
-	if (previousEnabled != settings.EnableSkylighting)
-		inOcclusion = false;
-
-	const bool canResetRuntimeResources = globals::d3d::device && globals::game::renderer;
-
-	if (canResetRuntimeResources && probeGridChanged)
-		SetupResources();
-
-	if (canResetRuntimeResources)
-		ResetSkylighting();
-	else
-		QueueResetSkylighting();
+	ApplySkylightingRuntimeSettingsChange(*this, previousProbeGridQuality);
 }
 
 void Skylighting::DrawSettings()
@@ -627,14 +649,14 @@ void Skylighting::DrawSettings()
 	ImGui::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
 	ImGui::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
 	if (ImGui::Checkbox("Include Marked Roof Occluders", &settings.IncludeMarkedRoofOccluders))
-		ResetSkylighting();
+		QueueResetSkylighting();
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Helps skylighting darken under some roofs the game marks specially. May rarely add extra dark patches if hidden helper objects are included.");
 
 	ImGui::Separator();
 
 	if (ImGui::Button("Rebuild Skylighting"))
-		ResetSkylighting();
+		QueueResetSkylighting();
 
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Changes below require rebuilding, a loading screen, or moving away from the current location to apply.");
@@ -740,7 +762,7 @@ void Skylighting::DrawSettings()
 	float probeFieldSizeCells = ClampProbeFieldSize(settings.ProbeFieldSize) / Skylighting::Settings::kWorldCellSize;
 	if (ImGui::SliderFloat("Skylighting Distance", &probeFieldSizeCells, Skylighting::Settings::kMinProbeFieldSizeCells, Skylighting::Settings::kMaxProbeFieldSizeCells, "%.1f cells", ImGuiSliderFlags_AlwaysClamp)) {
 		settings.ProbeFieldSize = ClampProbeFieldSize(probeFieldSizeCells * Skylighting::Settings::kWorldCellSize);
-		ResetSkylighting();
+		QueueResetSkylighting();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Sets the total camera-centered skylighting probe field width. Balanced uses 3.2 cells; Performance uses 2.5 cells.");
@@ -813,115 +835,123 @@ json Skylighting::CapturePerformanceSettingsState() const
 
 void Skylighting::SetupResources()
 {
-	ApplyProbeGridQuality();
-
-	delete texOcclusion;
-	texOcclusion = nullptr;
-	delete texProbeArray;
-	texProbeArray = nullptr;
-	delete texAccumFramesArray;
-	texAccumFramesArray = nullptr;
-	delete texShadowBitmask;
-	texShadowBitmask = nullptr;
-	delete texShadowVisibility;
-	texShadowVisibility = nullptr;
-
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
-	static ID3D11Device* shaderDevice = nullptr;
-	if (shaderDevice != device) {
-		probeUpdateCompute = nullptr;
-		shaderDevice = device;
+	if (!renderer || !device || !globals::d3d::context) {
+		QueueResetSkylighting(true);
+		return;
 	}
-
-	{
-		auto& precipitationOcclusion = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
-
-		D3D11_TEXTURE2D_DESC texDesc{};
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-		D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
-
-		precipitationOcclusion.texture->GetDesc(&texDesc);
-		precipitationOcclusion.depthSRV->GetDesc(&srvDesc);
-		precipitationOcclusion.views[0]->GetDesc(&dsvDesc);
-
-		texOcclusion = new Texture2D(texDesc, "Skylighting::Occlusion");
-		texOcclusion->CreateSRV(srvDesc);
-		texOcclusion->CreateDSV(dsvDesc);
+	auto& precipitationOcclusion = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
+	if (!precipitationOcclusion.texture || !precipitationOcclusion.depthSRV || !precipitationOcclusion.views[0]) {
+		QueueResetSkylighting(true);
+		return;
 	}
+	queuedRebuildSkylighting.exchange(false, std::memory_order_acq_rel);
+	try {
+		const auto& preset = GetProbeGridPreset(settings.ProbeGridQuality);
+		std::unique_ptr<Texture2D> occlusion;
+		std::unique_ptr<Texture3D> probes, accumulation, shadowBitmask, shadowVisibility;
+		winrt::com_ptr<ID3D11SamplerState> sampler;
 
-	{
-		D3D11_TEXTURE3D_DESC texDesc{
-			.Width = probeArrayDims[0],
-			.Height = probeArrayDims[1],
-			.Depth = probeArrayDims[2],
-			.MipLevels = 1,
-			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
-			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
-			.CPUAccessFlags = 0,
-			.MiscFlags = 0
-		};
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = texDesc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D,
-			.Texture3D = {
-				.MostDetailedMip = 0,
-				.MipLevels = texDesc.MipLevels }
-		};
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-			.Format = texDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D,
-			.Texture3D = {
-				.MipSlice = 0,
-				.FirstWSlice = 0,
-				.WSize = texDesc.Depth }
-		};
+		{
+			D3D11_TEXTURE2D_DESC texDesc{};
+			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+			D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
 
-		texProbeArray = new Texture3D(texDesc, "Skylighting::ProbeArray");
-		texProbeArray->CreateSRV(srvDesc);
-		texProbeArray->CreateUAV(uavDesc);
+			precipitationOcclusion.texture->GetDesc(&texDesc);
+			precipitationOcclusion.depthSRV->GetDesc(&srvDesc);
+			precipitationOcclusion.views[0]->GetDesc(&dsvDesc);
 
-		// Preserve the eight-bit SH count alongside a five-bit shadow sample cursor.
-		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R16_UINT;
+			occlusion = std::make_unique<Texture2D>(texDesc, "Skylighting::Occlusion");
+			occlusion->CreateSRV(srvDesc);
+			occlusion->CreateDSV(dsvDesc);
+		}
 
-		texAccumFramesArray = new Texture3D(texDesc, "Skylighting::AccumFramesArray");
-		texAccumFramesArray->CreateSRV(srvDesc);
-		texAccumFramesArray->CreateUAV(uavDesc);
+		{
+			D3D11_TEXTURE3D_DESC texDesc{
+				.Width = preset.Width,
+				.Height = preset.Height,
+				.Depth = preset.Depth,
+				.MipLevels = 1,
+				.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
+				.Usage = D3D11_USAGE_DEFAULT,
+				.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+				.CPUAccessFlags = 0,
+				.MiscFlags = 0
+			};
+			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+				.Format = texDesc.Format,
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D,
+				.Texture3D = {
+					.MostDetailedMip = 0,
+					.MipLevels = texDesc.MipLevels }
+			};
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+				.Format = texDesc.Format,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D,
+				.Texture3D = {
+					.MipSlice = 0,
+					.FirstWSlice = 0,
+					.WSize = texDesc.Depth }
+			};
 
-		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R32_UINT;
+			probes = std::make_unique<Texture3D>(texDesc, "Skylighting::ProbeArray");
+			probes->CreateSRV(srvDesc);
+			probes->CreateUAV(uavDesc);
 
-		texShadowBitmask = new Texture3D(texDesc, "Skylighting::ShadowBitmask");
-		texShadowBitmask->CreateSRV(srvDesc);
-		texShadowBitmask->CreateUAV(uavDesc);
+			// Preserve the eight-bit SH count alongside a five-bit shadow sample cursor.
+			texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R16_UINT;
 
-		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R8_UNORM;
+			accumulation = std::make_unique<Texture3D>(texDesc, "Skylighting::AccumFramesArray");
+			accumulation->CreateSRV(srvDesc);
+			accumulation->CreateUAV(uavDesc);
 
-		texShadowVisibility = new Texture3D(texDesc, "Skylighting::ShadowVisibility");
-		texShadowVisibility->CreateSRV(srvDesc);
-		texShadowVisibility->CreateUAV(uavDesc);
+			texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R32_UINT;
+
+			shadowBitmask = std::make_unique<Texture3D>(texDesc, "Skylighting::ShadowBitmask");
+			shadowBitmask->CreateSRV(srvDesc);
+			shadowBitmask->CreateUAV(uavDesc);
+
+			texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R8_UNORM;
+
+			shadowVisibility = std::make_unique<Texture3D>(texDesc, "Skylighting::ShadowVisibility");
+			shadowVisibility->CreateSRV(srvDesc);
+			shadowVisibility->CreateUAV(uavDesc);
+		}
+
+		{
+			D3D11_SAMPLER_DESC samplerDesc = {};
+			samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;  // Use comparison filtering
+			samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;               // Address mode (Clamp for shadow maps)
+			samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;  // Comparison function
+			samplerDesc.MinLOD = 0;
+			samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+			DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, sampler.put()));
+			Util::SetResourceName(sampler.get(), "Skylighting::ComparisonSampler");
+		}
+
+		// Publish only complete replacements; failed allocations retain the active grid.
+		delete std::exchange(texOcclusion, occlusion.release());
+		delete std::exchange(texProbeArray, probes.release());
+		delete std::exchange(texAccumFramesArray, accumulation.release());
+		delete std::exchange(texShadowBitmask, shadowBitmask.release());
+		delete std::exchange(texShadowVisibility, shadowVisibility.release());
+		comparisonSampler = std::move(sampler);
+		ApplyProbeGridQuality();
+		if (resourceDevice != device)
+			probeUpdateCompute = nullptr;
+		resourceDevice = device;
+		resourceRebuildFailed.store(false, std::memory_order_release);
+		ResetSkylighting();
+		if (!probeUpdateCompute)
+			CompileComputeShaders();
+	} catch (const std::exception&) {
+		// Keep sampling disabled until an explicit request retries the failed rebuild.
+		resourceRebuildFailed.store(true, std::memory_order_release);
+		queuedResetSkylighting.store(true, std::memory_order_release);
 	}
-
-	// Initialize every history volume before sampler or shader compilation. This
-	// also makes a disabled-at-load performance baseline immediately ready.
-	ResetSkylighting();
-
-	{
-		D3D11_SAMPLER_DESC samplerDesc = {};
-		samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;  // Use comparison filtering
-		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;               // Address mode (Clamp for shadow maps)
-		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;  // Comparison function
-		samplerDesc.MinLOD = 0;
-		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, comparisonSampler.put()));
-		Util::SetResourceName(comparisonSampler.get(), "Skylighting::ComparisonSampler");
-	}
-
-	if (!probeUpdateCompute)
-		CompileComputeShaders();
-	resourceDevice = device;
 }
 
 void Skylighting::SetupRenderTargetResources()
@@ -1056,7 +1086,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	if (!IsRuntimeActive())
 		return data;
 
-	if (UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire) || needsOcclusionRefresh || !HasProbeUpdateResources())
+	if (UpdateInteriorState() || HasPendingReset() || needsOcclusionRefresh || !HasProbeUpdateResources())
 		return data;
 
 	if (globals::state->isMapMenuOpen)
@@ -1121,7 +1151,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 void Skylighting::Prepass()
 {
 	auto context = globals::d3d::context;
-	if (!IsRuntimeActive() || UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire) || needsOcclusionRefresh ||
+	if (!IsRuntimeActive() || UpdateInteriorState() || HasPendingReset() || needsOcclusionRefresh ||
 		globals::state->isMapMenuOpen || !HasProbeUpdateResources() || !probeUpdateBufferEnabled) {
 		// A loading event may invalidate history after the world buffer was uploaded.
 		if (context && probeUpdateBufferEnabled)
@@ -1497,9 +1527,9 @@ void Skylighting::RenderOcclusion()
 	{
 		CS_GPU_PASS("Skylighting::SkylightingMask");
 
-		if (queuedResetSkylighting.load(std::memory_order_acquire))
-			ResetSkylighting();
-		if (queuedResetSkylighting.load(std::memory_order_acquire))
+		if (HasPendingReset())
+			EarlyPrepass();
+		if (HasPendingReset())
 			return;
 
 		const uint occlusionUpdateInterval = GetOcclusionUpdateInterval(settings);

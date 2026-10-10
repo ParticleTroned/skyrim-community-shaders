@@ -2,10 +2,13 @@
 
 #include <atomic>
 #include <limits>
+#include <optional>
 
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/NeuralRendering/ExposureCapture.h"
 #include "GpuPass.h"
+#include "RE/B/BSImagespaceShader.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/D3D.h"
@@ -124,6 +127,12 @@ namespace FrameAnnotations
 				Util::BindSharedDataConstantBuffersForPS(globals::d3d::context);
 			}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			std::optional<NeuralRendering::Color::ExposureProducerScope> exposureScope;
+			if constexpr (EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematic ||
+						  EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade)
+				exposureScope.emplace(static_cast<RE::BSImagespaceShader*>(static_cast<RE::ImageSpaceEffect*>(imageSpaceShader)));
+#endif
 			func(imageSpaceShader, shape, param);
 
 			if (annotate)
@@ -145,6 +154,12 @@ namespace FrameAnnotations
 			if (annotate)
 				globals::state->BeginPerfEvent("{} Dispatch", BuildEventName(EffectType));
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			std::optional<NeuralRendering::Color::ExposureProducerScope> exposureScope;
+			if constexpr (EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematic ||
+						  EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade)
+				exposureScope.emplace(static_cast<RE::BSImagespaceShader*>(imageSpaceShader));
+#endif
 			func(imageSpaceShader, a1, a2, a3);
 
 			if (annotate)
@@ -472,6 +487,20 @@ namespace FrameAnnotations
 		if (globals::game::isVR)
 			stl::detour_thunk<BSShaderAccumulator_RenderBatches>(REL::RelocationID(99963, 106609));
 
+		// Exposure ownership is required even when annotation events are disabled.
+		stl::write_vfunc<0x1,
+			BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRTonemapBlendCinematic>>(
+			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic[3]);
+		stl::write_vfunc<0x1,
+			BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade>>(
+			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[3]);
+		stl::write_vfunc<0xC,
+			BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISHDRTonemapBlendCinematic>>(
+			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic[0]);
+		stl::write_vfunc<0xC,
+			BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade>>(
+			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[0]);
+
 		if (!globals::state->frameAnnotations)
 			return;
 
@@ -558,12 +587,6 @@ namespace FrameAnnotations
 			RE::VTABLE_BSImagespaceShaderRadialBlurMedium[3]);
 		stl::write_vfunc<0x1, BSImagespaceShader_Render<RE::ImageSpaceManager::ISRadialBlurHigh>>(
 			RE::VTABLE_BSImagespaceShaderRadialBlurHigh[3]);
-		stl::write_vfunc<0x1,
-			BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRTonemapBlendCinematic>>(
-			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic[3]);
-		stl::write_vfunc<0x1,
-			BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade>>(
-			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[3]);
 		stl::write_vfunc<0x1, BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRDownSample16>>(
 			RE::VTABLE_BSImagespaceShaderHDRDownSample16[3]);
 		stl::write_vfunc<0x1, BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRDownSample4>>(
@@ -831,12 +854,6 @@ namespace FrameAnnotations
 			RE::VTABLE_BSImagespaceShaderRadialBlurMedium[0]);
 		stl::write_vfunc<0xC, BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISRadialBlurHigh>>(
 			RE::VTABLE_BSImagespaceShaderRadialBlurHigh[0]);
-		stl::write_vfunc<0xC,
-			BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISHDRTonemapBlendCinematic>>(
-			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic[0]);
-		stl::write_vfunc<0xC,
-			BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade>>(
-			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[0]);
 		stl::write_vfunc<0xC, BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISHDRDownSample16>>(
 			RE::VTABLE_BSImagespaceShaderHDRDownSample16[0]);
 		stl::write_vfunc<0xC, BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISHDRDownSample4>>(

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Utils/RuntimeToggle.h"
+
 #include "Buffer.h"
 #include "OCUEffectFoveationClient.h"
 
@@ -11,9 +13,14 @@ namespace Util
 struct ScreenSpaceGI : Feature
 {
 private:
+	Util::RuntimeToggle runtimeToggle{ !REL::Module::IsVR() };
 	static constexpr std::string_view MOD_ID = "130375";
 
 public:
+	/** @brief Read or stage the preference without touching render-owned settings. */
+	bool IsEnabledRequested() const { return runtimeToggle.Get(); }
+	void SetEnabled(bool enabled) { runtimeToggle.Set(enabled); }
+
 	bool inline SupportsVR() override { return true; }
 
 	virtual inline std::string GetName() override { return "Screen Space GI"; }
@@ -48,6 +55,7 @@ public:
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual json CapturePerformanceCostMeasurementState() const override;

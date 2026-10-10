@@ -15,6 +15,7 @@ public:
 	{
 		bool& settingToggleKey;
 		bool& settingsEffectsToggle;
+		bool& settingNeuralRenderingToggleKey;
 		bool& settingSkipCompilationKey;
 		bool& settingOverlayToggleKey;
 		bool& settingShaderBlockPrevKey;  // Debug: shader block previous key

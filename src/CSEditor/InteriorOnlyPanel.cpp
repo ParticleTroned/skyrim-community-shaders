@@ -261,8 +261,7 @@ namespace InteriorOnlyPanel
 				"Click + to add settings that will only apply in interiors.");
 			ImGui::Spacing();
 			ImGui::TextWrapped(
-				"Settings added here will override feature defaults when you enter an interior cell. "
-				"Values revert automatically when you exit.");
+				"Overrides feature defaults in interior cells. Original values return when you leave.");
 			return;
 		}
 

@@ -533,7 +533,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 	if (showApply && RequiresManualApply() && editorWindow->settings.autoApplyChanges && menu) {
 		ImGui::SameLine();
 		ImGui::TextColored(menu->GetTheme().StatusPalette.Warning, "(Manual apply only)");
-		Util::AddTooltip("This form type is only re-read by the engine on weather reinit.\nAuto-apply is disabled - use the Apply button.");
+		Util::AddTooltip("The engine rereads this form only on weather reinit. Auto-apply is disabled; use Apply.");
 	}
 
 	ImGui::Separator();

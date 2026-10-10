@@ -1072,7 +1072,7 @@ void VR::DrawOverlay()
 	ImGui::TextUnformatted("How to Use VR CSX:");
 	ImGui::Separator();
 	if (CanOpenMenuFromWorld()) {
-		ImGui::TextWrapped("With the current SteamVR overlay path, CSX settings bindings work during gameplay and menus.");
+		ImGui::TextWrapped("CSX settings bindings work during gameplay and menus with this SteamVR overlay path.");
 	} else {
 		ImGui::TextWrapped("Open the Skyrim Main Menu or Tween Menu before using the CSX settings bindings.");
 	}
@@ -1245,7 +1245,7 @@ void VR::DrawSettings()
 			ImGui::Text("Recording combo for: %s", this->currentComboName ? this->currentComboName : "Unknown");
 			ImGui::Spacing();
 
-			ImGui::TextDisabled("(During recording, any controller's buttons can be used. Requirement is only enforced during use.)");
+			ImGui::TextDisabled("Record with either controller. The controller requirement applies only when using the binding.");
 
 			ImGui::Spacing();
 
@@ -1369,7 +1369,7 @@ namespace
 						VRDepthCullingEnablePolicy::kMinimumExtent, VRDepthCullingEnablePolicy::kMaximumExtent, "%.1f");
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("Minimum bounding-box extent eligible for depth culling in this location. Lower values cull more small objects but can make missing-object artifacts more noticeable.");
+					ImGui::TextUnformatted("Minimum object bounds for depth culling here. Lower culls more small objects but may make missing-object artifacts more visible.");
 				}
 				ImGui::PopID();
 			};
@@ -1388,7 +1388,7 @@ namespace
 					a_vr.SetDepthCullingMode(mode);
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("Adds bounded recovery for objects that may become visible during head motion. This selection stays active when you leave Debug mode.");
+					ImGui::TextUnformatted("Recover objects that may become visible as you move your head. Keeps this selection after leaving Debug mode.");
 				}
 				ImGui::TableNextColumn();
 				if (Util::Widgets::RadioButton("Legacy", mode == VRDepthCullingTemporal::Mode::Legacy)) {
@@ -1396,7 +1396,7 @@ namespace
 					a_vr.SetDepthCullingMode(mode);
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("Uses Skyrim's native visibility results without temporal recovery. Save settings to keep Legacy after restarting; leaving Debug mode does not change it.");
+					ImGui::TextUnformatted("Use native visibility without temporal recovery. Leaving Debug mode keeps Legacy; save settings to keep it after restart.");
 				}
 				ImGui::EndTable();
 			}
@@ -1496,8 +1496,8 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 		ImGui::SeparatorText("Desktop Mirror");
 		Util::Widgets::Checkbox("Improve Render-Scale Desktop Mirror Quality", &settings.StabilizeRenderScaleDesktopMirror);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Improves the desktop mirror image when VR Render Scale Mode lowers the source resolution.");
-			ImGui::TextUnformatted("Only the desktop view changes. This can cost a little performance while render scale is active.");
+			ImGui::TextUnformatted("Improve the desktop mirror when VR Render Scale lowers resolution.");
+			ImGui::TextUnformatted("Affects only the desktop view; may add a small cost while Render Scale is active.");
 		}
 	}
 }
@@ -1587,7 +1587,7 @@ namespace
 			Util::Widgets::SliderInt("Welcome Message Timeout", &settings.kAutoHideSeconds, 0, VR::Config::kMaxAutoHideSeconds,
 				settings.kAutoHideSeconds <= 0 ? "Hidden" : "%d seconds");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Set to 0 to hide the startup controller instructions, or choose how long to show them.");
+				ImGui::TextUnformatted("Startup instruction duration. 0 hides the controller instructions.");
 			}
 		}
 
@@ -1745,9 +1745,9 @@ namespace
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("While the CSX menu is open in VR, keep the game window centered, foregrounded, and above other desktop windows.");
+			ImGui::Text("Keep the game window centred, in front and above other desktop windows while the VR menu is open.");
 			ImGui::Text("Only applies when Attach Mode presents the menu in VR.");
-			ImGui::Text("Disable this to move the game window aside or use other desktop applications while the menu stays open.");
+			ImGui::Text("Disable to move the game window aside or use other desktop apps with the VR menu open.");
 		}
 	}
 
@@ -1760,8 +1760,8 @@ namespace
 			Util::Widgets::Checkbox("Improve Render-Scale Desktop Mirror Quality", &settings.StabilizeRenderScaleDesktopMirror);
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Improves the desktop mirror image when VR Render Scale Mode lowers the source resolution.");
-			ImGui::TextUnformatted("Only the desktop view changes. This can cost a little performance while render scale is active.");
+			ImGui::TextUnformatted("Improve the desktop mirror when VR Render Scale lowers resolution.");
+			ImGui::TextUnformatted("Affects only the desktop view; may add a small cost while Render Scale is active.");
 			if (!available)
 				ImGui::TextUnformatted("Available only while VR Render Scale Mode is active.");
 		}
@@ -1787,7 +1787,7 @@ namespace
 		if (Util::Widgets::Checkbox("Unlock Menu Position and Size", &layoutUnlocked))
 			vr.SetMenuLayoutUnlocked(layoutUnlocked);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped("Allows the desktop CSX window to move, resize, and dock. In the headset, it restores custom placement and controller grip dragging. Locking the layout again preserves the saved headset settings.");
+			ImGui::TextWrapped("Unlock desktop move/resize/docking and saved HMD placement/grip dragging. Relocking keeps saved HMD settings.");
 		}
 	}
 
@@ -1809,7 +1809,7 @@ namespace
 				ImGui::TextWrapped("The headset menu opens 2.25 metres ahead at eye height. It remains vertical and turns to face you.");
 			} else {
 				Util::Widgets::SliderFloat("Menu Scale", &settings.VRMenuScale, VR::Config::kMinMenuScale, VR::Config::kMaxMenuScale, "%.2f");
-				ImGui::TextWrapped("Move or resize the desktop window directly. Hold a controller grip to move the headset menu; Menu Scale controls its size.");
+				ImGui::TextWrapped("Move/resize the desktop window directly. Grip-drag the HMD menu; Menu Scale sets its size.");
 				Util::Widgets::Checkbox("Enable Controller Grip Drag", &settings.EnableDragToReposition);
 
 				const char* positioningMethods[] = { "HMD Relative", "Fixed World Position" };
@@ -1859,10 +1859,10 @@ namespace
 				settings.menuOverlayPath = static_cast<VR::Settings::MenuOverlayPath>(menuOverlayPath);
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Auto uses IVROverlay on SteamVR from startup; OpenComposite and runtimes without IVROverlay use in-scene.");
-				ImGui::Text("RenderDoc uses IVROverlay on SteamVR while capture is enabled or loaded, regardless of this setting.");
+				ImGui::Text("Auto uses IVROverlay on SteamVR from startup; OpenComposite or runtimes without IVROverlay use in-scene.");
+				ImGui::Text("RenderDoc forces IVROverlay on SteamVR while capture is enabled or loaded, regardless of this choice.");
 				ImGui::Text("Use IVROverlay only to force the compositor overlay path for troubleshooting.");
-				ImGui::Text("In-scene is rendered into submitted eye textures and may appear in desktop VR mirror views.");
+				ImGui::Text("In-scene draws into submitted eye textures and may appear in desktop VR mirrors.");
 			}
 		}
 	}
@@ -1881,7 +1881,7 @@ namespace
 				if (vr.CanUseWandPointing()) {
 					ImGui::TextUnformatted("Thumbstick deadzone for CSX menu scrolling while Wand Navigation is active.");
 				} else {
-					ImGui::TextUnformatted("Thumbstick deadzone for CSX menu cursor movement and scrolling while Mouse Navigation is active.");
+					ImGui::TextUnformatted("Thumbstick deadzone for menu cursor movement and scrolling in Mouse Navigation.");
 				}
 			}
 			Util::Widgets::SliderFloat("Mouse Speed", &settings.mouseSpeed, 0.1f, 50.0f, "%.2f");
@@ -1989,7 +1989,7 @@ namespace
 
 		MenuUI::SectionHeading("Stereo blending");
 		{
-			ImGui::TextWrapped("Advanced fallback for VR screen-space mismatches. It is default-off and only runs when a supported screen-space effect is active.");
+			ImGui::TextWrapped("Default-off fallback for VR screen-space mismatches. Runs only with an active supported screen-space effect.");
 			ImGui::Spacing();
 
 			Util::Widgets::Checkbox("Blend Between Eyes", &settings.EnableStereoBlend);
@@ -2122,7 +2122,7 @@ namespace
 			ImGui::Text("Shared visible scale: %.2f", profile.sharedVisibleScale);
 			ImGui::Text("Horizontal scale: %.2f", profile.centerHorizontalScale);
 			if (anySharedMaskConsumerEnabled && !foveatedProfileActive)
-				ImGui::TextDisabled("Shared-mask consumers require shared visible scale below 1.00.");
+				ImGui::TextDisabled("Shared-mask effects need FOV Only Visible Scale below 1.00 in VR > FOV.");
 		} else if (anySharedMaskConsumerEnabled) {
 			ImGui::TextDisabled("Shared-mask consumers require active foveated upscaling.");
 		}
@@ -2147,7 +2147,7 @@ namespace
 		ImGui::Separator();
 		screenSpaceGI.DrawFoveationSettings();
 		if (!foveatedProfileActive)
-			ImGui::TextDisabled("SSGI FOV and Screen Space Shadows FOV require active upscaling with shared visible scale below 1.00.");
+			ImGui::TextDisabled("SSGI FOV and Screen Space Shadows FOV need active foveated upscaling. Set FOV Only Visible Scale below 1.00 in VR > FOV.");
 
 		drawSection("Shader FOV");
 		{
@@ -2229,7 +2229,7 @@ namespace
 		}
 		ImGui::Separator();
 		if (!foveatedProfileActive)
-			ImGui::TextDisabled("Lighting, SSR, Water, and Wetterness shader budgets require active foveated upscaling with shared visible scale below 1.00.");
+			ImGui::TextDisabled("Lighting, SSR, Water and Wetterness budgets need active foveated upscaling. Set FOV Only Visible Scale below 1.00 in VR > FOV.");
 
 		ImGui::BeginDisabled(!foveatedProfileActive);
 		drawDetailBudget(
@@ -2296,13 +2296,13 @@ namespace
 			"");
 		ImGui::EndDisabled();
 		if (wetnessEffectsRuntimeActive)
-			ImGui::TextDisabled("Wetterness dynamic-detail foveation is only available with Wetterness. Wetness Effects is not supported.");
+			ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness; legacy Wetness Effects is unsupported.");
 		else if (!wetternessFeatureAvailable)
 			ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness.");
 		else if (!wetternessSettingsAvailable)
 			ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness to be enabled.");
 		else if (settings.EnableWetternessFoveation && !wetternessFoveationRuntimeActive)
-			ImGui::TextDisabled("Wetterness dynamic-detail foveation is idle until rain, wetness, drying, or debug overrides are active.");
+			ImGui::TextDisabled("Wetterness detail foveation waits for rain, wetness, drying or debug overrides.");
 		ImGui::EndDisabled();
 
 		drawSection("Dynamic Cubemaps");
@@ -2329,7 +2329,7 @@ namespace
 		if (dynamicCubemapVisibilityThrottleBlockedByWetterness)
 			ImGui::TextDisabled("Low-Visibility Cubemap Throttle is disabled while Wetterness is active.");
 		if (!foveatedProfileActive)
-			ImGui::TextDisabled("Dynamic Cubemap foveation requires active foveated upscaling with shared visible scale below 1.00.");
+			ImGui::TextDisabled("Dynamic Cubemap foveation needs active foveated upscaling. Set FOV Only Visible Scale below 1.00 in VR > FOV.");
 		if (!dynamicCubemapsRuntimeActive)
 			ImGui::TextDisabled("Dynamic Cubemap foveation requires Dynamic Cubemaps.");
 
@@ -2375,13 +2375,13 @@ namespace
 			if (screenSpaceGI.settings.EnableFoveated && !screenSpaceGIRuntimeActive)
 				ImGui::TextDisabled("SSGI FOV requires active Screen Space GI.");
 			if (settings.EnableWetternessFoveation && wetnessEffectsRuntimeActive)
-				ImGui::TextDisabled("Wetterness dynamic-detail foveation is only available with Wetterness. Wetness Effects is not supported.");
+				ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness; legacy Wetness Effects is unsupported.");
 			else if (settings.EnableWetternessFoveation && !wetternessFeatureAvailable)
 				ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness.");
 			else if (settings.EnableWetternessFoveation && !wetternessSettingsAvailable)
 				ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness to be enabled.");
 			else if (settings.EnableWetternessFoveation && !wetternessFoveationRuntimeActive)
-				ImGui::TextDisabled("Wetterness dynamic-detail foveation is idle until rain, wetness, drying, or debug overrides are active.");
+				ImGui::TextDisabled("Wetterness detail foveation waits for rain, wetness, drying or debug overrides.");
 		}
 	}
 
@@ -2408,11 +2408,11 @@ namespace
 			comboTypes[i] = keyBindingConfigs[i].label;
 		}
 
-		ImGui::TextWrapped("CSX settings bindings open the configuration menu from the Skyrim Main Menu or Tween Menu.");
+		ImGui::TextWrapped("CSX settings bindings open the menu from Skyrim Main or Tween Menu.");
 		if (vr.CanOpenMenuFromWorld()) {
-			ImGui::TextWrapped("The current SteamVR overlay path also allows CSX settings to open during gameplay.");
+			ImGui::TextWrapped("This SteamVR overlay path also permits opening settings during gameplay.");
 		}
-		ImGui::TextWrapped("Performance Overlay bindings work during gameplay and menus, independently of the CSX settings menu.");
+		ImGui::TextWrapped("Performance Overlay bindings work during gameplay and menus, independently of CSX settings.");
 		ImGui::TextDisabled("Unbound actions are disabled. Save settings to persist binding changes.");
 		ImGui::Spacing();
 
@@ -2492,7 +2492,7 @@ namespace
 			vr.ResetComboRecordingState();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Reset all VR bindings. Performance Overlay actions are unbound by default to avoid accidental stick-click activation.");
+			ImGui::TextUnformatted("Reset all VR bindings. Performance Overlay stays unbound by default to prevent accidental stick-clicks.");
 		}
 	}
 	void DrawDebugSection()

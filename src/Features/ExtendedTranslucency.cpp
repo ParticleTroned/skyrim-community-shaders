@@ -124,38 +124,34 @@ void ExtendedTranslucency::DrawSettings()
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Anisotropic transluency will adjust the opacity based on your view angle to the translucent surface.\n"
-				"  - Disabled: No anisotropic transluency, flat alpha.\n"
-				"  - Rim Edge: Naive rim light effect with no physics model, the edge of the geometry is always opaque even its full transparent.\n"
-				"  - Isotropic Fabric: Imaginary fabric weaved from threads in one direction, respect normal map, also works well for layer of glass panels.\n"
-				"  - Anisotropic Fabric: Common fabric weaved from tangent and birnormal direction, ignores normal map.\n");
+				"Opacity varies with viewing angle:\n- Disabled: flat alpha.\n- Rim Edge: nonphysical rim; edges stay opaque even at full transparency.\n- Isotropic Fabric: single-direction threads using the normal map; also suits layered glass.\n- Anisotropic Fabric: tangent/bitangent weave; ignores the normal map.");
 		}
 		if (Util::Widgets::Checkbox("Skinned Mesh Only", &settings.SkinnedOnly)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Control if this effect should only apply to skinned mesh, check this option if your are seeing undesired effect on random objects.");
+			ImGui::Text("Apply only to skinned meshes. Enable if unrelated objects show unwanted effects.");
 		}
 
 		if (Util::Widgets::SliderFloat("Transparency Increase", &settings.AlphaReduction, 0, 1.f)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Transluent material will make the material more opaque on average, which could be different from the intent, reduce the alpha to counter this effect and increase the dynamic range of the output.");
+			ImGui::Text("Translucency can make materials more opaque than intended. Reduce alpha to compensate and widen the output's dynamic range.");
 		}
 
 		if (Util::Widgets::SliderFloat("Softness", &settings.AlphaSoftness, 0.0f, 1.0f)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Control the softness of the alpha increase, increase the softness reduce the increased amount of alpha.");
+			ImGui::Text("Soften the alpha increase. Higher softness reduces the added opacity.");
 		}
 
 		if (Util::Widgets::SliderFloat("Blend Weight", &settings.AlphaStrength, 0.0f, 1.0f)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Control the blend weight of the effect applied to the final result.");
+			ImGui::Text("Set how strongly the effect blends into the final image.");
 		}
 
 		ImGui::Spacing();

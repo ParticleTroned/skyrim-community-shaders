@@ -1628,7 +1628,7 @@ void AdaptiveBrightness::DrawSettings()
 	}
 
 	if (page.Is("profiles")) {
-		ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and water appearance used for each time and location type. Context profiles are ordered from broad Worldspace and Location scopes to specific Cities; exact locations and cells remain under Locations.");
+		ImGui::TextWrapped("Tune lighting, atmosphere, bloom and water by time and location type. Context profiles are ordered Worldspace > Location > City. Use Locations for exact places and cells.");
 		if (!settings.enabled)
 			ImGui::TextDisabled("Adaptive Balance is off. Saved profile values can still be reviewed.");
 
@@ -1996,7 +1996,7 @@ void AdaptiveBrightness::DrawCurrentContextProfileControls(
 	const auto* target = GetContextTarget(targets, a_scope);
 	if (!target) {
 		ImGui::TextDisabled("The current cell has no associated %s scope.", GetContextScopeName(a_scope));
-		ImGui::TextWrapped("This profile remains available so the profile layout does not change while cells are loading or when this scope is not present in the current location hierarchy.");
+		ImGui::TextWrapped("This profile stays visible during cell loading and when its scope is absent from the current location hierarchy.");
 		return;
 	}
 
@@ -2009,9 +2009,9 @@ void AdaptiveBrightness::DrawCurrentContextProfileControls(
 
 	if (!contextProfile) {
 		if (inheritedProfile) {
-			ImGui::TextWrapped("%s currently inherits the saved broader profile %s. Create an adjustment layer here to refine Lighting, Color, Bloom, and Water.", target->name.c_str(), inheritedProfile->name.c_str());
+			ImGui::TextWrapped("%s inherits saved broader profile %s. Add a layer here to adjust Lighting, Color, Bloom and Water.", target->name.c_str(), inheritedProfile->name.c_str());
 		} else {
-			ImGui::TextWrapped("%s currently inherits the %s base profile. Create an adjustment layer here to refine Lighting, Color, Bloom, and Water.", target->name.c_str(), GetProfileName(target->defaultProfile));
+			ImGui::TextWrapped("%s inherits base profile %s. Add a layer here to adjust Lighting, Color, Bloom and Water.", target->name.c_str(), GetProfileName(target->defaultProfile));
 		}
 		ImGui::BeginDisabled(!a_allowEdits);
 		const auto createLabel = std::format("Create {} Profile", GetContextScopeName(a_scope));
@@ -2040,7 +2040,7 @@ void AdaptiveBrightness::DrawContextProfilePresetControls(
 	bool a_allowEdits)
 {
 	ImGui::SeparatorText("Share Profile");
-	DrawHintText("Export stores this scope's Lighting, Color, Bloom, Water, wind, and layer mode as a portable JSON profile. Import applies them to the current scope without changing other saved profiles.");
+	DrawHintText("Export this scope's Lighting, Color, Bloom, Water, wind and layer mode to portable JSON. Import replaces them only for this scope.");
 
 	const auto scopeIndex = ContextScopeIndex(a_scope);
 	auto& presetName = contextPresetNames[scopeIndex];
@@ -2087,10 +2087,10 @@ void AdaptiveBrightness::DrawColorSettings(ProfileSettings& a_profile)
 	ImGui::TextWrapped("Adjust the whole scene, including sky, lighting and bloom. One is neutral; Global and active profile adjustments multiply.");
 	Util::Widgets::SliderFloat("Contrast", &a_profile.contrast, kContrastMin, kContrastMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Adjusts luminance around middle gray while preserving hue. Lower values soften contrast; higher values deepen shadows and brighten highlights.");
+		ImGui::TextUnformatted("Adjust luminance around middle gray without shifting hue. Lower softens contrast; higher deepens shadows and brightens highlights.");
 	Util::Widgets::SliderFloat("Saturation", &a_profile.saturation, 0.0f, kSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Zero makes the scene monochrome; one preserves its colors; higher values increase color intensity. Works with Linear Lighting on or off.");
+		ImGui::TextUnformatted("0 = monochrome; 1 = original colors; higher = stronger color. Works with Linear Lighting on or off.");
 }
 
 namespace
@@ -2104,9 +2104,9 @@ namespace
 			if (!ImGui::CollapsingHeader(group))
 				continue;
 			if (std::string_view(group) == "Godrays and Cloud Shadows")
-				ImGui::TextWrapped("Adjusts the existing Volumetric Lighting and Cloud Shadows settings while those features are active. Scales of one and colour contribution of zero preserve their settings.");
+				ImGui::TextWrapped("Adjust active Volumetric Lighting and Cloud Shadows. Scale 1 and colour contribution 0 preserve their settings.");
 			else if (std::string_view(group) == "Particles and Glow Sprites")
-				ImGui::TextWrapped("Glow sprites include additive non-fire effects, including some magic. Particle influence controls adjust received lighting; fire tuning remains separate.");
+				ImGui::TextWrapped("Glow sprites include additive non-fire effects, such as some magic. Particle influence adjusts received light; fire has separate controls.");
 			else
 				ImGui::TextWrapped("One and white are neutral. Colour curves below one lift dim colours; above one deepen them and strengthen HDR highlights.");
 			MenuUI::DetailGrid grid(group, 2, ImGui::GetFontSize() * 32);
@@ -2145,7 +2145,7 @@ void AdaptiveBrightness::DrawLightingSettings(
 			ImGui::TextWrapped("Scale final godray brightness after colour correction. One is neutral; zero hides godrays while retaining lens flare. This global control is independent of detailed lighting.");
 		Util::Widgets::Checkbox("Ambient Lighting for Effects and Sky Statics", &settings.useAmbientEffectLighting);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextWrapped("Replaces weather lighting on effect meshes and sky statics with ambient light, including IBL when enabled, and shadowed directional light. Effect and Sky Static Brightness still apply. This global switch is independent of detailed lighting controls.");
+			ImGui::TextWrapped("Use ambient light (including active IBL) and shadowed directional light instead of weather lighting on effect meshes and sky statics. Their Brightness controls still apply. This global switch works without enabling detailed lighting controls.");
 	}
 
 	if (!a_showAdvancedControls)
@@ -2189,11 +2189,11 @@ void AdaptiveBrightness::DrawLightingSettings(
 		Util::Widgets::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		Util::Widgets::SliderFloat("Point Light Saturation", &a_profile.pointLightSaturation, 0.0f, kSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Adjusts all point-light colors, including spotlights and particle lights. Zero makes their light monochrome; one preserves their colors. Global and active profile adjustments multiply. Works with Linear Lighting on or off.");
+			ImGui::TextUnformatted("Point-light saturation, including spotlights and particles: 0 = monochrome; 1 = original colors. Global and active profiles multiply. Works with Linear Lighting on or off.");
 
 		Util::Widgets::SliderFloat("Point Light Colour Curve", &a_profile.pointLightCurve, kPointLightCurveMin, kPointLightCurveMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Adjusts individual point-light color channels before intensity and saturation. One preserves the color response. Below one raises channels below one; above one deepens them and strengthens HDR channels above one. Global and active profile adjustments multiply.");
+			ImGui::TextUnformatted("Adjust point-light channels before intensity and saturation. 1 is neutral; lower lifts dim channels; higher deepens them and strengthens HDR channels. Global and active profiles multiply.");
 
 		MenuUI::SectionHeading("Point-light balance");
 		ImGui::TextWrapped("Subtype values multiply the Point Lights adjustment after the active layers are composed.");
@@ -2214,13 +2214,13 @@ void AdaptiveBrightness::DrawLightingSettings(
 			ImGui::TextUnformatted("Zero makes flames monochrome; one preserves their colors; values above one intensify their colors.");
 		Util::Widgets::SliderFloat("Brightness Curve##Fire", &a_profile.fireCurve, kFireCurveMin, kFireCurveMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Adjusts luminance in linear light while preserving hue. One is neutral; below one lifts dim parts; above one strengthens bright cores and darkens dim areas.");
+			ImGui::TextUnformatted("Adjust flame luminance in linear light without shifting hue. 1 is neutral; lower lifts dim parts; higher darkens dim areas and strengthens bright cores.");
 
 		grid.Next();
 		MenuUI::SectionHeading("Indirect and material lighting");
 		Util::Widgets::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Scales ambient lighting after vanilla or image-based lighting is selected. One preserves the lighting; zero removes its ambient contribution.");
+			ImGui::Text("Scale the selected vanilla or image-based ambient lighting. 1 preserves it; 0 removes it.");
 		Util::Widgets::SliderFloat("Emissive", &a_profile.emitColorMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		Util::Widgets::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		Util::Widgets::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -2269,13 +2269,13 @@ void AdaptiveBrightness::DrawWaterSettings(
 
 	ImGui::SeparatorText("Waves and Wind");
 	WaterAppearance::DrawWaveAmplitudeControl(a_profile.water);
-	DrawHintText("Wind Response multiplies Base Wave Amplitude between the calm and strong-wind scales. With wind off, only the base applies.");
+	DrawHintText("Wind Response multiplies Base Wave Amplitude between the calm and strong-wind scales. Wind off uses the base alone.");
 	DrawWaterWindSettings(a_profile, a_globalLayer);
 
 	ImGui::Separator();
 	Util::Widgets::Checkbox("Show Detailed Water Controls", &a_profile.waterAdvanced);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Shows detailed water color, surface, reflection, refraction, clarity, caustics, and parallax adjustments for this layer.");
+		ImGui::Text("Show this layer's water color, surface, reflection, refraction, clarity, caustics and parallax controls.");
 	if (a_profile.waterAdvanced) {
 		ImGui::Indent();
 		Util::Widgets::SliderFloat("Water Color Gamma", &a_profile.waterGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -2313,10 +2313,10 @@ void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool 
 	ImGui::BeginDisabled(layerDisabled);
 	Util::Widgets::SliderFloat("Calm Wave Scale", &waterWind.calmWaveMultiplier, kWaterWindMultiplierMin, kWaterWindMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Multiplies Base Wave Amplitude in calm weather after profile layers are composed. The final amplitude is capped at 2.");
+		ImGui::Text("Multiply Base Wave Amplitude in calm weather after composing profiles. Final amplitude is capped at 2.");
 	Util::Widgets::SliderFloat("Strong Wind Wave Scale", &waterWind.strongWindWaveMultiplier, kWaterWindMultiplierMin, kWaterWindMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Multiplies Base Wave Amplitude at maximum wind after profile layers are composed. The final amplitude is capped at 2.");
+		ImGui::Text("Multiply Base Wave Amplitude at maximum wind after composing profiles. Final amplitude is capped at 2.");
 
 	const float windSpeed = GetSmoothedWaterWindSpeed();
 	const float waveMultiplier = GetWaterWindWaveMultiplier(waterWind, windSpeed);
@@ -2327,8 +2327,8 @@ void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool 
 void AdaptiveBrightness::DrawGlobalPresetControls()
 {
 	ImGui::SeparatorText("Global Presets");
-	DrawHintText("Global presets store the shared Lighting, Color, Bloom, Water and wind layer, global depth of field, five profiles and exterior timing.");
-	DrawHintText("Import overwrites those profiles in the current settings. Saved location overrides are not changed.");
+	DrawHintText("Global presets include the shared Lighting, Color, Bloom, Water and wind layer, global lighting and depth of field, five profiles and exterior timing.");
+	DrawHintText("Import replaces these settings. Saved location overrides stay unchanged.");
 	ImGui::PushID("GlobalPresetControls");
 
 	const auto presetPath = GetPresetPath(globalPresetName, PresetKind::Global);
@@ -2353,7 +2353,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ExportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export the global layer, global depth of field, exterior timing and five Lighting, Color, Bloom and Water profiles. Excludes location overrides.");
+		ImGui::Text("Export the global layer, global lighting and depth of field, exterior timing and five Lighting, Color, Bloom and Water profiles. Excludes location overrides.");
 	}
 
 	if (keepControlsOnOneLine || keepButtonsOnOneLine)
@@ -2362,7 +2362,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ImportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace the global layer, global depth of field, exterior timing and five Lighting, Color, Bloom and Water profiles. Keeps location overrides.");
+		ImGui::Text("Replace the global layer, global lighting and depth of field, exterior timing and five Lighting, Color, Bloom and Water profiles. Keeps location overrides.");
 	}
 
 	if (!globalPresetStatus.empty())
@@ -2374,7 +2374,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, bool a_showAdvancedControls, bool a_allowEdits)
 {
 	ImGui::SeparatorText("Location Override Profiles");
-	DrawHintText("Layers are applied after the base profile from broad to specific: parent and current worldspaces, location hierarchy, then exact cell. Legacy saved profiles replace broader contextual layers at their position to preserve their original appearance.");
+	DrawHintText("Layers apply after the base profile, from broad to specific: parent/current worldspaces > location hierarchy > exact cell. Legacy profiles replace broader context layers at their position to preserve their saved look.");
 	if (a_includePresetControls) {
 		DrawHintText("Import adds overrides from a preset to the override list below. Later edits change this list, not the preset file.");
 	}
@@ -2627,7 +2627,7 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 void AdaptiveBrightness::DrawLocationOverridePresetControls()
 {
 	ImGui::SeparatorText("Override Presets");
-	DrawHintText("Override presets store all saved worldspace, regional location, city, specific location, and cell overrides. They do not include the five base profiles.");
+	DrawHintText("Override presets contain all worldspace, region, city, location and cell overrides. Excludes the five base profiles.");
 	ImGui::PushID("LocationOverridePresetControls");
 
 	const auto presetPath = GetPresetPath(locationOverridePresetName, PresetKind::Location);
@@ -2661,8 +2661,8 @@ void AdaptiveBrightness::DrawLocationOverridePresetControls()
 void AdaptiveBrightness::DrawFullPresetControls()
 {
 	ImGui::SeparatorText("Full Presets");
-	DrawHintText("Full presets store the global adjustment layer, exterior timing, the five profiles, and all saved worldspace, location, and cell overrides.");
-	DrawHintText("Import replaces the profiles and the saved override list in the current settings.");
+	DrawHintText("Full presets include the global layer, global lighting and depth-of-field settings, exterior timing, five profiles and all location overrides.");
+	DrawHintText("Import replaces these settings and the saved override list.");
 	ImGui::PushID("FullPresetControls");
 
 	const auto presetPath = GetPresetPath(fullPresetName, PresetKind::Full);
@@ -2672,7 +2672,7 @@ void AdaptiveBrightness::DrawFullPresetControls()
 		ExportFullPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export the global adjustment layer, exterior timing, the five profiles, and all saved overrides.");
+		ImGui::Text("Export global lighting and depth of field, the global layer, exterior timing, five profiles and all saved overrides.");
 	}
 
 	if (ImGui::GetContentRegionAvail().x >= ImGui::CalcTextSize("Export Full Import Full").x + ImGui::GetStyle().FramePadding.x * 4 + ImGui::GetStyle().ItemSpacing.x)
@@ -2681,7 +2681,7 @@ void AdaptiveBrightness::DrawFullPresetControls()
 		ImportFullPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace the global adjustment layer, exterior timing, the five profiles, and the saved override list.");
+		ImGui::Text("Replace global lighting and depth of field, the global layer, exterior timing, five profiles and all saved overrides.");
 	}
 
 	if (!fullPresetStatus.empty())

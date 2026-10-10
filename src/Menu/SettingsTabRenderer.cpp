@@ -205,7 +205,7 @@ namespace
 	{
 		auto& ts = globals::menu->GetSettings().Theme;
 		ImGui::PushStyleColor(ImGuiCol_Text, ts.StatusPalette.InfoColor);
-		ImGui::TextWrapped("Theme changes are not saved with the global \"Save Settings\" button. Use the Themes tab to save changes to this theme.");
+		ImGui::TextWrapped("Global Save Settings does not save theme edits. Save them in Themes.");
 		ImGui::PopStyleColor();
 		ImGui::Spacing();
 	}
@@ -274,10 +274,7 @@ void SettingsTabRenderer::RenderShadersTab()
 	ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Reuses disk entries whose shader source, includes, compiler defines, and "
-			"compatibility contracts match. Missing or outdated entries are compiled from source. "
-			"When disabled, disk reads are skipped and compiled shaders still update the cache. "
-			"Requires 'Enable Disk Cache' to be active.");
+			"Reuse disk shaders only when source, includes, defines and compatibility match. Compile missing/outdated entries. Off skips disk reads but still updates the cache. Requires Enable Disk Cache.");
 	}
 
 	bool useAsync = shaderCache->IsAsync();
@@ -388,7 +385,7 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 		"Neural Rendering Toggle Key:", settings.NeuralRenderingToggleKey,
 		state.settingNeuralRenderingToggleKey, "Change##NeuralRenderingToggle");
 	if (auto tooltip = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Turns NR on or off while retaining its settings. Off removes NR rendering cost. Unbound by default; requires the NR DLL. Controller bindings are in VR > Key Bindings.");
+		ImGui::TextUnformatted("Toggle NR without losing settings. Off removes NR rendering cost. Requires the NR DLL; unbound by default. Controller bindings: VR > Bindings.");
 
 	Util::InputComboWidget(
 		"Skip Compilation Key:",
@@ -417,7 +414,7 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 
 	ImGui::Separator();
 	ImGui::TextUnformatted("Hardcoded Bindings");
-	ImGui::TextWrapped("RenderDoc is an external graphics frame debugger used to capture frames for graphics debugging. It is only active when RenderDoc capture support is loaded.");
+	ImGui::TextWrapped("RenderDoc captures graphics frames for debugging. Requires loaded RenderDoc capture support.");
 	DrawReadOnlyKeybinding(
 		"RenderDoc Capture:",
 		"F12 / Print Screen",
@@ -434,8 +431,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
 	Util::Widgets::Checkbox("Show Icon Buttons in Header", &themeSettings.ShowActionIcons);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"When enabled: Shows action buttons (Save, Load, Clear Cache) as icons in the header\n"
-			"When disabled: Shows as text buttons below the header");
+			"On: header icons for Save, Load and Clear Cache. Off: text buttons below the header.");
 	}
 
 	if (themeSettings.ShowActionIcons) {
@@ -458,25 +454,25 @@ void SettingsTabRenderer::RenderBehaviorTab()
 
 	Util::Widgets::Checkbox("Show Footer", &themeSettings.ShowFooter);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Shows the footer with game version, swap chain, and GPU information at the bottom of the window");
+		ImGui::Text("Show game version, swap chain and GPU information in the window footer.");
 	}
 
 	if (Util::Widgets::Checkbox("Auto-hide Feature List", &globals::menu->GetSettings().AutoHideFeatureList))
 		FeatureListRenderer::ResetSidebarVisibility();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Automatically hides the left feature list panel. Move cursor to the left edge to show it.");
+		ImGui::Text("Hide the feature list automatically. Move the cursor to the left edge to reveal it.");
 	}
 
 	if (Util::Widgets::Checkbox("Require Shift to Dock", &globals::menu->GetSettings().RequireShiftToDock)) {
 		ImGui::GetIO().ConfigDockingWithShift = globals::menu->GetSettings().RequireShiftToDock;
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("When enabled, you must hold Shift while dragging to dock/snap windows. Prevents accidental docking.");
+		ImGui::Text("Require Shift-drag to dock/snap windows, preventing accidental docking.");
 	}
 
 	Util::Widgets::SliderFloat("Tooltip Hover Delay", &themeSettings.TooltipHoverDelay, 0.0f, 2.0f, "%.2f s", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Time in seconds to wait before a tooltip appears when hovering over an item.");
+		ImGui::TextUnformatted("Hover delay in seconds before a tooltip appears.");
 	}
 
 	// Skip confirmation when clearing shader cache (UI behavior, not a shader setting).
@@ -486,7 +482,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
 		menuSettings.SkipClearCacheConfirmation = skipConfirmation;
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("When checked, the shader cache will be cleared immediately without asking for confirmation.");
+		ImGui::Text("Clear the shader cache immediately without confirmation.");
 	}
 
 	bool smartClearDefault = menuSettings.SmartClearShaderCacheDefault;
@@ -495,8 +491,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextWrapped(
-			"When checked, a normal click clears only shaders drawing the current scene; Shift-click performs "
-			"a full clear. When unchecked, those roles are reversed. Enable this for controller-only VR use.");
+			"Checked: click clears current-scene shaders; Shift-click clears all. Unchecked reverses these actions. Useful for controller-only VR.");
 	}
 
 	SeparatorTextWithFont("Visual Effects", Menu::FontRole::Subheading);
@@ -909,7 +904,7 @@ void SettingsTabRenderer::RenderFontsTab()
 		menuInstance->pendingFontReload = true;
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("When enabled, the UI font size scales with your screen resolution. Disable to set a fixed size.");
+		ImGui::TextUnformatted("Scale UI fonts with screen resolution. Disable for a fixed size.");
 	}
 
 	ImGui::BeginDisabled(useAutoFont);
@@ -1104,10 +1099,10 @@ void SettingsTabRenderer::RenderStylingTab()
 	SeparatorTextWithFont("Scrollbar Opacity", Menu::FontRole::Subheading);
 	Util::Widgets::SliderFloat("Track Opacity", &themeSettings.ScrollbarOpacity.Background, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Controls the opacity of the scrollbar track/channel (the background area behind the scrollbar).");
+		ImGui::Text("Scrollbar track opacity: background behind the draggable thumb.");
 	Util::Widgets::SliderFloat("Thumb Opacity", &themeSettings.ScrollbarOpacity.Thumb, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Controls the opacity of the scrollbar thumb (the draggable part).");
+		ImGui::Text("Scrollbar thumb opacity: the draggable part.");
 	Util::Widgets::SliderFloat("Thumb Hovered Opacity", &themeSettings.ScrollbarOpacity.ThumbHovered, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Controls the opacity of the scrollbar thumb when hovered.");

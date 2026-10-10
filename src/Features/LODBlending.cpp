@@ -16,13 +16,9 @@ namespace
 	constexpr const char* kWaterReflectionStrengthDisplay = "LOD Water Reflection Blend";
 	constexpr const char* kEnableWaterReflectionStrengthDisplay = "Apply LOD Water Reflection Blend";
 	constexpr const char* kEnableWaterReflectionStrengthTooltip =
-		"Toggle the height-faded water reflection strength blend at runtime.\n"
-		"Disable this to compare against the pre-slider water reflection path while leaving the slider value intact.";
+		"Toggle the height-faded water reflection blend without changing its saved strength. Off uses the earlier water reflection path.";
 	constexpr const char* kWaterReflectionStrengthTooltip =
-		"Height-faded reflection blend for regular and LOD water.\n"
-		"The same value is applied to all visible water, based on camera height above the current water level.\n"
-		"1.00 blends toward the material reflection amount at high elevation, 0.00 blends toward only the reflection color.\n"
-		"Higher values move high-elevation water back toward full sky/SSR. Unified Water's Global Reflection Amount scales the completed result afterward.";
+		"Blend regular and LOD water reflections by camera height above current water level. 1.00 approaches material reflection strength at high elevation; 0.00 approaches reflection color only. Higher restores more sky/SSR. Adaptive Balance's Global Reflection Amount scales the final result.";
 	constexpr float kWaterReflectionStrengthDefault = 1.0f;
 	constexpr float kWaterReflectionStrengthMin = 0.0f;
 	constexpr float kWaterReflectionStrengthMax = 4.0f;

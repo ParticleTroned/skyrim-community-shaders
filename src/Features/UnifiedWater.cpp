@@ -678,8 +678,7 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Plane-normal depth over which the shallow surface cue fades in from the shore.\n"
-				"Set to 0 to disable this world-space fade; Minimum Edge Fade Width remains active.");
+				"Shore depth over which the shallow surface cue fades in, measured normal to the water plane. 0 disables this fade; Minimum Edge Fade Width still applies.");
 		}
 
 		Util::Widgets::SliderFloat(
@@ -691,8 +690,7 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Maximum view distance for the shallow fallback and its connected-depth reads.\n"
-				"Set to 0 to use native/Open depth blending everywhere.");
+				"Maximum distance for the shallow fallback and connected-depth reads. 0 uses native/Open depth blending everywhere.");
 		}
 
 		ImGui::EndDisabled();
@@ -704,8 +702,7 @@ void UnifiedWater::DrawSettings()
 		Util::Widgets::Checkbox("Use Open Shaders Depth Behaviour", &settings.UseOpenShadersDepthBehaviour);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Disables the shallow-only surface cue and uses the native Open Shaders-like water blend.\n"
-				"Custom visibility values are preserved and resume when disabled.");
+				"Use native Open Shaders-like water blending without the shallow surface cue. Saved visibility values resume when turned off.");
 		}
 
 		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
@@ -737,8 +734,7 @@ void UnifiedWater::DrawSettings()
 				ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Physical distance searched toward increasing terrain depth at half and full reach.\n"
-					"Increase this for broad shallow banks. Set to 0 to disable connected-depth protection.");
+					"Search distance toward deeper terrain at half/full reach. Increase for broad shallow banks; 0 disables connected-depth protection.");
 			}
 
 			Util::Widgets::SliderFloat(
@@ -750,8 +746,7 @@ void UnifiedWater::DrawSettings()
 				ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Plane-normal depth that gives full native/Open protection to a connected medium/deep channel.\n"
-					"Keep this above Shallow Surface Depth so a uniformly shallow stream retains its fallback surface.");
+					"Depth normal to the water plane where connected medium/deep channels get full native/Open protection. Keep above Shallow Surface Depth so shallow streams retain their fallback.");
 			}
 
 			Util::Widgets::SliderFloat(
@@ -763,8 +758,7 @@ void UnifiedWater::DrawSettings()
 				ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Depth width below Deep Context Depth over which connected deep-water protection fades in.\n"
-					"Raise this for a softer handoff; use the minimum for the sharpest transition.");
+					"Depth fade below Deep Context Depth for connected-water protection. Higher softens the handoff; minimum sharpens it.");
 			}
 
 			ImGui::Spacing();
@@ -779,8 +773,7 @@ void UnifiedWater::DrawSettings()
 				ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Plane-normal water depth where the shallow surface cue has faded completely to native water.\n"
-					"Lower this if the cue reaches medium water; raise it only when a shallow stream still loses its surface.");
+					"Depth normal to the water plane where the shallow cue disappears. Lower if it reaches medium-depth water; raise only if shallow streams still lose their surface.");
 			}
 
 			ImGui::Spacing();
@@ -795,15 +788,14 @@ void UnifiedWater::DrawSettings()
 				ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Minimum screen-space width of the shallow cue's terrain-contact fade.\n"
-					"This prevents subpixel terminal seams without extra texture samples. Set to 0 to use only Edge Fade Depth.");
+					"Minimum screen-space width of the terrain-contact fade. Prevents subpixel seams without extra samples. 0 uses only Edge Fade Depth.");
 			}
 
 			ImGui::TextDisabled(
 				"Up to two bounded connection reads run only for unresolved shallow pixels inside the fallback distance.");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Native/Open is always the base. Pixels outside the shallow range, disabled, or distance-culled skip the connectivity reads.");
+					"Native/Open remains the base. Pixels outside the shallow range, disabled or distance-culled skip connected-depth reads.");
 			}
 
 			ImGui::EndDisabled();

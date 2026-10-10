@@ -448,7 +448,7 @@ void EditorWindow::ShowObjectsWindow()
 				m_currentFilterColumn = static_cast<FilterColumn>(col);
 
 			ImGui::SameLine();
-			Util::HelpMarker("Filter the object list by the selected column.\nAll: searches Editor ID, Form ID, File, and Status.\nStatus: hides items with no status marker when the search box is non-empty.\nCtrl+F: Focus search\nEnter: Open selected");
+			Util::HelpMarker("Search the selected column. Choose All to search Editor ID, Form ID, File and Status. A non-empty Status search hides unmarked items.\nCtrl+F: focus search\nEnter: open selection");
 
 			// Quick filter buttons
 			const ImVec2 filterSpacer(spacerW, 0.0f);

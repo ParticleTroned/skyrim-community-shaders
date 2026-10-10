@@ -1008,7 +1008,7 @@ int main()
 	const auto historyResets = upscaling.historyResets;
 	for (unsigned redraw = 0; redraw < 2; ++redraw) {
 		drawMaster();
-		require(ImGui::Seen("Neural Rendering is paused after an error. Use Reset Neural Rendering Runtime below to try again. Your settings are retained.") &&
+		require(ImGui::Seen("NR paused after an error. Use Reset Neural Rendering Runtime below to retry. Settings are kept.") &&
 					ImGui::Seen("Reason: Recoverable NR failure") && ImGui::Seen("Reset Neural Rendering Runtime"),
 			"Recoverable failures must retain their reason and reset action while NR is off");
 		require(!upscaling.settings.neuralRenderingEnabled && ImGui::Disabled("Enabled"),
@@ -1547,7 +1547,7 @@ int main()
 				require(ImGui::Disabled("Enabled") && !ImGui::Disabled("After upscaling"),
 					"Pending incompatibility greys activation without preventing Full resolution selection");
 				if (pending == Upscaling::UpscaleMethod::kFSR)
-					require(ImGui::Seen(mode == ModeChoice::ReducedResolution ? "Renderscale NR paused: FSR." : "NR paused: FSR."),
+					require(ImGui::Seen(mode == ModeChoice::ReducedResolution ? "NR Before DLSS paused: FSR." : "NR paused: FSR."),
 						"The warning must name the pending incompatible setting, not the previous DLSS profile");
 			}
 		}
@@ -1555,7 +1555,7 @@ int main()
 		upscaling.settings = {};
 		upscaling.settings.neuralRenderingMode = 2;
 		upscaling.configuredQualityMode = 0;
-		require(!upscaling.ToggleNeuralRendering(), "Pending DLAA must block Renderscale NR while scaled DLSS still renders");
+		require(!upscaling.ToggleNeuralRendering(), "Pending DLAA must block NR Before DLSS while scaled DLSS still renders");
 		upscaling.configuredQualityMode.reset();
 		require(upscaling.ToggleNeuralRendering(), "Cancelling the incompatible profile restores NR activation");
 	}
@@ -1575,7 +1575,7 @@ int main()
 						const bool required = mode == ModeChoice::ReducedResolution;
 						const bool physicalRequired = isVR && required;
 						const bool supported = true;
-						require(upscaling.IsNeuralRenderingRenderScaleRequired() == required, "Enabled Renderscale NR requires compatible scaled DLSS profiles");
+						require(upscaling.IsNeuralRenderingRenderScaleRequired() == required, "Enabled NR Before DLSS requires compatible scaled DLSS profiles");
 						require(upscaling.IsNeuralRenderingRequested() == (supported && (!physicalRequired || (requested && latched && active))),
 							"VR renderscale NR requires requested and physical scaling; Full/Foveated and flat remain independent");
 						ImGui::Clear("Enabled");
@@ -1706,7 +1706,7 @@ int main()
 		upscaling.renderScaleRequested = upscaling.renderScaleLatched = upscaling.renderScaleActive = false;
 		ImGui::Clear();
 		upscaling.DrawSelectionControls();
-		require(ImGui::Seen(std::string("Renderscale NR paused: ") + reason + "."),
+		require(ImGui::Seen(std::string("NR Before DLSS paused: ") + reason + "."),
 			"The NR panel must name the setting that pauses NR");
 		upscaling.stabilizerSyncActive = true;
 		for (const bool interior : { false, true }) {
@@ -1715,13 +1715,13 @@ int main()
 			profile = { method, quality, false };
 			ImGui::Clear();
 			upscaling.DrawSelectionControls();
-			require(ImGui::Seen(std::string("Renderscale NR paused: VR FPS Stabilizer ") +
+			require(ImGui::Seen(std::string("NR Before DLSS paused: VR FPS Stabilizer ") +
 								(interior ? "Interior" : "Exterior") + " profile, " + reason + "."),
 				"A matching active Stabilizer profile must be named with its incompatible setting");
 			profile.qualityMode = quality + 1;
 			ImGui::Clear();
 			upscaling.DrawSelectionControls();
-			require(ImGui::Seen(std::string("Renderscale NR paused: ") + reason + "."),
+			require(ImGui::Seen(std::string("NR Before DLSS paused: ") + reason + "."),
 				"Manual settings must not be blamed on a different Stabilizer profile");
 		}
 		upscaling.stabilizerSyncActive = false;
@@ -1734,7 +1734,7 @@ int main()
 	ImGui::Clear();
 	upscaling.DrawSelectionControls();
 	require(!ImGui::Seen("Renderscale NR is waiting for scaling to become active.") &&
-				!ImGui::Seen("Renderscale NR paused: Render Scale off."),
+				!ImGui::Seen("NR Before DLSS paused: Render Scale off."),
 		"Generic target wait stays out of the UI without blaming a compatible configured profile");
 	upscaling.runtimeMethod.reset();
 	upscaling.renderScaleActive = true;
@@ -1742,8 +1742,8 @@ int main()
 	upscaling.stabilizerConfig.exterior = { Upscaling::UpscaleMethod::kDLSS, 3u, false };
 	ImGui::Clear();
 	DrawStabilizerNRWarnings(upscaling.stabilizerConfig, false);
-	require(ImGui::Seen("Interior profile is incompatible with Renderscale NR: DLAA.") &&
-				ImGui::Seen("Exterior profile is incompatible with Renderscale NR: Render Scale off.") &&
+	require(ImGui::Seen("Interior profile is incompatible with NR Before DLSS: DLAA.") &&
+				ImGui::Seen("Exterior profile is incompatible with NR Before DLSS: Render Scale off.") &&
 				upscaling.stabilizerConfig.interior.qualityMode == 0 && !upscaling.stabilizerConfig.exterior.renderScaleMode,
 		"Stabilizer warnings must name both incompatible profiles without changing the user's selection");
 	for (const bool enabled : { false, true }) {
@@ -1755,9 +1755,9 @@ int main()
 				for (const bool unconfigured : { false, true }) {
 					ImGui::Clear();
 					DrawStabilizerNRWarnings(upscaling.stabilizerConfig, unconfigured);
-					require(ImGui::Seen("Interior profile is incompatible with Renderscale NR: DLAA.") ==
+					require(ImGui::Seen("Interior profile is incompatible with NR Before DLSS: DLAA.") ==
 								(enabled && mode == 2 && switching && !unconfigured),
-						"Stabilizer warnings apply only to enabled Renderscale NR and active profile switching");
+						"Stabilizer warnings apply only to enabled NR Before DLSS and active profile switching");
 				}
 			}
 		}
@@ -1797,12 +1797,12 @@ int main()
 			ImGui::Clear("DLAA");
 			DrawVRFpsStabilizerUpscalePreset(profile);
 			require(ImGui::Disabled("DLAA") == (enabled && mode == 2) && profile.qualityMode == (enabled && mode == 2 ? 3u : 0u),
-				"Stabilizer forbids DLAA only while Renderscale NR is enabled");
+				"Stabilizer forbids DLAA only while NR Before DLSS is enabled");
 			profile.qualityMode = 3;
 			ImGui::Clear("Enabled##RenderScale");
 			DrawVRFpsStabilizerRenderScale(profile);
 			require(ImGui::Disabled("Enabled##RenderScale") == (enabled && mode == 2) && profile.renderScaleMode == (enabled && mode == 2),
-				"Stabilizer cannot turn Render Scale off while Renderscale NR is enabled");
+				"Stabilizer cannot turn Render Scale off while NR Before DLSS is enabled");
 			ImGui::Clear("##DLSSProfile");
 			DrawVRFpsStabilizerDLSSProfile(profile);
 			require(!ImGui::Disabled("##DLSSProfile"), "Compatible DLSS appearance profiles remain editable");

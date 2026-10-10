@@ -43,16 +43,16 @@ namespace Util::FeatureProfiling
 		"Upscaling::DLSS5EarlyCharacterMaskBounds", "Upscaling::DLSS5CharacterMask", "Upscaling::DLSS5CharacterCategoryCapture",
 		"Upscaling::DLSS5CharacterRoiSetup", "Upscaling::DLSS5CharacterComposite", "Upscaling::NeuralFinalLdrPreUi" });
 	inline constexpr const char* sharedCoverage =
-		"These shared pass self times include vanilla rendering and other effects. They are not summed as a feature cost. Use an on/off comparison to isolate this feature's additional cost.";
+		"Shared pass self times include vanilla rendering and other effects. They are not a feature-cost subtotal. Use on/off comparison for this feature's added cost.";
 	inline constexpr const char* materialCoverage =
-		"This feature runs inside shared shaders. The world and deferred stages provide broad rendering context, not a separate feature cost.";
+		"Runs in shared shaders. World/deferred timings show rendering context, not this feature's isolated cost.";
 
 	inline constexpr auto views = std::to_array<View>({ { "DynamicCubemaps", "DynamicCubemaps" },
 		{ "GrassCollision", "GrassCollision" },
 		{ "GrassOptimizations", "GrassOptimizations" },
 		{ "ImageBasedLighting", "IBL" },
 		{ "LightLimitFix", "LightLimitFix" },
-		{ "NeuralRendering", "NeuralRendering", {}, true, "Includes neural-rendering evaluation, colour processing and actor preparation. The subtotal covers these instrumented passes; ordinary upscaling is excluded.", neuralRenderingPasses, "Instrumented D3D11 neural-rendering passes and CPU preparation only. Evaluation on other GPU queues is excluded." },
+		{ "NeuralRendering", "NeuralRendering", {}, true, "Instrumented NR evaluation, colour processing and actor preparation. Subtotal excludes ordinary upscaling.", neuralRenderingPasses, "Instrumented D3D11 neural-rendering passes and CPU preparation only. Evaluation on other GPU queues is excluded." },
 		{ "ScreenSpaceGI", "ScreenSpaceGI" },
 		{ "ScreenSpaceShadows", "ScreenSpaceShadows" },
 		{ "Skylighting", "Skylighting" },
@@ -63,10 +63,10 @@ namespace Util::FeatureProfiling
 		{ "Upscaling", "Upscaling" },
 		{ "VolumetricLighting", "VolumetricLighting" },
 		{ "VolumetricShadows", "VolumetricShadows" },
-		{ "VR", "VR", vrPasses, true, "Partial VR coverage: stereo processing and shared passes affected by stereo and foveation settings. This is not the total VR cost or the isolated cost of foveation.", {}, "Partial stereo processing only. Shared stages and the isolated cost of foveation are excluded." },
-		{ "CloudShadows", "CloudShadows", {}, true, "Measures cubemap clears and copies only. Cloud rendering and shadow application run in shared passes and are not included in this subtotal." },
-		{ "InteriorSun", "InteriorSun", shadowPasses, false, "CPU timings cover shadow-caster selection and job preparation. GPU timings show the shared directional-shadow rendering stage." },
-		{ "Wetterness", "Wetterness", materialPasses, false, "CPU timings cover weather, wetness and puddle-state updates. GPU timings show broad shared rendering stages containing the wetness shaders." },
+		{ "VR", "VR", vrPasses, true, "Partial VR timings: stereo processing and shared passes affected by stereo/foveation. Not total VR cost or isolated foveation cost.", {}, "Partial stereo processing only. Shared stages and the isolated cost of foveation are excluded." },
+		{ "CloudShadows", "CloudShadows", {}, true, "Times cubemap clears/copies only. Shared cloud rendering and shadow application are excluded from the subtotal." },
+		{ "InteriorSun", "InteriorSun", shadowPasses, false, "CPU: shadow-caster selection/job preparation. GPU: shared directional-shadow rendering." },
+		{ "Wetterness", "Wetterness", materialPasses, false, "CPU: weather, wetness and puddle updates. GPU: shared rendering stages that include wetness shaders." },
 		{ "TruePBR", "", materialPasses, false, materialCoverage },
 		{ "ExtendedMaterials", "", materialPasses, false, materialCoverage },
 		{ "TerrainVariation", "", materialPasses, false, materialCoverage },

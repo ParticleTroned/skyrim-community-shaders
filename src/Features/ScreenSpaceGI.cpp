@@ -472,7 +472,7 @@ void ScreenSpaceGI::DrawSettings()
 				bool keepGIResources = settings.ResourceProfile == kResourceProfileFullGI;
 				if (Util::Widgets::Checkbox("Keep GI resources resident", &keepGIResources))
 					settings.ResourceProfile = keepGIResources ? kResourceProfileFullGI : kResourceProfileAOOnly;
-				Util::AddTooltip("Keep indirect-light buffers allocated for runtime switching. Turning this off frees them after a restart and disables GI.");
+				Util::AddTooltip("Keep GI buffers for runtime switching. Turning this off disables GI and frees buffers after restart.");
 				controls.Next();
 				Util::Widgets::Checkbox("AO Interiors Only", &settings.AOInteriorsOnly);
 				Util::AddTooltip("Run ambient shadows only in interiors.");
@@ -526,8 +526,7 @@ void ScreenSpaceGI::DrawSettings()
 					settings.NumSteps = static_cast<uint>(std::clamp(numSteps, 1, 20));
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::Text(
-						"How many samples does it take in one direction.\n"
-						"Controls accuracy of lighting, and noise when effect radius is large.");
+						"Samples per direction. Controls lighting accuracy and noise at large effect radii.");
 			}
 
 			recompileFlag |= Util::Widgets::Checkbox("Adaptive Sampling", &settings.EnableAdaptiveSampling);
@@ -676,8 +675,7 @@ void ScreenSpaceGI::DrawSettings()
 					Util::PercentageSlider("Movement Disocclusion", &settings.DepthDisocclusion, 0.f, 20.f);
 					if (auto _tt = Util::HoverTooltipWrapper())
 						ImGui::Text(
-							"If a pixel has moved too far from the last frame, its radiance will not be carried to this frame.\n"
-							"Lower values are stricter.");
+							"Reject previous-frame radiance when a pixel moves too far. Lower values reject more strictly.");
 
 					ImGui::Separator();
 				}
@@ -739,9 +737,9 @@ void ScreenSpaceGI::DrawOCUEffectFoveationSettings()
 	if (Util::Widgets::Checkbox("OCU peripheral sampling (experimental)", &enabled))
 		SetOCUEffectFoveationEnabled(enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextWrapped("Uses OCU's current eye positions and foveation rings to reduce peripheral AO/GI samples while keeping central samples and the lighting effects enabled.");
-		ImGui::TextWrapped("Does not require upscaling or render scale. Native quality is used when OCU's profile is unavailable. Experimental: peripheral noise and moving-eye quality need headset testing.");
-		ImGui::TextWrapped("Takes priority over SSGI FOV. Stereo Sync and Stereo Reprojection retain their existing behavior and use native sampling.");
+		ImGui::TextWrapped("Use OCU eye positions and foveation rings to reduce peripheral AO/GI samples, preserving central samples and enabled lighting effects.");
+		ImGui::TextWrapped("Requires no upscaling or render scale. Falls back to native quality without an OCU profile. Experimental: peripheral noise and moving-eye quality need HMD testing.");
+		ImGui::TextWrapped("Overrides SSGI FOV. Stereo Sync and Stereo Reprojection retain their behavior and native sampling.");
 	}
 	if (settings.ExperimentalOCUEffectFoveation)
 		ImGui::TextDisabled("%s", ocuEffectStatus.load(std::memory_order_relaxed));

@@ -186,31 +186,30 @@ void IBL::DrawSettings()
 		if (Util::WeatherUI::SliderFloat("Env IBL Scale", this, "EnvIBLScale", &settings.EnvIBLScale, kIBLScaleMin, kIBLScaleMax, "%.2f"))
 			changedWeatherBaselines.insert("EnvIBLScale");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Intensity multiplier for the environment IBL (from Dynamic Cubemaps).\nControls how strongly the surrounding environment contributes to ambient lighting.");
+			ImGui::Text("Scale ambient lighting from the Dynamic Cubemaps environment cubemap.");
 		}
 		if (Util::WeatherUI::SliderFloat("Sky IBL Scale", this, "SkyIBLScale", &settings.SkyIBLScale, kIBLScaleMin, kIBLScaleMax, "%.2f"))
 			changedWeatherBaselines.insert("SkyIBLScale");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Intensity multiplier for the sky IBL (from the game's native reflections cubemap).\nControls how strongly the sky contributes to ambient lighting.");
+			ImGui::Text("Scale ambient lighting from the game's native sky-reflection cubemap.");
 		}
 	}
 	if (page.Is("colour")) {
 		if (Util::WeatherUI::SliderFloat("Env IBL Saturation", this, "EnvIBLSaturation", &settings.EnvIBLSaturation, 0.0f, 2.0f, "%.2f"))
 			changedWeatherBaselines.insert("EnvIBLSaturation");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Color saturation of the environment IBL.\nLower values produce more neutral ambient light; higher values produce more vivid color.");
+			ImGui::Text("Environment IBL saturation: lower gives neutral ambient light; higher gives vivid color.");
 		}
 		if (Util::WeatherUI::SliderFloat("Sky IBL Saturation", this, "SkyIBLSaturation", &settings.SkyIBLSaturation, 0.0f, 2.0f, "%.2f"))
 			changedWeatherBaselines.insert("SkyIBLSaturation");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Color saturation of the sky IBL.\nLower values produce more neutral ambient light; higher values produce more vivid color.");
+			ImGui::Text("Sky IBL saturation: lower gives neutral ambient light; higher gives vivid color.");
 		}
 		if (Util::WeatherUI::SliderFloat("DALC Amount", this, "DALCAmount", &settings.DALCAmount, 0.0f, 1.0f, "%.2f"))
 			changedWeatherBaselines.insert("DALCAmount");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Blends the IBL brightness toward the game's vanilla ambient (DALC) level.\n"
-				"0 = no matching (pure IBL brightness), 1 = fully matched to vanilla ambient.");
+				"Match IBL brightness to vanilla ambient (DALC): 0 = pure IBL; 1 = fully matched.");
 		}
 		{
 			int dalcMode = static_cast<int>(settings.DALCMode);
@@ -219,11 +218,7 @@ void IBL::DrawSettings()
 				settings.DALCMode = static_cast<uint>(dalcMode);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"How the DALC-to-IBL brightness ratio is computed:\n"
-					"Luminance Ratio: Scalar ratio from overall luminance (loses DALC color tint).\n"
-					"Color Ratio: Per-channel ratio (preserves DALC color tint).\n"
-					"DALC + Sky: Uses vanilla ambient as base, sky IBL on top. Skylighting only affects sky.\n"
-					"DALC + Sky (Directional): Same, but Skylighting also dims vanilla ambient per-direction.");
+					"Choose ambient brightness matching:\nLuminance Ratio: overall ratio; loses vanilla ambient (DALC) tint.\nColor Ratio: per-channel ratio; preserves DALC tint.\nDALC + Sky: vanilla ambient plus sky IBL; Skylighting affects only sky.\nDALC + Sky (Directional): also dims vanilla ambient per direction.");
 			}
 		}
 	}
@@ -239,7 +234,7 @@ void IBL::DrawSettings()
 		}
 		Util::UIntCheckbox("Preserve Fog Luminance", settings.PreserveFogLuminance);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("When Fog Mix is active, rescales the IBL-tinted fog to keep the original fog brightness.\nPrevents fog from becoming too bright or too dark.");
+			ImGui::Text("With Fog Mix, preserve original fog brightness after applying the IBL tint. Prevents overbright or dark fog.");
 		}
 		Util::Widgets::Checkbox("Sync Slider Edits to Weather Fallback", &settings.CaptureWeatherBaselineOnSliderChange);
 		if (auto _tt = Util::HoverTooltipWrapper()) {

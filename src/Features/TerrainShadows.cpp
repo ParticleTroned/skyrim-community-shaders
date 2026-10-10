@@ -32,7 +32,7 @@ void TerrainShadows::DrawSettings()
 												});
 
 	if (page.Is("appearance")) {
-		MenuUI::DetailText("Terrain shadows follow the worldspace height map. Use Enabled in the header to switch them on or off, and Diagnostics to inspect the current terrain data.");
+		MenuUI::DetailText("Shadows use the worldspace height map. Toggle Enabled in the header; inspect terrain data in Diagnostics.");
 	}
 	if (page.Is("diagnostics")) {
 		std::string curr_worldspace = "N/A";

@@ -142,11 +142,7 @@ void GrassLighting::DrawSettings()
 		SanitizeSettings();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Subsurface Scattering (SSS) amount. "
-				"Soft lighting controls how evenly lit an object is. "
-				"Back lighting illuminates the back face of an object. "
-				"Combined to model the transport of light through the surface. "
-				"Values above 1.0 are stronger-than-default compatibility tuning for grass that still appears too harsh.");
+				"Light transmission through grass: Soft Lighting evens out illumination; Back Lighting lights the back face. Values above 1 strengthen compatibility tuning for grass that looks too harsh.");
 		}
 
 		ImGui::Spacing();
@@ -157,9 +153,7 @@ void GrassLighting::DrawSettings()
 		Util::UIntCheckbox("Wrapped Lighting for Vanilla Grass", settings.EnableWrappedLighting);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Restores the legacy wrapped diffuse transition for vanilla/basic grass. "
-				"This softens the boundary between lit and back-facing grass while keeping the newer grass lighting model active. "
-				"Complex grass is unaffected.");
+				"Restore legacy wrapped diffuse on vanilla/basic grass to soften the lit/back-face boundary. The newer lighting model stays active; complex grass is unchanged.");
 		}
 		ImGui::Spacing();
 		ImGui::Spacing();
@@ -167,11 +161,7 @@ void GrassLighting::DrawSettings()
 		Util::UIntCheckbox("Override Complex Grass Lighting Settings", settings.OverrideComplexGrassSettings);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Override the settings set by the grass mesh author. "
-				"Complex grass authors can define the brightness for their grass meshes. "
-				"However, some authors may not account for the extra lights available from CSX. "
-				"This option will treat their grass settings like non-complex grass. "
-				"This was the default in Community Shaders < 0.7.0");
+				"Override authored complex-grass brightness with basic-grass settings. Useful when authors did not account for CSX's extra lights. This was the default before Community Shaders 0.7.0.");
 		}
 		ImGui::Spacing();
 		ImGui::Spacing();

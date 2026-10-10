@@ -132,7 +132,7 @@ namespace
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Selects the profile's upscaling method. Renderscale NR requires DLSS; turn NR off or change its rendering mode to use another method.");
+			ImGui::TextUnformatted("Select the profile's upscaling method. NR Before DLSS needs DLSS; turn NR off or change its mode for other methods.");
 		}
 
 		return changed;
@@ -160,7 +160,7 @@ namespace
 			const bool open = static_cast<bool>(combo);
 			if (!open) {
 				if (auto tooltip = Util::HoverTooltipWrapper())
-					ImGui::TextUnformatted("Chooses image quality and performance. Renderscale NR requires a below-native DLSS preset.");
+					ImGui::TextUnformatted("Chooses image quality and performance. NR Before DLSS requires a below-native DLSS preset.");
 			}
 			if (open) {
 				for (int option = 0; option < static_cast<int>(presetNames.size()); ++option) {
@@ -171,7 +171,7 @@ namespace
 						changed = true;
 					}
 					if (auto tooltip = Util::HoverTooltipWrapper())
-						ImGui::TextUnformatted(option == 0 ? "Uses native resolution. Unavailable with Renderscale NR." : "Uses a smaller render image to improve performance.");
+						ImGui::TextUnformatted(option == 0 ? "Uses native resolution. Unavailable with NR Before DLSS." : "Uses a smaller render image to improve performance.");
 					if (option == qualityMode)
 						ImGui::SetItemDefaultFocus();
 				}
@@ -224,7 +224,7 @@ namespace
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Uses a smaller render image. Renderscale NR requires this on in both profiles. Turn NR off or change its rendering mode to turn this off.");
+			ImGui::TextUnformatted("Use a smaller render image. NR Before DLSS needs this on in both profiles. Turn NR off or change its mode to disable it.");
 		}
 		return changed;
 	}
@@ -341,7 +341,7 @@ namespace
 			const auto blocker = [&](const auto& profile) {
 				return upscaling.GetNeuralRenderingUpscalingProfileBlocker(upscaling.GetNeuralRenderingMode(), profile.upscaleMethod, profile.qualityMode, profile.renderScaleMode);
 			};
-			const char* modeName = upscaling.IsNeuralRenderingRenderScaleRequired() ? "Renderscale NR" : "NR";
+			const char* modeName = upscaling.IsNeuralRenderingRenderScaleRequired() ? "NR Before DLSS" : "NR";
 			const char* interiorBlocker = blocker(config.interior);
 			const char* exteriorBlocker = blocker(config.exterior);
 			if (interiorBlocker)
@@ -349,7 +349,7 @@ namespace
 			if (exteriorBlocker)
 				Util::Text::WrappedWarning("Exterior profile is incompatible with %s: %s.", modeName, exteriorBlocker);
 			if (interiorBlocker || exteriorBlocker)
-				ImGui::TextWrapped("These profiles cannot be applied with the selected NR mode. Choose compatible upscaling in both profiles, turn NR off, or change its rendering mode. Renderscale NR requires scaled DLSS with Render Scale.");
+				ImGui::TextWrapped("Profiles conflict with this NR mode. Choose compatible upscaling in both, or turn NR off/change its mode. NR Before DLSS needs below-native DLSS with Render Scale.");
 		}
 
 		ImGui::Spacing();
@@ -443,10 +443,10 @@ namespace
 			ImGui::Spacing();
 			if (uiState.config.upscalingSwitchingEnabled) {
 				Util::Text::WrappedWarning(
-					"No VR FPS Stabilizer Interior/Exterior profile settings are defined in this INI yet. Choose a Method for both profiles and configure the remaining settings, then use Save INI. Save & Apply reloads the profiles when the live interface is available.");
+					"No Interior/Exterior profiles in this INI. Choose both Methods and remaining settings, then Save INI. Save & Apply reloads profiles if the live interface is available.");
 			} else {
 				Util::Text::WrappedWarning(
-					"No VR FPS Stabilizer Interior/Exterior profile settings are defined in this INI. Switching remains inactive and no profile values are being applied. Enable switching to begin configuring them.");
+					"No Interior/Exterior profiles in this INI. Switching is inactive and applies no profile values. Enable switching to configure them.");
 			}
 		}
 
@@ -465,7 +465,7 @@ namespace
 		}
 		if (!uiState.config.upscalingSwitchingEnabled && uiState.profilesDefinedInIni) {
 			Util::Text::WrappedWarning(
-				"Interior/Exterior switching is off. Saving disables the managed profile group; other VR FPS Stabilizer settings are preserved.");
+				"Interior/Exterior switching is off. Saving disables this managed group and keeps other Stabilizer settings.");
 		}
 
 		if (uiState.loadFailed) {
@@ -507,10 +507,10 @@ namespace
 		} else if (!sessionConfig.upscalingSwitchingEnabled) {
 			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive because Interior/Exterior switching is off in the loaded profiles.");
 		} else {
-			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive; no Interior or Exterior upscaling profile is configured in the loaded INI.");
+			ImGui::TextDisabled("VR FPS Stabilizer sync inactive: no Interior or Exterior upscaling profile in the loaded INI.");
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Profile sync activates automatically when Stabilizer is loaded and its INI contains an active Interior or Exterior upscaling profile.");
+			ImGui::TextUnformatted("Sync starts automatically with loaded Stabilizer and an active Interior/Exterior profile in its INI.");
 			ImGui::TextUnformatted("Save & Apply refreshes both Stabilizer and CSX. Older Stabilizer versions require restarting Skyrim VR.");
 		}
 
@@ -519,23 +519,23 @@ namespace
 		if (uiState.config.hasMixedUpscalingSwitchingActivation) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
-				"The managed Interior/Exterior profile rows and transition fade contain a mix of active and UI-disabled entries. Active entries take precedence; saving will make the whole group match this toggle.");
+				"Managed profiles/fade mix active and UI-disabled entries. Active entries win; saving makes the whole group match this toggle.");
 		}
 		if (invalidSettingCount > 0) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
-				"%u recognized profile value(s) or combination(s) are invalid or outside the supported range. Safe resolved values are shown; saving will normalize those rows.",
+				"%u profile value(s) or combination(s) are invalid/out of range. Safe resolved values are shown; saving normalizes them.",
 				invalidSettingCount);
 		}
 		if (!completeProfiles && uiState.profilesDefinedInIni) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
-				"Missing profile values inherit the current runtime settings. Saving will write complete upscaling and feature settings for both profiles.");
+				"Missing profile values inherit runtime settings. Saving writes complete upscaling and feature settings for both profiles.");
 		}
 		if (!uiState.config.hasFadeDuration && uiState.profilesDefinedInIni) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
-				"The Render Scale transition fade duration is missing. CSX owns transition coverage; 0 seconds is recommended and will be written when saved.");
+				"Transition fade is missing. CSX owns transition coverage; saving writes the recommended 0 seconds.");
 		}
 
 		ImGui::Spacing();
@@ -553,7 +553,7 @@ namespace
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("VR FPS Stabilizer's separate timed fade for Interior/Exterior Render Scale profile changes.");
-			ImGui::TextUnformatted("Set this to 0 seconds because CSX owns transition coverage and releases Skyrim's loading fade when stereo presentation is coherent.");
+			ImGui::TextUnformatted("Use 0 seconds: CSX covers transitions and releases Skyrim's loading fade when both-eye presentation is coherent.");
 		}
 
 		if (!uiState.message.empty()) {
@@ -565,7 +565,7 @@ namespace
 			}
 		}
 		Util::Text::WrappedDisabled(
-			"This page saves Interior/Exterior profiles and the transition fade. Use the tabs above for performance, LOD, quality levels, locations and commands.");
+			"Save Interior/Exterior profiles and transition fade here. Other tabs cover performance, LOD, quality levels, locations and commands.");
 	}
 
 	MenuUI::SettingsFooter ProfileFooter()

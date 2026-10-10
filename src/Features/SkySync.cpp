@@ -39,7 +39,7 @@ void SkySync::DrawSettings()
 
 		Util::Widgets::Checkbox("Enable weather lens flare", &settings.EnableSunLensFlare);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Show lens-flare sprites supplied by the active weather. Some weathers do not provide a lens flare, so the setting has no visible effect in those weathers.");
+			ImGui::TextUnformatted("Show the active weather's lens-flare sprites. Has no visible effect if that weather provides none.");
 		}
 
 		if (settings.UseAlternateSunPath) {

@@ -953,7 +953,7 @@ bool ProfilingRenderer::RenderTimingSection(const std::string& key, const Featur
 			ImGui::TableNextColumn();
 			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "Instrumented subtotal");
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::TextWrapped("Subtotal of the instrumented passes with nesting overlap excluded. Individual rows show self time with profiled descendants excluded.");
+				ImGui::TextWrapped("Subtotal excludes nesting overlap. Each row is self time, excluding profiled descendants.");
 			ImGui::TableNextColumn();
 			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalAvg);
 			ImGui::TableNextColumn();
@@ -979,7 +979,7 @@ bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix
 	}
 	if (!cpuMode && featurePrefix == "NeuralRendering") {
 		MenuUI::SectionHeading("NR inference GPU timings (D3D12, ms)");
-		MenuUI::DetailText("Latest completed NGX evaluation samples, summed across eyes and regions per frame. These overlap the feature GPU timings above and are excluded from their subtotal.");
+		MenuUI::DetailText("Latest completed NGX evaluation times, summed per frame across eyes/regions. Overlap feature GPU timings and are excluded from their subtotal.");
 		const auto timings = globals::profiler->GetExternalGpuTimings();
 		const auto sampled = std::find_if(timings.begin(), timings.end(), [&](const auto& timing) { return timing.name.starts_with(featurePrefix + "::"); });
 		if (sampled != timings.end())

@@ -760,7 +760,7 @@ void PerformanceOverlay::DrawABTestStatisticalValidity(const Menu::ThemeSettings
 			snprintf(validStr, sizeof(validStr), "Per variant: at least %d samples, %.0fs duration, %.0f%% valid", kMinimumSamplesForValidity, static_cast<float>(kMinimumTestDuration), kMinimumValidFramesPercent);
 			snprintf(marginalStr, sizeof(marginalStr), "Marginal per variant: %d samples, %.0fs duration, %.0f%% valid", kMinimumSamplesForMarginal, static_cast<float>(kMinimumDurationForMarginal), kMinimumValidFramesPercent);
 			Util::ColoredTextLines validityLegend = {
-				{ "Frames require valid timing data. Outliers exceed 100ms or 3x that variant's median.\nBoth variants must meet the sample coverage thresholds.\nCoverage alone does not establish statistical significance.", theme.Palette.Text },
+				{ "Requires valid frame timings. Excludes outliers over 100 ms or 3x the variant median. Both variants must meet coverage thresholds; coverage alone does not prove significance.", theme.Palette.Text },
 				{ "", theme.Palette.Text },
 				{ validStr, theme.StatusPalette.SuccessColor },
 				{ marginalStr, theme.StatusPalette.Warning },
@@ -813,7 +813,7 @@ void PerformanceOverlay::ConvertABTestResultsToRows(const std::vector<Aggregated
 					row.tooltip = "Total frame time.";
 					break;
 				case SpecialShaderType::Other:
-					row.tooltip = "Frame time not attributed to any measured shader type. This includes UI, post-processing, engine work, and any GPU activity not directly measured by the overlay.";
+					row.tooltip = "Unattributed frame time: UI, post-processing, engine work and GPU activity the overlay does not measure by shader type.";
 					break;
 				case SpecialShaderType::CSPasses:
 					row.tooltip = "GPU time spent in CSX render passes while pass profiling is visible.";
@@ -1652,7 +1652,7 @@ std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay
 	DrawCallRow otherRow = {
 		"Other:", magic_enum::enum_integer(SpecialShaderType::Other), kDrawCallsNotApplicable, remainingOtherTime, remainingOtherPercent,
 		0.0f,
-		std::string("Frame time not attributed to any measured shader type or visible CSX render-pass profile. This includes UI, post-processing, engine work, and any GPU activity not directly measured."),
+		std::string("Unattributed frame time: UI, post-processing, engine work and GPU activity outside measured shader types and visible CSX pass timings."),
 		true, otherTestFrameTime, otherTestCostPerCall
 	};
 	// Always use the actual total frame time for live data

@@ -1655,8 +1655,7 @@ void WeatherWidget::LoadFeatureSettings()
 				FeatureIssues::AddFeatureIssue(
 					featureName,
 					"",
-					std::format("Weather '{}' contains settings for this feature, but the feature is not loaded. "
-								"The weather-specific parameters will be ignored until the feature is installed and loaded.",
+					std::format("Weather '{}' has settings for this unloaded feature. They apply once the feature is installed and loaded.",
 						GetEditorID()),
 					FeatureIssues::FeatureIssueInfo::IssueType::UNKNOWN,
 					fileInfo,
@@ -1762,8 +1761,7 @@ void WeatherWidget::DrawFeatureSettings()
 	static constexpr std::string_view kIblWeatherToggle = "EnableIBL";
 
 	ImGui::TextWrapped(
-		"Configure feature-specific settings that will be applied when this weather is active. "
-		"These override the feature's global settings for this weather only.");
+		"Override this feature's global settings while this weather is active.");
 	ImGui::Spacing();
 
 	auto* globalRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();

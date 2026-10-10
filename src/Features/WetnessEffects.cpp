@@ -455,8 +455,7 @@ void WetnessEffects::DrawSettings()
 		}
 		if (page.Is("rain")) {
 			ImGui::BulletText(
-				"At every interval, a raindrop is placed within each grid cell.\n"
-				"Only a set portion of raindrops will actually trigger splashes and ripples.\n");
+				"Each interval places a drop in every grid cell. Only the selected fraction produces splashes and ripples.");
 
 			Util::Widgets::SliderFloat("Grid Size", &settings.RaindropGridSize, 1.0f, 10.0f, "%.1f units");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -473,7 +472,7 @@ void WetnessEffects::DrawSettings()
 			}
 			Util::Widgets::SliderFloat("Chance", &settings.RaindropChance, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Portion of raindrops that will actually cause splashes and ripples. Higher values increase effect density but have the least performance impact.");
+				ImGui::Text("Fraction of drops producing splashes/ripples. Higher adds density with the least performance impact.");
 			}
 		}
 

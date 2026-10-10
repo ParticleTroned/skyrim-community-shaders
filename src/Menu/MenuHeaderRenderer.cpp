@@ -22,6 +22,8 @@ namespace
 {
 	using RoleFontGuard = MenuFonts::FontRoleGuard;
 	constexpr float kHeaderActionIconScale = 0.75f;
+	constexpr const char* kShaderFailureTooltip =
+		"Show/hide the shader failure message. Errors may appear in game. Check feature versions and load order, then CommunityShaders.log. Use the Nexus Mods page or Discord for help.";
 
 	struct HeaderContentAlignment
 	{
@@ -227,11 +229,7 @@ void MenuHeaderRenderer::RenderHeader(
 					shaderCache->ToggleErrorMessages();
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text(
-						"Hide or show the shader failure message. "
-						"Your installation is broken and will likely see errors in game. "
-						"Please double check you have updated all features and that your load order is correct. "
-						"See CommunityShaders.log for details and check the Nexus Mods page or Discord server. ");
+					ImGui::TextUnformatted(kShaderFailureTooltip);
 				}
 			}
 
@@ -251,11 +249,7 @@ void MenuHeaderRenderer::RenderHeader(
 			shaderCache->ToggleErrorMessages();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Hide or show the shader failure message. "
-				"Your installation is broken and will likely see errors in game. "
-				"Please double check you have updated all features and that your load order is correct. "
-				"See CommunityShaders.log for details and check the Nexus Mods page or Discord server. ");
+			ImGui::TextUnformatted(kShaderFailureTooltip);
 		}
 
 		// Add second separator when showing error button

@@ -139,7 +139,7 @@ void WeatherPicker::DrawSettings()
 	if (page.Is("analysis")) {
 		RenderCoreWeatherDetails(true, false);
 		RenderFeatureWeatherAnalysis();
-		MenuUI::DetailNote("Enabled in the header shows or hides the separate weather-details overlay. It does not change weather or time.");
+		MenuUI::DetailNote("Enabled shows/hides the weather-details overlay without changing weather or time.");
 	}
 }
 

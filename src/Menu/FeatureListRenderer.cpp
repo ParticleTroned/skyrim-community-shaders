@@ -1296,7 +1296,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			ImGui::Spacing();
 			ImGui::TextColored(
 				themeSettings.StatusPalette.Error,
-				"Wetness Effects and Wetterness cannot run together. Wetness Effects will be auto-disabled when Wetterness is active.");
+				"Wetness Effects cannot run with Wetterness and is automatically disabled while Wetterness is active.");
 		}
 	} else {
 		if (isLoaded) {
@@ -1480,7 +1480,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderReactiveConstraintWarningDialog
 
 	if (ImGui::BeginPopupModal("Setting Change Warning", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
 		const auto endPopup = SKSE::stl::scope_exit([] { ImGui::EndPopup(); });
-		ImGui::TextWrapped("Some of your settings have been automatically adjusted due to feature incompatibilities.");
+		ImGui::TextWrapped("Some settings were adjusted automatically to resolve feature incompatibilities.");
 		ImGui::Spacing();
 		ImGui::Separator();
 		ImGui::Spacing();
@@ -1561,8 +1561,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderReactiveConstraintWarningDialog
 		ImGui::Spacing();
 
 		ImGui::TextWrapped(
-			"These settings are disabled in their respective feature menus while the constraints are active. "
-			"Adjust the constraining features to remove them.");
+			"Affected controls stay disabled in their feature pages while these constraints apply. Change the constraining features to release them.");
 
 		ImGui::Spacing();
 

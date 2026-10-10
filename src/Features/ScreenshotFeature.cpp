@@ -1995,9 +1995,7 @@ void ScreenshotFeature::DrawSettings()
 	if (page.Is("source")) {
 		ImGui::TextWrapped("Capture and save run asynchronously without stalling the game.");
 		ImGui::TextWrapped(
-			"VR HMD captures use the exact accepted OpenVR eye submissions before compositor distortion. "
-			"SDR and VR captures use the selected lossless format. Desktop FP16 scene sources are tonemapped "
-			"(Reinhard) before SDR save; HDR PNG metadata is intentionally not included in this branch.");
+			"VR HMD captures use accepted OpenVR eye submissions before compositor distortion. SDR/VR use the selected lossless format. Desktop FP16 scenes are Reinhard-tonemapped to SDR; HDR PNG metadata is not written.");
 		if (!IsRuntimeEnabled()) {
 			ImGui::TextDisabled("Community Shaders screenshot capture is off. Output and crop settings can still be edited.");
 		}
@@ -2249,24 +2247,20 @@ void ScreenshotFeature::DrawSettings()
 
 		if (IsRuntimeEnabled() && HotkeyCollidesWithVanilla()) {
 			Util::Text::WrappedWarning(
-				"This hotkey collides with vanilla PrintScreen; both saves will fire. "
-				"Set bAllowScreenShot=0 in Skyrim.ini to suppress vanilla, or pick a different hotkey above.");
+				"This hotkey also triggers vanilla PrintScreen. Set bAllowScreenShot=0 in Skyrim.ini to prevent the vanilla save, or choose another hotkey.");
 		}
 
 		if (usesFixedEyeFraming) {
 			MenuUI::SectionHeading("Framing");
 			if (vrCaptureSource == VRCaptureSource::FramedStereo) {
 				ImGui::TextWrapped(
-					"Combined aligns both submitted eyes in head-projection space. The dominant eye owns the shared view; "
-					"the other eye fills the outer periphery through a narrow feathered join. Without scene depth, nearby "
-					"objects can show a seam or duplication.");
+					"Combined aligns submitted eyes in head-projection space. The dominant eye supplies the shared view; the other fills the outer edge with a feathered join. No scene depth: nearby objects may show seams or duplication.");
 			} else {
 				ImGui::TextWrapped(
 					"The selected submitted eye is center-cropped to 16:9 and resized to 2560 x 1440 without stretching.");
 			}
 			ImGui::TextWrapped(
-				"The ordinary crop preset is not applied. A live eye submission is required, so framed views are "
-				"unavailable during loading screens.");
+				"Ignores the ordinary crop preset. Requires live eye submissions; framed views are unavailable during loading.");
 			return;
 		}
 

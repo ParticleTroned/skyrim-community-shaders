@@ -500,9 +500,7 @@ void LightEditor::DrawSettings()
 		SetEnabled(requestedEnabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s",
-			"Allows for modifying lights in real-time to preview changes. "
-			"Light Placer lights can be saved back to their JSON configs. "
-			"Not intended for gameplay use.");
+			"Preview light edits live. Save Light Placer lights to their JSON configs. Intended for editing, not gameplay.");
 	}
 
 	if (!enabled)
@@ -752,7 +750,7 @@ void LightEditor::DrawSettings()
 		if (Util::ErrorButton("Delete"))
 			deleteConfirmPopupRequested = true;
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", "Delete this light entry from the Light Placer JSON.\nIf it is the only light in its entry, the whole models/formIDs entry is removed too.");
+			ImGui::Text("%s", "Delete this light from Light Placer JSON. If it is the entry's only light, its models/formIDs entry is also removed.");
 		}
 		DrawDeleteConfirmation();
 	}
@@ -816,7 +814,7 @@ void LightEditor::DrawSettings()
 				ImGui::Text("%s", "Cannot save because the source LIGH record could not be resolved.");
 			else {
 				const auto activeRef = GetActiveRefr();
-				ImGui::Text("Fork this bulb into a new whitelist entry for %s with the current edits, and blacklist it from the shared entry so the edits apply only to this reference.\nReload LP to apply.",
+				ImGui::Text("Create a whitelist entry for %s with these edits and blacklist this bulb from the shared entry. Only this reference changes.\nReload LP to apply.",
 					FormatOwnerFormEntry(activeRef.get()).c_str());
 			}
 		}
@@ -884,7 +882,7 @@ void LightEditor::DrawSettings()
 		const auto saveColorLabel = fmt::format("{}##color", "Save");
 		Util::Widgets::Checkbox(saveColorLabel.c_str(), &saveColorToLP);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", "Include color when saving to Light Placer.\nWhen unchecked, the existing JSON color is preserved.");
+			ImGui::Text("%s", "Save color to Light Placer. Unchecked preserves the existing JSON color.");
 		}
 	}
 

@@ -81,7 +81,7 @@ void WaterAppearance::DrawWaveAmplitudeControl(Profile& a_profile)
 		a_profile.WaveAmplitude,
 		kWaterAmountMin,
 		kWaterAmountMax,
-		"Sets wave strength before Wind Response multiplies it. With Wind Response off this is the fixed amplitude; the final amplitude is capped at 2.");
+		"Base wave strength before Wind Response. Wind off keeps this fixed amplitude; final amplitude is capped at 2.");
 	SanitizeProfile(a_profile);
 }
 
@@ -89,7 +89,7 @@ void WaterAppearance::DrawAdvancedProfileSettings(Profile& a_profile)
 {
 	SanitizeProfile(a_profile);
 
-	ImGui::TextWrapped("Identity values make this layer neutral. Water appearance processing is disabled when the composed result is also neutral.");
+	ImGui::TextWrapped("Identity values leave this layer neutral. Processing stops if the composed water appearance is also neutral.");
 
 	ImGui::SeparatorText("Surface");
 	DrawWaterSlider(
@@ -111,7 +111,7 @@ void WaterAppearance::DrawAdvancedProfileSettings(Profile& a_profile)
 		a_profile.GlobalReflectionAmount,
 		kWaterAmountMin,
 		kWaterAmountMax,
-		"Scales the environment, cubemap, and screen-space reflection result after LOD Blending's height-faded reflection blend.");
+		"Scale environment, cubemap and screen-space reflections after LOD Blending's height-faded blend.");
 	DrawWaterSlider(
 		"Sun Specular Multiplier",
 		a_profile.SunSpecularMultiplier,
@@ -147,7 +147,7 @@ void WaterAppearance::DrawAdvancedProfileSettings(Profile& a_profile)
 	DrawWaterSlider("Parallax Strength", a_profile.ParallaxStrength, kWaterAmountMin, kWaterAmountMax,
 		"Scales the apparent depth of water waves, including flowmaps. Zero disables water parallax.");
 	Util::Widgets::SliderInt("Parallax Quality", &a_profile.ParallaxQuality, Profile::kMinParallaxQuality, Profile::kMaxParallaxQuality, "%d", ImGuiSliderFlags_AlwaysClamp);
-	DrawTooltip("16 preserves the current full-detail quality. Higher values increase sampling cost. VR retains foveated detail reduction.");
+	DrawTooltip("16 keeps full-detail quality. Higher costs more samples; VR foveated detail reduction still applies.");
 
 	SanitizeProfile(a_profile);
 }

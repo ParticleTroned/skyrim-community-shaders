@@ -22,8 +22,7 @@ void TerrainVariation::DrawSettings()
 		return;
 
 	ImGui::TextWrapped(
-		"Terrain Variation is always enabled when installed. "
-		"To turn it off, select it in Advanced > Startup, save settings and restart the game.");
+		"Terrain Variation is enabled when installed. To disable it, check it in Advanced > Startup, save settings and restart.");
 
 	ImGui::Spacing();
 

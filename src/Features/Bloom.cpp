@@ -50,7 +50,7 @@ void Bloom::DrawProfileControls(Profile& a_profile)
 
 	const auto drawBloomSlider = [&]() {
 		Util::Widgets::SliderFloat("Bloom", &a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		DrawTooltip("Bloom strength contributed by this layer. 0 adds no strength; detailed controls can still reshape Bloom inherited from earlier layers.");
+		DrawTooltip("This layer's bloom strength: 0 adds none. Detailed controls can still reshape inherited bloom.");
 	};
 	const auto& style = ImGui::GetStyle();
 	const float bloomLabelWidth = ImGui::CalcTextSize("Bloom").x + style.ItemInnerSpacing.x;
@@ -101,9 +101,9 @@ bool Bloom::DrawAdvancedProfileSettings(Profile& a_profile)
 	changed |= Util::Widgets::SliderFloat("Halo Radius", &a_profile.HaloRadius, 0.0f, kHaloRadiusMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 	DrawTooltip("Controls the radius of the enhancement's additional bloom samples. Higher values create wider halos.");
 	changed |= Util::Widgets::SliderFloat("Halo Spread", &a_profile.HaloSpread, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	DrawTooltip("Blends between the original bloom and the widened halo samples. Higher values make the halo softer and more spread out.");
+	DrawTooltip("Blend original bloom with wider halo samples. Higher makes softer, wider halos.");
 	changed |= Util::Widgets::SliderFloat("Bloom Saturation", &a_profile.BloomSaturation, 0.0f, kBloomSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	DrawTooltip("Controls the color saturation of the enhanced bloom. Lower values make it whiter; higher values preserve or exaggerate its tint.");
+	DrawTooltip("Bloom color saturation: lower whitens it; higher preserves or strengthens its tint.");
 	changed |= Util::Widgets::ColorEdit3("Bloom Tint", reinterpret_cast<float*>(&a_profile.BloomTint));
 	DrawTooltip("Colors the bloom halo without changing the underlying scene lighting.");
 	changed |= Util::Widgets::SliderFloat("Compression Ceiling", &a_profile.CompressionCeiling, 0.0f, kCompressionCeilingMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);

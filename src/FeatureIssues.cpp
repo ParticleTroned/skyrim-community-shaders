@@ -374,8 +374,7 @@ namespace FeatureIssues
 		}
 		// Shader Breaking Features Section (most critical)
 		if (auto section = Util::SectionWrapper("Compilation Breaking Features",
-				"The following features modified core shader files and must be completely uninstalled via your mod manager. "
-				"Deleting just the INI file will not fix compilation errors if core shaders were modified.",
+				"These features changed core shaders. Uninstall them completely with your mod manager; deleting their INIs will not fix compilation errors.",
 				theme.StatusPalette.Error, !shaderBreakingIssues.empty())) {
 			for (const auto* issue : shaderBreakingIssues) {
 				DrawFeatureIssue(*issue, theme.StatusPalette.Error);
@@ -383,9 +382,7 @@ namespace FeatureIssues
 		}
 		// Unknown Features Section (potentially compilation breaking)
 		if (auto section = Util::SectionWrapper("Unknown Features",
-				"The following features are not recognized and we tried to disable automatically. "
-				"They may be from development branches or newer CSX versions. Since we cannot determine what files they may have modified, "
-				"they should be removed as a precaution to prevent potential shader compilation failures.",
+				"Unrecognized features may come from development branches or newer CSX versions. CSX attempted to disable them. Remove them to prevent compilation failures; their shader changes are unknown.",
 				theme.StatusPalette.Error, !unknownIssues.empty())) {
 			for (const auto* issue : unknownIssues) {
 				DrawFeatureIssue(*issue, theme.StatusPalette.Error);
@@ -393,8 +390,7 @@ namespace FeatureIssues
 		}
 		// Obsolete Features Section (non-shader-breaking)
 		if (auto section = Util::SectionWrapper("Obsolete Features",
-				"The following features are obsolete and disabled automatically. "
-				"These features have been removed or replaced in this CSX version but do not modify core shaders.",
+				"These obsolete features were disabled automatically. They were removed or replaced and do not modify core shaders.",
 				theme.StatusPalette.Warning, !obsoleteIssues.empty())) {
 			for (const auto* issue : obsoleteIssues) {
 				DrawFeatureIssue(*issue, theme.StatusPalette.Warning);
@@ -402,7 +398,7 @@ namespace FeatureIssues
 		}
 		// Version Mismatch Section
 		if (auto section = Util::SectionWrapper("Wrong Version Features",
-				"The following features have version compatibility issues and were disabled automatically. Please check for any updates or if the feature is considered obsolete.",
+				"These features were disabled due to incompatible versions. Check for updates or replacements.",
 				theme.StatusPalette.Warning, !versionIssues.empty())) {
 			for (const auto* issue : versionIssues) {
 				DrawFeatureIssue(*issue, theme.StatusPalette.Warning);
@@ -486,9 +482,9 @@ namespace FeatureIssues
 			if ((issue.IsObsolete() && issue.ModifiedShaderDirectory()) || issue.IsUnknown()) {
 				ImGui::TextColored(color, "POTENTIAL COMPILATION FAILURE");
 				if (issue.IsUnknown()) {
-					ImGui::TextWrapped("This unknown feature may have modified core shader files and could be causing compilation failures. Unknown features should be removed if failures continue.");
+					ImGui::TextWrapped("This unknown feature may have changed core shaders. Remove it if compilation failures continue.");
 				} else {
-					ImGui::TextWrapped("This obsolete feature modified core shader files and is causing compilation failures. It must be uninstalled via mod manager.");
+					ImGui::TextWrapped("This obsolete feature changed core shaders and causes compilation failures. Uninstall it with your mod manager.");
 				}
 				ImGui::Spacing();
 				ImGui::Separator();
@@ -671,7 +667,7 @@ namespace FeatureIssues
 				// Enhanced warning for unknown features
 				if (issue.IsUnknown()) {
 					ImGui::TextColored(theme.StatusPalette.Error, "WARNING:");
-					ImGui::TextWrapped("This is an UNKNOWN feature. If it modified core shader files (outside of its own folder), deleting these files alone will NOT fix shader compilation issues.");
+					ImGui::TextWrapped("Unknown feature: deleting its own files will not fix core shaders it changed outside its folder.");
 					ImGui::Spacing();
 					ImGui::TextColored(theme.StatusPalette.Warning, "If compilation issues persist after deletion:");
 					ImGui::BulletText("Completely uninstall the feature via your mod manager");
@@ -1503,11 +1499,7 @@ namespace FeatureIssues
 
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text(
-						"Creates test INI files that trigger all known feature issue cases:\n"
-						"- Obsolete features (ComplexParallaxMaterials, TerrainBlending, etc.)\n"
-						"- Unknown features (fake non-existent features)\n"
-						"- Version mismatch (modifies existing feature version)\n"
-						"Restart CSX after creating to see the issues in action.");
+						"Create test INIs for:\n- Obsolete features (ComplexParallaxMaterials, TerrainBlending, etc.)\n- Unknown, nonexistent features\n- Version mismatches in existing features\nRestart CSX to see the issues.");
 				}
 
 				// Restore button
@@ -1530,9 +1522,7 @@ namespace FeatureIssues
 
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text(
-						"Removes all test INI files and restores any modified INI files to their original state.\n"
-						"This undoes all changes made by 'Create Test INIs'.\n"
-						"Restart CSX after restoring to see normal operation.");
+						"Remove all test INIs and restore changed INIs. Undoes Create Test INIs.\nRestart CSX to return to normal operation.");
 				}
 			}
 		}

@@ -57,22 +57,19 @@ void InteriorSun::DrawSettings()
 	Util::Widgets::Checkbox("Force Double-Sided Rendering", &settings.ForceDoubleSidedRendering);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Disables backface culling during sun shadowmap rendering in interiors. "
-			"Will prevent most light leaking through unmasked/unprepared interiors at a small performance cost. ");
+			"Disable interior sun-shadow backface culling to reduce leaks in unmasked/unprepared interiors. Adds a small performance cost.");
 	}
 	Util::Widgets::Checkbox("Force Single Shadow Cascade", &settings.ForceSingleShadowCascade);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Uses the high-detail directional shadow split for the full Interior Sun distance. "
-			"Prevents prepared wall masks from falling into the lower-resolution later split.");
+			"Use the high-detail shadow split throughout Interior Sun's distance so prepared wall masks avoid lower-resolution splits.");
 	}
 	if (Util::Widgets::SliderFloat("Interior Shadow Distance", &settings.InteriorShadowDistance, 1000.0f, 8000.0f))
 		runtimeSettingsDirty.store(true, std::memory_order_release);
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Sets the distance shadows are rendered at in interiors. "
-			"Lower values provide higher quality shadows and improved performance but may cause distant interior spaces to light up incorrectly. ");
+			"Interior shadow distance. Lower improves quality and performance but may incorrectly light distant interior spaces.");
 	}
 	ImGui::EndDisabled();
 }

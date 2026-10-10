@@ -211,11 +211,11 @@ namespace
 	{
 		Util::Widgets::SliderFloat("PBR Metal Reflection", &globals::state->pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
 		if (ImGui::IsItemHovered()) {
-			ImGui::SetTooltip("Global multiplier for broad TruePBR metallic reflection response.\n1.0 = default. Lower values reduce overall metal reflectivity; higher values strengthen it.\nDoes not affect non-PBR shading.");
+			ImGui::SetTooltip("Scale broad TruePBR metal reflections: 1.0 = default; lower reduces reflectivity, higher strengthens it. Non-PBR shading stays unchanged.");
 		}
 		Util::Widgets::SliderFloat("PBR Metal Highlight", &globals::state->pbrMetalHighlightScale, 0.0f, 2.0f, "%.2f");
 		if (ImGui::IsItemHovered()) {
-			ImGui::SetTooltip("Scales focused direct-light highlights on TruePBR metals.\nUse this to reduce sharp bright hotspots without flattening the broader reflection response.");
+			ImGui::SetTooltip("Scale focused direct-light highlights on TruePBR metals. Reduce bright hotspots while keeping broad reflections.");
 		}
 	}
 }

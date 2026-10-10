@@ -150,7 +150,7 @@ void RenderDoc::DrawSettings()
 	static MenuUI::ActionFeedback feedback;
 	const bool captureReady = enableRenderDocCapture && IsAvailable();
 	if (enableRenderDocCapture && !IsAvailable())
-		Util::Text::WrappedWarning("RenderDoc capture is unavailable. Save settings and restart after enabling it. If it remains unavailable, check that Data/Renderdoc/renderdoc.dll is installed and loads successfully.");
+		Util::Text::WrappedWarning("RenderDoc unavailable. Enable it, save settings and restart. If still unavailable, check that Data/Renderdoc/renderdoc.dll is installed and loads.");
 	else if (!enableRenderDocCapture && IsAvailable())
 		Util::Text::WrappedWarning("Save settings and restart to unload RenderDoc. Capture overhead remains until then.");
 	MenuUI::SettingsPage page("RenderDoc", {
@@ -168,7 +168,7 @@ void RenderDoc::DrawSettings()
 	bool isSectionVisible = false;
 
 	if (page.Is("capture") && !captureReady)
-		MenuUI::DetailNote("Enable RenderDoc in the header, save settings, and restart the game before capturing. Existing capture files remain available in Storage and Files.");
+		MenuUI::DetailNote("Enable RenderDoc in the header, save settings and restart before capturing. Existing captures remain in Storage and Files.");
 	{
 		isSectionVisible = true;
 		// Capture Control Section
@@ -587,7 +587,7 @@ void RenderDoc::DrawSettingsEnabledControl()
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Enable RenderDoc frame capture for providing debug captures to the CSX maintainers.");
-		ImGui::Text("Enabling capture will force-enable frame annotations for easier debugging and will restore the previous setting when disabled.");
+		ImGui::Text("Capture enables frame annotations for debugging. Disabling it restores the previous annotation setting.");
 	}
 }
 
@@ -969,10 +969,7 @@ void RenderDoc::ApplyAutomaticCommentsToNewCaptures()
 
 std::string RenderDoc::GetOverlayWarningMessage() const
 {
-	return "WARNING: RenderDoc capture is active, performance will be severely impacted.\n"
-		   "CSX Upscaling and Frame Generation are disabled while capture is active.\n"
-		   "Press F12, Print Screen or press the Capture button in the RenderDoc feature settings.\n"
-		   "Disable RenderDoc capture in the RenderDoc feature settings.";
+	return "RenderDoc capture is active and severely affects performance. CSX Upscaling and Frame Generation are disabled.\nCapture with F12, Print Screen or the RenderDoc page's Capture button. Disable capture on that page.";
 }
 
 void RenderDoc::ClearFailedDeletions()

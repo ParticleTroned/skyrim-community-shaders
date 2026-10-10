@@ -265,7 +265,7 @@ namespace
 			ApplySkylightingRuntimeEnabledChange(a_skylighting, previousEnabled);
 
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Runtime-safe toggle. Keeps shaders and hooks loaded, but disables Skylighting updates and shading until re-enabled.");
+			ImGui::Text("Toggle Skylighting at runtime. Off stops updates and shading but keeps shaders and hooks loaded.");
 			ImGui::Text("The performance profiler compares against this Off state, not against a lower Skylighting preset.");
 		}
 		if (a_skylighting.resourceRebuildFailed.load(std::memory_order_acquire))
@@ -646,7 +646,7 @@ void Skylighting::DrawSettings()
 		if (Util::Widgets::Checkbox("Include Marked Roof Occluders", &settings.IncludeMarkedRoofOccluders))
 			QueueResetSkylighting();
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Helps skylighting darken under some roofs the game marks specially. May rarely add extra dark patches if hidden helper objects are included.");
+			ImGui::Text("Darken skylighting under specially marked roofs. Hidden helper objects may rarely add unwanted dark patches.");
 	}
 	if (page.Is("quality")) {
 		ImGui::Separator();
@@ -706,8 +706,8 @@ void Skylighting::DrawSettings()
 				settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, static_cast<uint>(probeIntervalUI));
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text(usesIncrementalProbeSlices ?
-								"Minimum matches Occlusion Update Interval. Incremental probe updates still follow fresh occlusion quadrants at runtime." :
-								"How often skylight data refreshes. 1 = every frame. Higher = faster, but slower reaction. Its minimum always matches Occlusion Update Interval.");
+								"Minimum equals Occlusion Update Interval. Incremental probes still follow fresh occlusion quadrants." :
+								"Skylight refresh interval: 1 = every frame. Higher saves work but reacts slower. Minimum equals Occlusion Update Interval.");
 		}
 		ImGui::EndDisabled();
 		NormalizeSettingsForRuntime(settings);
@@ -761,7 +761,7 @@ void Skylighting::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Sets the total camera-centered skylighting probe field width. Balanced uses 3.2 cells; Performance uses 2.5 cells.");
 			ImGui::Text("Effective reach is about half this value from the camera.");
-			ImGui::Text("Higher values reach farther, but with the same probe grid each probe covers more space and local detail gets softer.");
+			ImGui::Text("Higher reaches farther but spreads the same probe grid over more space, softening local detail.");
 			ImGui::Text("Raise Probe Grid Quality too if you want more reach without losing as much detail.");
 		}
 	}

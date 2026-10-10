@@ -380,13 +380,9 @@ namespace Util
 	const char* GetClearShaderCacheTooltip()
 	{
 		if (ResolveShaderCacheClearScope() == ShaderCacheClearScope::ActiveOnly) {
-			return "Clears only shaders drawing the current scene. They recompile as the scene redraws; "
-				   "everything else stays cached. Shift-click selects a full clear. VR controller users can "
-				   "choose the normal-click behavior with Smart Clear by Default.";
+			return "Clear current-scene shaders; they recompile as it redraws. Other shaders stay cached. Shift-click clears all; Smart Clear by Default selects the normal-click action, including for VR controllers.";
 		}
-		return "Clears all compiled shaders from memory and disk cache (if enabled). They recompile when "
-			   "the game next encounters them. Shift-click selects a scene-only smart clear. VR controller "
-			   "users can choose the normal-click behavior with Smart Clear by Default.";
+		return "Clear all compiled shaders from memory and enabled disk cache. They recompile when needed. Shift-click clears the current scene; Smart Clear by Default selects the normal-click action, including for VR controllers.";
 	}
 
 	// Helper function to perform the actual cache clearing
@@ -444,14 +440,10 @@ namespace Util
 			ImGui::Spacing();
 			if (isSmart) {
 				ImGui::TextWrapped(
-					"This watches the current scene, clears only shaders drawing it, then watches once more "
-					"after this menu closes to catch passes hidden by the overlay. Keep the affected area visible. "
-					"A brief stutter or temporary vanilla appearance is expected while those shaders recompile. "
-					"Use a full clear if the problem remains.");
+					"Clear current-scene shaders, then recheck after menu closure for passes hidden by the overlay. Keep the affected area visible. Recompilation may briefly stutter or show vanilla rendering. Use a full clear if the issue remains.");
 			} else {
 				ImGui::TextWrapped(
-					"This will clear all compiled shaders from memory and disk cache (if enabled). "
-					"Shaders will be recompiled when the game next encounters them.");
+					"Clear all compiled shaders from memory and enabled disk cache. They recompile when next needed.");
 			}
 			ImGui::Spacing();
 			ImGui::Spacing();

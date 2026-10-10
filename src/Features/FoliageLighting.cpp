@@ -77,8 +77,7 @@ void FoliageLighting::DrawFoliageScatteringSetting()
 	Util::UIntCheckbox("Foliage Scattering", settings.EnableFoliageScattering);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(
-			"Adds wrapped, view-dependent transmission to animated tree foliage. "
-			"PBR foliage also receives a diffuse transmission term independent of texture thickness.");
+			"Add wrapped, view-dependent transmission to animated tree foliage. PBR foliage also gets diffuse transmission independent of texture thickness.");
 	}
 }
 
@@ -97,8 +96,7 @@ void FoliageLighting::DrawFoliageAmbientFlipSetting()
 	Util::UIntCheckbox("Ambient Backface Flip", settings.EnableFoliageAmbientFlip);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(
-			"Mirrors the ambient sampling normal for visible backside tree foliage cards. "
-			"VR uses one shared reference direction to keep both eyes consistent.");
+			"Mirror ambient sampling normals on visible foliage backs. VR shares a reference direction between eyes.");
 	}
 }
 

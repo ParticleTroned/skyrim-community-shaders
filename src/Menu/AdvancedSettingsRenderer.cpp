@@ -96,7 +96,7 @@ void AdvancedSettingsRenderer::RenderShaderCompileFlags()
 		shaderCache->Clear();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Defines for Shader Compiler. Semicolon \";\" separated. Clear with space. Rebuild shaders after making change. Compute Shaders require a restart to recompile.");
+		ImGui::Text("Semicolon-separated shader defines; enter a space to clear. Rebuild shaders after editing. Compute shaders need a restart to recompile.");
 	}
 
 	// Half-precision (partial precision) shader compile flag
@@ -108,13 +108,7 @@ void AdvancedSettingsRenderer::RenderShaderCompileFlags()
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Adds D3DCOMPILE_PARTIAL_PRECISION to the shader compiler flags.\n"
-			"Lets fxc downgrade unmarked float ops to FP16 where it can prove safety, "
-			"on top of the existing min16float type hints.\n"
-			"On FP16-capable GPUs (Pascal+ / GCN+ / Skylake+) this can halve register "
-			"pressure and double ALU throughput, but it can also introduce minor visual "
-			"differences in shaders that haven't been audited for precision sensitivity.\n"
-			"Toggling this clears the shader cache and triggers a full recompile.");
+			"Request partial precision with D3DCOMPILE_PARTIAL_PRECISION. Image quality and performance depend on the shader and GPU. Changing this clears the cache; shaders recompile as needed.");
 	}
 
 	// Avoid flow control compiler flag (transient — not saved to config because the
@@ -127,13 +121,7 @@ void AdvancedSettingsRenderer::RenderShaderCompileFlags()
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Adds D3DCOMPILE_AVOID_FLOW_CONTROL to the shader compiler flags.\n"
-			"Forces fxc to flatten branches into predicated ops rather than emitting "
-			"dynamic flow control. Often a win for short branch bodies and uniformly-"
-			"taken branches; usually a loss for long divergent branches that vanilla "
-			"flow control would skip entirely.\n"
-			"Resets every launch. Toggling this clears the shader cache and triggers a "
-			"full recompile.");
+			"Ask the compiler to avoid flow-control instructions with D3DCOMPILE_AVOID_FLOW_CONTROL. May help short branches but add work when skipped branches are evaluated. Resets each launch. Changing this clears the cache; shaders recompile as needed.");
 	}
 }
 
@@ -158,36 +146,26 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 	Util::Widgets::SliderInt("Compiler Threads", &shaderCache->compilationThreadCount, 1, maxThreads);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Number of threads used to compile shaders at startup. "
-			"Defaults to 75%% of available logical CPU threads, leaving meaningful "
-			"headroom for Windows and other applications (E-cores included), while "
-			"startup compiler workers also run at cooperative OS priority. "
-			"Higher values finish compilation faster but may make the system less responsive.");
+			"Startup compile threads. Default: 75%% of logical CPUs, including E-cores, at cooperative OS priority to leave system headroom. Higher compiles faster but may reduce responsiveness.");
 	}
 	Util::Widgets::SliderInt("Background Compiler Threads", &shaderCache->backgroundCompilationThreadCount, 1, maxThreads);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Number of threads used to compile shaders during gameplay. "
-			"Defaults to half of performance cores to avoid impacting the render thread. "
-			"After startup, workers return to the game's normal relative priority. "
-			"Higher values finish compilation faster but may cause stuttering.");
+			"Gameplay compile threads. Default: half the performance cores to protect render-thread time; workers resume normal game priority after startup. Higher compiles faster but may stutter.");
 	}
 
 	auto& menuSettings = globals::menu->GetSettings();
 	Util::Widgets::Checkbox("Background Compile on Boot", &menuSettings.BackgroundShaderCompilationOnBoot);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Load the menu immediately and compile shaders in the background on boot.\n"
-			"Shaders still compile; only the startup wait is skipped.\n"
-			"Takes effect on the next launch. Default off.");
+			"Open the menu immediately; compile shaders in the background at startup. Skips waiting, not compilation. Applies next launch; default off.");
 	}
 
 	if (globals::game::isVR) {
 		Util::Widgets::Checkbox("Show Compilation HUD in VR", &menuSettings.ShowCompilationHUDInVR);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"When enabled, shader compilation status is shown in both the headset and desktop.\n"
-				"When disabled (default), it remains visible on the desktop but is hidden in the headset.");
+				"On: show compilation status in HMD and desktop. Off (default): desktop only.");
 		}
 	}
 }
@@ -215,7 +193,7 @@ void AdvancedSettingsRenderer::RenderShaderCacheControls()
 		shaderCache->SetDump(useDump);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Dump shaders at startup. This should be used only when reversing shaders. Normal users don't need this.");
+		ImGui::Text("Dump shaders at startup for reverse engineering. Unneeded for normal use.");
 	}
 
 	const bool capturing = shaderCache->IsCapturingActiveShaders();
@@ -257,25 +235,19 @@ void AdvancedSettingsRenderer::RenderShaderReplacementTable()
 			Util::Widgets::Checkbox("Vertex", &state->enableVShaders);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Replace Vertex Shaders. "
-					"When false, will disable the custom Vertex Shaders for the types above. "
-					"For developers to test whether CSX shaders match vanilla behavior. ");
+					"Replace vertex shaders for the types above. Off uses vanilla shaders for developer comparisons.");
 			}
 
 			Util::Widgets::Checkbox("Pixel", &state->enablePShaders);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Replace Pixel Shaders. "
-					"When false, will disable the custom Pixel Shaders for the types above. "
-					"For developers to test whether CSX shaders match vanilla behavior. ");
+					"Replace pixel shaders for the types above. Off uses vanilla shaders for developer comparisons.");
 			}
 
 			Util::Widgets::Checkbox("Compute", &state->enableCShaders);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Replace Compute Shaders. "
-					"When false, will disable the custom Compute Shaders for the types above. "
-					"For developers to test whether CSX shaders match vanilla behavior. ");
+					"Replace compute shaders for the types above. Off uses vanilla shaders for developer comparisons.");
 			}
 		}
 		ImGui::EndTable();
@@ -765,9 +737,7 @@ void AdvancedSettingsRenderer::RenderShaderBlockingPanel()
 		Util::DrawSectionHeader("Active Shaders (Used Recently)");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"List of shaders that have been used in recent frames. "
-				"Enable Shader Blocking above to use hotkeys to cycle through and block shaders for debugging. "
-				"Shaders not used for ~1 second are removed from this list.");
+				"Recently used shaders; entries expire after about one second. Enable Shader Blocking above to cycle/block them with hotkeys.");
 		}
 
 		// Get fresh active shaders data for accurate count and table

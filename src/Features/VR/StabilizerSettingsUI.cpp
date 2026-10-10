@@ -87,7 +87,7 @@ namespace VRFpsStabilizer
 				ImGui::SameLine();
 				if (ImGui::Button("Configure"))
 					editor.document.Set("Settings", setting.key, setting.suggested, editor.error);
-				Tooltip("Add this option using the supplied 1.4.13 beta template value. Saving is still required; omitted settings otherwise keep Stabilizer's own defaults.");
+				Tooltip("Add the supplied 1.4.13 beta template value, then save. Omitted settings keep Stabilizer's defaults.");
 				ImGui::PopID();
 				return;
 			}
@@ -137,7 +137,7 @@ namespace VRFpsStabilizer
 					continue;
 				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.35f);
 				const char* label = key.c_str();
-				const char* help = "Skyrim INI setting in this quality tier. Format: setting:category. Use Advanced entries to add, remove, or script settings.";
+				const char* help = "This tier's Skyrim INI setting (setting:category). Use Advanced entries to add, remove or script settings.";
 				if (Equal(key, "iMaxDesired:Particles")) {
 					label = "Maximum particles";
 					help = "Target maximum particle count for this tier. Lower values can improve performance in scenes with many particle effects.";

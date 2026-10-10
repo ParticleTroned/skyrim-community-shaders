@@ -150,7 +150,7 @@ namespace
 	constexpr float WETTERNESS_PROFILE_RAIN_REFLECTION_BALANCE = DEFAULT_RAIN_REFLECTION_BALANCE;
 
 	constexpr std::array<WetternessUiPresetDefinition, 4> WETTERNESS_UI_PRESETS = { { { "Performance",
-																						  "Cheapest wetness profile. Keeps the wet-ground look, but uses shorter ranges, sparser raindrops, and shorter splash/ripple lifetimes.",
+																						  "Lowest-cost profile: keeps wet ground with shorter ranges, fewer drops and shorter splash/ripple lifetimes.",
 																						  700.0f,
 																						  5000.0f,
 																						  3.6f,
@@ -159,7 +159,7 @@ namespace
 																						  4.5f,
 																						  0.22f },
 		{ "Balanced",
-			"Middle wetness profile. Keeps the same core wetness tuning with moderate raindrop density, lifetime, and distance ranges.",
+			"Balanced profile: same core wetness tuning, with moderate drop density, lifetimes and ranges.",
 			1000.0f,
 			7500.0f,
 			3.25f,
@@ -168,7 +168,7 @@ namespace
 			5.2f,
 			0.26f },
 		{ "Quality",
-			"Full wetness profile. Uses the default raindrop density, lifetimes, and the farthest wetness and raindrop coverage.",
+			"Full profile: default drop density/lifetimes and maximum wetness and raindrop coverage.",
 			1400.0f,
 			10000.0f,
 			3.0f,
@@ -1227,7 +1227,7 @@ void Wetterness::DrawPuddleMaskSettings()
 		InvalidateSanitizedSettingsCache();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Simple uses slope only, without puddle islands; Radius and Layout have no effect. Textured (default) uses one cached noise lookup. High Quality adds a second lookup for more variation. Legacy Procedural preserves the original 3D Perlin pattern at a higher shader cost.");
+		ImGui::TextUnformatted("Simple: slope only; no puddle islands, Radius or Layout. Textured (default): one cached noise lookup. High Quality: two lookups for more variation. Legacy Procedural: original 3D Perlin pattern at higher shader cost.");
 	}
 	if ((puddleMaskMode == PuddleMaskMode::Textured || puddleMaskMode == PuddleMaskMode::TexturedHighQuality) &&
 		!puddleMaskSrv) {
@@ -1386,7 +1386,7 @@ void Wetterness::DrawSettings()
 		ImGui::BeginDisabled(raindropAdvancedDisabled);
 		Util::Widgets::SliderFloat("Rain Phase Fade", &settings.RaindropTransitionFalloff, 0.5f, 6.0f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Shapes the main rain-to-post-rain signal used by raindrops, puddles, and rain reflection response. Ground wet-film uses a faster onset derived from this signal so it appears earlier.");
+			ImGui::TextUnformatted("Shape the rain/post-rain signal for drops, puddles and reflections. Ground wet-film derives a faster onset from it to appear earlier.");
 		}
 		Util::Widgets::SliderFloat("Raindrop Effect Range", &settings.RaindropFxRangeWorldUnits, RAINDROP_FX_RANGE_UI_MIN_GAME_UNITS, RAINDROP_FX_RANGE_UI_MAX_GAME_UNITS, "%.0f units", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1421,12 +1421,12 @@ void Wetterness::DrawSettings()
 				Util::Widgets::SliderFloat("Interval", &settings.RaindropInterval, 0.1f, 2.0f, "%.1f sec");
 				markPresetDirtyIfEdited();
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("How often new raindrops are added. Lower = more frequent updates, higher = slower updates. Lower values are more expensive.");
+					ImGui::TextUnformatted("Drop update interval. Lower updates more often and costs more; higher updates less often.");
 				}
 				Util::Widgets::SliderFloat("Chance", &settings.RaindropChance, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 				markPresetDirtyIfEdited();
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("How many possible drops actually appear. Higher = denser drops, lower = fewer drops. Higher values are more expensive.");
+					ImGui::TextUnformatted("Fraction of potential drops that appear. Higher gives denser, more expensive drops; lower gives fewer.");
 				}
 			}
 
@@ -1516,7 +1516,7 @@ void Wetterness::DrawSettings()
 		ImGui::EndDisabled();
 		SanitizePersistentReflectionSettings(settings, modernWetIndirectSpecularScale, legacyWetIndirectSpecularScale);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Global wet reflection baseline. It drives standing-water puddles and any wet indirect response that is still allowed. During rain the thin rain-contact film is mostly cubemap-suppressed, so this slider mainly shows up on real puddles. After rain it remains the baseline that the post-rain puddle controls bias up or down.");
+			ImGui::TextUnformatted("Baseline for puddle reflections and allowed wet indirect response. Rain suppresses most cubemap reflection on thin ground film, so this mainly affects puddles. Post-rain puddle controls adjust this baseline.");
 		}
 
 		drawUintCheckboxWithTooltip(
@@ -1540,13 +1540,13 @@ void Wetterness::DrawSettings()
 
 		Util::Widgets::Checkbox("Enable Weather-Driven Drying", &enableWeatherDrivenDryingModel);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Automatically controls drying based on weather and season. When on, manual drying-time sliders below are ignored.");
+			ImGui::TextUnformatted("Set drying automatically from weather and season. Ignores the manual drying times below while on.");
 		}
 
 		Util::Widgets::SliderFloat("Weather transition speed", &settings.WeatherTransitionSpeed, 0.2f, 8.0f);
 		markPresetDirtyIfEdited();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("How fast wetness responds to weather changes. Higher = quicker wet/dry transitions, lower = slower transitions.");
+			ImGui::TextUnformatted("Wetness response to weather: higher changes wet/dry state faster; lower changes it slower.");
 		}
 
 		MenuUI::DetailGrid dryingGrid("WetDrying", 2, ImGui::GetFontSize() * 32);
@@ -1556,9 +1556,9 @@ void Wetterness::DrawSettings()
 
 		ImGui::BeginDisabled(enableWeatherDrivenDryingModel);
 		drawDryingSlider("Stone Drying Time", settings.StoneDryingMultiplier, "Drying time for stone-like surfaces after rain. Higher = dries slower, lower = dries faster.");
-		drawDryingSlider("Grass Drying Time", settings.GrassDryingMultiplier, "Drying time for grass-like surfaces after rain. Higher = dries slower, lower = dries faster.");
-		drawDryingSlider("Dirt Drying Time", settings.DirtDryingMultiplier, "Drying time for dirt-like surfaces after rain. Higher = dries slower, lower = dries faster.");
-		drawDryingSlider("Puddle Drying Time", puddleDryingHours, "How long puddles remain after rain. Higher = puddles last longer, lower = puddles fade sooner.");
+		drawDryingSlider("Grass Drying Time", settings.GrassDryingMultiplier, "Grass drying time after rain. Higher dries slower; lower dries faster.");
+		drawDryingSlider("Dirt Drying Time", settings.DirtDryingMultiplier, "Dirt drying time after rain. Higher dries slower; lower dries faster.");
+		drawDryingSlider("Puddle Drying Time", puddleDryingHours, "Puddle duration after rain. Higher lasts longer; lower fades sooner.");
 		ImGui::EndDisabled();
 		if (enableWeatherDrivenDryingModel) {
 			ImGui::TextDisabled("Manual drying-time sliders are disabled while weather-driven drying is enabled.");
@@ -1578,7 +1578,7 @@ void Wetterness::DrawSettings()
 		rainGrassGlossiness = GrassLighting::ClampGlossiness(rainGrassGlossiness, kDefaultRainGrassGlossiness);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(
-				"Maximum effective grass glossiness while rain is active. Wetterness blends down from this value after rain using the grass drying time. If this is below the dry endpoint, the dry endpoint wins so rain never makes grass less glossy.");
+				"Maximum grass glossiness during rain, fading to the dry endpoint over Grass Drying Time. The dry endpoint is the minimum, so rain cannot make grass less glossy.");
 		}
 
 		Util::Widgets::SliderFloat(
@@ -1593,7 +1593,7 @@ void Wetterness::DrawSettings()
 			GrassLighting::Settings{}.Glossiness);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(
-				"Dry endpoint for grass glossiness after rain and grass drying finish. This is the same saved value as Grass Lighting > Complex Grass > Glossiness, so either slider edits the same setting.");
+				"Dry grass glossiness after rain and drying. Shares Grass Lighting > Complex Grass > Glossiness; either control edits the same saved value.");
 		}
 
 		Util::Widgets::SliderFloat(
@@ -1608,7 +1608,7 @@ void Wetterness::DrawSettings()
 			kDefaultRainGrassSpecularStrength);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(
-				"Maximum effective grass specular strength while rain is active. Wetterness blends down from this value after rain using the grass drying time. If this is below the dry endpoint, the dry endpoint wins so rain never makes grass less specular.");
+				"Maximum grass specular strength during rain, fading to the dry endpoint over Grass Drying Time. The dry endpoint is the minimum, so rain cannot reduce specularity.");
 		}
 
 		Util::Widgets::SliderFloat(
@@ -1623,7 +1623,7 @@ void Wetterness::DrawSettings()
 			GrassLighting::Settings{}.SpecularStrength);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(
-				"Dry endpoint for grass specular strength after rain and grass drying finish. This is the same saved value as Grass Lighting > Complex Grass > Specular Strength, so either slider edits the same setting.");
+				"Dry grass specular strength after rain and drying. Shares Grass Lighting > Complex Grass > Specular Strength; either control edits the same saved value.");
 		}
 
 		Util::Widgets::SliderFloat(
@@ -1637,7 +1637,7 @@ void Wetterness::DrawSettings()
 		markPresetDirtyIfEdited();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(
-				"Reduces grass albedo while wet. The effect reaches this strength during rain and fades out using the grass drying time. Applies to basic and complex grass.");
+				"Darken basic and complex grass albedo during rain; fade over Grass Drying Time.");
 		}
 	}
 	if (page.Is("surface")) {
@@ -1648,27 +1648,27 @@ void Wetterness::DrawSettings()
 		Util::Widgets::SliderFloat("Rain Wetness", &settings.MaxRainWetness, 0.0f, 2.5f);
 		markPresetDirtyIfEdited();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("How strong the rain wet-film looks. Higher = wetter/stronger rain film, lower = lighter rain film.");
+			ImGui::TextUnformatted("Rain film strength. Higher looks wetter; lower gives a lighter film.");
 		}
 
 		Util::Widgets::SliderFloat("Min Rain Wetness", &settings.MinRainWetness, 0.0f, 0.9f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Minimum rain wetness floor on surfaces. Higher = more surfaces stay visibly wet, lower = wetness favors only more exposed/up-facing surfaces.");
+			ImGui::TextUnformatted("Minimum surface wetness during rain. Higher keeps more surfaces wet; lower favors exposed, upward-facing surfaces.");
 		}
 
 		Util::Widgets::SliderFloat("Ground Wet-film", &settings.RainContactWetnessScale, RAIN_CONTACT_WETNESS_SCALE_MIN, RAIN_CONTACT_WETNESS_SCALE_MAX, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Controls the thin non-puddle reflection film on exposed ground, including raindrop read between puddles. Higher = wetter ground sheen. Lower = drier reflection between puddles. Does not drive puddle depth or puddle size.");
+			ImGui::TextUnformatted("Thin ground-film reflections and drops between puddles. Higher adds sheen; lower dries the reflection. Puddle depth and size stay unchanged.");
 		}
 
 		Util::Widgets::SliderFloat("Rain Reflection Balance", &rainReflectionBalance, RAIN_REFLECTION_BALANCE_MIN, RAIN_REFLECTION_BALANCE_MAX, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Rain-only balance for the thin ground wet-film. Lower = more cubemap/environment mirror; higher = more direct rain sparkle and less mirror. Deep puddles are unchanged.");
+			ImGui::TextUnformatted("Rain-only ground-film balance. Lower adds cubemap/environment mirror; higher adds rain sparkle and reduces mirror. Deep puddles stay unchanged.");
 		}
 
 		Util::Widgets::SliderFloat("Wet Surface Darkening", &settings.WetDarkeningStrength, 0.0f, 2.0f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("How much active wet surfaces darken. Applies continuously across wet ground and puddles so puddle edges do not get a separate dark band.");
+			ImGui::TextUnformatted("Darken wet ground and puddles continuously, avoiding a separate dark band at puddle edges.");
 		}
 
 		Util::Widgets::SliderFloat("Wet Film Specular Floor", &settings.WetFilmSpecularFloorScale, WET_FILM_SPECULAR_FLOOR_SCALE_MIN, WET_FILM_SPECULAR_FLOOR_SCALE_MAX, "%.2f");
@@ -1680,7 +1680,7 @@ void Wetterness::DrawSettings()
 		MenuUI::SectionHeading("Fade and skin");
 		Util::Widgets::SliderFloat("Wet Highlight Reduction", &settings.WetHighlightReduction, WET_HIGHLIGHT_REDUCTION_MIN, WET_HIGHLIGHT_REDUCTION_MAX, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Reduces bright white thin-film highlights. Higher = less white film glare, lower = brighter highlights. Deep puddles are not the target.");
+			ImGui::TextUnformatted("Reduce white thin-film glare. Higher dims it; lower brightens highlights. Does not target deep puddles.");
 		}
 
 		Util::Widgets::SliderFloat("Wetness Fade Range", &wetnessDistanceFadeRange, WETNESS_DISTANCE_FADE_RANGE_UI_MIN_GAME_UNITS, WETNESS_DISTANCE_FADE_RANGE_UI_MAX_GAME_UNITS, "%.0f units", ImGuiSliderFlags_AlwaysClamp);
@@ -1708,12 +1708,12 @@ void Wetterness::DrawSettings()
 		Util::Widgets::SliderFloat("Puddle Wetness", &settings.MaxPuddleWetness, 0.0f, 6.0f);
 		markPresetDirtyIfEdited();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Overall puddle strength. Higher = stronger puddles and broader puddle coverage, lower = weaker/more limited puddles.");
+			ImGui::TextUnformatted("Puddle strength and coverage. Higher strengthens and broadens puddles; lower weakens and limits them.");
 		}
 
 		Util::Widgets::SliderFloat("Puddle Max Angle", &settings.PuddleMaxAngle, 0.0f, 1.0f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Slope limit for puddle formation. Higher = puddles restricted to flatter ground, lower = puddles can appear on steeper slopes.");
+			ImGui::TextUnformatted("Puddle slope limit. Higher restricts puddles to flatter ground; lower allows steeper slopes.");
 		}
 
 		Util::Widgets::SliderFloat("Puddle Radius", &settings.PuddleRadiusWorldUnits, PUDDLE_RADIUS_UI_MIN_GAME_UNITS, PUDDLE_RADIUS_UI_MAX_GAME_UNITS, "%.0f units", ImGuiSliderFlags_AlwaysClamp);
@@ -1733,34 +1733,34 @@ void Wetterness::DrawSettings()
 
 		Util::Widgets::SliderFloat("Puddle Layout", &puddleLayout, PUDDLE_LAYOUT_MIN, PUDDLE_LAYOUT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Changes puddle placement/pattern while Puddle Radius sets the base puddle size. Lower values = broader smoother placement. Higher values = more broken-up, irregular placement.");
+			ImGui::TextUnformatted("Puddle placement: lower is broad/smooth; higher is irregular/broken up. Puddle Radius sets size.");
 		}
 
 		Util::Widgets::SliderFloat("Puddle Water Look", &settings.PuddleMinWetness, 0.0f, 1.0f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Wetness threshold for puddles to look like standing water. Higher = only stronger puddles become flat/reflective; lower = watery look appears sooner.");
+			ImGui::TextUnformatted("Threshold for standing-water appearance. Higher needs wetter puddles; lower gives flat, reflective water sooner.");
 		}
 
 		Util::Widgets::SliderFloat("Puddle Sky Reflections", &puddleSkyReflectionScale, PUDDLE_SKY_REFLECTION_SCALE_MIN, PUDDLE_SKY_REFLECTION_SCALE_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Scales sky/cubemap reflections only on puddle pixels. 1.0 = current/full reflection. Lower values reduce puddle sky reflection. Direct wet highlights and non-puddle ground wet-film are unchanged.");
+			ImGui::TextUnformatted("Puddle sky/cubemap reflections: 1.0 = full; lower reduces them. Keeps direct wet highlights and non-puddle film unchanged.");
 		}
 
 		ImGui::Dummy(ImVec2(0.0f, 12.0f));
 		Util::Widgets::SliderFloat("Post-Rain Puddle Shine", &settings.PostRainPuddleWaterStrength, POST_RAIN_PUDDLE_SHINE_MIN, POST_RAIN_PUDDLE_SHINE_MAX, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Post-rain puddles only. Scales puddle reflection intensity relative to Wet Reflection Shine. 2.5 = neutral. Lower = dimmer/subtler puddles, higher = stronger/brighter puddles.");
+			ImGui::TextUnformatted("Post-rain puddle reflection relative to Wet Reflection Shine. 2.5 = neutral; lower dims puddles, higher brightens them.");
 		}
 		Util::Widgets::SliderFloat("Post-Rain Water Clarity", &postRainWaterClarity, POST_RAIN_WATER_CLARITY_MIN, POST_RAIN_WATER_CLARITY_MAX, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Post-rain wet reflection clarity. Higher = less cubemap sky glare on post-rain wet reflections, with deeper/clearer body response on puddles. 0 = more mirror-like reflection.");
+			ImGui::TextUnformatted("Post-rain reflection clarity. Higher reduces cubemap sky glare and gives clearer, deeper puddles; 0 is more mirror-like.");
 		}
 	}
 	if (page.Is("shore")) {
 		Util::Widgets::SliderFloat("Shore Wetness", &settings.MaxShoreWetness, 0.0f, 1.0f);
 		markPresetDirtyIfEdited();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Wetness amount near rivers, lakes, and shorelines. Matches the legacy shore mask and also shapes the persistent dry-weather darkening layer.");
+			ImGui::TextUnformatted("Wetness near rivers, lakes and shores. Uses the legacy shore mask and shapes persistent dry-weather darkening.");
 		}
 
 		int shoreRange = static_cast<int>(settings.ShoreRange);
@@ -1781,7 +1781,7 @@ void Wetterness::DrawSettings()
 
 		Util::Widgets::SliderFloat("Shore Persistent Darkening", &shorePersistentDarkeningStrength, SHORE_PERSISTENT_DARKENING_MIN, SHORE_PERSISTENT_DARKENING_MAX, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Persistent shoreline darkening independent of rain runtime. This is the always-on dry-weather shoreline layer. Higher = darker shore banks, lower = subtler darkening.");
+			ImGui::TextUnformatted("Shoreline darkening even in dry weather, independent of rain. Higher darkens banks; lower makes the effect subtler.");
 		}
 	}
 

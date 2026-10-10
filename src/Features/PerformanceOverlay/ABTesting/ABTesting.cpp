@@ -182,12 +182,7 @@ void ABTestingManager::DrawSettingsUI()
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"A/B Testing compares two configurations by automatically swapping between them.\n"
-			"Workflow: Configure your test settings, then enable A/B testing.\n"
-			"- Variant B (TEST) = Your current settings when you enable testing\n"
-			"- Variant A (USER) = Your previously saved user configuration\n"
-			"The initial Variant B interval is an unmeasured warm-up, then testing begins with Variant A.\n"
-			"Set to 0 to disable and restore TEST settings.");
+			"Compare saved USER settings (A) with current TEST settings (B) at a fixed interval.\n1) Configure TEST settings, then enable A/B testing.\n2) The first B interval is unmeasured warm-up; measurement starts with A.\nSet 0 to stop and restore TEST settings.");
 	}
 }
 

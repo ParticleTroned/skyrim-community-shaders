@@ -1122,26 +1122,20 @@ void LightLimitFix::DrawSettings()
 			Util::Widgets::SliderFloat("Cluster Threshold", &settings.ParticleClusterThreshold, kParticleClusterThresholdMin, kParticleClusterThresholdMax, "%.1f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Distance+radius similarity threshold for merging particles into one light.\n"
-					"Higher = more merging, better performance, blurrier lights.\n"
-					"Lower = less merging, more precise, more expensive.");
+					"Particle-light merge threshold based on distance and radius. Higher merges more: faster but blurrier. Lower is more precise but costs more.");
 			}
 
 			Util::Widgets::SliderInt("Max Particles per Emitter", &settings.MaxParticlesPerEmitter, kMaxParticlesPerEmitterMin, kMaxParticlesPerEmitterMax);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Maximum number of particles sampled per emitter per frame.\n"
-					"Higher = closer to the real particle system but more CPU work.\n"
-					"Lower = faster, especially for very dense effects.");
+					"Particle samples per emitter per frame. Higher better matches the effect but costs CPU time; lower helps dense effects.");
 			}
 
 			// NEW: distance cutoff for particle lights
 			Util::Widgets::SliderFloat("Max Particle Distance", &settings.MaxParticleDistance, 1000.0f, kMaxParticleDistanceMax, "%.0f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Particle lights beyond this distance from the camera are skipped entirely.\n"
-					"Lower = better performance, but distant effects won't contribute light.\n"
-					"Higher = more distant particle lighting, but more cost.");
+					"Skip particle lights beyond this camera distance. Lower saves work but removes distant lighting; higher extends lighting at more cost.");
 			}
 
 			ImGui::Spacing();
@@ -1160,10 +1154,7 @@ void LightLimitFix::DrawSettings()
 			Util::Widgets::Checkbox("Legacy particle appearance", &settings.UseParticleLights087LegacyMode);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Restores the v0.8.7 particle-light alpha model.\n"
-					"When enabled, brightness comes from material / shader / vertex alpha and RadiusMult affects radius only.\n"
-					"When disabled, the current path uses RadiusMult for both intensity and radius.\n"
-					"This is most noticeable on billboard-backed particle lights.");
+					"Restore the v0.8.7 particle-light alpha model: material/shader/vertex alpha sets brightness; RadiusMult affects only radius. Off uses RadiusMult for intensity and radius. Most visible on billboard lights.");
 			}
 
 			ImGui::Spacing();
@@ -1176,9 +1167,7 @@ void LightLimitFix::DrawSettings()
 			Util::Widgets::SliderFloat("Intensity Scale", &settings.JsonPlacedLightIntensity, kJsonPlacedLightIntensityMin, kJsonPlacedLightIntensityMax, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Scales intensity for attached runtime lights generated from light records.\n"
-					"This primarily targets Light Placer-style JSON lights.\n"
-					"Requires Inverse Square Lighting runtime metadata to identify those lights.");
+					"Scale attached lights from light records, mainly Light Placer JSON lights. Requires Inverse Square Lighting metadata to identify them.");
 			}
 
 			Util::Widgets::Checkbox("Interiors Only", &settings.JsonPlacedLightsInteriorsOnly);
@@ -1193,7 +1182,7 @@ void LightLimitFix::DrawSettings()
 			ImGui::EndDisabled();
 
 			if (!jsonPlacedLightsSupported) {
-				MenuUI::DetailNote("Placed-light adjustments require Inverse Square Lighting. Enable it in the sidebar and restart the game.");
+				MenuUI::DetailNote("Placed-light adjustments require Inverse Square Lighting. Enable it in its header, or clear its checkbox in Advanced > Startup, save settings and restart if disabled at startup.");
 			}
 
 			ImGui::Spacing();
@@ -1206,8 +1195,7 @@ void LightLimitFix::DrawSettings()
 				SetContactShadowsEnabled(contactShadows);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Adds short screen-space contact shadows to LLF point lights.\n"
-					"Uses a cached per-cluster candidate list to limit the number of ray marches.");
+					"Add short screen-space contact shadows to LLF point lights. A cached per-cluster list limits ray marches.");
 			}
 
 			const auto shadowsDisabled = Util::DisableGuard(!contactShadows);
@@ -1227,7 +1215,7 @@ void LightLimitFix::DrawSettings()
 				settings.ContactShadowClusterBudget = static_cast<uint>(contactShadowClusterBudget);
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Maximum cached point and particle lights per cluster that can cast contact shadows. Set to 0 to disable clustered contact shadows.");
+				ImGui::Text("Maximum cached point/particle contact-shadow lights per cluster. 0 disables clustered contact shadows.");
 			}
 
 			int strictContactShadowBudget = static_cast<int>(settings.StrictContactShadowBudget);

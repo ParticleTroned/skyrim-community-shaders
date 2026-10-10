@@ -33,9 +33,7 @@ void ExtendedMaterials::DrawParallaxStrength()
 		SanitizeSettings(settings);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(
-			"Scales apparent depth on supported meshes and terrain, including TruePBR. "
-			"1 preserves material depth; 0 disables parallax depth and its shadows while keeping terrain height blending. "
-			"Higher values can increase stretching at shallow angles. Water has a separate control.");
+			"Scale depth on supported meshes and terrain, including TruePBR. 1 keeps authored depth; 0 disables parallax and its shadows but keeps terrain height blending. Higher may stretch textures at shallow angles. Water has its own control.");
 	}
 }
 
@@ -64,9 +62,7 @@ void ExtendedMaterials::DrawSettings()
 		Util::UIntCheckbox("Enable Complex Material", settings.EnableComplexMaterial);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Enables support for the Complex Material specification which makes use of the environment mask. "
-				"This includes parallax, as well as more realistic metals and specular reflections. "
-				"May lead to some warped textures on modded content which have an invalid alpha channel in their environment mask. ");
+				"Enable Complex Material support through environment masks: parallax, metals and specular reflections. Invalid mask alpha on modded content may warp textures.");
 		}
 
 		ImGui::Spacing();
@@ -87,8 +83,7 @@ void ExtendedMaterials::DrawSettings()
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Enables terrain parallax using the alpha channel of each landscape texture. "
-				"Therefore, all landscape textures must support parallax for this effect to work properly. ");
+				"Enable terrain parallax from landscape texture alpha. All landscape textures must support parallax.");
 		}
 		Util::UIntCheckbox("Enable Terrain Height Blending", settings.EnableHeightBlending);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -107,8 +102,7 @@ void ExtendedMaterials::DrawSettings()
 		Util::UIntCheckbox("Enable Shadows", settings.EnableShadows);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Enables cheap soft shadows when using parallax. "
-				"This applies to all directional and point lights. ");
+				"Add inexpensive soft parallax shadows for all directional and point lights.");
 		}
 		ImGui::Spacing();
 		ImGui::Spacing();

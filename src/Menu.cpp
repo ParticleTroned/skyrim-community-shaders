@@ -1247,9 +1247,7 @@ void Menu::DrawDisableAtBootSettings()
 	auto& disabledFeatures = state->GetDisabledFeatures();
 
 	ImGui::Text(
-		"Select features to disable at boot. "
-		"This is the same as deleting a feature.ini file. "
-		"Restart will be required to reenable.");
+		"Checked features are disabled at startup, like removing their feature INI. Save settings and restart to apply changes.");
 
 	ImGui::Spacing();
 
@@ -1307,9 +1305,7 @@ void Menu::DrawFooter()
 		ImGui::PopStyleColor();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextWrapped(
-			"Current Windows system commit and total commit capacity. A minimum total commit capacity "
-			"of 128 GB is recommended for all systems. This text is shown in red when the total is "
-			"below that minimum.");
+			"Windows committed memory / total commit capacity. Recommended minimum total: 128 GB on all systems. Red indicates lower total capacity.");
 	}
 
 	ImGui::SameLine();

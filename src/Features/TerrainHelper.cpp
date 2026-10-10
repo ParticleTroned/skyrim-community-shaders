@@ -46,7 +46,7 @@ void TerrainHelper::DrawSettings()
 	if (!page.Is("appearance"))
 		return;
 
-	MenuUI::DetailText("Terrain Helper matches distant terrain to nearby ground using its companion plugin. Use Enabled in the header to control it; there are no additional tuning controls.");
+	MenuUI::DetailText("Match distant terrain to nearby ground using Terrain Helper's companion plugin. Control it with Enabled in the header; no further tuning.");
 }
 
 void TerrainHelper::SetPerformanceCostMeasurementEnabled(bool a_enabled)

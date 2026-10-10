@@ -283,7 +283,7 @@ int main()
 			Check(output.contains("Shared GPU pass timings") && !output.contains("Instrumented subtotal"), "shared shader page claims a feature cost subtotal");
 		}
 		const auto vr = Draw("VR", 1);
-		Check(vr.contains("StereoBlend") && vr.contains("ScreenSpaceGI::GI") && vr.contains("Partial VR coverage"), "VR lost stereo or partial shared coverage");
+		Check(vr.contains("StereoBlend") && vr.contains("ScreenSpaceGI::GI") && vr.contains("Partial VR timings"), "VR lost stereo or partial shared coverage");
 		Draw("TruePBR", -1, 650, 27);
 		Draw("TruePBR", -1, 650, 27);
 		Draw("TruePBR", -1, 350, 27);

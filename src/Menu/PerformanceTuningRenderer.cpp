@@ -2088,10 +2088,10 @@ namespace
 			else if (!feature->IsPerformanceCostMeasurementReady())
 				ImGui::TextUnformatted(feature->GetPerformanceCostMeasurementWaitText());
 			ImGui::TextWrapped(
-				"CS closes automatically for the complete run. Keep the headset and scene still for about %.0f seconds; a small overlay shows progress and CS reopens with the results.",
+				"The menu closes for the run and reopens with results. Keep the scene and headset still for about %.0f seconds; the overlay shows progress.",
 				GetFeatureCostExpectedRunSeconds(feature));
 			ImGui::TextWrapped(
-				"After %.0f seconds of settling following menu closure, current settings are measured as %zu intervals of %.0f ms. The feature then changes to %s, settles for %.0f seconds, and measures %zu more intervals before restoring the exact prior state and waiting %.0f second to verify restoration.",
+				"The run settles for %.0f seconds, then measures current settings in %zu intervals of %.0f ms. It switches to %s, settles for %.0f seconds and measures %zu intervals. It restores the exact prior state and verifies it after %.0f second.",
 				kFeatureCostInitialWaitSeconds,
 				kFeatureCostMeasurementBlockCount,
 				kFeatureCostIntervalMilliseconds,
@@ -2100,13 +2100,13 @@ namespace
 				kFeatureCostMeasurementBlockCount,
 				kFeatureCostRestoreWaitSeconds);
 			ImGui::TextWrapped(
-				"If game-frame timing is interrupted during capture, only that %.0f-second measurement restarts. Readiness can extend the settling and restoration waits.",
+				"Interrupted game timing restarts only that %.0f-second measurement. Readiness may extend settling/restoration waits.",
 				kFeatureCostMeasurementSeconds);
 			ImGui::TextWrapped(
 				"After completion, wait %.0f seconds before remeasuring or starting the next feature or Upscaling case.",
 				kFeatureCostRestartCooldownSeconds);
-			ImGui::TextWrapped("GPU and CPU rows tolerate up to two missing raw samples across both states. Three or more make only that row unavailable; missing data never blocks Game or FPS.");
-			ImGui::TextWrapped("The automatic idle/vanity camera remains suppressed for the complete run and its previous delay is restored afterward.");
+			ImGui::TextWrapped("GPU/CPU rows allow two missing raw samples across both states. Three or more invalidate only that row; missing GPU/CPU data does not block Game/FPS.");
+			ImGui::TextWrapped("The idle/vanity camera is suppressed throughout the run; its previous delay returns afterward.");
 			if (feature && feature->GetShortName() == "Skylighting") {
 				ImGui::TextWrapped("For Skylighting, the comparison state is its in-game Enable toggle set to Off, not a lower preset.");
 			}
@@ -2724,7 +2724,7 @@ void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature)
 		}
 	}
 	Util::AddTooltip(reason ? reason : busy   ? "Wait for the current measurement to finish." :
-								   !supported ? "This feature has no separate runtime switch. Change its startup setting in Advanced > Startup, save settings and restart the game." :
+								   !supported ? "No runtime switch. Change startup in Advanced > Startup, save settings and restart." :
 												"Turns this feature on or off while keeping your current tuning.");
 }
 
@@ -2733,8 +2733,8 @@ namespace
 	void RenderQuickScan()
 	{
 		MenuUI::SectionHeading("Quick scan");
-		MenuUI::DetailText("Keep the scene still. CS closes, waits five seconds for rendering to settle, then captures 300 frames for all instrumented features together.");
-		MenuUI::DetailText("These are instrumented CPU and GPU self times, not the savings from switching a feature off. The existing on/off comparisons are unchanged.");
+		MenuUI::DetailText("Keep the scene still. The menu closes; CSX waits five seconds, then captures 300 frames for all instrumented features.");
+		MenuUI::DetailText("Instrumented CPU/GPU self times, not on/off savings. Existing on/off comparisons are unchanged.");
 		{
 			auto disabled = Util::DisableGuard(PerformanceTuningRenderer::HasActiveMeasurements());
 			if (ImGui::Button("Start quick scan")) {
@@ -2749,7 +2749,7 @@ namespace
 		if (g_quickScan.controller.phase != PerformanceQuickScan::Phase::Complete)
 			return;
 		ImGui::Text("Captured %u frames in %.1f seconds after settling.", g_quickScan.resolvedFrames, g_quickScan.captureSeconds);
-		MenuUI::DetailText("Sorted by GPU time. -- means shared-only, inactive, or incomplete timing coverage. Shared shader work and work on other GPU queues are not included.");
+		MenuUI::DetailText("Sorted by GPU time. -- = shared-only, inactive or incomplete coverage. Excludes shared shader work and other GPU queues.");
 		if (ImGui::BeginTable("##QuickScanResults", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
 			const SKSE::stl::scope_exit endTable([] { ImGui::EndTable(); });
 			ImGui::TableSetupColumn("Feature");
@@ -2798,14 +2798,14 @@ namespace
 			g_featureCostUiMessage = error ? "Measurement could not start. Check that a game is loaded, the editor is closed, and the features are ready." : "";
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextWrapped("Measure every active, editable feature against Off/None, one at a time. Inactive features and controls owned by scene or weather overrides are skipped. Each comparison restores its exact prior settings. CS closes for the complete run and reopens with the results. Keep the scene still; allow about 41 seconds per feature. Use the menu shortcut to cancel.");
+			ImGui::TextWrapped("CSX compares each active, editable feature with Off/None, skips inactive or scene/weather-controlled features, and restores exact settings after each comparison. The menu closes and reopens with results. Keep the scene still; allow about 41 seconds per feature. Cancel with the menu shortcut.");
 		RenderMeasurementStatus(g_featureCostBatch.active);
 		if (!g_featureCostUiMessage.empty())
 			MenuUI::DetailText(g_featureCostUiMessage.c_str());
 		if (!g_featureCostBatch.failureMessage.empty())
 			MenuUI::DetailText(g_featureCostBatch.failureMessage.c_str());
 		MenuUI::SectionHeading("Features and results");
-		MenuUI::DetailText("Choose the enabled features below. These are individual on/off costs; percentages do not add up to a total. Unmeasured or unavailable results show --.");
+		MenuUI::DetailText("Select enabled features below. Individual on/off costs do not add up to a total. -- = unmeasured or unavailable.");
 		const bool busy = PerformanceTuningRenderer::HasActiveMeasurements();
 		if (ImGui::BeginTable("##PerformanceFeatureCosts", 5,
 				ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {

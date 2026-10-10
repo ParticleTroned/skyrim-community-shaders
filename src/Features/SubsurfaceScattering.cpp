@@ -195,7 +195,7 @@ void SubsurfaceScattering::DrawSettings()
 			ImGui::PushID("Base Profile");
 			Util::Widgets::ColorEdit3("Mean Free Path Color", (float*)&settings.MeanFreePathBase);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Controls how far light goes into the subsurface in the red, green, and blue channel. It is scaled by the Mean Free Path Distance.");
+				ImGui::Text("Light penetration in red, green and blue, scaled by Mean Free Path Distance.");
 			}
 			Util::Widgets::SliderFloat("Mean Free Path Distance", &settings.MeanFreePathBase.w, 0.01f, 10.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -210,7 +210,7 @@ void SubsurfaceScattering::DrawSettings()
 			ImGui::PushID("Humanoid Profile");
 			Util::Widgets::ColorEdit3("Mean Free Path Color", (float*)&settings.MeanFreePathHuman);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Controls how far light goes into the subsurface in the red, green, and blue channel. It is scaled by the Mean Free Path Distance.");
+				ImGui::Text("Light penetration in red, green and blue, scaled by Mean Free Path Distance.");
 			}
 			Util::Widgets::SliderFloat("Mean Free Path Distance", &settings.MeanFreePathHuman.w, 0.01f, 10.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {

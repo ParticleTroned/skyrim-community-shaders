@@ -34,7 +34,7 @@ extract("src/Features/Upscaling.cpp"
     "bool Upscaling::ToggleNeuralRendering("
     "void Upscaling::DrawNeuralRenderingSettings(" master_control)
 extract("src/Features/Upscaling.cpp"
-    "\t\tconst bool dlssSelected = a_upscaleMethod == UpscaleMethod::kDLSS;"
+    "\t\tNeuralRendering::NormalizeRenderingCoverage(settings, globals::game::isVR);\n\t\tconst bool dlssSelected = a_upscaleMethod == UpscaleMethod::kDLSS;"
     "\t\t{\n\t\t\tif (page.Is(\"diagnostics\")" selection_controls)
 extract("src/Features/Upscaling.cpp"
     "bool Upscaling::IsNeuralRenderingEnabled("

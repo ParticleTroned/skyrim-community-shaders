@@ -1,4 +1,5 @@
 #include "Features/FoveatedCommon.h"
+#include "Features/Upscaling/FoveatedMaskCalibration.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Features/Upscaling/NeuralRendering/Runtime.h"
 
@@ -47,6 +48,8 @@ struct Upscaling
 		bool periphery_taa_enable = false;
 		uint32_t neuralRenderingMode = 2;
 		float foveatedCenterArea = 0.6f, periphery_taa_center_area = 0.3f;
+		float foveatedOuterBlendFeather = FoveatedCommon::kCenterFeather;
+		FoveatedMaskCalibration::Reference foveatedCalibrationReference;
 		float foveatedCenterHorizontalScale = 1.1f;
 		float foveatedLeftEyeMaskOffsetX = 0, foveatedLeftEyeMaskOffsetY = 0;
 		float foveatedRightEyeMaskOffsetX = 0, foveatedRightEyeMaskOffsetY = 0;
@@ -75,7 +78,7 @@ struct Upscaling
 	bool GetVRRenderScaleModePreference() const { return requested; }
 	bool IsVRRenderScaleModeActive() const { return active; }
 	bool IsNeuralRenderingFovConfigurationAvailable() const { return settings.foveatedVendorDispatch && settings.foveatedCenterArea < 0.999f; }
-	auto GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
+	auto GetNeuralRenderingMode() const { return NeuralRendering::ConfiguredRenderingMode(settings.neuralRenderingMode); }
 	static uint32_t ClampDLSSPresetUInt(uint32_t value) { return std::min(value, 5u); }
 	static bool IsNeuralRenderingEnabled(const Settings&) noexcept;
 	bool IsNeuralRenderingEnabled() const noexcept { return neuralRenderingFeatureAvailable && IsNeuralRenderingEnabled(settings); }
@@ -125,6 +128,8 @@ int main()
 		using Mode = NeuralRendering::RenderingMode;
 		using Backend = Upscaling::VRRenderScaleBackendKind;
 		Upscaling upscaling;
+		upscaling.settings.foveatedCalibrationReference.version = 1;
+		upscaling.settings.foveatedCalibrationReference.leftToRight = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
 		Upscaling::VRRenderScaleProfileSnapshot profile{};
 		profile.valid = profile.active = true;
 		profile.method = Method::kDLSS;
@@ -159,6 +164,7 @@ int main()
 										upscaling.settings.neuralRenderingRenderscaleFov = masked;
 										upscaling.settings.foveatedVendorDispatch = fov;
 										upscaling.settings.periphery_taa_enable = taa;
+										NeuralRendering::NormalizeRenderingCoverage(upscaling.settings, vr);
 										const bool expectedDispatch = upscaling.IsFoveatedVendorDispatchEnabled(method);
 										const bool expectedTAA = upscaling.IsPeripheryTAAEnabled(method);
 										const auto reads = upscaling.liveRequestReads;

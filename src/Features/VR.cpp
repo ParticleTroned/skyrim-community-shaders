@@ -2085,7 +2085,6 @@ namespace
 		};
 
 		if (maskOnly) {
-			upscaling.DrawFoveatedSetupInstructions();
 			drawSection("Shared FOV Mask");
 			upscaling.DrawFoveatedSettings();
 		}

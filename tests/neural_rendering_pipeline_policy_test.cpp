@@ -12,6 +12,29 @@ int main()
 			NeuralRendering::EffectiveDirectCommit(mode, true) != (mode != RenderingMode::ReducedResolution))
 			return 1;
 	}
+	static_assert(NeuralRendering::ConfiguredRenderingMode(0) == RenderingMode::FullResolution);
+	static_assert(NeuralRendering::ConfiguredRenderingMode(1) == RenderingMode::FullResolution);
+	static_assert(NeuralRendering::ConfiguredRenderingMode(2) == RenderingMode::ReducedResolution);
+	struct CoverageSettings
+	{
+		std::uint32_t neuralRenderingMode;
+		bool foveatedVendorDispatch, neuralRenderingFovOnly, neuralRenderingRenderscaleFov;
+		float foveatedCenterArea;
+	};
+	for (bool vr : { false, true }) {
+		for (bool enabled : { false, true }) {
+			for (float scale : { 0.25f, 0.8f, 1.0f, std::numeric_limits<float>::quiet_NaN() }) {
+				for (std::uint32_t mode : { 0u, 1u, 2u }) {
+					CoverageSettings settings{ mode, enabled, !enabled, !enabled, scale };
+					NeuralRendering::NormalizeRenderingCoverage(settings, vr);
+					const bool masked = vr && enabled && FoveatedCommon::IsActiveCoverage(scale);
+					if (settings.neuralRenderingFovOnly != masked || settings.neuralRenderingRenderscaleFov != masked ||
+						settings.neuralRenderingMode != static_cast<std::uint32_t>(NeuralRendering::ConfiguredRenderingMode(mode)))
+						return 1;
+				}
+			}
+		}
+	}
 	static_assert(NeuralRendering::RequiresVRRenderScale(true, RenderingMode::ReducedResolution));
 	static_assert(!NeuralRendering::RequiresVRRenderScale(false, RenderingMode::ReducedResolution));
 	static_assert(!NeuralRendering::RequiresVRRenderScale(true, RenderingMode::FullResolution));
@@ -50,10 +73,6 @@ int main()
 	static_assert(NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::FullResolution));
 	static_assert(!NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::Foveated));
 	static_assert(NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::ReducedResolution));
-	static_assert(!NeuralRendering::DefaultRenderscaleFov(false, false));
-	static_assert(!NeuralRendering::DefaultRenderscaleFov(false, true));
-	static_assert(!NeuralRendering::DefaultRenderscaleFov(true, false));
-	static_assert(NeuralRendering::DefaultRenderscaleFov(true, true));
 	static_assert(NeuralRendering::IsRenderingModeSelectable(false, RenderingMode::FullResolution, false));
 	static_assert(NeuralRendering::IsRenderingModeSelectable(false, RenderingMode::ReducedResolution, false));
 	static_assert(!NeuralRendering::IsRenderingModeSelectable(false, RenderingMode::Foveated, true));

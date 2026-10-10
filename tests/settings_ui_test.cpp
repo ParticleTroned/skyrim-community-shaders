@@ -1549,6 +1549,7 @@ int main()
 				 NeuralSliderCase{ "NR central area", &Upscaling::Settings::neuralRenderingCentralAreaPercent, DrawNeuralCentralAreaSettings, 25, 100 },
 				 NeuralSliderCase{ "NR central feather", &Upscaling::Settings::neuralRenderingCentralFeatherPixels, DrawNeuralCentralAreaSettings, 0, 256 } }) {
 			Upscaling::Settings neuralSettings;
+			neuralSettings.neuralRenderingCentralAreaPercent = 75;
 			const auto initialValue = neuralSettings.*test.member;
 			auto drawNeuralSlider = [&] {
 				ImGui::PushItemWidth(300);

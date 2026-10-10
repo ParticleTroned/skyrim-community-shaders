@@ -770,11 +770,7 @@ std::string_view NeuralRenderingFeature::GetSettingsFooterText() const
 	const auto& upscaling = globals::features::upscaling;
 	if (upscaling.GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution)
 		return globals::game::isVR ? "Requires scaled DLSS. In VR, turn Render Scale on." : "Requires scaled DLSS.";
-	if (upscaling.GetNeuralRenderingMode() == NeuralRendering::RenderingMode::Foveated)
-		return "VR only. Requires DLSS or FSR and an enabled FOV mask.";
-	if (upscaling.settings.neuralRenderingFovOnly)
-		return "Requires an enabled FOV mask with DLSS or FSR.";
-	return "Processes the full view at full resolution.";
+	return globals::game::isVR ? "Runs after upscaling. Coverage follows VR > FOV." : "Runs after upscaling at output resolution.";
 }
 
 void NeuralRenderingFeature::DrawSettings()

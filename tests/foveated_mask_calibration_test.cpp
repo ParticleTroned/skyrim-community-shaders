@@ -18,6 +18,62 @@ namespace
 		}
 	}
 
+	void CheckInheritedBoundary()
+	{
+		struct Settings
+		{
+			float foveatedCenterArea = 0.6f, foveatedOuterBlendFeather = 0.05f;
+			float periphery_taa_center_area = 0.3f, periphery_taa_outer_scale = 0.8f, periphery_taa_center_blend_feather = 0.02f;
+			bool periphery_taa_enable = true;
+			Reference foveatedCalibrationReference;
+		} settings;
+		InheritFovOnlyBoundary(settings);
+		Require(!settings.periphery_taa_enable, "Uncalibrated saved TAA must fall back to FOV only");
+		for (const float outer : { 0.25f, 0.6f, 0.85f, 0.95f }) {
+			for (const float feather : { 0.0f, 0.05f, 0.1f }) {
+				settings.foveatedCenterArea = outer;
+				settings.foveatedOuterBlendFeather = feather;
+				settings.foveatedCalibrationReference = { .version = 1,
+					.outer = { .scale = outer + 2.0f * std::max(feather, FoveatedCommon::kMinimumFeather) },
+					.leftToRight = { 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+					.feather = std::max(feather, FoveatedCommon::kMinimumFeather) };
+				const auto reference = settings.foveatedCalibrationReference;
+				Require(HasFovOnlySetup(settings), "Valid FOV-only calibration must permit TAA");
+				for (const float inner : { 0.25f, 0.3f, 0.6f, 1.0f }) {
+					settings.periphery_taa_enable = true;
+					settings.periphery_taa_center_area = inner;
+					InheritFovOnlyBoundary(settings);
+					Require(settings.periphery_taa_enable && settings.foveatedCalibrationReference == reference &&
+								settings.foveatedCenterArea == outer && settings.foveatedOuterBlendFeather == feather,
+						"Mode and inner changes must preserve FOV-only geometry and its reference");
+					Require(settings.periphery_taa_center_area <= outer && settings.periphery_taa_center_area >= MinimumInnerScale(settings),
+						"The inner area must stay bounded by inherited feather support");
+					Require(settings.periphery_taa_center_blend_feather == feather, "TAA must inherit FOV-only feathering");
+					for (const float horizontal : { 1.0f, 1.8f }) {
+						for (const float offset : { -0.3f, 0.0f, 0.3f }) {
+							const auto original = FoveatedMaskVisualization::MeasureCoverage(outer, feather, horizontal, offset, 0.04f, false, 1.0f);
+							const auto inherited = FoveatedMaskVisualization::MeasureCoverage(settings.periphery_taa_center_area,
+								settings.periphery_taa_center_blend_feather, horizontal, offset, 0.04f, true, settings.periphery_taa_outer_scale);
+							Require(std::abs(original.totalPercent - inherited.totalPercent) < 0.0001f,
+								"Inherited outer coverage must remain equal across centre sizes, clipping and wide feather support");
+						}
+					}
+				}
+			}
+		}
+		settings.foveatedCalibrationReference.peripheryTaa = true;
+		Require(!HasFovOnlySetup(settings), "A legacy TAA reference does not prove FOV-only setup");
+		settings.foveatedCalibrationReference.peripheryTaa = false;
+		settings.foveatedCalibrationReference.fullImage = true;
+		Require(!HasFovOnlySetup(settings), "Full-eye calibration has no bounded TAA periphery");
+		settings.foveatedCalibrationReference.fullImage = false;
+		settings.foveatedCalibrationReference.leftToRight = {};
+		Require(!HasFovOnlySetup(settings), "Corrupt saved projections must never enable TAA");
+		settings.periphery_taa_center_area = std::numeric_limits<float>::quiet_NaN();
+		InheritFovOnlyBoundary(settings);
+		Require(!settings.periphery_taa_enable && std::isfinite(settings.periphery_taa_center_area), "Corrupt saved inner values must sanitize safely");
+	}
+
 	void CheckPersistence(const Reference& reference)
 	{
 		const nlohmann::json saved = reference;
@@ -180,6 +236,7 @@ namespace
 
 int main()
 {
+	CheckInheritedBoundary();
 	const auto started = std::chrono::steady_clock::now();
 	Reference reference{ .version = 1, .outer = { .scale = 0.6f, .horizontalScale = 1.0f }, .leftToRight = { 1, 0, 0, 0, 1, 0, 0, 0, 1 } };
 	CheckPersistence(reference);

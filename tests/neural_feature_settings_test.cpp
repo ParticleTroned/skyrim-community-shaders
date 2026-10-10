@@ -123,6 +123,18 @@ int main()
 			require(accepted == (legacy == 0u || legacy == 1u));
 		}
 	}
+	NeuralRendering::ValidateRenderingSettingsNormalization(
+		{ { "neuralRenderingMode", 1 }, { "neuralRenderingFovOnly", false }, { "neuralRenderingRenderscaleFov", false } },
+		{ { "neuralRenderingMode", 0 }, { "neuralRenderingFovOnly", true }, { "neuralRenderingRenderscaleFov", true } });
+	for (const auto invalidMode : { Json(-1), Json(3), Json(1.5), Json(true), Json("1") }) {
+		bool accepted = false;
+		try {
+			NeuralRendering::ValidateRenderingSettingsNormalization({ { "neuralRenderingMode", invalidMode } }, { { "neuralRenderingMode", 0 } });
+			accepted = true;
+		} catch (const std::invalid_argument&) {
+		}
+		require(!accepted);
+	}
 	bool tuningRejected = false;
 	try {
 		NeuralRendering::ValidateRenderingSettingsNormalization(
@@ -139,11 +151,11 @@ int main()
 	colour.state.experiments.captureFrameEvidence = true;
 	Json saved;
 	feature.SaveSettings(saved);
-	require(saved.at("rendering").size() == 1 && saved.at("rendering").at("neuralRenderingMode") == 1);
+	require(saved.at("rendering").size() == 1 && saved.at("rendering").at("neuralRenderingMode") == 0);
 	require(!saved.contains("experiments") && !saved.at("colour").contains("experiments"));
 	backend.rendering = Json::object();
 	feature.LoadSettings(saved);
-	require(backend.applies == 1 && backend.rendering.at("neuralRenderingMode") == 1);
+	require(backend.applies == 1 && backend.rendering.at("neuralRenderingMode") == 0);
 	require(!colour.state.experiments.captureFrameEvidence);
 	for (const bool masked : { true, false }) {
 		backend.rendering["neuralRenderingFovOnly"] = !masked;
@@ -152,8 +164,7 @@ int main()
 		feature.SaveSettings(roundTrip);
 		backend.rendering = Json::object();
 		feature.LoadSettings(roundTrip);
-		require(backend.rendering.at("neuralRenderingRenderscaleFov") == masked &&
-				backend.rendering.at("neuralRenderingFovOnly") == !masked);
+		require(!backend.rendering.contains("neuralRenderingRenderscaleFov") && !backend.rendering.contains("neuralRenderingFovOnly"));
 	}
 	const auto priorColour = colour.Snapshot();
 	const auto priorChanges = colour.changes;

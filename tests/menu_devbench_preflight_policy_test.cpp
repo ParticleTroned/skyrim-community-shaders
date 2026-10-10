@@ -1,4 +1,5 @@
 #include "MenuDevBenchPreflightPolicy.h"
+#include <initializer_list>
 
 using namespace MenuDevBenchPreflightPolicy;
 
@@ -12,7 +13,8 @@ namespace
 			.stabilizerActiveForSession = true,
 			.developerMode = true,
 			.foveatedVendorDispatch = true,
-			.foveatedCenterArea = kFoveatedCenterArea,
+			.fovOnlyCalibrated = true,
+			.foveatedCenterArea = FovOnlyFixtureScale(0.05),
 			.peripheryTAAEnabled = true,
 			.peripheryTAACenterArea = kPeripheryTAACenterArea,
 			.peripheryTAAOuterScale = kPeripheryTAAOuterScale,
@@ -61,6 +63,18 @@ namespace
 		foveationOff.foveatedVendorDispatch = false;
 		if (HasRequiredFoveation(foveationOff) || IsReady(foveationOff) || IsReady(foveationOff, Preparation::Tuning))
 			return false;
+
+		auto uncalibrated = ready;
+		uncalibrated.fovOnlyCalibrated = false;
+		if (HasRequiredFoveation(uncalibrated) || IsReady(uncalibrated))
+			return false;
+		for (const double feather : { 0.0, 0.01, 0.05, 0.1 }) {
+			auto inherited = ready;
+			inherited.foveatedOuterFeather = feather;
+			inherited.foveatedCenterArea = FovOnlyFixtureScale(feather);
+			if (!HasRequiredFoveation(inherited))
+				return false;
+		}
 
 		auto wrongOuterScale = ready;
 		wrongOuterScale.peripheryTAAOuterScale = 0.71;

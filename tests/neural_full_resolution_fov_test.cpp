@@ -52,14 +52,13 @@ struct Upscaling
 #include "neural_full_resolution_fov_types.h"
 	bool available = true;
 	std::array<float2, 2> fovOffsets{ float2{ -0.03f, 0.02f }, float2{ 0.04f, -0.01f } };
-	std::array<float2, 2> taaOffsets{ float2{ -0.06f, 0.03f }, float2{ 0.07f, -0.02f } };
 	bool IsNeuralRenderingRequested() const { return settings.neuralRenderingEnabled; }
 	auto GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
 	UpscaleMethod method = UpscaleMethod::kDLSS;
 	UpscaleMethod GetRuntimeUpscaleMethod() const { return method; }
 	bool IsActiveUpscalingFoveatedProfileAvailable() const { return available; }
 	bool IsPeripheryTAAEnabled(UpscaleMethod) const { return available && settings.periphery_taa_enable; }
-	auto GetResolvedFoveatedMaskCenterOffsets(bool taa) const { return taa ? taaOffsets : fovOffsets; }
+	auto GetResolvedFoveatedMaskCenterOffsets(bool) const { return fovOffsets; }
 	ActiveUpscalingFoveatedProfile GetActiveUpscalingFoveatedProfile() const;
 	bool BuildFoveatedDispatchRects(uint32_t, uint32_t, uint32_t, uint32_t, bool,
 		float, float, float, UpscaleMethod, bool, const ActiveUpscalingFoveatedProfile* = nullptr);
@@ -151,21 +150,22 @@ int main()
 		const auto centerOnly = upscaling.foveatedRectCache.plan;
 		upscaling.settings.periphery_taa_enable = true;
 		const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
-		Require(profile.vendorCenterScale == 0.35f && profile.sharedVisibleScale == 0.8f && profile.usesPeripheryTAAOuterMask,
-			"FOV+TAA must use its outer visible mask, not either vendor center");
+		Require(profile.vendorCenterScale == 0.35f && profile.sharedVisibleScale == upscaling.settings.foveatedCenterArea && profile.usesPeripheryTAAOuterMask,
+			"FOV+TAA must preserve the FOV-only visible boundary independently of the vendor centre");
 		CheckSharedPlan(upscaling);
-		Require(!Equal(centerOnly.eyes[0].output, upscaling.foveatedRectCache.plan.eyes[0].output),
-			"Switching active profiles must rebuild the prepared guide crop");
+		Require(Equal(centerOnly.eyes[0].output, upscaling.foveatedRectCache.plan.eyes[0].output),
+			"Switching to TAA must preserve the inherited visible guide crop");
 		const auto taaPlan = upscaling.foveatedRectCache.plan;
 		upscaling.settings.neuralRenderingBlendFeather = 0.0f;
 		upscaling.settings.periphery_taa_center_blend_feather = 0.10f;
 		CheckSharedPlan(upscaling);
 		Require(Equal(taaPlan.eyes[1].output, upscaling.foveatedRectCache.plan.eyes[1].output),
 			"Independent NR/vendor feathers cannot alter the shared mask");
-		upscaling.taaOffsets[1].x -= 0.03f;
+		upscaling.fovOffsets[1].x -= 0.03f;
 		CheckSharedPlan(upscaling);
 		Require(!Equal(taaPlan.eyes[1].output, upscaling.foveatedRectCache.plan.eyes[1].output),
 			"Eye offset changes must invalidate prepared geometry");
+		upscaling.settings.foveatedCenterArea = 1.0f;
 		upscaling.settings.periphery_taa_outer_scale = 1.0f;
 		const auto fullSharedProfile = upscaling.GetActiveUpscalingFoveatedProfile();
 		Require(fullSharedProfile.available && fullSharedProfile.vendorCenterScale < 0.999f &&

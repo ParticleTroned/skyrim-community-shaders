@@ -67,7 +67,7 @@ int main()
 				{ { "action", "nr_configure" }, { "mode", value }, { "fovOnly", false },
 					{ "characterEnabled", true }, { "characterVisualIsolationEnabled", true } },
 				request, error));
-			require(request.mode == mode && request.fovOnly == false && request.HasAnyControl());
+			require(request.mode == NeuralRendering::ConfiguredRenderingMode(index) && request.fovOnly == false && request.HasAnyControl());
 			require(request.characterEnabled == true && request.characterVisualIsolationEnabled == true);
 		}
 	}
@@ -167,5 +167,19 @@ int main()
 		request = {};
 		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "renderscaleFov", invalid } }, request, error));
 		require(error.at("errorCode") == "nr_renderscale_fov_invalid");
+	}
+	for (bool sharedMask : { false, true }) {
+		for (const auto full : { std::optional<bool>{}, std::optional(false), std::optional(true) }) {
+			for (const auto scaled : { std::optional<bool>{}, std::optional(false), std::optional(true) }) {
+				request = {};
+				request.fovOnly = full;
+				request.renderscaleFov = scaled;
+				error = nullptr;
+				const bool allowed = (!full || *full == sharedMask) && (!scaled || *scaled == sharedMask);
+				require(TryValidateNeuralRenderingCoverage(request, sharedMask, error) == allowed);
+				if (!allowed)
+					require(error.at("errorCode") == "nr_coverage_inherited" && error.at("mutationApplied") == false && error.at("settingsChanged") == false);
+			}
+		}
 	}
 }

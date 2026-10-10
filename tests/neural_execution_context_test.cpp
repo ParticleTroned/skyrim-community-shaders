@@ -19,6 +19,7 @@ namespace NeuralRendering
 	{
 		std::optional<RenderingMode> renderingMode;
 		uint32_t modelResolutionPercent = 100;
+		bool pressureResolutionEnabled = false;
 		uint32_t featureSlot = 0;
 		CentralArea centralArea{};
 	};
@@ -28,6 +29,7 @@ struct Upscaling
 	struct
 	{
 		uint32_t neuralRenderingModelResolutionPercent = 100;
+		bool neuralRenderingPressureResolutionEnabled = false;
 		uint32_t neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
 		float foveatedCenterHorizontalScale = 1.0f;
 	} settings;

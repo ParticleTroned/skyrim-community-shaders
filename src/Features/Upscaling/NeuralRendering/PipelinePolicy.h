@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../FoveatedCommon.h"
 #include "RegionCapacity.h"
 
 #include <array>
@@ -11,7 +12,7 @@
 
 namespace NeuralRendering
 {
-	/** Independent routes exposed by the Neural Rendering feature. */
+	/** Stable persisted route values; Foveated is a legacy output-resolution alias. */
 	enum class RenderingMode : std::uint32_t
 	{
 		FullResolution = 0,
@@ -19,7 +20,7 @@ namespace NeuralRendering
 		ReducedResolution = 2,
 	};
 
-	/** Foveated NR owns its mask; other routes expose independent restrictions. */
+	/** The legacy foveated execution path always requires its mask. */
 	[[nodiscard]] constexpr bool UsesAutomaticFoveatedMask(RenderingMode mode) noexcept
 	{
 		return mode == RenderingMode::Foveated;
@@ -37,7 +38,7 @@ namespace NeuralRendering
 		return (mode == RenderingMode::FullResolution && fovOnly) || (fsr && mode == RenderingMode::Foveated);
 	}
 
-	/** Keeps renderscale masking independent of Full resolution and inactive on flat. */
+	/** Applies derived shared coverage to each placement; pre-DLSS masking is VR-only. */
 	[[nodiscard]] constexpr bool RequiresFoveatedMask(RenderingMode mode, bool fovOnly, bool isVR, bool renderscaleFov) noexcept
 	{
 		return UsesAutomaticFoveatedMask(mode) ||
@@ -49,6 +50,28 @@ namespace NeuralRendering
 		return a_value <= static_cast<std::uint32_t>(RenderingMode::ReducedResolution) ?
 		           static_cast<RenderingMode>(a_value) :
 		           RenderingMode::Foveated;
+	}
+
+	/** Output placement is independent of Render Scale and shared FOV coverage. */
+	[[nodiscard]] constexpr RenderingMode ConfiguredRenderingMode(std::uint32_t value) noexcept
+	{
+		return value == static_cast<std::uint32_t>(RenderingMode::ReducedResolution) ?
+		           RenderingMode::ReducedResolution :
+		           RenderingMode::FullResolution;
+	}
+
+	inline constexpr std::array kSelectableRenderingModes{
+		RenderingMode::FullResolution, RenderingMode::ReducedResolution
+	};
+
+	/** Coverage belongs to VR FOV; full-eye masks require no masked dispatch. */
+	template <class Settings>
+	void NormalizeRenderingCoverage(Settings& settings, bool isVR) noexcept
+	{
+		settings.neuralRenderingMode = static_cast<std::uint32_t>(ConfiguredRenderingMode(settings.neuralRenderingMode));
+		const bool masked = isVR && settings.foveatedVendorDispatch && FoveatedCommon::IsActiveCoverage(settings.foveatedCenterArea);
+		settings.neuralRenderingFovOnly = masked;
+		settings.neuralRenderingRenderscaleFov = masked;
 	}
 
 	[[nodiscard]] constexpr const char* GetRenderingModeName(RenderingMode a_mode) noexcept
@@ -83,12 +106,6 @@ namespace NeuralRendering
 	[[nodiscard]] constexpr bool RequiresVRRenderScale(bool isVR, RenderingMode mode) noexcept
 	{
 		return isVR && mode == RenderingMode::ReducedResolution;
-	}
-
-	/** A missing/reset Renderscale NR preference follows configured VR FOV. */
-	[[nodiscard]] constexpr bool DefaultRenderscaleFov(bool isVR, bool fovEnabled) noexcept
-	{
-		return isVR && fovEnabled;
 	}
 
 	/** Route choices remain escapable when a saved FOV prerequisite is unavailable. */

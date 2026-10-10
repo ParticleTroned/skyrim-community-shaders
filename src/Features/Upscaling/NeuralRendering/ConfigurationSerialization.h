@@ -63,13 +63,16 @@ namespace NeuralRendering
 	{
 		if (!rendering.is_object())
 			throw std::invalid_argument("rendering settings must be an object");
+		if (const auto mode = rendering.find("neuralRenderingMode"); mode != rendering.end() && ParseBoundedInteger(*mode, 1u, 1u))
+			rendering["neuralRenderingMode"] = 0u;
 		if (const auto legacy = rendering.find("neuralRenderingOptimizedStereoPath"); legacy != rendering.end()) {
 			for (const auto* key : { "neuralRenderingBatchedStereo", "neuralRenderingDirectCommit" })
 				if (!rendering.contains(key))
 					rendering[key] = legacy->get<bool>();
 			rendering.erase("neuralRenderingOptimizedStereoPath");
 		}
-		for (const auto* key : { "neuralCharacterDebugView", "neuralCharacterMaskTestMode" })
+		for (const auto* key : { "neuralCharacterDebugView", "neuralCharacterMaskTestMode",
+				 "neuralRenderingFovOnly", "neuralRenderingRenderscaleFov" })
 			rendering.erase(key);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		rendering.erase("neuralCharacterCurrentContextEnabled");
@@ -86,13 +89,17 @@ namespace NeuralRendering
 		return rendering;
 	}
 
-	/** Accepts migrated placement while rejecting other out-of-range persisted values. */
+	/** Accepts legacy placement and derived coverage while rejecting invalid tuning. */
 	inline void ValidateRenderingSettingsNormalization(const nlohmann::json& requested, const nlohmann::json& normalized)
 	{
 		for (const auto& [name, value] : requested.items()) {
 			if (normalized.at(name) == value)
 				continue;
 			if (name == "neuralRenderingInsertionPoint" && (value == 0u || value == 1u))
+				continue;
+			if (name == "neuralRenderingMode" && ParseBoundedInteger(value, 1u, 1u) && normalized.at(name) == 0u)
+				continue;
+			if ((name == "neuralRenderingFovOnly" || name == "neuralRenderingRenderscaleFov") && value.is_boolean())
 				continue;
 			throw std::invalid_argument("Neural Rendering setting is outside its valid range: " + name);
 		}

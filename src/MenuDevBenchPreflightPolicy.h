@@ -8,7 +8,6 @@ namespace MenuDevBenchPreflightPolicy
 		Tuning,
 	};
 
-	constexpr double kFoveatedCenterArea = 0.3;
 	constexpr double kPeripheryTAACenterArea = 0.3;
 	constexpr double kPeripheryTAAOuterScale = 0.7;
 	constexpr double kFloatTolerance = 0.0001;
@@ -21,7 +20,9 @@ namespace MenuDevBenchPreflightPolicy
 		bool developerMode = false;
 		bool neuralRenderingEnabled = false;
 		bool foveatedVendorDispatch = false;
+		bool fovOnlyCalibrated = false;
 		double foveatedCenterArea = 0.0;
+		double foveatedOuterFeather = 0.05;
 		bool peripheryTAAEnabled = false;
 		double peripheryTAACenterArea = 0.0;
 		double peripheryTAAOuterScale = 0.0;
@@ -33,10 +34,17 @@ namespace MenuDevBenchPreflightPolicy
 		return difference >= -kFloatTolerance && difference <= kFloatTolerance;
 	}
 
+	/** Preserve the fixed TAA fixture outline through FOV-only feather ownership. */
+	[[nodiscard]] constexpr double FovOnlyFixtureScale(double feather) noexcept
+	{
+		return kPeripheryTAAOuterScale - 2.0 * (feather < 0.0001 ? 0.0001 : feather);
+	}
+
 	[[nodiscard]] constexpr bool HasRequiredFoveation(const State& a_state) noexcept
 	{
 		return a_state.foveatedVendorDispatch &&
-		       NearlyEqual(a_state.foveatedCenterArea, kFoveatedCenterArea) &&
+		       a_state.fovOnlyCalibrated &&
+		       NearlyEqual(a_state.foveatedCenterArea, FovOnlyFixtureScale(a_state.foveatedOuterFeather)) &&
 		       a_state.peripheryTAAEnabled &&
 		       NearlyEqual(a_state.peripheryTAACenterArea, kPeripheryTAACenterArea) &&
 		       NearlyEqual(a_state.peripheryTAAOuterScale, kPeripheryTAAOuterScale);

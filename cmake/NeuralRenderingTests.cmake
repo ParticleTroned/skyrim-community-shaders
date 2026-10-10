@@ -371,10 +371,12 @@ add_custom_command(
     COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
         "-DOUTPUT_DIRECTORY=${_neural_controls_test_dir}" -P
         "${PROJECT_SOURCE_DIR}/tests/extract_neural_rendering_controls.cmake"
-    DEPENDS src/Features/Upscaling.cpp tests/extract_neural_rendering_controls.cmake
+    DEPENDS src/Features/Upscaling.cpp src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp
+        tests/extract_neural_rendering_controls.cmake
     VERBATIM)
 add_controller_test(neural_rendering_controls_test NeuralRenderingControls tests/neural_rendering_controls_test.cpp)
 target_include_directories(neural_rendering_controls_test PRIVATE "${_neural_controls_test_dir}")
+target_link_libraries(neural_rendering_controls_test PRIVATE nlohmann_json::nlohmann_json)
 target_sources(neural_rendering_controls_test PRIVATE "${_neural_controls_test_dir}/neural_rendering_controls_under_test.h")
 
 set(_neural_context_directory "${CMAKE_CURRENT_BINARY_DIR}/generated/neural-execution-context")

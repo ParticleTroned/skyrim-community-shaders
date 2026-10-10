@@ -1974,21 +1974,20 @@ namespace
 	};
 
 	constexpr const char* kFoveatedUpscalingMethodAvailabilityText = "VR FOV mask setup is available only with DLSS or FSR.";
-	constexpr const char* kFoveatedUpscalingSetupIntro = R"(Turn on FOV Mask Visualization.
-Magenta = left FOV, green = right FOV, white = overlap, charcoal = TAA.
-Amber diagonal stripes with 80% opaque shading mark missing coverage. The world remains visible underneath.
-The solid coloured outline and dark border mark the outside of each mask. The feather transition is not drawn.
+	constexpr const char* kFoveatedUpscalingSetupIntro = R"(Turn on FOV Mask Visualization. Preview bypasses DLSS/FSR, TAA and NR, so the scene may shimmer. Turn it off to check image quality.
+Magenta = left eye; green = right eye; white = overlap; charcoal = TAA.
+Amber stripes show gaps, with the scene visible underneath. Solid outlines and dark borders show mask edges; feathering is not drawn.
 
-Check one eye at a time. Fit the top, bottom, outward side and curved outer corners to everything you can see. Leave a little margin. Ignore the inward overlap while doing this.
-FOV area saved compares mask coverage, including feather support, with the full CSX eye image. It is approximate area, not measured performance.)";
-	constexpr const char* kFoveatedUpscalingSetupInstructions = R"(1) Leave FOV + TAA off. Use FOV Only Visible Scale, Expand FOV Scale R/L and per-eye offsets to fit the outer edges in each eye.
-2) Press Calibrate Masks. The saved outer coordinates guide a bounded minimum-area fit; eye projections supply central coverage. The ordinary sliders show the result.
-3) Automatic Mask Scaling changes the outside and refits the centre. 100% restores calibration; lower tightens coverage and higher expands it. Manual edits do not replace the reference; press Calibrate Masks again to capture them.
-4) Turn visualization off and inspect scenery in motion. Expand if peripheral flicker is visible. Recalibrate after changing headset fit or eye projection.)";
-	constexpr const char* kFoveatedUpscalingPeripheralTaaSetupInstructions = R"(1) Enable FOV + TAA and choose its centre scale and transition first.
-2) Fit the visible outside using FOV + TAA Visible Outer Scale, horizontal expansion and per-eye offsets. The centre and TAA ring together provide coverage.
-3) Press Calibrate Masks, then adjust Automatic Mask Scaling while checking scenery. Calibration preserves the selected centre scale and feather.
-4) Recalibrate after changing FOV mode, centre scale or transition. If the current controls cannot cover the target, the previous settings are retained.)";
+Check one eye at a time. Fit the top, bottom, outer side and corners with a small margin. Ignore nose-side overlap.
+FOV area saved includes feathering: approximate coverage reduction versus the full CSX eye image, not measured performance.)";
+	constexpr const char* kFoveatedUpscalingSetupInstructions = R"(1) Select FOV only. Fit each eye's outer edges using FOV Only Visible Scale, Expand FOV Scale R/L and per-eye offsets.
+2) Press Calibrate Masks to save the outer fit and cover the centre automatically. The sliders show the result.
+3) Automatic Mask Scaling: 100% restores calibration; lower shrinks coverage, higher expands it. The centre refits automatically. Recalibrate to capture manual edits.
+4) Turn visualization off and look around. Expand coverage if the edges flicker. Recalibrate if headset fit or eye projection changes.)";
+	constexpr const char* kFoveatedUpscalingPeripheralTaaSetupInstructions = R"(1) Fit both eyes in FOV only and press Calibrate Masks once.
+2) Select FOV + TAA from FOV mode.
+3) Set Inner area size: smaller uses more TAA around the upscaled centre.
+Outer boundary, shape, eye positions and feathering are inherited from FOV only. Switching modes or changing inner size needs no recalibration.)";
 
 	Matrix GetFoveatedEyeClipProjection(uint32_t eyeIndex)
 	{
@@ -5033,6 +5032,7 @@ FOV area saved compares mask coverage, including feather support, with the full 
 			settings.neuralRenderingDirectCommit = true;
 			settings.neuralRenderingSingleSubrectScale = 1.0f;
 		}
+		NeuralRendering::NormalizeRenderingCoverage(settings, globals::game::isVR);
 		Upscaling::ApplyNeuralRenderingFovConstraint(settings);
 		settings.neuralRenderingInsertionPoint = static_cast<uint>(
 			NeuralRendering::ResolveInsertionPoint(NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode)));
@@ -5082,7 +5082,11 @@ FOV area saved compares mask coverage, including feather support, with the full 
 		settings.foveatedLeftEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetY);
 		settings.foveatedRightEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(settings.foveatedRightEyeMaskOffsetX);
 		settings.foveatedRightEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(settings.foveatedRightEyeMaskOffsetY);
-		settings.periphery_taa_center_area = ClampFoveatedCenterScale(settings.periphery_taa_center_area);
+		if (globals::game::isVR)
+			FoveatedMaskCalibration::InheritFovOnlyBoundary(settings);
+		else
+			settings.periphery_taa_center_area = ClampFoveatedCenterScale(settings.periphery_taa_center_area);
+		NeuralRendering::NormalizeRenderingCoverage(settings, globals::game::isVR);
 	}
 
 	NeuralRendering::Tuning BuildNeuralRenderingTuning(const Upscaling::Settings& settings) noexcept
@@ -5294,12 +5298,14 @@ FOV area saved compares mask coverage, including feather support, with the full 
 
 	bool IsDefaultFoveatedMaskGeometry(const Upscaling::Settings& settings)
 	{
-		const Upscaling::Settings defaults{};
+		Upscaling::Settings defaults{};
+		FoveatedMaskCalibration::InheritFovOnlyBoundary(defaults);
 		auto nearlyEqual = [](float lhs, float rhs) {
 			return std::abs(lhs - rhs) <= 0.0001f;
 		};
 
-		return nearlyEqual(settings.foveatedCenterArea, defaults.foveatedCenterArea) &&
+		return !FoveatedMaskCalibration::IsValid(settings.foveatedCalibrationReference) &&
+		       nearlyEqual(settings.foveatedCenterArea, defaults.foveatedCenterArea) &&
 		       nearlyEqual(settings.foveatedCenterHorizontalScale, defaults.foveatedCenterHorizontalScale) &&
 		       nearlyEqual(settings.foveatedLeftEyeMaskOffsetX, defaults.foveatedLeftEyeMaskOffsetX) &&
 		       nearlyEqual(settings.foveatedLeftEyeMaskOffsetY, defaults.foveatedLeftEyeMaskOffsetY) &&
@@ -6638,6 +6644,7 @@ FOV area saved compares mask coverage, including feather support, with the full 
 		addFloat(ClampFoveatedMaskOffsetAdjustment(a_settings.foveatedRightEyeMaskOffsetX));
 		addFloat(ClampFoveatedMaskOffsetAdjustment(a_settings.foveatedRightEyeMaskOffsetY));
 		if (peripheryTAARequested) {
+			addFloat(ClampFoveatedCenterScale(a_settings.foveatedCenterArea));
 			const float centerArea = ClampFoveatedCenterScale(
 				a_settings.periphery_taa_center_area);
 			addFloat(centerArea);
@@ -6655,8 +6662,10 @@ FOV area saved compares mask coverage, including feather support, with the full 
 		return hash;
 	}
 
-	uint64_t BuildNeuralRenderingSettingsKey(const Upscaling::Settings& a_settings, bool includeCropMode = true)
+	uint64_t BuildNeuralRenderingSettingsKey(const Upscaling::Settings& requestedSettings, bool includeCropMode = true)
 	{
+		auto a_settings = requestedSettings;
+		NeuralRendering::NormalizeRenderingCoverage(a_settings, globals::game::isVR);
 		uint64_t hash = 0xCBF29CE484222325ull;
 		auto add = [&](uint64_t a_value) {
 			hash = HashResourceCheckValue(hash, a_value);
@@ -6756,7 +6765,8 @@ FOV area saved compares mask coverage, including feather support, with the full 
 			addMaskGeometry();
 			addFloat(ClampFoveatedCenterScale(a_settings.foveatedCenterArea));
 		}
-		const bool foveatedRequested = a_settings.foveatedVendorDispatch;
+		const bool foveatedRequested = globals::game::isVR && a_settings.foveatedVendorDispatch &&
+		                               FoveatedCommon::IsActiveCoverage(a_settings.foveatedCenterArea);
 		add(foveatedRequested);
 		if (!foveatedRequested && !NeuralRendering::RequiresFoveatedMask(mode, a_settings.neuralRenderingFovOnly, globals::game::isVR, a_settings.neuralRenderingRenderscaleFov))
 			return hash;
@@ -6772,6 +6782,7 @@ FOV area saved compares mask coverage, including feather support, with the full 
 		const bool peripheryTAARequested = a_settings.periphery_taa_enable;
 		add(peripheryTAARequested);
 		if (peripheryTAARequested) {
+			addFloat(ClampFoveatedCenterScale(a_settings.foveatedCenterArea));
 			const float centerArea = ClampFoveatedCenterScale(
 				a_settings.periphery_taa_center_area);
 			addFloat(centerArea);
@@ -18161,19 +18172,21 @@ void Upscaling::DrawFovSettingsLink() const
 
 void Upscaling::DrawNeuralRenderingFovWarning(bool a_neuralRenderingMenu) const
 {
-	if (a_neuralRenderingMenu && globals::game::isVR && NeuralRendering::Runtime::IsInstalled() &&
+	const bool usesFov = NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly,
+		globals::game::isVR, settings.neuralRenderingRenderscaleFov);
+	if (a_neuralRenderingMenu && globals::game::isVR && usesFov && NeuralRendering::Runtime::IsInstalled() &&
 		!IsNeuralRenderingFovConfigurationAvailable(GetUpscaleMethod())) {
-		Util::Text::WrappedWarning("Set up FOV for better NR performance and more tuning options.");
+		Util::Text::WrappedWarning("Shared FOV is unavailable. Check VR > FOV and select DLSS or FSR.");
 		DrawFovSettingsLink();
 		return;
 	}
-	if (!globals::game::isVR || !IsNeuralRenderingEnabled(settings) || !settings.foveatedVendorDispatch)
+	if (!globals::game::isVR || !IsNeuralRenderingEnabled(settings) || !usesFov)
 		return;
 	if (a_neuralRenderingMenu && (!neuralRenderingReplacedFovTaa ||
 									 !NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov) ||
 									 !IsNeuralRenderingFovConfigurationAvailable(GetUpscaleMethod())))
 		return;
-	Util::Text::WrappedError("NR uses FOV centre without TAA. Set both eye masks precisely to cover your visible headset view.");
+	Util::Text::WrappedError("NR uses the FOV centre without TAA. Fit both masks to cover your visible headset view.");
 }
 
 bool Upscaling::IsNeuralRenderingEnabled(const Settings& a_settings) noexcept
@@ -18192,15 +18205,27 @@ bool Upscaling::ApplyNeuralRenderingFovConstraint(Settings& a_settings) noexcept
 
 void Upscaling::DrawPeripheryTAAControl()
 {
-	{
-		auto guard = Util::DisableGuard(IsNeuralRenderingEnabled(settings));
-		Util::Widgets::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Enables periphery-only TAA outside the smaller vendor center region.");
-		ImGui::TextUnformatted("When ON, the FOV + TAA center scale becomes the active DLSS/FSR dispatch center.");
-		ImGui::TextUnformatted("The visible outer scale defines the shared HMD-visible mask boundary.");
-		ImGui::TextUnformatted("Expand and eye offsets are shared with the upscaling controls.");
+	NeuralRendering::NormalizeRenderingCoverage(settings, globals::game::isVR);
+	const bool nrEnabled = IsNeuralRenderingEnabled(settings);
+	const bool setupReady = FoveatedMaskCalibration::HasFovOnlySetup(settings);
+	if (auto combo = Util::Widgets::ComboBox("FOV mode", settings.periphery_taa_enable ? "FOV + TAA" : "FOV only")) {
+		for (const bool taa : { false, true }) {
+			const bool selected = settings.periphery_taa_enable == taa;
+			const bool unavailable = taa && (nrEnabled || !setupReady);
+			auto guard = Util::DisableGuard(unavailable);
+			if (ImGui::Selectable(taa ? "FOV + TAA" : "FOV only", selected) && !selected) {
+				pendingFoveatedMaskScaling.reset();
+				settings.periphery_taa_enable = taa;
+				FoveatedMaskCalibration::InheritFovOnlyBoundary(settings);
+				InvalidateFrameScopedUpscalingState();
+				RequestHistoryReset();
+			}
+			if (selected)
+				ImGui::SetItemDefaultFocus();
+			if (unavailable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+				ImGui::SetTooltip("%s", nrEnabled ? "FOV + TAA is unavailable while Neural Rendering is enabled." :
+													"In VR > FOV, fit a FOV-only mask to both eyes and press Calibrate Masks first. Full-eye coverage has no TAA periphery.");
+		}
 	}
 	DrawNeuralRenderingFovWarning(false);
 }
@@ -18269,8 +18294,7 @@ bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, s
 			merged[name] = value;
 		}
 		auto candidate = merged.get<Settings>();
-		candidate.neuralRenderingRenderscaleFov = a_configuration.value("neuralRenderingRenderscaleFov",
-			NeuralRendering::DefaultRenderscaleFov(IsVRRuntimeActive(), settings.foveatedVendorDispatch));
+
 		candidate.neuralCharacterDebugView = settings.neuralCharacterDebugView;
 		candidate.neuralCharacterMaskTestMode = settings.neuralCharacterMaskTestMode;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -18280,8 +18304,8 @@ bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, s
 		if (candidate.neuralRenderingMode > 2u || !candidate.neuralRenderingAutoMask || candidate.neuralRenderingUICorrection)
 			throw std::invalid_argument("Unsupported Neural Rendering mode or provider mask contract");
 		if (candidate.neuralRenderingEnabled && !NeuralRendering::IsRenderingConfigurationSupported(
-													IsVRRuntimeActive(), NeuralRendering::ClampRenderingMode(candidate.neuralRenderingMode)))
-			throw std::invalid_argument("Foveated NR requires Skyrim VR; use full-resolution or reduced-resolution NR on SE/AE");
+													IsVRRuntimeActive(), NeuralRendering::ConfiguredRenderingMode(candidate.neuralRenderingMode)))
+			throw std::invalid_argument("Neural Rendering mode is unsupported for this runtime");
 		SanitizeUpscalingSettings(candidate);
 		const json sanitized = candidate;
 		NeuralRendering::ValidateRenderingSettingsNormalization(a_configuration, sanitized);
@@ -18304,8 +18328,7 @@ bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, s
 bool Upscaling::ResetNeuralRenderingConfiguration()
 {
 	auto defaults = Settings{};
-	defaults.neuralRenderingRenderscaleFov = NeuralRendering::DefaultRenderscaleFov(
-		IsVRRuntimeActive(), settings.foveatedVendorDispatch);
+
 	const auto configuration = NeuralRendering::RenderingSettings(defaults);
 	std::string error;
 	const bool applied = ApplyNeuralRenderingConfiguration(configuration, error);
@@ -18422,7 +18445,7 @@ bool Upscaling::IsNeuralRenderingRequested() const noexcept
 
 NeuralRendering::RenderingMode Upscaling::GetNeuralRenderingMode() const noexcept
 {
-	return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode);
+	return NeuralRendering::ConfiguredRenderingMode(settings.neuralRenderingMode);
 }
 
 NeuralRendering::PipelineArrangement Upscaling::GetNeuralRenderingArrangement() const noexcept
@@ -18485,8 +18508,8 @@ void Upscaling::DrawNeuralRenderingEnableControl()
 				logger::warn("[NeuralRendering] UI toggle rejected: {}", error);
 		}
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(!hardwareSupported ? NeuralRendering::Runtime::kUnsupportedHardwareNotice : renderScaleAvailable ? "Enhances scene detail using NR. Off removes its rendering cost and keeps your settings. Enabling NR disables FOV + TAA." :
-																																	  "Choose compatible upscaling for this NR mode. Renderscale NR needs scaled DLSS and Render Scale in VR. Foveated NR requires DLSS or FSR.");
+			ImGui::TextUnformatted(!hardwareSupported ? NeuralRendering::Runtime::kUnsupportedHardwareNotice : renderScaleAvailable ? "Enhance scene detail with NR. Off removes its rendering cost and keeps settings. Enabling NR turns FOV + TAA off." :
+																																	  "Before DLSS requires scaled DLSS and, in VR, Render Scale. After upscaling remains available with or without Render Scale.");
 	}
 }
 
@@ -18524,15 +18547,20 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 			else
 				Util::Text::WrappedWarning("%s %s: %s.", reducedResolution ? "Renderscale NR" : "NR", settings.neuralRenderingEnabled ? "paused" : "unavailable", blocker);
 			if (!reducedResolution)
-				ImGui::TextWrapped("Choose DLSS or FSR for Foveated NR, or select Full resolution NR.");
+				ImGui::TextWrapped("Check the selected upscaling profile. After upscaling runs at output resolution.");
 			else if (!GetNeuralRenderingUpscalingProfileBlocker(GetNeuralRenderingMode(), configuredMethod, quality, true))
-				ImGui::TextWrapped("Enable Render Scale in Upscaling to use Renderscale NR.");
+				ImGui::TextWrapped("Enable Render Scale in Upscaling to use Before DLSS.");
 			else
 				ImGui::TextWrapped("%s", globals::game::isVR ?
-											 "Select scaled DLSS with Render Scale, or choose Full resolution or Foveated NR. Foveated requires DLSS or FSR and FOV." :
-											 "Select scaled DLSS or choose Full resolution NR.");
-		} else
-			Util::Text::WrappedWarning("%s", "Renderscale NR is waiting for scaling to become active.");
+											 "Choose scaled DLSS with Render Scale, or select After upscaling." :
+											 "Choose scaled DLSS, or select After upscaling.");
+		} else {
+			static bool loggedScalingWait = false;
+			if (!loggedScalingWait && globals::state && globals::state->IsDeveloperMode()) {
+				logger::debug("[NeuralRendering] Renderscale NR is waiting for scaling to become active.");
+				loggedScalingWait = true;
+			}
+		}
 		if (settings.neuralRenderingEnabled)
 			ImGui::TextDisabled("Choose compatible scaling, turn NR off, or change its rendering mode. Your settings are retained.");
 	} else if (runtimeInstalled && !settings.neuralRenderingEnabled)
@@ -18652,7 +18680,7 @@ namespace
 			settings.neuralCharacterProviderBlending = choice == 1;
 		MenuUI::DetailNote("Used with category adjustments or Actors only. Choose it now; the selections and strengths are in Selection.");
 		ImGui::Spacing();
-		MenuUI::DetailText("Works with Full resolution, Foveated and Render scale NR.");
+		MenuUI::DetailText("Works with After upscaling and Before DLSS.");
 	}
 
 	void DrawNeuralIntegerSetting(const char* label, std::uint32_t& value, int minimum, int maximum, const char* format)
@@ -18685,14 +18713,27 @@ namespace
 
 	void DrawNeuralCentralAreaSettings(Upscaling::Settings& settings)
 	{
+		auto* storage = ImGui::GetStateStorage();
+		const auto restoreId = ImGui::GetID("NR central area restore");
+		bool limited = settings.neuralRenderingCentralAreaPercent < NeuralRendering::kMaximumCentralAreaPercent;
+		if (limited)
+			storage->SetInt(restoreId, static_cast<int>(settings.neuralRenderingCentralAreaPercent));
+		if (Util::Widgets::Checkbox("Limit NR to central area", &limited)) {
+			settings.neuralRenderingCentralAreaPercent = limited ?
+			                                                 static_cast<uint32_t>(std::clamp(storage->GetInt(restoreId, NeuralRendering::kDefaultLimitedCentralAreaPercent),
+																 static_cast<int>(NeuralRendering::kMinimumCentralAreaPercent), static_cast<int>(NeuralRendering::kMaximumCentralAreaPercent) - 1)) :
+			                                                 NeuralRendering::kMaximumCentralAreaPercent;
+		}
+		Util::AddTooltip("Run NR only around each saved FOV mask centre, with size and edge softness set below. Normal upscaling continues outside. Off restores 100% NR coverage; enabling restores the last size used in this menu, or starts at 75%. Headset and actor limits still apply.");
+		auto guard = Util::DisableGuard(!limited);
 		DrawNeuralIntegerSetting("NR central area", settings.neuralRenderingCentralAreaPercent,
 			NeuralRendering::kMinimumCentralAreaPercent, NeuralRendering::kMaximumCentralAreaPercent, "%d%%");
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Limits NR to a central area in every mode without changing upscaling coverage. Uses the FOV mask shape, horizontal expansion and saved per-eye centres; unconfigured centres use the middle of each view. Percentage sets the linear size, not pixel area. 100% adds no restriction; existing headset and actor selections still apply. Applies when released.");
+			ImGui::TextUnformatted("Run NR only in the central part of each headset view. Smaller values reduce its width and height; the rest keeps normal upscaling. Uses the saved FOV shape and eye centres, or view midpoints if unset. 100% adds no central restriction; headset and actor limits still apply. Applies on release.");
 		DrawNeuralIntegerSetting("NR central feather", settings.neuralRenderingCentralFeatherPixels,
 			0, NeuralRendering::kMaximumCentralFeatherPixels, "%d px");
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Softens the central-area edge using final output pixels, independently of NR resolution. Default 64 px; 0 gives a hard edge. The transition follows the FOV shape and keeps its width approximately even around stretched masks. Used below 100% central area. Applies when released.");
+			ImGui::TextUnformatted("Soften the central-area edge in final output pixels, independently of NR resolution. Follows FOV shape with roughly even width on stretched masks. Used when NR central area is below 100%; default 64 px, 0 = hard edge. Applies on release.");
 	}
 
 	void DrawNeuralRenderingSharedImageSettings(Upscaling::Settings& settings)
@@ -18772,6 +18813,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 	const Settings previousSettings = settings;
 	const bool showDiagnostics = NeuralRendering::kDevelopmentDiagnostics && globals::state && globals::state->IsDeveloperMode();
 	{
+		NeuralRendering::NormalizeRenderingCoverage(settings, globals::game::isVR);
 		const bool dlssSelected = a_upscaleMethod == UpscaleMethod::kDLSS;
 		const bool foveatedRouteEnabled =
 			IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod);
@@ -18781,8 +18823,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 		ApplyNeuralRenderingFovConstraint(settings);
 		DrawNeuralRenderingFovWarning(true);
 		const bool usesFov = NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov);
-		const char* modeName = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution ? "Render scale" : GetNeuralRenderingMode() == NeuralRendering::RenderingMode::Foveated ? "Foveated" :
-		                                                                                                                                                                                               "Full resolution";
+		const char* modeName = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution ? "Before DLSS" : "After upscaling";
 		const auto coverageName = settings.neuralRenderingCentralAreaPercent < NeuralRendering::kMaximumCentralAreaPercent ?
 		                              std::format("{}% central{}", settings.neuralRenderingCentralAreaPercent, usesFov ? " + headset mask" : "") :
 		                              std::string(usesFov ? "Headset mask" : "Whole view");
@@ -18800,57 +18841,49 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 													 },
 			"Your NR setup", "Choose a mode, then refine the picture.");
 		if (page.Is("mode")) {
-			std::array<MenuUI::Choice, 3> renderingModes{ { { "full", "Full resolution", "Finished scene · higher cost", "Enhances the finished scene at full resolution. Offers the most detail and usually costs more performance. FOV restriction is optional." },
-				{ "foveated", "Foveated", "Finished scene · FOV required", "Enhances the finished scene inside your FOV selection. A smaller area can improve performance. Requires VR, FOV and DLSS or FSR." },
-				{ "scaled", "Render scale", "Before DLSS · scaled image", "Enhances a smaller image before DLSS enlarges it. Requires scaled DLSS and Render Scale in VR. Unavailable with DLAA, FSR, TAA or no upscaling. FOV restriction is optional." } } };
+			std::array<MenuUI::Choice, 2> renderingModes{ { { "full", "After upscaling", "A · Output resolution", "Enhance the finished scene after upscaling. Available with or without Render Scale. In VR, coverage follows VR > FOV." },
+				{ "scaled", "Before DLSS", "C · Render resolution", "Enhance the smaller image before DLSS. Requires scaled DLSS and, in VR, Render Scale. In VR, coverage follows VR > FOV." } } };
 			for (uint index = 0; index < renderingModes.size(); ++index) {
-				const auto mode = static_cast<NeuralRendering::RenderingMode>(index);
-				renderingModes[index].enabled = NeuralRendering::IsRenderingModeSelectable(globals::game::isVR, mode, fovAvailable) && IsNeuralRenderingUpscalingAvailable(mode);
+				const auto mode = NeuralRendering::kSelectableRenderingModes[index];
+				renderingModes[index].enabled = IsNeuralRenderingUpscalingAvailable(mode);
 			}
-			const int choice = MenuUI::ChoiceCards("Rendering mode", static_cast<int>(GetNeuralRenderingMode()), renderingModes);
-			if (choice >= 0)
-				settings.neuralRenderingMode = static_cast<uint>(choice);
-			if (!globals::game::isVR)
-				ImGui::TextDisabled("Full resolution and Render scale support actor selection in SE/AE. Foveated requires Skyrim VR.");
-			if (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution) {
-				auto guard = Util::DisableGuard(!fovAvailable && !settings.neuralRenderingFovOnly);
-				Util::Widgets::Checkbox("Clip to headset mask", &settings.neuralRenderingFovOnly);
-				if (auto tooltip = Util::HoverTooltipWrapper())
-					ImGui::TextUnformatted("Limits NR to your FOV masks, preserving the scene outside. A smaller area can save GPU time. Set up the masks in VR > FOV.");
-			} else if (globals::game::isVR && GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution) {
-				auto guard = Util::DisableGuard(!fovAvailable && !settings.neuralRenderingRenderscaleFov);
-				Util::Widgets::Checkbox("Clip Render scale to headset mask", &settings.neuralRenderingRenderscaleFov);
-				if (auto tooltip = Util::HoverTooltipWrapper())
-					ImGui::TextUnformatted("Limits NR and DLSS to your FOV selection. Outside it, the scene keeps ordinary rendering. The independent NR central-area control applies with either setting.");
+			const int selected = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution ? 1 : 0;
+			const int choice = MenuUI::ChoiceCards("Rendering mode", selected, renderingModes);
+			if (choice >= 0 && static_cast<std::size_t>(choice) < renderingModes.size())
+				settings.neuralRenderingMode = static_cast<uint>(NeuralRendering::kSelectableRenderingModes[choice]);
+			if (globals::game::isVR) {
+				ImGui::TextDisabled(settings.neuralRenderingFovOnly ? "Coverage: shared VR FOV mask" : "Coverage: whole headset view");
+				Util::AddTooltip("Both NR modes follow VR > FOV. FOV off processes the full view; FOV on uses the shared mask. The Debug central-area controls restrict NR alone.");
 			}
-			if (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::Foveated) {
-				auto guard = Util::DisableGuard(true);
-				bool required = true;
-				Util::Widgets::Checkbox("Headset mask required", &required);
-				Util::AddTooltip("Foveated NR always uses the shared FOV mask. Configure its shape in VR > FOV.");
+			const bool debugMode = globals::state && globals::state->IsDeveloperMode();
+			if (debugMode) {
+				const char* description = settings.neuralRenderingCentralAreaPercent < NeuralRendering::kMaximumCentralAreaPercent ?
+				                              "NR enhances the central area and blends into the original scene at its edge. Existing headset and actor selections also apply." :
+				                          GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution ?
+				                              "NR enhances the smaller image before DLSS builds the final picture." :
+				                          settings.neuralRenderingFovOnly ?
+				                              "NR enhances the finished scene inside your FOV masks, preserving the scene outside." :
+				                              "NR enhances the whole finished scene. This usually costs more performance.";
+				static const char* lastDescription = nullptr;
+				if (lastDescription != description) {
+					logger::debug("[NeuralRendering] {}", description);
+					if (globals::game::isVR)
+						logger::debug("[NeuralRendering] Set up the shared FOV shape in VR > FOV.");
+					lastDescription = description;
+				}
 			}
-			ImGui::Spacing();
-			if (settings.neuralRenderingCentralAreaPercent < NeuralRendering::kMaximumCentralAreaPercent)
-				MenuUI::DetailNote("NR enhances the central area and blends into the original scene at its edge. Existing headset and actor selections also apply.");
-			else if (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution)
-				MenuUI::DetailNote("NR enhances the smaller image before DLSS builds the final picture.");
-			else if (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::Foveated)
-				MenuUI::DetailNote("NR enhances the finished scene inside your FOV selection. The surrounding scene keeps its original appearance.");
-			else
-				MenuUI::DetailNote(settings.neuralRenderingFovOnly ? "NR enhances the finished scene inside your FOV masks, preserving the scene outside." : "NR enhances the whole finished scene. This usually costs more performance.");
-			if (globals::game::isVR)
-				MenuUI::DetailText("Set up the shared FOV shape in VR > FOV.");
 			ImGui::Spacing();
 			DrawNeuralModelResolutionSettings(settings);
-			DrawNeuralCentralAreaSettings(settings);
+			if (debugMode)
+				DrawNeuralCentralAreaSettings(settings);
 		}
 		const bool reducedResolution = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution;
 		const bool missingFov = NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov) &&
 		                        !fovAvailable;
 		if (missingFov)
 			ImGui::TextWrapped(settings.neuralRenderingEnabled ?
-								   "Neural Rendering is enabled but waiting for FOV. Enable and configure FOV in VR > FOV, or select a mode without FOV restriction." :
-								   "This selection requires FOV. Configure it in VR > FOV, or select a mode without FOV restriction.");
+								   "NR is waiting for the shared FOV mask. Check VR > FOV and select DLSS or FSR, or turn FOV off." :
+								   "The shared FOV mask requires DLSS or FSR. Check VR > FOV, or turn FOV off.");
 		else if (NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov) &&
 				 !IsNeuralRenderingFovConfigurationAvailable())
 			ImGui::TextDisabled("FOV is configured; this NR route waits until runtime upscaling is available.");
@@ -18899,7 +18932,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 						settings.neuralRenderingDirectCommit = outputCommit != 0;
 					}
 					if (auto tooltip = Util::HoverTooltipWrapper())
-						ImGui::TextUnformatted("Direct avoids an intermediate output copy and is the default preference. Renderscale NR requires Staged output before DLSS. Full resolution and Foveated retain their actor baseline separately and support either choice.");
+						ImGui::TextUnformatted("Direct avoids an output copy and is preferred. Before DLSS requires Staged output. After upscaling supports either and keeps a separate actor baseline.");
 				}
 				if (requiresStagedOutput) {
 					ImGui::TextDisabled(reducedResolution ?
@@ -19308,7 +19341,12 @@ bool Upscaling::SetFoveatedUpscalingEnabled(bool a_enabled)
 	if (settings.foveatedVendorDispatch == a_enabled)
 		return true;
 
+	const auto previousSettings = settings;
 	settings.foveatedVendorDispatch = a_enabled;
+	if (!HandleNeuralRenderingSettingsTransition(previousSettings, "VR FOV coverage")) {
+		settings = previousSettings;
+		return false;
+	}
 	if (a_enabled) {
 		globals::features::screenSpaceShadows.bendSettings.EnableFoveated = 1u;
 		globals::features::screenSpaceGI.SetFoveationEnabled(true);
@@ -19400,20 +19438,21 @@ bool Upscaling::PrepareFoveatedMaskCalibration(Settings& a_candidate, bool a_cap
 		return false;
 	}
 	auto reference = a_candidate.foveatedCalibrationReference;
-	const bool taa = a_candidate.periphery_taa_enable;
+	if (a_captureReference && a_candidate.periphery_taa_enable) {
+		a_error = "Select FOV only before calibrating the visible boundary.";
+		return false;
+	}
 	if (a_captureReference) {
-		const auto profile = GetFoveatedMaskProfileParams(a_candidate, taa);
-		const float feather = GetNormalFoveatedBlendFeather(a_candidate, taa);
+		const auto profile = GetFoveatedMaskProfileParams(a_candidate, false);
+		const float feather = GetNormalFoveatedBlendFeather(a_candidate, false);
 		reference = {};
 		reference.version = 1;
-		reference.peripheryTaa = taa;
+		reference.peripheryTaa = false;
 		reference.centerScale = profile.centerScale;
 		reference.feather = feather;
 		reference.fullImage = !FoveatedCommon::IsActiveCoverage(profile.centerScale);
 		const float supportScale = profile.centerScale + 2.0f * std::max(feather, FoveatedCommon::kMinimumFeather);
-		reference.outer.scale = taa ? std::max(supportScale,
-										  ClampPeripheryTAAOuterScaleForCenter(a_candidate.periphery_taa_outer_scale, profile.centerScale)) :
-		                              supportScale;
+		reference.outer.scale = supportScale;
 		reference.outer.horizontalScale = profile.centerHorizontalScale;
 		reference.outer.centers = {
 			0.5f + FoveatedCommon::ResolveMaskOffsetX(profile.leftOffsetX, profile.centerScale, profile.centerHorizontalScale, false, true),
@@ -19423,8 +19462,8 @@ bool Upscaling::PrepareFoveatedMaskCalibration(Settings& a_candidate, bool a_cap
 		};
 		reference.leftToRight = projection;
 	} else {
-		if (!MatchesProfile(reference, taa, a_candidate.periphery_taa_center_area, GetNormalFoveatedBlendFeather(a_candidate, taa))) {
-			a_error = "Calibrate this FOV mode after setting its centre scale and transition.";
+		if (!MatchesProfile(reference, false, a_candidate.foveatedCenterArea, GetNormalFoveatedBlendFeather(a_candidate, false))) {
+			a_error = "Fit and calibrate FOV only first.";
 			return false;
 		}
 		if (!MatchesProjection(reference.leftToRight, projection)) {
@@ -19434,16 +19473,13 @@ bool Upscaling::PrepareFoveatedMaskCalibration(Settings& a_candidate, bool a_cap
 	}
 	const auto solution = Solve(reference, a_percent);
 	if (!solution) {
-		a_error = "No safe fit within the current controls. Check the outer edges or increase the FOV + TAA centre scale.";
+		a_error = "No safe fit within the current controls. Check the FOV-only outer edges.";
 		return false;
 	}
 	const auto& geometry = solution->geometry;
-	if (taa)
-		a_candidate.periphery_taa_outer_scale = geometry.scale;
-	else
-		a_candidate.foveatedCenterArea = geometry.scale;
+	a_candidate.foveatedCenterArea = geometry.scale;
 	a_candidate.foveatedCenterHorizontalScale = geometry.horizontalScale;
-	const float centerScale = taa ? reference.centerScale : geometry.scale;
+	const float centerScale = geometry.scale;
 	const float expansion = centerScale * 0.5f * (geometry.horizontalScale - 1.0f);
 	a_candidate.foveatedLeftEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(geometry.centers[0] - 0.5f + expansion);
 	a_candidate.foveatedLeftEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(geometry.centers[1] - 0.5f);
@@ -19451,6 +19487,7 @@ bool Upscaling::PrepareFoveatedMaskCalibration(Settings& a_candidate, bool a_cap
 	a_candidate.foveatedRightEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(geometry.centers[3] - 0.5f);
 	a_candidate.foveatedCalibrationReference = reference;
 	a_candidate.foveatedAutomaticMaskScaling = a_percent;
+	InheritFovOnlyBoundary(a_candidate);
 	return true;
 }
 
@@ -19458,13 +19495,12 @@ void Upscaling::DrawFoveatedCalibration()
 {
 	bool capture = ImGui::Button("Calibrate Masks");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextWrapped("First fit the top, bottom, outward sides and outer corners in each eye. Calibration saves these outer coordinates and fits the centre automatically. Existing inward overlap is not preserved.");
+		ImGui::TextWrapped("Fit each eye's top, bottom, outer side and corners first. Calibration saves that outline and fits the centre automatically, replacing the previous inward overlap.");
 	float percent = capture ? 100.0f : pendingFoveatedMaskScaling.value_or(settings.foveatedAutomaticMaskScaling);
 	bool scaleChanged = false;
 	{
 		const bool compatible = FoveatedMaskCalibration::MatchesProfile(settings.foveatedCalibrationReference,
-			settings.periphery_taa_enable, settings.periphery_taa_center_area,
-			GetNormalFoveatedBlendFeather(settings, settings.periphery_taa_enable));
+			false, settings.foveatedCenterArea, GetNormalFoveatedBlendFeather(settings, false));
 		if (!compatible)
 			pendingFoveatedMaskScaling.reset();
 		auto guard = Util::DisableGuard(!compatible);
@@ -19475,7 +19511,7 @@ void Upscaling::DrawFoveatedCalibration()
 		scaleChanged = pendingFoveatedMaskScaling.has_value() && !ImGui::IsItemActive();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextWrapped("Applies when released. 100%% restores the calibrated fit. Lower tightens the outside; higher expands it. Size and position are recalculated together to cover the centre. Check scenery for peripheral flicker. Manual edits do not replace the saved reference; Calibrate Masks does.");
+		ImGui::TextWrapped("Applies on release. 100%% restores calibration; lower shrinks outer coverage, higher expands it. Size and position also refit the centre. Check for edge flicker. Only Calibrate Masks updates the saved reference; manual edits do not.");
 	if (capture || scaleChanged) {
 		pendingFoveatedMaskScaling.reset();
 		const auto previous = settings;
@@ -19484,9 +19520,10 @@ void Upscaling::DrawFoveatedCalibration()
 			settings = candidate;
 			InvalidateFrameScopedUpscalingState();
 			RequestHistoryReset();
-			if (!HandleNeuralRenderingSettingsTransition(previous, "FOV mask calibration"))
-				foveatedCalibrationMessage = "Mask settings applied; the NR transition did not complete. Check NR status.";
-			else
+			if (!HandleNeuralRenderingSettingsTransition(previous, "FOV mask calibration")) {
+				settings = previous;
+				foveatedCalibrationMessage = "NR could not switch FOV coverage; previous calibration retained. Check NR status.";
+			} else
 				foveatedCalibrationMessage = settings.foveatedCenterArea >= FoveatedCommon::kFullCoverageThreshold && !settings.periphery_taa_enable ?
 				                                 "Full-eye coverage selected at the current control limits." :
 				                                 "Outer reference fitted; centre coverage checked. Inspect both eyes before saving.";
@@ -19512,11 +19549,8 @@ void Upscaling::DrawFoveatedSetupInstructions()
 		};
 		ImGui::TextUnformatted(kFoveatedUpscalingSetupIntro);
 		ImGui::Spacing();
-		drawInstructionHeadline("Upscaling FOV setup");
-		ImGui::TextUnformatted(kFoveatedUpscalingSetupInstructions);
-		ImGui::Spacing();
-		drawInstructionHeadline("Upscaling FOV + TAA setup");
-		ImGui::TextUnformatted(kFoveatedUpscalingPeripheralTaaSetupInstructions);
+		drawInstructionHeadline(settings.periphery_taa_enable ? "FOV + TAA setup" : "FOV-only setup");
+		ImGui::TextUnformatted(settings.periphery_taa_enable ? kFoveatedUpscalingPeripheralTaaSetupInstructions : kFoveatedUpscalingSetupInstructions);
 		ImGui::PopTextWrapPos();
 		ImGui::EndChild();
 	}
@@ -19544,8 +19578,8 @@ void Upscaling::DrawFoveatedSettings()
 			SetFoveatedUpscalingEnabled(fovEnabled);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Enables VR FOV-mask upscaling.");
-			ImGui::TextUnformatted("On: enables foveated upscaling controls and the shared FOV mask used by VR foveated effects.");
-			ImGui::TextUnformatted("Also selects SSGI FOV and Screen Space Shadows FOV. Their parent effects stay unchanged.");
+			ImGui::TextUnformatted("Enable foveated upscaling controls and the shared mask for VR FOV effects.");
+			ImGui::TextUnformatted("Also select SSGI FOV and Screen Space Shadows FOV, without enabling their parent effects.");
 		}
 	} else {
 		ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
@@ -19596,6 +19630,9 @@ void Upscaling::DrawFoveatedSettings()
 		}
 	};
 
+	DrawPeripheryTAAControl();
+	DrawFoveatedSetupInstructions();
+
 	if (IsDefaultFoveatedMaskGeometry(settings)) {
 		ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.05f, 1.0f), "Default FOV mask active. Tune it for your HMD for best image and performance.");
 	}
@@ -19605,49 +19642,63 @@ void Upscaling::DrawFoveatedSettings()
 		ImGui::TextUnformatted("Use this while tuning FOV masks.");
 		ImGui::TextUnformatted("Also works at full coverage. Temporarily pauses during loading and game menus.");
 		ImGui::TextUnformatted("Magenta = left FOV, green = right FOV, white = overlap, charcoal = TAA.");
-		ImGui::TextUnformatted("Amber diagonal stripes (80% opaque) flag missing coverage. Solid outlines mark the outer mask edges.");
-		ImGui::TextUnformatted("Fit only the outer edges in each eye, then press Calibrate Masks to fit the centre.");
+		ImGui::TextUnformatted("Amber stripes (80% opaque) mark coverage gaps; solid outlines mark outer mask edges.");
+		ImGui::TextUnformatted("Preview bypasses DLSS/FSR, TAA and NR; the scene may shimmer. Turn it off to check image quality.");
+		ImGui::TextUnformatted(settings.periphery_taa_enable ? "The visible boundary is inherited from FOV only." :
+															   "Fit each eye's outer edges, then press Calibrate Masks to fit the centre.");
 	}
 
-	DrawFoveatedCalibration();
+	if (!settings.periphery_taa_enable)
+		DrawFoveatedCalibration();
 	const auto coverage = GetFoveatedMaskCoverage();
 	ImGui::Text("FOV area saved (approx.): L %.1f%% / R %.1f%%", coverage[0].savedPercent, coverage[1].savedPercent);
-	ImGui::TextWrapped("Keep outside stripes out of view at the outer edges, then calibrate the centre. Includes active masks and feathering; full CSX FOV saves 0%%. This is area, not measured performance.");
+	ImGui::TextWrapped("Area saved includes mask feathering; full CSX FOV saves 0%%. This estimates coverage, not performance.");
 
 	ImGui::Dummy(ImVec2(0.0f, 6.0f));
 	ImGui::Separator();
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
 	ImGui::TextUnformatted("Upscaling FOV Controls");
 
-	{
-		auto areaGuard = Util::DisableGuard(settings.periphery_taa_enable);
-		Util::Widgets::SliderFloat("FOV Only Visible Scale", &settings.foveatedCenterArea, FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		if (settings.periphery_taa_enable) {
-			ImGui::TextUnformatted("Inactive while FOV + TAA is enabled.");
-			ImGui::TextUnformatted("This saved value is kept for the FOV-only profile.");
-		} else {
-			ImGui::TextUnformatted("Defines the visible/protected HMD area for FOV-only mode.");
-			ImGui::TextUnformatted("Lower values = smaller visible area and more performance.");
-			ImGui::TextUnformatted("Range: low 0.25 (smallest visible area) to high 1.00 (full visible area).");
+	const auto previousSettings = settings;
+	auto coverageTransition = ScopeExit([&]() {
+		if (!HandleNeuralRenderingSettingsTransition(previousSettings, "VR FOV mask geometry")) {
+			settings = previousSettings;
+			Util::Text::WrappedError("NR could not switch FOV coverage; previous settings retained.");
 		}
+	});
+	if (settings.periphery_taa_enable) {
+		const float minimum = FoveatedMaskCalibration::MinimumInnerScale(settings);
+		{
+			auto guard = Util::DisableGuard(minimum >= settings.foveatedCenterArea);
+			Util::Widgets::SliderFloat("Inner area size", &settings.periphery_taa_center_area,
+				minimum, settings.foveatedCenterArea, "%.2f");
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Smaller = less DLSS/FSR processing and more TAA around the centre. The visible boundary stays fixed.");
+		if (minimum > FoveatedCommon::kCenterScaleMin)
+			ImGui::TextWrapped("This wide mask needs the current centre to retain its feathered edge. Reduce the FOV-only visible scale first to use a smaller TAA centre.");
+		ImGui::TextWrapped("Outer boundary, shape, eye positions and feathering come from FOV only. No recalibration is needed when switching modes or changing inner size.");
+		FoveatedMaskCalibration::InheritFovOnlyBoundary(settings);
+		drawActiveFoveatedProfileStatus();
+		if (resourceSettingsKeyBefore != BuildUpscalingResourceMutationSettingsKey(settings))
+			InvalidateFrameScopedUpscalingState();
+		return;
 	}
+
+	Util::Widgets::SliderFloat("FOV Only Visible Scale", &settings.foveatedCenterArea,
+		FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Fits the visible headset area. Smaller values cover less; 1.00 covers the full eye image.");
 	settings.foveatedCenterArea = ClampFoveatedCenterScale(settings.foveatedCenterArea);
 	Util::Widgets::SliderFloat("Expand FOV Scale R/L", &settings.foveatedCenterHorizontalScale, FoveatedCommon::kCenterHorizontalScaleMin, FoveatedCommon::kCenterHorizontalScaleMax, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Widens the upscaling center mask horizontally.");
-		if (settings.periphery_taa_enable)
-			ImGui::TextUnformatted("FOV + TAA uses this shared horizontal expansion.");
-		ImGui::TextUnformatted("Range: low 1.00 (no extra width) to high 2.00 (maximum extra width).");
+		ImGui::TextUnformatted("1.00 = no extra width; 2.00 = maximum extra width.");
 	}
 
 	auto drawEyeOffsetTooltip = [&](const char* eye, const char* axis, const char* direction) {
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			if (settings.periphery_taa_enable)
-				ImGui::Text("%s-eye %s offset shared by upscaling and FOV + TAA.", eye, axis);
-			else
-				ImGui::Text("%s-eye %s offset for the upscaling center mask.", eye, axis);
+			ImGui::Text("%s-eye %s mask offset. Shared with FOV + TAA.", eye, axis);
 			ImGui::TextUnformatted(direction);
 		}
 	};
@@ -19668,59 +19719,7 @@ void Upscaling::DrawFoveatedSettings()
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
 	ImGui::Separator();
 	DrawFoveatedBlendSettings();
-	ImGui::Separator();
-	ImGui::TextUnformatted("Upscaling FOV + TAA Settings");
-	DrawPeripheryTAAControl();
-	ImGui::BeginDisabled(!settings.periphery_taa_enable);
-	if (!settings.periphery_taa_enable)
-		ImGui::TextDisabled("Enable FOV + TAA to edit the center scale, transition, and visible outer scale.");
-	Util::Widgets::SliderFloat("FOV + TAA Center Scale", &settings.periphery_taa_center_area, FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
-	if (settings.periphery_taa_enable) {
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Actual DLSS/FSR center dispatch size for FOV + TAA.");
-			ImGui::TextUnformatted("Lower values = smaller vendor center and more TAA ring coverage.");
-			ImGui::TextUnformatted("Range: low 0.25 (smallest center) to high 1.00 (largest center).");
-		}
-	}
-	settings.periphery_taa_center_area = ClampFoveatedCenterScale(settings.periphery_taa_center_area);
-	{
-		Util::Widgets::SliderFloat(
-			"Center Blend/TAA Transition",
-			&settings.periphery_taa_center_blend_feather,
-			kPeripheryTAACenterBlendFeatherMin,
-			kPeripheryTAACenterBlendFeatherMax,
-			"%.3f");
-		if (settings.periphery_taa_enable) {
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Controls softness of the center-to-TAA transition edge.");
-				ImGui::TextUnformatted("Lower = harder edge, higher = softer edge.");
-				ImGui::Text("Range: low %.2f (harder transition) to high %.2f (softer transition).", kPeripheryTAACenterBlendFeatherMin, kPeripheryTAACenterBlendFeatherMax);
-			}
-		}
-		settings.periphery_taa_center_blend_feather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
-	}
-	const float taaOuterRangeMin = GetPeripheryTAAOuterScaleFloor(settings.periphery_taa_center_area);
-	Util::Widgets::SliderFloat(
-		"FOV + TAA Visible Outer Scale",
-		&settings.periphery_taa_outer_scale,
-		taaOuterRangeMin,
-		kPeripheryTAAOuterScaleMax,
-		"%.2f");
-	if (settings.periphery_taa_enable) {
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Controls the shared HMD-visible boundary for FOV + TAA.");
-			ImGui::Text("Range: low %.2f (minimum allowed by current center scale) to high %.2f (full range).", taaOuterRangeMin, kPeripheryTAAOuterScaleMax);
-			ImGui::TextUnformatted("Lower values are faster.");
-			ImGui::TextUnformatted("Fit the solid outer outline to your visible edges, keeping the amber stripes just outside your view.");
-		}
-	}
-	ImGui::EndDisabled();
-
-	settings.periphery_taa_center_area = ClampFoveatedCenterScale(settings.periphery_taa_center_area);
-	settings.periphery_taa_center_blend_feather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
-	settings.periphery_taa_outer_scale = ClampPeripheryTAAOuterScaleForCenter(
-		settings.periphery_taa_outer_scale,
-		settings.periphery_taa_center_area);
+	FoveatedMaskCalibration::InheritFovOnlyBoundary(settings);
 
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
 	drawActiveFoveatedProfileStatus();
@@ -20812,6 +20811,7 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 {
 	if (a_backendResetSucceeded)
 		*a_backendResetSucceeded = false;
+	NeuralRendering::NormalizeRenderingCoverage(settings, globals::game::isVR);
 	const bool fovChanged = ApplyNeuralRenderingFovConstraint(settings);
 	const auto acceptTransition = [&]() {
 		neuralRenderingReplacedFovTaa = IsNeuralRenderingEnabled(settings) &&
@@ -23103,6 +23103,7 @@ void Upscaling::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 		"performance cost measurement off");
 	settings.foveatedVendorDispatch = false;
 	settings.periphery_taa_enable = false;
+	SanitizeFoveatedSettings(settings);
 	InvalidateFrameScopedUpscalingState();
 }
 
@@ -42485,7 +42486,8 @@ bool Upscaling::IsFSRRuntimeFsr4PathActive(UpscaleMethod a_upscaleMethod) const
 
 bool Upscaling::IsPeripheryTAAEnabled(UpscaleMethod a_upscaleMethod) const
 {
-	return !IsNeuralRenderingEnabled(settings) && IsFoveatedVendorDispatchEnabled(a_upscaleMethod) && settings.periphery_taa_enable;
+	return !IsNeuralRenderingEnabled(settings) && IsFoveatedVendorDispatchEnabled(a_upscaleMethod) &&
+	       settings.periphery_taa_enable && FoveatedMaskCalibration::HasFovOnlySetup(settings);
 }
 
 bool Upscaling::IsPeripheryTAAPathActive(UpscaleMethod a_upscaleMethod) const
@@ -42543,16 +42545,8 @@ Upscaling::ActiveUpscalingFoveatedProfile Upscaling::GetActiveUpscalingFoveatedP
 	const auto maskParams = GetFoveatedMaskProfileParams(settings, profile.usesPeripheryTAAOuterMask);
 	profile.vendorCenterScale = maskParams.centerScale;
 
-	if (profile.usesPeripheryTAAOuterMask) {
-		profile.sharedVisibleScale = ClampPeripheryTAAOuterScaleForCenter(
-			settings.periphery_taa_outer_scale,
-			settings.periphery_taa_center_area);
-	} else {
-		profile.sharedVisibleScale = maskParams.centerScale;
-	}
-
-	profile.sharedVisibleFeather = profile.usesPeripheryTAAOuterMask ? FoveatedCommon::kCenterFeather :
-	                                                                   GetNormalFoveatedBlendFeather(settings, false);
+	profile.sharedVisibleScale = ClampFoveatedCenterScale(settings.foveatedCenterArea);
+	profile.sharedVisibleFeather = GetNormalFoveatedBlendFeather(settings, false);
 	profile.centerHorizontalScale = maskParams.centerHorizontalScale;
 	profile.centerOffsets = GetResolvedFoveatedMaskCenterOffsets(profile.usesPeripheryTAAOuterMask);
 	if (!globals::game::isVR)
@@ -42589,7 +42583,7 @@ float2 Upscaling::GetResolvedFoveatedMaskCenterOffset(uint32_t eyeIndex, bool us
 	resolved.x += ClampFoveatedMaskOffsetAdjustment(userAdjustX);
 	resolved.y += ClampFoveatedMaskOffsetAdjustment(userAdjustY);
 
-	resolved.x = FoveatedCommon::ResolveMaskOffsetX(resolved.x, params.centerScale, params.centerHorizontalScale,
+	resolved.x = FoveatedCommon::ResolveMaskOffsetX(resolved.x, ClampFoveatedCenterScale(settings.foveatedCenterArea), params.centerHorizontalScale,
 		!isLeftEye, globals::game::isVR);
 
 	resolved.x = std::clamp(resolved.x, kFoveatedMaskOffsetResolvedMin, kFoveatedMaskOffsetResolvedMax);

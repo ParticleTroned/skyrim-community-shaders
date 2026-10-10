@@ -328,7 +328,7 @@ public:
 	static constexpr float kFoveatedManualOffsetMax = FoveatedMaskCalibration::kMaximumOffset;
 	static constexpr float kFoveatedBlendFeatherMin = 0.0f;
 	static constexpr float kFoveatedBlendFeatherMax = 0.10f;
-	static constexpr float kPeripheryTAAOuterScaleMin = 0.30f;
+	static constexpr float kPeripheryTAAOuterScaleMin = FoveatedCommon::kCenterScaleMin;
 	static constexpr float kPeripheryTAAOuterScaleMax = 1.0f;
 	// Explicit profile changes remain blocked while RaceSex owns presentation or its handoff tail.
 	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexMenu = 1u << 0;
@@ -479,8 +479,8 @@ public:
 		bool foveatedVendorDispatch = false;
 		bool neuralRenderingEnabled = false;
 		uint neuralRenderingMode = static_cast<uint>(NeuralRendering::RenderingMode::ReducedResolution);
+		// Compatibility fields are derived from shared VR FOV coverage for both placements.
 		bool neuralRenderingFovOnly = false;
-		// Loading/resetting NR defaults follows configured VR FOV; explicit choices persist.
 		bool neuralRenderingRenderscaleFov = false;
 		// Retained for saved-settings compatibility; effective placement follows the mode.
 		uint neuralRenderingInsertionPoint = static_cast<uint>(

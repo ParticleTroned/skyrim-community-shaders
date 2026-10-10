@@ -1,5 +1,7 @@
 #include "Features/Upscaling/FoveatedBlendPolicy.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
+#include <cstdio>
+#include <source_location>
 
 #include <cmath>
 #include <cstdint>
@@ -26,9 +28,11 @@ float ClampPeripheryTAAOuterScaleForCenter(float value, float) { return value; }
 
 int main()
 {
-	const auto require = [](bool value) {
-		if (!value)
+	const auto require = [](bool value, std::source_location location = std::source_location::current()) {
+		if (!value) {
+			std::fprintf(stderr, "key invariant at line %u\n", location.line());
 			throw std::runtime_error("NR effective settings-key invariant");
+		}
 	};
 	for (bool enabled : { false, true }) {
 		for (auto mode : { NeuralRendering::RenderingMode::FullResolution, NeuralRendering::RenderingMode::Foveated,
@@ -77,8 +81,17 @@ int main()
 	Upscaling::Settings foveated{};
 	foveated.neuralRenderingCentralAreaPercent = 100;
 	foveated.neuralRenderingEnabled = true;
+	foveated.foveatedVendorDispatch = true;
+	foveated.foveatedCenterArea = 0.8f;
 	foveated.neuralRenderingMode = static_cast<uint>(NeuralRendering::RenderingMode::Foveated);
 	const auto foveatedKey = BuildNeuralRenderingSettingsKey(foveated);
+	{
+		auto output = foveated;
+		output.neuralRenderingMode = 0;
+		output.neuralRenderingFovOnly = false;
+		output.neuralRenderingRenderscaleFov = true;
+		require(BuildNeuralRenderingSettingsKey(output) == foveatedKey);
+	}
 	{
 		auto outer = foveated;
 		outer.foveatedOuterBlendFeather = 0.05f;
@@ -181,8 +194,7 @@ int main()
 		baseline.neuralRenderingCentralFeatherPixels = 64;
 		baseline.neuralRenderingEnabled = true;
 		baseline.neuralRenderingMode = static_cast<uint>(mode);
-		baseline.neuralRenderingFovOnly = true;
-		baseline.neuralRenderingRenderscaleFov = true;
+		baseline.foveatedVendorDispatch = true;
 		baseline.foveatedCenterArea = 0.3f;
 		baseline.foveatedCenterHorizontalScale = 1.0f;
 		const auto key = BuildNeuralRenderingSettingsKey(baseline);
@@ -199,13 +211,14 @@ int main()
 		changed = baseline;
 		changed.foveatedCenterArea = 0.5f;
 		require(BuildNeuralRenderingSettingsKey(changed) != BuildNeuralRenderingSettingsKey(baseline));
-		baseline.neuralRenderingFovOnly = false;
-		baseline.neuralRenderingRenderscaleFov = false;
+		baseline.foveatedVendorDispatch = false;
 		changed = baseline;
 		changed.foveatedCenterArea = 0.5f;
 		require(BuildNeuralRenderingSettingsKey(changed) == BuildNeuralRenderingSettingsKey(baseline));
 		changed = baseline;
 		changed.neuralRenderingRenderscaleFov = true;
+		require(BuildNeuralRenderingSettingsKey(changed) == BuildNeuralRenderingSettingsKey(baseline));
+		changed.foveatedVendorDispatch = true;
 		require(BuildNeuralRenderingSettingsKey(changed) != BuildNeuralRenderingSettingsKey(baseline));
 		changed = baseline;
 		changed.foveatedCenterArea = 0.5f;

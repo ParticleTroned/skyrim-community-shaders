@@ -11,6 +11,7 @@ namespace NeuralRendering
 {
 	inline constexpr std::uint32_t kMinimumCentralAreaPercent = 25;
 	inline constexpr std::uint32_t kMaximumCentralAreaPercent = 100;
+	inline constexpr std::uint32_t kDefaultLimitedCentralAreaPercent = 75;
 	inline constexpr std::uint32_t kDefaultCentralFeatherPixels = 64;
 	inline constexpr std::uint32_t kMaximumCentralFeatherPixels = 256;
 

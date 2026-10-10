@@ -119,8 +119,14 @@ int main()
 	Require(Near(before[0].x + 0.3f, offsets[0].x + 0.45f));
 	Require(Near(before[1].x - 0.3f, offsets[1].x - 0.45f));
 	const auto taa = upscaling.GetResolvedFoveatedMaskCenterOffsets(true);
-	Require(Near(taa[0].x, -0.005f) && Near(taa[1].x, -0.005f));
+	Require(Near(taa[0].x, offsets[0].x) && Near(taa[1].x, offsets[1].x));
 	Require(Near(taa[0].y, offsets[0].y) && Near(taa[1].y, offsets[1].y));
+	for (const float inner : { 0.25f, 0.3f, 0.5f, 0.6f }) {
+		upscaling.settings.periphery_taa_center_area = inner;
+		const auto inherited = upscaling.GetResolvedFoveatedMaskCenterOffsets(true);
+		Require(Near(inherited[0].x, offsets[0].x) && Near(inherited[1].x, offsets[1].x));
+		Require(Near(inherited[0].y, offsets[0].y) && Near(inherited[1].y, offsets[1].y));
+	}
 	globals::game::isVR = false;
 	const auto flat = upscaling.GetResolvedFoveatedMaskCenterOffsets();
 	Require(Near(flat[0].x, before[0].x) && Near(flat[1].x, before[1].x));

@@ -113,6 +113,42 @@ namespace FoveatedMaskCalibration
 		       (!peripheryTaa || (std::isfinite(centerScale) && std::abs(reference.centerScale - centerScale) <= 1e-6f));
 	}
 
+	/** A calibrated FOV-only mask owns the visible boundary in both modes. */
+	template <class Settings>
+	[[nodiscard]] inline bool HasFovOnlySetup(const Settings& settings)
+	{
+		return MatchesProfile(settings.foveatedCalibrationReference, false, settings.foveatedCenterArea,
+				   std::max(settings.foveatedOuterBlendFeather, FoveatedCommon::kMinimumFeather)) &&
+		       !settings.foveatedCalibrationReference.fullImage && FoveatedCommon::IsActiveCoverage(settings.foveatedCenterArea);
+	}
+
+	/** Avoid shrinking feather support when the inherited outline exceeds the ring limit. */
+	template <class Settings>
+	[[nodiscard]] inline float MinimumInnerScale(const Settings& settings)
+	{
+		const float visibleScale = FoveatedCommon::ClampCenterScale(settings.foveatedCenterArea);
+		const float feather = std::isfinite(settings.foveatedOuterBlendFeather) ?
+		                          std::clamp(settings.foveatedOuterBlendFeather, FoveatedCommon::kMinimumFeather, 0.1f) :
+		                          FoveatedCommon::kCenterFeather;
+		return visibleScale + 2.0f * feather > 1.0f ? visibleScale : FoveatedCommon::kCenterScaleMin;
+	}
+
+	/** Derive TAA coverage without modifying the FOV-only fit or its reference. */
+	template <class Settings>
+	inline void InheritFovOnlyBoundary(Settings& settings)
+	{
+		const float visibleScale = FoveatedCommon::ClampCenterScale(settings.foveatedCenterArea);
+		const float feather = std::isfinite(settings.foveatedOuterBlendFeather) ?
+		                          std::clamp(settings.foveatedOuterBlendFeather, 0.0f, 0.1f) :
+		                          FoveatedCommon::kCenterFeather;
+		settings.periphery_taa_outer_scale = std::min(visibleScale + 2.0f * std::max(feather, FoveatedCommon::kMinimumFeather), 1.0f);
+		settings.periphery_taa_center_blend_feather = feather;
+		settings.periphery_taa_center_area = std::clamp(FoveatedCommon::ClampCenterScale(settings.periphery_taa_center_area),
+			MinimumInnerScale(settings), visibleScale);
+		if (!HasFovOnlySetup(settings))
+			settings.periphery_taa_enable = false;
+	}
+
 	inline Polygon ClipHalfPlane(Polygon polygon, double nx, double ny, double offset)
 	{
 		Polygon result;

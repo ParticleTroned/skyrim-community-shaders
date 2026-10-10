@@ -846,6 +846,19 @@ if(_descriptor_json_error)
     )
 endif()
 
+string(JSON _nr_mode_count LENGTH "${_descriptor_json}" inputSchema properties mode oneOf 0 enum)
+string(JSON _nr_first_mode GET "${_descriptor_json}" inputSchema properties mode oneOf 0 enum 0)
+string(JSON _nr_second_mode GET "${_descriptor_json}" inputSchema properties mode oneOf 0 enum 1)
+if(NOT _nr_mode_count EQUAL 2 OR NOT _nr_first_mode STREQUAL "full_resolution" OR NOT _nr_second_mode STREQUAL "reduced_resolution")
+    message(FATAL_ERROR "NR must expose only after-upscaling and before-DLSS placements")
+endif()
+foreach(_nr_derived_field IN ITEMS fovOnly renderscaleFov)
+    string(JSON _nr_deprecated GET "${_descriptor_json}" inputSchema properties ${_nr_derived_field} deprecated)
+    if(NOT _nr_deprecated)
+        message(FATAL_ERROR "NR coverage must be inherited from shared VR FOV")
+    endif()
+endforeach()
+
 string(JSON _mask_roi_status_description GET "${_descriptor_json}"
     outputSchema properties neuralRendering properties characterRendering
     properties runtime properties eyes items properties maskRoiStatus description)
@@ -2916,9 +2929,10 @@ foreach(_foveation_semantic_contract IN ITEMS
     [[constexpr double kManualOffsetRequestMin = -0.3;]]
     [[constexpr double kManualOffsetRequestMax = 0.3;]]
     [[constexpr double kBlendFeatherRequestMax = 0.1;]]
-    [[constexpr double kPeripheryTAAOuterScaleRequestMin = 0.3;]]
-    [[requestedSettings.periphery_taa_outer_scale <]]
-    [[requestedSettings.periphery_taa_center_area)]]
+    [[constexpr double kPeripheryTAAOuterScaleRequestMin = 0.25;]]
+    [["foveation_inner_scale_out_of_range"]]
+    [["foveation_fov_only_setup_required"]]
+    [[FoveatedMaskCalibration::InheritFovOnlyBoundary(requestedSettings);]]
     [[AppendDistinctFoveationCycleValue(]]
     [[const std::size_t valueCount = a_values.size();]]
     [[a_upscaling.GetRuntimeResolutionWorkFrame();]]
@@ -3136,7 +3150,7 @@ foreach(_foveation_action_contract IN ITEMS
     [["foveation_configure","foveation_cycle"]]
     [["foveation_configure_empty"]]
     [["foveation_request_field_unknown"]]
-    [["foveation_outer_scale_below_center"]]
+    [["foveation_inherited_control"]]
     [["foveation_cycle_index_out_of_range"]]
     [=["required":["control"]]=]
     [=["propertyNames":{"enum":["action","expectedBuildId","control","valueIndex"]}]=]
@@ -3183,13 +3197,11 @@ set(_foveation_cycle_controls
     periphery_taa
     fov_only_center_scale
     periphery_taa_center_scale
-    periphery_taa_outer_scale
     center_horizontal_scale
     left_eye_offset_x
     left_eye_offset_y
     right_eye_offset_x
     right_eye_offset_y
-    periphery_taa_blend_feather
     neural_final_ldr_blend_feather
     mask_visualization
 )
@@ -3207,11 +3219,10 @@ foreach(_outer_scale_contract IN ITEMS
     [[TryParseFoveationFloat(a_args, "peripheryTaaOuterScale",]]
     [[a_settings.periphery_taa_outer_scale = *a_request.peripheryTaaOuterScale;]]
     [[a_left.periphery_taa_outer_scale == a_right.periphery_taa_outer_scale]]
-    [[case FoveationCycleControl::PeripheryTAAOuterScale:]]
-    [[FoveationCycleControl::PeripheryTAAOuterScale, "periphery_taa_outer_scale"]]
-    [[request.peripheryTaaOuterScale = selected;]]
+    [["foveation_inherited_control"]]
+    [[GetPeripheryTAACenterScaleCycleValues(settings)]]
     [[{ "peripheryTaaOuterScale", settings.periphery_taa_outer_scale }]]
-    [["peripheryTaaOuterScale":{"type":"number","minimum":0.3,"maximum":1.0}]]
+    [["peripheryTaaOuterScale":{"type":"number","minimum":0.25,"maximum":1.0,]]
 )
     string(FIND "${_bridge}" "${_outer_scale_contract}" _outer_scale_position)
     if(_outer_scale_position EQUAL -1)
@@ -3415,7 +3426,7 @@ foreach(_character_contract IN ITEMS
 	[[{ "feature18InvocationMatchesEvidenceFrame", rendererSnapshot.frameId == observedFrame }]]
 	[[{ "controlMaskCopies", snapshot.counters.controlMaskCopies }]]
 	[[Actor diagnostics count authored face, skin, hair, armour and weapon pixels across the active low-resolution eye input]]
-	[[characterMinimumFacePixelSize uses full-eye final-output pixels in every A/B/C mode, independently of internal render resolution.]]
+	[[characterMinimumFacePixelSize uses full-eye final-output pixels in every A/C mode, independently of internal render resolution.]]
 	[[final-LDR and submit routes already preserve a separate baseline.]]
     [[{ "privateSingleSubrectEnabled", dynamicCharacterRoiEnabled || privateSingleSubrectEnabled }]]
     [[Feature 18 bypasses current CPU-selection or completed GPU-category-superset empty proofs bound to source, capture, policy and prepared contents; pending, stale or failed bounds never prove empty. Diagnostic forced-zero is identified separately. Delayed diagnostic coverage never suppresses current-frame evaluation. Empty transactions retain native resources without initialization or keepalive evaluation and reset history on successful re-entry.]]

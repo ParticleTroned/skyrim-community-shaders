@@ -226,7 +226,7 @@ public:
 
 	/** @brief Requests a material-category channel in the deferred G-buffer; default no-op. */
 	virtual bool NeedsDeferredMaterialCategories() const { return false; }
-	/** @brief Receives a native pixel-shader fallback on the render thread. */
+	/** @brief Receives a native pixel-shader fallback while authoring deferred material categories. */
 	virtual void OnPixelShaderFallback(RE::BSShader::Type) {}
 
 	/**

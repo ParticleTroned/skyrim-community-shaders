@@ -310,7 +310,7 @@ bool Deferred::MaterialCategoriesRequested()
 
 bool Deferred::IsMaterialCategoriesReady() const
 {
-	return IsMaterialCategoriesEnabled() && materialCategoriesValid && sceneDepthFinal &&
+	return !deferredPass && IsMaterialCategoriesEnabled() && materialCategoriesValid && sceneDepthFinal &&
 	       materialCategoryFrame == globals::state->frameCount;
 }
 

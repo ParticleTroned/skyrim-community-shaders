@@ -4,6 +4,7 @@
 #include "ShaderTools/LegacyGraphicsCompatibility.h"
 #include "Utils/ExternalEmittance.h"
 
+#include "Deferred.h"
 #include "Feature.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -937,7 +938,8 @@ namespace Hooks
 				}
 			}
 
-			if (!state->settingCustomShader && a_pixelShader && state->currentShader) {
+			if (!state->settingCustomShader && a_pixelShader && state->currentShader &&
+				globals::deferred->deferredPass && globals::deferred->IsMaterialCategoriesEnabled()) {
 				const auto type = state->currentShader->shaderType.get();
 				Feature::ForEachLoadedFeature("OnPixelShaderFallback", [type](Feature* feature) {
 					feature->OnPixelShaderFallback(type);

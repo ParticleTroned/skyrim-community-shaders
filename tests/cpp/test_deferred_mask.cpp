@@ -37,6 +37,11 @@ namespace RE
 			Water,
 			ImageSpace
 		};
+		struct ShaderType
+		{
+			Type value = Type::Lighting;
+			Type get() const { return value; }
+		} shaderType;
 	};
 }
 constexpr auto MASKS2 = RE::RENDER_TARGET::Mask;
@@ -118,7 +123,16 @@ struct Device
 struct Feature
 {
 	bool loaded = true, categories = false;
+	unsigned fallbacks = 0;
 	bool NeedsDeferredMaterialCategories() const { return categories; }
+	void OnPixelShaderFallback(RE::BSShader::Type) { ++fallbacks; }
+	template <class Callback>
+	static void ForEachLoadedFeature(const char*, Callback callback)
+	{
+		for (auto* feature : GetFeatureList())
+			if (feature->loaded)
+				callback(feature);
+	}
 	static std::array<Feature*, 1> GetFeatureList()
 	{
 		static Feature feature;
@@ -138,6 +152,8 @@ namespace globals
 	struct State
 	{
 		uint32_t frameCount = 7;
+		bool settingCustomShader = false;
+		RE::BSShader* currentShader = nullptr;
 	} stateStorage;
 	State* state = &stateStorage;
 }
@@ -148,10 +164,14 @@ public:
 	void UpdateMaterialCategoryTarget();
 	bool IsMaterialCategoriesEnabled() const { return materialCategoriesEnabled; }
 	bool IsMaterialCategoriesReady() const;
-	bool materialCategoriesEnabled = false, materialCategoriesValid = false, sceneDepthFinal = false;
+	bool materialCategoriesEnabled = false, materialCategoriesValid = false, sceneDepthFinal = false, deferredPass = false;
 	uint32_t materialCategoryFrame = 0;
 	std::optional<bool> failedMaterialCategoryMode;
 };
+namespace globals
+{
+	Deferred* deferred;
+}
 namespace SIE
 {
 	struct ShaderCache
@@ -258,12 +278,43 @@ void AllocationCases(Renderer& renderer, Device& device, bool uav)
 	ReleaseRenderTargetSlot(MASKS2);
 	Require(!target.texture && !target.SRV && !target.RTV && !target.UAV, "Retirement retained target slots");
 }
+void FallbackNotifications()
+{
+	Deferred deferred;
+	globals::deferred = &deferred;
+	RE::BSShader shader;
+	auto* state = globals::state;
+	auto* feature = Feature::GetFeatureList()[0];
+	for (bool categories : { false, true })
+		for (bool active : { false, true })
+			for (bool custom : { false, true })
+				for (bool native : { false, true })
+					for (bool known : { false, true }) {
+						deferred.materialCategoriesEnabled = categories;
+						deferred.deferredPass = active;
+						state->settingCustomShader = custom;
+						state->currentShader = known ? &shader : nullptr;
+						auto* a_pixelShader = native ? &shader : nullptr;
+						const auto before = feature->fallbacks;
+#include "deferred_fallback_under_test.h"
+						Require(feature->fallbacks - before == unsigned(categories && active && !custom && native && known),
+							"Fallback notification escaped an authored deferred pass");
+					}
+	state->settingCustomShader = false;
+	state->currentShader = nullptr;
+	globals::deferred = nullptr;
+	std::cout << "Native fallback notifications: 32 rendering/binding conditions passed\n";
+}
 void AdmissionCases()
 {
 	Deferred deferred;
 	deferred.materialCategoriesEnabled = deferred.materialCategoriesValid = deferred.sceneDepthFinal = true;
 	deferred.materialCategoryFrame = globals::state->frameCount;
 	Require(deferred.IsMaterialCategoriesReady(), "Completed material lane not admitted");
+	deferred.deferredPass = true;
+	Require(!deferred.IsMaterialCategoriesReady(), "Active deferred compositing admitted its material lane");
+	deferred.deferredPass = false;
+	Require(deferred.IsMaterialCategoriesReady(), "Ending deferred rendering did not admit the complete lane");
 	++globals::state->frameCount;
 	Require(!deferred.IsMaterialCategoriesReady(), "Previous frame's material lane was admitted");
 	deferred.materialCategoryFrame = globals::state->frameCount;
@@ -431,6 +482,7 @@ int wmain(int argc, wchar_t** argv)
 		AllocationCases(renderer, device, true);
 		Require(logger::errors == 14, "Allocation failures were not reported exactly once");
 		AdmissionCases();
+		FallbackNotifications();
 		AoPrecisionAndFill(device, context.get());
 		ShaderOutputs(argv[1]);
 		std::cout << "Deferred mask: 40 layout transitions, 14 allocation rollbacks, bounded retries, current-frame admission, AO precision and typed UAV fill passed\n";

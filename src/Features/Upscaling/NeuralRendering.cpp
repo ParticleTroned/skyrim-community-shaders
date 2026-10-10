@@ -544,7 +544,8 @@ struct NeuralRendering::Impl
 		// Never on the Prepare dispatch: that writes NGX's input proxy, which the overlay would corrupt.
 		data.regionOverlayEnabled = (!prepare && regionOverlay) ? 1u : 0u;
 		data.regionOutlineThickness = kRegionOutlineThicknessPixels;
-		data.materialMapEnabled = (!prepare && materialMapEnabled && MaterialLane()) ? 1u : 0u;
+		auto* masks2 = prepare ? nullptr : MaterialLane();
+		data.materialMapEnabled = (materialMapEnabled && masks2) ? 1u : 0u;
 		data.materialMapMode = materialMapMode;
 		data.materialMapFilter = materialMapFilter;
 		data.materialMapStrengthBound = materialStrengthBound ? 1u : 0u;
@@ -575,7 +576,6 @@ struct NeuralRendering::Impl
 		auto buffer = colorBuffer->CB();
 		context->CSSetConstantBuffers(0, 1, &buffer);
 		globals::state->BindSharedDataCS(context.get(), true);
-		auto* masks2 = MaterialLane();
 		ID3D11ShaderResourceView* inputs[]{ original->srv.get(), prepare ? nullptr : eye.color->srv,
 			prepare ? nullptr : eye.output->srv, exposure,
 			data.hasToneData ? eye.toneData->srv.get() : nullptr, masks2 };

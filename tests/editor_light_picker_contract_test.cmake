@@ -127,7 +127,7 @@ if(NOT _capability_gate_count EQUAL 2)
 endif()
 
 foreach(_vr_click_owner_contract IN ITEMS
-    "RecordQueuedWandClickOwner(logicalButton, eventController);"
+    "RecordQueuedWandClickOwner(event->button, event->pointer.controller);"
     "const int targetFrame = ImGui::GetFrameCount() + 1;"
     "!ImGui::IsMouseClicked(ImGuiMouseButton_Left) || click.frame != ImGui::GetFrameCount()"
 )

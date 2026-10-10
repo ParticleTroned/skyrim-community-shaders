@@ -19,6 +19,7 @@ class FeatureIssueScannerTests(unittest.TestCase):
         self.assertIsNotNone(compiler, "Run in the MSVC developer environment")
         source = (ROOT / "src/FeatureIssues.cpp").read_text(encoding="utf-8")
         feature = (ROOT / "src/Feature.cpp").read_text(encoding="utf-8")
+        legacy_utility = (ROOT / "src/LegacyUtilityCompatibility.cpp").read_text(encoding="utf-8")
         driver = r'''
 #include <cstdlib>
 #include <filesystem>
@@ -36,6 +37,8 @@ struct Module {
 };
 }
 #include "FeatureVersions.h"
+#include "LegacyUtilityCompatibility.h"
+LEGACY_UTILITY_ALIAS
 namespace logger {
 template<class... Args> void info(Args&&...) {}
 template<class... Args> void warn(Args&&...) {}
@@ -117,6 +120,9 @@ int main(int argc, char** argv) {
         WriteINI("PerformanceTuning.ini");
         WriteINI("FoliageLighting.ini");
         WriteINI("LinearLighting.ini");
+        for (const auto* alias : { "CSUtility.ini", "OSUtility.ini", "CS Utility.ini", "OS Utility.ini" })
+            WriteINI(alias);
+        Check(!Feature::IsFeatureKnown("CSUtilityExtra"), "Legacy aliases must match exactly");
         if (!REL::Module::vr)
             WriteINI("VR.ini");
         std::filesystem::create_directory(Util::PathHelpers::featuresPath / "Ignored.ini");
@@ -158,6 +164,7 @@ int main(int argc, char** argv) {
 }
 '''
         for marker, value in (
+            ("LEGACY_UTILITY_ALIAS", block(legacy_utility, "bool LegacyUtilityCompatibility::IsAlias(")),
             ("KNOWN_FEATURE", block(feature, "bool Feature::IsFeatureKnown(")),
             ("OBSOLETE_FEATURE", block(source, "bool IsObsoleteFeature(")),
             ("ORPHAN_SCANNER", block(source, "void ScanForOrphanedFeatureINIs(")),
@@ -169,7 +176,7 @@ int main(int argc, char** argv) {
             exe = directory / "scanner.exe"
             cpp.write_text(driver, encoding="utf-8")
             command = [compiler, "/nologo", "/std:c++20", "/EHsc", "/O2", "/W4", "/WX",
-                       f"/I{ROOT / 'include'}", str(cpp), f"/Fe:{exe}"]
+                       f"/I{ROOT / 'include'}", f"/I{ROOT / 'src'}", str(cpp), f"/Fe:{exe}"]
             compiled = subprocess.run(command, cwd=directory, capture_output=True, text=True, timeout=60)
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
             result = subprocess.run([str(exe), str(directory)], capture_output=True, text=True, timeout=15)

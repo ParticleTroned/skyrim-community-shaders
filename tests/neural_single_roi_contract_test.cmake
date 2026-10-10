@@ -307,7 +307,7 @@ foreach(_transition_contract IN ITEMS
     [[RequestHistoryReset();]]
     [[NeuralRendering::RequiresBackendRetirement(]]
     [[a_previousSettings.neuralRenderingEnabled != settings.neuralRenderingEnabled, insertionPointChanged, previousInsertionPoint != currentInsertionPoint || a_previousSettings.neuralCharacterProviderBlending != settings.neuralCharacterProviderBlending,]]
-    [[neuralRenderer.Reset();]]
+    [[neuralRenderer.Reset(false, NeuralRendering::BackendRetirementPolicy::RetainHealthyBackend);]]
 )
     string(FIND "${_settings_transition_normalized}" "${_transition_contract}"
         _transition_contract_position)
@@ -322,7 +322,7 @@ string(FIND "${_settings_transition_normalized}"
     [[if (!fovChanged && HasSameNeuralRenderingSettingsKey]]
     _same_key_early_return_position)
 string(FIND "${_settings_transition_normalized}"
-    [[neuralRenderer.Reset();]]
+    [[neuralRenderer.Reset(false, NeuralRendering::BackendRetirementPolicy::RetainHealthyBackend);]]
     _renderer_reset_position)
 if(NOT _same_key_early_return_position LESS _renderer_reset_position)
     message(FATAL_ERROR "Unchanged settings must preserve native backend ownership")

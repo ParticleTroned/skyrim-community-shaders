@@ -72,7 +72,7 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-quality",
-    "presetVersion": "d2026.10.07.1",
+    "presetVersion": "d2026.10.10.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.20",
@@ -80,7 +80,7 @@
     },
     "settingsContract": {
       "revision": 10,
-      "sourceTreeSha256": "F8BA78FC07325DBFFD40FABAD1FBDD097626826B00AACA34FAC4028A24E19A9D"
+      "sourceTreeSha256": "A044146C17F0EF58F700C5B17A10B0A05D6B1351E0A831052F751620C3A1FCA2"
     }
   },
   "Upscaling": {
@@ -622,10 +622,10 @@
           "CausticsSpeed": 1.0,
           "CausticsStrength": 1.0,
           "CausticsTiling": 1.0,
-          "FresnelMax": 1.0,
-          "FresnelMin": 0.25,
+          "FresnelMax": 0.85,
+          "FresnelMin": 0.15,
           "GlobalReflectionAmount": 1.0,
-          "Muddiness": 0.7,
+          "Muddiness": 0.85,
           "ParallaxQuality": 16,
           "ParallaxStrength": 1.0,
           "RefractionAmount": 1.0,

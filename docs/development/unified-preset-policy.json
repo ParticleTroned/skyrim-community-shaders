@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.10.07.1",
+    "packageVersion": "d2026.10.10.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "982F652A87701145DEC20038BC7416C45C0F58AB39510B243FD5FAAC29499797"
+        "sha256": "4A71CA9248978CB5C289CBF7DB40AB609320DA823C26300DA91D3FC258F975F7"
     },
     "runtimeSettingsContract": {
         "revision": 10,
-        "sourceTreeSha256": "F8BA78FC07325DBFFD40FABAD1FBDD097626826B00AACA34FAC4028A24E19A9D",
+        "sourceTreeSha256": "A044146C17F0EF58F700C5B17A10B0A05D6B1351E0A831052F751620C3A1FCA2",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -31,6 +31,7 @@
                 "src/Features/AdaptiveBalanceGodraySettings.h",
                 "src/Features/FoveatedCommon.h",
                 "src/Features/GrassOptimizations/GrassPolicy.h",
+                "src/Features/TextureStreaming/Categories.h",
                 "src/Features/TextureStreaming/Policy.h",
                 "src/Features/TextureStreaming/Settings.h",
                 "src/Features/Upscaling/FoveatedMaskCalibration.h",
@@ -137,6 +138,7 @@
             "src/Features/TerrainVariation.h",
             "src/Features/TextureStreaming.cpp",
             "src/Features/TextureStreaming.h",
+            "src/Features/TextureStreaming/Categories.h",
             "src/Features/TextureStreaming/Policy.h",
             "src/Features/TextureStreaming/Settings.h",
             "src/Features/UnifiedWater.cpp",

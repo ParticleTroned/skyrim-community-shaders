@@ -67,13 +67,16 @@ namespace
 
 	bool IsCompatibleLegacyUnifiedPreset(const PresetCompatibility::Evaluation& a_evaluation, const Version& a_current)
 	{
-		// Bundled revision-8 NR settings support both the 3.19 and 3.20 version lines.
-		return a_current.major == 3 && a_current.minor == 20 && a_current.runtime == "VR" &&
-		       a_evaluation.settingsContractRevision == 8 &&
-		       a_evaluation.minimumVersion == "3.19" && a_evaluation.maximumVersionExclusive == "3.20" &&
-		       (a_evaluation.presetId == "csx-unified-performance" ||
-				   a_evaluation.presetId == "csx-unified-balanced" ||
-				   a_evaluation.presetId == "csx-unified-quality");
+		// Existing NR and FOV presets are migrated by the current settings loaders.
+		if (a_current.major != 3 || a_current.minor != 20 || a_current.runtime != "VR" ||
+			(a_evaluation.presetId != "csx-unified-performance" &&
+				a_evaluation.presetId != "csx-unified-balanced" &&
+				a_evaluation.presetId != "csx-unified-quality"))
+			return false;
+		return (a_evaluation.settingsContractRevision == 8 &&
+				   a_evaluation.minimumVersion == "3.19" && a_evaluation.maximumVersionExclusive == "3.20") ||
+		       ((a_evaluation.settingsContractRevision == 8 || a_evaluation.settingsContractRevision == 9) &&
+				   a_evaluation.minimumVersion == "3.20" && a_evaluation.maximumVersionExclusive == "3.21");
 	}
 
 	bool IsSha256(std::string_view a_value)
@@ -168,14 +171,7 @@ PresetCompatibility::Evaluation PresetCompatibility::Evaluate(
 	}
 	evaluation.settingsContractRevision = revisionIt->get<std::uint32_t>();
 	evaluation.settingsContractSourceTreeSha256 = sourceHashIt->get<std::string>();
-	if (evaluation.settingsContractRevision != kSettingsContractRevision) {
-		return Reject(
-			std::move(evaluation),
-			std::format(
-				"Preset settings contract revision {} is not supported by this build (supported: {}).",
-				evaluation.settingsContractRevision,
-				kSettingsContractRevision));
-	}
+
 	if (!IsSha256(evaluation.settingsContractSourceTreeSha256))
 		return Reject(std::move(evaluation), "Preset settings contract sourceTreeSha256 is invalid.");
 
@@ -195,9 +191,19 @@ PresetCompatibility::Evaluation PresetCompatibility::Evaluate(
 				current->runtime));
 	}
 
+	const bool compatibleLegacyPreset = IsCompatibleLegacyUnifiedPreset(evaluation, *current);
+	if (evaluation.settingsContractRevision != kSettingsContractRevision && !compatibleLegacyPreset) {
+		return Reject(
+			std::move(evaluation),
+			std::format(
+				"Preset settings contract revision {} is not supported by this build (supported: {}).",
+				evaluation.settingsContractRevision,
+				kSettingsContractRevision));
+	}
+
 	const Version currentWithoutRuntime{ current->major, current->minor, {} };
 	if ((currentWithoutRuntime < *minimum || currentWithoutRuntime >= *maximum) &&
-		!IsCompatibleLegacyUnifiedPreset(evaluation, *current)) {
+		!compatibleLegacyPreset) {
 		return Reject(
 			std::move(evaluation),
 			std::format(

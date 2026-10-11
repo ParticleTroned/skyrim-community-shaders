@@ -170,6 +170,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	auto shaderCache = globals::shaderCache;
 
 	state->updateShader = true;
+	state->deferredPixelShaderMissing = false;
 	state->currentShader = shader;
 
 	state->currentVertexDescriptor = vertexDescriptor;
@@ -191,7 +192,8 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 
 	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect) {
 		RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
-		RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor);
+		RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor,
+			skipPixelShader ? SIE::ShaderCache::PixelShaderLookup::Compile : SIE::ShaderCache::PixelShaderLookup::Draw);
 		if (vertexShader == nullptr || (!skipPixelShader && pixelShader == nullptr)) {
 			shaderFound = false;
 		} else {
@@ -213,7 +215,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	state->lastModifiedVertexDescriptor = state->modifiedVertexDescriptor;
 	state->lastModifiedPixelDescriptor = state->modifiedPixelDescriptor;
 
-	return shaderFound;
+	return shaderFound && !state->deferredPixelShaderMissing;
 }
 
 namespace LightingExtensions
@@ -924,7 +926,7 @@ namespace Hooks
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
 					if (state->ShaderEnabled(type)) {
-						RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
+						RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
 						if (pixelShader) {
 							globals::d3d::context->PSSetShader(Util::AsReal(pixelShader->shader), NULL, NULL);
 							*globals::game::currentPixelShader = a_pixelShader;
@@ -934,6 +936,10 @@ namespace Hooks
 				}
 			}
 
+			if (!state->settingCustomShader && state->deferredPixelShaderMissing) {
+				*globals::game::currentPixelShader = a_pixelShader;
+				return;
+			}
 			if (!state->settingCustomShader && a_pixelShader && state->currentShader &&
 				globals::deferred->deferredPass && globals::deferred->IsMaterialCategoriesEnabled()) {
 				const auto type = state->currentShader->shaderType.get();

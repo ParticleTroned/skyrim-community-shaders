@@ -166,3 +166,9 @@ target_include_directories(deferred_mask_tests PRIVATE "${deferred_mask_test_dir
 target_link_libraries(deferred_mask_tests PRIVATE d3d11 d3dcompiler)
 add_test(NAME DeferredMaskTests COMMAND deferred_mask_tests "${CMAKE_SOURCE_DIR}/package/Shaders")
 set_tests_properties(DeferredMaskTests PROPERTIES TIMEOUT 120 LABELS "Cpp;GPU;Deferred")
+
+add_executable(deferred_shader_fallback_tests test_deferred_shader_fallback.cpp)
+target_compile_features(deferred_shader_fallback_tests PRIVATE cxx_std_23)
+target_include_directories(deferred_shader_fallback_tests PRIVATE "${deferred_mask_test_directory}")
+add_test(NAME DeferredShaderFallbackTests COMMAND deferred_shader_fallback_tests)
+set_tests_properties(DeferredShaderFallbackTests PROPERTIES TIMEOUT 30 LABELS "Cpp;Deferred")

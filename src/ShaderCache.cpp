@@ -2724,9 +2724,11 @@ namespace SIE
 	}
 
 	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(const RE::BSShader& shader,
-		uint32_t descriptor)
+		uint32_t descriptor, PixelShaderLookup a_lookup)
 	{
 		auto state = globals::state;
+		if (a_lookup == PixelShaderLookup::Draw)
+			state->deferredPixelShaderMissing = false;
 		if (globals::game::isVR && strcmp(shader.fxpFilename, "OBBOcclusionTesting") == 0)
 			// use vanilla shader
 			return nullptr;
@@ -2763,10 +2765,22 @@ namespace SIE
 			}
 		}
 
+		if (a_lookup == PixelShaderLookup::Cached)
+			return nullptr;
 		if (IsAsync()) {
 			compilationSet.Add({ ShaderClass::Pixel, shader, descriptor });
-		} else {
-			return MakeAndAddPixelShader(shader, descriptor);
+		} else if (auto* compiled = MakeAndAddPixelShader(shader, descriptor)) {
+			return compiled;
+		}
+
+		auto* deferred = globals::deferred;
+		const auto categoryFlag = GetMaterialCategoryFlag(shader.shaderType.get());
+		if (a_lookup == PixelShaderLookup::Draw && deferred && deferred->deferredPass && categoryFlag) {
+			// Both variants preserve the G-buffer; an AO-only draw cannot author complete categories.
+			deferred->InvalidateMaterialCategories();
+			auto* fallback = GetPixelShader(shader, descriptor ^ categoryFlag, PixelShaderLookup::Cached);
+			state->deferredPixelShaderMissing = fallback == nullptr;
+			return fallback;
 		}
 
 		return nullptr;

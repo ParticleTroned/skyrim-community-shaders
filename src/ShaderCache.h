@@ -723,8 +723,17 @@ namespace SIE
 			}
 		}
 
+		/** Cached lookups never schedule compilation; draw lookups permit compatible deferred fallback. */
+		enum class PixelShaderLookup
+		{
+			Compile,
+			Draw,
+			Cached
+		};
+
+		/** Draw lookups may use the other deferred category layout while the exact variant compiles. */
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader& shader,
-			uint32_t descriptor);
+			uint32_t descriptor, PixelShaderLookup a_lookup = PixelShaderLookup::Compile);
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 

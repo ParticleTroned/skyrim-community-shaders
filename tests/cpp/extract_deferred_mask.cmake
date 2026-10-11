@@ -31,11 +31,18 @@ extract_deferred_mask_region("${naming_source}" "	GUID WKPDID_D3DDebugObjectName
     "	bool GetTexture2DDesc" "deferred_names_under_test.h")
 file(READ "${deferred_mask_source_root}/src/ShaderCache.h" shader_cache_header)
 extract_deferred_mask_region("${shader_cache_header}" "		static constexpr uint32_t GetMaterialCategoryFlag("
-    "
-		RE::BSGraphics::PixelShader* GetPixelShader(" "deferred_flag_under_test.h")
+    "		/** Cached lookups never schedule compilation; draw lookups permit compatible deferred fallback. */" "deferred_flag_under_test.h")
 file(READ "${deferred_mask_source_root}/src/Hooks.cpp" hooks_source)
 extract_deferred_mask_region("${hooks_source}" "			if (!state->settingCustomShader && a_pixelShader && state->currentShader &&"
     "			*globals::game::currentPixelShader = a_pixelShader;" "deferred_fallback_under_test.h")
 file(READ "${deferred_mask_source_root}/src/ShaderCache.cpp" shader_cache_source)
 extract_deferred_mask_region("${shader_cache_source}" "	void ShaderCache::PrewarmDeferredPixelShaders("
     "	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(" "deferred_prewarm_under_test.h")
+extract_deferred_mask_region("${shader_cache_header}" "		enum class PixelShaderLookup"
+    "		/** Draw lookups" "pixel_lookup_mode.h")
+extract_deferred_mask_region("${shader_cache_source}" "	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader("
+    "	RE::BSGraphics::ComputeShader* ShaderCache::GetComputeShader(" "pixel_lookup.h")
+extract_deferred_mask_region("${hooks_source}" "	struct BSShader__BeginTechnique_SetPixelShader"
+    "	struct CreateDepthStencil_PrecipitationMask" "pixel_binding.h")
+extract_deferred_mask_region("${hooks_source}" "bool Hooks::BSShader_BeginTechnique::thunk("
+    "namespace LightingExtensions" "begin_technique.h")

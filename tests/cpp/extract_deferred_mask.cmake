@@ -18,7 +18,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${deferred_mask_source_root}/src/Hooks.cpp"
     "${deferred_mask_source_root}/src/Utils/D3D.cpp"
     "${deferred_mask_source_root}/src/ShaderCache.h"
-    "${deferred_mask_source_root}/src/ShaderCache.cpp")
+    "${deferred_mask_source_root}/src/ShaderCache.cpp"
+    "${deferred_mask_source_root}/src/TruePBR.cpp")
 set(deferred_mask_test_directory "${CMAKE_CURRENT_BINARY_DIR}/deferred_mask")
 file(MAKE_DIRECTORY "${deferred_mask_test_directory}")
 file(READ "${deferred_mask_source_root}/src/Deferred.cpp" deferred_source)
@@ -46,3 +47,8 @@ extract_deferred_mask_region("${hooks_source}" "	struct BSShader__BeginTechnique
     "	struct CreateDepthStencil_PrecipitationMask" "pixel_binding.h")
 extract_deferred_mask_region("${hooks_source}" "bool Hooks::BSShader_BeginTechnique::thunk("
     "namespace LightingExtensions" "begin_technique.h")
+extract_deferred_mask_region("${shader_cache_header}" "		enum class LightingShaderFlags"
+    "		enum class BloodSplatterShaderTechniques" "lighting_flags_under_test.h")
+file(READ "${deferred_mask_source_root}/src/TruePBR.cpp" true_pbr_source)
+extract_deferred_mask_region("${true_pbr_source}" "void TruePBR::GenerateShaderPermutations("
+    "struct ExtendedRendererState" "pbr_prewarm_under_test.h")

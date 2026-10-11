@@ -8,6 +8,7 @@
 #include <source_location>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -51,6 +52,7 @@ namespace RE
 		{
 			Type value = Type::Lighting;
 			Type get() const { return value; }
+			bool operator==(Type other) const { return value == other; }
 			unsigned underlying() const { return static_cast<unsigned>(value); }
 		} shaderType;
 		const char* fxpFilename = "Lighting";
@@ -90,6 +92,7 @@ struct TestDeferred
 {
 	bool deferredPass = true, categories = true, captureReady = true;
 	unsigned invalidations = 0;
+	static bool MaterialCategoriesRequested();
 	bool IsMaterialCategoriesEnabled() const { return categories; }
 	void InvalidateMaterialCategories()
 	{
@@ -135,6 +138,8 @@ namespace globals
 		TestContext* context;
 	}
 }
+bool TestDeferred::MaterialCategoriesRequested() { return globals::deferred->categories; }
+using Deferred = TestDeferred;
 namespace Util
 {
 	template <class T>
@@ -172,6 +177,7 @@ namespace SIE
 	struct ShaderCache
 	{
 #include "deferred_flag_under_test.h"
+#include "lighting_flags_under_test.h"
 #include "pixel_lookup_mode.h"
 		std::array<std::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::PixelShader>>,
 			static_cast<unsigned>(RE::BSShader::Type::Total)>
@@ -213,10 +219,22 @@ namespace SIE
 			++compiles;
 			return compilationSucceeds ? Add(shader, descriptor) : nullptr;
 		}
+		void PrewarmDeferredPixelShaders(const RE::BSShader&, uint32_t, bool);
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader&, uint32_t, PixelShaderLookup = PixelShaderLookup::Compile);
 	};
+#include "deferred_prewarm_under_test.h"
 #include "pixel_lookup.h"
 }
+namespace Permutations
+{
+	std::vector<uint32_t> pixelPermutations;
+	const auto& GeneratePBRLightingPixelPermutations() { return pixelPermutations; }
+}
+struct TruePBR
+{
+	void GenerateShaderPermutations(RE::BSShader*);
+};
+#include "pbr_prewarm_under_test.h"
 namespace Hooks
 {
 #include "pixel_binding.h"
@@ -377,8 +395,8 @@ bool nativeTechniqueReady = true;
 RE::BSGraphics::PixelShader* nativeTechniquePixel = nullptr;
 bool NativeTechnique(RE::BSShader*, uint32_t, uint32_t, bool skipPixel)
 {
-	if (nativeTechniqueReady && !skipPixel)
-		Hooks::BSShader__BeginTechnique_SetPixelShader::thunk(nullptr, nativeTechniquePixel);
+	if (nativeTechniqueReady)
+		Hooks::BSShader__BeginTechnique_SetPixelShader::thunk(nullptr, skipPixel ? nullptr : nativeTechniquePixel);
 	return nativeTechniqueReady;
 }
 void TestTechniqueAdmission()
@@ -393,7 +411,7 @@ void TestTechniqueAdmission()
 	Require(f.context.binds == 0 && f.state.deferredPixelShaderMissing);
 	// A new depth-only technique must not inherit the rejected pixel stage.
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, true));
-	Require(!f.state.deferredPixelShaderMissing && f.context.binds == 0);
+	Require(!f.state.deferredPixelShaderMissing && f.context.binds == 1 && f.context.bound == nullptr);
 	auto* fallback = f.cache.Add(f.shader, plain);
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
 	Require(f.context.bound == fallback->shader);
@@ -406,11 +424,50 @@ void TestTechniqueAdmission()
 	Require(f.current == fallback && f.context.vertex == &nativeVS && !f.state.settingCustomShader);
 	// Depth-only fallback requires a vertex stage but never a pixel variant.
 	f.cache.pixelShaders[0].clear();
+	f.cache.compilationSet.requests.clear();
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, true));
 	Require(f.current == nullptr && !f.state.deferredPixelShaderMissing);
+	Require(f.context.bound == nullptr && f.cache.compilationSet.requests.empty());
 	// Effect techniques retain their native admission rules.
 	f.shader.shaderType.value = RE::BSShader::Type::Effect;
 	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
+}
+void TestNullPixelBinding()
+{
+	for (bool cached : { false, true }) {
+		Fixture f;
+		f.context.bound = f.native.shader;
+		f.current = &f.native;
+		f.state.modifiedPixelDescriptor = 0x10021u;
+		if (cached)
+			f.cache.Add(f.shader, f.state.modifiedPixelDescriptor);
+		Hooks::BSShader__BeginTechnique_SetPixelShader::thunk(nullptr, nullptr);
+		Require(f.context.bound == nullptr && f.current == nullptr);
+		Require(!f.state.deferredPixelShaderMissing && f.deferred.captureReady);
+		Require(f.cache.compilationSet.requests.empty());
+	}
+}
+void TestPBRPrewarming()
+{
+	constexpr uint32_t forward = 0x10009u;
+	constexpr uint32_t deferred = forward | static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Deferred);
+	const auto flag = SIE::ShaderCache::GetMaterialCategoryFlag(RE::BSShader::Type::Lighting);
+	Permutations::pixelPermutations = { forward, deferred };
+	for (bool categories : { false, true }) {
+		Fixture f;
+		f.deferred.categories = categories;
+		TruePBR feature;
+		feature.GenerateShaderPermutations(&f.shader);
+		std::set<uint32_t> expected{ forward, deferred };
+		if (categories)
+			expected.insert(deferred | flag);
+		Require(f.cache.compilationSet.requests == expected);
+		Require(f.deferred.captureReady && !f.state.deferredPixelShaderMissing);
+		f.cache.compilationSet.requests.clear();
+		f.shader.shaderType.value = RE::BSShader::Type::Effect;
+		feature.GenerateShaderPermutations(&f.shader);
+		Require(f.cache.compilationSet.requests.empty());
+	}
 }
 int main()
 {
@@ -424,7 +481,9 @@ int main()
 			TestSynchronousAndCachedLookups();
 			TestExactAndProtectedLookups();
 			TestUnusedCategoriesStayCold();
+			TestNullPixelBinding();
 			TestTechniqueAdmission();
+			TestPBRPrewarming();
 			TestVROcclusionBypass();
 		}
 		std::cout << "Deferred shader fallback: " << assertions << " checks passed (flat and VR)\n";

@@ -192,8 +192,8 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 
 	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect) {
 		RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
-		RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor,
-			skipPixelShader ? SIE::ShaderCache::PixelShaderLookup::Compile : SIE::ShaderCache::PixelShaderLookup::Draw);
+		RE::BSGraphics::PixelShader* pixelShader = skipPixelShader ? nullptr :
+		                                                             shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
 		if (vertexShader == nullptr || (!skipPixelShader && pixelShader == nullptr)) {
 			shaderFound = false;
 		} else {
@@ -201,12 +201,8 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			globals::d3d::context->VSSetShader(Util::AsReal(vertexShader->shader), NULL, NULL);
 			*globals::game::currentVertexShader = vertexShader;
 			globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
-			if (skipPixelShader) {
-				pixelShader = nullptr;
-			}
 			*globals::game::currentPixelShader = pixelShader;
-			if (pixelShader)
-				globals::d3d::context->PSSetShader(Util::AsReal(pixelShader->shader), NULL, NULL);
+			globals::d3d::context->PSSetShader(pixelShader ? Util::AsReal(pixelShader->shader) : nullptr, NULL, NULL);
 			state->settingCustomShader = false;
 			shaderFound = true;
 		}
@@ -921,7 +917,7 @@ namespace Hooks
 			auto state = globals::state;
 			auto shaderCache = globals::shaderCache;
 
-			if (!state->settingCustomShader) {
+			if (!state->settingCustomShader && a_pixelShader) {
 				if (shaderCache->IsEnabled()) {
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
@@ -936,7 +932,7 @@ namespace Hooks
 				}
 			}
 
-			if (!state->settingCustomShader && state->deferredPixelShaderMissing) {
+			if (!state->settingCustomShader && a_pixelShader && state->deferredPixelShaderMissing) {
 				*globals::game::currentPixelShader = a_pixelShader;
 				return;
 			}
@@ -950,8 +946,7 @@ namespace Hooks
 
 			*globals::game::currentPixelShader = a_pixelShader;
 
-			if (a_pixelShader)
-				globals::d3d::context->PSSetShader(Util::AsReal(a_pixelShader->shader), NULL, NULL);
+			globals::d3d::context->PSSetShader(a_pixelShader ? Util::AsReal(a_pixelShader->shader) : nullptr, NULL, NULL);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

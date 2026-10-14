@@ -16,6 +16,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "Utils/ShaderLifetime.h"
+
 struct ID3D11PixelShader
 {};
 struct ID3D11VertexShader
@@ -203,7 +205,7 @@ namespace SIE
 	{
 #include "category_flag.h"
 #include "lighting_flags.h"
-		std::array<std::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::PixelShader>>,
+		std::array<std::unordered_map<uint32_t, std::shared_ptr<RE::BSGraphics::PixelShader>>,
 			static_cast<unsigned>(RE::BSShader::Type::Total)>
 			pixelShaders;
 		std::mutex pixelShadersMutex;
@@ -213,8 +215,8 @@ namespace SIE
 		std::vector<uint32_t> blockedIDs;
 		bool safeLoad = false, async = true, compilationSucceeds = true;
 		unsigned compiles = 0;
-		RE::BSGraphics::VertexShader* vertex = nullptr;
-		auto* GetVertexShader(const RE::BSShader&, uint32_t) { return vertex; }
+		std::shared_ptr<RE::BSGraphics::VertexShader> vertex;
+		auto GetVertexShader(const RE::BSShader&, uint32_t) { return vertex; }
 		struct Task
 		{
 			ShaderClass stage;
@@ -234,19 +236,22 @@ namespace SIE
 		RE::BSGraphics::PixelShader* Add(const RE::BSShader& shader, uint32_t descriptor)
 		{
 			auto& entry = pixelShaders[shader.shaderType.underlying()][descriptor];
-			entry = std::make_unique<RE::BSGraphics::PixelShader>();
+			entry = std::make_shared<RE::BSGraphics::PixelShader>();
 			entry->id = descriptor;
 			entry->constantBuffers[1].buffer = entry.get();
 			entry->shader = reinterpret_cast<ID3D11PixelShader*>(entry.get());
 			return entry.get();
 		}
-		RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader& shader, uint32_t descriptor)
+		std::shared_ptr<RE::BSGraphics::PixelShader> MakeAndAddPixelShader(const RE::BSShader& shader, uint32_t descriptor)
 		{
 			++compiles;
-			return compilationSucceeds ? Add(shader, descriptor) : nullptr;
+			if (!compilationSucceeds)
+				return nullptr;
+			Add(shader, descriptor);
+			return pixelShaders[shader.shaderType.underlying()].at(descriptor);
 		}
 		void PrewarmDeferredPixelShaders(const RE::BSShader&, uint32_t, bool);
-		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader&, uint32_t, PixelShaderLookup = PixelShaderLookup::Compile);
+		std::shared_ptr<RE::BSGraphics::PixelShader> GetPixelShader(const RE::BSShader&, uint32_t, PixelShaderLookup = PixelShaderLookup::Compile);
 	};
 #include "pixel_lookup.h"
 #include "pixel_prewarm.h"
@@ -273,6 +278,11 @@ enum class CSFrameHookPhase
 bool ShouldRecordCSFramePhaseDiag() { return false; }
 uint64_t ReadFrameDiagCounterTicks() { return 0; }
 void RecordCSFrameHookPhase(CSFrameHookPhase, uint32_t, uint64_t) {}
+namespace
+{
+	Util::ShaderLifetime::RetainedBinding<RE::BSGraphics::VertexShader> g_retainedVertexShader;
+	Util::ShaderLifetime::RetainedBinding<RE::BSGraphics::PixelShader> g_retainedPixelShader;
+}
 namespace Hooks
 {
 #include "pixel_binding.h"
@@ -372,7 +382,7 @@ void TestColdAndFailedVariants()
 	Require(f.state.deferredPixelShaderMissing && f.context.binds == 0 && f.current == &f.native);
 	Require(f.cache.compilationSet.requests == std::set<uint32_t>{ requested });
 	auto* fallback = f.cache.Add(f.shader, plain);
-	Require(f.cache.GetPixelShader(f.shader, requested, SIE::ShaderCache::PixelShaderLookup::Draw) == fallback);
+	Require(f.cache.GetPixelShader(f.shader, requested, SIE::ShaderCache::PixelShaderLookup::Draw).get() == fallback);
 	Require(!f.state.deferredPixelShaderMissing);
 	f.Bind(requested);
 	Require(!f.state.deferredPixelShaderMissing && f.context.bound == fallback->shader);
@@ -497,8 +507,8 @@ void TestTechniqueAdmission()
 	nativeTechniqueReady = false;
 	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
 	ID3D11VertexShader nativeVS;
-	RE::BSGraphics::VertexShader vertex{ &nativeVS };
-	f.cache.vertex = &vertex;
+	f.cache.vertex = std::make_shared<RE::BSGraphics::VertexShader>();
+	f.cache.vertex->shader = &nativeVS;
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
 	Require(f.current == fallback && f.context.vertex == &nativeVS && !f.state.settingCustomShader);
 	// Depth-only fallback requires a vertex stage but never a pixel variant.

@@ -2,11 +2,14 @@
 #include <ankerl/unordered_dense.h>
 #include <magic_enum/magic_enum.hpp>
 #include <winrt/base.h>
+#include <wrl/client.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <future>
@@ -15,15 +18,54 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <set>
 #include <source_location>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "Utils/GenerationClaim.h"
+#include "Utils/ShaderLifetime.h"
+
 namespace
 {
+	thread_local bool failNextGlobalAllocation = false;
+	thread_local bool failNextMetadataAllocation = false;
+	thread_local unsigned heldMetadataLocks = 0;
+	thread_local std::function<void()> afterMetadataUnlock;
+	struct MetadataMutex
+	{
+		std::mutex mutex;
+		std::atomic<DWORD> owner{ 0 };
+		void lock()
+		{
+			mutex.lock();
+			owner = GetCurrentThreadId();
+			++heldMetadataLocks;
+		}
+		void unlock()
+		{
+			owner = 0;
+			--heldMetadataLocks;
+			mutex.unlock();
+			if (!heldMetadataLocks && afterMetadataUnlock) {
+				auto action = std::exchange(afterMetadataUnlock, {});
+				action();
+			}
+		}
+		bool try_lock()
+		{
+			if (owner == GetCurrentThreadId() || !mutex.try_lock())
+				return false;
+			owner = GetCurrentThreadId();
+			++heldMetadataLocks;
+			return true;
+		}
+		bool HeldByCurrentThread() const { return owner == GetCurrentThreadId(); }
+	};
 	void Require(bool condition, const std::source_location& location = std::source_location::current())
 	{
 		if (!condition)
@@ -122,18 +164,34 @@ namespace
 	{
 		virtual ~ShaderObject() = default;
 		unsigned references = 1;
+		std::function<void()> duringFinalRelease;
 		void AddRef() { ++references; }
 		void Release()
 		{
 			if (heldMapLocks)
 				observations.releaseUnderLock = true;
 			if (--references == 0) {
+				if (duringFinalRelease)
+					duringFinalRelease();
 				++observations.released;
 				delete this;
 			}
 		}
 	};
 }
+
+// A one-shot, thread-local failure isolates the production shared-owner allocation.
+void* operator new(std::size_t size)
+{
+	if (std::exchange(failNextGlobalAllocation, false) ||
+		(heldMetadataLocks && std::exchange(failNextMetadataAllocation, false)))
+		throw std::bad_alloc();
+	if (void* memory = std::malloc(size ? size : 1))
+		return memory;
+	throw std::bad_alloc();
+}
+void operator delete(void* memory) noexcept { std::free(memory); }
+void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 
 // Only driver and engine boundaries are substituted; publication is extracted from production.
 struct ID3D11VertexShader : ShaderObject
@@ -146,8 +204,8 @@ struct ID3DBlob
 {
 	std::atomic<unsigned> references{ 1 };
 	std::array<uint8_t, 4> bytes{};
-	void AddRef() { ++references; }
-	void Release() { --references; }
+	ULONG AddRef() { return ++references; }
+	ULONG Release() { return --references; }
 	void* GetBufferPointer() { return bytes.data(); }
 	size_t GetBufferSize() const { return bytes.size(); }
 };
@@ -183,8 +241,41 @@ namespace globals::d3d
 {
 	ID3D11Device* device = nullptr;
 }
+namespace SKSE::stl
+{
+	template <class Action>
+	struct scope_exit
+	{
+		Action action;
+		~scope_exit() { action(); }
+	};
+}
 namespace Util
 {
+	namespace ContentHash
+	{
+		struct Hash128
+		{
+			uint64_t low = 0, high = 0;
+		};
+	}
+	namespace ShaderContentReuse
+	{
+		struct Identity
+		{};
+	}
+	std::string WStringToString(const std::wstring& path)
+	{
+		std::string result;
+		result.reserve(path.size());
+		for (const auto character : path) {
+			if (static_cast<uint32_t>(character) > 0x7f)
+				throw std::invalid_argument("Fixture shader paths must contain only ASCII characters");
+			result.push_back(static_cast<char>(character));
+		}
+		return result;
+	}
+	std::string FixFilePath(const std::string& path) { return path; }
 	void SetResourceName(ShaderObject*, const char*, ...)
 	{
 		++observations.named;
@@ -217,12 +308,20 @@ namespace RE
 		enum class Type
 		{
 			Lighting,
+			ImageSpace,
 			Total
 		};
 		struct TypeValue
 		{
-			Type get() const { return Type::Lighting; }
+			Type value = Type::Lighting;
+			Type get() const { return value; }
+			bool operator==(Type other) const { return value == other; }
 		} shaderType;
+		std::string fxpFilename = "Lighting.hlsl";
+	};
+	struct BSImagespaceShader : BSShader
+	{
+		std::string originalShaderName = "ImageSpace.hlsl";
 	};
 	namespace BSGraphics
 	{
@@ -242,46 +341,104 @@ namespace RE
 }
 namespace SIE
 {
+	std::mutex g_diskCacheMutationMutex;
+	std::function<void()> duringDiskAdvance;
+	void AdvanceDiskCacheGeneration()
+	{
+		if (duringDiskAdvance)
+			duringDiskAdvance();
+	}
 	enum class ShaderClass
 	{
 		Vertex,
 		Pixel,
 		Compute
 	};
+	using std::chrono::system_clock;
+	struct ShaderCompilationTask
+	{
+		enum Status
+		{
+			Pending,
+			Completed,
+			Failed
+		};
+	};
+	struct ShaderCacheResult
+	{
+		ID3DBlob* blob = nullptr;
+		ShaderCompilationTask::Status status = ShaderCompilationTask::Completed;
+		system_clock::time_point compileTime{};
+		bool loadedFromDisk = false;
+		uint64_t generation = 0;
+	};
 	struct ShaderCache
 	{
 		struct
 		{
 			std::atomic<uint64_t> generation{ 7 };
+			std::function<void()> duringBump;
+			void BumpGeneration()
+			{
+				++generation;
+				if (duringBump)
+					duringBump();
+			}
+			void Clear() { ++generation; }
 		} compilationSet;
 		std::unique_ptr<int> dependencyTracker;
+		MetadataMutex mapMutex, hlslMapMutex;
+		struct Notification
+		{
+			unsigned count = 0;
+			void notify_all() { ++count; }
+		} mapCV;
+		struct hlslRecord
+		{
+			std::string key;
+			RE::BSShader::Type type;
+			uint32_t descriptor;
+			ShaderClass shaderClass;
+			std::wstring diskPath;
+			Util::ContentHash::Hash128 compileStateDigest, packCompileStateDigest;
+			bool developerMode = false;
+			std::optional<Util::ContentHash::Hash128> sourceDigest;
+			Microsoft::WRL::ComPtr<ID3DBlob> compiledBlob;
+			std::optional<Util::ShaderContentReuse::Identity> contentIdentity;
+			bool operator<(const hlslRecord& other) const { return key < other.key; }
+		};
+		std::unordered_map<std::string, ShaderCacheResult> shaderMap;
+		std::unordered_map<std::string, int> deferredEvictions;
+		std::unordered_map<std::string, std::set<hlslRecord>> hlslToShaderMap;
+		bool ApplyDeferredEviction(const std::string&) { return false; }
+		bool AddCompletedShader(const std::string&, ShaderClass, const RE::BSShader&, uint32_t,
+			ID3DBlob*, const std::wstring&, const Util::ContentHash::Hash128&, const Util::ContentHash::Hash128&,
+			bool, bool, std::optional<uint64_t>, std::optional<Util::ContentHash::Hash128>, std::optional<Util::ShaderContentReuse::Identity>);
+		std::atomic<size_t> deferredEvictionCount{ 0 };
+		void RequestFeatureShaderClear(bool) {}
+		void Clear();
+		void Clear(RE::BSShader::Type);
+		void ClearShaderMap(RE::BSShader::Type);
 		MapMutex vertexShadersMutex, pixelShadersMutex, computeShadersMutex;
 		template <class T>
-		using Maps = std::array<ankerl::unordered_dense::map<uint32_t, std::unique_ptr<T>,
-									ankerl::unordered_dense::hash<uint32_t>, std::equal_to<uint32_t>, TestAllocator<std::pair<uint32_t, std::unique_ptr<T>>>>,
-			1>;
+		using Maps = std::array<ankerl::unordered_dense::map<uint32_t, std::shared_ptr<T>,
+									ankerl::unordered_dense::hash<uint32_t>, std::equal_to<uint32_t>, TestAllocator<std::pair<uint32_t, std::shared_ptr<T>>>>,
+			2>;
 		Maps<RE::BSGraphics::VertexShader> vertexShaders;
 		Maps<RE::BSGraphics::PixelShader> pixelShaders;
 		Maps<RE::BSGraphics::ComputeShader> computeShaders;
 		bool IsDiskCacheActive() const { return false; }
 #include "shader_generation_check.h"
 
-		RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt);
-		RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt);
-		RE::BSGraphics::ComputeShader* MakeAndAddComputeShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt);
-		~ShaderCache()
-		{
-			const auto release = [](auto& maps) {
-				for (auto& [id, wrapper] : maps[0])
-					wrapper->shader->Release();
-			};
-			release(vertexShaders);
-			release(pixelShaders);
-			release(computeShaders);
-		}
+		std::shared_ptr<RE::BSGraphics::VertexShader> MakeAndAddVertexShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt);
+		std::shared_ptr<RE::BSGraphics::PixelShader> MakeAndAddPixelShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt);
+		std::shared_ptr<RE::BSGraphics::ComputeShader> MakeAndAddComputeShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt);
 	};
 	namespace SShaderCache
 	{
+		std::string GetTypeFromShaderString(const std::string& key) { return key; }
+		std::string GetShaderString(ShaderClass, const RE::BSShader&, uint32_t descriptor, bool) { return std::to_string(descriptor); }
+		std::wstring GetShaderPath(const std::string& path) { return { path.begin(), path.end() }; }
 		ID3DBlob blob;
 		bool compileFails = false;
 		std::function<void()> duringCompile;
@@ -310,7 +467,18 @@ namespace SIE
 			return shader;
 		}
 	}
+#include "shader_result_traits_under_test.h"
+
+// Publication shares the extracted result traits and real generation-claim utility.
+#include "shader_add_completed_under_test.h"
+#include "shader_clear_metadata_under_test.h"
 #include "shader_publication_under_test.h"
+#include "shader_release_under_test.h"
+#include "shader_retirement_under_test.h"
+
+// Cache clears depend on the retirement helpers above.
+#include "shader_full_clear_under_test.h"
+#include "shader_type_clear_under_test.h"
 }
 
 namespace
@@ -348,6 +516,215 @@ namespace
 		ShaderBytecodeMap.clear();
 	}
 
+	void CheckOwnerAllocationFailure()
+	{
+		auto wrapper = std::make_unique<RE::BSGraphics::VertexShader>();
+		winrt::com_ptr<ID3D11VertexShader> resource;
+		resource.attach(new ID3D11VertexShader);
+		++observations.created;
+		wrapper->shader = resource.get();
+		const auto released = observations.released.load();
+		const auto destroyed = observations.wrappersDestroyed.load();
+		bool failed = false;
+		failNextGlobalAllocation = true;
+		try {
+			Util::ShaderLifetime::Share(std::move(wrapper), std::move(resource));
+		} catch (const std::bad_alloc&) {
+			failed = true;
+		}
+		const bool injected = !std::exchange(failNextGlobalAllocation, false);
+		Require(failed && injected && !wrapper && !resource);
+		Require(observations.released == released + 1 && observations.wrappersDestroyed == destroyed + 1);
+		Require(!observations.releaseUnderLock);
+	}
+
+	void CheckMetadataTransactions()
+	{
+		ID3DBlob blob;
+		SIE::ShaderCache cache;
+		RE::BSShader shader;
+		const auto publish = [&](uint64_t generation) {
+			return cache.AddCompletedShader("Lighting", SIE::ShaderClass::Vertex, shader, 1,
+				&blob, L"cache/1", {}, {}, false, false, generation, {}, {});
+		};
+		bool cleared = false;
+		afterMetadataUnlock = [&] {
+			cache.Clear();
+			cleared = true;
+		};
+		Require(publish(cache.compilationSet.generation.load()) && cleared);
+		Require(cache.shaderMap.empty() && cache.hlslToShaderMap.empty() && blob.references == 1);
+
+		// A producer admitted after clear's transaction keeps its source association.
+		bool published = false;
+		uint64_t admittedGeneration = 0;
+		afterMetadataUnlock = [&] {
+			admittedGeneration = cache.compilationSet.generation.load();
+			published = publish(admittedGeneration);
+		};
+		cache.Clear();
+		Require(published && cache.shaderMap.contains("Lighting"));
+		Require(cache.hlslToShaderMap.at(shader.fxpFilename).begin()->key == "Lighting");
+		Require(cache.compilationSet.generation == admittedGeneration + 1 && blob.references == 2);
+		const auto staleGeneration = cache.compilationSet.generation.load();
+		cache.Clear();
+		Require(!publish(staleGeneration));
+		Require(cache.shaderMap.empty() && cache.hlslToShaderMap.empty() && blob.references == 1);
+
+		// Failed source-record allocation must still release metadata locks and wake waiters.
+		const auto generation = cache.compilationSet.generation.load();
+		cache.shaderMap["Lighting"] = { nullptr, SIE::ShaderCompilationTask::Pending, {}, false, generation };
+		cache.hlslToShaderMap[shader.fxpFilename] = {};
+		const auto notifications = cache.mapCV.count;
+		failNextMetadataAllocation = true;
+		const bool accepted = publish(generation);
+		const bool injected = !std::exchange(failNextMetadataAllocation, false);
+		Require(!accepted && injected && heldMetadataLocks == 0);
+		Require(!cache.mapMutex.HeldByCurrentThread() && !cache.hlslMapMutex.HeldByCurrentThread());
+		Require(cache.shaderMap.empty() && cache.hlslToShaderMap.at(shader.fxpFilename).empty());
+		Require(cache.mapCV.count == notifications + 1 && blob.references == 1);
+		Require(publish(generation));
+		Require(cache.shaderMap.contains("Lighting") && cache.hlslToShaderMap.at(shader.fxpFilename).size() == 1);
+		cache.Clear();
+	}
+
+	void CheckRetainedBinding()
+	{
+		int native = 0;
+		int* current = nullptr;
+		unsigned releases = 0;
+		bool releasedWhileCurrent = false;
+		const auto make = [&] {
+			return std::shared_ptr<int>(new int(1), [&](int* value) {
+				releasedWhileCurrent |= current == value;
+				++releases;
+				delete value;
+			});
+		};
+		Util::ShaderLifetime::RetainedBinding<int> binding;
+		auto first = make();
+		std::weak_ptr<int> firstLifetime = first;
+		binding.Set(current, first);
+		first.reset();
+		current = &native;
+		Require(!firstLifetime.expired() && releases == 0);
+		binding.Set(current, {});
+		Require(current == nullptr && firstLifetime.expired() && releases == 1);
+		binding.Set(current, make());
+		auto next = make();
+		binding.Set(current, next);
+		Require(current == next.get() && releases == 2 && !releasedWhileCurrent);
+		binding.Set(current, {});
+		next.reset();
+		Require(releases == 3 && !releasedWhileCurrent);
+	}
+
+	template <class Make, class Maps>
+	void CheckLifetime(Make make, Maps maps, MapMutex SIE::ShaderCache::* mutex)
+	{
+		for (unsigned operation = 0; operation < 3; ++operation) {
+			ID3D11Device device;
+			SIE::ShaderCache cache;
+			globals::d3d::device = &device;
+			RE::BSShader shader;
+			const auto create = [&](uint32_t descriptor, RE::BSShader::Type type = RE::BSShader::Type::Lighting) {
+				shader.shaderType.value = type;
+				return (cache.*make)(shader, descriptor, std::nullopt);
+			};
+			auto reader = create(20);
+			create(21);
+			create(22, RE::BSShader::Type::ImageSpace);
+			using Wrapper = typename decltype(reader)::element_type;
+			Util::ShaderLifetime::RetainedBinding<Wrapper> binding;
+			Wrapper* nativeCurrent = nullptr;
+			binding.Set(nativeCurrent, reader);
+			Require(nativeCurrent == reader.get());
+			std::weak_ptr<Wrapper> retired = reader;
+			auto* oldResource = reader->shader;
+			const auto before = observations.released.load();
+			AsyncGate<void> gate{ 1 };
+			gate.workers.push_back(std::async(std::launch::async, [reader = std::move(reader), &gate, oldResource]() mutable {
+				gate.ArriveAndWait();
+				Require(reader->id == 20 && reader->shader == oldResource);
+				reader.reset();
+			}));
+			Require(gate.WaitUntilEntered());
+			if (operation == 0)
+				SIE::ReleaseShader(cache.*maps, cache.*mutex, RE::BSShader::Type::Lighting, 20);
+			else
+				SIE::RetireShaders(cache.*maps, cache.*mutex, operation == 1 ? std::optional<size_t>{ 0 } : std::nullopt);
+			Require(!(cache.*maps)[0].contains(20));
+			Require((cache.*maps)[0].contains(21) == (operation == 0));
+			Require((cache.*maps)[1].contains(22) == (operation != 2));
+			Require(observations.released == before + operation && !retired.expired());
+			Require(nativeCurrent->id == 20 && nativeCurrent->shader == oldResource);
+
+			// A reader survives both native replacement and release of the retained binding.
+			Wrapper native;
+			nativeCurrent = &native;
+			binding.Set(nativeCurrent, {});
+			Require(nativeCurrent == nullptr && !retired.expired());
+			auto replacement = create(23);
+			binding.Set(nativeCurrent, replacement);
+			Require(nativeCurrent == replacement.get() && !retired.expired());
+			Require(observations.released == before + operation);
+			gate.Resume();
+			gate.workers[0].get();
+			Require(retired.expired() && observations.released == before + operation + 1);
+			SIE::RetireShaders(cache.*maps, cache.*mutex);
+			Require(nativeCurrent == replacement.get() && nativeCurrent->id == 23);
+		}
+	}
+
+	template <class Make, class Maps>
+	void CheckClearOrdering(Make make, Maps maps)
+	{
+		for (bool scoped : { false, true }) {
+			ID3D11Device device;
+			SIE::ShaderCache cache;
+			globals::d3d::device = &device;
+			RE::BSShader shader;
+			const auto create = [&](uint32_t descriptor) { return (cache.*make)(shader, descriptor, std::nullopt); };
+			auto target = create(30);
+			shader.shaderType.value = RE::BSShader::Type::ImageSpace;
+			create(32);
+			shader.shaderType.value = RE::BSShader::Type::Lighting;
+			cache.shaderMap["Lighting"] = {};
+			cache.shaderMap["ImageSpace"] = {};
+			cache.hlslToShaderMap["Lighting.hlsl"] = {};
+			cache.hlslToShaderMap["ImageSpace.hlsl"] = {};
+			const auto generation = cache.compilationSet.generation.load();
+			bool recreated = false, ordered = false, metadataLocked = false, diskOrdered = scoped;
+			cache.compilationSet.duringBump = [&] {
+				metadataLocked = cache.mapMutex.HeldByCurrentThread() && (scoped || cache.hlslMapMutex.HeldByCurrentThread());
+			};
+			SIE::duringDiskAdvance = [&] {
+				diskOrdered = cache.shaderMap.empty() && cache.hlslToShaderMap.empty() &&
+				              cache.compilationSet.generation == generation + 1 && heldMetadataLocks == 0 &&
+				              (cache.*maps)[0].contains(30);
+			};
+			target->shader->duringFinalRelease = [&] {
+				std::unique_lock metadata(cache.mapMutex, std::try_to_lock);
+				ordered = metadata.owns_lock() && cache.compilationSet.generation > generation;
+				if (metadata.owns_lock()) {
+					ordered &= !cache.shaderMap.contains("Lighting") && cache.shaderMap.contains("ImageSpace") == scoped;
+					metadata.unlock();
+				}
+				if (ordered)
+					recreated = create(31) != nullptr;
+			};
+			target.reset();
+			if (scoped)
+				cache.Clear(RE::BSShader::Type::Lighting);
+			else
+				cache.Clear();
+			SIE::duringDiskAdvance = {};
+			Require(metadataLocked && diskOrdered && cache.compilationSet.generation == generation + 2);
+			Require(ordered && recreated && (cache.*maps)[0].contains(31) && !(cache.*maps)[0].contains(30));
+			Require((cache.*maps)[1].contains(32) == scoped);
+		}
+	}
+
 	template <class Make, class Maps>
 	void CheckStage(Make make, Maps maps, MapMutex SIE::ShaderCache::* mutex)
 	{
@@ -360,7 +737,7 @@ namespace
 		};
 		const auto live = cache.compilationSet.generation.load();
 		const auto mapSize = [&] { return (cache.*maps)[0].size(); };
-		auto* resident = create(1, live);
+		auto resident = create(1, live);
 		Require(resident && resident->shader && resident->id == 1 && mapSize() == 1);
 		Require(device.references == 1 && SIE::SShaderCache::blob.references == 1);
 
@@ -414,12 +791,12 @@ namespace
 			{
 				std::unique_lock lock(cache.*mutex, std::try_to_lock);
 				if (started && lock.owns_lock()) {
-					lookupSucceeded = (cache.*maps)[0].at(1).get() == resident;
+					lookupSucceeded = (cache.*maps)[0].at(1) == resident;
 					++cache.compilationSet.generation;
 				}
 			}
 			gate.Resume();
-			auto* result = gate.workers[0].get();
+			auto result = gate.workers[0].get();
 			device.duringCreate = {};
 			Require(started && ownsInputs && lookupSucceeded);
 			Require(result == nullptr && mapSize() == 1 && observations.released == before + 1);
@@ -434,8 +811,8 @@ namespace
 		gate.workers.push_back(std::async(std::launch::async, [&] { return create(3); }));
 		const bool overlapped = gate.WaitUntilEntered();
 		gate.Resume();
-		auto* firstResult = gate.workers[0].get();
-		auto* secondResult = gate.workers[1].get();
+		auto firstResult = gate.workers[0].get();
+		auto secondResult = gate.workers[1].get();
 		device.duringCreate = {};
 		Require(overlapped && firstResult && firstResult == secondResult);
 		Require(mapSize() == 2 && observations.released == beforeDuplicate + 1);
@@ -453,7 +830,7 @@ namespace
 		}
 		AllocationControl::failNext = false;
 		Require(allocationFailed && mapSize() == 2);
-		Require((cache.*maps)[0].at(1).get() == resident && (cache.*maps)[0].at(3).get() == firstResult);
+		Require((cache.*maps)[0].at(1) == resident && (cache.*maps)[0].at(3) == firstResult);
 		Require(observations.released == beforeFailure + 1 && observations.wrappersDestroyed == wrappersBeforeFailure + 1);
 		Require(device.references == 1 && SIE::SShaderCache::blob.references == 1);
 
@@ -463,7 +840,7 @@ namespace
 		Require(create(4) == nullptr && mapSize() == 2);
 		Require(!AllocationControl::onAllocation);
 		Require(observations.released == beforeInvalidatedSlot + 1);
-		Require((cache.*maps)[0].at(1).get() == resident && (cache.*maps)[0].at(3).get() == firstResult);
+		Require((cache.*maps)[0].at(1) == resident && (cache.*maps)[0].at(3) == firstResult);
 		Require(create(4) != nullptr && mapSize() == 3);
 	}
 }
@@ -471,14 +848,23 @@ namespace
 int main()
 {
 	try {
+		CheckOwnerAllocationFailure();
+		CheckMetadataTransactions();
 		CheckBytecodeHooks();
+		CheckRetainedBinding();
 		CheckStage(&SIE::ShaderCache::MakeAndAddVertexShader, &SIE::ShaderCache::vertexShaders, &SIE::ShaderCache::vertexShadersMutex);
+		CheckLifetime(&SIE::ShaderCache::MakeAndAddVertexShader, &SIE::ShaderCache::vertexShaders, &SIE::ShaderCache::vertexShadersMutex);
+		CheckClearOrdering(&SIE::ShaderCache::MakeAndAddVertexShader, &SIE::ShaderCache::vertexShaders);
 		CheckStage(&SIE::ShaderCache::MakeAndAddPixelShader, &SIE::ShaderCache::pixelShaders, &SIE::ShaderCache::pixelShadersMutex);
+		CheckLifetime(&SIE::ShaderCache::MakeAndAddPixelShader, &SIE::ShaderCache::pixelShaders, &SIE::ShaderCache::pixelShadersMutex);
+		CheckClearOrdering(&SIE::ShaderCache::MakeAndAddPixelShader, &SIE::ShaderCache::pixelShaders);
 		CheckStage(&SIE::ShaderCache::MakeAndAddComputeShader, &SIE::ShaderCache::computeShaders, &SIE::ShaderCache::computeShadersMutex);
+		CheckLifetime(&SIE::ShaderCache::MakeAndAddComputeShader, &SIE::ShaderCache::computeShaders, &SIE::ShaderCache::computeShadersMutex);
+		CheckClearOrdering(&SIE::ShaderCache::MakeAndAddComputeShader, &SIE::ShaderCache::computeShaders);
 		Require(!observations.driverUnderLock && !observations.releaseUnderLock && !observations.namingUnderLock);
 		Require(observations.created == observations.released && observations.named > 0);
 		Require(observations.wrappersCreated == observations.wrappersDestroyed);
-		std::cout << "All three shader stages: resident lookups, stale generations, duplicate races, allocation/generation races, failure cleanup and input ownership passed\n";
+		std::cout << "All three shader stages: resident lookups, stale generations, duplicate races, allocation/generation races, failure cleanup, retirement, metadata transactions and retained engine bindings passed\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

@@ -244,13 +244,8 @@ namespace SIE
 		DeleteScopedDiskCacheEntries(diskPaths);
 		compilationSet.Forget(taskIds);
 
-		if (a_clearFeatures) {
-			globals::deferred->ClearShaderCache();
-			for (auto* feature : Feature::GetFeatureList()) {
-				if (feature->loaded)
-					feature->ClearShaderCacheScoped();
-			}
-		}
+		if (a_clearFeatures)
+			RequestFeatureShaderClear(true);
 
 		const auto elapsed = std::chrono::duration<double, std::milli>(
 			std::chrono::steady_clock::now() - start);

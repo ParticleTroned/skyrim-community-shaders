@@ -60,6 +60,7 @@ public:
 	virtual void SetupResources() override;
 	virtual void SetupRenderTargetResources() override;
 	virtual void ClearShaderCache() override;
+	void PrepareShaderCache() override;
 	void CompileComputeShaders();
 
 	virtual void Prepass() override;

@@ -389,6 +389,7 @@ public:
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
 	virtual void ClearShaderCache() override;
+	void PrepareShaderCache() override;
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
 	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, const ResolvedBillboardLight* a_billboardLight = nullptr);

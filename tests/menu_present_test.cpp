@@ -23,9 +23,21 @@ namespace
 	uint32_t timingFrame = 0;
 	HRESULT timingResult = S_OK;
 	std::string renderOrder;
+	bool pendingClearAtPresent = false;
 }
 namespace globals
 {
+	struct ShaderCache
+	{
+		bool pending = false;
+		void ProcessPendingClear()
+		{
+			++effects;
+			renderOrder += "clear;";
+			pending = false;
+		}
+	} shaderCacheValue;
+	ShaderCache* shaderCache = &shaderCacheValue;
 	struct State
 	{
 		bool startupMenuBlurSourceReady = false;
@@ -46,6 +58,7 @@ namespace globals
 		{
 			++effects;
 			renderOrder += "overlay;";
+			shaderCache->pending = true;
 		}
 	} menuValue;
 	Menu* menu = &menuValue;
@@ -155,6 +168,7 @@ int main()
 {
 	IDXGISwapChain_Present::func.target = [](IDXGISwapChain* chain, UINT interval, UINT flags) -> HRESULT {
 		++presentCalls;
+		pendingClearAtPresent |= globals::shaderCache->pending;
 		renderOrder += "present;";
 		forwardedChain = chain;
 		forwardedInterval = interval;
@@ -173,6 +187,8 @@ int main()
 							effects = presentCalls = 0;
 							flatBegins = flatCompletions = timingCapabilityQueries = 0;
 							renderOrder.clear();
+							pendingClearAtPresent = false;
+							globals::shaderCache->pending = false;
 							globals::stateValue.frameCount = 0;
 							globals::stateValue.startupMenuInitializationComplete = initialized;
 							globals::stateValue.startupMenuBlurSourceReady = blurReady;
@@ -181,10 +197,10 @@ int main()
 							const auto actual = IDXGISwapChain_Present::thunk(chain, 2, flags);
 							const bool test = !vr && (flags & DXGI_PRESENT_TEST) != 0;
 							const char* expectedOrder = test ? "present;" :
-							                                   (vr ? "mirror;reset;accepted;overlay;capture;indicator;present;collect;" :
-																	 "mirror;reset;overlay;capture;indicator;timing-end;present;timing-begin;collect;");
+							                                   (vr ? "mirror;reset;accepted;overlay;clear;capture;indicator;present;collect;" :
+																	 "mirror;reset;overlay;clear;capture;indicator;timing-end;present;timing-begin;collect;");
 							const bool expectedBlurReady = blurReady || (!test && initialized && SUCCEEDED(result));
-							if (actual != result || presentCalls != 1 || forwardedChain != chain || forwardedFlags != flags || forwardedInterval != 2 ||
+							if (pendingClearAtPresent || actual != result || presentCalls != 1 || forwardedChain != chain || forwardedFlags != flags || forwardedInterval != 2 ||
 								flatBegins != unsigned(!vr && !test) || flatCompletions != flatBegins || timingCapabilityQueries != flatBegins ||
 								(!vr && !test && (timingFrame != 0 || timingResult != result || !timingSupported)) ||
 								renderOrder != expectedOrder || globals::stateValue.startupMenuBlurSourceReady != expectedBlurReady ||

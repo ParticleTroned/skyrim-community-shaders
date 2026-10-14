@@ -8,9 +8,12 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <source_location>
 #include <stdexcept>
@@ -20,6 +23,8 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#include "Utils/RendererOwnership.h"
 
 namespace
 {
@@ -34,12 +39,13 @@ namespace
 		RuntimeShader* shader = this;
 		unsigned* releases;
 		explicit RuntimeShader(unsigned& a_releases) : releases(&a_releases) {}
-		void Release() { ++*releases; }
+		~RuntimeShader() { ++*releases; }
 	};
 }
 
 namespace logger
 {
+	unsigned errorCount = 0;
 	template <class... Args>
 	void debug(const char*, Args&&...)
 	{}
@@ -49,6 +55,11 @@ namespace logger
 	template <class... Args>
 	void info(const char*, Args&&...)
 	{}
+	template <class... Args>
+	void error(const char*, Args&&...)
+	{
+		++errorCount;
+	}
 }
 
 namespace RE
@@ -77,8 +88,27 @@ namespace RE
 struct Feature
 {
 	bool loaded = true;
-	unsigned clears = 0;
-	void ClearShaderCacheScoped() { ++clears; }
+	unsigned clears = 0, fullClears = 0, preparations = 0;
+	std::function<void()> duringClear, duringPrepare;
+	std::string GetName() const { return "TestFeature"; }
+	void ClearShaderCache()
+	{
+		++fullClears;
+		if (duringClear)
+			duringClear();
+	}
+	void ClearShaderCacheScoped()
+	{
+		++clears;
+		if (duringClear)
+			duringClear();
+	}
+	void PrepareShaderCache()
+	{
+		++preparations;
+		if (duringPrepare)
+			duringPrepare();
+	}
 	static std::vector<Feature*>& GetFeatureList()
 	{
 		static std::vector<Feature*> features;
@@ -140,6 +170,9 @@ namespace SIE
 #include "shader_capture_declarations.h"
 #include "shader_capture_state.h"
 #include "shader_category_flag.h"
+		std::atomic<uint8_t> pendingFeatureClear{ 0 };
+		void RequestFeatureShaderClear(bool scoped);
+		void ProcessPendingFeatureClear();
 		std::vector<uint32_t> pixelRequests;
 		void GetPixelShader(const RE::BSShader&, uint32_t descriptor) { pixelRequests.push_back(descriptor); }
 		void PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories);
@@ -150,7 +183,7 @@ namespace SIE
 		std::unordered_map<std::string, Blob> shaderMap;
 		std::unordered_set<std::string> deferredEvictions;
 		std::mutex mapMutex, vertexShadersMutex, pixelShadersMutex, computeShadersMutex;
-		using RuntimeMaps = std::array<std::unordered_map<uint32_t, std::unique_ptr<RuntimeShader>>, RE::BSShader::Total>;
+		using RuntimeMaps = std::array<std::unordered_map<uint32_t, std::shared_ptr<RuntimeShader>>, RE::BSShader::Total>;
 		RuntimeMaps vertexShaders, pixelShaders, computeShaders;
 		CompilationSet compilationSet;
 		std::vector<std::wstring> deletedPaths;
@@ -172,6 +205,14 @@ namespace SIE
 
 namespace globals
 {
+	namespace game
+	{
+		int* renderer = nullptr;
+	}
+	namespace d3d
+	{
+		int* context = nullptr;
+	}
 	struct State
 	{
 		bool developer = false;
@@ -187,12 +228,19 @@ namespace globals
 	SIE::ShaderCache* shaderCache = nullptr;
 }
 
+namespace Util
+{
+	CRITICAL_SECTION rendererLock;
+	CRITICAL_SECTION* GetRendererContextLock(int*, int*) { return &rendererLock; }
+}
+
 namespace SIE
 {
 #include "shader_capture_tracking_under_test.h"
 #include "shader_capture_under_test.h"
 #include "shader_category_prewarm.h"
 #include "shader_eviction_under_test.h"
+#include "shader_feature_clear_under_test.h"
 #include "shader_queue_add_under_test.h"
 }
 
@@ -221,6 +269,93 @@ namespace
 	{
 		a_cache.activeShaderCaptureFramesRemaining.store(1);
 		a_cache.TickActiveShaderCapture(a_menuVisible);
+		a_cache.ProcessPendingFeatureClear();
+	}
+
+	void TestFeatureClearBoundary()
+	{
+		ShaderCache cache;
+		Feature first, second, unloaded;
+		unloaded.loaded = false;
+		Feature::GetFeatureList() = { &first, &second, &unloaded };
+		globals::deferred->clears = 0;
+		cache.RequestFeatureShaderClear(true);
+		cache.RequestFeatureShaderClear(false);
+		cache.RequestFeatureShaderClear(true);
+		Require(first.clears == 0 && first.fullClears == 0 && globals::deferred->clears == 0);
+		std::vector<unsigned> order;
+		first.duringClear = [&] { order.push_back(1); };
+		second.duringClear = [&] { order.push_back(2); };
+		first.duringPrepare = [&] {
+			order.push_back(3);
+			cache.RequestFeatureShaderClear(true);
+			throw std::runtime_error("expected preparation failure");
+		};
+		second.duringPrepare = [&] { order.push_back(4); };
+
+		// A busy renderer leaves the coalesced request pending for the next boundary.
+		std::future<void> blocked;
+		bool completed = false;
+		{
+			const Util::RendererOwnership ownership(&Util::rendererLock, true);
+			blocked = std::async(std::launch::async, [&] { cache.ProcessPendingFeatureClear(); });
+			completed = blocked.wait_for(std::chrono::seconds(3)) == std::future_status::ready;
+		}
+		blocked.get();
+		Require(completed && order.empty() && cache.pendingFeatureClear == 3);
+		cache.ProcessPendingFeatureClear();
+		Require(order == std::vector<unsigned>({ 1, 2, 3, 4 }));
+		Require(first.fullClears == 1 && second.fullClears == 1 && first.clears == 0 && second.clears == 0);
+		Require(unloaded.fullClears == 0 && unloaded.clears == 0 && unloaded.preparations == 0);
+		Require(globals::deferred->clears == 1 && cache.pendingFeatureClear == 1);
+		order.clear();
+		first.duringPrepare = [&] { order.push_back(3); };
+		cache.ProcessPendingFeatureClear();
+		Require(order == std::vector<unsigned>({ 1, 2, 3, 4 }));
+		Require(first.clears == 1 && second.clears == 1 && first.preparations == 2 && second.preparations == 2);
+		Require(globals::deferred->clears == 2 && cache.pendingFeatureClear == 0);
+		cache.ProcessPendingFeatureClear();
+		Require(globals::deferred->clears == 2);
+		Feature::GetFeatureList().clear();
+	}
+
+	void TestFeatureClearInvalidationFailure()
+	{
+		for (unsigned failedIndex = 0; failedIndex < 2; ++failedIndex) {
+			ShaderCache cache;
+			std::array<Feature, 3> features;
+			Feature::GetFeatureList() = { &features[0], &features[1], &features[2] };
+			std::vector<unsigned> order;
+			for (unsigned index = 0; index < features.size(); ++index) {
+				features[index].duringClear = [&, index] { order.push_back(index + 1); };
+				features[index].duringPrepare = [&, index] { order.push_back(index + 4); };
+			}
+			features[failedIndex].duringClear = [&] {
+				order.push_back(failedIndex + 1);
+				auto concurrent = std::async(std::launch::async, [&] { cache.RequestFeatureShaderClear(false); });
+				concurrent.get();
+				if (failedIndex == 0)
+					throw std::runtime_error("expected invalidation failure");
+				throw 1;
+			};
+			const auto errorsBefore = logger::errorCount;
+			cache.RequestFeatureShaderClear(true);
+			cache.ProcessPendingFeatureClear();
+			Require(order.size() == failedIndex + 1 && cache.pendingFeatureClear == 3);
+			Require(logger::errorCount == errorsBefore + 1);
+			for (unsigned index = 0; index < features.size(); ++index) {
+				Require(features[index].clears == (index <= failedIndex ? 1u : 0u));
+				Require(features[index].fullClears == 0 && features[index].preparations == 0);
+			}
+			features[failedIndex].duringClear = [&] { order.push_back(failedIndex + 1); };
+			order.clear();
+			cache.ProcessPendingFeatureClear();
+			Require(order == std::vector<unsigned>({ 1, 2, 3, 4, 5, 6 }) && cache.pendingFeatureClear == 0);
+			for (const auto& feature : features)
+				Require(feature.fullClears == 1 && feature.preparations == 1);
+			Require(logger::errorCount == errorsBefore + 1);
+			Feature::GetFeatureList().clear();
+		}
 	}
 
 	void TestQueueWithSharedBytecode()
@@ -253,6 +388,7 @@ namespace
 
 	void TestCaptureAndClearVariants(bool a_developer)
 	{
+		unsigned releases = 0;
 		ShaderCache cache;
 		globals::state->developer = a_developer;
 		globals::deferred->clears = 0;
@@ -271,13 +407,12 @@ namespace
 		Require(cache.activeShaders.size() == (a_developer ? 1u : 0u));
 		if (a_developer)
 			Require(cache.activeShaders.at(key).descriptor == 99 && cache.activeShaders.at(key).drawCalls == 4);
-		unsigned releases = 0;
 		for (uint32_t descriptor : { 10u, 11u }) {
 			const auto id = ShaderCompilationTask::MakeId(ShaderClass::Pixel, shader.shaderType.get(), descriptor);
 			const auto& info = cache.capturedShaders.at(id);
 			Require(info.descriptor == descriptor && info.key == key);
 			Require(info.diskPath == SIE::SShaderCache::GetDiskPath(shader.fxpFilename, descriptor, ShaderClass::Pixel));
-			cache.pixelShaders[RE::BSShader::Lighting][descriptor] = std::make_unique<RuntimeShader>(releases);
+			cache.pixelShaders[RE::BSShader::Lighting][descriptor] = std::make_shared<RuntimeShader>(releases);
 		}
 		std::thread bulkLoad([&] { cache.TrackActiveShader(ShaderClass::Pixel, shader, 88); });
 		bulkLoad.join();
@@ -292,8 +427,8 @@ namespace
 		Require(globals::deferred->clears == 1 && loaded.clears == 1 && unloaded.clears == 0);
 
 		cache.shaderMap[key] = {};
-		cache.pixelShaders[RE::BSShader::Lighting][10] = std::make_unique<RuntimeShader>(releases);
-		cache.pixelShaders[RE::BSShader::Lighting][12] = std::make_unique<RuntimeShader>(releases);
+		cache.pixelShaders[RE::BSShader::Lighting][10] = std::make_shared<RuntimeShader>(releases);
+		cache.pixelShaders[RE::BSShader::Lighting][12] = std::make_shared<RuntimeShader>(releases);
 		cache.TickActiveShaderCapture(false);
 		Require(cache.activeShaderCaptureStage == Stage::SecondWindow);
 		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
@@ -315,13 +450,13 @@ namespace
 	void TestProtectedVariants()
 	{
 		for (unsigned protection = 0; protection < 3; ++protection) {
+			unsigned releases = 0;
 			ShaderCache cache;
 			globals::state->developer = false;
 			RE::BSShader shader;
 			const auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Pixel, shader, 7, true);
 			cache.shaderMap[key] = {};
-			unsigned releases = 0;
-			cache.pixelShaders[RE::BSShader::Lighting][7] = std::make_unique<RuntimeShader>(releases);
+			cache.pixelShaders[RE::BSShader::Lighting][7] = std::make_shared<RuntimeShader>(releases);
 			if (protection == 0)
 				cache.shaderMap[key].status = ShaderCompilationTask::Pending;
 			else if (protection == 1)
@@ -397,6 +532,7 @@ namespace
 
 	void TestStageAndTypeIdentity()
 	{
+		unsigned releases = 0;
 		ShaderCache cache;
 		globals::state->developer = false;
 		RE::BSShader lighting, imageSpace;
@@ -409,11 +545,10 @@ namespace
 		cache.TrackActiveShader(ShaderClass::Compute, imageSpace, 4);
 		cache.TrackActiveShader(ShaderClass::Pixel, imageSpace, 4);
 		Require(cache.capturedShaders.size() == 4);
-		unsigned releases = 0;
-		cache.vertexShaders[RE::BSShader::Lighting][4] = std::make_unique<RuntimeShader>(releases);
-		cache.pixelShaders[RE::BSShader::Lighting][4] = std::make_unique<RuntimeShader>(releases);
-		cache.pixelShaders[RE::BSShader::ImageSpace][4] = std::make_unique<RuntimeShader>(releases);
-		cache.computeShaders[RE::BSShader::ImageSpace][4] = std::make_unique<RuntimeShader>(releases);
+		cache.vertexShaders[RE::BSShader::Lighting][4] = std::make_shared<RuntimeShader>(releases);
+		cache.pixelShaders[RE::BSShader::Lighting][4] = std::make_shared<RuntimeShader>(releases);
+		cache.pixelShaders[RE::BSShader::ImageSpace][4] = std::make_shared<RuntimeShader>(releases);
+		cache.computeShaders[RE::BSShader::ImageSpace][4] = std::make_shared<RuntimeShader>(releases);
 		FinishWindow(cache, true);
 		Require(releases == 4 && cache.compilationSet.forgotten.size() == 4);
 		Require(cache.deletedPaths.size() == 3);
@@ -422,7 +557,10 @@ namespace
 
 int main()
 {
+	InitializeCriticalSection(&Util::rendererLock);
 	try {
+		TestFeatureClearBoundary();
+		TestFeatureClearInvalidationFailure();
 		TestQueueWithSharedBytecode();
 		TestCaptureAndClearVariants(false);
 		TestCaptureAndClearVariants(true);
@@ -430,9 +568,11 @@ int main()
 		TestStageAndTypeIdentity();
 		TestCategoryVariantIdentity();
 		TestCategoryPrewarm();
+		DeleteCriticalSection(&Util::rendererLock);
 		std::cout << "Shader cache variant checks passed\n";
 		return 0;
 	} catch (const std::exception& error) {
+		DeleteCriticalSection(&Util::rendererLock);
 		std::cerr << error.what() << '\n';
 		return 1;
 	}

@@ -1,5 +1,6 @@
 #include <RE/Skyrim.h>
 #include <REL/Relocation.h>
+#include <spdlog/sinks/sink.h>
 #include <spdlog/spdlog.h>
 
 #include <array>
@@ -7,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <new>
 #include <span>
 #include <stdexcept>
@@ -41,7 +43,8 @@ namespace
 {
 	using Define = std::pair<const char*, const char*>;
 	unsigned compileCalls{}, liveShaders{};
-	bool failCompile{}, throwCompile{};
+	bool failCompile{}, throwCompile{}, throwUnknownCompile{};
+	unsigned loggedErrors{}, compilerErrors{}, allocationErrors{}, unknownErrors{};
 	std::span<const Define> expectedDefines;
 	Util::ShaderCompileTiming* expectedTiming{};
 	constexpr wchar_t path[] = L"Data\\Shaders\\LazyShaderTest.hlsl";
@@ -49,6 +52,24 @@ namespace
 	std::wstring_view expectedPath = path;
 	std::string_view expectedTarget = "cs_5_0";
 	std::string_view expectedEntry = "main";
+
+	class ErrorSink final : public spdlog::sinks::sink
+	{
+	public:
+		void log(const spdlog::details::log_msg& message) override
+		{
+			if (message.level != spdlog::level::err)
+				return;
+			++loggedErrors;
+			const std::string_view text(message.payload.data(), message.payload.size());
+			compilerErrors += text.find("Injected compiler exception") != std::string_view::npos;
+			allocationErrors += text.find(std::bad_alloc{}.what()) != std::string_view::npos;
+			unknownErrors += text.find("unknown exception") != std::string_view::npos;
+		}
+		void flush() override {}
+		void set_pattern(const std::string&) override {}
+		void set_formatter(std::unique_ptr<spdlog::formatter>) override {}
+	};
 
 	void Require(bool condition, const char* message)
 	{
@@ -203,30 +224,70 @@ namespace
 
 	void CheckExceptions()
 	{
-		Util::LazyShader<ID3D11ComputeShader> shader;
 		const std::array<Define, 1> defines{ { { "TEST", nullptr } } };
+		const std::vector<Define> dynamicDefines(defines.begin(), defines.end());
 		expectedDefines = defines;
 		expectedTiming = nullptr;
+		Util::LazyShader<ID3D11ComputeShader> allocationFailure;
+		const auto callsBeforeAllocation = compileCalls;
+		const auto errorsBeforeAllocation = loggedErrors;
+		const auto allocationErrorsBefore = allocationErrors;
 		failAllocation = true;
-		bool rejected = false;
-		try {
-			Request(shader, "TEST");
-		} catch (const std::bad_alloc&) {
-			rejected = true;
-		}
+		const auto* failedAllocation = Request(allocationFailure, "TEST");
 		failAllocation = false;
-		Require(rejected && !shader, "Cold argument allocation failure must propagate without creating a shader");
-		throwCompile = true;
-		rejected = false;
-		try {
-			Request(shader, "TEST");
-		} catch (const std::runtime_error&) {
-			rejected = true;
+		Require(!failedAllocation && !allocationFailure && compileCalls == callsBeforeAllocation,
+			"Cold macro allocation failure must return no shader without reaching the compiler");
+		Require(loggedErrors == errorsBeforeAllocation + 1 && allocationErrors == allocationErrorsBefore + 1,
+			"Cold allocation failure must report the actual exception once");
+		const auto allocationsBefore = allocations.load();
+		for (unsigned draw = 0; draw < 10000; ++draw) {
+			Require(!Request(allocationFailure, "TEST"), "Allocation failure must stay latched for fixed macros");
+			Require(!allocationFailure.Get(path, dynamicDefines, "cs_5_0"), "Allocation failure must stay latched for dynamic macros");
 		}
-		throwCompile = false;
-		Require(rejected && !shader, "Compiler exceptions must retain their existing propagation behavior");
-		Require(Request(shader, "TEST"), "Exceptions must not leave a false compilation-failure latch");
+		Require(compileCalls == callsBeforeAllocation && allocations.load() == allocationsBefore && loggedErrors == errorsBeforeAllocation + 1,
+			"Allocation failure must not retry, allocate or log again during drawing");
+		allocationFailure.Reset();
+		Require(Request(allocationFailure, "TEST") && compileCalls == callsBeforeAllocation + 1,
+			"Reset must permit recovery after allocation failure");
+
+		for (const bool dynamicRequest : { false, true }) {
+			std::array<Util::LazyShader<ID3D11ComputeShader>, 2> shaders;
+			const auto callsBefore = compileCalls;
+			const auto errorsBefore = loggedErrors;
+			const auto compilerErrorsBefore = compilerErrors;
+			throwCompile = true;
+			for (auto& shader : shaders) {
+				const auto* failed = dynamicRequest ? shader.Get(path, dynamicDefines, "cs_5_0") : Request(shader, "TEST");
+				Require(!failed && !shader, "Compiler exceptions must return null and allow sibling preparation to continue");
+			}
+			throwCompile = false;
+			Require(compileCalls == callsBefore + 2 && loggedErrors == errorsBefore + 2 && compilerErrors == compilerErrorsBefore + 2,
+				"Each sibling must attempt compilation once and report its actual exception");
+			const auto allocationsBeforeRetry = allocations.load();
+			for (unsigned draw = 0; draw < 10000; ++draw) {
+				for (auto& shader : shaders) {
+					Require(!Request(shader, "TEST"), "A throwing compile must stay latched for fixed macros");
+					Require(!shader.Get(path, dynamicDefines, "cs_5_0"), "A throwing compile must stay latched for dynamic macros");
+				}
+			}
+			Require(compileCalls == callsBefore + 2 && allocations.load() == allocationsBeforeRetry && loggedErrors == errorsBefore + 2,
+				"A throwing compile must not retry, allocate or log again during drawing");
+			shaders[0].Reset();
+			Require(Request(shaders[0], "TEST") && compileCalls == callsBefore + 3 && !Request(shaders[1], "TEST"),
+				"Reset must recover only the requested shader after a throwing compile");
+		}
+
+		Util::LazyShader<ID3D11ComputeShader> unknownFailure;
+		const auto unknownErrorsBefore = unknownErrors;
+		throwUnknownCompile = true;
+		Require(!Request(unknownFailure, "TEST"), "Non-standard compiler exceptions must return null");
+		throwUnknownCompile = false;
+		Require(unknownErrors == unknownErrorsBefore + 1 && !Request(unknownFailure, "TEST"),
+			"Non-standard compiler exceptions must be reported and latched");
+		unknownFailure.Reset();
+		Require(Request(unknownFailure, "TEST"), "Reset must recover after a non-standard compiler exception");
 	}
+
 }
 
 std::string Util::WStringToString(const std::wstring& value)
@@ -250,6 +311,8 @@ ID3D11DeviceChild* Util::CompileShader(const wchar_t* shaderPath,
 	Require(timing == expectedTiming, "The compiler must receive the original timing destination");
 	if (throwCompile)
 		throw std::runtime_error("Injected compiler exception");
+	if (throwUnknownCompile)
+		throw 1;
 	if (timing) {
 		timing->bytecodeCompilationQpcTicks += 13;
 		timing->d3dObjectCreationQpcTicks += 17;
@@ -260,6 +323,7 @@ ID3D11DeviceChild* Util::CompileShader(const wchar_t* shaderPath,
 int main()
 {
 	try {
+		logger::set_default_logger(std::make_shared<spdlog::logger>("lazy_shader_test", std::make_shared<ErrorSink>()));
 		CheckCachedRequests();
 		Require(liveShaders == 0, "Cache destruction must release every shader");
 		CheckFailureAndReset();

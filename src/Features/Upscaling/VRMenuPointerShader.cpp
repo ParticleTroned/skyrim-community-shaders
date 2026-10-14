@@ -8,6 +8,7 @@
 #include <d3d11.h>
 #include <d3d11shader.h>
 #include <d3dcompiler.h>
+#include <memory>
 #include <winrt/base.h>
 
 namespace
@@ -19,7 +20,8 @@ namespace
 	};
 	thread_local PointerVertexShaderValidation cachedValidation;
 
-	RE::BSGraphics::VertexShader* FindBoundVertexShaderBytecode(ID3D11VertexShader* a_boundShader)
+	RE::BSGraphics::VertexShader* FindBoundVertexShaderBytecode(ID3D11VertexShader* a_boundShader,
+		std::shared_ptr<RE::BSGraphics::VertexShader>& a_retainedShader)
 	{
 		auto* nativeShader = globals::game::currentVertexShader ? *globals::game::currentVertexShader : nullptr;
 		if (nativeShader && reinterpret_cast<ID3D11VertexShader*>(nativeShader->shader) == a_boundShader) {
@@ -33,9 +35,9 @@ namespace
 			return nullptr;
 
 		// The engine retains its native wrapper even when CSX binds a replacement.
-		auto* replacement = shaderCache->GetVertexShaderIfCached(*state->currentShader, state->modifiedVertexDescriptor);
-		if (replacement && reinterpret_cast<ID3D11VertexShader*>(replacement->shader) == a_boundShader) {
-			return replacement;
+		a_retainedShader = shaderCache->GetVertexShaderIfCached(*state->currentShader, state->modifiedVertexDescriptor);
+		if (a_retainedShader && reinterpret_cast<ID3D11VertexShader*>(a_retainedShader->shader) == a_boundShader) {
+			return a_retainedShader.get();
 		}
 		return nullptr;
 	}
@@ -59,7 +61,8 @@ bool ValidateVRMenuPointerVertexShader(ID3D11DeviceContext* a_context)
 
 	// Holding the COM object prevents address reuse and caches unsupported signatures too.
 	cachedValidation = { boundShader, false };
-	auto* shader = FindBoundVertexShaderBytecode(boundShader.get());
+	std::shared_ptr<RE::BSGraphics::VertexShader> retainedShader;
+	auto* shader = FindBoundVertexShaderBytecode(boundShader.get(), retainedShader);
 	if (!shader || !shader->byteCodeSize)
 		return false;
 	winrt::com_ptr<ID3D11ShaderReflection> reflection;

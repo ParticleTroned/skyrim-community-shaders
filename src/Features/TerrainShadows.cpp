@@ -88,6 +88,10 @@ void TerrainShadows::ClearShaderCache()
 {
 	shadowUpdateProgram.Reset();
 	shadowHeightValid = false;
+}
+
+void TerrainShadows::PrepareShaderCache()
+{
 	CompileComputeShaders();
 }
 

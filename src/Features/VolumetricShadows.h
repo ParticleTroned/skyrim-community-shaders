@@ -37,6 +37,7 @@ public:
 
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
+	void PrepareShaderCache() override;
 	virtual void DrawSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool) override;

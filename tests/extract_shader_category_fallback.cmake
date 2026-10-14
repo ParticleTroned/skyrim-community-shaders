@@ -6,10 +6,10 @@ file(READ "${PROJECT_ROOT}/src/Hooks.cpp" _hooks)
 file(READ "${PROJECT_ROOT}/src/TruePBR.cpp" _pbr)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp" _character)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.h" _character_header)
-extract_between("${_cache}" "RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader("
-    "RE::BSGraphics::ComputeShader* ShaderCache::GetComputeShader(" "pixel_lookup.h")
+extract_between("${_cache}" "std::shared_ptr<RE::BSGraphics::PixelShader> ShaderCache::GetPixelShader("
+    "std::shared_ptr<RE::BSGraphics::ComputeShader> ShaderCache::GetComputeShader(" "pixel_lookup.h")
 extract_between("${_header}" "static constexpr uint32_t GetCharacterCategoryFlag("
-    "/** Draw lookups" "category_flag.h")
+    "std::shared_ptr<RE::BSGraphics::PixelShader> GetPixelShader(" "category_flag.h")
 extract_between("${_hooks}" "struct BSShader__BeginTechnique_SetPixelShader"
     "struct CreateDepthStencil_PrecipitationMask" "pixel_binding.h")
 extract_between("${_character}" "void Increment(std::uint64_t&"
@@ -38,6 +38,6 @@ extract_between("${_pbr}" "auto* boundShader = *globals::game::currentPixelShade
 extract_between("${_header}" "enum class LightingShaderFlags"
     "enum class BloodSplatterShaderTechniques" "lighting_flags.h")
 extract_between("${_cache}" "void ShaderCache::PrewarmDeferredPixelShaders("
-    "RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(" "pixel_prewarm.h")
+    "std::shared_ptr<RE::BSGraphics::PixelShader> ShaderCache::GetPixelShader(" "pixel_prewarm.h")
 extract_between("${_pbr}" "void TruePBR::GenerateShaderPermutations("
     "struct ExtendedRendererState" "pbr_prewarm.h")

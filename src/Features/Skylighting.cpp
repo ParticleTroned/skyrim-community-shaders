@@ -1039,7 +1039,10 @@ void Skylighting::ClearShaderCache()
 {
 	QueueResetSkylighting();
 	probeUpdateCompute = nullptr;
+}
 
+void Skylighting::PrepareShaderCache()
+{
 	CompileComputeShaders();
 }
 

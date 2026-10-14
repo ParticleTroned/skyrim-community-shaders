@@ -3116,6 +3116,10 @@ void LightLimitFix::ClearShaderCache()
 {
 	clusterBuildingCS.Reset();
 	clusterCullingCS.Reset();
+}
+
+void LightLimitFix::PrepareShaderCache()
+{
 	CompileComputeShaders();
 }
 

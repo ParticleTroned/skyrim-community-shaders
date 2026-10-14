@@ -7,6 +7,14 @@ foreach(
     IN
     ITEMS
         shader_publication_under_test.h
+        shader_retirement_under_test.h
+        shader_full_clear_under_test.h
+        shader_type_clear_under_test.h
+        shader_clear_metadata_under_test.h
+        shader_result_traits_under_test.h
+        shader_add_completed_under_test.h
+        shader_release_under_test.h
+        shader_feature_clear_under_test.h
         shader_generation_check.h
         shader_bytecode_map.h
         shader_bytecode_hooks.h
@@ -82,6 +90,7 @@ foreach(_bridge IN ITEMS off on)
         tests/shader_category_fallback_test.cpp)
     target_sources(shader_category_fallback_${_bridge}_test PRIVATE ${_category_fallback_headers})
     target_include_directories(shader_category_fallback_${_bridge}_test PRIVATE "${_category_fallback_dir}")
+    target_link_libraries(shader_category_fallback_${_bridge}_test PRIVATE Microsoft::CppWinRT)
 endforeach()
 target_compile_definitions(shader_category_fallback_on_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
 

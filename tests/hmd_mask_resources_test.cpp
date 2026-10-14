@@ -328,24 +328,29 @@ int main()
 			failBuffer = false;
 			Require(upscaling.EnsureHMDMaskClearResources(), "Buffer creation failure must remain recoverable");
 		}
-		{
+		for (const bool unknownException : { false, true }) {
 			Upscaling upscaling;
-			throwCompile = true;
-			Require(!upscaling.EnsureHMDMaskClearResources() && !upscaling.vrClearHMDMaskCS &&
-						!upscaling.vrClearHMDMaskCB && deviceFailureChecks == 2,
-				"Compiler exceptions must retain existing cleanup and device-loss checks");
-			throwCompile = false;
-			Require(upscaling.EnsureHMDMaskClearResources(), "Compiler exceptions must remain recoverable");
-		}
-		{
-			Upscaling upscaling;
+			const auto callsBefore = compileCalls;
+			const auto buffersBefore = bufferCalls;
 			const auto checksBefore = deviceRemovalChecks;
-			throwUnknownCompile = true;
+			const auto exceptionChecksBefore = deviceFailureChecks;
+			throwCompile = !unknownException;
+			throwUnknownCompile = unknownException;
 			Require(!upscaling.EnsureHMDMaskClearResources() && !upscaling.vrClearHMDMaskCS &&
-						!upscaling.vrClearHMDMaskCB && deviceRemovalChecks == checksBefore + 1,
-				"Unknown compiler exceptions must retain existing cleanup and device-removal checks");
-			throwUnknownCompile = false;
-			Require(upscaling.EnsureHMDMaskClearResources(), "Unknown compiler exceptions must remain recoverable");
+						!upscaling.vrClearHMDMaskCB && compileCalls == callsBefore + 1 && bufferCalls == buffersBefore &&
+						deviceRemovalChecks == checksBefore + 1 && deviceFailureChecks == exceptionChecksBefore,
+				"Logged compiler exceptions must take the null-shader fallback and retain device-removal checks");
+			throwCompile = throwUnknownCompile = false;
+			deviceRemoved = true;
+			Require(!upscaling.EnsureHMDMaskClearResources() && deviceLossRecorded &&
+						compileCalls == callsBefore + 1 && bufferCalls == buffersBefore && deviceRemovalChecks == checksBefore + 2,
+				"Latched compiler exceptions must still detect device removal without recompiling");
+			deviceRemoved = deviceLossRecorded = false;
+			Require(!upscaling.EnsureHMDMaskClearResources() && compileCalls == callsBefore + 1,
+				"Compiler recovery alone must not bypass an exception failure latch");
+			upscaling.ClearShaderCache();
+			Require(upscaling.EnsureHMDMaskClearResources() && compileCalls == callsBefore + 2 && bufferCalls == buffersBefore + 1,
+				"Explicit shader-cache invalidation must recover after compiler exceptions");
 		}
 		{
 			Upscaling upscaling;

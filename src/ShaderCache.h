@@ -6,6 +6,7 @@
 #include <deque>
 #include <efsw/efsw.hpp>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -555,11 +556,12 @@ namespace SIE
 		 */
 		bool ShaderModifiedSince(const std::string& a_type, system_clock::time_point a_current);
 
+		/** Invalidate engine entries immediately and queue standalone feature work for the render thread. */
 		void Clear();
 		void Clear(RE::BSShader::Type a_type);
 		/** @brief Requests a full cache clear on the render thread. */
 		void RequestClear();
-		/** @brief Drains a pending full-clear request on the render thread. */
+		/** Service requested clears and standalone feature preparation at the render-frame boundary. */
 		void ProcessPendingClear();
 		/**
    		* @brief Clears and marks shaders for recompilation based on the given path.
@@ -623,9 +625,10 @@ namespace SIE
 		/** @brief Warms AO-only shaders and, when requested, their deferred category variants. */
 		void PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories);
 
-		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor);
-		/** Return an existing vertex shader by exact descriptor without compiling or scheduling work. */
-		RE::BSGraphics::VertexShader* GetVertexShaderIfCached(const RE::BSShader& shader, uint32_t descriptor);
+		/** Retain the returned wrapper through binding or any other use, including across invalidation. */
+		std::shared_ptr<RE::BSGraphics::VertexShader> GetVertexShader(const RE::BSShader& shader, uint32_t descriptor);
+		/** Retain an existing vertex shader by exact descriptor without compiling or scheduling work. */
+		std::shared_ptr<RE::BSGraphics::VertexShader> GetVertexShaderIfCached(const RE::BSShader& shader, uint32_t descriptor);
 		/** Reserved pixel descriptor bit for the authored category output layout. */
 		static constexpr uint32_t GetCharacterCategoryFlag(RE::BSShader::Type type)
 		{
@@ -650,17 +653,18 @@ namespace SIE
 			Cached
 		};
 
-		/** Draw lookups may use the other deferred category layout while the exact variant compiles. */
-		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader& shader,
+		/** Retain the selected shader; draw lookups may use the other deferred category layout. */
+		std::shared_ptr<RE::BSGraphics::PixelShader> GetPixelShader(const RE::BSShader& shader,
 			uint32_t descriptor, PixelShaderLookup a_lookup = PixelShaderLookup::Compile);
-		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
+		/** Retain the returned wrapper through the complete native compute dispatch. */
+		std::shared_ptr<RE::BSGraphics::ComputeShader> GetComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 
-		RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader& shader,
+		std::shared_ptr<RE::BSGraphics::VertexShader> MakeAndAddVertexShader(const RE::BSShader& shader,
 			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
-		RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader& shader,
+		std::shared_ptr<RE::BSGraphics::PixelShader> MakeAndAddPixelShader(const RE::BSShader& shader,
 			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
-		RE::BSGraphics::ComputeShader* MakeAndAddComputeShader(const RE::BSShader& shader,
+		std::shared_ptr<RE::BSGraphics::ComputeShader> MakeAndAddComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
 		static std::string GetDefinesString(const RE::BSShader& shader, uint32_t descriptor);
@@ -1104,7 +1108,7 @@ namespace SIE
 
 		template <typename ShaderType>
 		using ShaderMapArray = std::array<
-			ankerl::unordered_dense::map<uint32_t, std::unique_ptr<ShaderType>>,
+			ankerl::unordered_dense::map<uint32_t, std::shared_ptr<ShaderType>>,
 			RE::BSShader::Type::Total>;
 
 		ShaderMapArray<RE::BSGraphics::VertexShader> vertexShaders;
@@ -1133,6 +1137,9 @@ namespace SIE
 		bool hideError = false;
 		bool useFileWatcher = false;
 		std::atomic_bool pendingClear{ false };
+		std::atomic<uint8_t> pendingFeatureClear{ 0 };  // Bit 0: scoped, bit 1: full; full takes precedence.
+		void RequestFeatureShaderClear(bool a_scoped);
+		void ProcessPendingFeatureClear();
 
 		bool ShouldUseAsyncCompilation() const;
 

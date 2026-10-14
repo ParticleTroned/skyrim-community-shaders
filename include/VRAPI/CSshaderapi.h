@@ -170,6 +170,7 @@ namespace CSX::ShaderAPI
 		Status status = Status::kInternalError;
 		std::uint32_t applied = 0;
 		std::uint32_t changed = 0;
+		/** @brief Reports deferred work; memory/all clears queue render-boundary feature invalidation and preparation. */
 		std::uint32_t pending = 0;
 		std::uint32_t restartRequired = 0;
 		std::uint32_t shaderRecompileExpected = 0;

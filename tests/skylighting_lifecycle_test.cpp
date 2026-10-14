@@ -345,6 +345,7 @@ struct Skylighting
 	unsigned compilations = 0;
 	std::function<void()> compile;
 	void ClearShaderCache();
+	void PrepareShaderCache();
 	void CompileComputeShaders()
 	{
 		++compilations;
@@ -617,9 +618,12 @@ try {
 			if (outcome == 0)
 				f.feature.probeUpdateCompute.value = &f.compute;
 		};
+		f.feature.ClearShaderCache();
+		Require(f.feature.compilations == 0 && f.feature.HasPendingReset(), "invalidation must queue history reset without preparing shaders");
+		Require(!f.feature.probeUpdateCompute, "invalidation must release the old compute shader");
 		bool threw = false;
 		try {
-			f.feature.ClearShaderCache();
+			f.feature.PrepareShaderCache();
 		} catch (const std::runtime_error& e) {
 			Require(std::string(e.what()) == "injected shader compilation failure", "shader reload must only propagate the injected compile failure");
 			threw = true;

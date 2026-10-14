@@ -875,9 +875,9 @@ void TruePBR::SetupGrassShaderMaterial(RE::BSShader* shader, const RE::BSLightin
 		return;
 	// Material constants must follow the shader actually bound, including a pending category fallback.
 	auto* boundShader = *globals::game::currentPixelShader;
-	auto* customShader = boundShader ? globals::shaderCache->GetPixelShader(*shader, boundShader->id, SIE::ShaderCache::PixelShaderLookup::Cached) : nullptr;
+	auto customShader = boundShader ? globals::shaderCache->GetPixelShader(*shader, boundShader->id, SIE::ShaderCache::PixelShaderLookup::Cached) : nullptr;
 	const auto& constants = ShaderConstants::GrassPS::Get();
-	if (customShader == nullptr || customShader != *globals::game::currentPixelShader ||
+	if (customShader == nullptr || customShader.get() != *globals::game::currentPixelShader ||
 		customShader->constantBuffers[1].buffer == nullptr ||
 		customShader->constantTable[constants.PBRFlags] != 0 ||
 		customShader->constantTable[constants.PBRParams1] != 1 ||

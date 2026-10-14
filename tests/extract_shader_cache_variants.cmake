@@ -49,12 +49,12 @@ extract_between(
 
 extract_between(
     "${_header}" "\t\tstatic constexpr uint32_t GetCharacterCategoryFlag("
-    "\n\t\tRE::BSGraphics::PixelShader* GetPixelShader("
+    "\n\t\tstd::shared_ptr<RE::BSGraphics::PixelShader> GetPixelShader("
     "shader_category_flag.h"
 )
 extract_between(
     "${_source}" "\tvoid ShaderCache::PrewarmDeferredPixelShaders("
-    "\n\tRE::BSGraphics::PixelShader* ShaderCache::GetPixelShader("
+    "\n\tstd::shared_ptr<RE::BSGraphics::PixelShader> ShaderCache::GetPixelShader("
     "shader_category_prewarm.h"
 )
 extract_between(
@@ -82,4 +82,40 @@ extract_between(
 extract_between(
     "${_header}" "\t\tbool IsTaskStale(" "\n\t\tvoid StartActiveShaderCaptureWindow("
     "shader_generation_check.h"
+)
+
+extract_between(
+    "${_source}" "\ttemplate <typename ShaderMaps, typename MutexType>"
+    "\n\tvoid ShaderCache::Clear()" "shader_retirement_under_test.h"
+)
+extract_between(
+    "${_source}" "\ttemplate <typename ShaderType, typename MutexType>"
+    "\n\tvoid ShaderCache::EvictShaderResources(" "shader_release_under_test.h"
+)
+extract_between(
+    "${_source}" "\tvoid ShaderCache::RequestFeatureShaderClear("
+    "\n\tnamespace" "shader_feature_clear_under_test.h"
+)
+
+
+extract_between(
+    "${_source}" "\tvoid ShaderCache::Clear()"
+    "\n\ttemplate <typename ShaderType, typename MutexType>" "shader_full_clear_under_test.h"
+)
+extract_between(
+    "${_source}" "\tvoid ShaderCache::Clear(RE::BSShader::Type"
+    "\n\tvoid ShaderCache::RequestClear()" "shader_type_clear_under_test.h"
+)
+extract_between(
+    "${_source}" "\tvoid ShaderCache::ClearShaderMap("
+    "\n\tvoid ShaderCache::InsertModifiedShaderMap(" "shader_clear_metadata_under_test.h"
+)
+
+extract_between(
+    "${_source}" "\t\tstruct ShaderCacheResultTraits"
+    "\n\t}" "shader_result_traits_under_test.h"
+)
+extract_between(
+    "${_source}" "\tbool ShaderCache::AddCompletedShader("
+    "\n\tstd::pair<ShaderCache::ClaimResult, ID3DBlob*>" "shader_add_completed_under_test.h"
 )

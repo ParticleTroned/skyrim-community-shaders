@@ -8,6 +8,7 @@
 #include "ShaderTools/BSShaderHooks.h"
 #include "Utils/D3DContextProtection.h"
 #include "Utils/ExternalEmittance.h"
+#include "Utils/ShaderLifetime.h"
 #include "Utils/TracyVRFrameTiming.h"
 #include "Utils/VRLoadingMenuClear.h"
 
@@ -65,6 +66,8 @@ std::mutex shaderBytecodeMapMutex;
 namespace
 {
 	std::shared_mutex g_renderTargetRecreationMutex;
+	Util::ShaderLifetime::RetainedBinding<RE::BSGraphics::VertexShader> g_retainedVertexShader;
+	Util::ShaderLifetime::RetainedBinding<RE::BSGraphics::PixelShader> g_retainedPixelShader;
 
 	void LogGraphicsAdapterInfoOnce(ID3D11Device* a_device)
 	{
@@ -796,9 +799,9 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	}
 
 	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect && !UseNativeWaterShaders(*shader)) {
-		RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
-		RE::BSGraphics::PixelShader* pixelShader = skipPixelShader ? nullptr :
-		                                                             shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
+		auto vertexShader = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
+		auto pixelShader = skipPixelShader ? nullptr :
+		                                     shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
 		if (phaseDiagActive) {
 			const uint64_t phaseEndTicks = ReadFrameDiagCounterTicks();
 			RecordCSFrameHookPhase(CSFrameHookPhase::BeginTechniqueShaderCacheLookup, phaseDiagFrame, phaseEndTicks - phaseStartTicks);
@@ -809,14 +812,14 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		} else {
 			state->settingCustomShader = true;
 			globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
-			*globals::game::currentVertexShader = vertexShader;
+			g_retainedVertexShader.Set(*globals::game::currentVertexShader, vertexShader);
 			globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
-			*globals::game::currentPixelShader = pixelShader;
+			g_retainedPixelShader.Set(*globals::game::currentPixelShader, pixelShader);
 			globals::d3d::context->PSSetShader(pixelShader ? reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader) : nullptr, NULL, NULL);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (globals::features::upscaling.IsNeuralRenderingEnabled())
 				NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
-					globals::d3d::context, shader, pixelShader,
+					globals::d3d::context, shader, pixelShader.get(),
 					pixelShader ? reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader) : nullptr);
 #endif
 			state->settingCustomShader = false;
@@ -967,16 +970,16 @@ namespace GrassExtensions
 			if (!ready || !globals::features::truePBR.loaded || !globals::features::grassLighting.loaded ||
 				!cache->IsEnabled() || !state->ShaderEnabled(RE::BSShader::Type::Grass))
 				return ready;
-			auto* vertex = cache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
-			auto* pixel = cache->GetPixelShader(*shader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
+			auto vertex = cache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
+			auto pixel = cache->GetPixelShader(*shader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
 			if (state->deferredPixelShaderMissing)
 				return false;
 			if (vertex && pixel) {
 				// Native setup must address the reflected constants of the bound grass pair.
 				globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertex->shader), nullptr, 0);
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixel->shader), nullptr, 0);
-				*globals::game::currentVertexShader = vertex;
-				*globals::game::currentPixelShader = pixel;
+				g_retainedVertexShader.Set(*globals::game::currentVertexShader, vertex);
+				g_retainedPixelShader.Set(*globals::game::currentPixelShader, pixel);
 				globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
 			} else {
 				if (auto* deferred = globals::deferred; pixel && deferred && deferred->deferredPass) {
@@ -1087,6 +1090,8 @@ struct IDXGISwapChain_Present
 		if (globals::game::isVR)
 			CSX::Api::AdvanceAcceptedDrawFrame(globals::d3d::context);
 		menu->DrawOverlay();
+		// Service shader settings from the overlay at the current render boundary.
+		globals::shaderCache->ProcessPendingClear();
 		globals::features::screenshotFeature.OnBeforePresent(This);
 		globals::features::screenshotFeature.DrawPostCaptureIndicator();
 
@@ -1669,7 +1674,7 @@ namespace Hooks
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
 					if (state->ShaderEnabled(type) && !UseNativeWaterShaders(*currentShader)) {
-						RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
+						auto vertexShader = shaderCache->GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
 						if (vertexShader) {
 							globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
 							*globals::game::currentVertexShader = a_vertexShader;
@@ -1700,7 +1705,7 @@ namespace Hooks
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
 					if (state->ShaderEnabled(type) && !UseNativeWaterShaders(*currentShader)) {
-						RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
+						auto pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
 						if (pixelShader) {
 							globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 							*globals::game::currentPixelShader = a_pixelShader;
@@ -2159,6 +2164,7 @@ namespace Hooks
 				auto shaderCache = globals::shaderCache;
 				auto& vl = globals::features::volumetricLighting;
 				const char* profileName = nullptr;
+				std::shared_ptr<RE::BSGraphics::ComputeShader> retainedComputeShader;
 				bool blurBufferBound = false;
 				winrt::com_ptr<ID3D11Buffer> previousBlurBuffer;
 				winrt::com_ptr<ID3D11DeviceContext1> blurContext1;
@@ -2200,8 +2206,9 @@ namespace Hooks
 						}
 					}
 					if (isShader != nullptr) {
-						if (auto* computeShader = shaderCache->GetComputeShader(*isShader, techniqueId)) {
-							shader = computeShader;
+						retainedComputeShader = shaderCache->GetComputeShader(*isShader, techniqueId);
+						if (retainedComputeShader) {
+							shader = retainedComputeShader.get();
 							// Native fallback must keep its original dispatch and constant-buffer layout.
 							if (horizontalBlur || verticalBlur) {
 								auto* context = globals::d3d::context;

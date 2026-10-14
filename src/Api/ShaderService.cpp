@@ -267,7 +267,8 @@ namespace
 			case CSX::ShaderAPI::MutationAction::kClearMemoryCache:
 				cache->Clear();
 				changed = true;
-				strings.message = "in-memory shader cache cleared";
+				pending = true;
+				strings.message = "engine shader cache cleared; feature invalidation and preparation queued for the render boundary";
 				break;
 			case CSX::ShaderAPI::MutationAction::kClearDiskCache:
 				cache->DeleteDiskCache();
@@ -278,7 +279,8 @@ namespace
 				cache->Clear();
 				cache->DeleteDiskCache();
 				changed = true;
-				strings.message = "memory, active disk, rollback, and temporary shader caches cleared";
+				pending = true;
+				strings.message = "engine shader cache and disk caches cleared; feature invalidation and preparation queued for the render boundary";
 				break;
 			case CSX::ShaderAPI::MutationAction::kRestorePreviousDiskCache:
 				persistenceRelevant = true;

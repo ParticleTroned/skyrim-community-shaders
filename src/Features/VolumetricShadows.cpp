@@ -508,6 +508,10 @@ void VolumetricShadows::ClearShaderCache()
 {
 	shadowCopyAllocationFailed = false;
 	ReleaseComputeShaders();
+}
+
+void VolumetricShadows::PrepareShaderCache()
+{
 	CompileComputeShaders();
 }
 

@@ -1313,7 +1313,7 @@ void ScreenSpaceGI::SetupRenderTargetResources()
 
 void ScreenSpaceGI::ClearShaderCache()
 {
-	static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
+	const std::array shaderPtrs{
 		&prefilterDepthsCompute,
 		&prefilterRadianceCompute,
 		&prefilterNormalCompute,
@@ -1342,7 +1342,12 @@ void ScreenSpaceGI::ClearShaderCache()
 
 	for (auto shader : shaderPtrs)
 		*shader = nullptr;
+}
 
+void ScreenSpaceGI::PrepareShaderCache()
+{
+	// A caught preparation exception must not retry from the draw path.
+	recompileFlag = false;
 	CompileComputeShaders();
 }
 
@@ -1771,6 +1776,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 	if (recompileFlag) {
 		ClearShaderCache();
+		PrepareShaderCache();
 		refreshActiveShaders();
 		resetHistoryState("shader recompile");
 		clearOutputsAndReturn();

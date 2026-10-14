@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstring>
 #include <d3dcompiler.h>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -36,12 +37,14 @@
 #include "Utils/ContentHash.h"
 #include "Utils/FileSystem.h"
 #include "Utils/GenerationClaim.h"
+#include "Utils/RendererContextAccess.h"
 #include "Utils/ResourceName.h"
 #include "Utils/ShaderCacheManifest.h"
 #include "Utils/ShaderCachePack.h"
 #include "Utils/ShaderCompiler.h"
 #include "Utils/ShaderDefines.h"
 #include "Utils/ShaderInclude.h"
+#include "Utils/ShaderLifetime.h"
 #include "Utils/ShaderSourceProvenance.h"
 
 #include "Features/DynamicCubemaps.h"
@@ -3355,7 +3358,7 @@ namespace SIE
 		}
 	}
 
-	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShaderIfCached(const RE::BSShader& shader, uint32_t descriptor)
+	std::shared_ptr<RE::BSGraphics::VertexShader> ShaderCache::GetVertexShaderIfCached(const RE::BSShader& shader, uint32_t descriptor)
 	{
 		const auto typeIndex = static_cast<size_t>(shader.shaderType.underlying());
 		if (typeIndex >= vertexShaders.size())
@@ -3363,10 +3366,10 @@ namespace SIE
 		std::lock_guard lockGuard(vertexShadersMutex);
 		const auto& typeCache = vertexShaders[typeIndex];
 		const auto it = typeCache.find(descriptor);
-		return it != typeCache.end() ? it->second.get() : nullptr;
+		return it != typeCache.end() ? it->second : nullptr;
 	}
 
-	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShader(const RE::BSShader& shader,
+	std::shared_ptr<RE::BSGraphics::VertexShader> ShaderCache::GetVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
 		if (!SShaderCache::ResolveImageSpaceDescriptor(shader, descriptor)) {
@@ -3399,7 +3402,7 @@ namespace SIE
 			}
 		}
 
-		if (auto* cached = GetVertexShaderIfCached(shader, descriptor))
+		if (auto cached = GetVertexShaderIfCached(shader, descriptor))
 			return cached;
 		if (IsSaveLoadSafeModeActive()) {
 			return nullptr;
@@ -3422,7 +3425,7 @@ namespace SIE
 			GetPixelShader(shader, descriptor | categoryFlag);
 	}
 
-	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(const RE::BSShader& shader,
+	std::shared_ptr<RE::BSGraphics::PixelShader> ShaderCache::GetPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor, PixelShaderLookup a_lookup)
 	{
 		auto state = globals::state;
@@ -3460,7 +3463,7 @@ namespace SIE
 			auto& typeCache = pixelShaders[static_cast<size_t>(shader.shaderType.underlying())];
 			auto it = typeCache.find(descriptor);
 			if (it != typeCache.end()) {
-				return it->second.get();
+				return it->second;
 			}
 		}
 		if (a_lookup == PixelShaderLookup::Cached)
@@ -3468,7 +3471,7 @@ namespace SIE
 		if (!IsSaveLoadSafeModeActive()) {
 			if (ShouldUseAsyncCompilation()) {
 				compilationSet.Add({ ShaderClass::Pixel, shader, descriptor });
-			} else if (auto* compiled = MakeAndAddPixelShader(shader, descriptor)) {
+			} else if (auto compiled = MakeAndAddPixelShader(shader, descriptor)) {
 				return compiled;
 			}
 		}
@@ -3478,7 +3481,7 @@ namespace SIE
 		if (a_lookup == PixelShaderLookup::Draw && deferred && deferred->deferredPass && categoryFlag) {
 			// Both variants preserve the G-buffer; an AO-only draw cannot author a complete actor mask.
 			deferred->InvalidateCharacterCategoryCapture();
-			auto* fallback = GetPixelShader(shader, descriptor ^ categoryFlag, PixelShaderLookup::Cached);
+			auto fallback = GetPixelShader(shader, descriptor ^ categoryFlag, PixelShaderLookup::Cached);
 			state->deferredPixelShaderMissing = fallback == nullptr;
 			return fallback;
 		}
@@ -3486,7 +3489,7 @@ namespace SIE
 		return nullptr;
 	}
 
-	RE::BSGraphics::ComputeShader* ShaderCache::GetComputeShader(const RE::BSShader& shader,
+	std::shared_ptr<RE::BSGraphics::ComputeShader> ShaderCache::GetComputeShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
 		auto state = globals::state;
@@ -3518,7 +3521,7 @@ namespace SIE
 			auto& typeCache = computeShaders[static_cast<size_t>(shader.shaderType.underlying())];
 			auto it = typeCache.find(descriptor);
 			if (it != typeCache.end()) {
-				return it->second.get();
+				return it->second;
 			}
 		}
 		if (IsSaveLoadSafeModeActive()) {
@@ -3576,76 +3579,59 @@ namespace SIE
 		FlushShaderCacheManifest();
 	}
 
+	template <typename ShaderMaps, typename MutexType>
+	void RetireShaders(ShaderMaps& a_shaders, MutexType& a_mutex, std::optional<size_t> a_type = std::nullopt)
+	{
+		using Values = typename ShaderMaps::value_type::value_container_type;
+		std::array<Values, std::tuple_size_v<ShaderMaps>> retired;
+		{
+			std::lock_guard lock(a_mutex);
+			for (size_t type = 0; type < a_shaders.size(); ++type) {
+				if (a_type && *a_type != type)
+					continue;
+				// Extraction leaves bucket metadata behind; clear it before publishing the empty map.
+				retired[type] = std::move(a_shaders[type]).extract();
+				a_shaders[type].clear();
+			}
+		}
+	}
+
 	void ShaderCache::Clear()
 	{
-		compilationSet.BumpGeneration();
-
+		{
+			std::scoped_lock lockMetadata{ mapMutex, hlslMapMutex };
+			// Claims in the new generation must not reuse bytecode or lose their source records.
+			compilationSet.BumpGeneration();
+			shaderMap.clear();
+			deferredEvictions.clear();
+			deferredEvictionCount.store(0, std::memory_order_relaxed);
+			hlslToShaderMap.clear();
+		}
+		mapCV.notify_all();
 		{
 			std::unique_lock diskCacheLock{ g_diskCacheMutationMutex };
 			AdvanceDiskCacheGeneration();
 		}
-		{
-			std::lock_guard lockGuardV(vertexShadersMutex);
-			for (auto& shaders : vertexShaders) {
-				for (auto& [id, shader] : shaders) {
-					shader->shader->Release();
-				}
-				shaders.clear();
-			}
-		}
-		{
-			std::lock_guard lockGuardP(pixelShadersMutex);
-			for (auto& shaders : pixelShaders) {
-				for (auto& [id, shader] : shaders) {
-					shader->shader->Release();
-				}
-				shaders.clear();
-			}
-		}
-		{
-			std::lock_guard lockGuardC(computeShadersMutex);
-			for (auto& shaders : computeShaders) {
-				for (auto& [id, shader] : shaders) {
-					shader->shader->Release();
-				}
-				shaders.clear();
-			}
-		}
-		{
-			std::unique_lock lockM{ mapMutex };
-			shaderMap.clear();
-			deferredEvictions.clear();
-			deferredEvictionCount.store(0, std::memory_order_relaxed);
-		}
-		mapCV.notify_all();
-		{
-			std::unique_lock lockH{ hlslMapMutex };
-			hlslToShaderMap.clear();
-		}
+		RetireShaders(vertexShaders, vertexShadersMutex);
+		RetireShaders(pixelShaders, pixelShadersMutex);
+		RetireShaders(computeShaders, computeShadersMutex);
 		compilationSet.Clear();
-		globals::deferred->ClearShaderCache();
-		for (auto* feature : Feature::GetFeatureList()) {
-			if (feature->loaded) {
-				feature->ClearShaderCache();
-			}
-		}
+		RequestFeatureShaderClear(false);
 	}
 
 	template <typename ShaderType, typename MutexType>
 	void ReleaseShader(ShaderType& shaders,
 		MutexType& mutex, RE::BSShader::Type type, uint32_t descriptor)
 	{
-		std::lock_guard<MutexType> lockGuard(mutex);
-
-		if (static_cast<size_t>(type) < shaders.size()) {
-			auto& shaderMap = shaders[static_cast<size_t>(type)];
-			auto shaderIt = shaderMap.find(descriptor);
-			if (shaderIt != shaderMap.end()) {
-				auto& shaderPtr = shaderIt->second;
-				if (shaderPtr && shaderPtr->shader) {
-					shaderPtr->shader->Release();
+		typename ShaderType::value_type::mapped_type retired;
+		{
+			std::lock_guard<MutexType> lockGuard(mutex);
+			if (static_cast<size_t>(type) < shaders.size()) {
+				auto& shaderMap = shaders[static_cast<size_t>(type)];
+				if (auto it = shaderMap.find(descriptor); it != shaderMap.end()) {
+					retired = std::move(it->second);
+					shaderMap.erase(it);
 				}
-				shaderMap.erase(shaderIt);
 			}
 		}
 	}
@@ -3796,31 +3782,15 @@ namespace SIE
 
 	void ShaderCache::Clear(RE::BSShader::Type a_type)
 	{
-		compilationSet.BumpGeneration();
+		const auto type = static_cast<size_t>(a_type);
+		if (type >= vertexShaders.size())
+			return;
 
 		logger::debug("Clearing cache for {}", magic_enum::enum_name(a_type));
-		std::lock_guard lockGuardV(vertexShadersMutex);
-		{
-			for (auto& [id, shader] : vertexShaders[static_cast<size_t>(a_type)]) {
-				shader->shader->Release();
-			}
-			vertexShaders[static_cast<size_t>(a_type)].clear();
-		}
-		std::lock_guard lockGuardP(pixelShadersMutex);
-		{
-			for (auto& [id, shader] : pixelShaders[static_cast<size_t>(a_type)]) {
-				shader->shader->Release();
-			}
-			pixelShaders[static_cast<size_t>(a_type)].clear();
-		}
-		std::lock_guard lockGuardC(computeShadersMutex);
-		{
-			for (auto& [id, shader] : computeShaders[static_cast<size_t>(a_type)]) {
-				shader->shader->Release();
-			}
-			computeShaders[static_cast<size_t>(a_type)].clear();
-		}
 		ClearShaderMap(a_type);
+		RetireShaders(vertexShaders, vertexShadersMutex, type);
+		RetireShaders(pixelShaders, pixelShadersMutex, type);
+		RetireShaders(computeShaders, computeShadersMutex, type);
 		compilationSet.Clear();
 	}
 
@@ -3833,6 +3803,55 @@ namespace SIE
 	{
 		if (pendingClear.exchange(false, std::memory_order_acq_rel)) {
 			Clear();
+		}
+		ProcessPendingFeatureClear();
+	}
+
+	void ShaderCache::RequestFeatureShaderClear(bool a_scoped)
+	{
+		pendingFeatureClear.fetch_or(a_scoped ? 1 : 2, std::memory_order_release);
+	}
+
+	void ShaderCache::ProcessPendingFeatureClear()
+	{
+		if (pendingFeatureClear.load(std::memory_order_acquire) == 0)
+			return;
+		const Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
+		if (!ownership)
+			return;
+		const auto pending = pendingFeatureClear.exchange(0, std::memory_order_acq_rel);
+		if (!pending)
+			return;
+
+		try {
+			globals::deferred->ClearShaderCache();
+			for (auto* feature : Feature::GetFeatureList()) {
+				if (feature->loaded) {
+					if (pending & 2)
+						feature->ClearShaderCache();
+					else
+						feature->ClearShaderCacheScoped();
+				}
+			}
+		} catch (const std::exception& error) {
+			pendingFeatureClear.fetch_or(pending, std::memory_order_release);
+			logger::error("Failed to invalidate standalone shaders; retry queued: {}", error.what());
+			return;
+		} catch (...) {
+			pendingFeatureClear.fetch_or(pending, std::memory_order_release);
+			logger::error("Failed to invalidate standalone shaders; retry queued: unknown exception");
+			return;
+		}
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (!feature->loaded)
+				continue;
+			try {
+				feature->PrepareShaderCache();
+			} catch (const std::exception& error) {
+				logger::error("Failed to prepare {} shaders after invalidation: {}", feature->GetName(), error.what());
+			} catch (...) {
+				logger::error("Failed to prepare {} shaders after invalidation: unknown exception", feature->GetName());
+			}
 		}
 	}
 
@@ -3864,10 +3883,36 @@ namespace SIE
 	{
 		auto keyWithDescriptor = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, false);
 
-		Util::GenerationClaim::PublishOutcome outcome;
+		const std::wstring path = SIE::SShaderCache::GetShaderPath(
+			shader.shaderType == RE::BSShader::Type::ImageSpace ?
+				static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
+				shader.fxpFilename);
+		auto pathString = Util::WStringToString(path);
+		// Failed compiles also need source records so the file watcher can invalidate them.
+		std::string lowerFilePath = Util::FixFilePath(pathString);
+		hlslRecord newRecord{
+			key,
+			shader.shaderType.get(),
+			descriptor,
+			shaderClass,
+			a_diskPath,
+			a_compileStateDigest,
+			a_packCompileStateDigest,
+			a_developerMode,
+			a_sourceDigest,
+			Microsoft::WRL::ComPtr<ID3DBlob>{ fromDisk ? nullptr : a_blob },
+			std::move(a_contentIdentity)
+		};
+
+		Util::GenerationClaim::PublishOutcome outcome = Util::GenerationClaim::PublishOutcome::RejectedStale;
 		uint64_t liveGeneration = 0;
+		std::exception_ptr trackingError;
 		{
-			std::unique_lock lockM{ mapMutex };
+			const SKSE::stl::scope_exit notifyResult([&] {
+				if (outcome != Util::GenerationClaim::PublishOutcome::RejectedStale)
+					mapCV.notify_all();
+			});
+			std::scoped_lock lockMetadata{ mapMutex, hlslMapMutex };
 			liveGeneration = compilationSet.generation.load(std::memory_order_acquire);
 			outcome = Util::GenerationClaim::TryPublish<ShaderCacheResultTraits>(
 				shaderMap,
@@ -3884,12 +3929,44 @@ namespace SIE
 						a_generation
 					};
 				});
+			if (outcome == Util::GenerationClaim::PublishOutcome::Published) {
+				try {
+					auto it = hlslToShaderMap.find(lowerFilePath);
+					if (it != hlslToShaderMap.end()) {
+						auto& entries = it->second;
+
+						auto existingRecord = std::find_if(entries.begin(), entries.end(),
+							[&](const hlslRecord& r) { return r.key == key; });
+
+						if (existingRecord != entries.end()) {
+							entries.erase(existingRecord);
+						}
+
+						entries.insert(newRecord);
+					} else {
+						hlslToShaderMap.emplace(lowerFilePath, std::set<hlslRecord>{ newRecord });
+					}
+				} catch (...) {
+					// No reader can observe this borrowed blob before its tracking record exists.
+					shaderMap.erase(key);
+					trackingError = std::current_exception();
+				}
+			}
+		}
+
+		if (trackingError) {
+			try {
+				std::rethrow_exception(trackingError);
+			} catch (const std::exception& error) {
+				logger::error("Failed to track shader {}: {}", keyWithDescriptor, error.what());
+			} catch (...) {
+				logger::error("Failed to track shader {}: unknown exception", keyWithDescriptor);
+			}
+			ApplyDeferredEviction(key);
+			return false;
 		}
 
 		if (outcome != Util::GenerationClaim::PublishOutcome::Published) {
-			if (outcome == Util::GenerationClaim::PublishOutcome::RejectedStaleCleanedPending) {
-				mapCV.notify_all();
-			}
 			logger::debug(
 				"Discarding stale-generation shader (task gen {}, current {}): {}",
 				a_taskGeneration.value_or(liveGeneration),
@@ -3901,51 +3978,6 @@ namespace SIE
 
 		const auto status = a_blob ? ShaderCompilationTask::Status::Completed : ShaderCompilationTask::Status::Failed;
 		logger::debug("Adding {} shader to map: {}", magic_enum::enum_name(status), keyWithDescriptor);
-		mapCV.notify_all();  // wake threads waiting on a Pending→Completed/Failed transition
-		const std::wstring path = SIE::SShaderCache::GetShaderPath(
-			shader.shaderType == RE::BSShader::Type::ImageSpace ?
-				static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
-				shader.fxpFilename);
-		auto pathString = Util::WStringToString(path);
-		// Always create or update an hlsl->shader record so failing compiles are
-		// trackable and can be invalidated by the file watcher. This allows
-		// Clear(path) to find failed shaders and mark them for recompilation.
-		std::string lowerFilePath = Util::FixFilePath(pathString);
-		{
-			std::unique_lock lockH{ hlslMapMutex };
-			auto it = hlslToShaderMap.find(lowerFilePath);
-			hlslRecord newRecord{
-				key,
-				shader.shaderType.get(),
-				descriptor,
-				shaderClass,
-				a_diskPath,
-				a_compileStateDigest,
-				a_packCompileStateDigest,
-				a_developerMode,
-				a_sourceDigest,
-				Microsoft::WRL::ComPtr<ID3DBlob>{ fromDisk ? nullptr : a_blob },
-				std::move(a_contentIdentity)
-			};
-
-			if (it != hlslToShaderMap.end()) {
-				auto& entries = it->second;
-
-				// Find and remove existing record with the same key
-				auto existingRecord = std::find_if(entries.begin(), entries.end(),
-					[&](const hlslRecord& r) { return r.key == key; });
-
-				if (existingRecord != entries.end()) {
-					entries.erase(existingRecord);  // Remove the old record
-				}
-
-				// Insert the new or updated record
-				entries.insert(newRecord);
-			} else {
-				// Create a new entry in hlslToShaderMap for this file path
-				hlslToShaderMap.emplace(lowerFilePath, std::set<hlslRecord>{ newRecord });
-			}
-		}
 
 		const bool evicted = ApplyDeferredEviction(key);
 
@@ -5545,11 +5577,12 @@ namespace SIE
 		return !modifiedShaderMap.empty() && modifiedShaderMap.contains(a_type) && modifiedShaderMap.at(a_type) > a_current;
 	}
 
-	// Allocate a cache slot before transferring either wrapper or driver-object ownership.
+	// Ownership is prepared before locking; rejected candidates retire after unlocking.
 	template <class EngineShader, class DeviceShader, class Map, class Mutex, class IsCurrent>
-	static EngineShader* PublishPreparedShader(Map& a_map, Mutex& a_mutex, uint32_t a_descriptor,
+	static std::shared_ptr<EngineShader> PublishPreparedShader(Map& a_map, Mutex& a_mutex, uint32_t a_descriptor,
 		std::unique_ptr<EngineShader>& a_shader, winrt::com_ptr<DeviceShader>& a_deviceShader, IsCurrent&& a_isCurrent)
 	{
+		auto prepared = Util::ShaderLifetime::Share(std::move(a_shader), std::move(a_deviceShader));
 		std::lock_guard lock(a_mutex);
 		if (!a_isCurrent())
 			return nullptr;
@@ -5560,14 +5593,12 @@ namespace SIE
 				a_map.erase(it);
 			return nullptr;
 		}
-		if (inserted) {
-			it->second = std::move(a_shader);
-			a_deviceShader.detach();
-		}
-		return it->second.get();
+		if (inserted)
+			it->second = std::move(prepared);
+		return it->second;
 	}
 
-	RE::BSGraphics::VertexShader* ShaderCache::MakeAndAddVertexShader(const RE::BSShader& shader,
+	std::shared_ptr<RE::BSGraphics::VertexShader> ShaderCache::MakeAndAddVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration)
 	{
 		// Synchronous callers also need to reject a clear during object creation.
@@ -5598,7 +5629,7 @@ namespace SIE
 			magic_enum::enum_name(shader.shaderType.get()).data(), descriptor);
 		newShader->shader = reinterpret_cast<decltype(newShader->shader)>(candidate.get());
 
-		if (auto* published = PublishPreparedShader(vertexShaders[static_cast<size_t>(shader.shaderType.get())],
+		if (auto published = PublishPreparedShader(vertexShaders[static_cast<size_t>(shader.shaderType.get())],
 				vertexShadersMutex, descriptor, newShader, candidate, [&] { return !IsTaskStale(a_taskGeneration); }))
 			return published;
 		logger::debug("Discarding stale-generation vertex shader {}::{:X}",
@@ -5606,7 +5637,7 @@ namespace SIE
 		return nullptr;
 	}
 
-	RE::BSGraphics::PixelShader* ShaderCache::MakeAndAddPixelShader(const RE::BSShader& shader,
+	std::shared_ptr<RE::BSGraphics::PixelShader> ShaderCache::MakeAndAddPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration)
 	{
 		// Synchronous callers also need to reject a clear during object creation.
@@ -5637,7 +5668,7 @@ namespace SIE
 			magic_enum::enum_name(shader.shaderType.get()).data(), descriptor);
 		newShader->shader = reinterpret_cast<decltype(newShader->shader)>(candidate.get());
 
-		if (auto* published = PublishPreparedShader(pixelShaders[static_cast<size_t>(shader.shaderType.get())],
+		if (auto published = PublishPreparedShader(pixelShaders[static_cast<size_t>(shader.shaderType.get())],
 				pixelShadersMutex, descriptor, newShader, candidate, [&] { return !IsTaskStale(a_taskGeneration); }))
 			return published;
 		logger::debug("Discarding stale-generation pixel shader {}::{:X}",
@@ -5645,7 +5676,7 @@ namespace SIE
 		return nullptr;
 	}
 
-	RE::BSGraphics::ComputeShader* ShaderCache::MakeAndAddComputeShader(const RE::BSShader& shader,
+	std::shared_ptr<RE::BSGraphics::ComputeShader> ShaderCache::MakeAndAddComputeShader(const RE::BSShader& shader,
 		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration)
 	{
 		// Synchronous callers also need to reject a clear during object creation.
@@ -5676,7 +5707,7 @@ namespace SIE
 			magic_enum::enum_name(shader.shaderType.get()).data(), descriptor);
 		newShader->shader = reinterpret_cast<decltype(newShader->shader)>(candidate.get());
 
-		if (auto* published = PublishPreparedShader(computeShaders[static_cast<size_t>(shader.shaderType.get())],
+		if (auto published = PublishPreparedShader(computeShaders[static_cast<size_t>(shader.shaderType.get())],
 				computeShadersMutex, descriptor, newShader, candidate, [&] { return !IsTaskStale(a_taskGeneration); }))
 			return published;
 		logger::debug("Discarding stale-generation compute shader {}::{:X}",
@@ -5973,7 +6004,8 @@ namespace SIE
 		std::string_view shaderTypeStr = magic_enum::enum_name(a_type);
 
 		{
-			std::unique_lock lockM{ SIE::ShaderCache::mapMutex };
+			std::unique_lock lockM{ mapMutex };
+			compilationSet.BumpGeneration();
 			logger::debug("Clearing shaderMap of {}", shaderTypeStr);
 			for (auto it = shaderMap.begin(); it != shaderMap.end();) {
 				auto typeInKey = SIE::SShaderCache::GetTypeFromShaderString(it->first);

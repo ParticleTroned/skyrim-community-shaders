@@ -79,6 +79,7 @@ public:
 	virtual void SetupResources() override;
 	virtual void SetupRenderTargetResources() override;
 	virtual void ClearShaderCache() override;
+	void PrepareShaderCache() override;
 	bool CompileComputeShaders(Util::ShaderCompileTiming* a_timing = nullptr);
 	bool RequiredShadersOK() const;
 	bool ShadersOK();

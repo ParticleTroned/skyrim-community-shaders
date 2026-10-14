@@ -254,7 +254,10 @@ public:
 	{
 		return GetShaderDefineName().empty() ? std::string_view{} : std::string_view{ "1" };
 	}
+	/** Invalidate standalone shaders on the render thread without preparing replacements. */
 	virtual void ClearShaderCache() {}
+	/** Prepare invalidated standalone shaders on the render thread after the clear phase. */
+	virtual void PrepareShaderCache() {}
 	/** @brief Invalidates this feature's shader cache during a scene-scoped clear.
 	 *  Features may override this when they can avoid an eager full-cache rebuild. */
 	virtual void ClearShaderCacheScoped() { ClearShaderCache(); }

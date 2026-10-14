@@ -1624,7 +1624,7 @@ bool GrassBucketRenderer::Impl::HasBatchShader() const
 		!state->currentShader || state->currentShader->shaderType.get() != RE::BSShader::Type::Grass || !globals::game::currentVertexShader)
 		return false;
 	const auto shader = globals::shaderCache->GetVertexShaderIfCached(*state->currentShader, state->modifiedVertexDescriptor);
-	if (!shader || shader != *globals::game::currentVertexShader)
+	if (!shader || shader.get() != *globals::game::currentVertexShader)
 		return false;
 	winrt::com_ptr<ID3D11VertexShader> bound;
 	context->VSGetShader(bound.put(), nullptr, nullptr);

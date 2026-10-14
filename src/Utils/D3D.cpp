@@ -339,7 +339,8 @@ namespace Util
 	}
 
 	winrt::com_ptr<ID3D11DeviceChild> CompilePreparedShader(
-		const OwnedStandaloneShaderRequest& a_request, SIE::ShaderCache& a_cache, ShaderCompileTiming* a_timing, bool* a_staleSource)
+		const OwnedStandaloneShaderRequest& a_request, SIE::ShaderCache& a_cache, ShaderCompileTiming* a_timing, bool* a_staleSource,
+		std::optional<ContentHash::Hash128>* a_acceptedSourceDigest)
 	{
 		const auto queryQpc = []() noexcept {
 			LARGE_INTEGER value{};
@@ -468,7 +469,7 @@ namespace Util
 		};
 
 		const StandaloneShaderRequest request{ FilePath, macros, ProgramType, Program, flags, developerMode,
-			a_request.state.digest, a_request.state.compilationGeneration, a_request.state.sourceGeneration, a_request.requireStableSource, a_staleSource };
+			a_request.state.digest, a_request.state.compilationGeneration, a_request.state.sourceGeneration, a_request.requireStableSource, a_staleSource, a_acceptedSourceDigest };
 		if (!a_cache.CompileStandaloneShaderCached(request, compile, createShader)) {
 			if (FAILED(hr))
 				logger::error("Failed to create shader object for {}:{} (HRESULT 0x{:08X})", str, Program, static_cast<uint32_t>(hr));

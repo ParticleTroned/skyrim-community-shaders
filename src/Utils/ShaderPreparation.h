@@ -1,8 +1,12 @@
 #pragma once
 
+#include "Utils/ContentHash.h"
+
 #include <atomic>
 #include <cstdint>
 #include <d3d11.h>
+#include <filesystem>
+#include <optional>
 #include <winrt/base.h>
 
 namespace Util
@@ -30,6 +34,8 @@ namespace Util
 		winrt::com_ptr<ID3D11Device> device;
 		std::uint64_t compilationGeneration = 0;
 		std::uint64_t sourceGeneration = 0;
+		std::filesystem::path source;
+		std::optional<ContentHash::Hash128> sourceDigest;
 		std::uint64_t shaderDefinesGeneration = 0;
 		bool developerMode = false;
 		bool partialPrecision = false;

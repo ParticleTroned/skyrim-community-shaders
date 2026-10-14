@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <cassert>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -117,6 +118,11 @@ struct Feature
 	}
 };
 
+struct LightLimitFix
+{
+#include "llf_shader_paths_under_test.h"
+};
+
 namespace efsw
 {
 	using WatchID = std::int64_t;
@@ -195,6 +201,7 @@ namespace SIE
 		std::atomic<uint8_t> pendingFeatureClear{ 0 };
 		std::atomic_bool pendingStandaloneShaderClear{ false };
 		void RequestStandaloneShaderClear();
+		void RequestStandaloneShaderClear(const std::filesystem::path&);
 		void RequestFeatureShaderClear(bool scoped);
 		void ProcessPendingFeatureClear();
 		std::vector<uint32_t> pixelRequests;
@@ -226,6 +233,20 @@ namespace SIE
 			deletedPaths.insert(deletedPaths.end(), a_paths.begin(), a_paths.end());
 		}
 	};
+	bool unknownDependencies = false;
+	std::string NormalizedPathKey(const std::filesystem::path& path)
+	{
+		auto value = path.lexically_normal().generic_string();
+		std::ranges::transform(value, value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		return value;
+	}
+	std::filesystem::path ShaderSourceRoot() { return "Data/Shaders"; }
+	std::optional<std::vector<std::filesystem::path>> GetShaderDependencyPaths(const std::filesystem::path&, const std::filesystem::path&)
+	{
+		if (unknownDependencies)
+			return std::nullopt;
+		return std::vector<std::filesystem::path>{ "Data/Shaders/Common/Changed.hlsli" };
+	}
 	unsigned sourceInvalidations = 0;
 	void InvalidateShaderSourceCaches() { ++sourceInvalidations; }
 	struct UpdateListener
@@ -513,15 +534,25 @@ namespace
 		const auto invalidations = SIE::sourceInvalidations;
 		listener.Process({ 1, "Data/Shaders", "Archived.bak", Action::Moved, "OldProgram.HLSL" }, &cache);
 		Require(listener.observedPaths == std::vector<std::filesystem::path>({ "Data/Shaders/Archived.bak", "Data/Shaders/OldProgram.HLSL" }));
-		Require(cache.pendingStandaloneShaderClear && SIE::sourceInvalidations == invalidations + 2);
+		Require(!cache.pendingStandaloneShaderClear && SIE::sourceInvalidations == invalidations + 2);
 		cache.pendingStandaloneShaderClear = false;
 		listener.Process({ 1, "Data/Shaders", "Unrelated.bak", Action::Modified, "" }, &cache);
 		Require(!cache.pendingStandaloneShaderClear);
 		listener.Process({ 1, "Data/Shaders", "MissingProgram.hlsl", Action::Delete, "" }, &cache);
-		Require(cache.pendingStandaloneShaderClear);
+		Require(!cache.pendingStandaloneShaderClear);
 		cache.pendingStandaloneShaderClear = false;
 		listener.Process({ 1, "Data/Shaders/Common", "Changed.HLSLI", Action::Modified, "" }, &cache);
 		Require(cache.pendingStandaloneShaderClear);
+		cache.pendingStandaloneShaderClear = false;
+		listener.Process({ 1, "Data/Shaders/Common", "Unrelated.hlsli", Action::Modified, "" }, &cache);
+		Require(!cache.pendingStandaloneShaderClear);
+		listener.Process({ 1, "Data/Shaders/LightLimitFix", "ClusterBuildingCS.HLSL", Action::Delete, "" }, &cache);
+		Require(cache.pendingStandaloneShaderClear);
+		cache.pendingStandaloneShaderClear = false;
+		SIE::unknownDependencies = true;
+		listener.Process({ 1, "Data/Shaders/Common", "Missing.hlsli", Action::Delete, "" }, &cache);
+		Require(cache.pendingStandaloneShaderClear);
+		SIE::unknownDependencies = false;
 	}
 
 	void TestQueueWithSharedBytecode()

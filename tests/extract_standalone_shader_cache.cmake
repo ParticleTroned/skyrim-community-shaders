@@ -7,6 +7,9 @@ file(READ "${PROJECT_ROOT}/src/ShaderCache.cpp" _cache)
 extract_between("${_cache}" "\t\tstd::atomic_uint64_t g_shaderSourceGeneration" "\n\t\tstruct GlobalCompileStateSnapshot" "standalone_source_digest.h")
 extract_between("${_cache}" "\t\tstruct StandaloneCompileKey" "\n\t}\n\n\tUtil::StandaloneCompileState ShaderCache::CaptureStandaloneCompileState" "standalone_compile_key.h")
 extract_between("${_cache}" "\tbool ShaderCache::CompileStandaloneShaderCached" "\n\tvoid ShaderCache::PersistCompiledShaderBlob" "standalone_cache_under_test.h")
+extract_between("${_cache}" "	bool ShaderCache::IsStandalonePreparationCurrent" "
+	std::shared_ptr<Util::ShaderPreparation> ShaderCache::PrepareStandaloneShader" "standalone_current_under_test.h"
+)
 file(READ "${PROJECT_ROOT}/src/Utils/D3D.cpp" _d3d)
 extract_between("${_d3d}" "\tstd::optional<OwnedStandaloneShaderRequest> CaptureStandaloneShaderRequest(" "\n\t// RAII wrapper for D3D mapped resources" "standalone_d3d_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Utils/FileSystem.cpp" _filesystem)

@@ -35,6 +35,7 @@ namespace Util
 		std::optional<uint64_t> sourceGeneration;
 		bool requireStableSource = false;
 		bool* staleSource = nullptr;
+		std::optional<ContentHash::Hash128>* acceptedSourceDigest = nullptr;
 	};
 
 	struct ShaderPreparation;
@@ -82,7 +83,8 @@ namespace Util
 	bool IsShaderPreparationCurrent(const ShaderPreparation& a_preparation, bool a_resident = false);
 	/** Executes a captured request without reading render-owned configuration or context. */
 	winrt::com_ptr<ID3D11DeviceChild> CompilePreparedShader(
-		const OwnedStandaloneShaderRequest& a_request, SIE::ShaderCache& a_cache, ShaderCompileTiming* a_timing = nullptr, bool* a_staleSource = nullptr);
+		const OwnedStandaloneShaderRequest& a_request, SIE::ShaderCache& a_cache, ShaderCompileTiming* a_timing = nullptr, bool* a_staleSource = nullptr,
+		std::optional<ContentHash::Hash128>* a_acceptedSourceDigest = nullptr);
 
 	/** @brief Optional QPC accumulator separating compiler and device creation cost. */
 	struct ShaderCompileTiming

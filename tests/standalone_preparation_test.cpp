@@ -26,7 +26,7 @@ namespace
 			throw std::runtime_error(message);
 	}
 	std::atomic_size_t entered{}, priorityCalls{}, startupPriorityCalls{}, gameplayPriorityCalls{};
-	std::atomic_bool blockCompile{}, releaseCompile{}, nullCompile{}, standardException{}, unknownException{}, injectSourceInstability{}, changeSourceEpoch{}, priorityAvailable{ true }, injectPhaseCompletionFailure{};
+	std::atomic_bool blockCompile{}, releaseCompile{}, nullCompile{}, standardException{}, unknownException{}, injectSourceInstability{}, changeSourceEpoch{}, changeSourceContent{}, failDigest{}, priorityAvailable{ true }, injectPhaseCompletionFailure{};
 	winrt::com_ptr<ID3DBlob> bytecode;
 }
 namespace Util
@@ -43,7 +43,14 @@ namespace Util
 }
 namespace SIE
 {
-	std::atomic_uint64_t g_shaderSourceGeneration{ 1 };
+	std::atomic_uint64_t g_shaderSourceGeneration{ 1 }, sourceVersion{ 1 };
+	std::filesystem::path ShaderSourceRoot() { return "Data/Shaders"; }
+	std::optional<Util::ContentHash::Hash128> GetShaderContentDigest(const std::filesystem::path&, const std::filesystem::path&)
+	{
+		if (failDigest)
+			throw std::runtime_error("Injected digest failure");
+		return Util::ContentHash::Hash128{ sourceVersion.load(), 0 };
+	}
 	class ShaderCache
 	{
 	public:
@@ -142,7 +149,7 @@ namespace
 		entered = 0;
 		blockCompile = false;
 		releaseCompile = false;
-		nullCompile = standardException = unknownException = injectSourceInstability = changeSourceEpoch = false;
+		nullCompile = standardException = unknownException = injectSourceInstability = changeSourceEpoch = changeSourceContent = failDigest = false;
 		priorityAvailable = true;
 		injectPhaseCompletionFailure = false;
 	}
@@ -181,7 +188,13 @@ namespace
 		++cache.compilationSet.generation;
 		Require(!cache.IsStandalonePreparationCurrent(*operation) && cache.IsStandalonePreparationCurrent(*operation, true), "Resident currentness must ignore engine-only compilation generation changes");
 		++SIE::g_shaderSourceGeneration;
-		Require(!cache.IsStandalonePreparationCurrent(*operation, true), "Resident currentness must still reject a changed source generation");
+		Require(cache.IsStandalonePreparationCurrent(*operation, true), "An unrelated edit must preserve resident shader identity");
+		failDigest = true;
+		Require(!cache.IsStandalonePreparationCurrent(*operation, true), "Unverifiable source identity must fail closed without throwing");
+		failDigest = false;
+		++SIE::sourceVersion;
+		++SIE::g_shaderSourceGeneration;
+		Require(!cache.IsStandalonePreparationCurrent(*operation, true), "A changed source closure must reject the resident shader");
 	}
 
 	void CheckCompilationPriorityPhases()
@@ -257,7 +270,7 @@ namespace
 	void CheckTerminalFailuresAndSourceRaces()
 	{
 		auto device = CreateDevice();
-		for (unsigned condition = 0; condition < 7; ++condition) {
+		for (unsigned condition = 0; condition < 8; ++condition) {
 			ResetSeams();
 			SIE::ShaderCache cache;
 			nullCompile = condition == 0;
@@ -265,11 +278,12 @@ namespace
 			unknownException = condition == 2;
 			injectSourceInstability = condition == 3;
 			changeSourceEpoch = condition == 4;
+			changeSourceContent = condition == 7;
 			priorityAvailable = condition != 5;
 			cache.menuLoaded = injectPhaseCompletionFailure = condition == 6;
 			auto operation = cache.PrepareStandaloneShader(Request(cache, device));
-			const State expected = condition < 3 ? State::Failed : condition < 5 ? State::Stale :
-			                                                                       State::Ready;
+			const State expected = condition < 3 ? State::Failed : condition == 3 || condition == 7 ? State::Stale :
+			                                                                                          State::Ready;
 			Require(Wait(operation) == expected, "Worker failure, source instability and priority-warning states must remain distinct");
 			Require(bool(operation->shader) == (expected == State::Ready), "Only a current successful producer may publish its object");
 			cache.standalonePreparationPool->wait();
@@ -282,7 +296,12 @@ namespace
 		auto invalid = Request(cache, device);
 		--invalid.state.sourceGeneration;
 		auto operation = cache.PrepareStandaloneShader(std::move(invalid));
-		Require(Wait(operation) == State::Stale && entered == 0, "A stale request must stop before compilation");
+		Require(Wait(operation) == State::Ready && entered == 1, "An unrelated edit before dispatch must still compile current source");
+		cache.standalonePreparationPool->wait();
+		auto cancelled = Request(cache, device);
+		--cancelled.state.compilationGeneration;
+		auto stale = cache.PrepareStandaloneShader(std::move(cancelled));
+		Require(Wait(stale) == State::Stale && entered == 1, "An explicitly cancelled request must stop before compilation");
 		cache.standalonePreparationPool->wait();
 	}
 
@@ -299,7 +318,7 @@ namespace
 }
 
 winrt::com_ptr<ID3D11DeviceChild> Util::CompilePreparedShader(const OwnedStandaloneShaderRequest& request,
-	SIE::ShaderCache&, ShaderCompileTiming*, bool* sourceUnstable)
+	SIE::ShaderCache&, ShaderCompileTiming*, bool* sourceUnstable, std::optional<ContentHash::Hash128>* acceptedSourceDigest)
 {
 	Require(request.source == L"QueuedPreparation.hlsl" && request.profile == "cs_5_0" && request.entryPoint == "main" &&
 				request.macros.size() == 3 && request.macros[0].name == "NULL" && !request.macros[0].definition &&
@@ -318,7 +337,11 @@ winrt::com_ptr<ID3D11DeviceChild> Util::CompilePreparedShader(const OwnedStandal
 		return nullptr;
 	if (injectSourceInstability.load() && sourceUnstable)
 		*sourceUnstable = true;
-	if (changeSourceEpoch.load())
+	if (acceptedSourceDigest)
+		*acceptedSourceDigest = ContentHash::Hash128{ SIE::sourceVersion.load(), 0 };
+	if (changeSourceContent.load())
+		++SIE::sourceVersion;
+	if (changeSourceEpoch.load() || changeSourceContent.load())
 		++SIE::g_shaderSourceGeneration;
 	winrt::com_ptr<ID3D11ComputeShader> shader;
 	Require(SUCCEEDED(request.device->CreateComputeShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, shader.put())), "WARP compute shader creation failed");

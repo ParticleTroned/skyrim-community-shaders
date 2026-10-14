@@ -3288,10 +3288,10 @@ void LightLimitFix::PrepareShaderCache()
 void LightLimitFix::CompileComputeShaders()
 {
 	clusterBuildingCS.Prepare(
-		L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0",
+		kComputeShaderPaths[0], {}, "cs_5_0",
 		"main", "LightLimitFix::ClusterBuildingCS");
 	clusterCullingCS.Prepare(
-		L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0",
+		kComputeShaderPaths[1], {}, "cs_5_0",
 		"main", "LightLimitFix::ClusterCullingCS");
 }
 

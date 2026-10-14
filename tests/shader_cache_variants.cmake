@@ -20,6 +20,7 @@ foreach(
         shader_add_completed_under_test.h
         shader_release_under_test.h
         shader_feature_clear_under_test.h
+        llf_shader_paths_under_test.h
         shader_watcher_action_under_test.h
         shader_watcher_handle_under_test.h
         shader_watcher_invalidation_under_test.h
@@ -54,6 +55,7 @@ add_custom_command(
         src/Hooks.cpp
         src/ShaderCacheSmartClear.cpp
         src/Features/Upscaling.cpp
+        src/Features/LightLimitFix.h
         tests/extract_shader_cache_variants.cmake
         tests/extract_source_region.cmake
     VERBATIM

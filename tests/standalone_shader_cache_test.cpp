@@ -142,14 +142,12 @@ namespace SIE
 				state->IsDeveloperMode(), REL::Module::IsVR(), state->enablePartialPrecision.load(), state->enableAvoidFlowControl.load(),
 				IsDiskCache(), state->GetShaderDefinesSnapshot()->defines, state->GetShaderDefinesGeneration() };
 		}
-		bool IsStandalonePreparationCurrent(const Util::ShaderPreparation& operation, bool resident = false) const
-		{
-			return (resident || !IsTaskStale(operation.compilationGeneration)) && operation.sourceGeneration == g_shaderSourceGeneration;
-		}
+		bool IsStandalonePreparationCurrent(const Util::ShaderPreparation& operation, bool resident = false) const;
 		std::shared_ptr<Util::ShaderPreparation> PrepareStandaloneShader(Util::OwnedStandaloneShaderRequest request)
 		{
 			queuedPreparation = std::make_shared<Util::ShaderPreparation>();
 			queuedPreparation->device = request.device;
+			queuedPreparation->source = request.source;
 			queuedPreparation->compilationGeneration = request.state.compilationGeneration;
 			queuedPreparation->sourceGeneration = request.state.sourceGeneration;
 			queuedPreparation->shaderDefinesGeneration = request.state.shaderDefinesGeneration;
@@ -189,6 +187,7 @@ namespace SIE
 	// clang-format off
 #include "standalone_compile_key.h"
 #include "standalone_cache_under_test.h"
+#include "standalone_current_under_test.h"
 	// clang-format on
 }
 #include "d3d_resource_naming.h"
@@ -456,12 +455,14 @@ int main()
 	strict.sourceGeneration = SIE::g_shaderSourceGeneration.load();
 	bool staleSource = false;
 	strict.staleSource = &staleSource;
+	std::optional<Util::ContentHash::Hash128> acceptedDigest;
+	strict.acceptedSourceDigest = &acceptedDigest;
 	const auto createsBeforeEdit = creations;
 	assert(!cache.CompileStandaloneShaderCached(strict, [&] {
 		auto blob = compile();
 		Write("Data/Shaders/Common/value.hlsli", "#define VALUE 9\n");
 		return blob; }, create));
-	assert(staleSource && creations == createsBeforeEdit);
+	assert(staleSource && creations == createsBeforeEdit && !acceptedDigest);
 	assert(!cache.CompileStandaloneShaderCached(strict, compile, [&](ID3DBlob* blob) {
 		const auto accepted = create(blob);
 		Write("Data/Shaders/Common/value.hlsli", "#define VALUE 10\n");
@@ -476,11 +477,12 @@ int main()
 		return blob; }, create));
 	assert(!staleSource && creations == createsBeforeEpoch);
 	strict.compilationGeneration = cache.compilationSet.generation.load();
-	assert(!cache.CompileStandaloneShaderCached(strict, [&] {
+	assert(cache.CompileStandaloneShaderCached(strict, [&] {
 		auto blob = compile();
 		++SIE::g_shaderSourceGeneration;
 		return blob; }, create));
-	assert(!staleSource && creations == createsBeforeEpoch);
+	assert(!staleSource && creations == createsBeforeEpoch + 1);
+	assert(acceptedDigest == SIE::GetShaderContentDigest(strict.source, SIE::ShaderSourceRoot()));
 	strict.sourceGeneration = SIE::g_shaderSourceGeneration.load();
 	assert(!cache.CompileStandaloneShaderCached(strict, [] { return winrt::com_ptr<ID3DBlob>{}; }, create) && !staleSource);
 	cache.enabled = true;
@@ -545,7 +547,7 @@ int main()
 	SIE::globalIdentity = "configuration-changed-after-capture";
 	assert(SIE::BuildStandaloneCompileKey(frozen).packDigest == frozenIdentity);
 	Util::ShaderCompileTiming capturedTiming;
-	const auto capturedShader = Util::CompilePreparedShader(captured, cache, &capturedTiming, &staleSource);
+	const auto capturedShader = Util::CompilePreparedShader(captured, cache, &capturedTiming, &staleSource, &preparation->sourceDigest);
 	assert(capturedShader && !staleSource && capturedTiming.bytecodeCompilationQpcTicks > 0 && capturedTiming.d3dObjectCreationQpcTicks > 0);
 	UINT capturedNameSize = 0;
 	assert(SUCCEEDED(capturedShader->GetPrivateData(Util::WKPDID_D3DDebugObjectNameT, &capturedNameSize, nullptr)));
@@ -574,7 +576,10 @@ int main()
 	assert(Util::IsShaderPreparationCurrent(*preparation, true));
 	++cache.compilationSet.generation;
 	assert(!Util::IsShaderPreparationCurrent(*preparation) && Util::IsShaderPreparationCurrent(*preparation, true));
-	++SIE::g_shaderSourceGeneration;
+	SIE::InvalidateShaderSourceCaches();
+	assert(Util::IsShaderPreparationCurrent(*preparation, true));
+	Write("Data/Shaders/Common/value.hlsli", "#define VALUE 12\n");
+	SIE::InvalidateShaderSourceCaches();
 	assert(!Util::IsShaderPreparationCurrent(*preparation, true));
 	winrt::com_ptr<ID3D11Device> replacementDevice;
 	assert(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION,

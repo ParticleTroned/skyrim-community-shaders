@@ -11,6 +11,7 @@
 #include "Features/LightLimitFix/SceneLightSnapshot.h"
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -40,6 +41,10 @@ private:
 	static void RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint32_t& a_index);
 
 public:
+	static constexpr std::array<const wchar_t*, 2> kComputeShaderPaths{
+		L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl",
+		L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl"
+	};
 	/** @brief Read or stage the preference without touching render-owned settings. */
 	bool IsContactShadowsRequested() const { return runtimeToggle.Get(); }
 	void SetContactShadowsEnabled(bool enabled) { runtimeToggle.Set(enabled); }

@@ -576,6 +576,8 @@ namespace SIE
 		void ProcessPendingClear();
 		/** Queues owner-thread refresh of the LLF standalone pair after source observation. */
 		void RequestStandaloneShaderClear();
+		/** Queue LLF invalidation only for its roots or transitive includes. */
+		void RequestStandaloneShaderClear(const std::filesystem::path& a_changedSource);
 		/**
    		* @brief Clears and marks shaders for recompilation based on the given path.
  		*

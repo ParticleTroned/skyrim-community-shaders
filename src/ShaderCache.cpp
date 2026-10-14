@@ -3854,6 +3854,23 @@ namespace SIE
 		pendingStandaloneShaderClear.store(true, std::memory_order_release);
 	}
 
+	void ShaderCache::RequestStandaloneShaderClear(const std::filesystem::path& a_changedSource)
+	{
+		const auto changed = NormalizedPathKey(a_changedSource);
+		for (const auto* source : LightLimitFix::kComputeShaderPaths) {
+			if (changed == NormalizedPathKey(source)) {
+				RequestStandaloneShaderClear();
+				return;
+			}
+			const auto dependencies = GetShaderDependencyPaths(source, ShaderSourceRoot());
+			// An incomplete closure cannot prove that a deleted or renamed include is unrelated.
+			if (!dependencies || std::ranges::any_of(*dependencies, [&](const auto& path) { return NormalizedPathKey(path) == changed; })) {
+				RequestStandaloneShaderClear();
+				return;
+			}
+		}
+	}
+
 	void ShaderCache::RequestFeatureShaderClear(bool a_scoped)
 	{
 		pendingFeatureClear.fetch_or(a_scoped ? 1 : 2, std::memory_order_release);
@@ -4434,8 +4451,18 @@ namespace SIE
 
 	bool ShaderCache::IsStandalonePreparationCurrent(const Util::ShaderPreparation& a_preparation, bool a_resident) const
 	{
-		return (a_resident || !IsTaskStale(a_preparation.compilationGeneration)) &&
-		       a_preparation.sourceGeneration == g_shaderSourceGeneration.load(std::memory_order_acquire);
+		if (!a_resident && IsTaskStale(a_preparation.compilationGeneration))
+			return false;
+		if (a_preparation.sourceGeneration == g_shaderSourceGeneration.load(std::memory_order_acquire))
+			return true;
+		try {
+			return a_preparation.sourceDigest && a_preparation.sourceDigest == GetShaderContentDigest(a_preparation.source, ShaderSourceRoot());
+		} catch (const std::exception& error) {
+			logger::warn("Cannot validate standalone shader source: {}", error.what());
+		} catch (...) {
+			logger::warn("Cannot validate standalone shader source: unknown exception");
+		}
+		return false;
 	}
 
 	std::shared_ptr<Util::ShaderPreparation> ShaderCache::PrepareStandaloneShader(Util::OwnedStandaloneShaderRequest a_request)
@@ -4445,6 +4472,7 @@ namespace SIE
 		operation->device = a_request.device;
 		operation->compilationGeneration = a_request.state.compilationGeneration;
 		operation->sourceGeneration = a_request.state.sourceGeneration;
+		operation->source = a_request.source;
 		operation->shaderDefinesGeneration = a_request.state.shaderDefinesGeneration;
 		operation->developerMode = a_request.state.developerMode;
 		operation->partialPrecision = a_request.state.partialPrecision;
@@ -4489,14 +4517,14 @@ namespace SIE
 			auto& result = *producer->operation;
 			bool staleSource = false;
 			try {
-				if (!IsStandalonePreparationCurrent(result)) {
+				if (IsTaskStale(result.compilationGeneration)) {
 					result.Finish(Preparation::State::Stale);
 					return;
 				}
 				if (!request.device || (request.device->GetCreationFlags() & D3D11_CREATE_DEVICE_SINGLETHREADED)) {
 					logger::error("Standalone worker preparation requires a multithreaded D3D11 device");
 				} else {
-					result.shader = Util::CompilePreparedShader(request, *this, nullptr, &staleSource);
+					result.shader = Util::CompilePreparedShader(request, *this, nullptr, &staleSource, &result.sourceDigest);
 				}
 			} catch (const std::exception& error) {
 				logger::error("Failed to prepare standalone shader {}: {}", request.source.string(), error.what());
@@ -4517,6 +4545,8 @@ namespace SIE
 		const std::function<winrt::com_ptr<ID3DBlob>()>& compile,
 		const std::function<bool(ID3DBlob*)>& createShader)
 	{
+		if (request.acceptedSourceDigest)
+			request.acceptedSourceDigest->reset();
 		if (request.source.empty() || !request.profile || !*request.profile ||
 			!request.entryPoint || !*request.entryPoint || !compile || !createShader)
 			return false;
@@ -4525,10 +4555,7 @@ namespace SIE
 			*request.staleSource = false;
 		const auto diskGeneration = GetDiskCacheGeneration();
 		const auto taskGeneration = request.compilationGeneration.value_or(compilationSet.generation.load(std::memory_order_acquire));
-		const auto isCurrent = [&] {
-			return !IsTaskStale(taskGeneration) && (!request.sourceGeneration ||
-													   *request.sourceGeneration == g_shaderSourceGeneration.load(std::memory_order_acquire));
-		};
+		const auto isCurrent = [&] { return !IsTaskStale(taskGeneration); };
 		std::optional<StandaloneCompileKey> key;
 		winrt::com_ptr<ID3DBlob> cached;
 		std::optional<Util::ContentHash::Hash128> cachedDigest;
@@ -4577,6 +4604,8 @@ namespace SIE
 					if (!isCurrent() || cachedDigest != afterCreation)
 						return false;
 				}
+				if (request.acceptedSourceDigest)
+					*request.acceptedSourceDigest = cachedDigest;
 				logger::debug("Loaded standalone shader from cache: {}", request.source.string());
 				return true;
 			}
@@ -4621,6 +4650,8 @@ namespace SIE
 				logger::warn("Cannot persist standalone shader {}; retaining it in memory", request.source.string());
 			}
 		}
+		if (request.acceptedSourceDigest)
+			*request.acceptedSourceDigest = sourceDigest;
 		return true;
 	}
 
@@ -7282,7 +7313,7 @@ namespace SIE
 		InvalidateShaderSourceCaches();
 		const auto sourceExtension = filePath.extension().string();
 		if (_stricmp(sourceExtension.c_str(), ".hlsl") == 0 || _stricmp(sourceExtension.c_str(), ".hlsli") == 0)
-			cache->RequestStandaloneShaderClear();
+			cache->RequestStandaloneShaderClear(filePath);
 		// Skip directories
 		if (std::filesystem::is_directory(filePath)) {
 			return;

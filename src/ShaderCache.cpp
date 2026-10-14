@@ -4244,7 +4244,6 @@ namespace SIE
 	{
 		{
 			std::lock_guard lock{ standalonePreparationMutex };
-			acceptStandalonePreparations = false;
 			if (standalonePreparationPool)
 				standalonePreparationPool->purge();
 		}

@@ -249,8 +249,16 @@ namespace
 		for (size_t index = 2; index < operations.size(); ++index)
 			Require(Wait(operations[index]) == State::Stale, "Every purged queue entry must have a terminal operation state");
 		Require(cache.IsCompiling(), "Running producers must remain accounted for after queued cancellation");
-		auto stopped = cache.PrepareStandaloneShader(Request(cache, device));
-		Require(Wait(stopped) == State::Stale, "Stopped compilation must close preparation intake");
+		auto resumed = cache.PrepareStandaloneShader(Request(cache, device));
+		Require(resumed->state == State::Pending, "Cancellation must leave future preparation intake open");
+		ReleaseWorkers();
+		Require(Wait(resumed) == State::Ready && resumed->shader, "A fresh request must recover on the same standalone worker pool");
+		cache.standalonePreparationPool->wait();
+		Require(Wait(operations[0]) == State::Stale && Wait(operations[1]) == State::Stale && !operations[0]->shader && !operations[1]->shader, "Stopped generation results must discard their objects before publication");
+		ResetSeams();
+		blockCompile = true;
+		auto runningAtShutdown = cache.PrepareStandaloneShader(Request(cache, device));
+		WaitEntered(1);
 		std::atomic_bool shutdownEntered{}, shutdownDone{};
 		std::jthread shutdown([&] {
 			shutdownEntered = true;
@@ -260,11 +268,20 @@ namespace
 		});
 		while (!shutdownEntered.load())
 			shutdownEntered.wait(false);
-		Require(!shutdownDone.load() && cache.standalonePreparations == 2, "Shutdown must drain running producers before destroying their cache");
+		Require(!shutdownDone.load() && cache.standalonePreparations == 1, "Shutdown must drain running producers before destroying their cache");
+		for (;;) {
+			std::unique_lock lock(cache.standalonePreparationMutex);
+			if (!cache.acceptStandalonePreparations)
+				break;
+			lock.unlock();
+			std::this_thread::yield();
+		}
+		auto rejectedAtShutdown = cache.PrepareStandaloneShader(Request(cache, device));
+		Require(Wait(rejectedAtShutdown) == State::Stale, "Shutdown must permanently close intake");
 		ReleaseWorkers();
 		shutdown.join();
 		Require(shutdownDone && cache.standalonePreparations == 0 && !cache.IsCompiling(), "Shutdown must finish after all running producer counts are released");
-		Require(Wait(operations[0]) == State::Stale && Wait(operations[1]) == State::Stale && !operations[0]->shader && !operations[1]->shader, "Stopped generation results must discard their objects before publication");
+		Require(Wait(runningAtShutdown) == State::Ready, "Shutdown must drain a running producer while its cache remains alive");
 	}
 
 	void CheckTerminalFailuresAndSourceRaces()

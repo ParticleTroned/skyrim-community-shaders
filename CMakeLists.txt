@@ -2559,6 +2559,73 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${_billboard_test} PROPERTIES TIMEOUT 30)
     endforeach()
 
+    set(_strict_light_upload_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/strict-light-upload"
+    )
+    set(_strict_light_upload_test_headers)
+    foreach(
+        _part
+        IN
+        ITEMS data state comparison after frame_checker frame_read retire create
+    )
+        list(
+            APPEND _strict_light_upload_test_headers
+            "${_strict_light_upload_test_dir}/strict_light_${_part}_under_test.h"
+        )
+    endforeach()
+    add_custom_command(
+        OUTPUT ${_strict_light_upload_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_strict_light_upload_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_strict_light_upload.cmake"
+        DEPENDS
+            src/Features/LightLimitFix.cpp
+            src/Features/LightLimitFix.h
+            src/Utils/Game.h
+            src/Utils/Game.cpp
+            tests/extract_strict_light_upload.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_custom_target(
+        strict_light_upload_test_sources
+        DEPENDS ${_strict_light_upload_test_headers}
+    )
+    foreach(_variant IN ITEMS Standard FastFP)
+        if(_variant STREQUAL "FastFP" AND NOT MSVC)
+            continue()
+        endif()
+        if(_variant STREQUAL "FastFP")
+            set(_strict_target strict_light_upload_fast_fp_test)
+            set(_strict_test StrictLightUploadFastFP)
+        else()
+            set(_strict_target strict_light_upload_test)
+            set(_strict_test StrictLightUpload)
+        endif()
+        add_controller_test(
+            ${_strict_target}
+            ${_strict_test}
+            tests/strict_light_upload_test.cpp
+        )
+        add_dependencies(${_strict_target} strict_light_upload_test_sources)
+        target_sources(
+            ${_strict_target}
+            PRIVATE ${_strict_light_upload_test_headers}
+        )
+        target_include_directories(
+            ${_strict_target}
+            PRIVATE "${_strict_light_upload_test_dir}"
+        )
+        if(_variant STREQUAL "FastFP")
+            target_compile_options(
+                ${_strict_target}
+                PRIVATE "$<$<CONFIG:Release>:/fp:fast>"
+            )
+        endif()
+        set_tests_properties(${_strict_test} PROPERTIES TIMEOUT 30)
+    endforeach()
+
     set(_vr_scene_guards_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-scene-guards"
     )

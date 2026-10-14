@@ -147,7 +147,10 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(StrictLightDataCB);
 
-	StrictLightDataCB strictLightDataTemp;
+	StrictLightDataCB strictLightDataTemp{};
+	StrictLightDataCB strictLightDataUploaded{};
+	bool hasUploadedStrictLightData = false;
+	bool strictLightBindingPending = true;
 
 	struct CachedParticleLight
 	{
@@ -279,10 +282,6 @@ public:
 	ParticleLightDiagnostics particleLightDiagnostics;
 
 	RE::NiPoint3 eyePositionCached[2]{};
-	bool wasEmpty = false;
-	bool wasWorld = false;
-	int previousRoomIndex = -1;
-	uint previousShadowBitMask = 0;
 	eastl::hash_map<RE::NiLight*, bool> jsonPlacedLightCache;
 	Util::FrameChecker jsonPlacedLightCacheFrameChecker;
 

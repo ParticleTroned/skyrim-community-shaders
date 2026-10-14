@@ -101,6 +101,7 @@ struct LightLimitFix : Feature
 	ConstantBuffer* lightBuildingCB = nullptr;
 	ConstantBuffer* lightCullingCB = nullptr;
 	ConstantBuffer* strictLightDataCB = nullptr;
+	bool hasUploadedStrictLightData = false;
 	Buffer* clusters = nullptr;
 	Buffer* lights = nullptr;
 	Buffer* lightIndexCounter = nullptr;

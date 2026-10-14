@@ -27,10 +27,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <new>
 #include <optional>
@@ -847,6 +849,30 @@ namespace
 		return (dx * dx) + (dy * dy) + (dz * dz) > conservativeDistance * conservativeDistance;
 	}
 
+	bool SameStrictLightData(const LightLimitFix::StrictLightDataCB& a, const LightLimitFix::StrictLightDataCB& b) noexcept
+	{
+		if (a.NumStrictLights != b.NumStrictLights || a.RoomIndex != b.RoomIndex || a.ShadowBitMask != b.ShadowBitMask ||
+			a.NumStrictLights > std::size(a.StrictLights))
+			return false;
+
+		// Compare shader-visible fields by their bits; padding and inactive lights are irrelevant.
+		const auto same = [](float x, float y) { return std::bit_cast<std::uint32_t>(x) == std::bit_cast<std::uint32_t>(y); };
+		const auto same3 = [&](const float3& x, const float3& y) { return same(x.x, y.x) && same(x.y, y.y) && same(x.z, y.z); };
+		for (std::uint32_t i = 0; i < a.NumStrictLights; ++i) {
+			const auto& x = a.StrictLights[i];
+			const auto& y = b.StrictLights[i];
+			if (!same3(x.color, y.color) || !same(x.fade, y.fade) || !same(x.radius, y.radius) || !same(x.invRadius, y.invRadius) ||
+				!same(x.fadeZone, y.fadeZone) || !same(x.sizeBias, y.sizeBias) || x.roomFlags != y.roomFlags ||
+				x.lightFlags.underlying() != y.lightFlags.underlying() || x.shadowMaskIndex != y.shadowMaskIndex)
+				return false;
+			for (std::uint32_t eye = 0; eye < std::size(x.positionWS); ++eye) {
+				if (!same3(x.positionWS[eye].data, y.positionWS[eye].data))
+					return false;
+			}
+		}
+		return true;
+	}
+
 	void ClearStrictLightData(LightLimitFix::StrictLightDataCB& a_data, bool a_resetRoomIndex) noexcept
 	{
 		a_data.NumStrictLights = 0;
@@ -1422,6 +1448,7 @@ void LightLimitFix::SetupResources()
 		lightBuildingCB = nullptr;
 		delete lightCullingCB;
 		lightCullingCB = nullptr;
+		hasUploadedStrictLightData = false;
 		delete strictLightDataCB;
 		strictLightDataCB = nullptr;
 		clusterBuildingCS.Reset();
@@ -1540,8 +1567,11 @@ void LightLimitFix::SetupResources()
 	}
 
 	{
-		if (!strictLightDataCB)
-			strictLightDataCB = new ConstantBuffer(ConstantBufferDesc<StrictLightDataCB>());
+		if (!strictLightDataCB) {
+			strictLightDataCB = new ConstantBuffer(ConstantBufferDesc<StrictLightDataCB>(), "LightLimitFix::StrictLightData");
+			hasUploadedStrictLightData = false;
+			strictLightBindingPending = true;
+		}
 	}
 }
 
@@ -1888,24 +1918,16 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 		return;
 	}
 
-	auto shadowSceneNode = smState->shadowSceneNode[0];
-
-	const auto isEmpty = strictLightDataTemp.NumStrictLights == 0;
-	const bool isWorld = accumulator->GetRuntimeData().activeShadowSceneNode == shadowSceneNode;
-	const auto roomIndex = strictLightDataTemp.RoomIndex;
-	const auto shadowBitMask = strictLightDataTemp.ShadowBitMask;
-
-	if (!isEmpty || (isEmpty && !wasEmpty) || isWorld != wasWorld || previousRoomIndex != roomIndex || shadowBitMask != previousShadowBitMask) {
+	if (!hasUploadedStrictLightData || !SameStrictLightData(strictLightDataTemp, strictLightDataUploaded)) {
 		strictLightDataCB->Update(strictLightDataTemp);
-		wasEmpty = isEmpty;
-		wasWorld = isWorld;
-		previousRoomIndex = roomIndex;
-		previousShadowBitMask = shadowBitMask;
+		strictLightDataUploaded = strictLightDataTemp;
+		hasUploadedStrictLightData = true;
 	}
 
-	if (frameChecker.IsNewFrame()) {
+	if (frameChecker.IsNewFrame() || strictLightBindingPending) {
 		ID3D11Buffer* buffer = { strictLightDataCB->CB() };
 		context->PSSetConstantBuffers(3, 1, &buffer);
+		strictLightBindingPending = false;
 	}
 }
 

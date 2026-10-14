@@ -141,12 +141,15 @@ namespace SIE
 
 	namespace SShaderCache
 	{
+		std::atomic_uint shaderStringCalls{ 0 }, diskPathCalls{ 0 };
 		std::string GetShaderString(ShaderClass a_class, const RE::BSShader& a_shader, uint32_t, bool)
 		{
+			++shaderStringCalls;
 			return a_shader.fxpFilename + std::to_string(static_cast<int>(a_class));
 		}
 		std::wstring GetDiskPath(const std::string& a_name, uint32_t a_descriptor, ShaderClass a_class)
 		{
+			++diskPathCalls;
 			return std::wstring(a_name.begin(), a_name.end()) + L"/" + std::to_wstring(a_descriptor) + L"/" + std::to_wstring(static_cast<int>(a_class));
 		}
 	}
@@ -610,6 +613,96 @@ namespace
 		Feature::GetFeatureList().clear();
 	}
 
+	void TestCaptureFormattingAdmission()
+	{
+		ShaderCache cache;
+		RE::BSShader shader;
+		globals::state->developer = false;
+		SIE::SShaderCache::shaderStringCalls = 0;
+		SIE::SShaderCache::diskPathCalls = 0;
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::shaderStringCalls == 0 && SIE::SShaderCache::diskPathCalls == 0);
+		cache.BeginActiveShaderCapture();
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::shaderStringCalls == 1 && SIE::SShaderCache::diskPathCalls == 1);
+		const auto taskId = ShaderCompilationTask::MakeId(ShaderClass::Pixel, shader.shaderType.get(), 10);
+		const auto first = cache.capturedShaders.at(taskId);
+
+		// A capture retains its first submission even if live formatting inputs change.
+		shader.fxpFilename = "Changed";
+		for (unsigned repeat = 0; repeat < 3; ++repeat)
+			cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::shaderStringCalls == 1 && SIE::SShaderCache::diskPathCalls == 1);
+		const auto& unchanged = cache.capturedShaders.at(taskId);
+		Require(unchanged.key == first.key && unchanged.diskPath == first.diskPath && unchanged.lastUsed == first.lastUsed);
+		Require(unchanged.shaderType == first.shaderType && unchanged.shaderClass == first.shaderClass && unchanged.descriptor == first.descriptor);
+		Require(unchanged.drawCalls == 1 && unchanged.isActive);
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 11);
+		cache.TrackActiveShader(ShaderClass::Vertex, shader, 10);
+		RE::BSShader grass = shader;
+		grass.shaderType.value = RE::BSShader::Grass;
+		cache.TrackActiveShader(ShaderClass::Pixel, grass, 10);
+		Require(cache.capturedShaders.size() == 4 && cache.activeShaders.empty());
+		Require(SIE::SShaderCache::shaderStringCalls == 4 && SIE::SShaderCache::diskPathCalls == 4);
+		for (const auto& [id, info] : cache.capturedShaders)
+			Require(id == ShaderCompilationTask::MakeId(info.shaderClass, info.shaderType, info.descriptor));
+
+		std::thread bulkLoad([&] { cache.TrackActiveShader(ShaderClass::Compute, shader, 12); });
+		bulkLoad.join();
+		Require(cache.capturedShaders.size() == 4);
+		Require(SIE::SShaderCache::shaderStringCalls == 4 && SIE::SShaderCache::diskPathCalls == 4);
+		cache.activeShaderCaptureFramesRemaining.store(0);
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 12);
+		Require(SIE::SShaderCache::shaderStringCalls == 4 && SIE::SShaderCache::diskPathCalls == 4);
+		cache.StartActiveShaderCaptureWindow(Stage::SecondWindow);
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(cache.capturedShaders.size() == 1);
+		Require(SIE::SShaderCache::shaderStringCalls == 5 && SIE::SShaderCache::diskPathCalls == 5);
+		const auto& restarted = cache.capturedShaders.at(taskId);
+		Require(restarted.key != first.key && restarted.diskPath != first.diskPath && restarted.drawCalls == 1);
+	}
+
+	void TestDeveloperFormattingAdmission()
+	{
+		ShaderCache cache;
+		RE::BSShader shader;
+		globals::state->developer = true;
+		SIE::SShaderCache::shaderStringCalls = 0;
+		SIE::SShaderCache::diskPathCalls = 0;
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 11);
+		Require(SIE::SShaderCache::shaderStringCalls == 2 && SIE::SShaderCache::diskPathCalls == 1);
+		Require(cache.activeShaders.size() == 1 && cache.capturedShaders.empty());
+		const auto key = cache.activeShaders.begin()->first;
+		Require(cache.activeShaders.at(key).descriptor == 10 && cache.activeShaders.at(key).drawCalls == 2);
+		cache.BeginActiveShaderCapture();
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		const auto taskId = ShaderCompilationTask::MakeId(ShaderClass::Pixel, shader.shaderType.get(), 10);
+		const auto first = cache.capturedShaders.at(taskId);
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::shaderStringCalls == 4 && SIE::SShaderCache::diskPathCalls == 2);
+		Require(cache.activeShaders.at(key).drawCalls == 4 && cache.capturedShaders.size() == 1);
+		Require(cache.capturedShaders.at(taskId).drawCalls == 1 && cache.capturedShaders.at(taskId).lastUsed == first.lastUsed);
+		std::thread developerLoad([&] { cache.TrackActiveShader(ShaderClass::Pixel, shader, 11); });
+		developerLoad.join();
+		Require(SIE::SShaderCache::shaderStringCalls == 5 && SIE::SShaderCache::diskPathCalls == 2);
+		Require(cache.activeShaders.at(key).drawCalls == 5 && cache.capturedShaders.size() == 1);
+		cache.activeShaderCaptureFramesRemaining.store(0);
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::shaderStringCalls == 6 && SIE::SShaderCache::diskPathCalls == 2);
+		Require(cache.activeShaders.at(key).drawCalls == 6);
+		cache.StartActiveShaderCaptureWindow(Stage::SecondWindow);
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		shader.fxpFilename = "Alternate";
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::shaderStringCalls == 8 && SIE::SShaderCache::diskPathCalls == 4);
+		Require(cache.activeShaders.size() == 2 && cache.activeShaders.at(key).drawCalls == 7);
+		Require(cache.capturedShaders.size() == 1 && cache.capturedShaders.at(taskId).key == key);
+		Require(cache.capturedShaders.at(taskId).diskPath == first.diskPath && cache.capturedShaders.at(taskId).drawCalls == 1);
+		globals::state->developer = false;
+	}
+
 	void TestProtectedVariants()
 	{
 		for (unsigned protection = 0; protection < 3; ++protection) {
@@ -732,6 +825,8 @@ int main()
 		TestQueueWithSharedBytecode();
 		TestCaptureAndClearVariants(false);
 		TestCaptureAndClearVariants(true);
+		TestCaptureFormattingAdmission();
+		TestDeveloperFormattingAdmission();
 		TestProtectedVariants();
 		TestStageAndTypeIdentity();
 		TestCategoryVariantIdentity();

@@ -139,8 +139,10 @@ namespace SIE
 				descriptor = *imageSpaceDescriptor;
 			return true;
 		}
+		std::atomic_uint shaderStringCalls{ 0 };
 		std::string GetShaderString(ShaderClass, const RE::BSShader&, uint32_t descriptor, bool)
 		{
+			++shaderStringCalls;
 			return std::to_string(descriptor);
 		}
 	}
@@ -372,6 +374,52 @@ namespace
 		Require(!get(f.cache, f.shader, 19), "Descriptor-resolution failure must override a warm selection");
 		SIE::SShaderCache::descriptorAvailable = true;
 		Require((f.cache.*mutex).acquisitions == locked, "Rejected policy gates and accepted warm hits must avoid map locks");
+	}
+
+	template <class Get, class Maps>
+	void CheckBlockedKeyFormatting(Get get, Maps Cache::* maps, SIE::TestMutex Cache::* mutex, Stage stage)
+	{
+		Fixture f;
+		auto resident = Publish(f.cache.*maps, f.shader, 19);
+		Require(get(f.cache, f.shader, 19) == resident, "The formatting fixture must begin with a warm hit");
+		const auto locked = (f.cache.*mutex).acquisitions;
+		SIE::SShaderCache::shaderStringCalls = 0;
+		f.state.developer = true;
+		Require(get(f.cache, f.shader, 19) == resident, "An unselected block must preserve the warm shader");
+		f.cache.blockedKey = "19";
+		Require(get(f.cache, f.shader, 19) == resident, "A stale key without a selected index must stay inactive");
+		f.cache.blockedKeyIndex = 0;
+		f.cache.blockedKey.clear();
+		Require(get(f.cache, f.shader, 19) == resident, "An empty selected block must stay inactive");
+		f.cache.blockedKey = "19";
+		f.state.developer = false;
+		Require(get(f.cache, f.shader, 19) == resident, "Developer blocks must stay inactive in ordinary gameplay");
+		Require(SIE::SShaderCache::shaderStringCalls == 0, "Inactive blocks must not format a shader key");
+		f.state.developer = true;
+		f.cache.blockedKey = "20";
+		Require(get(f.cache, f.shader, 19) == resident, "A different selected key must preserve the warm shader");
+		Require(SIE::SShaderCache::shaderStringCalls == 1, "An active comparison must format exactly one key");
+		f.cache.blockedKey = "19";
+		Require(!get(f.cache, f.shader, 19), "A matching block must reject the warm shader");
+		Require(!get(f.cache, f.shader, 19), "A repeated matching block must remain effective");
+		Require(SIE::SShaderCache::shaderStringCalls == 3, "Each matching comparison must format exactly one key");
+		f.cache.blockedKeyIndex = -2;
+		Require(!get(f.cache, f.shader, 19), "Developer active-shader selections must retain their negative index sentinel");
+		Require(SIE::SShaderCache::shaderStringCalls == 4, "A negative active index must still format the comparison key");
+		Require(f.cache.blockedIDs == std::vector<uint32_t>{ 19 }, "Repeated block checks must keep one recorded descriptor");
+		f.cache.blockedKey = "20";
+		Require(get(f.cache, f.shader, 19) == resident, "A negative active index must only reject its matching key");
+		Require(SIE::SShaderCache::shaderStringCalls == 5, "A nonmatching active comparison must still format exactly once");
+		f.cache.blockedKey = "19";
+		f.state.developer = false;
+		Require(get(f.cache, f.shader, 19) == resident, "Disabling developer mode must immediately disable the block");
+		f.state.developer = true;
+		f.cache.blockedKeyIndex = -1;
+		Require(get(f.cache, f.shader, 19) == resident, "Clearing the selected index must immediately disable the block");
+		Require(SIE::SShaderCache::shaderStringCalls == 5, "Disabled blocks must stop formatting immediately");
+		Require(f.cache.tracked[static_cast<unsigned>(stage)] == 9, "All developer draws must retain their tracking admission");
+		Require((f.cache.*mutex).acquisitions == locked && f.cache.compilationSet.count == 0,
+			"Block formatting must preserve resident selection without queue or map-lock work");
 	}
 
 	template <class Get, class Maps>
@@ -610,6 +658,9 @@ int main()
 			CheckSelectionGates(vertexLookup, &Cache::vertexShaders, &Cache::vertexShadersMutex, &TestState::enableVShaders, Stage::Vertex);
 			CheckSelectionGates(pixelLookup, &Cache::pixelShaders, &Cache::pixelShadersMutex, &TestState::enablePShaders, Stage::Pixel);
 			CheckSelectionGates(computeLookup, &Cache::computeShaders, &Cache::computeShadersMutex, &TestState::enableCShaders, Stage::Compute);
+			CheckBlockedKeyFormatting(vertexLookup, &Cache::vertexShaders, &Cache::vertexShadersMutex, Stage::Vertex);
+			CheckBlockedKeyFormatting(pixelLookup, &Cache::pixelShaders, &Cache::pixelShadersMutex, Stage::Pixel);
+			CheckBlockedKeyFormatting(computeLookup, &Cache::computeShaders, &Cache::computeShadersMutex, Stage::Compute);
 			CheckContextAndIdentity(vertexLookup, &Cache::vertexShaders, &Cache::vertexShadersMutex);
 			CheckContextAndIdentity(pixelLookup, &Cache::pixelShaders, &Cache::pixelShadersMutex);
 			CheckContextAndIdentity(computeLookup, &Cache::computeShaders, &Cache::computeShadersMutex);

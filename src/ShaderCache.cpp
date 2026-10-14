@@ -3426,9 +3426,9 @@ namespace SIE
 		if (developerMode || activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0)
 			TrackActiveShader(ShaderClass::Vertex, shader, descriptor);
 
-		if (developerMode) {
+		if (developerMode && blockedKeyIndex != -1 && !blockedKey.empty()) {
 			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Vertex, shader, descriptor, true);
-			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
+			if (key == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
 					blockedIDs.push_back(descriptor);
 					logger::debug("Skipping blocked shader {:X}:{} total: {}", descriptor, blockedKey, blockedIDs.size());
@@ -3482,9 +3482,9 @@ namespace SIE
 		if (developerMode || activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0)
 			TrackActiveShader(ShaderClass::Pixel, shader, descriptor);
 
-		if (developerMode) {
+		if (developerMode && blockedKeyIndex != -1 && !blockedKey.empty()) {
 			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Pixel, shader, descriptor, true);
-			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
+			if (key == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
 					blockedIDs.push_back(descriptor);
 					logger::debug("Skipping blocked shader {:X}:{} total: {}", descriptor, blockedKey, blockedIDs.size());
@@ -3535,9 +3535,9 @@ namespace SIE
 		if (developerMode || activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0)
 			TrackActiveShader(ShaderClass::Compute, shader, descriptor);
 
-		if (developerMode) {
+		if (developerMode && blockedKeyIndex != -1 && !blockedKey.empty()) {
 			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Compute, shader, descriptor, true);
-			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
+			if (key == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
 					blockedIDs.push_back(descriptor);
 					logger::debug("Skipping blocked shader {:X}:{} total: {}", descriptor, blockedKey, blockedIDs.size());
@@ -6293,6 +6293,13 @@ namespace SIE
 		if (!developerMode && !capturing)
 			return;
 
+		const auto taskId = ShaderCompilationTask::MakeId(shaderClass, shader.shaderType.get(), descriptor);
+		if (!developerMode) {
+			std::lock_guard lock(activeShadersMutex);
+			if (capturedShaders.contains(taskId))
+				return;
+		}
+
 		auto key = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
 		std::lock_guard lock(activeShadersMutex);
 
@@ -6321,7 +6328,6 @@ namespace SIE
 
 		if (capturing) {
 			// Shared bytecode can back several runtime descriptors and disk paths.
-			const auto taskId = ShaderCompilationTask::MakeId(shaderClass, shader.shaderType.get(), descriptor);
 			auto [it, inserted] = capturedShaders.try_emplace(taskId);
 			if (inserted)
 				initializeInfo(it->second);

@@ -39,6 +39,7 @@
 #include "Utils/FileSystem.h"
 #include "Utils/GenerationClaim.h"
 #include "Utils/RendererContextAccess.h"
+#include "Utils/ResidentShaderCache.h"
 #include "Utils/ResourceName.h"
 #include "Utils/ShaderCacheManifest.h"
 #include "Utils/ShaderCachePack.h"
@@ -3360,15 +3361,47 @@ namespace SIE
 		}
 	}
 
+	template <ShaderClass Stage, typename ShaderMaps, typename MutexType>
+	auto GetResidentShader(ShaderMaps& a_shaders, MutexType& a_mutex,
+		std::atomic<uint64_t>& a_evictionRevision, const std::shared_ptr<const uint8_t>& a_ownerToken,
+		ID3D11Device* a_device, const RE::BSShader& a_shader, uint32_t a_descriptor)
+		-> typename ShaderMaps::value_type::mapped_type
+	{
+		const auto typeIndex = static_cast<size_t>(a_shader.shaderType.underlying());
+		if (typeIndex >= a_shaders.size())
+			return nullptr;
+		using Owner = typename ShaderMaps::value_type::mapped_type;
+		struct Key
+		{
+			const RE::BSShader* shader;
+			size_t type;
+			uint32_t descriptor;
+			bool operator==(const Key&) const = default;
+		};
+		static thread_local Util::ResidentShaderCache<Key, typename Owner::element_type> cache;
+		const Key key{ &a_shader, typeIndex, a_descriptor };
+		auto revision = a_evictionRevision.load(std::memory_order_acquire);
+		if (auto cached = cache.Find(a_ownerToken, a_device, revision, key)) {
+			if (a_evictionRevision.load(std::memory_order_acquire) == revision)
+				return cached;
+		}
+		Owner resident;
+		{
+			std::lock_guard lock{ a_mutex };
+			revision = a_evictionRevision.load(std::memory_order_relaxed);
+			const auto& typeCache = a_shaders[typeIndex];
+			if (const auto found = typeCache.find(a_descriptor); found != typeCache.end())
+				resident = found->second;
+		}
+		// No misses or fallback aliases are retained, so publication cannot stale a positive hit.
+		cache.Store(a_ownerToken, a_device, revision, key, resident);
+		return resident;
+	}
+
 	std::shared_ptr<RE::BSGraphics::VertexShader> ShaderCache::GetVertexShaderIfCached(const RE::BSShader& shader, uint32_t descriptor)
 	{
-		const auto typeIndex = static_cast<size_t>(shader.shaderType.underlying());
-		if (typeIndex >= vertexShaders.size())
-			return nullptr;
-		std::lock_guard lockGuard(vertexShadersMutex);
-		const auto& typeCache = vertexShaders[typeIndex];
-		const auto it = typeCache.find(descriptor);
-		return it != typeCache.end() ? it->second : nullptr;
+		return GetResidentShader<ShaderClass::Vertex>(vertexShaders, vertexShadersMutex,
+			vertexShaderEvictionRevision, residentShaderCacheOwner, globals::d3d::device, shader, descriptor);
 	}
 
 	std::shared_ptr<RE::BSGraphics::VertexShader> ShaderCache::GetVertexShader(const RE::BSShader& shader,
@@ -3460,14 +3493,9 @@ namespace SIE
 			}
 		}
 
-		{
-			std::lock_guard lockGuard(pixelShadersMutex);
-			auto& typeCache = pixelShaders[static_cast<size_t>(shader.shaderType.underlying())];
-			auto it = typeCache.find(descriptor);
-			if (it != typeCache.end()) {
-				return it->second;
-			}
-		}
+		if (auto cached = GetResidentShader<ShaderClass::Pixel>(pixelShaders, pixelShadersMutex,
+				pixelShaderEvictionRevision, residentShaderCacheOwner, globals::d3d::device, shader, descriptor))
+			return cached;
 		if (a_lookup == PixelShaderLookup::Cached)
 			return nullptr;
 		if (!IsSaveLoadSafeModeActive()) {
@@ -3518,14 +3546,9 @@ namespace SIE
 			}
 		}
 
-		{
-			std::lock_guard lockGuard(computeShadersMutex);
-			auto& typeCache = computeShaders[static_cast<size_t>(shader.shaderType.underlying())];
-			auto it = typeCache.find(descriptor);
-			if (it != typeCache.end()) {
-				return it->second;
-			}
-		}
+		if (auto cached = GetResidentShader<ShaderClass::Compute>(computeShaders, computeShadersMutex,
+				computeShaderEvictionRevision, residentShaderCacheOwner, globals::d3d::device, shader, descriptor))
+			return cached;
 		if (IsSaveLoadSafeModeActive()) {
 			return nullptr;
 		}
@@ -3590,12 +3613,14 @@ namespace SIE
 	}
 
 	template <typename ShaderMaps, typename MutexType>
-	void RetireShaders(ShaderMaps& a_shaders, MutexType& a_mutex, std::optional<size_t> a_type = std::nullopt)
+	void RetireShaders(ShaderMaps& a_shaders, MutexType& a_mutex,
+		std::atomic<uint64_t>& a_evictionRevision, std::optional<size_t> a_type = std::nullopt)
 	{
 		using Values = typename ShaderMaps::value_type::value_container_type;
 		std::array<Values, std::tuple_size_v<ShaderMaps>> retired;
 		{
 			std::lock_guard lock(a_mutex);
+			a_evictionRevision.fetch_add(1, std::memory_order_release);
 			for (size_t type = 0; type < a_shaders.size(); ++type) {
 				if (a_type && *a_type != type)
 					continue;
@@ -3622,16 +3647,17 @@ namespace SIE
 			std::unique_lock diskCacheLock{ g_diskCacheMutationMutex };
 			AdvanceDiskCacheGeneration();
 		}
-		RetireShaders(vertexShaders, vertexShadersMutex);
-		RetireShaders(pixelShaders, pixelShadersMutex);
-		RetireShaders(computeShaders, computeShadersMutex);
+		RetireShaders(vertexShaders, vertexShadersMutex, vertexShaderEvictionRevision);
+		RetireShaders(pixelShaders, pixelShadersMutex, pixelShaderEvictionRevision);
+		RetireShaders(computeShaders, computeShadersMutex, computeShaderEvictionRevision);
 		compilationSet.Clear();
 		RequestFeatureShaderClear(false);
 	}
 
 	template <typename ShaderType, typename MutexType>
 	void ReleaseShader(ShaderType& shaders,
-		MutexType& mutex, RE::BSShader::Type type, uint32_t descriptor)
+		MutexType& mutex, std::atomic<uint64_t>& a_evictionRevision,
+		RE::BSShader::Type type, uint32_t descriptor)
 	{
 		typename ShaderType::value_type::mapped_type retired;
 		{
@@ -3639,6 +3665,7 @@ namespace SIE
 			if (static_cast<size_t>(type) < shaders.size()) {
 				auto& shaderMap = shaders[static_cast<size_t>(type)];
 				if (auto it = shaderMap.find(descriptor); it != shaderMap.end()) {
+					a_evictionRevision.fetch_add(1, std::memory_order_release);
 					retired = std::move(it->second);
 					shaderMap.erase(it);
 				}
@@ -3653,13 +3680,13 @@ namespace SIE
 	{
 		switch (a_shaderClass) {
 		case ShaderClass::Vertex:
-			ReleaseShader(vertexShaders, vertexShadersMutex, a_type, a_descriptor);
+			ReleaseShader(vertexShaders, vertexShadersMutex, vertexShaderEvictionRevision, a_type, a_descriptor);
 			break;
 		case ShaderClass::Pixel:
-			ReleaseShader(pixelShaders, pixelShadersMutex, a_type, a_descriptor);
+			ReleaseShader(pixelShaders, pixelShadersMutex, pixelShaderEvictionRevision, a_type, a_descriptor);
 			break;
 		case ShaderClass::Compute:
-			ReleaseShader(computeShaders, computeShadersMutex, a_type, a_descriptor);
+			ReleaseShader(computeShaders, computeShadersMutex, computeShaderEvictionRevision, a_type, a_descriptor);
 			break;
 		default:
 			logger::warn("Unexpected shader class: {}", static_cast<int>(a_shaderClass));
@@ -3798,9 +3825,9 @@ namespace SIE
 
 		logger::debug("Clearing cache for {}", magic_enum::enum_name(a_type));
 		ClearShaderMap(a_type);
-		RetireShaders(vertexShaders, vertexShadersMutex, type);
-		RetireShaders(pixelShaders, pixelShadersMutex, type);
-		RetireShaders(computeShaders, computeShadersMutex, type);
+		RetireShaders(vertexShaders, vertexShadersMutex, vertexShaderEvictionRevision, type);
+		RetireShaders(pixelShaders, pixelShadersMutex, pixelShaderEvictionRevision, type);
+		RetireShaders(computeShaders, computeShadersMutex, computeShaderEvictionRevision, type);
 		compilationSet.Clear();
 	}
 

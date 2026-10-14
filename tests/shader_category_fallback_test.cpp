@@ -16,8 +16,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include "Utils/ResidentShaderCache.h"
 #include "Utils/ShaderLifetime.h"
 
+struct ID3D11Device
+{};
 struct ID3D11PixelShader
 {};
 struct ID3D11VertexShader
@@ -158,6 +161,7 @@ namespace globals
 	namespace d3d
 	{
 		TestContext* context;
+		ID3D11Device* device = nullptr;
 	}
 	namespace features
 	{
@@ -209,12 +213,14 @@ namespace SIE
 			static_cast<unsigned>(RE::BSShader::Type::Total)>
 			pixelShaders;
 		std::mutex pixelShadersMutex;
+		std::atomic<uint64_t> pixelShaderEvictionRevision{ 0 };
+		const std::shared_ptr<const uint8_t> residentShaderCacheOwner = std::make_shared<const uint8_t>();
 		std::atomic<unsigned> activeShaderCaptureFramesRemaining{ 0 };
 		int blockedKeyIndex = -1;
 		std::string blockedKey;
 		std::vector<uint32_t> blockedIDs;
 		bool safeLoad = false, async = true, compilationSucceeds = true;
-		unsigned compiles = 0;
+		unsigned compiles = 0, trackedLookups = 0;
 		std::shared_ptr<RE::BSGraphics::VertexShader> vertex;
 		auto GetVertexShader(const RE::BSShader&, uint32_t) { return vertex; }
 		struct Task
@@ -232,10 +238,14 @@ namespace SIE
 		bool IsEnabled() const { return true; }
 		bool IsSaveLoadSafeModeActive() const { return safeLoad; }
 		bool ShouldUseAsyncCompilation() const { return async; }
-		void TrackActiveShader(ShaderClass, const RE::BSShader&, uint32_t) {}
+		void TrackActiveShader(ShaderClass, const RE::BSShader&, uint32_t) { ++trackedLookups; }
 		RE::BSGraphics::PixelShader* Add(const RE::BSShader& shader, uint32_t descriptor)
 		{
-			auto& entry = pixelShaders[shader.shaderType.underlying()][descriptor];
+			auto& typeCache = pixelShaders[shader.shaderType.underlying()];
+			auto [found, inserted] = typeCache.try_emplace(descriptor);
+			if (!inserted)
+				return found->second.get();
+			auto& entry = found->second;
 			entry = std::make_shared<RE::BSGraphics::PixelShader>();
 			entry->id = descriptor;
 			entry->constantBuffers[1].buffer = entry.get();
@@ -249,6 +259,12 @@ namespace SIE
 				return nullptr;
 			Add(shader, descriptor);
 			return pixelShaders[shader.shaderType.underlying()].at(descriptor);
+		}
+		void ClearPixelShaders(size_t type)
+		{
+			std::lock_guard lock(pixelShadersMutex);
+			pixelShaderEvictionRevision.fetch_add(1, std::memory_order_release);
+			pixelShaders[type].clear();
 		}
 		void PrewarmDeferredPixelShaders(const RE::BSShader&, uint32_t, bool);
 		std::shared_ptr<RE::BSGraphics::PixelShader> GetPixelShader(const RE::BSShader&, uint32_t, PixelShaderLookup = PixelShaderLookup::Compile);
@@ -391,7 +407,7 @@ void TestColdAndFailedVariants()
 	f.Bind(requested);
 	Require(!f.state.deferredPixelShaderMissing && f.context.bound == fallback->shader);
 	Require(f.cache.compiles == 1);
-	f.cache.pixelShaders[0].clear();
+	f.cache.ClearPixelShaders(0);
 	f.context.binds = 0;
 	f.Bind(requested);
 	Require(f.state.deferredPixelShaderMissing && f.context.binds == 0);
@@ -425,6 +441,42 @@ void TestExactAndProtectedLookups()
 	f.shader.shaderType.value = RE::BSShader::Type::ImageSpace;
 	f.Bind(requested);
 	Require(f.context.bound == f.native.shader && !f.state.deferredPixelShaderMissing);
+}
+void TestPositiveSelectionTransitions()
+{
+	Fixture f;
+	constexpr uint32_t requested = 0x10021u;
+	auto* ready = f.cache.Add(f.shader, requested);
+	auto retained = f.cache.GetPixelShader(f.shader, requested, SIE::ShaderCache::PixelShaderLookup::Draw);
+	std::weak_ptr<RE::BSGraphics::PixelShader> retired = retained;
+	Require(retained.get() == ready);
+	f.cache.activeShaderCaptureFramesRemaining = 1;
+	f.state.deferredPixelShaderMissing = true;
+	Require(f.cache.GetPixelShader(f.shader, requested, SIE::ShaderCache::PixelShaderLookup::Draw) == retained);
+	Require(f.cache.trackedLookups == 1 && !f.state.deferredPixelShaderMissing);
+	f.state.enablePShaders = false;
+	Require(!f.cache.GetPixelShader(f.shader, requested, SIE::ShaderCache::PixelShaderLookup::Draw));
+	f.state.enablePShaders = true;
+	f.state.developer = true;
+	f.cache.blockedKeyIndex = 0;
+	f.cache.blockedKey = std::to_string(requested);
+	Require(!f.cache.GetPixelShader(f.shader, requested, SIE::ShaderCache::PixelShaderLookup::Draw));
+	Require(f.cache.blockedIDs == std::vector<uint32_t>{ requested });
+	f.cache.blockedKeyIndex = -1;
+	f.state.developer = false;
+	Require(f.cache.GetPixelShader(f.shader, requested, SIE::ShaderCache::PixelShaderLookup::Draw) == retained);
+	const auto publishedRevision = f.cache.pixelShaderEvictionRevision.load();
+	Require(f.cache.Add(f.shader, requested) == ready);
+	Require(f.cache.pixelShaderEvictionRevision.load() == publishedRevision);
+	f.cache.ClearPixelShaders(0);
+	Require(f.cache.pixelShaderEvictionRevision.load() > publishedRevision);
+	Require(retained->shader == ready->shader && retained->id == requested);
+	auto* replacement = f.cache.Add(f.shader, requested);
+	Require(replacement != ready);
+	Require(f.cache.GetPixelShader(f.shader, requested, SIE::ShaderCache::PixelShaderLookup::Draw).get() == replacement);
+	Require(retained.get() == ready && retained->id == requested && !retired.expired());
+	retained.reset();
+	Require(retired.expired());
 }
 void TestUnusedCategoriesStayCold()
 {
@@ -512,7 +564,7 @@ void TestTechniqueAdmission()
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
 	Require(f.current == fallback && f.context.vertex == &nativeVS && !f.state.settingCustomShader);
 	// Depth-only fallback requires a vertex stage but never a pixel variant.
-	f.cache.pixelShaders[0].clear();
+	f.cache.ClearPixelShaders(0);
 	f.cache.compilationSet.requests.clear();
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, true));
 	Require(f.current == nullptr && !f.state.deferredPixelShaderMissing);
@@ -588,6 +640,7 @@ int main()
 				for (bool categories : { false, true }) TestLayoutTransitions(type, categories);
 			TestColdAndFailedVariants();
 			TestExactAndProtectedLookups();
+			TestPositiveSelectionTransitions();
 			TestUnusedCategoriesStayCold();
 			TestBoundGrassVariant();
 			TestNullPixelBinding();

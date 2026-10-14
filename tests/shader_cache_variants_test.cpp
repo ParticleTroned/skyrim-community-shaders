@@ -199,6 +199,7 @@ namespace SIE
 		std::unordered_map<std::string, Blob> shaderMap;
 		std::unordered_set<std::string> deferredEvictions;
 		std::mutex mapMutex, vertexShadersMutex, pixelShadersMutex, computeShadersMutex;
+		std::atomic_uint64_t vertexShaderEvictionRevision{ 0 }, pixelShaderEvictionRevision{ 0 }, computeShaderEvictionRevision{ 0 };
 		using RuntimeMaps = std::array<std::unordered_map<uint32_t, std::shared_ptr<RuntimeShader>>, RE::BSShader::Total>;
 		RuntimeMaps vertexShaders, pixelShaders, computeShaders;
 		CompilationSet compilationSet;
@@ -575,12 +576,15 @@ namespace
 		bulkLoad.join();
 		Require(cache.capturedShaders.size() == 2);
 		cache.shaderMap[key] = {};
+		const auto compilationGeneration = cache.compilationSet.generation.load();
 		FinishWindow(cache, true);
 		Require(cache.activeShaderCaptureStage == Stage::AwaitingMenuClose);
 		Require(cache.lastScopedClearCount == 2 && releases == 2);
 		Require(cache.shaderMap.empty() && cache.clearedBytecodeThisCaptureCycle.size() == 1);
 		Require(cache.compilationSet.forgotten.size() == 2 && cache.deletedPaths.size() == 2);
 		Require(cache.deletedPaths[0] != cache.deletedPaths[1]);
+		Require(cache.pixelShaderEvictionRevision == 2 && cache.vertexShaderEvictionRevision == 0 && cache.computeShaderEvictionRevision == 0);
+		Require(cache.compilationSet.generation == compilationGeneration);
 		Require(globals::deferred->clears == 1 && loaded.clears == 1 && unloaded.clears == 0);
 
 		cache.shaderMap[key] = {};
@@ -593,6 +597,7 @@ namespace
 		FinishWindow(cache, false);
 		Require(cache.activeShaderCaptureStage == Stage::Idle);
 		Require(cache.lastScopedClearCount == 1 && releases == 3);
+		Require(cache.pixelShaderEvictionRevision == 3 && cache.compilationSet.generation == compilationGeneration);
 		Require(cache.shaderMap.contains(key) && cache.pixelShaders[RE::BSShader::Lighting].contains(10));
 		Require(cache.compilationSet.forgotten.size() == 3 && cache.deletedPaths.size() == 3);
 		Require(globals::deferred->clears == 1 && loaded.clears == 1);
@@ -601,6 +606,7 @@ namespace
 		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
 		FinishWindow(cache, true);
 		Require(releases == 4 && cache.shaderMap.empty());
+		Require(cache.pixelShaderEvictionRevision == 4 && cache.compilationSet.generation == compilationGeneration);
 		Feature::GetFeatureList().clear();
 	}
 
@@ -626,6 +632,7 @@ namespace
 			Require(releases == 0 && cache.shaderMap.contains(key));
 			Require(cache.clearedThisCaptureCycle.empty() && cache.clearedBytecodeThisCaptureCycle.empty());
 			Require(cache.compilationSet.forgotten.empty() && cache.deletedPaths.empty());
+			Require(cache.pixelShaderEvictionRevision == 0);
 			cache.shaderMap[key].status = ShaderCompilationTask::Completed;
 			cache.compilationSet.tasksInProgress.clear();
 			cache.deferredEvictions.clear();
@@ -633,6 +640,7 @@ namespace
 			cache.TrackActiveShader(ShaderClass::Pixel, shader, 7);
 			FinishWindow(cache, false);
 			Require(releases == 1 && cache.shaderMap.empty());
+			Require(cache.pixelShaderEvictionRevision == 1);
 		}
 	}
 
@@ -708,6 +716,7 @@ namespace
 		cache.computeShaders[RE::BSShader::ImageSpace][4] = std::make_shared<RuntimeShader>(releases);
 		FinishWindow(cache, true);
 		Require(releases == 4 && cache.compilationSet.forgotten.size() == 4);
+		Require(cache.vertexShaderEvictionRevision == 1 && cache.pixelShaderEvictionRevision == 2 && cache.computeShaderEvictionRevision == 1);
 		Require(cache.deletedPaths.size() == 3);
 	}
 }

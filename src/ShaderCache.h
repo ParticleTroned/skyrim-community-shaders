@@ -1122,6 +1122,12 @@ namespace SIE
 			ankerl::unordered_dense::map<uint32_t, std::shared_ptr<ShaderType>>,
 			RE::BSShader::Type::Total>;
 
+		// Ownership distinguishes cache instances even when their addresses are reused.
+		const std::shared_ptr<const uint8_t> residentShaderCacheOwner = std::make_shared<const uint8_t>();
+		std::atomic<uint64_t> vertexShaderEvictionRevision{ 0 };
+		std::atomic<uint64_t> pixelShaderEvictionRevision{ 0 };
+		std::atomic<uint64_t> computeShaderEvictionRevision{ 0 };
+
 		ShaderMapArray<RE::BSGraphics::VertexShader> vertexShaders;
 		ShaderMapArray<RE::BSGraphics::PixelShader> pixelShaders;
 		ShaderMapArray<RE::BSGraphics::ComputeShader> computeShaders;

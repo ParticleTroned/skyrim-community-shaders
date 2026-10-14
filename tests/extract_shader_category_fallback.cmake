@@ -8,6 +8,10 @@ file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRende
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.h" _character_header)
 extract_between("${_cache}" "std::shared_ptr<RE::BSGraphics::PixelShader> ShaderCache::GetPixelShader("
     "std::shared_ptr<RE::BSGraphics::ComputeShader> ShaderCache::GetComputeShader(" "pixel_lookup.h")
+file(READ "${OUTPUT_DIRECTORY}/pixel_lookup.h" _pixel_lookup)
+extract_between("${_cache}" "\ttemplate <ShaderClass Stage, typename ShaderMaps, typename MutexType>"
+    "\n\tstd::shared_ptr<RE::BSGraphics::VertexShader> ShaderCache::GetVertexShaderIfCached(" "pixel_lookup.h")
+file(APPEND "${OUTPUT_DIRECTORY}/pixel_lookup.h" "\n${_pixel_lookup}")
 extract_between("${_header}" "static constexpr uint32_t GetCharacterCategoryFlag("
     "std::shared_ptr<RE::BSGraphics::PixelShader> GetPixelShader(" "category_flag.h")
 extract_between("${_hooks}" "struct BSShader__BeginTechnique_SetPixelShader"

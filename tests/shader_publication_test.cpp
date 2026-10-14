@@ -76,6 +76,7 @@ namespace
 	struct MapMutex
 	{
 		std::mutex mutex;
+		std::function<void()> beforeUnlock;
 		void lock()
 		{
 			mutex.lock();
@@ -83,6 +84,8 @@ namespace
 		}
 		void unlock()
 		{
+			if (beforeUnlock)
+				beforeUnlock();
 			--heldMapLocks;
 			mutex.unlock();
 		}
@@ -420,6 +423,7 @@ namespace SIE
 		void Clear(RE::BSShader::Type);
 		void ClearShaderMap(RE::BSShader::Type);
 		MapMutex vertexShadersMutex, pixelShadersMutex, computeShadersMutex;
+		std::atomic_uint64_t vertexShaderEvictionRevision{ 0 }, pixelShaderEvictionRevision{ 0 }, computeShaderEvictionRevision{ 0 };
 		template <class T>
 		using Maps = std::array<ankerl::unordered_dense::map<uint32_t, std::shared_ptr<T>,
 									ankerl::unordered_dense::hash<uint32_t>, std::equal_to<uint32_t>, TestAllocator<std::pair<uint32_t, std::shared_ptr<T>>>>,
@@ -620,7 +624,7 @@ namespace
 	}
 
 	template <class Make, class Maps>
-	void CheckLifetime(Make make, Maps maps, MapMutex SIE::ShaderCache::* mutex)
+	void CheckLifetime(Make make, Maps maps, MapMutex SIE::ShaderCache::* mutex, std::atomic_uint64_t SIE::ShaderCache::* revision)
 	{
 		for (unsigned operation = 0; operation < 3; ++operation) {
 			ID3D11Device device;
@@ -632,8 +636,13 @@ namespace
 				return (cache.*make)(shader, descriptor, std::nullopt);
 			};
 			auto reader = create(20);
+			auto selectedOwner = reader;
 			create(21);
 			create(22, RE::BSShader::Type::ImageSpace);
+			const auto selectedRevision = (cache.*revision).load();
+			SIE::ReleaseShader(cache.*maps, cache.*mutex, cache.*revision, RE::BSShader::Type::Lighting, 99);
+			SIE::ReleaseShader(cache.*maps, cache.*mutex, cache.*revision, RE::BSShader::Type::Total, 20);
+			Require((cache.*revision).load() == selectedRevision);
 			using Wrapper = typename decltype(reader)::element_type;
 			Util::ShaderLifetime::RetainedBinding<Wrapper> binding;
 			Wrapper* nativeCurrent = nullptr;
@@ -649,10 +658,16 @@ namespace
 				reader.reset();
 			}));
 			Require(gate.WaitUntilEntered());
+			bool invalidatedUnderLock = false;
+			(cache.*mutex).beforeUnlock = [&] {
+				invalidatedUnderLock = heldMapLocks > 0 && (cache.*revision).load() > selectedRevision && !(cache.*maps)[0].contains(20);
+			};
 			if (operation == 0)
-				SIE::ReleaseShader(cache.*maps, cache.*mutex, RE::BSShader::Type::Lighting, 20);
+				SIE::ReleaseShader(cache.*maps, cache.*mutex, cache.*revision, RE::BSShader::Type::Lighting, 20);
 			else
-				SIE::RetireShaders(cache.*maps, cache.*mutex, operation == 1 ? std::optional<size_t>{ 0 } : std::nullopt);
+				SIE::RetireShaders(cache.*maps, cache.*mutex, cache.*revision, operation == 1 ? std::optional<size_t>{ 0 } : std::nullopt);
+			(cache.*mutex).beforeUnlock = {};
+			Require(invalidatedUnderLock && (cache.*revision).load() > selectedRevision);
 			Require(!(cache.*maps)[0].contains(20));
 			Require((cache.*maps)[0].contains(21) == (operation == 0));
 			Require((cache.*maps)[1].contains(22) == (operation != 2));
@@ -670,14 +685,18 @@ namespace
 			Require(observations.released == before + operation);
 			gate.Resume();
 			gate.workers[0].get();
+			Require(!retired.expired() && observations.released == before + operation);
+			selectedOwner.reset();
 			Require(retired.expired() && observations.released == before + operation + 1);
-			SIE::RetireShaders(cache.*maps, cache.*mutex);
+			const auto replacementRevision = (cache.*revision).load();
+			SIE::RetireShaders(cache.*maps, cache.*mutex, cache.*revision);
+			Require((cache.*revision).load() > replacementRevision);
 			Require(nativeCurrent == replacement.get() && nativeCurrent->id == 23);
 		}
 	}
 
 	template <class Make, class Maps>
-	void CheckClearOrdering(Make make, Maps maps)
+	void CheckClearOrdering(Make make, Maps maps, std::atomic_uint64_t SIE::ShaderCache::* revision)
 	{
 		for (bool scoped : { false, true }) {
 			ID3D11Device device;
@@ -694,6 +713,7 @@ namespace
 			cache.hlslToShaderMap["Lighting.hlsl"] = {};
 			cache.hlslToShaderMap["ImageSpace.hlsl"] = {};
 			const auto generation = cache.compilationSet.generation.load();
+			const auto selectedRevision = (cache.*revision).load();
 			bool recreated = false, ordered = false, metadataLocked = false, diskOrdered = scoped;
 			cache.compilationSet.duringBump = [&] {
 				metadataLocked = cache.mapMutex.HeldByCurrentThread() && (scoped || cache.hlslMapMutex.HeldByCurrentThread());
@@ -705,7 +725,7 @@ namespace
 			};
 			target->shader->duringFinalRelease = [&] {
 				std::unique_lock metadata(cache.mapMutex, std::try_to_lock);
-				ordered = metadata.owns_lock() && cache.compilationSet.generation > generation;
+				ordered = metadata.owns_lock() && cache.compilationSet.generation > generation && (cache.*revision).load() > selectedRevision;
 				if (metadata.owns_lock()) {
 					ordered &= !cache.shaderMap.contains("Lighting") && cache.shaderMap.contains("ImageSpace") == scoped;
 					metadata.unlock();
@@ -722,11 +742,12 @@ namespace
 			Require(metadataLocked && diskOrdered && cache.compilationSet.generation == generation + 2);
 			Require(ordered && recreated && (cache.*maps)[0].contains(31) && !(cache.*maps)[0].contains(30));
 			Require((cache.*maps)[1].contains(32) == scoped);
+			Require(cache.vertexShaderEvictionRevision.load() > 0 && cache.pixelShaderEvictionRevision.load() > 0 && cache.computeShaderEvictionRevision.load() > 0);
 		}
 	}
 
 	template <class Make, class Maps>
-	void CheckStage(Make make, Maps maps, MapMutex SIE::ShaderCache::* mutex)
+	void CheckStage(Make make, Maps maps, MapMutex SIE::ShaderCache::* mutex, std::atomic_uint64_t SIE::ShaderCache::* revision)
 	{
 		ID3D11Device device;
 		SIE::ShaderCache cache;
@@ -736,6 +757,7 @@ namespace
 			return (cache.*make)(shader, descriptor, generation);
 		};
 		const auto live = cache.compilationSet.generation.load();
+		const auto selectedRevision = (cache.*revision).load();
 		const auto mapSize = [&] { return (cache.*maps)[0].size(); };
 		auto resident = create(1, live);
 		Require(resident && resident->shader && resident->id == 1 && mapSize() == 1);
@@ -842,6 +864,7 @@ namespace
 		Require(observations.released == beforeInvalidatedSlot + 1);
 		Require((cache.*maps)[0].at(1) == resident && (cache.*maps)[0].at(3) == firstResult);
 		Require(create(4) != nullptr && mapSize() == 3);
+		Require((cache.*revision).load() == selectedRevision);
 	}
 }
 
@@ -852,15 +875,15 @@ int main()
 		CheckMetadataTransactions();
 		CheckBytecodeHooks();
 		CheckRetainedBinding();
-		CheckStage(&SIE::ShaderCache::MakeAndAddVertexShader, &SIE::ShaderCache::vertexShaders, &SIE::ShaderCache::vertexShadersMutex);
-		CheckLifetime(&SIE::ShaderCache::MakeAndAddVertexShader, &SIE::ShaderCache::vertexShaders, &SIE::ShaderCache::vertexShadersMutex);
-		CheckClearOrdering(&SIE::ShaderCache::MakeAndAddVertexShader, &SIE::ShaderCache::vertexShaders);
-		CheckStage(&SIE::ShaderCache::MakeAndAddPixelShader, &SIE::ShaderCache::pixelShaders, &SIE::ShaderCache::pixelShadersMutex);
-		CheckLifetime(&SIE::ShaderCache::MakeAndAddPixelShader, &SIE::ShaderCache::pixelShaders, &SIE::ShaderCache::pixelShadersMutex);
-		CheckClearOrdering(&SIE::ShaderCache::MakeAndAddPixelShader, &SIE::ShaderCache::pixelShaders);
-		CheckStage(&SIE::ShaderCache::MakeAndAddComputeShader, &SIE::ShaderCache::computeShaders, &SIE::ShaderCache::computeShadersMutex);
-		CheckLifetime(&SIE::ShaderCache::MakeAndAddComputeShader, &SIE::ShaderCache::computeShaders, &SIE::ShaderCache::computeShadersMutex);
-		CheckClearOrdering(&SIE::ShaderCache::MakeAndAddComputeShader, &SIE::ShaderCache::computeShaders);
+		CheckStage(&SIE::ShaderCache::MakeAndAddVertexShader, &SIE::ShaderCache::vertexShaders, &SIE::ShaderCache::vertexShadersMutex, &SIE::ShaderCache::vertexShaderEvictionRevision);
+		CheckLifetime(&SIE::ShaderCache::MakeAndAddVertexShader, &SIE::ShaderCache::vertexShaders, &SIE::ShaderCache::vertexShadersMutex, &SIE::ShaderCache::vertexShaderEvictionRevision);
+		CheckClearOrdering(&SIE::ShaderCache::MakeAndAddVertexShader, &SIE::ShaderCache::vertexShaders, &SIE::ShaderCache::vertexShaderEvictionRevision);
+		CheckStage(&SIE::ShaderCache::MakeAndAddPixelShader, &SIE::ShaderCache::pixelShaders, &SIE::ShaderCache::pixelShadersMutex, &SIE::ShaderCache::pixelShaderEvictionRevision);
+		CheckLifetime(&SIE::ShaderCache::MakeAndAddPixelShader, &SIE::ShaderCache::pixelShaders, &SIE::ShaderCache::pixelShadersMutex, &SIE::ShaderCache::pixelShaderEvictionRevision);
+		CheckClearOrdering(&SIE::ShaderCache::MakeAndAddPixelShader, &SIE::ShaderCache::pixelShaders, &SIE::ShaderCache::pixelShaderEvictionRevision);
+		CheckStage(&SIE::ShaderCache::MakeAndAddComputeShader, &SIE::ShaderCache::computeShaders, &SIE::ShaderCache::computeShadersMutex, &SIE::ShaderCache::computeShaderEvictionRevision);
+		CheckLifetime(&SIE::ShaderCache::MakeAndAddComputeShader, &SIE::ShaderCache::computeShaders, &SIE::ShaderCache::computeShadersMutex, &SIE::ShaderCache::computeShaderEvictionRevision);
+		CheckClearOrdering(&SIE::ShaderCache::MakeAndAddComputeShader, &SIE::ShaderCache::computeShaders, &SIE::ShaderCache::computeShaderEvictionRevision);
 		Require(!observations.driverUnderLock && !observations.releaseUnderLock && !observations.namingUnderLock);
 		Require(observations.created == observations.released && observations.named > 0);
 		Require(observations.wrappersCreated == observations.wrappersDestroyed);

@@ -1018,7 +1018,7 @@ namespace SIE
 		HANDLE managementThread = nullptr;
 
 	private:
-		/** @brief Returns true when Clear() invalidated an asynchronous task. */
+		/** @brief Returns true when a cache clear invalidated the captured compilation generation. */
 		bool IsTaskStale(std::optional<uint64_t> a_taskGeneration) const
 		{
 			return a_taskGeneration &&

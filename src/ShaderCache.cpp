@@ -36,6 +36,7 @@
 #include "Utils/ContentHash.h"
 #include "Utils/FileSystem.h"
 #include "Utils/GenerationClaim.h"
+#include "Utils/ResourceName.h"
 #include "Utils/ShaderCacheManifest.h"
 #include "Utils/ShaderCachePack.h"
 #include "Utils/ShaderCompiler.h"
@@ -5544,123 +5545,142 @@ namespace SIE
 		return !modifiedShaderMap.empty() && modifiedShaderMap.contains(a_type) && modifiedShaderMap.at(a_type) > a_current;
 	}
 
+	// Allocate a cache slot before transferring either wrapper or driver-object ownership.
+	template <class EngineShader, class DeviceShader, class Map, class Mutex, class IsCurrent>
+	static EngineShader* PublishPreparedShader(Map& a_map, Mutex& a_mutex, uint32_t a_descriptor,
+		std::unique_ptr<EngineShader>& a_shader, winrt::com_ptr<DeviceShader>& a_deviceShader, IsCurrent&& a_isCurrent)
+	{
+		std::lock_guard lock(a_mutex);
+		if (!a_isCurrent())
+			return nullptr;
+
+		auto [it, inserted] = a_map.try_emplace(a_descriptor);
+		if (!a_isCurrent()) {
+			if (inserted)
+				a_map.erase(it);
+			return nullptr;
+		}
+		if (inserted) {
+			it->second = std::move(a_shader);
+			a_deviceShader.detach();
+		}
+		return it->second.get();
+	}
+
 	RE::BSGraphics::VertexShader* ShaderCache::MakeAndAddVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration)
 	{
-		if (const auto shaderBlob =
-				SShaderCache::CompileShader(ShaderClass::Vertex, shader, descriptor, IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration)) {
-			if (IsTaskStale(a_taskGeneration)) {
-				return nullptr;
-			}
+		// Synchronous callers also need to reject a clear during object creation.
+		a_taskGeneration = a_taskGeneration.value_or(compilationSet.generation.load(std::memory_order_acquire));
+		winrt::com_ptr<ID3DBlob> shaderBlob;
+		shaderBlob.copy_from(SShaderCache::CompileShader(ShaderClass::Vertex, shader, descriptor,
+			IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration));
+		if (!shaderBlob || IsTaskStale(a_taskGeneration))
+			return nullptr;
 
-			auto device = globals::d3d::device;
-
-			auto newShader = SShaderCache::CreateVertexShader(*shaderBlob, shader,
-				descriptor);
-
-			std::lock_guard lockGuard(vertexShadersMutex);
-			if (IsTaskStale(a_taskGeneration)) {
-				logger::debug(
-					"Discarding stale-generation vertex shader {}::{:X}",
-					magic_enum::enum_name(shader.shaderType.get()),
-					descriptor);
-				return nullptr;
-			}
-
-			const auto result = device->CreateVertexShader(shaderBlob->GetBufferPointer(),
-				newShader->byteCodeSize, nullptr, reinterpret_cast<ID3D11VertexShader**>(&newShader->shader));
-			if (FAILED(result)) {
-				logger::error("Failed to create vertex shader {}::{:X}",
-					magic_enum::enum_name(shader.shaderType.get()), descriptor);
-				if (newShader->shader != nullptr) {
-					newShader->shader->Release();
-				}
-			} else {
-				return vertexShaders[static_cast<size_t>(shader.shaderType.get())]
-				    .insert_or_assign(descriptor, std::move(newShader))
-				    .first->second.get();
-			}
+		winrt::com_ptr<ID3D11Device> device;
+		device.copy_from(globals::d3d::device);
+		if (!device) {
+			logger::error("Cannot create vertex shader {}::{:X} without a D3D11 device",
+				magic_enum::enum_name(shader.shaderType.get()), descriptor);
+			return nullptr;
 		}
+		auto newShader = SShaderCache::CreateVertexShader(*shaderBlob, shader, descriptor);
+		winrt::com_ptr<ID3D11VertexShader> candidate;
+		const auto result = device->CreateVertexShader(shaderBlob->GetBufferPointer(),
+			newShader->byteCodeSize, nullptr, candidate.put());
+		if (FAILED(result) || !candidate) {
+			logger::error("Failed to create vertex shader {}::{:X}",
+				magic_enum::enum_name(shader.shaderType.get()), descriptor);
+			return nullptr;
+		}
+		Util::SetResourceName(candidate.get(), "ShaderCache::Vertex %s::%X",
+			magic_enum::enum_name(shader.shaderType.get()).data(), descriptor);
+		newShader->shader = reinterpret_cast<decltype(newShader->shader)>(candidate.get());
+
+		if (auto* published = PublishPreparedShader(vertexShaders[static_cast<size_t>(shader.shaderType.get())],
+				vertexShadersMutex, descriptor, newShader, candidate, [&] { return !IsTaskStale(a_taskGeneration); }))
+			return published;
+		logger::debug("Discarding stale-generation vertex shader {}::{:X}",
+			magic_enum::enum_name(shader.shaderType.get()), descriptor);
 		return nullptr;
 	}
 
 	RE::BSGraphics::PixelShader* ShaderCache::MakeAndAddPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration)
 	{
-		if (const auto shaderBlob =
-				SShaderCache::CompileShader(ShaderClass::Pixel, shader, descriptor, IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration)) {
-			if (IsTaskStale(a_taskGeneration)) {
-				return nullptr;
-			}
+		// Synchronous callers also need to reject a clear during object creation.
+		a_taskGeneration = a_taskGeneration.value_or(compilationSet.generation.load(std::memory_order_acquire));
+		winrt::com_ptr<ID3DBlob> shaderBlob;
+		shaderBlob.copy_from(SShaderCache::CompileShader(ShaderClass::Pixel, shader, descriptor,
+			IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration));
+		if (!shaderBlob || IsTaskStale(a_taskGeneration))
+			return nullptr;
 
-			auto device = globals::d3d::device;
-
-			auto newShader = SShaderCache::CreatePixelShader(*shaderBlob, shader,
-				descriptor);
-
-			std::lock_guard lockGuard(pixelShadersMutex);
-			if (IsTaskStale(a_taskGeneration)) {
-				logger::debug(
-					"Discarding stale-generation pixel shader {}::{:X}",
-					magic_enum::enum_name(shader.shaderType.get()),
-					descriptor);
-				return nullptr;
-			}
-			const auto result = device->CreatePixelShader(shaderBlob->GetBufferPointer(),
-				shaderBlob->GetBufferSize(), nullptr, reinterpret_cast<ID3D11PixelShader**>(&newShader->shader));
-			if (FAILED(result)) {
-				logger::error("Failed to create pixel shader {}::{:X}",
-					magic_enum::enum_name(shader.shaderType.get()),
-					descriptor);
-				if (newShader->shader != nullptr) {
-					newShader->shader->Release();
-				}
-			} else {
-				return pixelShaders[static_cast<size_t>(shader.shaderType.get())]
-				    .insert_or_assign(descriptor, std::move(newShader))
-				    .first->second.get();
-			}
+		winrt::com_ptr<ID3D11Device> device;
+		device.copy_from(globals::d3d::device);
+		if (!device) {
+			logger::error("Cannot create pixel shader {}::{:X} without a D3D11 device",
+				magic_enum::enum_name(shader.shaderType.get()), descriptor);
+			return nullptr;
 		}
+		auto newShader = SShaderCache::CreatePixelShader(*shaderBlob, shader, descriptor);
+		winrt::com_ptr<ID3D11PixelShader> candidate;
+		const auto result = device->CreatePixelShader(shaderBlob->GetBufferPointer(),
+			shaderBlob->GetBufferSize(), nullptr, candidate.put());
+		if (FAILED(result) || !candidate) {
+			logger::error("Failed to create pixel shader {}::{:X}",
+				magic_enum::enum_name(shader.shaderType.get()), descriptor);
+			return nullptr;
+		}
+		Util::SetResourceName(candidate.get(), "ShaderCache::Pixel %s::%X",
+			magic_enum::enum_name(shader.shaderType.get()).data(), descriptor);
+		newShader->shader = reinterpret_cast<decltype(newShader->shader)>(candidate.get());
+
+		if (auto* published = PublishPreparedShader(pixelShaders[static_cast<size_t>(shader.shaderType.get())],
+				pixelShadersMutex, descriptor, newShader, candidate, [&] { return !IsTaskStale(a_taskGeneration); }))
+			return published;
+		logger::debug("Discarding stale-generation pixel shader {}::{:X}",
+			magic_enum::enum_name(shader.shaderType.get()), descriptor);
 		return nullptr;
 	}
 
 	RE::BSGraphics::ComputeShader* ShaderCache::MakeAndAddComputeShader(const RE::BSShader& shader,
 		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration)
 	{
-		if (const auto shaderBlob =
-				SShaderCache::CompileShader(ShaderClass::Compute, shader, descriptor, IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration)) {
-			if (IsTaskStale(a_taskGeneration)) {
-				return nullptr;
-			}
+		// Synchronous callers also need to reject a clear during object creation.
+		a_taskGeneration = a_taskGeneration.value_or(compilationSet.generation.load(std::memory_order_acquire));
+		winrt::com_ptr<ID3DBlob> shaderBlob;
+		shaderBlob.copy_from(SShaderCache::CompileShader(ShaderClass::Compute, shader, descriptor,
+			IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration));
+		if (!shaderBlob || IsTaskStale(a_taskGeneration))
+			return nullptr;
 
-			auto device = globals::d3d::device;
-
-			auto newShader = SShaderCache::CreateComputeShader(*shaderBlob, shader,
-				descriptor);
-
-			std::lock_guard lockGuard(computeShadersMutex);
-			if (IsTaskStale(a_taskGeneration)) {
-				logger::debug(
-					"Discarding stale-generation compute shader {}::{:X}",
-					magic_enum::enum_name(shader.shaderType.get()),
-					descriptor);
-				return nullptr;
-			}
-			const auto result = device->CreateComputeShader(shaderBlob->GetBufferPointer(),
-				shaderBlob->GetBufferSize(), nullptr, reinterpret_cast<ID3D11ComputeShader**>(&newShader->shader));
-			if (FAILED(result)) {
-				logger::error("Failed to create pixel shader {}::{:X}",
-					magic_enum::enum_name(shader.shaderType.get()),
-					descriptor);
-				if (newShader->shader != nullptr) {
-					newShader->shader->Release();
-				}
-			} else {
-				return computeShaders[static_cast<size_t>(shader.shaderType.get())]
-				    .insert_or_assign(descriptor, std::move(newShader))
-				    .first->second.get();
-			}
+		winrt::com_ptr<ID3D11Device> device;
+		device.copy_from(globals::d3d::device);
+		if (!device) {
+			logger::error("Cannot create compute shader {}::{:X} without a D3D11 device",
+				magic_enum::enum_name(shader.shaderType.get()), descriptor);
+			return nullptr;
 		}
+		auto newShader = SShaderCache::CreateComputeShader(*shaderBlob, shader, descriptor);
+		winrt::com_ptr<ID3D11ComputeShader> candidate;
+		const auto result = device->CreateComputeShader(shaderBlob->GetBufferPointer(),
+			shaderBlob->GetBufferSize(), nullptr, candidate.put());
+		if (FAILED(result) || !candidate) {
+			logger::error("Failed to create compute shader {}::{:X}",
+				magic_enum::enum_name(shader.shaderType.get()), descriptor);
+			return nullptr;
+		}
+		Util::SetResourceName(candidate.get(), "ShaderCache::Compute %s::%X",
+			magic_enum::enum_name(shader.shaderType.get()).data(), descriptor);
+		newShader->shader = reinterpret_cast<decltype(newShader->shader)>(candidate.get());
+
+		if (auto* published = PublishPreparedShader(computeShaders[static_cast<size_t>(shader.shaderType.get())],
+				computeShadersMutex, descriptor, newShader, candidate, [&] { return !IsTaskStale(a_taskGeneration); }))
+			return published;
+		logger::debug("Discarding stale-generation compute shader {}::{:X}",
+			magic_enum::enum_name(shader.shaderType.get()), descriptor);
 		return nullptr;
 	}
 

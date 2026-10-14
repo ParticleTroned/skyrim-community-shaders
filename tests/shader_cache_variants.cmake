@@ -6,6 +6,10 @@ foreach(
     _header
     IN
     ITEMS
+        shader_publication_under_test.h
+        shader_generation_check.h
+        shader_bytecode_map.h
+        shader_bytecode_hooks.h
         shader_category_flag.h
         shader_category_prewarm.h
         shader_category_demand.h
@@ -30,6 +34,7 @@ add_custom_command(
     DEPENDS
         src/ShaderCache.h
         src/ShaderCache.cpp
+        src/Hooks.cpp
         src/ShaderCacheSmartClear.cpp
         src/Features/Upscaling.cpp
         tests/extract_shader_cache_variants.cmake
@@ -79,3 +84,13 @@ foreach(_bridge IN ITEMS off on)
     target_include_directories(shader_category_fallback_${_bridge}_test PRIVATE "${_category_fallback_dir}")
 endforeach()
 target_compile_definitions(shader_category_fallback_on_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+
+add_controller_test(
+    shader_publication_test ShaderPublication tests/shader_publication_test.cpp
+)
+target_sources(shader_publication_test PRIVATE ${_shader_variants_headers})
+target_include_directories(shader_publication_test PRIVATE "${_shader_variants_dir}")
+target_link_libraries(shader_publication_test PRIVATE
+    unordered_dense::unordered_dense magic_enum::magic_enum Microsoft::CppWinRT)
+target_compile_definitions(shader_publication_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+set_tests_properties(ShaderPublication PROPERTIES TIMEOUT 30)

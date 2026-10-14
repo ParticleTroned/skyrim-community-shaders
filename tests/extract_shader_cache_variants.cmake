@@ -62,3 +62,24 @@ extract_between(
     "\nbool Upscaling::IsCharacterNeuralRenderingRouteConfigured() const"
     "shader_category_demand.h"
 )
+
+extract_between(
+    "${_source}" "\ttemplate <class EngineShader, class DeviceShader, class Map, class Mutex, class IsCurrent>"
+    "\n\tstd::string ShaderCache::GetDefinesString("
+    "shader_publication_under_test.h"
+)
+
+file(READ "${PROJECT_ROOT}/src/Hooks.cpp" _hooks)
+extract_between(
+    "${_hooks}" "std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;"
+    "\nnamespace" "shader_bytecode_map.h"
+)
+extract_between(
+    "${_hooks}" "void RegisterShaderBytecode(" "\nnamespace"
+    "shader_bytecode_hooks.h"
+)
+
+extract_between(
+    "${_header}" "\t\tbool IsTaskStale(" "\n\t\tvoid StartActiveShaderCaptureWindow("
+    "shader_generation_check.h"
+)

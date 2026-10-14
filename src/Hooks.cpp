@@ -60,6 +60,7 @@
 #include <winrt/base.h>
 
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
+std::mutex shaderBytecodeMapMutex;
 
 namespace
 {
@@ -125,12 +126,15 @@ void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeL
 	auto codeCopy = std::make_unique<uint8_t[]>(BytecodeLength);
 	memcpy(codeCopy.get(), Bytecode, BytecodeLength);
 	logger::debug(fmt::runtime("Saving shader at index {:x} with {} bytes:\t{:x}"), (std::uintptr_t)Shader, BytecodeLength, (std::uintptr_t)Bytecode);
+	std::lock_guard lock(shaderBytecodeMapMutex);
 	ShaderBytecodeMap.emplace(Shader, std::make_pair(std::move(codeCopy), BytecodeLength));
 }
 
 const std::pair<std::unique_ptr<uint8_t[]>, size_t>& GetShaderBytecode(void* Shader)
 {
 	logger::debug(fmt::runtime("Loading shader at index {:x}"), (std::uintptr_t)Shader);
+	std::lock_guard lock(shaderBytecodeMapMutex);
+	// Entries are never erased, so returned bytecode remains valid across insertions.
 	return ShaderBytecodeMap.at(Shader);
 }
 

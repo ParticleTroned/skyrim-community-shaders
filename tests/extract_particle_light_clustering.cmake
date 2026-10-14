@@ -11,7 +11,7 @@ extract_between(
 )
 extract_between(
     "${_source}" "\t\tLightData clusteredLight{};"
-    "\n\t}\n\n\tlightCount =" "particle_light_clustering_under_test.h"
+    "\n\t}\n\n\tPublishParticleLights(" "particle_light_clustering_under_test.h"
 )
 extract_between(
     "${_source}" "\tstatic thread_local eastl::vector<LightData> reusableLightsData;"

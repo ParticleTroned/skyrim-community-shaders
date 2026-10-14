@@ -25,6 +25,7 @@
 #include "RE/B/BSShadowDirectionalLight.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -41,6 +42,12 @@
 static constexpr uint CLUSTER_MAX_LIGHTS = 256;
 static constexpr uint CONTACT_SHADOW_MAX_LIGHTS = 8;
 static constexpr uint MAX_LIGHTS = 1024;
+
+struct LightLimitFix::ParticleLightSnapshot
+{
+	std::array<CachedParticleLight, MAX_LIGHTS> lights{};
+	std::size_t count = 0;
+};
 
 namespace
 {
@@ -1112,7 +1119,8 @@ void LightLimitFix::DrawSettings()
 				ImGui::Text("Significantly improves performance by not rendering empty textures. Only disable if you are encountering issues.");
 			}
 
-			Util::Widgets::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection);
+			if (Util::Widgets::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection))
+				SetParticleLightDetectionEnabled(settings.EnableParticleLightsDetection);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Adds particle lights to the player light level, so that NPCs can detect them for stealth and gameplay.");
 			}
@@ -1319,7 +1327,8 @@ void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 	Util::Widgets::SliderFloat("Cluster Threshold", &settings.ParticleClusterThreshold, kParticleClusterThresholdMin, kParticleClusterThresholdMax, "%.1f");
 	Util::Widgets::SliderInt("Max Particles per Emitter", &settings.MaxParticlesPerEmitter, kMaxParticlesPerEmitterMin, kMaxParticlesPerEmitterMax);
 	Util::Widgets::SliderFloat("Max Particle Distance", &settings.MaxParticleDistance, 1000.0f, kMaxParticleDistanceMax, "%.0f");
-	Util::Widgets::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection);
+	if (Util::Widgets::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection))
+		SetParticleLightDetectionEnabled(settings.EnableParticleLightsDetection);
 
 	ImGui::SeparatorText("Contact Shadows");
 	const char* qualityOptions[] = { "Low", "Medium", "High" };
@@ -1600,6 +1609,7 @@ void LightLimitFix::LoadSettings(json& o_json)
 {
 	runtimeToggle.ReplaceSettings(settings, o_json.get<Settings>(), &Settings::EnableContactShadows);
 	SanitizeSettings(settings);
+	SetParticleLightDetectionEnabled(settings.EnableParticleLightsDetection);
 }
 
 void LightLimitFix::SaveSettings(json& o_json)
@@ -1613,6 +1623,7 @@ void LightLimitFix::RestoreDefaultSettings()
 {
 	runtimeToggle.ReplaceSettings(settings, Settings{}, &Settings::EnableContactShadows);
 	SanitizeSettings(settings);
+	SetParticleLightDetectionEnabled(settings.EnableParticleLightsDetection);
 }
 
 RE::NiNode* GetParentRoomNode(RE::NiAVObject* object)
@@ -1974,7 +1985,34 @@ void LightLimitFix::ApplyJsonPlacedLightIntensityScale(
 	a_light.fade *= settings.JsonPlacedLightIntensity;
 }
 
-float LightLimitFix::CalculateLuminance(CachedParticleLight& light, RE::NiPoint3& point)
+void LightLimitFix::SetParticleLightDetectionEnabled(bool a_enabled)
+{
+	settings.EnableParticleLightsDetection = a_enabled;
+	particleLightsDetectionEnabled.store(a_enabled, std::memory_order_release);
+}
+
+std::shared_ptr<LightLimitFix::ParticleLightSnapshot> LightLimitFix::CreateParticleLightSnapshot()
+{
+	if (!particleLightsDetectionEnabled.load(std::memory_order_acquire))
+		return {};
+	try {
+		auto snapshot = std::make_shared<ParticleLightSnapshot>();
+		particleLightSnapshotAllocationFailed.store(false, std::memory_order_relaxed);
+		return snapshot;
+	} catch (const std::bad_alloc&) {
+		if (!particleLightSnapshotAllocationFailed.exchange(true, std::memory_order_relaxed))
+			logger::warn("Particle-light detection snapshot allocation failed; rendered lights remain enabled");
+		return {};
+	}
+}
+
+void LightLimitFix::PublishParticleLights(std::shared_ptr<const ParticleLightSnapshot> a_snapshot)
+{
+	// Retired storage is released after the atomic exchange, outside publication synchronization.
+	cachedParticleLights.exchange(std::move(a_snapshot), std::memory_order_acq_rel);
+}
+
+float LightLimitFix::CalculateLuminance(const CachedParticleLight& light, const RE::NiPoint3& point)
 {
 	// See BSLight::CalculateLuminance_14131D3D0
 	// Performs lighting on the CPU which is identical to GPU code
@@ -1989,20 +2027,21 @@ float LightLimitFix::CalculateLuminance(CachedParticleLight& light, RE::NiPoint3
 
 void LightLimitFix::AddParticleLightLuminance(RE::NiPoint3& targetPosition, int& numHits, float& lightLevel)
 {
+	if (!particleLightsDetectionEnabled.load(std::memory_order_acquire))
+		return;
 	auto shaderCache = globals::shaderCache;
-
-	if (!shaderCache->IsEnabled())
+	if (!shaderCache || !shaderCache->IsEnabled())
 		return;
 
-	std::shared_lock<std::shared_mutex> lk{ cachedParticleLightsMutex };
+	const auto snapshot = cachedParticleLights.load(std::memory_order_acquire);
+	if (!snapshot)
+		return;
 	int particleLightsDetectionHits = 0;
-	if (settings.EnableParticleLightsDetection) {
-		for (auto& light : cachedParticleLights) {
-			auto luminance = CalculateLuminance(light, targetPosition);
-			lightLevel += luminance;
-			if (luminance > 0.0)
-				particleLightsDetectionHits++;
-		}
+	for (std::size_t index = 0; index < snapshot->count; ++index) {
+		auto luminance = CalculateLuminance(snapshot->lights[index], targetPosition);
+		lightLevel += luminance;
+		if (luminance > 0.0)
+			particleLightsDetectionHits++;
 	}
 	numHits += particleLightsDetectionHits;
 }
@@ -2015,6 +2054,7 @@ void LightLimitFix::Prepass()
 		!contactShadowIndexList || !contactShadowGrid ||
 		!lights->srv || !lightIndexList->srv || !lightGrid->srv ||
 		!contactShadowIndexList->srv || !contactShadowGrid->srv) {
+		PublishParticleLights({});
 		return;
 	}
 
@@ -3206,6 +3246,7 @@ float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radi
 void LightLimitFix::AddCachedParticleLights(
 	eastl::vector<LightData>& lightsData,
 	LightLimitFix::LightData& light,
+	ParticleLightSnapshot* a_detectionSnapshot,
 	const ResolvedBillboardLight* a_billboardLight)
 {
 	if (lightsData.size() >= MAX_LIGHTS) {
@@ -3252,13 +3293,13 @@ void LightLimitFix::AddCachedParticleLights(
 		light.invRadius = 1.f / light.radius;
 		lightsData.push_back(light);
 
-		if (cachedParticleLights.size() < MAX_LIGHTS) {
+		if (a_detectionSnapshot && a_detectionSnapshot->count < a_detectionSnapshot->lights.size()) {
 			CachedParticleLight cachedParticleLight{};
 			cachedParticleLight.grey = float3(light.color.x, light.color.y, light.color.z).Dot(luminanceWeights) * luminanceScale;
 			cachedParticleLight.radius = light.radius;
 			cachedParticleLight.position = { light.positionWS[0].data.x + eyePositionCached[0].x, light.positionWS[0].data.y + eyePositionCached[0].y, light.positionWS[0].data.z + eyePositionCached[0].z };
 
-			cachedParticleLights.push_back(cachedParticleLight);
+			a_detectionSnapshot->lights[a_detectionSnapshot->count++] = cachedParticleLight;
 		}
 	}
 }
@@ -3276,10 +3317,7 @@ void LightLimitFix::UpdateLights()
 {
 	ZoneScopedN("LLF::UpdateLights");
 
-	auto clearCachedParticleLights = [&]() {
-		std::lock_guard<std::shared_mutex> lk{ cachedParticleLightsMutex };
-		cachedParticleLights.clear();
-	};
+	auto clearCachedParticleLights = [&]() { PublishParticleLights({}); };
 
 	auto context = globals::d3d::context;
 	if (!context || !lights || !lights->resource) {
@@ -3329,6 +3367,7 @@ void LightLimitFix::UpdateLights()
 	lightsData.reserve(MAX_LIGHTS);
 	const bool isInterior = LocationContext::Get().inInterior;
 	RefreshJsonPlacedLightCacheFrame();
+	std::shared_ptr<ParticleLightSnapshot> detectionSnapshot;
 
 	// Process point lights
 
@@ -3434,9 +3473,6 @@ void LightLimitFix::UpdateLights()
 
 	{
 		CS_PROFILE_CPU_SCOPE("LightLimitFix::ParticleLightsCPU");
-		std::lock_guard<std::shared_mutex> lk{ cachedParticleLightsMutex };
-		cachedParticleLights.clear();
-
 		LightData clusteredLight{};
 		uint32_t clusteredLights = 0;
 
@@ -3460,7 +3496,7 @@ void LightLimitFix::UpdateLights()
 			clusteredLight.lightFlags.set(LightFlags::Simple);
 			clusteredLight.lightFlags.set(LightFlags::Particle);
 			clusteredLight.lightFlags.set(LightFlags::AffectWater);
-			AddCachedParticleLights(lightsData, clusteredLight);
+			AddCachedParticleLights(lightsData, clusteredLight, detectionSnapshot.get());
 
 			clusteredLights = 0;
 			clusteredLight = {};
@@ -3581,10 +3617,12 @@ void LightLimitFix::UpdateLights()
 			light.lightFlags.set(LightFlags::Simple);
 			light.lightFlags.set(LightFlags::Particle);
 			light.lightFlags.set(LightFlags::AffectWater);
-			AddCachedParticleLights(lightsData, light, &a_billboardLight);
+			AddCachedParticleLights(lightsData, light, detectionSnapshot.get(), &a_billboardLight);
 		};
 
 		std::lock_guard<std::mutex> currentLock{ currentParticleLightsMutex };
+		if (lightsData.size() < MAX_LIGHTS && (!currentParticleEmitters.empty() || !currentBillboardLights.empty()))
+			detectionSnapshot = CreateParticleLightSnapshot();
 		std::size_t emitterIndex = 0;
 		std::size_t billboardIndex = 0;
 		while (emitterIndex < currentParticleEmitters.size() || billboardIndex < currentBillboardLights.size()) {
@@ -3605,6 +3643,8 @@ void LightLimitFix::UpdateLights()
 
 		flushClusteredLight();
 	}
+
+	PublishParticleLights(std::move(detectionSnapshot));
 
 	lightCount = std::min((uint)lightsData.size(), MAX_LIGHTS);
 

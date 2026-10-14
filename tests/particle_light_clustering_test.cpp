@@ -199,6 +199,8 @@ namespace
 		std::vector<ParticleEmitterLight> currentParticleEmitters;
 		std::vector<ResolvedBillboardLight> currentBillboardLights;
 		std::mutex currentParticleLightsMutex;
+		std::shared_ptr<void> detectionSnapshot;
+		static std::shared_ptr<void> CreateParticleLightSnapshot() { return {}; }
 
 		static Vector3 Saturation(Vector3 a_color, float a_saturation)
 		{
@@ -210,7 +212,7 @@ namespace
 			a_light.positionWS[0].data = a_position - eyePositionCached[0];
 			a_light.positionWS[1].data = a_position - eyePositionCached[eyeCount == 2 ? 1 : 0];
 		}
-		void AddCachedParticleLights(std::vector<LightData>& a_output, LightData& a_light, const ResolvedBillboardLight* = nullptr)
+		void AddCachedParticleLights(std::vector<LightData>& a_output, LightData& a_light, void*, const ResolvedBillboardLight* = nullptr)
 		{
 			// Conditions use unfaded lights; retain the production capacity and positive-light gates.
 			if (a_output.size() < MAX_LIGHTS && a_light.radius > 1e-4f &&

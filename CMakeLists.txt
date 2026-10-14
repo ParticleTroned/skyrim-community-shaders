@@ -2411,6 +2411,90 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(ParticleLightClustering PROPERTIES TIMEOUT 30)
 
+    add_controller_test(
+        particle_light_detection_test
+        ParticleLightDetection
+        tests/particle_light_detection_test.cpp
+    )
+    set(_particle_light_detection_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/particle-light-detection"
+    )
+    set(_particle_light_detection_test_headers)
+    foreach(
+        _part
+        IN
+        ITEMS cap snapshot methods emission update_guard prepass_guard
+    )
+        list(
+            APPEND _particle_light_detection_test_headers
+            "${_particle_light_detection_test_dir}/particle_light_detection_${_part}_under_test.h"
+        )
+    endforeach()
+    add_custom_command(
+        OUTPUT ${_particle_light_detection_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_particle_light_detection_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_particle_light_detection.cmake"
+        DEPENDS
+            src/Features/LightLimitFix.cpp
+            tests/extract_particle_light_detection.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    target_sources(
+        particle_light_detection_test
+        PRIVATE ${_particle_light_detection_test_headers}
+    )
+    target_include_directories(
+        particle_light_detection_test
+        PRIVATE "${_particle_light_detection_test_dir}"
+    )
+    set_tests_properties(ParticleLightDetection PROPERTIES TIMEOUT 30)
+
+    if(MSVC)
+        # Particle arithmetic must also exercise the DLL's Release FP model.
+        foreach(_particle_kind IN ITEMS Clustering Detection)
+            string(TOLOWER "${_particle_kind}" _particle_domain)
+            set(_particle_sources
+                "particle_light_${_particle_domain}_test_sources"
+            )
+            set(_particle_fast_target
+                "particle_light_${_particle_domain}_fast_fp_test"
+            )
+            add_custom_target(
+                ${_particle_sources}
+                DEPENDS ${_particle_light_${_particle_domain}_test_headers}
+            )
+            add_dependencies(
+                particle_light_${_particle_domain}_test
+                ${_particle_sources}
+            )
+            add_controller_test(
+                ${_particle_fast_target}
+                ParticleLight${_particle_kind}FastFP
+                tests/particle_light_${_particle_domain}_test.cpp
+            )
+            add_dependencies(${_particle_fast_target} ${_particle_sources})
+            target_sources(
+                ${_particle_fast_target}
+                PRIVATE ${_particle_light_${_particle_domain}_test_headers}
+            )
+            target_include_directories(
+                ${_particle_fast_target}
+                PRIVATE "${_particle_light_${_particle_domain}_test_dir}"
+            )
+            target_compile_options(
+                ${_particle_fast_target}
+                PRIVATE "$<$<CONFIG:Release>:/fp:fast>"
+            )
+            set_tests_properties(
+                ParticleLight${_particle_kind}FastFP
+                PROPERTIES TIMEOUT 30
+            )
+        endforeach()
+    endif()
+
     set(_vr_scene_guards_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-scene-guards"
     )

@@ -14,8 +14,8 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
-#include <shared_mutex>
 #include <unordered_map>
 #include <wrl/client.h>
 
@@ -30,6 +30,10 @@ private:
 	using SceneLightSnapshot = LightLimitFixDetail::SceneLightSnapshot<RE::NiPointer<RE::BSLight>>;
 	LightLimitFixDetail::SceneLightSnapshotCache<RE::ShadowSceneNode, SceneLightSnapshot> sceneLightSnapshots;
 	bool sceneLightSnapshotFailed = false;
+	struct ParticleLightSnapshot;
+	void SetParticleLightDetectionEnabled(bool a_enabled);
+	std::shared_ptr<ParticleLightSnapshot> CreateParticleLightSnapshot();
+	void PublishParticleLights(std::shared_ptr<const ParticleLightSnapshot> a_snapshot);
 	/// Retain VR lights on the render thread until frame or load reset.
 	const SceneLightSnapshot* GetSceneLightSnapshot(RE::ShadowSceneNode* a_node);
 	/// Select live native VR shadow work and retain its owner through each render call.
@@ -325,7 +329,7 @@ public:
 		if (a_enabled) {
 			settings.EnableParticleLights = defaults.EnableParticleLights;
 			settings.EnableParticleLightsCulling = defaults.EnableParticleLightsCulling;
-			settings.EnableParticleLightsDetection = defaults.EnableParticleLightsDetection;
+			SetParticleLightDetectionEnabled(defaults.EnableParticleLightsDetection);
 			settings.ParticleClusterThreshold = defaults.ParticleClusterThreshold;
 			settings.MaxParticlesPerEmitter = defaults.MaxParticlesPerEmitter;
 			settings.MaxParticleDistance = defaults.MaxParticleDistance;
@@ -375,7 +379,7 @@ public:
 
 		settings.EnableParticleLights = a_state.value("EnableParticleLights", settings.EnableParticleLights);
 		settings.EnableParticleLightsCulling = a_state.value("EnableParticleLightsCulling", settings.EnableParticleLightsCulling);
-		settings.EnableParticleLightsDetection = a_state.value("EnableParticleLightsDetection", settings.EnableParticleLightsDetection);
+		SetParticleLightDetectionEnabled(a_state.value("EnableParticleLightsDetection", settings.EnableParticleLightsDetection));
 		settings.ParticleClusterThreshold = a_state.value("ParticleClusterThreshold", settings.ParticleClusterThreshold);
 		settings.MaxParticlesPerEmitter = a_state.value("MaxParticlesPerEmitter", settings.MaxParticlesPerEmitter);
 		settings.MaxParticleDistance = a_state.value("MaxParticleDistance", settings.MaxParticleDistance);
@@ -399,7 +403,8 @@ public:
 	void PrepareShaderCache() override;
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
-	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, const ResolvedBillboardLight* a_billboardLight = nullptr);
+	/** Admit a rendered light and append detection data only to an unpublished snapshot. */
+	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLightSnapshot* a_detectionSnapshot, const ResolvedBillboardLight* a_billboardLight = nullptr);
 	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached = true);
 	void RefreshJsonPlacedLightCacheFrame();
 	bool IsJsonPlacedLight(RE::BSLight* a_bsLight, RE::NiLight* a_niLight);
@@ -473,12 +478,16 @@ public:
 
 	void BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
 
-	std::shared_mutex cachedParticleLightsMutex;
-	eastl::vector<CachedParticleLight> cachedParticleLights;
+private:
+	std::atomic<std::shared_ptr<const ParticleLightSnapshot>> cachedParticleLights;
+	std::atomic_bool particleLightsDetectionEnabled{ settings.EnableParticleLightsDetection };
+	std::atomic_bool particleLightSnapshotAllocationFailed{ false };
 
+public:
 	eastl::hash_map<RE::NiNode*, uint8_t> roomNodes;
 
-	float CalculateLuminance(CachedParticleLight& light, RE::NiPoint3& point);
+	/** Evaluate a cached light without mutating its published data. */
+	float CalculateLuminance(const CachedParticleLight& light, const RE::NiPoint3& point);
 	void AddParticleLightLuminance(RE::NiPoint3& targetPosition, int& numHits, float& lightLevel);
 
 	struct Hooks

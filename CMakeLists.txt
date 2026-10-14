@@ -2387,6 +2387,7 @@ if(BUILD_CONTROLLER_TESTS)
     set(_particle_light_clustering_test_headers
         "${_particle_light_clustering_test_dir}/particle_light_cap_under_test.h"
         "${_particle_light_clustering_test_dir}/particle_light_clustering_under_test.h"
+        "${_particle_light_clustering_test_dir}/particle_light_scratch_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_particle_light_clustering_test_headers}

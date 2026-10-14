@@ -1,14 +1,18 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <initializer_list>
 #include <iostream>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <source_location>
+#include <utility>
 #include <vector>
 
 namespace
@@ -74,7 +78,12 @@ namespace
 				Vector3 translate;
 			} world;
 			RuntimeData& GetParticleSystemRuntimeData() { return runtime; }
-			ModelData& GetModelData() { return model; }
+			unsigned modelReads = 0;
+			ModelData& GetModelData()
+			{
+				++modelReads;
+				return model;
+			}
 		};
 		struct NiPSysData
 		{
@@ -91,10 +100,12 @@ namespace
 			std::vector<float> sizes;
 			std::vector<Vector3> positions;
 			std::vector<NiColorA> colors;
-			std::uint32_t GetActiveVertexCount() const { return static_cast<std::uint32_t>(radii.size()); }
+			std::optional<std::uint32_t> activeCount;
+			std::uint32_t GetActiveVertexCount() const { return activeCount.value_or(static_cast<std::uint32_t>(radii.size())); }
 			RuntimeData& GetParticlesRuntimeData()
 			{
-				runtime = { radii.data(), sizes.data(), positions.data(), colors.empty() ? nullptr : colors.data(), GetActiveVertexCount(), GetActiveVertexCount() };
+				const auto allocatedCount = static_cast<std::uint32_t>(radii.size());
+				runtime = { radii.data(), sizes.data(), positions.data(), colors.empty() ? nullptr : colors.data(), allocatedCount, allocatedCount };
 				return runtime;
 			}
 		};
@@ -146,6 +157,28 @@ namespace
 	{
 		Require(a_maxDistance == 0);
 		return false;
+	}
+
+	namespace eastl
+	{
+		template <class T>
+		using vector = std::vector<T>;
+	}
+	namespace SKSE::stl
+	{
+		template <class Callback>
+		struct scope_exit
+		{
+			explicit scope_exit(Callback a_callback) : callback(std::move(a_callback)) {}
+			~scope_exit() { callback(); }
+			Callback callback;
+		};
+	}
+
+	void WithReusableLightData(const std::function<void(std::vector<LightData>&)>& a_action)
+	{
+#include "particle_light_scratch_under_test.h"
+		a_action(lightsData);
 	}
 
 	struct Fixture
@@ -276,10 +309,12 @@ namespace
 			auto& emitter = fixture.currentParticleEmitters[0];
 			emitter.particleData->sizes = { 1, 1 };
 			emitter.particleData->positions = { { 12, 22, 32 }, { 16, 24, 34 } };
+			emitter.color = { 0.5f, 0.25f, 1, 0.5f };
+			fixture.settings.ParticleBrightness = 2;
 			emitter.particleData->colors = { { 1, 0, 0, 0.5f }, { 0, 1, 0, 1 } };
 			fixture.Run();
 			Require(fixture.lightsData.size() == 1);
-			CheckLight(fixture.lightsData[0], 30, { 0.5f, 1, 0 }, { 4, 3, 3 });
+			CheckLight(fixture.lightsData[0], 30, { 0.25f, 0.25f, 0 }, { 4, 3, 3 });
 			Require(fixture.lightsData[0].positionWS[1].data == (eyes == 2 ? Vector3{ 2, 2, 0 } : Vector3{ 4, 3, 3 }));
 		}
 
@@ -290,6 +325,74 @@ namespace
 		Require(disabled.lightsData.size() == 3);
 		for (const auto& light : disabled.lightsData)
 			CheckLight(light, 20, { 1, 1, 1 });
+	}
+
+	void TestEmitterCoordinates()
+	{
+		enum class Coordinates
+		{
+			Worldspace,
+			Local,
+			FirstPerson
+		};
+		const float nan = std::numeric_limits<float>::quiet_NaN();
+		for (const int eyes : { 1, 2 }) {
+			for (const auto coordinates : { Coordinates::Worldspace, Coordinates::Local, Coordinates::FirstPerson }) {
+				Fixture fixture;
+				fixture.eyeCount = eyes;
+				fixture.eyePositionCached = { Vector3{ 1, 1, 1 }, Vector3{ 2, 3, 4 } };
+				fixture.currentParticleEmitters = { Emitter({ 10, 10, 10 }) };
+				auto& emitter = fixture.currentParticleEmitters[0];
+				emitter.particleData->positions = { { 1, 2, 3 }, { 3, 4, 5 }, { 5, 6, 7 } };
+				auto& node = *emitter.node;
+				node.runtime.isWorldspace = coordinates == Coordinates::Worldspace;
+				node.model.modelBound.radius = 2;
+				node.world.scale = 3;
+				node.worldBound.radius = coordinates == Coordinates::FirstPerson ? 7.0f : 6.0f;
+				node.worldBound.center = { nan, nan, nan };
+				node.world.translate = { nan, nan, nan };
+				Vector3 translation;
+				if (coordinates == Coordinates::Local) {
+					translation = { 10, 20, 30 };
+					node.world.translate = translation;
+				} else if (coordinates == Coordinates::FirstPerson) {
+					translation = { 20, 30, 40 };
+					node.worldBound.center = translation;
+				}
+				fixture.Run();
+				Require(fixture.lightsData.size() == 1);
+				Require(node.modelReads == (coordinates == Coordinates::Worldspace ? 0u : 1u));
+				const Vector3 position{ 2 + translation.x, 3 + translation.y, 4 + translation.z };
+				CheckLight(fixture.lightsData[0], 10, { 3, 3, 3 }, position);
+				Require(fixture.lightsData[0].positionWS[1].data == (eyes == 2 ? position - Vector3{ 1, 2, 3 } : position));
+			}
+		}
+
+		Fixture inactive;
+		inactive.currentParticleEmitters = { Emitter({ 10 }) };
+		inactive.currentParticleEmitters[0].node->runtime.isWorldspace = false;
+		inactive.currentParticleEmitters[0].particleData->activeCount = 0;
+		inactive.Run();
+		Require(inactive.lightsData.empty() && inactive.currentParticleEmitters[0].node->modelReads == 0);
+	}
+
+	void TestTranslationRoundingOrder()
+	{
+		const float large = std::ldexp(1.0f, 24);
+		for (const bool firstPerson : { false, true }) {
+			Fixture fixture;
+			fixture.eyePositionCached[0] = { large, 0, 0 };
+			fixture.currentParticleEmitters = { Emitter({ 10, 10, 10 }) };
+			auto& emitter = fixture.currentParticleEmitters[0];
+			emitter.particleData->positions.assign(3, { 1, 0, 0 });
+			emitter.node->runtime.isWorldspace = false;
+			emitter.node->worldBound.radius = firstPerson ? 2.0f : 1.0f;
+			emitter.node->world.translate = { firstPerson ? 0.0f : large, 0, 0 };
+			emitter.node->worldBound.center = { firstPerson ? large : 0.0f, 0, 0 };
+			fixture.Run();
+			Require(fixture.lightsData.size() == 1 && emitter.node->modelReads == 1);
+			CheckLight(fixture.lightsData[0], 10, { 3, 3, 3 });
+		}
 	}
 
 	void TestInvalidEffectiveRadius()
@@ -326,6 +429,88 @@ namespace
 				CheckLight(fixture.lightsData[1], radius, { 1, 1, 1 });
 			}
 		}
+	}
+
+	void TestScratchReuse()
+	{
+		LightData* storage = nullptr;
+		std::size_t capacity = 0;
+		WithReusableLightData([&](auto& a_lights) {
+			Require(a_lights.empty() && a_lights.capacity() >= MAX_LIGHTS);
+			storage = a_lights.data();
+			capacity = a_lights.capacity();
+			a_lights.resize(3);
+			a_lights[0].radius = 101;
+		});
+		WithReusableLightData([&](auto& a_lights) {
+			Require(a_lights.empty() && a_lights.data() == storage && a_lights.capacity() == capacity);
+			a_lights.emplace_back();
+			a_lights[0].radius = 102;
+			Require(a_lights.size() == 1 && a_lights[0].radius == 102);
+		});
+		WithReusableLightData([&](auto& a_lights) {
+			Require(a_lights.empty() && a_lights.data() == storage && a_lights.capacity() == capacity);
+		});
+	}
+
+	void TestNestedScratchReuse()
+	{
+		LightData* outerStorage = nullptr;
+		WithReusableLightData([&](auto& a_outer) {
+			Require(a_outer.empty());
+			outerStorage = a_outer.data();
+			a_outer.emplace_back();
+			a_outer[0].radius = 11;
+			LightData* innerStorage = nullptr;
+			for (const float radius : { 21.0f, 22.0f }) {
+				WithReusableLightData([&](auto& a_inner) {
+					Require(a_inner.empty() && a_inner.data() != outerStorage);
+					if (innerStorage)
+						Require(a_inner.data() == innerStorage);
+					innerStorage = a_inner.data();
+					a_inner.emplace_back();
+					a_inner[0].radius = radius;
+				});
+				Require(a_outer.data() == outerStorage && a_outer.size() == 1 && a_outer[0].radius == 11);
+			}
+		});
+		WithReusableLightData([&](auto& a_lights) { Require(a_lights.empty() && a_lights.data() == outerStorage); });
+	}
+
+	void TestScratchExceptionRecovery()
+	{
+		struct ExpectedFailure
+		{};
+		LightData* outerStorage = nullptr;
+		LightData* innerStorage = nullptr;
+		bool innerCaught = false;
+		bool outerCaught = false;
+		try {
+			WithReusableLightData([&](auto& a_outer) {
+				Require(a_outer.empty());
+				outerStorage = a_outer.data();
+				a_outer.emplace_back();
+				a_outer[0].radius = 31;
+				try {
+					WithReusableLightData([&](auto& a_inner) {
+						Require(a_inner.empty() && a_inner.data() != outerStorage);
+						innerStorage = a_inner.data();
+						a_inner.emplace_back();
+						a_inner[0].radius = 41;
+						throw ExpectedFailure{};
+					});
+				} catch (const ExpectedFailure&) {
+					innerCaught = true;
+				}
+				Require(innerCaught && a_outer.data() == outerStorage && a_outer.size() == 1 && a_outer[0].radius == 31);
+				WithReusableLightData([&](auto& a_inner) { Require(a_inner.empty() && a_inner.data() == innerStorage); });
+				throw ExpectedFailure{};
+			});
+		} catch (const ExpectedFailure&) {
+			outerCaught = true;
+		}
+		Require(outerCaught);
+		WithReusableLightData([&](auto& a_lights) { Require(a_lights.empty() && a_lights.data() == outerStorage); });
 	}
 
 	void TestBillboardOrderAndBudget()
@@ -365,8 +550,13 @@ int main()
 	TestParticleSizeScaling();
 	TestThresholds();
 	TestAveragingAndStereo();
+	TestEmitterCoordinates();
+	TestTranslationRoundingOrder();
 	TestInvalidEffectiveRadius();
 	TestRadiusSumOverflow();
+	TestScratchReuse();
+	TestNestedScratchReuse();
+	TestScratchExceptionRecovery();
 	TestBillboardOrderAndBudget();
 	std::cout << "Particle effective-radius clustering, validity, averaging, stereo and budget order passed\n";
 }

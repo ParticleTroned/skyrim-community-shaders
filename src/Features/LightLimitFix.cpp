@@ -3318,7 +3318,14 @@ void LightLimitFix::UpdateLights()
 		eyePositionCached[eyeIndex] = { eyePosition.x, eyePosition.y, eyePosition.z };
 	}
 
+	// Active calls own their buffer so nested updates cannot overwrite outer light data.
+	static thread_local eastl::vector<LightData> reusableLightsData;
 	eastl::vector<LightData> lightsData{};
+	lightsData.swap(reusableLightsData);
+	const SKSE::stl::scope_exit recycleLightsData([&] {
+		lightsData.clear();
+		lightsData.swap(reusableLightsData);
+	});
 	lightsData.reserve(MAX_LIGHTS);
 	const bool isInterior = LocationContext::Get().inInterior;
 	RefreshJsonPlacedLightCacheFrame();
@@ -3490,7 +3497,19 @@ void LightLimitFix::UpdateLights()
 
 			const std::uint32_t maxPerEmitter = static_cast<std::uint32_t>(std::max(1, settings.MaxParticlesPerEmitter));
 			numVertices = std::min(numVertices, maxPerEmitter);
+			if (numVertices == 0) {
+				return;
+			}
 			const float saturation = ResolveParticleSaturation(settings.ParticleLightsSaturation, a_particleEmitter.saturationMult);
+			const float emitterAlpha = a_particleEmitter.color.alpha;
+			const float3 emitterColor{ a_particleEmitter.color.red, a_particleEmitter.color.green, a_particleEmitter.color.blue };
+			const bool isWorldspace = particleSystemRuntimeData.isWorldspace;
+			RE::NiPoint3 emitterTranslation{};
+			if (!isWorldspace) {
+				// First-person meshes use the world-bound center instead of world translation.
+				const bool isFirstPerson = (particleSystem->GetModelData().modelBound.radius * particleSystem->world.scale) != particleSystem->worldBound.radius;
+				emitterTranslation = isFirstPerson ? particleSystem->worldBound.center : particleSystem->world.translate;
+			}
 
 			for (std::uint32_t p = 0; p < numVertices; p++) {
 				if (lightsData.size() >= MAX_LIGHTS) {
@@ -3504,15 +3523,8 @@ void LightLimitFix::UpdateLights()
 				}
 
 				auto initialPosition = particleRuntimeData.positions[p];
-				if (!particleSystemRuntimeData.isWorldspace) {
-					// Detect first-person meshes.
-					if ((particleSystem->GetModelData().modelBound.radius * particleSystem->world.scale) != particleSystem->worldBound.radius) {
-						const auto& center = particleSystem->worldBound.center;
-						initialPosition = { initialPosition.x + center.x, initialPosition.y + center.y, initialPosition.z + center.z };
-					} else {
-						const auto& translate = particleSystem->world.translate;
-						initialPosition = { initialPosition.x + translate.x, initialPosition.y + translate.y, initialPosition.z + translate.z };
-					}
+				if (!isWorldspace) {
+					initialPosition = { initialPosition.x + emitterTranslation.x, initialPosition.y + emitterTranslation.y, initialPosition.z + emitterTranslation.z };
 				}
 
 				RE::NiPoint3 positionWS{
@@ -3537,12 +3549,8 @@ void LightLimitFix::UpdateLights()
 					}
 				}
 
-				float alpha = a_particleEmitter.color.alpha;
-				float3 color{
-					a_particleEmitter.color.red,
-					a_particleEmitter.color.green,
-					a_particleEmitter.color.blue
-				};
+				float alpha = emitterAlpha;
+				float3 color = emitterColor;
 				if (particleRuntimeData.color) {
 					alpha *= particleRuntimeData.color[p].alpha;
 					color.x *= particleRuntimeData.color[p].red;

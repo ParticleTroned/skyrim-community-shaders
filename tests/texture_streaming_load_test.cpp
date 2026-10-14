@@ -128,8 +128,13 @@ namespace Util
 	}
 	namespace FileHelpers
 	{
-		bool WriteTextFileAtomic(const std::filesystem::path& path, std::string_view contents, std::string&, bool)
+		bool failWrite = false;
+		bool WriteTextFileAtomic(const std::filesystem::path& path, std::string_view contents, std::string& error, bool)
 		{
+			if (failWrite) {
+				error = "Injected persistence failure";
+				return false;
+			}
 			std::ofstream stream(path, std::ios::binary | std::ios::trunc);
 			stream.write(contents.data(), contents.size());
 			return bool(stream);
@@ -157,7 +162,19 @@ namespace Util
 		static std::uint64_t Add(std::uint64_t a, std::uint64_t b) { return a + b; }
 	};
 }
+namespace StreamingTextures::LoadHooks
+{
+	std::function<void()> duringSerialization;
+	nlohmann::json SerializeCatalogEntry(const RememberedSize& value)
+	{
+		if (duringSerialization)
+			duringSerialization();
+		return SerializeRememberedSize(value);
+	}
+}
+#define SerializeRememberedSize SerializeCatalogEntry
 #include "streaming_load_under_test.h"
+#undef SerializeRememberedSize
 namespace globals::d3d
 {
 	ID3D11Device* device = nullptr;
@@ -365,6 +382,39 @@ int main()
 			file >> saved;
 		}
 		Require(saved.at("entries").empty(), "Invalidation was not persisted on shutdown");
+		const std::string changedPath = "textures\\architecture\\changed.dds";
+		Hooks::Remember(changedPath, entry);
+		const auto snapshotRevision = Hooks::catalog.revision;
+		bool serialized = false;
+		Hooks::duringSerialization = [&] {
+			bool available = false;
+			std::jthread reader([&] {
+				std::unique_lock lock(Hooks::catalog.mutex, std::try_to_lock);
+				available = lock.owns_lock();
+			});
+			reader.join();
+			Require(available, "JSON serialization blocked catalog readers");
+			if (!std::exchange(serialized, true)) {
+				auto updated = entry;
+				updated.drop = 1;
+				Hooks::Remember(changedPath, updated);
+			}
+		};
+		Hooks::catalog.Save();
+		Hooks::duringSerialization = {};
+		Require(serialized && Hooks::catalog.savedRevision == snapshotRevision && Hooks::Status().at("unsaved"), "A concurrent mutation was incorrectly marked saved");
+		{
+			std::ifstream file(cachePath);
+			file >> saved;
+		}
+		Require(ParseRememberedSize(changedPath, saved.at("entries").at(changedPath)) == entry, "Serialization did not retain the captured entry value");
+		const auto failuresBefore = Hooks::catalog.failures;
+		Util::FileHelpers::failWrite = true;
+		Hooks::catalog.Save();
+		Require(Hooks::catalog.savedRevision == snapshotRevision && Hooks::catalog.failures == failuresBefore + 1 && !Hooks::catalog.error.empty(), "Failed persistence lost the dirty revision or error");
+		Util::FileHelpers::failWrite = false;
+		Hooks::catalog.Save();
+		Require(!Hooks::Status().at("unsaved") && Hooks::catalog.error.empty(), "Persistence did not retry the newer revision");
 		std::filesystem::remove(cachePath);
 		std::filesystem::remove(Util::PathHelpers::testPath);
 		std::cout << "PASS: remembered source validation, load hooks, cap and reserve controls, persistence and ownership transfer\n";

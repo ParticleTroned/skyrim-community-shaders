@@ -9,6 +9,8 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace StreamingTextures::LoadHooks
 {
@@ -44,19 +46,24 @@ namespace StreamingTextures::LoadHooks
 			}
 			void Save()
 			{
-				nlohmann::json document;
+				std::vector<std::pair<std::string, RememberedSize>> snapshot;
+				std::filesystem::path destination;
 				std::uint64_t version;
 				{
 					std::scoped_lock lock(mutex);
 					if (revision == savedRevision || !ready)
 						return;
 					version = revision;
-					document = { { "version", 1 }, { "entries", nlohmann::json::object() } };
-					for (const auto& [name, value] : entries)
-						document["entries"][name] = SerializeRememberedSize(value);
+					destination = path;
+					snapshot.reserve(entries.size());
+					for (const auto& entry : entries)
+						snapshot.push_back(entry);
 				}
+				nlohmann::json document = { { "version", 1 }, { "entries", nlohmann::json::object() } };
+				for (const auto& [name, value] : snapshot)
+					document["entries"][name] = SerializeRememberedSize(value);
 				std::string message;
-				if (!Util::FileHelpers::WriteTextFileAtomic(path, document.dump(), message, false)) {
+				if (!Util::FileHelpers::WriteTextFileAtomic(destination, document.dump(), message, false)) {
 					std::scoped_lock lock(mutex);
 					error = message;
 					++failures;

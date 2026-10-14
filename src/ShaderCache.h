@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Utils/ShaderCreation.h"
+
 #include <BS_thread_pool.hpp>
 #include <atomic>
 #include <condition_variable>
@@ -232,7 +234,7 @@ namespace SIE
 		};
 		ShaderCompilationTask(ShaderClass shaderClass, const RE::BSShader& shader,
 			uint32_t descriptor);
-		void Perform() const;
+		void Perform(Util::ShaderCreation::Attempt& a_attempt) const;
 
 		size_t GetId() const;
 		static size_t MakeId(ShaderClass shaderClass, RE::BSShader::Type shaderType, uint32_t descriptor);
@@ -316,7 +318,7 @@ namespace SIE
 
 		std::optional<ShaderCompilationTask> WaitTake(std::stop_token stoken);
 		void Add(const ShaderCompilationTask& task);
-		void Complete(const ShaderCompilationTask& task);
+		void Complete(const ShaderCompilationTask& task, Util::ShaderCreation::Result a_result);
 		/** @brief Frees a dispatch slot and wakes WaitTake(). Call for every
 		 *  dispatched task, including stale-generation and stopped tasks. */
 		void ReleaseDispatchSlot();
@@ -674,11 +676,14 @@ namespace SIE
 			uint32_t descriptor);
 
 		std::shared_ptr<RE::BSGraphics::VertexShader> MakeAndAddVertexShader(const RE::BSShader& shader,
-			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt,
+			Util::ShaderCreation::Attempt* a_attempt = nullptr);
 		std::shared_ptr<RE::BSGraphics::PixelShader> MakeAndAddPixelShader(const RE::BSShader& shader,
-			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt,
+			Util::ShaderCreation::Attempt* a_attempt = nullptr);
 		std::shared_ptr<RE::BSGraphics::ComputeShader> MakeAndAddComputeShader(const RE::BSShader& shader,
-			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt,
+			Util::ShaderCreation::Attempt* a_attempt = nullptr);
 
 		static std::string GetDefinesString(const RE::BSShader& shader, uint32_t descriptor);
 

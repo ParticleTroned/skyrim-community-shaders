@@ -5787,14 +5787,24 @@ namespace SIE
 	}
 
 	std::shared_ptr<RE::BSGraphics::VertexShader> ShaderCache::MakeAndAddVertexShader(const RE::BSShader& shader,
-		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration)
+		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration, Util::ShaderCreation::Attempt* a_attempt)
 	{
+		if (a_attempt)
+			a_attempt->result = Util::ShaderCreation::Result::CompileFailed;
 		// Synchronous callers also need to reject a clear during object creation.
 		a_taskGeneration = a_taskGeneration.value_or(compilationSet.generation.load(std::memory_order_acquire));
-		auto shaderBlob = SShaderCache::CompileShader(ShaderClass::Vertex, shader, descriptor,
-			IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration);
-		if (!shaderBlob || IsTaskStale(a_taskGeneration))
+		auto shaderBlob = a_attempt && a_attempt->bytecode ? a_attempt->bytecode : SShaderCache::CompileShader(ShaderClass::Vertex, shader, descriptor, IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration);
+		if (IsTaskStale(a_taskGeneration)) {
+			if (a_attempt)
+				a_attempt->result = Util::ShaderCreation::Result::Stale;
 			return nullptr;
+		}
+		if (!shaderBlob)
+			return nullptr;
+		if (a_attempt) {
+			a_attempt->bytecode = shaderBlob;
+			a_attempt->result = Util::ShaderCreation::Result::CreationFailed;
+		}
 
 		winrt::com_ptr<ID3D11Device> device;
 		device.copy_from(globals::d3d::device);
@@ -5804,8 +5814,11 @@ namespace SIE
 			return nullptr;
 		}
 		auto newShader = SShaderCache::CreateVertexShader(*shaderBlob, shader, descriptor);
-		if (!newShader)
+		if (!newShader) {
+			if (a_attempt)
+				a_attempt->result = Util::ShaderCreation::Result::ReflectionFailed;
 			return nullptr;
+		}
 		winrt::com_ptr<ID3D11VertexShader> candidate;
 		const auto result = device->CreateVertexShader(shaderBlob->GetBufferPointer(),
 			newShader->byteCodeSize, nullptr, candidate.put());
@@ -5819,22 +5832,37 @@ namespace SIE
 		newShader->shader = reinterpret_cast<decltype(newShader->shader)>(candidate.get());
 
 		if (auto published = PublishPreparedShader(vertexShaders[static_cast<size_t>(shader.shaderType.get())],
-				vertexShadersMutex, descriptor, newShader, candidate, [&] { return !IsTaskStale(a_taskGeneration); }))
+				vertexShadersMutex, descriptor, newShader, candidate, [&] { return !IsTaskStale(a_taskGeneration); })) {
+			if (a_attempt)
+				a_attempt->result = Util::ShaderCreation::Result::Published;
 			return published;
+		}
+		if (a_attempt)
+			a_attempt->result = Util::ShaderCreation::Result::Stale;
 		logger::debug("Discarding stale-generation vertex shader {}::{:X}",
 			magic_enum::enum_name(shader.shaderType.get()), descriptor);
 		return nullptr;
 	}
 
 	std::shared_ptr<RE::BSGraphics::PixelShader> ShaderCache::MakeAndAddPixelShader(const RE::BSShader& shader,
-		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration)
+		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration, Util::ShaderCreation::Attempt* a_attempt)
 	{
+		if (a_attempt)
+			a_attempt->result = Util::ShaderCreation::Result::CompileFailed;
 		// Synchronous callers also need to reject a clear during object creation.
 		a_taskGeneration = a_taskGeneration.value_or(compilationSet.generation.load(std::memory_order_acquire));
-		auto shaderBlob = SShaderCache::CompileShader(ShaderClass::Pixel, shader, descriptor,
-			IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration);
-		if (!shaderBlob || IsTaskStale(a_taskGeneration))
+		auto shaderBlob = a_attempt && a_attempt->bytecode ? a_attempt->bytecode : SShaderCache::CompileShader(ShaderClass::Pixel, shader, descriptor, IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration);
+		if (IsTaskStale(a_taskGeneration)) {
+			if (a_attempt)
+				a_attempt->result = Util::ShaderCreation::Result::Stale;
 			return nullptr;
+		}
+		if (!shaderBlob)
+			return nullptr;
+		if (a_attempt) {
+			a_attempt->bytecode = shaderBlob;
+			a_attempt->result = Util::ShaderCreation::Result::CreationFailed;
+		}
 
 		winrt::com_ptr<ID3D11Device> device;
 		device.copy_from(globals::d3d::device);
@@ -5844,8 +5872,11 @@ namespace SIE
 			return nullptr;
 		}
 		auto newShader = SShaderCache::CreatePixelShader(*shaderBlob, shader, descriptor);
-		if (!newShader)
+		if (!newShader) {
+			if (a_attempt)
+				a_attempt->result = Util::ShaderCreation::Result::ReflectionFailed;
 			return nullptr;
+		}
 		winrt::com_ptr<ID3D11PixelShader> candidate;
 		const auto result = device->CreatePixelShader(shaderBlob->GetBufferPointer(),
 			shaderBlob->GetBufferSize(), nullptr, candidate.put());
@@ -5859,22 +5890,37 @@ namespace SIE
 		newShader->shader = reinterpret_cast<decltype(newShader->shader)>(candidate.get());
 
 		if (auto published = PublishPreparedShader(pixelShaders[static_cast<size_t>(shader.shaderType.get())],
-				pixelShadersMutex, descriptor, newShader, candidate, [&] { return !IsTaskStale(a_taskGeneration); }))
+				pixelShadersMutex, descriptor, newShader, candidate, [&] { return !IsTaskStale(a_taskGeneration); })) {
+			if (a_attempt)
+				a_attempt->result = Util::ShaderCreation::Result::Published;
 			return published;
+		}
+		if (a_attempt)
+			a_attempt->result = Util::ShaderCreation::Result::Stale;
 		logger::debug("Discarding stale-generation pixel shader {}::{:X}",
 			magic_enum::enum_name(shader.shaderType.get()), descriptor);
 		return nullptr;
 	}
 
 	std::shared_ptr<RE::BSGraphics::ComputeShader> ShaderCache::MakeAndAddComputeShader(const RE::BSShader& shader,
-		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration)
+		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration, Util::ShaderCreation::Attempt* a_attempt)
 	{
+		if (a_attempt)
+			a_attempt->result = Util::ShaderCreation::Result::CompileFailed;
 		// Synchronous callers also need to reject a clear during object creation.
 		a_taskGeneration = a_taskGeneration.value_or(compilationSet.generation.load(std::memory_order_acquire));
-		auto shaderBlob = SShaderCache::CompileShader(ShaderClass::Compute, shader, descriptor,
-			IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration);
-		if (!shaderBlob || IsTaskStale(a_taskGeneration))
+		auto shaderBlob = a_attempt && a_attempt->bytecode ? a_attempt->bytecode : SShaderCache::CompileShader(ShaderClass::Compute, shader, descriptor, IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration);
+		if (IsTaskStale(a_taskGeneration)) {
+			if (a_attempt)
+				a_attempt->result = Util::ShaderCreation::Result::Stale;
 			return nullptr;
+		}
+		if (!shaderBlob)
+			return nullptr;
+		if (a_attempt) {
+			a_attempt->bytecode = shaderBlob;
+			a_attempt->result = Util::ShaderCreation::Result::CreationFailed;
+		}
 
 		winrt::com_ptr<ID3D11Device> device;
 		device.copy_from(globals::d3d::device);
@@ -5897,8 +5943,13 @@ namespace SIE
 		newShader->shader = reinterpret_cast<decltype(newShader->shader)>(candidate.get());
 
 		if (auto published = PublishPreparedShader(computeShaders[static_cast<size_t>(shader.shaderType.get())],
-				computeShadersMutex, descriptor, newShader, candidate, [&] { return !IsTaskStale(a_taskGeneration); }))
+				computeShadersMutex, descriptor, newShader, candidate, [&] { return !IsTaskStale(a_taskGeneration); })) {
+			if (a_attempt)
+				a_attempt->result = Util::ShaderCreation::Result::Published;
 			return published;
+		}
+		if (a_attempt)
+			a_attempt->result = Util::ShaderCreation::Result::Stale;
 		logger::debug("Discarding stale-generation compute shader {}::{:X}",
 			magic_enum::enum_name(shader.shaderType.get()), descriptor);
 		return nullptr;
@@ -6585,15 +6636,24 @@ namespace SIE
 		                               static_cast<double>(start.QuadPart - task.GetEnqueuedQpc()) * 1000.0 / freq.QuadPart :
 		                               0.0;
 
-		try {
-			task.Perform();
-		} catch (const std::exception& e) {
-			logger::error("Unhandled exception compiling shader task {}: {}", taskKey, e.what());
-			ResolvePendingFailure(taskKey, task.GetGeneration());
-		} catch (...) {
-			logger::error("Unhandled non-standard exception compiling shader task {}", taskKey);
-			ResolvePendingFailure(taskKey, task.GetGeneration());
-		}
+		Util::ShaderCreation::Attempt attempt;
+		const auto result = Util::ShaderCreation::Run(attempt, [&] {
+			try {
+				task.Perform(attempt);
+			} catch (const std::exception& e) {
+				logger::error("Unhandled exception compiling shader task {}: {}", taskKey, e.what());
+				ResolvePendingFailure(taskKey, task.GetGeneration());
+				attempt.result = Util::ShaderCreation::Result::CompileFailed;
+			} catch (...) {
+				logger::error("Unhandled non-standard exception compiling shader task {}", taskKey);
+				ResolvePendingFailure(taskKey, task.GetGeneration());
+				attempt.result = Util::ShaderCreation::Result::CompileFailed;
+			} }, [&](std::chrono::milliseconds delay) {
+			std::mutex retryMutex;
+			std::condition_variable_any retryWake;
+			std::unique_lock lock(retryMutex);
+			retryWake.wait_for(lock, stoken, delay, [] { return false; });
+			return !stoken.stop_requested() && !IsTaskStale(task.GetGeneration()); });
 
 		QueryPerformanceCounter(&end);
 		const double elapsedMs = static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / freq.QuadPart;
@@ -6657,7 +6717,7 @@ namespace SIE
 			return;
 		}
 
-		compilationSet.Complete(task);
+		compilationSet.Complete(task, result);
 		ApplyDeferredEviction(taskKey, true);
 	}
 
@@ -6669,18 +6729,25 @@ namespace SIE
 		cachedPriority(ComputePriority(aShaderClass, aShader, aDescriptor))
 	{}
 
-	void ShaderCompilationTask::Perform() const
+	void ShaderCompilationTask::Perform(Util::ShaderCreation::Attempt& a_attempt) const
 	{
 		ZoneScoped;
 		ZoneText(GetString().c_str(), GetString().size());
 
-		if (shaderClass == ShaderClass::Vertex) {
-			ShaderCache::Instance().MakeAndAddVertexShader(shader, descriptor, GetGeneration());
-		} else if (shaderClass == ShaderClass::Pixel) {
-			ShaderCache::Instance().MakeAndAddPixelShader(shader, descriptor, GetGeneration());
-		} else if (shaderClass == ShaderClass::Compute) {
-			ShaderCache::Instance().MakeAndAddComputeShader(shader, descriptor, GetGeneration());
+		try {
+			if (shaderClass == ShaderClass::Vertex)
+				ShaderCache::Instance().MakeAndAddVertexShader(shader, descriptor, GetGeneration(), &a_attempt);
+			else if (shaderClass == ShaderClass::Pixel)
+				ShaderCache::Instance().MakeAndAddPixelShader(shader, descriptor, GetGeneration(), &a_attempt);
+			else if (shaderClass == ShaderClass::Compute)
+				ShaderCache::Instance().MakeAndAddComputeShader(shader, descriptor, GetGeneration(), &a_attempt);
+		} catch (const std::bad_alloc&) {
+			if (a_attempt.result != Util::ShaderCreation::Result::CreationFailed || !a_attempt.bytecode)
+				throw;
+			logger::warn("Runtime shader allocation failed; retaining bytecode for bounded retry");
 		}
+		if (ShaderCache::Instance().IsTaskStale(GetGeneration()))
+			a_attempt.result = Util::ShaderCreation::Result::Stale;
 	}
 
 	size_t ShaderCompilationTask::GetId() const
@@ -6873,11 +6940,10 @@ namespace SIE
 		}
 	}
 
-	void CompilationSet::Complete(const ShaderCompilationTask& task)
+	void CompilationSet::Complete(const ShaderCompilationTask& task, Util::ShaderCreation::Result a_result)
 	{
 		auto& cache = ShaderCache::Instance();
 		auto key = task.GetString();
-		auto shaderBlob = cache.GetCompletedShader(task);
 
 		bool shouldLogCompletion = false;
 		bool batchBecameTerminal = false;
@@ -6908,11 +6974,11 @@ namespace SIE
 			QueryPerformanceCounter(&now);
 
 			// Update task counters
-			if (shaderBlob) {
+			if (a_result == Util::ShaderCreation::Result::Published) {
 				logger::debug("Compiling Task succeeded: {}", key);
 				completedTasks++;
 			} else {
-				logger::debug("Compiling Task failed: {}", key);
+				logger::warn("Shader runtime publication failed ({}): {}", magic_enum::enum_name(a_result), key);
 				failedTasks++;
 			}
 			completedPriorityWeight += static_cast<uint64_t>(task.GetPriority()) + 1;

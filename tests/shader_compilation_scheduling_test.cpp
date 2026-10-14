@@ -8,6 +8,7 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <magic_enum/magic_enum.hpp>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -17,6 +18,13 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+struct ID3DBlob
+{
+	unsigned AddRef() { return 1; }
+	unsigned Release() { return 1; }
+};
+#include "Utils/ShaderCreation.h"
 
 namespace
 {
@@ -125,10 +133,11 @@ namespace SIE
 			return std::to_string(id);
 		}
 		std::filesystem::path GetSourcePath() const { return {}; }
-		void Perform() const
+		void Perform(Util::ShaderCreation::Attempt& attempt) const
 		{
 			if (work)
 				work();
+			attempt.result = Util::ShaderCreation::Result::Published;
 		}
 	};
 }
@@ -159,11 +168,20 @@ namespace SIE
 		std::set<ShaderCompilationTask, TaskPriorityLess> availableTasks, tasksInProgress, processedTasks;
 		std::vector<SlowTaskRecord> slowTaskRecords;
 		ShaderCache* owner = nullptr;
-		unsigned completeCalls = 0;
+		std::atomic<int64_t> completionTime{};
+		std::atomic<uint64_t> diskHitTasks{}, diskHitPriorityWeight{}, completedPriorityWeight{}, contentDedupeTasks{}, activeReuseTasks{}, previousReuseTasks{};
+		std::atomic<bool> compilationPhaseStarted{};
+		LARGE_INTEGER totalTime{}, frequency{};
+		CompilationSet()
+		{
+			QueryPerformanceFrequency(&frequency);
+			QueryPerformanceCounter(&lastCalculation);
+		}
+		static std::string GetHumanTime(double) { return "test"; }
 		std::optional<ShaderCompilationTask> WaitTake(std::stop_token stop);
 		void Add(const ShaderCompilationTask& task);
 		void ReleaseDispatchSlot();
-		void Complete(const ShaderCompilationTask& task);
+		void Complete(const ShaderCompilationTask& task, Util::ShaderCreation::Result result);
 		bool IsCurrentGeneration(const ShaderCompilationTask& task) const { return task.GetGeneration() == generation.load(); }
 	};
 	struct ShaderCache
@@ -175,6 +193,8 @@ namespace SIE
 		unsigned resolvedFailures = 0, retiredTasks = 0;
 		bool taskFailed = false;
 		ShaderCache() { compilationSet.owner = this; }
+		static ShaderCache& Instance();
+		bool IsShaderLoadedFromDisk(const std::string&) { return false; }
 		bool IsCompiling();
 		void TryCompleteStartupCompilationPhase();
 		bool SetBackgroundCompilation(bool value);
@@ -205,19 +225,20 @@ namespace SIE
 #include "shader_compilation_phase_under_test.h"
 #include "shader_compilation_worker_under_test.h"
 
-	void CompilationSet::Complete(const ShaderCompilationTask& task)
+	ShaderCache& ShaderCache::Instance() { return *globals::shaderCache; }
+	struct CompileDedupe
 	{
-		std::lock_guard lock(compilationMutex);
-		++completeCalls;
-		if (!IsCurrentGeneration(task))
-			return;
-		if (owner->taskFailed)
-			++failedTasks;
-		else
-			++completedTasks;
-		tasksInProgress.erase(task);
-		processedTasks.insert(task);
+		uint64_t RetainedBytes() const { return 0; }
+		uint64_t DroppedBlobs() const { return 0; }
+		void Clear() {}
+	};
+	CompileDedupe& GetCompileDedupe()
+	{
+		static CompileDedupe value;
+		return value;
 	}
+	void FlushShaderCacheManifest() {}
+#include "shader_compilation_completion_under_test.h"
 }
 
 namespace
@@ -312,11 +333,28 @@ namespace
 				"Only a current running task may apply worker priority");
 			Require(cache.resolvedFailures == (condition == 2 || condition == 3 ? 1u : 0u),
 				"Standard and unknown compiler exceptions must resolve pending failures");
-			Require(cache.compilationSet.completeCalls == (condition == 2 || condition == 3 ? 1u : 0u),
+			Require(cache.compilationSet.completedTasks + cache.compilationSet.failedTasks == (condition == 2 || condition == 3 ? 1u : 0u),
 				"Stopped tasks must release admission independently of completion bookkeeping");
 			cache.compilationSet.ReleaseDispatchSlot();
 			Require(cache.compilationSet.dispatchedTasksInFlight == 0,
 				"Recovered dispatch admission must return to zero without underflow");
+		}
+	}
+
+	void CheckPublicationCompletion()
+	{
+		using Util::ShaderCreation::Result;
+		for (auto result : { Result::Published, Result::CompileFailed, Result::ReflectionFailed, Result::CreationFailed }) {
+			CacheBinding binding;
+			auto& cache = binding.cache;
+			Queue(cache, 1);
+			auto task = Take(cache);
+			cache.compilationSet.Complete(task, result);
+			cache.compilationSet.ReleaseDispatchSlot();
+			Require(cache.compilationSet.completedTasks == (result == Result::Published ? 1u : 0u), "Only a published runtime wrapper completes successfully");
+			Require(cache.compilationSet.failedTasks == (result == Result::Published ? 0u : 1u), "Bytecode alone cannot turn runtime failure into success");
+			Queue(cache, 1);
+			Require(cache.compilationSet.availableTasks.empty(), "Terminal work cannot restart from every draw");
 		}
 	}
 
@@ -397,6 +435,7 @@ int main()
 	try {
 		CheckWorkerPriorityAndProgress();
 		CheckTerminalAdmissionRecovery();
+		CheckPublicationCompletion();
 		CheckBudgetTransitions();
 		CheckStartupPhaseBoundary();
 		std::cout << "Shader compilation scheduling: phase priority, progress, admission recovery and budget wakeups passed\n";

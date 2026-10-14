@@ -155,3 +155,8 @@ extract_between(
     "${_source}" "\tstd::pair<ShaderCache::ClaimResult, winrt::com_ptr<ID3DBlob>>"
     "\n\tvoid ShaderCache::ResolvePendingFailure(" "shader_blob_claim_under_test.h"
 )
+
+extract_between(
+    "${_source}" "\tvoid ShaderCompilationTask::Perform("
+    "\n\tsize_t ShaderCompilationTask::GetId(" "shader_task_perform_under_test.h"
+)

@@ -4,6 +4,7 @@ set(_compilation_scheduling_dir
 set(_compilation_scheduling_headers)
 foreach(_header IN ITEMS
     shader_compilation_priority_under_test.h
+    shader_compilation_completion_under_test.h
     shader_compilation_worker_under_test.h
     shader_compilation_admission_under_test.h
     shader_compilation_mode_under_test.h
@@ -44,3 +45,5 @@ endforeach()
 set_tests_properties(
     ShaderCompilationPriority ShaderCompilationScheduling PROPERTIES TIMEOUT 15
 )
+
+target_link_libraries(shader_compilation_scheduling_test PRIVATE Microsoft::CppWinRT magic_enum::magic_enum)

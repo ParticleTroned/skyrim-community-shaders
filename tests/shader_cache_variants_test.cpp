@@ -130,6 +130,11 @@ namespace efsw
 	using Action = Actions;
 }
 
+namespace Util::ShaderCreation
+{
+	struct Attempt;
+}
+
 namespace SIE
 {
 #include "shader_task_declarations.h"

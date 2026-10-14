@@ -35,3 +35,8 @@ extract_between(
     "${_header}" "struct TaskPriorityLess"
     "\nnamespace SIE" "shader_compilation_comparison_under_test.h"
 )
+
+extract_between(
+    "${_cache}" "\tvoid CompilationSet::Complete("
+    "\n\tvoid CompilationSet::IncCacheHit(" "shader_compilation_completion_under_test.h"
+)

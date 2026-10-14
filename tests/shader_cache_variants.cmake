@@ -8,6 +8,7 @@ foreach(
     ITEMS
         shader_blob_lookup_under_test.h
         shader_blob_claim_under_test.h
+        shader_task_perform_under_test.h
         shader_publication_under_test.h
         shader_reflection_under_test.h
         shader_factories_under_test.h

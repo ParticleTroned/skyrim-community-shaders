@@ -36,6 +36,7 @@ namespace
 {
 	std::atomic<unsigned> arraysAllocated{ 0 }, arraysFreed{ 0 };
 	thread_local bool failNextGlobalAllocation = false;
+	std::function<void()> duringResourceName;
 	thread_local bool failNextMetadataAllocation = false;
 	thread_local unsigned heldMetadataLocks = 0;
 	thread_local std::function<void()> afterMetadataUnlock;
@@ -228,6 +229,8 @@ struct ID3DBlob
 	size_t GetBufferSize() const { return bytes.size(); }
 };
 
+#include "Utils/ShaderCreation.h"
+
 struct ID3D11Device
 {
 	std::atomic<unsigned> references{ 1 };
@@ -297,6 +300,8 @@ namespace Util
 	void SetResourceName(ShaderObject*, const char*, ...)
 	{
 		++observations.named;
+		if (duringResourceName)
+			duringResourceName();
 		if (heldMapLocks)
 			observations.namingUnderLock = true;
 	}
@@ -311,6 +316,9 @@ namespace logger
 	{}
 	template <class... Args>
 	void error(const char*, Args&&...)
+	{}
+	template <class... Args>
+	void warn(const char*, Args&&...)
 	{}
 }
 namespace fmt
@@ -411,6 +419,13 @@ namespace SIE
 			Completed,
 			Failed
 		};
+		ShaderClass shaderClass;
+		const RE::BSShader& shader;
+		uint32_t descriptor;
+		uint64_t generation;
+		uint64_t GetGeneration() const { return generation; }
+		std::string GetString() const { return std::to_string(descriptor); }
+		void Perform(Util::ShaderCreation::Attempt&) const;
 	};
 	struct ShaderCacheResult
 	{
@@ -422,6 +437,8 @@ namespace SIE
 	};
 	struct ShaderCache
 	{
+		inline static ShaderCache* active = nullptr;
+		static ShaderCache& Instance() { return *active; }
 		struct
 		{
 			std::atomic<uint64_t> generation{ 7 };
@@ -497,9 +514,9 @@ namespace SIE
 		bool IsDiskCacheActive() const { return false; }
 #include "shader_generation_check.h"
 
-		std::shared_ptr<RE::BSGraphics::VertexShader> MakeAndAddVertexShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt);
-		std::shared_ptr<RE::BSGraphics::PixelShader> MakeAndAddPixelShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt);
-		std::shared_ptr<RE::BSGraphics::ComputeShader> MakeAndAddComputeShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt);
+		std::shared_ptr<RE::BSGraphics::VertexShader> MakeAndAddVertexShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt, Util::ShaderCreation::Attempt* = nullptr);
+		std::shared_ptr<RE::BSGraphics::PixelShader> MakeAndAddPixelShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt, Util::ShaderCreation::Attempt* = nullptr);
+		std::shared_ptr<RE::BSGraphics::ComputeShader> MakeAndAddComputeShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt, Util::ShaderCreation::Attempt* = nullptr);
 	};
 	namespace SShaderCache
 	{
@@ -507,10 +524,12 @@ namespace SIE
 		std::string GetShaderString(ShaderClass, const RE::BSShader&, uint32_t descriptor, bool) { return std::to_string(descriptor); }
 		std::wstring GetShaderPath(const std::string& path) { return { path.begin(), path.end() }; }
 		ID3DBlob blob;
+		unsigned compileCalls = 0;
 		bool compileFails = false;
 		std::function<void()> duringCompile;
 		winrt::com_ptr<ID3DBlob> CompileShader(ShaderClass, const RE::BSShader&, uint32_t, bool, int*, std::optional<uint64_t>)
 		{
+			++compileCalls;
 			if (duringCompile)
 				duringCompile();
 			winrt::com_ptr<ID3DBlob> result;
@@ -534,8 +553,12 @@ namespace SIE
 #include "shader_blob_lookup_under_test.h"
 #include "shader_clear_metadata_under_test.h"
 #include "shader_publication_under_test.h"
+
+#define ZoneScoped
+#define ZoneText(...)
 #include "shader_release_under_test.h"
 #include "shader_retirement_under_test.h"
+#include "shader_task_perform_under_test.h"
 
 // Cache clears depend on the retirement helpers above.
 #include "shader_full_clear_under_test.h"
@@ -713,6 +736,52 @@ namespace
 		cache.Clear();
 	}
 
+	void CheckCreationRetries()
+	{
+		using Util::ShaderCreation::Result;
+		for (unsigned failure = 0; failure < 6; ++failure) {
+			SIE::ShaderCache cache;
+			ID3D11Device device;
+			globals::d3d::device = &device;
+			RE::BSShader shader;
+			Util::ShaderCreation::Attempt attempt;
+			unsigned attempts = 0;
+			std::vector<std::chrono::milliseconds> delays;
+			const auto compiles = SIE::SShaderCache::compileCalls;
+			device.result = failure == 5 ? S_OK : E_FAIL;
+			SIE::ShaderCache::active = &cache;
+			SIE::ShaderCompilationTask task{ SIE::ShaderClass::Vertex, shader, 5, 7 };
+			if (failure == 5)
+				duringResourceName = [] { failNextGlobalAllocation = true; };
+			const auto outcome = Util::ShaderCreation::Run(attempt, [&] {
+				++attempts;
+				if (failure == 1) ReflectionFixture::failure = ReflectionFixture::Failure::Reflect;
+				task.Perform(attempt); }, [&](std::chrono::milliseconds delay) {
+				delays.push_back(delay);
+				if (failure == 2) return false;
+				if (failure == 0) device.result = S_OK;
+				if (failure == 5) duringResourceName = {};
+				if (failure == 4) ++cache.compilationSet.generation;
+				return true; });
+			ReflectionFixture::failure = ReflectionFixture::Failure::None;
+			Require(SIE::SShaderCache::compileCalls == compiles + 1);
+			if (failure == 0 || failure == 5) {
+				Require(outcome == Result::Published && attempts == 2 && delays.size() == 1);
+				Require(cache.vertexShaders[0].at(5)->shader != nullptr);
+			} else if (failure == 1) {
+				Require(outcome == Result::ReflectionFailed && attempts == 1 && delays.empty());
+			} else if (failure == 2) {
+				Require(outcome == Result::Stale && attempts == 1 && delays.size() == 1);
+			} else if (failure == 3) {
+				Require(outcome == Result::CreationFailed && attempts == 4);
+				Require(delays == std::vector{ std::chrono::milliseconds(100), std::chrono::milliseconds(500), std::chrono::milliseconds(2000) });
+			} else {
+				// A cleared generation cannot recreate or publish its retained bytecode.
+				Require(outcome == Result::Stale && attempts == 2 && cache.vertexShaders[0].empty());
+			}
+		}
+	}
+
 	void CheckBlobOwnership()
 	{
 		for (bool disk : { false, true }) {
@@ -784,7 +853,7 @@ namespace
 			RE::BSShader shader;
 			const auto create = [&](uint32_t descriptor, RE::BSShader::Type type = RE::BSShader::Type::Lighting) {
 				shader.shaderType.value = type;
-				return (cache.*make)(shader, descriptor, std::nullopt);
+				return (cache.*make)(shader, descriptor, std::nullopt, nullptr);
 			};
 			auto reader = create(20);
 			auto selectedOwner = reader;
@@ -854,7 +923,7 @@ namespace
 			SIE::ShaderCache cache;
 			globals::d3d::device = &device;
 			RE::BSShader shader;
-			const auto create = [&](uint32_t descriptor) { return (cache.*make)(shader, descriptor, std::nullopt); };
+			const auto create = [&](uint32_t descriptor) { return (cache.*make)(shader, descriptor, std::nullopt, nullptr); };
 			auto target = create(30);
 			shader.shaderType.value = RE::BSShader::Type::ImageSpace;
 			create(32);
@@ -905,7 +974,7 @@ namespace
 		globals::d3d::device = &device;
 		RE::BSShader shader;
 		const auto create = [&](uint32_t descriptor, std::optional<uint64_t> generation = std::nullopt) {
-			return (cache.*make)(shader, descriptor, generation);
+			return (cache.*make)(shader, descriptor, generation, nullptr);
 		};
 		const auto live = cache.compilationSet.generation.load();
 		const auto selectedRevision = (cache.*revision).load();
@@ -1027,6 +1096,7 @@ int main()
 		CheckOwnerAllocationFailure();
 		CheckMetadataTransactions();
 		CheckBlobOwnership();
+		CheckCreationRetries();
 		CheckBytecodeHooks();
 		CheckRetainedBinding();
 		CheckStage(&SIE::ShaderCache::MakeAndAddVertexShader, &SIE::ShaderCache::vertexShaders, &SIE::ShaderCache::vertexShadersMutex, &SIE::ShaderCache::vertexShaderEvictionRevision);

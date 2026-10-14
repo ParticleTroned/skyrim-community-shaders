@@ -83,7 +83,8 @@ namespace
 	constexpr float kParticleConfigSaturationMax = 10.0f;
 	constexpr float kJsonPlacedLightIntensityMin = 0.0f;
 	constexpr float kJsonPlacedLightIntensityMax = 8.0f;
-	constexpr std::uint32_t kParticleLightCacheSweepInterval = 120;
+	constexpr std::size_t kParticleLightCachePruneBudget = 256;
+	constexpr std::size_t kParticleLightCacheRetirementBatch = 64;
 	constexpr std::uint32_t kParticleLightCacheMaxIdleFrames = 600;
 	constexpr std::size_t kParticleLightCacheMaxEntries = static_cast<std::size_t>(MAX_LIGHTS) * 32u;
 	constexpr std::size_t kMaxQueuedParticleLights = static_cast<std::size_t>(MAX_LIGHTS) * 16u;
@@ -1589,23 +1590,26 @@ void LightLimitFix::Reset()
 	sceneLightSnapshotFailed = false;
 
 	{
+		ParticleLightRetirementBuffers retired;
+		retired.Swap(particleLightRetirementSpare);
+		const SKSE::stl::scope_exit recycleRetired([&] {
+			// Local ownership keeps destructor callbacks from touching an active retirement buffer.
+			retired.Clear();
+			retired.Swap(particleLightRetirementSpare);
+		});
+
 		std::lock_guard<std::mutex> currentLock{ currentParticleLightsMutex };
+		std::lock_guard<std::mutex> queueLock{ particleLightsQueueMutex };
+		currentParticleEmitters.swap(retired.emitters);
+		currentBillboardLights.swap(retired.billboards);
+		currentParticleEmitters.swap(queuedParticleEmitters);
+		currentBillboardLights.swap(queuedBillboardLights);
+		queuedEmitterIndices.swap(retired.emitterIndices);
+		queuedBillboardIndices.swap(retired.billboardIndices);
+		nextParticleLightSequence = 0;
 
-		// NiPointer releases the retained emitter geometry and particle data.
-		currentParticleEmitters.clear();
-		currentBillboardLights.clear();
-
-		{
-			std::lock_guard<std::mutex> queueLock{ particleLightsQueueMutex };
-			std::swap(currentParticleEmitters, queuedParticleEmitters);
-			std::swap(currentBillboardLights, queuedBillboardLights);
-			queuedEmitterIndices.clear();
-			queuedBillboardIndices.clear();
-			nextParticleLightSequence = 0;
-
-			particleLightDiagnostics.currentEmitters.store(currentParticleEmitters.size(), std::memory_order_relaxed);
-			particleLightDiagnostics.currentBillboards.store(currentBillboardLights.size(), std::memory_order_relaxed);
-		}
+		particleLightDiagnostics.currentEmitters.store(currentParticleEmitters.size(), std::memory_order_relaxed);
+		particleLightDiagnostics.currentBillboards.store(currentBillboardLights.size(), std::memory_order_relaxed);
 	}
 
 	const std::uint32_t frame = globals::state ? globals::state->frameCount : 0;
@@ -1613,26 +1617,65 @@ void LightLimitFix::Reset()
 	jsonPlacedLightCache.clear();
 }
 
+void LightLimitFix::RetireParticleLightCacheEntry(ParticleLightCacheMap::iterator a_entry, ParticleLightCacheEntry& a_retired)
+{
+	const auto key = a_entry->first;
+	const auto index = a_entry->second.maintenanceIndex;
+	if (index + 1 != particleLightMaintenanceKeys.size()) {
+		const auto movedKey = particleLightMaintenanceKeys.back();
+		particleLightMaintenanceKeys[index] = movedKey;
+		particleLightsReferences.find(movedKey)->second.maintenanceIndex = index;
+	}
+	particleLightMaintenanceKeys.pop_back();
+	std::swap(a_retired, a_entry->second);
+	// Key erasure does not scan unrelated empty buckets to construct a next iterator.
+	particleLightsReferences.erase(key);
+	if (particleLightMaintenanceCursor >= particleLightMaintenanceKeys.size())
+		particleLightMaintenanceCursor = 0;
+	particleLightDiagnostics.cacheEntries.store(particleLightsReferences.size(), std::memory_order_relaxed);
+}
+
 void LightLimitFix::PruneParticleLightCache(std::uint32_t a_frame)
 {
-	if (a_frame - lastParticleLightCacheSweepFrame < kParticleLightCacheSweepInterval) {
-		return;
-	}
-	lastParticleLightCacheSweepFrame = a_frame;
-
 	const auto configVersion = globals::features::llf::particleLights.configVersion;
-	std::lock_guard<std::mutex> cacheLock{ particleLightsCacheMutex };
-	for (auto it = particleLightsReferences.begin(); it != particleLightsReferences.end();) {
-		const bool configChanged = it->second.reference.configVersion != configVersion;
-		const bool entryExpired = a_frame - it->second.lastSeenFrame > kParticleLightCacheMaxIdleFrames;
-		if (configChanged || entryExpired) {
-			it = particleLightsReferences.erase(it);
-		} else {
-			++it;
-		}
+	std::size_t inspectionLimit = 0;
+	{
+		std::lock_guard<std::mutex> cacheLock{ particleLightsCacheMutex };
+		if (hasParticleLightCacheServiceFrame && lastParticleLightCacheServiceFrame == a_frame)
+			return;
+		hasParticleLightCacheServiceFrame = true;
+		lastParticleLightCacheServiceFrame = a_frame;
+		inspectionLimit = std::min(kParticleLightCachePruneBudget, particleLightMaintenanceKeys.size());
 	}
 
-	particleLightDiagnostics.cacheEntries.store(particleLightsReferences.size(), std::memory_order_relaxed);
+	std::array<std::optional<ParticleLightCacheEntry>, kParticleLightCacheRetirementBatch> retired;
+	std::size_t inspected = 0;
+	while (inspected < inspectionLimit) {
+		std::size_t retiredCount = 0;
+		const auto before = inspected;
+		{
+			std::lock_guard<std::mutex> cacheLock{ particleLightsCacheMutex };
+			for (std::size_t batch = 0; batch < kParticleLightCacheRetirementBatch &&
+										inspected < inspectionLimit && !particleLightMaintenanceKeys.empty();
+				++batch, ++inspected) {
+				if (particleLightMaintenanceCursor >= particleLightMaintenanceKeys.size())
+					particleLightMaintenanceCursor = 0;
+				const auto key = particleLightMaintenanceKeys[particleLightMaintenanceCursor];
+				auto it = particleLightsReferences.find(key);
+				const bool configChanged = it->second.reference.configVersion != configVersion;
+				const bool entryExpired = a_frame - it->second.lastSeenFrame > kParticleLightCacheMaxIdleFrames;
+				if (configChanged || entryExpired) {
+					RetireParticleLightCacheEntry(it, retired[retiredCount++].emplace());
+				} else {
+					++particleLightMaintenanceCursor;
+				}
+			}
+		}
+		for (std::size_t i = 0; i < retiredCount; ++i)
+			retired[i].reset();
+		if (inspected == before)
+			break;
+	}
 }
 
 void LightLimitFix::LoadSettings(json& o_json)
@@ -2254,10 +2297,12 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 	}
 
 	std::optional<ParticleLightReference> cachedReference;
+	std::optional<ParticleLightCacheEntry> retiredEntry;
 	{
 		std::lock_guard<std::mutex> cacheLock{ particleLightsCacheMutex };
 		auto it = particleLightsReferences.find(key);
 		if (it != particleLightsReferences.end() &&
+			frame - it->second.lastSeenFrame <= kParticleLightCacheMaxIdleFrames &&
 			it->second.reference.configVersion == particleLights.configVersion &&
 			it->second.signature == signature &&
 			it->second.sourceTexturePath == material->sourceTexturePath &&
@@ -2268,9 +2313,10 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 			}
 			cachedReference = it->second.reference;
 		} else if (it != particleLightsReferences.end()) {
-			particleLightsReferences.erase(it);
+			RetireParticleLightCacheEntry(it, retiredEntry.emplace());
 		}
 	}
+	retiredEntry.reset();
 
 	auto cacheReference = [&](ParticleLightReference a_reference) {
 		ParticleLightCacheEntry entry{};
@@ -2283,12 +2329,20 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 		entry.lastSeenFrame = frame;
 		entry.tintResolvedFrame = billboard ? frame : 0;
 
-		std::lock_guard<std::mutex> cacheLock{ particleLightsCacheMutex };
-		if (auto it = particleLightsReferences.find(key); it != particleLightsReferences.end()) {
-			it->second = std::move(entry);
-		} else if (particleLightsReferences.size() < kParticleLightCacheMaxEntries) {
-			particleLightsReferences.emplace(key, std::move(entry));
-			particleLightDiagnostics.cacheEntries.store(particleLightsReferences.size(), std::memory_order_relaxed);
+		{
+			std::lock_guard<std::mutex> cacheLock{ particleLightsCacheMutex };
+			if (auto it = particleLightsReferences.find(key); it != particleLightsReferences.end()) {
+				entry.maintenanceIndex = it->second.maintenanceIndex;
+				std::swap(it->second, entry);
+			} else if (particleLightsReferences.size() < kParticleLightCacheMaxEntries) {
+				entry.maintenanceIndex = particleLightMaintenanceKeys.size();
+				particleLightMaintenanceKeys.push_back(key);
+				SKSE::stl::scope_exit rollbackKey([&] { particleLightMaintenanceKeys.pop_back(); });
+				if (particleLightsReferences.emplace(key, std::move(entry)).second) {
+					rollbackKey.release();
+					particleLightDiagnostics.cacheEntries.store(particleLightsReferences.size(), std::memory_order_relaxed);
+				}
+			}
 		}
 		return a_reference;
 	};
@@ -3196,12 +3250,17 @@ void LightLimitFix::PostPostLoad()
 	LightLimitFixDetail::ShadowCulling::Install();
 	globals::features::llf::particleLights.GetConfigs();
 	particleLightsReferences.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 4u);
+	particleLightMaintenanceKeys.reserve(kParticleLightCacheMaxEntries);
 	queuedParticleEmitters.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
 	currentParticleEmitters.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
 	queuedBillboardLights.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
 	currentBillboardLights.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
 	queuedEmitterIndices.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
 	queuedBillboardIndices.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
+	particleLightRetirementSpare.emitters.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
+	particleLightRetirementSpare.billboards.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
+	particleLightRetirementSpare.emitterIndices.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
+	particleLightRetirementSpare.billboardIndices.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
 	Hooks::Install();
 }
 

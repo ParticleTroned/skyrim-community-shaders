@@ -257,6 +257,7 @@ public:
 		RE::BSFixedString gradientTexturePath;
 		std::uint32_t lastSeenFrame = 0;
 		std::uint32_t tintResolvedFrame = 0;
+		std::size_t maintenanceIndex = 0;
 	};
 
 	struct ParticleLightDiagnostics
@@ -266,9 +267,13 @@ public:
 		std::atomic<std::size_t> cacheEntries{ 0 };
 	};
 
-	eastl::hash_map<ParticleLightKey, ParticleLightCacheEntry, ParticleLightKeyHash> particleLightsReferences;
+	using ParticleLightCacheMap = eastl::hash_map<ParticleLightKey, ParticleLightCacheEntry, ParticleLightKeyHash>;
+	ParticleLightCacheMap particleLightsReferences;
+	eastl::vector<ParticleLightKey> particleLightMaintenanceKeys;
+	std::size_t particleLightMaintenanceCursor = 0;
 	std::mutex particleLightsCacheMutex;
-	std::uint32_t lastParticleLightCacheSweepFrame = 0;
+	std::uint32_t lastParticleLightCacheServiceFrame = 0;
+	bool hasParticleLightCacheServiceFrame = false;
 
 	eastl::vector<ParticleEmitterLight> queuedParticleEmitters;
 	eastl::vector<ParticleEmitterLight> currentParticleEmitters;
@@ -276,6 +281,32 @@ public:
 	eastl::vector<ResolvedBillboardLight> currentBillboardLights;
 	eastl::hash_map<ParticleLightKey, std::size_t, ParticleLightKeyHash> queuedEmitterIndices;
 	eastl::hash_map<ParticleLightKey, std::size_t, ParticleLightKeyHash> queuedBillboardIndices;
+	/** Empty storage reused after synchronous frame retirement on the render thread. */
+	struct ParticleLightRetirementBuffers
+	{
+		eastl::vector<ParticleEmitterLight> emitters;
+		eastl::vector<ResolvedBillboardLight> billboards;
+		eastl::hash_map<ParticleLightKey, std::size_t, ParticleLightKeyHash> emitterIndices;
+		eastl::hash_map<ParticleLightKey, std::size_t, ParticleLightKeyHash> billboardIndices;
+
+		/// Transfer storage between the idle pool and an exclusively owned local buffer.
+		void Swap(ParticleLightRetirementBuffers& a_other)
+		{
+			emitters.swap(a_other.emitters);
+			billboards.swap(a_other.billboards);
+			emitterIndices.swap(a_other.emitterIndices);
+			billboardIndices.swap(a_other.billboardIndices);
+		}
+		/// Release retired owners on the render thread after both particle locks unlock.
+		void Clear()
+		{
+			emitters.clear();
+			billboards.clear();
+			emitterIndices.clear();
+			billboardIndices.clear();
+		}
+	};
+	ParticleLightRetirementBuffers particleLightRetirementSpare;
 	std::uint64_t nextParticleLightSequence = 0;
 	std::mutex particleLightsQueueMutex;
 	std::mutex currentParticleLightsMutex;
@@ -478,6 +509,8 @@ public:
 	void BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
 
 private:
+	/** Detach into an empty destination and repair the cursor while the cache mutex is held. */
+	void RetireParticleLightCacheEntry(ParticleLightCacheMap::iterator a_entry, ParticleLightCacheEntry& a_retired);
 	std::atomic<std::shared_ptr<const ParticleLightSnapshot>> cachedParticleLights;
 	std::atomic_bool particleLightsDetectionEnabled{ settings.EnableParticleLightsDetection };
 	std::atomic_bool particleLightSnapshotAllocationFailed{ false };

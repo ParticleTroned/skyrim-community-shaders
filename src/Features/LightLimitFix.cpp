@@ -1126,7 +1126,7 @@ void LightLimitFix::DrawSettings()
 			Util::Widgets::SliderFloat("Cluster Threshold", &settings.ParticleClusterThreshold, kParticleClusterThresholdMin, kParticleClusterThresholdMax, "%.1f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Particle-light merge threshold based on distance and radius. Higher merges more: faster but blurrier. Lower is more precise but costs more.");
+					"Particle-light merge threshold based on distance and effective light-radius difference. Radius multipliers affect merging. Higher merges more: faster but blurrier. Lower is more precise but costs more.");
 			}
 
 			Util::Widgets::SliderInt("Max Particles per Emitter", &settings.MaxParticlesPerEmitter, kMaxParticlesPerEmitterMin, kMaxParticlesPerEmitterMax);
@@ -3498,6 +3498,10 @@ void LightLimitFix::UpdateLights()
 				}
 
 				const float radius = particleRuntimeData.radii[p] * particleRuntimeData.sizes[p];
+				const float effectiveRadius = radius * a_particleEmitter.radiusMult * settings.ParticleRadius;
+				if (!std::isfinite(effectiveRadius)) {
+					continue;
+				}
 
 				auto initialPosition = particleRuntimeData.positions[p];
 				if (!particleSystemRuntimeData.isWorldspace) {
@@ -3519,11 +3523,12 @@ void LightLimitFix::UpdateLights()
 
 				if (clusteredLights) {
 					const auto averageRadius = clusteredLight.radius / static_cast<float>(clusteredLights);
-					const float radiusDiff = std::abs(averageRadius - radius);
+					const float radiusDiff = std::abs(averageRadius - effectiveRadius);
 
 					const auto averagePosition = clusteredLight.positionWS[0].data / static_cast<float>(clusteredLights);
 					const float positionDiff = positionWS.GetDistance({ averagePosition.x, averagePosition.y, averagePosition.z });
 					if ((radiusDiff + positionDiff) > settings.ParticleClusterThreshold ||
+						!std::isfinite(clusteredLight.radius + effectiveRadius) ||
 						!settings.EnableParticleLightsOptimization) {
 						flushClusteredLight();
 					}
@@ -3545,7 +3550,7 @@ void LightLimitFix::UpdateLights()
 					color.z *= particleRuntimeData.color[p].blue;
 				}
 				clusteredLight.color += Saturation(color, saturation) * alpha * settings.ParticleBrightness;
-				clusteredLight.radius += radius * a_particleEmitter.radiusMult * settings.ParticleRadius;
+				clusteredLight.radius += effectiveRadius;
 				clusteredLight.positionWS[0].data.x += positionWS.x;
 				clusteredLight.positionWS[0].data.y += positionWS.y;
 				clusteredLight.positionWS[0].data.z += positionWS.z;

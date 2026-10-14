@@ -2376,6 +2376,40 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(SceneLightCap PROPERTIES TIMEOUT 30)
 
+    add_controller_test(
+        particle_light_clustering_test
+        ParticleLightClustering
+        tests/particle_light_clustering_test.cpp
+    )
+    set(_particle_light_clustering_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/particle-light-clustering"
+    )
+    set(_particle_light_clustering_test_headers
+        "${_particle_light_clustering_test_dir}/particle_light_cap_under_test.h"
+        "${_particle_light_clustering_test_dir}/particle_light_clustering_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_particle_light_clustering_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_particle_light_clustering_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_particle_light_clustering.cmake"
+        DEPENDS
+            src/Features/LightLimitFix.cpp
+            tests/extract_particle_light_clustering.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    target_sources(
+        particle_light_clustering_test
+        PRIVATE ${_particle_light_clustering_test_headers}
+    )
+    target_include_directories(
+        particle_light_clustering_test
+        PRIVATE "${_particle_light_clustering_test_dir}"
+    )
+    set_tests_properties(ParticleLightClustering PROPERTIES TIMEOUT 30)
+
     set(_vr_scene_guards_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-scene-guards"
     )

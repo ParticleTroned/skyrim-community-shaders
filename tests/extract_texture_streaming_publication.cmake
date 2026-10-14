@@ -23,4 +23,4 @@ extract_between("${source}" "\tvoid Defer(Block reason, const Record& record)"
     "\tstd::vector<RE::NiPointer<RE::NiAVObject>> previewRoots" "streaming_defer_under_test.h")
 
 extract_between("${source}" "void TextureStreaming::State::SuspendPreviewReductions("
-    "void TextureStreaming::State::ScanPreviews()" "streaming_preview_protection_under_test.h")
+    "void TextureStreaming::State::RefreshPreviews()" "streaming_preview_protection_under_test.h")

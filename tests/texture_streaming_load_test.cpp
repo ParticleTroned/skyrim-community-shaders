@@ -1,5 +1,6 @@
 #include "Features/TextureStreaming/ConsumerInventory.h"
 #include "Features/TextureStreaming/LoadHooks.h"
+#include "Features/TextureStreaming/Maintenance.h"
 #include "Utils/NativeTextureLoading.h"
 #include "d3d11_shader_test.h"
 #include <atomic>
@@ -156,7 +157,12 @@ namespace Util
 	};
 }
 #include "streaming_load_under_test.h"
+namespace globals::d3d
+{
+	ID3D11Device* device = nullptr;
+}
 namespace Policy = TextureStreamingPolicy;
+using MaintenanceBudget = StreamingTextures::MaintenanceBudget<>;
 struct TextureStreaming
 {
 	struct State
@@ -181,7 +187,7 @@ struct TextureStreaming
 		std::unordered_set<std::uint64_t> reducedRecords;
 		std::uint64_t inventoryGeneration = 41;
 		void Fail(const char* error) { throw std::runtime_error(error); }
-		void AdoptLoads();
+		void AdoptLoads(const MaintenanceBudget& budget);
 	};
 };
 #include "streaming_adoption_under_test.h"
@@ -193,6 +199,7 @@ int main()
 	try {
 		ComPtr<ID3D11Device> device;
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, nullptr));
+		globals::d3d::device = device.Get();
 		DirectX::ScratchImage pixels;
 		Check(pixels.Initialize2D(DXGI_FORMAT_BC1_UNORM, 4096, 2048, 1, 13));
 		DirectX::Blob dds;
@@ -294,7 +301,8 @@ int main()
 		Hooks::Create(nullptr, &source);
 		{
 			TextureStreaming::State state;
-			state.AdoptLoads();
+			const ::MaintenanceBudget budget;
+			state.AdoptLoads(budget);
 			const auto& record = state.records.at(10);
 			Require(record.full.Width == 4096 && record.view.Texture2D.MipLevels == 13 && record.drop == 2 &&
 						record.bytes[0] > record.bytes[2] && record.sourceValidated && state.reducedRecords.contains(10) &&
@@ -303,6 +311,18 @@ int main()
 				"Adoption lost restoration ownership or initialized stale scene consumers");
 		}
 		Require(source.references == 0 && Hooks::Status().at("activeLoads") == 0, "Adopted record leaked load ownership");
+		Hooks::Create(nullptr, &source);
+		ComPtr<ID3D11Device> replacementDevice;
+		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &replacementDevice, nullptr, nullptr));
+		globals::d3d::device = replacementDevice.Get();
+		{
+			TextureStreaming::State state;
+			const ::MaintenanceBudget budget;
+			state.AdoptLoads(budget);
+			Require(state.records.empty() && state.reducedRecords.empty() && !Hooks::HasPending() && source.references == 0 && Hooks::Status().at("activeLoads") == 0,
+				"A deferred old-device load survived the device reset or leaked handoff ownership");
+		}
+		globals::d3d::device = device.Get();
 		createBody = [&](RE::NiSourceTexture*) {
 			Require(!Hooks::Prepare(device.Get(), 2048), "Remembered load overrode another mod's size request");
 			Hooks::Configure(false, {}, {}, {}, 2);

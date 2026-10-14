@@ -8,6 +8,7 @@
 #include "TextureStreaming/Diagnostics.h"
 #include "TextureStreaming/GeometryDemand.h"
 #include "TextureStreaming/LoadHooks.h"
+#include "TextureStreaming/Maintenance.h"
 #include "TextureStreaming/Preview.h"
 #include "TextureStreaming/RestorationCache.h"
 #include "TextureStreaming/RestorationPriority.h"
@@ -48,12 +49,12 @@ namespace
 	namespace Policy = TextureStreamingPolicy;
 	using Diagnostics = StreamingTextures::Diagnostics;
 	using Block = Diagnostics::Block;
+	using MaintenanceBudget = StreamingTextures::MaintenanceBudget<>;
 	using Exclusion = Diagnostics::Exclusion;
 	constexpr auto streamingConflictWarning = "SPS detected. Disable the SPS mod and restart to use CSX texture streaming.";
 	constexpr std::size_t maximumRecords = 16384, maximumConsumers = 256, maximumFrontier = 16384;
 	constexpr std::size_t maximumReducedTextures = 512;
 	constexpr std::size_t maximumInventoryRetirementSteps = 4096;
-	constexpr auto inventoryRetirementBudget = std::chrono::microseconds(200);
 	constexpr std::uint64_t uploadBytesPerFrame = 4 * Policy::MiB;
 	std::atomic_bool originHookReady{ false };
 	std::atomic_uint64_t originSerial{ 0 };
@@ -517,6 +518,7 @@ struct TextureStreaming::State
 	std::uint64_t epoch = 1, scan = 0, completeScan = 0, nextScanMs = 0, deviceGeneration = 0;
 	std::uint64_t inventoryGeneration = 1, inventoryRetirementRemaining = 0, inventoryRetirementCursor = 0;
 	bool inventoryRetirementPending = false;
+	StreamingTextures::MaintenanceSchedule maintenanceSchedule;
 	std::uint32_t worldStart = 0, lastFrame = UINT32_MAX;
 	bool paused = false, reading = false;
 	std::unordered_map<std::uint64_t, Record> records;
@@ -566,14 +568,16 @@ struct TextureStreaming::State
 	std::unordered_set<RE::NiAVObject*> previewVisited;
 	std::uint64_t nextPreviewScanMs = 0;
 	bool previewActive = false;
-	void ScanPreviews();
+	void RefreshPreviews();
+	bool PreviewProtectionPending() const;
+	void ScanPreviews(const MaintenanceBudget& budget);
 	void ProtectPreviewTexture(RE::NiSourceTexture* texture);
-	void Scan();
-	void Prune();
+	void Scan(const MaintenanceBudget& budget);
+	void Prune(const MaintenanceBudget& budget);
 	void InvalidateInventory();
 	void MarkInventoryRetired(Record& record);
-	void RetireInventory();
-	void AdoptLoads();
+	void RetireInventory(const MaintenanceBudget& budget);
+	void AdoptLoads(const MaintenanceBudget& budget);
 	std::uint32_t Demand(Record& record);
 	std::uint32_t Target(const Record& record, std::uint32_t demanded) const
 	{
@@ -581,7 +585,7 @@ struct TextureStreaming::State
 	}
 	bool ReductionRequested() const noexcept;
 	void UpdateConfigurationDetail();
-	void Select(bool previewOnly = false);
+	void Select(const MaintenanceBudget& budget, bool previewOnly = false);
 	void ServiceTransaction();
 	void CancelTransaction();
 	void Publish(Record& record, Transaction& work);
@@ -615,14 +619,13 @@ void TextureStreaming::State::MarkInventoryRetired(Record& record)
 		--inventoryRetirementRemaining;
 }
 
-void TextureStreaming::State::RetireInventory()
+void TextureStreaming::State::RetireInventory(const MaintenanceBudget& budget)
 {
 	if (!inventoryRetirementPending)
 		return;
-	const auto deadline = std::chrono::steady_clock::now() + inventoryRetirementBudget;
 	std::size_t steps = 0;
 	const auto available = [&] {
-		return steps < maximumInventoryRetirementSteps && std::chrono::steady_clock::now() < deadline;
+		return steps < maximumInventoryRetirementSteps && budget.Available();
 	};
 	while (!frontier.empty() && available()) {
 		frontier.pop_back();
@@ -656,10 +659,9 @@ void TextureStreaming::State::RetireInventory()
 	}
 }
 
-void TextureStreaming::State::AdoptLoads()
+void TextureStreaming::State::AdoptLoads(const MaintenanceBudget& budget)
 {
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(400);
-	for (unsigned count = 0; count < 64 && std::chrono::steady_clock::now() < deadline; ++count) {
+	for (unsigned count = 0; count < 64 && budget.Available(); ++count) {
 		auto load = StreamingTextures::LoadHooks::Poll();
 		if (!load)
 			break;
@@ -667,6 +669,10 @@ void TextureStreaming::State::AdoptLoads()
 		auto* engine = source ? source->rendererTexture : nullptr;
 		StreamingTextures::Origin origin;
 		if (!engine || !engine->resourceView || !StreamingTextures::ReadOrigin(engine->texture, origin) || origin.serial != load->serial)
+			continue;
+		ComPtr<ID3D11Device> sourceDevice;
+		engine->texture->GetDevice(&sourceDevice);
+		if (sourceDevice.Get() != globals::d3d::device)
 			continue;
 		if (records.contains(origin.serial)) {
 			Fail("Reduced-load source was observed before ownership transfer");
@@ -892,7 +898,7 @@ void TextureStreaming::State::ProtectPreviewTexture(RE::NiSourceTexture* texture
 	}
 }
 
-void TextureStreaming::State::ScanPreviews()
+void TextureStreaming::State::RefreshPreviews()
 {
 	auto preview = StreamingTextures::Preview::Roots();
 	if (!preview.complete)
@@ -905,7 +911,16 @@ void TextureStreaming::State::ScanPreviews()
 		previewVisited.clear();
 		nextPreviewScanMs = 0;
 	}
-	if (previewRoots.empty())
+}
+
+bool TextureStreaming::State::PreviewProtectionPending() const
+{
+	return previewActive && (previewRoots.empty() || !previewFrontier.empty() || GetTickCount64() >= nextPreviewScanMs);
+}
+
+void TextureStreaming::State::ScanPreviews(const MaintenanceBudget& budget)
+{
+	if (!budget.Available() || previewRoots.empty())
 		return;
 	const auto now = GetTickCount64();
 	if (previewFrontier.empty()) {
@@ -914,8 +929,7 @@ void TextureStreaming::State::ScanPreviews()
 		previewFrontier = previewRoots;
 		previewVisited.clear();
 	}
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(400);
-	for (unsigned count = 0; !previewFrontier.empty() && count < 512 && std::chrono::steady_clock::now() < deadline; ++count) {
+	for (unsigned count = 0; !previewFrontier.empty() && count < 512 && budget.Available(); ++count) {
 		auto object = std::move(previewFrontier.back());
 		previewFrontier.pop_back();
 		if (!object || !previewVisited.insert(object.get()).second)
@@ -956,9 +970,9 @@ void TextureStreaming::State::ScanPreviews()
 		nextPreviewScanMs = now + 250;
 }
 
-void TextureStreaming::State::Scan()
+void TextureStreaming::State::Scan(const MaintenanceBudget& budget)
 {
-	if (inventoryRetirementPending)
+	if (!budget.Available() || inventoryRetirementPending)
 		return;
 	if (frontier.empty()) {
 		if (GetTickCount64() < nextScanMs)
@@ -970,9 +984,8 @@ void TextureStreaming::State::Scan()
 		visited.clear();
 		frontier.push_back({ RE::NiPointer<RE::NiAVObject>(root), false });
 	}
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(400);
 	unsigned count = 0;
-	while (!inventoryRetirementPending && !frontier.empty() && ++count <= 512 && std::chrono::steady_clock::now() < deadline) {
+	while (!inventoryRetirementPending && !frontier.empty() && ++count <= 512 && budget.Available()) {
 		auto node = std::move(frontier.back());
 		frontier.pop_back();
 		if (!node.object || !visited.insert(node.object.get()).second)
@@ -1149,8 +1162,10 @@ bool TextureStreaming::State::ReductionRequested() const noexcept
 	return enabled && (modes.continuous || (modes.onPressure && pressure.conserving));
 }
 
-void TextureStreaming::State::Select(bool previewOnly)
+void TextureStreaming::State::Select(const MaintenanceBudget& budget, bool previewOnly)
 {
+	if (!budget.Available())
+		return;
 	if (reading || transaction || !memory.Fresh(GetTickCount64())) {
 		diagnostics.Defer(reading ? Block::ReaderPending : transaction ? (transaction->published ? Block::RetirementPending : Block::UploadPending) :
 																		 Block::StaleBudget);
@@ -1172,7 +1187,7 @@ void TextureStreaming::State::Select(bool previewOnly)
 		const auto demanded = Demand(record);
 		const auto target = Target(record, demanded);
 		if (record.sourceValidated && record.headerHash && record.rememberedDrop != record.distanceDrop && completeScan && record.consumers.Current(inventoryGeneration) && record.consumers.verified == completeScan &&
-			!record.consumers.committed.empty() && !record.protectedConsumer) {
+			!record.consumers.committed.empty() && !record.protectedConsumer && !PreviewProtectionPending()) {
 			StreamingTextures::Origin origin;
 			if (StreamingTextures::ReadOrigin(record.current, origin) && !origin.protectedConsumer) {
 				StreamingTextures::LoadHooks::Remember(record.path, { record.full, record.distanceDrop, origin.requiredCategories, record.headerHash, record.fileBytes });
@@ -1198,6 +1213,10 @@ void TextureStreaming::State::Select(bool previewOnly)
 			return;
 		}
 		const bool refill = target < record.drop;
+		if (!refill && PreviewProtectionPending()) {
+			Defer(Block::InventoryIncomplete, record);
+			return;
+		}
 		const bool required = demanded < record.drop;
 		if (!refill)
 			++diagnostics.shrinkCandidates;
@@ -1241,12 +1260,11 @@ void TextureStreaming::State::Select(bool previewOnly)
 			selectedPriority = priority;
 		}
 	};
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(400);
 	// Service the bounded reduced set first so refill demand cannot queue behind the full inventory.
 	auto reduced = reducedRecords.find(reducedCursor);
 	if (reduced == reducedRecords.end())
 		reduced = reducedRecords.begin();
-	for (unsigned count = 0; reduced != reducedRecords.end() && count < 64 && std::chrono::steady_clock::now() < deadline; ++count) {
+	for (unsigned count = 0; reduced != reducedRecords.end() && count < 64 && budget.Available(); ++count) {
 		const auto id = *reduced++;
 		reducedCursor = reduced == reducedRecords.end() ? 0 : *reduced;
 		if (auto entry = records.find(id); entry != records.end())
@@ -1255,7 +1273,7 @@ void TextureStreaming::State::Select(bool previewOnly)
 	auto entry = records.find(selectionCursor);
 	if (entry == records.end())
 		entry = records.begin();
-	for (unsigned count = 0; entry != records.end() && count < 64 && std::chrono::steady_clock::now() < deadline; ++count) {
+	for (unsigned count = 0; entry != records.end() && count < 64 && budget.Available(); ++count) {
 		auto current = entry++;
 		selectionCursor = entry == records.end() ? 0 : entry->first;
 		if (!current->second.drop)
@@ -1487,7 +1505,7 @@ void TextureStreaming::State::ServiceTransaction()
 	}
 	auto& record = found->second;
 	const auto target = work.payload.request.drop;
-	if (record.source->rendererTexture != record.engine || record.engine->texture != record.current || record.engine->resourceView != record.currentView || record.engine->UAV || target > Target(record, Demand(record))) {
+	if (record.source->rendererTexture != record.engine || record.engine->texture != record.current || record.engine->resourceView != record.currentView || record.engine->UAV || (target > record.drop && PreviewProtectionPending()) || target > Target(record, Demand(record))) {
 		CancelTransaction();
 		return;
 	}
@@ -1556,8 +1574,7 @@ void TextureStreaming::State::Tick()
 	Util::RendererOwnership owner(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
 	if (!owner)
 		return;
-	AdoptLoads();
-	ScanPreviews();
+	RefreshPreviews();
 	memory = Memory::Get().SampleStreaming(globals::d3d::device);
 	const bool transition = globals::features::upscaling.IsTextureStreamingTransitionActive();
 	memory.priorityWork |= transition;
@@ -1582,7 +1599,6 @@ void TextureStreaming::State::Tick()
 		deviceGeneration = memory.generation;
 		InvalidateInventory();
 	}
-	RetireInventory();
 	const auto now = GetTickCount64();
 	const auto pressureChange = pressure.Update(now, memory.sampledAtMs, memory.Fresh(now), memory.local.Budget,
 		Memory::Add(memory.local.CurrentUsage, memory.pendingBytes), options.reserveMiB * Policy::MiB);
@@ -1599,20 +1615,41 @@ void TextureStreaming::State::Tick()
 		const bool previewWork = transaction && records.contains(transaction->payload.request.serial) && records.at(transaction->payload.request.serial).previewProtected;
 		if (transition || !previewWork)
 			CancelTransaction();
-		ServiceTransaction();
-		if (loading && !transition && previewActive)
-			Select(true);
-		Prune();
-		detail = loading ? "Waiting for world loading" : "Waiting for render-scale or NR transition";
-		return;
-	}
-	if (enabled && originHookReady)
-		Scan();
-	else if (enabled)
+	} else if (enabled && !originHookReady) {
 		diagnostics.Defer(Block::OriginUnavailable);
+	}
+	const MaintenanceBudget budget;
+	const auto first = maintenanceSchedule.StartFrame();
+	for (std::size_t offset = 0; offset < StreamingTextures::MaintenanceSchedule::phaseCount && budget.Available(); ++offset) {
+		switch (StreamingTextures::MaintenanceSchedule::Phase(first, offset)) {
+		case StreamingTextures::MaintenancePhase::AdoptLoads:
+			AdoptLoads(budget);
+			break;
+		case StreamingTextures::MaintenancePhase::PreviewScan:
+			ScanPreviews(budget);
+			break;
+		case StreamingTextures::MaintenancePhase::RetireInventory:
+			RetireInventory(budget);
+			break;
+		case StreamingTextures::MaintenancePhase::WorldScan:
+			if (!blocked && enabled && originHookReady)
+				Scan(budget);
+			break;
+		case StreamingTextures::MaintenancePhase::Select:
+			if (!blocked || (loading && !transition && previewActive))
+				Select(budget, blocked);
+			break;
+		case StreamingTextures::MaintenancePhase::Prune:
+			Prune(budget);
+			break;
+		case StreamingTextures::MaintenancePhase::Count:
+			break;
+		}
+	}
+	// Publication and GPU retirement must progress even when maintenance exhausts its allowance.
 	ServiceTransaction();
-	Select();
-	Prune();
+	if (blocked)
+		detail = loading ? "Waiting for world loading" : "Waiting for render-scale or NR transition";
 }
 
 void TextureStreaming::State::UpdatePressureDiagnostics(std::uint64_t now)
@@ -1641,15 +1678,16 @@ void TextureStreaming::State::ReportPressureEpisode(std::string_view reason, std
 		DiagnosticStatus(diagnostics, pressureEpisode.initial).dump());
 }
 
-void TextureStreaming::State::Prune()
+void TextureStreaming::State::Prune(const MaintenanceBudget& budget)
 {
+	if (!budget.Available())
+		return;
 	if (!enabled && reducedRecords.empty() && !reading && !transaction)
 		reader.ClearCache(true);
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(200);
 	auto entry = records.find(pruneCursor);
 	if (entry == records.end())
 		entry = records.begin();
-	for (unsigned count = 0; entry != records.end() && count < 128 && std::chrono::steady_clock::now() < deadline; ++count) {
+	for (unsigned count = 0; entry != records.end() && count < 128 && budget.Available(); ++count) {
 		auto current = entry++;
 		pruneCursor = entry == records.end() ? 0 : entry->first;
 		auto& [id, record] = *current;

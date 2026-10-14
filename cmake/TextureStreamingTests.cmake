@@ -116,7 +116,7 @@ target_include_directories(sps_followups_policy_test PRIVATE "${_shadow_startup_
 
 set(_streaming_lifecycle_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/streaming-lifecycle")
 set(_streaming_lifecycle_headers)
-foreach(_header retirement lifecycle_demand tick prune scan_gate)
+foreach(_header retirement lifecycle_demand tick prune scan_gate preview_state target_policy transaction_validation selection_guard)
     list(APPEND _streaming_lifecycle_headers "${_streaming_lifecycle_dir}/streaming_${_header}_under_test.h")
 endforeach()
 add_custom_command(OUTPUT ${_streaming_lifecycle_headers}

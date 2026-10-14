@@ -4,6 +4,11 @@ endif()
 include("${PROJECT_ROOT}/tests/extract_source_region.cmake")
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(READ "${PROJECT_ROOT}/src/Features/LightLimitFix.cpp" _source)
+file(READ "${PROJECT_ROOT}/src/Features/LightLimitFix.h" _header)
+extract_between(
+    "${_header}" "\tstatic constexpr std::array<const wchar_t*, 2> kComputeShaderPaths{" "\n\t/** @brief Read or stage"
+    "llf_shader_paths_under_test.h"
+)
 extract_between(
     "${_source}" "void LightLimitFix::ClearShaderCache()"
     "\nfloat LightLimitFix::CalculateLightDistance(" "llf_shader_lifecycle_under_test.h"

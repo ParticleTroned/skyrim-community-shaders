@@ -92,6 +92,7 @@ struct Feature
 };
 struct LightLimitFix : Feature
 {
+#include "llf_shader_paths_under_test.h"
 	Util::AsyncShader<ID3D11ComputeShader> clusterBuildingCS, clusterCullingCS;
 	Microsoft::WRL::ComPtr<IUnknown> shaderDeviceIdentity;
 	struct LightBuildingCB

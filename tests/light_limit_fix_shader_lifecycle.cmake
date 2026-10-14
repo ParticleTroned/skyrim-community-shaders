@@ -1,6 +1,10 @@
 set(_llf_shader_lifecycle_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/llf-shader-lifecycle")
 set(_llf_shader_lifecycle_headers)
-foreach(_header IN ITEMS lifecycle status device relatch draw)
+foreach(
+    _header
+    IN
+    ITEMS lifecycle status device relatch draw paths
+)
     list(APPEND _llf_shader_lifecycle_headers
         "${_llf_shader_lifecycle_dir}/llf_shader_${_header}_under_test.h")
 endforeach()
@@ -12,6 +16,7 @@ add_custom_command(
         "${PROJECT_SOURCE_DIR}/tests/extract_light_limit_fix_shader_lifecycle.cmake"
     DEPENDS
         src/Features/LightLimitFix.cpp
+        src/Features/LightLimitFix.h
         tests/extract_light_limit_fix_shader_lifecycle.cmake
         tests/extract_source_region.cmake
     VERBATIM

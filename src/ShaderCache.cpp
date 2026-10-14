@@ -3061,7 +3061,7 @@ namespace SIE
 			return shaderBlob;
 		}
 
-		std::unique_ptr<RE::BSGraphics::VertexShader> CreateVertexShader(ID3DBlob& shaderData,
+		auto CreateVertexShader(ID3DBlob& shaderData,
 			const RE::BSShader& shader, uint32_t descriptor)
 		{
 			static const auto perTechniqueBuffersArray =
@@ -3072,12 +3072,9 @@ namespace SIE
 				REL::Relocation<ID3D11Buffer**>(RELOCATION_ID(524759, 411375));
 			static const auto bufferData = REL::Relocation<void*>(RELOCATION_ID(524965, 411446));
 
-			auto rawPtr =
-				new uint8_t[sizeof(RE::BSGraphics::VertexShader) + shaderData.GetBufferSize()];
-			auto shaderPtr = new (rawPtr) RE::BSGraphics::VertexShader;
-			memcpy(rawPtr + sizeof(RE::BSGraphics::VertexShader), shaderData.GetBufferPointer(),
-				shaderData.GetBufferSize());
-			std::unique_ptr<RE::BSGraphics::VertexShader> newShader{ shaderPtr };
+			auto newShader = Util::ShaderLifetime::MakeWithTrailingBytes<RE::BSGraphics::VertexShader>(shaderData.GetBufferSize());
+			memcpy(reinterpret_cast<uint8_t*>(newShader.get()) + sizeof(RE::BSGraphics::VertexShader),
+				shaderData.GetBufferPointer(), shaderData.GetBufferSize());
 			newShader->byteCodeSize = (uint32_t)shaderData.GetBufferSize();
 			newShader->id = descriptor;
 			newShader->vertexDesc = 0;
@@ -5761,9 +5758,9 @@ namespace SIE
 	}
 
 	// Ownership is prepared before locking; rejected candidates retire after unlocking.
-	template <class EngineShader, class DeviceShader, class Map, class Mutex, class IsCurrent>
+	template <class EngineShader, class Deleter, class DeviceShader, class Map, class Mutex, class IsCurrent>
 	static std::shared_ptr<EngineShader> PublishPreparedShader(Map& a_map, Mutex& a_mutex, uint32_t a_descriptor,
-		std::unique_ptr<EngineShader>& a_shader, winrt::com_ptr<DeviceShader>& a_deviceShader, IsCurrent&& a_isCurrent)
+		std::unique_ptr<EngineShader, Deleter>& a_shader, winrt::com_ptr<DeviceShader>& a_deviceShader, IsCurrent&& a_isCurrent)
 	{
 		auto prepared = Util::ShaderLifetime::Share(std::move(a_shader), std::move(a_deviceShader));
 		std::lock_guard lock(a_mutex);

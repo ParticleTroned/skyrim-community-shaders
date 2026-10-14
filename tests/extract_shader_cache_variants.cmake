@@ -64,7 +64,7 @@ extract_between(
 )
 
 extract_between(
-    "${_source}" "\ttemplate <class EngineShader, class DeviceShader, class Map, class Mutex, class IsCurrent>"
+    "${_source}" "\ttemplate <class EngineShader, class Deleter, class DeviceShader, class Map, class Mutex, class IsCurrent>"
     "\n\tstd::string ShaderCache::GetDefinesString("
     "shader_publication_under_test.h"
 )

@@ -32,6 +32,7 @@
 
 namespace
 {
+	std::atomic<unsigned> arraysAllocated{ 0 }, arraysFreed{ 0 };
 	thread_local bool failNextGlobalAllocation = false;
 	thread_local bool failNextMetadataAllocation = false;
 	thread_local unsigned heldMetadataLocks = 0;
@@ -195,6 +196,18 @@ void* operator new(std::size_t size)
 }
 void operator delete(void* memory) noexcept { std::free(memory); }
 void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
+void* operator new[](std::size_t size)
+{
+	auto* memory = ::operator new(size);
+	++arraysAllocated;
+	return memory;
+}
+void operator delete[](void* memory) noexcept
+{
+	++arraysFreed;
+	::operator delete(memory);
+}
+void operator delete[](void* memory, std::size_t) noexcept { ::operator delete[](memory); }
 
 // Only driver and engine boundaries are substituted; publication is extracted from production.
 struct ID3D11VertexShader : ShaderObject
@@ -452,10 +465,11 @@ namespace SIE
 				duringCompile();
 			return compileFails ? nullptr : &blob;
 		}
-		std::unique_ptr<RE::BSGraphics::VertexShader> CreateVertexShader(ID3DBlob&, const RE::BSShader&, uint32_t descriptor)
+		auto CreateVertexShader(ID3DBlob& shaderData, const RE::BSShader&, uint32_t descriptor)
 		{
-			auto shader = std::make_unique<RE::BSGraphics::VertexShader>();
+			auto shader = Util::ShaderLifetime::MakeWithTrailingBytes<RE::BSGraphics::VertexShader>(shaderData.GetBufferSize());
 			shader->id = descriptor;
+			std::memcpy(reinterpret_cast<uint8_t*>(shader.get()) + sizeof(*shader), shaderData.GetBufferPointer(), shaderData.GetBufferSize());
 			return shader;
 		}
 		std::unique_ptr<RE::BSGraphics::PixelShader> CreatePixelShader(ID3DBlob&, const RE::BSShader&, uint32_t descriptor)
@@ -520,9 +534,30 @@ namespace
 		ShaderBytecodeMap.clear();
 	}
 
+	void CheckTrailingBytecode()
+	{
+		const auto allocated = arraysAllocated.load(), freed = arraysFreed.load();
+		{
+			RE::BSShader shader;
+			SIE::SShaderCache::blob.bytes = { 1, 7, 11, 23 };
+			auto wrapper = SIE::SShaderCache::CreateVertexShader(SIE::SShaderCache::blob, shader, 9);
+			Require(wrapper->id == 9);
+			Require(std::memcmp(reinterpret_cast<uint8_t*>(wrapper.get()) + sizeof(*wrapper),
+						SIE::SShaderCache::blob.GetBufferPointer(), SIE::SShaderCache::blob.GetBufferSize()) == 0);
+		}
+		Require(arraysAllocated == allocated + 1 && arraysFreed == freed + 1);
+		bool overflowRejected = false;
+		try {
+			Util::ShaderLifetime::MakeWithTrailingBytes<RE::BSGraphics::VertexShader>(std::numeric_limits<std::size_t>::max());
+		} catch (const std::bad_array_new_length&) {
+			overflowRejected = true;
+		}
+		Require(overflowRejected && arraysAllocated == allocated + 1);
+	}
+
 	void CheckOwnerAllocationFailure()
 	{
-		auto wrapper = std::make_unique<RE::BSGraphics::VertexShader>();
+		auto wrapper = Util::ShaderLifetime::MakeWithTrailingBytes<RE::BSGraphics::VertexShader>(128);
 		winrt::com_ptr<ID3D11VertexShader> resource;
 		resource.attach(new ID3D11VertexShader);
 		++observations.created;
@@ -871,6 +906,7 @@ namespace
 int main()
 {
 	try {
+		CheckTrailingBytecode();
 		CheckOwnerAllocationFailure();
 		CheckMetadataTransactions();
 		CheckBytecodeHooks();
@@ -887,6 +923,7 @@ int main()
 		Require(!observations.driverUnderLock && !observations.releaseUnderLock && !observations.namingUnderLock);
 		Require(observations.created == observations.released && observations.named > 0);
 		Require(observations.wrappersCreated == observations.wrappersDestroyed);
+		Require(arraysAllocated == arraysFreed);
 		std::cout << "All three shader stages: resident lookups, stale generations, duplicate races, allocation/generation races, failure cleanup, retirement, metadata transactions and retained engine bindings passed\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

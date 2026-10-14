@@ -20,6 +20,7 @@
 #include <thread>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
 #include "RE/N/NiSmartPointer.h"
 
@@ -27,6 +28,8 @@ namespace
 {
 	thread_local int allocationsUntilFailure = -1;
 	thread_local std::uint64_t allocationCalls = 0;
+	thread_local std::uint64_t allocationsUnderQueueLock = 0;
+	thread_local std::function<void()> afterQueueUnlock;
 	thread_local bool queueLockHeld = false;
 	const auto renderThreadID = std::this_thread::get_id();
 	bool verifyCaptureLock = false;
@@ -93,6 +96,8 @@ namespace
 void* operator new(std::size_t a_size)
 {
 	++allocationCalls;
+	if (queueLockHeld)
+		++allocationsUnderQueueLock;
 	if (allocationsUntilFailure == 0) {
 		allocationsUntilFailure = -1;
 		throw std::bad_alloc{};
@@ -120,8 +125,14 @@ namespace RE
 	struct BSSpinLockGuard
 	{
 		explicit BSSpinLockGuard(std::mutex& a_mutex) : lock(a_mutex) { queueLockHeld = true; }
-		~BSSpinLockGuard() { queueLockHeld = false; }
-		std::lock_guard<std::mutex> lock;
+		~BSSpinLockGuard()
+		{
+			queueLockHeld = false;
+			lock.unlock();
+			if (auto action = std::exchange(afterQueueUnlock, {}))
+				action();
+		}
+		std::unique_lock<std::mutex> lock;
 	};
 	struct ShadowSceneNode
 	{
@@ -155,7 +166,7 @@ namespace RE
 struct LightLimitFix
 {
 	using SceneLightSnapshot = Snapshot;
-	std::unordered_map<RE::ShadowSceneNode*, Snapshot> sceneLightSnapshots;
+	LightLimitFixDetail::SceneLightSnapshotCache<RE::ShadowSceneNode, Snapshot> sceneLightSnapshots;
 	bool sceneLightSnapshotFailed = false;
 	const Snapshot* GetSceneLightSnapshot(RE::ShadowSceneNode* a_node);
 	static void RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint32_t& a_index);
@@ -173,9 +184,11 @@ namespace globals::game
 
 const Snapshot* Capture(LightLimitFix& a_fix, RE::ShadowSceneNode* a_node)
 {
+	const auto before = allocationsUnderQueueLock;
 	verifyCaptureLock = true;
 	const auto* snapshot = a_fix.GetSceneLightSnapshot(a_node);
 	verifyCaptureLock = false;
+	Require(allocationsUnderQueueLock == before);
 	return snapshot;
 }
 
@@ -271,6 +284,146 @@ void TestCapture()
 	fix.sceneLightSnapshots.clear();
 	Require(destroyed == 5);
 	Require(Capture(fix, &node)->Find(node.activeLights.front().get()) != nullptr);
+}
+
+void TestPreparedCaptureStorage()
+{
+	std::atomic<unsigned> destroyed{ 0 };
+	RE::ShadowSceneNode node;
+	node.activeLights.push_back(RE::make_nismart<Light>(destroyed));
+	node.activeShadowLights.push_back(RE::make_nismart<ShadowLight>(destroyed));
+	Snapshot snapshot;
+	std::size_t required = 0;
+	verifyCaptureLock = true;
+	{
+		RE::BSSpinLockGuard lock{ node.lightQueueLock };
+		Require(!snapshot.TryCaptureScene(node, required));
+	}
+	Require(required == 2);
+	Require(node.activeLights.front()->references == 1 && node.activeShadowLights.front()->references == 1);
+	snapshot.ReserveCapture(required);
+	for (unsigned frame = 0; frame < 3; ++frame) {
+		const auto before = allocationCalls;
+		const auto lockedBefore = allocationsUnderQueueLock;
+		{
+			RE::BSSpinLockGuard lock{ node.lightQueueLock };
+			Require(snapshot.TryCaptureScene(node, required));
+		}
+		Require(allocationCalls == before && allocationsUnderQueueLock == lockedBefore);
+		Require(node.activeLights.front()->references == 2 && node.activeShadowLights.front()->references == 2);
+		snapshot.FinishCapture();
+		Require(snapshot.Find(node.activeLights.front().get()) == node.activeLights.front().get());
+		Require(snapshot.ActiveLights().size() == 2);
+		Require(snapshot.ActiveLights()[0] == node.activeLights.front().get());
+		Require(snapshot.ActiveLights()[1] == node.activeShadowLights.front().get());
+		snapshot.Clear();
+		Require(snapshot.ActiveLights().empty());
+		Require(snapshot.Find(node.activeLights.front().get()) == nullptr);
+		Require(node.activeLights.front()->references == 1 && node.activeShadowLights.front()->references == 1);
+	}
+	verifyCaptureLock = false;
+	Require(destroyed == 0 && !queueLockHeld);
+}
+
+void TestCaptureGrowthRace()
+{
+	std::atomic<unsigned> destroyed{ 0 };
+	RE::ShadowSceneNode node;
+	node.activeLights.push_back(RE::make_nismart<Light>(destroyed));
+	bool grew = false;
+	afterQueueUnlock = [&] {
+		Require(!queueLockHeld);
+		std::thread grow([&] {
+			RE::BSSpinLockGuard lock{ node.lightQueueLock };
+			for (unsigned index = 0; index < 64; ++index)
+				node.activeLights.push_back(RE::make_nismart<Light>(destroyed));
+			node.lightQueueRemove.push_back(RE::make_nismart<Light>(destroyed));
+		});
+		grow.join();
+		grew = true;
+	};
+	LightLimitFix fix;
+	const auto* snapshot = Capture(fix, &node);
+	Require(grew && snapshot && !afterQueueUnlock);
+	Require(snapshot->ActiveLights().size() == 65);
+	for (std::size_t index = 0; index < node.activeLights.size(); ++index) {
+		Require(snapshot->ActiveLights()[index] == node.activeLights[index].get());
+		Require(snapshot->Find(node.activeLights[index].get()) == node.activeLights[index].get());
+	}
+	Require(snapshot->Find(node.lightQueueRemove.front().get()) == node.lightQueueRemove.front().get());
+	Require(node.lightQueueRemove.front()->references == 2 && destroyed == 0);
+}
+
+void TestCaptureFailureAfterWithdrawal()
+{
+	std::atomic<unsigned> destroyed{ 0 };
+	RE::ShadowSceneNode node;
+	node.activeLights.push_back(RE::make_nismart<Light>(destroyed));
+	node.activeShadowLights.push_back(RE::make_nismart<ShadowLight>(destroyed));
+	bool withdrew = false;
+	std::function<void()> withdrawAfterCapture;
+	withdrawAfterCapture = [&] {
+		if (node.activeLights.front()->references == 1) {
+			afterQueueUnlock = withdrawAfterCapture;
+			return;
+		}
+		Require(!queueLockHeld && node.activeLights.front()->references == 2);
+		std::thread cleanup([&] {
+			RE::BSSpinLockGuard lock{ node.lightQueueLock };
+			node.activeLights.clear();
+			node.activeShadowLights.clear();
+		});
+		cleanup.join();
+		Require(destroyed == 0);
+		withdrew = true;
+		allocationsUntilFailure = 0;
+	};
+	afterQueueUnlock = withdrawAfterCapture;
+	LightLimitFix fix;
+	const auto before = loggedFailures;
+	Require(Capture(fix, &node) == nullptr);
+	allocationsUntilFailure = -1;
+	Require(withdrew && !afterQueueUnlock && !queueLockHeld);
+	Require(destroyed == 2 && fix.sceneLightSnapshotFailed && fix.sceneLightSnapshots.empty());
+	Require(loggedFailures == before + 1);
+	Require(Capture(fix, &node) == nullptr && loggedFailures == before + 1);
+}
+
+void TestSnapshotCacheReuse()
+{
+	std::atomic<unsigned> destroyed{ 0 };
+	RE::ShadowSceneNode firstNode;
+	RE::ShadowSceneNode secondNode;
+	firstNode.activeLights.push_back(RE::make_nismart<Light>(destroyed));
+	secondNode.activeShadowLights.push_back(RE::make_nismart<ShadowLight>(destroyed));
+	LightLimitFix fix;
+	const auto* firstSnapshot = Capture(fix, &firstNode);
+	const auto* secondSnapshot = Capture(fix, &secondNode);
+	Require(firstSnapshot && secondSnapshot && firstSnapshot != secondSnapshot);
+	auto* firstKey = firstNode.activeLights.front().get();
+	auto* secondKey = secondNode.activeShadowLights.front().get();
+	firstNode.activeLights.clear();
+	secondNode.activeShadowLights.clear();
+	Require(destroyed == 0);
+	const auto before = allocationCalls;
+	fix.sceneLightSnapshots.clear();
+	Require(allocationCalls == before && destroyed == 2 && fix.sceneLightSnapshots.empty());
+	Require(!fix.sceneLightSnapshots.Find(&firstNode) && !fix.sceneLightSnapshots.Find(&secondNode));
+	Require(firstSnapshot->Find(firstKey) == nullptr && secondSnapshot->Find(secondKey) == nullptr);
+	Require(firstSnapshot->ActiveLights().empty() && secondSnapshot->ActiveLights().empty());
+	secondNode.activeLights.push_back(RE::make_nismart<Light>(destroyed));
+	firstNode.lightQueueAdd.push_back(RE::make_nismart<Light>(destroyed));
+	const auto* reusedFirst = Capture(fix, &secondNode);
+	const auto* reusedSecond = Capture(fix, &firstNode);
+	Require(reusedFirst == firstSnapshot && reusedSecond == secondSnapshot);
+	Require(reusedFirst->ActiveLights().size() == 1);
+	Require(reusedFirst->ActiveLights().front() == secondNode.activeLights.front().get());
+	Require(reusedSecond->ActiveLights().empty());
+	Require(reusedSecond->Find(firstNode.lightQueueAdd.front().get()) == firstNode.lightQueueAdd.front().get());
+	Require(reusedFirst->Find(firstNode.lightQueueAdd.front().get()) == nullptr);
+	Require(reusedSecond->Find(secondNode.activeLights.front().get()) == nullptr);
+	Require(fix.sceneLightSnapshots.Find(&secondNode) == reusedFirst);
+	Require(fix.sceneLightSnapshots.Find(&firstNode) == reusedSecond);
 }
 
 void TestAllocationFailures()
@@ -370,6 +523,66 @@ void TestNativeWorkInvalidation()
 		Require(!queueLockHeld && node.references == 1);
 	}
 	std::cout << "Live dispatch respects cleared, terminated, shrunk, replaced and unowned work\n";
+}
+
+void TestNativePreparationWorkInvalidation()
+{
+	for (unsigned change = 0; change < 5; ++change) {
+		std::atomic<unsigned> destroyed{ 0 };
+		RE::ShadowSceneNode node;
+		node.activeShadowLights.push_back(RE::make_nismart<ShadowLight>(destroyed));
+		node.activeShadowLights.push_back(RE::make_nismart<ShadowLight>(destroyed));
+		auto* first = node.activeShadowLights[0].get();
+		auto* replacement = node.activeShadowLights[1].get();
+		unsigned originalRenders = 0;
+		unsigned replacementRenders = 0;
+		first->onRender = [&] { ++originalRenders; };
+		replacement->onRender = [&] { ++replacementRenders; };
+		node.shadowLightsAccum = { first, nullptr };
+		bool invalidated = false;
+		std::function<void()> invalidateAfterSelection;
+		invalidateAfterSelection = [&] {
+			if (first->references == 1) {
+				afterQueueUnlock = invalidateAfterSelection;
+				return;
+			}
+			Require(!queueLockHeld && first->references == 2);
+			std::thread cleanup([&] {
+				RE::BSSpinLockGuard lock{ node.lightQueueLock };
+				switch (change) {
+				case 0:
+					node.shadowLightsAccum.clear();
+					break;
+				case 1:
+					node.shadowLightsAccum[0] = nullptr;
+					break;
+				case 2:
+					node.shadowLightsAccum.resize(0);
+					break;
+				case 3:
+					node.shadowLightsAccum[0] = replacement;
+					break;
+				case 4:
+					break;
+				}
+				node.activeShadowLights.erase(node.activeShadowLights.begin());
+			});
+			cleanup.join();
+			Require(destroyed == 0 && first->references == 1);
+			invalidated = true;
+		};
+		afterQueueUnlock = invalidateAfterSelection;
+		const auto lockedBefore = allocationsUnderQueueLock;
+		std::uint32_t index = 0;
+		verifyCaptureLock = true;
+		LightLimitFix::RenderVRShadowLights(&node, index);
+		verifyCaptureLock = false;
+		Require(invalidated && !afterQueueUnlock && !queueLockHeld);
+		Require(index == (change == 3 ? 1u : 0u) && originalRenders == 0);
+		Require(replacementRenders == (change == 3 ? 1u : 0u));
+		Require(destroyed == 1 && replacement->references == 1 && node.references == 1);
+		Require(allocationsUnderQueueLock == lockedBefore);
+	}
 }
 
 void TestNativeRenderLifetime()
@@ -705,9 +918,11 @@ void TestOwnerIndexAllocationFailures()
 		node.shadowLightsAccum = { light.get(), nullptr };
 		const auto before = loggedFailures;
 		std::uint32_t index = 0;
+		const auto lockedBefore = allocationsUnderQueueLock;
 		allocationsUntilFailure = failureAfter;
 		LightLimitFix::RenderVRShadowLights(&node, index);
 		allocationsUntilFailure = -1;
+		Require(allocationsUnderQueueLock == lockedBefore);
 		Require(!queueLockHeld && light->references == 2 && node.references == 1 && destroyed == 0);
 		if (index == 1) {
 			Require(failures > 0 && light->renderCalls == 1 && loggedFailures == before);
@@ -720,6 +935,67 @@ void TestOwnerIndexAllocationFailures()
 		Require(index == 1 && light->renderCalls == 1 && loggedFailures == before + 1);
 	}
 	Require(false);
+}
+
+void TestNativeIndexReuse()
+{
+	std::atomic<unsigned> destroyed{ 0 };
+	RE::ShadowSceneNode node;
+	node.activeShadowLights.push_back(RE::make_nismart<ShadowLight>(destroyed));
+	node.activeShadowLights.push_back(RE::make_nismart<ShadowLight>(destroyed));
+	node.shadowLightsAccum = { node.activeShadowLights[0].get(), node.activeShadowLights[1].get(), nullptr };
+	std::uint32_t index = 0;
+	LightLimitFix::RenderVRShadowLights(&node, index);
+	Require(index == 2);
+	const auto before = allocationCalls;
+	const auto lockedBefore = allocationsUnderQueueLock;
+	verifyCaptureLock = true;
+	for (unsigned frame = 0; frame < 3; ++frame) {
+		index = 0;
+		LightLimitFix::RenderVRShadowLights(&node, index);
+		Require(index == 2 && node.references == 1);
+		Require(node.activeShadowLights[0]->references == 1 && node.activeShadowLights[1]->references == 1);
+	}
+	verifyCaptureLock = false;
+	Require(allocationCalls == before && allocationsUnderQueueLock == lockedBefore);
+	Require(node.activeShadowLights[0]->renderCalls == 4 && node.activeShadowLights[1]->renderCalls == 4);
+	Require(destroyed == 0 && !queueLockHeld);
+}
+
+void TestReentrantNativeDispatch()
+{
+	std::atomic<unsigned> destroyed{ 0 };
+	RE::ShadowSceneNode outer;
+	RE::ShadowSceneNode inner;
+	auto first = RE::make_nismart<ShadowLight>(destroyed);
+	auto second = RE::make_nismart<ShadowLight>(destroyed);
+	auto nested = RE::make_nismart<ShadowLight>(destroyed);
+	outer.activeShadowLights = { first, second };
+	inner.lightQueueRemove.push_back(nested);
+	outer.shadowLightsAccum = { first.get(), second.get(), nullptr };
+	inner.shadowLightsAccum = { nested.get(), nullptr };
+	nested->onRender = [&] {
+		Require(first->references == 3 && second->references == 2 && nested->references == 3);
+		Require(outer.references == 2 && inner.references == 2);
+	};
+	first->onRender = [&] {
+		std::uint32_t nestedIndex = 0;
+		LightLimitFix::RenderVRShadowLights(&inner, nestedIndex);
+		Require(nestedIndex == 1 && nested->renderCalls == 1 && nested->references == 2);
+		Require(first->references == 3 && inner.references == 1 && outer.references == 2);
+	};
+	second->onRender = [&] {
+		Require(first->references == 2 && second->references == 3 && nested->references == 2);
+	};
+	const auto lockedBefore = allocationsUnderQueueLock;
+	std::uint32_t index = 0;
+	verifyCaptureLock = true;
+	LightLimitFix::RenderVRShadowLights(&outer, index);
+	verifyCaptureLock = false;
+	Require(index == 2 && first->renderCalls == 1 && second->renderCalls == 1);
+	Require(outer.references == 1 && inner.references == 1);
+	Require(first->references == 2 && second->references == 2 && nested->references == 2);
+	Require(allocationsUnderQueueLock == lockedBefore && destroyed == 0 && !queueLockHeld);
 }
 
 void TestNativeRenderUnwind()
@@ -817,9 +1093,15 @@ int main(int a_argc, char** a_argv)
 	}
 	TestOwnership();
 	TestCapture();
+	TestPreparedCaptureStorage();
+	TestCaptureGrowthRace();
+	TestCaptureFailureAfterWithdrawal();
+	TestSnapshotCacheReuse();
 	TestAllocationFailures();
 	TestEnumerationOwnership();
+	TestOwnerIndexAllocationFailures();
 	TestNativeWorkInvalidation();
+	TestNativePreparationWorkInvalidation();
 	TestNativeRenderLifetime();
 	TestEmptyNativeRender();
 	TestCompletedLightRelease();
@@ -831,7 +1113,8 @@ int main(int a_argc, char** a_argv)
 	TestNativeRenderSelection();
 	TestNativeOwnerSources();
 	TestOwnerIndexMutation();
-	TestOwnerIndexAllocationFailures();
+	TestNativeIndexReuse();
+	TestReentrantNativeDispatch();
 	TestNativeRenderUnwind();
 	std::cout << "Scene light ownership, live native dispatch, sun ownership and snapshot allocation failures passed\n";
 }

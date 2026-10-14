@@ -1657,20 +1657,30 @@ const LightLimitFix::SceneLightSnapshot* LightLimitFix::GetSceneLightSnapshot(RE
 {
 	if (!a_node || sceneLightSnapshotFailed)
 		return nullptr;
-	if (const auto it = sceneLightSnapshots.find(a_node); it != sceneLightSnapshots.end())
-		return &it->second;
+	if (const auto* snapshot = sceneLightSnapshots.Find(a_node))
+		return snapshot;
 
+	SceneLightSnapshot* snapshot = nullptr;
 	try {
-		SceneLightSnapshot snapshot;
-		{
-			auto& runtime = a_node->GetRuntimeData();
-			// VR's queue drain drops active and queued references under this lock.
-			const RE::BSSpinLockGuard lock{ runtime.lightQueueLock };
-			snapshot.RetainScene(runtime);
+		snapshot = &sceneLightSnapshots.Spare();
+		auto& runtime = a_node->GetRuntimeData();
+		for (;;) {
+			std::size_t required = 0;
+			bool captured = false;
+			{
+				const RE::BSSpinLockGuard lock{ runtime.lightQueueLock };
+				captured = snapshot->TryCaptureScene(runtime, required);
+			}
+			if (captured)
+				break;
+			snapshot->ReserveCapture(required);
 		}
-		// Publish only complete captures; failed captures release references after unlocking.
-		return &sceneLightSnapshots.try_emplace(a_node, std::move(snapshot)).first->second;
+		// Ownership is complete before deduplication or publication can allocate.
+		snapshot->FinishCapture();
+		return sceneLightSnapshots.Publish(a_node);
 	} catch (const std::bad_alloc&) {
+		if (snapshot)
+			snapshot->Clear();
 		sceneLightSnapshotFailed = true;
 		logger::error("Light Limit Fix: scene light capture allocation failed; skipping engine lights until reset");
 		return nullptr;
@@ -1682,13 +1692,15 @@ void LightLimitFix::RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint3
 	if (!a_node)
 		return;
 	RE::NiPointer<RE::ShadowSceneNode> sceneOwner;
-	std::optional<SceneLightSnapshot::OwnerIndex> ownerIndex;
+	SceneLightSnapshot::OwnerIndexLease indexLease;
+	auto& ownerIndex = indexLease.Get();
+	bool indexPrepared = false;
 	auto& runtime = a_node->GetRuntimeData();
 
 	for (;;) {
 		RE::NiPointer<RE::BSLight> lightOwner;
 		RE::BSLight* light = nullptr;
-		try {
+		{
 			const RE::BSSpinLockGuard lock{ runtime.lightQueueLock };
 			// Native selection observes the live array after each Render; withdrawn work must stay withdrawn.
 			if (a_index >= runtime.shadowLightsAccum.size() || !runtime.shadowLightsAccum[a_index])
@@ -1700,14 +1712,31 @@ void LightLimitFix::RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint3
 				// The scene directly deletes its sun; only the scene may supply its lifetime lease.
 				light = runtime.sunShadowDirLight;
 			} else {
-				if (!ownerIndex)
-					ownerIndex.emplace(runtime);
-				lightOwner = ownerIndex->Retain(runtime, key);
+				lightOwner = ownerIndex.Retain(runtime, key);
 				light = lightOwner.get();
 			}
-		} catch (const std::bad_alloc&) {
-			logger::error("Light Limit Fix: native shadow owner index allocation failed; skipping remaining shadow maps");
-			return;
+		}
+		if (lightOwner && !indexPrepared) {
+			try {
+				for (;;) {
+					std::size_t required = 0;
+					bool captured = false;
+					{
+						const RE::BSSpinLockGuard lock{ runtime.lightQueueLock };
+						captured = ownerIndex.TryCaptureScene(runtime, required);
+					}
+					if (captured)
+						break;
+					ownerIndex.ReserveCapture(required);
+				}
+				ownerIndex.FinishCapture();
+				indexPrepared = true;
+				// Preparation releases the queue lock; select current native work again before rendering.
+				continue;
+			} catch (const std::bad_alloc&) {
+				logger::error("Light Limit Fix: native shadow owner index allocation failed; skipping remaining shadow maps");
+				return;
+			}
 		}
 		if (!light || !light->IsShadowLight())
 			break;

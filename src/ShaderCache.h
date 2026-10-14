@@ -418,7 +418,7 @@ namespace SIE
 
 	struct ShaderCacheResult
 	{
-		ID3DBlob* blob;
+		winrt::com_ptr<ID3DBlob> blob;
 		ShaderCompilationTask::Status status;
 		system_clock::time_point compileTime = system_clock::now();
 		bool loadedFromDisk = false;  ///< true when the shader blob was read from the disk cache rather than compiled
@@ -597,13 +597,13 @@ namespace SIE
 		bool Clear(const std::string& a_path);
 
 		/** @brief Publishes a result unless its task is stale or an eviction consumes it.
-		 *  @return True when a_blob remains usable by the caller. */
+		 *  @return True when bytecode was admitted; the caller retains ownership. */
 		bool AddCompletedShader(
 			const std::string& key,
 			ShaderClass shaderClass,
 			const RE::BSShader& shader,
 			uint32_t descriptor,
-			ID3DBlob* a_blob,
+			const winrt::com_ptr<ID3DBlob>& a_blob,
 			const std::wstring& a_diskPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
 			const Util::ContentHash::Hash128& a_packCompileStateDigest,
@@ -619,16 +619,18 @@ namespace SIE
 			Claimed,   // Claimed as Pending; caller must compile and call AddCompletedShader
 			RejectedStale
 		};
-		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(
+		/** Return an owned cache-hit blob acquired while the metadata lock is held. */
+		std::pair<ClaimResult, winrt::com_ptr<ID3DBlob>> ClaimCompilation(
 			const std::string& key,
 			std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		void ResolvePendingFailure(
 			const std::string& key,
 			std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
-		ID3DBlob* GetCompletedShader(const std::string& a_key);
-		ID3DBlob* GetCompletedShader(const SIE::ShaderCompilationTask& a_task);
-		ID3DBlob* GetCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor);
+		/** Retain completed bytecode across concurrent invalidation and retirement. */
+		winrt::com_ptr<ID3DBlob> GetCompletedShader(const std::string& a_key);
+		winrt::com_ptr<ID3DBlob> GetCompletedShader(const SIE::ShaderCompilationTask& a_task);
+		winrt::com_ptr<ID3DBlob> GetCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor);
 		bool IsShaderLoadedFromDisk(const std::string& a_key);
 		ShaderCompilationTask::Status GetShaderStatus(const std::string& a_key);
 		std::string GetShaderStatsString(bool a_timeOnly = false, bool a_elapsedOnly = false);

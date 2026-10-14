@@ -2724,7 +2724,7 @@ namespace SIE
 			return result;
 		}
 
-		static ID3DBlob* CompileShader(
+		static winrt::com_ptr<ID3DBlob> CompileShader(
 			ShaderClass shaderClass,
 			const RE::BSShader& shader,
 			uint32_t descriptor,
@@ -2796,16 +2796,16 @@ namespace SIE
 			const auto type = shader.shaderType.get();
 
 			// check diskcache
-			ID3DBlob* shaderBlob = nullptr;
+			winrt::com_ptr<ID3DBlob> shaderBlob;
 			const bool readDiskCache = useDiskCache && cache.IsSkipUnchangedShaders();
 			auto* managedPack = useDiskCache ? GetShaderPackStore(compileState.developerMode) : nullptr;
 			if (readDiskCache && managedPack) {
-				shaderBlob = LoadShaderBlobFromPack(
+				shaderBlob.attach(LoadShaderBlobFromPack(
 					*managedPack,
 					compileState.developerMode,
 					diskPath,
 					shaderSourcePath,
-					packCompileStateDigest);
+					packCompileStateDigest));
 				if (shaderBlob) {
 					logger::debug("Loaded shader from managed pack: {}", Util::WStringToString(diskPath));
 					if (dependencyTracker && !IsSaveLoadSafeModeActive()) {
@@ -2824,7 +2824,6 @@ namespace SIE
 							compileState.developerMode,
 							/*fromDisk=*/true,
 							a_taskGeneration)) {
-						shaderBlob->Release();
 						return nullptr;
 					}
 					return shaderBlob;
@@ -2856,7 +2855,7 @@ namespace SIE
 				} else if (auto cached = ReadVerifiedCachedShaderBlob(diskPath); !cached) {
 					logger::error("Failed to load {} shader {}::{:X}", magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor);
 				} else {
-					shaderBlob = cached.detach();
+					shaderBlob = std::move(cached);
 					logger::debug("Loaded shader from {}", Util::WStringToString(diskPath));
 					if (!cache.AddCompletedShader(
 							key,
@@ -2870,7 +2869,6 @@ namespace SIE
 							compileState.developerMode,
 							/*fromDisk=*/true,
 							a_taskGeneration)) {
-						shaderBlob->Release();
 						return nullptr;
 					}
 					return shaderBlob;
@@ -2936,7 +2934,7 @@ namespace SIE
 							shared->blob = FindReusableShaderBlob(*contentIdentity, compileState.developerMode, diskPath, path,
 								packCompileStateDigest, diskCacheGeneration, reuseSource);
 					}
-					shaderBlob = shared->blob.detach();
+					shaderBlob = std::move(shared->blob);
 					dedupeHit = shaderBlob != nullptr;
 					if (dedupeHit) {
 						if (reuseSource == ContentReuseSource::None)
@@ -2948,7 +2946,7 @@ namespace SIE
 						cache.IncSourceCompileTasks(a_taskGeneration);
 						cache.MarkCompilationPhaseStarted(a_taskGeneration);
 						compileResult = shared->Compile(path, pathString, defines.data(), GetShaderProfile(shaderClass),
-							flags, includeHandler, &shaderBlob, errorBlob.put());
+							flags, includeHandler, shaderBlob.put(), errorBlob.put());
 					}
 					return SUCCEEDED(compileResult);
 				},
@@ -2982,7 +2980,6 @@ namespace SIE
 				}
 				cache.RecordCompileFailure(key, pathString, errorText);
 				if (shaderBlob != nullptr) {
-					shaderBlob->Release();
 				}
 
 				cache.AddCompletedShader(
@@ -3013,8 +3010,7 @@ namespace SIE
 
 				const auto stripResult = D3DStripShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), stripFlags, strippedShaderBlob.put());
 				if (SUCCEEDED(stripResult) && strippedShaderBlob) {
-					shaderBlob->Release();
-					shaderBlob = strippedShaderBlob.detach();
+					shaderBlob = std::move(strippedShaderBlob);
 					canShare = true;
 				} else {
 					logger::warn("Cannot strip shader {} for sharing (HRESULT {:08X}); keeping its original bytecode", pathString, static_cast<uint32_t>(stripResult));
@@ -3033,7 +3029,7 @@ namespace SIE
 			try {
 				if (sourceDigest) {
 					cache.PersistCompiledShaderBlob(
-						shaderBlob,
+						shaderBlob.get(),
 						compileState.developerMode,
 						diskPath,
 						path,
@@ -3062,7 +3058,6 @@ namespace SIE
 					false,
 					a_taskGeneration,
 					sourceDigest, canShare ? contentIdentity : std::nullopt)) {
-				shaderBlob->Release();
 				return nullptr;
 			}
 			return shaderBlob;
@@ -3641,14 +3636,16 @@ namespace SIE
 
 	void ShaderCache::Clear()
 	{
+		decltype(shaderMap) retiredBytecode;
+		decltype(hlslToShaderMap) retiredSources;
 		{
 			std::scoped_lock lockMetadata{ mapMutex, hlslMapMutex };
 			// Claims in the new generation must not reuse bytecode or lose their source records.
 			compilationSet.BumpGeneration();
-			shaderMap.clear();
+			shaderMap.swap(retiredBytecode);
 			deferredEvictions.clear();
 			deferredEvictionCount.store(0, std::memory_order_relaxed);
-			hlslToShaderMap.clear();
+			hlslToShaderMap.swap(retiredSources);
 		}
 		mapCV.notify_all();
 		{
@@ -3939,7 +3936,7 @@ namespace SIE
 		ShaderClass shaderClass,
 		const RE::BSShader& shader,
 		uint32_t descriptor,
-		ID3DBlob* a_blob,
+		const winrt::com_ptr<ID3DBlob>& a_blob,
 		const std::wstring& a_diskPath,
 		const Util::ContentHash::Hash128& a_compileStateDigest,
 		const Util::ContentHash::Hash128& a_packCompileStateDigest,
@@ -3968,7 +3965,7 @@ namespace SIE
 			a_packCompileStateDigest,
 			a_developerMode,
 			a_sourceDigest,
-			Microsoft::WRL::ComPtr<ID3DBlob>{ fromDisk ? nullptr : a_blob },
+			Microsoft::WRL::ComPtr<ID3DBlob>{ fromDisk ? nullptr : a_blob.get() },
 			std::move(a_contentIdentity)
 		};
 
@@ -4015,7 +4012,7 @@ namespace SIE
 						hlslToShaderMap.emplace(lowerFilePath, std::set<hlslRecord>{ newRecord });
 					}
 				} catch (...) {
-					// No reader can observe this borrowed blob before its tracking record exists.
+					// Publish bytecode and source tracking as one metadata transaction.
 					shaderMap.erase(key);
 					trackingError = std::current_exception();
 				}
@@ -4052,7 +4049,7 @@ namespace SIE
 		return a_blob != nullptr && !evicted;
 	}
 
-	std::pair<ShaderCache::ClaimResult, ID3DBlob*> ShaderCache::ClaimCompilation(
+	std::pair<ShaderCache::ClaimResult, winrt::com_ptr<ID3DBlob>> ShaderCache::ClaimCompilation(
 		const std::string& key,
 		std::optional<uint64_t> a_taskGeneration)
 	{
@@ -4137,7 +4134,7 @@ namespace SIE
 		ApplyDeferredEviction(key);
 	}
 
-	ID3DBlob* ShaderCache::GetCompletedShader(const std::string& a_key)
+	winrt::com_ptr<ID3DBlob> ShaderCache::GetCompletedShader(const std::string& a_key)
 	{
 		std::string type = SIE::SShaderCache::GetTypeFromShaderString(a_key);
 		UpdateShaderModifiedTime(type);
@@ -4157,14 +4154,14 @@ namespace SIE
 		return nullptr;
 	}
 
-	ID3DBlob* ShaderCache::GetCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader,
+	winrt::com_ptr<ID3DBlob> ShaderCache::GetCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
 		auto key = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
 		return GetCompletedShader(key);
 	}
 
-	ID3DBlob* ShaderCache::GetCompletedShader(const ShaderCompilationTask& a_task)
+	winrt::com_ptr<ID3DBlob> ShaderCache::GetCompletedShader(const ShaderCompilationTask& a_task)
 	{
 		auto key = a_task.GetString();
 		return GetCompletedShader(key);
@@ -5420,7 +5417,7 @@ namespace SIE
 				continue;
 
 			auto* shaderBlob = record.compiledBlob.Get();
-			if (!shaderBlob || !record.sourceDigest || GetCompletedShader(record.key) != shaderBlob)
+			if (!shaderBlob || !record.sourceDigest || GetCompletedShader(record.key).get() != shaderBlob)
 				continue;
 
 			const bool managedLane = GetShaderPackStore(record.developerMode) != nullptr;
@@ -5794,9 +5791,8 @@ namespace SIE
 	{
 		// Synchronous callers also need to reject a clear during object creation.
 		a_taskGeneration = a_taskGeneration.value_or(compilationSet.generation.load(std::memory_order_acquire));
-		winrt::com_ptr<ID3DBlob> shaderBlob;
-		shaderBlob.copy_from(SShaderCache::CompileShader(ShaderClass::Vertex, shader, descriptor,
-			IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration));
+		auto shaderBlob = SShaderCache::CompileShader(ShaderClass::Vertex, shader, descriptor,
+			IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration);
 		if (!shaderBlob || IsTaskStale(a_taskGeneration))
 			return nullptr;
 
@@ -5835,9 +5831,8 @@ namespace SIE
 	{
 		// Synchronous callers also need to reject a clear during object creation.
 		a_taskGeneration = a_taskGeneration.value_or(compilationSet.generation.load(std::memory_order_acquire));
-		winrt::com_ptr<ID3DBlob> shaderBlob;
-		shaderBlob.copy_from(SShaderCache::CompileShader(ShaderClass::Pixel, shader, descriptor,
-			IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration));
+		auto shaderBlob = SShaderCache::CompileShader(ShaderClass::Pixel, shader, descriptor,
+			IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration);
 		if (!shaderBlob || IsTaskStale(a_taskGeneration))
 			return nullptr;
 
@@ -5876,9 +5871,8 @@ namespace SIE
 	{
 		// Synchronous callers also need to reject a clear during object creation.
 		a_taskGeneration = a_taskGeneration.value_or(compilationSet.generation.load(std::memory_order_acquire));
-		winrt::com_ptr<ID3DBlob> shaderBlob;
-		shaderBlob.copy_from(SShaderCache::CompileShader(ShaderClass::Compute, shader, descriptor,
-			IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration));
+		auto shaderBlob = SShaderCache::CompileShader(ShaderClass::Compute, shader, descriptor,
+			IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration);
 		if (!shaderBlob || IsTaskStale(a_taskGeneration))
 			return nullptr;
 

@@ -117,7 +117,7 @@ extract_between(
 )
 extract_between(
     "${_source}" "\tbool ShaderCache::AddCompletedShader("
-    "\n\tstd::pair<ShaderCache::ClaimResult, ID3DBlob*>" "shader_add_completed_under_test.h"
+    "\n\tstd::pair<ShaderCache::ClaimResult, winrt::com_ptr<ID3DBlob>>" "shader_add_completed_under_test.h"
 )
 
 extract_between(
@@ -145,4 +145,13 @@ extract_between(
 extract_between(
     "${_source}" "\t\tstd::unique_ptr<RE::BSGraphics::VertexShader, Util::ShaderLifetime::TrailingBytesDeleter<RE::BSGraphics::VertexShader>> CreateVertexShader("
     "\n\t\tstatic bool GetImagespaceShaderDescriptor(" "shader_factories_under_test.h"
+)
+
+extract_between(
+    "${_source}" "\twinrt::com_ptr<ID3DBlob> ShaderCache::GetCompletedShader(const std::string&"
+    "\n\twinrt::com_ptr<ID3DBlob> ShaderCache::GetCompletedShader(ShaderClass" "shader_blob_lookup_under_test.h"
+)
+extract_between(
+    "${_source}" "\tstd::pair<ShaderCache::ClaimResult, winrt::com_ptr<ID3DBlob>>"
+    "\n\tvoid ShaderCache::ResolvePendingFailure(" "shader_blob_claim_under_test.h"
 )

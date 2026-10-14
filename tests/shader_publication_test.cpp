@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -413,7 +414,7 @@ namespace SIE
 	};
 	struct ShaderCacheResult
 	{
-		ID3DBlob* blob = nullptr;
+		winrt::com_ptr<ID3DBlob> blob;
 		ShaderCompilationTask::Status status = ShaderCompilationTask::Completed;
 		system_clock::time_point compileTime{};
 		bool loadedFromDisk = false;
@@ -438,7 +439,13 @@ namespace SIE
 		struct Notification
 		{
 			unsigned count = 0;
-			void notify_all() { ++count; }
+			std::condition_variable_any condition;
+			void notify_all()
+			{
+				++count;
+				condition.notify_all();
+			}
+			void wait(std::unique_lock<MetadataMutex>& lock) { condition.wait(lock); }
 		} mapCV;
 		struct hlslRecord
 		{
@@ -458,8 +465,20 @@ namespace SIE
 		std::unordered_map<std::string, int> deferredEvictions;
 		std::unordered_map<std::string, std::set<hlslRecord>> hlslToShaderMap;
 		bool ApplyDeferredEviction(const std::string&) { return false; }
+		enum class ClaimResult
+		{
+			CacheHit,
+			Claimed,
+			RejectedStale
+		};
+		std::pair<ClaimResult, winrt::com_ptr<ID3DBlob>> ClaimCompilation(const std::string&, std::optional<uint64_t>);
+		winrt::com_ptr<ID3DBlob> GetCompletedShader(const std::string&);
+		void UpdateShaderModifiedTime(const std::string&) {}
+		bool ShaderModifiedSince(const std::string&, system_clock::time_point) { return false; }
+		system_clock::time_point GetModifiedShaderMapTime(const std::string&) { return {}; }
+
 		bool AddCompletedShader(const std::string&, ShaderClass, const RE::BSShader&, uint32_t,
-			ID3DBlob*, const std::wstring&, const Util::ContentHash::Hash128&, const Util::ContentHash::Hash128&,
+			const winrt::com_ptr<ID3DBlob>&, const std::wstring&, const Util::ContentHash::Hash128&, const Util::ContentHash::Hash128&,
 			bool, bool, std::optional<uint64_t>, std::optional<Util::ContentHash::Hash128>, std::optional<Util::ShaderContentReuse::Identity>);
 		std::atomic<size_t> deferredEvictionCount{ 0 };
 		void RequestFeatureShaderClear(bool) {}
@@ -490,11 +509,13 @@ namespace SIE
 		ID3DBlob blob;
 		bool compileFails = false;
 		std::function<void()> duringCompile;
-		ID3DBlob* CompileShader(ShaderClass, const RE::BSShader&, uint32_t, bool, int*, std::optional<uint64_t>)
+		winrt::com_ptr<ID3DBlob> CompileShader(ShaderClass, const RE::BSShader&, uint32_t, bool, int*, std::optional<uint64_t>)
 		{
 			if (duringCompile)
 				duringCompile();
-			return compileFails ? nullptr : &blob;
+			winrt::com_ptr<ID3DBlob> result;
+			result.copy_from(compileFails ? nullptr : &blob);
+			return result;
 		}
 		int GetVariableIndex(ShaderClass, const RE::BSShader&, const char* name)
 		{
@@ -509,6 +530,8 @@ namespace SIE
 
 // Publication shares the extracted result traits and real generation-claim utility.
 #include "shader_add_completed_under_test.h"
+#include "shader_blob_claim_under_test.h"
+#include "shader_blob_lookup_under_test.h"
 #include "shader_clear_metadata_under_test.h"
 #include "shader_publication_under_test.h"
 #include "shader_release_under_test.h"
@@ -644,8 +667,10 @@ namespace
 		SIE::ShaderCache cache;
 		RE::BSShader shader;
 		const auto publish = [&](uint64_t generation) {
+			winrt::com_ptr<ID3DBlob> owned;
+			owned.copy_from(&blob);
 			return cache.AddCompletedShader("Lighting", SIE::ShaderClass::Vertex, shader, 1,
-				&blob, L"cache/1", {}, {}, false, false, generation, {}, {});
+				owned, L"cache/1", {}, {}, false, false, generation, {}, {});
 		};
 		bool cleared = false;
 		afterMetadataUnlock = [&] {
@@ -665,7 +690,7 @@ namespace
 		cache.Clear();
 		Require(published && cache.shaderMap.contains("Lighting"));
 		Require(cache.hlslToShaderMap.at(shader.fxpFilename).begin()->key == "Lighting");
-		Require(cache.compilationSet.generation == admittedGeneration + 1 && blob.references == 2);
+		Require(cache.compilationSet.generation == admittedGeneration + 1 && blob.references == 3);
 		const auto staleGeneration = cache.compilationSet.generation.load();
 		cache.Clear();
 		Require(!publish(staleGeneration));
@@ -686,6 +711,36 @@ namespace
 		Require(publish(generation));
 		Require(cache.shaderMap.contains("Lighting") && cache.hlslToShaderMap.at(shader.fxpFilename).size() == 1);
 		cache.Clear();
+	}
+
+	void CheckBlobOwnership()
+	{
+		for (bool disk : { false, true }) {
+			for (unsigned iteration = 0; iteration < 4; ++iteration) {
+				ID3DBlob blob;
+				SIE::ShaderCache cache;
+				RE::BSShader shader;
+				const auto generation = cache.compilationSet.generation.load();
+				winrt::com_ptr<ID3DBlob> producer;
+				producer.attach(&blob);
+				Require(cache.AddCompletedShader("Lighting", SIE::ShaderClass::Vertex, shader, 1,
+					producer, L"cache/1", {}, {}, false, disk, generation, {}, {}));
+				producer = nullptr;
+				Require(blob.references == (disk ? 1u : 2u));
+				auto reader = cache.GetCompletedShader("Lighting");
+				auto [claim, claimed] = cache.ClaimCompilation("Lighting", generation);
+				Require(claim == SIE::ShaderCache::ClaimResult::CacheHit && claimed.get() == &blob && reader.get() == &blob);
+				std::thread clear([&] { cache.Clear(); });
+				clear.join();
+				Require(blob.references == 2 && !cache.GetCompletedShader("Lighting"));
+				Require(!cache.AddCompletedShader("Lighting", SIE::ShaderClass::Vertex, shader, 1,
+					reader, L"cache/1", {}, {}, false, disk, generation, {}, {}));
+				claimed = nullptr;
+				Require(blob.references == 1 && reader->GetBufferSize() == 4);
+				reader = nullptr;
+				Require(blob.references == 0);
+			}
+		}
 	}
 
 	void CheckRetainedBinding()
@@ -971,6 +1026,7 @@ int main()
 		CheckTrailingBytecode();
 		CheckOwnerAllocationFailure();
 		CheckMetadataTransactions();
+		CheckBlobOwnership();
 		CheckBytecodeHooks();
 		CheckRetainedBinding();
 		CheckStage(&SIE::ShaderCache::MakeAndAddVertexShader, &SIE::ShaderCache::vertexShaders, &SIE::ShaderCache::vertexShadersMutex, &SIE::ShaderCache::vertexShaderEvictionRevision);

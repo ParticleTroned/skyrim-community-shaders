@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <functional>
 #include <future>
 #include <iostream>
@@ -302,6 +303,9 @@ namespace Util
 namespace logger
 {
 	template <class... Args>
+	void trace(const char*, Args&&...)
+	{}
+	template <class... Args>
 	void debug(const char*, Args&&...)
 	{}
 	template <class... Args>
@@ -316,6 +320,8 @@ namespace fmt
 
 // The extracted hooks use the bytecode-map declarations above.
 #include "shader_bytecode_hooks.h"
+
+#include "shader_reflection_fixture.h"
 
 namespace RE
 {
@@ -341,12 +347,37 @@ namespace RE
 	};
 	namespace BSGraphics
 	{
+		namespace Vertex
+		{
+			enum Attribute
+			{
+				VA_POSITION,
+				VA_TEXCOORD0,
+				VA_TEXCOORD1,
+				VA_NORMAL,
+				VA_BINORMAL,
+				VA_COLOR,
+				VA_SKINNING,
+				VA_INSTANCEDATA,
+				VA_LANDDATA,
+				VA_EYEDATA
+			};
+		}
+
 		template <class T>
 		struct Shader
 		{
 			T* shader = nullptr;
 			uint32_t id = 0;
 			uint32_t byteCodeSize = 4;
+			uint64_t vertexDesc = 0;
+			std::array<int8_t, 8> constantTable{};
+			struct ConstantBuffer
+			{
+				ID3D11Buffer* buffer = nullptr;
+				void* data = nullptr;
+			};
+			std::array<ConstantBuffer, 3> constantBuffers{};
 			Shader() { ++observations.wrappersCreated; }
 			~Shader() { ++observations.wrappersDestroyed; }
 		};
@@ -465,25 +496,14 @@ namespace SIE
 				duringCompile();
 			return compileFails ? nullptr : &blob;
 		}
-		auto CreateVertexShader(ID3DBlob& shaderData, const RE::BSShader&, uint32_t descriptor)
+		int GetVariableIndex(ShaderClass, const RE::BSShader&, const char* name)
 		{
-			auto shader = Util::ShaderLifetime::MakeWithTrailingBytes<RE::BSGraphics::VertexShader>(shaderData.GetBufferSize());
-			shader->id = descriptor;
-			std::memcpy(reinterpret_cast<uint8_t*>(shader.get()) + sizeof(*shader), shaderData.GetBufferPointer(), shaderData.GetBufferSize());
-			return shader;
+			return std::string_view(name) == "Known" ? 2 : -1;
 		}
-		std::unique_ptr<RE::BSGraphics::PixelShader> CreatePixelShader(ID3DBlob&, const RE::BSShader&, uint32_t descriptor)
-		{
-			auto shader = std::make_unique<RE::BSGraphics::PixelShader>();
-			shader->id = descriptor;
-			return shader;
-		}
-		std::unique_ptr<RE::BSGraphics::ComputeShader> CreateComputeShader(ID3DBlob&, const RE::BSShader&, uint32_t descriptor)
-		{
-			auto shader = std::make_unique<RE::BSGraphics::ComputeShader>();
-			shader->id = descriptor;
-			return shader;
-		}
+#include "shader_reflection_under_test.h"
+
+// Factories require the reflected metadata implementation above.
+#include "shader_factories_under_test.h"
 	}
 #include "shader_result_traits_under_test.h"
 
@@ -532,6 +552,47 @@ namespace
 		Require(started);
 		Require(ShaderBytecodeMap.size() == keys.size() + 1);
 		ShaderBytecodeMap.clear();
+	}
+
+	void CheckReflectionFailures()
+	{
+		using ReflectionFixture::Failure;
+		ID3D11Device device;
+		globals::d3d::device = &device;
+		SIE::ShaderCache cache;
+		RE::BSShader shader;
+		shader.shaderType.value = RE::BSShader::Type::ImageSpace;
+		for (auto failure : { Failure::Reflect, Failure::NullReflector, Failure::ShaderDesc,
+				 Failure::Buffer, Failure::NullBuffer, Failure::Variable, Failure::NullVariable,
+				 Failure::Type, Failure::NullType }) {
+			ReflectionFixture::failure = failure;
+			const auto before = observations.created.load();
+			Require(!cache.MakeAndAddVertexShader(shader, 1));
+			Require(!cache.MakeAndAddPixelShader(shader, 1));
+			Require(cache.vertexShaders[1].empty() && cache.pixelShaders[1].empty());
+			Require(observations.created == before);
+		}
+		for (auto failure : { Failure::Input, Failure::NullSemantic }) {
+			ReflectionFixture::failure = failure;
+			const auto before = observations.created.load();
+			Require(!cache.MakeAndAddVertexShader(shader, 1));
+			Require(observations.created == before);
+		}
+		ReflectionFixture::failure = Failure::None;
+		auto valid = cache.MakeAndAddVertexShader(shader, 1);
+		Require(valid && valid->vertexDesc && valid->constantTable[2] == 1);
+		Require(cache.MakeAndAddPixelShader(shader, 1) != nullptr);
+		ReflectionFixture::bufferCount = 0;
+		auto absent = cache.MakeAndAddVertexShader(shader, 2);
+		Require(absent && absent->constantBuffers[2].buffer == nullptr && absent->constantBuffers[2].data);
+		ReflectionFixture::bufferCount = 1;
+		ReflectionFixture::bufferName = "FeatureData";
+		auto custom = cache.MakeAndAddPixelShader(shader, 2);
+		Require(custom && custom->constantTable[2] == 0);
+		ReflectionFixture::bufferName = "PerGeometry";
+		ReflectionFixture::variableName = "Unknown";
+		Require(cache.MakeAndAddPixelShader(shader, 3) != nullptr);
+		ReflectionFixture::variableName = "Known";
 	}
 
 	void CheckTrailingBytecode()
@@ -906,6 +967,7 @@ namespace
 int main()
 {
 	try {
+		CheckReflectionFailures();
 		CheckTrailingBytecode();
 		CheckOwnerAllocationFailure();
 		CheckMetadataTransactions();

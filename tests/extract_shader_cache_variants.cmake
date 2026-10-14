@@ -137,3 +137,12 @@ extract_between(
     "${_source}" "\t\t\t\t\tcase efsw::Actions::Add:" "\n\t\t\t\t\tdefault:"
     "shader_watcher_routes_under_test.h"
 )
+
+extract_between(
+    "${_source}" "\t\tstatic void AddAttribute(" "\n\t\tstd::wstring GetDiskPath("
+    "shader_reflection_under_test.h"
+)
+extract_between(
+    "${_source}" "\t\tstd::unique_ptr<RE::BSGraphics::VertexShader, Util::ShaderLifetime::TrailingBytesDeleter<RE::BSGraphics::VertexShader>> CreateVertexShader("
+    "\n\t\tstatic bool GetImagespaceShaderDescriptor(" "shader_factories_under_test.h"
+)

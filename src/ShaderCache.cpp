@@ -2445,18 +2445,18 @@ namespace SIE
 		}
 
 		template <size_t MaxOffsetsSize>
-		static void ReflectConstantBuffers(ID3D11ShaderReflection& reflector,
+		static bool ReflectConstantBuffers(ID3D11ShaderReflection& reflector,
 			std::array<size_t, 3>& bufferSizes,
 			std::array<int8_t, MaxOffsetsSize>& constantOffsets,
 			uint64_t& vertexDesc,
 			ShaderClass shaderClass, uint32_t descriptor, const RE::BSShader& shader)
 		{
-			D3D11_SHADER_DESC desc;
+			D3D11_SHADER_DESC desc{};
 			if (FAILED(reflector.GetDesc(&desc))) {
 				logger::error("Failed to get shader descriptor for {} shader {}::{:X}",
 					magic_enum::enum_name(shaderClass), magic_enum::enum_name(shader.shaderType.get()),
 					descriptor);
-				return;
+				return false;
 			}
 
 			if (shaderClass == ShaderClass::Vertex) {
@@ -2464,13 +2464,14 @@ namespace SIE
 				bool hasTexcoord2 = false;
 				bool hasTexcoord3 = false;
 				for (uint32_t inputIndex = 0; inputIndex < desc.InputParameters; ++inputIndex) {
-					D3D11_SIGNATURE_PARAMETER_DESC inputDesc;
-					if (FAILED(reflector.GetInputParameterDesc(inputIndex, &inputDesc))) {
+					D3D11_SIGNATURE_PARAMETER_DESC inputDesc{};
+					if (FAILED(reflector.GetInputParameterDesc(inputIndex, &inputDesc)) || !inputDesc.SemanticName) {
 						logger::error(
 							"Failed to get input parameter {} descriptor for {} shader {}::{:X}",
 							inputIndex, magic_enum::enum_name(shaderClass),
 							magic_enum::enum_name(shader.shaderType.get()),
 							descriptor);
+						return false;
 					} else {
 						std::string_view semanticName = inputDesc.SemanticName;
 						if (semanticName == "POSITION" && inputDesc.SemanticIndex == 0) {
@@ -2510,45 +2511,44 @@ namespace SIE
 				}
 			}
 
-			if (desc.ConstantBuffers <= 0) {
-				return;
+			std::array<ID3D11ShaderReflectionConstantBuffer*, 3> nativeBuffers{};
+			constexpr std::array<std::string_view, 3> nativeNames{ "PerTechnique", "PerMaterial", "PerGeometry" };
+			// Enumerating distinguishes an absent optional buffer from broken reflection metadata.
+			for (uint32_t index = 0; index < desc.ConstantBuffers; ++index) {
+				auto* buffer = reflector.GetConstantBufferByIndex(index);
+				D3D11_SHADER_BUFFER_DESC bufferDesc{};
+				if (!buffer || FAILED(buffer->GetDesc(&bufferDesc)) || !bufferDesc.Name)
+					return false;
+				for (size_t slot = 0; slot < nativeNames.size(); ++slot)
+					if (nativeNames[slot] == bufferDesc.Name)
+						nativeBuffers[slot] = buffer;
 			}
 
 			auto mapBufferConsts =
-				[&](const char* bufferName, size_t& bufferSize) {
-					auto bufferReflector = reflector.GetConstantBufferByName(bufferName);
-					if (bufferReflector == nullptr) {
-						logger::trace("Buffer {} not found for {} shader {}::{:X}",
-							bufferName, magic_enum::enum_name(shaderClass),
-							magic_enum::enum_name(shader.shaderType.get()),
-							descriptor);
-						return;
-					}
-
-					D3D11_SHADER_BUFFER_DESC bufferDesc;
-					if (FAILED(bufferReflector->GetDesc(&bufferDesc))) {
-						logger::trace("Failed to get buffer {} descriptor for {} shader {}::{:X}",
-							bufferName, magic_enum::enum_name(shaderClass),
-							magic_enum::enum_name(shader.shaderType.get()),
-							descriptor);
-						return;
-					}
+				[&](ID3D11ShaderReflectionConstantBuffer* bufferReflector, size_t& bufferSize) {
+					if (!bufferReflector)
+						return true;
+					D3D11_SHADER_BUFFER_DESC bufferDesc{};
+					if (FAILED(bufferReflector->GetDesc(&bufferDesc)))
+						return false;
 
 					for (uint32_t i = 0; i < bufferDesc.Variables; i++) {
 						ID3D11ShaderReflectionVariable* var = bufferReflector->GetVariableByIndex(i);
 
-						D3D11_SHADER_VARIABLE_DESC varDesc;
-						if (FAILED(var->GetDesc(&varDesc))) {
+						D3D11_SHADER_VARIABLE_DESC varDesc{};
+						if (!var || FAILED(var->GetDesc(&varDesc)) || !varDesc.Name) {
 							logger::trace("Failed to get variable descriptor for {} shader {}::{:X}",
 								magic_enum::enum_name(shaderClass), magic_enum::enum_name(shader.shaderType.get()),
 								descriptor);
-							continue;
+							return false;
 						}
 
 						const auto variableIndex =
 							GetVariableIndex(shaderClass, shader, varDesc.Name);
 						const bool variableFound = variableIndex != -1;
 						if (variableFound) {
+							if (static_cast<size_t>(variableIndex) >= constantOffsets.size())
+								return false;
 							constantOffsets[variableIndex] = (int8_t)(varDesc.StartOffset / 4);
 						} else {
 							logger::trace("Unknown variable name {} in {} shader {}::{:X}",
@@ -2558,8 +2558,10 @@ namespace SIE
 						}
 
 						if (shader.shaderType == RE::BSShader::Type::ImageSpace) {
-							D3D11_SHADER_TYPE_DESC varTypeDesc;
-							var->GetType()->GetDesc(&varTypeDesc);
+							D3D11_SHADER_TYPE_DESC varTypeDesc{};
+							auto* variableType = var->GetType();
+							if (!variableType || FAILED(variableType->GetDesc(&varTypeDesc)))
+								return false;
 							if (varTypeDesc.Elements > 0) {
 								if (!variableFound) {
 									const std::string arrayName =
@@ -2567,6 +2569,8 @@ namespace SIE
 									const auto variableArrayIndex =
 										GetVariableIndex(shaderClass, shader, arrayName.c_str());
 									if (variableArrayIndex != -1) {
+										if (static_cast<size_t>(variableArrayIndex) >= constantOffsets.size())
+											return false;
 										constantOffsets[variableArrayIndex] = static_cast<int8_t>(varDesc.StartOffset / 4);
 									} else {
 										logger::debug("Unknown variable name {} in {} shader {}::{:X}",
@@ -2582,6 +2586,8 @@ namespace SIE
 										const auto variableArrayElementIndex =
 											GetVariableIndex(shaderClass, shader, varName.c_str());
 										if (variableArrayElementIndex != -1) {
+											if (static_cast<size_t>(variableArrayElementIndex) >= constantOffsets.size())
+												return false;
 											constantOffsets[variableArrayElementIndex] =
 												static_cast<int8_t>((varDesc.StartOffset + elementSize * arrayIndex) / 4);
 										} else {
@@ -2597,12 +2603,13 @@ namespace SIE
 						}
 					}
 
-					bufferSize = ((bufferDesc.Size + 15) & ~15) / 16;
+					bufferSize = (static_cast<size_t>(bufferDesc.Size) + 15) / 16;
+					return true;
 				};
 
-			mapBufferConsts("PerTechnique", bufferSizes[0]);
-			mapBufferConsts("PerMaterial", bufferSizes[1]);
-			mapBufferConsts("PerGeometry", bufferSizes[2]);
+			return mapBufferConsts(nativeBuffers[0], bufferSizes[0]) &&
+			       mapBufferConsts(nativeBuffers[1], bufferSizes[1]) &&
+			       mapBufferConsts(nativeBuffers[2], bufferSizes[2]);
 		}
 
 		std::wstring GetDiskPath(
@@ -3061,7 +3068,7 @@ namespace SIE
 			return shaderBlob;
 		}
 
-		auto CreateVertexShader(ID3DBlob& shaderData,
+		std::unique_ptr<RE::BSGraphics::VertexShader, Util::ShaderLifetime::TrailingBytesDeleter<RE::BSGraphics::VertexShader>> CreateVertexShader(ID3DBlob& shaderData,
 			const RE::BSShader& shader, uint32_t descriptor)
 		{
 			static const auto perTechniqueBuffersArray =
@@ -3082,14 +3089,16 @@ namespace SIE
 			winrt::com_ptr<ID3D11ShaderReflection> reflector;
 			const auto reflectionResult = D3DReflect(shaderData.GetBufferPointer(), shaderData.GetBufferSize(),
 				IID_PPV_ARGS(&reflector));
-			if (FAILED(reflectionResult)) {
+			if (FAILED(reflectionResult) || !reflector) {
 				logger::error("Failed to reflect vertex shader {}::{:X}", magic_enum::enum_name(shader.shaderType.get()),
 					descriptor);
+				return nullptr;
 			} else {
 				std::array<size_t, 3> bufferSizes = { 0, 0, 0 };
 				std::fill(newShader->constantTable.begin(), newShader->constantTable.end(), static_cast<uint8_t>(0));
-				ReflectConstantBuffers(*reflector.get(), bufferSizes, newShader->constantTable, newShader->vertexDesc,
-					ShaderClass::Vertex, descriptor, shader);
+				if (!ReflectConstantBuffers(*reflector.get(), bufferSizes, newShader->constantTable, newShader->vertexDesc,
+						ShaderClass::Vertex, descriptor, shader))
+					return nullptr;
 				if (bufferSizes[0] != 0) {
 					newShader->constantBuffers[0].buffer =
 						(REX::W32::ID3D11Buffer*)perTechniqueBuffersArray.get()[bufferSizes[0]];
@@ -3133,16 +3142,18 @@ namespace SIE
 			winrt::com_ptr<ID3D11ShaderReflection> reflector;
 			const auto reflectionResult = D3DReflect(shaderData.GetBufferPointer(),
 				shaderData.GetBufferSize(), IID_PPV_ARGS(&reflector));
-			if (FAILED(reflectionResult)) {
-				logger::error("Failed to reflect vertex shader {}::{:X}", magic_enum::enum_name(shader.shaderType.get()),
+			if (FAILED(reflectionResult) || !reflector) {
+				logger::error("Failed to reflect pixel shader {}::{:X}", magic_enum::enum_name(shader.shaderType.get()),
 					descriptor);
+				return nullptr;
 			} else {
 				std::array<size_t, 3> bufferSizes = { 0, 0, 0 };
 				std::ranges::fill(newShader->constantTable, (int8_t)0);
-				uint64_t dummy;
-				ReflectConstantBuffers(*reflector.get(), bufferSizes, newShader->constantTable,
-					dummy,
-					ShaderClass::Pixel, descriptor, shader);
+				uint64_t dummy{};
+				if (!ReflectConstantBuffers(*reflector.get(), bufferSizes, newShader->constantTable,
+						dummy,
+						ShaderClass::Pixel, descriptor, shader))
+					return nullptr;
 				if (bufferSizes[0] != 0) {
 					newShader->constantBuffers[0].buffer =
 						(REX::W32::ID3D11Buffer*)perTechniqueBuffersArray.get()[bufferSizes[0]];
@@ -5797,6 +5808,8 @@ namespace SIE
 			return nullptr;
 		}
 		auto newShader = SShaderCache::CreateVertexShader(*shaderBlob, shader, descriptor);
+		if (!newShader)
+			return nullptr;
 		winrt::com_ptr<ID3D11VertexShader> candidate;
 		const auto result = device->CreateVertexShader(shaderBlob->GetBufferPointer(),
 			newShader->byteCodeSize, nullptr, candidate.put());
@@ -5836,6 +5849,8 @@ namespace SIE
 			return nullptr;
 		}
 		auto newShader = SShaderCache::CreatePixelShader(*shaderBlob, shader, descriptor);
+		if (!newShader)
+			return nullptr;
 		winrt::com_ptr<ID3D11PixelShader> candidate;
 		const auto result = device->CreatePixelShader(shaderBlob->GetBufferPointer(),
 			shaderBlob->GetBufferSize(), nullptr, candidate.put());

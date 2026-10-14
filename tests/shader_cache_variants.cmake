@@ -7,6 +7,8 @@ foreach(
     IN
     ITEMS
         shader_publication_under_test.h
+        shader_reflection_under_test.h
+        shader_factories_under_test.h
         shader_retirement_under_test.h
         shader_full_clear_under_test.h
         shader_type_clear_under_test.h

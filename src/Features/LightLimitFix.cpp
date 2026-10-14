@@ -2161,17 +2161,18 @@ void ResolveBillboardTint(
 		}
 	}
 
-	RE::NiColorA siblingEmissiveTint{};
-	bool hasSiblingEmissiveTint = false;
 	const bool vertexTintLooksWhite = hasVertexTint && IsNearWhiteTint(a_reference.baseColor);
 	if (!hasVertexTint || vertexTintLooksWhite) {
-		hasSiblingEmissiveTint = TryGetBillboardSiblingEmissiveTint(a_geometry, siblingEmissiveTint);
-		const bool siblingTintIsNonWhite = hasSiblingEmissiveTint && !IsNearWhiteTint(siblingEmissiveTint);
-
 		const RE::NiColorA materialEmissiveTint = BuildEffectMaterialEmissiveTint(a_material, a_shaderProperty);
 		const float materialEmissiveLuma = GetEmissiveTintLuma(materialEmissiveTint);
 		const bool hasMaterialEmissiveTint = materialEmissiveLuma > 1e-4f;
 		const bool materialTintIsNonWhite = hasMaterialEmissiveTint && !IsNearWhiteTint(materialEmissiveTint);
+
+		RE::NiColorA siblingEmissiveTint{};
+		// The material's non-white tint has priority regardless of nearby geometry.
+		const bool hasSiblingEmissiveTint = !materialTintIsNonWhite &&
+		                                    TryGetBillboardSiblingEmissiveTint(a_geometry, siblingEmissiveTint);
+		const bool siblingTintIsNonWhite = hasSiblingEmissiveTint && !IsNearWhiteTint(siblingEmissiveTint);
 
 		// Resolve fallback from a single source to avoid mixing color from one source
 		// with emissive energy from another. Prefer the billboard's own effect material

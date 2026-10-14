@@ -2495,6 +2495,70 @@ if(BUILD_CONTROLLER_TESTS)
         endforeach()
     endif()
 
+    set(_billboard_light_tint_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/billboard-light-tint"
+    )
+    set(_billboard_light_tint_test_headers)
+    foreach(
+        _part
+        IN
+        ITEMS near_white fallback material vertex_color vertex_scan resolve
+    )
+        list(
+            APPEND _billboard_light_tint_test_headers
+            "${_billboard_light_tint_test_dir}/billboard_tint_${_part}_under_test.h"
+        )
+    endforeach()
+    add_custom_command(
+        OUTPUT ${_billboard_light_tint_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_billboard_light_tint_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_billboard_light_tint.cmake"
+        DEPENDS
+            src/Features/LightLimitFix.cpp
+            tests/extract_billboard_light_tint.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_custom_target(
+        billboard_light_tint_test_sources
+        DEPENDS ${_billboard_light_tint_test_headers}
+    )
+    foreach(_variant IN ITEMS Standard FastFP)
+        if(_variant STREQUAL "FastFP" AND NOT MSVC)
+            continue()
+        endif()
+        if(_variant STREQUAL "FastFP")
+            set(_billboard_target billboard_light_tint_fast_fp_test)
+            set(_billboard_test BillboardLightTintFastFP)
+        else()
+            set(_billboard_target billboard_light_tint_test)
+            set(_billboard_test BillboardLightTint)
+        endif()
+        add_controller_test(
+            ${_billboard_target}
+            ${_billboard_test}
+            tests/billboard_light_tint_test.cpp
+        )
+        add_dependencies(${_billboard_target} billboard_light_tint_test_sources)
+        target_sources(
+            ${_billboard_target}
+            PRIVATE ${_billboard_light_tint_test_headers}
+        )
+        target_include_directories(
+            ${_billboard_target}
+            PRIVATE "${_billboard_light_tint_test_dir}"
+        )
+        if(_variant STREQUAL "FastFP")
+            target_compile_options(
+                ${_billboard_target}
+                PRIVATE "$<$<CONFIG:Release>:/fp:fast>"
+            )
+        endif()
+        set_tests_properties(${_billboard_test} PROPERTIES TIMEOUT 30)
+    endforeach()
+
     set(_vr_scene_guards_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-scene-guards"
     )

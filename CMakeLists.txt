@@ -2341,6 +2341,41 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(SceneLightSnapshot PROPERTIES TIMEOUT 30)
 
+    add_controller_test(
+        scene_light_cap_test
+        SceneLightCap
+        tests/scene_light_cap_test.cpp
+    )
+    set(_scene_light_cap_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/scene-light-cap"
+    )
+    set(_scene_light_cap_test_headers
+        "${_scene_light_cap_test_dir}/scene_light_cap_constant_under_test.h"
+        "${_scene_light_cap_test_dir}/scene_light_cap_under_test.h"
+        "${_scene_light_cap_test_dir}/scene_light_cap_native_limit_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_scene_light_cap_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_scene_light_cap_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_scene_light_cap.cmake"
+        DEPENDS
+            src/Features/LightLimitFix.cpp
+            tests/extract_scene_light_cap.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    target_sources(
+        scene_light_cap_test
+        PRIVATE ${_scene_light_cap_test_headers}
+    )
+    target_include_directories(
+        scene_light_cap_test
+        PRIVATE "${_scene_light_cap_test_dir}"
+    )
+    set_tests_properties(SceneLightCap PROPERTIES TIMEOUT 30)
+
     set(_vr_scene_guards_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-scene-guards"
     )

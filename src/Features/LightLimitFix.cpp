@@ -3335,8 +3335,6 @@ void LightLimitFix::UpdateLights()
 						light.fade = runtimeData.fade;
 					}
 
-					SetEngineLightFlags(light, bsLight);
-					light.fade *= bsLight->lodDimmer;
 					const bool isPortalStrict = !IsGlobalLight(bsLight);
 
 					if (isPortalStrict) {
@@ -3352,8 +3350,15 @@ void LightLimitFix::UpdateLights()
 								addRoom(static_cast<RE::NiNode*>(portalPtr->portalSharedNode.get()), light);
 							}
 						}
-						light.lightFlags.set(LightFlags::PortalStrict);
 					}
+					// Native radius updates and room indices also serve lights outside the clustered buffer.
+					if (lightsData.size() >= MAX_LIGHTS)
+						return;
+
+					SetEngineLightFlags(light, bsLight);
+					light.fade *= bsLight->lodDimmer;
+					if (isPortalStrict)
+						light.lightFlags.set(LightFlags::PortalStrict);
 					ApplyJsonPlacedLightIntensityScale(light, bsLight, niLight, isPortalStrict, isInterior);
 
 					if (bsLight->IsShadowLight()) {
@@ -3367,8 +3372,7 @@ void LightLimitFix::UpdateLights()
 					if (light.shadowMaskIndex != 255) {
 						SetLightPosition(light, niLight->world.translate);
 
-						if ((light.color.x + light.color.y + light.color.z) * light.fade > 1e-4 && light.radius > 1e-4 &&
-							lightsData.size() < MAX_LIGHTS) {
+						if ((light.color.x + light.color.y + light.color.z) * light.fade > 1e-4 && light.radius > 1e-4) {
 							lightsData.push_back(light);
 						}
 					}

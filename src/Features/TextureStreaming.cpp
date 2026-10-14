@@ -31,6 +31,7 @@
 #include <condition_variable>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -51,6 +52,8 @@ namespace
 	constexpr auto streamingConflictWarning = "SPS detected. Disable the SPS mod and restart to use CSX texture streaming.";
 	constexpr std::size_t maximumRecords = 16384, maximumConsumers = 256, maximumFrontier = 16384;
 	constexpr std::size_t maximumReducedTextures = 512;
+	constexpr std::size_t maximumInventoryRetirementSteps = 4096;
+	constexpr auto inventoryRetirementBudget = std::chrono::microseconds(200);
 	constexpr std::uint64_t uploadBytesPerFrame = 4 * Policy::MiB;
 	std::atomic_bool originHookReady{ false };
 	std::atomic_uint64_t originSerial{ 0 };
@@ -512,6 +515,8 @@ struct TextureStreaming::State
 	std::uint32_t maximumDrop = 2;
 	StreamingTextures::Categories categories;
 	std::uint64_t epoch = 1, scan = 0, completeScan = 0, nextScanMs = 0, deviceGeneration = 0;
+	std::uint64_t inventoryGeneration = 1, inventoryRetirementRemaining = 0, inventoryRetirementCursor = 0;
+	bool inventoryRetirementPending = false;
 	std::uint32_t worldStart = 0, lastFrame = UINT32_MAX;
 	bool paused = false, reading = false;
 	std::unordered_map<std::uint64_t, Record> records;
@@ -548,7 +553,9 @@ struct TextureStreaming::State
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (record.terrainConsumer) {
 			terrainInventoryDiagnostics.Defer(reason);
-			const auto* geometry = record.consumers.committed.empty() ? nullptr : record.consumers.committed.front().geometry.get();
+			const auto* geometry = !record.consumers.Current(inventoryGeneration) || record.consumers.committed.empty() ?
+			                           nullptr :
+			                           record.consumers.committed.front().geometry.get();
 			terrainBlocks.Observe(static_cast<std::size_t>(reason), record.path, geometry && geometry->name.c_str() ? geometry->name.c_str() : "");
 		}
 #else
@@ -563,6 +570,9 @@ struct TextureStreaming::State
 	void ProtectPreviewTexture(RE::NiSourceTexture* texture);
 	void Scan();
 	void Prune();
+	void InvalidateInventory();
+	void MarkInventoryRetired(Record& record);
+	void RetireInventory();
 	void AdoptLoads();
 	std::uint32_t Demand(Record& record);
 	std::uint32_t Target(const Record& record, std::uint32_t demanded) const
@@ -586,6 +596,66 @@ struct TextureStreaming::State
 	}
 };
 
+void TextureStreaming::State::InvalidateInventory()
+{
+	if (++inventoryGeneration == 0)
+		++inventoryGeneration;
+	completeScan = nextScanMs = 0;
+	inventoryRetirementPending = true;
+	inventoryRetirementRemaining = records.size();
+}
+
+void TextureStreaming::State::MarkInventoryRetired(Record& record)
+{
+	if (record.consumers.Current(inventoryGeneration))
+		return;
+	if (!record.consumers.Observe(0, 0, inventoryGeneration))
+		throw std::logic_error("Texture consumer references must retire before activating an inventory");
+	if (inventoryRetirementRemaining)
+		--inventoryRetirementRemaining;
+}
+
+void TextureStreaming::State::RetireInventory()
+{
+	if (!inventoryRetirementPending)
+		return;
+	const auto deadline = std::chrono::steady_clock::now() + inventoryRetirementBudget;
+	std::size_t steps = 0;
+	const auto available = [&] {
+		return steps < maximumInventoryRetirementSteps && std::chrono::steady_clock::now() < deadline;
+	};
+	while (!frontier.empty() && available()) {
+		frontier.pop_back();
+		++steps;
+	}
+	auto entry = records.find(inventoryRetirementCursor);
+	if (entry == records.end())
+		entry = records.begin();
+	while (inventoryRetirementRemaining && !records.empty() && available()) {
+		if (entry == records.end())
+			entry = records.begin();
+		auto& record = entry->second;
+		if (!record.consumers.Current(inventoryGeneration)) {
+			record.consumers.RetireOne();
+			if (record.consumers.Empty())
+				MarkInventoryRetired(record);
+		}
+		++steps;
+		if (record.consumers.Current(inventoryGeneration))
+			++entry;
+		inventoryRetirementCursor = entry == records.end() ? 0 : entry->first;
+	}
+	// Release owning scene references before spending the remaining allowance on raw lookup keys.
+	while (!visited.empty() && available()) {
+		visited.erase(visited.begin());
+		++steps;
+	}
+	if (!inventoryRetirementRemaining && frontier.empty() && visited.empty()) {
+		inventoryRetirementPending = false;
+		inventoryRetirementCursor = 0;
+	}
+}
+
 void TextureStreaming::State::AdoptLoads()
 {
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(400);
@@ -603,6 +673,7 @@ void TextureStreaming::State::AdoptLoads()
 			continue;
 		}
 		Record record;
+		record.consumers.generation = inventoryGeneration;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		record.terrainConsumer = ((origin.requiredCategories | load->size.categories) & StreamingTextures::Terrain) != 0;
 #endif
@@ -639,6 +710,8 @@ void TextureStreaming::State::AdoptLoads()
 
 void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BSGeometry* geometry, bool eligible, std::uint32_t requiredCategories)
 {
+	if (inventoryRetirementPending)
+		return;
 	++diagnostics.textureObservations;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	const bool terrain = (requiredCategories & StreamingTextures::Terrain) != 0;
@@ -769,7 +842,10 @@ void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BS
 		++terrainInventoryDiagnostics.candidateRegistrations;
 	record.terrainConsumer |= terrainConsumer;
 #endif
-	record.consumers.Observe(scan, completeScan);
+	if (!record.consumers.Observe(scan, completeScan, inventoryGeneration)) {
+		InvalidateInventory();
+		return;
+	}
 	record.protectedConsumer |= origin.protectedConsumer || !eligible || record.engine != engine;
 	if (record.protectedConsumer)
 		StreamingTextures::LoadHooks::Forget(record.path);
@@ -882,6 +958,8 @@ void TextureStreaming::State::ScanPreviews()
 
 void TextureStreaming::State::Scan()
 {
+	if (inventoryRetirementPending)
+		return;
 	if (frontier.empty()) {
 		if (GetTickCount64() < nextScanMs)
 			return;
@@ -894,7 +972,7 @@ void TextureStreaming::State::Scan()
 	}
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(400);
 	unsigned count = 0;
-	while (!frontier.empty() && ++count <= 512 && std::chrono::steady_clock::now() < deadline) {
+	while (!inventoryRetirementPending && !frontier.empty() && ++count <= 512 && std::chrono::steady_clock::now() < deadline) {
 		auto node = std::move(frontier.back());
 		frontier.pop_back();
 		if (!node.object || !visited.insert(node.object.get()).second)
@@ -973,7 +1051,7 @@ void TextureStreaming::State::Scan()
 			return;
 		}
 	}
-	if (frontier.empty()) {
+	if (!inventoryRetirementPending && frontier.empty()) {
 		completeScan = scan;
 		++diagnostics.scansCompleted;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -996,10 +1074,10 @@ std::uint32_t TextureStreaming::State::Demand(Record& record)
 		record.restorationUrgency = 64;
 		return 0;
 	}
-	record.consumers.Promote(completeScan);
+	record.consumers.Promote(completeScan, inventoryGeneration);
 	if (!enabled)
 		return 0;
-	if (!completeScan || record.consumers.verified != completeScan || record.consumers.committed.empty()) {
+	if (!completeScan || !record.consumers.Current(inventoryGeneration) || record.consumers.verified != completeScan || record.consumers.committed.empty()) {
 		Defer(Block::InventoryIncomplete, record);
 		return 0;
 	}
@@ -1093,7 +1171,7 @@ void TextureStreaming::State::Select(bool previewOnly)
 			return;
 		const auto demanded = Demand(record);
 		const auto target = Target(record, demanded);
-		if (record.sourceValidated && record.headerHash && record.rememberedDrop != record.distanceDrop && completeScan && record.consumers.verified == completeScan &&
+		if (record.sourceValidated && record.headerHash && record.rememberedDrop != record.distanceDrop && completeScan && record.consumers.Current(inventoryGeneration) && record.consumers.verified == completeScan &&
 			!record.consumers.committed.empty() && !record.protectedConsumer) {
 			StreamingTextures::Origin origin;
 			if (StreamingTextures::ReadOrigin(record.current, origin) && !origin.protectedConsumer) {
@@ -1471,7 +1549,7 @@ void TextureStreaming::State::Tick()
 	if (lastFrame == frame)
 		return;
 	lastFrame = frame;
-	if (!enabled && records.empty() && !reading && !transaction && !StreamingTextures::LoadHooks::HasPending()) {
+	if (!enabled && records.empty() && !reading && !transaction && !inventoryRetirementPending && !StreamingTextures::LoadHooks::HasPending()) {
 		detail = "Disabled";
 		return;
 	}
@@ -1497,15 +1575,14 @@ void TextureStreaming::State::Tick()
 			records.clear();
 			reducedRecords.clear();
 			reader.ClearCache();
+			frontier.clear();
+			visited.clear();
+			inventoryRetirementCursor = 0;
 		}
 		deviceGeneration = memory.generation;
-		frontier.clear();
-		visited.clear();
-		completeScan = 0;
-		for (auto& [id, record] : records) {
-			record.consumers.Clear();
-		}
+		InvalidateInventory();
 	}
+	RetireInventory();
 	const auto now = GetTickCount64();
 	const auto pressureChange = pressure.Update(now, memory.sampledAtMs, memory.Fresh(now), memory.local.Budget,
 		Memory::Add(memory.local.CurrentUsage, memory.pendingBytes), options.reserveMiB * Policy::MiB);
@@ -1575,10 +1652,15 @@ void TextureStreaming::State::Prune()
 	for (unsigned count = 0; entry != records.end() && count < 128 && std::chrono::steady_clock::now() < deadline; ++count) {
 		auto current = entry++;
 		pruneCursor = entry == records.end() ? 0 : entry->first;
-		const auto& [id, record] = *current;
+		auto& [id, record] = *current;
+		if (!record.consumers.Current(inventoryGeneration)) {
+			if (!record.consumers.Empty())
+				continue;
+			MarkInventoryRetired(record);
+		}
 		const bool replaced = record.source->rendererTexture != record.engine || record.engine->texture != record.current;
 		// A partially scanned texture belongs to the next inventory, not an expired one.
-		if ((!record.drop && (!enabled || record.consumers.Expired(completeScan))) || replaced) {
+		if ((!record.drop && (!enabled || record.consumers.Expired(completeScan, inventoryGeneration))) || replaced) {
 			reducedRecords.erase(id);
 			records.erase(current);
 		}
@@ -1693,12 +1775,7 @@ void TextureStreaming::Configure(bool enabled, std::uint32_t maximumDrop, std::o
 		state->options = *options;
 	if (coverageChanged) {
 		state->categories = *categories;
-		state->frontier.clear();
-		state->visited.clear();
-		state->completeScan = 0;
-		state->nextScanMs = 0;
-		for (auto& [id, record] : state->records)
-			record.consumers.Clear();
+		state->InvalidateInventory();
 	}
 	state->modes = nextModes;
 	state->requestedEnabled = enabled;
@@ -1771,7 +1848,8 @@ nlohmann::json TextureStreaming::GetStatus() const
 		{ "demand", { { "eyeCount", state->demand.eyeCount }, { "sourceFrame", state->demand.frame },
 						{ "sampledAtMs", state->demand.sampledAtMs }, { "mipBias", state->demand.mipBias } } },
 		{ "previewActive", state->previewActive }, { "maximumPayloadMiB", Policy::MaximumPayloadBytes / Policy::MiB },
-		{ "inventory", { { "scan", state->scan }, { "completeScan", state->completeScan }, { "frontierNodes", state->frontier.size() },
+		{ "inventory", { { "generation", state->inventoryGeneration }, { "retirementPending", state->inventoryRetirementPending },
+						   { "retirementRecords", state->inventoryRetirementRemaining }, { "scan", state->scan }, { "completeScan", state->completeScan }, { "frontierNodes", state->frontier.size() }, { "visitedNodes", state->visited.size() },
 						   { "desiredShrinks", desiredShrinks }, { "desiredRestores", desiredRestores } } },
 		{ "pressureEpisode", { { "active", state->pressureEpisode.active }, { "startedAtMs", state->pressureEpisode.startedAtMs },
 								 { "summaryReported", state->pressureEpisode.summaryReported },

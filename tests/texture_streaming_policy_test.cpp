@@ -5,6 +5,7 @@
 #include "Utils/GpuMemoryBudget.h"
 #include <cmath>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 
 namespace P = TextureStreamingPolicy;
@@ -13,6 +14,62 @@ void Require(bool condition, const char* message)
 {
 	if (!condition)
 		throw std::runtime_error(message);
+}
+namespace
+{
+	struct OwnedConsumer
+	{
+		std::shared_ptr<int> owner;
+		explicit OwnedConsumer(const std::shared_ptr<int>& value) : owner(value) {}
+		OwnedConsumer(OwnedConsumer&&) = default;
+		OwnedConsumer& operator=(OwnedConsumer&&) = default;
+		OwnedConsumer(const OwnedConsumer&) = delete;
+		OwnedConsumer& operator=(const OwnedConsumer&) = delete;
+	};
+
+	void CheckInventoryRetirement()
+	{
+		StreamingTextures::ConsumerInventory<OwnedConsumer> inventory;
+		const auto committed = std::make_shared<int>(1);
+		const auto scanning = std::make_shared<int>(2);
+		Require(!inventory.Current(0) && !inventory.Observe(1, 0, 0), "Unknown generation activated an inventory");
+		Require(inventory.Observe(1, 0, 1), "Fresh inventory failed to activate");
+		inventory.scanning.emplace_back(committed);
+		inventory.scanning.emplace_back(committed);
+		inventory.Promote(1, 1);
+		Require(inventory.Observe(2, 1, 1), "Current generation rejected a rescan");
+		inventory.scanning.emplace_back(scanning);
+		inventory.scanning.emplace_back(scanning);
+		Require(committed.use_count() == 3 && scanning.use_count() == 3, "Inventory lost owning consumer references");
+
+		inventory.Promote(2, 2);
+		Require(!inventory.Current(2) && inventory.Expired(2, 2) && inventory.verified == 1 && inventory.committed.size() == 2,
+			"Invalidated consumers remained current or were promoted");
+		for (const auto generation : { 2u, 3u, 4u })
+			Require(!inventory.Observe(3, 2, generation) && inventory.generation == 1 && committed.use_count() == 3 && scanning.use_count() == 3,
+				"Repeated invalidation activated or discarded retained consumers");
+
+		Require(inventory.RetireOne() && committed.use_count() == 3 && scanning.use_count() == 2 && inventory.verified == 1,
+			"Retirement released more than one scanning reference");
+		Require(!inventory.Observe(3, 0, 4), "A partially retired inventory activated");
+		Require(inventory.RetireOne() && committed.use_count() == 3 && scanning.use_count() == 1,
+			"Retirement did not finish scanning references first");
+		Require(inventory.RetireOne() && committed.use_count() == 2 && !inventory.Empty(),
+			"Retirement released more than one committed reference");
+		Require(!inventory.Observe(3, 0, 4), "An inventory with one stale consumer activated");
+		Require(inventory.RetireOne() && committed.use_count() == 1 && inventory.Empty() && !inventory.seen && !inventory.verified && inventory.generation == 1,
+			"Final retirement retained scan metadata or activated a new generation");
+		Require(!inventory.RetireOne() && inventory.generation == 1, "Empty retirement authorized a new generation");
+
+		Require(inventory.Observe(3, 0, 4) && inventory.Current(4), "Retired inventory failed to activate the latest generation");
+		inventory.scanning.emplace_back(scanning);
+		inventory.Promote(3, 1);
+		Require(!inventory.verified && inventory.committed.empty() && scanning.use_count() == 2, "An old generation promoted fresh consumers");
+		inventory.Promote(3, 4);
+		Require(inventory.verified == 3 && inventory.committed.size() == 1, "A complete fresh inventory failed to publish");
+		inventory.Clear();
+		Require(inventory.Empty() && !inventory.generation && scanning.use_count() == 1, "Explicit clear retained consumers or generation identity");
+	}
 }
 int main()
 {
@@ -78,26 +135,27 @@ int main()
 		Require(P::DesiredDrop(1024, 11, 1, 999) == 2, "Minimum edge or drop limit escaped validation");
 		Require(P::DesiredDrop(8192, 14, 1, 3) == 3, "Maximum mip drop not enforced");
 		StreamingTextures::ConsumerInventory<int> inventory;
-		inventory.Observe(1, 0);
+		Require(inventory.Observe(1, 0, 1), "First scan could not activate");
 		inventory.scanning.push_back(10);
-		Require(!inventory.Expired(0), "Unfinished first scan was pruned");
-		inventory.Promote(0);
+		Require(!inventory.Expired(0, 1), "Unfinished first scan was pruned");
+		inventory.Promote(0, 1);
 		Require(inventory.committed.empty(), "Partial inventory was published");
-		inventory.Observe(2, 1);
+		Require(inventory.Observe(2, 1, 1), "Current inventory rejected its next scan");
 		Require(inventory.verified == 1 && inventory.committed == std::vector<int>{ 10 }, "Unvisited committed consumers were lost at the next scan");
 		inventory.scanning.push_back(20);
-		inventory.Promote(1);
-		Require(inventory.committed == std::vector<int>{ 10 } && !inventory.Expired(1), "In-progress rescan replaced or pruned committed consumers");
-		inventory.Promote(2);
+		inventory.Promote(1, 1);
+		Require(inventory.committed == std::vector<int>{ 10 } && !inventory.Expired(1, 1), "In-progress rescan replaced or pruned committed consumers");
+		inventory.Promote(2, 1);
 		Require(inventory.verified == 2 && inventory.committed == std::vector<int>{ 20 }, "Complete inventory was not published");
-		Require(inventory.Expired(3), "A texture absent from the completed scan was retained");
-		inventory.Observe(4, 3);
+		Require(inventory.Expired(3, 1), "A texture absent from the completed scan was retained");
+		Require(inventory.Observe(4, 3, 1), "Current inventory rejected an observation");
 		inventory.scanning.push_back(40);
-		inventory.Observe(5, 3);
+		Require(inventory.Observe(5, 3, 1), "Current inventory rejected an abandoned-scan restart");
 		Require(inventory.scanning.empty() && inventory.verified == 2, "An abandoned scan became committed");
 		inventory.Clear();
 		Require(inventory.committed.empty() && inventory.scanning.empty() && !inventory.verified && !inventory.seen, "World invalidation retained consumers");
-		Require(inventory.Expired(0), "Invalidated full-size inventory pinned textures through loading");
+		Require(inventory.Expired(0, 1), "Invalidated full-size inventory pinned textures through loading");
+		CheckInventoryRetirement();
 		Require(P::CappedDrop(8192, 256, 14, 1024) == 3, "Size cap was overridden by the distance detail floor");
 		Require(P::CappedDrop(4096, 4096, 13, 0) == 0, "Unlimited retained a size cap");
 		Require(P::CappedDrop(4096, 4096, 13, 8192) == 0, "Cap upscaled a smaller texture");

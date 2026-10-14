@@ -1,11 +1,30 @@
 #pragma once
 
+#include "Diagnostics/AssetLoadRecord.h"
 #include "Features/TextureStreaming/RestorationCache.h"
 #include <array>
 #include <atomic>
 #include <condition_variable>
 #include <optional>
 #include <utility>
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+namespace CSX::Diagnostics::Stutters
+{
+	class AssetScope
+	{
+	public:
+		AssetScope(AssetKind, std::string_view, std::string_view) noexcept {}
+		~AssetScope() noexcept = default;
+		AssetScope(const AssetScope&) = delete;
+		AssetScope& operator=(const AssetScope&) = delete;
+		void Result(bool) noexcept {}
+		void Result(bool, std::int64_t) noexcept {}
+		void CacheHit(bool) noexcept {}
+		void Bytes(std::uint64_t) noexcept {}
+	};
+}
+#endif
 
 namespace StreamingReaderFixture
 {

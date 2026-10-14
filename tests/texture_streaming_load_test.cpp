@@ -1,4 +1,6 @@
+#include "Features/TextureStreaming/ConsumerInventory.h"
 #include "Features/TextureStreaming/LoadHooks.h"
+#include "Utils/NativeTextureLoading.h"
 #include "d3d11_shader_test.h"
 #include <atomic>
 #include <condition_variable>
@@ -8,6 +10,7 @@
 #include <iostream>
 #include <mutex>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -94,11 +97,12 @@ namespace RE
 }
 std::function<void(RE::NiSourceTexture*)> createBody;
 void OriginalCreate(void*, RE::NiSourceTexture* source) { createBody(source); }
+static_assert(std::is_same_v<decltype(&OriginalCreate), Util::NativeTextureLoading::Create>);
 namespace REL
 {
-	inline std::array<std::uintptr_t, 27> slots = [] {
-		std::array<std::uintptr_t, 27> result{};
-		result[26] = reinterpret_cast<std::uintptr_t>(&OriginalCreate);
+	inline std::array<std::uintptr_t, Util::NativeTextureLoading::kCreateSlot + 1> slots = [] {
+		std::array<std::uintptr_t, Util::NativeTextureLoading::kCreateSlot + 1> result{};
+		result[Util::NativeTextureLoading::kCreateSlot] = reinterpret_cast<std::uintptr_t>(&OriginalCreate);
 		return result;
 	}();
 	template <class T>
@@ -167,6 +171,7 @@ struct TextureStreaming
 			D3D11_TEXTURE2D_DESC full{};
 			D3D11_SHADER_RESOURCE_VIEW_DESC view{};
 			std::array<std::uint64_t, Policy::MaximumDrop + 1> bytes{};
+			StreamingTextures::ConsumerInventory<int> consumers;
 			unsigned drop = 0, desired = 0;
 			std::uint64_t headerHash = 0, fileBytes = 0;
 			bool sourceValidated = false, protectedConsumer = false;
@@ -174,6 +179,7 @@ struct TextureStreaming
 		};
 		std::unordered_map<std::uint64_t, Record> records;
 		std::unordered_set<std::uint64_t> reducedRecords;
+		std::uint64_t inventoryGeneration = 41;
 		void Fail(const char* error) { throw std::runtime_error(error); }
 		void AdoptLoads();
 	};
@@ -292,8 +298,9 @@ int main()
 			const auto& record = state.records.at(10);
 			Require(record.full.Width == 4096 && record.view.Texture2D.MipLevels == 13 && record.drop == 2 &&
 						record.bytes[0] > record.bytes[2] && record.sourceValidated && state.reducedRecords.contains(10) &&
-						engine.width == 1024 && engine.height == 512 && engine.mips == 11,
-				"Adoption lost the full restoration descriptor or reduced-record registration");
+						engine.width == 1024 && engine.height == 512 && engine.mips == 11 &&
+						record.consumers.Current(state.inventoryGeneration) && record.consumers.Empty() && !record.consumers.seen && !record.consumers.verified,
+				"Adoption lost restoration ownership or initialized stale scene consumers");
 		}
 		Require(source.references == 0 && Hooks::Status().at("activeLoads") == 0, "Adopted record leaked load ownership");
 		createBody = [&](RE::NiSourceTexture*) {

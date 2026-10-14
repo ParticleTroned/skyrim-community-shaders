@@ -15,6 +15,8 @@ extract_between("${source}" "constexpr auto streamingConflictWarning"
     "constexpr std::size_t maximumRecords" "streaming_conflict_under_test.h")
 extract_between("${source}" "bool TextureStreaming::State::ReductionRequested() const noexcept"
     "void TextureStreaming::State::Select(" "streaming_mode_under_test.h")
+extract_between("${source}" "void TextureStreaming::State::InvalidateInventory()"
+    "void TextureStreaming::State::MarkInventoryRetired(" "streaming_invalidation_under_test.h")
 extract_between("${source}" "void TextureStreaming::State::UpdateConfigurationDetail()"
     "nlohmann::json TextureStreaming::GetStatus()" "streaming_settings_under_test.h")
 string(FIND "${source}" "void TextureStreaming::DrawSettingsEnabledControl()" start)

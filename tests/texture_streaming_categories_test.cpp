@@ -1,3 +1,4 @@
+#include "Features/TextureStreaming/ConsumerInventory.h"
 #include "Features/TextureStreaming/DemandDiagnostics.h"
 #include "Features/TextureStreaming/GeometryDemand.h"
 #include "Features/TextureStreaming/Settings.h"
@@ -18,6 +19,12 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+namespace CSX::Diagnostics::Stutters::AssetLoadHooks
+{
+	inline bool ddsAvailable = false;
+	void SetDDSAvailable(bool available) noexcept { ddsAvailable = available; }
+}
 
 namespace RE
 {
@@ -352,11 +359,7 @@ struct TextureStreaming
 {
 	bool loaded = true;
 	std::string failedLoadedMessage;
-	struct Inventory
-	{
-		unsigned clears = 0;
-		void Clear() { ++clears; }
-	};
+	using Inventory = StreamingTextures::ConsumerInventory<int>;
 	struct Record
 	{
 		Inventory consumers;
@@ -378,6 +381,9 @@ struct TextureStreaming
 		void UpdateConfigurationDetail();
 		unsigned maximumDrop = 2;
 		std::uint64_t epoch = 7, completeScan = 12, nextScanMs = 10000;
+		std::uint64_t inventoryGeneration = 1, inventoryRetirementRemaining = 0, inventoryRetirementCursor = 0;
+		bool inventoryRetirementPending = false;
+		void InvalidateInventory();
 		std::vector<int> frontier{ 1 }, visited{ 1 }, reducedRecords;
 		std::map<int, Record> records{ { 1, {} } };
 		std::string detail;
@@ -400,6 +406,7 @@ struct TextureStreaming
 #include "streaming_startup_under_test.h"
 #undef LoadDDS
 #undef GetModuleHandleW
+#include "streaming_invalidation_under_test.h"
 #include "streaming_mode_under_test.h"
 #include "streaming_settings_under_test.h"
 #include "streaming_ui_under_test.h"
@@ -819,10 +826,13 @@ int main()
 		parallaxLoaded.LoadSettings(parallaxSaved);
 		Require(!parallaxLoaded.state->categories.parallax && !parallaxLoaded.state->categories.terrain, "Saved disabled coverage was overwritten by defaults");
 		TextureStreaming feature;
+		Require(feature.state->records[1].consumers.Observe(12, 0, 1), "Fixture inventory did not initialize");
+		feature.state->records[1].consumers.scanning.push_back(7);
+		feature.state->records[1].consumers.Promote(12, 1);
 		Util::Widgets::clicks = { { "Landscape", true }, { "Cutouts", true }, { "Emissive", true } };
 		feature.DrawSettings();
 		Require(feature.state->categories == Categories{ true, true, true, true, true } && Util::Widgets::clicks.empty(), "UI did not apply all independent category toggles");
-		Require(feature.state->epoch == 8 && feature.state->frontier.empty() && feature.state->visited.empty() && !feature.state->completeScan && !feature.state->nextScanMs && feature.state->records[1].consumers.clears == 1, "Category change retained stale scans or pending work identity");
+		Require(feature.state->epoch == 8 && feature.state->inventoryGeneration == 2 && feature.state->inventoryRetirementPending && feature.state->inventoryRetirementRemaining == 1 && !feature.state->completeScan && !feature.state->nextScanMs && !feature.state->frontier.empty() && !feature.state->visited.empty() && feature.state->records[1].consumers.committed == std::vector<int>{ 7 } && !feature.state->records[1].consumers.Current(2), "Category change did not invalidate immediately while deferring physical retirement");
 		Require(MenuUI::sections.size() == 3 && std::string(MenuUI::sections[1].id) == "categories", "Optional categories were absent from page navigation");
 		feature.Configure(true, 3);
 		Require(feature.state->categories == Categories{ true, true, true, true, true } && feature.state->epoch == 9, "Mip control reset categories or retained stale pending work");

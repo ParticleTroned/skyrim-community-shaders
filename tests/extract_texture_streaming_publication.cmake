@@ -11,8 +11,13 @@ extract_between("${source}" "enum class ReadKind"
 
 extract_between("${source}" "std::optional<std::string> TexturePath("
     "nlohmann::json DiagnosticStatus(" "streaming_path_under_test.h")
+extract_between("${source}" "void TextureStreaming::State::InvalidateInventory()"
+    "void TextureStreaming::State::MarkInventoryRetired(" "streaming_observation_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/streaming_observation_under_test.h" invalidation_source)
 extract_between("${source}" "void TextureStreaming::State::ObserveTexture("
     "void TextureStreaming::State::SuspendPreviewReductions(" "streaming_observation_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/streaming_observation_under_test.h" observation_source)
+file(WRITE "${OUTPUT_DIRECTORY}/streaming_observation_under_test.h" "${invalidation_source}\n${observation_source}")
 
 extract_between("${source}" "\tvoid Defer(Block reason, const Record& record)"
     "\tstd::vector<RE::NiPointer<RE::NiAVObject>> previewRoots" "streaming_defer_under_test.h")

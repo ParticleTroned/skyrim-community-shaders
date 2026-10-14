@@ -30,7 +30,12 @@ namespace StreamingInventoryFixture
 			NiPointer() = default;
 			explicit NiPointer(T* p) : value(p) {}
 			void reset(T* p) { value = p; }
-			T* get() const { return value; }
+			inline static unsigned accesses = 0;
+			T* get() const
+			{
+				++accesses;
+				return value;
+			}
 		};
 		namespace BSGraphics
 		{
@@ -94,7 +99,10 @@ namespace StreamingInventoryFixture
 			StreamingTextures::Modes modes;
 			StreamingTextures::Options options;
 			std::uint32_t maximumDrop = 2;
-			std::uint64_t scan = 1, completeScan = 0;
+			std::uint64_t scan = 1, completeScan = 0, inventoryGeneration = 1, nextScanMs = 0;
+			std::uint64_t inventoryRetirementRemaining = 0, inventoryRetirementCursor = 0;
+			bool inventoryRetirementPending = false;
+			void InvalidateInventory();
 			bool enabled = true;
 			void Fail(const char* message) { throw std::runtime_error(message); }
 			void ObserveTexture(RE::NiSourceTexture*, RE::BSGeometry*, bool, std::uint32_t);
@@ -209,6 +217,7 @@ void CheckStreamingInventory(ID3D11Device* device)
 					terrainState.terrainTextureDiagnostics.reasons[static_cast<std::size_t>(TextureRejection::None)] == 1,
 			"Accepted terrain did not expose its resource contract");
 		auto& terrainRecord = terrainState.records.at(74);
+		Require(terrainRecord.consumers.Observe(1, 0, terrainState.inventoryGeneration), "Terrain fixture inventory did not initialize");
 		terrainRecord.consumers.committed.push_back({ RE::NiPointer<RE::BSGeometry>(&terrainGeometry) });
 		terrainState.Defer(Block::InventoryIncomplete, terrainRecord);
 		terrainState.Defer(Block::FullDetailDemand, terrainRecord);
@@ -217,6 +226,15 @@ void CheckStreamingInventory(ID3D11Device* device)
 					terrainState.terrainBlocks.texturePaths[fullDetail] == "textures\\landscape\\terrain.dds" &&
 					terrainState.terrainBlocks.geometryNames[fullDetail] == "TerrainPatch",
 			"Terrain admission blocker lost its texture or limiting geometry identity");
+		{
+			StreamingInventoryFixture::TextureStreaming::State staleState;
+			staleState.inventoryGeneration = terrainState.inventoryGeneration;
+			staleState.records.emplace(74, terrainRecord);
+			staleState.InvalidateInventory();
+			RE::NiPointer<RE::BSGeometry>::accesses = 0;
+			staleState.Defer(Block::InventoryIncomplete, staleState.records.at(74));
+			Require(RE::NiPointer<RE::BSGeometry>::accesses == 0, "Stale diagnostic inventory dereferenced a retired geometry");
+		}
 		terrainRecord.terrainConsumer = false;
 		terrainState.Defer(Block::FullDetailDemand, terrainRecord);
 		Require(terrainState.terrainInventoryDiagnostics.blocked[fullDetail] == 1 && terrainState.diagnostics.blocked[fullDetail] == 2,

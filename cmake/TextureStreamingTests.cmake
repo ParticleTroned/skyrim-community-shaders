@@ -25,7 +25,7 @@ target_include_directories(texture_streaming_gate_test PRIVATE "${_streaming_gat
 
 set(_streaming_categories_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/streaming-categories")
 set(_streaming_categories_headers)
-foreach(_header material demand settings ui flags features sections mode geometry_types startup conflict landscape_lookup)
+foreach(_header material demand settings ui flags features sections mode geometry_types startup conflict landscape_lookup invalidation)
     list(APPEND _streaming_categories_headers "${_streaming_categories_dir}/streaming_${_header}_under_test.h")
 endforeach()
 add_custom_command(OUTPUT ${_streaming_categories_headers}
@@ -113,3 +113,20 @@ add_custom_command(OUTPUT "${_shadow_startup_header}"
     VERBATIM)
 target_sources(sps_followups_policy_test PRIVATE "${_shadow_startup_header}")
 target_include_directories(sps_followups_policy_test PRIVATE "${_shadow_startup_dir}")
+
+set(_streaming_lifecycle_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/streaming-lifecycle")
+set(_streaming_lifecycle_headers)
+foreach(_header retirement lifecycle_demand tick prune scan_gate)
+    list(APPEND _streaming_lifecycle_headers "${_streaming_lifecycle_dir}/streaming_${_header}_under_test.h")
+endforeach()
+add_custom_command(OUTPUT ${_streaming_lifecycle_headers}
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_streaming_lifecycle_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_texture_streaming_lifecycle.cmake"
+    DEPENDS src/Features/TextureStreaming.cpp tests/extract_source_region.cmake
+        tests/extract_texture_streaming_lifecycle.cmake
+    VERBATIM)
+add_controller_test(texture_streaming_lifecycle_test TextureStreamingLifecycle tests/texture_streaming_lifecycle_test.cpp)
+target_sources(texture_streaming_lifecycle_test PRIVATE ${_streaming_lifecycle_headers})
+target_include_directories(texture_streaming_lifecycle_test PRIVATE "${_streaming_lifecycle_dir}")
+target_link_libraries(texture_streaming_lifecycle_test PRIVATE nlohmann_json::nlohmann_json)

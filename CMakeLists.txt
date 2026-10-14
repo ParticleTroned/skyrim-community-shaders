@@ -2626,6 +2626,40 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${_strict_test} PROPERTIES TIMEOUT 30)
     endforeach()
 
+    add_controller_test(
+        room_ancestor_lookup_test
+        RoomAncestorLookup
+        tests/room_ancestor_lookup_test.cpp
+    )
+    set(_room_ancestor_lookup_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/room-ancestor-lookup"
+    )
+    set(_room_ancestor_lookup_test_headers
+        "${_room_ancestor_lookup_test_dir}/room_ancestor_clear_under_test.h"
+        "${_room_ancestor_lookup_test_dir}/room_ancestor_lookup_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_room_ancestor_lookup_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_room_ancestor_lookup_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_room_ancestor_lookup.cmake"
+        DEPENDS
+            src/Features/LightLimitFix.cpp
+            tests/extract_room_ancestor_lookup.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    target_sources(
+        room_ancestor_lookup_test
+        PRIVATE ${_room_ancestor_lookup_test_headers}
+    )
+    target_include_directories(
+        room_ancestor_lookup_test
+        PRIVATE "${_room_ancestor_lookup_test_dir}"
+    )
+    set_tests_properties(RoomAncestorLookup PROPERTIES TIMEOUT 30)
+
     set(_vr_scene_guards_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-scene-guards"
     )

@@ -1665,12 +1665,13 @@ RE::NiNode* GetParentRoomNode(RE::NiAVObject* object)
 	static const auto* roomRtti = REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSMultiBoundRoom }.get();
 	static const auto* portalRtti = REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSPortalSharedNode }.get();
 
-	const auto* rtti = object->GetRTTI();
-	if (rtti == roomRtti || rtti == portalRtti) {
-		return static_cast<RE::NiNode*>(object);
+	for (; object; object = object->parent) {
+		const auto* rtti = object->GetRTTI();
+		if (rtti == roomRtti || rtti == portalRtti) {
+			return static_cast<RE::NiNode*>(object);
+		}
 	}
-
-	return GetParentRoomNode(object->parent);
+	return nullptr;
 }
 
 void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass)
@@ -1686,7 +1687,8 @@ void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pa
 		return;
 	}
 	if (!roomNodes.empty()) {
-		if (RE::NiNode* roomNode = GetParentRoomNode(a_pass->geometry)) {
+		// Room and portal nodes are distinct from render-pass geometry.
+		if (RE::NiNode* roomNode = GetParentRoomNode(a_pass->geometry->parent)) {
 			if (auto it = roomNodes.find(roomNode); it != roomNodes.cend()) {
 				strictLightDataTemp.RoomIndex = it->second;
 			}

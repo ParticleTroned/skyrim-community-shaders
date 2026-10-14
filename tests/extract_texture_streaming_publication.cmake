@@ -24,3 +24,10 @@ extract_between("${source}" "\tvoid Defer(Block reason, const Record& record)"
 
 extract_between("${source}" "void TextureStreaming::State::SuspendPreviewReductions("
     "void TextureStreaming::State::RefreshPreviews()" "streaming_preview_protection_under_test.h")
+
+extract_between(
+    "${source}"
+    "\tauto TrackRecordStatus("
+    "\tvoid SuspendPreviewReductions("
+    "streaming_status_tracking_under_test.h"
+)

@@ -3,6 +3,7 @@
 #include "Features/TextureStreaming/Maintenance.h"
 #include "Utils/NativeTextureLoading.h"
 #include "d3d11_shader_test.h"
+#include "texture_streaming_status_checks.h"
 #include <atomic>
 #include <condition_variable>
 #include <filesystem>
@@ -185,6 +186,7 @@ struct TextureStreaming
 		};
 		std::unordered_map<std::uint64_t, Record> records;
 		std::unordered_set<std::uint64_t> reducedRecords;
+		StreamingTextures::InventoryStatusCounters inventoryStatus;
 		std::uint64_t inventoryGeneration = 41;
 		void Fail(const char* error) { throw std::runtime_error(error); }
 		void AdoptLoads(const MaintenanceBudget& budget);
@@ -303,6 +305,7 @@ int main()
 			TextureStreaming::State state;
 			const ::MaintenanceBudget budget;
 			state.AdoptLoads(budget);
+			Require(TextureStreamingStatusChecks::Equal(state.inventoryStatus, TextureStreamingStatusChecks::Aggregate(state.records)), "Remembered load adoption status did not match its inventory");
 			const auto& record = state.records.at(10);
 			Require(record.full.Width == 4096 && record.view.Texture2D.MipLevels == 13 && record.drop == 2 &&
 						record.bytes[0] > record.bytes[2] && record.sourceValidated && state.reducedRecords.contains(10) &&
@@ -319,6 +322,7 @@ int main()
 			TextureStreaming::State state;
 			const ::MaintenanceBudget budget;
 			state.AdoptLoads(budget);
+			Require(TextureStreamingStatusChecks::Equal(state.inventoryStatus, TextureStreamingStatusChecks::Aggregate(state.records)), "Remembered load adoption status did not match its inventory");
 			Require(state.records.empty() && state.reducedRecords.empty() && !Hooks::HasPending() && source.references == 0 && Hooks::Status().at("activeLoads") == 0,
 				"A deferred old-device load survived the device reset or leaked handoff ownership");
 		}

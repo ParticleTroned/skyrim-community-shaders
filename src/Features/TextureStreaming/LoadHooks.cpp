@@ -326,9 +326,23 @@ namespace StreamingTextures::LoadHooks
 	}
 	nlohmann::json Status()
 	{
-		std::scoped_lock lock(catalog.mutex);
-		return { { "previewLoadGuardActive", IsPreviewActive() }, { "hookReady", catalog.hookReady }, { "ready", catalog.ready }, { "entries", catalog.entries.size() },
-			{ "loadedReduced", catalog.hits }, { "rejectedSources", catalog.rejected }, { "failures", catalog.failures },
-			{ "activeLoads", catalog.activeLoads->load() }, { "protectionLimit", catalog.protectionLimit }, { "unsaved", catalog.revision != catalog.savedRevision }, { "error", catalog.error } };
+		struct Snapshot
+		{
+			bool previewLoadGuardActive = false, hookReady = false, ready = false;
+			std::size_t entries = 0;
+			std::uint64_t loadedReduced = 0, rejectedSources = 0, failures = 0;
+			std::size_t activeLoads = 0;
+			bool protectionLimit = false, unsaved = false;
+			std::string error;
+		} snapshot;
+		{
+			std::scoped_lock lock(catalog.mutex);
+			snapshot = { IsPreviewActive(), catalog.hookReady, catalog.ready, catalog.entries.size(),
+				catalog.hits, catalog.rejected, catalog.failures, catalog.activeLoads->load(),
+				catalog.protectionLimit, catalog.revision != catalog.savedRevision, catalog.error };
+		}
+		return { { "previewLoadGuardActive", snapshot.previewLoadGuardActive }, { "hookReady", snapshot.hookReady }, { "ready", snapshot.ready }, { "entries", snapshot.entries },
+			{ "loadedReduced", snapshot.loadedReduced }, { "rejectedSources", snapshot.rejectedSources }, { "failures", snapshot.failures },
+			{ "activeLoads", snapshot.activeLoads }, { "protectionLimit", snapshot.protectionLimit }, { "unsaved", snapshot.unsaved }, { "error", snapshot.error } };
 	}
 }

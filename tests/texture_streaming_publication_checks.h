@@ -5,6 +5,7 @@
 #include "Features/TextureStreaming/RestorationCache.h"
 #include "Features/TextureStreaming/TextureData.h"
 #include "d3d11_shader_test.h"
+#include "texture_streaming_status_checks.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -83,7 +84,10 @@ namespace
 				std::array<std::uint64_t, 4> bytes{ 1024, 256, 64, 16 };
 				D3D11_TEXTURE2D_DESC full{};
 				std::string path = "textures/landscape/test.dds";
-				unsigned drop = 1;
+				unsigned drop = 1, desired = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				bool terrainConsumer = false;
+#endif
 				bool protectedConsumer = false;
 				std::shared_ptr<void> loadLifetime;
 				std::uint64_t stableSince = 0, retryAfter = 0;
@@ -113,6 +117,8 @@ namespace
 #endif
 			};
 			std::unordered_set<std::uint64_t> reducedRecords{ 42 };
+			StreamingTextures::InventoryStatusCounters inventoryStatus;
+#include "streaming_status_tracking_under_test.h"
 			unsigned restores = 0, shrinks = 0, failures = 0;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			unsigned gpuCopyShrinks = 0, cachedRestores = 0, ddsRestores = 0, terrainShrinks = 0, terrainRestores = 0;
@@ -173,6 +179,8 @@ namespace
 			record.current = engine.texture;
 			record.currentView = engine.resourceView;
 			work.payload.request.drop = target;
+			record.desired = target;
+			state.inventoryStatus.Add(StreamingTextures::InventoryStatusCounters::From(record));
 			Check(work.upload.Begin(device, full, view, target));
 			const D3D11_QUERY_DESC query{ D3D11_QUERY_EVENT, 0 };
 			Check(device->CreateQuery(&query, &work.retirement));
@@ -208,6 +216,7 @@ void CheckStreamingPublication(ID3D11Device* device, ID3D11DeviceContext* contex
 					f.work.upload.texture.Reset();
 			}
 			f.state.Publish(f.record, f.work);
+			RequirePublication(TextureStreamingStatusChecks::Equal(f.state.inventoryStatus, TextureStreamingStatusChecks::Contribution(f.record)), "Publication or cancellation status did not match the retained record");
 			RequirePublication(f.state.cancelled && f.state.failures == 1 && !f.work.replacementCommitted && f.record.retryAfter > GetTickCount64(), "Provenance failure did not cancel publication");
 			RequirePublication(f.engine.resourceView == old && f.state.reducedRecords.contains(42), "Failed publication altered engine ownership or residency bookkeeping");
 			for (unsigned stage = 0; stage < getters.size(); ++stage) f.ExpectBound(stage, old);
@@ -221,8 +230,12 @@ void CheckStreamingPublication(ID3D11Device* device, ID3D11DeviceContext* contex
 			Check(StreamingTextures::WriteOrigin(f.engine.texture, { 42, false, StreamingTextures::LandscapeStatics }));
 			Check(StreamingTextures::WriteOrigin(f.work.upload.texture.Get(), { 42, false, 0 }));
 			Check(StreamingTextures::WriteOrigin(f.engine.texture, { 42, false, StreamingTextures::EmissiveStatics }));
-			f.record.protectedConsumer = true;
+			{
+				auto statusChange = f.state.TrackRecordStatus(f.record);
+				f.record.protectedConsumer = true;
+			}
 			f.state.Publish(f.record, f.work);
+			RequirePublication(TextureStreamingStatusChecks::Equal(f.state.inventoryStatus, TextureStreamingStatusChecks::Contribution(f.record)), "Publication or cancellation status did not match the retained record");
 			RequirePublication(f.work.replacementCommitted && !f.state.cancelled && f.engine.resourceView == replacement && !f.state.reducedRecords.contains(42), "Full restoration did not publish atomically");
 			RequirePublication(f.work.oldView.Get() == old && f.work.oldTexture && f.engine.width == 1024 && f.engine.mips == 11, "Restoration lost retirement ownership or engine dimensions");
 			for (unsigned stage = 0; stage < getters.size(); ++stage) f.ExpectBound(stage, replacement);
@@ -239,6 +252,7 @@ void CheckStreamingPublication(ID3D11Device* device, ID3D11DeviceContext* contex
 			f.Bind(5);
 			Check(StreamingTextures::WriteOrigin(f.engine.texture, { 42, false, StreamingTextures::AlphaTestedStatics }));
 			f.state.Publish(f.record, f.work);
+			RequirePublication(TextureStreamingStatusChecks::Equal(f.state.inventoryStatus, TextureStreamingStatusChecks::Contribution(f.record)), "Publication or cancellation status did not match the retained record");
 			RequirePublication(f.work.replacementCommitted && !f.state.cancelled && f.engine.width == 256 && f.record.drop == 2 && f.state.reducedRecords.contains(42), "Ordinary pixel-only reduction was blocked");
 			f.ExpectBound(5, replacement);
 			for (unsigned stage = 0; stage < 5; ++stage)
@@ -256,6 +270,7 @@ void CheckStreamingPublication(ID3D11Device* device, ID3D11DeviceContext* contex
 				auto* old = f.engine.resourceView;
 				const auto expected = f.work.upload.desc;
 				f.state.Publish(f.record, f.work);
+				RequirePublication(TextureStreamingStatusChecks::Equal(f.state.inventoryStatus, TextureStreamingStatusChecks::Contribution(f.record)), "Publication or cancellation status did not match the retained record");
 				RequirePublication(f.work.replacementCommitted && !f.state.cancelled && f.work.oldView.Get() == old,
 					"Unavailable engine metadata blocked publication or lost retirement ownership");
 				RequirePublication(f.engine.width == (fields & 1 ? expected.Width : 0) &&
@@ -276,6 +291,7 @@ void CheckStreamingPublication(ID3D11Device* device, ID3D11DeviceContext* contex
 			f.Bind(5);
 			Check(StreamingTextures::WriteOrigin(f.engine.texture, { 42, false, categories }));
 			f.state.Publish(f.record, f.work);
+			RequirePublication(TextureStreamingStatusChecks::Equal(f.state.inventoryStatus, TextureStreamingStatusChecks::Contribution(f.record)), "Publication or cancellation status did not match the retained record");
 			const bool terrain = (categories & StreamingTextures::Terrain) != 0;
 			RequirePublication(f.work.replacementCommitted && f.state.terrainShrinks == (terrain ? 1u : 0u), "Parallax mesh was falsely attributed to terrain");
 			if (terrain)
@@ -295,6 +311,7 @@ void CheckStreamingPublication(ID3D11Device* device, ID3D11DeviceContext* contex
 			auto* old = f.engine.resourceView;
 			Check(StreamingTextures::WriteOrigin(f.engine.texture, { 42, false, 0 }));
 			f.state.Publish(f.record, f.work);
+			RequirePublication(TextureStreamingStatusChecks::Equal(f.state.inventoryStatus, TextureStreamingStatusChecks::Contribution(f.record)), "Publication or cancellation status did not match the retained record");
 			RequirePublication(f.state.cancelled && f.record.protectedConsumer && !f.work.replacementCommitted, "Special-stage consumer admitted a reduced texture");
 			if (special < 5)
 				f.ExpectBound(special, old);

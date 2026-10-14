@@ -25,3 +25,27 @@ extract_between("${source}" "\tconst auto found = records.find(work.payload.requ
     "\tif (!work.reservation) {" "streaming_transaction_validation_under_test.h")
 extract_between("${source}" "\t\tconst bool refill = target < record.drop;"
     "\t\tconst bool required = demanded < record.drop;" "streaming_selection_guard_under_test.h")
+
+extract_between(
+    "${source}"
+    "\tauto TrackRecordStatus("
+    "\tvoid SuspendPreviewReductions("
+    "streaming_status_tracking_under_test.h"
+)
+
+extract_between(
+    "${source}"
+    "void TextureStreaming::State::Select("
+    "void TextureStreaming::State::Publish("
+    "streaming_selection_status_under_test.h"
+)
+file(
+    READ "${OUTPUT_DIRECTORY}/streaming_selection_status_under_test.h"
+    selection_source
+)
+extract_between(
+    "${selection_source}"
+    "\t\tconst auto recordStatus = TrackRecordStatus(record);"
+    "\t\tconst bool refill = target < record.drop;"
+    "streaming_selection_status_under_test.h"
+)

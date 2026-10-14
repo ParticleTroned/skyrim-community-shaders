@@ -37,8 +37,8 @@ if(NOT _compatibility_found)
 endif()
 
 foreach(_bridge_contract IN ITEMS
-    "ServiceFoundation value({ ServiceName, 1, 1, 16 })"
-    "{ \"minor\", 1 }, { \"schemaRevision\", 16 }"
+        "ServiceFoundation value({ ServiceName, 1, 1, 17 })"
+        "{ \"minor\", 1 }, { \"schemaRevision\", 17 }"
     "PresetCompatibility::ToJson(PresetCompatibility::GetPublished())"
 )
     string(FIND "${_bridge}" "${_bridge_contract}" _bridge_position)
@@ -46,6 +46,115 @@ foreach(_bridge_contract IN ITEMS
         message(FATAL_ERROR "Feature DevBench compatibility contract is missing: ${_bridge_contract}")
     endif()
 endforeach()
+
+string(
+    JSON _snapshot
+    GET "${_descriptor}"
+    outputSchema
+    properties
+    result
+    properties
+    snapshot
+)
+string(JSON _snapshot_type GET "${_snapshot}" type)
+string(JSON _snapshot_extra GET "${_snapshot}" additionalProperties)
+string(JSON _snapshot_required_count LENGTH "${_snapshot}" required)
+string(JSON _snapshot_property_count LENGTH "${_snapshot}" properties)
+if(
+    NOT _snapshot_type STREQUAL "object"
+    OR _snapshot_extra
+    OR NOT _snapshot_required_count EQUAL 5
+    OR NOT _snapshot_property_count EQUAL 5
+)
+    message(
+        FATAL_ERROR
+        "Streaming snapshot identity must expose exactly five required fields"
+    )
+endif()
+set(_snapshot_fields
+    capturedAtMs
+    configurationEpoch
+    inventoryGeneration
+    deviceGeneration
+    lastServiceAttemptFrame
+)
+set(_snapshot_required_fields)
+foreach(_index RANGE 0 4)
+    string(JSON _snapshot_required GET "${_snapshot}" required ${_index})
+    list(APPEND _snapshot_required_fields "${_snapshot_required}")
+endforeach()
+list(SORT _snapshot_fields)
+list(SORT _snapshot_required_fields)
+if(NOT "${_snapshot_required_fields}" STREQUAL "${_snapshot_fields}")
+    message(
+        FATAL_ERROR
+        "Streaming snapshot identity is missing required fields"
+    )
+endif()
+foreach(
+    _field
+    IN
+    ITEMS capturedAtMs configurationEpoch inventoryGeneration deviceGeneration
+)
+    string(JSON _field_type GET "${_snapshot}" properties ${_field} type)
+    string(JSON _field_minimum GET "${_snapshot}" properties ${_field} minimum)
+    if(NOT _field_type STREQUAL "integer" OR NOT _field_minimum EQUAL 0)
+        message(
+            FATAL_ERROR
+            "Streaming snapshot identity must be a nonnegative integer: ${_field}"
+        )
+    endif()
+endforeach()
+string(
+    JSON _frame_type_count
+    LENGTH "${_snapshot}"
+    properties
+    lastServiceAttemptFrame
+    type
+)
+string(
+    JSON _frame_first_type
+    GET "${_snapshot}"
+    properties
+    lastServiceAttemptFrame
+    type
+    0
+)
+string(
+    JSON _frame_second_type
+    GET "${_snapshot}"
+    properties
+    lastServiceAttemptFrame
+    type
+    1
+)
+set(_frame_types "${_frame_first_type}" "${_frame_second_type}")
+list(SORT _frame_types)
+string(
+    JSON _frame_minimum
+    GET "${_snapshot}"
+    properties
+    lastServiceAttemptFrame
+    minimum
+)
+string(
+    JSON _frame_maximum
+    GET "${_snapshot}"
+    properties
+    lastServiceAttemptFrame
+    maximum
+)
+if(
+    NOT _frame_type_count EQUAL 2
+    OR NOT "${_frame_types}" STREQUAL "integer;null"
+    OR NOT _frame_minimum EQUAL 0
+    OR NOT _frame_maximum EQUAL 4294967295
+)
+    message(
+        FATAL_ERROR
+        "Streaming service attempt frame must preserve its nullable uint32 identity"
+    )
+endif()
 
 foreach(_coverage IN ITEMS terrain parallax)
     string(JSON _coverage_default GET

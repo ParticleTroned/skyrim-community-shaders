@@ -59,7 +59,9 @@ set(_streaming_publication_headers
     "${_streaming_publication_dir}/streaming_path_under_test.h"
     "${_streaming_publication_dir}/streaming_observation_under_test.h"
     "${_streaming_publication_dir}/streaming_preview_protection_under_test.h"
-    "${_streaming_publication_dir}/streaming_defer_under_test.h")
+    "${_streaming_publication_dir}/streaming_defer_under_test.h"
+    "${_streaming_publication_dir}/streaming_status_tracking_under_test.h"
+)
 add_custom_command(OUTPUT ${_streaming_publication_headers}
     COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
         "-DOUTPUT_DIRECTORY=${_streaming_publication_dir}" -P
@@ -116,7 +118,20 @@ target_include_directories(sps_followups_policy_test PRIVATE "${_shadow_startup_
 
 set(_streaming_lifecycle_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/streaming-lifecycle")
 set(_streaming_lifecycle_headers)
-foreach(_header retirement lifecycle_demand tick prune scan_gate preview_state target_policy transaction_validation selection_guard)
+foreach(
+    _header
+    retirement
+    lifecycle_demand
+    tick
+    prune
+    scan_gate
+    preview_state
+    target_policy
+    transaction_validation
+    selection_guard
+    status_tracking
+    selection_status
+)
     list(APPEND _streaming_lifecycle_headers "${_streaming_lifecycle_dir}/streaming_${_header}_under_test.h")
 endforeach()
 add_custom_command(OUTPUT ${_streaming_lifecycle_headers}
@@ -130,3 +145,79 @@ add_controller_test(texture_streaming_lifecycle_test TextureStreamingLifecycle t
 target_sources(texture_streaming_lifecycle_test PRIVATE ${_streaming_lifecycle_headers})
 target_include_directories(texture_streaming_lifecycle_test PRIVATE "${_streaming_lifecycle_dir}")
 target_link_libraries(texture_streaming_lifecycle_test PRIVATE nlohmann_json::nlohmann_json)
+
+set(_streaming_status_dir
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/streaming-status"
+)
+set(_streaming_status_headers)
+foreach(
+    _header
+    snapshot
+    copy
+    diagnostics
+    terrain
+    reduction
+)
+    list(
+        APPEND _streaming_status_headers
+        "${_streaming_status_dir}/streaming_status_${_header}_under_test.h"
+    )
+endforeach()
+list(
+    APPEND _streaming_status_headers
+    "${_streaming_status_dir}/streaming_status_under_test.h"
+)
+add_custom_command(
+    OUTPUT ${_streaming_status_headers}
+    COMMAND
+        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_streaming_status_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_texture_streaming_status.cmake"
+    DEPENDS
+        src/Features/TextureStreaming.cpp
+        tests/extract_source_region.cmake
+        tests/extract_texture_streaming_status.cmake
+    VERBATIM
+)
+add_controller_test(
+    texture_streaming_status_test
+    TextureStreamingStatus
+    tests/texture_streaming_status_test.cpp
+)
+target_sources(
+    texture_streaming_status_test
+    PRIVATE ${_streaming_status_headers}
+)
+target_include_directories(
+    texture_streaming_status_test
+    PRIVATE "${_streaming_status_dir}"
+)
+target_compile_definitions(
+    texture_streaming_status_test
+    PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+)
+target_link_libraries(
+    texture_streaming_status_test
+    PRIVATE nlohmann_json::nlohmann_json Microsoft::DirectXTex
+)
+add_controller_test(
+    texture_streaming_status_debug_test
+    TextureStreamingStatusDebug
+    tests/texture_streaming_status_test.cpp
+)
+target_sources(
+    texture_streaming_status_debug_test
+    PRIVATE ${_streaming_status_headers}
+)
+target_include_directories(
+    texture_streaming_status_debug_test
+    PRIVATE "${_streaming_status_dir}"
+)
+target_compile_definitions(
+    texture_streaming_status_debug_test
+    PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN DEVBENCH_BRIDGE_ENABLED
+)
+target_link_libraries(
+    texture_streaming_status_debug_test
+    PRIVATE nlohmann_json::nlohmann_json Microsoft::DirectXTex
+)

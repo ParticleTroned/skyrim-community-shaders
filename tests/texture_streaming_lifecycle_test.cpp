@@ -3,6 +3,7 @@
 #include "Features/TextureStreaming/Diagnostics.h"
 #include "Features/TextureStreaming/Maintenance.h"
 #include "Features/TextureStreaming/Settings.h"
+#include "texture_streaming_status_checks.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -20,6 +21,16 @@
 
 namespace
 {
+	namespace SKSE::stl
+	{
+		template <class F>
+		struct scope_exit
+		{
+			F action;
+			explicit scope_exit(F function) : action(std::move(function)) {}
+			~scope_exit() { action(); }
+		};
+	}
 	namespace Policy = TextureStreamingPolicy;
 	using Block = StreamingTextures::Diagnostics::Block;
 	using MaintenancePhase = StreamingTextures::MaintenancePhase;
@@ -159,8 +170,10 @@ namespace
 				{
 					unsigned Width = 4096, Height = 4096, MipLevels = 13;
 				} full;
-				unsigned drop = 0, distanceDrop = 0;
+				unsigned drop = 0, desired = 0, distanceDrop = 0;
+				std::array<std::uint64_t, Policy::MaximumDrop + 1> bytes{ 1024, 256, 64, 16 };
 				double restorationUrgency = 0;
+				std::uint64_t stableSince = 0, retryAfter = 0, restorationWaitingSince = 0;
 				bool protectedConsumer = false, previewProtected = false;
 			};
 			struct Node
@@ -188,9 +201,12 @@ namespace
 			bool inventoryRetirementPending = false;
 			std::uint64_t epoch = 1, scan = 1, completeScan = 1, nextScanMs = 0, deviceGeneration = 1;
 			unsigned worldStart = 0, lastFrame = UINT32_MAX;
+			bool hasServiceAttemptFrame = false;
 			bool enabled = true, reductionRequested = true, paused = false, reading = false, hasPendingLoad = false;
 			std::unordered_map<std::uint64_t, Record> records;
 			std::unordered_set<std::uint64_t> reducedRecords;
+			StreamingTextures::InventoryStatusCounters inventoryStatus;
+#include "streaming_status_tracking_under_test.h"
 			std::uint64_t pruneCursor = 0;
 			std::vector<Node> frontier;
 			std::unordered_set<Geometry*> visited;
@@ -232,6 +248,7 @@ namespace
 #include "streaming_target_policy_under_test.h"
 			void ValidateTransaction();
 			void EvaluateCandidate(Record&, std::uint32_t);
+			void UpdateSelectionStatus(Record&, std::uint32_t);
 			void AdoptLoads(const MaintenanceBudget& budget) { EnterPhase(MaintenancePhase::AdoptLoads, budget); }
 			void RefreshPreviews();
 			bool PreviewProtectionPending() const;
@@ -327,6 +344,12 @@ namespace
 		++acceptedCandidates;
 	}
 
+	void TextureStreaming::State::UpdateSelectionStatus(Record& record, std::uint32_t target)
+	{
+		const auto now = GetTickCount64();
+#include "streaming_selection_status_under_test.h"
+	}
+
 	using State = TextureStreaming::State;
 	struct Fixture
 	{
@@ -370,7 +393,13 @@ namespace
 			record.consumers.verified = state.completeScan;
 			if (drop)
 				state.reducedRecords.insert(id);
+			state.inventoryStatus.Add(StreamingTextures::InventoryStatusCounters::From(record));
+			CheckStatus();
 			return record;
+		}
+		void CheckStatus() const
+		{
+			Require(TextureStreamingStatusChecks::Equal(state.inventoryStatus, TextureStreamingStatusChecks::Aggregate(state.records)), "Lifecycle status did not match its inventory");
 		}
 		void Retire()
 		{
@@ -381,6 +410,7 @@ namespace
 				state.RetireInventory(MaintenanceBudget{});
 			}
 			requireOwner = false;
+			CheckStatus();
 			Require(referenceReleases - before <= maximumInventoryRetirementSteps, "A retirement pass exceeded its reference-release budget");
 		}
 		void Tick(bool ordinaryReset = true)
@@ -392,9 +422,28 @@ namespace
 			requireOwner = true;
 			state.Tick();
 			requireOwner = false;
+			CheckStatus();
 			Require(!ordinaryReset || referenceReleases - before <= maximumInventoryRetirementSteps, "Tick exceeded its inventory retirement budget");
 		}
 	};
+	void CheckSelectionStatusChanges()
+	{
+		for (unsigned resident = 0; resident < 4; ++resident) {
+			for (unsigned target = 0; target < 4; ++target) {
+				for (bool delayed : { false, true }) {
+					Fixture f;
+					auto& record = f.Add(1, 0, 0, resident);
+					record.retryAfter = delayed ? GetTickCount64() + 1 : 0;
+					f.state.UpdateSelectionStatus(record, target);
+					f.CheckStatus();
+					Require(record.desired == target, "Selection failed to publish its current desired drop");
+					f.state.UpdateSelectionStatus(record, target);
+					f.CheckStatus();
+				}
+			}
+		}
+	}
+
 	void CheckImmediateInvalidation()
 	{
 		Fixture f;
@@ -446,10 +495,14 @@ namespace
 			while (cursorEntry->second.consumers.RetireOne()) {}
 		}
 		const auto removed = cursorEntry->first;
-		cursorEntry->second.drop = 0;
+		{
+			auto statusChange = f.state.TrackRecordStatus(cursorEntry->second);
+			cursorEntry->second.drop = 0;
+		}
 		f.state.pruneCursor = removed;
 		const auto remaining = f.state.inventoryRetirementRemaining;
 		f.state.Prune(MaintenanceBudget{});
+		f.CheckStatus();
 		Require(!f.state.records.contains(removed) && f.state.inventoryRetirementRemaining < remaining,
 			"Prune erased its retirement cursor without acknowledging the empty stale record");
 		auto& adopted = f.Add(301, 0, 0, 1);
@@ -474,13 +527,16 @@ namespace
 		const auto before = referenceReleases;
 		auto source = std::move(f.state.records.at(1).source);
 		f.state.Prune(MaintenanceBudget{});
+		f.CheckStatus();
 		f.state.records.at(1).source = std::move(source);
 		Require(f.state.records.size() == 2 && referenceReleases == before, "Prune moved bulk stale reference destruction into record erasure");
 		for (unsigned i = 0; f.state.inventoryRetirementPending && i < 100; ++i) {
 			f.Retire();
 			f.state.Prune(MaintenanceBudget{});
+			f.CheckStatus();
 		}
 		f.state.Prune(MaintenanceBudget{});
+		f.CheckStatus();
 		Require(f.state.records.size() == 1 && f.state.records.contains(2) && f.state.reducedRecords.contains(2),
 			"Invalidation lost the reduced texture's restoration ownership or retained stale full-size records");
 	}
@@ -781,6 +837,7 @@ namespace
 int main()
 {
 	try {
+		CheckSelectionStatusChanges();
 		CheckImmediateInvalidation();
 		CheckRepeatedInvalidationAndMutation();
 		CheckPrunePreservesOwnership();

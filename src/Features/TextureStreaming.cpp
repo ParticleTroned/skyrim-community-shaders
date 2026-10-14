@@ -13,6 +13,7 @@
 #include "TextureStreaming/RestorationCache.h"
 #include "TextureStreaming/RestorationPriority.h"
 #include "TextureStreaming/Settings.h"
+#include "TextureStreaming/StatusAccounting.h"
 #include "TextureStreaming/TextureData.h"
 #include "TruePBR/TextureEnumeration.h"
 #include "Utils/Game.h"
@@ -520,8 +521,10 @@ struct TextureStreaming::State
 	bool inventoryRetirementPending = false;
 	StreamingTextures::MaintenanceSchedule maintenanceSchedule;
 	std::uint32_t worldStart = 0, lastFrame = UINT32_MAX;
+	bool hasServiceAttemptFrame = false;
 	bool paused = false, reading = false;
 	std::unordered_map<std::uint64_t, Record> records;
+	StreamingTextures::InventoryStatusCounters inventoryStatus;
 	std::unordered_set<std::uint64_t> reducedRecords;
 	std::uint64_t selectionCursor = 0, reducedCursor = 0, pruneCursor = 0;
 	std::vector<Node> frontier;
@@ -547,6 +550,81 @@ struct TextureStreaming::State
 	std::string detail = "Disabled";
 	Memory::Snapshot memory;
 
+	/** Owned diagnostic values; no inventory or engine references escape the live state lock. */
+	struct StatusSnapshot
+	{
+		bool enabled{};
+		bool requestedEnabled{};
+		bool externalStreamingConflict{};
+		StreamingTextures::Modes modes{};
+		StreamingTextures::Options options{};
+		StreamingTextures::Categories categories{};
+		std::uint32_t maximumDrop{};
+		Policy::Pressure pressure{};
+		StreamingTextures::InventoryStatusCounters inventoryStatus{};
+		std::uint64_t shrinks{};
+		std::uint64_t restores{};
+		std::uint64_t failures{};
+		std::uint64_t cancelled{};
+		std::uint64_t admissionDeferrals{};
+		Diagnostics diagnostics{};
+		StreamingTextures::DemandContext demand{};
+		bool previewActive{};
+		std::uint64_t inventoryGeneration{};
+		bool inventoryRetirementPending{};
+		std::uint64_t inventoryRetirementRemaining{};
+		std::uint64_t scan{};
+		std::uint64_t completeScan{};
+		std::size_t frontierNodes{};
+		std::size_t visitedNodes{};
+		StreamingTextures::PressureEpisode pressureEpisode{};
+		bool reading{};
+		bool transactionActive{};
+		bool paused{};
+		std::string detail{};
+		Memory::Snapshot memory{};
+		bool distanceReductionRequested{};
+		bool reductionRequested{};
+		std::uint64_t capturedAtMs{};
+		std::uint64_t epoch{};
+		std::uint64_t deviceGeneration{};
+		std::uint32_t lastFrame{};
+		bool hasServiceAttemptFrame{};
+		std::string unavailableReason{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::uint64_t gpuCopyShrinks{};
+		std::uint64_t cachedRestores{};
+		std::uint64_t ddsRestores{};
+		std::uint64_t sourceHeaderReads{};
+		std::uint64_t sourcePayloadReads{};
+		std::uint64_t sourceBytesRead{};
+		StreamingTextures::MaterialDiagnostics materialDiagnostics{};
+		StreamingTextures::MaterialDiagnostics terrainMaterialDiagnostics{};
+		StreamingTextures::TextureDiagnostics textureDiagnostics{};
+		StreamingTextures::TextureDiagnostics terrainTextureDiagnostics{};
+		StreamingTextures::DemandDiagnostics demandDiagnostics{};
+		StreamingTextures::DemandDiagnostics terrainDemandDiagnostics{};
+		Diagnostics terrainInventoryDiagnostics{};
+		StreamingTextures::DiagnosticSamples<Diagnostics::exclusionNames.size()> terrainExclusions{};
+		StreamingTextures::DiagnosticSamples<Diagnostics::blockNames.size()> terrainBlocks{};
+		std::uint64_t terrainShrinks{};
+		std::uint64_t terrainRestores{};
+		std::uint64_t terrainRetiredReductions{};
+		std::uint64_t terrainRetiredLogicalBytes{};
+		TerrainReduction terrainReduction{};
+#endif
+	};
+	/** The caller holds mutex; inventory totals are maintained by each record mutation. */
+	[[nodiscard]] StatusSnapshot CopyStatusSnapshot() const;
+
+	/** The caller holds mutex and keeps the record alive until this guard retires.
+	 * Guards for the same record must not overlap. */
+	auto TrackRecordStatus(Record& record)
+	{
+		return SKSE::stl::scope_exit([this, &record, before = StreamingTextures::InventoryStatusCounters::From(record)]() noexcept {
+			inventoryStatus.Replace(before, StreamingTextures::InventoryStatusCounters::From(record));
+		});
+	}
 	void SuspendPreviewReductions(const char* reason);
 	void ObserveTexture(RE::NiSourceTexture* source, RE::BSGeometry* geometry, bool eligible, std::uint32_t requiredCategories);
 	void Defer(Block reason, const Record& record)
@@ -599,6 +677,71 @@ struct TextureStreaming::State
 		logger::warn("[TextureStreaming] {}", detail);
 	}
 };
+
+TextureStreaming::State::StatusSnapshot TextureStreaming::State::CopyStatusSnapshot() const
+{
+	StatusSnapshot snapshot;
+	snapshot.enabled = enabled;
+	snapshot.requestedEnabled = requestedEnabled;
+	snapshot.externalStreamingConflict = externalStreamingConflict;
+	snapshot.modes = modes;
+	snapshot.options = options;
+	snapshot.categories = categories;
+	snapshot.maximumDrop = maximumDrop;
+	snapshot.pressure = pressure;
+	snapshot.inventoryStatus = inventoryStatus;
+	snapshot.shrinks = shrinks;
+	snapshot.restores = restores;
+	snapshot.failures = failures;
+	snapshot.cancelled = cancelled;
+	snapshot.admissionDeferrals = admissionDeferrals;
+	snapshot.diagnostics = diagnostics;
+	snapshot.demand = demand;
+	snapshot.previewActive = previewActive;
+	snapshot.inventoryGeneration = inventoryGeneration;
+	snapshot.inventoryRetirementPending = inventoryRetirementPending;
+	snapshot.inventoryRetirementRemaining = inventoryRetirementRemaining;
+	snapshot.scan = scan;
+	snapshot.completeScan = completeScan;
+	snapshot.frontierNodes = frontier.size();
+	snapshot.visitedNodes = visited.size();
+	snapshot.pressureEpisode = pressureEpisode;
+	snapshot.reading = reading;
+	snapshot.transactionActive = transaction.has_value();
+	snapshot.paused = paused;
+	snapshot.detail = detail;
+	snapshot.memory = memory;
+	snapshot.distanceReductionRequested = ReductionRequested();
+	snapshot.reductionRequested = enabled && (ReductionRequested() || options.maximumSize != 0);
+	snapshot.capturedAtMs = GetTickCount64();
+	snapshot.epoch = epoch;
+	snapshot.deviceGeneration = deviceGeneration;
+	snapshot.lastFrame = lastFrame;
+	snapshot.hasServiceAttemptFrame = hasServiceAttemptFrame;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	snapshot.gpuCopyShrinks = gpuCopyShrinks;
+	snapshot.cachedRestores = cachedRestores;
+	snapshot.ddsRestores = ddsRestores;
+	snapshot.sourceHeaderReads = sourceHeaderReads;
+	snapshot.sourcePayloadReads = sourcePayloadReads;
+	snapshot.sourceBytesRead = sourceBytesRead;
+	snapshot.materialDiagnostics = materialDiagnostics;
+	snapshot.terrainMaterialDiagnostics = terrainMaterialDiagnostics;
+	snapshot.textureDiagnostics = textureDiagnostics;
+	snapshot.terrainTextureDiagnostics = terrainTextureDiagnostics;
+	snapshot.demandDiagnostics = demandDiagnostics;
+	snapshot.terrainDemandDiagnostics = terrainDemandDiagnostics;
+	snapshot.terrainInventoryDiagnostics = terrainInventoryDiagnostics;
+	snapshot.terrainExclusions = terrainExclusions;
+	snapshot.terrainBlocks = terrainBlocks;
+	snapshot.terrainShrinks = terrainShrinks;
+	snapshot.terrainRestores = terrainRestores;
+	snapshot.terrainRetiredReductions = terrainRetiredReductions;
+	snapshot.terrainRetiredLogicalBytes = terrainRetiredLogicalBytes;
+	snapshot.terrainReduction = terrainReduction;
+#endif
+	return snapshot;
+}
 
 void TextureStreaming::State::InvalidateInventory()
 {
@@ -709,7 +852,9 @@ void TextureStreaming::State::AdoptLoads(const MaintenanceBudget& budget)
 			record.protectedConsumer = true;
 		for (std::uint32_t drop = 0; drop < record.bytes.size(); ++drop)
 			record.bytes[drop] = StreamingTextures::LogicalBytes(record.full, drop);
-		records.emplace(origin.serial, std::move(record));
+		const auto [entry, inserted] = records.emplace(origin.serial, std::move(record));
+		if (inserted)
+			inventoryStatus.Add(StreamingTextures::InventoryStatusCounters::From(entry->second));
 		reducedRecords.insert(origin.serial);
 	}
 }
@@ -838,10 +983,14 @@ void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BS
 		value.current = engine->texture;
 		value.currentView = engine->resourceView;
 		value.path = *path;
-		it = records.emplace(origin.serial, std::move(value)).first;
+		const auto [entry, inserted] = records.emplace(origin.serial, std::move(value));
+		it = entry;
+		if (inserted)
+			inventoryStatus.Add(StreamingTextures::InventoryStatusCounters::From(it->second));
 		++diagnostics.candidateRegistrations;
 	}
 	auto& record = it->second;
+	const auto recordStatus = TrackRecordStatus(record);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	const bool terrainConsumer = (origin.requiredCategories & StreamingTextures::Terrain) != 0;
 	if (terrainConsumer && !record.terrainConsumer)
@@ -868,6 +1017,7 @@ void TextureStreaming::State::SuspendPreviewReductions(const char* reason)
 	StreamingTextures::LoadHooks::Configure(false, modes, options, categories, maximumDrop);
 	for (const auto id : reducedRecords)
 		if (auto found = records.find(id); found != records.end()) {
+			const auto recordStatus = TrackRecordStatus(found->second);
 			found->second.previewProtected = found->second.protectedConsumer = true;
 			StreamingTextures::LoadHooks::Forget(found->second.path);
 		}
@@ -893,6 +1043,7 @@ void TextureStreaming::State::ProtectPreviewTexture(RE::NiSourceTexture* texture
 		Fail("Could not protect a preview texture; distance streaming suspended");
 	}
 	if (const auto found = records.find(origin.serial); found != records.end()) {
+		const auto recordStatus = TrackRecordStatus(found->second);
 		found->second.previewProtected = true;
 		found->second.protectedConsumer = true;
 	}
@@ -1194,6 +1345,7 @@ void TextureStreaming::State::Select(const MaintenanceBudget& budget, bool previ
 				record.rememberedDrop = record.distanceDrop;
 			}
 		}
+		const auto recordStatus = TrackRecordStatus(record);
 		if (record.desired != target) {
 			record.desired = target;
 			record.stableSince = now;
@@ -1297,6 +1449,7 @@ void TextureStreaming::State::Select(const MaintenanceBudget& budget, bool previ
 
 void TextureStreaming::State::Publish(Record& record, Transaction& work)
 {
+	const auto recordStatus = TrackRecordStatus(record);
 	auto* context = globals::d3d::context;
 	auto* old = record.engine->resourceView;
 	StreamingTextures::Origin origin;
@@ -1567,6 +1720,7 @@ void TextureStreaming::State::Tick()
 	if (lastFrame == frame)
 		return;
 	lastFrame = frame;
+	hasServiceAttemptFrame = true;
 	if (!enabled && records.empty() && !reading && !transaction && !inventoryRetirementPending && !StreamingTextures::LoadHooks::HasPending()) {
 		detail = "Disabled";
 		return;
@@ -1590,6 +1744,7 @@ void TextureStreaming::State::Tick()
 		if (deviceGeneration && deviceGeneration != memory.generation) {
 			transaction.reset();
 			records.clear();
+			inventoryStatus = {};
 			reducedRecords.clear();
 			reader.ClearCache();
 			frontier.clear();
@@ -1700,6 +1855,7 @@ void TextureStreaming::State::Prune(const MaintenanceBudget& budget)
 		// A partially scanned texture belongs to the next inventory, not an expired one.
 		if ((!record.drop && (!enabled || record.consumers.Expired(completeScan, inventoryGeneration))) || replaced) {
 			reducedRecords.erase(id);
+			inventoryStatus.Remove(StreamingTextures::InventoryStatusCounters::From(record));
 			records.erase(current);
 		}
 	}
@@ -1861,40 +2017,36 @@ void TextureStreaming::SaveSettings(nlohmann::json& object)
 void TextureStreaming::RestoreDefaultSettings() { Configure(true, 2, StreamingTextures::Categories{}, StreamingTextures::Modes{}, StreamingTextures::Options{}); }
 nlohmann::json TextureStreaming::GetStatus() const
 {
-	std::scoped_lock lock(state->mutex);
-	std::uint64_t full = 0, resident = 0, protectedCount = 0, reduced = 0, desiredShrinks = 0, desiredRestores = 0;
-	for (const auto& [id, record] : state->records) {
-		full += record.bytes[0];
-		resident += record.bytes[record.drop];
-		protectedCount += record.protectedConsumer;
-		reduced += record.drop != 0;
-		desiredShrinks += record.desired > record.drop;
-		desiredRestores += record.desired < record.drop;
-	}
-	const auto& memory = state->memory;
-	nlohmann::json result = { { "enabled", state->enabled }, { "requestedEnabled", state->requestedEnabled }, { "maximumMipDrop", state->maximumDrop },
-		{ "externalStreamingConflict", state->externalStreamingConflict }, { "unavailableReason", state->externalStreamingConflict ? streamingConflictWarning : failedLoadedMessage },
-		{ "modes", StreamingTextures::SerializeModes(state->modes) },
-		{ "options", StreamingTextures::SerializeOptions(state->options) }, { "rememberedSizes", StreamingTextures::LoadHooks::Status() },
-		{ "categories", StreamingTextures::SerializeCategories(state->categories) }, { "originHookReady", originHookReady.load() },
-		{ "conserving", state->pressure.conserving }, { "records", state->records.size() }, { "protectedRecords", protectedCount },
-		{ "reducedTextures", reduced }, { "fullLogicalBytes", full }, { "residentLogicalBytes", resident },
-		{ "logicalBytesRemoved", full - resident }, { "physicalBytesReclaimed", nullptr },
-		{ "shrinks", state->shrinks }, { "restores", state->restores }, { "failures", state->failures },
-		{ "cancelled", state->cancelled }, { "admissionDeferrals", state->admissionDeferrals },
-		{ "diagnostics", DiagnosticStatus(state->diagnostics) },
-		{ "demand", { { "eyeCount", state->demand.eyeCount }, { "sourceFrame", state->demand.frame },
-						{ "sampledAtMs", state->demand.sampledAtMs }, { "mipBias", state->demand.mipBias } } },
-		{ "previewActive", state->previewActive }, { "maximumPayloadMiB", Policy::MaximumPayloadBytes / Policy::MiB },
-		{ "inventory", { { "generation", state->inventoryGeneration }, { "retirementPending", state->inventoryRetirementPending },
-						   { "retirementRecords", state->inventoryRetirementRemaining }, { "scan", state->scan }, { "completeScan", state->completeScan }, { "frontierNodes", state->frontier.size() }, { "visitedNodes", state->visited.size() },
-						   { "desiredShrinks", desiredShrinks }, { "desiredRestores", desiredRestores } } },
-		{ "pressureEpisode", { { "active", state->pressureEpisode.active }, { "startedAtMs", state->pressureEpisode.startedAtMs },
-								 { "summaryReported", state->pressureEpisode.summaryReported },
-								 { "committedShrinks", state->pressureEpisode.active ? nlohmann::json(state->shrinks - state->pressureEpisode.initialShrinks) : nlohmann::json(nullptr) },
-								 { "committedRestores", state->pressureEpisode.active ? nlohmann::json(state->restores - state->pressureEpisode.initialRestores) : nlohmann::json(nullptr) },
-								 { "observations", state->pressureEpisode.active ? DiagnosticStatus(state->diagnostics, state->pressureEpisode.initial) : nlohmann::json(nullptr) } } },
-		{ "reading", state->reading }, { "transactionActive", state->transaction.has_value() }, { "paused", state->paused && (state->enabled || !state->records.empty() || state->reading || state->transaction.has_value()) }, { "detail", state->detail },
+	const auto snapshot = [&] {
+		std::scoped_lock lock(state->mutex);
+		auto value = state->CopyStatusSnapshot();
+		value.unavailableReason = value.externalStreamingConflict ? streamingConflictWarning : failedLoadedMessage;
+		return value;
+	}();
+	const auto& memory = snapshot.memory;
+	nlohmann::json result = { { "enabled", snapshot.enabled }, { "requestedEnabled", snapshot.requestedEnabled }, { "maximumMipDrop", snapshot.maximumDrop },
+		{ "externalStreamingConflict", snapshot.externalStreamingConflict }, { "unavailableReason", snapshot.unavailableReason },
+		{ "modes", StreamingTextures::SerializeModes(snapshot.modes) },
+		{ "options", StreamingTextures::SerializeOptions(snapshot.options) }, { "rememberedSizes", StreamingTextures::LoadHooks::Status() },
+		{ "categories", StreamingTextures::SerializeCategories(snapshot.categories) }, { "originHookReady", originHookReady.load() },
+		{ "conserving", snapshot.pressure.conserving }, { "records", snapshot.inventoryStatus.records }, { "protectedRecords", snapshot.inventoryStatus.protectedRecords },
+		{ "reducedTextures", snapshot.inventoryStatus.reducedTextures }, { "fullLogicalBytes", snapshot.inventoryStatus.fullLogicalBytes }, { "residentLogicalBytes", snapshot.inventoryStatus.residentLogicalBytes },
+		{ "logicalBytesRemoved", snapshot.inventoryStatus.fullLogicalBytes - snapshot.inventoryStatus.residentLogicalBytes }, { "physicalBytesReclaimed", nullptr },
+		{ "shrinks", snapshot.shrinks }, { "restores", snapshot.restores }, { "failures", snapshot.failures },
+		{ "cancelled", snapshot.cancelled }, { "admissionDeferrals", snapshot.admissionDeferrals },
+		{ "diagnostics", DiagnosticStatus(snapshot.diagnostics) },
+		{ "demand", { { "eyeCount", snapshot.demand.eyeCount }, { "sourceFrame", snapshot.demand.frame },
+						{ "sampledAtMs", snapshot.demand.sampledAtMs }, { "mipBias", snapshot.demand.mipBias } } },
+		{ "previewActive", snapshot.previewActive }, { "maximumPayloadMiB", Policy::MaximumPayloadBytes / Policy::MiB },
+		{ "inventory", { { "generation", snapshot.inventoryGeneration }, { "retirementPending", snapshot.inventoryRetirementPending },
+						   { "retirementRecords", snapshot.inventoryRetirementRemaining }, { "scan", snapshot.scan }, { "completeScan", snapshot.completeScan }, { "frontierNodes", snapshot.frontierNodes }, { "visitedNodes", snapshot.visitedNodes },
+						   { "desiredShrinks", snapshot.inventoryStatus.desiredShrinks }, { "desiredRestores", snapshot.inventoryStatus.desiredRestores } } },
+		{ "pressureEpisode", { { "active", snapshot.pressureEpisode.active }, { "startedAtMs", snapshot.pressureEpisode.startedAtMs },
+								 { "summaryReported", snapshot.pressureEpisode.summaryReported },
+								 { "committedShrinks", snapshot.pressureEpisode.active ? nlohmann::json(snapshot.shrinks - snapshot.pressureEpisode.initialShrinks) : nlohmann::json(nullptr) },
+								 { "committedRestores", snapshot.pressureEpisode.active ? nlohmann::json(snapshot.restores - snapshot.pressureEpisode.initialRestores) : nlohmann::json(nullptr) },
+								 { "observations", snapshot.pressureEpisode.active ? DiagnosticStatus(snapshot.diagnostics, snapshot.pressureEpisode.initial) : nlohmann::json(nullptr) } } },
+		{ "reading", snapshot.reading }, { "transactionActive", snapshot.transactionActive }, { "paused", snapshot.paused && (snapshot.enabled || snapshot.inventoryStatus.records != 0 || snapshot.reading || snapshot.transactionActive) }, { "detail", snapshot.detail },
 		{ "memory", { { "valid", memory.Fresh(GetTickCount64()) }, { "budgetBytes", memory.local.Budget },
 						{ "usageBytes", memory.local.CurrentUsage }, { "pendingBytes", memory.pendingBytes }, { "recoveryDemandBytes", memory.recoveryDemandBytes }, { "priorityWork", memory.priorityWork },
 						{ "sampledAtMs", memory.sampledAtMs }, { "deviceGeneration", memory.generation }, { "sampleSequence", memory.sequence },
@@ -1909,37 +2061,33 @@ nlohmann::json TextureStreaming::GetStatus() const
 	result["memory"]["physicalBudgetBytes"] = memory.physicalBudgetBytes;
 	result["memory"]["pressureSimulated"] = memory.pressureSimulated;
 	const auto cache = state->reader.CacheStatus();
-	result["transfers"] = { { "gpuCopyShrinks", state->gpuCopyShrinks }, { "cachedRestores", state->cachedRestores }, { "ddsRestores", state->ddsRestores },
-		{ "sourceHeaderReads", state->sourceHeaderReads }, { "sourcePayloadReads", state->sourcePayloadReads }, { "sourceBytesRead", state->sourceBytesRead } };
+	result["transfers"] = { { "gpuCopyShrinks", snapshot.gpuCopyShrinks }, { "cachedRestores", snapshot.cachedRestores }, { "ddsRestores", snapshot.ddsRestores },
+		{ "sourceHeaderReads", snapshot.sourceHeaderReads }, { "sourcePayloadReads", snapshot.sourcePayloadReads }, { "sourceBytesRead", snapshot.sourceBytesRead } };
 	result["restorationCache"] = { { "limitBytes", cache.limitBytes }, { "bytes", cache.bytes }, { "entries", cache.entries }, { "generation", cache.generation },
 		{ "hits", cache.hits }, { "misses", cache.misses }, { "evictions", cache.evictions }, { "storeFailures", cache.storeFailures } };
-	result["debugForceStreaming"] = state->modes.continuous;
-	result["materialDiagnostics"] = MaterialDiagnosticStatus(state->materialDiagnostics);
-	const auto& terrain = state->terrainReduction;
-	std::uint64_t terrainRecords = 0, terrainReduced = 0, terrainDesiredShrinks = 0;
-	for (const auto& [id, record] : state->records)
-		if (record.terrainConsumer) {
-			++terrainRecords;
-			terrainReduced += record.drop != 0;
-			terrainDesiredShrinks += record.desired > record.drop;
-		}
+	result["debugForceStreaming"] = snapshot.modes.continuous;
+	result["materialDiagnostics"] = MaterialDiagnosticStatus(snapshot.materialDiagnostics);
+	const auto& terrain = snapshot.terrainReduction;
 	result["terrainDiagnostics"] = {
-		{ "records", terrainRecords }, { "reducedTextures", terrainReduced }, { "desiredShrinks", terrainDesiredShrinks },
-		{ "inventory", DiagnosticStatus(state->terrainInventoryDiagnostics) },
-		{ "exclusionSamples", DiagnosticSampleStatus(state->terrainExclusions, Diagnostics::exclusionNames) },
-		{ "blockedSamples", DiagnosticSampleStatus(state->terrainBlocks, Diagnostics::blockNames) },
-		{ "textures", TextureDiagnosticStatus(state->terrainTextureDiagnostics) },
-		{ "demand", DemandDiagnosticStatus(state->terrainDemandDiagnostics) },
-		{ "committedShrinks", state->terrainShrinks }, { "committedRestores", state->terrainRestores },
-		{ "retiredReductions", state->terrainRetiredReductions }, { "retiredLogicalReductionBytes", state->terrainRetiredLogicalBytes },
-		{ "materials", MaterialDiagnosticStatus(state->terrainMaterialDiagnostics) },
-		{ "lastReduction", !state->terrainShrinks ? nlohmann::json(nullptr) : nlohmann::json{ { "texturePath", terrain.path.data() }, { "resourceSerial", terrain.serial }, { "requiredCategories", terrain.requiredCategories }, { "fullWidth", terrain.fullWidth }, { "fullHeight", terrain.fullHeight }, { "width", terrain.width }, { "height", terrain.height }, { "previousDrop", terrain.previousDrop }, { "drop", terrain.drop } } }
+		{ "records", snapshot.inventoryStatus.terrainRecords }, { "reducedTextures", snapshot.inventoryStatus.terrainReducedTextures }, { "desiredShrinks", snapshot.inventoryStatus.terrainDesiredShrinks },
+		{ "inventory", DiagnosticStatus(snapshot.terrainInventoryDiagnostics) },
+		{ "exclusionSamples", DiagnosticSampleStatus(snapshot.terrainExclusions, Diagnostics::exclusionNames) },
+		{ "blockedSamples", DiagnosticSampleStatus(snapshot.terrainBlocks, Diagnostics::blockNames) },
+		{ "textures", TextureDiagnosticStatus(snapshot.terrainTextureDiagnostics) },
+		{ "demand", DemandDiagnosticStatus(snapshot.terrainDemandDiagnostics) },
+		{ "committedShrinks", snapshot.terrainShrinks }, { "committedRestores", snapshot.terrainRestores },
+		{ "retiredReductions", snapshot.terrainRetiredReductions }, { "retiredLogicalReductionBytes", snapshot.terrainRetiredLogicalBytes },
+		{ "materials", MaterialDiagnosticStatus(snapshot.terrainMaterialDiagnostics) },
+		{ "lastReduction", !snapshot.terrainShrinks ? nlohmann::json(nullptr) : nlohmann::json{ { "texturePath", terrain.path.data() }, { "resourceSerial", terrain.serial }, { "requiredCategories", terrain.requiredCategories }, { "fullWidth", terrain.fullWidth }, { "fullHeight", terrain.fullHeight }, { "width", terrain.width }, { "height", terrain.height }, { "previousDrop", terrain.previousDrop }, { "drop", terrain.drop } } }
 	};
-	result["textureDiagnostics"] = TextureDiagnosticStatus(state->textureDiagnostics);
-	result["demandDiagnostics"] = DemandDiagnosticStatus(state->demandDiagnostics);
+	result["textureDiagnostics"] = TextureDiagnosticStatus(snapshot.textureDiagnostics);
+	result["demandDiagnostics"] = DemandDiagnosticStatus(snapshot.demandDiagnostics);
 #endif
-	result["distanceReductionRequested"] = state->ReductionRequested();
-	result["reductionRequested"] = state->enabled && (state->ReductionRequested() || state->options.maximumSize != 0);
+	result["snapshot"] = { { "capturedAtMs", snapshot.capturedAtMs }, { "configurationEpoch", snapshot.epoch },
+		{ "inventoryGeneration", snapshot.inventoryGeneration }, { "deviceGeneration", snapshot.deviceGeneration },
+		{ "lastServiceAttemptFrame", snapshot.hasServiceAttemptFrame ? nlohmann::json(snapshot.lastFrame) : nlohmann::json(nullptr) } };
+	result["distanceReductionRequested"] = snapshot.distanceReductionRequested;
+	result["reductionRequested"] = snapshot.reductionRequested;
 	return result;
 }
 void TextureStreaming::DrawSettingsEnabledControl()

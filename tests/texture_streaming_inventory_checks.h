@@ -2,6 +2,7 @@
 #include "Features/TextureStreaming/ConsumerInventory.h"
 #include "Features/TextureStreaming/Diagnostics.h"
 #include "Features/TextureStreaming/RememberedSizes.h"
+#include "texture_streaming_status_checks.h"
 #include <cctype>
 #include <optional>
 #include <unordered_map>
@@ -10,11 +11,27 @@
 namespace StreamingTextures::LoadHooks
 {
 	inline std::string forgottenPreview;
-	inline void Forget(const std::string& name) { forgottenPreview = name; }
+	inline bool failForget = false;
+	inline void Forget(const std::string& name)
+	{
+		if (failForget)
+			throw std::runtime_error("Injected remembered-size forget failure");
+		forgottenPreview = name;
+	}
 	inline void Configure(bool, const Modes&, const Options&, const Categories&, std::uint32_t) {}
 }
 namespace StreamingInventoryFixture
 {
+	namespace SKSE::stl
+	{
+		template <class F>
+		struct scope_exit
+		{
+			F action;
+			explicit scope_exit(F function) : action(std::move(function)) {}
+			~scope_exit() { action(); }
+		};
+	}
 	using Microsoft::WRL::ComPtr;
 	namespace Policy = TextureStreamingPolicy;
 	using Diagnostics = StreamingTextures::Diagnostics;
@@ -82,12 +99,15 @@ namespace StreamingInventoryFixture
 				std::array<std::uint64_t, Policy::MaximumDrop + 1> bytes{};
 				StreamingTextures::ConsumerInventory<Consumer> consumers;
 				bool protectedConsumer = false, previewProtected = false;
+				unsigned drop = 0, desired = 0;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				bool terrainConsumer = false;
 #endif
 			};
 			std::unordered_map<std::uint64_t, Record> records;
 			std::unordered_set<std::uint64_t> reducedRecords;
+			StreamingTextures::InventoryStatusCounters inventoryStatus;
+#include "streaming_status_tracking_under_test.h"
 			Diagnostics diagnostics;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			StreamingTextures::TextureDiagnostics textureDiagnostics, terrainTextureDiagnostics;
@@ -134,18 +154,22 @@ void CheckStreamingInventory(ID3D11Device* device)
 		StreamingInventoryFixture::TextureStreaming::State state;
 		state.categories.terrain = true;
 		state.ObserveTexture(&source, &geometry, true, terrainFirst ? Terrain : 0u);
+		Require(TextureStreamingStatusChecks::Equal(state.inventoryStatus, TextureStreamingStatusChecks::Aggregate(state.records)), "First observation status did not match the inventory");
 		state.ObserveTexture(&source, &geometry, true, terrainFirst ? 0u : Terrain);
+		Require(TextureStreamingStatusChecks::Equal(state.inventoryStatus, TextureStreamingStatusChecks::Aggregate(state.records)), "Shared observation status depended on scan order");
 		Origin observed;
 		Require(ReadOrigin(original.texture.Get(), observed) && observed.requiredCategories == (Terrain | LandscapeStatics) && !state.categories.Allows(observed.requiredCategories),
 			"Shared terrain/static coverage depended on scan order");
 		state.categories.landscapeStatics = true;
 		state.ObserveTexture(&source, &geometry, true, 0);
+		Require(TextureStreamingStatusChecks::Equal(state.inventoryStatus, TextureStreamingStatusChecks::Aggregate(state.records)), "Observation status did not match the inventory");
 		Require(state.records.size() == 1, "Both category toggles failed to admit a shared texture");
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		Require(state.records.at(71).terrainConsumer && state.terrainInventoryDiagnostics.candidateRegistrations == 1,
 			"Shared terrain/static diagnostic attribution depended on scan order");
 #endif
 		state.ProtectPreviewTexture(&source);
+		Require(TextureStreamingStatusChecks::Equal(state.inventoryStatus, TextureStreamingStatusChecks::Aggregate(state.records)), "Preview protection status did not match the inventory");
 		Require(state.records.at(71).previewProtected && state.records.at(71).protectedConsumer &&
 					ReadOrigin(original.texture.Get(), observed) && observed.protectedConsumer &&
 					StreamingTextures::LoadHooks::forgottenPreview == NormalizeTexturePath(source.name.c_str()),
@@ -158,13 +182,41 @@ void CheckStreamingInventory(ID3D11Device* device)
 		} catch (const std::runtime_error&) {
 			suspensionReported = true;
 		}
+		Require(TextureStreamingStatusChecks::Equal(state.inventoryStatus, TextureStreamingStatusChecks::Aggregate(state.records)), "Suspended preview protection status did not match the inventory");
 		Require(suspensionReported && !state.enabled && state.records.at(71).previewProtected && state.records.at(71).protectedConsumer,
 			"Incomplete preview traversal left reduced consumers eligible to remain downscaled");
 		source.name.text = "textures/armor/shared.dds";
 		state.ObserveTexture(&source, &geometry, true, 0);
+		Require(TextureStreamingStatusChecks::Equal(state.inventoryStatus, TextureStreamingStatusChecks::Aggregate(state.records)), "Observation status did not match the inventory");
 		Require(state.records.at(71).protectedConsumer && ReadOrigin(original.texture.Get(), observed) && observed.protectedConsumer,
 			"A protected path alias did not invalidate an existing candidate");
 	}
+	{
+		Upload original;
+		Check(original.Begin(device, full, view, 0));
+		Check(WriteOrigin(original.texture.Get(), { 75, false, 0 }));
+		RE::BSGraphics::Texture engine{ original.texture.Get(), original.view.Get() };
+		RE::NiSourceTexture source{ { "textures/architecture/guard.dds" }, &engine };
+		RE::BSGeometry geometry;
+		StreamingInventoryFixture::TextureStreaming::State state;
+		state.categories.landscapeStatics = true;
+		state.ObserveTexture(&source, &geometry, true, 0);
+		Require(state.records.size() == 1 && !state.records.at(75).protectedConsumer,
+			"Exceptional observation fixture failed to admit an ordinary texture");
+		Check(WriteOrigin(original.texture.Get(), { 75, true, 0 }));
+		StreamingTextures::LoadHooks::failForget = true;
+		bool rejected = false;
+		try {
+			state.ObserveTexture(&source, &geometry, true, 0);
+		} catch (const std::runtime_error&) {
+			rejected = true;
+		}
+		StreamingTextures::LoadHooks::failForget = false;
+		Require(rejected && state.records.at(75).protectedConsumer &&
+					TextureStreamingStatusChecks::Equal(state.inventoryStatus, TextureStreamingStatusChecks::Aggregate(state.records)),
+			"Observation protection status failed to reconcile an exception path");
+	}
+
 	for (const char* name : { static_cast<const char*>(nullptr), "" }) {
 		Upload original;
 		Check(original.Begin(device, full, view, 0));
@@ -174,6 +226,7 @@ void CheckStreamingInventory(ID3D11Device* device)
 		RE::BSGeometry geometry;
 		StreamingInventoryFixture::TextureStreaming::State state;
 		state.ObserveTexture(&source, &geometry, true, 0);
+		Require(TextureStreamingStatusChecks::Equal(state.inventoryStatus, TextureStreamingStatusChecks::Aggregate(state.records)), "Observation status did not match the inventory");
 		Origin observed;
 		Require(state.records.empty() && ReadOrigin(original.texture.Get(), observed) && observed.protectedConsumer, "An unnamed texture was admitted or lost protection");
 	}
@@ -186,6 +239,7 @@ void CheckStreamingInventory(ID3D11Device* device)
 	RE::BSGeometry geometry;
 	StreamingInventoryFixture::TextureStreaming::State state;
 	state.ObserveTexture(&source, &geometry, true, 0);
+	Require(TextureStreamingStatusChecks::Equal(state.inventoryStatus, TextureStreamingStatusChecks::Aggregate(state.records)), "Observation status did not match the inventory");
 	Require(state.records.empty(), "A view of a different texture entered replacement publication");
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -198,6 +252,7 @@ void CheckStreamingInventory(ID3D11Device* device)
 		StreamingInventoryFixture::TextureStreaming::State terrainState;
 		terrainState.categories.terrain = true;
 		terrainState.ObserveTexture(&terrainSource, &terrainGeometry, true, Terrain);
+		Require(TextureStreamingStatusChecks::Equal(terrainState.inventoryStatus, TextureStreamingStatusChecks::Aggregate(terrainState.records)), "Terrain observation status did not match the inventory");
 		const auto missing = static_cast<std::size_t>(Exclusion::MissingProvenance);
 		Require(terrainState.records.empty() && terrainState.terrainInventoryDiagnostics.textureObservations == 1 &&
 					terrainState.terrainInventoryDiagnostics.excluded[missing] == 1 &&
@@ -205,14 +260,17 @@ void CheckStreamingInventory(ID3D11Device* device)
 					terrainState.terrainExclusions.geometryNames[missing] == "TerrainPatch",
 			"Untracked terrain was not distinguished from material rejection");
 		terrainState.ObserveTexture(&terrainSource, &terrainGeometry, true, 0);
+		Require(TextureStreamingStatusChecks::Equal(terrainState.inventoryStatus, TextureStreamingStatusChecks::Aggregate(terrainState.records)), "Terrain observation status did not match the inventory");
 		Require(terrainState.terrainInventoryDiagnostics.textureObservations == 1, "Static observations polluted terrain diagnostics");
 		Check(WriteOrigin(untracked.texture.Get(), { 74, false, 0 }));
 		terrainState.categories.terrain = false;
 		terrainState.ObserveTexture(&terrainSource, &terrainGeometry, true, Terrain);
+		Require(TextureStreamingStatusChecks::Equal(terrainState.inventoryStatus, TextureStreamingStatusChecks::Aggregate(terrainState.records)), "Terrain observation status did not match the inventory");
 		Require(terrainState.terrainInventoryDiagnostics.excluded[static_cast<std::size_t>(Exclusion::CategoryDisabled)] == 1,
 			"Terrain consent rejection lost its diagnostic attribution");
 		terrainState.categories.terrain = true;
 		terrainState.ObserveTexture(&terrainSource, &terrainGeometry, true, Terrain);
+		Require(TextureStreamingStatusChecks::Equal(terrainState.inventoryStatus, TextureStreamingStatusChecks::Aggregate(terrainState.records)), "Terrain observation status did not match the inventory");
 		Require(terrainState.records.size() == 1 && terrainState.records.at(74).terrainConsumer &&
 					terrainState.terrainTextureDiagnostics.reasons[static_cast<std::size_t>(TextureRejection::None)] == 1,
 			"Accepted terrain did not expose its resource contract");
@@ -230,17 +288,22 @@ void CheckStreamingInventory(ID3D11Device* device)
 			StreamingInventoryFixture::TextureStreaming::State staleState;
 			staleState.inventoryGeneration = terrainState.inventoryGeneration;
 			staleState.records.emplace(74, terrainRecord);
+			staleState.inventoryStatus.Add(StreamingTextures::InventoryStatusCounters::From(terrainRecord));
 			staleState.InvalidateInventory();
 			RE::NiPointer<RE::BSGeometry>::accesses = 0;
 			staleState.Defer(Block::InventoryIncomplete, staleState.records.at(74));
 			Require(RE::NiPointer<RE::BSGeometry>::accesses == 0, "Stale diagnostic inventory dereferenced a retired geometry");
 		}
-		terrainRecord.terrainConsumer = false;
+		{
+			auto statusChange = terrainState.TrackRecordStatus(terrainRecord);
+			terrainRecord.terrainConsumer = false;
+		}
 		terrainState.Defer(Block::FullDetailDemand, terrainRecord);
 		Require(terrainState.terrainInventoryDiagnostics.blocked[fullDetail] == 1 && terrainState.diagnostics.blocked[fullDetail] == 2,
 			"Static admission polluted terrain diagnostics");
 		Check(WriteOrigin(untracked.texture.Get(), { 74, true, 0 }));
 		terrainState.ObserveTexture(&terrainSource, &terrainGeometry, true, Terrain);
+		Require(TextureStreamingStatusChecks::Equal(terrainState.inventoryStatus, TextureStreamingStatusChecks::Aggregate(terrainState.records)), "Terrain observation status did not match the inventory");
 		Require(terrainState.records.at(74).protectedConsumer, "Terrain diagnostics weakened shared-resource protection");
 	}
 	{
@@ -249,6 +312,7 @@ void CheckStreamingInventory(ID3D11Device* device)
 		terrainState.categories.terrain = true;
 		Check(WriteOrigin(original.texture.Get(), { 73, false, 0 }));
 		terrainState.ObserveTexture(&source, &terrainGeometry, true, Terrain);
+		Require(TextureStreamingStatusChecks::Equal(terrainState.inventoryStatus, TextureStreamingStatusChecks::Aggregate(terrainState.records)), "Terrain observation status did not match the inventory");
 		const auto failedView = static_cast<std::size_t>(TextureRejection::ViewResource);
 		Require(terrainState.records.empty() && terrainState.terrainTextureDiagnostics.reasons[failedView] == 1 &&
 					terrainState.terrainInventoryDiagnostics.excluded[static_cast<std::size_t>(Exclusion::TextureContract)] == 1,

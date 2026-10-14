@@ -35,7 +35,8 @@ struct TextureStreaming : Feature
 	/** Legacy developer API alias for the persistent continuous trigger; requires enabled streaming. */
 	void SetDebugForceStreaming(bool enabled);
 #endif
-	/** Explicit diagnostic snapshot; counters and logical capacities do not measure physical VRAM relief. */
+	/** Fresh owned status with frame/generation identity; JSON formatting occurs after the live lock.
+	 * Logical capacities do not measure physical VRAM relief; subsystem snapshots are independent. */
 	nlohmann::json GetStatus() const;
 
 private:

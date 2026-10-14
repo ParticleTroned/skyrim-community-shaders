@@ -219,7 +219,7 @@ struct ID3D11PixelShader : ShaderObject
 {};
 struct ID3D11ComputeShader : ShaderObject
 {};
-struct ID3DBlob
+struct ID3D10Blob
 {
 	std::atomic<unsigned> references{ 1 };
 	std::array<uint8_t, 4> bytes{};
@@ -229,6 +229,7 @@ struct ID3DBlob
 	size_t GetBufferSize() const { return bytes.size(); }
 };
 
+using ID3DBlob = ID3D10Blob;
 #include "Utils/ShaderCreation.h"
 
 struct ID3D11Device
@@ -512,8 +513,10 @@ namespace SIE
 		Maps<RE::BSGraphics::PixelShader> pixelShaders;
 		Maps<RE::BSGraphics::ComputeShader> computeShaders;
 		bool IsDiskCacheActive() const { return false; }
-#include "shader_generation_check.h"
 
+	private:
+#include "shader_generation_check.h"
+	public:
 		std::shared_ptr<RE::BSGraphics::VertexShader> MakeAndAddVertexShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt, Util::ShaderCreation::Attempt* = nullptr);
 		std::shared_ptr<RE::BSGraphics::PixelShader> MakeAndAddPixelShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt, Util::ShaderCreation::Attempt* = nullptr);
 		std::shared_ptr<RE::BSGraphics::ComputeShader> MakeAndAddComputeShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = std::nullopt, Util::ShaderCreation::Attempt* = nullptr);
@@ -734,6 +737,31 @@ namespace
 		Require(publish(generation));
 		Require(cache.shaderMap.contains("Lighting") && cache.hlslToShaderMap.at(shader.fxpFilename).size() == 1);
 		cache.Clear();
+	}
+
+	void CheckRetryWait()
+	{
+		std::stop_source source;
+		failNextGlobalAllocation = true;
+		const bool elapsed = Util::ShaderCreation::WaitForRetry(source.get_token(), std::chrono::milliseconds(1));
+		const bool allocationUnused = std::exchange(failNextGlobalAllocation, false);
+		Require(elapsed && allocationUnused);
+		source.request_stop();
+		Require(!Util::ShaderCreation::WaitForRetry(source.get_token(), std::chrono::seconds(10)));
+		for (unsigned iteration = 0; iteration < 32; ++iteration) {
+			std::atomic_bool entered{ false };
+			bool cancelled = false;
+			std::jthread worker([&](std::stop_token token) {
+				entered.store(true, std::memory_order_release);
+				entered.notify_one();
+				cancelled = !Util::ShaderCreation::WaitForRetry(token, std::chrono::seconds(10));
+			});
+			while (!entered.load(std::memory_order_acquire))
+				entered.wait(false, std::memory_order_acquire);
+			worker.request_stop();
+			worker.join();
+			Require(cancelled);
+		}
 	}
 
 	void CheckCreationRetries()
@@ -1096,6 +1124,7 @@ int main()
 		CheckOwnerAllocationFailure();
 		CheckMetadataTransactions();
 		CheckBlobOwnership();
+		CheckRetryWait();
 		CheckCreationRetries();
 		CheckBytecodeHooks();
 		CheckRetainedBinding();

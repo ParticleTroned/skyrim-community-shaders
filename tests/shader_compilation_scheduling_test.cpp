@@ -19,11 +19,12 @@
 #include <utility>
 #include <vector>
 
-struct ID3DBlob
+struct ID3D10Blob
 {
 	unsigned AddRef() { return 1; }
 	unsigned Release() { return 1; }
 };
+using ID3DBlob = ID3D10Blob;
 #include "Utils/ShaderCreation.h"
 
 namespace
@@ -298,7 +299,7 @@ namespace
 
 	void CheckTerminalAdmissionRecovery()
 	{
-		for (unsigned condition = 0; condition < 5; ++condition) {
+		for (unsigned condition = 0; condition < 6; ++condition) {
 			CacheBinding binding;
 			auto& cache = binding.cache;
 			cache.compilationThreadCount = 1;
@@ -312,6 +313,8 @@ namespace
 					throw 1;
 				if (condition == 4)
 					stop.request_stop();
+				if (condition == 5)
+					++cache.compilationSet.generation;
 			});
 			auto first = Take(cache);
 			Queue(cache, 2);

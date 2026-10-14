@@ -1,6 +1,7 @@
 #include "Utils/ComIdentity.h"
 #include "Utils/ShaderCacheManifest.h"
 #include "Utils/ShaderCompiler.h"
+#include "Utils/ShaderCreation.h"
 #include "Utils/ShaderDefines.h"
 #include "Utils/ShaderInclude.h"
 #include "Utils/ShaderPreparation.h"
@@ -22,7 +23,10 @@
 #include <spdlog/sinks/ostream_sink.h>
 #include <spdlog/spdlog.h>
 #include <sstream>
+#include <type_traits>
 #include <unordered_map>
+
+static_assert(std::is_same_v<decltype(Util::ShaderCreation::Attempt::bytecode), winrt::com_ptr<ID3DBlob>>);
 #include <unordered_set>
 #include <winrt/base.h>
 

@@ -6678,12 +6678,9 @@ namespace SIE
 				logger::error("Unhandled non-standard exception compiling shader task {}", taskKey);
 				ResolvePendingFailure(taskKey, task.GetGeneration());
 				attempt.result = Util::ShaderCreation::Result::CompileFailed;
-			} }, [&](std::chrono::milliseconds delay) {
-			std::mutex retryMutex;
-			std::condition_variable_any retryWake;
-			std::unique_lock lock(retryMutex);
-			retryWake.wait_for(lock, stoken, delay, [] { return false; });
-			return !stoken.stop_requested() && !IsTaskStale(task.GetGeneration()); });
+			}
+			if (IsTaskStale(task.GetGeneration()))
+				attempt.result = Util::ShaderCreation::Result::Stale; }, [&](std::chrono::milliseconds delay) { return Util::ShaderCreation::WaitForRetry(stoken, delay) && !IsTaskStale(task.GetGeneration()); });
 
 		QueryPerformanceCounter(&end);
 		const double elapsedMs = static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / freq.QuadPart;
@@ -6776,8 +6773,6 @@ namespace SIE
 				throw;
 			logger::warn("Runtime shader allocation failed; retaining bytecode for bounded retry");
 		}
-		if (ShaderCache::Instance().IsTaskStale(GetGeneration()))
-			a_attempt.result = Util::ShaderCreation::Result::Stale;
 	}
 
 	size_t ShaderCompilationTask::GetId() const

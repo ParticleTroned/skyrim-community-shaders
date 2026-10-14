@@ -1,5 +1,6 @@
 #include <Windows.h>
 #include <ankerl/unordered_dense.h>
+#include <magic_enum/magic_enum.hpp>
 
 #include <algorithm>
 #include <array>
@@ -10,6 +11,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <iostream>
@@ -193,6 +195,8 @@ namespace SIE
 		}
 	};
 
+	std::string NormalizedPathKey(const std::filesystem::path&);
+
 	struct ShaderCache
 	{
 #include "shader_capture_declarations.h"
@@ -225,6 +229,20 @@ namespace SIE
 			++bytecodeQueries;
 			return !shaderMap.empty();
 		}
+		std::unordered_map<std::string, std::string> sourceKeys;
+		std::unordered_map<std::string, std::chrono::system_clock::time_point> modified;
+		std::vector<RE::BSShader::Type> typeClears;
+		void InsertModifiedShaderMap(const std::string& source, std::chrono::system_clock::time_point time) { modified[source] = time; }
+		bool Clear(const std::string& path)
+		{
+			const auto key = sourceKeys.find(NormalizedPathKey(path));
+			if (key == sourceKeys.end())
+				return false;
+			EvictShader(key->second, RE::BSShader::Lighting, 10, ShaderClass::Pixel);
+			sourceKeys.erase(key);
+			return true;
+		}
+		void Clear(RE::BSShader::Type type) { typeClears.push_back(type); }
 		void StartActiveShaderCaptureWindow(ActiveShaderCaptureStage a_stage);
 		void EvictShaderResources(RE::BSShader::Type a_type, uint32_t a_descriptor, ShaderClass a_shaderClass);
 		void EvictShader(const std::string& a_key, RE::BSShader::Type a_type, uint32_t a_descriptor, ShaderClass a_shaderClass);
@@ -249,12 +267,19 @@ namespace SIE
 	}
 	unsigned sourceInvalidations = 0;
 	void InvalidateShaderSourceCaches() { ++sourceInvalidations; }
+	struct TestDependencies
+	{
+		std::unordered_map<std::string, std::vector<std::string>> dependents;
+		std::vector<std::string> GetDependents(const std::string& path) { return dependents[NormalizedPathKey(path)]; }
+	};
 	struct UpdateListener
 	{
 #include "shader_watcher_action_under_test.h"
 		std::mutex actionMutex;
 		std::vector<fileAction> queue;
 		std::vector<std::filesystem::path> observedPaths;
+		TestDependencies dependencies;
+		TestDependencies* deps = &dependencies;
 		void handleFileAction(efsw::WatchID, const std::string&, const std::string&, efsw::Action, std::string);
 		void UpdateCache(const std::filesystem::path&, ShaderCache*, bool&);
 		void Process(const fileAction& fAction, ShaderCache* cache)
@@ -553,6 +578,54 @@ namespace
 		listener.Process({ 1, "Data/Shaders/Common", "Missing.hlsli", Action::Delete, "" }, &cache);
 		Require(cache.pendingStandaloneShaderClear);
 		SIE::unknownDependencies = false;
+	}
+
+	void TestMissingShaderInputs()
+	{
+		SIE::UpdateListener listener;
+		ShaderCache cache;
+		using Action = efsw::Actions;
+		const auto root = std::filesystem::temp_directory_path() / ("CSX-watcher-" + std::to_string(GetCurrentProcessId()));
+		std::filesystem::create_directories(root / "Common");
+		struct Cleanup
+		{
+			std::filesystem::path path;
+			~Cleanup() { std::filesystem::remove_all(path); }
+		} cleanup{ root };
+		const auto source = root / "Effect.hlsl";
+		const auto include = root / "Common" / "Shared.hlsli";
+		unsigned releases = 0;
+		const auto populate = [&] {
+			cache.sourceKeys[SIE::NormalizedPathKey(source)] = "effect";
+			cache.shaderMap["effect"] = {};
+			cache.pixelShaders[RE::BSShader::Lighting][10] = std::make_shared<RuntimeShader>(releases);
+		};
+		std::ofstream(source) << "source";
+		populate();
+		std::filesystem::remove(source);
+		const auto before = std::chrono::system_clock::now();
+		listener.Process({ 1, root.string(), "Effect.hlsl", Action::Delete, "" }, &cache);
+		Require(cache.shaderMap.empty() && cache.pixelShaders[RE::BSShader::Lighting].empty() && releases == 1);
+		Require(cache.modified.at("Effect") >= before);
+		std::ofstream(source) << "recreated";
+		populate();
+		listener.Process({ 1, root.string(), "Effect.hlsl", Action::Add, "" }, &cache);
+		Require(cache.shaderMap.empty() && releases == 2);
+		populate();
+		std::filesystem::rename(source, root / "Effect.bak");
+		listener.Process({ 1, root.string(), "Effect.bak", Action::Moved, "Effect.hlsl" }, &cache);
+		Require(cache.shaderMap.empty() && releases == 3);
+		std::ofstream(include) << "include";
+		listener.dependencies.dependents[SIE::NormalizedPathKey(std::filesystem::weakly_canonical(include))] = { source.string() };
+		populate();
+		std::filesystem::remove(include);
+		listener.Process({ 1, include.parent_path().string(), "Shared.hlsli", Action::Delete, "" }, &cache);
+		Require(cache.shaderMap.empty() && releases == 4);
+		std::ofstream(include) << "recreated include";
+		populate();
+		std::filesystem::rename(include, include.parent_path() / "Shared.bak");
+		listener.Process({ 1, include.parent_path().string(), "Shared.bak", Action::Moved, "Shared.hlsli" }, &cache);
+		Require(cache.shaderMap.empty() && releases == 5);
 	}
 
 	void TestQueueWithSharedBytecode()
@@ -858,6 +931,7 @@ int main()
 		TestFeatureClearInvalidationFailure();
 		TestStandaloneClearBoundary();
 		TestWatcherActions();
+		TestMissingShaderInputs();
 		TestQueueWithSharedBytecode();
 		TestCaptureAndClearVariants(false);
 		TestCaptureAndClearVariants(true);

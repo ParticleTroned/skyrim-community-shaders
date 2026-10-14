@@ -133,10 +133,23 @@ extract_between(
     "shader_watcher_handle_under_test.h"
 )
 extract_between(
-    "${_source}" "\tvoid UpdateListener::UpdateCache(" "\n\t\t// Skip directories"
+    "${_source}" "\tvoid UpdateListener::UpdateCache(" "\n\tvoid UpdateListener::processQueue("
     "shader_watcher_invalidation_under_test.h"
 )
-file(APPEND "${OUTPUT_DIRECTORY}/shader_watcher_invalidation_under_test.h" "\n\t\tobservedPaths.push_back(filePath);\n\t}\n")
+file(
+    READ "${OUTPUT_DIRECTORY}/shader_watcher_invalidation_under_test.h"
+    _watcher
+)
+string(
+    REPLACE "fileDone = true;"
+    "fileDone = true; observedPaths.push_back(filePath);"
+    _watcher
+    "${_watcher}"
+)
+file(
+    WRITE "${OUTPUT_DIRECTORY}/shader_watcher_invalidation_under_test.h"
+    "${_watcher}"
+)
 extract_between(
     "${_source}" "\t\t\t\t\tcase efsw::Actions::Add:" "\n\t\t\t\t\tdefault:"
     "shader_watcher_routes_under_test.h"

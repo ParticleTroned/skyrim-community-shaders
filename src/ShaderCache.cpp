@@ -7314,27 +7314,27 @@ namespace SIE
 		const auto sourceExtension = filePath.extension().string();
 		if (_stricmp(sourceExtension.c_str(), ".hlsl") == 0 || _stricmp(sourceExtension.c_str(), ".hlsli") == 0)
 			cache->RequestStandaloneShaderClear(filePath);
-		// Skip directories
-		if (std::filesystem::is_directory(filePath)) {
+		std::error_code statusError;
+		if (std::filesystem::is_directory(filePath, statusError))
 			return;
-		}
 		// Extract file components
 		const std::string extension = filePath.extension().string();
 		const std::string shaderTypeString = filePath.stem().string();
-		std::chrono::time_point<std::chrono::system_clock> modifiedTime{};
+		auto modifiedTime = std::chrono::system_clock::now();
 		auto shaderType = magic_enum::enum_cast<RE::BSShader::Type>(shaderTypeString, magic_enum::case_insensitive);
-		// Check if the file exists and get its modified time
-		if (std::filesystem::exists(filePath)) {
-			modifiedTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(filePath));
-		} else {
-			return;
-		}
+		// Deleted and renamed inputs still invalidate their resident replacements.
+		std::error_code timeError;
+		const auto writeTime = std::filesystem::last_write_time(filePath, timeError);
+		if (!timeError)
+			modifiedTime = std::chrono::clock_cast<std::chrono::system_clock>(writeTime);
+		else if (timeError != std::errc::no_such_file_or_directory)
+			logger::warn("Cannot read shader modification time for {}: {}; invalidating existing entries", filePath.string(), timeError.message());
 
 		// Ensure the file is not a directory and is a valid shader file (.hlsl)
 		std::string lowerExtension = extension;
 		std::transform(lowerExtension.begin(), lowerExtension.end(), lowerExtension.begin(),
 			[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-		if (!std::filesystem::is_directory(filePath) && lowerExtension == ".hlsl") {
+		if (lowerExtension == ".hlsl") {
 			// Update cache with the modified shader
 			cache->InsertModifiedShaderMap(shaderTypeString, modifiedTime);
 
@@ -7361,7 +7361,7 @@ namespace SIE
 			}
 		}
 		// Handle include file changes (.hlsli) by invalidating dependents
-		else if (!std::filesystem::is_directory(filePath) && lowerExtension == ".hlsli") {
+		else if (lowerExtension == ".hlsli") {
 			// Normalize to absolute canonical path to match how dependencies are tracked
 			std::error_code ec;
 			auto canonicalPath = std::filesystem::weakly_canonical(filePath, ec);

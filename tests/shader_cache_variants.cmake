@@ -72,7 +72,7 @@ target_include_directories(
 )
 target_link_libraries(
     shader_cache_variants_test
-    PRIVATE unordered_dense::unordered_dense
+    PRIVATE unordered_dense::unordered_dense magic_enum::magic_enum
 )
 target_compile_definitions(
     shader_cache_variants_test

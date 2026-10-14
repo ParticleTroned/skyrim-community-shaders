@@ -3835,6 +3835,7 @@ if(BUILD_CONTROLLER_TESTS)
         ShaderCompilationSchedulingPolicy
         tests/shader_compilation_scheduling_policy_test.cpp
     )
+    include("${PROJECT_SOURCE_DIR}/tests/shader_compilation_scheduling.cmake")
     add_controller_test(
         vr_depth_culling_cache_refresh_policy_test
         VRDepthCullingCacheRefreshPolicy

@@ -140,19 +140,22 @@ namespace Util
 		}
 	}
 
+	bool SetCurrentThreadShaderCompilationPriority(ShaderCompilationSchedulingPolicy::CompilationPhase a_phase)
+	{
+		using namespace ShaderCompilationSchedulingPolicy;
+		const auto mode = SelectWorkerThreadPriorityMode(a_phase);
+		const DWORD processPriorityClass = GetPriorityClass(GetCurrentProcess());
+		const int threadPriority = mode == WorkerThreadPriorityMode::CooperativeBackground ?
+		                               GetCooperativeBackgroundThreadPriority(processPriorityClass) :
+		                               THREAD_PRIORITY_BELOW_NORMAL;
+		const bool priorityApplied = SetThreadPriority(GetCurrentThread(), threadPriority) != FALSE;
+		return processPriorityClass != 0 && priorityApplied &&
+		       (mode == WorkerThreadPriorityMode::GameplayBackground || processPriorityClass != REALTIME_PRIORITY_CLASS);
+	}
+
 	bool SetCurrentThreadCooperativeBackgroundPriority()
 	{
-		const DWORD processPriorityClass = GetPriorityClass(GetCurrentProcess());
-		const int threadPriority = GetCooperativeBackgroundThreadPriority(processPriorityClass);
-		const bool priorityApplied =
-			SetThreadPriority(GetCurrentThread(), threadPriority) != FALSE;
-		// THREAD_PRIORITY_IDLE is still base priority 16 in REALTIME_PRIORITY_CLASS;
-		// Windows offers no relative thread priority that can make such a process
-		// cooperative with an ordinary desktop application. Apply the least
-		// aggressive available value, but report that the guarantee is unavailable.
-		return processPriorityClass != 0 &&
-		       processPriorityClass != REALTIME_PRIORITY_CLASS &&
-		       priorityApplied;
+		return SetCurrentThreadShaderCompilationPriority(ShaderCompilationSchedulingPolicy::CompilationPhase::Startup);
 	}
 
 	std::optional<std::filesystem::path> GetPicturesPath()

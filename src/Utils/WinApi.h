@@ -4,6 +4,11 @@
 #include <optional>
 #include <string>
 
+namespace ShaderCompilationSchedulingPolicy
+{
+	enum class CompilationPhase;
+}
+
 namespace Util
 {
 	/** Opens a file or directory through Windows, returning a visible error on failure. */
@@ -24,6 +29,10 @@ namespace Util
 
 	/// Applies the process-class-aware cooperative priority to the calling thread.
 	bool SetCurrentThreadCooperativeBackgroundPriority();
+
+	/** Applies startup's process-aware priority or gameplay's below-normal CPU priority.
+	 * Reports query/set failures and startup's unavailable desktop guarantee in Realtime. */
+	bool SetCurrentThreadShaderCompilationPriority(ShaderCompilationSchedulingPolicy::CompilationPhase a_phase);
 
 	/** Windows user-owned capture roots; unavailable only when shell discovery fails. */
 	std::optional<std::filesystem::path> GetPicturesPath();

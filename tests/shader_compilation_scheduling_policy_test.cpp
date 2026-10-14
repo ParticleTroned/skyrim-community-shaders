@@ -54,7 +54,7 @@ namespace
 		       SelectWorkerThreadPriorityMode(SelectCompilationPhase(false)) ==
 		           WorkerThreadPriorityMode::CooperativeBackground &&
 		       SelectWorkerThreadPriorityMode(SelectCompilationPhase(true)) ==
-		           WorkerThreadPriorityMode::ProcessNormal;
+		           WorkerThreadPriorityMode::GameplayBackground;
 	}
 
 	static_assert(CoversStartupCompilationCpuShare());

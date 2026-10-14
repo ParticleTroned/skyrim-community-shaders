@@ -152,7 +152,7 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 	Util::Widgets::SliderInt("Background Compiler Threads", &shaderCache->backgroundCompilationThreadCount, 1, maxThreads);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Gameplay compile threads. Default: half the performance cores to protect render-thread time; workers resume normal game priority after startup. Higher compiles faster but may stutter.");
+			"Gameplay compile threads. Default: half the performance cores. Workers use below-normal CPU priority after startup; this budget controls concurrency separately. Higher values may increase throughput and stutter.");
 	}
 
 	auto& menuSettings = globals::menu->GetSettings();

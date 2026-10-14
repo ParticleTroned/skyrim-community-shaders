@@ -25,15 +25,19 @@ namespace
 		if (!condition)
 			throw std::runtime_error(message);
 	}
-	std::atomic_size_t entered{}, priorityCalls{};
+	std::atomic_size_t entered{}, priorityCalls{}, startupPriorityCalls{}, gameplayPriorityCalls{};
 	std::atomic_bool blockCompile{}, releaseCompile{}, nullCompile{}, standardException{}, unknownException{}, injectSourceInstability{}, changeSourceEpoch{}, priorityAvailable{ true }, injectPhaseCompletionFailure{};
 	winrt::com_ptr<ID3DBlob> bytecode;
 }
 namespace Util
 {
-	bool SetCurrentThreadCooperativeBackgroundPriority() noexcept
+	bool SetCurrentThreadShaderCompilationPriority(ShaderCompilationSchedulingPolicy::CompilationPhase phase) noexcept
 	{
 		++priorityCalls;
+		if (phase == ShaderCompilationSchedulingPolicy::CompilationPhase::Startup)
+			++startupPriorityCalls;
+		else
+			++gameplayPriorityCalls;
 		return priorityAvailable.load();
 	}
 }
@@ -180,6 +184,28 @@ namespace
 		Require(!cache.IsStandalonePreparationCurrent(*operation, true), "Resident currentness must still reject a changed source generation");
 	}
 
+	void CheckCompilationPriorityPhases()
+	{
+		ResetSeams();
+		SIE::ShaderCache cache;
+		auto device = CreateDevice();
+		const auto startupBefore = startupPriorityCalls.load();
+		auto startup = cache.PrepareStandaloneShader(Request(cache, device));
+		Require(Wait(startup) == State::Ready, "Startup priority must preserve standalone producer progress");
+		cache.standalonePreparationPool->wait();
+		Require(startupPriorityCalls == startupBefore + 1, "Standalone startup work must select cooperative priority");
+		cache.startupCompilationComplete = true;
+		for (const bool available : { true, false }) {
+			priorityAvailable = available;
+			const auto gameplayBefore = gameplayPriorityCalls.load();
+			auto gameplay = cache.PrepareStandaloneShader(Request(cache, device));
+			Require(Wait(gameplay) == State::Ready, "A failed gameplay priority change must preserve standalone producer progress");
+			cache.standalonePreparationPool->wait();
+			Require(gameplayPriorityCalls == gameplayBefore + 1 && cache.standalonePreparations == 0,
+				"Standalone gameplay work must apply gameplay priority and release admission on the reused pool");
+		}
+	}
+
 	void CheckBoundedQueueCancellationAndShutdown()
 	{
 		ResetSeams();
@@ -310,10 +336,11 @@ int main()
 					"main", "cs_5_0", 0, 0, bytecode.put(), nullptr)),
 			"Compute test bytecode compilation failed");
 		CheckSuccessAndCapturedOwnership();
+		CheckCompilationPriorityPhases();
 		CheckBoundedQueueCancellationAndShutdown();
 		CheckTerminalFailuresAndSourceRaces();
 		CheckDeviceThreadingRejection();
-		Require(priorityCalls > 0, "Actual worker preparation must apply cooperative priority");
+		Require(priorityCalls > 0, "Actual worker preparation must apply the compilation phase priority");
 		std::cout << "Standalone preparation: owned capture, two-worker/16-operation bound, purge notification, startup counts, shutdown, device threading and source races passed\n";
 		return 0;
 	} catch (const std::exception& error) {

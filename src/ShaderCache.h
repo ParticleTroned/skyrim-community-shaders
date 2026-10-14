@@ -769,12 +769,8 @@ namespace SIE
 				static_cast<int32_t>(std::thread::hardware_concurrency()));
 		}
 
-		// Startup compilation uses most of the CPU while leaving enough logical processors
-		// free for the OS and foreground applications to remain responsive. Compiler workers
-		// run at process-aware cooperative priority until DataLoaded. Pool workers are
-		// restored to normal relative priority for constrained in-game recompiles.
-		// Management and file watcher run on dedicated jthreads, not pool slots.
-		// Background (in-game): half of P-cores only, to avoid starving the render thread.
+		// Startup uses process-aware cooperative priority; gameplay workers stay below normal.
+		// Dispatch budgets remain independent of CPU priority and pool size.
 		int32_t compilationThreadCount = GetDefaultCompilationThreadCount();
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(Util::GetPerformanceCoreCount()) / 2, 1);
 		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(compilationThreadCount) };
@@ -789,7 +785,7 @@ namespace SIE
 		std::atomic<bool> menuLoaded = false;
 		// Set only after DataLoaded and the initial compilation batch have both
 		// completed. Keep this distinct from menu/UI lifecycle state so early menu
-		// initialization or background-mode entry cannot raise worker priority.
+		// initialization or background-mode entry cannot select the gameplay priority.
 		std::atomic<bool> startupCompilationComplete = false;
 
 		enum class LightingShaderTechniques

@@ -48,7 +48,7 @@ namespace ShaderCompilationSchedulingPolicy
 	enum class WorkerThreadPriorityMode
 	{
 		CooperativeBackground,
-		ProcessNormal,
+		GameplayBackground,
 	};
 
 	[[nodiscard]] constexpr CompilationPhase SelectCompilationPhase(
@@ -69,7 +69,7 @@ namespace ShaderCompilationSchedulingPolicy
 	{
 		return a_phase == CompilationPhase::Startup ?
 		           WorkerThreadPriorityMode::CooperativeBackground :
-		           WorkerThreadPriorityMode::ProcessNormal;
+		           WorkerThreadPriorityMode::GameplayBackground;
 	}
 
 	[[nodiscard]] constexpr CooperativeThreadPriority SelectCooperativeThreadPriority(

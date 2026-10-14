@@ -4188,7 +4188,7 @@ namespace SIE
 			return;
 
 		if (!startupCompilationComplete.exchange(true, std::memory_order_acq_rel))
-			logger::info("Shader compiler scheduling transitioned from startup-cooperative to in-game normal priority");
+			logger::info("Shader compiler scheduling transitioned from startup-cooperative to gameplay below-normal priority");
 	}
 
 	void ShaderCache::StopCompilation()
@@ -4450,8 +4450,10 @@ namespace SIE
 		standalonePreparations.fetch_add(1, std::memory_order_release);
 		producer->admitted = true;
 		standalonePreparationPool->detach_task([this, producer, request = std::move(a_request)] {
-			if (!Util::SetCurrentThreadCooperativeBackgroundPriority())
-				logger::warn("Standalone preparation could not apply cooperative worker priority");
+			const auto phase = ShaderCompilationSchedulingPolicy::SelectCompilationPhase(
+				startupCompilationComplete.load(std::memory_order_acquire));
+			if (!Util::SetCurrentThreadShaderCompilationPriority(phase))
+				logger::warn("Standalone preparation could not apply its phase-selected worker priority");
 			auto& result = *producer->operation;
 			bool staleSource = false;
 			try {
@@ -6524,29 +6526,19 @@ namespace SIE
 			return;
 		}
 
-		const auto taskKey = task.GetString();
-
-		// The large blocking startup batch yields to the desktop even when another
-		// plugin raises Skyrim's process class. Once DataLoaded releases the game,
-		// explicitly restore each reused pool worker to normal relative priority;
-		// in-game recompiles are constrained by the smaller background thread limit.
+		// CPU priority follows the lifecycle independently of the configured dispatch budget.
 		static std::atomic_bool priorityWarningLogged = false;
 		using namespace ShaderCompilationSchedulingPolicy;
-		const auto priorityMode = SelectWorkerThreadPriorityMode(
-			SelectCompilationPhase(startupCompilationComplete.load(std::memory_order_acquire)));
-		const bool priorityApplied =
-			priorityMode == WorkerThreadPriorityMode::CooperativeBackground ?
-				Util::SetCurrentThreadCooperativeBackgroundPriority() :
-				SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL) != FALSE;
+		const auto phase = SelectCompilationPhase(startupCompilationComplete.load(std::memory_order_acquire));
+		const bool priorityApplied = Util::SetCurrentThreadShaderCompilationPriority(phase);
 		if (!priorityApplied &&
 			!priorityWarningLogged.exchange(true, std::memory_order_acq_rel)) {
 			logger::warn(
 				"Shader compiler workers could not apply the requested {} CPU priority; continuing with the priority available to the current process class.",
-				priorityMode == WorkerThreadPriorityMode::CooperativeBackground ?
-					"startup-cooperative" :
-					"in-game normal");
+				phase == CompilationPhase::Startup ? "startup-cooperative" : "gameplay below-normal");
 		}
 
+		const auto taskKey = task.GetString();
 		LARGE_INTEGER start, end, freq;
 		QueryPerformanceFrequency(&freq);
 		QueryPerformanceCounter(&start);

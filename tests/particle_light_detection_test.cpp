@@ -147,6 +147,7 @@ namespace
 			float radius = 0;
 		};
 		struct ParticleLightSnapshot;
+#include "particle_light_detection_builder_under_test.h"
 		struct LightData
 		{
 			Vector3 color;
@@ -196,7 +197,7 @@ namespace
 		float CalculateLuminance(const CachedParticleLight& a_light, const RE::NiPoint3& a_point);
 		void AddParticleLightLuminance(RE::NiPoint3& a_position, int& a_hits, float& a_level);
 		float CalculateLightDistance(float3 a_position, float a_radius);
-		void AddCachedParticleLights(eastl::vector<LightData>& a_output, LightData& a_light, ParticleLightSnapshot* a_snapshot, const ResolvedBillboardLight* a_billboard = nullptr);
+		void AddCachedParticleLights(eastl::vector<LightData>& a_output, LightData& a_light, ParticleLightSnapshotBuilder& a_detection, const ResolvedBillboardLight* a_billboard = nullptr);
 		void Prepass();
 		void UpdateLights();
 	};
@@ -367,56 +368,56 @@ namespace
 		disabled.SetParticleLightDetectionEnabled(false);
 		enabled.eyeCount = disabled.eyeCount = 2;
 		enabled.eyePositionCached[0] = disabled.eyePositionCached[0] = { 10, 20, 30 };
-		auto builder = enabled.CreateParticleLightSnapshot();
+		LightLimitFix::ParticleLightSnapshotBuilder builder, disabledBuilder;
 		const auto allocations = snapshotAllocationAttempts.load();
-		auto disabledBuilder = disabled.CreateParticleLightSnapshot();
-		Require(builder && !disabledBuilder && snapshotAllocationAttempts.load() == allocations);
 		std::vector<LightData> enabledRender;
 		std::vector<LightData> disabledRender;
 		auto enabledLight = MakeLight();
 		auto disabledLight = enabledLight;
-		enabled.AddCachedParticleLights(enabledRender, enabledLight, builder.get());
-		disabled.AddCachedParticleLights(disabledRender, disabledLight, disabledBuilder.get());
+		enabled.AddCachedParticleLights(enabledRender, enabledLight, builder);
+		disabled.AddCachedParticleLights(disabledRender, disabledLight, disabledBuilder);
+		Require(builder.snapshot && !disabledBuilder.snapshot && snapshotAllocationAttempts.load() == allocations + 1);
 		Require(enabledRender == disabledRender && enabledRender.size() == 1);
 		Require(enabledRender[0].fade == 1 && enabledRender[0].invRadius == 0.5f);
-		Require(builder->count == 1 && builder->lights[0].radius == 2);
-		Require(std::abs(builder->lights[0].grey - 1.81f) < 1e-6f);
-		Require(builder->lights[0].position == Vector3{ 11, 22, 33 });
-		enabled.PublishParticleLights(std::move(builder));
+		Require(builder.snapshot->count == 1 && builder.snapshot->lights[0].radius == 2);
+		Require(std::abs(builder.snapshot->lights[0].grey - 1.81f) < 1e-6f);
+		Require(builder.snapshot->lights[0].position == Vector3{ 11, 22, 33 });
+		enabled.PublishParticleLights(std::move(builder.snapshot));
 		const auto detection = Query(enabled, { 11, 22, 33 });
 		Require(detection.hits == 1 && std::abs(detection.level - 1.81f) < 1e-6f);
 
 		fadeStart = 0;
 		fadeEnd = 16;
-		auto fadedBuilder = enabled.CreateParticleLightSnapshot();
+		LightLimitFix::ParticleLightSnapshotBuilder fadedBuilder;
 		auto fadedLight = MakeLight({ 3, 0, 0 }, 1);
 		fadedLight.fade = 0.5f;
 		std::vector<LightData> fadedRender;
-		enabled.AddCachedParticleLights(fadedRender, fadedLight, fadedBuilder.get());
+		enabled.AddCachedParticleLights(fadedRender, fadedLight, fadedBuilder);
 		Require(fadedRender.size() == 1 && fadedRender[0].fade == 0.25f);
-		Require(fadedBuilder->count == 1 && std::abs(fadedBuilder->lights[0].grey - 1.81f * 0.25f) < 1e-6f);
+		Require(fadedBuilder.snapshot->count == 1 && std::abs(fadedBuilder.snapshot->lights[0].grey - 1.81f * 0.25f) < 1e-6f);
 		fadeEnd = 0;
 	}
 
 	void TestEmissionLimitsAndRejection()
 	{
 		LightLimitFix fix;
-		auto builder = fix.CreateParticleLightSnapshot();
+		LightLimitFix::ParticleLightSnapshotBuilder builder{ fix.CreateParticleLightSnapshot(), true };
 		std::vector<LightData> output(MAX_LIGHTS - 1);
-		builder->count = MAX_LIGHTS - 1;
+		builder.snapshot->count = MAX_LIGHTS - 1;
 		auto light = MakeLight();
-		fix.AddCachedParticleLights(output, light, builder.get());
-		Require(output.size() == MAX_LIGHTS && builder->count == MAX_LIGHTS);
-		const auto retained = builder->lights[MAX_LIGHTS - 1];
-		fix.AddCachedParticleLights(output, light, builder.get());
-		Require(output.size() == MAX_LIGHTS && builder->count == MAX_LIGHTS);
-		Require(builder->lights[MAX_LIGHTS - 1].grey == retained.grey && builder->lights[MAX_LIGHTS - 1].position == retained.position);
+		fix.AddCachedParticleLights(output, light, builder);
+		Require(output.size() == MAX_LIGHTS && builder.snapshot->count == MAX_LIGHTS);
+		const auto retained = builder.snapshot->lights[MAX_LIGHTS - 1];
+		fix.AddCachedParticleLights(output, light, builder);
+		Require(output.size() == MAX_LIGHTS && builder.snapshot->count == MAX_LIGHTS);
+		Require(builder.snapshot->lights[MAX_LIGHTS - 1].grey == retained.grey && builder.snapshot->lights[MAX_LIGHTS - 1].position == retained.position);
 		output.clear();
-		fix.AddCachedParticleLights(output, light, builder.get());
-		Require(output.size() == 1 && builder->count == MAX_LIGHTS);
+		fix.AddCachedParticleLights(output, light, builder);
+		Require(output.size() == 1 && builder.snapshot->count == MAX_LIGHTS);
 
-		for (const int rejection : { 0, 1, 2 }) {
-			builder = fix.CreateParticleLightSnapshot();
+		const auto allocations = snapshotAllocationAttempts.load();
+		for (const int rejection : { 0, 1, 2, 3, 4 }) {
+			builder = {};
 			output.clear();
 			light = MakeLight();
 			fix.settings.MaxParticleDistance = 0;
@@ -424,11 +425,31 @@ namespace
 				light.radius = 0;
 			else if (rejection == 1)
 				light.color = {};
-			else
+			else if (rejection == 2)
 				fix.settings.MaxParticleDistance = 1;
-			fix.AddCachedParticleLights(output, light, builder.get());
-			Require(output.empty() && builder->count == 0);
+			else if (rejection == 3)
+				light.fade = 0;
+			else
+				output.resize(MAX_LIGHTS);
+			fix.AddCachedParticleLights(output, light, builder);
+			Require(output.size() == (rejection == 4 ? MAX_LIGHTS : 0) && !builder.attempted && !builder.snapshot);
+			Require(snapshotAllocationAttempts.load() == allocations);
 		}
+		fix.settings.MaxParticleDistance = 0;
+		output.clear();
+		builder = {};
+		failNextSnapshotAllocation = true;
+		for (unsigned index = 0; index < 3; ++index) {
+			light = MakeLight();
+			fix.AddCachedParticleLights(output, light, builder);
+		}
+		Require(output.size() == 3 && builder.attempted && !builder.snapshot && snapshotAllocationAttempts.load() == allocations + 1);
+		fix.PublishParticleLights(std::move(builder.snapshot));
+		Require(!fix.cachedParticleLights.load());
+		builder = {};
+		light = MakeLight();
+		fix.AddCachedParticleLights(output, light, builder);
+		Require(builder.snapshot && builder.snapshot->count == 1 && snapshotAllocationAttempts.load() == allocations + 2);
 	}
 
 	void RestoreRuntimeBoundaries()

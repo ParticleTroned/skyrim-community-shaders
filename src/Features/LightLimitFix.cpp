@@ -3330,7 +3330,7 @@ float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radi
 void LightLimitFix::AddCachedParticleLights(
 	eastl::vector<LightData>& lightsData,
 	LightLimitFix::LightData& light,
-	ParticleLightSnapshot* a_detectionSnapshot,
+	ParticleLightSnapshotBuilder& a_detection,
 	const ResolvedBillboardLight* a_billboardLight)
 {
 	if (lightsData.size() >= MAX_LIGHTS) {
@@ -3377,7 +3377,11 @@ void LightLimitFix::AddCachedParticleLights(
 		light.invRadius = 1.f / light.radius;
 		lightsData.push_back(light);
 
-		if (a_detectionSnapshot && a_detectionSnapshot->count < a_detectionSnapshot->lights.size()) {
+		if (!a_detection.attempted) {
+			a_detection.attempted = true;
+			a_detection.snapshot = CreateParticleLightSnapshot();
+		}
+		if (auto* a_detectionSnapshot = a_detection.snapshot.get(); a_detectionSnapshot && a_detectionSnapshot->count < a_detectionSnapshot->lights.size()) {
 			CachedParticleLight cachedParticleLight{};
 			cachedParticleLight.grey = float3(light.color.x, light.color.y, light.color.z).Dot(luminanceWeights) * luminanceScale;
 			cachedParticleLight.radius = light.radius;
@@ -3451,7 +3455,7 @@ void LightLimitFix::UpdateLights()
 	lightsData.reserve(MAX_LIGHTS);
 	const bool isInterior = LocationContext::Get().inInterior;
 	RefreshJsonPlacedLightCacheFrame();
-	std::shared_ptr<ParticleLightSnapshot> detectionSnapshot;
+	ParticleLightSnapshotBuilder detection;
 
 	// Process point lights
 
@@ -3580,7 +3584,7 @@ void LightLimitFix::UpdateLights()
 			clusteredLight.lightFlags.set(LightFlags::Simple);
 			clusteredLight.lightFlags.set(LightFlags::Particle);
 			clusteredLight.lightFlags.set(LightFlags::AffectWater);
-			AddCachedParticleLights(lightsData, clusteredLight, detectionSnapshot.get());
+			AddCachedParticleLights(lightsData, clusteredLight, detection);
 
 			clusteredLights = 0;
 			clusteredLight = {};
@@ -3701,12 +3705,10 @@ void LightLimitFix::UpdateLights()
 			light.lightFlags.set(LightFlags::Simple);
 			light.lightFlags.set(LightFlags::Particle);
 			light.lightFlags.set(LightFlags::AffectWater);
-			AddCachedParticleLights(lightsData, light, detectionSnapshot.get(), &a_billboardLight);
+			AddCachedParticleLights(lightsData, light, detection, &a_billboardLight);
 		};
 
 		std::lock_guard<std::mutex> currentLock{ currentParticleLightsMutex };
-		if (lightsData.size() < MAX_LIGHTS && (!currentParticleEmitters.empty() || !currentBillboardLights.empty()))
-			detectionSnapshot = CreateParticleLightSnapshot();
 		std::size_t emitterIndex = 0;
 		std::size_t billboardIndex = 0;
 		while (emitterIndex < currentParticleEmitters.size() || billboardIndex < currentBillboardLights.size()) {
@@ -3728,7 +3730,7 @@ void LightLimitFix::UpdateLights()
 		flushClusteredLight();
 	}
 
-	PublishParticleLights(std::move(detectionSnapshot));
+	PublishParticleLights(std::move(detection.snapshot));
 
 	lightCount = std::min((uint)lightsData.size(), MAX_LIGHTS);
 

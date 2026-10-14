@@ -4,6 +4,11 @@ endif()
 include("${PROJECT_ROOT}/tests/extract_source_region.cmake")
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(READ "${PROJECT_ROOT}/src/Features/LightLimitFix.cpp" _source)
+file(READ "${PROJECT_ROOT}/src/Features/LightLimitFix.h" _header)
+extract_between(
+    "${_header}" "\tstruct ParticleLightSnapshotBuilder" "\n\tvoid SetParticleLightDetectionEnabled"
+    "particle_light_detection_builder_under_test.h"
+)
 
 extract_between(
     "${_source}" "static constexpr uint MAX_LIGHTS ="

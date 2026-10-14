@@ -32,6 +32,11 @@ private:
 	LightLimitFixDetail::SceneLightSnapshotCache<RE::ShadowSceneNode, SceneLightSnapshot> sceneLightSnapshots;
 	bool sceneLightSnapshotFailed = false;
 	struct ParticleLightSnapshot;
+	struct ParticleLightSnapshotBuilder
+	{
+		std::shared_ptr<ParticleLightSnapshot> snapshot;
+		bool attempted = false;
+	};
 	void SetParticleLightDetectionEnabled(bool a_enabled);
 	std::shared_ptr<ParticleLightSnapshot> CreateParticleLightSnapshot();
 	void PublishParticleLights(std::shared_ptr<const ParticleLightSnapshot> a_snapshot);
@@ -439,7 +444,7 @@ public:
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
 	/** Admit a rendered light and append detection data only to an unpublished snapshot. */
-	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLightSnapshot* a_detectionSnapshot, const ResolvedBillboardLight* a_billboardLight = nullptr);
+	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, ParticleLightSnapshotBuilder& a_detection, const ResolvedBillboardLight* a_billboardLight = nullptr);
 	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached = true);
 	void RefreshJsonPlacedLightCacheFrame();
 	bool IsJsonPlacedLight(RE::BSLight* a_bsLight, RE::NiLight* a_niLight);

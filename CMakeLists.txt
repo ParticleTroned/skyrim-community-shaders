@@ -2423,7 +2423,7 @@ if(BUILD_CONTROLLER_TESTS)
     foreach(
         _part
         IN
-        ITEMS cap snapshot methods emission update_guard prepass_guard
+        ITEMS cap snapshot builder methods emission update_guard prepass_guard
     )
         list(
             APPEND _particle_light_detection_test_headers
@@ -2438,6 +2438,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${PROJECT_SOURCE_DIR}/tests/extract_particle_light_detection.cmake"
         DEPENDS
             src/Features/LightLimitFix.cpp
+            src/Features/LightLimitFix.h
             tests/extract_particle_light_detection.cmake
             tests/extract_source_region.cmake
         VERBATIM

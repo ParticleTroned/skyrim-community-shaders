@@ -28,6 +28,9 @@ using namespace std::chrono;
 namespace Util
 {
 	struct StandaloneShaderRequest;
+	struct OwnedStandaloneShaderRequest;
+	struct ShaderPreparation;
+	struct StandaloneCompileState;
 }
 
 namespace ShaderConstants
@@ -488,6 +491,12 @@ namespace SIE
 			const Util::StandaloneShaderRequest& a_request,
 			const std::function<winrt::com_ptr<ID3DBlob>()>& a_compile,
 			const std::function<bool(ID3DBlob*)>& a_createShader);
+		/** Captures compile macros and cache identity on the renderer owner. */
+		Util::StandaloneCompileState CaptureStandaloneCompileState() const;
+		/** Queues bounded preparation without exposing render-owned state to workers. */
+		std::shared_ptr<Util::ShaderPreparation> PrepareStandaloneShader(Util::OwnedStandaloneShaderRequest a_request);
+		/** Tests the epochs used to admit a completed standalone object. */
+		bool IsStandalonePreparationCurrent(const Util::ShaderPreparation& a_preparation, bool a_resident = false) const;
 		void PersistCompiledShaderBlob(
 			ID3DBlob* a_shaderBlob,
 			bool a_developerMode,
@@ -563,6 +572,8 @@ namespace SIE
 		void RequestClear();
 		/** Service requested clears and standalone feature preparation at the render-frame boundary. */
 		void ProcessPendingClear();
+		/** Queues owner-thread refresh of the LLF standalone pair after source observation. */
+		void RequestStandaloneShaderClear();
 		/**
    		* @brief Clears and marks shaders for recompilation based on the given path.
  		*
@@ -767,6 +778,10 @@ namespace SIE
 		int32_t compilationThreadCount = GetDefaultCompilationThreadCount();
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(Util::GetPerformanceCoreCount()) / 2, 1);
 		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(compilationThreadCount) };
+		std::mutex standalonePreparationMutex;
+		std::unique_ptr<BS::thread_pool<>> standalonePreparationPool;
+		std::atomic<size_t> standalonePreparations = 0;
+		bool acceptStandalonePreparations = true;
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
 		/** @brief Sets compilation mode and wakes the dispatcher; returns the previous mode. */
 		bool SetBackgroundCompilation(bool value);
@@ -1137,6 +1152,7 @@ namespace SIE
 		bool hideError = false;
 		bool useFileWatcher = false;
 		std::atomic_bool pendingClear{ false };
+		std::atomic_bool pendingStandaloneShaderClear{ false };
 		std::atomic<uint8_t> pendingFeatureClear{ 0 };  // Bit 0: scoped, bit 1: full; full takes precedence.
 		void RequestFeatureShaderClear(bool a_scoped);
 		void ProcessPendingFeatureClear();
@@ -1216,6 +1232,7 @@ namespace SIE
 			std::string filename;
 			efsw::Action action;
 			std::string oldFilename;
+			bool operator==(const fileAction&) const = default;
 		};
 		std::mutex actionMutex;
 		std::vector<fileAction> queue{};

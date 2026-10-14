@@ -2,6 +2,7 @@
 #include "Api/ShaderCompatibilityRegistry.h"
 #include "BuildProvenance.h"
 #include "Features/GrassLighting.h"
+#include "Features/LightLimitFix.h"
 #include "TruePBR.h"
 
 #include "Globals.h"
@@ -45,6 +46,7 @@
 #include "Utils/ShaderDefines.h"
 #include "Utils/ShaderInclude.h"
 #include "Utils/ShaderLifetime.h"
+#include "Utils/ShaderPreparation.h"
 #include "Utils/ShaderSourceProvenance.h"
 
 #include "Features/DynamicCubemaps.h"
@@ -3540,6 +3542,14 @@ namespace SIE
 	ShaderCache::~ShaderCache()
 	{
 		StopFileWatcher();
+		{
+			std::lock_guard lock{ standalonePreparationMutex };
+			acceptStandalonePreparations = false;
+		}
+		if (standalonePreparationPool) {
+			standalonePreparationPool->purge();
+			standalonePreparationPool->wait();
+		}
 
 		// Stop dispatch before closing deferred-persistence intake. This lets
 		// compilations already in flight enqueue their completed blobs first.
@@ -3807,6 +3817,11 @@ namespace SIE
 		ProcessPendingFeatureClear();
 	}
 
+	void ShaderCache::RequestStandaloneShaderClear()
+	{
+		pendingStandaloneShaderClear.store(true, std::memory_order_release);
+	}
+
 	void ShaderCache::RequestFeatureShaderClear(bool a_scoped)
 	{
 		pendingFeatureClear.fetch_or(a_scoped ? 1 : 2, std::memory_order_release);
@@ -3814,14 +3829,30 @@ namespace SIE
 
 	void ShaderCache::ProcessPendingFeatureClear()
 	{
-		if (pendingFeatureClear.load(std::memory_order_acquire) == 0)
+		if (pendingFeatureClear.load(std::memory_order_acquire) == 0 &&
+			!pendingStandaloneShaderClear.load(std::memory_order_acquire))
 			return;
 		const Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
 		if (!ownership)
 			return;
 		const auto pending = pendingFeatureClear.exchange(0, std::memory_order_acq_rel);
-		if (!pending)
+		const bool standalone = pendingStandaloneShaderClear.exchange(false, std::memory_order_acq_rel);
+		if (!pending) {
+			if (standalone && globals::features::lightLimitFix.loaded) {
+				try {
+					globals::features::lightLimitFix.ClearShaderCache();
+					globals::features::lightLimitFix.PrepareShaderCache();
+					globals::features::lightLimitFix.WaitShaderCacheReady();
+				} catch (const std::exception& error) {
+					pendingStandaloneShaderClear.store(true, std::memory_order_release);
+					logger::error("Failed to refresh Light Limit Fix shaders; retry queued: {}", error.what());
+				} catch (...) {
+					pendingStandaloneShaderClear.store(true, std::memory_order_release);
+					logger::error("Failed to refresh Light Limit Fix shaders; retry queued: unknown exception");
+				}
+			}
 			return;
+		}
 
 		try {
 			globals::deferred->ClearShaderCache();
@@ -3853,6 +3884,8 @@ namespace SIE
 				logger::error("Failed to prepare {} shaders after invalidation: unknown exception", feature->GetName());
 			}
 		}
+		if (globals::features::lightLimitFix.loaded)
+			globals::features::lightLimitFix.WaitShaderCacheReady();
 	}
 
 	namespace
@@ -4143,7 +4176,8 @@ namespace SIE
 
 	bool ShaderCache::IsCompiling()
 	{
-		return compilationSet.totalTasks && compilationSet.completedTasks + compilationSet.failedTasks < compilationSet.totalTasks;
+		return standalonePreparations.load(std::memory_order_acquire) != 0 ||
+		       (compilationSet.totalTasks && compilationSet.completedTasks + compilationSet.failedTasks < compilationSet.totalTasks);
 	}
 
 	void ShaderCache::TryCompleteStartupCompilationPhase()
@@ -4159,6 +4193,12 @@ namespace SIE
 
 	void ShaderCache::StopCompilation()
 	{
+		{
+			std::lock_guard lock{ standalonePreparationMutex };
+			acceptStandalonePreparations = false;
+			if (standalonePreparationPool)
+				standalonePreparationPool->purge();
+		}
 		if (IsCompiling()) {
 			logger::info("Stopping {} remaining shader compilation tasks", compilationSet.totalTasks - compilationSet.completedTasks - compilationSet.failedTasks);
 		}
@@ -4333,12 +4373,12 @@ namespace SIE
 
 		StandaloneCompileKey BuildStandaloneCompileKey(const Util::StandaloneShaderRequest& request)
 		{
-			const auto captured = CaptureGlobalCompileState();
+			const auto digest = request.globalCompileDigest ? *request.globalCompileDigest : CaptureGlobalCompileState().digest;
 			const auto inputs = nlohmann::json::array({ "standalone-v1", request.source.lexically_normal().generic_string(),
 														  request.profile, request.entryPoint, request.flags })
 			                        .dump();
 			const auto packDigest = Util::ContentHash::CombineHashes(
-				Util::ShaderDefines::CompileStateDigest(captured.digest, request.macros),
+				Util::ShaderDefines::CompileStateDigest(digest, request.macros),
 				Util::ContentHash::HashString(inputs));
 			const auto hash = packDigest.ToHex();
 			const auto diskPath = std::format(L"Data/ShaderCache/Standalone/{}.cso", std::wstring(hash.begin(), hash.end()));
@@ -4351,6 +4391,93 @@ namespace SIE
 		}
 	}
 
+	Util::StandaloneCompileState ShaderCache::CaptureStandaloneCompileState() const
+	{
+		const auto captured = CaptureGlobalCompileState();
+		return { captured.digest, compilationSet.generation.load(std::memory_order_acquire),
+			g_shaderSourceGeneration.load(std::memory_order_acquire), captured.developerMode, captured.isVR,
+			captured.partialPrecision, captured.avoidFlowControl, IsDiskCache(), captured.shaderDefines->defines,
+			globals::state->GetShaderDefinesGeneration() };
+	}
+
+	bool ShaderCache::IsStandalonePreparationCurrent(const Util::ShaderPreparation& a_preparation, bool a_resident) const
+	{
+		return (a_resident || !IsTaskStale(a_preparation.compilationGeneration)) &&
+		       a_preparation.sourceGeneration == g_shaderSourceGeneration.load(std::memory_order_acquire);
+	}
+
+	std::shared_ptr<Util::ShaderPreparation> ShaderCache::PrepareStandaloneShader(Util::OwnedStandaloneShaderRequest a_request)
+	{
+		using Preparation = Util::ShaderPreparation;
+		auto operation = std::make_shared<Preparation>();
+		operation->device = a_request.device;
+		operation->compilationGeneration = a_request.state.compilationGeneration;
+		operation->sourceGeneration = a_request.state.sourceGeneration;
+		operation->shaderDefinesGeneration = a_request.state.shaderDefinesGeneration;
+		operation->developerMode = a_request.state.developerMode;
+		operation->partialPrecision = a_request.state.partialPrecision;
+		operation->avoidFlowControl = a_request.state.avoidFlowControl;
+		struct Producer
+		{
+			std::shared_ptr<Preparation> operation;
+			std::atomic<size_t>& active;
+			ShaderCache& owner;
+			bool admitted = false;
+			~Producer()
+			{
+				if (!admitted)
+					return;
+				if (operation->state.load(std::memory_order_acquire) == Preparation::State::Pending)
+					operation->Finish(Preparation::State::Stale);
+				if (active.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+					try {
+						owner.TryCompleteStartupCompilationPhase();
+					} catch (...) {
+						OutputDebugStringA("Standalone preparation could not report startup phase completion\n");
+					}
+				}
+			}
+		};
+		constexpr size_t maximumPreparations = 16;
+		std::lock_guard lock{ standalonePreparationMutex };
+		if (!acceptStandalonePreparations || standalonePreparations.load(std::memory_order_acquire) >= maximumPreparations) {
+			operation->Finish(Preparation::State::Stale);
+			return operation;
+		}
+		if (!standalonePreparationPool)
+			standalonePreparationPool = std::make_unique<BS::thread_pool<>>(2);
+		auto producer = std::make_shared<Producer>(operation, standalonePreparations, *this);
+		standalonePreparations.fetch_add(1, std::memory_order_release);
+		producer->admitted = true;
+		standalonePreparationPool->detach_task([this, producer, request = std::move(a_request)] {
+			if (!Util::SetCurrentThreadCooperativeBackgroundPriority())
+				logger::warn("Standalone preparation could not apply cooperative worker priority");
+			auto& result = *producer->operation;
+			bool staleSource = false;
+			try {
+				if (!IsStandalonePreparationCurrent(result)) {
+					result.Finish(Preparation::State::Stale);
+					return;
+				}
+				if (!request.device || (request.device->GetCreationFlags() & D3D11_CREATE_DEVICE_SINGLETHREADED)) {
+					logger::error("Standalone worker preparation requires a multithreaded D3D11 device");
+				} else {
+					result.shader = Util::CompilePreparedShader(request, *this, nullptr, &staleSource);
+				}
+			} catch (const std::exception& error) {
+				logger::error("Failed to prepare standalone shader {}: {}", request.source.string(), error.what());
+			} catch (...) {
+				logger::error("Failed to prepare standalone shader {}: unknown exception", request.source.string());
+			}
+			const bool current = !staleSource && IsStandalonePreparationCurrent(result);
+			if (!current)
+				result.shader = nullptr;
+			result.Finish(!current ? Preparation::State::Stale : result.shader ? Preparation::State::Ready :
+																				 Preparation::State::Failed);
+		});
+		return operation;
+	}
+
 	bool ShaderCache::CompileStandaloneShaderCached(
 		const Util::StandaloneShaderRequest& request,
 		const std::function<winrt::com_ptr<ID3DBlob>()>& compile,
@@ -4360,8 +4487,14 @@ namespace SIE
 			!request.entryPoint || !*request.entryPoint || !compile || !createShader)
 			return false;
 
+		if (request.staleSource)
+			*request.staleSource = false;
 		const auto diskGeneration = GetDiskCacheGeneration();
-		const auto taskGeneration = compilationSet.generation.load(std::memory_order_acquire);
+		const auto taskGeneration = request.compilationGeneration.value_or(compilationSet.generation.load(std::memory_order_acquire));
+		const auto isCurrent = [&] {
+			return !IsTaskStale(taskGeneration) && (!request.sourceGeneration ||
+													   *request.sourceGeneration == g_shaderSourceGeneration.load(std::memory_order_acquire));
+		};
 		std::optional<StandaloneCompileKey> key;
 		winrt::com_ptr<ID3DBlob> cached;
 		std::optional<Util::ContentHash::Hash128> cachedDigest;
@@ -4403,6 +4536,13 @@ namespace SIE
 		}
 		if (cached) {
 			if (createShader(cached.get())) {
+				if (request.requireStableSource) {
+					const auto afterCreation = GetShaderContentDigest(request.source, ShaderSourceRoot(), true);
+					if (request.staleSource && cachedDigest && afterCreation && cachedDigest != afterCreation)
+						*request.staleSource = true;
+					if (!isCurrent() || cachedDigest != afterCreation)
+						return false;
+				}
 				logger::debug("Loaded standalone shader from cache: {}", request.source.string());
 				return true;
 			}
@@ -4410,18 +4550,32 @@ namespace SIE
 		}
 
 		winrt::com_ptr<ID3DBlob> blob;
+		std::optional<Util::ContentHash::Hash128> beforeCompilation, afterCompilation;
 		const auto sourceDigest = Util::ShaderSourceProvenance::CompileWithStableDigest(
-			[&](bool) {
-				return key && IsDiskCacheActive() ?
-			               GetShaderContentDigest(request.source, ShaderSourceRoot(), true) :
-			               std::nullopt;
+			[&](bool a_afterCompilation) {
+				auto digest = request.requireStableSource || (key && IsDiskCacheActive()) ?
+			                      GetShaderContentDigest(request.source, ShaderSourceRoot(), true) :
+			                      std::nullopt;
+				(a_afterCompilation ? afterCompilation : beforeCompilation) = digest;
+				return digest;
 			},
 			[&] { blob = compile(); return bool(blob); },
 			[&](std::exception_ptr) {
-				logger::warn("Cannot verify standalone shader source {}; retaining bytecode in memory", request.source.string());
+				logger::warn("Cannot verify standalone shader source {}; {}", request.source.string(),
+					request.requireStableSource ? "rejecting preparation" : "retaining bytecode in memory");
 			});
-		if (!blob || !createShader(blob.get()))
+		if (request.requireStableSource && request.staleSource && beforeCompilation && afterCompilation && beforeCompilation != afterCompilation)
+			*request.staleSource = true;
+		if (!blob || (request.requireStableSource && (!sourceDigest || !isCurrent())) || !createShader(blob.get()))
 			return false;
+
+		if (request.requireStableSource) {
+			const auto afterCreation = GetShaderContentDigest(request.source, ShaderSourceRoot(), true);
+			if (request.staleSource && sourceDigest && afterCreation && sourceDigest != afterCreation)
+				*request.staleSource = true;
+			if (!isCurrent() || sourceDigest != afterCreation)
+				return false;
+		}
 
 		if (key && sourceDigest && !IsTaskStale(taskGeneration)) {
 			try {
@@ -7029,6 +7183,9 @@ namespace SIE
 	{
 		fileDone = true;
 		InvalidateShaderSourceCaches();
+		const auto sourceExtension = filePath.extension().string();
+		if (_stricmp(sourceExtension.c_str(), ".hlsl") == 0 || _stricmp(sourceExtension.c_str(), ".hlsli") == 0)
+			cache->RequestStandaloneShaderClear();
 		// Skip directories
 		if (std::filesystem::is_directory(filePath)) {
 			return;
@@ -7127,6 +7284,7 @@ namespace SIE
 						break;
 					case efsw::Actions::Delete:
 						logger::debug("Detected Deleted path {}", filePath.string());
+						UpdateCache(filePath, cache, fileDone);
 						break;
 					case efsw::Actions::Modified:
 						if (!std::filesystem::is_directory(filePath)) {
@@ -7136,6 +7294,9 @@ namespace SIE
 						break;
 					case efsw::Actions::Moved:
 						logger::debug("Detected Moved path {}", filePath.string());
+						UpdateCache(filePath, cache, fileDone);
+						if (!fAction.oldFilename.empty())
+							UpdateCache(std::filesystem::path(fAction.dir) / fAction.oldFilename, cache, fileDone);
 						break;
 					default:
 						logger::error("Filewatcher received invalid action {}", magic_enum::enum_name(fAction.action));
@@ -7154,9 +7315,8 @@ namespace SIE
 	void UpdateListener::handleFileAction(efsw::WatchID watchid, const std::string& dir, const std::string& filename, efsw::Action action, std::string oldFilename)
 	{
 		std::lock_guard lock(actionMutex);
-		if (queue.empty() || (queue.back().action != action && queue.back().filename != filename)) {
-			// only add if not a duplicate; esfw is very spammy
-			queue.push_back({ watchid, dir, filename, action, oldFilename });
-		}
+		fileAction observed{ watchid, dir, filename, action, std::move(oldFilename) };
+		if (queue.empty() || queue.back() != observed)
+			queue.push_back(std::move(observed));
 	}
 }

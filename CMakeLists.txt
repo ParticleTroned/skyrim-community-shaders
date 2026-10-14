@@ -2744,6 +2744,10 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE CommonLibSSE::CommonLibSSE spdlog::spdlog windowsapp.lib
     )
     target_compile_definitions(lazy_shader_test PRIVATE NOMINMAX)
+    include("${PROJECT_SOURCE_DIR}/tests/async_shader.cmake")
+    include(
+        "${PROJECT_SOURCE_DIR}/tests/light_limit_fix_shader_lifecycle.cmake"
+    )
     include("${PROJECT_SOURCE_DIR}/tests/hmd_mask_resources.cmake")
     add_d3d_shader_test(
         actor_blending_shader_test ActorBlendingShader

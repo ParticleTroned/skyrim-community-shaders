@@ -5,7 +5,7 @@ endif()
 # Standalone D3D tests reuse the production helper without game dependencies.
 file(READ "${PROJECT_ROOT}/src/Utils/D3D.cpp" _source)
 string(FIND "${_source}" "\tGUID WKPDID_D3DDebugObjectNameT =" _start)
-string(FIND "${_source}" "\n\tID3D11DeviceChild* CompileShader(" _end)
+string(FIND "${_source}" "\n\tstd::optional<OwnedStandaloneShaderRequest> CaptureStandaloneShaderRequest(" _end)
 if(_start EQUAL -1 OR _end LESS _start)
     message(FATAL_ERROR "Cannot locate the D3D resource naming implementation")
 endif()

@@ -4,9 +4,11 @@
 #include "Features/TerrainBlending.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Utils/ComIdentity.h"
 #include "Utils/Format.h"
 #include "Utils/RendererContextAccess.h"
 #include "Utils/ShaderInclude.h"
+#include "Utils/ShaderPreparation.h"
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 #include <algorithm>
@@ -226,12 +228,118 @@ namespace Util
 		Resource->SetPrivateData(WKPDID_D3DDebugObjectNameT, len, buffer);
 	}
 
+	std::optional<OwnedStandaloneShaderRequest> CaptureStandaloneShaderRequest(
+		const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines,
+		const char* ProgramType, const char* Program, const char* a_name)
+	{
+		if (!FilePath || !*FilePath || !ProgramType || !Program || !*Program)
+			return std::nullopt;
+		auto* device = globals::d3d::device;
+		if (!device || !globals::state || !globals::shaderCache)
+			return std::nullopt;
+		OwnedStandaloneShaderRequest owned;
+		owned.source = FilePath;
+		owned.profile = ProgramType;
+		owned.entryPoint = Program;
+		owned.resourceName = a_name ? a_name : "";
+		owned.device.copy_from(device);
+		owned.state = globals::shaderCache->CaptureStandaloneCompileState();
+		const bool developerMode = owned.state.developerMode;
+
+		// Build defines (aka convert vector->D3DCONSTANT array)
+		std::vector<D3D_SHADER_MACRO> macros;
+		std::string str = Util::WStringToString(FilePath);
+
+		for (auto& i : Defines) {
+			if (i.first && _stricmp(i.first, "") != 0) {
+				macros.push_back({ i.first, i.second });
+			} else {
+				logger::error("Failed to process shader defines for {}", str);
+			}
+		}
+
+		if (owned.state.isVR)
+			macros.push_back({ "VR", "" });
+		if (developerMode) {
+			macros.push_back({ "D3DCOMPILE_SKIP_OPTIMIZATION", "" });
+			macros.push_back({ "D3DCOMPILE_DEBUG", "" });
+		}
+		for (const auto& [name, definition] : owned.state.defines)
+			macros.push_back({ name.c_str(), definition.c_str() });
+		if (!_stricmp(ProgramType, "ps_5_0"))
+			macros.push_back({ "PSHADER", "" });
+		else if (!_stricmp(ProgramType, "vs_5_0"))
+			macros.push_back({ "VSHADER", "" });
+		else if (!_stricmp(ProgramType, "hs_5_0"))
+			macros.push_back({ "HULLSHADER", "" });
+		else if (!_stricmp(ProgramType, "ds_5_0"))
+			macros.push_back({ "DOMAINSHADER", "" });
+		else if (!_stricmp(ProgramType, "cs_5_0"))
+			macros.push_back({ "COMPUTESHADER", "" });
+		else if (!_stricmp(ProgramType, "cs_4_0"))
+			macros.push_back({ "COMPUTESHADER", "" });
+		else
+			return std::nullopt;
+
+		// Add null terminating entry
+		macros.push_back({ "WINPC", "" });
+		macros.push_back({ "DX11", "" });
+		macros.push_back({ nullptr, nullptr });
+
+		// Compiler setup
+		uint32_t flags = !developerMode ? (D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3) : D3DCOMPILE_DEBUG;
+		if (owned.state.partialPrecision)
+			flags |= D3DCOMPILE_PARTIAL_PRECISION;
+		if (owned.state.avoidFlowControl)
+			flags |= D3DCOMPILE_AVOID_FLOW_CONTROL;
+		// Disk cache on = user is running shipped, known-good shaders — skip the fxc
+		// validation pass to trim compile time. Disk cache off = dev workflow, keep
+		// validation so malformed source produces a clean error instead of UB.
+		if (owned.state.skipValidation)
+			flags |= D3DCOMPILE_SKIP_VALIDATION;
+
+		owned.flags = flags;
+		owned.macros.reserve(macros.size() - 1);
+		for (const auto& macro : macros) {
+			if (macro.Name)
+				owned.macros.push_back({ macro.Name, macro.Definition ? std::optional<std::string>(macro.Definition) : std::nullopt });
+		}
+		return owned;
+	}
+
 	ID3D11DeviceChild* CompileShader(
-		const wchar_t* FilePath,
-		const std::vector<std::pair<const char*, const char*>>& Defines,
-		const char* ProgramType,
-		const char* Program,
-		ShaderCompileTiming* a_timing)
+		const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines,
+		const char* ProgramType, const char* Program, ShaderCompileTiming* a_timing)
+	{
+		auto request = CaptureStandaloneShaderRequest(FilePath, Defines, ProgramType, Program, nullptr);
+		return request ? CompilePreparedShader(*request, *globals::shaderCache, a_timing).detach() : nullptr;
+	}
+
+	std::shared_ptr<ShaderPreparation> RequestShaderPreparation(
+		const wchar_t* a_path, const std::vector<std::pair<const char*, const char*>>& a_defines,
+		const char* a_target, const char* a_entry, const char* a_name)
+	{
+		auto request = CaptureStandaloneShaderRequest(a_path, a_defines, a_target, a_entry, a_name);
+		if (!request)
+			return nullptr;
+		request->requireStableSource = true;
+		return globals::shaderCache->PrepareStandaloneShader(std::move(*request));
+	}
+
+	bool IsShaderPreparationCurrent(const ShaderPreparation& a_preparation, bool a_resident)
+	{
+		auto* state = globals::state;
+		return state && globals::shaderCache && globals::shaderCache->IsStandalonePreparationCurrent(a_preparation, a_resident) &&
+		       a_preparation.shaderDefinesGeneration == state->GetShaderDefinesGeneration() &&
+		       a_preparation.developerMode == state->IsDeveloperMode() &&
+		       a_preparation.partialPrecision == state->enablePartialPrecision.load(std::memory_order_relaxed) &&
+		       a_preparation.avoidFlowControl == state->enableAvoidFlowControl.load(std::memory_order_relaxed) &&
+		       SameIdentity(a_preparation.device.get(), globals::d3d::device) &&
+		       SUCCEEDED(a_preparation.device->GetDeviceRemovedReason());
+	}
+
+	winrt::com_ptr<ID3D11DeviceChild> CompilePreparedShader(
+		const OwnedStandaloneShaderRequest& a_request, SIE::ShaderCache& a_cache, ShaderCompileTiming* a_timing, bool* a_staleSource)
 	{
 		const auto queryQpc = []() noexcept {
 			LARGE_INTEGER value{};
@@ -250,69 +358,21 @@ namespace Util
 				std::numeric_limits<uint64_t>::max() - a_destination;
 			a_destination += std::min(elapsed, remaining);
 		};
-		if (!FilePath || !*FilePath || !ProgramType || !Program || !*Program)
+		const auto& device = a_request.device;
+		const auto* FilePath = a_request.source.c_str();
+		const auto* ProgramType = a_request.profile.c_str();
+		const auto* Program = a_request.entryPoint.c_str();
+		const auto flags = a_request.flags;
+		const auto developerMode = a_request.state.developerMode;
+		const auto str = a_request.source.string();
+		if (!device || FAILED(device->GetDeviceRemovedReason()))
 			return nullptr;
-		auto device = globals::d3d::device;
-		if (!device || !globals::state || !globals::shaderCache)
-			return nullptr;
-		const bool developerMode = globals::state->IsDeveloperMode();
-
-		CustomInclude include(L"Data\\Shaders", FilePath);
-
-		// Build defines (aka convert vector->D3DCONSTANT array)
 		std::vector<D3D_SHADER_MACRO> macros;
-		std::string str = Util::WStringToString(FilePath);
-
-		for (auto& i : Defines) {
-			if (i.first && _stricmp(i.first, "") != 0) {
-				macros.push_back({ i.first, i.second });
-			} else {
-				logger::error("Failed to process shader defines for {}", str);
-			}
-		}
-
-		if (REL::Module::IsVR())
-			macros.push_back({ "VR", "" });
-		if (developerMode) {
-			macros.push_back({ "D3DCOMPILE_SKIP_OPTIMIZATION", "" });
-			macros.push_back({ "D3DCOMPILE_DEBUG", "" });
-		}
-		const auto shaderDefines = globals::state->GetShaderDefinesSnapshot();
-		if (!shaderDefines->defines.empty()) {
-			for (const auto& [name, definition] : shaderDefines->defines)
-				macros.push_back({ name.c_str(), definition.c_str() });
-		}
-		if (!_stricmp(ProgramType, "ps_5_0"))
-			macros.push_back({ "PSHADER", "" });
-		else if (!_stricmp(ProgramType, "vs_5_0"))
-			macros.push_back({ "VSHADER", "" });
-		else if (!_stricmp(ProgramType, "hs_5_0"))
-			macros.push_back({ "HULLSHADER", "" });
-		else if (!_stricmp(ProgramType, "ds_5_0"))
-			macros.push_back({ "DOMAINSHADER", "" });
-		else if (!_stricmp(ProgramType, "cs_5_0"))
-			macros.push_back({ "COMPUTESHADER", "" });
-		else if (!_stricmp(ProgramType, "cs_4_0"))
-			macros.push_back({ "COMPUTESHADER", "" });
-		else
-			return nullptr;
-
-		// Add null terminating entry
-		macros.push_back({ "WINPC", "" });
-		macros.push_back({ "DX11", "" });
+		macros.reserve(a_request.macros.size() + 1);
+		for (const auto& macro : a_request.macros)
+			macros.push_back({ macro.name.c_str(), macro.definition ? macro.definition->c_str() : nullptr });
 		macros.push_back({ nullptr, nullptr });
-
-		// Compiler setup
-		uint32_t flags = !developerMode ? (D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3) : D3DCOMPILE_DEBUG;
-		if (globals::state->enablePartialPrecision.load(std::memory_order_relaxed))
-			flags |= D3DCOMPILE_PARTIAL_PRECISION;
-		if (globals::state->enableAvoidFlowControl.load(std::memory_order_relaxed))
-			flags |= D3DCOMPILE_AVOID_FLOW_CONTROL;
-		// Disk cache on = user is running shipped, known-good shaders — skip the fxc
-		// validation pass to trim compile time. Disk cache off = dev workflow, keep
-		// validation so malformed source produces a clean error instead of UB.
-		if (globals::shaderCache->IsDiskCache())
-			flags |= D3DCOMPILE_SKIP_VALIDATION;
+		CustomInclude include(L"Data\\Shaders", FilePath);
 
 		auto compile = [&]() -> winrt::com_ptr<ID3DBlob> {
 			winrt::com_ptr<ID3DBlob> shaderBlob;
@@ -407,15 +467,18 @@ namespace Util
 			return SUCCEEDED(hr) && bool(regShader);
 		};
 
-		const StandaloneShaderRequest request{ FilePath, macros, ProgramType, Program, flags, developerMode };
-		if (!globals::shaderCache->CompileStandaloneShaderCached(request, compile, createShader)) {
+		const StandaloneShaderRequest request{ FilePath, macros, ProgramType, Program, flags, developerMode,
+			a_request.state.digest, a_request.state.compilationGeneration, a_request.state.sourceGeneration, a_request.requireStableSource, a_staleSource };
+		if (!a_cache.CompileStandaloneShaderCached(request, compile, createShader)) {
 			if (FAILED(hr))
 				logger::error("Failed to create shader object for {}:{} (HRESULT 0x{:08X})", str, Program, static_cast<uint32_t>(hr));
 			return nullptr;
 		}
 
 		nameCompiledShader(regShader.get());
-		return regShader.detach();
+		if (!a_request.resourceName.empty())
+			SetResourceName(regShader.get(), a_request.resourceName.c_str());
+		return regShader;
 	}
 
 	// RAII wrapper for D3D mapped resources

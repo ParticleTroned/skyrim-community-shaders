@@ -4,7 +4,7 @@
 
 #include "Buffer.h"
 #include "OverlayFeature.h"
-#include "Utils/LazyShader.h"
+#include "Utils/AsyncShader.h"
 #include "Utils/PointLightFlags.h"
 
 #include "Features/LightLimitFix/ParticleLights.h"
@@ -17,12 +17,14 @@
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
+#include <wrl/client.h>
 
 class ParticleLights;
 struct LightLimitFix : OverlayFeature
 {
 private:
 	Util::RuntimeToggle runtimeToggle{ false };
+	Microsoft::WRL::ComPtr<IUnknown> shaderDeviceIdentity;
 	static constexpr std::string_view MOD_ID = "99548";
 	eastl::hash_map<RE::BSLight*, RE::NiLight*> effectLightValidationCache;
 	using SceneLightSnapshot = LightLimitFixDetail::SceneLightSnapshot<RE::NiPointer<RE::BSLight>>;
@@ -156,8 +158,8 @@ public:
 	bool previousEnableLightsVisualisation = false;
 	bool currentEnableLightsVisualisation = false;
 
-	Util::LazyShader<ID3D11ComputeShader> clusterBuildingCS;
-	Util::LazyShader<ID3D11ComputeShader> clusterCullingCS;
+	Util::AsyncShader<ID3D11ComputeShader> clusterBuildingCS;
+	Util::AsyncShader<ID3D11ComputeShader> clusterCullingCS;
 
 	ConstantBuffer* lightBuildingCB = nullptr;
 	ConstantBuffer* lightCullingCB = nullptr;
@@ -284,6 +286,10 @@ public:
 
 	virtual void SetupResources() override;
 	void CompileComputeShaders();
+	/** Complete both standalone requests at an explicit resource preparation boundary. */
+	bool WaitShaderCacheReady();
+	/** Read the published readiness of the complete cluster shader pair. */
+	bool IsShaderCacheReady() const;
 	virtual void SetupRenderTargetResources() override;
 	virtual void Reset() override;
 
@@ -293,6 +299,7 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual void DrawSettings() override;
+	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;

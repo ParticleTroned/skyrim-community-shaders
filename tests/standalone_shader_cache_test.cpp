@@ -1,7 +1,9 @@
+#include "Utils/ComIdentity.h"
 #include "Utils/ShaderCacheManifest.h"
 #include "Utils/ShaderCompiler.h"
 #include "Utils/ShaderDefines.h"
 #include "Utils/ShaderInclude.h"
+#include "Utils/ShaderPreparation.h"
 #include "Utils/ShaderSourceProvenance.h"
 
 #include <algorithm>
@@ -37,9 +39,11 @@ struct TestState
 	};
 	bool developer = false;
 	std::atomic_bool enablePartialPrecision = false, enableAvoidFlowControl = false;
+	std::atomic_uint64_t shaderDefinesGeneration = 0;
 	std::shared_ptr<Defines> snapshot = std::make_shared<Defines>();
 	bool IsDeveloperMode() const { return developer; }
 	auto GetShaderDefinesSnapshot() const { return snapshot; }
+	uint64_t GetShaderDefinesGeneration() const { return shaderDefinesGeneration.load(); }
 };
 namespace globals
 {
@@ -129,6 +133,32 @@ namespace SIE
 		bool IsDiskCacheActive() const { return enabled && !held; }
 		bool IsSkipUnchangedShaders() const { return skipUnchanged; }
 		bool IsTaskStale(std::optional<uint64_t> value) const { return value && *value != compilationSet.generation; }
+		std::optional<Util::OwnedStandaloneShaderRequest> queuedRequest;
+		std::shared_ptr<Util::ShaderPreparation> queuedPreparation;
+		Util::StandaloneCompileState CaptureStandaloneCompileState() const
+		{
+			const auto* state = globals::state;
+			return { CaptureGlobalCompileState().digest, compilationSet.generation.load(), g_shaderSourceGeneration.load(),
+				state->IsDeveloperMode(), REL::Module::IsVR(), state->enablePartialPrecision.load(), state->enableAvoidFlowControl.load(),
+				IsDiskCache(), state->GetShaderDefinesSnapshot()->defines, state->GetShaderDefinesGeneration() };
+		}
+		bool IsStandalonePreparationCurrent(const Util::ShaderPreparation& operation, bool resident = false) const
+		{
+			return (resident || !IsTaskStale(operation.compilationGeneration)) && operation.sourceGeneration == g_shaderSourceGeneration;
+		}
+		std::shared_ptr<Util::ShaderPreparation> PrepareStandaloneShader(Util::OwnedStandaloneShaderRequest request)
+		{
+			queuedPreparation = std::make_shared<Util::ShaderPreparation>();
+			queuedPreparation->device = request.device;
+			queuedPreparation->compilationGeneration = request.state.compilationGeneration;
+			queuedPreparation->sourceGeneration = request.state.sourceGeneration;
+			queuedPreparation->shaderDefinesGeneration = request.state.shaderDefinesGeneration;
+			queuedPreparation->developerMode = request.state.developerMode;
+			queuedPreparation->partialPrecision = request.state.partialPrecision;
+			queuedPreparation->avoidFlowControl = request.state.avoidFlowControl;
+			queuedRequest = std::move(request);
+			return queuedPreparation;
+		}
 		bool CompileStandaloneShaderCached(const Util::StandaloneShaderRequest&,
 			const std::function<winrt::com_ptr<ID3DBlob>()>&, const std::function<bool(ID3DBlob*)>&);
 		void PersistCompiledShaderBlob(ID3DBlob* blob, bool developer, const std::wstring& path,
@@ -416,6 +446,147 @@ int main()
 	variant = request;
 	variant.source = L"Data/Shaders/another.hlsl";
 	assert(identity != SIE::BuildStandaloneCompileKey(variant).packDigest);
+	const auto strictSource = source;
+	Write("Data/Shaders/test.hlsl", strictSource);
+	Write("Data/Shaders/Common/value.hlsli", "#define VALUE 8\n");
+	cache.enabled = false;
+	auto strict = request;
+	strict.requireStableSource = true;
+	strict.compilationGeneration = cache.compilationSet.generation.load();
+	strict.sourceGeneration = SIE::g_shaderSourceGeneration.load();
+	bool staleSource = false;
+	strict.staleSource = &staleSource;
+	const auto createsBeforeEdit = creations;
+	assert(!cache.CompileStandaloneShaderCached(strict, [&] {
+		auto blob = compile();
+		Write("Data/Shaders/Common/value.hlsli", "#define VALUE 9\n");
+		return blob; }, create));
+	assert(staleSource && creations == createsBeforeEdit);
+	assert(!cache.CompileStandaloneShaderCached(strict, compile, [&](ID3DBlob* blob) {
+		const auto accepted = create(blob);
+		Write("Data/Shaders/Common/value.hlsli", "#define VALUE 10\n");
+		return accepted;
+	}));
+	assert(staleSource && creations == createsBeforeEdit + 1);
+	assert(cache.CompileStandaloneShaderCached(strict, compile, create) && !staleSource);
+	const auto createsBeforeEpoch = creations;
+	assert(!cache.CompileStandaloneShaderCached(strict, [&] {
+		auto blob = compile();
+		++cache.compilationSet.generation;
+		return blob; }, create));
+	assert(!staleSource && creations == createsBeforeEpoch);
+	strict.compilationGeneration = cache.compilationSet.generation.load();
+	assert(!cache.CompileStandaloneShaderCached(strict, [&] {
+		auto blob = compile();
+		++SIE::g_shaderSourceGeneration;
+		return blob; }, create));
+	assert(!staleSource && creations == createsBeforeEpoch);
+	strict.sourceGeneration = SIE::g_shaderSourceGeneration.load();
+	assert(!cache.CompileStandaloneShaderCached(strict, [] { return winrt::com_ptr<ID3DBlob>{}; }, create) && !staleSource);
+	cache.enabled = true;
+	assert(cache.CompileStandaloneShaderCached(strict, compile, create));
+	const auto compilesBeforeCachedEdit = compiles;
+	assert(!cache.CompileStandaloneShaderCached(strict, compile, [&](ID3DBlob* blob) {
+		const auto accepted = create(blob);
+		Write("Data/Shaders/Common/value.hlsli", "#define VALUE 11\n");
+		return accepted;
+	}));
+	assert(staleSource && compiles == compilesBeforeCachedEdit);
+	assert(cache.CompileStandaloneShaderCached(strict, compile, create) && !staleSource);
+
+	state.developer = true;
+	state.enablePartialPrecision = true;
+	state.enableAvoidFlowControl = true;
+	REL::Module::vr = true;
+	state.snapshot = std::make_shared<TestState::Defines>();
+	state.snapshot->defines.emplace_back("CAPTURED_GLOBAL", "12");
+	++state.shaderDefinesGeneration;
+	std::shared_ptr<Util::ShaderPreparation> preparation;
+	{
+		std::wstring temporaryPath = L"Data/Shaders/test.hlsl";
+		std::string temporaryName = "EXTRA", temporaryValue = "13", temporaryProfile = "ps_5_0", temporaryEntry = "main", temporaryResource = "OwnedCapture::Shader";
+		const std::vector<std::pair<const char*, const char*>> temporaryDefines{
+			{ temporaryName.c_str(), temporaryValue.c_str() }, { "NULL_MACRO", nullptr }, { "EMPTY_MACRO", "" }
+		};
+		preparation = Util::RequestShaderPreparation(temporaryPath.c_str(), temporaryDefines,
+			temporaryProfile.c_str(), temporaryEntry.c_str(), temporaryResource.c_str());
+		temporaryPath = L"missing.hlsl";
+		temporaryName = "MUTATED";
+		temporaryValue = "99";
+		temporaryProfile = "vs_5_0";
+		temporaryEntry = "missing";
+		temporaryResource = "Mutated::Shader";
+	}
+	assert(preparation && cache.queuedRequest && preparation->state == Util::ShaderPreparation::State::Pending && !preparation->shader);
+	auto& captured = *cache.queuedRequest;
+	assert(captured.source == L"Data/Shaders/test.hlsl" && captured.profile == "ps_5_0" && captured.entryPoint == "main" && captured.resourceName == "OwnedCapture::Shader");
+	assert(captured.requireStableSource && captured.macros[0].name == "EXTRA" && captured.macros[0].definition == "13");
+	assert(captured.macros[1].name == "NULL_MACRO" && !captured.macros[1].definition && captured.macros[2].definition && captured.macros[2].definition->empty());
+	assert(captured.state.developerMode && captured.state.isVR && captured.state.partialPrecision && captured.state.avoidFlowControl && captured.state.skipValidation);
+	assert(captured.state.shaderDefinesGeneration == state.GetShaderDefinesGeneration() && preparation->shaderDefinesGeneration == captured.state.shaderDefinesGeneration);
+	assert((captured.state.defines == std::vector<std::pair<std::string, std::string>>({ { "CAPTURED_GLOBAL", "12" } })));
+	assert(captured.flags & D3DCOMPILE_DEBUG);
+	assert(captured.flags & D3DCOMPILE_PARTIAL_PRECISION);
+	assert(captured.flags & D3DCOMPILE_AVOID_FLOW_CONTROL);
+	assert(captured.flags & D3DCOMPILE_SKIP_VALIDATION);
+	std::vector<D3D_SHADER_MACRO> capturedMacros;
+	for (const auto& macro : captured.macros)
+		capturedMacros.push_back({ macro.name.c_str(), macro.definition ? macro.definition->c_str() : nullptr });
+	capturedMacros.push_back({});
+	const Util::StandaloneShaderRequest frozen{ captured.source, capturedMacros, captured.profile.c_str(), captured.entryPoint.c_str(), captured.flags,
+		captured.state.developerMode, captured.state.digest, captured.state.compilationGeneration, captured.state.sourceGeneration, true };
+	const auto frozenIdentity = SIE::BuildStandaloneCompileKey(frozen).packDigest;
+	state.developer = false;
+	state.enablePartialPrecision = false;
+	state.enableAvoidFlowControl = false;
+	state.snapshot = std::make_shared<TestState::Defines>();
+	REL::Module::vr = false;
+	++state.shaderDefinesGeneration;
+	SIE::globalIdentity = "configuration-changed-after-capture";
+	assert(SIE::BuildStandaloneCompileKey(frozen).packDigest == frozenIdentity);
+	Util::ShaderCompileTiming capturedTiming;
+	const auto capturedShader = Util::CompilePreparedShader(captured, cache, &capturedTiming, &staleSource);
+	assert(capturedShader && !staleSource && capturedTiming.bytecodeCompilationQpcTicks > 0 && capturedTiming.d3dObjectCreationQpcTicks > 0);
+	UINT capturedNameSize = 0;
+	assert(SUCCEEDED(capturedShader->GetPrivateData(Util::WKPDID_D3DDebugObjectNameT, &capturedNameSize, nullptr)));
+	std::string capturedName(capturedNameSize, '\0');
+	assert(SUCCEEDED(capturedShader->GetPrivateData(Util::WKPDID_D3DDebugObjectNameT, &capturedNameSize, capturedName.data())));
+	assert(capturedName == "OwnedCapture::Shader");
+	assert(!Util::IsShaderPreparationCurrent(*preparation) && !Util::IsShaderPreparationCurrent(*preparation, true));
+	assert(cache.IsStandalonePreparationCurrent(*preparation));
+	state.shaderDefinesGeneration = preparation->shaderDefinesGeneration;
+	state.developer = preparation->developerMode;
+	state.enablePartialPrecision = preparation->partialPrecision;
+	state.enableAvoidFlowControl = preparation->avoidFlowControl;
+	assert(Util::IsShaderPreparationCurrent(*preparation));
+	++state.shaderDefinesGeneration;
+	assert(!Util::IsShaderPreparationCurrent(*preparation) && !Util::IsShaderPreparationCurrent(*preparation, true));
+	state.shaderDefinesGeneration = preparation->shaderDefinesGeneration;
+	state.developer = !preparation->developerMode;
+	assert(!Util::IsShaderPreparationCurrent(*preparation, true));
+	state.developer = preparation->developerMode;
+	state.enablePartialPrecision = !preparation->partialPrecision;
+	assert(!Util::IsShaderPreparationCurrent(*preparation, true));
+	state.enablePartialPrecision = preparation->partialPrecision;
+	state.enableAvoidFlowControl = !preparation->avoidFlowControl;
+	assert(!Util::IsShaderPreparationCurrent(*preparation, true));
+	state.enableAvoidFlowControl = preparation->avoidFlowControl;
+	assert(Util::IsShaderPreparationCurrent(*preparation, true));
+	++cache.compilationSet.generation;
+	assert(!Util::IsShaderPreparationCurrent(*preparation) && Util::IsShaderPreparationCurrent(*preparation, true));
+	++SIE::g_shaderSourceGeneration;
+	assert(!Util::IsShaderPreparationCurrent(*preparation, true));
+	winrt::com_ptr<ID3D11Device> replacementDevice;
+	assert(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION,
+		replacementDevice.put(), nullptr, nullptr)));
+	globals::d3d::device = replacementDevice.get();
+	preparation->sourceGeneration = SIE::g_shaderSourceGeneration.load();
+	assert(!Util::IsShaderPreparationCurrent(*preparation, true));
+	globals::d3d::device = device.get();
+	state.developer = false;
+	state.enablePartialPrecision = false;
+	state.enableAvoidFlowControl = false;
+
 	std::ostringstream capturedLog;
 	auto previousLogger = spdlog::default_logger();
 	auto sink = std::make_shared<spdlog::sinks::ostream_sink_mt>(capturedLog);
@@ -438,5 +609,5 @@ int main()
 	assert(!Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0"));
 	std::filesystem::remove("Data/Shaders/test.hlsl");
 	assert(!Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0"));
-	std::cout << "Standalone shader cache: real compiler/WARP, warm reuse, identities, source/include edits, policies, corruption, atomic replacement and invalidation passed\n";
+	std::cout << "Standalone shader cache: real compiler/WARP, warm reuse, identities, source/include edits, policies, corruption, atomic replacement, owned capture and strict source invalidation passed\n";
 }

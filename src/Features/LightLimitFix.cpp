@@ -15,6 +15,7 @@
 #include "Shadercache.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/ComIdentity.h"
 #include "Utils/D3D.h"
 #include "Utils/ExternalEmittance.h"
 #include "Utils/Finite.h"
@@ -1293,6 +1294,7 @@ void LightLimitFix::DrawSettings()
 	if (previousEnableLightsVisualisation != currentEnableLightsVisualisation) {
 		globals::state->SetDefines(settings.EnableLightsVisualisation ? "LLFDEBUG" : "");
 		shaderCache->Clear(RE::BSShader::Type::Lighting);
+		shaderCache->RequestStandaloneShaderClear();
 		previousEnableLightsVisualisation = currentEnableLightsVisualisation;
 	}
 }
@@ -1345,7 +1347,14 @@ void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 
 bool LightLimitFix::IsPerformanceCostMeasurementReady() const
 {
-	return !Util::IsRuntimeToggleBlocked(globals::state) && (settings.EnableContactShadows != 0) == IsContactShadowsRequested();
+	return IsShaderCacheReady() && !Util::IsRuntimeToggleBlocked(globals::state) && (settings.EnableContactShadows != 0) == IsContactShadowsRequested();
+}
+
+Feature::SettingsHeaderStatus LightLimitFix::GetSettingsHeaderStatus() const
+{
+	if (clusterBuildingCS.HasFailed() || clusterCullingCS.HasFailed())
+		return { "Failed", true };
+	return IsShaderCacheReady() ? SettingsHeaderStatus{} : SettingsHeaderStatus{ "Pending", true };
 }
 
 json LightLimitFix::CapturePerformanceSettingsState() const
@@ -1398,8 +1407,8 @@ void LightLimitFix::SetupResources()
 	clusterSize[1] = ((uint)screenSize.y + 63) / 64;
 	clusterSize[2] = 32;
 	uint clusterCount = clusterSize[0] * clusterSize[1] * clusterSize[2];
-	static ID3D11Device* shaderDevice = nullptr;
-	if (shaderDevice != globals::d3d::device) {
+	const auto deviceIdentity = Util::GetComIdentity(globals::d3d::device);
+	if (!deviceIdentity || shaderDeviceIdentity != deviceIdentity) {
 		delete lightBuildingCB;
 		lightBuildingCB = nullptr;
 		delete lightCullingCB;
@@ -1408,7 +1417,7 @@ void LightLimitFix::SetupResources()
 		strictLightDataCB = nullptr;
 		clusterBuildingCS.Reset();
 		clusterCullingCS.Reset();
-		shaderDevice = globals::d3d::device;
+		shaderDeviceIdentity = deviceIdentity;
 	}
 
 	{
@@ -3125,12 +3134,39 @@ void LightLimitFix::PrepareShaderCache()
 
 void LightLimitFix::CompileComputeShaders()
 {
-	clusterBuildingCS.Get(
+	clusterBuildingCS.Prepare(
 		L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0",
 		"main", "LightLimitFix::ClusterBuildingCS");
-	clusterCullingCS.Get(
+	clusterCullingCS.Prepare(
 		L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0",
 		"main", "LightLimitFix::ClusterCullingCS");
+}
+
+bool LightLimitFix::WaitShaderCacheReady()
+{
+	constexpr unsigned kMaximumPreparationAttempts = 3;
+	for (unsigned attempt = 0; attempt < kMaximumPreparationAttempts; ++attempt) {
+		const bool buildingReady = clusterBuildingCS.Wait() != nullptr;
+		const bool cullingReady = clusterCullingCS.Wait() != nullptr;
+		if (buildingReady && cullingReady && clusterBuildingCS.IsCurrent() && clusterCullingCS.IsCurrent())
+			return true;
+		if (clusterBuildingCS.HasFailed() || clusterCullingCS.HasFailed())
+			return false;
+		if (attempt + 1 < kMaximumPreparationAttempts) {
+			// Both programs must share the current compiler and source generation.
+			ClearShaderCache();
+			CompileComputeShaders();
+		}
+	}
+	clusterBuildingCS.Fail();
+	clusterCullingCS.Fail();
+	logger::error("Light Limit Fix shader preparation failed after repeated invalidation");
+	return false;
+}
+
+bool LightLimitFix::IsShaderCacheReady() const
+{
+	return clusterBuildingCS.IsReady() && clusterCullingCS.IsReady();
 }
 
 float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radius)
@@ -3548,12 +3584,8 @@ void LightLimitFix::UpdateStructure()
 		!contactShadowIndexCounter || !contactShadowIndexList || !contactShadowGrid) {
 		return;
 	}
-	auto* clusterBuilding = clusterBuildingCS.Get(
-		L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0",
-		"main", "LightLimitFix::ClusterBuildingCS");
-	auto* clusterCulling = clusterCullingCS.Get(
-		L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0",
-		"main", "LightLimitFix::ClusterCullingCS");
+	auto* clusterBuilding = clusterBuildingCS.get();
+	auto* clusterCulling = clusterCullingCS.get();
 	if (!clusterBuilding || !clusterCulling) {
 		const UINT zero[4]{ 0, 0, 0, 0 };
 		context->ClearUnorderedAccessViewUint(lightGrid->uav.get(), zero);

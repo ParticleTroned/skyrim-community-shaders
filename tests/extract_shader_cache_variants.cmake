@@ -93,7 +93,7 @@ extract_between(
     "\n\tvoid ShaderCache::EvictShaderResources(" "shader_release_under_test.h"
 )
 extract_between(
-    "${_source}" "\tvoid ShaderCache::RequestFeatureShaderClear("
+    "${_source}" "\tvoid ShaderCache::RequestStandaloneShaderClear("
     "\n\tnamespace" "shader_feature_clear_under_test.h"
 )
 
@@ -118,4 +118,22 @@ extract_between(
 extract_between(
     "${_source}" "\tbool ShaderCache::AddCompletedShader("
     "\n\tstd::pair<ShaderCache::ClaimResult, ID3DBlob*>" "shader_add_completed_under_test.h"
+)
+
+extract_between(
+    "${_header}" "\t\tstruct fileAction" "\n\t\tstd::mutex actionMutex;"
+    "shader_watcher_action_under_test.h"
+)
+extract_between(
+    "${_source}" "\tvoid UpdateListener::handleFileAction(" "\n}"
+    "shader_watcher_handle_under_test.h"
+)
+extract_between(
+    "${_source}" "\tvoid UpdateListener::UpdateCache(" "\n\t\t// Skip directories"
+    "shader_watcher_invalidation_under_test.h"
+)
+file(APPEND "${OUTPUT_DIRECTORY}/shader_watcher_invalidation_under_test.h" "\n\t\tobservedPaths.push_back(filePath);\n\t}\n")
+extract_between(
+    "${_source}" "\t\t\t\t\tcase efsw::Actions::Add:" "\n\t\t\t\t\tdefault:"
+    "shader_watcher_routes_under_test.h"
 )

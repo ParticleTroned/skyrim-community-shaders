@@ -911,6 +911,8 @@ void State::Setup()
 		++loadedFeatureSetupCount;
 	});
 	globals::deferred->SetupResources();
+	if (globals::features::lightLimitFix.loaded)
+		globals::features::lightLimitFix.WaitShaderCacheReady();
 	CompleteRenderTargetResourcePublication(
 		publicationGeneration,
 		loadedFeatureSetupCount);
@@ -953,6 +955,8 @@ void State::SetupRenderTargetResources()
 		++loadedFeatureSetupCount;
 	});
 	globals::deferred->SetupResources();
+	if (globals::features::lightLimitFix.loaded)
+		globals::features::lightLimitFix.WaitShaderCacheReady();
 	CompleteRenderTargetResourcePublication(
 		publicationGeneration,
 		loadedFeatureSetupCount);

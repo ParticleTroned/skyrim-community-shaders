@@ -8,6 +8,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <future>
 #include <iostream>
@@ -116,6 +117,19 @@ struct Feature
 	}
 };
 
+namespace efsw
+{
+	using WatchID = std::int64_t;
+	enum class Actions
+	{
+		Add,
+		Delete,
+		Modified,
+		Moved
+	};
+	using Action = Actions;
+}
+
 namespace SIE
 {
 #include "shader_task_declarations.h"
@@ -171,6 +185,8 @@ namespace SIE
 #include "shader_capture_state.h"
 #include "shader_category_flag.h"
 		std::atomic<uint8_t> pendingFeatureClear{ 0 };
+		std::atomic_bool pendingStandaloneShaderClear{ false };
+		void RequestStandaloneShaderClear();
 		void RequestFeatureShaderClear(bool scoped);
 		void ProcessPendingFeatureClear();
 		std::vector<uint32_t> pixelRequests;
@@ -201,6 +217,27 @@ namespace SIE
 			deletedPaths.insert(deletedPaths.end(), a_paths.begin(), a_paths.end());
 		}
 	};
+	unsigned sourceInvalidations = 0;
+	void InvalidateShaderSourceCaches() { ++sourceInvalidations; }
+	struct UpdateListener
+	{
+#include "shader_watcher_action_under_test.h"
+		std::mutex actionMutex;
+		std::vector<fileAction> queue;
+		std::vector<std::filesystem::path> observedPaths;
+		void handleFileAction(efsw::WatchID, const std::string&, const std::string&, efsw::Action, std::string);
+		void UpdateCache(const std::filesystem::path&, ShaderCache*, bool&);
+		void Process(const fileAction& fAction, ShaderCache* cache)
+		{
+			const auto filePath = std::filesystem::path(fAction.dir) / fAction.filename;
+			bool fileDone = false;
+			switch (fAction.action) {
+#include "shader_watcher_routes_under_test.h"
+			default:
+				break;
+			}
+		}
+	};
 }
 
 namespace globals
@@ -226,6 +263,34 @@ namespace globals
 	State* state = &stateStorage;
 	Deferred* deferred = &deferredStorage;
 	SIE::ShaderCache* shaderCache = nullptr;
+	namespace features
+	{
+		struct LightLimitFix
+		{
+			bool loaded = false;
+			unsigned clears = 0, preparations = 0, waits = 0;
+			std::function<void()> duringClear, duringPrepare, duringWait;
+			void ClearShaderCache()
+			{
+				++clears;
+				if (duringClear)
+					duringClear();
+			}
+			void PrepareShaderCache()
+			{
+				++preparations;
+				if (duringPrepare)
+					duringPrepare();
+			}
+			bool WaitShaderCacheReady()
+			{
+				++waits;
+				if (duringWait)
+					duringWait();
+				return true;
+			}
+		} lightLimitFix;
+	}
 }
 
 namespace Util
@@ -242,6 +307,8 @@ namespace SIE
 #include "shader_eviction_under_test.h"
 #include "shader_feature_clear_under_test.h"
 #include "shader_queue_add_under_test.h"
+#include "shader_watcher_handle_under_test.h"
+#include "shader_watcher_invalidation_under_test.h"
 }
 
 struct Upscaling
@@ -284,6 +351,10 @@ namespace
 		cache.RequestFeatureShaderClear(true);
 		Require(first.clears == 0 && first.fullClears == 0 && globals::deferred->clears == 0);
 		std::vector<unsigned> order;
+		auto& llf = globals::features::lightLimitFix;
+		llf = {};
+		llf.loaded = true;
+		llf.duringWait = [&] { order.push_back(5); };
 		first.duringClear = [&] { order.push_back(1); };
 		second.duringClear = [&] { order.push_back(2); };
 		first.duringPrepare = [&] {
@@ -304,18 +375,19 @@ namespace
 		blocked.get();
 		Require(completed && order.empty() && cache.pendingFeatureClear == 3);
 		cache.ProcessPendingFeatureClear();
-		Require(order == std::vector<unsigned>({ 1, 2, 3, 4 }));
+		Require(order == std::vector<unsigned>({ 1, 2, 3, 4, 5 }) && llf.waits == 1);
 		Require(first.fullClears == 1 && second.fullClears == 1 && first.clears == 0 && second.clears == 0);
 		Require(unloaded.fullClears == 0 && unloaded.clears == 0 && unloaded.preparations == 0);
 		Require(globals::deferred->clears == 1 && cache.pendingFeatureClear == 1);
 		order.clear();
 		first.duringPrepare = [&] { order.push_back(3); };
 		cache.ProcessPendingFeatureClear();
-		Require(order == std::vector<unsigned>({ 1, 2, 3, 4 }));
+		Require(order == std::vector<unsigned>({ 1, 2, 3, 4, 5 }) && llf.waits == 2);
 		Require(first.clears == 1 && second.clears == 1 && first.preparations == 2 && second.preparations == 2);
 		Require(globals::deferred->clears == 2 && cache.pendingFeatureClear == 0);
 		cache.ProcessPendingFeatureClear();
-		Require(globals::deferred->clears == 2);
+		Require(globals::deferred->clears == 2 && llf.waits == 2);
+		llf = {};
 		Feature::GetFeatureList().clear();
 	}
 
@@ -356,6 +428,91 @@ namespace
 			Require(logger::errorCount == errorsBefore + 1);
 			Feature::GetFeatureList().clear();
 		}
+	}
+
+	void TestStandaloneClearBoundary()
+	{
+		ShaderCache cache;
+		Feature unrelated;
+		Feature::GetFeatureList() = { &unrelated };
+		auto& llf = globals::features::lightLimitFix;
+		llf = {};
+		llf.loaded = true;
+		std::vector<unsigned> order;
+		llf.duringClear = [&] { order.push_back(1); };
+		llf.duringPrepare = [&] { order.push_back(2); };
+		llf.duringWait = [&] { order.push_back(3); };
+		const auto deferredClears = globals::deferred->clears;
+		cache.RequestStandaloneShaderClear();
+		cache.RequestStandaloneShaderClear();
+		std::future<void> denied;
+		bool returned = false;
+		{
+			const Util::RendererOwnership ownership(&Util::rendererLock, true);
+			denied = std::async(std::launch::async, [&] { cache.ProcessPendingFeatureClear(); });
+			returned = denied.wait_for(std::chrono::seconds(3)) == std::future_status::ready;
+		}
+		denied.get();
+		Require(returned && order.empty() && cache.pendingStandaloneShaderClear);
+		cache.ProcessPendingFeatureClear();
+		Require(order == std::vector<unsigned>({ 1, 2, 3 }) && !cache.pendingStandaloneShaderClear);
+		Require(llf.clears == 1 && llf.preparations == 1 && llf.waits == 1);
+		Require(unrelated.clears == 0 && unrelated.fullClears == 0 && unrelated.preparations == 0 && globals::deferred->clears == deferredClears);
+		cache.ProcessPendingFeatureClear();
+		Require(llf.waits == 1);
+		llf.duringPrepare = [&] { throw std::runtime_error("expected standalone preparation failure"); };
+		cache.RequestStandaloneShaderClear();
+		const auto errorsBefore = logger::errorCount;
+		cache.ProcessPendingFeatureClear();
+		Require(cache.pendingStandaloneShaderClear && llf.waits == 1 && logger::errorCount == errorsBefore + 1);
+		llf.duringPrepare = [&] { order.push_back(2); };
+		order.clear();
+		cache.ProcessPendingFeatureClear();
+		Require(order == std::vector<unsigned>({ 1, 2, 3 }) && !cache.pendingStandaloneShaderClear && llf.waits == 2);
+		order.clear();
+		unrelated.duringClear = [&] { order.push_back(4); };
+		unrelated.duringPrepare = [&] { order.push_back(5); };
+		cache.RequestFeatureShaderClear(false);
+		cache.RequestStandaloneShaderClear();
+		cache.ProcessPendingFeatureClear();
+		Require(order == std::vector<unsigned>({ 4, 5, 3 }) && !cache.pendingStandaloneShaderClear && llf.waits == 3);
+		llf.loaded = false;
+		cache.RequestStandaloneShaderClear();
+		cache.ProcessPendingFeatureClear();
+		Require(!cache.pendingStandaloneShaderClear && llf.waits == 3);
+		llf = {};
+		Feature::GetFeatureList().clear();
+	}
+
+	void TestWatcherActions()
+	{
+		SIE::UpdateListener listener;
+		using Action = efsw::Actions;
+		listener.handleFileAction(1, "Data/Shaders", "First.hlsl", Action::Modified, "");
+		listener.handleFileAction(1, "Data/Shaders", "First.hlsl", Action::Modified, "");
+		listener.handleFileAction(1, "Data/Shaders", "Second.hlsl", Action::Modified, "");
+		listener.handleFileAction(1, "Data/OtherShaders", "Second.hlsl", Action::Modified, "");
+		listener.handleFileAction(2, "Data/OtherShaders", "Second.hlsl", Action::Modified, "");
+		listener.handleFileAction(2, "Data/OtherShaders", "Second.hlsl", Action::Delete, "");
+		listener.handleFileAction(2, "Data/OtherShaders", "Second.hlsl", Action::Moved, "Old.hlsl");
+		listener.handleFileAction(2, "Data/OtherShaders", "Second.hlsl", Action::Moved, "Different.hlsl");
+		listener.handleFileAction(2, "Data/OtherShaders", "Second.hlsl", Action::Moved, "Different.hlsl");
+		listener.handleFileAction(1, "Data/Shaders", "First.hlsl", Action::Modified, "");
+		Require(listener.queue.size() == 8 && listener.queue[1].filename == "Second.hlsl" && listener.queue[5].oldFilename == "Old.hlsl");
+		ShaderCache cache;
+		listener.observedPaths.clear();
+		const auto invalidations = SIE::sourceInvalidations;
+		listener.Process({ 1, "Data/Shaders", "Archived.bak", Action::Moved, "OldProgram.HLSL" }, &cache);
+		Require(listener.observedPaths == std::vector<std::filesystem::path>({ "Data/Shaders/Archived.bak", "Data/Shaders/OldProgram.HLSL" }));
+		Require(cache.pendingStandaloneShaderClear && SIE::sourceInvalidations == invalidations + 2);
+		cache.pendingStandaloneShaderClear = false;
+		listener.Process({ 1, "Data/Shaders", "Unrelated.bak", Action::Modified, "" }, &cache);
+		Require(!cache.pendingStandaloneShaderClear);
+		listener.Process({ 1, "Data/Shaders", "MissingProgram.hlsl", Action::Delete, "" }, &cache);
+		Require(cache.pendingStandaloneShaderClear);
+		cache.pendingStandaloneShaderClear = false;
+		listener.Process({ 1, "Data/Shaders/Common", "Changed.HLSLI", Action::Modified, "" }, &cache);
+		Require(cache.pendingStandaloneShaderClear);
 	}
 
 	void TestQueueWithSharedBytecode()
@@ -561,6 +718,8 @@ int main()
 	try {
 		TestFeatureClearBoundary();
 		TestFeatureClearInvalidationFailure();
+		TestStandaloneClearBoundary();
+		TestWatcherActions();
 		TestQueueWithSharedBytecode();
 		TestCaptureAndClearVariants(false);
 		TestCaptureAndClearVariants(true);

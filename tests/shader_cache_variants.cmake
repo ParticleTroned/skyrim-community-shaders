@@ -15,6 +15,10 @@ foreach(
         shader_add_completed_under_test.h
         shader_release_under_test.h
         shader_feature_clear_under_test.h
+        shader_watcher_action_under_test.h
+        shader_watcher_handle_under_test.h
+        shader_watcher_invalidation_under_test.h
+        shader_watcher_routes_under_test.h
         shader_generation_check.h
         shader_bytecode_map.h
         shader_bytecode_hooks.h

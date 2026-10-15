@@ -133,6 +133,7 @@ int main() {
         driver = r'''
 #include <cassert>
 #include <cstdint>
+#include "Utils/ShaderLifetime.h"
 struct ID3D11VertexShader {};
 struct ID3D11PixelShader {};
 namespace RE {
@@ -143,6 +144,8 @@ struct VertexShader { ID3D11VertexShader* shader; };
 struct PixelShader { ID3D11PixelShader* shader; };
 }
 }
+Util::ShaderLifetime::RetainedBinding<RE::BSGraphics::VertexShader> g_retainedVertexShader;
+Util::ShaderLifetime::RetainedBinding<RE::BSGraphics::PixelShader> g_retainedPixelShader;
 struct State {
     uint32_t modifiedVertexDescriptor = 1, modifiedPixelDescriptor = 2;
     bool enabled = true, deferredPixelShaderMissing = false;
@@ -151,8 +154,8 @@ struct State {
 struct Cache {
     enum class PixelShaderLookup { Draw };
     bool enabled = true;
-    RE::BSGraphics::VertexShader* vertex = nullptr;
-    RE::BSGraphics::PixelShader* pixel = nullptr;
+    std::shared_ptr<RE::BSGraphics::VertexShader> vertex;
+    std::shared_ptr<RE::BSGraphics::PixelShader> pixel;
     bool IsEnabled() const { return enabled; }
     auto GetVertexShader(RE::BSShader&, uint32_t) { return vertex; }
     auto GetPixelShader(RE::BSShader&, uint32_t, PixelShaderLookup) { return pixel; }
@@ -187,8 +190,10 @@ Flags flags; Flags* stateUpdateFlags = &flags;
 }
 ID3D11VertexShader nativeVS, customVS;
 ID3D11PixelShader nativePS, customPS;
-RE::BSGraphics::VertexShader fixtureNativeVertex{&nativeVS}, customVertex{&customVS};
-RE::BSGraphics::PixelShader fixtureNativePixel{&nativePS}, customPixel{&customPS};
+RE::BSGraphics::VertexShader fixtureNativeVertex{&nativeVS};
+RE::BSGraphics::PixelShader fixtureNativePixel{&nativePS};
+auto customVertex = std::make_shared<RE::BSGraphics::VertexShader>(&customVS);
+auto customPixel = std::make_shared<RE::BSGraphics::PixelShader>(&customPS);
 bool nativeReady = true;
 bool publishDuringSetup = false;
 bool NativeSetup(RE::BSShader*, uint32_t) {
@@ -197,8 +202,8 @@ bool NativeSetup(RE::BSShader*, uint32_t) {
     globals::d3d::contextValue.vertex = globals::cacheValue.vertex ? &customVS : &nativeVS;
     globals::d3d::contextValue.pixel = globals::cacheValue.pixel ? &customPS : &nativePS;
     if (publishDuringSetup) {
-        globals::cacheValue.vertex = &customVertex;
-        globals::cacheValue.pixel = &customPixel;
+        globals::cacheValue.vertex = customVertex;
+        globals::cacheValue.pixel = customPixel;
     }
     return nativeReady;
 }
@@ -206,22 +211,22 @@ METHOD
 int main() {
     RE::BSShader shader;
     // A partial asynchronous pair must restore both native stages.
-    globals::cacheValue.vertex = &customVertex;
+    globals::cacheValue.vertex = customVertex;
     assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
     assert(globals::d3d::contextValue.vertex == &nativeVS);
     assert(globals::d3d::contextValue.pixel == &nativePS);
     assert(globals::game::vertex == &fixtureNativeVertex);
     // A ready pixel stage cannot restore native outputs into deferred targets.
     globals::cacheValue.vertex = nullptr;
-    globals::cacheValue.pixel = &customPixel;
+    globals::cacheValue.pixel = customPixel;
     globals::deferred->deferredPass = true;
     assert(!BSGrassShader_SetupTechnique::thunk(&shader, 0));
     assert(!globals::deferred->captureReady);
     assert(globals::d3d::contextValue.pixel == &customPS);
     // The next draw succeeds as soon as the matching vertex stage arrives.
-    globals::cacheValue.vertex = &customVertex;
+    globals::cacheValue.vertex = customVertex;
     assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
-    assert(globals::game::vertex == &customVertex && globals::game::pixel == &customPixel);
+    assert(globals::game::vertex == customVertex.get() && globals::game::pixel == customPixel.get());
     globals::deferred->deferredPass = false;
     globals::cacheValue.vertex = nullptr;
     assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
@@ -232,7 +237,7 @@ int main() {
     assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
     assert(globals::d3d::contextValue.vertex == &customVS);
     assert(globals::d3d::contextValue.pixel == &customPS);
-    assert(globals::game::vertex == &customVertex && globals::game::pixel == &customPixel);
+    assert(globals::game::vertex == customVertex.get() && globals::game::pixel == customPixel.get());
     assert(globals::game::flags.dirty);
     publishDuringSetup = false;
     nativeReady = false;
@@ -257,7 +262,7 @@ int main() {
             cpp.write_text(driver, encoding="utf-8")
             compiled = subprocess.run(
                 [compiler, "/nologo", "/std:c++20", "/EHsc", "/O2", "/W4", "/WX",
-                 str(cpp), f"/Fe:{exe}"], cwd=directory, capture_output=True, text=True, timeout=60)
+                 f"/I{ROOT / 'src'}", str(cpp), f"/Fe:{exe}"], cwd=directory, capture_output=True, text=True, timeout=60)
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
             result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

@@ -2309,6 +2309,13 @@ if(BUILD_CONTROLLER_TESTS)
     )
 
     add_controller_test(
+        shadow_culling_snapshot_test
+        ShadowCullingSnapshot
+        tests/shadow_culling_snapshot_test.cpp
+    )
+    set_tests_properties(ShadowCullingSnapshot PROPERTIES TIMEOUT 30)
+
+    add_controller_test(
         scene_light_snapshot_test
         SceneLightSnapshot
         tests/scene_light_snapshot_test.cpp

@@ -1,5 +1,6 @@
 #include "ShadowCulling.h"
 #include "Globals.h"
+#include "ShadowCullingSnapshot.h"
 #include "State.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -33,7 +34,7 @@ namespace LightLimitFixDetail::ShadowCulling
 			bool interior = false;
 			std::uint64_t sampledAt = 0;
 		};
-		std::atomic<std::shared_ptr<const Snapshot>> snapshot;
+		SnapshotPublication<Snapshot> snapshot;
 		std::atomic_bool available{ false }, active{ false };
 		bool conflict = false;
 		std::string failure;
@@ -83,7 +84,8 @@ namespace LightLimitFixDetail::ShadowCulling
 		{
 			if (!active.load(std::memory_order_acquire) || !culler || !globals::state || globals::state->IsSaveLoadSafeModeActive())
 				return false;
-			const auto captured = snapshot.load();
+			thread_local SnapshotPublication<Snapshot>::Reader reader{ snapshot };
+			const auto captured = reader.Acquire();
 			const auto now = GetTickCount64();
 			if (!captured || now < captured->sampledAt || now - captured->sampledAt > 250)
 				return false;
@@ -201,7 +203,7 @@ namespace LightLimitFixDetail::ShadowCulling
 		if (!available.load() || !featureEnabled || !settings.Active() || !globals::game::smState || !globals::game::shadowState || !globals::state ||
 			globals::state->IsSaveLoadSafeModeActive() || (globals::game::ui && globals::game::ui->GameIsPaused())) {
 			active.store(false, std::memory_order_release);
-			snapshot.store({});
+			snapshot.Publish({});
 			return;
 		}
 		try {
@@ -216,14 +218,14 @@ namespace LightLimitFixDetail::ShadowCulling
 					!std::isfinite(view.projMatrixUnjittered._11) || view.projMatrixUnjittered._11 == 0 ||
 					!std::isfinite(view.projMatrixUnjittered._22) || view.projMatrixUnjittered._22 == 0) {
 					active.store(false, std::memory_order_release);
-					snapshot.store({});
+					snapshot.Publish({});
 					return;
 				}
 			}
 			auto* scene = globals::game::smState->shadowSceneNode[0];
 			if (!scene) {
 				active.store(false, std::memory_order_release);
-				snapshot.store({});
+				snapshot.Publish({});
 				return;
 			}
 			captured->scene.reset(scene);
@@ -241,11 +243,11 @@ namespace LightLimitFixDetail::ShadowCulling
 					if (light && light.get() != data.sunShadowDirLight)
 						CaptureLight(*captured, light.get(), Pass::Point);
 			}
-			snapshot.store(std::move(captured));
+			snapshot.Publish(std::move(captured));
 			active.store(true, std::memory_order_release);
 		} catch (const std::exception& error) {
 			active.store(false, std::memory_order_release);
-			snapshot.store({});
+			snapshot.Publish({});
 			failure = error.what();
 			available = false;
 			logger::warn("[LightLimitFix] Native shadow culling suspended: {}", failure);
@@ -283,7 +285,7 @@ namespace LightLimitFixDetail::ShadowCulling
 	nlohmann::json Status(const Settings& settings)
 	{
 		nlohmann::json result{ { "settings", settings }, { "available", available.load() }, { "spsConflict", conflict }, { "error", failure } };
-		const auto captured = snapshot.load();
+		const auto captured = snapshot.Read();
 		result["active"] = active.load() && captured != nullptr;
 		result["shadowCameras"] = captured ? captured->cameraCount : 0;
 		result["eyes"] = captured ? captured->eyeCount : 0;

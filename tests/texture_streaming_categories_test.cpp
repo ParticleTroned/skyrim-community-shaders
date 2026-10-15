@@ -20,12 +20,6 @@
 #include <string>
 #include <vector>
 
-namespace CSX::Diagnostics::Stutters::AssetLoadHooks
-{
-	inline bool ddsAvailable = false;
-	void SetDDSAvailable(bool available) noexcept { ddsAvailable = available; }
-}
-
 namespace RE
 {
 	struct NiPoint3

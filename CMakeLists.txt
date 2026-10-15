@@ -3382,6 +3382,10 @@ if(BUILD_CONTROLLER_TESTS)
             tests/extract_source_region.cmake
         VERBATIM
     )
+    add_custom_target(
+        cost_measurement_sources
+        DEPENDS ${_cost_measurement_headers}
+    )
     add_controller_test(
         performance_tuning_measurement_test
         PerformanceTuningMeasurement
@@ -3403,10 +3407,7 @@ if(BUILD_CONTROLLER_TESTS)
             performance_tuning_measurement_test
             performance_tuning_measurement_devbench_test
     )
-        target_sources(
-            ${_measurement_target}
-            PRIVATE ${_cost_measurement_headers}
-        )
+        add_dependencies(${_measurement_target} cost_measurement_sources)
         target_include_directories(
             ${_measurement_target}
             PRIVATE "${_cost_measurement_dir}"
@@ -4907,6 +4908,10 @@ if(BUILD_CONTROLLER_TESTS)
             tests/extract_source_region.cmake
         VERBATIM
     )
+    add_custom_target(
+        vr_live_timing_sources
+        DEPENDS "${_vr_live_timing_header}"
+    )
     add_controller_test(vr_live_timing_test VRLiveTiming tests/vr_live_timing_test.cpp)
     foreach(
         _target
@@ -4916,7 +4921,7 @@ if(BUILD_CONTROLLER_TESTS)
             performance_tuning_measurement_test
             performance_tuning_measurement_devbench_test
     )
-        target_sources(${_target} PRIVATE "${_vr_live_timing_header}")
+        add_dependencies(${_target} vr_live_timing_sources)
         target_include_directories(
             ${_target}
             PRIVATE

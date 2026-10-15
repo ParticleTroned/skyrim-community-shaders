@@ -29,4 +29,4 @@ add_controller_test(background_blur_initialization_test BackgroundBlurInitializa
 add_dependencies(background_blur_initialization_test ui_regression_sources)
 target_include_directories(background_blur_initialization_test PRIVATE "${_ui_regression_dir}")
 target_compile_definitions(background_blur_initialization_test PRIVATE CSX_BLUR_SHADER_DIR="${PROJECT_SOURCE_DIR}/package/Shaders/Menu")
-target_link_libraries(background_blur_initialization_test PRIVATE d3d11 d3dcompiler dxguid runtimeobject)
+target_link_libraries(background_blur_initialization_test PRIVATE xxHash::xxhash d3d11 d3dcompiler dxguid runtimeobject)

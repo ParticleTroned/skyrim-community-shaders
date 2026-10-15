@@ -156,7 +156,7 @@ namespace
 		f.context->UpdateSubresource(f.input.Get(), 0, nullptr, scene.data(), kWidth * sizeof(Pixel), 0);
 		for (const Projection projection : { Projection{ 1, 0, 0, 0, 1, 0, 0, 0, 1 },
 				 Projection{ .93, .04, .12, -.02, 1.03, .015, .08, .01, 1 } }) {
-			for (const float percent : { 70.0f, 100.0f, 130.0f }) {
+			for (const float percent : { 70.0f, 85.0f, kMaximumPercent }) {
 				for (const float feather : { 0.0f, 0.0001f, 0.05f, 0.1f }) {
 					const Reference reference{ .version = FoveatedMaskCalibration::kReferenceVersion,
 						.outer = { .scale = 0.6f, .horizontalScale = 1.2f, .centers = { .4f, .48f, .6f, .52f } },

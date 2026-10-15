@@ -167,8 +167,13 @@ void CheckHeadsetSetupTransaction()
 	Require(!CheckCoverage(fitting, 50, applied.outer, applied.centerScale, applied.fullImage, false).hasGap,
 		"Applied slider values must retain verified full-strength headset coverage");
 	const auto scaled = candidate;
+	for (float percent : { kMinimumPercent - 1, kMaximumPercent + 1, kMaximumReferencePercent }) {
+		auto invalid = scaled;
+		Require(!upscaling.PrepareFoveatedMaskCalibration(invalid, CaptureMode::Reuse, percent, error) && invalid == scaled,
+			"Unsupported coverage requests must fail without changing the selected fit");
+	}
 	for (bool hardEdge : { false, true }) {
-		for (float percent : { 50.0f, 65.0f, 80.0f, 115.0f, 130.0f }) {
+		for (float percent : { 50.0f, 65.0f, 80.0f, 90.0f, kMaximumPercent }) {
 			auto manual = baseline;
 			manual.foveatedDisableOuterFeather = hardEdge;
 			Require(upscaling.PrepareFoveatedMaskCalibration(manual, CaptureMode::Reuse, percent, error),
@@ -308,7 +313,7 @@ int main()
 			"Hard-edge capture must use the full-strength core while preserving configured-fade compatibility");
 		auto fittingReference = reference;
 		fittingReference.feather = GetNormalFoveatedBlendFeather(upscaling.settings, false);
-		for (float percent : { 70.0f, 100.0f, 130.0f }) {
+		for (float percent : { 70.0f, 85.0f, FoveatedMaskCalibration::kMaximumPercent }) {
 			const auto fit = FoveatedMaskCalibration::Solve(fittingReference, percent);
 			Require(fit.has_value(), "Saved hard-edge references must support automatic scaling");
 			const auto coverage = FoveatedMaskCalibration::CheckCoverage(reference, percent, fit->geometry,

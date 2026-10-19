@@ -3669,6 +3669,53 @@ if(BUILD_CONTROLLER_TESTS)
         tests/reflex_policy_test.cpp
     )
     add_controller_test(
+        reflex_capture_test
+        ReflexCapture
+        tests/reflex_capture_test.cpp
+    )
+    target_compile_definitions(
+        reflex_capture_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    add_controller_test(
+        reflex_production_isolation_test
+        ReflexProductionIsolation
+        tests/reflex_production_isolation_test.cpp
+    )
+    target_sources(
+        reflex_production_isolation_test
+        PRIVATE
+            src/Features/Upscaling/ReflexDiagnostics.cpp
+            src/Features/Upscaling/ReflexDiagnosticSuite.cpp
+            src/Features/Upscaling/ReflexPresentation.cpp
+    )
+    add_controller_test(
+        reflex_presentation_test
+        ReflexPresentation
+        tests/reflex_presentation_test.cpp
+    )
+    target_compile_definitions(
+        reflex_presentation_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED NOMINMAX
+    )
+    target_link_libraries(
+        reflex_presentation_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_controller_test(
+        reflex_report_test
+        ReflexReport
+        tests/reflex_report_test.cpp
+    )
+    target_compile_definitions(
+        reflex_report_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    target_link_libraries(
+        reflex_report_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_controller_test(
         light_limit_fix_vr_hook_policy_test
         LightLimitFixVRHookPolicy
         tests/light_limit_fix_vr_hook_policy_test.cpp

@@ -24,6 +24,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/D3DTextureLifetimeTracker.h"
 #	include "Diagnostics/EngineStutterMonitor.h"
+#	include "Features/Upscaling/ReflexPresentation.h"
 #	include "Diagnostics/AssetLoadHooks.h"
 #	include "Features/Upscaling/VRRenderScaleDevBenchBridge.h"
 #endif
@@ -1061,9 +1062,20 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ReflexDiagnostics::Presentation::PresentScope reflexPresent(This, SyncInterval, Flags, globals::state ? globals::state->frameCount : 0);
+#endif
 		// Flat-screen status probes must not draw or advance frame accounting.
-		if (!globals::game::isVR && (Flags & DXGI_PRESENT_TEST) != 0)
+		if (!globals::game::isVR && (Flags & DXGI_PRESENT_TEST) != 0) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			reflexPresent.BeginCall();
+			const auto result = func(This, SyncInterval, Flags);
+			reflexPresent.EndCall(result);
+			return result;
+#else
 			return func(This, SyncInterval, Flags);
+#endif
+		}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		CSX::Diagnostics::Stutters::Scope stutterPresent("DXGI::PresentHook", CSX::Diagnostics::Stutters::Boundary::Present);
@@ -1106,7 +1118,13 @@ struct IDXGISwapChain_Present
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			CSX::Diagnostics::Stutters::Scope stutterDriver("DXGI::PresentDriver");
 #endif
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			reflexPresent.BeginCall();
+#endif
 			retval = func(This, SyncInterval, Flags);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			reflexPresent.EndCall(retval);
+#endif
 		}
 		if (flatPresent)
 			globals::profiler->CompleteFlatPresent(retval);

@@ -12,6 +12,7 @@
 #include <string_view>
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "ReflexDiagnostics.h"
 #	include <atomic>
 #	include <cstring>
 #	include <mutex>
@@ -3892,7 +3893,12 @@ bool Streamline::EnsureReflexDisabledForFrameGeneration()
 	disableOptions.mode = sl::ReflexMode::eOff;
 	disableOptions.frameLimitUs = 0;
 	disableOptions.useMarkersToOptimize = false;
-	if (SL_FAILED(result, slReflexSetOptions(disableOptions))) {
+	const auto result = slReflexSetOptions(disableOptions);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	++reflexOptionsSequence;
+	reflexLastOptionsResult = static_cast<int32_t>(result);
+#endif
+	if (result != sl::Result::eOk) {
 		frameGenerationQuarantinedByReflex.store(true, std::memory_order_release);
 		logger::error(
 			"[Streamline] Failed to disable Reflex before Frame Generation: {}. Frame Generation is quarantined until restart.",
@@ -3909,12 +3915,18 @@ bool Streamline::EnsureReflexDisabledForFrameGeneration()
 
 void Streamline::UpdateReflex()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	ReflexDiagnostics::Scope diagnostics(*this);
+#endif
 	if (!initialized || !reflexSupportedOnCurrentAdapter || !featureReflex || !slReflexSetOptions)
 		return;
 
 	const auto& upscaling = globals::features::upscaling;
 	const bool reflexBlockedByFrameGeneration = upscaling.IsFrameGenerationDx12PathActive();
 	if (reflexBlockedByFrameGeneration) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		diagnostics.record.reason = "frame_generation";
+#endif
 		(void)EnsureReflexDisabledForFrameGeneration();
 		lastReflexSleepFrame = UINT32_MAX;
 		return;
@@ -3943,12 +3955,22 @@ void Streamline::UpdateReflex()
 		featurePCL,
 		settings.reflexUseMarkersToOptimize);
 	options.useMarkersToOptimize = markerOptimization.enabled;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	diagnostics.record.resolved = ReflexDiagnostics::Options{
+		static_cast<int>(options.mode), options.frameLimitUs, options.useMarkersToOptimize
+	};
+#endif
 
 	if (!reflexOptionsCache.valid ||
 		reflexOptionsCache.mode != options.mode ||
 		reflexOptionsCache.frameLimitUs != options.frameLimitUs ||
 		reflexOptionsCache.useMarkersToOptimize != options.useMarkersToOptimize) {
-		if (SL_FAILED(result, slReflexSetOptions(options))) {
+		const auto result = slReflexSetOptions(options);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		++reflexOptionsSequence;
+		reflexLastOptionsResult = static_cast<int32_t>(result);
+#endif
+		if (result != sl::Result::eOk) {
 			logger::error("[Streamline] Failed to apply Reflex options: {}", magic_enum::enum_name(result));
 		} else {
 			reflexOptionsCache.valid = true;
@@ -3965,22 +3987,46 @@ void Streamline::UpdateReflex()
 		}
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	diagnostics.record.reason = "sleep_function_missing";
+#endif
 	if (!slReflexSleep)
 		return;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	diagnostics.record.reason = "off_without_cap";
+#endif
 	if (options.mode == sl::ReflexMode::eOff && options.frameLimitUs == 0)
 		return;
 
 	const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	diagnostics.record.reason = "already_slept_this_frame";
+#endif
 	if (lastReflexSleepFrame == currentFrame)
 		return;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	diagnostics.record.reason = "frame_token_unavailable";
+#endif
 	const auto frameTokenSnapshot = AcquireFrameToken(currentFrame, "reflex");
 	if (!frameTokenSnapshot)
 		return;
 
 	lastReflexSleepFrame = currentFrame;
-	if (SL_FAILED(result, slReflexSleep(*frameTokenSnapshot->token))) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const auto sleepStart = diagnostics.Active() ? ReflexDiagnostics::Tick() : 0;
+#endif
+	const auto result = slReflexSleep(*frameTokenSnapshot->token);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (diagnostics.Active()) {
+		diagnostics.record.sleepTicks = ReflexDiagnostics::Tick() - sleepStart;
+		diagnostics.record.sleepResult = static_cast<int32_t>(result);
+		diagnostics.record.tokenAddress = reinterpret_cast<uintptr_t>(frameTokenSnapshot->token);
+		diagnostics.record.reason = "called";
+	}
+#endif
+	if (result != sl::Result::eOk) {
 		logger::warn("[Streamline] Reflex sleep call failed: {}", magic_enum::enum_name(result));
 	}
 }

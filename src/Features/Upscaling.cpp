@@ -46,7 +46,9 @@
 #include "Upscaling/NeuralRendering/Renderer.h"
 #include "Upscaling/NeuralRendering/Runtime.h"
 #include "Upscaling/NvidiaComIdentity.h"
+#include "Upscaling/ReflexDiagnosticSuite.h"
 #include "Upscaling/ReflexPolicy.h"
+#include "Upscaling/ReflexPresentation.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/UpscalingProviderSelectionPolicy.h"
 #include "Upscaling/VRMenuPointerShader.h"
@@ -16856,7 +16858,11 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		}
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	auto ret = ReflexDiagnostics::Presentation::Create(ptrD3D11CreateDeviceAndSwapChainUpscaling, pAdapter,
+#else
 	auto ret = ptrD3D11CreateDeviceAndSwapChainUpscaling(pAdapter,
+#endif
 		DriverType,
 		Software,
 		Flags,
@@ -17669,6 +17675,10 @@ void Upscaling::DrawSettings()
 	}
 
 	if (streamline.reflexSupportedOnCurrentAdapter && page.Is("motion")) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ImGui::BeginDisabled(ReflexDiagnostics::Suite::Busy());
+		auto restoreReflexControls = ScopeExit([] { ImGui::EndDisabled(); });
+#endif
 		const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
 		const bool reflexBlockedByFrameGeneration = IsFrameGenerationDx12PathActive();
 
@@ -17727,7 +17737,14 @@ void Upscaling::DrawSettings()
 			ImGui::EndDisabled();
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (page.Is("motion"))
+		ReflexDiagnostics::Suite::DrawControls();
+#endif
 	if (page.Is("diagnostics")) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ReflexDiagnostics::Suite::DrawControls();
+#endif
 		if (globals::state && globals::state->IsDeveloperMode() && streamline.reflexSupportedOnCurrentAdapter) {
 			ImGui::SeparatorText("Reflex Debug");
 			const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
@@ -20825,6 +20842,7 @@ void Upscaling::SaveSettings(json& o_json)
 		o_json = settings;
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	ReflexDiagnostics::Suite::PreservePersistedSettings(o_json);
 	o_json["pipelineDiagnostics"] = settings.pipelineDiagnostics || settings.pipelineDiagnosticsStructured;
 	o_json["pipelineDiagnosticsStructured"] = settings.pipelineDiagnosticsStructured;
 #endif

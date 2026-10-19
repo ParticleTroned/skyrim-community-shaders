@@ -257,6 +257,10 @@ public:
 	};
 	ReflexOptionsCache reflexOptionsCache{};
 	uint32_t lastReflexSleepFrame = UINT32_MAX;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::atomic_uint64_t reflexOptionsSequence{ 0 };
+	std::atomic<std::optional<int32_t>> reflexLastOptionsResult{};
+#endif
 	DLSSResultPolicy::BudgetWarningThrottle dlssBudgetWarningThrottle;
 	bool lastDLSSFailureDuplicatedConstants = false;
 

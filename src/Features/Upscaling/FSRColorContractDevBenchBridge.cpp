@@ -11,6 +11,7 @@
 
 #	include <atomic>
 #	include <cstdint>
+#	include <cmath>
 #	include <exception>
 #	include <stdexcept>
 #	include <string>
@@ -19,6 +20,32 @@ namespace
 {
 	using json = nlohmann::json;
 	std::atomic_bool installAttempted{ false };
+
+	json DispatchJson(const FidelityFX::RuntimeUpscalerDispatchSnapshot& dispatch)
+	{
+		return {
+			{ "valid", dispatch.valid },
+			{ "frame", dispatch.frame },
+			{ "path", static_cast<std::uint32_t>(dispatch.path) },
+			{ "serial", dispatch.serial },
+			{ "contextGeneration", dispatch.contextGeneration },
+			{ "contextIndex", dispatch.contextIndex },
+			{ "renderWidth", dispatch.renderWidth },
+			{ "renderHeight", dispatch.renderHeight },
+			{ "displayWidth", dispatch.displayWidth },
+			{ "displayHeight", dispatch.displayHeight },
+			{ "highDynamicRangeInput", dispatch.highDynamicRangeInput },
+			{ "autoExposure", dispatch.autoExposure },
+			{ "exposureResourceBound", dispatch.exposureResourceBound },
+			{ "preExposure", dispatch.preExposure },
+
+			{ "configuredSharpnessAtDispatch", dispatch.valid && std::isfinite(dispatch.configuredSharpness) ? json(dispatch.configuredSharpness) : json(nullptr) },
+			{ "effectiveSharpness", dispatch.valid ? json(dispatch.effectiveSharpness) : json(nullptr) },
+			{ "sharpeningEnabled", dispatch.valid ? json(dispatch.sharpeningEnabled) : json(nullptr) },
+			{ "dispatchQpc", dispatch.valid && dispatch.dispatchQpc ? json(dispatch.dispatchQpc) : json(nullptr) },
+			{ "submittedInputs", FSRDispatchInputTelemetry::ToJson(dispatch.submittedInputs, dispatch.valid) },
+		};
+	}
 
 	json SnapshotJson(const FidelityFX::FsrColorContractStatusSnapshot& a_status)
 	{
@@ -42,22 +69,8 @@ namespace
 									{ "autoExposure", contract.runtimeContextAutoExposure },
 									{ "generation", contract.runtimeContextGeneration },
 								} },
-			{ "lastSuccessfulDispatch", {
-											{ "valid", dispatch.valid },
-											{ "frame", dispatch.frame },
-											{ "path", static_cast<std::uint32_t>(dispatch.path) },
-											{ "serial", dispatch.serial },
-											{ "contextGeneration", dispatch.contextGeneration },
-											{ "contextIndex", dispatch.contextIndex },
-											{ "renderWidth", dispatch.renderWidth },
-											{ "renderHeight", dispatch.renderHeight },
-											{ "displayWidth", dispatch.displayWidth },
-											{ "displayHeight", dispatch.displayHeight },
-											{ "highDynamicRangeInput", dispatch.highDynamicRangeInput },
-											{ "autoExposure", dispatch.autoExposure },
-											{ "exposureResourceBound", dispatch.exposureResourceBound },
-											{ "preExposure", dispatch.preExposure },
-										} },
+			{ "lastSuccessfulDispatch", DispatchJson(dispatch) },
+			{ "lastSuccessfulEyeDispatches", json::array({ DispatchJson(a_status.eyeDispatches[0]), DispatchJson(a_status.eyeDispatches[1]) }) },
 			{ "sourceColorContractChanged", false },
 		};
 	}
@@ -147,12 +160,12 @@ void FSRColorContractDevBenchBridge::Install()
 	if (!devBench)
 		return;
 	static const std::string descriptor = json{
-		{ "description", "Inspect or set DevBench-only FSR processing flags without changing the compositor source-colour contract. The production default remains HDR-input plus auto-exposure. set uses expectedRevision compare-and-set, invalidates prior dispatch evidence, and causes host/runtime FSR contexts to be recreated at their existing render-thread safe points. status reports requested flags, effective context flags and generations, plus the latest successful dispatch dimensions and processing evidence. This tool does not alter DLSS/DLAA, source transfer, provider selection, persistence, or resolution." },
+		{ "description", "Inspect or set DevBench-only FSR processing flags without changing the compositor source-colour contract. The production default remains HDR-input plus auto-exposure. set uses expectedRevision compare-and-set, invalidates prior dispatch evidence, and causes host/runtime FSR contexts to be recreated at their existing render-thread safe points. status reports requested flags, effective context flags and generations, plus synchronized successful per-eye dispatch identity, dimensions, configured sharpness at dispatch, effective sharpening value/enabled state and QPC timing. submittedInputs schema 1 adds actual submitted reset, X/Y jitterOffsetPixels and frameTimeDeltaMilliseconds with explicit availability and nullable values. Last-success availability is not frame freshness or internal exposure/history convergence. Failed SDK calls invalidate affected diagnostic dispatch evidence. Invalid dispatch sharpness/timing evidence is null; no sharpness setter is added. This tool does not alter DLSS/DLAA, source transfer, provider selection, persistence, or resolution." },
 		{ "inputSchema", {
 							 { "type", "object" },
 							 { "additionalProperties", false },
 							 { "properties", {
-												 { "action", { { "type", "string" }, { "enum", { "status", "set" } }, { "default", "status" } } },
+												 { "action", { { "type", "string" }, { "enum", { "status", "set" } }, { "default", "status" }, { "description", "Status retains last-success inputs under submittedInputs schema 1; qualify frame/serial/context freshness independently. Unavailable inputs are null; this is not vendor convergence telemetry." } } },
 												 { "expectedRevision", { { "type", "integer" }, { "minimum", 0 } } },
 												 { "highDynamicRangeInput", { { "type", "boolean" } } },
 												 { "autoExposure", { { "type", "boolean" } } },

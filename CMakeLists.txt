@@ -3617,6 +3617,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/main_thread_dispatch_policy_test.cpp
     )
     add_controller_test(
+        colour_pipeline_probe_policy_test
+        ColourPipelineProbePolicy
+        tests/colour_pipeline_probe_policy_test.cpp
+    )
+    add_controller_test(
         vr_render_scale_preparation_policy_test
         VRRenderScalePreparationPolicy
         tests/vr_render_scale_preparation_policy_test.cpp

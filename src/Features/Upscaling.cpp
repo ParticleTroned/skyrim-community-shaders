@@ -32,6 +32,7 @@
 #include "Upscaling/FSRColorContractDevBenchBridge.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "RenderMap/D3DContextHooks.h"
+#	include "Upscaling/ColourPipelineProbe.h"
 #endif
 #include "Upscaling/FSRHostLifecyclePolicy.h"
 #include "Upscaling/FSRTemporalTuningDevBenchBridge.h"
@@ -49345,6 +49346,12 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 		const auto& outputEyeRegion = outputStereoLayout.eyes[i];
 		D3D11_BOX outBox = { 0, 0, 0, outputEyeRegion.width, outputEyeRegion.height, 1 };
 		context->CopySubresourceRegion(colorDst, 0, outputEyeRegion.minX, 0, 0, vrIntermediateColorOut[i]->resource.get(), 0, &outBox);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		CSX::Diagnostics::ColourPipelineProbe::RecordFsrOutputCopyBack(
+			colorDst, vrIntermediateColorOut[i]->resource.get(), i,
+			outputEyeRegion.minX, outputEyeRegion.width, outputEyeRegion.height,
+			"Upscaling::FinalizePerEyeOutputs", "after queuing the per-eye copy");
+#endif
 	}
 }
 
@@ -68204,6 +68211,26 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
+	auto& upscaling = globals::features::upscaling;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	CSX::Diagnostics::ColourPipelineProbe::ServiceReadbacks(
+		globals::d3d::context, globals::state ? globals::state->frameCount : 0);
+	const auto captureStage = [&](CSX::Diagnostics::ColourPipelineProbe::Stage a_stage) {
+		if (!CSX::Diagnostics::ColourPipelineProbe::WantsVendorCapture() ||
+			a_target != RE::RENDER_TARGETS::kVR_FRAMEBUFFER || upscaling.GetRuntimeUpscaleMethod() != UpscaleMethod::kFSR)
+			return;
+		auto* renderer = globals::game::renderer;
+		if (!renderer)
+			return;
+		const auto& target = renderer->GetRuntimeData().renderTargets[static_cast<std::uint32_t>(a_target)];
+		const bool matchesMain = target.texture == renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture;
+		CSX::Diagnostics::ColourPipelineProbe::CaptureImageSpaceStage(a_stage,
+			target.texture, target.SRV,
+			target.RTV, target.UAV,
+			static_cast<std::uint32_t>(a_target), matchesMain,
+			"Upscaling::Main_PostProcessing::thunk", "at the original ImageSpace call boundary");
+	};
+#endif
 	const auto runOriginal = [&] {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		auto& runtime = CSX::RenderMap::GetRuntime();
@@ -68222,10 +68249,15 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		if (activated)
 			runtime.CompleteWindowBootstrap(CSX::RenderMap::CapturePostProcessingBootstrap(globals::d3d::context));
 #endif
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		captureStage(CSX::Diagnostics::ColourPipelineProbe::Stage::ImageSpaceInput);
+#endif
 		func(a_this, a3, a_target, a_4, a_5);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		captureStage(CSX::Diagnostics::ColourPipelineProbe::Stage::ImageSpaceOutput);
+#endif
 	};
 
-	auto& upscaling = globals::features::upscaling;
 	upscaling.InvalidateFrameGenerationInputs();
 	if (globals::game::isVR)
 		upscaling.ReleaseVRGameEntryVendorWorkGatesIfConverged();

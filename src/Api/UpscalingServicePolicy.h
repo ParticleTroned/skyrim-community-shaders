@@ -6,6 +6,17 @@
 
 namespace CSX::Api
 {
+	/** Accept only successful, unchanged observations from the native API. */
+	inline bool IsUpscalingSnapshotBracketStable(
+		UpscalingAPI::Status a_beforeStatus, const UpscalingAPI::Snapshot001& a_before,
+		UpscalingAPI::Status a_afterStatus, const UpscalingAPI::Snapshot001& a_after) noexcept
+	{
+		return a_beforeStatus == UpscalingAPI::Status::kSuccess &&
+		       a_afterStatus == UpscalingAPI::Status::kSuccess && a_before.stateRevision != 0 &&
+		       a_before.stateRevision == a_after.stateRevision &&
+		       a_before.capabilityRevision == a_after.capabilityRevision;
+	}
+
 	struct UpscalingAdmissionDecision
 	{
 		std::uint64_t observedConditions = UpscalingAPI::kConditionNone;

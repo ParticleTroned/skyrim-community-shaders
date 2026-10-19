@@ -318,6 +318,139 @@ namespace
 			"overflowed stage shader was silently joined to an existing observation");
 	}
 
+	CollectorConfig LateConfig()
+	{
+		auto config = Config();
+		config.maxEvents = 128;
+		config.requestedEventKindMask = EventKindBit(EventKind::kEyeSubmitted);
+		config.latePostProcessingWindow = true;
+		config.activationTarget = 9;
+		config.maxActivationWait = std::chrono::seconds(1);
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		return config;
+	}
+
+	void TestLateWindowSkipsPrefixAndMatchesAcceptedPair()
+	{
+		Runtime runtime;
+		runtime.SetImmediateContext(0xA000);
+		Check(runtime.StartCapture(LateConfig()) == StartResult::kStarted, "late window did not arm");
+		runtime.SetCpuFrame(12);
+		for (int index = 0; index < 5000; ++index) {
+			auto prefix = runtime.EnterRenderPass({ .renderPass = 1 });
+			runtime.RecordDraw(0xA000, DrawOperation::kDraw, 3);
+		}
+		Check(!runtime.IsCapturing() && runtime.GetCaptureWindow().phase == CaptureWindowPhase::kArmed,
+			"prefix consumed the late window");
+		Check(runtime.StartCapture(LateConfig()) == StartResult::kAlreadyCapturing,
+			"another start replaced an armed window");
+		Check(!runtime.ActivatePostProcessingWindow(8, 12, 77) &&
+				  !runtime.ActivatePostProcessingWindow(9, kUnknownFrame, 77) &&
+				  !runtime.ActivatePostProcessingWindow(9, 12, 0),
+			"invalid boundary activated");
+		Check(runtime.ActivatePostProcessingWindow(9, 12, 77), "declared boundary did not activate");
+		Check(!runtime.ActivatePostProcessingWindow(9, 12, 77), "boundary activated twice");
+		std::thread excluded([&] { runtime.RecordDraw(0xA000, DrawOperation::kDraw, 99); });
+		excluded.join();
+		const ResourceObservationInput resource{ .d3dObject = 0xA100,
+			.dimension = ResourceDimension::kTexture2D,
+			.widthOrBytes = 64,
+			.height = 32,
+			.depthOrArraySize = 1,
+			.mipLevels = 1 };
+		{
+			auto scope = runtime.EnterPostProcessing(resource, resource, 9, 77);
+			Check(runtime.IsInsidePostProcessing(), "activated boundary did not retain provenance");
+			runtime.RecordPostProcessingBootstrap({ 1, 2, 3, 4, 5, 6 }, runtime.PostProcessingCaptureGeneration());
+			runtime.RecordRasterState(0xA000, 0, { 0, 0, 64, 32, 0, 1 }, { 0, 0, 64, 32 }, 1, 1, false);
+			runtime.RecordTransferResourceAccess(0xA000, { .resource = resource }, ResourceStage::kPixel, 0, false);
+			runtime.CompleteWindowBootstrap(true);
+		}
+		Check(runtime.GetCaptureWindow().bootstrapComplete, "bootstrap was not committed");
+		runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77);
+		runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77);
+		runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 91, 77);
+		runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 90, 78);
+		Check(runtime.IsCapturing() && runtime.GetCaptureWindow().acceptedEyeMask == 1,
+			"repeated or mismatched eye completed a pair");
+		runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 90, 77);
+		Check(!runtime.IsCapturing(), "matched window continued accepting prefix work");
+		Check(runtime.StartCapture(LateConfig()) == StartResult::kAlreadyCapturing,
+			"another start replaced an unfinalized terminal window");
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot && snapshot->window.phase == CaptureWindowPhase::kMatchedEyes &&
+				  snapshot->window.acceptedEyeMask == 3 && snapshot->window.compositorCycle == 90 &&
+				  snapshot->window.cpuFrame == 12 && snapshot->window.bootstrapEventCount > 0,
+			"matching accepted pair was not retained");
+		Check(snapshot->statistics.droppedEventLimit == 0 && snapshot->statistics.droppedStopped == 0,
+			"omitted prefix was misclassified as event loss");
+		Check(std::none_of(snapshot->events.begin(), snapshot->events.end(), [](const auto& event) {
+			return event.kind == EventKind::kDraw || event.kind == EventKind::kDispatch ||
+			       event.payload.schema == static_cast<std::uint16_t>(PayloadSchema::kTransferOperation);
+		}),
+			"bootstrap invented an execution operation or retained prefix draws");
+	}
+
+	void TestLateWindowIncompleteConditions()
+	{
+		for (int lane = 0; lane < 8; ++lane) {
+			Runtime runtime;
+			runtime.SetImmediateContext(0xA000);
+			auto config = LateConfig();
+			if (lane == 0)
+				config.maxActivationWait = std::chrono::nanoseconds(1);
+			if (lane == 4) {
+				config.maxEvents = 1;
+				config.maxBytes = Collector::RequiredStorageBytes(config);
+			}
+			if (lane == 5 || lane == 7)
+				config.maxDuration = std::chrono::milliseconds(100);
+			Check(runtime.StartCapture(config) == StartResult::kStarted, "incomplete window did not arm");
+			if (lane == 0) {
+				Check(!runtime.ActivatePostProcessingWindow(9, 12, 77), "expired arm activated");
+			} else if (lane != 1) {
+				Check(runtime.ActivatePostProcessingWindow(9, 12, 77), "incomplete lane did not activate");
+				if (lane >= 3) {
+					const ResourceObservationInput resource{ .d3dObject = 0xA100, .dimension = ResourceDimension::kTexture2D };
+					auto scope = runtime.EnterPostProcessing(resource, resource, 9, 77);
+					runtime.RecordPostProcessingBootstrap({ 1, 2, 3, 4, 5, 6 }, runtime.PostProcessingCaptureGeneration());
+					if (lane == 7) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(120));
+						Check(!runtime.IsCapturing(), "bootstrap deadline did not stop admission");
+					}
+					runtime.CompleteWindowBootstrap(true);
+				}
+				if (lane == 2)
+					runtime.CompleteWindowBootstrap(false);
+				if (lane == 3)
+					runtime.SetCpuFrame(13);
+				if (lane == 5) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(120));
+					Check(!runtime.IsCapturing() && runtime.GetCaptureWindow().failure == CaptureWindowFailure::kActiveTimeout,
+						"active deadline did not fail closed");
+				}
+				if (lane == 6)
+					runtime.RecordEyeSubmission({ .d3dObject = 0xA100, .dimension = ResourceDimension::kTexture2D },
+						Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77);
+			}
+			const auto beforeStop = runtime.GetCaptureWindow();
+			auto snapshot = runtime.StopCapture();
+			Check(snapshot && snapshot->window.phase == CaptureWindowPhase::kIncomplete &&
+					  snapshot->window.failure != CaptureWindowFailure::kNone,
+				"incomplete lane claimed completion");
+			if (lane == 3)
+				Check(snapshot->window.failure == CaptureWindowFailure::kFrameChanged, "frame change was not attributed");
+			if (lane == 6)
+				Check(snapshot->window.acceptedEyeMask == 1, "missing-eye stop lost its partial pair");
+			if (beforeStop.endTick != 0)
+				Check(snapshot->window.endTick == beforeStop.endTick, "finalization changed the latched window end");
+			if (lane == 7)
+				Check(snapshot->window.bootstrapEventCount == snapshot->statistics.recorded &&
+						  snapshot->window.bootstrapEventCount > 0 && !snapshot->window.bootstrapComplete,
+					"expired bootstrap lost its retained partial-event provenance");
+		}
+	}
+
 	void TestShaderBytecodeCatalogueBounds()
 	{
 		ShaderBytecodeCatalogue catalogue(2, 8);
@@ -1358,8 +1491,10 @@ namespace
 		Check((resolved & eyeOnly) != 0, "requested eye event was not retained");
 		Check((resolved & EventKindBit(EventKind::kResourceObserved)) != 0,
 			"eye submission did not resolve its resource identity dependency");
-		Check((resolved & EventKindBit(EventKind::kDraw)) == 0,
-			"eye submission unexpectedly enabled draw capture");
+		Check((resolved & EventKindBit(EventKind::kDraw)) != 0 &&
+				  (resolved & EventKindBit(EventKind::kTransferResourceAccess)) != 0 &&
+				  (resolved & EventKindBit(EventKind::kRasterStateObserved)) != 0,
+			"eye selection omitted the post-processing transfer dependencies");
 
 		const auto techniquePair = ResolveEventKindDependencies(EventKindBit(EventKind::kTechniqueBegin));
 		Check((techniquePair & EventKindBit(EventKind::kTechniqueEnd)) != 0 &&
@@ -2023,6 +2158,109 @@ namespace
 		}
 	}
 
+	void TestBootstrapPublicationRetainsCaptureGeneration()
+	{
+		constexpr std::uintptr_t context = 0xE800;
+		const std::array<std::uintptr_t, 6> sourceShaders{ 0xE810, 0, 0, 0, 0xE814, 0xE815 };
+		auto config = Config();
+		config.maxEvents = 128;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		for (std::uint32_t publication = 0; publication < 5; ++publication) {
+			for (const auto turnOver : { false, true }) {
+				Runtime runtime;
+				runtime.SetImmediateContext(context);
+				Check(runtime.StartCapture(config) == StartResult::kStarted, "bootstrap source did not start");
+				const auto generation = runtime.ActiveCaptureGeneration();
+				runtime.PauseNextProducerPublicationForTesting(publication);
+				std::uint64_t targetSeed = 0;
+				std::uint64_t resourceSeed = 0;
+				bool retainedGeneration = false;
+				std::thread worker([&] {
+					auto scope = runtime.EnterPostProcessing({}, {}, 9, 77);
+					const auto expected = runtime.PostProcessingCaptureGeneration();
+					targetSeed = runtime.ClaimRenderTargetStateSeed(context, expected);
+					resourceSeed = runtime.ClaimResourceViewStateSeed(context, expected);
+					runtime.RecordPostProcessingBootstrap(sourceShaders, expected);
+					retainedGeneration = expected == generation && runtime.PostProcessingCaptureGeneration() == generation;
+				});
+				WaitForDeferredPublicationPause(runtime, worker);
+				bool successorStarted = true;
+				if (turnOver) {
+					const auto first = runtime.StopCapture();
+					successorStarted = first.has_value() && runtime.StartCapture(config) == StartResult::kStarted;
+					if (successorStarted) {
+						runtime.BindStage(context, ShaderStage::kVertex, 0xE820);
+						runtime.BindStage(context, ShaderStage::kPixel, 0xE824);
+						runtime.BindStage(context, ShaderStage::kCompute, 0xE825);
+					}
+				}
+				runtime.ResumeDeferredPublicationForTesting();
+				worker.join();
+				Check(successorStarted && retainedGeneration, "bootstrap lost its retained capture generation");
+				const auto current = runtime.ActiveCaptureGeneration();
+				Check(runtime.ClaimRenderTargetStateSeed(context, current) == (turnOver ? current : 0),
+					"stale bootstrap consumed successor target seeding");
+				Check(runtime.ClaimResourceViewStateSeed(context, current) == (turnOver ? current : 0),
+					"stale bootstrap consumed successor resource seeding");
+				if (!turnOver)
+					Check(targetSeed == generation && resourceSeed == generation, "valid bootstrap seeds were rejected");
+				runtime.RecordDraw(context, DrawOperation::kDraw, 5);
+				runtime.RecordDispatch(context, DispatchOperation::kDispatch, 1, 1, 1);
+				const auto capture = runtime.StopCapture();
+				Check(capture.has_value(), "bootstrap result did not stop");
+				std::size_t pipelineSnapshots = 0;
+				for (const auto& event : capture->events) {
+					if (event.payload.schema == static_cast<std::uint16_t>(PayloadSchema::kNativePipelineSnapshot))
+						++pipelineSnapshots;
+					if (turnOver && event.kind == EventKind::kStageShaderObserved)
+						Check(std::find(sourceShaders.begin(), sourceShaders.end(), event.payload.words[1]) == sourceShaders.end(),
+							"old bootstrap shader entered the successor catalogue");
+				}
+				Check(pipelineSnapshots == (turnOver ? 0u : 1u), "bootstrap pipeline snapshot crossed capture turnover");
+				for (const auto kind : { EventKind::kDraw, EventKind::kDispatch }) {
+					const auto execution = std::find_if(capture->events.begin(), capture->events.end(),
+						[kind](const EventRecord& event) { return event.kind == kind; });
+					Check(execution != capture->events.end() && execution->payload.words[2] != 0,
+						"bootstrap result lost the valid stage binding");
+					const auto stage = std::find_if(capture->events.begin(), capture->events.end(),
+						[execution](const EventRecord& event) {
+							return event.kind == EventKind::kStageShaderObserved && event.payload.words[0] == execution->payload.words[2];
+						});
+					const auto expectedShader = kind == EventKind::kDraw ?
+					                                (turnOver ? 0xE820u : 0xE810u) :
+					                                (turnOver ? 0xE825u : 0xE815u);
+					Check(stage != capture->events.end() && stage->payload.words[1] == expectedShader,
+						"old bootstrap overwrote the valid stage binding");
+				}
+			}
+		}
+	}
+
+	void TestBootstrapCompletionRetainsScopeGeneration()
+	{
+		Runtime runtime;
+		runtime.SetImmediateContext(0xE900);
+		Check(runtime.StartCapture(LateConfig()) == StartResult::kStarted, "bootstrap completion source did not arm");
+		runtime.SetCpuFrame(12);
+		Check(runtime.ActivatePostProcessingWindow(9, 12, 77), "bootstrap completion source did not activate");
+		auto oldScope = runtime.EnterPostProcessing({}, {}, 9, 77);
+		Check(runtime.IsInsidePostProcessing(), "bootstrap completion source scope did not enter");
+		Check(runtime.StopCapture().has_value(), "bootstrap completion source did not stop");
+		Check(runtime.StartCapture(LateConfig()) == StartResult::kStarted, "bootstrap completion successor did not arm");
+		runtime.SetCpuFrame(12);
+		Check(runtime.ActivatePostProcessingWindow(9, 12, 78), "bootstrap completion successor did not activate");
+		runtime.CompleteWindowBootstrap(false);
+		Check(runtime.GetCaptureWindow().phase == CaptureWindowPhase::kBootstrap,
+			"old scope completed or failed a successor bootstrap on the same thread");
+		{
+			auto newScope = runtime.EnterPostProcessing({}, {}, 9, 78);
+			runtime.RecordPostProcessingBootstrap({ 1, 2, 3, 4, 5, 6 }, runtime.PostProcessingCaptureGeneration());
+			runtime.CompleteWindowBootstrap(true);
+		}
+		Check(runtime.GetCaptureWindow().bootstrapComplete, "valid successor bootstrap completion was rejected");
+		Check(runtime.StopCapture().has_value(), "bootstrap completion successor did not stop");
+	}
+
 	void TestCommandListAdmissionRetainsCaptureGeneration()
 	{
 		constexpr std::uint32_t actorCount = 8;
@@ -2170,7 +2408,7 @@ namespace
 						break;
 					case Producer::kEyeSubmission:
 						expected = EventKind::kEyeSubmitted;
-						runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 1, 1, 0, 1);
+						runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 1, 1, 0, 1, 1);
 						break;
 					case Producer::kResourceFlow:
 						expected = EventKind::kResourceFlow;
@@ -2441,7 +2679,7 @@ namespace
 		constexpr std::uintptr_t sourceShader = 0xC081;
 		constexpr std::uintptr_t replacementShader = 0xC082;
 		auto filteredConfig = Config();
-		filteredConfig.requestedEventKindMask = EventKindBit(EventKind::kEyeSubmitted);
+		filteredConfig.requestedEventKindMask = EventKindBit(EventKind::kCaptureMarker);
 		filteredConfig.maxBytes = Collector::RequiredStorageBytes(filteredConfig);
 		auto executionConfig = Config();
 		executionConfig.maxEvents = 64;
@@ -2794,11 +3032,160 @@ namespace
 				"stale stage publication replaced the successor binding");
 		}
 	}
+
+	void TestFailedPostWriteObservationClearsCommandEpoch()
+	{
+		for (const bool failResource : { false, true }) {
+			Runtime runtime;
+			runtime.SetImmediateContext(0xA000);
+			auto config = Config();
+			config.maxEvents = 128;
+			config.maxResourceObservations = 1;
+			config.maxTargetViewObservations = 1;
+			config.maxBytes = Collector::RequiredStorageBytes(config);
+			const ResourceObservationInput resource{ .d3dObject = 0xA100, .dimension = ResourceDimension::kTexture2D, .widthOrBytes = 64, .height = 32, .depthOrArraySize = 1, .mipLevels = 1 };
+			ResourceViewInput target{ .resource = resource,
+				.view = { .kind = TargetViewKind::kRenderTarget, .d3dObject = 0xA200 } };
+			Check(runtime.StartCapture(config) == StartResult::kStarted, "failed write observation capture did not start");
+			runtime.SetCpuFrame(12);
+			{
+				auto scope = runtime.EnterPostProcessing(resource, resource, 9, 77);
+				Check(runtime.IsInsidePostProcessing(), "failed write observation scope did not activate");
+				runtime.RecordTransferResourceAccess(0xA000, target, ResourceStage::kOutputMerger, 0, true);
+				runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77);
+				if (failResource)
+					target.resource.widthOrBytes = 128;
+				else
+					target.view.d3dObject = 0xA300;
+				runtime.RecordTransferResourceAccess(0xA000, target, ResourceStage::kOutputMerger, 0, true);
+			}
+			runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 91, 78);
+			const auto capture = runtime.StopCapture();
+			Check(capture.has_value(), "failed write observation capture did not stop");
+			Check(failResource ? capture->statistics.droppedResourceObservations != 0 :
+								 capture->statistics.droppedTargetViewObservations != 0,
+				"failed post-write regression did not exhaust the intended catalogue");
+			std::size_t publications = 0;
+			for (const auto& event : capture->events) {
+				if (event.payload.schema != static_cast<std::uint16_t>(PayloadSchema::kEyePublication))
+					continue;
+				if (publications++ == 0)
+					Check(event.payload.words[1] && event.payload.words[2], "initial same-frame write did not establish an epoch");
+				else
+					Check(!event.payload.words[1] && !event.payload.words[2], "failed post-write observation published a stale command epoch");
+			}
+			Check(publications == 2, "failed post-write regression lost eye publication records");
+		}
+	}
+
+	void TestTransferVersionAdmissionAndTurnover()
+	{
+		TransferVersions versions;
+		Check(!versions.Write(0, { 1, 2, 3, 4 }), "zero capture admitted a command epoch");
+		for (std::uint64_t resource = 1; resource <= TransferVersions::kCapacity; ++resource)
+			Check(versions.Write(7, { resource, resource + 1000, resource + 2000, 12 }), "bounded version admission failed");
+		Check(!versions.CanWrite(7, 257) && !versions.Write(7, { 257, 2000, 3000, 12 }), "version capacity silently grew");
+		Check(versions.Write(7, { 1, 4000, 5000, 12 }) && versions.Read(7, 1, 12).observation == 4000,
+			"full catalogue could not replace an admitted resource epoch");
+		Check(!versions.Read(8, 1, 12).observation && !versions.Read(7, 1, 13).observation &&
+				  !versions.Read(7, 1, kUnknownFrame).observation,
+			"epoch crossed capture or frame bounds");
+		versions.Invalidate();
+		Check(!versions.Read(7, 1, 12).observation, "uncovered work retained an epoch");
+		Check(versions.Write(8, { 257, 6000, 7000, 12 }) && !versions.Read(8, 1, 12).observation,
+			"new capture inherited old catalogue entries");
+
+		Runtime runtime;
+		runtime.SetImmediateContext(0xA000);
+		auto config = Config();
+		config.maxEvents = 128;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		const ResourceObservationInput resource{ .d3dObject = 0xA100, .dimension = ResourceDimension::kTexture2D, .widthOrBytes = 64, .height = 32, .depthOrArraySize = 1, .mipLevels = 1 };
+		Check(runtime.StartCapture(config) == StartResult::kStarted, "transfer capture did not start");
+		runtime.SetCpuFrame(12);
+		{
+			auto scope = runtime.EnterPostProcessing(resource, resource, 9, 77);
+			Check(runtime.IsInsidePostProcessing(), "original post-processing scope did not activate");
+			runtime.BeginTransferOperation(0xA000, false, 0, { 1, 2, 3, 4, 5, 6 });
+			runtime.RecordRasterState(0xA000, 0, { 2, 3, 64, 32, 0, 1 }, { -1, 0, 64, 32 }, 1, 1, true);
+			runtime.RecordTransferResourceAccess(0xA000, { .resource = resource }, ResourceStage::kOutputMerger, 0, true);
+			runtime.BeginTransferOperation(0xA000, true, 0, { 1, 2, 3, 4, 5, 7 });
+			runtime.RecordRasterState(0xA000, 0, { 2, 3, 64, 32, 0, 1 }, { -1, 0, 64, 32 }, 1, 1, false);
+			runtime.RecordTransferResourceAccess(0xA000, { .resource = resource }, ResourceStage::kCompute, 2, false);
+		}
+		Check(!runtime.IsInsidePostProcessing(), "post-processing scope leaked");
+		runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77);
+		runtime.SetCpuFrame(13);
+		runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 91, 78);
+		const auto capture = runtime.StopCapture();
+		Check(capture.has_value(), "transfer capture did not stop");
+		std::uint64_t writeVersion = 0;
+		std::uint64_t operation = 0;
+		std::size_t publications = 0;
+		std::size_t rasterStates = 0;
+		for (const auto& event : capture->events) {
+			const auto schema = static_cast<PayloadSchema>(event.payload.schema);
+			if (schema == PayloadSchema::kTransferOperation)
+				operation = event.payload.words[0];
+			if (schema == PayloadSchema::kRasterState) {
+				Check(operation && (event.payload.words[7] >> 1u) == operation,
+					"raster flags corrupted the command operation");
+				Check((event.payload.words[7] & 1u) == (rasterStates++ == 0 ? 1u : 0u),
+					"raster flags lost enabled or disabled scissor state");
+			}
+			if (schema == PayloadSchema::kTransferResourceAccess) {
+				Check(operation && event.payload.words[7] == operation, "resource access borrowed another operation");
+				Check((event.payload.words[6] & 2u) == 2u, "resource flags lost capacity admission");
+				if (event.payload.words[6] & 1u) {
+					writeVersion = event.payload.words[2];
+					Check(writeVersion && event.payload.words[3], "recorded write omitted its command epoch");
+				} else
+					Check(writeVersion && event.payload.words[2] == writeVersion, "same-frame read lost its recorded write epoch");
+			}
+			if (schema == PayloadSchema::kEyePublication) {
+				if (publications++ == 0)
+					Check(event.payload.words[1] == writeVersion && event.payload.words[3] == 77 &&
+							  event.frame.eye == Eye::kLeft,
+						"accepted left eye lost its same-frame epoch or lease");
+				else
+					Check(!event.payload.words[1] && event.payload.words[3] == 78 && event.frame.eye == Eye::kRight,
+						"successor frame inherited the left-eye epoch");
+			}
+		}
+		Check(writeVersion && publications == 2 && rasterStates == 2,
+			"transfer fixture did not retain publication and raster records");
+
+		Check(runtime.StartCapture(config) == StartResult::kStarted, "turnover source capture did not start");
+		runtime.SetCpuFrame(12);
+		{
+			auto stale = runtime.EnterPostProcessing(resource, resource, 9, 77);
+			Check(runtime.IsInsidePostProcessing(), "turnover source scope did not enter");
+			Check(runtime.StopCapture().has_value(), "turnover source capture did not stop");
+			Check(runtime.StartCapture(config) == StartResult::kStarted, "turnover successor did not start");
+			runtime.SetCpuFrame(12);
+			Check(!runtime.IsInsidePostProcessing(), "old scope became active in successor capture");
+			runtime.RecordTransferResourceAccess(0xA000, { .resource = resource }, ResourceStage::kOutputMerger, 0, true);
+		}
+		runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 92, 79);
+		const auto successor = runtime.StopCapture();
+		Check(successor.has_value(), "turnover successor did not stop");
+		Check(std::none_of(successor->events.begin(), successor->events.end(), [](const EventRecord& event) {
+			return event.payload.schema == static_cast<std::uint16_t>(PayloadSchema::kTransferResourceAccess);
+		}),
+			"old scope recorded a write in the successor capture");
+		const auto publication = std::find_if(successor->events.begin(), successor->events.end(), [](const EventRecord& event) {
+			return event.payload.schema == static_cast<std::uint16_t>(PayloadSchema::kEyePublication);
+		});
+		Check(publication != successor->events.end() && !publication->payload.words[1], "old capture epoch crossed turnover");
+	}
+
 }
 
 int main()
 {
 	try {
+		TestFailedPostWriteObservationClearsCommandEpoch();
+		TestTransferVersionAdmissionAndTurnover();
 		TestInactiveRuntime();
 		TestNestedBoundaries();
 		TestShaderIdentityGenerations();
@@ -2806,6 +3193,8 @@ int main()
 		TestShaderObservationBoundIsExplicit();
 		TestResolvedStageShaderIdentity();
 		TestStageShaderObservationBoundIsExplicit();
+		TestLateWindowSkipsPrefixAndMatchesAcceptedPair();
+		TestLateWindowIncompleteConditions();
 		TestShaderBytecodeCatalogueBounds();
 		TestNativeShaderCreationPreservesResultOnDiagnosticFailure();
 		TestNativeShaderMetadataLifetime();
@@ -2834,6 +3223,8 @@ int main()
 		TestExecuteRestoreStateIsIndependentOfCaptureAdmission();
 		TestDeferredRecordingReportsPartialFilteredAndFailedFinishes();
 		TestDiagnosticCatalogueAdmissionFailuresFailOpen();
+		TestBootstrapPublicationRetainsCaptureGeneration();
+		TestBootstrapCompletionRetainsScopeGeneration();
 		TestCommandListAdmissionRetainsCaptureGeneration();
 		TestProducerPublicationRetainsCaptureGeneration();
 		TestImmediateStagePublicationRetainsCaptureGeneration();

@@ -30,6 +30,9 @@
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FSRColorContractDevBenchBridge.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "RenderMap/D3DContextHooks.h"
+#endif
 #include "Upscaling/FSRHostLifecyclePolicy.h"
 #include "Upscaling/FSRTemporalTuningDevBenchBridge.h"
 #include "Upscaling/FSRTemporalTuningSerialization.h"
@@ -68201,6 +68204,27 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
+	const auto runOriginal = [&] {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		auto& runtime = CSX::RenderMap::GetRuntime();
+		auto* renderer = globals::game::renderer;
+		const auto publication = globals::state ? globals::state->GetRenderTargetResourcePublicationGeneration() : 0;
+		const bool activated = runtime.ActivatePostProcessingWindow(
+			static_cast<std::uint32_t>(a_target), globals::state ? globals::state->frameCount : 0, publication);
+		const auto source = renderer && runtime.IsCapturing() ? CSX::RenderMap::DescribeResource(
+																	renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture) :
+		                                                        CSX::RenderMap::ResourceObservationInput{};
+		const auto targetIndex = static_cast<std::uint32_t>(a_target);
+		const auto destination = renderer && runtime.IsCapturing() && targetIndex < std::size(renderer->GetRuntimeData().renderTargets) ?
+		                             CSX::RenderMap::DescribeResource(renderer->GetRuntimeData().renderTargets[targetIndex].texture) :
+		                             CSX::RenderMap::ResourceObservationInput{};
+		const auto transferScope = runtime.EnterPostProcessing(source, destination, targetIndex, publication);
+		if (activated)
+			runtime.CompleteWindowBootstrap(CSX::RenderMap::CapturePostProcessingBootstrap(globals::d3d::context));
+#endif
+		func(a_this, a3, a_target, a_4, a_5);
+	};
+
 	auto& upscaling = globals::features::upscaling;
 	upscaling.InvalidateFrameGenerationInputs();
 	if (globals::game::isVR)
@@ -68208,7 +68232,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	auto upscaleMethod = upscaling.GetRuntimeUpscaleMethod();
 
 	if (!upscaling.ApplyPendingPostLoadRuntimeReset(upscaleMethod)) {
-		func(a_this, a3, a_target, a_4, a_5);
+		runOriginal();
 		return;
 	}
 
@@ -68245,7 +68269,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		// validation before their native physical contract can become stable.
 		if (upscaling.GetVRNativeRestorePresentationGuardActiveEpoch() != 0 &&
 			!globals::features::vr.InstallSubmitHook()) {
-			func(a_this, a3, a_target, a_4, a_5);
+			runOriginal();
 			return;
 		}
 
@@ -68262,7 +68286,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			// A fixed DLAA/FSR-AA frame without a ready provider must retain
 			// Skyrim's temporal fallback. Disabling it here exposes the raw frame
 			// that users report as persistent shimmer/flicker during gated loads.
-			func(a_this, a3, a_target, a_4, a_5);
+			runOriginal();
 			return;
 		}
 
@@ -68273,7 +68297,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
 
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		func(a_this, a3, a_target, a_4, a_5);
+		runOriginal();
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		return;
 	}
@@ -68294,7 +68318,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 		upscaling.PrepareFullResolutionPostProcessing();
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		func(a_this, a3, a_target, a_4, a_5);
+		runOriginal();
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		upscaling.PrepareFullResolutionPostProcessing();
 		return;
@@ -68329,7 +68353,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		}
 
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		func(a_this, a3, a_target, a_4, a_5);
+		runOriginal();
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 
 		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
@@ -68358,7 +68382,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	if (upscaleMethod == UpscaleMethod::kNONE) {
 		// Keep vanilla TAA/water stabilization state untouched when no upscaler is active.
-		func(a_this, a3, a_target, a_4, a_5);
+		runOriginal();
 		return;
 	}
 
@@ -68367,7 +68391,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		upscaling.PrepareFullResolutionPostProcessing();
 
 	BSImagespaceShaderISTemporalAA->taaEnabled = upscaleMethod == UpscaleMethod::kTAA;
-	func(a_this, a3, a_target, a_4, a_5);
+	runOriginal();
 
 	BSImagespaceShaderISTemporalAA->taaEnabled = false;
 

@@ -1151,6 +1151,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					submitPacket.GetColorTexture()) {
 					const vr::VRTextureBounds_t fullBounds{ 0.0f, 0.0f, 1.0f, 1.0f };
 					const auto& bounds = retainedBounds ? *retainedBounds : fullBounds;
+					CSX::RenderMap::GetRuntime().SetCpuFrame(globals::state ? globals::state->frameCount : 0);
 					CSX::RenderMap::GetRuntime().RecordEyeSubmission(
 						DescribeSubmittedTexture(submitPacket.GetColorTexture()),
 						RenderMapEye(submitPacket.eye),

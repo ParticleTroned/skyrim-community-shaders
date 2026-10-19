@@ -36,6 +36,14 @@ namespace CSX::RenderMap::PayloadSchemaNames
 	inline constexpr char kEyeSubmissionV1[] = "eye-submission-v1";
 	inline constexpr char kCullDecisionV1[] = "cull-decision-v1";
 
+	inline constexpr char kPostProcessingBoundaryV1[] = "post-processing-boundary-v1";
+	inline constexpr char kPostProcessingOperationV1[] = "post-processing-operation-v1";
+	inline constexpr char kRasterStateObservationV1[] = "raster-state-observation-v1";
+	inline constexpr char kPostProcessingResourceAccessV1[] = "post-processing-resource-access-v1";
+	inline constexpr char kAcceptedEyePublicationV1[] = "accepted-eye-publication-v1";
+	inline constexpr char kPostProcessingCopyRegionV1[] = "post-processing-copy-region-v1";
+	inline constexpr char kNativePipelineSnapshotV1[] = "native-pipeline-snapshot-v1";
+
 	inline constexpr auto kAll = std::to_array<const char*>({
 		kShaderObservationV2,
 		kStageShaderObservationV3,
@@ -67,5 +75,12 @@ namespace CSX::RenderMap::PayloadSchemaNames
 		kVisibilitySubmissionV1,
 		kEyeSubmissionV1,
 		kCullDecisionV1,
+		kPostProcessingBoundaryV1,
+		kPostProcessingOperationV1,
+		kRasterStateObservationV1,
+		kPostProcessingResourceAccessV1,
+		kAcceptedEyePublicationV1,
+		kPostProcessingCopyRegionV1,
+		kNativePipelineSnapshotV1,
 	});
 }

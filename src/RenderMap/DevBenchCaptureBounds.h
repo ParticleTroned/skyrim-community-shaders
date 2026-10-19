@@ -41,9 +41,10 @@ namespace CSX::RenderMap::DevBenchBounds
 		std::uint64_t maximum;
 	};
 
-	inline constexpr std::array<BoundSpec, 13> kBounds{ {
+	inline constexpr std::array<BoundSpec, 14> kBounds{ {
 		{ "maxFrames", kMaximumFrames },
 		{ "maxDurationMs", kMaximumDurationMs },
+		{ "maxActivationWaitMs", kMaximumDurationMs },
 		{ "maxEvents", kMaximumEvents },
 		{ "maxBytes", kMaximumBytes },
 		{ "maxScopeDepth", kMaximumScopeDepth },

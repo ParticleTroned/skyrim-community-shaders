@@ -29,6 +29,9 @@ namespace CSX::RenderMap
 
 		thread_local PendingVisibilitySubmission pendingVisibilitySubmission;
 		thread_local PendingGeometrySubmission pendingGeometrySubmission;
+		thread_local const Runtime* postProcessingOwner = nullptr;
+		thread_local std::uint64_t postProcessingGeneration = 0;
+		thread_local std::uint64_t transferOperation = 0;
 
 		std::uint64_t PackFloats(float a_low, float a_high) noexcept
 		{
@@ -599,7 +602,7 @@ namespace CSX::RenderMap
 	StartResult Runtime::StartCapture(const CollectorConfig& a_config)
 	{
 		std::scoped_lock lifecycleLock(captureLifecycleMutex);
-		if (collector.IsCapturing() || collector.IsDraining())
+		if (collector.ActiveGeneration() != 0 || collector.IsDraining())
 			return collector.Start(a_config);
 
 		// Reset while hooks still observe an inactive collector; publishing first
@@ -649,6 +652,70 @@ namespace CSX::RenderMap
 		return collector.IsCapturing();
 	}
 
+	bool Runtime::ActivatePostProcessingWindow(std::uint32_t a_target, std::uint64_t a_frame,
+		std::uint64_t a_publicationGeneration) noexcept
+	{
+		return collector.ActivatePostProcessingWindow(a_target, a_frame, a_publicationGeneration);
+	}
+
+	void Runtime::CompleteWindowBootstrap(bool a_success) noexcept
+	{
+		std::scoped_lock lifecycleLock(captureLifecycleMutex);
+		const auto generation = postProcessingOwner == this ?
+		                            postProcessingGeneration :
+		                            collector.ActiveGeneration();
+		if (generation != 0 && collector.ActiveGeneration() == generation)
+			collector.CompleteWindowBootstrap(a_success, generation);
+	}
+
+	std::uint64_t Runtime::PostProcessingCaptureGeneration() const noexcept
+	{
+		return postProcessingOwner == this ? postProcessingGeneration : 0;
+	}
+
+	void Runtime::BindBootstrapStage(ShaderStage a_stage, std::uintptr_t a_d3dObject,
+		std::uint64_t a_expectedCaptureGeneration) noexcept
+	{
+#if defined(CSX_RENDER_MAP_TESTING)
+		PauseProducerPublicationForTesting();
+#endif
+		// Serialize diagnostic publication with capture reset, not native D3D queries.
+		std::scoped_lock lifecycleLock(captureLifecycleMutex);
+		if (collector.ActiveGeneration() != a_expectedCaptureGeneration)
+			return;
+		SetImmediateBoundStage(a_stage, a_d3dObject);
+		if (EnsureImmediateContextObservation(a_expectedCaptureGeneration) == 0)
+			return;
+		NextCommandStreamSequence();
+		PublishBoundStageObservation(a_stage, a_d3dObject,
+			ObserveBoundStage(a_stage, a_d3dObject, a_expectedCaptureGeneration));
+	}
+
+	void Runtime::RecordPostProcessingBootstrap(const std::array<std::uintptr_t, 6>& a_shaders,
+		std::uint64_t a_expectedCaptureGeneration) noexcept
+	{
+		if (a_expectedCaptureGeneration == 0 ||
+			PostProcessingCaptureGeneration() != a_expectedCaptureGeneration || !IsInsidePostProcessing())
+			return;
+		BindBootstrapStage(ShaderStage::kVertex, a_shaders[0], a_expectedCaptureGeneration);
+		BindBootstrapStage(ShaderStage::kPixel, a_shaders[4], a_expectedCaptureGeneration);
+		BindBootstrapStage(ShaderStage::kCompute, a_shaders[5], a_expectedCaptureGeneration);
+		std::scoped_lock lifecycleLock(captureLifecycleMutex);
+		if (collector.ActiveGeneration() != a_expectedCaptureGeneration)
+			return;
+		transferOperation = 0;
+		collector.RecordForGeneration(EventKind::kRasterStateObserved,
+			{ .schema = static_cast<std::uint16_t>(PayloadSchema::kNativePipelineSnapshot),
+				.words = { a_shaders[0], a_shaders[1], a_shaders[2], a_shaders[3], a_shaders[4], a_shaders[5] } },
+			EnsureImmediateContextObservation(a_expectedCaptureGeneration),
+			a_expectedCaptureGeneration, NextCommandStreamSequence());
+	}
+
+	CaptureWindowSnapshot Runtime::GetCaptureWindow() const noexcept
+	{
+		return collector.GetCaptureWindow();
+	}
+
 	bool Runtime::IsCaptureDraining() const noexcept
 	{
 		return collector.IsDraining();
@@ -661,8 +728,7 @@ namespace CSX::RenderMap
 
 	void Runtime::SetCpuFrame(std::uint64_t a_cpuFrame) noexcept
 	{
-		if (!collector.IsCapturing())
-			return;
+		collector.PollCaptureWindow(a_cpuFrame);
 		auto frame = collector.GetThreadFrameContext();
 		frame.cpuFrame = a_cpuFrame;
 		collector.SetThreadFrameContext(frame);
@@ -671,6 +737,180 @@ namespace CSX::RenderMap
 	void Runtime::SetFrameContext(const FrameContext& a_context) noexcept
 	{
 		collector.SetThreadFrameContext(a_context);
+	}
+
+	Runtime::PostProcessingScope::PostProcessingScope(Runtime& a_owner,
+		const ResourceObservationInput& a_source, const ResourceObservationInput& a_destination,
+		std::uint32_t a_target, std::uint64_t a_publicationGeneration) noexcept :
+		previousOwner(postProcessingOwner), previousGeneration(postProcessingGeneration), previousOperation(transferOperation)
+	{
+		const auto generation = a_owner.collector.ActiveGeneration();
+		if (!generation)
+			return;
+		const auto context = a_owner.EnsureImmediateContextObservation(generation);
+		const auto sequence = a_owner.NextCommandStreamSequence();
+		const auto source = a_owner.ObserveResource(a_source, context, sequence, generation);
+		const auto destination = a_owner.ObserveResource(a_destination, context, sequence, generation);
+		if (!context || (a_source.d3dObject && (!source.observationId || source.sessionGeneration != generation)) ||
+			(a_destination.d3dObject && (!destination.observationId || destination.sessionGeneration != generation)))
+			return;
+		const auto observation = a_owner.collector.AllocateObservationId(generation);
+		if (!observation)
+			return;
+		const EventPayload payload{
+			.schema = static_cast<std::uint16_t>(PayloadSchema::kPostProcessingBoundary),
+			.words = { observation, source.observationId, destination.observationId,
+				a_target, a_publicationGeneration },
+		};
+		scope = a_owner.collector.EnterScope(ScopeKind::kRenderPass, observation,
+			EventKind::kRenderPassEnter, EventKind::kRenderPassExit, payload, payload, generation);
+		if (scope.IsActive()) {
+			transferOperation = 0;
+			postProcessingOwner = &a_owner;
+			postProcessingGeneration = generation;
+		}
+	}
+
+	Runtime::PostProcessingScope::~PostProcessingScope()
+	{
+		postProcessingOwner = previousOwner;
+		postProcessingGeneration = previousGeneration;
+		transferOperation = previousOperation;
+	}
+
+	Runtime::PostProcessingScope Runtime::EnterPostProcessing(
+		const ResourceObservationInput& a_source, const ResourceObservationInput& a_destination,
+		std::uint32_t a_target, std::uint64_t a_publicationGeneration) noexcept
+	{
+		return PostProcessingScope(*this, a_source, a_destination, a_target, a_publicationGeneration);
+	}
+
+	bool Runtime::IsInsidePostProcessing() const noexcept
+	{
+		return postProcessingOwner == this && postProcessingGeneration != 0 &&
+		       postProcessingGeneration == collector.ActiveGeneration();
+	}
+
+	void Runtime::BeginTransferOperation(std::uintptr_t a_context, bool a_compute,
+		std::uint32_t a_operation, const std::array<std::uintptr_t, 6>& a_shaders) noexcept
+	{
+		transferOperation = 0;
+		if (!IsInsidePostProcessing() || a_context != immediateContext.load(std::memory_order_acquire))
+			return;
+		const auto observation = collector.AllocateObservationId(postProcessingGeneration);
+		const auto recorded = collector.RecordForGeneration(EventKind::kRasterStateObserved,
+			{ .schema = static_cast<std::uint16_t>(PayloadSchema::kTransferOperation), .words = {
+																						   observation,
+																						   a_operation | (static_cast<std::uint64_t>(a_compute) << 32u),
+																						   a_shaders[0],
+																						   a_shaders[1],
+																						   a_shaders[2],
+																						   a_shaders[3],
+																						   a_shaders[4],
+																						   a_shaders[5],
+																					   } },
+			EnsureImmediateContextObservation(postProcessingGeneration), postProcessingGeneration, NextCommandStreamSequence());
+		if (recorded == RecordResult::kRecorded)
+			transferOperation = observation;
+	}
+
+	void Runtime::RecordRasterState(std::uintptr_t a_context, std::uint32_t a_slot,
+		const std::array<float, 6>& a_viewport, const std::array<std::int32_t, 4>& a_scissor,
+		std::uint32_t a_viewportCount, std::uint32_t a_scissorCount, bool a_scissorEnabled) noexcept
+	{
+		if (!IsInsidePostProcessing() || a_context != immediateContext.load(std::memory_order_acquire))
+			return;
+		collector.RecordForGeneration(EventKind::kRasterStateObserved,
+			{ .schema = static_cast<std::uint16_t>(PayloadSchema::kRasterState), .words = {
+																					 a_slot,
+																					 PackFloats(a_viewport[0], a_viewport[1]),
+																					 PackFloats(a_viewport[2], a_viewport[3]),
+																					 PackFloats(a_viewport[4], a_viewport[5]),
+																					 static_cast<std::uint32_t>(a_scissor[0]) | (static_cast<std::uint64_t>(static_cast<std::uint32_t>(a_scissor[1])) << 32u),
+																					 static_cast<std::uint32_t>(a_scissor[2]) | (static_cast<std::uint64_t>(static_cast<std::uint32_t>(a_scissor[3])) << 32u),
+																					 a_viewportCount | (static_cast<std::uint64_t>(a_scissorCount) << 32u),
+																					 (transferOperation << 1u) | static_cast<std::uint64_t>(a_scissorEnabled),
+																				 } },
+			EnsureImmediateContextObservation(postProcessingGeneration), postProcessingGeneration, NextCommandStreamSequence());
+	}
+
+	void Runtime::RecordTransferResourceAccess(std::uintptr_t a_context,
+		const ResourceViewInput& a_view, ResourceStage a_stage, std::uint32_t a_slot, bool a_write) noexcept
+	{
+		if (!IsInsidePostProcessing() ||
+			a_context != immediateContext.load(std::memory_order_acquire))
+			return;
+		const auto generation = postProcessingGeneration;
+		const auto context = EnsureImmediateContextObservation(generation);
+		const auto sequence = NextCommandStreamSequence();
+		const auto resource = ObserveResource(a_view.resource, context, sequence, generation);
+		const auto view = a_view.view.d3dObject ? ObserveResourceView(a_view, context, sequence, generation) : TargetViewObservationResult{};
+		if (!context || !resource.observationId || resource.sessionGeneration != generation ||
+			(a_view.view.d3dObject && (!view.observationId || view.sessionGeneration != generation))) {
+			if (a_write) {
+				const std::lock_guard lock(transferVersionMutex);
+				// A completed write cannot retain an older positive command attribution.
+				if (collector.ActiveGeneration() == generation)
+					transferVersions.Invalidate();
+			}
+			return;
+		}
+		const auto frame = collector.GetThreadFrameContext().cpuFrame;
+		TransferVersions::Version version;
+		bool capacityAvailable = true;
+		{
+			const std::lock_guard lock(transferVersionMutex);
+			if (collector.ActiveGeneration() != generation)
+				return;
+			if (a_write) {
+				version = { resource.observationId, collector.AllocateObservationId(generation), sequence, frame };
+				capacityAvailable = version.observation && frame != kUnknownFrame &&
+				                    transferVersions.CanWrite(generation, resource.observationId);
+				if (!capacityAvailable)
+					version = {};
+			} else {
+				version = transferVersions.Read(generation, resource.observationId, frame);
+			}
+			const auto recorded = collector.RecordForGeneration(EventKind::kTransferResourceAccess,
+				{ .schema = static_cast<std::uint16_t>(PayloadSchema::kTransferResourceAccess), .words = {
+																									resource.observationId,
+																									view.observationId,
+																									version.observation,
+																									version.command,
+																									static_cast<std::uint64_t>(a_stage),
+																									a_slot,
+																									static_cast<std::uint64_t>(a_write) | (static_cast<std::uint64_t>(capacityAvailable) << 1u) | (static_cast<std::uint64_t>(a_view.view.kind) << 8u),
+																									transferOperation,
+																								} },
+				context, generation, sequence);
+			if (a_write && capacityAvailable && recorded == RecordResult::kRecorded)
+				(void)transferVersions.Write(generation, version);
+			else if (a_write)
+				transferVersions.Invalidate();
+		}
+	}
+
+	void Runtime::RecordTransferCopyRegion(std::uintptr_t a_context, std::uint32_t a_sourceSubresource,
+		std::uint32_t a_destinationSubresource, const std::array<std::uint32_t, 3>& a_destination,
+		const std::array<std::uint32_t, 6>& a_sourceBox, bool a_hasSourceBox) noexcept
+	{
+		if (!IsInsidePostProcessing() || a_context != immediateContext.load(std::memory_order_acquire))
+			return;
+		const auto pack = [](std::uint32_t a_low, std::uint32_t a_high) {
+			return a_low | (static_cast<std::uint64_t>(a_high) << 32u);
+		};
+		collector.RecordForGeneration(EventKind::kResourceFlow,
+			{ .schema = static_cast<std::uint16_t>(PayloadSchema::kTransferCopyRegion), .words = {
+																							transferOperation,
+																							pack(a_sourceSubresource, a_destinationSubresource),
+																							pack(a_destination[0], a_destination[1]),
+																							a_destination[2],
+																							pack(a_sourceBox[0], a_sourceBox[1]),
+																							pack(a_sourceBox[2], a_sourceBox[3]),
+																							pack(a_sourceBox[4], a_sourceBox[5]),
+																							a_hasSourceBox,
+																						} },
+			EnsureImmediateContextObservation(postProcessingGeneration), postProcessingGeneration, NextCommandStreamSequence());
 	}
 
 	Collector::ScopeGuard Runtime::EnterRenderPass(const RenderPassBoundary& a_boundary) noexcept
@@ -1015,15 +1255,24 @@ namespace CSX::RenderMap
 		}
 	}
 
-	void Runtime::PauseNextProducerPublicationForTesting() noexcept
+	void Runtime::PauseNextProducerPublicationForTesting(std::uint32_t a_skipPublications) noexcept
 	{
 		resumeDeferredPublication.store(false, std::memory_order_release);
 		deferredPublicationPaused.store(false, std::memory_order_release);
+		producerPublicationsToSkip.store(a_skipPublications, std::memory_order_release);
 		pauseNextProducerPublication.store(true, std::memory_order_release);
 	}
 
 	void Runtime::PauseProducerPublicationForTesting() noexcept
 	{
+		if (!pauseNextProducerPublication.load(std::memory_order_acquire))
+			return;
+		auto remaining = producerPublicationsToSkip.load(std::memory_order_acquire);
+		while (remaining != 0) {
+			if (producerPublicationsToSkip.compare_exchange_weak(remaining, remaining - 1,
+					std::memory_order_acq_rel))
+				return;
+		}
 		if (!pauseNextProducerPublication.exchange(false, std::memory_order_acq_rel))
 			return;
 		deferredPublicationPaused.store(true, std::memory_order_release);
@@ -1441,6 +1690,10 @@ namespace CSX::RenderMap
 		std::uintptr_t a_commandList,
 		bool a_restoreContextState) noexcept
 	{
+		if (collector.IsCapturing()) {
+			const std::lock_guard lock(transferVersionMutex);
+			transferVersions.Invalidate();
+		}
 		const auto isImmediateContext =
 			a_context != 0 && a_context == immediateContext.load(std::memory_order_acquire);
 		if (isImmediateContext && !a_restoreContextState)
@@ -1600,18 +1853,31 @@ namespace CSX::RenderMap
 			bindingObservation.observationId);
 	}
 
-	std::uint64_t Runtime::ClaimRenderTargetStateSeed(std::uintptr_t a_context) noexcept
+	std::uint64_t Runtime::ClaimImmediateStateSeed(std::atomic_uint64_t& a_seed,
+		std::uintptr_t a_context, std::uint64_t a_expectedCaptureGeneration) noexcept
 	{
-		if (!collector.IsCapturing() || a_context == 0 ||
-			a_context != immediateContext.load(std::memory_order_acquire)) {
+		const auto generation = a_expectedCaptureGeneration != 0 ?
+		                            a_expectedCaptureGeneration :
+		                            collector.ActiveGeneration();
+		if (generation == 0 || collector.ActiveGeneration() != generation || !collector.IsCapturing() ||
+			a_context == 0 || a_context != immediateContext.load(std::memory_order_acquire) ||
+			a_seed.load(std::memory_order_acquire) == generation)
 			return 0;
-		}
-		const auto generation = collector.ActiveGeneration();
-		if (generation == 0)
+#if defined(CSX_RENDER_MAP_TESTING)
+		if (a_expectedCaptureGeneration != 0)
+			PauseProducerPublicationForTesting();
+#endif
+		std::scoped_lock lifecycleLock(captureLifecycleMutex);
+		if (collector.ActiveGeneration() != generation || !collector.IsCapturing() ||
+			a_context != immediateContext.load(std::memory_order_acquire))
 			return 0;
-		return targetStateObservationGeneration.exchange(generation, std::memory_order_acq_rel) == generation ?
-		           0 :
-		           generation;
+		return a_seed.exchange(generation, std::memory_order_acq_rel) == generation ? 0 : generation;
+	}
+
+	std::uint64_t Runtime::ClaimRenderTargetStateSeed(std::uintptr_t a_context,
+		std::uint64_t a_expectedCaptureGeneration) noexcept
+	{
+		return ClaimImmediateStateSeed(targetStateObservationGeneration, a_context, a_expectedCaptureGeneration);
 	}
 
 	ResourceObservationResult Runtime::ObserveResource(
@@ -1761,18 +2027,10 @@ namespace CSX::RenderMap
 		}
 	}
 
-	std::uint64_t Runtime::ClaimResourceViewStateSeed(std::uintptr_t a_context) noexcept
+	std::uint64_t Runtime::ClaimResourceViewStateSeed(std::uintptr_t a_context,
+		std::uint64_t a_expectedCaptureGeneration) noexcept
 	{
-		if (!collector.IsCapturing() || a_context == 0 ||
-			a_context != immediateContext.load(std::memory_order_acquire)) {
-			return 0;
-		}
-		const auto generation = collector.ActiveGeneration();
-		if (generation == 0)
-			return 0;
-		return resourceViewStateObservationGeneration.exchange(generation, std::memory_order_acq_rel) == generation ?
-		           0 :
-		           generation;
+		return ClaimImmediateStateSeed(resourceViewStateObservationGeneration, a_context, a_expectedCaptureGeneration);
 	}
 
 	void Runtime::RecordResourceFlow(
@@ -1790,6 +2048,15 @@ namespace CSX::RenderMap
 		const auto generation = collector.ActiveGeneration();
 		if (!generation)
 			return;
+		if (IsInsidePostProcessing()) {
+			BeginTransferOperation(a_context, false, 0x100u + static_cast<std::uint32_t>(a_operation), {});
+			RecordTransferResourceAccess(a_context, { .resource = a_source }, ResourceStage::kPixel, a_sourceSubresource, false);
+			RecordTransferResourceAccess(a_context, { .resource = a_destination }, ResourceStage::kOutputMerger, a_destinationSubresource, true);
+		} else {
+			const std::lock_guard lock(transferVersionMutex);
+			transferVersions.Invalidate();
+		}
+
 		const auto contextObservationId = EnsureImmediateContextObservation(generation);
 		if (contextObservationId == 0)
 			return;
@@ -1872,6 +2139,10 @@ namespace CSX::RenderMap
 		std::uint64_t a_completedQpcTick,
 		std::uint64_t a_expectedCaptureGeneration) noexcept
 	{
+		if (collector.IsCapturing() && !IsInsidePostProcessing()) {
+			const std::lock_guard lock(transferVersionMutex);
+			transferVersions.Invalidate();
+		}
 		if (a_expectedCaptureGeneration == 0 || collector.ActiveGeneration() != a_expectedCaptureGeneration ||
 			a_context == 0 || a_context != immediateContext.load(std::memory_order_acquire)) {
 			return;
@@ -2066,7 +2337,7 @@ namespace CSX::RenderMap
 		float a_uMax,
 		float a_vMax,
 		std::uint32_t a_submitFlags,
-		std::uint64_t a_compositorCycle) noexcept
+		std::uint64_t a_compositorCycle, std::uint64_t a_publicationGeneration) noexcept
 	{
 		if (!collector.IsCapturing() || a_resource.d3dObject == 0)
 			return;
@@ -2084,13 +2355,34 @@ namespace CSX::RenderMap
 		frame.eye = a_eye;
 		frame.eyeMask = a_eyeMask;
 		collector.SetThreadFrameContext(frame);
-		collector.RecordForGeneration(
+		TransferVersions::Version version;
+		{
+			const std::lock_guard lock(transferVersionMutex);
+			if (collector.ActiveGeneration() == captureGeneration)
+				version = transferVersions.Read(captureGeneration, resource.observationId, frame.cpuFrame);
+		}
+		const auto eyeRecorded = collector.RecordForGeneration(
 			EventKind::kEyeSubmitted,
 			EyeSubmissionPayload(
 				resource.observationId, a_eye, a_eyeMask,
 				a_uMin, a_vMin, a_uMax, a_vMax, a_submitFlags, a_compositorCycle),
 			0,
 			resource.sessionGeneration);
+		auto publicationRecorded = RecordResult::kFiltered;
+		if (a_publicationGeneration)
+			publicationRecorded = collector.RecordForGeneration(EventKind::kEyeSubmitted,
+				{ .schema = static_cast<std::uint16_t>(PayloadSchema::kEyePublication), .words = {
+																							resource.observationId,
+																							version.observation,
+																							version.command,
+																							a_publicationGeneration,
+																							a_compositorCycle,
+																							static_cast<std::uint64_t>(a_eye),
+																							a_eyeMask,
+																						} },
+				0, resource.sessionGeneration);
+		if (eyeRecorded == RecordResult::kRecorded && publicationRecorded == RecordResult::kRecorded)
+			collector.AcceptWindowEye(a_eye, frame.cpuFrame, a_compositorCycle, a_publicationGeneration, captureGeneration);
 		collector.SetThreadFrameContext(previousFrame);
 	}
 
@@ -2351,6 +2643,10 @@ namespace CSX::RenderMap
 		std::uint64_t a_argument2,
 		std::uint64_t a_argument3) noexcept
 	{
+		if (collector.IsCapturing() && !IsInsidePostProcessing()) {
+			const std::lock_guard lock(transferVersionMutex);
+			transferVersions.Invalidate();
+		}
 		if (!collector.IsCapturing() || a_context == 0) {
 			return;
 		}
@@ -2469,6 +2765,10 @@ namespace CSX::RenderMap
 		std::uint64_t a_argument2,
 		std::uint64_t a_argument3) noexcept
 	{
+		if (collector.IsCapturing() && !IsInsidePostProcessing()) {
+			const std::lock_guard lock(transferVersionMutex);
+			transferVersions.Invalidate();
+		}
 		if (!collector.IsCapturing() || a_context == 0) {
 			return;
 		}

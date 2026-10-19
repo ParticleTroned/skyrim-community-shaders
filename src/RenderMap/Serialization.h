@@ -13,6 +13,7 @@ namespace CSX::RenderMap
 	struct CaptureCompleteness
 	{
 		std::uint64_t lostEventCount{ 0 };
+		std::uint64_t transferAdmissionFailures{ 0 };
 		bool structurallyIncomplete{ false };
 		bool terminalFailure{ false };
 		nlohmann::json reasons = nlohmann::json::array();
@@ -22,10 +23,11 @@ namespace CSX::RenderMap
 		bool Incomplete() const noexcept { return EvidenceTruncated() || terminalFailure; }
 	};
 
-	/** Evaluate retained event, catalogue, scope, and lifecycle evidence once for all outputs. */
+	/** Evaluate retained event, catalogue, scope, transfer, and lifecycle evidence once for all outputs. */
 	CaptureCompleteness EvaluateCaptureCompleteness(const CaptureSnapshot& a_snapshot);
 
 	nlohmann::json SerializeBounds(const CollectorConfig& a_config);
+	nlohmann::json SerializeCaptureWindow(const CaptureWindowSnapshot& a_window);
 	nlohmann::json SerializeEventKindMask(EventKindMask a_mask);
 	nlohmann::json SerializeGeometryShaderTypeMask(std::uint64_t a_mask);
 	nlohmann::json SerializeControllerStatus(const ControllerSnapshot& a_status);

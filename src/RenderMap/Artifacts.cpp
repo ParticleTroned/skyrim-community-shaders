@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 
 namespace CSX::RenderMap
 {
@@ -163,7 +164,7 @@ namespace CSX::RenderMap
 				{ "schema", {
 								{ "name", "csx.render-event" },
 								{ "major", 1 },
-								{ "minor", 17 },
+								{ "minor", 19 },
 								{ "producerVersion", "collector-v1" },
 							} },
 				{ "captureId", a_capture.descriptor.captureId },
@@ -248,16 +249,17 @@ namespace CSX::RenderMap
 				return bundle;
 			const auto& snapshot = a_capture.snapshot;
 			const auto summary = SerializeCaptureSummary(a_capture);
+			const auto transferAdmissionFailures = completeness.transferAdmissionFailures;
 			const auto serializedEventCount = snapshot.events.size() + (lostEvents == 0 ? 0 : 1);
 			const bool truncated = lostEvents != 0;
 			const bool incomplete = completeness.Incomplete();
 			bundle.eventsArtifact = DescribeArtifact(
 				"events-jsonl", eventsPath, "application/x-ndjson", !incomplete);
-
 			json extensions = a_context.extensions.is_object() ?
 			                      a_context.extensions :
 			                      json::object();
 			extensions.update({
+				{ "csx.captureWindow", SerializeCaptureWindow(snapshot.window) },
 				{ "csx.processId", a_processId },
 				{ "csx.captureIncompleteReasons", completeness.reasons },
 				{ "csx.sessionGeneration", snapshot.sessionGeneration },
@@ -281,6 +283,8 @@ namespace CSX::RenderMap
 				{ "csx.droppedSceneObjectObservationCount", snapshot.statistics.droppedSceneObjectObservations },
 				{ "csx.geometryObservationCount", snapshot.geometryObservations.size() },
 				{ "csx.droppedGeometryObservationCount", snapshot.statistics.droppedGeometryObservations },
+				{ "csx.maximumTransferVersionResources", TransferVersions::kCapacity },
+				{ "csx.observedTransferVersionAdmissionFailures", transferAdmissionFailures },
 				{ "csx.materialStateObservationCount", snapshot.materialStateObservations.size() },
 				{ "csx.droppedMaterialStateObservationCount", snapshot.statistics.droppedMaterialStateObservations },
 			});
@@ -289,7 +293,7 @@ namespace CSX::RenderMap
 				{ "schema", {
 								{ "name", "csx.render-capture-manifest" },
 								{ "major", 1 },
-								{ "minor", 7 },
+								{ "minor", 9 },
 								{ "producerVersion", "collector-v1" },
 							} },
 				{ "captureId", a_capture.descriptor.captureId },
@@ -316,9 +320,11 @@ namespace CSX::RenderMap
 								{ "maxTargetBindingObservations", snapshot.config.maxTargetBindingObservations },
 								{ "maxSceneObjectObservations", snapshot.config.maxSceneObjectObservations },
 								{ "maxGeometryObservations", snapshot.config.maxGeometryObservations },
+								{ "maxTransferVersionResources", TransferVersions::kCapacity },
 								{ "maxMaterialStateObservations", snapshot.config.maxMaterialStateObservations },
 								{ "geometryShaderTypes", SerializeGeometryShaderTypeMask(snapshot.config.geometryShaderTypeMask) },
 								{ "executionWithinSelectedGeometry", snapshot.config.executionWithinSelectedGeometry },
+								{ "activation", summary["bounds"]["activation"] },
 								{ "pointerPolicy", "retain" },
 							} },
 				{ "clock", {

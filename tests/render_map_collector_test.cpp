@@ -1,4 +1,5 @@
 #include "RenderMap/Collector.h"
+#include "RenderMap/DevBenchCaptureBounds.h"
 
 #include <atomic>
 #include <cstdlib>
@@ -84,6 +85,79 @@ namespace
 		Check(collector.Start(config) == StartResult::kInvalidBounds, "zero target-binding-observation bound was accepted");
 	}
 
+	void TestLateWindowCollectorAdmission()
+	{
+		Collector collector;
+		auto config = Config();
+		config.latePostProcessingWindow = true;
+		constexpr std::uint32_t mainSourceTarget = 1;
+		constexpr std::uint32_t vrFramebufferTarget = 114;
+		config.activationTarget = vrFramebufferTarget;
+		config.requestedEventKindMask = EventKindBit(EventKind::kEyeSubmitted);
+		config.maxActivationWait = std::chrono::seconds(1);
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		auto invalid = config;
+		invalid.executionWithinSelectedGeometry = true;
+		Check(collector.Start(invalid) == StartResult::kInvalidBounds, "late window accepted restricted geometry");
+		invalid = config;
+		invalid.requestedEventKindMask = EventKindBit(EventKind::kDraw);
+		Check(collector.Start(invalid) == StartResult::kInvalidBounds, "late window omitted requested eyes");
+		invalid = config;
+		invalid.maxActivationWait = std::chrono::nanoseconds::zero();
+		Check(collector.Start(invalid) == StartResult::kInvalidBounds, "late window accepted an unbounded armed wait");
+		Check(collector.Start(config) == StartResult::kStarted, "late collector did not arm");
+		const auto generation = collector.ActiveGeneration();
+		for (int index = 0; index < 5000; ++index)
+			Check(collector.Record(EventKind::kDraw) == RecordResult::kFiltered, "collector admitted prefix events");
+		Check(collector.ObserveResource({ .d3dObject = 1 }).observationId == 0,
+			"collector admitted a prefix catalogue entry");
+		Check(!collector.ActivatePostProcessingWindow(mainSourceTarget, 12, 77), "source target activated the destination window");
+		Check(!collector.ActivatePostProcessingWindow(vrFramebufferTarget, 0, 77), "zero frame activated the window");
+		Check(!collector.ActivatePostProcessingWindow(vrFramebufferTarget, kUnknownFrame, 0), "unknown frame activated the window");
+		Check(!collector.ActivatePostProcessingWindow(vrFramebufferTarget, 12, 0), "missing publication activated the window");
+		const auto refused = collector.GetCaptureWindow();
+		Check(refused.phase == CaptureWindowPhase::kArmed && refused.activationTick == 0 &&
+				  refused.activationBoundary.attemptCount == 4 && refused.activationBoundary.targetRejections == 1 &&
+				  refused.activationBoundary.frameRejections == 2 && refused.activationBoundary.publicationRejections == 2 &&
+				  refused.activationBoundary.lastTarget == vrFramebufferTarget && refused.activationBoundary.lastCpuFrame == 12 &&
+				  refused.activationBoundary.lastPublicationGeneration == 0,
+			"refused inputs were lost or changed activation eligibility");
+		Check(collector.ActivatePostProcessingWindow(vrFramebufferTarget, 12, 77), "VR destination boundary did not activate");
+		Check(!collector.ActivatePostProcessingWindow(mainSourceTarget, 0, 0), "bootstrap window reactivated");
+		const auto accepted = collector.GetCaptureWindow();
+		Check(accepted.activationBoundary.attemptCount == 5 && accepted.activationBoundary.lastCpuFrame == 12 &&
+				  accepted.activationBoundary.lastPublicationGeneration == 77 && accepted.activationBoundary.targetRejections == 1,
+			"post-activation calls rewrote armed boundary diagnostics");
+		std::thread excluded([&] {
+			Check(collector.Record(EventKind::kDraw) == RecordResult::kFiltered,
+				"foreign thread populated bootstrap events");
+			Check(collector.ObserveResource({ .d3dObject = 2 }).observationId == 0,
+				"foreign thread populated bootstrap catalogue");
+		});
+		excluded.join();
+		Check(collector.Record(EventKind::kRasterStateObserved) == RecordResult::kRecorded,
+			"bootstrap owner could not retain its state");
+		collector.CompleteWindowBootstrap(true);
+		auto snapshot = collector.Stop();
+		Check(snapshot && snapshot->events.size() == 1 && snapshot->resourceObservations.empty() &&
+				  snapshot->statistics.droppedStopped == 0 && snapshot->statistics.droppedEventLimit == 0 &&
+				  snapshot->window.phase == CaptureWindowPhase::kIncomplete &&
+				  snapshot->window.activationBoundary.attemptCount == 5,
+			"omitted prefix consumed capacity or was promoted to a complete window");
+		Check(collector.Start(Config()) == StartResult::kStarted && collector.ActiveGeneration() != generation,
+			"late window drain did not release single-owner admission");
+		Check(collector.Stop().has_value(), "successor collector could not drain");
+
+		config.maxActivationWait = std::chrono::nanoseconds(1);
+		Check(collector.Start(config) == StartResult::kStarted, "deadline diagnostic capture did not arm");
+		std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		Check(!collector.ActivatePostProcessingWindow(vrFramebufferTarget, 12, 77), "expired armed window activated");
+		const auto expired = collector.Stop();
+		Check(expired && expired->window.failure == CaptureWindowFailure::kActivationTimeout &&
+				  expired->window.activationBoundary.attemptCount == 0 && expired->events.empty(),
+			"expired boundary invented an in-window attempt or admitted events");
+	}
+
 	void TestStageShaderEnrichmentDoesNotAllocateLookupNodes()
 	{
 		Collector collector;
@@ -145,6 +219,69 @@ namespace
 				  snapshot->stageShaderObservations.front().engineAliasesTruncated &&
 				  snapshot->statistics.droppedStageShaderObservations == 1,
 			"bounded enrichment lost truncation or admission evidence");
+	}
+
+	void TestDevBenchDefaultBudget()
+	{
+		auto config = CSX::RenderMap::DevBenchBounds::DefaultConfig();
+		config.captureNumericId = 42;
+		const auto maximumBytes = config.maxBytes;
+		auto catalogueConfig = config;
+		catalogueConfig.maxEvents = 0;
+		Check(Collector::RequiredStorageBytes(catalogueConfig) < maximumBytes,
+			"DevBench default catalogues consume the entire advertised byte budget");
+
+		Collector collector;
+		Check(collector.Start(config) == StartResult::kStarted,
+			"DevBench default capture profile was rejected");
+		Check(collector.Stop().has_value(), "DevBench default capture profile did not stop");
+	}
+
+	void TestDevBenchJsonBounds()
+	{
+		using nlohmann::json;
+		for (const auto& bound : DevBenchBounds::kBounds) {
+			const std::string field(bound.field);
+			for (const auto value : { std::uint64_t{ 1 }, bound.maximum })
+				Check(!DevBenchBounds::Validate(json{ { field, value } }), "valid JSON bound was rejected");
+			for (const auto value : { std::uint64_t{ 0 }, bound.maximum + 1, std::uint64_t{ 0x100000001 }, (std::numeric_limits<std::uint64_t>::max)() }) {
+				const auto error = DevBenchBounds::Validate(json{ { field, value } });
+				Check(error && !error->invalidType && error->bound.field == field,
+					"oversized JSON bound wrapped or lost its field identity");
+			}
+			for (const auto& value : { json(-1), json(1.5), json(true), json("1"), json(nullptr) }) {
+				const auto error = DevBenchBounds::Validate(json{ { field, value } });
+				Check(error && error->invalidType && error->bound.field == field,
+					"non-unsigned JSON bound was admitted");
+			}
+		}
+		Check(!DevBenchBounds::Validate(json::parse(R"({"maxFrames":1,"maxScopeDepth":32})")),
+			"positive integers from the real JSON parser were rejected");
+		Check(DevBenchBounds::Validate(json::parse(R"({"maxEvents":18446744073709551616})"))->invalidType,
+			"integer beyond uint64 range was admitted as floating point");
+		Check(!DevBenchBounds::Validate(json::object()), "omitted bounds did not retain defaults");
+	}
+
+	void TestDevBenchMinimumEventBudget()
+	{
+		auto config = DevBenchBounds::DefaultConfig();
+		auto catalogueConfig = config;
+		catalogueConfig.maxEvents = 0;
+		const auto fixedBytes = Collector::RequiredStorageBytes(catalogueConfig);
+		catalogueConfig.maxEvents = 1;
+		const auto minimumBytes = Collector::RequiredStorageBytes(catalogueConfig);
+		Collector collector;
+		config.maxBytes = fixedBytes + 1;
+		Check(collector.Start(config) == StartResult::kInvalidBounds,
+			"catalogue threshold unexpectedly admitted a partial event slot");
+		config.maxBytes = minimumBytes - 1;
+		Check(collector.Start(config) == StartResult::kInvalidBounds, "partial event slot was admitted");
+		config.maxBytes = minimumBytes;
+		Check(collector.Start(config) == StartResult::kStarted, "exact one-event byte budget was rejected");
+		Check(collector.Stop().has_value(), "minimum-budget capture did not stop");
+		config.maxResourceObservations *= 2;
+		Check(collector.Start(config) == StartResult::kInvalidBounds,
+			"changed catalogue bounds reused the default byte minimum");
 	}
 
 	void TestNestedScopes()
@@ -414,7 +551,11 @@ int main()
 {
 	try {
 		TestBoundsValidation();
+		TestLateWindowCollectorAdmission();
 		TestStageShaderEnrichmentDoesNotAllocateLookupNodes();
+		TestDevBenchDefaultBudget();
+		TestDevBenchJsonBounds();
+		TestDevBenchMinimumEventBudget();
 		TestNestedScopes();
 		TestCapacityLimits();
 		TestFrameLimit();

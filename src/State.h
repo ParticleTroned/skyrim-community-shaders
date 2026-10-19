@@ -358,8 +358,29 @@ public:
 		CharacterFocusFadeMask = 255 << CharacterFocusFadeShift,
 		CharacterFace = 0b01 << CharacterCategoryShift,
 		CharacterSkin = 0b10 << CharacterCategoryShift,
-		CharacterHair = 0b11 << CharacterCategoryShift
+		CharacterHair = 0b11 << CharacterCategoryShift,
+		MeshBlending = 1u << 23
 	};
+
+	static_assert((static_cast<std::uint32_t>(ExtraShaderDescriptors::MeshBlending) &
+					  (static_cast<std::uint32_t>(ExtraShaderDescriptors::InWorld) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::IsReflections) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::IsBeastRace) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::EffectShadows) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::IsTree) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::GrassSphereNormal) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::IsFemale) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::SuppressExternalEmittance) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::AdditiveLighting) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::PBRGrass) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::PBRGrassShading) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::CharacterCategoryMask) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::CharacterExcluded) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::CharacterFocusFadeMask))) == 0u);
+
+	static constexpr std::uint32_t MeshBlendingLandscapeClassShift = 11u;
+	static constexpr std::uint32_t MeshBlendingLandscapeClassBits = 2u;
+	static constexpr std::uint32_t MeshBlendingLandscapeClassCount = 6u;
 
 	enum class ExtraFeatureDescriptors : uint32_t
 	{
@@ -371,8 +392,20 @@ public:
 		THLand5HasDisplacement = 1 << 5,
 		ETMaterialModel = 0b111 << 6,
 		THLandHasDisplacement = 1 << 9,
-		TVMeshVariation = 1 << 10
+		TVMeshVariation = 1 << 10,
+		// Six 2-bit LAND material classes, ordered like the terrain texture layers.
+		// Values are interpreted by MeshBlending as Unknown, Hard, Soft, Reserved.
+		MeshBlendingLandscapeClasses = 0x007FF800u
 	};
+	static_assert(
+		static_cast<std::uint32_t>(ExtraFeatureDescriptors::MeshBlendingLandscapeClasses) ==
+		(((1u << (MeshBlendingLandscapeClassBits * MeshBlendingLandscapeClassCount)) - 1u) << MeshBlendingLandscapeClassShift));
+	static_assert(
+		(static_cast<std::uint32_t>(ExtraFeatureDescriptors::MeshBlendingLandscapeClasses) &
+			(static_cast<std::uint32_t>(ExtraFeatureDescriptors::ETMaterialModel) |
+				static_cast<std::uint32_t>(ExtraFeatureDescriptors::THLandHasDisplacement) |
+				static_cast<std::uint32_t>(ExtraFeatureDescriptors::TVMeshVariation) |
+				((1u << MeshBlendingLandscapeClassShift) - 1u))) == 0u);
 
 	bool inWorld = false;
 	uint32_t lastWorldRenderFrame = std::numeric_limits<uint32_t>::max();

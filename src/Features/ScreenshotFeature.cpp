@@ -930,17 +930,21 @@ bool ScreenshotFeature::RequestCapture(CaptureRequest request)
 
 void ScreenshotFeature::ProcessCaptureRequest()
 {
-	if (sequenceCapture) {
+	if (sequenceCapture)
 		sequenceCapture->Tick(loaded);
-		if (sequenceCapture->IsActive())
-			return;
-	}
 	std::optional<CaptureRequest> request;
+	bool stillRequested = false;
 	{
 		std::lock_guard lock(pendingRequestMutex);
+		if (sequenceCapture && sequenceCapture->IsActive())
+			return;
 		request.swap(pendingRequest);
+		stillRequested = request.has_value() || captureRequested.exchange(false);
+		if (stillRequested)
+			++screenshotsInFlight;
 	}
-	if (request || captureRequested.exchange(false)) {
+	if (stillRequested) {
+		const SKSE::stl::scope_exit releaseCapture([this] { --screenshotsInFlight; });
 		// Capture moves the request, so keep a once-only handle to still answer a caller
 		// waiting on a throw without invoking a throwing callback a second time.
 		std::function<void(const CaptureResult&)> onComplete;

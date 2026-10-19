@@ -4278,6 +4278,10 @@ if(BUILD_CONTROLLER_TESTS)
         render_map_collector_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"
     )
+    target_link_libraries(
+        render_map_collector_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
     add_test(NAME RenderMapCollector COMMAND render_map_collector_test)
     set_tests_properties(RenderMapCollector PROPERTIES LABELS "ControllerTests")
 
@@ -4296,6 +4300,10 @@ if(BUILD_CONTROLLER_TESTS)
     target_include_directories(
         render_map_runtime_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(
+        render_map_runtime_test
+        PRIVATE nlohmann_json::nlohmann_json
     )
     add_test(NAME RenderMapRuntime COMMAND render_map_runtime_test)
     set_tests_properties(RenderMapRuntime PROPERTIES LABELS "ControllerTests")

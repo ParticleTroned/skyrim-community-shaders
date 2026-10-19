@@ -11,7 +11,7 @@ namespace StreamingTextures::Preview
 		std::vector<RE::NiPointer<RE::NiAVObject>> roots;
 		bool complete = true;
 	};
-	/** Retain bounded preview roots; incomplete inventory makes distance streaming fail closed. */
+	/** Retain bounded preview roots, rejecting implausible addresses; incomplete inventory suspends streaming. */
 	RootSnapshot Roots();
 	bool Active();
 }

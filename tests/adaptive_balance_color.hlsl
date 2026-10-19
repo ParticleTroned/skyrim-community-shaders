@@ -41,7 +41,7 @@ RWTexture2D<float4> Result : register(u0);
 		bool isLinear = appearanceParameters.y != 0;
 		graded = Color::DirectionalLight(color, isLinear) * appearanceControls.w;
 		original = Color::Light(color, isLinear) * ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
-		           SharedData::adaptiveBalanceSettings.directionalLightMult * appearanceControls.w;
+		           (Color::IsSceneColorDraw() ? SharedData::adaptiveBalanceSettings.directionalLightMult : 1.0) * appearanceControls.w;
 	} else if (appearanceParameters.x == 2) {
 		graded = Color::ApplyAmbientBalance(color) * appearanceMaterial.xyz;
 		original = color * Color::AmbientBalanceMultiplier() * appearanceMaterial.xyz;
@@ -52,12 +52,13 @@ RWTexture2D<float4> Result : register(u0);
 		bool isLinear = appearanceParameters.y != 0;
 		graded = Color::DirectionalLight(color, isLinear, appearanceControls.w);
 		original = Color::Light(color * appearanceControls.w, isLinear) *
-		           ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) * SharedData::adaptiveBalanceSettings.directionalLightMult;
+		           ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
+		           (Color::IsSceneColorDraw() ? SharedData::adaptiveBalanceSettings.directionalLightMult : 1.0);
 	} else if (appearanceParameters.x == 6) {
 		bool isLinear = appearanceParameters.y != 0;
 		graded = Color::PointLight(color, isLinear);
 		original = Color::Light(color, isLinear) * ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
-		           Color::GetPointLightMultiplier(isLinear);
+		           (Color::IsSceneColorDraw() ? Color::GetPointLightMultiplier(isLinear) : 1.0);
 	} else if (appearanceParameters.x == 7) {
 		graded = color * EyeAppearance::SpecularMultiplier();
 	} else if (appearanceParameters.x == 10) {
@@ -79,13 +80,18 @@ RWTexture2D<float4> Result : register(u0);
 	uint lightFlags = lightParameters.y == 1 ? Color::PointLightFlagSpot :
 	                  lightParameters.y == 2 ? Color::PointLightFlagOmnidirectionalBulb :
 	                                           0;
-	bool preserveHDRIntensity = lightParameters.z != 0;
+	bool preserveHDRIntensity = lightParameters.z != 0 && lightParameters.w == 0;
 	float3 graded = lightParameters.w != 0 ? Color::DirectionalLight(color, isLinear) :
 	                preserveHDRIntensity   ? Color::PointLightPreserveHDRIntensity(color, isLinear, lightFlags) :
 	                                         Color::PointLight(color, isLinear, lightFlags);
 	float3 original = Color::Light(color, isLinear, preserveHDRIntensity) *
-	                  ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
-	                  Color::GetPointLightMultiplier(isLinear) * Color::GetPointLightTypeMultiplier(isLinear, lightFlags);
+	                  ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f);
+	if (Color::IsSceneColorDraw()) {
+		if (lightParameters.w != 0)
+			original *= SharedData::adaptiveBalanceSettings.directionalLightMult;
+		else
+			original = original * Color::GetPointLightMultiplier(isLinear) * Color::GetPointLightTypeMultiplier(isLinear, lightFlags);
+	}
 	Result[id.xy] = float4(graded, all(asuint(graded) == asuint(original)));
 #else
 	if (!ENABLE_LL)

@@ -5100,22 +5100,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		settings.neuralRenderingPreset = std::min(settings.neuralRenderingPreset, 4u);
 		settings.neuralRenderingModelResolutionPercent = std::clamp(settings.neuralRenderingModelResolutionPercent,
 			NeuralRendering::kMinimumModelResolutionPercent, NeuralRendering::kMaximumModelResolutionPercent);
-		settings.neuralRenderingIntensity = std::clamp(
-			std::isfinite(settings.neuralRenderingIntensity) ? settings.neuralRenderingIntensity : 0.8f,
-			0.0f,
-			2.0f);
-		settings.neuralRenderingLocalTone = std::clamp(
-			std::isfinite(settings.neuralRenderingLocalTone) ? settings.neuralRenderingLocalTone : 0.75f,
-			0.0f,
-			2.0f);
-		settings.neuralRenderingLocalStructure = std::clamp(
-			std::isfinite(settings.neuralRenderingLocalStructure) ? settings.neuralRenderingLocalStructure : 0.9f,
-			0.0f,
-			2.0f);
-		settings.neuralRenderingSkinStructure = std::clamp(
-			std::isfinite(settings.neuralRenderingSkinStructure) ? settings.neuralRenderingSkinStructure : 0.9f,
-			0.0f,
-			2.0f);
+		NeuralRendering::Runtime::Instance().GetTuningLimits().Sanitize(settings);
 		settings.neuralRenderingStyle = std::min(settings.neuralRenderingStyle, 3u);
 		settings.neuralRenderingSingleSubrectScale = std::clamp(
 			std::isfinite(settings.neuralRenderingSingleSubrectScale) ?
@@ -18365,6 +18350,7 @@ bool Upscaling::ApplyNeuralRenderingPreset(
 	default:
 		break;
 	}
+	NeuralRendering::Runtime::Instance().GetTuningLimits().Sanitize(a_settings);
 	return true;
 }
 
@@ -18408,7 +18394,7 @@ bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, s
 			throw std::invalid_argument("Neural Rendering mode is unsupported for this runtime");
 		SanitizeUpscalingSettings(candidate);
 		const json sanitized = candidate;
-		NeuralRendering::ValidateRenderingSettingsNormalization(a_configuration, sanitized);
+		NeuralRendering::ValidateRenderingSettingsNormalization(a_configuration, sanitized, NeuralRendering::Runtime::Instance().GetTuningLimits());
 		const auto previous = settings;
 		settings = std::move(candidate);
 		if (!HandleNeuralRenderingSettingsTransition(previous, "Neural Rendering feature configuration")) {
@@ -18877,21 +18863,23 @@ namespace
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Set Intensity, Local Tone, Local Structure and Skin Structure together. Natural is gentle; Fabric Detail boosts texture; Strong boosts the effect. Custom keeps your values.");
 
+		const auto limits = NeuralRendering::Runtime::Instance().GetTuningLimits();
+		limits.Sanitize(settings);
 		bool customTuningChanged = false;
 		customTuningChanged |= Util::Widgets::SliderFloat(
-			"Intensity", &settings.neuralRenderingIntensity, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			"Intensity", &settings.neuralRenderingIntensity, 0.0f, limits.intensity, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Sets overall enhancement for the whole NR image. Higher values make the effect stronger.");
 		customTuningChanged |= Util::Widgets::SliderFloat(
-			"Local Tone", &settings.neuralRenderingLocalTone, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			"Local Tone", &settings.neuralRenderingLocalTone, 0.0f, limits.localToneStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Adjusts local brightness and contrast. Higher values allow stronger changes; colour preservation can soften them.");
 		customTuningChanged |= Util::Widgets::SliderFloat(
-			"Local Structure", &settings.neuralRenderingLocalStructure, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			"Local Structure", &settings.neuralRenderingLocalStructure, 0.0f, limits.localStructureStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Adjusts texture and shape detail throughout the NR image. Higher values add stronger detail.");
 		customTuningChanged |= Util::Widgets::SliderFloat(
-			"Skin Structure", &settings.neuralRenderingSkinStructure, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			"Skin Structure", &settings.neuralRenderingSkinStructure, 0.0f, limits.skinStructureStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Adjust skin detail in the shared NR result. Selection > Skin Strength sets how much appears on selected bodies.");
 		static constexpr const char* styles[]{
@@ -19248,7 +19236,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 					static_cast<unsigned long long>(neuralStatus.successes),
 					static_cast<unsigned long long>(neuralStatus.failures));
 				ImGui::TextDisabled(
-					"Any 310.8 nvngx_dlssnr.dll with the required exports is accepted; SHA-256 is diagnostic only.");
+					"Any 310.8 or newer nvngx_dlssnr.dll with the required exports is accepted; SHA-256 is diagnostic only.");
 				ImGui::TextColored(
 					Util::Colors::GetWarning(),
 					"Untrusted NR DLLs execute in-process. Developer Mode and Streamline logging do not restrict admission.");

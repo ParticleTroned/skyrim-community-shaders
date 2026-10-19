@@ -17,10 +17,11 @@ namespace Util
 {
 	/**
      * @brief Extracts a world-space sphere centered on transformed shape geometry.
+     * @note List shapes are supported only on blend collision objects, as one enclosing sphere.
      * @param collisionObj Pointer to the collision object.
      * @param centerPos Output: center position of the shape.
      * @param radius Output: radius of the shape.
-     * @return False for missing/list shapes or invalid/unrepresentable bounds; outputs remain unchanged on failure.
+     * @return False for missing/unsupported shapes or invalid/unrepresentable bounds; outputs remain unchanged on failure.
      */
 	bool GetShapeBound(RE::bhkNiCollisionObject* collisionObj, RE::NiPoint3& centerPos, float& radius);
 

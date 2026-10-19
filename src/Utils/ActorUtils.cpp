@@ -95,7 +95,8 @@ namespace Util
 		RE::bhkRigidBody* bhkRigid = collisionObj->body.get() ? collisionObj->body.get()->AsBhkRigidBody() : nullptr;
 		RE::hkpRigidBody* hkpRigid = bhkRigid ? skyrim_cast<RE::hkpRigidBody*>(bhkRigid->referencedObject.get()) : nullptr;
 		const auto* shape = hkpRigid ? hkpRigid->collidable.GetShape() : nullptr;
-		if (!shape || skyrim_cast<const RE::hkpListShape*>(shape))
+		// Compound skeleton bodies use blend collision objects; ordinary lists remain unsupported.
+		if (!shape || (skyrim_cast<const RE::hkpListShape*>(shape) && !collisionObj->AsBhkBlendCollisionObject()))
 			return false;
 
 		const float worldScale = RE::bhkWorld::GetWorldScaleInverse();

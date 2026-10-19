@@ -1,6 +1,7 @@
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Features/Upscaling/NeuralRendering/Runtime.h"
 #include <tuple>
 
 #include <algorithm>
@@ -16,6 +17,17 @@
 #include <string_view>
 #include <utility>
 
+namespace NeuralRendering
+{
+	Runtime& Runtime::Instance()
+	{
+		static Runtime instance;
+		return instance;
+	}
+	Runtime::~Runtime() = default;
+	TuningLimits Runtime::GetTuningLimits() const { return {}; }
+}
+
 using json = nlohmann::json;
 
 // Compile the production parser without a game, renderer, or live DevBench host.
@@ -27,7 +39,36 @@ int main()
 		if (!value)
 			throw std::runtime_error("Neural Rendering request validation invariant");
 	};
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 8).intensity == 1.0f);
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 8).localStructureStrength == 2.0f);
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 9).localStructureStrength == 1.0f);
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 9).skinStructureStrength == 1.0f);
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 9).localToneStrength == 2.0f);
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 90).localStructureStrength == 2.0f);
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(311, 9).localStructureStrength == 2.0f);
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(0, 0).intensity == 2.0f);
+	for (unsigned minor : { 8u, 9u, 10u }) {
+		const auto limits = NeuralRendering::GetTuningLimitsForVersion(310, minor);
+		for (const auto& [field, maximum] : {
+				 std::pair{ "intensity", limits.intensity }, std::pair{ "localToneStrength", limits.localToneStrength },
+				 std::pair{ "localStructureStrength", limits.localStructureStrength }, std::pair{ "skinStructureStrength", limits.skinStructureStrength } }) {
+			for (double value : { -0.01, 0.0, 0.5, 1.0, 1.01, 1.5, 2.0, 2.01 }) {
+				NeuralRenderingConfigurationRequest request;
+				json error;
+				const bool accepted = TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { field, value } }, request, error, limits);
+				require(accepted == (value >= 0 && value <= maximum));
+				if (!accepted)
+					require(error.at("errorCode") == "nr_tuning_out_of_range" && error.at("maximum") == maximum && error.at("field") == field);
+			}
+		}
+	}
 	const auto descriptor = json::parse(kNeuralRenderingDescriptor);
+	const auto& limitsSchema = descriptor.at("outputSchema").at("properties").at("neuralRendering").at("properties").at("tuningLimits").at("properties");
+	require(limitsSchema.at("localToneStrength").at("const") == 2);
+	for (const auto* field : { "intensity", "localStructureStrength", "skinStructureStrength" }) {
+		require(limitsSchema.at(field).at("enum") == json::array({ 1, 2 }));
+		require(descriptor.at("inputSchema").at("properties").at(field).at("description").get<std::string>().find("310.9") != std::string::npos);
+	}
 	const auto& performanceSchema = descriptor.at("outputSchema").at("properties").at("neuralRendering").at("properties").at("performance").at("properties");
 	require(performanceSchema.contains("lastFeatureParallel") && performanceSchema.contains("lastEvaluationGpuMicroseconds") &&
 			performanceSchema.contains("parallelCommandSubmissions"));

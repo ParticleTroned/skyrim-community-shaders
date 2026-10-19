@@ -1811,6 +1811,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_widget_under_test.h"
             "${_settings_ui_dir}/settings_widget_declarations.h"
             "${_settings_ui_dir}/settings_lighting_pages_under_test.h"
+            "${_settings_ui_dir}/settings_grass_under_test.h"
             "${_settings_ui_dir}/settings_shadow_culling_under_test.h"
             "${_settings_ui_dir}/settings_llf_shadows_under_test.h"
             "${_settings_ui_dir}/settings_model_resolution_under_test.h"
@@ -1878,6 +1879,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_widget_under_test.h"
             "${_settings_ui_dir}/settings_widget_declarations.h"
             "${_settings_ui_dir}/settings_lighting_pages_under_test.h"
+            "${_settings_ui_dir}/settings_grass_under_test.h"
             "${_settings_ui_dir}/settings_shadow_culling_under_test.h"
             "${_settings_ui_dir}/settings_llf_shadows_under_test.h"
             "${_settings_ui_dir}/settings_model_resolution_under_test.h"
@@ -3005,6 +3007,18 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(
         PBRGrassMaterial
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
+        NAME GrassDrawLifecycle
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/grass_draw_lifecycle_test.py"
+    )
+    set_tests_properties(
+        GrassDrawLifecycle
         PROPERTIES
             LABELS "ControllerTests"
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"

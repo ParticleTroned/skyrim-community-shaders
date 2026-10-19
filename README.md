@@ -260,7 +260,7 @@ Streamline's source license and the separate DLSS/NGX and Reflex SDK terms are
 included with the packaged runtime.
 
 The build downloads the production x64 DLLs directly from
-[NVIDIA's Streamline 2.14.1 SDK release](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1)
+[NVIDIA's Streamline 2.14.16 SDK release](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.16)
 and verifies the archive's pinned SHA-256 in
 [Streamline-Runtime.cmake](cmake/Streamline-Runtime.cmake). These runtime DLLs are
 not checked into this repository. The same archive supplies all five license
@@ -277,7 +277,7 @@ The `StreamlineRuntime` CMake install component includes these notices with its
 DLLs. Source builds obtain the Streamline source license and third-party notices
 through the pinned [Streamline submodule](extern/Streamline-DX12).
 
-The public 2.14.1 SDK archive does not contain `sl.dlss_nr.dll`,
+The public 2.14.16 SDK archive does not contain `sl.dlss_nr.dll`,
 `nvngx_dlssnr.dll`, or their implementation sources. This update does not package
 DLSS Neural Rendering or add support for it.
 

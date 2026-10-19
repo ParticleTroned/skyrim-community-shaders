@@ -143,6 +143,26 @@ int main()
 		tuningRejected = true;
 	}
 	require(tuningRejected);
+	for (unsigned minor : { 8u, 9u, 10u }) {
+		const auto limits = NeuralRendering::GetTuningLimitsForVersion(310, minor);
+		for (const auto& [field, maximum] : {
+				 std::pair{ "neuralRenderingIntensity", limits.intensity },
+				 std::pair{ "neuralRenderingLocalTone", limits.localToneStrength },
+				 std::pair{ "neuralRenderingLocalStructure", limits.localStructureStrength },
+				 std::pair{ "neuralRenderingSkinStructure", limits.skinStructureStrength } }) {
+			for (const auto& value : { Json(-1.0), Json(0.5), Json(1.5), Json(2.0), Json(2.1),
+					 Json(true), Json("1.5"), Json(nullptr), Json(std::numeric_limits<double>::infinity()),
+					 Json(std::numeric_limits<double>::quiet_NaN()) }) {
+				bool accepted = false;
+				try {
+					NeuralRendering::ValidateRenderingSettingsNormalization({ { field, value } }, { { field, maximum } }, limits);
+					accepted = true;
+				} catch (const std::invalid_argument&) {
+				}
+				require(accepted == (value.is_number() && value.get<double>() >= maximum && value.get<double>() <= 2.0));
+			}
+		}
+	}
 	NeuralRenderingFeature feature;
 	auto& backend = globals::features::upscaling;
 	auto& colour = NeuralRendering::Color::Registry::Instance();

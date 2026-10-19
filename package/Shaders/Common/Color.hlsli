@@ -296,8 +296,9 @@ namespace Color
 			linearColor = Saturation(linearColor, saturation);
 			color = ENABLE_LL_COLOR_ADJUSTMENTS ? linearColor : LinearToGammaSafe(linearColor);
 		}
-		color = color * ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
-		        GetPointLightMultiplier(isLinear) * GetPointLightTypeMultiplier(isLinear, lightFlags);
+		color *= ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f);
+		if (IsSceneColorDraw())
+			color = color * GetPointLightMultiplier(isLinear) * GetPointLightTypeMultiplier(isLinear, lightFlags);
 		return grade ? AdaptiveBalanceColorBounds::Output(color) : color;
 	}
 

@@ -115,9 +115,16 @@ namespace RE
 			output = massCenter;
 		}
 	};
+	struct bhkBlendCollisionObject;
 	struct bhkNiCollisionObject
 	{
+		virtual ~bhkNiCollisionObject() = default;
+		virtual bhkBlendCollisionObject* AsBhkBlendCollisionObject() { return nullptr; }
 		Borrowed<bhkEntity> body;
+	};
+	struct bhkBlendCollisionObject : bhkNiCollisionObject
+	{
+		bhkBlendCollisionObject* AsBhkBlendCollisionObject() override { return this; }
 	};
 }
 
@@ -270,6 +277,44 @@ namespace
 		Check(!Util::ExtractShapeBound(&list, radius) && radius == 31, "unsupported list radius accepted or published");
 		Check(list.projectionCalls == 0 && f.wrapper.massCenterCalls == 0 && f.wrapper.transformCalls == 0, "rejected shape reached Havok accessors");
 	}
+	void BlendCollisionLists()
+	{
+		Fixture f;
+		RE::hkpListShape list;
+		list.center = { 1, 2, 3 };
+		list.halfExtents = { 2, 3, 6 };
+		f.rigid.collidable.shape = &list;
+		RE::bhkBlendCollisionObject blend;
+		blend.body.value = &f.wrapper;
+		f.wrapper.transform.rotation.col0 = { 0, 1, 0, 0 };
+		f.wrapper.transform.rotation.col1 = { -1, 0, 0, 0 };
+		f.wrapper.transform.translation = { 10, 20, 30, 0 };
+		RE::bhkWorld::scale = 2;
+		RE::NiPoint3 center;
+		float radius = 0;
+		Check(Util::GetShapeBound(&blend, center, radius), "blend collision list rejected");
+		Check(Near(center.x, 16) && Near(center.y, 42) && Near(center.z, 66) && Near(radius, 14),
+			"blend collision list has incorrect transformed bounds");
+		Check(list.projectionCalls == 6 && f.wrapper.transformCalls == 1 && f.wrapper.massCenterCalls == 0,
+			"blend collision list did not use projected geometry");
+
+		list.projectionCalls = 0;
+		ExpectRejected(&f.object);
+		radius = 31;
+		Check(!Util::ExtractShapeBound(&list, radius) && radius == 31, "context-free list radius accepted or published");
+		Check(list.projectionCalls == 0, "unsupported list reached projections");
+
+		for (float invalid : { -1.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+			list.halfExtents = { 2, invalid, 6 };
+			ExpectRejected(&blend);
+		}
+		list.halfExtents = {};
+		ExpectRejected(&blend);
+		f.rigid.collidable.shape = nullptr;
+		ExpectRejected(&blend);
+		blend.body.value = nullptr;
+		ExpectRejected(&blend);
+	}
 	void NonCapsuleFallback()
 	{
 		Fixture f;
@@ -371,6 +416,7 @@ int main()
 	CapsuleGeometry();
 	InvalidCapsules();
 	MissingAndUnsupportedShapes();
+	BlendCollisionLists();
 	NonCapsuleFallback();
 	NonCapsuleGeometry();
 	InvalidNonCapsules();

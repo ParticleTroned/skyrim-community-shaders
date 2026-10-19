@@ -12,10 +12,10 @@ extract_between("${source}" "enum class ReadKind"
 extract_between("${source}" "std::optional<std::string> TexturePath("
     "nlohmann::json DiagnosticStatus(" "streaming_path_under_test.h")
 extract_between("${source}" "void TextureStreaming::State::ObserveTexture("
-    "void TextureStreaming::State::SuspendPreviewReductions(" "streaming_observation_under_test.h")
+    "void TextureStreaming::State::SuspendInventory(" "streaming_observation_under_test.h")
 
 extract_between("${source}" "\tvoid Defer(Block reason, const Record& record)"
     "\tstd::vector<RE::NiPointer<RE::NiAVObject>> previewRoots" "streaming_defer_under_test.h")
 
-extract_between("${source}" "void TextureStreaming::State::SuspendPreviewReductions("
+extract_between("${source}" "void TextureStreaming::State::SuspendInventory("
     "void TextureStreaming::State::ScanPreviews()" "streaming_preview_protection_under_test.h")

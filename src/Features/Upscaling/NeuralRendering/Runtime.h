@@ -2,6 +2,7 @@
 
 #include "CapacityFallback.h"
 #include "RegionCapacity.h"
+#include "TuningLimits.h"
 
 #include "ExecutionEvidence.h"
 
@@ -13,6 +14,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -160,6 +162,8 @@ namespace NeuralRendering
 		[[nodiscard]] std::filesystem::path Path() const;
 		[[nodiscard]] std::string Hash() const;
 		[[nodiscard]] std::string Version() const;
+		/** Use probed DLL limits, or cached installed-file metadata before initialization. */
+		[[nodiscard]] TuningLimits GetTuningLimits() const;
 		[[nodiscard]] std::filesystem::path ParameterCorePath() const;
 		[[nodiscard]] std::string ParameterCoreHash() const;
 		[[nodiscard]] ParameterCoreTrust CoreTrust() const;
@@ -229,6 +233,7 @@ namespace NeuralRendering
 		std::filesystem::path path_;
 		std::string hash_;
 		std::string version_;
+		std::optional<TuningLimits> tuningLimits_;
 		std::filesystem::path corePath_;
 		std::string coreHash_;
 		ParameterCoreTrust coreTrust_ = ParameterCoreTrust::Unknown;

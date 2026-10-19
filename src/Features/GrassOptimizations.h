@@ -52,7 +52,8 @@ struct GrassOptimizations : Feature
 	bool SetSettings(const GrassPolicy::Settings& settings, std::string& error);
 	/** @brief Apply a validated partial settings transaction; unknown fields reject the whole update. */
 	bool UpdateSettings(const json& update, std::string& error);
-	void PrepareGeometry(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry);
+	/** @brief Preserve the property wind phase captured before native setup advances it. */
+	void PrepareGeometry(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry, std::optional<uint32_t> nativeWindTimer);
 	GrassBucketRenderer& GetRenderer() { return *renderer; }
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	void SetDiagnosticsEnabled(bool enabled);

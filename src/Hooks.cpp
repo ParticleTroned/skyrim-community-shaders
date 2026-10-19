@@ -1516,7 +1516,16 @@ namespace GrassExtensions
 					BuildRenderMapGeometryBoundary(shader, pass, renderFlags, RE::BSShader::Type::Grass));
 			}
 #endif
+			// Native setup advances property history before CPU shader constants may be readable.
+			auto* const windProperty = pass ? pass->shaderProperty : nullptr;
+			std::optional<uint32_t> nativeWindTimer;
+			if (windProperty) {
+				auto* property = static_cast<RE::BSGrassShaderProperty*>(windProperty);
+				nativeWindTimer = GrassRuntime::GetPropertyData(property, globals::game::isVR).windTimer;
+			}
 			func(shader, pass, renderFlags);
+			if (pass && pass->shaderProperty != windProperty)
+				nativeWindTimer.reset();
 
 			auto state = globals::state;
 
@@ -1534,7 +1543,7 @@ namespace GrassExtensions
 					state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::GrassSphereNormal);
 				}
 			}
-			globals::features::grassOptimizations.PrepareGeometry(pass, shader, renderFlags, func.get());
+			globals::features::grassOptimizations.PrepareGeometry(pass, shader, renderFlags, func.get(), nativeWindTimer);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1546,7 +1555,9 @@ namespace GrassExtensions
 			const bool ready = func(shader, technique);
 			auto* state = globals::state;
 			auto* cache = globals::shaderCache;
-			if (!ready || !globals::features::truePBR.loaded || !globals::features::grassLighting.loaded ||
+			const bool needsCustomPair = globals::features::grassOptimizations.loaded ||
+			                             (globals::features::truePBR.loaded && globals::features::grassLighting.loaded);
+			if (!ready || !needsCustomPair ||
 				!cache->IsEnabled() || !state->ShaderEnabled(RE::BSShader::Type::Grass))
 				return ready;
 			auto* vertex = cache->GetVertexShader(*shader, state->modifiedVertexDescriptor);

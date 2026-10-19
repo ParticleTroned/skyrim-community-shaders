@@ -10,8 +10,9 @@
 namespace StreamingTextures::LoadHooks
 {
 	inline std::string forgottenPreview;
+	inline bool enabled = true;
 	inline void Forget(const std::string& name) { forgottenPreview = name; }
-	inline void Configure(bool, const Modes&, const Options&, const Categories&, std::uint32_t) {}
+	inline void Configure(bool active, const Modes&, const Options&, const Categories&, std::uint32_t) { enabled = active; }
 }
 namespace StreamingInventoryFixture
 {
@@ -94,12 +95,16 @@ namespace StreamingInventoryFixture
 			StreamingTextures::Modes modes;
 			StreamingTextures::Options options;
 			std::uint32_t maximumDrop = 2;
-			std::uint64_t scan = 1, completeScan = 0;
+			std::uint64_t epoch = 1, scan = 1, completeScan = 0;
+			std::vector<int> frontier, previewFrontier, previewRoots;
+			std::unordered_set<int> visited, previewVisited;
+			std::string inventoryFailure;
 			bool enabled = true;
-			void Fail(const char* message) { throw std::runtime_error(message); }
+			unsigned failures = 0;
+			void Fail(const char*) { ++failures; }
 			void ObserveTexture(RE::NiSourceTexture*, RE::BSGeometry*, bool, std::uint32_t);
 			void ProtectPreviewTexture(RE::NiSourceTexture*);
-			void SuspendPreviewReductions(const char*);
+			void SuspendInventory(const char*);
 #include "streaming_defer_under_test.h"
 		};
 	};
@@ -145,14 +150,23 @@ void CheckStreamingInventory(ID3D11Device* device)
 			"A shared inventory preview did not revoke streaming and remembered loads");
 		state.records.at(71).previewProtected = false;
 		state.reducedRecords.insert(71);
-		bool suspensionReported = false;
-		try {
-			state.SuspendPreviewReductions("test overflow");
-		} catch (const std::runtime_error&) {
-			suspensionReported = true;
-		}
-		Require(suspensionReported && !state.enabled && state.records.at(71).previewProtected && state.records.at(71).protectedConsumer,
-			"Incomplete preview traversal left reduced consumers eligible to remain downscaled");
+		state.completeScan = state.scan;
+		state.records.at(71).consumers.committed.push_back({ RE::NiPointer<RE::BSGeometry>(&geometry) });
+		state.records.at(71).consumers.scanning.push_back({ RE::NiPointer<RE::BSGeometry>(&geometry) });
+		state.records.at(71).consumers.verified = state.scan;
+		state.frontier = state.previewFrontier = state.previewRoots = { 1, 2 };
+		state.visited = state.previewVisited = { 1, 2 };
+		state.SuspendInventory("test overflow");
+		Require(state.failures == 1 && !state.enabled && !StreamingTextures::LoadHooks::enabled && state.records.at(71).previewProtected && state.records.at(71).protectedConsumer,
+			"Incomplete traversal left reduced consumers eligible to remain downscaled");
+		Require(state.epoch == 2 && !state.completeScan && state.inventoryFailure == "test overflow" &&
+					state.frontier.empty() && state.previewFrontier.empty() && state.previewRoots.empty() && state.visited.empty() && state.previewVisited.empty() &&
+					state.records.at(71).consumers.scanning.empty() && state.records.at(71).consumers.committed.empty() &&
+					!state.records.at(71).consumers.seen && !state.records.at(71).consumers.verified,
+			"Rejected inventory retained partial coverage, queued traversal or pending reduction eligibility");
+		state.SuspendInventory("another failure");
+		Require(state.failures == 1 && state.epoch == 2 && state.inventoryFailure == "test overflow",
+			"Repeated suspension replaced the original failure or repeatedly invalidated restoration work");
 		source.name.text = "textures/armor/shared.dds";
 		state.ObserveTexture(&source, &geometry, true, 0);
 		Require(state.records.at(71).protectedConsumer && ReadOrigin(original.texture.Get(), observed) && observed.protectedConsumer,

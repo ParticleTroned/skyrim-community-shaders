@@ -12,6 +12,8 @@ public:
 	void InstallHooks();
 	void SetupResources();
 	void ClearShaderCache();
+	/** @brief Retire frame plans and unused LOD assets even when no grass is drawn. */
+	void EndFrame();
 	/** @brief Preserve geometry inputs and pre-setup wind history for batching at the native draw boundary. */
 	void PrepareGeometry(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry, std::optional<uint32_t> nativeWindTimer);
 	bool IsHookInstalled() const;

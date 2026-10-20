@@ -41,6 +41,7 @@ struct GrassOptimizations : Feature
 	void RestoreDefaultSettings() override;
 	void SetupResources() override;
 	void ClearShaderCache() override;
+	void Reset() override;
 	void PostPostLoad() override;
 	/** @brief Stage a toggle; changes take effect at the next grass pass without recompilation. */
 	void SetEnabled(bool enabled);

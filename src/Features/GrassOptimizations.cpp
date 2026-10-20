@@ -96,6 +96,7 @@ void GrassOptimizations::RestoreDefaultSettings()
 }
 void GrassOptimizations::SetupResources() { renderer->SetupResources(); }
 void GrassOptimizations::ClearShaderCache() { renderer->ClearShaderCache(); }
+void GrassOptimizations::Reset() { renderer->EndFrame(); }
 void GrassOptimizations::PostPostLoad() { renderer->InstallHooks(); }
 void GrassOptimizations::PrepareGeometry(RE::BSRenderPass* pass, RE::BSShader* shader, uint32_t flags, GrassRuntime::SetupGeometry setup, std::optional<uint32_t> nativeWindTimer) { renderer->PrepareGeometry(pass, shader, flags, setup, nativeWindTimer); }
 

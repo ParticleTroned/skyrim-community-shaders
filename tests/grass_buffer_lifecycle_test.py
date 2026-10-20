@@ -189,9 +189,9 @@ int main() {
                            "/I" + str(ROOT / "src"), str(cpp), "/Fe:" + str(executable)]
                 if devbench:
                     command.append("/DDEVBENCH_BRIDGE_ENABLED")
-                result = subprocess.run(command, cwd=directory, capture_output=True, text=True)
+                result = subprocess.run(command, cwd=directory, capture_output=True, text=True, timeout=300)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                result = subprocess.run([str(executable)], cwd=directory, capture_output=True, text=True)
+                result = subprocess.run([str(executable)], cwd=directory, capture_output=True, text=True, timeout=60)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 

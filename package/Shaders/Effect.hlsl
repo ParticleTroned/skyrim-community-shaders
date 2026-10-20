@@ -636,36 +636,36 @@ float3 GetAmbientEffectLighting(float3 worldPosition, float2 screenPosition, uin
 #	if defined(LIGHTING)
 	ApplyParticleLightingInfluence(dirColor, ambientColor);
 #	endif
-	[branch] if (!any(dirColor != 0.0))
+	shadowVariance = 1.0;
+	[branch] if (any(dirColor != 0.0))
 	{
-		shadowVariance = 1.0;
-		return ambientColor;
-	}
-	float3 viewDirection = worldPosition / max(length(worldPosition), 1e-5);
-	float shadow = 1.0;
+		float3 viewDirection = worldPosition / max(length(worldPosition), 1e-5);
+		float shadow = 1.0;
 #	if defined(LIGHTING)
-	if (ShadowSampling::HasDirectionalShadows()) {
-		shadow = ShadowSampling::Get3DFilteredShadow(worldPosition, viewDirection, screenPosition, eyeIndex);
-	}
-#	else
-	// Sky statics use world shadows without depending on the scene shadow-mask pass.
-	if (!SharedData::InInterior && !SharedData::HideSky && !SharedData::InMapMenu) {
-		static const uint SampleCount = 8;
-		static const float ViewRayLength = 2048.0;
-		float3 startPosition = worldPosition - viewDirection * ViewRayLength;
-		float3 endPosition = worldPosition + viewDirection * clamp(maxShadowDistance, 0.0, ViewRayLength);
-		float noise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(screenPosition, SharedData::BufferDim.xy), SharedData::FrameCount);
-		shadow = 0.0;
-		for (uint i = 0; i < SampleCount; i++) {
-			float3 samplePosition = lerp(startPosition, endPosition, (float(i) + noise) / float(SampleCount));
-			shadow += ShadowSampling::GetWorldShadow(samplePosition, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+		if (ShadowSampling::HasDirectionalShadows()) {
+			shadow = ShadowSampling::Get3DFilteredShadow(worldPosition, viewDirection, screenPosition, eyeIndex);
 		}
-		shadow /= float(SampleCount);
-	}
+#	else
+		// Sky statics use world shadows without depending on the scene shadow-mask pass.
+		if (!SharedData::InInterior && !SharedData::HideSky && !SharedData::InMapMenu) {
+			static const uint SampleCount = 8;
+			static const float ViewRayLength = 2048.0;
+			float3 startPosition = worldPosition - viewDirection * ViewRayLength;
+			float3 endPosition = worldPosition + viewDirection * clamp(maxShadowDistance, 0.0, ViewRayLength);
+			float noise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(screenPosition, SharedData::BufferDim.xy), SharedData::FrameCount);
+			shadow = 0.0;
+			for (uint i = 0; i < SampleCount; i++) {
+				float3 samplePosition = lerp(startPosition, endPosition, (float(i) + noise) / float(SampleCount));
+				shadow += ShadowSampling::GetWorldShadow(samplePosition, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+			}
+			shadow /= float(SampleCount);
+		}
 #	endif
-	dirColor *= shadow;
-	shadowVariance = 1.0 - sqrt(saturate(fwidth(shadow)));
-	return ambientColor + dirColor;
+		dirColor *= shadow;
+		shadowVariance = 1.0 - sqrt(saturate(fwidth(shadow)));
+		ambientColor += dirColor;
+	}
+	return ambientColor;
 }
 
 void ExtractEffectLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor, float skylightingDiffuse)

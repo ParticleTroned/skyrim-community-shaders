@@ -60,6 +60,11 @@ namespace GrassPolicy
 		return CullCapacity{ std::max(current.instances, std::bit_ceil(static_cast<uint32_t>(instances))),
 			std::max(current.slots, static_cast<uint32_t>(slots)) };
 	}
+	/** @brief Replacement allocations coexist with retained buffers until the new bundle is complete. */
+	constexpr bool ReplacementFitsBudget(uint64_t resident, uint64_t replacement, uint64_t budget)
+	{
+		return resident <= budget && replacement <= budget - resident;
+	}
 	/** @brief Float offset of the native wind vector in flat or stereo geometry constants. */
 	constexpr uint32_t WindVectorOffset(bool vr) { return (vr ? 33u : 17u) * 4; }
 

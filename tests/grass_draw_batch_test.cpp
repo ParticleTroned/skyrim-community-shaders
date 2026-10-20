@@ -131,6 +131,11 @@ int main()
 		require(!GrassPolicy::PlanCullCapacity({}, UINT64_MAX, 1));
 		require(!GrassPolicy::PlanCullCapacity({}, 1, 7));
 		require(!GrassPolicy::PlanCullCapacity({ UINT32_MAX, 1 }, 1, 1));
+		require(GrassPolicy::ReplacementFitsBudget(40, 60, 100));
+		require(!GrassPolicy::ReplacementFitsBudget(40, 61, 100));
+		require(!GrassPolicy::ReplacementFitsBudget(101, 0, 100));
+		require(GrassPolicy::ReplacementFitsBudget(UINT64_MAX - 1, 1, UINT64_MAX));
+		require(!GrassPolicy::ReplacementFitsBudget(UINT64_MAX, 1, UINT64_MAX));
 		GrassPolicy::FrameQueue<int> queue;
 		std::array<int, 16> shapes{};
 		for (uint32_t frame : { UINT32_MAX - 1, UINT32_MAX, 0u, 1u }) {

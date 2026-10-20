@@ -1545,7 +1545,7 @@ bool GrassBucketRenderer::Impl::EnsureResult(Bucket& bucket, uint32_t slots)
 	slots = planned->slots;
 	const uint64_t previous = uint64_t(result.capacity) * result.slots * 56 + (result.arguments ? 192 : 0);
 	const uint64_t next = uint64_t(capacity) * slots * 56 + 192;
-	if (next > GrassPolicy::kMaxCullResultBytes - (resultBytes - previous))
+	if (previous > resultBytes || !GrassPolicy::ReplacementFitsBudget(resultBytes, next, GrassPolicy::kMaxCullResultBytes))
 		return false;
 	CullResult replacement;
 	replacement.output = RawBuffer(capacity * slots * 32, D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_UNORDERED_ACCESS, 0, "GrassOptimizations::Compacted");
@@ -2013,7 +2013,7 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 		const auto next = std::bit_ceil(bucket.instances);
 		const uint64_t bytes = uint64_t(next) * GrassPolicy::kRecordBytes;
 		const uint64_t previous = bucket.records ? uint64_t(bucket.recordsCapacity) * GrassPolicy::kRecordBytes : 0;
-		if (bytes <= GrassPolicy::kMaxResidentRecordBytes - (residentRecordBytes - previous)) {
+		if (previous <= residentRecordBytes && GrassPolicy::ReplacementFitsBudget(residentRecordBytes, bytes, GrassPolicy::kMaxResidentRecordBytes)) {
 			bucket.records = RawBuffer(uint32_t(bytes), D3D11_BIND_SHADER_RESOURCE, 0, "GrassOptimizations::BucketRecords");
 			bucket.recordsCapacity = next;
 			bucket.recordsDirty = true;

@@ -98,6 +98,8 @@ namespace
 						}
 						Check(reflection->GetResourceBindingDescByName("GrassInstanceExtras", &binding));
 						Require(binding.BindPoint == 2, "Batch fade changed register");
+						Check(reflection->GetResourceBindingDescByName("GrassSourceRecords", &binding));
+						Require(binding.BindPoint == 3, "Batch source records changed register");
 						D3D11_SHADER_VARIABLE_DESC world{}, previous{};
 						ValidateWindLayout(reflection.Get(), "PerGeometry", vr);
 						auto geometry = reflection->GetConstantBufferByName("PerGeometry");
@@ -110,6 +112,7 @@ namespace
 #include "grass_bounds_gpu.h"
 #include "grass_collision_strength_gpu.h"
 #include "grass_culling_gpu.h"
+#include "grass_source_index_gpu.h"
 #include "grass_spd_gpu.h"
 
 }
@@ -125,6 +128,7 @@ int main()
 			}
 		};
 		run("Grass vertex variants", [] { ValidateGrassVariants(); });
+		run("Grass exact source indices", [] { RunGrassSourceIndices(); });
 		for (bool vr : { false, true })
 			for (bool enhanced : { false, true })
 				for (bool depth : { false, true }) {

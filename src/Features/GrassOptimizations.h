@@ -20,7 +20,7 @@ struct GrassOptimizations : Feature
 	std::string_view GetShaderDefineName() override { return "GRASS_OPTIMIZATIONS"; }
 	bool HasShaderDefine(RE::BSShader::Type type) override { return type == RE::BSShader::Type::Grass; }
 	bool SupportsVR() override { return true; }
-	std::string_view GetShaderCacheAbiVersion() override { return "native-cell-buckets-v7"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "native-cell-buckets-v8"; }
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
 	void DrawSettings() override;
 	bool HasPerformanceSettings() const override { return true; }

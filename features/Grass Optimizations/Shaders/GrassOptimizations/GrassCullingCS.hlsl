@@ -87,7 +87,6 @@ void CountN(uint index, uint amount)
 	Counters.InterlockedAdd(index * 4, amount, unused);
 #endif
 }
-float2 Unpack(uint value) { return float2(f16tof32(value), f16tof32(value >> 16)); }
 uint Hash(uint x)
 {
 	x ^= x >> 16;
@@ -190,9 +189,9 @@ uint FindSlice(uint index)
 	return left;
 }
 
-uint CullInstance(uint index, uint commonSlice, out uint4 a, out uint4 b, out uint tier, out GrassInstanceExtra extras[EYES])
+uint CullInstance(uint index, uint commonSlice, out uint sourceRecord, out uint tier, out GrassInstanceExtra extras[EYES])
 {
-	a = b = 0;
+	sourceRecord = 0;
 	tier = 0;
 	[unroll] for (uint initialEye = 0; initialEye < EYES; ++initialEye)
 		extras[initialEye] = (GrassInstanceExtra)0;
@@ -200,13 +199,13 @@ uint CullInstance(uint index, uint commonSlice, out uint4 a, out uint4 b, out ui
 	if (left >= SliceCount)
 		return 0;
 	Slice slice = Slices[SliceOffset + left];
-	uint record = slice.first + index - (slice.end - slice.count);
-	a = Records.Load4(record * 32);
-	b = Records.Load4(record * 32 + 16);
-	float4 instance1 = float4(Unpack(a.x), Unpack(a.y));
-	float4 instance2 = float4(Unpack(a.z), Unpack(a.w));
-	float4 instance3 = float4(Unpack(b.x), Unpack(b.y));
-	float4 instance4 = float4(Unpack(b.z), Unpack(b.w));
+	sourceRecord = slice.first + index - (slice.end - slice.count);
+	uint4 a = Records.Load4(sourceRecord * 32);
+	uint4 b = Records.Load4(sourceRecord * 32 + 16);
+	float4 instance1 = float4(UnpackGrassInstance(a.x), UnpackGrassInstance(a.y));
+	float4 instance2 = float4(UnpackGrassInstance(a.z), UnpackGrassInstance(a.w));
+	float4 instance3 = float4(UnpackGrassInstance(b.x), UnpackGrassInstance(b.y));
+	float4 instance4 = float4(UnpackGrassInstance(b.z), UnpackGrassInstance(b.w));
 	float3 scale = instance4.y * ScaleMask + 1;
 	float3x3 rotation = float3x3(instance2.xyz, instance3.xyz, float3(instance4.x, instance2.w, instance3.w));
 	float3 center = instance1.xyz + mul(rotation, ModelBound.xyz * scale) + slice.originFade.xyz - RepresentativeOrigin.xyz;
@@ -340,11 +339,11 @@ groupshared uint BinOffsets[3 * EYES];
 		Arguments.Store(id.x * 32 + 12, IndexCounts[id.x / EyeCount]);
 	GroupMemoryBarrierWithGroupSync();
 
-	uint4 a = 0, b = 0;
+	uint sourceRecord = 0;
 	uint tier = 0, eyeMask = 0;
 	GrassInstanceExtra extras[EYES];
 	if (id.x < InstanceCount)
-		eyeMask = CullInstance(id.x, CommonSlice, a, b, tier, extras);
+		eyeMask = CullInstance(id.x, CommonSlice, sourceRecord, tier, extras);
 	uint localSlots[EYES];
 	[unroll] for (uint reserveEye = 0; reserveEye < EYES; ++reserveEye) if (eyeMask & (1u << reserveEye))
 		InterlockedAdd(BinCounts[tier * EyeCount + reserveEye], 1, localSlots[reserveEye]);
@@ -358,8 +357,8 @@ groupshared uint BinOffsets[3 * EYES];
 	{
 		uint bin = tier * EyeCount + eye;
 		uint output = bin * Capacity + BinOffsets[bin] + localSlots[eye];
-		Compacted.Store4(output * 32, a);
-		Compacted.Store4(output * 32 + 16, b);
+		// Source indices fit exactly in the float input-assembler stream.
+		Compacted.Store(output * 4, asuint(float(sourceRecord)));
 		Extras[output] = extras[eye];
 	}
 }

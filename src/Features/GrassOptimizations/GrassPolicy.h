@@ -11,7 +11,10 @@
 namespace GrassPolicy
 {
 	inline constexpr uint32_t kRecordBytes = 32;
+	inline constexpr uint32_t kSurvivorIndexBytes = sizeof(float);
+	inline constexpr uint32_t kSurvivorBytes = kSurvivorIndexBytes + 6 * sizeof(float);
 	inline constexpr uint32_t kMaxBatchInstances = 262144;
+	static_assert(kMaxBatchInstances <= (1u << 24));
 	inline constexpr uint32_t kMaxBatchSlices = 8192;
 	inline constexpr uint32_t kMaxFrameSources = 4096;
 	inline constexpr uint64_t kMaxResidentRecordBytes = 128ull * 1024 * 1024;

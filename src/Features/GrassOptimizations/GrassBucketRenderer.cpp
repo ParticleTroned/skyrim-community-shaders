@@ -1411,7 +1411,7 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 	resultBytes = 0;
 	for (const auto& bucket : buckets)
 		if (bucket.result.output)
-			resultBytes += uint64_t(bucket.result.capacity) * bucket.result.slots * 56 + 192;
+			resultBytes += uint64_t(bucket.result.capacity) * bucket.result.slots * GrassPolicy::kSurvivorBytes + 192;
 	for (auto& bucket : dormantBuckets) bucket.result = {};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	publishedResultBytes.store(resultBytes, std::memory_order_relaxed);
@@ -1543,12 +1543,12 @@ bool GrassBucketRenderer::Impl::EnsureResult(Bucket& bucket, uint32_t slots)
 		return false;
 	const uint32_t capacity = planned->instances;
 	slots = planned->slots;
-	const uint64_t previous = uint64_t(result.capacity) * result.slots * 56 + (result.arguments ? 192 : 0);
-	const uint64_t next = uint64_t(capacity) * slots * 56 + 192;
+	const uint64_t previous = uint64_t(result.capacity) * result.slots * GrassPolicy::kSurvivorBytes + (result.arguments ? 192 : 0);
+	const uint64_t next = uint64_t(capacity) * slots * GrassPolicy::kSurvivorBytes + 192;
 	if (previous > resultBytes || !GrassPolicy::ReplacementFitsBudget(resultBytes, next, GrassPolicy::kMaxCullResultBytes))
 		return false;
 	CullResult replacement;
-	replacement.output = RawBuffer(capacity * slots * 32, D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_UNORDERED_ACCESS, 0, "GrassOptimizations::Compacted");
+	replacement.output = RawBuffer(capacity * slots * GrassPolicy::kSurvivorIndexBytes, D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_UNORDERED_ACCESS, 0, "GrassOptimizations::Compacted");
 	replacement.extras = Structured<std::array<float, 6>>(capacity * slots, true, false, "GrassOptimizations::Extras");
 	replacement.arguments = RawBuffer(192, D3D11_BIND_UNORDERED_ACCESS, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, "GrassOptimizations::IndirectArgs");
 	replacement.capacity = capacity;
@@ -1596,7 +1596,7 @@ ID3D11InputLayout* GrassBucketRenderer::Impl::Layout(uint64_t descriptor)
 	elements[1] = { "TEXCOORD", 0, DXGI_FORMAT_R16G16_FLOAT, 0, desc.GetAttributeOffset(Vertex::VA_TEXCOORD0), D3D11_INPUT_PER_VERTEX_DATA, 0 };
 	elements[2] = { "NORMAL", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, desc.GetAttributeOffset(Vertex::VA_NORMAL), D3D11_INPUT_PER_VERTEX_DATA, 0 };
 	elements[3] = { "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, desc.GetAttributeOffset(Vertex::VA_COLOR), D3D11_INPUT_PER_VERTEX_DATA, 0 };
-	for (UINT i = 0; i < 4; ++i) elements[4 + i] = { "TEXCOORD", 4 + i, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 8 * i, D3D11_INPUT_PER_INSTANCE_DATA, 1 };
+	for (UINT i = 0; i < 4; ++i) elements[4 + i] = { "TEXCOORD", 4 + i, DXGI_FORMAT_R32_FLOAT, 1, 0, D3D11_INPUT_PER_INSTANCE_DATA, 1 };
 	winrt::com_ptr<ID3D11InputLayout> result;
 	DX::ThrowIfFailed(globals::d3d::device->CreateInputLayout(elements.data(), UINT(elements.size()), signature->GetBufferPointer(), signature->GetBufferSize(), result.put()));
 	Util::SetResourceName(result.get(), "GrassOptimizations::InputLayout");
@@ -2257,8 +2257,8 @@ void GrassBucketRenderer::Impl::EmitDraws(const Bucket& bucket)
 	GrassD3D::DrawState restore(context.get());
 	context->IASetInputLayout(layout);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	auto extra = bucket.result.extras->srv.get();
-	context->VSSetShaderResources(2, 1, &extra);
+	const std::array<ID3D11ShaderResourceView*, 2> sources{ bucket.result.extras->srv.get(), bucket.records->srv.get() };
+	context->VSSetShaderResources(2, UINT(sources.size()), sources.data());
 	for (UINT tier = 0; tier < 3; ++tier) {
 		if (!meshes[tier].vertices || !meshes[tier].indices)
 			continue;
@@ -2270,7 +2270,7 @@ void GrassBucketRenderer::Impl::EmitDraws(const Bucket& bucket)
 		for (UINT eye = 0; eye < eyes; ++eye) {
 			const auto slot = tier * eyes + eye;
 			auto compacted = bucket.result.output->resource.get();
-			const UINT instanceStride = 32, instanceOffset = slot * capacity * 32;
+			const UINT instanceStride = GrassPolicy::kSurvivorIndexBytes, instanceOffset = slot * capacity * instanceStride;
 			context->IASetVertexBuffers(1, 1, &compacted, &instanceStride, &instanceOffset);
 			auto drawCB = frameConstants[bucket.plan.slot / kSlotsPerPage]->resource.get();
 			const UINT begin = (bucket.plan.slot % kSlotsPerPage) * (kFrameSlotBytes / 16) + kDrawOffset / 16 + slot * 16, size = 16;

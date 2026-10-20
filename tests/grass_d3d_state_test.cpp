@@ -171,8 +171,8 @@ namespace
 		auto* cb = f.constants[0].Get();
 		const UINT first = 16, count = 16;
 		c->VSSetConstantBuffers1(9, 1, &cb, &first, &count);
-		auto* srv = f.srvs[0].Get();
-		c->VSSetShaderResources(2, 1, &srv);
+		const std::array<ID3D11ShaderResourceView*, 3> srvs{ f.srvs[0].Get(), holes ? nullptr : f.srvs[1].Get(), f.srvs[2].Get() };
+		c->VSSetShaderResources(2, UINT(srvs.size()), srvs.data());
 		try {
 			GrassD3D::DrawState restore(c);
 			const std::array<ID3D11Buffer*, 2> changed{ f.vertices[1].Get(), f.vertices[0].Get() };
@@ -182,8 +182,8 @@ namespace
 			c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
 			ID3D11Buffer* emptyCB = nullptr;
 			c->VSSetConstantBuffers(9, 1, &emptyCB);
-			ID3D11ShaderResourceView* emptySRV = nullptr;
-			c->VSSetShaderResources(2, 1, &emptySRV);
+			const std::array<ID3D11ShaderResourceView*, 2> changedSRVs{ f.srvs[2].Get(), f.srvs[0].Get() };
+			c->VSSetShaderResources(2, UINT(changedSRVs.size()), changedSRVs.data());
 			if (unwind)
 				throw UnwindProbe{};
 		} catch (const UnwindProbe&) {}
@@ -206,9 +206,11 @@ namespace
 		D3D11_PRIMITIVE_TOPOLOGY topology{};
 		c->IAGetPrimitiveTopology(&topology);
 		Require(topology == D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, "Restore topology");
-		ComPtr<ID3D11ShaderResourceView> view;
-		c->VSGetShaderResources(2, 1, &view);
-		Require(view.Get() == srv, "Restore grass VS resource");
+		for (UINT i = 0; i < srvs.size(); ++i) {
+			ComPtr<ID3D11ShaderResourceView> view;
+			c->VSGetShaderResources(2 + i, 1, &view);
+			Require(view.Get() == srvs[i], "Restore grass VS resources and preserve adjacent slot");
+		}
 	}
 }
 

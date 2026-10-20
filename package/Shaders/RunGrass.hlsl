@@ -225,6 +225,9 @@ float4 GetMSPosition(VS_INPUT input)
 #	ifdef GRASS_LIGHTING
 VS_OUTPUT main(VS_INPUT input)
 {
+#		ifdef GRASS_OPTIMIZATIONS
+	LoadGrassBatchInstance(input.InstanceData1, input.InstanceData2, input.InstanceData3, input.InstanceData4);
+#		endif
 	VS_OUTPUT vsout;
 
 	uint eyeIndex = Stereo::GetEyeIndexVS(
@@ -326,6 +329,9 @@ VS_OUTPUT main(VS_INPUT input)
 #	else
 VS_OUTPUT main(VS_INPUT input)
 {
+#		ifdef GRASS_OPTIMIZATIONS
+	LoadGrassBatchInstance(input.InstanceData1, input.InstanceData2, input.InstanceData3, input.InstanceData4);
+#		endif
 	VS_OUTPUT vsout;
 
 	uint eyeIndex = Stereo::GetEyeIndexVS(

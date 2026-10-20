@@ -17,7 +17,10 @@ namespace GrassD3D
 		explicit DrawState(ID3D11DeviceContext1* context) : ctx(context)
 		{
 			ctx->VSGetConstantBuffers1(9, 1, cb.put(), &first, &count);
-			ctx->VSGetShaderResources(2, 1, srv.put());
+			std::array<ID3D11ShaderResourceView*, 2> rawSRVs{};
+			ctx->VSGetShaderResources(2, static_cast<UINT>(rawSRVs.size()), rawSRVs.data());
+			for (UINT i = 0; i < srvs.size(); ++i)
+				srvs[i].attach(rawSRVs[i]);
 			ctx->IAGetInputLayout(layout.put());
 			std::array<ID3D11Buffer*, 2> rawVertices{};
 			ctx->IAGetVertexBuffers(0, static_cast<UINT>(rawVertices.size()), rawVertices.data(), strides.data(), offsets.data());
@@ -29,9 +32,11 @@ namespace GrassD3D
 		~DrawState()
 		{
 			auto buffer = cb.get();
-			auto resource = srv.get();
 			ctx->VSSetConstantBuffers1(9, 1, &buffer, &first, &count);
-			ctx->VSSetShaderResources(2, 1, &resource);
+			std::array<ID3D11ShaderResourceView*, 2> rawSRVs{};
+			for (UINT i = 0; i < srvs.size(); ++i)
+				rawSRVs[i] = srvs[i].get();
+			ctx->VSSetShaderResources(2, static_cast<UINT>(rawSRVs.size()), rawSRVs.data());
 			ctx->IASetInputLayout(layout.get());
 			std::array<ID3D11Buffer*, 2> rawVertices{};
 			for (UINT i = 0; i < vertices.size(); ++i)
@@ -46,7 +51,7 @@ namespace GrassD3D
 	private:
 		ID3D11DeviceContext1* ctx;
 		winrt::com_ptr<ID3D11Buffer> cb, indices;
-		winrt::com_ptr<ID3D11ShaderResourceView> srv;
+		std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 2> srvs;
 		winrt::com_ptr<ID3D11InputLayout> layout;
 		std::array<winrt::com_ptr<ID3D11Buffer>, 2> vertices;
 		std::array<UINT, 2> strides{}, offsets{};

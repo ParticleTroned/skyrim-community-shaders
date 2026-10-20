@@ -687,7 +687,7 @@ struct GrassBucketRenderer::Impl
 	ID3D11InputLayout* Layout(uint64_t descriptor);
 	void CompileSignature();
 	void UpdateLODDemand(const GrassPolicy::Settings& settings);
-	std::array<Mesh, 2> LODMeshes(const Source& source);
+	std::array<const Mesh*, 2> LODMeshes(const Source& source);
 	static Mesh LoadLODMesh(const LODKey& key);
 	bool HasBatchShader() const;
 	void CullSlices(const Bucket& bucket, float radius, uint32_t eyes, uint32_t& instances);
@@ -1688,15 +1688,29 @@ void GrassBucketRenderer::Impl::UpdateLODDemand(const GrassPolicy::Settings& set
 	lodMode = mode;
 }
 
-std::array<Mesh, 2> GrassBucketRenderer::Impl::LODMeshes(const Source& source)
+std::array<const Mesh*, 2> GrassBucketRenderer::Impl::LODMeshes(const Source& source)
 {
-	std::array<Mesh, 2> result;
-	for (uint32_t tier = 0; tier < result.size(); ++tier) {
+	const auto find = [&](uint32_t tier) -> const Mesh* {
 		const LODLookup key{ source.model, source.descriptor, reinterpret_cast<uintptr_t>(source.texture.get()), tier };
-		if (const auto mesh = lodMeshes.FindOrLoad(key, [&](const LODKey& requested) { return LoadLODMesh(requested); }))
-			result[tier] = *mesh;
+		return lodMeshes.FindOrLoad(key, [&](const LODKey& requested) { return LoadLODMesh(requested); });
+	};
+	const auto compatible = [&](const Mesh* mesh) {
+		return mesh && mesh->vertices && mesh->indices && mesh->descriptor == source.descriptor &&
+		       mesh->texture && mesh->texture.get() == source.property->GetBaseTexture();
+	};
+	const Mesh* midMesh = frameSettings.EnableMidLOD ? find(0) : nullptr;
+	const Mesh* farMesh = frameSettings.EnableFarLOD ? find(1) : nullptr;
+	bool farValid = compatible(farMesh);
+	if (frameSettings.EnableFarLOD && !farValid && !frameSettings.EnableMidLOD) {
+		midMesh = find(0);
+		farValid = compatible(farMesh);
 	}
-	return result;
+	if (!compatible(midMesh))
+		midMesh = nullptr;
+	if (!farValid)
+		farMesh = midMesh;
+	// Cache entries remain stable throughout render-thread plan preparation.
+	return { frameSettings.EnableMidLOD ? midMesh : nullptr, frameSettings.EnableFarLOD ? farMesh : nullptr };
 }
 
 Mesh GrassBucketRenderer::Impl::LoadLODMesh(const LODKey& key)
@@ -2042,22 +2056,13 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 	meshes[0].indexCount = representative.triangles * 3;
 	float radius = representative.bound.radius;
 	if (frameSettings.EnableMeshLOD && !representative.model.empty()) {
-		const auto& lod = LODMeshes(representative);
-		const auto compatibleLOD = [&](const Mesh& mesh) {
-			return mesh.vertices && mesh.indices && mesh.descriptor == representative.descriptor &&
-			       mesh.texture && mesh.texture.get() == representative.property->GetBaseTexture();
-		};
-		if (frameSettings.EnableMidLOD && compatibleLOD(lod[0]))
-			meshes[1] = lod[0];
-		if (frameSettings.EnableFarLOD) {
-			if (compatibleLOD(lod[1]))
-				meshes[2] = lod[1];
-			else if (compatibleLOD(lod[0]))
-				meshes[2] = lod[0];
-		}
-		for (size_t tier = 1; tier < meshes.size(); ++tier)
-			if (meshes[tier].vertices && meshes[tier].indices)
+		const auto lod = LODMeshes(representative);
+		for (size_t tier = 1; tier < meshes.size(); ++tier) {
+			if (lod[tier - 1]) {
+				meshes[tier] = *lod[tier - 1];
 				radius = std::max(radius, meshes[tier].radius + representative.bound.center.Length());
+			}
+		}
 	}
 	const uint32_t eyes = globals::game::isVR ? 2 : 1;
 	auto layout = Layout(representative.descriptor);

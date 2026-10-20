@@ -18,8 +18,12 @@ class GrassLODLifecycleTests(unittest.TestCase):
         source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
         methods = "\n".join(block(source, signature) for signature in (
             "void GrassBucketRenderer::EndFrame(",
-            "void GrassBucketRenderer::Impl::UpdateLODDemand("))
+            "void GrassBucketRenderer::Impl::UpdateLODDemand(",
+            "std::array<const Mesh*, 2> GrassBucketRenderer::Impl::LODMeshes("))
         driver = r'''
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
 #include "Features/GrassOptimizations/GrassLODCache.h"
 #include "Features/GrassOptimizations/GrassPolicy.h"
 #include <atomic>
@@ -42,19 +46,33 @@ struct Owner {
     Owner() { ++alive; }
     ~Owner() { Require(!captureLocked); --alive; }
 };
-using Mesh = std::shared_ptr<Owner>;
 namespace RE {
     using NiSourceTexture = int;
     template<class T> using NiPointer = std::shared_ptr<T>;
 }
+struct Mesh {
+    std::shared_ptr<Owner> owner;
+    std::shared_ptr<int> texture;
+    uint64_t descriptor = 0;
+    uint32_t tier = 0;
+    bool vertices = true, indices = true;
+    Mesh() = default;
+    Mesh(std::shared_ptr<Owner> value) : owner(std::move(value)) {}
+    explicit operator bool() const { return bool(owner); }
+};
 using LODLookup = std::tuple<std::string_view, uint64_t, uintptr_t, uint32_t>;
 PRODUCTION_KEY;
 
 struct Lifetime { std::atomic_bool alive{true}; std::atomic_uint64_t generation{0}; };
+struct Property {
+    int* texture;
+    int* GetBaseTexture() const { return texture; }
+};
 struct Source {
     std::string model = "test.nif";
     uint64_t descriptor = 7;
     std::shared_ptr<int> texture = std::make_shared<int>(1);
+    std::shared_ptr<Property> property = std::make_shared<Property>(texture.get());
     std::shared_ptr<Lifetime> lifetime = std::make_shared<Lifetime>();
     uint64_t generation = 0;
 };
@@ -81,14 +99,88 @@ struct GrassBucketRenderer {
         uint64_t residentRevision = 0, lodRevision = UINT64_MAX;
         uint32_t lodMode = 0;
         bool failed = false;
+        GrassPolicy::Settings frameSettings;
         GrassLOD::Cache<LODKey, Mesh> lodMeshes;
         std::vector<Bucket> buckets{1}, dormantBuckets{1};
         void UpdateLODDemand(const GrassPolicy::Settings&);
+        std::array<const Mesh*, 2> LODMeshes(const Source&);
+        static inline std::array<unsigned, 2> loadCounts{}, loadModes{};
+        static inline Property* changePropertyOnLoad = nullptr;
+        static inline uint32_t changePropertyTier = 0;
+        static Mesh LoadLODMesh(const LODKey& key) {
+            ++loadCounts[key.tier];
+            if (key.tier == changePropertyTier && changePropertyOnLoad) changePropertyOnLoad->texture = nullptr;
+            Mesh mesh{std::make_shared<Owner>()};
+            mesh.texture = key.texture;
+            mesh.descriptor = key.descriptor;
+            mesh.tier = key.tier;
+            switch (loadModes[key.tier]) {
+            case 1: return {};
+            case 2: mesh.vertices = false; break;
+            case 3: mesh.indices = false; break;
+            case 4: ++mesh.descriptor; break;
+            case 5: mesh.texture.reset(); break;
+            case 6: mesh.texture = std::make_shared<int>(2); break;
+            }
+            return mesh;
+        }
     };
     std::unique_ptr<Impl> impl = std::make_unique<Impl>();
     void EndFrame();
 };
 PRODUCTION_METHODS
+void CheckLODResolution() {
+    auto& settings = globals::features::grassOptimizations.settings;
+    settings.Enabled = settings.EnableMeshLOD = true;
+    for (bool midEnabled : {false, true})
+        for (bool farEnabled : {false, true})
+            for (unsigned midMode = 0; midMode < 7; ++midMode)
+                for (unsigned farMode = 0; farMode < 7; ++farMode) {
+                    settings.EnableMidLOD = midEnabled;
+                    settings.EnableFarLOD = farEnabled;
+                    GrassBucketRenderer renderer;
+                    auto& state = *renderer.impl;
+                    state.frameSettings = settings;
+                    state.residents[1] = Source{};
+                    const auto& source = state.residents[1];
+                    state.loadCounts = {};
+                    state.loadModes = {midMode, farMode};
+                    renderer.EndFrame();
+                    const auto selected = state.LODMeshes(source);
+                    Require(bool(selected[0]) == (midEnabled && midMode == 0));
+                    Require(bool(selected[1]) == (farEnabled && (farMode == 0 || midMode == 0)));
+                    if (selected[0]) Require(selected[0]->tier == 0);
+                    if (selected[1]) Require(selected[1]->tier == (farMode == 0 ? 1u : 0u));
+                    const std::array<unsigned, 2> expectedLoads{
+                        midEnabled || (farEnabled && farMode != 0) ? 1u : 0u, farEnabled ? 1u : 0u};
+                    Require(state.loadCounts == expectedLoads);
+                    for (unsigned frame = 0; frame < 100; ++frame)
+                        Require(state.LODMeshes(source) == selected && state.loadCounts == expectedLoads);
+                    for (auto mesh : selected)
+                        if (mesh) Require(mesh->owner.use_count() == 1);
+                    int changedTexture = 3;
+                    source.property->texture = &changedTexture;
+                    const auto rejected = state.LODMeshes(source);
+                    Require(!rejected[0] && !rejected[1]);
+                }
+    Require(Owner::alive == 0);
+    for (uint32_t changedTier : {0u, 1u}) {
+        settings.EnableMidLOD = settings.EnableFarLOD = true;
+        GrassBucketRenderer renderer;
+        auto& state = *renderer.impl;
+        state.frameSettings = settings;
+        state.residents[1] = Source{};
+        const auto& source = state.residents[1];
+        state.loadModes = {};
+        state.changePropertyOnLoad = source.property.get();
+        state.changePropertyTier = changedTier;
+        renderer.EndFrame();
+        const auto selected = state.LODMeshes(source);
+        state.changePropertyOnLoad = nullptr;
+        Require(!selected[0] && !selected[1]);
+    }
+    Require(Owner::alive == 0);
+}
 int main() {
     try {
         auto& settings = globals::features::grassOptimizations.settings;
@@ -146,12 +238,12 @@ int main() {
         settings.EnableMidLOD = false;
         renderer.EndFrame();
         Require(state.lodMeshes.FindOrLoad(replacement, load) && Owner::alive == 1);
-        const auto far = keyFor(state.residents[1], 1);
-        Require(state.lodMeshes.FindOrLoad(far, load) && Owner::alive == 2);
+        const auto farKey = keyFor(state.residents[1], 1);
+        Require(state.lodMeshes.FindOrLoad(farKey, load) && Owner::alive == 2);
         settings.EnableMidLOD = true;
         settings.EnableFarLOD = false;
         renderer.EndFrame();
-        Require(Owner::alive == 1 && !state.lodMeshes.FindOrLoad(far, load));
+        Require(Owner::alive == 1 && !state.lodMeshes.FindOrLoad(farKey, load));
         ++state.residents[1].lifetime->generation;
         ++state.residentRevision;
         renderer.EndFrame();
@@ -182,6 +274,7 @@ int main() {
         ++state.residentRevision;
         renderer.EndFrame();
         Require(Owner::alive == 0);
+        CheckLODResolution();
         std::cout << "Production LOD demand, shared users, frame plans, toggles and retirement passed\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

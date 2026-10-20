@@ -678,7 +678,8 @@ struct GrassBucketRenderer::Impl
 	bool MainDepthBound() const;
 	bool HasBatchDrawState() const;
 	float frameHeight = 0;
-	void DispatchBucket(Bucket& bucket, ID3D11ComputeShader* shader);
+	void UploadRecords(Bucket& bucket);
+	void DispatchBucket(Bucket& bucket);
 	void EmitDraws(const Bucket& bucket);
 };
 
@@ -2119,7 +2120,19 @@ void GrassBucketRenderer::Impl::UploadCulling()
 			shader = diagnostic;
 	}
 #endif
+	// Bucket inputs and outputs are distinct; finish all uploads before binding culling resources.
+	for (auto bucket : cullingBuckets) {
+		UploadRecords(*bucket);
+		constexpr UINT zeros[4]{};
+		context->ClearUnorderedAccessViewUint(bucket->result.arguments->uav.get(), zeros);
+	}
 	GrassD3D::ComputeState restore(context.get(), kCullUAVCount);
+	const std::array<ID3D11ShaderResourceView*, 2> sharedSRVs{ table->srv.get(), useHiZ ? hiZ.SRV() : nullptr };
+	context->CSSetShaderResources(1, UINT(sharedSRVs.size()), sharedSRVs.data());
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	auto counters = shader == diagnosticShader.get() ? gpuCounters->uav.get() : nullptr;
+	context->CSSetUnorderedAccessViews(3, 1, &counters, nullptr);
+#endif
 	winrt::com_ptr<ID3D11Buffer> stereo;
 	UINT first = 0, count = 0;
 	if (globals::game::isVR) {
@@ -2129,13 +2142,13 @@ void GrassBucketRenderer::Impl::UploadCulling()
 	}
 	context->CSSetShader(shader, nullptr, 0);
 	for (auto bucket : cullingBuckets)
-		DispatchBucket(*bucket, shader);
+		DispatchBucket(*bucket);
 }
 
-void GrassBucketRenderer::Impl::DispatchBucket(Bucket& bucket, [[maybe_unused]] ID3D11ComputeShader* shader)
+void GrassBucketRenderer::Impl::UploadRecords(Bucket& bucket)
 {
 #if defined(DEVBENCH_BRIDGE_ENABLED) || defined(TRACY_SUPPORT)
-	CS_GPU_PASS("GrassOptimizations::PrepareAndCull");
+	CS_GPU_PASS("GrassOptimizations::UploadRecords");
 #endif
 	auto& records = *bucket.records;
 	if (bucket.recordsDirty) {
@@ -2177,6 +2190,13 @@ void GrassBucketRenderer::Impl::DispatchBucket(Bucket& bucket, [[maybe_unused]] 
 			++reusedRecordBuckets;
 #endif
 	}
+}
+
+void GrassBucketRenderer::Impl::DispatchBucket(Bucket& bucket)
+{
+#if defined(DEVBENCH_BRIDGE_ENABLED) || defined(TRACY_SUPPORT)
+	CS_GPU_PASS("GrassOptimizations::PrepareAndCull");
+#endif
 	const auto& plan = bucket.plan;
 	const auto& params = plan.params;
 	auto cb = frameConstants[plan.slot / kSlotsPerPage]->resource.get();
@@ -2188,13 +2208,9 @@ void GrassBucketRenderer::Impl::DispatchBucket(Bucket& bucket, [[maybe_unused]] 
 		                                           3;
 		context->CSSetConstantBuffers1(binding, 1, &cb, &offsets[i], &counts[i]);
 	}
-	constexpr UINT zeros[4]{};
-	context->ClearUnorderedAccessViewUint(bucket.result.arguments->uav.get(), zeros);
-	std::array<ID3D11ShaderResourceView*, 3> srvs{ records.srv.get(), table->srv.get(), params.depthMips ? hiZ.SRV() : nullptr };
-	std::array<ID3D11UnorderedAccessView*, kCullUAVCount> uavs{ bucket.result.output->uav.get(), bucket.result.extras->uav.get(), bucket.result.arguments->uav.get() };
+	auto records = bucket.records->srv.get();
+	const std::array<ID3D11UnorderedAccessView*, 3> uavs{ bucket.result.output->uav.get(), bucket.result.extras->uav.get(), bucket.result.arguments->uav.get() };
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	if (shader == diagnosticShader.get())
-		uavs[3] = gpuCounters->uav.get();
 	if (diagnostics.load(std::memory_order_relaxed) && frameSettings.EnableOcclusionCulling) {
 		if (params.depthMips)
 			++hiZBatches;
@@ -2202,7 +2218,7 @@ void GrassBucketRenderer::Impl::DispatchBucket(Bucket& bucket, [[maybe_unused]] 
 			++hiZUnavailable;
 	}
 #endif
-	context->CSSetShaderResources(0, UINT(srvs.size()), srvs.data());
+	context->CSSetShaderResources(0, 1, &records);
 	context->CSSetUnorderedAccessViews(0, UINT(uavs.size()), uavs.data(), nullptr);
 	context->Dispatch((params.instances + 63) / 64, 1, 1);
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -2212,10 +2228,6 @@ void GrassBucketRenderer::Impl::DispatchBucket(Bucket& bucket, [[maybe_unused]] 
 	if (diagnostics.load(std::memory_order_relaxed))
 		++cullingDispatches;
 #endif
-	srvs.fill(nullptr);
-	uavs.fill(nullptr);
-	context->CSSetShaderResources(0, UINT(srvs.size()), srvs.data());
-	context->CSSetUnorderedAccessViews(0, UINT(uavs.size()), uavs.data(), nullptr);
 }
 
 void GrassBucketRenderer::Impl::EmitDraws(const Bucket& bucket)

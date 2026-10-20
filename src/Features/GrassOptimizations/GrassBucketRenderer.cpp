@@ -220,6 +220,13 @@ namespace
 		ID3D11InputLayout* layout = nullptr;
 		uint32_t slot = 0;
 		bool prepared = false, empty = false;
+		/** @brief Release draw owners; constants are overwritten before the plan is prepared again. */
+		void Retire()
+		{
+			meshes = {};
+			layout = nullptr;
+			prepared = empty = false;
+		}
 	};
 	inline constexpr uint32_t kFrameSlotBytes = 3072, kSlotsPerPage = 21;
 	inline constexpr uint32_t kParametersOffset = 1024, kFrustumOffset = 1280, kDrawOffset = 1536;
@@ -1219,11 +1226,11 @@ void GrassBucketRenderer::ClearShaderCache()
 {
 	impl->cullingPrepared = false;
 	for (auto& bucket : impl->buckets) {
-		bucket.plan = {};
+		bucket.plan.Retire();
 		bucket.outcomes.Clear();
 	}
 	for (auto& bucket : impl->dormantBuckets)
-		bucket.plan = {};
+		bucket.plan.Retire();
 	impl->cullShader.Reset();
 	impl->signature = nullptr;
 	impl->layouts.clear();
@@ -1237,9 +1244,9 @@ void GrassBucketRenderer::ClearShaderCache()
 void GrassBucketRenderer::EndFrame()
 {
 	for (auto& bucket : impl->buckets)
-		bucket.plan = {};
+		bucket.plan.Retire();
 	for (auto& bucket : impl->dormantBuckets)
-		bucket.plan = {};
+		bucket.plan.Retire();
 	try {
 		impl->UpdateLODDemand(globals::features::grassOptimizations.GetSettings());
 	} catch (const std::bad_alloc&) {
@@ -1273,7 +1280,7 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 	cullingPrepared = false;
 	for (auto& bucket : buckets) {
 		bucket.outcomes.Clear();
-		bucket.plan = {};
+		bucket.plan.Retire();
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	PollCounters();
@@ -1882,7 +1889,7 @@ void GrassBucketRenderer::Impl::PrepareCulling(RE::BSRenderPass* pass, RE::BSSha
 			currentOrigin = savedOrigin;
 		});
 		for (auto& bucket : buckets) {
-			bucket.plan = {};
+			bucket.plan.Retire();
 			if (bucket.sources.empty())
 				continue;
 			auto& source = bucket.sources.front();

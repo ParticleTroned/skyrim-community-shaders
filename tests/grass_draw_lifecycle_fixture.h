@@ -205,6 +205,7 @@ struct Bucket
 		bool prepared = false;
 		bool empty = false;
 		std::array<float, 152> geometry{};
+		void Retire() { prepared = empty = false; }
 	} plan;
 };
 struct FakeContext

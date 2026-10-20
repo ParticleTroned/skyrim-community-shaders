@@ -58,7 +58,13 @@ struct Source {
     std::shared_ptr<Lifetime> lifetime = std::make_shared<Lifetime>();
     uint64_t generation = 0;
 };
-struct Plan { std::array<Mesh, 3> meshes; };
+struct Plan {
+    std::array<Mesh, 3> meshes;
+    void* layout = nullptr;
+    bool prepared = false, empty = false;
+    std::array<float, 152> geometry{};
+    PRODUCTION_RETIRE
+};
 struct Bucket { Plan plan; };
 namespace logger { template<class... T> void warn(T&&...) {} }
 namespace globals::features {
@@ -111,10 +117,15 @@ int main() {
         Require(!state.lodMeshes.FindOrLoad(absent, load) && loads == 1);
         state.buckets[0].plan.meshes[1] = *mesh;
         state.dormantBuckets[0].plan.meshes[2] = *mesh;
+        auto& plan = state.buckets[0].plan;
+        plan.layout = &state;
+        plan.prepared = plan.empty = true;
+        plan.geometry.fill(42);
         state.residents.erase(1);
         ++state.residentRevision;
         renderer.EndFrame();
         Require(Owner::alive == 1 && !state.buckets[0].plan.meshes[1] && !state.dormantBuckets[0].plan.meshes[2]);
+        Require(!plan.prepared && !plan.empty && !plan.layout && plan.geometry[0] == 42 && plan.geometry.back() == 42);
         state.residents.erase(2);
         ++state.residentRevision;
         renderer.EndFrame();
@@ -175,7 +186,8 @@ int main() {
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }
-'''.replace("PRODUCTION_METHODS", methods).replace("PRODUCTION_KEY", block(source, "struct LODKey"))
+'''.replace("PRODUCTION_METHODS", methods).replace("PRODUCTION_KEY", block(source, "struct LODKey")).replace(
+            "PRODUCTION_RETIRE", block(source, "void Retire("))
         compiler = os.environ.get("CXX") or shutil.which("cl")
         self.assertIsNotNone(compiler, "Run in the MSVC developer environment")
         with tempfile.TemporaryDirectory(prefix="grass-lod-lifecycle-") as temporary:

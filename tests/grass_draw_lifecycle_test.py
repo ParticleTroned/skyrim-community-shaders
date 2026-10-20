@@ -63,6 +63,8 @@ int main() {
                 f.Draw();
                 Require(f.renderer.impl->submissions == 1 && GrassBucketRenderer::nativeCalls == 0,
                     "Late graphics readiness must batch at the actual draw; setup must not cache native fallback");
+                Require(f.nativeSetupCalls == 1,
+                    "An already captured current pass must not repeat native setup or restoration");
                 f.Draw();
                 Require(f.renderer.impl->submissions == 1 && GrassBucketRenderer::nativeCalls == 0,
                     "A completed batch must suppress repeated native groups without resubmission");
@@ -77,6 +79,37 @@ int main() {
                 f.Draw();
                 Require(f.renderer.impl->submissions == 0 && GrassBucketRenderer::nativeCalls == 2,
                     "Native rendering already submitted must prevent later whole-bucket duplication");
+            }
+            for (bool sameLights : {false, true}) {
+                Fixture f;
+                RE::BSLight light;
+                RE::BSLight* lights[]{&light};
+                f.pass.sceneLights = lights;
+                f.pass.numLights = 1;
+                if (sameLights) f.renderer.impl->buckets.front().sources.front().lights = {&light};
+                f.renderer.impl->ready = true;
+                f.Setup();
+                f.Draw();
+                Require(f.nativeSetupCalls == (sameLights ? 1u : 3u) && f.renderer.impl->submissions == 1,
+                    "Current-pass reuse must require matching lights and retain native setup otherwise");
+            }
+            for (bool failPreparation : {false, true}) {
+                Fixture f;
+                auto otherShape = f.shape;
+                auto& source = f.renderer.impl->buckets.front().sources.front();
+                source.identity = &otherShape;
+                source.queue->members = {&otherShape};
+                source.queue->representative = &otherShape;
+                f.renderer.impl->ready = true;
+                f.renderer.impl->throwOnPrepare = failPreparation;
+                f.Setup();
+                bool failed = false;
+                try { f.renderer.impl->PrepareCulling(&f.pass, &f.shader, 0, Fixture::NativeSetup); }
+                catch (const std::runtime_error&) { failed = true; }
+                Require(failed == failPreparation && f.nativeSetupCalls == 3,
+                    "Preparing another representative must run native setup and restore the current pass, including exceptions");
+                Require(f.property->windTimer == std::bit_cast<uint32_t>(10.f),
+                    "Preparing another representative advanced the current property's wind");
             }
             {
                 Fixture f;

@@ -1856,9 +1856,17 @@ void GrassBucketRenderer::Impl::PrepareCulling(RE::BSRenderPass* pass, RE::BSSha
 	}
 	frameSlices.clear();
 	const auto savedOrigin = currentOrigin;
+	const auto savedGeometry = geometryCPU;
+	const bool savedGeometryValid = geometryCPUValid;
+	bool nativeGeometryChanged = false;
 	{
 		const SKSE::stl::scope_exit restore([&]() noexcept {
-			RestoreCurrentGeometry();
+			if (nativeGeometryChanged)
+				RestoreCurrentGeometry();
+			else {
+				geometryCPU = savedGeometry;
+				geometryCPUValid = savedGeometryValid;
+			}
 			currentOrigin = savedOrigin;
 		});
 		for (auto& bucket : buckets) {
@@ -1889,9 +1897,19 @@ void GrassBucketRenderer::Impl::PrepareCulling(RE::BSRenderPass* pass, RE::BSSha
 			prototype.sceneLights = member->lights.empty() ? nullptr : member->lights.data();
 			prototype.numLights = uint8_t(member->lights.size());
 			MakeNativeVisible(representative);
-			GrassRuntime::PrepareGeometryWithoutAdvancingWind(shader, &prototype, flags, setup, globals::game::isVR);
+			const bool reuseCurrent = savedGeometryValid && pass == currentSetupPass && shader == currentNativeShader && flags == currentSetupFlags &&
+			                          pass->geometry == representative && pass->shaderProperty == member->property.get() &&
+			                          pass->numLights == member->lights.size() &&
+			                          (member->lights.empty() || (pass->sceneLights && std::equal(member->lights.begin(), member->lights.end(), pass->sceneLights)));
+			if (reuseCurrent) {
+				geometryCPU = savedGeometry;
+				geometryCPUValid = true;
+			} else {
+				nativeGeometryChanged = true;
+				GrassRuntime::PrepareGeometryWithoutAdvancingWind(shader, &prototype, flags, setup, globals::game::isVR);
+				CopyGeometryConstants();
+			}
 			currentOrigin = member->origin;
-			CopyGeometryConstants();
 			PrepareBucket(bucket);
 		}
 	}

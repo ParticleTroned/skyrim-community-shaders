@@ -12,6 +12,12 @@ namespace GrassLOD
 	class Cache
 	{
 	public:
+		/** @brief Release all assets and demand without allocating during memory-pressure recovery. */
+		void Clear()
+		{
+			entries.clear();
+			demand.clear();
+		}
 		/** @brief Retire unreferenced assets outside the native capture lock. */
 		void SetDemand(std::set<Key, std::less<>> next)
 		{

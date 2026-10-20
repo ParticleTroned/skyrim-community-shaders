@@ -27,14 +27,25 @@ class GrassLODLifecycleTests(unittest.TestCase):
 #include "Features/GrassOptimizations/GrassLODCache.h"
 #include "Features/GrassOptimizations/GrassPolicy.h"
 #include <atomic>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <new>
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <vector>
+unsigned failAllocation = 0;
+bool failAllAllocations = false;
+void* operator new(std::size_t size) {
+    if (failAllAllocations || (failAllocation && !--failAllocation)) throw std::bad_alloc{};
+    if (auto* memory = std::malloc(size ? size : 1)) return memory;
+    throw std::bad_alloc{};
+}
+void operator delete(void* memory) noexcept { std::free(memory); }
+void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 bool captureLocked = false;
 struct Mutex {
     void lock_shared() { captureLocked = true; }
@@ -84,7 +95,10 @@ struct Plan {
     PRODUCTION_RETIRE
 };
 struct Bucket { Plan plan; };
-namespace logger { template<class... T> void warn(T&&...) {} }
+namespace logger {
+    unsigned warnings = 0;
+    template<class... T> void warn(T&&...) { ++warnings; }
+}
 namespace globals::features {
     struct Feature {
         bool loaded = true;
@@ -129,6 +143,43 @@ struct GrassBucketRenderer {
     void EndFrame();
 };
 PRODUCTION_METHODS
+void CheckDemandAllocationFailure() {
+    auto& settings = globals::features::grassOptimizations.settings;
+    settings.Enabled = settings.EnableMeshLOD = settings.EnableMidLOD = settings.EnableFarLOD = true;
+    for (bool endFrame : {false, true})
+        for (unsigned allocation : {0u, 1u, 2u, 3u}) {
+            GrassBucketRenderer renderer;
+            auto& state = *renderer.impl;
+            state.frameSettings = settings;
+            state.residents[1] = Source{};
+            state.UpdateLODDemand(settings);
+            const auto& source = state.residents[1];
+            const LODKey key{source.model, source.descriptor, source.texture, 0};
+            const auto load = [](const LODKey&) { return std::make_shared<Owner>(); };
+            Require(state.lodMeshes.FindOrLoad(key, load) && Owner::alive == 1);
+            ++state.residentRevision;
+            const auto warnings = logger::warnings;
+            failAllocation = allocation;
+            failAllAllocations = allocation == 0;
+            try {
+                if (endFrame) renderer.EndFrame();
+                else state.UpdateLODDemand(settings);
+            } catch (...) {
+                failAllAllocations = false;
+                throw;
+            }
+            failAllAllocations = false;
+            Require(!failAllocation && !captureLocked && !state.failed && Owner::alive == 0);
+            Require(state.lodMeshes.Entries().empty() && state.lodRevision == UINT64_MAX);
+            Require(logger::warnings == warnings + 1);
+            const auto selected = state.LODMeshes(source);
+            Require(!selected[0] && !selected[1]);
+            state.UpdateLODDemand(settings);
+            Require(state.lodRevision == state.residentRevision);
+            Require(state.lodMeshes.FindOrLoad(key, load) && Owner::alive == 1);
+        }
+    Require(Owner::alive == 0);
+}
 void CheckLODResolution() {
     auto& settings = globals::features::grassOptimizations.settings;
     settings.Enabled = settings.EnableMeshLOD = true;
@@ -275,6 +326,7 @@ int main() {
         renderer.EndFrame();
         Require(Owner::alive == 0);
         CheckLODResolution();
+        CheckDemandAllocationFailure();
         std::cout << "Production LOD demand, shared users, frame plans, toggles and retirement passed\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

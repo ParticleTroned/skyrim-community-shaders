@@ -1249,13 +1249,7 @@ void GrassBucketRenderer::EndFrame()
 		bucket.plan.Retire();
 	for (auto& bucket : impl->dormantBuckets)
 		bucket.plan.Retire();
-	try {
-		impl->UpdateLODDemand(globals::features::grassOptimizations.GetSettings());
-	} catch (const std::bad_alloc&) {
-		impl->lodMeshes.SetDemand({});
-		impl->lodRevision = UINT64_MAX;
-		logger::warn("Grass LOD demand allocation failed; released cached meshes");
-	}
+	impl->UpdateLODDemand(globals::features::grassOptimizations.GetSettings());
 }
 
 void GrassBucketRenderer::Impl::PrepareFrame()
@@ -1663,29 +1657,36 @@ ID3D11InputLayout* GrassBucketRenderer::Impl::Layout(uint64_t descriptor)
 
 void GrassBucketRenderer::Impl::UpdateLODDemand(const GrassPolicy::Settings& settings)
 {
-	const uint32_t mode = settings.Enabled && settings.EnableMeshLOD && !failed && globals::features::grassOptimizations.loaded ?
-	                          (settings.EnableMidLOD ? 1u : 0u) | (settings.EnableFarLOD ? 2u : 0u) :
-	                          0u;
-	std::set<LODKey, std::less<>> demand;
-	uint64_t revision;
-	{
-		std::shared_lock lock(captureMutex);
-		revision = residentRevision;
-		if (lodRevision == revision && lodMode == mode)
-			return;
-		if (mode)
-			for (const auto& [identity, source] : residents) {
-				if (source.model.empty() || !source.texture || !source.lifetime->alive.load(std::memory_order_acquire) ||
-					source.generation != source.lifetime->generation.load(std::memory_order_acquire))
-					continue;
-				demand.insert({ source.model, source.descriptor, source.texture, 0 });
-				if (mode & 2u)
-					demand.insert({ source.model, source.descriptor, source.texture, 1 });
-			}
+	try {
+		const uint32_t mode = settings.Enabled && settings.EnableMeshLOD && !failed && globals::features::grassOptimizations.loaded ?
+		                          (settings.EnableMidLOD ? 1u : 0u) | (settings.EnableFarLOD ? 2u : 0u) :
+		                          0u;
+		std::set<LODKey, std::less<>> demand;
+		uint64_t revision;
+		{
+			std::shared_lock lock(captureMutex);
+			revision = residentRevision;
+			if (lodRevision == revision && lodMode == mode)
+				return;
+			if (mode)
+				for (const auto& [identity, source] : residents) {
+					if (source.model.empty() || !source.texture || !source.lifetime->alive.load(std::memory_order_acquire) ||
+						source.generation != source.lifetime->generation.load(std::memory_order_acquire))
+						continue;
+					demand.insert({ source.model, source.descriptor, source.texture, 0 });
+					if (mode & 2u)
+						demand.insert({ source.model, source.descriptor, source.texture, 1 });
+				}
+		}
+		lodMeshes.SetDemand(std::move(demand));
+		lodRevision = revision;
+		lodMode = mode;
+	} catch (const std::bad_alloc&) {
+		// Optional LOD demand must not disable culling when its allocation fails.
+		lodMeshes.Clear();
+		lodRevision = UINT64_MAX;
+		logger::warn("Grass LOD demand allocation failed; released cached meshes");
 	}
-	lodMeshes.SetDemand(std::move(demand));
-	lodRevision = revision;
-	lodMode = mode;
 }
 
 std::array<const Mesh*, 2> GrassBucketRenderer::Impl::LODMeshes(const Source& source)

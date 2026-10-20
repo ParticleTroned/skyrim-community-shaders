@@ -28,6 +28,7 @@ class GrassLODLifecycleTests(unittest.TestCase):
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 bool captureLocked = false;
@@ -42,15 +43,13 @@ struct Owner {
     ~Owner() { Require(!captureLocked); --alive; }
 };
 using Mesh = std::shared_ptr<Owner>;
-struct LODKey {
-    std::string model;
-    uint64_t descriptor;
-    std::shared_ptr<int> texture;
-    uint32_t tier;
-    bool operator<(const LODKey& other) const {
-        return std::tie(model, descriptor, texture, tier) < std::tie(other.model, other.descriptor, other.texture, other.tier);
-    }
-};
+namespace RE {
+    using NiSourceTexture = int;
+    template<class T> using NiPointer = std::shared_ptr<T>;
+}
+using LODLookup = std::tuple<std::string_view, uint64_t, uintptr_t, uint32_t>;
+PRODUCTION_KEY;
+
 struct Lifetime { std::atomic_bool alive{true}; std::atomic_uint64_t generation{0}; };
 struct Source {
     std::string model = "test.nif";
@@ -98,12 +97,18 @@ int main() {
         };
         const auto key = keyFor(state.residents[1]);
         int loads = 0;
-        const auto load = [&]() { ++loads; return std::make_shared<Owner>(); };
+        const auto load = [&](const LODKey&) { ++loads; return std::make_shared<Owner>(); };
         Require(!state.lodMeshes.FindOrLoad(key, load));
         renderer.EndFrame();
         auto mesh = state.lodMeshes.FindOrLoad(key, load);
         Require(mesh && *mesh && loads == 1 && Owner::alive == 1);
         Require(state.lodMeshes.FindOrLoad(key, load) == mesh && loads == 1);
+        const auto lookup = key.Lookup();
+        for (int frame = 0; frame < 1000; ++frame)
+            Require(state.lodMeshes.FindOrLoad(lookup, load) == mesh && loads == 1);
+        auto absent = lookup;
+        std::get<1>(absent) += 1;
+        Require(!state.lodMeshes.FindOrLoad(absent, load) && loads == 1);
         state.buckets[0].plan.meshes[1] = *mesh;
         state.dormantBuckets[0].plan.meshes[2] = *mesh;
         state.residents.erase(1);
@@ -144,7 +149,7 @@ int main() {
         ++state.residentRevision;
         renderer.EndFrame();
         int failures = 0;
-        const auto rejected = [&]() -> Mesh {
+        const auto rejected = [&](const LODKey&) -> Mesh {
             auto candidate = std::make_shared<Owner>();
             ++failures;
             return {};
@@ -170,7 +175,7 @@ int main() {
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }
-'''.replace("PRODUCTION_METHODS", methods)
+'''.replace("PRODUCTION_METHODS", methods).replace("PRODUCTION_KEY", block(source, "struct LODKey"))
         compiler = os.environ.get("CXX") or shutil.which("cl")
         self.assertIsNotNone(compiler, "Run in the MSVC developer environment")
         with tempfile.TemporaryDirectory(prefix="grass-lod-lifecycle-") as temporary:

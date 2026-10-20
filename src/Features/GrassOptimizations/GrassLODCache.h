@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <map>
 #include <set>
 #include <utility>
@@ -12,25 +13,26 @@ namespace GrassLOD
 	{
 	public:
 		/** @brief Retire unreferenced assets outside the native capture lock. */
-		void SetDemand(std::set<Key> next)
+		void SetDemand(std::set<Key, std::less<>> next)
 		{
 			std::erase_if(entries, [&](const auto& entry) { return !next.contains(entry.first); });
 			demand = std::move(next);
 		}
 		/** @brief Deduplicate loads, including failures, only while a resident needs the key. */
-		template <class Load>
-		const Value* FindOrLoad(const Key& key, Load&& load)
+		template <class Lookup, class Load>
+		const Value* FindOrLoad(const Lookup& key, Load&& load)
 		{
-			if (!demand.contains(key))
-				return nullptr;
 			if (const auto found = entries.find(key); found != entries.end())
 				return &found->second;
-			return &entries.emplace(key, std::forward<Load>(load)()).first->second;
+			const auto requested = demand.find(key);
+			if (requested == demand.end())
+				return nullptr;
+			return &entries.emplace(*requested, std::forward<Load>(load)(*requested)).first->second;
 		}
-		const std::map<Key, Value>& Entries() const { return entries; }
+		const auto& Entries() const { return entries; }
 
 	private:
-		std::set<Key> demand;
-		std::map<Key, Value> entries;
+		std::set<Key, std::less<>> demand;
+		std::map<Key, Value, std::less<>> entries;
 	};
 }

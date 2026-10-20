@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <mutex>
 #include <shared_mutex>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -125,18 +126,20 @@ namespace
 	};
 	static_assert(sizeof(Parameters) == 208 && offsetof(Parameters, collisionStrength) == 172 &&
 				  offsetof(Parameters, indexCounts) == 176 && offsetof(Parameters, meshWeights) == 192);
+	using LODLookup = std::tuple<std::string_view, uint64_t, uintptr_t, uint32_t>;
 	struct LODKey
 	{
 		std::string model;
 		uint64_t descriptor;
 		RE::NiPointer<RE::NiSourceTexture> texture;
 		uint32_t tier;
-		bool operator<(const LODKey& other) const
+		LODLookup Lookup() const
 		{
-			const auto textureID = reinterpret_cast<uintptr_t>(texture.get());
-			const auto otherTextureID = reinterpret_cast<uintptr_t>(other.texture.get());
-			return std::tie(model, descriptor, textureID, tier) < std::tie(other.model, other.descriptor, otherTextureID, other.tier);
+			return { model, descriptor, reinterpret_cast<uintptr_t>(texture.get()), tier };
 		}
+		bool operator<(const LODKey& other) const { return Lookup() < other.Lookup(); }
+		bool operator<(const LODLookup& other) const { return Lookup() < other; }
+		friend bool operator<(const LODLookup& left, const LODKey& right) { return left < right.Lookup(); }
 	};
 	struct DrawConstants
 	{
@@ -1610,7 +1613,7 @@ void GrassBucketRenderer::Impl::UpdateLODDemand(const GrassPolicy::Settings& set
 	const uint32_t mode = settings.Enabled && settings.EnableMeshLOD && !failed && globals::features::grassOptimizations.loaded ?
 	                          (settings.EnableMidLOD ? 1u : 0u) | (settings.EnableFarLOD ? 2u : 0u) :
 	                          0u;
-	std::set<LODKey> demand;
+	std::set<LODKey, std::less<>> demand;
 	uint64_t revision;
 	{
 		std::shared_lock lock(captureMutex);
@@ -1636,8 +1639,8 @@ std::array<Mesh, 2> GrassBucketRenderer::Impl::LODMeshes(const Source& source)
 {
 	std::array<Mesh, 2> result;
 	for (uint32_t tier = 0; tier < result.size(); ++tier) {
-		const LODKey key{ source.model, source.descriptor, source.texture, tier };
-		if (const auto mesh = lodMeshes.FindOrLoad(key, [&]() { return LoadLODMesh(key); }))
+		const LODLookup key{ source.model, source.descriptor, reinterpret_cast<uintptr_t>(source.texture.get()), tier };
+		if (const auto mesh = lodMeshes.FindOrLoad(key, [&](const LODKey& requested) { return LoadLODMesh(requested); }))
 			result[tier] = *mesh;
 	}
 	return result;

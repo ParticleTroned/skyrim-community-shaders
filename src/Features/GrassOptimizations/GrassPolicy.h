@@ -39,6 +39,8 @@ namespace GrassPolicy
 	}
 	/** @brief The native descriptor stores mesh stride in four-byte units in its low nibble. */
 	constexpr uint32_t MeshStride(uint64_t descriptor) { return uint32_t(descriptor & 0xF) * 4; }
+	/** @brief Density and distance costs follow the drawable mesh selected for each LOD slot. */
+	inline float MeshWeight(uint32_t indexCount) { return std::sqrt(std::max(1.0f, indexCount / 24.0f)); }
 	/** @brief Unsupported batch sizes retain native rendering before scratch allocation. */
 	constexpr bool BatchCapacityValid(uint64_t instances, uint64_t slices)
 	{

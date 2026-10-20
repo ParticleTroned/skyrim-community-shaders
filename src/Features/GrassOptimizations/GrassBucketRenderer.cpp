@@ -112,14 +112,16 @@ namespace
 		uint32_t depthWidth, depthHeight, depthMips, collision;
 		std::array<float, 4> depthScale;
 		float meshCostBias, costBiasStartDistance, invisibleFadeCull, renderDistance;
-		float edgeFadeStart, simpleShadingPixelSize, qualityRadius, meshWeight;
+		float edgeFadeStart, simpleShadingPixelSize, qualityRadius, padding;
 		uint32_t overrideDistance;
 		float collisionDistance;
 		uint32_t sliceOffset = 0;
 		float collisionStrength = GrassCollision::kDefaultCollisionStrength;
 		std::array<uint32_t, 4> indexCounts{};
+		std::array<float, 4> meshWeights{};
 	};
-	static_assert(sizeof(Parameters) == 192 && offsetof(Parameters, collisionStrength) == 172 && offsetof(Parameters, indexCounts) == 176);
+	static_assert(sizeof(Parameters) == 208 && offsetof(Parameters, collisionStrength) == 172 &&
+				  offsetof(Parameters, indexCounts) == 176 && offsetof(Parameters, meshWeights) == 192);
 	struct DrawConstants
 	{
 		uint32_t enabled, eye, base;
@@ -1963,8 +1965,10 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 		frameSettings.MeshCostBias, frameSettings.CostBiasStartDistance, frameSettings.InvisibleFadeCull,
 		frameSettings.RenderDistanceOverride > 0 ? frameSettings.RenderDistanceOverride : nativeRenderDistance,
 		frameSettings.EdgeFadeStart, frameSettings.SimpleShadingPixelSize, representative.bound.radius,
-		std::sqrt(std::max(1.0f, representative.triangles / 8.0f)), frameSettings.RenderDistanceOverride > 0 ? 1u : 0u, frameSettings.CollisionDistance };
+		0, frameSettings.RenderDistanceOverride > 0 ? 1u : 0u, frameSettings.CollisionDistance };
 	params.indexCounts = { meshes[0].indexCount, meshes[1].indexCount, meshes[2].indexCount, 0 };
+	params.meshWeights = { GrassPolicy::MeshWeight(meshes[0].indexCount),
+		GrassPolicy::MeshWeight(meshes[1].indexCount), GrassPolicy::MeshWeight(meshes[2].indexCount), 1 };
 	params.collisionStrength = frameCollisionStrength;
 	if (cullingSlices.size() > GrassPolicy::kMaxFrameSlices - frameSlices.size())
 		return GRASS_DRAW_REJECT(Capacity);

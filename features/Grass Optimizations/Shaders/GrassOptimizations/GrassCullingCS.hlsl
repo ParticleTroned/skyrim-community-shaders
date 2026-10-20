@@ -18,12 +18,13 @@ cbuffer Parameters : register(b0)
 	uint DepthWidth, DepthHeight, DepthMips, CollisionEnabled;
 	float4 DepthUVScale;
 	float MeshCostBias, CostBiasStartDistance, InvisibleFadeCull, RenderDistance;
-	float EdgeFadeStart, SimpleShadingPixelSize, QualityRadius, MeshWeight;
+	float EdgeFadeStart, SimpleShadingPixelSize, QualityRadius, Padding;
 	uint OverrideDistance;
 	float CollisionDistance;
 	uint SliceOffset;
 	float CollisionStrength;
 	uint4 IndexCounts;
+	float4 MeshWeights;
 };
 
 cbuffer FrustumParameters : register(b3)
@@ -228,17 +229,18 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out 
 	uint seed = Hash(asuint(instance1.x + slice.originFade.x) ^ Hash(asuint(instance1.y + slice.originFade.y)) ^ a.y);
 	float densityHash = (seed & 0xffffff) / 16777216.0;
 	float lodHash = (Hash(seed ^ 0x9e3779b9) & 0xffffff) / 16777216.0;
-	float costBias = MeshCostBias * saturate((distance - CostBiasStartDistance) / max(CostBiasStartDistance, 1e-4));
-	float pixelScale = lerp(1, MeshWeight, costBias);
-	float maximumDistance = RenderDistance * lerp(1, 1 / max(MeshWeight, 1), costBias);
-	float keep = lerp(MinDensity, 1, saturate((pixels - MinPixels * pixelScale) / max((FullPixels - MinPixels) * pixelScale, .01)));
-	float densityFade = DensityEnabled && pixels < FullPixels * pixelScale ? saturate((keep + .15 - densityHash) / .15) : 1;
-	bool densityReject = valid && DensityEnabled && (pixels < MinPixels * pixelScale || densityFade <= 0);
 	uint tier = 0;
 	if (valid && MidEnabled && pixels < MidPixels + (lodHash - .5) * BandPixels)
 		tier = 1;
 	if (valid && FarEnabled && pixels < FarPixels + (lodHash - .5) * BandPixels)
 		tier = 2;
+	float meshWeight = MeshWeights[tier];
+	float costBias = MeshCostBias * saturate((distance - CostBiasStartDistance) / max(CostBiasStartDistance, 1e-4));
+	float pixelScale = lerp(1, meshWeight, costBias);
+	float maximumDistance = RenderDistance * lerp(1, 1 / max(meshWeight, 1), costBias);
+	float keep = lerp(MinDensity, 1, saturate((pixels - MinPixels * pixelScale) / max((FullPixels - MinPixels) * pixelScale, .01)));
+	float densityFade = DensityEnabled && pixels < FullPixels * pixelScale ? saturate((keep + .15 - densityHash) / .15) : 1;
+	bool densityReject = valid && DensityEnabled && (pixels < MinPixels * pixelScale || densityFade <= 0);
 	bool windComputed = false;
 	float2 wind = 0;
 	[unroll] for (uint eye = 0; eye < EYES; ++eye)

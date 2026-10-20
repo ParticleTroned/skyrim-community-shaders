@@ -16,13 +16,15 @@ void RunCullingShader(bool vr)
 	Check(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, shader.GetAddressOf()));
 	Util::SetResourceName(shader.Get(), "GrassTest::CullCS");
 	D3D11_SHADER_BUFFER_DESC parameterLayout{};
-	D3D11_SHADER_VARIABLE_DESC indexCountLayout{}, strengthLayout{};
+	D3D11_SHADER_VARIABLE_DESC indexCountLayout{}, strengthLayout{}, weightLayout{};
 	const auto parameterReflection = reflection->GetConstantBufferByName("Parameters");
 	Check(parameterReflection->GetDesc(&parameterLayout));
 	Check(parameterReflection->GetVariableByName("IndexCounts")->GetDesc(&indexCountLayout));
 	Check(parameterReflection->GetVariableByName("CollisionStrength")->GetDesc(&strengthLayout));
+	Check(parameterReflection->GetVariableByName("MeshWeights")->GetDesc(&weightLayout));
+	Require(weightLayout.StartOffset == 192 && weightLayout.Size == 16, "Drawable mesh costs changed the CPU parameter layout");
 	Require(strengthLayout.StartOffset == 172 && strengthLayout.Size == sizeof(float), "Collision strength changed the CPU culling layout");
-	Require(parameterLayout.Size == 192 && indexCountLayout.StartOffset == 176 && indexCountLayout.Size == 16, "Indirect index counts changed the CPU parameter layout");
+	Require(parameterLayout.Size == 208 && indexCountLayout.StartOffset == 176 && indexCountLayout.Size == 16, "Indirect index counts changed the CPU parameter layout");
 	const UINT eyes = vr ? 2 : 1, capacity = 128;
 	using Record = std::array<uint32_t, 8>;
 	const std::array<Record, 3> records{ Record{ 0, 0x3c003800, 0x3c00, 0, 0x3c000000, 0x3c000000, 0, 0 },
@@ -127,7 +129,7 @@ void RunCullingShader(bool vr)
 	std::array<UINT, 4> indexCounts{ 9, 6, 3, 0 };
 	params.SetVariable("ModelBound", std::array<float, 4>{ 0, 0, 0, .05f });
 	params.SetVariable("QualityRadius", .05f);
-	params.SetVariable("MeshWeight", 1.0f);
+	params.SetVariable("MeshWeights", std::array<float, 4>{ 1, 1, 1, 1 });
 	params.SetVariable("ViewHeight", 100.0f);
 	params.SetVariable("MinPixels", 2.0f);
 	params.SetVariable("FullPixels", 16.0f);
@@ -229,6 +231,38 @@ void RunCullingShader(bool vr)
 		Require(counts[16] == 2, "Uncovered VR eye depth was not classified");
 	values = dispatch(true, false, false, true);
 	for (UINT eye = 0; eye < eyes; ++eye) Require(values[(2 * eyes + eye) * 8 + 4] == 2 && values[eye * 8 + 4] == 0, "Far LOD selection lost or duplicated instances");
+	params.SetVariable("MeshWeights", std::array<float, 4>{ 16, 8, 1, 1 });
+	params.SetVariable("MeshCostBias", 1.0f);
+	params.SetVariable("CostBiasStartDistance", 0.0f);
+	params.SetVariable("RenderDistance", 2.0f);
+	params.SetVariable("OverrideDistance", 1u);
+	params.SetVariable("EdgeFadeStart", .85f);
+	for (bool lod : { false, true }) {
+		values = dispatch(true, false, false, lod);
+		for (UINT eye = 0; eye < eyes; ++eye)
+			Require(values[(lod ? 2 * eyes + eye : eye) * 8 + 4] == (lod ? 2u : 0u), "Distance cost did not follow the drawable LOD");
+	}
+	params.SetVariable("RenderDistance", 0.0f);
+	params.SetVariable("FullPixels", 2.1f);
+	for (bool lod : { false, true }) {
+		values = dispatch(true, true, false, lod);
+		for (UINT eye = 0; eye < eyes; ++eye)
+			Require(values[(lod ? 2 * eyes + eye : eye) * 8 + 4] == (lod ? 2u : 0u), "Density cost did not follow the drawable LOD");
+	}
+	params.SetVariable("FarPixels", .01f);
+	params.SetVariable("MeshWeights", std::array<float, 4>{ 16, 1, 8, 1 });
+	values = dispatch(true, true, false, true);
+	for (UINT eye = 0; eye < eyes; ++eye)
+		Require(values[(eyes + eye) * 8 + 4] == 2, "Mid LOD inherited another tier's mesh cost");
+	params.SetVariable("CostBiasStartDistance", 6000.0f);
+	values = dispatch(true, true, false, false);
+	for (UINT eye = 0; eye < eyes; ++eye)
+		Require(values[eye * 8 + 4] == 2, "Near grass lost mesh-cost protection");
+	params.SetVariable("MeshWeights", std::array<float, 4>{ 1, 1, 1, 1 });
+	params.SetVariable("MeshCostBias", 0.0f);
+	params.SetVariable("FullPixels", 16.0f);
+	params.SetVariable("FarPixels", 64.0f);
+	params.SetVariable("OverrideDistance", 0u);
 	params.SetVariable("ModelBound", std::array<float, 4>{ 0, 0, 0, 1.1f });
 	params.SetVariable("CollisionEnabled", 1u);
 	params.SetVariable("CollisionStrength", 1.0f);

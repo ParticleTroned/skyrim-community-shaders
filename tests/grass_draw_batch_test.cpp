@@ -238,6 +238,10 @@ int main()
 		require(wrapped.VisibleInFrame(0) && wrapped.IdleFrames(0) == 0);
 		require(GrassPolicy::MeshStride(0x8000000000000087ull) == 28);
 		require(GrassPolicy::MeshStride(0x8000000000000080ull) == 0);
+		require(GrassPolicy::MeshWeight(0) == 1);
+		require(GrassPolicy::MeshWeight(24) == 1);
+		require(GrassPolicy::MeshWeight(96) == 2);
+		require(GrassPolicy::MeshWeight(384) == 4);
 		require(GrassPolicy::NativeCountMatches(10, 10));
 		require(!GrassPolicy::NativeCountMatches(10, 20));
 		require(!GrassPolicy::NativeCountMatches(10, 21));

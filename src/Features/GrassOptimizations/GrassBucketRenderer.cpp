@@ -1661,23 +1661,21 @@ void GrassBucketRenderer::Impl::UpdateLODDemand(const GrassPolicy::Settings& set
 		const uint32_t mode = settings.Enabled && settings.EnableMeshLOD && !failed && globals::features::grassOptimizations.loaded ?
 		                          (settings.EnableMidLOD ? 1u : 0u) | (settings.EnableFarLOD ? 2u : 0u) :
 		                          0u;
+		std::shared_lock lock(captureMutex);
+		const auto revision = residentRevision;
+		if (lodRevision == revision && lodMode == mode)
+			return;
 		std::set<LODKey, std::less<>> demand;
-		uint64_t revision;
-		{
-			std::shared_lock lock(captureMutex);
-			revision = residentRevision;
-			if (lodRevision == revision && lodMode == mode)
-				return;
-			if (mode)
-				for (const auto& [identity, source] : residents) {
-					if (source.model.empty() || !source.texture || !source.lifetime->alive.load(std::memory_order_acquire) ||
-						source.generation != source.lifetime->generation.load(std::memory_order_acquire))
-						continue;
-					demand.insert({ source.model, source.descriptor, source.texture, 0 });
-					if (mode & 2u)
-						demand.insert({ source.model, source.descriptor, source.texture, 1 });
-				}
-		}
+		if (mode)
+			for (const auto& [identity, source] : residents) {
+				if (source.model.empty() || !source.texture || !source.lifetime->alive.load(std::memory_order_acquire) ||
+					source.generation != source.lifetime->generation.load(std::memory_order_acquire))
+					continue;
+				demand.insert({ source.model, source.descriptor, source.texture, 0 });
+				if (mode & 2u)
+					demand.insert({ source.model, source.descriptor, source.texture, 1 });
+			}
+		lock.unlock();
 		lodMeshes.SetDemand(std::move(demand));
 		lodRevision = revision;
 		lodMode = mode;

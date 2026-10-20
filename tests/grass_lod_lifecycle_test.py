@@ -255,6 +255,20 @@ int main() {
         const auto lookup = key.Lookup();
         for (int frame = 0; frame < 1000; ++frame)
             Require(state.lodMeshes.FindOrLoad(lookup, load) == mesh && loads == 1);
+        const auto warnings = logger::warnings;
+        failAllAllocations = true;
+        try {
+            for (int frame = 0; frame < 1000; ++frame) {
+                state.UpdateLODDemand(settings);
+                renderer.EndFrame();
+            }
+        } catch (...) {
+            failAllAllocations = false;
+            throw;
+        }
+        failAllAllocations = false;
+        Require(logger::warnings == warnings && Owner::alive == 1);
+        Require(state.lodMeshes.FindOrLoad(lookup, load) == mesh && loads == 1);
         auto absent = lookup;
         std::get<1>(absent) += 1;
         Require(!state.lodMeshes.FindOrLoad(absent, load) && loads == 1);

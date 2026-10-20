@@ -69,18 +69,21 @@ void RunCullingShader(bool vr)
 	Util::SetResourceName(inputSRV.Get(), "GrassTest::Input SRV");
 	Util::SetResourceName(tableSRV.Get(), "GrassTest::Slices SRV");
 	std::array<ComPtr<ID3D11UnorderedAccessView>, 4> views;
-	std::array<ID3D11Buffer*, 4> buffers{ output.Get(), extras.Get(), args.Get(), counters.Get() };
-	for (UINT i = 0; i < views.size(); ++i) {
-		D3D11_BUFFER_DESC desc{};
-		buffers[i]->GetDesc(&desc);
-		D3D11_UNORDERED_ACCESS_VIEW_DESC view{};
-		view.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		view.Format = i == 1 ? DXGI_FORMAT_UNKNOWN : DXGI_FORMAT_R32_TYPELESS;
-		view.Buffer.NumElements = desc.ByteWidth / (i == 1 ? 24 : 4);
-		view.Buffer.Flags = i == 1 ? 0 : D3D11_BUFFER_UAV_FLAG_RAW;
-		Check(device->CreateUnorderedAccessView(buffers[i], &view, views[i].GetAddressOf()));
-		Util::SetResourceName(views[i].Get(), "GrassTest::Output%u UAV", i);
-	}
+	const auto makeOutputViews = [&]() {
+		std::array<ID3D11Buffer*, 4> buffers{ output.Get(), extras.Get(), args.Get(), counters.Get() };
+		for (UINT i = 0; i < views.size(); ++i) {
+			D3D11_BUFFER_DESC desc{};
+			buffers[i]->GetDesc(&desc);
+			D3D11_UNORDERED_ACCESS_VIEW_DESC view{};
+			view.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+			view.Format = i == 1 ? DXGI_FORMAT_UNKNOWN : DXGI_FORMAT_R32_TYPELESS;
+			view.Buffer.NumElements = desc.ByteWidth / (i == 1 ? 24 : 4);
+			view.Buffer.Flags = i == 1 ? 0 : D3D11_BUFFER_UAV_FLAG_RAW;
+			Check(device->CreateUnorderedAccessView(buffers[i], &view, views[i].ReleaseAndGetAddressOf()));
+			Util::SetResourceName(views[i].Get(), "GrassTest::Output%u UAV", i);
+		}
+	};
+	makeOutputViews();
 	D3D11_TEXTURE2D_DESC depthDesc{};
 	depthDesc.Width = eyes * 4;
 	depthDesc.Height = 4;
@@ -379,46 +382,107 @@ void RunCullingShader(bool vr)
 		stereo->Bind(context.Get());
 	}
 
-	// Cross-group appends and short batches share the same complete argument initialization.
-	constexpr UINT manyInstances = 65;
-	const std::vector<Record> manyRecords(manyInstances, records[0]);
-	auto manyInput = makeBuffer(UINT(manyRecords.size() * sizeof(Record)), D3D11_BIND_SHADER_RESOURCE, 0,
-		D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, manyRecords.data(), "GrassTest::ManyInstances");
-	inputView.BufferEx.NumElements = manyInstances * 8;
-	Check(device->CreateShaderResourceView(manyInput.Get(), &inputView, inputSRV.ReleaseAndGetAddressOf()));
-	Util::SetResourceName(inputSRV.Get(), "GrassTest::ManyInstances SRV");
-	const std::array<Slice, 3> manySlices{ Slice{}, Slice{ 0, manyInstances, manyInstances, 0, { 0, 0, 0, 1 } }, Slice{} };
-	context->UpdateSubresource(table.Get(), 0, nullptr, manySlices.data(), 0, 0);
-	params.SetVariable("SliceCount", 1u);
-	params.SetVariable("BandPixels", 0.0f);
-	params.SetVariable("MidPixels", 1e9f);
-	for (bool diagnostic : { true, false }) {
-		if (!diagnostic) {
-			std::vector<D3D_SHADER_MACRO> productionDefines;
-			if (vr)
-				productionDefines.push_back({ "VR", "1" });
-			auto productionCode = Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassCullingCS.hlsl", "cs_5_0", productionDefines);
-			Check(device->CreateComputeShader(productionCode->GetBufferPointer(), productionCode->GetBufferSize(), nullptr, shader.ReleaseAndGetAddressOf()));
-			Util::SetResourceName(shader.Get(), "GrassTest::ProductionCullCS");
+	// Verify multisets, paired extras and canaries; compaction order is deliberately unspecified.
+	for (const UINT outputCapacity : { 256u, GrassPolicy::kMaxBatchInstances }) {
+		const UINT outputSlots = outputCapacity * eyes * 3 + 1;
+		std::vector<Record> manyRecords(outputCapacity, records[0]);
+		for (UINT i = 0; i < outputCapacity; ++i) {
+			manyRecords[i][7] = (i & 1023u) | ((i >> 10) << 16);
+			const float z = i % 3 == 0 ? .025f : i % 3 == 1 ? .5f :
+			                                                  4.0f;
+			manyRecords[i][1] = (manyRecords[i][1] & 0xffff0000u) | DirectX::PackedVector::XMConvertFloatToHalf(z);
 		}
-		for (UINT instances : { 0u, 1u, manyInstances }) {
-			params.SetVariable("InstanceCount", instances);
-			const UINT groups = (std::max)(1u, (instances + 63) / 64);
-			for (UINT tier = 0; tier < 3; ++tier) {
-				indexCounts = tier == 0 ? std::array<UINT, 4>{ 18, 0, 0, 0 } : std::array<UINT, 4>{ 18, 12, 6, 0 };
-				params.SetVariable("FarPixels", tier == 2 ? 1e9f : 0.0f);
-				values = dispatch(false, false, false, tier != 0, groups);
-				for (UINT slot = 0; slot < 6; ++slot) {
-					const UINT expectedInstances = slot < 3 * eyes && slot / eyes == tier ? instances : 0;
-					Require(values[slot * 8 + 4] == expectedInstances, "Argument reset lost or accumulated survivors across batches or thread groups");
+		auto manyInput = makeBuffer(UINT(manyRecords.size() * sizeof(Record)), D3D11_BIND_SHADER_RESOURCE, 0,
+			D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, manyRecords.data(), "GrassTest::BoundaryInput");
+		inputView.BufferEx.NumElements = outputCapacity * 8;
+		Check(device->CreateShaderResourceView(manyInput.Get(), &inputView, inputSRV.ReleaseAndGetAddressOf()));
+		Util::SetResourceName(inputSRV.Get(), "GrassTest::BoundaryInput SRV");
+		output = makeBuffer(outputSlots * 32, D3D11_BIND_UNORDERED_ACCESS, 0,
+			D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, nullptr, "GrassTest::BoundaryOutput");
+		std::vector<uint32_t> extraSentinels(outputSlots * 6, 0xdeadbeef);
+		extras = makeBuffer(outputSlots * 24, D3D11_BIND_UNORDERED_ACCESS, 24,
+			D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, extraSentinels.data(), "GrassTest::BoundaryExtras");
+		makeOutputViews();
+		params.SetVariable("Capacity", outputCapacity);
+		params.SetVariable("BandPixels", 0.0f);
+		params.SetVariable("MidPixels", 1e9f);
+		const auto resetOutputs = [&]() {
+			const UINT canary[4]{ 0xdeadbeef, 0xdeadbeef, 0xdeadbeef, 0xdeadbeef };
+			context->ClearUnorderedAccessViewUint(views[0].Get(), canary);
+			context->UpdateSubresource(extras.Get(), 0, nullptr, extraSentinels.data(), 0, 0);
+		};
+		for (bool diagnostic : { true, false }) {
+			std::vector<D3D_SHADER_MACRO> boundaryDefines;
+			if (vr)
+				boundaryDefines.push_back({ "VR", "1" });
+			if (diagnostic)
+				boundaryDefines.push_back({ "GRASS_DIAGNOSTICS", "1" });
+			auto boundaryCode = Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassCullingCS.hlsl", "cs_5_0", boundaryDefines);
+			Check(device->CreateComputeShader(boundaryCode->GetBufferPointer(), boundaryCode->GetBufferSize(), nullptr, shader.ReleaseAndGetAddressOf()));
+			Util::SetResourceName(shader.Get(), "GrassTest::BoundaryCullCS");
+			const auto sizes = outputCapacity == 256 ? std::vector<UINT>{ 0, 1, 2, 31, 63, 64, 65, 127, 128, 129, 256 } : std::vector<UINT>{ outputCapacity };
+			for (UINT instances : sizes) {
+				const UINT split = instances / 2;
+				const std::array<Slice, 3> manySlices{ Slice{}, Slice{ 0, split, split, 0, { 0, 0, 0, .25f } },
+					Slice{ split, instances - split, instances, 0, { 0, 0, 0, .75f } } };
+				context->UpdateSubresource(table.Get(), 0, nullptr, manySlices.data(), 0, 0);
+				params.SetVariable("SliceCount", 2u);
+				params.SetVariable("InstanceCount", instances);
+				const UINT groups = (std::max)(1u, (instances + 63) / 64);
+				for (UINT tier = 0; tier < 4; ++tier) {
+					resetOutputs();
+					indexCounts = tier == 0 ? std::array<UINT, 4>{ 18, 0, 0, 0 } : std::array<UINT, 4>{ 18, 12, 6, 0 };
+					params.SetVariable("MidPixels", tier == 3 ? 8.0f : 1e9f);
+					params.SetVariable("FarPixels", tier == 2 ? 1e9f : tier == 3 ? 4.0f :
+																				   0.0f);
+					values = dispatch(false, false, false, tier != 0, groups);
+					compacted = read(output.Get());
+					fades = read(extras.Get());
+					for (UINT slot = 0; slot < 6; ++slot) {
+						const UINT expectedInstances = slot >= 3 * eyes ? 0 : tier == 3       ? instances / 3 + (slot / eyes < instances % 3 ? 1u : 0u) :
+						                                                  slot / eyes == tier ? instances :
+						                                                                        0;
+						Require(values[slot * 8 + 4] == expectedInstances, "Compaction lost or accumulated survivors at a group boundary");
+						if (slot >= 3 * eyes)
+							continue;
+						std::vector<bool> seen(instances, false);
+						for (UINT survivor = 0; survivor < expectedInstances; ++survivor) {
+							const UINT offset = slot * outputCapacity + survivor;
+							const UINT tag = compacted[offset * 8 + 7];
+							const UINT record = (tag & 1023u) | ((tag >> 16) << 10);
+							Require(record < instances && !seen[record], "Compaction duplicated a source or emitted an inactive lane");
+							seen[record] = true;
+							Require(tier != 3 || record % 3 == slot / eyes, "Compaction moved an instance to another LOD bin");
+							Require(std::equal(manyRecords[record].begin(), manyRecords[record].end(), compacted.begin() + offset * 8), "Compaction changed a native record");
+							Require(std::bit_cast<float>(fades[offset * 6 + 3]) == (record < split ? .25f : .75f), "Compaction detached a record from its fade");
+							for (UINT axis = 0; axis < 3; ++axis)
+								Require(fades[offset * 6 + axis] == 0, "Compaction changed the source origin");
+							for (UINT time = 0; time < 2; ++time) {
+								const float angle = .4f * (time == 0 ? 4.25f : 3.75f);
+								const float wind = (std::sin(3.14159265358979323846f * std::sin(angle)) + std::sin(6.28318530717958647692f * std::sin(angle))) * .3f + .2f * std::cos(3.14159265358979323846f * std::cos(angle));
+								Require(std::abs(std::bit_cast<float>(fades[offset * 6 + 4 + time]) - wind) < 1e-5f, "Compaction changed current or previous wind");
+							}
+						}
+						if (expectedInstances < outputCapacity) {
+							const UINT guard = slot * outputCapacity + expectedInstances;
+							Require(compacted[guard * 8] == 0xdeadbeef && fades[guard * 6] == 0xdeadbeef, "Compaction overwrote a bin canary");
+						}
+					}
+					Require(compacted.back() == 0xdeadbeef && fades.back() == 0xdeadbeef, "Compaction exceeded output capacity");
+					counts = read(counters.Get());
+					Require(counts[0] == (diagnostic ? instances * eyes : 0), "Boundary diagnostics changed candidate counts");
 				}
 			}
+			params.SetVariable("MinPixels", 1e8f);
+			params.SetVariable("FullPixels", 2e8f);
+			values = dispatch(false, true, false, false, outputCapacity / 64);
+			for (UINT slot = 0; slot < 6; ++slot)
+				Require(values[slot * 8 + 4] == 0, "Fully culled batch retained previous draw counts");
+			params.SetVariable("SliceCount", 0u);
+			values = dispatch(false, false, false, false, outputCapacity / 64);
+			for (UINT slot = 0; slot < 6; ++slot)
+				Require(values[slot * 8 + 4] == 0, "Missing slices emitted uninitialized lanes");
 		}
-		params.SetVariable("MinPixels", 1e8f);
-		params.SetVariable("FullPixels", 2e8f);
-		values = dispatch(false, true, false, false, 2);
-		for (UINT slot = 0; slot < 6; ++slot)
-			Require(values[slot * 8 + 4] == 0, "Fully culled batch retained previous draw counts");
 	}
 }
 

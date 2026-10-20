@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 
@@ -25,6 +26,11 @@ namespace GrassRuntime
 	inline GroupLayout CaptureGroupLayout(const RE::BSMultiStreamInstanceTriShape::MULTISTREAM_TRISHAPE_RUNTIME_DATA& data)
 	{
 		return { data.instanceGroups.data(), data.instanceGroups.size(), data.activeGroupCount };
+	}
+	/** @brief Native instance headers initialize only the low 32 bits of their CPU byte width. */
+	inline bool HasInstanceData(const RE::BSGraphics::VertexBuffer& buffer, uint64_t requiredBytes)
+	{
+		return buffer.m_data && requiredBytes <= uint32_t(buffer.byteWidth);
 	}
 	/** @brief Native grass fields follow the runtime-sized lighting property. */
 	struct PropertyData

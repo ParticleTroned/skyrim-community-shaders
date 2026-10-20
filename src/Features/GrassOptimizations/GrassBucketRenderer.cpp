@@ -1103,7 +1103,7 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 				if (bytes > desc.ByteWidth || desc.MiscFlags & D3D11_RESOURCE_MISC_BUFFER_STRUCTURED)
 					return GRASS_CAPTURE_REJECT(GroupBuffer);
 			} else {
-				if (!group->vertexBuffer->m_data || bytes > group->vertexBuffer->byteWidth)
+				if (!GrassRuntime::HasInstanceData(*group->vertexBuffer, bytes))
 					return GRASS_CAPTURE_REJECT(GroupBuffer);
 				const auto data = static_cast<const uint8_t*>(group->vertexBuffer->m_data);
 				std::shared_ptr<const std::vector<uint8_t>> cached;
@@ -1124,7 +1124,7 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 					snapshot.bytes = std::make_shared<const std::vector<uint8_t>>(data, data + bytes);
 				source.cpuRecordBytes += bytes;
 			}
-			if (group->vertexBuffer->m_data && group->vertexBuffer->byteWidth >= bytes)
+			if (GrassRuntime::HasInstanceData(*group->vertexBuffer, bytes))
 				CacheRootBounds(snapshot, group->vertexBuffer->m_data);
 			else if (snapshot.bytes)
 				CacheRootBounds(snapshot, snapshot.bytes->data());

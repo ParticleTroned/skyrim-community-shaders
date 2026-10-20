@@ -172,6 +172,21 @@ namespace
 		if (!matches())
 			throw std::runtime_error("Restored group layout did not match");
 	}
+
+	void CheckInstanceDataBounds()
+	{
+		std::array<std::byte, 32> data{};
+		RE::BSGraphics::VertexBuffer buffer{};
+		for (uint64_t upper : { 0ull, 0xdeadbeef00000000ull })
+			for (uint32_t bytes : { 0u, 31u, 32u, 33u }) {
+				buffer.byteWidth = upper | bytes;
+				for (bool present : { false, true }) {
+					buffer.m_data = present ? data.data() : nullptr;
+					if (GrassRuntime::HasInstanceData(buffer, data.size()) != (present && bytes >= data.size()))
+						throw std::runtime_error("Native header padding authorized an invalid CPU instance read");
+				}
+			}
+	}
 }
 
 int main()
@@ -180,6 +195,7 @@ int main()
 		CheckLayout(false, 0x160);
 		CheckLayout(true, 0x178);
 		CheckGroupLayout();
+		CheckInstanceDataBounds();
 		std::cout << "SE/AE and VR grass layouts, native wind preservation, animated cache reuse and property invalidation passed\n";
 		return 0;
 	} catch (const std::exception& error) {

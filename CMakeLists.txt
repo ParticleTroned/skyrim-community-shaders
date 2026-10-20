@@ -3035,6 +3035,18 @@ if(BUILD_CONTROLLER_TESTS)
             LABELS "ControllerTests"
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
     )
+    add_test(
+        NAME GrassCaptureLifecycle
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/grass_capture_lifecycle_test.py"
+    )
+    set_tests_properties(
+        GrassCaptureLifecycle
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
     add_controller_test(
         motion_sharpening_runtime_compile_test
         MotionSharpeningRuntimeCompile

@@ -189,6 +189,7 @@ struct Source
 	std::vector<Group> groups;
 	std::shared_ptr<Lifetime> lifetime = std::make_shared<Lifetime>();
 	uint64_t generation = 0;
+	bool groupsCurrent = true;
 	std::shared_ptr<Queue> queue = std::make_shared<Queue>();
 	std::shared_ptr<RE::BSShaderProperty> property;
 	std::vector<RE::BSLight*> lights;
@@ -275,6 +276,7 @@ inline bool CurrentGeometry(const Source& source)
 	return source.identity->GetGeometryRuntimeData().shaderProperty.get() == source.property.get();
 }
 inline bool CurrentContract(const Source&) { return true; }
+inline bool CurrentGroups(const Source& source) { return source.groupsCurrent; }
 enum class DrawRejection
 {
 	QueueMembership

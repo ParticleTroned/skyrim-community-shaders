@@ -136,6 +136,42 @@ namespace
 		std::memset(bytes.data() + nativeOffset, 0, sizeof(RE::BSTArray<float>));
 		std::memset(&native->lightData.lights, 0, sizeof(RE::BSTArray<RE::BSLight*>));
 	}
+
+	void CheckGroupLayout()
+	{
+		using Runtime = RE::BSMultiStreamInstanceTriShape::MULTISTREAM_TRISHAPE_RUNTIME_DATA;
+		alignas(Runtime) std::array<std::byte, sizeof(Runtime)> storage{};
+		// Placement storage avoids invoking the game's allocator for the borrowed array.
+		auto& native = *::new (storage.data()) Runtime{};
+		std::array<RE::BSMultiStreamInstanceTriShape::InstanceGroup*, 2> groups{};
+		BorrowArray(native.instanceGroups, groups);
+		native.activeGroupCount = 1;
+		const auto captured = GrassRuntime::CaptureGroupLayout(native);
+		const auto matches = [&]() { return captured == GrassRuntime::CaptureGroupLayout(native); };
+		// Cached-file loading need not maintain the generated-grass instance total.
+		for (uint32_t total : { 0u, 64u, 4096u }) {
+			native.instanceCount = total;
+			if (!matches())
+				throw std::runtime_error("Generated-grass totals invalidated cached group layout");
+		}
+		++native.activeGroupCount;
+		if (matches())
+			throw std::runtime_error("Attachment into a vacant slot retained a stale snapshot");
+		--native.activeGroupCount;
+		std::array<RE::BSMultiStreamInstanceTriShape::InstanceGroup*, 2> replacement{};
+		BorrowArray(native.instanceGroups, replacement);
+		if (matches())
+			throw std::runtime_error("Reallocated group storage retained a stale snapshot");
+		BorrowArray(native.instanceGroups, groups);
+		auto* count = reinterpret_cast<std::byte*>(&native.instanceGroups) + 0x10;
+		const uint32_t one = 1;
+		std::memcpy(count, &one, sizeof(one));
+		if (matches())
+			throw std::runtime_error("Changed native slot count retained a stale snapshot");
+		BorrowArray(native.instanceGroups, groups);
+		if (!matches())
+			throw std::runtime_error("Restored group layout did not match");
+	}
 }
 
 int main()
@@ -143,6 +179,7 @@ int main()
 	try {
 		CheckLayout(false, 0x160);
 		CheckLayout(true, 0x178);
+		CheckGroupLayout();
 		std::cout << "SE/AE and VR grass layouts, native wind preservation, animated cache reuse and property invalidation passed\n";
 		return 0;
 	} catch (const std::exception& error) {

@@ -75,6 +75,7 @@ namespace
 		std::shared_ptr<Lifetime> lifetime;
 		RE::NiPointer<RE::BSShaderProperty> property;
 		RE::NiPointer<RE::NiSourceTexture> texture;
+		GrassRuntime::GroupLayout groupLayout;
 		RE::BSShaderMaterial* material;
 		RE::BSGraphics::TriShape* mesh;
 		winrt::com_ptr<ID3D11Buffer> vertices, indices;
@@ -367,6 +368,10 @@ namespace
 			return false;
 		const auto& data = GrassRuntime::GetPropertyData(static_cast<const RE::BSGrassShaderProperty*>(source.property.get()), globals::game::isVR);
 		return GrassRuntime::MatchesPersistentProperty(data, source.wavePeriod, source.lightMask, source.lights);
+	}
+	bool CurrentGroups(const Source& source)
+	{
+		return source.groupLayout == GrassRuntime::CaptureGroupLayout(source.identity->GetMultiStreamTrishapeRuntimeData());
 	}
 	// The capture lock and live lifetime token keep the native shape valid during these reads.
 	bool CurrentGeometry(const Source& source)
@@ -849,7 +854,7 @@ bool GrassBucketRenderer::QueueVisible(RE::BSMultiStreamInstanceTriShape* shape,
 		if (found != impl->residents.end()) {
 			const auto& source = found->second;
 			if (source.queue && source.queue->compatible.load(std::memory_order_relaxed) && source.queue->batching == batching && source.lifetime->alive.load(std::memory_order_acquire) &&
-				source.generation == source.lifetime->generation.load(std::memory_order_acquire) && CurrentGeometry(source) && CurrentContract(source)) {
+				source.generation == source.lifetime->generation.load(std::memory_order_acquire) && CurrentGeometry(source) && CurrentContract(source) && CurrentGroups(source)) {
 				queue = source.queue;
 				source.lifetime->observedFrame.store(now, std::memory_order_relaxed);
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -949,7 +954,7 @@ bool GrassBucketRenderer::Impl::RefreshSource(RE::BSMultiStreamInstanceTriShape*
 		auto& cached = found->second;
 		bool unchanged = cached.lifetime->alive.load(std::memory_order_acquire) &&
 		                 cached.generation == cached.lifetime->generation.load(std::memory_order_acquire) &&
-		                 CurrentGeometry(cached) && CurrentContract(cached);
+		                 CurrentGeometry(cached) && CurrentContract(cached) && CurrentGroups(cached);
 		size_t groupIndex = 0;
 		for (auto group : runtime.instanceGroups) {
 			if (!group || !group->instanceCount)
@@ -1029,6 +1034,7 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 			return true;
 		}
 		Source source{};
+		source.groupLayout = GrassRuntime::CaptureGroupLayout(runtime);
 		source.capturedFrame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 		source.residency.createdFrame = source.capturedFrame;
 		source.identity = shape;
@@ -1103,7 +1109,8 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 				std::shared_ptr<const std::vector<uint8_t>> cached;
 				{
 					std::scoped_lock lock(impl->captureMutex);
-					if (auto found = impl->residents.find(shape); found != impl->residents.end() && found->second.generation == source.generation)
+					if (auto found = impl->residents.find(shape); found != impl->residents.end() && found->second.generation == source.generation &&
+																  found->second.groupLayout == source.groupLayout)
 						for (const auto& previous : found->second.groups)
 							if (previous.identity == snapshot.identity && previous.count == snapshot.count) {
 								cached = previous.bytes;
@@ -1130,12 +1137,14 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 			impl->identities.find(shape) == impl->identities.end() ||
 			impl->identities.at(shape).first != source.lifetime)
 			return GRASS_CAPTURE_REJECT(Destroyed);
-		if (source.lifetime->generation.load(std::memory_order_acquire) != source.generation)
+		if (source.lifetime->generation.load(std::memory_order_acquire) != source.generation || !CurrentGroups(source))
 			return GRASS_CAPTURE_REJECT(Stale);
 		if (!impl->MakeResidentRoom(source))
 			return GRASS_CAPTURE_REJECT(FrameCapacity);
 		const auto existing = impl->residents.find(shape);
 		const uint64_t previousBytes = existing != impl->residents.end() ? existing->second.cpuRecordBytes : 0;
+		if (existing != impl->residents.end())
+			source.generation = ++source.lifetime->generation;
 		const auto now = globals::state->timer;
 		for (auto& group : source.groups) {
 			const auto born = source.lifetime->fadeHistory.Capture(group.identity);
@@ -1939,7 +1948,7 @@ bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, Outcome& outcome)
 		return false;
 	for (const auto& source : bucket.sources)
 		if (!source.lifetime->alive.load(std::memory_order_acquire) ||
-			source.generation != source.lifetime->generation.load(std::memory_order_acquire))
+			source.generation != source.lifetime->generation.load(std::memory_order_acquire) || !CurrentGroups(source))
 			return false;
 	outcome = Outcome::Batched;
 	if (!bucket.plan.empty) {

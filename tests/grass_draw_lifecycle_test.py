@@ -210,6 +210,19 @@ int main() {
                 Require(!f.renderer.impl->DrawBucket(bucket, outcome) && outcome == Outcome::Native,
                     "Changed geometry must retain native rendering");
             }
+            for (bool replacedSnapshot : {false, true}) {
+                Fixture f;
+                f.renderer.impl->ready = true;
+                f.Setup();
+                f.renderer.impl->PrepareCulling(&f.pass, &f.shader, 0, Fixture::NativeSetup);
+                auto& source = f.renderer.impl->buckets.front().sources.front();
+                if (replacedSnapshot) ++source.lifetime->generation;
+                else source.groupsCurrent = false;
+                f.Draw();
+                f.Draw();
+                Require(f.renderer.impl->submissions == 0 && GrassBucketRenderer::nativeCalls == 2,
+                    "Changed group layout or replaced snapshot must reject an already prepared batch");
+            }
             for (uint32_t flags : {0u, 0x10u}) {
                 for (float previous : {0.f, 9.f}) {
                     for (bool failPreparation : {false, true}) {

@@ -176,12 +176,8 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out 
 		reason = 17;
 	return nearest > farthest + DepthBias;
 }
-uint CullInstance(uint index, out uint4 a, out uint4 b, out uint tier, out GrassInstanceExtra extras[EYES])
+uint FindSlice(uint index)
 {
-	a = b = 0;
-	tier = 0;
-	[unroll] for (uint initialEye = 0; initialEye < EYES; ++initialEye)
-		extras[initialEye] = (GrassInstanceExtra)0;
 	uint left = 0, right = SliceCount;
 	[loop] while (left < right)
 	{
@@ -191,6 +187,16 @@ uint CullInstance(uint index, out uint4 a, out uint4 b, out uint tier, out Grass
 		else
 			left = middle + 1;
 	}
+	return left;
+}
+
+uint CullInstance(uint index, uint commonSlice, out uint4 a, out uint4 b, out uint tier, out GrassInstanceExtra extras[EYES])
+{
+	a = b = 0;
+	tier = 0;
+	[unroll] for (uint initialEye = 0; initialEye < EYES; ++initialEye)
+		extras[initialEye] = (GrassInstanceExtra)0;
+	uint left = commonSlice < SliceCount ? commonSlice : FindSlice(index);
 	if (left >= SliceCount)
 		return 0;
 	Slice slice = Slices[SliceOffset + left];
@@ -318,10 +324,16 @@ uint CullInstance(uint index, out uint4 a, out uint4 b, out uint tier, out Grass
 	return eyeMask;
 }
 
+groupshared uint CommonSlice;
 groupshared uint BinCounts[3 * EYES];
 groupshared uint BinOffsets[3 * EYES];
 
 [numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID, uint lane : SV_GroupIndex) {
+	if (lane == 0) {
+		CommonSlice = FindSlice(id.x);
+		if (CommonSlice < SliceCount && Slices[SliceOffset + CommonSlice].end < min(id.x + 64, InstanceCount))
+			CommonSlice = SliceCount;
+	}
 	if (lane < 3 * EYES)
 		BinCounts[lane] = 0;
 	if (id.x < 3 * EyeCount)
@@ -332,7 +344,7 @@ groupshared uint BinOffsets[3 * EYES];
 	uint tier = 0, eyeMask = 0;
 	GrassInstanceExtra extras[EYES];
 	if (id.x < InstanceCount)
-		eyeMask = CullInstance(id.x, a, b, tier, extras);
+		eyeMask = CullInstance(id.x, CommonSlice, a, b, tier, extras);
 	uint localSlots[EYES];
 	[unroll] for (uint reserveEye = 0; reserveEye < EYES; ++reserveEye) if (eyeMask & (1u << reserveEye))
 		InterlockedAdd(BinCounts[tier * EyeCount + reserveEye], 1, localSlots[reserveEye]);

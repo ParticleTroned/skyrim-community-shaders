@@ -677,6 +677,8 @@ struct GrassBucketRenderer::Impl
 	void RefreshFades();
 	void ReuseRecordBuffers(std::vector<Bucket>& previousBuckets);
 	bool EnsureResult(Bucket& bucket, uint32_t slots);
+	bool EnsureRecords(Bucket& bucket);
+	bool MakeRecordRoom(uint64_t replacementBytes);
 	void PrepareCulling(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry);
 	void CopyGeometryConstants();
 	void RestoreCurrentGeometry();
@@ -1552,6 +1554,41 @@ void GrassBucketRenderer::PrepareGeometry(RE::BSRenderPass* pass, RE::BSShader* 
 	}
 }
 
+bool GrassBucketRenderer::Impl::MakeRecordRoom(uint64_t replacementBytes)
+{
+	if (replacementBytes > GrassPolicy::kMaxResidentRecordBytes || residentRecordBytes > GrassPolicy::kMaxResidentRecordBytes)
+		return false;
+	while (!GrassPolicy::ReplacementFitsBudget(residentRecordBytes, replacementBytes, GrassPolicy::kMaxResidentRecordBytes)) {
+		if (dormantBuckets.empty())
+			return false;
+		const auto& dormant = dormantBuckets.back();
+		const uint64_t bytes = dormant.records ? uint64_t(dormant.recordsCapacity) * GrassPolicy::kRecordBytes : 0;
+		if (bytes > residentRecordBytes)
+			return false;
+		// Inactive reuse must not prevent active growth; leave every active buffer intact.
+		dormantBuckets.pop_back();
+		residentRecordBytes -= bytes;
+	}
+	return true;
+}
+
+bool GrassBucketRenderer::Impl::EnsureRecords(Bucket& bucket)
+{
+	if (bucket.records && bucket.recordsCapacity >= bucket.instances)
+		return true;
+	const auto next = std::bit_ceil(bucket.instances);
+	const uint64_t bytes = uint64_t(next) * GrassPolicy::kRecordBytes;
+	const uint64_t previous = bucket.records ? uint64_t(bucket.recordsCapacity) * GrassPolicy::kRecordBytes : 0;
+	if (previous > residentRecordBytes || !MakeRecordRoom(bytes))
+		return false;
+	bucket.records = RawBuffer(uint32_t(bytes), D3D11_BIND_SHADER_RESOURCE, 0, "GrassOptimizations::BucketRecords");
+	bucket.recordsCapacity = next;
+	bucket.recordsDirty = true;
+	bucket.dirtyFirstInstance = 0;
+	residentRecordBytes = residentRecordBytes - previous + bytes;
+	return true;
+}
+
 bool GrassBucketRenderer::Impl::EnsureResult(Bucket& bucket, uint32_t slots)
 {
 	auto& result = bucket.result;
@@ -2046,20 +2083,7 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 	                                                                      1u;
 	if (!EnsureResult(bucket, eyes * tiers))
 		return GRASS_DRAW_REJECT(Capacity);
-	if (!bucket.records || bucket.recordsCapacity < bucket.instances) {
-		const auto next = std::bit_ceil(bucket.instances);
-		const uint64_t bytes = uint64_t(next) * GrassPolicy::kRecordBytes;
-		const uint64_t previous = bucket.records ? uint64_t(bucket.recordsCapacity) * GrassPolicy::kRecordBytes : 0;
-		if (previous <= residentRecordBytes && GrassPolicy::ReplacementFitsBudget(residentRecordBytes, bytes, GrassPolicy::kMaxResidentRecordBytes)) {
-			bucket.records = RawBuffer(uint32_t(bytes), D3D11_BIND_SHADER_RESOURCE, 0, "GrassOptimizations::BucketRecords");
-			bucket.recordsCapacity = next;
-			bucket.recordsDirty = true;
-			bucket.dirtyFirstInstance = 0;
-			residentRecordBytes = residentRecordBytes - previous + bytes;
-		}
-	}
-
-	if (!bucket.records || bucket.recordsCapacity < bucket.instances)
+	if (!EnsureRecords(bucket))
 		return GRASS_DRAW_REJECT(Capacity);
 	Parameters params{ prefix, uint32_t(cullingSlices.size()), bucket.result.capacity, eyes,
 		frameSettings.FrustumCulling, frameSettings.DensityReduction,

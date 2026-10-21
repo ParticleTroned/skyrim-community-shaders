@@ -198,6 +198,10 @@ namespace
 					if (GrassRuntime::MatchesInstanceBytes(buffer, uint64_t(instances) * 32) != (instances && stride == 32))
 						throw std::runtime_error("Invalid native grass record width was admitted");
 				}
+		buffer.byteWidth = 0xdeadbeef00000020ull;
+		for (uint64_t required : { 0ull, 31ull, 33ull, 0x100000020ull, UINT64_MAX })
+			if (GrassRuntime::MatchesInstanceBytes(buffer, required))
+				throw std::runtime_error("Native width padding or overflow authorized an invalid instance range");
 	}
 }
 

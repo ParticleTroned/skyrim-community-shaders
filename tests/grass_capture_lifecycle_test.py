@@ -23,7 +23,7 @@ class GrassCaptureLifecycleTests(unittest.TestCase):
             executable = directory / "driver.exe"
             cpp.write_text(driver, encoding="utf-8")
             command = [compiler, "/nologo", "/std:c++latest", "/EHsc", "/W4", "/WX",
-                       str(cpp), "/Fe:" + str(executable)]
+                       "/I" + str(ROOT / "src"), str(cpp), "/Fe:" + str(executable)]
             if devbench:
                 command.append("/DDEVBENCH_BRIDGE_ENABLED")
             result = subprocess.run(command, cwd=directory, capture_output=True, text=True, timeout=60)
@@ -32,9 +32,14 @@ class GrassCaptureLifecycleTests(unittest.TestCase):
 
     def test_cached_geometry_ignores_generation_metadata(self):
         source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
+        runtime = (ROOT / "src/Features/GrassOptimizations/GrassRuntime.h").read_text(encoding="utf-8")
         capture = block(source, "bool GrassBucketRenderer::CaptureVisible(")
         gate = capture[capture.index("auto& geometry ="):capture.index("auto property =")]
         gate = gate.replace("return GRASS_CAPTURE_REJECT(Geometry);", "return false;")
+        buffers = capture[capture.index("const auto bytes ="):capture.index("const auto data =")]
+        width_gate = block(buffers, "if (!GrassRuntime::MatchesInstanceBytes(")
+        helpers = "\n".join(block(runtime, signature) for signature in (
+            "inline bool HasInstanceData(", "inline bool MatchesInstanceBytes("))
         geometry = block(source, "bool CurrentGeometry(")
         driver = r'''
 #include <array>
@@ -43,12 +48,27 @@ class GrassCaptureLifecycleTests(unittest.TestCase):
 #include <iostream>
 #include <memory>
 #include <stdexcept>
-struct ID3D11Buffer {};
+#include "Features/GrassOptimizations/GrassPolicy.h"
+constexpr uint32_t D3D11_RESOURCE_MISC_BUFFER_STRUCTURED = 0x40;
+struct D3D11_BUFFER_DESC { uint32_t ByteWidth = 64, MiscFlags = 0; };
+struct ID3D11Buffer {
+    D3D11_BUFFER_DESC desc;
+    void GetDesc(D3D11_BUFFER_DESC* destination) const { *destination = desc; }
+};
 ID3D11Buffer vertices, indices;
+struct BufferHandle {
+    ID3D11Buffer* pointer;
+    auto get() const { return pointer; }
+    auto operator->() const { return pointer; }
+    void copy_from(ID3D11Buffer* source) { pointer = source; }
+};
 namespace RE {
     struct NiRTTI {};
     const NiRTTI grassRTTI;
     constexpr uintptr_t NiRTTI_BSGrassShaderProperty = 1;
+    namespace BSGraphics {
+        struct VertexBuffer { ID3D11Buffer* buffer; const void* m_data; uint64_t byteWidth; };
+    }
     struct Property { const NiRTTI* GetRTTI() const { return &grassRTTI; } };
     struct BSMultiStreamInstanceTriShape {
         struct Runtime { uint32_t instanceSize = 0, instanceCount = 0; float renderDistance = 8000; } runtime;
@@ -69,6 +89,7 @@ namespace RE {
         auto& GetModelData() { return model; }
     };
 }
+namespace GrassRuntime { BUFFER_HELPERS }
 namespace REL {
     template<class T> struct Relocation {
         explicit Relocation(uintptr_t) {}
@@ -80,7 +101,7 @@ struct Source {
     RE::BSMultiStreamInstanceTriShape* identity;
     std::shared_ptr<RE::Property> property;
     RE::BSMultiStreamInstanceTriShape::RendererData* mesh;
-    struct Buffer { ID3D11Buffer* pointer; auto get() const { return pointer; } } vertices{&::vertices}, indices{&::indices};
+    BufferHandle vertices{&::vertices}, indices{&::indices};
     uint64_t descriptor = 1;
     uint32_t triangles = 12, vertexCount = 16;
     std::array<float, 3> origin{};
@@ -93,6 +114,16 @@ bool CaptureGeometry(RE::BSMultiStreamInstanceTriShape* shape) {
     return true;
 }
 CURRENT_GEOMETRY
+bool CaptureBuffer(RE::BSGraphics::VertexBuffer& buffer, uint32_t count, uint64_t instances) {
+    struct Group { RE::BSGraphics::VertexBuffer* vertexBuffer; } storage{&buffer};
+    auto* group = &storage;
+    struct Snapshot { uint32_t count; BufferHandle buffer; } snapshot{count, {nullptr}};
+#define GRASS_CAPTURE_REJECT(reason) false
+    BUFFER_GUARDS
+    }
+#undef GRASS_CAPTURE_REJECT
+    return true;
+}
 void Require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
 int main() {
     try {
@@ -117,26 +148,59 @@ int main() {
         shape.world.valid = true;
         shape.geometry.rendererData = nullptr;
         Require(!CaptureGeometry(&shape) && !CurrentGeometry(source), "Missing geometry was admitted");
+        std::array<uint8_t, 64> records{};
+        ID3D11Buffer gpu;
+        for (bool gpuBacked : {false, true}) {
+            for (uint64_t padding : {0ull, 0xdeadbeef00000000ull}) {
+                RE::BSGraphics::VertexBuffer buffer{gpuBacked ? &gpu : nullptr,
+                    gpuBacked ? nullptr : records.data(), padding | 64};
+                Require(CaptureBuffer(buffer, 2, 2), "Valid cached CPU/GPU group was rejected");
+                for (uint32_t bytes : {0u, 32u, 48u, 63u, 65u, 128u}) {
+                    buffer.byteWidth = padding | bytes;
+                    Require(!CaptureBuffer(buffer, 2, 2), "Malformed cached record layout was admitted");
+                }
+                buffer.byteWidth = padding | 64;
+                Require(!CaptureBuffer(buffer, 0, 0), "Empty cached group was admitted");
+                Require(!CaptureBuffer(buffer, 2, uint64_t(GrassPolicy::kMaxBatchInstances) + 1),
+                    "Oversized cached batch was admitted");
+                if (gpuBacked) {
+                    gpu.desc.ByteWidth = 63;
+                    Require(!CaptureBuffer(buffer, 2, 2), "Undersized GPU buffer was admitted");
+                    gpu.desc.ByteWidth = 64;
+                    gpu.desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+                    Require(!CaptureBuffer(buffer, 2, 2), "Unsupported structured GPU buffer was admitted");
+                    gpu.desc.MiscFlags = 0;
+                } else {
+                    buffer.m_data = nullptr;
+                    Require(!CaptureBuffer(buffer, 2, 2), "Missing CPU instance data was admitted");
+                }
+            }
+        }
         std::cout << "Cached and generated geometry admission, reuse and rejection passed\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }
 '''
         for devbench in (False, True):
-            for negative in (None, "capture", "reuse"):
+            for negative in (None, "capture", "reuse", "buffer"):
                 capture_gate = gate
                 current = geometry
+                buffer_guards = buffers
                 if negative == "capture":
                     capture_gate += "if (runtime.instanceSize != 16) return false;\n"
                 elif negative == "reuse":
                     current = current.replace("source.renderDistance == runtime.renderDistance",
                                               "runtime.instanceSize == 16 && source.renderDistance == runtime.renderDistance")
+                elif negative == "buffer":
+                    buffer_guards = buffer_guards.replace(width_gate, "")
                 code = driver.replace("CAPTURE_GATE", capture_gate).replace("CURRENT_GEOMETRY", current)
+                code = code.replace("BUFFER_GUARDS", buffer_guards).replace("BUFFER_HELPERS", helpers)
                 with self.subTest(devbench=devbench, negative=negative):
                     result = self.compile_and_run(code, devbench)
                     self.assertEqual(result.returncode, int(negative is not None), result.stdout + result.stderr)
                     if negative:
-                        self.assertIn("generation-only instance size", result.stderr)
+                        self.assertIn("Malformed cached record layout" if negative == "buffer"
+                                      else "generation-only instance size", result.stderr)
 
     def test_visibility_recapture(self):
         source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")

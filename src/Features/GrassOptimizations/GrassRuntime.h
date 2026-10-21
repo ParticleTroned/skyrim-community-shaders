@@ -32,6 +32,11 @@ namespace GrassRuntime
 	{
 		return buffer.m_data && requiredBytes <= uint32_t(buffer.byteWidth);
 	}
+	/** @brief Validate native group records; cached shapes need not initialize generation-only instanceSize. */
+	inline bool MatchesInstanceBytes(const RE::BSGraphics::VertexBuffer& buffer, uint64_t requiredBytes)
+	{
+		return requiredBytes && requiredBytes == uint32_t(buffer.byteWidth);
+	}
 	/** @brief Native grass fields follow the runtime-sized lighting property. */
 	struct PropertyData
 	{

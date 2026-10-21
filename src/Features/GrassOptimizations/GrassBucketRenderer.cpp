@@ -396,7 +396,7 @@ namespace
 		       source.triangles == mesh.triangleCount && source.vertexCount == mesh.vertexCount &&
 		       Identity(shape.world) && source.origin == shape.world.translate &&
 		       source.bound.center == bound.center && source.bound.radius == bound.radius &&
-		       runtime.instanceSize == 16 && source.renderDistance == runtime.renderDistance;
+		       source.renderDistance == runtime.renderDistance;
 	}
 	bool SameMaterial(const Source& a, const Source& b)
 	{
@@ -1034,7 +1034,7 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 		auto& geometry = shape->GetGeometryRuntimeData();
 		auto& runtime = shape->GetMultiStreamTrishapeRuntimeData();
 		if (!geometry.shaderProperty || geometry.shaderProperty->GetRTTI() != REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSGrassShaderProperty }.get() ||
-			!geometry.rendererData || runtime.instanceSize != 16 || !Identity(shape->world))
+			!geometry.rendererData || !Identity(shape->world))
 			return GRASS_CAPTURE_REJECT(Geometry);
 		auto property = static_cast<RE::BSGrassShaderProperty*>(geometry.shaderProperty.get());
 		auto& grassData = GrassRuntime::GetPropertyData(property, globals::game::isVR);
@@ -1105,6 +1105,8 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 			const auto bytes = uint64_t(snapshot.count) * GrassPolicy::kRecordBytes;
 			if (instances > GrassPolicy::kMaxBatchInstances)
 				return GRASS_CAPTURE_REJECT(GroupCapacity);
+			if (!GrassRuntime::MatchesInstanceBytes(*group->vertexBuffer, bytes))
+				return GRASS_CAPTURE_REJECT(GroupBuffer);
 			if (group->vertexBuffer->buffer) {
 				snapshot.buffer.copy_from(reinterpret_cast<ID3D11Buffer*>(group->vertexBuffer->buffer));
 				D3D11_BUFFER_DESC desc{};

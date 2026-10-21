@@ -187,6 +187,18 @@ namespace
 				}
 			}
 	}
+
+	void CheckInstanceLayout()
+	{
+		RE::BSGraphics::VertexBuffer buffer{};
+		for (uint64_t padding : { 0ull, 0xdeadbeef00000000ull })
+			for (uint32_t instances : { 0u, 1u, 2u, 64u })
+				for (uint32_t stride : { 0u, 16u, 24u, 32u, 64u }) {
+					buffer.byteWidth = padding | (instances * stride);
+					if (GrassRuntime::MatchesInstanceBytes(buffer, uint64_t(instances) * 32) != (instances && stride == 32))
+						throw std::runtime_error("Invalid native grass record width was admitted");
+				}
+	}
 }
 
 int main()
@@ -196,6 +208,7 @@ int main()
 		CheckLayout(true, 0x178);
 		CheckGroupLayout();
 		CheckInstanceDataBounds();
+		CheckInstanceLayout();
 		std::cout << "SE/AE and VR grass layouts, native wind preservation, animated cache reuse and property invalidation passed\n";
 		return 0;
 	} catch (const std::exception& error) {

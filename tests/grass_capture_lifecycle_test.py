@@ -14,6 +14,130 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class GrassCaptureLifecycleTests(unittest.TestCase):
+    def compile_and_run(self, driver, devbench):
+        compiler = os.environ.get("CXX") or shutil.which("cl")
+        self.assertIsNotNone(compiler, "Run in the MSVC developer environment")
+        with tempfile.TemporaryDirectory(prefix="grass-capture-lifecycle-") as temporary:
+            directory = Path(temporary)
+            cpp = directory / "driver.cpp"
+            executable = directory / "driver.exe"
+            cpp.write_text(driver, encoding="utf-8")
+            command = [compiler, "/nologo", "/std:c++latest", "/EHsc", "/W4", "/WX",
+                       str(cpp), "/Fe:" + str(executable)]
+            if devbench:
+                command.append("/DDEVBENCH_BRIDGE_ENABLED")
+            result = subprocess.run(command, cwd=directory, capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return subprocess.run([str(executable)], cwd=directory, capture_output=True, text=True, timeout=10)
+
+    def test_cached_geometry_ignores_generation_metadata(self):
+        source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
+        capture = block(source, "bool GrassBucketRenderer::CaptureVisible(")
+        gate = capture[capture.index("auto& geometry ="):capture.index("auto property =")]
+        gate = gate.replace("return GRASS_CAPTURE_REJECT(Geometry);", "return false;")
+        geometry = block(source, "bool CurrentGeometry(")
+        driver = r'''
+#include <array>
+#include <bit>
+#include <cstdint>
+#include <iostream>
+#include <memory>
+#include <stdexcept>
+struct ID3D11Buffer {};
+ID3D11Buffer vertices, indices;
+namespace RE {
+    struct NiRTTI {};
+    const NiRTTI grassRTTI;
+    constexpr uintptr_t NiRTTI_BSGrassShaderProperty = 1;
+    struct Property { const NiRTTI* GetRTTI() const { return &grassRTTI; } };
+    struct BSMultiStreamInstanceTriShape {
+        struct Runtime { uint32_t instanceSize = 0, instanceCount = 0; float renderDistance = 8000; } runtime;
+        struct RendererData { void* vertexBuffer = &vertices; void* indexBuffer = &indices; } meshData;
+        struct Geometry {
+            std::shared_ptr<Property> shaderProperty = std::make_shared<Property>();
+            RendererData* rendererData = nullptr;
+            uint64_t vertexDesc = 1;
+        } geometry;
+        struct Mesh { uint32_t triangleCount = 12, vertexCount = 16; } mesh;
+        struct Bound { std::array<float, 3> center{}; float radius = 30; };
+        struct Model { Bound modelBound; } model;
+        struct Transform { bool valid = true; std::array<float, 3> translate{}; } world;
+        BSMultiStreamInstanceTriShape() { geometry.rendererData = &meshData; }
+        auto& GetGeometryRuntimeData() { return geometry; }
+        auto& GetMultiStreamTrishapeRuntimeData() { return runtime; }
+        auto& GetTrishapeRuntimeData() { return mesh; }
+        auto& GetModelData() { return model; }
+    };
+}
+namespace REL {
+    template<class T> struct Relocation {
+        explicit Relocation(uintptr_t) {}
+        T get() const { return &RE::grassRTTI; }
+    };
+}
+bool Identity(const RE::BSMultiStreamInstanceTriShape::Transform& transform) { return transform.valid; }
+struct Source {
+    RE::BSMultiStreamInstanceTriShape* identity;
+    std::shared_ptr<RE::Property> property;
+    RE::BSMultiStreamInstanceTriShape::RendererData* mesh;
+    struct Buffer { ID3D11Buffer* pointer; auto get() const { return pointer; } } vertices{&::vertices}, indices{&::indices};
+    uint64_t descriptor = 1;
+    uint32_t triangles = 12, vertexCount = 16;
+    std::array<float, 3> origin{};
+    RE::BSMultiStreamInstanceTriShape::Bound bound;
+    float renderDistance = 8000;
+};
+bool CaptureGeometry(RE::BSMultiStreamInstanceTriShape* shape) {
+    CAPTURE_GATE
+    static_cast<void>(runtime);
+    return true;
+}
+CURRENT_GEOMETRY
+void Require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
+int main() {
+    try {
+        RE::BSMultiStreamInstanceTriShape shape;
+        Source source{&shape, shape.geometry.shaderProperty, &shape.meshData};
+        for (uint32_t size : {0u, 1u, 8u, 16u, 0xccccccccu}) {
+            shape.runtime.instanceSize = size;
+            for (uint32_t count : {0u, 12345u}) {
+                shape.runtime.instanceCount = count;
+                Require(CaptureGeometry(&shape), "Cached geometry depended on generation-only instance size");
+                Require(CurrentGeometry(source), "Cached reuse depended on generation-only instance size");
+            }
+        }
+        shape.runtime.renderDistance += 1;
+        Require(!CurrentGeometry(source), "Changed native render distance retained stale geometry");
+        shape.runtime.renderDistance = source.renderDistance;
+        ++shape.mesh.triangleCount;
+        Require(!CurrentGeometry(source), "Changed mesh retained stale geometry");
+        shape.mesh.triangleCount = source.triangles;
+        shape.world.valid = false;
+        Require(!CaptureGeometry(&shape) && !CurrentGeometry(source), "Unsupported transform was admitted");
+        shape.world.valid = true;
+        shape.geometry.rendererData = nullptr;
+        Require(!CaptureGeometry(&shape) && !CurrentGeometry(source), "Missing geometry was admitted");
+        std::cout << "Cached and generated geometry admission, reuse and rejection passed\n";
+        return 0;
+    } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+}
+'''
+        for devbench in (False, True):
+            for negative in (None, "capture", "reuse"):
+                capture_gate = gate
+                current = geometry
+                if negative == "capture":
+                    capture_gate += "if (runtime.instanceSize != 16) return false;\n"
+                elif negative == "reuse":
+                    current = current.replace("source.renderDistance == runtime.renderDistance",
+                                              "runtime.instanceSize == 16 && source.renderDistance == runtime.renderDistance")
+                code = driver.replace("CAPTURE_GATE", capture_gate).replace("CURRENT_GEOMETRY", current)
+                with self.subTest(devbench=devbench, negative=negative):
+                    result = self.compile_and_run(code, devbench)
+                    self.assertEqual(result.returncode, int(negative is not None), result.stdout + result.stderr)
+                    if negative:
+                        self.assertIn("generation-only instance size", result.stderr)
+
     def test_visibility_recapture(self):
         source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
         runtime = (ROOT / "src/Features/GrassOptimizations/GrassRuntime.h").read_text(encoding="utf-8")
@@ -152,22 +276,9 @@ int main() {
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }
 '''.replace("PRODUCTION_LAYOUT", layout).replace("PRODUCTION_METHODS", methods)
-        compiler = os.environ.get("CXX") or shutil.which("cl")
-        self.assertIsNotNone(compiler, "Run in the MSVC developer environment")
-        with tempfile.TemporaryDirectory(prefix="grass-capture-lifecycle-") as temporary:
-            directory = Path(temporary)
-            cpp = directory / "driver.cpp"
-            cpp.write_text(driver, encoding="utf-8")
-            for devbench in (False, True):
-                executable = directory / ("devbench.exe" if devbench else "production.exe")
-                command = [compiler, "/nologo", "/std:c++latest", "/EHsc", "/W4", "/WX",
-                           str(cpp), "/Fe:" + str(executable)]
-                if devbench:
-                    command.append("/DDEVBENCH_BRIDGE_ENABLED")
-                result = subprocess.run(command, cwd=directory, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                result = subprocess.run([str(executable)], cwd=directory, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for devbench in (False, True):
+            result = self.compile_and_run(driver, devbench)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

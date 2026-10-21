@@ -40,7 +40,7 @@ math(EXPR _length "${_end} - ${_start}")
 string(SUBSTRING "${_source}" ${_start} ${_length} _enumeration)
 string(
     APPEND _capture
-    "\ntemplate<class Consumer>\nvoid EnumerateSceneLights(RE::ShadowSceneNode* shadowSceneNode, const Snapshot* snapshot, Consumer addLight)\n{\n${_enumeration}\n}\n"
+    "\ntemplate<class Consumer>\nvoid EnumerateSceneLights(RE::ShadowSceneNode* shadowSceneNode, [[maybe_unused]] const Snapshot* snapshot, Consumer addLight)\n{\n${_enumeration}\n}\n"
 )
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(

@@ -316,16 +316,23 @@ void TestEnumerationOwnership()
 		node.activeShadowLights.push_back(RE::make_nismart<ShadowLight>(destroyed));
 		LightLimitFix fix;
 		const auto* snapshot = vr ? Capture(fix, &node) : nullptr;
+		auto replacement = RE::make_nismart<ShadowLight>(destroyed);
+		node.activeShadowLights.front() = replacement;
+		const auto destroyedBeforeEnumeration = destroyed.load();
 		unsigned visits = 0;
 		EnumerateSceneLights(&node, snapshot, [&](Light* light) {
 			++visits;
+			Require(light == replacement.get());
+			Require(light->references == (vr ? 2u : 3u));
 			node.activeShadowLights.front().reset();
-			Require(destroyed == 0);
+			Require(destroyed == destroyedBeforeEnumeration);
 			Require(light->IsShadowLight());
 		});
-		Require(visits == 1 && destroyed == (vr ? 0u : 1u));
+		Require(visits == 1 && replacement->references == 1);
 		fix.sceneLightSnapshots.clear();
 		Require(destroyed == 1);
+		replacement.reset();
+		Require(destroyed == 2);
 	}
 }
 

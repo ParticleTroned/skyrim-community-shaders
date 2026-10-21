@@ -175,56 +175,17 @@ public:
 	float lightsNear = 1;
 	float lightsFar = 16384;
 
-	struct ParticleEmitterLight
+	struct ParticleLightInfo
 	{
-		RE::NiPointer<RE::NiParticleSystem> node;
+		bool billboard;
+		RE::NiPointer<RE::BSGeometry> node;
 		RE::NiPointer<RE::NiPSysData> particleData;
 		RE::NiColorA color;
 		float radiusMult = 1.0f;
-		float saturationMult = 1.0f;
-		std::uint64_t sequence = 0;
-	};
-
-	struct ResolvedBillboardLight
-	{
-		RE::NiPoint3 position;
-		float radius = 0.0f;
-		float3 color{};
-		std::uint32_t flickerSeed = 0;
 		bool flicker = false;
 		float flickerSpeed = 1.0f;
 		float flickerIntensity = 0.0f;
 		float flickerMovement = 0.0f;
-		std::uint64_t sequence = 0;
-	};
-
-	struct ParticleLightKey
-	{
-		RE::BSGeometry* geometry = nullptr;
-		RE::BSShaderProperty* shaderProperty = nullptr;
-
-		bool operator==(const ParticleLightKey&) const = default;
-	};
-
-	struct ParticleLightKeyHash
-	{
-		[[nodiscard]] std::size_t operator()(const ParticleLightKey& a_key) const noexcept
-		{
-			std::size_t hash = reinterpret_cast<std::size_t>(a_key.geometry) >> 4;
-			const std::size_t shaderPropertyHash = reinterpret_cast<std::size_t>(a_key.shaderProperty) >> 4;
-			hash ^= shaderPropertyHash + std::size_t{ 0x9E3779B9u } + (hash << 6) + (hash >> 2);
-			return hash;
-		}
-	};
-
-	struct ParticleLightCacheSignature
-	{
-		RE::BSShaderMaterial* material = nullptr;
-		RE::BSGraphics::TriShape* rendererData = nullptr;
-		const std::uint8_t* rawVertexData = nullptr;
-		bool billboard = false;
-
-		bool operator==(const ParticleLightCacheSignature&) const = default;
 	};
 
 	struct ParticleLightReference
@@ -240,37 +201,12 @@ public:
 		std::uint64_t configVersion = 0;
 	};
 
-	struct ParticleLightCacheEntry
-	{
-		ParticleLightReference reference{};
-		ParticleLightCacheSignature signature{};
-		RE::BSFixedString sourceTexturePath;
-		RE::BSFixedString gradientTexturePath;
-		std::uint32_t lastSeenFrame = 0;
-		std::uint32_t tintResolvedFrame = 0;
-	};
-
-	struct ParticleLightDiagnostics
-	{
-		std::atomic<std::size_t> currentEmitters{ 0 };
-		std::atomic<std::size_t> currentBillboards{ 0 };
-		std::atomic<std::size_t> cacheEntries{ 0 };
-	};
-
-	eastl::hash_map<ParticleLightKey, ParticleLightCacheEntry, ParticleLightKeyHash> particleLightsReferences;
-	std::mutex particleLightsCacheMutex;
-	std::uint32_t lastParticleLightCacheSweepFrame = 0;
-
-	eastl::vector<ParticleEmitterLight> queuedParticleEmitters;
-	eastl::vector<ParticleEmitterLight> currentParticleEmitters;
-	eastl::vector<ResolvedBillboardLight> queuedBillboardLights;
-	eastl::vector<ResolvedBillboardLight> currentBillboardLights;
-	eastl::hash_map<ParticleLightKey, std::size_t, ParticleLightKeyHash> queuedEmitterIndices;
-	eastl::hash_map<ParticleLightKey, std::size_t, ParticleLightKeyHash> queuedBillboardIndices;
-	std::uint64_t nextParticleLightSequence = 0;
+	eastl::hash_map<RE::BSGeometry*, ParticleLightReference> particleLightsReferences;
+	eastl::vector<ParticleLightInfo> queuedParticleLights;
+	eastl::vector<ParticleLightInfo> currentParticleLights;
 	std::mutex particleLightsQueueMutex;
-	std::mutex currentParticleLightsMutex;
-	ParticleLightDiagnostics particleLightDiagnostics;
+
+	std::atomic<std::size_t> currentParticleLightCount{ 0 };
 
 	RE::NiPoint3 eyePositionCached[2]{};
 	bool wasEmpty = false;
@@ -391,7 +327,7 @@ public:
 	virtual void ClearShaderCache() override;
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
-	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, const ResolvedBillboardLight* a_billboardLight = nullptr);
+	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, const ParticleLightInfo* a_particleLight = nullptr);
 	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached = true);
 	void RefreshJsonPlacedLightCacheFrame();
 	bool IsJsonPlacedLight(RE::BSLight* a_bsLight, RE::NiLight* a_niLight);
@@ -457,7 +393,6 @@ public:
 	bool AddParticleLight(RE::BSRenderPass* a_pass, const ParticleLightReference& a_reference);
 	/** Reports whether effect processing requires fresh material admission before drawing. */
 	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique, bool* a_admissionInvalidated = nullptr);
-	void PruneParticleLightCache(std::uint32_t a_frame);
 
 	void BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass);
 
@@ -542,12 +477,6 @@ public:
 			stl::write_thunk_call<ValidLight2>(REL::RelocationID(100997, 107784).address() + REL::Relocate(0x139, 0x12A, 0x133));
 			stl::write_thunk_call<ValidLight3>(REL::RelocationID(101296, 108283).address() + REL::Relocate(0xB7, 0x7E));
 			InstallAlphaGeometryGroupGuard();
-			InstallVRNonShadowCasterLightFlagsGuard();
-			InstallVRSceneGraphCullingObjectGuard();
-			InstallVRShadowMapCameraGuard();
-			InstallVRShadowLightLifetimeGuard();
-			InstallVRRoomLightCullingProcessGuards();
-			InstallVRRoomLightEntryGuards();
 			InstallVREffectShaderLightGuards();
 
 			logger::info("[LLF] Installed hooks");

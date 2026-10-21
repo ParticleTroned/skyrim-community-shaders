@@ -70,13 +70,8 @@ namespace
 	constexpr int kMaxParticlesPerEmitterMax = 2048;
 	constexpr float kMaxParticleDistanceMin = 0.0f;
 	constexpr float kMaxParticleDistanceMax = 20000.0f;
-	constexpr float kParticleConfigSaturationMin = 0.0f;
-	constexpr float kParticleConfigSaturationMax = 10.0f;
 	constexpr float kJsonPlacedLightIntensityMin = 0.0f;
 	constexpr float kJsonPlacedLightIntensityMax = 8.0f;
-	constexpr std::uint32_t kParticleLightCacheSweepInterval = 120;
-	constexpr std::uint32_t kParticleLightCacheMaxIdleFrames = 600;
-	constexpr std::size_t kParticleLightCacheMaxEntries = static_cast<std::size_t>(MAX_LIGHTS) * 32u;
 	constexpr std::size_t kMaxQueuedParticleLights = static_cast<std::size_t>(MAX_LIGHTS) * 16u;
 	// StartGroupingAlphas has no capacity check; leave room for workers already past the guard.
 	constexpr std::uint32_t kAlphaGeometryGroupCapacityFlat = 512;
@@ -784,18 +779,18 @@ namespace
 		return std::clamp((LegacyFlickerNoiseSigned(a_seed, a_time) * 0.5f) + 0.5f, 0.0f, 1.0f);
 	}
 
-	void ApplyLegacyParticleLightFlicker(LightLimitFix::LightData& a_light, const LightLimitFix::ResolvedBillboardLight& a_billboardLight, int a_eyeCount)
+	void ApplyLegacyParticleLightFlicker(LightLimitFix::LightData& a_light, const LightLimitFix::ParticleLightInfo& a_particleLight, int a_eyeCount)
 	{
-		if (!a_billboardLight.flicker || !globals::state) {
+		if (!a_particleLight.flicker || !a_particleLight.node || !globals::state) {
 			return;
 		}
 
-		const auto seed = a_billboardLight.flickerSeed;
-		const float scaledTimer = globals::state->timer * a_billboardLight.flickerSpeed;
+		const auto seed = static_cast<std::uint32_t>(std::hash<void*>{}(a_particleLight.node.get()));
+		const float scaledTimer = globals::state->timer * a_particleLight.flickerSpeed;
 		const RE::NiPoint3 flickerOffset{
-			LegacyFlickerNoiseSigned(seed, scaledTimer) * a_billboardLight.flickerMovement,
-			LegacyFlickerNoiseSigned(seed + 1u, scaledTimer) * a_billboardLight.flickerMovement,
-			LegacyFlickerNoiseSigned(seed + 2u, scaledTimer) * a_billboardLight.flickerMovement
+			LegacyFlickerNoiseSigned(seed, scaledTimer) * a_particleLight.flickerMovement,
+			LegacyFlickerNoiseSigned(seed + 1u, scaledTimer) * a_particleLight.flickerMovement,
+			LegacyFlickerNoiseSigned(seed + 2u, scaledTimer) * a_particleLight.flickerMovement
 		};
 
 		for (int eyeIndex = 0; eyeIndex < std::clamp(a_eyeCount, 0, 2); eyeIndex++) {
@@ -807,37 +802,10 @@ namespace
 		// Legacy LLF applied flicker after distance dimming. The current path keeps fade
 		// separate from color, so convert back into pre-fade color space first.
 		const float fadeCompensation = 1.0f / std::max(a_light.fade, 1e-4f);
-		const float flickerIntensity = LegacyFlickerNoise01(seed + 3u, scaledTimer) * a_billboardLight.flickerIntensity * fadeCompensation;
+		const float flickerIntensity = LegacyFlickerNoise01(seed + 3u, scaledTimer) * a_particleLight.flickerIntensity * fadeCompensation;
 		a_light.color.x = std::max(0.0f, a_light.color.x - flickerIntensity);
 		a_light.color.y = std::max(0.0f, a_light.color.y - flickerIntensity);
 		a_light.color.z = std::max(0.0f, a_light.color.z - flickerIntensity);
-	}
-
-	float ResolveParticleSaturation(float a_globalSaturation, float a_configSaturation)
-	{
-		const float configSaturation = Util::ClampFinite(
-			a_configSaturation,
-			kParticleConfigSaturationMin,
-			kParticleConfigSaturationMax,
-			1.0f);
-		return a_globalSaturation * configSaturation;
-	}
-
-	bool IsParticleEmitterBeyondDistance(
-		const RE::BSGeometry* a_geometry,
-		const RE::NiPoint3& a_eyePosition,
-		float a_maxDistance)
-	{
-		if (!a_geometry || a_maxDistance <= 0.0f) {
-			return false;
-		}
-
-		const auto& bound = a_geometry->worldBound;
-		const float conservativeDistance = a_maxDistance + std::max(bound.radius, 0.0f);
-		const float dx = bound.center.x - a_eyePosition.x;
-		const float dy = bound.center.y - a_eyePosition.y;
-		const float dz = bound.center.z - a_eyePosition.z;
-		return (dx * dx) + (dy * dy) + (dz * dz) > conservativeDistance * conservativeDistance;
 	}
 
 	void ClearStrictLightData(LightLimitFix::StrictLightDataCB& a_data, bool a_resetRoomIndex) noexcept
@@ -1260,20 +1228,7 @@ void LightLimitFix::DrawSettings()
 
 	if (page.Is("diagnostics")) {
 		ImGui::Text(std::format("Clustered Light Count : {}", lightCount).c_str());
-		ImGui::Text(std::format(
-			"Particle Lights Count : {}",
-			particleLightDiagnostics.currentEmitters.load(std::memory_order_relaxed) +
-				particleLightDiagnostics.currentBillboards.load(std::memory_order_relaxed))
-				.c_str());
-		ImGui::Text(std::format(
-			"Particle Emitters / Billboards : {} / {}",
-			particleLightDiagnostics.currentEmitters.load(std::memory_order_relaxed),
-			particleLightDiagnostics.currentBillboards.load(std::memory_order_relaxed))
-				.c_str());
-		ImGui::Text(std::format(
-			"Particle Cache Entries : {}",
-			particleLightDiagnostics.cacheEntries.load(std::memory_order_relaxed))
-				.c_str());
+		ImGui::Text("Particle Lights Count : %zu", currentParticleLightCount.load(std::memory_order_relaxed));
 	}
 
 	///////////////////////////////
@@ -1378,11 +1333,7 @@ void LightLimitFix::DrawOverlay()
 
 	if (ImGui::TreeNodeEx("Statistics")) {
 		ImGui::Text(std::format("Clustered Light Count : {}", lightCount).c_str());
-		ImGui::Text(std::format(
-			"Particle Lights Count : {}",
-			particleLightDiagnostics.currentEmitters.load(std::memory_order_relaxed) +
-				particleLightDiagnostics.currentBillboards.load(std::memory_order_relaxed))
-				.c_str());
+		ImGui::Text("Particle Lights Count : %zu", currentParticleLightCount.load(std::memory_order_relaxed));
 		ImGui::TreePop();
 	}
 
@@ -1548,55 +1499,15 @@ void LightLimitFix::Reset()
 {
 	LightLimitFixDetail::ShadowCulling::Update(settings.ShadowCulling, loaded && !globals::state->IsFeatureDisabled(GetShortName()));
 	effectLightValidationCache.clear();
-	// Frame and load resets release retained lights outside the engine's queue lock.
 	sceneLightSnapshots.clear();
 	sceneLightSnapshotFailed = false;
-
-	{
-		std::lock_guard<std::mutex> currentLock{ currentParticleLightsMutex };
-
-		// NiPointer releases the retained emitter geometry and particle data.
-		currentParticleEmitters.clear();
-		currentBillboardLights.clear();
-
-		{
-			std::lock_guard<std::mutex> queueLock{ particleLightsQueueMutex };
-			std::swap(currentParticleEmitters, queuedParticleEmitters);
-			std::swap(currentBillboardLights, queuedBillboardLights);
-			queuedEmitterIndices.clear();
-			queuedBillboardIndices.clear();
-			nextParticleLightSequence = 0;
-
-			particleLightDiagnostics.currentEmitters.store(currentParticleEmitters.size(), std::memory_order_relaxed);
-			particleLightDiagnostics.currentBillboards.store(currentBillboardLights.size(), std::memory_order_relaxed);
-		}
-	}
-
-	const std::uint32_t frame = globals::state ? globals::state->frameCount : 0;
-	PruneParticleLightCache(frame);
+	std::lock_guard<std::mutex> queueLock{ particleLightsQueueMutex };
+	currentParticleLights.clear();
+	std::swap(currentParticleLights, queuedParticleLights);
+	currentParticleLightCount.store(currentParticleLights.size(), std::memory_order_relaxed);
+	// Geometry keys are transient; rebuild the configuration cache each frame.
+	particleLightsReferences.clear();
 	jsonPlacedLightCache.clear();
-}
-
-void LightLimitFix::PruneParticleLightCache(std::uint32_t a_frame)
-{
-	if (a_frame - lastParticleLightCacheSweepFrame < kParticleLightCacheSweepInterval) {
-		return;
-	}
-	lastParticleLightCacheSweepFrame = a_frame;
-
-	const auto configVersion = globals::features::llf::particleLights.configVersion;
-	std::lock_guard<std::mutex> cacheLock{ particleLightsCacheMutex };
-	for (auto it = particleLightsReferences.begin(); it != particleLightsReferences.end();) {
-		const bool configChanged = it->second.reference.configVersion != configVersion;
-		const bool entryExpired = a_frame - it->second.lastSeenFrame > kParticleLightCacheMaxIdleFrames;
-		if (configChanged || entryExpired) {
-			it = particleLightsReferences.erase(it);
-		} else {
-			++it;
-		}
-	}
-
-	particleLightDiagnostics.cacheEntries.store(particleLightsReferences.size(), std::memory_order_relaxed);
 }
 
 void LightLimitFix::LoadSettings(json& o_json)
@@ -1746,12 +1657,6 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 	auto* activeNode = accumulator->GetRuntimeData().activeShadowSceneNode;
 	bool inWorld = activeNode == smState->shadowSceneNode[0];
-	const bool retainSceneLights = globals::game::isVR;
-	const auto* snapshot = retainSceneLights ? GetSceneLightSnapshot(activeNode) : nullptr;
-	if (retainSceneLights && !snapshot) {
-		ClearStrictLightData(strictLightDataTemp, false);
-		return;
-	}
 	const bool isInterior = LocationContext::Get().inInterior;
 
 	constexpr uint32_t kStrictLightCapacity = 15;
@@ -1770,8 +1675,6 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 	{
 		for (uint32_t i = 0; i < strictLightCount; i++) {
 			auto bsLight = a_pass->sceneLights[i + 1];
-			if (retainSceneLights)
-				bsLight = snapshot->Find(bsLight);
 			if (!bsLight) {
 				continue;
 			}
@@ -1814,8 +1717,6 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 		for (uint32_t i = 0; i < shadowLightCount; i++) {
 			auto bsLight = a_pass->sceneLights[i + 1];
-			if (retainSceneLights)
-				bsLight = snapshot->Find(bsLight);
 			if (!bsLight || !bsLight->IsShadowLight()) {
 				continue;
 			}
@@ -2150,64 +2051,21 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 	}
 
 	auto* node = a_pass->geometry;
-	const std::uint32_t frame = globals::state ? globals::state->frameCount : 0;
-	const ParticleLightKey key{ node, shaderProperty };
-
-	ParticleLightCacheSignature signature{};
-	signature.material = material;
-	signature.billboard = billboard;
-	if (billboard) {
-		signature.rendererData = node->GetGeometryRuntimeData().rendererData;
-		if (signature.rendererData) {
-			signature.rawVertexData = signature.rendererData->rawVertexData;
-		}
-	}
-
-	std::optional<ParticleLightReference> cachedReference;
 	{
-		std::lock_guard<std::mutex> cacheLock{ particleLightsCacheMutex };
-		auto it = particleLightsReferences.find(key);
-		if (it != particleLightsReferences.end() &&
-			it->second.reference.configVersion == particleLights.configVersion &&
-			it->second.signature == signature &&
-			it->second.sourceTexturePath == material->sourceTexturePath &&
-			it->second.gradientTexturePath == material->greyscaleTexturePath) {
-			it->second.lastSeenFrame = frame;
-			if (!it->second.reference.valid || !billboard || it->second.tintResolvedFrame == frame) {
-				return it->second.reference;
-			}
-			cachedReference = it->second.reference;
-		} else if (it != particleLightsReferences.end()) {
+		std::lock_guard<std::mutex> queueLock{ particleLightsQueueMutex };
+		auto it = particleLightsReferences.find(node);
+		if (it != particleLightsReferences.end()) {
+			if (it->second.configVersion == particleLights.configVersion)
+				return it->second;
 			particleLightsReferences.erase(it);
 		}
 	}
 
 	auto cacheReference = [&](ParticleLightReference a_reference) {
-		ParticleLightCacheEntry entry{};
-		entry.reference = a_reference;
-		entry.signature = signature;
-		// Retain the interned texture names so their identity cannot be recycled
-		// while a stale geometry key remains in the bounded cache.
-		entry.sourceTexturePath = material->sourceTexturePath;
-		entry.gradientTexturePath = material->greyscaleTexturePath;
-		entry.lastSeenFrame = frame;
-		entry.tintResolvedFrame = billboard ? frame : 0;
-
-		std::lock_guard<std::mutex> cacheLock{ particleLightsCacheMutex };
-		if (auto it = particleLightsReferences.find(key); it != particleLightsReferences.end()) {
-			it->second = std::move(entry);
-		} else if (particleLightsReferences.size() < kParticleLightCacheMaxEntries) {
-			particleLightsReferences.emplace(key, std::move(entry));
-			particleLightDiagnostics.cacheEntries.store(particleLightsReferences.size(), std::memory_order_relaxed);
-		}
+		std::lock_guard<std::mutex> queueLock{ particleLightsQueueMutex };
+		particleLightsReferences[node] = a_reference;
 		return a_reference;
 	};
-
-	if (cachedReference) {
-		auto reference = *cachedReference;
-		ResolveBillboardTint(reference, node, material, shaderProperty);
-		return cacheReference(reference);
-	}
 
 	auto cacheInvalidReference = [&]() {
 		ParticleLightReference invalidReference{};
@@ -2305,7 +2163,6 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, const ParticleLig
 		return false;
 	}
 	const auto& config = a_reference.config;
-	const ParticleLightKey key{ a_pass->geometry, shaderProperty };
 
 	RE::NiColorA color = a_reference.baseColor;
 	if (a_reference.applyEffectMaterialTint) {
@@ -2339,70 +2196,24 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, const ParticleLig
 		color.alpha = std::max(config.radiusMult, 0.0f);
 	}
 
-	if (a_reference.billboard) {
-		ResolvedBillboardLight resolved{};
-		resolved.position = a_pass->geometry->world.translate;
-		resolved.radius = a_pass->geometry->worldBound.radius * config.radiusMult * settings.BillboardRadius * 0.5f;
-		resolved.color = Saturation(
-			float3{ color.red, color.green, color.blue },
-			ResolveParticleSaturation(settings.ParticleLightsSaturation, config.saturationMult));
-		resolved.color *= color.alpha * settings.BillboardBrightness;
-		resolved.flickerSeed = static_cast<std::uint32_t>(std::hash<void*>{}(a_pass->geometry));
-		resolved.flicker = config.flicker;
-		resolved.flickerSpeed = config.flickerSpeed;
-		resolved.flickerIntensity = config.flickerIntensity;
-		resolved.flickerMovement = config.flickerMovement;
-
-		std::lock_guard<std::mutex> queueLock{ particleLightsQueueMutex };
-		if (auto it = queuedBillboardIndices.find(key); it != queuedBillboardIndices.end()) {
-			if (it->second < queuedBillboardLights.size()) {
-				resolved.sequence = queuedBillboardLights[it->second].sequence;
-				queuedBillboardLights[it->second] = resolved;
-				return true;
-			}
-			queuedBillboardIndices.erase(it);
-		}
-
-		if (queuedParticleEmitters.size() + queuedBillboardLights.size() >= kMaxQueuedParticleLights) {
-			return false;
-		}
-
-		resolved.sequence = nextParticleLightSequence++;
-		const std::size_t billboardIndex = queuedBillboardLights.size();
-		queuedBillboardLights.push_back(resolved);
-		queuedBillboardIndices[key] = billboardIndex;
-		return true;
+	ParticleLightInfo info;
+	info.billboard = a_reference.billboard;
+	info.node.reset(a_pass->geometry);
+	if (!info.billboard) {
+		// Release the exact retained data even if the emitter replaces its live data.
+		info.particleData = static_cast<RE::NiParticleSystem*>(info.node.get())->GetParticlesRuntimeData().particleData;
 	}
-
-	auto* particleSystem = static_cast<RE::NiParticleSystem*>(a_pass->geometry);
-	auto* particleData = particleSystem->GetParticlesRuntimeData().particleData.get();
-	auto updateEmitter = [&](ParticleEmitterLight& a_emitter) {
-		a_emitter.particleData.reset(particleData);
-		a_emitter.color = color;
-		a_emitter.radiusMult = config.radiusMult;
-		a_emitter.saturationMult = config.saturationMult;
-	};
+	info.color = color;
+	info.radiusMult = config.radiusMult;
+	info.flicker = config.flicker;
+	info.flickerSpeed = config.flickerSpeed;
+	info.flickerIntensity = config.flickerIntensity;
+	info.flickerMovement = config.flickerMovement;
 
 	std::lock_guard<std::mutex> queueLock{ particleLightsQueueMutex };
-	if (auto it = queuedEmitterIndices.find(key); it != queuedEmitterIndices.end()) {
-		if (it->second < queuedParticleEmitters.size()) {
-			auto& emitter = queuedParticleEmitters[it->second];
-			updateEmitter(emitter);
-			return true;
-		}
-		queuedEmitterIndices.erase(it);
-	}
-
-	if (queuedParticleEmitters.size() + queuedBillboardLights.size() >= kMaxQueuedParticleLights) {
+	if (queuedParticleLights.size() >= kMaxQueuedParticleLights)
 		return false;
-	}
-
-	const std::size_t emitterIndex = queuedParticleEmitters.size();
-	auto& emitter = queuedParticleEmitters.emplace_back();
-	emitter.node.reset(particleSystem);
-	updateEmitter(emitter);
-	emitter.sequence = nextParticleLightSequence++;
-	queuedEmitterIndices[key] = emitterIndex;
+	queuedParticleLights.push_back(std::move(info));
 	return true;
 }
 
@@ -3106,13 +2917,10 @@ void LightLimitFix::PostPostLoad()
 	LightLimitFixDetail::ShadowCulling::Install();
 	globals::features::llf::particleLights.GetConfigs();
 	particleLightsReferences.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 4u);
-	queuedParticleEmitters.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
-	currentParticleEmitters.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
-	queuedBillboardLights.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
-	currentBillboardLights.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
-	queuedEmitterIndices.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
-	queuedBillboardIndices.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
+	queuedParticleLights.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
+	currentParticleLights.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
 	Hooks::Install();
+	logger::warn("[LLF] Comparison build: live scene lights, geometry particle queue, VR culling/lifetime guards bypassed");
 }
 
 void LightLimitFix::DataLoaded()
@@ -3150,7 +2958,7 @@ float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radi
 void LightLimitFix::AddCachedParticleLights(
 	eastl::vector<LightData>& lightsData,
 	LightLimitFix::LightData& light,
-	const ResolvedBillboardLight* a_billboardLight)
+	const ParticleLightInfo* a_particleLight)
 {
 	if (lightsData.size() >= MAX_LIGHTS) {
 		return;
@@ -3189,8 +2997,8 @@ void LightLimitFix::AddCachedParticleLights(
 	light.fade *= dimmer;
 	const float luminanceScale = light.fade;
 	if ((light.color.x + light.color.y + light.color.z) * luminanceScale > 1e-4 && light.radius > 1e-4) {
-		if (a_billboardLight) {
-			ApplyLegacyParticleLightFlicker(light, *a_billboardLight, eyeCount);
+		if (a_particleLight) {
+			ApplyLegacyParticleLightFlicker(light, *a_particleLight, eyeCount);
 		}
 
 		light.invRadius = 1.f / light.radius;
@@ -3249,12 +3057,6 @@ void LightLimitFix::UpdateLights()
 		clearAndUpdate();
 		return;
 	}
-	const auto* snapshot = globals::game::isVR ? GetSceneLightSnapshot(shadowSceneNode) : nullptr;
-	if (globals::game::isVR && !snapshot) {
-		clearAndUpdate();
-		return;
-	}
-
 	// Cache data since cameraData can become invalid in first-person
 
 	for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
@@ -3349,13 +3151,12 @@ void LightLimitFix::UpdateLights()
 
 	{
 		CS_PROFILE_CPU_SCOPE("LightLimitFix::SceneLightsCPU");
-		if (globals::game::isVR) {
-			for (auto* light : snapshot->ActiveLights())
-				addLight(light);
-		} else {
-			for (auto& light : shadowSceneNode->GetRuntimeData().activeLights)
+		for (auto& light : shadowSceneNode->GetRuntimeData().activeLights)
+			addLight(light.get());
+		for (auto& light : shadowSceneNode->GetRuntimeData().activeShadowLights) {
+			if (globals::game::isVR) {
 				addLight(light.get());
-			for (auto& light : shadowSceneNode->GetRuntimeData().activeShadowLights) {
+			} else {
 				const RE::NiPointer<RE::BSLight> owner = light;
 				addLight(owner.get());
 			}
@@ -3396,134 +3197,118 @@ void LightLimitFix::UpdateLights()
 			clusteredLight = {};
 		};
 
-		auto processParticleEmitter = [&](const ParticleEmitterLight& a_particleEmitter) {
-			if (!a_particleEmitter.node ||
-				IsParticleEmitterBeyondDistance(a_particleEmitter.node.get(), eyePositionCached[0], settings.MaxParticleDistance)) {
-				return;
+		std::lock_guard<std::mutex> queueLock{ particleLightsQueueMutex };
+		for (const auto& particleLight : currentParticleLights) {
+			if (!particleLight.node) {
+				continue;
 			}
 
-			auto* particleSystem = a_particleEmitter.node.get();
-			auto* particleData = a_particleEmitter.particleData.get();
-			if (!particleSystem || !particleData) {
-				return;
-			}
+			if (!particleLight.billboard) {
+				auto particleSystem = static_cast<RE::NiParticleSystem*>(particleLight.node.get());
+				if (auto particleData = particleSystem->GetParticlesRuntimeData().particleData) {
+					auto& particleSystemRuntimeData = particleSystem->GetParticleSystemRuntimeData();
+					auto& particleRuntimeData = particleData->GetParticlesRuntimeData();
 
-			auto& particleSystemRuntimeData = particleSystem->GetParticleSystemRuntimeData();
-			auto& particleRuntimeData = particleData->GetParticlesRuntimeData();
-			if (!particleRuntimeData.radii || !particleRuntimeData.sizes || !particleRuntimeData.positions) {
-				return;
-			}
+					if (!particleRuntimeData.radii || !particleRuntimeData.sizes || !particleRuntimeData.positions) {
+						continue;
+					}
 
-			std::uint32_t numVertices = static_cast<std::uint32_t>(particleData->GetActiveVertexCount());
-			const std::uint32_t runtimeMaxVertices = static_cast<std::uint32_t>(particleRuntimeData.maxNumVertices);
-			const std::uint32_t runtimeNumVertices = static_cast<std::uint32_t>(particleRuntimeData.numVertices);
-			if (runtimeMaxVertices == 0) {
-				return;
-			}
-			numVertices = std::min(numVertices, runtimeMaxVertices);
-			if (runtimeNumVertices > 0) {
-				numVertices = std::min(numVertices, runtimeNumVertices);
-			}
+					// Use explicit 32-bit type to avoid narrowing warnings
+					std::uint32_t numVertices = static_cast<std::uint32_t>(particleData->GetActiveVertexCount());
+					const std::uint32_t runtimeMaxVertices = static_cast<std::uint32_t>(particleRuntimeData.maxNumVertices);
+					const std::uint32_t runtimeNumVertices = static_cast<std::uint32_t>(particleRuntimeData.numVertices);
+					if (runtimeMaxVertices == 0) {
+						continue;
+					}
+					numVertices = std::min(numVertices, runtimeMaxVertices);
+					if (runtimeNumVertices > 0) {
+						numVertices = std::min(numVertices, runtimeNumVertices);
+					}
 
-			const std::uint32_t maxPerEmitter = static_cast<std::uint32_t>(std::max(1, settings.MaxParticlesPerEmitter));
-			numVertices = std::min(numVertices, maxPerEmitter);
-			const float saturation = ResolveParticleSaturation(settings.ParticleLightsSaturation, a_particleEmitter.saturationMult);
+					// Bound emitter work by the configured particle budget.
+					std::uint32_t maxPerEmitter = static_cast<std::uint32_t>(std::max(1, settings.MaxParticlesPerEmitter));
+					if (numVertices > maxPerEmitter) {
+						numVertices = maxPerEmitter;
+					}
+					for (std::uint32_t p = 0; p < numVertices; p++) {
+						float radius = particleRuntimeData.radii[p] * particleRuntimeData.sizes[p];
 
-			for (std::uint32_t p = 0; p < numVertices; p++) {
-				if (lightsData.size() >= MAX_LIGHTS) {
-					break;
-				}
+						auto initialPosition = particleRuntimeData.positions[p];
+						if (!particleSystemRuntimeData.isWorldspace) {
+							// Detect first-person meshes
+							if ((particleLight.node->GetModelData().modelBound.radius * particleLight.node->world.scale) != particleLight.node->worldBound.radius) {
+								const auto& center = particleLight.node->worldBound.center;
+								initialPosition = { initialPosition.x + center.x, initialPosition.y + center.y, initialPosition.z + center.z };
+							} else {
+								const auto& translate = particleLight.node->world.translate;
+								initialPosition = { initialPosition.x + translate.x, initialPosition.y + translate.y, initialPosition.z + translate.z };
+							}
+						}
 
-				const float radius = particleRuntimeData.radii[p] * particleRuntimeData.sizes[p];
+						RE::NiPoint3 positionWS{
+							initialPosition.x - eyePositionCached[0].x,
+							initialPosition.y - eyePositionCached[0].y,
+							initialPosition.z - eyePositionCached[0].z
+						};
 
-				auto initialPosition = particleRuntimeData.positions[p];
-				if (!particleSystemRuntimeData.isWorldspace) {
-					// Detect first-person meshes.
-					if ((particleSystem->GetModelData().modelBound.radius * particleSystem->world.scale) != particleSystem->worldBound.radius) {
-						const auto& center = particleSystem->worldBound.center;
-						initialPosition = { initialPosition.x + center.x, initialPosition.y + center.y, initialPosition.z + center.z };
-					} else {
-						const auto& translate = particleSystem->world.translate;
-						initialPosition = { initialPosition.x + translate.x, initialPosition.y + translate.y, initialPosition.z + translate.z };
+						if (clusteredLights) {
+							auto averageRadius = clusteredLight.radius / (float)clusteredLights;
+							float radiusDiff = abs(averageRadius - radius);
+
+							auto averagePosition = clusteredLight.positionWS[0].data / (float)clusteredLights;
+							float positionDiff = positionWS.GetDistance({ averagePosition.x, averagePosition.y, averagePosition.z });
+
+							if ((radiusDiff + positionDiff) > settings.ParticleClusterThreshold ||
+								!settings.EnableParticleLightsOptimization) {
+								flushClusteredLight();
+							}
+						}
+
+						float alpha = particleLight.color.alpha;
+						float3 color{
+							particleLight.color.red,
+							particleLight.color.green,
+							particleLight.color.blue
+						};
+						if (particleRuntimeData.color) {
+							alpha *= particleRuntimeData.color[p].alpha;
+							color.x *= particleRuntimeData.color[p].red;
+							color.y *= particleRuntimeData.color[p].green;
+							color.z *= particleRuntimeData.color[p].blue;
+						}
+						clusteredLight.color += Saturation(color, settings.ParticleLightsSaturation) * alpha * settings.ParticleBrightness;
+
+						clusteredLight.radius += radius * particleLight.radiusMult * settings.ParticleRadius;
+
+						clusteredLight.positionWS[0].data.x += positionWS.x;
+						clusteredLight.positionWS[0].data.y += positionWS.y;
+						clusteredLight.positionWS[0].data.z += positionWS.z;
+
+						clusteredLights++;
 					}
 				}
-
-				RE::NiPoint3 positionWS{
-					initialPosition.x - eyePositionCached[0].x,
-					initialPosition.y - eyePositionCached[0].y,
-					initialPosition.z - eyePositionCached[0].z
-				};
-
-				if (clusteredLights) {
-					const auto averageRadius = clusteredLight.radius / static_cast<float>(clusteredLights);
-					const float radiusDiff = std::abs(averageRadius - radius);
-
-					const auto averagePosition = clusteredLight.positionWS[0].data / static_cast<float>(clusteredLights);
-					const float positionDiff = positionWS.GetDistance({ averagePosition.x, averagePosition.y, averagePosition.z });
-					if ((radiusDiff + positionDiff) > settings.ParticleClusterThreshold ||
-						!settings.EnableParticleLightsOptimization) {
-						flushClusteredLight();
-					}
-					if (lightsData.size() >= MAX_LIGHTS) {
-						break;
-					}
-				}
-
-				float alpha = a_particleEmitter.color.alpha;
-				float3 color{
-					a_particleEmitter.color.red,
-					a_particleEmitter.color.green,
-					a_particleEmitter.color.blue
-				};
-				if (particleRuntimeData.color) {
-					alpha *= particleRuntimeData.color[p].alpha;
-					color.x *= particleRuntimeData.color[p].red;
-					color.y *= particleRuntimeData.color[p].green;
-					color.z *= particleRuntimeData.color[p].blue;
-				}
-				clusteredLight.color += Saturation(color, saturation) * alpha * settings.ParticleBrightness;
-				clusteredLight.radius += radius * a_particleEmitter.radiusMult * settings.ParticleRadius;
-				clusteredLight.positionWS[0].data.x += positionWS.x;
-				clusteredLight.positionWS[0].data.y += positionWS.y;
-				clusteredLight.positionWS[0].data.z += positionWS.z;
-				clusteredLights++;
-			}
-		};
-
-		auto processBillboard = [&](const ResolvedBillboardLight& a_billboardLight) {
-			// Preserve submission order and budget priority: an emitter cluster
-			// sequenced before this billboard must be emitted first.
-			flushClusteredLight();
-			if (lightsData.size() >= MAX_LIGHTS) {
-				return;
-			}
-
-			LightData light{};
-			light.color = a_billboardLight.color;
-			light.radius = a_billboardLight.radius;
-			SetLightPosition(light, a_billboardLight.position);
-			light.lightFlags.set(LightFlags::Simple);
-			light.lightFlags.set(LightFlags::Particle);
-			light.lightFlags.set(LightFlags::AffectWater);
-			AddCachedParticleLights(lightsData, light, &a_billboardLight);
-		};
-
-		std::lock_guard<std::mutex> currentLock{ currentParticleLightsMutex };
-		std::size_t emitterIndex = 0;
-		std::size_t billboardIndex = 0;
-		while (emitterIndex < currentParticleEmitters.size() || billboardIndex < currentBillboardLights.size()) {
-			if (lightsData.size() >= MAX_LIGHTS) {
-				break;
-			}
-
-			const bool processEmitter =
-				billboardIndex >= currentBillboardLights.size() ||
-				(emitterIndex < currentParticleEmitters.size() &&
-					currentParticleEmitters[emitterIndex].sequence <= currentBillboardLights[billboardIndex].sequence);
-			if (processEmitter) {
-				processParticleEmitter(currentParticleEmitters[emitterIndex++]);
 			} else {
-				processBillboard(currentBillboardLights[billboardIndex++]);
+				// Process billboard
+				LightData light{};
+
+				light.color.x = particleLight.color.red;
+				light.color.y = particleLight.color.green;
+				light.color.z = particleLight.color.blue;
+
+				light.color = Saturation(light.color, settings.ParticleLightsSaturation);
+
+				light.color *= particleLight.color.alpha * settings.BillboardBrightness;
+				light.radius = particleLight.node->worldBound.radius * particleLight.radiusMult * settings.BillboardRadius * 0.5f;
+
+				auto position = particleLight.node->world.translate;
+
+				SetLightPosition(light, position);  // Light is complete for both eyes by now
+
+				light.lightFlags.set(LightFlags::Simple);
+				light.lightFlags.set(LightFlags::Particle);
+				light.lightFlags.set(LightFlags::AffectWater);
+
+				AddCachedParticleLights(lightsData, light, &particleLight);
 			}
 		}
 

@@ -429,6 +429,20 @@ namespace SIE
 	class ShaderCache
 	{
 	public:
+		/** Read-only global compiler provenance; no shader-specific completeness claim. */
+		struct CompileContextSnapshot
+		{
+			bool developerMode = false;
+			bool virtualReality = false;
+			bool partialPrecision = false;
+			bool avoidFlowControl = false;
+			std::string shaderDefinesCanonical;
+			std::string shaderDefinesSuffix;
+			std::string globalCompileStateDigest;
+			std::string shaderCacheAbiId;
+			std::string shaderCompilerIdentity;
+		};
+
 		static ShaderCache& Instance()
 		{
 			static ShaderCache instance;
@@ -482,6 +496,8 @@ namespace SIE
 		void StopCompilation();
 
 		bool IsDiskCache() const;
+		/** Capture current global compile inputs without compiling or changing cache policy. */
+		CompileContextSnapshot GetCompileContextSnapshot() const;
 		void SetDiskCache(bool value);
 		/** Reuses verified standalone bytecode, retrying source when device creation rejects a hit.
 		 * Callbacks run synchronously; only accepted bytecode with stable source inputs is persisted. */

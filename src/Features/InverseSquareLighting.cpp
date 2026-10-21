@@ -1,146 +1,12 @@
 #include "InverseSquareLighting.h"
-#include "LocationContext.h"
-#include "Menu/SettingsPage.h"
-#include "State.h"
-#include "Utils/RendererContextAccess.h"
-#include "Utils/RuntimeToggle.h"
-#include "Utils/UI.h"
-
 #include "CSEditor/EditorWindow.h"
 #include "Features/InverseSquareLighting/Common.h"
-#include "Globals.h"
 #include "LightLimitFix.h"
-
 #include <cmath>
 #include <numbers>
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	InverseSquareLighting::Settings,
-	Enabled)
-
-namespace
-{
-	float SanitizeRadius(const float a_radius)
-	{
-		return std::isfinite(a_radius) ? std::max(a_radius, 0.0f) : 0.0f;
-	}
-
-	void CaptureOriginalRadius(ISLCommon::RuntimeLightDataExt& a_runtimeData)
-	{
-		a_runtimeData.originalRadius = SanitizeRadius(a_runtimeData.radius);
-	}
-
-	float RestoreOriginalRadius(ISLCommon::RuntimeLightDataExt& a_runtimeData)
-	{
-		if (a_runtimeData.flags.any(LightLimitFix::LightFlags::Initialised))
-			a_runtimeData.radius = SanitizeRadius(a_runtimeData.originalRadius);
-		else
-			a_runtimeData.radius = SanitizeRadius(a_runtimeData.radius);
-		return a_runtimeData.radius;
-	}
-
-	void SetVanillaLightData(LightLimitFix::LightData& a_light, ISLCommon::RuntimeLightDataExt& a_runtimeData)
-	{
-		a_light.lightFlags.reset(
-			LightLimitFix::LightFlags::Disabled,
-			LightLimitFix::LightFlags::InverseSquare,
-			LightLimitFix::LightFlags::Linear);
-
-		a_light.radius = RestoreOriginalRadius(a_runtimeData);
-		a_light.invRadius = a_light.radius > 0.0f ? 1.0f / a_light.radius : 0.0f;
-		a_light.fadeZone = 0.0f;
-		a_light.sizeBias = 0.0f;
-		a_light.fade = a_runtimeData.fade;
-	}
-}
-
-void InverseSquareLighting::DrawSettings()
-{
-	MenuUI::SettingsPage page("InverseSquareLighting", {
-														   { "appearance", "How it works", "Learn how nearby light falloff changes.", "Nearby light falloff", true, true, "Shape nearby lighting" },
-													   });
-	if (!page.Is("appearance"))
-		return;
-
-	MenuUI::DetailText("Nearby lights use physically based distance falloff. Use Enabled in the header to compare with the original lighting; there are no additional tuning controls.");
-}
-
-void InverseSquareLighting::LoadSettings(json& o_json)
-{
-	settings = o_json;
-	SetRuntimeEnabled(settings.Enabled);
-}
-
-void InverseSquareLighting::SaveSettings(json& o_json)
-{
-	o_json = settings;
-}
-
-void InverseSquareLighting::RestoreDefaultSettings()
-{
-	EditorWindow::GetSingleton()->lightEditor.RestoreDefaultSettings();
-	settings = {};
-	SetRuntimeEnabled(settings.Enabled);
-}
-
-void InverseSquareLighting::SetRuntimeEnabled(bool a_enabled)
-{
-	settings.Enabled = a_enabled;
-	runtimeSettingsDirty.store(true, std::memory_order_release);
-}
-
-void InverseSquareLighting::EarlyPrepass()
-{
-	if (!runtimeSettingsDirty.load(std::memory_order_acquire) || Util::IsRuntimeToggleBlocked(globals::state))
-		return;
-	Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
-	if (!ownership || !globals::game::smState || !globals::game::smState->shadowSceneNode[0])
-		return;
-	const auto* player = RE::PlayerCharacter::GetSingleton();
-	const auto* cell = player ? player->GetParentCell() : nullptr;
-	if (!LocationContext::HasAttachedCell(globals::game::tes, cell))
-		return;
-	runtimeSettingsDirty.exchange(false, std::memory_order_acq_rel);
-	if (runtimeEnabled.exchange(settings.Enabled, std::memory_order_acq_rel) != settings.Enabled)
-		ApplyRuntimeStateToActiveLights();
-}
-
-void InverseSquareLighting::ApplyRuntimeStateToActiveLights() const
-{
-	if (!globals::features::lightLimitFix.loaded)
-		return;
-
-	const auto smState = globals::game::smState;
-	if (!smState)
-		return;
-
-	const auto shadowSceneNode = smState->shadowSceneNode[0];
-	if (!shadowSceneNode)
-		return;
-
-	auto applyRuntimeState = [this](const RE::NiPointer<RE::BSLight>& a_bsLight) {
-		auto* bsLight = a_bsLight.get();
-		if (!bsLight)
-			return;
-
-		auto* niLight = bsLight->light.get();
-		if (!niLight)
-			return;
-
-		LightLimitFix::LightData light{};
-		ProcessLight(light, bsLight, niLight);
-	};
-
-	for (const auto& bsLight : shadowSceneNode->GetRuntimeData().activeLights)
-		applyRuntimeState(bsLight);
-	for (const auto& bsLight : shadowSceneNode->GetRuntimeData().activeShadowLights)
-		applyRuntimeState(bsLight);
-}
-
 void InverseSquareLighting::PostPostLoad()
 {
-	// Hooks must honor the startup preference before any guarded render prepass.
-	runtimeEnabled.store(settings.Enabled, std::memory_order_release);
 	stl::detour_thunk<CreatePointLight>(REL::RelocationID(17208, 17610));
 	stl::detour_thunk<BSLight_GetLuminance>(REL::RelocationID(101303, 108292));
 
@@ -151,8 +17,6 @@ RE::NiPointLight* InverseSquareLighting::CreatePointLight::thunk(RE::TESObjectLI
 {
 	const auto niLight = func(ligh, refr, root, forceDynamic, useLightRadius, affectRequesterOnly);
 
-	// Keep metadata current while runtime behavior is disabled so the same live lights can
-	// immediately use their authored falloff again when the toggle is re-enabled.
 	if (ligh && root && niLight)
 		SetExtLightData(niLight, ligh);
 
@@ -162,22 +26,11 @@ RE::NiPointLight* InverseSquareLighting::CreatePointLight::thunk(RE::TESObjectLI
 void InverseSquareLighting::SetExtLightData(RE::NiLight* niLight, const RE::TESObjectLIGH* ligh)
 {
 	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
-	CaptureOriginalRadius(*runtimeData);
 	runtimeData->flags.set(LightLimitFix::LightFlags::Initialised);
-	runtimeData->flags.reset(
-		LightLimitFix::LightFlags::InverseSquare,
-		LightLimitFix::LightFlags::Linear);
 	if (ligh->data.flags.any(static_cast<RE::TES_LIGHT_FLAGS>(ISLCommon::TES_LIGHT_FLAGS_EXT::kInverseSquare)))
 		runtimeData->flags.set(LightLimitFix::LightFlags::InverseSquare);
 	if (ligh->data.flags.any(static_cast<RE::TES_LIGHT_FLAGS>(ISLCommon::TES_LIGHT_FLAGS_EXT::kLinear)))
 		runtimeData->flags.set(LightLimitFix::LightFlags::Linear);
-	if (ligh->data.flags.any(RE::TES_LIGHT_FLAGS::kSpotlight, RE::TES_LIGHT_FLAGS::kSpotShadow)) {
-		runtimeData->flags.set(LightLimitFix::LightFlags::Spot);
-		runtimeData->flags.reset(LightLimitFix::LightFlags::OmniDirectional);
-	} else {
-		runtimeData->flags.reset(LightLimitFix::LightFlags::Spot);
-		runtimeData->flags.set(LightLimitFix::LightFlags::OmniDirectional);
-	}
 	runtimeData->cutoffOverride = std::clamp(ligh->data.fallofExponent, 0.01f, 1.f);
 	runtimeData->lighFormId = ligh->formID;
 	const float size = ligh->data.fov >= 50.0f ? std::numbers::sqrt2_v<float> : ligh->data.fov;
@@ -188,16 +41,10 @@ void InverseSquareLighting::ProcessLight(LightLimitFix::LightData& light, RE::BS
 {
 	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
 
-	if (runtimeData->flags.none(LightLimitFix::LightFlags::Initialised)) {
+	if (light.lightFlags.none(LightLimitFix::LightFlags::Initialised)) {
 		const auto userData = niLight->GetUserData();
 		logger::debug("[InverseSquareLighting] FormID: 0x{:08X} | Light*: {:p} | Name: {} - light uninitialised", userData ? userData->formID : 0, static_cast<void*>(niLight), niLight->name);
-		CaptureOriginalRadius(*runtimeData);
 		runtimeData->flags.set(LightLimitFix::LightFlags::Initialised);
-	}
-
-	if (!IsEnabled()) {
-		SetVanillaLightData(light, *runtimeData);
-		return;
 	}
 
 	const auto& editorRef = EditorWindow::GetSingleton()->lightEditor;
@@ -220,8 +67,8 @@ void InverseSquareLighting::ProcessLight(LightLimitFix::LightData& light, RE::BS
 		// light.color *= intensity;
 		light.fade = intensity;
 	} else {
-		light.radius = SanitizeRadius(runtimeData->radius);
-		light.invRadius = light.radius > 0.0f ? 1.0f / light.radius : 0.0f;
+		light.radius = runtimeData->radius;
+		light.invRadius = 1.f / light.radius;
 		// light.color *= runtimeData->fade;
 		light.fade = runtimeData->fade;
 	}
@@ -252,18 +99,7 @@ float InverseSquareLighting::GetAttenuation(const float distance, const float ra
 
 float InverseSquareLighting::BSLight_GetLuminance::thunk(RE::BSLight* bsLight, RE::NiPoint3* targetPosition, RE::NiLight* refLight)
 {
-	if (!bsLight || !targetPosition)
-		return func(bsLight, targetPosition, refLight);
-
 	auto* niLight = bsLight->light.get();
-	if (!niLight)
-		return func(bsLight, targetPosition, refLight);
-
-	if (!globals::features::inverseSquareLighting.IsEnabled()) {
-		RestoreOriginalRadius(*ISLCommon::RuntimeLightDataExt::Get(niLight));
-		return func(bsLight, targetPosition, refLight);
-	}
-
 	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
 
 	if (refLight == niLight || runtimeData->flags.any(LightLimitFix::LightFlags::Disabled))

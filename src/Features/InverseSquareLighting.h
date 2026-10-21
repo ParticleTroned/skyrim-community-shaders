@@ -4,7 +4,6 @@
 struct InverseSquareLighting : Feature
 {
 private:
-	std::atomic<bool> runtimeSettingsDirty{ true };
 	static constexpr std::string_view MOD_ID = "153542";
 
 public:
@@ -19,7 +18,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Makes light fade more naturally with distance.",
+			"Implements an additional inverse square falloff for lighting which allows for a more physically accurate and realistic looking light attenuation.",
 			{ "Automatic light radius calculation based on intensity",
 				"Lights smoothly fade out at a configurable cutoff, solving the infinite distance problem",
 				"Does not modify any existing lighting",
@@ -30,37 +29,12 @@ public:
 
 	inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
-	struct Settings
-	{
-		bool Enabled = true;
-	};
-
-	Settings settings;
-	std::atomic<bool> runtimeEnabled = true;
-
-	/** Supports a cost comparison through the existing in-game enable toggle. */
-	bool SupportsPerformanceCostMeasurement() const override { return true; }
-	/** Returns the requested state without changing the feature's configuration. */
-	bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
-	/** Uses the same runtime enable path as the feature's settings panel. */
-	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { SetRuntimeEnabled(a_enabled); }
-	/** Waits for the render-thread toggle transaction to finish. */
-	bool IsPerformanceCostMeasurementReady() const override
-	{
-		return !runtimeSettingsDirty.load(std::memory_order_acquire) &&
-		       runtimeEnabled.load(std::memory_order_acquire) == settings.Enabled;
-	}
-
-	virtual void DrawSettings() override;
-	virtual void LoadSettings(json& o_json) override;
-	virtual void SaveSettings(json& o_json) override;
-	virtual void RestoreDefaultSettings() override;
-
 	virtual bool SupportsVR() override { return true; }
 
+	/** The feature is active for the lifetime of its loaded startup configuration. */
+	bool IsEnabled() const { return loaded; }
+
 	virtual void PostPostLoad() override;
-	virtual void EarlyPrepass() override;
-	bool IsEnabled() const { return loaded && runtimeEnabled.load(std::memory_order_acquire); }
 
 	static float CalculateRadius(float intensity, bool shadowCaster, float cutoffOverride, float size);
 
@@ -90,9 +64,6 @@ private:
 	static constexpr float MetresToUnitsSq = MetresToUnits * MetresToUnits;
 	static constexpr float ScaledUnitsSq = Scale * MetresToUnitsSq;
 	static constexpr float FadeZoneBase = 4.5f * Scale * MetresToUnits;
-
-	void SetRuntimeEnabled(bool a_enabled);
-	void ApplyRuntimeStateToActiveLights() const;
 
 	static void SetExtLightData(RE::NiLight* niLight, const RE::TESObjectLIGH* ligh);
 

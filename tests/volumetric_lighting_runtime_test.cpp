@@ -92,19 +92,6 @@ namespace
 	{
 		void* shadowSceneNode[1]{ reinterpret_cast<void*>(1) };
 	} testShadowState;
-	struct InverseSquareLighting
-	{
-		struct Settings
-		{
-			bool Enabled = true;
-		} settings;
-		std::atomic<bool> runtimeSettingsDirty{ true }, runtimeEnabled{ true };
-		unsigned lightUpdates = 0;
-		void PostPostLoad();
-		void EarlyPrepass();
-		void SetRuntimeEnabled(bool enabled);
-		void ApplyRuntimeStateToActiveLights();
-	};
 	unsigned shadowDistanceUpdates = 0;
 	State testState;
 	RE::TES testTes;
@@ -146,11 +133,6 @@ namespace
 		RequireRenderer();
 		arraysCleared = true;
 		++arrayClears;
-	}
-	void InverseSquareLighting::ApplyRuntimeStateToActiveLights()
-	{
-		RequireRenderer();
-		++lightUpdates;
 	}
 	void SetBooleanSettings(int flags, const std::string&, bool value)
 	{
@@ -269,60 +251,46 @@ namespace
 	{
 		Fixture f;
 		InteriorSun sun;
-		InverseSquareLighting inverse;
 		sun.SetRuntimeEnabled(false);
-		inverse.SetRuntimeEnabled(false);
 		sun.PostPostLoad();
-		inverse.PostPostLoad();
 		testState.menu = true;
 		sun.EarlyPrepass();
-		inverse.EarlyPrepass();
-		Require(!sun.IsEnabled() && !inverse.runtimeEnabled, "native hooks must honor disabled settings before the first safe frame");
-		Require(sun.runtimeSettingsDirty && inverse.runtimeSettingsDirty, "startup must retain deferred engine reconciliation");
+		Require(!sun.IsEnabled(), "native hooks must honor disabled settings before the first safe frame");
+		Require(sun.runtimeSettingsDirty, "startup must retain deferred engine reconciliation");
 	}
 
 	void TestNativeLightingToggles()
 	{
 		Fixture f;
 		InteriorSun sun;
-		InverseSquareLighting inverse;
 		shadowDistanceUpdates = 0;
 		sun.SetRuntimeEnabled(false);
-		inverse.SetRuntimeEnabled(false);
-		Require(shadowDistanceUpdates == 0 && inverse.lightUpdates == 0, "native setters must only request changes");
+		Require(shadowDistanceUpdates == 0, "native setters must only request changes");
 		for (bool* guard : { &testState.safe, &testState.engineBusy, &testState.menu, &testState.pendingPostLoadRuntimeReset }) {
 			*guard = true;
 			sun.EarlyPrepass();
-			inverse.EarlyPrepass();
-			Require(sun.runtimeEnabled && inverse.runtimeEnabled, "native toggles must defer protected engine state");
+			Require(sun.runtimeEnabled, "native toggles must defer protected engine state");
 			*guard = false;
 		}
 		testCell.attached = false;
 		sun.EarlyPrepass();
-		inverse.EarlyPrepass();
-		Require(shadowDistanceUpdates == 0 && inverse.lightUpdates == 0, "unattached destination must retain native changes");
+		Require(shadowDistanceUpdates == 0, "unattached destination must retain native changes");
 		testCell.attached = true;
 		testTes.interiorCell = &testCell;
 		sun.EarlyPrepass();
-		inverse.EarlyPrepass();
-		Require(shadowDistanceUpdates == 0 && inverse.lightUpdates == 0, "inconsistent destination must retain native changes");
+		Require(shadowDistanceUpdates == 0, "inconsistent destination must retain native changes");
 		testTes.interiorCell = nullptr;
 		auto* context = globals::d3d::context;
 		globals::d3d::context = nullptr;
 		sun.EarlyPrepass();
-		inverse.EarlyPrepass();
-		Require(shadowDistanceUpdates == 0 && inverse.lightUpdates == 0, "missing renderer must retain native changes");
+		Require(shadowDistanceUpdates == 0, "missing renderer must retain native changes");
 		globals::d3d::context = context;
 		sun.EarlyPrepass();
-		inverse.EarlyPrepass();
-		Require(shadowDistanceUpdates == 1 && inverse.lightUpdates == 1 && sun.nativeDistance == 60, "safe render boundary must apply native changes");
+		Require(shadowDistanceUpdates == 1 && sun.nativeDistance == 60, "safe render boundary must apply native changes");
 		sun.SetRuntimeEnabled(true);
 		sun.SetRuntimeEnabled(false);
-		inverse.SetRuntimeEnabled(true);
-		inverse.SetRuntimeEnabled(false);
 		sun.EarlyPrepass();
-		inverse.EarlyPrepass();
-		Require(shadowDistanceUpdates == 1 && inverse.lightUpdates == 1, "opposing native requests must avoid redundant work");
+		Require(shadowDistanceUpdates == 1, "opposing native requests must avoid redundant work");
 	}
 
 	void TestNativeLocationDuringDeferral()

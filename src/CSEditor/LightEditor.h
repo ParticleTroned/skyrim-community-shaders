@@ -55,7 +55,7 @@ struct LightEditor
 	 * @brief Apply editor overrides to a specific light during rendering.
 	 * @param niLight     The NiLight scene node to potentially override.
 	 * @param runtimeData The runtime light data extension to modify.
-	 * @return True if the light should be rendered, false if it should be suppressed.
+	 * @return True if the selected light's overrides were applied.
 	 */
 	bool ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDataExt* runtimeData) const;
 
@@ -190,7 +190,7 @@ private:
 	// External-emittance color preview (CS-driven, selected bulb only): the game only drives emittance
 	// color for refs in the cell's emittance maps, so we track the source region's live color ourselves.
 	RE::TESForm* activeEmittanceSource = nullptr;
-	bool emittanceColorActive = false;  // gates ApplyOverrides to the emittance color below
+	bool emittanceColorActive = false;
 	RE::NiColor emittanceColor{};
 
 	// Emittance state at selection time, so Reset reverts a changed source (it lives outside LightSettings).

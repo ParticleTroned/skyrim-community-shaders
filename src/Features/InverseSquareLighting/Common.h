@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "Features/LightLimitFix.h"
 
 struct ISLCommon
@@ -16,7 +16,7 @@ struct ISLCommon
 		RE::FormID lighFormId;
 		RE::NiColor diffuse;
 		float radius;
-		float originalRadius;
+		float pad1C;
 		float size;
 		float fade;
 		std::uint32_t unk138;

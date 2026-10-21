@@ -1033,8 +1033,7 @@ void LightEditor::CancelPick()
 
 bool LightEditor::ShouldDisableLight(bool inverseSquare) const
 {
-	return enabled && !State::GetSingleton()->IsPersistentMutationBlocked() &&
-	       (inverseSquare ? disableInvSqLights : disableRegularLights);
+	return inverseSquare ? disableInvSqLights : disableRegularLights;
 }
 
 bool LightEditor::HasDeferredWork() const
@@ -2422,40 +2421,21 @@ float LightEditor::GetLPSizeFactor() const
 
 bool LightEditor::ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDataExt* runtimeData) const
 {
-	if (State::GetSingleton()->IsPersistentMutationBlocked() || !enabled || !niLight || !runtimeData)
+	if (State::GetSingleton()->IsPersistentMutationBlocked())
 		return false;
-
-	// Hovered (not selected) light: blink its fade so it flashes in the combo list.
-	if (hoverFlashNiLight && niLight == hoverFlashNiLight.get() && niLight != activeNiLight.get()) {
-		runtimeData->fade = hoverFlashVisible ? hoverFlashOnFade : 0.f;
-		return true;
-	}
 
 	if (niLight != activeNiLight.get())
 		return false;
 
-	runtimeData->lighFormId = current.data.lighFormId;
-	// Use the emittance source's live color while one drives this bulb (see UpdateEmittanceColor), else the editor color.
-	runtimeData->diffuse = emittanceColorActive ? emittanceColor : current.data.diffuse;
-	runtimeData->fade = current.data.fade * GetLPFadeFactor();
+	runtimeData->diffuse = current.data.diffuse;
+	runtimeData->fade = current.data.fade;
 	runtimeData->cutoffOverride = current.data.cutoffOverride;
-	runtimeData->size = current.data.size * GetLPSizeFactor();
+	runtimeData->size = current.data.size;
 
-	const bool isInverseSquare = current.data.flags.any(LightLimitFix::LightFlags::InverseSquare);
-	const bool radiusWasEdited = current.data.radius != original.data.radius;
-	if ((lpInfo.isLPLight && lpRawDataLoaded) || !isInverseSquare ||
-		original.data.flags.none(LightLimitFix::LightFlags::InverseSquare) || radiusWasEdited) {
-		runtimeData->originalRadius = current.data.radius * GetLPRadiusFactor();
-	}
-
-	if (isInverseSquare) {
+	if (current.data.flags.any(LightLimitFix::LightFlags::InverseSquare))
 		runtimeData->flags.set(LightLimitFix::LightFlags::InverseSquare);
-	} else {
+	else
 		runtimeData->flags.reset(LightLimitFix::LightFlags::InverseSquare);
-		// Restore the authoritative radius: ProcessLight's IS branch writes a computed value into the shared
-		// runtimeData->radius that the non-IS branch only reads, so a stale inflated value would stick forever.
-		runtimeData->radius = runtimeData->originalRadius;
-	}
 
 	if (current.data.flags.any(LightLimitFix::LightFlags::Linear))
 		runtimeData->flags.set(LightLimitFix::LightFlags::Linear);
@@ -3266,9 +3246,7 @@ bool LightEditor::RefreshLPJsonState()
 		}
 		return fallback;
 	};
-	const float runtimeRadius = lpInfo.runtimeSnapshot.flags.any(LightLimitFix::LightFlags::Initialised) ?
-	                                lpInfo.runtimeSnapshot.originalRadius :
-	                                lpInfo.runtimeSnapshot.radius;
+	const float runtimeRadius = lpInfo.runtimeSnapshot.radius;
 	const float parsedFadeFactor = inferFactor(lpInfo.runtimeSnapshot.fade, parsedFade, fallbackFactor);
 	const float parsedRadiusFactor = inferFactor(runtimeRadius, parsedRadius, fallbackFactor);
 	const float parsedSizeFactor = inferFactor(lpInfo.runtimeSnapshot.size, parsedSize, fallbackFactor);
@@ -3321,7 +3299,6 @@ bool LightEditor::RefreshLPJsonState()
 	lpInfo.sizeFactor = parsedSizeFactor;
 	original.data.fade = current.data.fade = parsedFade;
 	original.data.radius = current.data.radius = parsedRadius;
-	original.data.originalRadius = current.data.originalRadius = parsedRadius;
 	original.data.size = current.data.size = parsedSize;
 	original.data.cutoffOverride = current.data.cutoffOverride = parsedCutoff;
 	if (hasAuthoredShadowBias) {

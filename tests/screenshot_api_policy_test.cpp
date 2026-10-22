@@ -1,5 +1,5 @@
+#define CSX_SCREENSHOT_STORAGE_TESTING
 #include "Features/ScreenshotApiPolicy.h"
-#include "Features/ScreenshotStorageSecurity.cpp"
 #include "screenshot_storage_security_test.h"
 
 #include <iostream>

@@ -1325,8 +1325,16 @@ namespace CSX::RenderMap
 		boundary.publicationRejections += rejectedPublication;
 		if (rejectedTarget || rejectedFrame || rejectedPublication)
 			return false;
+		const auto activationTick = ReadClockTicks();
+		if (activationTick - session->window.armedTick >= DurationToTicks(session->config.maxActivationWait)) {
+			session->window.phase = CaptureWindowPhase::kIncomplete;
+			session->window.failure = CaptureWindowFailure::kActivationTimeout;
+			session->window.endTick = activationTick;
+			session->accepting.store(false, std::memory_order_release);
+			return false;
+		}
 		session->window.phase = CaptureWindowPhase::kBootstrap;
-		session->window.activationTick = ReadClockTicks();
+		session->window.activationTick = activationTick;
 		session->window.cpuFrame = a_frame;
 		session->window.publicationGeneration = a_publicationGeneration;
 		session->window.bootstrapThreadId = CurrentThreadId();

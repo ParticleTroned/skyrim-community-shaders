@@ -13,7 +13,7 @@ namespace CSX::Api
 	{
 		return a_beforeStatus == UpscalingAPI::Status::kSuccess &&
 		       a_afterStatus == UpscalingAPI::Status::kSuccess && a_before.stateRevision != 0 &&
-		       a_before.stateRevision == a_after.stateRevision &&
+		       a_before.stateRevision == a_after.stateRevision && a_before.capabilityRevision != 0 &&
 		       a_before.capabilityRevision == a_after.capabilityRevision;
 	}
 

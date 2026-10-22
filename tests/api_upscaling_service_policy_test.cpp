@@ -66,6 +66,22 @@ int main()
 		Check(!CSX::Api::IsUpscalingSnapshotBracketStable(Status::kSuccess, before, Status::kSuccess, before),
 			"uninitialized API revision was correlated");
 
+		before.stateRevision = 1;
+		before.capabilityRevision = 0;
+		after = before;
+		Check(!CSX::Api::IsUpscalingSnapshotBracketStable(Status::kSuccess, before, Status::kSuccess, after),
+			"uninitialized capability revisions were correlated");
+		after.capabilityRevision = 2;
+		Check(!CSX::Api::IsUpscalingSnapshotBracketStable(Status::kSuccess, before, Status::kSuccess, after),
+			"missing before capability authority was correlated");
+		before.capabilityRevision = 2;
+		after.capabilityRevision = 0;
+		Check(!CSX::Api::IsUpscalingSnapshotBracketStable(Status::kSuccess, before, Status::kSuccess, after),
+			"missing after capability authority was correlated");
+		after = before;
+		Check(CSX::Api::IsUpscalingSnapshotBracketStable(Status::kSuccess, before, Status::kSuccess, after),
+			"restored nonzero capability authority was rejected");
+
 		const auto directLoading = CSX::Api::ResolveUpscalingAdmission(
 			kConditionLoadingTransition | kConditionTransitionPending,
 			RequestPurpose::kDirect,

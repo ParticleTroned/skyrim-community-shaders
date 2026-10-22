@@ -16,7 +16,7 @@
 #include "Hooks.h"
 #include "Menu.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
-#	include "RenderMap/Runtime.h"
+#	include "RenderMap/RetainedEyeSubmission.h"
 #endif
 #include "State.h"
 #include "Util.h"
@@ -1152,7 +1152,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					const vr::VRTextureBounds_t fullBounds{ 0.0f, 0.0f, 1.0f, 1.0f };
 					const auto& bounds = retainedBounds ? *retainedBounds : fullBounds;
 					CSX::RenderMap::GetRuntime().SetCpuFrame(globals::state ? globals::state->frameCount : 0);
-					CSX::RenderMap::GetRuntime().RecordEyeSubmission(
+					CSX::RenderMap::RecordRetainedEyeSubmission(
+						CSX::RenderMap::GetRuntime(),
+						submitPacket.publicationLease,
+						globals::state ? globals::state->GetRenderTargetResourcePublicationGeneration() : 0,
+						reinterpret_cast<std::uintptr_t>(globals::d3d::device),
 						DescribeSubmittedTexture(submitPacket.GetColorTexture()),
 						RenderMapEye(submitPacket.eye),
 						submitPacket.eye == vr::Eye_Left ? 1u : 2u,

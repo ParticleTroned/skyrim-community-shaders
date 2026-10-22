@@ -405,7 +405,7 @@ namespace CSX::RenderMap
 			float a_uMax,
 			float a_vMax,
 			std::uint32_t a_submitFlags,
-			std::uint64_t a_compositorCycle, std::uint64_t a_publicationGeneration = 0) noexcept;
+			std::uint64_t a_compositorCycle, std::uint64_t a_publicationGeneration) noexcept;
 		void RecordDraw(
 			std::uintptr_t a_context,
 			DrawOperation a_operation,

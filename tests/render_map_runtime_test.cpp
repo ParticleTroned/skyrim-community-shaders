@@ -1,5 +1,5 @@
 #include "RenderMap/D3DContextHooks.h"
-#include "RenderMap/Runtime.h"
+#include "RenderMap/RetainedEyeSubmission.h"
 #if defined(_WIN32)
 #	ifndef NOMINMAX
 #		define NOMINMAX
@@ -328,6 +328,64 @@ namespace
 		config.maxActivationWait = std::chrono::seconds(1);
 		config.maxBytes = Collector::RequiredStorageBytes(config);
 		return config;
+	}
+
+	void TestRetainedEyeSubmissionPublication()
+	{
+		for (int lane = 0; lane < 7; ++lane) {
+			Runtime runtime;
+			runtime.SetImmediateContext(0xA000);
+			Check(runtime.StartCapture(LateConfig()) == StartResult::kStarted, "retained eye window did not arm");
+			runtime.SetCpuFrame(12);
+			Check(runtime.ActivatePostProcessingWindow(9, 12, 77), "retained eye boundary did not activate");
+			const ResourceObservationInput resource{ .d3dObject = 0xA100, .dimension = ResourceDimension::kTexture2D };
+			{
+				auto scope = runtime.EnterPostProcessing(resource, resource, 9, 77);
+				runtime.RecordPostProcessingBootstrap({ 1, 2, 3, 4, 5, 6 }, runtime.PostProcessingCaptureGeneration());
+				runtime.CompleteWindowBootstrap(true);
+			}
+			OpenVRSubmitLeasePolicy::PublicationLease lease{
+				.generation = 77,
+				.deviceIdentity = 0xD000,
+				.colorTextureRetained = true
+			};
+			if (lane == 1)
+				lease.generation = 0;
+			if (lane == 2)
+				lease.generation = 78;
+			if (lane == 5)
+				lease.colorTextureRetained = false;
+			if (lane == 6) {
+				lease.depthTextureRequired = true;
+				lease.depthTextureRetained = false;
+			}
+			const auto currentGeneration = lane == 3 ? 78u : lease.generation;
+			const auto currentDevice = lane == 4 ? 0xD001u : 0xD000u;
+			RecordRetainedEyeSubmission(runtime, lease, currentGeneration, currentDevice,
+				resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90);
+			RecordRetainedEyeSubmission(runtime, lease, currentGeneration, currentDevice,
+				resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 90);
+			const auto snapshot = runtime.StopCapture();
+			Check(snapshot.has_value(), "retained eye capture did not stop");
+			Check((snapshot->window.phase == CaptureWindowPhase::kMatchedEyes) == (lane == 0),
+				"retained publication authority did not control late-window closure");
+			std::size_t eyes = 0;
+			std::size_t publications = 0;
+			for (const auto& event : snapshot->events) {
+				if (event.payload.schema == static_cast<std::uint16_t>(PayloadSchema::kEyeSubmission))
+					++eyes;
+				if (event.payload.schema == static_cast<std::uint16_t>(PayloadSchema::kEyePublication)) {
+					++publications;
+					Check(event.payload.words[3] == lease.generation && event.payload.words[4] == 90,
+						"retained eye publication lost generation or compositor cycle");
+				}
+			}
+			const auto expectedRecords = lane == 0 || lane == 2 ? 2u : 0u;
+			Check(eyes == expectedRecords && publications == expectedRecords,
+				"invalidated lease published evidence or eye/publication schemas were conflated");
+			Check(snapshot->window.acceptedEyeMask == (lane == 0 ? 3 : 0),
+				"mismatched publication acquired accepted-eye authority");
+		}
 	}
 
 	void TestLateWindowSkipsPrefixAndMatchesAcceptedPair()
@@ -1437,7 +1495,7 @@ namespace
 			.mipLevels = 1,
 		};
 		runtime.RecordEyeSubmission(
-			submittedTexture, Eye::kLeft, 1, 0.0f, 0.0f, 0.5f, 1.0f, 0, 77);
+			submittedTexture, Eye::kLeft, 1, 0.0f, 0.0f, 0.5f, 1.0f, 0, 77, 0);
 		runtime.RecordCullDecision(
 			versionId, versionGeneration, 12, false, 2, 2, 0, 0, 100);
 
@@ -1516,7 +1574,7 @@ namespace
 			runtime.RecordVisibilityCandidate(0x1000 + index, index, 1);
 		runtime.RecordEyeSubmission(
 			{ .d3dObject = 0x9000, .dimension = ResourceDimension::kTexture2D, .widthOrBytes = 2048, .height = 2048, .depthOrArraySize = 1, .mipLevels = 1 },
-			Eye::kRight, 2, 0.5f, 0.0f, 1.0f, 1.0f, 0, 9);
+			Eye::kRight, 2, 0.5f, 0.0f, 1.0f, 1.0f, 0, 9, 0);
 
 		auto snapshot = runtime.StopCapture();
 		Check(snapshot && snapshot->events.size() == 2,
@@ -3184,6 +3242,7 @@ namespace
 int main()
 {
 	try {
+		TestRetainedEyeSubmissionPublication();
 		TestFailedPostWriteObservationClearsCommandEpoch();
 		TestTransferVersionAdmissionAndTurnover();
 		TestInactiveRuntime();

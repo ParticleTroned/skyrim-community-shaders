@@ -4161,6 +4161,13 @@ namespace SIE
 
 	void ShaderCache::SetEnabled(bool value)
 	{
+		auto& upscaling = globals::features::upscaling;
+		std::unique_lock<std::recursive_mutex> renderScaleAuthorityLock(
+			upscaling.perfModeRenderTargetRecreateQueueMutex,
+			std::defer_lock);
+		if (globals::game::isVR)
+			renderScaleAuthorityLock.lock();
+
 		const auto action = ShaderCacheEnablePolicy::Resolve({
 			.enabled = IsEnabled(),
 			.enableRequested = IsEnableRequested(),
@@ -4177,7 +4184,6 @@ namespace SIE
 			isEnabled.store(true, std::memory_order_release);
 
 			if (globals::game::isVR) {
-				auto& upscaling = globals::features::upscaling;
 				if (ShaderCacheDisablePolicy::ShouldRequestRelatchOnEnable({
 						.enableAlreadyRequested = enableAlreadyRequested,
 						.vrRenderScaleRequested = upscaling.IsRenderScaleModeRequested(),
@@ -4218,33 +4224,19 @@ namespace SIE
 
 	void ShaderCache::ServicePendingDisable()
 	{
-		// Status resolution crosses render-scale controller state; stable frames
-		// must stop at the atomic pending flag.
-		const bool pendingDisable =
-			pendingDisableAfterVRNativeRestore.load(std::memory_order_acquire);
-		if (!pendingDisable)
-			return;
-
-		const bool enableStillRequested = IsEnableRequested();
-		const auto action = ShaderCacheDisablePolicy::ResolvePendingDisable({
-			.pendingDisable = pendingDisable,
-			.enableRequested = enableStillRequested,
-			.nativeTargetsRestored = false,
-		});
-		if (action == ShaderCacheDisablePolicy::PendingDisableAction::Cancel) {
-			pendingDisableAfterVRNativeRestore.store(false, std::memory_order_release);
-			return;
-		}
-
 		auto& upscaling = globals::features::upscaling;
-		if (upscaling.GetVRRenderScaleModeStatus() !=
-			Upscaling::VRRenderScaleStatus::Disabled) {
-			return;
+		const auto action = ShaderCacheDisablePolicy::ApplyPendingDisable(
+			upscaling.perfModeRenderTargetRecreateQueueMutex,
+			pendingDisableAfterVRNativeRestore,
+			enableRequested,
+			isEnabled,
+			[&upscaling] {
+				return upscaling.GetVRRenderScaleModeStatus() ==
+			           Upscaling::VRRenderScaleStatus::Disabled;
+			});
+		if (action == ShaderCacheDisablePolicy::PendingDisableAction::Complete) {
+			logger::info("Native VR render targets restored; custom shaders disabled");
 		}
-
-		pendingDisableAfterVRNativeRestore.store(false, std::memory_order_release);
-		isEnabled.store(false, std::memory_order_release);
-		logger::info("Native VR render targets restored; custom shaders disabled");
 	}
 
 	bool ShaderCache::IsAsync() const

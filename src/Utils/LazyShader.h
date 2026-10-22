@@ -72,6 +72,8 @@ namespace Util
 
 		/** @brief Returns the cached shader without triggering compilation. */
 		ShaderT* get() const { return shader.get(); }
+		/** @brief Returns whether first-use compilation failed and remains latched. */
+		bool HasFailed() const { return failed; }
 
 		/** @brief Returns whether a shader is currently cached. */
 		explicit operator bool() const { return shader != nullptr; }

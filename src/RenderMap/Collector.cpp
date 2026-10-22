@@ -210,8 +210,17 @@ namespace CSX::RenderMap
 		thread_local ThreadState threadState;
 		std::atomic_uint64_t nextSessionGeneration{ 1 };
 
+#ifdef CSX_RENDER_MAP_ACTIVATION_TESTING
+		std::atomic<Collector::TestClock> activationTestClock{ nullptr };
+		std::atomic<Collector::TestActivationCheckpoint> activationTestCheckpoint{ nullptr };
+#endif
+
 		std::uint64_t ReadClockTicks() noexcept
 		{
+#ifdef CSX_RENDER_MAP_ACTIVATION_TESTING
+			if (const auto clock = activationTestClock.load(std::memory_order_acquire))
+				return clock();
+#endif
 #ifdef _WIN32
 			LARGE_INTEGER value{};
 			return ::QueryPerformanceCounter(&value) ? static_cast<std::uint64_t>(value.QuadPart) : 0;
@@ -1292,6 +1301,10 @@ namespace CSX::RenderMap
 		std::uint64_t a_publicationGeneration) noexcept
 	{
 		PollCaptureWindow();
+#ifdef CSX_RENDER_MAP_ACTIVATION_TESTING
+		if (const auto checkpoint = activationTestCheckpoint.exchange(nullptr, std::memory_order_acq_rel))
+			checkpoint(*this);
+#endif
 		const std::lock_guard stopLock(stopMutex);
 		const auto session = activeSession.load(std::memory_order_acquire);
 		if (!session || !session->config.latePostProcessingWindow)
@@ -1312,8 +1325,16 @@ namespace CSX::RenderMap
 		boundary.publicationRejections += rejectedPublication;
 		if (rejectedTarget || rejectedFrame || rejectedPublication)
 			return false;
+		const auto activationTick = ReadClockTicks();
+		if (activationTick - session->window.armedTick >= DurationToTicks(session->config.maxActivationWait)) {
+			session->window.phase = CaptureWindowPhase::kIncomplete;
+			session->window.failure = CaptureWindowFailure::kActivationTimeout;
+			session->window.endTick = activationTick;
+			session->accepting.store(false, std::memory_order_release);
+			return false;
+		}
 		session->window.phase = CaptureWindowPhase::kBootstrap;
-		session->window.activationTick = ReadClockTicks();
+		session->window.activationTick = activationTick;
 		session->window.cpuFrame = a_frame;
 		session->window.publicationGeneration = a_publicationGeneration;
 		session->window.bootstrapThreadId = CurrentThreadId();
@@ -1322,6 +1343,14 @@ namespace CSX::RenderMap
 		session->accepting.store(true, std::memory_order_release);
 		return true;
 	}
+
+#ifdef CSX_RENDER_MAP_ACTIVATION_TESTING
+	void Collector::SetActivationTestHooks(TestClock a_clock, TestActivationCheckpoint a_checkpoint) noexcept
+	{
+		activationTestClock.store(a_clock, std::memory_order_release);
+		activationTestCheckpoint.store(a_checkpoint, std::memory_order_release);
+	}
+#endif
 
 	void Collector::CompleteWindowBootstrap(bool a_success, std::uint64_t a_expectedGeneration) noexcept
 	{

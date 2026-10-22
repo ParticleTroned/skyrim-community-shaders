@@ -4319,6 +4319,10 @@ if(BUILD_CONTROLLER_TESTS)
         src/RenderMap/Serialization.cpp
     )
     target_compile_features(render_map_controller_test PRIVATE cxx_std_23)
+    target_compile_definitions(
+        render_map_controller_test
+        PRIVATE CSX_RENDER_MAP_ACTIVATION_TESTING=1
+    )
     target_include_directories(
         render_map_controller_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"

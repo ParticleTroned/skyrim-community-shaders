@@ -819,6 +819,13 @@ namespace CSX::RenderMap
 		static std::uint64_t RequiredStorageBytes(const CollectorConfig& a_config) noexcept;
 		static std::uint64_t ClockFrequencyHz() noexcept;
 
+#ifdef CSX_RENDER_MAP_ACTIVATION_TESTING
+		using TestClock = std::uint64_t (*)() noexcept;
+		using TestActivationCheckpoint = void (*)(Collector&) noexcept;
+		/** Isolate clock and one-shot precommit scheduling controls to the test target. */
+		static void SetActivationTestHooks(TestClock a_clock, TestActivationCheckpoint a_checkpoint) noexcept;
+#endif
+
 	private:
 		void ExitScope(
 			std::uint64_t a_generation,

@@ -32,6 +32,84 @@ namespace
 			throw std::runtime_error(std::string(a_message));
 	}
 
+	struct ActivationTimingFixture
+	{
+		static inline std::uint64_t tick;
+		static inline std::uint64_t commitTick;
+		static inline bool advancing;
+		static inline bool checkpointReached;
+		static inline bool armedAtCheckpoint;
+
+		static std::uint64_t Clock() noexcept { return advancing ? tick++ : tick; }
+
+		static void AfterPreflight(Collector& a_collector) noexcept
+		{
+			checkpointReached = true;
+			armedAtCheckpoint = a_collector.GetCaptureWindow().phase == CaptureWindowPhase::kArmed;
+			tick = commitTick;
+			advancing = true;
+		}
+
+		explicit ActivationTimingFixture(std::uint64_t a_commitTick)
+		{
+			tick = Collector::ClockFrequencyHz() * 2;
+			commitTick = a_commitTick;
+			advancing = false;
+			checkpointReached = false;
+			armedAtCheckpoint = false;
+			Collector::SetActivationTestHooks(Clock, AfterPreflight);
+		}
+
+		~ActivationTimingFixture() { Collector::SetActivationTestHooks(nullptr, nullptr); }
+	};
+
+	void TestActivationDeadlineAtLockedCommit()
+	{
+		const auto frequency = Collector::ClockFrequencyHz();
+		Check(frequency > 1, "clock cannot represent activation boundary cases");
+		for (const auto boundary : { frequency * 3 - 1, frequency * 3, frequency * 3 + 1 }) {
+			ActivationTimingFixture timing(boundary);
+			Collector collector;
+			CollectorConfig config;
+			config.maxEvents = 16;
+			config.maxFrames = 3;
+			config.maxDuration = std::chrono::minutes(1);
+			config.latePostProcessingWindow = true;
+			config.activationTarget = 114;
+			config.requestedEventKindMask = EventKindBit(EventKind::kEyeSubmitted);
+			config.maxActivationWait = std::chrono::seconds(1);
+			config.maxBytes = Collector::RequiredStorageBytes(config);
+			Check(collector.Start(config) == StartResult::kStarted, "commit boundary capture did not arm");
+			const bool accepted = collector.ActivatePostProcessingWindow(114, 12, 77);
+			Check(timing.checkpointReached && timing.armedAtCheckpoint,
+				"regression did not pause after a timely preflight");
+			const bool expired = boundary >= frequency * 3;
+			Check(accepted != expired, "locked commit ignored activation deadline");
+			if (!expired) {
+				Check(collector.GetCaptureWindow().activationTick == boundary,
+					"activation publication did not reuse the admission tick");
+				Check(collector.Stop().has_value(), "timely boundary capture did not drain");
+				continue;
+			}
+			Check(!collector.IsCapturing(), "expired commit enabled acceptance");
+			Check(collector.Record(EventKind::kRasterStateObserved) != RecordResult::kRecorded,
+				"expired commit admitted bootstrap events");
+			collector.CompleteWindowBootstrap(true);
+			collector.AcceptWindowEye(Eye::kLeft, 12, 9, 77);
+			collector.AcceptWindowEye(Eye::kRight, 12, 9, 77);
+			const auto snapshot = collector.Stop();
+			Check(snapshot && snapshot->events.empty() && snapshot->window.phase == CaptureWindowPhase::kIncomplete &&
+					  snapshot->window.failure == CaptureWindowFailure::kActivationTimeout &&
+					  snapshot->window.activationTick == 0 && snapshot->window.endTick == boundary &&
+					  snapshot->window.acceptedEyeMask == 0 && !snapshot->window.bootstrapComplete,
+				"expired commit became a valid activation or accepted-eye window");
+			const auto serialized = SerializeCaptureWindow(snapshot->window);
+			Check(serialized["phase"] == "incomplete" && serialized["failure"] == "activation-timeout" &&
+					  serialized["activationTick"] == 0 && serialized["endTick"] == boundary,
+				"serialized window hid the locked activation timeout");
+		}
+	}
+
 	void TestPayloadSchemaCatalogue()
 	{
 		const std::set<std::string> advertised(
@@ -1113,6 +1191,7 @@ namespace
 int main()
 {
 	try {
+		TestActivationDeadlineAtLockedCommit();
 		TestTransferSerializationAndDurableAdmissionGap();
 		TestSummaryAndManifestCompleteness();
 		TestPayloadSchemaCatalogue();

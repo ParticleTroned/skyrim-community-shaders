@@ -3,7 +3,7 @@ if(NOT DEFINED PROJECT_ROOT OR NOT DEFINED OUTPUT_DIRECTORY)
 endif()
 file(READ "${PROJECT_ROOT}/src/EngineFixes/VRShadowBatch.cpp" _source)
 string(FIND "${_source}" "namespace VRShadowBatch" _start)
-string(FIND "${_source}" "\n\tvoid Install()" _end)
+string(FIND "${_source}" "\n\tvoid Install(bool a_enabled)" _end)
 if(_start EQUAL -1 OR _end LESS _start)
     message(FATAL_ERROR "Cannot locate production shadow batch hook bodies")
 endif()
@@ -15,7 +15,7 @@ string(SUBSTRING "${_source}" ${_end} -1 _install)
 if(
     NOT _install
         MATCHES
-        "void Install\\(\\)[ \t\r\n]*\\{.*\\}[ \t\r\n]*\\}[ \t\r\n]*$"
+        "void Install\\(bool a_enabled\\)[ \t\r\n]*\\{.*\\}[ \t\r\n]*\\}[ \t\r\n]*$"
 )
     message(
         FATAL_ERROR

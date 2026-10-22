@@ -238,6 +238,7 @@ public:
 		static constexpr uint32_t kButtonJoystickTrigger = 32;
 
 		// Performance optimization settings
+		bool EnableVRShadowBatch = true;               ///< Startup-only shadow submission protection; disable only for diagnosis.
 		bool EnableDepthBufferCullingExterior = true;  ///< Enable native depth culling outdoors
 		bool EnableDepthBufferCullingInterior = true;  ///< Enable native depth culling indoors
 		bool DepthCullingLegacyMode = false;           ///< Use native results without temporal pose capture or recovery

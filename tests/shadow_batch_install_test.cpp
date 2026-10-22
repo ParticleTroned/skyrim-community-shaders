@@ -2,6 +2,7 @@
 #include "Utils/VirtualFunctionHook.h"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <iostream>
 #include <source_location>
@@ -165,6 +166,8 @@ long DetourTransactionCommit()
 
 namespace VRShadowBatch
 {
+	std::atomic_bool installAttempted{ false };
+	std::atomic_bool installed{ false };
 	using Renderer = RE::BSBatchRenderer;
 	using Pass = RE::BSRenderPass;
 	using Register = void (*)(Renderer*, Pass*, std::uint32_t);
@@ -219,6 +222,8 @@ namespace Test
 	void ResetFixture()
 	{
 		state = {};
+		VRShadowBatch::installAttempted.store(false);
+		VRShadowBatch::installed.store(false);
 		for (std::size_t i = 0; i < VRShadowBatch::kHookSites.size(); ++i)
 			state.code[i] = VRShadowBatch::kHookSites[i].prefix;
 		state.code.back() = VRShadowBatch::kContiguousGroups.prefix;
@@ -228,9 +233,10 @@ namespace Test
 	void ExpectFailure()
 	{
 		try {
-			VRShadowBatch::Install();
+			VRShadowBatch::Install(true);
 		} catch (const StartupFailure&) {
 			Check(!state.published && !state.transaction && state.successMessages == 0);
+			Check(!VRShadowBatch::IsInstalled());
 			return;
 		}
 		Check(false);
@@ -254,10 +260,26 @@ namespace Test
 	}
 	void RuntimeAndByteAdmission()
 	{
+		for (const auto runtime : { Runtime::SE, Runtime::AE, Runtime::VR }) {
+			ResetFixture();
+			state.runtime = runtime;
+			state.version = 0;
+			state.code = {};
+			VRShadowBatch::Install(false);
+			VRShadowBatch::Install(true);
+			VRShadowBatch::Install(false);
+			Check(!VRShadowBatch::IsInstalled());
+			Check(state.addresses.empty() && state.calls.empty() && state.versionReads == 0);
+			Check(state.attachments.empty() && !state.published && !state.transaction);
+			Check(state.successMessages == (runtime == Runtime::VR ? 1 : 0));
+			for (auto slot : OriginalSlots())
+				Check(*slot == nullptr);
+		}
 		for (const auto runtime : { Runtime::SE, Runtime::AE }) {
 			ResetFixture();
 			state.runtime = runtime;
-			VRShadowBatch::Install();
+			VRShadowBatch::Install(true);
+			Check(!VRShadowBatch::IsInstalled());
 			Check(state.addresses.empty() && state.calls.empty() && state.versionReads == 0);
 			Check(!state.published && state.successMessages == 0);
 			for (auto slot : OriginalSlots())
@@ -281,8 +303,16 @@ namespace Test
 	void SuccessAndFailures()
 	{
 		ResetFixture();
-		VRShadowBatch::Install();
+		VRShadowBatch::Install(true);
+		Check(VRShadowBatch::IsInstalled());
 		Check(state.calls == "BUAAAAAAAC" && state.published && !state.transaction && state.successMessages == 1);
+		Check(state.addresses.size() == 15 && state.versionReads == 1);
+		CheckAttachments();
+		CheckOriginals(true);
+		VRShadowBatch::Install(false);
+		VRShadowBatch::Install(true);
+		Check(VRShadowBatch::IsInstalled());
+		Check(state.calls == "BUAAAAAAAC" && state.successMessages == 1);
 		Check(state.addresses.size() == 15 && state.versionReads == 1);
 		CheckAttachments();
 		CheckOriginals(true);

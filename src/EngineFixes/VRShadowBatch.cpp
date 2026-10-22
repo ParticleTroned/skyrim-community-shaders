@@ -20,6 +20,8 @@ namespace VRShadowBatch
 {
 	namespace
 	{
+		std::atomic_bool installAttempted{ false };
+		std::atomic_bool installed{ false };
 		using Renderer = RE::BSBatchRenderer;
 		using Pass = RE::BSRenderPass;
 		// Initialized contiguous words retain the complete draw identity without a hash staging buffer.
@@ -304,12 +306,17 @@ namespace VRShadowBatch
 		}
 	}
 
-	void Install()
+	void Install(bool a_enabled)
 	{
 		static_assert(sizeof(Renderer::PassGroup) == 0x30);
 		static_assert(offsetof(Pass, passGroupNext) == 0x30);
-		if (!REL::Module::IsVR())
+		// Native lists must never switch ownership after the startup decision.
+		if (!REL::Module::IsVR() || installAttempted.exchange(true, std::memory_order_acq_rel))
 			return;
+		if (!a_enabled) {
+			logger::info("[VR shadow batch] Disabled at startup for diagnosis; native shadow submissions are unprotected");
+			return;
+		}
 		if (REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15)
 			stl::report_and_fail("VR shadow batch isolation requires Skyrim VR 1.4.15.");
 		for (const auto& site : kHookSites) {
@@ -359,6 +366,12 @@ namespace VRShadowBatch
 			logger::critical("[VR shadow batch] Atomic hook installation failed: {}", result.error);
 			stl::report_and_fail("VR shadow batch isolation could not be installed. See CSX.log.");
 		}
+		installed.store(true, std::memory_order_release);
 		logger::info("[VR shadow batch] Installed lightless shadow-map submission isolation and batch retirement hooks");
+	}
+
+	bool IsInstalled() noexcept
+	{
+		return installed.load(std::memory_order_acquire);
 	}
 }

@@ -2357,7 +2357,7 @@ namespace Hooks
 	 */
 	void Install()
 	{
-		VRShadowBatch::Install();
+		VRShadowBatch::Install(globals::features::vr.settings.EnableVRShadowBatch);
 		Util::VRLoadingMenuClear::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		InstallVRFaceGenTintAssignmentDiagnostic();

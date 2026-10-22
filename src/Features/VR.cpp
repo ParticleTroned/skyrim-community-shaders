@@ -1,6 +1,7 @@
 #include "VR.h"
 #include "Diagnostics/VRPipelineDiagnostics.h"
 #include "DynamicCubemaps.h"
+#include "EngineFixes/VRShadowBatch.h"
 #include "FoveatedCommon.h"
 #include "GpuPass.h"
 #include "LocationContext.h"
@@ -9,6 +10,7 @@
 #include "Menu/Fonts.h"
 #include "Menu/OverlayPolicy.h"
 #include "Menu/OverlayRenderer.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsPage.h"
 #include "RE/B/BSOpenVR.h"
 #include "RE/B/BSOpenVRControllerDevice.h"
@@ -429,6 +431,7 @@ constexpr float kDefaultOffsetEpsilon = 0.0001f;
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VR::Settings,
+	EnableVRShadowBatch,
 	EnableDepthBufferCullingInterior,
 	EnableDepthBufferCullingExterior,
 	DepthCullingLegacyMode,
@@ -1169,6 +1172,17 @@ void VR::DrawSettings()
 	}
 
 	if (page.Is("diagnostics")) {
+		{
+			ImGui::SeparatorText("Shadow submission diagnostic");
+			const auto disabled = Util::DisableGuard(!globals::state || globals::state->IsPersistentMutationBlocked() || PerformanceTuningRenderer::HasActiveMeasurements());
+			if (Util::Widgets::Checkbox("VRShadowBatch protection (restart required)", &settings.EnableVRShadowBatch))
+				menu->RequestSettingsDirtyCheck();
+			const bool installed = VRShadowBatch::IsInstalled();
+			ImGui::Text("Active this session: %s", installed ? "On" : "Off");
+			ImGui::TextWrapped("Save settings and restart Skyrim VR to apply. Off is for diagnosis and can reintroduce shadow-related freezes.");
+			if (settings.EnableVRShadowBatch != installed)
+				Util::Text::WrappedWarning("Restart required after saving; the current session has not changed.");
+		}
 		{
 			DrawDebugSection();
 		}

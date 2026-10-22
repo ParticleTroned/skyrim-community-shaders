@@ -2947,8 +2947,15 @@ if(BUILD_CONTROLLER_TESTS)
             ${_settings_test_launcher} "${Python3_EXECUTABLE}"
             "${PROJECT_SOURCE_DIR}/tests/grass_collision_settings_test.py"
     )
+    add_test(
+        NAME VRShadowBatchToggle
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/vr_shadow_batch_toggle_test.py"
+    )
     set_tests_properties(
         GrassCollisionSettings
+        VRShadowBatchToggle
         PROPERTIES
             LABELS "ControllerTests"
             ENVIRONMENT

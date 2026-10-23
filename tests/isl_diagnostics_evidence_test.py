@@ -151,6 +151,7 @@ class Evidence(unittest.TestCase):
 
     def test_sidecar_pages_and_boundaries(self):
         raw,pages=pair();page=pages[0]
+        page['quality']['transitionOrBoundaryOverlap']=1
         page['total']=2;page['nextOffset']=1
         row={'ordinal':0,'metric':'EngineUpdate','generation':3,'thread':7,'frame':None,'caller':None,'enterQpc':1,'exitQpc':3}
         page['records']=[row]
@@ -161,6 +162,14 @@ class Evidence(unittest.TestCase):
         changed=copy.deepcopy(pages);changed[1]['offset']=0
         with self.assertRaises(E.EvidenceError):E.sidecar(changed,raw,'test')
         with self.assertRaises(E.EvidenceError):E.sidecar(pages[:1],raw,'test')
+
+    def test_old_policy_entering_after_admission_cannot_qualify(self):
+        raw,pages=pair()
+        # Unsampled/counters-only invocations still increment the collector's overlap count.
+        pages[0]['quality']['transitionOrBoundaryOverlap']=1
+        result=E.sidecar(pages,raw,'test')
+        self.assertFalse(result['complete'])
+        self.assertEqual(result['oldGenerationInvocationsDuringCapture'],1)
 
     def test_isolated_native_availability_keeps_reflex_rules(self):
         pages=fixture();condition=pages[0]['condition']

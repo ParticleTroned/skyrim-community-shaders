@@ -61,6 +61,11 @@ def sidecar(pages, raw_pages, expected_build):
         limits.append("unsettled generation at admission")
     # Boundary-straddling observations remain exported and are excluded from steady analysis.
     steady = [r for r in rows if r["generation"] == first["generation"] and b["startQpc"] <= r["enterQpc"] <= r["exitQpc"] <= b["stopQpc"]]
+    boundary_overlaps = sum(r['enterQpc'] < b['startQpc'] or r['exitQpc'] > b['stopQpc'] for r in rows)
+    old_generation_calls = quality['transitionOrBoundaryOverlap'] - boundary_overlaps
+    require(old_generation_calls >= 0, 'boundary records exceed the declared overlap count')
+    if old_generation_calls or any(r['generation'] != first['generation'] for r in rows):
+        limits.append('old-generation invocations entered the admitted capture')
     counters = {}
     for thread in first["threads"]:
         for metric, values in thread["counters"].items():
@@ -72,6 +77,7 @@ def sidecar(pages, raw_pages, expected_build):
             total["maxQpc"] = max(total["maxQpc"], values["maxQpc"])
     return {"schemaValid": True, "paginationComplete": True, "complete": not limits, "limitations": limits,
             "steadyRows": len(steady), "excludedBoundaryOrTransitionRows": len(rows) - len(steady), "counters": counters,
+            "oldGenerationInvocationsDuringCapture": old_generation_calls,
             "timedMs": {metric: raw.statistics(1000 * (r["exitQpc"] - r["enterQpc"]) / b["qpcFrequency"]
                                                for r in steady if r["metric"] == metric) for metric in {r["metric"] for r in steady}},
             "uniqueOverflow": quality["uniqueOverflow"], "countsMeaning": "unsampled totals include boundary overlap; sampled durations are not additive whole-frame costs"}

@@ -125,7 +125,7 @@ namespace CSX::Diagnostics::ISL
 			++total.timed;
 			total.elapsed += std::max<int64_t>(0, exit - enter);
 			total.maximum = std::max(total.maximum, exit - enter);
-			if (slot->rows.size() < slot->rows.capacity())
+			if (slot->rows.size() < Data().capacity)
 				slot->rows.push_back({ enter, exit, policy.generation, frame, caller, slot->thread.load(std::memory_order_relaxed), metric });
 			else
 				++slot->overflow;

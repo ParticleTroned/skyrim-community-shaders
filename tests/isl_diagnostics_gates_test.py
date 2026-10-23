@@ -10,6 +10,51 @@ from skylighting_settings_test import block
 ROOT = Path(__file__).resolve().parents[1]
 
 class Gates(unittest.TestCase):
+    def test_smaller_capture_respects_limit_after_buffer_reuse(self):
+        source = (ROOT / "src/Diagnostics/ISLDiagnostics.cpp").read_text()
+        finish = block(source, "void Scope::Finish() noexcept")
+        driver = r'''
+#include "Diagnostics/ISLDiagnostics.h"
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstdlib>
+#include <vector>
+namespace SKSE::stl {
+template<class F> struct scope_exit { F callback; ~scope_exit() { callback(); } };
+}
+namespace CSX::Diagnostics::ISL {
+namespace RM { int64_t Clock() { return 20; } }
+struct Row { int64_t enter,exit; uint64_t generation,frame; uintptr_t caller; uint32_t thread; Metric metric; };
+struct Totals { uint64_t count{},timed{}; int64_t elapsed{},maximum{}; };
+struct Slot {
+    std::atomic_flag busy{};
+    std::atomic_uint32_t thread{7};
+    unsigned depth{},invocationDepth{};
+    std::atomic_uint64_t invocationSequence{};
+    std::atomic_bool invocationActive{};
+    std::array<Totals,size_t(Metric::Count)> totals{};
+    std::vector<Row> rows;
+    uint64_t overflow{};
+} fixture;
+struct DataState { size_t capacity=16; } state;
+DataState& Data() { return state; }
+Scope::Scope(Metric selected,bool,uintptr_t) noexcept: policy{},slot(&fixture),metric(selected),enter(10) {
+    ++slot->depth; slot->busy.test_and_set();
+}
+Scope::~Scope() { Finish(); }
+FINISH
+}
+int main() {
+    using namespace CSX::Diagnostics::ISL;
+    fixture.rows.reserve(128);
+    for (unsigned n=0;n<20;++n) { Scope scope(Metric::EngineUpdate); scope.Finish(); }
+    if(fixture.rows.size()!=16 || fixture.overflow!=4 || fixture.depth || fixture.busy.test()) std::abort();
+    if(fixture.totals[size_t(Metric::EngineUpdate)].timed!=20) std::abort();
+}
+'''.replace('FINISH', finish)
+        self.compile_driver(driver, (True,))
+
     def test_particle_subtractions_preserve_lock_and_native_admission(self):
         source = (ROOT / "src/Features/LightLimitFix.cpp").read_text()
         body = block(source, "void LightLimitFix::AddParticleLightLuminance(")

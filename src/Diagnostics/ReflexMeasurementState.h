@@ -437,7 +437,6 @@ namespace CSX::Diagnostics::ReflexMeasurement
 				throw std::logic_error("admission must close before freeze");
 			if (frozen)
 				return;
-			frozen = true;
 			MergeStarted(app, appStarted);
 			MergeStarted(native, nativeStarted);
 			finalize();

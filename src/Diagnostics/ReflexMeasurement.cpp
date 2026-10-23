@@ -207,7 +207,7 @@ namespace CSX::Diagnostics::ReflexMeasurement
 			s.cursor.Consume(std::span(rows.data(), count), [&](auto row) {
 				auto& j = s.journal;
 				std::scoped_lock lock(j.mutex);
-				if (j.compositor.size() == j.compositor.capacity())
+				if (j.compositor.size() >= s.requestedCapacity)
 					++j.quality.overflow;
 				else
 					j.compositor.push_back(row);

@@ -103,6 +103,30 @@ namespace
 		j.End(app, AppRecord{ 20, 51 }, j.app);
 		Check(j.app.size() == 1 && !j.app[0].completed && !j.Outstanding(), "late completion changed frozen evidence or stranded admission");
 	}
+	void FailedPreparationAndFinalization()
+	{
+		Journal j;
+		j.Start(Mode::Passive, 16, 10, false);
+		j.Close(11);
+		j.Freeze(12, false, false);
+		Check(!j.quality.Complete() && !j.Outstanding(), "failed preparation became valid evidence");
+		j.Start(Mode::Passive, 16, 20);
+		const auto ticket = j.Begin(21);
+		j.RecordStart(ticket, AppRecord{ 21, 0, 1, 1, true }, j.appStarted, j.appLimit);
+		j.Close(22);
+		bool rejected = false;
+		try {
+			j.FreezeWith(23, true, false, [] { throw std::runtime_error("injected finalization failure"); });
+		} catch (const std::runtime_error&) {
+			rejected = true;
+		}
+		Check(rejected && !j.frozen && j.freeze == 0, "partial finalization was published as frozen");
+		j.Freeze(24, true, false);
+		Check(j.frozen && j.freeze == 24 && j.app.size() == 1 && j.quality.missingCompletions == 1,
+			"finalization retry lost or duplicated the unfinished record");
+		j.End(ticket, AppRecord{ 21, 25, 1, 1, true }, j.app);
+		Check(j.app.size() == 1 && !j.app[0].completed, "late completion modified frozen evidence");
+	}
 
 	void IndependentHistory()
 	{
@@ -153,6 +177,7 @@ int main()
 	AdmissionAndDrain();
 	LossAndTimeout();
 	MissingCompletions();
+	FailedPreparationAndFinalization();
 	IndependentHistory();
 	Restoration();
 	return EXIT_SUCCESS;

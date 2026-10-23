@@ -29,7 +29,10 @@ def sidecar(pages, raw_pages, expected_build):
     b, rb = first["boundaries"], source["boundaries"]
     for left, right in (("startQpc", "applicationAdmissionStartQpc"), ("stopQpc", "applicationAdmissionStopQpc"),
                         ("freezeQpc", "freezeQpc"), ("qpcFrequency", "qpcFrequency")):
-        require(b[left] == rb[right], "raw/sidecar boundary mismatch")
+        value = b[left]
+        if left != "qpcFrequency" and finite(value) and value <= 0:
+            value = None
+        require(value == rb[right], "raw/sidecar boundary mismatch")
     cursor, rows = 0, []
     for index, page in enumerate(pages):
         require(required <= page.keys(), "missing sidecar page metadata")
@@ -54,16 +57,19 @@ def sidecar(pages, raw_pages, expected_build):
         require(type(quality.get(key)) is int and quality[key] >= 0, "missing transition inspection")
         loss.add(key)
     limits = [k for k in loss - {"uniqueOverflow", "transitionOrBoundaryOverlap"} if quality[k]]
+    valid_window = all(finite(b[key]) and b[key] > 0 for key in ("startQpc", "stopQpc", "freezeQpc", "qpcFrequency")) and b["startQpc"] <= b["stopQpc"] <= b["freezeQpc"]
+    if not valid_window:
+        limits.append("unavailable or invalid capture clock/boundaries")
     if quality["contaminated"]:
         limits.append("outside control or unsafe game state during capture")
     condition = first["condition"]
     if not condition["ready"] or condition["requestedGeneration"] != first["generation"] or condition["effectiveGeneration"] != first["generation"]:
         limits.append("unsettled generation at admission")
     # Boundary-straddling observations remain exported and are excluded from steady analysis.
-    steady = [r for r in rows if r["generation"] == first["generation"] and b["startQpc"] <= r["enterQpc"] <= r["exitQpc"] <= b["stopQpc"]]
-    boundary_overlaps = sum(r['enterQpc'] < b['startQpc'] or r['exitQpc'] > b['stopQpc'] for r in rows)
-    old_generation_calls = quality['transitionOrBoundaryOverlap'] - boundary_overlaps
-    require(old_generation_calls >= 0, 'boundary records exceed the declared overlap count')
+    steady = [r for r in rows if valid_window and r["generation"] == first["generation"] and b["startQpc"] <= r["enterQpc"] <= r["exitQpc"] <= b["stopQpc"]]
+    boundary_overlaps = sum(r['enterQpc'] < b['startQpc'] or r['exitQpc'] > b['stopQpc'] for r in rows) if valid_window else None
+    old_generation_calls = quality['transitionOrBoundaryOverlap'] - boundary_overlaps if valid_window else None
+    require(old_generation_calls is None or old_generation_calls >= 0, 'boundary records exceed the declared overlap count')
     if old_generation_calls or any(r['generation'] != first['generation'] for r in rows):
         limits.append('old-generation invocations entered the admitted capture')
     counters = {}
@@ -93,6 +99,9 @@ def experiment_applied(phase, validation, header, original):
     counts = validation['counters']
     count = lambda name: counts.get(name, {}).get('count', 0)
     reasons = []
+    if gates['observationLevel'] == 'off' and any(gates[key] != 'normal' for key in
+            ('luminanceMode', 'rendererMode', 'particleDetectionMode', 'editorOverrideMode')):
+        reasons.append('eligible subtraction work cannot be established with observations off')
     if gates['observationLevel'] != 'off':
         if gates['luminanceMode'] != 'normal' and (not count('LuminanceEligible') or not count('LuminanceNative')):
             reasons.append('no eligible native luminance calls observed')
@@ -242,11 +251,11 @@ def correlate_qpc(raw_pages, side_pages):
 
 def comparison(phases):
     references = [p for p in phases if p["condition"]["label"] == "R"]
-    reproducible = len(references) >= 3 and all(p["valid"] and p["waveform"].get("combDetected", False) for p in references)
+    reproducible = len(references) >= 3 and all(p["valid"] and p["waveform"].get("status") == "MEASURED_PROXY" and p["waveform"].get("combDetected", False) for p in references)
     output = []
     for label in dict.fromkeys(p["condition"]["label"] for p in phases if p["condition"]["label"] != "R"):
         treatments = [p for p in phases if p["condition"]["label"] == label]
-        valid = reproducible and len(treatments) >= 2 and all(p["valid"] for p in treatments)
+        valid = reproducible and len(treatments) >= 2 and all(p["valid"] and p["waveform"].get("status") == "MEASURED_PROXY" for p in treatments)
         reduced = valid and all(not p["waveform"].get("combDetected", True) for p in treatments)
         baseline_rates = [p['waveform'].get('toothRatePerSecond') for p in references]
         treatment_rates = [p['waveform'].get('toothRatePerSecond') for p in treatments]
@@ -255,7 +264,7 @@ def comparison(phases):
         fewer = valid and quantified and all(x < .8 * baseline_rate for x in treatment_rates)
         more = valid and quantified and all(x > 1.2 * baseline_rate for x in treatment_rates)
         outcome = 'invalid or incomplete' if not valid else 'reduced' if reduced or fewer else 'increased' if more else 'unchanged or mixed'
-        output.append({"label": label, "status": "REPEATED_PROXY_REDUCTION" if reduced else "NO_REPEATED_PROXY_REDUCTION" if valid else "INCONCLUSIVE",
+        output.append({"label": label, "status": "REPEATED_PROXY_REDUCTION" if reduced or fewer else "NO_REPEATED_PROXY_REDUCTION" if valid else "INCONCLUSIVE",
                        "outcome": outcome, "referenceToothRatePerSecond": baseline_rate, "treatmentToothRatesPerSecond": treatment_rates,
                        "rateRule": "each repeat must differ from median reference by more than 20%; no average-FPS inference",
                        "referenceCombReproduced": reproducible, "runtimeFixProven": False,

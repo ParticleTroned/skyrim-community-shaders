@@ -90,7 +90,11 @@ namespace CSX::Diagnostics::ISL
 	{
 		const auto& d = Data();
 		const auto p = CurrentPolicy();
-		return { { "liveRestored", p.luminance == Luminance::Normal && p.renderer == Renderer::Normal && p.particle == Particle::Normal && !p.editorBypass && p.Pack() == d.requested.load() },
+		const auto& isl = globals::features::inverseSquareLighting;
+		const bool settled = !isl.loaded || isl.IsPerformanceCostMeasurementReady();
+		return { { "liveRestored", !d.sessionActive && !d.settingsOwned && settled &&
+									   (p.Pack() & 0xffff) == (Policy{}.Pack() & 0xffff) && p.Pack() == d.requested.load() },
+			{ "islSettled", settled },
 			{ "conflict", d.restorationConflict }, { "expired", d.expired.load() }, { "startup", d.startupReceipt },
 			{ "restartRequired", d.suppressed || VRShadowBatch::IsInstalled() != globals::features::vr.settings.EnableVRShadowBatch } };
 	}

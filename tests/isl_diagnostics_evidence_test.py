@@ -35,11 +35,26 @@ def pair():
     return raw,[header]
 
 class Evidence(unittest.TestCase):
+    def test_cancelled_before_admission_exports_without_qualifying(self):
+        raw,pages=pair()
+        raw[0]['boundaries']['applicationAdmissionStartQpc']=None
+        pages[0]['boundaries']['startQpc']=0
+        result=E.sidecar(pages,raw,'test')
+        self.assertTrue(result['schemaValid'] and result['paginationComplete'])
+        self.assertFalse(result['complete'])
+        self.assertIsNone(result['oldGenerationInvocationsDuringCapture'])
+        self.assertIn('unavailable or invalid capture clock/boundaries',result['limitations'])
+        pages[0]['boundaries']['startQpc']=None
+        self.assertFalse(E.sidecar(pages,raw,'test')['complete'])
+
     def test_unexercised_subtraction_is_inconclusive(self):
         phase = {'gates': R.NORMAL | {'luminanceMode': 'native'}}
         self.assertFalse(E.experiment_applied(phase, {'counters': {}}, {}, {})['valid'])
         counts = {'LuminanceEligible': {'count': 1}, 'LuminanceNative': {'count': 2}}
         self.assertTrue(E.experiment_applied(phase, {'counters': counts}, {}, {})['valid'])
+        phase['gates']['observationLevel'] = 'off'
+        self.assertFalse(E.experiment_applied(phase, {'counters': {}}, {}, {})['valid'])
+        self.assertTrue(E.experiment_applied({'gates': R.NORMAL | {'observationLevel': 'off'}}, {'counters': {}}, {}, {})['valid'])
         phase = {'gates': R.NORMAL, 'pruneFrames': 120}
         header = {'prune': {'consumed': False, 'delayed': False, 'activationQpc': 4}, 'boundaries': {'startQpc': 4}}
         self.assertFalse(E.experiment_applied(phase, {'counters': {}}, header, {})['valid'])
@@ -127,7 +142,7 @@ class Evidence(unittest.TestCase):
         self.assertEqual(E.waveform(changed,rules)['status'],'UNAVAILABLE')
 
     def test_no_reference_is_never_a_fix(self):
-        phases=[{'name':str(i),'condition':{'label':label},'valid':True,'waveform':{'combDetected':False}}
+        phases=[{'name':str(i),'condition':{'label':label},'valid':True,'waveform':{'status':'MEASURED_PROXY','combDetected':False}}
                 for i,label in enumerate(['R','L','L','R','V','V','R'])]
         result=E.comparison(phases)
         self.assertFalse(result['referenceCombReproduced'])
@@ -135,6 +150,13 @@ class Evidence(unittest.TestCase):
         for p in phases:
             if p['condition']['label']=='R':p['waveform']['combDetected']=True
         self.assertTrue(all(x['status']=='REPEATED_PROXY_REDUCTION' for x in E.comparison(phases)['comparisons']))
+        phases[1]['waveform']={'status':'UNAVAILABLE','classification':'UNAVAILABLE'}
+        self.assertEqual(E.comparison(phases)['comparisons'][0]['status'],'INCONCLUSIVE')
+        for p in phases:
+            p['waveform']={'status':'MEASURED_PROXY','combDetected':True,
+                           'toothRatePerSecond': 2 if p['condition']['label']=='R' else 1}
+        result=E.comparison(phases)
+        self.assertTrue(all(x['status']=='REPEATED_PROXY_REDUCTION' and x['outcome']=='reduced' for x in result['comparisons']))
         phases[0]['valid']=False
         self.assertFalse(E.comparison(phases)['referenceCombReproduced'])
 

@@ -188,6 +188,7 @@ namespace CSX::Diagnostics::ReflexMeasurement
 			} catch (...) {
 				s.captureSession = 0;
 				s.journal.CloseTimed(Clock);
+				s.journal.Freeze(Clock(), false, false);
 				throw;
 			}
 			s.captureReleased = false;

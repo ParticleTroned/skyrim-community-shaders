@@ -33,12 +33,14 @@ namespace CSX::ViewRefresh
 			EyeTransform transform;
 			uint32_t width, height, eye, reverseDepth;
 			Vector2 depthUvOffset;
-			Vector2 padding{};
+			uint32_t depthWidth = 0, depthHeight = 0;
 		};
 		static_assert(sizeof(Constants) == 288);
 
 		struct EyeResources
 		{
+			std::unique_ptr<Texture2D> color;
+			vr::EColorSpace colorSpace = vr::ColorSpace_Gamma;
 			std::unique_ptr<Texture2D> distance;
 			std::unique_ptr<Texture2D> owner;
 			std::unique_ptr<Texture2D> output;
@@ -68,7 +70,13 @@ namespace CSX::ViewRefresh
 			float worldScale = 0;
 			Matrix sourcePose;
 			std::unique_ptr<Texture2D> depth;
-			std::unique_ptr<Texture2D> color;
+			uint32_t depthWidth = 0, depthHeight = 0;
+			uint64_t historyRevision = 0;
+			uint8_t capturedEyes = 0;
+			uint8_t preparedEyes = 0;
+			bool latePoseSelected = false;
+			Clock::time_point latePoseSelectedAt;
+			Matrix lateTarget;
 			std::array<EyeResources, 2> eyes;
 			std::unique_ptr<ConstantBuffer> constants;
 			Util::LazyShader<ID3D11ComputeShader> selectDepth, selectSource, resolveColor;
@@ -82,7 +90,9 @@ namespace CSX::ViewRefresh
 			bool graphicsFailed = false;
 			bool retryGraphics = false;
 			StereoReceipt receipt;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			uint64_t renderedPairs = 0, reusedPairs = 0, correctedPairs = 0, failedPairs = 0;
+#endif
 		};
 		Runtime runtime;
 		void Failure(const char* operation, const char* message);
@@ -123,6 +133,10 @@ namespace CSX::ViewRefresh
 			const auto* state = globals::state;
 			if (runtime.graphicsFailed)
 				return false;
+			if (state->IsSaveLoadSafeModeActive() || state->pendingPostLoadRuntimeReset) {
+				runtime.reason = "Save/load recovery needs fresh rendering";
+				return false;
+			}
 			auto* ui = globals::game::ui;
 			if (!ui || ui->GameIsPaused() || state->IsMainOrLoadingMenuOpen() || state->isMapMenuOpen ||
 				ui->IsMenuOpen(RE::DialogueMenu::MENU_NAME) || ui->IsMenuOpen(RE::RaceSexMenu::MENU_NAME) ||
@@ -136,10 +150,10 @@ namespace CSX::ViewRefresh
 				runtime.reason = "Menu presentation requires fresh rendering";
 				return false;
 			}
-			if (upscaling.IsVRRenderScaleModeLatched() || upscaling.IsPresentationUpscalingActive() ||
+			if (upscaling.HasPendingVRUpscalingTransition() ||
 				upscaling.IsVRPostLoadCompositorHoldActive() || upscaling.IsVRInitialLoadPresentationProtectionActive() ||
-				upscaling.GetVRNativeRestorePresentationGuardActiveEpoch() != 0 || upscaling.IsNeuralRenderingRequested()) {
-				runtime.reason = "Requires stable native-resolution presentation";
+				upscaling.GetVRNativeRestorePresentationGuardActiveEpoch() != 0) {
+				runtime.reason = "Waiting for a stable presentation configuration";
 				return false;
 			}
 			// Engine TAA has no public skipped-frame history reset contract.
@@ -166,7 +180,7 @@ namespace CSX::ViewRefresh
 			runtime.reused = runtime.pairActive = runtime.pairRefreshed = false;
 			runtime.pendingPair.store(false, std::memory_order_release);
 			runtime.depth.reset();
-			runtime.color.reset();
+			runtime.capturedEyes = runtime.preparedEyes = 0;
 			runtime.eyes = {};
 			runtime.constants.reset();
 			runtime.selectDepth.Reset();
@@ -193,6 +207,9 @@ namespace CSX::ViewRefresh
 
 		bool EnsureContext()
 		{
+			// Settings retries cannot replace resources between the two eye submissions.
+			if (runtime.pairActive)
+				return runtime.device == globals::d3d::device && runtime.context && runtime.isolatedState;
 			if (runtime.device != globals::d3d::device || runtime.retryGraphics) {
 				ReleaseGraphics();
 				runtime.retryGraphics = false;
@@ -208,8 +225,8 @@ namespace CSX::ViewRefresh
 
 		bool ValidSize(const D3D11_TEXTURE2D_DESC& desc)
 		{
-			return desc.Width >= 2 && desc.Width <= 8192 && desc.Width % 2 == 0 &&
-			       desc.Height >= 1 && desc.Height <= 4096 && desc.ArraySize == 1 &&
+			return desc.Width >= 1 && desc.Width <= 16384 &&
+			       desc.Height >= 1 && desc.Height <= 8192 && desc.ArraySize == 1 &&
 			       desc.MipLevels == 1 && desc.SampleDesc.Count == 1;
 		}
 
@@ -244,9 +261,9 @@ namespace CSX::ViewRefresh
 			return result;
 		}
 
-		bool EnsureOutputs()
+		bool EnsureOutputs(uint32_t eye)
 		{
-			if (!EnsureContext() || !runtime.color || !runtime.depth)
+			if (!EnsureContext() || !runtime.eyes[eye].color || !runtime.depth)
 				return false;
 			if (!runtime.selectDepth.Get(L"Data/Shaders/VR/ViewRefresh.hlsl", {}, "cs_5_0", "SelectDepth", "ViewRefresh::SelectDepth") ||
 				!runtime.selectSource.Get(L"Data/Shaders/VR/ViewRefresh.hlsl", {}, "cs_5_0", "SelectSource", "ViewRefresh::SelectSource") ||
@@ -254,17 +271,15 @@ namespace CSX::ViewRefresh
 				Failure("shader preparation", "A required compute shader could not be compiled");
 				return false;
 			}
-			const auto width = runtime.color->desc.Width / 2;
-			const auto height = runtime.color->desc.Height;
-			for (uint32_t eye = 0; eye < 2; ++eye) {
-				auto& resources = runtime.eyes[eye];
-				if (resources.output && resources.output->desc.Width == width && resources.output->desc.Height == height)
-					continue;
-				EyeResources candidate;
-				candidate.distance = MakeTexture(width, height, DXGI_FORMAT_R32_UINT, true, eye ? "ViewRefresh::RightDistance" : "ViewRefresh::LeftDistance");
-				candidate.owner = MakeTexture(width, height, DXGI_FORMAT_R32_UINT, true, eye ? "ViewRefresh::RightOwner" : "ViewRefresh::LeftOwner");
-				candidate.output = MakeTexture(width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, true, eye ? "ViewRefresh::RightColor" : "ViewRefresh::LeftColor");
-				resources = std::move(candidate);
+			auto& resources = runtime.eyes[eye];
+			const auto width = resources.color->desc.Width, height = resources.color->desc.Height;
+			if (!resources.output || resources.output->desc.Width != width || resources.output->desc.Height != height) {
+				auto distance = MakeTexture(width, height, DXGI_FORMAT_R32_UINT, true, eye ? "ViewRefresh::RightDistance" : "ViewRefresh::LeftDistance");
+				auto owner = MakeTexture(width, height, DXGI_FORMAT_R32_UINT, true, eye ? "ViewRefresh::RightOwner" : "ViewRefresh::LeftOwner");
+				auto output = MakeTexture(width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, true, eye ? "ViewRefresh::RightColor" : "ViewRefresh::LeftColor");
+				resources.distance = std::move(distance);
+				resources.owner = std::move(owner);
+				resources.output = std::move(output);
 			}
 			if (!runtime.constants) {
 				D3D11_BUFFER_DESC desc{};
@@ -275,61 +290,60 @@ namespace CSX::ViewRefresh
 			return true;
 		}
 
-		bool PreparePair(const Matrix& target, uint64_t cycle)
+		bool PrepareEye(uint32_t eye, const Matrix& target)
 		{
 			Util::OpenVRContext openvr;
-			if (!openvr.IsValid() || !runtime.color || !runtime.depth || !BoundedMotion(runtime.sourcePose, target))
+			if (!openvr.IsValid() || !runtime.eyes[eye].color || !runtime.depth)
 				return false;
-			std::array<Constants, 2> data{};
-			for (uint32_t eye = 0; eye < 2; ++eye) {
-				auto& cb = data[eye];
-				const auto eyeToHead = Util::HmdMatrix34ToMatrix(openvr.system->GetEyeToHeadTransform(static_cast<vr::EVREye>(eye)));
-				if (!BuildEyeTransform(runtime.projection[eye], eyeToHead, runtime.sourcePose, target, runtime.worldScale, cb.transform))
-					return false;
-				cb.width = runtime.color->desc.Width / 2;
-				cb.height = runtime.color->desc.Height;
-				cb.eye = eye;
-				cb.reverseDepth = runtime.projection[eye]._43 > 0;
-				cb.depthUvOffset = runtime.depthUvOffset[eye];
-			}
-			if (!EnsureOutputs())
+			Constants data{};
+			const auto eyeToHead = Util::HmdMatrix34ToMatrix(openvr.system->GetEyeToHeadTransform(static_cast<vr::EVREye>(eye)));
+			if (!BuildEyeTransform(runtime.projection[eye], eyeToHead, runtime.sourcePose, target, runtime.worldScale, data.transform) || !EnsureOutputs(eye))
 				return false;
-			// Shader compilation or allocation may outlive the admission checked by the caller.
-			if (std::chrono::duration<double>(Clock::now() - runtime.capturedAt).count() > MaximumSceneAgeSeconds)
-				return false;
-			CS_GPU_PASS("ViewRefresh::ReprojectStereo");
+			auto& resources = runtime.eyes[eye];
+			data.width = resources.color->desc.Width;
+			data.height = resources.color->desc.Height;
+			data.eye = eye;
+			data.reverseDepth = runtime.projection[eye]._43 > 0;
+			data.depthUvOffset = runtime.depthUvOffset[eye];
+			data.depthWidth = runtime.depthWidth;
+			data.depthHeight = runtime.depthHeight;
+			CS_GPU_PASS("ViewRefresh::ReprojectEye");
 			Util::ScopedDeviceContextState isolated(runtime.context.get(), runtime.isolatedState.get());
 			if (!isolated)
 				return false;
 			auto* context = globals::d3d::context;
-			ID3D11ShaderResourceView* inputs[] = { runtime.color->srv.get(), runtime.depth->srv.get() };
+			ID3D11ShaderResourceView* inputs[] = { resources.color->srv.get(), runtime.depth->srv.get() };
 			context->CSSetShaderResources(0, 2, inputs);
 			auto* cb = runtime.constants->CB();
 			context->CSSetConstantBuffers(0, 1, &cb);
+			runtime.constants->Update(data);
 			constexpr UINT empty[] = { UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX };
-			for (uint32_t eye = 0; eye < 2; ++eye) {
-				auto& resources = runtime.eyes[eye];
-				runtime.constants->Update(data[eye]);
-				context->ClearUnorderedAccessViewUint(resources.distance->uav.get(), empty);
-				context->ClearUnorderedAccessViewUint(resources.owner->uav.get(), empty);
-				ID3D11UnorderedAccessView* outputs[] = { resources.distance->uav.get(), resources.owner->uav.get(), resources.output->uav.get() };
-				context->CSSetUnorderedAccessViews(0, 3, outputs, nullptr);
-				for (auto* shader : { runtime.selectDepth.get(), runtime.selectSource.get(), runtime.resolveColor.get() }) {
-					context->CSSetShader(shader, nullptr, 0);
-					context->Dispatch((data[eye].width + 7) / 8, (data[eye].height + 7) / 8, 1);
-				}
+			context->ClearUnorderedAccessViewUint(resources.distance->uav.get(), empty);
+			context->ClearUnorderedAccessViewUint(resources.owner->uav.get(), empty);
+			ID3D11UnorderedAccessView* outputs[] = { resources.distance->uav.get(), resources.owner->uav.get(), resources.output->uav.get() };
+			context->CSSetUnorderedAccessViews(0, 3, outputs, nullptr);
+			for (auto* shader : { runtime.selectDepth.get(), runtime.selectSource.get(), runtime.resolveColor.get() }) {
+				context->CSSetShader(shader, nullptr, 0);
+				context->Dispatch((data.width + 7) / 8, (data.height + 7) / 8, 1);
 			}
-			ID3D11UnorderedAccessView* noOutputs[3]{};
-			ID3D11ShaderResourceView* noInputs[2]{};
-			context->CSSetUnorderedAccessViews(0, 3, noOutputs, nullptr);
-			context->CSSetShaderResources(0, 2, noInputs);
 			if (FAILED(globals::d3d::device->GetDeviceRemovedReason())) {
 				Failure("reprojection", "The D3D11 device is unavailable");
 				return false;
 			}
+			return true;
+		}
+
+		bool PreparePair(const Matrix& target, uint64_t cycle)
+		{
+			if (!BoundedMotion(runtime.sourcePose, target) || !PrepareEye(0, target) || !PrepareEye(1, target))
+				return false;
+			// Compilation and dispatch may outlive the admission checked by the caller.
+			if (std::chrono::duration<double>(Clock::now() - runtime.capturedAt).count() > MaximumSceneAgeSeconds)
+				return false;
 			runtime.displayedPose = Util::MatrixToHmdMatrix34(target);
 			runtime.prepared = CurrentIdentity();
 			runtime.prepared.cycle = cycle;
+			runtime.preparedEyes = 3;
 			runtime.pendingPair.store(true, std::memory_order_release);
 			return true;
 		}
@@ -444,7 +458,8 @@ namespace CSX::ViewRefresh
 		runtime.pendingPair.store(false, std::memory_order_release);
 		runtime.prepared = {};
 		runtime.reused = false;
-		if (!Eligible(true) || !runtime.settings.reuseScenes || !CanReuse(runtime.source, CurrentIdentity(), std::chrono::duration<double>(Clock::now() - runtime.capturedAt).count()))
+		if (!Eligible(true) || !runtime.settings.reuseScenes ||
+			runtime.historyRevision != globals::features::upscaling.GetHistoryResetRevision() || !CanReuse(runtime.source, CurrentIdentity(), std::chrono::duration<double>(Clock::now() - runtime.capturedAt).count()))
 			return false;
 		auto* player = RE::PlayerCharacter::GetSingleton();
 		if (!player)
@@ -470,6 +485,20 @@ namespace CSX::ViewRefresh
 			Failure("scene preparation", error.what());
 			return false;
 		}
+	}
+
+	bool IsReusingScene()
+	{
+		if (!runtime.serviceRequired.load(std::memory_order_acquire))
+			return false;
+		const std::scoped_lock lock(runtime.mutex);
+		// Resource invalidation cannot supply the world work skipped earlier in this frame.
+		return runtime.reused && globals::state && runtime.prepared.frame == globals::state->frameCount;
+	}
+
+	bool HasPendingSubmission()
+	{
+		return runtime.pendingPair.load(std::memory_order_acquire);
 	}
 
 	void CaptureWorld()
@@ -508,10 +537,15 @@ namespace CSX::ViewRefresh
 			if (!ValidSize(desc))
 				return;
 			const auto activeSize = Util::ConvertToDynamic(globals::state->screenSize);
-			if (activeSize.x != static_cast<float>(desc.Width) || activeSize.y != static_cast<float>(desc.Height)) {
-				runtime.reason = "Dynamic resolution requires a fresh scene";
+			if (!std::isfinite(activeSize.x) || !std::isfinite(activeSize.y) ||
+				activeSize.x < 2 || activeSize.y < 1 || activeSize.x > desc.Width || activeSize.y > desc.Height)
 				return;
-			}
+			const auto activeWidth = static_cast<uint32_t>(std::lround(activeSize.x));
+			const auto activeHeight = static_cast<uint32_t>(std::lround(activeSize.y));
+			if (activeWidth % 2 != 0)
+				return;
+			runtime.depthWidth = activeWidth / 2;
+			runtime.depthHeight = activeHeight;
 			const auto& camera = globals::game::frameBufferCached;
 			for (uint32_t eye = 0; eye < 2; ++eye) {
 				const auto projection = camera.GetCameraProjUnjittered(eye).Transpose();
@@ -535,6 +569,8 @@ namespace CSX::ViewRefresh
 			}
 			CS_GPU_PASS("ViewRefresh::CaptureDepth");
 			Util::ScopedDeviceContextState isolated(runtime.context.get(), runtime.isolatedState.get());
+			if (!isolated)
+				return;
 			globals::d3d::context->CopyResource(runtime.depth->resource.get(), depthTexture.get());
 			runtime.source = CurrentIdentity();
 			runtime.sourcePose = runtime.renderPose;
@@ -551,11 +587,10 @@ namespace CSX::ViewRefresh
 		}
 	}
 
-	void BeginSubmitPair(ID3D11Texture2D* color, uint64_t cycle)
+	void BeginSubmitPair(uint64_t cycle)
 	{
 		if (!runtime.serviceRequired.load(std::memory_order_acquire) && !runtime.pendingPair.load(std::memory_order_acquire))
 			return;
-		const std::shared_lock resources(Hooks::GetRenderTargetRecreationMutex());
 		const std::scoped_lock lock(runtime.mutex);
 		runtime.pairActive = false;
 		runtime.pairRefreshed = false;
@@ -566,40 +601,107 @@ namespace CSX::ViewRefresh
 			runtime.pairRefreshed = true;
 			return;
 		}
-		if (!color || !Eligible() || !BelongsToCurrentDevice(color) || !SameFrame(runtime.source, runtime.pairIdentity) || runtime.source.cycle != cycle ||
-			runtime.source.settingsRevision != runtime.revision ||
-			!runtime.depth)
+		runtime.capturedEyes = runtime.preparedEyes = 0;
+		runtime.latePoseSelected = false;
+		if (!Eligible() || !SameFrame(runtime.source, runtime.pairIdentity) || runtime.source.cycle != cycle ||
+			runtime.source.settingsRevision != runtime.revision || !runtime.depth)
 			return;
+		runtime.pairActive = true;
+		runtime.pendingPair.store(true, std::memory_order_release);
+		runtime.reason = "Waiting for completed stereo presentation";
+	}
+
+	Submission PrepareSubmission(vr::EVREye eye, uint64_t cycle, const vr::Texture_t* input,
+		const vr::VRTextureBounds_t* bounds, vr::EVRSubmitFlags flags, vr::VRTextureWithPose_t& output)
+	{
+		if (!runtime.pendingPair.load(std::memory_order_acquire))
+			return Submission::Original;
+		const std::shared_lock resources(Hooks::GetRenderTargetRecreationMutex());
+		const std::scoped_lock lock(runtime.mutex);
+		if (!runtime.pairActive)
+			return Submission::Original;
+		const auto fail = [&]() {
+			runtime.source.complete = false;
+			runtime.receipt.malformed = true;
+			return runtime.pairRefreshed || runtime.reused ? Submission::Reject : Submission::Original;
+		};
+		if (runtime.reused || !SameFrame(runtime.pairIdentity, CurrentIdentity()) || cycle != runtime.pairIdentity.cycle)
+			return fail();
+		if (eye != vr::Eye_Left && eye != vr::Eye_Right)
+			return fail();
+		const auto index = static_cast<uint32_t>(eye);
+		const auto bit = static_cast<uint8_t>(1u << index);
+		if (runtime.receipt.malformed || (runtime.capturedEyes & bit) || flags != vr::Submit_Default ||
+			!input || !input->handle || input->eType != vr::TextureType_DirectX)
+			return fail();
 		try {
+			auto* texture = static_cast<ID3D11Texture2D*>(input->handle);
+			if (!BelongsToCurrentDevice(texture))
+				return fail();
 			D3D11_TEXTURE2D_DESC desc{};
-			color->GetDesc(&desc);
-			if (!ValidSize(desc) || desc.Width != runtime.depth->desc.Width || desc.Height != runtime.depth->desc.Height)
-				return;
-			DXGI_FORMAT sampledFormat = desc.Format;
-			if (sampledFormat == DXGI_FORMAT_R8G8B8A8_TYPELESS || sampledFormat == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)
-				sampledFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-			if (sampledFormat != DXGI_FORMAT_R8G8B8A8_UNORM && sampledFormat != DXGI_FORMAT_R16G16B16A16_FLOAT)
-				return;
-			if (!runtime.color || runtime.color->desc.Width != desc.Width || runtime.color->desc.Height != desc.Height || runtime.color->desc.Format != sampledFormat)
-				runtime.color = MakeTexture(desc.Width, desc.Height, sampledFormat, false, "ViewRefresh::SceneColor");
+			texture->GetDesc(&desc);
+			const auto regionBounds = bounds ? *bounds : vr::VRTextureBounds_t{ 0, 0, 1, 1 };
+			ImageRegion region;
+			if (!ValidSize(desc) || !ResolveImageRegion(desc.Width, desc.Height,
+										regionBounds.uMin, regionBounds.vMin, regionBounds.uMax, regionBounds.vMax, region))
+				return fail();
+			if (!MatchesEyeLayout(desc.Width, desc.Height, index, region))
+				return fail();
+			auto format = desc.Format;
+			if (format == DXGI_FORMAT_R8G8B8A8_TYPELESS || format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)
+				format = DXGI_FORMAT_R8G8B8A8_UNORM;
+			if (format != DXGI_FORMAT_R8G8B8A8_UNORM && format != DXGI_FORMAT_R16G16B16A16_FLOAT)
+				return fail();
+			const auto colorSpace = input->eColorSpace == vr::ColorSpace_Auto ?
+			                            (format == DXGI_FORMAT_R16G16B16A16_FLOAT ? vr::ColorSpace_Linear : vr::ColorSpace_Gamma) :
+			                            input->eColorSpace;
+			if (colorSpace != vr::ColorSpace_Linear && colorSpace != vr::ColorSpace_Gamma)
+				return fail();
+			const auto& peer = runtime.eyes[1 - index];
+			if (runtime.capturedEyes && (!peer.color || peer.color->desc.Width != region.width ||
+											peer.color->desc.Height != region.height || peer.colorSpace != colorSpace))
+				return fail();
+			auto& destination = runtime.eyes[index];
+			if (!destination.color || destination.color->desc.Width != region.width || destination.color->desc.Height != region.height || destination.color->desc.Format != format)
+				destination.color = MakeTexture(region.width, region.height, format, false, index ? "ViewRefresh::RightSource" : "ViewRefresh::LeftSource");
+			destination.colorSpace = colorSpace;
 			{
 				CS_GPU_PASS("ViewRefresh::CaptureColor");
 				Util::ScopedDeviceContextState isolated(runtime.context.get(), runtime.isolatedState.get());
-				globals::d3d::context->CopyResource(runtime.color->resource.get(), color);
+				if (!isolated)
+					return fail();
+				const D3D11_BOX box{ region.left, region.top, 0, region.left + region.width, region.top + region.height, 1 };
+				globals::d3d::context->CopySubresourceRegion(destination.color->resource.get(), 0, 0, 0, 0, texture, 0, &box);
 			}
-			runtime.pairActive = true;
-			runtime.pendingPair.store(true, std::memory_order_release);
-			runtime.reason = "Fresh stereo scene captured";
-			if (runtime.settings.latePose) {
-				Matrix target;
-				if (LatePose(target) && PreparePair(target, cycle)) {
-					runtime.pairRefreshed = true;
-					runtime.reason = "Correcting rendered stereo pose";
-				}
+			// Choose once after vendor work; both eyes must use the same predicted pose.
+			if (!runtime.capturedEyes) {
+				runtime.latePoseSelectedAt = Clock::now();
+				runtime.latePoseSelected = runtime.settings.latePose && LatePose(runtime.lateTarget);
 			}
+			runtime.capturedEyes |= bit;
+			if (!runtime.latePoseSelected)
+				return Submission::Original;
+			if (!PrepareEye(index, runtime.lateTarget)) {
+				Failure("late pose", "The completed presentation eye could not be refreshed");
+				return fail();
+			}
+			if (std::chrono::duration<double>(Clock::now() - runtime.latePoseSelectedAt).count() > MaximumSceneAgeSeconds) {
+				runtime.reason = "Late pose preparation exceeded its freshness limit";
+				return fail();
+			}
+			runtime.pairRefreshed = true;
+			runtime.preparedEyes |= bit;
+			runtime.prepared = runtime.pairIdentity;
+			runtime.displayedPose = Util::MatrixToHmdMatrix34(runtime.lateTarget);
+			output.handle = destination.output->resource.get();
+			output.eType = vr::TextureType_DirectX;
+			output.eColorSpace = colorSpace;
+			output.mDeviceToAbsoluteTracking = runtime.displayedPose;
+			runtime.reason = "Correcting completed stereo presentation";
+			return Submission::Refreshed;
 		} catch (const std::exception& error) {
-			Failure("stereo capture", error.what());
-			runtime.pairActive = false;
+			Failure("presentation capture", error.what());
+			return fail();
 		}
 	}
 
@@ -611,11 +713,16 @@ namespace CSX::ViewRefresh
 		if (eye != vr::Eye_Left && eye != vr::Eye_Right)
 			return false;
 		if (!runtime.pairActive || !runtime.pairRefreshed || !SameFrame(runtime.prepared, CurrentIdentity()) ||
-			runtime.prepared.cycle != cycle || !runtime.eyes[eye].output)
+			runtime.prepared.cycle != cycle || (runtime.preparedEyes & (1u << static_cast<uint32_t>(eye))) == 0 || !runtime.eyes[eye].output)
 			return false;
+		if (runtime.reused && std::chrono::duration<double>(Clock::now() - runtime.capturedAt).count() > MaximumSceneAgeSeconds) {
+			runtime.source.complete = false;
+			runtime.reason = "Prepared scene expired before presentation";
+			return false;
+		}
 		texture.handle = runtime.eyes[eye].output->resource.get();
 		texture.eType = vr::TextureType_DirectX;
-		texture.eColorSpace = vr::ColorSpace_Gamma;
+		texture.eColorSpace = runtime.eyes[eye].colorSpace;
 		texture.mDeviceToAbsoluteTracking = runtime.displayedPose;
 		return true;
 	}
@@ -640,21 +747,32 @@ namespace CSX::ViewRefresh
 			return;
 		const auto current = CurrentIdentity();
 		const bool complete = SameFrame(runtime.pairIdentity, current) && cycle == current.cycle && runtime.receipt.Complete(cycle);
-		runtime.source.complete = complete && !runtime.graphicsFailed && !runtime.reused && SameFrame(runtime.source, runtime.pairIdentity) && runtime.source.settingsRevision == runtime.revision;
+		runtime.source.complete = complete && runtime.capturedEyes == 3 && !runtime.graphicsFailed && !runtime.reused && SameFrame(runtime.source, runtime.pairIdentity) && runtime.source.settingsRevision == runtime.revision;
+		if (runtime.source.complete)
+			runtime.historyRevision = globals::features::upscaling.GetHistoryResetRevision();
 		if (!complete) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			++runtime.failedPairs;
+#endif
 			runtime.reason = "Stereo submission failed; rendering fresh scenes";
 		} else if (runtime.reused) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			++runtime.reusedPairs;
+#endif
+			runtime.reason = "Reusing one scene with current stereo tracking";
 		} else {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			++runtime.renderedPairs;
 			if (runtime.pairRefreshed)
 				++runtime.correctedPairs;
+#endif
+			runtime.reason = runtime.pairRefreshed ? "Correcting completed stereo presentation" : "Final stereo scene captured";
 		}
 		runtime.pairActive = false;
 		ServiceDisabled();
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	nlohmann::json Status()
 	{
 		const std::scoped_lock lock(runtime.mutex);
@@ -665,6 +783,7 @@ namespace CSX::ViewRefresh
 			{ "renderedPairs", runtime.renderedPairs }, { "reusedPairs", runtime.reusedPairs },
 			{ "correctedPairs", runtime.correctedPairs }, { "failedPairs", runtime.failedPairs } };
 	}
+#endif
 
 	void DrawSettings()
 	{
@@ -675,10 +794,10 @@ namespace CSX::ViewRefresh
 			auto disabled = Util::DisableGuard(!settings.enabled);
 			changed |= ImGui::Checkbox("Scene Reuse", &settings.reuseScenes);
 			if (auto tooltip = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted("Render a fresh world every other display frame while stationary. Head tracking continues; hands and world animation update at scene cadence. Requires native resolution without engine TAA or Neural Rendering.");
+				ImGui::TextUnformatted("Render a fresh world every other display frame while stationary. Head tracking continues; hands and world animation update at scene cadence. Supports DLSS, render scale and Neural Rendering. Engine TAA must be off. Temporal histories restart after reused frames, which can reduce image stability.");
 			changed |= ImGui::Checkbox("Late Pose Correction", &settings.latePose);
 			if (auto tooltip = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted("Refresh the pose of freshly rendered frames on SteamVR. Adds a reprojection pass. Scene Reuse also works with the game's normal OpenComposite pose cycle.");
+				ImGui::TextUnformatted("Refresh the final image after DLSS/NR processing using a newer pose on SteamVR. Adds a reprojection pass. Scene Reuse also works with the game's normal OpenComposite pose cycle.");
 		}
 		if (changed)
 			Configure(settings);

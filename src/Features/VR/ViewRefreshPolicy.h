@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Utils/NormalizedCoordinates.h"
 #include <SimpleMath.h>
 #include <cmath>
 #include <cstdint>
@@ -13,6 +14,36 @@ namespace CSX::ViewRefresh
 	inline constexpr double MaximumSceneAgeSeconds = 0.035;
 	inline constexpr float MaximumHeadMovementMeters = 0.05f;
 	inline constexpr float MinimumRotationCosine = 0.99026807f;  // Eight degrees.
+
+	struct ImageRegion
+	{
+		uint32_t left = 0, top = 0, width = 0, height = 0;
+	};
+
+	/** Round upright, contained eye rectangles to source pixel boundaries. */
+	inline bool ResolveImageRegion(uint32_t width, uint32_t height, float left, float top, float right, float bottom, ImageRegion& region)
+	{
+		if (!width || !height || width > 16384 || height > 16384 ||
+			!std::isfinite(left) || !std::isfinite(top) || !std::isfinite(right) || !std::isfinite(bottom) ||
+			left < 0 || top < 0 || right > 1 || bottom > 1 || left >= right || top >= bottom)
+			return false;
+		const auto x0 = Util::NormalizedCoordinates::ResolvePixelBoundary(left, width);
+		const auto y0 = Util::NormalizedCoordinates::ResolvePixelBoundary(top, height);
+		const auto x1 = Util::NormalizedCoordinates::ResolvePixelBoundary(right, width);
+		const auto y1 = Util::NormalizedCoordinates::ResolvePixelBoundary(bottom, height);
+		if (x1 <= x0 || y1 <= y0 || x1 - x0 > 8192 || y1 - y0 > 8192)
+			return false;
+		region = { x0, y0, x1 - x0, y1 - y0 };
+		return true;
+	}
+
+	/** Full-eye projection is valid only for a whole eye or its exact stereo half. */
+	inline bool MatchesEyeLayout(uint32_t width, uint32_t height, uint32_t eye, const ImageRegion& region)
+	{
+		return eye < 2 && region.top == 0 && region.height == height &&
+		       ((region.left == 0 && region.width == width) ||
+				   (region.width * 2 == width && region.left == eye * region.width));
+	}
 
 	/** A reused image never becomes the source of another image. */
 	struct SceneIdentity

@@ -71,6 +71,23 @@ namespace
 			Require(!StationaryPlayer(position, angles, position, Vector3(0, invalid, 0)), "Invalid player angle admitted");
 		}
 	}
+	void PresentationRegions()
+	{
+		ImageRegion eye;
+		Require(ResolveImageRegion(4000, 2000, 0.5f, 0, 1, 1, eye) && eye.left == 2000 && eye.width == 2000 && eye.height == 2000,
+			"Native stereo bounds were not isolated");
+		Require(ResolveImageRegion(2000, 2000, 0, 0, 1, 1, eye) && eye.left == 0 && eye.width == 2000,
+			"Completed per-eye DLSS/NR image was rejected");
+		for (float value : { -1.0f, 2.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() })
+			Require(!ResolveImageRegion(2000, 2000, value, 0, 1, 1, eye), "Invalid image bounds reached a copy");
+		Require(MatchesEyeLayout(4000, 2000, 1, { 2000, 0, 2000, 2000 }), "Right stereo layout rejected");
+		Require(!MatchesEyeLayout(4000, 2000, 0, { 2000, 0, 2000, 2000 }), "Wrong stereo half accepted");
+		Require(!MatchesEyeLayout(4000, 2000, 1, { 1000, 0, 2000, 2000 }), "Partial eye crop accepted as a full projection");
+		Require(!ResolveImageRegion(0, 2000, 0, 0, 1, 1, eye), "Empty texture accepted");
+		Require(!ResolveImageRegion(20000, 2000, 0, 0, 1, 1, eye), "Oversize allocation accepted");
+		Require(!ResolveImageRegion(2000, 2000, 0, 1, 1, 0, eye), "Inverted eye accepted");
+		Require(!ResolveImageRegion(2000, 2000, 0.5f, 0, 0.5f, 1, eye), "Empty region accepted");
+	}
 	void Cameras()
 	{
 		const auto source = Matrix::CreateRotationY(0.3f) * Matrix::CreateTranslation(4, 1.7f, -3);
@@ -145,6 +162,7 @@ int main()
 {
 	try {
 		Admission();
+		PresentationRegions();
 		Cameras();
 		SubmissionReceipts();
 		std::cout << "View Refresh cadence, stale inputs, recenter, pose validation, stereo pivots and projection conventions passed\n";

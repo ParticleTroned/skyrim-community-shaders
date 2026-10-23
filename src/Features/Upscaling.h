@@ -3438,6 +3438,7 @@ public:
 	bool previousVendorUpscalerSelected = false;
 	bool depthUpscaleUseWideKernel = false;
 	bool historyResetRequested = true;
+	std::atomic<uint64_t> historyResetRevision{ 1 };
 	bool historyResetThisFrame = false;
 	NeuralRendering::PreDlssInputHistory flatDlssInputHistory;
 	std::atomic<uint32_t> neuralTemporalAdmissionLatch{ 0 };
@@ -4086,6 +4087,8 @@ public:
 	void UpscaleDepth();
 	void RefreshSubmitStageUnderwaterMask();
 	void RequestHistoryReset() noexcept;
+	/** Revision of temporal invalidation, shared with retained presentation consumers. */
+	uint64_t GetHistoryResetRevision() const noexcept { return historyResetRevision.load(std::memory_order_relaxed); }
 	[[nodiscard]] bool RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesiredProfile& a_request);
 	bool StoreDeferredVRRenderScaleRequestLatestWinsLocked(
 		const VRRenderScaleDesiredProfile& a_request);

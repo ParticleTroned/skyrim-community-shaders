@@ -9,7 +9,7 @@ cbuffer Refresh : register(b0)
 	uint EyeIndex;
 	uint ReverseDepth;
 	float2 DepthUvOffset;
-	float2 Padding;
+	uint2 DepthSize;
 };
 
 Texture2D<float4> SceneColor : register(t0);
@@ -20,8 +20,8 @@ RWTexture2D<float4> RefreshedColor : register(u2);
 
 int2 DepthPixel(float2 uv)
 {
-	int2 pixel = clamp(int2((uv + DepthUvOffset) * EyeSize), 0, int2(EyeSize) - 1);
-	pixel.x += EyeIndex * EyeSize.x;
+	int2 pixel = clamp(int2((uv + DepthUvOffset) * DepthSize), 0, int2(DepthSize) - 1);
+	pixel.x += EyeIndex * DepthSize.x;
 	return pixel;
 }
 
@@ -70,7 +70,7 @@ bool Project(uint2 pixel, out int2 target, out uint distance)
 
 float4 ReadOwner(uint owner)
 {
-	return SceneColor.Load(int3(owner % EyeSize.x + EyeIndex * EyeSize.x, owner / EyeSize.x, 0));
+	return SceneColor.Load(int3(owner % EyeSize.x, owner / EyeSize.x, 0));
 }
 
 int2 AngularSource(uint2 pixel)
@@ -81,7 +81,6 @@ int2 AngularSource(uint2 pixel)
 	if (all(isfinite(source)) && source.w > 1e-6)
 		sourceUv = source.xy / source.w * float2(0.5, -0.5) + 0.5;
 	int2 sourcePixel = clamp(int2(saturate(sourceUv) * EyeSize), 0, int2(EyeSize) - 1);
-	sourcePixel.x += EyeIndex * EyeSize.x;
 	return sourcePixel;
 }
 
@@ -95,7 +94,7 @@ int2 AngularSource(uint2 pixel)
 		return;
 	}
 	int2 angularPixel = AngularSource(pixel);
-	float2 angularUv = (float2(angularPixel - int2(EyeIndex * EyeSize.x, 0)) + 0.5) / EyeSize;
+	float2 angularUv = (float2(angularPixel) + 0.5) / EyeSize;
 	float angularDepth = SceneDepth.Load(int3(DepthPixel(angularUv), 0));
 	if (!isfinite(angularDepth) || (ReverseDepth ? angularDepth <= 0.000001 : angularDepth >= 0.999999)) {
 		RefreshedColor[pixel] = SceneColor.Load(int3(angularPixel, 0));

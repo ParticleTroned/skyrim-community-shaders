@@ -4,6 +4,7 @@
 #include "Upscaling/FoveatedMaskCalibrationJson.h"
 #include "Upscaling/NeuralRendering/FramebufferTransaction.h"
 #include "Utils/GpuMemoryBudget.h"
+#include "VR/ViewRefresh.h"
 
 #include "BuildProvenance.h"
 #include "Deferred.h"
@@ -60681,6 +60682,7 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 
 void Upscaling::RequestHistoryReset() noexcept
 {
+	historyResetRevision.fetch_add(1, std::memory_order_relaxed);
 	historyResetRequested = true;
 	if (IsNeuralRenderingEnabled())
 		NeuralRendering::CharacterRendering::Instance().Invalidate(globals::state ?
@@ -68185,6 +68187,9 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 {
 	auto& upscaling = globals::features::upscaling;
 	upscaling.InvalidateFrameGenerationInputs();
+	// The prepared pair already contains final postprocessing and vendor output.
+	if (CSX::ViewRefresh::IsReusingScene())
+		return;
 	if (globals::game::isVR)
 		upscaling.ReleaseVRGameEntryVendorWorkGatesIfConverged();
 	auto upscaleMethod = upscaling.GetRuntimeUpscaleMethod();

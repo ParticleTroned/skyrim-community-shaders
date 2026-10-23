@@ -797,7 +797,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				});
 				const auto refreshCycle = g_vrSubmitPairBoundaryState.compositorCycle;
 				if (!nestedSubmit)
-					CSX::ViewRefresh::BeginSubmitPair(a_texture, refreshCycle);
+					CSX::ViewRefresh::BeginSubmitPair(refreshCycle);
 				const SKSE::stl::scope_exit endViewRefresh([&]() noexcept {
 					if (!nestedSubmit)
 						CSX::ViewRefresh::EndSubmitPair(refreshCycle);
@@ -966,7 +966,43 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							  bool a_auditBlackKeepalive = false,
 							  const vr::Texture_t* a_screenshotTexture = nullptr,
 							  const vr::VRTextureBounds_t* a_screenshotBounds = nullptr) {
-				(void)a_probeObservation;
+				bool refreshedSubmission = std::string_view(a_path) == "view-refresh";
+				vr::VRTextureWithPose_t finalRefresh{};
+				const vr::VRTextureBounds_t finalRefreshBounds{ 0, 0, 1, 1 };
+				if (!refreshedSubmission && submitBoundaryIdentity.scopeToken != 0 && CSX::ViewRefresh::HasPendingSubmission()) {
+					const bool finalVendorOutput = a_probeObservation && a_probeObservation->valid &&
+					                               a_probeObservation->path == Upscaling::VRRenderScalePresentationPath::VendorEvaluated &&
+					                               a_probeObservation->frame == (globals::state ? globals::state->frameCount : 0) &&
+					                               a_probeObservation->compositorCycleToken == compositorCycleToken &&
+					                               a_probeObservation->eyeIndex == static_cast<uint32_t>(eEye) &&
+					                               !a_probeObservation->transitionCooldown && !a_probeObservation->loadingOrMenuContext;
+					const bool mainVendorReady = !upscaling.GetRuntimeResolutionPlan().vendorMethod ||
+					                             (globals::state && upscaling.vrMainPassVendorDispatchCompletedFrame.load(std::memory_order_acquire) == globals::state->frameCount);
+					const bool nativeOutput = std::string_view(a_path) == "original" && mainVendorReady &&
+					                          !upscaling.IsPresentationUpscalingActive() && !upscaling.IsVRRenderScaleModeLatched();
+					winrt::com_ptr<ID3D11Texture2D> sourceLifetime;
+					vr::Texture_t source{};
+					if (submitBoundaryIdentity.matchedToken != 0 &&
+						(std::string_view(a_path) == "original" || std::string_view(a_path) == "upscaled") &&
+						(nativeOutput || finalVendorOutput) && a_postLoadReleaseToken == 0 && a_postLoadKeepaliveToken == 0 &&
+						a_texture && a_texture->handle && a_texture->eType == vr::TextureType_DirectX) {
+						sourceLifetime = RetainExactOpenVRSubmitTexture(a_texture->handle);
+						source = *a_texture;
+						source.handle = sourceLifetime.get();
+					}
+					const auto decision = CSX::ViewRefresh::PrepareSubmission(eEye, compositorCycleToken,
+						sourceLifetime ? &source : nullptr, a_bounds, a_submitFlags, finalRefresh);
+					if (decision == CSX::ViewRefresh::Submission::Reject)
+						return vr::VRCompositorError_RequestFailed;
+					if (decision == CSX::ViewRefresh::Submission::Refreshed) {
+						a_texture = &finalRefresh;
+						a_bounds = &finalRefreshBounds;
+						a_submitFlags = vr::Submit_TextureWithPose;
+						a_screenshotTexture = nullptr;
+						a_screenshotBounds = nullptr;
+						refreshedSubmission = true;
+					}
+				}
 				(void)a_auditBlackKeepalive;
 				const bool observeScreenshot =
 					a_allowScreenshotCapture &&
@@ -1138,7 +1174,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				if (submitBoundaryIdentity.scopeToken != 0)
 					CSX::ViewRefresh::RecordSubmission(eEye, compositorCycleToken,
 						submitBoundaryIdentity.matchedToken != 0 && result == vr::VRCompositorError_None && canPublishSubmitResult,
-						std::string_view(a_path) == "view-refresh");
+						refreshedSubmission);
 				const auto completionResult =
 					result == vr::VRCompositorError_None && !canPublishSubmitResult ?
 						vr::VRCompositorError_RequestFailed :
@@ -1852,6 +1888,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				const vr::VRTextureBounds_t refreshedBounds{ 0, 0, 1, 1 };
 				return submit("view-refresh", &refreshedTexture, &refreshedBounds, vr::Submit_TextureWithPose);
 			}
+			if (CSX::ViewRefresh::IsReusingScene())
+				return vr::VRCompositorError_RequestFailed;
 			if (!upscaling.IsVRPostLoadCompositorHoldActive() &&
 				!upscaling.IsVRRenderScaleModeLatched() &&
 				!upscaling.IsPresentationUpscalingActive() &&

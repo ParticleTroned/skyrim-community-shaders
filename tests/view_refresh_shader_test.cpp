@@ -35,6 +35,7 @@ namespace
 		std::array<ComPtr<ID3D11ComputeShader>, 3> shaders;
 		std::array<ComPtr<ID3D11ShaderReflection>, 3> reflections;
 		Texture color, depth, distance, owner, output;
+		uint32_t depthWidth = Width, depthHeight = Height;
 		std::array<Vector4, Width * 2 * Height> colors;
 		std::array<float, Width * 2 * Height> depths;
 		Matrix projection{ DirectX::XMMatrixPerspectiveFovLH(DirectX::XM_PIDIV2, 1, 1, 100) };
@@ -77,7 +78,7 @@ namespace
 				Util::SetResourceName(shaders[i].Get(), "ViewRefreshTest::%s", entries[i]);
 				Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflections[i].GetAddressOf())));
 			}
-			color = Create(Width * 2, DXGI_FORMAT_R32G32B32A32_FLOAT, false, "Color");
+			color = Create(Width, DXGI_FORMAT_R32G32B32A32_FLOAT, false, "Color");
 			depth = Create(Width * 2, DXGI_FORMAT_R32_FLOAT, false, "Depth");
 			distance = Create(Width, DXGI_FORMAT_R32_UINT, true, "Distance");
 			owner = Create(Width, DXGI_FORMAT_R32_UINT, true, "Owner");
@@ -85,7 +86,6 @@ namespace
 			for (uint32_t y = 0; y < Height; ++y)
 				for (uint32_t x = 0; x < Width * 2; ++x)
 					colors[y * Width * 2 + x] = Vector4(static_cast<float>(x % Width), static_cast<float>(y), x < Width ? 1.0f : 2.0f, 0.75f);
-			context->UpdateSubresource(color.resource.Get(), 0, nullptr, colors.data(), sizeof(Vector4) * Width * 2, 0);
 		}
 
 		float RawDepth(float z) const
@@ -96,6 +96,11 @@ namespace
 
 		std::vector<Vector4> Run(uint32_t eye, const EyeTransform& transform, DirectX::SimpleMath::Vector2 depthUvOffset = {})
 		{
+			std::array<Vector4, Width * Height> eyeColors;
+			for (uint32_t y = 0; y < Height; ++y)
+				for (uint32_t x = 0; x < Width; ++x)
+					eyeColors[y * Width + x] = colors[y * Width * 2 + eye * Width + x];
+			context->UpdateSubresource(color.resource.Get(), 0, nullptr, eyeColors.data(), sizeof(Vector4) * Width, 0);
 			context->UpdateSubresource(depth.resource.Get(), 0, nullptr, depths.data(), sizeof(float) * Width * 2, 0);
 			const UINT clear[] = { UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX };
 			context->ClearUnorderedAccessViewUint(distance.uav.Get(), clear);
@@ -112,6 +117,7 @@ namespace
 				constants.SetVariable("TargetClipToSourceSkyClip", transform.targetClipToSourceSkyClip);
 				constants.SetVariable("EyeSize", std::array{ Width, Height });
 				constants.SetVariable("EyeIndex", eye);
+				constants.SetVariable("DepthSize", std::array{ depthWidth, depthHeight });
 				constants.SetVariable("ReverseDepth", projection._43 > 0 ? 1u : 0u);
 				constants.SetVariable("DepthUvOffset", depthUvOffset);
 				constants.Bind(context.Get());
@@ -221,6 +227,21 @@ namespace
 			for (const auto& pixel : output)
 				Require(pixel.z == static_cast<float>(eye + 1), "Jittered depth lookup crossed eyes");
 		}
+		gpu.depthWidth = Width / 2;
+		gpu.depthHeight = 5;
+		gpu.depths.fill(std::numeric_limits<float>::quiet_NaN());
+		for (uint32_t y = 0; y < gpu.depthHeight; ++y)
+			for (uint32_t x = 0; x < gpu.depthWidth * 2; ++x)
+				gpu.depths[y * Width * 2 + x] = gpu.RawDepth(x < gpu.depthWidth ? 10.0f : 20.0f);
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			const auto output = gpu.Run(eye, translated);
+			for (uint32_t y = 0; y < Height; ++y)
+				for (uint32_t x = 2; x < Width; ++x)
+					Require(output[y * Width + x] == gpu.colors[y * Width * 2 + eye * Width + x - (eye ? 1 : 2)],
+						"Reduced/padded stereo depth did not map to final-resolution color");
+		}
+		gpu.depthWidth = Width;
+		gpu.depthHeight = Height;
 		gpu.projection = Matrix(DirectX::XMMatrixPerspectiveFovRH(DirectX::XM_PIDIV2, 1, 1, 100));
 		Require(BuildEyeTransform(gpu.projection, Matrix::Identity, Matrix::Identity, Matrix::Identity, 100, identity), "Right-handed setup failed");
 		gpu.depths.fill(gpu.RawDepth(-10));

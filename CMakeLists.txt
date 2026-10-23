@@ -3649,9 +3649,13 @@ if(BUILD_CONTROLLER_TESTS)
     set(_view_refresh_test_headers
         "${_view_refresh_test_dir}/view_refresh_identity.h"
         "${_view_refresh_test_dir}/view_refresh_disabled.h"
+        "${_view_refresh_test_dir}/view_refresh_context.h"
         "${_view_refresh_test_dir}/view_refresh_configure.h"
         "${_view_refresh_test_dir}/view_refresh_submission.h"
         "${_view_refresh_test_dir}/view_refresh_request.h"
+        "${_view_refresh_test_dir}/view_refresh_reuse.h"
+        "${_view_refresh_test_dir}/view_refresh_presentation.h"
+        "${_view_refresh_test_dir}/view_refresh_submit_route.h"
     )
     add_custom_command(
         OUTPUT ${_view_refresh_test_headers}
@@ -3661,12 +3665,17 @@ if(BUILD_CONTROLLER_TESTS)
             "${PROJECT_SOURCE_DIR}/tests/extract_view_refresh_lifecycle.cmake"
         DEPENDS
             src/Features/VR/ViewRefresh.cpp
+            src/Features/VR/InSceneOverlay.cpp
             src/Features/VR/ViewRefreshDevBench.cpp
             tests/extract_view_refresh_lifecycle.cmake
             tests/extract_source_region.cmake
         VERBATIM
     )
-    add_controller_test(view_refresh_lifecycle_test ViewRefreshLifecycle tests/view_refresh_lifecycle_test.cpp)
+    add_d3d_shader_test(view_refresh_lifecycle_test ViewRefreshLifecycle tests/view_refresh_lifecycle_test.cpp)
+    target_compile_definitions(
+        view_refresh_lifecycle_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
     target_sources(
         view_refresh_lifecycle_test
         PRIVATE ${_view_refresh_test_headers}

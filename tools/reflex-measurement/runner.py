@@ -57,15 +57,18 @@ def plan(config):
     return phases
 
 
-def payload(result):
+def payload(result, key="result", action=None):
     require(result.get("ok") and result.get("transportOk"), "DevBench transport/guard/semantic failure")
     contents = result["data"]["content"]
     require(len(contents) == 1, "expected one structured tool response")
     content = contents[0]
     if isinstance(content, dict) and content.get("type") == "text":
         content = json.loads(content["text"])
-    require(content.get("ok") is True, f"measurement action failed: {content.get('error')}")
-    return content["result"]
+    require(isinstance(content, dict), "expected a structured tool payload")
+    require(content.get("ok") is True, f"tool action failed: {content.get('error', 'success not confirmed')}")
+    require(action is None or content.get("action") == action, "unexpected tool action response")
+    require(key in content, f"tool response is missing {key}")
+    return content[key]
 
 
 class Campaign:

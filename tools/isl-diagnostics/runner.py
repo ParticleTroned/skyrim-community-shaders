@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib.util
 import json
 from pathlib import Path
@@ -22,6 +23,7 @@ evidence = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(evidence)
 require = evidence.require
 ISL_TOOL = "communityshaders.isl_diagnostics"
+NR_TOOL = "communityshaders.neural_rendering"
 NORMAL = {"luminanceMode": "normal", "rendererMode": "normal", "particleDetectionMode": "normal",
           "editorOverrideMode": "normal", "observationLevel": "counters"}
 PLANS = {
@@ -79,6 +81,8 @@ class Campaign(base.Campaign):
         self.side_pages = []
         self.last_transport = None
         self.scene_reference = None
+        self.nr_setup = {"state": "not_checked", "disableAuthorized": args.disable_neural_rendering,
+                         "policy": "explicit NR-off setup is retained; capture settings are restored separately"}
 
     def controller(self, *args, **kwargs):
         result = super().controller(*args, **kwargs)
@@ -100,6 +104,51 @@ class Campaign(base.Campaign):
         request = {"contractMajor": 1, "schema": 1, "expectedBuildId": self.args.build_id, "clientId": self.client,
                    "commandId": uuid.uuid4().hex, "sessionId": self.session, "action": action} | arguments
         return base.payload(self.controller("call", "isl-" + action, request, tool=ISL_TOOL))
+
+    def nr(self, action, label, **arguments):
+        request = {"action": action, "expectedBuildId": self.args.build_id} | arguments
+        status = base.payload(self.controller("call", label, request, tool=NR_TOOL), "neuralRendering", action)
+        self.save(label + "-status.json", status)
+        evidence.nr_preference(status)
+        evidence.nr_counters(status)
+        return status
+
+    def prepare_nr(self):
+        original = self.nr("nr_status", "nr-original")
+        enabled = evidence.nr_preference(original)
+        self.nr_setup.update(state="checked", originalRequested=enabled)
+        if enabled:
+            self.nr_setup["state"] = "requires_explicit_disable"
+            require(self.args.disable_neural_rendering,
+                    "NR's stored enable preference is ON; this does not prove NR is rendering. "
+                    "The UI may show unavailable/off. See nr-original-status.json. "
+                    "Rerun with -DisableNeuralRendering to explicitly set NR OFF and leave it off for this test.")
+            print("Setting Neural Rendering OFF for this test; it will remain OFF afterward.", flush=True)
+            self.nr_setup["state"] = "disable_dispatched_outcome_unconfirmed"
+            self.save("nr-disable-intent.json", self.nr_setup)
+            changed = self.nr("nr_configure", "nr-disable", enabled=False,
+                              expectedConfigurationFingerprint=original["requestedConfigurationFingerprint"])
+            self.nr_setup["state"] = "disable_acknowledged"
+            expected = copy.deepcopy(original["requestedConfiguration"])
+            expected["upscaling"]["neuralRenderingEnabled"] = False
+            require(changed["requestedConfiguration"] == expected,
+                    "NR-off setup changed additional configuration; stop and inspect nr-original/disable-status.json")
+            verified = self.nr("nr_status", "nr-disabled-verified")
+            require(verified["requestedConfiguration"] == expected,
+                    "configuration changed during NR-off verification; no capture started")
+        else:
+            verified = original
+        require(evidence.nr_preference(verified) is False, "NR-off setup was not verified; no capture started")
+        self.nr_setup.update(state="off_verified", requestedAfter=False,
+                             changedBySetup=enabled, fingerprint=verified["requestedConfigurationFingerprint"])
+        self.save("nr-setup.json", self.nr_setup)
+        print("Neural Rendering OFF verified. Detailed NR state will be saved around every window.", flush=True)
+
+    def nr_condition(self, name, condition):
+        status = self.nr("nr_status", name)
+        require(evidence.nr_preference(status) is False and condition.get("nrRequested") is False,
+                "NR-off condition changed or disagrees between APIs; see saved NR and ISL condition receipts")
+        return status
 
     def collect(self, capture, side, label):
         pages, offset = [], 0
@@ -154,9 +203,10 @@ class Campaign(base.Campaign):
         self.isl("configure", gates=phase["gates"], islEnabled=phase["islEnabled"],
                  shadowCulling=phase["shadowCulling"] or self.original["shadowCulling"]["settings"])
         before = self.settle_isl()
-        require(not before["nrRequested"], "disable Neural Rendering for this ISL campaign before continuing")
+        nr_before = self.nr_condition(name + "-nr-before", before)
         if phase["pruneFrames"]:
             self.isl("arm_prune_deferral", frames=phase["pruneFrames"])
+        print(f"Capturing {name} ({self.config['durationMs'] / 1000:g}s); keep the same viewpoint.", flush=True)
         self.pending_start = True
         started = self.call("start", mode="B", durationMs=self.config["durationMs"], capacity=self.config["capacity"],
                             admissionDelayMs=self.config["admissionDelayMs"], readback=False)
@@ -179,6 +229,8 @@ class Campaign(base.Campaign):
         applied = evidence.experiment_applied(phase, side_validation, self.side_pages[0], self.original)
         self.capture = None
         after = self.isl("condition")
+        nr_after = self.nr_condition(name + "-nr-after", after)
+        nr_window = evidence.nr_window(nr_before, nr_after)
         raw_after = self.call("condition")
         guard = self.performance_window(transport_start, transport_stop, name)
         source = evidence.streams(self.raw_pages, "compositor")
@@ -204,8 +256,8 @@ class Campaign(base.Campaign):
                   "validation": {"raw": raw_validation, "isl": side_validation}, "waveform": waveform,
                   "statistics": evidence.raw.summarize(self.raw_pages), "controllerOutsideAdmission": controller_clear,
                   "settingsAndSceneStable": stable, "clientReadyQpc": client_ready,
-                  "performanceWindow": guard, "sceneMatch": scene, "experimentApplied": applied,
-                  "valid": raw_validation["complete"] and side_validation["complete"] and controller_clear and stable and guard["valid"] and scene["valid"] and applied['valid'],
+                  "performanceWindow": guard, "sceneMatch": scene, "experimentApplied": applied, "neuralRendering": nr_window,
+                  "valid": raw_validation["complete"] and side_validation["complete"] and controller_clear and stable and guard["valid"] and scene["valid"] and applied['valid'] and nr_window['valid'],
                   "qpcAssociations": evidence.correlate_qpc(self.raw_pages, self.side_pages),
                   "evidencePrefix": name, "sceneTimePolicy": "preserved; elapsed game time is recorded, not reset"}
         self.save(name + "-summary.json", result)
@@ -268,6 +320,12 @@ class Campaign(base.Campaign):
             catalog = self.controller("list", "catalog")
             tools = catalog["data"]["tools"]
             require({base.TOOL, ISL_TOOL} <= {tool["name"] for tool in tools}, "combined diagnostic tools not registered")
+            nr_tool = next((tool for tool in tools if tool["name"] == NR_TOOL), {})
+            properties = nr_tool.get("inputSchema", {}).get("properties", {})
+            require({"nr_status", "nr_configure"} <= set(properties.get("action", {}).get("enum", [])) and
+                    {"enabled", "expectedBuildId", "expectedConfigurationFingerprint"} <= properties.keys(),
+                    "required NR status and guarded configuration API unavailable; no capture started")
+            self.prepare_nr()
             self.prepare_dispatched = True
             prepared = self.call("prepare", purpose="isl")
             self.session = prepared["sessionId"]
@@ -283,7 +341,7 @@ class Campaign(base.Campaign):
             if self.config["pacing"] == "off_unlimited":
                 self.call("configure", reflexMode="off", capFps=0)
             for phase in phases:
-                print(f"Capturing {phase['name']} ({self.config['durationMs'] / 1000:g}s); keep the same viewpoint.", flush=True)
+                print(f"Preparing {phase['name']}; checking and settling the test condition.", flush=True)
                 self.phase(phase)
         except (Exception, KeyboardInterrupt) as error:
             self.failures.append({"type": type(error).__name__, "message": str(error)})
@@ -292,18 +350,25 @@ class Campaign(base.Campaign):
             if self.prepare_dispatched:
                 print("Finalizing captures and restoring settings; keep Skyrim running...", flush=True)
                 self.restore()
+            self.save("nr-setup-final.json", self.nr_setup)
             self.save("campaign.json", {"completed": self.completed, "failures": self.failures, "cleanup": self.cleanup,
-                      "buildId": self.args.build_id, "plan": self.args.plan, "rules": self.rules, "sceneTime": "preserved"})
+                      "buildId": self.args.build_id, "plan": self.args.plan, "rules": self.rules, "sceneTime": "preserved",
+                      "neuralRenderingSetup": self.nr_setup})
             self.save("report.json", evidence.comparison(self.completed))
             with (self.root / 'report.txt').open('x', encoding='utf-8') as output:
                 output.write(evidence.readable_report(self.completed, self.failures, self.cleanup))
+                output.write("\nNeural Rendering setup: " + json.dumps(self.nr_setup) + "\n")
         failed = bool(self.failures or "restorationFailure" in self.cleanup or "stopOrExportFailure" in self.cleanup)
         if failed:
             print(f"TEST FAILED / INCOMPLETE: {len(self.completed)}/{len(phases)} windows processed. See report.txt.",
                   file=sys.stderr, flush=True)
         else:
-            print(f"TEST FINISHED: {len(self.completed)}/{len(phases)} windows completed; settings restored.", flush=True)
+            print(f"TEST FINISHED: {len(self.completed)}/{len(phases)} windows completed; capture settings restored.", flush=True)
             print("Collection succeeded; the diagnosis may still be inconclusive. See report.txt.", flush=True)
+        if self.nr_setup["state"] == "off_verified":
+            print("NR was verified OFF before testing; this toolkit never re-enables it. See nr-setup-final.json.", flush=True)
+        elif self.nr_setup["state"] in ("disable_dispatched_outcome_unconfirmed", "disable_acknowledged"):
+            print("NR setup did not finish verification; inspect NR receipts before retrying. No capture started.", file=sys.stderr, flush=True)
         print(f"Send the ENTIRE output folder: {self.root}", flush=True)
         return int(failed)
 
@@ -314,6 +379,8 @@ def main():
     parser.add_argument("--plan", choices=PLANS, default="core")
     parser.add_argument("--observation", choices=("off", "counters", "timed"))
     parser.add_argument("--off-unlimited", action="store_true", help="Explicitly change pacing once; restore accepted settings afterward")
+    parser.add_argument("--disable-neural-rendering", action="store_true",
+                        help="Explicitly set NR OFF before the campaign and leave it off; preserve other configuration")
     for name in ("output", "controller", "runtime", "build-id", "artifact", "artifact-sha256"):
         parser.add_argument("--" + name, required=True)
     args = parser.parse_args()

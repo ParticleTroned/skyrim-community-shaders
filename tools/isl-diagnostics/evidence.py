@@ -276,6 +276,41 @@ def comparison(phases):
                                    "radiusWriteSuppression": "reported negative", "fullPre12ISL": "outcome not established", "VRShadowBatch": "outcome not established"}}
 
 
+def nr_preference(status):
+    require(isinstance(status, dict), "missing structured NR status")
+    settings = status.get("settings", {})
+    configuration = status.get("requestedConfiguration", {})
+    require(isinstance(settings, dict) and isinstance(configuration, dict), "invalid NR configuration evidence")
+    enabled = settings.get("enabled")
+    upscaling = configuration.get("upscaling", {})
+    require(type(enabled) is bool and isinstance(upscaling, dict) and
+            upscaling.get("neuralRenderingEnabled") is enabled, "missing or inconsistent NR enable preference")
+    fingerprint = status.get("requestedConfigurationFingerprint")
+    require(isinstance(fingerprint, str) and len(fingerprint) == 32 and
+            all(c in "0123456789abcdef" for c in fingerprint), "invalid NR configuration fingerprint")
+    return enabled
+
+
+def nr_counters(status):
+    fields = ("attempts", "featureEvaluations", "outputCommits", "resetAttempts")
+    counters = status.get("counters", {})
+    require(isinstance(counters, dict) and all(type(counters.get(k)) is int and counters[k] >= 0 for k in fields),
+            "missing or invalid NR execution counters; cannot qualify the window")
+    return {k: counters[k] for k in fields}
+
+
+def nr_window(before, after):
+    disabled = nr_preference(before) is False and nr_preference(after) is False
+    first, last = nr_counters(before), nr_counters(after)
+    delta = {k: last[k] - first[k] for k in first}
+    stable = before["requestedConfigurationFingerprint"] == after["requestedConfigurationFingerprint"]
+    valid = disabled and stable and all(value == 0 for value in delta.values())
+    return {"valid": valid, "requestedOff": disabled, "configurationStable": stable, "counterDeltas": delta,
+            "reason": "NR off and no observed execution/reset counter changes" if valid else
+            "NR preference, configuration or execution counters changed; comparison is contaminated",
+            "scope": "read-only snapshots outside admission; counter rollback is not accepted as zero work"}
+
+
 def readable_report(phases, failures=(), cleanup=None):
     report = comparison(phases)
     cleanup = cleanup or {}
@@ -305,6 +340,8 @@ def readable_report(phases, failures=(), cleanup=None):
     for phase in phases:
         wave = phase['waveform']
         lines.append(f"  {phase['name']}: valid={phase['valid']}; {wave.get('classification', 'UNAVAILABLE')}; teeth={wave.get('toothCount')}; mountains={wave.get('mountainCount')}; mountain rate/s={wave.get('mountainRatePerSecond')}")
+        if 'neuralRendering' in phase:
+            lines.append('    NR qualification: ' + json.dumps(phase['neuralRendering']))
     lines += ['', 'Missing cost channels remain unavailable, not zero cost. Timed queries are sampled; retained GPU histories lack exact frame alignment.',
               'Natural game-time progression and dynamic AI/lighting remain qualifications; inspect before/after receipts and restored references.',
               'Historical negatives: radius-write suppression, stored radius, retention/particle/culling paths. Their waveform changes were not quantified.',

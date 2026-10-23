@@ -1,6 +1,8 @@
 """Exercise the external PowerShell boundary without a game or network endpoint."""
 
 import contextlib
+import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -21,6 +23,143 @@ from runner import Campaign, EvidenceError  # noqa: E402
 spec = importlib.util.spec_from_file_location('isl_transport_runner', ROOT / 'tools/isl-diagnostics/runner.py')
 isl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(isl)
+
+
+def nr_tool():
+    return {'name': isl.NR_TOOL, 'inputSchema': {'properties': {
+        'action': {'enum': ['nr_status', 'nr_configure']}, 'enabled': {'type': 'boolean'},
+        'expectedBuildId': {'type': 'string'}, 'expectedConfigurationFingerprint': {'type': 'string'}}}}
+
+
+def nr_status(enabled=False):
+    return {'settings': {'enabled': enabled},
+            'requestedConfiguration': {'upscaling': {'neuralRenderingEnabled': enabled, 'neuralRenderingIntensity': 0.5},
+                                       'color': {'enabled': False}},
+            'requestedConfigurationFingerprint': ('a' if enabled else 'b') * 32,
+            'renderScalePrerequisite': {'available': False}, 'runtime': {'installed': True},
+            'counters': {'attempts': 12, 'featureEvaluations': 24, 'outputCommits': 24, 'resetAttempts': 1}}
+
+
+def nr_response(status, action='nr_status', ok=True):
+    return {'ok': True, 'transportOk': True, 'data': {'content': [{'type': 'text', 'text': json.dumps({
+        'action': action, 'ok': ok, 'neuralRendering': status})}]}}
+
+
+class NeuralSetupTests(unittest.TestCase):
+    def setUp(self):
+        parent = ROOT / 'build/measurement-transport-tests'
+        parent.mkdir(parents=True, exist_ok=True)
+        self.directory = tempfile.TemporaryDirectory(dir=parent)
+        self.addCleanup(self.directory.cleanup)
+        self.args = SimpleNamespace(output=str(Path(self.directory.name) / 'output'), controller='unused.ps1',
+                                    runtime='unused.json', build_id='a' * 64, artifact='unused.dll',
+                                    artifact_sha256='b' * 64, plan='core', disable_neural_rendering=False)
+        self.campaign = isl.Campaign(self.args, json.loads((ROOT / 'tools/isl-diagnostics/core.json').read_text()))
+
+    def test_already_disabled_does_not_send_mutation(self):
+        with patch.object(self.campaign, 'controller', return_value=nr_response(nr_status())) as controller:
+            self.campaign.prepare_nr()
+        controller.assert_called_once()
+        self.assertEqual(controller.call_args.args[2]['action'], 'nr_status')
+        self.assertFalse(self.campaign.nr_setup['changedBySetup'])
+
+    def test_ui_unavailable_with_stored_on_requires_explicit_setup(self):
+        with patch.object(self.campaign, 'controller', return_value=nr_response(nr_status(True))) as controller:
+            with self.assertRaisesRegex(isl.evidence.EvidenceError, 'does not prove NR is rendering'):
+                self.campaign.prepare_nr()
+        controller.assert_called_once()
+        self.assertTrue((self.campaign.root / 'nr-original-status.json').exists())
+        self.assertEqual(self.campaign.nr_setup['state'], 'requires_explicit_disable')
+
+    def test_explicit_disable_is_guarded_verified_and_preserves_tuning(self):
+        self.args.disable_neural_rendering = True
+        responses = [nr_response(nr_status(True)), nr_response(nr_status(), 'nr_configure'), nr_response(nr_status())]
+        with patch.object(self.campaign, 'controller', side_effect=responses) as controller:
+            self.campaign.prepare_nr()
+        request = controller.call_args_list[1].args[2]
+        self.assertEqual(request, {'action': 'nr_configure', 'expectedBuildId': self.args.build_id,
+                                   'enabled': False, 'expectedConfigurationFingerprint': 'a' * 32})
+        self.assertEqual([c.args[2]['action'] for c in controller.call_args_list], ['nr_status', 'nr_configure', 'nr_status'])
+        self.assertEqual(self.campaign.nr_setup['state'], 'off_verified')
+        self.assertTrue(self.campaign.nr_setup['changedBySetup'])
+        self.assertTrue((self.campaign.root / 'nr-disable-intent.json').exists())
+
+    def test_failed_or_lost_disable_is_never_retried_or_treated_as_verified(self):
+        self.args.disable_neural_rendering = True
+        for response in (nr_response(nr_status(True), 'nr_configure', False), TimeoutError('lost reply')):
+            with self.subTest(response=response):
+                self.args.output = str(Path(self.directory.name) / str(id(response)))
+                campaign = isl.Campaign(self.args, self.campaign.config)
+                with patch.object(campaign, 'controller', side_effect=[nr_response(nr_status(True)), response]) as controller:
+                    with self.assertRaises((isl.base.EvidenceError, TimeoutError)):
+                        campaign.prepare_nr()
+                self.assertEqual(controller.call_count, 2)
+                self.assertEqual(campaign.nr_setup['state'], 'disable_dispatched_outcome_unconfirmed')
+
+    def test_unexpected_tuning_change_is_rejected(self):
+        self.args.disable_neural_rendering = True
+        changed = nr_status()
+        changed['requestedConfiguration']['upscaling']['neuralRenderingIntensity'] = 0.9
+        with patch.object(self.campaign, 'controller', side_effect=[nr_response(nr_status(True)), nr_response(changed, 'nr_configure')]):
+            with self.assertRaisesRegex(isl.evidence.EvidenceError, 'additional configuration'):
+                self.campaign.prepare_nr()
+
+    def test_incomplete_or_contradictory_status_fails_closed(self):
+        for change in ('missing_settings', 'numeric_enabled', 'inconsistent', 'fingerprint'):
+            state = nr_status()
+            if change == 'missing_settings':
+                del state['settings']
+            elif change == 'numeric_enabled':
+                state['settings']['enabled'] = 0
+            elif change == 'inconsistent':
+                state['requestedConfiguration']['upscaling']['neuralRenderingEnabled'] = True
+            else:
+                state['requestedConfigurationFingerprint'] = ''
+            with self.subTest(change=change), self.assertRaises(isl.evidence.EvidenceError):
+                isl.evidence.nr_preference(state)
+
+    def test_named_payload_requires_matching_action_and_success(self):
+        for response in (nr_response(nr_status(), 'nr_configure'), nr_response(nr_status(), ok=False)):
+            with self.assertRaises(isl.base.EvidenceError):
+                isl.base.payload(response, 'neuralRendering', 'nr_status')
+        response = nr_response(nr_status())
+        self.assertEqual(isl.base.payload(response, 'neuralRendering', 'nr_status'), nr_status())
+
+    def test_isl_and_nr_state_must_both_be_explicitly_off(self):
+        for flag in (True, 0, None):
+            with patch.object(self.campaign, 'nr', return_value=nr_status()), \
+                 self.assertRaisesRegex(isl.evidence.EvidenceError, 'disagrees'):
+                self.campaign.nr_condition('phase-before', {'nrRequested': flag})
+
+    def test_execution_counter_changes_and_configuration_changes_invalidate_window(self):
+        before = nr_status()
+        self.assertTrue(isl.evidence.nr_window(before, copy.deepcopy(before))['valid'])
+        for key in before['counters']:
+            for delta in (-1, 1):
+                after = copy.deepcopy(before)
+                after['counters'][key] += delta
+                self.assertFalse(isl.evidence.nr_window(before, after)['valid'])
+        after = copy.deepcopy(before)
+        after['requestedConfigurationFingerprint'] = 'c' * 32
+        self.assertFalse(isl.evidence.nr_window(before, after)['valid'])
+        for value in (None, True, -1):
+            after['counters']['attempts'] = value
+            with self.assertRaises(isl.evidence.EvidenceError):
+                isl.evidence.nr_window(before, after)
+
+    def test_preflight_failure_is_reported_before_session_or_capture(self):
+        catalog = {'data': {'tools': [{'name': isl.ISL_TOOL}, {'name': isl.base.TOOL}, nr_tool()]}}
+        with patch.object(self.campaign, 'controller', side_effect=[catalog, nr_response(nr_status(True))]), \
+             patch.object(self.campaign, 'call') as call, patch.object(self.campaign, 'phase') as phase, \
+             patch.object(self.campaign, 'restore') as restore, contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.campaign.run(), 1)
+        call.assert_not_called()
+        phase.assert_not_called()
+        restore.assert_not_called()
+        report = json.loads((self.campaign.root / 'campaign.json').read_text())
+        self.assertEqual(report['neuralRenderingSetup']['state'], 'requires_explicit_disable')
+        self.assertEqual(report['completed'], [])
 
 
 @unittest.skipUnless(shutil.which('pwsh'), 'PowerShell 7 is required')
@@ -44,7 +183,7 @@ $description = 'keyboard name' + [char]0x2192 + 'DirectInput-scan-code; ' + [cha
 ''', encoding='utf-8')
         self.args = SimpleNamespace(output=str(self.root / 'output'), controller=str(self.controller),
                                     runtime='runtime.json', build_id='a' * 64, artifact='plugin.dll',
-                                    artifact_sha256='b' * 64, plan='core')
+                                    artifact_sha256='b' * 64, plan='core', disable_neural_rendering=False)
 
     def test_utf8_structured_arguments_and_discovery_flags(self):
         campaign = Campaign(self.args, {})
@@ -118,6 +257,29 @@ $description = 'keyboard name' + [char]0x2192 + 'DirectInput-scan-code; ' + [cha
             Campaign(self.args, {})
         self.assertEqual((output / 'previous.txt').read_text(), 'preserve')
 
+    def test_launcher_forwards_explicit_nr_disable_without_connecting(self):
+        dll = self.root / 'CommunityShaders.dll'
+        dll.write_bytes(b'offline launcher fixture')
+        (self.root / 'CSX.BuildManifest.json').write_text(json.dumps({
+            'buildId': 'a' * 64, 'artifact': {'sha256': hashlib.sha256(dll.read_bytes()).hexdigest(),
+                                           'sizeBytes': dll.stat().st_size},
+            'identity': {'build': {'options': {'DEVBENCH_BRIDGE': 'ON'}}}}))
+        (self.root / 'DevBenchControl.psm1').write_text('# offline fixture')
+        runtime = self.root / 'runtime.json'
+        runtime.write_text('{}')
+        script = self.root / 'launch.ps1'
+        script.write_text('''param($Launcher, $Controller, $Runtime, $PluginDirectory)
+function global:python { $args | ConvertTo-Json -Compress; $global:LASTEXITCODE = 0 }
+& $Launcher -Controller $Controller -Runtime $Runtime -PluginDirectory $PluginDirectory -DisableNeuralRendering
+''')
+        result = subprocess.run(['pwsh', '-NoProfile', '-File', str(script),
+                                 '-Launcher', str(ROOT / 'tools/isl-diagnostics/run.ps1'),
+                                 '-Controller', str(self.controller), '-Runtime', str(runtime),
+                                 '-PluginDirectory', str(self.root)], capture_output=True, check=True)
+        arguments = json.loads(result.stdout.decode('utf-8-sig').splitlines()[-1])
+        self.assertIn('--disable-neural-rendering', arguments)
+        self.assertEqual(arguments[arguments.index('--artifact') + 1], str(dll))
+
     def test_failed_catalog_has_visible_failure_and_no_game_actions(self):
         self.controller.write_text("'{\"ok\":false,\"transportOk\":true,\"errors\":[\"catalog rejected\"]}'", encoding='utf-8')
         config = json.loads((ROOT / 'tools/isl-diagnostics/core.json').read_text())
@@ -138,7 +300,7 @@ $description = 'keyboard name' + [char]0x2192 + 'DirectInput-scan-code; ' + [cha
             self.args.output = str(self.root / f'finished-{restoration_failed}')
             campaign = isl.Campaign(self.args, config)
             condition = {'isl': {'loaded': True}, 'editor': {'clean': True}, 'startup': {'active': 'normal'}}
-            catalog = {'data': {'tools': [{'name': isl.ISL_TOOL}, {'name': isl.base.TOOL}]}}
+            catalog = {'data': {'tools': [{'name': isl.ISL_TOOL}, {'name': isl.base.TOOL}, nr_tool()]}}
             def phase(item):
                 campaign.completed.append({'name': item['name'], 'condition': item, 'valid': True,
                                            'waveform': {'status': 'UNAVAILABLE'}})
@@ -147,6 +309,7 @@ $description = 'keyboard name' + [char]0x2192 + 'DirectInput-scan-code; ' + [cha
                     campaign.cleanup['restorationFailure'] = 'synthetic restoration failure'
             stdout, stderr = io.StringIO(), io.StringIO()
             with patch.object(campaign, 'controller', return_value=catalog), \
+                 patch.object(campaign, 'prepare_nr'), \
                  patch.object(campaign, 'call', return_value={'sessionId': 1}), \
                  patch.object(campaign, 'isl', return_value=condition), \
                  patch.object(campaign, 'phase', side_effect=phase), \

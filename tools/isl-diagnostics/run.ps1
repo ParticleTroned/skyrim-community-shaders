@@ -7,7 +7,8 @@ param(
     [ValidateSet('core', 'luminance-cost', 'both', 'particle', 'shadow', 'editor', 'conversion', 'observer', 'prune', 'mountains', 'batch')]
     [string]$Plan = 'core',
     [ValidateSet('off', 'counters', 'timed')][string]$Observation = 'counters',
-    [switch]$OffUnlimited
+    [switch]$OffUnlimited,
+    [switch]$DisableNeuralRendering
 )
 $ErrorActionPreference = 'Stop'
 $controllerPath = (Resolve-Path -LiteralPath $Controller).Path
@@ -51,6 +52,7 @@ $arguments = @(
     '--plan', $Plan, '--observation', $Observation
 )
 if ($OffUnlimited) { $arguments += '--off-unlimited' }
+if ($DisableNeuralRendering) { $arguments += '--disable-neural-rendering' }
 & python @arguments
 $testExitCode = $LASTEXITCODE
 if ($testExitCode -ne 0) {

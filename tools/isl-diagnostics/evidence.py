@@ -99,6 +99,8 @@ def experiment_applied(phase, validation, header, original):
     counts = validation['counters']
     count = lambda name: counts.get(name, {}).get('count', 0)
     reasons = []
+    if 'islEnabled' in phase and header.get('condition', {}).get('isl', {}).get('enabled') is not phase['islEnabled']:
+        reasons.append('requested ISL enable state was not observed at admission')
     if gates['observationLevel'] == 'off' and any(gates[key] != 'normal' for key in
             ('luminanceMode', 'rendererMode', 'particleDetectionMode', 'editorOverrideMode')):
         reasons.append('eligible subtraction work cannot be established with observations off')
@@ -242,14 +244,27 @@ def correlate_qpc(raw_pages, side_pages):
             continue
         previous = intervals[max(0, index - 1)][0]
         adjacent = [r for r in rows if r["exitQpc"] >= previous and r["enterQpc"] <= end]
+        scopes = [{"ordinal": r["ordinal"], "metric": r["metric"], "thread": r.get("thread"), "frame": r.get("frame"),
+                   "enterQpc": r["enterQpc"], "exitQpc": r["exitQpc"],
+                   "durationMs": (r["exitQpc"] - r["enterQpc"]) * 1000 / frequency,
+                   "overlapMs": max(0, min(end, r["exitQpc"]) - max(previous, r["enterQpc"])) * 1000 / frequency}
+                  for r in adjacent]
         result.append({"beginQpc": begin, "endQpc": end, "priorBeginQpc": previous, "intervalMs": periods[index],
                        "overlappingOrdinals": [r["ordinal"] for r in adjacent],
+                       "longestOverlappingScopes": sorted(scopes, key=lambda r: r['overlapMs'], reverse=True)[:12],
                        "metrics": sorted({r["metric"] for r in adjacent})})
     return {"status": "MEASURED_QPC_ASSOCIATIONS", "thresholdMs": threshold, "intervals": result,
             "meaning": "same-clock overlap in previous/current application intervals; sampled observations, not causation or exact compositor-frame matching"}
 
 
 def comparison(phases):
+    nr = nr_comparison(phases)
+    interaction = isl_toggle_comparison(phases, 'interaction')
+    mountains = isl_toggle_comparison(phases, 'mountains')
+    timings = [{"name": p['name'], "valid": p['valid'], "islEnabled": p['condition']['islEnabled'],
+                "statistics": p['statistics'], "timedMs": p['validation']['isl'].get('timedMs', {}),
+                "qpcAssociations": p['qpcAssociations']} for p in phases if p['condition'].get('group') == 'timed']
+    phases = [p for p in phases if p['condition'].get('group', 'core') == 'core']
     references = [p for p in phases if p["condition"]["label"] == "R"]
     reproducible = len(references) >= 3 and all(p["valid"] and p["waveform"].get("status") == "MEASURED_PROXY" and p["waveform"].get("combDetected", False) for p in references)
     output = []
@@ -263,13 +278,17 @@ def comparison(phases):
         baseline_rate = statistics.median(baseline_rates) if quantified else None
         fewer = valid and quantified and all(x < .8 * baseline_rate for x in treatment_rates)
         more = valid and quantified and all(x > 1.2 * baseline_rate for x in treatment_rates)
-        outcome = 'invalid or incomplete' if not valid else 'reduced' if reduced or fewer else 'increased' if more else 'unchanged or mixed'
+        complete = len(references) >= 3 and len(treatments) >= 2 and all(
+            p['valid'] and p['waveform'].get('status') == 'MEASURED_PROXY' for p in references + treatments)
+        outcome = ('reference comb not reproduced' if complete else 'invalid or incomplete') if not valid else 'reduced' if reduced or fewer else 'increased' if more else 'unchanged or mixed'
         output.append({"label": label, "status": "REPEATED_PROXY_REDUCTION" if reduced or fewer else "NO_REPEATED_PROXY_REDUCTION" if valid else "INCONCLUSIVE",
                        "outcome": outcome, "referenceToothRatePerSecond": baseline_rate, "treatmentToothRatesPerSecond": treatment_rates,
                        "rateRule": "each repeat must differ from median reference by more than 20%; no average-FPS inference",
                        "referenceCombReproduced": reproducible, "runtimeFixProven": False,
                        "reason": "inspect raw offsets, mountains, settings, scene matching and observer effects; proxy changes identify a candidate, not exact SteamVR late starts"})
-    return {"referenceCombReproduced": reproducible, "comparisons": output, "exactSteamVRLateStart": "UNAVAILABLE",
+    return {"referenceCombReproduced": reproducible, "comparisons": output, "neuralRenderingComparison": nr,
+            "islWithNREnabled": interaction, "mountainComparison": mountains, "timedProbes": timings,
+            "exactSteamVRLateStart": "UNAVAILABLE",
             "referenceStatus": "reproduced" if reproducible else "reference_not_reproduced_under_selected_pacing_or_incomplete",
             "mountains": [{"name": p["name"], "count": p["waveform"].get("mountainCount"), "rate": p["waveform"].get("mountainRatePerSecond")} for p in phases],
             "historicalEvidence": {"storedRadius": "late starts persisted; waveform not quantified", "retentionParticleCulling": "late starts persisted; waveform not quantified",
@@ -299,22 +318,94 @@ def nr_counters(status):
     return {k: counters[k] for k in fields}
 
 
-def nr_window(before, after):
+def nr_window(before, after, expected_enabled=False):
     disabled = nr_preference(before) is False and nr_preference(after) is False
+    requested = nr_preference(before) is expected_enabled and nr_preference(after) is expected_enabled
     first, last = nr_counters(before), nr_counters(after)
     delta = {k: last[k] - first[k] for k in first}
     stable = before["requestedConfigurationFingerprint"] == after["requestedConfigurationFingerprint"]
-    valid = disabled and stable and all(value == 0 for value in delta.values())
+    executing = all(delta[k] > 0 for k in ("attempts", "featureEvaluations", "outputCommits"))
+    quiet = all(value == 0 for value in delta.values())
+    valid = requested and stable and (executing and delta['resetAttempts'] == 0 if expected_enabled else quiet)
+    diagnostics = {}
+    for key in ('failures', 'callerHistoryResets', 'forcedHistoryResets', 'resourceRebuilds', 'stereoFailures', 'deviceRemovals'):
+        start, end = before['counters'].get(key), after['counters'].get(key)
+        diagnostics[key] = end - start if type(start) is int and type(end) is int and end >= start >= 0 else None
     return {"valid": valid, "requestedOff": disabled, "configurationStable": stable, "counterDeltas": delta,
-            "reason": "NR off and no observed execution/reset counter changes" if valid else
-            "NR preference, configuration or execution counters changed; comparison is contaminated",
+            "diagnosticCounterDeltas": diagnostics,
+            "expectedEnabled": expected_enabled, "executionObserved": executing,
+            "reason": ("NR on with observed evaluations and output commits, without runtime resets" if expected_enabled else
+                       "NR off and no observed execution/reset counter changes") if valid else
+            "NR state/configuration or execution does not qualify this condition; inspect snapshots and counter deltas",
             "scope": "read-only snapshots outside admission; counter rollback is not accepted as zero work"}
+
+
+def nr_comparison(phases):
+    """Separate an NR reversal from the NR-off ISL subtraction comparisons."""
+    windows = [p for p in phases if p['condition'].get('group') == 'nr']
+    if not windows:
+        return {"status": "NOT_RUN"}
+    result = {"status": "INCONCLUSIVE", "runtimeFixProven": False,
+              "windows": [{"name": p['name'], "valid": p['valid'],
+                           "requestedEnabled": p['condition']['nrEnabled'], "waveform": p['waveform'],
+                           "execution": p['neuralRendering']} for p in windows],
+              "meaning": "matched-view OpenVR offset proxy; no exact SteamVR Late Start or root-cause claim"}
+    if len(windows) != 4 or [p['condition']['label'] for p in windows] != ['as-found', 'off', 'on', 'off'] or any(
+            not p['valid'] or p['waveform'].get('status') != 'MEASURED_PROXY' for p in windows):
+        result['reason'] = 'missing, invalid or unmeasured NR comparison windows'
+        return result
+    initial, off1, on, off2 = windows
+    comb = lambda p: p['waveform'].get('combDetected') is True
+    result.update(initialCombObserved=comb(initial), enabledCombObserved=comb(on),
+                  bothOffWindowsClear=not comb(off1) and not comb(off2),
+                  repeatedEnabledComb=initial['condition']['nrEnabled'] and comb(initial) and comb(on))
+    if comb(off1) or comb(off2):
+        result['status'] = 'COMB_PERSISTS_WITH_NR_OFF'
+    elif comb(on):
+        result['status'] = 'NR_ASSOCIATED_COMB_PROXY'
+    elif comb(initial):
+        result['status'] = 'INITIAL_COMB_NOT_REPRODUCED'
+    else:
+        result['status'] = 'COMB_NOT_REPRODUCED'
+    result['reason'] = 'inspect initial and re-enabled work, both off windows, isolated mountains and unchanged scene/settings'
+    return result
+
+
+def isl_toggle_comparison(phases, group):
+    windows = [p for p in phases if p['condition'].get('group') == group]
+    if not windows:
+        return {'status': 'NOT_RUN'}
+    expected = [False, True, False] if group == 'interaction' else [True, False, True, False, True]
+    result = {'status': 'INCONCLUSIVE', 'runtimeFixProven': False,
+              'windows': [{'name': p['name'], 'valid': p['valid'], 'islEnabled': p['condition']['islEnabled'],
+                           'waveform': p['waveform'], 'statistics': p['statistics']} for p in windows],
+              'meaning': 'fixed-view waveform association; natural AI/lighting changes remain possible'}
+    if [p['condition']['islEnabled'] for p in windows] != expected or any(
+            not p['valid'] or p['waveform'].get('status') != 'MEASURED_PROXY' for p in windows):
+        result['reason'] = 'missing, invalid or unmeasured ISL-toggle windows'
+        return result
+    on = [p['waveform'] for p in windows if p['condition']['islEnabled']]
+    off = [p['waveform'] for p in windows if not p['condition']['islEnabled']]
+    if group == 'interaction':
+        result['status'] = ('COMB_PERSISTS_WITH_ISL_OFF_NR_ON' if any(w.get('combDetected') for w in off) else
+                            'COMB_ONLY_WITH_BOTH_ENABLED' if all(w.get('combDetected') for w in on) else 'COMB_NOT_REPRODUCED')
+    else:
+        rates = [w.get('mountainRatePerSecond') for w in on]
+        off_rates = [w.get('mountainRatePerSecond') for w in off]
+        if not all(finite(rate) for rate in rates + off_rates):
+            return result | {'reason': 'mountain rates unavailable'}
+        baseline = statistics.median(rates)
+        result.update(referenceMountainRatesPerSecond=rates, offMountainRatesPerSecond=off_rates)
+        result['status'] = ('MOUNTAINS_REDUCED_WITH_ISL_OFF' if baseline > 0 and all(rate < baseline * .8 for rate in off_rates) else
+                            'MOUNTAINS_PERSIST_WITH_BOTH_OFF' if any(rate > 0 for rate in off_rates) else
+                            'NO_REPEATABLE_MOUNTAIN_DIFFERENCE' if any(rate > 0 for rate in rates) else 'MOUNTAINS_NOT_REPRODUCED')
+    return result
 
 
 def readable_report(phases, failures=(), cleanup=None):
     report = comparison(phases)
     cleanup = cleanup or {}
-    restoration = {key: cleanup[key] for key in ('restorationFailure', 'stopOrExportFailure') if key in cleanup}
+    restoration = {key: cleanup[key] for key in ('restorationFailure', 'stopOrExportFailure', 'nrFinalizationFailure') if key in cleanup}
     restoration['pacing'] = cleanup.get('rawRestoration', {}).get('restoration')
     remaining = cleanup.get('remainingISL', {})
     restoration['isl'] = remaining.get('restoration', remaining)
@@ -328,12 +419,16 @@ def readable_report(phases, failures=(), cleanup=None):
         'D': 'Conversion cost under startup radius suppression and native luminance; compared against matching ordinary output.',
         'X': 'Optional ISL observations off, raw collector still active.', 'T': 'Sampled timing observer compared with counters.',
         'Q': 'One exercised, bounded prune delay; inspect actual due/executed frames.'}
-    execution = 'FAILED / INCOMPLETE' if not phases or failures or any(key in cleanup for key in ('restorationFailure', 'stopOrExportFailure')) else 'FINISHED'
+    execution = 'FAILED / INCOMPLETE' if not phases or failures or any(key in cleanup for key in ('restorationFailure', 'stopOrExportFailure', 'nrFinalizationFailure')) else 'FINISHED'
     lines = ['CSX ISL diagnostic evidence report', '', f'Capture execution: {execution}; processed windows: {len(phases)}',
              'Reference: ' + report['referenceStatus'],
              'Exact SteamVR CPU Late Start classification: UNAVAILABLE.',
              'Results below use the named OpenVR pose-call-offset proxy. No runtime fix or root cause is proven.', '',
-             'Ranked comparisons (campaign order):']
+             'NR initial / off / on / off comparison: ' + report['neuralRenderingComparison']['status'],
+             report['neuralRenderingComparison'].get('reason', ''),
+             'ISL off / on / off with NR on: ' + report['islWithNREnabled']['status'],
+             'Long NR-off mountain comparison: ' + report['mountainComparison']['status'],
+             '', 'ISL subtraction comparisons (NR off):']
     for item in report['comparisons']:
         lines += [f"  {item['label']}: {item['outcome']} ({item['status']})", '    ' + explanations.get(item['label'], 'Inspect the complete condition receipt.')]
     lines += ['', 'Separate waveform observations:']
@@ -342,6 +437,22 @@ def readable_report(phases, failures=(), cleanup=None):
         lines.append(f"  {phase['name']}: valid={phase['valid']}; {wave.get('classification', 'UNAVAILABLE')}; teeth={wave.get('toothCount')}; mountains={wave.get('mountainCount')}; mountain rate/s={wave.get('mountainRatePerSecond')}")
         if 'neuralRendering' in phase:
             lines.append('    NR qualification: ' + json.dumps(phase['neuralRendering']))
+    lines += ['', 'Timed probes (separate from the low-overhead waveform baselines):']
+    for probe in report['timedProbes']:
+        largest = sorted(((name, stats) for name, stats in probe['timedMs'].items() if stats and finite(stats.get('max'))),
+                         key=lambda pair: pair[1]['max'], reverse=True)[:12]
+        lines.append(f"  {probe['name']}: valid={probe['valid']}; ISL enabled={probe['islEnabled']}")
+        for name, stats in largest:
+            lines.append(f"    {name}: max={stats['max']:.4f} ms; p95={stats.get('p95')}; samples={stats.get('count')}")
+        lines.append('    Shared-QPC intervals and overlapping recorded scopes are retained in report.json and the window summary.')
+        intervals = probe['qpcAssociations'].get('intervals', [])
+        lines.append(f'    Long application intervals with QPC associations: {len(intervals)}')
+        for interval in sorted(intervals, key=lambda item: item['intervalMs'], reverse=True)[:5]:
+            lines.append(f"    Application interval {interval['intervalMs']:.4f} ms; overlapping scopes (nested, do not add):")
+            for scope in interval.get('longestOverlappingScopes', [])[:5]:
+                lines.append(f"      {scope['metric']}: duration={scope['durationMs']:.4f} ms, overlap={scope['overlapMs']:.4f} ms, thread={scope['thread']}")
+        if not intervals:
+            lines.append('    No qualifying long interval in this probe; rare-stall cause remains unobserved here.')
     lines += ['', 'Missing cost channels remain unavailable, not zero cost. Timed queries are sampled; retained GPU histories lack exact frame alignment.',
               'Natural game-time progression and dynamic AI/lighting remain qualifications; inspect before/after receipts and restored references.',
               'Historical negatives: radius-write suppression, stored radius, retention/particle/culling paths. Their waveform changes were not quantified.',

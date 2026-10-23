@@ -414,6 +414,27 @@ function global:python { $args | ConvertTo-Json -Compress; $global:LASTEXITCODE 
         self.assertIn('Capture execution: FAILED / INCOMPLETE', (campaign.root / 'report.txt').read_text())
         self.assertEqual(json.loads((campaign.root / 'campaign.json').read_text())['completed'], [])
 
+    def test_launcher_comparison_flag_and_incompatible_options(self):
+        (self.root / 'DevBenchControl.psm1').write_text('# offline fixture')
+        runtime = self.root / 'runtime.json'
+        runtime.write_text('{}')
+        script = self.root / 'compare.ps1'
+        script.write_text('''param($Launcher, $Controller, $Runtime)
+function global:python { $args | ConvertTo-Json -Compress; $global:LASTEXITCODE = 0 }
+& $Launcher -Controller $Controller -Runtime $Runtime -CompareNeuralRendering
+''')
+        launcher = ROOT / 'tools/isl-diagnostics/run.ps1'
+        result = subprocess.run(['pwsh', '-NoProfile', '-File', str(script), '-Launcher', str(launcher),
+                                 '-Controller', str(self.controller), '-Runtime', str(runtime)], capture_output=True, check=True)
+        arguments = json.loads(result.stdout.decode('utf-8-sig').splitlines()[-1])
+        self.assertIn('--compare-neural-rendering', arguments)
+        self.assertNotIn('--disable-neural-rendering', arguments)
+        for extra in (['-DisableNeuralRendering'], ['-OffUnlimited'], ['-Plan', 'shadow'], ['-Observation', 'timed']):
+            result = subprocess.run(['pwsh', '-NoProfile', '-File', str(launcher), '-Controller', 'missing',
+                                     '-Runtime', 'missing', '-CompareNeuralRendering'] + extra, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b'Use -CompareNeuralRendering', result.stderr)
+
     def test_finished_message_waits_for_restoration_and_reports_cleanup_failure(self):
         config = json.loads((ROOT / 'tools/isl-diagnostics/core.json').read_text())
         for restoration_failed in (False, True):

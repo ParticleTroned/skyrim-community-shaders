@@ -9,9 +9,13 @@ param(
     [string]$Plan = 'core',
     [ValidateSet('off', 'counters', 'timed')][string]$Observation = 'counters',
     [switch]$OffUnlimited,
-    [switch]$DisableNeuralRendering
+    [switch]$DisableNeuralRendering,
+    [switch]$CompareNeuralRendering
 )
 $ErrorActionPreference = 'Stop'
+if ($CompareNeuralRendering -and ($DisableNeuralRendering -or $OffUnlimited -or $Plan -ne 'core' -or $Observation -ne 'counters')) {
+    throw 'Use -CompareNeuralRendering with core, counters and normal pacing; omit -DisableNeuralRendering and -OffUnlimited.'
+}
 $controllerPath = (Resolve-Path -LiteralPath $Controller).Path
 $requiredScripts = @(
     $controllerPath,
@@ -43,6 +47,7 @@ $arguments = @(
 )
 if ($OffUnlimited) { $arguments += '--off-unlimited' }
 if ($DisableNeuralRendering) { $arguments += '--disable-neural-rendering' }
+if ($CompareNeuralRendering) { $arguments += '--compare-neural-rendering' }
 & python @arguments
 $testExitCode = $LASTEXITCODE
 if ($testExitCode -ne 0) {

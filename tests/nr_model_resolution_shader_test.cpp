@@ -502,6 +502,7 @@ namespace
 		Texture motion(device, source, DXGI_FORMAT_R32G32_FLOAT, std::vector(colors.size(), Motion{}));
 		Texture reconstructed(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel));
 		NeuralRendering::RendererApplyArgs args;
+		ConfigureGuided(args);
 		args.device = device;
 		args.context = context;
 		args.colorInput = input.texture.Get();
@@ -1327,11 +1328,11 @@ namespace
 					ModelResolution::Batch single;
 					const auto bytes = adapter.AdditionalBytes(args, sharing);
 					Require(bytes && *bytes && prepare(single), "Initial single-region preparation failed");
-					const auto compileCount = AdapterCompiler::calls;
+					const auto initialCompileCount = AdapterCompiler::calls;
 					args = packedArgs;
 					if (sharedColor)
 						for (auto& target : targets) context->ClearUnorderedAccessViewFloat(target.color.uav.Get(), sentinel.data());
-					Require(adapter.AdditionalBytes(args, sharing) == 0 && prepare(batch) && AdapterCompiler::calls == compileCount,
+					Require(adapter.AdditionalBytes(args, sharing) == 0 && prepare(batch) && AdapterCompiler::calls == initialCompileCount,
 						"First atlas admission allocated or compiled on a moving-actor frame");
 #ifdef DEVBENCH_BRIDGE_ENABLED
 					if (AdapterCompiler::guided && percent == 30 && mode == RenderingMode::ReducedResolution && !sharedTargets) {
@@ -1344,6 +1345,7 @@ namespace
 						Require(prepare(batch) && AdapterCompiler::calls == warmed, "Single-to-atlas actor movement recompiled a guided shader");
 					}
 #endif
+					const auto compileCount = AdapterCompiler::calls;
 					for (unsigned eye = 0; eye < 2; ++eye)
 						Require(batch.targets[eye].color.resource == single.targets[eye].color.resource &&
 									batch.arguments[eye].viewportCrop == single.arguments[eye].viewportCrop,

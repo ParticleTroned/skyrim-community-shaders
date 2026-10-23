@@ -4,6 +4,9 @@
 #include "Api/FeatureDevBenchBridge.h"
 #include "Api/FeatureService.h"
 #include "Api/ProfilerApiDevBenchBridge.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/ReflexMeasurement.h"
+#endif
 #include "Api/ProfilerService.h"
 #include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceRegistryProvider.h"
@@ -184,6 +187,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			CSX::Api::ProfilerApiDevBenchBridge::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			NvPerf::InstallDevBench();
+			CSX::Diagnostics::ReflexMeasurement::Install();
 #endif
 			ScreenshotDevBenchBridge::Install();
 			CSX::Api::UpscalingDevBenchBridge::Install();
@@ -202,6 +206,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				NvPerf::InstallDevBench();
+				CSX::Diagnostics::ReflexMeasurement::Install();
 #endif
 				// DevBench publishes its interface from its own PostLoad listener. If
 				// CSX's listener ran first, this is the first deterministic retry after
@@ -320,6 +325,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				NvPerf::InstallDevBench();
+				CSX::Diagnostics::ReflexMeasurement::Install();
 #endif
 				CSX::Api::UpscalingDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();

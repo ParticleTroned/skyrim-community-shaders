@@ -12,6 +12,7 @@
 #include <string_view>
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/ReflexMeasurement.h"
 #	include <atomic>
 #	include <cstring>
 #	include <mutex>
@@ -3884,13 +3885,35 @@ bool Streamline::EnsureReflexDisabledForFrameGeneration()
 
 void Streamline::UpdateReflex()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	CSX::Diagnostics::ReflexMeasurement::UpdateScope measurement(
+		globals::state ? globals::state->frameCountAtomic.load(std::memory_order_relaxed) : 0, globals::state != nullptr);
+	if (!initialized)
+		measurement.reason = CSX::Diagnostics::ReflexMeasurement::Exit::Uninitialized;
+	else if (!reflexSupportedOnCurrentAdapter)
+		measurement.reason = CSX::Diagnostics::ReflexMeasurement::Exit::AdapterUnavailable;
+	else if (!featureReflex)
+		measurement.reason = CSX::Diagnostics::ReflexMeasurement::Exit::PluginUnavailable;
+	const SKSE::stl::scope_exit observePreferences([&] {
+		CSX::Diagnostics::ReflexMeasurement::ObservePreferences(reflexBackend,
+			measurement.reason == CSX::Diagnostics::ReflexMeasurement::Exit::Updated ||
+				measurement.reason == CSX::Diagnostics::ReflexMeasurement::Exit::FrameGeneration);
+	});
+#endif
 	if (!initialized || !reflexSupportedOnCurrentAdapter || !featureReflex)
 		return;
 
 	const auto& upscaling = globals::features::upscaling;
 	const bool reflexBlockedByFrameGeneration = upscaling.IsFrameGenerationDx12PathActive();
 	if (reflexBlockedByFrameGeneration) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		measurement.reason = CSX::Diagnostics::ReflexMeasurement::Exit::FrameGeneration;
+#endif
 		(void)EnsureReflexDisabledForFrameGeneration();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (measurement.CapturesBackend())
+			measurement.SetBackend(reflexBackend.GetStatus(), GetTickCount64());
+#endif
 		return;
 	}
 
@@ -3919,5 +3942,13 @@ void Streamline::UpdateReflex()
 	options.useMarkersToOptimize = markerOptimization.enabled;
 
 	const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const auto uptimeMs = GetTickCount64();
+	const auto outcome = reflexBackend.Update(options, currentFrame, uptimeMs);
+	measurement.SetBackendOutcome(outcome, uptimeMs);
+	LogReflexOutcome(outcome);
+	measurement.reason = CSX::Diagnostics::ReflexMeasurement::Exit::Updated;
+#else
 	LogReflexOutcome(reflexBackend.Update(options, currentFrame, GetTickCount64()));
+#endif
 }

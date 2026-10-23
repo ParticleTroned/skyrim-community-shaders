@@ -3639,6 +3639,48 @@ if(BUILD_CONTROLLER_TESTS)
         tests/camera_reprojection_test.cpp
     )
     target_link_libraries(camera_reprojection_test PRIVATE Microsoft::DirectXTK)
+    add_controller_test(view_refresh_policy_test ViewRefreshPolicy tests/view_refresh_policy_test.cpp)
+    target_link_libraries(view_refresh_policy_test PRIVATE Microsoft::DirectXTK)
+    add_d3d_shader_test(view_refresh_shader_test ViewRefreshShader tests/view_refresh_shader_test.cpp)
+    target_link_libraries(view_refresh_shader_test PRIVATE Microsoft::DirectXTK)
+    set(_view_refresh_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/view-refresh-test"
+    )
+    set(_view_refresh_test_headers
+        "${_view_refresh_test_dir}/view_refresh_identity.h"
+        "${_view_refresh_test_dir}/view_refresh_disabled.h"
+        "${_view_refresh_test_dir}/view_refresh_configure.h"
+        "${_view_refresh_test_dir}/view_refresh_submission.h"
+        "${_view_refresh_test_dir}/view_refresh_request.h"
+    )
+    add_custom_command(
+        OUTPUT ${_view_refresh_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_view_refresh_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_view_refresh_lifecycle.cmake"
+        DEPENDS
+            src/Features/VR/ViewRefresh.cpp
+            src/Features/VR/ViewRefreshDevBench.cpp
+            tests/extract_view_refresh_lifecycle.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(view_refresh_lifecycle_test ViewRefreshLifecycle tests/view_refresh_lifecycle_test.cpp)
+    target_sources(
+        view_refresh_lifecycle_test
+        PRIVATE ${_view_refresh_test_headers}
+    )
+    target_include_directories(
+        view_refresh_lifecycle_test
+        PRIVATE
+            "${_view_refresh_test_dir}"
+            "${PROJECT_SOURCE_DIR}/extern/CommonLibSSE-NG/extern/openvr/headers"
+    )
+    target_link_libraries(
+        view_refresh_lifecycle_test
+        PRIVATE Microsoft::DirectXTK nlohmann_json::nlohmann_json
+    )
     add_controller_test(
         vr_submit_temporal_snapshot_test
         VRSubmitTemporalSnapshot

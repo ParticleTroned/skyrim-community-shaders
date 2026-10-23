@@ -22,6 +22,7 @@
 #include "Features/Skylighting.h"
 #include "Features/Upscaling.h"
 #include "Features/VR/StabilizerIntegration.h"
+#include "Features/VR/ViewRefresh.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
 #include "Hooks.h"
@@ -198,6 +199,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			if (errors.empty()) {
 				VRFpsStabilizer::Initialize();
 				VRFpsStabilizer::InstallDevBench();
+				CSX::ViewRefresh::InstallDevBench();
 				ScreenshotDevBenchBridge::Install();
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED

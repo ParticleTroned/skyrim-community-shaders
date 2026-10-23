@@ -48,6 +48,26 @@ std::atomic<uint64_t> g_vrSubmitPairBoundarySequence{ 0 }, g_openVRSubmitCycleSt
 uint32_t observedThread = 1, nativeDepth = 0, returnedEyes = 0;
 uint64_t g_neuralSubmitPairBoundaryToken = 0;
 uint32_t GetCurrentThreadId() { return observedThread; }
+namespace CSX::ViewRefresh
+{
+	uint32_t begins = 0, ends = 0;
+	uint64_t activeCycle = 0;
+	bool active = false, invalidEnd = false;
+	void BeginSubmitPair(ID3D11Texture2D*, uint64_t cycle)
+	{
+		if (nativeDepth != 0 || active)
+			throw std::runtime_error("View Refresh began outside the native outer pair");
+		++begins;
+		active = true;
+		activeCycle = cycle;
+	}
+	void EndSubmitPair(uint64_t cycle) noexcept
+	{
+		invalidEnd |= nativeDepth != 0 || !active || cycle != activeCycle;
+		++ends;
+		active = false;
+	}
+}
 namespace globals
 {
 	struct State
@@ -82,7 +102,7 @@ namespace globals
 			void ServiceVRRenderScaleRelatchAtFrameBoundary()
 			{
 				if (nativeDepth != 0 || returnedEyes < 2 || g_vrSubmitPairBoundaryState.active ||
-					activeNeuralBoundary != 0 || g_vrRelatchPairCompletion.identity.token != 0)
+					activeNeuralBoundary != 0 || CSX::ViewRefresh::active || g_vrRelatchPairCompletion.identity.token != 0)
 					throw std::runtime_error("Relatch ran before native/eye return or before boundary ownership was cleared");
 				++calls;
 			}
@@ -139,6 +159,8 @@ namespace
 	{
 		++nativeDepth;
 		const SKSE::stl::scope_exit leaveNative([&]() { --nativeDepth; });
+		if (!CSX::ViewRefresh::active)
+			throw std::runtime_error("Native submission lost the View Refresh pair scope");
 		const bool nullOuter = nativeDepth == 1 &&
 		                       (scenario == Scenario::NullTexture || scenario == Scenario::NullOuterThenNested);
 		if (a_this != &nativeInstance || a_texture != (nullOuter ? nullptr : &texture))
@@ -197,6 +219,14 @@ namespace
 			throw std::runtime_error(a_message);
 	}
 
+	void RequireRefreshCompleted(uint32_t previousBegins)
+	{
+		Require(CSX::ViewRefresh::begins == previousBegins + 1 &&
+					CSX::ViewRefresh::ends == CSX::ViewRefresh::begins &&
+					!CSX::ViewRefresh::active && !CSX::ViewRefresh::invalidEnd,
+			"View Refresh did not finish exactly one outer scope after native return");
+	}
+
 	void NativePairOwnsOnePostReturnService()
 	{
 		for (const auto sample : { Scenario::Complete, Scenario::Missing, Scenario::Duplicate, Scenario::InvalidEye,
@@ -211,8 +241,10 @@ namespace
 			g_openVRSubmitCycleState = 20;
 			observedThread = 1;
 			returnedEyes = 0;
+			const auto previousBegins = CSX::ViewRefresh::begins;
 			BSOpenVR_Submit::thunk(&nativeInstance,
 				(sample == Scenario::NullTexture || sample == Scenario::NullOuterThenNested) ? nullptr : &texture);
+			RequireRefreshCompleted(previousBegins);
 			const bool complete = sample == Scenario::Complete || sample == Scenario::NestedThenComplete ||
 			                      sample == Scenario::DeepNestedThenComplete || sample == Scenario::NestedThrowThenComplete;
 			Require(globals::features::upscaling.calls == (complete ? 1u : 0u),
@@ -235,11 +267,13 @@ namespace
 		globals::features::upscaling = {};
 		g_neuralSubmitPairBoundaryToken = 700;
 		bool caught = false;
+		const auto previousBegins = CSX::ViewRefresh::begins;
 		try {
 			BSOpenVR_Submit::thunk(&nativeInstance, &texture);
 		} catch (const NativeFailure&) {
 			caught = true;
 		}
+		RequireRefreshCompleted(previousBegins);
 		Require(caught && nativeDepth == 0 && globals::features::upscaling.calls == 0 &&
 					!g_vrSubmitPairBoundaryState.active && g_vrSubmitPairBoundaryState.token == 0 &&
 					g_vrRelatchPairCompletion.identity.token == 0 && g_vrRelatchPairCompletion.completedEyeMask == 0,
@@ -259,7 +293,9 @@ namespace
 		globals::features::upscaling.neuralEnabled = false;
 		g_neuralSubmitPairBoundaryToken = 700;
 		returnedEyes = 0;
+		const auto previousBegins = CSX::ViewRefresh::begins;
 		BSOpenVR_Submit::thunk(&nativeInstance, &texture);
+		RequireRefreshCompleted(previousBegins);
 		const auto& nr = globals::features::upscaling;
 		Require(nr.calls == 1 && nr.neuralBegins == 0 && nr.neuralEnds == 0 &&
 					g_neuralSubmitPairBoundaryToken == 700,

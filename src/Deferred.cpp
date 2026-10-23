@@ -28,6 +28,7 @@
 #include "Features/Upscaling/NeuralRendering/CharacterCategoryFormat.h"
 #include "Features/Upscaling/NeuralRendering/CharacterRendering.h"
 #include "Features/VR.h"
+#include "Features/VR/ViewRefresh.h"
 
 #include "Hooks.h"
 #include "Utils/D3D.h"
@@ -1000,6 +1001,8 @@ void Deferred::Hooks::Main_RenderShadowMaps::thunk()
 
 void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 {
+	if (CSX::ViewRefresh::TryReuseWorld())
+		return;
 	CS_GPU_PASS("SharedScene::World");
 	auto* const state = globals::state;
 	state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
@@ -1007,6 +1010,7 @@ void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 	state->lastWorldRenderFrame = state->frameCount;
 	func(a1);
 	state->lastCompletedWorldRenderFrame = state->frameCount;
+	CSX::ViewRefresh::CaptureWorld();
 	state->inWorld = false;
 	state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
 };

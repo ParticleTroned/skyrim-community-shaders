@@ -7,6 +7,7 @@
 #include "Features/VR/InSceneOverlaySubmitPolicy.h"
 #include "Features/VR/OpenVRSubmitLeasePolicy.h"
 #include "Features/VR/VRRenderScaleFrameBoundaryPolicy.h"
+#include "Features/VR/ViewRefresh.h"
 #include "Features/VR/WandBeamRenderer.h"
 #include "Features/VR/WandSurfaceGeometry.h"
 #include "Globals.h"
@@ -703,6 +704,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				upscaling.NotifyVRPostLoadCompositorCycleStarted(
 					compositorCycleToken,
 					result == vr::VRCompositorError_None);
+				CSX::ViewRefresh::OnRenderPose(compositorCycleToken, _this,
+					result == vr::VRCompositorError_None && pRenderPoseArray && unRenderPoseArrayCount > vr::k_unTrackedDeviceIndex_Hmd ?
+						&pRenderPoseArray[vr::k_unTrackedDeviceIndex_Hmd] :
+						nullptr);
 				const bool cycleCooldownActive =
 					upscaling.submitStageVendorResumeFrame.load(
 						std::memory_order_acquire) != 0;
@@ -789,6 +794,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				const SKSE::stl::scope_exit endNeuralBoundary([&]() noexcept {
 					upscaling.EndNeuralSubmitPairBoundary(neuralBoundary);
 					g_neuralSubmitPairBoundaryToken = previousNeuralBoundary;
+				});
+				const auto refreshCycle = g_vrSubmitPairBoundaryState.compositorCycle;
+				if (!nestedSubmit)
+					CSX::ViewRefresh::BeginSubmitPair(a_texture, refreshCycle);
+				const SKSE::stl::scope_exit endViewRefresh([&]() noexcept {
+					if (!nestedSubmit)
+						CSX::ViewRefresh::EndSubmitPair(refreshCycle);
 				});
 				func(_this, a_texture);
 			}
@@ -1123,6 +1135,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				}
 				const bool canPublishSubmitResult =
 					submitPacketCurrentAfterSubmit && isSubmitPacketCurrent();
+				if (submitBoundaryIdentity.scopeToken != 0)
+					CSX::ViewRefresh::RecordSubmission(eEye, compositorCycleToken,
+						submitBoundaryIdentity.matchedToken != 0 && result == vr::VRCompositorError_None && canPublishSubmitResult,
+						std::string_view(a_path) == "view-refresh");
 				const auto completionResult =
 					result == vr::VRCompositorError_None && !canPublishSubmitResult ?
 						vr::VRCompositorError_RequestFailed :
@@ -1829,6 +1845,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				return submitLatchedNativeRestoreCycle(
 					"native-restore-cycle-native",
 					recordStrictObservation);
+			}
+			vr::VRTextureWithPose_t refreshedTexture{};
+			if (submitBoundaryIdentity.matchedToken != 0 && !nativeRestoreGuardActive && !upscaling.IsVRPostLoadCompositorHoldActive() &&
+				CSX::ViewRefresh::GetSubmission(eEye, compositorCycleToken, refreshedTexture)) {
+				const vr::VRTextureBounds_t refreshedBounds{ 0, 0, 1, 1 };
+				return submit("view-refresh", &refreshedTexture, &refreshedBounds, vr::Submit_TextureWithPose);
 			}
 			if (!upscaling.IsVRPostLoadCompositorHoldActive() &&
 				!upscaling.IsVRRenderScaleModeLatched() &&

@@ -21,6 +21,7 @@
 #include "SubsurfaceScattering.h"
 #include "Upscaling.h"
 #include "VR/MenuPositioningPolicy.h"
+#include "VR/ViewRefresh.h"
 #include "VRDepthCullingCacheRefreshPolicy.h"
 #include "VRDepthCullingEnablePolicy.h"
 #include "VRDepthCullingSettings.h"
@@ -485,6 +486,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void VR::LoadSettings(json& o_json)
 {
+	CSX::ViewRefresh::Load(o_json);
 	auto normalizedSettings = o_json;
 	if (VRDepthCullingSettings::NormalizeLoadedSettings(normalizedSettings))
 		logger::warn("VR: invalid depth-culling settings normalized to valid defaults or limits");
@@ -527,6 +529,7 @@ void VR::SaveSettings(json& o_json)
 {
 	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
 	o_json = settings;
+	CSX::ViewRefresh::Save(o_json);
 	SaveVRControllerBinding(o_json, "VRMenuOpenKeys", settings.VRMenuOpenKeys);
 	SaveVRControllerBinding(o_json, "VRMenuCloseKeys", settings.VRMenuCloseKeys);
 	SaveVRControllerBinding(o_json, "VROverlayOpenKeys", settings.VROverlayOpenKeys);
@@ -537,6 +540,7 @@ void VR::SaveSettings(json& o_json)
 
 void VR::RestoreDefaultSettings()
 {
+	CSX::ViewRefresh::Configure({});
 	ReleaseMenuDesktopWindowManagement();
 	settings = Settings{};
 	settings.ClampToValidRanges();
@@ -1399,6 +1403,7 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 	}
 
 	DrawDepthCullingSettings(*this, "PerformanceSettings");
+	CSX::ViewRefresh::DrawSettings();
 
 	if (!a_advanced)
 		return;

@@ -68,6 +68,8 @@ class Evidence(unittest.TestCase):
         self.assertFalse(E.scene_match(changed, changed, [pose], result['reference'])['valid'])
         self.assertFalse(E.scene_match(condition, condition, [])['valid'])
         self.assertTrue(E.scene_match(condition | {'gameHour': 13}, condition | {'gameHour': 13.1}, [pose], result['reference'])['valid'])
+        self.assertTrue(E.scene_match(condition, condition | {'gameHour': 13}, [pose], result['reference'])['valid'])
+        self.assertFalse(E.scene_match(condition, condition | {'gameHour': None}, [pose], result['reference'])['valid'])
 
     def test_lost_ack_recovery_does_not_reexport_released_sidecar(self):
         campaign = object.__new__(R.Campaign)

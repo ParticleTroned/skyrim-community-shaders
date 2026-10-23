@@ -134,8 +134,8 @@ def scene_match(before, after, compositor, reference=None):
     elif any(math.dist(positions[0], p) > 8 for p in positions[1:]):
         limits.append("player moved more than 8 world units")
     hours = [before.get("gameHour"), after.get("gameHour")]
-    if not all(finite(x) for x in hours) or max(abs((a - b + 12) % 24 - 12) for a in hours for b in hours) > 0.5:
-        limits.append("game time changes by more than 0.5 hours within a capture or is unavailable")
+    if not all(finite(x) for x in hours):
+        limits.append("game time unavailable")
     poses = [row.get("hmdPose", {}) for row in compositor]
     valid_poses = [p["matrix34"] for p in poses if p.get("available") is True and isinstance(p.get("matrix34"), list) and
                    len(p["matrix34"]) == 12 and all(finite(x) for x in p["matrix34"])]
@@ -154,7 +154,8 @@ def scene_match(before, after, compositor, reference=None):
         if max_position > 0.10 or max_angle > 5:
             limits.append("HMD viewpoint changed beyond 10 cm / 5 degrees")
     return {"valid": not limits, "limitations": limits, "reference": reference,
-            "referenceGameHour": reference.get("gameHour"), "captureGameHours": hours,
+            "referenceGameHour": reference.get("gameHour"), "conditionReceiptGameHours": hours,
+            "gameTimeQualification": "after receipt follows export; elapsed time includes transfer, not only admission. No time reset or fixed-time equivalence is claimed",
             "maxHmdPositionDeltaMetres": max_position, "maxHmdForwardAngleDegrees": max_angle,
             "meaning": "fixed predeclared matching limits; natural time progression across conditions is retained. Bracketing references are required. Does not prove unchanged AI, dynamic lights or intermediate game position"}
 

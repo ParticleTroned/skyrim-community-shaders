@@ -1084,6 +1084,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					}
 				}
 #endif
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				const auto renderMapCaptureGeneration = CSX::RenderMap::GetRuntime().ActiveCaptureGeneration();
+#endif
 				vr::EVRCompositorError result = submitPacket.captureError;
 				if (submitPacket.valid) {
 					result = func(
@@ -1146,18 +1149,27 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				if (result == vr::VRCompositorError_None &&
 					submitPacketCurrentAfterSubmit &&
-					isSubmitPacketCurrent() &&
 					submitPacket.directX &&
 					submitPacket.GetColorTexture()) {
 					const vr::VRTextureBounds_t fullBounds{ 0.0f, 0.0f, 1.0f, 1.0f };
 					const auto& bounds = retainedBounds ? *retainedBounds : fullBounds;
-					CSX::RenderMap::GetRuntime().SetCpuFrame(globals::state ? globals::state->frameCount : 0);
 					CSX::RenderMap::RecordRetainedEyeSubmission(
 						CSX::RenderMap::GetRuntime(),
+						Hooks::GetRenderTargetRecreationMutex(),
 						submitPacket.publicationLease,
-						globals::state ? globals::state->GetRenderTargetResourcePublicationGeneration() : 0,
-						reinterpret_cast<std::uintptr_t>(globals::d3d::device),
-						DescribeSubmittedTexture(submitPacket.GetColorTexture()),
+						renderMapCaptureGeneration,
+						[&]() -> std::optional<CSX::RenderMap::RetainedEyePublication> {
+							const auto generation = globals::state ? globals::state->GetRenderTargetResourcePublicationGeneration() : 0;
+							const auto device = reinterpret_cast<std::uintptr_t>(globals::d3d::device);
+							if (!OpenVRSubmitLeasePolicy::CanPublish(submitPacket.publicationLease, generation, device))
+								return std::nullopt;
+							return CSX::RenderMap::RetainedEyePublication{
+								.generation = generation,
+								.device = device,
+								.cpuFrame = globals::state ? globals::state->frameCount : 0,
+								.resource = DescribeSubmittedTexture(submitPacket.GetColorTexture())
+							};
+						},
 						RenderMapEye(submitPacket.eye),
 						submitPacket.eye == vr::Eye_Left ? 1u : 2u,
 						bounds.uMin,

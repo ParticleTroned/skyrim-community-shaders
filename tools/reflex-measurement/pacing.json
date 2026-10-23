@@ -1,0 +1,15 @@
+{
+    "schema": 1,
+    "modes": ["off", "on", "boost"],
+    "capsFps": [30, 45],
+    "functionalCapFps": 20,
+    "functionalMs": 3000,
+    "comparisonMs": 30000,
+    "settleSeconds": 5,
+    "repeats": 2,
+    "capacity": 65536,
+    "admissionDelayMs": 2500,
+    "queryPeriodMs": 1000,
+    "observerRelativeThreshold": 0.05,
+    "observerAbsoluteThresholdMs": 0.2
+}

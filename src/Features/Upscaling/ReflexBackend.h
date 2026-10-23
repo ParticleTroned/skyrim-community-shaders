@@ -71,11 +71,29 @@ namespace Reflex
 		uint64_t deviceGeneration = 0;
 	};
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	enum class SleepSkip : uint32_t
+	{
+		Attempted,
+		NotRequested,
+		NoFrame,
+		SameFrame,
+		Backoff,
+		BackendUnavailable,
+		SettingsPending
+	};
+#endif
 	struct Outcome
 	{
 		Status status{};
 		Notice notice = Notice::None;
 		bool disabled = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool attemptsObserved = false;
+		bool settingsAttempted = false;
+		bool sleepAttempted = false;
+		SleepSkip sleepSkipReason = SleepSkip::Attempted;
+#endif
 	};
 
 	/// Official native entry points, injectable without replacing recovery logic.
@@ -83,7 +101,38 @@ namespace Reflex
 	{
 		decltype(&NvAPI_D3D_SetSleepMode) setSleepMode = nullptr;
 		decltype(&NvAPI_D3D_Sleep) sleep = nullptr;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		decltype(&NvAPI_D3D_GetSleepStatus) getSleepStatus = nullptr;
+#endif
 	};
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	struct DiagnosticBinding
+	{
+		Status status;
+		uintptr_t device{}, settingsFunction{}, sleepFunction{}, readbackFunction{};
+		NV_SET_SLEEP_MODE_PARAMS submitted{};
+		NvAPI_Status submissionResult = NVAPI_API_NOT_INITIALIZED;
+		int64_t submissionEnter{}, submissionExit{};
+	};
+	struct DiagnosticReadback
+	{
+		NvAPI_Status result = NVAPI_NO_IMPLEMENTATION;
+		NV_GET_SLEEP_STATUS_PARAMS raw{};
+		uint64_t generation{};
+		int64_t requested{}, enter{}, exit{};
+		int64_t admitted{};
+		bool attempted{}, generationKnown{};
+		uint64_t sequence{};
+		bool completed{};
+	};
+	struct DiagnosticDriver
+	{
+		NvAPI_Status result = NVAPI_NO_IMPLEMENTATION;
+		NvU32 version{};
+		NvAPI_ShortString branch{};
+	};
+#endif
 
 	/// Owns a native device and one serialized settings/sleep recovery state.
 	class Backend
@@ -104,8 +153,21 @@ namespace Reflex
 		/// Confirm native acceptance of Off, zero cap and disabled marker optimization.
 		Outcome Disable(uint64_t a_nowMs);
 		[[nodiscard]] Status GetStatus() const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/// Inspect the owned native binding without changing recovery or settings.
+		[[nodiscard]] DiagnosticBinding InspectDiagnosticBinding() const;
+		/// Return no snapshot rather than waiting behind native pacing work.
+		[[nodiscard]] std::optional<DiagnosticBinding> TryInspectDiagnosticBinding() const;
+		/// Query the same serialized device; failures remain outside backend health.
+		[[nodiscard]] DiagnosticReadback ReadSleepStatus();
+		/// Read available driver identity outside capture windows.
+		[[nodiscard]] DiagnosticDriver ReadDriverIdentity() const;
+#endif
 
 	private:
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		[[nodiscard]] DiagnosticBinding DescribeDiagnosticBinding() const;
+#endif
 		NvAPI_Status InitializeApi();
 		Outcome Process(Options a_desired, std::optional<uint32_t> a_frame, uint64_t a_nowMs);
 		void Fail(NvAPI_Status a_result, Operation a_operation, uint64_t a_nowMs);
@@ -123,6 +185,12 @@ namespace Reflex
 		bool supportedDevice = false;
 		bool possiblyActive = false;
 		Status status{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		NV_SET_SLEEP_MODE_PARAMS diagnosticSubmitted{};
+		NvAPI_Status diagnosticSubmissionResult = NVAPI_API_NOT_INITIALIZED;
+		int64_t diagnosticSubmissionEnter{}, diagnosticSubmissionExit{};
+		decltype(&NvAPI_SYS_GetDriverAndBranchVersion) diagnosticDriverFunction = nullptr;
+#endif
 		// Sleep exclusion follows the logical game frame across device changes.
 		std::optional<uint32_t> lastSleepFrame;
 		std::optional<uint64_t> lastFailureNoticeMs;

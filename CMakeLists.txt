@@ -3675,6 +3675,55 @@ if(BUILD_CONTROLLER_TESTS)
         ReflexBackend
         tests/reflex_backend_test.cpp
     )
+    add_controller_test(
+        reflex_measurement_state_test ReflexMeasurementState
+        tests/reflex_measurement_state_test.cpp
+    )
+    target_compile_definitions(
+        reflex_measurement_state_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    add_controller_test(
+        reflex_measurement_backend_test ReflexMeasurementBackend
+        tests/reflex_measurement_backend_test.cpp
+    )
+    target_sources(
+        reflex_measurement_backend_test
+        PRIVATE src/Features/Upscaling/ReflexBackend.cpp
+    )
+    target_include_directories(
+        reflex_measurement_backend_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/extern/nvapi"
+    )
+    target_compile_definitions(
+        reflex_measurement_backend_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    target_link_libraries(reflex_measurement_backend_test PRIVATE d3d11 dxguid)
+    add_controller_test(
+        reflex_measurement_off_test ReflexMeasurementOff
+        tests/reflex_measurement_off_test.cpp
+    )
+    add_test(
+        NAME ReflexMeasurementEvidence
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/reflex_measurement_evidence_test.py"
+    )
+    set_tests_properties(
+        ReflexMeasurementEvidence
+        PROPERTIES LABELS "ControllerTests"
+    )
+    add_test(
+        NAME ReflexMeasurementSourceIsolation
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/reflex_measurement_isolation_test.py"
+    )
+    set_tests_properties(
+        ReflexMeasurementSourceIsolation
+        PROPERTIES LABELS "ControllerTests"
+    )
     set(_reflex_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/reflex")
     set(_reflex_logging_header
         "${_reflex_test_dir}/reflex_logging_under_test.h"

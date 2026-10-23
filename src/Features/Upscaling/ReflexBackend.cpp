@@ -1,5 +1,8 @@
 #include "ReflexBackend.h"
 #include "NvidiaComIdentity.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/ReflexMeasurement.h"
+#endif
 
 #include <array>
 #include <string_view>
@@ -72,6 +75,10 @@ namespace Reflex
 		unload = Resolve<decltype(&NvAPI_Unload)>(query, "NvAPI_Unload");
 		calls.setSleepMode = Resolve<decltype(calls.setSleepMode)>(query, "NvAPI_D3D_SetSleepMode");
 		calls.sleep = Resolve<decltype(calls.sleep)>(query, "NvAPI_D3D_Sleep");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		calls.getSleepStatus = Resolve<decltype(calls.getSleepStatus)>(query, "NvAPI_D3D_GetSleepStatus");
+		diagnosticDriverFunction = Resolve<decltype(diagnosticDriverFunction)>(query, "NvAPI_SYS_GetDriverAndBranchVersion");
+#endif
 		if (!initialize || !unload || !calls.setSleepMode || !calls.sleep)
 			return NVAPI_NO_IMPLEMENTATION;
 		const auto result = initialize();
@@ -94,6 +101,11 @@ namespace Reflex
 		lastFailureNoticeMs.reset();
 		lastRecoveryNoticeMs.reset();
 		status.deviceGeneration = generation;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		diagnosticSubmitted = {};
+		diagnosticSubmissionResult = NVAPI_API_NOT_INITIALIZED;
+		diagnosticSubmissionEnter = diagnosticSubmissionExit = 0;
+#endif
 		if (!a_device) {
 			status.nativeStatus = NVAPI_INVALID_ARGUMENT;
 			return status.nativeStatus;
@@ -147,6 +159,64 @@ namespace Reflex
 		return status;
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	DiagnosticBinding Backend::InspectDiagnosticBinding() const
+	{
+		std::scoped_lock lock(mutex);
+		return DescribeDiagnosticBinding();
+	}
+	std::optional<DiagnosticBinding> Backend::TryInspectDiagnosticBinding() const
+	{
+		std::unique_lock lock(mutex, std::try_to_lock);
+		return lock ? std::optional(DescribeDiagnosticBinding()) : std::nullopt;
+	}
+	DiagnosticBinding Backend::DescribeDiagnosticBinding() const
+	{
+		return { status, reinterpret_cast<uintptr_t>(device.Get()),
+			reinterpret_cast<uintptr_t>(calls.setSleepMode), reinterpret_cast<uintptr_t>(calls.sleep),
+			reinterpret_cast<uintptr_t>(calls.getSleepStatus), diagnosticSubmitted, diagnosticSubmissionResult,
+			diagnosticSubmissionEnter, diagnosticSubmissionExit };
+	}
+
+	DiagnosticReadback Backend::ReadSleepStatus()
+	{
+		DiagnosticReadback result;
+		result.completed = true;
+		result.requested = CSX::Diagnostics::ReflexMeasurement::Clock();
+		result.enter = result.requested;
+		result.raw.version = NV_GET_SLEEP_STATUS_PARAMS_VER;
+		std::unique_lock lock(mutex, std::try_to_lock);
+		if (!lock) {
+			result.result = NVAPI_DEVICE_BUSY;
+			result.exit = CSX::Diagnostics::ReflexMeasurement::Clock();
+			return result;
+		}
+		result.generation = status.deviceGeneration;
+		result.generationKnown = true;
+		result.enter = CSX::Diagnostics::ReflexMeasurement::Clock();
+		if (!device)
+			result.result = NVAPI_INVALID_HANDLE;
+		else if (calls.getSleepStatus) {
+			result.attempted = true;
+			result.result = calls.getSleepStatus(device.Get(), &result.raw);
+		}
+		result.exit = CSX::Diagnostics::ReflexMeasurement::Clock();
+		return result;
+	}
+	DiagnosticDriver Backend::ReadDriverIdentity() const
+	{
+		DiagnosticDriver result;
+		std::unique_lock lock(mutex, std::try_to_lock);
+		if (!lock) {
+			result.result = NVAPI_DEVICE_BUSY;
+			return result;
+		}
+		if (initializedApi && diagnosticDriverFunction)
+			result.result = diagnosticDriverFunction(&result.version, result.branch);
+		return result;
+	}
+#endif
+
 	bool Backend::CanApply() const
 	{
 		return device && calls.setSleepMode && calls.sleep &&
@@ -188,6 +258,10 @@ namespace Reflex
 
 	Outcome Backend::Process(Options a_desired, std::optional<uint32_t> a_frame, uint64_t a_nowMs)
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const bool observeAttempts = CSX::Diagnostics::ReflexMeasurement::NativeTracingActive();
+		bool settingsAttempted = false, sleepAttempted = false;
+#endif
 		Notice notice = Notice::None;
 		const bool changed = !status.desiredValid || status.desired != a_desired;
 		if (changed) {
@@ -214,7 +288,31 @@ namespace Reflex
 			parameters.bUseMarkersToOptimize = a_desired.useMarkersToOptimize;
 			// Preserve the SDK's zero default for minimum queue time and reserved fields.
 			possiblyActive |= a_desired.NeedsSleep() || a_desired.useMarkersToOptimize;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			using namespace CSX::Diagnostics::ReflexMeasurement;
+			auto& journal = Records();
+			const auto ticket = BeginNativeOperation();
+			const auto submitted = parameters;
+			diagnosticSubmitted = parameters;
+			NativeRecord record{ 0, 0, status.deviceGeneration,
+				reinterpret_cast<uintptr_t>(device.Get()), a_frame.value_or(0), a_frame.has_value(), true,
+				0, submitted.version, sizeof(submitted), submitted.bLowLatencyMode, submitted.bLowLatencyBoost,
+				submitted.minimumIntervalUs, submitted.bUseMarkersToOptimize, submitted.bUseMinQueueTime, ticket.enter, ticket.inherited };
+			record.applicationSequence = ticket.parentSequence;
+			record.operationEnter = ticket.admitted ? Clock() : 0;
+			journal.RecordStart(ticket, record, journal.nativeStarted, journal.nativeLimit);
+			diagnosticSubmissionEnter = Clock();
+			settingsAttempted = true;
+#endif
 			const auto result = calls.setSleepMode(device.Get(), &parameters);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			diagnosticSubmissionExit = Clock();
+			diagnosticSubmissionResult = result;
+			record.enter = diagnosticSubmissionEnter;
+			record.exit = diagnosticSubmissionExit;
+			record.result = result;
+			journal.End(ticket, record, journal.native);
+#endif
 			status.operation = Operation::Settings;
 			status.nativeStatus = result;
 			if (result == NVAPI_OK) {
@@ -238,7 +336,27 @@ namespace Reflex
 		if (a_frame && lastSleepFrame != a_frame && CanApply() &&
 			!status.pending && a_desired.NeedsSleep()) {
 			lastSleepFrame = a_frame;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			using namespace CSX::Diagnostics::ReflexMeasurement;
+			auto& journal = Records();
+			const auto ticket = BeginNativeOperation();
+			NativeRecord record{ 0, 0, status.deviceGeneration,
+				reinterpret_cast<uintptr_t>(device.Get()), *a_frame, true, false };
+			record.admitted = ticket.enter;
+			record.inheritedAdmission = ticket.inherited;
+			record.applicationSequence = ticket.parentSequence;
+			record.operationEnter = ticket.admitted ? Clock() : 0;
+			journal.RecordStart(ticket, record, journal.nativeStarted, journal.nativeLimit);
+			const auto nativeEnter = ticket.admitted ? Clock() : 0;
+			sleepAttempted = true;
+#endif
 			const auto result = calls.sleep(device.Get());
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			record.enter = nativeEnter;
+			record.exit = ticket.admitted ? Clock() : 0;
+			record.result = result;
+			journal.End(ticket, record, journal.native);
+#endif
 			status.operation = Operation::Sleep;
 			status.nativeStatus = result;
 			if (result == NVAPI_OK) {
@@ -262,7 +380,20 @@ namespace Reflex
 			rateLimit(lastFailureNoticeMs);
 		else if (notice == Notice::Recovered)
 			rateLimit(lastRecoveryNoticeMs);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		// Codes distinguish intentional skips from missing native journal entries.
+		const auto skip = !observeAttempts || sleepAttempted           ? SleepSkip::Attempted :
+		                  !a_frame                                     ? SleepSkip::NoFrame :
+		                  !a_desired.NeedsSleep()                      ? SleepSkip::NotRequested :
+		                  lastSleepFrame == a_frame                    ? SleepSkip::SameFrame :
+		                  !CanApply()                                  ? SleepSkip::BackendUnavailable :
+		                  settingsAttempted && status.pending          ? SleepSkip::SettingsPending :
+		                  status.pending && a_nowMs < status.retryAtMs ? SleepSkip::Backoff :
+		                                                                 SleepSkip::SettingsPending;
+		return { status, notice, IsDisabled(), observeAttempts, settingsAttempted, sleepAttempted, skip };
+#else
 		return { status, notice, IsDisabled() };
+#endif
 	}
 
 	Outcome Backend::Update(Options a_desired, uint32_t a_frame, uint64_t a_nowMs)

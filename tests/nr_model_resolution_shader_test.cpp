@@ -1,6 +1,7 @@
 #include "Features/Upscaling/NeuralRendering/ModelResolution.h"
 #include "GpuPass.h"
 #include "ShaderPackageIncludes.h"
+#include "Utils/ComIdentity.h"
 #include "Utils/ShaderCompiler.h"
 #include "d3d11_shader_test.h"
 #include "nr_model_resolution_accounting_under_test.h"
@@ -115,6 +116,34 @@ namespace
 			throw std::runtime_error(message);
 		}
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void CheckPreparationEvidence(const NeuralRendering::ModelResolution::Batch& batch,
+		const NeuralRendering::ModelResolution::Targets& native, bool shared)
+	{
+		using namespace NeuralRendering;
+		using Util::SameIdentity;
+		struct Slot
+		{
+			struct Texture
+			{
+				ComPtr<ID3D11Resource> resource11;
+			} color, depth, motionVectors;
+		} slot{ { native.color.resource }, { native.depth.resource }, { native.motion.resource } };
+		const std::array slots{ &slot };
+		const auto a_args = std::span(batch.arguments.data(), batch.count);
+		ExecutionDescriptor descriptor{};
+		descriptor.regionCount = 1;
+		descriptor.regions[0].physicalSlot = a_args.front().featureSlot;
+		ExecutionEvidence preparation(descriptor);
+		preparation.Update([](auto& snapshot) { snapshot.regions[0].newlyAllocatedLogicalBytes = 123; });
+		auto execution = std::make_shared<ExecutionEvidence>(descriptor);
+		const auto MergeModelPreparationEvidenceLocked = [&](ExecutionEvidence& value) { value.MergeResourcePreparation(preparation); };
+#	include "nr_model_preparation_evidence_under_test.h"
+		Require(execution->Snapshot().regions[0].newlyAllocatedLogicalBytes == (shared ? 123u : 0u),
+			"Early preparation allocation evidence was lost or attributed to a private batch");
+	}
+#endif
 
 	struct Region
 	{
@@ -463,6 +492,8 @@ namespace
 		args.renderingMode = NeuralRendering::RenderingMode::FullResolution;
 		NeuralRendering::ModelResolution adapter;
 		NeuralRendering::ModelResolution::Batch batch;
+		NeuralRendering::ModelResolution::Batch retained;
+		NeuralRendering::RendererApplyArgs retainedArgs;
 		HRESULT status = S_OK;
 		const auto request = std::span(&args, 1);
 		for (unsigned pass = 0; pass < 2; ++pass) {
@@ -471,14 +502,25 @@ namespace
 			if (pass != 0)
 				Require(adapter.AdditionalBytes(request) == 0, "Filter switch reallocated model textures");
 			Require(adapter.Prepare(request, batch, status), "Kernel adapter preparation failed");
+			if (pass != 0)
+				Require(!adapter.Reconstruct(std::span(&retainedArgs, 1), retained, status) && status == E_INVALIDARG,
+					"A retained batch accepted constants overwritten by a different filter");
 			context->CopyResource(batch.arguments[0].colorInput, proxy.texture.Get());
 			context->CopyResource(batch.arguments[0].colorOutput, outputNeural.texture.Get());
+			auto mismatched = args;
+			mismatched.reconstructionFilter = args.reconstructionFilter == NeuralRendering::ReconstructionFilter::Bilinear ?
+			                                      NeuralRendering::ReconstructionFilter::Lanczos3 :
+			                                      NeuralRendering::ReconstructionFilter::Bilinear;
+			Require(!adapter.Reconstruct(std::span(&mismatched, 1), batch, status) && status == E_INVALIDARG,
+				"A changed filter silently reconstructed with stale prepared constants");
 			Require(adapter.Reconstruct(request, batch, status), "Kernel adapter reconstruction failed");
 			adapter.Commit(request, batch);
 			constants.SetVariable("ReconstructionFilter", static_cast<unsigned>(args.reconstructionFilter));
 			Dispatch(context, shader, constants, sourceRegion.size, inputs, outputs);
 			const auto direct = result.Read<Pixel>(device, context), adapted = reconstructed.Read<Pixel>(device, context);
 			Require(direct == adapted, "Production adapter lost the selected filter or retained stale constants after a switch");
+			retained = batch;
+			retainedArgs = args;
 		}
 	}
 
@@ -608,6 +650,13 @@ namespace
 				Require(Texture(targets[1].depth, model).Read<float>(device, context) == untouched,
 					"Mono preparation touched the unused eye");
 				Require(shared.Prepare(args, candidate, result, targets), "Direct shared-target preparation failed");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				auto native = targets[0];
+				if (guidesOnly)
+					native.color = baseline.targets[0].color;
+				CheckPreparationEvidence(candidate, native, true);
+				CheckPreparationEvidence(baseline, native, false);
+#endif
 				Require(shared.AdditionalBytes(args, sharing) == 0 && shared.RetainedBytes(2).value() + shared.RetainedBytes(3).value() == retained,
 					"Shared-target cache retains duplicate model-sized allocations");
 				const auto previousMotion = candidate.targets[0].motion.resource;

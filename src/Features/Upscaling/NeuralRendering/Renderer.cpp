@@ -3604,7 +3604,8 @@ namespace NeuralRendering
 		}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		if (execution && SameIdentity(a_args.front().colorInput, slots.front()->color.resource11.Get()))
+		if (execution && SameIdentity(a_args.front().depthGuide, slots.front()->depth.resource11.Get()) &&
+			SameIdentity(a_args.front().motionVectors, slots.front()->motionVectors.resource11.Get()))
 			MergeModelPreparationEvidenceLocked(*execution);
 #endif
 

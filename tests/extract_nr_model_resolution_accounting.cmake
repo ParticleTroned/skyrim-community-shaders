@@ -12,3 +12,6 @@ string(SUBSTRING "${source}" ${start} ${length} function_body)
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(WRITE "${OUTPUT_DIRECTORY}/nr_model_resolution_accounting_under_test.h"
     "#pragma once\n#include <DirectXTex.h>\nnamespace NeuralRendering {\n${function_body}\n}\n")
+include("${CMAKE_CURRENT_LIST_DIR}/extract_source_region.cmake")
+extract_between("${source}" "\t\tif (execution &&" "\n#endif\n\n\t\t// Allocate/compile"
+    "nr_model_preparation_evidence_under_test.h")

@@ -80,7 +80,7 @@ namespace NeuralRendering
 
 		/** Prepare both eyes into validated shared targets or private proxies before native evaluation. */
 		bool Prepare(std::span<const RendererApplyArgs>, Batch&, HRESULT&, std::span<const Targets> = {});
-		/** Reconstruct the complete batch into retained private or explicitly unpublished output targets. */
+		/** Reconstruct into retained targets; reject filters changed since preparation before dispatch. */
 		bool Reconstruct(std::span<const RendererApplyArgs>, const Batch&, HRESULT&);
 		/** Commit only the original owned rectangles after successful reconstruction. */
 		void Commit(std::span<const RendererApplyArgs>, const Batch&) const;

@@ -1169,6 +1169,9 @@ namespace NeuralRendering
 		if (!ValidBatchLayout(args) || args.front().device != batch.device.Get() || args.front().context != batch.context.Get())
 			return false;
 		for (std::size_t index = 0; index < args.size(); ++index) {
+			if (args[index].reconstructionFilter != batch.arguments[index].reconstructionFilter ||
+				static_cast<std::uint32_t>(args[index].reconstructionFilter) != batch.resources[index]->constants.reconstructionFilter)
+				return false;
 			const auto& selection = args[index].modelOutputSelection;
 			if (static_cast<bool>(selection) != static_cast<bool>(batch.selectedOutputs[index]) ||
 				(selection && (args[index].colorInput != batch.selectionSources[index].Get() ||

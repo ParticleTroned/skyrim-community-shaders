@@ -142,6 +142,7 @@
       "neuralRenderingBatchedStereo": true,
       "neuralRenderingBlendFeather": 0.05000000074505806,
       "neuralRenderingDirectCommit": true,
+      "neuralRenderingReconstructionFilter": 0,
       "neuralRenderingEnabled": false,
       "neuralRenderingFovOnly": false,
       "neuralRenderingRenderscaleFov": false,

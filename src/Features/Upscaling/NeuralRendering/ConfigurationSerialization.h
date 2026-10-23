@@ -35,6 +35,18 @@ namespace NeuralRendering
 		return ParseBoundedInteger(value, kMinimumModelResolutionPercent, kMaximumModelResolutionPercent);
 	}
 
+	/** Named filters form the public DevBench reconstruction contract. */
+	[[nodiscard]] inline std::optional<ReconstructionFilter> ParseReconstructionFilter(const nlohmann::json& value)
+	{
+		if (!value.is_string())
+			return std::nullopt;
+		if (value == "bilinear")
+			return ReconstructionFilter::Bilinear;
+		if (value == "lanczos3")
+			return ReconstructionFilter::Lanczos3;
+		return std::nullopt;
+	}
+
 	/** Selects feature-owned fields from an ordinary or legacy upscaling profile. */
 	inline nlohmann::json RenderingSettings(const nlohmann::json& settings)
 	{

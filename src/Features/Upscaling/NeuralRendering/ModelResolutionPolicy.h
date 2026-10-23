@@ -16,6 +16,28 @@ namespace NeuralRendering
 	inline constexpr std::uint32_t kMaximumModelResolutionPercent = 100;
 	inline constexpr std::uint32_t kMaximumModelResolutionDimension = kMaximumNeuralImageDimension;
 
+	/** Reconstruction filters operate on the NR residual within one eye or packed tile. */
+	enum class ReconstructionFilter : std::uint32_t
+	{
+		Bilinear = 0,
+		Lanczos3 = 1
+	};
+	/** Reject unknown filter values before resource admission or dispatch. */
+	[[nodiscard]] constexpr bool IsValidReconstructionFilter(ReconstructionFilter filter) noexcept
+	{
+		return filter == ReconstructionFilter::Bilinear || filter == ReconstructionFilter::Lanczos3;
+	}
+	/** Invalid saved values retain the inexpensive default. */
+	[[nodiscard]] constexpr ReconstructionFilter ClampReconstructionFilter(std::uint32_t value) noexcept
+	{
+		return value == static_cast<std::uint32_t>(ReconstructionFilter::Lanczos3) ? ReconstructionFilter::Lanczos3 : ReconstructionFilter::Bilinear;
+	}
+	/** Stable DevBench names are independent of the UI's Advanced label. */
+	[[nodiscard]] constexpr const char* GetReconstructionFilterName(ReconstructionFilter filter) noexcept
+	{
+		return filter == ReconstructionFilter::Lanczos3 ? "lanczos3" : "bilinear";
+	}
+
 	/** Independent inference scale is a whole percentage of the selected route's colour grid. */
 	[[nodiscard]] constexpr bool IsValidModelResolutionPercent(std::uint32_t percent) noexcept
 	{

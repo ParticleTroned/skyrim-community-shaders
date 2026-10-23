@@ -43,6 +43,24 @@ void Check(bool condition, const char* message)
 
 int main()
 {
+	for (unsigned filter : { 0u, 1u }) {
+		Upscaling::Settings settings;
+		from_json({ { "neuralRenderingReconstructionFilter", filter } }, settings);
+		Check(settings.neuralRenderingReconstructionFilter == filter && json(settings).at("neuralRenderingReconstructionFilter") == filter,
+			"Reconstruction filter did not round-trip");
+		for (const auto& invalid : { json(-1), json(2), json(1.0), json(true), json("lanczos3"), json(nullptr), json(0x100000001ULL) }) {
+			const auto previous = settings;
+			bool rejected = false;
+			try {
+				from_json({ { "neuralRenderingReconstructionFilter", invalid } }, settings);
+			} catch (const std::invalid_argument&) {
+				rejected = true;
+			}
+			Check(rejected && settings == previous, "Invalid filter partially changed the saved configuration");
+		}
+		from_json(json::object(), settings);
+		Check(settings.neuralRenderingReconstructionFilter == 0, "Legacy settings must default to bilinear");
+	}
 	for (bool vr : { false, true }) {
 		REL::Module::vr = vr;
 		Upscaling::Settings settings;

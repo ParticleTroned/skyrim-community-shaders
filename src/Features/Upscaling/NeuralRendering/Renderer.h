@@ -160,6 +160,7 @@ namespace NeuralRendering
 		std::uint64_t generation = 0;
 		InsertionPoint insertionPoint = kDefaultInsertionPoint;
 		std::uint32_t modelResolutionPercent = 100;
+		ReconstructionFilter reconstructionFilter = ReconstructionFilter::Bilinear;
 		bool pressureResolutionEnabled = false;
 		std::uint32_t requestedModelResolutionPercent = 100;
 		std::uint32_t effectiveModelResolutionPercent = 100;
@@ -247,6 +248,7 @@ namespace NeuralRendering
 		bool providerBlending = false;
 		ComputeSubrect actorSelectionSupport{};
 		std::uint32_t modelResolutionPercent = 100;
+		ReconstructionFilter reconstructionFilter = ReconstructionFilter::Bilinear;
 		bool pressureResolutionEnabled = false;
 		bool parallelEyes = false;
 		/** Keep model preparation resident while moving actors alternate atlas and single ROI. */

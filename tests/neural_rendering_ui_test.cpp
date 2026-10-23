@@ -100,6 +100,7 @@ namespace globals
 				bool neuralCharacterOtherActorsEnabled = NeuralRendering::CharacterPolicy::kDefaultOtherActors;
 				unsigned neuralRenderingMode = 0;
 				unsigned neuralRenderingModelResolutionPercent = 100;
+				unsigned neuralRenderingReconstructionFilter = 0;
 				bool neuralRenderingPressureResolutionEnabled = true;
 				bool neuralRenderingPrewarmEnabled = true;
 				float neuralRenderingSingleSubrectScale = 1.0f;
@@ -639,6 +640,14 @@ int main()
 	{
 		Upscaling::Settings settings;
 		require(settings.neuralRenderingPressureResolutionEnabled, "Automatic pressure resolution defaults on");
+		require(settings.neuralRenderingReconstructionFilter == 0, "Bilinear must remain the default");
+		for (const auto [value, expected] : { std::pair{ 1, 1u }, std::pair{ 0, 0u }, std::pair{ 2, 0u } }) {
+			ImGui::Clear("NR reconstruction filter");
+			ImGui::comboEditValue = value;
+			DrawNeuralModelResolutionSettings(settings);
+			require(settings.neuralRenderingReconstructionFilter == expected && settings.neuralRenderingModelResolutionPercent == 100,
+				"Filter selection changed model resolution or accepted an invalid value");
+		}
 		ImGui::Clear("Lower NR resolution under memory pressure");
 		DrawNeuralModelResolutionSettings(settings);
 		require(!settings.neuralRenderingPressureResolutionEnabled && settings.neuralRenderingModelResolutionPercent == 100,

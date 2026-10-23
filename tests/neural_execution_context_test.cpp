@@ -19,6 +19,7 @@ namespace NeuralRendering
 	{
 		std::optional<RenderingMode> renderingMode;
 		uint32_t modelResolutionPercent = 100;
+		ReconstructionFilter reconstructionFilter = ReconstructionFilter::Bilinear;
 		bool pressureResolutionEnabled = false;
 		bool parallelEyes = false;
 		uint32_t featureSlot = 0;
@@ -30,6 +31,7 @@ struct Upscaling
 	struct
 	{
 		uint32_t neuralRenderingModelResolutionPercent = 100;
+		uint32_t neuralRenderingReconstructionFilter = 0;
 		bool neuralRenderingPressureResolutionEnabled = false;
 		bool neuralRenderingParallelEyes = false, neuralRenderingBatchedStereo = true;
 		uint32_t neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
@@ -57,6 +59,13 @@ int main()
 	Upscaling upscaling;
 	NeuralRendering::RendererApplyArgs args;
 	unsigned calls = 0;
+	for (const uint32_t value : { 0u, 1u, 2u, 0xffffffffu }) {
+		upscaling.settings.neuralRenderingReconstructionFilter = value;
+		upscaling.SetNeuralExecutionContext(args, {}, {}, {});
+		++calls;
+		if (args.reconstructionFilter != (value == 1u ? NeuralRendering::ReconstructionFilter::Lanczos3 : NeuralRendering::ReconstructionFilter::Bilinear))
+			throw std::runtime_error("Reconstruction filter was lost or accepted an invalid value");
+	}
 	for (const auto mode : { RenderingMode::ReducedResolution, RenderingMode::FullResolution, RenderingMode::Foveated }) {
 		upscaling.mode = mode;
 		for (const uint32_t percent : { 0u, 29u, 30u, 32u, 33u, 50u, 67u, 100u, 101u }) {

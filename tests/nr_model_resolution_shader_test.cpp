@@ -14,8 +14,11 @@
 #include <filesystem>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <span>
 #include <stdexcept>
+#include <string>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -32,6 +35,7 @@ namespace AdapterCompiler
 	ID3D11Device* device = nullptr;
 	unsigned calls = 0;
 	bool vr = false;
+	NeuralRendering::ReconstructionFilter filter = NeuralRendering::ReconstructionFilter::Bilinear;
 	bool failPacking = false;
 	unsigned packingAttempts = 0;
 }
@@ -55,12 +59,22 @@ ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
 	if (AdapterCompiler::vr)
 		defines.push_back({ "VR", "1" });
 	defines.push_back({ nullptr, nullptr });
-	Microsoft::WRL::ComPtr<ID3DBlob> code, errors;
-	const auto result = D3DCompileFromFile(shaderPath.c_str(), defines.data(), &includes,
-		entry, target, D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS, 0, &code, &errors);
-	if (errors)
-		std::cerr << static_cast<const char*>(errors->GetBufferPointer());
-	D3D11ShaderTest::Check(result);
+	using Defines = std::vector<std::pair<std::string, std::string>>;
+	static std::map<std::tuple<std::filesystem::path, std::string, std::string, Defines>, Microsoft::WRL::ComPtr<ID3DBlob>> bytecode;
+	Defines key;
+	for (const auto& define : defines)
+		if (define.Name)
+			key.emplace_back(define.Name, define.Definition);
+	// Reuse bytecode across the stereo/filter matrix; every production compilation request still counts.
+	auto& code = bytecode[{ shaderPath, target, entry, std::move(key) }];
+	if (!code) {
+		Microsoft::WRL::ComPtr<ID3DBlob> errors;
+		const auto result = D3DCompileFromFile(shaderPath.c_str(), defines.data(), &includes,
+			entry, target, D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS, 0, &code, &errors);
+		if (errors)
+			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+		D3D11ShaderTest::Check(result);
+	}
 	ID3D11ComputeShader* shader = nullptr;
 	D3D11ShaderTest::Check(AdapterCompiler::device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &shader));
 	return shader;
@@ -350,6 +364,7 @@ namespace
 		ConstantBuffer constants(device, shader.reflection.Get(), "ModelResolutionConstants");
 		Configure(constants, source, model, sourceRegion, modelRegion, false, { 1, 1 });
 		constants.SetVariable("OutputFormat", condition >= 4 ? condition - 3 : 0u);
+		constants.SetVariable("ReconstructionFilter", static_cast<unsigned>(AdapterCompiler::filter));
 		const std::array inputs{ input.srv.Get(), proxy.srv.Get(), outputNeural.srv.Get() };
 		const std::array outputs{ result.uav.Get() };
 		Dispatch(context, shader, constants, sourceRegion.size, inputs, outputs);
@@ -367,6 +382,106 @@ namespace
 			}
 		}
 	}
+	void CheckReconstructionKernel(ID3D11Device* device, ID3D11DeviceContext* context, Shader& shader)
+	{
+		constexpr Size source{ 19, 13 }, model{ 10, 7 };
+		constexpr Region sourceRegion{ { 3, 2 }, { 13, 9 } }, modelRegion{ { 1, 1 }, { 8, 5 } };
+		std::vector<Pixel> colors(source[0] * source[1]);
+		for (unsigned i = 0; i < colors.size(); ++i)
+			colors[i] = { 2.0f + float(i % 2), -0.25f, 8.0f, 0.2f + 0.01f * float(i % 17) };
+		const float invalid = std::numeric_limits<float>::quiet_NaN();
+		std::vector<Pixel> baseline(model[0] * model[1], Pixel{ invalid, invalid, invalid, 1 });
+		auto neural = baseline;
+		for (UINT y = modelRegion.offset[1]; y < modelRegion.offset[1] + modelRegion.size[1]; ++y)
+			for (UINT x = modelRegion.offset[0]; x < modelRegion.offset[0] + modelRegion.size[0]; ++x) {
+				const auto i = y * model[0] + x;
+				baseline[i] = { 0.25f, 0.5f, 1.0f, 1.0f };
+				neural[i] = { 0.25f + (x > 5 ? 0.2f : -0.1f), 0.5f + 0.015f * float((x * 7 + y * 3) % 11), 1.0f - 0.02f * float(y % 3), 0.0f };
+			}
+		Texture input(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, colors);
+		Texture proxy(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, baseline);
+		Texture outputNeural(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, neural);
+		Texture result(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel));
+		ConstantBuffer constants(device, shader.reflection.Get(), "ModelResolutionConstants");
+		Configure(constants, source, model, sourceRegion, modelRegion, false, { 1, 1 });
+		constants.SetVariable("ReconstructionFilter", static_cast<unsigned>(AdapterCompiler::filter));
+		const std::array inputs{ input.srv.Get(), proxy.srv.Get(), outputNeural.srv.Get() };
+		const std::array outputs{ result.uav.Get() };
+		Dispatch(context, shader, constants, sourceRegion.size, inputs, outputs);
+		const auto pixels = result.Read<Pixel>(device, context);
+		const auto kernel = [](double distance) {
+			const auto x = std::abs(distance);
+			if (AdapterCompiler::filter == NeuralRendering::ReconstructionFilter::Bilinear)
+				return std::max(0.0, 1.0 - x);
+			if (x < 1e-10)
+				return 1.0;
+			if (x >= 3.0)
+				return 0.0;
+			const double angle = 3.14159265358979323846 * x;
+			return 3.0 * std::sin(angle) * std::sin(angle / 3.0) / (angle * angle);
+		};
+		for (UINT y = 0; y < source[1]; ++y)
+			for (UINT x = 0; x < source[0]; ++x) {
+				const auto i = y * source[0] + x;
+				if (!sourceRegion.Contains(x, y)) {
+					Require(pixels[i] == sentinel, "Kernel wrote outside the source crop");
+					continue;
+				}
+				const double px = (x + 0.5) * model[0] / source[0] - 0.5, py = (y + 0.5) * model[1] / source[1] - 0.5;
+				std::array<double, 3> residual{};
+				double normalization = 0;
+				for (int sy = int(std::floor(py)) - 2; sy <= int(std::floor(py)) + 3; ++sy)
+					for (int sx = int(std::floor(px)) - 2; sx <= int(std::floor(px)) + 3; ++sx) {
+						const auto weight = kernel(px - sx) * kernel(py - sy);
+						const auto sampleX = std::clamp(sx, int(modelRegion.offset[0]), int(modelRegion.offset[0] + modelRegion.size[0] - 1));
+						const auto sampleY = std::clamp(sy, int(modelRegion.offset[1]), int(modelRegion.offset[1] + modelRegion.size[1] - 1));
+						const auto sampleIndex = sampleY * model[0] + sampleX;
+						for (unsigned channel = 0; channel < 3; ++channel)
+							residual[channel] += weight * (neural[sampleIndex][channel] - baseline[sampleIndex][channel]);
+						normalization += weight;
+					}
+				for (unsigned channel = 0; channel < 3; ++channel)
+					Near(pixels[i][channel], colors[i][channel] + float(residual[channel] / normalization), "Residual kernel disagrees with the double-precision reference or clamps HDR");
+				Require(pixels[i][3] == colors[i][3], "Residual kernel changed full-resolution alpha");
+			}
+		Texture depth(device, source, DXGI_FORMAT_R32_FLOAT, std::vector(colors.size(), 0.5f));
+		Texture motion(device, source, DXGI_FORMAT_R32G32_FLOAT, std::vector(colors.size(), Motion{}));
+		Texture reconstructed(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel));
+		NeuralRendering::RendererApplyArgs args;
+		args.device = device;
+		args.context = context;
+		args.colorInput = input.texture.Get();
+		args.depthGuide = depth.texture.Get();
+		args.depthGuideSRV = depth.srv.Get();
+		args.motionVectors = motion.texture.Get();
+		args.colorOutput = reconstructed.texture.Get();
+		args.colorWidth = args.outputWidth = args.guideWidth = source[0];
+		args.colorHeight = args.outputHeight = args.guideHeight = source[1];
+		args.viewportCrop = UpscalingDLSS::ViewportCrop::Identity(source[0], source[1], source[0], source[1]);
+		args.computeSubrect = { sourceRegion.offset[0], sourceRegion.offset[1], sourceRegion.size[0], sourceRegion.size[1] };
+		args.modelResolutionPercent = 50;
+		args.renderingMode = NeuralRendering::RenderingMode::FullResolution;
+		NeuralRendering::ModelResolution adapter;
+		NeuralRendering::ModelResolution::Batch batch;
+		HRESULT status = S_OK;
+		const auto request = std::span(&args, 1);
+		for (unsigned pass = 0; pass < 2; ++pass) {
+			args.reconstructionFilter = pass == 0 ? AdapterCompiler::filter : AdapterCompiler::filter == NeuralRendering::ReconstructionFilter::Bilinear ? NeuralRendering::ReconstructionFilter::Lanczos3 :
+			                                                                                                                                               NeuralRendering::ReconstructionFilter::Bilinear;
+			if (pass != 0)
+				Require(adapter.AdditionalBytes(request) == 0, "Filter switch reallocated model textures");
+			Require(adapter.Prepare(request, batch, status), "Kernel adapter preparation failed");
+			context->CopyResource(batch.arguments[0].colorInput, proxy.texture.Get());
+			context->CopyResource(batch.arguments[0].colorOutput, outputNeural.texture.Get());
+			Require(adapter.Reconstruct(request, batch, status), "Kernel adapter reconstruction failed");
+			adapter.Commit(request, batch);
+			constants.SetVariable("ReconstructionFilter", static_cast<unsigned>(args.reconstructionFilter));
+			Dispatch(context, shader, constants, sourceRegion.size, inputs, outputs);
+			const auto direct = result.Read<Pixel>(device, context), adapted = reconstructed.Read<Pixel>(device, context);
+			Require(direct == adapted, "Production adapter lost the selected filter or retained stale constants after a switch");
+		}
+	}
+
 	void CheckSharedAdapter(ID3D11Device* device, ID3D11DeviceContext* context, bool guidesOnly)
 	{
 		using namespace NeuralRendering;
@@ -388,6 +503,7 @@ namespace
 		Texture leftOutput(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
 		Texture rightOutput(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
 		RendererApplyArgs input;
+		input.reconstructionFilter = AdapterCompiler::filter;
 		input.device = device;
 		input.context = context;
 		input.colorInput = leftInput.texture.Get();
@@ -405,6 +521,7 @@ namespace
 			input.reset = mode == RenderingMode::ReducedResolution;
 			for (unsigned percent : { 90u, 80u, 50u, 33u, 30u }) {
 				input.modelResolutionPercent = percent;
+				input.reconstructionFilter = AdapterCompiler::filter;
 				std::array args{ input, input };
 				args[1].featureSlot = 3;
 				args[1].colorInput = rightInput.texture.Get();
@@ -456,6 +573,11 @@ namespace
 				bad = targets;
 				bad[1].color = guidesOnly ? own(Texture(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(count, sentinel))) : Color::Texture{};
 				Require(!shared.Prepare(args, invalid, result, bad), "Mixed colour ownership must reject both eyes");
+				auto mismatchedFilter = args;
+				mismatchedFilter[1].reconstructionFilter = args[0].reconstructionFilter == ReconstructionFilter::Bilinear ? ReconstructionFilter::Lanczos3 : ReconstructionFilter::Bilinear;
+				Require(!shared.Prepare(mismatchedFilter, invalid, result, targets) && invalid.count == 0, "Mixed stereo filters were accepted");
+				mismatchedFilter[0].reconstructionFilter = mismatchedFilter[1].reconstructionFilter = static_cast<ReconstructionFilter>(2);
+				Require(!shared.Prepare(mismatchedFilter, invalid, result, targets) && invalid.count == 0, "Invalid reconstruction filter reached dispatch");
 				bad = targets;
 				bad[1] = bad[0];
 				Require(!shared.Prepare(args, invalid, result, bad), "Aliased eyes must not share mutable model targets");
@@ -585,6 +707,7 @@ namespace
 		Texture motion(device, guides, DXGI_FORMAT_R32G32_FLOAT, velocities);
 		Texture output(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel));
 		RendererApplyArgs input;
+		input.reconstructionFilter = AdapterCompiler::filter;
 		input.device = device;
 		input.context = context;
 		input.colorInput = color.texture.Get();
@@ -603,6 +726,7 @@ namespace
 			input.renderingMode = mode;
 			for (unsigned percent : { 30u, 50u, 90u }) {
 				input.modelResolutionPercent = percent;
+				input.reconstructionFilter = AdapterCompiler::filter;
 				const auto args = std::span(&input, 1);
 				ModelResolution adapter;
 				ModelResolution::Batch batch;
@@ -751,6 +875,7 @@ namespace
 		Texture right(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, colors);
 		Texture mask(device, source, DXGI_FORMAT_R8_UNORM, std::vector<std::uint8_t>(colors.size(), 255));
 		RendererApplyArgs input;
+		input.reconstructionFilter = AdapterCompiler::filter;
 		input.device = device;
 		input.context = context;
 		input.colorInput = color.texture.Get();
@@ -770,6 +895,7 @@ namespace
 			input.centralArea.finalOutput = mode == RenderingMode::ReducedResolution ? UpscalingDLSS::Extent{ 1604, 1204 } : UpscalingDLSS::Extent{ 401, 301 };
 			for (const unsigned percent : { 100u, 80u, 30u }) {
 				input.modelResolutionPercent = percent;
+				input.reconstructionFilter = AdapterCompiler::filter;
 				for (const unsigned feather : { 0u, 64u, 256u }) {
 					input.centralArea.featherPixels = feather;
 					std::array args{ input, input };
@@ -981,6 +1107,7 @@ namespace
 						input.featureSlot = eye;
 						input.renderingMode = mode;
 						input.modelResolutionPercent = percent;
+						input.reconstructionFilter = AdapterCompiler::filter;
 						input.featureUpscaling = mode == RenderingMode::FullResolution;
 						input.reset = mode == RenderingMode::ReducedResolution;
 						input.characterVisualIsolation = input.providerBlending = true;
@@ -1283,6 +1410,7 @@ namespace
 		using namespace NeuralRendering;
 		for (auto mode : { RenderingMode::FullResolution, RenderingMode::ReducedResolution }) {
 			RendererApplyArgs input;
+			input.reconstructionFilter = AdapterCompiler::filter;
 			input.colorWidth = input.outputWidth = 2048;
 			input.colorHeight = input.outputHeight = 1024;
 			input.guideWidth = mode == RenderingMode::FullResolution ? 1024 : 2048;
@@ -1492,13 +1620,16 @@ namespace
 			                  Texture(batch.targets[eye].color, model).Read<Pixel>(device, context) :
 			                  LoadPixels(Texture(batch.targets[eye].color, model).Read<Stored>(device, context), desc.Format);
 			batch.targets[eye].output.resource->GetDesc(&desc);
+			const auto invalidX = projected.computeSubrect.baseX + projected.computeSubrect.width / 3;
+			const auto invalidY = projected.computeSubrect.baseY + projected.computeSubrect.height / 3;
 			for (std::size_t i = 0; i < pixels.size(); ++i) {
 				pixels[i][0] += 0.07313f + float(eye) * 0.0167f;
 				pixels[i][1] += 0.10937f + float(i % 3) * 0.0011f;
 				pixels[i][2] -= 0.06731f;
 				pixels[i][3] = 0.987f;
-				if (invalidNative && i % 7 < 2)
-					pixels[i][0] = i % 7 == 0 ? std::numeric_limits<float>::quiet_NaN() : std::numeric_limits<float>::infinity();
+				// Localized invalid samples leave both valid and fallback neighbourhoods for either filter.
+				if (invalidNative && i / model[0] == invalidY && i % model[0] >= invalidX && i % model[0] <= invalidX + 1)
+					pixels[i][0] = i % model[0] == invalidX ? std::numeric_limits<float>::quiet_NaN() : std::numeric_limits<float>::infinity();
 			}
 			const auto stored = StorePixels<Stored>(pixels, desc.Format);
 			context->UpdateSubresource(projected.colorOutput, 0, nullptr, stored.data(), model[0] * sizeof(Stored), 0);
@@ -1549,6 +1680,7 @@ namespace
 		context->CopyResource(legacySelected.texture.Get(), typedBaseline.texture.Get());
 
 		RendererApplyArgs arg;
+		arg.reconstructionFilter = AdapterCompiler::filter;
 		arg.device = device;
 		arg.context = context;
 		arg.colorInput = input.texture.Get();
@@ -1656,6 +1788,8 @@ namespace
 					Require(false, "Fused selection left stale pixels outside the native source ROI");
 				}
 		}
+		if (!changed)
+			std::cerr << "No selected residual: filter " << GetReconstructionFilterName(arg.reconstructionFilter) << " format " << format << " invalidNative " << invalidNative << '\n';
 		Require(changed, "Selected-output comparison never applied an NR residual");
 
 		const auto compilations = AdapterCompiler::calls;
@@ -1727,6 +1861,7 @@ namespace
 				Texture(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(leftColors.size(), sentinel))
 			};
 			RendererApplyArgs arg;
+			arg.reconstructionFilter = AdapterCompiler::filter;
 			arg.device = device;
 			arg.context = context;
 			arg.colorInput = leftInput.texture.Get();
@@ -1866,6 +2001,7 @@ namespace
 		Texture outputLeft(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
 		Texture outputRight(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
 		RendererApplyArgs inputArgs;
+		inputArgs.reconstructionFilter = AdapterCompiler::filter;
 		inputArgs.device = device;
 		inputArgs.context = context;
 		inputArgs.colorInput = input.texture.Get();
@@ -1964,22 +2100,26 @@ int main()
 		static_assert(NeuralRendering::Color::Work::AllocationExtent(wide)[1] == 384);
 		for (bool vr : { false, true }) {
 			AdapterCompiler::vr = vr;
-			CheckAdapter(device.Get(), context.Get());
-			CheckPackedAdapter(device.Get(), context.Get());
-			CheckCentralArea(device.Get(), context.Get());
-			CheckUpscaledGuides(device.Get(), context.Get());
-			CheckSharedAdapter(device.Get(), context.Get(), false);
-			CheckSharedAdapter(device.Get(), context.Get(), true);
-			CheckSelectedAdapter(device.Get(), context.Get(), vr);
-			Shader prepare(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl", vr);
-			Shader reconstruct(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", vr);
-			for (bool mask : { false, true })
-				CheckPrepare(device.Get(), context.Get(), prepare, mask);
-			for (bool fullScale : { false, true })
-				CheckNonIntegerPrepare(device.Get(), context.Get(), prepare, fullScale);
-			CheckNonIntegerPrepare(device.Get(), context.Get(), prepare, false, true);
-			for (unsigned condition = 0; condition < 7; ++condition)
-				CheckReconstruct(device.Get(), context.Get(), reconstruct, condition);
+			for (auto filter : { NeuralRendering::ReconstructionFilter::Bilinear, NeuralRendering::ReconstructionFilter::Lanczos3 }) {
+				AdapterCompiler::filter = filter;
+				CheckAdapter(device.Get(), context.Get());
+				CheckPackedAdapter(device.Get(), context.Get());
+				CheckCentralArea(device.Get(), context.Get());
+				CheckUpscaledGuides(device.Get(), context.Get());
+				CheckSharedAdapter(device.Get(), context.Get(), false);
+				CheckSharedAdapter(device.Get(), context.Get(), true);
+				CheckSelectedAdapter(device.Get(), context.Get(), vr);
+				Shader prepare(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl", vr);
+				Shader reconstruct(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", vr);
+				for (bool mask : { false, true })
+					CheckPrepare(device.Get(), context.Get(), prepare, mask);
+				for (bool fullScale : { false, true })
+					CheckNonIntegerPrepare(device.Get(), context.Get(), prepare, fullScale);
+				CheckNonIntegerPrepare(device.Get(), context.Get(), prepare, false, true);
+				for (unsigned condition = 0; condition < 7; ++condition)
+					CheckReconstruct(device.Get(), context.Get(), reconstruct, condition);
+				CheckReconstructionKernel(device.Get(), context.Get(), reconstruct);
+			}
 		}
 		std::cout << "PASS: NR production adapter and shaders on WARP: shared/staged pixel equivalence, fused/legacy selection, all carrier rounding, mixed precision, provider masks, central feather, packed stereo coverage, alias preflight, allocation reuse, stereo commit, area reduction, guide/mask ownership, odd sizes, identity, residual detail, alpha, ROI isolation and finite fallback (flat/VR)\n";
 	} catch (const std::exception& error) {

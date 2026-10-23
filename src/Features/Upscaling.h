@@ -491,6 +491,7 @@ public:
 		bool neuralRenderingBatchedStereo = true;
 		bool neuralRenderingDirectCommit = true;
 		uint neuralRenderingModelResolutionPercent = 100;
+		uint neuralRenderingReconstructionFilter = 0;
 		bool neuralRenderingPressureResolutionEnabled = true;
 		uint neuralRenderingCentralAreaPercent = NeuralRendering::kMaximumCentralAreaPercent;
 		uint neuralRenderingCentralFeatherPixels = NeuralRendering::kDefaultCentralFeatherPixels;

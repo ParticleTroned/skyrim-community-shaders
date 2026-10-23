@@ -904,6 +904,36 @@ namespace NeuralRendering
 		return true;
 	}
 
+	bool ModelResolution::EnsureGuidedShader(bool selected, bool guarded, ComPtr<ID3D11ComputeShader>& retained, HRESULT& result)
+	{
+		const auto index = (selected ? 1u : 0u) | (guarded ? 2u : 0u);
+		auto& shader = guidedShaders_[index];
+		if (!shader && !guidedShaderFailed_[index]) {
+			try {
+				std::vector<std::pair<const char*, const char*>> defines{ { "GUIDED_NR_RECONSTRUCTION", "1" } };
+				if (selected)
+					defines.emplace_back("MODEL_OUTPUT_SELECTION", "1");
+				if (guarded)
+					defines.emplace_back("PACKED_CROP_COVERAGE_GUARD", "1");
+				shader.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+					L"Data/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", defines, "cs_5_0", "main")));
+				guidedShaderFailed_[index] = !shader;
+				if (shader)
+					Util::SetResourceName(shader.Get(), "NeuralRendering::GuidedReconstruction%u", index);
+			} catch (const std::exception&) {
+				shader.Reset();
+				guidedShaderFailed_[index] = true;
+			}
+			// An optional compile failure must not conceal device removal or poison Basic.
+			result = device_->GetDeviceRemovedReason();
+			if (FAILED(result))
+				return false;
+		}
+		result = S_OK;
+		retained = shader;
+		return true;
+	}
+
 	void ModelResolution::DispatchCoverage(std::span<const RendererApplyArgs> args, Batch& batch)
 	{
 		auto* context = args.front().context;
@@ -975,6 +1005,7 @@ namespace NeuralRendering
 		const bool selected = std::ranges::any_of(args, [](const auto& input) { return input.modelOutputSelection.has_value(); });
 		batch.device = args.front().device;
 		batch.context = args.front().context;
+		std::array<GuidedReconstructionInput, kMaximumRegionEvaluations> guidedInputs{};
 		try {
 			for (std::size_t index = 0; index < args.size(); ++index) {
 				const auto& input = args[index];
@@ -1015,6 +1046,10 @@ namespace NeuralRendering
 					result = E_INVALIDARG;
 					return false;
 				}
+				// The outer proxy retains unedited source values even when native colour processing encodes its own copy.
+				guidedInputs[index] = { input.guidedReconstructionEnabled, input.modelResolutionPercent, geometry->sourceSize,
+					geometry->packedCrops.count ? geometry->packedCrops.unpackedExtent : geometry->modelSize, input.insertionPoint,
+					key.colorFormat == key.outputFormat && (key.colorFormat == DXGI_FORMAT_R32G32B32A32_FLOAT || OutputFormat(key.colorFormat) != 0u) };
 				const auto source = geometry->sourceRegion;
 				const auto model = geometry->modelRegion;
 				work->constants = {
@@ -1090,6 +1125,45 @@ namespace NeuralRendering
 			return false;
 		batch.reconstructionShader = selected ? (batch.packedCoverage ? guardedSelection_ : selection_) :
 		                                        (batch.packedCoverage ? guardedReconstruct_ : reconstruct_);
+		auto qualification = kGuidedReconstructionQualification;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const auto override = args.front().reconstructionOverride;
+		const bool consistentOverride = std::ranges::all_of(args, [&](const auto& input) { return input.reconstructionOverride == override; });
+		if (consistentOverride && override == GuidedReconstructionOverride::GuidedExperiment)
+			qualification = { kMaximumModelResolutionPercent, true, true };
+#endif
+		batch.reconstructionDecision = SelectGuidedReconstruction(std::span(guidedInputs.data(), args.size()), qualification);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (!consistentOverride || override == GuidedReconstructionOverride::Basic)
+			batch.reconstructionDecision = { GuidedReconstructionMode::Basic, GuidedReconstructionReason::ForcedBasic };
+		else if (override == GuidedReconstructionOverride::GuidedExperiment && batch.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution)
+			batch.reconstructionDecision.reason = GuidedReconstructionReason::Experiment;
+#endif
+		if (batch.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution) {
+			ComPtr<ID3D11ComputeShader> guided;
+			const bool guarded = batch.packedCoverage != nullptr;
+			if (!EnsureGuidedShader(selected, guarded, guided, result))
+				return false;
+			if (PackingAvailable() && std::ranges::any_of(args, [](const auto& input) { return input.packedCropsEnabled; })) {
+				// Actor movement can switch retained capacity between atlas and single-region work.
+				ComPtr<ID3D11ComputeShader> alternate;
+				if (!EnsureGuidedShader(selected, !guarded, alternate, result))
+					return false;
+			}
+			if (guided)
+				batch.reconstructionShader = std::move(guided);
+			else
+				batch.reconstructionDecision = { GuidedReconstructionMode::Basic, GuidedReconstructionReason::ShaderUnavailable };
+		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		for (std::size_t index = 0; index < args.size(); ++index) {
+			const auto& input = guidedInputs[index];
+			batch.arguments[index].executionContext.modelReconstruction = ModelReconstructionEvidence{
+				batch.reconstructionDecision, input.effectivePercent, input.target, input.unpackedModel, args[index].reconstructionFilter,
+				input.enabled, batch.arguments[index].modelResolutionHistory->packedCrops.count != 0, input.matchedReferenceDomain
+			};
+		}
+#endif
 		batch.constants = constants_;
 		auto* context = args.front().context;
 		if (batch.packedCoverage)
@@ -1217,6 +1291,8 @@ namespace NeuralRendering
 		guardedReconstruct_.Reset();
 		selection_.Reset();
 		guardedSelection_.Reset();
+		guidedShaders_ = {};
+		guidedShaderFailed_ = {};
 		compileFailed_ = false;
 		packingFailure_ = S_OK;
 	}

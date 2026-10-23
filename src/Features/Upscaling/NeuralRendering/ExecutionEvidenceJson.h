@@ -69,9 +69,26 @@ namespace NeuralRendering::Evidence
 			{ "capacityPixels", static_cast<std::uint64_t>(value.allocationCapacity.width) * value.allocationCapacity.height }
 		};
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	inline Json ModelReconstructionJson(const std::optional<ModelReconstructionEvidence>& value)
+	{
+		if (!value)
+			return nullptr;
+		return { { "mode", value->decision.mode == GuidedReconstructionMode::GuidedLowResolution ? "guided_low_resolution" : "basic" },
+			{ "reason", GetGuidedReconstructionReasonName(value->decision.reason) }, { "effectivePercent", value->effectivePercent },
+			{ "target", ExtentJson(value->target) }, { "unpackedModel", ExtentJson(value->unpackedModel) },
+			{ "basicFilter", GetReconstructionFilterName(value->basicFilter) }, { "enabled", value->enabled },
+			{ "packed", value->packed }, { "matchedReferenceDomain", value->matchedReferenceDomain },
+			{ "kernel", value->decision.mode == GuidedReconstructionMode::GuidedLowResolution ? Json("2x2") : Json(nullptr) } };
+	}
+#endif
 	inline Json ContextJson(const ExecutionContext& value)
 	{
-		return { { "sourceTransactionId", value.sourceTransactionId },
+		return {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			{ "modelReconstruction", ModelReconstructionJson(value.modelReconstruction) },
+#endif
+			{ "sourceTransactionId", value.sourceTransactionId },
 			{ "mode", value.renderingMode ? Json(GetRenderingModeName(*value.renderingMode)) : Json(nullptr) },
 			{ "fovOnly", OptionalJson(value.fovOnly) }, { "renderscaleFov", OptionalJson(value.renderscaleFov) }, { "captureEpoch", OptionalJson(value.captureEpoch) },
 			{ "configurationEpoch", OptionalJson(value.configurationEpoch) }, { "sourceContext", value.sourceContext },
@@ -80,7 +97,8 @@ namespace NeuralRendering::Evidence
 			{ "sourceColorOrigin", OptionalJson(value.sourceColorOrigin) }, { "sourceGuideOrigin", OptionalJson(value.sourceGuideOrigin) },
 			{ "jitterPixels", OptionalJson(value.jitterPixels) }, { "jitterConvention", "engine_input_pixel_offset_dlss_negates_xy" },
 			{ "motionVectorConvention", "engine_normalized_per_eye_scaled_by_nr_viewport_no_jitter_parameter_in_feature18" },
-			{ "pixelCoordinates", "top_left_origin_integer_texels_half_open_rectangles" } };
+			{ "pixelCoordinates", "top_left_origin_integer_texels_half_open_rectangles" }
+		};
 	}
 	/** Missing samples are null; clocks and inclusive/self semantics stay explicit. */
 	inline Json PassTimingJson(const Util::PassTimingHandle& handle)

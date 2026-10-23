@@ -47,6 +47,9 @@ int main()
 			auto filter = baseline;
 			filter.neuralRenderingReconstructionFilter = 1;
 			require((BuildNeuralRenderingSettingsKey(filter) != key) == enabled);
+			auto guided = baseline;
+			guided.neuralRenderingGuidedReconstruction = true;
+			require((BuildNeuralRenderingSettingsKey(guided) != key) == enabled);
 			auto parallel = baseline;
 			parallel.neuralRenderingParallelEyes = true;
 			require(BuildNeuralRenderingSettingsKey(parallel) == key);

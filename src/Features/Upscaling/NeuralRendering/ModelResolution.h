@@ -48,6 +48,7 @@ namespace NeuralRendering
 			Microsoft::WRL::ComPtr<ID3D11ComputeShader> reconstructionShader;
 			Microsoft::WRL::ComPtr<ID3D11Buffer> constants;
 			Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> packedCoverage;
+			GuidedReconstructionDecision reconstructionDecision{};
 			std::size_t count = 0;
 		};
 
@@ -110,6 +111,7 @@ namespace NeuralRendering
 		bool EnsureShaders(ID3D11Device*, HRESULT&);
 		bool EnsureCoverage(ID3D11Device*, HRESULT&);
 		bool EnsureSelectionShader(bool guarded, HRESULT&);
+		bool EnsureGuidedShader(bool selected, bool guarded, Microsoft::WRL::ComPtr<ID3D11ComputeShader>&, HRESULT&);
 		void DispatchCoverage(std::span<const RendererApplyArgs>, Batch&);
 		template <std::size_t Bindings>
 		void DispatchReconstruction(std::span<const RendererApplyArgs>, const Batch&);
@@ -124,6 +126,8 @@ namespace NeuralRendering
 		std::array<std::shared_ptr<Work>, kLogicalFeatureSlotCount> slots_{};
 		Microsoft::WRL::ComPtr<ID3D11Device> device_;
 		Microsoft::WRL::ComPtr<ID3D11ComputeShader> prepare_, reconstruct_, selection_, guardedSelection_;
+		std::array<Microsoft::WRL::ComPtr<ID3D11ComputeShader>, 4> guidedShaders_{};
+		std::array<bool, 4> guidedShaderFailed_{};
 		Microsoft::WRL::ComPtr<ID3D11Buffer> constants_;
 		bool compileFailed_ = false;
 		HRESULT packingFailure_ = S_OK;

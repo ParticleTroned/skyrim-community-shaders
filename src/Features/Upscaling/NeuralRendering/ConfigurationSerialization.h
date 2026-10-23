@@ -2,7 +2,7 @@
 
 #include "CentralAreaPolicy.h"
 #include "DevelopmentDiagnostics.h"
-#include "ModelResolutionPolicy.h"
+#include "GuidedReconstructionPolicy.h"
 #include "TuningLimits.h"
 
 #include <cstdint>
@@ -46,6 +46,46 @@ namespace NeuralRendering
 			return ReconstructionFilter::Lanczos3;
 		return std::nullopt;
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	struct ReconstructionComparisonRequest
+	{
+		GuidedReconstructionOverride mode = GuidedReconstructionOverride::Auto;
+		std::uint32_t frames = 0;
+		std::uint64_t expectedRevision = 0;
+	};
+	/** Validate the complete lease before claiming renderer ownership or mutating state. */
+	[[nodiscard]] inline std::optional<ReconstructionComparisonRequest> ParseReconstructionComparison(const nlohmann::json& args)
+	{
+		if (!args.is_object())
+			return std::nullopt;
+		for (const auto& item : args.items())
+			if (item.key() != "action" && item.key() != "expectedBuildId" && item.key() != "reconstructionOverride" &&
+				item.key() != "reconstructionOverrideFrames" && item.key() != "expectedReconstructionOverrideRevision")
+				return std::nullopt;
+		if (args.value("action", nlohmann::json{}) != "nr_reconstruction_compare")
+			return std::nullopt;
+		const auto mode = args.find("reconstructionOverride"), frames = args.find("reconstructionOverrideFrames"), revision = args.find("expectedReconstructionOverrideRevision");
+		if (mode == args.end() || !mode->is_string() || frames == args.end() || revision == args.end() || !revision->is_number_integer())
+			return std::nullopt;
+		ReconstructionComparisonRequest result;
+		if (*mode == "basic")
+			result.mode = GuidedReconstructionOverride::Basic;
+		else if (*mode == "guided_experiment")
+			result.mode = GuidedReconstructionOverride::GuidedExperiment;
+		else if (*mode != "auto")
+			return std::nullopt;
+		const auto boundedFrames = ParseBoundedInteger(*frames, 0, GuidedReconstructionExperiment::kMaximumFrames);
+		if (!boundedFrames || (result.mode == GuidedReconstructionOverride::Auto ? *boundedFrames != 0 : *boundedFrames == 0) ||
+			(!revision->is_number_unsigned() && revision->get<std::int64_t>() <= 0))
+			return std::nullopt;
+		result.expectedRevision = revision->get<std::uint64_t>();
+		if (result.expectedRevision == 0 || result.expectedRevision == std::numeric_limits<std::uint64_t>::max())
+			return std::nullopt;
+		result.frames = *boundedFrames;
+		return result;
+	}
+#endif
 
 	/** Selects feature-owned fields from an ordinary or legacy upscaling profile. */
 	inline nlohmann::json RenderingSettings(const nlohmann::json& settings)

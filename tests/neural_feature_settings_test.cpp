@@ -86,10 +86,11 @@ struct IndependentSettings
 	bool neuralCharacterGpuMaskSupportEnabled = false;
 	unsigned neuralRenderingModelResolutionPercent = 100;
 	unsigned neuralRenderingReconstructionFilter = 0;
+	bool neuralRenderingGuidedReconstruction = false;
 	bool neuralRenderingPressureResolutionEnabled = true;
 	unsigned neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(IndependentSettings, qualityMode, neuralRenderingEnabled, neuralRenderingIntensity, neuralRenderingModelResolutionPercent, neuralRenderingReconstructionFilter, neuralRenderingPressureResolutionEnabled, neuralRenderingCentralAreaPercent, neuralRenderingCentralFeatherPixels)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(IndependentSettings, qualityMode, neuralRenderingEnabled, neuralRenderingIntensity, neuralRenderingModelResolutionPercent, neuralRenderingReconstructionFilter, neuralRenderingGuidedReconstruction, neuralRenderingPressureResolutionEnabled, neuralRenderingCentralAreaPercent, neuralRenderingCentralFeatherPixels)
 
 int main()
 {
@@ -100,6 +101,8 @@ int main()
 	};
 	const auto defaults = NeuralRendering::RenderingSettings(Json(IndependentSettings{}));
 	require(defaults.at("neuralRenderingReconstructionFilter") == 0);
+	require(defaults.at("neuralRenderingGuidedReconstruction") == false);
+	require(NeuralRendering::PersistentRenderingSettings({ { "neuralRenderingGuidedReconstruction", true } }).at("neuralRenderingGuidedReconstruction") == true);
 	require(NeuralRendering::PersistentRenderingSettings({ { "neuralRenderingReconstructionFilter", 1 } }).at("neuralRenderingReconstructionFilter") == 1);
 	require(defaults.at("neuralRenderingCentralAreaPercent") == 100 && defaults.at("neuralRenderingCentralFeatherPixels") == 64);
 	const auto savedArea = NeuralRendering::PersistentRenderingSettings({ { "neuralRenderingCentralAreaPercent", 50 }, { "neuralRenderingCentralFeatherPixels", 256 } });
@@ -233,13 +236,14 @@ int main()
 	IndependentSettings live{ 2, true, 1.75f, 2, 1 };
 	live.neuralRenderingModelResolutionPercent = 67;
 	live.neuralRenderingReconstructionFilter = 1;
+	live.neuralRenderingGuidedReconstruction = true;
 	live.neuralRenderingPressureResolutionEnabled = true;
 	IndependentSettings upscalerEdit{ 4, false, 0.0f, 0, 0 };
 	NeuralRendering::CopyRenderingSettings(upscalerEdit, live);
 	require(upscalerEdit.qualityMode == 4 && upscalerEdit.neuralRenderingEnabled);
 	require(upscalerEdit.neuralRenderingIntensity == live.neuralRenderingIntensity);
 	require(upscalerEdit.neuralRenderingModelResolutionPercent == 67 && upscalerEdit.neuralRenderingReconstructionFilter == 1);
-	require(upscalerEdit.neuralRenderingPressureResolutionEnabled);
+	require(upscalerEdit.neuralRenderingPressureResolutionEnabled && upscalerEdit.neuralRenderingGuidedReconstruction);
 	require(upscalerEdit.neuralCharacterDebugView == 2 && upscalerEdit.neuralCharacterMaskTestMode == 1);
 	require(NeuralRendering::RenderingSettings(Json{ { "qualityMode", 4 } }).empty());
 	require(NeuralRendering::RenderingSettings(Json{ { "qualityMode", 4 }, { "neuralRenderingEnabled", false } }).size() == 1);

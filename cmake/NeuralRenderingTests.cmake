@@ -1,4 +1,10 @@
 add_controller_test(nr_model_resolution_policy_test NRModelResolutionPolicy tests/nr_model_resolution_policy_test.cpp)
+foreach(_bridge IN ITEMS on off)
+    add_controller_test(nr_guided_reconstruction_${_bridge}_test NRGuidedReconstruction_${_bridge}
+        tests/nr_guided_reconstruction_policy_test.cpp)
+    target_link_libraries(nr_guided_reconstruction_${_bridge}_test PRIVATE nlohmann_json::nlohmann_json)
+endforeach()
+target_compile_definitions(nr_guided_reconstruction_on_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
 add_controller_test(nr_packed_crop_policy_test NRPackedCropPolicy tests/nr_packed_crop_policy_test.cpp)
 add_controller_test(nr_packed_crop_policy_production_test NRPackedCropPolicyProduction tests/nr_packed_crop_policy_test.cpp)
 target_compile_definitions(nr_packed_crop_policy_test PRIVATE DEVBENCH_BRIDGE_ENABLED)

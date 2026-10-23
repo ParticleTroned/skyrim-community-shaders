@@ -10,7 +10,7 @@ namespace PresetCompatibility
 {
 	inline constexpr std::string_view kSettingsKey = "Preset Compatibility";
 	inline constexpr std::uint32_t kContractVersion = 1;
-	inline constexpr std::uint32_t kSettingsContractRevision = 17;
+	inline constexpr std::uint32_t kSettingsContractRevision = 18;
 
 	enum class Disposition
 	{

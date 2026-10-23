@@ -16,6 +16,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -39,6 +40,8 @@ namespace AdapterCompiler
 	NeuralRendering::ReconstructionFilter filter = NeuralRendering::ReconstructionFilter::Bilinear;
 	bool failPacking = false;
 	unsigned packingAttempts = 0;
+	bool guided = false, failGuided = false, throwGuided = false;
+	unsigned guidedAttempts = 0;
 }
 
 // Substitute only engine compilation/profiling; the adapter and GPU work are production code.
@@ -46,6 +49,13 @@ ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
 	const std::vector<std::pair<const char*, const char*>>& options, const char* target, const char* entry, ShaderCompileTiming*)
 {
 	++AdapterCompiler::calls;
+	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "GUIDED_NR_RECONSTRUCTION"; })) {
+		++AdapterCompiler::guidedAttempts;
+		if (AdapterCompiler::throwGuided)
+			throw std::bad_alloc{};
+		if (AdapterCompiler::failGuided)
+			return nullptr;
+	}
 	if (std::filesystem::path(path).filename() == L"ModelResolutionCoverageCS.hlsl") {
 		++AdapterCompiler::packingAttempts;
 		if (AdapterCompiler::failPacking)
@@ -145,6 +155,14 @@ namespace
 	}
 #endif
 
+	void ConfigureGuided(NeuralRendering::RendererApplyArgs& args)
+	{
+		args.guidedReconstructionEnabled = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		args.reconstructionOverride = AdapterCompiler::guided ? NeuralRendering::GuidedReconstructionOverride::GuidedExperiment : NeuralRendering::GuidedReconstructionOverride::Auto;
+#endif
+	}
+
 	struct Region
 	{
 		Size offset{}, size{};
@@ -213,12 +231,19 @@ namespace
 		ComPtr<ID3D11ComputeShader> shader;
 		ComPtr<ID3D11ShaderReflection> reflection;
 
-		Shader(ID3D11Device* device, const wchar_t* path, bool vr, const char* featureRoot = "features/Neural Rendering/Shaders")
+		Shader(ID3D11Device* device, const wchar_t* path, bool vr, const char* featureRoot = "features/Neural Rendering/Shaders", bool zeroGuidance = false)
 		{
 			PackageIncludes includes("package/Shaders", featureRoot);
-			const D3D_SHADER_MACRO defines[]{ { "VR", "1" }, { nullptr, nullptr } };
+			std::vector<D3D_SHADER_MACRO> defines;
+			if (vr)
+				defines.push_back({ "VR", "1" });
+			if (AdapterCompiler::guided && std::filesystem::path(path).filename() == L"ModelResolutionReconstructCS.hlsl")
+				defines.push_back({ "GUIDED_NR_RECONSTRUCTION", "1" });
+			if (zeroGuidance)
+				defines.push_back({ "GUIDED_NR_GUIDANCE_STRENGTH", "0" });
+			defines.push_back({ nullptr, nullptr });
 			ComPtr<ID3DBlob> code, errors;
-			const auto result = D3DCompileFromFile(path, vr ? defines : defines + 1, &includes,
+			const auto result = D3DCompileFromFile(path, defines.data(), &includes,
 				"main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
 				0, &code, &errors);
 			if (errors)
@@ -440,7 +465,7 @@ namespace
 		const auto pixels = result.Read<Pixel>(device, context);
 		const auto kernel = [](double distance) {
 			const auto x = std::abs(distance);
-			if (AdapterCompiler::filter == NeuralRendering::ReconstructionFilter::Bilinear)
+			if (AdapterCompiler::guided || AdapterCompiler::filter == NeuralRendering::ReconstructionFilter::Bilinear)
 				return std::max(0.0, 1.0 - x);
 			if (x < 1e-10)
 				return 1.0;
@@ -524,6 +549,78 @@ namespace
 		}
 	}
 
+	void CheckGuidedEdges(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
+	{
+		constexpr Size source{ 8, 4 }, model{ 4, 2 };
+		Shader guided(device, L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", vr);
+		Shader zero(device, L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", vr, "features/Neural Rendering/Shaders", true);
+		D3D11_SHADER_DESC reflection{};
+		Check(guided.reflection->GetDesc(&reflection));
+		Require(reflection.BoundResources == 5, "Guided kernel added a resource binding");
+		for (UINT i = 0; i < reflection.BoundResources; ++i) {
+			D3D11_SHADER_INPUT_BIND_DESC binding{};
+			Check(guided.reflection->GetResourceBindingDesc(i, &binding));
+			Require((binding.Type == D3D_SIT_CBUFFER && binding.BindPoint == 0) ||
+						(binding.Type == D3D_SIT_TEXTURE && binding.BindPoint <= 2) ||
+						(binding.Type == D3D_SIT_UAV_RWTYPED && binding.BindPoint == 0),
+				"Guided kernel changed the host binding contract");
+		}
+		for (float exposure : { 1e-8f, 0.001f, 1.0f, 1000.0f, 1e30f })
+			for (bool zeroStrength : { false, true })
+				for (bool black : { false, true }) {
+					auto& shader = zeroStrength ? zero : guided;
+					std::vector<Pixel> colors(source[0] * source[1]), proxy(model[0] * model[1]), neural(proxy.size());
+					for (unsigned i = 0; i < colors.size(); ++i) {
+						const float value = black ? 0 : i % source[0] < 4 ? -0.25f :
+						                                                    2.0f;
+						colors[i] = { value * exposure, value * exposure, value * exposure, 0.37f };
+					}
+					for (unsigned i = 0; i < proxy.size(); ++i) {
+						const float value = black ? 0 : i % model[0] < 2 ? -0.25f :
+						                                                   2.0f;
+						proxy[i] = { value * exposure, value * exposure, value * exposure, 1 };
+						const float residual = (i % model[0] < 2 ? 0.1f : -0.1f) * exposure;
+						neural[i] = { proxy[i][0] + residual, proxy[i][1] - residual, proxy[i][2] + residual, 0 };
+					}
+					Texture original(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, colors);
+					Texture baseline(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, proxy);
+					Texture output(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, neural);
+					Texture result(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel));
+					ConstantBuffer constants(device, shader.reflection.Get(), "ModelResolutionConstants");
+					Configure(constants, source, model, { {}, source }, { {}, model }, false, { 1, 1 });
+					const std::array inputs{ original.srv.Get(), baseline.srv.Get(), output.srv.Get() };
+					const std::array outputs{ result.uav.Get() };
+					Dispatch(context, shader, constants, source, inputs, outputs);
+					const auto pixels = result.Read<Pixel>(device, context);
+					for (unsigned y = 0; y < source[1]; ++y)
+						for (unsigned x = 0; x < source[0]; ++x) {
+							const unsigned i = y * source[0] + x;
+							const double px = (x + 0.5) / 2 - 0.5, py = (y + 0.5) / 2 - 0.5;
+							double scale = std::abs(colors[i][0]), sum = 0, edit = 0;
+							for (int dy = 0; dy < 2; ++dy)
+								for (int dx = 0; dx < 2; ++dx) {
+									const int sx = std::clamp(int(std::floor(px)) + dx, 0, 3), sy = std::clamp(int(std::floor(py)) + dy, 0, 1);
+									scale = std::max(scale, std::abs(double(proxy[sy * 4 + sx][0])));
+								}
+							for (int dy = 0; dy < 2; ++dy)
+								for (int dx = 0; dx < 2; ++dx) {
+									const int sx = std::clamp(int(std::floor(px)) + dx, 0, 3), sy = std::clamp(int(std::floor(py)) + dy, 0, 1);
+									const double fx = px - std::floor(px), fy = py - std::floor(py);
+									double weight = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy);
+									if (!zeroStrength && scale > 1e-6) {
+										const double difference = (colors[i][0] - proxy[sy * 4 + sx][0]) / scale;
+										weight /= 1 + 16 * difference * difference;
+									}
+									edit += weight * (neural[sy * 4 + sx][0] - proxy[sy * 4 + sx][0]);
+									sum += weight;
+								}
+							const float expected = colors[i][0] + float(edit / sum);
+							Require(std::isfinite(pixels[i][0]) && std::abs(pixels[i][0] - expected) <= 3e-6f * exposure, "Guided edge, signed HDR, exposure or zero-guidance reference failed");
+							Require(pixels[i][3] == colors[i][3], "Guidance changed source alpha");
+						}
+				}
+	}
+
 	void CheckSharedAdapter(ID3D11Device* device, ID3D11DeviceContext* context, bool guidesOnly)
 	{
 		using namespace NeuralRendering;
@@ -546,6 +643,7 @@ namespace
 		Texture rightOutput(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
 		RendererApplyArgs input;
 		input.reconstructionFilter = AdapterCompiler::filter;
+		ConfigureGuided(input);
 		input.device = device;
 		input.context = context;
 		input.colorInput = leftInput.texture.Get();
@@ -564,6 +662,7 @@ namespace
 			for (unsigned percent : { 90u, 80u, 50u, 33u, 30u }) {
 				input.modelResolutionPercent = percent;
 				input.reconstructionFilter = AdapterCompiler::filter;
+				ConfigureGuided(input);
 				std::array args{ input, input };
 				args[1].featureSlot = 3;
 				args[1].colorInput = rightInput.texture.Get();
@@ -757,6 +856,7 @@ namespace
 		Texture output(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel));
 		RendererApplyArgs input;
 		input.reconstructionFilter = AdapterCompiler::filter;
+		ConfigureGuided(input);
 		input.device = device;
 		input.context = context;
 		input.colorInput = color.texture.Get();
@@ -776,6 +876,7 @@ namespace
 			for (unsigned percent : { 30u, 50u, 90u }) {
 				input.modelResolutionPercent = percent;
 				input.reconstructionFilter = AdapterCompiler::filter;
+				ConfigureGuided(input);
 				const auto args = std::span(&input, 1);
 				ModelResolution adapter;
 				ModelResolution::Batch batch;
@@ -925,6 +1026,7 @@ namespace
 		Texture mask(device, source, DXGI_FORMAT_R8_UNORM, std::vector<std::uint8_t>(colors.size(), 255));
 		RendererApplyArgs input;
 		input.reconstructionFilter = AdapterCompiler::filter;
+		ConfigureGuided(input);
 		input.device = device;
 		input.context = context;
 		input.colorInput = color.texture.Get();
@@ -945,6 +1047,7 @@ namespace
 			for (const unsigned percent : { 100u, 80u, 30u }) {
 				input.modelResolutionPercent = percent;
 				input.reconstructionFilter = AdapterCompiler::filter;
+				ConfigureGuided(input);
 				for (const unsigned feather : { 0u, 64u, 256u }) {
 					input.centralArea.featherPixels = feather;
 					std::array args{ input, input };
@@ -1157,6 +1260,7 @@ namespace
 						input.renderingMode = mode;
 						input.modelResolutionPercent = percent;
 						input.reconstructionFilter = AdapterCompiler::filter;
+						ConfigureGuided(input);
 						input.featureUpscaling = mode == RenderingMode::FullResolution;
 						input.reset = mode == RenderingMode::ReducedResolution;
 						input.characterVisualIsolation = input.providerBlending = true;
@@ -1229,6 +1333,17 @@ namespace
 						for (auto& target : targets) context->ClearUnorderedAccessViewFloat(target.color.uav.Get(), sentinel.data());
 					Require(adapter.AdditionalBytes(args, sharing) == 0 && prepare(batch) && AdapterCompiler::calls == compileCount,
 						"First atlas admission allocated or compiled on a moving-actor frame");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (AdapterCompiler::guided && percent == 30 && mode == RenderingMode::ReducedResolution && !sharedTargets) {
+						adapter.InvalidateShaders();
+						Require(prepare(batch), "Packed-first shader warming failed");
+						const auto warmed = AdapterCompiler::calls;
+						for (auto& input : args) input.packedCrops = {};
+						Require(prepare(single) && AdapterCompiler::calls == warmed, "Atlas-to-single actor movement compiled a guided shader");
+						args = packedArgs;
+						Require(prepare(batch) && AdapterCompiler::calls == warmed, "Single-to-atlas actor movement recompiled a guided shader");
+					}
+#endif
 					for (unsigned eye = 0; eye < 2; ++eye)
 						Require(batch.targets[eye].color.resource == single.targets[eye].color.resource &&
 									batch.arguments[eye].viewportCrop == single.arguments[eye].viewportCrop,
@@ -1460,6 +1575,7 @@ namespace
 		for (auto mode : { RenderingMode::FullResolution, RenderingMode::ReducedResolution }) {
 			RendererApplyArgs input;
 			input.reconstructionFilter = AdapterCompiler::filter;
+			ConfigureGuided(input);
 			input.colorWidth = input.outputWidth = 2048;
 			input.colorHeight = input.outputHeight = 1024;
 			input.guideWidth = mode == RenderingMode::FullResolution ? 1024 : 2048;
@@ -1730,6 +1846,7 @@ namespace
 
 		RendererApplyArgs arg;
 		arg.reconstructionFilter = AdapterCompiler::filter;
+		ConfigureGuided(arg);
 		arg.device = device;
 		arg.context = context;
 		arg.colorInput = input.texture.Get();
@@ -1911,6 +2028,7 @@ namespace
 			};
 			RendererApplyArgs arg;
 			arg.reconstructionFilter = AdapterCompiler::filter;
+			ConfigureGuided(arg);
 			arg.device = device;
 			arg.context = context;
 			arg.colorInput = leftInput.texture.Get();
@@ -2051,6 +2169,7 @@ namespace
 		Texture outputRight(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
 		RendererApplyArgs inputArgs;
 		inputArgs.reconstructionFilter = AdapterCompiler::filter;
+		ConfigureGuided(inputArgs);
 		inputArgs.device = device;
 		inputArgs.context = context;
 		inputArgs.colorInput = input.texture.Get();
@@ -2075,6 +2194,33 @@ namespace
 		const auto estimate = adapter.AdditionalBytes(args);
 		Require(estimate && *estimate > 0, "Proxy allocation must be admitted before preparation");
 		Require(adapter.Prepare(args, batch, result), "Production proxy preparation failed");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const auto& evidence = batch.arguments[0].executionContext.modelReconstruction;
+		Require(evidence && evidence->decision == batch.reconstructionDecision && evidence->effectivePercent == 50 &&
+					evidence->target == UpscalingDLSS::Extent{ 13, 9 } && evidence->unpackedModel == UpscalingDLSS::Extent{ 7, 5 },
+			"Frozen capture lost the actual reconstruction decision or sampling grid");
+		if (AdapterCompiler::guided) {
+			Require(batch.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution, "Eligible experiment did not select guided reconstruction");
+			auto unsupported = args;
+			unsupported[1].guidedReconstructionEnabled = false;
+			ModelResolution::Batch fallback;
+			Require(adapter.Prepare(unsupported, fallback, result) && fallback.reconstructionDecision.mode == GuidedReconstructionMode::Basic, "One unsupported eye did not fall back as a pair");
+			for (bool throws : { false, true }) {
+				AdapterCompiler::throwGuided = throws;
+				AdapterCompiler::failGuided = true;
+				adapter.InvalidateShaders();
+				const auto attempts = AdapterCompiler::guidedAttempts;
+				Require(adapter.Prepare(args, fallback, result) && fallback.reconstructionDecision.reason == GuidedReconstructionReason::ShaderUnavailable, "Optional compile failure poisoned Basic preparation");
+				Require(adapter.Prepare(args, fallback, result) && AdapterCompiler::guidedAttempts == attempts + 1, "Optional compile failure retried every frame");
+				AdapterCompiler::throwGuided = false;
+				AdapterCompiler::failGuided = false;
+				adapter.InvalidateShaders();
+				Require(adapter.Prepare(args, fallback, result) && fallback.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution, "Optional compile failure did not clear on invalidation");
+			}
+		}
+#else
+		Require(batch.reconstructionDecision.reason == GuidedReconstructionReason::Unqualified, "Unqualified production route activated guided reconstruction");
+#endif
 		Require(adapter.AdditionalBytes(args) == 0, "Unchanged eye allocations must be reused");
 		Require(adapter.RetainedBytes(0).value() + adapter.RetainedBytes(1).value() == *estimate,
 			"Admission and retained-allocation accounting disagree");
@@ -2088,6 +2234,12 @@ namespace
 		Require(std::ranges::all_of(unchanged, [](const auto& pixel) { return pixel == sentinel; }),
 			"Preparation exposed a private eye before pair reconstruction");
 		const auto compilations = AdapterCompiler::calls;
+		for (auto& eye : args) {
+			eye.guidedReconstructionEnabled = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			eye.reconstructionOverride = GuidedReconstructionOverride::Basic;
+#endif
+		}
 		adapter.Reset();
 		Require(adapter.RetainedBytes(0) == 0 && adapter.RetainedBytes(1) == 0, "Reset retained cached proxy allocations");
 		Require(adapter.Reconstruct(args, batch, result), "An admitted batch must survive native backend reset");
@@ -2149,8 +2301,18 @@ int main()
 		static_assert(NeuralRendering::Color::Work::AllocationExtent(wide)[1] == 384);
 		for (bool vr : { false, true }) {
 			AdapterCompiler::vr = vr;
-			for (auto filter : { NeuralRendering::ReconstructionFilter::Bilinear, NeuralRendering::ReconstructionFilter::Lanczos3 }) {
-				AdapterCompiler::filter = filter;
+			for (unsigned variant = 0; variant <
+#ifdef DEVBENCH_BRIDGE_ENABLED
+									   3
+#else
+									   2
+#endif
+				;
+				++variant) {
+				AdapterCompiler::guided = variant == 2;
+				AdapterCompiler::filter = variant == 1 ? NeuralRendering::ReconstructionFilter::Lanczos3 : NeuralRendering::ReconstructionFilter::Bilinear;
+				if (AdapterCompiler::guided)
+					CheckGuidedEdges(device.Get(), context.Get(), vr);
 				CheckAdapter(device.Get(), context.Get());
 				CheckPackedAdapter(device.Get(), context.Get());
 				CheckCentralArea(device.Get(), context.Get());

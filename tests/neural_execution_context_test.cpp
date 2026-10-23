@@ -1,4 +1,4 @@
-#include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
+#include "Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h"
 
 #include <array>
 #include <cstdint>
@@ -20,11 +20,29 @@ namespace NeuralRendering
 		std::optional<RenderingMode> renderingMode;
 		uint32_t modelResolutionPercent = 100;
 		ReconstructionFilter reconstructionFilter = ReconstructionFilter::Bilinear;
+		bool guidedReconstructionEnabled = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		uint32_t frameId = 1;
+		uint64_t generation = 1;
+		GuidedReconstructionOverride reconstructionOverride = GuidedReconstructionOverride::Auto;
+#endif
 		bool pressureResolutionEnabled = false;
 		bool parallelEyes = false;
 		uint32_t featureSlot = 0;
 		CentralArea centralArea{};
 	};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	struct Renderer
+	{
+		GuidedReconstructionExperiment experiment;
+		static Renderer& Instance()
+		{
+			static Renderer value;
+			return value;
+		}
+		auto ResolveReconstructionOverride(uint32_t frame, uint64_t generation) { return experiment.Resolve(frame, generation); }
+	};
+#endif
 }
 struct Upscaling
 {
@@ -32,13 +50,15 @@ struct Upscaling
 	{
 		uint32_t neuralRenderingModelResolutionPercent = 100;
 		uint32_t neuralRenderingReconstructionFilter = 0;
+		bool neuralRenderingGuidedReconstruction = false;
 		bool neuralRenderingPressureResolutionEnabled = false;
 		bool neuralRenderingParallelEyes = false, neuralRenderingBatchedStereo = true;
 		uint32_t neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
 		float foveatedCenterHorizontalScale = 1.0f;
 	} settings;
 	NeuralRendering::RenderingMode mode = NeuralRendering::RenderingMode::FullResolution;
-	unsigned captures = 0;
+	unsigned captures = 0, resets = 0;
+	void RequestHistoryReset() noexcept { ++resets; }
 	std::array<float2, 2> savedOffsets{};
 	auto GetResolvedFoveatedMaskCenterOffsets(bool) const noexcept { return savedOffsets; }
 	auto GetNeuralRenderingMode() const noexcept { return mode; }
@@ -59,6 +79,12 @@ int main()
 	Upscaling upscaling;
 	NeuralRendering::RendererApplyArgs args;
 	unsigned calls = 0;
+	upscaling.settings.neuralRenderingGuidedReconstruction = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	auto& experiment = NeuralRendering::Renderer::Instance().experiment;
+	if (!experiment.Configure(NeuralRendering::GuidedReconstructionOverride::GuidedExperiment, 2, experiment.Status().revision))
+		throw std::runtime_error("Comparison setup failed");
+#endif
 	for (const uint32_t value : { 0u, 1u, 2u, 0xffffffffu }) {
 		upscaling.settings.neuralRenderingReconstructionFilter = value;
 		upscaling.SetNeuralExecutionContext(args, {}, {}, {});
@@ -66,6 +92,17 @@ int main()
 		if (args.reconstructionFilter != (value == 1u ? NeuralRendering::ReconstructionFilter::Lanczos3 : NeuralRendering::ReconstructionFilter::Bilinear))
 			throw std::runtime_error("Reconstruction filter was lost or accepted an invalid value");
 	}
+	if (!args.guidedReconstructionEnabled)
+		throw std::runtime_error("Guided enable was lost at admission");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (upscaling.resets != 1 || args.reconstructionOverride != NeuralRendering::GuidedReconstructionOverride::GuidedExperiment)
+		throw std::runtime_error("Comparison history transition repeated or was lost");
+	args.frameId += 2;
+	upscaling.SetNeuralExecutionContext(args, {}, {}, {});
+	++calls;
+	if (upscaling.resets != 2 || args.reconstructionOverride != NeuralRendering::GuidedReconstructionOverride::Auto)
+		throw std::runtime_error("Expired comparison did not restore history once");
+#endif
 	for (const auto mode : { RenderingMode::ReducedResolution, RenderingMode::FullResolution, RenderingMode::Foveated }) {
 		upscaling.mode = mode;
 		for (const uint32_t percent : { 0u, 29u, 30u, 32u, 33u, 50u, 67u, 100u, 101u }) {

@@ -101,6 +101,7 @@ namespace globals
 				unsigned neuralRenderingMode = 0;
 				unsigned neuralRenderingModelResolutionPercent = 100;
 				unsigned neuralRenderingReconstructionFilter = 0;
+				bool neuralRenderingGuidedReconstruction = false;
 				bool neuralRenderingPressureResolutionEnabled = true;
 				bool neuralRenderingPrewarmEnabled = true;
 				float neuralRenderingSingleSubrectScale = 1.0f;
@@ -641,6 +642,11 @@ int main()
 		Upscaling::Settings settings;
 		require(settings.neuralRenderingPressureResolutionEnabled, "Automatic pressure resolution defaults on");
 		require(settings.neuralRenderingReconstructionFilter == 0, "Bilinear must remain the default");
+		require(!settings.neuralRenderingGuidedReconstruction, "Guided reconstruction must default off");
+		ImGui::Clear("Improve low-resolution NR");
+		DrawNeuralModelResolutionSettings(settings);
+		require(settings.neuralRenderingGuidedReconstruction && settings.neuralRenderingModelResolutionPercent == 100 && settings.neuralRenderingReconstructionFilter == 0,
+			"Guided toggle changed independent model scale or Basic filter");
 		for (const auto [value, expected] : { std::pair{ 1, 1u }, std::pair{ 0, 0u }, std::pair{ 2, 0u } }) {
 			ImGui::Clear("NR reconstruction filter");
 			ImGui::comboEditValue = value;

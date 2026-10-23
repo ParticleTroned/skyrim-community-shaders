@@ -43,6 +43,13 @@ void Check(bool condition, const char* message)
 
 int main()
 {
+	for (bool enabled : { false, true }) {
+		Upscaling::Settings settings;
+		from_json({ { "neuralRenderingGuidedReconstruction", enabled } }, settings);
+		Check(settings.neuralRenderingGuidedReconstruction == enabled && json(settings).at("neuralRenderingGuidedReconstruction") == enabled, "Guided option did not round-trip");
+		from_json(json::object(), settings);
+		Check(!settings.neuralRenderingGuidedReconstruction, "Legacy settings must disable guided reconstruction");
+	}
 	for (unsigned filter : { 0u, 1u }) {
 		Upscaling::Settings settings;
 		from_json({ { "neuralRenderingReconstructionFilter", filter } }, settings);

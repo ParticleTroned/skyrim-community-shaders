@@ -10,7 +10,7 @@
 namespace CSX::Diagnostics::ReflexMeasurement
 {
 	using json = nlohmann::json;
-	inline constexpr uint32_t HistoryCapacity = 128, SamplePeriodMs = 10, PostrollMs = 2000, QueryCapacity = 4096;
+	inline constexpr uint32_t SamplePeriodMs = 10, PostrollMs = 2000, QueryCapacity = 4096;
 	inline constexpr const char* LatencyLimitation = "No source-proven simulation-start to corresponding VR eye GPU-completion boundary. OpenVR Submit is a CPU handoff; mirror Present and GPU elapsed-work timings are not eye completion or headset display. No latency queries or diagnostic markers are issued.";
 	struct Service
 	{

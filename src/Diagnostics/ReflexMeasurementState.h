@@ -17,6 +17,7 @@
 namespace CSX::Diagnostics::ReflexMeasurement
 {
 	inline constexpr uint32_t Schema = 1;
+	inline constexpr uint32_t HistoryCapacity = 128;
 	using Tick = int64_t;
 	enum class Mode : uint8_t
 	{
@@ -187,17 +188,10 @@ namespace CSX::Diagnostics::ReflexMeasurement
 		template <class Emit>
 		void Consume(std::span<const CompositorRecord> history, Emit emit)
 		{
-			if (history.empty()) {
+			if (history.size() <= 2 || history.size() > HistoryCapacity) {
 				++quality.sourceFailures;
 				return;
 			}
-			if (history.size() <= 2) {
-				++quality.sourceFailures;
-				return;
-			}
-			for (size_t i = 1; i < history.size(); ++i)
-				if (history[i].frame <= history[i - 1].frame)
-					++quality.invalidCompositor;
 			const auto newest = history.back().frame;
 			if (seeded && newest < latest) {
 				++quality.resets;
@@ -209,15 +203,26 @@ namespace CSX::Diagnostics::ReflexMeasurement
 			if (newest < 2)
 				return;
 			const auto completed = newest - 2;
+			std::array<const CompositorRecord*, HistoryCapacity> ordered{};
+			size_t count{};
+			for (const auto& row : history)
+				if (row.frame <= completed)
+					ordered[count++] = &row;
+			// Separate reads can straddle a runtime advance; frame IDs define completion and order.
+			std::sort(ordered.begin(), ordered.begin() + count, [](auto* a, auto* b) { return a->frame < b->frame; });
 			if (!seeded) {
-				seeded = true;
-				last = completed;
-				for (const auto& row : history)
-					if (row.frame == last)
-						lastTime = row.systemSeconds;
+				if (count && ordered[count - 1]->frame == completed &&
+					std::isfinite(ordered[count - 1]->systemSeconds) && ordered[count - 1]->systemSeconds > 0) {
+					seeded = true;
+					last = completed;
+					lastTime = ordered[count - 1]->systemSeconds;
+				}
 				return;
 			}
-			for (auto row : history) {
+			for (size_t i = 0; i < count; ++i) {
+				auto row = *ordered[i];
+				if (i && row.frame == ordered[i - 1]->frame && row.systemSeconds != ordered[i - 1]->systemSeconds)
+					++quality.invalidCompositor;
 				if (row.frame <= last || row.frame > completed || (stopTarget && row.frame > *stopTarget))
 					continue;
 				if (row.frame > last + 1)

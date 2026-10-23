@@ -155,10 +155,40 @@ class Campaign(base.Campaign):
         else:
             verified = original
         require(evidence.nr_preference(verified) is False, "NR-off setup was not verified; no capture started")
+        self.settle_nr(verified)
         self.nr_setup.update(state="off_verified", requestedAfter=False,
                              changedBySetup=enabled, fingerprint=verified["requestedConfigurationFingerprint"])
         self.save("nr-setup.json", self.nr_setup)
         print("Neural Rendering OFF verified. Detailed NR state will be saved around every window.", flush=True)
+
+    def settle_nr(self, status):
+        print("Waiting for NR cleanup and a quiet settling interval before capture...", flush=True)
+        deadline = time.monotonic() + 140
+        fingerprint = status["requestedConfigurationFingerprint"]
+        previous = evidence.nr_counters(status)
+        quiet_since = None
+        ordinal = 0
+        while True:
+            require(evidence.nr_preference(status) is False and status["requestedConfigurationFingerprint"] == fingerprint,
+                    "NR settings changed during cleanup; no capture started")
+            retained = status.get("renderer", {}).get("memoryRetirement", {}).get("backendRetained")
+            require(type(retained) is bool, "NR cleanup state unavailable; no capture started")
+            counters = evidence.nr_counters(status)
+            now = time.monotonic()
+            if retained or counters != previous:
+                quiet_since = None
+            elif quiet_since is None:
+                quiet_since = now
+            if quiet_since is not None and now - quiet_since >= self.config["settleSeconds"]:
+                self.save("nr-settled.json", {"status": status, "quietSeconds": now - quiet_since})
+                return
+            require(now < deadline, "NR cleanup did not become quiet within 140s; see nr-settle status files")
+            previous = counters
+            time.sleep(2)
+            ordinal += 1
+            if ordinal % 5 == 0:
+                print("Still waiting for NR cleanup/settling; keep Skyrim running.", flush=True)
+            status = self.nr("nr_status", f"nr-settle-{ordinal:03}")
 
     def nr_condition(self, name, condition):
         status = self.nr("nr_status", name)
@@ -240,18 +270,18 @@ class Campaign(base.Campaign):
         stopped = self.call("stop", captureId=self.capture, reason="completed")
         transport_stop = self.last_transport
         require(stopped["frozen"], "capture still draining; recovery manifest retains ownership")
+        after = self.isl("condition")
+        nr_after = self.nr_condition(name + "-nr-after", after)
+        raw_after = self.call("condition")
         print(f"Exporting and validating {name}; keep the same viewpoint.", flush=True)
         raw_validation, side_validation = self.export_pair(self.capture, name)
         applied = evidence.experiment_applied(phase, side_validation, self.side_pages[0], self.original)
         self.capture = None
-        after = self.isl("condition")
-        nr_after = self.nr_condition(name + "-nr-after", after)
         nr_window = evidence.nr_window(nr_before, nr_after)
-        raw_after = self.call("condition")
         guard = self.performance_window(transport_start, transport_stop, name)
         source = evidence.streams(self.raw_pages, "compositor")
         scene = evidence.scene_match(started["condition"], raw_after, source, self.scene_reference)
-        if self.scene_reference is None:
+        if self.scene_reference is None or (not self.scene_reference.get("pose") and scene["reference"].get("pose")):
             self.scene_reference = scene["reference"]
         if self.rules is None and phase["label"] == "R":
             try:
@@ -276,9 +306,17 @@ class Campaign(base.Campaign):
                   "valid": raw_validation["complete"] and side_validation["complete"] and controller_clear and stable and guard["valid"] and scene["valid"] and applied['valid'] and nr_window['valid'],
                   "qpcAssociations": evidence.correlate_qpc(self.raw_pages, self.side_pages),
                   "evidencePrefix": name, "sceneTimePolicy": "preserved; elapsed game time is recorded, not reset"}
+        self.record_phase(result)
+
+    def record_phase(self, result):
+        name = result["name"]
         self.save(name + "-summary.json", result)
         self.completed.append(result)
-        require(result["valid"], f"{name}: incomplete or contaminated capture; evidence preserved, conclusions withheld")
+        require(result["settingsAndSceneStable"], f"{name}: test settings or scene changed; stopping to preserve user changes")
+        if not result["valid"]:
+            message = f"{name}: incomplete or contaminated capture; evidence preserved, conclusions withheld"
+            self.failures.append({"type": "InvalidWindow", "message": message})
+            print(message + "; continuing the remaining windows.", file=sys.stderr, flush=True)
 
     def restore(self):
         try:

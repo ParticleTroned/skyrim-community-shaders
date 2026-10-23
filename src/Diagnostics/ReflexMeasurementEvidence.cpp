@@ -1,11 +1,10 @@
 #include "Diagnostics/ReflexMeasurementInternal.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "BuildProvenance.h"
-#	include "Utils/CryptoHash.h"
 #	include "Utils/StringUtils.h"
+#	include "Utils/VRFrameTiming.h"
 #	include "Utils/WinApi.h"
 #	include <cstring>
-#	include <fstream>
 
 namespace CSX::Diagnostics::ReflexMeasurement
 {
@@ -72,23 +71,12 @@ namespace CSX::Diagnostics::ReflexMeasurement
 			if (!size || size >= path.size())
 				return { { "available", false }, { "reason", "module path unavailable or truncated" } };
 			const std::filesystem::path file(std::wstring(path.data(), size));
-			json identity{ { "available", true }, { "base", reinterpret_cast<uintptr_t>(module) }, { "path", Util::PathToUtf8(file) },
-				{ "hashMeaning", "on-disk inspection does not prove loaded code is unintercepted or unmodified" } };
+			json identity{ { "available", true }, { "base", reinterpret_cast<uintptr_t>(module) }, { "path", Util::PathToUtf8(file) } };
 			try {
-				const auto bytes = std::filesystem::file_size(file);
-				if (bytes > 512 * 1024 * 1024)
-					throw std::runtime_error("module exceeds bounded inspection size");
-				std::string contents(static_cast<size_t>(bytes), '\0');
-				std::ifstream input(file, std::ios::binary);
-				if (!input.read(contents.data(), static_cast<std::streamsize>(contents.size())))
-					throw std::runtime_error("module read failed or was truncated");
-				identity["size"] = bytes;
-				identity["sha256"] = Util::CryptoHash::Sha256Hex(contents);
 				const auto version = Util::GetDllVersion(file.wstring());
 				identity["version"] = version ? json(version->string()) : json(nullptr);
 				identity["versionReason"] = version ? json(nullptr) : json("file version resource unavailable");
 			} catch (const std::exception& e) {
-				identity["sha256"] = nullptr;
 				identity["inspectionError"] = e.what();
 			}
 			return identity;
@@ -245,14 +233,14 @@ namespace CSX::Diagnostics::ReflexMeasurement
 	json Environment()
 	{
 		const auto inspected = Backend().TryInspectDiagnosticBinding();
-		if (!inspected)
-			throw std::runtime_error("native backend busy; identity inspection not acquired");
-		const auto& b = *inspected;
+		const auto b = inspected.value_or(Reflex::DiagnosticBinding{});
 		const auto driver = Backend().ReadDriverIdentity();
 		json modules = json::object();
 		for (const auto name : { "nvapi64.dll", "sl.interposer.dll", "sl.common.dll", "sl.reflex.dll", "sl.pcl.dll", "sl.dlss.dll", "nvngx_dlss.dll", "nvngx_dlssg.dll", "openvr_api.dll", "vrclient_x64.dll" })
 			modules[name] = ModuleIdentity(GetModuleHandleA(name));
 		return { { "schema", Schema }, { "producer", BuildProvenance::GetProducer() }, { "runtime", REL::Module::get().version().string() },
+			{ "backendInspectionAvailable", inspected.has_value() },
+			{ "backendInspectionReason", inspected ? json(nullptr) : json("native backend busy; optional binding snapshot unavailable") },
 			{ "driver", { { "result", driver.result }, { "version", driver.result == NVAPI_OK ? json(driver.version) : json(nullptr) },
 							{ "branch", driver.result == NVAPI_OK ? json(std::string(driver.branch, strnlen_s(driver.branch, sizeof(driver.branch)))) : json(nullptr) },
 							{ "reason", driver.result == NVAPI_OK ? json(nullptr) : json("native driver identity query unavailable or failed") } } },
@@ -321,7 +309,9 @@ namespace CSX::Diagnostics::ReflexMeasurement
 							   { "requestedCapacity", s.requestedCapacity }, { "applicationCapacity", j.appLimit }, { "nativeCapacity", j.nativeLimit }, { "compositorCapacity", j.compositor.capacity() },
 							   { "readbackRequested", s.readbackRequested }, { "compositorRequested", s.compositorRequested },
 							   { "queryPeriodMs", s.readbackRequested ? json(s.queryPeriodMs) : json(nullptr) }, { "admissionDelayMs", s.admissionDelayMs },
-							   { "requestedHistoryCapacity", HistoryCapacity }, { "maximumHistoryReturned", s.maxHistoryReturned }, { "lastHistoryReturned", s.lastHistoryReturned },
+							   { "historyReadMethod", "GetFrameTiming(framesAgo)" },
+							   { "requestedHistoryCapacity", std::min(HistoryCapacity, Util::VRFrameTiming::kMaxCatchUpFrames + Util::VRFrameTiming::kCompletionLagFrames) },
+							   { "maximumHistoryReturned", s.maxHistoryReturned }, { "lastHistoryReturned", s.lastHistoryReturned },
 							   { "historyReason", "request capacity does not extend runtime retention; source-index gaps are accounted independently of destination drops" },
 							   { "samplePeriodMs", SamplePeriodMs }, { "postrollLimitMs", PostrollMs } } },
 			{ "boundaries", { { "applicationAdmissionStartQpc", Timestamp(j.start) }, { "applicationAdmissionStopQpc", Timestamp(j.stop) }, { "freezeQpc", Timestamp(j.freeze) }, { "qpcFrequency", Timestamp(frequency.QuadPart) },

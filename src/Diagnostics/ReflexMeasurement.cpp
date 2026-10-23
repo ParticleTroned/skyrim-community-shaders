@@ -5,6 +5,7 @@
 #	include "Features/Upscaling.h"
 #	include "Globals.h"
 #	include "Utils/OpenVRFrameTiming.h"
+#	include "Utils/VRFrameTiming.h"
 #	include <chrono>
 #	include <cstring>
 
@@ -172,9 +173,12 @@ namespace CSX::Diagnostics::ReflexMeasurement
 			bool fault{};
 			auto* compositor = Util::OpenVRFrameTiming::TryResolveCompositor(&fault);
 			std::array<vr::Compositor_FrameTiming, HistoryCapacity> raw{};
-			const auto count = Util::OpenVRFrameTiming::TryGetFrameTimings(compositor, raw.data(), HistoryCapacity, &fault);
-			s.lastHistoryReturned = count;
-			s.maxHistoryReturned = std::max(s.maxHistoryReturned, count);
+			const auto count = Util::VRFrameTiming::ReadRecentHistory(std::span(raw.data(), raw.size()), s.cursor.seeded ? s.cursor.last : 0,
+				[&](auto& timing, uint32_t ago) {
+					return Util::OpenVRFrameTiming::TryGetFrameTiming(compositor, &timing, &fault, ago);
+				});
+			s.lastHistoryReturned = static_cast<uint32_t>(count);
+			s.maxHistoryReturned = std::max(s.maxHistoryReturned, s.lastHistoryReturned);
 			const auto retrieved = Clock();
 			std::array<CompositorRecord, HistoryCapacity> rows{};
 			for (size_t i = 0; i < count; ++i) {

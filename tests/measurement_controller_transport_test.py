@@ -36,6 +36,7 @@ def nr_status(enabled=False):
                                        'color': {'enabled': False}},
             'requestedConfigurationFingerprint': ('a' if enabled else 'b') * 32,
             'renderScalePrerequisite': {'available': False}, 'runtime': {'installed': True},
+            'renderer': {'memoryRetirement': {'backendRetained': False}},
             'counters': {'attempts': 12, 'featureEvaluations': 24, 'outputCommits': 24, 'resetAttempts': 1}}
 
 
@@ -54,6 +55,92 @@ class NeuralSetupTests(unittest.TestCase):
                                     runtime='unused.json', build_id='a' * 64, artifact='unused.dll',
                                     artifact_sha256='b' * 64, plan='core', disable_neural_rendering=False)
         self.campaign = isl.Campaign(self.args, json.loads((ROOT / 'tools/isl-diagnostics/core.json').read_text()))
+        self.settle_patch = patch.object(isl.Campaign, 'settle_nr', autospec=True)
+        self.settle_patch.start()
+        self.addCleanup(self.settle_patch.stop)
+
+    def test_retired_backend_and_reset_are_allowed_only_before_quiet_settling(self):
+        self.settle_patch.stop()
+        before = nr_status()
+        before['renderer']['memoryRetirement']['backendRetained'] = True
+        after = nr_status()
+        after['counters']['resetAttempts'] += 1
+        clock = [0.0]
+        with patch.object(self.campaign, 'nr', return_value=after), \
+             patch.object(isl.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(isl.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            self.campaign.settle_nr(before)
+        settled = json.loads((self.campaign.root / 'nr-settled.json').read_text())
+        self.assertGreaterEqual(settled['quietSeconds'], self.campaign.config['settleSeconds'])
+        self.assertEqual(settled['status']['counters']['resetAttempts'], 2)
+        self.assertFalse(isl.evidence.nr_window(before, after)['valid'])
+
+    def test_nr_cleanup_wait_is_bounded_and_preserves_configuration(self):
+        self.settle_patch.stop()
+        status = nr_status()
+        status['renderer']['memoryRetirement']['backendRetained'] = True
+        clock = [0.0]
+        with patch.object(self.campaign, 'nr', return_value=status), \
+             patch.object(isl.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(isl.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             self.assertRaisesRegex(isl.evidence.EvidenceError, 'within 140s'):
+            self.campaign.settle_nr(status)
+        self.assertEqual(clock[0], 140)
+        changed = nr_status(True)
+        with patch.object(self.campaign, 'nr', return_value=changed), \
+             patch.object(isl.time, 'sleep'), \
+             self.assertRaisesRegex(isl.evidence.EvidenceError, 'settings changed'):
+            self.campaign.settle_nr(status)
+
+    def test_invalid_window_is_retained_without_aborting_remaining_data_collection(self):
+        result = {'name': '01-R', 'valid': False, 'settingsAndSceneStable': True}
+        with contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.campaign.record_phase(result)
+        self.assertEqual(self.campaign.completed, [result])
+        self.assertEqual(self.campaign.failures[0]['type'], 'InvalidWindow')
+        self.assertIn('continuing', stderr.getvalue())
+        self.assertFalse(json.loads((self.campaign.root / '01-R-summary.json').read_text())['valid'])
+
+    def test_changed_settings_stop_the_campaign_after_preserving_evidence(self):
+        result = {'name': '01-R', 'valid': False, 'settingsAndSceneStable': False}
+        with self.assertRaisesRegex(isl.evidence.EvidenceError, 'preserve user changes'):
+            self.campaign.record_phase(result)
+        self.assertEqual(self.campaign.completed, [result])
+
+    def test_nr_cleanup_during_export_does_not_contaminate_finished_window(self):
+        campaign = self.campaign
+        condition = {'ready': True, 'pacing': {}, 'weather': None, 'cell': 1, 'nrRequested': False,
+                     'effective': 1, 'shadowBatch': {}, 'shadowCulling': {'settings': {}}}
+        campaign.original = condition
+        campaign.rules = {'unavailable': 'test has no waveform'}
+        status = nr_status()
+        def call(action, **kwargs):
+            if action == 'start':
+                return {'captureId': 1, 'admissionDelayMs': 1000, 'condition': {}}
+            return {'frozen': True} if action == 'stop' else {}
+        def export(*args):
+            status['counters']['resetAttempts'] += 1
+            campaign.raw_pages = [{'boundaries': {'applicationAdmissionStartQpc': 10}}]
+            campaign.side_pages = [{}]
+            return {'complete': True}, {'complete': True}
+        with patch.object(campaign, 'isl', return_value=condition), \
+             patch.object(campaign, 'settle_isl', return_value=condition), \
+             patch.object(campaign, 'nr_condition', side_effect=lambda *a: copy.deepcopy(status)), \
+             patch.object(campaign, 'call', side_effect=call), \
+             patch.object(campaign, 'export_pair', side_effect=export), \
+             patch.object(campaign, 'performance_window', return_value={'valid': True}), \
+             patch.object(isl.base, 'qpc_now', return_value=1), \
+             patch.object(isl.time, 'monotonic', side_effect=[0, 100]), \
+             patch.object(isl.evidence, 'streams', return_value=[]), \
+             patch.object(isl.evidence, 'scene_match', return_value={'valid': True, 'reference': {}}), \
+             patch.object(isl.evidence, 'experiment_applied', return_value={'valid': True}), \
+             patch.object(isl.evidence, 'correlate_qpc', return_value={}), \
+             patch.object(isl.evidence.raw, 'summarize', return_value={}):
+            campaign.phase(isl.plan(campaign.config)[0])
+        self.assertEqual(status['counters']['resetAttempts'], 2)
+        self.assertTrue(campaign.completed[0]['neuralRendering']['valid'])
+        self.assertTrue(campaign.completed[0]['valid'])
 
     def test_already_disabled_does_not_send_mutation(self):
         with patch.object(self.campaign, 'controller', return_value=nr_response(nr_status())) as controller:

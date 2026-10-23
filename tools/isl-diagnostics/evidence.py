@@ -164,7 +164,7 @@ def scene_match(before, after, compositor, reference=None):
             limits.append("HMD viewpoint changed beyond 10 cm / 5 degrees")
     return {"valid": not limits, "limitations": limits, "reference": reference,
             "referenceGameHour": reference.get("gameHour"), "conditionReceiptGameHours": hours,
-            "gameTimeQualification": "after receipt follows export; elapsed time includes transfer, not only admission. No time reset or fixed-time equivalence is claimed",
+            "gameTimeQualification": "condition receipts include control/transfer overhead beyond admission. No time reset or fixed-time equivalence is claimed",
             "maxHmdPositionDeltaMetres": max_position, "maxHmdForwardAngleDegrees": max_angle,
             "meaning": "fixed predeclared matching limits; natural time progression across conditions is retained. Bracketing references are required. Does not prove unchanged AI, dynamic lights or intermediate game position"}
 

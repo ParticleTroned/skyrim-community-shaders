@@ -1,4 +1,5 @@
 #include "Diagnostics/ReflexMeasurementState.h"
+#include "Utils/VRFrameTiming.h"
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -171,6 +172,50 @@ namespace
 		user.fps = 45;
 		Check(!l.Restore(user, 200) && l.conflict && !l.requestedRestored && !l.active, "restoration overwrote intervening user changes or stranded its conflicted lease");
 	}
+	void SingleFrameHistory()
+	{
+		struct Timing
+		{
+			uint32_t m_nFrameIndex{};
+		};
+		CompositorCursor cursor;
+		std::vector<CompositorRecord> output;
+		auto poll = [&](uint32_t latest, uint32_t advance, int failAgo = -1) {
+			std::array<Timing, HistoryCapacity> source{};
+			uint32_t calls{};
+			const auto count = Util::VRFrameTiming::ReadRecentHistory(std::span(source.data(), source.size()), cursor.seeded ? cursor.last : 0,
+				[&](auto& timing, uint32_t ago) {
+					++calls;
+					timing.m_nFrameIndex = latest + (ago ? advance : 0) - ago;
+					return static_cast<int>(ago) != failAgo;
+				});
+			Check(calls <= 18, "single-frame history exceeded the bounded catch-up budget");
+			std::array<CompositorRecord, HistoryCapacity> rows{};
+			for (size_t i = 0; i < count; ++i)
+				rows[i] = History(source[i].m_nFrameIndex, source[i].m_nFrameIndex).front();
+			cursor.Consume(std::span(rows.data(), count), [&](auto row) { output.push_back(row); });
+		};
+		poll(100, 1);
+		Check(cursor.seeded && cursor.last == 98 && output.empty(), "advancing reads did not establish a completed boundary");
+		for (uint32_t frame = 101; frame < 300; ++frame) {
+			poll(frame, frame % 2);
+			poll(frame, 0);
+		}
+		Check(output.size() == 199 && cursor.last == 297 && cursor.quality.Complete(),
+			"duplicate/advancing single-frame reads lost frames or emitted incomplete data");
+		cursor.Close();
+		poll(302, 1);
+		Check(cursor.Drained() && output.back().frame == 299, "single-frame post-roll did not stop at the exact target");
+		cursor.stopTarget.reset();
+		poll(303, 0, 1);
+		Check(cursor.quality.sourceFailures == 1, "failed single-frame read was hidden");
+		poll(304, 0);
+		Check(cursor.last == 302 && cursor.quality.sourceLost == 0, "next history failed to recover retained frames");
+		poll(350, 0);
+		Check(cursor.quality.sourceLost > 0, "bounded history concealed an actual source gap");
+		poll(100, 0);
+		Check(cursor.quality.resets == 1, "single-frame source restart was not recorded");
+	}
 }
 int main()
 {
@@ -179,6 +224,7 @@ int main()
 	MissingCompletions();
 	FailedPreparationAndFinalization();
 	IndependentHistory();
+	SingleFrameHistory();
 	Restoration();
 	return EXIT_SUCCESS;
 }

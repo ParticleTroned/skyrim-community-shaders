@@ -72,6 +72,7 @@ def plan(config, selected="core"):
 class Campaign(base.Campaign):
     def __init__(self, args, config):
         super().__init__(args, config)
+        self.args.build_id = None
         self.client = "isl-" + uuid.uuid4().hex
         self.rules = None
         self.original = None
@@ -88,6 +89,10 @@ class Campaign(base.Campaign):
         result = super().controller(*args, **kwargs)
         self.last_transport = result
         return result
+
+    def identity_parameters(self):
+        # Capture ownership and live API guards do not require an on-disk DLL audit.
+        return {"SkipRuntimeIdentityVerification": True}
 
     def performance_window(self, before, after, name):
         self.save(name + "-guard-before.json", before)
@@ -106,8 +111,19 @@ class Campaign(base.Campaign):
         return base.payload(self.controller("call", "isl-" + action, request, tool=ISL_TOOL))
 
     def nr(self, action, label, **arguments):
-        request = {"action": action, "expectedBuildId": self.args.build_id} | arguments
-        status = base.payload(self.controller("call", label, request, tool=NR_TOOL), "neuralRendering", action)
+        require(self.args.build_id is not None or action == "nr_status", "read NR status before changing settings")
+        request = {"action": action} | arguments
+        if self.args.build_id is not None:
+            request["expectedBuildId"] = self.args.build_id
+        response = base.payload(self.controller("call", label, request, tool=NR_TOOL), None, action)
+        if self.args.build_id is None:
+            build_id = response.get("producer", {}).get("buildId")
+            require(isinstance(build_id, str) and bool(build_id.strip()), "running diagnostic API did not expose its build ID")
+            self.args.build_id = build_id
+            self.save("connection.json", {"runtime": self.args.runtime, "producer": response["producer"],
+                      "policy": "live API discovery; no artifact, manifest or external build expectation"})
+        require("neuralRendering" in response, "tool response is missing neuralRendering")
+        status = response["neuralRendering"]
         self.save(label + "-status.json", status)
         evidence.nr_preference(status)
         evidence.nr_counters(status)
@@ -306,8 +322,7 @@ class Campaign(base.Campaign):
         except (Exception, KeyboardInterrupt) as error:
             self.cleanup["restorationFailure"] = str(error)
         self.save("recovery-manifest.json", {"clientId": self.client, "sessionId": self.session, "captureId": self.last_capture_id,
-                  "buildId": self.args.build_id, "runtime": self.args.runtime, "artifact": self.args.artifact,
-                  "artifactSha256": self.args.artifact_sha256, "rawUnacknowledgedTotal": self.raw_unacked,
+                  "buildId": self.args.build_id, "runtime": self.args.runtime, "rawUnacknowledgedTotal": self.raw_unacked,
                   "sideUnacknowledgedTotal": self.side_unacked, "cleanup": self.cleanup,
                   "recovery": "same owner: recover_and_stop; wait for frozen; export and validate both journals; acknowledge both; restore; inspect restoration and restart-required flags"})
         self.save("restoration.json", self.cleanup)
@@ -381,8 +396,10 @@ def main():
     parser.add_argument("--off-unlimited", action="store_true", help="Explicitly change pacing once; restore accepted settings afterward")
     parser.add_argument("--disable-neural-rendering", action="store_true",
                         help="Explicitly set NR OFF before the campaign and leave it off; preserve other configuration")
-    for name in ("output", "controller", "runtime", "build-id", "artifact", "artifact-sha256"):
+    for name in ("output", "controller", "runtime"):
         parser.add_argument("--" + name, required=True)
+    for name in ("build-id", "artifact", "artifact-sha256"):
+        parser.add_argument("--" + name, help=argparse.SUPPRESS)
     args = parser.parse_args()
     config = json.loads(Path(args.scenario).read_text(encoding="utf-8-sig"))
     if args.observation:

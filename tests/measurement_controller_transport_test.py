@@ -2,7 +2,6 @@
 
 import contextlib
 import copy
-import hashlib
 import importlib.util
 import io
 import json
@@ -42,7 +41,7 @@ def nr_status(enabled=False):
 
 def nr_response(status, action='nr_status', ok=True):
     return {'ok': True, 'transportOk': True, 'data': {'content': [{'type': 'text', 'text': json.dumps({
-        'action': action, 'ok': ok, 'neuralRendering': status})}]}}
+        'action': action, 'ok': ok, 'producer': {'buildId': 'a' * 64}, 'neuralRendering': status})}]}}
 
 
 class NeuralSetupTests(unittest.TestCase):
@@ -62,6 +61,31 @@ class NeuralSetupTests(unittest.TestCase):
         controller.assert_called_once()
         self.assertEqual(controller.call_args.args[2]['action'], 'nr_status')
         self.assertFalse(self.campaign.nr_setup['changedBySetup'])
+        self.assertNotIn('expectedBuildId', controller.call_args.args[2])
+        self.assertEqual(self.args.build_id, 'a' * 64)
+
+    def test_live_discovery_ignores_external_build_and_artifact_expectations(self):
+        self.args.output = str(Path(self.directory.name) / 'live-discovery')
+        self.args.build_id = 'stale-external-build'
+        self.args.artifact = 'does-not-exist.dll'
+        campaign = isl.Campaign(self.args, self.campaign.config)
+        with patch.object(campaign, 'controller', return_value=nr_response(nr_status())) as controller:
+            campaign.prepare_nr()
+            campaign.nr('nr_status', 'later')
+        self.assertNotIn('expectedBuildId', controller.call_args_list[0].args[2])
+        self.assertEqual(controller.call_args_list[1].args[2]['expectedBuildId'], 'a' * 64)
+        self.assertEqual(campaign.identity_parameters(), {'SkipRuntimeIdentityVerification': True})
+
+    def test_discovery_missing_required_protocol_id_stops_before_mutation(self):
+        response = nr_response(nr_status(True))
+        content = json.loads(response['data']['content'][0]['text'])
+        del content['producer']
+        response['data']['content'][0]['text'] = json.dumps(content)
+        self.args.disable_neural_rendering = True
+        with patch.object(self.campaign, 'controller', return_value=response) as controller:
+            with self.assertRaisesRegex(isl.evidence.EvidenceError, 'did not expose its build ID'):
+                self.campaign.prepare_nr()
+        controller.assert_called_once()
 
     def test_ui_unavailable_with_stored_on_requires_explicit_setup(self):
         with patch.object(self.campaign, 'controller', return_value=nr_response(nr_status(True))) as controller:
@@ -174,7 +198,8 @@ class TransportTests(unittest.TestCase):
         self.controller.write_text('''param(
     $Command, $RuntimePath, $ExpectedBuildId, $ArtifactPath, $ExpectedArtifactSha256,
     $EvidenceDirectory, $EvidenceLabel, $MaxTransientRetries, [switch]$NoExit,
-    [switch]$RequireSuccess, [switch]$RequirePerformanceNeutral, $Tool, $ArgumentsJson
+    [switch]$RequireSuccess, [switch]$RequirePerformanceNeutral, [switch]$SkipRuntimeIdentityVerification,
+    $Tool, $ArgumentsJson
 )
 $description = 'keyboard name' + [char]0x2192 + 'DirectInput-scan-code; ' + [char]0x65e5
 @{ok=$true;transportOk=$true;description=$description;arguments=$ArgumentsJson;
@@ -200,6 +225,16 @@ $description = 'keyboard name' + [char]0x2192 + 'DirectInput-scan-code; ' + [cha
         self.assertEqual(json.loads(result['arguments']), request)
         self.assertTrue(result['parameters']['RequireSuccess']['IsPresent'])
         self.assertTrue(result['parameters']['RequirePerformanceNeutral']['IsPresent'])
+
+    def test_isl_transport_omits_artifact_audits_but_keeps_action_guards(self):
+        campaign = isl.Campaign(self.args, {})
+        result = campaign.controller('call', 'status', {'action': 'nr_status'}, tool=isl.NR_TOOL)
+        parameters = result['parameters']
+        self.assertTrue(parameters['SkipRuntimeIdentityVerification']['IsPresent'])
+        self.assertTrue(parameters['RequireSuccess']['IsPresent'])
+        self.assertTrue(parameters['RequirePerformanceNeutral']['IsPresent'])
+        for name in ('ArtifactPath', 'ExpectedArtifactSha256', 'ExpectedBuildId'):
+            self.assertNotIn(name, parameters)
 
     def test_legacy_console_reproduces_reported_control_character(self):
         script = "[Console]::OutputEncoding=[Text.Encoding]::GetEncoding(437); @{description=('name'+[char]0x2192+'scan-code')} | ConvertTo-Json -Compress"
@@ -258,12 +293,6 @@ $description = 'keyboard name' + [char]0x2192 + 'DirectInput-scan-code; ' + [cha
         self.assertEqual((output / 'previous.txt').read_text(), 'preserve')
 
     def test_launcher_forwards_explicit_nr_disable_without_connecting(self):
-        dll = self.root / 'CommunityShaders.dll'
-        dll.write_bytes(b'offline launcher fixture')
-        (self.root / 'CSX.BuildManifest.json').write_text(json.dumps({
-            'buildId': 'a' * 64, 'artifact': {'sha256': hashlib.sha256(dll.read_bytes()).hexdigest(),
-                                           'sizeBytes': dll.stat().st_size},
-            'identity': {'build': {'options': {'DEVBENCH_BRIDGE': 'ON'}}}}))
         (self.root / 'DevBenchControl.psm1').write_text('# offline fixture')
         runtime = self.root / 'runtime.json'
         runtime.write_text('{}')
@@ -272,13 +301,17 @@ $description = 'keyboard name' + [char]0x2192 + 'DirectInput-scan-code; ' + [cha
 function global:python { $args | ConvertTo-Json -Compress; $global:LASTEXITCODE = 0 }
 & $Launcher -Controller $Controller -Runtime $Runtime -PluginDirectory $PluginDirectory -DisableNeuralRendering
 ''')
-        result = subprocess.run(['pwsh', '-NoProfile', '-File', str(script),
-                                 '-Launcher', str(ROOT / 'tools/isl-diagnostics/run.ps1'),
-                                 '-Controller', str(self.controller), '-Runtime', str(runtime),
-                                 '-PluginDirectory', str(self.root)], capture_output=True, check=True)
-        arguments = json.loads(result.stdout.decode('utf-8-sig').splitlines()[-1])
-        self.assertIn('--disable-neural-rendering', arguments)
-        self.assertEqual(arguments[arguments.index('--artifact') + 1], str(dll))
+        (self.root / 'CSX.BuildManifest.json').write_text('invalid stale manifest')
+        for plugin in ('', str(self.root / 'nonexistent-provider'), str(self.root)):
+            with self.subTest(plugin=plugin):
+                result = subprocess.run(['pwsh', '-NoProfile', '-File', str(script),
+                                         '-Launcher', str(ROOT / 'tools/isl-diagnostics/run.ps1'),
+                                         '-Controller', str(self.controller), '-Runtime', str(runtime),
+                                         '-PluginDirectory', plugin], capture_output=True, check=True)
+                arguments = json.loads(result.stdout.decode('utf-8-sig').splitlines()[-1])
+                self.assertIn('--disable-neural-rendering', arguments)
+                for name in ('--artifact', '--artifact-sha256', '--build-id'):
+                    self.assertNotIn(name, arguments)
 
     def test_failed_catalog_has_visible_failure_and_no_game_actions(self):
         self.controller.write_text("'{\"ok\":false,\"transportOk\":true,\"errors\":[\"catalog rejected\"]}'", encoding='utf-8')

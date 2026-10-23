@@ -67,8 +67,8 @@ def payload(result, key="result", action=None):
     require(isinstance(content, dict), "expected a structured tool payload")
     require(content.get("ok") is True, f"tool action failed: {content.get('error', 'success not confirmed')}")
     require(action is None or content.get("action") == action, "unexpected tool action response")
-    require(key in content, f"tool response is missing {key}")
-    return content[key]
+    require(key is None or key in content, f"tool response is missing {key}")
+    return content if key is None else content[key]
 
 
 class Campaign:
@@ -93,13 +93,16 @@ class Campaign:
         with (self.root / name).open("x", encoding="utf-8") as output:
             json.dump(value, output, indent=2, allow_nan=False)
 
+    def identity_parameters(self):
+        return {"ExpectedBuildId": self.args.build_id, "ArtifactPath": self.args.artifact,
+                "ExpectedArtifactSha256": self.args.artifact_sha256}
+
     def controller(self, command, label, arguments=None, tool=TOOL):
         self.ordinal += 1
         prefix = f"{self.ordinal:04}-{label}"
-        parameters = {"Command": command, "RuntimePath": self.args.runtime, "ExpectedBuildId": self.args.build_id,
-                      "ArtifactPath": self.args.artifact, "ExpectedArtifactSha256": self.args.artifact_sha256,
+        parameters = {"Command": command, "RuntimePath": self.args.runtime,
                       "EvidenceDirectory": str(self.root / "transport"), "EvidenceLabel": prefix,
-                      "MaxTransientRetries": 0, "NoExit": True}
+                      "MaxTransientRetries": 0, "NoExit": True} | self.identity_parameters()
         # Discovery has no measurement/action outcome; all tool calls retain both guards.
         if command != "list":
             parameters.update(RequireSuccess=True, RequirePerformanceNeutral=True)

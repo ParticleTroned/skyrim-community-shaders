@@ -896,6 +896,15 @@ namespace NeuralRendering
 				}
 			}
 		}
+		void FinishApplyLocked(RendererApplyOutcome& outcome) noexcept
+		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (failureLatched_ || quarantined_)
+				reconstructionExperiment_.Cancel();
+			outcome.reconstructionHistoryReset |= reconstructionExperiment_.ConsumeChange();
+#endif
+			FinishCapture(outcome);
+		}
 		mutable std::mutex mutex_;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		LifetimeDiagnostics lifetimeDiagnostics_;
@@ -2034,6 +2043,9 @@ namespace NeuralRendering
 		bool a_applyFailure,
 		std::uint64_t a_failuresBefore) noexcept
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		reconstructionExperiment_.Cancel();
+#endif
 		LogFailureDiagnosticsLocked(a_stage, E_FAIL, a_slot);
 		snapshot_.stallRecovery.Cancel();
 		memoryRetirement_.Released();
@@ -3325,9 +3337,6 @@ namespace NeuralRendering
 #endif
 		const bool nativeSucceeded = sequential ? ApplySequentialStereoLocked(batch.arguments, outcome, true) :
 		                                          ApplyBatchLocked(std::span(batch.arguments.data(), batch.count), outcome, true);
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		outcome.reconstructionHistoryReset = reconstructionExperiment_.ConsumeChange();
-#endif
 		if (!nativeSucceeded)
 			return false;
 		activeStage_ = RendererStage::OutputCommit;
@@ -4410,7 +4419,7 @@ namespace NeuralRendering
 			state_->FinishMemoryRecoveryLocked(succeeded, outcome);
 			if (succeeded)
 				Runtime::Instance().AcknowledgePresentedFeatures(outcome.evaluationSucceededFeatureSlotMask);
-			state_->FinishCapture(outcome);
+			state_->FinishApplyLocked(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -4423,7 +4432,7 @@ namespace NeuralRendering
 				failureFeatureSlot,
 				true,
 				failuresBefore);
-			state_->FinishCapture(outcome);
+			state_->FinishApplyLocked(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -4457,7 +4466,7 @@ namespace NeuralRendering
 				Runtime::Instance().AcknowledgePresentedFeatures(outcome.evaluationSucceededFeatureSlotMask);
 			if (!outcome.memoryPressureBypass)
 				Increment(succeeded ? state_->snapshot_.counters.stereoSuccesses : state_->snapshot_.counters.stereoFailures);
-			state_->FinishCapture(outcome);
+			state_->FinishApplyLocked(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -4471,7 +4480,7 @@ namespace NeuralRendering
 				true,
 				failuresBefore);
 			Increment(state_->snapshot_.counters.stereoFailures);
-			state_->FinishCapture(outcome);
+			state_->FinishApplyLocked(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -4502,7 +4511,7 @@ namespace NeuralRendering
 			state_->FinishMemoryRecoveryLocked(succeeded, outcome);
 			if (succeeded)
 				Runtime::Instance().AcknowledgePresentedFeatures(outcome.evaluationSucceededFeatureSlotMask);
-			state_->FinishCapture(outcome);
+			state_->FinishApplyLocked(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -4515,7 +4524,7 @@ namespace NeuralRendering
 				failureFeatureSlot,
 				true,
 				failuresBefore);
-			state_->FinishCapture(outcome);
+			state_->FinishApplyLocked(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);

@@ -74,7 +74,7 @@ namespace NeuralRendering::Evidence
 	{
 		if (!value)
 			return nullptr;
-		return { { "mode", value->decision.mode == GuidedReconstructionMode::GuidedLowResolution ? "guided_low_resolution" : "basic" },
+		return { { "mode", GetGuidedReconstructionModeName(value->decision.mode) },
 			{ "reason", GetGuidedReconstructionReasonName(value->decision.reason) }, { "effectivePercent", value->effectivePercent },
 			{ "target", ExtentJson(value->target) }, { "unpackedModel", ExtentJson(value->unpackedModel) },
 			{ "basicFilter", GetReconstructionFilterName(value->basicFilter) }, { "enabled", value->enabled },

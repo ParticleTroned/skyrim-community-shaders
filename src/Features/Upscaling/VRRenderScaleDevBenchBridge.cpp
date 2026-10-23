@@ -3265,7 +3265,7 @@ namespace
 									 { "requestedPercent", a_upscaling.settings.neuralRenderingModelResolutionPercent },
 									 { "pressureResolutionEnabled", snapshot.pressureResolutionEnabled },
 									 { "effectivePercent", snapshot.effectiveModelResolutionPercent },
-									 { "reconstructionOverride", { { "mode", NeuralRendering::GetGuidedReconstructionOverrideName(snapshot.reconstructionOverride.mode) }, { "revision", snapshot.reconstructionOverride.revision }, { "remainingFrames", snapshot.reconstructionOverride.remainingFrames } } },
+									 { "reconstructionOverride", { { "mode", NeuralRendering::GetGuidedReconstructionOverrideName(snapshot.reconstructionOverride.mode) }, { "revision", snapshot.reconstructionOverride.revision }, { "remainingFrames", snapshot.reconstructionOverride.remainingFrames }, { "historyResetPending", snapshot.reconstructionOverride.historyResetPending } } },
 									 { "guidedQualification", { { "cutoffPercent", NeuralRendering::kGuidedReconstructionQualification.maximumPercent }, { "beforeUpscaling", NeuralRendering::kGuidedReconstructionQualification.beforeUpscaling }, { "afterUpscaling", NeuralRendering::kGuidedReconstructionQualification.afterUpscaling }, { "kernel", "2x2" } } },
 									 { "configuredPercent", NeuralRendering::EffectiveModelResolutionPercent(a_upscaling.GetNeuralRenderingMode(), a_upscaling.settings.neuralRenderingModelResolutionPercent) },
 									 { "lastRequest", {
@@ -3275,7 +3275,7 @@ namespace
 														  { "sharedInputs", snapshot.modelSharedInputs },
 														  { "selectedOutput", snapshot.modelOutputSelected },
 														  { "reconstructionPrepared", snapshot.reconstructionPrepared },
-														  { "reconstructionMode", snapshot.guidedReconstruction.mode == NeuralRendering::GuidedReconstructionMode::GuidedLowResolution ? "guided_low_resolution" : "basic" },
+														  { "reconstructionMode", NeuralRendering::GetGuidedReconstructionModeName(snapshot.guidedReconstruction.mode) },
 														  { "reconstructionReason", NeuralRendering::GetGuidedReconstructionReasonName(snapshot.guidedReconstruction.reason) },
 														  { "packedCrops", NeuralRendering::PackedCropLayoutJson(snapshot.packedCropLayout) },
 														  { "source", { { "width", snapshot.modelSourceWidth }, { "height", snapshot.modelSourceHeight } } },
@@ -9195,7 +9195,7 @@ namespace
 				const auto status = renderer.GetSnapshot().reconstructionOverride;
 				return json{ { "ok", applied }, { "action", "nr_reconstruction_compare" }, { "mutationApplied", applied },
 					{ "reason", applied ? "comparison_lease_updated" : "override_revision_conflict" },
-					{ "historyResetPending", applied }, { "mode", NeuralRendering::GetGuidedReconstructionOverrideName(status.mode) },
+					{ "historyResetPending", status.historyResetPending }, { "mode", NeuralRendering::GetGuidedReconstructionOverrideName(status.mode) },
 					{ "revision", status.revision }, { "remainingFrames", status.remainingFrames } };
 			});
 		}

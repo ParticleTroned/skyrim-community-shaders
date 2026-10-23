@@ -2,6 +2,7 @@
 
 #include <array>
 #include <stdexcept>
+#include <string_view>
 
 namespace
 {
@@ -66,15 +67,25 @@ namespace
 		GuidedReconstructionExperiment lease;
 		Require(!lease.Configure(Basic, 601, 1) && !lease.Configure(Basic, 0, 1));
 		Require(!lease.Configure(Auto, 1, 1) && !lease.Configure(Basic, 2, 0));
-		Require(lease.Configure(GuidedExperiment, 2, 1));
+		Require(lease.Configure(Auto, 0, 1));
+		Require(!lease.Status().historyResetPending);
+		Require(lease.Configure(GuidedExperiment, 2, lease.Status().revision));
+		Require(lease.Status().historyResetPending);
 		Require(lease.Resolve(10, 1) == std::pair{ GuidedExperiment, true });
+		Require(!lease.Status().historyResetPending);
 		Require(lease.Resolve(10, 1) == std::pair{ GuidedExperiment, false });
 		Require(lease.Resolve(11, 1) == std::pair{ GuidedExperiment, false });
 		Require(lease.Resolve(12, 1) == std::pair{ Auto, true });
 		Require(lease.Resolve(13, 1) == std::pair{ Auto, false });
 		Require(!lease.Configure(Auto, 0, 2));
+		Require(!lease.Status().historyResetPending);
+		Require(std::string_view(GetGuidedReconstructionModeName(GuidedReconstructionMode::Basic)) == "basic");
+		Require(std::string_view(GetGuidedReconstructionModeName(GuidedReconstructionMode::GuidedLowResolution)) == "guided_low_resolution");
 		Require(lease.Configure(Basic, 4, lease.Status().revision));
 		Require(lease.Resolve(14, 1) == std::pair{ Basic, true });
+		Require(lease.Configure(Basic, 4, lease.Status().revision));
+		Require(!lease.Status().historyResetPending);
+		Require(lease.Resolve(14, 1) == std::pair{ Basic, false });
 		Require(lease.Resolve(15, 2) == std::pair{ Auto, true });
 		Require(lease.Configure(Basic, 4, lease.Status().revision));
 		Require(lease.Resolve(20, 2) == std::pair{ Basic, true });

@@ -84,6 +84,19 @@ namespace NeuralRendering
 		return { GuidedReconstructionMode::GuidedLowResolution, Eligible };
 	}
 
+	/** Stable names shared by live status and retained execution evidence. */
+	[[nodiscard]] constexpr const char* GetGuidedReconstructionModeName(GuidedReconstructionMode mode) noexcept
+	{
+		switch (mode) {
+		case GuidedReconstructionMode::Basic:
+			return "basic";
+		case GuidedReconstructionMode::GuidedLowResolution:
+			return "guided_low_resolution";
+		default:
+			return "unknown";
+		}
+	}
+
 	[[nodiscard]] constexpr const char* GetGuidedReconstructionReasonName(GuidedReconstructionReason reason) noexcept
 	{
 		switch (reason) {
@@ -133,13 +146,19 @@ namespace NeuralRendering
 		GuidedReconstructionOverride mode = GuidedReconstructionOverride::Auto;
 		std::uint64_t revision = 1;
 		std::uint32_t remainingFrames = 0;
+		bool historyResetPending = false;
 	};
 	/** A bounded comparison lease cannot restore over a newer request or user generation. */
 	class GuidedReconstructionExperiment
 	{
 	public:
 		static constexpr std::uint32_t kMaximumFrames = 600;
-		[[nodiscard]] GuidedReconstructionOverrideStatus Status() const noexcept { return status_; }
+		[[nodiscard]] GuidedReconstructionOverrideStatus Status() const noexcept
+		{
+			auto result = status_;
+			result.historyResetPending = changed_;
+			return result;
+		}
 		bool Configure(GuidedReconstructionOverride mode, std::uint32_t frames, std::uint64_t expectedRevision) noexcept
 		{
 			if (expectedRevision != status_.revision ||

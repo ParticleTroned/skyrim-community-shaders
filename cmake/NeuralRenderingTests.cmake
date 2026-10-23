@@ -38,6 +38,7 @@ set(_neural_failure_headers
     "${_neural_failure_dir}/neural_failure_resource_key_under_test.h"
     "${_neural_failure_dir}/neural_failure_stage_under_test.h"
     "${_neural_failure_dir}/neural_failure_capture_under_test.h"
+    "${_neural_failure_dir}/neural_reconstruction_finish_under_test.h"
     "${_neural_failure_dir}/neural_stall_service_under_test.h")
 add_custom_command(
     OUTPUT ${_neural_failure_headers}

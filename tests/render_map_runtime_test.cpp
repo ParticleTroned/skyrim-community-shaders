@@ -12,6 +12,7 @@
 #include <chrono>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -361,10 +362,13 @@ namespace
 			}
 			const auto currentGeneration = lane == 3 ? 78u : lease.generation;
 			const auto currentDevice = lane == 4 ? 0xD001u : 0xD000u;
-			RecordRetainedEyeSubmission(runtime, lease, currentGeneration, currentDevice,
-				resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90);
-			RecordRetainedEyeSubmission(runtime, lease, currentGeneration, currentDevice,
-				resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 90);
+			std::shared_mutex recreation;
+			const auto captureGeneration = runtime.ActiveCaptureGeneration();
+			const auto observe = [&]() -> std::optional<RetainedEyePublication> {
+				return RetainedEyePublication{ currentGeneration, currentDevice, 12, resource };
+			};
+			RecordRetainedEyeSubmission(runtime, recreation, lease, captureGeneration, observe, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90);
+			RecordRetainedEyeSubmission(runtime, recreation, lease, captureGeneration, observe, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 90);
 			const auto snapshot = runtime.StopCapture();
 			Check(snapshot.has_value(), "retained eye capture did not stop");
 			Check((snapshot->window.phase == CaptureWindowPhase::kMatchedEyes) == (lane == 0),
@@ -386,6 +390,101 @@ namespace
 			Check(snapshot->window.acceptedEyeMask == (lane == 0 ? 3 : 0),
 				"mismatched publication acquired accepted-eye authority");
 		}
+	}
+
+	void TestRetainedSubmissionCaptureTurnover()
+	{
+		for (int lane = 0; lane < 5; ++lane) {
+			Runtime runtime;
+			runtime.SetImmediateContext(0xA000);
+			const ResourceObservationInput resource{ .d3dObject = 0xA100, .dimension = ResourceDimension::kTexture2D };
+			const auto start = [&]() {
+				Check(runtime.StartCapture(LateConfig()) == StartResult::kStarted, "submit capture did not arm");
+				runtime.SetCpuFrame(12);
+				Check(runtime.ActivatePostProcessingWindow(9, 12, 77), "submit capture did not activate");
+				{
+					auto scope = runtime.EnterPostProcessing(resource, resource, 9, 77);
+					runtime.RecordPostProcessingBootstrap({ 1, 2, 3, 4, 5, 6 }, runtime.PostProcessingCaptureGeneration());
+					runtime.CompleteWindowBootstrap(true);
+				}
+			};
+			if (lane != 3)
+				start();
+			const auto beforeNativeSubmit = runtime.ActiveCaptureGeneration();
+			std::shared_mutex recreation;
+			const OpenVRSubmitLeasePolicy::PublicationLease lease{ 77, 0xD000, true, false, true };
+			const ResourceObservationInput submitted{ .d3dObject = 0xB100, .dimension = ResourceDimension::kTexture2D };
+			const auto observe = [&]() -> std::optional<RetainedEyePublication> { return RetainedEyePublication{ 77, 0xD000, 12, submitted }; };
+			const auto publish = [&](Eye eye, std::uint8_t mask) {
+				RecordRetainedEyeSubmission(runtime, recreation, lease, beforeNativeSubmit, observe, eye, mask, 0, 0, 1, 1, 0, 90);
+			};
+			if (lane == 4)
+				publish(Eye::kLeft, 1);
+			if (lane == 1 || lane == 2 || lane == 4)
+				Check(runtime.StopCapture().has_value(), "predecessor submit capture did not stop");
+			if (lane == 2 || lane == 3 || lane == 4)
+				start();
+			publish(Eye::kLeft, 1);
+			publish(Eye::kRight, 2);
+			if (lane != 0)
+				runtime.RecordEyeSubmission(submitted, Eye::kRight, 2, 0, 0, 1, 1, 0, 90, 77, beforeNativeSubmit, 12);
+			const auto snapshot = runtime.StopCapture();
+			if (lane == 1) {
+				Check(!snapshot, "stopped submit invented a capture");
+				continue;
+			}
+			Check(snapshot.has_value(), "submit successor capture did not stop");
+			std::size_t eyes = 0;
+			for (const auto& event : snapshot->events)
+				if (event.payload.schema == static_cast<std::uint16_t>(PayloadSchema::kEyeSubmission) ||
+					event.payload.schema == static_cast<std::uint16_t>(PayloadSchema::kEyePublication))
+					++eyes;
+			Check(eyes == (lane == 0 ? 4u : 0u), "in-flight predecessor submit entered successor capture");
+			Check((snapshot->window.phase == CaptureWindowPhase::kMatchedEyes) == (lane == 0), "stale submit closed successor window");
+			if (lane != 0) {
+				Check(snapshot->window.acceptedEyeMask == 0, "stale submit acquired successor eye authority");
+				for (const auto& event : snapshot->events)
+					if (event.payload.schema == static_cast<std::uint16_t>(PayloadSchema::kResourceObservation))
+						Check(event.payload.words[1] != 0xB100, "stale submit resource entered successor capture");
+			}
+		}
+	}
+
+	void TestRetainedSubmissionRecreationInterval()
+	{
+		Runtime runtime;
+		Check(runtime.StartCapture(Config()) == StartResult::kStarted, "publication interval capture did not start");
+		const auto captureGeneration = runtime.ActiveCaptureGeneration();
+		std::shared_mutex recreation;
+		std::uint64_t generation = 77;
+		const OpenVRSubmitLeasePolicy::PublicationLease lease{ 77, 0xD000, true, false, true };
+		const ResourceObservationInput resource{ .d3dObject = 0xB100, .dimension = ResourceDimension::kTexture2D };
+		bool blocked = false;
+		const auto observe = [&]() -> std::optional<RetainedEyePublication> {
+			const auto sampled = generation;
+			std::jthread writer([&]() {
+				std::unique_lock attempt(recreation, std::try_to_lock);
+				blocked = !attempt.owns_lock();
+				if (attempt.owns_lock())
+					generation = 78;
+			});
+			writer.join();
+			return RetainedEyePublication{ sampled, 0xD000, 12, resource };
+		};
+		RecordRetainedEyeSubmission(runtime, recreation, lease, captureGeneration, observe, Eye::kLeft, 1, 0, 0, 1, 1, 0, 90);
+		Check(blocked, "recreation entered between publication sampling and record");
+		{
+			const std::unique_lock writer(recreation);
+			generation = 78;
+		}
+		RecordRetainedEyeSubmission(runtime, recreation, lease, captureGeneration, observe, Eye::kRight, 2, 0, 0, 1, 1, 0, 90);
+		const auto snapshot = runtime.StopCapture();
+		Check(snapshot.has_value(), "publication interval capture did not stop");
+		std::size_t eyes = 0;
+		for (const auto& event : snapshot->events)
+			if (event.payload.schema == static_cast<std::uint16_t>(PayloadSchema::kEyeSubmission))
+				++eyes;
+		Check(eyes == 1, "relatched publication admitted stale eye");
 	}
 
 	void TestLateWindowSkipsPrefixAndMatchesAcceptedPair()
@@ -425,13 +524,13 @@ namespace
 			runtime.CompleteWindowBootstrap(true);
 		}
 		Check(runtime.GetCaptureWindow().bootstrapComplete, "bootstrap was not committed");
-		runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77);
-		runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77);
-		runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 91, 77);
-		runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 90, 78);
+		runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77, runtime.ActiveCaptureGeneration());
+		runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77, runtime.ActiveCaptureGeneration());
+		runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 91, 77, runtime.ActiveCaptureGeneration());
+		runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 90, 78, runtime.ActiveCaptureGeneration());
 		Check(runtime.IsCapturing() && runtime.GetCaptureWindow().acceptedEyeMask == 1,
 			"repeated or mismatched eye completed a pair");
-		runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 90, 77);
+		runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 90, 77, runtime.ActiveCaptureGeneration());
 		Check(!runtime.IsCapturing(), "matched window continued accepting prefix work");
 		Check(runtime.StartCapture(LateConfig()) == StartResult::kAlreadyCapturing,
 			"another start replaced an unfinalized terminal window");
@@ -489,7 +588,7 @@ namespace
 				}
 				if (lane == 6)
 					runtime.RecordEyeSubmission({ .d3dObject = 0xA100, .dimension = ResourceDimension::kTexture2D },
-						Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77);
+						Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77, runtime.ActiveCaptureGeneration());
 			}
 			const auto beforeStop = runtime.GetCaptureWindow();
 			auto snapshot = runtime.StopCapture();
@@ -1495,7 +1594,7 @@ namespace
 			.mipLevels = 1,
 		};
 		runtime.RecordEyeSubmission(
-			submittedTexture, Eye::kLeft, 1, 0.0f, 0.0f, 0.5f, 1.0f, 0, 77, 0);
+			submittedTexture, Eye::kLeft, 1, 0.0f, 0.0f, 0.5f, 1.0f, 0, 77, 0, runtime.ActiveCaptureGeneration());
 		runtime.RecordCullDecision(
 			versionId, versionGeneration, 12, false, 2, 2, 0, 0, 100);
 
@@ -1574,7 +1673,7 @@ namespace
 			runtime.RecordVisibilityCandidate(0x1000 + index, index, 1);
 		runtime.RecordEyeSubmission(
 			{ .d3dObject = 0x9000, .dimension = ResourceDimension::kTexture2D, .widthOrBytes = 2048, .height = 2048, .depthOrArraySize = 1, .mipLevels = 1 },
-			Eye::kRight, 2, 0.5f, 0.0f, 1.0f, 1.0f, 0, 9, 0);
+			Eye::kRight, 2, 0.5f, 0.0f, 1.0f, 1.0f, 0, 9, 0, runtime.ActiveCaptureGeneration());
 
 		auto snapshot = runtime.StopCapture();
 		Check(snapshot && snapshot->events.size() == 2,
@@ -2466,7 +2565,7 @@ namespace
 						break;
 					case Producer::kEyeSubmission:
 						expected = EventKind::kEyeSubmitted;
-						runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 1, 1, 0, 1, 1);
+						runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 1, 1, 0, 1, 1, runtime.ActiveCaptureGeneration());
 						break;
 					case Producer::kResourceFlow:
 						expected = EventKind::kResourceFlow;
@@ -3110,14 +3209,14 @@ namespace
 				auto scope = runtime.EnterPostProcessing(resource, resource, 9, 77);
 				Check(runtime.IsInsidePostProcessing(), "failed write observation scope did not activate");
 				runtime.RecordTransferResourceAccess(0xA000, target, ResourceStage::kOutputMerger, 0, true);
-				runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77);
+				runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77, runtime.ActiveCaptureGeneration());
 				if (failResource)
 					target.resource.widthOrBytes = 128;
 				else
 					target.view.d3dObject = 0xA300;
 				runtime.RecordTransferResourceAccess(0xA000, target, ResourceStage::kOutputMerger, 0, true);
 			}
-			runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 91, 78);
+			runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 91, 78, runtime.ActiveCaptureGeneration());
 			const auto capture = runtime.StopCapture();
 			Check(capture.has_value(), "failed write observation capture did not stop");
 			Check(failResource ? capture->statistics.droppedResourceObservations != 0 :
@@ -3172,9 +3271,9 @@ namespace
 			runtime.RecordTransferResourceAccess(0xA000, { .resource = resource }, ResourceStage::kCompute, 2, false);
 		}
 		Check(!runtime.IsInsidePostProcessing(), "post-processing scope leaked");
-		runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77);
+		runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 90, 77, runtime.ActiveCaptureGeneration());
 		runtime.SetCpuFrame(13);
-		runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 91, 78);
+		runtime.RecordEyeSubmission(resource, Eye::kRight, 2, 0.5f, 0, 1, 1, 0, 91, 78, runtime.ActiveCaptureGeneration());
 		const auto capture = runtime.StopCapture();
 		Check(capture.has_value(), "transfer capture did not stop");
 		std::uint64_t writeVersion = 0;
@@ -3224,7 +3323,7 @@ namespace
 			Check(!runtime.IsInsidePostProcessing(), "old scope became active in successor capture");
 			runtime.RecordTransferResourceAccess(0xA000, { .resource = resource }, ResourceStage::kOutputMerger, 0, true);
 		}
-		runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 92, 79);
+		runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 0.5f, 1, 0, 92, 79, runtime.ActiveCaptureGeneration());
 		const auto successor = runtime.StopCapture();
 		Check(successor.has_value(), "turnover successor did not stop");
 		Check(std::none_of(successor->events.begin(), successor->events.end(), [](const EventRecord& event) {
@@ -3243,6 +3342,8 @@ int main()
 {
 	try {
 		TestRetainedEyeSubmissionPublication();
+		TestRetainedSubmissionCaptureTurnover();
+		TestRetainedSubmissionRecreationInterval();
 		TestFailedPostWriteObservationClearsCommandEpoch();
 		TestTransferVersionAdmissionAndTurnover();
 		TestInactiveRuntime();

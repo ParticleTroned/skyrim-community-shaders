@@ -2337,11 +2337,13 @@ namespace CSX::RenderMap
 		float a_uMax,
 		float a_vMax,
 		std::uint32_t a_submitFlags,
-		std::uint64_t a_compositorCycle, std::uint64_t a_publicationGeneration) noexcept
+		std::uint64_t a_compositorCycle, std::uint64_t a_publicationGeneration,
+		std::uint64_t a_expectedCaptureGeneration, std::uint64_t a_cpuFrame) noexcept
 	{
-		if (!collector.IsCapturing() || a_resource.d3dObject == 0)
+		if (a_expectedCaptureGeneration == 0 || collector.ActiveGeneration() != a_expectedCaptureGeneration ||
+			!collector.IsCapturing() || a_resource.d3dObject == 0)
 			return;
-		const auto captureGeneration = collector.ActiveGeneration();
+		const auto captureGeneration = a_expectedCaptureGeneration;
 		if (!captureGeneration)
 			return;
 		const auto resource = ObserveResource(a_resource, 0, 0, captureGeneration);
@@ -2352,6 +2354,8 @@ namespace CSX::RenderMap
 			return;
 		const auto previousFrame = collector.GetThreadFrameContext();
 		auto frame = previousFrame;
+		if (a_cpuFrame != kUnknownFrame)
+			frame.cpuFrame = a_cpuFrame;
 		frame.eye = a_eye;
 		frame.eyeMask = a_eyeMask;
 		collector.SetThreadFrameContext(frame);

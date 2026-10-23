@@ -1,4 +1,5 @@
 #include "LightLimitFix.h"
+#include "Diagnostics/ISLDiagnostics.h"
 #include "EngineFix.h"
 #include "Features/InverseSquareLighting/Common.h"
 #include "Globals.h"
@@ -1582,14 +1583,25 @@ void LightLimitFix::PruneParticleLightCache(std::uint32_t a_frame)
 	if (a_frame - lastParticleLightCacheSweepFrame < kParticleLightCacheSweepInterval) {
 		return;
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (CSX::Diagnostics::ISL::DeferPrune(a_frame)) {
+		CS_ISL_COUNT(PruneDeferred, 1);
+		return;
+	}
+#endif
+	CS_ISL_BROAD(pruneSweep, PruneSweep);
 	lastParticleLightCacheSweepFrame = a_frame;
 
 	const auto configVersion = globals::features::llf::particleLights.configVersion;
+	CS_ISL_SCOPE(pruneWait, PruneWait);
 	std::lock_guard<std::mutex> cacheLock{ particleLightsCacheMutex };
+	CS_ISL_END(pruneWait);
+	CS_ISL_COUNT(PruneEntries, particleLightsReferences.size());
 	for (auto it = particleLightsReferences.begin(); it != particleLightsReferences.end();) {
 		const bool configChanged = it->second.reference.configVersion != configVersion;
 		const bool entryExpired = a_frame - it->second.lastSeenFrame > kParticleLightCacheMaxIdleFrames;
 		if (configChanged || entryExpired) {
+			CS_ISL_COUNT(PruneErased, 1);
 			it = particleLightsReferences.erase(it);
 		} else {
 			++it;
@@ -1660,17 +1672,26 @@ void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pa
 
 const LightLimitFix::SceneLightSnapshot* LightLimitFix::GetSceneLightSnapshot(RE::ShadowSceneNode* a_node)
 {
+	CS_ISL_SCOPE(sceneSnapshot, SceneSnapshot);
 	if (!a_node || sceneLightSnapshotFailed)
 		return nullptr;
-	if (const auto it = sceneLightSnapshots.find(a_node); it != sceneLightSnapshots.end())
+	if (const auto it = sceneLightSnapshots.find(a_node); it != sceneLightSnapshots.end()) {
+		CS_ISL_COUNT(SceneSnapshotHit, 1);
 		return &it->second;
+	}
 
 	try {
+		CS_ISL_SCOPE(snapshotBuild, SceneSnapshotBuild);
 		SceneLightSnapshot snapshot;
 		{
 			auto& runtime = a_node->GetRuntimeData();
 			// VR's queue drain drops active and queued references under this lock.
+			CS_ISL_SCOPE(queueWait, SceneQueueWait);
 			const RE::BSSpinLockGuard lock{ runtime.lightQueueLock };
+			CS_ISL_END(queueWait);
+			CS_ISL_SCOPE(queueHeld, SceneQueueHeld);
+			CS_ISL_COUNT(SceneActiveLights, runtime.activeLights.size() + runtime.activeShadowLights.size());
+			CS_ISL_COUNT(ScenePendingLights, runtime.lightQueueAdd.size() + runtime.lightQueueRemove.size() + runtime.unk190.size());
 			snapshot.RetainScene(runtime);
 		}
 		// Publish only complete captures; failed captures release references after unlocking.
@@ -1694,7 +1715,12 @@ void LightLimitFix::RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint3
 		RE::NiPointer<RE::BSLight> lightOwner;
 		RE::BSLight* light = nullptr;
 		try {
+			CS_ISL_SCOPE(queueWait, SceneQueueWait);
 			const RE::BSSpinLockGuard lock{ runtime.lightQueueLock };
+			CS_ISL_END(queueWait);
+			CS_ISL_SCOPE(queueHeld, SceneQueueHeld);
+			CS_ISL_COUNT(SceneActiveLights, runtime.activeLights.size() + runtime.activeShadowLights.size());
+			CS_ISL_COUNT(ScenePendingLights, runtime.lightQueueAdd.size() + runtime.lightQueueRemove.size() + runtime.unk190.size());
 			// Native selection observes the live array after each Render; withdrawn work must stay withdrawn.
 			if (a_index >= runtime.shadowLightsAccum.size() || !runtime.shadowLightsAccum[a_index])
 				break;
@@ -1705,8 +1731,10 @@ void LightLimitFix::RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint3
 				// The scene directly deletes its sun; only the scene may supply its lifetime lease.
 				light = runtime.sunShadowDirLight;
 			} else {
-				if (!ownerIndex)
+				if (!ownerIndex) {
+					CS_ISL_SCOPE(ownerBuild, OwnerIndex);
 					ownerIndex.emplace(runtime);
+				}
 				lightOwner = ownerIndex->Retain(runtime, key);
 				light = lightOwner.get();
 			}
@@ -1717,7 +1745,10 @@ void LightLimitFix::RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint3
 		if (!light || !light->IsShadowLight())
 			break;
 		const auto previousIndex = a_index;
-		static_cast<RE::BSShadowLight*>(light)->Render(a_index);
+		{
+			CS_ISL_BROAD(retainedRender, RetainedShadowRender);
+			static_cast<RE::BSShadowLight*>(light)->Render(a_index);
+		}
 		if (a_index <= previousIndex)
 			break;
 	}
@@ -1787,6 +1818,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 			light.lightFlags = std::bit_cast<LightFlags>(runtimeData.ambient.red);
 
 			if (isl.loaded) {
+				CS_ISL_COUNT(StrictLight, 1);
 				isl.ProcessLight(light, bsLight, niLight);
 			} else {
 				light.radius = runtimeData.radius.x;
@@ -1963,14 +1995,27 @@ float LightLimitFix::CalculateLuminance(CachedParticleLight& light, RE::NiPoint3
 
 void LightLimitFix::AddParticleLightLuminance(RE::NiPoint3& targetPosition, int& numHits, float& lightLevel)
 {
+	CS_ISL_SCOPE(particleQuery, ParticleQuery);
 	auto shaderCache = globals::shaderCache;
 
 	if (!shaderCache->IsEnabled())
 		return;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (particleQuery.policy.particle == CSX::Diagnostics::ISL::Particle::BeforeLock)
+		return;
+#endif
+	CS_ISL_SCOPE(sharedWait, ParticleSharedWait);
 	std::shared_lock<std::shared_mutex> lk{ cachedParticleLightsMutex };
+	CS_ISL_END(sharedWait);
+	CS_ISL_SCOPE(sharedHeld, ParticleSharedHeld);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (particleQuery.policy.particle == CSX::Diagnostics::ISL::Particle::ScanOff)
+		return;
+#endif
 	int particleLightsDetectionHits = 0;
 	if (settings.EnableParticleLightsDetection) {
+		CS_ISL_COUNT(ParticleScanSize, cachedParticleLights.size());
 		for (auto& light : cachedParticleLights) {
 			auto luminance = CalculateLuminance(light, targetPosition);
 			lightLevel += luminance;
@@ -1978,6 +2023,7 @@ void LightLimitFix::AddParticleLightLuminance(RE::NiPoint3& targetPosition, int&
 				particleLightsDetectionHits++;
 		}
 	}
+	CS_ISL_COUNT(ParticleHits, particleLightsDetectionHits);
 	numHits += particleLightsDetectionHits;
 }
 
@@ -3202,6 +3248,7 @@ void LightLimitFix::AddCachedParticleLights(
 			cachedParticleLight.radius = light.radius;
 			cachedParticleLight.position = { light.positionWS[0].data.x + eyePositionCached[0].x, light.positionWS[0].data.y + eyePositionCached[0].y, light.positionWS[0].data.z + eyePositionCached[0].z };
 
+			CS_ISL_COUNT(ParticleAccepted, 1);
 			cachedParticleLights.push_back(cachedParticleLight);
 		}
 	}
@@ -3221,7 +3268,10 @@ void LightLimitFix::UpdateLights()
 	ZoneScopedN("LLF::UpdateLights");
 
 	auto clearCachedParticleLights = [&]() {
+		CS_ISL_SCOPE(exclusiveWait, ParticleExclusiveWait);
 		std::lock_guard<std::shared_mutex> lk{ cachedParticleLightsMutex };
+		CS_ISL_END(exclusiveWait);
+		CS_ISL_SCOPE(exclusiveHeld, ParticleExclusiveHeld);
 		cachedParticleLights.clear();
 	};
 
@@ -3301,6 +3351,7 @@ void LightLimitFix::UpdateLights()
 					light.lightFlags = std::bit_cast<LightFlags>(runtimeData.ambient.red);
 
 					if (isl.loaded) {
+						CS_ISL_COUNT(SceneLight, 1);
 						isl.ProcessLight(light, bsLight, niLight);
 					} else {
 						light.radius = runtimeData.radius.x;
@@ -3349,6 +3400,7 @@ void LightLimitFix::UpdateLights()
 
 	{
 		CS_PROFILE_CPU_SCOPE("LightLimitFix::SceneLightsCPU");
+		CS_ISL_BROAD(phase, SceneLightsCPU);
 		if (globals::game::isVR) {
 			for (auto* light : snapshot->ActiveLights())
 				addLight(light);
@@ -3364,7 +3416,11 @@ void LightLimitFix::UpdateLights()
 
 	{
 		CS_PROFILE_CPU_SCOPE("LightLimitFix::ParticleLightsCPU");
+		CS_ISL_BROAD(phase, ParticleLightsCPU);
+		CS_ISL_SCOPE(exclusiveWait, ParticleExclusiveWait);
 		std::lock_guard<std::shared_mutex> lk{ cachedParticleLightsMutex };
+		CS_ISL_END(exclusiveWait);
+		CS_ISL_SCOPE(exclusiveHeld, ParticleExclusiveHeld);
 		cachedParticleLights.clear();
 
 		LightData clusteredLight{};
@@ -3397,6 +3453,7 @@ void LightLimitFix::UpdateLights()
 		};
 
 		auto processParticleEmitter = [&](const ParticleEmitterLight& a_particleEmitter) {
+			CS_ISL_COUNT(ParticleEmitters, 1);
 			if (!a_particleEmitter.node ||
 				IsParticleEmitterBeyondDistance(a_particleEmitter.node.get(), eyePositionCached[0], settings.MaxParticleDistance)) {
 				return;
@@ -3491,6 +3548,7 @@ void LightLimitFix::UpdateLights()
 		};
 
 		auto processBillboard = [&](const ResolvedBillboardLight& a_billboardLight) {
+			CS_ISL_COUNT(ParticleBillboards, 1);
 			// Preserve submission order and budget priority: an emitter cluster
 			// sequenced before this billboard must be emitted first.
 			flushClusteredLight();
@@ -3534,9 +3592,15 @@ void LightLimitFix::UpdateLights()
 
 	{
 		CS_PROFILE_CPU_SCOPE("LightLimitFix::UploadLightsCPU");
+		CS_ISL_BROAD(phase, LightUploadCPU);
 		D3D11_MAPPED_SUBRESOURCE mapped;
-		DX::ThrowIfFailed(context->Map(lights->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+		{
+			CS_ISL_BROAD(map, LightMap);
+			DX::ThrowIfFailed(context->Map(lights->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+		}
 		size_t bytes = sizeof(LightData) * lightCount;
+		CS_ISL_COUNT(UploadBytes, bytes);
+		CS_ISL_COUNT(UploadLights, lightCount);
 		if (bytes > 0) {
 			memcpy_s(mapped.pData, bytes, lightsData.data(), bytes);
 		}
@@ -3548,6 +3612,7 @@ void LightLimitFix::UpdateLights()
 
 void LightLimitFix::UpdateStructure()
 {
+	CS_ISL_BROAD(culling, LightCullCPU);
 	auto context = globals::d3d::context;
 	if (!context || !lightBuildingCB || !lightCullingCB || !clusters || !lights ||
 		!lightIndexCounter || !lightIndexList || !lightGrid ||
@@ -3774,6 +3839,7 @@ float LightLimitFix::Hooks::AIProcess_CalculateLightValue_GetLuminance::thunk(
 	RE::NiLight& refLight,
 	int32_t shadowBitMask)
 {
+	CS_ISL_SCOPE(nativeWrapper, ParticleNativeWrapper);
 	auto ret = func(shadowSceneNode, targetPosition, numHits, sunLightLevel, lightLevel, refLight, shadowBitMask);
 	globals::features::lightLimitFix.AddParticleLightLuminance(targetPosition, numHits, ret);
 	return ret;

@@ -2122,6 +2122,19 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE "${_shadow_batch_test_dir}"
     )
     set_tests_properties(ShadowBatchInstall PROPERTIES TIMEOUT 30)
+    add_controller_test(shadow_batch_diagnostic_install_test ShadowBatchDiagnosticInstall tests/shadow_batch_install_test.cpp)
+    target_sources(
+        shadow_batch_diagnostic_install_test
+        PRIVATE "${_shadow_batch_test_dir}/shadow_batch_install.h"
+    )
+    target_include_directories(
+        shadow_batch_diagnostic_install_test
+        PRIVATE "${_shadow_batch_test_dir}"
+    )
+    target_compile_definitions(
+        shadow_batch_diagnostic_install_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
 
     set(_adaptive_balance_dof_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/adaptive-balance-dof"
@@ -3731,6 +3744,28 @@ if(BUILD_CONTROLLER_TESTS)
         reflex_backend_test
         ReflexBackend
         tests/reflex_backend_test.cpp
+    )
+    add_controller_test(isl_diagnostics_state_test ISLDiagnosticsState tests/isl_diagnostics_state_test.cpp)
+    target_compile_definitions(
+        isl_diagnostics_state_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    add_test(
+        NAME ISLDiagnosticsEvidence
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/isl_diagnostics_evidence_test.py"
+    )
+    add_test(
+        NAME ISLDiagnosticsGates
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/isl_diagnostics_gates_test.py"
+    )
+    set_tests_properties(
+        ISLDiagnosticsEvidence
+        ISLDiagnosticsGates
+        PROPERTIES LABELS "ControllerTests"
     )
     add_controller_test(
         reflex_measurement_state_test ReflexMeasurementState

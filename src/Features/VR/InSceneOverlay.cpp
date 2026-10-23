@@ -1,3 +1,4 @@
+#include "Diagnostics/ISLDiagnostics.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Upscaling.h"
@@ -670,11 +671,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			uint32_t unGamePoseArrayCount)
 		{
 #ifdef DEVBENCH_BRIDGE_ENABLED
+			CS_ISL_BROAD(poseCycle, PoseCycle);
 			CSX::Diagnostics::Stutters::Scope stutterCycle("OpenVR::PoseCycle", CSX::Diagnostics::Stutters::Boundary::Compositor);
 #endif
 			vr::EVRCompositorError result;
 			{
 #ifdef DEVBENCH_BRIDGE_ENABLED
+				CS_ISL_BROAD(poseWait, PoseNativeWait);
 				CSX::Diagnostics::Stutters::Scope stutterWait("OpenVR::WaitGetPoses");
 #endif
 				result = func(
@@ -685,10 +688,16 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					unGamePoseArrayCount);
 			}
 			{
+				CS_ISL_BROAD(presentationWait, PoseMutexWait);
 				const std::scoped_lock presentationWorkLock(
 					g_vrRenderScalePresentationWorkMutex);
+				CS_ISL_END(presentationWait);
+				CS_ISL_BROAD(presentationHeld, PoseMutexHeld);
+				CS_ISL_BROAD(cycleWait, CycleMutexWait);
 				const std::scoped_lock cyclePublishLock(
 					g_openVRSubmitCyclePublishMutex);
+				CS_ISL_END(cycleWait);
+				CS_ISL_BROAD(cycleHeld, CycleMutexHeld);
 				const uint64_t previousCycleState =
 					g_openVRSubmitCycleState.load(std::memory_order_acquire);
 				const uint64_t previousCompositorCycleToken =
@@ -700,9 +709,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				auto& upscaling = globals::features::upscaling;
 				// Finish prior presentation work before atomically publishing the
 				// next cycle token and its complete promoted policy.
-				upscaling.NotifyVRPostLoadCompositorCycleStarted(
-					compositorCycleToken,
-					result == vr::VRCompositorError_None);
+				{
+					CS_ISL_BROAD(notify, PoseNotify);
+					upscaling.NotifyVRPostLoadCompositorCycleStarted(
+						compositorCycleToken,
+						result == vr::VRCompositorError_None);
+				}
 				const bool cycleCooldownActive =
 					upscaling.submitStageVendorResumeFrame.load(
 						std::memory_order_acquire) != 0;
@@ -721,12 +733,16 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 		static void thunk(RE::BSOpenVR* _this, ID3D11Texture2D* a_texture)
 		{
 #ifdef DEVBENCH_BRIDGE_ENABLED
+			CS_ISL_BROAD(submit, VRSubmit);
 			CSX::Diagnostics::Stutters::Scope stutterSubmit("OpenVR::StereoSubmitHook");
 #endif
 			// Keep the full native stereo call and its relatch boundary serialized
 			// with nested eye work and compositor-cycle publication.
+			CS_ISL_BROAD(submitWait, SubmitMutexWait);
 			const std::scoped_lock presentationWorkLock(
 				g_vrRenderScalePresentationWorkMutex);
+			CS_ISL_END(submitWait);
+			CS_ISL_BROAD(submitHeld, SubmitMutexHeld);
 			// A suppressed nested call has no boundary, but still owns its scope.
 			static thread_local bool nativeSubmitActive = false;
 			const bool nestedSubmit = std::exchange(nativeSubmitActive, true);

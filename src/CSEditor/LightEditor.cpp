@@ -1,4 +1,5 @@
 #include "LightEditor.h"
+#include "Diagnostics/ISLDiagnostics.h"
 #include "EditorWindow.h"
 #include "Features/InverseSquareLighting.h"
 #include "Features/LightLimitFix.h"
@@ -490,6 +491,12 @@ std::string LightEditor::LighEdidForFormId(RE::FormID formId)
 
 void LightEditor::DrawSettings()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (CSX::Diagnostics::ISL::AcquisitionActive()) {
+		ImGui::TextUnformatted("ISL diagnostic capture owns lighting controls.");
+		return;
+	}
+#endif
 	if (State::GetSingleton()->IsPersistentMutationBlocked()) {
 		ImGui::TextDisabled("Light Editor is unavailable while persistent mutations are blocked.");
 		return;
@@ -998,7 +1005,11 @@ void LightEditor::DrawSettings()
 
 void LightEditor::SetEnabled(bool value)
 {
-	if (value && State::GetSingleton()->IsPersistentMutationBlocked())
+	if (value && (State::GetSingleton()->IsPersistentMutationBlocked()
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					 || CSX::Diagnostics::ISL::AcquisitionActive()
+#endif
+						 ))
 		return;
 
 	if (!value) {
@@ -1033,6 +1044,7 @@ void LightEditor::CancelPick()
 
 bool LightEditor::ShouldDisableLight(bool inverseSquare) const
 {
+	CS_ISL_COUNT(EditorDisableCheck, 1);
 	return enabled && !State::GetSingleton()->IsPersistentMutationBlocked() &&
 	       (inverseSquare ? disableInvSqLights : disableRegularLights);
 }
@@ -2422,11 +2434,14 @@ float LightEditor::GetLPSizeFactor() const
 
 bool LightEditor::ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDataExt* runtimeData) const
 {
+	CS_ISL_SCOPE(editorCall, EditorCall);
 	if (State::GetSingleton()->IsPersistentMutationBlocked() || !enabled || !niLight || !runtimeData)
 		return false;
 
 	// Hovered (not selected) light: blink its fade so it flashes in the combo list.
 	if (hoverFlashNiLight && niLight == hoverFlashNiLight.get() && niLight != activeNiLight.get()) {
+		CS_ISL_COUNT(EditorHover, 1);
+		CS_ISL_COUNT(EditorOverride, 1);
 		runtimeData->fade = hoverFlashVisible ? hoverFlashOnFade : 0.f;
 		return true;
 	}
@@ -2434,6 +2449,7 @@ bool LightEditor::ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDa
 	if (niLight != activeNiLight.get())
 		return false;
 
+	CS_ISL_COUNT(EditorOverride, 1);
 	runtimeData->lighFormId = current.data.lighFormId;
 	// Use the emittance source's live color while one drives this bulb (see UpdateEmittanceColor), else the editor color.
 	runtimeData->diffuse = emittanceColorActive ? emittanceColor : current.data.diffuse;

@@ -1,4 +1,5 @@
 #include "Hooks.h"
+#include "Diagnostics/ISLDiagnostics.h"
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 #	include "Diagnostics/NvPerf.h"
 #endif
@@ -1109,6 +1110,7 @@ struct IDXGISwapChain_Present
 #	if defined(NVPERF_ENABLED)
 		NvPerf::OnPresentBegin();
 #	endif
+		CS_ISL_BROAD(present, Present);
 		CSX::Diagnostics::Stutters::Scope stutterPresent("DXGI::PresentHook", CSX::Diagnostics::Stutters::Boundary::Present);
 #endif
 		auto state = globals::state;
@@ -2147,6 +2149,7 @@ namespace Hooks
 		{
 #	ifdef DEVBENCH_BRIDGE_ENABLED
 			CSX::Diagnostics::Stutters::PublishGameContext();
+			CS_ISL_BROAD(engineUpdate, EngineUpdate);
 			CSX::Diagnostics::Stutters::Scope stutterUpdate("Engine::MainUpdate", CSX::Diagnostics::Stutters::Boundary::Engine);
 #	endif
 #	ifdef TRACY_ENABLE
@@ -2357,7 +2360,11 @@ namespace Hooks
 	 */
 	void Install()
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		VRShadowBatch::Install(globals::features::vr.settings.EnableVRShadowBatch);
+#else
+		VRShadowBatch::Install(true);
+#endif
 		Util::VRLoadingMenuClear::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		InstallVRFaceGenTintAssignmentDiagnostic();

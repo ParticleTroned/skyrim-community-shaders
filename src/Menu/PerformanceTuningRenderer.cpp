@@ -1,4 +1,5 @@
 #include "PerformanceTuningRenderer.h"
+#include "Diagnostics/ISLDiagnostics.h"
 #include "Menu/SettingsPage.h"
 
 #include <algorithm>
@@ -3315,6 +3316,10 @@ void PerformanceTuningRenderer::NotifyMenuClosed()
 
 bool PerformanceTuningRenderer::HasActiveMeasurements()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (CSX::Diagnostics::ISL::AcquisitionActive())
+		return true;
+#endif
 	return g_quickScan.controller.Active() || IsAnyFeatureCostMeasurementActive() || IsUpscalingCostSweepRunning() || g_featureCostBatch.active;
 }
 

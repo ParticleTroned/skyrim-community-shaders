@@ -28,6 +28,7 @@ namespace CSX::Diagnostics::ReflexMeasurement
 		Tick queryPeriodTicks{};
 		bool startPending{};
 		bool captureReleased = true;
+		bool rawAcknowledged = true, islPurpose{};
 		size_t contiguousExport{};
 		std::string owner;
 		uint64_t session{};
@@ -49,7 +50,6 @@ namespace CSX::Diagnostics::ReflexMeasurement
 		uint32_t admissionDelayMs = 2500;
 		std::string workerError, termination;
 		std::jthread worker;
-		~Service();
 	};
 	Service& State();
 	Reflex::Backend& Backend();
@@ -66,6 +66,7 @@ namespace CSX::Diagnostics::ReflexMeasurement
 	json Export(const json& args);
 	json Readiness(const json& args);
 	void Run(std::stop_token token, uint32_t durationMs);
+	void RequestExpiredRestoration();
 	void FreezeCapture(Tick now, bool tailComplete, bool timedOut);
 }
 #endif

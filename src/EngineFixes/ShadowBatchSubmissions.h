@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Diagnostics/ISLDiagnostics.h"
+
 #include <ankerl/unordered_dense.h>
 
 #include <cstddef>
@@ -73,6 +75,7 @@ namespace ShadowBatch
 			try {
 				if (!free) {
 					records.emplace_back();
+					CS_ISL_COUNT(BatchRecordGrowth, 1);
 					free = &records.back();
 				}
 				record = free;
@@ -174,6 +177,7 @@ namespace ShadowBatch
 				                                                                            capacity * 2;
 				// Grow off to the side: a failed dense-map rehash must not damage live membership.
 				auto replacement = std::make_unique<Entries>(next);
+				CS_ISL_COUNT(BatchEntriesGrowth, 1);
 				if (entries) {
 					for (const auto& entry : *entries)
 						replacement->emplace(entry);
@@ -194,6 +198,7 @@ namespace ShadowBatch
 				return *lastBucket;
 			}
 			auto bucket = std::make_unique<Bucket>();
+			CS_ISL_COUNT(BatchBucketAllocate, 1);
 			bucket->key = a_key;
 			auto* result = bucket.get();
 			buckets.emplace(a_key, std::move(bucket));

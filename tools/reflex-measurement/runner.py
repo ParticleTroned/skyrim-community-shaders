@@ -89,7 +89,7 @@ class Campaign:
         with (self.root / name).open("x", encoding="utf-8") as output:
             json.dump(value, output, indent=2, allow_nan=False)
 
-    def controller(self, command, label, arguments=None):
+    def controller(self, command, label, arguments=None, tool=TOOL):
         self.ordinal += 1
         prefix = f"{self.ordinal:04}-{label}"
         command_line = ["pwsh", "-NoProfile", "-File", self.args.controller, command,
@@ -98,8 +98,8 @@ class Campaign:
                         "-EvidenceDirectory", str(self.root / "transport"), "-EvidenceLabel", prefix,
                         "-MaxTransientRetries", "0", "-RequireSuccess", "-RequirePerformanceNeutral", "-NoExit"]
         if arguments is not None:
-            command_line += ["-Tool", TOOL, "-ArgumentsJson", json.dumps(arguments, separators=(",", ":"))]
-        self.save(prefix + "-request.json", {"command": command, "tool": TOOL if arguments else None, "arguments": arguments})
+            command_line += ["-Tool", tool, "-ArgumentsJson", json.dumps(arguments, separators=(",", ":"))]
+        self.save(prefix + "-request.json", {"command": command, "tool": tool if arguments else None, "arguments": arguments})
         try:
             result = subprocess.run(command_line, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=False)
         except subprocess.TimeoutExpired as error:

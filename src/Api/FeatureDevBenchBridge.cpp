@@ -1,4 +1,5 @@
 #include "Api/FeatureDevBenchBridge.h"
+#include "Diagnostics/ISLDiagnostics.h"
 #include "LegacyUtilityCompatibility.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -272,6 +273,8 @@ namespace
 					const auto status = LightLimitFixDetail::ShadowCulling::Status(lighting.settings.ShadowCulling);
 					if (!lighting.loaded || !status.at("available").get<bool>())
 						return json{ { "error", "CSX native shadow culling is unavailable; SPS retains control when loaded" }, { "errorCode", "feature_unavailable" } };
+					if (CSX::Diagnostics::ISL::AcquisitionActive())
+						return json{ { "error", "ISL capture owns shadow settings" } };
 					lighting.settings.ShadowCulling = LightLimitFixDetail::ShadowCulling::Parse(args.at("shadowCulling"), lighting.settings.ShadowCulling);
 				}
 				auto status = LightLimitFixDetail::ShadowCulling::Status(lighting.settings.ShadowCulling);

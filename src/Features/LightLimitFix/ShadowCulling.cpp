@@ -1,4 +1,5 @@
 #include "ShadowCulling.h"
+#include "Diagnostics/ISLDiagnostics.h"
 #include "Globals.h"
 #include "ShadowCullingSnapshot.h"
 #include "State.h"
@@ -50,6 +51,7 @@ namespace LightLimitFixDetail::ShadowCulling
 		};
 		Caster Classify(const RE::BSGeometry& geometry)
 		{
+			CS_ISL_SCOPE(classify, ShadowClassify);
 			Caster result;
 			const auto& data = geometry.GetGeometryRuntimeData();
 			const auto* property = data.shaderProperty.get();
@@ -82,13 +84,22 @@ namespace LightLimitFixDetail::ShadowCulling
 		}
 		bool Skip(RE::BSCullingProcess* culler, RE::BSGeometry& geometry, const RE::NiCamera* shadowCamera = nullptr)
 		{
-			if (!active.load(std::memory_order_acquire) || !culler || !globals::state || globals::state->IsSaveLoadSafeModeActive())
+			CS_ISL_SCOPE(skipObservation, ShadowSkip);
+			if (!active.load(std::memory_order_acquire) || !culler || !globals::state || globals::state->IsSaveLoadSafeModeActive()) {
+				CS_ISL_COUNT(ShadowInactive, 1);
 				return false;
+			}
 			thread_local SnapshotPublication<Snapshot>::Reader reader{ snapshot };
 			const auto captured = reader.Acquire();
 			const auto now = GetTickCount64();
-			if (!captured || now < captured->sampledAt || now - captured->sampledAt > 250)
+			if (!captured) {
+				CS_ISL_COUNT(ShadowMissingSnapshot, 1);
 				return false;
+			}
+			if (now < captured->sampledAt || now - captured->sampledAt > 250) {
+				CS_ISL_COUNT(ShadowStaleSnapshot, 1);
+				return false;
+			}
 			const auto* camera = shadowCamera ? shadowCamera : culler->camera;
 			const Camera* matched = nullptr;
 			for (unsigned i = 0; i < captured->cameraCount; ++i)
@@ -96,14 +107,28 @@ namespace LightLimitFixDetail::ShadowCulling
 					matched = &captured->cameras[i];
 					break;
 				}
-			if (!matched)
+			if (!matched) {
+				CS_ISL_COUNT(ShadowCameraMismatch, 1);
 				return false;
+			}
 			if (matched->pass == Pass::Point) {
 				const auto* light = matched->pointOwner.get();
-				if (!light || light->light.get() != matched->pointSource.get() ||
-					light->worldTranslate != matched->lightPosition || !light->light ||
-					light->light->GetLightRuntimeData().radius.x != matched->lightRadius)
+				if (!light || light->light.get() != matched->pointSource.get()) {
+					CS_ISL_COUNT(ShadowSourceChanged, 1);
 					return false;
+				}
+				if (light->worldTranslate != matched->lightPosition) {
+					CS_ISL_COUNT(ShadowPositionChanged, 1);
+					return false;
+				}
+				if (!light->light) {
+					CS_ISL_COUNT(ShadowSourceChanged, 1);
+					return false;
+				}
+				if (light->light->GetLightRuntimeData().radius.x != matched->lightRadius) {
+					CS_ISL_COUNT(ShadowRadiusChanged, 1);
+					return false;
+				}
 			}
 			Demand demand;
 			demand.pass = matched->pass;
@@ -129,6 +154,8 @@ namespace LightLimitFixDetail::ShadowCulling
 			demand.lightDistance = distance(matched->lightPosition);
 			demand.lightRadius = matched->lightRadius;
 			const bool skip = ShouldCull(captured->settings, demand);
+			CS_ISL_COUNT(ShadowCulled, skip);
+			CS_ISL_COUNT(ShadowKept, !skip);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (skip) {
 				(demand.pass == Pass::Sun ? sunSkipped : torchSkipped).fetch_add(1, std::memory_order_relaxed);
@@ -200,6 +227,7 @@ namespace LightLimitFixDetail::ShadowCulling
 	}
 	void Update(const Settings& settings, bool featureEnabled)
 	{
+		CS_ISL_BROAD(update, ShadowUpdate);
 		if (!available.load() || !featureEnabled || !settings.Active() || !globals::game::smState || !globals::game::shadowState || !globals::state ||
 			globals::state->IsSaveLoadSafeModeActive() || (globals::game::ui && globals::game::ui->GameIsPaused())) {
 			active.store(false, std::memory_order_release);
@@ -232,7 +260,10 @@ namespace LightLimitFixDetail::ShadowCulling
 			captured->interior = globals::game::smState->interior;
 			auto& data = scene->GetRuntimeData();
 			{
+				CS_ISL_SCOPE(queueWait, ShadowQueueWait);
 				const RE::BSSpinLockGuard lock{ data.lightQueueLock };
+				CS_ISL_END(queueWait);
+				CS_ISL_SCOPE(queueHeld, ShadowQueueHeld);
 				if (const auto* sun = data.sunShadowDirLight) {
 					const auto& direction = sun->GetShadowDirectionalLightRuntimeData().sunVector;
 					const double length = std::hypot(double(direction.x), double(direction.y), double(direction.z));
@@ -243,6 +274,7 @@ namespace LightLimitFixDetail::ShadowCulling
 					if (light && light.get() != data.sunShadowDirLight)
 						CaptureLight(*captured, light.get(), Pass::Point);
 			}
+			CS_ISL_COUNT(ShadowCameras, captured->cameraCount);
 			snapshot.Publish(std::move(captured));
 			active.store(true, std::memory_order_release);
 		} catch (const std::exception& error) {
@@ -255,7 +287,11 @@ namespace LightLimitFixDetail::ShadowCulling
 	}
 	void DrawSettings(Settings& settings, bool advanced)
 	{
-		const bool unavailable = conflict || !available.load();
+		const bool unavailable = conflict || !available.load()
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		                         || CSX::Diagnostics::ISL::AcquisitionActive()
+#endif
+			;
 		{
 			const auto disabled = Util::DisableGuard(unavailable);
 			ImGui::SeparatorText("Shadow culling");

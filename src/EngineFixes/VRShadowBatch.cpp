@@ -1,4 +1,5 @@
 #include "VRShadowBatch.h"
+#include "Diagnostics/ISLDiagnostics.h"
 
 #include "ShadowBatchSubmissions.h"
 #include "Utils/VirtualFunctionHook.h"
@@ -55,14 +56,19 @@ namespace VRShadowBatch
 
 		void ReleaseRecords(BatchState& state, Store::Record* retired)
 		{
+			CS_ISL_SCOPE(reclaim, BatchReclaim);
 			if (!retired)
 				return;
 			auto* tail = retired;
 			for (auto* record = retired; record; record = record->next) {
+				CS_ISL_COUNT(BatchReclaimedRecords, 1);
 				record->payload = {};
 				tail = record;
 			}
+			CS_ISL_SCOPE(batchWait, BatchMutexWait);
 			const std::lock_guard lock{ state.mutex };
+			CS_ISL_END(batchWait);
+			CS_ISL_SCOPE(batchHeld, BatchMutexHeld);
 			state.submissions.Recycle(retired, tail);
 		}
 
@@ -76,7 +82,10 @@ namespace VRShadowBatch
 					return;
 				Store::Record* retired;
 				{
+					CS_ISL_SCOPE(batchWait, BatchMutexWait);
 					const std::lock_guard lock{ state.mutex };
+					CS_ISL_END(batchWait);
+					CS_ISL_SCOPE(batchHeld, BatchMutexHeld);
 					retired = state.submissions.TakeRetired();
 				}
 				ReleaseRecords(state, retired);
@@ -91,16 +100,25 @@ namespace VRShadowBatch
 			Renderer* renderer;
 			bool completed{};
 			std::optional<Store::ReadScope> reader;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			CSX::Diagnostics::ISL::Scope observation{ CSX::Diagnostics::ISL::Metric::BatchNativeRead };
+#endif
 			NativeRead(BatchState& a_state, Renderer* a_renderer) : state(a_state), renderer(a_renderer)
 			{
+				CS_ISL_SCOPE(batchWait, BatchMutexWait);
 				const std::lock_guard lock{ state.mutex };
+				CS_ISL_END(batchWait);
+				CS_ISL_SCOPE(batchHeld, BatchMutexHeld);
 				reader.emplace(state.submissions);
 			}
 			~NativeRead()
 			{
 				Store::Record* retired;
 				{
+					CS_ISL_SCOPE(batchWait, BatchMutexWait);
 					const std::lock_guard lock{ state.mutex };
+					CS_ISL_END(batchWait);
+					CS_ISL_SCOPE(batchHeld, BatchMutexHeld);
 					if (completed)
 						Prune(renderer, state);
 					reader.reset();
@@ -135,12 +153,16 @@ namespace VRShadowBatch
 				if (auto state = cache.state.lock())
 					return state;
 			}
+			CS_ISL_SCOPE(batchWait, BatchMutexWait);
 			const std::lock_guard lock{ registryMutex };
+			CS_ISL_END(batchWait);
+			CS_ISL_SCOPE(batchHeld, BatchMutexHeld);
 			std::shared_ptr<BatchState> state;
 			if (const auto found = registry.find(a_renderer); found != registry.end()) {
 				state = found->second;
 			} else if (a_create) {
 				state = std::make_shared<BatchState>();
+				CS_ISL_COUNT(BatchAllocate, 1);
 				registry.emplace(a_renderer, state);
 				// Creation must invalidate negative entries held by every observing thread.
 				registryRevision.fetch_add(1, std::memory_order_release);
@@ -200,10 +222,12 @@ namespace VRShadowBatch
 
 		void RegisterSubmission(Renderer* a_renderer, Pass* a_pass, std::uint32_t a_technique, bool a_sorted, std::uintptr_t a_caller)
 		{
+			CS_ISL_SCOPE(registration, BatchRegister);
 			const auto original = a_sorted ? registerSorted : registerUnsorted;
 			if (!a_pass || !a_pass->shader || !a_pass->geometry || !a_pass->shaderProperty ||
 				!IsIsolatedShadowPass(a_pass->shader->shaderType.get() == RE::BSShader::Type::Utility,
 					a_technique, a_pass->numLights, a_pass->numShadowLights)) {
+				CS_ISL_COUNT(BatchReject, 1);
 				original(a_renderer, a_pass, a_technique);
 				return;
 			}
@@ -219,7 +243,10 @@ namespace VRShadowBatch
 				return;
 			}
 			ReclaimOnExit reclaim{ *state, false };
+			CS_ISL_SCOPE(batchWait, BatchMutexWait);
 			std::unique_lock lock{ state->mutex };
+			CS_ISL_END(batchWait);
+			CS_ISL_SCOPE(batchHeld, BatchMutexHeld);
 			Store::Admission admission{};
 			try {
 				admission = state->submissions.Admit(bucket, MakeKey(a_pass, a_sorted), a_caller, [&](Payload& payload) {
@@ -232,12 +259,15 @@ namespace VRShadowBatch
 				reclaim.pending = state->submissions.HasRetired();
 			} catch (const std::bad_alloc&) {
 				reclaim.pending = true;
+				CS_ISL_END(batchHeld);
 				lock.unlock();
 				ReportAllocationFailure();
 				return;
 			}
 			if (!admission.inserted) {
+				CS_ISL_COUNT(BatchDuplicate, 1);
 				const auto firstCaller = admission.record->caller;
+				CS_ISL_END(batchHeld);
 				lock.unlock();
 				ReportDuplicate(a_renderer, a_pass, bucket, firstCaller, a_caller);
 				return;
@@ -259,7 +289,10 @@ namespace VRShadowBatch
 		{
 			if (auto state = FindState(a_renderer)) {
 				const ReclaimOnExit reclaim{ *state };
+				CS_ISL_SCOPE(batchWait, BatchMutexWait);
 				const std::lock_guard lock{ state->mutex };
+				CS_ISL_END(batchWait);
+				CS_ISL_SCOPE(batchHeld, BatchMutexHeld);
 				Original(a_renderer);
 				state->submissions.Clear();
 			} else {
@@ -274,10 +307,16 @@ namespace VRShadowBatch
 			if (state) {
 				const ReclaimOnExit reclaim{ *state };
 				{
+					CS_ISL_SCOPE(batchWait, BatchMutexWait);
 					const std::lock_guard lock{ state->mutex };
+					CS_ISL_END(batchWait);
+					CS_ISL_SCOPE(batchHeld, BatchMutexHeld);
 					state->submissions.Clear();
 				}
+				CS_ISL_SCOPE(batchWait, BatchMutexWait);
 				const std::lock_guard registryLock{ registryMutex };
+				CS_ISL_END(batchWait);
+				CS_ISL_SCOPE(batchHeld, BatchMutexHeld);
 				registry.erase(a_renderer);
 				registryRevision.fetch_add(1, std::memory_order_release);
 			}
@@ -285,6 +324,7 @@ namespace VRShadowBatch
 
 		void RenderActiveRange(Renderer* a_renderer, std::uint32_t a_first, std::uint32_t a_last, std::uint32_t a_flags)
 		{
+			CS_ISL_BROAD(render, BatchRender);
 			if (auto state = FindState(a_renderer)) {
 				NativeRead reader{ *state, a_renderer };
 				renderRange(a_renderer, a_first, a_last, a_flags);
@@ -296,6 +336,7 @@ namespace VRShadowBatch
 
 		bool RenderBatch(Renderer* a_renderer, std::uint32_t* a_pass, std::uint32_t* a_bucket, void* a_list, std::uint32_t a_flags)
 		{
+			CS_ISL_BROAD(render, BatchRender);
 			if (auto state = FindState(a_renderer)) {
 				NativeRead reader{ *state, a_renderer };
 				const auto result = renderStep(a_renderer, a_pass, a_bucket, a_list, a_flags);
@@ -313,10 +354,14 @@ namespace VRShadowBatch
 		// Native lists must never switch ownership after the startup decision.
 		if (!REL::Module::IsVR() || installAttempted.exchange(true, std::memory_order_acq_rel))
 			return;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (!a_enabled) {
 			logger::info("[VR shadow batch] Disabled at startup for diagnosis; native shadow submissions are unprotected");
 			return;
 		}
+#else
+		(void)a_enabled;
+#endif
 		if (REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15)
 			stl::report_and_fail("VR shadow batch isolation requires Skyrim VR 1.4.15.");
 		for (const auto& site : kHookSites) {

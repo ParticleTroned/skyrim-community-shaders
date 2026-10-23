@@ -429,10 +429,15 @@ constexpr float kRecentDefaultHMDOffsetZ = -0.76875f;
 constexpr float kPreviousDefaultMenuScale = 1.0f;
 constexpr float kDefaultOffsetEpsilon = 0.0001f;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	define CSX_VR_BATCH_FIELD EnableVRShadowBatch,
+#else
+#	define CSX_VR_BATCH_FIELD
+#endif
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VR::Settings,
-	EnableVRShadowBatch,
-	EnableDepthBufferCullingInterior,
+	CSX_VR_BATCH_FIELD
+		EnableDepthBufferCullingInterior,
 	EnableDepthBufferCullingExterior,
 	DepthCullingLegacyMode,
 	MinOccludeeBoxExtentExterior,
@@ -481,6 +486,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableDynamicCubemapFoveation,
 	EnableDynamicCubemapVisibilityThrottle,
 	menuOverlayPath)
+#undef CSX_VR_BATCH_FIELD
 
 //=============================================================================
 // FEATURE BASE CLASS OVERRIDES
@@ -1172,6 +1178,7 @@ void VR::DrawSettings()
 	}
 
 	if (page.Is("diagnostics")) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		{
 			ImGui::SeparatorText("Shadow submission diagnostic");
 			const auto disabled = Util::DisableGuard(!globals::state || globals::state->IsPersistentMutationBlocked() || PerformanceTuningRenderer::HasActiveMeasurements());
@@ -1183,6 +1190,7 @@ void VR::DrawSettings()
 			if (settings.EnableVRShadowBatch != installed)
 				Util::Text::WrappedWarning("Restart required after saving; the current session has not changed.");
 		}
+#endif
 		{
 			DrawDebugSection();
 		}

@@ -1,3 +1,4 @@
+#include "Diagnostics/ISLDiagnostics.h"
 #include "EngineFixes/ShadowBatchSubmissions.h"
 #include "EngineFixes/VRShadowBatchLayout.h"
 #include "EngineFixes/VRShadowBatchPolicy.h"

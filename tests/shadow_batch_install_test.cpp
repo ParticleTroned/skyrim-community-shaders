@@ -260,6 +260,7 @@ namespace Test
 	}
 	void RuntimeAndByteAdmission()
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		for (const auto runtime : { Runtime::SE, Runtime::AE, Runtime::VR }) {
 			ResetFixture();
 			state.runtime = runtime;
@@ -275,6 +276,12 @@ namespace Test
 			for (auto slot : OriginalSlots())
 				Check(*slot == nullptr);
 		}
+#else
+		ResetFixture();
+		VRShadowBatch::Install(false);
+		Check(VRShadowBatch::IsInstalled());
+		CheckAttachments();
+#endif
 		for (const auto runtime : { Runtime::SE, Runtime::AE }) {
 			ResetFixture();
 			state.runtime = runtime;

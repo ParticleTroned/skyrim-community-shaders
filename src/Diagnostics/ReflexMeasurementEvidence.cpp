@@ -53,7 +53,7 @@ namespace CSX::Diagnostics::ReflexMeasurement
 			return { { "active", nullptr }, { "conflict", nullptr }, { "requestedRestored", nullptr }, { "acceptedRestored", nullptr },
 				{ "reason", "preference observer busy; no fresh restoration receipt" } };
 		const auto& l = s.lease;
-		return { { "active", l.active }, { "conflict", l.conflict }, { "requestedRestored", l.requestedRestored },
+		return { { "active", l.active }, { "wrotePreferences", l.wrotePreferences }, { "unchangedReleased", l.unchangedReleased }, { "conflict", l.conflict }, { "requestedRestored", l.requestedRestored },
 			{ "acceptedRestored", l.acceptedRestored }, { "restoreRequestedQpc", Timestamp(l.restoreRequestedAt) },
 			{ "acceptedQpc", Timestamp(l.acceptedAt) }, { "acceptedGeneration", l.acceptedRestored ? json(l.acceptedGeneration) : json(nullptr) },
 			{ "acceptedReceiptKind", !l.acceptedRestored ? json(nullptr) : l.freshNativeSettings ? json("native_settings_accepted_after_request") :

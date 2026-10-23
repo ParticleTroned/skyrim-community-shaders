@@ -63,9 +63,9 @@ int main()
 	Backend backend({ Settings, Sleep, Getter });
 	Check(backend.BindDevice(device.Get(), true) == NVAPI_OK, "injected native binding failed");
 	auto& j = Records();
-	j.Start(Mode::Passive, 16, Clock());
+	j.Start(CSX::Diagnostics::ReflexMeasurement::Mode::Passive, 16, Clock());
 	sleepResult = NVAPI_ERROR;
-	const auto failed = backend.Update({ Mode::Boost, 33333, false }, 10, 100);
+	const auto failed = backend.Update({ Reflex::Mode::Boost, 33333, false }, 10, 100);
 	j.Close(Clock());
 	j.Freeze(Clock(), true, false);
 	Check(j.native.size() == 2 && j.native[0].settings && !j.native[1].settings, "settings/sleep streams conflated");
@@ -82,24 +82,24 @@ int main()
 				  after.pending == failed.status.pending && after.accepted == failed.status.accepted && after.desired == failed.status.desired,
 			"diagnostic query changed recovery/health/preferences");
 	}
-	j.Start(Mode::Passive, 16, Clock());
-	const auto sameFailure = backend.Update({ Mode::Boost, 33333, false }, 10, 101);
+	j.Start(CSX::Diagnostics::ReflexMeasurement::Mode::Passive, 16, Clock());
+	const auto sameFailure = backend.Update({ Reflex::Mode::Boost, 33333, false }, 10, 101);
 	Check(sameFailure.attemptsObserved && !sameFailure.sleepAttempted && sameFailure.sleepSkipReason == SleepSkip::SameFrame, "same-frame sleep exclusion not distinguished");
-	const auto backoff = backend.Update({ Mode::Boost, 33333, false }, 11, 150);
+	const auto backoff = backend.Update({ Reflex::Mode::Boost, 33333, false }, 11, 150);
 	Check(!backoff.settingsAttempted && !backoff.sleepAttempted && backoff.sleepSkipReason == SleepSkip::Backoff, "backoff was presented as a fresh native attempt");
 	sleepResult = NVAPI_OK;
-	const auto recovered = backend.Update({ Mode::Boost, 33333, false }, 12, 200);
+	const auto recovered = backend.Update({ Reflex::Mode::Boost, 33333, false }, 12, 200);
 	Check(recovered.settingsAttempted && recovered.sleepAttempted && recovered.sleepSkipReason == SleepSkip::Attempted, "native recovery attempts not reported");
 	const auto off = backend.Update({}, 13, 210);
 	Check(off.settingsAttempted && !off.sleepAttempted && off.sleepSkipReason == SleepSkip::NotRequested, "Off/zero was not distinguished from failed pacing");
 	Check(backend.Disable(220).sleepSkipReason == SleepSkip::NoFrame, "non-frame disable was labelled as a frame sleep");
 	Backend unavailable(NativeCalls{});
 	unavailable.BindDevice(device.Get(), true);
-	Check(unavailable.Update({ Mode::On, 0, false }, 20, 300).sleepSkipReason == SleepSkip::BackendUnavailable, "unavailable backend skip missing");
+	Check(unavailable.Update({ Reflex::Mode::On, 0, false }, 20, 300).sleepSkipReason == SleepSkip::BackendUnavailable, "unavailable backend skip missing");
 	settingsResult = NVAPI_ERROR;
 	Backend rejected({ Settings, Sleep });
 	rejected.BindDevice(device.Get(), true);
-	const auto unaccepted = rejected.Update({ Mode::On, 0, false }, 21, 400);
+	const auto unaccepted = rejected.Update({ Reflex::Mode::On, 0, false }, 21, 400);
 	Check(unaccepted.settingsAttempted && !unaccepted.sleepAttempted && unaccepted.sleepSkipReason == SleepSkip::SettingsPending, "failed settings was confused with successful sleep");
 	settingsResult = NVAPI_OK;
 	j.Close(Clock());
@@ -107,7 +107,7 @@ int main()
 	Backend unsupported({ Settings, Sleep });
 	unsupported.BindDevice(device.Get(), true);
 	Check(unsupported.ReadSleepStatus().result == NVAPI_NO_IMPLEMENTATION, "missing optional getter not unsupported");
-	j.Start(Mode::Minimal, 16, Clock());
+	j.Start(CSX::Diagnostics::ReflexMeasurement::Mode::Minimal, 16, Clock());
 	unsupported.Update({}, 11, 110);
 	j.Close(Clock());
 	j.Freeze(Clock(), true, false);

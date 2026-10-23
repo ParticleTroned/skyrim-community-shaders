@@ -1,4 +1,5 @@
 #include "Deferred.h"
+#include "Diagnostics/ISLDiagnostics.h"
 
 #include <algorithm>
 #include <format>
@@ -534,6 +535,10 @@ void Deferred::EarlyPrepasses()
 
 	CopyShadowLightData();
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	CSX::Diagnostics::ISL::Prepass(globals::state->frameCount);
+	const auto clearDiagnosticFrame = SKSE::stl::scope_exit([] { CSX::Diagnostics::ISL::ClearFrame(); });
+#endif
 	Feature::ForEachLoadedFeature("EarlyPrepass", [](Feature* feature) { feature->EarlyPrepass(); }, true);
 }
 

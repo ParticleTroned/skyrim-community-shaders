@@ -1,4 +1,5 @@
 #include "Api/FeatureService.h"
+#include "Diagnostics/ISLDiagnostics.h"
 
 #include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceFoundation.h"
@@ -117,7 +118,20 @@ namespace
 			const auto loaded = std::ranges::count_if(features, [](Feature* value) { return value && value->loaded; });
 			const auto constraints = Constraints();
 			auto* state = globals::state;
-			a_output = { .structSize = sizeof(Snapshot001), .available = state ? 1u : 0u, .persistentMutationBlocked = state && state->IsPersistentMutationBlocked() ? 1u : 0u, .saveLoadSafeModeActive = state && state->IsSaveLoadSafeModeActive() ? 1u : 0u, .featureCount = static_cast<std::uint32_t>(features.size()), .loadedFeatureCount = static_cast<std::uint32_t>(loaded), .activeConstraintCount = static_cast<std::uint32_t>(constraints.size()), .stateRevision = revision, .capabilities = CSX::FeatureAPI::ServiceCapabilities, .buildId = BuildProvenance::GetBuildId().data() };
+			a_output = { .structSize = sizeof(Snapshot001), .available = state ? 1u : 0u, .persistentMutationBlocked = (state && state->IsPersistentMutationBlocked())
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				                                                                                                               || CSX::Diagnostics::ISL::AcquisitionActive()
+#endif
+				                                                                                                           ?
+				                                                                                                           1u :
+				                                                                                                           0u,
+				.saveLoadSafeModeActive = state && state->IsSaveLoadSafeModeActive() ? 1u : 0u,
+				.featureCount = static_cast<std::uint32_t>(features.size()),
+				.loadedFeatureCount = static_cast<std::uint32_t>(loaded),
+				.activeConstraintCount = static_cast<std::uint32_t>(constraints.size()),
+				.stateRevision = revision,
+				.capabilities = CSX::FeatureAPI::ServiceCapabilities,
+				.buildId = BuildProvenance::GetBuildId().data() };
 			return Status::kSuccess;
 		}
 
@@ -207,8 +221,12 @@ namespace
 			auto* state = globals::state;
 			if (!state)
 				return FillPreflight(a_output, Status::kUnavailable, "unavailable", "feature state is unavailable");
-			if (state->IsPersistentMutationBlocked())
-				return FillPreflight(a_output, Status::kBlocked, "persistence_blocked", "persistent mutations are blocked during save/load activity");
+			if (state->IsPersistentMutationBlocked()
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				|| CSX::Diagnostics::ISL::AcquisitionActive()
+#endif
+			)
+				return FillPreflight(a_output, Status::kBlocked, "persistence_blocked", "persistent mutations are blocked by runtime activity");
 			constexpr auto required = CSX::FeatureAPI::kMutationPersist | CSX::FeatureAPI::kMutationAllowDisruptive;
 			if ((mutation.flags & required) != required) {
 				strings.reasonCode = "acknowledgement_required";
@@ -244,7 +262,11 @@ namespace
 			if (mutation.expectedStateRevision != revision)
 				return FillReceipt(a_output, Status::kRevisionConflict, "state changed after preflight");
 			auto* state = globals::state;
-			if (!state || state->IsPersistentMutationBlocked())
+			if (!state || state->IsPersistentMutationBlocked()
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				|| CSX::Diagnostics::ISL::AcquisitionActive()
+#endif
+			)
 				return FillReceipt(a_output, Status::kBlocked, "persistent mutations are currently blocked");
 			if (LegacyUtilityCompatibility::IsAlias(mutation.featureShortName))
 				return FillReceipt(a_output, Status::kInvalidArgument, "Legacy utility names address appearance and DOF settings only; use AdaptiveBrightness for the feature boot gate");

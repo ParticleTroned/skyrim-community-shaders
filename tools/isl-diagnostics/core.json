@@ -1,0 +1,25 @@
+{
+    "schema": 1,
+    "sequence": ["R", "L", "L", "R", "V", "V", "R"],
+    "durationMs": 30000,
+    "settleSeconds": 5,
+    "capacity": 65536,
+    "admissionDelayMs": 2500,
+    "observationLevel": "counters",
+    "pacing": "preserve",
+    "sceneTime": "preserve",
+    "conditions": {
+        "R": { "luminanceMode": "normal", "rendererMode": "normal" },
+        "L": { "luminanceMode": "native", "rendererMode": "normal" },
+        "V": { "luminanceMode": "normal", "rendererMode": "vanilla_output" },
+        "C": { "luminanceMode": "compute_discard_then_native", "rendererMode": "normal" },
+        "B": { "luminanceMode": "native", "rendererMode": "vanilla_output" },
+        "S": { "particleDetectionMode": "scan_off" },
+        "P": { "particleDetectionMode": "bypass_before_lock" },
+        "E": { "editorOverrideMode": "bypass" },
+        "O": { "shadowCulling": { "sun": false, "torch": false, "actors": false } },
+        "M": { "islEnabled": false },
+        "D": { "luminanceMode": "native", "rendererMode": "vanilla_direct" },
+        "U": { "luminanceMode": "native", "rendererMode": "vanilla_output" }
+    }
+}

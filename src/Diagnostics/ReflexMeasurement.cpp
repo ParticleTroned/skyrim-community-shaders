@@ -1,3 +1,4 @@
+#include "Diagnostics/ISLDiagnosticsInternal.h"
 #include "Diagnostics/ReflexMeasurementInternal.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Api/DevBenchMainThreadDispatch.h"
@@ -9,17 +10,11 @@
 
 namespace CSX::Diagnostics::ReflexMeasurement
 {
-	Service::~Service()
-	{
-		if (worker.joinable()) {
-			worker.request_stop();
-			worker.join();
-		}
-	}
 	Service& State()
 	{
-		static Service state;
-		return state;
+		// Process-lifetime storage keeps admitted callbacks valid during process teardown.
+		static auto* state = new Service;
+		return *state;
 	}
 	namespace
 	{
@@ -152,6 +147,18 @@ namespace CSX::Diagnostics::ReflexMeasurement
 		s.leaseActive.store(s.lease.active, std::memory_order_release);
 	}
 
+	void RequestExpiredRestoration()
+	{
+		auto& s = State();
+		std::unique_lock lock(s.preferences, std::try_to_lock);
+		if (!lock || s.acquiring || !s.islPurpose || s.lease.restoring)
+			return;
+		if (!s.lease.ReleaseUnchanged(CurrentPreferences(), Clock()) && s.lease.Restore(CurrentPreferences(), Clock()))
+			ApplyPreferences(s.lease.original);
+		s.leaseActive = s.lease.active;
+		s.preferenceConflict = s.lease.conflict;
+	}
+
 	namespace
 	{
 		void SampleCompositor(bool closing)
@@ -222,19 +229,25 @@ namespace CSX::Diagnostics::ReflexMeasurement
 		s.journal.FreezeWith(now, tailComplete, timedOut, [&] { s.journal.MergeStarted(s.queries, s.queryStarted); });
 		s.capturePreferenceConflict = s.preferenceConflict.load(std::memory_order_acquire);
 		s.captureControlCalls = s.controlCallsDuringCapture.load(std::memory_order_acquire);
+		if (s.islPurpose) {
+			ISL::FreezeCapture(now);
+			ISL::TouchSession();
+		}
 	}
 	void Run(std::stop_token token, uint32_t durationMs)
 	{
 		using namespace std::chrono;
 		auto& s = State();
-		const SKSE::stl::scope_exit stopped([&] { s.acquiring.store(false, std::memory_order_release); });
-		while (!s.responseWritten.load(std::memory_order_acquire) && !token.stop_requested())
+		const auto handshakeDeadline = steady_clock::now() + seconds(30);
+		while (!s.responseWritten.load(std::memory_order_acquire) && !token.stop_requested() && steady_clock::now() < handshakeDeadline)
 			std::this_thread::sleep_for(milliseconds(1));
 		const auto armUntil = steady_clock::now() + milliseconds(s.admissionDelayMs);
 		while (!token.stop_requested() && steady_clock::now() < armUntil)
 			std::this_thread::sleep_for(milliseconds(1));
-		if (token.stop_requested()) {
-			s.termination = "cancelled_before_admission";
+		if (token.stop_requested() || !s.responseWritten) {
+			s.termination = token.stop_requested() ? "cancelled_before_admission" : "response_handshake_timeout";
+			if (s.islPurpose)
+				ISL::CloseCapture();
 			s.journal.CloseTimed(Clock);
 			FreezeCapture(Clock(), false, false);
 			return;
@@ -243,22 +256,28 @@ namespace CSX::Diagnostics::ReflexMeasurement
 		std::optional<steady_clock::time_point> closingAt;
 		try {
 			s.journal.Open(Clock());
+			if (s.islPurpose)
+				ISL::OpenCapture(s.journal.start);
 			for (;;) {
 				const auto now = steady_clock::now();
 				if (token.stop_requested() || now >= deadline) {
 					if (s.journal.active) {
 						s.termination = token.stop_requested() ? "cancelled" : "completed";
+						if (s.islPurpose)
+							ISL::CloseCapture();
 						s.journal.CloseTimed(Clock);
 					}
 				}
 				const bool closing = !s.journal.active;
+				if (closing && s.islPurpose)
+					ISL::CloseCapture();
 				if (closing && !closingAt)
 					closingAt = now;
 				if (s.compositorRequested)
 					SampleCompositor(closing);
 				const bool tail = !s.compositorRequested || s.cursor.Drained();
 				const bool timedOut = closingAt && now - *closingAt >= milliseconds(PostrollMs);
-				if (closing && ((tail && s.journal.Outstanding() == 0) || timedOut)) {
+				if (closing && ((tail && s.journal.Outstanding() == 0 && (!s.islPurpose || ISL::Outstanding() == 0)) || timedOut)) {
 					{
 						std::scoped_lock lock(s.journal.mutex);
 						auto& q = s.journal.quality;
@@ -278,6 +297,8 @@ namespace CSX::Diagnostics::ReflexMeasurement
 		} catch (...) {
 			s.workerError = "unknown acquisition failure";
 		}
+		if (s.islPurpose)
+			ISL::CloseCapture();
 		s.journal.CloseTimed(Clock);
 		FreezeCapture(Clock(), false, false);
 	}

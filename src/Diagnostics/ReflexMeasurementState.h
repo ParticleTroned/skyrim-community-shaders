@@ -45,7 +45,7 @@ namespace CSX::Diagnostics::ReflexMeasurement
 	{
 		Preferences original{}, owned{};
 		bool active{}, conflict{}, restoring{}, requestedRestored{}, acceptedRestored{};
-		bool freshNativeSettings{};
+		bool freshNativeSettings{}, wrotePreferences{}, unchangedReleased{};
 		Tick restoreRequestedAt{}, acceptedAt{};
 		uint64_t acceptedGeneration{};
 		void Acquire(Preferences current)
@@ -67,6 +67,23 @@ namespace CSX::Diagnostics::ReflexMeasurement
 			if (!active || conflict || restoring)
 				return false;
 			owned = next;
+			wrotePreferences = true;
+			return true;
+		}
+		bool ReleaseUnchanged(Preferences current, Tick now)
+		{
+			Observe(current);
+			if (wrotePreferences)
+				return false;
+			if (conflict) {
+				active = false;
+				return true;
+			}
+			if (!active)
+				return unchangedReleased;
+			requestedRestored = unchangedReleased = true;
+			restoreRequestedAt = now;
+			active = false;
 			return true;
 		}
 		bool Restore(Preferences current, Tick now)

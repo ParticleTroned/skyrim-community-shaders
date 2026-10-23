@@ -1,4 +1,5 @@
 #include "Api/EditorService.h"
+#include "Diagnostics/ISLDiagnostics.h"
 
 #include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceFoundation.h"
@@ -144,9 +145,7 @@ namespace
 			if ((mutation.flags & requiredFlags) != requiredFlags) {
 				strings.message = "mutation requires explicit allowDisruptive acknowledgement";
 				strings.reasonCode = "acknowledgement_required";
-				a_output = { .structSize = sizeof(Preflight001), .status = Status::kBlocked, .allowed = 0,
-					.disruptive = disruptive ? 1u : 0u, .stateRevision = revision, .requiredFlags = requiredFlags,
-					.reasonCode = strings.reasonCode.c_str(), .message = strings.message.c_str() };
+				a_output = { .structSize = sizeof(Preflight001), .status = Status::kBlocked, .allowed = 0, .disruptive = disruptive ? 1u : 0u, .stateRevision = revision, .requiredFlags = requiredFlags, .reasonCode = strings.reasonCode.c_str(), .message = strings.message.c_str() };
 				return Status::kBlocked;
 			}
 
@@ -154,9 +153,7 @@ namespace
 			pending.insert_or_assign(strings.token, PendingPreflight{ mutation, std::chrono::steady_clock::now() + kPreflightLifetime });
 			strings.reasonCode = "allowed";
 			strings.message = "mutation may execute with the returned token";
-			a_output = { .structSize = sizeof(Preflight001), .status = Status::kSuccess, .allowed = 1,
-				.disruptive = disruptive ? 1u : 0u, .stateRevision = revision, .requiredFlags = requiredFlags,
-				.token = strings.token.c_str(), .reasonCode = strings.reasonCode.c_str(), .message = strings.message.c_str() };
+			a_output = { .structSize = sizeof(Preflight001), .status = Status::kSuccess, .allowed = 1, .disruptive = disruptive ? 1u : 0u, .stateRevision = revision, .requiredFlags = requiredFlags, .token = strings.token.c_str(), .reasonCode = strings.reasonCode.c_str(), .message = strings.message.c_str() };
 			return Status::kSuccess;
 		}
 
@@ -230,9 +227,7 @@ namespace
 				++revision;
 			lastState = after;
 			strings.message = changed ? "editor mutation applied" : "editor already matched requested state";
-			a_output = { .structSize = sizeof(MutationReceipt001), .status = Status::kSuccess, .applied = 1,
-				.changed = changed ? 1u : 0u, .previousStateRevision = previousRevision, .stateRevision = revision,
-				.message = strings.message.c_str() };
+			a_output = { .structSize = sizeof(MutationReceipt001), .status = Status::kSuccess, .applied = 1, .changed = changed ? 1u : 0u, .previousStateRevision = previousRevision, .stateRevision = revision, .message = strings.message.c_str() };
 			return Status::kSuccess;
 		}
 
@@ -260,7 +255,11 @@ namespace
 				.menuSessionOpen = menu && menu->IsMenuSessionOpen(),
 				.mainMenuOpen = state && state->isMainMenuOpen,
 				.loadingMenuOpen = state && state->isLoadingMenuOpen,
-				.persistentMutationBlocked = state && state->IsPersistentMutationBlocked(),
+				.persistentMutationBlocked = (state && state->IsPersistentMutationBlocked())
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				                             || CSX::Diagnostics::ISL::AcquisitionActive()
+#endif
+					,
 				.saveLoadSafeModeActive = state && state->IsSaveLoadSafeModeActive(),
 				.weatherLocked = editor && editor->IsWeatherLocked(),
 				.timePaused = editor && editor->IsTimePaused(),
@@ -298,7 +297,7 @@ namespace
 			}
 			return a_state.previewMode != CSX::EditorAPI::PreviewMode::kNone &&
 			       (a_action == CSX::EditorAPI::MutationAction::kClose || a_action == CSX::EditorAPI::MutationAction::kToggle ||
-				       a_action == CSX::EditorAPI::MutationAction::kExitPreview);
+					   a_action == CSX::EditorAPI::MutationAction::kExitPreview);
 		}
 
 		static bool CanApply(CSX::EditorAPI::MutationAction a_action, const StateSignature& a_state)
@@ -400,16 +399,14 @@ namespace
 		{
 			strings.reasonCode = std::move(a_reason);
 			strings.message = std::move(a_message);
-			a_output = { .structSize = sizeof(Preflight001), .status = a_status, .allowed = a_allowed ? 1u : 0u,
-				.stateRevision = revision, .reasonCode = strings.reasonCode.c_str(), .message = strings.message.c_str() };
+			a_output = { .structSize = sizeof(Preflight001), .status = a_status, .allowed = a_allowed ? 1u : 0u, .stateRevision = revision, .reasonCode = strings.reasonCode.c_str(), .message = strings.message.c_str() };
 			return a_status;
 		}
 
 		Status FillReceipt(MutationReceipt001& a_output, Status a_status, std::string a_message)
 		{
 			strings.message = std::move(a_message);
-			a_output = { .structSize = sizeof(MutationReceipt001), .status = a_status, .stateRevision = revision,
-				.message = strings.message.c_str() };
+			a_output = { .structSize = sizeof(MutationReceipt001), .status = a_status, .stateRevision = revision, .message = strings.message.c_str() };
 			return a_status;
 		}
 
@@ -518,11 +515,15 @@ namespace CSX::Api
 	const EditorAPI::Interface001* GetEditorService001()
 	{
 		static const EditorAPI::Interface001 service{
-			.structSize = sizeof(EditorAPI::Interface001), .major = EditorAPI::ServiceMajor,
-			.minor = EditorAPI::ServiceMinor, .schemaRevision = EditorAPI::SchemaRevision,
+			.structSize = sizeof(EditorAPI::Interface001),
+			.major = EditorAPI::ServiceMajor,
+			.minor = EditorAPI::ServiceMinor,
+			.schemaRevision = EditorAPI::SchemaRevision,
 			.capabilities = EditorAPI::ServiceCapabilities,
 			.context = &GetCurrentEditorServiceContext(),
-			.GetSnapshot = &GetSnapshotFn, .Preflight = &PreflightFn, .Execute = &ExecuteFn,
+			.GetSnapshot = &GetSnapshotFn,
+			.Preflight = &PreflightFn,
+			.Execute = &ExecuteFn,
 		};
 		return &service;
 	}

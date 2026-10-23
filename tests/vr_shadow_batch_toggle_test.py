@@ -27,7 +27,9 @@ class ShadowBatchToggleTests(unittest.TestCase):
             r"NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT\(\s*VR::Settings,.*?\)",
             vr_source, re.S,
         ).group()
+        serialization = serialization.replace("CSX_VR_BATCH_FIELD", "EnableVRShadowBatch,")
         names = serialization[serialization.index(",") + 1:-1].replace("\n", "").replace("\t", "").split(",")
+        names = [name.strip() for name in names]
         self.assertIn("EnableVRShadowBatch", names)
         default = re.search(r"bool EnableVRShadowBatch\s*=\s*[^;]+;", vr_header).group()
         # Unrelated settings are placeholders; the actual macro and toggle default are executed.

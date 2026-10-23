@@ -1,4 +1,5 @@
 #include "InverseSquareLighting.h"
+#include "Diagnostics/ISLDiagnostics.h"
 #include "LocationContext.h"
 #include "Menu/SettingsPage.h"
 #include "State.h"
@@ -32,6 +33,7 @@ namespace
 
 	float RestoreOriginalRadius(ISLCommon::RuntimeLightDataExt& a_runtimeData)
 	{
+		CS_ISL_SCOPE(radiusRestore, RadiusRestore);
 		if (a_runtimeData.flags.any(LightLimitFix::LightFlags::Initialised))
 			a_runtimeData.radius = SanitizeRadius(a_runtimeData.originalRadius);
 		else
@@ -139,6 +141,9 @@ void InverseSquareLighting::ApplyRuntimeStateToActiveLights() const
 
 void InverseSquareLighting::PostPostLoad()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	CSX::Diagnostics::ISL::InitializeStartup();
+#endif
 	// Hooks must honor the startup preference before any guarded render prepass.
 	runtimeEnabled.store(settings.Enabled, std::memory_order_release);
 	stl::detour_thunk<CreatePointLight>(REL::RelocationID(17208, 17610));
@@ -149,6 +154,7 @@ void InverseSquareLighting::PostPostLoad()
 
 RE::NiPointLight* InverseSquareLighting::CreatePointLight::thunk(RE::TESObjectLIGH* ligh, RE::TESObjectREFR* refr, RE::NiAVObject* root, bool forceDynamic, bool useLightRadius, bool affectRequesterOnly)
 {
+	CS_ISL_SCOPE(creation, CreatePointLight);
 	const auto niLight = func(ligh, refr, root, forceDynamic, useLightRadius, affectRequesterOnly);
 
 	// Keep metadata current while runtime behavior is disabled so the same live lights can
@@ -162,6 +168,8 @@ RE::NiPointLight* InverseSquareLighting::CreatePointLight::thunk(RE::TESObjectLI
 void InverseSquareLighting::SetExtLightData(RE::NiLight* niLight, const RE::TESObjectLIGH* ligh)
 {
 	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
+	CS_ISL_SCOPE(metadata, MetadataInit);
+	CS_ISL_COUNT(MetadataReinit, runtimeData->flags.any(LightLimitFix::LightFlags::Initialised));
 	CaptureOriginalRadius(*runtimeData);
 	runtimeData->flags.set(LightLimitFix::LightFlags::Initialised);
 	runtimeData->flags.reset(
@@ -187,8 +195,13 @@ void InverseSquareLighting::SetExtLightData(RE::NiLight* niLight, const RE::TESO
 void InverseSquareLighting::ProcessLight(LightLimitFix::LightData& light, RE::BSLight* bsLight, RE::NiLight* niLight) const
 {
 	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
+	CS_ISL_SCOPE(process, ProcessLight);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	process.Unique(niLight);
+#endif
 
 	if (runtimeData->flags.none(LightLimitFix::LightFlags::Initialised)) {
+		CS_ISL_COUNT(Uninitialized, 1);
 		const auto userData = niLight->GetUserData();
 		logger::debug("[InverseSquareLighting] FormID: 0x{:08X} | Light*: {:p} | Name: {} - light uninitialised", userData ? userData->formID : 0, static_cast<void*>(niLight), niLight->name);
 		CaptureOriginalRadius(*runtimeData);
@@ -201,7 +214,10 @@ void InverseSquareLighting::ProcessLight(LightLimitFix::LightData& light, RE::BS
 	}
 
 	const auto& editorRef = EditorWindow::GetSingleton()->lightEditor;
-	editorRef.ApplyOverrides(niLight, runtimeData);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (!process.policy.editorBypass)
+#endif
+		editorRef.ApplyOverrides(niLight, runtimeData);
 
 	light.lightFlags = runtimeData->flags;
 	light.color = { runtimeData->diffuse.red, runtimeData->diffuse.green, runtimeData->diffuse.blue };
@@ -211,14 +227,49 @@ void InverseSquareLighting::ProcessLight(LightLimitFix::LightData& light, RE::BS
 		light.lightFlags.set(LightLimitFix::LightFlags::Disabled);
 
 	if (bsLight->pointLight && isInvSq) {
+		CS_ISL_COUNT(EligibleInverseSquare, 1);
+		CS_ISL_COUNT(EligibleShadow, bsLight->IsShadowLight());
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const auto vanillaOutput = [&] {
+			light.lightFlags.reset(LightLimitFix::LightFlags::InverseSquare, LightLimitFix::LightFlags::Linear);
+			light.radius = SanitizeRadius(runtimeData->originalRadius);
+			light.invRadius = light.radius > 0.0f ? 1.0f / light.radius : 0.0f;
+			light.fadeZone = light.sizeBias = 0.0f;
+			light.fade = runtimeData->fade;
+		};
+		if (process.policy.renderer == CSX::Diagnostics::ISL::Renderer::VanillaDirect &&
+			CSX::Diagnostics::ISL::SuppressRadiusWrites() &&
+			process.policy.luminance == CSX::Diagnostics::ISL::Luminance::Native &&
+			!editorRef.IsEnabled() && !editorRef.HasDeferredWork()) {
+			vanillaOutput();
+			return;
+		}
+#endif
+		CS_ISL_SCOPE(conversion, Conversion);
 		const float intensity = runtimeData->fade * 4;
 		light.radius = CalculateRadius(intensity, bsLight->IsShadowLight(), runtimeData->cutoffOverride, runtimeData->size);
+		CS_ISL_COUNT(ComputedRadius, 1);
+		CS_ISL_COUNT(NonfiniteRadius, !std::isfinite(light.radius));
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (CSX::Diagnostics::ISL::SuppressRadiusWrites()) {
+			process.Count(CSX::Diagnostics::ISL::Metric::RadiusSuppressed);
+		} else {
+			process.Count(CSX::Diagnostics::ISL::Metric::RadiusWrite);
+			process.Count(CSX::Diagnostics::ISL::Metric::RadiusChanged, runtimeData->radius != light.radius);
+			runtimeData->radius = light.radius;
+		}
+#else
 		runtimeData->radius = light.radius;
+#endif
 		light.invRadius = 1.f / light.radius;
 		light.fadeZone = 1.f / (light.radius * std::clamp(FadeZoneBase * light.invRadius, 0.f, 1.f));
 		light.sizeBias = ScaledUnitsSq * runtimeData->size * runtimeData->size * 0.5f;
 		// light.color *= intensity;
 		light.fade = intensity;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (process.policy.renderer == CSX::Diagnostics::ISL::Renderer::VanillaOutput)
+			vanillaOutput();
+#endif
 	} else {
 		light.radius = SanitizeRadius(runtimeData->radius);
 		light.invRadius = light.radius > 0.0f ? 1.0f / light.radius : 0.0f;
@@ -250,32 +301,97 @@ float InverseSquareLighting::GetAttenuation(const float distance, const float ra
 	return attenuation * fade;
 }
 
+namespace
+{
+	float EvaluateCustomLuminance(RE::BSLight* bsLight, RE::NiLight* niLight, const ISLCommon::RuntimeLightDataExt* runtimeData, const RE::NiPoint3* targetPosition)
+	{
+		const float dist = niLight->world.translate.GetDistance(*targetPosition);
+		const float radius = InverseSquareLighting::CalculateRadius(runtimeData->fade * 4, bsLight->IsShadowLight(), runtimeData->cutoffOverride, runtimeData->size);
+		const float attenuation = InverseSquareLighting::GetAttenuation(dist, radius, runtimeData->size);
+		const float luminance = (runtimeData->diffuse.red + runtimeData->diffuse.green + runtimeData->diffuse.blue) * runtimeData->fade * 4 * attenuation * (1.0f / 3.0f);
+		return luminance;
+	}
+}
 float InverseSquareLighting::BSLight_GetLuminance::thunk(RE::BSLight* bsLight, RE::NiPoint3* targetPosition, RE::NiLight* refLight)
 {
-	if (!bsLight || !targetPosition)
-		return func(bsLight, targetPosition, refLight);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	using namespace CSX::Diagnostics::ISL;
+	Scope observation(Metric::LuminanceCalls, false, reinterpret_cast<uintptr_t>(_ReturnAddress()));
+	const auto classify = [&](float value) {
+		observation.Count(Metric::LuminanceNonfinite, !std::isfinite(value));
+		observation.Count(Metric::LuminanceZero, value == 0);
+		observation.Count(Metric::LuminancePositive, std::isfinite(value) && value > 0);
+		observation.Count(Metric::LuminanceNegative, std::isfinite(value) && value < 0);
+		return value;
+	};
+#endif
+	const auto native = [&] {
+		CS_ISL_COUNT(LuminanceNative, 1);
+		const auto result = func(bsLight, targetPosition, refLight);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		return classify(result);
+#else
+		return result;
+#endif
+	};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (observation.policy.luminance != Luminance::Normal) {
+		auto* source = bsLight ? bsLight->light.get() : nullptr;
+		if (source && targetPosition && globals::features::inverseSquareLighting.IsEnabled()) {
+			const auto* data = ISLCommon::RuntimeLightDataExt::Get(source);
+			if (source != refLight && data->flags.none(LightLimitFix::LightFlags::Disabled) &&
+				bsLight->pointLight && data->flags.any(LightLimitFix::LightFlags::InverseSquare)) {
+				observation.Count(Metric::LuminanceEligible);
+				if (observation.policy.luminance == Luminance::ComputeDiscard) {
+					const float candidate = EvaluateCustomLuminance(bsLight, source, data, targetPosition);
+					observation.Count(Metric::LuminanceCustom);
+					observation.Candidate(candidate);
+					observation.Count(Metric::LuminanceCandidateNonfinite, !std::isfinite(candidate));
+				}
+			}
+		}
+		return native();
+	}
+#endif
+	if (!bsLight || !targetPosition) {
+		CS_ISL_COUNT(LuminanceFallback, 1);
+		return native();
+	}
 
 	auto* niLight = bsLight->light.get();
-	if (!niLight)
-		return func(bsLight, targetPosition, refLight);
+	if (!niLight) {
+		CS_ISL_COUNT(LuminanceFallback, 1);
+		return native();
+	}
 
 	if (!globals::features::inverseSquareLighting.IsEnabled()) {
 		RestoreOriginalRadius(*ISLCommon::RuntimeLightDataExt::Get(niLight));
-		return func(bsLight, targetPosition, refLight);
+		{
+			CS_ISL_COUNT(LuminanceFallback, 1);
+			return native();
+		}
 	}
 
 	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
 
-	if (refLight == niLight || runtimeData->flags.any(LightLimitFix::LightFlags::Disabled))
+	if (refLight == niLight || runtimeData->flags.any(LightLimitFix::LightFlags::Disabled)) {
+		CS_ISL_COUNT(LuminanceSelf, refLight == niLight);
+		CS_ISL_COUNT(LuminanceDisabled, runtimeData->flags.any(LightLimitFix::LightFlags::Disabled));
+		CS_ISL_COUNT(LuminanceZero, 1);
 		return 0.0f;
+	}
 
-	if (!bsLight->pointLight || runtimeData->flags.none(LightLimitFix::LightFlags::InverseSquare))
-		return func(bsLight, targetPosition, refLight);
+	if (!bsLight->pointLight || runtimeData->flags.none(LightLimitFix::LightFlags::InverseSquare)) {
+		CS_ISL_COUNT(LuminanceFallback, 1);
+		return native();
+	}
 
-	const float dist = niLight->world.translate.GetDistance(*targetPosition);
-	const float radius = CalculateRadius(runtimeData->fade * 4, bsLight->IsShadowLight(), runtimeData->cutoffOverride, runtimeData->size);
-	const float attenuation = GetAttenuation(dist, radius, runtimeData->size);
-	const float luminance = (runtimeData->diffuse.red + runtimeData->diffuse.green + runtimeData->diffuse.blue) * runtimeData->fade * 4 * attenuation * (1.0f / 3.0f);
+	CS_ISL_COUNT(LuminanceEligible, 1);
+	const float luminance = EvaluateCustomLuminance(bsLight, niLight, runtimeData, targetPosition);
+	CS_ISL_COUNT(LuminanceCustom, 1);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	classify(luminance);
+#endif
 	bsLight->luminance = luminance;
 
 	return luminance;

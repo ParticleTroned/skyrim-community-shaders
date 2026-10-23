@@ -1137,6 +1137,7 @@ void VR::DrawSettings()
 										{ "fov-effects", "FOV effects", "Choose which effects use the shared FOV mask.", "Effect coverage and detail budgets", true, true, nullptr },
 										{ "depth-culling", "Depth culling", "Choose visibility checks for exterior and interior objects.", "Object visibility and culling method", true, true, "Balance visibility and appearance" },
 										{ "stereo", "Stereo", "Refine the appearance shared between your eyes.", "Shared stereo appearance", true, true, nullptr },
+										{ "view-refresh", "View Refresh", "Reuse scene frames and refresh headset poses.", "Experimental scene reuse and pose correction", true, true, nullptr },
 										{ "layout", "Menu", "Choose menu placement, presentation and desktop behaviour.", "Headset placement and desktop settings", true, true, "Set up interaction" },
 										{ "controls", "Controls", "Choose navigation, pointer response and controller shortcuts.", "Navigation, pointer and shortcuts", true, true, nullptr, nullptr, nullptr, openVRInfo.isCompatible },
 										{ "diagnostics", "Diagnostics", "Inspect headset and controller diagnostics.", "Headset and controller state", true, false, nullptr },
@@ -1152,6 +1153,8 @@ void VR::DrawSettings()
 		DrawControlsSettings();
 	if (page.Is("depth-culling"))
 		DrawDepthCullingSettings(*this, "DepthCullingSettings");
+	if (page.Is("view-refresh"))
+		CSX::ViewRefresh::DrawSettings();
 
 	if (page.Is("fov")) {
 		{
@@ -1403,7 +1406,6 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 	}
 
 	DrawDepthCullingSettings(*this, "PerformanceSettings");
-	CSX::ViewRefresh::DrawSettings();
 
 	if (!a_advanced)
 		return;

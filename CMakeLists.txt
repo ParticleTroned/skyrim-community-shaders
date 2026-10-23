@@ -3807,6 +3807,16 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
     add_test(
+        NAME MeasurementControllerTransport
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/measurement_controller_transport_test.py"
+    )
+    set_tests_properties(
+        MeasurementControllerTransport
+        PROPERTIES LABELS "ControllerTests"
+    )
+    add_test(
         NAME ReflexMeasurementSourceIsolation
         COMMAND
             "${Python3_EXECUTABLE}"

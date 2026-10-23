@@ -174,6 +174,7 @@ class Campaign(base.Campaign):
         stopped = self.call("stop", captureId=self.capture, reason="completed")
         transport_stop = self.last_transport
         require(stopped["frozen"], "capture still draining; recovery manifest retains ownership")
+        print(f"Exporting and validating {name}; keep the same viewpoint.", flush=True)
         raw_validation, side_validation = self.export_pair(self.capture, name)
         applied = evidence.experiment_applied(phase, side_validation, self.side_pages[0], self.original)
         self.capture = None
@@ -263,6 +264,7 @@ class Campaign(base.Campaign):
         phases = plan(self.config, self.args.plan)
         self.save("scenario.json", {"config": self.config, "plan": self.args.plan, "phases": phases, "clientId": self.client})
         try:
+            print("Checking DevBench connection and diagnostic tools...", flush=True)
             catalog = self.controller("list", "catalog")
             tools = catalog["data"]["tools"]
             require({base.TOOL, ISL_TOOL} <= {tool["name"] for tool in tools}, "combined diagnostic tools not registered")
@@ -285,15 +287,25 @@ class Campaign(base.Campaign):
                 self.phase(phase)
         except (Exception, KeyboardInterrupt) as error:
             self.failures.append({"type": type(error).__name__, "message": str(error)})
+            print(f"TEST FAILED: {type(error).__name__}: {error}", file=sys.stderr, flush=True)
         finally:
             if self.prepare_dispatched:
+                print("Finalizing captures and restoring settings; keep Skyrim running...", flush=True)
                 self.restore()
             self.save("campaign.json", {"completed": self.completed, "failures": self.failures, "cleanup": self.cleanup,
                       "buildId": self.args.build_id, "plan": self.args.plan, "rules": self.rules, "sceneTime": "preserved"})
             self.save("report.json", evidence.comparison(self.completed))
             with (self.root / 'report.txt').open('x', encoding='utf-8') as output:
                 output.write(evidence.readable_report(self.completed, self.failures, self.cleanup))
-        return int(bool(self.failures or "restorationFailure" in self.cleanup or "stopOrExportFailure" in self.cleanup))
+        failed = bool(self.failures or "restorationFailure" in self.cleanup or "stopOrExportFailure" in self.cleanup)
+        if failed:
+            print(f"TEST FAILED / INCOMPLETE: {len(self.completed)}/{len(phases)} windows processed. See report.txt.",
+                  file=sys.stderr, flush=True)
+        else:
+            print(f"TEST FINISHED: {len(self.completed)}/{len(phases)} windows completed; settings restored.", flush=True)
+            print("Collection succeeded; the diagnosis may still be inconclusive. See report.txt.", flush=True)
+        print(f"Send the ENTIRE output folder: {self.root}", flush=True)
+        return int(failed)
 
 
 def main():
@@ -310,7 +322,12 @@ def main():
         config["observationLevel"] = args.observation
     if args.off_unlimited:
         config["pacing"] = "off_unlimited"
-    return Campaign(args, config).run()
+    try:
+        return Campaign(args, config).run()
+    except (Exception, KeyboardInterrupt) as error:
+        print(f"TEST FAILED: {type(error).__name__}: {error}", file=sys.stderr, flush=True)
+        print(f"Preserve any output already written to: {Path(args.output).resolve()}", file=sys.stderr, flush=True)
+        return 1
 
 
 if __name__ == "__main__":

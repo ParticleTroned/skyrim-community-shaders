@@ -293,7 +293,9 @@ def readable_report(phases, failures=(), cleanup=None):
         'D': 'Conversion cost under startup radius suppression and native luminance; compared against matching ordinary output.',
         'X': 'Optional ISL observations off, raw collector still active.', 'T': 'Sampled timing observer compared with counters.',
         'Q': 'One exercised, bounded prune delay; inspect actual due/executed frames.'}
-    lines = ['CSX ISL diagnostic evidence report', '', 'Reference: ' + report['referenceStatus'],
+    execution = 'FAILED / INCOMPLETE' if not phases or failures or any(key in cleanup for key in ('restorationFailure', 'stopOrExportFailure')) else 'FINISHED'
+    lines = ['CSX ISL diagnostic evidence report', '', f'Capture execution: {execution}; processed windows: {len(phases)}',
+             'Reference: ' + report['referenceStatus'],
              'Exact SteamVR CPU Late Start classification: UNAVAILABLE.',
              'Results below use the named OpenVR pose-call-offset proxy. No runtime fix or root cause is proven.', '',
              'Ranked comparisons (campaign order):']

@@ -72,6 +72,7 @@ class Campaign:
     def __init__(self, args, config):
         self.args, self.config = args, config
         self.root = Path(args.output).resolve()
+        require(not self.root.exists(), f"Output folder already exists: {self.root}. Choose a NEW folder; preserve earlier results.")
         self.root.mkdir(parents=True, exist_ok=False)
         self.client = "reflex-" + uuid.uuid4().hex
         self.session, self.capture = None, None
@@ -92,27 +93,33 @@ class Campaign:
     def controller(self, command, label, arguments=None, tool=TOOL):
         self.ordinal += 1
         prefix = f"{self.ordinal:04}-{label}"
-        command_line = ["pwsh", "-NoProfile", "-File", self.args.controller, command,
-                        "-RuntimePath", self.args.runtime, "-ExpectedBuildId", self.args.build_id,
-                        "-ArtifactPath", self.args.artifact, "-ExpectedArtifactSha256", self.args.artifact_sha256,
-                        "-EvidenceDirectory", str(self.root / "transport"), "-EvidenceLabel", prefix,
-                        "-MaxTransientRetries", "0", "-RequireSuccess", "-RequirePerformanceNeutral", "-NoExit"]
+        parameters = {"Command": command, "RuntimePath": self.args.runtime, "ExpectedBuildId": self.args.build_id,
+                      "ArtifactPath": self.args.artifact, "ExpectedArtifactSha256": self.args.artifact_sha256,
+                      "EvidenceDirectory": str(self.root / "transport"), "EvidenceLabel": prefix,
+                      "MaxTransientRetries": 0, "NoExit": True}
+        # Discovery has no measurement/action outcome; all tool calls retain both guards.
+        if command != "list":
+            parameters.update(RequireSuccess=True, RequirePerformanceNeutral=True)
         if arguments is not None:
-            command_line += ["-Tool", tool, "-ArgumentsJson", json.dumps(arguments, separators=(",", ":"))]
+            parameters.update(Tool=tool, ArgumentsJson=json.dumps(arguments, separators=(",", ":")))
         self.save(prefix + "-request.json", {"command": command, "tool": tool if arguments else None, "arguments": arguments})
+        self.save(prefix + "-parameters.json", parameters)
+        command_line = ["pwsh", "-NoProfile", "-File", str(Path(__file__).with_name("invoke-controller.ps1")),
+                        "-Controller", self.args.controller, "-ParametersPath", str(self.root / (prefix + "-parameters.json"))]
         try:
-            result = subprocess.run(command_line, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=False)
+            result = subprocess.run(command_line, capture_output=True, timeout=60, check=False)
         except subprocess.TimeoutExpired as error:
             for suffix, value in (("stdout", error.stdout), ("stderr", error.stderr)):
-                text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
-                (self.root / (prefix + f".{suffix}.txt")).write_text(text, encoding="utf-8")
+                (self.root / (prefix + f".{suffix}.txt")).write_bytes(value or b"")
             raise
         # Persist failures too, before parsing or interpreting anything.
-        (self.root / (prefix + ".stdout.txt")).write_text(result.stdout, encoding="utf-8")
-        (self.root / (prefix + ".stderr.txt")).write_text(result.stderr, encoding="utf-8")
+        (self.root / (prefix + ".stdout.txt")).write_bytes(result.stdout)
+        (self.root / (prefix + ".stderr.txt")).write_bytes(result.stderr)
         require(result.returncode == 0, f"controller exited {result.returncode}; see {prefix}")
-        parsed = json.loads(result.stdout)
+        parsed = json.loads(result.stdout.decode("utf-8-sig"))
         self.save(prefix + ".json", parsed)
+        require(isinstance(parsed, dict) and parsed.get("ok") is True and parsed.get("transportOk") is True,
+                f"DevBench {command} failed; see {prefix}.json: {parsed.get('errors') if isinstance(parsed, dict) else 'invalid envelope'}")
         return parsed
 
     def call(self, action, **arguments):

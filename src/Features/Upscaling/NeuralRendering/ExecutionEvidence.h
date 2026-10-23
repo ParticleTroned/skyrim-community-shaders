@@ -2,6 +2,9 @@
 
 #include "../DLSSViewportCrop.h"
 #include "ComputeSubrect.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "GuidedReconstructionPolicy.h"
+#endif
 #include "NativeEvaluationLayout.h"
 #include "PipelinePolicy.h"
 #include "RoiDescriptor.h"
@@ -31,6 +34,19 @@ namespace NeuralRendering
 	/** Tightly packed logical texture size; excludes driver alignment and residency. */
 	[[nodiscard]] std::optional<std::uint64_t> LogicalTextureBytes(std::uint32_t format, std::uint32_t width, std::uint32_t height) noexcept;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Frozen outer reconstruction facts accompany native evaluation and resource evidence. */
+	struct ModelReconstructionEvidence
+	{
+		GuidedReconstructionDecision decision{};
+		std::uint32_t effectivePercent = 100;
+		UpscalingDLSS::Extent target{}, unpackedModel{};
+		ReconstructionFilter basicFilter = ReconstructionFilter::Bilinear;
+		bool enabled = false, packed = false, matchedReferenceDomain = false;
+		bool operator==(const ModelReconstructionEvidence&) const = default;
+	};
+#endif
+
 	/** Caller-owned facts stay unavailable until supplied by the admitted route. */
 	struct ExecutionContext
 	{
@@ -45,6 +61,9 @@ namespace NeuralRendering
 		std::optional<UpscalingDLSS::ViewportCrop> dlssViewportCrop;
 		std::optional<std::array<float, 2>> jitterPixels;
 		std::optional<std::array<std::uint32_t, 2>> sourceColorOrigin, sourceGuideOrigin;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::optional<ModelReconstructionEvidence> modelReconstruction;
+#endif
 		Util::PassTimingHandle inputPreparation;
 		bool operator==(const ExecutionContext&) const = default;
 	};

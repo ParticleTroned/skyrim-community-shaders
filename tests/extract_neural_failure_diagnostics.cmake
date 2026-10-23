@@ -12,6 +12,8 @@ extract_between("${source}" "\t\tstruct ResourceKey\n"
     "\t\tstruct HistoryKey\n" "neural_failure_resource_key_under_test.h")
 extract_between("${source}" "\tbool Renderer::State::ServiceStallRecoveryLocked("
     "\tbool Renderer::State::ServiceRetainedBackendLocked(" "neural_stall_service_under_test.h")
+extract_between("${source}" "\t\tvoid FinishApplyLocked("
+    "\t\tmutable std::mutex mutex_;" "neural_reconstruction_finish_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/Renderer.h" header)
 extract_between("${header}" "\tenum class RendererStage"
     "\tstruct RendererCounters" "neural_failure_stage_under_test.h")

@@ -20,7 +20,14 @@ namespace NeuralRendering
 		struct CoverageWork;
 
 	public:
-		/** Retained views of admitted renderer-owned model textures. */
+		/** Shared roles are excluded from private allocation admission and cache ownership. */
+		enum class Sharing
+		{
+			Private,
+			Guides,
+			All
+		};
+		/** Retained shared guides; colour and output must either both be supplied or both remain private. */
 		struct Targets
 		{
 			Color::Texture color, depth, motion, output;
@@ -41,6 +48,7 @@ namespace NeuralRendering
 			Microsoft::WRL::ComPtr<ID3D11ComputeShader> reconstructionShader;
 			Microsoft::WRL::ComPtr<ID3D11Buffer> constants;
 			Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> packedCoverage;
+			GuidedReconstructionDecision reconstructionDecision{};
 			std::size_t count = 0;
 		};
 
@@ -65,15 +73,15 @@ namespace NeuralRendering
 			PackedCropAdmissionDiagnostics* diagnostics = nullptr
 #endif
 			) noexcept;
-		/** Raw shared preparation retains private actor selection and native protection semantics. */
-		static bool CanUseSharedTargets(std::span<const RendererApplyArgs>, bool colorProcessing, bool compactInputs) noexcept;
+		/** Shared preparation retains private actor selection and native protection semantics. */
+		static bool CanUseSharedTargets(std::span<const RendererApplyArgs>, bool compactInputs) noexcept;
 		/** Count additional private textures before memory admission; shared aliases are excluded. */
-		std::optional<std::uint64_t> AdditionalBytes(std::span<const RendererApplyArgs>, bool sharedTargets = false) const;
+		std::optional<std::uint64_t> AdditionalBytes(std::span<const RendererApplyArgs>, Sharing sharing = Sharing::Private) const;
 		[[nodiscard]] std::optional<std::uint64_t> RetainedBytes(std::uint32_t) const noexcept;
 
 		/** Prepare both eyes into validated shared targets or private proxies before native evaluation. */
 		bool Prepare(std::span<const RendererApplyArgs>, Batch&, HRESULT&, std::span<const Targets> = {});
-		/** Reconstruct the complete batch into retained private or explicitly unpublished output targets. */
+		/** Reconstruct into retained targets; reject filters changed since preparation before dispatch. */
 		bool Reconstruct(std::span<const RendererApplyArgs>, const Batch&, HRESULT&);
 		/** Commit only the original owned rectangles after successful reconstruction. */
 		void Commit(std::span<const RendererApplyArgs>, const Batch&) const;
@@ -103,6 +111,7 @@ namespace NeuralRendering
 		bool EnsureShaders(ID3D11Device*, HRESULT&);
 		bool EnsureCoverage(ID3D11Device*, HRESULT&);
 		bool EnsureSelectionShader(bool guarded, HRESULT&);
+		bool EnsureGuidedShader(bool selected, bool guarded, Microsoft::WRL::ComPtr<ID3D11ComputeShader>&, HRESULT&);
 		void DispatchCoverage(std::span<const RendererApplyArgs>, Batch&);
 		template <std::size_t Bindings>
 		void DispatchReconstruction(std::span<const RendererApplyArgs>, const Batch&);
@@ -117,6 +126,8 @@ namespace NeuralRendering
 		std::array<std::shared_ptr<Work>, kLogicalFeatureSlotCount> slots_{};
 		Microsoft::WRL::ComPtr<ID3D11Device> device_;
 		Microsoft::WRL::ComPtr<ID3D11ComputeShader> prepare_, reconstruct_, selection_, guardedSelection_;
+		std::array<Microsoft::WRL::ComPtr<ID3D11ComputeShader>, 4> guidedShaders_{};
+		std::array<bool, 4> guidedShaderFailed_{};
 		Microsoft::WRL::ComPtr<ID3D11Buffer> constants_;
 		bool compileFailed_ = false;
 		HRESULT packingFailure_ = S_OK;

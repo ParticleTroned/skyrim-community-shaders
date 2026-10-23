@@ -372,6 +372,8 @@ namespace FSRTemporalTuningPolicy
 	OP(neuralRenderingInsertionPoint)            \
 	OP(neuralRenderingBatchedStereo)             \
 	OP(neuralRenderingDirectCommit)              \
+	OP(neuralRenderingReconstructionFilter)      \
+	OP(neuralRenderingGuidedReconstruction)      \
 	OP(neuralRenderingModelResolutionPercent)    \
 	OP(neuralRenderingParallelEyes)              \
 	OP(neuralRenderingPrewarmEnabled)            \
@@ -429,6 +431,8 @@ void from_json(const json& a_json, Upscaling::Settings& a_settings)
 		if (!NeuralRendering::ParseModelResolutionPercent(*value))
 			throw std::invalid_argument("NR model resolution must be an integer from 30 to 100 percent");
 	}
+	if (const auto value = a_json.find("neuralRenderingReconstructionFilter"); value != a_json.end() && !NeuralRendering::ParseBoundedInteger(*value, 0u, 1u))
+		throw std::invalid_argument("NR reconstruction filter must be 0 (bilinear) or 1 (Advanced)");
 	for (const auto& [name, minimum, maximum] : {
 			 std::tuple{ "neuralRenderingCentralAreaPercent", NeuralRendering::kMinimumCentralAreaPercent, NeuralRendering::kMaximumCentralAreaPercent },
 			 std::tuple{ "neuralRenderingCentralFeatherPixels", 0u, NeuralRendering::kMaximumCentralFeatherPixels } }) {
@@ -5107,6 +5111,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		settings.neuralRenderingInsertionPoint = static_cast<uint>(
 			NeuralRendering::ResolveInsertionPoint(NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode)));
 		settings.neuralRenderingPreset = std::min(settings.neuralRenderingPreset, 4u);
+		settings.neuralRenderingReconstructionFilter = static_cast<uint>(NeuralRendering::ClampReconstructionFilter(settings.neuralRenderingReconstructionFilter));
 		settings.neuralRenderingModelResolutionPercent = std::clamp(settings.neuralRenderingModelResolutionPercent,
 			NeuralRendering::kMinimumModelResolutionPercent, NeuralRendering::kMaximumModelResolutionPercent);
 		NeuralRendering::Runtime::Instance().GetTuningLimits(settings.neuralRenderingNetwork).Sanitize(settings);
@@ -6752,6 +6757,8 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		add(a_settings.neuralRenderingBatchedStereo);
 		add(a_settings.neuralRenderingDirectCommit);
 		add(NeuralRendering::EffectiveModelResolutionPercent(mode, a_settings.neuralRenderingModelResolutionPercent));
+		add(static_cast<uint64_t>(NeuralRendering::ClampReconstructionFilter(a_settings.neuralRenderingReconstructionFilter)));
+		add(a_settings.neuralRenderingGuidedReconstruction);
 		add(a_settings.neuralRenderingPressureResolutionEnabled);
 		add(a_settings.neuralRenderingCentralAreaPercent);
 		if (a_settings.neuralRenderingCentralAreaPercent < NeuralRendering::kMaximumCentralAreaPercent)
@@ -19058,6 +19065,15 @@ namespace
 			NeuralRendering::kMinimumModelResolutionPercent, NeuralRendering::kMaximumModelResolutionPercent, "%d%%");
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Set NR resolution in any mode, independently of scene resolution, upscaling and strength. Lower may soften detail; 100% keeps original NR resolution. Applies on release.");
+		int filter = static_cast<int>(NeuralRendering::ClampReconstructionFilter(settings.neuralRenderingReconstructionFilter));
+		const char* filters[] = { "Bilinear", "Advanced" };
+		if (Util::Widgets::Combo("NR reconstruction filter", &filter, filters, 2))
+			settings.neuralRenderingReconstructionFilter = static_cast<std::uint32_t>(NeuralRendering::ClampReconstructionFilter(static_cast<std::uint32_t>(filter)));
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Bilinear is the inexpensive default. Advanced can preserve sharper NR changes at reduced NR resolution, with possible ringing and extra GPU cost. Original scene detail and alpha are preserved.");
+		Util::Widgets::Checkbox("Improve low-resolution NR", &settings.neuralRenderingGuidedReconstruction);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Provisional guided reconstruction for NR sampling at 50% or lower. Auto currently retains the selected filter until this route is qualified. NR resolution and strength are unchanged.");
 		Util::Widgets::Checkbox("Lower NR resolution under memory pressure", &settings.neuralRenderingPressureResolutionEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("When GPU memory is scarce, temporarily lower NR resolution by 10-point steps to 30%, then restore it gradually after sustained headroom. The slider keeps your target; scene resolution, textures and strength stay unchanged.");
@@ -45469,6 +45485,10 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 					ready = PrepareReducedResolutionNeuralOutputTarget(eyeIndex, args, fuseSelection);
 				}
 				applied = ready && NeuralRendering::Renderer::Instance().Apply(args, &outcome);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (outcome.reconstructionHistoryReset)
+					RequestHistoryReset();
+#endif
 				if (applied && beforeDlss) {
 					applied = args.modelOutputSelection ? outcome.WasOutputSelected(args.featureSlot) :
 					                                      PrepareReducedResolutionNeuralOutput(eyeIndex, args);
@@ -46106,6 +46126,10 @@ namespace
 				applied = NeuralRendering::Renderer::Instance().Apply(
 					a_batchArgs[eye], &outcome);
 			}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (outcome.reconstructionHistoryReset)
+				a_upscaling.RequestHistoryReset();
+#endif
 			for (uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye) {
 				const bool attempted =
 					outcome.WasEvaluationAttempted(a_batchArgs[eye].featureSlot);

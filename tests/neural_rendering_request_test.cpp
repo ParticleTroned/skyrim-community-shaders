@@ -40,6 +40,30 @@ int main()
 		if (!value)
 			throw std::runtime_error("Neural Rendering request validation invariant");
 	};
+	for (const auto& [name, expected] : { std::pair{ "bilinear", NeuralRendering::ReconstructionFilter::Bilinear }, std::pair{ "lanczos3", NeuralRendering::ReconstructionFilter::Lanczos3 } }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "reconstructionFilter", name } }, request, error));
+		require(request.HasAnyControl() && request.reconstructionFilter == expected);
+	}
+	for (const auto& value : { json(nullptr), json(true), json(0), json(1.0), json("Lanczos3"), json("nearest"), json::array(), json::object() }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "reconstructionFilter", value } }, request, error));
+		require(!request.reconstructionFilter && error.at("errorCode") == "nr_reconstruction_filter_invalid");
+	}
+	for (bool enabled : { false, true }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "guidedReconstruction", enabled } }, request, error));
+		require(request.HasAnyControl() && request.guidedReconstruction == enabled);
+	}
+	for (auto invalid : { json(1), json(0.0), json("true"), json(nullptr), json::array(), json::object() }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "guidedReconstruction", invalid } }, request, error));
+		require(error.at("errorCode") == "nr_guided_reconstruction_invalid");
+	}
 	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 8).intensity == 1.0f);
 	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 8).localStructureStrength == 2.0f);
 	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 9).localStructureStrength == 1.0f);
@@ -64,6 +88,11 @@ int main()
 		}
 	}
 	const auto descriptor = json::parse(kNeuralRenderingDescriptor);
+	auto registeredDescriptor = descriptor;
+	SetRegisteredNeuralActions(registeredDescriptor);
+	const auto& actions = registeredDescriptor.at("inputSchema").at("properties").at("action").at("enum");
+	require(std::find(actions.begin(), actions.end(), "nr_reconstruction_compare") != actions.end());
+	require(descriptor.at("inputSchema").at("properties").at("guidedReconstruction").at("default") == false);
 	for (const auto& value : { json(0), json(1u), json(2), json(-1), json(3), json(1.5), json(true), json("2"), json(nullptr), json(UINT64_MAX) }) {
 		NeuralRenderingConfigurationRequest request;
 		json error;

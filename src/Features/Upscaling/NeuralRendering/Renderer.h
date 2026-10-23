@@ -2,6 +2,7 @@
 
 #include "../DLSSViewportCrop.h"
 #include "CaptureEvidence.h"
+#include "GuidedReconstructionPolicy.h"
 #include "MemoryConservationPolicy.h"
 #include "MemoryRetirementPolicy.h"
 #include "ModelResolutionPolicy.h"
@@ -160,6 +161,7 @@ namespace NeuralRendering
 		std::uint64_t generation = 0;
 		InsertionPoint insertionPoint = kDefaultInsertionPoint;
 		std::uint32_t modelResolutionPercent = 100;
+		ReconstructionFilter reconstructionFilter = ReconstructionFilter::Bilinear;
 		bool pressureResolutionEnabled = false;
 		std::uint32_t requestedModelResolutionPercent = 100;
 		std::uint32_t effectiveModelResolutionPercent = 100;
@@ -196,6 +198,9 @@ namespace NeuralRendering
 		bool useAutoMask = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		bool modelOutputSelected = false;
+		GuidedReconstructionDecision guidedReconstruction{};
+		bool reconstructionPrepared = false;
+		GuidedReconstructionOverrideStatus reconstructionOverride{};
 		PackedCropLayout packedCropLayout{};
 		PrewarmPolicy prewarm{};
 		Runtime::LifecycleCounts nativeLifecycle{};
@@ -247,6 +252,11 @@ namespace NeuralRendering
 		bool providerBlending = false;
 		ComputeSubrect actorSelectionSupport{};
 		std::uint32_t modelResolutionPercent = 100;
+		ReconstructionFilter reconstructionFilter = ReconstructionFilter::Bilinear;
+		bool guidedReconstructionEnabled = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		GuidedReconstructionOverride reconstructionOverride = GuidedReconstructionOverride::Auto;
+#endif
 		bool pressureResolutionEnabled = false;
 		bool parallelEyes = false;
 		/** Keep model preparation resident while moving actors alternate atlas and single ROI. */
@@ -292,6 +302,9 @@ namespace NeuralRendering
 	/** Per-call evidence captured at the exact NVIDIA evaluation boundary. */
 	struct RendererApplyOutcome
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool reconstructionHistoryReset = false;
+#endif
 		std::uint32_t evaluationAttemptedFeatureSlotMask = 0;
 		std::uint32_t evaluationSucceededFeatureSlotMask = 0;
 		std::uint32_t selectedOutputFeatureSlotMask = 0;
@@ -367,6 +380,10 @@ namespace NeuralRendering
 		/** Queues recovery without GPU work; the caller must gate this on requested NR. */
 		bool NotifyDlssMemoryPressure();
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Start/cancel a bounded session-only comparison, rejecting stale restoration tokens. */
+		bool ConfigureReconstructionOverride(GuidedReconstructionOverride, std::uint32_t frames, std::uint64_t expectedRevision);
+		/** Resolve before source admission; the caller resets downstream history once when changed. */
+		[[nodiscard]] std::pair<GuidedReconstructionOverride, bool> ResolveReconstructionOverride(std::uint32_t frame, std::uint64_t generation);
 		/** Injects a logical backpressure timeout; recovery still requires real fence completion. */
 		bool SimulateTransientStall();
 		static constexpr std::uint32_t kMaximumMemorySimulationMilliseconds = 30000;

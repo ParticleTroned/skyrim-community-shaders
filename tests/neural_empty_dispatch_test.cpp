@@ -27,6 +27,7 @@ namespace NeuralRendering
 	};
 	struct RendererApplyOutcome
 	{
+		bool reconstructionHistoryReset = false;
 		uint32_t evaluationAttemptedFeatureSlotMask = 0, successful = 0, selectedOutputFeatureSlotMask = 0;
 		bool WasEvaluationAttempted(uint32_t slot) const { return (evaluationAttemptedFeatureSlotMask & (1u << slot)) != 0; }
 		bool WasEvaluationSuccessful(uint32_t slot) const { return (successful & (1u << slot)) != 0; }

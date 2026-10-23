@@ -1,4 +1,5 @@
 #include "Features/Upscaling/NeuralRendering/CapacityFallback.h"
+#include "Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryRecoveryPolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryRetirementPolicy.h"
 #include "Features/Upscaling/NeuralRendering/NetworkSelection.h"
@@ -98,6 +99,12 @@ namespace NeuralRendering
 		++value;
 	}
 
+	struct RendererApplyOutcome
+	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool reconstructionHistoryReset = false;
+#endif
+	};
 	struct Runtime
 	{
 		static constexpr auto kFeatureSlotCount = kPhysicalFeatureSlotCount;
@@ -232,6 +239,12 @@ namespace NeuralRendering
 			MemoryRetirementPolicy memoryRetirement_;
 			std::atomic<bool> backendMaintenancePending_ = false;
 			bool failureLatched_ = false, quarantined_ = false, abandoned = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			GuidedReconstructionExperiment reconstructionExperiment_;
+#endif
+			unsigned capturesFinalized = 0;
+			void FinishCapture(const RendererApplyOutcome&) noexcept { ++capturesFinalized; }
+#include "neural_reconstruction_finish_under_test.h"
 			HRESULT removal = S_OK;
 			RendererStage activeStage_ = RendererStage::None;
 			void SetActiveFeatureSlotLocked(std::uint32_t) {}
@@ -360,8 +373,35 @@ int main()
 
 		messages.clear();
 		Renderer::State unexpected;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		Require(unexpected.reconstructionExperiment_.Configure(GuidedReconstructionOverride::GuidedExperiment, 4, 1), "Comparison setup failed");
+		(void)unexpected.reconstructionExperiment_.Resolve(1, 1);
+#endif
 		unexpected.QuarantineAfterUnexpectedFailureLocked(RendererStage::FeatureEvaluate, 1, true, 0);
 		Require(unexpected.quarantined_ && unexpected.abandoned && Has("issued=109") && Has("color=723x779"), "exception quarantine failed to preserve pre-detach evidence");
+		RendererApplyOutcome unexpectedOutcome;
+		unexpected.FinishApplyLocked(unexpectedOutcome);
+		Require(unexpected.capturesFinalized == 1, "Terminal outcome lost capture finalization");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		Require(unexpected.reconstructionExperiment_.Status().mode == GuidedReconstructionOverride::Auto && unexpectedOutcome.reconstructionHistoryReset &&
+					!unexpected.reconstructionExperiment_.Status().historyResetPending,
+			"Exceptional failure retained its lease or deferred history reset");
+		RendererApplyOutcome nextOutcome;
+		unexpected.FinishApplyLocked(nextOutcome);
+		Require(!nextOutcome.reconstructionHistoryReset, "Exceptional failure repeated its history reset");
+		for (bool failed : { false, true }) {
+			Renderer::State terminal;
+			Require(terminal.reconstructionExperiment_.Configure(GuidedReconstructionOverride::Basic, 4, 1), "Comparison setup failed");
+			(void)terminal.reconstructionExperiment_.Resolve(1, 1);
+			terminal.failureLatched_ = failed;
+			if (!failed)
+				terminal.reconstructionExperiment_.Cancel();
+			RendererApplyOutcome outcome;
+			terminal.FinishApplyLocked(outcome);
+			Require(outcome.reconstructionHistoryReset && terminal.reconstructionExperiment_.Status().mode == GuidedReconstructionOverride::Auto,
+				"Failure or optional fallback deferred its history reset");
+		}
+#endif
 		const auto queriesBeforeRepeat = memoryQueries;
 		unexpected.QuarantineAfterUnexpectedFailureLocked(RendererStage::FeatureEvaluate, 1, true, 0);
 		Require(memoryQueries == queriesBeforeRepeat, "exception quarantine repeats diagnostics");

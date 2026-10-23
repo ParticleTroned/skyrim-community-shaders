@@ -56,6 +56,8 @@ int main(int argc, char** argv)
 		assert(nr.at("neuralRenderingMode") == 2);
 		assert(nr.at("neuralRenderingInsertionPoint") == 0);
 		assert(nr.at("neuralRenderingNetwork") == 0);
+		assert(nr.at("neuralRenderingReconstructionFilter") == 0);
+		assert(nr.at("neuralRenderingGuidedReconstruction") == false);
 		assert(preset.at("Terrain Blending").at("LandscapeSeams") == 0);
 		assert(preset.at("Performance Overlay").at("ShowRenderTargets") == false);
 		const auto& shadowCulling = preset.at("Light Limit Fix").at("ShadowCulling");
@@ -103,7 +105,7 @@ int main(int argc, char** argv)
 		}
 	}
 	for (const auto presetId : { "csx-unified-performance", "csx-unified-balanced", "csx-unified-quality" }) {
-		for (const auto revision : { 15u, 16u, 17u, 18u }) {
+		for (auto revision = 15u; revision < PresetCompatibility::kSettingsContractRevision; ++revision) {
 			auto legacy = CompatiblePreset();
 			auto& marker = legacy["Preset Compatibility"];
 			marker["presetId"] = presetId;

@@ -12,6 +12,7 @@ set(_nr_shader_files
     ColorPrepareCS.hlsl
     ColorReconstructCS.hlsl
     ModelResolutionCommon.hlsli
+    ModelResolutionGuided.hlsli
     ModelResolutionCoverageCS.hlsl
     ModelResolutionStorage.hlsli
     ModelResolutionPrepareCS.hlsl

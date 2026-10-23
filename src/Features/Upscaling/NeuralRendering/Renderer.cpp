@@ -329,6 +329,7 @@ namespace NeuralRendering
 				left.insertionPoint == right.insertionPoint &&
 				left.featureUpscaling == right.featureUpscaling &&
 				left.modelResolutionPercent == right.modelResolutionPercent &&
+				left.reconstructionFilter == right.reconstructionFilter &&
 				left.pressureResolutionEnabled == right.pressureResolutionEnabled &&
 				left.parallelEyes == right.parallelEyes &&
 				left.renderingMode == right.renderingMode &&
@@ -742,6 +743,9 @@ namespace NeuralRendering
 		MemoryConservationPolicy memoryConservation_{};
 		MemoryRecoveryPolicy memoryRecovery_{};
 		MemoryResolutionPolicy memoryResolution_{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		GuidedReconstructionExperiment reconstructionExperiment_{};
+#endif
 		static_assert(std::atomic_uint32_t::is_always_lock_free);
 		std::atomic_uint32_t modelResolutionCeiling_{ kMaximumModelResolutionPercent };
 		void PublishModelResolutionCeilingLocked() noexcept
@@ -891,6 +895,15 @@ namespace NeuralRendering
 						capture.valid = false;
 				}
 			}
+		}
+		void FinishApplyLocked(RendererApplyOutcome& outcome) noexcept
+		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (failureLatched_ || quarantined_)
+				reconstructionExperiment_.Cancel();
+			outcome.reconstructionHistoryReset |= reconstructionExperiment_.ConsumeChange();
+#endif
+			FinishCapture(outcome);
 		}
 		mutable std::mutex mutex_;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -1109,6 +1122,8 @@ namespace NeuralRendering
 			return fail("feature-slot generation must be nonzero");
 		if (!IsValidInsertionPoint(a_args.insertionPoint))
 			return fail("Feature 18 insertion point is invalid");
+		if (!IsValidReconstructionFilter(a_args.reconstructionFilter))
+			return fail("NR reconstruction filter is invalid");
 		if (!IsValidModelResolutionPercent(a_args.modelResolutionPercent))
 			return fail("NR model resolution must be an integer percentage from 30 to 100");
 		if (colorConfiguration_.Enabled() &&
@@ -1567,9 +1582,12 @@ namespace NeuralRendering
 			snapshot_.generation = a_args.generation;
 			snapshot_.insertionPoint = a_args.insertionPoint;
 			snapshot_.modelResolutionPercent = a_args.modelResolutionPercent;
+			snapshot_.reconstructionFilter = a_args.reconstructionFilter;
 			snapshot_.modelSharedInputs = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			snapshot_.modelOutputSelected = false;
+			snapshot_.guidedReconstruction = {};
+			snapshot_.reconstructionPrepared = false;
 			diagnosticSourceTransaction_ = a_args.executionContext.sourceTransactionId;
 #endif
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -2025,6 +2043,9 @@ namespace NeuralRendering
 		bool a_applyFailure,
 		std::uint64_t a_failuresBefore) noexcept
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		reconstructionExperiment_.Cancel();
+#endif
 		LogFailureDiagnosticsLocked(a_stage, E_FAIL, a_slot);
 		snapshot_.stallRecovery.Cancel();
 		memoryRetirement_.Released();
@@ -2257,6 +2278,10 @@ namespace NeuralRendering
 
 	void Renderer::State::FinishMemoryResolutionLocked(std::span<const RendererApplyArgs> args, bool succeeded)
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (!succeeded)
+			reconstructionExperiment_.Cancel();
+#endif
 		if (succeeded && !args.empty()) {
 			for (const auto& arg : args)
 				successfulResolutionPercents_[arg.featureSlot] = arg.modelResolutionPercent;
@@ -3194,8 +3219,11 @@ namespace NeuralRendering
 		// A backend identity change retires its slots; staged proxies survive that reset.
 		const bool stableBackend = !device_ || (SameIdentity(device_.Get(), first.device) && SameIdentity(context_.Get(), first.context));
 		const bool sharedTargets = stableBackend && ModelResolution::CanUseSharedTargets(args,
-														colorConfiguration_.Enabled(), colorConfiguration_.experiments.CompactInputsEnabled());
+														colorConfiguration_.experiments.CompactInputsEnabled());
+		const auto sharing = !sharedTargets ? ModelResolution::Sharing::Private : colorConfiguration_.Enabled() ? ModelResolution::Sharing::Guides :
+		                                                                                                          ModelResolution::Sharing::All;
 		bool sharedInputsPrepared = false;
+		ModelResolution::Batch batch;
 		SetRequestTelemetryLocked(first);
 		const SKSE::stl::scope_exit restoreTelemetry([&] {
 			if constexpr (kDevelopmentDiagnostics) {
@@ -3206,9 +3234,12 @@ namespace NeuralRendering
 				const auto extent = projected ? UpscalingDLSS::Extent{ telemetryProxy.outputWidth, telemetryProxy.outputHeight } : UpscalingDLSS::Extent{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				snapshot_.modelOutputSelected = outcome.WasOutputSelected(observed.featureSlot);
+				snapshot_.guidedReconstruction = batch.reconstructionDecision;
+				snapshot_.reconstructionPrepared = batch.count != 0;
 				snapshot_.packedCropLayout = projected && telemetryProxy.modelResolutionHistory ? telemetryProxy.modelResolutionHistory->packedCrops : PackedCropLayout{};
 #endif
 				snapshot_.modelResolutionPercent = observed.modelResolutionPercent;
+				snapshot_.reconstructionFilter = observed.reconstructionFilter;
 				snapshot_.modelSharedInputs = sharedInputsPrepared;
 				snapshot_.modelSourceWidth = observed.outputWidth;
 				snapshot_.modelSourceHeight = observed.outputHeight;
@@ -3250,7 +3281,7 @@ namespace NeuralRendering
 				proxy.computeSubrect, UpscalingDLSS::BuildMotionVectorPixelScale(proxy.viewportCrop), proxy.featureUpscaling);
 			FinalizeResourceKeysLocked(proxy, resource);
 		}
-		const auto additional = modelResolution_.AdditionalBytes(args, sharedTargets);
+		const auto additional = modelResolution_.AdditionalBytes(args, sharing);
 		if (!additional)
 			return FailLocked(RendererStage::Validation, E_INVALIDARG,
 				"NR model-resolution allocation size could not be established", first.featureSlot, false);
@@ -3286,16 +3317,24 @@ namespace NeuralRendering
 				const auto retain = [](const SharedTexture& texture) {
 					return Color::Texture{ texture.resource11, texture.srv11, texture.uav11 };
 				};
-				targets[index] = { retain(slot.color), retain(slot.depth), retain(slot.motionVectors), retain(slot.output) };
+				targets[index].depth = retain(slot.depth);
+				targets[index].motion = retain(slot.motionVectors);
+				if (sharing == ModelResolution::Sharing::All) {
+					targets[index].color = retain(slot.color);
+					targets[index].output = retain(slot.output);
+				}
 			}
 		}
-		ModelResolution::Batch batch;
 		HRESULT result = S_OK;
 		activeStage_ = RendererStage::ResourceCreation;
 		if (!modelResolution_.Prepare(args, batch, result, sharedTargets ? std::span(targets.data(), args.size()) : std::span<const ModelResolution::Targets>{}))
 			return FailLocked(RendererStage::ResourceCreation, result,
 				"NR model-resolution input preparation failed; original render input retained", first.featureSlot, true);
 		sharedInputsPrepared = sharedTargets;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (batch.reconstructionDecision.reason == GuidedReconstructionReason::ShaderUnavailable)
+			reconstructionExperiment_.Cancel();
+#endif
 		const bool nativeSucceeded = sequential ? ApplySequentialStereoLocked(batch.arguments, outcome, true) :
 		                                          ApplyBatchLocked(std::span(batch.arguments.data(), batch.count), outcome, true);
 		if (!nativeSucceeded)
@@ -3592,7 +3631,8 @@ namespace NeuralRendering
 		}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		if (execution && SameIdentity(a_args.front().colorInput, slots.front()->color.resource11.Get()))
+		if (execution && SameIdentity(a_args.front().depthGuide, slots.front()->depth.resource11.Get()) &&
+			SameIdentity(a_args.front().motionVectors, slots.front()->motionVectors.resource11.Get()))
 			MergeModelPreparationEvidenceLocked(*execution);
 #endif
 
@@ -4379,7 +4419,7 @@ namespace NeuralRendering
 			state_->FinishMemoryRecoveryLocked(succeeded, outcome);
 			if (succeeded)
 				Runtime::Instance().AcknowledgePresentedFeatures(outcome.evaluationSucceededFeatureSlotMask);
-			state_->FinishCapture(outcome);
+			state_->FinishApplyLocked(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -4392,7 +4432,7 @@ namespace NeuralRendering
 				failureFeatureSlot,
 				true,
 				failuresBefore);
-			state_->FinishCapture(outcome);
+			state_->FinishApplyLocked(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -4426,7 +4466,7 @@ namespace NeuralRendering
 				Runtime::Instance().AcknowledgePresentedFeatures(outcome.evaluationSucceededFeatureSlotMask);
 			if (!outcome.memoryPressureBypass)
 				Increment(succeeded ? state_->snapshot_.counters.stereoSuccesses : state_->snapshot_.counters.stereoFailures);
-			state_->FinishCapture(outcome);
+			state_->FinishApplyLocked(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -4440,7 +4480,7 @@ namespace NeuralRendering
 				true,
 				failuresBefore);
 			Increment(state_->snapshot_.counters.stereoFailures);
-			state_->FinishCapture(outcome);
+			state_->FinishApplyLocked(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -4471,7 +4511,7 @@ namespace NeuralRendering
 			state_->FinishMemoryRecoveryLocked(succeeded, outcome);
 			if (succeeded)
 				Runtime::Instance().AcknowledgePresentedFeatures(outcome.evaluationSucceededFeatureSlotMask);
-			state_->FinishCapture(outcome);
+			state_->FinishApplyLocked(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -4484,7 +4524,7 @@ namespace NeuralRendering
 				failureFeatureSlot,
 				true,
 				failuresBefore);
-			state_->FinishCapture(outcome);
+			state_->FinishApplyLocked(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
 			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
@@ -4502,6 +4542,9 @@ namespace NeuralRendering
 	bool Renderer::Reset(bool a_clearTransportRejections, BackendRetirementPolicy a_policy)
 	{
 		std::scoped_lock lock(state_->mutex_);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		state_->reconstructionExperiment_.Cancel();
+#endif
 		try {
 			const bool reset = state_->ResetLocked(false, false, a_policy);
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -4821,6 +4864,9 @@ namespace NeuralRendering
 	{
 		std::scoped_lock lock(state_->mutex_);
 		auto result = state_->SnapshotLocked();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		result.reconstructionOverride = state_->reconstructionExperiment_.Status();
+#endif
 		const auto parallel = state_->interop_.GetParallelStatus();
 		result.parallelEyesAvailable = parallel.available;
 		result.parallelEyesDisabled = parallel.disabled;
@@ -4832,6 +4878,20 @@ namespace NeuralRendering
 	{
 		return state_->modelResolutionCeiling_.load(std::memory_order_relaxed);
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	bool Renderer::ConfigureReconstructionOverride(GuidedReconstructionOverride mode, std::uint32_t frames, std::uint64_t expectedRevision)
+	{
+		std::scoped_lock lock(state_->mutex_);
+		return state_->reconstructionExperiment_.Configure(mode, frames, expectedRevision);
+	}
+
+	std::pair<GuidedReconstructionOverride, bool> Renderer::ResolveReconstructionOverride(std::uint32_t frame, std::uint64_t generation)
+	{
+		std::scoped_lock lock(state_->mutex_);
+		return state_->reconstructionExperiment_.Resolve(frame, generation);
+	}
+#endif
 
 	Util::GpuMemoryBudget::Reservation Renderer::ReserveOutputAllocation(ID3D11Device* device, std::uint64_t bytes)
 	{

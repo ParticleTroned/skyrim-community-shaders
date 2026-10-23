@@ -16,14 +16,78 @@ Texture2D<float> SelectionMask : register(t4);
 #endif
 RWTexture2D<float4> Result : register(u0);
 
-bool ReadResidual(int2 coordinate, uint4 bounds, out float3 residual)
+bool ReadResidual(int2 coordinate, uint4 bounds, out float3 residual, out float3 original)
 {
 	coordinate = clamp(coordinate, int2(bounds.xy), int2(bounds.xy + bounds.zw - 1u));
-	float3 original = ProxyColor.Load(int3(coordinate, 0)).rgb;
+	original = ProxyColor.Load(int3(coordinate, 0)).rgb;
 	float3 neural = ProxyNeural.Load(int3(coordinate, 0)).rgb;
 	residual = neural - original;
 	return all(isfinite(original)) && all(isfinite(neural)) && all(isfinite(residual));
 }
+
+bool ReadResidual(int2 coordinate, uint4 bounds, out float3 residual)
+{
+	float3 original;
+	return ReadResidual(coordinate, bounds, residual, original);
+}
+
+bool BilinearResidual(float2 position, uint4 bounds, out float3 residual)
+{
+	int2 base = int2(floor(position));
+	float2 phase = frac(position);
+	float3 r00, r10, r01, r11;
+	bool valid = ReadResidual(base, bounds, r00);
+	valid = ReadResidual(base + int2(1, 0), bounds, r10) && valid;
+	valid = ReadResidual(base + int2(0, 1), bounds, r01) && valid;
+	valid = ReadResidual(base + int2(1, 1), bounds, r11) && valid;
+	residual = lerp(lerp(r00, r10, phase.x), lerp(r01, r11, phase.x), phase.y);
+	return valid;
+}
+
+// The three-lobe window is sinc(x) * sinc(x / 3); each axis is normalized below.
+float Lanczos3Weight(float distance)
+{
+	const float x = abs(distance);
+	if (x < 1e-5)
+		return 1.0;
+	if (x >= 3.0)
+		return 0.0;
+	const float angle = 3.14159265358979323846 * x;
+	return (sin(angle) / angle) * (sin(angle / 3.0) / (angle / 3.0));
+}
+
+bool Lanczos3Residual(float2 position, uint4 bounds, out float3 residual)
+{
+	const int2 origin = int2(floor(position)) - 2;
+	float weightsX[6], weightsY[6];
+	float2 normalization = 0.0;
+	[unroll] for (int i = 0; i < 6; ++i)
+	{
+		weightsX[i] = Lanczos3Weight(position.x - float(origin.x + i));
+		weightsY[i] = Lanczos3Weight(position.y - float(origin.y + i));
+		normalization += float2(weightsX[i], weightsY[i]);
+	}
+	residual = 0.0;
+	bool valid = true;
+	// Clamp every tap to this eye's owned rectangle or packed tile.
+	[unroll] for (int y = 0; y < 6; ++y)
+	{
+		float3 row = 0.0;
+		[unroll] for (int x = 0; x < 6; ++x)
+		{
+			float3 tapResidual;
+			valid = ReadResidual(origin + int2(x, y), bounds, tapResidual) && valid;
+			row += tapResidual * weightsX[x];
+		}
+		residual += row * weightsY[y];
+	}
+	residual /= normalization.x * normalization.y;
+	return valid && all(isfinite(residual));
+}
+
+#ifdef GUIDED_NR_RECONSTRUCTION
+#	include "Upscaling/NeuralRendering/ModelResolutionGuided.hlsli"
+#endif
 
 float CentralWeight(float2 uv)
 {
@@ -94,14 +158,15 @@ float CentralWeight(float2 uv)
 		position = (float2(pixel) + 0.5) * float2(UnpackedSize) / float2(SourceSize) - 0.5 + float2(tile.packed.xy) - float2(tile.model.xy);
 		bounds = tile.packed;
 	}
-	int2 base = int2(floor(position));
-	float2 phase = frac(position);
-	float3 r00, r10, r01, r11;
-	bool valid = ReadResidual(base, bounds, r00);
-	valid = ReadResidual(base + int2(1, 0), bounds, r10) && valid;
-	valid = ReadResidual(base + int2(0, 1), bounds, r01) && valid;
-	valid = ReadResidual(base + int2(1, 1), bounds, r11) && valid;
-	float3 residual = lerp(lerp(r00, r10, phase.x), lerp(r01, r11, phase.x), phase.y);
+	float3 residual;
+	bool valid;
+#ifdef GUIDED_NR_RECONSTRUCTION
+	valid = GuidedResidual(position, bounds, source.rgb, residual);
+#else
+	[branch] if (ReconstructionFilter == 1u)
+		valid = Lanczos3Residual(position, bounds, residual);
+	else valid = BilinearResidual(position, bounds, residual);
+#endif
 	// Reconstruct only the matched change; the original image retains its fine detail.
 	precise float3 candidate = source.rgb + residual * weight;
 	valid = valid && all(isfinite(candidate));

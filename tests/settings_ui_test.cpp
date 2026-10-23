@@ -413,6 +413,8 @@ struct Upscaling
 	struct Settings
 	{
 		uint32_t neuralRenderingModelResolutionPercent = 100;
+		uint32_t neuralRenderingReconstructionFilter = 0;
+		bool neuralRenderingGuidedReconstruction = false;
 		bool neuralRenderingPressureResolutionEnabled = true;
 		bool neuralCharacterPackedCrops = false;
 		bool neuralCharacterRenderingEnabled = false;

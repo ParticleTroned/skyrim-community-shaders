@@ -227,7 +227,9 @@ class MemoryRecoveryContracts(unittest.TestCase):
         for entry in ("Apply", "ApplyStereo", "ApplySequentialStereo"):
             source = body(RENDERER, f"bool Renderer::{entry}(")
             self.assertLess(source.index(f"state_->{entry}Locked("), source.index("FinishMemoryRecoveryLocked(succeeded, outcome)"))
-            self.assertLess(source.index("FinishMemoryRecoveryLocked(succeeded, outcome)"), source.index("state_->FinishCapture("))
+            self.assertLess(source.index("FinishMemoryRecoveryLocked(succeeded, outcome)"), source.index("state_->FinishApplyLocked("))
+            self.assertEqual(source.count("state_->FinishApplyLocked(outcome)"), 2)
+        self.assertIn("FinishCapture(outcome)", body(RENDERER, "void FinishApplyLocked("))
         per_slot = body(RENDERER, "void Renderer::State::SucceedLocked(")
         self.assertFalse("memoryRecovery_.Succeeded(" in per_slot)
 

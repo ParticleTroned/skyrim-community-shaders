@@ -10,6 +10,8 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 	args.renderingMode = GetNeuralRenderingMode();
 	args.modelResolutionPercent = NeuralRendering::EffectiveModelResolutionPercent(
 		*args.renderingMode, settings.neuralRenderingModelResolutionPercent);
+	args.reconstructionFilter = NeuralRendering::ClampReconstructionFilter(settings.neuralRenderingReconstructionFilter);
+	args.guidedReconstructionEnabled = settings.neuralRenderingGuidedReconstruction;
 	args.pressureResolutionEnabled = settings.neuralRenderingPressureResolutionEnabled;
 	args.parallelEyes = globals::game::isVR && settings.neuralRenderingParallelEyes && settings.neuralRenderingBatchedStereo;
 	args.centralArea = {
@@ -23,6 +25,10 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 		args.centralArea.offset = { offset.x, offset.y };
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	const auto [reconstructionOverride, reconstructionChanged] = NeuralRendering::Renderer::Instance().ResolveReconstructionOverride(args.frameId, args.generation);
+	args.reconstructionOverride = reconstructionOverride;
+	if (reconstructionChanged)
+		RequestHistoryReset();
 	SetNeuralCaptureExecutionContext(args, dlssCrop, colorOrigin, guideOrigin);
 #endif
 }

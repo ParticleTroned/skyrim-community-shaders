@@ -367,9 +367,10 @@ namespace
 			}
 		}
 	}
-	void CheckSharedAdapter(ID3D11Device* device, ID3D11DeviceContext* context)
+	void CheckSharedAdapter(ID3D11Device* device, ID3D11DeviceContext* context, bool guidesOnly)
 	{
 		using namespace NeuralRendering;
+		const auto sharing = guidesOnly ? ModelResolution::Sharing::Guides : ModelResolution::Sharing::All;
 		constexpr Size source{ 17, 11 };
 		std::vector<Pixel> color(source[0] * source[1]), right(color.size());
 		std::vector<float> depths(color.size());
@@ -408,9 +409,8 @@ namespace
 				args[1].featureSlot = 3;
 				args[1].colorInput = rightInput.texture.Get();
 				args[1].colorOutput = rightOutput.texture.Get();
-				Require(ModelResolution::CanUseSharedTargets(args, false, false), "Raw A/B/C inputs must accept shared preparation");
-				Require(!ModelResolution::CanUseSharedTargets(args, true, false) && !ModelResolution::CanUseSharedTargets(args, false, true),
-					"Color processing and compact recovery must retain staged inputs");
+				Require(ModelResolution::CanUseSharedTargets(args, false), "Raw A/B/C inputs must accept shared preparation");
+				Require(!ModelResolution::CanUseSharedTargets(args, true), "Compact recovery must retain staged inputs");
 				ModelResolution staged, shared;
 				RendererApplyArgs projected;
 				Require(ModelResolution::Project(args[0], projected) && projected.reset == input.reset &&
@@ -428,15 +428,19 @@ namespace
 						own(Texture(device, model, DXGI_FORMAT_R32_FLOAT, std::vector(count, -1.0f))),
 						own(Texture(device, model, DXGI_FORMAT_R32G32_FLOAT, std::vector(count, Motion{ -1, -1 }))),
 						own(Texture(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(count, sentinel))) };
+					if (guidesOnly) {
+						target.color = {};
+						target.output = {};
+					}
 				}
-				const auto retained = 2u * source[0] * source[1] * sizeof(Pixel);
-				Require(shared.AdditionalBytes(args, true) == retained, "Shared aliases must not enter private allocation admission");
+				const auto retained = (2u * source[0] * source[1] + (guidesOnly ? 4u * count : 0u)) * sizeof(Pixel);
+				Require(shared.AdditionalBytes(args, sharing) == retained, "Shared aliases must not enter private allocation admission");
 				auto bad = targets;
-				bad[1].color.srv = bad[1].depth.srv;
+				bad[1].motion.srv = bad[1].depth.srv;
 				Require(!shared.Prepare(args, invalid, result, bad) && result == E_INVALIDARG && invalid.count == 0,
 					"Mismatched right-eye view must reject the whole batch before preparation");
-				const auto untouched = Texture(targets[0].color, model).Read<Pixel>(device, context);
-				Require(std::ranges::all_of(untouched, [](const auto& value) { return value == sentinel; }),
+				const auto untouched = Texture(targets[0].depth, model).Read<float>(device, context);
+				Require(std::ranges::all_of(untouched, [](const auto& value) { return value == -1.0f; }),
 					"Invalid right-eye target dispatched left-eye preparation");
 				for (bool selectionSource : { false, true }) {
 					auto aliased = args;
@@ -446,9 +450,12 @@ namespace
 						aliased[1].controlMask = targets[0].depth.resource;
 					Require(!shared.Prepare(aliased, invalid, result, targets) && invalid.count == 0,
 						"An actor source aliased a mutable shared model target");
-					Require(Texture(targets[0].color, model).Read<Pixel>(device, context) == untouched,
+					Require(Texture(targets[0].depth, model).Read<float>(device, context) == untouched,
 						"Aliased actor input dispatched the other eye before rejection");
 				}
+				bad = targets;
+				bad[1].color = guidesOnly ? own(Texture(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(count, sentinel))) : Color::Texture{};
+				Require(!shared.Prepare(args, invalid, result, bad), "Mixed colour ownership must reject both eyes");
 				bad = targets;
 				bad[1] = bad[0];
 				Require(!shared.Prepare(args, invalid, result, bad), "Aliased eyes must not share mutable model targets");
@@ -470,27 +477,29 @@ namespace
 					Require(!shared.Prepare(malformed, invalid, result, targets) && result == E_INVALIDARG && invalid.count == 0,
 						"Malformed shared-input batch reached preparation");
 				}
-				Require(Texture(targets[0].color, model).Read<Pixel>(device, context) == untouched,
+				Require(Texture(targets[0].depth, model).Read<float>(device, context) == untouched,
 					"Rejected batch changed a valid eye before preflight completed");
 				ModelResolution::Batch mono;
 				const auto monoArgs = std::span(args.data(), 1);
 				Require(shared.Prepare(monoArgs, mono, result, std::span(targets.data(), 1)) && mono.count == 1,
 					"Direct mono preparation failed");
-				Require(Texture(targets[1].color, model).Read<Pixel>(device, context) == untouched,
+				Require(Texture(targets[1].depth, model).Read<float>(device, context) == untouched,
 					"Mono preparation touched the unused eye");
 				Require(shared.Prepare(args, candidate, result, targets), "Direct shared-target preparation failed");
-				Require(shared.AdditionalBytes(args, true) == 0 && shared.RetainedBytes(2).value() + shared.RetainedBytes(3).value() == retained,
+				Require(shared.AdditionalBytes(args, sharing) == 0 && shared.RetainedBytes(2).value() + shared.RetainedBytes(3).value() == retained,
 					"Shared-target cache retains duplicate model-sized allocations");
-				const auto previousColor = candidate.targets[0].color.resource;
+				const auto previousMotion = candidate.targets[0].motion.resource;
 				const auto previousReconstruction = candidate.resources[0];
-				targets[0].color = own(Texture(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(count, sentinel)));
-				Require(shared.Prepare(args, candidate, result, targets) && candidate.arguments[0].colorInput != previousColor.Get() &&
-							candidate.resources[0] == previousReconstruction && shared.AdditionalBytes(args, true) == 0,
+				targets[0].motion = own(Texture(device, model, DXGI_FORMAT_R32G32_FLOAT, std::vector(count, Motion{ -1, -1 })));
+				Require(shared.Prepare(args, candidate, result, targets) && candidate.arguments[0].motionVectors != previousMotion.Get() &&
+							candidate.resources[0] == previousReconstruction && shared.AdditionalBytes(args, sharing) == 0,
 					"Replaced shared views must bind without retaining stale targets or reallocating reconstruction");
 				const auto rect = baseline.arguments[0].computeSubrect;
 				for (std::size_t eye = 0; eye < args.size(); ++eye) {
-					Require(candidate.arguments[eye].colorInput == targets[eye].color.resource.Get() &&
-								candidate.arguments[eye].colorOutput == targets[eye].output.resource.Get(),
+					Require(candidate.arguments[eye].depthGuide == targets[eye].depth.resource.Get() &&
+								candidate.arguments[eye].motionVectors == targets[eye].motion.resource.Get() &&
+								(guidesOnly ? candidate.targets[eye].color.resource && candidate.targets[eye].output.resource :
+											  candidate.arguments[eye].colorInput == targets[eye].color.resource.Get() && candidate.arguments[eye].colorOutput == targets[eye].output.resource.Get()),
 						"Shared target identities were replaced");
 					const auto oldColor = Texture(baseline.targets[eye].color, model).Read<Pixel>(device, context);
 					const auto newColor = Texture(candidate.targets[eye].color, model).Read<Pixel>(device, context);
@@ -551,9 +560,9 @@ namespace
 							eye.providerBlending = true;
 						}
 					}
-					Require(ModelResolution::CanUseSharedTargets(actor, false, false), "Raw actors lost shared model preparation");
+					Require(ModelResolution::CanUseSharedTargets(actor, false), "Raw actors lost shared model preparation");
 					const auto expectedBytes = retained + (providerBlending ? 2u * model[0] * model[1] : 0u);
-					Require(shared.AdditionalBytes(actor, true) == expectedBytes,
+					Require(shared.AdditionalBytes(actor, sharing) == expectedBytes,
 						"Shared actor accounting lost the private positive mask or counted aliased model textures");
 				}
 			}
@@ -607,9 +616,15 @@ namespace
 				Require(adapter.Prepare(args, batch, result), "Final-scene NR rejected lower-resolution guides");
 				ModelResolution shared;
 				ModelResolution::Batch direct;
-				Require(ModelResolution::CanUseSharedTargets(args, false, false) &&
+				Require(ModelResolution::CanUseSharedTargets(args, false) &&
 							shared.Prepare(args, direct, result, std::span(batch.targets.data(), 1)),
 					"Shared A/B preparation rejected proportional guide targets");
+				const std::array guideTargets{ ModelResolution::Targets{ {}, batch.targets[0].depth, batch.targets[0].motion, {} } };
+				Require(shared.Prepare(args, direct, result, guideTargets) &&
+							direct.arguments[0].depthGuide == batch.arguments[0].depthGuide &&
+							direct.arguments[0].colorInput != batch.arguments[0].colorInput &&
+							shared.RetainedBytes(input.featureSlot) == expectedBytes - std::uint64_t(guideExtent.width) * guideExtent.height * (sizeof(float) + sizeof(Motion)),
+					"Guide sharing lost independent guide dimensions, private colour or replacement accounting");
 				const auto& projected = batch.arguments[0];
 				Require(!projected.reset && projected.featureUpscaling &&
 							projected.modelResolutionHistory == ModelResolutionHistory{ input.viewportCrop, percent, input.computeSubrect },
@@ -687,7 +702,7 @@ namespace
 		ModelResolution::Batch first, second;
 		HRESULT result = S_OK;
 		const auto maskedArgs = std::span(&input, 1);
-		Require(ModelResolution::CanUseSharedTargets(maskedArgs, false, false) && masked.Prepare(maskedArgs, first, result),
+		Require(ModelResolution::CanUseSharedTargets(maskedArgs, false) && masked.Prepare(maskedArgs, first, result),
 			"Scaled temporal actors lost shared eligibility or private selection preparation");
 		input.controlMask = replacementSelection.texture;
 		input.actorSelection = replacementSelection.srv;
@@ -764,7 +779,7 @@ namespace
 					args[1].colorOutput = right.texture.Get();
 					HRESULT result = S_OK;
 					ModelResolution::Batch batch;
-					Require(ModelResolution::Required(input) && ModelResolution::CanUseSharedTargets(args, false, false), "Independent central area lost the raw shared path at 100% model resolution");
+					Require(ModelResolution::Required(input) && ModelResolution::CanUseSharedTargets(args, false), "Independent central area lost the raw shared path at 100% model resolution");
 					Require(adapter.Prepare(args, batch, result), "Central area preparation failed");
 					const Size model{ batch.arguments[0].outputWidth, batch.arguments[0].outputHeight };
 					for (unsigned eye = 0; eye < 2; ++eye) {
@@ -929,7 +944,9 @@ namespace
 				selected[(40 + kPackedCropSupportPixels) * source[0] + 32 + kPackedCropSupportPixels] = 255;
 			Texture selection(device, source, DXGI_FORMAT_R8_UNORM, selected);
 			for (unsigned percent : { 30u, 75u, 100u })
-				for (bool sharedTargets : { false, true }) {
+				for (auto sharing : { ModelResolution::Sharing::Private, ModelResolution::Sharing::Guides, ModelResolution::Sharing::All }) {
+					const bool sharedTargets = sharing != ModelResolution::Sharing::Private;
+					const bool sharedColor = sharing == ModelResolution::Sharing::All;
 					std::array<std::vector<Pixel>, 2> colors;
 					for (unsigned eye = 0; eye < 2; ++eye) {
 						colors[eye].resize(source[0] * source[1]);
@@ -988,7 +1005,7 @@ namespace
 					HRESULT result = S_OK;
 					std::array<ModelResolution::Targets, 2> targets{};
 					if (sharedTargets) {
-						Require(ModelResolution::CanUseSharedTargets(args, false, false), "Packed actors lost raw shared eligibility");
+						Require(ModelResolution::CanUseSharedTargets(args, false), "Packed actors lost raw shared eligibility");
 						const auto own = [](const Texture& texture) { return Color::Texture{ texture.texture, texture.srv, texture.uav }; };
 						for (unsigned eye = 0; eye < 2; ++eye) {
 							RendererApplyArgs projected;
@@ -1000,6 +1017,12 @@ namespace
 								own(Texture(device, size, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(size[0] * size[1], sentinel))) };
 						}
 					}
+					if (!sharedColor)
+						for (auto& target : targets) {
+							target.color = {};
+							target.output = {};
+						}
+
 					const auto prepare = [&](ModelResolution::Batch& prepared) {
 						return adapter.Prepare(args, prepared, result, sharedTargets ? std::span<const ModelResolution::Targets>(targets) : std::span<const ModelResolution::Targets>{});
 					};
@@ -1022,24 +1045,24 @@ namespace
 					}
 					for (auto& input : args) input.packedCrops = {};
 					ModelResolution::Batch single;
-					const auto bytes = adapter.AdditionalBytes(args, sharedTargets);
+					const auto bytes = adapter.AdditionalBytes(args, sharing);
 					Require(bytes && *bytes && prepare(single), "Initial single-region preparation failed");
 					const auto compileCount = AdapterCompiler::calls;
 					args = packedArgs;
-					if (sharedTargets)
+					if (sharedColor)
 						for (auto& target : targets) context->ClearUnorderedAccessViewFloat(target.color.uav.Get(), sentinel.data());
-					Require(adapter.AdditionalBytes(args, sharedTargets) == 0 && prepare(batch) && AdapterCompiler::calls == compileCount,
+					Require(adapter.AdditionalBytes(args, sharing) == 0 && prepare(batch) && AdapterCompiler::calls == compileCount,
 						"First atlas admission allocated or compiled on a moving-actor frame");
 					for (unsigned eye = 0; eye < 2; ++eye)
 						Require(batch.targets[eye].color.resource == single.targets[eye].color.resource &&
 									batch.arguments[eye].viewportCrop == single.arguments[eye].viewportCrop,
 							"First atlas admission replaced single-region capacity");
-					Require(adapter.AdditionalBytes(args, sharedTargets) == 0 && adapter.RetainedBytes(0).value() + adapter.RetainedBytes(1).value() == *bytes,
+					Require(adapter.AdditionalBytes(args, sharing) == 0 && adapter.RetainedBytes(0).value() + adapter.RetainedBytes(1).value() == *bytes,
 						"Packed allocation reuse or replacement-peak accounting changed");
 					if (sharedTargets) {
 						std::uint64_t expectedBytes = 2u * std::uint64_t(source[0]) * source[1] * sizeof(Pixel);
 						for (std::size_t eye = 0; eye < batch.count; ++eye)
-							expectedBytes += std::uint64_t(batch.arguments[eye].outputWidth) * batch.arguments[eye].outputHeight;
+							expectedBytes += std::uint64_t(batch.arguments[eye].outputWidth) * batch.arguments[eye].outputHeight * (1u + (sharedColor ? 0u : 2u * sizeof(Pixel)));
 						Require(*bytes == expectedBytes, "Shared packed accounting duplicated native model targets or omitted positive masks");
 					}
 					Require(batch.arguments[0].colorInput != batch.arguments[1].colorInput, "Eye atlases alias");
@@ -1054,7 +1077,8 @@ namespace
 						Check(projected.controlMask.As(&maskView.resource));
 						const auto maskPixels = Texture(maskView, size).Read<std::uint8_t>(device, context);
 						if (sharedTargets) {
-							Require(projected.colorInput == targets[eye].color.resource.Get() && projected.colorOutput == targets[eye].output.resource.Get(),
+							Require(projected.depthGuide == targets[eye].depth.resource.Get() && projected.motionVectors == targets[eye].motion.resource.Get() &&
+										(!sharedColor || (projected.colorInput == targets[eye].color.resource.Get() && projected.colorOutput == targets[eye].output.resource.Get())),
 								"Shared actor model targets were replaced");
 							Require(projected.controlMask != args[eye].controlMask && projected.controlMask.Get() != targets[eye].output.resource.Get() && projected.actorSelection,
 								"Positive actor selection no longer has independent private ownership");
@@ -1065,7 +1089,7 @@ namespace
 						for (unsigned y = 0; y < size[1]; ++y)
 							for (unsigned x = 0; x < size[0]; ++x) {
 								if (!contains(projected.computeSubrect, float(x), float(y))) {
-									if (sharedTargets)
+									if (sharedColor)
 										Require(pixels[y * size[0] + x] == sentinel, "Atlas touched unused backing pixels");
 									continue;
 								}
@@ -1174,7 +1198,7 @@ namespace
 								"Unpacked identity-scale fallback performed unnecessary model preparation");
 						}
 						ModelResolution::Batch transition;
-						Require(adapter.AdditionalBytes(args, sharedTargets) == 0 && prepare(transition) && AdapterCompiler::calls == compileCount,
+						Require(adapter.AdditionalBytes(args, sharing) == 0 && prepare(transition) && AdapterCompiler::calls == compileCount,
 							"Atlas/single/resize transition allocated or compiled");
 						for (unsigned eye = 0; eye < 2; ++eye) {
 							const auto& current = transition.arguments[eye];
@@ -1193,7 +1217,7 @@ namespace
 									"Layout transition preserved incompatible temporal identity");
 						}
 						adapter.ReleaseUnscaledSlots(args);
-						Require(adapter.AdditionalBytes(args, sharedTargets) == 0, "Fallback retired resident preparation");
+						Require(adapter.AdditionalBytes(args, sharing) == 0, "Fallback retired resident preparation");
 					}
 					args = transitionArgs;
 					const auto originalSources = args[0].packedCrops;
@@ -1203,7 +1227,7 @@ namespace
 						args[0].packedCrops.regions[1].height = crops.regions[1].height - (step % 2 ? 0u : 8u);
 						adapter.PlanPackedCrops(args);
 						ModelResolution::Batch moving;
-						Require(adapter.AdditionalBytes(args, sharedTargets) == 0 && prepare(moving) &&
+						Require(adapter.AdditionalBytes(args, sharing) == 0 && prepare(moving) &&
 									moving.targets[0].color.resource == batch.targets[0].color.resource &&
 									moving.targets[1].color.resource == batch.targets[1].color.resource,
 							"Changing actor extents within capacity rebuilt model textures");
@@ -1230,7 +1254,7 @@ namespace
 									!moved.arguments[0].modelResolutionHistory->packedCrops.count && moved.arguments[1].modelResolutionHistory->packedCrops.count,
 							"A one-eye packing fallback must retain a complete stereo transaction");
 						adapter.ReleaseUnscaledSlots(args);
-						Require(adapter.AdditionalBytes(args, sharedTargets) == 0, "An unpacked stereo peer reallocated every frame while packing was active");
+						Require(adapter.AdditionalBytes(args, sharing) == 0, "An unpacked stereo peer reallocated every frame while packing was active");
 						args[0] = original;
 						args[0].characterVisualIsolation = false;
 						Require(!ModelResolution::Required(args[0]), "Ordinary-scene input was packed without actor-only coverage");
@@ -1944,7 +1968,8 @@ int main()
 			CheckPackedAdapter(device.Get(), context.Get());
 			CheckCentralArea(device.Get(), context.Get());
 			CheckUpscaledGuides(device.Get(), context.Get());
-			CheckSharedAdapter(device.Get(), context.Get());
+			CheckSharedAdapter(device.Get(), context.Get(), false);
+			CheckSharedAdapter(device.Get(), context.Get(), true);
 			CheckSelectedAdapter(device.Get(), context.Get(), vr);
 			Shader prepare(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl", vr);
 			Shader reconstruct(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", vr);

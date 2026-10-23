@@ -3194,7 +3194,9 @@ namespace NeuralRendering
 		// A backend identity change retires its slots; staged proxies survive that reset.
 		const bool stableBackend = !device_ || (SameIdentity(device_.Get(), first.device) && SameIdentity(context_.Get(), first.context));
 		const bool sharedTargets = stableBackend && ModelResolution::CanUseSharedTargets(args,
-														colorConfiguration_.Enabled(), colorConfiguration_.experiments.CompactInputsEnabled());
+														colorConfiguration_.experiments.CompactInputsEnabled());
+		const auto sharing = !sharedTargets ? ModelResolution::Sharing::Private : colorConfiguration_.Enabled() ? ModelResolution::Sharing::Guides :
+		                                                                                                          ModelResolution::Sharing::All;
 		bool sharedInputsPrepared = false;
 		SetRequestTelemetryLocked(first);
 		const SKSE::stl::scope_exit restoreTelemetry([&] {
@@ -3250,7 +3252,7 @@ namespace NeuralRendering
 				proxy.computeSubrect, UpscalingDLSS::BuildMotionVectorPixelScale(proxy.viewportCrop), proxy.featureUpscaling);
 			FinalizeResourceKeysLocked(proxy, resource);
 		}
-		const auto additional = modelResolution_.AdditionalBytes(args, sharedTargets);
+		const auto additional = modelResolution_.AdditionalBytes(args, sharing);
 		if (!additional)
 			return FailLocked(RendererStage::Validation, E_INVALIDARG,
 				"NR model-resolution allocation size could not be established", first.featureSlot, false);
@@ -3286,7 +3288,12 @@ namespace NeuralRendering
 				const auto retain = [](const SharedTexture& texture) {
 					return Color::Texture{ texture.resource11, texture.srv11, texture.uav11 };
 				};
-				targets[index] = { retain(slot.color), retain(slot.depth), retain(slot.motionVectors), retain(slot.output) };
+				targets[index].depth = retain(slot.depth);
+				targets[index].motion = retain(slot.motionVectors);
+				if (sharing == ModelResolution::Sharing::All) {
+					targets[index].color = retain(slot.color);
+					targets[index].output = retain(slot.output);
+				}
 			}
 		}
 		ModelResolution::Batch batch;

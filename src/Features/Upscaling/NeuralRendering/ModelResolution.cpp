@@ -206,11 +206,13 @@ namespace NeuralRendering
 		{
 			UpscalingDLSS::Extent sourceSize{}, modelSize{}, modelGuideSize{};
 			DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN, outputFormat = DXGI_FORMAT_UNKNOWN, motionFormat = DXGI_FORMAT_UNKNOWN;
-			bool hasMask = false, sharedTargets = false, selectedOutput = false;
+			bool hasMask = false;
+			ModelResolution::Sharing sharing = ModelResolution::Sharing::Private;
+			bool selectedOutput = false;
 
 			bool operator==(const AllocationKey&) const = default;
 
-			static std::optional<AllocationKey> Read(const RendererApplyArgs& input, const RendererApplyArgs& projected, bool sharedTargets = false)
+			static std::optional<AllocationKey> Read(const RendererApplyArgs& input, const RendererApplyArgs& projected, ModelResolution::Sharing sharing = ModelResolution::Sharing::Private)
 			{
 				D3D11_TEXTURE2D_DESC color{}, output{}, motion{};
 				if (!ReadDescription(input.colorInput, color) || !ReadDescription(input.colorOutput, output) ||
@@ -220,22 +222,20 @@ namespace NeuralRendering
 					motion.Width != input.guideWidth || motion.Height != input.guideHeight)
 					return std::nullopt;
 				return AllocationKey{ { input.outputWidth, input.outputHeight }, { projected.outputWidth, projected.outputHeight }, { projected.guideWidth, projected.guideHeight },
-					color.Format, output.Format, motion.Format, input.controlMask != nullptr, sharedTargets, input.modelOutputSelection.has_value() };
+					color.Format, output.Format, motion.Format, input.controlMask != nullptr, sharing, input.modelOutputSelection.has_value() };
 			}
 
 			std::optional<std::uint64_t> Bytes() const noexcept
 			{
 				const auto fullOutput = selectedOutput ? std::optional<std::uint64_t>{ 0 } :
 				                                         LogicalTextureBytes(outputFormat, sourceSize.width, sourceSize.height);
-				if (sharedTargets) {
-					// Positive selection stays private while native protection stores its inverse.
-					const auto maskBytes = hasMask ? static_cast<std::uint64_t>(modelSize.width) * modelSize.height : 0u;
-					return fullOutput ? std::optional{ *fullOutput + maskBytes } : std::nullopt;
-				}
 				std::uint64_t total = 0;
 				const std::array formats{ colorFormat, DXGI_FORMAT_R32_FLOAT, motionFormat, outputFormat };
 				const std::array sizes{ modelSize, modelGuideSize, modelGuideSize, modelSize };
 				for (std::size_t index = 0; index < formats.size(); ++index) {
+					if (sharing == ModelResolution::Sharing::All ||
+						(sharing == ModelResolution::Sharing::Guides && (index == 1 || index == 2)))
+						continue;
 					const auto bytes = LogicalTextureBytes(formats[index], sizes[index].width, sizes[index].height);
 					if (!bytes)
 						return std::nullopt;
@@ -272,7 +272,7 @@ namespace NeuralRendering
 			       uav.Format == format && uav.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE2D && uav.Texture2D.MipSlice == 0;
 		}
 
-		bool ValidateTargets(std::span<const RendererApplyArgs> args, std::span<const ModelResolution::Targets> targets)
+		bool ValidateTargets(std::span<const RendererApplyArgs> args, std::span<const ModelResolution::Targets> targets, ModelResolution::Sharing sharing)
 		{
 			std::array<ComPtr<IUnknown>, kMaximumRegionEvaluations * 4> identities{};
 			std::array<ComPtr<IUnknown>, kMaximumRegionEvaluations * 7> sources{};
@@ -302,7 +302,7 @@ namespace NeuralRendering
 				RendererApplyArgs projected;
 				if (!ModelResolution::Project(args[index], projected))
 					return false;
-				const auto allocation = AllocationKey::Read(args[index], projected, true);
+				const auto allocation = AllocationKey::Read(args[index], projected, sharing);
 				if (!allocation)
 					return false;
 				const auto& t = targets[index];
@@ -310,6 +310,11 @@ namespace NeuralRendering
 				const std::array textures{ &t.color, &t.depth, &t.motion, &t.output };
 				const std::array sizes{ allocation->modelSize, allocation->modelGuideSize, allocation->modelGuideSize, allocation->modelSize };
 				for (std::size_t role = 0; role < textures.size(); ++role) {
+					if (sharing == ModelResolution::Sharing::Guides && (role == 0 || role == 3)) {
+						if (textures[role]->resource || textures[role]->srv || textures[role]->uav)
+							return false;
+						continue;
+					}
 					if (!ValidateTarget(args[index].device, *textures[role], sizes[role], formats[role]))
 						return false;
 					const auto identity = Util::GetComIdentity(textures[role]->resource.Get());
@@ -801,16 +806,16 @@ namespace NeuralRendering
 		return true;
 	}
 
-	bool ModelResolution::CanUseSharedTargets(std::span<const RendererApplyArgs> args, bool colorProcessing, bool compactInputs) noexcept
+	bool ModelResolution::CanUseSharedTargets(std::span<const RendererApplyArgs> args, bool compactInputs) noexcept
 	{
-		return !colorProcessing && !compactInputs && ValidBatchLayout(args) &&
+		return !compactInputs && ValidBatchLayout(args) &&
 		       std::ranges::all_of(args, [](const auto& input) {
 				   RendererApplyArgs projected;
 				   return Project(input, projected);
 			   });
 	}
 
-	std::optional<std::uint64_t> ModelResolution::AdditionalBytes(std::span<const RendererApplyArgs> args, bool sharedTargets) const
+	std::optional<std::uint64_t> ModelResolution::AdditionalBytes(std::span<const RendererApplyArgs> args, Sharing sharing) const
 	{
 		if (!ValidBatchLayout(args) || !ValidateSelectedOutputs(args))
 			return std::nullopt;
@@ -819,7 +824,7 @@ namespace NeuralRendering
 			RendererApplyArgs projected;
 			if (!Project(input, projected))
 				return std::nullopt;
-			const auto allocation = AllocationKey::Read(input, projected, sharedTargets);
+			const auto allocation = AllocationKey::Read(input, projected, sharing);
 			if (!allocation)
 				return std::nullopt;
 			const auto& cached = slots_[input.featureSlot];
@@ -952,8 +957,10 @@ namespace NeuralRendering
 				depthView.Texture2D.MostDetailedMip != 0 || depthView.Texture2D.MipLevels != 1)
 				return false;
 		}
-		const bool sharedTargets = !targets.empty();
-		if (sharedTargets && !ValidateTargets(args, targets))
+		const auto sharing = targets.empty() ? Sharing::Private : targets.front().color.resource ? Sharing::All :
+		                                                                                           Sharing::Guides;
+		const bool sharedTargets = sharing != Sharing::Private;
+		if (sharedTargets && !ValidateTargets(args, targets, sharing))
 			return false;
 		if (!PreparePacking(args, result))
 			return false;
@@ -970,7 +977,7 @@ namespace NeuralRendering
 		try {
 			for (std::size_t index = 0; index < args.size(); ++index) {
 				const auto& input = args[index];
-				const auto allocation = AllocationKey::Read(input, batch.arguments[index], sharedTargets);
+				const auto allocation = AllocationKey::Read(input, batch.arguments[index], sharing);
 				if (!allocation) {
 					result = E_INVALIDARG;
 					return false;
@@ -983,11 +990,12 @@ namespace NeuralRendering
 					work = std::make_shared<Work>();
 					work->allocation = key;
 					const auto prefix = std::format("NeuralRendering::ModelSlot{}::", input.featureSlot);
-					if ((!sharedTargets &&
+					if ((sharing != Sharing::All &&
 							(!CreateTexture(input.device, work->color, modelSize, key.colorFormat, prefix + "Color", result) ||
-								!CreateTexture(input.device, work->depth, key.modelGuideSize, DXGI_FORMAT_R32_FLOAT, prefix + "Depth", result) ||
-								!CreateTexture(input.device, work->motion, key.modelGuideSize, key.motionFormat, prefix + "Motion", result) ||
 								!CreateTexture(input.device, work->output, modelSize, key.outputFormat, prefix + "Output", result))) ||
+						(sharing == Sharing::Private &&
+							(!CreateTexture(input.device, work->depth, key.modelGuideSize, DXGI_FORMAT_R32_FLOAT, prefix + "Depth", result) ||
+								!CreateTexture(input.device, work->motion, key.modelGuideSize, key.motionFormat, prefix + "Motion", result))) ||
 						(!key.selectedOutput && !CreateTexture(input.device, work->reconstructed, sourceSize, key.outputFormat, prefix + "Reconstructed", result)) ||
 						(hasMask && !CreateTexture(input.device, work->mask, modelSize, DXGI_FORMAT_R8_UNORM, prefix + "Mask", result)))
 						return false;
@@ -1039,7 +1047,15 @@ namespace NeuralRendering
 					batch.selectionDestinations[index] = input.colorOutput;
 				}
 				auto& target = batch.targets[index];
-				target = sharedTargets ? targets[index] : Targets{ work->color, work->depth, work->motion, work->output };
+				target = { work->color, work->depth, work->motion, work->output };
+				if (sharedTargets) {
+					target.depth = targets[index].depth;
+					target.motion = targets[index].motion;
+					if (sharing == Sharing::All) {
+						target.color = targets[index].color;
+						target.output = targets[index].output;
+					}
+				}
 				auto& adapted = batch.arguments[index];
 				adapted.colorInput = target.color.resource.Get();
 				adapted.depthGuide = target.depth.resource.Get();

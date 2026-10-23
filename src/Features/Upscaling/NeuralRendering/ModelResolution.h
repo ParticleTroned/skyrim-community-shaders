@@ -20,7 +20,14 @@ namespace NeuralRendering
 		struct CoverageWork;
 
 	public:
-		/** Retained views of admitted renderer-owned model textures. */
+		/** Shared roles are excluded from private allocation admission and cache ownership. */
+		enum class Sharing
+		{
+			Private,
+			Guides,
+			All
+		};
+		/** Retained shared guides; colour and output must either both be supplied or both remain private. */
 		struct Targets
 		{
 			Color::Texture color, depth, motion, output;
@@ -65,10 +72,10 @@ namespace NeuralRendering
 			PackedCropAdmissionDiagnostics* diagnostics = nullptr
 #endif
 			) noexcept;
-		/** Raw shared preparation retains private actor selection and native protection semantics. */
-		static bool CanUseSharedTargets(std::span<const RendererApplyArgs>, bool colorProcessing, bool compactInputs) noexcept;
+		/** Shared preparation retains private actor selection and native protection semantics. */
+		static bool CanUseSharedTargets(std::span<const RendererApplyArgs>, bool compactInputs) noexcept;
 		/** Count additional private textures before memory admission; shared aliases are excluded. */
-		std::optional<std::uint64_t> AdditionalBytes(std::span<const RendererApplyArgs>, bool sharedTargets = false) const;
+		std::optional<std::uint64_t> AdditionalBytes(std::span<const RendererApplyArgs>, Sharing sharing = Sharing::Private) const;
 		[[nodiscard]] std::optional<std::uint64_t> RetainedBytes(std::uint32_t) const noexcept;
 
 		/** Prepare both eyes into validated shared targets or private proxies before native evaluation. */

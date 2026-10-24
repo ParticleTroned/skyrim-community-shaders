@@ -1,3 +1,4 @@
+#include "Features/MeshBlendingLandscapePolicy.h"
 #include "Features/MeshBlendingPolicy.h"
 #include "Utils/Finite.h"
 
@@ -12,6 +13,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -108,12 +110,25 @@ struct MeshBlending
 	std::vector<OverrideRule> detectedAllowList;
 	std::vector<OverrideRule> denyList;
 	CompiledRules compiledRules;
+	std::vector<LandscapeAssignment> landscapeAssignments;
+	std::vector<SurfaceMaterialRule> surfaceMaterialRules;
+	std::vector<BlendPairRule> blendPairRules;
+	bool blendPairsExplicit = false;
+	struct LandscapeBoundary
+	{
+		std::shared_ptr<const CompiledLandscapeRules> current;
+		void PublishPolicy(std::shared_ptr<const CompiledLandscapeRules> compiled) noexcept { current = std::move(compiled); }
+	} landscape;
 	json ruleFileDocument = json::object();
+	std::vector<LandscapeDiagnostic> savedDiscoveryDiagnostics;
 	std::atomic_bool discoveryCaptureEnabled = false;
 	mutable std::mutex discoveryMutex;
 	std::set<std::pair<std::string, std::string>> discoveredRuleKeys;
+	std::map<std::string, LandscapeDiagnostic, std::less<>> discoveredLandscapeIdentities;
 	std::size_t discoveryDuplicateObservations = 0u;
 	std::size_t discoveryDropped = 0u;
+	std::size_t landscapeDiscoveryDuplicateObservations = 0u;
+	std::size_t landscapeDiscoveryDropped = 0u;
 	std::atomic_bool ruleFileMutationAllowed = true;
 	std::string ruleFileLoadError;
 	std::uint32_t cacheGeneration = 0u;
@@ -126,9 +141,13 @@ struct MeshBlending
 	bool IsDiscoveryCaptureSaturated() const;
 	void SetDiscoveryCaptureEnabled(bool enabled);
 	static CompiledRules CompileRules(const RuleFileState& state);
+	static std::shared_ptr<const CompiledLandscapeRules> CompileLandscapeRules(const RuleFileState& state);
+	static std::optional<LandscapeMaterialKind> ParseLandscapeMaterialKind(std::string_view kind);
+	static const char* CanonicalLandscapeMaterialKind(LandscapeMaterialKind kind);
+	static LandscapeMaterialClass GetLandscapeMaterialClass(LandscapeMaterialKind kind);
 	bool LoadRuleFile();
 	bool ReadRuleFileState(RuleFileState& state, bool& notFound, std::string& error) const;
-	void ApplyRuleFileState(RuleFileState&& state, CompiledRules&& compiled);
+	void ApplyRuleFileState(RuleFileState&& state, CompiledRules&& compiled, std::shared_ptr<const CompiledLandscapeRules> landscapeRules);
 	bool WriteRuleFile(const RuleFileState& state, std::string& error) const;
 	DiscoverySaveResult SaveDiscoveredRules();
 	bool ClearSavedRules(std::string& error);
@@ -168,7 +187,8 @@ namespace
 		auto initial = EmptyDocument();
 		initial["AllowList"].push_back(Rule(model, source));
 		Load(feature, initial);
-		const auto generationAfterStoppingCapture = feature.cacheGeneration + 1u;
+		const auto generation = feature.cacheGeneration + 1u;
+		const auto landscapeGeneration = feature.landscape.current->revision;
 		feature.discoveredRuleKeys.emplace("meshes/new.nif", source);
 		feature.discoveryCaptureEnabled.store(true);
 		const auto captured = feature.discoveredRuleKeys;
@@ -180,13 +200,13 @@ namespace
 		file.beforeWrite = [&] {
 			Require(feature.compiledRules.Match(model, source) == RuleMatch::kAuthored,
 				"staged disk rules changed active policy before write");
-			Require(feature.cacheGeneration == generationAfterStoppingCapture, "staging invalidated active cache");
+			Require(feature.cacheGeneration == generation, "staging invalidated active cache");
 		};
 		const auto result = feature.SaveDiscoveredRules();
 		Require(!result.success && !result.error.empty() && file.writes == 1u, "write failure was not returned");
 		Require(feature.compiledRules.Match(model, source) == RuleMatch::kAuthored && feature.denyList.empty(),
 			"failed save replaced active policy");
-		Require(feature.cacheGeneration == generationAfterStoppingCapture,
+		Require(feature.cacheGeneration == generation && feature.landscape.current->revision == landscapeGeneration,
 			"failed save changed live policy generations");
 		Require(feature.ruleFileDocument == initial && feature.discoveredRuleKeys == captured,
 			"failed save discarded the active document or pending capture");
@@ -259,6 +279,35 @@ namespace
 			"clear lost extension fields or retained generated policy");
 	}
 
+	void TestLandscapePublicationFollowsFileCommit()
+	{
+		namespace Landscape = CSX::MeshBlendingLandscapePolicy;
+		MeshBlending feature;
+		auto initial = EmptyDocument();
+		initial["LandscapeAssignments"] = json::array({ { { "Kind", "Snow" }, { "Form", "0X000123~TERRAIN.ESP" } } });
+		Load(feature, initial);
+		Landscape::CapturedTexture identity;
+		identity.present = true;
+		identity.form = Landscape::CanonicalFormKey("0x123~Terrain.esp");
+		const auto before = feature.landscape.current;
+		Require(Landscape::ClassifyTexture(identity, *before) == Landscape::MaterialKind::kSnow,
+			"form-only LAND policy required loaded engine data");
+		auto edited = initial;
+		edited["LandscapeAssignments"][0]["Kind"] = "Stone";
+		file.contents = edited.dump();
+		file.beforeWrite = [&] {
+			Require(feature.landscape.current == before && Landscape::ClassifyTexture(identity, *feature.landscape.current) == Landscape::MaterialKind::kSnow,
+				"staging LAND policy replaced the live snapshot before file commit");
+		};
+		file.failWrite = true;
+		Require(!feature.SaveDiscoveredRules().success && feature.landscape.current == before,
+			"failed save published staged LAND rules");
+		file.failWrite = false;
+		Require(feature.SaveDiscoveredRules().success && feature.landscape.current->revision != before->revision &&
+					Landscape::ClassifyTexture(identity, *feature.landscape.current) == Landscape::MaterialKind::kStone,
+			"successful save did not reclassify the retained LAND identity");
+	}
+
 	void TestParserLimitsAndFailClosedState()
 	{
 		MeshBlending feature;
@@ -309,12 +358,13 @@ void TestSettingsAndPayload()
 	static_assert(offsetof(MeshBlending::PerFrame, BlendWidth) == 4u);
 	static_assert(offsetof(MeshBlending::PerFrame, DepthBias) == 8u);
 	static_assert(offsetof(MeshBlending::PerFrame, MaximumGap) == 12u);
-	static_assert(offsetof(MeshBlending::PerFrame, Padding0) == 16u);
+	static_assert(offsetof(MeshBlending::PerFrame, EnableLandscapeBlending) == 16u);
 	static_assert(offsetof(MeshBlending::PerFrame, ProjectedSnowEdgeWidth) == 20u);
-	static_assert(offsetof(MeshBlending::PerFrame, Padding2) == 24u);
-	static_assert(offsetof(MeshBlending::PerFrame, Padding3) == 28u);
+	static_assert(offsetof(MeshBlending::PerFrame, LandscapeBlendStrength) == 24u);
+	static_assert(offsetof(MeshBlending::PerFrame, Padding1) == 28u);
 	MeshBlending feature;
 	feature.settings = json::object().get<MeshBlending::Settings>();
+	feature.settings.LandscapeLayerBlending = 0u;
 	Require(feature.IsRuntimeEnabled(), "default enabled NIF controls were inactive");
 	feature.settings.ProjectedSnowEnabled = 0u;
 
@@ -353,16 +403,53 @@ void TestSettingsAndPayload()
 	const auto payload = feature.GetCommonBufferData();
 	Require(payload.BlendStrength == 1.0f && payload.MaximumGap == 384.0f,
 		"GPU payload did not apply the shared finite-value sanitizer");
-	Require(payload.Padding0 == 0u && payload.Padding2 == 0.0f && payload.Padding3 == 0.0f, "GPU padding was not zero");
+	Require(payload.EnableLandscapeBlending == 0u && payload.Padding1 == 0.0f, "GPU padding was not zero");
+}
+
+void TestLandscapeMechanismGates()
+{
+	MeshBlending feature;
+	feature.settings.BlendStrength = 0.0f;
+	feature.settings.ProjectedSnowEnabled = 0u;
+	feature.settings.DetectionMode = static_cast<std::uint32_t>(MeshBlending::DetectionMode::kDisabled);
+	Require(feature.IsRuntimeEnabled(), "LAND-only operation depended on NIF/snow controls");
+	auto payload = feature.GetCommonBufferData();
+	Require(payload.BlendStrength == 0.0f && payload.ProjectedSnowEdgeWidth == 0.0f &&
+				payload.EnableLandscapeBlending == 1u && payload.LandscapeBlendStrength == 1.0f,
+		"LAND-only GPU payload enabled another mechanism or omitted LAND");
+	feature.settings.LandscapeBlendStrength = 0.0f;
+	payload = feature.GetCommonBufferData();
+	Require(!feature.IsRuntimeEnabled() && payload.EnableLandscapeBlending == 0u &&
+				payload.LandscapeBlendStrength == 0.0f,
+		"zero LAND strength remained active in CPU or GPU policy");
+	feature.settings.LandscapeBlendStrength = 1.0f;
+	feature.settings.LandscapeLayerBlending = 0u;
+	Require(!feature.IsRuntimeEnabled() && feature.GetCommonBufferData().EnableLandscapeBlending == 0u,
+		"disabled LAND mechanism remained active");
+	feature.settings.LandscapeLayerBlending = 1u;
+	feature.settings.Enabled = 0u;
+	Require(!feature.IsRuntimeEnabled() && feature.GetCommonBufferData().EnableLandscapeBlending == 0u,
+		"master toggle did not disable LAND CPU and GPU policy");
+	feature.settings.Enabled = 1u;
+	feature.loaded = false;
+	Require(!feature.IsRuntimeEnabled(), "unloaded LAND feature remained active");
+	feature.loaded = true;
+	globals::shaderCacheValue.enabled = false;
+	Require(!feature.IsRuntimeEnabled(), "disabled shader cache admitted LAND");
+	globals::shaderCacheValue.enabled = true;
+	feature.ruleFileMutationAllowed.store(false);
+	Require(!feature.IsRuntimeEnabled(), "invalid rule-file gate admitted LAND");
 }
 
 int main()
 {
 	try {
 		TestSettingsAndPayload();
+		TestLandscapeMechanismGates();
 		TestFailedSavePreservesActivePolicy();
 		TestSuccessfulSaveMergesDiskPolicy();
 		TestConcurrentFileChangeAndClearFailure();
+		TestLandscapePublicationFollowsFileCommit();
 		TestParserLimitsAndFailClosedState();
 		std::cout << "Mesh rule transactions and parser limits passed\n";
 		return 0;

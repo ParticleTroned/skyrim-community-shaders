@@ -10,8 +10,12 @@
 
 #include <algorithm>
 #include <bit>
+#include <charconv>
 #include <cmath>
 #include <format>
+#include <fstream>
+#include <iterator>
+#include <limits>
 #include <tuple>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -29,6 +33,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	MaximumGap,
 	ProjectedSnowEnabled,
 	ProjectedSnowEdgeWidth,
+	LandscapeLayerBlending,
+	LandscapeBlendStrength,
 	DetectionMode,
 	MaximumDistance,
 	BoundsExpansion,
@@ -38,6 +44,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 namespace
 {
 	static_assert(CSX::MeshBlendingPolicy::EnableMask == static_cast<std::uint32_t>(State::ExtraShaderDescriptors::MeshBlending));
+	static_assert(CSX::MeshBlendingLandscapePolicy::ClassMask == static_cast<std::uint32_t>(State::ExtraFeatureDescriptors::MeshBlendingLandscapeClasses));
+	static_assert(CSX::MeshBlendingLandscapePolicy::ClassShift == State::MeshBlendingLandscapeClassShift);
+	static_assert(CSX::MeshBlendingLandscapePolicy::ClassBits == State::MeshBlendingLandscapeClassBits);
+	static_assert(CSX::MeshBlendingLandscapePolicy::LayerCount == State::MeshBlendingLandscapeClassCount);
 	using ShaderFlag = RE::BSShaderProperty::EShaderPropertyFlag;
 	using MaterialFeature = RE::BSShaderMaterial::Feature;
 
@@ -177,6 +187,16 @@ namespace
 		return CSX::MeshBlendingPolicy::NormalizePath(a_path, a_isModelPath);
 	}
 
+	std::string NormalizeIdentity(std::string_view a_value)
+	{
+		return CSX::MeshBlendingLandscapePolicy::NormalizeIdentity(a_value);
+	}
+
+	std::string NormalizeTexturePath(std::string_view a_path)
+	{
+		return CSX::MeshBlendingLandscapePolicy::NormalizeTexturePath(a_path);
+	}
+
 	bool IsSafeRuleString(std::string_view a_value, std::size_t a_maximumLength)
 	{
 		return a_value.size() <= a_maximumLength && IsValidUtf8(a_value) &&
@@ -184,6 +204,28 @@ namespace
 				   const auto value = static_cast<unsigned char>(character);
 				   return value < static_cast<unsigned char>(' ') || value == 0x7Fu;
 			   });
+	}
+
+	bool IsPortableLandscapeFormKey(std::string_view a_form)
+	{
+		return IsSafeRuleString(a_form, 512u) && !CSX::MeshBlendingLandscapePolicy::CanonicalFormKey(a_form).empty();
+	}
+
+	std::string BuildLandscapeDiagnosticKey(
+		std::string_view a_form,
+		std::string_view a_editorID,
+		std::string_view a_diffuse)
+	{
+		if (!a_form.empty()) {
+			return std::string("form:").append(NormalizeIdentity(a_form));
+		}
+		if (!a_editorID.empty()) {
+			return std::string("editor:").append(NormalizeIdentity(a_editorID));
+		}
+		if (!a_diffuse.empty()) {
+			return std::string("diffuse:").append(NormalizeTexturePath(a_diffuse));
+		}
+		return {};
 	}
 
 	const char* DetectionModeName(std::uint32_t a_mode)
@@ -204,10 +246,11 @@ namespace
 std::pair<std::string, std::vector<std::string>> MeshBlending::GetFeatureSummary()
 {
 	return {
-		"Blends eligible NIF transition overlays and projected-snow edges without an extra render pass.",
-		{ "Conservative static-object selection with deny-first rules",
-			"Generated rules retain current receiver validation",
-			"Bounded cache and traversal with a configurable distance limit",
+		"Blends eligible NIF transition shapes and compatible soft/hard LTEX layers without an extra render pass.",
+		{ "No additional render pass or geometry",
+			"Conservative static-object classifier with deny-first overrides",
+			"Fast LAND/LTEX material rules with bounded classification",
+			"Bounded cache, traversal limits, and a configurable player-distance bubble",
 			"Flat-screen and VR eye-correct depth sampling" }
 	};
 }
@@ -224,10 +267,12 @@ MeshBlending::Settings MeshBlending::Sanitize(Settings a_settings)
 	a_settings.ProjectedSnowEnabled = a_settings.ProjectedSnowEnabled ? 1u : 0u;
 	a_settings.RequireOverlappingBounds = a_settings.RequireOverlappingBounds ? 1u : 0u;
 	a_settings.DeveloperLogging = a_settings.DeveloperLogging ? 1u : 0u;
+	a_settings.LandscapeLayerBlending = a_settings.LandscapeLayerBlending ? 1u : 0u;
 	if (a_settings.DetectionMode > static_cast<std::uint32_t>(DetectionMode::kStrictAutomatic)) {
 		a_settings.DetectionMode = static_cast<std::uint32_t>(DetectionMode::kStrictAutomatic);
 	}
 	a_settings.BlendStrength = Util::ClampFinite(a_settings.BlendStrength, 0.0f, 1.0f, 1.0f);
+	a_settings.LandscapeBlendStrength = Util::ClampFinite(a_settings.LandscapeBlendStrength, 0.0f, 1.0f, 1.0f);
 	a_settings.BlendWidth = Util::ClampFinite(a_settings.BlendWidth, 0.01f, 256.0f, 12.0f);
 	a_settings.DepthBias = Util::ClampFinite(a_settings.DepthBias, 0.0f, 128.0f, 0.25f);
 	a_settings.MaximumGap = Util::ClampFinite(a_settings.MaximumGap, 0.01f, 4096.0f, 64.0f);
@@ -249,6 +294,27 @@ MeshBlending::CompiledRules MeshBlending::CompileRules(const RuleFileState& a_st
 		compiled.AddDetected(rule.Model, rule.NodePath);
 	compiled.BuildNodeIndex();
 	return compiled;
+}
+
+std::optional<MeshBlending::LandscapeMaterialKind> MeshBlending::ParseLandscapeMaterialKind(std::string_view a_kind)
+{
+	return CSX::MeshBlendingLandscapePolicy::ParseMaterialKind(a_kind);
+}
+
+const char* MeshBlending::CanonicalLandscapeMaterialKind(LandscapeMaterialKind a_kind)
+{
+	return CSX::MeshBlendingLandscapePolicy::CanonicalMaterialKind(a_kind).data();
+}
+
+MeshBlending::LandscapeMaterialClass MeshBlending::GetLandscapeMaterialClass(LandscapeMaterialKind a_kind)
+{
+	return CSX::MeshBlendingLandscapePolicy::GetMaterialClass(a_kind);
+}
+
+std::shared_ptr<const MeshBlending::CompiledLandscapeRules> MeshBlending::CompileLandscapeRules(const RuleFileState& a_state)
+{
+	return CSX::MeshBlendingLandscapePolicy::CompilePolicy({ a_state.landscapeAssignments,
+		a_state.surfaceMaterialRules, a_state.blendPairRules, a_state.blendPairsExplicit });
 }
 
 void MeshBlending::InvalidateClassificationCache()
@@ -277,9 +343,9 @@ MeshBlending::PerFrame MeshBlending::GetCommonBufferData() const
 		sanitized.BlendWidth,
 		sanitized.DepthBias,
 		sanitized.MaximumGap,
-		0u,
+		sanitized.Enabled != 0u && sanitized.LandscapeLayerBlending != 0u && sanitized.LandscapeBlendStrength > 0.0f ? 1u : 0u,
 		sanitized.ProjectedSnowEnabled != 0u ? sanitized.ProjectedSnowEdgeWidth : 0.0f,
-		0.0f,
+		sanitized.LandscapeBlendStrength,
 		0.0f
 	};
 }
@@ -289,6 +355,9 @@ bool MeshBlending::IsRuntimeEnabled() const
 	if (!loaded || !ruleFileMutationAllowed.load(std::memory_order_acquire) ||
 		!globals::shaderCache || !globals::shaderCache->IsEnabled() || settings.Enabled == 0u) {
 		return false;
+	}
+	if (settings.LandscapeLayerBlending != 0u && IsFinite(settings.LandscapeBlendStrength) && settings.LandscapeBlendStrength > 0.0f) {
+		return true;
 	}
 	return IsOverlayPolicyEnabled() &&
 	       ((settings.NifEnabled != 0u && IsFinite(settings.BlendStrength) && settings.BlendStrength > 0.0f) ||
@@ -316,7 +385,8 @@ bool MeshBlending::IsDiscoveryCaptureActive() const
 bool MeshBlending::IsDiscoveryCaptureSaturated() const
 {
 	std::scoped_lock lock(discoveryMutex);
-	return discoveredRuleKeys.size() >= kMaximumRules;
+	return discoveredRuleKeys.size() >= kMaximumRules &&
+	       discoveredLandscapeIdentities.size() >= kMaximumLandscapeIdentities;
 }
 
 void MeshBlending::SetDiscoveryCaptureEnabled(bool a_enabled)
@@ -362,13 +432,83 @@ void MeshBlending::CaptureDiscoveredRule(std::string_view a_modelPath, std::stri
 	}
 	if (discoveredRuleKeys.size() >= kMaximumRules) {
 		++discoveryDropped;
-		discoveryCaptureEnabled.store(false, std::memory_order_relaxed);
+		if (discoveredLandscapeIdentities.size() >= kMaximumLandscapeIdentities) {
+			discoveryCaptureEnabled.store(false, std::memory_order_relaxed);
+		}
 		return;
 	}
 	discoveredRuleKeys.insert(key);
-	if (discoveredRuleKeys.size() >= kMaximumRules) {
+	if (discoveredRuleKeys.size() >= kMaximumRules &&
+		discoveredLandscapeIdentities.size() >= kMaximumLandscapeIdentities) {
 		discoveryCaptureEnabled.store(false, std::memory_order_relaxed);
 	}
+}
+
+void MeshBlending::CaptureDiscoveredLandscape(const MeshBlendingLandscape::Texture& a_texture, LandscapeMaterialKind a_kind)
+{
+	if (!a_texture.present || !discoveryCaptureEnabled.load(std::memory_order_relaxed) ||
+		!ruleFileMutationAllowed.load(std::memory_order_acquire)) {
+		return;
+	}
+
+	LandscapeDiagnostic diagnostic;
+	diagnostic.Kind = CanonicalLandscapeMaterialKind(a_kind);
+	diagnostic.Form = a_texture.form;
+	diagnostic.EditorID = a_texture.editorID;
+	diagnostic.Diffuse = a_texture.diffuse;
+	if (a_texture.materialCount != 0u) {
+		const auto& material = a_texture.materials[0];
+		diagnostic.Material = !material.form.empty()     ? material.form :
+		                      !material.editorID.empty() ? material.editorID :
+		                                                   material.name;
+	}
+	for (auto* identity : { &diagnostic.Form, &diagnostic.EditorID, &diagnostic.Diffuse, &diagnostic.Material }) {
+		if (!IsSafeRuleString(*identity, kMaximumRuleLength))
+			identity->clear();
+	}
+
+	const auto key = BuildLandscapeDiagnosticKey(
+		diagnostic.Form,
+		diagnostic.EditorID,
+		diagnostic.Diffuse);
+	std::scoped_lock lock(discoveryMutex);
+	if (!discoveryCaptureEnabled.load(std::memory_order_relaxed) ||
+		!ruleFileMutationAllowed.load(std::memory_order_acquire)) {
+		return;
+	}
+	if (key.empty()) {
+		++landscapeDiscoveryDropped;
+		return;
+	}
+	if (auto found = discoveredLandscapeIdentities.find(key); found != discoveredLandscapeIdentities.end()) {
+		found->second = std::move(diagnostic);
+		++landscapeDiscoveryDuplicateObservations;
+		return;
+	}
+	if (discoveredLandscapeIdentities.size() >= kMaximumLandscapeIdentities) {
+		++landscapeDiscoveryDropped;
+		if (discoveredRuleKeys.size() >= kMaximumRules) {
+			discoveryCaptureEnabled.store(false, std::memory_order_relaxed);
+		}
+		return;
+	}
+	discoveredLandscapeIdentities.emplace(key, std::move(diagnostic));
+	if (discoveredLandscapeIdentities.size() >= kMaximumLandscapeIdentities &&
+		discoveredRuleKeys.size() >= kMaximumRules) {
+		discoveryCaptureEnabled.store(false, std::memory_order_relaxed);
+	}
+}
+
+void MeshBlending::CaptureLandscapeMaterials(RE::TESObjectLAND* a_land, bool a_materialSetupSucceeded)
+{
+	MeshBlendingLandscape::DiscoverySink discovery;
+	if (IsDiscoveryCaptureActive()) {
+		discovery.context = this;
+		discovery.capture = [](void* context, const MeshBlendingLandscape::Texture& texture, LandscapeMaterialKind kind) {
+			static_cast<MeshBlending*>(context)->CaptureDiscoveredLandscape(texture, kind);
+		};
+	}
+	landscape.Capture(a_land, a_materialSetupSucceeded, discovery);
 }
 
 void MeshBlending::EnsureRuleFileLoaded()
@@ -399,14 +539,16 @@ bool MeshBlending::LoadRuleFile()
 	}
 
 	auto compiled = CompileRules(state);
-	ApplyRuleFileState(std::move(state), std::move(compiled));
+	auto compiledLandscape = CompileLandscapeRules(state);
+	ApplyRuleFileState(std::move(state), std::move(compiled), std::move(compiledLandscape));
 	ruleFileLoadError.clear();
 	ruleFileMutationAllowed.store(true, std::memory_order_release);
 	logger::info(
-		"[Mesh Blending] Loaded {} manual, {} detected, and {} deny rules{}",
+		"[Mesh Blending] Loaded {} manual, {} detected, {} deny, and {} LTEX assignment rules{}",
 		allowList.size(),
 		detectedAllowList.size(),
 		denyList.size(),
+		landscapeAssignments.size(),
 		notFound ? " (new rule file)" : "");
 	return true;
 }
@@ -555,6 +697,182 @@ bool MeshBlending::ReadRuleFileState(
 			return false;
 		}
 
+		auto parseLandscapeAssignments = [&]() {
+			if (!ruleFile.contains("LandscapeAssignments")) {
+				return true;
+			}
+			const auto& array = ruleFile.at("LandscapeAssignments");
+			if (!array.is_array() || array.size() > kMaximumLandscapeIdentities) {
+				a_error = std::format("LandscapeAssignments must contain at most {} entries.", kMaximumLandscapeIdentities);
+				return false;
+			}
+			for (std::size_t index = 0u; index < array.size(); ++index) {
+				const auto& item = array[index];
+				const auto context = std::format("LandscapeAssignments[{}]", index);
+				if (!item.is_object()) {
+					a_error = std::format("{} must be an object.", context);
+					return false;
+				}
+				LandscapeAssignment assignment;
+				if (!readString(item, context, "Kind", assignment.Kind, true) ||
+					!readString(item, context, "Form", assignment.Form, false) ||
+					!readString(item, context, "EditorID", assignment.EditorID, false) ||
+					!readString(item, context, "Diffuse", assignment.Diffuse, false)) {
+					return false;
+				}
+				const auto kind = ParseLandscapeMaterialKind(assignment.Kind);
+				if (!kind) {
+					a_error = std::format("{}.Kind is not recognized.", context);
+					return false;
+				}
+				assignment.Kind = CanonicalLandscapeMaterialKind(*kind);
+				auto selectors = CSX::MeshBlendingLandscapePolicy::CanonicalizeLandscapeSelectors(
+					assignment.Form, assignment.EditorID, assignment.Diffuse);
+				if (selectors.DiffuseCollapsed()) {
+					a_error = std::format("{}.Diffuse has no effective texture path after canonicalization.", context);
+					return false;
+				}
+				const bool hasSelector = selectors.HasSelector();
+				assignment.Form = std::move(selectors.form);
+				assignment.EditorID = std::move(selectors.editorID);
+				assignment.Diffuse = std::move(selectors.diffuse);
+				if (!hasSelector) {
+					a_error = std::format("{} has no effective Form, EditorID, or Diffuse selector.", context);
+					return false;
+				}
+				if (!assignment.Form.empty()) {
+					if (!IsPortableLandscapeFormKey(assignment.Form)) {
+						a_error = std::format("{}.Form is not a portable 0xLOCALID~Plugin selector.", context);
+						return false;
+					} else {
+						assignment.Form = CSX::MeshBlendingLandscapePolicy::CanonicalFormKey(assignment.Form);
+					}
+				}
+				a_state.landscapeAssignments.push_back(std::move(assignment));
+			}
+			return true;
+		};
+		if (!parseLandscapeAssignments()) {
+			return false;
+		}
+
+		if (ruleFile.contains("SurfaceMaterials")) {
+			const auto& array = ruleFile.at("SurfaceMaterials");
+			if (!array.is_array() || array.size() > kMaximumRules) {
+				a_error = std::format("SurfaceMaterials must contain at most {} entries.", kMaximumRules);
+				return false;
+			}
+			for (std::size_t index = 0u; index < array.size(); ++index) {
+				const auto& item = array[index];
+				const auto context = std::format("SurfaceMaterials[{}]", index);
+				SurfaceMaterialRule rule;
+				if (!item.is_object() || !readString(item, context, "Material", rule.Material, true) ||
+					!readString(item, context, "Kind", rule.Kind, true) || rule.Material.empty()) {
+					if (a_error.empty()) {
+						a_error = std::format("{} is invalid.", context);
+					}
+					return false;
+				}
+				const auto kind = ParseLandscapeMaterialKind(rule.Kind);
+				if (!kind) {
+					a_error = std::format("{}.Kind is not recognized.", context);
+					return false;
+				}
+				rule.Kind = CanonicalLandscapeMaterialKind(*kind);
+				a_state.surfaceMaterialRules.push_back(std::move(rule));
+			}
+		}
+
+		a_state.blendPairsExplicit = ruleFile.contains("BlendPairs");
+		if (a_state.blendPairsExplicit) {
+			const auto& array = ruleFile.at("BlendPairs");
+			if (!array.is_array() || array.size() > kMaximumRules) {
+				a_error = std::format("BlendPairs must contain at most {} entries.", kMaximumRules);
+				return false;
+			}
+			for (std::size_t index = 0u; index < array.size(); ++index) {
+				const auto& item = array[index];
+				const auto context = std::format("BlendPairs[{}]", index);
+				BlendPairRule rule;
+				if (!item.is_object()) {
+					a_error = std::format("{} must be an object.", context);
+					return false;
+				}
+				if (!readString(item, context, "Source", rule.Source, true) ||
+					!readString(item, context, "Receiver", rule.Receiver, true)) {
+					return false;
+				}
+				const auto source = ParseLandscapeMaterialKind(rule.Source);
+				const auto receiver = ParseLandscapeMaterialKind(rule.Receiver);
+				if (!source || !receiver) {
+					a_error = std::format("{} contains an unknown material kind.", context);
+					return false;
+				}
+				const auto sourceClass = GetLandscapeMaterialClass(*source);
+				const auto receiverClass = GetLandscapeMaterialClass(*receiver);
+				if (sourceClass == LandscapeMaterialClass::kUnknown ||
+					receiverClass == LandscapeMaterialClass::kUnknown) {
+					a_error = std::format("{} cannot use Unknown as a blend endpoint.", context);
+					return false;
+				}
+				if (sourceClass == LandscapeMaterialClass::kHard &&
+					receiverClass == LandscapeMaterialClass::kSoft) {
+					a_error = std::format("{} cannot blend a hard source over a soft receiver.", context);
+					return false;
+				}
+				rule.Source = CanonicalLandscapeMaterialKind(*source);
+				rule.Receiver = CanonicalLandscapeMaterialKind(*receiver);
+				a_state.blendPairRules.push_back(std::move(rule));
+			}
+		}
+
+		if (ruleFile.contains("DiscoveryDiagnostics")) {
+			const auto& array = ruleFile.at("DiscoveryDiagnostics");
+			if (!array.is_array() || array.size() > kMaximumLandscapeIdentities) {
+				a_error = std::format("DiscoveryDiagnostics must contain at most {} entries.", kMaximumLandscapeIdentities);
+				return false;
+			}
+			std::map<std::string, LandscapeDiagnostic, std::less<>> diagnosticsByIdentity;
+			for (std::size_t index = 0u; index < array.size(); ++index) {
+				const auto& item = array[index];
+				const auto context = std::format("DiscoveryDiagnostics[{}]", index);
+				LandscapeDiagnostic diagnostic;
+				if (!item.is_object()) {
+					a_error = std::format("{} must be an object.", context);
+					return false;
+				}
+				if (!readString(item, context, "Kind", diagnostic.Kind, true) ||
+					!readString(item, context, "Form", diagnostic.Form, false) ||
+					!readString(item, context, "EditorID", diagnostic.EditorID, false) ||
+					!readString(item, context, "Diffuse", diagnostic.Diffuse, false) ||
+					!readString(item, context, "Material", diagnostic.Material, false)) {
+					return false;
+				}
+				const auto kind = ParseLandscapeMaterialKind(diagnostic.Kind);
+				if (!kind) {
+					a_error = std::format("{}.Kind is not recognized.", context);
+					return false;
+				}
+				diagnostic.Kind = CanonicalLandscapeMaterialKind(*kind);
+				if (!diagnostic.Form.empty()) {
+					if (!IsPortableLandscapeFormKey(diagnostic.Form)) {
+						diagnostic.Form.clear();
+					} else {
+						diagnostic.Form = CSX::MeshBlendingLandscapePolicy::CanonicalFormKey(diagnostic.Form);
+					}
+				}
+				diagnostic.Diffuse = NormalizeTexturePath(diagnostic.Diffuse);
+				if (const auto key = BuildLandscapeDiagnosticKey(diagnostic.Form, diagnostic.EditorID, diagnostic.Diffuse);
+					!key.empty()) {
+					diagnosticsByIdentity.insert_or_assign(key, std::move(diagnostic));
+				}
+			}
+			a_state.discoveryDiagnostics.reserve(diagnosticsByIdentity.size());
+			for (auto& [key, diagnostic] : diagnosticsByIdentity) {
+				(void)key;
+				a_state.discoveryDiagnostics.push_back(std::move(diagnostic));
+			}
+		}
 	} catch (const json::exception& exception) {
 		a_error = std::format("The rule file is invalid: {}", exception.what());
 		return false;
@@ -563,14 +881,21 @@ bool MeshBlending::ReadRuleFileState(
 	return true;
 }
 
-void MeshBlending::ApplyRuleFileState(RuleFileState&& a_state, CompiledRules&& a_compiledRules)
+void MeshBlending::ApplyRuleFileState(RuleFileState&& a_state, CompiledRules&& a_compiledRules,
+	std::shared_ptr<const CompiledLandscapeRules> a_landscapeRules)
 {
 	allowList = std::move(a_state.allowList);
 	detectedAllowList = std::move(a_state.detectedAllowList);
 	denyList = std::move(a_state.denyList);
+	landscapeAssignments = std::move(a_state.landscapeAssignments);
+	surfaceMaterialRules = std::move(a_state.surfaceMaterialRules);
+	blendPairRules = std::move(a_state.blendPairRules);
+	savedDiscoveryDiagnostics = std::move(a_state.discoveryDiagnostics);
+	blendPairsExplicit = a_state.blendPairsExplicit;
 	ruleFileDocument = std::move(a_state.document);
 	compiledRules = std::move(a_compiledRules);
 	InvalidateClassificationCache();
+	landscape.PublishPolicy(std::move(a_landscapeRules));
 }
 
 bool MeshBlending::WriteRuleFile(const RuleFileState& a_state, std::string& a_error) const
@@ -586,6 +911,49 @@ bool MeshBlending::WriteRuleFile(const RuleFileState& a_state, std::string& a_er
 			ruleFile["DetectedAllowList"] = a_state.detectedAllowList;
 		}
 
+		auto emitLandscapeAssignments = [&]() {
+			json array = json::array();
+			for (const auto& entry : a_state.landscapeAssignments) {
+				array.push_back({ { "Kind", entry.Kind },
+					{ "Form", entry.Form },
+					{ "EditorID", entry.EditorID },
+					{ "Diffuse", entry.Diffuse } });
+			}
+			return array;
+		};
+		auto emitSurfaceMaterials = [&]() {
+			json array = json::array();
+			for (const auto& entry : a_state.surfaceMaterialRules) {
+				array.push_back({ { "Material", entry.Material }, { "Kind", entry.Kind } });
+			}
+			return array;
+		};
+		ruleFile["LandscapeAssignments"] = emitLandscapeAssignments();
+		ruleFile["SurfaceMaterials"] = emitSurfaceMaterials();
+
+		if (a_state.blendPairsExplicit) {
+			json array = json::array();
+			for (const auto& entry : a_state.blendPairRules) {
+				array.push_back({ { "Source", entry.Source }, { "Receiver", entry.Receiver } });
+			}
+			ruleFile["BlendPairs"] = std::move(array);
+		} else {
+			ruleFile.erase("BlendPairs");
+		}
+
+		if (a_state.discoveryDiagnostics.empty()) {
+			ruleFile.erase("DiscoveryDiagnostics");
+		} else {
+			json array = json::array();
+			for (const auto& entry : a_state.discoveryDiagnostics) {
+				array.push_back({ { "Kind", entry.Kind },
+					{ "Form", entry.Form },
+					{ "EditorID", entry.EditorID },
+					{ "Diffuse", entry.Diffuse },
+					{ "Material", entry.Material } });
+			}
+			ruleFile["DiscoveryDiagnostics"] = std::move(array);
+		}
 		return Util::FileHelpers::WriteTextFileAtomicIfUnchanged(
 			GetRuleFilePath(),
 			ruleFile.dump(1),
@@ -607,9 +975,11 @@ MeshBlending::DiscoverySaveResult MeshBlending::SaveDiscoveredRules()
 		return result;
 	}
 	std::set<std::pair<std::string, std::string>> discoveredSnapshot;
+	std::map<std::string, LandscapeDiagnostic, std::less<>> landscapeSnapshot;
 	{
 		std::scoped_lock lock(discoveryMutex);
 		discoveredSnapshot = discoveredRuleKeys;
+		landscapeSnapshot = discoveredLandscapeIdentities;
 	}
 
 	// Re-read only for an explicit mutation so edits made by a mod author while
@@ -657,23 +1027,54 @@ MeshBlending::DiscoverySaveResult MeshBlending::SaveDiscoveredRules()
 		}),
 		proposedDetectedAllowList.end());
 
+	std::map<std::string, LandscapeDiagnostic, std::less<>> mergedLandscape;
+	for (const auto& diagnostic : diskState.discoveryDiagnostics) {
+		const auto key = BuildLandscapeDiagnosticKey(diagnostic.Form, diagnostic.EditorID, diagnostic.Diffuse);
+		if (!key.empty()) {
+			mergedLandscape[key] = diagnostic;
+		}
+	}
+	for (const auto& [key, diagnostic] : landscapeSnapshot) {
+		if (key.empty()) {
+			continue;
+		}
+		if (mergedLandscape.contains(key)) {
+			mergedLandscape[key] = diagnostic;
+			++result.landscapeRefreshed;
+		} else if (mergedLandscape.size() < kMaximumLandscapeIdentities) {
+			mergedLandscape.emplace(key, diagnostic);
+			++result.landscapeAdded;
+		} else {
+			++result.landscapeCapacityRejected;
+		}
+	}
+
 	RuleFileState proposed = std::move(diskState);
 	proposed.detectedAllowList = std::move(proposedDetectedAllowList);
+	proposed.discoveryDiagnostics.clear();
+	proposed.discoveryDiagnostics.reserve(mergedLandscape.size());
+	for (auto& [key, diagnostic] : mergedLandscape) {
+		(void)key;
+		proposed.discoveryDiagnostics.push_back(std::move(diagnostic));
+	}
 	auto compiled = CompileRules(proposed);
+	auto compiledLandscape = CompileLandscapeRules(proposed);
 	if (!WriteRuleFile(proposed, result.error)) {
 		ruleFileMutationAllowed.store(true, std::memory_order_release);
 		return result;
 	}
 
-	ApplyRuleFileState(std::move(proposed), std::move(compiled));
+	ApplyRuleFileState(std::move(proposed), std::move(compiled), std::move(compiledLandscape));
 	result.added = additions.size();
 	result.success = true;
 	ruleFileLoadError.clear();
 	ruleFileMutationAllowed.store(true, std::memory_order_release);
 	ClearDiscoveredRules();
 	logger::info(
-		"[Mesh Blending] Saved {} NIF identities to {}",
+		"[Mesh Blending] Saved {} NIF and {} new LTEX identities ({} LTEX refreshed) to {}",
 		result.added,
+		result.landscapeAdded,
+		result.landscapeRefreshed,
 		GetRuleFilePath().string());
 	return result;
 }
@@ -686,7 +1087,6 @@ bool MeshBlending::ClearSavedRules(std::string& a_error)
 		return false;
 	}
 	{
-		// Wait for an in-flight observation after disabling capture.
 		std::scoped_lock lock(discoveryMutex);
 	}
 
@@ -699,16 +1099,18 @@ bool MeshBlending::ClearSavedRules(std::string& a_error)
 	}
 	(void)notFound;
 	diskState.detectedAllowList.clear();
+	diskState.discoveryDiagnostics.clear();
 	auto compiled = CompileRules(diskState);
+	auto compiledLandscape = CompileLandscapeRules(diskState);
 	if (!WriteRuleFile(diskState, a_error)) {
 		ruleFileMutationAllowed.store(true, std::memory_order_release);
 		return false;
 	}
-	ApplyRuleFileState(std::move(diskState), std::move(compiled));
+	ApplyRuleFileState(std::move(diskState), std::move(compiled), std::move(compiledLandscape));
 	ClearDiscoveredRules();
 	ruleFileLoadError.clear();
 	ruleFileMutationAllowed.store(true, std::memory_order_release);
-	logger::info("[Mesh Blending] Cleared detected NIF identities in {}", GetRuleFilePath().string());
+	logger::info("[Mesh Blending] Cleared generated material identities in {}", GetRuleFilePath().string());
 	return true;
 }
 
@@ -716,8 +1118,11 @@ void MeshBlending::ClearDiscoveredRules()
 {
 	std::scoped_lock lock(discoveryMutex);
 	discoveredRuleKeys.clear();
+	discoveredLandscapeIdentities.clear();
 	discoveryDuplicateObservations = 0u;
 	discoveryDropped = 0u;
+	landscapeDiscoveryDuplicateObservations = 0u;
+	landscapeDiscoveryDropped = 0u;
 }
 
 bool MeshBlending::BuildOverlaySourceState(RE::BSRenderPass* a_pass, SourceState& a_source) const
@@ -1211,7 +1616,7 @@ MeshBlending::Classification MeshBlending::ClassifyOnCacheMiss(
 	if (a_captureDiscovery) {
 		std::scoped_lock lock(discoveryMutex);
 		captureHasCapacity = discoveredRuleKeys.size() < kMaximumRules;
-		if (!captureHasCapacity) {
+		if (!captureHasCapacity && discoveredLandscapeIdentities.size() >= kMaximumLandscapeIdentities) {
 			discoveryCaptureEnabled.store(false, std::memory_order_relaxed);
 		}
 	}
@@ -1312,14 +1717,20 @@ void MeshBlending::PrepareLightingDraw(RE::BSRenderPass* a_pass)
 	constexpr std::uint32_t descriptorMask = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::MeshBlending);
 	constexpr std::uint32_t inWorldMask = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::InWorld);
 	constexpr std::uint32_t reflectionMask = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::IsReflections);
+	constexpr std::uint32_t landscapeClassMask = static_cast<std::uint32_t>(State::ExtraFeatureDescriptors::MeshBlendingLandscapeClasses);
 	auto& descriptor = state->permutationData.ExtraShaderDescriptor;
-	CSX::MeshBlendingPolicy::ClearDrawDescriptor(descriptor);
+	auto& featureDescriptor = state->permutationData.ExtraFeatureDescriptor;
+	CSX::MeshBlendingPolicy::ClearDrawDescriptors(descriptor, featureDescriptor, CSX::MeshBlendingLandscapePolicy::ClassMask);
 
 	const bool runtimeEnabled = IsRuntimeEnabled();
 	const bool discoveryCaptureActive = IsDiscoveryCaptureActive();
 	if (!runtimeEnabled && !discoveryCaptureActive) {
 		return;
 	}
+	const auto passShaderFlags = a_pass && a_pass->shaderProperty ? a_pass->shaderProperty->flags.underlying() : 0u;
+	const bool lodLandscapePass = (passShaderFlags & ToMask(ShaderFlag::kLODLandscape)) != 0u;
+	const bool landscapePass = !lodLandscapePass &&
+	                           (passShaderFlags & ToMask(ShaderFlag::kMultiTextureLandscape)) != 0u;
 #ifdef TRACY_ENABLE
 	ZoneScopedN("MeshBlending - Prepare Lighting Draw");
 #endif
@@ -1334,7 +1745,29 @@ void MeshBlending::PrepareLightingDraw(RE::BSRenderPass* a_pass)
 		}
 		return;
 	}
-	const auto passShaderFlags = a_pass && a_pass->shaderProperty ? a_pass->shaderProperty->flags.underlying() : 0u;
+	if (landscapePass || lodLandscapePass) {
+		// Borrowed seam layers have no six-slot material policy; keep their native weights.
+		const bool seamPass = (state->modifiedPixelDescriptor & static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams)) != 0u;
+		if (landscapePass && !seamPass && runtimeEnabled && settings.LandscapeLayerBlending != 0u &&
+			IsFinite(settings.LandscapeBlendStrength) && settings.LandscapeBlendStrength > 0.0f) {
+			std::uint32_t packedClasses = 0u;
+			if (landscape.TryGetClasses(a_pass, packedClasses)) {
+				if (collectDiagnostics) {
+					++diagnostics.landscapeRegistryHits;
+				}
+				featureDescriptor |= packedClasses & landscapeClassMask;
+				if ((packedClasses & landscapeClassMask) != 0u) {
+					if (collectDiagnostics) {
+						++diagnostics.activeDraws;
+					}
+					++diagnostics.currentFrameActive;
+				}
+			} else if (collectDiagnostics) {
+				++diagnostics.landscapeRegistryMisses;
+			}
+		}
+		return;
+	}
 	const auto projectedSnowFlags = ToMask(ShaderFlag::kProjectedUV) | ToMask(ShaderFlag::kMultiIndexSnow);
 	if ((passShaderFlags & projectedSnowFlags) == projectedSnowFlags) {
 		TryPrepareProjectedSnow(a_pass);
@@ -1409,89 +1842,156 @@ void MeshBlending::DrawDiagnostics() const
 	ImGui::Text("Accepts: %llu allow-list, %llu automatic",
 		static_cast<unsigned long long>(diagnostics.ruleAccepts),
 		static_cast<unsigned long long>(diagnostics.automaticAccepts));
+	ImGui::Text("LAND snapshots: %llu hits, %llu misses",
+		static_cast<unsigned long long>(diagnostics.landscapeRegistryHits),
+		static_cast<unsigned long long>(diagnostics.landscapeRegistryMisses));
 	ImGui::TreePop();
 }
 
 void MeshBlending::DrawDiscoverySettings()
 {
 	static Util::ConfirmationPopup savePopup{
-		"Save Detected NIF Rules?##MeshBlending",
-		"This atomically merges captured exact model/node pairs into MeshBlendingRules.json. "
-		"Generated rules retain current receiver checks and remain separate from authored policy.",
-		"Save Detected NIF Rules"
+		"Save Detected Materials?##MeshBlending",
+		"This atomically merges captured exact NIF model/node pairs and streamed LTEX identities into "
+		"MeshBlendingRules.json. Generated entries remain separate from manually authored policy.",
+		"Save Detected Materials"
 	};
 	static Util::ConfirmationPopup clearPopup{
-		"Clear Detected NIF Rules?##MeshBlending",
-		"This removes generated DetectedAllowList entries and the current session capture. "
-		"Authored AllowList, DenyList, and unknown extension fields are preserved.",
-		"Clear Detected NIF Rules"
+		"Clear Detected Materials?##MeshBlending",
+		"This removes only generated DetectedAllowList and DiscoveryDiagnostics entries plus the current session capture. "
+		"Manual AllowList, DenyList, LandscapeAssignments, SurfaceMaterials, BlendPairs, and unknown top-level extension fields are preserved.",
+		"Clear Detected Materials"
 	};
-	ImGui::SeparatorText("NIF recording");
+
+	ImGui::SeparatorText("Material recording");
 	auto* state = globals::state;
 	const bool mutationBlocked = state && state->IsPersistentMutationBlocked();
 	const bool ruleFileBlocked = !ruleFileMutationAllowed.load(std::memory_order_acquire);
 	const bool captureSaturated = IsDiscoveryCaptureSaturated();
 	bool captureEnabled = discoveryCaptureEnabled.load(std::memory_order_relaxed);
-	if (mutationBlocked || ruleFileBlocked || captureSaturated)
+	if (mutationBlocked || ruleFileBlocked || captureSaturated) {
 		ImGui::BeginDisabled();
-	if (ImGui::Checkbox("Record Visible NIF Identities", &captureEnabled)) {
-		SetDiscoveryCaptureEnabled(captureEnabled);
-		discoveryStatus = captureEnabled && !discoveryCaptureEnabled.load(std::memory_order_relaxed) ?
-		                      "The recording limit is reached. Save or clear the current results." :
-		                      "";
 	}
-	if (mutationBlocked || ruleFileBlocked || captureSaturated)
+	if (ImGui::Checkbox("Record Visible Material Identities", &captureEnabled)) {
+		SetDiscoveryCaptureEnabled(captureEnabled);
+		if (captureEnabled && !discoveryCaptureEnabled.load(std::memory_order_relaxed)) {
+			discoveryStatus = "Both bounded recording categories are full. Save or clear the current results.";
+		} else {
+			discoveryStatus.clear();
+		}
+	}
+	if (mutationBlocked || ruleFileBlocked || captureSaturated) {
 		ImGui::EndDisabled();
+	}
 	if (auto tooltip = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Records eligible visible NIF overlays inside the view and distance gates. Identities are bounded and deduplicated in memory. "
-			"Recording is session-only, pauses feature-cost measurement, and writes a file only when Save Detected NIF Rules is pressed.");
+			"Records only NIF identities that are rendered inside the view/distance gates and LTEX identities from streamed LAND cells.\n"
+			"It does not scan directories or open every NIF. Both categories are bounded and deduplicated in memory.\n"
+			"No disk I/O occurs until Save Detected Materials is pressed. Recording is session-only and pauses performance A/B measurement.");
 	}
-	std::size_t discoveredCount = 0u;
-	std::size_t duplicateCount = 0u;
-	std::size_t droppedCount = 0u;
+
+	std::size_t discoveredNifCount = 0u;
+	std::size_t nifDuplicateCount = 0u;
+	std::size_t nifDroppedCount = 0u;
+	std::size_t discoveredLandscapeCount = 0u;
+	std::size_t landscapeDuplicateCount = 0u;
+	std::size_t landscapeDroppedCount = 0u;
+	const auto compiledLandscapePairCount = landscape.GetBlendPairCount();
 	{
 		std::scoped_lock lock(discoveryMutex);
-		discoveredCount = discoveredRuleKeys.size();
-		duplicateCount = discoveryDuplicateObservations;
-		droppedCount = discoveryDropped;
+		discoveredNifCount = discoveredRuleKeys.size();
+		nifDuplicateCount = discoveryDuplicateObservations;
+		nifDroppedCount = discoveryDropped;
+		discoveredLandscapeCount = discoveredLandscapeIdentities.size();
+		landscapeDuplicateCount = landscapeDiscoveryDuplicateObservations;
+		landscapeDroppedCount = landscapeDiscoveryDropped;
 	}
-	ImGui::Text("Session: %zu / %zu unique; %zu duplicates; %zu dropped", discoveredCount, kMaximumRules, duplicateCount, droppedCount);
-	ImGui::Text("Persisted: %zu authored allow, %zu detected allow, %zu deny", allowList.size(), detectedAllowList.size(), denyList.size());
+	ImGui::Text(
+		"Session NIF: %zu / %zu unique; %zu duplicates; %zu dropped",
+		discoveredNifCount,
+		kMaximumRules,
+		nifDuplicateCount,
+		nifDroppedCount);
+	ImGui::Text(
+		"Session LTEX: %zu / %zu unique; %zu duplicates; %zu dropped",
+		discoveredLandscapeCount,
+		kMaximumLandscapeIdentities,
+		landscapeDuplicateCount,
+		landscapeDroppedCount);
+	ImGui::Text(
+		"Persisted: %zu manual allow, %zu detected allow, %zu deny; %zu LTEX assignments, %zu surface rules, "
+		"%zu authored pair rules (%s; %zu compiled), %zu diagnostics",
+		allowList.size(),
+		detectedAllowList.size(),
+		denyList.size(),
+		landscapeAssignments.size(),
+		surfaceMaterialRules.size(),
+		blendPairRules.size(),
+		blendPairsExplicit ? "explicit policy" : "built-in defaults",
+		compiledLandscapePairCount,
+		savedDiscoveryDiagnostics.size());
 	ImGui::TextDisabled("Rule file: Data/SKSE/Plugins/CommunityShaders/MeshBlendingRules.json");
-	if (ruleFileBlocked)
-		ImGui::TextWrapped("Mesh Blending and discovery are disabled, and the rule file is protected from replacement: %s Fix or remove it, then restart.", ruleFileLoadError.c_str());
-	if (mutationBlocked)
+	if (ruleFileBlocked) {
+		ImGui::TextWrapped(
+			"Mesh Blending and discovery are disabled, and the existing rule file is protected from replacement: %s "
+			"Fix or remove it, then restart.",
+			ruleFileLoadError.c_str());
+	}
+	if (mutationBlocked) {
 		ImGui::TextDisabled("Rule-file changes are paused while the game is saving or loading.");
-	if (droppedCount != 0u)
-		ImGui::TextWrapped("Some identities were not retained because recording was full or the identity was unsafe for JSON.");
-	if (captureSaturated)
-		ImGui::TextWrapped("Recording stopped at the session limit. Save or clear the captured identities.");
-	const bool hasSessionCapture = discoveredCount != 0u;
-	if (mutationBlocked || ruleFileBlocked || !hasSessionCapture)
+	}
+	if (nifDroppedCount != 0u || landscapeDroppedCount != 0u) {
+		ImGui::TextWrapped("Some identities were not retained because their independent category was full or the identity was unsafe for JSON.");
+	}
+	if (captureSaturated) {
+		ImGui::TextWrapped("Recording stopped because both independent categories reached their session limits.");
+	}
+
+	const bool hasSessionCapture = discoveredNifCount != 0u || discoveredLandscapeCount != 0u;
+	const bool hasGeneratedData = !detectedAllowList.empty() || !savedDiscoveryDiagnostics.empty();
+	if (mutationBlocked || ruleFileBlocked || !hasSessionCapture) {
 		ImGui::BeginDisabled();
-	if (ImGui::Button("Save Detected NIF Rules"))
+	}
+	if (ImGui::Button("Save Detected Materials")) {
 		savePopup.Request();
-	if (mutationBlocked || ruleFileBlocked || !hasSessionCapture)
+	}
+	if (mutationBlocked || ruleFileBlocked || !hasSessionCapture) {
 		ImGui::EndDisabled();
+	}
 	ImGui::SameLine();
-	if (mutationBlocked || ruleFileBlocked || (!hasSessionCapture && detectedAllowList.empty()))
+	if (mutationBlocked || ruleFileBlocked || (!hasSessionCapture && !hasGeneratedData)) {
 		ImGui::BeginDisabled();
-	if (ImGui::Button("Clear Detected NIF Rules"))
+	}
+	if (ImGui::Button("Clear Detected Materials")) {
 		clearPopup.Request();
-	if (mutationBlocked || ruleFileBlocked || (!hasSessionCapture && detectedAllowList.empty()))
+	}
+	if (mutationBlocked || ruleFileBlocked || (!hasSessionCapture && !hasGeneratedData)) {
 		ImGui::EndDisabled();
-	if (!discoveryStatus.empty())
+	}
+
+	if (!discoveryStatus.empty()) {
 		ImGui::TextWrapped("%s", discoveryStatus.c_str());
+	}
+
 	if (savePopup.Draw()) {
 		if (globals::state && globals::state->IsPersistentMutationBlocked()) {
 			discoveryStatus = "Nothing was changed because the game is saving or loading.";
 		} else {
 			const auto result = SaveDiscoveredRules();
-			discoveryStatus = result.success ?
-			                      std::format("Saved {} new NIF identities; {} were already allowed, {} denied, and {} exceeded capacity.",
-									  result.added, result.alreadyAllowed, result.denied, result.capacityRejected) :
-			                      std::format("Could not save detected NIF rules: {}", result.error);
+			if (result.success) {
+				discoveryStatus = std::format(
+					"Saved {} new NIF identities and {} new LTEX identities; {} NIF identities were already allowed, {} were denied, "
+					"{} LTEX identities were refreshed, and {} NIF / {} LTEX identities exceeded capacity.",
+					result.added,
+					result.landscapeAdded,
+					result.alreadyAllowed,
+					result.denied,
+					result.landscapeRefreshed,
+					result.capacityRejected,
+					result.landscapeCapacityRejected);
+			} else {
+				discoveryStatus = std::format("Could not save detected materials: {}", result.error);
+			}
 		}
 	}
 	if (clearPopup.Draw()) {
@@ -1499,8 +1999,11 @@ void MeshBlending::DrawDiscoverySettings()
 			discoveryStatus = "Nothing was changed because the game is saving or loading.";
 		} else {
 			std::string error;
-			discoveryStatus = ClearSavedRules(error) ? "Cleared detected NIF rules and the current capture; authored policy was preserved." :
-			                                           std::format("Could not clear detected NIF rules: {}", error);
+			if (ClearSavedRules(error)) {
+				discoveryStatus = "Cleared generated detected identities and the current capture; manual policy was preserved.";
+			} else {
+				discoveryStatus = std::format("Could not clear MeshBlendingRules.json: {}", error);
+			}
 		}
 	}
 }
@@ -1528,6 +2031,12 @@ void MeshBlending::DrawSettings()
 	if (auto tooltip = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Controls NIF intersection fades. Zero disables NIF blending work.");
 	}
+	ImGui::SliderFloat("LAND blend strength", &settings.LandscapeBlendStrength, 0.0f, 1.0f, "%.2f");
+	if (auto tooltip = Util::HoverTooltipWrapper()) {
+		ImGui::Text(
+			"Rebalances already-active LAND texture weights using bounded material rules: soft deposits over hard, "
+			"authored soft-layer mixtures are preserved, and hard/hard stays crisp. Unknown identities preserve authored weights.");
+	}
 	ImGui::SliderFloat("Projected snow edge width", &settings.ProjectedSnowEdgeWidth, 0.0f, 8.0f, "%.2f pixels");
 	if (auto tooltip = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Softens accepted multi-index projected-snow cutoffs. Zero preserves the original hard discard.");
@@ -1540,10 +2049,11 @@ void MeshBlending::DrawSettings()
 	}
 
 	if (ImGui::TreeNodeEx("Performance and safety")) {
-		ImGui::SliderFloat("Culling distance", &settings.MaximumDistance, 0.0f, 32768.0f, "%.0f units");
+		ImGui::SliderFloat("NIF culling distance", &settings.MaximumDistance, 0.0f, 32768.0f, "%.0f units");
 		if (auto tooltip = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Static overlays outside this camera/eye-centered bubble are rejected before root lookup. Set to 0 for unlimited distance.");
+				"Static NIF shapes outside this camera/eye-centered bubble are rejected before root lookup. "
+				"LAND is already bounded by submitted nearby terrain draws. Set to 0 for unlimited NIF distance.");
 		}
 		classifierChanged |= ImGui::SliderFloat("Bounds expansion", &settings.BoundsExpansion, 0.0f, 256.0f, "%.0f units");
 		ImGui::TextDisabled("Automatic and saved detected overlays require a plausible opaque sibling.");
@@ -1570,7 +2080,7 @@ void MeshBlending::DrawSettings()
 		ImGui::TextDisabled("Overlay blending is inactive: allow-list-only mode has no compiled allow rules.");
 	}
 	if (settings.DetectionMode == static_cast<std::uint32_t>(DetectionMode::kStrictAutomatic)) {
-		ImGui::TextWrapped("Automatic overlay detection is selected. Deny rules always win; explicit allows still pass every render-state and static-owner safety gate.");
+		ImGui::TextWrapped("Automatic NIF detection is active. Deny rules always win; explicit allows still pass every render-state and static-owner safety gate.");
 	}
 	if (globals::state && globals::state->IsDeveloperMode()) {
 		bool developerLogging = settings.DeveloperLogging != 0u;
@@ -1594,6 +2104,9 @@ void MeshBlending::DrawMechanismToggles()
 	bool snowEnabled = settings.ProjectedSnowEnabled != 0u;
 	if (ImGui::Checkbox("Projected snow edges", &snowEnabled))
 		settings.ProjectedSnowEnabled = snowEnabled ? 1u : 0u;
+	bool landscapeEnabled = settings.LandscapeLayerBlending != 0u;
+	if (ImGui::Checkbox("LAND/LTEX material blending", &landscapeEnabled))
+		settings.LandscapeLayerBlending = landscapeEnabled ? 1u : 0u;
 }
 
 void MeshBlending::DrawEssentialSettings()
@@ -1624,15 +2137,18 @@ void MeshBlending::DrawPerformanceSettings(bool a_advanced)
 		settings.Enabled = enabled ? 1u : 0u;
 	}
 	DrawMechanismToggles();
-	ImGui::SliderFloat("Culling distance", &settings.MaximumDistance, 0.0f, 32768.0f, "%.0f units");
+	ImGui::SliderFloat("NIF culling distance", &settings.MaximumDistance, 0.0f, 32768.0f, "%.0f units");
 	if (auto tooltip = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Rejects overlays beyond this camera/eye-centered distance before owner lookup.");
+		ImGui::Text("Applies only to NIF classification. LAND work is already limited to submitted nearby terrain draws.");
 	}
 	if (IsDiscoveryCaptureActive()) {
 		ImGui::TextDisabled("Stop Record Visible Material Identities before running a feature-cost measurement.");
 	}
 	if (a_advanced) {
 		ImGui::Text("Mode: %s; active draws: %u last frame, %u this frame", DetectionModeName(settings.DetectionMode), diagnostics.lastFrameActive, diagnostics.currentFrameActive);
+		ImGui::Text("LAND snapshots: %llu hits, %llu misses",
+			static_cast<unsigned long long>(diagnostics.landscapeRegistryHits),
+			static_cast<unsigned long long>(diagnostics.landscapeRegistryMisses));
 		if (diagnostics.lastFrameActive == 0u && diagnostics.currentFrameActive == 0u) {
 			ImGui::TextDisabled("No mesh-blending draws are visible; A/B measures idle overhead only.");
 		}
@@ -1646,6 +2162,7 @@ json MeshBlending::CapturePerformanceSettingsState() const
 		{ "Enabled", settings.Enabled },
 		{ "NifEnabled", settings.NifEnabled },
 		{ "ProjectedSnowEnabled", settings.ProjectedSnowEnabled },
+		{ "LandscapeLayerBlending", settings.LandscapeLayerBlending },
 		{ "MaximumDistance", settings.MaximumDistance }
 	};
 }

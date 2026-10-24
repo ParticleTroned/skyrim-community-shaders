@@ -65,7 +65,9 @@ json MeshBlending::ControlDevBench(const json& a_request)
 							 { "cacheEvictions", diagnostics.cacheEvictions },
 							 { "rootTraversals", diagnostics.rootTraversals },
 							 { "nodesVisited", diagnostics.nodesVisited },
-							 { "traversalLimitRejects", diagnostics.traversalLimitRejects } } }
+							 { "traversalLimitRejects", diagnostics.traversalLimitRejects },
+							 { "landscapeRegistryHits", diagnostics.landscapeRegistryHits },
+							 { "landscapeRegistryMisses", diagnostics.landscapeRegistryMisses } } }
 	};
 }
 

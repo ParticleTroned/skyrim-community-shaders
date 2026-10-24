@@ -70,6 +70,8 @@ namespace
 			feature.diagnostics.drawCalls = std::uint64_t{ 1 } << 40u;
 			feature.diagnostics.currentFrame = 19u;
 			feature.diagnostics.traversalLimitRejects = 7u;
+			feature.diagnostics.landscapeRegistryHits = 11u;
+			feature.diagnostics.landscapeRegistryMisses = 13u;
 		}
 		~Fixture() { globals::state = nullptr; }
 	};
@@ -77,7 +79,8 @@ namespace
 	json MutationState(const MeshBlending& feature)
 	{
 		return { feature.settings, feature.capture, feature.loads, feature.captureWrites,
-			feature.diagnostics.drawCalls, feature.diagnostics.currentFrame, feature.diagnostics.traversalLimitRejects };
+			feature.diagnostics.drawCalls, feature.diagnostics.currentFrame, feature.diagnostics.traversalLimitRejects,
+			feature.diagnostics.landscapeRegistryHits, feature.diagnostics.landscapeRegistryMisses };
 	}
 
 	void TestStatusAndMutation()
@@ -97,6 +100,8 @@ namespace
 		Require(counters.is_object() && counters.at("drawCalls") == (std::uint64_t{ 1 } << 40u) &&
 					counters.at("frame") == 19u && counters.at("traversalLimitRejects") == 7u && !status.contains("drawCalls"),
 			"diagnostics were flattened, truncated or omitted");
+		Require(counters.at("landscapeRegistryHits") == 11u && counters.at("landscapeRegistryMisses") == 13u,
+			"status omitted LAND diagnostic counters");
 		Require(MutationState(feature) == before, "status request mutated feature state");
 		feature.ruleFileMutationAllowed.store(true);
 		const auto changed = feature.ControlDevBench({ { "settings", { { "NifEnabled", false }, { "BlendWidth", 24.0f } } },

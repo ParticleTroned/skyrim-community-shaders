@@ -191,9 +191,9 @@ namespace
 	static_assert(offsetof(MeshBlendingSettingsCB, BlendWidth) == 4);
 	static_assert(offsetof(MeshBlendingSettingsCB, DepthBias) == 8);
 	static_assert(offsetof(MeshBlendingSettingsCB, MaximumGap) == 12);
-	static_assert(offsetof(MeshBlendingSettingsCB, Padding0) == 16);
+	static_assert(offsetof(MeshBlendingSettingsCB, EnableLandscapeBlending) == 16);
 	static_assert(offsetof(MeshBlendingSettingsCB, ProjectedSnowEdgeWidth) == 20);
-	static_assert(offsetof(MeshBlendingSettingsCB, Padding2) == 24);
+	static_assert(offsetof(MeshBlendingSettingsCB, LandscapeBlendStrength) == 24);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);
 	static_assert(std::is_trivially_copyable_v<FeatureDataLayout>);

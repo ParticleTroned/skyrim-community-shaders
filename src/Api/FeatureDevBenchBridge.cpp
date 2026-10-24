@@ -40,7 +40,7 @@ namespace
 
 	CSX::Api::ServiceFoundation& Foundation()
 	{
-		static CSX::Api::ServiceFoundation value({ ServiceName, 1, 1, 23 });
+		static CSX::Api::ServiceFoundation value({ ServiceName, 1, 1, 24 });
 		static std::once_flag once;
 		std::call_once(once, [&] { value.SetServerMetadataProvider([] { auto p = BuildProvenance::GetProducer(); p["serviceSessionId"] = Foundation().SessionId(); return p; }); });
 		return value;
@@ -237,7 +237,7 @@ namespace
 		}
 		if (action == "registry") {
 			auto response = Foundation().MakeEnvelope(args, true);
-			response["result"] = { { "service", ServiceName }, { "major", 1 }, { "minor", 1 }, { "schemaRevision", 23 },
+			response["result"] = { { "service", ServiceName }, { "major", 1 }, { "minor", 1 }, { "schemaRevision", 24 },
 				{ "capabilities", ServiceCapabilities }, { "mainThreadAffine", true }, { "registryMainThreadAffine", false },
 				{ "preflightTokenLifetimeMs", 30000 }, { "actions", json::array({ "mesh_blending", "terrain_seams", "registry", "snapshot", "features", "issues", "preset_compatibility", "settings", "sun_receiver", "sun_receiver_trace", "shadow_culling", "texture_streaming", "texture_streaming_pressure", "constraints", "preflight", "execute" }) },
 				{ "mutations", json::array({ "set_disabled_at_boot" }) }, { "legacyInterfacesPreserved", true } };

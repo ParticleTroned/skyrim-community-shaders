@@ -1,54 +1,40 @@
-# Shader-only contract. Runtime admission, persistence and buffer layout are
-# checked by their own production-backed contracts.
 if(NOT DEFINED PROJECT_ROOT)
     message(FATAL_ERROR "PROJECT_ROOT is required")
 endif()
 
-file(READ "${PROJECT_ROOT}/package/Shaders/Lighting.hlsl" _mesh_scope_lighting)
-file(READ "${PROJECT_ROOT}/features/Mesh Blending/Shaders/MeshBlending/MeshBlending.hlsli" _mesh_scope_math)
-file(READ "${PROJECT_ROOT}/package/Shaders/Tests/TestMeshBlending.hlsl" _mesh_scope_tests)
-file(READ "${PROJECT_ROOT}/package/Shaders/Common/Permutation.hlsli" _mesh_scope_permutation)
-
-foreach(_mesh_scope_forbidden IN ITEMS
-    "RemapLandscapeWeights"
-    "MeshBlendingLandscape"
-    "kLandscapeClass"
-    "LandscapeBlendStrength"
-    "EnableLandscapeBlending"
-    "MESH_BLENDING_LANDSCAPE_AVAILABLE"
-)
-    string(FIND "${_mesh_scope_lighting}${_mesh_scope_math}${_mesh_scope_tests}${_mesh_scope_permutation}" "${_mesh_scope_forbidden}" _mesh_scope_position)
-    if(NOT _mesh_scope_position EQUAL -1)
-        message(FATAL_ERROR "Future LAND policy is present in this shader stage: ${_mesh_scope_forbidden}")
-    endif()
-endforeach()
-
+file(READ "${PROJECT_ROOT}/package/Shaders/Lighting.hlsl" _lighting_shader)
 string(REGEX MATCH
-    "#[ \t]*(if|elif)[^\n]*defined\\(MESH_BLENDING\\)[^\n]*\n[ \t]*!defined\\(LOD\\)[^\n]*!defined\\(LANDSCAPE\\)"
-    _mesh_scope_static_guard "${_mesh_scope_lighting}")
-if(NOT _mesh_scope_static_guard)
-    message(FATAL_ERROR "The NIF shader gate must explicitly exclude LANDSCAPE")
+    "#[ \t]*if[ \t]+defined\\(LANDSCAPE\\)[ \t]*&&[ \t]*!defined\\(LANDSCAPE_SEAMS\\)[ \t\r\n]*#[ \t]*define[ \t]+MESH_BLENDING_LANDSCAPE_AVAILABLE"
+    _landscape_seam_guard "${_lighting_shader}")
+if(NOT _landscape_seam_guard)
+    message(FATAL_ERROR "Six-layer LAND material policy must exclude borrowed seam layers")
+endif()
+string(REGEX MATCHALL "MeshBlending::RemapLandscapeWeights\\(" _landscape_remaps "${_lighting_shader}")
+list(LENGTH _landscape_remaps _landscape_remap_count)
+if(NOT _landscape_remap_count EQUAL 1)
+    message(FATAL_ERROR "LAND material policy must be applied exactly once")
 endif()
 
-foreach(_mesh_scope_required IN ITEMS
-    "MeshBlending::ComputeFade(screenUV, input.Position.z, eyeIndex)"
-    "LandscapeSeams::Load("
-    "LANDSCAPE_SEAMS_BLEND_EXTRAS"
+# POM owns its height-blended result. All shadow and material consumers must
+# use it without a later policy remap invalidating cached shadow heights.
+set(_landscape_stages "${_lighting_shader}")
+foreach(_stage IN ITEMS
+    "input.LandBlendWeights2.xy /= totalWeight"
+    "MeshBlending::RemapLandscapeWeights("
+    "SharedData::meshBlendingSettings.LandscapeBlendStrength"
+    "input.LandBlendWeights1 = meshBlendingLandscapeWeights1"
+    "ExtendedMaterials::GetParallaxCoords(input,"
+    "input.LandBlendWeights1.x = weights[0]"
+    "hasCachedTerrainShadowBaseHeight = COMPUTE_TERRAIN_SHADOW_BASE(sh0)"
+    "cachedDirectionalTerrainParallaxShadow = EVAL_TERRAIN_DIR_SHADOW(sh0,"
+    "shininess = dot(input.LandBlendWeights1,"
+    "ExtendedMaterials::GetParallaxSoftShadowMultiplierTerrain(input,"
 )
-    string(FIND "${_mesh_scope_lighting}" "${_mesh_scope_required}" _mesh_scope_position)
-    if(_mesh_scope_position EQUAL -1)
-        message(FATAL_ERROR "Shader integration is missing: ${_mesh_scope_required}")
+    string(FIND "${_landscape_stages}" "${_stage}" _stage_position)
+    if(_stage_position EQUAL -1)
+        message(FATAL_ERROR "LAND material/shadow pipeline is missing or out of order: ${_stage}")
     endif()
-endforeach()
-
-foreach(_mesh_scope_required IN ITEMS
-    "MESH_BLENDING_PROJECTED_SNOW_AVAILABLE"
-    "MeshBlending::ComputeProjectedSnowCoverage("
-    "SharedData::meshBlendingSettings.ProjectedSnowEdgeWidth"
-    "psout.Diffuse.w *= meshBlendingProjectedSnowCoverage"
-)
-    string(FIND "${_mesh_scope_lighting}" "${_mesh_scope_required}" _mesh_scope_position)
-    if(_mesh_scope_position EQUAL -1)
-        message(FATAL_ERROR "Projected-snow shader integration is missing: ${_mesh_scope_required}")
-    endif()
+    string(LENGTH "${_stage}" _stage_length)
+    math(EXPR _next_stage "${_stage_position} + ${_stage_length}")
+    string(SUBSTRING "${_landscape_stages}" ${_next_stage} -1 _landscape_stages)
 endforeach()

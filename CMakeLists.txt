@@ -1754,6 +1754,36 @@ if(BUILD_CONTROLLER_TESTS)
         NvidiaPipelineContract
         PROPERTIES LABELS "ControllerTests"
     )
+    add_test(
+        NAME MeshBlendingSafetyContract
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/mesh_blending_safety_contract_test.cmake"
+    )
+    set_tests_properties(
+        MeshBlendingSafetyContract
+        PROPERTIES LABELS "ControllerTests"
+    )
+    add_test(
+        NAME MeshBlendingRuntimeScopeContract
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/mesh_blending_runtime_scope_contract_test.cmake"
+    )
+    set_tests_properties(
+        MeshBlendingRuntimeScopeContract
+        PROPERTIES LABELS "ControllerTests"
+    )
+    add_test(
+        NAME MeshBlendingShaderScopeContract
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/mesh_blending_shader_scope_contract_test.cmake"
+    )
+    set_tests_properties(
+        MeshBlendingShaderScopeContract
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_test(
         NAME BuildProvenance
@@ -3674,6 +3704,121 @@ if(BUILD_CONTROLLER_TESTS)
     target_include_directories(
         vr_submit_stereo_batch_test
         PRIVATE "${_stereo_admission_dir}"
+    )
+    add_controller_test(
+        mesh_blending_policy_test
+        MeshBlendingPolicy
+        tests/mesh_blending_policy_test.cpp
+    )
+    set(_mesh_rules_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mesh_rules")
+    add_custom_command(
+        OUTPUT
+            "${_mesh_rules_test_dir}/mesh_blending_rule_members.h"
+            "${_mesh_rules_test_dir}/mesh_blending_rules_under_test.h"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extract_mesh_blending_rules.py"
+            --source-dir "${PROJECT_SOURCE_DIR}" --output-dir
+            "${_mesh_rules_test_dir}"
+        DEPENDS
+            src/Features/MeshBlending.h
+            src/Features/MeshBlending.cpp
+            tests/extract_mesh_blending_rules.py
+            tests/extract_adaptive_balance_toggle.py
+        VERBATIM
+    )
+    add_controller_test(
+        mesh_blending_rules_test
+        MeshBlendingRules
+        tests/mesh_blending_rules_test.cpp
+    )
+    target_sources(
+        mesh_blending_rules_test
+        PRIVATE
+            "${_mesh_rules_test_dir}/mesh_blending_rule_members.h"
+            "${_mesh_rules_test_dir}/mesh_blending_rules_under_test.h"
+    )
+    target_include_directories(
+        mesh_blending_rules_test
+        PRIVATE "${_mesh_rules_test_dir}"
+    )
+    target_link_libraries(
+        mesh_blending_rules_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_controller_test(
+        mesh_blending_devbench_policy_test
+        MeshBlendingDevBenchPolicy
+        tests/mesh_blending_devbench_policy_test.cpp
+    )
+    target_link_libraries(
+        mesh_blending_devbench_policy_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    set(_mesh_devbench_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/mesh_devbench"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_mesh_devbench_test_dir}/mesh_blending_devbench_members.h"
+            "${_mesh_devbench_test_dir}/mesh_blending_devbench_under_test.h"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extract_mesh_blending_devbench.py"
+            --source-dir "${PROJECT_SOURCE_DIR}" --output-dir
+            "${_mesh_devbench_test_dir}"
+        DEPENDS
+            src/Features/MeshBlending.h
+            src/Features/MeshBlendingDevBench.cpp
+            tests/extract_mesh_blending_devbench.py
+            tests/extract_adaptive_balance_toggle.py
+        VERBATIM
+    )
+    add_controller_test(
+        mesh_blending_devbench_test
+        MeshBlendingDevBench
+        tests/mesh_blending_devbench_test.cpp
+    )
+    target_sources(
+        mesh_blending_devbench_test
+        PRIVATE
+            "${_mesh_devbench_test_dir}/mesh_blending_devbench_members.h"
+            "${_mesh_devbench_test_dir}/mesh_blending_devbench_under_test.h"
+    )
+    target_include_directories(
+        mesh_blending_devbench_test
+        PRIVATE "${_mesh_devbench_test_dir}"
+    )
+    target_link_libraries(
+        mesh_blending_devbench_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    set(_mesh_depth_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mesh_depth")
+    add_custom_command(
+        OUTPUT "${_mesh_depth_test_dir}/mesh_blending_depth_under_test.h"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extract_mesh_blending_depth.py"
+            --source-dir "${PROJECT_SOURCE_DIR}" --output-dir
+            "${_mesh_depth_test_dir}"
+        DEPENDS
+            src/State.cpp
+            tests/extract_mesh_blending_depth.py
+            tests/extract_adaptive_balance_toggle.py
+        VERBATIM
+    )
+    add_controller_test(
+        mesh_blending_depth_test
+        MeshBlendingDepth
+        tests/mesh_blending_depth_test.cpp
+    )
+    target_sources(
+        mesh_blending_depth_test
+        PRIVATE "${_mesh_depth_test_dir}/mesh_blending_depth_under_test.h"
+    )
+    target_include_directories(
+        mesh_blending_depth_test
+        PRIVATE "${_mesh_depth_test_dir}"
     )
     add_controller_test(
         main_thread_dispatch_policy_test

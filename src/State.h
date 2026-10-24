@@ -144,7 +144,7 @@ public:
 		StartupHydration,
 	};
 
-	void Draw();
+	void Draw(bool a_isCompute);
 	void Debug();
 	void Reset();
 	void Setup();
@@ -358,8 +358,25 @@ public:
 		CharacterFocusFadeMask = 255 << CharacterFocusFadeShift,
 		CharacterFace = 0b01 << CharacterCategoryShift,
 		CharacterSkin = 0b10 << CharacterCategoryShift,
-		CharacterHair = 0b11 << CharacterCategoryShift
+		CharacterHair = 0b11 << CharacterCategoryShift,
+		MeshBlending = 1u << 23
 	};
+
+	static_assert((static_cast<std::uint32_t>(ExtraShaderDescriptors::MeshBlending) &
+					  (static_cast<std::uint32_t>(ExtraShaderDescriptors::InWorld) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::IsReflections) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::IsBeastRace) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::EffectShadows) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::IsTree) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::GrassSphereNormal) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::IsFemale) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::SuppressExternalEmittance) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::AdditiveLighting) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::PBRGrass) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::PBRGrassShading) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::CharacterCategoryMask) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::CharacterExcluded) |
+						  static_cast<std::uint32_t>(ExtraShaderDescriptors::CharacterFocusFadeMask))) == 0u);
 
 	enum class ExtraFeatureDescriptors : uint32_t
 	{

@@ -43,8 +43,8 @@ if(NOT _terrain_seams_found)
 endif()
 
 foreach(_bridge_contract IN ITEMS
-    "ServiceFoundation value({ ServiceName, 1, 1, 21 })"
-    "{ \"minor\", 1 }, { \"schemaRevision\", 21 }"
+    "ServiceFoundation value({ ServiceName, 1, 1, 22 })"
+    "{ \"minor\", 1 }, { \"schemaRevision\", 22 }"
     "PresetCompatibility::ToJson(PresetCompatibility::GetPublished())"
 )
     string(FIND "${_bridge}" "${_bridge_contract}" _bridge_position)

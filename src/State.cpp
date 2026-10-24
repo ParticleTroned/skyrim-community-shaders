@@ -61,6 +61,7 @@
 #include "SettingsSerialization.h"
 #include "ShaderCache.h"
 #include "TruePBR.h"
+#include "Utils/D3D.h"
 #include "Utils/FileSystem.h"
 #include "Utils/SettingsOverlay.h"
 #include "Utils/SphericalHarmonics.h"
@@ -465,7 +466,7 @@ namespace
 	};
 }
 
-void State::Draw()
+void State::Draw(bool a_isCompute)
 {
 	ZoneScoped;
 	const bool stateDrawDiagActive = ShouldRecordStateDrawPhaseDiag();
@@ -549,6 +550,21 @@ void State::Draw()
 			ZoneScopedN("VolumetricShadows::SetShaderResources");
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::VolumetricShadowResources, stateDrawDiagFrame, stateDrawDiagActive);
 			volumetricShadows.SetShaderResources(context);
+		}
+
+		constexpr auto meshBlendingMask = static_cast<std::uint32_t>(ExtraShaderDescriptors::MeshBlending);
+		constexpr auto projectedUVMask = static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV);
+		if (!a_isCompute && currentShader && currentShader->shaderType.get() == RE::BSShader::Type::Lighting &&
+			(permutationData.ExtraShaderDescriptor & meshBlendingMask) != 0u &&
+			(currentPixelDescriptor & projectedUVMask) == 0u) {
+			// Other passes can replace t17. The intersection gap needs the current
+			// full-precision scene-depth view after the engine flushes its state.
+			auto* depth = Util::GetCurrentSceneDepthSRV(false);
+			if (depth) {
+				context->PSSetShaderResources(17, 1, &depth);
+			} else {
+				permutationData.ExtraShaderDescriptor &= ~meshBlendingMask;
+			}
 		}
 
 		if (permutationData != permutationDataPrevious) {

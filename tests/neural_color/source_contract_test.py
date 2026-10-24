@@ -64,7 +64,7 @@ class Contracts(unittest.TestCase):
         engine_hook = (ROOT / "src/Hooks.cpp").read_text().split(
             "void Hooks::BSGraphics_SetDirtyStates::thunk", 1)[1].split(
             "struct ID3D11Device_CreateVertexShader", 1)[0]
-        branches = engine_hook.split("globals::state->Draw();")[1:]
+        branches = engine_hook.split("globals::state->Draw(isCompute);")[1:]
         self.assertEqual(len(branches), 2)
         for branch in branches:
             self.assertIn("ObserveGraphicsStateFlush(globals::d3d::context, isCompute)", branch)

@@ -31,6 +31,7 @@ namespace FeatureVersions
         {"LinearLighting"sv,       {1,0,5}},
         {"TextureStreaming"sv,      {1,0,0}},
         {"NeuralRendering"sv,          {1,6,0}},
+        {"MeshBlending"sv,         {1,1,1}},
         {"PerformanceOverlay"sv,   {1,2,0}},
         {"PerformanceTuning"sv,    {1,0,0}},
         {"RenderDoc"sv,            {1,1,0}},

@@ -24,6 +24,7 @@
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
+#include "Features/MeshBlending.h"
 #include "Features/NeuralRenderingFeature.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/RenderDoc.h"
@@ -278,6 +279,7 @@ namespace
 			&globals::features::terrainShadows,
 			&globals::features::screenSpaceGI,
 			&globals::features::skylighting,
+			&globals::features::meshBlending,
 			&globals::features::skySync,
 			&globals::features::terrainBlending,
 			&globals::features::terrainHelper,

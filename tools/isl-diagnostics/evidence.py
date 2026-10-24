@@ -56,6 +56,10 @@ def sidecar(pages, raw_pages, expected_build):
     for key in ("oldGenerationAtAdmission", "unstableInvocationInspection"):
         require(type(quality.get(key)) is int and quality[key] >= 0, "missing transition inspection")
         loss.add(key)
+    for key in ("labelLoss", "contextLoss"):
+        if key in quality:
+            require(type(quality[key]) is int and quality[key] >= 0, "invalid engine evidence loss counter")
+            loss.add(key)
     limits = [k for k in loss - {"uniqueOverflow", "transitionOrBoundaryOverlap"} if quality[k]]
     valid_window = all(finite(b[key]) and b[key] > 0 for key in ("startQpc", "stopQpc", "freezeQpc", "qpcFrequency")) and b["startQpc"] <= b["stopQpc"] <= b["freezeQpc"]
     if not valid_window:

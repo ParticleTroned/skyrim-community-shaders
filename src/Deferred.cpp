@@ -999,12 +999,15 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 
 void Deferred::Hooks::Main_RenderShadowMaps::thunk()
 {
+	CS_ISL_BROAD(enginePhase, RenderShadowMaps);
 	func();
+	CS_ISL_END(enginePhase);
 	globals::deferred->EarlyPrepasses();
 };
 
 void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 {
+	CS_ISL_BROAD(enginePhase, RenderWorld);
 	CS_GPU_PASS("SharedScene::World");
 	auto* const state = globals::state;
 	state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
@@ -1018,6 +1021,7 @@ void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 
 void Deferred::Hooks::Main_RenderWorld_Start::thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges, uint32_t RenderFlags, int GeometryGroup)
 {
+	CS_ISL_BROAD(enginePhase, RenderWorldBatches);
 	// Each opaque pass invalidates the prior copy, even with deferred rendering disabled.
 	globals::deferred->finalSceneDepthFrame.reset();
 	if (globals::shaderCache->IsEnabled() && globals::state->inWorld) {
@@ -1030,6 +1034,7 @@ void Deferred::Hooks::Main_RenderWorld_Start::thunk(RE::BSBatchRenderer* This, u
 
 void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumulator* This, uint32_t RenderFlags)
 {
+	CS_ISL_BROAD(enginePhase, RenderWorldDecals);
 	auto deferred = globals::deferred;
 	auto renderer = globals::game::renderer;
 
@@ -1111,6 +1116,7 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 
 void Deferred::Hooks::BSCubeMapCamera_RenderCubemap::thunk(RE::NiAVObject* camera, int a2, bool a3, bool a4, bool a5)
 {
+	CS_ISL_BROAD(enginePhase, RenderCubemap);
 	auto deferred = globals::deferred;
 	auto state = globals::state;
 

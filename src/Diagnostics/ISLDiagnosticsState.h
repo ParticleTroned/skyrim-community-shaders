@@ -28,7 +28,8 @@ namespace CSX::Diagnostics::ISL
 	{
 		Off,
 		Counters,
-		Timed
+		Timed,
+		Engine
 	};
 	struct Policy
 	{
@@ -43,7 +44,7 @@ namespace CSX::Diagnostics::ISL
 		static Policy Unpack(uint64_t bits) { return { Luminance(bits & 3), Renderer((bits >> 2) & 3), Particle((bits >> 4) & 3), Observation((bits >> 6) & 3), bool(bits & 256), bits >> 16 }; }
 		bool Valid(bool suppressed, bool editorClean) const
 		{
-			return luminance <= Luminance::ComputeDiscard && renderer <= Renderer::VanillaDirect && particle <= Particle::BeforeLock && observation <= Observation::Timed &&
+			return luminance <= Luminance::ComputeDiscard && renderer <= Renderer::VanillaDirect && particle <= Particle::BeforeLock && observation <= Observation::Engine &&
 			       (!(editorBypass || renderer == Renderer::VanillaDirect) || editorClean) &&
 			       (renderer != Renderer::VanillaDirect || (suppressed && luminance == Luminance::Native));
 		}

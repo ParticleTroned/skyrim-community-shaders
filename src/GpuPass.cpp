@@ -15,6 +15,10 @@ ScopedGpuPass::ScopedGpuPass(const tracy::SourceLocationData* a_sourceLocation, 
 		return;
 #	ifdef DEVBENCH_BRIDGE_ENABLED
 	stutterScope.emplace(a_name);
+	if (CSX::Diagnostics::ISL::EngineRecording()) {
+		islScope.emplace(CSX::Diagnostics::ISL::Metric::FeaturePass, true);
+		islScope->Label(a_name);
+	}
 #	endif
 	auto* profiler = globals::profiler;
 	auto* state = globals::state;
@@ -47,6 +51,10 @@ ScopedGpuPass::ScopedGpuPass(std::string_view a_name, const Util::PassTimingHand
 		return;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	stutterScope.emplace(a_name);
+	if (CSX::Diagnostics::ISL::EngineRecording()) {
+		islScope.emplace(CSX::Diagnostics::ISL::Metric::FeaturePass, true);
+		islScope->Label(a_name);
+	}
 #endif
 	auto* profiler = globals::profiler;
 	auto* state = globals::state;

@@ -2150,6 +2150,7 @@ namespace Hooks
 #	ifdef DEVBENCH_BRIDGE_ENABLED
 			CSX::Diagnostics::Stutters::PublishGameContext();
 			CS_ISL_BROAD(engineUpdate, EngineUpdate);
+			CSX::Diagnostics::ISL::RecordEngineContext();
 			CSX::Diagnostics::Stutters::Scope stutterUpdate("Engine::MainUpdate", CSX::Diagnostics::Stutters::Boundary::Engine);
 #	endif
 #	ifdef TRACY_ENABLE

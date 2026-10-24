@@ -13,6 +13,7 @@
 #	include <bit>
 #	include <filesystem>
 #	include <fstream>
+#	include <cstring>
 
 namespace CSX::Diagnostics::ISL
 {
@@ -22,6 +23,13 @@ namespace CSX::Diagnostics::ISL
 		thread_local Slot* localSlot{};
 		thread_local uint64_t localFrame = UnknownFrame;
 		thread_local volatile uint64_t discardSink{};
+		uint64_t CpuTime(bool& known) noexcept
+		{
+			FILETIME created{}, exited{}, kernel{}, user{};
+			known = GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user) != FALSE;
+			return ((uint64_t(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime) +
+			       ((uint64_t(user.dwHighDateTime) << 32) | user.dwLowDateTime);
+		}
 		constexpr auto StartupFile = "Data/SKSE/Plugins/CommunityShaders/ISLDiagnostics.once.json";
 	}
 	DiagnosticState& Data()
@@ -103,8 +111,70 @@ namespace CSX::Diagnostics::ISL
 		}
 		if (policy.generation != d.captureGeneration)
 			++slot->overlap;
-		if (policy.observation == Observation::Timed && (broad || (total.count & 63) == 1))
+		if ((policy.observation == Observation::Timed && (broad || (total.count & 63) == 1)) ||
+			(policy.observation == Observation::Engine && broad)) {
+			if (policy.observation == Observation::Engine && (selected == Metric::EngineUpdate ||
+																 selected == Metric::RetainedShadowRender || selected == Metric::QueueCollisionsNative || selected == Metric::RenderShadowMaps || selected == Metric::RenderWorld ||
+																 selected == Metric::PoseCycle || selected == Metric::VRSubmit || selected == Metric::Present)) {
+				cpuBegin = CpuTime(cpuKnown);
+				cyclesKnown = QueryThreadCycleTime(GetCurrentThread(), &cyclesBegin) != FALSE;
+			}
 			enter = RM::Clock();
+		}
+	}
+	bool EngineRecording() noexcept
+	{
+		return Data().admitting.load(std::memory_order_relaxed) && CurrentPolicy().observation == Observation::Engine;
+	}
+	void Scope::Label(std::string_view name) noexcept
+	{
+		if (!slot || !enter)
+			return;
+		if (name.empty() || name.size() >= slot->labels.front().size()) {
+			++slot->labelLoss;
+			return;
+		}
+		for (size_t i = 0; i < slot->labels.size(); ++i) {
+			auto& value = slot->labels[i];
+			if (value[0] == 0) {
+				std::memcpy(value.data(), name.data(), name.size());
+				value[name.size()] = 0;
+			}
+			if (name == value.data()) {
+				label = uint16_t(i + 1);
+				return;
+			}
+		}
+		++slot->labelLoss;
+	}
+	void RecordEngineContext() noexcept
+	{
+		auto* slot = localSlot;
+		if (!EngineRecording() || !slot || !slot->depth || (slot->totals[size_t(Metric::EngineUpdate)].count & 31) != 1)
+			return;
+		if (slot->contextCount == slot->contexts.size()) {
+			++slot->contextLoss;
+			return;
+		}
+		EngineContext context;
+		context.qpc = RM::Clock();
+		context.frame = globals::state ? globals::state->frameCount : UnknownFrame;
+		context.gameHour = globals::game::calendar ? globals::game::calendar->GetHour() : -1.0f;
+		context.weather = globals::game::sky && globals::game::sky->currentWeather ? globals::game::sky->currentWeather->GetFormID() : 0;
+		if (const auto* player = RE::PlayerCharacter::GetSingleton()) {
+			if (const auto* cell = player->GetParentCell())
+				context.cell = cell->GetFormID();
+		}
+		if (const auto* processes = RE::ProcessLists::GetSingleton()) {
+			context.processesKnown = true;
+			context.highActors = processes->numberHighActors;
+			context.detection = processes->runDetection;
+			context.high = processes->processHigh;
+			context.low = processes->processLow;
+			context.middleHigh = processes->processMHigh;
+			context.middleLow = processes->processMLow;
+		}
+		slot->contexts[slot->contextCount++] = context;
 	}
 	Scope::~Scope() { Finish(); }
 	void Scope::Finish() noexcept
@@ -125,9 +195,32 @@ namespace CSX::Diagnostics::ISL
 			++total.timed;
 			total.elapsed += std::max<int64_t>(0, exit - enter);
 			total.maximum = std::max(total.maximum, exit - enter);
-			if (slot->rows.size() < Data().capacity)
-				slot->rows.push_back({ enter, exit, policy.generation, frame, caller, slot->thread.load(std::memory_order_relaxed), metric });
-			else
+			bool retain = true;
+			if (metric == Metric::FeaturePass && label) {
+				auto& named = slot->labelTotals[label - 1];
+				++named.count;
+				named.elapsed += std::max<int64_t>(0, exit - enter);
+				named.maximum = std::max(named.maximum, exit - enter);
+				retain = (named.count % FeaturePassStride) == 1 ||
+				         (exit - enter) >= Data().frequency * SlowFeaturePassMicroseconds / 1000000;
+			}
+			if (retain && slot->rows.size() < Data().capacity) {
+				Row row{ enter, exit, policy.generation, frame, caller, slot->thread.load(std::memory_order_relaxed), metric };
+				row.label = label;
+				if (cpuKnown) {
+					bool known{};
+					const auto end = CpuTime(known);
+					row.cpuKnown = known && end >= cpuBegin;
+					row.cpuStart100ns = cpuBegin;
+					row.cpu100ns = row.cpuKnown ? end - cpuBegin : 0;
+				}
+				if (cyclesKnown) {
+					uint64_t end{};
+					row.cyclesKnown = QueryThreadCycleTime(GetCurrentThread(), &end) && end >= cyclesBegin;
+					row.cycles = row.cyclesKnown ? end - cyclesBegin : 0;
+				}
+				slot->rows.push_back(row);
+			} else if (retain)
 				++slot->overflow;
 		}
 		if (!--slot->depth)
@@ -354,7 +447,7 @@ namespace CSX::Diagnostics::ISL
 			locked[i] = &d.slots[i];
 		}
 		// Allocate before committing ownership so allocation failure remains retryable.
-		if (policy.observation == Observation::Timed) {
+		if (policy.observation == Observation::Timed || policy.observation == Observation::Engine) {
 			for (auto& slot : d.slots) slot.rows.reserve(boundedCapacity);
 			d.frozenRows.reserve(boundedCapacity * ThreadCapacity);
 		}
@@ -382,6 +475,10 @@ namespace CSX::Diagnostics::ISL
 			slot.callers = {};
 			slot.callerOverflow = 0;
 			slot.rows.clear();
+			slot.labels = {};
+			slot.labelTotals = {};
+			slot.labelLoss = 0;
+			slot.contextCount = slot.contextLoss = 0;
 			slot.overflow = slot.uniqueOverflow = slot.checksum = slot.candidateCount = slot.overlap = slot.uniqueCount = 0;
 		}
 		LARGE_INTEGER frequency{};

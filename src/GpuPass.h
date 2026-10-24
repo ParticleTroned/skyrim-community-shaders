@@ -3,6 +3,7 @@
 #include "Utils/PassTimingCapture.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/EngineStutterMonitor.h"
+#	include "Diagnostics/ISLDiagnostics.h"
 #endif
 
 #include <Tracy/Tracy.hpp>
@@ -33,6 +34,7 @@ struct ScopedGpuPass
 private:
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	std::optional<CSX::Diagnostics::Stutters::Scope> stutterScope;
+	std::optional<CSX::Diagnostics::ISL::Scope> islScope;
 #endif
 #ifdef TRACY_ENABLE
 	std::optional<tracy::ScopedZone> cpuZone;

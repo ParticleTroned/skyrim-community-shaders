@@ -12,6 +12,8 @@ namespace CSX::Diagnostics::ISL
 {
 	using json = nlohmann::json;
 	inline constexpr size_t ThreadCapacity = 32, UniqueCapacity = 2048;
+	inline constexpr uint64_t FeaturePassStride = 64;
+	inline constexpr int64_t SlowFeaturePassMicroseconds = 2000;
 	inline constexpr uint64_t UnknownFrame = ~uint64_t{};
 	struct Row
 	{
@@ -20,6 +22,9 @@ namespace CSX::Diagnostics::ISL
 		uintptr_t caller{};
 		uint32_t thread{};
 		Metric metric{};
+		uint16_t label{};
+		uint64_t cpuStart100ns{}, cpu100ns{}, cycles{};
+		bool cpuKnown{}, cyclesKnown{};
 	};
 	struct Totals
 	{
@@ -38,6 +43,15 @@ namespace CSX::Diagnostics::ISL
 		uint32_t thread{};
 		bool active{}, unstable{};
 	};
+	struct EngineContext
+	{
+		int64_t qpc{};
+		uint64_t frame{};
+		float gameHour{};
+		uint32_t weather{}, cell{};
+		int32_t highActors = -1;
+		bool processesKnown{}, detection{}, high{}, low{}, middleHigh{}, middleLow{};
+	};
 	struct Slot
 	{
 		std::atomic_flag busy{};
@@ -51,6 +65,12 @@ namespace CSX::Diagnostics::ISL
 		std::array<CallerCount, 16> callers{};
 		uint64_t callerOverflow{};
 		std::vector<Row> rows;
+		std::array<std::array<char, 128>, 128> labels{};
+		std::array<Totals, 128> labelTotals{};
+		uint64_t labelLoss{};
+		std::array<EngineContext, 256> contexts{};
+		size_t contextCount{};
+		uint64_t contextLoss{};
 		uint64_t overflow{}, uniqueOverflow{}, checksum{}, candidateCount{}, overlap{}, uniqueCount{};
 	};
 	struct DiagnosticState
@@ -83,6 +103,7 @@ namespace CSX::Diagnostics::ISL
 	json ConditionJson();
 	json StartupStage(const json& args);
 	json Export(const json& args);
+	json CallerJson(uintptr_t address);
 	json Configure(const json& args);
 	json RestorationJson();
 	void StageDefaultPolicy();

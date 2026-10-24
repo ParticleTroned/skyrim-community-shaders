@@ -48,7 +48,7 @@ namespace CSX::Diagnostics::ISL
 		static constexpr const char* luminance[] = { "normal", "native", "compute_discard_then_native" };
 		static constexpr const char* renderer[] = { "normal", "vanilla_output", "vanilla_direct" };
 		static constexpr const char* particle[] = { "normal", "scan_off", "bypass_before_lock" };
-		static constexpr const char* observation[] = { "off", "counters", "timed" };
+		static constexpr const char* observation[] = { "off", "counters", "timed", "engine" };
 		return { { "luminanceMode", luminance[size_t(p.luminance)] }, { "rendererMode", renderer[size_t(p.renderer)] },
 			{ "particleDetectionMode", particle[size_t(p.particle)] }, { "editorOverrideMode", p.editorBypass ? "bypass" : "normal" },
 			{ "observationLevel", observation[size_t(p.observation)] }, { "generation", p.generation } };
@@ -114,13 +114,14 @@ namespace CSX::Diagnostics::ISL
 			return { { "module", length ? json(std::filesystem::path(path).filename().string()) : json(nullptr) }, { "rva", rva } };
 		}
 	}
+	json CallerJson(uintptr_t address) { return Caller(address); }
 	void FreezeCapture(int64_t now)
 	{
 		auto& d = Data();
 		CloseCapture();
 		d.stop = RM::State().journal.stop;
 		d.freeze = now;
-		uint64_t unfinished = 0, overflow = 0, overlap = 0, uniqueOverflow = 0;
+		uint64_t unfinished = 0, overflow = 0, overlap = 0, uniqueOverflow = 0, labelLoss = 0, contextLoss = 0;
 		json threads = json::array();
 		d.frozenRows.clear();
 		for (auto& slot : d.slots) {
@@ -140,7 +141,25 @@ namespace CSX::Diagnostics::ISL
 			for (const auto& entry : slot.callers)
 				if (entry.address)
 					callers.push_back({ { "caller", Caller(entry.address) }, { "calls", entry.count } });
-			threads.push_back({ { "callers", callers }, { "callerOverflow", slot.callerOverflow }, { "thread", slot.thread.load() }, { "counters", std::move(counters) }, { "candidateChecksum", slot.checksum },
+			json labels = json::array(), contexts = json::array();
+			for (size_t i = 0; i < slot.labels.size(); ++i) {
+				if (slot.labels[i][0]) {
+					const auto& total = slot.labelTotals[i];
+					labels.push_back({ { "id", i + 1 }, { "name", slot.labels[i].data() }, { "count", total.count }, { "elapsedQpc", total.elapsed }, { "maxQpc", total.maximum } });
+				}
+			}
+			for (size_t i = 0; i < slot.contextCount; ++i) {
+				const auto& c = slot.contexts[i];
+				contexts.push_back({ { "qpc", c.qpc }, { "frame", c.frame == UnknownFrame ? json(nullptr) : json(c.frame) }, { "gameHour", c.gameHour >= 0 ? json(c.gameHour) : json(nullptr) },
+					{ "weather", c.weather ? json(c.weather) : json(nullptr) }, { "cell", c.cell ? json(c.cell) : json(nullptr) },
+					{ "processListsAvailable", c.processesKnown }, { "highActors", c.processesKnown ? json(c.highActors) : json(nullptr) },
+					{ "detection", c.processesKnown ? json(c.detection) : json(nullptr) }, { "processHigh", c.processesKnown ? json(c.high) : json(nullptr) },
+					{ "processLow", c.processesKnown ? json(c.low) : json(nullptr) }, { "processMiddleHigh", c.processesKnown ? json(c.middleHigh) : json(nullptr) },
+					{ "processMiddleLow", c.processesKnown ? json(c.middleLow) : json(nullptr) } });
+			}
+			labelLoss += slot.labelLoss;
+			contextLoss += slot.contextLoss;
+			threads.push_back({ { "labels", labels }, { "engineContexts", contexts }, { "callers", callers }, { "callerOverflow", slot.callerOverflow }, { "thread", slot.thread.load() }, { "counters", std::move(counters) }, { "candidateChecksum", slot.checksum },
 				{ "candidateCount", slot.candidateCount }, { "uniqueLightAddresses", slot.uniqueCount }, { "uniqueOverflow", slot.uniqueOverflow } });
 			overflow += slot.overflow + slot.callerOverflow;
 			overlap += slot.overlap;
@@ -175,8 +194,8 @@ namespace CSX::Diagnostics::ISL
 			{ "preAdmissionInvocations", priorInvocations }, { "transitionObservation", "Root light invocations tracked while session active; QPC entry available in timed mode, unknown in counters, observations disabled in off mode. Publication does not imply global quiescence." },
 			{ "condition", d.captureCondition }, { "threads", std::move(threads) }, { "prune", prune },
 			{ "quality", { { "oldGenerationAtAdmission", oldGeneration }, { "unstableInvocationInspection", unstableInvocations }, { "unfinishedThreadSlots", unfinished }, { "overflow", overflow }, { "threadRegistrationLoss", d.threadLoss.load() },
-							 { "contention", d.contention.load() }, { "transitionOrBoundaryOverlap", overlap }, { "uniqueOverflow", uniqueOverflow }, { "contaminated", d.contaminated.load() } } },
-			{ "sampling", { { "timedQueryStride", 64 }, { "callerStride", 64 }, { "callers", "sampled only in timed mode" }, { "broadIntervalStride", 1 }, { "threadCapacity", ThreadCapacity }, { "recordsPerThread", d.capacity },
+							 { "labelLoss", labelLoss }, { "contextLoss", contextLoss }, { "contention", d.contention.load() }, { "transitionOrBoundaryOverlap", overlap }, { "uniqueOverflow", uniqueOverflow }, { "contaminated", d.contaminated.load() } } },
+			{ "sampling", { { "timedQueryStride", 64 }, { "callerStride", 64 }, { "callers", "sampled only in timed mode" }, { "broadIntervalStride", 1 }, { "featurePassRowStride", FeaturePassStride }, { "featurePassAlwaysRetainMicroseconds", SlowFeaturePassMicroseconds }, { "engineContextStride", 32 }, { "engineMode", "Broad scopes only; named pass QPC totals unsampled, rows sampled 1/64 per name plus every pass at least 2ms. No GPU queries enabled. CPU100ns is quantized current-thread kernel+user time, cycles are not time. Inclusive nesting must not be summed. Unknown CPU/cycle samples are null." }, { "threadCapacity", ThreadCapacity }, { "recordsPerThread", d.capacity },
 							  { "mode", d.captureCondition["effective"]["observationLevel"] }, { "counts", "unsampled per-thread totals; unique addresses are bounded per-thread estimates, not a global count" } } },
 			{ "alignmentQuality", "same-clock QPC intervals; no proven one-to-one application/compositor mapping; unknown worker frame IDs are null" },
 			{ "lateStartClassification", "UNAVAILABLE; raw compositor timing offsets and explicitly named offline proxies only" } };
@@ -196,7 +215,7 @@ namespace CSX::Diagnostics::ISL
 		for (size_t i = offset; i < end; ++i) {
 			const auto& row = d.frozenRows[i];
 			result["records"].push_back({ { "ordinal", i }, { "metric", MetricName(row.metric) }, { "enterQpc", row.enter }, { "exitQpc", row.exit },
-				{ "generation", row.generation }, { "frame", row.frame == UnknownFrame ? json(nullptr) : json(row.frame) }, { "thread", row.thread }, { "caller", Caller(row.caller) } });
+				{ "generation", row.generation }, { "frame", row.frame == UnknownFrame ? json(nullptr) : json(row.frame) }, { "thread", row.thread }, { "caller", Caller(row.caller) }, { "labelId", row.label }, { "cpuStart100ns", row.cpuKnown ? json(row.cpuStart100ns) : json(nullptr) }, { "cpu100ns", row.cpuKnown ? json(row.cpu100ns) : json(nullptr) }, { "cycles", row.cyclesKnown ? json(row.cycles) : json(nullptr) } });
 		}
 		if (offset == d.contiguous)
 			d.contiguous = end;

@@ -5,22 +5,21 @@ param(
     # Accepted for older commands; diagnostic support is discovered from the live API.
     [string]$PluginDirectory,
     [string]$OutputDirectory,
-    [ValidateSet('core', 'luminance-cost', 'both', 'particle', 'shadow', 'editor', 'conversion', 'observer', 'prune', 'mountains', 'batch')]
+    [ValidateSet('core', 'engine', 'luminance-cost', 'both', 'particle', 'shadow', 'editor', 'conversion', 'observer', 'prune', 'mountains', 'batch')]
     [string]$Plan = 'core',
-    [ValidateSet('off', 'counters', 'timed')][string]$Observation = 'counters',
+    [ValidateSet('off', 'counters', 'timed', 'engine')][string]$Observation = 'counters',
     [switch]$OffUnlimited,
     [switch]$DisableNeuralRendering,
     [switch]$CompareNeuralRendering
 )
 $ErrorActionPreference = 'Stop'
-if ($CompareNeuralRendering -and ($DisableNeuralRendering -or $OffUnlimited -or $Plan -ne 'core' -or $Observation -ne 'counters')) {
-    throw 'Use -CompareNeuralRendering with core, counters and normal pacing; omit -DisableNeuralRendering and -OffUnlimited.'
+if ($CompareNeuralRendering -and ($DisableNeuralRendering -or $OffUnlimited -or $Plan -notin @('core', 'engine') -or $Observation -ne 'counters')) {
+    throw 'Use -CompareNeuralRendering with core/engine, counters and normal pacing; omit -DisableNeuralRendering and -OffUnlimited.'
 }
 $controllerPath = (Resolve-Path -LiteralPath $Controller).Path
 $requiredScripts = @(
     $controllerPath,
     (Join-Path (Split-Path -Parent $controllerPath) 'DevBenchControl.psm1'),
-    (Join-Path $PSScriptRoot 'check-window.ps1'),
     (Join-Path $PSScriptRoot '../reflex-measurement/invoke-controller.ps1')
 )
 foreach ($scriptPath in $requiredScripts) {

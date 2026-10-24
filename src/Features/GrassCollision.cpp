@@ -1,4 +1,5 @@
 #include "GrassCollision.h"
+#include "Diagnostics/ISLDiagnostics.h"
 #include "Menu/SettingsPage.h"
 #include "Utils/UI.h"
 
@@ -757,7 +758,10 @@ bool GrassCollision::HasShaderDefine(RE::BSShader::Type shaderType)
 
 void GrassCollision::Hooks::MainUpdate_QueueCollisions::thunk()
 {
+	CS_ISL_BROAD(native, QueueCollisionsNative);
 	func();
+	CS_ISL_END(native);
+	CS_ISL_BROAD(csx, QueueCollisionsCSX);
 	globals::features::grassCollision.QueueCollisions();
 }
 

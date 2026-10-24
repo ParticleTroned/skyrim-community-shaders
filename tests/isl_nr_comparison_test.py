@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from measurement_controller_transport_test import ROOT, isl, nr_status, nr_tool
+from measurement_controller_transport_test import ROOT, isl, nr_status, nr_tool, diagnostic_tools
 
 
 def window(group, label, enabled, comb=False, mountains=0):
@@ -120,9 +120,7 @@ class Reversal(unittest.TestCase):
                 return {'captureId': 1, 'admissionDelayMs': 1000, 'condition': {}}
             return {'frozen': True} if action == 'stop' else {}
         def export(*args):
-            campaign.raw_pages = [{'boundaries': {'applicationAdmissionStartQpc': 10}}]
-            campaign.side_pages = [{'condition': condition}]
-            return {'complete': True}, {'complete': True, 'counters': {}}
+            return {'file': 'NR-00-as-found.csxcap', 'bytes': 123}
         phase = {'name': 'NR-00-as-found', 'group': 'nr', 'label': 'as-found', 'nrEnabled': True,
                  'gates': isl.NORMAL.copy(), 'islEnabled': True, 'shadowCulling': None, 'pruneFrames': None}
         with patch.object(campaign, 'isl', return_value=condition) as control, \
@@ -130,7 +128,6 @@ class Reversal(unittest.TestCase):
              patch.object(campaign, 'nr', side_effect=[self.status, after]), \
              patch.object(campaign, 'call', side_effect=call), \
              patch.object(campaign, 'export_pair', side_effect=export), \
-             patch.object(campaign, 'performance_window', return_value={'valid': True}), \
              patch.object(isl.base, 'qpc_now', return_value=1), \
              patch.object(isl.time, 'monotonic', side_effect=[0, 100]), \
              patch.object(isl.evidence, 'streams', return_value=[]), \
@@ -140,12 +137,13 @@ class Reversal(unittest.TestCase):
              patch.object(isl.evidence.raw, 'summarize', return_value={}), contextlib.redirect_stdout(io.StringIO()):
             campaign.phase(phase)
         self.assertEqual([c.args[0] for c in control.call_args_list], ['condition'])
-        self.assertTrue(campaign.completed[0]['valid'])
-        self.assertEqual(campaign.completed[0]['neuralRendering']['counterDeltas']['outputCommits'], 100)
+        self.assertTrue(campaign.completed[0]['collected'])
+        inputs = json.loads((campaign.root / 'NR-00-as-found-analysis-input.json').read_text())
+        self.assertEqual(inputs['nrAfter']['counters']['outputCommits'] - inputs['nrBefore']['counters']['outputCommits'], 100)
 
     def test_complete_campaign_includes_all_states_and_leaves_nr_off(self):
         campaign = self.campaign
-        catalog = {'data': {'tools': [{'name': isl.ISL_TOOL}, {'name': isl.base.TOOL}, nr_tool()]}}
+        catalog = {'data': {'tools': diagnostic_tools()}}
         def phase(item):
             self.events.append(('capture', item['name']))
             result = window(item.get('group', 'core'), item['label'], item.get('nrEnabled', False))
@@ -209,7 +207,7 @@ class Evidence(unittest.TestCase):
         phases = isl.late_start_phases()
         self.assertEqual([p['islEnabled'] for p in phases[:5]], [True, False, True, False, True])
         self.assertTrue(all(p['durationMs'] == 60000 and p['gates']['observationLevel'] == 'counters' for p in phases[:5]))
-        self.assertTrue(all(p['durationMs'] == 10000 and p['gates']['observationLevel'] == 'timed' for p in phases[5:]))
+        self.assertTrue(all(p['durationMs'] == 10000 and p['gates']['observationLevel'] == 'engine' for p in phases[5:]))
         self.assertEqual([p['islEnabled'] for p in phases[5:]], [value for value in [True, False, True, False, True] for _ in range(3)])
 
     def test_slow_interval_keeps_actual_wait_durations_and_thread_without_adding_nested_costs(self):

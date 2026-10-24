@@ -8,7 +8,8 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
-import subprocess
+import os
+import shutil
 import time
 import uuid
 
@@ -27,6 +28,7 @@ NR_TOOL = "communityshaders.neural_rendering"
 NORMAL = {"luminanceMode": "normal", "rendererMode": "normal", "particleDetectionMode": "normal",
           "editorOverrideMode": "normal", "observationLevel": "counters"}
 PLANS = {
+    "engine": ["R", "R", "R", "M", "M", "M", "R", "R", "R"],
     "core": ["R", "L", "L", "R", "V", "V", "R"],
     "luminance-cost": ["R", "C", "C", "R", "L", "L", "R"],
     "both": ["R", "B", "B", "R", "L", "V", "R"],
@@ -48,7 +50,14 @@ def plan(config, selected="core"):
     require(type(config["capacity"]) is int and 16 <= config["capacity"] <= 262144, "invalid capacity")
     require(type(config["admissionDelayMs"]) is int and 1000 <= config["admissionDelayMs"] <= 30000, "invalid admission delay")
     require(config["sceneTime"] == "preserve" and config["pacing"] in ("preserve", "off_unlimited"), "explicit pacing and scene policy required")
-    require(config["observationLevel"] in ("off", "counters", "timed"), "invalid observer")
+    require(config["observationLevel"] in ("off", "counters", "timed", "engine"), "invalid observer")
+    if selected == "engine":
+        require(config["observationLevel"] == "counters", "engine plan selects its observers automatically")
+        return [{"name": f"engine-{index + 1:02}-{'R' if enabled else 'M'}", "label": "R" if enabled else "M",
+                 "group": "engine", "durationMs": 30000 if index % 3 == 0 else 10000,
+                 "gates": NORMAL | {"observationLevel": "counters" if index % 3 == 0 else "engine"},
+                 "islEnabled": enabled, "shadowCulling": None, "pruneFrames": None}
+                for index, enabled in enumerate(value for value in (True, False, True) for _ in range(3))]
     sequence = config["sequence"] if selected == "core" else PLANS[selected]
     require(sequence == PLANS["core"] if selected == "core" else True, "core order must remain R L L R V V R")
     result = []
@@ -74,7 +83,7 @@ def late_start_phases():
     phases = []
     for group, sequence, duration, observer in (
             ("mountains", (True, False, True, False, True), 60000, "counters"),
-            ("timed", tuple(state for state in (True, False, True, False, True) for _ in range(3)), 10000, "timed")):
+            ("timed", tuple(state for state in (True, False, True, False, True) for _ in range(3)), 10000, "engine")):
         for index, enabled in enumerate(sequence):
             label = "R" if enabled else "M"
             phases.append({"name": f"{group}-{index + 1:02}-{label}", "label": label, "group": group,
@@ -88,16 +97,10 @@ class Campaign(base.Campaign):
         super().__init__(args, config)
         self.args.build_id = None
         self.client = "isl-" + uuid.uuid4().hex
-        self.rules = None
         self.original = None
         self.raw_unacked = None
         self.side_unacked = None
-        self.raw_pages = []
-        self.side_pages = []
         self.last_transport = None
-        self.scene_reference = None
-        self.nr_rules = None
-        self.group_rules = {}
         self.nr_owned_configuration = None
         self.nr_pending_configuration = None
         self.nr_comparison_touched = False
@@ -112,17 +115,6 @@ class Campaign(base.Campaign):
     def identity_parameters(self):
         # Capture ownership and live API guards do not require an on-disk DLL audit.
         return {"SkipRuntimeIdentityVerification": True}
-
-    def performance_window(self, before, after, name):
-        self.save(name + "-guard-before.json", before)
-        self.save(name + "-guard-after.json", after)
-        command = ["pwsh", "-NoProfile", "-File", str(HERE / "check-window.ps1"),
-                   "-ModulePath", str(Path(self.args.controller).resolve().parent / "DevBenchControl.psm1"),
-                   "-BeforePath", str(self.root / (name + "-guard-before.json")),
-                   "-AfterPath", str(self.root / (name + "-guard-after.json"))]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
-        require(result.returncode == 0, "performance-window qualification failed: " + result.stderr)
-        return json.loads(result.stdout)
 
     def isl(self, action, **arguments):
         request = {"contractMajor": 1, "schema": 1, "expectedBuildId": self.args.build_id, "clientId": self.client,
@@ -296,39 +288,37 @@ class Campaign(base.Campaign):
             self.nr_setup["state"] = "final_state_unconfirmed"
             print("NR final state unconfirmed: " + str(error), file=sys.stderr, flush=True)
 
-    def collect(self, capture, side, label):
-        pages, offset = [], 0
-        call = self.isl if side else self.call
-        while True:
-            page = call("export", captureId=capture, offset=offset, limit=256)
-            self.save(f"{label}-{'isl' if side else 'raw'}-page-{offset:08}.json", page)
-            pages.append(page)
-            if side:
-                self.side_pages = pages
-            else:
-                self.raw_pages = pages
-            following = page["nextOffset"]
-            if following is None:
-                break
-            require(type(following) is int and following > offset, "non-progressing export")
-            offset = following
-        return pages
-
     def export_pair(self, capture, label):
-        self.raw_pages = self.collect(capture, False, label)
-        raw_validation = evidence.raw.validate(self.raw_pages, "B", self.args.build_id)
-        self.side_pages = self.collect(capture, True, label)
-        side_validation = evidence.sidecar(self.side_pages, self.raw_pages, self.args.build_id)
-        # A complete export can be acknowledged even when its recorded quality is bad.
-        self.save(label + "-validation.json", {"raw": raw_validation, "isl": side_validation})
-        self.raw_unacked = self.raw_pages[0]["total"]
-        self.side_unacked = self.side_pages[0]["total"]
+        # The game persists frozen data once. Only copying and receipt checks run here.
+        receipt = self.call("save_capture", captureId=capture)
+        require(receipt.get("saved") is True and receipt.get("format") == "csx-isl-capture-v1" and
+                receipt.get("captureId") == capture, "native capture save was not confirmed")
+        require(type(receipt.get("bytes")) is int and receipt["bytes"] > 0 and
+                all(type(receipt.get(k)) is int and receipt[k] >= 0 for k in ("rawTotal", "islTotal")),
+                "invalid native file receipt; capture remains owned")
+        self.save(label + "-native-file.json", receipt)
+        source = Path(receipt["path"])
+        require(source.is_absolute() and source.suffix.lower() == ".csxcap", "native recording path is not an absolute .csxcap file")
+        destination = self.root / (label + ".csxcap")
+        partial = destination.with_suffix(".csxcap.partial")
+        require(source.stat().st_size == receipt["bytes"], "native capture file size changed")
+        with source.open("rb") as incoming, partial.open("xb") as outgoing:
+            shutil.copyfileobj(incoming, outgoing, length=1024 * 1024)
+            outgoing.flush()
+            os.fsync(outgoing.fileno())
+        require(partial.stat().st_size == receipt["bytes"], "capture copy incomplete; originals preserved")
+        require(not destination.exists(), "capture destination exists; preserving it")
+        partial.rename(destination)
+        copied = receipt | {"file": destination.name, "copiedBytes": destination.stat().st_size}
+        self.save(label + "-collection.json", copied)
+        # Both totals are retained before either ACK so lost replies can be retried safely.
+        self.raw_unacked, self.side_unacked = receipt["rawTotal"], receipt["islTotal"]
         self.call("acknowledge_export", captureId=capture, total=self.raw_unacked)
         self.raw_unacked = None
         released = self.isl("acknowledge_export", captureId=capture, total=self.side_unacked)
         self.side_unacked = None
         require(released["released"], "joint capture not released after both acknowledgements")
-        return raw_validation, side_validation
+        return copied
 
     def settle_isl(self):
         deadline = time.monotonic() + 30
@@ -346,13 +336,22 @@ class Campaign(base.Campaign):
     def phase(self, phase):
         name = phase["name"]
         duration = phase.get("durationMs", self.config["durationMs"])
-        group = phase.get("group", "core")
         nr_comparison = phase.get("group") == "nr"
         self.save(name + "-requested.json", phase)
+        if phase.get("group") == "engine":
+            reset = self.call("set_noon")
+            self.save(name + "-time-reset.json", reset)
+            require(evidence.finite(reset.get("gameHour")) and 12 <= reset["gameHour"] <= 12.05,
+                    "noon reset not confirmed; no capture started")
         if not nr_comparison:
             self.isl("configure", gates=phase["gates"], islEnabled=phase["islEnabled"],
                      shadowCulling=phase["shadowCulling"] or self.original["shadowCulling"]["settings"])
         before = self.settle_isl()
+        if phase.get("group") == "engine":
+            at_noon = evidence.finite(before.get("gameHour")) and 12 <= before["gameHour"] <= 12.05
+            self.save(name + "-time-verified.json", {"gameHour": before.get("gameHour"), "settleSeconds": self.config["settleSeconds"], "withinNoonRange": at_noon})
+            if not at_noon:
+                print("Noon settling exceeded the comparison range; retaining this recording for offline diagnosis.", flush=True)
         if nr_comparison:
             require(all(before[key] == self.original[key] for key in ("pacing", "isl", "effective", "shadowBatch")) and
                     before["shadowCulling"]["settings"] == self.original["shadowCulling"]["settings"],
@@ -381,59 +380,27 @@ class Campaign(base.Campaign):
         after = self.isl("condition")
         nr_after = self.nr_condition(name + "-nr-after", after, phase.get("nrEnabled", False))
         raw_after = self.call("condition")
-        print(f"Exporting and validating {name}; keep the same viewpoint.", flush=True)
-        raw_validation, side_validation = self.export_pair(self.capture, name)
-        applied = evidence.experiment_applied(phase, side_validation, self.side_pages[0], self.original)
+        # Save analysis inputs before copying so interruption cannot erase the context.
+        self.save(name + "-guard-before.json", transport_start)
+        self.save(name + "-guard-after.json", transport_stop)
+        inputs = {"name": name, "condition": phase, "before": before, "after": after,
+                  "started": started, "rawAfter": raw_after, "nrBefore": nr_before, "nrAfter": nr_after,
+                  "clientReadyQpc": client_ready, "original": self.original,
+                  "pacingPolicy": self.config["pacing"], "sceneTimePolicy": "noon reset then settled" if phase.get("group") == "engine" else "preserved"}
+        self.save(name + "-analysis-input.json", inputs)
+        print(f"Saving {name}; analysis will run offline after you send the files.", flush=True)
+        receipt = self.export_pair(self.capture, name)
         self.capture = None
-        nr_window = evidence.nr_window(nr_before, nr_after, phase.get("nrEnabled", False))
-        guard = self.performance_window(transport_start, transport_stop, name)
-        source = evidence.streams(self.raw_pages, "compositor")
-        scene = evidence.scene_match(started["condition"], raw_after, source, self.scene_reference)
-        if self.scene_reference is None or (not self.scene_reference.get("pose") and scene["reference"].get("pose")):
-            self.scene_reference = scene["reference"]
-        rules = self.nr_rules if nr_comparison else self.rules if group == "core" else self.group_rules.get(group)
-        if rules is None and (group != "core" or phase["label"] == "R"):
-            prefix = "" if group == "core" else group + "-"
-            try:
-                rules = evidence.reference_rules(source)
-                self.save(prefix + "frozen-proxy-rules.json", rules)
-            except evidence.EvidenceError as error:
-                self.save(prefix + "proxy-unavailable.json", {"reason": str(error)})
-                rules = {"unavailable": str(error)}
-            if nr_comparison:
-                self.nr_rules = rules
-            elif group == "core":
-                self.rules = rules
-            else:
-                self.group_rules[group] = rules
-        waveform = evidence.waveform(source, rules) if rules and "unavailable" not in rules else {
-            "status": "UNAVAILABLE", "classification": "UNAVAILABLE", "reason": "reference could not define a valid proxy"}
-        admission = self.raw_pages[0]["boundaries"]["applicationAdmissionStartQpc"]
-        controller_clear = evidence.finite(admission) and admission > client_ready
-        stable = all(before[k] == after[k] for k in ("pacing", "weather", "cell", "nrRequested", "effective", "shadowBatch"))
+        result = {"name": name, "condition": phase, "collected": True,
+                  "file": receipt["file"], "bytes": receipt["bytes"], "analysis": "pending_offline"}
+        self.completed.append(result)
+        # Natural weather/time changes are evidence, not a reason to abort collection.
+        stable = all(before[k] == after[k] for k in ("pacing", "nrRequested", "effective", "shadowBatch"))
         stable &= before.get("isl") == after.get("isl")
         stable &= before["shadowCulling"]["settings"] == after["shadowCulling"]["settings"]
         expected_pacing = self.original["pacing"] if self.config["pacing"] == "preserve" else before["pacing"]
-        stable &= before["pacing"] == expected_pacing
-        result = {"name": name, "condition": phase, "before": before, "after": after,
-                  "validation": {"raw": raw_validation, "isl": side_validation}, "waveform": waveform,
-                  "statistics": evidence.raw.summarize(self.raw_pages), "controllerOutsideAdmission": controller_clear,
-                  "settingsAndSceneStable": stable, "clientReadyQpc": client_ready,
-                  "performanceWindow": guard, "sceneMatch": scene, "experimentApplied": applied, "neuralRendering": nr_window,
-                  "valid": raw_validation["complete"] and side_validation["complete"] and controller_clear and stable and guard["valid"] and scene["valid"] and applied['valid'] and nr_window['valid'],
-                  "qpcAssociations": evidence.correlate_qpc(self.raw_pages, self.side_pages),
-                  "evidencePrefix": name, "sceneTimePolicy": "preserved; elapsed game time is recorded, not reset"}
-        self.record_phase(result)
-
-    def record_phase(self, result):
-        name = result["name"]
-        self.save(name + "-summary.json", result)
-        self.completed.append(result)
-        require(result["settingsAndSceneStable"], f"{name}: test settings or scene changed; stopping to preserve user changes")
-        if not result["valid"]:
-            message = f"{name}: incomplete or contaminated capture; evidence preserved, conclusions withheld"
-            self.failures.append({"type": "InvalidWindow", "message": message})
-            print(message + "; continuing the remaining windows.", file=sys.stderr, flush=True)
+        require(stable and before["pacing"] == expected_pacing,
+                f"{name}: settings changed outside the test; recording saved, preserving user changes")
 
     def restore(self):
         try:
@@ -441,6 +408,8 @@ class Campaign(base.Campaign):
             self.session = stop["sessionId"]
             self.cleanup["stop"] = stop
             capture = stop.get("captureId")
+            if stop.get("released"):
+                self.raw_unacked = self.side_unacked = None
             if capture and not stop.get("released"):
                 require(stop.get("frozen"), "worker has not drained; retry stop before export/restore")
                 # Lost ACK replies are recovered using a fresh export attempt; server refuses reused buffers.
@@ -479,25 +448,33 @@ class Campaign(base.Campaign):
         self.save("recovery-manifest.json", {"clientId": self.client, "sessionId": self.session, "captureId": self.last_capture_id,
                   "buildId": self.args.build_id, "runtime": self.args.runtime, "rawUnacknowledgedTotal": self.raw_unacked,
                   "sideUnacknowledgedTotal": self.side_unacked, "cleanup": self.cleanup,
-                  "recovery": "same owner: recover_and_stop; wait for frozen; export and validate both journals; acknowledge both; restore; inspect restoration and restart-required flags"})
+                  "recovery": "same owner: recover_and_stop; wait for frozen; save_capture and copy the native file; acknowledge both; restore; inspect restoration and restart-required flags"})
         self.save("restoration.json", self.cleanup)
 
     def run(self):
         phases = plan(self.config, self.args.plan)
         compare_nr = getattr(self.args, "compare_neural_rendering", False)
-        extended = late_start_phases() if compare_nr else []
+        extended = late_start_phases() if compare_nr and self.args.plan == "core" else []
         total = len(phases) + len(extended) + (7 if compare_nr else 0)
         self.save("scenario.json", {"config": self.config, "plan": self.args.plan, "phases": phases, "clientId": self.client,
                                    "nrComparison": ["as-found", "off", "on", "off"] if compare_nr else None,
-                                   "interaction": "NR on; ISL off/on/off" if compare_nr else None, "lateStarts": extended})
+                                   "interaction": "NR on; ISL off/on/off" if compare_nr else None, "lateStarts": extended,
+                                   "engineTimePolicy": "reset to noon before each engine-plan window; verify and settle at least 5s" if self.args.plan == "engine" else None})
         try:
-            require(not compare_nr or (self.args.plan == "core" and self.config["pacing"] == "preserve" and
+            require(not compare_nr or (self.args.plan in ("core", "engine") and self.config["pacing"] == "preserve" and
                                       self.config["observationLevel"] == "counters" and not self.args.disable_neural_rendering),
-                    "NR comparison requires core, counters, preserved pacing, and no separate DisableNeuralRendering option")
+                    "NR comparison requires core/engine, counters, preserved pacing, and no separate DisableNeuralRendering option")
             print("Checking DevBench connection and diagnostic tools...", flush=True)
             catalog = self.controller("list", "catalog")
             tools = catalog["data"]["tools"]
             require({base.TOOL, ISL_TOOL} <= {tool["name"] for tool in tools}, "combined diagnostic tools not registered")
+            raw_tool = next(tool for tool in tools if tool["name"] == base.TOOL)
+            require("save_capture" in raw_tool.get("inputSchema", {}).get("properties", {}).get("action", {}).get("enum", []),
+                    "this toolkit requires the new file-capture diagnostic AIO; no settings changed")
+            side_tool = next(tool for tool in tools if tool["name"] == ISL_TOOL)
+            observer_schema = side_tool.get("inputSchema", {}).get("properties", {}).get("gates", {}).get("properties", {}).get("observationLevel", {})
+            require(not (compare_nr or self.args.plan == "engine") or "engine" in observer_schema.get("enum", []),
+                    "this diagnostic AIO lacks broader engine recording; no settings changed")
             nr_tool = next((tool for tool in tools if tool["name"] == NR_TOOL), {})
             properties = nr_tool.get("inputSchema", {}).get("properties", {})
             require({"nr_status", "nr_configure"} <= set(properties.get("action", {}).get("enum", [])) and
@@ -538,19 +515,23 @@ class Campaign(base.Campaign):
                 self.finish_nr_comparison()
             self.save("nr-setup-final.json", self.nr_setup)
             self.save("campaign.json", {"completed": self.completed, "failures": self.failures, "cleanup": self.cleanup,
-                      "buildId": self.args.build_id, "plan": self.args.plan, "rules": self.rules, "sceneTime": "preserved",
-                      "neuralRenderingSetup": self.nr_setup, "nrRules": self.nr_rules, "groupRules": self.group_rules})
-            self.save("report.json", evidence.comparison(self.completed))
+                      "buildId": self.args.build_id, "plan": self.args.plan, "sceneTime": "per-phase policy in analysis inputs",
+                      "neuralRenderingSetup": self.nr_setup})
+            self.save("report.json", {"status": "COLLECTION_ONLY", "collected": len(self.completed),
+                      "expected": total, "analysis": "pending_offline", "failures": self.failures, "cleanup": self.cleanup})
             with (self.root / 'report.txt').open('x', encoding='utf-8') as output:
-                output.write(evidence.readable_report(self.completed, self.failures, self.cleanup))
-                output.write("\nNeural Rendering setup: " + json.dumps(self.nr_setup) + "\n")
+                output.write(f"COLLECTION ONLY: {len(self.completed)}/{total} windows saved.\n")
+                output.write("No diagnosis or offline analysis was run on this computer. Send the entire folder.\n")
+                output.write("Failures: " + json.dumps(self.failures) + "\n")
+                output.write("Restoration: " + json.dumps(self.cleanup) + "\n")
+                output.write("NR final state: " + json.dumps(self.nr_setup) + "\n")
         failed = bool(self.failures or any(key in self.cleanup for key in ("restorationFailure", "stopOrExportFailure", "nrFinalizationFailure")))
         if failed:
             print(f"TEST FAILED / INCOMPLETE: {len(self.completed)}/{total} windows processed. See report.txt.",
                   file=sys.stderr, flush=True)
         else:
             print(f"TEST FINISHED: {len(self.completed)}/{total} windows completed; capture settings restored.", flush=True)
-            print("Collection succeeded; the diagnosis may still be inconclusive. See report.txt.", flush=True)
+            print("You can close Skyrim now. Export and analysis will run on our computer; send the whole folder.", flush=True)
         if self.nr_setup["state"] == "off_verified":
             print("NR comparison finished with NR OFF. See nr-setup-final.json." if compare_nr else
                   "NR was verified OFF before testing; this toolkit never re-enables it. See nr-setup-final.json.", flush=True)
@@ -564,11 +545,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scenario", default=str(HERE / "core.json"))
     parser.add_argument("--plan", choices=PLANS, default="core")
-    parser.add_argument("--observation", choices=("off", "counters", "timed"))
+    parser.add_argument("--observation", choices=("off", "counters", "timed", "engine"))
     parser.add_argument("--off-unlimited", action="store_true", help="Explicitly change pacing once; restore accepted settings afterward")
     nr_options = parser.add_mutually_exclusive_group()
     nr_options.add_argument("--compare-neural-rendering", action="store_true",
-                           help="Capture initial state, NR reversal, NR/ISL interaction, core ISL tests and longer mountain/timed probes; leave NR off")
+                           help="Capture initial state and NR/ISL reversals, then the selected core or focused engine plan; leave NR off")
     nr_options.add_argument("--disable-neural-rendering", action="store_true",
                         help="Explicitly set NR OFF before the campaign and leave it off; preserve other configuration")
     for name in ("output", "controller", "runtime"):

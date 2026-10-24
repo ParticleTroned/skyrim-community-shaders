@@ -249,19 +249,11 @@ namespace CSX::Diagnostics::ReflexMeasurement
 			{ "readbackFunction", FunctionIdentity(b.readbackFunction) }, { "softwareLatency", { { "status", "UNSUPPORTED" }, { "reason", LatencyLimitation } } },
 			{ "writerScope", "CSX native writers only; other DLL settings writes are not observed" } };
 	}
-	json Export(const json& args)
+	json ExportRecords(size_t offset, size_t limit)
 	{
 		auto& s = State();
 		auto& j = s.journal;
-		std::scoped_lock lock(j.mutex);
-		if (!j.frozen)
-			throw std::logic_error("export requires a frozen capture");
-		const auto offset = args.value("offset", size_t{}), limit = args.value("limit", size_t{ 256 });
-		if (!limit || limit > 256)
-			throw std::invalid_argument("limit must be 1..256");
 		const auto total = j.app.size() + j.native.size() + j.compositor.size() + s.queries.size();
-		if (offset > total)
-			throw std::invalid_argument("offset exceeds frozen export");
 		LARGE_INTEGER frequency{};
 		QueryPerformanceFrequency(&frequency);
 		json records = json::array();
@@ -278,7 +270,25 @@ namespace CSX::Diagnostics::ReflexMeasurement
 				records.push_back({ { "stream", "readback" }, { "ordinal", n }, { "data", ReadbackJson(s.queries[n]) } });
 			}
 		}
-		if (offset == s.contiguousExport)
+		return records;
+	}
+	json Export(const json& args, bool trackProgress)
+	{
+		auto& s = State();
+		auto& j = s.journal;
+		std::scoped_lock lock(j.mutex);
+		if (!j.frozen)
+			throw std::logic_error("export requires a frozen capture");
+		const auto offset = args.value("offset", size_t{}), limit = args.value("limit", size_t{ 256 });
+		if (!limit || limit > 256)
+			throw std::invalid_argument("limit must be 1..256");
+		const auto total = j.app.size() + j.native.size() + j.compositor.size() + s.queries.size();
+		if (offset > total)
+			throw std::invalid_argument("offset exceeds frozen export");
+		LARGE_INTEGER frequency{};
+		QueryPerformanceFrequency(&frequency);
+		auto records = ExportRecords(offset, limit);
+		if (trackProgress && offset == s.contiguousExport)
 			s.contiguousExport += records.size();
 		return { { "captureId", j.id }, { "schema", Schema }, { "offset", offset }, { "total", total },
 			{ "nextOffset", offset + records.size() < total ? json(offset + records.size()) : json(nullptr) },

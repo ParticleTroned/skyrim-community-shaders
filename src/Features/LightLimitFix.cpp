@@ -3839,7 +3839,7 @@ float LightLimitFix::Hooks::AIProcess_CalculateLightValue_GetLuminance::thunk(
 	RE::NiLight& refLight,
 	int32_t shadowBitMask)
 {
-	CS_ISL_SCOPE(nativeWrapper, ParticleNativeWrapper);
+	CS_ISL_BROAD(nativeWrapper, ParticleNativeWrapper);
 	auto ret = func(shadowSceneNode, targetPosition, numHits, sunLightLevel, lightLevel, refLight, shadowBitMask);
 	globals::features::lightLimitFix.AddParticleLightLuminance(targetPosition, numHits, ret);
 	return ret;

@@ -30,6 +30,11 @@ def nr_tool():
         'expectedBuildId': {'type': 'string'}, 'expectedConfigurationFingerprint': {'type': 'string'}}}}
 
 
+def diagnostic_tools():
+    return [{'name': isl.ISL_TOOL, 'inputSchema': {'properties': {'gates': {'properties': {'observationLevel': {'enum': ['counters', 'engine']}}}}}},
+            {'name': isl.base.TOOL, 'inputSchema': {'properties': {'action': {'enum': ['save_capture']}}}}, nr_tool()]
+
+
 def nr_status(enabled=False):
     return {'settings': {'enabled': enabled},
             'requestedConfiguration': {'upscaling': {'neuralRenderingEnabled': enabled, 'neuralRenderingIntensity': 0.5},
@@ -93,21 +98,6 @@ class NeuralSetupTests(unittest.TestCase):
              self.assertRaisesRegex(isl.evidence.EvidenceError, 'settings changed'):
             self.campaign.settle_nr(status)
 
-    def test_invalid_window_is_retained_without_aborting_remaining_data_collection(self):
-        result = {'name': '01-R', 'valid': False, 'settingsAndSceneStable': True}
-        with contextlib.redirect_stderr(io.StringIO()) as stderr:
-            self.campaign.record_phase(result)
-        self.assertEqual(self.campaign.completed, [result])
-        self.assertEqual(self.campaign.failures[0]['type'], 'InvalidWindow')
-        self.assertIn('continuing', stderr.getvalue())
-        self.assertFalse(json.loads((self.campaign.root / '01-R-summary.json').read_text())['valid'])
-
-    def test_changed_settings_stop_the_campaign_after_preserving_evidence(self):
-        result = {'name': '01-R', 'valid': False, 'settingsAndSceneStable': False}
-        with self.assertRaisesRegex(isl.evidence.EvidenceError, 'preserve user changes'):
-            self.campaign.record_phase(result)
-        self.assertEqual(self.campaign.completed, [result])
-
     def test_nr_cleanup_during_export_does_not_contaminate_finished_window(self):
         campaign = self.campaign
         condition = {'ready': True, 'pacing': {}, 'weather': None, 'cell': 1, 'nrRequested': False,
@@ -121,15 +111,12 @@ class NeuralSetupTests(unittest.TestCase):
             return {'frozen': True} if action == 'stop' else {}
         def export(*args):
             status['counters']['resetAttempts'] += 1
-            campaign.raw_pages = [{'boundaries': {'applicationAdmissionStartQpc': 10}}]
-            campaign.side_pages = [{}]
-            return {'complete': True}, {'complete': True}
+            return {'file': '01-R.csxcap', 'bytes': 123}
         with patch.object(campaign, 'isl', return_value=condition), \
              patch.object(campaign, 'settle_isl', return_value=condition), \
              patch.object(campaign, 'nr_condition', side_effect=lambda *a: copy.deepcopy(status)), \
              patch.object(campaign, 'call', side_effect=call), \
              patch.object(campaign, 'export_pair', side_effect=export), \
-             patch.object(campaign, 'performance_window', return_value={'valid': True}), \
              patch.object(isl.base, 'qpc_now', return_value=1), \
              patch.object(isl.time, 'monotonic', side_effect=[0, 100]), \
              patch.object(isl.evidence, 'streams', return_value=[]), \
@@ -139,8 +126,10 @@ class NeuralSetupTests(unittest.TestCase):
              patch.object(isl.evidence.raw, 'summarize', return_value={}):
             campaign.phase(isl.plan(campaign.config)[0])
         self.assertEqual(status['counters']['resetAttempts'], 2)
-        self.assertTrue(campaign.completed[0]['neuralRendering']['valid'])
-        self.assertTrue(campaign.completed[0]['valid'])
+        inputs = json.loads((campaign.root / '01-R-analysis-input.json').read_text())
+        self.assertEqual(inputs['nrBefore']['counters'], inputs['nrAfter']['counters'])
+        self.assertTrue(campaign.completed[0]['collected'])
+        self.assertEqual(campaign.completed[0]['analysis'], 'pending_offline')
 
     def test_already_disabled_does_not_send_mutation(self):
         with patch.object(self.campaign, 'controller', return_value=nr_response(nr_status())) as controller:
@@ -259,7 +248,7 @@ class NeuralSetupTests(unittest.TestCase):
                 isl.evidence.nr_window(before, after)
 
     def test_preflight_failure_is_reported_before_session_or_capture(self):
-        catalog = {'data': {'tools': [{'name': isl.ISL_TOOL}, {'name': isl.base.TOOL}, nr_tool()]}}
+        catalog = {'data': {'tools': diagnostic_tools()}}
         with patch.object(self.campaign, 'controller', side_effect=[catalog, nr_response(nr_status(True))]), \
              patch.object(self.campaign, 'call') as call, patch.object(self.campaign, 'phase') as phase, \
              patch.object(self.campaign, 'restore') as restore, contextlib.redirect_stdout(io.StringIO()), \
@@ -411,7 +400,7 @@ function global:python { $args | ConvertTo-Json -Compress; $global:LASTEXITCODE 
         self.assertIn('TEST FAILED / INCOMPLETE: 0/7', stderr.getvalue())
         self.assertIn('catalog rejected', stderr.getvalue())
         self.assertIn('Send the ENTIRE output folder', stdout.getvalue())
-        self.assertIn('Capture execution: FAILED / INCOMPLETE', (campaign.root / 'report.txt').read_text())
+        self.assertIn('COLLECTION ONLY: 0/7', (campaign.root / 'report.txt').read_text())
         self.assertEqual(json.loads((campaign.root / 'campaign.json').read_text())['completed'], [])
 
     def test_launcher_comparison_flag_and_incompatible_options(self):
@@ -441,7 +430,7 @@ function global:python { $args | ConvertTo-Json -Compress; $global:LASTEXITCODE 
             self.args.output = str(self.root / f'finished-{restoration_failed}')
             campaign = isl.Campaign(self.args, config)
             condition = {'isl': {'loaded': True}, 'editor': {'clean': True}, 'startup': {'active': 'normal'}}
-            catalog = {'data': {'tools': [{'name': isl.ISL_TOOL}, {'name': isl.base.TOOL}, nr_tool()]}}
+            catalog = {'data': {'tools': diagnostic_tools()}}
             def phase(item):
                 campaign.completed.append({'name': item['name'], 'condition': item, 'valid': True,
                                            'waveform': {'status': 'UNAVAILABLE'}})
@@ -463,7 +452,7 @@ function global:python { $args | ConvertTo-Json -Compress; $global:LASTEXITCODE 
                 self.assertIn('TEST FAILED / INCOMPLETE', stderr.getvalue())
             else:
                 self.assertIn('TEST FINISHED: 7/7', stdout.getvalue())
-                self.assertIn('diagnosis may still be inconclusive', stdout.getvalue())
+                self.assertIn('Export and analysis will run on our computer', stdout.getvalue())
 
 
 if __name__ == '__main__':

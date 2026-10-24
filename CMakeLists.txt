@@ -3762,9 +3762,25 @@ if(BUILD_CONTROLLER_TESTS)
             "${Python3_EXECUTABLE}"
             "${PROJECT_SOURCE_DIR}/tests/isl_diagnostics_gates_test.py"
     )
+    add_test(
+        NAME ISLOfflineCapture
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/isl_offline_capture_test.py"
+    )
+    add_test(
+        NAME ISLCaptureNative
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/isl_capture_native_test.py"
+            --json-include
+            "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
     set_tests_properties(
         ISLDiagnosticsEvidence
         ISLDiagnosticsGates
+        ISLOfflineCapture
+        ISLCaptureNative
         PROPERTIES LABELS "ControllerTests"
     )
     add_controller_test(

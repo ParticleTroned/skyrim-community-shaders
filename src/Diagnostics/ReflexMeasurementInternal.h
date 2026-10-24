@@ -37,7 +37,7 @@ namespace CSX::Diagnostics::ReflexMeasurement
 		uint32_t requestedDurationMs{};
 		size_t requestedCapacity{};
 		Tick preparedAt{};
-		json environment, condition;
+		json environment, condition, savedCapture;
 		std::vector<Reflex::DiagnosticReadback> queries;
 		std::vector<Reflex::DiagnosticReadback> queryStarted;
 		CompositorCursor cursor;
@@ -63,7 +63,11 @@ namespace CSX::Diagnostics::ReflexMeasurement
 	json ReadbackJson(const Reflex::DiagnosticReadback& result);
 	json LeaseJson();
 	json Environment();
-	json Export(const json& args);
+	json Export(const json& args, bool trackProgress = true);
+	/// Requires a frozen journal and its mutex; shared by file and paged export.
+	json ExportRecords(size_t offset, size_t limit);
+	/// Persist a frozen joint journal once; decoding and analysis run offline.
+	json SaveCapture();
 	json Readiness(const json& args);
 	void Run(std::stop_token token, uint32_t durationMs);
 	void RequestExpiredRestoration();

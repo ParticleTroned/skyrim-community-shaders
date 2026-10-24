@@ -13,19 +13,24 @@ class Gates(unittest.TestCase):
     def test_smaller_capture_respects_limit_after_buffer_reuse(self):
         source = (ROOT / "src/Diagnostics/ISLDiagnostics.cpp").read_text()
         finish = block(source, "void Scope::Finish() noexcept")
+        label = block(source, "void Scope::Label(std::string_view name) noexcept")
         driver = r'''
 #include "Diagnostics/ISLDiagnostics.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 namespace SKSE::stl {
 template<class F> struct scope_exit { F callback; ~scope_exit() { callback(); } };
 }
 namespace CSX::Diagnostics::ISL {
-namespace RM { int64_t Clock() { return 20; } }
-struct Row { int64_t enter,exit; uint64_t generation,frame; uintptr_t caller; uint32_t thread; Metric metric; };
+namespace RM { int64_t now=20; int64_t Clock() { return now; } }
+uint64_t CpuTime(bool& known) { known=true; return 100; }
+int GetCurrentThread() { return 1; }
+int QueryThreadCycleTime(int,uint64_t* value) { *value=200; return 1; }
+struct Row { int64_t enter,exit; uint64_t generation,frame; uintptr_t caller; uint32_t thread; Metric metric; uint16_t label{}; uint64_t cpuStart100ns{}, cpu100ns{},cycles{}; bool cpuKnown{},cyclesKnown{}; };
 struct Totals { uint64_t count{},timed{}; int64_t elapsed{},maximum{}; };
 struct Slot {
     std::atomic_flag busy{};
@@ -35,14 +40,20 @@ struct Slot {
     std::atomic_bool invocationActive{};
     std::array<Totals,size_t(Metric::Count)> totals{};
     std::vector<Row> rows;
+    std::array<Totals,128> labelTotals{};
+    std::array<std::array<char,128>,128> labels{};
+    uint64_t labelLoss{};
     uint64_t overflow{};
 } fixture;
-struct DataState { size_t capacity=16; } state;
+constexpr uint64_t FeaturePassStride=64;
+constexpr int64_t SlowFeaturePassMicroseconds=2000;
+struct DataState { size_t capacity=16; int64_t frequency=10000000; } state;
 DataState& Data() { return state; }
 Scope::Scope(Metric selected,bool,uintptr_t) noexcept: policy{},slot(&fixture),metric(selected),enter(10) {
     ++slot->depth; slot->busy.test_and_set();
 }
 Scope::~Scope() { Finish(); }
+LABEL
 FINISH
 }
 int main() {
@@ -51,8 +62,14 @@ int main() {
     for (unsigned n=0;n<20;++n) { Scope scope(Metric::EngineUpdate); scope.Finish(); }
     if(fixture.rows.size()!=16 || fixture.overflow!=4 || fixture.depth || fixture.busy.test()) std::abort();
     if(fixture.totals[size_t(Metric::EngineUpdate)].timed!=20) std::abort();
+    fixture.rows.clear();
+    for(unsigned n=0;n<64;++n) { Scope scope(Metric::FeaturePass); scope.Label("draw"); }
+    if(fixture.rows.size()!=1 || fixture.labelTotals[0].count!=64) std::abort();
+    RM::now=50000;
+    { Scope scope(Metric::FeaturePass); scope.Label("draw"); }
+    if(fixture.rows.size()!=2 || fixture.labelTotals[0].count!=65 || fixture.depth || fixture.busy.test()) std::abort();
 }
-'''.replace('FINISH', finish)
+'''.replace('FINISH', finish).replace('LABEL', label)
         self.compile_driver(driver, (True,))
 
     def test_particle_subtractions_preserve_lock_and_native_admission(self):

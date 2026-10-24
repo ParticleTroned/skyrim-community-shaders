@@ -3,6 +3,7 @@
 #	include "Diagnostics/ISLDiagnosticsState.h"
 #	include <cstddef>
 #	include <cstdint>
+#	include <string_view>
 
 namespace CSX::Diagnostics::ISL
 {
@@ -101,6 +102,14 @@ namespace CSX::Diagnostics::ISL
     X(PruneWait) \
     X(PruneDeferred) \
     X(EngineUpdate) \
+    X(RenderShadowMaps) \
+    X(RenderWorld) \
+    X(RenderWorldBatches) \
+    X(RenderWorldDecals) \
+    X(RenderCubemap) \
+    X(QueueCollisionsNative) \
+    X(QueueCollisionsCSX) \
+    X(FeaturePass) \
     X(PoseCycle) \
     X(PoseNativeWait) \
     X(PoseMutexWait) \
@@ -121,6 +130,11 @@ namespace CSX::Diagnostics::ISL
 			Count
 	};
 	struct Slot;
+	/// Only explicitly selected engine captures activate named CPU pass timing.
+	/// True only during admission of the broader engine observation mode.
+	bool EngineRecording() noexcept;
+	/// Read-only context on the engine update thread; no actor iteration or control calls.
+	void RecordEngineContext() noexcept;
 	/// Holds one immutable policy snapshot and nonblocking per-thread observation admission.
 	class Scope
 	{
@@ -133,6 +147,8 @@ namespace CSX::Diagnostics::ISL
 		void Candidate(float value) noexcept;
 		void Unique(const void* identity) noexcept;
 		void Finish() noexcept;
+		/// Intern a bounded pass name in the current thread slot without allocating.
+		void Label(std::string_view name) noexcept;
 		const Policy policy;
 
 	private:
@@ -142,6 +158,9 @@ namespace CSX::Diagnostics::ISL
 		int64_t enter{};
 		uintptr_t caller{};
 		uint64_t frame{};
+		uint64_t cpuBegin{}, cyclesBegin{};
+		bool cpuKnown{}, cyclesKnown{};
+		uint16_t label{};
 	};
 	/// Startup requests are consumed once before light initialization, never from presets.
 	void InitializeStartup();

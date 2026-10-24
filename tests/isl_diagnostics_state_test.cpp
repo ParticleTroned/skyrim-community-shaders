@@ -21,7 +21,7 @@ int main()
 				for (unsigned o = 0; o < 4; ++o) {
 					Policy policy{ Luminance(l), Renderer(r), Particle(p), Observation(o), true, 1234567 };
 					Check(Policy::Unpack(policy.Pack()) == policy, "packed policy lost a field");
-					const bool valid = l <= 2 && r <= 2 && p <= 2 && o <= 2 && (r != 2 || l == 1);
+					const bool valid = l <= 2 && r <= 2 && p <= 2 && o <= 3 && (r != 2 || l == 1);
 					Check(policy.Valid(true, true) == valid, "illegal combined policy accepted");
 					Check(!policy.Valid(false, false), "editor bypass admitted dirty editor");
 				}

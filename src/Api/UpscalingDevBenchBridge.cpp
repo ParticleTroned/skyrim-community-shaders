@@ -737,6 +737,11 @@ namespace
 
 namespace CSX::Api::UpscalingDevBenchBridge
 {
+	nlohmann::json BuildSnapshotJson(const UpscalingAPI::Snapshot001& a_snapshot)
+	{
+		return Snapshot(a_snapshot);
+	}
+
 	void Install()
 	{
 		if (g_registered.load(std::memory_order_acquire))

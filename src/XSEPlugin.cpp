@@ -1,4 +1,5 @@
 #include "Api/AcceptedDrawService.h"
+#include "Api/ColourPipelineProbeDevBenchBridge.h"
 #include "Api/EditorDevBenchBridge.h"
 #include "Api/EditorService.h"
 #include "Api/FeatureDevBenchBridge.h"
@@ -34,6 +35,7 @@
 #	include "Diagnostics/NvPerf.h"
 #	include "Diagnostics/EngineStutterMonitor.h"
 #endif
+#include "RenderMap/DevBenchBridge.h"
 #include "SceneSettingsManager.h"
 #include "ScreenshotDevBenchBridge.h"
 #include "ShaderCache.h"
@@ -187,10 +189,12 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 #endif
 			ScreenshotDevBenchBridge::Install();
 			CSX::Api::UpscalingDevBenchBridge::Install();
+			CSX::Api::ColourPipelineProbeDevBenchBridge::Install();
 			CSX::Api::WeatherDevBenchBridge::Install();
 			CSX::Api::EditorDevBenchBridge::Install();
 			CSX::Api::FeatureDevBenchBridge::Install();
 			CSX::Api::ShaderDevBenchBridge::Install();
+			CSX::RenderMap::DevBenchBridge::Install();
 			break;
 		}
 	case SKSE::MessagingInterface::kPostPostLoad:
@@ -207,10 +211,12 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// CSX's listener ran first, this is the first deterministic retry after
 				// all PostLoad listeners have completed.
 				CSX::Api::UpscalingDevBenchBridge::Install();
+				CSX::Api::ColourPipelineProbeDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
 				CSX::Api::EditorDevBenchBridge::Install();
 				CSX::Api::FeatureDevBenchBridge::Install();
 				CSX::Api::ShaderDevBenchBridge::Install();
+				CSX::RenderMap::DevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				CSX::Api::RegisterAcceptedDrawService();
@@ -322,8 +328,10 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				NvPerf::InstallDevBench();
 #endif
 				CSX::Api::UpscalingDevBenchBridge::Install();
+				CSX::Api::ColourPipelineProbeDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
 				CSX::Api::ShaderDevBenchBridge::Install();
+				CSX::RenderMap::DevBenchBridge::Install();
 				globals::state->startupMenuInitializationComplete.store(true, std::memory_order_release);
 			}
 

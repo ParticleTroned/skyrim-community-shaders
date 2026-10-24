@@ -76,6 +76,7 @@ namespace Permutation
 		static const uint CharacterFace = (1 << CharacterCategoryShift);
 		static const uint CharacterSkin = (2 << CharacterCategoryShift);
 		static const uint CharacterHair = (3 << CharacterCategoryShift);
+		static const uint MeshBlending = (1u << 23);
 	}
 
 	namespace ExtraFeatureFlags

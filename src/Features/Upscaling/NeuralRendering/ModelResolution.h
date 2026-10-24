@@ -46,6 +46,9 @@ namespace NeuralRendering
 			Microsoft::WRL::ComPtr<ID3D11Device> device;
 			Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
 			Microsoft::WRL::ComPtr<ID3D11ComputeShader> reconstructionShader;
+			Microsoft::WRL::ComPtr<ID3D11ComputeShader> preparationShader;
+			Microsoft::WRL::ComPtr<ID3D11Buffer> peripheralConstants;
+			std::array<PeripheralCompressionPlan, kMaximumRegionEvaluations> peripheralPlans{};
 			Microsoft::WRL::ComPtr<ID3D11Buffer> constants;
 			Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> packedCoverage;
 			GuidedReconstructionDecision reconstructionDecision{};
@@ -54,6 +57,8 @@ namespace NeuralRendering
 
 		/** Freeze capacity before memory admission; speculative upgrades preserve the working policy. */
 		void PlanPackedCrops(std::span<RendererApplyArgs>, bool speculative = false) noexcept;
+		/** Freeze optional mapping and shader ownership after scale/actor planning and before admission. */
+		bool PreparePeripheralCompression(std::span<RendererApplyArgs>, bool compactInputs, HRESULT&);
 		/** Resolve optional shaders before native memory admission; device errors remain fatal. */
 		bool PreparePacking(std::span<const RendererApplyArgs>, HRESULT&);
 		[[nodiscard]] bool PackingAvailable() const noexcept { return SUCCEEDED(packingFailure_); }
@@ -112,8 +117,11 @@ namespace NeuralRendering
 		bool EnsureCoverage(ID3D11Device*, HRESULT&);
 		bool EnsureSelectionShader(bool guarded, HRESULT&);
 		bool EnsureGuidedShader(bool selected, bool guarded, Microsoft::WRL::ComPtr<ID3D11ComputeShader>&, HRESULT&);
+		bool EnsurePeripheralShaders(ID3D11Device*, bool selected, PeripheralCompressionShaders&, HRESULT&);
 		void DispatchCoverage(std::span<const RendererApplyArgs>, Batch&);
-		template <std::size_t Bindings>
+		template <UINT ConstantBuffers>
+		void DispatchPreparation(std::span<const RendererApplyArgs>, const Batch&);
+		template <std::size_t Bindings, UINT ConstantBuffers = 1>
 		void DispatchReconstruction(std::span<const RendererApplyArgs>, const Batch&);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		void ServiceCoverageInspection(ID3D11DeviceContext*);
@@ -128,6 +136,10 @@ namespace NeuralRendering
 		Microsoft::WRL::ComPtr<ID3D11ComputeShader> prepare_, reconstruct_, selection_, guardedSelection_;
 		std::array<Microsoft::WRL::ComPtr<ID3D11ComputeShader>, 4> guidedShaders_{};
 		std::array<bool, 4> guidedShaderFailed_{};
+		Microsoft::WRL::ComPtr<ID3D11ComputeShader> peripheralPrepare_;
+		std::array<Microsoft::WRL::ComPtr<ID3D11ComputeShader>, 2> peripheralReconstruct_{};
+		std::array<bool, 2> peripheralShaderFailed_{};
+		Microsoft::WRL::ComPtr<ID3D11Buffer> peripheralConstants_;
 		Microsoft::WRL::ComPtr<ID3D11Buffer> constants_;
 		bool compileFailed_ = false;
 		HRESULT packingFailure_ = S_OK;

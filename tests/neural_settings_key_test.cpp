@@ -50,6 +50,9 @@ int main()
 			auto guided = baseline;
 			guided.neuralRenderingGuidedReconstruction = true;
 			require((BuildNeuralRenderingSettingsKey(guided) != key) == enabled);
+			auto peripheral = baseline;
+			peripheral.neuralRenderingPeripheralCompression = true;
+			require((BuildNeuralRenderingSettingsKey(peripheral) != key) == enabled);
 			auto parallel = baseline;
 			parallel.neuralRenderingParallelEyes = true;
 			require(BuildNeuralRenderingSettingsKey(parallel) == key);

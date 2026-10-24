@@ -12,6 +12,8 @@ namespace NeuralRendering
 	template <class Settings>
 	[[nodiscard]] const char* PrewarmConfigurationBlocker(const Settings& settings, bool isVR) noexcept
 	{
+		if (settings.neuralRenderingPeripheralCompression)
+			return "peripheral_compression_requires_live_geometry";
 		const auto mode = ConfiguredRenderingMode(settings.neuralRenderingMode);
 		if (!isVR || mode != RenderingMode::ReducedResolution ||
 			settings.neuralRenderingModelResolutionPercent != 100 || settings.neuralRenderingPressureResolutionEnabled ||

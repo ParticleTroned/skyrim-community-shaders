@@ -144,6 +144,7 @@
       "neuralRenderingDirectCommit": true,
       "neuralRenderingReconstructionFilter": 0,
             "neuralRenderingGuidedReconstruction": false,
+            "neuralRenderingPeripheralCompression": false,
       "neuralRenderingEnabled": false,
       "neuralRenderingFovOnly": false,
       "neuralRenderingRenderscaleFov": false,

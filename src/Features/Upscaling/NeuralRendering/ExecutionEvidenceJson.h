@@ -70,6 +70,20 @@ namespace NeuralRendering::Evidence
 		};
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	/** The frozen plan describes candidate geometry; native records prove actual submitted work. */
+	inline Json PeripheralCompressionJson(const PeripheralCompressionPlan& value)
+	{
+		return { { "requested", value.requested }, { "active", value.Active() },
+			{ "reason", GetPeripheralCompressionReasonName(value.reason) }, { "qualified", false },
+			{ "mappingVersion", PeripheralMapping::kVersion }, { "uniformPercent", value.uniformPercent },
+			{ "source", ExtentJson(value.source) }, { "sourceGuides", ExtentJson(value.sourceGuides) },
+			{ "ordinaryModel", ExtentJson(value.ordinaryModel) }, { "ordinaryGuides", ExtentJson(value.ordinaryGuides) },
+			{ "candidateModel", ExtentJson(value.model) }, { "candidateGuides", ExtentJson(value.guides) },
+			{ "sourceCrop", ViewportJson(value.sourceCrop) }, { "ownedOutput", SubrectJson(value.ownedOutput) },
+			{ "baselinePixels", value.baselinePixels }, { "candidatePixels", value.candidatePixels },
+			{ "protectedFraction", value.mapping.centre }, { "workingFraction", value.mapping.work },
+			{ "maximumFootprint", value.maximumFootprint }, { "motionConvention", "normalized_endpoint_difference" } };
+	}
 	inline Json ModelReconstructionJson(const std::optional<ModelReconstructionEvidence>& value)
 	{
 		if (!value)
@@ -87,6 +101,7 @@ namespace NeuralRendering::Evidence
 		return {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			{ "modelReconstruction", ModelReconstructionJson(value.modelReconstruction) },
+			{ "peripheralCompression", value.peripheralCompression ? PeripheralCompressionJson(*value.peripheralCompression) : Json(nullptr) },
 #endif
 			{ "sourceTransactionId", value.sourceTransactionId },
 			{ "mode", value.renderingMode ? Json(GetRenderingModeName(*value.renderingMode)) : Json(nullptr) },

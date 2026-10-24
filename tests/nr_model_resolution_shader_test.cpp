@@ -7,6 +7,7 @@
 #include "nr_model_resolution_accounting_under_test.h"
 
 #include <DirectXPackedVector.h>
+#include <d3d11_1.h>
 
 #include <algorithm>
 #include <array>
@@ -42,6 +43,8 @@ namespace AdapterCompiler
 	unsigned packingAttempts = 0;
 	bool guided = false, failGuided = false, throwGuided = false;
 	unsigned guidedAttempts = 0;
+	bool failPeripheral = false;
+	unsigned peripheralAttempts = 0;
 }
 
 // Substitute only engine compilation/profiling; the adapter and GPU work are production code.
@@ -49,6 +52,11 @@ ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
 	const std::vector<std::pair<const char*, const char*>>& options, const char* target, const char* entry, ShaderCompileTiming*)
 {
 	++AdapterCompiler::calls;
+	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "NR_PERIPHERAL_COMPRESSION"; })) {
+		++AdapterCompiler::peripheralAttempts;
+		if (AdapterCompiler::failPeripheral)
+			return nullptr;
+	}
 	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "GUIDED_NR_RECONSTRUCTION"; })) {
 		++AdapterCompiler::guidedAttempts;
 		if (AdapterCompiler::throwGuided)
@@ -2285,6 +2293,7 @@ namespace
 		adapter.ReleaseUnscaledSlots(args);
 		Require(adapter.RetainedBytes(0) == 0 && adapter.RetainedBytes(1) == 0, "100% retained downscaling caches");
 	}
+#include "nr_peripheral_shader_checks.h"
 }
 
 int main()
@@ -2313,6 +2322,9 @@ int main()
 				++variant) {
 				AdapterCompiler::guided = variant == 2;
 				AdapterCompiler::filter = variant == 1 ? NeuralRendering::ReconstructionFilter::Lanczos3 : NeuralRendering::ReconstructionFilter::Bilinear;
+				if (!AdapterCompiler::guided)
+					for (bool mixedGuides : { false, true })
+						CheckPeripheralAdapter(device.Get(), context.Get(), mixedGuides);
 				if (AdapterCompiler::guided)
 					CheckGuidedEdges(device.Get(), context.Get(), vr);
 				CheckAdapter(device.Get(), context.Get());

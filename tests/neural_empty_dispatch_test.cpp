@@ -27,7 +27,7 @@ namespace NeuralRendering
 	};
 	struct RendererApplyOutcome
 	{
-		bool reconstructionHistoryReset = false;
+		bool reconstructionHistoryReset = false, spatialHistoryReset = false;
 		uint32_t evaluationAttemptedFeatureSlotMask = 0, successful = 0, selectedOutputFeatureSlotMask = 0;
 		bool WasEvaluationAttempted(uint32_t slot) const { return (evaluationAttemptedFeatureSlotMask & (1u << slot)) != 0; }
 		bool WasEvaluationSuccessful(uint32_t slot) const { return (successful & (1u << slot)) != 0; }
@@ -41,7 +41,7 @@ namespace NeuralRendering
 			++ceilingReads;
 			return ceiling;
 		}
-		bool succeeds = true;
+		bool succeeds = true, spatialChange = false;
 		uint32_t selectionCompletion = 0b11u;
 		static Renderer& Instance()
 		{
@@ -52,6 +52,7 @@ namespace NeuralRendering
 		{
 			++entries;
 			++admittedEyes;
+			outcome->spatialHistoryReset = spatialChange;
 			outcome->evaluationAttemptedFeatureSlotMask |= 1u << args.featureSlot;
 			if (succeeds) {
 				outcome->successful |= 1u << args.featureSlot;
@@ -261,5 +262,20 @@ int main()
 						}
 					}
 		}
+	}
+	for (bool batched : { false, true }) {
+		globals::game::isVR = true;
+		Upscaling upscaling;
+		auto& backend = NeuralRendering::Renderer::Instance();
+		backend = {};
+		backend.spatialChange = true;
+		std::array<Upscaling::NeuralCenterDispatchResult, 2> results{};
+		std::array<NeuralRendering::RendererApplyArgs, 2> args{};
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			results[eye].prepared = true;
+			args[eye].featureSlot = eye;
+		}
+		(void)EvaluatePreparedNeuralStereo(upscaling, results, args, batched, Upscaling::NeuralStereoRouteRole::Main);
+		Require(upscaling.resets == 1);
 	}
 }

@@ -50,6 +50,13 @@ int main()
 		from_json(json::object(), settings);
 		Check(!settings.neuralRenderingGuidedReconstruction, "Legacy settings must disable guided reconstruction");
 	}
+	for (bool enabled : { false, true }) {
+		Upscaling::Settings settings;
+		from_json({ { "neuralRenderingPeripheralCompression", enabled } }, settings);
+		Check(settings.neuralRenderingPeripheralCompression == enabled && json(settings).at("neuralRenderingPeripheralCompression") == enabled, "Peripheral option did not round-trip");
+		from_json(json::object(), settings);
+		Check(!settings.neuralRenderingPeripheralCompression, "Legacy settings must disable peripheral compression");
+	}
 	for (unsigned filter : { 0u, 1u }) {
 		Upscaling::Settings settings;
 		from_json({ { "neuralRenderingReconstructionFilter", filter } }, settings);

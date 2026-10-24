@@ -1,4 +1,5 @@
 #include "Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h"
+#include "Features/Upscaling/NeuralRendering/PeripheralCompressionPolicy.h"
 
 #include <array>
 #include <cstdint>
@@ -21,10 +22,13 @@ namespace NeuralRendering
 		uint32_t modelResolutionPercent = 100;
 		ReconstructionFilter reconstructionFilter = ReconstructionFilter::Bilinear;
 		bool guidedReconstructionEnabled = false;
+		bool peripheralCompressionEnabled = false;
+		bool peripheralSourceRestricted = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		uint32_t frameId = 1;
 		uint64_t generation = 1;
 		GuidedReconstructionOverride reconstructionOverride = GuidedReconstructionOverride::Auto;
+		PeripheralCompressionOverride peripheralOverride = PeripheralCompressionOverride::Auto;
 #endif
 		bool pressureResolutionEnabled = false;
 		bool parallelEyes = false;
@@ -35,6 +39,8 @@ namespace NeuralRendering
 	struct Renderer
 	{
 		GuidedReconstructionExperiment experiment;
+		PeripheralCompressionExperiment peripheral;
+		auto ResolvePeripheralOverride(uint32_t frame, uint64_t generation) { return peripheral.Resolve(frame, generation); }
 		static Renderer& Instance()
 		{
 			static Renderer value;
@@ -51,6 +57,8 @@ struct Upscaling
 		uint32_t neuralRenderingModelResolutionPercent = 100;
 		uint32_t neuralRenderingReconstructionFilter = 0;
 		bool neuralRenderingGuidedReconstruction = false;
+		bool neuralRenderingPeripheralCompression = false;
+		bool neuralRenderingFovOnly = false, neuralRenderingRenderscaleFov = false;
 		bool neuralRenderingPressureResolutionEnabled = false;
 		bool neuralRenderingParallelEyes = false, neuralRenderingBatchedStereo = true;
 		uint32_t neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
@@ -127,6 +135,17 @@ int main()
 					if (args.parallelEyes != (vr && requested && batched))
 						throw std::runtime_error("Parallel NR routing lost runtime, mode or serial-submission policy");
 				}
+	for (bool vr : { false, true })
+		for (bool mask : { false, true }) {
+			globals::game::isVR = vr;
+			upscaling.mode = RenderingMode::ReducedResolution;
+			upscaling.settings.neuralRenderingPeripheralCompression = true;
+			upscaling.settings.neuralRenderingRenderscaleFov = mask;
+			upscaling.SetNeuralExecutionContext(args, {}, {}, {});
+			++calls;
+			if (!args.peripheralCompressionEnabled || args.peripheralSourceRestricted != (vr && mask))
+				throw std::runtime_error("Peripheral source restriction lost the FOV/runtime contract");
+		}
 	for (bool vr : { false, true }) {
 		globals::game::isVR = vr;
 		upscaling.settings.neuralRenderingCentralAreaPercent = 50;

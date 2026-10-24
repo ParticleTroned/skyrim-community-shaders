@@ -1,5 +1,11 @@
 #include "Common/FoveatedMask.hlsli"
 #include "Upscaling/NeuralRendering/ModelResolutionCommon.hlsli"
+#ifdef NR_PERIPHERAL_COMPRESSION
+#	include "Upscaling/NeuralRendering/PeripheralCompression.hlsli"
+#	ifdef GUIDED_NR_RECONSTRUCTION
+#		error Peripheral and guided reconstruction require separate combination qualification.
+#	endif
+#endif
 #ifdef MODEL_OUTPUT_SELECTION
 #	include "Common/NeuralRenderingSelection.hlsli"
 #	include "Upscaling/NeuralRendering/ModelResolutionStorage.hlsli"
@@ -146,7 +152,11 @@ float CentralWeight(float2 uv)
 		return;
 	}
 #endif
+#ifdef NR_PERIPHERAL_COMPRESSION
+	float2 position = PeripheralForward((float2(pixel) + 0.5) / float2(SourceSize)) * float2(ModelSize) - 0.5;
+#else
 	float2 position = (float2(pixel) + 0.5) * float2(ModelSize) / float2(SourceSize) - 0.5;
+#endif
 	uint4 bounds = uint4(ModelRegionOffset, ModelRegionSize);
 	if (PackedCount != 0u) {
 		uint tileIndex = FindPackedCrop(float2(pixel) + 0.5, true);

@@ -372,6 +372,7 @@ namespace FSRTemporalTuningPolicy
 	OP(neuralRenderingBatchedStereo)             \
 	OP(neuralRenderingDirectCommit)              \
 	OP(neuralRenderingReconstructionFilter)      \
+	OP(neuralRenderingPeripheralCompression)     \
 	OP(neuralRenderingGuidedReconstruction)      \
 	OP(neuralRenderingModelResolutionPercent)    \
 	OP(neuralRenderingParallelEyes)              \
@@ -6767,6 +6768,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		add(NeuralRendering::EffectiveModelResolutionPercent(mode, a_settings.neuralRenderingModelResolutionPercent));
 		add(static_cast<uint64_t>(NeuralRendering::ClampReconstructionFilter(a_settings.neuralRenderingReconstructionFilter)));
 		add(a_settings.neuralRenderingGuidedReconstruction);
+		add(a_settings.neuralRenderingPeripheralCompression);
 		add(a_settings.neuralRenderingPressureResolutionEnabled);
 		add(a_settings.neuralRenderingCentralAreaPercent);
 		if (a_settings.neuralRenderingCentralAreaPercent < NeuralRendering::kMaximumCentralAreaPercent)
@@ -18838,6 +18840,9 @@ namespace
 			settings.neuralRenderingReconstructionFilter = static_cast<std::uint32_t>(NeuralRendering::ClampReconstructionFilter(static_cast<std::uint32_t>(filter)));
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Bilinear is the inexpensive default. Advanced can preserve sharper NR changes at reduced NR resolution, with possible ringing and extra GPU cost. Original scene detail and alpha are preserved.");
+		Util::Widgets::Checkbox("Peripheral NR compression", &settings.neuralRenderingPeripheralCompression);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Experimental: preserve the central 80% of each axis while compressing the peripheral NR grid to 90%. Combines with NR resolution. Unsupported crops, actor routes and guided reconstruction keep ordinary NR. VR quality and performance are unqualified.");
 		Util::Widgets::Checkbox("Improve low-resolution NR", &settings.neuralRenderingGuidedReconstruction);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Provisional guided reconstruction for NR sampling at 50% or lower. Auto currently retains the selected filter until this route is qualified. NR resolution and strength are unchanged.");
@@ -45248,6 +45253,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 					ready = PrepareReducedResolutionNeuralOutputTarget(eyeIndex, args, fuseSelection);
 				}
 				applied = ready && NeuralRendering::Renderer::Instance().Apply(args, &outcome);
+				if (outcome.spatialHistoryReset)
+					RequestHistoryReset();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				if (outcome.reconstructionHistoryReset)
 					RequestHistoryReset();
@@ -45889,6 +45896,8 @@ namespace
 				applied = NeuralRendering::Renderer::Instance().Apply(
 					a_batchArgs[eye], &outcome);
 			}
+			if (outcome.spatialHistoryReset)
+				a_upscaling.RequestHistoryReset();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (outcome.reconstructionHistoryReset)
 				a_upscaling.RequestHistoryReset();

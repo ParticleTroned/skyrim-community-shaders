@@ -11,6 +11,7 @@ set(_nr_shader_files
     ColorMeasureCS.hlsl
     ColorPrepareCS.hlsl
     ColorReconstructCS.hlsl
+    PeripheralCompression.hlsli
     ModelResolutionCommon.hlsli
     ModelResolutionGuided.hlsli
     ModelResolutionCoverageCS.hlsl

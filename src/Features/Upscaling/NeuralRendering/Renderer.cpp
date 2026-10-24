@@ -745,6 +745,7 @@ namespace NeuralRendering
 		MemoryResolutionPolicy memoryResolution_{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		GuidedReconstructionExperiment reconstructionExperiment_{};
+		PeripheralCompressionExperiment peripheralExperiment_{};
 #endif
 		static_assert(std::atomic_uint32_t::is_always_lock_free);
 		std::atomic_uint32_t modelResolutionCeiling_{ kMaximumModelResolutionPercent };
@@ -770,6 +771,34 @@ namespace NeuralRendering
 		bool RetryWorkingResolutionLocked(std::span<RendererApplyArgs> args);
 		void FinishMemoryResolutionLocked(std::span<const RendererApplyArgs> args, bool succeeded);
 		void PrepareMemoryResolutionLocked(std::span<RendererApplyArgs> args);
+		bool PreparePeripheralCompressionLocked(std::span<RendererApplyArgs> args)
+		{
+			HRESULT result = S_OK;
+			bool compact = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			compact = colorConfiguration_.experiments.CompactInputsEnabled();
+#endif
+			if (!modelResolution_.PreparePeripheralCompression(args, compact, result))
+				return FailLocked(RendererStage::ResourceCreation, result, "NR peripheral preparation failed", args.front().featureSlot, true);
+			snapshot_.peripheralCompression = args.front().peripheralCompression;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (snapshot_.peripheralCompression.reason == PeripheralCompressionReason::ShaderUnavailable)
+				peripheralExperiment_.Cancel();
+#endif
+			return true;
+		}
+		std::array<PeripheralMapping, Runtime::kFeatureSlotCount> presentedPeripheralMappings_{};
+		void FinishPeripheralCompressionLocked(std::span<const RendererApplyArgs> args, bool succeeded, RendererApplyOutcome& outcome) noexcept
+		{
+			for (const auto& input : args) {
+				if (input.featureSlot >= presentedPeripheralMappings_.size())
+					continue;
+				const auto mapping = succeeded && input.peripheralCompression.Active() ? input.peripheralCompression.mapping : PeripheralMapping{};
+				auto& previous = presentedPeripheralMappings_[input.featureSlot];
+				outcome.spatialHistoryReset |= previous != mapping;
+				previous = mapping;
+			}
+		}
 		void ResolutionChangedLocked();
 		MemoryBudgetSample memorySample_{};
 		Util::GpuMemoryBudget::Reservation memoryReservation_;
@@ -806,6 +835,7 @@ namespace NeuralRendering
 		RendererSnapshot SnapshotLocked()
 		{
 #ifdef DEVBENCH_BRIDGE_ENABLED
+			snapshot_.peripheralOverride = peripheralExperiment_.Status();
 			snapshot_.prewarm = prewarm_;
 			snapshot_.nativeLifecycle = Runtime::Instance().GetLifecycleCounts();
 			snapshot_.prewarmSubmission = interop_.GetLifetimeSnapshot();
@@ -899,9 +929,12 @@ namespace NeuralRendering
 		void FinishApplyLocked(RendererApplyOutcome& outcome) noexcept
 		{
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			if (failureLatched_ || quarantined_)
+			if (failureLatched_ || quarantined_) {
 				reconstructionExperiment_.Cancel();
+				peripheralExperiment_.Cancel();
+			}
 			outcome.reconstructionHistoryReset |= reconstructionExperiment_.ConsumeChange();
+			outcome.spatialHistoryReset |= peripheralExperiment_.ConsumeChange();
 #endif
 			FinishCapture(outcome);
 		}
@@ -2045,6 +2078,7 @@ namespace NeuralRendering
 	{
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		reconstructionExperiment_.Cancel();
+		peripheralExperiment_.Cancel();
 #endif
 		LogFailureDiagnosticsLocked(a_stage, E_FAIL, a_slot);
 		snapshot_.stallRecovery.Cancel();
@@ -2279,8 +2313,10 @@ namespace NeuralRendering
 	void Renderer::State::FinishMemoryResolutionLocked(std::span<const RendererApplyArgs> args, bool succeeded)
 	{
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		if (!succeeded)
+		if (!succeeded) {
 			reconstructionExperiment_.Cancel();
+			peripheralExperiment_.Cancel();
+		}
 #endif
 		if (succeeded && !args.empty()) {
 			for (const auto& arg : args)
@@ -4412,9 +4448,10 @@ namespace NeuralRendering
 			state_->PrepareMemoryResolutionLocked({ &args, 1 });
 			state_->CaptureColorConfiguration(a_args);
 			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRendering", state_->wholePass_);
-			bool succeeded = state_->ApplyLocked(args, outcome);
+			bool succeeded = state_->PreparePeripheralCompressionLocked({ &args, 1 }) && state_->ApplyLocked(args, outcome);
 			if (state_->RetryWorkingResolutionLocked({ &args, 1 }))
-				succeeded = state_->ApplyLocked(args, outcome);
+				succeeded = state_->PreparePeripheralCompressionLocked({ &args, 1 }) && state_->ApplyLocked(args, outcome);
+			state_->FinishPeripheralCompressionLocked({ &args, 1 }, succeeded, outcome);
 			state_->FinishMemoryResolutionLocked({ &args, 1 }, succeeded);
 			state_->FinishMemoryRecoveryLocked(succeeded, outcome);
 			if (succeeded)
@@ -4427,6 +4464,7 @@ namespace NeuralRendering
 		} catch (...) {
 			const auto failureFeatureSlot =
 				state_->ActiveFeatureSlotOrLocked(a_args.featureSlot);
+			state_->FinishPeripheralCompressionLocked({ &a_args, 1 }, false, outcome);
 			state_->QuarantineAfterUnexpectedFailureLocked(
 				state_->activeStage_,
 				failureFeatureSlot,
@@ -4457,9 +4495,10 @@ namespace NeuralRendering
 			state_->PrepareMemoryResolutionLocked(args);
 			state_->CaptureColorConfiguration(a_args[0]);
 			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRenderingStereo", state_->wholePass_);
-			bool succeeded = state_->ApplyStereoLocked(args, outcome);
+			bool succeeded = state_->PreparePeripheralCompressionLocked(args) && state_->ApplyStereoLocked(args, outcome);
 			if (state_->RetryWorkingResolutionLocked(args))
-				succeeded = state_->ApplyStereoLocked(args, outcome);
+				succeeded = state_->PreparePeripheralCompressionLocked(args) && state_->ApplyStereoLocked(args, outcome);
+			state_->FinishPeripheralCompressionLocked(args, succeeded, outcome);
 			state_->FinishMemoryResolutionLocked(args, succeeded);
 			state_->FinishMemoryRecoveryLocked(succeeded, outcome);
 			if (succeeded)
@@ -4474,6 +4513,7 @@ namespace NeuralRendering
 		} catch (...) {
 			const auto failureFeatureSlot =
 				state_->ActiveFeatureSlotOrLocked(a_args[0].featureSlot);
+			state_->FinishPeripheralCompressionLocked(a_args, false, outcome);
 			state_->QuarantineAfterUnexpectedFailureLocked(
 				state_->activeStage_,
 				failureFeatureSlot,
@@ -4504,9 +4544,10 @@ namespace NeuralRendering
 			state_->PrepareMemoryResolutionLocked(args);
 			state_->CaptureColorConfiguration(a_args[0]);
 			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRenderingSequentialStereo", state_->wholePass_);
-			bool succeeded = state_->ApplySequentialStereoLocked(args, outcome);
+			bool succeeded = state_->PreparePeripheralCompressionLocked(args) && state_->ApplySequentialStereoLocked(args, outcome);
 			if (state_->RetryWorkingResolutionLocked(args))
-				succeeded = state_->ApplySequentialStereoLocked(args, outcome);
+				succeeded = state_->PreparePeripheralCompressionLocked(args) && state_->ApplySequentialStereoLocked(args, outcome);
+			state_->FinishPeripheralCompressionLocked(args, succeeded, outcome);
 			state_->FinishMemoryResolutionLocked(args, succeeded);
 			state_->FinishMemoryRecoveryLocked(succeeded, outcome);
 			if (succeeded)
@@ -4519,6 +4560,7 @@ namespace NeuralRendering
 		} catch (...) {
 			const auto failureFeatureSlot =
 				state_->ActiveFeatureSlotOrLocked(a_args[0].featureSlot);
+			state_->FinishPeripheralCompressionLocked(a_args, false, outcome);
 			state_->QuarantineAfterUnexpectedFailureLocked(
 				state_->activeStage_,
 				failureFeatureSlot,
@@ -4544,6 +4586,7 @@ namespace NeuralRendering
 		std::scoped_lock lock(state_->mutex_);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		state_->reconstructionExperiment_.Cancel();
+		state_->peripheralExperiment_.Cancel();
 #endif
 		try {
 			const bool reset = state_->ResetLocked(false, false, a_policy);
@@ -4880,6 +4923,18 @@ namespace NeuralRendering
 	}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	bool Renderer::ConfigurePeripheralOverride(PeripheralCompressionOverride mode, std::uint32_t frames, std::uint64_t expectedRevision)
+	{
+		std::scoped_lock lock(state_->mutex_);
+		return state_->peripheralExperiment_.Configure(mode, frames, expectedRevision);
+	}
+
+	std::pair<PeripheralCompressionOverride, bool> Renderer::ResolvePeripheralOverride(std::uint32_t frame, std::uint64_t generation)
+	{
+		std::scoped_lock lock(state_->mutex_);
+		return state_->peripheralExperiment_.Resolve(frame, generation);
+	}
+
 	bool Renderer::ConfigureReconstructionOverride(GuidedReconstructionOverride mode, std::uint32_t frames, std::uint64_t expectedRevision)
 	{
 		std::scoped_lock lock(state_->mutex_);

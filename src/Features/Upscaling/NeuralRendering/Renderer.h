@@ -1,4 +1,5 @@
 #pragma once
+#include "PeripheralCompressionPolicy.h"
 
 #include "../DLSSViewportCrop.h"
 #include "CaptureEvidence.h"
@@ -166,6 +167,7 @@ namespace NeuralRendering
 		std::uint32_t requestedModelResolutionPercent = 100;
 		std::uint32_t effectiveModelResolutionPercent = 100;
 		bool modelSharedInputs = false;
+		PeripheralCompressionPlan peripheralCompression{};
 		std::uint32_t modelSourceWidth = 0, modelSourceHeight = 0;
 		std::uint32_t modelWidth = 0, modelHeight = 0;
 		std::uint32_t colorWidth = 0;
@@ -201,6 +203,7 @@ namespace NeuralRendering
 		GuidedReconstructionDecision guidedReconstruction{};
 		bool reconstructionPrepared = false;
 		GuidedReconstructionOverrideStatus reconstructionOverride{};
+		PeripheralCompressionOverrideStatus peripheralOverride{};
 		PackedCropLayout packedCropLayout{};
 		PrewarmPolicy prewarm{};
 		Runtime::LifecycleCounts nativeLifecycle{};
@@ -223,6 +226,13 @@ namespace NeuralRendering
 		Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> mask;
 		ComputeSubrect maskSupport{};
 		bool providerBlending = false;
+	};
+
+	/** Optional shader ownership survives backend retirement between spatial planning and preparation. */
+	struct PeripheralCompressionShaders
+	{
+		Microsoft::WRL::ComPtr<ID3D11ComputeShader> prepare, reconstruct;
+		Microsoft::WRL::ComPtr<ID3D11Buffer> constants;
 	};
 
 	struct RendererApplyArgs
@@ -254,8 +264,13 @@ namespace NeuralRendering
 		std::uint32_t modelResolutionPercent = 100;
 		ReconstructionFilter reconstructionFilter = ReconstructionFilter::Bilinear;
 		bool guidedReconstructionEnabled = false;
+		bool peripheralCompressionEnabled = false;
+		bool peripheralSourceRestricted = false;
+		PeripheralCompressionPlan peripheralCompression{};
+		PeripheralCompressionShaders peripheralShaders{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		GuidedReconstructionOverride reconstructionOverride = GuidedReconstructionOverride::Auto;
+		PeripheralCompressionOverride peripheralOverride = PeripheralCompressionOverride::Auto;
 #endif
 		bool pressureResolutionEnabled = false;
 		bool parallelEyes = false;
@@ -302,6 +317,7 @@ namespace NeuralRendering
 	/** Per-call evidence captured at the exact NVIDIA evaluation boundary. */
 	struct RendererApplyOutcome
 	{
+		bool spatialHistoryReset = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		bool reconstructionHistoryReset = false;
 #endif
@@ -380,6 +396,10 @@ namespace NeuralRendering
 		/** Queues recovery without GPU work; the caller must gate this on requested NR. */
 		bool NotifyDlssMemoryPressure();
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Configure a nonpersistent, revision-checked peripheral comparison lease. */
+		bool ConfigurePeripheralOverride(PeripheralCompressionOverride, std::uint32_t frames, std::uint64_t expectedRevision);
+		/** Resolve the lease once per source frame and report history transitions. */
+		[[nodiscard]] std::pair<PeripheralCompressionOverride, bool> ResolvePeripheralOverride(std::uint32_t frame, std::uint64_t generation);
 		/** Start/cancel a bounded session-only comparison, rejecting stale restoration tokens. */
 		bool ConfigureReconstructionOverride(GuidedReconstructionOverride, std::uint32_t frames, std::uint64_t expectedRevision);
 		/** Resolve before source admission; the caller resets downstream history once when changed. */

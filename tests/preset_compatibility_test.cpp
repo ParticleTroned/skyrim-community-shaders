@@ -57,6 +57,7 @@ int main(int argc, char** argv)
 		assert(nr.at("neuralRenderingNetwork") == 0);
 		assert(nr.at("neuralRenderingReconstructionFilter") == 0);
 		assert(nr.at("neuralRenderingGuidedReconstruction") == false);
+		assert(nr.at("neuralRenderingPeripheralCompression") == false);
 		assert(preset.at("Terrain Blending").at("LandscapeSeams") == 0);
 		assert(preset.at("Performance Overlay").at("ShowRenderTargets") == false);
 		assert(preset.at("Sky Sync").at("DisabledWorldspaces") == nlohmann::json::array(

@@ -1,4 +1,7 @@
 #include "Upscaling/NeuralRendering/ModelResolutionCommon.hlsli"
+#ifdef NR_PERIPHERAL_COMPRESSION
+#	include "Upscaling/NeuralRendering/PeripheralCompression.hlsli"
+#endif
 
 Texture2D<float4> InputColor : register(t0);
 Texture2D<float> InputDepth : register(t1);
@@ -30,8 +33,13 @@ void PrepareColor(uint2 id)
 		sourceOffset = tile.source.xy;
 		sourceEnd = tile.source.xy + tile.source.zw;
 	}
+#ifdef NR_PERIPHERAL_COMPRESSION
+	float2 lower = max(PeripheralInverse(samplePixel / sampleGrid) * float2(SourceSize), float2(sourceOffset));
+	float2 upper = min(PeripheralInverse((samplePixel + 1.0) / sampleGrid) * float2(SourceSize), float2(sourceEnd));
+#else
 	float2 lower = max(samplePixel * float2(SourceSize) / sampleGrid, float2(sourceOffset));
 	float2 upper = min((samplePixel + 1.0) * float2(SourceSize) / sampleGrid, float2(sourceEnd));
+#endif
 	uint2 first = uint2(floor(lower));
 	uint2 end = uint2(ceil(upper));
 	float4 color = 0.0;
@@ -72,8 +80,13 @@ void PrepareGuides(uint2 id)
 	uint2 sourceOffset = SourceRegionOffset * guideSize / SourceSize;
 	uint2 sourceEnd = ((SourceRegionOffset + SourceRegionSize) * guideSize + SourceSize - 1u) / SourceSize;
 	uint2 pixel = regionOffset + id;
+#ifdef NR_PERIPHERAL_COMPRESSION
+	float2 lower = max(PeripheralInverse(float2(pixel) / float2(modelGuideSize)) * float2(guideSize), float2(sourceOffset));
+	float2 upper = min(PeripheralInverse(float2(pixel + 1u) / float2(modelGuideSize)) * float2(guideSize), float2(sourceEnd));
+#else
 	float2 lower = max(float2(pixel) * float2(guideSize) / float2(modelGuideSize), float2(sourceOffset));
 	float2 upper = min(float2(pixel + 1u) * float2(guideSize) / float2(modelGuideSize), float2(sourceEnd));
+#endif
 	uint packedTileIndex = PackedCount;
 	if (PackedCount != 0u) {
 		float2 atlasPosition = (float2(pixel) + 0.5) * float2(ModelSize) / float2(modelGuideSize);
@@ -112,6 +125,12 @@ void PrepareGuides(uint2 id)
 	}
 	ProxyDepth[pixel] = nearest;
 	float2 atlasMotion = motion * MotionVectorScale;
+#ifdef NR_PERIPHERAL_COMPRESSION
+	// The selected surface supplies velocity at this inverse-mapped guide sample.
+	const float2 anchor = PeripheralInverse((float2(pixel) + 0.5) / float2(modelGuideSize));
+	atlasMotion = PeripheralForward(anchor + atlasMotion) - PeripheralForward(anchor);
+	atlasMotion = all(isfinite(atlasMotion)) ? atlasMotion : 0.0;
+#endif
 	if (packedTileIndex < PackedCount) {
 		PackedCropTile tile = PackedTiles[packedTileIndex];
 		float2 position = (float2(pixel) + 0.5) * float2(ModelSize) / float2(modelGuideSize);

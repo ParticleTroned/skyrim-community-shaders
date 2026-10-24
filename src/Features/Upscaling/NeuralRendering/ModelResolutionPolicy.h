@@ -4,6 +4,7 @@
 #include "CentralAreaPolicy.h"
 #include "ComputeSubrect.h"
 #include "PackedCropPolicy.h"
+#include "PeripheralMapping.h"
 #include "PipelinePolicy.h"
 
 #include <array>
@@ -69,6 +70,8 @@ namespace NeuralRendering
 		std::uintptr_t controlMaskIdentity = 0;
 		CentralArea centralArea{};
 		PackedCropLayout packedCrops{};
+		PeripheralMapping peripheralMapping{};
+		std::uint32_t peripheralMappingVersion = 0;
 
 		bool operator==(const ModelResolutionHistory&) const = default;
 	};

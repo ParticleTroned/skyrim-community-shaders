@@ -102,6 +102,7 @@ namespace globals
 				unsigned neuralRenderingModelResolutionPercent = 100;
 				unsigned neuralRenderingReconstructionFilter = 0;
 				bool neuralRenderingGuidedReconstruction = false;
+				bool neuralRenderingPeripheralCompression = false;
 				bool neuralRenderingPressureResolutionEnabled = true;
 				bool neuralRenderingPrewarmEnabled = true;
 				float neuralRenderingSingleSubrectScale = 1.0f;
@@ -647,6 +648,11 @@ int main()
 		DrawNeuralModelResolutionSettings(settings);
 		require(settings.neuralRenderingGuidedReconstruction && settings.neuralRenderingModelResolutionPercent == 100 && settings.neuralRenderingReconstructionFilter == 0,
 			"Guided toggle changed independent model scale or Basic filter");
+		require(!settings.neuralRenderingPeripheralCompression, "Peripheral compression must default off");
+		ImGui::Clear("Peripheral NR compression");
+		DrawNeuralModelResolutionSettings(settings);
+		require(settings.neuralRenderingPeripheralCompression && settings.neuralRenderingGuidedReconstruction && settings.neuralRenderingModelResolutionPercent == 100,
+			"Peripheral toggle changed guided or scale settings");
 		for (const auto [value, expected] : { std::pair{ 1, 1u }, std::pair{ 0, 0u }, std::pair{ 2, 0u } }) {
 			ImGui::Clear("NR reconstruction filter");
 			ImGui::comboEditValue = value;
@@ -736,6 +742,9 @@ int main()
 		Upscaling::Settings supported{};
 		supported.neuralRenderingMode = 2;
 		supported.neuralRenderingPressureResolutionEnabled = false;
+		auto compressed = supported;
+		compressed.neuralRenderingPeripheralCompression = true;
+		require(NeuralRendering::PrewarmConfigurationBlocker(compressed, true), "Compression must defer prewarm");
 		require(!NeuralRendering::PrewarmConfigurationBlocker(supported, true),
 			"Full-view C supports prewarm with fixed full model resolution and automatic masks");
 		require(NeuralRendering::PrewarmConfigurationBlocker(supported, false), "Flat NR must not prewarm");

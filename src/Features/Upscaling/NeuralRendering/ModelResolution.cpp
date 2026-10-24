@@ -132,6 +132,7 @@ namespace NeuralRendering
 			for (std::size_t index = 0; index < args.size(); ++index) {
 				const auto& input = args[index];
 				if (!IsValidReconstructionFilter(input.reconstructionFilter) || input.reconstructionFilter != args.front().reconstructionFilter ||
+					input.peripheralCompression.Active() != args.front().peripheralCompression.Active() ||
 					input.featureSlot >= kLogicalFeatureSlotCount || !Util::SameIdentity(input.device, args.front().device) ||
 					!Util::SameIdentity(input.context, args.front().context))
 					return false;
@@ -412,6 +413,15 @@ namespace NeuralRendering
 				}
 			}
 
+			if (geometry && args.peripheralCompression.Active()) {
+				const auto& plan = args.peripheralCompression;
+				if (geometry->packedCrops.count || !plan.Matches(*geometry, { args.guideWidth, args.guideHeight }, args.viewportCrop, args.modelResolutionPercent))
+					return std::nullopt;
+				geometry->modelSize = plan.model;
+				geometry->modelGuideSize = plan.guides;
+				geometry->modelRegion = { 0, 0, plan.model.width, plan.model.height };
+				geometry->nativeCrop = UpscalingDLSS::ViewportCrop::Identity(plan.guides.width, plan.guides.height, plan.model.width, plan.model.height);
+			}
 			return geometry;
 		}
 	}
@@ -691,6 +701,115 @@ namespace NeuralRendering
 		return true;
 	}
 
+	bool ModelResolution::EnsurePeripheralShaders(ID3D11Device* device, bool selected, PeripheralCompressionShaders& retained, HRESULT& result)
+	{
+		if (device_.Get() != device) {
+			Reset();
+			device_ = device;
+		}
+		const auto index = selected ? 1u : 0u;
+		auto& reconstruction = peripheralReconstruct_[index];
+		if (!peripheralShaderFailed_[index] && (!peripheralPrepare_ || !reconstruction)) {
+			try {
+				std::vector<std::pair<const char*, const char*>> defines{ { "NR_PERIPHERAL_COMPRESSION", "1" } };
+				if (!peripheralPrepare_) {
+					peripheralPrepare_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+						L"Data/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl", defines, "cs_5_0", "main")));
+					if (peripheralPrepare_)
+						Util::SetResourceName(peripheralPrepare_.Get(), "NeuralRendering::PeripheralPrepare");
+				}
+				if (peripheralPrepare_ && !reconstruction) {
+					if (selected)
+						defines.emplace_back("MODEL_OUTPUT_SELECTION", "1");
+					reconstruction.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+						L"Data/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", defines, "cs_5_0", "main")));
+					if (reconstruction)
+						Util::SetResourceName(reconstruction.Get(), "NeuralRendering::PeripheralReconstruct%u", index);
+				}
+				peripheralShaderFailed_[index] = !peripheralPrepare_ || !reconstruction;
+			} catch (const std::exception&) {
+				peripheralShaderFailed_[index] = true;
+			}
+			result = device->GetDeviceRemovedReason();
+			if (FAILED(result))
+				return false;
+		}
+		result = S_OK;
+		if (peripheralShaderFailed_[index])
+			return true;
+		if (!peripheralConstants_) {
+			D3D11_BUFFER_DESC desc{};
+			desc.ByteWidth = sizeof(PeripheralMapping);
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+			result = device->CreateBuffer(&desc, nullptr, &peripheralConstants_);
+			if (FAILED(result))
+				return false;
+			Util::SetResourceName(peripheralConstants_.Get(), "NeuralRendering::PeripheralMapping");
+		}
+		retained = { peripheralPrepare_, reconstruction, peripheralConstants_ };
+		return true;
+	}
+
+	bool ModelResolution::PreparePeripheralCompression(std::span<RendererApplyArgs> args, bool compactInputs, HRESULT& result)
+	{
+		result = E_INVALIDARG;
+		if (args.empty() || args.size() > kEyeCount)
+			return false;
+		std::array<PeripheralCompressionPlan, kEyeCount> plans{};
+		for (std::size_t index = 0; index < args.size(); ++index) {
+			auto& input = args[index];
+			input.peripheralCompression = {};
+			input.peripheralShaders = {};
+			if (!input.peripheralCompressionEnabled)
+				continue;
+			const auto geometry = Geometry(input);
+			if (!geometry) {
+				plans[index].requested = true;
+				plans[index].reason = PeripheralCompressionReason::InvalidGeometry;
+				continue;
+			}
+			bool identity = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const bool ordinary = input.peripheralOverride == PeripheralCompressionOverride::Ordinary;
+			identity = ordinary || input.peripheralOverride == PeripheralCompressionOverride::Identity;
+#endif
+			bool guidedConflict = input.guidedReconstructionEnabled && input.modelResolutionPercent <= kGuidedReconstructionQualification.maximumPercent;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			guidedConflict |= input.guidedReconstructionEnabled && input.reconstructionOverride == GuidedReconstructionOverride::GuidedExperiment;
+#endif
+			plans[index] = BuildPeripheralCompressionPlan(*geometry, { input.guideWidth, input.guideHeight }, input.viewportCrop,
+				input.modelResolutionPercent, { .requested = true, .identity = identity, .actorRoute = input.characterVisualIsolation || input.providerBlending || input.actorSelection || input.controlMask || (input.modelOutputSelection && input.modelOutputSelection->mask), .restricted = input.peripheralSourceRestricted || input.centralArea.Active() || input.renderingMode == RenderingMode::Foveated, .compactInputs = compactInputs, .guidedConflict = guidedConflict });
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (ordinary)
+				plans[index].reason = PeripheralCompressionReason::ForcedOrdinary;
+#endif
+		}
+		ReconcilePeripheralCompression(std::span(plans.data(), args.size()));
+		if (plans[0].Active()) {
+			if (!args.front().device || !args.front().context || !ValidBatchLayout(args) || !ValidateSelectedOutputs(args))
+				return false;
+			const bool selected = std::ranges::any_of(args, [](const auto& input) { return input.modelOutputSelection.has_value(); });
+			PeripheralCompressionShaders shaders;
+			if (!EnsurePeripheralShaders(args.front().device, selected, shaders, result))
+				return false;
+			for (std::size_t index = 0; index < args.size(); ++index) {
+				if (!shaders.prepare)
+					plans[index].reason = PeripheralCompressionReason::ShaderUnavailable;
+				else
+					args[index].peripheralShaders = shaders;
+			}
+		}
+		for (std::size_t index = 0; index < args.size(); ++index) {
+			args[index].peripheralCompression = plans[index];
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			args[index].executionContext.peripheralCompression = plans[index];
+#endif
+		}
+		result = S_OK;
+		return true;
+	}
+
 	bool ModelResolution::Required(const RendererApplyArgs& args
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		,
@@ -698,7 +817,7 @@ namespace NeuralRendering
 #endif
 		) noexcept
 	{
-		if (args.modelOutputSelection || args.modelResolutionPercent != kMaximumModelResolutionPercent || args.centralArea.Active() || !args.centralArea.Valid())
+		if (args.peripheralCompression.Active() || args.modelOutputSelection || args.modelResolutionPercent != kMaximumModelResolutionPercent || args.centralArea.Active() || !args.centralArea.Valid())
 			return true;
 		if (args.packedCrops.count < 2)
 			return false;
@@ -770,6 +889,13 @@ namespace NeuralRendering
 		adapted.modelResolutionHistory = ModelResolutionHistory{ input.viewportCrop, input.modelResolutionPercent,
 			SourceRegion(input), reinterpret_cast<std::uintptr_t>(Util::GetComIdentity(input.controlMask.Get()).Get()),
 			input.centralArea.Active() ? input.centralArea : CentralArea{}, geometry->packedCrops };
+		if (input.peripheralCompression.Active()) {
+			adapted.modelResolutionHistory->peripheralMapping = input.peripheralCompression.mapping;
+			adapted.modelResolutionHistory->peripheralMappingVersion = PeripheralMapping::kVersion;
+		}
+		adapted.peripheralCompressionEnabled = false;
+		adapted.peripheralCompression = {};
+		adapted.peripheralShaders = {};
 		adapted.centralArea = {};
 		adapted.packedCrops = {};
 		adapted.packedCropsEnabled = false;
@@ -818,7 +944,7 @@ namespace NeuralRendering
 
 	std::optional<std::uint64_t> ModelResolution::AdditionalBytes(std::span<const RendererApplyArgs> args, Sharing sharing) const
 	{
-		if (!ValidBatchLayout(args) || !ValidateSelectedOutputs(args))
+		if (!args.front().device || !args.front().context || !ValidBatchLayout(args) || !ValidateSelectedOutputs(args))
 			return std::nullopt;
 		std::uint64_t total = 0;
 		for (const auto& input : args) {
@@ -1005,10 +1131,18 @@ namespace NeuralRendering
 		const bool selected = std::ranges::any_of(args, [](const auto& input) { return input.modelOutputSelection.has_value(); });
 		batch.device = args.front().device;
 		batch.context = args.front().context;
+		const bool peripheral = args.front().peripheralCompression.Active();
+		if (peripheral && (!args.front().peripheralShaders.prepare || !args.front().peripheralShaders.reconstruct || !args.front().peripheralShaders.constants)) {
+			result = E_INVALIDARG;
+			return false;
+		}
+		batch.preparationShader = peripheral ? args.front().peripheralShaders.prepare : prepare_;
+		batch.peripheralConstants = peripheral ? args.front().peripheralShaders.constants : nullptr;
 		std::array<GuidedReconstructionInput, kMaximumRegionEvaluations> guidedInputs{};
 		try {
 			for (std::size_t index = 0; index < args.size(); ++index) {
 				const auto& input = args[index];
+				batch.peripheralPlans[index] = input.peripheralCompression;
 				const auto allocation = AllocationKey::Read(input, batch.arguments[index], sharing);
 				if (!allocation) {
 					result = E_INVALIDARG;
@@ -1048,7 +1182,9 @@ namespace NeuralRendering
 				}
 				// The outer proxy retains unedited source values even when native colour processing encodes its own copy.
 				guidedInputs[index] = { input.guidedReconstructionEnabled, input.modelResolutionPercent, geometry->sourceSize,
-					geometry->packedCrops.count ? geometry->packedCrops.unpackedExtent : geometry->modelSize, input.insertionPoint,
+					geometry->packedCrops.count ? geometry->packedCrops.unpackedExtent : peripheral ? input.peripheralCompression.ordinaryModel :
+																									  geometry->modelSize,
+					input.insertionPoint,
 					key.colorFormat == key.outputFormat && (key.colorFormat == DXGI_FORMAT_R32G32B32A32_FLOAT || OutputFormat(key.colorFormat) != 0u) };
 				const auto source = geometry->sourceRegion;
 				const auto model = geometry->modelRegion;
@@ -1140,6 +1276,10 @@ namespace NeuralRendering
 			batch.reconstructionDecision.reason = GuidedReconstructionReason::Experiment;
 #endif
 		if (batch.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution) {
+			if (peripheral) {
+				result = E_INVALIDARG;
+				return false;
+			}
 			ComPtr<ID3D11ComputeShader> guided;
 			const bool guarded = batch.packedCoverage != nullptr;
 			if (!EnsureGuidedShader(selected, guarded, guided, result))
@@ -1164,11 +1304,30 @@ namespace NeuralRendering
 			};
 		}
 #endif
+		if (peripheral)
+			batch.reconstructionShader = args.front().peripheralShaders.reconstruct;
 		batch.constants = constants_;
-		auto* context = args.front().context;
 		if (batch.packedCoverage)
 			DispatchCoverage(args, batch);
-		ComputeStateGuard<4, 4> guard(context);
+		if (peripheral)
+			DispatchPreparation<2>(args, batch);
+		else
+			DispatchPreparation<1>(args, batch);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (batch.packedCoverage)
+			ServiceCoverageInspection(args.front().context);
+#endif
+		result = args.front().device->GetDeviceRemovedReason();
+		if (SUCCEEDED(result))
+			batch.count = args.size();
+		return SUCCEEDED(result);
+	}
+
+	template <UINT ConstantBuffers>
+	void ModelResolution::DispatchPreparation(std::span<const RendererApplyArgs> args, const Batch& batch)
+	{
+		auto* context = args.front().context;
+		ComputeStateGuard<4, 4, ComputeStatePolicy::ClearBindingsAndPredication, ConstantBuffers> guard(context);
 
 		for (std::size_t index = 0; index < args.size(); ++index) {
 			const auto& work = *batch.resources[index];
@@ -1177,8 +1336,13 @@ namespace NeuralRendering
 			const std::array srvs{ work.colorView.Get(), args[index].depthGuideSRV, work.motionView.Get(), work.allocation.hasMask ? work.maskView.Get() : nullptr };
 			const auto& target = batch.targets[index];
 			const std::array uavs{ target.color.uav.Get(), target.depth.uav.Get(), target.motion.uav.Get(), work.allocation.hasMask ? work.mask.uav.Get() : nullptr };
-			context->CSSetShader(prepare_.Get(), nullptr, 0);
+			context->CSSetShader(batch.preparationShader.Get(), nullptr, 0);
 			context->CSSetConstantBuffers(0, 1, &cb);
+			if constexpr (ConstantBuffers == 2) {
+				context->UpdateSubresource(batch.peripheralConstants.Get(), 0, nullptr, &batch.peripheralPlans[index].mapping, 0, 0);
+				auto* mapping = batch.peripheralConstants.Get();
+				context->CSSetConstantBuffers(1, 1, &mapping);
+			}
 			context->CSSetShaderResources(0, static_cast<UINT>(srvs.size()), srvs.data());
 			context->CSSetUnorderedAccessViews(0, static_cast<UINT>(uavs.size()), uavs.data(), nullptr);
 			{
@@ -1191,21 +1355,13 @@ namespace NeuralRendering
 			}
 			guard.Unbind();
 		}
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		if (batch.packedCoverage)
-			ServiceCoverageInspection(context);
-#endif
-		result = args.front().device->GetDeviceRemovedReason();
-		if (SUCCEEDED(result))
-			batch.count = args.size();
-		return SUCCEEDED(result);
 	}
 
-	template <std::size_t Bindings>
+	template <std::size_t Bindings, UINT ConstantBuffers>
 	void ModelResolution::DispatchReconstruction(std::span<const RendererApplyArgs> args, const Batch& batch)
 	{
 		auto* context = args.front().context;
-		ComputeStateGuard<Bindings> guard(context);
+		ComputeStateGuard<Bindings, 1, ComputeStatePolicy::ClearBindingsAndPredication, ConstantBuffers> guard(context);
 		for (std::size_t index = 0; index < args.size(); ++index) {
 			const auto& work = *batch.resources[index];
 			context->UpdateSubresource(batch.constants.Get(), 0, nullptr, &work.constants, 0, 0);
@@ -1221,6 +1377,11 @@ namespace NeuralRendering
 			auto* uav = batch.selectedOutputs[index] ? batch.selectedOutputs[index].Get() : work.reconstructed.uav.Get();
 			context->CSSetShader(batch.reconstructionShader.Get(), nullptr, 0);
 			context->CSSetConstantBuffers(0, 1, &cb);
+			if constexpr (ConstantBuffers == 2) {
+				context->UpdateSubresource(batch.peripheralConstants.Get(), 0, nullptr, &batch.peripheralPlans[index].mapping, 0, 0);
+				auto* mapping = batch.peripheralConstants.Get();
+				context->CSSetConstantBuffers(1, 1, &mapping);
+			}
 			context->CSSetShaderResources(0, static_cast<UINT>(srvs.size()), srvs.data());
 			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 			{
@@ -1243,6 +1404,8 @@ namespace NeuralRendering
 		if (!ValidBatchLayout(args) || args.front().device != batch.device.Get() || args.front().context != batch.context.Get())
 			return false;
 		for (std::size_t index = 0; index < args.size(); ++index) {
+			if (args[index].peripheralCompression != batch.peripheralPlans[index])
+				return false;
 			if (args[index].reconstructionFilter != batch.arguments[index].reconstructionFilter ||
 				static_cast<std::uint32_t>(args[index].reconstructionFilter) != batch.resources[index]->constants.reconstructionFilter)
 				return false;
@@ -1256,7 +1419,14 @@ namespace NeuralRendering
 								  selection->mask.Get() != batch.selectionMasks[index].Get())))
 				return false;
 		}
-		if (std::ranges::any_of(std::span(batch.selectedOutputs.data(), batch.count), [](const auto& output) { return output != nullptr; }))
+		if (batch.peripheralPlans[0].Active()) {
+			if (!batch.peripheralConstants || batch.packedCoverage)
+				return false;
+			if (std::ranges::any_of(std::span(batch.selectedOutputs.data(), batch.count), [](const auto& output) { return output != nullptr; }))
+				DispatchReconstruction<5, 2>(args, batch);
+			else
+				DispatchReconstruction<3, 2>(args, batch);
+		} else if (std::ranges::any_of(std::span(batch.selectedOutputs.data(), batch.count), [](const auto& output) { return output != nullptr; }))
 			DispatchReconstruction<5>(args, batch);
 		else if (batch.packedCoverage)
 			DispatchReconstruction<4>(args, batch);
@@ -1293,6 +1463,9 @@ namespace NeuralRendering
 		guardedSelection_.Reset();
 		guidedShaders_ = {};
 		guidedShaderFailed_ = {};
+		peripheralPrepare_.Reset();
+		peripheralReconstruct_ = {};
+		peripheralShaderFailed_ = {};
 		compileFailed_ = false;
 		packingFailure_ = S_OK;
 	}
@@ -1304,6 +1477,7 @@ namespace NeuralRendering
 		lastCoverageFrame_ = std::numeric_limits<std::uint32_t>::max();
 		InvalidateShaders();
 		constants_.Reset();
+		peripheralConstants_.Reset();
 		device_.Reset();
 	}
 

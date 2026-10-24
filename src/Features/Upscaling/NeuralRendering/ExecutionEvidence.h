@@ -4,6 +4,7 @@
 #include "ComputeSubrect.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "GuidedReconstructionPolicy.h"
+#	include "PeripheralCompressionPolicy.h"
 #endif
 #include "NativeEvaluationLayout.h"
 #include "PipelinePolicy.h"
@@ -63,6 +64,7 @@ namespace NeuralRendering
 		std::optional<std::array<std::uint32_t, 2>> sourceColorOrigin, sourceGuideOrigin;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		std::optional<ModelReconstructionEvidence> modelReconstruction;
+		std::optional<PeripheralCompressionPlan> peripheralCompression;
 #endif
 		Util::PassTimingHandle inputPreparation;
 		bool operator==(const ExecutionContext&) const = default;

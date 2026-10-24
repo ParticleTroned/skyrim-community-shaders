@@ -157,13 +157,18 @@ class Reversal(unittest.TestCase):
              patch.object(campaign, 'settle_nr'), patch.object(campaign, 'restore'), \
              contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(campaign.run(), 0)
-        self.assertEqual(len(campaign.completed), 34)
-        self.assertIn('34/34', output.getvalue())
+        expected = 16 if campaign.args.plan == 'engine' else 34
+        self.assertEqual(len(campaign.completed), expected)
+        self.assertIn(f'{expected}/{expected}', output.getvalue())
         self.assertEqual([e for e in self.events if e[0] == 'capture'][0][1], 'NR-00-as-found')
         interaction = [p for p in campaign.completed if p['condition'].get('group') == 'interaction']
         self.assertEqual([p['condition']['islEnabled'] for p in interaction], [False, True, False])
         self.assertFalse(self.status['settings']['enabled'])
         self.assertTrue((campaign.root / 'report.json').exists())
+
+    def test_focused_engine_campaign_keeps_reversals_and_finishes_at_sixteen_windows(self):
+        self.campaign.args.plan = 'engine'
+        self.test_complete_campaign_includes_all_states_and_leaves_nr_off()
 
 
 class Evidence(unittest.TestCase):

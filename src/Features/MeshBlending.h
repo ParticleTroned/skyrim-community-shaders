@@ -46,6 +46,8 @@ struct MeshBlending final : Feature
 		float BlendWidth = 12.0f;
 		float DepthBias = 0.25f;
 		float MaximumGap = 64.0f;
+		std::uint32_t ProjectedSnowEnabled = 1u;
+		float ProjectedSnowEdgeWidth = 2.0f;
 
 		std::uint32_t DetectionMode = static_cast<std::uint32_t>(MeshBlending::DetectionMode::kStrictAutomatic);
 		float MaximumDistance = 8192.0f;
@@ -62,7 +64,7 @@ struct MeshBlending final : Feature
 		float DepthBias = 0.25f;
 		float MaximumGap = 64.0f;
 		std::uint32_t Padding0 = 0u;
-		float Padding1 = 0.0f;
+		float ProjectedSnowEdgeWidth = 2.0f;
 		float Padding2 = 0.0f;
 		float Padding3 = 0.0f;
 	};
@@ -321,6 +323,7 @@ private:
 	bool IsDiscoveryCaptureSaturated() const;
 	void SetDiscoveryCaptureEnabled(bool a_enabled);
 	void CaptureDiscoveredRule(std::string_view a_modelPath, std::string_view a_nodePath);
+	bool TryPrepareProjectedSnow(RE::BSRenderPass* a_pass);
 	void EnsureRuleFileLoaded();
 	bool LoadRuleFile();
 	bool ReadRuleFileState(RuleFileState& a_state, bool& a_notFound, std::string& a_error) const;

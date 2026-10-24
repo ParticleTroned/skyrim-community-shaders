@@ -1,4 +1,8 @@
 add_controller_test(nr_model_resolution_policy_test NRModelResolutionPolicy tests/nr_model_resolution_policy_test.cpp)
+add_controller_test(nr_peripheral_compression_policy_test NRPeripheralCompressionPolicy tests/nr_peripheral_compression_policy_test.cpp)
+add_controller_test(nr_peripheral_compression_policy_bridge_test NRPeripheralCompressionPolicyBridge tests/nr_peripheral_compression_policy_test.cpp)
+target_compile_definitions(nr_peripheral_compression_policy_bridge_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+target_link_libraries(nr_peripheral_compression_policy_bridge_test PRIVATE nlohmann_json::nlohmann_json)
 foreach(_bridge IN ITEMS on off)
     add_controller_test(nr_guided_reconstruction_${_bridge}_test NRGuidedReconstruction_${_bridge}
         tests/nr_guided_reconstruction_policy_test.cpp)

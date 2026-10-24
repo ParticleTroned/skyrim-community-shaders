@@ -1,4 +1,7 @@
 #include "Upscaling/NeuralRendering/ModelResolutionCommon.hlsli"
+#ifdef NR_PERIPHERAL_COMPRESSION
+#	include "Upscaling/NeuralRendering/PeripheralCompression.hlsli"
+#endif
 
 Texture2D<float4> InputColor : register(t0);
 Texture2D<float> InputDepth : register(t1);
@@ -8,6 +11,24 @@ RWTexture2D<float4> ProxyColor : register(u0);
 RWTexture2D<float> ProxyDepth : register(u1);
 RWTexture2D<float2> ProxyMotion : register(u2);
 RWTexture2D<float> ProxyMask : register(u3);
+
+void ModelSourceBounds(float2 pixel, float2 grid, uint2 size, uint2 offset, uint2 end,
+	out float2 lower, out float2 upper)
+{
+#ifdef NR_PERIPHERAL_COMPRESSION
+	PeripheralSourceBounds(pixel / grid, (pixel + 1.0) / grid, lower, upper);
+	lower = clamp(lower * float2(size), float2(offset), float2(end));
+	upper = clamp(upper * float2(size), float2(offset), float2(end));
+	// Warped crop corners are context only; extend the owned edge instead of reading outside the eye.
+	bool2 empty = upper <= lower;
+	lower = float2(empty.x ? min(lower.x, float(end.x - 1u)) : lower.x,
+		empty.y ? min(lower.y, float(end.y - 1u)) : lower.y);
+	upper = float2(empty.x ? lower.x + 1.0 : upper.x, empty.y ? lower.y + 1.0 : upper.y);
+#else
+	lower = max(pixel * float2(size) / grid, float2(offset));
+	upper = min((pixel + 1.0) * float2(size) / grid, float2(end));
+#endif
+}
 
 void PrepareColor(uint2 id)
 {
@@ -30,8 +51,8 @@ void PrepareColor(uint2 id)
 		sourceOffset = tile.source.xy;
 		sourceEnd = tile.source.xy + tile.source.zw;
 	}
-	float2 lower = max(samplePixel * float2(SourceSize) / sampleGrid, float2(sourceOffset));
-	float2 upper = min((samplePixel + 1.0) * float2(SourceSize) / sampleGrid, float2(sourceEnd));
+	float2 lower, upper;
+	ModelSourceBounds(samplePixel, sampleGrid, SourceSize, sourceOffset, sourceEnd, lower, upper);
 	uint2 first = uint2(floor(lower));
 	uint2 end = uint2(ceil(upper));
 	float4 color = 0.0;
@@ -72,8 +93,8 @@ void PrepareGuides(uint2 id)
 	uint2 sourceOffset = SourceRegionOffset * guideSize / SourceSize;
 	uint2 sourceEnd = ((SourceRegionOffset + SourceRegionSize) * guideSize + SourceSize - 1u) / SourceSize;
 	uint2 pixel = regionOffset + id;
-	float2 lower = max(float2(pixel) * float2(guideSize) / float2(modelGuideSize), float2(sourceOffset));
-	float2 upper = min(float2(pixel + 1u) * float2(guideSize) / float2(modelGuideSize), float2(sourceEnd));
+	float2 lower, upper;
+	ModelSourceBounds(float2(pixel), float2(modelGuideSize), guideSize, sourceOffset, sourceEnd, lower, upper);
 	uint packedTileIndex = PackedCount;
 	if (PackedCount != 0u) {
 		float2 atlasPosition = (float2(pixel) + 0.5) * float2(ModelSize) / float2(modelGuideSize);
@@ -112,6 +133,12 @@ void PrepareGuides(uint2 id)
 	}
 	ProxyDepth[pixel] = nearest;
 	float2 atlasMotion = motion * MotionVectorScale;
+#ifdef NR_PERIPHERAL_COMPRESSION
+	// The selected surface supplies velocity at this inverse-mapped guide sample.
+	const float2 anchor = PeripheralInverse((float2(pixel) + 0.5) / float2(modelGuideSize));
+	atlasMotion = PeripheralForward(anchor + atlasMotion) - PeripheralForward(anchor);
+	atlasMotion = all(isfinite(atlasMotion)) ? atlasMotion : 0.0;
+#endif
 	if (packedTileIndex < PackedCount) {
 		PackedCropTile tile = PackedTiles[packedTileIndex];
 		float2 position = (float2(pixel) + 0.5) * float2(ModelSize) / float2(modelGuideSize);

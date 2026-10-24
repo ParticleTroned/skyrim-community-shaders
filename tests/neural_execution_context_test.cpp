@@ -1,4 +1,5 @@
 #include "Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h"
+#include "Features/Upscaling/NeuralRendering/PeripheralCompressionPolicy.h"
 
 #include <array>
 #include <cstdint>
@@ -21,10 +22,13 @@ namespace NeuralRendering
 		uint32_t modelResolutionPercent = 100;
 		ReconstructionFilter reconstructionFilter = ReconstructionFilter::Bilinear;
 		bool guidedReconstructionEnabled = false;
+		std::uint32_t peripheralCompressionPercent = 0;
+		PeripheralMask peripheralMask{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		uint32_t frameId = 1;
 		uint64_t generation = 1;
 		GuidedReconstructionOverride reconstructionOverride = GuidedReconstructionOverride::Auto;
+		PeripheralCompressionOverride peripheralOverride = PeripheralCompressionOverride::Auto;
 #endif
 		bool pressureResolutionEnabled = false;
 		bool parallelEyes = false;
@@ -35,6 +39,8 @@ namespace NeuralRendering
 	struct Renderer
 	{
 		GuidedReconstructionExperiment experiment;
+		PeripheralCompressionExperiment peripheral;
+		auto ResolvePeripheralOverride(uint32_t frame, uint64_t generation) { return peripheral.Resolve(frame, generation); }
 		static Renderer& Instance()
 		{
 			static Renderer value;
@@ -50,7 +56,9 @@ struct Upscaling
 	{
 		uint32_t neuralRenderingModelResolutionPercent = 100;
 		uint32_t neuralRenderingReconstructionFilter = 0;
-		bool neuralRenderingGuidedReconstruction = false;
+		bool neuralRenderingGuidedReconstruction = true;
+		unsigned neuralRenderingPeripheralCompressionPercent = 0;
+		bool neuralRenderingFovOnly = false, neuralRenderingRenderscaleFov = false;
 		bool neuralRenderingPressureResolutionEnabled = false;
 		bool neuralRenderingParallelEyes = false, neuralRenderingBatchedStereo = true;
 		uint32_t neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
@@ -61,6 +69,13 @@ struct Upscaling
 	void RequestHistoryReset() noexcept { ++resets; }
 	std::array<float2, 2> savedOffsets{};
 	auto GetResolvedFoveatedMaskCenterOffsets(bool) const noexcept { return savedOffsets; }
+	struct FovProfile
+	{
+		bool available = true;
+		float sharedVisibleScale = 0.7f, centerHorizontalScale = 1.0f;
+		std::array<float2, 2> centerOffsets{};
+	};
+	auto GetActiveUpscalingFoveatedProfile() const noexcept { return FovProfile{ true, 0.7f, settings.foveatedCenterHorizontalScale, savedOffsets }; }
 	auto GetNeuralRenderingMode() const noexcept { return mode; }
 	void SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs&,
 		const UpscalingDLSS::ViewportCrop&, const std::array<uint32_t, 2>&,
@@ -127,6 +142,17 @@ int main()
 					if (args.parallelEyes != (vr && requested && batched))
 						throw std::runtime_error("Parallel NR routing lost runtime, mode or serial-submission policy");
 				}
+	for (bool vr : { false, true })
+		for (bool mask : { false, true }) {
+			globals::game::isVR = vr;
+			upscaling.mode = RenderingMode::ReducedResolution;
+			upscaling.settings.neuralRenderingPeripheralCompressionPercent = 20;
+			upscaling.settings.neuralRenderingRenderscaleFov = mask;
+			upscaling.SetNeuralExecutionContext(args, {}, {}, {});
+			++calls;
+			if (args.peripheralCompressionPercent != 20 || args.peripheralMask.active != (vr && mask))
+				throw std::runtime_error("Peripheral mask lost the FOV/runtime contract");
+		}
 	for (bool vr : { false, true }) {
 		globals::game::isVR = vr;
 		upscaling.settings.neuralRenderingCentralAreaPercent = 50;

@@ -57,7 +57,8 @@ int main(int argc, char** argv)
 		assert(nr.at("neuralRenderingInsertionPoint") == 0);
 		assert(nr.at("neuralRenderingNetwork") == 0);
 		assert(nr.at("neuralRenderingReconstructionFilter") == 0);
-		assert(nr.at("neuralRenderingGuidedReconstruction") == false);
+		assert(nr.at("neuralRenderingGuidedReconstruction") == true);
+		assert(nr.at("neuralRenderingPeripheralCompressionPercent") == 0);
 		assert(preset.at("Terrain Blending").at("LandscapeSeams") == 0);
 		assert(preset.at("Performance Overlay").at("ShowRenderTargets") == false);
 		const auto& shadowCulling = preset.at("Light Limit Fix").at("ShadowCulling");

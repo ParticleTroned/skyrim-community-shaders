@@ -16,21 +16,25 @@ namespace
 	{
 		using namespace NeuralRendering;
 		using enum GuidedReconstructionReason;
-		const GuidedReconstructionQualification qualified{ 50, true, true };
+		const auto qualified = kGuidedReconstructionQualification;
 		GuidedReconstructionInput input{ true, 50, { 2001, 1001 }, { 1001, 501 }, InsertionPoint::UpscaledCenter, true };
 		std::array pair{ input, input };
 		const auto reason = [&](GuidedReconstructionInput value) { return SelectGuidedReconstruction(std::span(&value, 1), qualified).reason; };
-		Require(SelectGuidedReconstruction(pair).reason == Unqualified);
+		Require(qualified.maximumPercent == 99 && qualified.beforeUpscaling && qualified.afterUpscaling);
+		Require(SelectGuidedReconstruction(pair).reason == Eligible);
 		Require(SelectGuidedReconstruction(pair, qualified).mode == GuidedReconstructionMode::GuidedLowResolution);
 		for (auto route : { InsertionPoint::UpscaledCenter, InsertionPoint::FinalLdrPreUi }) {
 			input.insertion = route;
-			for (unsigned percent : { 30u, 33u, 50u, 51u, 67u, 99u, 100u }) {
+			for (unsigned percent = kMinimumModelResolutionPercent; percent <= kMaximumModelResolutionPercent; ++percent) {
 				input.effectivePercent = percent;
 				input.unpackedModel = BuildModelResolutionExtent(input.target.width, input.target.height, percent);
-				Require(reason(input) == (percent == 100 ? NoReduction : percent > 50 ? AboveCutoff :
-																						Eligible));
+				Require(reason(input) == (percent == 100 ? NoReduction : Eligible));
 			}
 		}
+		input = pair[0];
+		input.effectivePercent = 51;
+		input.unpackedModel = BuildModelResolutionExtent(input.target.width, input.target.height, input.effectivePercent);
+		Require(SelectGuidedReconstruction(std::span(&input, 1), { 50, true, true }).reason == AboveCutoff);
 		input = pair[0];
 		input.enabled = false;
 		Require(reason(input) == Disabled);

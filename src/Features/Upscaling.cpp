@@ -340,78 +340,79 @@ namespace FSRTemporalTuningPolicy
 	}
 }
 
-#define UPSCALING_SETTINGS_JSON_FIELDS(OP)       \
-	OP(fsrSharedGuideInputs)                     \
-	OP(fsrTemporalTuning)                        \
-	OP(motionAdaptiveRCAS)                       \
-	OP(motionSharpnessAdjustment)                \
-	OP(motionSharpnessThreshold)                 \
-	OP(motionSharpnessCap)                       \
-	OP(upscaleMethod)                            \
-	OP(upscaleMethodNoDLSS)                      \
-	OP(qualityMode)                              \
-	OP(dlssPreset)                               \
-	OP(renderScaleMode)                          \
-	OP(renderScaleLinkedToUpscaling)             \
-	OP(perfMode)                                 \
-	OP(frameLimitMode)                           \
-	OP(frameGenerationMode)                      \
-	OP(frameGenerationForceEnable)               \
-	OP(frameGenerationAllowInMenus)              \
-	OP(streamlineLogLevel)                       \
-	OP(sharpnessFSR)                             \
-	OP(sharpnessDLSS)                            \
-	OP(dlssSharpener)                            \
-	OP(fsr4RuntimeEnable)                        \
-	OP(fsr4RuntimeSelectionSchemaVersion)        \
-	OP(foveatedVendorDispatch)                   \
-	OP(neuralRenderingEnabled)                   \
-	OP(neuralRenderingMode)                      \
-	OP(neuralRenderingFovOnly)                   \
-	OP(neuralRenderingRenderscaleFov)            \
-	OP(neuralRenderingInsertionPoint)            \
-	OP(neuralRenderingBatchedStereo)             \
-	OP(neuralRenderingDirectCommit)              \
-	OP(neuralRenderingReconstructionFilter)      \
-	OP(neuralRenderingGuidedReconstruction)      \
-	OP(neuralRenderingModelResolutionPercent)    \
-	OP(neuralRenderingParallelEyes)              \
-	OP(neuralRenderingPrewarmEnabled)            \
-	OP(neuralRenderingPressureResolutionEnabled) \
-	OP(neuralRenderingCentralAreaPercent)        \
-	OP(neuralRenderingCentralFeatherPixels)      \
-	OP(neuralRenderingPreset)                    \
-	OP(neuralRenderingIntensity)                 \
-	OP(neuralRenderingLocalTone)                 \
-	OP(neuralRenderingLocalStructure)            \
-	OP(neuralRenderingSkinStructure)             \
-	OP(neuralRenderingStyle)                     \
-	OP(neuralRenderingNetwork)                   \
-	OP(neuralRenderingAutoMask)                  \
-	OP(neuralRenderingUICorrection)              \
-	OP(neuralRenderingSingleSubrectScale)        \
-	OP(neuralRenderingBlendFeather)              \
-	OP(foveatedOuterBlendFeather)                \
-	OP(foveatedDisableOuterFeather)              \
-	OP(foveatedCenterArea)                       \
-	OP(foveatedCenterHorizontalScale)            \
-	OP(foveatedBlendCurveEnabled)                \
-	OP(foveatedBlendFalloff)                     \
-	OP(foveatedLeftEyeMaskOffsetX)               \
-	OP(foveatedLeftEyeMaskOffsetY)               \
-	OP(foveatedRightEyeMaskOffsetX)              \
-	OP(foveatedRightEyeMaskOffsetY)              \
-	OP(periphery_taa_center_area)                \
-	OP(foveatedMaskSetup)                        \
-	OP(foveatedCalibrationReference)             \
-	OP(foveatedAutomaticMaskScaling)             \
-	OP(periphery_taa_enable)                     \
-	OP(periphery_taa_outer_scale)                \
-	OP(periphery_taa_center_blend_feather)       \
-	OP(reflexLowLatencyMode)                     \
-	OP(reflexLowLatencyBoost)                    \
-	OP(reflexUseMarkersToOptimize)               \
-	OP(reflexUseFPSLimit)                        \
+#define UPSCALING_SETTINGS_JSON_FIELDS(OP)          \
+	OP(fsrSharedGuideInputs)                        \
+	OP(fsrTemporalTuning)                           \
+	OP(motionAdaptiveRCAS)                          \
+	OP(motionSharpnessAdjustment)                   \
+	OP(motionSharpnessThreshold)                    \
+	OP(motionSharpnessCap)                          \
+	OP(upscaleMethod)                               \
+	OP(upscaleMethodNoDLSS)                         \
+	OP(qualityMode)                                 \
+	OP(dlssPreset)                                  \
+	OP(renderScaleMode)                             \
+	OP(renderScaleLinkedToUpscaling)                \
+	OP(perfMode)                                    \
+	OP(frameLimitMode)                              \
+	OP(frameGenerationMode)                         \
+	OP(frameGenerationForceEnable)                  \
+	OP(frameGenerationAllowInMenus)                 \
+	OP(streamlineLogLevel)                          \
+	OP(sharpnessFSR)                                \
+	OP(sharpnessDLSS)                               \
+	OP(dlssSharpener)                               \
+	OP(fsr4RuntimeEnable)                           \
+	OP(fsr4RuntimeSelectionSchemaVersion)           \
+	OP(foveatedVendorDispatch)                      \
+	OP(neuralRenderingEnabled)                      \
+	OP(neuralRenderingMode)                         \
+	OP(neuralRenderingFovOnly)                      \
+	OP(neuralRenderingRenderscaleFov)               \
+	OP(neuralRenderingInsertionPoint)               \
+	OP(neuralRenderingBatchedStereo)                \
+	OP(neuralRenderingDirectCommit)                 \
+	OP(neuralRenderingReconstructionFilter)         \
+	OP(neuralRenderingPeripheralCompressionPercent) \
+	OP(neuralRenderingGuidedReconstruction)         \
+	OP(neuralRenderingModelResolutionPercent)       \
+	OP(neuralRenderingParallelEyes)                 \
+	OP(neuralRenderingPrewarmEnabled)               \
+	OP(neuralRenderingPressureResolutionEnabled)    \
+	OP(neuralRenderingCentralAreaPercent)           \
+	OP(neuralRenderingCentralFeatherPixels)         \
+	OP(neuralRenderingPreset)                       \
+	OP(neuralRenderingIntensity)                    \
+	OP(neuralRenderingLocalTone)                    \
+	OP(neuralRenderingLocalStructure)               \
+	OP(neuralRenderingSkinStructure)                \
+	OP(neuralRenderingStyle)                        \
+	OP(neuralRenderingNetwork)                      \
+	OP(neuralRenderingAutoMask)                     \
+	OP(neuralRenderingUICorrection)                 \
+	OP(neuralRenderingSingleSubrectScale)           \
+	OP(neuralRenderingBlendFeather)                 \
+	OP(foveatedOuterBlendFeather)                   \
+	OP(foveatedDisableOuterFeather)                 \
+	OP(foveatedCenterArea)                          \
+	OP(foveatedCenterHorizontalScale)               \
+	OP(foveatedBlendCurveEnabled)                   \
+	OP(foveatedBlendFalloff)                        \
+	OP(foveatedLeftEyeMaskOffsetX)                  \
+	OP(foveatedLeftEyeMaskOffsetY)                  \
+	OP(foveatedRightEyeMaskOffsetX)                 \
+	OP(foveatedRightEyeMaskOffsetY)                 \
+	OP(periphery_taa_center_area)                   \
+	OP(foveatedMaskSetup)                           \
+	OP(foveatedCalibrationReference)                \
+	OP(foveatedAutomaticMaskScaling)                \
+	OP(periphery_taa_enable)                        \
+	OP(periphery_taa_outer_scale)                   \
+	OP(periphery_taa_center_blend_feather)          \
+	OP(reflexLowLatencyMode)                        \
+	OP(reflexLowLatencyBoost)                       \
+	OP(reflexUseMarkersToOptimize)                  \
+	OP(reflexUseFPSLimit)                           \
 	OP(reflexFPSLimit)
 
 void to_json(json& a_json, const Upscaling::Settings& a_settings)
@@ -431,6 +432,9 @@ void from_json(const json& a_json, Upscaling::Settings& a_settings)
 		if (!NeuralRendering::ParseModelResolutionPercent(*value))
 			throw std::invalid_argument("NR model resolution must be an integer from 30 to 100 percent");
 	}
+	if (const auto value = a_json.find("neuralRenderingPeripheralCompressionPercent"); value != a_json.end() &&
+																					   !NeuralRendering::ParseBoundedInteger(*value, 0u, NeuralRendering::kMaximumPeripheralCompressionPercent))
+		throw std::invalid_argument("NR peripheral compression must be an integer from 0 to 100 percent");
 	if (const auto value = a_json.find("neuralRenderingReconstructionFilter"); value != a_json.end() && !NeuralRendering::ParseBoundedInteger(*value, 0u, 1u))
 		throw std::invalid_argument("NR reconstruction filter must be 0 (bilinear) or 1 (Advanced)");
 	for (const auto& [name, minimum, maximum] : {
@@ -443,6 +447,13 @@ void from_json(const json& a_json, Upscaling::Settings& a_settings)
 	parsed.name = a_json.value(#name, defaults.name);
 	UPSCALING_SETTINGS_JSON_FIELDS(UPSCALING_READ_JSON_FIELD)
 #undef UPSCALING_READ_JSON_FIELD
+	if (!a_json.contains("neuralRenderingPeripheralCompressionPercent")) {
+		if (const auto legacy = a_json.find("neuralRenderingPeripheralCompression"); legacy != a_json.end()) {
+			if (!legacy->is_boolean())
+				throw std::invalid_argument("Legacy NR peripheral compression must be a boolean");
+			parsed.neuralRenderingPeripheralCompressionPercent = legacy->get<bool>() ? NeuralRendering::kLegacyPeripheralCompressionPercent : 0u;
+		}
+	}
 	NeuralRendering::ReadUpscalingCharacterSettingsJson(a_json, parsed);
 	if (const auto value = a_json.find("foveatedOuterBlendFeather"); value != a_json.end() && !value->is_number())
 		throw std::invalid_argument("FOV outer feather requires a numeric value");
@@ -6759,6 +6770,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		add(NeuralRendering::EffectiveModelResolutionPercent(mode, a_settings.neuralRenderingModelResolutionPercent));
 		add(static_cast<uint64_t>(NeuralRendering::ClampReconstructionFilter(a_settings.neuralRenderingReconstructionFilter)));
 		add(a_settings.neuralRenderingGuidedReconstruction);
+		add(a_settings.neuralRenderingPeripheralCompressionPercent);
 		add(a_settings.neuralRenderingPressureResolutionEnabled);
 		add(a_settings.neuralRenderingCentralAreaPercent);
 		if (a_settings.neuralRenderingCentralAreaPercent < NeuralRendering::kMaximumCentralAreaPercent)
@@ -19071,9 +19083,13 @@ namespace
 			settings.neuralRenderingReconstructionFilter = static_cast<std::uint32_t>(NeuralRendering::ClampReconstructionFilter(static_cast<std::uint32_t>(filter)));
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Bilinear is the inexpensive default. Advanced can preserve sharper NR changes at reduced NR resolution, with possible ringing and extra GPU cost. Original scene detail and alpha are preserved.");
+		DrawNeuralIntegerSetting("Peripheral compression", settings.neuralRenderingPeripheralCompressionPercent,
+			0, NeuralRendering::kMaximumPeripheralCompressionPercent, "%d%%");
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("0% disables compression. 20% preserves the inner 80% of the current view scale and compresses the outer band. Follows each eye's active FOV mask shape and centre, or the full rectangular view without FOV. Higher values extend compression inward. Uses the selected NR resolution and supports guided reconstruction. Actor and compact-input routes retain ordinary NR. Applies on release.");
 		Util::Widgets::Checkbox("Improve low-resolution NR", &settings.neuralRenderingGuidedReconstruction);
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Provisional guided reconstruction for NR sampling at 50% or lower. Auto currently retains the selected filter until this route is qualified. NR resolution and strength are unchanged.");
+			ImGui::TextUnformatted("Enabled by default. Automatically use source-colour-guided reconstruction below 100% NR resolution. At 100%, or when unsupported, retain the selected filter. NR resolution and strength are unchanged.");
 		Util::Widgets::Checkbox("Lower NR resolution under memory pressure", &settings.neuralRenderingPressureResolutionEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("When GPU memory is scarce, temporarily lower NR resolution by 10-point steps to 30%, then restore it gradually after sustained headroom. The slider keeps your target; scene resolution, textures and strength stay unchanged.");
@@ -45485,6 +45501,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 					ready = PrepareReducedResolutionNeuralOutputTarget(eyeIndex, args, fuseSelection);
 				}
 				applied = ready && NeuralRendering::Renderer::Instance().Apply(args, &outcome);
+				if (outcome.spatialHistoryReset)
+					RequestHistoryReset();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				if (outcome.reconstructionHistoryReset)
 					RequestHistoryReset();
@@ -46126,6 +46144,8 @@ namespace
 				applied = NeuralRendering::Renderer::Instance().Apply(
 					a_batchArgs[eye], &outcome);
 			}
+			if (outcome.spatialHistoryReset)
+				a_upscaling.RequestHistoryReset();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (outcome.reconstructionHistoryReset)
 				a_upscaling.RequestHistoryReset();

@@ -7,6 +7,7 @@
 #include "nr_model_resolution_accounting_under_test.h"
 
 #include <DirectXPackedVector.h>
+#include <d3d11_1.h>
 
 #include <algorithm>
 #include <array>
@@ -17,6 +18,7 @@
 #include <limits>
 #include <map>
 #include <new>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -26,10 +28,14 @@
 
 template <class T>
 concept HasPackedCropDiagnosticField = requires(T value) { value.packedCropPlanning; };
+template <class T>
+concept HasPeripheralDiagnosticField = requires(T value) { value.peripheralCompression; };
 #ifdef DEVBENCH_BRIDGE_ENABLED
 static_assert(HasPackedCropDiagnosticField<NeuralRendering::RendererApplyArgs>);
+static_assert(HasPeripheralDiagnosticField<NeuralRendering::RendererSnapshot>);
 #else
 static_assert(!HasPackedCropDiagnosticField<NeuralRendering::RendererApplyArgs>);
+static_assert(!HasPeripheralDiagnosticField<NeuralRendering::RendererSnapshot>);
 #endif
 
 namespace AdapterCompiler
@@ -41,19 +47,50 @@ namespace AdapterCompiler
 	bool failPacking = false;
 	unsigned packingAttempts = 0;
 	bool guided = false, failGuided = false, throwGuided = false;
-	bool throwGuidedAllocationFailure = false;
+	bool failGuidedAllocation = false, throwGuidedAllocationFailure = false;
 	unsigned guidedAttempts = 0;
+	unsigned ordinarySelectionAttempts = 0;
+	bool failPeripheral = false;
+	unsigned peripheralAttempts = 0;
+	unsigned peripheralAllocationFailureAttempt = 0;
+	bool throwPeripheralAllocationFailure = false;
 }
 
 // Substitute only engine compilation/profiling; the adapter and GPU work are production code.
 ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
 	const std::vector<std::pair<const char*, const char*>>& options, const char* target, const char* entry, ShaderCompileTiming*)
 {
+	HRESULT result;
+	return CompileShader(path, options, target, entry, result);
+}
+
+ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
+	const std::vector<std::pair<const char*, const char*>>& options, const char* target, const char* entry, HRESULT& result, ShaderCompileTiming*)
+{
+	result = E_FAIL;
 	++AdapterCompiler::calls;
+	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "MODEL_OUTPUT_SELECTION"; }) &&
+		std::ranges::none_of(options, [](const auto& option) { return std::string_view(option.first) == "NR_PERIPHERAL_COMPRESSION" || std::string_view(option.first) == "GUIDED_NR_RECONSTRUCTION"; }))
+		++AdapterCompiler::ordinarySelectionAttempts;
+	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "NR_PERIPHERAL_COMPRESSION"; })) {
+		++AdapterCompiler::peripheralAttempts;
+		if (AdapterCompiler::peripheralAttempts == AdapterCompiler::peripheralAllocationFailureAttempt) {
+			if (AdapterCompiler::throwPeripheralAllocationFailure)
+				throw std::bad_alloc{};
+			result = E_OUTOFMEMORY;
+			return nullptr;
+		}
+		if (AdapterCompiler::failPeripheral)
+			return nullptr;
+	}
 	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "GUIDED_NR_RECONSTRUCTION"; })) {
 		++AdapterCompiler::guidedAttempts;
 		if (AdapterCompiler::throwGuidedAllocationFailure)
 			throw std::bad_alloc{};
+		if (AdapterCompiler::failGuidedAllocation) {
+			result = E_OUTOFMEMORY;
+			return nullptr;
+		}
 		if (AdapterCompiler::throwGuided)
 			throw std::runtime_error("Optional guided shader compilation failed");
 		if (AdapterCompiler::failGuided)
@@ -83,14 +120,15 @@ ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
 	auto& code = bytecode[{ shaderPath, target, entry, std::move(key) }];
 	if (!code) {
 		Microsoft::WRL::ComPtr<ID3DBlob> errors;
-		const auto result = D3DCompileFromFile(shaderPath.c_str(), defines.data(), &includes,
+		const auto compilationResult = D3DCompileFromFile(shaderPath.c_str(), defines.data(), &includes,
 			entry, target, D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS, 0, &code, &errors);
 		if (errors)
 			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
-		D3D11ShaderTest::Check(result);
+		D3D11ShaderTest::Check(compilationResult);
 	}
 	ID3D11ComputeShader* shader = nullptr;
 	D3D11ShaderTest::Check(AdapterCompiler::device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &shader));
+	result = S_OK;
 	return shader;
 }
 ScopedGpuPass::ScopedGpuPass(std::string_view, const Util::PassTimingHandle&, bool) {}
@@ -160,10 +198,7 @@ namespace
 
 	void ConfigureGuided(NeuralRendering::RendererApplyArgs& args)
 	{
-		args.guidedReconstructionEnabled = true;
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		args.reconstructionOverride = AdapterCompiler::guided ? NeuralRendering::GuidedReconstructionOverride::GuidedExperiment : NeuralRendering::GuidedReconstructionOverride::Auto;
-#endif
+		args.guidedReconstructionEnabled = AdapterCompiler::guided;
 	}
 
 	struct Region
@@ -439,6 +474,43 @@ namespace
 			}
 		}
 	}
+	std::optional<std::array<double, 3>> ReferenceResidual(std::span<const Pixel> baseline, std::span<const Pixel> neural,
+		Size model, Region bounds, double px, double py, NeuralRendering::ReconstructionFilter filter)
+	{
+		const bool advanced = filter == NeuralRendering::ReconstructionFilter::Lanczos3;
+		const auto kernel = [&](double distance) {
+			const auto x = std::abs(distance);
+			if (!advanced)
+				return std::max(0.0, 1.0 - x);
+			if (x < 1e-10)
+				return 1.0;
+			if (x >= 3.0)
+				return 0.0;
+			const double angle = 3.14159265358979323846 * x;
+			return 3.0 * std::sin(angle) * std::sin(angle / 3.0) / (angle * angle);
+		};
+		std::array<double, 3> residual{};
+		double normalization = 0;
+		const int margin = advanced ? 2 : 0;
+		for (int sy = int(std::floor(py)) - margin; sy <= int(std::floor(py)) + margin + 1; ++sy)
+			for (int sx = int(std::floor(px)) - margin; sx <= int(std::floor(px)) + margin + 1; ++sx) {
+				const auto weight = kernel(px - sx) * kernel(py - sy);
+				const auto sampleX = std::clamp(sx, int(bounds.offset[0]), int(bounds.offset[0] + bounds.size[0] - 1));
+				const auto sampleY = std::clamp(sy, int(bounds.offset[1]), int(bounds.offset[1] + bounds.size[1] - 1));
+				const auto sampleIndex = sampleY * model[0] + sampleX;
+				for (unsigned channel = 0; channel < 3; ++channel) {
+					const float change = neural[sampleIndex][channel] - baseline[sampleIndex][channel];
+					if (!std::isfinite(change))
+						return std::nullopt;
+					residual[channel] += weight * change;
+				}
+				normalization += weight;
+			}
+		for (auto& channel : residual)
+			channel /= normalization;
+		return residual;
+	}
+
 	void CheckReconstructionKernel(ID3D11Device* device, ID3D11DeviceContext* context, Shader& shader)
 	{
 		constexpr Size source{ 19, 13 }, model{ 10, 7 };
@@ -466,17 +538,6 @@ namespace
 		const std::array outputs{ result.uav.Get() };
 		Dispatch(context, shader, constants, sourceRegion.size, inputs, outputs);
 		const auto pixels = result.Read<Pixel>(device, context);
-		const auto kernel = [](double distance) {
-			const auto x = std::abs(distance);
-			if (AdapterCompiler::guided || AdapterCompiler::filter == NeuralRendering::ReconstructionFilter::Bilinear)
-				return std::max(0.0, 1.0 - x);
-			if (x < 1e-10)
-				return 1.0;
-			if (x >= 3.0)
-				return 0.0;
-			const double angle = 3.14159265358979323846 * x;
-			return 3.0 * std::sin(angle) * std::sin(angle / 3.0) / (angle * angle);
-		};
 		for (UINT y = 0; y < source[1]; ++y)
 			for (UINT x = 0; x < source[0]; ++x) {
 				const auto i = y * source[0] + x;
@@ -485,20 +546,11 @@ namespace
 					continue;
 				}
 				const double px = (x + 0.5) * model[0] / source[0] - 0.5, py = (y + 0.5) * model[1] / source[1] - 0.5;
-				std::array<double, 3> residual{};
-				double normalization = 0;
-				for (int sy = int(std::floor(py)) - 2; sy <= int(std::floor(py)) + 3; ++sy)
-					for (int sx = int(std::floor(px)) - 2; sx <= int(std::floor(px)) + 3; ++sx) {
-						const auto weight = kernel(px - sx) * kernel(py - sy);
-						const auto sampleX = std::clamp(sx, int(modelRegion.offset[0]), int(modelRegion.offset[0] + modelRegion.size[0] - 1));
-						const auto sampleY = std::clamp(sy, int(modelRegion.offset[1]), int(modelRegion.offset[1] + modelRegion.size[1] - 1));
-						const auto sampleIndex = sampleY * model[0] + sampleX;
-						for (unsigned channel = 0; channel < 3; ++channel)
-							residual[channel] += weight * (neural[sampleIndex][channel] - baseline[sampleIndex][channel]);
-						normalization += weight;
-					}
+				const auto residual = ReferenceResidual(baseline, neural, model, modelRegion, px, py,
+					AdapterCompiler::guided ? NeuralRendering::ReconstructionFilter::Bilinear : AdapterCompiler::filter);
+				Require(residual.has_value(), "Finite residual fixture produced invalid reference");
 				for (unsigned channel = 0; channel < 3; ++channel)
-					Near(pixels[i][channel], colors[i][channel] + float(residual[channel] / normalization), "Residual kernel disagrees with the double-precision reference or clamps HDR");
+					Near(pixels[i][channel], colors[i][channel] + float((*residual)[channel]), "Residual kernel disagrees with the double-precision reference or clamps HDR");
 				Require(pixels[i][3] == colors[i][3], "Residual kernel changed full-resolution alpha");
 			}
 		Texture depth(device, source, DXGI_FORMAT_R32_FLOAT, std::vector(colors.size(), 0.5f));
@@ -2204,8 +2256,11 @@ namespace
 		Require(evidence && evidence->decision == batch.reconstructionDecision && evidence->effectivePercent == 50 &&
 					evidence->target == UpscalingDLSS::Extent{ 13, 9 } && evidence->unpackedModel == UpscalingDLSS::Extent{ 7, 5 },
 			"Frozen capture lost the actual reconstruction decision or sampling grid");
+#endif
+		Require(batch.reconstructionDecision.mode == (AdapterCompiler::guided ? GuidedReconstructionMode::GuidedLowResolution : GuidedReconstructionMode::Basic),
+			"Automatic reconstruction did not respect the guided setting");
 		if (AdapterCompiler::guided) {
-			Require(batch.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution, "Eligible experiment did not select guided reconstruction");
+			Require(batch.reconstructionDecision.reason == GuidedReconstructionReason::Eligible, "Automatic reconstruction required a developer override");
 			auto unsupported = args;
 			unsupported[1].guidedReconstructionEnabled = false;
 			ModelResolution::Batch fallback;
@@ -2222,15 +2277,16 @@ namespace
 				adapter.InvalidateShaders();
 				Require(adapter.Prepare(args, fallback, result) && fallback.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution, "Optional compile failure did not clear on invalidation");
 			}
-			adapter.InvalidateShaders();
-			AdapterCompiler::throwGuidedAllocationFailure = true;
-			Require(!adapter.Prepare(args, fallback, result) && result == E_OUTOFMEMORY, "Guided allocation exception bypassed resource recovery");
-			AdapterCompiler::throwGuidedAllocationFailure = false;
-			Require(adapter.Prepare(args, fallback, result) && fallback.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution, "Guided allocation exception latched an optional shader failure");
+			for (bool throws : { false, true }) {
+				adapter.InvalidateShaders();
+				AdapterCompiler::failGuidedAllocation = true;
+				AdapterCompiler::throwGuidedAllocationFailure = throws;
+				Require(!adapter.Prepare(args, fallback, result) && result == E_OUTOFMEMORY, "Guided allocation failure bypassed resource recovery");
+				AdapterCompiler::failGuidedAllocation = false;
+				AdapterCompiler::throwGuidedAllocationFailure = false;
+				Require(adapter.Prepare(args, fallback, result) && fallback.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution, "Guided allocation failure latched an optional shader failure");
+			}
 		}
-#else
-		Require(batch.reconstructionDecision.reason == GuidedReconstructionReason::Unqualified, "Unqualified production route activated guided reconstruction");
-#endif
 		Require(adapter.AdditionalBytes(args) == 0, "Unchanged eye allocations must be reused");
 		Require(adapter.RetainedBytes(0).value() + adapter.RetainedBytes(1).value() == *estimate,
 			"Admission and retained-allocation accounting disagree");
@@ -2293,6 +2349,7 @@ namespace
 		adapter.ReleaseUnscaledSlots(args);
 		Require(adapter.RetainedBytes(0) == 0 && adapter.RetainedBytes(1) == 0, "100% retained downscaling caches");
 	}
+#include "nr_peripheral_shader_checks.h"
 }
 
 int main()
@@ -2311,16 +2368,14 @@ int main()
 		static_assert(NeuralRendering::Color::Work::AllocationExtent(wide)[1] == 384);
 		for (bool vr : { false, true }) {
 			AdapterCompiler::vr = vr;
-			for (unsigned variant = 0; variant <
-#ifdef DEVBENCH_BRIDGE_ENABLED
-									   3
-#else
-									   2
-#endif
-				;
-				++variant) {
+			for (unsigned variant = 0; variant < 3; ++variant) {
 				AdapterCompiler::guided = variant == 2;
 				AdapterCompiler::filter = variant == 1 ? NeuralRendering::ReconstructionFilter::Lanczos3 : NeuralRendering::ReconstructionFilter::Bilinear;
+				for (bool mixedGuides : { false, true })
+					for (bool shaped : { false, true })
+						CheckPeripheralAdapter(device.Get(), context.Get(), mixedGuides, shaped);
+				if (variant == 0)
+					CheckPeripheralAdapter(device.Get(), context.Get(), false, false, 100);
 				if (AdapterCompiler::guided)
 					CheckGuidedEdges(device.Get(), context.Get(), vr);
 				CheckAdapter(device.Get(), context.Get());

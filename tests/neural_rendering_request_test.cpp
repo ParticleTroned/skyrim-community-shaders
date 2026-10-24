@@ -64,6 +64,34 @@ int main()
 		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "guidedReconstruction", invalid } }, request, error));
 		require(error.at("errorCode") == "nr_guided_reconstruction_invalid");
 	}
+	for (bool enabled : { false, true }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "peripheralCompression", enabled } }, request, error));
+		require(request.HasAnyControl() && request.peripheralCompression == enabled);
+	}
+	for (auto invalid : { json(1), json(0.0), json("true"), json(nullptr), json::array(), json::object() }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "peripheralCompression", invalid } }, request, error));
+		require(error.at("errorCode") == "nr_peripheral_compression_invalid");
+	}
+	for (unsigned percent : { 0u, 1u, 20u, 99u, 100u }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "peripheralCompressionPercent", percent } }, request, error));
+		require(request.HasAnyControl() && request.peripheralCompressionPercent == percent);
+	}
+	for (auto invalid : { json(-1), json(101), json(1.5), json(true), json(nullptr), json("20") }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "peripheralCompressionPercent", invalid } }, request, error));
+	}
+	{
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "peripheralCompressionPercent", 20 }, { "peripheralCompression", true } }, request, error));
+	}
 	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 8).intensity == 1.0f);
 	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 8).localStructureStrength == 2.0f);
 	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 9).localStructureStrength == 1.0f);
@@ -92,7 +120,11 @@ int main()
 	SetRegisteredNeuralActions(registeredDescriptor);
 	const auto& actions = registeredDescriptor.at("inputSchema").at("properties").at("action").at("enum");
 	require(std::find(actions.begin(), actions.end(), "nr_reconstruction_compare") != actions.end());
-	require(descriptor.at("inputSchema").at("properties").at("guidedReconstruction").at("default") == false);
+	require(std::find(actions.begin(), actions.end(), "nr_peripheral_compare") != actions.end());
+	const auto& declaredActions = descriptor.at("inputSchema").at("properties").at("action").at("enum");
+	require(std::find(declaredActions.begin(), declaredActions.end(), "nr_peripheral_compare") != declaredActions.end());
+	require(descriptor.at("inputSchema").at("properties").at("guidedReconstruction").at("default") == true);
+	require(descriptor.at("inputSchema").at("properties").at("peripheralCompressionPercent").at("default") == 0);
 	for (const auto& value : { json(0), json(1u), json(2), json(-1), json(3), json(1.5), json(true), json("2"), json(nullptr), json(UINT64_MAX) }) {
 		NeuralRenderingConfigurationRequest request;
 		json error;

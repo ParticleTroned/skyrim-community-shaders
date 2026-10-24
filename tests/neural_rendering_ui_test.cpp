@@ -101,7 +101,8 @@ namespace globals
 				unsigned neuralRenderingMode = 0;
 				unsigned neuralRenderingModelResolutionPercent = 100;
 				unsigned neuralRenderingReconstructionFilter = 0;
-				bool neuralRenderingGuidedReconstruction = false;
+				bool neuralRenderingGuidedReconstruction = true;
+				unsigned neuralRenderingPeripheralCompressionPercent = 0;
 				bool neuralRenderingPressureResolutionEnabled = true;
 				bool neuralRenderingPrewarmEnabled = true;
 				float neuralRenderingSingleSubrectScale = 1.0f;
@@ -189,6 +190,12 @@ namespace globals
 				settings.neuralRenderingEnabled = config.at("neuralRenderingEnabled");
 				return true;
 			}
+			static constexpr const char* kOpenCompositeRenderScaleBlockWarning = "OpenComposite unavailable";
+			bool IsOpenCompositeUpscalingBlocked() const { return false; }
+			bool IsRenderDocUpscalingBlocked() const { return false; }
+			const char* GetRenderDocUpscalingBlockReason() const { return ""; }
+			bool IsVRStartupNativeFallbackRestartRequired() const { return false; }
+			bool IsVRStartupMainMenuRenderStateActive() const { return false; }
 			void RequestHistoryReset() { ++historyResets; }
 			void DrawNeuralRenderingFovWarning(bool) const {}
 			static bool IsNeuralRenderingEnabled(const Settings&) noexcept;
@@ -642,11 +649,24 @@ int main()
 		Upscaling::Settings settings;
 		require(settings.neuralRenderingPressureResolutionEnabled, "Automatic pressure resolution defaults on");
 		require(settings.neuralRenderingReconstructionFilter == 0, "Bilinear must remain the default");
-		require(!settings.neuralRenderingGuidedReconstruction, "Guided reconstruction must default off");
+		require(settings.neuralRenderingGuidedReconstruction, "Guided reconstruction must default on");
 		ImGui::Clear("Improve low-resolution NR");
 		DrawNeuralModelResolutionSettings(settings);
-		require(settings.neuralRenderingGuidedReconstruction && settings.neuralRenderingModelResolutionPercent == 100 && settings.neuralRenderingReconstructionFilter == 0,
+		require(!settings.neuralRenderingGuidedReconstruction && settings.neuralRenderingModelResolutionPercent == 100 && settings.neuralRenderingReconstructionFilter == 0,
 			"Guided toggle changed independent model scale or Basic filter");
+		ImGui::Clear("Improve low-resolution NR");
+		DrawNeuralModelResolutionSettings(settings);
+		require(settings.neuralRenderingGuidedReconstruction, "Guided reconstruction could not be re-enabled");
+		require(!settings.neuralRenderingPeripheralCompressionPercent, "Peripheral compression must default off");
+		for (int percent : { 20, 100, 0 }) {
+			ImGui::Clear("Peripheral compression");
+			ImGui::sliderEditValue = static_cast<float>(percent);
+			ImGui::itemDeactivatedAfterEdit = true;
+			DrawNeuralModelResolutionSettings(settings);
+			require(settings.neuralRenderingPeripheralCompressionPercent == unsigned(percent) && settings.neuralRenderingGuidedReconstruction && settings.neuralRenderingModelResolutionPercent == 100,
+				"Compression slider changed guided or NR scale settings");
+		}
+
 		for (const auto [value, expected] : { std::pair{ 1, 1u }, std::pair{ 0, 0u }, std::pair{ 2, 0u } }) {
 			ImGui::Clear("NR reconstruction filter");
 			ImGui::comboEditValue = value;
@@ -736,6 +756,9 @@ int main()
 		Upscaling::Settings supported{};
 		supported.neuralRenderingMode = 2;
 		supported.neuralRenderingPressureResolutionEnabled = false;
+		auto compressed = supported;
+		compressed.neuralRenderingPeripheralCompressionPercent = 20;
+		require(NeuralRendering::PrewarmConfigurationBlocker(compressed, true), "Compression must defer prewarm");
 		require(!NeuralRendering::PrewarmConfigurationBlocker(supported, true),
 			"Full-view C supports prewarm with fixed full model resolution and automatic masks");
 		require(NeuralRendering::PrewarmConfigurationBlocker(supported, false), "Flat NR must not prewarm");
@@ -1820,7 +1843,7 @@ int main()
 				require(ImGui::Disabled("Enabled") && !ImGui::Disabled("After upscaling"),
 					"Pending incompatibility greys activation without preventing Full resolution selection");
 				if (pending == Upscaling::UpscaleMethod::kFSR)
-					require(ImGui::Seen(mode == ModeChoice::ReducedResolution ? "NR Before DLSS paused: FSR." : "NR paused: FSR."),
+					require(ImGui::Seen("NR Before DLSS is waiting: incompatible upscaling setting (FSR)."),
 						"The warning must name the pending incompatible setting, not the previous DLSS profile");
 			}
 		}
@@ -1980,7 +2003,7 @@ int main()
 		upscaling.renderScaleRequested = upscaling.renderScaleLatched = upscaling.renderScaleActive = false;
 		ImGui::Clear();
 		upscaling.DrawSelectionControls();
-		require(ImGui::Seen(std::string("NR Before DLSS paused: ") + reason + "."),
+		require(ImGui::Seen(std::string("NR Before DLSS is waiting: incompatible upscaling setting (") + reason + ")."),
 			"The NR panel must name the setting that pauses NR");
 		upscaling.stabilizerSyncActive = true;
 		for (const bool interior : { false, true }) {
@@ -1989,13 +2012,12 @@ int main()
 			profile = { method, quality, false };
 			ImGui::Clear();
 			upscaling.DrawSelectionControls();
-			require(ImGui::Seen(std::string("NR Before DLSS paused: VR FPS Stabilizer ") +
-								(interior ? "Interior" : "Exterior") + " profile, " + reason + "."),
-				"A matching active Stabilizer profile must be named with its incompatible setting");
+			require(ImGui::Seen(std::string("NR Before DLSS is waiting: incompatible upscaling setting (") + reason + ")."),
+				"A matching active Stabilizer profile must report its incompatible setting");
 			profile.qualityMode = quality + 1;
 			ImGui::Clear();
 			upscaling.DrawSelectionControls();
-			require(ImGui::Seen(std::string("NR Before DLSS paused: ") + reason + "."),
+			require(ImGui::Seen(std::string("NR Before DLSS is waiting: incompatible upscaling setting (") + reason + ")."),
 				"Manual settings must not be blamed on a different Stabilizer profile");
 		}
 		upscaling.stabilizerSyncActive = false;
@@ -2008,7 +2030,7 @@ int main()
 	ImGui::Clear();
 	upscaling.DrawSelectionControls();
 	require(!ImGui::Seen("Renderscale NR is waiting for scaling to become active.") &&
-				!ImGui::Seen("NR Before DLSS paused: Render Scale off."),
+				!ImGui::Seen("NR Before DLSS is waiting: incompatible upscaling setting (Render Scale off)."),
 		"Generic target wait stays out of the UI without blaming a compatible configured profile");
 	upscaling.runtimeMethod.reset();
 	upscaling.renderScaleActive = true;

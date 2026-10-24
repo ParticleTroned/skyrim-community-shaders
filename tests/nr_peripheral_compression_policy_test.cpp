@@ -1,0 +1,157 @@
+#include "Features/Upscaling/NeuralRendering/PeripheralCompressionPolicy.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
+#endif
+
+#include <iostream>
+#include <limits>
+#include <stdexcept>
+
+namespace
+{
+	using namespace NeuralRendering;
+	void Require(bool condition, const char* message)
+	{
+		if (!condition)
+			throw std::runtime_error(message);
+	}
+	PeripheralCompressionPlan Plan(UpscalingDLSS::Extent source, std::uint32_t percent = 100,
+		UpscalingDLSS::Extent guides = {}, PeripheralCompressionSupport support = { .requested = true })
+	{
+		if (guides == UpscalingDLSS::Extent{})
+			guides = source;
+		const auto crop = UpscalingDLSS::ViewportCrop::Identity(guides.width, guides.height, source.width, source.height);
+		const auto baseline = BuildModelResolutionGeometry(crop, source, { 0, 0, source.width, source.height }, percent, guides);
+		Require(baseline.has_value(), "Invalid test geometry");
+		return BuildPeripheralCompressionPlan(*baseline, guides, crop, percent, support);
+	}
+}
+
+int main()
+{
+	try {
+		const auto full = Plan({ 3840, 2160 });
+		Require(full.Active() && full.model == UpscalingDLSS::Extent{ 3456, 1944 }, "Twenty percent did not retain the 80/90 dimensions");
+		Require(full.candidatePixels * 100 == full.baselinePixels * 81, "Unexpected rectangular model area");
+		Require(Plan({ 3840, 2160 }, 100, {}, { .requested = true, .compressionPercent = 0 }).reason == PeripheralCompressionReason::Disabled, "Zero did not bypass compression");
+		const auto maximum = Plan({ 3840, 2160 }, 100, {}, { .requested = true, .compressionPercent = 100 });
+		Require(maximum.Active() && maximum.mapping.protectedFraction == 0.0f && maximum.model == UpscalingDLSS::Extent{ 1920, 1080 }, "Maximum compression retained a protected centre");
+		Require(Plan({ 1920, 1080 }, 100, {}, { .requested = true, .compressionPercent = 101 }).reason == PeripheralCompressionReason::InvalidGeometry, "Out-of-range slider reached allocation");
+		for (float invalid : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), -1.0f }) {
+			for (unsigned field = 0; field < 4; ++field) {
+				PeripheralMask mask{ .active = true };
+				(field < 2 ? mask.center : mask.radii)[field % 2] = invalid;
+				const auto rejected = Plan({ 1920, 1080 }, 50, {}, { .requested = true, .mask = mask });
+				const auto retained = rejected;
+				Require(rejected.reason == PeripheralCompressionReason::InvalidGeometry && rejected == retained,
+					"Invalid mask poisoned the retained ordinary fallback plan");
+				mask.active = false;
+				const auto rectangular = Plan({ 1920, 1080 }, 50, {}, { .requested = true, .mask = mask });
+				Require(rectangular.Active() && rectangular == Plan({ 1920, 1080 }, 50), "Inactive mask changed rectangular compression");
+			}
+		}
+		float maximumPixelError = 0.0f;
+		for (bool shaped : { false, true }) {
+			for (auto compression : { 1u, 20u, 50u, 100u }) {
+				for (auto percent : { 30u, 50u, 99u, 100u }) {
+					const PeripheralMask mask{ { 0.47f, 0.53f }, { 0.43f, 0.36f }, shaped };
+					const auto plan = Plan({ 1921, 1081 }, percent, {}, { .requested = true, .compressionPercent = compression, .mask = mask });
+					Require(plan.Active() && plan.candidatePixels < plan.baselinePixels, "Valid slider/FOV combination did not reduce work");
+					const auto& mapping = plan.mapping;
+					for (int y = -4; y <= 24; ++y) {
+						for (int x = -4; x <= 24; ++x) {
+							const PeripheralMapping::Point source{ float(x) / 20.0f, float(y) / 20.0f };
+							const auto work = mapping.Forward(source), restored = mapping.Inverse(work);
+							for (unsigned axis = 0; axis < 2; ++axis) {
+								maximumPixelError = std::max(maximumPixelError, std::abs(restored[axis] - source[axis]) * 1921.0f);
+								Require(std::isfinite(restored[axis]) && std::abs(restored[axis] - source[axis]) * 1921.0f < 0.025f, "Mask mapping lost invertibility");
+							}
+							if (mapping.Distance({ source[0] - mapping.center[0], source[1] - mapping.center[1] }) <= mapping.protectedFraction) {
+								for (unsigned axis = 0; axis < 2; ++axis)
+									Require(std::abs(mapping.origin[axis] + work[axis] * mapping.work[axis] - source[axis]) < 2e-7f, "Protected centre changed sampling density");
+							}
+						}
+					}
+					for (unsigned y = 0; y < 12; ++y) {
+						for (unsigned x = 0; x < 20; ++x) {
+							const PeripheralMapping::Point lower{ float(x) / 20.0f, float(y) / 12.0f }, upper{ float(x + 1) / 20.0f, float(y + 1) / 12.0f };
+							const auto bounds = mapping.SourceBounds(lower, upper);
+							for (unsigned sy = 0; sy <= 4; ++sy) {
+								for (unsigned sx = 0; sx <= 4; ++sx) {
+									const auto sample = mapping.Inverse({ lower[0] + (upper[0] - lower[0]) * float(sx) / 4.0f,
+										lower[1] + (upper[1] - lower[1]) * float(sy) / 4.0f });
+									for (unsigned axis = 0; axis < 2; ++axis)
+										Require(sample[axis] >= bounds.first[axis] - 1e-6f && sample[axis] <= bounds.second[axis] + 1e-6f, "Inverse cell bounds missed a cross-axis extremum");
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		for (const auto support : { PeripheralCompressionSupport{}, PeripheralCompressionSupport{ .requested = true, .identity = true } }) {
+			const auto off = Plan({ 1920, 1080 }, 50, {}, support);
+			Require(!off.Active() && off.mapping == PeripheralMapping{} && off.model == off.ordinaryModel, "Off/identity altered geometry");
+		}
+		for (auto support : { PeripheralCompressionSupport{ .requested = true, .actorRoute = true },
+				 PeripheralCompressionSupport{ .requested = true, .restricted = true }, PeripheralCompressionSupport{ .requested = true, .compactInputs = true } })
+			Require(!Plan({ 1920, 1080 }, 50, {}, support).Active(), "Unsupported source admitted");
+		const UpscalingDLSS::ViewportCrop crop{ { 2400, 1400 }, { 300, 100, 2100, 1300 }, { 2400, 1400 }, { 300, 100, 2100, 1300 } };
+		const auto baseline = BuildModelResolutionGeometry(crop, { 1800, 1200 }, { 0, 0, 1800, 1200 }, 50);
+		Require(baseline.has_value(), "Cropped fixture invalid");
+		const PeripheralMask mask{ { 0.47f, 0.52f }, { 0.4f, 0.38f }, true };
+		const auto clipped = BuildPeripheralCompressionPlan(*baseline, { 1800, 1200 }, crop, 50, { .requested = true, .mask = mask });
+		Require(clipped.Active() && clipped.sourceCrop == crop && clipped.ownedOutput == baseline->sourceRegion, "FOV compression changed crop ownership");
+		auto excludedCenter = mask;
+		excludedCenter.center[0] = 0.01f;
+		Require(BuildPeripheralCompressionPlan(*baseline, { 1800, 1200 }, crop, 50, { .requested = true, .mask = excludedCenter }).reason == PeripheralCompressionReason::InvalidGeometry,
+			"A crop excluding its declared mask centre reached dispatch");
+		Require(std::abs(clipped.mapping.center[0] - (0.47f * 2400.0f - 300.0f) / 1800.0f) < 1e-6f, "FOV centre was treated as crop-local");
+		Require(BuildPeripheralCompressionPlan(*baseline, { 1800, 1200 }, crop, 50, { .requested = true }).reason == PeripheralCompressionReason::RestrictedDomain, "Unknown crop guessed a mask");
+		std::array pair{ full, Plan({ 1920, 1080 }, 50, {}, { .requested = true, .actorRoute = true }) };
+		ReconcilePeripheralCompression(pair);
+		Require(!pair[0].Active() && pair[0].reason == PeripheralCompressionReason::PairUnsupported && !pair[1].Active(), "Eye strategies diverged");
+		auto history = ModelResolutionHistory{};
+		history.peripheralMapping = clipped.mapping;
+		history.peripheralMappingVersion = PeripheralMapping::kVersion;
+		Require(history != ModelResolutionHistory{}, "Mapping absent from temporal identity");
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		PeripheralCompressionExperiment lease;
+		using Mode = PeripheralCompressionOverride;
+		Require(!lease.Configure(Mode::CompressedExperiment, 601, 1), "Unbounded lease accepted");
+		Require(lease.Configure(Mode::CompressedExperiment, 2, 1), "Comparison rejected");
+		Require(lease.Resolve(10, 1) == std::pair{ Mode::CompressedExperiment, true }, "Comparison did not invalidate history");
+		Require(lease.Resolve(10, 1) == std::pair{ Mode::CompressedExperiment, false }, "Second eye consumed lease frame");
+		Require(!lease.Configure(Mode::Ordinary, 2, 1), "Stale comparison revision accepted");
+		Require(lease.Resolve(12, 1) == std::pair{ Mode::Auto, true }, "Expired lease persisted");
+		Require(lease.Configure(Mode::Identity, 5, lease.Status().revision), "Identity lease rejected");
+		(void)lease.Resolve(12, 1);
+		Require(lease.Resolve(13, 2) == std::pair{ Mode::Auto, true }, "Generation change preserved override");
+		using Json = nlohmann::json;
+		Json request{ { "action", "nr_peripheral_compare" }, { "peripheralOverride", "compressed_experiment" },
+			{ "peripheralOverrideFrames", 2 }, { "expectedPeripheralOverrideRevision", 1 } };
+		Require(ParsePeripheralComparison(request).has_value(), "Comparison parser rejected valid lease");
+		for (const auto* field : { "action", "peripheralOverride", "peripheralOverrideFrames", "expectedPeripheralOverrideRevision" }) {
+			auto missing = request;
+			missing.erase(field);
+			Require(!ParsePeripheralComparison(missing), "Missing comparison field accepted");
+			for (auto bad : { Json(nullptr), Json(true), Json(-1), Json(1.5), Json::array(), Json::object() }) {
+				auto invalid = request;
+				invalid[field] = bad;
+				Require(!ParsePeripheralComparison(invalid), "Malformed comparison field accepted");
+			}
+		}
+		request["peripheralOverride"] = "identity";
+		Require(ParsePeripheralComparison(request).has_value(), "Identity parser rejected");
+		request["peripheralOverrideFrames"] = 0;
+		Require(!ParsePeripheralComparison(request), "Zero experiment lease accepted");
+		request["peripheralOverride"] = "auto";
+		Require(ParsePeripheralComparison(request).has_value(), "Auto cancellation rejected");
+#endif
+		std::cout << "PASS: peripheral geometry, pair policy and endpoint motion; maximum fp32 roundtrip error " << maximumPixelError << " source pixels\n";
+	} catch (const std::exception& error) {
+		std::cerr << error.what() << '\n';
+		return 1;
+	}
+}

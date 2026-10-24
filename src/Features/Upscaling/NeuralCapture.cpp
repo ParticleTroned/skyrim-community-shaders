@@ -3,6 +3,8 @@
 #include "Features/Upscaling/NeuralRendering/Renderer.h"
 #include "Globals.h"
 
+#include <algorithm>
+
 void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& args,
 	[[maybe_unused]] const UpscalingDLSS::ViewportCrop& dlssCrop, [[maybe_unused]] const std::array<uint32_t, 2>& colorOrigin,
 	[[maybe_unused]] const std::array<uint32_t, 2>& guideOrigin) noexcept
@@ -12,6 +14,17 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 		*args.renderingMode, settings.neuralRenderingModelResolutionPercent);
 	args.reconstructionFilter = NeuralRendering::ClampReconstructionFilter(settings.neuralRenderingReconstructionFilter);
 	args.guidedReconstructionEnabled = settings.neuralRenderingGuidedReconstruction;
+	args.peripheralCompressionPercent = settings.neuralRenderingPeripheralCompressionPercent;
+	args.peripheralMask = {};
+	if (args.peripheralCompressionPercent && NeuralRendering::RequiresFoveatedMask(*args.renderingMode, settings.neuralRenderingFovOnly,
+												 globals::game::isVR, settings.neuralRenderingRenderscaleFov)) {
+		const auto profile = GetActiveUpscalingFoveatedProfile();
+		const auto& offset = profile.centerOffsets[args.featureSlot % NeuralRendering::kEyeCount];
+		const float scale = profile.available ? profile.sharedVisibleScale : 0.0f;
+		args.peripheralMask = { { std::clamp(0.5f + offset.x, 0.0f, 1.0f), std::clamp(0.5f + offset.y, 0.0f, 1.0f) },
+			{ scale * profile.centerHorizontalScale * 0.5f, scale * 0.5f }, true };
+	}
+
 	args.pressureResolutionEnabled = settings.neuralRenderingPressureResolutionEnabled;
 	args.parallelEyes = globals::game::isVR && settings.neuralRenderingParallelEyes && settings.neuralRenderingBatchedStereo;
 	args.centralArea = {
@@ -25,6 +38,10 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 		args.centralArea.offset = { offset.x, offset.y };
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	const auto [peripheralOverride, peripheralChanged] = NeuralRendering::Renderer::Instance().ResolvePeripheralOverride(args.frameId, args.generation);
+	args.peripheralOverride = peripheralOverride;
+	if (peripheralChanged)
+		RequestHistoryReset();
 	const auto [reconstructionOverride, reconstructionChanged] = NeuralRendering::Renderer::Instance().ResolveReconstructionOverride(args.frameId, args.generation);
 	args.reconstructionOverride = reconstructionOverride;
 	if (reconstructionChanged)

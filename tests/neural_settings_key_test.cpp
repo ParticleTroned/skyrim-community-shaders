@@ -48,8 +48,11 @@ int main()
 			filter.neuralRenderingReconstructionFilter = 1;
 			require((BuildNeuralRenderingSettingsKey(filter) != key) == enabled);
 			auto guided = baseline;
-			guided.neuralRenderingGuidedReconstruction = true;
+			guided.neuralRenderingGuidedReconstruction = !baseline.neuralRenderingGuidedReconstruction;
 			require((BuildNeuralRenderingSettingsKey(guided) != key) == enabled);
+			auto peripheral = baseline;
+			peripheral.neuralRenderingPeripheralCompressionPercent = 20;
+			require((BuildNeuralRenderingSettingsKey(peripheral) != key) == enabled);
 			auto parallel = baseline;
 			parallel.neuralRenderingParallelEyes = true;
 			require(BuildNeuralRenderingSettingsKey(parallel) == key);

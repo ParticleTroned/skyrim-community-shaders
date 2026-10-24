@@ -3,6 +3,7 @@
 #include "Features/Upscaling/NeuralRendering/MemoryRecoveryPolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryRetirementPolicy.h"
 #include "Features/Upscaling/NeuralRendering/NetworkSelection.h"
+#include "Features/Upscaling/NeuralRendering/PeripheralCompressionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/RegionCapacity.h"
 #include "Features/Upscaling/NeuralRendering/StallRecoveryPolicy.h"
 #include "Features/Upscaling/NeuralRendering/SubmissionFenceSnapshot.h"
@@ -103,6 +104,7 @@ namespace NeuralRendering
 	{
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		bool reconstructionHistoryReset = false;
+		bool spatialHistoryReset = false;
 #endif
 	};
 	struct Runtime
@@ -241,6 +243,7 @@ namespace NeuralRendering
 			bool failureLatched_ = false, quarantined_ = false, abandoned = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			GuidedReconstructionExperiment reconstructionExperiment_;
+			PeripheralCompressionExperiment peripheralExperiment_;
 #endif
 			unsigned capturesFinalized = 0;
 			void FinishCapture(const RendererApplyOutcome&) noexcept { ++capturesFinalized; }

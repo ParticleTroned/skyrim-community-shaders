@@ -72,15 +72,15 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-performance",
-    "presetVersion": "d2026.10.31.2",
+    "presetVersion": "d2026.10.31.6",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
       "maximumVersionExclusive": "3.22"
     },
     "settingsContract": {
-      "revision": 21,
-      "sourceTreeSha256": "5D5FA6544BF413781CEBBF290B72F90B2974A4CB0114A43099B164E61124819A"
+      "revision": 25,
+      "sourceTreeSha256": "BB3D76EDEEA1218807666FDAE3F550C02AF67B1CF0F14C0A5746B2FDA765C733"
     }
   },
   "Upscaling": {
@@ -157,7 +157,8 @@
       "neuralRenderingBlendFeather": 0.05000000074505806,
       "neuralRenderingDirectCommit": true,
       "neuralRenderingReconstructionFilter": 0,
-      "neuralRenderingGuidedReconstruction": false,
+      "neuralRenderingGuidedReconstruction": true,
+      "neuralRenderingPeripheralCompressionPercent": 0,
       "neuralRenderingEnabled": false,
       "neuralRenderingFovOnly": false,
       "neuralRenderingRenderscaleFov": false,

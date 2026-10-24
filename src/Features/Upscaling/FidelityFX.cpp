@@ -909,6 +909,9 @@ bool FidelityFX::IsRuntimeUpscalerOwnershipDetached() const noexcept
 
 void FidelityFX::QuarantineHostFSRState(const char* a_reason)
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	ClearDevBenchFsrColorContext(false);
+#endif
 	InvalidateFSRRelatchDrain();
 	if (fsrHostStateQuarantined)
 		return;
@@ -1034,6 +1037,9 @@ FidelityFX::LifecycleResult FidelityFX::ReleaseHostFSRResources()
 	fsrContextMaxRenderHeight = 0;
 	fsrContextDisplayWidth = 0;
 	fsrContextDisplayHeight = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	ClearDevBenchFsrColorContext(false);
+#endif
 	if (fsrScratchBuffer) {
 		free(fsrScratchBuffer);
 		fsrScratchBuffer = nullptr;
@@ -1227,15 +1233,109 @@ std::string FidelityFX::GetRuntimeUpscalerRequestedVersionString() const
 }
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+uint64_t FidelityFX::GetDevBenchFsrColorContractState() const noexcept
+{
+	return devBenchFsrColorContractState.load(std::memory_order_acquire);
+}
+
+uint64_t FidelityFX::GetDevBenchFsrColorContractFlags() const noexcept
+{
+	return GetDevBenchFsrColorContractState() & FSRColorContractPolicy::kFlagMask;
+}
+
+FidelityFX::FsrColorContractStatusSnapshot FidelityFX::GetDevBenchFsrColorContractStatusSnapshot() const noexcept
+{
+	const std::lock_guard lock(devBenchFsrColorContractMutex);
+	return GetDevBenchFsrColorContractStatusSnapshotLocked();
+}
+
+FidelityFX::FsrColorContractStatusSnapshot FidelityFX::GetDevBenchFsrColorContractStatusSnapshotLocked() const noexcept
+{
+	const uint64_t requested = GetDevBenchFsrColorContractState();
+	const auto requestedContract = FSRColorContractPolicy::Decode(requested);
+	const uint64_t host = devBenchHostContextColorContract.load(std::memory_order_acquire);
+	const uint64_t runtime = devBenchRuntimeContextColorContract.load(std::memory_order_acquire);
+	return {
+		{
+			requestedContract.revision,
+			requestedContract.highDynamicRangeInput,
+			requestedContract.autoExposure,
+			(host & FSRColorContractPolicy::kContextValidBit) != 0,
+			(host & FSRColorContractPolicy::kHighDynamicRangeInputBit) != 0,
+			(host & FSRColorContractPolicy::kAutoExposureBit) != 0,
+			devBenchHostContextGeneration.load(std::memory_order_acquire),
+			(runtime & FSRColorContractPolicy::kContextValidBit) != 0,
+			(runtime & FSRColorContractPolicy::kHighDynamicRangeInputBit) != 0,
+			(runtime & FSRColorContractPolicy::kAutoExposureBit) != 0,
+			devBenchRuntimeContextGeneration.load(std::memory_order_acquire),
+		},
+		devBenchSuccessfulDispatch,
+	};
+}
+
+FidelityFX::FsrColorContractSetResult FidelityFX::SetDevBenchFsrColorContract(
+	uint64_t a_expectedRevision,
+	bool a_highDynamicRangeInput,
+	bool a_autoExposure) noexcept
+{
+	return FSRColorContractReceiptPolicy::ApplySet<FsrColorContractStatusSnapshot>(
+		devBenchFsrColorContractMutex,
+		devBenchFsrColorContractState,
+		a_expectedRevision,
+		a_highDynamicRangeInput,
+		a_autoExposure,
+		[this]() { devBenchSuccessfulDispatch = {}; },
+		[this]() { return GetDevBenchFsrColorContractStatusSnapshotLocked(); });
+}
+
+FSRColorContractPolicy::ReplacementState FidelityFX::GetDevBenchFsrColorContractReplacementState() const noexcept
+{
+	const std::lock_guard lock(devBenchFsrColorContractMutex);
+	const uint64_t requested = GetDevBenchFsrColorContractState();
+	const uint64_t host = devBenchHostContextColorContract.load(std::memory_order_acquire);
+	const uint64_t runtime = devBenchRuntimeContextColorContract.load(std::memory_order_acquire);
+	const uint32_t currentFrame =
+		globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	return FSRColorContractPolicy::GetReplacementState(
+		host,
+		devBenchHostContextLastDispatchFrame.load(std::memory_order_acquire),
+		runtime,
+		devBenchRuntimeContextLastDispatchFrame.load(std::memory_order_acquire),
+		requested,
+		currentFrame);
+}
+
+void FidelityFX::PublishDevBenchFsrColorContext(bool a_runtime, uint64_t a_flags) noexcept
+{
+	const std::lock_guard lock(devBenchFsrColorContractMutex);
+	auto& context = a_runtime ?
+	                    devBenchRuntimeContextColorContract :
+	                    devBenchHostContextColorContract;
+	auto& generation = a_runtime ?
+	                       devBenchRuntimeContextGeneration :
+	                       devBenchHostContextGeneration;
+	context.store(FSRColorContractPolicy::ContextState(a_flags), std::memory_order_release);
+	generation.fetch_add(1, std::memory_order_acq_rel);
+}
+
+void FidelityFX::ClearDevBenchFsrColorContext(bool a_runtime) noexcept
+{
+	const std::lock_guard lock(devBenchFsrColorContractMutex);
+	auto& context = a_runtime ?
+	                    devBenchRuntimeContextColorContract :
+	                    devBenchHostContextColorContract;
+	auto& lastDispatchFrame = a_runtime ?
+	                              devBenchRuntimeContextLastDispatchFrame :
+	                              devBenchHostContextLastDispatchFrame;
+	context.store(0, std::memory_order_release);
+	lastDispatchFrame.store(0, std::memory_order_release);
+	devBenchSuccessfulDispatch = {};
+}
+
 FidelityFX::RuntimeUpscalerDispatchSnapshot FidelityFX::GetRuntimeUpscalerDispatchSnapshotForRenderThread() const
 {
-	const std::scoped_lock lock(devBenchSuccessfulDispatchMutex);
-	return {
-		devBenchSuccessfulDispatch.valid,
-		devBenchSuccessfulDispatch.frame,
-		devBenchSuccessfulDispatch.path,
-		devBenchSuccessfulDispatch.serial,
-	};
+	const std::lock_guard lock(devBenchFsrColorContractMutex);
+	return devBenchSuccessfulDispatch;
 }
 #endif
 
@@ -1255,7 +1355,7 @@ void FidelityFX::ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache)
 	runtimeUpscalerLastFramePath = RuntimeUpscalerFramePath::kInactive;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	{
-		const std::scoped_lock lock(devBenchSuccessfulDispatchMutex);
+		const std::scoped_lock lock(devBenchFsrColorContractMutex);
 		devBenchSuccessfulDispatch = {};
 	}
 #endif
@@ -1288,6 +1388,9 @@ void FidelityFX::LatchRuntimeFsr4Failure()
 
 void FidelityFX::QuarantineRuntimeUpscalerForSession(const char* a_reason)
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	ClearDevBenchFsrColorContext(true);
+#endif
 	InvalidateFSRRelatchDrain();
 	runtimeUpscalerFailureLatched = true;
 	if (runtimeUpscalerSessionQuarantined)
@@ -1332,17 +1435,49 @@ void FidelityFX::RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path)
 }
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-void FidelityFX::RecordDevBenchSuccessfulDispatch(RuntimeUpscalerFramePath a_path)
+void FidelityFX::RecordDevBenchSuccessfulDispatch(
+	RuntimeUpscalerFramePath a_path,
+	uint32_t a_contextIndex,
+	uint32_t a_renderWidth,
+	uint32_t a_renderHeight,
+	uint32_t a_displayWidth,
+	uint32_t a_displayHeight)
 {
-	const std::scoped_lock lock(devBenchSuccessfulDispatchMutex);
+	const std::lock_guard lock(devBenchFsrColorContractMutex);
+	const bool runtimePath = a_path == RuntimeUpscalerFramePath::kRuntimeFsr31 ||
+	                         a_path == RuntimeUpscalerFramePath::kRuntimeFsr4;
+	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	(runtimePath ? devBenchRuntimeContextLastDispatchFrame : devBenchHostContextLastDispatchFrame)
+		.store(frame, std::memory_order_release);
+	const uint64_t contextState = (runtimePath ?
+									   devBenchRuntimeContextColorContract :
+									   devBenchHostContextColorContract)
+	                                  .load(std::memory_order_acquire);
+	if (!FSRColorContractPolicy::ContextMatches(
+			contextState,
+			GetDevBenchFsrColorContractState())) {
+		devBenchSuccessfulDispatch = {};
+		return;
+	}
 	uint64_t serial = ++devBenchSuccessfulDispatchSerial;
 	if (serial == 0)
 		serial = ++devBenchSuccessfulDispatchSerial;
 	devBenchSuccessfulDispatch = {
 		true,
-		globals::state ? std::max(globals::state->frameCount, 1u) : 0u,
+		frame,
 		a_path,
 		serial,
+		(runtimePath ? devBenchRuntimeContextGeneration : devBenchHostContextGeneration)
+			.load(std::memory_order_acquire),
+		a_contextIndex,
+		a_renderWidth,
+		a_renderHeight,
+		a_displayWidth,
+		a_displayHeight,
+		(contextState & FSRColorContractPolicy::kHighDynamicRangeInputBit) != 0,
+		(contextState & FSRColorContractPolicy::kAutoExposureBit) != 0,
+		false,
+		1.0f,
 	};
 }
 #endif
@@ -1819,6 +1954,12 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 			splitPerEyeContexts ? "yes" : "no");
 	}
 
+	uint64_t colorContractFlags = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	colorContractFlags = GetDevBenchFsrColorContractFlags();
+#else
+	colorContractFlags = FSRColorContractPolicy::kDefaultFlags;
+#endif
 	for (uint32_t i = 0; i < numContexts; ++i) {
 		FfxFsr3ContextDescription contextDescription{};
 		contextDescription.maxRenderSize.width = renderWidth;
@@ -1827,9 +1968,11 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 		contextDescription.maxUpscaleSize.height = displayHeight;
 		contextDescription.displaySize.width = displayWidth;
 		contextDescription.displaySize.height = displayHeight;
-		contextDescription.flags = FFX_FSR3_ENABLE_UPSCALING_ONLY | FFX_FSR3_ENABLE_AUTO_EXPOSURE;
-		if constexpr (VRSubmitColorContract::kLegacyFsrHighDynamicRange)
+		contextDescription.flags = FFX_FSR3_ENABLE_UPSCALING_ONLY;
+		if ((colorContractFlags & FSRColorContractPolicy::kHighDynamicRangeInputBit) != 0)
 			contextDescription.flags |= FFX_FSR3_ENABLE_HIGH_DYNAMIC_RANGE;
+		if ((colorContractFlags & FSRColorContractPolicy::kAutoExposureBit) != 0)
+			contextDescription.flags |= FFX_FSR3_ENABLE_AUTO_EXPOSURE;
 		contextDescription.backendInterfaceUpscaling = fsrInterface;
 
 		fsrContext[i] = {};
@@ -1865,6 +2008,9 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 	fsrContextMaxRenderHeight = renderHeight;
 	fsrContextDisplayWidth = displayWidth;
 	fsrContextDisplayHeight = displayHeight;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	PublishDevBenchFsrColorContext(false, colorContractFlags);
+#endif
 	if (emitDiagLogs) {
 		logger::debug("[FidelityFX] Created {} FSR3 contexts (Display: {}x{}, MaxRender: {}x{}, RequestedRender: {}x{}, SplitPerEye={})",
 			numContexts, displayWidth, displayHeight, renderWidth, renderHeight, requestedRenderWidth, requestedRenderHeight, splitPerEyeContexts);
@@ -1940,6 +2086,9 @@ FidelityFX::LifecycleResult FidelityFX::DestroyRuntimeUpscalerContexts(bool a_wa
 	runtimeUpscalerMaxDisplayWidth = 0;
 	runtimeUpscalerMaxDisplayHeight = 0;
 	runtimeUpscalerRequestedVersion = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	ClearDevBenchFsrColorContext(true);
+#endif
 	return LifecycleResult::Ready;
 }
 
@@ -2159,7 +2308,19 @@ bool FidelityFX::IsRuntimeUpscalerDispatchProofUsable(
 
 bool FidelityFX::AreFSRResourcesCompatible(uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_contextCount) const
 {
-	return HasFSRResources() &&
+	bool colorContractCompatible = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const uint64_t contextColorContract = devBenchHostContextColorContract.load(std::memory_order_acquire);
+	const uint32_t lastDispatchFrame = devBenchHostContextLastDispatchFrame.load(std::memory_order_acquire);
+	const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	const bool dispatchedThisFrame = currentFrame != 0 && lastDispatchFrame == currentFrame;
+	colorContractCompatible = FSRColorContractPolicy::CanReuseContext(
+		contextColorContract,
+		GetDevBenchFsrColorContractState(),
+		dispatchedThisFrame);
+#endif
+	return colorContractCompatible &&
+	       HasFSRResources() &&
 	       fsrContextCount == a_contextCount &&
 	       a_renderWidth != 0 &&
 	       a_renderHeight != 0 &&
@@ -2356,7 +2517,19 @@ bool FidelityFX::AreRuntimeUpscalerContextsCompatible(
 			return false;
 	}
 
-	return FSRTemporalTuningPolicy::CanReuseContextProfile(temporalContextRevision,
+	bool colorContractCompatible = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const uint64_t contextColorContract = devBenchRuntimeContextColorContract.load(std::memory_order_acquire);
+	const uint32_t lastDispatchFrame = devBenchRuntimeContextLastDispatchFrame.load(std::memory_order_acquire);
+	const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	const bool dispatchedThisFrame = currentFrame != 0 && lastDispatchFrame == currentFrame;
+	colorContractCompatible = FSRColorContractPolicy::CanReuseContext(
+		contextColorContract,
+		GetDevBenchFsrColorContractState(),
+		dispatchedThisFrame);
+#endif
+	return colorContractCompatible &&
+	       FSRTemporalTuningPolicy::CanReuseContextProfile(temporalContextRevision,
 			   temporalRequestRevision.load(std::memory_order_acquire),
 			   globals::state && temporalContextLastDispatchFrame == globals::state->frameCount) &&
 	       runtimeUpscalerContextCount == a_contextCount &&
@@ -3499,11 +3672,19 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 	bool createdContextWithUpscalerVersionDescriptor = false;
 	bool createdContextWithDefaultProvider = false;
 
+	uint64_t colorContractFlags = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	colorContractFlags = GetDevBenchFsrColorContractFlags();
+#else
+	colorContractFlags = FSRColorContractPolicy::kDefaultFlags;
+#endif
 	for (uint32_t i = 0; i < a_contextCount; ++i) {
 		ffx::CreateContextDescUpscale createDesc{};
-		createDesc.flags = FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
-		if constexpr (VRSubmitColorContract::kLegacyFsrHighDynamicRange)
+		createDesc.flags = 0;
+		if ((colorContractFlags & FSRColorContractPolicy::kHighDynamicRangeInputBit) != 0)
 			createDesc.flags |= FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE;
+		if ((colorContractFlags & FSRColorContractPolicy::kAutoExposureBit) != 0)
+			createDesc.flags |= FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
 		createDesc.maxRenderSize = { a_fullRenderWidth, a_fullRenderHeight };
 		createDesc.maxUpscaleSize = { a_fullDisplayWidth, a_fullDisplayHeight };
 		createDesc.fpMessage = RuntimeFfxMessage;
@@ -3619,6 +3800,9 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 	const auto tuningResult = ConfigureTemporalTuningContexts(GetTemporalTuningSnapshot());
 	if (tuningResult != LifecycleResult::Ready)
 		return tuningResult;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	PublishDevBenchFsrColorContext(true, colorContractFlags);
+#endif
 
 	if ((runtimeUpscalerProviderMatchedVersionId != 0 || !runtimeUpscalerProviderMatchedVersionName.empty()) &&
 		!RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, a_requestedVersion)) {
@@ -3796,7 +3980,9 @@ FidelityFX::LifecycleResult FidelityFX::ExecuteRuntimeUpscalerBatch(
 			const auto dispatchPath = GetRuntimeUpscalerProviderFramePath(a_plan.requestedVersion);
 			RecordRuntimeUpscalerFramePath(dispatchPath);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			RecordDevBenchSuccessfulDispatch(dispatchPath);
+			const auto& evidenceRegion = a_regions.front();
+			RecordDevBenchSuccessfulDispatch(dispatchPath, evidenceRegion.contextIndex,
+				evidenceRegion.renderWidth, evidenceRegion.renderHeight, evidenceRegion.displayWidth, evidenceRegion.displayHeight);
 #endif
 		}
 		return dispatchResult;
@@ -4447,7 +4633,7 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 	const bool dispatchOK = DispatchHostFsr3UpscaleProtected(fsrContext[a_contextIndex], dispatchParameters, hostDispatchCrashed, hostDispatchExceptionCode);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (dispatchOK)
-		RecordDevBenchSuccessfulDispatch(fallbackFramePath);
+		RecordDevBenchSuccessfulDispatch(fallbackFramePath, a_contextIndex, a_renderWidth, a_renderHeight, a_displayWidth, a_displayHeight);
 #endif
 	if (!dispatchOK && !hostDispatchCrashed) {
 		logger::critical("[FidelityFX] Failed to dispatch region upscaling for eye {}!", a_contextIndex);

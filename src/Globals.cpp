@@ -1,5 +1,9 @@
 #include "Globals.h"
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "RenderMap/D3DContextHooks.h"
+#endif
+
 #include "Deferred.h"
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
@@ -465,6 +469,7 @@ namespace globals
 		stl::detour_vfunc<38, ID3D11DeviceContext_DrawAuto>(a_context);
 		stl::detour_vfunc<39, ID3D11DeviceContext_DrawIndexedInstancedIndirect>(a_context);
 		stl::detour_vfunc<40, ID3D11DeviceContext_DrawInstancedIndirect>(a_context);
+		CSX::RenderMap::InstallD3DContextHooks(a_context);
 #endif
 	}
 }

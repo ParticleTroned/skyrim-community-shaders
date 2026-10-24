@@ -63,6 +63,24 @@ class Files(unittest.TestCase):
             mutate(rows)
             self.assertFalse(capture_file.read_capture(io.BytesIO(encoded(rows)))[2]['complete'])
 
+    def test_recovered_file_finds_its_original_phase_without_a_connection(self):
+        with patch.dict('sys.modules', {'capture_file': capture_file, 'engine_analysis': engine, 'evidence': isl.evidence}):
+            analyzer = load('analyze')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            value = {'name': 'engine-01-R', 'started': {'captureId': 7}}
+            (root / 'engine-01-R-analysis-input.json').write_text(json.dumps(value))
+            source = analyzer.Source(root)
+            try:
+                self.assertEqual(source.inputs('interrupted', 7), ('engine-01-R', value))
+                self.assertEqual(source.inputs('interrupted', 8), ('interrupted', None))
+                (root / 'duplicate-analysis-input.json').write_text(json.dumps(value))
+                source.names['duplicate-analysis-input.json'] = 'duplicate-analysis-input.json'
+                with self.assertRaisesRegex(ValueError, 'ambiguous'):
+                    source.inputs('interrupted', 7)
+            finally:
+                source.close()
+
 
 class Collection(unittest.TestCase):
     def setUp(self):

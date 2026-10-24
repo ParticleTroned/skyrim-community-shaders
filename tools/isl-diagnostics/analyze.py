@@ -41,6 +41,18 @@ class Source:
         with self.open(name) as stream:
             return json.load(stream)
 
+    def inputs(self, name, capture_id):
+        direct = self.json(name + '-analysis-input.json')
+        if direct is not None:
+            return name, direct
+        if capture_id is None:
+            return name, None
+        matches = [(n[:-len('-analysis-input.json')], self.json(n)) for n in self.names if n.endswith('-analysis-input.json')]
+        matches = [(n, value) for n, value in matches if value.get('started', {}).get('captureId') == capture_id]
+        if len(matches) > 1:
+            raise ValueError('ambiguous recovery capture context')
+        return matches[0] if matches else (name, None)
+
     def recordings(self):
         names = set()
         for name in self.names:
@@ -94,14 +106,15 @@ def attempt(operation):
         return {'complete': False, 'valid': False, 'status': 'UNAVAILABLE', 'limitations': [str(error)]}
 
 
-def guard(source, name, output, module):
+def guard(source, name, output, module, output_name):
     before, after = name + '-guard-before.json', name + '-guard-after.json'
     if before not in source.names or after not in source.names or not module.is_file():
         return {'valid': False, 'limitations': ['offline performance qualification inputs/module missing']}
-    for file in (before, after):
-        save(output / file, source.json(file))
+    local_before, local_after = output_name + '-guard-before.json', output_name + '-guard-after.json'
+    for original, destination in ((before, local_before), (after, local_after)):
+        save(output / destination, source.json(original))
     command = ['pwsh', '-NoProfile', '-File', str(Path(__file__).with_name('check-window.ps1')),
-               '-ModulePath', str(module), '-BeforePath', str(output / before), '-AfterPath', str(output / after)]
+               '-ModulePath', str(module), '-BeforePath', str(output / local_before), '-AfterPath', str(output / local_after)]
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
         if result.returncode:
@@ -114,7 +127,8 @@ def guard(source, name, output, module):
 def analyze_window(source, name, output, module, references=None):
     raw, side, file_quality = source.recording(name)
     result = {'name': name, 'fileQuality': file_quality}
-    inputs = source.json(name + '-analysis-input.json')
+    input_name, inputs = source.inputs(name, raw.get('captureId') if raw else None)
+    result['inputPhase'] = input_name
     legacy = source.json(name + '-summary.json', {})
     for kind, document in (('raw', raw), ('isl', side)):
         if document is not None:
@@ -146,7 +160,7 @@ def analyze_window(source, name, output, module, references=None):
         result.update(condition=inputs['condition'], before=inputs['before'], after=inputs['after'],
                       neuralRendering=attempt(lambda: evidence.nr_window(inputs['nrBefore'], inputs['nrAfter'], inputs['condition'].get('nrEnabled', False))),
                       sceneMatch=scene,
-                      performanceWindow=guard(source, name, output, module), sceneTimePolicy=inputs['sceneTimePolicy'])
+                      performanceWindow=guard(source, input_name, output, module, name), sceneTimePolicy=inputs['sceneTimePolicy'])
         ready = inputs['clientReadyQpc']
         admission = raw['boundaries']['applicationAdmissionStartQpc']
         result['controllerOutsideAdmission'] = evidence.finite(admission) and admission > ready

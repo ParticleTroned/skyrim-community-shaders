@@ -20,6 +20,8 @@ def load(name):
 
 
 capture_file, engine = load('capture_file'), load('engine_analysis')
+with patch.dict('sys.modules', {'capture_file': capture_file, 'engine_analysis': engine, 'evidence': isl.evidence}):
+    analyzer = load('analyze')
 
 
 def recording():
@@ -64,8 +66,6 @@ class Files(unittest.TestCase):
             self.assertFalse(capture_file.read_capture(io.BytesIO(encoded(rows)))[2]['complete'])
 
     def test_recovered_file_finds_its_original_phase_without_a_connection(self):
-        with patch.dict('sys.modules', {'capture_file': capture_file, 'engine_analysis': engine, 'evidence': isl.evidence}):
-            analyzer = load('analyze')
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             value = {'name': 'engine-01-R', 'started': {'captureId': 7}}
@@ -78,6 +78,58 @@ class Files(unittest.TestCase):
                 source.names['duplicate-analysis-input.json'] = 'duplicate-analysis-input.json'
                 with self.assertRaisesRegex(ValueError, 'ambiguous'):
                     source.inputs('interrupted', 7)
+            finally:
+                source.close()
+
+    def test_incomplete_context_is_recovered_and_mismatched_context_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = {'condition': {'group': 'engine'}, 'before': {'gameHour': 12}, 'nrBefore': {}}
+            (root / 'phase-analysis-before.json').write_text(json.dumps(before))
+            (root / 'phase-start.json').write_text(json.dumps({'captureId': 7}))
+            source = analyzer.Source(root)
+            try:
+                name, value = source.inputs('interrupted', 7)
+                self.assertEqual(name, 'phase')
+                self.assertEqual(value['before'], before['before'])
+                self.assertTrue(value['recoveredContext'])
+                self.assertNotIn('after', value)
+                (root / 'phase-analysis-input.json').write_text(json.dumps({'started': {'captureId': 9}}))
+                source.names['phase-analysis-input.json'] = 'phase-analysis-input.json'
+                with self.assertRaisesRegex(ValueError, 'different capture'):
+                    source.inputs('phase', 7)
+            finally:
+                source.close()
+
+    def test_missing_or_bad_context_does_not_erase_timing_exports(self):
+        raw, side, quality = capture_file.read_capture(io.BytesIO(encoded(recording())))
+        raw.update(captureId=7, recording={'mode': 'B'}, environment={'producer': {'buildId': 'test'}})
+        source = SimpleNamespace(recording=lambda name: (raw, side, quality),
+                                 inputs=lambda *args: (_ for _ in ()).throw(ValueError('ambiguous context')))
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(isl.evidence.raw, 'validate', return_value={'complete': True}), \
+             patch.object(isl.evidence, 'sidecar', return_value={'complete': True}):
+            output = Path(directory)
+            result = analyzer.analyze_window(source, 'phase', output, output / 'unused')
+            self.assertTrue(result['channelsComplete'])
+            self.assertFalse(result['matchedComparisonEligible'])
+            self.assertIn('ambiguous context', result['contextQuality']['limitations'])
+            self.assertEqual(json.loads((output / 'phase-raw.json').read_text()), raw)
+            self.assertEqual(json.loads((output / 'phase-isl.json').read_text()), side)
+
+    def test_bad_legacy_page_preserves_other_pages_and_side_only_capture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'phase-isl-page-00000000.json').write_text(json.dumps({'total': 2, 'offset': 0, 'records': [{'ordinal': 0}]}))
+            (root / 'phase-isl-page-00000256.json').write_text('{unfinished')
+            source = analyzer.Source(root)
+            try:
+                self.assertEqual(source.recordings(), ['phase'])
+                raw, side, quality = source.recording('phase')
+                self.assertIsNone(raw)
+                self.assertEqual(side['records'], [{'ordinal': 0}])
+                self.assertFalse(quality['complete'])
+                self.assertTrue(any('unreadable page' in error for error in quality['limitations']))
             finally:
                 source.close()
 
@@ -176,6 +228,33 @@ class Collection(unittest.TestCase):
         self.assertNotEqual(inputs['before']['weather'], inputs['after']['weather'])
         self.assertEqual(inputs['sceneTimePolicy'], 'noon reset then settled')
 
+    def test_post_capture_status_failure_keeps_admission_context(self):
+        campaign = self.campaign
+        campaign.config = json.loads((ROOT / 'tools/isl-diagnostics/core.json').read_text())
+        before = dict(ready=True, gameHour=12.01, pacing={}, nrRequested=False, effective=isl.NORMAL.copy(),
+                      shadowBatch={}, shadowCulling={'settings': {}}, isl={'enabled': True})
+        campaign.original = before
+        responses = {'set_noon': {'gameHour': 12}, 'start': {'captureId': 7, 'admissionDelayMs': 2500, 'condition': {}},
+                     'stop': {'frozen': True}}
+        with patch.object(campaign, 'call', side_effect=lambda action, **kwargs: responses[action]), \
+             patch.object(campaign, 'isl', return_value=before), patch.object(campaign, 'settle_isl', return_value=before), \
+             patch.object(campaign, 'nr_condition', side_effect=[nr_status(), TimeoutError('status unavailable')]), \
+             patch.object(isl.base, 'qpc_now', return_value=1), \
+             patch.object(isl.time, 'monotonic', side_effect=[0, 100]), self.assertRaises(TimeoutError):
+            campaign.phase(isl.plan(campaign.config, 'engine')[0])
+        source = analyzer.Source(campaign.root)
+        try:
+            name, inputs = source.inputs('interrupted', 7)
+            self.assertEqual(name, 'engine-01-R')
+            self.assertEqual(inputs['before'], before)
+            self.assertEqual(inputs['after'], before)
+            self.assertEqual(inputs['clientReadyQpc'], 1)
+            self.assertIn(name + '-guard-before.json', source.names)
+            self.assertIn(name + '-guard-after.json', source.names)
+            self.assertNotIn('nrAfter', inputs)
+        finally:
+            source.close()
+
 
 class Engine(unittest.TestCase):
     def test_nested_and_other_thread_work_are_not_added_to_frame_cost(self):
@@ -202,6 +281,30 @@ class Engine(unittest.TestCase):
         quiet = [dict(r, waitGetPosesCalledMs=8, presents=1) for r in rows]
         self.assertFalse(engine.cadence(quiet)['combDetected'])
         self.assertEqual(engine.cadence(quiet)['extraPresentations'], 0)
+
+    def test_epoch_resets_do_not_combine_short_sequences_into_a_comb(self):
+        rows = [dict(systemSeconds=(epoch * 100 + i) / 90, frame=i + (400 if epoch == 0 else 0),
+                     epoch=epoch, presents=2 if i % 20 == 19 else 1, waitGetPosesCalledMs=(i % 20) * .55)
+                for epoch in range(2) for i in range(100)]
+        result = engine.cadence(rows)
+        self.assertEqual(result['repeatCorroboratedWraps'], 8)
+        self.assertEqual(result['sourceGaps'], 1)
+        self.assertFalse(result['combDetected'])
+        self.assertEqual([s['wraps'] for s in result['sequences']], [4, 4])
+        rows[40]['systemSeconds'] = float('nan')
+        result = engine.cadence(rows)
+        self.assertEqual(result['invalidRows'], 1)
+        self.assertGreater(result['sourceGaps'], 1)
+
+    def test_named_pass_means_use_unsampled_totals_not_slow_biased_rows(self):
+        side = {'boundaries': {'qpcFrequency': 1000, 'startQpc': 1, 'stopQpc': 101}, 'generation': 1,
+                'threads': [{'thread': 1, 'labels': [{'id': 1, 'name': 'draw', 'count': 64, 'elapsedQpc': 83, 'maxQpc': 20}]}],
+                'records': [dict(ordinal=i, metric='FeaturePass', enterQpc=start, exitQpc=end,
+                                 thread=1, generation=1, labelId=1)
+                            for i, (start, end) in enumerate(((1, 2), (31, 51)))]}
+        result = engine.analyze(side)
+        self.assertNotIn('draw', result['inclusiveScopes'])
+        self.assertEqual(result['namedPassStatisticsMs']['draw'], {'count': 64, 'mean': 83/64, 'max': 20, 'p95': None})
 
 
 if __name__ == '__main__':

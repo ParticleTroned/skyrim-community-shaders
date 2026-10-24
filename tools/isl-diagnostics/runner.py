@@ -359,6 +359,10 @@ class Campaign(base.Campaign):
         nr_before = self.nr_condition(name + "-nr-before", before, phase.get("nrEnabled", False))
         if phase["pruneFrames"]:
             self.isl("arm_prune_deferral", frames=phase["pruneFrames"])
+        inputs = {"name": name, "condition": phase, "before": before, "nrBefore": nr_before,
+                  "original": self.original, "pacingPolicy": self.config["pacing"],
+                  "sceneTimePolicy": "noon reset then settled" if phase.get("group") == "engine" else "preserved"}
+        self.save(name + "-analysis-before.json", inputs)
         print(f"Capturing {name} ({duration / 1000:g}s); keep the same viewpoint.", flush=True)
         self.pending_start = True
         started = self.call("start", mode="B", durationMs=duration, capacity=self.config["capacity"],
@@ -369,24 +373,23 @@ class Campaign(base.Campaign):
         self.last_capture_id = self.capture
         self.pending_start = False
         self.save(name + "-start.json", started)
+        self.save(name + "-guard-before.json", transport_start)
         client_ready = base.qpc_now()
         # Local bounded sleeps only: no controller, file I/O, screenshot or polling inside admission.
         deadline = time.monotonic() + (started["admissionDelayMs"] + duration + 2250) / 1000
         while time.monotonic() < deadline:
             time.sleep(min(30, max(0, deadline - time.monotonic())))
+        self.save(name + "-admission.json", {"clientReadyQpc": client_ready})
         stopped = self.call("stop", captureId=self.capture, reason="completed")
         transport_stop = self.last_transport
+        self.save(name + "-guard-after.json", transport_stop)
         require(stopped["frozen"], "capture still draining; recovery manifest retains ownership")
         after = self.isl("condition")
+        self.save(name + "-analysis-after.json", after)
         nr_after = self.nr_condition(name + "-nr-after", after, phase.get("nrEnabled", False))
         raw_after = self.call("condition")
         # Save analysis inputs before copying so interruption cannot erase the context.
-        self.save(name + "-guard-before.json", transport_start)
-        self.save(name + "-guard-after.json", transport_stop)
-        inputs = {"name": name, "condition": phase, "before": before, "after": after,
-                  "started": started, "rawAfter": raw_after, "nrBefore": nr_before, "nrAfter": nr_after,
-                  "clientReadyQpc": client_ready, "original": self.original,
-                  "pacingPolicy": self.config["pacing"], "sceneTimePolicy": "noon reset then settled" if phase.get("group") == "engine" else "preserved"}
+        inputs.update(after=after, started=started, rawAfter=raw_after, nrAfter=nr_after, clientReadyQpc=client_ready)
         self.save(name + "-analysis-input.json", inputs)
         print(f"Saving {name}; analysis will run offline after you send the files.", flush=True)
         receipt = self.export_pair(self.capture, name)

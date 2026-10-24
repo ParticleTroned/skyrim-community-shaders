@@ -44,11 +44,27 @@ class Source:
     def inputs(self, name, capture_id):
         direct = self.json(name + '-analysis-input.json')
         if direct is not None:
+            if direct.get('started', {}).get('captureId') != capture_id:
+                raise ValueError('phase context belongs to a different capture')
             return name, direct
         if capture_id is None:
             return name, None
         matches = [(n[:-len('-analysis-input.json')], self.json(n)) for n in self.names if n.endswith('-analysis-input.json')]
         matches = [(n, value) for n, value in matches if value.get('started', {}).get('captureId') == capture_id]
+        complete_names = {n for n, _ in matches}
+        for filename in self.names:
+            if not filename.endswith('-analysis-before.json'):
+                continue
+            phase = filename[:-len('-analysis-before.json')]
+            started = self.json(phase + '-start.json', {})
+            if phase not in complete_names and started.get('captureId') == capture_id:
+                partial = self.json(filename) | {'started': started, 'recoveredContext': True}
+                partial.update(self.json(phase + '-admission.json', {}))
+                for key, suffix in (('after', '-analysis-after.json'), ('nrAfter', '-nr-after-status.json')):
+                    value = self.json(phase + suffix)
+                    if value is not None:
+                        partial[key] = value
+                matches.append((phase, partial))
         if len(matches) > 1:
             raise ValueError('ambiguous recovery capture context')
         return matches[0] if matches else (name, None)
@@ -58,7 +74,7 @@ class Source:
         for name in self.names:
             if name.endswith(('.csxcap', '.csxcap.partial')):
                 names.add(name.split('.csxcap')[0])
-            match = re.fullmatch(r'(.+)-raw-page-\d{8}\.json', name)
+            match = re.fullmatch(r'(.+)-(?:raw|isl)-page-\d{8}\.json', name)
             if match:
                 names.add(match[1])
         return sorted(names)
@@ -73,7 +89,13 @@ class Source:
             selected = sorted(n for n in self.names if re.fullmatch(re.escape(name) + '-' + channel + r'-page-\d{8}\.json', n))
             header, rows = None, []
             for page_name in selected:
-                page = self.json(page_name)
+                try:
+                    page = self.json(page_name)
+                    if not isinstance(page, dict) or not isinstance(page.get('records'), list) or 'offset' not in page or 'total' not in page:
+                        raise ValueError('invalid page envelope')
+                except (ValueError, OSError, zipfile.BadZipFile) as error:
+                    errors.append(f'{channel}: unreadable page {page_name}: {error}')
+                    continue
                 current = {k: v for k, v in page.items() if k not in ('records', 'offset', 'nextOffset')}
                 if header is not None and channel == 'raw' and current.get('environment') is None:
                     current['environment'] = header.get('environment')
@@ -102,7 +124,7 @@ def save(path, value):
 def attempt(operation):
     try:
         return operation()
-    except (ValueError, TypeError, KeyError, IndexError, ZeroDivisionError) as error:
+    except (ValueError, TypeError, KeyError, IndexError, AttributeError, ArithmeticError, OSError) as error:
         return {'complete': False, 'valid': False, 'status': 'UNAVAILABLE', 'limitations': [str(error)]}
 
 
@@ -127,18 +149,19 @@ def guard(source, name, output, module, output_name):
 def analyze_window(source, name, output, module, references=None):
     raw, side, file_quality = source.recording(name)
     result = {'name': name, 'fileQuality': file_quality}
-    input_name, inputs = source.inputs(name, raw.get('captureId') if raw else None)
-    result['inputPhase'] = input_name
-    legacy = source.json(name + '-summary.json', {})
     for kind, document in (('raw', raw), ('isl', side)):
         if document is not None:
             save(output / (name + '-' + kind + '.json'), document)
     if raw is None:
-        return result | {'valid': False, 'limitations': ['raw channel missing']}
+        if side is not None:
+            result['engine'] = attempt(lambda: engine_analysis.analyze(side))
+        return result | {'status': 'PARTIAL', 'channelsComplete': False, 'matchedComparisonEligible': False,
+                         'limitations': ['raw channel missing; recovered sidecar retained']}
     raw_pages = capture_file.pages(raw)
-    build = raw.get('environment', {}).get('producer', {}).get('buildId')
+    build = (raw.get('environment') or {}).get('producer', {}).get('buildId')
     raw_quality = attempt(lambda: evidence.raw.validate(raw_pages, raw['recording']['mode'], build))
-    compositor = evidence.streams(raw_pages, 'compositor')
+    compositor = [r['data'] for r in raw['records'] if isinstance(r, dict) and
+                  r.get('stream') == 'compositor' and isinstance(r.get('data'), dict)]
     result.update(rawQuality=raw_quality, statistics=attempt(lambda: evidence.raw.summarize(raw_pages)),
                   cadence=attempt(lambda: engine_analysis.cadence(compositor)))
     if side is not None:
@@ -146,7 +169,21 @@ def analyze_window(source, name, output, module, references=None):
         result.update(islQuality=attempt(lambda: evidence.sidecar(side_pages, raw_pages, build)),
                       engine=attempt(lambda: engine_analysis.analyze(side)),
                       qpcAssociations=attempt(lambda: evidence.correlate_qpc(raw_pages, side_pages)))
+    result['channelsComplete'] = raw_quality.get('complete', False) and result.get('islQuality', {}).get('complete', False) and file_quality['complete']
+    context = attempt(lambda: analyze_context(source, name, raw, side, compositor, result, output, module, references))
+    result['contextQuality'] = context
+    result['matchedComparisonEligible'] = result['channelsComplete'] and context.get('valid', False)
+    return result
+
+
+def analyze_context(source, name, raw, side, compositor, result, output, module, references):
+    """Optional receipts qualify comparisons without discarding independent timing channels."""
+    input_name, inputs = source.inputs(name, raw.get('captureId'))
+    result['inputPhase'] = input_name
+    legacy = source.json(name + '-summary.json', {})
     if inputs:
+        result.update(condition=inputs.get('condition'), before=inputs.get('before'), after=inputs.get('after'),
+                      contextRecovered=inputs.get('recoveredContext', False))
         references = references if references is not None else {}
         group = inputs['condition'].get('group', 'core')
         scene = attempt(lambda: evidence.scene_match(inputs['started']['condition'], inputs['rawAfter'], compositor, references.get(group)))
@@ -161,9 +198,9 @@ def analyze_window(source, name, output, module, references=None):
                       neuralRendering=attempt(lambda: evidence.nr_window(inputs['nrBefore'], inputs['nrAfter'], inputs['condition'].get('nrEnabled', False))),
                       sceneMatch=scene,
                       performanceWindow=guard(source, input_name, output, module, name), sceneTimePolicy=inputs['sceneTimePolicy'])
-        ready = inputs['clientReadyQpc']
+        ready = inputs.get('clientReadyQpc')
         admission = raw['boundaries']['applicationAdmissionStartQpc']
-        result['controllerOutsideAdmission'] = evidence.finite(admission) and admission > ready
+        result['controllerOutsideAdmission'] = evidence.finite(admission) and evidence.finite(ready) and admission > ready
         before, after = inputs['before'], inputs['after']
         result['settingsStable'] = all(before.get(k) == after.get(k) for k in ('pacing', 'nrRequested', 'effective', 'shadowBatch', 'isl')) and before.get('shadowCulling', {}).get('settings') == after.get('shadowCulling', {}).get('settings')
         result['requestedGatesObserved'] = side is not None and all(side['condition']['effective'].get(k) == v for k, v in inputs['condition']['gates'].items())
@@ -175,11 +212,9 @@ def analyze_window(source, name, output, module, references=None):
         result['settingsStable'] = legacy.get('settingsAndSceneStable', False)
         result['requestedGatesObserved'] = side is not None and all(side['condition'].get('effective', {}).get(k) == v for k, v in result.get('condition', {}).get('gates', {}).items())
         result['contextSource'] = 'retained legacy receipts; waveform and raw/side evidence recomputed'
-    result['channelsComplete'] = raw_quality.get('complete', False) and result.get('islQuality', {}).get('complete', False) and file_quality['complete']
-    result['matchedComparisonEligible'] = result['channelsComplete'] and result.get('settingsStable', False) and result.get('requestedGatesObserved', False) and result.get('controllerOutsideAdmission', False) and all(
+    eligible = result.get('settingsStable', False) and result.get('requestedGatesObserved', False) and result.get('controllerOutsideAdmission', False) and all(
         result.get(k, {}).get('valid', False) for k in ('sceneMatch', 'performanceWindow', 'neuralRendering', 'experimentApplied'))
-    # Record limitations separately: unmatched weather does not erase measured timing data.
-    return result
+    return {'valid': bool(eligible), 'limitations': [] if eligible else ['comparison receipts incomplete or unmatched; timing channels retained']}
 
 
 def main():

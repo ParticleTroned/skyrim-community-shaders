@@ -975,7 +975,12 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "TerrainBlending/TerrainBlending.hlsli"
 #	endif
 
-#	if defined(MESH_BLENDING) &&                                                                                       \
+#	if defined(MESH_BLENDING) && !defined(LOD) && !defined(LODLANDSCAPE) && !defined(LANDSCAPE) && \
+		defined(MULTI_INDEX) && defined(PROJECTED_UV) && defined(SPARKLE) &&                        \
+		!defined(BACK_LIGHTING) && !defined(DO_ALPHA_TEST)
+#		include "MeshBlending/MeshBlending.hlsli"
+#		define MESH_BLENDING_PROJECTED_SNOW_AVAILABLE
+#	elif defined(MESH_BLENDING) &&                                                                                     \
 		!defined(LOD) && !defined(LODLANDSCAPE) && !defined(LANDSCAPE) &&                                               \
 		!defined(SKIN) && !defined(SKINNED) && !defined(HAIR) && !defined(EYE) && !defined(TREE_ANIM) &&                \
 		!defined(FACEGEN) && !defined(FACEGEN_RGB_TINT) && !defined(PROJECTED_UV) && !defined(DEPTH_WRITE_DECALS) &&    \
@@ -2812,6 +2817,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float projectedMaterialWeight = 0;
 
+#	if defined(MESH_BLENDING_PROJECTED_SNOW_AVAILABLE)
+	float meshBlendingProjectedSnowCoverage = 1.0f;
+#	endif
+
 	float projWeight = 0;
 
 #	if defined(PROJECTED_UV)
@@ -2832,8 +2841,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif  // LODOBJECTSHD
 #		if defined(SPARKLE)
 
-	if (projWeight < 0)
-		discard;
+#			if defined(MESH_BLENDING_PROJECTED_SNOW_AVAILABLE)
+	// Multi-index projected snow normally has a binary projection discard. On
+	// accepted snow-overlay draws only, retain fragments in a derivative-sized
+	// edge band and pass fractional coverage to the final alpha.
+	[branch] if (SharedData::meshBlendingSettings.ProjectedSnowEdgeWidth > 0.0f && MeshBlending::ShouldApply())
+	{
+		meshBlendingProjectedSnowCoverage = MeshBlending::ComputeProjectedSnowCoverage(
+			projWeight,
+			fwidth(projWeight),
+			SharedData::meshBlendingSettings.ProjectedSnowEdgeWidth);
+		if (meshBlendingProjectedSnowCoverage <= 0.0f)
+			discard;
+	}
+	else
+#			endif
+		if (projWeight < 0)
+			discard;
 
 	rawBaseColor = Triplanar::SampleStochasticBias(TexColorSampler, SampColorSampler, projWorldPos, triWeights, ProjectedUVParams2.y, SharedData::MipBias, triNoise);
 	baseColor = float4(Color::Diffuse(rawBaseColor.rgb), rawBaseColor.a);
@@ -4339,6 +4363,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif  // ANISOTROPIC_ALPHA
 
 	psout.Diffuse.w = alpha;
+#	endif
+
+#	if defined(MESH_BLENDING_PROJECTED_SNOW_AVAILABLE)
+	psout.Diffuse.w *= meshBlendingProjectedSnowCoverage;
 #	endif
 
 #	if defined(MESH_BLENDING_AVAILABLE) && !defined(DEFERRED)

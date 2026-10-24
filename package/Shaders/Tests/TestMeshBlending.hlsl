@@ -1,4 +1,4 @@
-// HLSL unit tests for Mesh Blending's NIF depth-fade policy.
+// HLSL unit tests for Mesh Blending's NIF depth fade and projected-snow coverage.
 #define MESH_BLENDING_MATH_ONLY
 #include "/Shaders/MeshBlending/MeshBlending.hlsli"
 #include "/Test/STF/ShaderTestFramework.hlsli"
@@ -43,8 +43,19 @@
 	ASSERT(AreEqual, MeshBlending::ApplyBlendStrength(0.25f, 1.0f), 0.25f);
 }
 
-/// @tags mesh-blending, descriptor-isolation
-[numthreads(1, 1, 1)] void TestMeshBlendingDescriptorIsolation() {
+/// @tags mesh-blending, projected-snow
+[numthreads(1, 1, 1)] void TestMeshBlendingProjectedSnowCoverage() {
+	ASSERT(AreEqual, MeshBlending::ComputeProjectedSnowCoverage(-0.1f, 0.1f, 2.0f), 0.0f);
+	ASSERT(AreEqual, MeshBlending::ComputeProjectedSnowCoverage(0.0f, 0.1f, 2.0f), 0.5f);
+	ASSERT(AreEqual, MeshBlending::ComputeProjectedSnowCoverage(0.1f, 0.1f, 2.0f), 1.0f);
+	const float widerCoverage = MeshBlending::ComputeProjectedSnowCoverage(0.1f, 0.1f, 4.0f);
+	ASSERT(IsTrue, widerCoverage > 0.5f);
+	ASSERT(IsTrue, widerCoverage < 1.0f);
+}
+
+	/// @tags mesh-blending, descriptor-isolation
+	[numthreads(1, 1, 1)] void TestMeshBlendingDescriptorIsolation()
+{
 	ASSERT(AreEqual, MeshBlending::kEnableMask, 0x00800000u);
 	ASSERT(AreEqual, MeshBlending::kEnableMask & 0x007FFFFFu, 0u);
 	ASSERT(IsFalse, MeshBlending::ShouldApplyDescriptor(1u | (1u << 9), 1u, 2u));

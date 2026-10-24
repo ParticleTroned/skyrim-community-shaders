@@ -15,6 +15,15 @@ namespace MeshBlending
 	static const float kMinimumNegativeGapTolerance = 1.0e-4f;
 	static const float kInvalidDepthEpsilon = 1.0e-6f;
 
+	// Pure part of the projected-snow edge filter. edgeDerivative is fwidth of
+	// the projected material weight; keeping it explicit makes the policy
+	// testable and lets Lighting skip derivative work when the setting is off.
+	float ComputeProjectedSnowCoverage(float projectedWeight, float edgeDerivative, float edgeWidth)
+	{
+		const float halfWidth = max(0.5f * abs(edgeDerivative) * max(edgeWidth, 0.0f), kMinimumBlendWidth);
+		return smoothstep(-halfWidth, halfWidth, projectedWeight);
+	}
+
 	// Computes the opacity multiplier from the signed separation between the
 	// opaque receiver and transparent source. Negative separation means that the
 	// sampled depth is in front of the source, so clearly negative values fail

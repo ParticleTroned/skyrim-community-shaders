@@ -41,14 +41,14 @@ foreach(_mesh_scope_required IN ITEMS
     endif()
 endforeach()
 
-foreach(_mesh_scope_forbidden IN ITEMS
+foreach(_mesh_scope_required IN ITEMS
     "MESH_BLENDING_PROJECTED_SNOW_AVAILABLE"
-    "ComputeProjectedSnowCoverage"
-    "meshBlendingProjectedSnowCoverage"
-    "ProjectedSnowEdgeWidth"
+    "MeshBlending::ComputeProjectedSnowCoverage("
+    "SharedData::meshBlendingSettings.ProjectedSnowEdgeWidth"
+    "psout.Diffuse.w *= meshBlendingProjectedSnowCoverage"
 )
-    string(FIND "${_mesh_scope_lighting}${_mesh_scope_math}${_mesh_scope_tests}" "${_mesh_scope_forbidden}" _mesh_scope_position)
-    if(NOT _mesh_scope_position EQUAL -1)
-        message(FATAL_ERROR "Future projected-snow code is present in the NIF shader stage: ${_mesh_scope_forbidden}")
+    string(FIND "${_mesh_scope_lighting}" "${_mesh_scope_required}" _mesh_scope_position)
+    if(_mesh_scope_position EQUAL -1)
+        message(FATAL_ERROR "Projected-snow shader integration is missing: ${_mesh_scope_required}")
     endif()
 endforeach()

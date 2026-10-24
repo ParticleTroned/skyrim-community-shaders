@@ -501,10 +501,10 @@ namespace SharedData
 		float DepthBias;
 		float MaximumGap;
 
-		uint Padding0;
+		uint EnableLandscapeBlending;
 		float ProjectedSnowEdgeWidth;
-		float Padding2;
-		float Padding3;
+		float LandscapeBlendStrength;
+		float pad0;
 	};
 #	endif
 

@@ -89,6 +89,8 @@ namespace Permutation
 		static const int THLand5HasDisplacement = (1 << 5);
 		static const int THLandHasDisplacement = (1 << 9);
 		static const int TVMeshVariation = (1 << 10);
+		// Six two-bit Mesh Blending LAND material classes occupy bits 11-22.
+		static const uint MeshBlendingLandscapeClasses = 0x007FF800u;
 	}
 
 	cbuffer PerShader : register(b4)

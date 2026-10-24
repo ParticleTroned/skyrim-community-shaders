@@ -16,10 +16,11 @@ namespace CSX::MeshBlendingPolicy
 {
 	inline constexpr std::uint32_t EnableMask = 1u << 23;
 
-	/** Clear the Mesh-owned bit while preserving other shader descriptors. */
-	inline constexpr void ClearDrawDescriptor(std::uint32_t& shader) noexcept
+	/** Clear the Mesh shader flag and explicitly owned feature fields. */
+	inline constexpr void ClearDrawDescriptors(std::uint32_t& shader, std::uint32_t& feature, std::uint32_t featureMask = 0u) noexcept
 	{
 		shader &= ~EnableMask;
+		feature &= ~featureMask;
 	}
 
 	[[nodiscard]] constexpr char LowerAscii(char a_character) noexcept
@@ -447,6 +448,15 @@ namespace CSX::MeshBlendingPolicy
 	{
 		return ResolveLiveRoute(a_root, a_indices, a_expected,
 			std::forward<ResolveChild>(a_resolveChild), [](const Object*) { return true; });
+	}
+
+	[[nodiscard]] constexpr std::string_view TrimAsciiSpaces(std::string_view a_value) noexcept
+	{
+		const auto first = a_value.find_first_not_of(' ');
+		if (first == std::string_view::npos)
+			return {};
+		const auto lastNonSpace = a_value.find_last_not_of(' ');
+		return a_value.substr(first, lastNonSpace - first + 1);
 	}
 
 	struct CanonicalOverrideSelectors

@@ -436,11 +436,12 @@ constexpr bool TestDescriptorIsolation()
 	static_assert((EnableMask & 0x007FFFFFu) == 0u);
 	for (const auto other : { 0u, 1u << 9, 1u << 10, 0x007FFFFFu, 0xFF7FFFFFu }) {
 		std::uint32_t shader = other | EnableMask;
-		ClearDrawDescriptor(shader);
-		if (shader != other)
+		std::uint32_t feature = 0xFFFFFFFFu;
+		ClearDrawDescriptors(shader, feature);
+		if (shader != other || feature != 0xFFFFFFFFu)
 			return false;
-		ClearDrawDescriptor(shader);
-		if (shader != other)
+		ClearDrawDescriptors(shader, feature);
+		if (shader != other || feature != 0xFFFFFFFFu)
 			return false;
 	}
 	return true;

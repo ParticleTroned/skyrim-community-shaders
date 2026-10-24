@@ -1,5 +1,6 @@
 #pragma once
 
+#include "MeshBlendingLandscape.h"
 #include "MeshBlendingPolicy.h"
 
 #include "../Feature.h"
@@ -8,9 +9,12 @@
 #include <atomic>
 #include <bit>
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
+#include <shared_mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -18,7 +22,8 @@
 #include <vector>
 
 /**
- * Softens eligible static NIF overlays without adding a render pass.
+ * Softens selected intersections between static NIF shapes and rebalances
+ * compatible LAND/LTEX material weights without adding a render pass.
  */
 struct MeshBlending final : Feature
 {
@@ -48,6 +53,8 @@ struct MeshBlending final : Feature
 		float MaximumGap = 64.0f;
 		std::uint32_t ProjectedSnowEnabled = 1u;
 		float ProjectedSnowEdgeWidth = 2.0f;
+		std::uint32_t LandscapeLayerBlending = 1u;
+		float LandscapeBlendStrength = 1.0f;
 
 		std::uint32_t DetectionMode = static_cast<std::uint32_t>(MeshBlending::DetectionMode::kStrictAutomatic);
 		float MaximumDistance = 8192.0f;
@@ -63,10 +70,10 @@ struct MeshBlending final : Feature
 		float BlendWidth = 12.0f;
 		float DepthBias = 0.25f;
 		float MaximumGap = 64.0f;
-		std::uint32_t Padding0 = 0u;
+		std::uint32_t EnableLandscapeBlending = 1u;
 		float ProjectedSnowEdgeWidth = 2.0f;
-		float Padding2 = 0.0f;
-		float Padding3 = 0.0f;
+		float LandscapeBlendStrength = 1.0f;
+		float Padding1 = 0.0f;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	static_assert(sizeof(PerFrame) == 32);
@@ -111,6 +118,9 @@ struct MeshBlending final : Feature
 	 * This must run before the engine's original SetupGeometry call.
 	 */
 	void PrepareLightingDraw(RE::BSRenderPass* a_pass);
+
+	/** Captures the final vanilla/True PBR LTEX identities for four LAND quadrants. */
+	void CaptureLandscapeMaterials(RE::TESObjectLAND* a_land, bool a_materialSetupSucceeded);
 
 private:
 	using Classification = CSX::MeshBlendingPolicy::CachedClassification;
@@ -219,9 +229,27 @@ private:
 		std::uint64_t ruleAccepts = 0u;
 		std::uint64_t automaticAccepts = 0u;
 		std::uint64_t activeDraws = 0u;
+		std::uint64_t landscapeRegistryHits = 0u;
+		std::uint64_t landscapeRegistryMisses = 0u;
 		std::uint32_t currentFrame = 0u;
 		std::uint32_t currentFrameActive = 0u;
 		std::uint32_t lastFrameActive = 0u;
+	};
+
+	using LandscapeMaterialKind = CSX::MeshBlendingLandscapePolicy::MaterialKind;
+	using LandscapeMaterialClass = CSX::MeshBlendingLandscapePolicy::MaterialClass;
+	using LandscapeAssignment = CSX::MeshBlendingLandscapePolicy::LandscapeAssignment;
+	using SurfaceMaterialRule = CSX::MeshBlendingLandscapePolicy::SurfaceMaterialRule;
+	using BlendPairRule = CSX::MeshBlendingLandscapePolicy::BlendPairRule;
+	using CompiledLandscapeRules = CSX::MeshBlendingLandscapePolicy::CompiledPolicy;
+
+	struct LandscapeDiagnostic
+	{
+		std::string Kind;
+		std::string Form;
+		std::string EditorID;
+		std::string Diffuse;
+		std::string Material;
 	};
 
 	struct DiscoverySaveResult
@@ -231,6 +259,9 @@ private:
 		std::size_t alreadyAllowed = 0u;
 		std::size_t denied = 0u;
 		std::size_t capacityRejected = 0u;
+		std::size_t landscapeAdded = 0u;
+		std::size_t landscapeRefreshed = 0u;
+		std::size_t landscapeCapacityRejected = 0u;
 		std::string error;
 	};
 
@@ -239,6 +270,11 @@ private:
 		std::vector<OverrideRule> allowList;
 		std::vector<OverrideRule> detectedAllowList;
 		std::vector<OverrideRule> denyList;
+		std::vector<LandscapeAssignment> landscapeAssignments;
+		std::vector<SurfaceMaterialRule> surfaceMaterialRules;
+		std::vector<BlendPairRule> blendPairRules;
+		std::vector<LandscapeDiagnostic> discoveryDiagnostics;
+		bool blendPairsExplicit = false;
 		json document = json::object();
 		std::optional<std::string> sourceContents;
 	};
@@ -250,6 +286,7 @@ private:
 	static constexpr std::uint32_t kSourceCacheValidationFrames = 120u;
 	static constexpr std::size_t kMaximumTraversalObjects = 256u;
 	static constexpr std::size_t kMaximumRules = 1024u;
+	static constexpr std::size_t kMaximumLandscapeIdentities = 4096u;
 	static constexpr std::size_t kMaximumRuleLength = 512u;
 	static constexpr std::uint32_t kMaximumClassificationLogs = 64u;
 	static_assert(std::has_single_bit(kCacheSetCount));
@@ -259,6 +296,11 @@ private:
 	std::vector<OverrideRule> detectedAllowList;
 	std::vector<OverrideRule> denyList;
 	CompiledRules compiledRules;
+	std::vector<LandscapeAssignment> landscapeAssignments;
+	std::vector<SurfaceMaterialRule> surfaceMaterialRules;
+	std::vector<BlendPairRule> blendPairRules;
+	bool blendPairsExplicit = false;
+	MeshBlendingLandscape landscape;
 	json ruleFileDocument = json::object();
 	std::uint32_t policyGeneration = 1u;
 	std::uint32_t cachedEyeFrame = static_cast<std::uint32_t>(-1);
@@ -268,8 +310,12 @@ private:
 	std::atomic_bool discoveryCaptureEnabled = false;
 	mutable std::mutex discoveryMutex;
 	std::set<std::pair<std::string, std::string>> discoveredRuleKeys;
+	std::map<std::string, LandscapeDiagnostic, std::less<>> discoveredLandscapeIdentities;
+	std::vector<LandscapeDiagnostic> savedDiscoveryDiagnostics;
 	std::size_t discoveryDuplicateObservations = 0u;
 	std::size_t discoveryDropped = 0u;
+	std::size_t landscapeDiscoveryDuplicateObservations = 0u;
+	std::size_t landscapeDiscoveryDropped = 0u;
 	std::string discoveryStatus;
 	bool ruleFileLoadAttempted = false;
 	std::atomic_bool ruleFileMutationAllowed = true;
@@ -280,6 +326,7 @@ private:
 	bool IsOverlayPolicyEnabled() const;
 	void DrawMechanismToggles();
 	static CompiledRules CompileRules(const RuleFileState& a_state);
+	static std::shared_ptr<const CompiledLandscapeRules> CompileLandscapeRules(const RuleFileState& a_state);
 	void InvalidateClassificationCache();
 	void BeginDiagnosticsFrame(std::uint32_t a_frame);
 	/** Validates alpha overlays; each caller applies its narrower material/flag policy. */
@@ -323,11 +370,15 @@ private:
 	bool IsDiscoveryCaptureSaturated() const;
 	void SetDiscoveryCaptureEnabled(bool a_enabled);
 	void CaptureDiscoveredRule(std::string_view a_modelPath, std::string_view a_nodePath);
+	void CaptureDiscoveredLandscape(const MeshBlendingLandscape::Texture& a_texture, LandscapeMaterialKind a_kind);
+	static std::optional<LandscapeMaterialKind> ParseLandscapeMaterialKind(std::string_view a_kind);
+	static const char* CanonicalLandscapeMaterialKind(LandscapeMaterialKind a_kind);
+	static LandscapeMaterialClass GetLandscapeMaterialClass(LandscapeMaterialKind a_kind);
 	bool TryPrepareProjectedSnow(RE::BSRenderPass* a_pass);
 	void EnsureRuleFileLoaded();
 	bool LoadRuleFile();
 	bool ReadRuleFileState(RuleFileState& a_state, bool& a_notFound, std::string& a_error) const;
-	void ApplyRuleFileState(RuleFileState&& a_state, CompiledRules&& a_compiledRules);
+	void ApplyRuleFileState(RuleFileState&& a_state, CompiledRules&& a_compiledRules, std::shared_ptr<const CompiledLandscapeRules> a_landscapeRules);
 	bool WriteRuleFile(const RuleFileState& a_state, std::string& a_error) const;
 	DiscoverySaveResult SaveDiscoveredRules();
 	bool ClearSavedRules(std::string& a_error);

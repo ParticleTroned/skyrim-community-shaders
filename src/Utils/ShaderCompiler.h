@@ -35,6 +35,14 @@ namespace Util
 		const char* ProgramType,
 		const char* Program = "main",
 		ShaderCompileTiming* a_timing = nullptr);
+	/** Report compiler/object creation errors so optional paths can preserve allocation failures. */
+	ID3D11DeviceChild* CompileShader(
+		const wchar_t* FilePath,
+		const std::vector<std::pair<const char*, const char*>>& Defines,
+		const char* ProgramType,
+		const char* Program,
+		HRESULT& a_result,
+		ShaderCompileTiming* a_timing = nullptr);
 
 	/** Permit standalone retries without retaining failures from pre-reset attempts. */
 	void ClearShaderCompileFailures();

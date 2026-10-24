@@ -167,11 +167,19 @@ namespace SIE
 namespace
 {
 	bool injectSizedError = false;
+	bool injectAllocationFailure = false, injectInvalidBytecode = false;
 	unsigned compilerCalls = 0;
 	HRESULT CompileForTest(LPCWSTR path, const D3D_SHADER_MACRO* macros, ID3DInclude* include,
 		LPCSTR entry, LPCSTR target, UINT flags, UINT flags2, ID3DBlob** blob, ID3DBlob** errors)
 	{
 		++compilerCalls;
+		if (injectAllocationFailure)
+			return E_OUTOFMEMORY;
+		if (injectInvalidBytecode) {
+			assert(SUCCEEDED(D3DCreateBlob(4, blob)));
+			std::memset((*blob)->GetBufferPointer(), 0, 4);
+			return S_OK;
+		}
 		if (!injectSizedError)
 			return D3DCompileFromFile(path, macros, include, entry, target, flags, flags2, blob, errors);
 		constexpr std::string_view message = "unterminated-error";
@@ -428,8 +436,19 @@ int main()
 	sizedLogger->set_pattern("%v");
 	spdlog::set_default_logger(sizedLogger);
 	cache.enabled = false;
+	HRESULT reported = S_OK;
+	injectAllocationFailure = true;
+	assert(!Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0", "main", reported) && reported == E_OUTOFMEMORY);
+	injectAllocationFailure = false;
+	winrt::com_ptr<ID3D11DeviceChild> allocationRecovered;
+	allocationRecovered.attach(Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0", "main", reported));
+	assert(allocationRecovered && reported == S_OK);
+	injectInvalidBytecode = true;
+	assert(!Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0", "main", reported) && reported == E_INVALIDARG);
+	injectInvalidBytecode = false;
+	capturedLog.str("");
 	injectSizedError = true;
-	assert(!Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0"));
+	assert(!Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0", "main", reported) && reported == E_FAIL);
 	constexpr std::string_view expectedError = "Shader compilation failed:\n\nunterminated-error";
 	assert(capturedLog.str().starts_with(expectedError));
 	const auto ending = capturedLog.str().substr(expectedError.size());

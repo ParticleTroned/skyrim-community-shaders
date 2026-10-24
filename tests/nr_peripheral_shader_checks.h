@@ -1,4 +1,47 @@
 // Uses the production adapter and the texture fixtures in nr_model_resolution_shader_test.cpp.
+void CheckPeripheralResidual(ID3D11Device* device, ID3D11DeviceContext* context, NeuralRendering::ModelResolution& adapter,
+	const NeuralRendering::ModelResolution::Batch& batch, const std::array<NeuralRendering::RendererApplyArgs, 2>& args,
+	const std::array<Texture, 2>& outputs, std::span<const Pixel> colors, const std::vector<Pixel>& prepared)
+{
+	const auto& plan = args[0].peripheralCompression;
+	const Size source{ plan.source.width, plan.source.height }, model{ plan.model.width, plan.model.height };
+	for (unsigned condition : { 0u, 1u, 2u, 3u }) {
+		std::array<std::vector<Pixel>, 2> native{ prepared, prepared };
+		for (UINT eye = 0; eye < args.size(); ++eye) {
+			for (UINT i = 0; i < prepared.size(); ++i) {
+				auto& pixel = native[eye][i];
+				pixel[0] += condition == 0 ? 0.0f : condition == 1 ? 0.125f :
+				                                                     float(int((i * 7 + eye * 5) % 11) - 5) / 32.0f;
+				pixel[1] += condition == 0 ? 0.0f : condition == 1 ? -0.25f :
+				                                                     float(int((i / model[0] + eye) % 7) - 3) / 16.0f;
+				pixel[3] = 1;
+			}
+			if (condition == 3) {
+				native[eye][0][0] = std::numeric_limits<float>::quiet_NaN();
+				native[eye][(model[1] / 2) * model[0] + model[0] / 2][1] = std::numeric_limits<float>::infinity();
+			}
+			context->UpdateSubresource(batch.targets[eye].output.resource.Get(), 0, nullptr, native[eye].data(), model[0] * sizeof(Pixel), 0);
+		}
+		HRESULT result = S_OK;
+		Require(adapter.Reconstruct(args, batch, result), "Compressed residual reconstruction failed");
+		adapter.Commit(args, batch);
+		for (UINT eye = 0; eye < args.size(); ++eye) {
+			const auto pixels = outputs[eye].Read<Pixel>(device, context);
+			for (UINT y = 0; y < source[1]; ++y)
+				for (UINT x = 0; x < source[0]; ++x) {
+					const auto i = y * source[0] + x;
+					const double px = plan.mapping.Forward((float(x) + 0.5f) / source[0], 0) * model[0] - 0.5f;
+					const double py = plan.mapping.Forward((float(y) + 0.5f) / source[1], 1) * model[1] - 0.5f;
+					const auto residual = ReferenceResidual(prepared, native[eye], model, { { 0, 0 }, model }, px, py, args[eye].reconstructionFilter);
+					for (UINT channel = 0; channel < 3; ++channel)
+						Near(pixels[i][channel], colors[i][channel] + (residual ? float((*residual)[channel]) : 0.0f),
+							"Compressed residual lost spatial phase, eye isolation or finite fallback");
+					Require(pixels[i][3] == colors[i][3], "Compressed residual changed source alpha");
+				}
+		}
+	}
+}
+
 void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, bool mixedGuides)
 {
 	using namespace NeuralRendering;
@@ -148,30 +191,22 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 					Near(sampledMotion[y * grid[0] + x][axis], plan.mapping.Forward(anchor + velocity[axis], axis) - plan.mapping.Forward(anchor, axis), "Peripheral endpoint motion differs");
 				}
 			}
-		for (bool residual : { false, true }) {
-			for (UINT eye = 0; eye < args.size(); ++eye) {
-				auto native = prepared;
-				for (auto& pixel : native) {
-					pixel[0] += residual ? 0.125f : 0.0f;
-					pixel[1] -= residual ? 0.25f : 0.0f;
-					pixel[3] = 1;
-				}
-				context->UpdateSubresource(batch.targets[eye].output.resource.Get(), 0, nullptr, native.data(), model[0] * sizeof(Pixel), 0);
-			}
-			Require(adapter.Reconstruct(args, batch, result), "Compressed residual reconstruction failed");
-			stateRestored();
-			adapter.Commit(args, batch);
-			for (const auto& output : outputs) {
-				const auto pixels = output.Read<Pixel>(device, context);
-				for (UINT i = 0; i < pixels.size(); ++i)
-					for (UINT c = 0; c < 4; ++c)
-						Near(pixels[i][c], colors[i][c] + (residual ? c == 0 ? 0.125f : c == 1 ? -0.25f :
-						                                                                         0 :
-																	  0),
-							"Compressed residual changed detail, HDR or alpha");
-			}
-		}
+		CheckPeripheralResidual(device, context, adapter, batch, args, outputs, colors, prepared);
+		stateRestored();
 		if (percent == 100) {
+			for (unsigned failure : { 0u, 1u, 2u, 3u }) {
+				adapter.InvalidateShaders();
+				AdapterCompiler::peripheralAllocationFailureAttempt = AdapterCompiler::peripheralAttempts + 1u + failure % 2u;
+				AdapterCompiler::throwPeripheralAllocationFailure = failure >= 2;
+				Require(!adapter.PreparePeripheralCompression(args, false, result) && result == E_OUTOFMEMORY,
+					"Shader allocation failure was concealed by an ordinary fallback");
+				Require(!args[0].peripheralCompression.Active() && !args[1].peripheralCompression.Active() &&
+							!args[0].peripheralShaders.prepare && !args[1].peripheralShaders.prepare,
+					"Failed shader allocation published a partial pair plan");
+				AdapterCompiler::peripheralAllocationFailureAttempt = 0;
+				Require(adapter.PreparePeripheralCompression(args, false, result) && args[0].peripheralCompression.Active(),
+					"Recovered allocation failure permanently disabled compression");
+			}
 			adapter.InvalidateShaders();
 			AdapterCompiler::failPeripheral = true;
 			Require(adapter.PreparePeripheralCompression(args, false, result) && args[0].peripheralCompression.reason == PeripheralCompressionReason::ShaderUnavailable,

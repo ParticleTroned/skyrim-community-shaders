@@ -714,7 +714,9 @@ namespace NeuralRendering
 				std::vector<std::pair<const char*, const char*>> defines{ { "NR_PERIPHERAL_COMPRESSION", "1" } };
 				if (!peripheralPrepare_) {
 					peripheralPrepare_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
-						L"Data/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl", defines, "cs_5_0", "main")));
+						L"Data/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl", defines, "cs_5_0", "main", result)));
+					if (!peripheralPrepare_ && result == E_OUTOFMEMORY)
+						return false;
 					if (peripheralPrepare_)
 						Util::SetResourceName(peripheralPrepare_.Get(), "NeuralRendering::PeripheralPrepare");
 				}
@@ -722,11 +724,16 @@ namespace NeuralRendering
 					if (selected)
 						defines.emplace_back("MODEL_OUTPUT_SELECTION", "1");
 					reconstruction.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
-						L"Data/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", defines, "cs_5_0", "main")));
+						L"Data/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", defines, "cs_5_0", "main", result)));
+					if (!reconstruction && result == E_OUTOFMEMORY)
+						return false;
 					if (reconstruction)
 						Util::SetResourceName(reconstruction.Get(), "NeuralRendering::PeripheralReconstruct%u", index);
 				}
 				peripheralShaderFailed_[index] = !peripheralPrepare_ || !reconstruction;
+			} catch (const std::bad_alloc&) {
+				result = E_OUTOFMEMORY;
+				return false;
 			} catch (const std::exception&) {
 				peripheralShaderFailed_[index] = true;
 			}

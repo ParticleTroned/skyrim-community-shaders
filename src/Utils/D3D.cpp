@@ -255,6 +255,19 @@ namespace Util
 		const char* Program,
 		ShaderCompileTiming* a_timing)
 	{
+		HRESULT result;
+		return CompileShader(FilePath, Defines, ProgramType, Program, result, a_timing);
+	}
+
+	ID3D11DeviceChild* CompileShader(
+		const wchar_t* FilePath,
+		const std::vector<std::pair<const char*, const char*>>& Defines,
+		const char* ProgramType,
+		const char* Program,
+		HRESULT& a_result,
+		ShaderCompileTiming* a_timing)
+	{
+		a_result = E_INVALIDARG;
 		const auto queryQpc = []() noexcept {
 			LARGE_INTEGER value{};
 			return QueryPerformanceCounter(&value) && value.QuadPart > 0 ?
@@ -275,6 +288,7 @@ namespace Util
 		if (!FilePath || !*FilePath || !ProgramType || !Program || !*Program)
 			return nullptr;
 		auto device = globals::d3d::device;
+		a_result = E_FAIL;
 		if (!device || !globals::state || !globals::shaderCache)
 			return nullptr;
 		const bool developerMode = globals::state->IsDeveloperMode();
@@ -316,8 +330,10 @@ namespace Util
 			macros.push_back({ "COMPUTESHADER", "" });
 		else if (!_stricmp(ProgramType, "cs_4_0"))
 			macros.push_back({ "COMPUTESHADER", "" });
-		else
+		else {
+			a_result = E_INVALIDARG;
 			return nullptr;
+		}
 
 		// Add null terminating entry
 		macros.push_back({ "WINPC", "" });
@@ -354,6 +370,7 @@ namespace Util
 		};
 
 		auto compile = [&]() -> winrt::com_ptr<ID3DBlob> {
+			a_result = E_FAIL;
 			winrt::com_ptr<ID3DBlob> shaderBlob;
 			winrt::com_ptr<ID3DBlob> shaderErrors;
 
@@ -364,7 +381,7 @@ namespace Util
 			}
 			logger::debug("Compiling {} with {}", str, DefinesToString(macros));
 			const uint64_t compilationBegin = a_timing ? queryQpc() : 0;
-			const HRESULT compilationResult = D3DCompileFromFile(
+			const HRESULT compilationResult = a_result = D3DCompileFromFile(
 				FilePath,
 				macros.data(),
 				&include,
@@ -381,7 +398,8 @@ namespace Util
 					queryQpc());
 			}
 			if (FAILED(compilationResult)) {
-				recordFailure();
+				if (compilationResult != E_OUTOFMEMORY)
+					recordFailure();
 				auto errorText = shaderErrors ? std::string_view(static_cast<const char*>(shaderErrors->GetBufferPointer()), shaderErrors->GetBufferSize()) : std::string_view("Unknown error");
 				if (!errorText.empty() && errorText.back() == '\0')
 					errorText.remove_suffix(1);
@@ -445,17 +463,22 @@ namespace Util
 					objectCreationBegin,
 					queryQpc());
 			}
-			return SUCCEEDED(hr) && bool(regShader);
+			a_result = FAILED(hr) ? hr : regShader ? S_OK :
+			                                         E_FAIL;
+			return SUCCEEDED(a_result);
 		};
 
 		const StandaloneShaderRequest request{ FilePath, macros, ProgramType, Program, flags, developerMode };
 		if (!globals::shaderCache->CompileStandaloneShaderCached(request, compile, createShader)) {
 			if (FAILED(hr))
 				logger::error("Failed to create shader object for {}:{} (HRESULT 0x{:08X})", str, Program, static_cast<uint32_t>(hr));
+			if (SUCCEEDED(a_result))
+				a_result = E_FAIL;
 			return nullptr;
 		}
 
 		nameCompiledShader(regShader.get());
+		a_result = S_OK;
 		return regShader.detach();
 	}
 

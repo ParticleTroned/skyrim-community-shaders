@@ -18,6 +18,7 @@
 #include <limits>
 #include <map>
 #include <new>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -45,15 +46,31 @@ namespace AdapterCompiler
 	unsigned guidedAttempts = 0;
 	bool failPeripheral = false;
 	unsigned peripheralAttempts = 0;
+	unsigned peripheralAllocationFailureAttempt = 0;
+	bool throwPeripheralAllocationFailure = false;
 }
 
 // Substitute only engine compilation/profiling; the adapter and GPU work are production code.
 ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
 	const std::vector<std::pair<const char*, const char*>>& options, const char* target, const char* entry, ShaderCompileTiming*)
 {
+	HRESULT result;
+	return CompileShader(path, options, target, entry, result);
+}
+
+ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
+	const std::vector<std::pair<const char*, const char*>>& options, const char* target, const char* entry, HRESULT& result, ShaderCompileTiming*)
+{
+	result = E_FAIL;
 	++AdapterCompiler::calls;
 	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "NR_PERIPHERAL_COMPRESSION"; })) {
 		++AdapterCompiler::peripheralAttempts;
+		if (AdapterCompiler::peripheralAttempts == AdapterCompiler::peripheralAllocationFailureAttempt) {
+			if (AdapterCompiler::throwPeripheralAllocationFailure)
+				throw std::bad_alloc{};
+			result = E_OUTOFMEMORY;
+			return nullptr;
+		}
 		if (AdapterCompiler::failPeripheral)
 			return nullptr;
 	}
@@ -88,14 +105,15 @@ ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
 	auto& code = bytecode[{ shaderPath, target, entry, std::move(key) }];
 	if (!code) {
 		Microsoft::WRL::ComPtr<ID3DBlob> errors;
-		const auto result = D3DCompileFromFile(shaderPath.c_str(), defines.data(), &includes,
+		const auto compilationResult = D3DCompileFromFile(shaderPath.c_str(), defines.data(), &includes,
 			entry, target, D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS, 0, &code, &errors);
 		if (errors)
 			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
-		D3D11ShaderTest::Check(result);
+		D3D11ShaderTest::Check(compilationResult);
 	}
 	ID3D11ComputeShader* shader = nullptr;
 	D3D11ShaderTest::Check(AdapterCompiler::device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &shader));
+	result = S_OK;
 	return shader;
 }
 ScopedGpuPass::ScopedGpuPass(std::string_view, const Util::PassTimingHandle&, bool) {}
@@ -444,6 +462,43 @@ namespace
 			}
 		}
 	}
+	std::optional<std::array<double, 3>> ReferenceResidual(std::span<const Pixel> baseline, std::span<const Pixel> neural,
+		Size model, Region bounds, double px, double py, NeuralRendering::ReconstructionFilter filter)
+	{
+		const bool advanced = filter == NeuralRendering::ReconstructionFilter::Lanczos3;
+		const auto kernel = [&](double distance) {
+			const auto x = std::abs(distance);
+			if (!advanced)
+				return std::max(0.0, 1.0 - x);
+			if (x < 1e-10)
+				return 1.0;
+			if (x >= 3.0)
+				return 0.0;
+			const double angle = 3.14159265358979323846 * x;
+			return 3.0 * std::sin(angle) * std::sin(angle / 3.0) / (angle * angle);
+		};
+		std::array<double, 3> residual{};
+		double normalization = 0;
+		const int margin = advanced ? 2 : 0;
+		for (int sy = int(std::floor(py)) - margin; sy <= int(std::floor(py)) + margin + 1; ++sy)
+			for (int sx = int(std::floor(px)) - margin; sx <= int(std::floor(px)) + margin + 1; ++sx) {
+				const auto weight = kernel(px - sx) * kernel(py - sy);
+				const auto sampleX = std::clamp(sx, int(bounds.offset[0]), int(bounds.offset[0] + bounds.size[0] - 1));
+				const auto sampleY = std::clamp(sy, int(bounds.offset[1]), int(bounds.offset[1] + bounds.size[1] - 1));
+				const auto sampleIndex = sampleY * model[0] + sampleX;
+				for (unsigned channel = 0; channel < 3; ++channel) {
+					const float change = neural[sampleIndex][channel] - baseline[sampleIndex][channel];
+					if (!std::isfinite(change))
+						return std::nullopt;
+					residual[channel] += weight * change;
+				}
+				normalization += weight;
+			}
+		for (auto& channel : residual)
+			channel /= normalization;
+		return residual;
+	}
+
 	void CheckReconstructionKernel(ID3D11Device* device, ID3D11DeviceContext* context, Shader& shader)
 	{
 		constexpr Size source{ 19, 13 }, model{ 10, 7 };
@@ -471,17 +526,6 @@ namespace
 		const std::array outputs{ result.uav.Get() };
 		Dispatch(context, shader, constants, sourceRegion.size, inputs, outputs);
 		const auto pixels = result.Read<Pixel>(device, context);
-		const auto kernel = [](double distance) {
-			const auto x = std::abs(distance);
-			if (AdapterCompiler::guided || AdapterCompiler::filter == NeuralRendering::ReconstructionFilter::Bilinear)
-				return std::max(0.0, 1.0 - x);
-			if (x < 1e-10)
-				return 1.0;
-			if (x >= 3.0)
-				return 0.0;
-			const double angle = 3.14159265358979323846 * x;
-			return 3.0 * std::sin(angle) * std::sin(angle / 3.0) / (angle * angle);
-		};
 		for (UINT y = 0; y < source[1]; ++y)
 			for (UINT x = 0; x < source[0]; ++x) {
 				const auto i = y * source[0] + x;
@@ -490,20 +534,11 @@ namespace
 					continue;
 				}
 				const double px = (x + 0.5) * model[0] / source[0] - 0.5, py = (y + 0.5) * model[1] / source[1] - 0.5;
-				std::array<double, 3> residual{};
-				double normalization = 0;
-				for (int sy = int(std::floor(py)) - 2; sy <= int(std::floor(py)) + 3; ++sy)
-					for (int sx = int(std::floor(px)) - 2; sx <= int(std::floor(px)) + 3; ++sx) {
-						const auto weight = kernel(px - sx) * kernel(py - sy);
-						const auto sampleX = std::clamp(sx, int(modelRegion.offset[0]), int(modelRegion.offset[0] + modelRegion.size[0] - 1));
-						const auto sampleY = std::clamp(sy, int(modelRegion.offset[1]), int(modelRegion.offset[1] + modelRegion.size[1] - 1));
-						const auto sampleIndex = sampleY * model[0] + sampleX;
-						for (unsigned channel = 0; channel < 3; ++channel)
-							residual[channel] += weight * (neural[sampleIndex][channel] - baseline[sampleIndex][channel]);
-						normalization += weight;
-					}
+				const auto residual = ReferenceResidual(baseline, neural, model, modelRegion, px, py,
+					AdapterCompiler::guided ? NeuralRendering::ReconstructionFilter::Bilinear : AdapterCompiler::filter);
+				Require(residual.has_value(), "Finite residual fixture produced invalid reference");
 				for (unsigned channel = 0; channel < 3; ++channel)
-					Near(pixels[i][channel], colors[i][channel] + float(residual[channel] / normalization), "Residual kernel disagrees with the double-precision reference or clamps HDR");
+					Near(pixels[i][channel], colors[i][channel] + float((*residual)[channel]), "Residual kernel disagrees with the double-precision reference or clamps HDR");
 				Require(pixels[i][3] == colors[i][3], "Residual kernel changed full-resolution alpha");
 			}
 		Texture depth(device, source, DXGI_FORMAT_R32_FLOAT, std::vector(colors.size(), 0.5f));

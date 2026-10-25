@@ -1,3 +1,16 @@
+add_controller_test(neural_combat_pause_test NeuralCombatPause tests/neural_combat_pause_test.cpp)
+set(_neural_combat_pause_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/neural-combat-pause")
+add_custom_command(
+    OUTPUT "${_neural_combat_pause_dir}/neural_combat_pause_under_test.h"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_combat_pause_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_combat_pause.cmake"
+    DEPENDS src/Features/Upscaling.cpp tests/extract_neural_combat_pause.cmake
+        tests/extract_source_region.cmake
+    VERBATIM)
+target_sources(neural_combat_pause_test PRIVATE "${_neural_combat_pause_dir}/neural_combat_pause_under_test.h")
+target_include_directories(neural_combat_pause_test PRIVATE "${_neural_combat_pause_dir}")
+
 add_controller_test(nr_model_resolution_policy_test NRModelResolutionPolicy tests/nr_model_resolution_policy_test.cpp)
 add_controller_test(nr_peripheral_compression_policy_test NRPeripheralCompressionPolicy tests/nr_peripheral_compression_policy_test.cpp)
 add_controller_test(nr_peripheral_compression_policy_bridge_test NRPeripheralCompressionPolicyBridge tests/nr_peripheral_compression_policy_test.cpp)

@@ -159,6 +159,7 @@
       "neuralRenderingReconstructionFilter": 0,
       "neuralRenderingGuidedReconstruction": true,
       "neuralRenderingPeripheralCompressionPercent": 0,
+      "neuralRenderingPauseInCombat": false,
       "neuralRenderingEnabled": false,
       "neuralRenderingFovOnly": false,
       "neuralRenderingRenderscaleFov": false,

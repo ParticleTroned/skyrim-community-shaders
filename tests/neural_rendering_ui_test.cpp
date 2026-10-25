@@ -1,6 +1,7 @@
 #include "Features/FoveatedCommon.h"
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
+#include "Features/Upscaling/NeuralRendering/CombatPausePolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryConservationPolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryRecoveryPolicy.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
@@ -103,6 +104,7 @@ namespace globals
 				unsigned neuralRenderingReconstructionFilter = 0;
 				bool neuralRenderingGuidedReconstruction = true;
 				unsigned neuralRenderingPeripheralCompressionPercent = 0;
+				bool neuralRenderingPauseInCombat = false;
 				bool neuralRenderingPressureResolutionEnabled = true;
 				bool neuralRenderingPrewarmEnabled = true;
 				float neuralRenderingSingleSubrectScale = 1.0f;
@@ -174,6 +176,8 @@ namespace globals
 			void DrawSelectionControls();
 			void DrawNeuralRenderingEnableControl();
 			void DrawNeuralRenderingMasterControl(bool a_showDiagnostics);
+			NeuralRendering::CombatPauseSnapshot combatPauseSnapshot;
+			auto GetNeuralCombatPauseSnapshot() const { return combatPauseSnapshot; }
 			bool ToggleNeuralRendering(std::string* a_error = nullptr);
 			void DrawNeuralRenderingCropControl(bool);
 			bool acceptConfiguration = true;
@@ -657,6 +661,10 @@ int main()
 		ImGui::Clear("Improve low-resolution NR");
 		DrawNeuralModelResolutionSettings(settings);
 		require(settings.neuralRenderingGuidedReconstruction, "Guided reconstruction could not be re-enabled");
+		require(!settings.neuralRenderingPauseInCombat, "Combat pausing must default off");
+		ImGui::Clear("Pause NR during combat");
+		DrawNeuralModelResolutionSettings(settings);
+		require(settings.neuralRenderingPauseInCombat && settings.neuralRenderingModelResolutionPercent == 100, "Combat control must retain NR resolution");
 		require(!settings.neuralRenderingPeripheralCompressionPercent, "Peripheral compression must default off");
 		for (int percent : { 20, 100, 0 }) {
 			ImGui::Clear("Peripheral compression");
@@ -2197,4 +2205,15 @@ int main()
 		"Bindings can disable quarantined NR");
 	require(upscaling.settings.neuralRenderingMode == 2 && globals::menuInstance.dirtyChecks == dirtyChecks + 2,
 		"Bindings retain the chosen route and mark successful edits dirty");
+	upscaling.settings.neuralRenderingEnabled = true;
+	upscaling.settings.neuralRenderingPauseInCombat = true;
+	upscaling.combatPauseSnapshot.phase = NeuralRendering::CombatPausePhase::Cooldown;
+	upscaling.combatPauseSnapshot.remainingMs = 1500;
+	renderer.snapshot = {};
+	renderer.snapshot.failureLatched = true;
+	drawMaster();
+	require(ImGui::Seen("NR paused after an error. Use Reset Neural Rendering Runtime below to retry. Settings are kept.") &&
+				ImGui::Seen("Combat resume delay: %.1f seconds of active gameplay remaining.") &&
+				!ImGui::Seen("NR resumes in %.1f seconds without combat."),
+		"Combat cooldown must not promise recovery while a runtime error still blocks NR");
 }

@@ -101,9 +101,8 @@ namespace
 	{
 		if (std::none_of(gBlockRawTriggerUntilRelease.begin(), gBlockRawTriggerUntilRelease.end(), [](bool blocked) { return blocked; }))
 			return;
-		auto* system = RE::BSOpenVR::GetIVRSystem();
 		auto* compositor = RE::BSOpenVR::GetIVRCompositor();
-		if (!system || !compositor)
+		if (!compositor)
 			return;
 		for (std::size_t slot = 0; slot < gBlockRawTriggerUntilRelease.size(); ++slot) {
 			if (!gBlockRawTriggerUntilRelease[slot])
@@ -112,10 +111,10 @@ namespace
 			const auto index = Util::GetControllerIndexForDevice(controller, a_vr.lastKnownLeftHandedMode);
 			vr::TrackedDevicePose_t pose{};
 			vr::VRControllerState_t state{};
-			if (index == vr::k_unTrackedDeviceIndexInvalid ||
+			if (index >= vr::k_unMaxTrackedDeviceCount ||
 				compositor->GetLastPoseForTrackedDeviceIndex(index, &pose, nullptr) != vr::VRCompositorError_None ||
-				!pose.bPoseIsValid || !pose.bDeviceIsConnected || !system->GetControllerState(index, &state, sizeof(state)) ||
-				!std::isfinite(state.rAxis[1].x) || state.rAxis[1].x >= 0.3f ||
+				!pose.bPoseIsValid || !pose.bDeviceIsConnected || !Util::TryGetRuntimeControllerState(index, state) ||
+				!std::isfinite(state.rAxis[1].x) || state.rAxis[1].x < 0.0f || state.rAxis[1].x >= 0.3f ||
 				(state.ulButtonPressed & vr::ButtonMaskFromId(vr::k_EButton_SteamVR_Trigger)) != 0)
 				continue;
 			gBlockRawTriggerUntilRelease[slot] = false;
@@ -199,10 +198,9 @@ namespace
 
 	void RefreshMenuThumbstickInput(VR& a_vr)
 	{
-		auto* system = RE::BSOpenVR::GetIVRSystem();
 		std::array<vr::TrackedDevicePose_t, vr::k_unMaxTrackedDeviceCount> poses{};
-		const bool havePoses = system && Util::GetDeviceToAbsoluteTrackingPoseCompatible(
-											 vr::TrackingUniverseStanding, 0, poses.data(), static_cast<uint32_t>(poses.size()));
+		const bool havePoses = Util::GetDeviceToAbsoluteTrackingPoseCompatible(
+			vr::TrackingUniverseStanding, 0, poses.data(), static_cast<uint32_t>(poses.size()));
 		const bool leftHanded = RE::BSOpenVRControllerDevice::IsLeftHandedMode();
 		for (const auto hand : { ControllerDevice::Primary, ControllerDevice::Secondary }) {
 			auto& controller = hand == ControllerDevice::Primary ? a_vr.primaryControllerState : a_vr.secondaryControllerState;
@@ -211,7 +209,7 @@ namespace
 			const auto index = havePoses ? Util::GetControllerIndexForDevice(hand, leftHanded) : vr::k_unTrackedDeviceIndexInvalid;
 			vr::VRControllerState_t state{};
 			if (index < poses.size() && poses[index].bPoseIsValid && poses[index].bDeviceIsConnected &&
-				system->GetControllerState(index, &state, sizeof(state))) {
+				Util::TryGetRuntimeControllerState(index, state)) {
 				// Skyrim's thumbstick/trackpad is OpenVR axis 0; queued events may omit its neutral state.
 				const auto& axis = state.rAxis[0];
 				if (std::isfinite(axis.x) && std::isfinite(axis.y) && std::abs(axis.x) <= 1.0f && std::abs(axis.y) <= 1.0f)

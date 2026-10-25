@@ -218,7 +218,7 @@ namespace
 			return false;
 
 		vr::VRControllerState_t controllerState{};
-		if (!system->GetControllerState(a_controllerIndex, &controllerState, sizeof(controllerState)))
+		if (!Util::TryGetRuntimeControllerState(a_controllerIndex, controllerState))
 			return false;
 
 		std::vector<std::string> renderModelCandidates;

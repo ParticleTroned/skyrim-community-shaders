@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -20,6 +22,13 @@ static void Require(bool condition, const char* message)
 
 namespace vr
 {
+	enum EVRInitError
+	{
+		VRInitError_None,
+		VRInitError_Unknown
+	};
+	constexpr auto IVRSystem_Version = "IVRSystem_019";
+	void* VR_GetGenericInterface(const char*, EVRInitError*);
 	using TrackedDeviceIndex_t = uint32_t;
 	constexpr auto k_unTrackedDeviceIndexInvalid = ~TrackedDeviceIndex_t{};
 	constexpr uint32_t k_unMaxTrackedDeviceCount = 4;
@@ -27,12 +36,20 @@ namespace vr
 	{
 		TrackingUniverseStanding
 	};
+	enum EVRCompositorError
+	{
+		VRCompositorError_None,
+		VRCompositorError_RequestFailed
+	};
+	constexpr uint32_t k_EButton_SteamVR_Trigger = 33;
+	constexpr uint64_t ButtonMaskFromId(uint32_t button) { return uint64_t{ 1 } << button; }
 	struct TrackedDevicePose_t
 	{
 		bool bPoseIsValid = true, bDeviceIsConnected = true;
 	};
 	struct VRControllerState_t
 	{
+		uint64_t ulButtonPressed = 0;
 		std::array<ImVec2, 5> rAxis{};
 	};
 }
@@ -47,28 +64,81 @@ namespace Runtime
 {
 	struct System
 	{
+		uint32_t reads = 0;
 		std::array<vr::VRControllerState_t, vr::k_unMaxTrackedDeviceCount> states{};
 		std::array<bool, vr::k_unMaxTrackedDeviceCount> readable{ true, true, true, true };
 		bool GetControllerState(vr::TrackedDeviceIndex_t index, vr::VRControllerState_t* out, uint32_t size)
 		{
 			Require(index < states.size() && size == sizeof(*out), "controller reads must use valid indices and state size");
+			++reads;
 			*out = states[index];
 			return readable[index];
 		}
 	} system;
 	bool available = true, posesAvailable = true, leftHanded = false;
+	bool isVR = true, exportAvailable = true, interfaceAvailable = true, interfaceError = false;
+	bool compositorAvailable = true;
 	std::array<vr::TrackedDevicePose_t, vr::k_unMaxTrackedDeviceCount> poses{};
+	struct Compositor
+	{
+		uint32_t reads = 0;
+		vr::EVRCompositorError GetLastPoseForTrackedDeviceIndex(vr::TrackedDeviceIndex_t index, vr::TrackedDevicePose_t* out, std::nullptr_t)
+		{
+			Require(index < poses.size(), "invalid controller indices must not reach the compositor");
+			++reads;
+			*out = poses[index];
+			return posesAvailable ? vr::VRCompositorError_None : vr::VRCompositorError_RequestFailed;
+		}
+	} compositor;
 	std::array<vr::TrackedDeviceIndex_t, 2> indices{ 2, 3 };
 	void Reset(bool handedness)
 	{
 		system = {};
+		compositor = {};
 		available = posesAvailable = true;
+		compositorAvailable = true;
+		isVR = exportAvailable = interfaceAvailable = true;
+		interfaceError = false;
 		leftHanded = handedness;
 		poses = {};
 		indices = { 2, 3 };
 	}
 	size_t PhysicalHand(size_t role) { return role ^ static_cast<size_t>(leftHanded); }
 	ImVec2& Stick(size_t role) { return system.states[indices[PhysicalHand(role)]].rAxis[0]; }
+	void* GetGenericInterface(const char* version, vr::EVRInitError* error)
+	{
+		Require(std::strcmp(version, vr::IVRSystem_Version) == 0, "runtime reads must request the compiled OpenVR ABI");
+		*error = interfaceError ? vr::VRInitError_Unknown : vr::VRInitError_None;
+		return interfaceAvailable ? &system : nullptr;
+	}
+}
+
+namespace vr
+{
+	using IVRSystem = Runtime::System;
+}
+
+namespace REL
+{
+	struct Module
+	{
+		static bool IsVR() { return Runtime::isVR; }
+	};
+}
+
+namespace REX::W32
+{
+	Runtime::System* GetModuleHandleA(const char* name)
+	{
+		Require(std::strcmp(name, "openvr_api.dll") == 0, "passive reads must resolve the loaded OpenVR runtime");
+		return Runtime::available ? &Runtime::system : nullptr;
+	}
+
+	auto GetProcAddress(Runtime::System*, const char* name) -> decltype(&Runtime::GetGenericInterface)
+	{
+		Require(std::strcmp(name, "VR_GetGenericInterface") == 0, "passive reads must use the runtime export");
+		return Runtime::exportAvailable ? Runtime::GetGenericInterface : nullptr;
+	}
 }
 
 namespace RE
@@ -86,7 +156,11 @@ namespace RE
 	};
 	struct BSOpenVR
 	{
-		static Runtime::System* GetIVRSystem() { return Runtime::available ? &Runtime::system : nullptr; }
+		static Runtime::Compositor* GetIVRCompositor() { return Runtime::compositorAvailable ? &Runtime::compositor : nullptr; }
+		static Runtime::System* GetIVRSystem()
+		{
+			throw std::runtime_error("render-thread controller reads must not dispatch the game's input hooks");
+		}
 	};
 	struct VRControllerState
 	{
@@ -102,6 +176,7 @@ namespace RE
 
 namespace Util
 {
+#include "ui_vr_runtime_state.h"
 	vr::TrackedDeviceIndex_t GetControllerIndexForDevice(ControllerDevice role, bool leftHanded)
 	{
 		return Runtime::indices[static_cast<size_t>(role) ^ static_cast<size_t>(leftHanded)];
@@ -143,6 +218,7 @@ struct VR
 	} settings;
 	std::vector<VRControllerEventLog> vrControllerEventLog;
 	RE::VRControllerState primaryControllerState, secondaryControllerState;
+	bool lastKnownLeftHandedMode = false;
 	bool customVRCursorVisible = false;
 	ImVec2 customVRCursorPos{};
 	void ReleaseOCUPointerState() {}
@@ -167,6 +243,7 @@ namespace
 	std::array<bool, 2> gBlockRawTriggerUntilRelease{};
 	bool gPrevPrimaryVRInputStates[2]{};
 	bool gPrevSecondaryVRInputStates[2]{};
+#include "ui_vr_trigger_release.h"
 	struct Mapping
 	{
 		size_t keyCode;
@@ -428,9 +505,172 @@ static void CheckUnavailableInput(ScrollFixture& f)
 	}
 }
 
+static void CheckTriggerReleaseReads(bool leftHanded)
+{
+	const std::unique_ptr<ImGuiContext, decltype(&ImGui::DestroyContext)> context{ ImGui::CreateContext(), ImGui::DestroyContext };
+	ImGui::GetIO().IniFilename = nullptr;
+	Runtime::Reset(leftHanded);
+	VR vrFeature;
+	vrFeature.lastKnownLeftHandedMode = leftHanded;
+	for (auto* controller : { &vrFeature.primaryControllerState, &vrFeature.secondaryControllerState })
+		for (auto& button : controller->buttons)
+			button.isPressed = true;
+	const auto primaryIndex = Runtime::indices[Runtime::PhysicalHand(0)];
+	const auto secondaryIndex = Runtime::indices[Runtime::PhysicalHand(1)];
+	for (auto index : { primaryIndex, secondaryIndex }) {
+		Runtime::system.states[index].rAxis[1].x = .8f;
+		Runtime::system.states[index].ulButtonPressed = vr::ButtonMaskFromId(vr::k_EButton_SteamVR_Trigger);
+	}
+	// A closed menu rearms the gate on every frame that processes gameplay input.
+	for (int frame = 0; frame < 32; ++frame) {
+		vrFeature.ReleaseMenuImGuiInputState();
+		ObserveRawTriggerReleases(vrFeature);
+		Require(gBlockRawTriggerUntilRelease[0] && gBlockRawTriggerUntilRelease[1] &&
+					gPrevPrimaryVRInputStates[0] && gPrevSecondaryVRInputStates[0],
+			"repeated closed-menu input resets must retain held triggers without dispatching game hooks");
+	}
+	Require(Runtime::system.reads == 64, "both physical controllers must be sampled through the runtime");
+	auto& primary = Runtime::system.states[primaryIndex];
+	primary.rAxis[1].x = 0;
+	ObserveRawTriggerReleases(vrFeature);
+	Require(gBlockRawTriggerUntilRelease[0], "digital trigger press must retain the gate after analog release");
+	primary.ulButtonPressed = 0;
+	primary.rAxis[1].x = .3f;
+	ObserveRawTriggerReleases(vrFeature);
+	Require(gBlockRawTriggerUntilRelease[0], "analog trigger threshold must retain the gate without a digital press");
+	primary.rAxis[1].x = .299f;
+	ObserveRawTriggerReleases(vrFeature);
+	Require(!gBlockRawTriggerUntilRelease[0] && !gPrevPrimaryVRInputStates[0] &&
+				gBlockRawTriggerUntilRelease[1] && gPrevSecondaryVRInputStates[0],
+		"a physical release must clear only its own controller gate");
+	Runtime::system.states[secondaryIndex] = {};
+	ObserveRawTriggerReleases(vrFeature);
+	Require(!gBlockRawTriggerUntilRelease[1] && !gPrevSecondaryVRInputStates[0] &&
+				gPrevPrimaryVRInputStates[1] && gPrevSecondaryVRInputStates[1],
+		"trigger release must preserve other held menu buttons");
+	const auto readsAfterRelease = Runtime::system.reads + Runtime::compositor.reads;
+	ObserveRawTriggerReleases(vrFeature);
+	Require(Runtime::system.reads + Runtime::compositor.reads == readsAfterRelease, "released gates must not issue extra runtime queries");
+
+	for (int failure = 0; failure < 17; ++failure) {
+		Runtime::Reset(leftHanded);
+		vrFeature.ReleaseMenuImGuiInputState();
+		gBlockRawTriggerUntilRelease[1] = false;
+		switch (failure) {
+		case 0:
+			Runtime::isVR = false;
+			break;
+		case 1:
+			Runtime::available = false;
+			break;
+		case 2:
+			Runtime::exportAvailable = false;
+			break;
+		case 3:
+			Runtime::interfaceAvailable = false;
+			break;
+		case 4:
+			Runtime::interfaceError = true;
+			break;
+		case 5:
+			Runtime::system.readable[primaryIndex] = false;
+			break;
+		case 6:
+			Runtime::indices[Runtime::PhysicalHand(0)] = vr::k_unTrackedDeviceIndexInvalid;
+			break;
+		case 7:
+			Runtime::indices[Runtime::PhysicalHand(0)] = vr::k_unMaxTrackedDeviceCount;
+			break;
+		case 8:
+			Runtime::compositorAvailable = false;
+			break;
+		case 9:
+			Runtime::posesAvailable = false;
+			break;
+		case 10:
+			Runtime::poses[primaryIndex].bPoseIsValid = false;
+			break;
+		case 11:
+			Runtime::poses[primaryIndex].bDeviceIsConnected = false;
+			break;
+		case 12:
+			Runtime::system.states[primaryIndex].rAxis[1].x = std::numeric_limits<float>::quiet_NaN();
+			break;
+		case 13:
+			Runtime::system.states[primaryIndex].rAxis[1].x = std::numeric_limits<float>::infinity();
+			break;
+		case 14:
+			Runtime::system.states[primaryIndex].rAxis[1].x = -.01f;
+			break;
+		case 15:
+			Runtime::system.states[primaryIndex].rAxis[1].x = 1.01f;
+			break;
+		case 16:
+			Runtime::system.states[primaryIndex].rAxis[1].x = -std::numeric_limits<float>::infinity();
+			break;
+		}
+		ObserveRawTriggerReleases(vrFeature);
+		Require(gBlockRawTriggerUntilRelease[0] && gPrevPrimaryVRInputStates[0], "failed or invalid reads must not infer a trigger release");
+		if (failure == 6 || failure == 7)
+			Require(Runtime::compositor.reads == 0, "invalid indices must be rejected before any compositor query");
+		Runtime::Reset(leftHanded);
+		ObserveRawTriggerReleases(vrFeature);
+		Require(!gBlockRawTriggerUntilRelease[0] && !gPrevPrimaryVRInputStates[0], "a verified neutral sample must release the gate after recovery");
+	}
+}
+
+static void CheckPassiveRuntimeReads()
+{
+	for (int failure = 0; failure < 7; ++failure) {
+		Runtime::Reset(false);
+		Runtime::Stick(0) = { .5f, -.75f };
+		auto index = Runtime::indices[0];
+		vr::VRControllerState_t state{};
+		state.ulButtonPressed = 0x123456789ABCDEF0;
+		for (size_t axis = 0; axis < state.rAxis.size(); ++axis)
+			state.rAxis[axis] = { static_cast<float>(axis) + .1f, static_cast<float>(axis) + .2f };
+		const auto original = state;
+		switch (failure) {
+		case 0:
+			Runtime::isVR = false;
+			break;
+		case 1:
+			Runtime::available = false;
+			break;
+		case 2:
+			Runtime::exportAvailable = false;
+			break;
+		case 3:
+			Runtime::interfaceAvailable = false;
+			break;
+		case 4:
+			Runtime::interfaceError = true;
+			break;
+		case 5:
+			Runtime::system.readable[index] = false;
+			break;
+		case 6:
+			index = vr::k_unMaxTrackedDeviceCount;
+			break;
+		}
+		Require(!Util::TryGetRuntimeControllerState(index, state), "unavailable passive reads must fail without using the game's proxy");
+		Require(state.ulButtonPressed == original.ulButtonPressed, "failed reads must preserve the caller's buttons");
+		for (size_t axis = 0; axis < state.rAxis.size(); ++axis)
+			Require(state.rAxis[axis].x == original.rAxis[axis].x && state.rAxis[axis].y == original.rAxis[axis].y,
+				"failed reads must preserve all caller axes");
+		Runtime::Reset(false);
+		Runtime::Stick(0) = { .5f, -.75f };
+		Require(Util::TryGetRuntimeControllerState(Runtime::indices[0], state) && state.rAxis[0].x == .5f && state.rAxis[0].y == -.75f,
+			"passive reads must recover after runtime failures and retain current physical input");
+	}
+}
+
 int main()
 {
 	try {
+		CheckPassiveRuntimeReads();
+		for (bool leftHanded : { false, true })
+			CheckTriggerReleaseReads(leftHanded);
 		for (bool mouseNavigation : { false, true })
 			for (size_t hand : { 0u, 1u })
 				for (bool trickleEvents : { false, true })

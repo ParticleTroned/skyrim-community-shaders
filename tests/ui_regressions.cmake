@@ -1,6 +1,6 @@
 set(_ui_regression_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/ui-regressions")
 set(_ui_regression_headers)
-foreach(name IN ITEMS wand_types wand_pose vr_scroll_types vr_scroll_refresh vr_scroll_poll vr_cursor_delta vr_scroll vr_input_release escape markers header_button docked_icon_size docked_header theme_save atomic_write filename blur_initialization blur_lifecycle)
+foreach(name IN ITEMS wand_types wand_pose vr_runtime_state vr_trigger_release vr_scroll_types vr_scroll_refresh vr_scroll_poll vr_cursor_delta vr_scroll vr_input_release escape markers header_button docked_icon_size docked_header theme_save atomic_write filename blur_initialization blur_lifecycle)
     list(APPEND _ui_regression_headers "${_ui_regression_dir}/ui_${name}.h")
 endforeach()
 add_custom_command(
@@ -10,7 +10,7 @@ add_custom_command(
         "${PROJECT_SOURCE_DIR}/tests/extract_ui_regressions.cmake"
     DEPENDS src/Features/VR/WandPointing.cpp src/Features/VR/Input.cpp src/Menu.cpp
         src/CSEditor/EditorWindow.cpp src/Menu/MenuHeaderRenderer.cpp
-        src/Menu/ThemeManager.cpp src/Menu/BackgroundBlur.cpp src/Utils/FileSystem.cpp
+        src/Menu/ThemeManager.cpp src/Menu/BackgroundBlur.cpp src/Utils/FileSystem.cpp src/Utils/VRUtils.cpp
         tests/extract_ui_regressions.cmake tests/extract_source_region.cmake
     VERBATIM
 )

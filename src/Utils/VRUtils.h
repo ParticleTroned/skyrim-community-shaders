@@ -133,6 +133,10 @@ namespace Util
 	 */
 	vr::TrackedDeviceIndex_t GetControllerIndexForDevice(ControllerDevice device, bool isLeftHanded);
 
+	/// Reads physical controller state through the runtime export, bypassing game input proxies.
+	/// Invalid indices or unavailable runtime state leave the output unchanged and return false.
+	bool TryGetRuntimeControllerState(vr::TrackedDeviceIndex_t a_index, vr::VRControllerState_t& a_state);
+
 	/**
 	 * @brief Get controller world matrix from OpenVR pose
 	 * @param index The tracked device index of the controller

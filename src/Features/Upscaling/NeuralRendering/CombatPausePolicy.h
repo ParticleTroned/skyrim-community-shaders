@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PipelinePolicy.h"
+
 #include <cstdint>
 #include <optional>
 
@@ -59,13 +61,13 @@ namespace NeuralRendering
 
 		[[nodiscard]] constexpr CombatPauseSnapshot GetSnapshot() const noexcept { return snapshot; }
 
-		/** Missing player state or paused gameplay interrupts the continuous safe interval. */
+		/** Paused gameplay interrupts recovery without initiating a new combat pause. */
 		constexpr CombatPauseSnapshot Update(std::uint32_t a_frame, bool a_enabled,
-			std::uint64_t a_nowMs, std::optional<bool> a_inCombat) noexcept
+			std::uint64_t a_nowMs, std::optional<bool> a_inCombat, bool a_gamePaused = false) noexcept
 		{
 			if (HasFrame(a_frame))
 				return snapshot;
-			if (snapshot.sampled && (a_frame != snapshot.frame + 1u || a_nowMs < lastSampleMs))
+			if (snapshot.sampled && (!IsSequentialFrame(snapshot.frame, a_frame) || a_nowMs < lastSampleMs))
 				snapshot.phase = CombatPausePhase::Unavailable;
 			snapshot.sampled = true;
 			snapshot.frame = a_frame;
@@ -77,6 +79,8 @@ namespace NeuralRendering
 				snapshot.phase = CombatPausePhase::Unavailable;
 			} else if (*a_inCombat) {
 				snapshot.phase = CombatPausePhase::Combat;
+			} else if (a_gamePaused && snapshot.IsPaused()) {
+				snapshot.phase = CombatPausePhase::Unavailable;
 			} else if (snapshot.IsPaused()) {
 				if (snapshot.phase != CombatPausePhase::Cooldown)
 					cooldownStartedMs = a_nowMs;

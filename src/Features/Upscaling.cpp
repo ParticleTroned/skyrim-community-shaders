@@ -18679,7 +18679,7 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 		if (combatPause.phase == NeuralRendering::CombatPausePhase::Combat)
 			ImGui::TextWrapped("NR paused during combat. Normal upscaling continues.");
 		else if (combatPause.phase == NeuralRendering::CombatPausePhase::Cooldown)
-			ImGui::TextWrapped("NR resumes in %.1f seconds without combat.", static_cast<double>(combatPause.remainingMs) / 1000.0);
+			ImGui::TextWrapped("Combat resume delay: %.1f seconds of active gameplay remaining.", static_cast<double>(combatPause.remainingMs) / 1000.0);
 		else
 			ImGui::TextWrapped("NR combat pause is waiting for active gameplay.");
 	}
@@ -60754,11 +60754,11 @@ NeuralRendering::CombatPauseSnapshot Upscaling::ResolveNeuralCombatPause() const
 	const bool enabled = settings.neuralRenderingEnabled && settings.neuralRenderingPauseInCombat;
 	std::optional<bool> inCombat;
 	auto* const ui = globals::game::ui;
-	if (enabled && state && ui && !state->IsMainOrLoadingMenuOpen(ui) && !ui->GameIsPaused()) {
+	if (enabled && state && ui && !state->IsMainOrLoadingMenuOpen(ui)) {
 		if (auto* player = RE::PlayerCharacter::GetSingleton())
 			inCombat = player->IsInCombat();
 	}
-	return neuralCombatPause.Update(frame, enabled, GetTickCount64(), inCombat);
+	return neuralCombatPause.Update(frame, enabled, GetTickCount64(), inCombat, ui && ui->GameIsPaused());
 }
 
 NeuralRendering::TemporalAdmissionResult Upscaling::BuildNeuralTemporalAdmission(

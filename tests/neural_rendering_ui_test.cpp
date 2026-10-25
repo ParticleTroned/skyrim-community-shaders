@@ -2192,4 +2192,15 @@ int main()
 		"Bindings can disable quarantined NR");
 	require(upscaling.settings.neuralRenderingMode == 2 && globals::menuInstance.dirtyChecks == dirtyChecks + 2,
 		"Bindings retain the chosen route and mark successful edits dirty");
+	upscaling.settings.neuralRenderingEnabled = true;
+	upscaling.settings.neuralRenderingPauseInCombat = true;
+	upscaling.combatPauseSnapshot.phase = NeuralRendering::CombatPausePhase::Cooldown;
+	upscaling.combatPauseSnapshot.remainingMs = 1500;
+	renderer.snapshot = {};
+	renderer.snapshot.failureLatched = true;
+	drawMaster();
+	require(ImGui::Seen("NR paused after an error. Use Reset Neural Rendering Runtime below to retry. Settings are kept.") &&
+				ImGui::Seen("Combat resume delay: %.1f seconds of active gameplay remaining.") &&
+				!ImGui::Seen("NR resumes in %.1f seconds without combat."),
+		"Combat cooldown must not promise recovery while a runtime error still blocks NR");
 }

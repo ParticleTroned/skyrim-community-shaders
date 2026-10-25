@@ -1,11 +1,13 @@
 #include "Features/Upscaling/NeuralRendering/CombatPausePolicy.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 
+#include <array>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
 #include <string_view>
+#include <thread>
 
 namespace RE
 {
@@ -88,6 +90,58 @@ void Require(bool value, const char* message)
 		std::fprintf(stderr, "%s\n", message);
 		std::exit(1);
 	}
+}
+
+void CheckUnavailableInputsAndConcurrentRoutes(State& state, RE::UI& ui, RE::PlayerCharacter& player)
+{
+	using Role = Upscaling::NeuralStereoRouteRole;
+	using Phase = NeuralRendering::CombatPausePhase;
+	const auto restore = [&] {
+		globals::state = &state;
+		globals::game::ui = &ui;
+		RE::PlayerCharacter::instance = &player;
+		++state.frameCount;
+		state.lastWorldRenderFrame = state.lastCompletedWorldRenderFrame = state.frameCount;
+		ui.paused = false;
+		player.combat = false;
+	};
+	for (int missing = 0; missing < 3; ++missing) {
+		restore();
+		Upscaling unavailable;
+		if (missing == 0)
+			globals::state = nullptr;
+		else if (missing == 1)
+			globals::game::ui = nullptr;
+		else
+			RE::PlayerCharacter::instance = nullptr;
+		const auto samples = player.samples;
+		Require(!unavailable.BuildNeuralTemporalAdmission(Role::Main, false, true).admitted &&
+					unavailable.GetNeuralCombatPauseSnapshot().phase == Phase::Unavailable && player.samples == samples,
+			"Unavailable world, UI or player must block NR without sampling an actor");
+		restore();
+		Require(!unavailable.BuildNeuralTemporalAdmission(Role::Submit, false, true).admitted &&
+					unavailable.GetNeuralCombatPauseSnapshot().remainingMs == 3000,
+			"Restored gameplay must begin a complete safe interval");
+	}
+	restore();
+	player.combat = true;
+	Upscaling concurrent;
+	const auto samples = player.samples;
+	std::atomic<bool> coherent{ true };
+	std::array<std::thread, 8> readers;
+	for (std::size_t index = 0; index < readers.size(); ++index) {
+		readers[index] = std::thread([&, index] {
+			for (unsigned read = 0; read < 32; ++read) {
+				const auto admission = concurrent.BuildNeuralTemporalAdmission(index % 2 ? Role::Submit : Role::Main, false, true);
+				if (admission.admitted || !admission.combatPaused || concurrent.GetNeuralCombatPauseSnapshot().phase != Phase::Combat)
+					coherent.store(false, std::memory_order_relaxed);
+			}
+		});
+	}
+	for (auto& reader : readers)
+		reader.join();
+	Require(coherent.load() && player.samples == samples + 1,
+		"Concurrent main/submit readers must share exactly one combat sample");
 }
 
 int main()
@@ -173,6 +227,41 @@ int main()
 	upscaling.settings.neuralRenderingEnabled = false;
 	nextFrame();
 	Require(upscaling.ResolveNeuralCombatPause().phase == Phase::Disabled, "Disabled NR must disable combat policy");
+
+	// A peaceful paused menu may reuse the existing world image without combat fallback.
+	{
+		Upscaling peaceful;
+		player.combat = false;
+		ui.paused = false;
+		nextFrame();
+		Require(peaceful.BuildNeuralTemporalAdmission(Role::Main, false, true).admitted, "Peaceful setup must admit NR");
+		++state.frameCount;
+		ui.paused = true;
+		const auto menu = peaceful.BuildNeuralTemporalAdmission(Role::Submit, false, true);
+		Require(menu.admitted && menu.retainedWorldFrame && !menu.combatPaused,
+			"A peaceful paused menu must preserve retained-world NR continuity");
+		ui.paused = false;
+		nextFrame(10000);
+		Require(peaceful.BuildNeuralTemporalAdmission(Role::Main, false, true).admitted,
+			"Closing a peaceful menu must not introduce a combat cooldown");
+		ui.paused = true;
+		player.combat = true;
+		nextFrame();
+		Require(!peaceful.BuildNeuralTemporalAdmission(Role::Submit, false, true).admitted &&
+					peaceful.GetNeuralCombatPauseSnapshot().phase == Phase::Combat,
+			"A paused menu must still detect combat and preserve the pause");
+		player.combat = false;
+		nextFrame(10000);
+		Require(!peaceful.BuildNeuralTemporalAdmission(Role::Main, false, true).admitted,
+			"Combat ending in a menu must wait for active gameplay");
+		ui.paused = false;
+		nextFrame();
+		Require(!peaceful.BuildNeuralTemporalAdmission(Role::Main, false, true).admitted &&
+					peaceful.GetNeuralCombatPauseSnapshot().remainingMs == 3000,
+			"Leaving a combat menu must start the complete resume interval");
+	}
+
+	CheckUnavailableInputsAndConcurrentRoutes(state, ui, player);
 
 	NeuralRendering::CombatPausePolicy policy;
 	Require(policy.Update(1, true, 100, true).IsPaused(), "Policy combat setup failed");

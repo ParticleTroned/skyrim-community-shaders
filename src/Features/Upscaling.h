@@ -12,6 +12,7 @@
 #include "Upscaling/NeuralRendering/CaptureEvidence.h"
 #include "Upscaling/NeuralRendering/CentralAreaPolicy.h"
 #include "Upscaling/NeuralRendering/CharacterRendering.h"
+#include "Upscaling/NeuralRendering/CombatPausePolicy.h"
 #include "Upscaling/NeuralRendering/MainDepthPresentation.h"
 #include "Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Upscaling/NeuralRendering/PreDlssInputHistory.h"
@@ -137,8 +138,12 @@ public:
 		StereoPreflightFailed,
 		CachedPairSignatureMismatch,
 		NeuralEvaluationFailed,
-		StereoDispatchFailed
+		StereoDispatchFailed,
+		CombatPause
 	};
+
+	/** Last frame-latched combat decision; reading status never samples gameplay. */
+	[[nodiscard]] NeuralRendering::CombatPauseSnapshot GetNeuralCombatPauseSnapshot() const noexcept;
 
 	/** @brief One coherent two-eye neural-rendering routing decision. */
 	struct NeuralStereoRouteSnapshot
@@ -494,6 +499,7 @@ public:
 		uint neuralRenderingReconstructionFilter = 0;
 		bool neuralRenderingGuidedReconstruction = false;
 		bool neuralRenderingPeripheralCompression = false;
+		bool neuralRenderingPauseInCombat = false;
 		bool neuralRenderingPressureResolutionEnabled = true;
 		uint neuralRenderingCentralAreaPercent = NeuralRendering::kMaximumCentralAreaPercent;
 		uint neuralRenderingCentralFeatherPixels = NeuralRendering::kDefaultCentralFeatherPixels;
@@ -3444,6 +3450,8 @@ public:
 	bool historyResetThisFrame = false;
 	NeuralRendering::PreDlssInputHistory flatDlssInputHistory;
 	std::atomic<uint32_t> neuralTemporalAdmissionLatch{ 0 };
+	mutable std::mutex neuralCombatPauseMutex;
+	mutable NeuralRendering::CombatPausePolicy neuralCombatPause;
 	uint32_t neuralInsertionPointLatchedFrame = std::numeric_limits<uint32_t>::max();
 	NeuralRendering::InsertionPoint neuralInsertionPointLatched =
 		NeuralRendering::kDefaultInsertionPoint;
@@ -4094,6 +4102,8 @@ public:
 		const VRRenderScaleDesiredProfile& a_request);
 	void SuspendVRRenderScaleControllerForDeferredRequest(
 		const VRRenderScaleDesiredProfile& a_request);
+	/** Sample the runtime combat state once per frame for every NR route. */
+	[[nodiscard]] NeuralRendering::CombatPauseSnapshot ResolveNeuralCombatPause() const noexcept;
 	[[nodiscard]] NeuralRendering::TemporalAdmissionResult BuildNeuralTemporalAdmission(
 		NeuralStereoRouteRole a_role,
 		bool a_menuContextActive,

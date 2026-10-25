@@ -1,6 +1,7 @@
 #include "Features/FoveatedCommon.h"
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
+#include "Features/Upscaling/NeuralRendering/CombatPausePolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryConservationPolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryRecoveryPolicy.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
@@ -103,6 +104,7 @@ namespace globals
 				unsigned neuralRenderingReconstructionFilter = 0;
 				bool neuralRenderingGuidedReconstruction = false;
 				bool neuralRenderingPeripheralCompression = false;
+				bool neuralRenderingPauseInCombat = false;
 				bool neuralRenderingPressureResolutionEnabled = true;
 				bool neuralRenderingPrewarmEnabled = true;
 				float neuralRenderingSingleSubrectScale = 1.0f;
@@ -174,6 +176,8 @@ namespace globals
 			void DrawSelectionControls();
 			void DrawNeuralRenderingEnableControl();
 			void DrawNeuralRenderingMasterControl(bool a_showDiagnostics);
+			NeuralRendering::CombatPauseSnapshot combatPauseSnapshot;
+			auto GetNeuralCombatPauseSnapshot() const { return combatPauseSnapshot; }
 			bool ToggleNeuralRendering(std::string* a_error = nullptr);
 			void DrawNeuralRenderingCropControl(bool);
 			bool acceptConfiguration = true;
@@ -648,6 +652,10 @@ int main()
 		DrawNeuralModelResolutionSettings(settings);
 		require(settings.neuralRenderingGuidedReconstruction && settings.neuralRenderingModelResolutionPercent == 100 && settings.neuralRenderingReconstructionFilter == 0,
 			"Guided toggle changed independent model scale or Basic filter");
+		require(!settings.neuralRenderingPauseInCombat, "Combat pausing must default off");
+		ImGui::Clear("Pause NR during combat");
+		DrawNeuralModelResolutionSettings(settings);
+		require(settings.neuralRenderingPauseInCombat && settings.neuralRenderingModelResolutionPercent == 100, "Combat control must retain NR resolution");
 		require(!settings.neuralRenderingPeripheralCompression, "Peripheral compression must default off");
 		ImGui::Clear("Peripheral NR compression");
 		DrawNeuralModelResolutionSettings(settings);

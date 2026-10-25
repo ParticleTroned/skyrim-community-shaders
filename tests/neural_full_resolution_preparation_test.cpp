@@ -48,7 +48,8 @@ struct Upscaling
 		GamePaused,
 		TemporalSourceStale,
 		FrameGeneration,
-		StereoPreflightFailed
+		StereoPreflightFailed,
+		CombatPause
 	};
 	struct Settings
 	{
@@ -110,6 +111,8 @@ struct Upscaling
 		inputs.pausedContinuityAllowed = continuity;
 		return NeuralRendering::EvaluateTemporalAdmission(NeuralRendering::TemporalRoute::Main, inputs);
 	}
+	unsigned admissionObservations = 0;
+	void ObserveNeuralTemporalAdmission(NeuralStereoRouteRole, const NeuralRendering::TemporalAdmissionResult&) { ++admissionObservations; }
 	bool GetRuntimeFoveatedRegionDimensions(uint32_t& iw, uint32_t& ih, uint32_t& ow, uint32_t& oh) const
 	{
 		iw = width / 2;
@@ -120,6 +123,8 @@ struct Upscaling
 	}
 	bool PrepareFullResolutionNeuralInputs(uint32_t, uint32_t, uint32_t, uint32_t, NeuralStereoRouteRole, uint32_t, uint64_t)
 	{
+		if (!admissionObservations)
+			throw std::runtime_error("Admission transitions must be observed before guide preparation");
 		++guideCopies;
 		if (guidePreparationThrows)
 			throw std::runtime_error("guide allocation failed");
@@ -252,7 +257,7 @@ int main()
 		upscaling.PrepareMainFullResolutionNeuralFrame();
 		Require(upscaling.mainFinalLdrNeuralState.ready, "Paused fresh world remains valid");
 
-		for (int gate = 0; gate < 8; ++gate) {
+		for (int gate = 0; gate < 9; ++gate) {
 			NextFrame(upscaling, state);
 			upscaling.mainFinalLdrNeuralState = {};
 			upscaling.requested = gate != 0;
@@ -263,6 +268,7 @@ int main()
 			upscaling.hardMenu = gate == 5;
 			upscaling.settings.frameGenerationMode = gate == 6 ? 1u : 0u;
 			upscaling.world.worldFrameStateAvailable = gate != 7;
+			upscaling.world.combatPaused = gate == 8;
 			const auto before = upscaling.guideCopies;
 			const auto publications = upscaling.publications;
 			const auto captures = upscaling.captureFrames;
@@ -278,6 +284,7 @@ int main()
 				const auto reason = gate == 3 ? Upscaling::NeuralStereoFallbackReason::RouteIneligible :
 				                    gate == 5 ? Upscaling::NeuralStereoFallbackReason::MenuContext :
 				                    gate == 7 ? Upscaling::NeuralStereoFallbackReason::TemporalSourceStale :
+				                    gate == 8 ? Upscaling::NeuralStereoFallbackReason::CombatPause :
 				                                Upscaling::NeuralStereoFallbackReason::FrameGeneration;
 				RequireNoAttemptFallback(upscaling, state, reason);
 			}

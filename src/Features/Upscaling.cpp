@@ -373,6 +373,7 @@ namespace FSRTemporalTuningPolicy
 	OP(neuralRenderingDirectCommit)              \
 	OP(neuralRenderingReconstructionFilter)      \
 	OP(neuralRenderingPeripheralCompression)     \
+	OP(neuralRenderingPauseInCombat)             \
 	OP(neuralRenderingGuidedReconstruction)      \
 	OP(neuralRenderingModelResolutionPercent)    \
 	OP(neuralRenderingParallelEyes)              \
@@ -6769,6 +6770,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		add(static_cast<uint64_t>(NeuralRendering::ClampReconstructionFilter(a_settings.neuralRenderingReconstructionFilter)));
 		add(a_settings.neuralRenderingGuidedReconstruction);
 		add(a_settings.neuralRenderingPeripheralCompression);
+		add(a_settings.neuralRenderingPauseInCombat);
 		add(a_settings.neuralRenderingPressureResolutionEnabled);
 		add(a_settings.neuralRenderingCentralAreaPercent);
 		if (a_settings.neuralRenderingCentralAreaPercent < NeuralRendering::kMaximumCentralAreaPercent)
@@ -18672,6 +18674,15 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Turns off your saved NR choice so it stays off when compatible upscaling is available.");
 	}
+	const auto combatPause = GetNeuralCombatPauseSnapshot();
+	if (settings.neuralRenderingEnabled && settings.neuralRenderingPauseInCombat && combatPause.IsPaused()) {
+		if (combatPause.phase == NeuralRendering::CombatPausePhase::Combat)
+			ImGui::TextWrapped("NR paused during combat. Normal upscaling continues.");
+		else if (combatPause.phase == NeuralRendering::CombatPausePhase::Cooldown)
+			ImGui::TextWrapped("NR resumes in %.1f seconds without combat.", static_cast<double>(combatPause.remainingMs) / 1000.0);
+		else
+			ImGui::TextWrapped("NR combat pause is waiting for active gameplay.");
+	}
 	if (status.quarantined) {
 		Util::Text::WrappedError("Neural Rendering cannot recover safely in this session. Restart the game to try again.");
 	} else if (status.failureLatched && status.stallRecovery.pending) {
@@ -18830,6 +18841,8 @@ namespace
 
 	void DrawNeuralModelResolutionSettings(Upscaling::Settings& settings)
 	{
+		Util::Widgets::Checkbox("Pause NR during combat", &settings.neuralRenderingPauseInCombat);
+		Util::AddTooltip("Pause NR for both eyes during player combat. Normal upscaling continues. Resume after three continuous seconds of unpaused gameplay out of combat, with fresh history. NR resources stay cached while memory permits.");
 		DrawNeuralIntegerSetting("NR Model Resolution", settings.neuralRenderingModelResolutionPercent,
 			NeuralRendering::kMinimumModelResolutionPercent, NeuralRendering::kMaximumModelResolutionPercent, "%d%%");
 		if (auto tooltip = Util::HoverTooltipWrapper())
@@ -46784,6 +46797,7 @@ void Upscaling::PrepareMainFullResolutionNeuralFrame() noexcept
 		route.arrangement = static_cast<uint32_t>(GetNeuralRenderingArrangement());
 		const bool menuBlocked = IsNeuralRenderingHardMenuBlocked(*this, globals::state);
 		const auto admission = BuildNeuralTemporalAdmission(NeuralStereoRouteRole::Main, menuBlocked, !menuBlocked);
+		ObserveNeuralTemporalAdmission(NeuralStereoRouteRole::Main, admission);
 		BeginNeuralCaptureFrame(NeuralStereoRouteRole::Main, globals::state->frameCount);
 		route.hardMenuBlocked = menuBlocked;
 		route.menuContinuityAllowed = !menuBlocked;
@@ -51667,6 +51681,7 @@ void Upscaling::ServiceNeuralRenderingPrewarm()
 
 void Upscaling::Reset()
 {
+	(void)ResolveNeuralCombatPause();
 	NeuralRendering::Renderer::Instance().ServiceBackendMaintenance(settings.neuralRenderingEnabled);
 	ServiceNeuralRenderingPrewarm();
 	if (!globals::game::isVR)
@@ -60723,6 +60738,29 @@ void Upscaling::RequestHistoryReset() noexcept
 		historyResetThisFrame = true;
 }
 
+NeuralRendering::CombatPauseSnapshot Upscaling::GetNeuralCombatPauseSnapshot() const noexcept
+{
+	std::scoped_lock lock(neuralCombatPauseMutex);
+	return neuralCombatPause.GetSnapshot();
+}
+
+NeuralRendering::CombatPauseSnapshot Upscaling::ResolveNeuralCombatPause() const noexcept
+{
+	std::scoped_lock lock(neuralCombatPauseMutex);
+	const auto* state = globals::state;
+	const auto frame = state ? state->frameCount : std::numeric_limits<uint32_t>::max();
+	if (neuralCombatPause.HasFrame(frame))
+		return neuralCombatPause.GetSnapshot();
+	const bool enabled = settings.neuralRenderingEnabled && settings.neuralRenderingPauseInCombat;
+	std::optional<bool> inCombat;
+	auto* const ui = globals::game::ui;
+	if (enabled && state && ui && !state->IsMainOrLoadingMenuOpen(ui) && !ui->GameIsPaused()) {
+		if (auto* player = RE::PlayerCharacter::GetSingleton())
+			inCombat = player->IsInCombat();
+	}
+	return neuralCombatPause.Update(frame, enabled, GetTickCount64(), inCombat);
+}
+
 NeuralRendering::TemporalAdmissionResult Upscaling::BuildNeuralTemporalAdmission(
 	NeuralStereoRouteRole a_role,
 	bool a_menuContextActive,
@@ -60736,6 +60774,7 @@ NeuralRendering::TemporalAdmissionResult Upscaling::BuildNeuralTemporalAdmission
 		.gamePaused = ui && ui->GameIsPaused(),
 		.pausedContinuityAllowed = a_pausedContinuityAllowed,
 		.worldFrameStateAvailable = state != nullptr,
+		.combatPaused = ResolveNeuralCombatPause().IsPaused(),
 		.currentFrame = state ? state->frameCount : invalidFrame,
 		.lastWorldRenderFrame = state ? state->lastWorldRenderFrame : invalidFrame,
 		.lastCompletedWorldRenderFrame =
@@ -60793,6 +60832,8 @@ Upscaling::NeuralStereoFallbackReason Upscaling::GetNeuralTemporalFallbackReason
 		return NeuralStereoFallbackReason::GamePaused;
 	case NeuralRendering::TemporalAdmissionBlockReason::TemporalSourceStale:
 		return NeuralStereoFallbackReason::TemporalSourceStale;
+	case NeuralRendering::TemporalAdmissionBlockReason::CombatPause:
+		return NeuralStereoFallbackReason::CombatPause;
 	default:
 		return NeuralStereoFallbackReason::RouteIneligible;
 	}
@@ -62413,6 +62454,8 @@ const char* Upscaling::GetNeuralStereoFallbackReasonName(NeuralStereoFallbackRea
 		return "cached_pair_signature_mismatch";
 	case NeuralStereoFallbackReason::NeuralEvaluationFailed:
 		return "neural_evaluation_failed";
+	case NeuralStereoFallbackReason::CombatPause:
+		return "combat_pause";
 	case NeuralStereoFallbackReason::StereoDispatchFailed:
 		return "stereo_dispatch_failed";
 	default:

@@ -88,10 +88,11 @@ struct IndependentSettings
 	unsigned neuralRenderingReconstructionFilter = 0;
 	bool neuralRenderingGuidedReconstruction = false;
 	bool neuralRenderingPeripheralCompression = false;
+	bool neuralRenderingPauseInCombat = false;
 	bool neuralRenderingPressureResolutionEnabled = true;
 	unsigned neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(IndependentSettings, qualityMode, neuralRenderingEnabled, neuralRenderingIntensity, neuralRenderingModelResolutionPercent, neuralRenderingReconstructionFilter, neuralRenderingGuidedReconstruction, neuralRenderingPeripheralCompression, neuralRenderingPressureResolutionEnabled, neuralRenderingCentralAreaPercent, neuralRenderingCentralFeatherPixels)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(IndependentSettings, qualityMode, neuralRenderingEnabled, neuralRenderingIntensity, neuralRenderingModelResolutionPercent, neuralRenderingReconstructionFilter, neuralRenderingGuidedReconstruction, neuralRenderingPeripheralCompression, neuralRenderingPauseInCombat, neuralRenderingPressureResolutionEnabled, neuralRenderingCentralAreaPercent, neuralRenderingCentralFeatherPixels)
 
 int main()
 {
@@ -104,6 +105,7 @@ int main()
 	require(defaults.at("neuralRenderingReconstructionFilter") == 0);
 	require(defaults.at("neuralRenderingGuidedReconstruction") == false);
 	require(defaults.at("neuralRenderingPeripheralCompression") == false);
+	require(defaults.at("neuralRenderingPauseInCombat") == false);
 	require(NeuralRendering::PersistentRenderingSettings({ { "neuralRenderingGuidedReconstruction", true } }).at("neuralRenderingGuidedReconstruction") == true);
 	require(NeuralRendering::PersistentRenderingSettings({ { "neuralRenderingReconstructionFilter", 1 } }).at("neuralRenderingReconstructionFilter") == 1);
 	require(defaults.at("neuralRenderingCentralAreaPercent") == 100 && defaults.at("neuralRenderingCentralFeatherPixels") == 64);

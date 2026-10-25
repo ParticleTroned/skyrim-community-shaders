@@ -58,6 +58,7 @@ int main(int argc, char** argv)
 		assert(nr.at("neuralRenderingReconstructionFilter") == 0);
 		assert(nr.at("neuralRenderingGuidedReconstruction") == false);
 		assert(nr.at("neuralRenderingPeripheralCompression") == false);
+		assert(nr.at("neuralRenderingPauseInCombat") == false);
 		assert(preset.at("Terrain Blending").at("LandscapeSeams") == 0);
 		assert(preset.at("Performance Overlay").at("ShowRenderTargets") == false);
 		assert(preset.at("Sky Sync").at("DisabledWorldspaces") == nlohmann::json::array(
@@ -80,6 +81,10 @@ int main(int argc, char** argv)
 	for (const auto presetId : { "csx-unified-performance", "csx-unified-balanced", "csx-unified-quality" }) {
 		auto previous = CompatiblePreset();
 		previous["Preset Compatibility"]["presetId"] = presetId;
+		for (auto revision : { 18u, 19u }) {
+			previous["Preset Compatibility"]["settingsContract"]["revision"] = revision;
+			assert(PresetCompatibility::Evaluate(previous, "CSX 3.21.0-VR").ShouldApply());
+		}
 		previous["Preset Compatibility"]["settingsContract"]["revision"] = 17u;
 		assert(PresetCompatibility::Evaluate(previous, "CSX 3.21.0-VR").ShouldApply());
 		previous["Preset Compatibility"]["settingsContract"]["revision"] = 16u;

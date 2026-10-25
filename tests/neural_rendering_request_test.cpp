@@ -76,6 +76,18 @@ int main()
 		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "peripheralCompression", invalid } }, request, error));
 		require(error.at("errorCode") == "nr_peripheral_compression_invalid");
 	}
+	for (bool enabled : { false, true }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "pauseInCombat", enabled } }, request, error));
+		require(request.HasAnyControl() && request.pauseInCombat == enabled);
+	}
+	for (auto invalid : { json(1), json(0.0), json("true"), json(nullptr), json::array(), json::object() }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "pauseInCombat", invalid } }, request, error));
+		require(error.at("errorCode") == "nr_pause_in_combat_invalid");
+	}
 	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 8).intensity == 1.0f);
 	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 8).localStructureStrength == 2.0f);
 	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 9).localStructureStrength == 1.0f);
@@ -109,6 +121,7 @@ int main()
 	require(std::find(declaredActions.begin(), declaredActions.end(), "nr_peripheral_compare") != declaredActions.end());
 	require(descriptor.at("inputSchema").at("properties").at("guidedReconstruction").at("default") == false);
 	require(descriptor.at("inputSchema").at("properties").at("peripheralCompression").at("default") == false);
+	require(descriptor.at("inputSchema").at("properties").at("pauseInCombat").at("default") == false);
 	for (const auto& value : { json(0), json(1u), json(2), json(-1), json(3), json(1.5), json(true), json("2"), json(nullptr), json(UINT64_MAX) }) {
 		NeuralRenderingConfigurationRequest request;
 		json error;

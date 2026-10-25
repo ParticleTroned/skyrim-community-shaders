@@ -53,6 +53,9 @@ int main()
 			auto peripheral = baseline;
 			peripheral.neuralRenderingPeripheralCompression = true;
 			require((BuildNeuralRenderingSettingsKey(peripheral) != key) == enabled);
+			auto combat = baseline;
+			combat.neuralRenderingPauseInCombat = true;
+			require((BuildNeuralRenderingSettingsKey(combat) != key) == enabled);
 			auto parallel = baseline;
 			parallel.neuralRenderingParallelEyes = true;
 			require(BuildNeuralRenderingSettingsKey(parallel) == key);

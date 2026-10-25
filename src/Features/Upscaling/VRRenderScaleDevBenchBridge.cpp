@@ -1576,6 +1576,7 @@ namespace
       "pressureResolutionEnabled":{"type":"boolean","default":true,"description":"Temporarily reduce NR resolution under memory pressure, then gradually restore the requested percentage after sustained headroom; texture detail and scene resolution are unchanged."},
       "guidedReconstruction":{"type":"boolean","default":false,"description":"Improve low-resolution NR with a provisional 2x2 guided residual kernel. Auto remains Basic until the route is qualified; independent scale and strength are unchanged."},
       "peripheralCompression":{"type":"boolean","default":false,"description":"Experimental fixed peripheral compression; unsupported routes retain ordinary NR."},
+      "pauseInCombat":{"type":"boolean","default":false,"description":"Pause NR during player combat; resume after three continuous seconds of unpaused gameplay out of combat. Normal upscaling remains active."},
       "reconstructionOverride":{"type":"string","enum":["auto","basic","guided_experiment"],"description":"Temporary comparison only. Guided experiment bypasses qualification and cutoff, retaining enable, domain, geometry and ownership checks."},
       "peripheralOverride":{"type":"string","enum":["auto","ordinary","identity","compressed_experiment"],"description":"Nonpersistent comparison mode; compression still requires the user setting and support checks."},
       "reconstructionOverrideFrames":{"type":"integer","minimum":0,"maximum":600,"description":"Frame lease: zero for auto, 1 to 600 otherwise. Expires or cancels on generation change, reset or failure."},
@@ -1617,7 +1618,7 @@ namespace
       "expectedConfigurationFingerprint":{"type":"string","pattern":"^[0-9a-f]{32}$","description":"Reject nr_configure before mutation if requested full configuration changed."}
     },
     "required":["action"],
-    "allOf":[{"if":{"properties":{"action":{"const":"nr_configure"}},"required":["action"]},"then":{"minProperties":2,"propertyNames":{"enum":["action","expectedBuildId","expectedConfigurationFingerprint","enabled","mode","fovOnly","renderscaleFov","modelResolutionPercent","reconstructionFilter","guidedReconstruction","parallelEyes","prewarmEnabled","pressureResolutionEnabled","centralAreaPercent","centralFeatherPixels","insertionPoint","preset","intensity","localToneStrength","localStructureStrength","skinStructureStrength","style","network","batchedStereo","directCommit","implementation","optimizedStereoPath","useAutoMask","uiCorrection","singleSubrectScale","characterEnabled","characterSceneStrengthsEnabled","characterVisualIsolationEnabled","experimentalCurrentContext","experimentalGpuMaskSupport","characterFaces","characterSkin","characterHair","characterHumans","characterOtherHumanoids","characterCreatures","characterAnimals","characterOtherActors","characterArmor","characterWeapons","characterProviderBlending","characterPackedCrops","characterFaceStrength","characterSkinStrength","characterHairStrength","characterArmorStrength","characterWeaponsStrength","characterMaximumDistanceMeters","characterAdaptiveRoiSelection","characterFocusScale","characterMinimumFacePixelSize","characterCropMode","characterRoiMargin","characterRoiHoldFrames","characterDepthAwareFeather","characterVisibilityDepthTest","characterFeatherRadius","characterFeatherDepthThreshold","characterDebugView","characterMaskTestMode","peripheralCompression"]}}},{"if":{"properties":{"action":{"const":"foveation_configure"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","expectedBuildId","foveatedEnabled","peripheryTaaEnabled","fovOnlyCenterScale","fovOnlyOuterFeather","disableOuterFeather","peripheryTaaCenterScale","peripheryTaaOuterScale","centerHorizontalScale","leftEyeOffsetX","leftEyeOffsetY","rightEyeOffsetX","rightEyeOffsetY","peripheryTaaBlendFeather","neuralFinalLdrBlendFeather","maskVisualization","maskBinocularGapVisualization","calibrateMasks","automaticMaskScaling","automaticHeadsetSetup","maskSetupFinished"]},"anyOf":[{"required":["foveatedEnabled"]},{"required":["peripheryTaaEnabled"]},{"required":["fovOnlyCenterScale"]},{"required":["fovOnlyOuterFeather"]},{"required":["disableOuterFeather"]},{"required":["peripheryTaaCenterScale"]},{"required":["peripheryTaaOuterScale"]},{"required":["centerHorizontalScale"]},{"required":["leftEyeOffsetX"]},{"required":["leftEyeOffsetY"]},{"required":["rightEyeOffsetX"]},{"required":["rightEyeOffsetY"]},{"required":["peripheryTaaBlendFeather"]},{"required":["neuralFinalLdrBlendFeather"]},{"required":["maskVisualization"]},{"required":["maskBinocularGapVisualization"]},{"required":["calibrateMasks"]},{"required":["automaticMaskScaling"]},{"required":["automaticHeadsetSetup"]},{"required":["maskSetupFinished"]}],"allOf":[{"if":{"required":["automaticMaskScaling"]},"then":{"not":{"anyOf":[{"required":["calibrateMasks"]},{"required":["fovOnlyCenterScale"]},{"required":["fovOnlyOuterFeather"]},{"required":["disableOuterFeather"]},{"required":["peripheryTaaCenterScale"]},{"required":["peripheryTaaOuterScale"]},{"required":["centerHorizontalScale"]},{"required":["leftEyeOffsetX"]},{"required":["leftEyeOffsetY"]},{"required":["rightEyeOffsetX"]},{"required":["rightEyeOffsetY"]},{"required":["peripheryTaaBlendFeather"]},{"required":["automaticHeadsetSetup"]}]}}},{"if":{"required":["automaticHeadsetSetup"]},"then":{"not":{"anyOf":[{"required":["calibrateMasks"]},{"required":["automaticMaskScaling"]},{"required":["peripheryTaaEnabled"]},{"required":["fovOnlyCenterScale"]},{"required":["peripheryTaaCenterScale"]},{"required":["peripheryTaaOuterScale"]},{"required":["centerHorizontalScale"]},{"required":["leftEyeOffsetX"]},{"required":["leftEyeOffsetY"]},{"required":["rightEyeOffsetX"]},{"required":["rightEyeOffsetY"]},{"required":["peripheryTaaBlendFeather"]}]}}}]}},{"if":{"properties":{"action":{"const":"foveation_cycle"}},"required":["action"]},"then":{"required":["control"],"propertyNames":{"enum":["action","expectedBuildId","control","valueIndex"]}}},{"if":{"properties":{"action":{"const":"foveation_cycle"},"control":{"enum":["master","periphery_taa","center_horizontal_scale","mask_visualization"]}},"required":["action","control"]},"then":{"properties":{"valueIndex":{"maximum":1}}}},{"if":{"properties":{"action":{"const":"nr_toggle"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","expectedBuildId"]}}},{"if":{"properties":{"action":{"const":"nr_memory_recovery"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","expectedBuildId","durationMilliseconds","simulateDlssWarning","conservationOnly"]}}},{"if":{"required":["durationMilliseconds"]},"then":{"properties":{"action":{"const":"nr_memory_recovery"}},"not":{"required":["simulateDlssWarning"]}}},{"if":{"properties":{"action":{"const":"nr_stall_recovery"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","expectedBuildId","simulateTransientStall"]}}},{"if":{"required":["simulateTransientStall"]},"then":{"properties":{"action":{"const":"nr_stall_recovery"}}}},{"if":{"required":["simulateDlssWarning"]},"then":{"properties":{"action":{"const":"nr_memory_recovery"}}}},{"if":{"required":["conservationOnly"]},"then":{"required":["durationMilliseconds"]}},{"if":{"required":["maskSetupFinished"]},"then":{"properties":{"action":{"const":"foveation_configure"}},"propertyNames":{"enum":["action","expectedBuildId","maskSetupFinished"]}}},{"if":{"properties":{"action":{"const":"nr_reconstruction_compare"}},"required":["action"]},"then":{"required":["reconstructionOverride","reconstructionOverrideFrames","expectedReconstructionOverrideRevision"],"propertyNames":{"enum":["action","expectedBuildId","reconstructionOverride","reconstructionOverrideFrames","expectedReconstructionOverrideRevision"]}}},{"if":{"properties":{"action":{"const":"nr_peripheral_compare"}},"required":["action"]},"then":{"required":["peripheralOverride","peripheralOverrideFrames","expectedPeripheralOverrideRevision"],"propertyNames":{"enum":["action","expectedBuildId","peripheralOverride","peripheralOverrideFrames","expectedPeripheralOverrideRevision"]}}}]
+    "allOf":[{"if":{"properties":{"action":{"const":"nr_configure"}},"required":["action"]},"then":{"minProperties":2,"propertyNames":{"enum":["action","expectedBuildId","expectedConfigurationFingerprint","enabled","mode","fovOnly","renderscaleFov","modelResolutionPercent","reconstructionFilter","guidedReconstruction","parallelEyes","prewarmEnabled","pressureResolutionEnabled","centralAreaPercent","centralFeatherPixels","insertionPoint","preset","intensity","localToneStrength","localStructureStrength","skinStructureStrength","style","network","batchedStereo","directCommit","implementation","optimizedStereoPath","useAutoMask","uiCorrection","singleSubrectScale","characterEnabled","characterSceneStrengthsEnabled","characterVisualIsolationEnabled","experimentalCurrentContext","experimentalGpuMaskSupport","characterFaces","characterSkin","characterHair","characterHumans","characterOtherHumanoids","characterCreatures","characterAnimals","characterOtherActors","characterArmor","characterWeapons","characterProviderBlending","characterPackedCrops","characterFaceStrength","characterSkinStrength","characterHairStrength","characterArmorStrength","characterWeaponsStrength","characterMaximumDistanceMeters","characterAdaptiveRoiSelection","characterFocusScale","characterMinimumFacePixelSize","characterCropMode","characterRoiMargin","characterRoiHoldFrames","characterDepthAwareFeather","characterVisibilityDepthTest","characterFeatherRadius","characterFeatherDepthThreshold","characterDebugView","characterMaskTestMode","peripheralCompression","pauseInCombat"]}}},{"if":{"properties":{"action":{"const":"foveation_configure"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","expectedBuildId","foveatedEnabled","peripheryTaaEnabled","fovOnlyCenterScale","fovOnlyOuterFeather","disableOuterFeather","peripheryTaaCenterScale","peripheryTaaOuterScale","centerHorizontalScale","leftEyeOffsetX","leftEyeOffsetY","rightEyeOffsetX","rightEyeOffsetY","peripheryTaaBlendFeather","neuralFinalLdrBlendFeather","maskVisualization","maskBinocularGapVisualization","calibrateMasks","automaticMaskScaling","automaticHeadsetSetup","maskSetupFinished"]},"anyOf":[{"required":["foveatedEnabled"]},{"required":["peripheryTaaEnabled"]},{"required":["fovOnlyCenterScale"]},{"required":["fovOnlyOuterFeather"]},{"required":["disableOuterFeather"]},{"required":["peripheryTaaCenterScale"]},{"required":["peripheryTaaOuterScale"]},{"required":["centerHorizontalScale"]},{"required":["leftEyeOffsetX"]},{"required":["leftEyeOffsetY"]},{"required":["rightEyeOffsetX"]},{"required":["rightEyeOffsetY"]},{"required":["peripheryTaaBlendFeather"]},{"required":["neuralFinalLdrBlendFeather"]},{"required":["maskVisualization"]},{"required":["maskBinocularGapVisualization"]},{"required":["calibrateMasks"]},{"required":["automaticMaskScaling"]},{"required":["automaticHeadsetSetup"]},{"required":["maskSetupFinished"]}],"allOf":[{"if":{"required":["automaticMaskScaling"]},"then":{"not":{"anyOf":[{"required":["calibrateMasks"]},{"required":["fovOnlyCenterScale"]},{"required":["fovOnlyOuterFeather"]},{"required":["disableOuterFeather"]},{"required":["peripheryTaaCenterScale"]},{"required":["peripheryTaaOuterScale"]},{"required":["centerHorizontalScale"]},{"required":["leftEyeOffsetX"]},{"required":["leftEyeOffsetY"]},{"required":["rightEyeOffsetX"]},{"required":["rightEyeOffsetY"]},{"required":["peripheryTaaBlendFeather"]},{"required":["automaticHeadsetSetup"]}]}}},{"if":{"required":["automaticHeadsetSetup"]},"then":{"not":{"anyOf":[{"required":["calibrateMasks"]},{"required":["automaticMaskScaling"]},{"required":["peripheryTaaEnabled"]},{"required":["fovOnlyCenterScale"]},{"required":["peripheryTaaCenterScale"]},{"required":["peripheryTaaOuterScale"]},{"required":["centerHorizontalScale"]},{"required":["leftEyeOffsetX"]},{"required":["leftEyeOffsetY"]},{"required":["rightEyeOffsetX"]},{"required":["rightEyeOffsetY"]},{"required":["peripheryTaaBlendFeather"]}]}}}]}},{"if":{"properties":{"action":{"const":"foveation_cycle"}},"required":["action"]},"then":{"required":["control"],"propertyNames":{"enum":["action","expectedBuildId","control","valueIndex"]}}},{"if":{"properties":{"action":{"const":"foveation_cycle"},"control":{"enum":["master","periphery_taa","center_horizontal_scale","mask_visualization"]}},"required":["action","control"]},"then":{"properties":{"valueIndex":{"maximum":1}}}},{"if":{"properties":{"action":{"const":"nr_toggle"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","expectedBuildId"]}}},{"if":{"properties":{"action":{"const":"nr_memory_recovery"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","expectedBuildId","durationMilliseconds","simulateDlssWarning","conservationOnly"]}}},{"if":{"required":["durationMilliseconds"]},"then":{"properties":{"action":{"const":"nr_memory_recovery"}},"not":{"required":["simulateDlssWarning"]}}},{"if":{"properties":{"action":{"const":"nr_stall_recovery"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","expectedBuildId","simulateTransientStall"]}}},{"if":{"required":["simulateTransientStall"]},"then":{"properties":{"action":{"const":"nr_stall_recovery"}}}},{"if":{"required":["simulateDlssWarning"]},"then":{"properties":{"action":{"const":"nr_memory_recovery"}}}},{"if":{"required":["conservationOnly"]},"then":{"required":["durationMilliseconds"]}},{"if":{"required":["maskSetupFinished"]},"then":{"properties":{"action":{"const":"foveation_configure"}},"propertyNames":{"enum":["action","expectedBuildId","maskSetupFinished"]}}},{"if":{"properties":{"action":{"const":"nr_reconstruction_compare"}},"required":["action"]},"then":{"required":["reconstructionOverride","reconstructionOverrideFrames","expectedReconstructionOverrideRevision"],"propertyNames":{"enum":["action","expectedBuildId","reconstructionOverride","reconstructionOverrideFrames","expectedReconstructionOverrideRevision"]}}},{"if":{"properties":{"action":{"const":"nr_peripheral_compare"}},"required":["action"]},"then":{"required":["peripheralOverride","peripheralOverrideFrames","expectedPeripheralOverrideRevision"],"propertyNames":{"enum":["action","expectedBuildId","peripheralOverride","peripheralOverrideFrames","expectedPeripheralOverrideRevision"]}}}]
   }
 })nr";
 
@@ -3141,6 +3142,7 @@ namespace
 							  { "reconstructionFilter", NeuralRendering::GetReconstructionFilterName(NeuralRendering::ClampReconstructionFilter(a_upscaling.settings.neuralRenderingReconstructionFilter)) },
 							  { "guidedReconstruction", a_upscaling.settings.neuralRenderingGuidedReconstruction },
 							  { "peripheralCompression", a_upscaling.settings.neuralRenderingPeripheralCompression },
+							  { "pauseInCombat", a_upscaling.settings.neuralRenderingPauseInCombat },
 							  { "pressureResolutionEnabled", a_upscaling.settings.neuralRenderingPressureResolutionEnabled },
 							  { "prewarmEnabled", a_upscaling.settings.neuralRenderingPrewarmEnabled },
 							  { "parallelEyes", a_upscaling.settings.neuralRenderingParallelEyes },
@@ -3236,6 +3238,12 @@ namespace
 													{ "source", snapshot.parameterCoreSource },
 												} },
 						 } },
+			{ "combatPause", [&a_upscaling]() {
+				 const auto pause = a_upscaling.GetNeuralCombatPauseSnapshot();
+				 return json{ { "sampled", pause.sampled }, { "frame", pause.sampled ? json(pause.frame) : json(nullptr) },
+					 { "phase", NeuralRendering::GetCombatPausePhaseName(pause.phase) }, { "paused", pause.IsPaused() },
+					 { "resumeDelayMs", NeuralRendering::kCombatResumeDelayMs }, { "remainingMs", pause.remainingMs } };
+			 }() },
 			{ "renderer", {
 							  { "lastCompletedStage", NeuralRendering::ToString(snapshot.lastCompletedStage) },
 							  { "shaderGenerationRequested", snapshot.shaderGenerationRequested },
@@ -7422,6 +7430,7 @@ namespace
 		std::string_view{ "reconstructionFilter" },
 		std::string_view{ "guidedReconstruction" },
 		std::string_view{ "peripheralCompression" },
+		std::string_view{ "pauseInCombat" },
 		std::string_view{ "pressureResolutionEnabled" },
 		std::string_view{ "prewarmEnabled" },
 		std::string_view{ "parallelEyes" },
@@ -7490,6 +7499,7 @@ namespace
 		std::optional<NeuralRendering::ReconstructionFilter> reconstructionFilter;
 		std::optional<bool> guidedReconstruction;
 		std::optional<bool> peripheralCompression;
+		std::optional<bool> pauseInCombat;
 		std::optional<bool> pressureResolutionEnabled;
 		std::optional<bool> prewarmEnabled;
 		std::optional<bool> parallelEyes;
@@ -7569,7 +7579,7 @@ namespace
 
 		[[nodiscard]] bool HasAnyControl() const noexcept
 		{
-			return enabled || mode || fovOnly || renderscaleFov || modelResolutionPercent || reconstructionFilter || guidedReconstruction || peripheralCompression || pressureResolutionEnabled || prewarmEnabled || parallelEyes || centralAreaPercent || centralFeatherPixels || insertionPoint || preset || network || HasImageTuningOverrides() ||
+			return enabled || mode || fovOnly || renderscaleFov || modelResolutionPercent || reconstructionFilter || guidedReconstruction || peripheralCompression || pauseInCombat || pressureResolutionEnabled || prewarmEnabled || parallelEyes || centralAreaPercent || centralFeatherPixels || insertionPoint || preset || network || HasImageTuningOverrides() ||
 			       batchedStereo || directCommit || implementation ||
 			       legacyOptimizedStereoPath || useAutoMask || uiCorrection ||
 			       singleSubrectScale ||
@@ -7652,6 +7662,13 @@ namespace
 				return false;
 			}
 			a_request.peripheralCompression = value->get<bool>();
+		}
+		if (const auto value = a_args.find("pauseInCombat"); value != a_args.end()) {
+			if (!value->is_boolean()) {
+				a_error = { { "error", "pauseInCombat must be a boolean" }, { "errorCode", "nr_pause_in_combat_invalid" }, { "field", "pauseInCombat" } };
+				return false;
+			}
+			a_request.pauseInCombat = value->get<bool>();
 		}
 		if (const auto value = a_args.find("reconstructionFilter"); value != a_args.end()) {
 			a_request.reconstructionFilter = NeuralRendering::ParseReconstructionFilter(*value);
@@ -9278,6 +9295,8 @@ namespace
 					requestedSettings.neuralRenderingGuidedReconstruction = *request.guidedReconstruction;
 				if (request.peripheralCompression)
 					requestedSettings.neuralRenderingPeripheralCompression = *request.peripheralCompression;
+				if (request.pauseInCombat)
+					requestedSettings.neuralRenderingPauseInCombat = *request.pauseInCombat;
 				if (request.reconstructionFilter)
 					requestedSettings.neuralRenderingReconstructionFilter = static_cast<uint32_t>(*request.reconstructionFilter);
 				if (request.modelResolutionPercent)
@@ -9571,6 +9590,7 @@ namespace
 					previousSettings.neuralRenderingReconstructionFilter != requestedSettings.neuralRenderingReconstructionFilter ||
 					previousSettings.neuralRenderingGuidedReconstruction != requestedSettings.neuralRenderingGuidedReconstruction ||
 					previousSettings.neuralRenderingPeripheralCompression != requestedSettings.neuralRenderingPeripheralCompression ||
+					previousSettings.neuralRenderingPauseInCombat != requestedSettings.neuralRenderingPauseInCombat ||
 					previousSettings.neuralRenderingPressureResolutionEnabled != requestedSettings.neuralRenderingPressureResolutionEnabled ||
 					characterSettingsChanged;
 				if (!settingsChanged) {
@@ -11397,6 +11417,7 @@ namespace VRRenderScaleDevBenchBridge
 		static const std::string descriptor = [] {
 			auto result = json::parse(kNeuralRenderingDescriptor);
 			result["description"] = result["description"].get<std::string>() +
+			                        " nr_configure pauseInCombat optionally pauses NR during player combat and resumes after three seconds out of combat; ordinary upscaling stays active. "
 			                        " nr_configure network chooses 0 Runtime default, 1 Legacy (310.8-like), or 2 Newer within the same DLL. "
 			                        "Explicit networks require 310.9; unsupported explicit requests reject without mutation. Saved choices on "
 			                        "other runtime families use native 0. Changing the effective preset retires incompatible eye features "

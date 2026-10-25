@@ -3,7 +3,6 @@
 #include "Common/FrameBuffer.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/VolumetricLighting.hlsli"
-#include "Common/VolumetricLightingClarity.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
 
@@ -13,6 +12,8 @@ struct PS_OUTPUT
 };
 
 #if defined(PSHADER)
+#	include "Common/VolumetricLightingClarity.hlsli"
+
 SamplerState VLSourceSampler : register(s0);
 SamplerState LFSourceSampler : register(s1);
 

@@ -44,6 +44,28 @@ namespace
 	using D3D11ShaderTest::Check;
 	using Buffer = D3D11ShaderTest::ConstantBuffer;
 
+	ComPtr<ID3DBlob> CompileCompositeShader(bool vr, bool volumetric, bool lensFlare, bool vertex)
+	{
+		std::vector<D3D_SHADER_MACRO> defines{ { vertex ? "VSHADER" : "PSHADER", "1" } };
+		if (vr)
+			defines.push_back({ "VR", "1" });
+		if (volumetric)
+			defines.push_back({ "VOLUMETRIC_LIGHTING", "1" });
+		if (lensFlare)
+			defines.push_back({ "LENS_FLARE", "1" });
+		defines.push_back({ nullptr, nullptr });
+		Util::CustomInclude includes("package/Shaders");
+		ComPtr<ID3DBlob> bytecode, errors;
+		const auto compiled = D3DCompileFromFile(L"package/Shaders/ISCompositeLensFlareVolumetricLighting.hlsl",
+			defines.data(), &includes, "main", vertex ? "vs_5_0" : "ps_5_0",
+			D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+			0, bytecode.GetAddressOf(), errors.GetAddressOf());
+		if (errors)
+			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+		Check(compiled);
+		return bytecode;
+	}
+
 	struct Texture
 	{
 		ComPtr<ID3D11Texture2D> resource;
@@ -98,22 +120,7 @@ namespace
 			shafts(device, "Shafts", D3D11_BIND_SHADER_RESOURCE, width == 2 && height == 1 ? shaftPixels : nullptr, width, height),
 			flare(device, "Flare", D3D11_BIND_SHADER_RESOURCE, width == 2 && height == 1 ? flarePixels : nullptr, width, height)
 		{
-			std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" } };
-			if (vr)
-				defines.push_back({ "VR", "1" });
-			if (vl)
-				defines.push_back({ "VOLUMETRIC_LIGHTING", "1" });
-			if (lf)
-				defines.push_back({ "LENS_FLARE", "1" });
-			defines.push_back({ nullptr, nullptr });
-			Util::CustomInclude includes("package/Shaders");
-			ComPtr<ID3DBlob> bytecode, errors;
-			const auto compiled = D3DCompileFromFile(L"package/Shaders/ISCompositeLensFlareVolumetricLighting.hlsl",
-				defines.data(), &includes, "main", "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
-				0, bytecode.GetAddressOf(), errors.GetAddressOf());
-			if (errors)
-				std::cerr << static_cast<const char*>(errors->GetBufferPointer());
-			Check(compiled);
+			auto bytecode = CompileCompositeShader(vr, vl, lf, false);
 			Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
 			Check(device->CreatePixelShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, pixel.GetAddressOf()));
 			Util::SetResourceName(pixel.Get(), "VolumetricTest::CompositePS");
@@ -466,6 +473,7 @@ int main()
 			VerifyClarityFiltering(device.Get(), context.Get(), vr);
 			std::cout << (vr ? "VR" : "SE/AE") << " clarity: haze, shafts, gamma, dynamic bounds and master gate passed\n";
 			for (const auto mode : { std::array{ true, false }, std::array{ false, true }, std::array{ true, true } }) {
+				CompileCompositeShader(vr, mode[0], mode[1], true);
 				Fixture fixture(device.Get(), context.Get(), vr, mode[0], mode[1]);
 				Verify(fixture);
 				std::cout << (vr ? "VR" : "SE/AE") << " volumetric=" << mode[0] << " flare=" << mode[1] << " passed\n";

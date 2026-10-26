@@ -2796,9 +2796,12 @@ namespace
 	}
 }
 
+#include "render_map_context_call_test.h"
+
 int main()
 {
 	try {
+		TestContextCallEntryGeneration();
 		TestInactiveRuntime();
 		TestNestedBoundaries();
 		TestShaderIdentityGenerations();

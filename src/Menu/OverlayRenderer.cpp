@@ -55,23 +55,32 @@ namespace
 		return std::max(2.0f, ThemeManager::Constants::OVERLAY_WINDOW_POSITION * Util::GetUIScale() * 0.5f);
 	}
 
-	void ExcludeShaderCompilationWindowFromTop(ImVec2& a_availableMin, const ImVec2& a_availableMax)
+	constexpr const char* kTopStatusWindows[] = {
+		"ShaderCompilationInfo", "UWCacheCreationInfo", "ShaderBlockingInfo"
+	};
+	constexpr ImGuiWindowFlags kShaderStatusWindowFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
+	                                                      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+	                                                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing;
+
+	bool IsShaderStatusDesktopOnly()
 	{
-		const char* topStatusWindows[] = {
-			"ShaderCompilationInfo",
-			"UWCacheCreationInfo",
-			"ShaderBlockingInfo"
-		};
+		if (!REL::Module::IsVR() || !globals::features::vr.IsOpenVRCompatible() ||
+			globals::features::vr.GetEffectiveMenuAttachMode() == VR::Settings::OverlayAttachMode::None)
+			return false;
+		const auto* menu = globals::menu;
+		return !menu || !OverlayPolicy::ShouldRouteShaderCompilationStatusToHMD(true, menu->GetSettings().ShowCompilationHUDInVR);
+	}
 
-		for (const char* windowName : topStatusWindows) {
-			auto* statusWindow = ImGui::FindWindowByName(windowName);
-			if (!statusWindow || !statusWindow->Active || statusWindow->Hidden)
-				continue;
+	ImGuiWindow* FindStatusWindowForLayout(const char* a_windowName)
+	{
+		auto* window = ImGui::FindWindowByName(a_windowName);
+		if (!window || !window->Active || window->Hidden)
+			return nullptr;
 
-			const float statusBottom = statusWindow->Pos.y + statusWindow->Size.y + ImGui::GetStyle().ItemSpacing.y;
-			if (statusBottom > a_availableMin.y)
-				a_availableMin.y = std::min(statusBottom, a_availableMax.y);
-		}
+		// Desktop-only status remains active in ImGui after its HMD draw lists are filtered.
+		if (std::strcmp(a_windowName, "ShaderCompilationInfo") == 0 && IsShaderStatusDesktopOnly())
+			return nullptr;
+		return window;
 	}
 
 	ImVec2 FitSizeToAspect(ImVec2 a_availableSize, float a_heightOverWidth)
@@ -196,11 +205,16 @@ namespace
 		const std::vector<OverlayFeature*>& overlays,
 		ImDrawData& filteredDrawData)
 	{
-		if (!drawData || !ShouldFilterVROverlaysFromDesktop()) {
+		if (!drawData) {
 			return drawData;
 		}
+		const bool filterVROverlays = ShouldFilterVROverlaysFromDesktop();
+		const bool deferShaderStatus = IsShaderStatusDesktopOnly();
+		if (!filterVROverlays && !deferShaderStatus)
+			return drawData;
 
 		bool removedAny = false;
+		bool deferredAny = false;
 		int totalIdxCount = 0;
 		int totalVtxCount = 0;
 
@@ -209,18 +223,43 @@ namespace
 		filteredDrawData.CmdLists.reserve(drawData->CmdListsCount);
 		for (int i = 0; i < drawData->CmdListsCount; ++i) {
 			auto* cmdList = drawData->CmdLists[i];
-			if (IsHiddenDesktopOverlayDrawList(cmdList, overlays)) {
+			if (filterVROverlays && IsHiddenDesktopOverlayDrawList(cmdList, overlays)) {
 				removedAny = true;
 				continue;
 			}
 
-			filteredDrawData.CmdLists.push_back(cmdList);
 			totalIdxCount += cmdList->IdxBuffer.Size;
 			totalVtxCount += cmdList->VtxBuffer.Size;
+			if (deferShaderStatus && cmdList->_OwnerName && std::strcmp(cmdList->_OwnerName, "ShaderCompilationInfo") == 0) {
+				deferredAny = true;
+				continue;
+			}
+			filteredDrawData.CmdLists.push_back(cmdList);
 		}
 
-		if (!removedAny) {
+		if (!removedAny && !deferredAny) {
 			return drawData;
+		}
+		// Desktop-only status stays readable without affecting shared ImGui focus or HMD layout.
+		if (deferredAny) {
+			const int retainedCount = filteredDrawData.CmdLists.Size;
+			int statusIndex = retainedCount;
+			const auto* foreground = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
+			for (int index = 0; index < retainedCount; ++index) {
+				auto* list = filteredDrawData.CmdLists[index];
+				const auto* window = list->_OwnerName ? ImGui::FindWindowByName(list->_OwnerName) : nullptr;
+				if (list == foreground || (window && (window->Flags & ImGuiWindowFlags_Tooltip))) {
+					statusIndex = index;
+					break;
+				}
+			}
+			for (auto* cmdList : drawData->CmdLists) {
+				if (cmdList->_OwnerName && std::strcmp(cmdList->_OwnerName, "ShaderCompilationInfo") == 0 &&
+					!(filterVROverlays && IsHiddenDesktopOverlayDrawList(cmdList, overlays)))
+					filteredDrawData.CmdLists.push_back(cmdList);
+			}
+			std::rotate(filteredDrawData.CmdLists.begin() + statusIndex,
+				filteredDrawData.CmdLists.begin() + retainedCount, filteredDrawData.CmdLists.end());
 		}
 
 		filteredDrawData.CmdListsCount = filteredDrawData.CmdLists.Size;
@@ -494,7 +533,8 @@ ImVec2 OverlayRenderer::GetDefaultVRSettingsWindowSize(bool a_excludeShaderCompi
 	}
 
 	if (a_excludeShaderCompilationWindow) {
-		ExcludeShaderCompilationWindowFromTop(availableMin, availableMax);
+		float topStatusLeft = availableMin.x;
+		ExcludeTopStatusWindowsFromLayout(availableMin, availableMax, topStatusLeft);
 	}
 	availableMin.y = std::min(availableMin.y, availableMax.y);
 
@@ -519,6 +559,35 @@ float OverlayRenderer::GetDefaultVRLeftAnchorX(float a_windowWidth)
 	return std::clamp(blendedLeftEdge, minLeftEdge, std::max(minLeftEdge, maxRightEdge - a_windowWidth));
 }
 
+float OverlayRenderer::GetTopStatusWindowBottom(float a_minimumY, const char* a_excludeWindow)
+{
+	for (const char* windowName : kTopStatusWindows) {
+		if (a_excludeWindow && std::strcmp(windowName, a_excludeWindow) == 0)
+			continue;
+		if (auto* window = FindStatusWindowForLayout(windowName))
+			a_minimumY = std::max(a_minimumY, window->Pos.y + window->Size.y + ImGui::GetStyle().ItemSpacing.y);
+	}
+	return a_minimumY;
+}
+
+bool OverlayRenderer::ExcludeTopStatusWindowsFromLayout(ImVec2& a_availableMin, const ImVec2& a_availableMax, float& a_topStatusLeft)
+{
+	bool foundTopStatusWindow = false;
+	for (const char* windowName : kTopStatusWindows) {
+		auto* statusWindow = FindStatusWindowForLayout(windowName);
+		if (!statusWindow)
+			continue;
+
+		const float statusBottom = statusWindow->Pos.y + statusWindow->Size.y + ImGui::GetStyle().ItemSpacing.y;
+		if (statusBottom > a_availableMin.y)
+			a_availableMin.y = std::min(statusBottom, a_availableMax.y);
+		a_topStatusLeft = foundTopStatusWindow ? std::min(a_topStatusLeft, statusWindow->Pos.x) : statusWindow->Pos.x;
+		foundTopStatusWindow = true;
+	}
+
+	return foundTopStatusWindow;
+}
+
 bool OverlayRenderer::MoveWindowBelowShaderCompilationStatus(ImVec2& position, const ImVec2& windowSize, const ImVec2& pivot)
 {
 	if (windowSize.x <= 0.0f || windowSize.y <= 0.0f) {
@@ -531,17 +600,11 @@ bool OverlayRenderer::MoveWindowBelowShaderCompilationStatus(ImVec2& position, c
 	const ImVec2 windowMax(windowMin.x + windowSize.x, windowMin.y + windowSize.y);
 	const ImRect windowRect(windowMin, windowMax);
 
-	const char* kStatusWindows[] = {
-		"ShaderCompilationInfo",
-		"UWCacheCreationInfo",
-		"ShaderBlockingInfo"
-	};
-
 	float targetMinY = windowRect.Min.y;
 	bool overlappedAny = false;
-	for (const char* windowName : kStatusWindows) {
-		auto* statusWin = ImGui::FindWindowByName(windowName);
-		if (!statusWin || !statusWin->Active || statusWin->Hidden) {
+	for (const char* windowName : kTopStatusWindows) {
+		auto* statusWin = FindStatusWindowForLayout(windowName);
+		if (!statusWin) {
 			continue;
 		}
 
@@ -758,7 +821,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 		const bool hasFeatureIssues = FeatureIssues::HasFeatureIssues();
 
 		ImGui::SetNextWindowPos(ImVec2(pos, pos));
-		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
+		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, kShaderStatusWindowFlags)) {
 			ImGui::End();
 			return;
 		}
@@ -834,7 +897,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	if (failed) {
 		if (!hide) {
 			ImGui::SetNextWindowPos(ImVec2(pos, pos));
-			if (!ImGui::Begin("ShaderCompilationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
+			if (!ImGui::Begin("ShaderCompilationInfo", nullptr, kShaderStatusWindowFlags)) {
 				ImGui::End();
 				return;
 			}
@@ -848,7 +911,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 		}
 	} else if (renderDocAvailable) {
 		ImGui::SetNextWindowPos(ImVec2(pos, pos));
-		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
+		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, kShaderStatusWindowFlags)) {
 			ImGui::End();
 			return;
 		}
@@ -933,19 +996,7 @@ void OverlayRenderer::RenderShaderBlockingStatus()
 		pos = GetDefaultVRLeftAnchorX(GetDefaultVRSettingsWindowSize(false).x);
 	}
 
-	// Stack below shader compilation window if visible
-	float yPos = pos;
-	if (auto* shaderWin = ImGui::FindWindowByName("ShaderCompilationInfo")) {
-		if (shaderWin->Active) {
-			yPos = shaderWin->Pos.y + shaderWin->Size.y + ImGui::GetStyle().ItemSpacing.y;
-		}
-	}
-	// Also stack below water cache overlay if visible
-	if (auto* waterWin = ImGui::FindWindowByName("UWCacheCreationInfo")) {
-		if (waterWin->Active && waterWin->Pos.y + waterWin->Size.y > yPos) {
-			yPos = waterWin->Pos.y + waterWin->Size.y + ImGui::GetStyle().ItemSpacing.y;
-		}
-	}
+	const float yPos = GetTopStatusWindowBottom(pos, "ShaderBlockingInfo");
 	ImGui::SetNextWindowPos(ImVec2(pos, yPos));
 	if (!ImGui::Begin("ShaderBlockingInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
 		ImGui::End();

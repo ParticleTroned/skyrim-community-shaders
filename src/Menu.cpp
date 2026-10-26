@@ -273,30 +273,6 @@ namespace
 		}
 	}
 
-	bool ExcludeTopStatusWindowsFromLayout(ImVec2& a_availableMin, const ImVec2& a_availableMax, float& a_topStatusLeft)
-	{
-		const char* topStatusWindows[] = {
-			"ShaderCompilationInfo",
-			"UWCacheCreationInfo",
-			"ShaderBlockingInfo"
-		};
-
-		bool foundTopStatusWindow = false;
-		for (const char* windowName : topStatusWindows) {
-			auto* statusWindow = ImGui::FindWindowByName(windowName);
-			if (!statusWindow || !statusWindow->Active || statusWindow->Hidden)
-				continue;
-
-			const float statusBottom = statusWindow->Pos.y + statusWindow->Size.y + ImGui::GetStyle().ItemSpacing.y;
-			if (statusBottom > a_availableMin.y)
-				a_availableMin.y = std::min(statusBottom, a_availableMax.y);
-			a_topStatusLeft = foundTopStatusWindow ? std::min(a_topStatusLeft, statusWindow->Pos.x) : statusWindow->Pos.x;
-			foundTopStatusWindow = true;
-		}
-
-		return foundTopStatusWindow;
-	}
-
 	ImVec2 FitSizeToAspect(ImVec2 a_availableSize, float a_heightOverWidth)
 	{
 		a_availableSize.x = std::max(a_availableSize.x, 1.0f);
@@ -340,7 +316,7 @@ namespace
 			}
 
 			float topStatusLeft = availableMin.x;
-			const bool constrainedByTopStatusWindow = ExcludeTopStatusWindowsFromLayout(availableMin, availableMax, topStatusLeft);
+			const bool constrainedByTopStatusWindow = OverlayRenderer::ExcludeTopStatusWindowsFromLayout(availableMin, availableMax, topStatusLeft);
 			availableMin.y = std::min(availableMin.y, availableMax.y);
 
 			const ImVec2 availableSpan(
@@ -1463,7 +1439,10 @@ void Menu::DrawOverlay()
 
 	OverlayRenderer::RenderOverlay(
 		*this,
-		[this]() { ProcessInputEventQueue(); },
+		[this]() {
+			ProcessInputEventQueue();
+			UpdateIdleCameraSuppression();
+		},
 		[this]() { DrawSettings(); },
 		[](std::vector<InputCombo> keys) -> const char* {
 			static std::string result_cache;
@@ -1478,6 +1457,14 @@ bool Menu::IsMenuSessionOpen() const
 {
 	const auto* editorWindow = EditorWindow::GetSingleton();
 	return IsEnabled || (editorWindow && editorWindow->open);
+}
+
+void Menu::UpdateIdleCameraSuppression()
+{
+	if (ShouldSwallowInput())
+		vanityCameraSuppression.Acquire();
+	else
+		vanityCameraSuppression.Release();
 }
 
 bool Menu::HasClosedMenuOverlay() const

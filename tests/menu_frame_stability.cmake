@@ -14,6 +14,12 @@ set(_menu_frame_test_headers
     "${_menu_frame_test_dir}/menu_recovery_focus_under_test.h"
     "${_menu_frame_test_dir}/menu_sidebar_font_under_test.h"
     "${_menu_frame_test_dir}/menu_header_scale_under_test.h"
+    "${_menu_frame_test_dir}/menu_idle_camera_under_test.h"
+    "${_menu_frame_test_dir}/menu_status_visibility_under_test.h"
+    "${_menu_frame_test_dir}/menu_status_reservation_under_test.h"
+    "${_menu_frame_test_dir}/menu_water_status_stack_under_test.h"
+    "${_menu_frame_test_dir}/menu_shader_status_stack_under_test.h"
+    "${_menu_frame_test_dir}/menu_desktop_status_under_test.h"
 )
 add_custom_command(
     OUTPUT ${_menu_frame_test_headers}
@@ -28,6 +34,7 @@ add_custom_command(
         src/Hooks.cpp
         src/Menu.cpp
         src/Menu/OverlayRenderer.cpp
+        src/Features/UnifiedWater.cpp
         src/Menu/FeatureListRenderer.cpp
         src/Menu/MenuHeaderRenderer.cpp
         tests/extract_source_region.cmake
@@ -39,11 +46,12 @@ add_controller_test(menu_frame_stability_test MenuFrameStability tests/menu_fram
 target_link_libraries(menu_frame_stability_test PRIVATE imgui::imgui)
 add_controller_test(menu_present_test MenuPresent tests/menu_present_test.cpp)
 add_controller_test(menu_layout_recovery_test MenuLayoutRecovery tests/menu_layout_recovery_test.cpp)
+add_controller_test(menu_session_stability_test MenuSessionStability tests/menu_session_stability_test.cpp)
 target_link_libraries(menu_layout_recovery_test PRIVATE imgui::imgui)
 foreach(
     _menu_frame_test_target
     IN
-    ITEMS menu_frame_stability_test menu_present_test menu_layout_recovery_test
+    ITEMS menu_frame_stability_test menu_present_test menu_layout_recovery_test menu_session_stability_test
 )
     add_dependencies(${_menu_frame_test_target} menu_frame_test_sources)
     target_include_directories(

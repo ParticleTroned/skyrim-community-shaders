@@ -848,23 +848,7 @@ void UnifiedWater::DrawOverlay()
 	if (REL::Module::IsVR()) {
 		pos = OverlayRenderer::GetDefaultVRLeftAnchorX(OverlayRenderer::GetDefaultVRSettingsWindowSize(false).x);
 	}
-	const auto& style = ImGui::GetStyle();
-
-	// Stack below shader compilation window if it's visible this frame
-	float vOffset = 0.0f;
-	if (auto* shaderWin = ImGui::FindWindowByName("ShaderCompilationInfo")) {
-		if (shaderWin->Active) {
-			vOffset = (shaderWin->Pos.y + shaderWin->Size.y) - pos + style.ItemSpacing.y;
-		}
-	}
-	// Also stack below shader blocking overlay if visible
-	if (auto* blockingWin = ImGui::FindWindowByName("ShaderBlockingInfo")) {
-		if (blockingWin->Active) {
-			float blockingBottom = (blockingWin->Pos.y + blockingWin->Size.y) - pos + style.ItemSpacing.y;
-			if (blockingBottom > vOffset)
-				vOffset = blockingBottom;
-		}
-	}
+	const float yPos = OverlayRenderer::GetTopStatusWindowBottom(pos, "UWCacheCreationInfo");
 
 	const auto snapshot = waterCache->GetBuildProgressSnapshot();
 
@@ -875,7 +859,7 @@ void UnifiedWater::DrawOverlay()
 		auto percent = static_cast<float>(snapshot.completed) / static_cast<float>(snapshot.total);
 		auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", snapshot.completed, snapshot.total, 100 * percent);
 
-		ImGui::SetNextWindowPos(ImVec2(pos, pos + vOffset));
+		ImGui::SetNextWindowPos(ImVec2(pos, yPos));
 		if (!ImGui::Begin("UWCacheCreationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
 			ImGui::End();
 			return;
@@ -885,7 +869,7 @@ void UnifiedWater::DrawOverlay()
 
 		ImGui::End();
 	} else if (waterCache->HasBuildFailed()) {
-		ImGui::SetNextWindowPos(ImVec2(pos, pos + vOffset));
+		ImGui::SetNextWindowPos(ImVec2(pos, yPos));
 		if (!ImGui::Begin("UWCacheCreationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
 			ImGui::End();
 			return;

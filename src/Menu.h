@@ -4,6 +4,7 @@
 #include "Menu/ThemeManager.h"
 #include "Utils/Input.h"
 #include "Utils/Serialize.h"
+#include "Utils/VanityCamera.h"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -521,6 +522,9 @@ public:
 	void ProcessVROverlayInput();
 
 private:
+	/// Synchronizes idle-camera ownership after UI input and before any rendering early return.
+	void UpdateIdleCameraSuppression();
+	Util::VanityCameraSuppressionLease vanityCameraSuppression;
 	std::atomic<bool> pendingLayoutReset = false;
 	bool layoutResetKeyHeld = false;
 	bool resetMenuDocking = false;

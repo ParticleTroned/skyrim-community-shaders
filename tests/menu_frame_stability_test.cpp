@@ -1,5 +1,6 @@
 #include "Menu/HomePageRenderer.h"
 #include "Menu/Layout.h"
+#include "Menu/OverlayPolicy.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -9,7 +10,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
+#include <vector>
 
 // Real ImGui executes the production theme and welcome layout. Only game
 // settings and unrelated colour loading are replaced by test dependencies.
@@ -20,6 +23,7 @@ struct Menu
 	struct Settings
 	{
 		bool FirstTimeSetupCompleted = false;
+		bool ShowCompilationHUDInVR = false;
 	} settings;
 	const Settings& GetSettings() const { return settings; }
 	struct Theme
@@ -84,8 +88,57 @@ ImGui::PopStyleVar(2);
 struct OverlayRenderer
 {
 	static bool MoveWindowBelowShaderCompilationStatus(ImVec2&, const ImVec2&, const ImVec2&);
+	static bool ExcludeTopStatusWindowsFromLayout(ImVec2&, const ImVec2&, float&);
+	static float GetTopStatusWindowBottom(float, const char*);
+	static float ShaderBlockingTop(float);
 };
+struct VR
+{
+	struct Settings
+	{
+		enum class OverlayAttachMode
+		{
+			None,
+			HMDOnly,
+			ControllerOnly
+		};
+	};
+	bool compatible = true;
+	Settings::OverlayAttachMode attachMode = Settings::OverlayAttachMode::HMDOnly;
+	bool IsOpenVRCompatible() const { return compatible; }
+	Settings::OverlayAttachMode GetEffectiveMenuAttachMode() const { return attachMode; }
+};
+namespace globals
+{
+	Menu* menu = nullptr;
+	namespace features
+	{
+		VR vr;
+	}
+}
+#include "menu_status_visibility_under_test.h"
+
 #include "menu_status_overlap_under_test.h"
+#include "menu_status_reservation_under_test.h"
+float OverlayRenderer::ShaderBlockingTop(float pos)
+{
+#include "menu_shader_status_stack_under_test.h"
+	return yPos;
+}
+static float WaterStatusTop(float pos)
+{
+#include "menu_water_status_stack_under_test.h"
+	return yPos;
+}
+struct OverlayFeature
+{
+	const char* name;
+	bool HideFromDesktopWhenSubmittedToVR() const { return true; }
+	const char* GetOverlayWindowName() const { return name; }
+};
+static bool filterDesktopOverlays = false;
+static bool ShouldFilterVROverlaysFromDesktop() { return filterDesktopOverlays; }
+#include "menu_desktop_status_under_test.h"
 struct SettingsWindowLayout
 {
 	bool constrainedByTopStatusWindow = false;
@@ -198,9 +251,240 @@ static bool CheckTraceMenuPosition()
 	return passed;
 }
 
+static bool CheckStatusPresentationLayout()
+{
+	bool passed = true;
+	using AttachMode = VR::Settings::OverlayAttachMode;
+	for (bool isVR : { false, true }) {
+		for (bool compatible : { false, true }) {
+			for (auto attachMode : { AttachMode::None, AttachMode::HMDOnly, AttachMode::ControllerOnly }) {
+				for (const char* name : { "ShaderCompilationInfo", "UWCacheCreationInfo", "ShaderBlockingInfo" }) {
+					ImGui::CreateContext();
+					auto& io = ImGui::GetIO();
+					io.IniFilename = nullptr;
+					io.DisplaySize = ImVec2(1920, 1620);
+					io.Fonts->AddFontDefault();
+					io.Fonts->Build();
+					Menu menu;
+					globals::menu = &menu;
+					globals::features::vr = { compatible, attachMode };
+					REL::Module::vr = isVR;
+					const ImVec2 original(700, 800);
+					ImVec2 position = original;
+					for (int frame = 0; frame < 32; ++frame) {
+						ImGui::NewFrame();
+						const bool statusPresent = frame >= 4 && frame < 26;
+						menu.settings.ShowCompilationHUDInVR = frame >= 12 && frame < 20;
+						const float height = frame % 4 < 2 ? 80.0f : 300.0f;
+						if (statusPresent) {
+							ImGui::SetNextWindowPos(ImVec2(12, 8));
+							ImGui::SetNextWindowSize(ImVec2(600, height));
+							ImGui::Begin(name, nullptr, ImGuiWindowFlags_NoSavedSettings);
+							ImGui::TextUnformatted("Changing desktop status");
+							ImGui::End();
+						}
+						const bool hiddenFromHMD = isVR && compatible && attachMode != AttachMode::None &&
+						                           std::strcmp(name, "ShaderCompilationInfo") == 0 && !menu.settings.ShowCompilationHUDInVR;
+						const bool expectedReservation = statusPresent && !hiddenFromHMD;
+						ImVec2 minimum(2, 2);
+						float left = 2;
+						const bool reserved = OverlayRenderer::ExcludeTopStatusWindowsFromLayout(minimum, ImVec2(1918, 1618), left);
+						const float expectedMinY = expectedReservation ? 8 + height + ImGui::GetStyle().ItemSpacing.y : 2;
+						const float nextStatusTop = OverlayRenderer::GetTopStatusWindowBottom(2, nullptr);
+						const float selfExcludedTop = OverlayRenderer::GetTopStatusWindowBottom(2, name);
+						if (nextStatusTop != expectedMinY || selfExcludedTop != 2) {
+							std::puts("FAIL: status stacking reserves invisible panels or stacks a panel below itself");
+							passed = false;
+						}
+						if (reserved != expectedReservation || minimum.y != expectedMinY || left != (expectedReservation ? 12 : 2)) {
+							std::printf("FAIL: %s reserves incorrect canvas space (VR %d compatible %d mode %d frame %d)\n",
+								name, isVR, compatible, static_cast<int>(attachMode), frame);
+							passed = false;
+						}
+						if (isVR) {
+							position = ApplyStatusLayout(position, ImVec2(300, 300), false, { reserved }, frame == 0);
+							const ImVec2 expectedPosition = expectedReservation ? ImVec2(200, 250) : original;
+							if (position.x != expectedPosition.x || position.y != expectedPosition.y) {
+								std::puts("FAIL: hidden status moves the HMD menu or visible status fails to restore placement");
+								passed = false;
+							}
+						}
+						ImGui::Render();
+					}
+					ImGui::DestroyContext();
+				}
+			}
+		}
+	}
+	globals::menu = nullptr;
+	REL::Module::vr = false;
+	return passed;
+}
+
+static bool CheckCombinedStatusStacking()
+{
+	bool passed = true;
+	for (bool blocking : { false, true }) {
+		ImGui::CreateContext();
+		auto& io = ImGui::GetIO();
+		io.IniFilename = nullptr;
+		io.DisplaySize = ImVec2(1920, 1620);
+		io.Fonts->AddFontDefault();
+		io.Fonts->Build();
+		Menu menu;
+		globals::menu = &menu;
+		globals::features::vr = { true, VR::Settings::OverlayAttachMode::HMDOnly };
+		REL::Module::vr = true;
+		for (int frame = 0; frame < 24; ++frame) {
+			ImGui::NewFrame();
+			menu.settings.ShowCompilationHUDInVR = frame >= 12;
+			const float shaderHeight = frame % 2 ? 80.0f : 300.0f;
+			const float spacing = ImGui::GetStyle().ItemSpacing.y;
+			ImGui::SetNextWindowPos(ImVec2(8, 8));
+			ImGui::SetNextWindowSize(ImVec2(600, shaderHeight));
+			ImGui::Begin("ShaderCompilationInfo");
+			ImGui::End();
+			float expectedWaterTop = menu.settings.ShowCompilationHUDInVR ? 8 + shaderHeight + spacing : 8;
+			if (blocking) {
+				const float top = OverlayRenderer::ShaderBlockingTop(8);
+				passed &= top == expectedWaterTop;
+				ImGui::SetNextWindowPos(ImVec2(8, top));
+				ImGui::SetNextWindowSize(ImVec2(600, 80));
+				ImGui::Begin("ShaderBlockingInfo");
+				ImGui::End();
+				expectedWaterTop += 80 + spacing;
+			}
+			const float waterTop = WaterStatusTop(8);
+			passed &= waterTop == expectedWaterTop;
+			ImGui::SetNextWindowPos(ImVec2(8, waterTop));
+			ImGui::SetNextWindowSize(ImVec2(600, 80));
+			ImGui::Begin("UWCacheCreationInfo");
+			ImGui::End();
+			ImVec2 minimum(2, 2);
+			float left = 2;
+			const bool reserved = OverlayRenderer::ExcludeTopStatusWindowsFromLayout(minimum, ImVec2(1918, 1618), left);
+			passed &= reserved && minimum.y == expectedWaterTop + 80 + spacing;
+			ImGui::Render();
+		}
+		ImGui::DestroyContext();
+	}
+	globals::menu = nullptr;
+	REL::Module::vr = false;
+	if (!passed)
+		std::puts("FAIL: hidden shader status indirectly displaces water or shader-blocking panels");
+	return passed;
+}
+
+static bool CheckPassiveDesktopStatus()
+{
+	bool passed = true;
+	ImGui::CreateContext();
+	auto& io = ImGui::GetIO();
+	io.IniFilename = nullptr;
+	io.DisplaySize = ImVec2(1920, 1620);
+	io.Fonts->AddFontDefault();
+	io.Fonts->Build();
+	Menu menu;
+	globals::menu = &menu;
+	io.MouseDrawCursor = true;
+	OverlayFeature privateOverlay{ "PrivateOverlay" };
+	const std::vector<OverlayFeature*> overlays{ &privateOverlay };
+	for (int frame = 0; frame < 24; ++frame) {
+		REL::Module::vr = frame < 12 || frame >= 16;
+		globals::features::vr.compatible = frame < 20;
+		globals::features::vr.attachMode = frame >= 8 && frame < 12 ?
+		                                       VR::Settings::OverlayAttachMode::None :
+		                                       VR::Settings::OverlayAttachMode::HMDOnly;
+		menu.settings.ShowCompilationHUDInVR = frame >= 4 && frame < 8;
+		io.AddMousePosEvent(30, 30);
+		ImGui::NewFrame();
+		const bool statusPresent = frame % 8 >= 2 && frame % 8 < 6;
+		if (statusPresent) {
+			ImGui::SetNextWindowPos(ImVec2(8, 8));
+			ImGui::SetNextWindowSize(ImVec2(600, 150));
+			ImGui::Begin("ShaderCompilationInfo", nullptr, kShaderStatusWindowFlags);
+			ImGui::TextUnformatted("Passive shader status");
+			ImGui::End();
+		}
+		ImGui::SetNextWindowPos(ImVec2(0, 0));
+		ImGui::SetNextWindowSize(ImVec2(700, 700));
+		ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoTitleBar);
+		ImGui::TextUnformatted("Settings under desktop-only status");
+		ImGui::End();
+		if (statusPresent) {
+			auto* status = ImGui::FindWindowByName("ShaderCompilationInfo");
+			if (frame % 4 < 2)
+				ImGui::BringWindowToDisplayFront(status);
+			else
+				ImGui::BringWindowToDisplayBack(status);
+		}
+		if (frame > 1) {
+			const auto* settings = ImGui::FindWindowByName("Settings");
+			passed &= ImGui::GetCurrentContext()->HoveredWindow == settings && ImGui::GetCurrentContext()->NavWindow == settings;
+		}
+		ImGui::SetNextWindowPos(ImVec2(900, 900));
+		ImGui::Begin("PrivateOverlay", nullptr, ImGuiWindowFlags_NoFocusOnAppearing);
+		ImGui::TextUnformatted("Private overlay");
+		ImGui::End();
+		ImGui::BeginTooltip();
+		ImGui::TextUnformatted("Settings tooltip");
+		ImGui::EndTooltip();
+		ImGui::Render();
+		auto* original = ImGui::GetDrawData();
+		const auto* foreground = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
+		std::vector<ImDrawList*> sourceLists(original->CmdLists.begin(), original->CmdLists.end());
+		for (bool filter : { false, true }) {
+			filterDesktopOverlays = filter;
+			ImDrawData filtered;
+			auto* desktop = BuildDesktopDrawData(original, overlays, filtered);
+			std::vector<ImDrawList*> expected;
+			ImDrawList* shader = nullptr;
+			const bool desktopOnly = frame < 4 || (frame >= 16 && frame < 20);
+			for (auto* list : sourceLists) {
+				if (filter && list->_OwnerName && std::strcmp(list->_OwnerName, "PrivateOverlay") == 0)
+					continue;
+				if (desktopOnly && list->_OwnerName && std::strcmp(list->_OwnerName, "ShaderCompilationInfo") == 0)
+					shader = list;
+				else
+					expected.push_back(list);
+			}
+			std::vector<ImDrawList*> retained;
+			bool sawShader = false;
+			int vertices = 0, indices = 0;
+			for (int index = 0; index < desktop->CmdLists.Size; ++index) {
+				auto* list = desktop->CmdLists[index];
+				vertices += list->VtxBuffer.Size;
+				indices += list->IdxBuffer.Size;
+				if (list == shader) {
+					sawShader = true;
+					continue;
+				}
+				retained.push_back(list);
+				if (shader) {
+					const auto* window = list->_OwnerName ? ImGui::FindWindowByName(list->_OwnerName) : nullptr;
+					const bool aboveStatus = list == foreground || (window && (window->Flags & ImGuiWindowFlags_Tooltip));
+					passed &= aboveStatus == sawShader;
+				}
+			}
+			passed &= retained == expected && sawShader == (shader != nullptr);
+			passed &= desktop->TotalVtxCount == vertices && desktop->TotalIdxCount == indices;
+			passed &= std::equal(sourceLists.begin(), sourceLists.end(), original->CmdLists.begin());
+		}
+	}
+	ImGui::DestroyContext();
+	globals::menu = nullptr;
+	REL::Module::vr = false;
+	if (!passed)
+		std::puts("FAIL: passive desktop status steals HMD input, becomes unreadable, or mutates shared drawing");
+	return passed;
+}
+
 int main()
 {
 	bool passed = CheckTraceMenuPosition();
+	passed &= CheckStatusPresentationLayout();
+	passed &= CheckCombinedStatusStacking();
+	passed &= CheckPassiveDesktopStatus();
 	for (float fontSize : { 21.0f, 27.0f, 42.0f, 54.0f }) {
 		for (float globalScale : { 0.0f, 0.5f }) {
 			for (bool traceOverlay : { false, true }) {

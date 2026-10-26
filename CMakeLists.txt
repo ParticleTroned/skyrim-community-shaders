@@ -1796,6 +1796,32 @@ if(BUILD_CONTROLLER_TESTS)
     target_link_libraries(sun_receiver_trace_test PRIVATE xbyak::xbyak)
     add_controller_test(sun_receiver_policy_test SunReceiverPolicy tests/sun_receiver_policy_test.cpp)
     add_controller_test(sun_receiver_log_test SunReceiverLog tests/sun_receiver_log_test.cpp)
+    set(_plugin_compatibility_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/plugin-compatibility-test"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_plugin_compatibility_test_dir}/plugin_compatibility_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_plugin_compatibility_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_plugin_compatibility.cmake"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/XSEPlugin.cpp"
+            "${PROJECT_SOURCE_DIR}/tests/extract_plugin_compatibility.cmake"
+            "${PROJECT_SOURCE_DIR}/tests/extract_source_region.cmake"
+        VERBATIM
+    )
+    add_controller_test(plugin_compatibility_test PluginCompatibility tests/plugin_compatibility_test.cpp)
+    target_sources(
+        plugin_compatibility_test
+        PRIVATE
+            "${_plugin_compatibility_test_dir}/plugin_compatibility_under_test.h"
+    )
+    target_include_directories(
+        plugin_compatibility_test
+        PRIVATE "${_plugin_compatibility_test_dir}"
+    )
     target_link_libraries(
         sun_receiver_policy_test
         PRIVATE nlohmann_json::nlohmann_json

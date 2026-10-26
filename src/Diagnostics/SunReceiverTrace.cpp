@@ -1,6 +1,7 @@
 #include "Diagnostics/SunReceiverTrace.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Compatibility.h"
 #	include "Diagnostics/BoundedThreadTrace.h"
 #	include "EngineFixes/SunReceiverPolicy.h"
 #	include "Diagnostics/SunReceiverTraceRequest.h"
@@ -492,7 +493,7 @@ namespace Diagnostics::SunReceiverTrace
 				throw std::runtime_error(installationError);
 			if (!journal.Quiescent() || !traceId.empty())
 				throw std::invalid_argument("Finish and release the retained trace before starting another");
-			if (GetModuleHandleW(L"ShadowFixes.dll"))
+			if (Compatibility::IsLoaded(Compatibility::shadowFixes))
 				throw std::invalid_argument("ShadowFixes.dll masks native failures; disable it before tracing");
 			const auto request = ParseStart(args);
 			RE::TESObjectREFR* reference = nullptr;
@@ -585,7 +586,7 @@ namespace Diagnostics::SunReceiverTrace
 			const bool vr = REL::Module::IsVR();
 			if (vr && REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15)
 				throw std::runtime_error("VR receiver diagnostics require verified Skyrim VR 1.4.15");
-			if (GetModuleHandleW(L"ShadowFixes.dll"))
+			if (Compatibility::IsLoaded(Compatibility::shadowFixes))
 				throw std::runtime_error("ShadowFixes.dll owns receiver repair; disable it before using receiver diagnostics");
 			if (!SunShadowReceiver::Available())
 				throw std::runtime_error(SunShadowReceiver::InstallationError());

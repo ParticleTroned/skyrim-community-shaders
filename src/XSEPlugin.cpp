@@ -44,6 +44,7 @@
 
 #include "ENB/ENBSeriesAPI.h"
 
+#include <algorithm>
 #include <atomic>
 
 #define DLLEXPORT __declspec(dllexport)
@@ -61,6 +62,25 @@ namespace
 	{
 		logger::error("{}", errorMessage);
 		errors.push_back(std::move(errorMessage));
+		stl::report_and_fail(std::format("CSX cannot start.\n\n{}\n\nResolve this error and restart Skyrim.", errors.back()));
+	}
+
+	void CheckIncompatiblePlugins()
+	{
+		const auto pluginsPath = Util::PathHelpers::GetDataPath() / "SKSE" / "Plugins";
+		for (const auto& plugin : Compatibility::incompatiblePlugins) {
+			const auto probe = Compatibility::ProbePlugin(plugin, pluginsPath);
+			if (!probe.present && !probe.error)
+				continue;
+			const auto dllName = stl::utf16_to_utf8(plugin.dll).value_or("<unicode conversion error>"s);
+			const auto errorMessage = probe.error ?
+			                              std::format("Cannot check incompatible DLL {}: {}. Check access to Data/SKSE/Plugins before using CSX.", dllName, probe.error.message()) :
+			                          plugin.reason.empty() ?
+			                              std::format("Incompatible DLL {} detected. Remove it to use CSX.", dllName) :
+			                              std::format("Incompatible DLL {} detected ({}). Remove it to use CSX.", dllName, plugin.reason);
+			if (std::ranges::find(errors, errorMessage) == errors.end())
+				PushStartupError(errorMessage);
+		}
 	}
 
 	void CommunityShadersAPIMessageHandler(SKSE::MessagingInterface::Message* a_message)
@@ -71,21 +91,18 @@ namespace
 		CSX::Api::HandleServiceRegistryMessage(a_message);
 	}
 
-	bool RegisterCommunityShadersAPIMessageListener()
+	void RegisterCommunityShadersAPIMessageListener()
 	{
 		auto messaging = SKSE::GetMessagingInterface();
 		if (!messaging) {
 			PushStartupError("SKSE messaging interface unavailable while registering CSX API message listener. Check CSX.log for details.");
-			return false;
 		}
 
 		if (!messaging->RegisterListener(nullptr, CommunityShadersAPIMessageHandler)) {
 			PushStartupError("Failed to register CSX API message listener. Check CSX.log for details.");
-			return false;
 		}
 
 		logger::info("Registered legacy CSAP and versioned CSXR API listener for currently loaded plugins");
-		return true;
 	}
 
 	void ResetRuntimeStateAfterGameLoad()
@@ -166,10 +183,14 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
+			// All SKSE DLLs are loaded now, including plugins ordered after CSX.
+			CheckIncompatiblePlugins();
+			if (!errors.empty())
+				break;
+
 			// Keep early consumers reachable; refresh the wildcard registration
 			// for plugins loaded after CSX before their PostLoad callbacks.
-			if (!RegisterCommunityShadersAPIMessageListener())
-				break;
+			RegisterCommunityShadersAPIMessageListener();
 
 			// Establish the API owner from an actual SKSE game-thread task. The
 			// lifecycle callback itself is not a reliable thread-affinity oracle.
@@ -195,6 +216,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		}
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
+			CheckIncompatiblePlugins();
 			if (errors.empty()) {
 				VRFpsStabilizer::Initialize();
 				VRFpsStabilizer::InstallDevBench();
@@ -271,10 +293,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		}
 	case SKSE::MessagingInterface::kDataLoaded:
 		{
-			for (auto it = errors.begin(); it != errors.end(); ++it) {
-				auto& errorMessage = *it;
-				RE::DebugMessageBox(std::format("CSX\n{}\nAll hooks and features are disabled.", errorMessage).c_str());
-			}
+			CheckIncompatiblePlugins();
 
 			if (errors.empty()) {
 				globals::OnDataLoaded();
@@ -402,14 +421,15 @@ bool Load()
 		stl::report_and_fail("Old version of PrivateProfileRedirector detected, 0.6.2+ required if using it."sv);
 	}
 
+	CheckIncompatiblePlugins();
+
 	auto messaging = SKSE::GetMessagingInterface();
 	if (!messaging) {
 		logger::error("SKSE messaging interface unavailable");
 		return false;
 	}
 	CSX::Api::InitializeServiceRegistryProvider();
-	if (!RegisterCommunityShadersAPIMessageListener())
-		return false;
+	RegisterCommunityShadersAPIMessageListener();
 
 	if (!messaging->RegisterListener("SKSE", MessageHandler)) {
 		logger::error("Failed to register SKSE message listener");
@@ -434,21 +454,9 @@ bool Load()
 	auto log = spdlog::default_logger();
 	log->set_level(state->GetLogLevel());
 
-	for (const auto& plugin : Compatibility::incompatiblePlugins) {
-		if (LoadLibrary(plugin.dll)) {
-			auto dllName = stl::utf16_to_utf8(plugin.dll).value_or("<unicode conversion error>"s);
-			auto errorMessage = plugin.reason.empty() ?
-			                        std::format("Incompatible DLL {} detected. Remove it to use CSX.", dllName) :
-			                        std::format("Incompatible DLL {} detected ({}). Remove it to use CSX.", dllName, plugin.reason);
-			logger::error("{}", errorMessage);
-			errors.push_back(errorMessage);
-		}
-	}
-
 	auto pushMissingDllError = [&](std::string_view dllName) {
 		auto errorMessage = std::format("Required DLL {} was missing. Install it to use CSX.", dllName);
-		logger::error("{}", errorMessage);
-		errors.push_back(errorMessage);
+		PushStartupError(errorMessage);
 	};
 
 	// Engine Fixes: VR accepts either EngineFixesVR.dll or the EngineFixes.dll NG
@@ -471,6 +479,7 @@ bool Load()
 		}
 	}
 
+	CheckIncompatiblePlugins();
 	if (errors.empty()) {
 		Hooks::InstallEarlyHooks();
 		logger::info("Calling feature Load methods");

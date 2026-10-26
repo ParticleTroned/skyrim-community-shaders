@@ -146,6 +146,11 @@ option(
     OFF
 )
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
+option(
+    VR_RENDERSCALE_AB_TEST
+    "Include session-only VR render-scale A/B controls in a tester build"
+    OFF
+)
 option(NVPERF_SUPPORT "Build developer-only NVIDIA D3D11 hardware counters" OFF)
 set(NVPERF_SDK_ROOT
     ""
@@ -270,6 +275,7 @@ add_custom_target(
         "DEVBENCH_BRIDGE=${DEVBENCH_BRIDGE}" --build-option
         "CSX_RELEASE_VERSION=${CSX_RELEASE_VERSION}" --build-option
         "TRACY_SUPPORT=${TRACY_SUPPORT}" --build-option
+        "VR_RENDERSCALE_AB_TEST=${VR_RENDERSCALE_AB_TEST}" --build-option
         "NVPERF_SUPPORT=${NVPERF_SUPPORT}" --build-option
         "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}" --build-option
         "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}" --build-option
@@ -400,6 +406,12 @@ target_link_libraries(
 if(DEVBENCH_BRIDGE)
     target_link_libraries(${PROJECT_NAME} PRIVATE DevBench::API advapi32)
     target_compile_definitions(${PROJECT_NAME} PRIVATE DEVBENCH_BRIDGE_ENABLED)
+endif()
+if(DEVBENCH_BRIDGE OR VR_RENDERSCALE_AB_TEST)
+    target_compile_definitions(
+        ${PROJECT_NAME}
+        PRIVATE VR_RENDERSCALE_AB_TEST_ENABLED
+    )
 endif()
 
 include(NvPerf)
@@ -3551,6 +3563,15 @@ if(BUILD_CONTROLLER_TESTS)
         vr_render_scale_qualification_policy_test
         VRRenderScaleQualificationPolicy
         tests/vr_render_scale_qualification_policy_test.cpp
+    )
+    add_controller_test(
+        vr_render_scale_ab_test
+        VRRenderScaleAB
+        tests/vr_render_scale_ab_test.cpp
+    )
+    target_compile_definitions(
+        vr_render_scale_ab_test
+        PRIVATE VR_RENDERSCALE_AB_TEST_ENABLED
     )
     add_controller_test(
         vr_render_scale_replacement_telemetry_policy_test

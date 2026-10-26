@@ -6861,6 +6861,7 @@ namespace
 			"cpu_performance_stop",
 			"cpu_performance_reset",
 			"fsr_shared_guides",
+			"ab_test",
 			"gpu_performance_status",
 			"gpu_performance_start",
 			"gpu_performance_stop",
@@ -8945,6 +8946,26 @@ namespace
 			std::move(response));
 	}
 
+	json BuildRenderScaleABTestStatus(const Upscaling& a_upscaling)
+	{
+		const auto& test = a_upscaling.vrRenderScaleABTest;
+		const auto frame = globals::state ? globals::state->frameCount : 0u;
+		json conditions = json::array();
+		for (std::size_t index = 0; index < VRRenderScaleABTest::kNames.size(); ++index) {
+			const auto counts = test.Read(static_cast<VRRenderScaleABTest::Condition>(index));
+			conditions.push_back({ { "condition", VRRenderScaleABTest::kNames[index] },
+				{ "gameplayFrames", counts.frames }, { "menuHookFrames", counts.menuHookFrames },
+				{ "nativeCandidates", counts.nativeCandidates }, { "nativeRestored", counts.nativeRestored },
+				{ "nativeReplaced", counts.nativeReplaced } });
+		}
+		return { { "persistent", false },
+			{ "requested", VRRenderScaleABTest::kNames[static_cast<std::size_t>(test.Requested())] },
+			{ "applied", VRRenderScaleABTest::kNames[static_cast<std::size_t>(test.Applied(frame))] },
+			{ "eligibleThisFrame", test.Eligible(frame) }, { "frame", frame },
+			{ "renderScaleActive", a_upscaling.IsVRRenderScaleModeActive() },
+			{ "conditions", std::move(conditions) } };
+	}
+
 	json BuildRenderScaleResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
@@ -10740,6 +10761,33 @@ namespace
 			});
 		}
 
+		if (action == "ab_test") {
+			std::optional<VRRenderScaleABTest::Condition> condition;
+			for (auto it = a_args.begin(); it != a_args.end(); ++it) {
+				if (it.key() != "action" && it.key() != "condition")
+					return json{ { "error", "ab_test accepts only action and optional condition" } };
+			}
+			if (a_args.contains("condition")) {
+				if (!a_args["condition"].is_string())
+					return json{ { "error", "ab_test condition must be a string" } };
+				const auto name = a_args["condition"].get<std::string>();
+				for (std::size_t index = 0; index < VRRenderScaleABTest::kNames.size(); ++index) {
+					if (name == VRRenderScaleABTest::kNames[index])
+						condition = static_cast<VRRenderScaleABTest::Condition>(index);
+				}
+				if (!condition)
+					return json{ { "error", "unknown ab_test condition" } };
+			}
+			return RunOnMainThread([condition]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "render-scale A/B testing requires Skyrim VR" } };
+				auto& upscaling = globals::features::upscaling;
+				if (condition && !upscaling.RequestVRRenderScaleABTest(*condition))
+					return json{ { "error", "load Upscaling and stop GPU telemetry capture before changing the A/B test" } };
+				return json{ { "action", "ab_test" }, { "abTest", BuildRenderScaleABTestStatus(upscaling) } };
+			});
+		}
+
 		if (action == "fsr_shared_guides") {
 			std::optional<bool> enabled;
 			if (a_args.contains("enabled")) {
@@ -12111,6 +12159,21 @@ namespace VRRenderScaleDevBenchBridge
 			R"json({"description":"Control and inspect CSX VR render-scale, including DevBench-only retryTelemetry schema v1 with non-coalesced causes, source locations, per-role viewport wait intervals, QPC timestamps and stabilization milestones in status and qualification receipts, plus bounded exact-owner preparation stage telemetry and a single-owner, QPC-timed server-side qualification barrier that returns the first coherent exact-cell/profile observation without menu queries or client polling. qualification_begin requires an active stress session plus caller-supplied transitionId and ownerId; qualification_dispatch freezes the latency origin immediately before the command and can atomically reset/start CPU plus GPU performance telemetry on that dispatch frame; qualification_wait accepts the same ownership pair, an exact editor ID and/or form ID, an optional target profile, an optional exact foveation fixture, and a timeout that defaults to 120000ms and cannot exceed it. None and TAA targets validate the authoritative effective profile and native presentation without requiring inactive controller projections to mirror TAA. target.fsrRuntime matches the configured preference; coherent desired, authoritative, resource, lifecycle, and eye-dispatch evidence independently validates the physical FSR backend, including capability fallback. Omit target when an external controller owns profile selection; the waiter then requires a post-dispatch profile change and validates the mutually coherent observed profile without changing it. DLSS dispatch tracing remains opt-in and non-blocking. stop, dlss_trace_stop, and cpu_performance_stop accept expectedSessionId to fail closed if capture ownership changed; gpu_performance_stop accepts expectedStartFrame as its ownership guard; expectedStartFrame remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses expose cpuPerformance.sessionId and state; stop retains the session ID and reset clears it to zero. Every response identifies the producing DLL; expectedBuildId fails closed on a stale build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","qualification_status","qualification_begin","qualification_dispatch","qualification_wait","qualification_cancel","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","gpu_performance_status","gpu_performance_start","gpu_performance_stop","gpu_performance_reset","dlss_trace_status","dlss_trace_start","dlss_trace_read","dlss_trace_stop","dlss_trace_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"transitionId":{"type":"integer","minimum":1,"description":"Caller-owned nonzero qualification transition ID. Begin, dispatch, wait, and cancel must present it."},"ownerId":{"type":"string","minLength":1,"maxLength":128,"description":"Caller-generated qualification owner identity. Begin, dispatch, wait, and cancel must present the same value."},"startPerformanceTelemetry":{"type":"boolean","default":false,"description":"qualification_dispatch only: require inactive CPU and GPU captures, reset/start both on the dispatch frame, and return their ownership receipts."},"expectedCell":{"type":"integer","minimum":1,"maximum":4294967295,"description":"Optional exact destination cell form ID. qualification_wait requires this or expectedCellEditorId; when both are supplied both must match."},"expectedCellEditorId":{"type":"string","minLength":1,"maxLength":128,"description":"Preferred stable exact destination cell editor ID for qualification_wait."},"timeoutMs":{"type":"integer","minimum":1,"maximum":120000,"default":120000,"description":"Maximum qualification deadline measured from qualification_dispatch on the server QPC clock; the waiter returns immediately when the requested milestone is satisfied."},"target":{"type":"object","additionalProperties":false,"properties":{"method":{"type":"string","enum":["none","taa","dlss","fsr"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"renderScaleMode":{"type":"boolean"},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"],"description":"Configured FSR runtime preference only. Physical backend fallback is validated independently."}},"required":["method","qualityMode","renderScaleMode"],"description":"Optional exact expected profile for a runner-owned selection. None and TAA require qualityMode 0 and renderScaleMode false. Omit it for an externally owned selection; the waiter observes and returns the exact coherent profile without mutating upscaling state."},"foveation":{"type":"object","additionalProperties":false,"properties":{"foveatedVendorDispatch":{"type":"boolean"},"foveatedCenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAEnable":{"type":"boolean"},"peripheryTAACenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAOuterScale":{"type":"number","minimum":0,"maximum":1}},"required":["foveatedVendorDispatch","foveatedCenterArea","peripheryTAAEnable","peripheryTAACenterArea","peripheryTAAOuterScale"],"description":"Optional exact settings fixture. Float comparisons use the tolerance returned in each receipt; active physical flags must agree with the requested enable states."},"afterSequence":{"type":"integer","minimum":0,"description":"For dlss_trace_read, return records after this sequence."},"limit":{"type":"integer","minimum":1,"maximum":256,"description":"Maximum ring records returned by dlss_trace_read; defaults to 32 and pinned failures are returned separately."},"expectedSessionId":{"type":"integer","minimum":1,"description":"Optional ownership guard for stop, dlss_trace_stop, and cpu_performance_stop. The corresponding active session must match before it is stopped."},"expectedStartFrame":{"type":"integer","minimum":0,"description":"Optional ownership guard for gpu_performance_stop and legacy secondary guard for cpu_performance_stop. When present, the active capture window start frame must match before it is stopped."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})json";
 		static const std::string runtimeDiagnosticDescriptor = [&] {
 			auto descriptor = json::parse(diagnosticDescriptor);
+			descriptor["inputSchema"]["properties"]["condition"] = {
+				{ "type", "string" },
+				{ "enum", VRRenderScaleABTest::kNames },
+				{ "description", "ab_test only: session condition; omit for status. Applies at a settled gameplay frame boundary." }
+			};
+			descriptor["description"] = descriptor["description"].get<std::string>() +
+			                            " ab_test selects or inspects session-only baseline, bypass_menu_draws, restore_native_passes, or both. "
+			                            "Overrides pause during menus/loading/transitions and reset on process restart. "
+			                            "The menu control bypasses current bridge draw hooks; it does not recreate the removed early-1.7 hook. "
+			                            "Native restoration forwards eligible image-space callbacks to Skyrim before D3D state mutation. "
+			                            "Conditions report cumulative eligible gameplayFrames, menuHookFrames, nativeCandidates, nativeRestored, "
+			                            "and successful nativeReplaced callbacks. These counters do not measure timing or prove improvement. "
+			                            "Zero path counts mean the path was not observed. Requested and applied conditions can differ; "
+			                            "eligibleThisFrame must be true for an active gameplay override. Status counters are independently sampled. ";
+
 			auto description = descriptor["description"].get<std::string>();
 			constexpr std::string_view previousNativeDescription =
 				"None and TAA targets validate the authoritative effective profile "
@@ -12281,6 +12344,27 @@ namespace VRRenderScaleDevBenchBridge
 			descriptor["inputSchema"]["properties"]["action"]["enum"] = RenderScaleActions();
 			descriptor["inputSchema"]["allOf"] = neuralDescriptor.at("inputSchema").at("allOf");
 			descriptor["outputSchema"] = neuralDescriptor.at("outputSchema");
+			auto& abSchema = descriptor["outputSchema"]["properties"]["abTest"];
+			abSchema = { { "type", "object" }, { "additionalProperties", false },
+				{ "required", { "persistent", "requested", "applied", "eligibleThisFrame", "frame", "renderScaleActive", "conditions" } } };
+			auto& abOutput = abSchema["properties"];
+			abOutput["frame"] = { { "type", "integer" }, { "minimum", 0 } };
+			abOutput["renderScaleActive"] = { { "type", "boolean" } };
+			abOutput["persistent"] = { { "type", "boolean" } };
+			abOutput["requested"] = { { "type", "string" }, { "enum", VRRenderScaleABTest::kNames } };
+			abOutput["applied"] = abOutput["requested"];
+			abOutput["eligibleThisFrame"] = { { "type", "boolean" } };
+			abOutput["conditions"] = {
+				{ "type", "array" }, { "minItems", 4 }, { "maxItems", 4 },
+				{ "items", { { "type", "object" }, { "additionalProperties", false },
+							   { "required", { "condition", "gameplayFrames", "menuHookFrames", "nativeCandidates", "nativeRestored", "nativeReplaced" } },
+							   { "properties", { { "condition", { { "type", "string" }, { "enum", VRRenderScaleABTest::kNames } } },
+												   { "gameplayFrames", { { "type", "integer" }, { "minimum", 0 } } },
+												   { "menuHookFrames", { { "type", "integer" }, { "minimum", 0 } } },
+												   { "nativeCandidates", { { "type", "integer" }, { "minimum", 0 } } },
+												   { "nativeRestored", { { "type", "integer" }, { "minimum", 0 } } },
+												   { "nativeReplaced", { { "type", "integer" }, { "minimum", 0 } } } } } } }
+			};
 			return descriptor.dump();
 		}();
 		devBench->RegisterTool(

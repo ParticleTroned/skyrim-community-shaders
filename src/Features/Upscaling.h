@@ -51,6 +51,9 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Upscaling/VRRenderScaleRetryTelemetry.h"
 #endif
+#ifdef VR_RENDERSCALE_AB_TEST_ENABLED
+#	include "Upscaling/VRRenderScaleABTest.h"
+#endif
 
 namespace RE
 {
@@ -2700,6 +2703,16 @@ public:
 	bool ShouldApplyDLSSSharpening() const;
 	bool ShouldRouteDLSSMainPassThroughSharpener() const;
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
+#ifdef VR_RENDERSCALE_AB_TEST_ENABLED
+	/** Shares menu/API admission without requiring developer telemetry in tester builds. */
+	[[nodiscard]] bool CanChangeVRRenderScaleABTest() const noexcept;
+	/** Session-only A/B controls shared by the menu and DevBench. */
+	bool RequestVRRenderScaleABTest(VRRenderScaleABTest::Condition a_condition);
+	void DrawVRRenderScaleABTest();
+	void UpdateVRRenderScaleABTestFrame();
+	void LogVRRenderScaleABTest() const;
+	VRRenderScaleABTest::State vrRenderScaleABTest;
+#endif
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	/** @brief Returns fixed-path progress without affecting release dispatch behavior. */
 	VRMainPassDispatchDiagnosticSnapshot GetVRMainPassDispatchDiagnosticSnapshot() const noexcept;

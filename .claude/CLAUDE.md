@@ -50,6 +50,7 @@ powershell.exe -Command "./BuildRelease.bat [PRESET_NAME]"
 -   `AIO_ZIP_TO_DIST` (default: ON) - Creates all-in-one distribution package as 7z in `/dist`
 -   `SKIP_RUNTIME_DOWNLOADS` (default: OFF) - Allows [DLL development without upscaler runtime downloads](../docs/development/runtime-downloads.md); incomplete runtime payloads block installation and packaging.
 -   `TRACY_SUPPORT` (default: OFF) - Enables Tracy profiler integration for performance analysis
+-   `VR_RENDERSCALE_AB_TEST` (default: OFF) - Includes session-only VR A/B menu controls in a tester build without enabling DevBench or Tracy. DevBench builds include these controls automatically.
 
 **Auto-Deployment Configuration**:
 

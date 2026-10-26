@@ -17128,6 +17128,115 @@ void Upscaling::DrawSettingsHeaderControls()
 	ImGui::Spacing();
 }
 
+#ifdef VR_RENDERSCALE_AB_TEST_ENABLED
+bool Upscaling::CanChangeVRRenderScaleABTest() const noexcept
+{
+	if (!globals::game::isVR || !loaded)
+		return false;
+#	ifdef DEVBENCH_BRIDGE_ENABLED
+	return !IsVRRenderScaleGPUPerformanceTelemetryActive();
+#	else
+	return true;
+#	endif
+}
+
+bool Upscaling::RequestVRRenderScaleABTest(VRRenderScaleABTest::Condition a_condition)
+{
+	if (!CanChangeVRRenderScaleABTest())
+		return false;
+	const auto previous = vrRenderScaleABTest.Requested();
+	if (!vrRenderScaleABTest.Request(a_condition))
+		return false;
+	if (previous != a_condition) {
+		LogVRRenderScaleABTest();
+		logger::info("[VRRenderScaleAB] Selected {}; applies on a settled gameplay frame; session only.",
+			VRRenderScaleABTest::kNames[static_cast<std::size_t>(a_condition)]);
+	}
+	return true;
+}
+
+void Upscaling::UpdateVRRenderScaleABTestFrame()
+{
+	auto* state = globals::state;
+	if (!state || !vrRenderScaleABTest.NeedsFrame(state->frameCount))
+		return;
+	const auto suspensionEpoch = vrRenderScaleABTest.SuspensionEpoch();
+	const bool eligible = globals::game::isVR && loaded && state->inWorld &&
+	                      !IsCommunityShadersMenuOpen() &&
+	                      !IsExplicitVRMenuPresentationContextActive() &&
+	                      !(globals::game::ui && globals::game::ui->GameIsPaused()) &&
+	                      !IsVRLoadingPresentationContextActive(state) &&
+	                      !IsVRTransitionPresentationProtectionActive(*this, state) &&
+	                      !HasPendingVRRenderScaleTransition() &&
+	                      !pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) &&
+	                      !perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) &&
+	                      !postLoadRuntimeResetPending.load(std::memory_order_acquire) &&
+	                      !IsVRInitialLoadPresentationProtectionActive() &&
+	                      !IsVRPostLoadCompositorHoldActive() && !IsSubmitStageDeviceLost();
+	vrRenderScaleABTest.BeginFrame(state->frameCount, eligible, suspensionEpoch);
+}
+
+void Upscaling::LogVRRenderScaleABTest() const
+{
+	for (std::size_t index = 0; index < VRRenderScaleABTest::kNames.size(); ++index) {
+		const auto counts = vrRenderScaleABTest.Read(static_cast<VRRenderScaleABTest::Condition>(index));
+		logger::info("[VRRenderScaleAB] {} gameplayFrames={} menuHookFrames={} nativeCandidates={} nativeRestored={} nativeReplaced={}",
+			VRRenderScaleABTest::kNames[index], counts.frames, counts.menuHookFrames,
+			counts.nativeCandidates, counts.nativeRestored, counts.nativeReplaced);
+	}
+}
+
+void Upscaling::DrawVRRenderScaleABTest()
+{
+	ImGui::SeparatorText("Render-scale A/B test");
+	ImGui::TextWrapped("Select A, B, C or D, close the menu, then observe the same viewpoint. Return to A between comparisons. No restart or DevBench connection is needed.");
+	const bool blocked = !CanChangeVRRenderScaleABTest();
+	{
+		ImGui::BeginDisabled(blocked);
+		auto restoreDisabled = ScopeExit([]() { ImGui::EndDisabled(); });
+		for (std::size_t index = 0; index < VRRenderScaleABTest::kLabels.size(); ++index) {
+			const auto condition = static_cast<VRRenderScaleABTest::Condition>(index);
+			if (ImGui::RadioButton(VRRenderScaleABTest::kLabels[index], vrRenderScaleABTest.Requested() == condition))
+				RequestVRRenderScaleABTest(condition);
+		}
+	}
+	if (blocked)
+		ImGui::TextWrapped("Load Upscaling and stop GPU telemetry capture before changing the test.");
+	ImGui::TextWrapped("B bypasses today's menu-draw checks; it does not reproduce the removed early-1.7 hook. C restores native upsample passes only where the render-scale replacement is eligible.");
+	ImGui::TextWrapped("Overrides pause for menus, loading and render-scale transitions. Choices reset to A when Skyrim restarts. Keep ISL, NR, render scale and the viewpoint unchanged during each comparison.");
+	if (ImGui::BeginTable("VRRenderScaleABCounts", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+		auto endTable = ScopeExit([]() { ImGui::EndTable(); });
+		ImGui::TableSetupColumn("Condition");
+		ImGui::TableSetupColumn("Game frames");
+		ImGui::TableSetupColumn("Menu-hook frames");
+		ImGui::TableSetupColumn("Native candidates");
+		ImGui::TableSetupColumn("Native passes");
+		ImGui::TableSetupColumn("Replacements");
+		ImGui::TableHeadersRow();
+		for (std::size_t index = 0; index < VRRenderScaleABTest::kNames.size(); ++index) {
+			const auto counts = vrRenderScaleABTest.Read(static_cast<VRRenderScaleABTest::Condition>(index));
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::Text("%c", static_cast<int>('A' + index));
+			ImGui::TableNextColumn();
+			ImGui::Text("%llu", static_cast<unsigned long long>(counts.frames));
+			ImGui::TableNextColumn();
+			ImGui::Text("%llu", static_cast<unsigned long long>(counts.menuHookFrames));
+			ImGui::TableNextColumn();
+			ImGui::Text("%llu", static_cast<unsigned long long>(counts.nativeCandidates));
+			ImGui::TableNextColumn();
+			ImGui::Text("%llu", static_cast<unsigned long long>(counts.nativeRestored));
+			ImGui::TableNextColumn();
+			ImGui::Text("%llu", static_cast<unsigned long long>(counts.nativeReplaced));
+		}
+	}
+	ImGui::TextWrapped("Counts accumulate for this session. Native passes count C/D callbacks forwarded to Skyrim; replacements count successful A/B copies. Candidates alone do not prove a copy would succeed. Zero menu-hook frames or native candidates means that path was not exercised. Counts do not measure performance.");
+	if (ImGui::Button("Write A/B counts to log"))
+		LogVRRenderScaleABTest();
+	ImGui::Separator();
+}
+#endif
+
 void Upscaling::DrawSettings()
 {
 	MenuUI::SettingsPage page("Upscaling", {
@@ -17764,6 +17873,10 @@ void Upscaling::DrawSettings()
 			ImGui::Separator();
 		}
 
+#ifdef VR_RENDERSCALE_AB_TEST_ENABLED
+		if (IsVRRuntimeActive())
+			DrawVRRenderScaleABTest();
+#endif
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (IsVRRuntimeActive()) {
 			if (Util::Widgets::Checkbox("Pipeline Diagnostics", &settings.pipelineDiagnostics) &&
@@ -21336,6 +21449,10 @@ void Upscaling::CompleteVRLoadingMenuCloseOutsideLocks(
 RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
+#ifdef VR_RENDERSCALE_AB_TEST_ENABLED
+	if (a_event)
+		globals::features::upscaling.vrRenderScaleABTest.Suspend();
+#endif
 	TrackVRFastTravelInteractionMenuLifecycle(a_event);
 
 	if (a_event && a_event->opening && a_event->menuName == RE::RaceSexMenu::MENU_NAME) {
@@ -22585,6 +22702,10 @@ struct VRMenuBridgeHigherCallHook
 {
 	static std::uintptr_t thunk(std::uintptr_t a_wrapperIdentity, uint8_t a_flag, uint32_t a_mode)
 	{
+#ifdef VR_RENDERSCALE_AB_TEST_ENABLED
+		if (globals::state && globals::features::upscaling.vrRenderScaleABTest.ObserveMenuHook(globals::state->frameCount))
+			return func(a_wrapperIdentity, a_flag, a_mode);
+#endif
 		const auto invokeProduction = [&]() -> std::uintptr_t {
 			VRMenuBridgeHigherCallContext nextContext{};
 			VRMenuBridgeHigherCallContext filterContext{};
@@ -22670,6 +22791,12 @@ struct VRMenuBridgeDirectDrawHook
 		INT a_baseVertexLocation,
 		UINT a_startInstanceLocation)
 	{
+#ifdef VR_RENDERSCALE_AB_TEST_ENABLED
+		if (globals::state && globals::features::upscaling.vrRenderScaleABTest.ObserveMenuHook(globals::state->frameCount)) {
+			a_context->DrawIndexedInstanced(a_indexCount, a_instanceCount, a_startIndexLocation, a_baseVertexLocation, a_startInstanceLocation);
+			return;
+		}
+#endif
 		const bool presentationTrace = IsVRMenuPresentationTraceActive();
 		if (!presentationTrace && GetCurrentVRMenuBridgeHigherCallContext() == nullptr) {
 			a_context->DrawIndexedInstanced(
@@ -51018,6 +51145,9 @@ void Upscaling::ConfigureTAA()
 
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
+#ifdef VR_RENDERSCALE_AB_TEST_ENABLED
+	UpdateVRRenderScaleABTestFrame();
+#endif
 	if (const uint64_t reconciledLoadingSerial =
 			TryReconcileMissedVRLoadingMenuClose(*this);
 		reconciledLoadingSerial != 0) {
@@ -60490,6 +60620,10 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 	if (inputWidth >= outputWidth && inputHeight >= outputHeight)
 		return false;
 
+#ifdef VR_RENDERSCALE_AB_TEST_ENABLED
+	if (vrRenderScaleABTest.ObserveNativeCandidate(state->frameCount))
+		return false;
+#endif
 	ID3D11ShaderResourceView* psSourceSRV = nullptr;
 	ID3D11ShaderResourceView* csSourceSRV = nullptr;
 	context->PSGetShaderResources(0, 1, &psSourceSRV);
@@ -60666,6 +60800,9 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 
 	const bool copiedToOutput = copyDynamicRegionToTarget(outputTexture);
 	if (copiedToOutput) {
+#ifdef VR_RENDERSCALE_AB_TEST_ENABLED
+		vrRenderScaleABTest.ObserveNativeReplacement(state->frameCount);
+#endif
 		context->OMSetRenderTargets(1, &outputRTV, outputDSV);
 		releaseRefs();
 		if (globals::game::stateUpdateFlags)

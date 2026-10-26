@@ -200,17 +200,23 @@ namespace CSX::Api
 
 	uint64_t ServiceFoundation::AppendEvent(std::string_view a_requestId, uint64_t a_eventIndex, std::string_view a_type, json a_payload)
 	{
-		std::lock_guard lock(mutex);
-		const uint64_t eventId = nextEventId++;
-		events.push_back({
-			{ "eventId", eventId },
+		json event = {
+			{ "eventId", 0ull },
 			{ "eventIndex", a_eventIndex },
 			{ "requestId", a_requestId },
 			{ "type", a_type },
-			{ "timestampUtc", TimestampUtc() },
+			{ "timestampUtc", nullptr },
 			{ "payload", std::move(a_payload) },
-		});
+		};
+		std::lock_guard lock(mutex);
 		TrimLocked(std::chrono::steady_clock::now());
+		const uint64_t eventId = nextEventId;
+		event.at("eventId") = eventId;
+		event.at("timestampUtc") = TimestampUtc();
+		events.push_back(std::move(event));
+		++nextEventId;
+		while (events.size() > limits.maximumEvents)
+			events.pop_front();
 		return eventId;
 	}
 

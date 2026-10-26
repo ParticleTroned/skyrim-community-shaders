@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstring>
 #include <cwctype>
+#include <exception>
 #include <format>
 #include <iomanip>
 #include <sstream>
@@ -25,6 +26,7 @@ namespace CSX::ScreenshotStorage
 	{
 		std::atomic<DirectoryCreationTestHook> g_directoryCreationTestHook{ nullptr };
 		std::atomic<DirectoryCreationTestHook> g_destinationOpeningTestHook{ nullptr };
+		std::atomic<CommittedWriteTestHook> g_committedWriteTestHook{ nullptr };
 	}
 
 	void SetDirectoryCreationTestHook(DirectoryCreationTestHook a_hook) noexcept
@@ -35,6 +37,11 @@ namespace CSX::ScreenshotStorage
 	void SetDestinationOpeningTestHook(DirectoryCreationTestHook a_hook) noexcept
 	{
 		g_destinationOpeningTestHook.store(a_hook, std::memory_order_release);
+	}
+
+	void SetCommittedWriteTestHook(CommittedWriteTestHook a_hook) noexcept
+	{
+		g_committedWriteTestHook.store(a_hook, std::memory_order_release);
 	}
 #endif
 
@@ -162,11 +169,13 @@ namespace CSX::ScreenshotStorage
 			}
 		}
 
-		void DeleteHandle(HANDLE a_handle) noexcept
+		DWORD DeleteHandle(HANDLE a_handle) noexcept
 		{
 			FILE_DISPOSITION_INFO disposition{ .DeleteFile = TRUE };
-			SetFileInformationByHandle(
-				a_handle, FileDispositionInfo, &disposition, sizeof(disposition));
+			return SetFileInformationByHandle(
+					   a_handle, FileDispositionInfo, &disposition, sizeof(disposition)) ?
+			           ERROR_SUCCESS :
+			           GetLastError();
 		}
 
 		HANDLE OpenDirectory(const std::filesystem::path& a_path, bool a_protectWrites = false)
@@ -357,6 +366,10 @@ namespace CSX::ScreenshotStorage
 
 		try {
 			const auto identity = Identity(ReadIdentity(file.Get(), false));
+#ifdef CSX_SCREENSHOT_STORAGE_TESTING
+			if (const auto hook = g_committedWriteTestHook.load(std::memory_order_acquire))
+				hook(CommittedWritePhase::BeforeWrite, file.Get());
+#endif
 			const auto* bytes = static_cast<const std::byte*>(a_data);
 			std::size_t offset = 0;
 			while (offset < a_size) {
@@ -367,11 +380,23 @@ namespace CSX::ScreenshotStorage
 						"committed artifact write failed with Win32 error {}", GetLastError()));
 				offset += written;
 			}
+#ifdef CSX_SCREENSHOT_STORAGE_TESTING
+			if (const auto hook = g_committedWriteTestHook.load(std::memory_order_acquire))
+				hook(CommittedWritePhase::BeforeFlush, file.Get());
+#endif
 			if (!FlushFileBuffers(file.Get()))
 				throw std::runtime_error(std::format(
 					"committed artifact flush failed with Win32 error {}", GetLastError()));
 
+#ifdef CSX_SCREENSHOT_STORAGE_TESTING
+			if (const auto hook = g_committedWriteTestHook.load(std::memory_order_acquire))
+				hook(CommittedWritePhase::BeforeRename, file.Get());
+#endif
 			RenameHandle(file.Get(), destination, a_replaceExisting);
+#ifdef CSX_SCREENSHOT_STORAGE_TESTING
+			if (const auto hook = g_committedWriteTestHook.load(std::memory_order_acquire))
+				hook(CommittedWritePhase::AfterRename, file.Get());
+#endif
 			const auto publishedPath = FinalPath(file.Get());
 			if (!SamePath(publishedPath, destination))
 				throw std::runtime_error("committed artifact producer handle did not resolve to its destination path");
@@ -387,10 +412,18 @@ namespace CSX::ScreenshotStorage
 			const auto verifiedPath = FinalPath(published.Get());
 			if (!SamePath(verifiedPath, publishedPath))
 				throw std::runtime_error("committed artifact path changed during publication");
-			CommittedFile committed(file.Release(), publishedPath);
-			return committed.Describe();
+#ifdef CSX_SCREENSHOT_STORAGE_TESTING
+			if (const auto hook = g_committedWriteTestHook.load(std::memory_order_acquire))
+				hook(CommittedWritePhase::BeforeDescribe, file.Get());
+#endif
+			return DescribeHandle(file.Get());
 		} catch (...) {
-			DeleteHandle(file.Get());
+#ifdef CSX_SCREENSHOT_STORAGE_TESTING
+			if (const auto hook = g_committedWriteTestHook.load(std::memory_order_acquire))
+				hook(CommittedWritePhase::BeforeCleanup, file.Get());
+#endif
+			if (const auto error = DeleteHandle(file.Get()); error != ERROR_SUCCESS)
+				std::throw_with_nested(std::runtime_error(std::format("committed artifact cleanup failed with Win32 error {}", error)));
 			throw;
 		}
 	}
@@ -416,9 +449,14 @@ namespace CSX::ScreenshotStorage
 
 	CommittedArtifact CommittedFile::Describe() const
 	{
-		if (!handle)
+		return DescribeHandle(handle);
+	}
+
+	CommittedArtifact CommittedFile::DescribeHandle(void* a_handle)
+	{
+		if (!a_handle || a_handle == INVALID_HANDLE_VALUE)
 			throw std::runtime_error("committed artifact handle is unavailable");
-		const auto nativeHandle = static_cast<HANDLE>(handle);
+		const auto nativeHandle = static_cast<HANDLE>(a_handle);
 		const auto before = ReadIdentity(nativeHandle, false);
 		LARGE_INTEGER size{};
 		if (!GetFileSizeEx(nativeHandle, &size) || size.QuadPart < 0)

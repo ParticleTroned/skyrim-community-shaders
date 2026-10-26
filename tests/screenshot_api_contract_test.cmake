@@ -65,6 +65,34 @@ foreach(_legacy IN ITEMS
 endforeach()
 
 file(READ "${PROJECT_ROOT}/src/Features/ScreenshotApi.cpp" _implementation)
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotManifestAdmission.h" _admission)
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotStorageSecurity.cpp" _storage)
+foreach(_required_admission_consumer IN ITEMS
+    "CSX::Screenshot::AdmitManifestJob(*state, a_sequence, std::move(job), service,"
+    "CSX::Screenshot::AppendRequestEvent(service, a_record, a_type, std::move(a_payload))"
+    ".generation = a_sequence.manifestGeneration + 1"
+)
+    string(FIND "${_implementation}" "${_required_admission_consumer}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot publication bypasses shared admission: ${_required_admission_consumer}")
+    endif()
+endforeach()
+foreach(_required_rollback IN ITEMS
+    "a_sequence.manifestGeneration = previousGeneration"
+    "a_sequence.finalManifestGeneration = previousFinalGeneration"
+    "--a_state.outstanding"
+    "a_state.jobs.pop_back()"
+)
+    string(FIND "${_admission}" "${_required_rollback}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot failed admission lost rollback: ${_required_rollback}")
+    endif()
+endforeach()
+string(FIND "${_storage}" "return DescribeHandle(file.Get())" _owned_description)
+string(FIND "${_storage}" "CommittedFile committed(file.Release()" _released_description)
+if(_owned_description EQUAL -1 OR NOT _released_description EQUAL -1)
+    message(FATAL_ERROR "Screenshot integrity description lost producer cleanup handle")
+endif()
 foreach(_action IN ITEMS
     capabilities status settings_get settings_validate settings_apply capture
     sequence_start sequence_stop request_get request_list request_cancel
@@ -83,7 +111,7 @@ foreach(_event IN ITEMS
 	sequence.preparation_failed sequence.stop_requested sequence.finalizing
     packaging.queued packaging.completed packaging.failed request.terminal
 )
-    string(FIND "${_implementation}" "\"${_event}\"" _event_position)
+    string(FIND "${_implementation}\n${_admission}" "\"${_event}\"" _event_position)
     if(_event_position EQUAL -1)
         message(FATAL_ERROR "Screenshot API event is not implemented: ${_event}")
     endif()

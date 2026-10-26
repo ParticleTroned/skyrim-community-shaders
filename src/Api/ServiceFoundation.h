@@ -58,6 +58,7 @@ namespace CSX::Api
 			std::string_view a_field = {},
 			std::string_view a_requestId = {}) const;
 
+		/** Publish an event and its ID together; failed insertion consumes neither. */
 		uint64_t AppendEvent(
 			std::string_view a_requestId,
 			uint64_t a_eventIndex,

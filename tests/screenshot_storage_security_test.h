@@ -6,6 +6,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -27,6 +28,85 @@ namespace
 	std::filesystem::path g_destinationDisplaced;
 	std::filesystem::path g_destinationOutside;
 	bool g_destinationHookCalled = false;
+	CSX::ScreenshotStorage::CommittedWritePhase g_writeFailurePhase{};
+	bool g_cleanupReadOnly = false;
+
+	void FailCommittedWrite(CSX::ScreenshotStorage::CommittedWritePhase a_phase, void* a_handle)
+	{
+		using Phase = CSX::ScreenshotStorage::CommittedWritePhase;
+		if (a_phase == Phase::BeforeCleanup && g_cleanupReadOnly) {
+			FILE_BASIC_INFO information{};
+			information.FileAttributes = FILE_ATTRIBUTE_READONLY;
+			if (!SetFileInformationByHandle(a_handle, FileBasicInfo, &information, sizeof(information)))
+				throw std::runtime_error("could not arm owned read-only cleanup refusal");
+		}
+		if (a_phase == g_writeFailurePhase)
+			throw std::runtime_error("injected committed artifact failure");
+	}
+
+	void CheckCommittedWriteFailures(const std::filesystem::path& a_root)
+	{
+		using namespace CSX::ScreenshotStorage;
+		using Phase = CommittedWritePhase;
+		const auto temporary = a_root / "failure.tmp";
+		const auto destination = a_root / "failure.json";
+		for (const bool replace : { false, true }) {
+			for (const auto phase : { Phase::BeforeWrite, Phase::BeforeFlush, Phase::BeforeRename, Phase::AfterRename, Phase::BeforeDescribe }) {
+				if (replace) {
+					std::ofstream old(destination);
+					old << "old";
+				}
+				g_writeFailurePhase = phase;
+				SetCommittedWriteTestHook(&FailCommittedWrite);
+				bool failed = false;
+				try {
+					(void)CommittedFile::WriteAtomically(temporary, destination, "new", 3, replace);
+				} catch (const std::exception& error) {
+					failed = std::string_view(error.what()) == "injected committed artifact failure";
+				}
+				SetCommittedWriteTestHook(nullptr);
+				const bool oldRetained = replace && (phase == Phase::BeforeWrite || phase == Phase::BeforeFlush || phase == Phase::BeforeRename);
+				if (!failed || std::filesystem::exists(temporary) || std::filesystem::exists(destination) != oldRetained)
+					throw std::runtime_error("failed publication lost same-handle cleanup custody");
+				if (oldRetained) {
+					std::ifstream old(destination);
+					std::string value;
+					old >> value;
+					if (value != "old")
+						throw std::runtime_error("pre-rename failure changed existing destination");
+					std::filesystem::remove(destination);
+				}
+			}
+		}
+		for (const bool replace : { false, true }) {
+			if (replace) {
+				std::ofstream old(destination);
+				old << "old";
+			}
+			g_writeFailurePhase = Phase::BeforeDescribe;
+			g_cleanupReadOnly = true;
+			SetCommittedWriteTestHook(&FailCommittedWrite);
+			bool cleanupReported = false;
+			bool originalRetained = false;
+			try {
+				(void)CommittedFile::WriteAtomically(temporary, destination, "new", 3, replace);
+			} catch (const std::exception& error) {
+				cleanupReported = std::string_view(error.what()).find("cleanup failed with Win32 error") != std::string_view::npos;
+				try {
+					std::rethrow_if_nested(error);
+				} catch (const std::exception& original) {
+					originalRetained = std::string_view(original.what()) == "injected committed artifact failure";
+				}
+			}
+			SetCommittedWriteTestHook(nullptr);
+			g_cleanupReadOnly = false;
+			if (!SetFileAttributesW(destination.c_str(), FILE_ATTRIBUTE_NORMAL))
+				throw std::runtime_error("could not restore owned cleanup-refusal fixture");
+			std::filesystem::remove(destination);
+			if (!cleanupReported || !originalRetained)
+				throw std::runtime_error("cleanup refusal hid either retained file or original failure");
+		}
+	}
 
 	bool IsLeaseConflict(DWORD a_error)
 	{
@@ -94,6 +174,7 @@ inline void RunScreenshotStorageSecurityTests()
 	                  std::format("csx-screenshot-storage-{}-{}", GetCurrentProcessId(), GetTickCount64());
 	std::filesystem::create_directories(root);
 	try {
+		CheckCommittedWriteFailures(root);
 		const auto approved = root / "approved";
 		std::filesystem::create_directories(approved);
 		const auto nested = approved / "stable" / "parent";
@@ -324,6 +405,8 @@ inline void RunScreenshotStorageSecurityTests()
 		RemoveDirectoryW(junctionPath.c_str());
 		std::filesystem::remove_all(root);
 	} catch (...) {
+		CSX::ScreenshotStorage::SetCommittedWriteTestHook(nullptr);
+		g_cleanupReadOnly = false;
 		SetDirectoryCreationTestHook(nullptr);
 		SetDestinationOpeningTestHook(nullptr);
 		{

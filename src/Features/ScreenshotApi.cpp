@@ -1369,7 +1369,7 @@ ScreenshotApi::RequestRecord& ScreenshotApi::CreateRequestLocked(std::string a_k
 
 void ScreenshotApi::AppendEventLocked(RequestRecord& a_record, std::string_view a_type, json a_payload)
 {
-	service.AppendEvent(a_record.requestId, ++a_record.eventIndex, a_type, std::move(a_payload));
+	CSX::Screenshot::AppendRequestEvent(service, a_record, a_type, std::move(a_payload));
 }
 
 void ScreenshotApi::TransitionLocked(RequestRecord& a_record, std::string a_state, std::string_view a_eventType, json a_payload)
@@ -1886,6 +1886,8 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 		};
 		const auto parent = requests.find(a_sequence.requestId);
 		const auto updatedUtc = CSX::Api::ServiceFoundation::TimestampUtc();
+		if (parent == requests.end())
+			throw std::runtime_error("manifest request is no longer retained");
 		std::string terminalOutcome;
 		if (a_sequence.cancelRequested)
 			terminalOutcome = a_sequence.written == 0 ? "cancelled" : "cancelled_partial";
@@ -1903,7 +1905,7 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 		                              a_sequence.manifestChildren->fallbacksPresent;
 		ManifestJob job{
 			.requestId = a_sequence.requestId,
-			.generation = ++a_sequence.manifestGeneration,
+			.generation = a_sequence.manifestGeneration + 1,
 			.final = a_final,
 			.destination = a_final ? a_sequence.finalManifestPath : a_sequence.partialManifestPath,
 			.partialPath = a_sequence.partialManifestPath,
@@ -1934,22 +1936,14 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 			job.header["continuity"] = a_sequence.continuity.Receipt(a_sequence.frameCount,
 				a_sequence.written == a_sequence.frameCount && a_sequence.failed == 0 && a_sequence.cancelled == 0 && !a_sequence.cancelRequested);
 #endif
-		if (a_final)
-			a_sequence.finalManifestGeneration = job.generation;
-		if (parent != requests.end())
-			AppendEventLocked(parent->second, "packaging.queued", {
-																	  { "generation", job.generation },
-																	  { "final", a_final },
-																	  { "path", Util::PathToUtf8(job.destination) },
-																  });
+		json queuedEvent = {
+			{ "generation", job.generation },
+			{ "final", a_final },
+			{ "path", Util::PathToUtf8(job.destination) },
+		};
 		const auto state = manifestWorkerState;
-		{
-			std::lock_guard workerLock(state->mutex);
-			if (state->stopRequested || !CSX::ScreenshotPolicy::CanAdmitManifestJob(state->outstanding, a_final))
-				throw std::runtime_error("bounded manifest publication lane is full or stopping");
-			state->jobs.push_back(std::move(job));
-			++state->outstanding;
-		}
+		CSX::Screenshot::AdmitManifestJob(*state, a_sequence, std::move(job), service,
+			parent->second, std::move(queuedEvent));
 		state->condition.notify_one();
 	} catch (const std::exception& error) {
 		logger::error("Screenshot manifest admission failed: {}", error.what());

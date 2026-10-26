@@ -6,6 +6,7 @@
 #	include "Features/ScreenshotBurstPolicy.h"
 #endif
 #include "Features/ScreenshotStorageSecurity.h"
+#include "ScreenshotManifestAdmission.h"
 #include "ScreenshotManifestSnapshot.h"
 #include "ScreenshotNeuralDiagnostics.h"
 #include "ScreenshotWorkerThread.h"
@@ -184,17 +185,7 @@ private:
 		std::string error;
 	};
 
-	struct ManifestJob
-	{
-		std::string requestId;
-		uint64_t generation = 0;
-		bool final = false;
-		std::filesystem::path destination;
-		std::filesystem::path partialPath;
-		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
-		json header = json::object();
-		std::shared_ptr<const ManifestChildNode> children;
-	};
+	using ManifestJob = CSX::Screenshot::ManifestJob;
 
 	struct ManifestResult
 	{

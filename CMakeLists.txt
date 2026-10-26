@@ -4278,6 +4278,19 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
     add_test(NAME ApiServiceFoundation COMMAND api_service_foundation_test)
+    add_controller_test(
+        screenshot_manifest_admission_test
+        ScreenshotManifestAdmission
+        tests/screenshot_manifest_admission_test.cpp
+    )
+    target_sources(
+        screenshot_manifest_admission_test
+        PRIVATE src/Api/ServiceFoundation.cpp
+    )
+    target_link_libraries(
+        screenshot_manifest_admission_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
     set_tests_properties(
         ApiServiceFoundation
         PROPERTIES LABELS "ControllerTests"

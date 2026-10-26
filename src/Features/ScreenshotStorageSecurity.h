@@ -14,6 +14,17 @@ namespace CSX::ScreenshotStorage
 	using DirectoryCreationTestHook = void (*)(const std::filesystem::path&);
 	void SetDirectoryCreationTestHook(DirectoryCreationTestHook a_hook) noexcept;
 	void SetDestinationOpeningTestHook(DirectoryCreationTestHook a_hook) noexcept;
+	enum class CommittedWritePhase
+	{
+		BeforeWrite,
+		BeforeFlush,
+		BeforeRename,
+		AfterRename,
+		BeforeDescribe,
+		BeforeCleanup
+	};
+	using CommittedWriteTestHook = void (*)(CommittedWritePhase, void*);
+	void SetCommittedWriteTestHook(CommittedWriteTestHook a_hook) noexcept;
 #endif
 
 	struct CommittedArtifact
@@ -45,6 +56,7 @@ namespace CSX::ScreenshotStorage
 
 	private:
 		explicit CommittedFile(void* a_handle, std::filesystem::path a_path);
+		static CommittedArtifact DescribeHandle(void* a_handle);
 		void Release() noexcept;
 
 		void* handle = nullptr;

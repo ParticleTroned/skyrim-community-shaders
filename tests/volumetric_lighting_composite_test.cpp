@@ -533,43 +533,41 @@ namespace
 		Runtime::LocationContext::sun = false;
 		const auto expectRuntime = [&](float4 expected, const char* message, bool inWorld = true) {
 			feature.runtimeSettings = feature.settings;
-			feature.runtimeSettings.ExteriorGodrays = VolumetricLightingTuning::SanitizeProfile(feature.settings.ExteriorGodrays);
-			feature.runtimeSettings.InteriorGodrays = VolumetricLightingTuning::SanitizeProfile(feature.settings.InteriorGodrays);
 			feature.initialised = true;
 			feature.inInterior = Runtime::LocationContext::interior;
 			feature.runtimeEnabled = feature.inInterior ? feature.settings.InteriorEnabled && Runtime::LocationContext::sun : feature.settings.ExteriorEnabled;
 			Expect(fixture.Draw(authored, Runtime::Upload(inWorld)), addLens(expected), message);
 		};
 		const float4 neutral{ 1, 0.3f, 0.1f, 0 };
-		feature.settings.ExteriorGodrays.ShaftIntensity = 2.0f;
+		balance.settings.godrays.exterior.ShaftIntensity = 2.0f;
 		expectRuntime({ 2, 0.6f, 0.2f, 0 }, "Existing godray intensity did not reach composite");
 		balance.volumetricClarity = 1.0f;
 		expectRuntime({ 2, 0.6f, 0.2f, 0 }, "Clarity changed isolated shafts through runtime upload");
 		balance.enabled = false;
-		expectRuntime({ 2, 0.6f, 0.2f, 0 }, "Disabled Adaptive Balance changed standalone godray intensity");
+		expectRuntime(neutral, "Disabled Adaptive Balance retained godray intensity");
 		balance.enabled = true;
 		expectRuntime(neutral, "Godray tuning affected a non-world pass", false);
 		balance = {};
 		feature.settings = {};
 
-		feature.settings.ExteriorGodrays.Saturation = 0;
+		balance.settings.godrays.exterior.Saturation = 0;
 		expectRuntime({ grey, grey, grey, 0 }, "Exterior saturation did not reach composite");
-		feature.settings.ExteriorGodrays = { .Opacity = 2, .CustomColorContribution = 1, .CustomColorRed = 0, .CustomColorBlue = 0 };
+		balance.settings.godrays.exterior = { .Opacity = 2, .CustomColorContribution = 1, .CustomColorRed = 0, .CustomColorBlue = 0 };
 		expectRuntime({ 0, 0.75f, 0, 0 }, "Exterior color and opacity did not reach composite");
-		const auto authoredProfile = feature.settings.ExteriorGodrays;
+		const auto authoredProfile = balance.settings.godrays.exterior;
 		balance.effective.appearance = { .godrayIntensity = 2.0f, .godrayOpacity = 0.5f, .godrayTint = { 0.0f, 0.0f, 1.0f }, .godrayTintAmount = 0.5f };
 		expectRuntime({ 0, 0.5f, 0.5f, 0 }, "Adaptive Balance did not overlay standalone godray colour, intensity and opacity");
 		Require(feature.GetRuntimeGodrayProfile().ShaftIntensity == 2.0f, "Adaptive Balance shaft intensity did not compose");
-		Require(feature.settings.ExteriorGodrays == authoredProfile, "Adaptive Balance changed authored godray settings");
+		Require(balance.settings.godrays.exterior == authoredProfile, "Adaptive Balance changed authored godray settings");
 		balance.enabled = false;
-		expectRuntime({ 0, 0.75f, 0, 0 }, "Disabled Adaptive Balance did not retain standalone godray tuning");
+		expectRuntime(neutral, "Disabled Adaptive Balance retained context godray tuning");
 		balance.enabled = true;
 		feature.settings.ExteriorEnabled = false;
 		expectRuntime(neutral, "Adaptive Balance re-enabled disabled godray tuning");
 		feature.settings.ExteriorEnabled = true;
 		expectRuntime(neutral, "Adaptive Balance godray appearance affected a non-world pass", false);
 		balance = {};
-		feature.settings.InteriorGodrays = { .CustomColorContribution = 1, .CustomColorGreen = 0, .CustomColorBlue = 0 };
+		balance.settings.godrays.interior = { .CustomColorContribution = 1, .CustomColorGreen = 0, .CustomColorBlue = 0 };
 		Runtime::LocationContext::interior = true;
 		expectRuntime(neutral, "Sunless interior retained exterior tuning");
 		Runtime::LocationContext::sun = true;
@@ -593,8 +591,9 @@ namespace
 		expectRuntime(neutral, "Missing renderer state retained tuning");
 		Runtime::globals::state = &state;
 		expectRuntime(neutral, "Non-world pass retained tuning", false);
-		feature.settings.ExteriorGodrays.Opacity = nan;
-		feature.settings.ExteriorGodrays.CustomColorGreen = nan;
+		balance.settings.godrays.exterior = { .CustomColorContribution = 1, .CustomColorRed = 0, .CustomColorBlue = 0 };
+		balance.settings.godrays.exterior.Opacity = nan;
+		balance.settings.godrays.exterior.CustomColorGreen = nan;
 		expectRuntime({ 0, 0.5f, 0, 0 }, "Profile sanitization did not reach composite");
 	}
 }

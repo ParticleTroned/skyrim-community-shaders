@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.10.22.1",
+    "packageVersion": "d2026.10.26.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "85870A1ED343B33562C99225E99B8690B62FB1B9F603BD7E820695C1387A14F7"
+        "sha256": "D118D381C8E4400030675BEB49E18267FD5B59CBD4C2737A860360BBCEE80380"
     },
     "runtimeSettingsContract": {
-        "revision": 16,
-        "sourceTreeSha256": "66DB962867D5F4170F6A20CE9326C242835F6FBC54EB3A6182DBCC040178D5B8",
+        "revision": 17,
+        "sourceTreeSha256": "FC070EAE78C8D317D63F690C87C879F5E94444706E6FFC4178D8D9175F8C7DC0",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -301,26 +301,26 @@
             "reason": "current normalized interior policy pending a fresh profiler comparison"
         },
         { "path": ["Volumetric Lighting", "DisableWeatherInteractionDuringRain"], "value": false },
-        { "path": ["Volumetric Lighting", "ExteriorGodrays", "ShaftIntensity"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "ExteriorGodrays", "Opacity"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "ExteriorGodrays", "Saturation"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "exterior", "ShaftIntensity"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "exterior", "Opacity"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "exterior", "Saturation"], "value": 1.0 },
         {
-            "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorContribution"],
+            "path": ["Adaptive Balance", "godrays", "exterior", "CustomColorContribution"],
             "value": 1.0
         },
-        { "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorRed"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorGreen"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorBlue"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "InteriorGodrays", "ShaftIntensity"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "InteriorGodrays", "Opacity"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "InteriorGodrays", "Saturation"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "exterior", "CustomColorRed"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "exterior", "CustomColorGreen"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "exterior", "CustomColorBlue"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "interior", "ShaftIntensity"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "interior", "Opacity"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "interior", "Saturation"], "value": 1.0 },
         {
-            "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorContribution"],
+            "path": ["Adaptive Balance", "godrays", "interior", "CustomColorContribution"],
             "value": 1.0
         },
-        { "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorRed"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorGreen"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorBlue"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "interior", "CustomColorRed"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "interior", "CustomColorGreen"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "interior", "CustomColorBlue"], "value": 1.0 },
         {
             "path": ["Hair Specular", "Enabled"],
             "value": 1,
@@ -640,11 +640,11 @@
         { "path": ["Image Based Lighting", "EnableIBL"], "value": 0 },
         { "path": ["Volumetric Shadows", "Enabled"], "value": true },
         {
-            "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorContribution"],
+            "path": ["Adaptive Balance", "godrays", "exterior", "CustomColorContribution"],
             "value": 1.0
         },
         {
-            "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorContribution"],
+            "path": ["Adaptive Balance", "godrays", "interior", "CustomColorContribution"],
             "value": 1.0
         },
         { "path": ["Hair Specular", "Enabled"], "value": 1 },
@@ -761,6 +761,8 @@
             ["Adaptive Balance", "globalLightingEnabled"],
             ["Adaptive Balance", "lighting"],
             ["Adaptive Balance", "bloomEnhancement"],
+            ["Volumetric Lighting", "ExteriorGodrays"],
+            ["Volumetric Lighting", "InteriorGodrays"],
             ["Volumetric Lighting", "CustomColorBlue"],
             ["Volumetric Lighting", "CustomColorContribution"],
             ["Volumetric Lighting", "CustomColorGreen"],
@@ -844,8 +846,8 @@
             { "path": ["VR", "DepthCullingLegacyMode"], "value": false },
             { "path": ["VR", "DepthCullingPerformanceMode"], "value": false },
             { "path": ["VR", "UnlockMenuPositionAndSize"], "value": false },
-            { "path": ["Volumetric Lighting", "ExteriorGodrays", "ShaftIntensity"], "value": 1.0 },
-            { "path": ["Volumetric Lighting", "InteriorGodrays", "ShaftIntensity"], "value": 1.0 },
+            { "path": ["Adaptive Balance", "godrays", "exterior", "ShaftIntensity"], "value": 1.0 },
+            { "path": ["Adaptive Balance", "godrays", "interior", "ShaftIntensity"], "value": 1.0 },
             { "path": ["Wetterness", "RainGrassDarkening"], "value": 0.15000000596046448 },
             { "path": ["VR", "WandAimPitchTrimDegrees"], "value": -26.0 }
         ],

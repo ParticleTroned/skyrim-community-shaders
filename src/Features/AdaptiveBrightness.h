@@ -171,6 +171,7 @@ struct AdaptiveBrightness : Feature
 		bool useAmbientEffectLighting = false;
 		float godrayFinalBrightness = AdaptiveBalanceGodray::kDefault;  // Legacy preset/API storage; no rendering effect.
 		float volumetricClarity = AdaptiveBalanceGodray::kClarityDefault;
+		AdaptiveBalanceGodray::Profiles godrays;
 		float moonReflectionStrength = kMoonReflectionStrengthDefault;
 		float dayStartHour = 9.0f;
 		float nightStartHour = 21.0f;
@@ -346,6 +347,8 @@ struct AdaptiveBrightness : Feature
 	bool IsRuntimeEnabled() const;
 	/** Return smooth volumetric haze suppression, or zero while Adaptive Balance is bypassed. */
 	float GetEffectiveVolumetricClarity() const;
+	/** Compose context and profile godray tuning, or return neutral while disabled. */
+	VolumetricLightingTuning::Profile GetEffectiveGodrayProfile(bool a_interior) const;
 	/** Resolves the exterior night specular multiplier; neutral indoors and while bypassed. */
 	float GetEffectiveMoonReflectionStrength() const;
 	/** Resolves shared lighting and refreshes its matching per-draw point-light requirement. */
@@ -422,6 +425,7 @@ struct AdaptiveBrightness : Feature
 	void DrawLightingSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
 	/// Draws whole-scene grading controls independent of detailed lighting adjustments.
 	void DrawColorSettings(ProfileSettings& a_profile);
+	void DrawGodraySettings();
 	void DrawBloomSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
 	void DrawWaterSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
 	void DrawWaterWindSettings(ProfileSettings& a_profile, bool a_globalLayer);

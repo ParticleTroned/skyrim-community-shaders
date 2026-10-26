@@ -20,7 +20,7 @@ namespace Runtime
 		bool enablePShaders = true;
 	};
 
-	struct AdaptiveBalance
+	struct AdaptiveBrightness
 	{
 		struct Appearance
 		{
@@ -38,6 +38,12 @@ namespace Runtime
 			Appearance appearance;
 		} effective;
 		bool enabled = true;
+		struct
+		{
+			AdaptiveBalanceGodray::Profiles godrays;
+		} settings;
+		bool IsRuntimeEnabled() const { return enabled; }
+		VolumetricLightingTuning::Profile GetEffectiveGodrayProfile(bool) const;
 		float volumetricClarity = 0.0f;
 		float GetEffectiveVolumetricClarity() const { return enabled ? volumetricClarity : 0.0f; }
 		EffectiveSettings GetEffectiveSharedLightingSettings() const { return enabled ? effective : EffectiveSettings{}; }
@@ -66,7 +72,7 @@ namespace Runtime
 		namespace features
 		{
 			inline VolumetricLighting volumetricLighting;
-			inline AdaptiveBalance adaptiveBrightness;
+			inline AdaptiveBrightness adaptiveBrightness;
 		}
 	}
 

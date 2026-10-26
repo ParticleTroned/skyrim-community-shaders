@@ -1,12 +1,38 @@
 #pragma once
 
 #include "Utils/Finite.h"
+#include "VolumetricLightingTuningMigration.h"
 
 #include <cmath>
 
-/** Atmospheric clarity and retained legacy preset validation. */
+/** Context godray tuning, atmospheric clarity and legacy preset validation. */
 namespace AdaptiveBalanceGodray
 {
+	/** Context bases compose with profile adjustments before reaching the renderer. */
+	struct Profiles
+	{
+		VolumetricLightingTuning::Profile exterior;
+		VolumetricLightingTuning::Profile interior;
+		bool operator==(const Profiles&) const = default;
+	};
+
+	inline void to_json(nlohmann::json& a_json, const Profiles& a_profiles)
+	{
+		a_json = { { "exterior", a_profiles.exterior }, { "interior", a_profiles.interior } };
+	}
+
+	inline void from_json(const nlohmann::json& a_json, Profiles& a_profiles)
+	{
+		Profiles profiles;
+		if (a_json.is_object()) {
+			if (const auto it = a_json.find("exterior"); it != a_json.end())
+				profiles.exterior = VolumetricLightingTuning::ReadProfile(*it);
+			if (const auto it = a_json.find("interior"); it != a_json.end())
+				profiles.interior = VolumetricLightingTuning::ReadProfile(*it);
+		}
+		a_profiles = profiles;
+	}
+
 	inline constexpr float kMin = 0.0f;
 	inline constexpr float kMax = 5.0f;
 	inline constexpr float kDefault = 1.0f;

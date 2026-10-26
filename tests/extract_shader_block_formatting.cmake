@@ -3,7 +3,7 @@ file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(READ "${PROJECT_ROOT}/src/ShaderCache.cpp" _source)
 extract_between(
     "${_source}" "RE::BSGraphics::VertexShader* ShaderCache::GetVertexShaderIfCached("
-    "void ShaderCache::PrewarmDeferredPixelShaders(" "shader_block_vertex_under_test.h"
+    "template <typename Interface, typename Cache>" "shader_block_vertex_under_test.h"
 )
 extract_between(
     "${_source}" "RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader("

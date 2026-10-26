@@ -108,6 +108,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	useAmbientEffectLighting,
 	godrayFinalBrightness,
 	volumetricClarity,
+	godrays,
 	moonReflectionStrength,
 	dayStartHour,
 	nightStartHour,
@@ -662,6 +663,7 @@ namespace
 			}
 
 			file >> o_json;
+			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(o_json);
 			return true;
 		} catch (const json::exception& e) {
 			o_status = std::format("Import failed: invalid JSON ({})", e.what());
@@ -805,6 +807,8 @@ namespace
 	{
 		a_settings.godrayFinalBrightness = AdaptiveBalanceGodray::SanitizeFinalBrightness(a_settings.godrayFinalBrightness);
 		a_settings.volumetricClarity = AdaptiveBalanceGodray::SanitizeClarity(a_settings.volumetricClarity);
+		a_settings.godrays.exterior = VolumetricLightingTuning::SanitizeProfile(a_settings.godrays.exterior);
+		a_settings.godrays.interior = VolumetricLightingTuning::SanitizeProfile(a_settings.godrays.interior);
 		a_settings.moonReflectionStrength = Util::ClampFinite(a_settings.moonReflectionStrength,
 			AdaptiveBrightness::kMoonReflectionStrengthMin, AdaptiveBrightness::kMoonReflectionStrengthMax, AdaptiveBrightness::kMoonReflectionStrengthDefault);
 		AdaptiveBalanceDepthOfField::SanitizeSettings(a_settings.depthOfField);
@@ -1278,6 +1282,7 @@ namespace
 			{ "useAmbientEffectLighting", a_settings.useAmbientEffectLighting },
 			{ "godrayFinalBrightness", a_settings.godrayFinalBrightness },
 			{ "volumetricClarity", a_settings.volumetricClarity },
+			{ "godrays", a_settings.godrays },
 			{ "moonReflectionStrength", a_settings.moonReflectionStrength },
 			{ "globalProfile", a_settings.globalProfile },
 			{ "depthOfField", a_settings.depthOfField },
@@ -1416,6 +1421,9 @@ namespace
 
 			importedSettings.useAmbientEffectLighting = GetOptionalBool(migratedPreset, "useAmbientEffectLighting", false);
 			importedSettings.godrayFinalBrightness = GetOptionalFloat(migratedPreset, "godrayFinalBrightness", AdaptiveBalanceGodray::kDefault);
+			if (const auto it = migratedPreset.find("godrays"); it != migratedPreset.end())
+				importedSettings.godrays = it->get<AdaptiveBalanceGodray::Profiles>();
+
 			importedSettings.volumetricClarity = GetOptionalFloat(migratedPreset, "volumetricClarity", AdaptiveBalanceGodray::kClarityDefault);
 			importedSettings.moonReflectionStrength = GetOptionalFloat(migratedPreset, "moonReflectionStrength", AdaptiveBrightness::kMoonReflectionStrengthDefault);
 			importedSettings.dayStartHour = GetOptionalFloat(migratedPreset, "dayStartHour", importedSettings.dayStartHour);
@@ -1716,9 +1724,9 @@ void AdaptiveBrightness::DrawProfileControls(
 	const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
 	auto* storage = ImGui::GetStateStorage();
 	const auto selectionId = ImGui::GetID("AdjustmentGroup");
-	int selected = std::clamp(storage->GetInt(selectionId), 0, a_globalLayer ? 4 : 3);
-	constexpr const char* groups[] = { "Lighting", "Colour", "Bloom", "Water", "Depth of field" };
-	if (MenuUI::ChoiceSetting("Adjust", &selected, groups, a_globalLayer ? 5 : 4))
+	int selected = std::clamp(storage->GetInt(selectionId), 0, a_globalLayer ? 5 : 3);
+	constexpr const char* groups[] = { "Lighting", "Colour", "Bloom", "Water", "Depth of field", "Godrays" };
+	if (MenuUI::ChoiceSetting("Adjust", &selected, groups, a_globalLayer ? 6 : 4))
 		storage->SetInt(selectionId, selected);
 	const auto disabled = Util::DisableGuard(!a_allowEdits);
 	switch (selected) {
@@ -1737,7 +1745,33 @@ void AdaptiveBrightness::DrawProfileControls(
 	case 4:
 		AdaptiveBalanceDepthOfField::DrawSettings();
 		break;
+	case 5:
+		DrawGodraySettings();
+		break;
 	}
+}
+
+void AdaptiveBrightness::DrawGodraySettings()
+{
+	MenuUI::DetailNote("These exterior and interior bases control separated light shafts. Global, time and location appearance profiles adjust them further. Disabling Adaptive Balance bypasses all godray tuning and Atmospheric Clarity.");
+	Util::Widgets::SliderFloat("Atmospheric Clarity", &settings.volumetricClarity,
+		AdaptiveBalanceGodray::kClarityMin, AdaptiveBalanceGodray::kClarityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextWrapped("Reduce broad volumetric haze independently of godray intensity, opacity, saturation and tint. Zero retains the haze; one removes it. Depth boundaries protect foreground silhouettes. This is a local contrast separation: broad uniform beams may also fade. Vanilla Fog Intensity controls distance fog separately. Missing depth preserves the original lighting. Works without detailed lighting controls.");
+
+	MenuUI::DetailGrid grid("GodrayProfiles", 2, ImGui::GetFontSize() * 32);
+	const Util::Widgets::ControlLayout controls(true);
+	const auto drawProfile = [&](const char* label, VolumetricLightingTuning::Profile& profile) {
+		grid.Next();
+		MenuUI::SectionHeading(label);
+		ImGui::PushID(label);
+		const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
+		for (const auto& field : VolumetricLightingTuning::kProfileFields)
+			Util::Widgets::SliderFloat(field.label, &(profile.*field.member), 0.0f, field.maximum, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		profile = VolumetricLightingTuning::SanitizeProfile(profile);
+	};
+	drawProfile("Exterior Godrays", settings.godrays.exterior);
+	drawProfile("Interior Godrays", settings.godrays.interior);
 }
 
 void AdaptiveBrightness::DrawGlobalSettings(bool a_showAdvancedControls)
@@ -1765,6 +1799,7 @@ json AdaptiveBrightness::CapturePerformanceSettingsState() const
 		{ "useAmbientEffectLighting", settings.useAmbientEffectLighting },
 		{ "godrayFinalBrightness", settings.godrayFinalBrightness },
 		{ "volumetricClarity", settings.volumetricClarity },
+		{ "godrays", settings.godrays },
 		{ "moonReflectionStrength", settings.moonReflectionStrength },
 		{ "globalProfile", settings.globalProfile },
 		{ "depthOfField", settings.depthOfField }
@@ -2119,7 +2154,7 @@ namespace
 			if (std::string_view(group) == "Eyes")
 				ImGui::TextWrapped("Specular Brightness adjusts eye highlights and reflections. Eye Brightness scales all eye lighting. One preserves the original appearance; zero removes that contribution. Applies to eye materials in the scene, including reflections.");
 			else if (std::string_view(group) == "Godrays and Cloud Shadows")
-				ImGui::TextWrapped("Adjust active Volumetric Lighting and Cloud Shadows. Godray controls affect separated shaft detail; Global Atmospheric Clarity controls the broad volumetric veil. Scale 1 and colour contribution 0 preserve their settings.");
+				ImGui::TextWrapped("Godray profile adjustments compose over the exterior or interior base in Global > Godrays. Scale 1 and colour contribution 0 preserve that base. Atmospheric Clarity controls broad haze separately. Cloud shadow strength adjusts the active Cloud Shadows feature.");
 			else if (std::string_view(group) == "Particles and Glow Sprites")
 				ImGui::TextWrapped("Glow sprites include additive non-fire effects, such as some magic. Particle influence adjusts received light; fire has separate controls.");
 			else
@@ -2158,10 +2193,6 @@ void AdaptiveBrightness::DrawLightingSettings(
 			kMoonReflectionStrengthMin, kMoonReflectionStrengthMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("Scale direct moonlit highlights on materials, wet surfaces and water. Zero removes these highlights; one preserves their strength; two doubles it. Follows the active climate's dusk and dawn. Diffuse moonlight, sky reflections and the moon itself remain independent. This global control works without detailed lighting.");
-		Util::Widgets::SliderFloat("Atmospheric Clarity", &settings.volumetricClarity,
-			AdaptiveBalanceGodray::kClarityMin, AdaptiveBalanceGodray::kClarityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextWrapped("Reduce broad volumetric haze independently of godray intensity, opacity, saturation and tint. Zero retains the haze; one removes it. Use Volumetric Lighting > Look for godray tuning. Depth boundaries protect foreground silhouettes. This is a local contrast separation: broad uniform beams may also fade. Vanilla Fog Intensity controls distance fog separately. Missing depth preserves the original lighting. Works without detailed lighting controls.");
 		Util::Widgets::Checkbox("Ambient Lighting for Effects and Sky Statics", &settings.useAmbientEffectLighting);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("Use ambient light (including active IBL) and shadowed directional light instead of weather lighting on effect meshes and sky statics. Their Brightness controls still apply. This global switch works without enabling detailed lighting controls.");
@@ -3086,6 +3117,23 @@ bool AdaptiveBrightness::IsRuntimeEnabled() const
 float AdaptiveBrightness::GetEffectiveVolumetricClarity() const
 {
 	return IsRuntimeEnabled() ? AdaptiveBalanceGodray::SanitizeClarity(settings.volumetricClarity) : AdaptiveBalanceGodray::kClarityDefault;
+}
+
+VolumetricLightingTuning::Profile AdaptiveBrightness::GetEffectiveGodrayProfile(bool a_interior) const
+{
+	if (!IsRuntimeEnabled())
+		return {};
+	const auto appearance = GetEffectiveSharedLightingSettings().appearance;
+	const VolumetricLightingTuning::Profile layer{
+		.ShaftIntensity = appearance.godrayIntensity,
+		.Opacity = appearance.godrayOpacity,
+		.Saturation = appearance.godraySaturation,
+		.CustomColorContribution = appearance.godrayTintAmount,
+		.CustomColorRed = appearance.godrayTint.x,
+		.CustomColorGreen = appearance.godrayTint.y,
+		.CustomColorBlue = appearance.godrayTint.z,
+	};
+	return VolumetricLightingTuning::ComposeProfiles(a_interior ? settings.godrays.interior : settings.godrays.exterior, layer);
 }
 
 float AdaptiveBrightness::GetEffectiveMoonReflectionStrength() const

@@ -396,6 +396,25 @@ namespace
 		};
 	}
 
+	json BuildAdaptiveBalanceGodraySchema()
+	{
+		json properties = json::object();
+		const VolumetricLightingTuning::Profile defaults;
+		for (const auto& field : VolumetricLightingTuning::kProfileFields)
+			properties[field.name] = {
+				{ "type", "number" }, { "minimum", 0 }, { "maximum", field.maximum },
+				{ "default", defaults.*field.member }, { "description", field.label }
+			};
+		const json profile = {
+			{ "type", "object" }, { "minProperties", 1 }, { "additionalProperties", false }, { "properties", std::move(properties) }
+		};
+		return {
+			{ "type", "object" }, { "minProperties", 1 }, { "additionalProperties", false },
+			{ "properties", { { "exterior", profile }, { "interior", profile } } },
+			{ "description", "Partial exterior/interior godray base update. Omitted fields retain saved values. Profile appearance adjustments compose over these bases. All godray appearance tuning is neutral while Adaptive Balance is disabled; does not enable Volumetric Lighting." }
+		};
+	}
+
 	std::string ValidateAdaptiveBalanceVisuals(const json& a_visuals)
 	{
 		if (!a_visuals.is_object() || a_visuals.empty())
@@ -432,6 +451,24 @@ namespace
 			{ "parallaxStrength", 0.0, 2.0 },
 			{ "parallaxQuality", 4.0, 64.0 } } };
 		for (const auto& [name, value] : a_visuals.items()) {
+			if (name == "godrays") {
+				if (!value.is_object() || value.empty())
+					return "godrays must be a nonempty object";
+				for (const auto& [context, profile] : value.items()) {
+					if ((context != "exterior" && context != "interior") || !profile.is_object() || profile.empty())
+						return "Unknown or invalid godray context: " + context;
+					for (const auto& [key, input] : profile.items()) {
+						const auto field = std::find_if(VolumetricLightingTuning::kProfileFields.begin(), VolumetricLightingTuning::kProfileFields.end(),
+							[&](const auto& entry) { return key == entry.name; });
+						if (field == VolumetricLightingTuning::kProfileFields.end() || !input.is_number())
+							return "Unknown or non-numeric godray field: " + key;
+						const double number = input.get<double>();
+						if (!std::isfinite(number) || number < 0.0 || number > field->maximum)
+							return "Out-of-range or invalid godray field: " + key;
+					}
+				}
+				continue;
+			}
 			if (name == "appearance") {
 				if (!value.is_object() || value.empty())
 					return "appearance must be a nonempty object";
@@ -512,6 +549,7 @@ namespace
 		configured["lightingAdvanced"] = profile.advanced;
 		configured["useAmbientEffectLighting"] = balance.settings.useAmbientEffectLighting;
 		configured["volumetricClarity"] = balance.settings.volumetricClarity;
+		configured["godrays"] = balance.settings.godrays;
 		configured["moonReflectionStrength"] = balance.settings.moonReflectionStrength;
 		auto effective = waterFields(balance.GetEffectiveWaterAppearanceSettings());
 		const auto lighting = balance.GetEffectiveSharedLightingSettings();
@@ -536,6 +574,7 @@ namespace
 		effective["appearance"] = lighting.appearance;
 		effective["useAmbientEffectLighting"] = balance.IsRuntimeEnabled() && balance.settings.useAmbientEffectLighting;
 		effective["volumetricClarity"] = balance.GetEffectiveVolumetricClarity();
+		effective["godrays"] = { { "exterior", balance.GetEffectiveGodrayProfile(false) }, { "interior", balance.GetEffectiveGodrayProfile(true) } };
 		effective["moonReflectionStrength"] = balance.GetEffectiveMoonReflectionStrength();
 		return { { "global", std::move(configured) }, { "effective", std::move(effective) } };
 	}
@@ -1226,6 +1265,13 @@ namespace
 					appearance.merge_patch(visuals.at("appearance"));
 					profile.appearance = appearance.get<AdaptiveBalanceAppearanceSettings>();
 				}
+				auto godrays = balance.settings.godrays;
+				if (visuals.contains("godrays")) {
+					json updated = godrays;
+					updated.merge_patch(visuals.at("godrays"));
+					godrays = updated.get<AdaptiveBalanceGodray::Profiles>();
+				}
+				balance.settings.godrays = godrays;
 				balance.settings.globalProfile = profile;
 				balance.settings.useAmbientEffectLighting = visuals.value("useAmbientEffectLighting", balance.settings.useAmbientEffectLighting);
 				balance.settings.volumetricClarity = visuals.value("volumetricClarity", balance.settings.volumetricClarity);
@@ -1436,6 +1482,9 @@ namespace MenuDevBenchBridge
 				{ "type", "object" }, { "description", "Main-thread context at the DevBench call, independently framed from the asynchronous grass and profiler samples. Unavailable scene values are omitted." }
 			};
 			document["inputSchema"]["properties"]["visuals"]["properties"]["appearance"] = BuildAdaptiveBalanceAppearanceSchema();
+			document["inputSchema"]["properties"]["visuals"]["properties"]["godrays"] = BuildAdaptiveBalanceGodraySchema();
+			document["description"] = document["description"].get<std::string>() +
+			                          " set_adaptive_balance_visuals accepts godrays.exterior and godrays.interior partial profiles (ShaftIntensity 0..3, Opacity 0..2, Saturation 0..4, CustomColorContribution/Red/Green/Blue 0..1). These bases work without lightingAdvanced; profile appearance adjustments compose afterward. Disabling Adaptive Balance bypasses both bases, profile tuning and volumetricClarity. Volumetric Lighting owns only coverage and rendering quality. Status global.godrays reports saved bases and effective.godrays reports composed tuning before renderer availability gates.";
 			document["description"] = document["description"].get<std::string>() +
 			                          " set_adaptive_balance_visuals accepts appearance.eyeSpecularBrightness and appearance.eyeBrightness in [0,5] (default 1). They scale eye highlights/reflections and overall eye lighting respectively, require Global lightingAdvanced, and remain neutral while Adaptive Balance is disabled.";
 			document["inputSchema"]["properties"]["depthOfField"] = MenuDepthOfFieldSettingsPolicy::Schema();

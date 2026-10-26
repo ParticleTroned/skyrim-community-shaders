@@ -111,6 +111,11 @@ namespace
 	RE::Cell testCell;
 	RE::PlayerCharacter testPlayer;
 	RE::PlayerCharacter* RE::PlayerCharacter::GetSingleton() { return &testPlayer; }
+	struct AdaptiveBalance
+	{
+		VolumetricLightingTuning::Profile GetEffectiveGodrayProfile(bool) const { return {}; }
+	};
+
 	namespace globals
 	{
 		State* state = &::testState;
@@ -128,6 +133,7 @@ namespace
 		}
 		namespace features
 		{
+			inline AdaptiveBalance adaptiveBrightness;
 			InteriorSun interiorSun;
 		}
 	}

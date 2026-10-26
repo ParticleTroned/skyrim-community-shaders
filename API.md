@@ -264,17 +264,25 @@ Shaders' `CS_UTILITY` shared-buffer layout and wind API extensions are
 separate contracts; settings redirection does not guarantee identical
 rendered pixels across the two renderers.
 
-Legacy `vlIntensity` maps to Adaptive Balance's global-only
-`godrayFinalBrightness`: a finite multiplier from 0 to 5, default 1,
-applied to the completed godray colour after its existing gamma conversion.
-The master/runtime gate bypasses it to 1. It is independent of Linear
-Lighting, the Global detailed-lighting switch, and the composed profile
-`appearance.godrayIntensity` control; it does not enable godrays.
-`communityshaders.menu` action `set_adaptive_balance_visuals` accepts it as
-`visuals.godrayFinalBrightness`, stages it without saving, and rejects an
-invalid value before applying any part of the update. Inspection exposes
-it under `status.adaptiveBalanceVisuals.global.godrayFinalBrightness`
-and `.effective.godrayFinalBrightness` as saved and gate-adjusted values.
+Legacy `vlIntensity` maps to Adaptive Balance's `godrayFinalBrightness`
+compatibility field (finite 0 to 5, default 1). The saved value round-trips
+through legacy settings APIs but has no rendering effect.
+
+Godray appearance is owned by Adaptive Balance's `godrays.exterior` and
+`godrays.interior` bases. Each exposes `ShaftIntensity` (0–3), `Opacity`
+(0–2), `Saturation` (0–4), and `CustomColorContribution`, `CustomColorRed`,
+`CustomColorGreen`, `CustomColorBlue` (0–1). Existing Volumetric Lighting
+settings migrate to these bases. Profile `appearance.godray*` adjustments
+compose afterward, preserving the established blend order.
+
+DevBench `set_adaptive_balance_visuals` accepts partial `visuals.godrays`
+updates and `visuals.volumetricClarity` (0–1). Invalid or unknown fields reject
+the entire update. Context bases do not require `lightingAdvanced`.
+`status.adaptiveBalanceVisuals.global.godrays` reports saved bases;
+`.effective.godrays` reports composed adjustments before Volumetric Lighting's
+availability gates. Disabling Adaptive Balance makes both contexts neutral
+and Atmospheric Clarity zero, while preserving saved values. Coverage and
+quality remain Volumetric Lighting settings.
 
 Bloom inspection exposes the current Global
 profile as the legacy Default preset; the original inactive custom preset

@@ -97,6 +97,16 @@ int main(int argc, char** argv)
 			assert(!PresetCompatibility::Evaluate(legacy, "CSX 3.21.0-VR").ShouldApply());
 		}
 	}
+	{
+		auto legacy = CompatiblePreset();
+		auto& marker = legacy["Preset Compatibility"];
+		marker["settingsContract"]["revision"] = 16u;
+		marker["target"]["minimumVersion"] = "3.21";
+		marker["target"]["maximumVersionExclusive"] = "3.22";
+		assert(!PresetCompatibility::Evaluate(legacy, "CSX 3.20.0-VR").ShouldApply());
+		assert(PresetCompatibility::Evaluate(legacy, "CSX 3.21.0-VR").ShouldApply());
+		assert(!PresetCompatibility::Evaluate(legacy, "CSX 3.22.0-VR").ShouldApply());
+	}
 	for (const auto revision : { 5u, 7u, PresetCompatibility::kSettingsContractRevision + 1 }) {
 		auto incompatibleContract = CompatiblePreset();
 		incompatibleContract["Preset Compatibility"]["settingsContract"]["revision"] = revision;

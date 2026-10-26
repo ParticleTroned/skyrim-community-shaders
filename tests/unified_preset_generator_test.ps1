@@ -283,7 +283,7 @@ try {
     Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
     $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
         OutputRoot = $outputRoot; ReportPath = $reportPath
-    } -Pattern 'JSON path has a non-object parent.*Volumetric Lighting/CustomColorBlue' -Message 'A malformed stale-path ancestor was treated as absent.'
+    } -Pattern 'JSON path has a non-object parent.*Volumetric Lighting/' -Message 'A malformed stale-path ancestor was treated as absent.'
     [System.IO.File]::WriteAllText($isolatedBasePath, $baselineBaseText, $utf8)
     [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
 

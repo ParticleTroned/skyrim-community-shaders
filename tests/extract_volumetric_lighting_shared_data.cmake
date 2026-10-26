@@ -19,6 +19,8 @@ file(READ "${PROJECT_ROOT}/src/State.h" _state_header)
 file(READ "${PROJECT_ROOT}/src/Features/VolumetricLighting.h" _header)
 file(READ "${PROJECT_ROOT}/src/Features/VolumetricLighting.cpp" _feature)
 file(READ "${PROJECT_ROOT}/src/State.cpp" _state)
+file(READ "${PROJECT_ROOT}/src/Features/AdaptiveBrightness.cpp" _adaptive)
+extract_between("${_adaptive}" "VolumetricLightingTuning::Profile AdaptiveBrightness::GetEffectiveGodrayProfile(" "float AdaptiveBrightness::GetEffectiveMoonReflectionStrength()" _godrays)
 extract_between("${_state_header}" "struct alignas(16) SharedDataCB" "\n\t};" _buffer)
 extract_between("${_header}" "\tstruct TextureSize" "\nprivate:" _settings)
 extract_between("${_feature}" "\tbool IsImageSpaceReplacementEnabled()" "\n\tbool IsRainWeatherActive(" _replacement)
@@ -33,5 +35,5 @@ file(
 )
 file(
     WRITE "${_directory}/volumetric_lighting_runtime_under_test.h"
-    "${_replacement}\n${_profile}\nSharedDataCB Upload(bool a_inWorld) {\nSharedDataCB data{};\n${_upload}\nreturn data;\n}\n"
+    "${_godrays}\n${_replacement}\n${_profile}\nSharedDataCB Upload(bool a_inWorld) {\nSharedDataCB data{};\n${_upload}\nreturn data;\n}\n"
 )

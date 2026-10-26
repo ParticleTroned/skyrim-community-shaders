@@ -72,15 +72,15 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-performance",
-    "presetVersion": "d2026.10.22.1",
+    "presetVersion": "d2026.10.26.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
       "maximumVersionExclusive": "3.22"
     },
     "settingsContract": {
-      "revision": 16,
-      "sourceTreeSha256": "66DB962867D5F4170F6A20CE9326C242835F6FBC54EB3A6182DBCC040178D5B8"
+      "revision": 17,
+      "sourceTreeSha256": "FC070EAE78C8D317D63F690C87C879F5E94444706E6FFC4178D8D9175F8C7DC0"
     }
   },
   "Upscaling": {
@@ -887,7 +887,27 @@
         }
       }
     ],
-    "transitionHours": 2.0
+    "transitionHours": 2.0,
+    "godrays": {
+      "exterior": {
+        "CustomColorBlue": 1.0,
+        "CustomColorContribution": 1.0,
+        "CustomColorGreen": 1.0,
+        "CustomColorRed": 1.0,
+        "Opacity": 1.0,
+        "Saturation": 1.0,
+        "ShaftIntensity": 1.0
+      },
+      "interior": {
+        "CustomColorBlue": 1.0,
+        "CustomColorContribution": 1.0,
+        "CustomColorGreen": 1.0,
+        "CustomColorRed": 1.0,
+        "Opacity": 1.0,
+        "Saturation": 1.0,
+        "ShaftIntensity": 1.0
+      }
+    }
   },
   "Foliage Lighting": {
     "EnableFoliageAmbientBoost": 0,
@@ -1053,15 +1073,6 @@
       "Width": 320
     },
     "ExteriorEnabled": true,
-    "ExteriorGodrays": {
-      "CustomColorBlue": 1.0,
-      "CustomColorContribution": 1.0,
-      "CustomColorGreen": 1.0,
-      "CustomColorRed": 1.0,
-      "Opacity": 1.0,
-      "Saturation": 1.0,
-      "ShaftIntensity": 1.0
-    },
     "ExteriorQuality": 2,
     "InteriorCustomSize": {
       "Depth": 90,
@@ -1069,15 +1080,6 @@
       "Width": 320
     },
     "InteriorEnabled": true,
-    "InteriorGodrays": {
-      "CustomColorBlue": 1.0,
-      "CustomColorContribution": 1.0,
-      "CustomColorGreen": 1.0,
-      "CustomColorRed": 1.0,
-      "Opacity": 1.0,
-      "Saturation": 1.0,
-      "ShaftIntensity": 1.0
-    },
     "InteriorQuality": 2
   },
   "Volumetric Shadows": {

@@ -33,12 +33,14 @@ class DepthOfFieldMigrationTests(unittest.TestCase):
         filesystem = (ROOT / "src/Utils/FileSystem.cpp").read_text(encoding="utf-8-sig")
         prelude += "namespace Util::FileHelpers {\n" + function(filesystem, "JsonFileReadResult ReadJsonFile(") + "}\n"
         driver = (ROOT / "tests/depth_of_field_migration_test.cpp").read_text(encoding="utf-8-sig")
+        adaptive = (ROOT / "src/Features/AdaptiveBrightness.cpp").read_text(encoding="utf-8-sig")
+        preset_reader = function(adaptive, "\tbool ReadJsonPresetFile(")
         cls.temporary = tempfile.TemporaryDirectory(prefix="csx-dof-migration-")
         cls.addClassCleanup(cls.temporary.cleanup)
         cls.directory = Path(cls.temporary.name)
         source = cls.directory / "migration.cpp"
         cls.executable = cls.directory / "migration.exe"
-        source.write_text(prelude + migration + overrides + driver, encoding="utf-8")
+        source.write_text(prelude + migration + overrides + preset_reader + driver, encoding="utf-8")
         includes = [str(ROOT / "src"), *include.split(";")]
         if Path(compiler).stem.lower() == "cl":
             command = [compiler, "/nologo", "/std:c++20", "/EHsc", "/O2", "/W4", "/WX",
@@ -54,6 +56,27 @@ class DepthOfFieldMigrationTests(unittest.TestCase):
         result = subprocess.run([str(self.executable), name, str(self.directory / name)],
                                 capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_godray_context_migration_and_precedence(self):
+        self.check_case("godray-context-migration")
+
+    def test_godray_context_provider_routing(self):
+        self.check_case("godray-context-providers")
+
+    def test_godray_context_user_save_reload_and_reset(self):
+        self.check_case("godray-context-users")
+
+    def test_godray_context_failed_save_and_concurrent_edit(self):
+        self.check_case("godray-context-failure")
+
+    def test_godray_context_imported_settings_file(self):
+        self.check_case("godray-context-import")
+
+    def test_godray_context_renderer_reset_before_migration(self):
+        self.check_case("godray-context-renderer-reset")
+
+    def test_godray_context_disabled_provider(self):
+        self.check_case("godray-context-disabled")
 
     def test_saved_flags_values_and_legacy_renderer_fields(self):
         self.check_case("saved-values")

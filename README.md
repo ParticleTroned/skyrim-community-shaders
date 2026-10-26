@@ -31,11 +31,15 @@ supported legacy CSUtility/OSUtility settings access redirects to Adaptive
 Balance. See [utility compatibility](API.md#legacy-utility-settings)
 for the supported settings and remaining Open Shaders differences.
 
-**Adaptive Balance > Global > Lighting** also includes **Final godray
-brightness**, a global multiplier from 0 to 5 with a neutral default of 1.
-It scales the completed godray colour after gamma conversion and remains
-separate from profile godray intensity. Legacy `vlIntensity` settings map
-to this control; Adaptive Balance's Enabled switch gates both.
+**Adaptive Balance > Global > Godrays** owns exterior and interior godray
+intensity, opacity, saturation and custom colour, plus Atmospheric Clarity
+for broad volumetric haze. Existing Volumetric Lighting appearance settings
+migrate automatically; profile appearance adjustments retain their existing
+composition over these context bases. Adaptive Balance's Enabled switch
+bypasses all these adjustments while preserving saved values. Volumetric
+Lighting retains coverage, resolution and rendering quality controls.
+Legacy `godrayFinalBrightness` / `vlIntensity` values remain available for
+preset/API compatibility and have no rendering effect.
 
 If the CSX menu becomes too small, oversized or inaccessible, press
 **Ctrl+Shift+End** with the game focused. This fixed shortcut reopens the

@@ -161,6 +161,7 @@ struct AdaptiveBrightness
 	bool IsRuntimeAvailable() const;
 	bool IsRuntimeEnabled() const;
 	float GetEffectiveVolumetricClarity() const;
+	VolumetricLightingTuning::Profile GetEffectiveGodrayProfile(bool) const;
 	float GetEffectiveMoonReflectionStrength() const;
 	void SetEnabled(bool enabled);
 	PerFrameData GetCommonBufferData() const;
@@ -1148,6 +1149,58 @@ void CheckSkyGradientOwnership()
 	balance = {};
 }
 
+void CheckGodrayContextOwnership()
+{
+	AdaptiveBrightness balance;
+	balance.settings.godrays.exterior = { .ShaftIntensity = 2.0f, .Opacity = 0.7f, .Saturation = 1.4f, .CustomColorContribution = 0.6f, .CustomColorRed = 0.2f, .CustomColorGreen = 0.4f, .CustomColorBlue = 0.8f };
+	balance.settings.godrays.interior = { .ShaftIntensity = 0.4f, .Opacity = 1.3f, .Saturation = 0.2f, .CustomColorContribution = 0.3f, .CustomColorRed = 0.9f, .CustomColorGreen = 0.1f, .CustomColorBlue = 0.5f };
+	balance.settings.globalProfile.advanced = true;
+	balance.settings.globalProfile.appearance = { .godrayIntensity = 0.8f, .godrayOpacity = 1.2f, .godrayTint = { 1.0f, 0.0f, 0.3f }, .godrayTintAmount = 0.4f, .godraySaturation = 1.3f };
+	auto day = AdaptiveBrightness::ProfileSettings::AdjustmentDefaults();
+	auto night = day;
+	day.advanced = night.advanced = true;
+	day.appearance.godrayIntensity = 0.5f;
+	night.appearance.godrayIntensity = 2.0f;
+	night.appearance.godrayTint = { 0.1f, 0.8f, 0.3f };
+	night.appearance.godrayTintAmount = 0.8f;
+	balance.testProfileBlend = { .from = &day, .to = &night, .factor = 0.35f };
+	const auto saved = balance.settings.godrays;
+	for (const bool interior : { false, true }) {
+		const auto appearance = balance.GetEffectiveSharedLightingSettings().appearance;
+		const VolumetricLightingTuning::Profile layer{
+			.ShaftIntensity = appearance.godrayIntensity,
+			.Opacity = appearance.godrayOpacity,
+			.Saturation = appearance.godraySaturation,
+			.CustomColorContribution = appearance.godrayTintAmount,
+			.CustomColorRed = appearance.godrayTint.x,
+			.CustomColorGreen = appearance.godrayTint.y,
+			.CustomColorBlue = appearance.godrayTint.z
+		};
+		const auto expected = VolumetricLightingTuning::ComposeProfiles(interior ? saved.interior : saved.exterior, layer);
+		assert(balance.GetEffectiveGodrayProfile(interior) == expected);
+	}
+	balance.SetEnabled(false);
+	assert(balance.GetEffectiveGodrayProfile(false) == VolumetricLightingTuning::Profile{});
+	assert(balance.GetEffectiveGodrayProfile(true) == VolumetricLightingTuning::Profile{});
+	assert(balance.settings.godrays == saved);
+	balance.SetEnabled(true);
+	assert(balance.GetEffectiveGodrayProfile(false) != VolumetricLightingTuning::Profile{});
+	const json serialized = saved;
+	assert(serialized.get<AdaptiveBalanceGodray::Profiles>() == saved);
+	const auto schema = BuildAdaptiveBalanceGodraySchema();
+	for (const char* context : { "exterior", "interior" }) {
+		for (const auto& field : VolumetricLightingTuning::kProfileFields) {
+			for (const float value : { 0.0f, field.maximum })
+				assert(ValidateAdaptiveBalanceVisuals({ { "godrays", { { context, { { field.name, value } } } } } }).empty());
+			assert(!ValidateAdaptiveBalanceVisuals({ { "godrays", { { context, { { field.name, field.maximum + 1.0f } } } } } }).empty());
+			assert(!ValidateAdaptiveBalanceVisuals({ { "godrays", { { context, { { field.name, "invalid" } } } } } }).empty());
+			assert(schema["properties"][context]["properties"][field.name]["maximum"] == field.maximum);
+		}
+	}
+	assert(!ValidateAdaptiveBalanceVisuals({ { "godrays", { { "unknown", json::object() } } } }).empty());
+	assert(!ValidateAdaptiveBalanceVisuals({ { "godrays", { { "exterior", { { "ShaftIntensity", std::numeric_limits<double>::infinity() } } } } } }).empty());
+}
+
 void CheckVolumetricClarity()
 {
 	AdaptiveBrightness balance;
@@ -1297,6 +1350,7 @@ int main()
 {
 	CheckVanillaPointLightRequirements();
 	CheckVolumetricClarity();
+	CheckGodrayContextOwnership();
 	CheckAppearanceProfiles();
 	CheckSkyGradientOwnership();
 	CheckWeatherColors();

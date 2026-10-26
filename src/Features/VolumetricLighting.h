@@ -25,11 +25,9 @@ public:
 	{
 		bool ExteriorEnabled = true;
 		bool DisableWeatherInteractionDuringRain = false;
-		GodrayProfile ExteriorGodrays;
 		int32_t ExteriorQuality = 2;
 		TextureSize ExteriorCustomSize;
 		bool InteriorEnabled = true;
-		GodrayProfile InteriorGodrays;
 		int32_t InteriorQuality = 2;
 		TextureSize InteriorCustomSize;
 
@@ -83,7 +81,7 @@ public:
 	void RequestRuntimeReset();
 	bool IsPerformanceCostMeasurementReady() const override;
 	const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for volumetric lighting transition"; }
-	/** @return Active standalone tuning composed with Adaptive Balance, or neutral when unavailable. */
+	/** @return Adaptive Balance tuning for the active renderer context, or neutral when unavailable. */
 	GodrayProfile GetRuntimeGodrayProfile() const;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
@@ -154,8 +152,6 @@ private:
 	static void SetVLQuality(VolumetricLightingDescriptor& descriptor, std::uint32_t quality);
 	static void RenderVolumetricLighting(VolumetricLightingDescriptor* descriptor, RE::NiCamera* camera, bool flag);
 
-	void DrawGodrayTuningSettings();
-	void DrawGodrayProfileSettings(const char* label, GodrayProfile& profile);
 	void DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, bool isInterior);
 	TextureSize& FetchCurrentSizeInUnits(bool interior);
 	bool TryGetActiveGodrayProfile(GodrayProfile& profile) const;

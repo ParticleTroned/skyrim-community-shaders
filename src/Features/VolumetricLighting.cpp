@@ -14,7 +14,6 @@
 #include "SkySync.h"
 #include "State.h"
 #include "Utils/RendererContextAccess.h"
-#include "VolumetricLightingTuningMigration.h"
 
 namespace
 {
@@ -68,28 +67,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Height,
 	Depth);
 
-namespace VolumetricLightingTuning
-{
-	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-		Profile,
-		ShaftIntensity,
-		Opacity,
-		Saturation,
-		CustomColorContribution,
-		CustomColorRed,
-		CustomColorGreen,
-		CustomColorBlue);
-}
-
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VolumetricLighting::Settings,
 	ExteriorEnabled,
 	DisableWeatherInteractionDuringRain,
-	ExteriorGodrays,
 	ExteriorQuality,
 	ExteriorCustomSize,
 	InteriorEnabled,
-	InteriorGodrays,
 	InteriorQuality,
 	InteriorCustomSize);
 
@@ -102,9 +86,8 @@ void VolumetricLighting::DrawSettings()
 	MenuUI::SettingsPage page("VolumetricLighting", {
 														{ "coverage", "Coverage", "Choose where volumetric lighting runs.", "Interior, exterior and rain", true, true, "Choose coverage and quality" },
 														{ "quality", "Quality", "Balance volumetric detail and rendering cost.", "Interior and exterior resolution", true, true, nullptr },
-														{ "appearance", "Look", "Refine the colour and strength of light shafts.", "Interior and exterior godrays", true, true, "Shape the atmosphere" },
 													});
-	if (!page.Is("coverage") && !page.Is("quality") && !page.Is("appearance"))
+	if (!page.Is("coverage") && !page.Is("quality"))
 		return;
 	std::scoped_lock lock(settingsMutex);
 	if (page.Is("coverage")) {
@@ -132,8 +115,6 @@ void VolumetricLighting::DrawSettings()
 			DrawVolumetricLightingSettings(settings.InteriorQuality, settings.InteriorCustomSize, true);
 		}
 	}
-	if (page.Is("appearance"))
-		DrawGodrayTuningSettings();
 }
 
 void VolumetricLighting::DrawPerformanceSettings(bool a_advanced)
@@ -192,48 +173,6 @@ json VolumetricLighting::CapturePerformanceSettingsState() const
 {
 	std::scoped_lock lock(settingsMutex);
 	return settings;
-}
-
-void VolumetricLighting::DrawGodrayTuningSettings()
-{
-	MenuUI::SectionHeading("Godray tuning");
-	MenuUI::DetailNote("These controls affect separated shaft detail. Adaptive Balance's Atmospheric Clarity controls broad volumetric haze independently. Broad uniform beams may be classified as haze; invalid depth preserves the original lighting.");
-	const bool tuningAvailable = IsImageSpaceReplacementEnabled();
-	if (!tuningAvailable) {
-		ImGui::TextDisabled("Godray tuning requires ImageSpace pixel-shader replacement.");
-	}
-
-	const auto disabled = Util::DisableGuard(!tuningAvailable);
-	MenuUI::DetailGrid grid("GodrayProfiles", 2, ImGui::GetFontSize() * 32);
-	const Util::Widgets::ControlLayout controls(true);
-	grid.Next();
-	DrawGodrayProfileSettings("Exterior Godrays", settings.ExteriorGodrays);
-	grid.Next();
-	DrawGodrayProfileSettings("Interior Godrays", settings.InteriorGodrays);
-}
-
-void VolumetricLighting::DrawGodrayProfileSettings(const char* label, GodrayProfile& profile)
-{
-	MenuUI::SectionHeading(label);
-	ImGui::PushID(label);
-	const auto restoreId = SKSE::stl::scope_exit([] { ImGui::PopID(); });
-	auto drawSlider = [](const char* sliderLabel, float& value, float minValue, float maxValue, const char* tooltip) {
-		Util::Widgets::SliderFloat(sliderLabel, &value, minValue, maxValue, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(tooltip);
-	};
-
-	drawSlider("Godray Intensity", profile.ShaftIntensity, 0.0f, VolumetricLightingTuning::kShaftIntensityMax, "Scales separated godray detail without changing broad haze. 1.0 is default.");
-	drawSlider("Godray Opacity", profile.Opacity, 0.0f, VolumetricLightingTuning::kOpacityMax, "Shapes the separated shaft contribution after colour conversion without changing broad haze. 1.0 is default.");
-	drawSlider("Godray Saturation", profile.Saturation, 0.0f, VolumetricLightingTuning::kSaturationMax, "Adjusts weather godray saturation while preserving brightness. 1.0 is default.");
-
-	drawSlider("Custom Color Contribution", profile.CustomColorContribution, 0.0f, 1.0f, "Blends your custom color into the authored weather godray color.");
-	const bool customColorDisabled = profile.CustomColorContribution <= VolumetricLightingTuning::kFloatEpsilon;
-	ImGui::BeginDisabled(customColorDisabled);
-	drawSlider("Custom Color Red", profile.CustomColorRed, 0.0f, 1.0f, "Red channel for custom volumetric color.");
-	drawSlider("Custom Color Green", profile.CustomColorGreen, 0.0f, 1.0f, "Green channel for custom volumetric color.");
-	drawSlider("Custom Color Blue", profile.CustomColorBlue, 0.0f, 1.0f, "Blue channel for custom volumetric color.");
-	ImGui::EndDisabled();
 }
 
 void VolumetricLighting::DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, const bool isInterior)
@@ -327,20 +266,7 @@ void VolumetricLighting::LoadSettings(json& o_json)
 		return;
 	}
 
-	const auto legacyGodrays = VolumetricLightingTuning::ReadLegacyProfile(o_json);
-	auto exteriorGodrays = legacyGodrays;
-	if (const auto it = o_json.find("ExteriorGodrays"); it != o_json.end())
-		exteriorGodrays = VolumetricLightingTuning::ReadProfile(*it);
-	auto interiorGodrays = legacyGodrays;
-	if (const auto it = o_json.find("InteriorGodrays"); it != o_json.end())
-		interiorGodrays = VolumetricLightingTuning::ReadProfile(*it);
-
-	auto baseSettings = o_json;
-	baseSettings.erase("ExteriorGodrays");
-	baseSettings.erase("InteriorGodrays");
-	settings = baseSettings;
-	settings.ExteriorGodrays = exteriorGodrays;
-	settings.InteriorGodrays = interiorGodrays;
+	settings = o_json;
 	if (!REL::Module::IsVR()) {
 		settings.DisableWeatherInteractionDuringRain = false;
 	}
@@ -381,8 +307,6 @@ VolumetricLighting::TextureSize VolumetricLighting::ClampTextureSize(const Textu
 
 void VolumetricLighting::SanitizeSettings()
 {
-	settings.ExteriorGodrays = VolumetricLightingTuning::SanitizeProfile(settings.ExteriorGodrays);
-	settings.InteriorGodrays = VolumetricLightingTuning::SanitizeProfile(settings.InteriorGodrays);
 	settings.ExteriorQuality = ClampQualityIndex(settings.ExteriorQuality);
 	settings.InteriorQuality = ClampQualityIndex(settings.InteriorQuality);
 	settings.ExteriorCustomSize = ClampTextureSize(settings.ExteriorCustomSize);
@@ -397,10 +321,14 @@ bool VolumetricLighting::IsExteriorEnabled() const
 
 bool VolumetricLighting::TryGetActiveGodrayProfile(GodrayProfile& profile) const
 {
-	std::scoped_lock lock(settingsMutex);
-	if (!initialised || !runtimeEnabled)
-		return false;
-	profile = inInterior ? runtimeSettings.InteriorGodrays : runtimeSettings.ExteriorGodrays;
+	bool interior;
+	{
+		std::scoped_lock lock(settingsMutex);
+		if (!initialised || !runtimeEnabled)
+			return false;
+		interior = inInterior;
+	}
+	profile = globals::features::adaptiveBrightness.GetEffectiveGodrayProfile(interior);
 	return true;
 }
 
@@ -409,17 +337,7 @@ VolumetricLighting::GodrayProfile VolumetricLighting::GetRuntimeGodrayProfile() 
 	GodrayProfile profile{};
 	if (!loaded || !IsImageSpaceReplacementEnabled() || !TryGetActiveGodrayProfile(profile))
 		return profile;
-	const auto appearance = globals::features::adaptiveBrightness.GetEffectiveSharedLightingSettings().appearance;
-	const GodrayProfile layer{
-		.ShaftIntensity = appearance.godrayIntensity,
-		.Opacity = appearance.godrayOpacity,
-		.Saturation = appearance.godraySaturation,
-		.CustomColorContribution = appearance.godrayTintAmount,
-		.CustomColorRed = appearance.godrayTint.x,
-		.CustomColorGreen = appearance.godrayTint.y,
-		.CustomColorBlue = appearance.godrayTint.z,
-	};
-	return VolumetricLightingTuning::ComposeProfiles(profile, layer);
+	return profile;
 }
 
 bool VolumetricLighting::IsPerformanceToggleEnabled() const

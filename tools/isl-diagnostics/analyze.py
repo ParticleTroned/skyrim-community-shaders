@@ -7,10 +7,15 @@ import re
 import subprocess
 import time
 import zipfile
+import zlib
 
 import capture_file
 import engine_analysis
 import evidence
+import stack_evidence
+
+READ_ERRORS = (ValueError, TypeError, KeyError, IndexError, AttributeError, ArithmeticError,
+               OSError, EOFError, zipfile.BadZipFile, zlib.error)
 
 
 class Source:
@@ -24,6 +29,7 @@ class Source:
                 continue
             name = entry.rsplit('/', 1)[-1]
             if name in self.names:
+                self.close()
                 raise ValueError(f"ambiguous duplicate filename: {name}")
             self.names[name] = entry
 
@@ -124,7 +130,7 @@ def save(path, value):
 def attempt(operation):
     try:
         return operation()
-    except (ValueError, TypeError, KeyError, IndexError, AttributeError, ArithmeticError, OSError) as error:
+    except READ_ERRORS as error:
         return {'complete': False, 'valid': False, 'status': 'UNAVAILABLE', 'limitations': [str(error)]}
 
 
@@ -148,7 +154,8 @@ def guard(source, name, output, module, output_name):
 
 def analyze_window(source, name, output, module, references=None):
     raw, side, file_quality = source.recording(name)
-    result = {'name': name, 'fileQuality': file_quality}
+    result = {'name': name, 'fileQuality': file_quality,
+              'stackWaitCoverage': attempt(lambda: stack_evidence.coverage(source, side))}
     for kind, document in (('raw', raw), ('isl', side)):
         if document is not None:
             save(output / (name + '-' + kind + '.json'), document)
@@ -226,15 +233,18 @@ def main():
                         help='optional local pure performance-window validator; no connection is made')
     parser.add_argument('--phase', action='append', help='only analyze the named phase (repeatable)')
     args = parser.parse_args()
+    args.controller_module = args.controller_module.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
     source, started, reports = Source(args.input), time.monotonic(), []
     references = {}
     try:
         names = args.phase or source.recordings()
-        campaign = source.json('campaign.json', {})
-        order = [p['name'] for p in campaign.get('completed', [])]
+        campaign = attempt(lambda: source.json('campaign.json', {}))
+        completed = campaign.get('completed', []) if isinstance(campaign, dict) else []
+        order = [p.get('name') for p in completed if isinstance(p, dict)] if isinstance(completed, list) else []
         names.sort(key=lambda n: (order.index(n) if n in order else len(order), n))
-        if not names:
+        trace_requested = 'stack-campaign.json' in source.names or 'trace-ready.json' in source.names
+        if not names and not trace_requested and 'cpu-stack-wait.etl' not in source.names:
             raise ValueError('no native recordings or legacy raw pages found')
         for name in names:
             if not re.fullmatch(r'[A-Za-z0-9_-]+', name):
@@ -242,12 +252,19 @@ def main():
             print(f'Offline export and analysis: {name}', flush=True)
             try:
                 result = analyze_window(source, name, args.output, args.controller_module, references)
-            except (ValueError, KeyError, TypeError, OSError) as error:
+            except READ_ERRORS as error:
                 result = {'name': name, 'status': 'UNAVAILABLE', 'limitations': [str(error)]}
             save(args.output / (name + '-analysis.json'), result)
             reports.append({k: v for k, v in result.items() if k not in ('engine', 'qpcAssociations')})
+        trace = attempt(lambda: stack_evidence.preserve(source, args.output))
+        trace['windows'] = []
+        if trace.get('status') != 'NOT_REQUESTED':
+            trace['windows'] = [{'name': result['name'], **result.get('stackWaitCoverage', {'status': 'UNAVAILABLE'})}
+                                for result in reports]
+            save(args.output / 'stack-trace.json', trace)
         elapsed = time.monotonic() - started
         save(args.output / 'analysis.json', {'phases': reports, 'elapsedSeconds': elapsed,
+             'stackTrace': trace,
              'meaning': 'Independent measured channels and matched-comparison eligibility are separate. No automatic root-cause or exact SteamVR Late Start claim.'})
         with (args.output / 'report.txt').open('x', encoding='utf-8') as stream:
             stream.write('OFFLINE ANALYSIS — original recordings preserved\n')
@@ -258,8 +275,16 @@ def main():
                              f"{c.get('extraPresentations', 'unknown')} | {c.get('repeatCorroboratedWraps', 'unknown')} | {c.get('classification', 'unavailable')}\n")
             stream.write(f'\nElapsed: {elapsed:.2f}s. Per-phase files contain full exports, CPU stages, contexts, associations and limitations.\n')
             stream.write('Cadence wraps are not an exact reconstruction of combs/mountains. Do not infer AI causation from actor counts alone.\n')
+            if trace.get('status') != 'NOT_REQUESTED':
+                stream.write(f"\nWindows trace: {trace.get('status')}. See stack-trace.json.\n")
+                for window in trace['windows']:
+                    stream.write(f"{window['name']}: trace receipt coverage {window.get('status', 'UNAVAILABLE')}\n")
+                stream.write('Trace receipt coverage is not event-loss, stack or symbol validation; that analysis remains offline.\n')
+            if not reports:
+                stream.write('No engine recordings available; any Windows trace was retained independently.\n')
         print(f'OFFLINE ANALYSIS FINISHED: {len(reports)} recordings in {elapsed:.2f}s; {args.output}', flush=True)
-        return int(any(r.get('status') == 'UNAVAILABLE' for r in reports))
+        return int(not reports or any(r.get('status') == 'UNAVAILABLE' for r in reports) or
+                   trace.get('status') not in ('NOT_REQUESTED', 'PRESERVED'))
     finally:
         source.close()
 

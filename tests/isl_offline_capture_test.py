@@ -1,12 +1,14 @@
 """Exercise collection-only ownership, portable export, recovery and engine analysis."""
 
 import importlib.util
+import contextlib
 import io
 import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+import zipfile
 from unittest.mock import patch
 
 from measurement_controller_transport_test import ROOT, isl, nr_status
@@ -19,8 +21,9 @@ def load(name):
     return module
 
 
-capture_file, engine = load('capture_file'), load('engine_analysis')
-with patch.dict('sys.modules', {'capture_file': capture_file, 'engine_analysis': engine, 'evidence': isl.evidence}):
+capture_file, engine, stacks = load('capture_file'), load('engine_analysis'), load('stack_evidence')
+with patch.dict('sys.modules', {'capture_file': capture_file, 'engine_analysis': engine, 'evidence': isl.evidence,
+                                'stack_evidence': stacks}):
     analyzer = load('analyze')
 
 
@@ -37,6 +40,42 @@ def encoded(rows):
 
 
 class Files(unittest.TestCase):
+    def test_damaged_trace_zip_does_not_erase_engine_exports_or_summary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive_path, output = root / 'received.zip', root / 'analysis'
+            with zipfile.ZipFile(archive_path, 'x', zipfile.ZIP_STORED) as archive:
+                archive.writestr('phase.csxcap', encoded(recording()))
+                archive.writestr('campaign.json', '{damaged optional metadata')
+                archive.writestr('stack-wait/cpu-stack-wait.etl', b'ETL bytes to corrupt')
+            contents = bytearray(archive_path.read_bytes())
+            contents[contents.index(b'ETL bytes to corrupt')] ^= 1
+            archive_path.write_bytes(contents)
+            with patch('sys.argv', ['analyze', str(archive_path), '--output', str(output)]), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(analyzer.main(), 1)
+            self.assertTrue((output / 'phase-raw.json').is_file())
+            self.assertTrue((output / 'phase-isl.json').is_file())
+            trace = json.loads((output / 'stack-trace.json').read_text())
+            self.assertEqual(trace['status'], 'UNAVAILABLE')
+            self.assertIn('CRC', trace['limitations'][0])
+            self.assertIn('Windows trace: UNAVAILABLE', (output / 'report.txt').read_text(encoding='utf-8'))
+            self.assertEqual(archive_path.read_bytes(), contents)
+
+    def test_trace_only_interruption_is_preserved_without_claiming_engine_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, output = root / 'received', root / 'analysis'
+            source.mkdir()
+            (source / 'cpu-stack-wait.etl').write_bytes(b'ETL')
+            (source / 'trace-ready.json').write_text('{}')
+            with patch('sys.argv', ['analyze', str(source), '--output', str(output)]), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(analyzer.main(), 1)
+            self.assertEqual((output / 'cpu-stack-wait.etl').read_bytes(), b'ETL')
+            self.assertEqual(json.loads((output / 'analysis.json').read_text())['phases'], [])
+            self.assertIn('No engine recordings', (output / 'report.txt').read_text(encoding='utf-8'))
+
     def test_roundtrip_keeps_zero_null_and_resolves_metric_caller(self):
         raw, side, quality = capture_file.read_capture(io.BytesIO(encoded(recording())))
         self.assertTrue(quality['complete'])

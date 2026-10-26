@@ -28,6 +28,7 @@ NR_TOOL = "communityshaders.neural_rendering"
 NORMAL = {"luminanceMode": "normal", "rendererMode": "normal", "particleDetectionMode": "normal",
           "editorOverrideMode": "normal", "observationLevel": "counters"}
 PLANS = {
+    "stacks": ["R", "M", "R", "R", "M", "R"],
     "engine": ["R", "R", "R", "M", "M", "M", "R", "R", "R"],
     "core": ["R", "L", "L", "R", "V", "V", "R"],
     "luminance-cost": ["R", "C", "C", "R", "L", "L", "R"],
@@ -51,6 +52,14 @@ def plan(config, selected="core"):
     require(type(config["admissionDelayMs"]) is int and 1000 <= config["admissionDelayMs"] <= 30000, "invalid admission delay")
     require(config["sceneTime"] == "preserve" and config["pacing"] in ("preserve", "off_unlimited"), "explicit pacing and scene policy required")
     require(config["observationLevel"] in ("off", "counters", "timed", "engine"), "invalid observer")
+    if selected == "stacks":
+        require(config["observationLevel"] == "counters", "stack plan selects the bounded engine observer automatically")
+        require(config["pacing"] == "preserve", "stack comparison must preserve the tester's pacing settings")
+        return [{"name": f"stacks-{index + 1:02}-{label}", "label": label,
+                 "group": "engine", "durationMs": 10000,
+                 "gates": NORMAL | {"observationLevel": "engine"},
+                 "islEnabled": label == "R", "shadowCulling": None, "pruneFrames": None}
+                for index, label in enumerate(PLANS[selected])]
     if selected == "engine":
         require(config["observationLevel"] == "counters", "engine plan selects its observers automatically")
         return [{"name": f"engine-{index + 1:02}-{'R' if enabled else 'M'}", "label": "R" if enabled else "M",
@@ -462,8 +471,10 @@ class Campaign(base.Campaign):
         self.save("scenario.json", {"config": self.config, "plan": self.args.plan, "phases": phases, "clientId": self.client,
                                    "nrComparison": ["as-found", "off", "on", "off"] if compare_nr else None,
                                    "interaction": "NR on; ISL off/on/off" if compare_nr else None, "lateStarts": extended,
-                                   "engineTimePolicy": "reset to noon before each engine-plan window; verify and settle at least 5s" if self.args.plan == "engine" else None})
+                                   "engineTimePolicy": "reset to noon before each engine-plan window; verify and settle at least 5s" if self.args.plan in ("engine", "stacks") else None})
         try:
+            require(self.args.plan != "stacks" or getattr(self, "external_trace", False),
+                    "use run-stacks.ps1 for the stacks plan; Windows tracing is required")
             require(not compare_nr or (self.args.plan in ("core", "engine") and self.config["pacing"] == "preserve" and
                                       self.config["observationLevel"] == "counters" and not self.args.disable_neural_rendering),
                     "NR comparison requires core/engine, counters, preserved pacing, and no separate DisableNeuralRendering option")
@@ -476,7 +487,7 @@ class Campaign(base.Campaign):
                     "this toolkit requires the new file-capture diagnostic AIO; no settings changed")
             side_tool = next(tool for tool in tools if tool["name"] == ISL_TOOL)
             observer_schema = side_tool.get("inputSchema", {}).get("properties", {}).get("gates", {}).get("properties", {}).get("observationLevel", {})
-            require(not (compare_nr or self.args.plan == "engine") or "engine" in observer_schema.get("enum", []),
+            require(not (compare_nr or self.args.plan in ("engine", "stacks")) or "engine" in observer_schema.get("enum", []),
                     "this diagnostic AIO lacks broader engine recording; no settings changed")
             nr_tool = next((tool for tool in tools if tool["name"] == NR_TOOL), {})
             properties = nr_tool.get("inputSchema", {}).get("properties", {})
@@ -533,8 +544,12 @@ class Campaign(base.Campaign):
             print(f"TEST FAILED / INCOMPLETE: {len(self.completed)}/{total} windows processed. See report.txt.",
                   file=sys.stderr, flush=True)
         else:
-            print(f"TEST FINISHED: {len(self.completed)}/{total} windows completed; capture settings restored.", flush=True)
-            print("You can close Skyrim now. Export and analysis will run on our computer; send the whole folder.", flush=True)
+            if getattr(self, "external_trace", False):
+                print(f"ENGINE RECORDING FINISHED: {len(self.completed)}/{total} windows saved; capture settings restored.", flush=True)
+                print("Windows trace finalization follows. Wait for ALL FILES SAVED before closing this terminal.", flush=True)
+            else:
+                print(f"TEST FINISHED: {len(self.completed)}/{total} windows completed; capture settings restored.", flush=True)
+                print("You can close Skyrim now. Export and analysis will run on our computer; send the whole folder.", flush=True)
         if self.nr_setup["state"] == "off_verified":
             print("NR comparison finished with NR OFF. See nr-setup-final.json." if compare_nr else
                   "NR was verified OFF before testing; this toolkit never re-enables it. See nr-setup-final.json.", flush=True)

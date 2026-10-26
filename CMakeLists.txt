@@ -3769,6 +3769,12 @@ if(BUILD_CONTROLLER_TESTS)
             "${PROJECT_SOURCE_DIR}/tests/isl_offline_capture_test.py"
     )
     add_test(
+        NAME ISLStackCapture
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/isl_stack_capture_test.py"
+    )
+    add_test(
         NAME ISLCaptureNative
         COMMAND
             "${Python3_EXECUTABLE}"
@@ -3780,6 +3786,7 @@ if(BUILD_CONTROLLER_TESTS)
         ISLDiagnosticsEvidence
         ISLDiagnosticsGates
         ISLOfflineCapture
+        ISLStackCapture
         ISLCaptureNative
         PROPERTIES LABELS "ControllerTests"
     )

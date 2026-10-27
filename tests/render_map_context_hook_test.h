@@ -283,9 +283,11 @@ namespace CSX::RenderMap
 			auto& runtime = GetRuntime();
 			(void)runtime.StopCapture();
 			runtime.SetImmediateContext(reinterpret_cast<std::uintptr_t>(family == Family::Finish ? &state.immediate : &state.context));
-			runtime.ResetImmediatePipelineState();
+			runtime.ForCapture(0).RecordExecuteCommandList(
+				reinterpret_cast<std::uintptr_t>(family == Family::Finish ? &state.immediate : &state.context), 0, false);
 			if (family == Family::Execute)
-				runtime.SetImmediateBoundStage(ShaderStage::kPixel, reinterpret_cast<std::uintptr_t>(&state.pixel));
+				runtime.ForCapture(0).BindStage(reinterpret_cast<std::uintptr_t>(&state.context),
+					ShaderStage::kPixel, reinterpret_cast<std::uintptr_t>(&state.pixel));
 			if (mode != Mode::InactiveStart)
 				Require(runtime.StartCapture(Configuration()) == StartResult::kStarted, "initial concrete capture did not start");
 			BindOriginals();
@@ -339,7 +341,7 @@ namespace CSX::RenderMap
 																	 family == Family::ComputeShader ? static_cast<void*>(&state.compute) :
 																									   static_cast<void*>(&state.pixel));
 				const bool observed = std::any_of(snapshot->stageShaderObservations.begin(), snapshot->stageShaderObservations.end(),
-					[&](const StageShaderObservationRecord& item) { return item.d3dObject == object; });
+					[&](const StageShaderObservationRecord& item) { return item.pointerEvidence == object; });
 				Require(observed == (family != Family::Execute), "stale diagnostic rejection changed the actual physical shader shadow");
 				return;
 			}
@@ -355,7 +357,7 @@ namespace CSX::RenderMap
 			auto& runtime = GetRuntime();
 			(void)runtime.StopCapture();
 			runtime.SetImmediateContext(reinterpret_cast<std::uintptr_t>(&state.context));
-			runtime.ResetImmediatePipelineState();
+			runtime.ForCapture(0).RecordExecuteCommandList(reinterpret_cast<std::uintptr_t>(&state.context), 0, false);
 			Require(runtime.StartCapture(Configuration()) == StartResult::kStarted, "exception fixture capture failed");
 			ID3D11DeviceContext_Map::func = +[](ID3D11DeviceContext* context, ID3D11Resource* resource,
 												 UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE* output) -> HRESULT {

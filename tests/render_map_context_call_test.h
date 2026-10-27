@@ -79,7 +79,7 @@ namespace
 			Check(draw != snapshot->events.end() && draw->commandStreamSequence == 1,
 				"old context call advanced successor command sequence");
 			Check(std::any_of(snapshot->stageShaderObservations.begin(), snapshot->stageShaderObservations.end(),
-					  [](const StageShaderObservationRecord& stage) { return stage.d3dObject == 0x5500; }),
+					  [](const StageShaderObservationRecord& stage) { return stage.pointerEvidence == 0x5500; }),
 				"native stage binding shadow was discarded with stale diagnostics");
 			Check(std::none_of(snapshot->events.begin(), snapshot->events.end(), [](const EventRecord& event) {
 				return event.kind == EventKind::kResourceFlow || event.kind == EventKind::kFinishCommandList ||

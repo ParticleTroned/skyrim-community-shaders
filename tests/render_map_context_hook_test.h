@@ -334,7 +334,12 @@ namespace CSX::RenderMap
 				return;
 			}
 			if (family == Family::PixelShader || family == Family::VertexShader || family == Family::ComputeShader || family == Family::Execute) {
-				ID3D11DeviceContext_Draw::thunk(&state.context, 29, 4);
+				if (family == Family::ComputeShader) {
+					ID3D11DeviceContext_Dispatch::thunk(&state.context, 2, 3, 4);
+					Require(state.calls == 2, "compute shadow probe did not call its original exactly once");
+				} else {
+					ID3D11DeviceContext_Draw::thunk(&state.context, 29, 4);
+				}
 				auto snapshot = runtime.StopCapture();
 				Require(snapshot.has_value(), "physical shadow successor disappeared");
 				const auto object = reinterpret_cast<std::uintptr_t>(family == Family::VertexShader  ? static_cast<void*>(&state.vertex) :

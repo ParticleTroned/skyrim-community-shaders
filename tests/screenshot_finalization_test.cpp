@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <intrin.h>
 #include <iostream>
 #include <new>
 #include <stdexcept>
@@ -20,6 +21,14 @@ namespace
 	thread_local std::array<std::string_view, 2> failEvents{};
 	thread_local bool persistentEventFailure = false;
 	thread_local unsigned eventFaults = 0;
+	struct RejectedAllocation
+	{
+		void* caller = nullptr;
+		std::size_t bytes = 0;
+	};
+	thread_local std::array<RejectedAllocation, 16> rejectedAllocations{};
+	thread_local std::size_t rejectedAllocationCount = 0;
+	void* executableAddressMarker = nullptr;
 	const char* currentCase = "startup";
 
 	void EventAllocation(std::string_view type)
@@ -48,8 +57,11 @@ namespace
 
 void* operator new(std::size_t size)
 {
-	if (failAllAllocations || std::exchange(failNextAllocation, false))
+	if (failAllAllocations || std::exchange(failNextAllocation, false)) {
+		// Fixed storage preserves failure sites without allocating during unwinding.
+		rejectedAllocations[rejectedAllocationCount++ % rejectedAllocations.size()] = { _ReturnAddress(), size };
 		throw std::bad_alloc{};
+	}
 	if (auto memory = std::malloc(size ? size : 1))
 		return memory;
 	throw std::bad_alloc{};
@@ -274,6 +286,7 @@ struct ScreenshotFinalizationTest
 	static void RunCase(const char* name, void (*test)())
 	{
 		currentCase = name;
+		rejectedAllocationCount = 0;
 		std::fprintf(stderr, "START %s\n", name);
 		std::fflush(stderr);
 		test();
@@ -299,9 +312,16 @@ struct ScreenshotFinalizationTest
 
 int main()
 {
+	executableAddressMarker = reinterpret_cast<void*>(&main);
 	std::set_terminate([] {
 		ClearFaults();
 		std::fprintf(stderr, "TERMINATE %s\n", currentCase);
+		std::fprintf(stderr, "ADDRESS main=%p rejected=%zu\n", executableAddressMarker, rejectedAllocationCount);
+		const auto first = rejectedAllocationCount > rejectedAllocations.size() ? rejectedAllocationCount - rejectedAllocations.size() : 0;
+		for (auto index = first; index < rejectedAllocationCount; ++index) {
+			const auto& allocation = rejectedAllocations[index % rejectedAllocations.size()];
+			std::fprintf(stderr, "REJECTED %zu caller=%p bytes=%zu\n", index, allocation.caller, allocation.bytes);
+		}
 		if (const auto failure = std::current_exception()) {
 			try {
 				std::rethrow_exception(failure);

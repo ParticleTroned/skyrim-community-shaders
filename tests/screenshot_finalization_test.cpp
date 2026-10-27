@@ -3,6 +3,7 @@
 #include "Features/ScreenshotReferencePolicy.h"
 #include "Utils/StringUtils.h"
 
+#include <Windows.h>
 #include <algorithm>
 #include <array>
 #include <cstdio>
@@ -21,15 +22,46 @@ namespace
 	thread_local std::array<std::string_view, 2> failEvents{};
 	thread_local bool persistentEventFailure = false;
 	thread_local unsigned eventFaults = 0;
+	enum class StackCaptureStatus : unsigned
+	{
+		NotAttempted,
+		Captured,
+		Empty,
+		Reentrant,
+		NativeException
+	};
 	struct RejectedAllocation
 	{
 		void* caller = nullptr;
 		std::size_t bytes = 0;
+		std::array<void*, 16> frames{};
+		USHORT frameCount = 0;
+		StackCaptureStatus captureStatus = StackCaptureStatus::NotAttempted;
+		DWORD captureException = 0;
 	};
 	thread_local std::array<RejectedAllocation, 16> rejectedAllocations{};
 	thread_local std::size_t rejectedAllocationCount = 0;
+	thread_local bool capturingRejectedStack = false;
 	void* executableAddressMarker = nullptr;
 	const char* currentCase = "startup";
+
+	void CaptureRejectedStack(RejectedAllocation& allocation) noexcept
+	{
+		if (capturingRejectedStack) {
+			allocation.captureStatus = StackCaptureStatus::Reentrant;
+			return;
+		}
+		capturingRejectedStack = true;
+		__try {
+			allocation.frameCount = CaptureStackBackTrace(
+				0, static_cast<DWORD>(allocation.frames.size()), allocation.frames.data(), nullptr);
+			allocation.captureStatus = allocation.frameCount ? StackCaptureStatus::Captured : StackCaptureStatus::Empty;
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			allocation.captureException = GetExceptionCode();
+			allocation.captureStatus = StackCaptureStatus::NativeException;
+		}
+		capturingRejectedStack = false;
+	}
 
 	void EventAllocation(std::string_view type)
 	{
@@ -59,7 +91,9 @@ void* operator new(std::size_t size)
 {
 	if (failAllAllocations || std::exchange(failNextAllocation, false)) {
 		// Fixed storage preserves failure sites without allocating during unwinding.
-		rejectedAllocations[rejectedAllocationCount++ % rejectedAllocations.size()] = { _ReturnAddress(), size };
+		auto& allocation = rejectedAllocations[rejectedAllocationCount++ % rejectedAllocations.size()];
+		allocation = { _ReturnAddress(), size };
+		CaptureRejectedStack(allocation);
 		throw std::bad_alloc{};
 	}
 	if (auto memory = std::malloc(size ? size : 1))
@@ -321,6 +355,11 @@ int main()
 		for (auto index = first; index < rejectedAllocationCount; ++index) {
 			const auto& allocation = rejectedAllocations[index % rejectedAllocations.size()];
 			std::fprintf(stderr, "REJECTED %zu caller=%p bytes=%zu\n", index, allocation.caller, allocation.bytes);
+			std::fprintf(stderr, "CAPTURE %zu status=%u frames=%u exception=%08lX\n", index,
+				static_cast<unsigned>(allocation.captureStatus), static_cast<unsigned>(allocation.frameCount), allocation.captureException);
+			for (USHORT frame = 0; frame < allocation.frameCount; ++frame)
+				std::fprintf(stderr, "FRAME rejected=%zu index=%u address=%p\n", index,
+					static_cast<unsigned>(frame), allocation.frames[frame]);
 		}
 		if (const auto failure = std::current_exception()) {
 			try {

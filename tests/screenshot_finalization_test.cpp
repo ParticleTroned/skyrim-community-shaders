@@ -45,7 +45,9 @@ namespace
 	void* executableAddressMarker = nullptr;
 	const char* currentCase = "startup";
 
-	void CaptureRejectedStack(RejectedAllocation& allocation) noexcept
+	using StackCaptureRoutine = USHORT(WINAPI*)(DWORD, DWORD, PVOID*, PDWORD);
+
+	void CaptureRejectedStack(RejectedAllocation& allocation, StackCaptureRoutine capture = &CaptureStackBackTrace) noexcept
 	{
 		if (capturingRejectedStack) {
 			allocation.captureStatus = StackCaptureStatus::Reentrant;
@@ -53,7 +55,7 @@ namespace
 		}
 		capturingRejectedStack = true;
 		__try {
-			allocation.frameCount = CaptureStackBackTrace(
+			allocation.frameCount = capture(
 				0, static_cast<DWORD>(allocation.frames.size()), allocation.frames.data(), nullptr);
 			allocation.captureStatus = allocation.frameCount ? StackCaptureStatus::Captured : StackCaptureStatus::Empty;
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -102,6 +104,72 @@ void* operator new(std::size_t size)
 }
 void operator delete(void* memory) noexcept { std::free(memory); }
 void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
+
+namespace
+{
+	constexpr DWORD kInducedCaptureException = 0xE0424346;
+	unsigned inducedCaptureCalls = 0;
+
+	USHORT WINAPI EmptyCapture(DWORD, DWORD, PVOID*, PDWORD)
+	{
+		++inducedCaptureCalls;
+		return 0;
+	}
+
+	USHORT WINAPI InducedNativeCaptureException(DWORD, DWORD, PVOID*, PDWORD)
+	{
+		++inducedCaptureCalls;
+		RaiseException(kInducedCaptureException, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+		return 0;
+	}
+
+	void RunCaptureControl(const char* name, StackCaptureRoutine capture, StackCaptureStatus expected, bool reentrant)
+	{
+		currentCase = name;
+		RejectedAllocation sample{};
+		inducedCaptureCalls = 0;
+		capturingRejectedStack = reentrant;
+		failAllAllocations = true;
+		CaptureRejectedStack(sample, capture);
+		const bool guardAfterCapture = capturingRejectedStack;
+		const bool originalFaultStillArmed = failAllAllocations;
+		const auto callsAfterCapture = inducedCaptureCalls;
+		const auto rejectedBeforeThrow = rejectedAllocationCount;
+		bool originalBadAllocObserved = false;
+		void* unexpectedMemory = nullptr;
+		try {
+			unexpectedMemory = ::operator new(1);
+		} catch (const std::bad_alloc&) {
+			originalBadAllocObserved = true;
+		}
+		::operator delete(unexpectedMemory);
+		capturingRejectedStack = false;
+		ClearFaults();
+		Require(sample.captureStatus == expected && sample.frameCount == 0,
+			"induced capture control changed status or fabricated frames");
+		Require(sample.captureException == (expected == StackCaptureStatus::NativeException ? kInducedCaptureException : 0),
+			"induced capture exception identity changed");
+		Require(callsAfterCapture == (reentrant ? 0u : 1u) && guardAfterCapture == reentrant,
+			"capture refused incorrectly or failed to reset its owned guard");
+		Require(originalFaultStillArmed && originalBadAllocObserved && rejectedAllocationCount > rejectedBeforeThrow,
+			"capture control disarmed or bypassed the original bad_alloc");
+		RejectedAllocation resetProbe{};
+		CaptureRejectedStack(resetProbe, EmptyCapture);
+		Require(resetProbe.captureStatus == StackCaptureStatus::Empty && resetProbe.frameCount == 0 &&
+					!capturingRejectedStack && inducedCaptureCalls == callsAfterCapture + 1,
+			"capture guard did not admit the next induced empty capture");
+		std::fprintf(stderr, "CAPTURE-CONTROL %s PASS induced-status=%u subsequent-bad-alloc=1\n",
+			name, static_cast<unsigned>(sample.captureStatus));
+		std::fflush(stderr);
+	}
+
+	void RunCaptureControls()
+	{
+		RunCaptureControl("induced-reentrant", EmptyCapture, StackCaptureStatus::Reentrant, true);
+		RunCaptureControl("induced-empty", EmptyCapture, StackCaptureStatus::Empty, false);
+		RunCaptureControl("induced-native-exception", InducedNativeCaptureException, StackCaptureStatus::NativeException, false);
+	}
+}
 
 namespace logger
 {
@@ -374,6 +442,7 @@ int main()
 		std::abort();
 	});
 	try {
+		RunCaptureControls();
 		ScreenshotFinalizationTest::Run();
 		std::cout << "ScreenshotFinalization PASS\n";
 		return 0;

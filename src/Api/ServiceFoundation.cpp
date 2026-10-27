@@ -200,6 +200,10 @@ namespace CSX::Api
 
 	uint64_t ServiceFoundation::AppendEvent(std::string_view a_requestId, uint64_t a_eventIndex, std::string_view a_type, json a_payload)
 	{
+#ifdef CSX_SCREENSHOT_FINALIZATION_TESTING
+		if (eventAllocationTestHook)
+			eventAllocationTestHook(a_type);
+#endif
 		json event = {
 			{ "eventId", 0ull },
 			{ "eventIndex", a_eventIndex },

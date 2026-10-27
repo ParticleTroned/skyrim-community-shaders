@@ -383,11 +383,28 @@ void ScreenshotApi::DrainReferenceNotifications()
 	std::vector<ReferenceNotification> ready;
 	{
 		std::lock_guard lock(mutex);
-		ready.swap(referenceNotifications);
+		for (;;) {
+			RequestRecord* next = nullptr;
+			for (auto& [requestId, record] : requests) {
+				if (IsTerminal(record.state) && record.referenceCompletion &&
+					(!next || record.referenceNotificationOrder < next->referenceNotificationOrder))
+					next = &record;
+			}
+			if (!next)
+				break;
+			try {
+				auto receipt = CSX::Screenshot::ReferenceCompletion(MakeReceipt(*next));
+				ready.push_back({ {}, std::move(receipt) });
+				ready.back().completion = std::move(next->referenceCompletion);
+			} catch (...) {
+				next->referenceNotificationFailure = std::current_exception();
+				break;
+			}
+		}
 	}
 	for (auto& notification : ready) {
 		try {
-			notification.completion(CSX::Screenshot::ReferenceCompletion(notification.receipt));
+			notification.completion(notification.receipt);
 		} catch (const std::exception& error) {
 			logger::error("Screenshot reference notification failed: {}", error.what());
 		} catch (...) {
@@ -1376,17 +1393,22 @@ void ScreenshotApi::TransitionLocked(RequestRecord& a_record, std::string a_stat
 {
 	if (IsTerminal(a_record.state))
 		return;
-	a_record.state = std::move(a_state);
+	if (!IsTerminal(a_state)) {
+		AppendEventLocked(a_record, a_eventType, std::move(a_payload));
+		a_record.state.swap(a_state);
+		return;
+	}
+	a_record.state.swap(a_state);
 	if (IsTerminal(a_record.state)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_record.referenceCompletion && a_record.referenceNotificationOrder == 0)
+			a_record.referenceNotificationOrder = nextReferenceNotificationOrder++;
+#endif
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		CSX::ScreenshotPolicy::FinalizeNeuralDiagnostics(a_record.diagnosticSnapshot, a_record.actual);
 #endif
 		a_record.terminalUtc = CSX::Api::ServiceFoundation::TimestampUtc();
 		a_record.terminalAt = std::chrono::steady_clock::now();
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		if (a_record.referenceCompletion)
-			referenceNotifications.push_back({ std::move(a_record.referenceCompletion), MakeReceipt(a_record) });
-#endif
 	}
 	AppendEventLocked(a_record, a_eventType, std::move(a_payload));
 }
@@ -1415,6 +1437,25 @@ ScreenshotApi::json ScreenshotApi::MakeReceipt(const RequestRecord& a_record) co
 		receipt["parentRequestId"] = a_record.parentRequestId;
 		receipt["sequenceOrdinal"] = a_record.sequenceOrdinal;
 	}
+	auto appendFailure = [&](const std::exception_ptr& failure, std::string_view code, std::string_view phase) {
+		if (!failure)
+			return;
+		std::string message = "unknown exception";
+		try {
+			std::rethrow_exception(failure);
+		} catch (const std::exception& error) {
+			message = error.what();
+		} catch (...) {
+			message = "unknown exception";
+		}
+		json error = { { "code", code }, { "message", message }, { "phase", phase } };
+		receipt["errors"].push_back(error);
+		if (receipt["error"].is_null())
+			receipt["error"] = std::move(error);
+	};
+	appendFailure(a_record.finalizationFailure, "sequence_finalization_failed", "packaging");
+	appendFailure(a_record.finalizationJournalFailure, "finalization_journal_failed", "journal");
+	appendFailure(a_record.referenceNotificationFailure, "reference_notification_deferred", "notification");
 	return receipt;
 }
 
@@ -1819,58 +1860,90 @@ void ScreenshotApi::TryFinalizeSequenceLocked(SequenceRecord& a_sequence)
 		return;
 	if (a_sequence.finalizing)
 		return;
+	try {
+		const auto parent = requests.find(a_sequence.requestId);
+		if (parent == requests.end() || IsTerminal(parent->second.state)) {
+			a_sequence.finalizing = true;
+			a_sequence.directoryLease.reset();
+			return;
+		}
+		TransitionLocked(parent->second, "finalizing", "sequence.finalizing");
+		a_sequence.finalizing = true;
+		if (a_sequence.frameManifest)
+			QueueSequenceManifestLocked(a_sequence, true);
+		else
+			FinalizeSequenceLocked(a_sequence, nullptr);
+	} catch (...) {
+		FailSequenceFinalizationLocked(a_sequence, std::current_exception());
+	}
+}
+
+void ScreenshotApi::FailSequenceFinalizationLocked(SequenceRecord& a_sequence, std::exception_ptr a_failure) noexcept
+{
 	a_sequence.finalizing = true;
-	const auto parent = requests.find(a_sequence.requestId);
-	if (parent == requests.end())
-		return;
-	TransitionLocked(parent->second, "finalizing", "sequence.finalizing");
-	if (a_sequence.frameManifest)
-		QueueSequenceManifestLocked(a_sequence, true);
-	else
-		FinalizeSequenceLocked(a_sequence, nullptr);
+	a_sequence.directoryLease.reset();
+	if (const auto parent = requests.find(a_sequence.requestId); parent != requests.end()) {
+		auto& record = parent->second;
+		if (!record.finalizationFailure) {
+			record.finalizationFailure = std::move(a_failure);
+			record.state.swap(a_sequence.written == 0 ? record.failureState : record.partialFailureState);
+		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (record.referenceCompletion && record.referenceNotificationOrder == 0)
+			record.referenceNotificationOrder = nextReferenceNotificationOrder++;
+#endif
+		record.terminalAt = std::chrono::steady_clock::now();
+		record.terminalArtifacts = record.expectedArtifacts;
+	}
 }
 
 void ScreenshotApi::FinalizeSequenceLocked(
 	SequenceRecord& a_sequence,
 	const ManifestResult* a_manifestResult)
 {
-	const auto parent = requests.find(a_sequence.requestId);
-	if (parent == requests.end() || IsTerminal(parent->second.state))
-		return;
-	const bool manifestWritten = !a_sequence.frameManifest ||
-	                             (a_manifestResult && a_manifestResult->success);
-	if (a_sequence.frameManifest) {
-		parent->second.expectedArtifacts = 1;
-		parent->second.terminalArtifacts = 1;
-		if (manifestWritten) {
-			parent->second.artifacts.push_back(a_manifestResult->artifact);
-			parent->second.successfulArtifacts = 1;
-		} else {
-			parent->second.successfulArtifacts = 0;
-			parent->second.error = {
-				{ "code", "manifest_failed" },
-				{ "message", a_manifestResult ? a_manifestResult->error : "final manifest was not committed" },
-				{ "phase", "packaging" },
-			};
-			parent->second.errors.push_back(parent->second.error);
+	try {
+		const auto parent = requests.find(a_sequence.requestId);
+		if (parent == requests.end() || IsTerminal(parent->second.state)) {
+			a_sequence.directoryLease.reset();
+			return;
 		}
+		const bool manifestWritten = !a_sequence.frameManifest ||
+		                             (a_manifestResult && a_manifestResult->success);
+		if (a_sequence.frameManifest) {
+			parent->second.expectedArtifacts = 1;
+			parent->second.terminalArtifacts = 1;
+			if (manifestWritten) {
+				parent->second.artifacts.push_back(a_manifestResult->artifact);
+				parent->second.successfulArtifacts = 1;
+			} else {
+				parent->second.successfulArtifacts = 0;
+				parent->second.error = {
+					{ "code", "manifest_failed" },
+					{ "message", a_manifestResult ? a_manifestResult->error : "final manifest was not committed" },
+					{ "phase", "packaging" },
+				};
+				parent->second.errors.push_back(parent->second.error);
+			}
+		}
+		std::string terminal;
+		if (!manifestWritten)
+			terminal = a_sequence.written == 0 ? "failed" : "failed_partial";
+		else if (a_sequence.cancelRequested)
+			terminal = a_sequence.written == 0 ? "cancelled" : "cancelled_partial";
+		else if (a_sequence.stopRequested)
+			terminal = "stopped";
+		else if (a_sequence.failed != 0)
+			terminal = a_sequence.written == 0 ? "failed" : "failed_partial";
+		else if (a_sequence.dropped != 0 || !parent->second.warnings.empty() ||
+				 a_sequence.packaging["previewVideo"].value("state", std::string{}) == "unsupported")
+			terminal = "completed_with_warnings";
+		else
+			terminal = "completed";
+		TransitionLocked(parent->second, terminal, "request.terminal", { { "manifestPath", a_sequence.frameManifest && manifestWritten ? json(Util::PathToUtf8(a_sequence.finalManifestPath)) : json(nullptr) } });
+		a_sequence.directoryLease.reset();
+	} catch (...) {
+		FailSequenceFinalizationLocked(a_sequence, std::current_exception());
 	}
-	std::string terminal;
-	if (!manifestWritten)
-		terminal = a_sequence.written == 0 ? "failed" : "failed_partial";
-	else if (a_sequence.cancelRequested)
-		terminal = a_sequence.written == 0 ? "cancelled" : "cancelled_partial";
-	else if (a_sequence.stopRequested)
-		terminal = "stopped";
-	else if (a_sequence.failed != 0)
-		terminal = a_sequence.written == 0 ? "failed" : "failed_partial";
-	else if (a_sequence.dropped != 0 || !parent->second.warnings.empty() ||
-			 a_sequence.packaging["previewVideo"].value("state", std::string{}) == "unsupported")
-		terminal = "completed_with_warnings";
-	else
-		terminal = "completed";
-	TransitionLocked(parent->second, terminal, "request.terminal", { { "manifestPath", a_sequence.frameManifest && manifestWritten ? json(Util::PathToUtf8(a_sequence.finalManifestPath)) : json(nullptr) } });
-	a_sequence.directoryLease.reset();
 }
 
 void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool a_final)
@@ -1945,51 +2018,34 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 		CSX::Screenshot::AdmitManifestJob(*state, a_sequence, std::move(job), service,
 			parent->second, std::move(queuedEvent));
 		state->condition.notify_one();
-	} catch (const std::exception& error) {
-		logger::error("Screenshot manifest admission failed: {}", error.what());
-		a_sequence.packaging["frameManifest"] = {
-			{ "requested", true }, { "state", "failed" }, { "error", error.what() }
-		};
-		if (auto parent = requests.find(a_sequence.requestId); parent != requests.end())
-			AppendEventLocked(parent->second, "packaging.failed", {
-																	  { "generation", a_sequence.manifestGeneration },
-																	  { "final", a_final },
-																	  { "path", Util::PathToUtf8(a_final ? a_sequence.finalManifestPath : a_sequence.partialManifestPath) },
-																	  { "error", error.what() },
-																  });
-		if (a_final) {
-			ManifestResult failed{
-				.requestId = a_sequence.requestId,
-				.generation = a_sequence.manifestGeneration,
-				.final = true,
-				.success = false,
-				.destination = a_sequence.finalManifestPath,
-				.error = error.what(),
-			};
-			FinalizeSequenceLocked(a_sequence, &failed);
-		}
 	} catch (...) {
-		logger::error("Screenshot manifest admission failed with an unknown exception.");
-		a_sequence.packaging["frameManifest"] = {
-			{ "requested", true }, { "state", "failed" }, { "error", "manifest admission failed" }
-		};
-		if (auto parent = requests.find(a_sequence.requestId); parent != requests.end())
-			AppendEventLocked(parent->second, "packaging.failed", {
-																	  { "generation", a_sequence.manifestGeneration },
-																	  { "final", a_final },
-																	  { "path", Util::PathToUtf8(a_final ? a_sequence.finalManifestPath : a_sequence.partialManifestPath) },
-																	  { "error", "manifest admission failed" },
-																  });
-		if (a_final) {
-			ManifestResult failed{
-				.requestId = a_sequence.requestId,
-				.generation = a_sequence.manifestGeneration,
-				.final = true,
-				.success = false,
-				.destination = a_sequence.finalManifestPath,
-				.error = "manifest admission failed",
+		const auto failure = std::current_exception();
+		a_sequence.manifestAdmissionFailure = failure;
+		if (a_final)
+			FailSequenceFinalizationLocked(a_sequence, failure);
+		try {
+			std::string message = "manifest admission failed";
+			try {
+				std::rethrow_exception(failure);
+			} catch (const std::exception& error) {
+				message = error.what();
+			} catch (...) {
+				message = "manifest admission failed with an unknown exception";
+			}
+			a_sequence.packaging["frameManifest"] = {
+				{ "requested", true }, { "state", "failed" }, { "error", message }
 			};
-			FinalizeSequenceLocked(a_sequence, &failed);
+			if (auto parent = requests.find(a_sequence.requestId); parent != requests.end())
+				AppendEventLocked(parent->second, "packaging.failed", {
+																		  { "generation", a_sequence.manifestGeneration },
+																		  { "final", a_final },
+																		  { "path", Util::PathToUtf8(a_final ? a_sequence.finalManifestPath : a_sequence.partialManifestPath) },
+																		  { "error", message },
+																	  });
+		} catch (...) {
+			a_sequence.manifestReportingFailure = std::current_exception();
+			if (auto parent = requests.find(a_sequence.requestId); parent != requests.end())
+				parent->second.finalizationJournalFailure = a_sequence.manifestReportingFailure;
 		}
 	}
 }

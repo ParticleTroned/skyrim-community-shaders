@@ -298,3 +298,48 @@ if(_early_install_position LESS _postload_position)
 endif()
 
 message(STATUS "Screenshot API contract, schemas, goldens, migration, actions, and journal events are coherent")
+
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotApi.h" _finalization_header)
+file(READ "${PROJECT_ROOT}/tests/screenshot_finalization_test.cpp" _finalization_fixture)
+file(READ "${PROJECT_ROOT}/tests/extract_screenshot_finalization.cmake" _finalization_extractor)
+file(READ "${PROJECT_ROOT}/CMakeLists.txt" _finalization_targets)
+foreach(_finalization_text IN ITEMS
+    "void ScreenshotApi::FailSequenceFinalizationLocked"
+    "record.state.swap(a_sequence.written == 0 ? record.failureState : record.partialFailureState)"
+    "a_sequence.directoryLease.reset();"
+    "a_sequence.manifestAdmissionFailure = failure;"
+    "a_sequence.manifestReportingFailure = std::current_exception();"
+    "ready.back().completion = std::move(next->referenceCompletion);"
+)
+    string(FIND "${_implementation}" "${_finalization_text}" _found)
+    if(_found EQUAL -1)
+        message(FATAL_ERROR "Screenshot mandatory finalization boundary missing: ${_finalization_text}")
+    endif()
+endforeach()
+foreach(_method IN ITEMS
+    AppendEventLocked TransitionLocked MakeReceipt CountPendingOperationsLocked
+    TryFinalizeSequenceLocked FailSequenceFinalizationLocked FinalizeSequenceLocked
+    QueueSequenceManifestLocked DrainReferenceNotifications
+)
+    string(FIND "${_finalization_extractor}" "ScreenshotApi::${_method}(" _found)
+    if(_found EQUAL -1)
+        message(FATAL_ERROR "Finalization fixture does not select production ${_method}")
+    endif()
+endforeach()
+foreach(_fixture_text IN ITEMS
+    "#include \"Features/ScreenshotApi.h\""
+    "#include \"screenshot_finalization_under_test.h\""
+    "DirectoryLease::CreateExclusive"
+    "RejectedFinalization(\"packaging.queued\", \"packaging.failed\""
+    "test.api->CountPendingOperationsLocked() == 0"
+    "test.Record().referenceNotificationFailure"
+)
+    string(FIND "${_finalization_fixture}" "${_fixture_text}" _found)
+    if(_found EQUAL -1)
+        message(FATAL_ERROR "Production finalization fixture case missing: ${_fixture_text}")
+    endif()
+endforeach()
+string(FIND "${_finalization_targets}" "add_test(NAME ScreenshotFinalization COMMAND screenshot_finalization_test)" _found)
+if(_found EQUAL -1)
+    message(FATAL_ERROR "Production finalization fixture is not registered")
+endif()

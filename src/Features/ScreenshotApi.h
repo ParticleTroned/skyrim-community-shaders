@@ -15,6 +15,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -77,6 +78,12 @@ public:
 	bool IsSequenceRecording() const;
 
 private:
+#ifdef CSX_SCREENSHOT_FINALIZATION_TESTING
+	friend struct ScreenshotFinalizationTest;
+	struct FinalizationTestTag
+	{};
+	explicit ScreenshotApi(FinalizationTestTag);
+#endif
 	struct RequestRecord
 	{
 		std::string requestId;
@@ -93,6 +100,11 @@ private:
 		uint64_t eventIndex = 0;
 		std::string acceptedUtc;
 		std::string terminalUtc;
+		std::string failureState = "failed";
+		std::string partialFailureState = "failed_partial";
+		std::exception_ptr finalizationFailure;
+		std::exception_ptr finalizationJournalFailure;
+		std::exception_ptr referenceNotificationFailure;
 		json requested = json::object();
 		json effective = json::object();
 		json artifacts = json::array();
@@ -105,6 +117,7 @@ private:
 		json error = nullptr;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		std::function<void(const json&)> referenceCompletion;
+		uint64_t referenceNotificationOrder = 0;
 #endif
 		bool acknowledged = false;
 		bool cancelRequested = false;
@@ -153,6 +166,8 @@ private:
 		bool cancelRequested = false;
 		bool preparationPending = false;
 		bool finalizing = false;
+		std::exception_ptr manifestAdmissionFailure;
+		std::exception_ptr manifestReportingFailure;
 		bool frameManifest = true;
 		std::string activeChildRequestId;
 		std::size_t nextCheckpointChildCount = 10;
@@ -241,12 +256,12 @@ private:
 	};
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	uint64_t nextReferenceNotificationOrder = 1;
 	struct ReferenceNotification
 	{
 		std::function<void(const json&)> completion;
 		json receipt;
 	};
-	std::vector<ReferenceNotification> referenceNotifications;
 #endif
 	json DispatchRequest(ScreenshotFeature& a_feature, const json& a_request
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -330,6 +345,8 @@ private:
 	void FinishSequenceChildLocked(RequestRecord& a_child);
 	void TryFinalizeSequenceLocked(SequenceRecord& a_sequence);
 	void FinalizeSequenceLocked(SequenceRecord& a_sequence, const ManifestResult* a_manifestResult);
+	/** Commit failure and release storage without allocating failure diagnostics. */
+	void FailSequenceFinalizationLocked(SequenceRecord& a_sequence, std::exception_ptr a_failure) noexcept;
 	void QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool a_final);
 	void DrainWorkerResultsLocked();
 	static void ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_state);

@@ -398,14 +398,6 @@ namespace
 		       source.bound.center == bound.center && source.bound.radius == bound.radius &&
 		       source.renderDistance == runtime.renderDistance;
 	}
-	bool SameMaterial(const Source& a, const Source& b)
-	{
-		return a.material == b.material ||
-		       (!globals::features::truePBR.IsPBRGrassMaterial(a.material) &&
-				   !globals::features::truePBR.IsPBRGrassMaterial(b.material) &&
-				   a.property->GetBaseTexture() == b.property->GetBaseTexture() &&
-				   a.material->DoIsCopy(b.material) && b.material->DoIsCopy(a.material));
-	}
 	bool Compatible(const Source& a, const Source& b)
 	{
 		if (!CurrentContract(a) || !CurrentContract(b))
@@ -413,7 +405,7 @@ namespace
 		const bool sameBuffers = a.vertices == b.vertices && a.indices == b.indices;
 		const bool sameModelMesh = !a.model.empty() && a.model == b.model &&
 		                           a.vertexCount == b.vertexCount && a.vertexBytes == b.vertexBytes && a.indexBytes == b.indexBytes;
-		return (sameBuffers || sameModelMesh) && SameMaterial(a, b) &&
+		return (sameBuffers || sameModelMesh) && a.material == b.material &&
 		       a.descriptor == b.descriptor && a.flags == b.flags && a.triangles == b.triangles &&
 		       a.lights == b.lights && a.lightMask == b.lightMask && a.renderDistance == b.renderDistance && a.wavePeriod == b.wavePeriod && a.model == b.model &&
 		       a.bound.radius == b.bound.radius && a.bound.center == b.bound.center;
@@ -432,8 +424,7 @@ namespace
 			combine(source.vertexBytes);
 			combine(source.indexBytes);
 		}
-		if (source.model.empty())
-			combine(source.material);
+		combine(source.material);
 		combine(source.descriptor);
 		combine(source.flags);
 		combine(source.triangles);
@@ -1319,16 +1310,6 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 	lock.lock();
 	if (!frameSettings.Enabled || failed)
 		return;
-	if (preparedRevision == residentRevision) {
-		// Captured geometry is already validated; distinct materials can still change in place.
-		for (const auto& bucket : buckets)
-			for (size_t i = 1; i < bucket.sources.size(); ++i)
-				if (!SameMaterial(bucket.sources.front(), bucket.sources[i])) {
-					bucket.sources.front().queue->compatible.store(false, std::memory_order_relaxed);
-					preparedRevision = UINT64_MAX;
-					break;
-				}
-	}
 	if (preparedRevision == residentRevision && preparedBatching == frameSettings.CrossCellBatching) {
 		RefreshFades();
 #ifdef DEVBENCH_BRIDGE_ENABLED

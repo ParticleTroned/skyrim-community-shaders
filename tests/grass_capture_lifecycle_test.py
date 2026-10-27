@@ -30,6 +30,211 @@ class GrassCaptureLifecycleTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return subprocess.run([str(executable)], cwd=directory, capture_output=True, text=True, timeout=10)
 
+    def test_material_identity_partitions_queues(self):
+        source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
+        runtime = (ROOT / "src/Features/GrassOptimizations/GrassRuntime.h").read_text(encoding="utf-8")
+        methods = "\n".join(block(source, signature) for signature in (
+            "bool CurrentContract(", "bool Compatible(", "size_t CompatibilityHash(",
+            "void GrassBucketRenderer::Impl::AssignQueue(",
+            "void GrassBucketRenderer::Impl::EraseResident("))
+        retirement = block(block(source, "void GrassBucketRenderer::Impl::PrepareFrame("),
+                           "for (auto it = residents.begin();")
+        persistent = block(runtime, "inline bool MatchesPersistentProperty(")
+        driver = r'''
+#include "Features/GrassOptimizations/GrassPolicy.h"
+#include <functional>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <vector>
+namespace RE {
+    using BSMultiStreamInstanceTriShape = int;
+    struct BSLight {};
+    struct NiSourceTexture {};
+    struct BSShaderMaterial {
+        int value = 1;
+        bool DoIsCopy(const BSShaderMaterial* other) const { return value == other->value; }
+    };
+}
+namespace GrassRuntime {
+    struct PropertyData {
+        float wavePeriod = 1;
+        struct LightData { uint32_t activeLightMask = 0; std::vector<RE::BSLight*> lights; } lightData;
+    };
+    PERSISTENT_PROPERTY
+}
+namespace RE {
+    struct BSGrassShaderProperty {
+        BSShaderMaterial* material = nullptr;
+        struct Flags { uint64_t value = 0; auto underlying() const { return value; } } flags;
+        std::shared_ptr<NiSourceTexture> texture;
+        auto GetBaseTexture() const { return texture.get(); }
+        GrassRuntime::PropertyData flat, vr;
+    };
+}
+namespace GrassRuntime {
+    auto& GetPropertyData(const RE::BSGrassShaderProperty* property, bool vr) {
+        return vr ? property->vr : property->flat;
+    }
+}
+struct QueueGroup {
+    std::atomic_bool compatible{true};
+    bool batching = true;
+    uint32_t instances = 0, slices = 0;
+    std::vector<RE::BSMultiStreamInstanceTriShape*> members;
+};
+struct Source {
+    RE::BSMultiStreamInstanceTriShape* identity = nullptr;
+    RE::BSShaderMaterial* material = nullptr;
+    std::shared_ptr<RE::BSGrassShaderProperty> property = std::make_shared<RE::BSGrassShaderProperty>();
+    std::shared_ptr<RE::NiSourceTexture> texture = std::make_shared<RE::NiSourceTexture>();
+    std::shared_ptr<int> vertices = std::make_shared<int>(), indices = std::make_shared<int>();
+    std::string model;
+    uint64_t descriptor = 1, flags = 0;
+    uint32_t triangles = 12, vertexCount = 16, vertexBytes = 448, indexBytes = 72, lightMask = 0;
+    std::vector<RE::BSLight*> lights;
+    float renderDistance = 8000, wavePeriod = 1;
+    struct Bound { float radius = 30, center = 0; } bound;
+    struct Group { uint32_t count = 1; };
+    std::vector<Group> groups{1};
+    std::shared_ptr<QueueGroup> queue;
+    struct Lifetime { std::atomic_bool alive{true}; std::atomic_uint64_t generation{0}; };
+    std::shared_ptr<Lifetime> lifetime = std::make_shared<Lifetime>();
+    uint64_t generation = 0, cpuRecordBytes = 0;
+};
+bool CurrentGeometry(const Source&) { return true; }
+namespace globals::game { bool isVR = false; }
+namespace globals::features {
+    struct Feature {
+        bool batching = true;
+        bool IsCrossCellBatchingEnabled() const { return batching; }
+    } grassOptimizations;
+}
+struct GrassBucketRenderer {
+    struct Impl {
+        std::unordered_multimap<size_t, std::weak_ptr<QueueGroup>> queues;
+        std::map<RE::BSMultiStreamInstanceTriShape*, Source> residents;
+        uint64_t cpuRecordBytes = 0, residentRevision = 0;
+        void AssignQueue(Source&);
+        void EraseResident(RE::BSMultiStreamInstanceTriShape*);
+        void RetireInvalidSources();
+    };
+};
+PRODUCTION_METHODS
+void GrassBucketRenderer::Impl::RetireInvalidSources() { PRODUCTION_RETIREMENT }
+void Require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
+int main() {
+    try {
+        for (bool vr : {false, true}) for (const std::string model : {std::string{}, std::string{"grass.nif"}}) {
+            globals::game::isVR = vr;
+            GrassBucketRenderer::Impl state;
+            RE::BSShaderMaterial original, copy;
+            RE::BSMultiStreamInstanceTriShape shapes[4]{};
+            Source first;
+            first.identity = &shapes[0];
+            first.material = &original;
+            first.model = model;
+            first.property->material = first.material;
+            first.property->texture = first.texture;
+            state.AssignQueue(first);
+            state.residents.emplace(first.identity, first);
+            Source equal = first;
+            equal.identity = &shapes[1];
+            equal.material = &copy;
+            equal.property = std::make_shared<RE::BSGrassShaderProperty>(*first.property);
+            equal.property->material = equal.material;
+            equal.lifetime = std::make_shared<Source::Lifetime>();
+            equal.queue.reset();
+            Require(original.DoIsCopy(&copy) && copy.DoIsCopy(&original), "Fixture materials must compare equal");
+            Require(CurrentContract(first) && CurrentContract(equal), "Fixture contracts must be valid");
+            Require(!Compatible(first, equal) && !Compatible(equal, first),
+                "Distinct equivalent materials passed the batch comparison");
+            state.queues.emplace(CompatibilityHash(equal), first.queue);
+            state.AssignQueue(equal);
+            state.residents.emplace(equal.identity, equal);
+            Require(equal.queue != first.queue, "Distinct equivalent materials shared a grass queue");
+            Source shared = first;
+            shared.identity = &shapes[2];
+            shared.property = std::make_shared<RE::BSGrassShaderProperty>(*first.property);
+            shared.lifetime = std::make_shared<Source::Lifetime>();
+            if (!model.empty()) {
+                shared.vertices = std::make_shared<int>();
+                shared.indices = std::make_shared<int>();
+            }
+            shared.queue.reset();
+            state.AssignQueue(shared);
+            state.residents.emplace(shared.identity, shared);
+            Require(shared.queue == first.queue && first.queue->members.size() == 2 &&
+                first.queue->instances == 2 && equal.queue->instances == 1,
+                "Same-material grass lost batching or mixed instance ownership");
+            globals::features::grassOptimizations.batching = false;
+            Source native = first;
+            native.identity = &shapes[3];
+            native.queue.reset();
+            state.AssignQueue(native);
+            Require(native.queue != first.queue && !native.queue->batching,
+                "Disabling cross-cell batching retained a shared queue");
+            globals::features::grassOptimizations.batching = true;
+            ++original.value;
+            state.RetireInvalidSources();
+            Require(state.residents.size() == 3 && state.residentRevision == 0 && Compatible(first, shared),
+                "Editing a shared material invalidated identical material owners");
+            first.property->material = &copy;
+            Require(!CurrentContract(first) && !Compatible(first, shared),
+                "Material replacement retained a stale batch contract");
+            state.RetireInvalidSources();
+            Require(!state.residents.contains(first.identity) && state.residents.size() == 2 &&
+                state.residentRevision == 1 && first.lifetime->generation == 1 &&
+                first.queue->members.size() == 1 && first.queue->instances == 1,
+                "Material replacement did not retire the source and its queue membership");
+            Source recaptured = first;
+            recaptured.material = &copy;
+            recaptured.generation = recaptured.lifetime->generation.load();
+            recaptured.queue.reset();
+            state.AssignQueue(recaptured);
+            Require(CurrentContract(recaptured) && recaptured.queue == equal.queue &&
+                recaptured.queue != shared.queue && equal.queue->instances == 2,
+                "Recaptured grass did not join the replacement material's queue");
+            auto stale = shared;
+            stale.property = std::make_shared<RE::BSGrassShaderProperty>(*shared.property);
+            stale.property->texture = std::make_shared<RE::NiSourceTexture>();
+            Require(!CurrentContract(stale), "Texture replacement retained a stale contract");
+            stale.property = std::make_shared<RE::BSGrassShaderProperty>(*shared.property);
+            ++(vr ? stale.property->vr.wavePeriod : stale.property->flat.wavePeriod);
+            Require(!CurrentContract(stale), "Changed runtime property retained a stale contract");
+            stale.property.reset();
+            Require(!CurrentContract(stale), "Missing property retained a stale contract");
+        }
+        std::cout << "Grass queues partition equivalent materials and retain same-material batching\n";
+        return 0;
+    } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+}
+'''.replace("PRODUCTION_METHODS", methods).replace("PRODUCTION_RETIREMENT", retirement)
+        driver = driver.replace("PERSISTENT_PROPERTY", persistent)
+        mutations = (
+            None,
+            ("a.material == b.material", "true", "Distinct equivalent materials passed the batch comparison"),
+            (" && Compatible(representative->second, source)", "", "Distinct equivalent materials shared a grass queue"),
+            ("source.property->material != source.material || ", "", "Material replacement retained a stale batch contract"),
+            ("!CurrentContract(it->second)", "false", "Material replacement did not retire the source"),
+        )
+        for devbench in (False, True):
+            for mutation in mutations:
+                with self.subTest(devbench=devbench, mutation=mutation):
+                    code = driver
+                    if mutation:
+                        before, after, message = mutation
+                        self.assertIn(before, code)
+                        code = code.replace(before, after)
+                    result = self.compile_and_run(code, devbench)
+                    self.assertEqual(result.returncode, int(mutation is not None), result.stdout + result.stderr)
+                    if mutation:
+                        self.assertIn(message, result.stderr)
+
     def test_cached_geometry_ignores_generation_metadata(self):
         source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
         runtime = (ROOT / "src/Features/GrassOptimizations/GrassRuntime.h").read_text(encoding="utf-8")

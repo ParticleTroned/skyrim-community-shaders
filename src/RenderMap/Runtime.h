@@ -382,10 +382,10 @@ namespace CSX::RenderMap
 		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;
 
 		/** A generation-bound CPU publication boundary; native arguments are evaluated first. */
-		class ContextObservation
+		class CaptureObservationView
 		{
 		public:
-			ContextObservation(Runtime& a_owner, std::uint64_t a_generation) noexcept :
+			CaptureObservationView(Runtime& a_owner, std::uint64_t a_generation) noexcept :
 				owner(a_owner), generation(a_generation) {}
 
 			template <class... Args>
@@ -518,7 +518,7 @@ namespace CSX::RenderMap
 		};
 
 		[[nodiscard]] ContextCall BeginContextCall() noexcept { return ContextCall(*this); }
-		[[nodiscard]] ContextObservation ForCapture(std::uint64_t a_generation) noexcept { return ContextObservation(*this, a_generation); }
+		[[nodiscard]] CaptureObservationView ForCapture(std::uint64_t a_generation) noexcept { return CaptureObservationView(*this, a_generation); }
 
 #if defined(CSX_RENDER_MAP_TESTING)
 		void FailNextDeferredContextCatalogueAdmissionForTesting() noexcept;

@@ -69,9 +69,11 @@ namespace
 				if (!failed || std::filesystem::exists(temporary) || std::filesystem::exists(destination) != oldRetained)
 					throw std::runtime_error("failed publication lost same-handle cleanup custody");
 				if (oldRetained) {
-					std::ifstream old(destination);
 					std::string value;
-					old >> value;
+					{
+						std::ifstream old(destination);
+						old >> value;
+					}
 					if (value != "old")
 						throw std::runtime_error("pre-rename failure changed existing destination");
 					std::filesystem::remove(destination);

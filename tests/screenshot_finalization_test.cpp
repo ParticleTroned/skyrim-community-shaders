@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -19,6 +20,7 @@ namespace
 	thread_local std::array<std::string_view, 2> failEvents{};
 	thread_local bool persistentEventFailure = false;
 	thread_local unsigned eventFaults = 0;
+	const char* currentCase = "startup";
 
 	void EventAllocation(std::string_view type)
 	{
@@ -111,8 +113,10 @@ struct ScreenshotFinalizationTest
 			api.reset();
 			std::error_code error;
 			std::filesystem::remove_all(root, error);
-			if (error)
+			if (error) {
+				std::fprintf(stderr, "fixture cleanup failed with error %d\n", error.value());
 				std::terminate();
+			}
 		}
 		auto& Record() { return api->requests.at("sequence"); }
 		auto& Sequence() { return api->sequences.at("sequence"); }
@@ -267,25 +271,49 @@ struct ScreenshotFinalizationTest
 		Require(order == 2, "terminal callbacks were lost");
 	}
 
+	static void RunCase(const char* name, void (*test)())
+	{
+		currentCase = name;
+		std::fprintf(stderr, "START %s\n", name);
+		std::fflush(stderr);
+		test();
+		std::fprintf(stderr, "PASS %s\n", name);
+	}
+
 	static void Run()
 	{
 		CSX::Api::ServiceFoundation::SetEventAllocationTestHook(EventAllocation);
-		RejectedFinalization("sequence.finalizing", {}, false, false);
-		RejectedFinalization("packaging.queued", {}, false, false);
-		RejectedFinalization("packaging.failed", {}, true, false);
-		RejectedFinalization("packaging.queued", "packaging.failed", false, false);
-		RejectedFinalization("packaging.queued", {}, false, true);
-		TerminalPublication();
-		TerminalMetadataAllocation();
-		NotificationAndSuccess();
-		ParentAndPartialBoundaries();
-		CallbackOrder();
+		RunCase("finalizing-journal", [] { RejectedFinalization("sequence.finalizing", {}, false, false); });
+		RunCase("queued-journal", [] { RejectedFinalization("packaging.queued", {}, false, false); });
+		RunCase("failed-journal", [] { RejectedFinalization("packaging.failed", {}, true, false); });
+		RunCase("queued-and-failed-journal", [] { RejectedFinalization("packaging.queued", "packaging.failed", false, false); });
+		RunCase("persistent-allocation", [] { RejectedFinalization("packaging.queued", {}, false, true); });
+		RunCase("terminal-publication", TerminalPublication);
+		RunCase("terminal-metadata", TerminalMetadataAllocation);
+		RunCase("notification-and-success", NotificationAndSuccess);
+		RunCase("parent-and-partial", ParentAndPartialBoundaries);
+		RunCase("callback-order", CallbackOrder);
 		CSX::Api::ServiceFoundation::SetEventAllocationTestHook(nullptr);
 	}
 };
 
 int main()
 {
+	std::set_terminate([] {
+		ClearFaults();
+		std::fprintf(stderr, "TERMINATE %s\n", currentCase);
+		if (const auto failure = std::current_exception()) {
+			try {
+				std::rethrow_exception(failure);
+			} catch (const std::exception& error) {
+				std::fprintf(stderr, "%s\n", error.what());
+			} catch (...) {
+				std::fputs("non-standard active exception\n", stderr);
+			}
+		}
+		std::fflush(stderr);
+		std::abort();
+	});
 	try {
 		ScreenshotFinalizationTest::Run();
 		std::cout << "ScreenshotFinalization PASS\n";

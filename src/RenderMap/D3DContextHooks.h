@@ -16,4 +16,7 @@ namespace CSX::RenderMap
 
 	ResourceObservationInput DescribeResource(ID3D11Resource* a_resource) noexcept;
 	void InstallD3DContextHooks(ID3D11DeviceContext* a_context);
+#ifdef CSX_RENDER_MAP_CONTEXT_TESTING
+	void RunContextHookTests();
+#endif
 }

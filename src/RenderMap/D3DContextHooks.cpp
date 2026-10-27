@@ -9,6 +9,13 @@
 
 namespace CSX::RenderMap
 {
+#ifdef CSX_RENDER_MAP_CONTEXT_TESTING
+	template <class Signature>
+	using ContextOriginal = Signature*;
+#else
+	template <class Signature>
+	using ContextOriginal = REL::Relocation<Signature>;
+#endif
 	ResourceObservationInput DescribeResource(ID3D11Resource* a_resource) noexcept
 	{
 		ResourceObservationInput result;
@@ -574,7 +581,7 @@ namespace CSX::RenderMap
 				ObserveEffectiveRenderTargets(a_context, call.Generation(), TargetBindingSource::kPostCallQuery);
 				ObserveAllEffectiveResourceViews(a_context, call.Generation(), ResourceBindingSource::kPostCallQuery);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews
@@ -596,7 +603,7 @@ namespace CSX::RenderMap
 				ObserveEffectiveRenderTargets(a_context, call.Generation(), TargetBindingSource::kPostCallQuery);
 				ObserveAllEffectiveResourceViews(a_context, call.Generation(), ResourceBindingSource::kPostCallQuery);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 #define CSX_RESOURCE_BIND_HOOK(Name, Stage)                                                                            \
@@ -611,7 +618,7 @@ namespace CSX::RenderMap
 			ObserveEffectiveShaderResources(                                                                           \
 				a_context, call.Generation(), Stage, a_startSlot, a_viewCount, ResourceBindingSource::kPostCallQuery); \
 		}                                                                                                              \
-		static inline REL::Relocation<decltype(thunk)> func;                                                           \
+		static inline ContextOriginal<decltype(thunk)> func;                                                           \
 	}
 
 		CSX_RESOURCE_BIND_HOOK(ID3D11DeviceContext_VSSetShaderResources, ResourceStage::kVertex);
@@ -634,7 +641,7 @@ namespace CSX::RenderMap
 					a_context, call.Generation(), ResourceStage::kCompute, a_startSlot, a_viewCount, a_views);
 				ObserveAllEffectiveResourceViews(a_context, call.Generation(), ResourceBindingSource::kPostCallQuery);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_PSSetShader
@@ -647,7 +654,7 @@ namespace CSX::RenderMap
 				call.InvokeNative(func, a_context, a_shader, a_classInstances, a_classInstanceCount);
 				GetRuntime().ForCapture(call.Generation()).BindStage(reinterpret_cast<std::uintptr_t>(a_context), ShaderStage::kPixel, reinterpret_cast<std::uintptr_t>(a_shader));
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_VSSetShader
@@ -660,7 +667,7 @@ namespace CSX::RenderMap
 				call.InvokeNative(func, a_context, a_shader, a_classInstances, a_classInstanceCount);
 				GetRuntime().ForCapture(call.Generation()).BindStage(reinterpret_cast<std::uintptr_t>(a_context), ShaderStage::kVertex, reinterpret_cast<std::uintptr_t>(a_shader));
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_CSSetShader
@@ -673,7 +680,7 @@ namespace CSX::RenderMap
 				call.InvokeNative(func, a_context, a_shader, a_classInstances, a_classInstanceCount);
 				GetRuntime().ForCapture(call.Generation()).BindStage(reinterpret_cast<std::uintptr_t>(a_context), ShaderStage::kCompute, reinterpret_cast<std::uintptr_t>(a_shader));
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_DrawIndexedInstanced
@@ -689,7 +696,7 @@ namespace CSX::RenderMap
 				call.InvokeNative(func, a_context, a_indexCountPerInstance, a_instanceCount, a_startIndexLocation,
 					a_baseVertexLocation, a_startInstanceLocation);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_DrawIndexed
@@ -703,7 +710,7 @@ namespace CSX::RenderMap
 					static_cast<std::uint32_t>(a_baseVertexLocation));
 				call.InvokeNative(func, a_context, a_indexCount, a_startIndexLocation, a_baseVertexLocation);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_Draw
@@ -715,7 +722,7 @@ namespace CSX::RenderMap
 					DrawOperation::kDraw, a_vertexCount, a_startVertexLocation);
 				call.InvokeNative(func, a_context, a_vertexCount, a_startVertexLocation);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_DrawInstanced
@@ -730,7 +737,7 @@ namespace CSX::RenderMap
 				call.InvokeNative(func, a_context, a_vertexCountPerInstance, a_instanceCount,
 					a_startVertexLocation, a_startInstanceLocation);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_DrawAuto
@@ -741,7 +748,7 @@ namespace CSX::RenderMap
 				RecordDrawWithEffectiveState(a_context, call.Generation(), DrawOperation::kDrawAuto);
 				call.InvokeNative(func, a_context);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_DrawIndexedInstancedIndirect
@@ -755,7 +762,7 @@ namespace CSX::RenderMap
 					reinterpret_cast<std::uintptr_t>(a_argumentBuffer), a_alignedByteOffset);
 				call.InvokeNative(func, a_context, a_argumentBuffer, a_alignedByteOffset);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_DrawInstancedIndirect
@@ -769,7 +776,7 @@ namespace CSX::RenderMap
 					reinterpret_cast<std::uintptr_t>(a_argumentBuffer), a_alignedByteOffset);
 				call.InvokeNative(func, a_context, a_argumentBuffer, a_alignedByteOffset);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_Dispatch
@@ -783,7 +790,7 @@ namespace CSX::RenderMap
 					a_threadGroupCountZ);
 				call.InvokeNative(func, a_context, a_threadGroupCountX, a_threadGroupCountY, a_threadGroupCountZ);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_DispatchIndirect
@@ -797,7 +804,7 @@ namespace CSX::RenderMap
 					reinterpret_cast<std::uintptr_t>(a_argumentBuffer), a_alignedByteOffset);
 				call.InvokeNative(func, a_context, a_argumentBuffer, a_alignedByteOffset);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_ExecuteCommandList
@@ -809,7 +816,7 @@ namespace CSX::RenderMap
 				call.InvokeNative(func, a_context, a_commandList, a_restoreContextState);
 				GetRuntime().ForCapture(call.Generation()).RecordExecuteCommandList(reinterpret_cast<std::uintptr_t>(a_context), reinterpret_cast<std::uintptr_t>(a_commandList), a_restoreContextState != FALSE);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_FinishCommandList
@@ -823,7 +830,7 @@ namespace CSX::RenderMap
 				GetRuntime().ForCapture(call.Generation()).RecordFinishCommandList(reinterpret_cast<std::uintptr_t>(a_context), reinterpret_cast<std::uintptr_t>(SUCCEEDED(result) && a_commandList ? *a_commandList : nullptr), a_restoreDeferredContextState != FALSE, static_cast<std::int32_t>(result));
 				return result;
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_CopySubresourceRegion
@@ -839,7 +846,7 @@ namespace CSX::RenderMap
 					return;
 				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kCopySubresourceRegion, DescribeResource(a_source), DescribeResource(a_destination), a_sourceSubresource, a_destinationSubresource);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_Map
@@ -859,7 +866,7 @@ namespace CSX::RenderMap
 				}
 				return result;
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_Unmap
@@ -874,7 +881,7 @@ namespace CSX::RenderMap
 					GetRuntime().ForCapture(call.Generation()).RecordCpuUnmap(reinterpret_cast<std::uintptr_t>(a_context), DescribeResource(a_resource), a_subresource, ReadQpc(), generation);
 				}
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_CopyResource
@@ -887,7 +894,7 @@ namespace CSX::RenderMap
 					return;
 				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kCopyResource, DescribeResource(a_source), DescribeResource(a_destination));
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_ResolveSubresource
@@ -901,7 +908,7 @@ namespace CSX::RenderMap
 					return;
 				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kResolveSubresource, DescribeResource(a_source), DescribeResource(a_destination), a_sourceSubresource, a_destinationSubresource);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_UpdateSubresource
@@ -917,7 +924,7 @@ namespace CSX::RenderMap
 					return;
 				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kUpdateSubresource, ResourceObservationInput{}, DescribeResource(a_destination), 0, a_destinationSubresource);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_CopyStructureCount
@@ -931,7 +938,7 @@ namespace CSX::RenderMap
 					return;
 				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kCopyStructureCount, DescribeView(a_source).resource, DescribeResource(a_destination));
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_ClearRenderTargetView
@@ -945,7 +952,7 @@ namespace CSX::RenderMap
 					return;
 				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearRenderTarget, ResourceObservationInput{}, DescribeView(a_target).resource);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_ClearUnorderedAccessViewUint
@@ -959,7 +966,7 @@ namespace CSX::RenderMap
 					return;
 				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearUnorderedAccess, ResourceObservationInput{}, DescribeView(a_target).resource);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_ClearUnorderedAccessViewFloat
@@ -973,7 +980,7 @@ namespace CSX::RenderMap
 					return;
 				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearUnorderedAccess, ResourceObservationInput{}, DescribeView(a_target).resource);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_ClearDepthStencilView
@@ -987,7 +994,7 @@ namespace CSX::RenderMap
 					return;
 				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearDepthStencil, ResourceObservationInput{}, DescribeView(a_target).resource);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
 		struct ID3D11DeviceContext_GenerateMips
@@ -1001,10 +1008,11 @@ namespace CSX::RenderMap
 				const auto resource = DescribeView(a_view).resource;
 				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kGenerateMips, resource, resource);
 			}
-			static inline REL::Relocation<decltype(thunk)> func;
+			static inline ContextOriginal<decltype(thunk)> func;
 		};
 	}
 
+#ifndef CSX_RENDER_MAP_CONTEXT_TESTING
 	void InstallD3DContextHooks(ID3D11DeviceContext* a_context)
 	{
 		if (!a_context)
@@ -1046,4 +1054,10 @@ namespace CSX::RenderMap
 		stl::detour_vfunc<69, ID3D11DeviceContext_CSSetShader>(a_context);
 		stl::detour_vfunc<114, ID3D11DeviceContext_FinishCommandList>(a_context);
 	}
+#endif
+
 }
+
+#ifdef CSX_RENDER_MAP_CONTEXT_TESTING
+#	include "render_map_context_hook_test.h"
+#endif

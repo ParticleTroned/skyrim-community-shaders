@@ -500,7 +500,8 @@ void State::Draw()
 		}
 		{
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::PerfModeRelatch, stateDrawDiagFrame, stateDrawDiagActive);
-			globals::features::upscaling.ApplyPendingPerfModeRenderTargetRecreate("State::Draw");
+			if (globals::game::isVR && globals::features::upscaling.HasPendingPerfModeRenderTargetWork())
+				globals::features::upscaling.ApplyPendingPerfModeRenderTargetRecreate("State::Draw");
 			shaderCache->ServicePendingDisable();
 		}
 

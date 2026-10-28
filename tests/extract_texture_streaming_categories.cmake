@@ -9,6 +9,8 @@ extract_between("${source}" "static bool SharesTextureResource("
 extract_between("${source}" "double RequiredEdge("
     "\n}" "streaming_demand_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Features/TextureStreaming.cpp" source)
+extract_between("${source}" "void TextureStreaming::State::InvalidateInventory("
+    "void TextureStreaming::State::Scan(" "streaming_invalidation_under_test.h")
 extract_between("${source}" "void TextureStreaming::PostPostLoad()"
     "void TextureStreaming::Reset()" "streaming_startup_under_test.h")
 extract_between("${source}" "constexpr auto streamingConflictWarning"

@@ -2087,6 +2087,7 @@ if(BUILD_CONTROLLER_TESTS)
     include("${PROJECT_SOURCE_DIR}/tests/gameft_stack_wait.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/engine_stutters.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/game_setting_persistence.cmake")
+    include("${PROJECT_SOURCE_DIR}/cmake/StateDrawTests.cmake")
 
     add_controller_test(
         shadow_batch_submissions_test
@@ -3658,6 +3659,20 @@ if(BUILD_CONTROLLER_TESTS)
     target_include_directories(
         forced_weather_test
         PRIVATE "${_forced_weather_test_dir}"
+    )
+    add_test(
+        NAME WeatherDrawUpdates
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/weather_draw_updates_test.py"
+            --json-include
+            "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
+    set_tests_properties(
+        WeatherDrawUpdates
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
     )
     add_controller_test(
         camera_reprojection_test

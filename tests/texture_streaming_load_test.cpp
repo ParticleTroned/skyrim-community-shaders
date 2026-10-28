@@ -286,6 +286,10 @@ int main()
 		Require(loaded && loaded->size.full.Width == 4096 && loaded->size.drop == 2 && loaded->serial == 10, "Full restoration contract was lost at load handoff");
 		loaded.reset();
 		Require(source.references == 0 && Hooks::Status().at("activeLoads") == 0 && !Hooks::Poll() && !Hooks::HasPending(), "Load handoff leaked ownership or duplicated a source");
+		{
+			const std::scoped_lock lock(Hooks::catalog.mutex);
+			Require(!Hooks::HasPending() && !Hooks::Poll(), "Empty queue attempted a catalog lock");
+		}
 		Hooks::Create(nullptr, &source);
 		{
 			TextureStreaming::State state;

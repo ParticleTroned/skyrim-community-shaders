@@ -28,7 +28,7 @@ namespace LightLimitFixDetail::ShadowCulling
 			Settings settings;
 			RE::NiPointer<RE::ShadowSceneNode> scene;
 			std::array<Camera, 72> cameras;
-			std::array<RE::NiPoint3, 2> eyes{};
+			std::array<std::array<double, 3>, 2> eyes{};
 			unsigned cameraCount = 0, eyeCount = 0;
 			double sunSine = 0;
 			bool interior = false;
@@ -59,6 +59,8 @@ namespace LightLimitFixDetail::ShadowCulling
 			result.protectedGeometry = property->material->GetType() != RE::BSShaderMaterial::Type::kLighting ||
 			                           property->GetControllers() != nullptr || geometry.GetControllers() != nullptr ||
 			                           property->flags.any(Flag::kTreeAnim, Flag::kBillboard, Flag::kProjectedUV, Flag::kRefraction, Flag::kTempRefraction);
+			if (result.protectedGeometry)
+				return result;
 			result.dynamic = data.skinInstance != nullptr || result.protectedGeometry ||
 			                 netimmerse_cast<const RE::BSDynamicTriShape*>(&geometry) != nullptr;
 			unsigned depthCounter = 0;
@@ -98,6 +100,15 @@ namespace LightLimitFixDetail::ShadowCulling
 				}
 			if (!matched)
 				return false;
+			Demand demand;
+			demand.pass = matched->pass;
+			demand.eyeCount = captured->eyeCount;
+			demand.sunElevationSine = captured->sunSine;
+			demand.interior = captured->interior;
+			demand.radius = geometry.worldBound.radius;
+			const std::array<double, 3> center{ geometry.worldBound.center.x, geometry.worldBound.center.y, geometry.worldBound.center.z };
+			if (!BoundsMayCull(captured->settings, demand, center, captured->eyes))
+				return false;
 			if (matched->pass == Pass::Point) {
 				const auto* light = matched->pointOwner.get();
 				if (!light || light->light.get() != matched->pointSource.get() ||
@@ -105,29 +116,27 @@ namespace LightLimitFixDetail::ShadowCulling
 					light->light->GetLightRuntimeData().radius.x != matched->lightRadius)
 					return false;
 			}
-			Demand demand;
-			demand.pass = matched->pass;
-			demand.eyeCount = captured->eyeCount;
-			demand.sunElevationSine = captured->sunSine;
-			demand.interior = captured->interior;
-			demand.radius = geometry.worldBound.radius;
 			const auto caster = Classify(geometry);
 			demand.actor = caster.actor;
 			demand.dynamic = caster.dynamic;
 			demand.protectedGeometry = caster.protectedGeometry;
-			const std::array<double, 3> center{ geometry.worldBound.center.x, geometry.worldBound.center.y, geometry.worldBound.center.z };
+			const auto minimumShadowRadius = demand.pass == Pass::Sun ? demand.radius / demand.sunElevationSine : demand.radius;
+			if (!CasterMayCull(captured->settings, demand) || minimumShadowRadius >= (demand.actor ? ActorShadowRadius : ObjectShadowRadius))
+				return false;
 			std::array<double, 3> actorRoot{};
 			if (caster.actorRoot) {
 				const auto& point = caster.actorRoot->world.translate;
 				actorRoot = { point.x, point.y, point.z };
 			}
-			const auto distance = [&](const RE::NiPoint3& position) {
-				return SurfaceDistance(center, demand.radius, { position.x, position.y, position.z }, caster.actorRoot ? &actorRoot : nullptr);
+			const auto distance = [&](const std::array<double, 3>& position) {
+				return SurfaceDistance(center, demand.radius, position, caster.actorRoot ? &actorRoot : nullptr);
 			};
 			for (unsigned i = 0; i < demand.eyeCount; ++i)
-				demand.eyeDistance[i] = distance(captured->eyes[i]) - 512;
-			demand.lightDistance = distance(matched->lightPosition);
-			demand.lightRadius = matched->lightRadius;
+				demand.eyeDistance[i] = distance(captured->eyes[i]) - EyeDistanceMargin;
+			if (demand.pass == Pass::Point) {
+				demand.lightDistance = distance({ matched->lightPosition.x, matched->lightPosition.y, matched->lightPosition.z });
+				demand.lightRadius = matched->lightRadius;
+			}
 			const bool skip = ShouldCull(captured->settings, demand);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (skip) {
@@ -212,9 +221,10 @@ namespace LightLimitFixDetail::ShadowCulling
 			captured->sampledAt = GetTickCount64();
 			captured->eyeCount = globals::game::isVR ? 2 : 1;
 			for (unsigned i = 0; i < captured->eyeCount; ++i) {
-				captured->eyes[i] = Util::GetEyePosition(i);
+				const auto position = Util::GetEyePosition(i);
+				captured->eyes[i] = { position.x, position.y, position.z };
 				const auto view = Util::GetCameraData(i);
-				if (!std::isfinite(captured->eyes[i].x) || !std::isfinite(captured->eyes[i].y) || !std::isfinite(captured->eyes[i].z) ||
+				if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z) ||
 					!std::isfinite(view.projMatrixUnjittered._11) || view.projMatrixUnjittered._11 == 0 ||
 					!std::isfinite(view.projMatrixUnjittered._22) || view.projMatrixUnjittered._22 == 0) {
 					active.store(false, std::memory_order_release);

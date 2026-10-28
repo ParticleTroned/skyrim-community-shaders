@@ -27881,11 +27881,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 {
 	if (!globals::game::isVR)
 		return true;
-	Util::GpuMemoryBudget::Reservation memoryReservation;
-	const SKSE::stl::scope_exit releaseReservation([&] {
-		if (memoryReservation)
-			Util::GpuMemoryBudget::Get().Sample(globals::d3d::device, 0, true);
-	});
 	if (!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire)) {
 		if (vrRenderScaleRelatchDrainEpoch.load(std::memory_order_acquire) != 0) {
 			const std::scoped_lock queueLock(perfModeRenderTargetRecreateQueueMutex);
@@ -27897,6 +27892,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	if (vrRenderScalePresentationRecoveryStage.load(std::memory_order_acquire) ==
 		VRVendorRelatchPolicy::PresentationRecoveryStage::Quarantined)
 		return false;
+	Util::GpuMemoryBudget::Reservation memoryReservation;
+	const SKSE::stl::scope_exit releaseReservation([&] {
+		if (memoryReservation)
+			Util::GpuMemoryBudget::Get().Sample(globals::d3d::device, 0, true);
+	});
 
 	// Late adapter discovery must normalize the boot profile before mutation.
 	ResolvePendingVRUpscalingProviderSelection();

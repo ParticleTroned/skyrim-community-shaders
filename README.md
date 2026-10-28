@@ -312,6 +312,11 @@ is licensed under GPL-3.0-or-later with its
 [upstream exceptions](package/SKSE/Plugins/CommunityShaders/Licenses/SPS/EXCEPTIONS.md).
 These notices accompany future CSX packages.
 
+Pressure-only streaming uses sparse inventory learning when no reductions
+are needed. Disabling remembered sizes also skips that learning work.
+Pressure detection, pending operations and reduced-texture restoration
+remain serviced; discretionary scanning shares a bounded frame budget.
+
 ### SKSE Plugin API
 
 [LGPL-3.0-or-later](COPYING.LESSER): `include/VRAPI/CSinterface001.h` and

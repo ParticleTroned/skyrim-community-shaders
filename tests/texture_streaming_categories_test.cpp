@@ -1,6 +1,7 @@
 #include "Features/TextureStreaming/DemandDiagnostics.h"
 #include "Features/TextureStreaming/GeometryDemand.h"
 #include "Features/TextureStreaming/Settings.h"
+#include "Features/TextureStreaming/WorkSchedule.h"
 #include "TruePBR/MaterialRegistry.h"
 #include "asset_load_diagnostics_fixture.h"
 #include <algorithm>
@@ -378,7 +379,10 @@ struct TextureStreaming
 		bool ReductionRequested() const noexcept;
 		void UpdateConfigurationDetail();
 		unsigned maximumDrop = 2;
-		std::uint64_t epoch = 7, completeScan = 12, nextScanMs = 10000;
+		std::uint64_t epoch = 7, completeScan = 12, selectionCursor = 4;
+		std::size_t learningRemaining = 8;
+		StreamingTextures::WorkSchedule workSchedule;
+		void InvalidateInventory(std::uint64_t now);
 		std::vector<int> frontier{ 1 }, visited{ 1 }, reducedRecords;
 		std::map<int, Record> records{ { 1, {} } };
 		std::string detail;
@@ -401,6 +405,7 @@ struct TextureStreaming
 #include "streaming_startup_under_test.h"
 #undef LoadDDS
 #undef GetModuleHandleW
+#include "streaming_invalidation_under_test.h"
 #include "streaming_mode_under_test.h"
 #include "streaming_settings_under_test.h"
 #include "streaming_ui_under_test.h"
@@ -846,7 +851,9 @@ int main()
 		Util::Widgets::clicks = { { "Landscape", true }, { "Cutouts", true }, { "Emissive", true } };
 		feature.DrawSettings();
 		Require(feature.state->categories == Categories{ true, true, true, true, true } && Util::Widgets::clicks.empty(), "UI did not apply all independent category toggles");
-		Require(feature.state->epoch == 8 && feature.state->frontier.empty() && feature.state->visited.empty() && !feature.state->completeScan && !feature.state->nextScanMs && feature.state->records[1].consumers.clears == 1, "Category change retained stale scans or pending work identity");
+		Require(feature.state->epoch == 8 && feature.state->frontier.empty() && feature.state->visited.empty() && !feature.state->completeScan &&
+					!feature.state->selectionCursor && !feature.state->learningRemaining && feature.state->records[1].consumers.clears == 1,
+			"Category change retained stale scans or pending work identity");
 		Require(MenuUI::sections.size() == 3 && std::string(MenuUI::sections[1].id) == "categories", "Optional categories were absent from page navigation");
 		feature.Configure(true, 3);
 		Require(feature.state->categories == Categories{ true, true, true, true, true } && feature.state->epoch == 9, "Mip control reset categories or retained stale pending work");

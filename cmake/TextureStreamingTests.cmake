@@ -2,6 +2,26 @@ add_controller_test(texture_streaming_policy_test TextureStreamingPolicy tests/t
 target_compile_definitions(texture_streaming_policy_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(texture_streaming_policy_test PRIVATE nlohmann_json::nlohmann_json)
 
+add_controller_test(shadow_culling_bounds_test ShadowCullingBounds tests/shadow_culling_bounds_test.cpp)
+target_link_libraries(shadow_culling_bounds_test PRIVATE nlohmann_json::nlohmann_json)
+
+set(_streaming_maintenance_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/streaming-maintenance")
+set(_streaming_tick_header "${_streaming_maintenance_dir}/streaming_tick_under_test.h")
+set(_streaming_select_header "${_streaming_maintenance_dir}/streaming_select_under_test.h")
+add_custom_command(OUTPUT "${_streaming_tick_header}" "${_streaming_select_header}"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_streaming_maintenance_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_texture_streaming_maintenance.cmake"
+    DEPENDS src/Features/TextureStreaming.cpp tests/extract_source_region.cmake
+        tests/extract_texture_streaming_maintenance.cmake VERBATIM)
+add_controller_test(texture_streaming_maintenance_test TextureStreamingMaintenance tests/texture_streaming_maintenance_test.cpp)
+target_sources(texture_streaming_maintenance_test PRIVATE "${_streaming_tick_header}")
+target_include_directories(texture_streaming_maintenance_test PRIVATE "${_streaming_maintenance_dir}")
+add_controller_test(texture_streaming_selection_test TextureStreamingSelection tests/texture_streaming_selection_test.cpp)
+target_sources(texture_streaming_selection_test PRIVATE "${_streaming_select_header}")
+target_include_directories(texture_streaming_selection_test PRIVATE "${_streaming_maintenance_dir}")
+target_link_libraries(texture_streaming_selection_test PRIVATE nlohmann_json::nlohmann_json)
+
 set(_streaming_traversal_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/streaming-traversal")
 set(_streaming_traversal_headers)
 foreach(_header children pointer array preview_roots)
@@ -43,7 +63,7 @@ target_include_directories(texture_streaming_gate_test PRIVATE "${_streaming_gat
 
 set(_streaming_categories_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/streaming-categories")
 set(_streaming_categories_headers)
-foreach(_header material demand settings ui flags features sections mode geometry_types startup conflict landscape_lookup)
+foreach(_header material demand settings ui flags features sections mode geometry_types startup conflict landscape_lookup invalidation)
     list(APPEND _streaming_categories_headers "${_streaming_categories_dir}/streaming_${_header}_under_test.h")
 endforeach()
 add_custom_command(OUTPUT ${_streaming_categories_headers}

@@ -1,16 +1,23 @@
 #include "WeatherManager.h"
 
 #include "Feature.h"
+#include "Globals.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Form.h"
 
 #include <algorithm>
+#include <bit>
 #include <iterator>
 #include <vector>
 
 namespace
 {
+	RE::Sky* GetWeatherSky()
+	{
+		return globals::game::sky ? globals::game::sky : RE::Sky::GetSingleton();
+	}
+
 	void NormalizeFeatureWeatherSettings(const std::string& featureName, json& featureSettings)
 	{
 		if (auto* feature = Feature::FindFeatureByShortName(featureName)) {
@@ -46,7 +53,7 @@ WeatherManager::CurrentWeathers WeatherManager::GetCurrentWeathers()
 {
 	CurrentWeathers result;
 
-	auto sky = RE::Sky::GetSingleton();
+	auto* sky = GetWeatherSky();
 	if (!sky) {
 		return result;
 	}
@@ -161,7 +168,21 @@ void WeatherManager::UpdateFeatures()
 	if (globals::state->isMapMenuOpen)
 		return;
 
+	auto* sky = GetWeatherSky();
+	UpdateInputs inputs{
+		globals::state->frameCount, sky,
+		sky ? sky->currentWeather : nullptr,
+		sky ? sky->lastWeather : nullptr,
+		cachedLastWeather,
+		sky ? std::bit_cast<uint32_t>(sky->currentWeatherPct) : 0
+	};
+	if (!evaluationInvalidated && lastUpdateInputs && *lastUpdateInputs == inputs)
+		return;
+
 	EvaluateCurrentWeatherState(false);
+	// Public weather reads can change the remembered transition source between draws.
+	inputs.cachedPrevious = cachedLastWeather;
+	lastUpdateInputs = inputs;
 }
 
 void WeatherManager::StageSettingsForWeather(
@@ -217,6 +238,7 @@ void WeatherManager::CommitSettingsForWeather(
 
 void WeatherManager::RefreshFeatureOverrides()
 {
+	lastUpdateInputs.reset();
 	EvaluateCurrentWeatherState(true);
 }
 
@@ -351,6 +373,7 @@ void WeatherManager::ClearCache()
 		RestoreAllFeatureVariables(activeWeatherVariables.begin()->first);
 
 	stagedWeatherSettings.clear();
+	lastUpdateInputs.reset();
 	cachedLastWeather = nullptr;
 	lastKnownWeather = CurrentWeathers();
 	lastKnownWeather.currentWeather = nullptr;
@@ -633,7 +656,7 @@ void WeatherManager::RestoreAllFeatureVariables(const std::string& featureName)
 	if (activeIt == activeWeatherVariables.end())
 		return;
 
-	const auto variableNames = activeIt->second;
-	activeWeatherVariables.erase(activeIt);
-	RestoreFeatureVariables(featureName, variableNames);
+	// The caller may supply the map key itself; keep it alive while restoring settings.
+	const auto active = activeWeatherVariables.extract(activeIt);
+	RestoreFeatureVariables(active.key(), active.mapped());
 }

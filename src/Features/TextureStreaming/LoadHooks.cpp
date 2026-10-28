@@ -24,6 +24,7 @@ namespace StreamingTextures::LoadHooks
 			std::unordered_set<std::string> protectedPaths;
 			std::array<std::optional<ReducedLoad>, maximumLoads> pending;
 			std::size_t read = 0, write = 0;
+			std::atomic_bool pendingReady{ false };
 			std::shared_ptr<std::atomic_size_t> activeLoads = std::make_shared<std::atomic_size_t>(0);
 			std::uint64_t revision = 0, savedRevision = 0, hits = 0, rejected = 0, failures = 0;
 			bool enabled = true, ready = false, hookReady = false, protectionLimit = false;
@@ -147,6 +148,7 @@ namespace StreamingTextures::LoadHooks
 				std::scoped_lock lock(catalog.mutex);
 				catalog.pending[catalog.write] = std::move(scope.load);
 				catalog.write = (catalog.write + 1) % maximumLoads;
+				catalog.pendingReady.store(true, std::memory_order_release);
 			}
 		}
 	}
@@ -282,17 +284,19 @@ namespace StreamingTextures::LoadHooks
 	}
 	bool HasPending()
 	{
-		std::scoped_lock lock(catalog.mutex);
-		return catalog.pending[catalog.read].has_value();
+		return catalog.pendingReady.load(std::memory_order_acquire);
 	}
 	std::optional<ReducedLoad> Poll()
 	{
+		if (!HasPending())
+			return std::nullopt;
 		std::scoped_lock lock(catalog.mutex);
 		auto result = std::move(catalog.pending[catalog.read]);
 		if (result) {
 			catalog.pending[catalog.read].reset();
 			catalog.read = (catalog.read + 1) % maximumLoads;
 		}
+		catalog.pendingReady.store(catalog.pending[catalog.read].has_value(), std::memory_order_release);
 		return result;
 	}
 	void Remember(const std::string& path, const RememberedSize& size)

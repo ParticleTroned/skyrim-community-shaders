@@ -1,7 +1,7 @@
 #pragma once
 
 // Sun-angle and point-light magnification policy adapted from SPS, Copyright (c) 2026 dnai92.
-// Modified for CSX on 2026-10-14; GPL-3.0-or-later with the packaged SPS exceptions.
+// Modified for CSX on 2026-10-28; GPL-3.0-or-later with the packaged SPS exceptions.
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -13,6 +13,11 @@
 
 namespace LightLimitFixDetail::ShadowCulling
 {
+	inline constexpr double MetersPerUnit = 0.01428, EyeDistanceMargin = 512;
+	inline constexpr double MinimumSunSine = 0.17364817766693033;
+	inline constexpr double ObjectShadowRadius = 64, ActorShadowRadius = 256;
+	inline constexpr double ObjectAngularSize = 0.005, ActorAngularSize = 0.02;
+
 	struct Settings
 	{
 		bool sun = true, torch = true, actors = true, interiorTorches = true;
@@ -74,6 +79,47 @@ namespace LightLimitFixDetail::ShadowCulling
 		double radius = 0, sunElevationSine = 0, lightDistance = 0, lightRadius = 0;
 		bool actor = false, dynamic = true, interior = false, protectedGeometry = false;
 	};
+	inline double MinimumDistance(const Settings& settings, bool actor) noexcept
+	{
+		return (actor ? settings.actorDistanceMeters : settings.minimumDistanceMeters) / MetersPerUnit;
+	}
+	/** Pass-wide keep decisions precede light validation and geometry classification. */
+	inline bool PassMayCull(const Settings& settings, const Demand& demand) noexcept
+	{
+		return (demand.pass == Pass::Sun || demand.pass == Pass::Point) && demand.eyeCount && demand.eyeCount <= demand.eyeDistance.size() &&
+		       (settings.actors || (demand.pass == Pass::Sun ? settings.sun : settings.torch)) &&
+		       (demand.pass != Pass::Sun || (std::isfinite(demand.sunElevationSine) && demand.sunElevationSine >= MinimumSunSine)) &&
+		       (demand.pass != Pass::Point || !demand.interior || settings.interiorTorches);
+	}
+	inline bool CasterMayCull(const Settings& settings, const Demand& demand) noexcept
+	{
+		return !demand.protectedGeometry && (demand.actor ? settings.actors : !demand.dynamic && (demand.pass == Pass::Sun ? settings.sun : settings.torch));
+	}
+	/** Necessary bounds only: failure keeps the caster without inspecting its ownership hierarchy. */
+	inline bool BoundsMayCull(const Settings& settings, const Demand& demand, const std::array<double, 3>& center,
+		const std::array<std::array<double, 3>, 2>& eyes) noexcept
+	{
+		if (!PassMayCull(settings, demand) || !std::isfinite(demand.radius) || demand.radius <= 0)
+			return false;
+		const double radius = demand.pass == Pass::Sun ? demand.radius / demand.sunElevationSine : demand.radius;
+		if (radius >= (settings.actors ? std::max(ActorShadowRadius, ObjectShadowRadius) : ObjectShadowRadius))
+			return false;
+		const double minimum = settings.actors ? std::min(MinimumDistance(settings, false), MinimumDistance(settings, true)) : MinimumDistance(settings, false);
+		const double reach = demand.radius + EyeDistanceMargin + minimum;
+		for (unsigned eye = 0; eye < demand.eyeCount; ++eye) {
+			double squared = 0;
+			for (unsigned axis = 0; axis < center.size(); ++axis) {
+				if (!std::isfinite(center[axis]) || !std::isfinite(eyes[eye][axis]))
+					return false;
+				const double delta = center[axis] - eyes[eye][axis];
+				squared += delta * delta;
+			}
+			// Borderline comparisons fall through to the authoritative distance calculation.
+			if (squared < reach * reach * (1 - 32 * std::numeric_limits<double>::epsilon()))
+				return false;
+		}
+		return true;
+	}
 	/** Keep invalid bounds and nearby actor roots conservative before applying shadow distance policy. */
 	inline double SurfaceDistance(const std::array<double, 3>& center, double radius,
 		const std::array<double, 3>& position, const std::array<double, 3>* actorRoot = nullptr) noexcept
@@ -90,19 +136,8 @@ namespace LightLimitFixDetail::ShadowCulling
 	/** Admit only tiny distant shadow casters; unknown geometry, projections and close eyes retain their shadows. */
 	inline bool ShouldCull(const Settings& settings, const Demand& demand) noexcept
 	{
-		if (!settings.Active() || demand.pass == Pass::Unknown || !demand.eyeCount || demand.eyeCount > demand.eyeDistance.size() ||
-			!std::isfinite(demand.radius) || demand.radius <= 0 || demand.protectedGeometry)
+		if (!PassMayCull(settings, demand) || !CasterMayCull(settings, demand) || !std::isfinite(demand.radius) || demand.radius <= 0)
 			return false;
-		if (demand.pass == Pass::Sun && (!std::isfinite(demand.sunElevationSine) || demand.sunElevationSine < 0.17364817766693033))
-			return false;
-		if (demand.pass == Pass::Point && demand.interior && !settings.interiorTorches)
-			return false;
-		if (demand.actor) {
-			if (!settings.actors)
-				return false;
-		} else if (demand.dynamic || (demand.pass == Pass::Sun ? !settings.sun : !settings.torch)) {
-			return false;
-		}
 		double shadowRadius = demand.radius;
 		if (demand.pass == Pass::Point) {
 			if (!std::isfinite(demand.lightDistance) || !std::isfinite(demand.lightRadius) || demand.lightDistance <= 1 ||
@@ -112,12 +147,12 @@ namespace LightLimitFixDetail::ShadowCulling
 		} else {
 			shadowRadius /= demand.sunElevationSine;
 		}
-		if (!std::isfinite(shadowRadius) || shadowRadius >= (demand.actor ? 256 : 64))
+		if (!std::isfinite(shadowRadius) || shadowRadius >= (demand.actor ? ActorShadowRadius : ObjectShadowRadius))
 			return false;
-		const auto minimum = (demand.actor ? settings.actorDistanceMeters : settings.minimumDistanceMeters) / 0.01428;
+		const auto minimum = MinimumDistance(settings, demand.actor);
 		for (unsigned eye = 0; eye < demand.eyeCount; ++eye) {
 			const auto distance = demand.eyeDistance[eye];
-			if (!std::isfinite(distance) || distance <= minimum || shadowRadius / distance >= (demand.actor ? 0.02 : 0.005))
+			if (!std::isfinite(distance) || distance <= minimum || shadowRadius / distance >= (demand.actor ? ActorAngularSize : ObjectAngularSize))
 				return false;
 		}
 		return true;

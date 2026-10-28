@@ -364,7 +364,7 @@ namespace Util
 
 	bool IsInterior()
 	{
-		auto tes = RE::TES::GetSingleton();
+		auto* tes = globals::game::tes ? globals::game::tes : RE::TES::GetSingleton();
 		if (tes && !tes->interiorCell) {
 			if (auto worldSpace = tes->GetRuntimeData2().worldSpace) {
 				if (!worldSpace->flags.any(RE::TESWorldSpace::Flag::kNoSky, RE::TESWorldSpace::Flag::kFixedDimensions)) {

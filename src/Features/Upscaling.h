@@ -2780,6 +2780,12 @@ public:
 		uint32_t a_minDelayFrames = 0,
 		bool a_providerNeutralNativeRecovery = false);
 	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);
+	/** Per-draw admission only; queued mutation and unfinished drain cleanup remain authoritative. */
+	[[nodiscard]] bool HasPendingPerfModeRenderTargetWork() const noexcept
+	{
+		return pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		       vrRenderScaleRelatchDrainEpoch.load(std::memory_order_acquire) != 0;
+	}
 	/** Service settings relatches only after the complete native stereo submit has returned. */
 	void ServiceVRRenderScaleRelatchAtFrameBoundary();
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);

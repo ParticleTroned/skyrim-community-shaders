@@ -3,6 +3,24 @@
 // Substitute the engine registry while executing production preparation against D3D11.
 namespace RE
 {
+	struct BSShader
+	{
+		enum class Type
+		{
+			None,
+			Grass,
+			Sky,
+			Water,
+			BloodSplatter,
+			ImageSpace,
+			Lighting,
+			Effect,
+			Utility,
+			DistantTree,
+			Particle,
+			Total
+		};
+	};
 	enum class RENDER_TARGETS_DEPTHSTENCIL
 	{
 		kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM
@@ -74,7 +92,12 @@ namespace globals
 	struct State
 	{
 		bool directional = true;
-		bool HasDirectionalShadows() const { return directional; }
+		mutable unsigned directionalChecks = 0;
+		bool HasDirectionalShadows() const
+		{
+			++directionalChecks;
+			return directional;
+		}
 	};
 	inline State stateStorage;
 	inline State* state = &stateStorage;
@@ -130,7 +153,7 @@ struct VolumetricShadows
 	bool EnsureShadowCopyTextures();
 	void CopyShadowLightData();
 	static void SetSharedShadowMapSRV(ID3D11DeviceContext*, ID3D11ShaderResourceView*);
-	void SetShaderResources(ID3D11DeviceContext*);
+	void SetShaderResources(ID3D11DeviceContext*, RE::BSShader::Type);
 	void ReleaseComputeShaders();
 	void ClearShaderCache();
 	void ReleaseShadowCopyTextures();

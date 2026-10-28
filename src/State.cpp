@@ -549,7 +549,7 @@ void State::Draw()
 		if (volumetricShadows.loaded) {
 			ZoneScopedN("VolumetricShadows::SetShaderResources");
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::VolumetricShadowResources, stateDrawDiagFrame, stateDrawDiagActive);
-			volumetricShadows.SetShaderResources(context);
+			volumetricShadows.SetShaderResources(context, selectedCustomPixelShaderType);
 		}
 
 		if (permutationData != permutationDataPrevious) {
@@ -864,6 +864,7 @@ void State::UpdateSaveLoadSafeMode()
 
 void State::Reset()
 {
+	selectedCustomPixelShaderType = RE::BSShader::Type::None;
 	if (globals::game::isVR)
 		globals::profiler->EndFrame(frameCount);
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });

@@ -408,10 +408,23 @@ void VolumetricShadows::SetSharedShadowMapSRV(ID3D11DeviceContext* a_context, ID
 	a_context->PSSetShaderResources(kSharedShadowMapShaderSlot, 1, &a_srv);
 }
 
-void VolumetricShadows::SetShaderResources(ID3D11DeviceContext* a_context)
+void VolumetricShadows::SetShaderResources(ID3D11DeviceContext* a_context, RE::BSShader::Type a_shaderType)
 {
 	if (!a_context)
 		return;
+
+	// These families never sample the shared map. Consumers still rebind after native,
+	// deferred or hazard-driven context changes.
+	switch (a_shaderType) {
+	case RE::BSShader::Type::Grass:
+	case RE::BSShader::Type::Sky:
+	case RE::BSShader::Type::BloodSplatter:
+	case RE::BSShader::Type::Utility:
+	case RE::BSShader::Type::DistantTree:
+		return;
+	default:
+		break;
+	}
 
 	const bool hasDirectionalShadows = settings.Enabled && HasActiveDirectionalShadows();
 	if (hasDirectionalShadows)

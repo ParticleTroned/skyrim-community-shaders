@@ -53,7 +53,8 @@ public:
 	virtual void PostPostLoad() override;
 
 	void CopyShadowLightData();
-	void SetShaderResources(ID3D11DeviceContext* a_context);
+	/** Refreshes possible consumers; pass None unless the selected custom pixel family is known. */
+	void SetShaderResources(ID3D11DeviceContext* a_context, RE::BSShader::Type a_shaderType);
 
 	Util::LazyShader<ID3D11ComputeShader> downsampleShadowMip0CS;
 	Util::LazyShader<ID3D11ComputeShader> downsampleShadowMip1CS;

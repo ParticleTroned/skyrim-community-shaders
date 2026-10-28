@@ -50,6 +50,7 @@ namespace RE
 	{
 		enum class Type
 		{
+			None = -1,
 			Lighting,
 			Grass,
 			DistantTree,
@@ -98,6 +99,7 @@ struct TestState
 	bool developer = false, enablePShaders = true, settingCustomShader = false;
 	bool deferredPixelShaderMissing = false;
 	RE::BSShader* currentShader = nullptr;
+	RE::BSShader::Type selectedCustomPixelShaderType = RE::BSShader::Type::None;
 	uint32_t modifiedPixelDescriptor = 0;
 	uint32_t currentVertexDescriptor = 0, currentPixelDescriptor = 0, modifiedVertexDescriptor = 0;
 	uint32_t lastModifiedVertexDescriptor = 0, lastModifiedPixelDescriptor = 0, frameCount = 0;
@@ -218,7 +220,7 @@ namespace SIE
 		int blockedKeyIndex = -1;
 		std::string blockedKey;
 		std::vector<uint32_t> blockedIDs;
-		bool safeLoad = false, async = true, compilationSucceeds = true;
+		bool enabled = true, safeLoad = false, async = true, compilationSucceeds = true;
 		unsigned compiles = 0;
 		RE::BSGraphics::VertexShader* vertex = nullptr;
 		auto* GetVertexShader(const RE::BSShader&, uint32_t) { return vertex; }
@@ -234,7 +236,7 @@ namespace SIE
 			void Add(Task task) { requests.insert(task.descriptor); }
 		} compilationSet;
 		static bool IsSupportedShader(const RE::BSShader&) { return true; }
-		bool IsEnabled() const { return true; }
+		bool IsEnabled() const { return enabled; }
 		bool IsSaveLoadSafeModeActive() const { return safeLoad; }
 		bool ShouldUseAsyncCompilation() const { return async; }
 		void TrackActiveShader(ShaderClass, const RE::BSShader&, uint32_t) {}
@@ -504,8 +506,8 @@ bool nativeTechniqueReady = true;
 RE::BSGraphics::PixelShader* nativeTechniquePixel = nullptr;
 bool NativeTechnique(RE::BSShader*, uint32_t, uint32_t, bool skipPixel)
 {
-	if (nativeTechniqueReady)
-		Hooks::BSShader__BeginTechnique_SetPixelShader::thunk(nullptr, skipPixel ? nullptr : nativeTechniquePixel);
+	if (nativeTechniqueReady && !skipPixel)
+		Hooks::BSShader__BeginTechnique_SetPixelShader::thunk(nullptr, nativeTechniquePixel);
 	return nativeTechniqueReady;
 }
 void TestTechniqueAdmission()
@@ -518,25 +520,31 @@ void TestTechniqueAdmission()
 	// Native shader availability must not admit a draw with incompatible outputs.
 	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
 	Require(f.context.binds == 0 && f.state.deferredPixelShaderMissing);
-	// A new depth-only technique must not inherit the rejected pixel stage.
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
+	// A new depth-only technique must not inherit the rejected draw-admission state.
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, true));
-	Require(!f.state.deferredPixelShaderMissing && f.context.binds == 1 && f.context.bound == nullptr);
+	Require(!f.state.deferredPixelShaderMissing && f.context.binds == 0 && f.context.bound == nullptr);
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
 	auto* fallback = f.cache.Add(f.shader, plain);
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
 	Require(f.context.bound == fallback->shader);
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::Lighting);
 	nativeTechniqueReady = false;
 	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
 	ID3D11VertexShader nativeVS;
 	RE::BSGraphics::VertexShader vertex{ &nativeVS };
 	f.cache.vertex = &vertex;
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
 	Require(f.current == fallback && f.context.vertex == &nativeVS && !f.state.settingCustomShader);
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::Lighting);
 	// Depth-only fallback requires a vertex stage but never a pixel variant.
 	f.cache.pixelShaders[0].clear();
 	f.cache.compilationSet.requests.clear();
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, true));
 	Require(f.current == nullptr && !f.state.deferredPixelShaderMissing);
 	Require(f.context.bound == nullptr && f.cache.compilationSet.requests.empty());
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
 	// Effect techniques retain their native admission rules.
 	f.shader.shaderType.value = RE::BSShader::Type::Effect;
 	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
@@ -560,6 +568,28 @@ void TestWarningDeduplication()
 	Require(logger::warnings == 2);
 	state.RecordPreparationFailure(args, "category capture pending");
 	Require(logger::warnings == 3);
+}
+void TestPixelFamilyProof()
+{
+	Fixture f;
+	constexpr uint32_t descriptor = 0x10001u;
+	Hooks::BSShader_BeginTechnique::func = NativeTechnique;
+	nativeTechniqueReady = true;
+	nativeTechniquePixel = &f.native;
+	auto* lighting = f.cache.Add(f.shader, descriptor);
+	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	Require(f.context.bound == lighting->shader && f.state.selectedCustomPixelShaderType == RE::BSShader::Type::Lighting);
+	// Skipping the pixel stage can retain a consuming shader from a different family.
+	f.shader.shaderType.value = RE::BSShader::Type::Utility;
+	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, true));
+	Require(f.context.bound == lighting->shader && f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
+	auto* utility = f.cache.Add(f.shader, descriptor);
+	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	Require(f.context.bound == utility->shader && f.state.selectedCustomPixelShaderType == RE::BSShader::Type::Utility);
+	// Native selection must not reuse the custom shader's resource-consumer proof.
+	f.cache.enabled = false;
+	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	Require(f.context.bound == f.native.shader && f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
 }
 void TestSeamTechniqueFallback()
 {
@@ -592,12 +622,14 @@ void TestNullPixelBinding()
 	for (bool cached : { false, true }) {
 		Fixture f;
 		f.context.bound = f.native.shader;
+		f.state.selectedCustomPixelShaderType = RE::BSShader::Type::Lighting;
 		f.current = &f.native;
 		f.state.modifiedPixelDescriptor = 0x10021u;
 		if (cached)
 			f.cache.Add(f.shader, f.state.modifiedPixelDescriptor);
 		Hooks::BSShader__BeginTechnique_SetPixelShader::thunk(nullptr, nullptr);
 		Require(f.context.bound == nullptr && f.current == nullptr);
+		Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
 		Require(!f.state.deferredPixelShaderMissing && f.deferred.captureReady);
 		Require(f.cache.compilationSet.requests.empty());
 	}
@@ -677,6 +709,7 @@ int main()
 			TestBoundGrassVariant();
 			TestNullPixelBinding();
 			TestTechniqueAdmission();
+			TestPixelFamilyProof();
 			TestSeamTechniqueFallback();
 			TestPBRPrewarming();
 			TestSeamPrewarming();

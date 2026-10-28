@@ -98,6 +98,8 @@ public:
 	// A deferred draw must be withheld if neither compatible pixel variant is ready.
 	bool deferredPixelShaderMissing = false;
 	RE::BSShader* currentShader = nullptr;
+	// Only an explicitly bound custom pixel stage proves which shared resources it consumes.
+	RE::BSShader::Type selectedCustomPixelShaderType = RE::BSShader::Type::None;
 	std::string adapterDescription = "";
 
 	uint32_t currentVertexDescriptor = 0;

@@ -778,6 +778,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 
 	state->updateShader = true;
 	state->currentShader = shader;
+	state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
 	state->deferredPixelShaderMissing = false;
 
 	state->currentVertexDescriptor = vertexDescriptor;
@@ -831,6 +832,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
 			*globals::game::currentPixelShader = pixelShader;
 			globals::d3d::context->PSSetShader(pixelShader ? reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader) : nullptr, NULL, NULL);
+			state->selectedCustomPixelShaderType = pixelShader ? shader->shaderType.get() : RE::BSShader::Type::None;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (globals::features::upscaling.IsNeuralRenderingEnabled())
 				NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
@@ -855,6 +857,8 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		RecordCSFrameHookPhase(CSFrameHookPhase::BeginTechniqueTotal, phaseDiagFrame, totalEndTicks - totalStartTicks);
 	}
 
+	if (skipPixelShader || !shaderFound || state->deferredPixelShaderMissing)
+		state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
 	return shaderFound && !state->deferredPixelShaderMissing;
 }
 
@@ -1017,8 +1021,9 @@ namespace GrassExtensions
 	{
 		static bool thunk(RE::BSShader* shader, uint32_t technique)
 		{
-			const bool ready = func(shader, technique);
 			auto* state = globals::state;
+			state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
+			const bool ready = func(shader, technique);
 			auto* cache = globals::shaderCache;
 			const bool needsCustomPair = globals::features::grassOptimizations.loaded ||
 			                             (globals::features::truePBR.loaded && globals::features::grassLighting.loaded);
@@ -1033,6 +1038,7 @@ namespace GrassExtensions
 				// Native setup must address the reflected constants of the bound grass pair.
 				globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertex->shader), nullptr, 0);
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixel->shader), nullptr, 0);
+				state->selectedCustomPixelShaderType = RE::BSShader::Type::Grass;
 				*globals::game::currentVertexShader = vertex;
 				*globals::game::currentPixelShader = pixel;
 				globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
@@ -1046,6 +1052,7 @@ namespace GrassExtensions
 				auto* nativePixel = *globals::game::currentPixelShader;
 				globals::d3d::context->VSSetShader(nativeVertex ? reinterpret_cast<ID3D11VertexShader*>(nativeVertex->shader) : nullptr, nullptr, 0);
 				globals::d3d::context->PSSetShader(nativePixel ? reinterpret_cast<ID3D11PixelShader*>(nativePixel->shader) : nullptr, nullptr, 0);
+				state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
 			}
 			return ready;
 		}
@@ -1775,6 +1782,7 @@ namespace Hooks
 		{
 			auto state = globals::state;
 			auto shaderCache = globals::shaderCache;
+			state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
 
 			if (!state->settingCustomShader && a_pixelShader) {
 				if (shaderCache->IsEnabled()) {
@@ -1784,6 +1792,7 @@ namespace Hooks
 						RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
 						if (pixelShader) {
 							globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+							state->selectedCustomPixelShaderType = type;
 							*globals::game::currentPixelShader = a_pixelShader;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 							if (globals::features::upscaling.IsNeuralRenderingEnabled())

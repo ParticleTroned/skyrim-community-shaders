@@ -116,6 +116,7 @@ public:
 	virtual SettingsHeaderStatus GetSettingsHeaderStatus() const { return {}; }
 	/** Uses the existing runtime toggle, retaining the feature's enabled configuration. */
 	virtual void DrawSettingsEnabledControl();
+	/** Additional header information; master switches belong in DrawSettingsEnabledControl(). */
 	virtual void DrawSettingsHeaderControls() {}
 	/** Brief requirements shown above the settings actions. */
 	virtual std::string_view GetSettingsFooterText() const { return {}; }

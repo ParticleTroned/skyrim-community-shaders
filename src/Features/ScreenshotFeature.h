@@ -60,7 +60,6 @@ struct ScreenshotFeature : public Feature
 
 	void DrawSettingsEnabledControl() override;
 
-	virtual void DrawSettingsHeaderControls() override;
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override { return { "Captures screenshots or image sequences from the desktop view or headset.", {} }; }
 	virtual void DrawSettings() override;
 	/** Load a settings layer, migrating a supplied legacy eye only when canonical selection is absent. */

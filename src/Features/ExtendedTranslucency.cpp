@@ -17,14 +17,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 const RE::BSFixedString ExtendedTranslucency::NiExtraDataName_AnisotropicAlphaMaterial = "AnisotropicAlphaMaterial";
 
-namespace
-{
-	void DrawEnabledCheckbox(ExtendedTranslucency::Settings& a_settings)
-	{
-		Util::Widgets::Checkbox("Enabled", &a_settings.Enabled);
-	}
-}
-
 void ExtendedTranslucency::BSLightingShader_SetupGeometry(RE::BSRenderPass* pass)
 {
 	auto SetFeatureDescriptor = [](int material) {
@@ -103,7 +95,6 @@ void ExtendedTranslucency::DrawSettings()
 	if (!page.Is("appearance"))
 		return;
 
-	DrawEnabledCheckbox(settings);
 	ImGui::BeginDisabled(!settings.Enabled);
 
 	{

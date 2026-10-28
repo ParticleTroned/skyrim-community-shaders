@@ -400,12 +400,6 @@ void WetnessEffects::DrawSettings()
 		ImGui::Spacing();
 	}
 	if (page.Is("surface")) {
-		if (Util::UIntCheckbox("Enabled", settings.EnableWetnessEffects)) {
-			Ripples::UpdateSettings();  // Update cache when settings change
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enables a wetness effect near water and when it is raining.");
-		}
 		Util::Widgets::SliderFloat("Rain Wetness", &settings.MaxRainWetness, 0.0f, 2.5f);
 		if (ImGui::IsItemDeactivatedAfterEdit())
 			DetectCurrentPreset();

@@ -46,9 +46,7 @@ void CloudShadows::DrawSettings()
 	if (!page.Is("appearance"))
 		return;
 
-	const bool enabled = DrawEnabledCheckbox(settings);
-
-	ImGui::BeginDisabled(!enabled);
+	ImGui::BeginDisabled(settings.Enabled == 0);
 	Util::Widgets::SliderFloat("Opacity", &settings.Opacity, 0.0f, 1.0f, "%.1f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(

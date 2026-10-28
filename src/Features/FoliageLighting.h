@@ -40,7 +40,6 @@ public:
 		};
 	}
 
-	virtual void DrawSettingsHeaderControls() override;
 	virtual void DrawSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool) override;

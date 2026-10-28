@@ -1760,18 +1760,6 @@ void ScreenshotFeature::DrawSettingsEnabledControl()
 	Util::AddTooltip("Controls Community Shaders captures. Vanilla Skyrim screenshots are unaffected.");
 }
 
-void ScreenshotFeature::DrawSettingsHeaderControls()
-{
-	bool runtimeEnabled = enabled.load(std::memory_order_acquire);
-	if (Util::Widgets::Checkbox("Enable Community Shaders Screenshots", &runtimeEnabled)) {
-		SetEnabled(runtimeEnabled);
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Controls the Community Shaders screenshot hotkey and manual capture button.");
-		ImGui::Text("Vanilla Skyrim screenshots are unaffected.");
-	}
-}
-
 void ScreenshotFeature::PostPostLoad()
 {
 	// Seed VR-specific presets here rather than in LoadSettings: Feature::Load

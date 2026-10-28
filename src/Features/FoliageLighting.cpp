@@ -63,15 +63,6 @@ void FoliageLighting::SanitizeSettings(Settings& a_settings)
 	}
 }
 
-void FoliageLighting::DrawSettingsHeaderControls()
-{
-	bool foliageLightingEnabled = IsEnabled();
-	if (Util::Widgets::Checkbox("Enabled", &foliageLightingEnabled))
-		SetEnabled(foliageLightingEnabled);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Controls all tree foliage and grass lighting additions while preserving their saved tuning.");
-}
-
 void FoliageLighting::DrawFoliageScatteringSetting()
 {
 	Util::UIntCheckbox("Foliage Scattering", settings.EnableFoliageScattering);
@@ -150,7 +141,7 @@ void FoliageLighting::DrawSettings()
 void FoliageLighting::DrawPerformanceSettings(bool)
 {
 	SanitizeSettings(settings);
-	DrawSettingsHeaderControls();
+	DrawSettingsEnabledControl();
 	ImGui::BeginDisabled(!IsEnabled());
 	const bool truePBRActive = IsTruePBRActive();
 	DrawFoliageScatteringSetting();

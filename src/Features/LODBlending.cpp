@@ -61,15 +61,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LODObjectSnowGamma,
 	WaterReflectionStrength)
 
-namespace
-{
-	bool DrawEnabledCheckbox(bool& a_enabled)
-	{
-		Util::Widgets::Checkbox("Enabled", &a_enabled);
-		return a_enabled;
-	}
-}
-
 void LODBlending::DrawSettings()
 {
 	settings.WaterReflectionStrength = ClampWaterReflectionStrength(settings.WaterReflectionStrength);
@@ -80,9 +71,7 @@ void LODBlending::DrawSettings()
 	if (!page.Is("appearance"))
 		return;
 
-	const bool enabled = DrawEnabledCheckbox(Enabled);
-
-	ImGui::BeginDisabled(!enabled);
+	ImGui::BeginDisabled(!Enabled);
 	Util::Widgets::SliderFloat("LOD Terrain Brightness", &settings.LODTerrainBrightness, 0.01f, 5.f, "%.2f");
 	Util::Widgets::SliderFloat("LOD Object Brightness", &settings.LODObjectBrightness, 0.01f, 5.f, "%.2f");
 	Util::Widgets::SliderFloat("LOD Object Snow Brightness", &settings.LODObjectSnowBrightness, 0.01f, 5.f, "%.2f");

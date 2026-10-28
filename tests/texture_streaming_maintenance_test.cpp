@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -293,14 +294,135 @@ int main()
 		cadence.Complete(30000);
 		Require(cadence.lastDurationMs == 20000 && !cadence.Due(34999) && cadence.Due(35000), "Long scan diagnostics or capped rest duration changed");
 		cadence.Update(InventoryWork::Idle, 40000);
-		Require(!cadence.NeedsDemand(InventoryWork::Idle, 40001, 0), "Idle world requested camera work");
-		Require(cadence.NeedsDemand(InventoryWork::Active, 40001, 0), "Pressure/cap/reduced/pending wakeup skipped fresh demand");
+		Require(!cadence.NeedsDemand(InventoryWork::Idle, 40001, 0, false), "Idle world requested camera work");
+		Require(cadence.NeedsDemand(InventoryWork::Active, 40001, 0, false), "Pressure/cap/reduced/pending wakeup skipped fresh demand");
 		cadence.Update(InventoryWork::Learning, 40000);
-		Require(!cadence.NeedsDemand(InventoryWork::Learning, 44999, 0) && cadence.NeedsDemand(InventoryWork::Learning, 45000, 0), "Learning demand ignored scan cadence");
+		Require(!cadence.NeedsDemand(InventoryWork::Learning, 44749, 0, false) && !cadence.NeedsDemand(InventoryWork::Learning, 44750, 0, false) &&
+					cadence.NeedsDemand(InventoryWork::Learning, 45000, 0, false),
+			"An initial inventory prefetched demand without a reusable checkpoint");
 		cadence.Begin(45000);
-		Require(cadence.NeedsDemand(InventoryWork::Learning, 45001, 0), "In-progress inventory lost fresh demand");
+		Require(cadence.NeedsDemand(InventoryWork::Learning, 45001, 0, false), "In-progress inventory lost fresh demand");
 		cadence.Complete(45002);
-		Require(cadence.NeedsDemand(InventoryWork::Learning, 45003, 1) && !cadence.NeedsDemand(InventoryWork::Learning, 45003, 0), "Learning completion did not gate camera work");
+		Require(cadence.NeedsDemand(InventoryWork::Learning, 45003, 1, false) && !cadence.NeedsDemand(InventoryWork::Learning, 45003, 0, false), "Learning completion did not gate camera work");
+
+		StreamingTextures::DemandContext demand;
+		demand.eyeCount = 2;
+		demand.frame = 100;
+		demand.sampledAtMs = 50000;
+		demand.mipBias = -1;
+		for (auto& eye : demand.eyes)
+			eye = { 1000, 1200, 1500, 1800, 1, 1, 0 };
+		int root = 0, replacementRoot = 0;
+		StreamingTextures::WorkSchedule learning;
+		learning.Update(InventoryWork::Learning, 45000);
+		Require(!learning.DeferUnchangedLearning(50000, 100, demand, 1, 1, &root, false), "The first learning inventory was skipped");
+		learning.Begin(50000);
+		learning.Complete(50100);
+		const auto learned = learning;
+		Require(!learning.NeedsDemand(InventoryWork::Learning, 54849, 0, false) &&
+					learning.NeedsDemand(InventoryWork::Learning, 54850, 0, false),
+			"Reusable learning lost its bounded prefetch window");
+		for (std::uint64_t now = 54850; now < 55100; ++now)
+			Require(!learning.NeedsDemand(InventoryWork::Learning, now, 0, true),
+				"A loading or reduction catalog prefetched demand that could not be reused");
+		Require(learning.NeedsDemand(InventoryWork::Learning, 55100, 0, true) &&
+					learning.NeedsDemand(InventoryWork::Learning, 54850, 1, true) &&
+					learning.NeedsDemand(InventoryWork::Active, 54850, 0, true),
+			"Catalog guards suppressed due inventory, learning selection or pressure demand");
+		StreamingTextures::DemandContext captured;
+		if (learning.NeedsDemand(InventoryWork::Learning, 55099, 0, false)) {
+			captured = demand;
+			captured.sampledAtMs = 55099;
+		}
+		Require(learning.DeferUnchangedLearning(55101, 100, captured, 1, 1, &root, false),
+			"Crossing the learning deadline between world update and Present defeated inventory reuse");
+		learning = learned;
+		auto catalogRefresh = learned;
+		demand.sampledAtMs = 55100;
+		Require(!catalogRefresh.DeferUnchangedLearning(55100, 100, demand, 1, 1, &root, true) && catalogRefresh.Due(55100),
+			"A loading catalog or remembered reduction extended the normal inventory interval");
+		catalogRefresh.Begin(55100);
+		catalogRefresh.Complete(55200);
+		demand.sampledAtMs = 60200;
+		Require(!catalogRefresh.DeferUnchangedLearning(60200, 100, demand, 1, 1, &root, false),
+			"Removing remembered reductions reused a checkpoint from before normal inventories");
+		for (std::uint64_t now = 55100; now < 80000; now += 5000) {
+			demand.sampledAtMs = now;
+			Require(learning.DeferUnchangedLearning(now, 100, demand, 1, 1, &root, false), "Unchanged learning traversed the scene again");
+		}
+		Require(learning.nextScanMs == 80000, "Unknown consumer changes escaped the bounded refresh");
+		Require(!learning.NeedsDemand(InventoryWork::Learning, 79750, 0, false) &&
+					learning.NeedsDemand(InventoryWork::Learning, 80000, 0, false),
+			"Mandatory learning refresh prefetched demand that could not be reused");
+		demand.sampledAtMs = 80000;
+		Require(!learning.DeferUnchangedLearning(80000, 100, demand, 1, 1, &root, false), "Full learning refresh was suppressed indefinitely");
+
+		demand.sampledAtMs = 55100;
+		const auto mustRefresh = [&](StreamingTextures::DemandContext changed, std::uint64_t epoch, std::uint64_t resources, const void* world,
+									 std::uint32_t frame = 100, std::uint64_t now = 55100) {
+			auto candidate = learned;
+			Require(!candidate.DeferUnchangedLearning(now, frame, changed, epoch, resources, world, false), "Changed or invalid learning inputs reused an inventory");
+		};
+		mustRefresh(demand, 2, 1, &root);
+		mustRefresh(demand, 1, 2, &root);
+		mustRefresh(demand, 1, 1, &replacementRoot);
+		mustRefresh(demand, 1, 1, nullptr);
+		mustRefresh(demand, 1, 1, &root, 102);
+		mustRefresh(demand, 1, 1, &root, 100, 55351);
+		mustRefresh(demand, 1, 1, &root, 100, 49999);
+		for (unsigned eye = 0; eye < 2; ++eye) {
+			auto changed = demand;
+			changed.positions[eye][0] = static_cast<float>(StreamingTextures::WorkSchedule::LearningMovement);
+			mustRefresh(changed, 1, 1, &root);
+			changed = demand;
+			changed.positions[eye][1] = std::numeric_limits<float>::quiet_NaN();
+			mustRefresh(changed, 1, 1, &root);
+			changed = demand;
+			changed.eyes[eye].projectionX = 1.1;
+			mustRefresh(changed, 1, 1, &root);
+			changed = demand;
+			changed.eyes[eye].renderWidth = 900;
+			mustRefresh(changed, 1, 1, &root);
+			changed = demand;
+			changed.eyes[eye].outputHeight = 0;
+			mustRefresh(changed, 1, 1, &root);
+		}
+		for (unsigned eyes : { 0u, 1u, 3u }) {
+			auto changed = demand;
+			changed.eyeCount = eyes;
+			mustRefresh(changed, 1, 1, &root);
+		}
+		for (double bias : { 0.0, 17.0, std::numeric_limits<double>::infinity() }) {
+			auto changed = demand;
+			changed.mipBias = bias;
+			mustRefresh(changed, 1, 1, &root);
+		}
+		learning = learned;
+		demand.positions[0][0] = 1;
+		Require(learning.DeferUnchangedLearning(55100, 100, demand, 1, 1, &root, false), "Small HMD movement defeated idle learning reuse");
+		demand.positions[0][0] = static_cast<float>(StreamingTextures::WorkSchedule::LearningMovement);
+		demand.sampledAtMs = 60100;
+		Require(!learning.DeferUnchangedLearning(60100, 100, demand, 1, 1, &root, false), "Small steps moved the baseline and hid cumulative motion");
+		learning = learned;
+		learning.Reset(55100);
+		demand.positions[0][0] = 0;
+		Require(!learning.DeferUnchangedLearning(60100, 100, demand, 1, 1, &root, false), "Inventory invalidation retained learning reuse");
+		learning = learned;
+		learning.Update(InventoryWork::Active, 55100);
+		Require(!learning.DeferUnchangedLearning(60100, 100, demand, 1, 1, &root, false) && learning.Due(55100), "Learning reuse blocked pressure/cap/reduced/pending work");
+		learning = learned;
+		learning.Begin(55100);
+		Require(!learning.DeferUnchangedLearning(60100, 100, demand, 1, 1, &root, false), "Learning reuse interrupted an unfinished inventory");
+		learning.Complete(60100);
+		demand.sampledAtMs = 65100;
+		Require(!learning.DeferUnchangedLearning(65100, 100, demand, 1, 2, &root, false), "An origin change during scanning was hidden by completion");
+		learning.Reset(65100);
+		demand.eyes[1].projectionY = 0;
+		Require(!learning.DeferUnchangedLearning(65100, 100, demand, 1, 1, &root, false), "Invalid projection suppressed the first scan");
+		learning.Begin(65100);
+		learning.Complete(65100);
+		demand.sampledAtMs = 70100;
+		Require(!learning.DeferUnchangedLearning(70100, 100, demand, 1, 1, &root, false), "Repeated invalid projections authorized learning reuse");
 		std::cout << "PASS: production Tick idle/learning/pressure/cap/restore/preview/transition/device/frame gates and scan cadence\n";
 		return 0;
 	} catch (const std::exception& error) {

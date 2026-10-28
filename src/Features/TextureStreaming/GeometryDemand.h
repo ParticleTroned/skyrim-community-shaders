@@ -24,12 +24,19 @@ namespace StreamingTextures
 	);
 	struct DemandContext
 	{
+		static constexpr std::uint64_t MaximumAgeMs = 250;
 		std::array<TextureStreamingPolicy::Eye, 2> eyes{};
 		std::array<std::array<float, 3>, 2> positions{}, forward{};
 		unsigned eyeCount = 0;
 		double mipBias = 0;
 		std::uint32_t frame = UINT32_MAX;
 		std::uint64_t sampledAtMs = 0;
+		/** Unknown eyes and stale snapshots cannot establish current texture demand. */
+		[[nodiscard]] bool Fresh(std::uint32_t currentFrame, std::uint64_t now) const noexcept
+		{
+			return eyeCount && eyeCount <= eyes.size() && frame != UINT32_MAX && currentFrame - frame <= 1 &&
+			       now >= sampledAtMs && now - sampledAtMs <= MaximumAgeMs;
+		}
 	};
 	/** Estimate texture demand from projected world bounds, both eyes and effective shader bias. */
 	double RequiredEdge(RE::BSGeometry* geometry, const DemandContext& demand);

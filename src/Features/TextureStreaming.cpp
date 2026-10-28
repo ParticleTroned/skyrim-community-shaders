@@ -958,6 +958,9 @@ void TextureStreaming::State::Scan(Deadline deadline)
 			SuspendInventory("Invalid world inventory root; texture streaming suspended until restart");
 			return;
 		}
+		if (workSchedule.DeferUnchangedLearning(now, globals::state->frameCount, demand, epoch, originSerial.load(), root,
+				StreamingTextures::LoadHooks::NeedsLearningRefresh()))
+			return;
 		++scan;
 		workSchedule.Begin(now);
 		visited.clear();
@@ -1745,7 +1748,9 @@ void TextureStreaming::CaptureWorldDemand(float mipBias)
 	auto& demand = state->demand;
 	demand = {};
 	const auto now = GetTickCount64();
-	if (!state->workSchedule.NeedsDemand(state->InventoryMode(), now, state->learningRemaining))
+	const auto work = state->InventoryMode();
+	if (!state->workSchedule.NeedsDemand(work, now, state->learningRemaining,
+			work != StreamingTextures::InventoryWork::Learning || StreamingTextures::LoadHooks::NeedsLearningRefresh()))
 		return;
 	const auto& plan = globals::features::upscaling.GetRuntimeResolutionPlan();
 	if (plan.menuContextActive || plan.loadingMenuActive || globals::state->IsSaveLoadSafeModeActive())

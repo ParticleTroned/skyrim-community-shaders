@@ -25,6 +25,8 @@ namespace StreamingTextures::LoadHooks
 			std::array<std::optional<ReducedLoad>, maximumLoads> pending;
 			std::size_t read = 0, write = 0;
 			std::atomic_bool pendingReady{ false };
+			std::size_t rememberedReductions = 0;
+			std::atomic_bool learningRefreshRequired{ true };
 			std::shared_ptr<std::atomic_size_t> activeLoads = std::make_shared<std::atomic_size_t>(0);
 			std::uint64_t revision = 0, savedRevision = 0, hits = 0, rejected = 0, failures = 0;
 			bool enabled = true, ready = false, hookReady = false, protectionLimit = false;
@@ -35,6 +37,17 @@ namespace StreamingTextures::LoadHooks
 			std::filesystem::path path;
 			std::string error;
 			std::jthread worker;
+
+			void PublishLearningRefresh() noexcept
+			{
+				learningRefreshRequired.store(!ready || rememberedReductions != 0, std::memory_order_release);
+			}
+			void Erase(std::unordered_map<std::string, RememberedSize>::iterator entry)
+			{
+				rememberedReductions -= entry->second.drop != 0;
+				entries.erase(entry);
+				++revision;
+			}
 
 			~Catalog()
 			{
@@ -88,8 +101,10 @@ namespace StreamingTextures::LoadHooks
 							throw std::runtime_error("Remembered-size file has an unsupported schema");
 						std::scoped_lock lock(mutex);
 						for (const auto& [name, value] : document["entries"].items())
-							if (const auto entry = ParseRememberedSize(name, value); entry && entries.size() < maximumEntries && !protectedPaths.contains(name))
-								entries.try_emplace(name, *entry);
+							if (const auto entry = ParseRememberedSize(name, value); entry && entries.size() < maximumEntries && !protectedPaths.contains(name)) {
+								const auto [position, inserted] = entries.try_emplace(name, *entry);
+								rememberedReductions += inserted && position->second.drop != 0;
+							}
 					} else if (ec != std::errc::no_such_file_or_directory) {
 						throw std::runtime_error(ec.message());
 					}
@@ -102,6 +117,7 @@ namespace StreamingTextures::LoadHooks
 				{
 					std::scoped_lock lock(mutex);
 					ready = true;
+					PublishLearningRefresh();
 				}
 				while (true) {
 					std::unique_lock lock(mutex);
@@ -299,6 +315,7 @@ namespace StreamingTextures::LoadHooks
 		catalog.pendingReady.store(catalog.pending[catalog.read].has_value(), std::memory_order_release);
 		return result;
 	}
+	bool NeedsLearningRefresh() { return catalog.learningRefreshRequired.load(std::memory_order_acquire); }
 	void Remember(const std::string& path, const RememberedSize& size)
 	{
 		if (!size.Valid(path))
@@ -306,13 +323,18 @@ namespace StreamingTextures::LoadHooks
 		std::scoped_lock lock(catalog.mutex);
 		if (catalog.protectionLimit || catalog.protectedPaths.contains(path))
 			return;
-		if (const auto found = catalog.entries.find(path); found != catalog.entries.end() &&
-														   found->second == size)
+		const auto found = catalog.entries.find(path);
+		if (found != catalog.entries.end() && found->second == size)
 			return;
-		if (catalog.entries.size() >= maximumEntries && !catalog.entries.contains(path))
-			catalog.entries.erase(catalog.entries.begin());
-		catalog.entries[path] = size;
+		catalog.learningRefreshRequired.store(true, std::memory_order_release);
+		const bool replacingReduction = found != catalog.entries.end() && found->second.drop != 0;
+		if (catalog.entries.size() >= maximumEntries && found == catalog.entries.end())
+			catalog.Erase(catalog.entries.begin());
+		catalog.entries.insert_or_assign(path, size);
+		catalog.rememberedReductions -= replacingReduction;
+		catalog.rememberedReductions += size.drop != 0;
 		++catalog.revision;
+		catalog.PublishLearningRefresh();
 	}
 	void Forget(const std::string& path)
 	{
@@ -322,11 +344,13 @@ namespace StreamingTextures::LoadHooks
 		else if (!catalog.protectedPaths.contains(path) && !catalog.protectionLimit) {
 			catalog.protectionLimit = true;
 			catalog.entries.clear();
+			catalog.rememberedReductions = 0;
 			++catalog.revision;
 			logger::warn("[TextureStreaming] Remembered-size protection limit reached; reduced loads are suspended until restart");
 		}
-		if (catalog.entries.erase(path))
-			++catalog.revision;
+		if (const auto found = catalog.entries.find(path); found != catalog.entries.end())
+			catalog.Erase(found);
+		catalog.PublishLearningRefresh();
 	}
 	nlohmann::json Status()
 	{

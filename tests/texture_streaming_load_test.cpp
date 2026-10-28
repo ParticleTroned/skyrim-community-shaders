@@ -186,6 +186,7 @@ int main()
 	using namespace StreamingTextures;
 	namespace Hooks = StreamingTextures::LoadHooks;
 	try {
+		Require(Hooks::NeedsLearningRefresh(), "An unknown catalog allowed deferred learning");
 		ComPtr<ID3D11Device> device;
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, nullptr));
 		DirectX::ScratchImage pixels;
@@ -247,15 +248,31 @@ int main()
 		Util::PathHelpers::testPath = std::filesystem::temp_directory_path() / ("csx-streaming-test-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(GetTickCount64()));
 		std::filesystem::create_directory(Util::PathHelpers::testPath);
 		const auto cachePath = Util::PathHelpers::testPath / "TextureStreamingSizes.json";
+		const std::string earlyPath = "textures\\architecture\\early.dds";
+		Hooks::Remember(earlyPath, entry);
+		Require(Hooks::NeedsLearningRefresh(), "Learning resumed before the persistent catalog was ready");
 		{
 			std::ofstream file(cachePath);
-			file << nlohmann::json{ { "version", 1 }, { "entries", { { path, SerializeRememberedSize(entry) } } } }.dump();
+			file << nlohmann::json{ { "version", 1 }, { "entries", { { path, SerializeRememberedSize(entry) }, { earlyPath, SerializeRememberedSize(entry) } } } }.dump();
 		}
 		Hooks::Install();
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
 		while (!Hooks::Status().at("ready").get<bool>() && std::chrono::steady_clock::now() < deadline)
 			std::this_thread::yield();
-		Require(Hooks::Status().at("entries") == 1, "Worker did not load the previous session's validated size");
+		Require(Hooks::Status().at("entries") == 2, "Worker did not merge the previous session's validated size");
+		Hooks::Forget(earlyPath);
+		Require(Hooks::NeedsLearningRefresh(), "A persisted reduction did not retain normal learning cadence");
+		auto fullSize = entry;
+		fullSize.drop = 0;
+		Hooks::Remember(path, entry);
+		Hooks::Remember(path, fullSize);
+		Require(!Hooks::NeedsLearningRefresh(), "Replacing the last reduction retained a stale refresh requirement");
+		Hooks::Remember(path, fullSize);
+		Hooks::Remember(path, entry);
+		const std::string secondPath = "textures\\architecture\\second.dds";
+		Hooks::Remember(secondPath, entry);
+		Hooks::Forget(secondPath);
+		Require(Hooks::NeedsLearningRefresh(), "Removing one reduction hid another eligible entry");
 		Hooks::Configure(true, { false, true }, {}, {}, 2);
 		RE::NiSourceTexture source{ path };
 		ComPtr<ID3D11Texture2D> reduced;
@@ -328,8 +345,26 @@ int main()
 		};
 		Hooks::Create(nullptr, &source);
 		Require(Hooks::Status().at("rejectedSources") == 1 && Hooks::Status().at("entries") == 0, "Changed DDS was not invalidated");
+		Require(!Hooks::NeedsLearningRefresh(), "Source invalidation retained the last remembered reduction");
 		Hooks::Remember(path, entry);
 		Require(Hooks::Status().at("entries") == 0, "A protected source was relearned in the same session");
+		for (std::size_t i = 0; i < Hooks::maximumEntries; ++i)
+			Hooks::Remember("textures\\architecture\\catalog-" + std::to_string(i) + ".dds", fullSize);
+		Require(!Hooks::NeedsLearningRefresh(), "Full-size entries unnecessarily required normal learning cadence");
+		std::string evicted;
+		{
+			const std::scoped_lock lock(Hooks::catalog.mutex);
+			evicted = Hooks::catalog.entries.begin()->first;
+		}
+		Hooks::Remember(evicted, entry);
+		Require(Hooks::NeedsLearningRefresh(), "Replacing a full-size entry lost its reduction");
+		Hooks::Remember("textures\\architecture\\replacement.dds", fullSize);
+		Require(!Hooks::NeedsLearningRefresh(), "Evicting the last reduction retained a stale refresh requirement");
+		Hooks::Remember("textures\\architecture\\replacement.dds", entry);
+		for (std::size_t i = 0; i < Hooks::maximumEntries; ++i)
+			Hooks::Forget("textures\\architecture\\protected-" + std::to_string(i) + ".dds");
+		Require(Hooks::Status().at("protectionLimit") && Hooks::Status().at("entries") == 0 && !Hooks::NeedsLearningRefresh(),
+			"Protection-limit clearing left remembered reductions eligible");
 		Hooks::catalog.worker.request_stop();
 		Hooks::catalog.wake.notify_all();
 		Hooks::catalog.worker.join();
@@ -339,6 +374,26 @@ int main()
 			file >> saved;
 		}
 		Require(saved.at("entries").empty(), "Invalidation was not persisted on shutdown");
+		std::stop_source stopped;
+		stopped.request_stop();
+		{
+			Hooks::Catalog empty;
+			empty.path = cachePath;
+			empty.Run(stopped.get_token());
+			Require(empty.ready && !empty.learningRefreshRequired.load() && !empty.rememberedReductions,
+				"An empty persisted catalog retained an unknown refresh requirement");
+		}
+		{
+			std::ofstream file(cachePath, std::ios::trunc);
+			file << "malformed";
+		}
+		{
+			Hooks::Catalog failed;
+			failed.path = cachePath;
+			failed.Run(stopped.get_token());
+			Require(failed.ready && failed.failures == 1 && !failed.learningRefreshRequired.load() && !failed.rememberedReductions,
+				"A rejected catalog retained unknown or phantom reductions");
+		}
 		std::filesystem::remove(cachePath);
 		std::filesystem::remove(Util::PathHelpers::testPath);
 		std::cout << "PASS: remembered source validation, load hooks, cap and reserve controls, persistence and ownership transfer\n";

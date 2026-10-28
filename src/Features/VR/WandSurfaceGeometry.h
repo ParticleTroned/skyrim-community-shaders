@@ -110,7 +110,7 @@ namespace WandSurfaceGeometry
 			return false;
 
 		const float distance = Dot(a_surface.topLeft - a_rayOrigin, normal) / denominator;
-		if (distance <= 0.0f)
+		if (!(distance > 0.0f && distance <= std::numeric_limits<float>::max()))
 			return false;
 
 		const Vector fromTopLeft = a_rayOrigin + a_rayDirection * distance - a_surface.topLeft;
@@ -125,7 +125,7 @@ namespace WandSurfaceGeometry
 
 		const float u = (hitRight * downDown - hitDown * rightDown) / determinant;
 		const float v = (hitDown * rightRight - hitRight * rightDown) / determinant;
-		if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f)
+		if (!(u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f))
 			return false;
 
 		a_hit = { u, v, distance };

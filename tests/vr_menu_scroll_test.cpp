@@ -150,6 +150,10 @@ namespace RE
 	};
 	struct BSOpenVRControllerDevice
 	{
+		struct Keys
+		{
+			static constexpr size_t kTrigger = 0;
+		};
 		static bool IsLeftHandedMode() { return Runtime::leftHanded; }
 		static bool IsPrimaryController(size_t device) { return device == Runtime::PhysicalHand(0); }
 		static bool IsSecondaryController(size_t device) { return device == Runtime::PhysicalHand(1); }
@@ -168,14 +172,17 @@ namespace RE
 		struct Button
 		{
 			bool isPressed = false;
+			void OnEvent(bool pressed, double) { isPressed = pressed; }
 		};
 		std::array<Button, 2> buttons{};
+		Button& operator[](size_t key) { return buttons.at(key); }
 		const Button& operator[](size_t key) const { return buttons.at(key); }
 	};
 }
 
 namespace Util
 {
+	double GetNowSecs() { return 0.0; }
 #include "ui_vr_runtime_state.h"
 	vr::TrackedDeviceIndex_t GetControllerIndexForDevice(ControllerDevice role, bool leftHanded)
 	{
@@ -219,6 +226,7 @@ struct VR
 	std::vector<VRControllerEventLog> vrControllerEventLog;
 	RE::VRControllerState primaryControllerState, secondaryControllerState;
 	bool lastKnownLeftHandedMode = false;
+	bool ocuPointerAvailable = false;
 	bool customVRCursorVisible = false;
 	ImVec2 customVRCursorPos{};
 	void ReleaseOCUPointerState() {}
@@ -248,9 +256,9 @@ namespace
 	{
 		size_t keyCode;
 	};
-	std::array<Mapping, 2> GetVRInputMappings(bool secondary)
+	std::array<Mapping, 2> GetVRInputMappings(bool)
 	{
-		return secondary ? std::array{ Mapping{ 1 }, Mapping{ 0 } } : std::array{ Mapping{ 0 }, Mapping{ 1 } };
+		return { Mapping{ 0 }, Mapping{ 1 } };
 	}
 	void CancelWandMouseInput(VR&) {}
 	void ResetCursorOwnershipState() {}
@@ -548,12 +556,16 @@ static void CheckTriggerReleaseReads(bool leftHanded)
 	Require(!gBlockRawTriggerUntilRelease[1] && !gPrevSecondaryVRInputStates[0] &&
 				gPrevPrimaryVRInputStates[1] && gPrevSecondaryVRInputStates[1],
 		"trigger release must preserve other held menu buttons");
+	Require(!vrFeature.primaryControllerState.buttons[0].isPressed && !vrFeature.secondaryControllerState.buttons[0].isPressed &&
+				vrFeature.primaryControllerState.buttons[1].isPressed && vrFeature.secondaryControllerState.buttons[1].isPressed,
+		"observed releases must also clear cached triggers without changing unrelated buttons");
 	const auto readsAfterRelease = Runtime::system.reads + Runtime::compositor.reads;
 	ObserveRawTriggerReleases(vrFeature);
 	Require(Runtime::system.reads + Runtime::compositor.reads == readsAfterRelease, "released gates must not issue extra runtime queries");
 
 	for (int failure = 0; failure < 17; ++failure) {
 		Runtime::Reset(leftHanded);
+		vrFeature.primaryControllerState.buttons[0].isPressed = true;
 		vrFeature.ReleaseMenuImGuiInputState();
 		gBlockRawTriggerUntilRelease[1] = false;
 		switch (failure) {
@@ -619,6 +631,34 @@ static void CheckTriggerReleaseReads(bool leftHanded)
 	}
 }
 
+static void CheckTriggerReleaseWithoutEvents(bool leftHanded)
+{
+	const std::unique_ptr<ImGuiContext, decltype(&ImGui::DestroyContext)> context{ ImGui::CreateContext(), ImGui::DestroyContext };
+	ImGui::GetIO().IniFilename = nullptr;
+	Runtime::Reset(leftHanded);
+	VR vrFeature;
+	vrFeature.lastKnownLeftHandedMode = leftHanded;
+	vrFeature.ReleaseMenuImGuiInputState();
+	auto& primary = Runtime::system.states[Runtime::indices[Runtime::PhysicalHand(0)]];
+	primary.rAxis[1].x = .8f;
+	primary.ulButtonPressed = vr::ButtonMaskFromId(vr::k_EButton_SteamVR_Trigger);
+	vrFeature.PollThumbstickInput();
+	Require(gBlockRawTriggerUntilRelease[0] && !gBlockRawTriggerUntilRelease[1],
+		"menu frames without queued input must observe neutral triggers while retaining held triggers");
+	primary = {};
+	Runtime::posesAvailable = false;
+	vrFeature.PollThumbstickInput();
+	Require(gBlockRawTriggerUntilRelease[0], "a missing tracking sample must not release the trigger gate");
+	Runtime::posesAvailable = true;
+	vrFeature.PollThumbstickInput();
+	Require(!gBlockRawTriggerUntilRelease[0], "a neutral frame must arm the first click without another input event");
+	gBlockRawTriggerUntilRelease.fill(true);
+	vrFeature.ocuPointerAvailable = true;
+	vrFeature.PollThumbstickInput();
+	Require(gBlockRawTriggerUntilRelease[0] && gBlockRawTriggerUntilRelease[1],
+		"raw trigger polling must not override OCU's shared input ownership");
+}
+
 static void CheckPassiveRuntimeReads()
 {
 	for (int failure = 0; failure < 7; ++failure) {
@@ -669,8 +709,10 @@ int main()
 {
 	try {
 		CheckPassiveRuntimeReads();
-		for (bool leftHanded : { false, true })
+		for (bool leftHanded : { false, true }) {
 			CheckTriggerReleaseReads(leftHanded);
+			CheckTriggerReleaseWithoutEvents(leftHanded);
+		}
 		for (bool mouseNavigation : { false, true })
 			for (size_t hand : { 0u, 1u })
 				for (bool trickleEvents : { false, true })

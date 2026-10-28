@@ -271,7 +271,10 @@ namespace
 		drawList.AddCircleFilled(center, radius * 0.42f, innerColor, 16);
 	}
 
-	bool CenterWindowOnCurrentMonitorTopmost(HWND hwnd)
+	constexpr double kDesktopWindowStableCheckIntervalSecs = 10.0;
+	constexpr double kDesktopWindowRetryIntervalSecs = 1.0;
+
+	bool CenterWindowOnCurrentMonitorTopmost(HWND hwnd, bool alreadyTopmost)
 	{
 		if (!hwnd || !IsWindow(hwnd)) {
 			return false;
@@ -295,6 +298,10 @@ namespace
 		const int workHeight = workArea.bottom - workArea.top;
 		const int centeredX = workArea.left + std::max(0, (workWidth - windowWidth) / 2);
 		const int centeredY = workArea.top + std::max(0, (workHeight - windowHeight) / 2);
+		// Allow native pixel rounding without repeatedly sending position messages.
+		const bool alreadyCentered = std::abs(windowRect.left - centeredX) <= 1 && std::abs(windowRect.top - centeredY) <= 1;
+		if (alreadyCentered && alreadyTopmost)
+			return true;
 
 		return SetWindowPos(
 				   hwnd,
@@ -303,15 +310,16 @@ namespace
 				   centeredY,
 				   0,
 				   0,
-				   SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW) != FALSE;
+				   SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW | SWP_NOACTIVATE | (alreadyCentered ? SWP_NOMOVE : 0)) != FALSE;
 	}
 
 	void ResetDesktopWindowManagementState(VR& vr)
 	{
 		vr.desktopWindowManagementApplied = false;
 		vr.desktopWindowWasTopmost = false;
+		vr.desktopWindowManagementReleasePending = false;
 		vr.desktopWindowManagedHandle = nullptr;
-		vr.lastDesktopWindowManagementAttemptSecs = 0.0;
+		vr.nextDesktopWindowManagementCheckSecs = 0.0;
 	}
 
 	constexpr int kVRControllerBindingsVersion = 1;
@@ -1724,7 +1732,7 @@ namespace
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Keep the game window centred, in front and above other desktop windows while the VR menu is open.");
 			ImGui::Text("Only applies when Attach Mode presents the menu in VR.");
-			ImGui::Text("Disable to move the game window aside or use other desktop apps with the VR menu open.");
+			ImGui::Text("Placement is checked every ten seconds when stable. Disable to move the window aside or use other desktop apps.");
 		}
 	}
 
@@ -3458,43 +3466,44 @@ void VR::UpdateMenuDesktopWindowManagement(bool force)
 		return;
 	}
 
-	if (desktopWindowManagementApplied &&
-		desktopWindowManagedHandle &&
-		desktopWindowManagedHandle != hwnd) {
+	const bool windowChanged = desktopWindowManagedHandle != hwnd;
+	if (windowChanged) {
 		ReleaseMenuDesktopWindowManagement();
+		if (desktopWindowManagementApplied)
+			return;
+		desktopWindowManagedHandle = hwnd;
 	}
+	desktopWindowManagementReleasePending = false;
 
 	const double nowSecs = Util::GetNowSecs();
-	constexpr double kStableReassertIntervalSecs = 10.0;
-	constexpr double kUnstableRetryIntervalSecs = 1.0;
-	const bool windowIsTopmost = IsWindowTopmost(hwnd);
-	const bool windowIsForeground = GetForegroundWindow() == hwnd;
-	const bool windowStateStable = desktopWindowManagementApplied && windowIsTopmost && windowIsForeground;
-	const double reassertIntervalSecs = windowStateStable ? kStableReassertIntervalSecs : kUnstableRetryIntervalSecs;
-	const bool recentlyAttempted = nowSecs - lastDesktopWindowManagementAttemptSecs < reassertIntervalSecs;
 
-	if (!force && recentlyAttempted) {
+	if (!force && !windowChanged && nowSecs < nextDesktopWindowManagementCheckSecs) {
 		return;
 	}
+	nextDesktopWindowManagementCheckSecs = nowSecs + kDesktopWindowRetryIntervalSecs;
+	const bool windowIsTopmost = IsWindowTopmost(hwnd);
+	const bool windowIsForeground = GetForegroundWindow() == hwnd;
 
 	if (IsIconic(hwnd)) {
 		ShowWindow(hwnd, SW_RESTORE);
 	}
 
-	if (!desktopWindowManagementApplied) {
+	if (!desktopWindowManagementApplied)
 		desktopWindowWasTopmost = windowIsTopmost;
-	}
+	// Recheck current geometry so user movement, resizing and monitor changes are detected.
+	if (!CenterWindowOnCurrentMonitorTopmost(hwnd, windowIsTopmost))
+		return;
+	desktopWindowManagementApplied = true;
+	desktopWindowManagedHandle = hwnd;
 
-	lastDesktopWindowManagementAttemptSecs = nowSecs;
-
-	if (CenterWindowOnCurrentMonitorTopmost(hwnd)) {
+	if (!windowIsForeground) {
 		BringWindowToTop(hwnd);
 		SetForegroundWindow(hwnd);
 		SetActiveWindow(hwnd);
 		SetFocus(hwnd);
-		desktopWindowManagementApplied = true;
-		desktopWindowManagedHandle = hwnd;
 	}
+	if (GetForegroundWindow() == hwnd && IsWindowTopmost(hwnd))
+		nextDesktopWindowManagementCheckSecs = nowSecs + kDesktopWindowStableCheckIntervalSecs;
 }
 
 void VR::ReleaseMenuDesktopWindowManagement()
@@ -3503,18 +3512,26 @@ void VR::ReleaseMenuDesktopWindowManagement()
 		ResetDesktopWindowManagementState(*this);
 		return;
 	}
+	const double nowSecs = Util::GetNowSecs();
+	if (desktopWindowManagementReleasePending && nowSecs < nextDesktopWindowManagementCheckSecs)
+		return;
 
 	HWND hwnd = desktopWindowManagedHandle ? desktopWindowManagedHandle : GetGameWindowHandle();
 	if (hwnd && IsWindow(hwnd)) {
 		if (!desktopWindowWasTopmost) {
-			SetWindowPos(
-				hwnd,
-				HWND_NOTOPMOST,
-				0,
-				0,
-				0,
-				0,
-				SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+			if (!SetWindowPos(
+					hwnd,
+					HWND_NOTOPMOST,
+					0,
+					0,
+					0,
+					0,
+					SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER)) {
+				// Retain ownership until the original native window state is restored.
+				desktopWindowManagementReleasePending = true;
+				nextDesktopWindowManagementCheckSecs = nowSecs + kDesktopWindowRetryIntervalSecs;
+				return;
+			}
 		}
 	}
 

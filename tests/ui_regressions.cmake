@@ -1,6 +1,6 @@
 set(_ui_regression_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/ui-regressions")
 set(_ui_regression_headers)
-foreach(name IN ITEMS wand_types wand_pose vr_runtime_state vr_trigger_release vr_scroll_types vr_scroll_refresh vr_scroll_poll vr_cursor_delta vr_scroll vr_input_release escape markers header_button docked_icon_size docked_header theme_save atomic_write filename blur_initialization blur_lifecycle)
+foreach(name IN ITEMS wand_types wand_pose vr_runtime_state vr_trigger_release vr_scroll_types vr_scroll_refresh vr_scroll_poll vr_cursor_delta vr_scroll vr_input_release escape input_queue input_queue_finish input_queue_push markers header_button docked_icon_size docked_header theme_save atomic_write filename blur_initialization blur_lifecycle)
     list(APPEND _ui_regression_headers "${_ui_regression_dir}/ui_${name}.h")
 endforeach()
 add_custom_command(

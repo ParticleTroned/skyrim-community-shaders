@@ -217,7 +217,9 @@ namespace
 			}
 			if (frame >= 4 && (openComposite || steamVR) &&
 				(window->SizeFull.x < layout.minimum.x || window->SizeFull.y < layout.minimum.y ||
-					window->Pos.x + window->SizeFull.x > io.DisplaySize.x || window->Pos.y + window->SizeFull.y > io.DisplaySize.y)) {
+					window->Pos.x < MenuUI::Layout::CanvasPadding || window->Pos.y < MenuUI::Layout::CanvasPadding ||
+					window->Pos.x + window->SizeFull.x > io.DisplaySize.x - MenuUI::Layout::CanvasPadding ||
+					window->Pos.y + window->SizeFull.y > io.DisplaySize.y - MenuUI::Layout::CanvasPadding)) {
 				std::printf("FAIL: headset resize violated theme/canvas bounds on frame %d (size=%.1f,%.1f)\n", frame, window->SizeFull.x, window->SizeFull.y);
 				passed = false;
 			}
@@ -233,10 +235,19 @@ namespace
 			if (frame > 11 && !locked &&
 				((direction == 1 && (window->Size.x <= layout.size.x || window->Size.y <= layout.size.y)) ||
 					(direction < 0 && (window->Size.x != layout.expectedShrink.x || window->Size.y != layout.expectedShrink.y)) ||
-					(direction > 1 && (window->Size.x != (topLeft ? layout.position.x + layout.size.x : io.DisplaySize.x - layout.position.x) || window->Size.y != (topLeft ? layout.position.y + layout.size.y : io.DisplaySize.y - layout.position.y))) ||
+					(direction > 1 && (window->Size.x != (topLeft ? layout.position.x + layout.size.x : io.DisplaySize.x - layout.position.x) - MenuUI::Layout::CanvasPadding ||
+										  window->Size.y != (topLeft ? layout.position.y + layout.size.y : io.DisplaySize.y - layout.position.y) - MenuUI::Layout::CanvasPadding)) ||
 					window->Size.x != finalSize.x || window->Size.y != finalSize.y)) {
 				std::printf("FAIL: resized geometry did not persist on frame %d (SteamVR=%d)\n", frame, steamVR);
 				passed = false;
+			}
+			if (frame >= 10 && !locked && direction > 1) {
+				ImVec2 center{ window->Pos.x + window->SizeFull.x * .5f, window->Pos.y + window->SizeFull.y * .5f };
+				auto size = window->SizeFull;
+				if (ClampSettingsWindowToCanvas(center, size, { center, size })) {
+					std::puts("FAIL: edge drag produced geometry the next frame would repair");
+					passed = false;
+				}
 			}
 			ImGui::Render();
 			if (frame > 2 && ImGui::GetDrawData()->TotalVtxCount == 0) {
@@ -331,7 +342,7 @@ int main()
 					 ResizeLayout{ { 100, 100 }, { 800, 600 }, { 650, 480 }, { 650, 480 } }) &&
 		         passed;
 		passed = CheckDrag(false, steamVR, false, -1, true,
-					 ResizeLayout{ { 1750, 1470 }, { 170, 150 }, { 170, 150 }, { 170, 150 } }) &&
+					 ResizeLayout{ { 1742, 1462 }, { 170, 150 }, { 170, 150 }, { 170, 150 } }) &&
 		         passed;
 		passed = CheckDrag(false, steamVR, false, -1, true,
 					 ResizeLayout{ { 100, 100 }, { 800, 600 }, { 650, 200 }, { 650, 200 } }) &&

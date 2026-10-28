@@ -1563,12 +1563,17 @@ bool Menu::ConsumeNestedEscape(bool a_down, bool a_up)
 
 void Menu::ProcessInputEventQueue()
 {
-	std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
+	std::vector<KeyEvent> queuedEvents;
+	{
+		std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
+		queuedEvents.swap(_keyEventQueue);
+	}
+	// Runtime and hotkey callbacks may enqueue input; dispatch only our owned batch.
 	ImGuiIO& io = ImGui::GetIO();
 	// Split the queue into VR and non-VR events
 	std::vector<KeyEvent> vrEvents;
 	std::vector<KeyEvent> nonVREvents;
-	for (auto& event : _keyEventQueue) {
+	for (auto& event : queuedEvents) {
 		bool isVRController = ((event.device == RE::INPUT_DEVICE::kVivePrimary || event.device == RE::INPUT_DEVICE::kViveSecondary ||
 								event.device == RE::INPUT_DEVICE::kOculusPrimary || event.device == RE::INPUT_DEVICE::kOculusSecondary ||
 								event.device == RE::INPUT_DEVICE::kWMRPrimary || event.device == RE::INPUT_DEVICE::kWMRSecondary));
@@ -1839,8 +1844,6 @@ void Menu::ProcessInputEventQueue()
 	const float wheelY = static_cast<float>(directInputWheelRaw) / static_cast<float>(WHEEL_DELTA);
 	if (wheelY != 0.0f)
 		io.AddMouseWheelEvent(0.0f, wheelY);
-
-	_keyEventQueue.clear();
 }
 
 void Menu::RecordDirectInputWheelDelta(std::int32_t a_delta)

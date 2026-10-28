@@ -97,17 +97,27 @@ int main(int argc, char** argv)
 			assert(!PresetCompatibility::Evaluate(legacy, "CSX 3.21.0-VR").ShouldApply());
 		}
 	}
-	{
-		auto legacy = CompatiblePreset();
-		auto& marker = legacy["Preset Compatibility"];
-		marker["settingsContract"]["revision"] = 16u;
-		marker["target"]["minimumVersion"] = "3.21";
-		marker["target"]["maximumVersionExclusive"] = "3.22";
-		assert(!PresetCompatibility::Evaluate(legacy, "CSX 3.20.0-VR").ShouldApply());
-		assert(PresetCompatibility::Evaluate(legacy, "CSX 3.21.0-VR").ShouldApply());
-		assert(!PresetCompatibility::Evaluate(legacy, "CSX 3.22.0-VR").ShouldApply());
+	for (const auto presetId : { "csx-unified-performance", "csx-unified-balanced", "csx-unified-quality" }) {
+		for (const auto revision : { 15u, 16u }) {
+			auto legacy = CompatiblePreset();
+			auto& marker = legacy["Preset Compatibility"];
+			marker["presetId"] = presetId;
+			marker["settingsContract"]["revision"] = revision;
+			marker["target"]["minimumVersion"] = "3.21";
+			marker["target"]["maximumVersionExclusive"] = "3.22";
+			assert(PresetCompatibility::Evaluate(legacy, "CSX 3.21.0-VR").ShouldApply());
+			assert(PresetCompatibility::Evaluate(legacy, "CSX 3.21.1-VR").ShouldApply());
+			for (const auto label : { "CSX 3.20.0-VR", "CSX 3.22.0-VR", "CSX 3.21.0-SE", "CSX 3.21.0-AE" }) {
+				assert(!PresetCompatibility::Evaluate(legacy, label).ShouldApply());
+			}
+			auto widerRange = legacy;
+			widerRange["Preset Compatibility"]["target"]["maximumVersionExclusive"] = "3.23";
+			assert(!PresetCompatibility::Evaluate(widerRange, "CSX 3.21.0-VR").ShouldApply());
+			marker["presetId"] = "another-preset";
+			assert(!PresetCompatibility::Evaluate(legacy, "CSX 3.21.0-VR").ShouldApply());
+		}
 	}
-	for (const auto revision : { 5u, 7u, PresetCompatibility::kSettingsContractRevision + 1 }) {
+	for (const auto revision : { 5u, 7u, 14u, PresetCompatibility::kSettingsContractRevision + 1 }) {
 		auto incompatibleContract = CompatiblePreset();
 		incompatibleContract["Preset Compatibility"]["settingsContract"]["revision"] = revision;
 		assert(!PresetCompatibility::Evaluate(incompatibleContract, "CSX 3.21.0-VR").ShouldApply());

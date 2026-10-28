@@ -13,10 +13,8 @@ namespace
 	float g_savedVanityCameraDelay = 0.0f;
 	std::size_t g_vanityCameraSuppressionCount = 0;
 	bool g_missingSettingWarningLogged = false;
-	bool g_missingTasksWarningLogged = false;
 	RE::PlayerCamera* g_suppressedCamera = nullptr;
-	const SKSE::TaskInterface* g_taskInterface = nullptr;
-	bool g_refreshPending = false;
+	std::atomic<bool> g_settingAvailable = false;
 	std::mutex g_suppressionMutex;
 
 	RE::Setting* FindVanityCameraDelaySetting()
@@ -31,9 +29,14 @@ namespace
 
 	void RefreshIdleCameraOnGameThread()
 	{
-		std::lock_guard lock(g_suppressionMutex);
-		g_refreshPending = false;
-		if (g_vanityCameraSuppressionCount == 0) {
+		auto* availableSetting = FindVanityCameraDelaySetting();
+		g_settingAvailable.store(availableSetting != nullptr, std::memory_order_release);
+		bool suppressionRequested;
+		{
+			std::lock_guard lock(g_suppressionMutex);
+			suppressionRequested = g_vanityCameraSuppressionCount != 0;
+		}
+		if (!suppressionRequested) {
 			if (!g_vanityCameraDelaySetting)
 				return;
 			// Preserve a newer setting written by another owner while the menu was open.
@@ -52,12 +55,11 @@ namespace
 		}
 
 		if (!g_vanityCameraDelaySetting) {
-			auto* setting = FindVanityCameraDelaySetting();
-			if (!setting)
+			if (!availableSetting)
 				return;
-			g_vanityCameraDelaySetting = setting;
-			g_savedVanityCameraDelay = setting->GetFloat();
-			setting->data.f = kSuppressedVanityCameraDelaySeconds;
+			g_vanityCameraDelaySetting = availableSetting;
+			g_savedVanityCameraDelay = availableSetting->GetFloat();
+			availableSetting->data.f = kSuppressedVanityCameraDelaySeconds;
 			logger::info("Automatic vanity camera suppressed (saved delay: {})", g_savedVanityCameraDelay);
 		}
 
@@ -68,19 +70,15 @@ namespace
 		// The camera can already have a nearly expired countdown when the menu opens.
 		camera->GetRuntimeData2().idleTimer = kSuppressedVanityCameraDelaySeconds;
 	}
-
-	void QueueIdleCameraRefresh()
-	{
-		// One pending task observes the latest ownership, including close-before-dispatch.
-		if (!g_refreshPending) {
-			g_refreshPending = true;
-			g_taskInterface->AddTask(RefreshIdleCameraOnGameThread);
-		}
-	}
 }
 
 namespace Util
 {
+	void UpdateVanityCameraSuppression()
+	{
+		RefreshIdleCameraOnGameThread();
+	}
+
 	VanityCameraSuppressionLease::~VanityCameraSuppressionLease()
 	{
 		Release();
@@ -89,44 +87,30 @@ namespace Util
 	bool VanityCameraSuppressionLease::Acquire()
 	{
 		std::lock_guard lock(g_suppressionMutex);
-		if (active) {
-			QueueIdleCameraRefresh();
+		if (active)
 			return true;
-		}
 
-		auto* tasks = SKSE::GetTaskInterface();
-		if (!tasks) {
-			if (!g_missingTasksWarningLogged) {
-				logger::warn("Unable to suppress the automatic vanity camera: SKSE task interface was not found");
-				g_missingTasksWarningLogged = true;
-			}
-			return false;
-		}
-
-		if (g_vanityCameraSuppressionCount == 0 && !FindVanityCameraDelaySetting())
+		if (!g_settingAvailable.load(std::memory_order_acquire))
 			return false;
 
-		g_taskInterface = tasks;
 		++g_vanityCameraSuppressionCount;
 		active = true;
-		QueueIdleCameraRefresh();
 		return true;
 	}
 
 	void VanityCameraSuppressionLease::Release()
 	{
-		std::lock_guard lock(g_suppressionMutex);
-		if (!active)
-			return;
+		{
+			std::lock_guard lock(g_suppressionMutex);
+			if (!active)
+				return;
 
-		active = false;
-		if (g_vanityCameraSuppressionCount == 0) {
-			logger::error("Automatic vanity camera suppression lease count was already zero");
-			return;
+			active = false;
+			if (g_vanityCameraSuppressionCount != 0) {
+				--g_vanityCameraSuppressionCount;
+				return;
+			}
 		}
-
-		--g_vanityCameraSuppressionCount;
-		if (g_vanityCameraSuppressionCount == 0)
-			QueueIdleCameraRefresh();
+		logger::error("Automatic vanity camera suppression lease count was already zero");
 	}
 }

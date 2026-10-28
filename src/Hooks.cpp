@@ -14,6 +14,7 @@
 #include "Utils/ExternalEmittance.h"
 #include "Utils/TracyVRFrameTiming.h"
 #include "Utils/VRLoadingMenuClear.h"
+#include "Utils/VanityCamera.h"
 
 #include "Feature.h"
 #include "Features/GrassLighting.h"
@@ -2150,16 +2151,16 @@ namespace Hooks
 			DrawAdmittedRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
 	}
 
-#if defined(TRACY_ENABLE) || defined(DEVBENCH_BRIDGE_ENABLED)
 	struct Main_Update
 	{
 		static void thunk(RE::Main* a_this, float a2)
 		{
-#	ifdef DEVBENCH_BRIDGE_ENABLED
+			Util::UpdateVanityCameraSuppression();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			CSX::Diagnostics::Stutters::PublishGameContext();
 			CSX::Diagnostics::Stutters::Scope stutterUpdate("Engine::MainUpdate", CSX::Diagnostics::Stutters::Boundary::Engine);
-#	endif
-#	ifdef TRACY_ENABLE
+#endif
+#ifdef TRACY_ENABLE
 			const bool isVR = REL::Module::IsVR();
 			{
 				ZoneNamedN(mainUpdateCpuZone, "Game::MainUpdateCpu", isVR);
@@ -2174,13 +2175,12 @@ namespace Hooks
 			FrameMark;
 			if (isVR)
 				Util::TracyVRFrameTiming::Record(globals::state ? globals::state->frameCount : 0);
-#	else
+#else
 			func(a_this, a2);
-#	endif
+#endif
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
-#endif
 
 	namespace CSShadersSupport
 	{
@@ -2415,9 +2415,7 @@ namespace Hooks
 		stl::write_thunk_call<CreateCubemapRenderTarget_Reflections>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0xA25, 0xA25, 0xCD2));
 		stl::write_thunk_call<CreateDepthStencil_Reflections>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0xA59, 0xA59, 0xD13));
 
-#if defined(TRACY_ENABLE) || defined(DEVBENCH_BRIDGE_ENABLED)
 		stl::write_thunk_call<Main_Update>(REL::RelocationID(35551, 36544).address() + REL::Relocate(0x11F, 0x160));
-#endif
 
 		logger::info("Hooking BSImagespaceShader");
 		stl::detour_thunk<CSShadersSupport::BSImagespaceShader_DispatchComputeShader>(REL::RelocationID(100952, 107734));

@@ -1,12 +1,16 @@
 #include "Menu/SettingsActions.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <functional>
 #include <imgui_internal.h>
 #include <iostream>
+#include <mutex>
+#include <shared_mutex>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 static void Require(bool value, const char* message)
@@ -39,8 +43,33 @@ static std::size_t GetControllerSlot(ControllerDevice hand) { return hand == Con
 static std::array<WandPoseHistory, 2> g_wandPoseHistory{};
 #include "ui_wand_pose.h"
 
+namespace RE
+{
+	enum class INPUT_DEVICE
+	{
+		kKeyboard,
+		kVivePrimary,
+		kViveSecondary,
+		kOculusPrimary,
+		kOculusSecondary,
+		kWMRPrimary,
+		kWMRSecondary
+	};
+}
+
 struct Menu
 {
+	struct KeyEvent
+	{
+		RE::INPUT_DEVICE device;
+		int sequence;
+	};
+	std::vector<KeyEvent> _keyEventQueue;
+	std::shared_mutex _inputEventMutex;
+	std::atomic<std::int64_t> _directInputWheelDelta = 0;
+	std::vector<KeyEvent> nonVREventsHandled;
+	void ProcessInputEventQueue();
+	void addToEventQueue(KeyEvent);
 	bool escapeConsumed = false;
 	bool ConsumeNestedEscape(bool down, bool up);
 	struct Theme
@@ -58,6 +87,67 @@ namespace globals
 {
 	Menu storage;
 	auto* menu = &storage;
+	namespace features
+	{
+		struct
+		{
+			bool compatible = true;
+			std::function<void(std::vector<Menu::KeyEvent>&)> onInput;
+			bool IsOpenVRCompatible() const { return compatible; }
+			void ProcessVREvents(std::vector<Menu::KeyEvent>& events) { onInput(events); }
+		} vr;
+	}
+}
+constexpr int WHEEL_DELTA = 120;
+// Keep the production batch boundary and VR callback; unrelated hotkeys are substituted.
+#include "ui_input_queue.h"
+nonVREventsHandled.insert(nonVREventsHandled.end(), nonVREvents.begin(), nonVREvents.end());
+#include "ui_input_queue_finish.h"
+#include "ui_input_queue_push.h"
+
+static void CheckInputQueue()
+{
+	Menu menu;
+	menu.addToEventQueue({ RE::INPUT_DEVICE::kVivePrimary, 1 });
+	menu.addToEventQueue({ RE::INPUT_DEVICE::kKeyboard, 2 });
+	menu.addToEventQueue({ RE::INPUT_DEVICE::kOculusSecondary, 3 });
+	std::vector<int> dispatched;
+	bool producerWasUnblocked = false;
+	globals::features::vr.onInput = [&](std::vector<Menu::KeyEvent>& events) {
+		for (const auto& event : events)
+			dispatched.push_back(event.sequence);
+		std::thread producer([&] {
+			std::unique_lock<std::shared_mutex> probe(menu._inputEventMutex, std::try_to_lock);
+			producerWasUnblocked = probe.owns_lock();
+			if (producerWasUnblocked) {
+				probe.unlock();
+				menu.addToEventQueue({ RE::INPUT_DEVICE::kWMRPrimary, 4 });
+			}
+		});
+		producer.join();
+	};
+	menu.ProcessInputEventQueue();
+	Require(producerWasUnblocked, "runtime callbacks must not hold the input producer's mutex");
+	Require(dispatched == std::vector<int>{ 1, 3 }, "the captured VR batch retains event order");
+	Require(menu.nonVREventsHandled.size() == 1 && menu.nonVREventsHandled[0].sequence == 2,
+		"desktop input remains in its captured batch");
+	Require(menu._keyEventQueue.size() == 1 && menu._keyEventQueue[0].sequence == 4,
+		"input arriving during dispatch must survive for the next frame");
+	globals::features::vr.onInput = [&](std::vector<Menu::KeyEvent>& events) {
+		for (const auto& event : events)
+			dispatched.push_back(event.sequence);
+	};
+	menu.ProcessInputEventQueue();
+	menu.ProcessInputEventQueue();
+	Require(dispatched == std::vector<int>{ 1, 3, 4 } && menu._keyEventQueue.empty(),
+		"a newly queued event is dispatched exactly once on the next frame");
+	globals::features::vr.compatible = false;
+	menu.addToEventQueue({ RE::INPUT_DEVICE::kVivePrimary, 5 });
+	menu.ProcessInputEventQueue();
+	Require(dispatched.size() == 3 && menu.nonVREventsHandled.back().sequence == 5,
+		"flat runtimes must not dispatch OpenVR callbacks");
+	globals::features::vr.compatible = true;
+	globals::features::vr.onInput = {};
 }
 namespace SKSE::stl
 {
@@ -361,6 +451,7 @@ int main()
 		io.DisplaySize = { 1024, 768 };
 		io.Fonts->AddFontDefault();
 		io.Fonts->Build();
+		CheckInputQueue();
 		CheckPose();
 		ImGui::DestroyContext();
 		ImGui::CreateContext();

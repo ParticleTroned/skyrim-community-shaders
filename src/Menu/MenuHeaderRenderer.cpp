@@ -1,5 +1,6 @@
 #include "MenuHeaderRenderer.h"
 #include "FeatureListRenderer.h"
+#include "Layout.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -441,10 +442,13 @@ void MenuHeaderRenderer::RenderResizeHandles(float uiScale, ImVec2 minimumSize, 
 	const float bottomRightSize = steamVRControls ? topLeftSize * 1.2f : std::max(ImGui::GetFontSize() * 1.5f, 18.0f * uiScale);
 	const float handleInset = GetSteamVRResizeHandleInset(uiScale);
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
-	const ImVec2 resizeBoundsMin = viewport ? viewport->WorkPos : ImVec2(0.0f, 0.0f);
-	const ImVec2 resizeBoundsMax = viewport ?
-	                                   ImVec2(viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y + viewport->WorkSize.y) :
-	                                   ImGui::GetIO().DisplaySize;
+	const ImVec2 canvasOrigin = viewport ? viewport->WorkPos : ImVec2(0.0f, 0.0f);
+	const ImVec2 canvasSize = viewport ? viewport->WorkSize : ImGui::GetIO().DisplaySize;
+	const float padding = MenuUI::Layout::CanvasPadding;
+	// Match canvas recovery so a held edge drag cannot fight the next frame's bounds repair.
+	const ImVec2 resizeBoundsMin{ canvasOrigin.x + padding, canvasOrigin.y + padding };
+	const ImVec2 resizeBoundsMax{ resizeBoundsMin.x + std::max(1.0f, canvasSize.x - padding * 2),
+		resizeBoundsMin.y + std::max(1.0f, canvasSize.y - padding * 2) };
 	auto drawResizeHandle = [&](const char* id, const ImVec2& min, bool topLeft, float handleSize) {
 		// Direct SetWindowSize calls must honor the same usable minimum as native resizing.
 		const ImVec2 available = topLeft ?

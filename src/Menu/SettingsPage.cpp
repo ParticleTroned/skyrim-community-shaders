@@ -25,7 +25,6 @@ namespace MenuUI
 			std::function<bool(std::string_view)> canSelect;
 			bool pending = false;
 			std::vector<Section> sections;
-			float contentScrollbarWidth = 0;
 		};
 		std::unordered_map<std::string, Navigation> navigation;
 		Feature* activeFeature = nullptr;
@@ -102,9 +101,9 @@ namespace MenuUI
 		const auto found = navigation.find(a_page);
 		const bool hasCards = found == navigation.end() || std::ranges::any_of(found->second.sections, [](const Section& step) { return step.visible && step.overview; });
 		const float padding = ImGui::GetStyle().WindowPadding.x;
-		const float right = found == navigation.end() ? 0 : found->second.contentScrollbarWidth;
+		const float right = ImGui::GetStyle().ScrollbarSize;
 		const bool detail = found != navigation.end() && found->second.selected != "overview";
-		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - (detail ? ImGui::GetStyle().ScrollbarSize : right) - padding), hasCards);
+		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - right - padding), hasCards);
 		const float left = detail ? (grid.rail > 0 ? ImGui::GetTextLineHeight() * stageGuideInset : 0) : grid.rail;
 		return { padding + left, right };
 	}
@@ -117,7 +116,7 @@ namespace MenuUI
 			return a_panelWidth;
 		const bool hasCards = std::ranges::any_of(found->second.sections, [](const Section& step) { return step.visible && step.overview; });
 		const float padding = ImGui::GetStyle().WindowPadding.x;
-		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - found->second.contentScrollbarWidth - padding), hasCards);
+		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - ImGui::GetStyle().ScrollbarSize - padding), hasCards);
 		return padding + grid.rail + (grid.columns - 1) * (grid.width + grid.gap);
 	}
 
@@ -128,8 +127,7 @@ namespace MenuUI
 		// Match the initial header to the setup grid before its first content frame.
 		const bool hasCards = found == navigation.end() || found->second.sections.empty() || std::ranges::any_of(found->second.sections, [](const Section& step) { return step.visible && step.overview; });
 		const float padding = ImGui::GetStyle().WindowPadding.x;
-		const float right = found == navigation.end() ? 0 : found->second.selected != "overview" ? ImGui::GetStyle().ScrollbarSize :
-		                                                                                           found->second.contentScrollbarWidth;
+		const float right = ImGui::GetStyle().ScrollbarSize;
 		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - right - padding), hasCards);
 		return padding + (grid.rail > 0 ? ImGui::GetTextLineHeight() * stageGuideInset : 0);
 	}
@@ -312,13 +310,13 @@ namespace MenuUI
 		{
 			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0, ImGui::GetStyle().WindowPadding.y });
 			const SKSE::stl::scope_exit restorePadding([] { ImGui::PopStyleVar(); });
-			contentVisible = ImGui::BeginChild(std::format("##SettingsContent/{}", selected).c_str(), { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding);
+			// Conditional controls must not change the available width and reflow neighbouring columns.
+			contentVisible = ImGui::BeginChild(std::format("##SettingsContent/{}", selected).c_str(), { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_AlwaysVerticalScrollbar);
 		}
 		if (contentLeftPadding > 0)
 			ImGui::Indent(contentLeftPadding);
 		if (contentVisible && selected != "overview")
 			controlLayout = std::make_unique<Util::Widgets::ControlLayout>();
-		state.contentScrollbarWidth = ImGui::GetCurrentWindow()->ScrollbarSizes.x;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (contentVisible)
 			devBenchViewport.emplace(pageId, selected, !PerformanceTuningRenderer::HasActiveMeasurements());

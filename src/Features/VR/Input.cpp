@@ -97,7 +97,7 @@ namespace
 		} };
 	}
 
-	void ObserveRawTriggerReleases(const VR& a_vr)
+	void ObserveRawTriggerReleases(VR& a_vr)
 	{
 		if (std::none_of(gBlockRawTriggerUntilRelease.begin(), gBlockRawTriggerUntilRelease.end(), [](bool blocked) { return blocked; }))
 			return;
@@ -119,6 +119,9 @@ namespace
 				continue;
 			gBlockRawTriggerUntilRelease[slot] = false;
 			(slot == 0 ? gPrevPrimaryVRInputStates : gPrevSecondaryVRInputStates)[0] = false;
+			// A missing release event must not replay the cached press on another button's event.
+			auto& controllerState = slot == 0 ? a_vr.primaryControllerState : a_vr.secondaryControllerState;
+			controllerState[RE::BSOpenVRControllerDevice::Keys::kTrigger].OnEvent(false, Util::GetNowSecs());
 		}
 	}
 
@@ -1101,6 +1104,9 @@ void VR::ProcessControllerInputForImGui()
 	}
 
 	RefreshMenuThumbstickInput(*this);
+	// A neutral trigger may produce no queued event before the first menu click.
+	if (!ocuPointerAvailable)
+		ObserveRawTriggerReleases(*this);
 	if (useWandNavigation) {
 		if (!testMode)
 			ProcessOCUPointerInput();

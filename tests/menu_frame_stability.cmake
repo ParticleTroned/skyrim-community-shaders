@@ -15,6 +15,7 @@ set(_menu_frame_test_headers
     "${_menu_frame_test_dir}/menu_sidebar_font_under_test.h"
     "${_menu_frame_test_dir}/menu_header_scale_under_test.h"
     "${_menu_frame_test_dir}/menu_idle_camera_under_test.h"
+    "${_menu_frame_test_dir}/menu_game_update_under_test.h"
     "${_menu_frame_test_dir}/menu_status_visibility_under_test.h"
     "${_menu_frame_test_dir}/menu_status_reservation_under_test.h"
     "${_menu_frame_test_dir}/menu_water_status_stack_under_test.h"

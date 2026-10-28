@@ -1364,7 +1364,7 @@ int main()
 
 		for (const float font : { 13.0f, 21.0f }) {
 			for (const float panelWidth : { 850.0f, 420.0f }) {
-				float value = .75f, controlY = 0;
+				float value = .75f, controlY = 0, contentWidth = 0;
 				bool overflow = true;
 				ImRect viewportBounds;
 				const auto draw = [&] {
@@ -1375,6 +1375,7 @@ int main()
 						if (page.Is("selection")) {
 							viewportBounds = ImGui::GetCurrentWindow()->InnerClipRect;
 							controlY = ImGui::GetCursorScreenPos().y;
+							contentWidth = ImGui::GetContentRegionAvail().x;
 							Util::Widgets::SliderFloat("Strength", &value, 0, 1);
 							if (overflow)
 								ImGui::Dummy({ 0, 1800 });
@@ -1407,12 +1408,19 @@ int main()
 				require(std::abs(back.Min.x - scrolledBack.Min.x) < .1f && std::abs(back.Min.y - scrolledBack.Min.y) < .1f && std::abs(back.Max.x - scrolledBack.Max.x) < .1f && std::abs(back.Max.y - scrolledBack.Max.y) < .1f, "Overview tab remains fixed at the bottom of a long detail page");
 				const auto scrolled = Viewport::Describe(true);
 				require(scrolled["scrollMaxY"].get<float>() > 0 && std::abs(scrolled["scrollY"].get<float>() - scrolled["scrollMaxY"].get<float>()) < 1, "DevBench still targets the scrolling settings body");
+				const float overflowingWidth = contentWidth;
 				overflow = false;
-				for (int settle = 0; settle < 3; ++settle) frame(draw);
+				for (int settle = 0; settle < 3; ++settle) {
+					frame(draw);
+					require(std::abs(contentWidth - overflowingWidth) < .1f, "hiding conditional settings cannot widen and reflow the content");
+				}
 				const auto shortBack = Util::controls.at("Start here. Choose a card to open its settings.");
 				require(std::abs(back.Min.x - shortBack.Min.x) < .1f && std::abs(back.Min.y - shortBack.Min.y) < .1f, "pinned tabs do not move when controls no longer need a scrollbar");
 				overflow = true;
-				for (int settle = 0; settle < 3; ++settle) frame(draw);
+				for (int settle = 0; settle < 3; ++settle) {
+					frame(draw);
+					require(std::abs(contentWidth - overflowingWidth) < .1f, "showing conditional settings cannot narrow and reflow the content");
+				}
 				require(Viewport::Scroll("PinnedPage", "selection", 1), "dynamic detail content can scroll after it grows again");
 				frame(draw);
 				frame(draw);

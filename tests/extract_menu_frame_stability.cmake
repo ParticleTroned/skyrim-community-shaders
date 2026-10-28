@@ -20,6 +20,7 @@ extract_between("${_home}"
     "menu_welcome_admission_under_test.h"
 )
 file(READ "${PROJECT_ROOT}/src/Hooks.cpp" _hooks)
+extract_between("${_hooks}" "\tstruct Main_Update" "\tnamespace CSShadersSupport" "menu_game_update_under_test.h")
 extract_between("${_hooks}" "struct IDXGISwapChain_Present" "decltype(&CreateDXGIFactory)" "menu_present_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Menu.cpp" _menu)
 extract_between("${_menu}" "void Menu::UpdateIdleCameraSuppression()" "bool Menu::HasClosedMenuOverlay()" "menu_idle_camera_under_test.h")

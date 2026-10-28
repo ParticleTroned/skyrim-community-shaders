@@ -2,6 +2,7 @@
 
 #include "Api/ServiceFoundation.h"
 #include "ScreenshotApiPolicy.h"
+#include "Utils/JsonCleanup.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -38,6 +39,7 @@ namespace CSX::Screenshot
 	void AppendRequestEvent(Api::ServiceFoundation& a_service, Record& a_record,
 		std::string_view a_type, nlohmann::json a_payload)
 	{
+		const Util::JsonCleanupGuard payloadCleanup(a_payload);
 		const auto eventIndex = a_record.eventIndex + 1;
 		a_service.AppendEvent(a_record.requestId, eventIndex, a_type, std::move(a_payload));
 		a_record.eventIndex = eventIndex;
@@ -48,6 +50,8 @@ namespace CSX::Screenshot
 	void AdmitManifestJob(State& a_state, Sequence& a_sequence, ManifestJob a_job,
 		Api::ServiceFoundation& a_service, Record& a_record, nlohmann::json a_payload)
 	{
+		const Util::JsonCleanupGuard payloadCleanup(a_payload);
+		const Util::JsonCleanupGuard headerCleanup(a_job.header);
 		const std::lock_guard lock(a_state.mutex);
 		if (a_state.stopRequested || !ScreenshotPolicy::CanAdmitManifestJob(a_state.outstanding, a_job.final))
 			throw std::runtime_error("bounded manifest publication lane is full or stopping");
@@ -64,6 +68,7 @@ namespace CSX::Screenshot
 			a_sequence.manifestGeneration = previousGeneration;
 			a_sequence.finalManifestGeneration = previousFinalGeneration;
 			--a_state.outstanding;
+			Util::ClearJsonWithoutAllocation(a_state.jobs.back().header);
 			a_state.jobs.pop_back();
 			throw;
 		}

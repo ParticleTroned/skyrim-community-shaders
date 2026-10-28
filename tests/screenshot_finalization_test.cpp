@@ -1,6 +1,7 @@
 #include "BuildProvenance.h"
 #include "Features/ScreenshotApi.h"
 #include "Features/ScreenshotReferencePolicy.h"
+#include "Utils/JsonCleanup.h"
 #include "Utils/StringUtils.h"
 
 #include <Windows.h>
@@ -168,6 +169,32 @@ namespace
 		RunCaptureControl("induced-reentrant", EmptyCapture, StackCaptureStatus::Reentrant, true);
 		RunCaptureControl("induced-empty", EmptyCapture, StackCaptureStatus::Empty, false);
 		RunCaptureControl("induced-native-exception", InducedNativeCaptureException, StackCaptureStatus::NativeException, false);
+	}
+
+	void RunJsonCleanupControl()
+	{
+		using json = nlohmann::json;
+		json value = json::array({ nullptr, true, 7, "scalar", json::binary({ 1, 2, 3 }) });
+		value.push_back(json::object());
+		auto* nested = &value.back();
+		for (unsigned depth = 0; depth < 256; ++depth) {
+			(*nested)["child"] = json::array({ json::object() });
+			nested = &(*nested)["child"].front();
+		}
+		(*nested)["leaf"] = "retained leaf";
+		const auto before = rejectedAllocationCount;
+		failAllAllocations = true;
+		{
+			const Util::JsonCleanupGuard cleanup(value);
+		}
+		Util::ClearJsonWithoutAllocation(value);
+		const bool empty = value.empty();
+		const bool faultStillArmed = failAllAllocations;
+		const bool noAllocationAttempted = rejectedAllocationCount == before;
+		ClearFaults();
+		Require(empty && faultStillArmed && noAllocationAttempted,
+			"JSON cleanup allocated, retained children or changed the original fault");
+		std::fprintf(stderr, "JSON-CLEANUP persistent-fault mixed-depth256 PASS allocations=0\n");
 	}
 }
 
@@ -443,6 +470,7 @@ int main()
 	});
 	try {
 		RunCaptureControls();
+		RunJsonCleanupControl();
 		ScreenshotFinalizationTest::Run();
 		std::cout << "ScreenshotFinalization PASS\n";
 		return 0;

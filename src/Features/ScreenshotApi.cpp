@@ -1952,6 +1952,7 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 		return;
 	try {
 		json packaging = a_sequence.packaging;
+		const Util::JsonCleanupGuard packagingCleanup(packaging);
 		packaging["frameManifest"] = {
 			{ "requested", true },
 			{ "state", a_final ? "written" : "partial" },
@@ -2004,6 +2005,7 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 			},
 			.children = a_sequence.manifestChildren,
 		};
+		const Util::JsonCleanupGuard headerCleanup(job.header);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (a_sequence.burst)
 			job.header["continuity"] = a_sequence.continuity.Receipt(a_sequence.frameCount,
@@ -2014,6 +2016,7 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 			{ "final", a_final },
 			{ "path", Util::PathToUtf8(job.destination) },
 		};
+		const Util::JsonCleanupGuard queuedEventCleanup(queuedEvent);
 		const auto state = manifestWorkerState;
 		CSX::Screenshot::AdmitManifestJob(*state, a_sequence, std::move(job), service,
 			parent->second, std::move(queuedEvent));

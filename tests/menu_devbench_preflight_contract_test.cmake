@@ -222,6 +222,8 @@ foreach(_removed_surface IN ITEMS
     endif()
 endforeach()
 
+# Shared depth ordering does not select a scene backend; its shader tests
+# cover standard rendering and the standalone reversed-order permutation.
 file(
     GLOB _retired_scene_paths
     "${PROJECT_ROOT}/src/Features/VRHybridCulling*"
@@ -229,7 +231,6 @@ file(
 )
 list(
     APPEND _retired_scene_paths
-    "${PROJECT_ROOT}/package/Shaders/Common/DepthOrder.hlsli"
     "${PROJECT_ROOT}/src/Features/VRDepthCullingTelemetry.h"
     "${PROJECT_ROOT}/src/Features/VRNativeVisibilityTelemetry.h"
     "${PROJECT_ROOT}/src/MenuDepthCullingDiagnostics.h"
@@ -265,7 +266,6 @@ foreach(_source_path IN LISTS _runtime_sources)
             VRNativeVisibilityTelemetry
             MenuDepthCullingDiagnostics
             VRDepthCullingTelemetry.h
-            DepthOrder.hlsli
             DepthCullingMethod
             kSceneHiZMode
             IsGrassHiZAvailable

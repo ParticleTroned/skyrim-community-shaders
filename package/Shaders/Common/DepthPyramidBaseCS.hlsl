@@ -1,3 +1,5 @@
+#include "Common/DepthOrder.hlsli"
+
 #ifndef BASE_REDUCTION
 #	define BASE_REDUCTION 2
 #endif
@@ -12,12 +14,12 @@ RWTexture2D<float> Output : register(u0);
 float SafeDepth(uint2 pixel)
 {
 	float value = Source.Load(int3(pixel, 0));
-	return isfinite(value) && value >= 0 && value <= 1 ? value : 1;
+	return isfinite(value) && value >= 0 && value <= 1 ? value : DepthOrder::Far();
 }
 [numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {
 	if (id.x >= Width || id.y >= Height)
 		return;
-	float maximum = 0;
+	float maximum = DepthOrder::Near();
 	uint eyeWidth = Width / Eyes;
 	uint eye = id.x / eyeWidth;
 	uint2 base = uint2(id.x % eyeWidth, id.y) * (FirstLevel ? BASE_REDUCTION : 2);
@@ -29,13 +31,13 @@ float SafeDepth(uint2 pixel)
 		uint2 pixel = base + uint2(x, y);
 		if (FirstLevel) {
 			if (pixel.x >= ActiveWidth / Eyes || pixel.y >= ActiveHeight)
-				maximum = 1;
+				maximum = DepthOrder::Far();
 			else
-				maximum = max(maximum, SafeDepth(uint2(pixel.x + eye * (ActiveWidth / Eyes), pixel.y)));
+				maximum = DepthOrder::Farthest(maximum, SafeDepth(uint2(pixel.x + eye * (ActiveWidth / Eyes), pixel.y)));
 		} else {
 			pixel.x += eye * (SourceWidth / Eyes);
-			maximum = max(maximum, SafeDepth(min(pixel, uint2(SourceWidth, SourceHeight) - 1)));
+			maximum = DepthOrder::Farthest(maximum, SafeDepth(min(pixel, uint2(SourceWidth, SourceHeight) - 1)));
 		}
 	}
-	Output[id.xy] = isfinite(maximum) ? maximum : 1;
+	Output[id.xy] = isfinite(maximum) ? maximum : DepthOrder::Far();
 }

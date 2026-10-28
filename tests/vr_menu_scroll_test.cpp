@@ -153,6 +153,7 @@ namespace RE
 		struct Keys
 		{
 			static constexpr size_t kTrigger = 0;
+			static constexpr size_t kGrip = 1;
 		};
 		static bool IsLeftHandedMode() { return Runtime::leftHanded; }
 		static bool IsPrimaryController(size_t device) { return device == Runtime::PhysicalHand(0); }
@@ -353,10 +354,9 @@ static void CheckNavigation(ScrollFixture& f)
 {
 	// The physical stick returned to centre without delivering a neutral event.
 	f.Event(1, -1);
-	f.Controller().buttons[0].isPressed = true;
+	f.Controller()[RE::BSOpenVRControllerDevice::Keys::kGrip].isPressed = true;
 	f.vr.ReleaseMenuImGuiInputState();
-	f.RequireIdle();
-	Require(f.Controller().buttons[0].isPressed, "menu resets must preserve held shortcut buttons");
+	Require(f.Controller()[RE::BSOpenVRControllerDevice::Keys::kGrip].isPressed, "menu resets must preserve held shortcut buttons");
 	for (bool secondary : { false, true }) {
 		const auto mappings = GetVRInputMappings(secondary);
 		const auto& physical = secondary ? f.vr.secondaryControllerState : f.vr.primaryControllerState;
@@ -364,6 +364,9 @@ static void CheckNavigation(ScrollFixture& f)
 		for (size_t index = 0; index < mappings.size(); ++index)
 			Require(previous[index] == physical[mappings[index].keyCode].isPressed, "reset must latch physical held buttons in mapping order");
 	}
+
+	f.RequireIdle();
+	Require(f.Controller()[RE::BSOpenVRControllerDevice::Keys::kGrip].isPressed, "trigger polling must preserve held shortcut buttons");
 
 	f.Stick(0, -1);
 	f.Frames(12);
@@ -407,7 +410,7 @@ static void CheckLostEvents(ScrollFixture& f)
 	Runtime::Stick(1 - f.hand) = { 0, 1 };
 	f.RequireIdle();
 	const auto& other = f.hand == 0 ? f.vr.secondaryControllerState : f.vr.primaryControllerState;
-	Require(other.thumbsticks[1 - f.hand].y == 1 && f.Controller().buttons[0].isPressed,
+	Require(other.thumbsticks[1 - f.hand].y == 1 && f.Controller()[RE::BSOpenVRControllerDevice::Keys::kGrip].isPressed,
 		"a missing neutral event must not clear the other hand or shortcut buttons");
 
 	// A delayed queue batch after a render stall must not restore old movement.

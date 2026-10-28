@@ -1,3 +1,5 @@
+#include "Common/DepthOrder.hlsli"
+
 #include "Common/Math.hlsli"
 #include "GrassOptimizations/GrassCullingBounds.hlsli"
 #include "GrassOptimizations/GrassInstance.hlsli"
@@ -161,10 +163,10 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out 
 		reason = 14;
 		return false;
 	}
-	float farthest = 0;
+	float farthest = DepthOrder::Near();
 	[loop] for (int y = first.y; y <= last.y; ++y)
 		[loop] for (int x = first.x; x <= last.x; ++x)
-			farthest = max(farthest, DepthPyramid.Load(int3(x, y, mip)));
+			farthest = DepthOrder::Farthest(farthest, DepthPyramid.Load(int3(x, y, mip)));
 	if (!isfinite(farthest)) {
 		reason = 15;
 		return false;
@@ -173,7 +175,7 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out 
 		reason = 16;
 	else if (nearest <= farthest + DepthBias)
 		reason = 17;
-	return nearest > farthest + DepthBias;
+	return DepthOrder::IsBehindWithBias(nearest, farthest, DepthBias);
 }
 uint FindSlice(uint index)
 {

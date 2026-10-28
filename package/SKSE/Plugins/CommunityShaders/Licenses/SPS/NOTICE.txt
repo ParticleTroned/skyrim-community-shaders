@@ -9,8 +9,8 @@ CSX texture streaming was developed with reference to SPS. The reference
 covers distance-based demand, GPU copies of lower mip levels, a restoration
 RAM buffer, adjustable VRAM reserve, remembered load sizes and a size cap.
 Preview protection and urgency-ranked restoration also reference SPS.
-Idle inventory learning follows SPS's five-second cadence. CSX shares a
-bounded maintenance budget and services reduced textures before new demand.
+CSX idle inventories reuse unchanged demand until a bounded refresh.
+Reduced textures receive service before new demand.
 
 SPS's src/TextureStream.cpp also documents the DDS-loader ABI and its
 SE/AE/VR locations (75721, 77533, 0xDD2B60), and the texture-creation slot
@@ -18,7 +18,9 @@ of BSShaderResourceManager (0xD0 / 8 = 0x1A). These integration details are
 acknowledged at the corresponding CSX hook sites.
 
 CSX shadow culling adapts the sun-angle and point-light magnification
-policy from SPS src/ShadowCulling.cpp, modified on 2026-10-28. CSX adds
+policy from SPS src/ShadowCulling.cpp, modified on 2026-10-28. Ordinary
+caster thresholds and nearest-cascade protection reference that policy.
+Distance defaults are rounded to 20/15/50 metres for sun/torch/NPCs. CSX adds
 retained camera snapshots, stereo checks, actor-root distance protection
 and independent Light Limit Fix settings.
 

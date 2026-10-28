@@ -53,6 +53,13 @@ unsaved until saved through the theme controls.
 Effective zoom is limited to fit the current display. **General > Fonts**
 controls automatic or fixed font sizing.
 
+Native shadow culling under **Light Limit Fix > Performance** defaults to on,
+including indoor torches. Separate sun, torch and NPC distance sliders default
+to **20 m, 15 m and 50 m**, each adjustable from **5 to 300 m**. Old automatic
+distances migrate to these defaults; subsequently saved slider choices remain.
+Texture Streaming defaults to **off**, with **On pressure** selected and
+continuous streaming off when enabled. Explicit saved enable choices remain.
+
 ## Requirements
 
 -   Any terminal of your choice (e.g., PowerShell)

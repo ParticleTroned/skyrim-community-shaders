@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.10.26.1",
+    "packageVersion": "d2026.10.28.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "D118D381C8E4400030675BEB49E18267FD5B59CBD4C2737A860360BBCEE80380"
+        "sha256": "5008058BC406C39D54389F7377E85038404092654ECF0B9FEF1FC93F0F0DBC88"
     },
     "runtimeSettingsContract": {
-        "revision": 17,
-        "sourceTreeSha256": "5BE78F650AD794871DEB6F7CDC235B0D639C6823E213D7DED4F0DE56E43B08F2",
+        "revision": 18,
+        "sourceTreeSha256": "CE551F69C6032747D86A4A6D71247515E078DF63DF22E83A3849D9508A67D115",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -801,11 +801,9 @@
             { "path": ["Light Limit Fix", "ShadowCulling", "torch"], "value": true },
             { "path": ["Light Limit Fix", "ShadowCulling", "actors"], "value": true },
             { "path": ["Light Limit Fix", "ShadowCulling", "interiorTorches"], "value": true },
-            {
-                "path": ["Light Limit Fix", "ShadowCulling", "minimumDistanceMeters"],
-                "value": 50.0
-            },
-            { "path": ["Light Limit Fix", "ShadowCulling", "actorDistanceMeters"], "value": 75.0 },
+            { "path": ["Light Limit Fix", "ShadowCulling", "sunDistanceMeters"], "value": 20.0 },
+            { "path": ["Light Limit Fix", "ShadowCulling", "torchDistanceMeters"], "value": 15.0 },
+            { "path": ["Light Limit Fix", "ShadowCulling", "actorDistanceMeters"], "value": 50.0 },
             { "path": ["Extended Materials", "ParallaxStrength"], "value": 1.0 },
             { "path": ["Screenshot", "SettingsSchemaVersion"], "value": 2 },
             { "path": ["Screenshot", "Sequence", "Schedule", "Basis"], "value": "game_frames" },

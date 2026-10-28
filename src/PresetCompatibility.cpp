@@ -77,7 +77,7 @@ namespace
 				   a_evaluation.minimumVersion == "3.19" && a_evaluation.maximumVersionExclusive == "3.20") ||
 		       ((a_evaluation.settingsContractRevision >= 8 && a_evaluation.settingsContractRevision <= 15) &&
 				   a_evaluation.minimumVersion == "3.20" && a_evaluation.maximumVersionExclusive == "3.21") ||
-		       (a_current.minor == 21 && (a_evaluation.settingsContractRevision == 15 || a_evaluation.settingsContractRevision == 16) &&
+		       (a_current.minor == 21 && (a_evaluation.settingsContractRevision >= 15 && a_evaluation.settingsContractRevision <= 17) &&
 				   a_evaluation.minimumVersion == "3.21" &&
 				   a_evaluation.maximumVersionExclusive == "3.22");
 	}

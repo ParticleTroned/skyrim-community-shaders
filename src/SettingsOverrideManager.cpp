@@ -1,6 +1,7 @@
 #include "SettingsOverrideManager.h"
 
 #include "FeatureIssues.h"
+#include "Features/LightLimitFix/ShadowCullingPolicy.h"
 #include "SettingsMigrations.h"
 #include "Util.h"
 
@@ -12,11 +13,21 @@
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 
 using namespace SKSE;
 
 namespace
 {
+	void MigrateShadowCullingOverride(json& layer, std::string_view feature)
+	{
+		if (feature.empty() || feature == "Global") {
+			if (auto lightLimitFix = layer.find("Light Limit Fix"); lightLimitFix != layer.end())
+				LightLimitFixDetail::ShadowCulling::MigrateLegacyOverride(*lightLimitFix);
+		} else if (feature == "LightLimitFix") {
+			LightLimitFixDetail::ShadowCulling::MigrateLegacyOverride(layer);
+		}
+	}
 	// Simple hash function for file contents
 	std::string ComputeContentHash(const std::string& content)
 	{
@@ -608,6 +619,7 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 		if (overrideInfo->overrideData.contains("_metadata")) {
 			overrideInfo->overrideData.erase("_metadata");
 		}
+		MigrateShadowCullingOverride(overrideInfo->overrideData, overrideInfo->featureName);
 
 		if (overrideInfo->isGlobal) {
 			if (SettingsMigrations::MigrateAdaptiveBalanceRootLayer(overrideInfo->overrideData, true))
@@ -1095,9 +1107,18 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 	const auto readUserLayer = [&](const std::string& a_sourceFeature, json& o_userJson) {
 		std::string error;
 		const auto result = ReadUserSettingsLayer(GetUserOverridesDirectory() / (a_sourceFeature + ".user.json"), o_userJson, error);
+		if (result == Util::FileHelpers::JsonFileReadResult::Success) {
+			try {
+				MigrateShadowCullingOverride(o_userJson, a_sourceFeature);
+				return true;
+			} catch (const std::exception& exception) {
+				logger::warn("Cannot migrate user settings for {}: {}", a_sourceFeature, exception.what());
+				return false;
+			}
+		}
 		if (result == Util::FileHelpers::JsonFileReadResult::Error)
 			logger::warn("Cannot load user settings for {}: {}", a_sourceFeature, error);
-		return result == Util::FileHelpers::JsonFileReadResult::Success;
+		return false;
 	};
 	bool applied = false;
 	if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {

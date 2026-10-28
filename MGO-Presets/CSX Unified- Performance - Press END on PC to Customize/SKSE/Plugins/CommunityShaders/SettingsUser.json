@@ -72,15 +72,15 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-performance",
-    "presetVersion": "d2026.10.26.1",
+    "presetVersion": "d2026.10.28.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
       "maximumVersionExclusive": "3.22"
     },
     "settingsContract": {
-      "revision": 17,
-      "sourceTreeSha256": "5BE78F650AD794871DEB6F7CDC235B0D639C6823E213D7DED4F0DE56E43B08F2"
+      "revision": 18,
+      "sourceTreeSha256": "CE551F69C6032747D86A4A6D71247515E078DF63DF22E83A3849D9508A67D115"
     }
   },
   "Upscaling": {
@@ -970,8 +970,9 @@
       "torch": true,
       "actors": true,
       "interiorTorches": true,
-      "minimumDistanceMeters": 50.0,
-      "actorDistanceMeters": 75.0
+      "sunDistanceMeters": 20.0,
+      "torchDistanceMeters": 15.0,
+      "actorDistanceMeters": 50.0
     },
     "StrictContactShadowBudget": 4,
     "UseParticleLights087LegacyMode": false

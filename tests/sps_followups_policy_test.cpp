@@ -64,6 +64,7 @@ namespace ShadowSnapshotFixture
 	struct Camera
 	{
 		Pass pass = Pass::Unknown;
+		unsigned cascade = 0;
 	};
 	struct Snapshot
 	{
@@ -90,8 +91,8 @@ namespace ShadowSnapshotFixture
 		captured.settings.sun = captured.settings.torch = false;
 		Require(HasEligibleCamera(captured), "Actors-only point demand was discarded");
 		captured.cameras[0].pass = Pass::Sun;
-		Require(HasEligibleCamera(captured), "Actors-only sun demand was discarded");
-		for (const double sine : { 0.0, MinimumSunSine - 0.001, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN() }) {
+		Require(HasEligibleCamera(captured), "Actors-only nearest sun cascade was discarded");
+		for (const double sine : { 0.0, MinimumSunSine - 0.001, 1.01, std::numeric_limits<double>::quiet_NaN() }) {
 			captured.sunSine = sine;
 			Require(!HasEligibleCamera(captured), "Invalid or low sun activated culling");
 		}
@@ -118,33 +119,35 @@ namespace ShadowSnapshotFixture
 		captured = {};
 		captured.cameraCount = 1;
 		captured.cameras[0].pass = Pass::Sun;
-		captured.settings.actors = captured.settings.sun = false;
-		Require(!HasEligibleCamera(captured), "Disabled sun and actor policies activated culling");
-		captured.settings.sun = true;
-		Require(HasEligibleCamera(captured), "Enabled object sun culling did not reactivate");
+		captured.settings.actors = false;
+		Require(!HasEligibleCamera(captured), "Protected nearest cascade activated object-only culling");
+		captured.cameras[0].cascade = 1;
+		Require(HasEligibleCamera(captured), "An eligible outer cascade did not reactivate culling");
 		for (unsigned flags = 0; flags < 16; ++flags)
 			for (const auto pass : { Pass::Unknown, Pass::Sun, Pass::Point })
-				for (const bool interior : { false, true }) {
-					captured.settings.sun = (flags & 1) != 0;
-					captured.settings.torch = (flags & 2) != 0;
-					captured.settings.actors = (flags & 4) != 0;
-					captured.settings.interiorTorches = (flags & 8) != 0;
-					captured.cameras[0] = { pass };
-					captured.interior = interior;
-					Demand caster;
-					caster.pass = pass;
-					caster.eyeCount = captured.eyeCount;
-					caster.sunElevationSine = captured.sunSine;
-					caster.interior = interior;
-					caster.dynamic = false;
-					caster.radius = 1;
-					caster.eyeDistance = { 1e6, 1e6 };
-					caster.lightDistance = caster.lightRadius = 1000;
-					const bool objectEligible = ShouldCull(captured.settings, caster);
-					caster.actor = true;
-					Require(HasEligibleCamera(captured) == (objectEligible || ShouldCull(captured.settings, caster)),
-						"Snapshot eligibility disagreed with authoritative caster policy");
-				}
+				for (const unsigned cascade : { 0u, 1u })
+					for (const bool interior : { false, true }) {
+						captured.settings.sun = (flags & 1) != 0;
+						captured.settings.torch = (flags & 2) != 0;
+						captured.settings.actors = (flags & 4) != 0;
+						captured.settings.interiorTorches = (flags & 8) != 0;
+						captured.cameras[0] = { pass, cascade };
+						captured.interior = interior;
+						Demand caster;
+						caster.pass = pass;
+						caster.cascade = cascade;
+						caster.eyeCount = captured.eyeCount;
+						caster.sunElevationSine = captured.sunSine;
+						caster.interior = interior;
+						caster.dynamic = false;
+						caster.radius = 1;
+						caster.eyeDistance = { 1e6, 1e6 };
+						caster.lightDistance = caster.lightRadius = 1000;
+						const bool objectEligible = ShouldCull(captured.settings, caster);
+						caster.actor = true;
+						Require(HasEligibleCamera(captured) == (objectEligible || ShouldCull(captured.settings, caster)),
+							"Snapshot eligibility disagreed with authoritative caster policy");
+					}
 	}
 }
 int main()
@@ -157,7 +160,7 @@ int main()
 		Require(C::SurfaceDistance(staleCenter, 16, view, &actorRoot) == 84, "Stale skin bounds overrode the nearby actor root");
 		Require(!std::isfinite(C::SurfaceDistance({ std::numeric_limits<double>::infinity(), 0, 0 }, 16, view, &actorRoot)), "An actor root hid invalid geometry bounds");
 		C::Settings settings;
-		Require(settings.sun && settings.torch && settings.actors && settings.interiorTorches, "Culling defaults did not enable all four controls");
+		Require(settings.sun && settings.torch && settings.actors && settings.interiorTorches, "Culling defaults lost indoor torch coverage");
 		Require(C::Parse(nlohmann::json::object()) == settings, "Missing saved settings did not use the new defaults");
 		C::Demand demand{ C::Pass::Sun, { 10000, 10000 }, 2, 16, 1, 1000, 2000, false, false, false };
 		Require(C::ShouldCull(settings, demand), "Default sun culling was inactive");
@@ -165,6 +168,7 @@ int main()
 		Require(C::ShouldCull(settings, demand), "Default torch culling was inactive");
 		demand.interior = true;
 		Require(C::ShouldCull(settings, demand), "Default indoor torch culling was inactive");
+		settings.interiorTorches = true;
 		demand.actor = true;
 		Require(C::ShouldCull(settings, demand), "Default distant NPC culling was inactive");
 		demand.interior = false;
@@ -181,7 +185,9 @@ int main()
 		demand.sunElevationSine = 0.1;
 		Require(!C::ShouldCull(settings, demand), "Low sun lost a long shadow");
 		demand.sunElevationSine = 0.2;
+		demand.radius = 40;
 		Require(!C::ShouldCull(settings, demand), "Magnified sun shadow was treated as a tiny caster");
+		demand.radius = 16;
 		demand.sunElevationSine = 1;
 		demand.dynamic = true;
 		Require(!C::ShouldCull(settings, demand), "Animated geometry was culled as static");
@@ -217,8 +223,8 @@ int main()
 		demand.eyeDistance = { 10000, 10000 };
 		demand.radius = std::numeric_limits<double>::quiet_NaN();
 		Require(!C::ShouldCull(settings, demand), "Invalid bounds authorized culling");
-		for (const auto& bad : { nlohmann::json{ { "sun", 1 } }, nlohmann::json{ { "minimumDistanceMeters", 29 } },
-				 nlohmann::json{ { "actorDistanceMeters", 49 } }, nlohmann::json{ { "torch", true }, { "unknown", false } } }) {
+		for (const auto& bad : { nlohmann::json{ { "sun", 1 } }, nlohmann::json{ { "minimumDistanceMeters", 4 } },
+				 nlohmann::json{ { "actorDistanceMeters", 4 } }, nlohmann::json{ { "torch", true }, { "unknown", false } } }) {
 			bool rejected = false;
 			try {
 				(void)C::Parse(bad, settings);

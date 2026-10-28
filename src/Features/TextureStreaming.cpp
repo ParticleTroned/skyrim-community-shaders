@@ -526,7 +526,7 @@ struct TextureStreaming::State
 	};
 
 	mutable std::mutex mutex;
-	bool requestedEnabled = true, enabled = true, externalStreamingConflict = false;
+	bool requestedEnabled = StreamingTextures::DefaultEnabled, enabled = StreamingTextures::DefaultEnabled, externalStreamingConflict = false;
 	StreamingTextures::Modes modes;
 	StreamingTextures::Options options;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -1829,7 +1829,7 @@ void TextureStreaming::LoadSettings(nlohmann::json& object)
 		const auto maximum = StreamingTextures::ParseMaximumMipDrop(object.value("MaximumMipDrop", nlohmann::json(2)));
 		const auto modes = object.contains("Modes") ? StreamingTextures::ParseModes(object.at("Modes")) :
 		                                              StreamingTextures::Modes{};
-		Configure(object.value("Enabled", modes.Enabled()), maximum, object.contains("Categories") ? StreamingTextures::ParseCategories(object.at("Categories")) : StreamingTextures::Categories{}, modes,
+		Configure(object.value("Enabled", StreamingTextures::DefaultEnabled), maximum, object.contains("Categories") ? StreamingTextures::ParseCategories(object.at("Categories")) : StreamingTextures::Categories{}, modes,
 			object.contains("Options") ? StreamingTextures::ParseOptions(object.at("Options")) : StreamingTextures::Options{});
 	} catch (const std::exception& error) {
 		logger::warn("[TextureStreaming] Invalid saved settings retained previous configuration: {}", error.what());
@@ -1842,7 +1842,7 @@ void TextureStreaming::SaveSettings(nlohmann::json& object)
 		{ "MaximumMipDrop", state->maximumDrop }, { "Categories", StreamingTextures::SerializeCategories(state->categories) },
 		{ "Options", StreamingTextures::SerializeOptions(state->options) } };
 }
-void TextureStreaming::RestoreDefaultSettings() { Configure(true, 2, StreamingTextures::Categories{}, StreamingTextures::Modes{}, StreamingTextures::Options{}); }
+void TextureStreaming::RestoreDefaultSettings() { Configure(StreamingTextures::DefaultEnabled, 2, StreamingTextures::Categories{}, StreamingTextures::Modes{}, StreamingTextures::Options{}); }
 nlohmann::json TextureStreaming::GetStatus() const
 {
 	std::scoped_lock lock(state->mutex);

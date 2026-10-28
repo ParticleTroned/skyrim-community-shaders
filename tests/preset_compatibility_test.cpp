@@ -98,7 +98,7 @@ int main(int argc, char** argv)
 		}
 	}
 	for (const auto presetId : { "csx-unified-performance", "csx-unified-balanced", "csx-unified-quality" }) {
-		for (const auto revision : { 15u, 16u }) {
+		for (const auto revision : { 15u, 16u, 17u }) {
 			auto legacy = CompatiblePreset();
 			auto& marker = legacy["Preset Compatibility"];
 			marker["presetId"] = presetId;

@@ -1371,6 +1371,14 @@ void State::Load(
 		}
 	}
 
+	// Retire legacy distances before a separate-field override can merge with them.
+	try {
+		if (auto lighting = settings.find("Light Limit Fix"); lighting != settings.end())
+			LightLimitFixDetail::ShadowCulling::MigrateLegacyOverride(*lighting);
+	} catch (const std::exception& error) {
+		logger::warn("Shadow-culling migration deferred to feature validation: {}", error.what());
+	}
+
 	// Step 3: Discover and prepare overrides (applied after user settings, so overrides take priority)
 	auto overrideManager = SettingsOverrideManager::GetSingleton();
 	size_t overridesDiscovered = overrideManager->DiscoverOverrides();

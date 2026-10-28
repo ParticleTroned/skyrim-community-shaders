@@ -43,8 +43,8 @@ if(NOT _terrain_seams_found)
 endif()
 
 foreach(_bridge_contract IN ITEMS
-    "ServiceFoundation value({ ServiceName, 1, 1, 21 })"
-    "{ \"minor\", 1 }, { \"schemaRevision\", 21 }"
+    "ServiceFoundation value({ ServiceName, 1, 1, 22 })"
+    "{ \"minor\", 1 }, { \"schemaRevision\", 22 }"
     "PresetCompatibility::ToJson(PresetCompatibility::GetPublished())"
 )
     string(FIND "${_bridge}" "${_bridge_contract}" _bridge_position)
@@ -113,6 +113,32 @@ foreach(_field IN ITEMS available spsConflict active previewActive)
         message(FATAL_ERROR "Shadow/preview status is not exposed: ${_field}")
     endif()
 endforeach()
+foreach(_distance IN ITEMS "sunDistanceMeters,5,20" "torchDistanceMeters,5,15" "actorDistanceMeters,5,50")
+    string(REPLACE "," ";" _parts "${_distance}")
+    list(GET _parts 0 _field)
+    list(GET _parts 1 _minimum)
+    list(GET _parts 2 _default)
+    string(JSON _schema GET "${_descriptor}" inputSchema properties shadowCulling properties ${_field})
+    string(JSON _type GET "${_schema}" type)
+    string(JSON _actual_min GET "${_schema}" minimum)
+    string(JSON _actual_max GET "${_schema}" maximum)
+    string(JSON _actual_default GET "${_schema}" default)
+    if(NOT _type STREQUAL "number" OR NOT _actual_min EQUAL _minimum OR
+       NOT _actual_max EQUAL 300 OR NOT _actual_default EQUAL _default)
+        message(FATAL_ERROR "Shadow distance schema disagrees with UI/policy: ${_field}")
+    endif()
+    string(JSON _reply GET "${_descriptor}" outputSchema properties result properties settings properties ${_field})
+    string(JSON _reply_type GET "${_reply}" type)
+    string(JSON _reply_min GET "${_reply}" minimum)
+    string(JSON _reply_max GET "${_reply}" maximum)
+    if(NOT _reply_type STREQUAL _type OR NOT _reply_min EQUAL _actual_min OR NOT _reply_max EQUAL _actual_max)
+        message(FATAL_ERROR "Shadow-culling reply disagrees with request: ${_field}")
+    endif()
+endforeach()
+string(JSON _legacy_reply ERROR_VARIABLE _legacy_error GET "${_descriptor}" outputSchema properties result properties settings properties minimumDistanceMeters)
+if(NOT _legacy_error)
+    message(FATAL_ERROR "Shadow-culling reply still advertises retired automatic distances")
+endif()
 string(JSON _payload GET "${_descriptor}" outputSchema properties result properties maximumPayloadMiB const)
 if(NOT _payload EQUAL 128)
     message(FATAL_ERROR "The bounded 8K payload limit is missing from DevBench")

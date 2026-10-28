@@ -957,8 +957,9 @@
       "torch": true,
       "actors": true,
       "interiorTorches": true,
-      "minimumDistanceMeters": 50.0,
-      "actorDistanceMeters": 75.0
+      "sunDistanceMeters": 20.0,
+      "torchDistanceMeters": 15.0,
+      "actorDistanceMeters": 50.0
     },
     "StrictContactShadowBudget": 4,
     "UseParticleLights087LegacyMode": false

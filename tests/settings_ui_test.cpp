@@ -447,6 +447,7 @@ struct ShadowControlObservation
 	ImVec2 center;
 	bool disabled;
 	float alpha;
+	float minimum = 0, maximum = 0;
 };
 std::map<std::string, ShadowControlObservation> shadowControls;
 void ObserveShadowControl(const char* label)
@@ -465,6 +466,8 @@ bool TrackedShadowSlider(const char* label, float* value, float minimum, float m
 {
 	const bool changed = Util::Widgets::SliderFloat(label, value, minimum, maximum, format);
 	ObserveShadowControl(label);
+	shadowControls.at(label).minimum = minimum;
+	shadowControls.at(label).maximum = maximum;
 	return changed;
 }
 namespace LightLimitFixDetail::ShadowCulling
@@ -2098,7 +2101,11 @@ int main()
 					frame(draw);
 					frame(draw);
 					const auto original = shadows.settings.ShadowCulling;
-					for (const char* control : { "Sun shadows", "Torch shadows", "Distant NPC shadows", "Indoor torches", "Object distance", "NPC distance" }) {
+					for (const char* slider : { "Sun shadow distance", "Torch shadow distance", "NPC distance" }) {
+						const auto observed = shadowControls.at(slider);
+						require(observed.minimum == 5 && observed.maximum == 300, "All native shadow sliders must expose 5..300 metres");
+					}
+					for (const char* control : { "Sun shadows", "Torch shadows", "Distant NPC shadows", "Indoor torches", "Sun shadow distance", "Torch shadow distance", "NPC distance" }) {
 						const auto observed = shadowControls.at(control);
 						require(observed.disabled == sps, "SPS alone gates native shadow controls independently of contact shadows");
 						require(!sps || observed.alpha < shadowControls.at("Enable Point Light Contact Shadows").alpha, "SPS greys native shadow controls while leaving contact shadows bright");

@@ -21,6 +21,7 @@ namespace LightLimitFixDetail::ShadowCulling
 			RE::NiPointer<RE::BSShadowLight> pointOwner;
 			RE::NiPointer<RE::NiLight> pointSource;
 			Pass pass = Pass::Unknown;
+			unsigned cascade = 0;
 			RE::NiPoint3 lightPosition{};
 			float lightRadius = 0;
 		};
@@ -103,6 +104,7 @@ namespace LightLimitFixDetail::ShadowCulling
 				return false;
 			Demand demand;
 			demand.pass = matched->pass;
+			demand.cascade = matched->cascade;
 			demand.eyeCount = captured->eyeCount;
 			demand.sunElevationSine = captured->sunSine;
 			demand.interior = captured->interior;
@@ -169,6 +171,7 @@ namespace LightLimitFixDetail::ShadowCulling
 			// Keep the bounded camera order intact, including first-match identity semantics.
 			return std::any_of(captured.cameras.begin(), captured.cameras.begin() + captured.cameraCount, [&](const Camera& camera) {
 				demand.pass = camera.pass;
+				demand.cascade = camera.cascade;
 				if (!PassMayCull(captured.settings, demand))
 					return false;
 				demand.actor = false;
@@ -182,12 +185,13 @@ namespace LightLimitFixDetail::ShadowCulling
 		{
 			if (!light)
 				return;
-			const auto append = [&](const RE::NiPointer<RE::NiCamera>& camera) {
+			const auto append = [&](const RE::NiPointer<RE::NiCamera>& camera, unsigned cascade) {
 				if (!camera || output.cameraCount >= output.cameras.size())
 					return;
 				auto& target = output.cameras[output.cameraCount++];
 				target.owner = camera;
 				target.pass = pass;
+				target.cascade = cascade;
 				if (pass == Pass::Point) {
 					target.pointOwner.reset(light);
 					target.pointSource = light->light;
@@ -196,15 +200,20 @@ namespace LightLimitFixDetail::ShadowCulling
 				if (light->light)
 					target.lightRadius = light->light->GetLightRuntimeData().radius.x;
 			};
+			unsigned cascade = 0;
 			if (globals::game::isVR) {
-				for (const auto& descriptor : light->GetVRRuntimeData().shadowmapDescriptors)
+				for (const auto& descriptor : light->GetVRRuntimeData().shadowmapDescriptors) {
 					if (descriptor.isEnabled)
 						for (const auto& camera : descriptor.camera)
-							append(camera);
+							append(camera, cascade);
+					++cascade;
+				}
 			} else {
-				for (const auto& descriptor : light->GetRuntimeData().shadowmapDescriptors)
+				for (const auto& descriptor : light->GetRuntimeData().shadowmapDescriptors) {
 					if (descriptor.isEnabled)
-						append(descriptor.camera);
+						append(descriptor.camera, cascade);
+					++cascade;
+				}
 			}
 		}
 	}
@@ -303,18 +312,22 @@ namespace LightLimitFixDetail::ShadowCulling
 		ImGui::TextWrapped("Native shadow maps; independent of contact shadows.");
 		Util::Widgets::Checkbox("Sun shadows", &settings.sun);
 		Util::AddTooltip("Skip tiny distant sun-shadow casters. Both VR eyes and long shadows near the horizon remain protected.");
+		Util::Widgets::SliderFloat("Sun shadow distance", &settings.sunDistanceMeters, MinimumDistanceMeters, MaximumDistanceMeters, "%.0f m");
+		Util::AddTooltip("Minimum distance from the caster's bound. Default: 20 m. The nearest sun cascade and an additional stereo movement margin remain protected.");
 		ImGui::Spacing();
 		Util::Widgets::Checkbox("Torch shadows", &settings.torch);
 		Util::AddTooltip("Skip tiny distant torch/fire shadow casters. Objects close to a light and large projected shadows remain protected.");
+		Util::Widgets::SliderFloat("Torch shadow distance", &settings.torchDistanceMeters, MinimumDistanceMeters, MaximumDistanceMeters, "%.0f m");
+		Util::AddTooltip("Minimum distance from the caster's bound. Default: 15 m. Light magnification and an additional stereo movement margin can retain more shadows.");
 		ImGui::Spacing();
 		Util::Widgets::Checkbox("Distant NPC shadows", &settings.actors);
 		Util::AddTooltip("Also omit distant NPC shadows. Characters and their texture detail stay visible.");
+		Util::Widgets::SliderFloat("NPC distance", &settings.actorDistanceMeters, MinimumDistanceMeters, MaximumDistanceMeters, "%.0f m");
+		Util::AddTooltip("Default: 50 m. Nearby actor roots and large projected shadows remain protected.");
 		if (advanced) {
 			ImGui::Spacing();
 			Util::Widgets::Checkbox("Indoor torches", &settings.interiorTorches);
 			Util::AddTooltip("Allow torch and NPC shadow culling indoors. Near lights and large projected shadows remain protected.");
-			Util::Widgets::SliderFloat("Object distance", &settings.minimumDistanceMeters, 30, 300, "%.0f m");
-			Util::Widgets::SliderFloat("NPC distance", &settings.actorDistanceMeters, 50, 300, "%.0f m");
 		}
 	}
 	nlohmann::json Status(const Settings& settings)

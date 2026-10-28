@@ -368,7 +368,7 @@ struct TextureStreaming
 	{
 		std::mutex mutex;
 		StreamingTextures::Categories categories;
-		bool requestedEnabled = true, enabled = true, externalStreamingConflict = false;
+		bool requestedEnabled = StreamingTextures::DefaultEnabled, enabled = StreamingTextures::DefaultEnabled, externalStreamingConflict = false;
 		std::string inventoryFailure;
 		StreamingTextures::Modes modes;
 		StreamingTextures::Options options;
@@ -620,8 +620,10 @@ void CheckStreamingConflict()
 	simulatedSPSLoaded = false;
 	TextureStreaming native;
 	native.PostPostLoad();
-	Require(native.loaded && native.state->enabled && !native.state->externalStreamingConflict && originHookReady && hookInstalls == 1,
+	Require(native.loaded && !native.state->enabled && !native.state->requestedEnabled && !native.state->externalStreamingConflict && originHookReady && hookInstalls == 1,
 		"Removing SPS and restarting did not permit native streaming");
+	native.Configure(true, 2);
+	Require(native.state->enabled && native.state->requestedEnabled, "Enabling the default-off master failed without SPS");
 	native.PostPostLoad();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	Require(CSX::Diagnostics::Stutters::AssetLoadHooks::ddsAvailable, "DDS hook availability must reach diagnostics");
@@ -835,6 +837,7 @@ int main()
 			Require(!PathCategories(protectedPath, Terrain), "Expanded coverage bypassed a protected path");
 		MenuUI::selected = "categories";
 		TextureStreaming terrainControl;
+		terrainControl.Configure(true, 2);
 		Util::Widgets::clicks = { { "Terrain", false } };
 		terrainControl.DrawSettings();
 		Require(!terrainControl.state->categories.terrain && terrainControl.state->categories.parallax && terrainControl.state->categories.landscapeStatics, "Terrain UI was not independent");
@@ -847,21 +850,24 @@ int main()
 		parallaxLoaded.LoadSettings(parallaxSaved);
 		Require(!parallaxLoaded.state->categories.parallax && !parallaxLoaded.state->categories.terrain, "Saved disabled coverage was overwritten by defaults");
 		TextureStreaming feature;
+		feature.Configure(true, 2);
+		const auto featureEpoch = feature.state->epoch;
+		const auto consumerClears = feature.state->records[1].consumers.clears;
 		feature.state->categories = { false, false, false, true, true };
 		Util::Widgets::clicks = { { "Landscape", true }, { "Cutouts", true }, { "Emissive", true } };
 		feature.DrawSettings();
 		Require(feature.state->categories == Categories{ true, true, true, true, true } && Util::Widgets::clicks.empty(), "UI did not apply all independent category toggles");
-		Require(feature.state->epoch == 8 && feature.state->frontier.empty() && feature.state->visited.empty() && !feature.state->completeScan &&
-					!feature.state->selectionCursor && !feature.state->learningRemaining && feature.state->records[1].consumers.clears == 1,
+		Require(feature.state->epoch == featureEpoch + 1 && feature.state->frontier.empty() && feature.state->visited.empty() && !feature.state->completeScan &&
+					!feature.state->selectionCursor && !feature.state->learningRemaining && feature.state->records[1].consumers.clears == consumerClears + 1,
 			"Category change retained stale scans or pending work identity");
 		Require(MenuUI::sections.size() == 3 && std::string(MenuUI::sections[1].id) == "categories", "Optional categories were absent from page navigation");
 		feature.Configure(true, 3);
-		Require(feature.state->categories == Categories{ true, true, true, true, true } && feature.state->epoch == 9, "Mip control reset categories or retained stale pending work");
+		Require(feature.state->categories == Categories{ true, true, true, true, true } && feature.state->epoch == featureEpoch + 2, "Mip control reset categories or retained stale pending work");
 		feature.Configure(true, 3, Categories{ true, true, true, true, true });
-		Require(feature.state->epoch == 9, "Unchanged categories invalidated an inventory");
+		Require(feature.state->epoch == featureEpoch + 2, "Unchanged categories invalidated an inventory");
 		Util::Widgets::clicks = { { "Emissive", false } };
 		feature.DrawSettings();
-		Require(feature.state->categories == Categories{ true, true, false, true, true } && feature.state->epoch == 10, "Narrowing coverage did not invalidate an unfinished reduction");
+		Require(feature.state->categories == Categories{ true, true, false, true, true } && feature.state->epoch == featureEpoch + 3, "Narrowing coverage did not invalidate an unfinished reduction");
 		nlohmann::json saved;
 		feature.SaveSettings(saved);
 		TextureStreaming loaded;
@@ -877,7 +883,7 @@ int main()
 		loaded.DrawSettings();
 		Require(!loaded.state->categories.emissiveStatics && !Util::disabled, "Unavailable UI changed coverage or leaked ImGui disable state");
 		loaded.RestoreDefaultSettings();
-		Require(loaded.state->enabled && loaded.state->modes == Modes{} && loaded.state->maximumDrop == 2 && loaded.state->categories == Categories{}, "Reset did not restore default coverage");
+		Require(!loaded.state->enabled && !loaded.state->requestedEnabled && loaded.state->modes == Modes{} && loaded.state->maximumDrop == 2 && loaded.state->categories == Categories{}, "Reset did not restore default coverage");
 		originHookReady = true;
 		saved.erase("Categories");
 		feature.LoadSettings(saved);
@@ -898,7 +904,15 @@ int main()
 		Require(restoredMaster.state->enabled && restoredMaster.state->modes.continuous && restoredMaster.state->maximumDrop == 3,
 			"Re-enabling lost detailed tuning");
 		TextureStreaming mode;
-		Require(mode.state->enabled && mode.state->modes == Modes{} && !mode.state->ReductionRequested(), "Default pressure policy activated at healthy memory");
+		Require(!mode.state->enabled && !mode.state->requestedEnabled && mode.state->modes == Modes{} && !mode.state->ReductionRequested(), "Streaming master did not default off with pressure mode retained");
+		nlohmann::json absent = nlohmann::json::object();
+		mode.LoadSettings(absent);
+		Require(!mode.state->enabled && mode.state->modes.onPressure && !mode.state->modes.continuous, "Missing saved settings enabled streaming or lost pressure mode");
+		absent["Modes"] = SerializeModes(Modes{ false, true });
+		mode.LoadSettings(absent);
+		Require(!mode.state->enabled && mode.state->modes.continuous, "A trigger implicitly enabled the missing master switch");
+		mode.RestoreDefaultSettings();
+		mode.Configure(true, 2);
 		mode.state->pressure.conserving = true;
 		Require(mode.state->ReductionRequested(), "Default pressure trigger did not activate reductions");
 		const auto initialEpoch = mode.state->epoch;

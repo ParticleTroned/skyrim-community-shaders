@@ -7,6 +7,7 @@
 #include <RE/B/BSCullingProcess.h>
 #include <RE/B/BSParabolicCullingProcess.h>
 #include <RE/B/BSShadowDirectionalLight.h>
+#include <algorithm>
 #include <atomic>
 #include <memory>
 
@@ -158,6 +159,25 @@ namespace LightLimitFixDetail::ShadowCulling
 			if (!Skip(culler, geometry, camera))
 				parabolicOriginal(culler, geometry, alphaGroup);
 		}
+		bool HasEligibleCamera(const Snapshot& captured) noexcept
+		{
+			Demand demand;
+			demand.eyeCount = captured.eyeCount;
+			demand.sunElevationSine = captured.sunSine;
+			demand.interior = captured.interior;
+			demand.dynamic = false;
+			// Keep the bounded camera order intact, including first-match identity semantics.
+			return std::any_of(captured.cameras.begin(), captured.cameras.begin() + captured.cameraCount, [&](const Camera& camera) {
+				demand.pass = camera.pass;
+				if (!PassMayCull(captured.settings, demand))
+					return false;
+				demand.actor = false;
+				if (CasterMayCull(captured.settings, demand))
+					return true;
+				demand.actor = true;
+				return CasterMayCull(captured.settings, demand);
+			});
+		}
 		void CaptureLight(Snapshot& output, RE::BSShadowLight* light, Pass pass)
 		{
 			if (!light)
@@ -252,6 +272,11 @@ namespace LightLimitFixDetail::ShadowCulling
 				for (const auto& light : data.activeShadowLights)
 					if (light && light.get() != data.sunShadowDirLight)
 						CaptureLight(*captured, light.get(), Pass::Point);
+			}
+			if (!HasEligibleCamera(*captured)) {
+				active.store(false, std::memory_order_release);
+				snapshot.Publish({});
+				return;
 			}
 			snapshot.Publish(std::move(captured));
 			active.store(true, std::memory_order_release);

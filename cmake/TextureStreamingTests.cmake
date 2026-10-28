@@ -142,12 +142,13 @@ target_link_libraries(sps_followups_policy_test PRIVATE nlohmann_json::nlohmann_
 
 set(_shadow_startup_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/shadow-startup")
 set(_shadow_startup_header "${_shadow_startup_dir}/shadow_startup_under_test.h")
-add_custom_command(OUTPUT "${_shadow_startup_header}"
+set(_shadow_eligibility_header "${_shadow_startup_dir}/shadow_eligibility_under_test.h")
+add_custom_command(OUTPUT "${_shadow_startup_header}" "${_shadow_eligibility_header}"
     COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
         "-DOUTPUT_DIRECTORY=${_shadow_startup_dir}" -P
         "${PROJECT_SOURCE_DIR}/tests/extract_sps_followups.cmake"
     DEPENDS src/Features/LightLimitFix/ShadowCulling.cpp tests/extract_source_region.cmake
         tests/extract_sps_followups.cmake
     VERBATIM)
-target_sources(sps_followups_policy_test PRIVATE "${_shadow_startup_header}")
+target_sources(sps_followups_policy_test PRIVATE "${_shadow_startup_header}" "${_shadow_eligibility_header}")
 target_include_directories(sps_followups_policy_test PRIVATE "${_shadow_startup_dir}")

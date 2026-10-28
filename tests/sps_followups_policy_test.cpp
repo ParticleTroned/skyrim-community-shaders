@@ -58,10 +58,100 @@ namespace ShadowStartupFixture
 		Require(writes == 2, "Repeated initialization chained the hook to itself");
 	}
 }
+namespace ShadowSnapshotFixture
+{
+	using namespace LightLimitFixDetail::ShadowCulling;
+	struct Camera
+	{
+		Pass pass = Pass::Unknown;
+	};
+	struct Snapshot
+	{
+		Settings settings;
+		std::array<Camera, 72> cameras;
+		unsigned cameraCount = 0, eyeCount = 2;
+		double sunSine = 1;
+		bool interior = false;
+	};
+#include "shadow_eligibility_under_test.h"
+	void CheckEligibility()
+	{
+		Snapshot captured;
+		captured.cameras[0].pass = Pass::Sun;
+		Require(!HasEligibleCamera(captured), "Uncaptured cameras activated culling");
+		captured.cameraCount = 1;
+		Require(HasEligibleCamera(captured), "Valid sun demand did not reactivate culling");
+		captured.cameras[0].pass = Pass::Point;
+		captured.interior = true;
+		captured.settings.interiorTorches = false;
+		Require(!HasEligibleCamera(captured), "Disabled interior point demand activated culling");
+		captured.settings.interiorTorches = true;
+		Require(HasEligibleCamera(captured), "Interior torch opt-in did not reactivate culling");
+		captured.settings.sun = captured.settings.torch = false;
+		Require(HasEligibleCamera(captured), "Actors-only point demand was discarded");
+		captured.cameras[0].pass = Pass::Sun;
+		Require(HasEligibleCamera(captured), "Actors-only sun demand was discarded");
+		for (const double sine : { 0.0, MinimumSunSine - 0.001, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN() }) {
+			captured.sunSine = sine;
+			Require(!HasEligibleCamera(captured), "Invalid or low sun activated culling");
+		}
+		captured.sunSine = MinimumSunSine;
+		Require(HasEligibleCamera(captured), "Valid boundary sun demand was discarded");
+		for (const unsigned eyes : { 0u, 3u }) {
+			captured.eyeCount = eyes;
+			Require(!HasEligibleCamera(captured), "Invalid eye count activated culling");
+		}
+		for (const unsigned eyes : { 1u, 2u }) {
+			captured.eyeCount = eyes;
+			Require(HasEligibleCamera(captured), "Mono or stereo demand was discarded");
+		}
+		captured.settings.actors = false;
+		Require(!HasEligibleCamera(captured), "Disabled policy activated culling");
+		captured = {};
+		captured.cameraCount = 71;
+		captured.cameras.back().pass = Pass::Sun;
+		Require(!HasEligibleCamera(captured), "Camera beyond the captured range activated culling");
+		++captured.cameraCount;
+		Require(HasEligibleCamera(captured), "Last admitted camera was ignored");
+		captured.cameras.back().pass = Pass::Unknown;
+		Require(!HasEligibleCamera(captured), "Unknown camera activated culling");
+		captured = {};
+		captured.cameraCount = 1;
+		captured.cameras[0].pass = Pass::Sun;
+		captured.settings.actors = captured.settings.sun = false;
+		Require(!HasEligibleCamera(captured), "Disabled sun and actor policies activated culling");
+		captured.settings.sun = true;
+		Require(HasEligibleCamera(captured), "Enabled object sun culling did not reactivate");
+		for (unsigned flags = 0; flags < 16; ++flags)
+			for (const auto pass : { Pass::Unknown, Pass::Sun, Pass::Point })
+				for (const bool interior : { false, true }) {
+					captured.settings.sun = (flags & 1) != 0;
+					captured.settings.torch = (flags & 2) != 0;
+					captured.settings.actors = (flags & 4) != 0;
+					captured.settings.interiorTorches = (flags & 8) != 0;
+					captured.cameras[0] = { pass };
+					captured.interior = interior;
+					Demand caster;
+					caster.pass = pass;
+					caster.eyeCount = captured.eyeCount;
+					caster.sunElevationSine = captured.sunSine;
+					caster.interior = interior;
+					caster.dynamic = false;
+					caster.radius = 1;
+					caster.eyeDistance = { 1e6, 1e6 };
+					caster.lightDistance = caster.lightRadius = 1000;
+					const bool objectEligible = ShouldCull(captured.settings, caster);
+					caster.actor = true;
+					Require(HasEligibleCamera(captured) == (objectEligible || ShouldCull(captured.settings, caster)),
+						"Snapshot eligibility disagreed with authoritative caster policy");
+				}
+	}
+}
 int main()
 {
 	try {
 		ShadowStartupFixture::CheckStartup();
+		ShadowSnapshotFixture::CheckEligibility();
 		namespace C = LightLimitFixDetail::ShadowCulling;
 		const std::array<double, 3> actorRoot{ 100, 0, 0 }, view{ 0, 0, 0 }, staleCenter{ 10000, 0, 0 };
 		Require(C::SurfaceDistance(staleCenter, 16, view, &actorRoot) == 84, "Stale skin bounds overrode the nearby actor root");

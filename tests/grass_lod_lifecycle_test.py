@@ -17,6 +17,7 @@ class GrassLODLifecycleTests(unittest.TestCase):
     def test_production_retirement(self):
         source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
         methods = "\n".join(block(source, signature) for signature in (
+            "void GrassBucketRenderer::Impl::ClearDrawContext(",
             "void GrassBucketRenderer::EndFrame(",
             "void GrassBucketRenderer::Impl::UpdateLODDemand(",
             "std::array<const Mesh*, 2> GrassBucketRenderer::Impl::LODMeshes("))
@@ -59,6 +60,8 @@ struct Owner {
 };
 namespace RE {
     using NiSourceTexture = int;
+    using BSMultiStreamInstanceTriShape = int;
+    using BSRenderPass = int;
     template<class T> using NiPointer = std::shared_ptr<T>;
 }
 struct Mesh {
@@ -108,6 +111,10 @@ namespace globals::features {
 }
 struct GrassBucketRenderer {
     struct Impl {
+        RE::BSMultiStreamInstanceTriShape* current = nullptr;
+        RE::BSRenderPass* currentSetupPass = nullptr;
+        bool currentMainPass = false, currentDrawObserved = false;
+        void ClearDrawContext() noexcept;
         Mutex captureMutex;
         std::map<int, Source> residents;
         uint64_t residentRevision = 0, lodRevision = UINT64_MAX;
@@ -248,7 +255,12 @@ int main() {
         int loads = 0;
         const auto load = [&](const LODKey&) { ++loads; return std::make_shared<Owner>(); };
         Require(!state.lodMeshes.FindOrLoad(key, load));
+        int activeGeometry = 0, activePass = 0;
+        state.current = &activeGeometry;
+        state.currentSetupPass = &activePass;
+        state.currentMainPass = state.currentDrawObserved = true;
         renderer.EndFrame();
+        Require(!state.current && !state.currentSetupPass && !state.currentMainPass && !state.currentDrawObserved);
         auto mesh = state.lodMeshes.FindOrLoad(key, load);
         Require(mesh && *mesh && loads == 1 && Owner::alive == 1);
         Require(state.lodMeshes.FindOrLoad(key, load) == mesh && loads == 1);

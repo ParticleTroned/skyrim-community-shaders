@@ -19,6 +19,10 @@ def run_fixture(source: str, devbench: bool) -> subprocess.CompletedProcess:
     methods = "namespace GrassRuntime {\n" + block(runtime, "inline void PrepareGeometryWithoutAdvancingWind(") + "\n}\n"
     methods += block(hooks, "struct BSGrassShader_SetupGeometry") + ";\n"
     methods += block(hooks, "struct BSGrassShader_RestoreGeometry") + ";\n"
+    for signature in ("void GrassBucketRenderer::Impl::ClearDrawContext(",
+                      "bool GrassBucketRenderer::Impl::HasActiveDrawContext("):
+        if signature in source:
+            methods += block(source, signature) + "\n"
     methods += "\n".join(block(source, signature) for signature in (
         "void GrassBucketRenderer::PrepareGeometry(", "void GrassBucketRenderer::DrawGroup(",
         "void GrassBucketRenderer::Impl::MakeNativeVisible(", "void GrassBucketRenderer::RemoveShape(",
@@ -27,6 +31,7 @@ def run_fixture(source: str, devbench: bool) -> subprocess.CompletedProcess:
         "bool GrassBucketRenderer::Impl::DrawMainPass(",
         "void GrassBucketRenderer::DrawRenderPass(",
         "void GrassBucketRenderer::FinishGeometry(",
+        "void GrassBucketRenderer::EndFrame(",
         "void GrassBucketRenderer::Impl::CopyGeometryConstants(", "void GrassBucketRenderer::Impl::RestoreCurrentGeometry(",
         "bool GrassBucketRenderer::Impl::HasBatchDrawState("))
     driver = r'''
@@ -53,16 +58,226 @@ void Fixture::NativeSetup(RE::BSShader*, RE::BSRenderPass* pass, uint32_t flags)
     f.vertex.constantBuffers[2].data = available ? f.constants.data() : nullptr;
 }
 void Fixture::Setup(uint32_t flags) {
+    globals::state->currentShader = &shader;
     BSGrassShader_SetupGeometry::func.target = NativeSetup;
     inOriginalSetup = true;
     BSGrassShader_SetupGeometry::thunk(&shader, &pass, flags);
     inOriginalSetup = false;
 }
+void Fixture::Restore() {
+    BSGrassShader_RestoreGeometry::func.target = nullptr;
+    BSGrassShader_RestoreGeometry::thunk(&shader, &pass, 0);
+}
 void Require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+void CheckRenderFamilyIsolation() {
+    {
+        Fixture f;
+        auto otherShape = f.shape;
+        auto& bucket = f.renderer.impl->buckets.front();
+        auto otherSource = bucket.sources.front();
+        otherSource.identity = &otherShape;
+        otherSource.lifetime = std::make_shared<Lifetime>();
+        bucket.sources.front().queue->members.push_back(&otherShape);
+        bucket.sources.push_back(otherSource);
+        bucket.instances += otherSource.queue->instances;
+        otherSource.queue->instances = bucket.instances;
+        ++otherSource.queue->slices;
+        f.renderer.impl->residents.emplace(&otherShape, otherSource);
+        f.renderer.impl->admitted.emplace(&otherShape, Admission{0, 1});
+        f.renderer.impl->ready = true;
+        const auto draw = [](RE::BSRenderPass* pass, uint32_t, bool, uint32_t) {
+            auto& current = *Fixture::active;
+            ++current.nativeRenderPassCalls;
+            if (pass->geometry != &current.shape) {
+                current.Draw(false);
+                return;
+            }
+            current.Setup();
+            current.Draw();
+            current.Restore();
+        };
+        f.renderer.DrawRenderPass(&f.pass, 0, false, 0, draw);
+        Require(f.nativeRenderPassCalls == 1 && f.renderer.impl->submissions == 1 &&
+                GrassBucketRenderer::nativeCalls == 0,
+            "Restoring committed grass must preserve the wrapper result and prevent duplicate native queue expansion");
+        ++f.pass.passEnum;
+        f.renderer.DrawRenderPass(&f.pass, 0, false, 0, draw);
+        Require(f.nativeRenderPassCalls == 2 && f.renderer.impl->submissions == 2 &&
+                GrassBucketRenderer::nativeCalls == 0,
+            "Paired grass coverage must also suppress native expansion of the second queue member");
+    }
+    for (bool changedDescriptors : {false, true}) for (unsigned boundary = 0; boundary < 6; ++boundary) {
+        Fixture f;
+        f.renderer.impl->ready = true;
+        if (boundary == 1 || boundary == 2) {
+            bool threw = false;
+            try {
+                f.renderer.DrawRenderPass(&f.pass, 0, false, 0,
+                    [](RE::BSRenderPass*, uint32_t, bool, uint32_t flags) {
+                        auto& current = *Fixture::active;
+                        current.Setup();
+                        current.Draw();
+                        if (flags) throw std::runtime_error("Injected render-pass failure");
+                        current.Restore();
+                    });
+            } catch (const std::runtime_error&) { threw = true; }
+            Require(!threw, "Completed grass render-pass setup unexpectedly failed");
+            if (boundary == 2) {
+                f.pass.passEnum = 2;
+                try {
+                    f.renderer.DrawRenderPass(&f.pass, 0, false, 1,
+                        [](RE::BSRenderPass*, uint32_t, bool, uint32_t) {
+                            auto& current = *Fixture::active;
+                            current.Setup();
+                            current.Draw();
+                            throw std::runtime_error("Injected render-pass failure");
+                        });
+                } catch (const std::runtime_error&) { threw = true; }
+                Require(threw, "The exceptional wrapper route must reach its native draw");
+            }
+        } else {
+            f.Setup();
+            f.Draw();
+            if (boundary == 0) f.Restore();
+            if (boundary == 3) {
+                f.renderer.EndFrame();
+                ++globals::state->frameCount;
+                ++globals::state->frameCountAtomic;
+            }
+        }
+        const auto submissions = f.renderer.impl->submissions;
+        const auto culls = f.renderer.impl->cullingAttempts;
+        Require(submissions == (boundary == 2 ? 2u : 1u) && GrassBucketRenderer::nativeCalls == 0,
+            "The valid grass route must own coverage before testing unrelated draws");
+        RE::BSShader treeShader;
+        treeShader.shaderType = RE::BSShader::Type::DistantTree;
+        RE::BSMultiStreamInstanceTriShape treeShape;
+        RE::BSRenderPass treePass{&treeShape};
+        treePass.shader = &treeShader;
+        treePass.shaderProperty = f.property.get();
+        if (changedDescriptors) {
+            globals::state->modifiedVertexDescriptor = 0x10000;
+            globals::state->modifiedPixelDescriptor = 0x10000;
+        }
+        if (boundary == 4) globals::state->currentShader = &treeShader;
+        if (boundary == 5) {
+            f.renderer.DrawRenderPass(&treePass, 0x10000, true, 0,
+                [](RE::BSRenderPass*, uint32_t, bool, uint32_t) { Fixture::active->Draw(false); });
+        } else f.Draw(false);
+        Require(GrassBucketRenderer::nativeCalls == 1 && f.renderer.impl->submissions == submissions &&
+                f.renderer.impl->cullingAttempts == culls,
+            "A shared draw after restore, wrapper completion, exception, frame end or shader change must stay native");
+        globals::state->currentShader = &treeShader;
+        f.renderer.DrawRenderPass(&treePass, 0x10000, true, 0,
+            [](RE::BSRenderPass*, uint32_t, bool, uint32_t) { Fixture::active->Draw(false); });
+        Require(GrassBucketRenderer::nativeCalls == 2 && f.renderer.impl->submissions == submissions,
+            "Distant-tree passes must preserve native draws with unchanged and changed descriptors");
+        if (boundary == 3) continue;
+        globals::state->modifiedVertexDescriptor = 2;
+        globals::state->modifiedPixelDescriptor = 3;
+        ++f.pass.passEnum;
+        f.renderer.impl->buckets.front().sources.front().groupsCurrent = false;
+        f.Setup();
+        f.Draw(false);
+        Require(f.renderer.impl->submissions == submissions + 1 && GrassBucketRenderer::nativeCalls == 2 &&
+                f.renderer.impl->cullingAttempts == culls,
+            "Fresh grass setup must retain paired coverage after unrelated draws without repeating culling");
+        f.Restore();
+    }
+    for (unsigned foreignShader = 0; foreignShader < 4; ++foreignShader) {
+        Fixture f;
+        f.renderer.impl->ready = true;
+        f.Setup();
+        f.Draw();
+        RE::BSShader otherShader;
+        if (foreignShader == 1) otherShader.shaderType = RE::BSShader::Type::DistantTree;
+        if (foreignShader == 2) f.shader.shaderType = RE::BSShader::Type::DistantTree;
+        globals::state->currentShader = foreignShader == 0 ? nullptr :
+            (foreignShader == 2 ? &f.shader : &otherShader);
+        f.Draw(false);
+        Require(GrassBucketRenderer::nativeCalls == 1 && f.renderer.impl->submissions == 1,
+            "An inactive, foreign or non-grass shader must not consume retained grass coverage");
+    }
+    {
+        Fixture f;
+        f.renderer.impl->ready = true;
+        f.Setup();
+        f.Draw();
+        ++f.pass.passEnum;
+        f.Setup();
+        RE::BSShader treeShader;
+        treeShader.shaderType = RE::BSShader::Type::DistantTree;
+        globals::state->currentShader = &treeShader;
+        f.Draw(false);
+        f.Restore();
+        f.Draw(false);
+        Require(GrassBucketRenderer::nativeCalls == 2 && f.renderer.impl->submissions == 1,
+            "Finishing a pending grass pass under a foreign shader must not replay retained coverage");
+    }
+    {
+        Fixture f;
+        f.renderer.impl->ready = true;
+        f.Setup();
+        f.Draw();
+        RE::BSMultiStreamInstanceTriShape otherShape;
+        f.pass.geometry = &otherShape;
+        f.Draw(false);
+        f.Restore();
+        f.pass.geometry = &f.shape;
+        f.Draw();
+        Require(GrassBucketRenderer::nativeCalls == 2 && f.renderer.impl->submissions == 1,
+            "A pass whose geometry changed must stay native and retire its prior admission");
+    }
+    {
+        Fixture f;
+        f.renderer.impl->ready = true;
+        f.Setup();
+        f.Draw();
+        ++f.pass.passEnum;
+        REL::Relocation<void (*)(uint32_t)>::throwNext = true;
+        f.Setup();
+        f.Draw();
+        Require(f.renderer.impl->failed && GrassBucketRenderer::nativeCalls == 1 && f.renderer.impl->submissions == 1,
+            "A failure after admitting a fresh pass must discard its draw context before native fallback");
+    }
+    {
+        Fixture f;
+        f.renderer.impl->ready = true;
+        f.Setup();
+        auto otherPass = f.pass;
+        f.renderer.FinishGeometry(&otherPass);
+        f.Draw();
+        BSGrassShader_RestoreGeometry::func.target = [](RE::BSShader*, RE::BSRenderPass*, uint32_t) {
+            throw std::runtime_error("Injected native restore failure");
+        };
+        bool threw = false;
+        try { BSGrassShader_RestoreGeometry::thunk(&f.shader, &f.pass, 0); }
+        catch (const std::runtime_error&) { threw = true; }
+        Require(threw && f.renderer.impl->submissions == 1,
+            "A different pass must not retire the active grass geometry");
+        f.Draw(false);
+        Require(GrassBucketRenderer::nativeCalls == 1 && f.renderer.impl->submissions == 1,
+            "A native restoration exception must leave subsequent shared draws native");
+    }
+    {
+        Fixture f;
+        f.renderer.impl->ready = true;
+        f.Setup();
+        f.renderer.impl->throwOnDepth = true;
+        bool threw = false;
+        try { f.Restore(); } catch (const std::runtime_error&) { threw = true; }
+        Require(threw, "Injected geometry-finish failure must reach restoration");
+        f.renderer.impl->throwOnDepth = false;
+        f.Draw();
+        Require(GrassBucketRenderer::nativeCalls == 1 && f.renderer.impl->submissions == 0,
+            "Exceptional geometry finish must retire the active pass before another shared draw");
+    }
+}
 int main() {
     try {
         for (bool vr : {false, true}) {
             globals::game::isVR = vr;
+            CheckRenderFamilyIsolation();
             for (bool loaded : {false, true}) for (bool enabled : {false, true}) {
                 Fixture f;
                 globals::features::grassOptimizations.loaded = loaded;

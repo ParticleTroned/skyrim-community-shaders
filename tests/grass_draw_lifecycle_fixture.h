@@ -60,7 +60,8 @@ namespace RE
 	{
 		enum class Type
 		{
-			Grass
+			Grass,
+			DistantTree
 		};
 		Type shaderType = Type::Grass;
 	};
@@ -182,12 +183,17 @@ namespace REL
 	{
 		using Pointer = std::conditional_t<std::is_function_v<T>, std::add_pointer_t<T>, T>;
 		Pointer target = nullptr;
+		static inline bool throwNext = false;
 		Relocation() = default;
 		Relocation(RelocationID) {}
 		Pointer get() const { return target; }
 		template <class... Args>
 		void operator()(Args&&... args) const
 		{
+			if (throwNext) {
+				throwNext = false;
+				throw std::runtime_error("Injected state flush failure");
+			}
 			if (target)
 				target(std::forward<Args>(args)...);
 		}
@@ -292,6 +298,7 @@ namespace globals
 			PBRGrassShading = 4
 		};
 		uint32_t frameCount = 1, modifiedVertexDescriptor = 2, modifiedPixelDescriptor = 3;
+		RE::BSShader* currentShader = nullptr;
 		std::atomic_uint32_t frameCountAtomic{ 1 };
 		struct Permutation
 		{
@@ -314,6 +321,7 @@ namespace globals
 		{
 			bool loaded = true, enabled = true;
 			bool IsEnabled() const { return enabled; }
+			GrassPolicy::Settings GetSettings() const { return {}; }
 			GrassBucketRenderer& GetRenderer() { return *renderer; }
 			void PrepareGeometry(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry, std::optional<uint32_t>);
 		} grassOptimizations;
@@ -362,6 +370,7 @@ public:
 		bool geometryCPUValid = false, failed = false, ready = false, cullingPrepared = false, throwOnPrepare = false;
 		bool allCulled = false, throwOnUpload = false;
 		bool shaderAllowed = true, depthAllowed = true;
+		bool throwOnDepth = false;
 		bool drawShadersReady = false, pairedShadersAvailable = true;
 		std::shared_mutex captureMutex;
 		float frameHeight = 0;
@@ -370,6 +379,7 @@ public:
 		UINT telemetryViewportCount = 0;
 		std::array<float, 152> geometryCPU{};
 		std::vector<Bucket> buckets{ 1 };
+		std::vector<Bucket> dormantBuckets;
 		RE::BSRenderPass* currentSetupPass = nullptr;
 		RE::BSShader* currentNativeShader = nullptr;
 		GrassRuntime::SetupGeometry currentSetup = nullptr;
@@ -379,6 +389,9 @@ public:
 		uint32_t frame = 1, submissions = 0, batches = 0, reusedCullingDraws = 0;
 		uint64_t combinedSources = 0, combinedInstances = 0, cullingAttempts = 0, fallbacks = 0, nativeDraws = 0;
 		void PrepareFrame() {}
+		void ClearDrawContext() noexcept;
+		bool HasActiveDrawContext() const noexcept;
+		void UpdateLODDemand(const GrassPolicy::Settings&) {}
 		void PrepareCulling(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry);
 		void CopyGeometryConstants();
 		void RestoreCurrentGeometry();
@@ -409,7 +422,12 @@ public:
 			return true;
 		}
 		bool HasBatchShader() const { return ready && shaderAllowed; }
-		bool MainDepthBound() const { return depthAllowed; }
+		bool MainDepthBound() const
+		{
+			if (throwOnDepth)
+				throw std::runtime_error("Injected depth-state failure");
+			return depthAllowed;
+		}
 		bool PrepareDrawShaders() { return drawShadersReady = pairedShadersAvailable; }
 		bool HasBatchDrawState() const;
 		bool DrawBucket(Bucket&, Outcome&);
@@ -427,6 +445,7 @@ public:
 												uint32_t, uint32_t, RE::BSGraphics::VertexDesc, RE::BSGraphics::VertexBuffer*) { ++nativeCalls; };
 	void PrepareGeometry(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry, std::optional<uint32_t>);
 	void FinishGeometry(RE::BSRenderPass*);
+	void EndFrame();
 	void RemoveShape(RE::BSMultiStreamInstanceTriShape*);
 	using RenderPass = void (*)(RE::BSRenderPass*, uint32_t, bool, uint32_t);
 	void DrawRenderPass(RE::BSRenderPass*, uint32_t, bool, uint32_t, RenderPass);
@@ -459,7 +478,7 @@ struct Fixture
 	bool initialSnapshotAvailable = true, recoveredSnapshotAvailable = true;
 	bool inOriginalSetup = false;
 	std::function<void(RE::BSRenderPass*)> duringNativeSetup;
-	uint32_t nativeSetupCalls = 0;
+	uint32_t nativeSetupCalls = 0, nativeRenderPassCalls = 0;
 	static inline Fixture* active = nullptr;
 	Fixture()
 	{
@@ -469,6 +488,11 @@ struct Fixture
 		globals::features::grassOptimizations.loaded = true;
 		globals::features::grassOptimizations.enabled = true;
 		globals::game::shadowStateStorage = {};
+		globals::state->currentShader = nullptr;
+		globals::state->frameCount = 1;
+		globals::state->frameCountAtomic = 1;
+		globals::state->modifiedVertexDescriptor = 2;
+		globals::state->modifiedPixelDescriptor = 3;
 		GrassBucketRenderer::nativeCalls = 0;
 		vertex.constantBuffers[2].data = constants.data();
 		globals::game::shader = &vertex;
@@ -487,6 +511,7 @@ struct Fixture
 		renderer.impl->queues.emplace(0, source.queue);
 	}
 	void Setup(uint32_t flags = 0);
+	void Restore();
 	static void NativeSetup(RE::BSShader*, RE::BSRenderPass*, uint32_t);
 	void Draw(bool same = true) { renderer.DrawGroup(nullptr, same ? &mesh : &unrelatedMesh, 0, 2, 4, {}, &instances); }
 };

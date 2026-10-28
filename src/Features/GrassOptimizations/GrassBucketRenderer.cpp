@@ -677,6 +677,10 @@ struct GrassBucketRenderer::Impl
 	bool EnsureResult(Bucket& bucket, uint32_t slots);
 	bool EnsureRecords(Bucket& bucket);
 	bool MakeRecordRoom(uint64_t replacementBytes);
+	/** @brief Retire synchronous draw context without changing retained frame coverage. */
+	void ClearDrawContext() noexcept;
+	/** @brief Restrict shared instance draws to the geometry and shader of the active grass pass. */
+	bool HasActiveDrawContext() const noexcept;
 	void PrepareCulling(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry);
 	void CopyGeometryConstants();
 	void RestoreCurrentGeometry();
@@ -1233,6 +1237,7 @@ void GrassBucketRenderer::SetupResources()
 
 void GrassBucketRenderer::ClearShaderCache()
 {
+	impl->ClearDrawContext();
 	impl->cullingPrepared = false;
 	impl->drawShadersChecked = impl->drawShadersReady = false;
 	impl->drawVertexShaders = {};
@@ -1255,6 +1260,7 @@ void GrassBucketRenderer::ClearShaderCache()
 
 void GrassBucketRenderer::EndFrame()
 {
+	impl->ClearDrawContext();
 	for (auto& bucket : impl->buckets)
 		bucket.plan.Retire();
 	for (auto& bucket : impl->dormantBuckets)
@@ -1281,7 +1287,7 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 	const auto& collision = globals::features::grassCollision;
 	frameCollisionStrength = collision.settings.EnableGrassCollision ? collision.GetCollisionStrength() : GrassCollision::kDefaultCollisionStrength;
 	frameSettings.Enabled &= globals::features::grassOptimizations.loaded;
-	current = nullptr;
+	ClearDrawContext();
 	frame = now;
 	cullingPrepared = false;
 	drawShadersChecked = false;
@@ -1512,11 +1518,22 @@ void GrassBucketRenderer::Impl::ReuseRecordBuffers(std::vector<Bucket>& previous
 	}
 }
 
+void GrassBucketRenderer::Impl::ClearDrawContext() noexcept
+{
+	current = nullptr;
+	currentSetupPass = nullptr;
+	currentMainPass = currentDrawObserved = false;
+}
+
+bool GrassBucketRenderer::Impl::HasActiveDrawContext() const noexcept
+{
+	return current && currentSetupPass && currentSetupPass->geometry == current && currentNativeShader &&
+	       globals::state->currentShader == currentNativeShader && currentNativeShader->shaderType == RE::BSShader::Type::Grass;
+}
+
 void GrassBucketRenderer::PrepareGeometry(RE::BSRenderPass* pass, RE::BSShader* nativeShader, uint32_t flags, GrassRuntime::SetupGeometry setup, std::optional<uint32_t> nativeWindTimer)
 {
-	impl->current = nullptr;
-	impl->currentSetupPass = nullptr;
-	impl->currentMainPass = impl->currentDrawObserved = false;
+	impl->ClearDrawContext();
 	if (!pass || !pass->geometry || !impl->context || !impl->disabled)
 		return;
 	auto cb = impl->disabled->resource.get();
@@ -1545,6 +1562,7 @@ void GrassBucketRenderer::PrepareGeometry(RE::BSRenderPass* pass, RE::BSShader* 
 		static REL::Relocation<void (*)(uint32_t)> setDirtyStates{ REL::RelocationID(75580, 77386) };
 		setDirtyStates(0);
 	} catch (const std::exception& error) {
+		impl->ClearDrawContext();
 		impl->failed = true;
 		logger::error("Grass frame preparation failed; retaining native rendering: {}", error.what());
 	}
@@ -1552,7 +1570,11 @@ void GrassBucketRenderer::PrepareGeometry(RE::BSRenderPass* pass, RE::BSShader* 
 
 void GrassBucketRenderer::FinishGeometry(RE::BSRenderPass* pass)
 {
-	if (!pass || impl->currentSetupPass != pass || !impl->current || impl->currentDrawObserved || impl->nativeFallbackDepth ||
+	if (!pass || impl->currentSetupPass != pass)
+		return;
+	// The wrapper still needs the completed admission to suppress native queue expansion.
+	const SKSE::stl::scope_exit finish([&]() noexcept { impl->currentSetupPass = nullptr; });
+	if (!impl->HasActiveDrawContext() || impl->currentDrawObserved || impl->nativeFallbackDepth ||
 		impl->currentAdmission.bucket >= impl->buckets.size())
 		return;
 	static REL::Relocation<void (*)(uint32_t)> setDirtyStates{ REL::RelocationID(75580, 77386) };
@@ -2403,6 +2425,8 @@ void GrassBucketRenderer::Impl::EmitDraws(const Bucket& bucket)
 
 void GrassBucketRenderer::DrawRenderPass(RE::BSRenderPass* pass, uint32_t technique, bool alphaTest, uint32_t flags, RenderPass draw)
 {
+	impl->ClearDrawContext();
+	const SKSE::stl::scope_exit finish([&]() noexcept { impl->ClearDrawContext(); });
 	if (!pass || !pass->geometry || !pass->shader || pass->shader->shaderType != RE::BSShader::Type::Grass || impl->nativeFallbackDepth) {
 		draw(pass, technique, alphaTest, flags);
 		return;
@@ -2428,8 +2452,6 @@ void GrassBucketRenderer::DrawRenderPass(RE::BSRenderPass* pass, uint32_t techni
 	}
 	if (queue)
 		impl->MakeNativeVisible(static_cast<RE::BSMultiStreamInstanceTriShape*>(pass->geometry));
-	impl->current = nullptr;
-	impl->currentMainPass = impl->currentDrawObserved = false;
 	draw(pass, technique, alphaTest, flags);
 	if (impl->current == pass->geometry && impl->currentAdmission.bucket < impl->buckets.size() && impl->currentMainPass) {
 		auto& bucket = impl->buckets.at(impl->currentAdmission.bucket);
@@ -2505,7 +2527,7 @@ void GrassBucketRenderer::DrawGroup(RE::BSGraphics::Renderer* renderer, RE::BSGr
 	Bucket* mainBucket = nullptr;
 	try {
 		bool mainPass = false;
-		if (self.current) {
+		if (self.HasActiveDrawContext()) {
 			self.currentDrawObserved = true;
 			static REL::Relocation<void (*)(uint32_t)> setDirtyStates{ REL::RelocationID(75580, 77386) };
 			setDirtyStates(0);

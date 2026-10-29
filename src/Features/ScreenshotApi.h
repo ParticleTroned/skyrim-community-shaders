@@ -102,6 +102,7 @@ private:
 		std::string terminalUtc;
 		std::string failureState = "failed";
 		std::string partialFailureState = "failed_partial";
+		std::exception_ptr completionFailure;
 		std::exception_ptr finalizationFailure;
 		std::exception_ptr finalizationJournalFailure;
 		std::exception_ptr referenceNotificationFailure;
@@ -342,7 +343,9 @@ private:
 	void AppendEventLocked(RequestRecord& a_record, std::string_view a_type, json a_payload = json::object());
 	void TrimLocked();
 	std::size_t CountPendingOperationsLocked() const;
-	void FinishSequenceChildLocked(RequestRecord& a_child);
+	/** Retire consumed completion input even when optional reporting cannot allocate. */
+	void FailRequestCompletionLocked(RequestRecord& a_record, std::exception_ptr a_failure) noexcept;
+	void FinishSequenceChildLocked(RequestRecord& a_child) noexcept;
 	void TryFinalizeSequenceLocked(SequenceRecord& a_sequence);
 	void FinalizeSequenceLocked(SequenceRecord& a_sequence, const ManifestResult* a_manifestResult);
 	/** Commit failure and release storage without allocating failure diagnostics. */

@@ -18,6 +18,7 @@
 
 namespace
 {
+	using json = nlohmann::json;
 	thread_local bool failNextAllocation = false;
 	thread_local bool failAllAllocations = false;
 	thread_local std::array<std::string_view, 2> failEvents{};
@@ -203,6 +204,9 @@ namespace logger
 	template <class... Args>
 	void error(Args&&...)
 	{}
+	template <class... Args>
+	void warn(Args&&...)
+	{}
 }
 namespace BuildProvenance
 {
@@ -213,7 +217,8 @@ namespace BuildProvenance
 // Only lifecycle setup is bound for a CPU fixture; all coordinator records and methods are production code.
 ScreenshotApi::ScreenshotApi(FinalizationTestTag) :
 	service({ "csx.screenshot", kContractMajor, kContractMinor, kSchemaRevision }),
-	manifestWorkerState(std::make_shared<ManifestWorkerState>())
+	manifestWorkerState(std::make_shared<ManifestWorkerState>()),
+	preparationWorkerState(std::make_shared<PreparationWorkerState>())
 {}
 ScreenshotApi::~ScreenshotApi() = default;
 
@@ -412,6 +417,191 @@ struct ScreenshotFinalizationTest
 		Require(order == 2, "terminal callbacks were lost");
 	}
 
+	static void ConsumedManifestResult(bool persistent, bool success, bool inject = true)
+	{
+		Case test;
+		test.api->TryFinalizeSequenceLocked(test.Sequence());
+		test.api->manifestWorkerState->jobs.pop_front();
+		// Controlled result delivery exercises the actual coordinator drain, not a worker/file claim.
+		test.api->manifestWorkerState->results.push_back({ .requestId = "sequence", .generation = 1, .final = true, .success = success, .destination = test.Sequence().finalManifestPath, .error = "controlled worker failure" });
+		failEvents = { inject ? (success ? "packaging.completed" : "packaging.failed") : std::string_view{}, {} };
+		persistentEventFailure = persistent;
+		eventFaults = 0;
+		test.api->DrainWorkerResultsLocked();
+		const bool faultStillArmed = !persistent || failAllAllocations;
+		ClearFaults();
+		Require(eventFaults == (inject ? 1u : 0u) && faultStillArmed && test.lease.expired() &&
+					test.api->manifestWorkerState->outstanding == 0 && test.api->manifestWorkerState->results.empty() &&
+					static_cast<bool>(test.Record().finalizationJournalFailure) == inject && test.api->CountPendingOperationsLocked() == 0,
+			"consumed final result was lost after packaging publication failure");
+		Require(test.Record().state == (success && !persistent ? "completed" : "failed"),
+			"consumed final result produced an incorrect terminal outcome");
+		if (persistent)
+			Require(test.Record().finalizationFailure != nullptr, "persistent result failure lost its primary exception");
+	}
+
+	static void IndependentWorkerResults()
+	{
+		Case test;
+		test.api->TryFinalizeSequenceLocked(test.Sequence());
+		test.api->manifestWorkerState->jobs.pop_front();
+		test.api->manifestWorkerState->results.push_back({ .requestId = "sequence", .generation = 1, .final = true, .success = false, .destination = test.Sequence().finalManifestPath, .error = "worker failure" });
+		auto& parent = test.api->requests["preparing"];
+		parent.requestId = "preparing";
+		parent.kind = "sequence";
+		parent.state = "preparing";
+		auto& preparing = test.api->sequences["preparing"];
+		preparing.requestId = "preparing";
+		preparing.preparationPending = true;
+		test.api->preparationWorkerState->preparationResults.push_back({ .requestId = "preparing", .error = "preparation failure" });
+		test.api->preparationWorkerState->outstanding = 1;
+		failEvents = { "sequence.preparation_failed", {} };
+		eventFaults = 0;
+		test.api->DrainWorkerResultsLocked();
+		ClearFaults();
+		Require(eventFaults == 1 && parent.state == "failed" && parent.finalizationFailure &&
+					!preparing.preparationPending && test.Record().state == "failed" && test.lease.expired() &&
+					test.api->manifestWorkerState->outstanding == 0 && test.api->preparationWorkerState->outstanding == 0,
+			"a consumed preparation failure discarded another lane's final result");
+	}
+
+	static auto& AddChild(Case& test, const char* id)
+	{
+		auto& child = test.api->requests[id];
+		child.requestId = id;
+		child.commandId = id;
+		child.parentRequestId = "sequence";
+		child.kind = "sequence_frame";
+		child.state = "acquiring";
+		child.sequenceOrdinal = 1;
+		test.Sequence().frameManifest = false;
+		++test.Sequence().inFlight;
+		test.Sequence().activeChildRequestId = id;
+		return child;
+	}
+
+	static void SourceChildCompletion(std::string_view event, bool persistent)
+	{
+		Case test;
+		auto& child = AddChild(test, "source-child");
+		failEvents = { event, {} };
+		persistentEventFailure = persistent;
+		eventFaults = 0;
+		test.api->OnSourceTerminal("source-child", "failed", "source_timeout");
+		const bool faultStillArmed = !persistent || failAllAllocations;
+		ClearFaults();
+		Require(eventFaults == 1 && faultStillArmed && child.sequenceFinished && child.completionFailure &&
+					test.Sequence().inFlight == 0 && test.Sequence().activeChildRequestId.empty() &&
+					test.Sequence().failed == 1 && IsTerminal(test.Record().state) && test.lease.expired(),
+			"source terminal reporting stranded parent accounting or storage");
+		test.api->OnSourceTerminal("source-child", "failed", "source_timeout");
+		Require(test.Sequence().failed == 1 && test.Sequence().inFlight == 0, "source callback accounted twice");
+	}
+
+	static void ArtifactChildCompletion(std::string_view event, bool persistent)
+	{
+		Case test;
+		auto& child = AddChild(test, "artifact-child");
+		const auto path = test.Sequence().directoryLease->Path() / "controlled-output.bin";
+		const auto committed = CSX::ScreenshotStorage::CommittedFile::WriteAtomically(
+			test.Sequence().directoryLease->Path() / "controlled-output.tmp", path, "abc", 3, false);
+		json actual = { { "view", "fixture" }, { "width", 1u }, { "height", 1u }, { "format", "fixture" }, { "colourContract", "fixture" } };
+		failEvents = { event, {} };
+		persistentEventFailure = persistent;
+		eventFaults = 0;
+		test.api->OnArtifactTerminal("artifact-child", true, path, {}, std::move(actual), committed);
+		const bool faultStillArmed = !persistent || failAllAllocations;
+		ClearFaults();
+		Require(eventFaults == 1 && faultStillArmed && child.sequenceFinished && child.completionFailure &&
+					child.terminalArtifacts == 1 && child.successfulArtifacts == 1 &&
+					test.Sequence().written == 1 && test.Sequence().inFlight == 0 &&
+					IsTerminal(test.Record().state) && test.lease.expired(),
+			"committed artifact callback lost terminal accounting after publication failure");
+		test.api->OnArtifactTerminal("artifact-child", false, {}, "duplicate", nullptr);
+		Require(test.Sequence().written == 1 && child.terminalArtifacts == 1, "artifact callback accounted twice");
+	}
+
+	static void QueuedChildCancellation()
+	{
+		Case test;
+		auto& first = AddChild(test, "queued-one");
+		auto& second = AddChild(test, "queued-two");
+		test.api->manualDispatchQueue.push_back({ .requestId = "queued-one" });
+		test.api->sequenceDispatchQueue.push_back({ .requestId = "queued-two" });
+		failEvents = { "request.terminal", {} };
+		persistentEventFailure = true;
+		eventFaults = 0;
+		test.api->CancelQueuedDispatchesLocked("cancelled", "fixture cancellation");
+		const bool faultStillArmed = failAllAllocations;
+		ClearFaults();
+		Require(eventFaults == 1 && faultStillArmed && first.sequenceFinished && second.sequenceFinished &&
+					test.Sequence().inFlight == 0 && test.lease.expired() && IsTerminal(test.Record().state) &&
+					test.api->manualDispatchQueue.empty() && test.api->sequenceDispatchQueue.empty(),
+			"cancellation reporting consumed remaining queued children without accounting");
+	}
+
+	static void MultipleArtifactCompletion()
+	{
+		Case test;
+		auto& child = AddChild(test, "two-outputs");
+		child.expectedArtifacts = 2;
+		const auto directory = test.Sequence().directoryLease->Path();
+		for (unsigned i = 0; i < 2; ++i) {
+			const auto path = directory / (std::to_string(i) + ".bin");
+			const auto committed = CSX::ScreenshotStorage::CommittedFile::WriteAtomically(
+				directory / (std::to_string(i) + ".tmp"), path, "abc", 3, false);
+			json actual = { { "view", "fixture" }, { "width", 1u }, { "height", 1u }, { "format", "fixture" }, { "colourContract", "fixture" } };
+			if (i == 0)
+				failEvents = { "artifact.written", {} };
+			test.api->OnArtifactTerminal("two-outputs", true, path, {}, std::move(actual), committed);
+			ClearFaults();
+			Require(child.terminalArtifacts == i + 1 && child.successfulArtifacts == i + 1,
+				"artifact reporting failure lost a consumed output");
+			if (i == 0)
+				Require(!IsTerminal(child.state) && !child.sequenceFinished && test.Sequence().inFlight == 1,
+					"first output reporting failure prematurely consumed the second callback");
+		}
+		Require(child.sequenceFinished && child.completionFailure && child.state == "failed_partial" &&
+					test.Sequence().inFlight == 0 && test.Sequence().written == 1 && test.lease.expired(),
+			"multiple-output reporting failure did not reach a single terminal disposition");
+	}
+
+	static void NotificationRetention()
+	{
+		for (unsigned pressure = 0; pressure < 3; ++pressure) {
+			Case test;
+			test.Sequence().frameManifest = false;
+			unsigned callbacks = 0;
+			test.Record().referenceCompletion = [&](const json&) { ++callbacks; };
+			test.api->requestOrder.push_back("sequence");
+			test.api->TryFinalizeSequenceLocked(test.Sequence());
+			if (pressure == 0)
+				test.Record().acknowledged = true;
+			else if (pressure == 1)
+				test.Record().terminalAt -= ScreenshotApi::kRetention;
+			else {
+				for (std::size_t i = 0; i < ScreenshotApi::kMaximumRequests; ++i) {
+					const auto id = "active-" + std::to_string(i);
+					auto& active = test.api->requests[id];
+					active.requestId = id;
+					active.state = "acquiring";
+					test.api->requestOrder.push_back(id);
+				}
+			}
+			failNextAllocation = true;
+			test.api->DrainReferenceNotifications();
+			ClearFaults();
+			test.api->TrimLocked();
+			Require(test.api->requests.contains("sequence") && callbacks == 0 && test.Record().referenceCompletion,
+				"retention evicted an acknowledged/expired/capacity-selected pending callback");
+			test.api->DrainReferenceNotifications();
+			test.api->DrainReferenceNotifications();
+			Require(callbacks == 1 && !test.Record().referenceCompletion, "retained callback was lost or duplicated");
+			test.api->TrimLocked();
+			Require(!test.api->requests.contains("sequence"), "delivered callback prevented ordinary terminal eviction");
+		}
+	}
+
 	static void RunCase(const char* name, void (*test)())
 	{
 		currentCase = name;
@@ -435,6 +625,20 @@ struct ScreenshotFinalizationTest
 		RunCase("notification-and-success", NotificationAndSuccess);
 		RunCase("parent-and-partial", ParentAndPartialBoundaries);
 		RunCase("callback-order", CallbackOrder);
+		RunCase("consumed-final-failed-journal", [] { ConsumedManifestResult(false, false); });
+		RunCase("consumed-final-positive", [] { ConsumedManifestResult(false, true, false); });
+		RunCase("consumed-final-completed-journal", [] { ConsumedManifestResult(false, true); });
+		RunCase("consumed-final-persistent", [] { ConsumedManifestResult(true, false); });
+		RunCase("independent-worker-results", IndependentWorkerResults);
+		RunCase("source-child-terminal-journal", [] { SourceChildCompletion("request.terminal", false); });
+		RunCase("source-child-timeout-journal", [] { SourceChildCompletion("source.timeout", false); });
+		RunCase("source-child-persistent", [] { SourceChildCompletion("request.terminal", true); });
+		RunCase("artifact-child-terminal-journal", [] { ArtifactChildCompletion("request.terminal", false); });
+		RunCase("artifact-child-written-journal", [] { ArtifactChildCompletion("artifact.written", false); });
+		RunCase("artifact-child-persistent", [] { ArtifactChildCompletion("request.terminal", true); });
+		RunCase("queued-child-cancellation", QueuedChildCancellation);
+		RunCase("multiple-artifact-completion", MultipleArtifactCompletion);
+		RunCase("notification-retention", NotificationRetention);
 		CSX::Api::ServiceFoundation::SetEventAllocationTestHook(nullptr);
 	}
 };

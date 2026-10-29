@@ -1391,6 +1391,7 @@ void ScreenshotApi::AppendEventLocked(RequestRecord& a_record, std::string_view 
 
 void ScreenshotApi::TransitionLocked(RequestRecord& a_record, std::string a_state, std::string_view a_eventType, json a_payload)
 {
+	const Util::JsonCleanupGuard payloadCleanup(a_payload);
 	if (IsTerminal(a_record.state))
 		return;
 	if (!IsTerminal(a_state)) {
@@ -1399,18 +1400,25 @@ void ScreenshotApi::TransitionLocked(RequestRecord& a_record, std::string a_stat
 		return;
 	}
 	a_record.state.swap(a_state);
-	if (IsTerminal(a_record.state)) {
+	a_record.terminalAt = std::chrono::steady_clock::now();
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		if (a_record.referenceCompletion && a_record.referenceNotificationOrder == 0)
-			a_record.referenceNotificationOrder = nextReferenceNotificationOrder++;
+	if (a_record.referenceCompletion && a_record.referenceNotificationOrder == 0)
+		a_record.referenceNotificationOrder = nextReferenceNotificationOrder++;
 #endif
+	try {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		CSX::ScreenshotPolicy::FinalizeNeuralDiagnostics(a_record.diagnosticSnapshot, a_record.actual);
 #endif
 		a_record.terminalUtc = CSX::Api::ServiceFoundation::TimestampUtc();
-		a_record.terminalAt = std::chrono::steady_clock::now();
+		AppendEventLocked(a_record, a_eventType, std::move(a_payload));
+	} catch (...) {
+		// Committed terminal state must retire its child even when reporting fails.
+		if (!a_record.completionFailure)
+			a_record.completionFailure = std::current_exception();
+		FinishSequenceChildLocked(a_record);
+		throw;
 	}
-	AppendEventLocked(a_record, a_eventType, std::move(a_payload));
+	FinishSequenceChildLocked(a_record);
 }
 
 ScreenshotApi::json ScreenshotApi::MakeReceipt(const RequestRecord& a_record) const
@@ -1453,6 +1461,7 @@ ScreenshotApi::json ScreenshotApi::MakeReceipt(const RequestRecord& a_record) co
 		if (receipt["error"].is_null())
 			receipt["error"] = std::move(error);
 	};
+	appendFailure(a_record.completionFailure, "request_completion_failed", "completion");
 	appendFailure(a_record.finalizationFailure, "sequence_finalization_failed", "packaging");
 	appendFailure(a_record.finalizationJournalFailure, "finalization_journal_failed", "journal");
 	appendFailure(a_record.referenceNotificationFailure, "reference_notification_deferred", "notification");
@@ -1506,6 +1515,15 @@ ScreenshotApi::json ScreenshotApi::LookupReceiptLocked(std::string_view a_reques
 void ScreenshotApi::TrimLocked()
 {
 	const auto now = std::chrono::steady_clock::now();
+	auto canTrim = [](const RequestRecord& record) {
+		if (!IsTerminal(record.state))
+			return false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (record.referenceCompletion)
+			return false;
+#endif
+		return true;
+	};
 
 	auto eraseRequest = [this](auto position) {
 		const auto id = *position;
@@ -1533,15 +1551,15 @@ void ScreenshotApi::TrimLocked()
 		}
 		const bool expired = IsTerminal(found->second.state) && found->second.terminalAt != std::chrono::steady_clock::time_point{} &&
 		                     now - found->second.terminalAt >= kRetention;
-		if (IsTerminal(found->second.state) && (found->second.acknowledged || expired))
+		if (canTrim(found->second) && (found->second.acknowledged || expired))
 			position = eraseRequest(position);
 		else
 			++position;
 	}
 	while (requestOrder.size() > kMaximumRequests) {
-		auto position = std::find_if(requestOrder.begin(), requestOrder.end(), [this](const std::string& id) {
+		auto position = std::find_if(requestOrder.begin(), requestOrder.end(), [this, &canTrim](const std::string& id) {
 			const auto found = requests.find(id);
-			return found == requests.end() || IsTerminal(found->second.state);
+			return found == requests.end() || canTrim(found->second);
 		});
 		if (position == requestOrder.end())
 			break;
@@ -1673,87 +1691,113 @@ void ScreenshotApi::OnArtifactTerminal(
 	json a_actual,
 	std::optional<CSX::ScreenshotStorage::CommittedArtifact> a_committedArtifact)
 {
-	if (a_requestId.empty())
-		return;
-	bool artifactSucceeded = a_success;
-	std::string artifactError(a_error);
-	json artifact = nullptr;
-	std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> sequenceDirectoryLease;
-	{
+	const Util::JsonCleanupGuard actualCleanup(a_actual);
+	bool accounted = false;
+	try {
+		if (a_requestId.empty())
+			return;
+		bool artifactSucceeded = a_success;
+		std::string artifactError(a_error);
+		json artifact = nullptr;
+		const Util::JsonCleanupGuard artifactCleanup(artifact);
+		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> sequenceDirectoryLease;
+		{
+			std::lock_guard lock(mutex);
+			const auto found = requests.find(std::string(a_requestId));
+			if (found == requests.end() || IsTerminal(found->second.state))
+				return;
+			if (found->second.kind == "sequence_frame") {
+				if (const auto sequence = sequences.find(found->second.parentRequestId); sequence != sequences.end())
+					sequenceDirectoryLease = sequence->second.directoryLease;
+			}
+		}
+		if (artifactSucceeded && !HasCompleteArtifactProvenance(a_actual)) {
+			artifactSucceeded = false;
+			artifactError = "the committed artifact is missing required actual output provenance";
+		}
+		if (artifactSucceeded) {
+			try {
+				if (sequenceDirectoryLease)
+					sequenceDirectoryLease->VerifyDirectChild(a_path);
+				if (!a_committedArtifact)
+					throw std::runtime_error("the screenshot producer did not transfer committed-file custody");
+				artifact = DescribeCommittedArtifact(a_path, *a_committedArtifact);
+			} catch (const std::exception& error) {
+				artifactSucceeded = false;
+				artifactError = error.what();
+			}
+		}
 		std::lock_guard lock(mutex);
 		const auto found = requests.find(std::string(a_requestId));
 		if (found == requests.end() || IsTerminal(found->second.state))
 			return;
-		if (found->second.kind == "sequence_frame") {
-			if (const auto sequence = sequences.find(found->second.parentRequestId); sequence != sequences.end())
-				sequenceDirectoryLease = sequence->second.directoryLease;
-		}
-	}
-	if (artifactSucceeded && !HasCompleteArtifactProvenance(a_actual)) {
-		artifactSucceeded = false;
-		artifactError = "the committed artifact is missing required actual output provenance";
-	}
-	if (artifactSucceeded) {
-		try {
+		auto& record = found->second;
+		if (record.terminalArtifacts >= record.expectedArtifacts)
+			return;
+		++record.terminalArtifacts;
+		accounted = true;
+		std::optional<std::filesystem::path> relativeSequencePath;
+		if (artifactSucceeded && record.kind == "sequence_frame") {
 			if (sequenceDirectoryLease)
-				sequenceDirectoryLease->VerifyDirectChild(a_path);
-			if (!a_committedArtifact)
-				throw std::runtime_error("the screenshot producer did not transfer committed-file custody");
-			artifact = DescribeCommittedArtifact(a_path, *a_committedArtifact);
-		} catch (const std::exception& error) {
-			artifactSucceeded = false;
-			artifactError = error.what();
+				relativeSequencePath = CSX::ScreenshotPolicy::RelativeContainedArtifactPath(
+					sequenceDirectoryLease->Path(), std::filesystem::absolute(a_path).lexically_normal());
+			if (!relativeSequencePath) {
+				artifactSucceeded = false;
+				artifactError = "the committed sequence artifact escaped its sequence directory";
+			}
 		}
-	}
-	std::lock_guard lock(mutex);
-	const auto found = requests.find(std::string(a_requestId));
-	if (found == requests.end() || IsTerminal(found->second.state))
-		return;
-	auto& record = found->second;
-	if (record.terminalArtifacts >= record.expectedArtifacts)
-		return;
-	std::optional<std::filesystem::path> relativeSequencePath;
-	if (artifactSucceeded && record.kind == "sequence_frame") {
-		if (sequenceDirectoryLease)
-			relativeSequencePath = CSX::ScreenshotPolicy::RelativeContainedArtifactPath(
-				sequenceDirectoryLease->Path(), std::filesystem::absolute(a_path).lexically_normal());
-		if (!relativeSequencePath) {
-			artifactSucceeded = false;
-			artifactError = "the committed sequence artifact escaped its sequence directory";
+		if (artifactSucceeded) {
+			auto committedArtifact = artifact;
+			const Util::JsonCleanupGuard committedCleanup(committedArtifact);
+			if (relativeSequencePath)
+				committedArtifact["path"] = Util::PathToUtf8(*relativeSequencePath);
+			committedArtifact["actual"] = a_actual;
+			record.artifacts.push_back(committedArtifact);
+			record.actual["artifacts"].push_back(a_actual);
+			++record.successfulArtifacts;
+			++completedArtifacts;
+			AppendEventLocked(record, "artifact.written", committedArtifact);
+		} else {
+			++failedArtifacts;
+			json error = { { "code", "artifact_failed" }, { "message", artifactError.empty() ? "screenshot artifact failed" : artifactError }, { "phase", "encoding" }, { "path", a_path.empty() ? json(nullptr) : json(Util::PathToUtf8(a_path)) } };
+			const Util::JsonCleanupGuard errorCleanup(error);
+			record.errors.push_back(error);
+			if (record.error.is_null())
+				record.error = error;
+			AppendEventLocked(record, "artifact.failed", error);
 		}
-	}
-	if (artifactSucceeded) {
-		auto committedArtifact = artifact;
-		if (relativeSequencePath)
-			committedArtifact["path"] = Util::PathToUtf8(*relativeSequencePath);
-		committedArtifact["actual"] = a_actual;
-		record.artifacts.push_back(committedArtifact);
-		record.actual["artifacts"].push_back(a_actual);
-		++record.successfulArtifacts;
-		++completedArtifacts;
-		AppendEventLocked(record, "artifact.written", committedArtifact);
-	} else {
-		++failedArtifacts;
-		const json error = { { "code", "artifact_failed" }, { "message", artifactError.empty() ? "screenshot artifact failed" : artifactError }, { "phase", "encoding" }, { "path", a_path.empty() ? json(nullptr) : json(Util::PathToUtf8(a_path)) } };
-		record.errors.push_back(error);
-		if (record.error.is_null())
-			record.error = error;
-		AppendEventLocked(record, "artifact.failed", error);
-	}
-	++record.terminalArtifacts;
-	if (record.terminalArtifacts < record.expectedArtifacts)
-		return;
+		if (record.terminalArtifacts < record.expectedArtifacts)
+			return;
 
-	const bool allSucceeded = record.successfulArtifacts == record.expectedArtifacts;
-	std::string terminal;
-	if (record.cancelRequested)
-		terminal = record.successfulArtifacts == 0 ? "cancelled" : "cancelled_partial";
-	else if (!allSucceeded)
-		terminal = record.successfulArtifacts == 0 ? "failed" : "failed_partial";
-	else
-		terminal = record.warnings.empty() ? "completed" : "completed_with_warnings";
-	TransitionLocked(record, terminal, "request.terminal");
-	FinishSequenceChildLocked(record);
+		if (record.completionFailure) {
+			FailRequestCompletionLocked(record, record.completionFailure);
+			return;
+		}
+		const bool allSucceeded = record.successfulArtifacts == record.expectedArtifacts;
+		std::string terminal;
+		if (record.cancelRequested)
+			terminal = record.successfulArtifacts == 0 ? "cancelled" : "cancelled_partial";
+		else if (!allSucceeded)
+			terminal = record.successfulArtifacts == 0 ? "failed" : "failed_partial";
+		else
+			terminal = record.warnings.empty() ? "completed" : "completed_with_warnings";
+		TransitionLocked(record, terminal, "request.terminal");
+	} catch (...) {
+		const auto failure = std::current_exception();
+		std::lock_guard lock(mutex);
+		const auto found = std::find_if(requests.begin(), requests.end(), [&](const auto& entry) {
+			return entry.first == a_requestId;
+		});
+		if (found == requests.end())
+			return;
+		auto& record = found->second;
+		if (!record.completionFailure)
+			record.completionFailure = failure;
+		if (!accounted && !IsTerminal(record.state) && record.terminalArtifacts < record.expectedArtifacts)
+			++record.terminalArtifacts;
+		if (record.terminalArtifacts >= record.expectedArtifacts || IsTerminal(record.state))
+			FailRequestCompletionLocked(record, failure);
+	}
 }
 
 void ScreenshotApi::OnSourceTerminal(std::string_view a_requestId, std::string_view a_state, std::string_view a_error)
@@ -1761,22 +1805,42 @@ void ScreenshotApi::OnSourceTerminal(std::string_view a_requestId, std::string_v
 	if (a_requestId.empty())
 		return;
 	std::lock_guard lock(mutex);
-	const auto found = requests.find(std::string(a_requestId));
+	const auto found = std::find_if(requests.begin(), requests.end(), [&](const auto& entry) {
+		return entry.first == a_requestId;
+	});
 	if (found == requests.end() || IsTerminal(found->second.state))
 		return;
-	found->second.error = a_error.empty() ? json(nullptr) : json({ { "code", a_error }, { "message", a_error }, { "phase", "source" } });
-	if (!found->second.error.is_null())
-		found->second.errors.push_back(found->second.error);
-	if (a_error == "source_timeout")
-		AppendEventLocked(found->second, "source.timeout", { { "reason", a_error } });
-	if (found->second.kind == "sequence_frame" &&
-		(a_state == "dropped" || a_error == "source_busy" || a_error == "encoder_backpressure"))
-		AppendEventLocked(found->second, "sequence.frame_dropped", { { "reason", a_error } });
-	TransitionLocked(found->second, std::string(a_state), "request.terminal", { { "reason", a_error } });
-	FinishSequenceChildLocked(found->second);
+	try {
+		found->second.error = a_error.empty() ? json(nullptr) : json({ { "code", a_error }, { "message", a_error }, { "phase", "source" } });
+		if (!found->second.error.is_null())
+			found->second.errors.push_back(found->second.error);
+		if (a_error == "source_timeout")
+			AppendEventLocked(found->second, "source.timeout", { { "reason", a_error } });
+		if (found->second.kind == "sequence_frame" &&
+			(a_state == "dropped" || a_error == "source_busy" || a_error == "encoder_backpressure"))
+			AppendEventLocked(found->second, "sequence.frame_dropped", { { "reason", a_error } });
+		TransitionLocked(found->second, std::string(a_state), "request.terminal", { { "reason", a_error } });
+	} catch (...) {
+		FailRequestCompletionLocked(found->second, std::current_exception());
+	}
 }
 
-void ScreenshotApi::FinishSequenceChildLocked(RequestRecord& a_child)
+void ScreenshotApi::FailRequestCompletionLocked(RequestRecord& a_record, std::exception_ptr a_failure) noexcept
+{
+	if (!a_record.completionFailure)
+		a_record.completionFailure = std::move(a_failure);
+	if (!IsTerminal(a_record.state))
+		a_record.state.swap(a_record.successfulArtifacts == 0 ? a_record.failureState : a_record.partialFailureState);
+	a_record.terminalAt = std::chrono::steady_clock::now();
+	a_record.terminalArtifacts = a_record.expectedArtifacts;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_record.referenceCompletion && a_record.referenceNotificationOrder == 0)
+		a_record.referenceNotificationOrder = nextReferenceNotificationOrder++;
+#endif
+	FinishSequenceChildLocked(a_record);
+}
+
+void ScreenshotApi::FinishSequenceChildLocked(RequestRecord& a_child) noexcept
 {
 	if (a_child.parentRequestId.empty() || a_child.sequenceFinished)
 		return;
@@ -1795,7 +1859,12 @@ void ScreenshotApi::FinishSequenceChildLocked(RequestRecord& a_child)
 		++sequence.written;
 		sequence.consecutiveSkips = 0;
 	}
-	const auto primaryErrorCode = a_child.error.is_object() ? a_child.error.value("code", std::string{}) : std::string{};
+	std::string_view primaryErrorCode;
+	if (a_child.error.is_object()) {
+		const auto code = a_child.error.find("code");
+		if (code != a_child.error.end() && code->is_string())
+			primaryErrorCode = code->get_ref<const json::string_t&>();
+	}
 	if (a_child.state == "dropped" || primaryErrorCode == "source_busy" || primaryErrorCode == "encoder_backpressure") {
 		++sequence.dropped;
 		++sequence.consecutiveSkips;
@@ -1804,51 +1873,54 @@ void ScreenshotApi::FinishSequenceChildLocked(RequestRecord& a_child)
 	} else if (a_child.state == "failed" || a_child.state == "failed_partial") {
 		++sequence.failed;
 	}
-	json completedChild = {
-		{ "ordinal", a_child.sequenceOrdinal },
-		{ "requestId", a_child.requestId },
-		{ "state", a_child.state },
-		{ "scheduledEngineFrame", a_child.scheduledEngineFrame },
-		{ "scheduledTimestampUs", a_child.scheduledTimestampUs },
-		{ "requested", a_child.requested },
-		{ "effective", a_child.effective },
-		{ "actual", a_child.actual },
-		{ "artifacts", a_child.artifacts },
-		{ "warnings", a_child.warnings },
-		{ "errors", a_child.errors },
-		{ "error", a_child.error },
-	};
-	const bool childUsedFallback = std::ranges::any_of(
-		completedChild.value("warnings", json::array()),
-		[](const json& warning) {
+	try {
+		json completedChild = json::object();
+		const Util::JsonCleanupGuard childCleanup(completedChild);
+		completedChild["ordinal"] = a_child.sequenceOrdinal;
+		completedChild["requestId"] = a_child.requestId;
+		completedChild["state"] = a_child.state;
+		completedChild["scheduledEngineFrame"] = a_child.scheduledEngineFrame;
+		completedChild["scheduledTimestampUs"] = a_child.scheduledTimestampUs;
+		completedChild["requested"] = a_child.requested;
+		completedChild["effective"] = a_child.effective;
+		completedChild["actual"] = a_child.actual;
+		completedChild["artifacts"] = a_child.artifacts;
+		completedChild["warnings"] = a_child.warnings;
+		completedChild["errors"] = a_child.errors;
+		completedChild["error"] = a_child.error;
+		const bool childUsedFallback = std::ranges::any_of(a_child.warnings, [](const json& warning) {
 			return warning.value("code", std::string{}) == "source_fallback";
 		});
-	sequence.manifestChildren = std::make_shared<ManifestChildNode>(ManifestChildNode{
-		.previous = sequence.manifestChildren,
-		.child = std::move(completedChild),
-		.fallbacksPresent = childUsedFallback ||
-	                        (sequence.manifestChildren && sequence.manifestChildren->fallbacksPresent),
-	});
-	++sequence.childCount;
-	const bool childSucceeded = a_child.state == "completed" || a_child.state == "completed_with_warnings";
+		auto node = std::make_shared<ManifestChildNode>();
+		node->previous = sequence.manifestChildren;
+		node->fallbacksPresent = childUsedFallback || (node->previous && node->previous->fallbacksPresent);
+		node->child.swap(completedChild);
+		sequence.manifestChildren = std::move(node);
+		++sequence.childCount;
+		const bool childSucceeded = a_child.state == "completed" || a_child.state == "completed_with_warnings";
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	if (sequence.burst && !childSucceeded) {
-		sequence.continuity.Fail(primaryErrorCode.empty() ? a_child.state : primaryErrorCode);
-		sequence.stopRequested = true;
-	}
+		if (sequence.burst && !childSucceeded) {
+			sequence.continuity.Fail(primaryErrorCode.empty() ? a_child.state : primaryErrorCode);
+			sequence.stopRequested = true;
+		}
 #endif
-	if ((sequence.failurePolicy == "abort" && !childSucceeded) ||
-		(sequence.backpressurePolicy == "abort" && sequence.dropped != 0) ||
-		(sequence.maximumConsecutiveSkips != 0 && sequence.consecutiveSkips >= sequence.maximumConsecutiveSkips)) {
-		sequence.stopRequested = true;
+		if ((sequence.failurePolicy == "abort" && !childSucceeded) ||
+			(sequence.backpressurePolicy == "abort" && sequence.dropped != 0) ||
+			(sequence.maximumConsecutiveSkips != 0 && sequence.consecutiveSkips >= sequence.maximumConsecutiveSkips)) {
+			sequence.stopRequested = true;
+		}
+		if (sequence.childCount >= sequence.nextCheckpointChildCount) {
+			QueueSequenceManifestLocked(sequence, false);
+			sequence.nextCheckpointChildCount = std::min<std::size_t>(
+				kMaximumSequenceFrames,
+				sequence.nextCheckpointChildCount * 2);
+		}
+		TryFinalizeSequenceLocked(sequence);
+	} catch (...) {
+		if (!a_child.completionFailure)
+			a_child.completionFailure = std::current_exception();
+		FailSequenceFinalizationLocked(sequence, std::current_exception());
 	}
-	if (sequence.childCount >= sequence.nextCheckpointChildCount) {
-		QueueSequenceManifestLocked(sequence, false);
-		sequence.nextCheckpointChildCount = std::min<std::size_t>(
-			kMaximumSequenceFrames,
-			sequence.nextCheckpointChildCount * 2);
-	}
-	TryFinalizeSequenceLocked(sequence);
 }
 
 void ScreenshotApi::TryFinalizeSequenceLocked(SequenceRecord& a_sequence)
@@ -2068,94 +2140,118 @@ void ScreenshotApi::DrainWorkerResultsLocked()
 		preparationWorkerState->outstanding -= prepared.size();
 	}
 	for (auto& result : prepared) {
+		const Util::JsonCleanupGuard captureCleanup(result.capture);
 		const auto sequence = sequences.find(result.requestId);
 		if (sequence == sequences.end())
 			continue;
 		auto& record = sequence->second;
 		record.preparationPending = false;
-		auto parent = requests.find(result.requestId);
-		if (parent == requests.end() || IsTerminal(parent->second.state))
-			continue;
-		if (result.cancelled) {
-			record.finalizing = true;
-			if (record.frameManifest) {
-				record.packaging["frameManifest"] = {
-					{ "requested", true }, { "state", "cancelled" }, { "path", nullptr }
-				};
-				parent->second.terminalArtifacts = parent->second.expectedArtifacts;
+		try {
+			auto parent = requests.find(result.requestId);
+			if (parent == requests.end() || IsTerminal(parent->second.state))
+				continue;
+			if (result.cancelled) {
+				record.finalizing = true;
+				if (record.frameManifest) {
+					record.packaging["frameManifest"] = {
+						{ "requested", true }, { "state", "cancelled" }, { "path", nullptr }
+					};
+					parent->second.terminalArtifacts = parent->second.expectedArtifacts;
+				}
+				TransitionLocked(parent->second, record.stopRequested ? "stopped" : "cancelled", "request.terminal", { { "manifestPath", nullptr } });
+				continue;
 			}
-			TransitionLocked(parent->second, record.stopRequested ? "stopped" : "cancelled", "request.terminal", { { "manifestPath", nullptr } });
-			continue;
-		}
-		if (!result.success || !result.directoryLease) {
-			record.finalizing = true;
-			parent->second.error = {
-				{ "code", "destination_unavailable" },
-				{ "message", result.error.empty() ? "sequence destination preparation failed" : result.error },
-				{ "phase", "preparation" },
-				{ "field", "sequence.capture.destination" },
+			if (!result.success || !result.directoryLease) {
+				record.finalizing = true;
+				parent->second.error = {
+					{ "code", "destination_unavailable" },
+					{ "message", result.error.empty() ? "sequence destination preparation failed" : result.error },
+					{ "phase", "preparation" },
+					{ "field", "sequence.capture.destination" },
+				};
+				parent->second.errors.push_back(parent->second.error);
+				if (record.frameManifest) {
+					record.packaging["frameManifest"] = {
+						{ "requested", true },
+						{ "state", "failed" },
+						{ "path", nullptr },
+						{ "error", parent->second.error },
+					};
+					parent->second.terminalArtifacts = parent->second.expectedArtifacts;
+				}
+				TransitionLocked(parent->second, "failed", "sequence.preparation_failed", {
+																							  { "manifestPath", nullptr },
+																							  { "error", parent->second.error },
+																						  });
+				continue;
+			}
+			record.capture = std::move(result.capture);
+			record.effective["capture"] = record.capture;
+			record.directoryLease = std::move(result.directoryLease);
+			record.directory = record.directoryLease->Path();
+			record.partialManifestPath = record.directory / "sequence.json.partial";
+			record.finalManifestPath = record.directory / "sequence.json";
+			parent->second.effective["capture"] = record.capture;
+			json preparedPayload = {
+				{ "frameCount", record.frameCount },
+				{ "manifestPath", Util::PathToUtf8(record.partialManifestPath) },
 			};
-			parent->second.errors.push_back(parent->second.error);
-			if (record.frameManifest) {
-				record.packaging["frameManifest"] = {
-					{ "requested", true },
-					{ "state", "failed" },
-					{ "path", nullptr },
-					{ "error", parent->second.error },
-				};
-				parent->second.terminalArtifacts = parent->second.expectedArtifacts;
-			}
-			TransitionLocked(parent->second, "failed", "sequence.preparation_failed", {
-																						  { "manifestPath", nullptr },
-																						  { "error", parent->second.error },
-																					  });
-			continue;
+			const Util::JsonCleanupGuard preparedCleanup(preparedPayload);
+			if (record.stopRequested || record.cancelRequested)
+				AppendEventLocked(parent->second, "sequence.prepared", std::move(preparedPayload));
+			else
+				TransitionLocked(parent->second, "running", "sequence.started", std::move(preparedPayload));
+			if (!record.stopRequested && !record.cancelRequested)
+				QueueSequenceManifestLocked(record, false);
+			TryFinalizeSequenceLocked(record);
+		} catch (...) {
+			FailSequenceFinalizationLocked(record, std::current_exception());
 		}
-		record.capture = std::move(result.capture);
-		record.effective["capture"] = record.capture;
-		record.directoryLease = std::move(result.directoryLease);
-		record.directory = record.directoryLease->Path();
-		record.partialManifestPath = record.directory / "sequence.json.partial";
-		record.finalManifestPath = record.directory / "sequence.json";
-		parent->second.effective["capture"] = record.capture;
-		const json preparedPayload = {
-			{ "frameCount", record.frameCount },
-			{ "manifestPath", Util::PathToUtf8(record.partialManifestPath) },
-		};
-		if (record.stopRequested || record.cancelRequested)
-			AppendEventLocked(parent->second, "sequence.prepared", preparedPayload);
-		else
-			TransitionLocked(parent->second, "running", "sequence.started", preparedPayload);
-		if (!record.stopRequested && !record.cancelRequested)
-			QueueSequenceManifestLocked(record, false);
-		TryFinalizeSequenceLocked(record);
 	}
 	for (auto& result : completed) {
+		const Util::JsonCleanupGuard artifactCleanup(result.artifact);
 		const auto sequence = sequences.find(result.requestId);
 		if (sequence == sequences.end())
 			continue;
 		auto& record = sequence->second;
-		if (auto parent = requests.find(result.requestId); parent != requests.end()) {
-			AppendEventLocked(parent->second, result.success ? "packaging.completed" : "packaging.failed", {
-																											   { "generation", result.generation },
-																											   { "final", result.final },
-																											   { "path", Util::PathToUtf8(result.destination) },
-																											   { "error", result.success ? json(nullptr) : json(result.error) },
-																										   });
+		try {
+			if (auto parent = requests.find(result.requestId); parent != requests.end()) {
+				json payload = json::object();
+				const Util::JsonCleanupGuard payloadCleanup(payload);
+				payload["generation"] = result.generation;
+				payload["final"] = result.final;
+				payload["path"] = Util::PathToUtf8(result.destination);
+				payload["error"] = result.success ? json(nullptr) : json(result.error);
+				AppendEventLocked(parent->second, result.success ? "packaging.completed" : "packaging.failed", std::move(payload));
+			}
+		} catch (...) {
+			record.manifestReportingFailure = std::current_exception();
+			if (auto parent = requests.find(result.requestId); parent != requests.end())
+				parent->second.finalizationJournalFailure = std::current_exception();
 		}
-		if (result.final) {
-			if (result.generation != record.finalManifestGeneration)
+		try {
+			if (result.final && result.generation != record.finalManifestGeneration)
 				continue;
-			record.packaging["frameManifest"] = result.success ?
-			                                        json({ { "requested", true }, { "state", "written" }, { "path", Util::PathToUtf8(result.destination) } }) :
-			                                        json({ { "requested", true }, { "state", "failed" }, { "error", result.error } });
-			FinalizeSequenceLocked(record, &result);
-		} else if (result.success && result.generation <= record.manifestGeneration) {
-			record.packaging["frameManifest"] = {
-				{ "requested", true }, { "state", "partial" }, { "path", Util::PathToUtf8(result.destination) }
-			};
-		} else if (!result.success) {
-			logger::warn("Screenshot partial manifest checkpoint failed: {}", result.error);
+			if (result.final || (result.success && result.generation <= record.manifestGeneration)) {
+				json packaging = json::object();
+				const Util::JsonCleanupGuard packagingCleanup(packaging);
+				packaging["requested"] = true;
+				packaging["state"] = result.final ? (result.success ? "written" : "failed") : "partial";
+				if (result.success)
+					packaging["path"] = Util::PathToUtf8(result.destination);
+				else
+					packaging["error"] = result.error;
+				record.packaging["frameManifest"].swap(packaging);
+			} else if (!result.success) {
+				logger::warn("Screenshot partial manifest checkpoint failed: {}", result.error);
+			}
+			if (result.final)
+				FinalizeSequenceLocked(record, &result);
+		} catch (...) {
+			if (result.final)
+				FailSequenceFinalizationLocked(record, std::current_exception());
+			else
+				record.manifestReportingFailure = std::current_exception();
 		}
 	}
 }
@@ -2283,26 +2379,23 @@ void ScreenshotApi::CancelQueuedPreparationLocked(std::string_view a_requestId)
 
 void ScreenshotApi::CancelQueuedDispatchesLocked(std::string_view a_code, std::string_view a_reason)
 {
-	std::deque<DispatchEntry> queued;
-	queued.swap(manualDispatchQueue);
-	queued.insert(
-		queued.end(),
-		std::make_move_iterator(sequenceDispatchQueue.begin()),
-		std::make_move_iterator(sequenceDispatchQueue.end()));
-	sequenceDispatchQueue.clear();
-	for (const auto& entry : queued) {
-		const auto found = requests.find(entry.requestId);
-		if (found == requests.end() || IsTerminal(found->second.state))
-			continue;
-		found->second.cancelRequested = true;
-		found->second.error = {
-			{ "code", a_code },
-			{ "message", a_reason },
-			{ "phase", "source" },
-		};
-		found->second.errors.push_back(found->second.error);
-		TransitionLocked(found->second, "cancelled", "request.terminal", { { "reason", a_reason } });
-		FinishSequenceChildLocked(found->second);
+	for (auto* queue : { &manualDispatchQueue, &sequenceDispatchQueue }) {
+		while (!queue->empty()) {
+			const auto found = requests.find(queue->front().requestId);
+			if (found != requests.end() && !IsTerminal(found->second.state)) {
+				auto& record = found->second;
+				record.cancelRequested = true;
+				try {
+					record.error = { { "code", a_code }, { "message", a_reason }, { "phase", "source" } };
+					record.errors.push_back(record.error);
+					TransitionLocked(record, "cancelled", "request.terminal", { { "reason", a_reason } });
+				} catch (...) {
+					FailRequestCompletionLocked(record, std::current_exception());
+				}
+			}
+			Util::ClearJsonWithoutAllocation(queue->front().capture);
+			queue->pop_front();
+		}
 	}
 }
 

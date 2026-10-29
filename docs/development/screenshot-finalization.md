@@ -25,6 +25,24 @@ If receipt allocation fails, the callback remains with the retained request for
 a later drain. Successful preparation preserves terminal-transition order, and
 the callback is invoked outside the coordinator mutex.
 
+Acknowledgement, expiry and request-count trimming cannot erase a request while
+it owns a reference callback. Once a ready notification owns the callback and
+receipt, ordinary terminal retention applies again.
+
+Worker-result draining handles each consumed result independently. Optional
+packaging journal failures retain their exception without skipping a matching
+final result; failures preparing its terminal metadata instead enter the hard
+failure boundary. A preparation result cannot discard completions already
+removed from the other worker lane.
+
+A committed child-terminal transition retires parent in-flight accounting on
+both successful and exceptional reporting paths. Accounting is idempotent and
+does not allocate. Fallible child-manifest construction follows accounting and
+fails the parent safely if it cannot complete. Source, artifact and queued
+cancellation callbacks retain completion exceptions and do not consume a final
+input without a terminal disposition. An artifact request with several outputs
+continues counting the remaining callbacks before its failure disposition.
+
 `ScreenshotFinalization` uses the actual coordinator class, production method
 bodies selected by `extract_screenshot_finalization.cmake`, the real
 `ServiceFoundation` journal and Windows directory leases. It injects allocation
@@ -37,6 +55,11 @@ stack-capture controls are separate from actual SDK stack capture and from the
 finalization assertions.
 The fixture binds only coordinator lifecycle setup, inert producer metadata and
 logging; it starts no I/O worker and writes no manifest or screenshot.
+The terminal-custody cases additionally drain controlled worker-result inputs,
+invoke actual source/artifact callbacks and queued cancellation, and apply
+acknowledgement, expiry and capacity pressure before notification delivery.
+The artifact callback cases use committed three-byte storage payloads; they do
+not certify an image encoder or rendered screenshot.
 
 Compile the non-default `screenshot_finalization_test` target through the owning
 build recipe. Compilation and source-contract checks do not establish that its

@@ -160,6 +160,29 @@ contradict this policy.
 
 ## Validation and long-running work
 
+-   **Prioritize fast execution, measurement, and analysis.** Perform only the
+    requested work, start as soon as the necessary checks are satisfied, and
+    return results promptly. Preparation and reporting must not dominate a
+    straightforward test or measurement request.
+-   **Use minimal provenance by default.** Record the tested conditions,
+    results, failures or limitations, and the build/revision when already
+    known. Existing tool output and a concise result summary are normally
+    sufficient. The user will explicitly ask for detailed provenance when
+    needed; do not add an approval question or extra documentation workflow.
+-   Reuse confirmed session context, documentation, tool schemas, and existing
+    commands. Reread or rediscover only when information is missing, changed,
+    or contradicted by an actual failure. Do not build new orchestration or
+    provenance wrappers when existing calls can execute the requested test.
+-   Without an explicit request, do not add evidence frameworks, exhaustive
+    ledgers, source/deployment audits, repeated hashing, packaging, or unrelated
+    validation. Preserve automatically generated output without expanding it
+    into additional reports. Keep a quick test scoped to the requested checks.
+-   The detailed ledger, comparison, reporting, and deployment-audit rules
+    below apply only when the user requests detailed provenance or explicitly
+    invokes a protocol requiring those records. They do not mandate creating
+    those artifacts for routine tests. Necessary correctness, runtime ownership,
+    and settings-restoration checks still apply; use the smallest sufficient
+    checks and never claim an unperformed test or unsupported conclusion.
 -   Match validation to the changed surface: focused controller tests for policies, shader validation for HLSL, parser/unit tests for tooling, and runtime testing for UI/render/cache behavior.
 -   For shader refactors expected to be behavior-preserving, use `tools/verify-shader-refactor.ps1` first. Identical DXBC is the preferred proof; otherwise use controlled runtime A/B evidence.
 -   Runtime-affecting changes should be exercised through the available DevBench automation for each affected runtime. A new feature or settings surface should expose a DevBench action in the same PR. Changes to an exposed tool/action must update its registered description and schema in the same PR.
@@ -205,7 +228,8 @@ contradict this policy.
 -   Never interrupt shader compilation or cache generation because output is temporarily silent. Check process and cache activity and allow the documented build window.
 -   Preserve user-owned build outputs and shader caches unless the task explicitly requires their removal or regeneration.
 -   Report exact passed, failed, skipped, or blocked checks. Do not turn a warning into a pass or omit a known validation limitation.
--   Finalize runtime DLL verification from the preserved producer Build ID and
+-   For a requested or protocol-required deployment audit, finalize runtime
+    DLL verification from the preserved producer Build ID and
     source commit. Resolve the exact enabled AIO mod and compare its physical
     `CommunityShaders.dll` SHA-256 and size with its adjacent
     `CSX.BuildManifest.json` and AIO build receipt. Match the manifest Build ID

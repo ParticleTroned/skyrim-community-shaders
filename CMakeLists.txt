@@ -3544,6 +3544,37 @@ if(BUILD_CONTROLLER_TESTS)
         VRRenderScaleModePolicy
         tests/vr_render_scale_mode_policy_test.cpp
     )
+    set(_render_scale_menu_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/render_scale_menu_test"
+    )
+    set(_render_scale_menu_test_header
+        "${_render_scale_menu_test_dir}/render_scale_menu_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_render_scale_menu_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_render_scale_menu_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_render_scale_menu.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_render_scale_menu.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        vr_render_scale_menu_test
+        VRRenderScaleMenu
+        tests/vr_render_scale_menu_test.cpp
+    )
+    target_sources(
+        vr_render_scale_menu_test
+        PRIVATE "${_render_scale_menu_test_header}"
+    )
+    target_include_directories(
+        vr_render_scale_menu_test
+        PRIVATE "${_render_scale_menu_test_dir}"
+    )
     set(_upscaling_restore_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/upscaling_restore_test"
     )

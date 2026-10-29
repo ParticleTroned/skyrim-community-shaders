@@ -2568,7 +2568,8 @@ public:
 		uint32_t a_fallbackMethod);
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
-	void DrawVRRenderScaleLinkSetting(UpscaleMethod a_upscaleMethod);
+	/** Draw the link preference and native-AA availability for the desired profile. */
+	void DrawVRRenderScaleLinkSetting();
 	/** Apply the shared menu/API link policy without bypassing transition admission. */
 	bool SetRenderScaleLinkedToUpscaling(bool a_enabled);
 	/** Apply a VR FOV switch change and select screen-space FOV defaults on enable. */

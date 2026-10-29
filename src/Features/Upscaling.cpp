@@ -16945,6 +16945,50 @@ namespace
 		ImGui::TextUnformatted("Restart Skyrim VR if the change stays pending.");
 	}
 
+	void DrawVRRenderScaleModeSetting(
+		Upscaling& a_upscaling,
+		const Upscaling::VRRenderScaleDesiredProfile& a_profile)
+	{
+		const bool methodEligible = IsRenderScaleMethodEligible(a_profile.method);
+		const bool qualityEligible = IsRenderScaleQualityMode(a_profile.qualityMode);
+		const bool startupNativeFallbackActive = a_upscaling.IsVRStartupNativeFallbackRestartRequired();
+		const auto renderScale = VRRenderScaleModePolicy::Resolve(
+			methodEligible, qualityEligible,
+			startupNativeFallbackActive ? a_upscaling.IsVRStartupNativeFallbackSavedIntentActive() : a_profile.renderScaleModePreference);
+		const bool canEdit = methodEligible && qualityEligible &&
+		                     !a_upscaling.IsOpenCompositeUpscalingBlocked() &&
+		                     !(a_upscaling.IsNeuralRenderingRenderScaleRequired() && renderScale.enabled);
+		bool renderScaleMode = renderScale.enabled;
+		{
+			auto disabledGuard = Util::DisableGuard(!canEdit);
+			const bool renderScaleChanged = Util::Widgets::Checkbox("Render Scale", &renderScaleMode);
+			const bool renderScaleEditCommitted = renderScaleChanged;
+			const auto renderScaleEditDispatch = VRVendorRelatchPolicy::SelectMenuEditDispatch(
+				renderScaleChanged, renderScaleEditCommitted);
+			if (renderScaleEditDispatch.publishRequest) {
+				const bool enableRenderScaleMode = renderScaleMode;
+				const auto fallbackControl = startupNativeFallbackActive && !enableRenderScaleMode ?
+				                                 VRVendorRelatchPolicy::StartupNativeFallbackControl::DisableSavedProfile :
+				                                 VRVendorRelatchPolicy::StartupNativeFallbackControl::None;
+				const auto applied = a_upscaling.ApplyCSMenuUpscalingTransition(
+					a_profile.method,
+					enableRenderScaleMode,
+					a_profile.qualityMode,
+					a_profile.dlssPreset,
+					"render-scale menu mode change",
+					Upscaling::VRUpscalingTransitionOrigin::CSMenu,
+					0,
+					a_profile.fsr4RuntimeEnabled,
+					fallbackControl,
+					renderScaleEditDispatch.directMenuEdit);
+				if (applied.disposition != Upscaling::UpscalingTransitionApplyDisposition::Rejected && !enableRenderScaleMode)
+					a_upscaling.SetRenderScaleLinkedToUpscaling(false);
+			}
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			DrawVRRenderScaleModeTooltip();
+	}
+
 	void DrawVRStartupNativeFallbackStatus(
 		Upscaling& a_upscaling,
 		Upscaling::UpscaleMethod a_method,
@@ -17019,7 +17063,7 @@ bool Upscaling::SetRenderScaleLinkedToUpscaling(bool a_enabled)
 	return true;
 }
 
-void Upscaling::DrawVRRenderScaleLinkSetting(UpscaleMethod a_upscaleMethod)
+void Upscaling::DrawVRRenderScaleLinkSetting()
 {
 	bool linked = settings.renderScaleLinkedToUpscaling;
 	{
@@ -17036,10 +17080,10 @@ void Upscaling::DrawVRRenderScaleLinkSetting(UpscaleMethod a_upscaleMethod)
 		ImGui::TextUnformatted("Unlinked restores the saved manual on/off choice. Turning Render Scale off also unlinks it.");
 		ImGui::TextUnformatted("Keeps existing saved settings and explicit API/profiler on/off choices. DLSS Profile changes do not enable Render Scale.");
 	}
-	if (IsRenderScaleMethodEligible(a_upscaleMethod) &&
-		!IsRenderScaleQualityMode(GetEffectiveUpscalingQualityMode()) &&
-		GetVRRenderScaleModePreference()) {
-		ImGui::TextDisabled("Render Scale is inactive at native AA/DLAA; its Enabled preference is remembered.");
+	const auto desiredProfile = GetPendingVRRenderScaleDesiredProfile();
+	if (IsRenderScaleMethodEligible(desiredProfile.method) &&
+		!IsRenderScaleQualityMode(desiredProfile.qualityMode)) {
+		ImGui::TextDisabled("Render Scale is off at native AA/DLAA. Select a below-native Upscale Preset to use it.");
 	}
 }
 
@@ -17353,12 +17397,10 @@ void Upscaling::DrawSettings()
 		if (!globals::game::isVR)
 			return;
 
-		const bool renderScaleMethodEligible = IsRenderScaleMethodEligible(upscaleMethod);
-		const uint32_t renderScaleQualityMode = renderScaleMethodEligible ? GetEffectiveUpscalingQualityMode() : settings.qualityMode;
-		const bool renderScaleQualitySelected = IsRenderScaleQualityMode(renderScaleQualityMode);
+		const auto renderScaleProfile = GetPendingVRRenderScaleDesiredProfile();
+		const bool renderScaleMethodEligible = IsRenderScaleMethodEligible(renderScaleProfile.method);
 		const bool startupNativeFallbackActive =
 			IsVRStartupNativeFallbackRestartRequired();
-		const bool vrRenderScaleRequested = GetVRRenderScaleModePreference();
 		const bool startupMainMenuStateActive =
 			IsVRStartupMainMenuRenderStateActive();
 		const bool perfModeRelatchPending =
@@ -17366,50 +17408,8 @@ void Upscaling::DrawSettings()
 			perfModeRenderTargetRecreateInProgress.load(std::memory_order_relaxed) ||
 			postLoadRuntimeResetPending.load(std::memory_order_relaxed) ||
 			HasPendingVRRenderScaleTransition();
-		const bool publicRenderScaleRequested =
-			startupNativeFallbackActive ?
-				IsVRStartupNativeFallbackSavedIntentActive() :
-				vrRenderScaleRequested;
-		const bool neuralRenderScaleLocked = IsNeuralRenderingRenderScaleRequired() && publicRenderScaleRequested;
-		const bool publicRenderScaleCanEdit =
-			!neuralRenderScaleLocked && !openCompositeBlocksUpscaling &&
-			((renderScaleMethodEligible && renderScaleQualitySelected) ||
-				publicRenderScaleRequested);
-
-		bool renderScaleMode = publicRenderScaleRequested;
-		{
-			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
-			const bool renderScaleChanged = Util::Widgets::Checkbox("Render Scale", &renderScaleMode);
-			const bool renderScaleEditCommitted = renderScaleChanged;
-			const auto renderScaleEditDispatch =
-				VRVendorRelatchPolicy::SelectMenuEditDispatch(
-					renderScaleChanged,
-					renderScaleEditCommitted);
-			if (renderScaleEditDispatch.publishRequest) {
-				const bool enableRenderScaleMode = renderScaleMode;
-				const auto fallbackControl =
-					startupNativeFallbackActive && !enableRenderScaleMode ?
-						VRVendorRelatchPolicy::StartupNativeFallbackControl::DisableSavedProfile :
-						VRVendorRelatchPolicy::StartupNativeFallbackControl::None;
-				const auto applied = ApplyCSMenuUpscalingTransition(
-					upscaleMethod,
-					enableRenderScaleMode,
-					renderScaleQualityMode,
-					GetEffectiveDLSSPreset(),
-					"upscaling menu render-scale mode change",
-					VRUpscalingTransitionOrigin::CSMenu,
-					0,
-					std::nullopt,
-					fallbackControl,
-					renderScaleEditDispatch.directMenuEdit);
-				if (applied.disposition != UpscalingTransitionApplyDisposition::Rejected && !enableRenderScaleMode)
-					SetRenderScaleLinkedToUpscaling(false);
-			}
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			DrawVRRenderScaleModeTooltip();
-		}
-		DrawVRRenderScaleLinkSetting(upscaleMethod);
+		DrawVRRenderScaleModeSetting(*this, renderScaleProfile);
+		DrawVRRenderScaleLinkSetting();
 		if (IsNeuralRenderingRenderScaleRequired())
 			ImGui::TextWrapped("NR Before DLSS needs below-native DLSS and, in VR, Render Scale. Turn NR off or select After upscaling to use other settings.");
 		if (openCompositeBlocksUpscaling) {
@@ -17417,9 +17417,9 @@ void Upscaling::DrawSettings()
 		}
 		DrawVRStartupNativeFallbackStatus(
 			*this,
-			upscaleMethod,
-			renderScaleQualityMode,
-			GetEffectiveDLSSPreset());
+			renderScaleProfile.method,
+			renderScaleProfile.qualityMode,
+			renderScaleProfile.dlssPreset);
 		// The startup MainMenu override deliberately presents a native None
 		// contract while retaining the saved gameplay profile. PerfMode's legacy
 		// restart flag compares that saved profile with the (intentionally absent)
@@ -18186,65 +18186,19 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 	}
 
 	if (globals::game::isVR) {
-		DrawVRRenderScaleLinkSetting(upscaleMethod);
+		DrawVRRenderScaleLinkSetting();
 		if (IsNeuralRenderingRenderScaleRequired())
 			ImGui::TextWrapped("NR Before DLSS needs below-native DLSS and, in VR, Render Scale. Turn NR off or select After upscaling to use other settings.");
-		const bool renderScaleMethodEligible = IsRenderScaleMethodEligible(upscaleMethod);
-		const uint32_t renderScaleQualityMode = renderScaleMethodEligible ? GetEffectiveUpscalingQualityMode() : settings.qualityMode;
-		const bool renderScaleQualitySelected = IsRenderScaleQualityMode(renderScaleQualityMode);
-		const bool startupNativeFallbackActive =
-			IsVRStartupNativeFallbackRestartRequired();
-		const bool publicRenderScaleRequested =
-			startupNativeFallbackActive ?
-				IsVRStartupNativeFallbackSavedIntentActive() :
-				GetVRRenderScaleModePreference();
-		const bool neuralRenderScaleLocked = IsNeuralRenderingRenderScaleRequired() && publicRenderScaleRequested;
-		const bool publicRenderScaleCanEdit =
-			!neuralRenderScaleLocked && !openCompositeBlocksUpscaling &&
-			((renderScaleMethodEligible && renderScaleQualitySelected) ||
-				publicRenderScaleRequested);
-
-		bool renderScaleMode = publicRenderScaleRequested;
-		{
-			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
-			const bool renderScaleChanged = Util::Widgets::Checkbox("Render Scale", &renderScaleMode);
-			const bool renderScaleEditCommitted = renderScaleChanged;
-			const auto renderScaleEditDispatch =
-				VRVendorRelatchPolicy::SelectMenuEditDispatch(
-					renderScaleChanged,
-					renderScaleEditCommitted);
-			if (renderScaleEditDispatch.publishRequest) {
-				const bool enableRenderScaleMode = renderScaleMode;
-				const auto fallbackControl =
-					startupNativeFallbackActive && !enableRenderScaleMode ?
-						VRVendorRelatchPolicy::StartupNativeFallbackControl::DisableSavedProfile :
-						VRVendorRelatchPolicy::StartupNativeFallbackControl::None;
-				const auto applied = ApplyCSMenuUpscalingTransition(
-					upscaleMethod,
-					enableRenderScaleMode,
-					renderScaleQualityMode,
-					GetEffectiveDLSSPreset(),
-					"performance tuning render-scale mode change",
-					VRUpscalingTransitionOrigin::CSMenu,
-					0,
-					std::nullopt,
-					fallbackControl,
-					renderScaleEditDispatch.directMenuEdit);
-				if (applied.disposition != UpscalingTransitionApplyDisposition::Rejected && !enableRenderScaleMode)
-					SetRenderScaleLinkedToUpscaling(false);
-			}
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			DrawVRRenderScaleModeTooltip();
-		}
+		const auto renderScaleProfile = GetPendingVRRenderScaleDesiredProfile();
+		DrawVRRenderScaleModeSetting(*this, renderScaleProfile);
 		if (openCompositeBlocksUpscaling) {
 			Util::Text::WrappedWarning("%s", kOpenCompositeRenderScaleBlockWarning);
 		}
 		DrawVRStartupNativeFallbackStatus(
 			*this,
-			upscaleMethod,
-			renderScaleQualityMode,
-			GetEffectiveDLSSPreset());
+			renderScaleProfile.method,
+			renderScaleProfile.qualityMode,
+			renderScaleProfile.dlssPreset);
 
 		if (!a_advanced)
 			ImGui::SeparatorText("VR FOV");

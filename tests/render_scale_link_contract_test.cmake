@@ -159,14 +159,25 @@ section("${_source}" [[void Upscaling::DrawSettings()]]
     [[void Upscaling::DrawPerformanceSettings(]] _full_menu)
 section("${_source}" [[void Upscaling::DrawPerformanceSettings(]]
     [[bool Upscaling::ApplyNeuralRenderingPreset(]] _performance_menu)
+section("${_source}" [[void DrawVRRenderScaleModeSetting(]]
+    [[void DrawVRStartupNativeFallbackStatus(]] _render_scale_control)
+require_contract("${_render_scale_control}"
+    [[const bool renderScaleEditCommitted = renderScaleChanged;]]
+    "shared control commits discrete Render Scale choices immediately")
+require_contract("${_render_scale_control}"
+    [[Util::Widgets::Checkbox("Render Scale", &renderScaleMode)]]
+    "shared on/off control")
+require_contract("${_render_scale_control}"
+    [[if (applied.disposition != Upscaling::UpscalingTransitionApplyDisposition::Rejected && !enableRenderScaleMode) a_upscaling.SetRenderScaleLinkedToUpscaling(false);]]
+    "manual off unlinks only after an accepted transition")
 foreach(_menu IN ITEMS _full_menu _performance_menu)
-	foreach(_setting IN ITEMS renderScale quality dlssProfile)
+	foreach(_setting IN ITEMS quality dlssProfile)
 		require_contract("${${_menu}}"
 			"const bool ${_setting}EditCommitted = ${_setting}Changed;"
 			"${_menu} commits each discrete ${_setting} choice immediately")
 	endforeach()
 	require_contract("${${_menu}}"
-		[[Util::Widgets::Checkbox("Render Scale", &renderScaleMode)]]
+		[[DrawVRRenderScaleModeSetting(*this, renderScaleProfile);]]
 		"${_menu} uses the shared on/off control")
 	require_contract("${${_menu}}"
 		[[DrawUpscalingQualitySelection(qualityMode, upscaleMethod, IsNeuralRenderingRenderScaleRequired())]]
@@ -177,13 +188,7 @@ foreach(_menu IN ITEMS _full_menu _performance_menu)
         [[GetVRRenderScalePreferenceForSelection(selectedUpscaleChoice.method)]] "${_menu} method selection")
     require_contract("${${_menu}}"
         [[GetVRRenderScalePreferenceForSelection(upscaleMethod)]] "${_menu} quality selection")
-    require_contract("${${_menu}}" [[DrawVRRenderScaleLinkSetting(upscaleMethod);]] "${_menu} shared checkbox")
-    string(REGEX MATCH
-        [[if \([^;{}]*\.disposition != UpscalingTransitionApplyDisposition::Rejected && !enableRenderScaleMode\) SetRenderScaleLinkedToUpscaling\(false\);]]
-        _accepted_manual_off "${${_menu}}")
-    if(NOT _accepted_manual_off)
-        message(FATAL_ERROR "${_menu} must unlink only after an accepted explicit Render Scale-off transition")
-    endif()
+    require_contract("${${_menu}}" [[DrawVRRenderScaleLinkSetting();]] "${_menu} shared checkbox")
 endforeach()
 
 section("${_source}" [[Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransition(]]

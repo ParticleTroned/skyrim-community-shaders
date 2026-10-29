@@ -68,8 +68,9 @@ namespace Color
 		color = AdaptiveBalanceAppearance::ApplyColor(color, 1.0, 1.0,
 			SharedData::adaptiveBalanceSettings.appearance.directionalSaturation,
 			SharedData::adaptiveBalanceSettings.appearance.directionalTint, false);
-		color = color * ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
-		        SharedData::adaptiveBalanceSettings.directionalLightMult;
+		color *= ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f);
+		if (IsSceneColorDraw())
+			color *= SharedData::adaptiveBalanceSettings.directionalLightMult;
 		return grade ? AdaptiveBalanceColorBounds::Output(color) : color;
 	}
 

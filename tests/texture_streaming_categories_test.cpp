@@ -368,6 +368,7 @@ struct TextureStreaming
 		std::mutex mutex;
 		StreamingTextures::Categories categories;
 		bool requestedEnabled = true, enabled = true, externalStreamingConflict = false;
+		std::string inventoryFailure;
 		StreamingTextures::Modes modes;
 		StreamingTextures::Options options;
 		Policy::Pressure pressure;
@@ -621,6 +622,25 @@ void CheckStreamingConflict()
 	Require(CSX::Diagnostics::Stutters::AssetLoadHooks::ddsAvailable, "DDS hook availability must reach diagnostics");
 #endif
 	Require(hookInstalls == 1, "Repeated startup installed the DDS hook twice");
+
+	TextureStreaming rejected;
+	rejected.state->inventoryFailure = "Invalid world child inventory; texture streaming suspended until restart";
+	rejected.Configure(true, 2, std::nullopt, StreamingTextures::Modes{ false, true });
+	Require(!rejected.state->enabled && rejected.state->requestedEnabled && rejected.state->detail == rejected.state->inventoryFailure,
+		"Configuration re-enabled a rejected inventory or discarded its failure reason");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	rejected.SetDebugForceStreaming(false);
+	Require(!rejected.state->enabled, "The legacy streaming alias bypassed inventory suspension");
+#endif
+	Util::Widgets::clicks = { { "Enabled", false }, { "On pressure", true } };
+	rejected.DrawSettingsEnabledControl();
+	rejected.DrawSettings();
+	Require(!rejected.state->enabled && rejected.state->requestedEnabled && Util::Text::warning == rejected.state->inventoryFailure && !Util::disabled,
+		"Suspended inventory controls hid the failure or bypassed the session latch");
+	Util::Widgets::clicks.clear();
+	rejected.RestoreDefaultSettings();
+	Require(!rejected.state->enabled && rejected.state->detail == rejected.state->inventoryFailure,
+		"Restoring settings bypassed inventory suspension");
 }
 
 int main()

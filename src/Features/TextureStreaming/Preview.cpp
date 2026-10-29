@@ -1,6 +1,7 @@
 #include "Preview.h"
 #include "Globals.h"
 #include "LoadHooks.h"
+#include "Utils/Game.h"
 #include "Utils/VirtualFunctionHook.h"
 #include <RE/I/Inventory3DManager.h>
 #include <RE/M/MistMenu.h>
@@ -53,6 +54,16 @@ namespace StreamingTextures::Preview
 					LoadHooks::SetPreviewActive(ui->IsMenuOpen(menus[i]), 2u << i);
 			}
 		}
+		void AddRoot(RE::NiAVObject* root, RootSnapshot& output)
+		{
+			if (!output.complete || !root)
+				return;
+			if (!Util::IsLikelyValidPointer(root)) {
+				output.complete = false;
+				return;
+			}
+			output.roots.emplace_back(root);
+		}
 		template <class Data>
 		void AddModels(const Data* data, RootSnapshot& output)
 		{
@@ -63,8 +74,9 @@ namespace StreamingTextures::Preview
 				return;
 			}
 			for (const auto& model : data->loadedModels) {
-				if (model.spModel)
-					output.roots.emplace_back(model.spModel);
+				AddRoot(model.spModel.get(), output);
+				if (!output.complete)
+					return;
 			}
 		}
 	}
@@ -103,13 +115,15 @@ namespace StreamingTextures::Preview
 			else
 				AddModels(manager->GetRuntimeData(), output);
 		}
+		if (!output.complete)
+			return output;
 		if (ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME))
 			if (const auto mist = ui->GetMenu<RE::MistMenu>()) {
 				if (globals::game::isVR) {
-					if (const auto* data = mist->GetVRRuntimeData(); data && data->loadScreen3DModelNode)
-						output.roots.emplace_back(data->loadScreen3DModelNode);
-				} else if (mist->GetRuntimeData().loadScreenModel) {
-					output.roots.emplace_back(mist->GetRuntimeData().loadScreenModel.get());
+					if (const auto* data = mist->GetVRRuntimeData())
+						AddRoot(data->loadScreen3DModelNode.get(), output);
+				} else {
+					AddRoot(mist->GetRuntimeData().loadScreenModel.get(), output);
 				}
 			}
 		return output;

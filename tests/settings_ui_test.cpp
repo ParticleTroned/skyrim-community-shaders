@@ -1,3 +1,4 @@
+#include "Features/GrassOptimizations/GrassPolicy.h"
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
@@ -496,6 +497,36 @@ struct LLFShadowsFixture
 #include "settings_llf_shadows_under_test.h"
 	}
 };
+
+struct GrassOptimizations
+{
+	GrassPolicy::Settings settings;
+	mutable std::mutex settingsMutex;
+	std::atomic_uint32_t queueSettings{ 3 };
+	struct Renderer
+	{
+		bool IsRenderingAvailable() const { return true; }
+	} rendererStorage;
+	Renderer* renderer = &rendererStorage;
+	GrassPolicy::Settings GetSettings() const;
+	bool SetSettings(const GrassPolicy::Settings&, std::string&);
+	void DrawControls(bool, std::string_view);
+};
+struct GrassSliderObservation
+{
+	ImVec2 start, finish, number;
+	float minimum, maximum;
+};
+std::map<std::string, GrassSliderObservation> grassSliders;
+bool TrackedGrassSlider(const char* label, float* value, float minimum, float maximum, const char* format, ImGuiSliderFlags flags = 0)
+{
+	const bool changed = Util::Widgets::SliderFloat(label, value, minimum, maximum, format, flags);
+	const auto number = Util::controls.at(globals::features::vr.headset ? "Click to open the number pad." : "Double-click to enter a value.");
+	grassSliders[label] = { { ImGui::GetItemRectMin().x + 2, number.GetCenter().y },
+		{ number.Min.x - ImGui::GetStyle().ItemInnerSpacing.x - 2, number.GetCenter().y }, number.GetCenter(), minimum, maximum };
+	return changed;
+}
+#include "settings_grass_under_test.h"
 
 using uint = unsigned int;
 struct float3
@@ -1511,6 +1542,108 @@ int main()
 			require(Util::controls.at("a4").Min.y > Util::controls.at("a0").Min.y, "wide checkbox targets wrap onto another row");
 			click(Util::controls.at("b1").GetCenter(), grids);
 			require(enabled[6] && std::count(enabled.begin(), enabled.end(), true) == 1, "aligned checkbox grid edits only the clicked setting");
+		}
+
+		for (const bool headset : { false, true }) {
+			globals::features::vr.headset = headset;
+			struct GrassCase
+			{
+				const char* section;
+				const char* label;
+				float GrassPolicy::Settings::* member;
+			};
+			const GrassCase cases[]{
+				{ "density", "Full-density grass size", &GrassPolicy::Settings::FullDetailPixelSize },
+				{ "meshes", "Middle LOD size", &GrassPolicy::Settings::MidLODPixelSize },
+				{ "meshes", "Far LOD size", &GrassPolicy::Settings::FarLODPixelSize },
+				{ "meshes", "LOD transition width", &GrassPolicy::Settings::MeshLODBandPixels },
+				{ "distance", "Grass render distance", &GrassPolicy::Settings::RenderDistanceOverride }
+			};
+			for (const auto& test : cases) {
+				GrassOptimizations grass;
+				grass.settings.EnableMeshLOD = true;
+				// Saved thresholds need not lie on the displayed decimal grid.
+				grass.settings.MinPixelSize = 2.013f;
+				grass.settings.MidLODPixelSize = 8.017f;
+				auto draw = [&] { grass.DrawControls(true, test.section); };
+				frame(draw);
+				frame(draw);
+				for (const bool upper : { false, true }) {
+					const auto control = grassSliders.at(test.label);
+					const float expected = upper ? control.maximum : control.minimum;
+					const auto target = upper ? control.finish : control.start;
+					io.AddMousePosEvent(target.x, target.y);
+					frame(draw);
+					io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+					frame(draw);
+					// Drag past the end even if the numeric readout changes the track width.
+					io.AddMousePosEvent(target.x + (upper ? 100 : -100), target.y);
+					frame(draw);
+					io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+					frame(draw);
+					const auto actual = grass.GetSettings();
+					if (!actual.Valid() || std::abs(actual.*test.member - expected) > .0001f)
+						throw std::runtime_error(std::format("Grass slider '{}' did not retain its {} endpoint (headset={}): expected {}, got {}",
+							test.label, upper ? "upper" : "lower", headset, expected, actual.*test.member));
+					if (test.member == &GrassPolicy::Settings::MidLODPixelSize && !upper)
+						require(actual.FarLODPixelSize == actual.MidLODPixelSize, "lowering middle LOD keeps the far threshold valid at the same minimum");
+				}
+
+				const auto typeNumber = [&](const char* text) {
+					io.AddKeyEvent(ImGuiMod_Ctrl, true);
+					key(ImGuiKey_A, draw);
+					io.AddKeyEvent(ImGuiMod_Ctrl, false);
+					io.AddInputCharactersUTF8(text);
+					frame(draw);
+					key(ImGuiKey_Enter, draw);
+				};
+				const bool distance = test.member == &GrassPolicy::Settings::RenderDistanceOverride;
+				const float entered = distance ? 100.0f : test.member == &GrassPolicy::Settings::FullDetailPixelSize ? 2.029f :
+				                                                                                                       .019f;
+				const auto text = std::format("{}", entered);
+				const auto beforeEntry = grass.GetSettings().*test.member;
+				click(grassSliders.at(test.label).number, draw);
+				if (headset) {
+					frame(draw);
+					require(!GImGui->OpenPopupStack.empty(), "grass number pad opens");
+					click(Util::controls.at("Clear this entry. Your setting is unchanged.").GetCenter(), draw);
+					for (const char digit : text) {
+						if (digit == '.') {
+							click(Util::controls.at("Add a decimal point.").GetCenter(), draw);
+						} else {
+							const auto zero = Util::controls.at("Add this digit.");
+							const int value = digit - '0';
+							const int column = value ? (value - 1) % 3 - 1 : 0;
+							const int row = value ? -1 - (value - 1) / 3 : 0;
+							click({ zero.GetCenter().x + column * (zero.GetWidth() + ImGui::GetStyle().ItemSpacing.x),
+									  zero.GetCenter().y + row * (zero.GetHeight() + ImGui::GetStyle().ItemSpacing.y) },
+								draw);
+						}
+					}
+					require(grass.GetSettings().*test.member == beforeEntry, "grass number pad stages edits until Apply");
+					click(Util::controls.at("Use this value.").GetCenter(), draw);
+					require(GImGui->OpenPopupStack.empty(), "valid grass number pad entry closes");
+				} else {
+					click(grassSliders.at(test.label).number, draw);
+					frame(draw);
+					typeNumber(text.c_str());
+				}
+				require(grass.GetSettings().Valid() && grass.GetSettings().*test.member == entered, "grass numeric entry preserves valid precision beyond the display format");
+
+				if (!headset && !distance) {
+					for (const bool upper : { false, true }) {
+						const auto control = grassSliders.at(test.label);
+						io.AddKeyEvent(ImGuiMod_Ctrl, true);
+						click(control.start, draw);
+						io.AddKeyEvent(ImGuiMod_Ctrl, false);
+						frame(draw);
+						require(GImGui->TempInputId != 0, "grass Ctrl-click opens native numeric input");
+						typeNumber(upper ? "1000000" : "-1");
+						const auto actual = grass.GetSettings();
+						require(actual.Valid() && actual.*test.member == (upper ? control.maximum : control.minimum), "native grass threshold input clamps to valid ordered bounds");
+					}
+				}
+			}
 		}
 
 		{

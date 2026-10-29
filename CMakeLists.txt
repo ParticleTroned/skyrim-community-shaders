@@ -1811,6 +1811,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_widget_under_test.h"
             "${_settings_ui_dir}/settings_widget_declarations.h"
             "${_settings_ui_dir}/settings_lighting_pages_under_test.h"
+            "${_settings_ui_dir}/settings_grass_under_test.h"
             "${_settings_ui_dir}/settings_shadow_culling_under_test.h"
             "${_settings_ui_dir}/settings_llf_shadows_under_test.h"
             "${_settings_ui_dir}/settings_model_resolution_under_test.h"
@@ -1878,6 +1879,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_widget_under_test.h"
             "${_settings_ui_dir}/settings_widget_declarations.h"
             "${_settings_ui_dir}/settings_lighting_pages_under_test.h"
+            "${_settings_ui_dir}/settings_grass_under_test.h"
             "${_settings_ui_dir}/settings_shadow_culling_under_test.h"
             "${_settings_ui_dir}/settings_llf_shadows_under_test.h"
             "${_settings_ui_dir}/settings_model_resolution_under_test.h"
@@ -3005,6 +3007,18 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(
         PBRGrassMaterial
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
+        NAME GrassDrawLifecycle
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/grass_draw_lifecycle_test.py"
+    )
+    set_tests_properties(
+        GrassDrawLifecycle
         PROPERTIES
             LABELS "ControllerTests"
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
@@ -4307,6 +4321,39 @@ if(BUILD_CONTROLLER_TESTS)
     )
     add_test(NAME RenderMapRuntime COMMAND render_map_runtime_test)
     set_tests_properties(RenderMapRuntime PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
+        render_map_context_hooks_test
+        EXCLUDE_FROM_ALL
+        tests/render_map_context_hooks_test.cpp
+        src/RenderMap/D3DContextHooks.cpp
+        src/RenderMap/Runtime.cpp
+        src/RenderMap/Collector.cpp
+    )
+    target_compile_features(render_map_context_hooks_test PRIVATE cxx_std_23)
+    target_compile_definitions(
+        render_map_context_hooks_test
+        PRIVATE
+            CSX_RENDER_MAP_TESTING=1
+            CSX_RENDER_MAP_CONTEXT_TESTING=1
+            NOMINMAX
+            WIN32_LEAN_AND_MEAN
+    )
+    target_include_directories(
+        render_map_context_hooks_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}/tests"
+    )
+    add_test(NAME RenderMapContextHooks COMMAND render_map_context_hooks_test)
+    add_test(
+        NAME RenderMapContextContract
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/render_map_context_contract_test.cmake"
+    )
+    set_tests_properties(
+        RenderMapContextHooks
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         render_map_controller_test

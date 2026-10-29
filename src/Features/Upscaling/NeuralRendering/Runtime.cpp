@@ -397,6 +397,34 @@ namespace NeuralRendering
 			return {};
 		}
 
+		struct InstalledRuntimeMetadata
+		{
+			bool installed = false;
+			TuningLimits tuningLimits;
+		};
+
+		InstalledRuntimeMetadata DiscoverInstalledRuntimeMetadata()
+		{
+			InstalledRuntimeMetadata metadata;
+			try {
+				const auto path = ResolveRuntimePath({});
+				metadata.installed = !path.empty();
+				if (metadata.installed) {
+					if (const auto version = Util::GetDllVersion(path.wstring()))
+						metadata.tuningLimits = GetTuningLimitsForVersion(version->major(), version->minor());
+				}
+			} catch (const std::exception& error) {
+				logger::warn("[DLSSNR] optional runtime discovery failed: {}", error.what());
+			}
+			return metadata;
+		}
+
+		const InstalledRuntimeMetadata& GetInstalledRuntimeMetadata()
+		{
+			static const auto metadata = DiscoverInstalledRuntimeMetadata();
+			return metadata;
+		}
+
 		bool QueryFileIdentity(HANDLE a_file, FileIdentity& a_identity, std::string& a_error)
 		{
 			BY_HANDLE_FILE_INFORMATION information{};
@@ -1100,15 +1128,7 @@ namespace NeuralRendering
 
 	bool Runtime::IsInstalled() noexcept
 	{
-		static const bool installed = []() {
-			try {
-				return !ResolveRuntimePath({}).empty();
-			} catch (const std::exception& error) {
-				logger::warn("[DLSSNR] optional runtime discovery failed: {}", error.what());
-				return false;
-			}
-		}();
-		return installed;
+		return GetInstalledRuntimeMetadata().installed;
 	}
 
 	bool Runtime::ProbeLocked(const std::filesystem::path& a_explicitPath)
@@ -1154,6 +1174,7 @@ namespace NeuralRendering
 			return false;
 		}
 		version_ = Util::GetFormattedVersion(*version);
+		tuningLimits_ = GetTuningLimitsForVersion(version->major(), version->minor());
 		if (*version < kMinimumRuntimeVersion) {
 			SetFailureLocked(
 				RuntimeStatus::VersionRejected, RuntimeFailureStage::Version,
@@ -1383,6 +1404,7 @@ namespace NeuralRendering
 			const auto runtimePath = path_;
 			const std::string runtimeHash = hash_;
 			const std::string runtimeVersion = version_;
+			const auto runtimeTuningLimits = tuningLimits_;
 			const RuntimeTrust runtimeTrust = trust_;
 			const auto corePath = corePath_;
 			const std::string coreHash = coreHash_;
@@ -1394,6 +1416,7 @@ namespace NeuralRendering
 				path_ = runtimePath;
 				hash_ = runtimeHash;
 				version_ = runtimeVersion;
+				tuningLimits_ = runtimeTuningLimits;
 				trust_ = runtimeTrust;
 				corePath_ = corePath;
 				coreHash_ = coreHash;
@@ -1734,12 +1757,13 @@ namespace NeuralRendering
 		parameters->Set("DLSSNR.DepthInverted", 0u);
 		parameters->Set("DLSSNR.Enabled", 1u);
 		parameters->Set("DLSSNR.Reset", a_reset ? 1u : 0u);
-		parameters->Set("DLSSNR.Intensity", a_tuning.intensity);
-		parameters->Set("DLSSNR.LocalToneStrength", a_tuning.localToneStrength);
+		const auto limits = GetTuningLimits();
+		parameters->Set("DLSSNR.Intensity", std::clamp(a_tuning.intensity, 0.0f, limits.intensity));
+		parameters->Set("DLSSNR.LocalToneStrength", std::clamp(a_tuning.localToneStrength, 0.0f, limits.localToneStrength));
 		parameters->Set(
-			"DLSSNR.LocalStructureStrength", a_tuning.localStructureStrength);
+			"DLSSNR.LocalStructureStrength", std::clamp(a_tuning.localStructureStrength, 0.0f, limits.localStructureStrength));
 		parameters->Set(
-			"DLSSNR.SkinStructureStrength", a_tuning.skinStructureStrength);
+			"DLSSNR.SkinStructureStrength", std::clamp(a_tuning.skinStructureStrength, 0.0f, limits.skinStructureStrength));
 		parameters->Set("DLSSNR.UseAutoMask", a_tuning.useAutoMask ? 1u : 0u);
 		parameters->Set("DLSSNR.Style", a_tuning.style);
 		parameters->Set("DLSSNR.UICorrection", a_providerBlending ? 1u : 0u);
@@ -2037,6 +2061,7 @@ namespace NeuralRendering
 		path_.clear();
 		hash_.clear();
 		version_.clear();
+		tuningLimits_.reset();
 		corePath_.clear();
 		coreHash_.clear();
 		coreTrust_ = ParameterCoreTrust::Unknown;
@@ -2143,6 +2168,14 @@ namespace NeuralRendering
 	{
 		std::scoped_lock lock(mutex_);
 		return hash_;
+	}
+
+	TuningLimits Runtime::GetTuningLimits() const
+	{
+		std::scoped_lock lock(mutex_);
+		if (tuningLimits_)
+			return *tuningLimits_;
+		return GetInstalledRuntimeMetadata().tuningLimits;
 	}
 
 	std::string Runtime::Version() const

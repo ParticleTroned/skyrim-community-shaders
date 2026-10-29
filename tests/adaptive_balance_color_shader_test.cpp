@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <string_view>
 #include <utility>
 
 namespace
@@ -35,6 +36,11 @@ namespace
 		return colors;
 	}();
 	constexpr Pixels pointLightColors = fireColors;
+	constexpr std::array lightIntensityDefaults{
+		std::pair{ "directionalLightMult", 0.75f }, std::pair{ "pointLightMult", 1.3f }, std::pair{ "linearPointLightMult", 0.7f },
+		std::pair{ "spotlightMult", 0.8f }, std::pair{ "linearSpotlightMult", 0.9f },
+		std::pair{ "omnidirectionalBulbMult", 0.6f }, std::pair{ "linearOmnidirectionalBulbMult", 1.2f }
+	};
 
 	void Require(bool value, const char* message)
 	{
@@ -63,6 +69,7 @@ namespace
 	{
 		Scene,
 		PointLights,
+		SceneLights,
 		Appearance,
 		Fire
 	};
@@ -77,11 +84,14 @@ namespace
 
 		Fixture(ID3D11Device* device, bool vr, ShaderMode mode = ShaderMode::Scene, const std::vector<const char*>& extraDefines = {})
 		{
+			const bool lights = mode == ShaderMode::PointLights || mode == ShaderMode::SceneLights;
 			std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" } };
 			if (vr)
 				defines.push_back({ "VR", "1" });
-			if (mode == ShaderMode::PointLights)
+			if (lights)
 				defines.push_back({ "POINT_LIGHT_SATURATION_TEST", "1" });
+			if (mode == ShaderMode::PointLights)
+				defines.push_back({ "LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS", "1" });
 			if (mode == ShaderMode::Appearance)
 				defines.push_back({ "APPEARANCE_TEST", "1" });
 			if (mode == ShaderMode::Fire)
@@ -100,14 +110,11 @@ namespace
 			feature->SetMember("SharedData::adaptiveBalanceSettings", "pointLightCurve", 1.0f);
 			for (const auto* name : { "fireIntensity", "fireSaturation", "fireCurve" })
 				feature->SetMember("SharedData::adaptiveBalanceSettings", name, 1.0f);
-			if (mode == ShaderMode::Fire || mode == ShaderMode::Appearance)
+			if (mode == ShaderMode::Fire || mode == ShaderMode::Appearance || mode == ShaderMode::PointLights)
 				permutation = std::make_unique<ConstantBuffer>(device, reflection.Get(), "Permutation::PerShader");
-			if (mode == ShaderMode::PointLights || mode == ShaderMode::Appearance) {
+			if (lights || mode == ShaderMode::Appearance) {
 				feature->SetMember("SharedData::linearLightingSettings", "lightGamma", 2.2f);
-				for (auto [name, value] : { std::pair{ "pointLightMult", 1.3f }, std::pair{ "linearPointLightMult", 0.7f },
-						 std::pair{ "spotlightMult", 0.8f }, std::pair{ "linearSpotlightMult", 0.9f },
-						 std::pair{ "omnidirectionalBulbMult", 0.6f }, std::pair{ "linearOmnidirectionalBulbMult", 1.2f },
-						 std::pair{ "directionalLightMult", 0.75f } })
+				for (auto [name, value] : lightIntensityDefaults)
 					feature->SetMember("SharedData::adaptiveBalanceSettings", name, value);
 			}
 			auto* balance = feature->reflection->GetVariableByName("SharedData::adaptiveBalanceSettings");
@@ -174,13 +181,16 @@ namespace
 		}
 
 		Pixels DrawLights(ID3D11DeviceContext* context, bool linearLighting, bool linearLight, uint32_t kind,
-			bool preserveHDRIntensity, float saturation, bool directional = false, float curve = 1.0f, const Pixels& colors = pointLightColors)
+			bool preserveHDRIntensity, float saturation, bool directional = false, float curve = 1.0f, const Pixels& colors = pointLightColors,
+			uint32_t scene = 1)
 		{
 			feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", uint32_t(linearLighting));
 			feature->SetMember("SharedData::adaptiveBalanceSettings", "pointLightSaturation", saturation);
 			feature->SetMember("SharedData::adaptiveBalanceSettings", "pointLightCurve", curve);
 			inputs->SetVariable("colors", colors);
 			inputs->SetVariable("lightParameters", std::array<uint32_t, 4>{ uint32_t(linearLight), kind, uint32_t(preserveHDRIntensity), uint32_t(directional) });
+			if (permutation)
+				permutation->SetVariable("Permutation::ExtraShaderDescriptor", scene);
 			return Dispatch(context);
 		}
 
@@ -583,6 +593,96 @@ namespace
 		return checked + unsigned(point.size());
 	}
 
+	unsigned VerifyLightIntensities(Fixture& fixture, ID3D11DeviceContext* context, bool linearLighting,
+		bool linearLight, uint32_t scene, uint32_t route, bool preserveHDRIntensity, bool sceneDraw)
+	{
+		const bool directional = route == 3;
+		const uint32_t kind = directional ? 0 : route;
+		const auto allSettings = lightIntensityDefaults.size();
+		const auto setIntensity = [&](size_t setting, float intensity) {
+			for (size_t i = 0; i < allSettings; ++i)
+				fixture.feature->SetMember("SharedData::adaptiveBalanceSettings", lightIntensityDefaults[i].first,
+					i == setting || setting == allSettings ? intensity : 1.0f);
+		};
+		setIntensity(allSettings, 1.0f);
+		const auto baseline = fixture.DrawLights(context, linearLighting, linearLight, kind, preserveHDRIntensity,
+			1, directional, 1, pointLightColors, scene);
+		unsigned checked = 0;
+		for (size_t setting = 0; setting <= allSettings; ++setting) {
+			unsigned factors = kind == 0 ? 1 : 2;
+			if (setting != allSettings) {
+				const std::string_view name = lightIntensityDefaults[setting].first;
+				if (directional) {
+					factors = unsigned(name == "directionalLightMult");
+				} else {
+					factors = unsigned(name == (linearLight ? "linearPointLightMult" : "pointLightMult"));
+					if (kind == 1)
+						factors += unsigned(name == (linearLight ? "linearSpotlightMult" : "spotlightMult"));
+					if (kind == 2)
+						factors += unsigned(name == (linearLight ? "linearOmnidirectionalBulbMult" : "omnidirectionalBulbMult"));
+				}
+			}
+			for (float intensity : { 0.0f, 2.0f }) {
+				setIntensity(setting, intensity);
+				const auto result = fixture.DrawLights(context, linearLighting, linearLight, kind, preserveHDRIntensity,
+					1, directional, 1, pointLightColors, scene);
+				const float scale = !sceneDraw || factors == 0 ? 1.0f : factors == 1 ? intensity :
+				                                                                       intensity * intensity;
+				auto expected = baseline;
+				for (auto& pixel : expected)
+					for (size_t channel = 0; channel < 3; ++channel)
+						pixel[channel] *= scale;
+				try {
+					CompareAppearance(result, expected,
+						sceneDraw ? "Adaptive Balance changed scene-light intensity routing" :
+									"Adaptive Balance light intensity changed a preview draw");
+				} catch (...) {
+					std::cerr << "Intensity setting=" << (setting == allSettings ? "all" : lightIntensityDefaults[setting].first)
+							  << " intensity=" << intensity << '\n';
+					throw;
+				}
+				checked += unsigned(result.size());
+			}
+		}
+		return checked;
+	}
+
+	unsigned VerifyLightDrawScopes(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
+	{
+		unsigned checked = 0;
+		for (bool objectDraw : { true, false }) {
+			for (bool pbr : { false, true }) {
+				Fixture fixture(device, vr, objectDraw ? ShaderMode::PointLights : ShaderMode::SceneLights,
+					pbr ? std::vector<const char*>{ "TRUE_PBR" } : std::vector<const char*>{});
+				for (bool linearLighting : { false, true }) {
+					for (bool linearLight : { false, true }) {
+						for (uint32_t scene : { 0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u }) {
+							if (!objectDraw && scene != 0)
+								continue;
+							const bool sceneDraw = !objectDraw || (scene & 3u) != 0;
+							for (uint32_t route : { 0u, 1u, 2u, 3u }) {
+								for (bool preserveHDRIntensity : { false, true }) {
+									if (route == 3 && preserveHDRIntensity)
+										continue;
+									try {
+										checked += VerifyLightIntensities(fixture, context, linearLighting, linearLight, scene, route,
+											preserveHDRIntensity, sceneDraw);
+									} catch (...) {
+										std::cerr << "Light scope VR=" << vr << " object=" << objectDraw << " PBR=" << pbr
+												  << " LL=" << linearLighting << " linear=" << linearLight << " scene=" << scene
+												  << " route=" << route << " preserveHDR=" << preserveHDRIntensity << '\n';
+										throw;
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		return checked;
+	}
+
 	unsigned VerifyAppearanceModes(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
 	{
 		Fixture fixture(device, vr, ShaderMode::Appearance);
@@ -971,6 +1071,7 @@ int main()
 				}
 			}
 			lightSamples += VerifyLightModes(device.Get(), context.Get(), vr);
+			lightSamples += VerifyLightDrawScopes(device.Get(), context.Get(), vr);
 			appearanceSamples += VerifyAppearanceModes(device.Get(), context.Get(), vr);
 			appearanceSamples += VerifyEyeAppearance(device.Get(), context.Get(), vr);
 			fireSamples += VerifyFireModes(device.Get(), context.Get(), vr);

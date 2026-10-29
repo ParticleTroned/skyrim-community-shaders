@@ -174,7 +174,7 @@ State stateValue; State* state = &stateValue;
 Cache cacheValue; Cache* shaderCache = &cacheValue;
 Deferred deferredValue; Deferred* deferred = &deferredValue;
 namespace features {
-struct Feature { bool loaded = true; } truePBR, grassLighting;
+struct Feature { bool loaded = true; } truePBR, grassLighting, grassOptimizations;
 }
 namespace d3d { Context contextValue; Context* context = &contextValue; }
 namespace game {
@@ -242,9 +242,67 @@ int main() {
     globals::state->deferredPixelShaderMissing = true;
     assert(!BSGrassShader_SetupTechnique::thunk(&shader, 0));
     globals::state->deferredPixelShaderMissing = false;
+    globals::features::grassOptimizations.loaded = false;
     globals::features::truePBR.loaded = false;
     assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
     assert(globals::game::vertex == &fixtureNativeVertex && globals::game::pixel == &fixtureNativePixel);
+    // Optimized grass needs reflected native setup even without PBR or Grass Lighting.
+    constexpr struct { bool pbr, lighting, optimized, custom; } featureCases[] = {
+        {false, false, false, false},
+        {true,  false, false, false},
+        {false, true,  false, false},
+        {true,  true,  false, true},
+        {false, false, true,  true},
+        {true,  false, true,  true},
+        {false, true,  true,  true},
+        {true,  true,  true,  true},
+    };
+    for (const auto& feature : featureCases) {
+        globals::features::truePBR.loaded = feature.pbr;
+        globals::features::grassLighting.loaded = feature.lighting;
+        globals::features::grassOptimizations.loaded = feature.optimized;
+        globals::game::flags.dirty = false;
+        assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
+        assert(globals::game::vertex == (feature.custom ? &customVertex : &fixtureNativeVertex));
+        assert(globals::game::pixel == (feature.custom ? &customPixel : &fixtureNativePixel));
+        assert(globals::game::flags.dirty == feature.custom);
+        if (feature.custom) {
+            assert(globals::d3d::contextValue.vertex == &customVS);
+            assert(globals::d3d::contextValue.pixel == &customPS);
+        }
+    }
+    // Optimization alone retains native fallback while a complete pair is unavailable.
+    globals::features::truePBR.loaded = globals::features::grassLighting.loaded = false;
+    globals::features::grassOptimizations.loaded = true;
+    constexpr struct { bool vertex, pixel; } incompletePairs[] = {
+        {true, false}, {false, false}, {false, true},
+    };
+    for (const auto& pair : incompletePairs) {
+        globals::cacheValue.vertex = pair.vertex ? &customVertex : nullptr;
+        globals::cacheValue.pixel = pair.pixel ? &customPixel : nullptr;
+        assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
+        assert(globals::game::vertex == &fixtureNativeVertex && globals::game::pixel == &fixtureNativePixel);
+        assert(globals::d3d::contextValue.vertex == &nativeVS && globals::d3d::contextValue.pixel == &nativePS);
+    }
+    globals::deferred->deferredPass = true;
+    globals::deferred->captureReady = true;
+    assert(!BSGrassShader_SetupTechnique::thunk(&shader, 0));
+    assert(!globals::deferred->captureReady);
+    assert(globals::d3d::contextValue.pixel == &customPS);
+    globals::cacheValue.vertex = &customVertex;
+    assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
+    assert(globals::game::vertex == &customVertex && globals::game::pixel == &customPixel);
+    globals::deferred->deferredPass = false;
+    constexpr struct { bool ready, cache, stage; } disabledCases[] = {
+        {false, true, true}, {true, false, true}, {true, true, false},
+    };
+    for (const auto& disabled : disabledCases) {
+        nativeReady = disabled.ready;
+        globals::cacheValue.enabled = disabled.cache;
+        globals::state->enabled = disabled.stage;
+        assert(BSGrassShader_SetupTechnique::thunk(&shader, 0) == nativeReady);
+        assert(globals::game::vertex == &fixtureNativeVertex && globals::game::pixel == &fixtureNativePixel);
+    }
 }
 '''.replace("METHOD", method)
         self.compile_and_run(driver, compiler)

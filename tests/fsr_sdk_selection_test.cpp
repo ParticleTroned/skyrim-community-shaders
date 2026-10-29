@@ -47,7 +47,7 @@ int main()
 	constexpr auto fsr412 = FFX_UPSCALER_MAKE_VERSION(4, 1, 2);
 	constexpr uint64_t sdkId = (0xF5A5CA1Eull << 32) | fsr412;
 	Check(FFX_UPSCALER_VERSION == fsr412, "headers must describe FSR 4.1.2");
-	Check(FidelityFX::HostFsr3Version == FFX_UPSCALER_MAKE_VERSION(3, 1, 5), "DX11 host implementation remains FSR 3.1.5");
+	Check(FidelityFX::HostFsr3Version == FFX_UPSCALER_MAKE_VERSION(3, 1, 6), "DX11 host implementation must be FSR 3.1.6");
 	Check(FidelityFX::RuntimeFsr3Version == FFX_UPSCALER_MAKE_VERSION(3, 1, 6), "runtime fallback must select FSR 3.1.6");
 	Check(RuntimeProviderMatchesVersion(sdkId, fsr412), "SDK provider ID must match");
 	Check(RuntimeProviderMatchesVersion(sdkId | 0x80000000ull, fsr412), "driver version flag must not change the effect version");

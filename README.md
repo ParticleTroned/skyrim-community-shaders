@@ -29,8 +29,8 @@ and displays the actual provider separately. Runtime availability is checked
 on the active device; it is not restricted by GPU model names. **AMD FSR3**
 remains an explicit selection. Existing FSR4 preferences select automatic
 runtime mode, while saved FSR3 choices remain unchanged.
-Runtime FSR3 uses version 3.1.6. The independent FidelityFX-SDK-DX11 host
-implementation uses version 3.1.5. Provider failures retain CSX's host fallback and session
+Runtime FSR3 and the independent FidelityFX-SDK-DX11 host implementation use
+version 3.1.6. Provider failures retain CSX's host fallback and session
 quarantine. Stereo contexts must report the same provider before dispatch.
 
 The public upscaling API exposes `FSRRuntime::kAutomatic`; `kFSR4` retains the

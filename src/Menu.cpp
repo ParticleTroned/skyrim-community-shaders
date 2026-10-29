@@ -3,7 +3,6 @@
 #ifndef DIRECTINPUT_VERSION
 #	define DIRECTINPUT_VERSION 0x0800
 #endif
-#include <Psapi.h>
 #include <algorithm>
 #include <cmath>
 #include <dinput.h>
@@ -42,6 +41,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/SystemMemory.h"
 #include "Utils/UI.h"
 
 #include "CSEditor/EditorWindow.h"
@@ -53,8 +53,6 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/VR.h"
 #include "Features/VR/MenuPositioningPolicy.h"
-
-#pragma comment(lib, "Psapi.lib")
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::PaletteColors,
@@ -194,37 +192,6 @@ namespace
 {
 	constexpr std::uint64_t kBytesPerGiB = 1024ull * 1024ull * 1024ull;
 	constexpr std::uint64_t kRecommendedSystemCommitBytes = 128ull * kBytesPerGiB;
-
-	struct SystemCommitSample
-	{
-		bool valid = false;
-		std::uint64_t currentBytes = 0;
-		std::uint64_t totalBytes = 0;
-	};
-
-	SystemCommitSample QuerySystemCommit() noexcept
-	{
-		PERFORMANCE_INFORMATION information{};
-		information.cb = sizeof(information);
-		if (!::GetPerformanceInfo(&information, sizeof(information)) || information.PageSize == 0)
-			return {};
-
-		constexpr auto maximumBytes = std::numeric_limits<std::uint64_t>::max();
-		if (information.CommitTotal > maximumBytes / information.PageSize ||
-			information.CommitLimit > maximumBytes / information.PageSize) {
-			return {};
-		}
-
-		const auto totalBytes = static_cast<std::uint64_t>(information.CommitLimit) * information.PageSize;
-		if (totalBytes == 0)
-			return {};
-
-		return {
-			.valid = true,
-			.currentBytes = static_cast<std::uint64_t>(information.CommitTotal) * information.PageSize,
-			.totalBytes = totalBytes,
-		};
-	}
 
 	double BytesToGiB(std::uint64_t a_bytes) noexcept
 	{
@@ -1323,10 +1290,10 @@ void Menu::DrawFooter()
 
 	const double now = ImGui::GetTime();
 	if (systemCommitLastRefreshTime < 0.0 || now < systemCommitLastRefreshTime || now - systemCommitLastRefreshTime >= 1.0) {
-		const auto sample = QuerySystemCommit();
+		const auto sample = Util::QuerySystemMemory();
 		systemCommitSampleValid = sample.valid;
-		systemCommitCurrentBytes = sample.currentBytes;
-		systemCommitTotalBytes = sample.totalBytes;
+		systemCommitCurrentBytes = sample.commitUsedBytes;
+		systemCommitTotalBytes = sample.commitLimitBytes;
 		systemCommitLastRefreshTime = now;
 	}
 

@@ -392,6 +392,7 @@ target_link_libraries(
         xxHash::xxhash
         Streamline
         d3d12.lib
+        gdi32.lib
         bcrypt.lib
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
@@ -3256,6 +3257,26 @@ if(BUILD_CONTROLLER_TESTS)
         VRVendorRelatchPolicy
         tests/vr_vendor_relatch_policy_test.cpp
     )
+    add_controller_test(
+        system_memory_test
+        SystemMemory
+        tests/system_memory_test.cpp
+    )
+    target_link_libraries(system_memory_test PRIVATE spdlog::spdlog)
+    target_compile_definitions(
+        system_memory_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    add_controller_test(
+        graphics_driver_info_test
+        GraphicsDriverInfo
+        tests/graphics_driver_info_test.cpp
+    )
+    target_compile_definitions(
+        graphics_driver_info_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    target_link_libraries(graphics_driver_info_test PRIVATE dxgi.lib gdi32.lib)
     set(_vr_recovery_contract_test_header
         "${CMAKE_CURRENT_BINARY_DIR}/generated/vr_recovery_contract_under_test.h"
     )

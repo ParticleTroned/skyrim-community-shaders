@@ -12,6 +12,7 @@
 #include "ShaderTools/BSShaderHooks.h"
 #include "Utils/D3DContextProtection.h"
 #include "Utils/ExternalEmittance.h"
+#include "Utils/GraphicsDriverInfo.h"
 #include "Utils/TracyVRFrameTiming.h"
 #include "Utils/VRLoadingMenuClear.h"
 #include "Utils/VanityCamera.h"
@@ -116,6 +117,14 @@ namespace
 					HIWORD(high), LOWORD(high), HIWORD(low), LOWORD(low));
 			} else {
 				logger::info("[GPU] Windows driver version unavailable: DXGI query failed (0x{:08X}).", static_cast<uint32_t>(driverResult));
+			}
+			const auto publicDriver = Util::QueryGraphicsDriverVersion(description,
+				SUCCEEDED(driverResult) ? std::optional<std::uint32_t>(driverVersion.LowPart) : std::nullopt);
+			if (!publicDriver.vendor.empty()) {
+				if (!publicDriver.version.empty())
+					logger::info("[GPU] {} driver version: {}.", publicDriver.vendor, publicDriver.version);
+				else
+					logger::info("[GPU] {} driver version unavailable: {}.", publicDriver.vendor, publicDriver.error);
 			}
 		});
 	}

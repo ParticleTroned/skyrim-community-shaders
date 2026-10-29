@@ -39,6 +39,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
+#include "Utils/SystemMemory.h"
 #include "VRAPI/CSpluginapi.h"
 #include "WeatherManager.h"
 
@@ -156,6 +157,7 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	InitializeLog();
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::BUILD_LABEL);
 	BuildProvenance::LogRuntimeIdentity();
+	Util::LogSystemMemory("startup");
 	SKSE::Init(a_skse, false);
 	SKSE::AllocTrampoline(kTrampolineCapacity);
 	return Load();

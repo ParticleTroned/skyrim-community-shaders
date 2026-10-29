@@ -97,7 +97,7 @@ void GrassOptimizations::RestoreDefaultSettings()
 void GrassOptimizations::SetupResources() { renderer->SetupResources(); }
 void GrassOptimizations::ClearShaderCache() { renderer->ClearShaderCache(); }
 void GrassOptimizations::PostPostLoad() { renderer->InstallHooks(); }
-void GrassOptimizations::PrepareGeometry(RE::BSRenderPass* pass, RE::BSShader* shader, uint32_t flags, GrassRuntime::SetupGeometry setup) { renderer->PrepareGeometry(pass, shader, flags, setup); }
+void GrassOptimizations::PrepareGeometry(RE::BSRenderPass* pass, RE::BSShader* shader, uint32_t flags, GrassRuntime::SetupGeometry setup, std::optional<uint32_t> nativeWindTimer) { renderer->PrepareGeometry(pass, shader, flags, setup, nativeWindTimer); }
 
 std::pair<std::string, std::vector<std::string>> GrassOptimizations::GetFeatureSummary()
 {
@@ -132,6 +132,8 @@ void GrassOptimizations::RestorePerformanceCostMeasurementState(const json& stat
 void GrassOptimizations::DrawControls(bool advanced, std::string_view section)
 {
 	constexpr auto tooltipFlags = ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled;
+	// Decimal rounding can cross a strict lower bound or a saved fractional upper bound.
+	constexpr auto thresholdFlags = ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat;
 	auto next = GetSettings();
 	const auto panel = [section](std::string_view id) { return section.empty() || section == id; };
 	bool changed = false;
@@ -157,7 +159,7 @@ void GrassOptimizations::DrawControls(bool advanced, std::string_view section)
 			changed |= Util::Widgets::SliderFloat("Smallest grass size", &next.MinPixelSize, 0.0f, 64.0f, "%.1f px");
 			Util::AddTooltip("Remove grass smaller than this on screen. Higher values save rendering work but can leave sparse patches or shorten its visible reach.", tooltipFlags);
 			next.FullDetailPixelSize = std::max(next.FullDetailPixelSize, next.MinPixelSize + 0.01f);
-			changed |= Util::Widgets::SliderFloat("Full-density grass size", &next.FullDetailPixelSize, next.MinPixelSize + 0.01f, 256.0f, "%.1f px");
+			changed |= Util::Widgets::SliderFloat("Full-density grass size", &next.FullDetailPixelSize, next.MinPixelSize + 0.01f, 256.0f, "%.2f px", thresholdFlags);
 			Util::AddTooltip("Grass above this on-screen size keeps full density. Higher values thin more grass, saving work at the cost of coverage.", tooltipFlags);
 			changed |= Util::Widgets::SliderFloat("Minimum density", &next.MinDensity, 0.0f, 1.0f, "%.2f");
 			Util::AddTooltip("Set how much distant grass to keep. Higher values fill gaps but cost more; grass below the smallest-size cutoff is still removed.", tooltipFlags);
@@ -197,12 +199,12 @@ void GrassOptimizations::DrawControls(bool advanced, std::string_view section)
 			Util::AddTooltip("Use simpler meshes for middle-distance grass, reducing detail and rendering cost. Requires compatible grass LOD meshes.", tooltipFlags);
 			changed |= Util::Widgets::Checkbox("Far grass LOD", &next.EnableFarLOD);
 			Util::AddTooltip("Use simpler meshes for faraway grass, reducing distant detail and rendering cost. Requires compatible grass LOD meshes.", tooltipFlags);
-			changed |= Util::Widgets::SliderFloat("Middle LOD size", &next.MidLODPixelSize, 0.01f, 128.0f, "%.1f px");
+			changed |= Util::Widgets::SliderFloat("Middle LOD size", &next.MidLODPixelSize, 0.01f, 128.0f, "%.2f px", thresholdFlags);
 			Util::AddTooltip("Use the middle grass mesh below this on-screen size. Higher values switch sooner, saving work but reducing detail.", tooltipFlags);
 			next.FarLODPixelSize = std::min(next.FarLODPixelSize, next.MidLODPixelSize);
-			changed |= Util::Widgets::SliderFloat("Far LOD size", &next.FarLODPixelSize, 0.01f, next.MidLODPixelSize, "%.1f px");
+			changed |= Util::Widgets::SliderFloat("Far LOD size", &next.FarLODPixelSize, 0.01f, next.MidLODPixelSize, "%.2f px", thresholdFlags);
 			Util::AddTooltip("Use the far grass mesh below this on-screen size. Higher values trade more distant detail for performance.", tooltipFlags);
-			changed |= Util::Widgets::SliderFloat("LOD transition width", &next.MeshLODBandPixels, 0.01f, 32.0f, "%.1f px");
+			changed |= Util::Widgets::SliderFloat("LOD transition width", &next.MeshLODBandPixels, 0.01f, 32.0f, "%.2f px", thresholdFlags);
 			Util::AddTooltip("Spread changes between grass meshes to soften transitions. Wider values may keep detailed meshes longer and add rendering work.", tooltipFlags);
 		}
 	}

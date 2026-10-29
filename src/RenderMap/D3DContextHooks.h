@@ -18,4 +18,7 @@ namespace CSX::RenderMap
 	void InstallD3DContextHooks(ID3D11DeviceContext* a_context);
 	/** Query current immediate state at an activated boundary; never replay calls. */
 	bool CapturePostProcessingBootstrap(ID3D11DeviceContext* a_context) noexcept;
+#ifdef CSX_RENDER_MAP_CONTEXT_TESTING
+	void RunContextHookTests();
+#endif
 }

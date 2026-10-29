@@ -12,7 +12,9 @@
 #include <optional>
 #include <shared_mutex>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace CSX::RenderMap
@@ -436,6 +438,179 @@ namespace CSX::RenderMap
 			std::uint32_t a_descriptor,
 			std::string_view a_compileSourceName = {}) noexcept;
 		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;
+
+		/** A generation-bound CPU publication boundary; native arguments are evaluated first. */
+		class CaptureObservationView
+		{
+		public:
+			CaptureObservationView(Runtime& a_owner, std::uint64_t a_generation) noexcept :
+				owner(a_owner), generation(a_generation) {}
+
+			template <class... Args>
+			decltype(auto) RegisterDeferredContext(Args&&... a_arguments) const noexcept
+			{
+				return Publish([&]() noexcept -> decltype(auto) {
+					return owner.RegisterDeferredContext(std::forward<Args>(a_arguments)...);
+				});
+			}
+			template <class... Args>
+			decltype(auto) BindRenderTargetViews(Args&&... a_arguments) const noexcept
+			{
+				return Publish([&]() noexcept -> decltype(auto) {
+					return owner.BindRenderTargetViews(std::forward<Args>(a_arguments)...);
+				});
+			}
+			template <class... Args>
+			decltype(auto) BindResourceViews(Args&&... a_arguments) const noexcept
+			{
+				return Publish([&]() noexcept -> decltype(auto) {
+					return owner.BindResourceViews(std::forward<Args>(a_arguments)...);
+				});
+			}
+			template <class... Args>
+			decltype(auto) ClaimRenderTargetStateSeed(Args&&... a_arguments) const noexcept
+			{
+				return Publish([&]() noexcept -> decltype(auto) {
+					return owner.ClaimRenderTargetStateSeed(std::forward<Args>(a_arguments)...);
+				});
+			}
+			template <class... Args>
+			decltype(auto) ClaimResourceViewStateSeed(Args&&... a_arguments) const noexcept
+			{
+				return Publish([&]() noexcept -> decltype(auto) {
+					return owner.ClaimResourceViewStateSeed(std::forward<Args>(a_arguments)...);
+				});
+			}
+			template <class... Args>
+			decltype(auto) RecordFinishCommandList(Args&&... a_arguments) const noexcept
+			{
+				return Publish([&]() noexcept -> decltype(auto) {
+					return owner.RecordFinishCommandList(std::forward<Args>(a_arguments)...);
+				});
+			}
+			template <class... Args>
+			decltype(auto) RecordResourceFlow(Args&&... a_arguments) const noexcept
+			{
+				return Publish([&]() noexcept -> decltype(auto) {
+					return owner.RecordResourceFlow(std::forward<Args>(a_arguments)...);
+				});
+			}
+			template <class... Args>
+			decltype(auto) RecordCpuMap(Args&&... a_arguments) const noexcept
+			{
+				return Publish([&]() noexcept -> decltype(auto) {
+					return owner.RecordCpuMap(std::forward<Args>(a_arguments)...);
+				});
+			}
+			template <class... Args>
+			decltype(auto) RecordCpuUnmap(Args&&... a_arguments) const noexcept
+			{
+				return Publish([&]() noexcept -> decltype(auto) {
+					return owner.RecordCpuUnmap(std::forward<Args>(a_arguments)...);
+				});
+			}
+			template <class... Args>
+			decltype(auto) RecordDraw(Args&&... a_arguments) const noexcept
+			{
+				return Publish([&]() noexcept -> decltype(auto) {
+					return owner.RecordDraw(std::forward<Args>(a_arguments)...);
+				});
+			}
+			template <class... Args>
+			decltype(auto) RecordDispatch(Args&&... a_arguments) const noexcept
+			{
+				return Publish([&]() noexcept -> decltype(auto) {
+					return owner.RecordDispatch(std::forward<Args>(a_arguments)...);
+				});
+			}
+			void BeginTransferOperation(std::uintptr_t a_context, bool a_compute, std::uint32_t a_operation,
+				const std::array<std::uintptr_t, 6>& a_shaders) const noexcept
+			{
+				Publish([&]() noexcept {
+					owner.BeginTransferOperation(a_context, a_compute, a_operation, a_shaders);
+				});
+			}
+
+			void RecordRasterState(std::uintptr_t a_context, std::uint32_t a_slot,
+				const std::array<float, 6>& a_viewport, const std::array<std::int32_t, 4>& a_scissor,
+				std::uint32_t a_viewportCount, std::uint32_t a_scissorCount, bool a_scissorEnabled) const noexcept
+			{
+				Publish([&]() noexcept {
+					owner.RecordRasterState(a_context, a_slot, a_viewport, a_scissor, a_viewportCount, a_scissorCount, a_scissorEnabled);
+				});
+			}
+
+			void RecordTransferResourceAccess(std::uintptr_t a_context, const ResourceViewInput& a_view,
+				ResourceStage a_stage, std::uint32_t a_slot, bool a_write) const noexcept
+			{
+				Publish([&]() noexcept {
+					owner.RecordTransferResourceAccess(a_context, a_view, a_stage, a_slot, a_write);
+				});
+			}
+
+			void RecordTransferCopyRegion(std::uintptr_t a_context, std::uint32_t a_sourceSubresource,
+				std::uint32_t a_destinationSubresource, const std::array<std::uint32_t, 3>& a_destination,
+				const std::array<std::uint32_t, 6>& a_sourceBox, bool a_hasSourceBox) const noexcept
+			{
+				Publish([&]() noexcept {
+					owner.RecordTransferCopyRegion(a_context, a_sourceSubresource, a_destinationSubresource, a_destination, a_sourceBox, a_hasSourceBox);
+				});
+			}
+
+			void BindStage(std::uintptr_t a_context, ShaderStage a_stage, std::uintptr_t a_object) const noexcept
+			{
+				const std::scoped_lock lock(owner.captureLifecycleMutex);
+				if (generation != 0 && owner.ActiveCaptureGeneration() == generation)
+					owner.BindStage(a_context, a_stage, a_object);
+				else if (a_context != 0 && a_context == owner.immediateContext.load(std::memory_order_acquire))
+					owner.SetImmediateBoundStage(a_stage, a_object);
+			}
+
+			void RecordExecuteCommandList(std::uintptr_t a_context, std::uintptr_t a_list, bool a_restore) const noexcept
+			{
+				const std::scoped_lock lock(owner.captureLifecycleMutex);
+				if (generation != 0 && owner.ActiveCaptureGeneration() == generation)
+					owner.RecordExecuteCommandList(a_context, a_list, a_restore);
+				else if (!a_restore && a_context != 0 && a_context == owner.immediateContext.load(std::memory_order_acquire))
+					owner.ResetImmediatePipelineState();
+			}
+
+		private:
+			template <class Function>
+			decltype(auto) Publish(Function&& a_publish) const noexcept
+			{
+				using Result = std::invoke_result_t<Function>;
+				const std::scoped_lock lock(owner.captureLifecycleMutex);
+				if (generation == 0 || owner.ActiveCaptureGeneration() != generation) {
+					if constexpr (std::is_void_v<Result>)
+						return;
+					else
+						return Result{};
+				}
+				return std::forward<Function>(a_publish)();
+			}
+			Runtime& owner;
+			std::uint64_t generation;
+		};
+
+		/** Retains call-entry identity without locking across the original native call. */
+		class ContextCall
+		{
+		public:
+			ContextCall(Runtime& a_owner) noexcept : generation(a_owner.ActiveCaptureGeneration()) {}
+			std::uint64_t Generation() const noexcept { return generation; }
+			template <class Function, class... Args>
+			decltype(auto) InvokeNative(Function&& a_function, Args&&... a_arguments) const
+			{
+				return std::forward<Function>(a_function)(std::forward<Args>(a_arguments)...);
+			}
+
+		private:
+			const std::uint64_t generation;
+		};
+
+		[[nodiscard]] ContextCall BeginContextCall() noexcept { return ContextCall(*this); }
+		[[nodiscard]] CaptureObservationView ForCapture(std::uint64_t a_generation) noexcept { return CaptureObservationView(*this, a_generation); }
 
 #if defined(CSX_RENDER_MAP_TESTING)
 		void FailNextDeferredContextCatalogueAdmissionForTesting() noexcept;

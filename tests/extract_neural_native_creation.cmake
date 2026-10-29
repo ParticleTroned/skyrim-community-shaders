@@ -8,3 +8,7 @@ extract_between("${source}" "bool Runtime::FeatureConfiguration::Matches("
     "Runtime& Runtime::Instance()" "neural_native_key_under_test.h")
 extract_between("${source}" "bool Runtime::PrepareFeature("
     "bool Runtime::ResetFeatureLocked(" "neural_native_creation_under_test.h")
+extract_between("${source}" "struct InstalledRuntimeMetadata"
+    "bool QueryFileIdentity(" "neural_installed_metadata_under_test.h")
+extract_between("${source}" "TuningLimits Runtime::GetTuningLimits() const"
+    "std::string Runtime::Version() const" "neural_runtime_tuning_under_test.h")

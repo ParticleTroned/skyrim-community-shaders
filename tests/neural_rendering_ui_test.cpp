@@ -527,6 +527,14 @@ namespace MenuUI
 namespace NeuralRendering
 {
 	bool runtimeInstalled = true;
+	TuningLimits runtimeTuningLimits;
+	Runtime& Runtime::Instance()
+	{
+		static Runtime instance;
+		return instance;
+	}
+	Runtime::~Runtime() = default;
+	TuningLimits Runtime::GetTuningLimits() const { return runtimeTuningLimits; }
 	bool Runtime::IsInstalled() noexcept { return runtimeInstalled; }
 	struct Renderer
 	{
@@ -873,6 +881,56 @@ int main()
 				"Shared slider edits must select Custom");
 		}
 	}
+	for (bool vr : { false, true }) {
+		globals::game::isVR = vr;
+		for (unsigned minor : { 8u, 9u, 10u }) {
+			NeuralRendering::runtimeTuningLimits = NeuralRendering::GetTuningLimitsForVersion(310, minor);
+			const auto limits = NeuralRendering::runtimeTuningLimits;
+			for (const auto& [label, member, maximum] : {
+					 std::tuple{ "Intensity", &Upscaling::Settings::neuralRenderingIntensity, limits.intensity },
+					 std::tuple{ "Local Tone", &Upscaling::Settings::neuralRenderingLocalTone, limits.localToneStrength },
+					 std::tuple{ "Local Structure", &Upscaling::Settings::neuralRenderingLocalStructure, limits.localStructureStrength },
+					 std::tuple{ "Skin Structure", &Upscaling::Settings::neuralRenderingSkinStructure, limits.skinStructureStrength } }) {
+				auto& settings = globals::features::upscaling.settings;
+				settings = {};
+				settings.*member = 3.0f;
+				ImGui::Clear();
+				DrawNeuralRenderingSharedImageSettings(settings);
+				require(settings.*member == maximum, "Saved out-of-range values must be normalized for the installed DLL");
+				for (float input : { -1.0f, 0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f }) {
+					ImGui::sliderEditValue = input;
+					ImGui::Clear(label);
+					DrawNeuralRenderingSharedImageSettings(settings);
+					require(settings.*member == std::clamp(input, 0.0f, maximum), "Manual slider input must obey the DLL-specific range");
+				}
+			}
+			for (unsigned preset = 1; preset <= 4; ++preset) {
+				Upscaling::Settings settings;
+				require(Upscaling::ApplyNeuralRenderingPreset(settings, preset), "Known image preset must apply");
+				require(settings.neuralRenderingPreset == preset && settings.neuralRenderingIntensity <= limits.intensity &&
+							settings.neuralRenderingLocalTone <= limits.localToneStrength &&
+							settings.neuralRenderingLocalStructure <= limits.localStructureStrength &&
+							settings.neuralRenderingSkinStructure <= limits.skinStructureStrength,
+					"Presets must respect each DLL's ranges while keeping their identity");
+				if (preset == 2)
+					require(settings.neuralRenderingLocalStructure == (minor == 9 ? 1.0f : 1.6f) &&
+								settings.neuralRenderingSkinStructure == (minor == 9 ? 1.0f : 1.15f),
+						"310.8 structure presets must retain their original values");
+			}
+			for (float invalid : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity() }) {
+				auto& settings = globals::features::upscaling.settings;
+				settings.neuralRenderingIntensity = settings.neuralRenderingLocalTone =
+					settings.neuralRenderingLocalStructure = settings.neuralRenderingSkinStructure = invalid;
+				ImGui::Clear();
+				DrawNeuralRenderingSharedImageSettings(settings);
+				require(settings.neuralRenderingIntensity == 0.8f && settings.neuralRenderingLocalTone == 0.75f &&
+							settings.neuralRenderingLocalStructure == 0.9f && settings.neuralRenderingSkinStructure == 0.9f,
+					"Non-finite tuning must restore valid defaults within both DLL families' ranges");
+			}
+		}
+	}
+	NeuralRendering::runtimeTuningLimits = {};
+	globals::game::isVR = true;
 	globals::features::upscaling.settings = {};
 	ImGui::comboEditValue = 0;
 	ImGui::sliderEditValue = 0.375f;

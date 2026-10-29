@@ -3,6 +3,7 @@
 #include "CentralAreaPolicy.h"
 #include "DevelopmentDiagnostics.h"
 #include "ModelResolutionPolicy.h"
+#include "TuningLimits.h"
 
 #include <cstdint>
 #include <nlohmann/json.hpp>
@@ -89,9 +90,22 @@ namespace NeuralRendering
 		return rendering;
 	}
 
-	/** Accepts legacy placement and derived coverage while rejecting invalid tuning. */
-	inline void ValidateRenderingSettingsNormalization(const nlohmann::json& requested, const nlohmann::json& normalized)
+	/** Accepts legacy placement, coverage and provider range reductions; rejects invalid tuning. */
+	inline void ValidateRenderingSettingsNormalization(const nlohmann::json& requested, const nlohmann::json& normalized, TuningLimits limits = {})
 	{
+		const auto isProviderRangeReduction = [&](const std::string& name, const nlohmann::json& value) {
+			if (!value.is_number())
+				return false;
+			float maximum = 2.0f;
+			if (name == "neuralRenderingIntensity")
+				maximum = limits.intensity;
+			else if (name == "neuralRenderingLocalStructure")
+				maximum = limits.localStructureStrength;
+			else if (name == "neuralRenderingSkinStructure")
+				maximum = limits.skinStructureStrength;
+			const double strength = value.get<double>();
+			return strength > maximum && strength <= 2.0 && normalized.at(name) == maximum;
+		};
 		for (const auto& [name, value] : requested.items()) {
 			if (normalized.at(name) == value)
 				continue;
@@ -100,6 +114,8 @@ namespace NeuralRendering
 			if (name == "neuralRenderingMode" && ParseBoundedInteger(value, 1u, 1u) && normalized.at(name) == 0u)
 				continue;
 			if ((name == "neuralRenderingFovOnly" || name == "neuralRenderingRenderscaleFov") && value.is_boolean())
+				continue;
+			if (isProviderRangeReduction(name, value))
 				continue;
 			throw std::invalid_argument("Neural Rendering setting is outside its valid range: " + name);
 		}

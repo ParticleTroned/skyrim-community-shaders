@@ -1,10 +1,12 @@
 #include "Features/Upscaling/NeuralRendering/NativeEvaluationLayout.h"
 #include "Features/Upscaling/NeuralRendering/PrewarmPolicy.h"
 #include "Features/Upscaling/NeuralRendering/ShaderInvalidation.h"
+#include "Features/Upscaling/NeuralRendering/TuningLimits.h"
 
 #include <atomic>
 #include <bit>
 #include <chrono>
+#include <filesystem>
 #include <format>
 #include <iostream>
 #include <map>
@@ -14,8 +16,48 @@
 #include <thread>
 #include <vector>
 
+namespace Util
+{
+	struct TestRuntimeVersion
+	{
+		unsigned majorValue = 310, minorValue = 9;
+		unsigned major() const { return majorValue; }
+		unsigned minor() const { return minorValue; }
+	};
+	std::optional<TestRuntimeVersion> installedVersion = TestRuntimeVersion{};
+	bool versionReadFails = false;
+	unsigned versionReads = 0;
+	std::optional<TestRuntimeVersion> GetDllVersion(const std::wstring&)
+	{
+		++versionReads;
+		if (versionReadFails)
+			throw std::runtime_error("version resource unavailable");
+		return installedVersion;
+	}
+}
+namespace logger
+{
+	unsigned discoveryWarnings = 0;
+	template <class... Args>
+	void warn(Args&&...)
+	{
+		++discoveryWarnings;
+	}
+}
+
 namespace NeuralRendering
 {
+	bool runtimePresent = true, discoveryFails = false;
+	unsigned discoveryCalls = 0;
+	std::filesystem::path ResolveRuntimePath(const std::filesystem::path&)
+	{
+		++discoveryCalls;
+		if (discoveryFails)
+			throw std::runtime_error("runtime path unavailable");
+		return runtimePresent ? std::filesystem::path("nvngx_dlssnr.dll") : std::filesystem::path{};
+	}
+#include "neural_installed_metadata_under_test.h"
+
 	struct ID3D12GraphicsCommandList
 	{};
 	struct ID3D12Resource
@@ -107,7 +149,9 @@ namespace NeuralRendering
 			bool featureUpscaling = false, providerBlending = false, valid = false;
 			bool Matches(const NativeEvaluationLayout&) const;
 		};
-		std::mutex mutex_;
+		std::optional<TuningLimits> tuningLimits_ = TuningLimits{};
+		TuningLimits GetTuningLimits() const;
+		mutable std::recursive_mutex mutex_;
 		std::atomic<bool> abandonRequested_ = false;
 		bool abandoned_ = false;
 		RuntimeStatus status_ = RuntimeStatus::Initialized;
@@ -143,6 +187,7 @@ namespace NeuralRendering
 	};
 #include "neural_native_creation_under_test.h"
 #include "neural_native_key_under_test.h"
+#include "neural_runtime_tuning_under_test.h"
 }
 
 namespace
@@ -151,6 +196,55 @@ namespace
 	{
 		if (!condition)
 			throw std::runtime_error(message);
+	}
+	void RuntimeTuningMetadata()
+	{
+		using namespace NeuralRendering;
+		runtimePresent = false;
+		const auto absent = DiscoverInstalledRuntimeMetadata();
+		Require(!absent.installed && absent.tuningLimits.intensity == 2 && Util::versionReads == 0,
+			"missing providers must retain the original ranges without reading version metadata");
+		discoveryFails = true;
+		Require(!DiscoverInstalledRuntimeMetadata().installed && logger::discoveryWarnings == 1,
+			"discovery failures must remain observable and leave the optional provider unavailable");
+		discoveryFails = false;
+		runtimePresent = true;
+		Util::installedVersion.reset();
+		const auto unreadable = DiscoverInstalledRuntimeMetadata();
+		Require(unreadable.installed && unreadable.tuningLimits.localStructureStrength == 2,
+			"unreadable metadata must not infer a restricted version");
+		Util::versionReadFails = true;
+		Require(DiscoverInstalledRuntimeMetadata().installed && logger::discoveryWarnings == 2,
+			"version-resource failures must preserve file presence and report discovery failure");
+		Util::versionReadFails = false;
+		for (const auto& [major, minor, intensity, structure] : {
+				 std::array{ 310u, 8u, 1u, 2u }, std::array{ 310u, 9u, 1u, 1u },
+				 std::array{ 310u, 90u, 2u, 2u }, std::array{ 311u, 9u, 2u, 2u } }) {
+			Util::installedVersion = Util::TestRuntimeVersion{ major, minor };
+			const auto metadata = DiscoverInstalledRuntimeMetadata();
+			Require(metadata.installed && metadata.tuningLimits.intensity == intensity &&
+						metadata.tuningLimits.localToneStrength == 2 && metadata.tuningLimits.localStructureStrength == structure &&
+						metadata.tuningLimits.skinStructureStrength == structure,
+				"numeric major/minor metadata must select only the matching provider family");
+		}
+		Util::installedVersion = Util::TestRuntimeVersion{ 310, 9 };
+		Runtime runtime;
+		runtime.tuningLimits_.reset();
+		Require(GetInstalledRuntimeMetadata().installed && runtime.GetTuningLimits().localStructureStrength == 1,
+			"availability and pre-initialization limits must share installed metadata");
+		const auto reads = Util::versionReads;
+		const auto calls = discoveryCalls;
+		Util::installedVersion = Util::TestRuntimeVersion{ 310, 8 };
+		Require(runtime.GetTuningLimits().localStructureStrength == 1 && Util::versionReads == reads && discoveryCalls == calls,
+			"installed metadata must remain cached until restart");
+		runtime.tuningLimits_ = GetTuningLimitsForVersion(310, 8);
+		Require(runtime.GetTuningLimits().localStructureStrength == 2 && runtime.GetTuningLimits().intensity == 1,
+			"probed metadata must override the installed-file snapshot");
+		runtime.tuningLimits_ = GetTuningLimitsForVersion(310, 10);
+		Require(runtime.GetTuningLimits().intensity == 2, "a probed unknown version must not inherit the installed version's restrictions");
+		runtime.tuningLimits_.reset();
+		Require(runtime.GetTuningLimits().localStructureStrength == 1 && Util::versionReads == reads,
+			"retirement must restore cached installation limits without another filesystem query");
 	}
 	void NativeCreation()
 	{
@@ -181,6 +275,21 @@ namespace
 		tuning.intensity = 1.7f;
 		Require(run(warm, 2, layout) && evaluations.back().at("DLSSNR.Reset") == 0 && creates.size() == created, "tuning recreated or repeated first-use reset");
 		Require(evaluations.back().at("DLSSNR.Intensity") == std::bit_cast<std::uint32_t>(1.7f), "cached feature lost live tuning");
+		const auto previousTuning = tuning;
+		for (unsigned minor : { 8u, 9u, 10u }) {
+			const auto limits = GetTuningLimitsForVersion(310, minor);
+			warm.tuningLimits_ = limits;
+			tuning.intensity = tuning.localToneStrength = tuning.localStructureStrength = tuning.skinStructureStrength = 1.75f;
+			Require(run(warm, 2, layout), "version-specific tuning dispatch failed");
+			for (const auto& [key, maximum] : {
+					 std::pair{ "DLSSNR.Intensity", limits.intensity },
+					 std::pair{ "DLSSNR.LocalToneStrength", limits.localToneStrength },
+					 std::pair{ "DLSSNR.LocalStructureStrength", limits.localStructureStrength },
+					 std::pair{ "DLSSNR.SkinStructureStrength", limits.skinStructureStrength } })
+				Require(evaluations.back().at(key) == std::bit_cast<std::uint32_t>(std::min(1.75f, maximum)), "provider received tuning outside its version-specific range");
+		}
+		tuning = previousTuning;
+		warm.tuningLimits_ = TuningLimits{};
 		for (bool upscale : { false, true }) {
 			Runtime moving;
 			const UpscalingDLSS::Extent backing{ 2048, 1024 }, guides = upscale ? UpscalingDLSS::Extent{ 1365, 683 } : backing;
@@ -278,6 +387,7 @@ namespace
 int main()
 {
 	try {
+		RuntimeTuningMetadata();
 		NativeCreation();
 		InvalidationAndLease();
 	} catch (const std::exception& error) {

@@ -3338,6 +3338,9 @@ namespace
 
 }
 
+#include "render_map_context_call_test.h"
+#include "render_map_post_processing_context_test.h"
+
 int main()
 {
 	try {
@@ -3346,6 +3349,8 @@ int main()
 		TestRetainedSubmissionRecreationInterval();
 		TestFailedPostWriteObservationClearsCommandEpoch();
 		TestTransferVersionAdmissionAndTurnover();
+		TestContextCallEntryGeneration();
+		TestPostProcessingContextCallGeneration();
 		TestInactiveRuntime();
 		TestNestedBoundaries();
 		TestShaderIdentityGenerations();

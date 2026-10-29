@@ -1,5 +1,6 @@
 #include "VRGrassLifetimeFix.h"
 
+#include "Utils/GrassGroupLock.h"
 #include "Utils/VirtualFunctionHook.h"
 
 #include <algorithm>
@@ -7,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <span>
 
 namespace VRGrassLifetime
@@ -64,10 +66,9 @@ namespace VRGrassLifetime
 			const std::lock_guard childGuard{ children };
 			// Native traversal uses free_idx, which includes holes, rather than capacity or live size.
 			const auto childSlots = a_node->GetChildren().free_idx();
-			NativeLock groups{ *groupLockAddress };
-			std::unique_lock groupGuard{ groups, std::defer_lock };
+			std::optional<Util::GrassGroupLock> groupGuard;
 			if (childSlots != 0)
-				groupGuard.lock();
+				groupGuard.emplace(*groupLockAddress);
 			onVisible(a_node, a_process, a_alphaGroup);
 		}
 

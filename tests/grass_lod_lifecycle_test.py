@@ -49,6 +49,8 @@ void operator delete(void* memory) noexcept { std::free(memory); }
 void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 bool captureLocked = false;
 struct Mutex {
+    void lock() { captureLocked = true; }
+    void unlock() { captureLocked = false; }
     void lock_shared() { captureLocked = true; }
     void unlock_shared() { captureLocked = false; }
 };
@@ -58,6 +60,7 @@ struct Owner {
     Owner() { ++alive; }
     ~Owner() { Require(!captureLocked); --alive; }
 };
+using QueuedGroup = Owner;
 namespace RE {
     using NiSourceTexture = int;
     using BSMultiStreamInstanceTriShape = int;
@@ -116,6 +119,7 @@ struct GrassBucketRenderer {
         bool currentMainPass = false, currentDrawObserved = false;
         void ClearDrawContext() noexcept;
         Mutex captureMutex;
+        std::vector<std::shared_ptr<const QueuedGroup>> queuedGroups;
         std::map<int, Source> residents;
         uint64_t residentRevision = 0, lodRevision = UINT64_MAX;
         uint32_t lodMode = 0;
@@ -241,6 +245,13 @@ void CheckLODResolution() {
 }
 int main() {
     try {
+        {
+            GrassBucketRenderer renderer;
+            renderer.impl->queuedGroups.push_back(std::make_shared<QueuedGroup>());
+            Require(Owner::alive == 1);
+            renderer.EndFrame();
+            Require(Owner::alive == 0 && renderer.impl->queuedGroups.empty());
+        }
         auto& settings = globals::features::grassOptimizations.settings;
         settings.EnableMeshLOD = true;
         GrassBucketRenderer renderer;

@@ -234,6 +234,35 @@ namespace
 		Require(Word(testManager.grassShapeLock) == 0);
 	}
 
+	void NestedGroupReaders()
+	{
+		std::promise<void> started;
+		auto entered = started.get_future();
+		std::promise<void> acquired;
+		auto acquiredResult = acquired.get_future();
+		std::jthread reader;
+		cullAction = [&](RE::NiNode*) {
+			Require(Word(groupsWord) == 1);
+			{
+				Util::GrassGroupLock nested{ groupsWord };
+				Require(Word(groupsWord) == 1);
+			}
+			Require(Word(groupsWord) == 1);
+			reader = std::jthread([&] {
+				started.set_value();
+				Util::GrassGroupLock competing{ groupsWord };
+				acquired.set_value();
+			});
+			entered.get();
+			Require(acquiredResult.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout);
+		};
+		CullGrass(&grassNode, &process, -1);
+		Require(acquiredResult.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+		reader.join();
+		Require(Word(groupsWord) == 0);
+		cullAction = {};
+	}
+
 	void Race(bool a_bulkClear, bool a_grow)
 	{
 		std::vector<std::unique_ptr<int>> slots;
@@ -414,6 +443,7 @@ int main(int a_argc, char** a_argv)
 			return 0;
 		}
 		PassthroughAndUnwind();
+		NestedGroupReaders();
 		Race(false, false);
 		Race(false, true);
 		Race(true, false);

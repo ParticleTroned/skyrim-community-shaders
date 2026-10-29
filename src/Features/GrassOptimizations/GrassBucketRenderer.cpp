@@ -49,12 +49,26 @@ namespace
 		std::atomic_bool compatible{ true };
 		GrassPolicy::WindHistory windHistory;  // Render-thread owned; visibility only selects the representative.
 	};
+	struct QueuedGroup;
 	struct Lifetime
 	{
 		std::atomic_bool alive{ true };
 		std::atomic_uint64_t generation{ 0 };
 		std::atomic_uint64_t observedFrame{ UINT64_MAX };
 		GrassPolicy::FadeHistory<RE::BSGraphics::VertexBuffer*> fadeHistory;
+		std::weak_ptr<const QueuedGroup> queued;
+	};
+	struct QueuedShape
+	{
+		RE::NiPointer<RE::BSMultiStreamInstanceTriShape> shape;
+		std::shared_ptr<Lifetime> lifetime;
+	};
+	struct QueuedGroup
+	{
+		uint32_t frame;
+		RE::BSMultiStreamInstanceTriShape* representative;
+		std::shared_ptr<QueueGroup> queue;
+		std::vector<QueuedShape> members;
 	};
 	struct Group
 	{
@@ -68,6 +82,7 @@ namespace
 		float minVariance = 0, maxVariance = 0, maxBasisNorm = 0;
 		bool boundsKnown = false;
 		float birthTime = 0;
+		uint32_t engineIndex = 0;
 	};
 	struct Source
 	{
@@ -357,6 +372,20 @@ namespace
 		}
 		group.boundsKnown = true;
 	}
+	bool ReuseGroupRecords(Group& snapshot, std::span<const Group> previousGroups, ID3D11Buffer* nativeBuffer)
+	{
+		const auto cached = std::lower_bound(previousGroups.begin(), previousGroups.end(), snapshot.engineIndex,
+			[](const Group& previous, uint32_t key) { return previous.engineIndex < key; });
+		if (cached == previousGroups.end() || cached->engineIndex != snapshot.engineIndex || cached->identity != snapshot.identity ||
+			cached->count != snapshot.count || (cached->buffer && cached->buffer.get() != nativeBuffer))
+			return false;
+		const auto fade = snapshot.fade;
+		const auto visible = snapshot.visible;
+		snapshot = *cached;
+		snapshot.fade = fade;
+		snapshot.visible = visible;
+		return true;
+	}
 	bool Finite(const RE::NiPoint3& point) { return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z); }
 	bool Identity(const RE::NiTransform& transform)
 	{
@@ -535,6 +564,7 @@ namespace
 		{
 			globals::features::grassOptimizations.GetRenderer().MarkGroupsChanged(shape, group);
 			original(shape, group);
+			globals::features::grassOptimizations.GetRenderer().MarkGroupsChanged(shape, group, false);
 		}
 		static inline REL::Relocation<decltype(thunk)> original;
 	};
@@ -544,6 +574,7 @@ namespace
 		{
 			globals::features::grassOptimizations.GetRenderer().MarkGroupsChanged(shape);
 			const auto group = original(shape, count, data, arg, fade);
+			globals::features::grassOptimizations.GetRenderer().MarkGroupsChanged(shape, group, false);
 			globals::features::grassOptimizations.GetRenderer().RecordGeneratedGroups(shape, { &group, 1 }, true);
 			return group;
 		}
@@ -555,11 +586,9 @@ namespace
 		{
 			const auto previousCount = instances.size();
 			original(shape, instances);
-			globals::features::grassOptimizations.GetRenderer().MarkGenerated(shape);
 			if (instances.size() > previousCount)
 				globals::features::grassOptimizations.GetRenderer().RecordGeneratedGroups(shape,
 					{ instances.data() + previousCount, instances.size() - previousCount });
-			globals::features::grassOptimizations.GetRenderer().CaptureVisible(shape, false);
 		}
 		static inline REL::Relocation<decltype(thunk)> original;
 	};
@@ -583,6 +612,7 @@ struct GrassBucketRenderer::Impl
 	std::shared_mutex captureMutex;
 	std::unordered_map<RE::BSMultiStreamInstanceTriShape*, Source> residents;
 	std::unordered_multimap<size_t, std::weak_ptr<QueueGroup>> queues;
+	std::vector<std::shared_ptr<const QueuedGroup>> queuedGroups;
 	uint32_t nativeFallbackDepth = 0;
 	uint64_t residentRevision = 0, preparedRevision = UINT64_MAX;
 	uint64_t cpuRecordBytes = 0;
@@ -614,6 +644,7 @@ struct GrassBucketRenderer::Impl
 	bool geometryCPUValid = false;
 	FrustumParameters frustumData;
 	float nativeRenderDistance = 8000.0f;
+	bool nativeSettingsReady = false;
 	uint32_t frame = UINT32_MAX;
 	uint64_t residentRecordBytes = 0;
 	bool installed = false;
@@ -665,7 +696,11 @@ struct GrassBucketRenderer::Impl
 	void PollCounters();
 #endif
 	bool RefreshSource(RE::BSMultiStreamInstanceTriShape* shape, bool nativeVisible);
+	void ReadNativeSettings();
+	std::shared_ptr<const QueuedGroup> QueuedFor(RE::BSMultiStreamInstanceTriShape* shape, uint32_t now) const;
+	bool MatchesQueuedSources(const Bucket& bucket) const;
 	void EraseResident(RE::BSMultiStreamInstanceTriShape* shape);
+	void UnassignQueue(Source& source);
 	void AssignQueue(Source& source);
 	void MakeNativeVisible(RE::BSMultiStreamInstanceTriShape* shape);
 	/** @brief Update native visibility while the caller holds captureMutex exclusively. */
@@ -705,7 +740,11 @@ struct GrassBucketRenderer::Impl
 };
 
 GrassBucketRenderer::GrassBucketRenderer() : impl(std::make_unique<Impl>()) {}
-GrassBucketRenderer::~GrassBucketRenderer() = default;
+GrassBucketRenderer::~GrassBucketRenderer()
+{
+	// Releasing the last native owner can call the deleting-destructor hook.
+	impl->queuedGroups.clear();
+}
 bool GrassBucketRenderer::IsHookInstalled() const { return impl->installed; }
 bool GrassBucketRenderer::IsRenderingAvailable() const { return impl->installed && !impl->failed.load(std::memory_order_relaxed); }
 
@@ -729,21 +768,25 @@ void GrassBucketRenderer::RecordModel(RE::BSMultiStreamInstanceTriShape* shape, 
 		logger::warn("Grass model tracking allocation failed; retaining full meshes");
 	}
 }
-void GrassBucketRenderer::MarkGenerated(RE::BSMultiStreamInstanceTriShape* shape)
+void GrassBucketRenderer::MarkGroupsChanged(RE::BSMultiStreamInstanceTriShape* shape, std::optional<uint32_t> changedGroup, bool retireFade)
 {
-	MarkGroupsChanged(shape);
-}
-void GrassBucketRenderer::MarkGroupsChanged(RE::BSMultiStreamInstanceTriShape* shape, std::optional<uint32_t> removedGroup)
-{
+	const auto property = shape ? shape->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
+	if (!property || property->GetRTTI() != REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSGrassShaderProperty }.get())
+		return;
+	const GrassRuntime::GroupReadLock groupsLock;
 	std::scoped_lock lock(impl->captureMutex);
-	impl->EraseResident(shape);
+	if (auto found = impl->residents.find(shape); found != impl->residents.end()) {
+		for (auto& group : found->second.groups)
+			if (!changedGroup || group.engineIndex == *changedGroup)
+				group.identity = nullptr;
+	}
 	++impl->residentRevision;
 	if (auto found = impl->identities.find(shape); found != impl->identities.end() && found->second.first) {
 		++found->second.first->generation;
-		if (removedGroup) {
+		if (retireFade && changedGroup) {
 			const auto& groups = shape->GetMultiStreamTrishapeRuntimeData().instanceGroups;
-			if (*removedGroup < groups.size() && groups[*removedGroup])
-				found->second.first->fadeHistory.Removed(groups[*removedGroup]->vertexBuffer);
+			if (*changedGroup < groups.size() && groups[*changedGroup])
+				found->second.first->fadeHistory.Removed(groups[*changedGroup]->vertexBuffer);
 		}
 	}
 }
@@ -756,6 +799,7 @@ void GrassBucketRenderer::RecordGeneratedGroups(RE::BSMultiStreamInstanceTriShap
 	if (!property || property->GetRTTI() != REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSGrassShaderProperty }.get())
 		return;
 	try {
+		const GrassRuntime::GroupReadLock groupsLock;
 		std::scoped_lock lock(impl->captureMutex);
 		auto& lifetime = impl->identities[shape].first;
 		if (!lifetime)
@@ -787,24 +831,28 @@ void GrassBucketRenderer::Impl::EraseResident(RE::BSMultiStreamInstanceTriShape*
 {
 	if (auto found = residents.find(shape); found != residents.end()) {
 		cpuRecordBytes -= found->second.cpuRecordBytes;
-		if (auto queue = found->second.queue) {
-			std::erase(queue->members, shape);
-			for (const auto& group : found->second.groups)
-				queue->instances -= group.count;
-			queue->slices -= uint32_t(found->second.groups.size());
-		}
+		UnassignQueue(found->second);
 		residents.erase(found);
+	}
+}
+
+void GrassBucketRenderer::Impl::UnassignQueue(Source& source)
+{
+	if (auto queue = std::exchange(source.queue, {}); queue && std::erase(queue->members, source.identity)) {
+		for (const auto& group : source.groups) queue->instances -= group.count;
+		queue->slices -= uint32_t(source.groups.size());
 	}
 }
 
 void GrassBucketRenderer::Impl::AssignQueue(Source& source)
 {
+	auto selected = std::exchange(source.queue, {});
 	const bool batching = globals::features::grassOptimizations.IsCrossCellBatchingEnabled();
 	uint32_t count = 0;
 	for (const auto& group : source.groups) count += group.count;
 	const auto hash = CompatibilityHash(source);
 	const auto [begin, end] = queues.equal_range(hash);
-	if (batching) {
+	if (batching && !selected) {
 		for (auto candidate = begin; candidate != end; ++candidate) {
 			auto queue = candidate->second.lock();
 			if (!queue || !queue->compatible.load(std::memory_order_relaxed) || !queue->batching || queue->members.empty() || queue->instances > GrassPolicy::kMaxBatchInstances - count ||
@@ -812,35 +860,38 @@ void GrassBucketRenderer::Impl::AssignQueue(Source& source)
 				continue;
 			const auto representative = residents.find(queue->members.front());
 			if (representative != residents.end() && Compatible(representative->second, source)) {
-				source.queue = std::move(queue);
+				selected = std::move(queue);
 				break;
 			}
 		}
 	}
-	if (!source.queue) {
-		source.queue = std::make_shared<QueueGroup>();
-		source.queue->batching = batching;
-		queues.emplace(hash, source.queue);
+	if (!selected) {
+		selected = std::make_shared<QueueGroup>();
+		selected->batching = batching;
+		queues.emplace(hash, selected);
 	}
-	source.queue->members.push_back(source.identity);
-	source.queue->instances += count;
-	source.queue->slices += uint32_t(source.groups.size());
+	selected->members.push_back(source.identity);
+	selected->instances += count;
+	selected->slices += uint32_t(source.groups.size());
+	source.queue = std::move(selected);
 }
 
 void GrassBucketRenderer::Impl::MakeNativeVisible(RE::BSMultiStreamInstanceTriShape* shape)
 {
+	const GrassRuntime::GroupReadLock groupsLock;
 	std::scoped_lock lock(captureMutex);
 	MakeNativeVisibleLocked(shape);
 }
 
 void GrassBucketRenderer::Impl::MakeNativeVisibleLocked(RE::BSMultiStreamInstanceTriShape* shape)
 {
-	const auto found = residents.find(shape);
-	if (found == residents.end())
+	const auto identity = identities.find(shape);
+	if (identity == identities.end() || !identity->second.first)
 		return;
-	auto& source = found->second;
+	const auto found = residents.find(shape);
 	const auto now = globals::state->frameCount;
-	if (source.nativeVisibleFrame == now)
+	if (found != residents.end() && found->second.nativeVisibleFrame == now &&
+		found->second.generation == identity->second.first->generation.load(std::memory_order_acquire) && CurrentGroups(found->second))
 		return;
 	auto& runtime = shape->GetMultiStreamTrishapeRuntimeData();
 	auto property = shape->GetGeometryRuntimeData().shaderProperty.get();
@@ -852,11 +903,32 @@ void GrassBucketRenderer::Impl::MakeNativeVisibleLocked(RE::BSMultiStreamInstanc
 		auto live = runtime.instanceGroups[group];
 		if (!live || !live->instanceCount)
 			continue;
-		const auto time = source.lifetime->fadeHistory.Start(live->vertexBuffer);
+		const auto time = identity->second.first->fadeHistory.Start(live->vertexBuffer);
 		live->isVisible = true;
 		data.fadeAlphas[group] = fadeInSeconds > 0 ? std::clamp((globals::state->timer - time) / fadeInSeconds, 0.0f, 1.0f) : 1.0f;
 	}
-	source.nativeVisibleFrame = now;
+	if (found != residents.end())
+		found->second.nativeVisibleFrame = now;
+}
+
+std::shared_ptr<const QueuedGroup> GrassBucketRenderer::Impl::QueuedFor(RE::BSMultiStreamInstanceTriShape* shape, uint32_t now) const
+{
+	const auto identity = identities.find(shape);
+	if (identity != identities.end() && identity->second.first) {
+		auto queued = identity->second.first->queued.lock();
+		if (queued && queued->frame == now)
+			return queued;
+	}
+	return {};
+}
+
+bool GrassBucketRenderer::Impl::MatchesQueuedSources(const Bucket& bucket) const
+{
+	if (bucket.sources.empty())
+		return false;
+	const auto queued = QueuedFor(bucket.sources.front().identity, frame);
+	return queued && queued->queue == bucket.sources.front().queue && queued->members.size() == bucket.sources.size() &&
+	       std::all_of(bucket.sources.begin(), bucket.sources.end(), [&](const Source& source) { return QueuedFor(source.identity, frame) == queued; });
 }
 
 bool GrassBucketRenderer::QueueVisible(RE::BSMultiStreamInstanceTriShape* shape, RE::NiCullingProcess* process, int32_t index)
@@ -865,9 +937,20 @@ bool GrassBucketRenderer::QueueVisible(RE::BSMultiStreamInstanceTriShape* shape,
 		return false;
 	const auto now = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 	const bool batching = globals::features::grassOptimizations.IsCrossCellBatchingEnabled();
+	const GrassRuntime::GroupReadLock groupsLock;
+	if (!impl->nativeSettingsReady)
+		impl->ReadNativeSettings();
 	std::shared_ptr<QueueGroup> queue;
 	{
 		std::shared_lock lock(impl->captureMutex);
+		if (impl->QueuedFor(shape, now)) {
+			impl->identities.at(shape).first->observedFrame.store(now, std::memory_order_relaxed);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (impl->diagnostics.load(std::memory_order_relaxed))
+				++impl->queueDuplicates;
+#endif
+			return true;
+		}
 		const auto found = impl->residents.find(shape);
 		if (found != impl->residents.end()) {
 			const auto& source = found->second;
@@ -891,14 +974,9 @@ bool GrassBucketRenderer::QueueVisible(RE::BSMultiStreamInstanceTriShape* shape,
 			return false;
 		auto& source = found->second;
 		if (!source.queue || !source.queue->compatible.load(std::memory_order_relaxed) || source.queue->batching != batching) {
-			if (source.queue) {
-				std::erase(source.queue->members, shape);
-				for (const auto& group : source.groups) source.queue->instances -= group.count;
-				source.queue->slices -= uint32_t(source.groups.size());
-			}
-			source.queue.reset();
-			impl->AssignQueue(source);
+			impl->UnassignQueue(source);
 			++impl->residentRevision;
+			impl->AssignQueue(source);
 		}
 		source.lifetime->observedFrame.store(now, std::memory_order_relaxed);
 		queue = source.queue;
@@ -907,18 +985,39 @@ bool GrassBucketRenderer::QueueVisible(RE::BSMultiStreamInstanceTriShape* shape,
 	if (impl->diagnostics.load(std::memory_order_relaxed))
 		++impl->nativeVisibilityBypassed;
 #endif
-	// Rendering consumes the representative after all visibility workers finish.
-	if (queue->Claim(now, shape)) {
-		process->AppendVirtual(*shape, index);
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		if (impl->diagnostics.load(std::memory_order_relaxed))
-			++impl->queuedRepresentatives;
-#endif
-		return true;
+	// Keep every suppressed native draw reachable until all passes finish this frame.
+	auto queued = std::make_shared<QueuedGroup>(now, shape, queue);
+	{
+		std::scoped_lock lock(impl->captureMutex);
+		if (impl->QueuedFor(shape, now))
+			return true;
+		if (queue->queuedFrame == now)
+			return false;
+		queued->members.reserve(queue->members.size());
+		// Failed claims also retire at frame end, outside native traversal locks.
+		impl->queuedGroups.push_back(queued);
+		for (auto member : queue->members) {
+			const auto found = impl->residents.find(member);
+			if (found == impl->residents.end() || !found->second.lifetime->alive.load(std::memory_order_acquire) || impl->QueuedFor(member, now)) {
+				queue->compatible.store(false, std::memory_order_relaxed);
+				return false;
+			}
+			auto& retained = queued->members.emplace_back();
+			retained.shape = GrassRuntime::TryRetainShape(member);
+			if (!retained.shape) {
+				queue->compatible.store(false, std::memory_order_relaxed);
+				return false;
+			}
+			retained.lifetime = found->second.lifetime;
+		}
+		for (const auto& member : queued->members)
+			member.lifetime->queued = queued;
+		queue->Claim(now, shape);
 	}
+	process->AppendVirtual(*shape, index);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (impl->diagnostics.load(std::memory_order_relaxed))
-		++impl->queueDuplicates;
+		++impl->queuedRepresentatives;
 #endif
 	return true;
 }
@@ -1015,6 +1114,7 @@ bool GrassBucketRenderer::Impl::RefreshSource(RE::BSMultiStreamInstanceTriShape*
 
 bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shape, bool nativeVisible)
 {
+	const GrassRuntime::GroupReadLock groupsLock;
 	auto& feature = globals::features::grassOptimizations;
 	if (!feature.loaded || !feature.IsEnabled())
 		return false;
@@ -1052,6 +1152,7 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 			return true;
 		}
 		Source source{};
+		std::vector<Group> previousGroups;
 		source.groupLayout = GrassRuntime::CaptureGroupLayout(runtime);
 		source.capturedFrame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 		source.residency.createdFrame = source.capturedFrame;
@@ -1064,8 +1165,10 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 			source.lifetime = identity.first;
 			source.generation = source.lifetime->generation.load(std::memory_order_acquire);
 			source.model = identity.second;
-			if (auto found = impl->residents.find(shape); found != impl->residents.end())
+			if (auto found = impl->residents.find(shape); found != impl->residents.end()) {
 				source.residency = found->second.residency;
+				previousGroups = found->second.groups;
+			}
 		}
 		source.residency.Observe(source.capturedFrame, true);
 		source.property = geometry.shaderProperty;
@@ -1110,13 +1213,16 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 				return GRASS_CAPTURE_REJECT(GroupCapacity);
 			Group snapshot{ group->vertexBuffer, {}, group->instanceCount,
 				nativeVisible && group->isVisible ? grassData.fadeAlphas[index] : 1.0f, nativeVisible && group->isVisible, {} };
+			snapshot.engineIndex = index;
 			instances += snapshot.count;
 			const auto bytes = uint64_t(snapshot.count) * GrassPolicy::kRecordBytes;
 			if (instances > GrassPolicy::kMaxBatchInstances)
 				return GRASS_CAPTURE_REJECT(GroupCapacity);
 			if (!GrassRuntime::MatchesInstanceBytes(*group->vertexBuffer, bytes))
 				return GRASS_CAPTURE_REJECT(GroupBuffer);
+			ReuseGroupRecords(snapshot, previousGroups, reinterpret_cast<ID3D11Buffer*>(group->vertexBuffer->buffer));
 			if (group->vertexBuffer->buffer) {
+				snapshot.bytes.reset();
 				snapshot.buffer.copy_from(reinterpret_cast<ID3D11Buffer*>(group->vertexBuffer->buffer));
 				D3D11_BUFFER_DESC desc{};
 				snapshot.buffer->GetDesc(&desc);
@@ -1126,27 +1232,13 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 				if (!GrassRuntime::HasInstanceData(*group->vertexBuffer, bytes))
 					return GRASS_CAPTURE_REJECT(GroupBuffer);
 				const auto data = static_cast<const uint8_t*>(group->vertexBuffer->m_data);
-				std::shared_ptr<const std::vector<uint8_t>> cached;
-				{
-					std::scoped_lock lock(impl->captureMutex);
-					if (auto found = impl->residents.find(shape); found != impl->residents.end() && found->second.generation == source.generation &&
-																  found->second.groupLayout == source.groupLayout)
-						for (const auto& previous : found->second.groups)
-							if (previous.identity == snapshot.identity && previous.count == snapshot.count) {
-								cached = previous.bytes;
-								break;
-							}
-				}
-				// Instance generation invalidates this snapshot before new records can be drawn.
-				if (cached && cached->size() == bytes)
-					snapshot.bytes = std::move(cached);
-				else
+				if (!snapshot.bytes || snapshot.bytes->size() != bytes)
 					snapshot.bytes = std::make_shared<const std::vector<uint8_t>>(data, data + bytes);
 				source.cpuRecordBytes += bytes;
 			}
-			if (GrassRuntime::HasInstanceData(*group->vertexBuffer, bytes))
+			if (!snapshot.boundsKnown && GrassRuntime::HasInstanceData(*group->vertexBuffer, bytes))
 				CacheRootBounds(snapshot, group->vertexBuffer->m_data);
-			else if (snapshot.bytes)
+			else if (!snapshot.boundsKnown && snapshot.bytes)
 				CacheRootBounds(snapshot, snapshot.bytes->data());
 			source.groups.push_back(std::move(snapshot));
 		}
@@ -1163,8 +1255,17 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 			return GRASS_CAPTURE_REJECT(FrameCapacity);
 		const auto existing = impl->residents.find(shape);
 		const uint64_t previousBytes = existing != impl->residents.end() ? existing->second.cpuRecordBytes : 0;
-		if (existing != impl->residents.end())
+		if (existing != impl->residents.end()) {
 			source.generation = ++source.lifetime->generation;
+			const auto& previous = existing->second;
+			uint32_t previousCount = 0;
+			for (const auto& group : previous.groups) previousCount += group.count;
+			if (previous.queue && previous.queue->compatible.load(std::memory_order_relaxed) &&
+				previous.queue->batching == feature.IsCrossCellBatchingEnabled() && Compatible(previous, source) &&
+				previous.queue->instances - previousCount <= GrassPolicy::kMaxBatchInstances - instances &&
+				previous.queue->slices - previous.groups.size() <= GrassPolicy::kMaxBatchSlices - source.groups.size())
+				source.queue = previous.queue;
+		}
 		const auto now = globals::state->timer;
 		for (auto& group : source.groups) {
 			const auto born = source.lifetime->fadeHistory.Capture(group.identity);
@@ -1174,10 +1275,10 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 		}
 		const uint64_t nextCpuBytes = impl->cpuRecordBytes - previousBytes + source.cpuRecordBytes;
 		impl->EraseResident(shape);
-		impl->AssignQueue(source);
-		impl->residents.insert_or_assign(shape, std::move(source));
-		impl->cpuRecordBytes = nextCpuBytes;
 		++impl->residentRevision;
+		auto& resident = impl->residents.emplace(shape, std::move(source)).first->second;
+		impl->cpuRecordBytes = nextCpuBytes;
+		impl->AssignQueue(resident);
 		captured = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (impl->diagnostics.load(std::memory_order_relaxed))
@@ -1191,19 +1292,23 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 #undef GRASS_CAPTURE_REJECT
 }
 
+void GrassBucketRenderer::Impl::ReadNativeSettings()
+{
+	const auto iniFloat = [](const char* key, float fallback) {
+		auto setting = RE::GetINISetting(key);
+		const auto value = setting ? setting->GetFloat() : fallback;
+		return std::isfinite(value) && value >= 0 && value <= 100000 ? value : fallback;
+	};
+	nativeRenderDistance = std::max(1.0f, iniFloat("fGrassStartFadeDistance:Grass", 6000) + iniFloat("fGrassFadeRange:Grass", 2000));
+	fadeInSeconds = iniFloat("fGrassFadeInTime:Grass", 0);
+	nativeSettingsReady = true;
+}
+
 void GrassBucketRenderer::SetupResources()
 {
 	try {
-		const auto iniFloat = [](const char* key, float fallback) {
-			auto setting = RE::GetINISetting(key);
-			const auto value = setting ? setting->GetFloat() : fallback;
-			return std::isfinite(value) && value >= 0 && value <= 100000 ? value : fallback;
-		};
-		impl->nativeRenderDistance = std::max(1.0f, iniFloat("fGrassStartFadeDistance:Grass", 6000) + iniFloat("fGrassFadeRange:Grass", 2000));
-		if (auto setting = RE::GetINISetting("fGrassFadeInTime:Grass")) {
-			const auto value = setting->GetFloat();
-			impl->fadeInSeconds = std::isfinite(value) && value > 0 ? value : 0;
-		}
+		// Grass plugins finish applying their INI overrides before the first visibility pass.
+		impl->nativeSettingsReady = false;
 		DX::ThrowIfFailed(globals::d3d::context->QueryInterface(__uuidof(ID3D11DeviceContext1), impl->context.put_void()));
 		D3D11_SUBRESOURCE_DATA data{};
 		D3D11_BUFFER_DESC desc = ConstantBufferDesc(64, false);
@@ -1260,6 +1365,11 @@ void GrassBucketRenderer::ClearShaderCache()
 
 void GrassBucketRenderer::EndFrame()
 {
+	std::vector<std::shared_ptr<const QueuedGroup>> retired;
+	{
+		std::scoped_lock lock(impl->captureMutex);
+		retired.swap(impl->queuedGroups);
+	}
 	impl->ClearDrawContext();
 	for (auto& bucket : impl->buckets)
 		bucket.plan.Retire();
@@ -2018,11 +2128,12 @@ void GrassBucketRenderer::Impl::PrepareCulling(RE::BSRenderPass* pass, RE::BSSha
 				continue;
 			{
 				// Removal hooks must wait until native setup finishes reading the representative.
+				const GrassRuntime::GroupReadLock groupsLock;
 				std::scoped_lock lock(captureMutex);
 				auto& source = bucket.sources.front();
 				if (!source.queue || source.queue->queuedFrame != frame)
 					continue;
-				if (source.queue->members.size() != bucket.sources.size()) {
+				if (!MatchesQueuedSources(bucket)) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 					if (diagnostics.load(std::memory_order_relaxed))
 						RejectDraw(DrawRejection::QueueMembership);
@@ -2078,6 +2189,7 @@ bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, Outcome& outcome)
 	if (!ownership) {
 		if (!HasBatchDrawState())
 			return false;
+		const GrassRuntime::GroupReadLock groupsLock;
 		std::shared_lock lock(captureMutex);
 		for (const auto& source : bucket.sources)
 			if (!source.lifetime->alive.load(std::memory_order_acquire) ||
@@ -2431,26 +2543,14 @@ void GrassBucketRenderer::DrawRenderPass(RE::BSRenderPass* pass, uint32_t techni
 		draw(pass, technique, alphaTest, flags);
 		return;
 	}
-	std::shared_ptr<QueueGroup> queue;
-	if (pass && pass->geometry && pass->shader && pass->shader->shaderType == RE::BSShader::Type::Grass && !impl->nativeFallbackDepth) {
-		std::scoped_lock lock(impl->captureMutex);
-		const auto found = impl->residents.find(static_cast<RE::BSMultiStreamInstanceTriShape*>(pass->geometry));
-		if (found != impl->residents.end() && found->second.queue &&
-			found->second.queue->queuedFrame == globals::state->frameCountAtomic.load(std::memory_order_relaxed))
-			queue = found->second.queue;
-	}
-	if (!queue && pass && pass->geometry && pass->shader && pass->shader->shaderType == RE::BSShader::Type::Grass) {
+	std::shared_ptr<const QueuedGroup> queued;
+	{
 		std::shared_lock lock(impl->captureMutex);
-		for (const auto& entry : impl->queues) {
-			auto candidate = entry.second.lock();
-			if (candidate && candidate->queuedFrame == globals::state->frameCountAtomic.load(std::memory_order_relaxed) &&
-				candidate->representative.load(std::memory_order_acquire) == pass->geometry) {
-				queue = std::move(candidate);
-				break;
-			}
-		}
+		queued = impl->QueuedFor(static_cast<RE::BSMultiStreamInstanceTriShape*>(pass->geometry), globals::state->frameCountAtomic.load(std::memory_order_relaxed));
 	}
-	if (queue)
+	if (queued && queued->representative != pass->geometry)
+		queued.reset();
+	if (queued)
 		impl->MakeNativeVisible(static_cast<RE::BSMultiStreamInstanceTriShape*>(pass->geometry));
 	draw(pass, technique, alphaTest, flags);
 	if (impl->current == pass->geometry && impl->currentAdmission.bucket < impl->buckets.size() && impl->currentMainPass) {
@@ -2458,32 +2558,31 @@ void GrassBucketRenderer::DrawRenderPass(RE::BSRenderPass* pass, uint32_t techni
 		if (bucket.outcomes.MainOutcome() == Outcome::Batched)
 			return;
 	}
-	if (!queue)
+	if (!queued)
 		return;
 	++impl->nativeFallbackDepth;
 	const SKSE::stl::scope_exit restore([&]() noexcept { --impl->nativeFallbackDepth; });
-	size_t member = 0;
-	for (;;) {
-		RE::NiPointer<RE::BSMultiStreamInstanceTriShape> shape;
+	std::vector<RE::BSLight*> lights;
+	for (const auto& member : queued->members) {
+		auto* shape = member.shape.get();
+		if (shape == pass->geometry || !member.lifetime->alive.load(std::memory_order_acquire))
+			continue;
 		RE::NiPointer<RE::BSShaderProperty> property;
 		{
+			const GrassRuntime::GroupReadLock groupsLock;
 			std::scoped_lock lock(impl->captureMutex);
-			if (member >= queue->members.size())
-				break;
-			auto identity = queue->members[member++];
-			if (identity == pass->geometry)
+			property = shape->GetGeometryRuntimeData().shaderProperty;
+			if (!property || property->GetRTTI() != REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSGrassShaderProperty }.get())
 				continue;
-			const auto found = impl->residents.find(identity);
-			if (found == impl->residents.end() || !found->second.lifetime->alive.load(std::memory_order_acquire) ||
-				!CurrentGeometry(found->second) || !CurrentContract(found->second))
-				continue;
-			shape.reset(identity);
-			property = found->second.property;
+			const auto& data = GrassRuntime::GetPropertyData(static_cast<RE::BSGrassShaderProperty*>(property.get()), globals::game::isVR);
+			lights.assign(data.lightData.lights.begin(), data.lightData.lights.end());
+			impl->MakeNativeVisibleLocked(shape);
 		}
 		auto nativePass = *pass;
-		nativePass.geometry = shape.get();
+		nativePass.geometry = shape;
 		nativePass.shaderProperty = property.get();
-		impl->MakeNativeVisible(shape.get());
+		nativePass.sceneLights = lights.empty() ? nullptr : lights.data();
+		nativePass.numLights = uint8_t(std::min(lights.size(), size_t(UINT8_MAX)));
 		draw(&nativePass, technique, alphaTest, flags);
 	}
 }

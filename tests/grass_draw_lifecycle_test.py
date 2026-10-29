@@ -27,6 +27,9 @@ def run_fixture(source: str, devbench: bool) -> subprocess.CompletedProcess:
         "void GrassBucketRenderer::PrepareGeometry(", "void GrassBucketRenderer::DrawGroup(",
         "void GrassBucketRenderer::Impl::MakeNativeVisible(", "void GrassBucketRenderer::RemoveShape(",
         "void GrassBucketRenderer::Impl::EraseResident(",
+        "void GrassBucketRenderer::Impl::UnassignQueue(",
+        "std::shared_ptr<const QueuedGroup> GrassBucketRenderer::Impl::QueuedFor(",
+        "bool GrassBucketRenderer::Impl::MatchesQueuedSources(",
         "void GrassBucketRenderer::Impl::PrepareCulling(", "bool GrassBucketRenderer::Impl::DrawBucket(",
         "bool GrassBucketRenderer::Impl::DrawMainPass(",
         "void GrassBucketRenderer::DrawRenderPass(",
@@ -69,6 +72,51 @@ void Fixture::Restore() {
     BSGrassShader_RestoreGeometry::thunk(&shader, &pass, 0);
 }
 void Require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+void CheckQueuedStreamingFallback() {
+    for (unsigned mutation = 0; mutation < 4; ++mutation) {
+        Fixture f;
+        auto otherShape = f.shape;
+        auto otherSource = f.renderer.impl->buckets.front().sources.front();
+        otherSource.identity = &otherShape;
+        otherSource.lifetime = std::make_shared<Lifetime>();
+        auto queue = otherSource.queue;
+        queue->members.push_back(&otherShape);
+        queue->instances += 4;
+        ++queue->slices;
+        f.renderer.impl->buckets.front().sources.push_back(otherSource);
+        f.renderer.impl->buckets.front().instances += 4;
+        f.renderer.impl->residents.emplace(&otherShape, otherSource);
+        f.QueueSources();
+        const auto retire = [&] {
+            f.renderer.impl->EraseResident(&otherShape);
+            ++otherSource.lifetime->generation;
+        };
+        if (mutation == 1) retire();
+        if (mutation == 2) {
+            retire();
+            f.renderer.impl->EraseResident(&f.shape);
+        }
+        std::vector<RE::BSMultiStreamInstanceTriShape*> drawn;
+        static std::function<void(RE::BSRenderPass*)> visit;
+        visit = [&](RE::BSRenderPass* pass) {
+            drawn.push_back(pass->geometry);
+            if (mutation == 3 && pass->geometry == &f.shape) retire();
+        };
+        for (unsigned pass = 0; pass < 2; ++pass) {
+            drawn.clear();
+            f.renderer.DrawRenderPass(&f.pass, 0, false, 0,
+                [](RE::BSRenderPass* native, uint32_t, bool, uint32_t) { visit(native); });
+            Require(drawn == std::vector{&f.shape, &otherShape},
+                "Streaming invalidation lost or duplicated a suppressed native draw");
+            ++f.pass.passEnum;
+        }
+        Require(f.renderer.impl->submissions == 0, "Native fallback unexpectedly submitted a batch");
+        const auto pinned = otherSource.lifetime->queued.lock();
+        Require(pinned && pinned->members.size() == 2, "Queued sources were not retained for paired passes");
+        f.renderer.EndFrame();
+        Require(f.renderer.impl->queuedGroups.empty(), "Frame-end retained stale native draw owners");
+    }
+}
 void CheckRenderFamilyIsolation() {
     {
         Fixture f;
@@ -84,6 +132,7 @@ void CheckRenderFamilyIsolation() {
         ++otherSource.queue->slices;
         f.renderer.impl->residents.emplace(&otherShape, otherSource);
         f.renderer.impl->admitted.emplace(&otherShape, Admission{0, 1});
+        f.QueueSources();
         f.renderer.impl->ready = true;
         const auto draw = [](RE::BSRenderPass* pass, uint32_t, bool, uint32_t) {
             auto& current = *Fixture::active;
@@ -278,6 +327,7 @@ int main() {
         for (bool vr : {false, true}) {
             globals::game::isVR = vr;
             CheckRenderFamilyIsolation();
+            CheckQueuedStreamingFallback();
             for (bool loaded : {false, true}) for (bool enabled : {false, true}) {
                 Fixture f;
                 globals::features::grassOptimizations.loaded = loaded;
@@ -321,7 +371,7 @@ int main() {
                 if (invalid == 0) source.lifetime->alive = false;
                 if (invalid == 1) ++source.lifetime->generation;
                 if (invalid == 2) source.groupsCurrent = false;
-                if (invalid == 3) source.queue->members.clear();
+                if (invalid == 3) source.lifetime->queued.reset();
                 if (invalid == 4) source.queue->representative = nullptr;
                 if (invalid == 5) source.queue.reset();
                 if (invalid == 6) ++source.queue->queuedFrame;
@@ -340,6 +390,7 @@ int main() {
                 source.queue->representative = &otherShape;
                 state.residents.emplace(&otherShape, source);
                 state.identities.emplace(&otherShape, std::make_pair(source.lifetime, std::string{}));
+                f.QueueSources();
                 state.ready = true;
                 f.Setup();
                 std::promise<bool> attempted;
@@ -406,6 +457,7 @@ int main() {
                 source.identity = &otherShape;
                 source.queue->members = {&otherShape};
                 source.queue->representative = &otherShape;
+                f.QueueSources();
                 f.renderer.impl->ready = true;
                 f.renderer.impl->throwOnPrepare = failPreparation;
                 f.Setup();

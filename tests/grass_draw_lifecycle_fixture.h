@@ -69,6 +69,10 @@ namespace RE
 	struct NiPointer
 	{
 		std::shared_ptr<T> value;
+		NiPointer() = default;
+		explicit NiPointer(T* pointer) { reset(pointer); }
+		explicit operator bool() const { return value != nullptr; }
+		T* operator->() const { return value.get(); }
 		void reset(T* pointer)
 		{
 			value = std::shared_ptr<T>(pointer, [](T*) {});
@@ -82,8 +86,13 @@ namespace RE
 	};
 	struct BSLight
 	{};
+	struct NiRTTI
+	{};
+	inline NiRTTI grassRTTI;
+	inline const NiRTTI* NiRTTI_BSGrassShaderProperty = &grassRTTI;
 	struct BSShaderProperty
 	{
+		const NiRTTI* GetRTTI() const { return &grassRTTI; }
 		enum class EShaderPropertyFlag
 		{
 			kEffectLighting
@@ -97,6 +106,10 @@ namespace RE
 	struct BSGrassShaderProperty : BSShaderProperty
 	{
 		uint32_t windTimer = std::bit_cast<uint32_t>(9.f);
+		struct
+		{
+			std::vector<BSLight*> lights;
+		} lightData;
 	};
 	namespace BSGraphics
 	{
@@ -169,6 +182,11 @@ namespace RE
 }
 namespace GrassRuntime
 {
+	struct GroupReadLock
+	{
+		GroupReadLock() {}
+		~GroupReadLock() {}
+	};
 	using SetupGeometry = void (*)(RE::BSShader*, RE::BSRenderPass*, uint32_t);
 	inline auto& GetPropertyData(RE::BSGrassShaderProperty* property, bool) { return *property; }
 }
@@ -186,6 +204,10 @@ namespace REL
 		static inline bool throwNext = false;
 		Relocation() = default;
 		Relocation(RelocationID) {}
+		Relocation(const RE::NiRTTI* value)
+			requires std::is_same_v<T, const RE::NiRTTI*>
+			: target(value)
+		{}
 		Pointer get() const { return target; }
 		template <class... Args>
 		void operator()(Args&&... args) const
@@ -223,10 +245,12 @@ struct Group
 	BufferReference buffer;
 	uint32_t count = 4;
 };
+struct QueuedGroup;
 struct Lifetime
 {
 	std::atomic_bool alive{ true };
 	std::atomic_uint64_t generation{ 0 };
+	std::weak_ptr<const QueuedGroup> queued;
 };
 struct Queue
 {
@@ -237,6 +261,18 @@ struct Queue
 	std::vector<RE::BSMultiStreamInstanceTriShape*> members;
 };
 using QueueGroup = Queue;
+struct QueuedShape
+{
+	RE::NiPointer<RE::BSMultiStreamInstanceTriShape> shape;
+	std::shared_ptr<Lifetime> lifetime;
+};
+struct QueuedGroup
+{
+	uint32_t frame;
+	RE::BSMultiStreamInstanceTriShape* representative;
+	std::shared_ptr<QueueGroup> queue;
+	std::vector<QueuedShape> members;
+};
 struct Source
 {
 	RE::BSMultiStreamInstanceTriShape* identity;
@@ -366,6 +402,7 @@ public:
 		std::unordered_map<RE::BSMultiStreamInstanceTriShape*, std::pair<std::shared_ptr<Lifetime>, std::string>> identities;
 		uint64_t residentRevision = 0, cpuRecordBytes = 0;
 		std::unordered_map<unsigned, std::weak_ptr<Queue>> queues;
+		std::vector<std::shared_ptr<const QueuedGroup>> queuedGroups;
 		GrassPolicy::Settings frameSettings;
 		bool geometryCPUValid = false, failed = false, ready = false, cullingPrepared = false, throwOnPrepare = false;
 		bool allCulled = false, throwOnUpload = false;
@@ -398,6 +435,9 @@ public:
 		void MakeNativeVisible(RE::BSMultiStreamInstanceTriShape*);
 		void MakeNativeVisibleLocked(RE::BSMultiStreamInstanceTriShape*) {}
 		void EraseResident(RE::BSMultiStreamInstanceTriShape*);
+		void UnassignQueue(Source&);
+		std::shared_ptr<const QueuedGroup> QueuedFor(RE::BSMultiStreamInstanceTriShape*, uint32_t) const;
+		bool MatchesQueuedSources(const Bucket&) const;
 		std::function<void()> beforeBucketWork;
 		void RejectDraw(DrawRejection) {}
 		void UploadCulling()
@@ -509,6 +549,18 @@ struct Fixture
 		source.queue->representative = &shape;
 		renderer.impl->residents.emplace(&shape, source);
 		renderer.impl->queues.emplace(0, source.queue);
+		QueueSources();
+	}
+	void QueueSources()
+	{
+		auto& bucket = renderer.impl->buckets.front();
+		auto queued = std::make_shared<QueuedGroup>(1u, bucket.sources.front().queue->representative.load(), bucket.sources.front().queue);
+		for (auto& source : bucket.sources) {
+			renderer.impl->identities[source.identity].first = source.lifetime;
+			source.lifetime->queued = queued;
+			queued->members.push_back({ RE::NiPointer<RE::BSMultiStreamInstanceTriShape>{ source.identity }, source.lifetime });
+		}
+		renderer.impl->queuedGroups = { queued };
 	}
 	void Setup(uint32_t flags = 0);
 	void Restore();

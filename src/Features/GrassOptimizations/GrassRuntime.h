@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Utils/GrassGroupLock.h"
 #include <RE/B/BSGrassShaderProperty.h>
 #include <RE/B/BSMultiStreamInstanceTriShape.h>
 #include <RE/B/BSRenderPass.h>
@@ -14,6 +15,35 @@
 
 namespace GrassRuntime
 {
+	/** @brief Retain a borrowed shape only while it is live; the caller excludes its deleting destructor. */
+	inline RE::NiPointer<RE::BSMultiStreamInstanceTriShape> TryRetainShape(RE::BSMultiStreamInstanceTriShape* shape)
+	{
+		RE::stl::atomic_ref refs{ shape->_refCount };
+		auto count = refs.load();
+		while (count && count < UINT32_MAX - 1) {
+			if (refs.compare_exchange_weak(count, count + 1)) {
+				RE::NiPointer<RE::BSMultiStreamInstanceTriShape> retained{ shape };
+				shape->DecRefCount();
+				return retained;
+			}
+		}
+		return {};
+	}
+
+	/** @brief Borrow attached native groups in the same lock order as grass visibility. */
+	class GroupReadLock : public Util::GrassGroupLock
+	{
+	public:
+		GroupReadLock() : GrassGroupLock(Word()) {}
+
+	private:
+		static volatile uint32_t& Word()
+		{
+			static REL::Relocation<volatile uint32_t*> word{ REL::VariantID(524610, 411250, 0x317C990) };
+			return *word;
+		}
+	};
+
 	using SetupGeometry = void (*)(RE::BSShader*, RE::BSRenderPass*, uint32_t);
 	/** @brief Detect structural attachment changes cheaply; in-place edits still require generation hooks. */
 	struct GroupLayout

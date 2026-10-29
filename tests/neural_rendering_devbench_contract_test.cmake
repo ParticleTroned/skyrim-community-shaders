@@ -1396,7 +1396,7 @@ foreach(_continuity_decision IN ITEMS menuContinuityAllowed replayMenuContinuity
 endforeach()
 
 foreach(_live_menu_layer_contract IN ITEMS
-    [[return IsKnownGameMenuContextActive() || (vrMenuFrameTransaction.frame == currentFrame &&]]
+    [[return IsKnownGameMenuContextActive() || (IsVRMenuTransportContractPresent() && IsVRActivationPromptContextActive()) || (vrMenuFrameTransaction.frame == currentFrame &&]]
     [[vrMenuFrameTransaction.menuLayerRequired ||]]
     [[vrMenuFrameTransaction.mapLayerRequired ||]]
     [[vrMenuFrameTransaction.recognizedOperations != 0 ||]]

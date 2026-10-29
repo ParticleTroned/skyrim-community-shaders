@@ -42,6 +42,24 @@ extract_between(
     "vr_map_presentation_context_under_test.h"
 )
 extract_between(
+    "${_upscaling}"
+    "bool IsExplicitVRMenuPresentationContextActive()\n\t{"
+    "\n\tuint64_t EncodeVRMenuBridgeTraceState("
+    "vr_explicit_menu_context_under_test.h"
+)
+extract_between(
+    "${_upscaling}"
+    "const auto requiresNeuralMenuLayer = [&]() {"
+    "\n\tconst bool csOverlayOpen ="
+    "vr_neural_menu_requirement_under_test.h"
+)
+extract_between(
+    "${_upscaling}"
+    "const bool sourceMenuContextActive = menuWorldUIBridge ?"
+    "\n\t// Gameplay prompts must not arm menu tails"
+    "vr_menu_capture_owner_under_test.h"
+)
+extract_between(
     "${_header}"
     "struct VRMenuFrameTransaction\n"
     "\n\tuint32_t vrMenuFinalCompositeFrame"

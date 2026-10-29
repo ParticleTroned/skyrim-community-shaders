@@ -76,6 +76,7 @@ namespace globals
 	namespace game
 	{
 		RE::UI* ui = nullptr;
+		bool isVR = true;
 	}
 }
 namespace
@@ -101,6 +102,7 @@ try {
 	Require(!Util::IsMenuOpen<RE::MainMenu>(nullptr), "missing UI admitted a menu");
 	Require(!IsMainOrLoadingMenuContextActive() && !IsSkyrimMenuPresentationContextActive(nullptr), "missing UI admitted a context");
 	Require(!IsRaceSexMenuContextActive(nullptr) && !IsStatsMenuContextActive() && !IsDialogueMenuContextActive(), "missing UI admitted another context");
+	Require(!IsVRActivationPromptContextActive(), "missing UI admitted an activation prompt");
 	Require(RE::BSFixedString::constructions == 0, "menu keys were interned before UI availability");
 
 	RE::UI ui;
@@ -163,6 +165,19 @@ try {
 		ui.menuMap.clear();
 		Require(!IsSkyrimMenuPresentationContextActive(&ui), "presentation scan retained a removed menu");
 	}
+	auto custom = std::make_shared<RE::IMenu>();
+	for (const auto name : { "CustomMenu", "FavoritesMenu", "GiftMenu", "Credits Menu", "CalibrationOptionMenu" }) {
+		ui.menuMap.clear();
+		ui.menuMap[RE::BSFixedString{ name }].menu = custom;
+		for (bool open : { true, false, true }) {
+			custom->onStack = open;
+			Require(IsSkyrimMenuPresentationContextActive(&ui) == open, "required menu host was not recognized");
+		}
+	}
+	ui.menuMap.clear();
+	ui.menuMap[RE::BSFixedString{ "AlternatePerspectiveMenu" }].menu = custom;
+	Require(!IsSkyrimMenuPresentationContextActive(&ui), "SWF asset name was treated as the SKSE menu host");
+	ui.menuMap.clear();
 	ui.menuMap[RE::BSFixedString{ "Unrelated Menu" }].menu = main;
 	Require(!IsSkyrimMenuPresentationContextActive(&ui), "unrelated open menu changed presentation eligibility");
 	for (auto name : { RE::RaceSexMenu::MENU_NAME, RE::StatsMenu::MENU_NAME, RE::DialogueMenu::MENU_NAME }) {
@@ -180,10 +195,30 @@ try {
 	Require(IsStatsMenuContextActive() && IsDialogueMenuContextActive(), "existing event guards were lost");
 	g_vrStatsMenuOpenFromEvent = g_vrDialogueMenuOpenFromEvent = false;
 
+	ui.menuMap.clear();
+	const RE::BSFixedString activationKey{ "WSActivateRollover" };
+	auto activation = std::make_shared<RE::IMenu>();
+	ui.menuMap[activationKey].menu = activation;
+	Require(!IsVRActivationPromptContextActive(), "off-stack activation prompt appeared open");
+	const auto activationConstructions = RE::BSFixedString::constructions;
+	for (bool open : { true, false, true }) {
+		activation->onStack = open;
+		Require(IsVRActivationPromptContextActive() == open, "activation prompt transition was cached");
+		Require(!IsSkyrimMenuPresentationContextActive(&ui), "gameplay prompt entered the full-menu policy");
+	}
+	Require(RE::BSFixedString::constructions == activationConstructions, "activation checks re-interned their key");
+	globals::game::isVR = false;
+	Require(!IsVRActivationPromptContextActive(), "activation overlay admitted a non-VR runtime");
+	globals::game::isVR = true;
+	ui.menuMap.erase(activationKey);
+	Require(!IsVRActivationPromptContextActive(), "removed activation prompt remained active");
+	ui.menuMap[activationKey].menu = activation;
+
 	RE::UI replacement;
 	globals::game::ui = &replacement;
 	globals::state = nullptr;
 	Require(!IsMainOrLoadingMenuContextActive() && !IsSkyrimMenuPresentationContextActive(&replacement), "UI replacement reused old state");
+	Require(!IsVRActivationPromptContextActive(), "UI replacement retained an old activation prompt");
 	globals::game::ui = nullptr;
 	Require(!IsMainOrLoadingMenuContextActive(), "teardown retained menu state");
 	std::cout << "Menu lookup live state, key reuse, lifetime and context checks passed\n";

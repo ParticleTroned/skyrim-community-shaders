@@ -13,6 +13,7 @@ namespace
 	static_assert(std::atomic<VRMapMenuEventState>::is_always_lock_free);
 	std::atomic_uint64_t g_neuralMenuQueryEpoch{ 1 };
 	bool explicitMenu = true;
+	bool activationPrompt = false;
 	bool presentationTail = false;
 	bool csMenu = false;
 	uint32_t menuQueries = 0;
@@ -58,14 +59,18 @@ namespace
 	std::atomic_bool g_vrRaceSexMenuOpenFromEvent{ false };
 	bool IsMainMenuContextActive() { return false; }
 	bool IsLoadingMenuContextActive() { return false; }
-	bool IsSkyrimMenuPresentationContextActive(const void*) { return explicitMenu; }
-#include "vr_known_menu_context_under_test.h"
-#include "vr_non_loading_menu_context_under_test.h"
-	bool IsExplicitVRMenuPresentationContextActive()
+	bool IsSkyrimMenuPresentationContextActive(const void*)
 	{
 		++menuQueries;
-		return globals::game::isVR && IsKnownGameMenuContextActive();
+		return explicitMenu;
 	}
+	bool IsVRActivationPromptContextActive() { return globals::game::isVR && activationPrompt; }
+	bool IsStatsMenuContextActive() { return g_vrStatsMenuOpenFromEvent.load(); }
+	bool IsDialogueMenuContextActive() { return g_vrDialogueMenuOpenFromEvent.load(); }
+	bool IsKnownGameMenuContextActive();
+#include "vr_explicit_menu_context_under_test.h"
+#include "vr_known_menu_context_under_test.h"
+#include "vr_non_loading_menu_context_under_test.h"
 	bool IsVRMenuPresentationTailActive(const globals::State*)
 	{
 		++tailQueries;
@@ -73,7 +78,7 @@ namespace
 	}
 	[[maybe_unused]] bool IsVRMenuPresentationContextActive()
 	{
-		return IsExplicitVRMenuPresentationContextActive() ||
+		return (globals::game::isVR && IsKnownGameMenuContextActive()) ||
 		       (globals::game::isVR && IsVRMenuPresentationTailActive(globals::state));
 	}
 }
@@ -117,6 +122,21 @@ struct Upscaling
 	bool vrMenuDesktopPairPendingPresent = false;
 	uint32_t vrMenuDesktopRetainedPairPlanGeneration = 0;
 	bool vrMenuDesktopRetainedPairValid = false;
+	bool transportPresent = true;
+	bool IsVRMenuTransportContractPresent() const { return transportPresent; }
+	bool RequiresNeuralMenuLayer(uint32_t currentFrame) const
+	{
+#include "vr_neural_menu_requirement_under_test.h"
+		return requiresNeuralMenuLayer();
+	}
+	bool CanCaptureBridge(bool menuWorldUIBridge, bool statsWorldUIEligible,
+		bool mapWorldUIEligible, bool dialogueWorldUIEligible, bool activationWorldUIEligible,
+		bool loadingDirectBridge, bool mainMenuDirectBridge, uint64_t contextChangeSequence) const
+	{
+		auto decide = [](const char*, bool result) { return result; };
+#include "vr_menu_capture_owner_under_test.h"
+		return true;
+	}
 
 	uint32_t GetActiveVRRenderScaleContractGeneration() const { return activePlanGeneration; }
 	bool IsVRMapMenuPresentationActive() const;
@@ -470,6 +490,85 @@ namespace
 			"non-VR state acquired VR tail ownership");
 		globals::game::isVR = true;
 	}
+
+	void TestActivationPromptLifetime()
+	{
+		Upscaling upscaling;
+		explicitMenu = false;
+		activationPrompt = true;
+		presentationTail = false;
+		Require(IsExplicitVRMenuPresentationContextActive(), "activation prompt cannot own a layer");
+		Require(!IsKnownGameMenuContextActive() && !IsNonLoadingVRGameMenuPresentationContextActive(),
+			"activation prompt entered the full-menu scene policy");
+		PublishLayer(upscaling, 900);
+		upscaling.vrMenuFrameTransaction.presentationDecisionLatched = true;
+		upscaling.vrMenuFrameTransaction.presentationStarted = true;
+		activationPrompt = false;
+		upscaling.NotifyVRMenuPresentationContextChange("activation-prompt-close");
+		upscaling.BeginVRMenuFinalCompositeFrame(900);
+		Require(upscaling.vrMenuCommittedLayerValid, "prompt close changed the second eye's layer");
+		upscaling.BeginVRMenuFinalCompositeFrame(901);
+		Require(!upscaling.vrMenuCommittedLayerValid, "prompt close retained its old layer");
+		activationPrompt = true;
+		upscaling.NotifyVRMenuPresentationContextChange("activation-prompt-open");
+		PublishLayer(upscaling, 902);
+		activationPrompt = false;
+		upscaling.BeginVRMenuFinalCompositeFrame(903);
+		Require(!upscaling.vrMenuCommittedLayerValid, "missed prompt close event retained stale pixels");
+		activationPrompt = true;
+		PublishLayer(upscaling, 904);
+		explicitMenu = true;
+		upscaling.NotifyVRMenuPresentationContextChange("inventory-open-over-prompt");
+		upscaling.BeginVRMenuFinalCompositeFrame(905);
+		Require(!upscaling.vrMenuCommittedLayerValid, "nested menu reused the prompt-only layer");
+		PublishLayer(upscaling, 905);
+		explicitMenu = false;
+		upscaling.NotifyVRMenuPresentationContextChange("inventory-close-over-prompt");
+		upscaling.BeginVRMenuFinalCompositeFrame(906);
+		Require(!upscaling.vrMenuCommittedLayerValid, "remaining prompt kept the closed inventory layer");
+		PublishLayer(upscaling, 906);
+		Require(upscaling.vrMenuCommittedLayerFrame == 906, "remaining prompt failed to publish fresh content");
+		activationPrompt = false;
+	}
+
+	void TestActivationNeuralRequirement()
+	{
+		Upscaling upscaling;
+		explicitMenu = false;
+		activationPrompt = true;
+		Require(upscaling.RequiresNeuralMenuLayer(1000), "supported prompt transport lost text isolation");
+		upscaling.transportPresent = false;
+		Require(!upscaling.RequiresNeuralMenuLayer(1000), "unsupported prompt transport blocked neural rendering");
+		explicitMenu = true;
+		Require(upscaling.RequiresNeuralMenuLayer(1000), "full-menu protection depends on prompt transport");
+		explicitMenu = false;
+		activationPrompt = false;
+		upscaling.vrMenuFrameTransaction.frame = 1000;
+		upscaling.vrMenuFrameTransaction.suppressedOperations = 1;
+		Require(upscaling.RequiresNeuralMenuLayer(1000), "owned work lost isolation after context close");
+		Require(!upscaling.RequiresNeuralMenuLayer(1001), "stale prompt transaction blocked neural rendering");
+	}
+
+	void TestCaptureOwnerRevalidation()
+	{
+		Upscaling upscaling;
+		explicitMenu = false;
+		activationPrompt = true;
+		auto promptDraw = [&]() { return upscaling.CanCaptureBridge(true, false, false, false, true, false, false, 0); };
+		auto hudDraw = [&]() { return upscaling.CanCaptureBridge(false, false, false, false, false, false, false, 0); };
+		Require(promptDraw(), "live prompt source was rejected");
+		Require(!hudDraw(), "prompt authorized a closed full menu's HUD source");
+		explicitMenu = true;
+		activationPrompt = false;
+		Require(!promptDraw(), "unrelated full menu authorized a closed prompt's WORLDUI source");
+		Require(hudDraw(), "live full menu lost its HUD source");
+		activationPrompt = true;
+		Require(!upscaling.CanCaptureBridge(true, true, false, false, false, false, false, 0),
+			"prompt authorized a closed Stats source");
+		upscaling.NotifyVRMenuPresentationContextChange("close-and-reopen-during-preparation");
+		Require(!promptDraw() && !hudDraw(), "context replacement during preparation authorized an old draw");
+		explicitMenu = activationPrompt = false;
+	}
 }
 
 int main()
@@ -487,6 +586,9 @@ try {
 	TestUnsealedWorkWithoutRetainedLayer();
 	TestFailedCaptureRetirement();
 	TestMenuReplacementAndNonVR();
+	TestActivationPromptLifetime();
+	TestActivationNeuralRequirement();
+	TestCaptureOwnerRevalidation();
 	std::cout << "VR menu layer lifetime: close-frame recapture, stereo close, missing event, reopen, "
 				 "desktop retirement, open-menu fallback, query budget and plan changes passed\n";
 	return 0;

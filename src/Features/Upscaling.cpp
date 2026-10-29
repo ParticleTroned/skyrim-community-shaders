@@ -1967,10 +1967,12 @@ namespace
 		"StatsMenu",
 		"InventoryMenu",
 		"MagicMenu",
+		"FavoritesMenu",
 		"TweenMenu",
 		"Book Menu",
 		"ContainerMenu",
 		"BarterMenu",
+		"GiftMenu",
 		"Sleep/Wait Menu",
 		"Crafting Menu",
 		"Lockpicking Menu",
@@ -1980,8 +1982,13 @@ namespace
 		"MessageBoxMenu",
 		RE::RaceSexMenu::MENU_NAME,
 		"Tutorial Menu",
+		"Credits Menu",
+		"CalibrationOptionMenu",
 		"Console",
+		// SKSE hosts mod-provided Scaleform menus, including Alternate Perspective, here.
+		"CustomMenu",
 	};
+	constexpr std::string_view kVRActivationPromptMenuName = "WSActivateRollover";
 
 	constexpr const char* kFoveatedUpscalingMethodAvailabilityText = "VR FOV mask setup is available only with DLSS or FSR.";
 	constexpr const char* kFoveatedUpscalingSetupInstructions = R"(1) Select FOV only, then press Automatic Headset Setup. 100% Outer Coverage fits the view supplied by your headset.
@@ -7173,6 +7180,15 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		       Util::IsMenuOpen<RE::DialogueMenu>(ui);
 	}
 
+	bool IsVRActivationPromptContextActive()
+	{
+		auto* ui = globals::game::ui;
+		if (!globals::game::isVR || !ui)
+			return false;
+		static const RE::BSFixedString menuName{ kVRActivationPromptMenuName };
+		return Util::IsMenuOpen(ui, menuName);
+	}
+
 	void TrackVRFastTravelInteractionMenuLifecycle(const RE::MenuOpenCloseEvent* a_event)
 	{
 		if (!a_event || !globals::game::isVR || !globals::state)
@@ -7658,7 +7674,9 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 
 	bool IsExplicitVRMenuPresentationContextActive()
 	{
-		return globals::game::isVR && IsKnownGameMenuContextActive();
+		// Activation prompts own an overlay while gameplay and its temporal rendering continue.
+		return globals::game::isVR &&
+		       (IsKnownGameMenuContextActive() || IsVRActivationPromptContextActive());
 	}
 
 	uint64_t EncodeVRMenuBridgeTraceState(uint32_t a_frame, bool a_active)
@@ -8610,11 +8628,12 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		return state ? std::max(state->frameCount, 1u) : 0u;
 	}
 
-	static_assert(std::size(kSkyrimPresentationMenuNames) + 4u <= 32u);
+	static_assert(std::size(kSkyrimPresentationMenuNames) + 5u <= 32u);
 	constexpr uint32_t kVRMenuPresentationTraceMapBit = 1u << std::size(kSkyrimPresentationMenuNames);
 	constexpr uint32_t kVRMenuPresentationTraceMainBit = kVRMenuPresentationTraceMapBit << 1u;
 	constexpr uint32_t kVRMenuPresentationTraceLoadingBit = kVRMenuPresentationTraceMainBit << 1u;
 	constexpr uint32_t kVRMenuPresentationTraceRaceSexPreRollBit = kVRMenuPresentationTraceLoadingBit << 1u;
+	constexpr uint32_t kVRMenuPresentationTraceActivationPromptBit = kVRMenuPresentationTraceRaceSexPreRollBit << 1u;
 
 	uint32_t GetVRMenuPresentationTraceMenuBit(std::string_view a_menuName)
 	{
@@ -8629,6 +8648,8 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 			return kVRMenuPresentationTraceMainBit;
 		if (a_menuName == RE::LoadingMenu::MENU_NAME)
 			return kVRMenuPresentationTraceLoadingBit;
+		if (a_menuName == kVRActivationPromptMenuName)
+			return kVRMenuPresentationTraceActivationPromptBit;
 		return 0;
 	}
 
@@ -8663,6 +8684,8 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 			mask |= GetVRMenuPresentationTraceMenuBit(RE::RaceSexMenu::MENU_NAME);
 		if (g_vrMenuPresentationTraceRaceSexPreRollActive.load(std::memory_order_acquire))
 			mask |= kVRMenuPresentationTraceRaceSexPreRollBit;
+		if (IsVRActivationPromptContextActive())
+			mask |= kVRMenuPresentationTraceActivationPromptBit;
 		return mask;
 	}
 
@@ -8686,6 +8709,8 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 			append(RE::LoadingMenu::MENU_NAME);
 		if ((a_mask & kVRMenuPresentationTraceRaceSexPreRollBit) != 0)
 			append("RaceSexPreRoll");
+		if ((a_mask & kVRMenuPresentationTraceActivationPromptBit) != 0)
+			append(kVRActivationPromptMenuName);
 		return description.empty() ? "none" : description;
 	}
 
@@ -14314,11 +14339,8 @@ bool Upscaling::BeginVRMenuSemanticEpoch(
 		globals::state &&
 		vrMenuFrameTransaction.frame == globals::state->frameCount &&
 		vrMenuFrameTransaction.presentationDecisionLatched;
-	// Map keeps its mixed 3D/depth pass on the reduced engine target, but its
-	// exact projected/HUD bridges are still eligible for transparent overlay
-	// capture. Stats, Map, and Dialogue WORLDUI consumers share this mode-24 boundary;
-	// texture production and mixed depth-producing geometry remain outside the
-	// adapter.
+	// Only UI consumers at this mode-24 boundary enter the transparent overlay;
+	// texture production and mixed depth-producing geometry stay on the engine path.
 	context.eligible = menuRenderMode &&
 	                   adapterEligible &&
 	                   !postPresentationProducer;
@@ -15619,6 +15641,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	bool statsWorldUIEligible = false;
 	bool mapWorldUIEligible = false;
 	bool dialogueWorldUIEligible = false;
+	bool activationWorldUIEligible = false;
 	bool menuWorldUIBridge = false;
 	const bool loadingDirectBridge = authorizedDirectBridge && IsLoadingMenuContextActive();
 	const bool mainMenuDirectBridge =
@@ -15630,6 +15653,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		return decide("post-seal-source-producer", false);
 	if (vrMenuFrameTransaction.poisoned)
 		return decide("transaction-already-poisoned", false);
+	const uint64_t contextChangeSequence = vrMenuPresentationContextChangeConsumedSequence;
 	VRMenuCompositionTargetMatch destination{};
 	VRMenuCompositionTargetMatch menuSourceMatch{};
 	{
@@ -15658,12 +15682,15 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 			statsWorldUIEligible = IsStatsMenuContextActive();
 			mapWorldUIEligible = IsVRMapMenuPresentationActive();
 			dialogueWorldUIEligible = IsDialogueMenuContextActive();
+			activationWorldUIEligible = IsVRActivationPromptContextActive();
 		}
 		menuWorldUIBridge =
 			worldUISource &&
-			(statsWorldUIEligible || mapWorldUIEligible || dialogueWorldUIEligible);
+			(statsWorldUIEligible || mapWorldUIEligible || dialogueWorldUIEligible || activationWorldUIEligible);
 		if (!knownMenuSource && !menuWorldUIBridge)
 			return decide("menu-source-not-found", false);
+		if (!worldUISource && !IsKnownGameMenuContextActive())
+			return decide("activation-prompt-source-not-world-ui", false);
 
 		ID3D11RenderTargetView* rtv = nullptr;
 		ID3D11DepthStencilView* dsv = nullptr;
@@ -15685,10 +15712,8 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		if (destination.target != expectedDestination)
 			return decide("destination-target-mismatch", false);
 
-		// Suppressing a Stats, Map, or Dialogue world-UI consumer must not remove
-		// depth or stencil writes that later mixed geometry depends on. The replay
-		// remains an ordered transparent overlay while the original base keeps all
-		// geometry and depth-producing work.
+		// Suppressing a world-UI consumer must preserve depth/stencil writes needed
+		// by later geometry; only transparent overlay work can move to the final layer.
 		if (menuWorldUIBridge && dsv) {
 			ID3D11DepthStencilState* depthState = nullptr;
 			UINT stencilReference = 0;
@@ -15711,6 +15736,8 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 					reason = "map-world-ui-depth-stencil-write";
 				else if (dialogueWorldUIEligible)
 					reason = "dialogue-world-ui-depth-stencil-write";
+				else if (activationWorldUIEligible)
+					reason = "activation-world-ui-depth-stencil-write";
 				return decide(reason, false);
 			}
 		}
@@ -15771,18 +15798,26 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		graphicsState->projectionPosScaleY != 0.0f) {
 		return decide("menu-projection-dejitter-failed", false);
 	}
-	// Eligibility was checked before resource preparation. Revalidate the live
-	// menu context at the ownership boundary so an interleaved close event cannot
-	// publish a new layer or rearm any presentation tail.
-	if (!IsExplicitVRMenuPresentationContextActive())
+	// Revalidate the original source owner after preparation. A different open
+	// menu cannot authorize this draw, even if its close event was missed.
+	const bool sourceMenuContextActive = menuWorldUIBridge ?
+	                                         ((statsWorldUIEligible && IsStatsMenuContextActive()) ||
+												 (mapWorldUIEligible && IsVRMapMenuPresentationActive()) ||
+												 (dialogueWorldUIEligible && IsDialogueMenuContextActive()) ||
+												 (activationWorldUIEligible && IsVRActivationPromptContextActive())) :
+	                                     loadingDirectBridge  ? IsLoadingMenuContextActive() :
+	                                     mainMenuDirectBridge ? IsMainMenuContextActive() :
+	                                                            IsKnownGameMenuContextActive();
+	if (!sourceMenuContextActive ||
+		contextChangeSequence != vrMenuPresentationContextChangeSequence.load(std::memory_order_acquire))
 		return decide("menu-context-ended-before-capture", false);
 
-	// The exact reduced menu bridge is a direct menu-text signal. Arm the short
-	// observed tail only after an explicit menu context confirms this is not
-	// normal in-game projected UI/HUD work.
-	if (!menuWorldUIBridge)
-		ExtendVRObservedProjectedMenuTail(kVRObservedMenuPresentationTailFrames);
-	ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
+	// Gameplay prompts must not arm menu tails that suspend scene rendering policies.
+	if (IsKnownGameMenuContextActive()) {
+		if (!menuWorldUIBridge)
+			ExtendVRObservedProjectedMenuTail(kVRObservedMenuPresentationTailFrames);
+		ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
+	}
 	ExtendVRMenuBridgeTraceTail(kVRObservedMenuPresentationTailFrames);
 
 	const bool liveLayerDrawn = DrawVRMenuBridgeIntoFinalCompositeLayer(
@@ -15818,6 +15853,8 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 			successReason = "map-world-ui-layer-captured-original-suppressed";
 		else if (dialogueWorldUIEligible)
 			successReason = "dialogue-world-ui-layer-captured-original-suppressed";
+		else if (activationWorldUIEligible)
+			successReason = "activation-world-ui-layer-captured-original-suppressed";
 	} else if (semanticBridge) {
 		successReason = "semantic-layer-captured-original-suppressed";
 	} else if (loadingDirectBridge) {
@@ -21521,6 +21558,10 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 		ExtendVRMenuBridgeTraceTail();
 		globals::features::upscaling.NotifyVRMenuPresentationContextChange(
 			a_event->opening ? "menu-open" : "menu-close");
+	} else if (a_event && globals::game::isVR && a_event->menuName == kVRActivationPromptMenuName) {
+		ExtendVRMenuBridgeTraceTail();
+		globals::features::upscaling.NotifyVRMenuPresentationContextChange(
+			a_event->opening ? "activation-prompt-open" : "activation-prompt-close");
 	}
 	return RE::BSEventNotifyControl::kContinue;
 }
@@ -51811,7 +51852,7 @@ void Upscaling::PostDisplay()
 		IsVRNativeVendorDirectMenuPresentationContextActive(*this, globals::state);
 	const bool vrRenderScaleMenu =
 		IsVRRenderScaleTransitionSafetyRelevant(*this) &&
-		IsVRMenuPresentationContextActive();
+		(IsVRMenuPresentationContextActive() || IsVRActivationPromptContextActive());
 	const bool vrVendorMethod =
 		globals::game::isVR &&
 		IsVendorUpscalingMethod(GetRuntimeUpscaleMethod());
@@ -55317,7 +55358,8 @@ Upscaling::ClassifyVRRenderScaleOriginalSubmitFallback(
 	// It remains a valid active-contract fallback even though the optional menu
 	// composition transaction could not start.
 	const bool menuLayerFallbackUnsafe =
-		vrMenuCommittedLayerValid && IsVRMenuPresentationContextActive();
+		vrMenuCommittedLayerValid &&
+		(IsVRMenuPresentationContextActive() || IsVRActivationPromptContextActive());
 	// Fast-travel Loading and its close tail own a complete kVR_FRAMEBUFFER with
 	// Skyrim's fade. If CSX did not suppress any separately owned menu work, that
 	// framebuffer is always safer than returning success without calling OpenVR.
@@ -56855,11 +56897,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const bool currentMenuPresentationContext =
 		IsVRMenuPresentationContextActive();
 	const auto requiresNeuralMenuLayer = [&]() {
-		// Presentation cleanup deliberately outlives menu close. That tail alone
-		// has no UI to isolate, and close has already invalidated the old layer.
-		// Keep real open/nested menus and pending bridge work protected while
-		// allowing the world to resume NR immediately through an empty tail.
+		// Empty close tails need no isolation. Gameplay prompts require a late
+		// layer only where the render-scale transport can actually supply one.
 		return IsKnownGameMenuContextActive() ||
+		       (IsVRMenuTransportContractPresent() && IsVRActivationPromptContextActive()) ||
 		       (vrMenuFrameTransaction.frame == currentFrame &&
 				   (vrMenuFrameTransaction.menuLayerRequired ||
 					   vrMenuFrameTransaction.mapLayerRequired ||
@@ -57170,6 +57211,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		globals::game::isVR &&
 		(currentMenuPresentationContext || communityShadersMenuOpen);
 	const bool menuTextProtectionContext =
+		explicitMenuPresentationContext ||
 		resolutionPlan.knownMenuContextActive ||
 		resolutionPlan.menuContextActive ||
 		currentMenuPresentationContext ||
@@ -58284,7 +58326,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			serializedPresentationHandoffReady;
 		const bool cooldownStableCandidate =
 			vrRenderScaleMode &&
-			(!explicitMenuPresentationContext || stabilizerDoorHandoffPresentationReady) &&
+			(!IsKnownGameMenuContextActive() || stabilizerDoorHandoffPresentationReady) &&
 			(!submitPresentationContext || stabilizerDoorHandoffPresentationReady) &&
 			!presentationRenderTarget &&
 			(!resolutionPlan.knownMenuContextActive || stabilizerDoorHandoffPresentationReady) &&
@@ -68167,7 +68209,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 		});
 		func(a1);
 	}
-	if (globals::game::isVR && upscaling.IsVRRenderScaleModeLatched() && IsExplicitVRMenuPresentationContextActive()) {
+	if (globals::game::isVR && upscaling.IsVRRenderScaleModeLatched() && IsKnownGameMenuContextActive()) {
 		const bool observedProjectedMenu = IsCurrentRenderTargetVRObservedMenuPresentationSeedTexture();
 		if (observedProjectedMenu) {
 			ExtendVRObservedProjectedMenuTail();

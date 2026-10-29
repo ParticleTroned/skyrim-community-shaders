@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX SDK.
 //
-// Copyright (C) 2025 Advanced Micro Devices, Inc.
+// Copyright (C) 2026 Advanced Micro Devices, Inc.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files(the "Software"), to deal
@@ -67,6 +67,9 @@ enum FfxApiSurfaceFormat
     FFX_API_SURFACE_FORMAT_R8_TYPELESS,                 ///<  8 bit per channel, 1 channel typeless format
     FFX_API_SURFACE_FORMAT_R8G8_TYPELESS,               ///<  8 bit per channel, 2 channel typeless format
     FFX_API_SURFACE_FORMAT_R32_TYPELESS,                ///< 32 bit per channel, 1 channel typeless format
+    FFX_API_SURFACE_FORMAT_R32G32_UINT,                 ///< 32 bit per channel, 2 channel uint format
+
+    FFX_API_SURFACE_FORMAT_R8_SNORM,                    ///<  8 bit per channel, 1 channel signed normalized format
 };
 
 /// An enumeration of resource usage.
@@ -147,6 +150,14 @@ struct FfxApiFloatCoords2D
     float y; ///< The y coordinate of a 2-dimensional point.
 };
 
+/// A structure encapsulating a 3-dimensional set of floating point coordinates.
+struct FfxApiFloatCoords3D
+{
+    float x;  ///< The x coordinate of a 3-dimensional point.
+    float y;  ///< The y coordinate of a 3-dimensional point.
+    float z;  ///< The z coordinate of a 3-dimensional point.
+};
+
 /// A structure encapsulating a 2-dimensional rect.
 struct FfxApiRect2D
 {
@@ -183,6 +194,8 @@ struct FfxApiResourceDescription
     uint32_t     usage;     ///< Resource usage flags.
 };
 
+#define FFX_RESOURCE_NAME_SIZE 64
+
 struct FfxApiResource
 {
     void* resource;
@@ -196,3 +209,49 @@ typedef struct FfxApiEffectMemoryUsage
     uint64_t totalUsageInBytes;
     uint64_t aliasableUsageInBytes;
 } FfxApiEffectMemoryUsage;
+
+/// A structure describing a constant buffer allocation.
+///
+/// @ingroup SDKTypes
+typedef struct FfxApiConstantBufferAllocation
+{
+    struct FfxApiResource resource;  ///< The resource representing the constant buffer resource.
+    uint64_t       handle;    ///< The binding handle for the constant buffer
+
+} FfxApiConstantBufferAllocation;
+
+/// A function definition for a constant buffer allocation callback
+/// Used to provide a constant buffer allocator to the calling backend
+///
+/// @param [in] data                       The constant buffer data.
+/// @param [in] dataSize                   The size of the constant buffer data.
+///
+/// @ingroup SDKTypes
+typedef FfxApiConstantBufferAllocation(*FfxApiConstantBufferAllocator)(void* data, const uint64_t dataSize);
+
+/// A 4-component floating point vector
+typedef struct FfxApiFloat4
+{
+    float x;
+    float y;
+    float z;
+    float w;
+} FfxApiFloat4;
+
+/// A 4x4 matrix in row-major layout with row-vector convention.
+/// This is the canonical format expected by FFX APIs.
+///
+/// Memory layout: rows[row_index][column_index]
+/// Mathematical convention: v * M (row vector multiplied by matrix)
+typedef struct FfxApiMatrix4x4
+{
+    FfxApiFloat4 rows[4];  ///< Four rows of the matrix. Access as rows[row].x, rows[row].y etc.
+} FfxApiMatrix4x4;
+
+/// An inclusive floating-point interval [min, max].
+/// Valid instances must satisfy min <= max.
+typedef struct FfxApiFloatBounds
+{
+    float min; ///< Lower bound of the interval.
+    float max; ///< Upper bound of the interval.
+} FfxApiFloatBounds;

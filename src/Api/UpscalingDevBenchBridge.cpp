@@ -309,9 +309,9 @@ namespace
 		const auto value = Lower(a_value.get<std::string>());
 		if (value == "fsr3")
 			return UpscalingAPI::FSRRuntime::kFSR3;
-		if (value == "fsr4")
+		if (value == "auto" || value == "fsr4")
 			return UpscalingAPI::FSRRuntime::kFSR4;
-		throw std::runtime_error("target.fsrRuntime must be fsr3 or fsr4");
+		throw std::runtime_error("target.fsrRuntime must be fsr3, auto, or the legacy fsr4 alias");
 	}
 
 	UpscalingAPI::Profile001 ParseProfile(const json& a_value)
@@ -337,6 +337,7 @@ namespace
 			{ "renderScaleMode", a_value.renderScaleMode != 0 },
 			{ "dlssProfile", Named(a_value.dlssProfile) },
 			{ "fsrRuntime", Named(a_value.fsrRuntime) },
+			{ "fsrSelection", a_value.fsrRuntime == UpscalingAPI::FSRRuntime::kAutomatic ? "automatic" : "fsr3" },
 		};
 	}
 
@@ -749,7 +750,7 @@ namespace CSX::Api::UpscalingDevBenchBridge
 		if (g_installAttempted.exchange(true, std::memory_order_acq_rel))
 			return;
 		static constexpr const char* descriptor =
-			R"({"description":"Exercise the registered public csx.upscaling ABI through DevBench. Mutations require exact build identity and idempotency keys. Enabled Renderscale NR rejects incompatible profiles with neural_render_scale_required. It requires scaled DLSS and, in VR, active Render Scale. DLAA, native AA, TAA, FSR and None cannot be selected until NR is disabled or another NR mode is chosen. Foveated NR requires DLSS or FSR and a configured FOV mask. FSR Foveated NR uses the Full resolution final-scene path and shared FOV mask. FSR rejects Renderscale NR with or without FOV. Full resolution NR supports FSR with or without its optional FOV restriction.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["registry","capabilities","snapshot","preflight","apply","operation","events"],"default":"snapshot"},"expectedBuildId":{"type":"string"},"expectedStateRevision":{"type":"integer","minimum":0},"target":{"type":"object","properties":{"method":{"type":"string","enum":["none","taa","fsr","dlss"]},"qualityMode":{"type":"string","enum":["native_aa","hoshipa","ultra_quality","quality","balanced","performance","ultra_performance"]},"renderScaleMode":{"type":"boolean","description":"Must remain true while VR Renderscale NR is enabled. Disable NR or choose another NR mode before turning Render Scale off."},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"]}},"required":["method","qualityMode"]},"purpose":{"type":"string","enum":["direct","environment_profile_transition"]},"persistence":{"type":"string","enum":["runtime_only","persist_when_stable"]},"clientId":{"type":"string"},"commandId":{"type":"string"},"reason":{"type":"string"},"operationId":{"type":"integer","minimum":0},"afterEventId":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":500}}}})";
+			R"({"description":"Exercise the registered public csx.upscaling ABI through DevBench. Mutations require exact build identity and idempotency keys. Enabled Renderscale NR rejects incompatible profiles with neural_render_scale_required. It requires scaled DLSS and, in VR, active Render Scale. DLAA, native AA, TAA, FSR and None cannot be selected until NR is disabled or another NR mode is chosen. Foveated NR requires DLSS or FSR and a configured FOV mask. FSR Foveated NR uses the Full resolution final-scene path and shared FOV mask. FSR rejects Renderscale NR with or without FOV. Full resolution NR supports FSR with or without its optional FOV restriction.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["registry","capabilities","snapshot","preflight","apply","operation","events"],"default":"snapshot"},"expectedBuildId":{"type":"string"},"expectedStateRevision":{"type":"integer","minimum":0},"target":{"type":"object","properties":{"method":{"type":"string","enum":["none","taa","fsr","dlss"]},"qualityMode":{"type":"string","enum":["native_aa","hoshipa","ultra_quality","quality","balanced","performance","ultra_performance"]},"renderScaleMode":{"type":"boolean","description":"Must remain true while VR Renderscale NR is enabled. Disable NR or choose another NR mode before turning Render Scale off."},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","auto","fsr4"],"description":"auto selects an unpinned runtime provider by device capability. fsr4 is a legacy alias for auto, not an actual-provider guarantee. fsr3 explicitly selects FSR3. Responses retain fsrRuntime for compatibility and add fsrSelection; query communityshaders.fsr_temporal_tuning status for actual provider identity."}},"required":["method","qualityMode"]},"purpose":{"type":"string","enum":["direct","environment_profile_transition"]},"persistence":{"type":"string","enum":["runtime_only","persist_when_stable"]},"clientId":{"type":"string"},"commandId":{"type":"string"},"reason":{"type":"string"},"operationId":{"type":"integer","minimum":0},"afterEventId":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":500}}}})";
 		devBench->RegisterTool("communityshaders.upscaling_api", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);
 		logger::info("UpscalingDevBenchBridge: registered communityshaders.upscaling_api with devbench build {}", devBench->GetBuildNumber());

@@ -212,81 +212,10 @@ namespace
 			a_renderSize = Util::ConvertToDynamic(a_displaySize);
 	}
 
-	std::string ToUpperAscii(std::string a_value)
-	{
-		std::transform(a_value.begin(), a_value.end(), a_value.begin(), [](unsigned char c) {
-			return static_cast<char>(std::toupper(c));
-		});
-		return a_value;
-	}
-
-	FidelityFX::Fsr4AdapterSupport ClassifyFsr4AdapterSupport(const DXGI_ADAPTER_DESC& a_desc)
-	{
-		if (a_desc.VendorId != kAmdVendorId)
-			return FidelityFX::Fsr4AdapterSupport::Unsupported;
-
-		std::wstring wideDescription(a_desc.Description);
-		const std::string description = ToUpperAscii(stl::utf16_to_utf8(wideDescription).value_or(""));
-
-		// FSR 4.1.1 supports AMD's RDNA 3/RX 7000 and RDNA 4/RX 9000
-		// discrete GPUs. Do not treat a generic RDNA 3 marker as sufficient:
-		// it can also describe an unsupported integrated adapter.
-		const bool isKnownRdna3DiscreteDie =
-			description.find("NAVI31") != std::string::npos ||
-			description.find("NAVI 31") != std::string::npos ||
-			description.find("NAVI32") != std::string::npos ||
-			description.find("NAVI 32") != std::string::npos ||
-			description.find("NAVI33") != std::string::npos ||
-			description.find("NAVI 33") != std::string::npos;
-		if (isKnownRdna3DiscreteDie)
-			return FidelityFX::Fsr4AdapterSupport::RadeonRx7000;
-
-		if (description.find("RDNA4") != std::string::npos ||
-			description.find("RDNA 4") != std::string::npos ||
-			description.find("NAVI4") != std::string::npos ||
-			description.find("NAVI 4") != std::string::npos) {
-			return FidelityFX::Fsr4AdapterSupport::RadeonRx9000;
-		}
-
-		size_t searchPosition = 0;
-		while (searchPosition < description.length()) {
-			while (searchPosition < description.length() && !std::isdigit(static_cast<unsigned char>(description[searchPosition])))
-				searchPosition++;
-
-			const size_t modelStart = searchPosition;
-			while (searchPosition < description.length() && std::isdigit(static_cast<unsigned char>(description[searchPosition])))
-				searchPosition++;
-
-			if (searchPosition > modelStart) {
-				const std::string modelText = description.substr(modelStart, searchPosition - modelStart);
-				char* parseEnd = nullptr;
-				const unsigned long modelNumber = std::strtoul(modelText.c_str(), &parseEnd, 10);
-				const bool isRadeon7000Series = modelNumber >= 7000ul && modelNumber < 8000ul;
-				const bool isRadeon9000Series = modelNumber >= 9000ul && modelNumber < 10000ul;
-				if (parseEnd != modelText.c_str() && isRadeon7000Series)
-					return FidelityFX::Fsr4AdapterSupport::RadeonRx7000;
-				if (parseEnd != modelText.c_str() && isRadeon9000Series)
-					return FidelityFX::Fsr4AdapterSupport::RadeonRx9000;
-			}
-		}
-
-		// Keep fallbacks for abbreviated naming variants that don't include full numeric model text.
-		if (description.find("RX 70") != std::string::npos ||
-			description.find("RX70") != std::string::npos ||
-			description.find("RADEON 70") != std::string::npos) {
-			return FidelityFX::Fsr4AdapterSupport::RadeonRx7000;
-		}
-		if (description.find("RX 90") != std::string::npos ||
-			description.find("RX90") != std::string::npos ||
-			description.find("RADEON 90") != std::string::npos) {
-			return FidelityFX::Fsr4AdapterSupport::RadeonRx9000;
-		}
-
-		return FidelityFX::Fsr4AdapterSupport::Unsupported;
-	}
-
 	std::string UpscalerVersionToString(uint32_t a_version)
 	{
+		if (a_version == FidelityFX::RuntimeAutomaticVersion)
+			return "Automatic";
 		const uint32_t major = (a_version >> 22) & 0x3FFu;
 		const uint32_t minor = (a_version >> 12) & 0x3FFu;
 		const uint32_t patch = a_version & 0xFFFu;
@@ -305,22 +234,10 @@ namespace
 		return label;
 	}
 
-	bool RuntimeProviderNameMatchesVersion(const std::string& a_providerName, uint32_t a_version)
+	bool RuntimeProviderMatchesVersion(uint64_t a_providerId, uint32_t a_version)
 	{
-		return !a_providerName.empty() &&
-		       a_providerName.find(UpscalerVersionToString(a_version)) != std::string::npos;
-	}
-
-	bool RuntimeProviderIdMatchesVersion(uint64_t a_providerId, uint32_t a_version)
-	{
-		return a_providerId != 0 &&
-		       static_cast<uint32_t>(a_providerId & 0xFFFFFFFFull) == a_version;
-	}
-
-	bool RuntimeProviderMatchesVersion(uint64_t a_providerId, const std::string& a_providerName, uint32_t a_version)
-	{
-		return RuntimeProviderIdMatchesVersion(a_providerId, a_version) ||
-		       RuntimeProviderNameMatchesVersion(a_providerName, a_version);
+		// Bit 31 marks a driver implementation, not part of its version.
+		return a_providerId != 0 && static_cast<uint32_t>(a_providerId & 0x7FFFFFFFull) == a_version;
 	}
 
 	std::string RuntimeProviderDisplayName(uint64_t a_providerId, const std::string& a_providerName)
@@ -401,15 +318,30 @@ namespace
 		return nullptr;
 	}
 
-	bool QueryRuntimeUpscalerVersionId(ID3D12Device* a_device, uint32_t a_requestedVersion, uint64_t& a_versionId, std::string& a_versionName)
+	ffxReturnCode_t QueryFidelityFXProtected(ffx::Context* a_context, ffxQueryDescHeader* a_query, bool& a_crashed)
+	{
+		a_crashed = false;
+		ffxReturnCode_t result = FFX_API_RETURN_ERROR;
+		__try {
+			if (ffxModule.Query)
+				result = ffxModule.Query(a_context, a_query);
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			a_crashed = true;
+		}
+		return result;
+	}
+
+	bool QueryRuntimeUpscalerVersionId(ID3D12Device* a_device, uint32_t a_requestedVersion, uint64_t& a_versionId, std::string& a_versionName, bool& a_crashed)
 	{
 		a_versionId = 0;
 		a_versionName.clear();
+		a_crashed = false;
 
 		if (!a_device || !ffxModule.Query) {
 			return false;
 		}
 
+		constexpr uint64_t maxProviderCount = 64;
 		uint64_t versionCount = 0;
 		ffxQueryDescGetVersions countQuery{};
 		countQuery.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
@@ -417,8 +349,8 @@ namespace
 		countQuery.device = a_device;
 		countQuery.outputCount = &versionCount;
 
-		auto countResult = ffxModule.Query(nullptr, &countQuery.header);
-		if (countResult != FFX_API_RETURN_OK || versionCount == 0) {
+		const auto countResult = QueryFidelityFXProtected(nullptr, &countQuery.header, a_crashed);
+		if (countResult != FFX_API_RETURN_OK || versionCount == 0 || versionCount > maxProviderCount) {
 			logger::warn(
 				"[FidelityFX] Runtime upscaler version query failed or returned no versions (code {}, count {})",
 				static_cast<uint32_t>(countResult),
@@ -438,8 +370,8 @@ namespace
 		versionsQuery.versionIds = versionIds.data();
 		versionsQuery.versionNames = versionNames.data();
 
-		auto versionsResult = ffxModule.Query(nullptr, &versionsQuery.header);
-		if (versionsResult != FFX_API_RETURN_OK) {
+		const auto versionsResult = QueryFidelityFXProtected(nullptr, &versionsQuery.header, a_crashed);
+		if (versionsResult != FFX_API_RETURN_OK || returnedVersionCount > versionIds.size()) {
 			logger::warn("[FidelityFX] Runtime upscaler version enumeration failed with code {}", static_cast<uint32_t>(versionsResult));
 			return false;
 		}
@@ -460,14 +392,16 @@ namespace
 				versionName.empty() ? "(unnamed)" : versionName,
 				versionIds[i]);
 
-			if (versionIds[i] == a_requestedVersion ||
-				RuntimeProviderIdMatchesVersion(versionIds[i], a_requestedVersion) ||
-				RuntimeProviderNameMatchesVersion(versionName, a_requestedVersion)) {
+			if (a_requestedVersion != FidelityFX::RuntimeAutomaticVersion &&
+				RuntimeProviderMatchesVersion(versionIds[i], a_requestedVersion)) {
 				a_versionId = versionIds[i];
 				a_versionName = versionName;
 				return true;
 			}
 		}
+
+		if (a_requestedVersion == FidelityFX::RuntimeAutomaticVersion)
+			return false;
 
 		logger::warn(
 			"[FidelityFX] Runtime upscaler did not report requested FSR version {}; falling back to upscaler version descriptor",
@@ -486,7 +420,6 @@ namespace
 
 	enum class RuntimeUpscalerCreateAttempt : uint8_t
 	{
-		kGenericOverrideOnly,
 		kGenericOverrideWithUpscalerVersion,
 		kUpscalerVersionDescriptor,
 		kDefaultProvider
@@ -499,6 +432,16 @@ namespace
 		bool attempted = false;
 		ffxReturnCode_t result = FFX_API_RETURN_ERROR;
 	};
+
+	std::array<RuntimeUpscalerCreateAttemptResult, 3> RuntimeUpscalerCreateAttempts(bool a_automatic, bool a_hasVersionOverride)
+	{
+		// Automatic contexts must be unpinned to permit SDK and driver upgrades.
+		return { {
+			{ RuntimeUpscalerCreateAttempt::kGenericOverrideWithUpscalerVersion, !a_automatic && a_hasVersionOverride },
+			{ RuntimeUpscalerCreateAttempt::kUpscalerVersionDescriptor, !a_automatic },
+			{ RuntimeUpscalerCreateAttempt::kDefaultProvider, a_automatic },
+		} };
+	}
 
 	ffxReturnCode_t CreateRuntimeUpscalerContextProtected(
 		ffx::Context* a_context,
@@ -541,19 +484,6 @@ namespace
 		__try {
 			if (ffxModule.Configure)
 				result = ffxModule.Configure(a_context, a_desc);
-		} __except (EXCEPTION_EXECUTE_HANDLER) {
-			a_crashed = true;
-		}
-		return result;
-	}
-
-	ffxReturnCode_t QueryRuntimeProviderProtected(ffx::Context* a_context, ffxQueryGetProviderVersion* a_query, bool& a_crashed)
-	{
-		a_crashed = false;
-		ffxReturnCode_t result = FFX_API_RETURN_ERROR;
-		__try {
-			if (ffxModule.Query)
-				result = ffxModule.Query(a_context, &a_query->header);
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
 			a_crashed = true;
 		}
@@ -615,10 +545,6 @@ namespace
 		a_overrideVersionDesc.header.pNext = nullptr;
 
 		switch (a_attempt) {
-		case RuntimeUpscalerCreateAttempt::kGenericOverrideOnly:
-			a_createDesc.header.pNext = &a_backendDesc.header;
-			a_backendDesc.header.pNext = &a_overrideVersionDesc.header;
-			break;
 		case RuntimeUpscalerCreateAttempt::kGenericOverrideWithUpscalerVersion:
 			a_createDesc.header.pNext = &a_backendDesc.header;
 			a_backendDesc.header.pNext = &a_versionDesc.header;
@@ -1124,11 +1050,10 @@ bool FidelityFX::IsRuntimeUpscalerProviderMatchingRequestedVersion() const
 	if (!runtimeUpscalerSupportCheckKnown || !runtimeUpscalerSupportConfirmed)
 		return false;
 
-	if (runtimeUpscalerProviderMatchedVersionName.empty() && runtimeUpscalerProviderMatchedVersionId == 0)
-		return true;
-
-	const uint32_t requestedVersion = runtimeUpscalerRequestedVersion ? runtimeUpscalerRequestedVersion : GetPreferredRuntimeUpscalerVersion();
-	return RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, requestedVersion);
+	const uint32_t requestedVersion = runtimeUpscalerContextCount ? runtimeUpscalerRequestedVersion : GetPreferredRuntimeUpscalerVersion();
+	return runtimeUpscalerProviderMatchedVersionId != 0 &&
+	       (requestedVersion == RuntimeAutomaticVersion ||
+			   RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, requestedVersion));
 }
 
 bool FidelityFX::IsRuntimeUpscalerFailureLatched() const
@@ -1143,18 +1068,18 @@ bool FidelityFX::IsRuntimeFsr4FailureLatched() const
 
 const std::string& FidelityFX::GetHostFsrSdkLabel()
 {
-	static const std::string label = std::format("Host FSR3 SDK {}", UpscalerVersionToString(Fsr3Version));
+	static const std::string label = std::format("Host FSR3 SDK {}", UpscalerVersionToString(HostFsr3Version));
 	return label;
 }
 
 const std::string& FidelityFX::GetRuntimeUpscalerLabel(uint32_t a_version)
 {
-	static const std::string runtimeFsr3Label = std::format("Runtime FSR3 {} ({})", UpscalerVersionToString(Fsr3Version), RuntimeUpscalerDllNameUtf8);
-	static const std::string runtimeFsr4Label = std::format("Runtime FSR4 ({})", RuntimeUpscalerDllNameUtf8);
+	static const std::string runtimeFsr3Label = std::format("Runtime FSR3 {} ({})", UpscalerVersionToString(RuntimeFsr3Version), RuntimeUpscalerDllNameUtf8);
+	static const std::string runtimeFsr4Label = "FSR runtime (automatic)";
 
-	if (a_version == Fsr3Version)
+	if (a_version == RuntimeFsr3Version)
 		return runtimeFsr3Label;
-	if (a_version == FFX_UPSCALER_VERSION)
+	if (a_version == RuntimeAutomaticVersion)
 		return runtimeFsr4Label;
 
 	thread_local std::string fallbackLabel;
@@ -1171,9 +1096,9 @@ const std::string& FidelityFX::GetRuntimeUpscalerLastFramePathLabel() const
 	case RuntimeUpscalerFramePath::kHostFsr31:
 		return GetHostFsrSdkLabel();
 	case RuntimeUpscalerFramePath::kRuntimeFsr31:
-		return GetRuntimeUpscalerLabel(Fsr3Version);
+		return GetRuntimeUpscalerLabel(RuntimeFsr3Version);
 	case RuntimeUpscalerFramePath::kRuntimeFsr4:
-		return GetRuntimeUpscalerLabel(FFX_UPSCALER_VERSION);
+		return GetRuntimeUpscalerLabel(RuntimeAutomaticVersion);
 	case RuntimeUpscalerFramePath::kHostFsr31Fallback:
 		return HostFsrFallbackLabel();
 	case RuntimeUpscalerFramePath::kInactive:
@@ -1187,21 +1112,17 @@ const std::string& FidelityFX::GetConfiguredFsrPathLabel() const
 	if (runtimeUpscalerSessionQuarantined || runtimeUpscalerFailureLatched)
 		return HostFsrFallbackLabel();
 
-	if (runtimeFsr4FailureLatched) {
-		if (ShouldUseRuntimeUpscalerForFSR())
-			return GetRuntimeUpscalerLabel(Fsr3Version);
-
+	if (runtimeFsr4FailureLatched)
 		return HostFsrFallbackLabel();
-	}
 
 	if (runtimeUpscalerSupportCheckKnown && !runtimeUpscalerSupportConfirmed)
 		return HostFsrFallbackLabel();
 
 	if (ShouldRequestRuntimeFsr4())
-		return GetRuntimeUpscalerLabel(FFX_UPSCALER_VERSION);
+		return GetRuntimeUpscalerLabel(RuntimeAutomaticVersion);
 
 	if (ShouldUseRuntimeUpscalerForFSR())
-		return GetRuntimeUpscalerLabel(Fsr3Version);
+		return GetRuntimeUpscalerLabel(RuntimeFsr3Version);
 
 	return GetHostFsrSdkLabel();
 }
@@ -1217,12 +1138,12 @@ const std::string& FidelityFX::GetDisplayedFsrPathLabel() const
 
 std::string FidelityFX::GetRuntimeUpscalerProviderName() const
 {
-	return RuntimeProviderDisplayName(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName);
+	return GetTemporalTuningSnapshot().providerName;
 }
 
 std::string FidelityFX::GetRuntimeUpscalerRequestedVersionString() const
 {
-	const uint32_t requestedVersion = runtimeUpscalerRequestedVersion ? runtimeUpscalerRequestedVersion : GetPreferredRuntimeUpscalerVersion();
+	const uint32_t requestedVersion = runtimeUpscalerContextCount ? runtimeUpscalerRequestedVersion : GetPreferredRuntimeUpscalerVersion();
 	return UpscalerVersionToString(requestedVersion);
 }
 
@@ -1267,7 +1188,6 @@ void FidelityFX::ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache)
 		std::scoped_lock lock(adapterDescMutex);
 		adapterDescDevice = nullptr;
 		cachedAdapterDesc = {};
-		cachedAdapterFsr4Support = Fsr4AdapterSupport::Unsupported;
 		cachedAdapterDescValid = false;
 	}
 
@@ -1275,6 +1195,14 @@ void FidelityFX::ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache)
 	runtimeUpscalerSupportConfirmed = false;
 	runtimeUpscalerProviderMatchedVersionId = 0;
 	runtimeUpscalerProviderMatchedVersionName.clear();
+	{
+		std::scoped_lock lock(temporalTuningMutex);
+		temporalTuningSnapshot.providerId = 0;
+		temporalTuningSnapshot.activeProviderId = 0;
+		temporalTuningSnapshot.providerName.clear();
+		temporalTuningSnapshot.supportKnown = false;
+		temporalTuningSnapshot.supportConfirmed = false;
+	}
 }
 
 void FidelityFX::LatchRuntimeFsr4Failure()
@@ -1283,13 +1211,20 @@ void FidelityFX::LatchRuntimeFsr4Failure()
 		return;
 
 	runtimeFsr4FailureLatched = true;
-	logger::warn("[FidelityFX] Runtime FSR4 path failed; selecting the host fallback without creating another DX12 runtime provider.");
+	logger::warn("[FidelityFX] Automatic FSR runtime path failed; selecting the host fallback without creating another DX12 runtime provider.");
 }
 
 void FidelityFX::QuarantineRuntimeUpscalerForSession(const char* a_reason)
 {
 	InvalidateFSRRelatchDrain();
 	runtimeUpscalerFailureLatched = true;
+	runtimeUpscalerSupportConfirmed = false;
+	{
+		std::scoped_lock lock(temporalTuningMutex);
+		temporalTuningSnapshot.activeProviderId = 0;
+		temporalTuningSnapshot.providerName.clear();
+		temporalTuningSnapshot.supportConfirmed = false;
+	}
 	if (runtimeUpscalerSessionQuarantined)
 		return;
 
@@ -1305,13 +1240,8 @@ void FidelityFX::QuarantineRuntimeUpscalerForSession(const char* a_reason)
 
 FidelityFX::RuntimeUpscalerFramePath FidelityFX::GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const
 {
-	if (RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, FFX_UPSCALER_VERSION))
-		return RuntimeUpscalerFramePath::kRuntimeFsr4;
-
-	if (RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, Fsr3Version))
-		return RuntimeUpscalerFramePath::kRuntimeFsr31;
-
-	return a_requestedVersion == FFX_UPSCALER_VERSION ? RuntimeUpscalerFramePath::kRuntimeFsr4 : RuntimeUpscalerFramePath::kRuntimeFsr31;
+	// Resource ownership tracks the selection policy; provider identity is reported separately.
+	return a_requestedVersion == RuntimeAutomaticVersion ? RuntimeUpscalerFramePath::kRuntimeFsr4 : RuntimeUpscalerFramePath::kRuntimeFsr31;
 }
 
 void FidelityFX::RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path)
@@ -1929,10 +1859,14 @@ FidelityFX::LifecycleResult FidelityFX::DestroyRuntimeUpscalerContexts(bool a_wa
 		temporalLastDispatchPath.store(RuntimeUpscalerFramePath::kInactive, std::memory_order_relaxed);
 		temporalContextLastDispatchFrame = ~uint32_t{ 0 };
 		temporalTuningSnapshot.configuredContexts = 0;
+		temporalTuningSnapshot.activeProviderId = 0;
+		temporalTuningSnapshot.providerName.clear();
 		temporalTuningSnapshot.contextSettings = {};
 		if (temporalTuningSnapshot.status != FSRTemporalTuningPolicy::Status::Rejected &&
-			temporalTuningSnapshot.status != FSRTemporalTuningPolicy::Status::Faulted)
+			temporalTuningSnapshot.status != FSRTemporalTuningPolicy::Status::Faulted) {
 			temporalTuningSnapshot.status = FSRTemporalTuningPolicy::Status::Inactive;
+			temporalTuningSnapshot.providerId = 0;
+		}
 	}
 	runtimeUpscalerContextCount = 0;
 	runtimeUpscalerMaxRenderWidth = 0;
@@ -2142,8 +2076,8 @@ bool FidelityFX::IsRuntimeUpscalerDispatchProofUsable(
 		{
 			const uint32_t requestedVersion =
 				a_path == RuntimeUpscalerFramePath::kRuntimeFsr4 ?
-					FFX_UPSCALER_VERSION :
-					Fsr3Version;
+					RuntimeAutomaticVersion :
+					RuntimeFsr3Version;
 			return AreRuntimeUpscalerResourcesCompatible(
 				runtimeUpscalerMaxRenderWidth,
 				runtimeUpscalerMaxRenderHeight,
@@ -2186,13 +2120,13 @@ FidelityFX::LifecycleResult FidelityFX::PrepareRuntimeUpscalerContextsForFSR(
 	uint32_t a_contextCount,
 	bool a_requestFsr4)
 {
-	if (!ShouldUseRuntimeUpscalerForFSR() || !CanUseRuntimeUpscalerPath())
+	if (!ShouldUseRuntimeUpscalerForFSR(a_requestFsr4) || !CanUseRuntimeUpscalerPath())
 		return LifecycleResult::Failed;
 
 	const bool useFsr4 = a_requestFsr4 &&
 	                     !runtimeFsr4FailureLatched &&
 	                     IsRuntimeFsr4Available();
-	const uint32_t requestedVersion = useFsr4 ? FFX_UPSCALER_VERSION : Fsr3Version;
+	const uint32_t requestedVersion = useFsr4 ? RuntimeAutomaticVersion : RuntimeFsr3Version;
 	// Split-eye contexts retain display-sized bounds so quality changes do not
 	// require provider recreation; dispatch still supplies the active extent.
 	const bool useDisplayBounds = a_contextCount > 1 || useFsr4;
@@ -2223,7 +2157,7 @@ bool FidelityFX::AreFSRProviderContextsCompatible(
 			a_contextCount)) {
 		return true;
 	}
-	if (!ShouldUseRuntimeUpscalerForFSR() ||
+	if (!ShouldUseRuntimeUpscalerForFSR(a_requestFsr4) ||
 		runtimeUpscalerFailureLatched ||
 		runtimeUpscalerSessionQuarantined) {
 		return false;
@@ -2232,7 +2166,7 @@ bool FidelityFX::AreFSRProviderContextsCompatible(
 	const bool useFsr4 = a_requestFsr4 &&
 	                     !runtimeFsr4FailureLatched &&
 	                     IsRuntimeFsr4Available();
-	const uint32_t requestedVersion = useFsr4 ? FFX_UPSCALER_VERSION : Fsr3Version;
+	const uint32_t requestedVersion = useFsr4 ? RuntimeAutomaticVersion : RuntimeFsr3Version;
 	const bool useDisplayBounds = a_contextCount > 1 || useFsr4;
 	return AreRuntimeUpscalerContextsCompatible(
 		useDisplayBounds ? a_displayWidth : a_renderWidth,
@@ -2874,9 +2808,7 @@ FidelityFX::LifecycleResult FidelityFX::DestroyFSRResources(bool a_waitForIdle, 
 	return LifecycleResult::Ready;
 }
 
-bool FidelityFX::TryGetCurrentAdapterDesc(
-	DXGI_ADAPTER_DESC& a_outDesc,
-	Fsr4AdapterSupport* a_outFsr4Support) const
+bool FidelityFX::TryGetCurrentAdapterDesc(DXGI_ADAPTER_DESC& a_outDesc) const
 {
 	auto* device = globals::d3d::device;
 	if (!device)
@@ -2885,8 +2817,6 @@ bool FidelityFX::TryGetCurrentAdapterDesc(
 	std::scoped_lock lock(adapterDescMutex);
 	if (cachedAdapterDescValid && adapterDescDevice.get() == device) {
 		a_outDesc = cachedAdapterDesc;
-		if (a_outFsr4Support)
-			*a_outFsr4Support = cachedAdapterFsr4Support;
 		return true;
 	}
 
@@ -2904,11 +2834,8 @@ bool FidelityFX::TryGetCurrentAdapterDesc(
 
 	adapterDescDevice.copy_from(device);
 	cachedAdapterDesc = adapterDesc;
-	cachedAdapterFsr4Support = GetFsr4AdapterSupport(adapterDesc);
 	cachedAdapterDescValid = true;
 	a_outDesc = adapterDesc;
-	if (a_outFsr4Support)
-		*a_outFsr4Support = cachedAdapterFsr4Support;
 	return true;
 }
 
@@ -2948,24 +2875,9 @@ bool FidelityFX::IsRuntimeUpscalerPresent() const
 	return true;
 }
 
-FidelityFX::Fsr4AdapterSupport FidelityFX::GetFsr4AdapterSupport(const DXGI_ADAPTER_DESC& a_adapterDesc)
-{
-	return ClassifyFsr4AdapterSupport(a_adapterDesc);
-}
-
 bool FidelityFX::IsRuntimeFsr4AutoEligible() const
 {
-	return GetFsr4AdapterSupport() != Fsr4AdapterSupport::Unsupported;
-}
-
-FidelityFX::Fsr4AdapterSupport FidelityFX::GetFsr4AdapterSupport() const
-{
-	DXGI_ADAPTER_DESC adapterDesc{};
-	Fsr4AdapterSupport support = Fsr4AdapterSupport::Unsupported;
-	if (!TryGetCurrentAdapterDesc(adapterDesc, &support))
-		return Fsr4AdapterSupport::Unsupported;
-
-	return support;
+	return IsRuntimeUpscalerPresent();
 }
 
 bool FidelityFX::IsRuntimeFsr4Available() const
@@ -2976,12 +2888,13 @@ bool FidelityFX::IsRuntimeFsr4Available() const
 	return IsRuntimeFsr4AutoEligible();
 }
 
-bool FidelityFX::ShouldUseRuntimeUpscalerForFSR() const
+bool FidelityFX::ShouldUseRuntimeUpscalerForFSR(std::optional<bool> a_automaticRequested) const
 {
 	return FSRRuntimeLifecyclePolicy::SelectProviderRoute({
 			   .hostSupported = IsHostFSR3Supported(),
 			   .runtimePresent = IsRuntimeUpscalerPresent(),
 			   .amdAdapter = IsAmdAdapterDetected(),
+			   .automaticRequested = a_automaticRequested.has_value() ? *a_automaticRequested : globals::features::upscaling.GetRuntimeFSR4Enabled(),
 		   }) == FSRRuntimeLifecyclePolicy::ProviderRoute::Runtime;
 }
 
@@ -3019,7 +2932,7 @@ bool FidelityFX::ShouldRequestRuntimeFsr4() const
 
 uint32_t FidelityFX::GetPreferredRuntimeUpscalerVersion() const
 {
-	return ShouldRequestRuntimeFsr4() ? FFX_UPSCALER_VERSION : Fsr3Version;
+	return ShouldRequestRuntimeFsr4() ? RuntimeAutomaticVersion : RuntimeFsr3Version;
 }
 
 void FidelityFX::ArmRuntimeHostFallback(uint32_t a_contextCount)
@@ -3097,7 +3010,7 @@ FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan()
 	                                    Upscaling::VRRenderScaleBackendKind::FSR4Runtime :
 	                            plan.runtimeFsr4Requested ||
 	                                ShouldUseRuntimeUpscalerForFSR();
-	plan.requestedVersion = plan.runtimeFsr4Requested ? FFX_UPSCALER_VERSION : Fsr3Version;
+	plan.requestedVersion = plan.runtimeFsr4Requested ? RuntimeAutomaticVersion : RuntimeFsr3Version;
 	const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
 	plan.contextCount = exactCurrentProviderReady ?
 	                        existingProvider.resources.contextCount :
@@ -3262,33 +3175,71 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerInterop()
 FidelityFX::LifecycleResult FidelityFX::RecordRuntimeProviderResult(bool a_supported)
 {
 	runtimeUpscalerSupportCheckKnown = true;
-	runtimeUpscalerSupportConfirmed = a_supported;
+	runtimeUpscalerSupportConfirmed = false;
 	runtimeUpscalerProviderMatchedVersionId = 0;
 	runtimeUpscalerProviderMatchedVersionName.clear();
-	if (!a_supported || !runtimeUpscalerContexts[0] || !ffxModule.Query)
-		return LifecycleResult::Ready;
-
-	ffxQueryGetProviderVersion query{};
-	query.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
-	bool crashed = false;
-	const auto result = QueryRuntimeProviderProtected(&runtimeUpscalerContexts[0], &query, crashed);
-	if (crashed) {
-		runtimeUpscalerContextIndeterminate[0] = true;
-		runtimeUpscalerSupportConfirmed = false;
-		{
-			std::scoped_lock lock(temporalTuningMutex);
-			temporalTuningSnapshot.status = FSRTemporalTuningPolicy::Status::Faulted;
-			temporalTuningSnapshot.lastConfigureResult = static_cast<int32_t>(result);
-		}
-		QuarantineRuntimeUpscalerForSession("a runtime provider query fault");
-		const auto failure = ResolveRuntimeUpscalerLifecycleFailure("runtime provider query fault");
-		runtimeUpscalerQuarantineRetirement = NormalizeRuntimeQuarantineResult(failure);
-		return failure;
+	{
+		std::scoped_lock lock(temporalTuningMutex);
+		temporalTuningSnapshot.providerId = 0;
+		temporalTuningSnapshot.activeProviderId = 0;
+		temporalTuningSnapshot.providerName.clear();
+		temporalTuningSnapshot.requestedVersion = runtimeUpscalerRequestedVersion;
+		temporalTuningSnapshot.supportKnown = true;
+		temporalTuningSnapshot.supportConfirmed = false;
 	}
-	if (result == FFX_API_RETURN_OK) {
-		runtimeUpscalerProviderMatchedVersionId = query.versionId;
-		if (query.versionName)
-			runtimeUpscalerProviderMatchedVersionName = query.versionName;
+	if (!a_supported)
+		return LifecycleResult::Ready;
+	if (!ffxModule.Query || runtimeUpscalerContextCount == 0 ||
+		runtimeUpscalerContextCount > std::size(runtimeUpscalerContexts) ||
+		std::any_of(std::begin(runtimeUpscalerContexts), std::begin(runtimeUpscalerContexts) + runtimeUpscalerContextCount,
+			[](const auto& context) { return context == nullptr; })) {
+		runtimeUpscalerSupportConfirmed = false;
+		const auto cleanup = DestroyRuntimeUpscalerContexts(false);
+		return cleanup == LifecycleResult::Ready ? LifecycleResult::Failed : cleanup;
+	}
+
+	for (uint32_t eye = 0; eye < runtimeUpscalerContextCount; ++eye) {
+		ffxQueryGetProviderVersion query{};
+		query.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
+		bool crashed = false;
+		const auto result = QueryFidelityFXProtected(&runtimeUpscalerContexts[eye], &query.header, crashed);
+		if (crashed) {
+			runtimeUpscalerContextIndeterminate[eye] = true;
+			runtimeUpscalerSupportConfirmed = false;
+			{
+				std::scoped_lock lock(temporalTuningMutex);
+				temporalTuningSnapshot.status = FSRTemporalTuningPolicy::Status::Faulted;
+				temporalTuningSnapshot.lastConfigureResult = static_cast<int32_t>(result);
+			}
+			QuarantineRuntimeUpscalerForSession("a runtime provider query fault");
+			const auto failure = ResolveRuntimeUpscalerLifecycleFailure("runtime provider query fault");
+			runtimeUpscalerQuarantineRetirement = NormalizeRuntimeQuarantineResult(failure);
+			return failure;
+		}
+		const std::string name = result == FFX_API_RETURN_OK && query.versionName ? query.versionName : "";
+		if (result != FFX_API_RETURN_OK || query.versionId == 0 ||
+			(eye > 0 && query.versionId != runtimeUpscalerProviderMatchedVersionId) ||
+			(runtimeUpscalerRequestedVersion != RuntimeAutomaticVersion &&
+				!RuntimeProviderMatchesVersion(query.versionId, runtimeUpscalerRequestedVersion))) {
+			logger::warn("[FidelityFX] Runtime provider identity is unavailable, inconsistent between eyes, or incompatible with the explicit version request; using host FSR3.");
+			runtimeUpscalerSupportConfirmed = false;
+			runtimeUpscalerProviderMatchedVersionId = 0;
+			runtimeUpscalerProviderMatchedVersionName.clear();
+			const auto cleanup = DestroyRuntimeUpscalerContexts(false);
+			return cleanup == LifecycleResult::Ready ? LifecycleResult::Failed : cleanup;
+		}
+		if (eye == 0) {
+			runtimeUpscalerProviderMatchedVersionId = query.versionId;
+			runtimeUpscalerProviderMatchedVersionName = name;
+		}
+	}
+	runtimeUpscalerSupportConfirmed = true;
+	{
+		std::scoped_lock lock(temporalTuningMutex);
+		temporalTuningSnapshot.providerId = runtimeUpscalerProviderMatchedVersionId;
+		temporalTuningSnapshot.activeProviderId = runtimeUpscalerProviderMatchedVersionId;
+		temporalTuningSnapshot.providerName = RuntimeProviderDisplayName(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName);
+		temporalTuningSnapshot.supportConfirmed = true;
 	}
 	return LifecycleResult::Ready;
 }
@@ -3317,11 +3268,14 @@ FidelityFX::TemporalTuningSnapshot FidelityFX::GetTemporalTuningSnapshot() const
 	if (hostPath) {
 		snapshot.contextSettings = {};
 		snapshot.configuredContexts = 0;
-		snapshot.providerId = 0;
+		snapshot.activeProviderId = 0;
+		snapshot.providerName.clear();
 		if (snapshot.status != FSRTemporalTuningPolicy::Status::Rejected &&
-			snapshot.status != FSRTemporalTuningPolicy::Status::Faulted)
+			snapshot.status != FSRTemporalTuningPolicy::Status::Faulted) {
+			snapshot.providerId = 0;
 			snapshot.status = snapshot.requested.enabled ? FSRTemporalTuningPolicy::Status::UnsupportedProvider :
 			                                               FSRTemporalTuningPolicy::Status::VendorDefaults;
+		}
 	}
 	return snapshot;
 }
@@ -3354,7 +3308,7 @@ FidelityFX::LifecycleResult FidelityFX::ConfigureTemporalTuningContexts(const Te
 		ffxQueryGetProviderVersion query{};
 		query.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
 		bool crashed = false;
-		const auto result = QueryRuntimeProviderProtected(&runtimeUpscalerContexts[eye], &query, crashed);
+		const auto result = QueryFidelityFXProtected(&runtimeUpscalerContexts[eye], &query.header, crashed);
 		if (crashed) {
 			runtimeUpscalerContextIndeterminate[eye] = true;
 			publish(Status::Faulted, providerId, 0, static_cast<int32_t>(result));
@@ -3484,7 +3438,17 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 
 	uint64_t runtimeVersionId = 0;
 	std::string runtimeVersionName;
-	const bool hasRuntimeVersionOverride = QueryRuntimeUpscalerVersionId(swapChain.d3d12Device.get(), a_requestedVersion, runtimeVersionId, runtimeVersionName);
+	const bool automatic = a_requestedVersion == RuntimeAutomaticVersion;
+	bool queryCrashed = false;
+	const bool hasRuntimeVersionOverride = QueryRuntimeUpscalerVersionId(
+		swapChain.d3d12Device.get(), a_requestedVersion, runtimeVersionId, runtimeVersionName, queryCrashed);
+	if (queryCrashed) {
+		QuarantineRuntimeUpscalerForSession("a runtime capability query fault");
+		const auto failure = ResolveRuntimeUpscalerLifecycleFailure("runtime capability query fault");
+		runtimeUpscalerQuarantineRetirement = NormalizeRuntimeQuarantineResult(failure);
+		RecordRuntimeProviderResult(false);
+		return failure;
+	}
 	const bool emitDiagLogs = ShouldEmitFidelityFXDiagLogs();
 	if (emitDiagLogs && hasRuntimeVersionOverride) {
 		logger::debug(
@@ -3494,7 +3458,6 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 			runtimeVersionId);
 	}
 
-	bool createdContextWithGenericVersionOverride = false;
 	bool createdContextWithGenericVersionAndUpscalerDescriptor = false;
 	bool createdContextWithUpscalerVersionDescriptor = false;
 	bool createdContextWithDefaultProvider = false;
@@ -3514,16 +3477,7 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 		ffx::CreateContextDescOverrideVersion overrideVersionDesc{};
 		overrideVersionDesc.versionId = runtimeVersionId;
 
-		std::array<RuntimeUpscalerCreateAttemptResult, 4> attempts{ {
-			// The upscaler runtime requires its effect-version descriptor when
-			// selecting a provider. Do not issue the older override-only probe:
-			// current AMD providers reject it, and failed context probes add
-			// avoidable driver/compiler churn during VR relatches.
-			{ RuntimeUpscalerCreateAttempt::kGenericOverrideOnly, false },
-			{ RuntimeUpscalerCreateAttempt::kGenericOverrideWithUpscalerVersion, hasRuntimeVersionOverride },
-			{ RuntimeUpscalerCreateAttempt::kUpscalerVersionDescriptor, true },
-			{ RuntimeUpscalerCreateAttempt::kDefaultProvider, a_requestedVersion == FFX_UPSCALER_VERSION },
-		} };
+		auto attempts = RuntimeUpscalerCreateAttempts(automatic, hasRuntimeVersionOverride);
 
 		bool contextCreated = false;
 		for (auto& attempt : attempts) {
@@ -3566,9 +3520,7 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 			}
 
 			contextCreated = true;
-			if (attempt.attempt == RuntimeUpscalerCreateAttempt::kGenericOverrideOnly) {
-				createdContextWithGenericVersionOverride = true;
-			} else if (attempt.attempt == RuntimeUpscalerCreateAttempt::kGenericOverrideWithUpscalerVersion) {
+			if (attempt.attempt == RuntimeUpscalerCreateAttempt::kGenericOverrideWithUpscalerVersion) {
 				createdContextWithGenericVersionAndUpscalerDescriptor = true;
 			} else if (attempt.attempt == RuntimeUpscalerCreateAttempt::kUpscalerVersionDescriptor) {
 				createdContextWithUpscalerVersionDescriptor = true;
@@ -3587,10 +3539,9 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 				return iter != attempts.end() ? FfxCreateResultText(iter->attempted, iter->result) : std::string("not attempted");
 			};
 
-			logger::error("[FidelityFX] Failed to create runtime upscaler context {} for FSR version {}. Generic override: {}, generic override + upscaler descriptor: {}, upscaler version descriptor: {}, default provider: {} (Render: {}x{}, Display: {}x{}).",
+			logger::error("[FidelityFX] Failed to create runtime upscaler context {} for FSR version {}. Generic override + upscaler descriptor: {}, upscaler version descriptor: {}, default provider: {} (Render: {}x{}, Display: {}x{}).",
 				i,
 				UpscalerVersionToString(a_requestedVersion),
-				getAttemptResult(RuntimeUpscalerCreateAttempt::kGenericOverrideOnly),
 				getAttemptResult(RuntimeUpscalerCreateAttempt::kGenericOverrideWithUpscalerVersion),
 				getAttemptResult(RuntimeUpscalerCreateAttempt::kUpscalerVersionDescriptor),
 				getAttemptResult(RuntimeUpscalerCreateAttempt::kDefaultProvider),
@@ -3620,17 +3571,6 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 	if (tuningResult != LifecycleResult::Ready)
 		return tuningResult;
 
-	if ((runtimeUpscalerProviderMatchedVersionId != 0 || !runtimeUpscalerProviderMatchedVersionName.empty()) &&
-		!RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, a_requestedVersion)) {
-		logger::warn(
-			"[FidelityFX] Runtime upscaler provider '{}' does not match requested FSR version {}; reporting actual provider path.",
-			RuntimeProviderDisplayName(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName),
-			UpscalerVersionToString(a_requestedVersion));
-	}
-
-	if (emitDiagLogs && createdContextWithGenericVersionOverride) {
-		logger::debug("[FidelityFX] Runtime upscaler context creation used the generic FSR version override path.");
-	}
 	if (emitDiagLogs && createdContextWithGenericVersionAndUpscalerDescriptor) {
 		logger::debug("[FidelityFX] Runtime upscaler context creation used the generic FSR version override path with the upscaler version descriptor.");
 	}
@@ -3638,7 +3578,7 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 		logger::debug("[FidelityFX] Runtime upscaler context creation used the upscaler FSR version descriptor.");
 	}
 	if (createdContextWithDefaultProvider) {
-		logger::warn("[FidelityFX] Runtime upscaler context creation succeeded only through the default provider path after explicit FSR version requests failed; reporting the actual provider path.");
+		logger::info("[FidelityFX] Automatic runtime selected provider '{}'.", GetRuntimeUpscalerProviderName());
 	}
 
 	if (emitDiagLogs && runtimeUpscalerProviderMatchedVersionName.empty()) {
@@ -4350,7 +4290,7 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 			if (runtimePlan.runtimeFsr4Requested)
 				LatchRuntimeFsr4Failure();
 			QuarantineRuntimeUpscalerForSession(
-				runtimePlan.runtimeFsr4Requested ? "an FSR4 setup/dispatch failure" : "an FSR3 runtime setup/dispatch failure");
+				runtimePlan.runtimeFsr4Requested ? "an automatic FSR runtime setup/dispatch failure" : "an FSR3 runtime setup/dispatch failure");
 		}
 		if (std::ranges::any_of(
 				runtimeUpscalerContextIndeterminate,
@@ -4543,7 +4483,7 @@ FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(
 			LatchRuntimeFsr4Failure();
 		QuarantineRuntimeUpscalerForSession(
 			runtimePlan.runtimeFsr4Requested ?
-				"an FSR4 stereo setup/dispatch failure" :
+				"an automatic FSR runtime stereo setup/dispatch failure" :
 				"an FSR3 runtime stereo setup/dispatch failure");
 	}
 	if (std::ranges::any_of(

@@ -24,6 +24,7 @@ static_assert(std::is_trivially_copyable_v<Profile001>);
 static_assert(static_cast<std::uint32_t>(DLSSProfile::kE) == 5);
 static_assert(static_cast<std::uint32_t>(QualityMode::kUltraPerformance) == 6);
 static_assert(static_cast<std::uint32_t>(FSRRuntime::kFSR4) == 1);
+static_assert(FSRRuntime::kAutomatic == FSRRuntime::kFSR4);
 static_assert(CSX::ServiceAPI::kCapabilityTransactions != 0);
 
 namespace

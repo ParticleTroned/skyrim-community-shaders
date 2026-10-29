@@ -62,7 +62,7 @@ struct Upscaling
 		bool runtime = false, failed = false, fsr4 = false, fsr4Failed = false;
 		bool IsNvidiaAdapterDetected() const { return true; }
 		bool IsRuntimeUpscalerFailureLatched() const { return failed; }
-		bool ShouldUseRuntimeUpscalerForFSR() const { return runtime; }
+		bool ShouldUseRuntimeUpscalerForFSR(bool automatic) const { return runtime || (automatic && fsr4); }
 		bool IsRuntimeFsr4FailureLatched() const { return fsr4Failed; }
 		bool IsRuntimeFsr4Available() const { return fsr4; }
 	} fidelityFX;
@@ -192,6 +192,13 @@ int main()
 		profile.active = true;
 		profile.method = Method::kFSR;
 		Require(upscaling.BuildVRRenderScaleResourceKey(profile).backend == Backend::FSRHost, "Host FSR selection changed");
+		profile.fsr4RuntimeEnabled = upscaling.fidelityFX.fsr4 = true;
+		Require(upscaling.BuildVRRenderScaleResourceKey(profile).backend == Backend::FSR4Runtime,
+			"NVIDIA host-to-automatic planning must use the target preference");
+		profile.fsr4RuntimeEnabled = false;
+		Require(upscaling.BuildVRRenderScaleResourceKey(profile).backend == Backend::FSRHost,
+			"NVIDIA automatic-to-host planning must use the target preference");
+		upscaling.fidelityFX.fsr4 = false;
 		upscaling.fidelityFX.runtime = true;
 		Require(upscaling.BuildVRRenderScaleResourceKey(profile).backend == Backend::FSRRuntime, "Runtime FSR selection changed");
 		profile.fsr4RuntimeEnabled = upscaling.fidelityFX.fsr4 = true;

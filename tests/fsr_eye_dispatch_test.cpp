@@ -215,7 +215,8 @@ struct FidelityFX
 	FfxFsr3DispatchUpscaleDescription lastHostParameters{};
 	RuntimeUpscalerFramePath lastFramePath = RuntimeUpscalerFramePath::kInactive;
 
-	static constexpr uint32_t Fsr3Version = 3;
+	static constexpr uint32_t RuntimeAutomaticVersion = 0;
+	static constexpr uint32_t RuntimeFsr3Version = 3;
 	bool useProductionDispatchPlan = false;
 	bool runtimeHostFallbackFrameValid = false;
 	uint32_t runtimeHostFallbackFrame = 0;

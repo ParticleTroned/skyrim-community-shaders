@@ -14,14 +14,15 @@ namespace FSRRuntimeLifecyclePolicy
 		bool hostSupported = false;
 		bool runtimePresent = false;
 		bool amdAdapter = false;
+		bool automaticRequested = false;
 	};
 
-	/** Selects FSR3 by capability while keeping the AMD runtime preference. */
+	/** Honors automatic runtime selection while preserving the explicit FSR3 route. */
 	[[nodiscard]] constexpr ProviderRoute SelectProviderRoute(
 		const ProviderRouteInputs& a_inputs) noexcept
 	{
 		if (a_inputs.runtimePresent &&
-			(a_inputs.amdAdapter || !a_inputs.hostSupported)) {
+			(a_inputs.automaticRequested || a_inputs.amdAdapter || !a_inputs.hostSupported)) {
 			return ProviderRoute::Runtime;
 		}
 

@@ -80,6 +80,13 @@ int main()
 			"Legacy coverage above the new maximum must expire its reference without rejecting the profile");
 		Check(settings.foveatedCenterArea == expected.foveatedCenterArea && settings.foveatedMaskSetup == expected.foveatedMaskSetup,
 			"Migrating the old coverage range must preserve the fitted geometry and user confirmation");
+		for (bool automatic : { false, true }) {
+			auto fsrProfile = saved;
+			fsrProfile["fsr4RuntimeEnable"] = automatic;
+			fsrProfile["fsr4RuntimeSelectionSchemaVersion"] = 0;
+			from_json(fsrProfile, settings);
+			Check(settings.fsr4RuntimeEnable == automatic, "loading old FSR settings must preserve either explicit preference");
+		}
 		from_json(json::object(), settings);
 		Check(!settings.foveatedPeripheryMaskVisualization, "Defaults must not enable visualization");
 	}

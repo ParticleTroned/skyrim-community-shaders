@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX SDK.
 //
-// Copyright (C) 2025 Advanced Micro Devices, Inc.
+// Copyright (C) 2026 Advanced Micro Devices, Inc.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files(the "Software"), to deal
@@ -23,15 +23,44 @@
 #pragma once
 #include "../ffx_api.h"
 #include "../ffx_api_types.h"
-#include <directx/d3d12.h>
+#include <d3d12.h>
 #include <dxgi.h>
 #include <dxgi1_5.h>
 
-#define FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12 0x0000002u
+/// Resource allocation callback function.
+typedef ffxReturnCode_t(*PfnFfxResourceAllocatorFunc)(uint32_t                         effectId,
+                                                      D3D12_RESOURCE_STATES            initialState,
+                                                      const D3D12_HEAP_PROPERTIES*     pHeapProps,
+                                                      const D3D12_RESOURCE_DESC*       pD3DDesc,
+                                                      const struct FfxApiResourceDescription* pFfxDesc,
+                                                      const D3D12_CLEAR_VALUE*         pOptimizedClear,
+                                                      ID3D12Resource**                 ppD3DResource);
+
+/// Resource destruction callback function.
+typedef ffxReturnCode_t(*PfnFfxResourceDeallocatorFunc)(uint32_t effectId, ID3D12Resource* pResource);
+
+// Heap allocation callback function.
+typedef ffxReturnCode_t(*PfnFfxHeapAllocatorFunc)(uint32_t effectId, const D3D12_HEAP_DESC* pHeapDesc, bool aliasable, ID3D12Heap** ppD3DHeap, uint64_t* pHeapStartOffset);
+
+// Heap destruction callback function.
+typedef ffxReturnCode_t(*PfnFfxHeapDeallocatorFunc)(uint32_t effectId, ID3D12Heap* pD3DHeap, uint64_t heapStartOffset, uint64_t heapSize);
+
+#define FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12 FFX_API_MAKE_BACKEND_SUB_ID(FFX_API_BACKEND_ID_DX12, 0x02)
 struct ffxCreateBackendDX12Desc
 {
     ffxCreateContextDescHeader header;
-    ID3D12Device              *device;  ///< Device on which the backend will run.
+    ID3D12Device*              device;  ///< Device on which the backend will run.
+};
+
+#define FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12_ALLOCATION_CALLBACKS FFX_API_MAKE_BACKEND_SUB_ID(FFX_API_BACKEND_ID_DX12, 0x03)
+struct ffxCreateBackendDX12AllocationCallbacksDesc
+{
+	ffxCreateContextDescHeader    header;
+    PfnFfxResourceAllocatorFunc   pfnFfxResourceAllocator;        ///< Resource allocation function (can be null)
+    PfnFfxResourceDeallocatorFunc pfnFfxResourceDeallocator;      ///< Resource deallocation function (can be null)
+    PfnFfxHeapAllocatorFunc       pfnFfxHeapAllocator;            ///< Heap allocation function (can be null)
+    PfnFfxHeapDeallocatorFunc     pfnFfxHeapDeallocator;          ///< Heap deallocation function (can be null)
+    FfxApiConstantBufferAllocator pfnFfxConstantBufferAllocator;  ///< Constant buffer allocation function (can be null)
 };
 
 #if defined(__cplusplus)
@@ -155,6 +184,8 @@ static inline uint32_t ffxApiGetSurfaceFormatDX12(DXGI_FORMAT format)
     case DXGI_FORMAT_R8_UNORM:
     case DXGI_FORMAT_A8_UNORM:
         return FFX_API_SURFACE_FORMAT_R8_UNORM;
+    case DXGI_FORMAT_R8_SNORM:
+        return FFX_API_SURFACE_FORMAT_R8_SNORM;
     case DXGI_FORMAT_R8_UINT:
         return FFX_API_SURFACE_FORMAT_R8_UINT;
     //case DXGI_FORMAT_R8_SNORM:
@@ -178,6 +209,10 @@ static inline FfxApiResource ffxApiGetResourceDX12(ID3D12Resource* pRes, uint32_
     if (!pRes) return res;
 
     D3D12_RESOURCE_DESC desc = pRes->GetDesc();
+    if (desc.Dimension == D3D12_RESOURCE_DIMENSION_UNKNOWN) {
+        return res;
+    }
+
     if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
     {
         res.description.flags = FFX_API_RESOURCE_FLAGS_NONE;
@@ -224,6 +259,8 @@ static inline FfxApiResource ffxApiGetResourceDX12(ID3D12Resource* pRes, uint32_
         case D3D12_RESOURCE_DIMENSION_TEXTURE3D:
             res.description.type = FFX_API_RESOURCE_TYPE_TEXTURE3D;
             break;
+        default:
+            break;  // D3D12_RESOURCE_DIMENSION_BUFFER and D3D12_RESOURCE_DIMENSION_UNKNOWN are handled above.
         }
     }
 

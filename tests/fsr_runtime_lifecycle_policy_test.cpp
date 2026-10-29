@@ -35,6 +35,9 @@ namespace
 			.amdAdapter = false,
 		}) == ProviderRoute::Unavailable);
 
+	static_assert(SelectProviderRoute({ .hostSupported = true, .runtimePresent = true, .amdAdapter = false, .automaticRequested = true }) == ProviderRoute::Runtime);
+	static_assert(SelectProviderRoute({ .hostSupported = true, .runtimePresent = false, .amdAdapter = false, .automaticRequested = true }) == ProviderRoute::Host);
+
 	static_assert(!HasRetirementRelevantState({}));
 	static_assert(!HasRetirementRelevantState({
 		.interopFencePresent = true,

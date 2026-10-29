@@ -2,11 +2,14 @@
 #include <Windows.h>
 
 #include "Features/Upscaling/FSRTemporalTuningPolicy.h"
+#include <FidelityFX/api/include/ffx_api_loader.h>
 #include <FidelityFX/upscalers/include/ffx_upscale.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <format>
 #include <functional>
 #include <iostream>
 #include <mutex>
@@ -19,6 +22,14 @@ namespace logger
 	void warn(const char*, Args&&...)
 	{}
 }
+namespace globals
+{
+	struct State
+	{
+		uint32_t frameCount = 12;
+	};
+	inline State* state = nullptr;
+}
 namespace globals::features
 {
 	struct
@@ -29,12 +40,14 @@ namespace globals::features
 }
 ffxFunctions ffxModule{};
 #include "temporal_provider_calls_under_test.h"
+#include "temporal_query_under_test.h"
 
 struct FidelityFX
 {
 	enum class LifecycleResult
 	{
 		Ready,
+		Failed,
 		Pending,
 		RuntimeDeviceLost
 	};
@@ -47,6 +60,8 @@ struct FidelityFX
 		kHostFsr31Fallback
 	};
 #include "temporal_snapshot_under_test.h"
+	static constexpr uint32_t RuntimeAutomaticVersion = 0;
+	uint32_t runtimeUpscalerRequestedVersion = 0;
 	bool runtimeUpscalerSupportCheckKnown = false;
 	bool runtimeUpscalerSupportConfirmed = false;
 	std::uint64_t runtimeUpscalerProviderMatchedVersionId = 99;
@@ -63,10 +78,15 @@ struct FidelityFX
 	FSRTemporalTuningPolicy::RejectedRequest temporalRejectedRequest{};
 	LifecycleResult runtimeUpscalerQuarantineRetirement = LifecycleResult::Ready;
 	LifecycleResult cleanupResult = LifecycleResult::Ready;
-	unsigned quarantineCalls = 0;
+	bool runtimeUpscalerSessionQuarantined = false;
+	bool runtimeUpscalerFailureLatched = false;
+	bool runtimeUpscalerQuarantineFrameValid = false;
+	uint32_t runtimeUpscalerQuarantineFrame = 0;
 	unsigned failureCalls = 0;
 	unsigned destroyCalls = 0;
-	void QuarantineRuntimeUpscalerForSession(const char*) { ++quarantineCalls; }
+	void InvalidateFSRRelatchDrain() {}
+	static const char* GetHostFsrSdkLabel() { return "Host FSR3"; }
+	void QuarantineRuntimeUpscalerForSession(const char*);
 	LifecycleResult ResolveRuntimeUpscalerLifecycleFailure(const char*)
 	{
 		++failureCalls;
@@ -78,12 +98,16 @@ struct FidelityFX
 		++destroyCalls;
 		return cleanupResult;
 	}
+	std::string GetRuntimeUpscalerProviderName() const;
 	LifecycleResult RecordRuntimeProviderResult(bool);
 	bool RequestTemporalTuning(const FSRTemporalTuningPolicy::Settings&);
 	TemporalTuningSnapshot GetTemporalTuningSnapshot() const;
 	LifecycleResult ConfigureTemporalTuningContexts(const TemporalTuningSnapshot&);
 };
+#include "temporal_provider_identity_under_test.h"
+#include "temporal_provider_name_under_test.h"
 #include "temporal_provider_result_under_test.h"
+#include "temporal_quarantine_under_test.h"
 
 namespace
 {
@@ -92,6 +116,7 @@ namespace
 	int queryFaultEye = -1;
 	ffxReturnCode_t queryResult = FFX_API_RETURN_OK;
 	constexpr std::uint64_t fsr411 = (0xF5A5CA1Eull << 32) | FFX_UPSCALER_MAKE_VERSION(4, 1, 1);
+	constexpr std::uint64_t fsr412 = (0xF5A5CA1Eull << 32) | FFX_UPSCALER_MAKE_VERSION(4, 1, 2);
 	std::array<std::uint64_t, 2> providerIds{ 123, 123 };
 	int queryFailureEye = -1;
 	unsigned ContextIndex(ffx::Context* context)
@@ -175,22 +200,22 @@ void TestInitialProviderQuery()
 {
 	ffxModule.Query = &Query;
 	FidelityFX valid;
-	Check(valid.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::Ready && queryCalls == 1,
+	Check(valid.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::Ready && queryCalls == 2,
 		"valid fresh provider query must admit context setup");
 	Check(valid.runtimeUpscalerSupportConfirmed && valid.runtimeUpscalerProviderMatchedVersionId == 123 &&
 			  valid.runtimeUpscalerProviderMatchedVersionName == "FSR test",
 		"successful query must publish the actual provider");
 	queryResult = FFX_API_RETURN_ERROR;
 	FidelityFX unavailable;
-	Check(unavailable.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::Ready && unavailable.quarantineCalls == 0 &&
+	Check(unavailable.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::Failed && !unavailable.runtimeUpscalerSessionQuarantined && unavailable.destroyCalls == 1 &&
 			  unavailable.runtimeUpscalerProviderMatchedVersionId == 0 && unavailable.runtimeUpscalerProviderMatchedVersionName.empty(),
-		"ordinary query rejection must clear stale identity without quarantining a valid context");
+		"ordinary query rejection must release the unverified contexts without quarantine");
 	injectFault = true;
 	FidelityFX fault;
 	Check(fault.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::RuntimeDeviceLost,
 		"query SEH must return the lifecycle failure rather than escaping to dispatch");
 	Check(fault.runtimeUpscalerContextIndeterminate[0] && !fault.runtimeUpscalerContextIndeterminate[1] &&
-			  fault.quarantineCalls == 1 && fault.failureCalls == 1 && !fault.runtimeUpscalerSupportConfirmed,
+			  fault.runtimeUpscalerSessionQuarantined && fault.failureCalls == 1 && !fault.runtimeUpscalerSupportConfirmed,
 		"query fault must quarantine the exact indeterminate context before use");
 	Check(fault.temporalTuningSnapshot.status == FSRTemporalTuningPolicy::Status::Faulted &&
 			  fault.temporalTuningSnapshot.lastConfigureResult == FFX_API_RETURN_ERROR &&
@@ -201,15 +226,66 @@ void TestInitialProviderQuery()
 	Check(absent.RecordRuntimeProviderResult(false) == FidelityFX::LifecycleResult::Ready && queryCalls == before,
 		"unsupported creation must not query a provider");
 	absent.runtimeUpscalerContexts[0] = nullptr;
-	Check(absent.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::Ready && queryCalls == before,
+	Check(absent.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::Failed && queryCalls == before,
 		"absent context must not query a provider");
+}
+
+void TestProviderReporting()
+{
+	ResetProvider();
+	FidelityFX active;
+	Check(active.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::Ready,
+		"reporting fixture must verify its runtime contexts");
+	Check(active.GetRuntimeUpscalerProviderName() == "FSR test", "verified provider must be reported");
+	active.temporalLastDispatchPath = FidelityFX::RuntimeUpscalerFramePath::kHostFsr31Fallback;
+	Check(active.GetRuntimeUpscalerProviderName().empty(), "a host fallback must not claim an active runtime provider");
+	active.temporalLastDispatchPath = FidelityFX::RuntimeUpscalerFramePath::kRuntimeFsr4;
+	active.QuarantineRuntimeUpscalerForSession("test failure");
+	Check(active.GetRuntimeUpscalerProviderName().empty() && !active.GetTemporalTuningSnapshot().supportConfirmed &&
+			  !active.runtimeUpscalerSupportConfirmed && active.runtimeUpscalerSessionQuarantined &&
+			  active.GetTemporalTuningSnapshot().activeProviderId == 0 && active.GetTemporalTuningSnapshot().providerId != 0,
+		"quarantine must invalidate provider diagnostics even while retaining context handles");
+	ResetProvider();
+}
+
+void TestSelectionIdentity()
+{
+	ResetProvider();
+	providerIds = { fsr412, fsr411 };
+	FidelityFX mismatch;
+	Check(mismatch.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::Failed && mismatch.destroyCalls == 1,
+		"automatic stereo must reject different providers before dispatch even without tuning");
+	ResetProvider();
+	providerIds = { fsr412, fsr412 };
+	FidelityFX explicitFsr3;
+	explicitFsr3.runtimeUpscalerRequestedVersion = FFX_UPSCALER_MAKE_VERSION(3, 1, 6);
+	Check(explicitFsr3.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::Failed,
+		"explicit FSR3 must reject a provider that silently upgrades to FSR4");
+	ResetProvider();
+	const uint64_t future = (0xF5A5CA1Eull << 32) | 0x80000000ull | FFX_UPSCALER_MAKE_VERSION(5, 2, 1);
+	providerIds = { future, future };
+	FidelityFX automatic;
+	Check(automatic.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::Ready && automatic.temporalTuningSnapshot.activeProviderId == future,
+		"automatic mode must accept and report matching future driver providers");
+	ResetProvider();
+	providerIds = { 0, 0 };
+	FidelityFX unknown;
+	Check(unknown.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::Failed,
+		"unknown identities cannot establish stereo consistency");
+	ResetProvider();
+	injectFault = true;
+	queryFaultEye = 1;
+	FidelityFX rightFault;
+	Check(rightFault.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::RuntimeDeviceLost && rightFault.runtimeUpscalerContextIndeterminate[1],
+		"right-eye provider faults must quarantine before either eye dispatches");
+	ResetProvider();
 }
 
 void TestCompleteProfiles()
 {
 	using namespace FSRTemporalTuningPolicy;
 	const auto profile = EnabledProfile();
-	for (const auto provider : { fsr411, (0xF5A5CA1Eull << 32) | FFX_UPSCALER_MAKE_VERSION(3, 1, 5), 0x123456789ABCDEFull }) {
+	for (const auto provider : { fsr411, fsr412, fsr412 | 0x80000000ull, (0xF5A5CA1Eull << 32) | FFX_UPSCALER_MAKE_VERSION(3, 1, 6), 0x123456789ABCDEFull }) {
 		for (unsigned contexts : { 1u, 2u }) {
 			ResetProvider(provider);
 			FidelityFX fidelity;
@@ -264,7 +340,7 @@ void TestRejectedProfiles()
 				"failed FSR4 configuration must retain its provider identity without applying history state");
 			if (fault) {
 				Check(result == FidelityFX::LifecycleResult::RuntimeDeviceLost && snapshot.status == Status::Faulted &&
-						  snapshot.lastConfigureResult == FFX_API_RETURN_ERROR && fidelity.quarantineCalls == 1 && fidelity.destroyCalls == 0 &&
+						  snapshot.lastConfigureResult == FFX_API_RETURN_ERROR && fidelity.runtimeUpscalerSessionQuarantined && fidelity.destroyCalls == 0 &&
 						  fidelity.runtimeUpscalerContextIndeterminate[failure / 5] && !fidelity.runtimeUpscalerContextIndeterminate[1 - failure / 5],
 					"configure faults must quarantine the exact eye and retain indeterminate ownership");
 			} else {
@@ -338,6 +414,8 @@ void TestIdentityAndRequestChanges()
 int main()
 {
 	TestInitialProviderQuery();
+	TestProviderReporting();
+	TestSelectionIdentity();
 	TestCompleteProfiles();
 	TestRejectedProfiles();
 	TestIdentityAndRequestChanges();

@@ -3864,6 +3864,58 @@ if(BUILD_CONTROLLER_TESTS)
         LightLimitFixVRHookPolicy
         tests/light_limit_fix_vr_hook_policy_test.cpp
     )
+    set(_fsr_selection_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-sdk-selection"
+    )
+    set(_fsr_selection_headers "")
+    foreach(
+        _header
+        IN
+        ITEMS
+            fsr_sdk_versions.h
+            fsr_version_under_test.h
+            fsr_version_format_under_test.h
+            fsr_runtime_route_under_test.h
+            fsr_migration_under_test.h
+            fsr_selection_schema.h
+            fsr_runtime_query_under_test.h
+            fsr_runtime_create_calls_under_test.h
+            fsr_runtime_create_under_test.h
+    )
+        list(
+            APPEND _fsr_selection_headers
+            "${_fsr_selection_test_dir}/${_header}"
+        )
+    endforeach()
+    add_custom_command(
+        OUTPUT ${_fsr_selection_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_fsr_selection_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_fsr_sdk_selection.cmake"
+        DEPENDS
+            src/Features/Upscaling/FidelityFX.cpp
+            src/Features/Upscaling/FidelityFX.h
+            src/Features/Upscaling.cpp
+            src/Features/Upscaling.h
+            tests/extract_fsr_sdk_selection.cmake
+        VERBATIM
+    )
+    add_controller_test(fsr_sdk_selection_test FSRSDKSelection tests/fsr_sdk_selection_test.cpp)
+    target_sources(fsr_sdk_selection_test PRIVATE ${_fsr_selection_headers})
+    target_include_directories(
+        fsr_sdk_selection_test
+        PRIVATE
+            "${_fsr_selection_test_dir}"
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/extern/FidelityFX-SDK/sdk/include"
+    )
+    add_controller_test(fsr_runtime_selection_test FSRRuntimeSelection tests/fsr_runtime_selection_test.cpp)
+    target_sources(fsr_runtime_selection_test PRIVATE ${_fsr_selection_headers})
+    target_include_directories(
+        fsr_runtime_selection_test
+        PRIVATE "${_fsr_selection_test_dir}" "${PROJECT_SOURCE_DIR}/include"
+    )
     add_controller_test(
         fsr_host_lifecycle_policy_test
         FSRHostLifecyclePolicy
@@ -3937,6 +3989,10 @@ if(BUILD_CONTROLLER_TESTS)
     set(_fsr_temporal_headers
         "${_fsr_temporal_test_dir}/temporal_settings_load_under_test.h"
         "${_fsr_temporal_test_dir}/temporal_provider_calls_under_test.h"
+        "${_fsr_temporal_test_dir}/temporal_query_under_test.h"
+        "${_fsr_temporal_test_dir}/temporal_provider_identity_under_test.h"
+        "${_fsr_temporal_test_dir}/temporal_quarantine_under_test.h"
+        "${_fsr_temporal_test_dir}/temporal_provider_name_under_test.h"
         "${_fsr_temporal_test_dir}/temporal_provider_result_under_test.h"
         "${_fsr_temporal_test_dir}/temporal_snapshot_under_test.h"
     )

@@ -23,6 +23,22 @@ includes both standard and Horizon Fix Water variants. Optional integrations
 still require their companion plugins. GitHub's source archives are for
 development, not installation.
 
+CSX bundles AMD FSR SDK 2.4.0 with FSR Upscaling 4.1.2. **AMD FSR runtime**
+lets the SDK select a compatible provider, including automatic driver upgrades,
+and displays the actual provider separately. Runtime availability is checked
+on the active device; it is not restricted by GPU model names. **AMD FSR3**
+remains an explicit selection. Existing FSR4 preferences select automatic
+runtime mode, while saved FSR3 choices remain unchanged.
+Runtime FSR3 uses version 3.1.6. The independent FidelityFX-SDK-DX11 host
+implementation uses version 3.1.5. Provider failures retain CSX's host fallback and session
+quarantine. Stereo contexts must report the same provider before dispatch.
+
+The public upscaling API exposes `FSRRuntime::kAutomatic`; `kFSR4` retains the
+same ABI value as a compatibility alias. DevBench accepts `fsrRuntime: "auto"`
+and the legacy `"fsr4"` spelling. Neither guarantees a particular provider
+version. `communityshaders.fsr_temporal_tuning` status reports the active provider identity
+and runtime support checks independently of temporal tuning overrides.
+
 Depth of field controls are under **Adaptive Balance > Global > Depth of field**.
 Scene and underwater overrides are global and default to off. Underwater fog
 blur correction has its own toggle; Adaptive Balance's Enabled control gates

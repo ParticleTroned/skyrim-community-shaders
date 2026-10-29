@@ -5437,27 +5437,11 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 #endif
 	}
 
-	void ApplyLegacyFsr4RuntimeSelectionMigration(
-		Upscaling::Settings& settings,
-		FidelityFX::Fsr4AdapterSupport a_adapterSupport)
+	void ApplyLegacyFsr4RuntimeSelectionMigration(Upscaling::Settings& settings)
 	{
-		if (settings.fsr4RuntimeSelectionSchemaVersion >= Upscaling::kFsr4RuntimeSelectionSchemaVersion)
-			return;
-
-		switch (a_adapterSupport) {
-		case FidelityFX::Fsr4AdapterSupport::RadeonRx7000:
-			if (!settings.fsr4RuntimeEnable)
-				logger::info("[Upscaling] Migrated RX 7000 settings to the newly supported FSR4 runtime path.");
-			settings.fsr4RuntimeEnable = true;
-			break;
-		case FidelityFX::Fsr4AdapterSupport::RadeonRx9000:
-			// RX 9000 users could already choose FSR3, so preserve that selection.
-			break;
-		case FidelityFX::Fsr4AdapterSupport::Unsupported:
-			// Keep the migration pending in case this config is later used with a supported GPU.
-			return;
-		}
-		settings.fsr4RuntimeSelectionSchemaVersion = Upscaling::kFsr4RuntimeSelectionSchemaVersion;
+		// The saved boolean is an explicit preference on every adapter family.
+		settings.fsr4RuntimeSelectionSchemaVersion = std::max(
+			settings.fsr4RuntimeSelectionSchemaVersion, Upscaling::kFsr4RuntimeSelectionSchemaVersion);
 	}
 
 	void ResetVRSpecificUpscalingSettings(Upscaling::Settings& settings)
@@ -16676,9 +16660,7 @@ namespace
 		}
 		if (globals::state)
 			globals::state->SetAdapterDescription(adapterDesc.Description);
-		ApplyLegacyFsr4RuntimeSelectionMigration(
-			a_upscaling.settings,
-			FidelityFX::GetFsr4AdapterSupport(adapterDesc));
+		ApplyLegacyFsr4RuntimeSelectionMigration(a_upscaling.settings);
 		if (adapterDesc.VendorId != kNvidiaVendorId) {
 			a_upscaling.streamline.MarkAdapterUnavailable("created device is not on an NVIDIA adapter");
 			return false;
@@ -17249,7 +17231,7 @@ void Upscaling::DrawSettings()
 		upscaleChoices.push_back({ UpscaleMethod::kTAA, false, "TAA" });
 		upscaleChoices.push_back({ UpscaleMethod::kFSR, false, "AMD FSR3" });
 		if (runtimeFsr4AutoEligible)
-			upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR4" });
+			upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR runtime" });
 		if (featureDLSS)
 			upscaleChoices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
 	}
@@ -17305,7 +17287,7 @@ void Upscaling::DrawSettings()
 		} else {
 			ImGui::TextUnformatted("Selects the upscaling backend. Choices incompatible with enabled NR are unavailable.");
 			if (runtimeFsr4AutoEligible)
-				ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR3, FSR4, or None.");
+				ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR3, automatic FSR runtime, or None.");
 			else
 				ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR3, or None.");
 			if (renderDocBlocksUpscaling)
@@ -17367,18 +17349,21 @@ void Upscaling::DrawSettings()
 		fidelityFX.ShouldUseRuntimeUpscalerForFSR();
 	if (upscaleMethod == UpscaleMethod::kFSR) {
 		const auto& hostFsrSdkLabel = FidelityFX::GetHostFsrSdkLabel();
-		const auto& runtimeFsr3Label = FidelityFX::GetRuntimeUpscalerLabel(FidelityFX::Fsr3Version);
 		ImGui::TextDisabled("FSR path: %s", fidelityFX.GetDisplayedFsrPathLabel().c_str());
+		if (runtimeFsrPathRequested) {
+			const auto provider = fidelityFX.GetRuntimeUpscalerProviderName();
+			ImGui::TextDisabled("Runtime provider: %s", provider.empty() ? "Not active" : provider.c_str());
+		}
 		if (fidelityFX.IsRuntimeUpscalerFailureLatched()) {
 			ImGui::TextDisabled("Runtime FSR path is latched off after a runtime failure; using %s fallback.", hostFsrSdkLabel.c_str());
 		} else if (fidelityFX.IsRuntimeFsr4FailureLatched()) {
-			ImGui::TextDisabled("FSR4 is latched off after a runtime failure; using %s.", runtimeFsr3Label.c_str());
+			ImGui::TextDisabled("Automatic FSR runtime is latched off after a failure; using %s fallback.", hostFsrSdkLabel.c_str());
 		} else if (fidelityFX.HasRuntimeUpscalerSupportCheckResult() &&
 				   !fidelityFX.IsRuntimeUpscalerSupportConfirmed()) {
 			ImGui::TextDisabled("Runtime FSR context creation failed; using %s fallback.", hostFsrSdkLabel.c_str());
 		}
 		if (!runtimeUpscalerPresent && runtimeFsr4Requested)
-			ImGui::TextDisabled("FSR4 unavailable: missing FidelityFX upscaler runtime.");
+			ImGui::TextDisabled("FSR runtime unavailable: missing FidelityFX upscaler runtime.");
 	}
 
 	// Display warning for DLSS resolution limits (non-VR only; VR handles this automatically)
@@ -17498,7 +17483,7 @@ void Upscaling::DrawSettings()
 				qualityEditDispatch.directMenuEdit);
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Controls the shared DLSS/FSR3/FSR4 internal render scale / quality level.");
+			ImGui::TextUnformatted("Controls the shared DLSS/FSR internal render scale / quality level.");
 			ImGui::TextUnformatted("Choose a named preset; the resolution scale is shown beside each option.");
 		}
 
@@ -17537,7 +17522,7 @@ void Upscaling::DrawSettings()
 					draft = settings.fsrTemporalTuning;
 					lastSettings = settings.fsrTemporalTuning;
 				}
-				ImGui::TextWrapped("Runtime FSR tuning, including FSR 4.1.1. Apply edits together. Disabling or any provider rejection restores the entire profile to vendor defaults.");
+				ImGui::TextWrapped("Runtime FSR tuning. Apply edits together. Disabling or any provider rejection restores the entire profile to vendor defaults.");
 				Util::Widgets::Checkbox("Enable reconstruction overrides", &draft.enabled);
 				Util::Widgets::SliderFloat("Velocity factor", &draft.velocityFactor, 0.0f, 1.0f);
 				if (auto _tt = Util::HoverTooltipWrapper())
@@ -17859,11 +17844,11 @@ void Upscaling::DrawSettings()
 					if (!runtimeUpscalerPresent)
 						return "Unavailable (missing runtime)";
 					if (!runtimeFsrPathRequested && settings.fsr4RuntimeEnable)
-						return "Unavailable for adapter";
+						return "Runtime not selected";
 					if (runtimeFailureLatched)
 						return "Unavailable (latched fallback)";
 					if (runtimeFsr4FailureLatched)
-						return "Available (FSR4 fallback latched)";
+						return "Automatic runtime fallback latched";
 					if (!supportKnown)
 						return "Pending";
 					if (supportConfirmed && providerMismatch)
@@ -18025,7 +18010,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		upscaleChoices.push_back({ UpscaleMethod::kTAA, false, "TAA" });
 		upscaleChoices.push_back({ UpscaleMethod::kFSR, false, "AMD FSR3" });
 		if (runtimeFsr4AutoEligible)
-			upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR4" });
+			upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR runtime" });
 		if (featureDLSS)
 			upscaleChoices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
 	}
@@ -21003,7 +20988,7 @@ void Upscaling::LoadSettings(json& o_json)
 	}
 	if (!hasFsr4RuntimeSelectionSchemaVersion)
 		settings.fsr4RuntimeSelectionSchemaVersion = 0;
-	ApplyLegacyFsr4RuntimeSelectionMigration(settings, fidelityFX.GetFsr4AdapterSupport());
+	ApplyLegacyFsr4RuntimeSelectionMigration(settings);
 	if (!hasRenderScaleModeSetting && hasLegacyPerfModeSetting) {
 		try {
 			settings.renderScaleMode = o_json.at("perfMode").get<uint>();
@@ -21792,7 +21777,7 @@ Upscaling::VRExistingVendorProviderSnapshot Upscaling::GetExistingVRVendorProvid
 				a_profile.displayEyeWidth,
 				a_profile.displayEyeHeight,
 				2u,
-				FFX_UPSCALER_VERSION)) {
+				FidelityFX::RuntimeAutomaticVersion)) {
 			return VRRenderScaleBackendKind::FSR4Runtime;
 		}
 		if (fidelityFX.AreRuntimeUpscalerResourcesCompatible(
@@ -21801,7 +21786,7 @@ Upscaling::VRExistingVendorProviderSnapshot Upscaling::GetExistingVRVendorProvid
 				a_profile.displayEyeWidth,
 				a_profile.displayEyeHeight,
 				2u,
-				FidelityFX::Fsr3Version)) {
+				FidelityFX::RuntimeFsr3Version)) {
 			return VRRenderScaleBackendKind::FSRRuntime;
 		}
 		return fidelityFX.HasFSRResources() ?
@@ -21937,8 +21922,8 @@ bool Upscaling::CanDispatchExistingVRVendorEvaluation(
 		const bool runtimeFSR4Provider =
 			providerBackend == VRRenderScaleBackendKind::FSR4Runtime;
 		const uint32_t runtimeVersion = runtimeFSR4Provider ?
-		                                    FFX_UPSCALER_VERSION :
-		                                    FidelityFX::Fsr3Version;
+		                                    FidelityFX::RuntimeAutomaticVersion :
+		                                    FidelityFX::RuntimeFsr3Version;
 		const bool runtimeResourcesMatch =
 			hostProvider ||
 			fidelityFX.AreRuntimeUpscalerResourcesCompatible(
@@ -22020,8 +22005,8 @@ bool Upscaling::CanDispatchExistingVRVendorEvaluation(
 				} else {
 					const uint32_t runtimeVersion =
 						provider.backend == VRRenderScaleBackendKind::FSR4Runtime ?
-							FFX_UPSCALER_VERSION :
-							FidelityFX::Fsr3Version;
+							FidelityFX::RuntimeAutomaticVersion :
+							FidelityFX::RuntimeFsr3Version;
 					resourcesReady = fidelityFX.AreRuntimeUpscalerResourcesCompatible(
 						provider.displayEyeWidth,
 						provider.displayEyeHeight,
@@ -42411,7 +42396,7 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			CreateUpscalingTextureResources(a_upscalemethod);
 		}
 
-		// Host FSR 3.1.5 and runtime upscaler providers keep separate temporal state.
+		// Host FSR3 and runtime upscaler providers keep separate temporal state.
 		// Ordinary path changes rebuild; provider quarantine may retain a compatible
 		// host context and reset its history while the runtime path falls back.
 		if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
@@ -64183,7 +64168,7 @@ Upscaling::VRRenderScaleResourceKey Upscaling::BuildVRRenderScaleResourceKey(con
 	} else if (a_profile.method == UpscaleMethod::kFSR) {
 		const bool runtimeFSR =
 			!fidelityFX.IsRuntimeUpscalerFailureLatched() &&
-			fidelityFX.ShouldUseRuntimeUpscalerForFSR();
+			fidelityFX.ShouldUseRuntimeUpscalerForFSR(a_profile.fsr4RuntimeEnabled);
 		const bool runtimeFSR4 =
 			runtimeFSR &&
 			a_profile.fsr4RuntimeEnabled &&
@@ -65970,7 +65955,7 @@ void Upscaling::PreparePendingVRRenderScaleTransition(
 		stageBeginQpc = QueryVRRenderScalePresentationQpc();
 #endif
 		const bool runtimeFSR =
-			fidelityFX.ShouldUseRuntimeUpscalerForFSR() &&
+			fidelityFX.ShouldUseRuntimeUpscalerForFSR(a_request.fsr4RuntimeEnabled) &&
 			!fidelityFX.IsRuntimeUpscalerFailureLatched();
 		if (runtimeFSR) {
 			const bool runtimeFSR4 =

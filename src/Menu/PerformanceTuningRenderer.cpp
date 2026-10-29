@@ -1553,7 +1553,7 @@ namespace
 				qualityName,
 				Upscaling::GetDLSSPresetName(dlssPreset));
 		} else if (isFSR) {
-			result.label = fmt::format("{} {}", fsr4RuntimeEnabled ? "FSR4" : "FSR3", qualityName);
+			result.label = fmt::format("{} {}", fsr4RuntimeEnabled ? "FSR runtime" : "FSR3", qualityName);
 		}
 
 		result.profile = baseState;
@@ -1809,7 +1809,7 @@ namespace
 					currentTime,
 					UpscalingCostSweepPhase::Failed,
 					fsr4ProviderFallback ?
-						"The FSR4 provider fell back before its measurement could complete." :
+						"The automatic FSR runtime provider fell back before its measurement could complete." :
 						"The active Upscaling profile changed outside the measurement protocol.");
 				return;
 			}
@@ -2567,7 +2567,7 @@ namespace
 			{ "renderScale", renderScaleMode ? Upscaling::GetQualityModeResolutionScale(qualityMode) : 1.0f },
 			{ "dlssPreset", isDLSS ? json(dlssPreset) : json(nullptr) },
 			{ "dlssPresetName", isDLSS ? json(Upscaling::GetDLSSPresetName(dlssPreset)) : json(nullptr) },
-			{ "fsrRuntime", isFSR ? json(fsr4RuntimeEnabled ? "FSR4" : "FSR3") : json(nullptr) },
+			{ "fsrRuntime", isFSR ? json(fsr4RuntimeEnabled ? "FSR runtime" : "FSR3") : json(nullptr) },
 		};
 	}
 

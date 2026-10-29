@@ -26,8 +26,15 @@
 
 #include <FidelityFX/api/include/ffx_api.hpp>
 #include <FidelityFX/api/include/ffx_api_loader.h>
+
+// The runtime and DX11 host SDKs give different layouts the same type name.
+#pragma push_macro("FfxFrameGenerationConfig")
+#undef FfxFrameGenerationConfig
+#define FfxFrameGenerationConfig FfxRuntimeFrameGenerationConfig
 #include <FidelityFX/framegeneration/include/dx12/ffx_api_framegeneration_dx12.hpp>
 #include <FidelityFX/framegeneration/include/ffx_framegeneration.hpp>
+#pragma pop_macro("FfxFrameGenerationConfig")
+
 #include <FidelityFX/upscalers/include/ffx_upscale.hpp>
 
 #include "../../Buffer.h"
@@ -50,17 +57,12 @@ public:
 		RuntimeDeviceLost
 	};
 
-	enum class Fsr4AdapterSupport
-	{
-		Unsupported,
-		RadeonRx7000,
-		RadeonRx9000
-	};
 	enum class RuntimeUpscalerFramePath : uint8_t
 	{
 		kInactive = 0,
 		kHostFsr31 = 1,
 		kRuntimeFsr31 = 2,
+		/** Automatic runtime route; the provider query supplies the actual version. */
 		kRuntimeFsr4 = 3,
 		kHostFsr31Fallback = 4
 	};
@@ -109,7 +111,10 @@ public:
 #endif
 
 	static constexpr const wchar_t* PluginDir = L"Data\\Shaders\\Upscaling\\FidelityFX";
-	static constexpr uint32_t Fsr3Version = FFX_UPSCALER_MAKE_VERSION(FFX_FSR3_VERSION_MAJOR, FFX_FSR3_VERSION_MINOR, FFX_FSR3_VERSION_PATCH);
+	/** Automatic requests omit all SDK effect-version overrides. */
+	static constexpr uint32_t RuntimeAutomaticVersion = 0;
+	static constexpr uint32_t HostFsr3Version = FFX_UPSCALER_MAKE_VERSION(FFX_FSR3_VERSION_MAJOR, FFX_FSR3_VERSION_MINOR, FFX_FSR3_VERSION_PATCH);
+	static constexpr uint32_t RuntimeFsr3Version = FFX_UPSCALER_MAKE_VERSION(3, 1, 6);
 	static constexpr std::wstring_view RuntimeUpscalerDllName = L"amd_fidelityfx_upscaler_dx12.dll";
 	static constexpr std::string_view RuntimeUpscalerDllNameUtf8 = "amd_fidelityfx_upscaler_dx12.dll";
 	/** Requested profile and last context application; retained context evidence may outlive FSR dispatch. */
@@ -118,7 +123,13 @@ public:
 		FSRTemporalTuningPolicy::Settings requested{};
 		FSRTemporalTuningPolicy::Settings contextSettings{};
 		FSRTemporalTuningPolicy::Status status = FSRTemporalTuningPolicy::Status::Inactive;
+		/** Provider associated with temporal configuration, including rejected requests. */
 		uint64_t providerId = 0;
+		uint64_t activeProviderId = 0;
+		std::string providerName;
+		uint32_t requestedVersion = 0;
+		bool supportKnown = false;
+		bool supportConfirmed = false;
 		uint32_t configuredContexts = 0;
 		int32_t lastConfigureResult = 0;
 		uint64_t requestRevision = 0;
@@ -224,12 +235,12 @@ public:
 	bool IsAmdAdapterDetected() const;
 	bool IsNvidiaAdapterDetected() const;
 	bool IsRuntimeUpscalerPresent() const;
-	static Fsr4AdapterSupport GetFsr4AdapterSupport(const DXGI_ADAPTER_DESC& a_adapterDesc);
-	Fsr4AdapterSupport GetFsr4AdapterSupport() const;
+	/** Runtime candidates are validated through device/context capabilities, not GPU names. */
 	bool IsRuntimeFsr4AutoEligible() const;
 	bool IsRuntimeFsr4Available() const;
 	bool ShouldRequestRuntimeFsr4() const;
-	bool ShouldUseRuntimeUpscalerForFSR() const;
+	/** Resolves the target preference during preparation, or the active preference otherwise. */
+	bool ShouldUseRuntimeUpscalerForFSR(std::optional<bool> a_automaticRequested = std::nullopt) const;
 	/** Applies the guide routing preference without releasing fenced import ownership. */
 	void SetRuntimeSharedGuideInputsEnabled(bool a_enabled) noexcept { runtimeSharedGuideInputsEnabled.store(a_enabled, std::memory_order_release); }
 	[[nodiscard]] bool AreRuntimeSharedGuideInputsEnabled() const noexcept { return runtimeSharedGuideInputsEnabled.load(std::memory_order_acquire); }
@@ -396,7 +407,6 @@ private:
 	mutable std::mutex adapterDescMutex;
 	mutable winrt::com_ptr<ID3D11Device> adapterDescDevice;
 	mutable DXGI_ADAPTER_DESC cachedAdapterDesc{};
-	mutable Fsr4AdapterSupport cachedAdapterFsr4Support = Fsr4AdapterSupport::Unsupported;
 	mutable bool cachedAdapterDescValid = false;
 
 	struct RuntimeRegionDescriptions
@@ -427,7 +437,7 @@ private:
 		uint32_t fullDisplayHeight = 0;
 	};
 
-	bool TryGetCurrentAdapterDesc(DXGI_ADAPTER_DESC& a_outDesc, Fsr4AdapterSupport* a_outFsr4Support = nullptr) const;
+	bool TryGetCurrentAdapterDesc(DXGI_ADAPTER_DESC& a_outDesc) const;
 	bool CanUseRuntimeUpscalerPath();
 	RuntimeDispatchPlan ResolveRuntimeDispatchPlan();
 	void ArmRuntimeHostFallback(uint32_t a_contextCount);

@@ -319,7 +319,7 @@ public:
 	static constexpr uint32_t kDLSSPresetF = 4;
 	static constexpr uint32_t kDLSSPresetE = 5;
 	static constexpr uint32_t kDLSSPresetMaxIndex = kDLSSPresetE;
-	static constexpr uint32_t kFsr4RuntimeSelectionSchemaVersion = 1;
+	static constexpr uint32_t kFsr4RuntimeSelectionSchemaVersion = 2;
 	// CSX owns renderer-transition coverage; the external Stabilizer fade must
 	// stay disabled to avoid stacking a second timed black hold.
 	static constexpr float kVRFpsStabilizerDefaultFadeDuration = 0.0f;

@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX SDK.
 //
-// Copyright (C) 2025 Advanced Micro Devices, Inc.
+// Copyright (C) 2026 Advanced Micro Devices, Inc.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files(the "Software"), to deal
@@ -31,53 +31,80 @@ namespace ffx
 {
 
 template<>
-struct struct_type<ffxCreateContextDescFrameGenerationSwapChainWrapDX12> : std::integral_constant<uint64_t, FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_WRAP_DX12> {};
+struct struct_type<ffxCreateContextDescFrameGenerationSwapChainWrapDX12> : std::integral_constant<uint64_t, FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_WRAP_DX12>
+{};
 
-struct CreateContextDescFrameGenerationSwapChainWrapDX12 : public InitHelper<ffxCreateContextDescFrameGenerationSwapChainWrapDX12> {};
-
-template<>
-struct struct_type<ffxCreateContextDescFrameGenerationSwapChainNewDX12> : std::integral_constant<uint64_t, FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_NEW_DX12> {};
-
-struct CreateContextDescFrameGenerationSwapChainNewDX12 : public InitHelper<ffxCreateContextDescFrameGenerationSwapChainNewDX12> {};
+struct CreateContextDescFrameGenerationSwapChainWrapDX12 : public InitHelper<ffxCreateContextDescFrameGenerationSwapChainWrapDX12>
+{};
 
 template<>
-struct struct_type<ffxCreateContextDescFrameGenerationSwapChainForHwndDX12> : std::integral_constant<uint64_t, FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_FOR_HWND_DX12> {};
+struct struct_type<ffxCreateContextDescFrameGenerationSwapChainNewDX12> : std::integral_constant<uint64_t, FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_NEW_DX12>
+{};
 
-struct CreateContextDescFrameGenerationSwapChainForHwndDX12 : public InitHelper<ffxCreateContextDescFrameGenerationSwapChainForHwndDX12> {};
-
-template<>
-struct struct_type<ffxConfigureDescFrameGenerationSwapChainRegisterUiResourceDX12> : std::integral_constant<uint64_t, FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_REGISTERUIRESOURCE_DX12> {};
-
-struct ConfigureDescFrameGenerationSwapChainRegisterUiResourceDX12 : public InitHelper<ffxConfigureDescFrameGenerationSwapChainRegisterUiResourceDX12> {};
+struct CreateContextDescFrameGenerationSwapChainNewDX12 : public InitHelper<ffxCreateContextDescFrameGenerationSwapChainNewDX12>
+{};
 
 template<>
-struct struct_type<ffxQueryDescFrameGenerationSwapChainInterpolationCommandListDX12> : std::integral_constant<uint64_t, FFX_API_QUERY_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_INTERPOLATIONCOMMANDLIST_DX12> {};
+struct struct_type<ffxCreateContextDescFrameGenerationSwapChainForHwndDX12> : std::integral_constant<uint64_t, FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_FOR_HWND_DX12>
+{};
 
-struct QueryDescFrameGenerationSwapChainInterpolationCommandListDX12 : public InitHelper<ffxQueryDescFrameGenerationSwapChainInterpolationCommandListDX12> {};
-
-template<>
-struct struct_type<ffxQueryDescFrameGenerationSwapChainInterpolationTextureDX12> : std::integral_constant<uint64_t, FFX_API_QUERY_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_INTERPOLATIONTEXTURE_DX12> {};
-
-struct QueryDescFrameGenerationSwapChainInterpolationTextureDX12 : public InitHelper<ffxQueryDescFrameGenerationSwapChainInterpolationTextureDX12> {};
+struct CreateContextDescFrameGenerationSwapChainForHwndDX12 : public InitHelper<ffxCreateContextDescFrameGenerationSwapChainForHwndDX12>
+{};
 
 template<>
-struct struct_type<ffxDispatchDescFrameGenerationSwapChainWaitForPresentsDX12> : std::integral_constant<uint64_t, FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_WAIT_FOR_PRESENTS_DX12> {};
+struct struct_type<ffxConfigureDescFrameGenerationSwapChainRegisterUiResourceDX12> : std::integral_constant<uint64_t, FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_REGISTERUIRESOURCE_DX12>
+{};
 
-struct DispatchDescFrameGenerationSwapChainWaitForPresentsDX12 : public InitHelper<ffxDispatchDescFrameGenerationSwapChainWaitForPresentsDX12> {};
-
-template<>
-struct struct_type<ffxConfigureDescFrameGenerationSwapChainKeyValueDX12> : std::integral_constant<uint64_t, FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_KEYVALUE_DX12> {};
-
-struct ConfigureDescFrameGenerationSwapChainKeyValueDX12 : public InitHelper<ffxConfigureDescFrameGenerationSwapChainKeyValueDX12> {};
+struct ConfigureDescFrameGenerationSwapChainRegisterUiResourceDX12 : public InitHelper<ffxConfigureDescFrameGenerationSwapChainRegisterUiResourceDX12>
+{};
 
 template<>
-struct struct_type<ffxQueryFrameGenerationSwapChainGetGPUMemoryUsageDX12> : std::integral_constant<uint64_t, FFX_API_QUERY_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_GPU_MEMORY_USAGE_DX12> {};
+struct struct_type<ffxQueryDescFrameGenerationSwapChainInterpolationCommandListDX12> : std::integral_constant<uint64_t, FFX_API_QUERY_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_INTERPOLATIONCOMMANDLIST_DX12>
+{};
 
-struct QueryFrameGenerationSwapChainGetGPUMemoryUsageDX12 : public InitHelper<ffxQueryFrameGenerationSwapChainGetGPUMemoryUsageDX12> {};
+struct QueryDescFrameGenerationSwapChainInterpolationCommandListDX12 : public InitHelper<ffxQueryDescFrameGenerationSwapChainInterpolationCommandListDX12>
+{};
 
 template<>
-struct struct_type<ffxQueryFrameGenerationSwapChainGetGPUMemoryUsageDX12V2> : std::integral_constant<uint64_t, FFX_API_QUERY_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_GPU_MEMORY_USAGE_DX12_V2> {};
+struct struct_type<ffxQueryDescFrameGenerationSwapChainInterpolationTextureDX12> : std::integral_constant<uint64_t, FFX_API_QUERY_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_INTERPOLATIONTEXTURE_DX12>
+{};
 
-struct QueryFrameGenerationSwapChainGetGPUMemoryUsageDX12V2 : public InitHelper<ffxQueryFrameGenerationSwapChainGetGPUMemoryUsageDX12V2> {};
+struct QueryDescFrameGenerationSwapChainInterpolationTextureDX12 : public InitHelper<ffxQueryDescFrameGenerationSwapChainInterpolationTextureDX12>
+{};
 
-}
+template<>
+struct struct_type<ffxDispatchDescFrameGenerationSwapChainWaitForPresentsDX12> : std::integral_constant<uint64_t, FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_WAIT_FOR_PRESENTS_DX12>
+{};
+
+struct DispatchDescFrameGenerationSwapChainWaitForPresentsDX12 : public InitHelper<ffxDispatchDescFrameGenerationSwapChainWaitForPresentsDX12>
+{};
+
+template<>
+struct struct_type<ffxConfigureDescFrameGenerationSwapChainKeyValueDX12> : std::integral_constant<uint64_t, FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_KEYVALUE_DX12>
+{};
+
+struct ConfigureDescFrameGenerationSwapChainKeyValueDX12 : public InitHelper<ffxConfigureDescFrameGenerationSwapChainKeyValueDX12>
+{};
+
+template<>
+struct struct_type<ffxQueryFrameGenerationSwapChainGetGPUMemoryUsageDX12> : std::integral_constant<uint64_t, FFX_API_QUERY_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_GPU_MEMORY_USAGE_DX12>
+{};
+
+struct QueryFrameGenerationSwapChainGetGPUMemoryUsageDX12 : public InitHelper<ffxQueryFrameGenerationSwapChainGetGPUMemoryUsageDX12>
+{};
+
+template<>
+struct struct_type<ffxQueryFrameGenerationSwapChainGetGPUMemoryUsageDX12V2> : std::integral_constant<uint64_t, FFX_API_QUERY_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_GPU_MEMORY_USAGE_DX12_V2>
+{};
+
+struct QueryFrameGenerationSwapChainGetGPUMemoryUsageDX12V2 : public InitHelper<ffxQueryFrameGenerationSwapChainGetGPUMemoryUsageDX12V2>
+{};
+
+template<>
+struct struct_type<ffxCreateContextDescFrameGenerationSwapChainVersionDX12> : std::integral_constant<uint64_t, FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_VERSION_DX12>
+{};
+
+struct CreateContextDescFrameGenerationSwapChainVersionDX12 : public InitHelper<ffxCreateContextDescFrameGenerationSwapChainVersionDX12>
+{};
+
+}  // namespace ffx

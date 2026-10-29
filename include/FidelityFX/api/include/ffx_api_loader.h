@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX SDK.
 //
-// Copyright (C) 2025 Advanced Micro Devices, Inc.
+// Copyright (C) 2026 Advanced Micro Devices, Inc.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files(the "Software"), to deal
@@ -35,6 +35,12 @@ typedef struct ffxFunctions {
 // _GAMING_XBOX defined by GDK tools build
 // _WINDOWS defined by MSBuild x64 windows configurations
 // PLATFORM_WINDOWS defined for Unreal Engine build processes
+#if defined(_WINDOWS) || defined(PLATFORM_WINDOWS)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif //WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif // defined(_WINDOWS) || defined(PLATFORM_WINDOWS)
 #if defined(_GAMING_XBOX) || defined(_WINDOWS) || defined(PLATFORM_WINDOWS)
 #include <libloaderapi.h>
 #else

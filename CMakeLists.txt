@@ -1877,6 +1877,8 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_shell_under_test.h"
             "${_settings_ui_dir}/settings_capture_feedback_under_test.h"
             "${_settings_ui_dir}/settings_constraint_warning_under_test.h"
+            "${_settings_ui_dir}/settings_adaptive_presets_under_test.h"
+            "${_settings_ui_dir}/settings_preset_files_under_test.h"
         COMMAND
             "${Python3_EXECUTABLE}"
             "${PROJECT_SOURCE_DIR}/tests/ui_page_inventory.py" --root
@@ -1945,6 +1947,8 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_shell_under_test.h"
             "${_settings_ui_dir}/settings_capture_feedback_under_test.h"
             "${_settings_ui_dir}/settings_constraint_warning_under_test.h"
+            "${_settings_ui_dir}/settings_adaptive_presets_under_test.h"
+            "${_settings_ui_dir}/settings_preset_files_under_test.h"
     )
     target_include_directories(settings_ui_test PRIVATE "${_settings_ui_dir}")
     find_package(fmt CONFIG REQUIRED)

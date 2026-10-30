@@ -13,6 +13,7 @@
 #include "Utils/Form.h"
 #include "Utils/Game.h"
 #include "Utils/PointLightFlags.h"
+#include "Utils/StringUtils.h"
 #include "Utils/UI.h"
 #include "WeatherColorAdjustment.h"
 #include "WetternessLightingPolicy.h"
@@ -543,22 +544,56 @@ namespace
 		return GetPresetDirectory() / GetPresetFilename(a_name, a_kind);
 	}
 
-	std::filesystem::path GetLocationOverrideLiveOverridePath(std::string_view a_name)
+	std::array<std::filesystem::path, 2> GetPresetImportDirectories(PresetKind a_kind)
 	{
-		return Util::PathHelpers::GetOverridesPath() / GetPresetFilename(a_name, PresetKind::Location);
+		return { GetPresetDirectory(), a_kind == PresetKind::Location ? Util::PathHelpers::GetOverridesPath() : std::filesystem::path{} };
+	}
+
+	void ReadPresetNames(PresetKind a_kind, std::vector<std::string>& a_names, std::string& a_status)
+	{
+		a_names.clear();
+		a_status.clear();
+		std::unordered_set<std::string> seen;
+		std::size_t skipped = 0;
+		const auto suffix = std::format("{}.json", GetPresetFilenameSuffix(a_kind));
+		for (const auto& directory : GetPresetImportDirectories(a_kind)) {
+			try {
+				if (directory.empty() || !std::filesystem::exists(directory))
+					continue;
+				for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+					const auto filename = Util::PathToUtf8(entry.path().filename());
+					if (!entry.is_regular_file() || !EndsWithCaseInsensitive(filename, suffix))
+						continue;
+					const auto key = Util::ToLowerAscii(filename);
+					// A listed filename must resolve back to itself through the existing importer.
+					if (key != Util::ToLowerAscii(GetPresetFilename(filename, a_kind))) {
+						++skipped;
+						continue;
+					}
+					if (seen.insert(key).second)
+						a_names.push_back(filename);
+				}
+			} catch (const std::filesystem::filesystem_error& error) {
+				if (!a_status.empty())
+					a_status += " ";
+				a_status += std::format("Could not list presets: {}", error.what());
+			}
+		}
+		std::ranges::sort(a_names);
+		if (skipped) {
+			if (!a_status.empty())
+				a_status += " ";
+			a_status += std::format("{} file(s) omitted: use letters, numbers, - or _ before the preset suffix.", skipped);
+		}
 	}
 
 	std::optional<std::filesystem::path> ResolvePresetImportPath(std::string_view a_name, PresetKind a_kind)
 	{
-		std::array paths{
-			GetPresetPath(a_name, a_kind),
-			a_kind == PresetKind::Location ? GetLocationOverrideLiveOverridePath(a_name) : std::filesystem::path{}
-		};
-
-		for (const auto& path : paths) {
-			if (path.empty())
+		for (const auto& directory : GetPresetImportDirectories(a_kind)) {
+			if (directory.empty())
 				continue;
 
+			const auto path = directory / GetPresetFilename(a_name, a_kind);
 			std::error_code ec;
 			if (std::filesystem::exists(path, ec) && !ec)
 				return path;
@@ -1503,32 +1538,6 @@ namespace
 		ImGui::PopTextWrapPos();
 	}
 
-	void DrawPresetNameInput(
-		const char* a_label,
-		const char* a_id,
-		std::string& a_name,
-		const std::filesystem::path& a_exportPath,
-		const std::filesystem::path* a_alternateImportPath = nullptr,
-		float a_width = 0.0f)
-	{
-		if (a_label && a_label[0] != '\0') {
-			ImGui::TextUnformatted(a_label);
-			ImGui::SameLine();
-		}
-		const float availableWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
-		const float requestedWidth = a_width > 0.0f ?
-		                                 a_width :
-		                                 std::min(280.0f * Util::GetUIScale(), std::max(120.0f, availableWidth * 0.45f));
-		const float inputWidth = std::clamp(requestedWidth, 1.0f, availableWidth);
-		ImGui::SetNextItemWidth(inputWidth);
-		Util::Widgets::InputTextWithHint(a_id, "Preset name", &a_name);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped("Export path: %s", a_exportPath.string().c_str());
-			if (a_alternateImportPath)
-				ImGui::TextWrapped("Import also accepts: %s", a_alternateImportPath->string().c_str());
-		}
-	}
-
 	int CompareString(const std::string& a_lhs, const std::string& a_rhs)
 	{
 		if (a_lhs == a_rhs)
@@ -1620,10 +1629,13 @@ namespace
 void AdaptiveBrightness::DrawSettingsHeaderControls()
 {
 	const auto contextSectionToSelect = SyncContextSection();
-	if (contextSectionToSelect == ContextSection::Profiles)
-		MenuUI::SettingsPage::Select("AdaptiveBrightness", "profiles");
-	else if (contextSectionToSelect == ContextSection::Locations)
-		MenuUI::SettingsPage::Select("AdaptiveBrightness", "locations");
+	// Keep exchange navigation stable while the player crosses contextual boundaries.
+	if (MenuUI::SettingsPage::Selected("AdaptiveBrightness") != "presets") {
+		if (contextSectionToSelect == ContextSection::Profiles)
+			MenuUI::SettingsPage::Select("AdaptiveBrightness", "profiles");
+		else if (contextSectionToSelect == ContextSection::Locations)
+			MenuUI::SettingsPage::Select("AdaptiveBrightness", "locations");
+	}
 
 	if (settings.enabled) {
 		const auto contextLabel = GetContextLabel();
@@ -1692,25 +1704,8 @@ void AdaptiveBrightness::DrawSettings()
 		DrawLocationOverrides(false, true, settings.enabled);
 	}
 
-	if (page.Is("presets")) {
-		const auto selectionId = ImGui::GetID("PresetCollection");
-		auto* storage = ImGui::GetStateStorage();
-		int selected = std::clamp(storage->GetInt(selectionId), 0, 2);
-		constexpr const char* collections[] = { "Global profiles", "Location overrides", "Complete setup" };
-		if (MenuUI::ChoiceSetting("Preset contents", &selected, collections, IM_ARRAYSIZE(collections)))
-			storage->SetInt(selectionId, selected);
-		switch (selected) {
-		case 0:
-			DrawGlobalPresetControls();
-			break;
-		case 1:
-			DrawLocationOverridePresetControls();
-			break;
-		case 2:
-			DrawFullPresetControls();
-			break;
-		}
-	}
+	if (page.Is("presets"))
+		DrawPresets();
 }
 
 void AdaptiveBrightness::DrawProfileControls(
@@ -2066,7 +2061,7 @@ void AdaptiveBrightness::DrawCurrentContextProfileControls(
 		if (ImGui::Button(createLabel.c_str()))
 			SaveCurrentLocationOverride(*target);
 		ImGui::EndDisabled();
-		DrawContextProfilePresetControls(a_scope, *target, nullptr, a_allowEdits);
+		DrawPresetShortcut(a_scope);
 		return;
 	}
 
@@ -2078,47 +2073,18 @@ void AdaptiveBrightness::DrawCurrentContextProfileControls(
 		a_allowEdits,
 		"Save Profile",
 		false);
-	DrawContextProfilePresetControls(a_scope, *target, contextProfile, a_allowEdits);
+	DrawPresetShortcut(a_scope);
 }
 
-void AdaptiveBrightness::DrawContextProfilePresetControls(
-	ContextProfileScope a_scope,
-	const LocationOverrideTarget& a_target,
-	const LocationOverride* a_locationOverride,
-	bool a_allowEdits)
+void AdaptiveBrightness::DrawPresetShortcut(ContextProfileScope a_scope)
 {
-	ImGui::SeparatorText("Share Profile");
-	DrawHintText("Export this scope's Lighting, Color, Bloom, Water, wind and layer mode to portable JSON. Import replaces them only for this scope.");
-
-	const auto scopeIndex = ContextScopeIndex(a_scope);
-	auto& presetName = contextPresetNames[scopeIndex];
-	auto& presetStatus = contextPresetStatuses[scopeIndex];
-	const auto presetKind = GetContextScopePresetKind(a_scope);
-	const auto presetPath = GetPresetPath(presetName, presetKind);
-
-	ImGui::PushID(static_cast<int>(scopeIndex));
-	const auto inputLabel = std::format("{} profile", GetContextScopeName(a_scope));
-	DrawPresetNameInput(inputLabel.c_str(), "##ContextProfilePresetName", presetName, presetPath);
-
-	ImGui::BeginDisabled(!a_locationOverride);
-	if (ImGui::Button("Export Profile") && a_locationOverride)
-		ExportContextProfile(a_scope, a_target, *a_locationOverride);
-	ImGui::EndDisabled();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Export the current %s profile to JSON.", GetContextScopeName(a_scope));
-
-	if (ImGui::GetContentRegionAvail().x >= ImGui::CalcTextSize("Export Profile Import Profile").x + ImGui::GetStyle().FramePadding.x * 4 + ImGui::GetStyle().ItemSpacing.x)
-		ImGui::SameLine();
-	ImGui::BeginDisabled(!a_allowEdits);
-	if (ImGui::Button("Import Profile"))
-		ImportContextProfile(a_scope, a_target);
-	ImGui::EndDisabled();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Apply a shared JSON profile to the current %s scope.", GetContextScopeName(a_scope));
-
-	if (!presetStatus.empty())
-		ImGui::TextWrapped("%s", presetStatus.c_str());
-	ImGui::PopID();
+	if (ImGui::Button("Import / export this profile")) {
+		presetUI.collection = static_cast<MenuUI::AdaptiveBalancePresets::Collection>(
+			static_cast<int>(MenuUI::AdaptiveBalancePresets::Collection::Worldspace) + static_cast<int>(a_scope));
+		presetFilesDirty = true;
+		MenuUI::SettingsPage::Select("AdaptiveBrightness", "presets");
+	}
+	Util::AddTooltip("Open the shared Presets screen for this scope. Apply pending profile edits before exporting.");
 }
 
 void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle, bool a_showAdvancedControls, bool a_allowEdits)
@@ -2374,53 +2340,6 @@ void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool 
 	ImGui::EndDisabled();
 }
 
-void AdaptiveBrightness::DrawGlobalPresetControls()
-{
-	ImGui::SeparatorText("Global Presets");
-	DrawHintText("Global presets include the shared Lighting, Color, Bloom, Water and wind layer, global lighting and depth of field, five profiles and exterior timing.");
-	DrawHintText("Import replaces these settings. Saved location overrides stay unchanged.");
-	ImGui::PushID("GlobalPresetControls");
-
-	const auto presetPath = GetPresetPath(globalPresetName, PresetKind::Global);
-	const auto& style = ImGui::GetStyle();
-	const float scale = Util::GetUIScale();
-	const float exportButtonWidth = ImGui::CalcTextSize("Export Global").x + style.FramePadding.x * 2.0f;
-	const float importButtonWidth = ImGui::CalcTextSize("Import Global").x + style.FramePadding.x * 2.0f;
-	const float availableWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
-	const float inlineButtonWidth = exportButtonWidth + importButtonWidth + style.ItemSpacing.x * 2.0f;
-	const bool keepButtonsOnOneLine =
-		availableWidth >= exportButtonWidth + importButtonWidth + style.ItemSpacing.x;
-	const float minimumInputWidth = 140.0f * scale;
-	const bool keepControlsOnOneLine = availableWidth >= minimumInputWidth + inlineButtonWidth;
-	const float inputWidth = keepControlsOnOneLine ?
-	                             availableWidth - inlineButtonWidth :
-	                             std::min(280.0f * scale, availableWidth);
-	DrawPresetNameInput(nullptr, "##GlobalPresetName", globalPresetName, presetPath, nullptr, inputWidth);
-
-	if (keepControlsOnOneLine)
-		ImGui::SameLine();
-	if (ImGui::Button("Export Global")) {
-		ExportGlobalPreset();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export the global layer, global lighting and depth of field, exterior timing and five Lighting, Color, Bloom and Water profiles. Excludes location overrides.");
-	}
-
-	if (keepControlsOnOneLine || keepButtonsOnOneLine)
-		ImGui::SameLine();
-	if (ImGui::Button("Import Global")) {
-		ImportGlobalPreset();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace the global layer, global lighting and depth of field, exterior timing and five Lighting, Color, Bloom and Water profiles. Keeps location overrides.");
-	}
-
-	if (!globalPresetStatus.empty())
-		ImGui::TextWrapped("%s", globalPresetStatus.c_str());
-
-	ImGui::PopID();
-}
-
 void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, bool a_showAdvancedControls, bool a_allowEdits)
 {
 	ImGui::SeparatorText("Location Override Profiles");
@@ -2498,7 +2417,11 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 	ImGui::TextDisabled("%zu saved override%s.", settings.locationOverrides.size(), settings.locationOverrides.size() == 1 ? "" : "s");
 
 	if (a_includePresetControls)
-		DrawLocationOverridePresetControls();
+		if (ImGui::Button("Import / export location presets")) {
+			presetUI.collection = MenuUI::AdaptiveBalancePresets::Collection::Locations;
+			presetFilesDirty = true;
+			MenuUI::SettingsPage::Select("AdaptiveBrightness", "presets");
+		}
 	ImGui::SeparatorText("Saved Overrides");
 	DrawHintText(a_allowEdits ?
 					 "Overrides match worldspace, region, city, specific location or cell. Select a row to edit it." :
@@ -2674,70 +2597,113 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 	}
 }
 
-void AdaptiveBrightness::DrawLocationOverridePresetControls()
+void AdaptiveBrightness::DrawPresets()
 {
-	ImGui::SeparatorText("Override Presets");
-	DrawHintText("Override presets contain all worldspace, region, city, location and cell overrides. Excludes the five base profiles.");
-	ImGui::PushID("LocationOverridePresetControls");
-
-	const auto presetPath = GetPresetPath(locationOverridePresetName, PresetKind::Location);
-	const auto overridePath = GetLocationOverrideLiveOverridePath(locationOverridePresetName);
-	DrawPresetNameInput("Override preset", "##LocationOverridePresetName", locationOverridePresetName, presetPath, &overridePath);
-
-	ImGui::BeginDisabled(settings.locationOverrides.empty());
-	if (ImGui::Button("Export Overrides")) {
-		ExportLocationOverrides();
+	namespace Presets = MenuUI::AdaptiveBalancePresets;
+	const auto& theme = globals::menu->GetTheme();
+	const auto palette = [&](bool a_export) {
+		const auto accent = Util::Color::Lift(theme.StatusPalette.InfoColor, a_export ? .10f : -.10f, 1);
+		const auto base = ImGui::GetStyleColorVec4(ImGuiCol_Button);
+		const float tint = a_export ? .30f : .14f;
+		return Presets::Palette{
+			Util::Color::Blend(base, accent, tint, .76f),
+			Util::Color::Blend(base, accent, tint + .12f, .86f),
+			Util::Color::Blend(base, accent, tint + .24f, .94f),
+			Util::Color::Blend(theme.Palette.FrameBorder, accent, .65f, 1)
+		};
+	};
+	const auto exportPalette = palette(true);
+	const auto importPalette = palette(false);
+	const auto targets = GetCurrentLocationOverrideTargets();
+	const std::array contextTargets{
+		targets.worldspace ? &*targets.worldspace : nullptr,
+		targets.region ? &*targets.region : nullptr,
+		targets.city ? &*targets.city : nullptr
+	};
+	Presets::Targets targetNames;
+	for (std::size_t index = 0; index < targetNames.size(); ++index)
+		targetNames[index] = contextTargets[index] ? contextTargets[index]->name : "No current scope";
+	Presets::DrawSelection(presetUI, exportPalette, importPalette, targetNames);
+	const bool changed = lastDrawnPresetUI.mode != presetUI.mode || lastDrawnPresetUI.collection != presetUI.collection;
+	lastDrawnPresetUI = presetUI;
+	presetFilesDirty |= changed || ImGui::IsWindowAppearing();
+	constexpr std::array kinds{ PresetKind::Full, PresetKind::Global, PresetKind::Location, PresetKind::Worldspace, PresetKind::Region, PresetKind::City };
+	static_assert(kinds.size() == static_cast<std::size_t>(Presets::Collection::Count));
+	const auto collectionIndex = static_cast<std::size_t>(presetUI.collection);
+	const auto kind = kinds.at(collectionIndex);
+	std::string* name = &fullPresetName;
+	std::string* status = &fullPresetStatus;
+	const LocationOverrideTarget* target = nullptr;
+	const LocationOverride* profile = nullptr;
+	ContextProfileScope scope = ContextProfileScope::Worldspace;
+	if (presetUI.collection == Presets::Collection::Base) {
+		name = &globalPresetName;
+		status = &globalPresetStatus;
+	} else if (presetUI.collection == Presets::Collection::Locations) {
+		name = &locationOverridePresetName;
+		status = &locationOverridePresetStatus;
+	} else if (collectionIndex >= static_cast<std::size_t>(Presets::Collection::Worldspace)) {
+		const auto scopeIndex = collectionIndex - static_cast<std::size_t>(Presets::Collection::Worldspace);
+		scope = static_cast<ContextProfileScope>(scopeIndex);
+		name = &contextPresetNames.at(scopeIndex);
+		status = &contextPresetStatuses.at(scopeIndex);
+		target = contextTargets.at(scopeIndex);
+		profile = target ? FindLocationOverride(target->key) : nullptr;
 	}
-	ImGui::EndDisabled();
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export the saved override list.");
+	if (changed) {
+		status->clear();
+		presetFileStatus.clear();
 	}
-
-	if (ImGui::GetContentRegionAvail().x >= ImGui::CalcTextSize("Export Overrides Import Overrides").x + ImGui::GetStyle().FramePadding.x * 4 + ImGui::GetStyle().ItemSpacing.x)
-		ImGui::SameLine();
-	if (ImGui::Button("Import Overrides")) {
-		ImportLocationOverrides();
+	const bool importing = presetUI.mode == Presets::Mode::Import;
+	if (importing && presetFilesDirty) {
+		ReadPresetNames(kind, presetFiles, presetFileStatus);
+		presetFilesDirty = false;
 	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Add overrides from this preset to the override list below.");
+	const char* unavailable = nullptr;
+	const auto* editedOverride = locationOverrideEditProfile ? FindLocationOverride(locationOverrideEditKey) : nullptr;
+	if (locationOverrideEditProfile && (!editedOverride || json(*locationOverrideEditProfile) != json(editedOverride->profile)))
+		unavailable = "Apply or cancel the open location edit before exchanging presets.";
+	else if (collectionIndex >= static_cast<std::size_t>(Presets::Collection::Worldspace) && !target)
+		unavailable = "The current cell has no matching scope. Choose another box.";
+	else if (!importing && collectionIndex >= static_cast<std::size_t>(Presets::Collection::Worldspace) && !profile)
+		unavailable = "Create and apply this scope's profile before exporting it.";
+	else if (importing && target && !settings.enabled)
+		unavailable = "Enable Adaptive Balance before importing a contextual profile.";
+	else if (!importing && presetUI.collection == Presets::Collection::Locations && settings.locationOverrides.empty())
+		unavailable = "No location overrides are saved. Complete setup is still available.";
+	const auto& colors = importing ? importPalette : exportPalette;
+	const auto feedback = importing && !presetFileStatus.empty() ?
+	                          std::format("{}{}{}", presetFileStatus, status->empty() ? "" : " ", *status) :
+	                          *status;
+	const auto path = GetPresetPath(*name, kind);
+	const auto pathHint = importing && kind == PresetKind::Location ?
+	                          std::format("Import path: {}\nAlso accepts: {}", path.string(), (Util::PathHelpers::GetOverridesPath() / path.filename()).string()) :
+	                          std::format("{} path: {}", importing ? "Import" : "Export", path.string());
+	if (!Presets::DrawTransfer(presetUI, colors, *name, presetFiles, pathHint, feedback, unavailable, presetFilesDirty))
+		return;
+	bool succeeded = false;
+	switch (presetUI.collection) {
+	case Presets::Collection::Full:
+		succeeded = importing ? ImportFullPreset() : ExportFullPreset();
+		break;
+	case Presets::Collection::Base:
+		succeeded = importing ? ImportGlobalPreset() : ExportGlobalPreset();
+		break;
+	case Presets::Collection::Locations:
+		succeeded = importing ? ImportLocationOverrides() : ExportLocationOverrides();
+		break;
+	default:
+		if (target) {
+			if (importing)
+				succeeded = ImportContextProfile(scope, *target);
+			else if (profile)
+				succeeded = ExportContextProfile(scope, *target, *profile);
+		}
+		break;
 	}
-
-	if (!locationOverridePresetStatus.empty())
-		ImGui::TextWrapped("%s", locationOverridePresetStatus.c_str());
-
-	ImGui::PopID();
-}
-
-void AdaptiveBrightness::DrawFullPresetControls()
-{
-	ImGui::SeparatorText("Full Presets");
-	DrawHintText("Full presets include the global layer, global lighting and depth-of-field settings, exterior timing, five profiles and all location overrides.");
-	DrawHintText("Import replaces these settings and the saved override list.");
-	ImGui::PushID("FullPresetControls");
-
-	const auto presetPath = GetPresetPath(fullPresetName, PresetKind::Full);
-	DrawPresetNameInput("Full preset", "##FullPresetName", fullPresetName, presetPath);
-
-	if (ImGui::Button("Export Full")) {
-		ExportFullPreset();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export global lighting and depth of field, the global layer, exterior timing, five profiles and all saved overrides.");
-	}
-
-	if (ImGui::GetContentRegionAvail().x >= ImGui::CalcTextSize("Export Full Import Full").x + ImGui::GetStyle().FramePadding.x * 4 + ImGui::GetStyle().ItemSpacing.x)
-		ImGui::SameLine();
-	if (ImGui::Button("Import Full")) {
-		ImportFullPreset();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace global lighting and depth of field, the global layer, exterior timing, five profiles and all saved overrides.");
-	}
-
-	if (!fullPresetStatus.empty())
-		ImGui::TextWrapped("%s", fullPresetStatus.c_str());
-
-	ImGui::PopID();
+	if (importing && succeeded)
+		*status = "Imported. Use Save Settings to keep it. " + *status;
+	presetFilesDirty = true;
 }
 
 bool AdaptiveBrightness::ExportGlobalPreset()

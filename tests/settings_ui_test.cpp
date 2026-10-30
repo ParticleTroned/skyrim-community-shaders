@@ -2,10 +2,12 @@
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
+#include "Menu/AdaptiveBalancePresets.h"
 #include "Menu/SettingsActions.h"
 #include "Menu/SettingsPage.h"
 #include "Utils/FeatureProfiling.h"
 #include "Utils/NumericEntry.h"
+#include "Utils/StringUtils.h"
 #include "Utils/UISmoothing.h"
 #include "Utils/VRFrameTiming.h"
 #include <algorithm>
@@ -17,6 +19,7 @@
 #include <filesystem>
 #include <fmt/format.h>
 #include <format>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <imgui_internal.h>
@@ -28,6 +31,7 @@
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #define NOMINMAX
 #include <windows.h>
 
@@ -635,6 +639,42 @@ bool TrackedSelectable(const char* label)
 }
 #include "settings_constraint_warning_under_test.h"
 
+std::map<std::string, ImVec4> presetButtonColors;
+ImGuiID presetNameInputId = 0;
+bool TrackedPresetNameInput(const char* label, const char* hint, std::string* name)
+{
+	const bool changed = ImGui::InputTextWithHint(label, hint, name);
+	presetNameInputId = ImGui::GetItemID();
+	Util::controls["Preset name input"] = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+	return changed;
+}
+bool TrackedPresetButton(const char* label, ImVec2 size)
+{
+	presetButtonColors[label] = ImGui::GetStyleColorVec4(ImGuiCol_Button);
+	const bool clicked = ImGui::Button(label, size);
+	Util::controls[label] = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+	return clicked;
+}
+#include "settings_adaptive_presets_under_test.h"
+
+namespace Util::PathHelpers
+{
+	std::filesystem::path presetTestRoot;
+	std::filesystem::path GetCommunityShaderPath() { return presetTestRoot; }
+	std::filesystem::path GetOverridesPath() { return presetTestRoot / "Overrides"; }
+}
+namespace PresetFilesTest
+{
+	struct AdaptiveBrightness
+	{
+		static constexpr const char* kDefaultGlobalPresetName = "Default";
+		static constexpr const char* kDefaultLocationOverridePresetName = "Default";
+		static constexpr const char* kDefaultFullPresetName = "Default";
+		static constexpr std::string_view kFeatureShortName = "AdaptiveBrightness";
+	};
+#include "settings_preset_files_under_test.h"
+}
+
 void require(bool condition, const char* reason)
 {
 	if (!condition)
@@ -788,6 +828,171 @@ int main()
 			});
 		}
 		ImGui::GetStyle().FontScaleMain = 1;
+
+		{
+			namespace Presets = MenuUI::AdaptiveBalancePresets;
+			Presets::State exchange;
+			const Presets::Palette exportColors{ { .42f, .34f, .12f, 1 }, { .50f, .40f, .16f, 1 }, { .60f, .48f, .20f, 1 }, { .8f, .7f, .4f, 1 } };
+			const Presets::Palette importColors{ { .21f, .17f, .06f, 1 }, { .30f, .24f, .08f, 1 }, { .40f, .32f, .12f, 1 }, { .6f, .5f, .2f, 1 } };
+			const Presets::Targets targets{ "Tamriel", "The Reach", "Markarth" };
+			const std::array<std::string, 2> files{ std::string(96, 'W') + "_AdaptiveBrightness_City.json", "Clear_Nights_AdaptiveBrightness_City.json" };
+			std::string name = "My appearance", feedback;
+			const char* unavailable = nullptr;
+			bool refresh = false;
+			int transfers = 0;
+			float panelWidth = 850, panelHeight = 600, fontSize = 22, presetLine = 0, presetAvailableHeight = 0;
+			ImRect panelBounds;
+			MenuUI::SettingsPage::Select("PresetExchangeTest", "presets");
+			const auto draw = [&] {
+				ImGui::PushFont(ImGui::GetFont(), fontSize);
+				ImGui::BeginChild("PresetHMDPanel", { panelWidth, panelHeight });
+				panelBounds = ImGui::GetCurrentWindow()->Rect();
+				{
+					MenuUI::SettingsPage page("PresetExchangeTest", { { "presets", "Presets", "Exchange appearances" } });
+					if (page.Is("presets")) {
+						const auto colors = GImGui->ColorStack.Size;
+						const auto disabled = GImGui->DisabledStackSize;
+						presetLine = ImGui::GetTextLineHeight();
+						presetAvailableHeight = ImGui::GetContentRegionAvail().y;
+						Presets::DrawSelection(exchange, exportColors, importColors, targets);
+						transfers += Presets::DrawTransfer(exchange, exchange.mode == Presets::Mode::Export ? exportColors : importColors,
+							name, files, "Presets/example.json", feedback, unavailable, refresh);
+						require(colors == GImGui->ColorStack.Size && disabled == GImGui->DisabledStackSize,
+							"preset exchange restores button colours and enclosing disabled state");
+					}
+				}
+				ImGui::EndChild();
+				ImGui::PopFont();
+			};
+			for (const ImVec2 panel : { ImVec2{ 850, 600 }, ImVec2{ 700, 500 }, ImVec2{ 620, 440 } }) {
+				panelWidth = panel.x;
+				panelHeight = panel.y;
+				for (float size : { 18.0f, 22.0f, 27.0f }) {
+					fontSize = size;
+					for (const auto mode : { Presets::Mode::Export, Presets::Mode::Import }) {
+						for (int collection = 0; collection < static_cast<int>(Presets::Collection::Count); ++collection) {
+							exchange.collection = static_cast<Presets::Collection>(collection);
+							exchange.mode = mode;
+							frame(draw);
+							frame(draw);
+							const auto viewport = MenuUI::DevBenchViewport::Describe(true);
+							require(viewport["scrollMaxY"].get<float>() == 0, std::format("Preset viewport {}x{} font {} mode {} collection {}: scroll {}, height {}, line {}, available {}", panelWidth, panelHeight, fontSize, static_cast<int>(mode), static_cast<int>(exchange.collection), viewport["scrollMaxY"].get<float>(), viewport["height"].get<float>(), presetLine, presetAvailableHeight).c_str());
+							const auto action = std::format("{} {}", mode == Presets::Mode::Export ? "Export" : "Import", Presets::CollectionName(exchange.collection));
+							const auto button = Util::controls.at(action);
+							require(button.Min.x >= 0 && button.Max.x <= panelWidth && button.Max.y <= panelHeight,
+								"preset action stays inside the visible HMD panel");
+						}
+						if (mode == Presets::Mode::Import) {
+							refresh = false;
+							click(Util::controls.at("Choose a matching JSON preset from the Presets folder.").GetCenter(), draw);
+							frame(draw);
+							require(refresh && !GImGui->OpenPopupStack.empty(), "opening the preset picker requests a fresh file inventory");
+							const auto* popup = GImGui->OpenPopupStack.back().Window;
+							require(popup != nullptr, "the file picker has a visible window");
+							require(panelBounds.Contains(popup->Rect()) && popup->ScrollMax.x == 0,
+								std::format("Picker must fit panel {}x{} font {}: panel ({},{})-({},{}), popup ({},{})-({},{}), horizontal scroll {}",
+									panelWidth, panelHeight, fontSize, panelBounds.Min.x, panelBounds.Min.y, panelBounds.Max.x, panelBounds.Max.y,
+									popup->Pos.x, popup->Pos.y, popup->Rect().Max.x, popup->Rect().Max.y, popup->ScrollMax.x)
+									.c_str());
+							click(Util::controls.at(files[0]).GetCenter(), draw);
+							require(name == files[0] && transfers == 0, "choosing a file preserves its full name and never imports automatically");
+						}
+					}
+				}
+			}
+			panelWidth = 850;
+			panelHeight = 600;
+			fontSize = 22;
+			exchange = {};
+			frame(draw);
+			frame(draw);
+			const auto exportTint = presetButtonColors.at("##full");
+			click(Util::controls.at("Import mode: apply a JSON file to your setup.").GetCenter(), draw);
+			require(exchange.mode == Presets::Mode::Import && transfers == 0, "switching to import changes mode without applying a file");
+			const auto importTint = presetButtonColors.at("##full");
+			require(importTint.x < exportTint.x && importTint.y < exportTint.y, "import changes the complete diagram to the darker palette");
+			for (int index = 0; index < static_cast<int>(Presets::Collection::Count); ++index) {
+				const auto collection = static_cast<Presets::Collection>(index);
+				click(Util::controls.at(std::format("##{}", Presets::CollectionId(collection))).GetCenter(), draw);
+				require(exchange.collection == collection && transfers == 0, "collection boxes select contents without performing a transfer");
+				const auto action = std::format("Import {}", Presets::CollectionName(collection));
+				require(Util::controls.contains(action), "the final action names both mode and selected collection");
+			}
+			unavailable = "Apply or cancel the open location edit before exchanging presets.";
+			frame(draw);
+			click(Util::controls.at("Import City").GetCenter(), draw);
+			require(transfers == 0, "unavailable and pending-edit transfers cannot apply a file");
+			unavailable = nullptr;
+			frame(draw);
+			click(Util::controls.at("Import City").GetCenter(), draw);
+			require(transfers == 1, "only the explicit named import button requests a transfer");
+			click(Util::controls.at("Preset name input").GetCenter(), draw);
+			const auto cityInput = presetNameInputId;
+			require(GImGui->ActiveId == cityInput, "preset name editing is active before external navigation");
+			exchange.collection = Presets::Collection::Base;
+			frame(draw);
+			frame(draw);
+			require(presetNameInputId != cityInput && GImGui->ActiveId != cityInput,
+				"external collection selection cannot retain the previous collection's text edit buffer");
+			const auto importInput = presetNameInputId;
+			exchange.mode = Presets::Mode::Export;
+			frame(draw);
+			require(presetNameInputId != importInput, "import and export filename fields have independent edit identities");
+			feedback = "Status line\nSecond line must stay in the tooltip";
+			frame(draw);
+			const auto feedbackBounds = Util::controls.at(feedback);
+			require(VisibleTextIndices({ { feedbackBounds.Min.x, feedbackBounds.Max.y },
+						{ feedbackBounds.Max.x, feedbackBounds.Max.y + ImGui::GetTextLineHeight() * 2 } }) == 0,
+				"multiline feedback cannot draw below its reserved single row");
+			name.assign(300, 'X');
+			feedback.assign(500, 'Y');
+			panelWidth = 620;
+			panelHeight = 440;
+			fontSize = 27;
+			frame(draw);
+			frame(draw);
+			require(MenuUI::DevBenchViewport::Describe(true)["scrollMaxY"].get<float>() == 0,
+				"long preset names and feedback do not make the HMD view scroll");
+		}
+
+		{
+			using namespace PresetFilesTest;
+			auto& root = Util::PathHelpers::presetTestRoot;
+			root = std::filesystem::current_path() / std::format("preset-picker-test-{}-{}", GetCurrentProcessId(), GetTickCount64());
+			require(std::filesystem::create_directory(root), "preset picker tests own a fresh temporary directory");
+			const SKSE::stl::scope_exit cleanup([&] { std::filesystem::remove_all(root); });
+			const auto directory = GetPresetDirectory();
+			std::filesystem::create_directories(directory);
+			std::filesystem::create_directories(Util::PathHelpers::GetOverridesPath());
+			const auto write = [](const std::filesystem::path& path) { std::ofstream(path) << "{}"; };
+			const auto full = GetPresetFilename("Warm", PresetKind::Full);
+			const auto suffixName = std::string("Warm_AdaptiveBrightness_Global_AdaptiveBrightness_Full.json");
+			write(directory / full);
+			write(directory / suffixName);
+			write(directory / "Warm tone_AdaptiveBrightness_Full.json");
+			write(directory / GetPresetFilename("Warm", PresetKind::City));
+			std::filesystem::create_directory(directory / GetPresetFilename("Folder", PresetKind::Full));
+			std::vector<std::string> files;
+			std::string status;
+			ReadPresetNames(PresetKind::Full, files, status);
+			require(files.size() == 2 && std::ranges::find(files, suffixName) != files.end(), "picker filters directories and incompatible names while keeping full exported filenames");
+			for (const auto& file : files)
+				require(ResolvePresetImportPath(file, PresetKind::Full) == directory / file, "every selectable file resolves to that exact exported file");
+			require(!status.empty(), "incompatible file names are explained");
+			const auto locations = GetPresetFilename("Places", PresetKind::Location);
+			write(directory / locations);
+			write(Util::PathHelpers::GetOverridesPath() / locations);
+			ReadPresetNames(PresetKind::Location, files, status);
+			require(files.size() == 1 && status.empty(), "duplicate live/preset names are removed and a successful refresh clears earlier errors");
+			require(ResolvePresetImportPath(files[0], PresetKind::Location) == directory / locations, "picker and importer give the Presets directory the same priority");
+			std::filesystem::remove_all(directory);
+			write(directory);
+			ReadPresetNames(PresetKind::Location, files, status);
+			require(files.size() == 1 && !status.empty(), "a failed preset directory scan reports its error and still offers readable legacy files");
+			std::filesystem::remove(directory);
+			ReadPresetNames(PresetKind::Location, files, status);
+			require(files.size() == 1 && status.empty(), "missing preset directories are harmless and a recovered scan clears errors");
+		}
 
 		using Viewport = MenuUI::DevBenchViewport;
 		bool allowScroll = true;

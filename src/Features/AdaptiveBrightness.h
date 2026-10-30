@@ -14,6 +14,7 @@
 #include "Bloom.h"
 #include "Buffer.h"
 #include "LinearLighting.h"
+#include "Menu/AdaptiveBalancePresets.h"
 #include "SharedLighting.h"
 #include "WaterAppearance.h"
 
@@ -287,6 +288,11 @@ struct AdaptiveBrightness : Feature
 		Locations
 	};
 
+	MenuUI::AdaptiveBalancePresets::State presetUI;
+	MenuUI::AdaptiveBalancePresets::State lastDrawnPresetUI;
+	std::vector<std::string> presetFiles;
+	std::string presetFileStatus;
+	bool presetFilesDirty = true;
 	std::string globalPresetName = kDefaultGlobalPresetName;
 	std::string globalPresetStatus;
 	std::string selectedLocationOverrideKey;
@@ -405,11 +411,7 @@ struct AdaptiveBrightness : Feature
 		ContextProfileScope a_scope,
 		bool a_showAdvancedControls,
 		bool a_allowEdits);
-	void DrawContextProfilePresetControls(
-		ContextProfileScope a_scope,
-		const LocationOverrideTarget& a_target,
-		const LocationOverride* a_locationOverride,
-		bool a_allowEdits);
+	void DrawPresetShortcut(ContextProfileScope a_scope);
 	void DrawProfileSettings(
 		ProfileSettings& a_profile,
 		const char* a_sectionTitle = "Profile Values",
@@ -429,10 +431,8 @@ struct AdaptiveBrightness : Feature
 	void DrawBloomSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
 	void DrawWaterSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
 	void DrawWaterWindSettings(ProfileSettings& a_profile, bool a_globalLayer);
-	void DrawGlobalPresetControls();
+	void DrawPresets();
 	void DrawLocationOverrides(bool a_includePresetControls = true, bool a_showAdvancedControls = true, bool a_allowEdits = true);
-	void DrawLocationOverridePresetControls();
-	void DrawFullPresetControls();
 	void SaveCurrentLocationOverride(const LocationOverrideTarget& a_target);
 	void ClearLocationOverrideSelection();
 	void InvalidateProfileTabSync();

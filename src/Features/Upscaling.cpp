@@ -55,6 +55,7 @@
 #include "Upscaling/VRVendorRelatchPolicy.h"
 #include "Utils/D3D.h"
 #include "Utils/D3DContextProtection.h"
+#include "Utils/DeviceContextState.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Game.h"
 #include "Utils/MenuLookup.h"
@@ -14775,6 +14776,8 @@ void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
 			vrMenuFrameTransaction.suppressedOperations);
 	}
 	vrMenuFinalCompositeFrame = a_frame;
+	vrMenuNativeFallbackTarget = 0;
+	vrMenuNativeFallbackPending = false;
 	vrMenuFinalCompositeLayerDrawCount = 0;
 	vrMenuFrameTransaction = {};
 	vrMenuFrameTransaction.frame = a_frame;
@@ -14965,6 +14968,7 @@ bool Upscaling::SealVRMenuFrameTransaction(uint32_t a_frame)
 	}
 
 	std::swap(vrMenuFinalCompositeLayer, vrMenuCommittedCompositeLayer);
+	vrMenuNativeFallbackPending = false;
 	vrMenuFrameTransaction.sealed = true;
 	vrMenuCommittedLayerValid = true;
 	vrMenuCommittedLayerFrame = a_frame;
@@ -15249,6 +15253,7 @@ void Upscaling::VRMapMenuPostDisplayHook::thunk(RE::MapMenu* a_menu)
 
 void Upscaling::ResetVRMenuFinalCompositeLayer()
 {
+	ResetVRMenuNativeFallback();
 	vrMenuPointerOverlay.Reset();
 	vrMenuPointerOverlayPS.Reset();
 	vrMenuPointerCompositePS.Reset();
@@ -15469,6 +15474,187 @@ bool Upscaling::PrewarmVRMenuFinalCompositeResources(DXGI_FORMAT a_layerFormat)
 	return true;
 }
 
+namespace
+{
+	const char* GetVRMenuCaptureCompatibilityRejection(
+		ID3D11DeviceContext* a_context, ID3D11DepthStencilView* a_depthView, bool& a_premultipliedSource)
+	{
+		a_premultipliedSource = false;
+		// Capture must have no side effects beyond the one colour target.
+		std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> targets{};
+		std::array<ID3D11Buffer*, D3D11_SO_BUFFER_SLOT_COUNT> streamOutputs{};
+		std::array<ID3D11UnorderedAccessView*, D3D11_1_UAV_SLOT_COUNT> unorderedViews{};
+		winrt::com_ptr<ID3D11Device> device;
+		a_context->GetDevice(device.put());
+		const UINT unorderedCount = device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_1 ?
+		                                D3D11_1_UAV_SLOT_COUNT :
+		                                D3D11_PS_CS_UAV_REGISTER_COUNT;
+		a_context->OMGetRenderTargets(static_cast<UINT>(targets.size()), targets.data(), nullptr);
+		a_context->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, unorderedCount, unorderedViews.data());
+		a_context->SOGetTargets(static_cast<UINT>(streamOutputs.size()), streamOutputs.data());
+		auto releaseBindings = ScopeExit([&]() {
+			for (auto* target : targets)
+				if (target)
+					target->Release();
+			for (auto* output : streamOutputs)
+				if (output)
+					output->Release();
+			for (auto* view : unorderedViews)
+				if (view)
+					view->Release();
+		});
+		const auto bound = [](auto* resource) { return resource != nullptr; };
+		if (std::any_of(targets.begin() + 1, targets.end(), bound) ||
+			std::any_of(streamOutputs.begin(), streamOutputs.end(), bound) ||
+			std::any_of(unorderedViews.begin(), unorderedViews.end(), bound))
+			return "menu-compatibility-side-effects";
+		if (!targets[0])
+			return "menu-compatibility-missing-target";
+		D3D11_RENDER_TARGET_VIEW_DESC targetDesc{};
+		targets[0]->GetDesc(&targetDesc);
+		// The late layer needs colour and coverage; reject formats without usable alpha.
+		if (targetDesc.ViewDimension != D3D11_RTV_DIMENSION_TEXTURE2D || targetDesc.Texture2D.MipSlice != 0 ||
+			(targetDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM && targetDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM_SRGB &&
+				targetDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM && targetDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB &&
+				targetDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT && targetDesc.Format != DXGI_FORMAT_R32G32B32A32_FLOAT))
+			return "menu-compatibility-target-format";
+		winrt::com_ptr<ID3D11Predicate> predicate;
+		BOOL predicateValue = FALSE;
+		a_context->GetPredication(predicate.put(), &predicateValue);
+		if (predicate)
+			return "menu-compatibility-predication";
+		if (a_depthView) {
+			winrt::com_ptr<ID3D11DepthStencilState> depthState;
+			UINT stencilReference = 0;
+			a_context->OMGetDepthStencilState(depthState.put(), &stencilReference);
+			// A null state uses D3D's default depth test and writes, not a disabled test.
+			if (!depthState)
+				return "menu-compatibility-default-depth";
+			D3D11_DEPTH_STENCIL_DESC depthDesc{};
+			depthState->GetDesc(&depthDesc);
+			if (depthDesc.StencilEnable ||
+				(depthDesc.DepthEnable &&
+					(depthDesc.DepthWriteMask != D3D11_DEPTH_WRITE_MASK_ZERO ||
+						depthDesc.DepthFunc != D3D11_COMPARISON_ALWAYS))) {
+				return "menu-compatibility-depth-stencil";
+			}
+		}
+
+		winrt::com_ptr<ID3D11BlendState> blendState;
+		FLOAT blendFactor[4]{};
+		UINT sampleMask = 0;
+		a_context->OMGetBlendState(blendState.put(), blendFactor, &sampleMask);
+		if (!blendState)
+			return "menu-compatibility-opaque-blend";
+		D3D11_BLEND_DESC blendDesc{};
+		blendState->GetDesc(&blendDesc);
+		const auto& target = blendDesc.RenderTarget[0];
+		// Only source-over colour and coverage can move to a transparent late layer.
+		if (blendDesc.AlphaToCoverageEnable || blendDesc.IndependentBlendEnable ||
+			!target.BlendEnable || target.RenderTargetWriteMask != D3D11_COLOR_WRITE_ENABLE_ALL ||
+			target.BlendOp != D3D11_BLEND_OP_ADD || target.DestBlend != D3D11_BLEND_INV_SRC_ALPHA ||
+			(target.SrcBlend != D3D11_BLEND_SRC_ALPHA && target.SrcBlend != D3D11_BLEND_ONE) ||
+			target.BlendOpAlpha != D3D11_BLEND_OP_ADD || target.SrcBlendAlpha != D3D11_BLEND_ONE ||
+			target.DestBlendAlpha != D3D11_BLEND_INV_SRC_ALPHA) {
+			return "menu-compatibility-blend";
+		}
+		a_premultipliedSource = target.SrcBlend == D3D11_BLEND_ONE;
+		return nullptr;
+	}
+}
+
+bool Upscaling::PrepareVRMenuNativeFallback(ID3D11RenderTargetView* a_target, uint32_t a_width, uint32_t a_height)
+{
+	if (vrMenuNativeFallbackUnavailable)
+		return false;
+	const auto targetIdentity = GetCOMIdentityAddress(a_target);
+	if (vrMenuNativeFallbackPending)
+		return vrMenuNativeFallbackTarget == targetIdentity;
+	if (!vrMenuNativeFallbackState) {
+		if (!Util::CreateIsolatedDeviceContextState(globals::d3d::device, globals::d3d::context,
+				vrMenuNativeFallbackContext, vrMenuNativeFallbackState, "Upscaling::VRMenuNativeFallbackState")) {
+			vrMenuNativeFallbackUnavailable = true;
+			logger::warn("[VRMenuComposite] Menu transparency fix is using native UI: state isolation unavailable");
+			return false;
+		}
+	}
+	if (!vrMenuNativeFallbackConstants) {
+		const VRMenuLayerCompositeCB constants{ { 1.0f, 1.0f }, { 0.0f, 0.0f } };
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = sizeof(constants);
+		desc.Usage = D3D11_USAGE_IMMUTABLE;
+		desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+		D3D11_SUBRESOURCE_DATA initialData{};
+		initialData.pSysMem = &constants;
+		const auto result = globals::d3d::device->CreateBuffer(&desc, &initialData, vrMenuNativeFallbackConstants.put());
+		if (FAILED(result)) {
+			vrMenuNativeFallbackUnavailable = true;
+			logger::warn("[VRMenuComposite] Menu transparency fix is using native UI: fallback constants failed ({:#x})", static_cast<uint32_t>(result));
+			return false;
+		}
+		Util::SetResourceName(vrMenuNativeFallbackConstants.get(), "Upscaling::VRMenuNativeFallbackConstants");
+	}
+
+	// Pin a ready-to-draw fallback before suppression; recovery cannot allocate or map.
+	Util::ScopedDeviceContextState restoreState(vrMenuNativeFallbackContext.get(), vrMenuNativeFallbackState.get());
+	auto* context = vrMenuNativeFallbackContext.get();
+	context->ClearState();
+	context->OMSetRenderTargets(1, &a_target, nullptr);
+	context->OMSetBlendState(vrMenuCompositeBlendState.get(), nullptr, 0xFFFFFFFF);
+	context->OMSetDepthStencilState(vrMenuCaptureDepthDisabledState.get(), 0);
+	context->RSSetState(upscaleRasterizerState.get());
+	const D3D11_VIEWPORT viewport{ 0.0f, 0.0f, static_cast<float>(a_width), static_cast<float>(a_height), 0.0f, 1.0f };
+	context->RSSetViewports(1, &viewport);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context->VSSetShader(upscaleVS.get(), nullptr, 0);
+	context->PSSetShader(vrMenuLayerCompositePS.get(), nullptr, 0);
+	auto* constants = vrMenuNativeFallbackConstants.get();
+	context->PSSetConstantBuffers(0, 1, &constants);
+	auto* sampler = globals::deferred->linearSampler;
+	context->PSSetSamplers(0, 1, &sampler);
+	auto* source = vrMenuFinalCompositeLayer->srv.get();
+	context->PSSetShaderResources(0, 1, &source);
+	vrMenuNativeFallbackTarget = targetIdentity;
+	return true;
+}
+
+void Upscaling::RestoreVRMenuNativeDrawOrder(const char* a_reason)
+{
+	if (vrMenuNativeFallbackPending) {
+		CS_GPU_PASS("Upscaling::VRMenuNativeFallback");
+		const CSX::Api::SuppressAcceptedDraw suppressAcceptedDraw;
+		Util::ScopedDeviceContextState restoreState(vrMenuNativeFallbackContext.get(), vrMenuNativeFallbackState.get());
+		vrMenuParallelBridgeDrawInProgress = true;
+		auto restoreReplayFlag = ScopeExit([&]() { vrMenuParallelBridgeDrawInProgress = false; });
+		vrMenuNativeFallbackContext->Draw(3, 0);
+		vrMenuNativeFallbackContext->ClearState();
+	}
+	vrMenuNativeFallbackPending = false;
+	vrMenuNativeFallbackTarget = 0;
+	InvalidateVRMenuCommittedLayer(a_reason);
+	// The original target now owns the prefix; leave all later draws in native order.
+	vrMenuFrameTransaction.nativeMenuFallback = true;
+	vrMenuFrameTransaction.menuLayerRequired = false;
+	vrMenuFrameTransaction.recognizedOperations = 0;
+	vrMenuFrameTransaction.capturedOperations = 0;
+	vrMenuFrameTransaction.suppressedOperations = 0;
+	vrMenuFrameTransaction.epochCount = 0;
+	for (auto& epoch : g_vrMenuSemanticEpochStack)
+		epoch.capturedOperations = 0;
+	vrMenuFinalCompositeLayerDrawCount = 0;
+	vrMenuFinalCompositeLayerClearedFrame = std::numeric_limits<uint32_t>::max();
+}
+
+void Upscaling::ResetVRMenuNativeFallback()
+{
+	vrMenuNativeFallbackPending = false;
+	vrMenuNativeFallbackTarget = 0;
+	vrMenuNativeFallbackState = nullptr;
+	vrMenuNativeFallbackContext = nullptr;
+	vrMenuNativeFallbackConstants = nullptr;
+	vrMenuNativeFallbackUnavailable = false;
+}
+
 bool Upscaling::DrawVRMenuBridgeIntoFinalCompositeLayer(
 	ID3D11DeviceContext* a_context,
 	DXGI_FORMAT a_format,
@@ -15480,8 +15666,10 @@ bool Upscaling::DrawVRMenuBridgeIntoFinalCompositeLayer(
 	uint32_t a_renderWidth,
 	uint32_t a_renderHeight,
 	uint32_t a_finalWidth,
-	uint32_t a_finalHeight)
+	uint32_t a_finalHeight,
+	bool a_premultipliedSource)
 {
+	auto* captureBlendState = a_premultipliedSource ? vrMenuCompositeBlendState.get() : vrMenuLayerCaptureBlendState.get();
 	if (!a_context ||
 		!a_indexCount ||
 		!a_instanceCount ||
@@ -15489,7 +15677,7 @@ bool Upscaling::DrawVRMenuBridgeIntoFinalCompositeLayer(
 		!a_renderHeight ||
 		!a_finalWidth ||
 		!a_finalHeight ||
-		!vrMenuLayerCaptureBlendState ||
+		!captureBlendState ||
 		!vrMenuCaptureDepthDisabledState ||
 		!EnsureVRMenuFinalCompositeLayer(a_finalWidth, a_finalHeight, a_format)) {
 		return false;
@@ -15564,7 +15752,7 @@ bool Upscaling::DrawVRMenuBridgeIntoFinalCompositeLayer(
 
 	ID3D11RenderTargetView* layerRTV = vrMenuFinalCompositeLayer->rtv.get();
 	a_context->OMSetRenderTargets(1, &layerRTV, nullptr);
-	a_context->OMSetBlendState(vrMenuLayerCaptureBlendState.get(), previousBlendFactor, previousSampleMask);
+	a_context->OMSetBlendState(captureBlendState, previousBlendFactor, previousSampleMask);
 	a_context->OMSetDepthStencilState(vrMenuCaptureDepthDisabledState.get(), 0);
 	a_context->RSSetViewports(previousViewportCount, finalViewports.data());
 	a_context->RSSetScissorRects(previousScissorCount, previousScissorCount ? finalScissors.data() : nullptr);
@@ -15588,19 +15776,27 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	const char** a_decisionReason)
 {
 	const CSX::Api::SuppressAcceptedDraw suppressAcceptedDraw;
+	auto* state = globals::state;
 	bool requiredBridgeOperation = false;
+	bool mayRestoreCapturedPrefix = false;
 	auto decide = [&](const char* a_reason, bool a_result) {
 		if (a_decisionReason)
 			*a_decisionReason = a_reason;
-		if (!a_result && requiredBridgeOperation)
-			PoisonVRMenuFrameTransaction(a_reason);
+		if (!a_result && !vrMenuParallelBridgeDrawInProgress) {
+			if (vrMenuTransparencyFixActive && mayRestoreCapturedPrefix &&
+				state && vrMenuFrameTransaction.frame == state->frameCount &&
+				!vrMenuFrameTransaction.presentationDecisionLatched && !vrMenuFrameTransaction.presentationStarted &&
+				!vrMenuFrameTransaction.sealed && (requiredBridgeOperation || vrMenuNativeFallbackPending))
+				RestoreVRMenuNativeDrawOrder(a_reason);
+			else if (requiredBridgeOperation)
+				PoisonVRMenuFrameTransaction(a_reason);
+		}
 		return a_result;
 	};
 	if (a_decisionReason)
 		*a_decisionReason = "not-evaluated";
 	(void)a_callerRva;
 
-	auto* state = globals::state;
 	if (!globals::game::isVR)
 		return decide("not-vr", false);
 	if (!a_context)
@@ -15609,6 +15805,15 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		return decide("internal-menu-replay", false);
 	if (!state)
 		return decide("missing-state", false);
+	const auto usingImmediateContext = [&]() {
+		return globals::d3d::context &&
+		       GetCOMIdentityAddress(a_context) == GetCOMIdentityAddress(globals::d3d::context);
+	};
+	if (vrMenuTransparencyFixActive) {
+		if (!usingImmediateContext())
+			return decide("unsupported-device-context", false);
+		mayRestoreCapturedPrefix = true;
+	}
 
 	EnsureRuntimeResolutionStateCurrent();
 	const bool semanticBridge = IsVRMenuSemanticBridgeOperationActive();
@@ -15637,9 +15842,13 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		return decide("post-seal-source-producer", false);
 	if (vrMenuFrameTransaction.poisoned)
 		return decide("transaction-already-poisoned", false);
+	if (vrMenuFrameTransaction.nativeMenuFallback)
+		return decide("menu-compatibility-native-frame", false);
 	const uint64_t contextChangeSequence = vrMenuPresentationContextChangeConsumedSequence;
 	VRMenuCompositionTargetMatch destination{};
 	VRMenuCompositionTargetMatch menuSourceMatch{};
+	bool premultipliedMenuSource = false;
+	winrt::com_ptr<ID3D11RenderTargetView> nativeTarget;
 	{
 		constexpr uint32_t menuSourceSlot = 0;
 		ID3D11ShaderResourceView* menuSourceSRV = nullptr;
@@ -15678,7 +15887,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 
 		ID3D11RenderTargetView* rtv = nullptr;
 		ID3D11DepthStencilView* dsv = nullptr;
-		a_context->OMGetRenderTargets(1, &rtv, menuWorldUIBridge ? &dsv : nullptr);
+		a_context->OMGetRenderTargets(1, &rtv, (menuWorldUIBridge || vrMenuTransparencyFixActive) ? &dsv : nullptr);
 		auto rtvRelease = ScopeExit([&]() {
 			if (rtv)
 				rtv->Release();
@@ -15696,9 +15905,18 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		if (destination.target != expectedDestination)
 			return decide("destination-target-mismatch", false);
 
-		// Suppressing a world-UI consumer must preserve depth/stencil writes needed
-		// by later geometry; only transparent overlay work can move to the final layer.
-		if (menuWorldUIBridge && dsv) {
+		if (vrMenuTransparencyFixActive) {
+			nativeTarget.copy_from(rtv);
+			if (vrMenuNativeFallbackPending && vrMenuNativeFallbackTarget != GetCOMIdentityAddress(rtv)) {
+				RestoreVRMenuNativeDrawOrder("menu-compatibility-target-changed");
+				return decide("menu-compatibility-target-changed", false);
+			}
+			if (const char* reason = GetVRMenuCaptureCompatibilityRejection(a_context, dsv, premultipliedMenuSource)) {
+				RestoreVRMenuNativeDrawOrder(reason);
+				return decide(reason, false);
+			}
+		} else if (menuWorldUIBridge && dsv) {
+			// Suppression must preserve depth/stencil writes consumed by later geometry.
 			ID3D11DepthStencilState* depthState = nullptr;
 			UINT stencilReference = 0;
 			a_context->OMGetDepthStencilState(&depthState, &stencilReference);
@@ -15737,10 +15955,8 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		++vrMenuFrameTransaction.recognizedOperations;
 	if (!semanticBridge && !authorizedDirectBridge)
 		return decide("bridge-operation-outside-semantic-epoch", false);
-	if (!globals::d3d::context ||
-		GetCOMIdentityAddress(a_context) != GetCOMIdentityAddress(globals::d3d::context)) {
+	if (!vrMenuTransparencyFixActive && !usingImmediateContext())
 		return decide("unsupported-device-context", false);
-	}
 
 	const auto& plan = GetRuntimeResolutionPlan();
 	const uint32_t renderWidth = ClampPositiveDimension(plan.engineRenderSize.x);
@@ -15795,6 +16011,9 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	if (!sourceMenuContextActive ||
 		contextChangeSequence != vrMenuPresentationContextChangeSequence.load(std::memory_order_acquire))
 		return decide("menu-context-ended-before-capture", false);
+	if (vrMenuTransparencyFixActive &&
+		!PrepareVRMenuNativeFallback(nativeTarget.get(), destination.width, destination.height))
+		return decide("menu-compatibility-fallback-unavailable", false);
 
 	// Gameplay prompts must not arm menu tails that suspend scene rendering policies.
 	if (IsKnownGameMenuContextActive()) {
@@ -15815,9 +16034,12 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		destination.width,
 		destination.height,
 		finalWidth,
-		finalHeight);
+		finalHeight,
+		premultipliedMenuSource);
 	if (!liveLayerDrawn)
 		return decide("final-layer-draw-failed", false);
+	if (vrMenuTransparencyFixActive)
+		vrMenuNativeFallbackPending = true;
 	RecordVRMenuPresentationTraceLayerStage(
 		*this,
 		menuSourceMatch,
@@ -17045,6 +17267,35 @@ bool Upscaling::SetRenderScaleLinkedToUpscaling(bool a_enabled)
 	return true;
 }
 
+void Upscaling::DrawVRMenuTransparencyFixSetting()
+{
+	bool enabled = vrMenuTransparencyFixRequested.load(std::memory_order_relaxed);
+	if (Util::Widgets::Checkbox("Menu transparency fix (A/B)", &enabled))
+		vrMenuTransparencyFixRequested.store(enabled, std::memory_order_release);
+	if (auto tooltip = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Off: current high-resolution UI. On: preserve menu blending and masking.");
+		ImGui::TextUnformatted("Menus with unsupported masking or blending fall back to the game's render resolution.");
+		ImGui::TextUnformatted("Close CSX settings to compare the quest marker in the same game menu.");
+		ImGui::TextUnformatted("Session only; resets to Off when Skyrim restarts. Render Scale is unchanged.");
+	}
+}
+
+void Upscaling::ApplyVRMenuTransparencyFixAtFrameBoundary()
+{
+	const bool requested = vrMenuTransparencyFixRequested.load(std::memory_order_acquire);
+	if (requested == vrMenuTransparencyFixActive || vrMenuDrawInterfaceDepth != 0 ||
+		g_vrMenuSemanticEpochDepth != 0 || g_vrMenuBridgeDirectDrawDepth != 0 ||
+		GetCurrentVRMenuBridgeHigherCallContext() || vrMenuParallelBridgeDrawInProgress)
+		return;
+	// Both eyes must finish with the old policy before retained UI can be invalidated.
+	InvalidateVRMenuCommittedLayer("menu-transparency-fix-changed");
+	InvalidateVRRenderScaleStereoPresentationPacket(false);
+	NotifyVRMenuPresentationContextChange("menu-transparency-fix-changed");
+	ResetVRMenuNativeFallback();
+	vrMenuTransparencyFixActive = requested;
+	logger::info("[VRMenuComposite] Session menu transparency fix {}", requested ? "enabled" : "disabled");
+}
+
 void Upscaling::DrawVRRenderScaleLinkSetting()
 {
 	bool linked = settings.renderScaleLinkedToUpscaling;
@@ -17395,6 +17646,7 @@ void Upscaling::DrawSettings()
 			HasPendingVRRenderScaleTransition();
 		DrawVRRenderScaleModeSetting(*this, renderScaleProfile);
 		DrawVRRenderScaleLinkSetting();
+		DrawVRMenuTransparencyFixSetting();
 		if (IsNeuralRenderingRenderScaleRequired())
 			ImGui::TextWrapped("NR Before DLSS needs below-native DLSS and, in VR, Render Scale. Turn NR off or select After upscaling to use other settings.");
 		if (openCompositeBlocksUpscaling) {
@@ -18176,6 +18428,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 			ImGui::TextWrapped("NR Before DLSS needs below-native DLSS and, in VR, Render Scale. Turn NR off or select After upscaling to use other settings.");
 		const auto renderScaleProfile = GetPendingVRRenderScaleDesiredProfile();
 		DrawVRRenderScaleModeSetting(*this, renderScaleProfile);
+		DrawVRMenuTransparencyFixSetting();
 		if (openCompositeBlocksUpscaling) {
 			Util::Text::WrappedWarning("%s", kOpenCompositeRenderScaleBlockWarning);
 		}
@@ -51618,6 +51871,8 @@ void Upscaling::Reset()
 	ServiceNeuralRenderingPrewarm();
 	if (!globals::game::isVR)
 		return;
+
+	ApplyVRMenuTransparencyFixAtFrameBoundary();
 
 	// Watchdog deadlines are measured in seconds; the end-of-frame boundary
 	// observes all mutation progress without polling on every dirty-state draw.

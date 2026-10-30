@@ -5012,7 +5012,12 @@ private:
 	bool EnsureVRMenuDesktopEyePair(DXGI_FORMAT a_format, uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool DrawVRMenuBridgeIntoFinalCompositeLayer(ID3D11DeviceContext* a_context, DXGI_FORMAT a_format, UINT a_indexCount,
 		UINT a_instanceCount, UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation,
-		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_finalWidth, uint32_t a_finalHeight);
+		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_finalWidth, uint32_t a_finalHeight, bool a_premultipliedSource);
+	void DrawVRMenuTransparencyFixSetting();
+	void ApplyVRMenuTransparencyFixAtFrameBoundary();
+	bool PrepareVRMenuNativeFallback(ID3D11RenderTargetView* a_target, uint32_t a_width, uint32_t a_height);
+	void RestoreVRMenuNativeDrawOrder(const char* a_reason);
+	void ResetVRMenuNativeFallback();
 	bool TryCaptureAndSuppressVRMenuBridgeDraw(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation, uint32_t a_callerRva,
 		const char** a_decisionReason = nullptr);
@@ -5038,6 +5043,7 @@ private:
 		bool sealed = false;
 		bool poisoned = false;
 		bool menuLayerRequired = false;
+		bool nativeMenuFallback = false;
 		bool mapLayerRequired = false;
 		bool mapLayerCapture = false;
 		const char* failureReason = nullptr;
@@ -5089,6 +5095,14 @@ private:
 	uint64_t vrMenuPresentationContextChangeConsumedSequence = 0;
 	uint32_t vrMenuAdapterPreflightFailureFrame = std::numeric_limits<uint32_t>::max();
 	bool vrMenuParallelBridgeDrawInProgress = false;
+	std::atomic_bool vrMenuTransparencyFixRequested{ false };
+	bool vrMenuTransparencyFixActive = false;
+	winrt::com_ptr<ID3D11DeviceContext1> vrMenuNativeFallbackContext;
+	winrt::com_ptr<ID3DDeviceContextState> vrMenuNativeFallbackState;
+	winrt::com_ptr<ID3D11Buffer> vrMenuNativeFallbackConstants;
+	std::uintptr_t vrMenuNativeFallbackTarget = 0;
+	bool vrMenuNativeFallbackPending = false;
+	bool vrMenuNativeFallbackUnavailable = false;
 	eastl::unique_ptr<Texture2D> vrMapMenuUISupersampleColor;
 	winrt::com_ptr<ID3D11Texture2D> vrMapMenuUISupersampleDepth;
 	std::array<winrt::com_ptr<ID3D11DepthStencilView>, 8> vrMapMenuUISupersampleDepthViews{};

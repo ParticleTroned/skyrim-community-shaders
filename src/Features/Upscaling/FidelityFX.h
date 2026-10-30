@@ -16,6 +16,8 @@
 #include <utility>
 #include <vector>
 
+#include "FSRColorContractPolicy.h"
+#include "FSRColorContractReceiptPolicy.h"
 #include "FSRSharedGuidePolicy.h"
 
 #include <FidelityFX/host/backends/dx11/ffx_dx11.h>
@@ -99,13 +101,47 @@ public:
 		float sharpness = 0.0f;
 	};
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	struct FsrColorContractSnapshot
+	{
+		uint64_t revision = 0;
+		bool highDynamicRangeInput = true;
+		bool autoExposure = true;
+		bool hostContextValid = false;
+		bool hostContextHighDynamicRangeInput = true;
+		bool hostContextAutoExposure = true;
+		uint64_t hostContextGeneration = 0;
+		bool runtimeContextValid = false;
+		bool runtimeContextHighDynamicRangeInput = true;
+		bool runtimeContextAutoExposure = true;
+		uint64_t runtimeContextGeneration = 0;
+	};
+
 	struct RuntimeUpscalerDispatchSnapshot
 	{
 		bool valid = false;
 		uint32_t frame = 0;
 		RuntimeUpscalerFramePath path = RuntimeUpscalerFramePath::kInactive;
 		uint64_t serial = 0;
+		uint64_t contextGeneration = 0;
+		uint32_t contextIndex = 0;
+		uint32_t renderWidth = 0;
+		uint32_t renderHeight = 0;
+		uint32_t displayWidth = 0;
+		uint32_t displayHeight = 0;
+		bool highDynamicRangeInput = true;
+		bool autoExposure = true;
+		bool exposureResourceBound = false;
+		float preExposure = 1.0f;
 	};
+
+	struct FsrColorContractStatusSnapshot
+	{
+		FsrColorContractSnapshot contract{};
+		RuntimeUpscalerDispatchSnapshot dispatch{};
+	};
+
+	using FsrColorContractSetResult =
+		FSRColorContractReceiptPolicy::SetReceipt<FsrColorContractStatusSnapshot>;
 #endif
 
 	static constexpr const wchar_t* PluginDir = L"Data\\Shaders\\Upscaling\\FidelityFX";
@@ -251,6 +287,15 @@ public:
 	std::string GetRuntimeUpscalerRequestedVersionString() const;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	/** @brief Render-thread-only copy used to publish actual FSR path evidence under the controller lock. */
+	/** @brief Returns one coherent FSR request, context, and dispatch evidence snapshot. */
+	FsrColorContractStatusSnapshot GetDevBenchFsrColorContractStatusSnapshot() const noexcept;
+	/** @brief Atomically changes the request and captures its complete operation receipt. */
+	FsrColorContractSetResult SetDevBenchFsrColorContract(
+		uint64_t a_expectedRevision,
+		bool a_highDynamicRangeInput,
+		bool a_autoExposure) noexcept;
+	/** @brief Returns the coherent render-thread disposition for a changed FSR processing contract. */
+	[[nodiscard]] FSRColorContractPolicy::ReplacementState GetDevBenchFsrColorContractReplacementState() const noexcept;
 	RuntimeUpscalerDispatchSnapshot GetRuntimeUpscalerDispatchSnapshotForRenderThread() const;
 #endif
 
@@ -438,8 +483,26 @@ private:
 	RuntimeUpscalerFramePath GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const;
 	void RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	void RecordDevBenchSuccessfulDispatch(RuntimeUpscalerFramePath a_path);
-	mutable std::mutex devBenchSuccessfulDispatchMutex;
+	[[nodiscard]] uint64_t GetDevBenchFsrColorContractState() const noexcept;
+	[[nodiscard]] uint64_t GetDevBenchFsrColorContractFlags() const noexcept;
+	[[nodiscard]] FsrColorContractStatusSnapshot GetDevBenchFsrColorContractStatusSnapshotLocked() const noexcept;
+	void PublishDevBenchFsrColorContext(bool a_runtime, uint64_t a_flags) noexcept;
+	void ClearDevBenchFsrColorContext(bool a_runtime) noexcept;
+	void RecordDevBenchSuccessfulDispatch(
+		RuntimeUpscalerFramePath a_path,
+		uint32_t a_contextIndex,
+		uint32_t a_renderWidth,
+		uint32_t a_renderHeight,
+		uint32_t a_displayWidth,
+		uint32_t a_displayHeight);
+	std::atomic<uint64_t> devBenchFsrColorContractState{ FSRColorContractPolicy::kDefaultState };
+	std::atomic<uint64_t> devBenchHostContextColorContract{ 0 };
+	std::atomic<uint64_t> devBenchRuntimeContextColorContract{ 0 };
+	std::atomic<uint64_t> devBenchHostContextGeneration{ 0 };
+	std::atomic<uint64_t> devBenchRuntimeContextGeneration{ 0 };
+	std::atomic<uint32_t> devBenchHostContextLastDispatchFrame{ 0 };
+	std::atomic<uint32_t> devBenchRuntimeContextLastDispatchFrame{ 0 };
+	mutable std::mutex devBenchFsrColorContractMutex;
 	RuntimeUpscalerDispatchSnapshot devBenchSuccessfulDispatch{};
 	uint64_t devBenchSuccessfulDispatchSerial = 0;
 #endif

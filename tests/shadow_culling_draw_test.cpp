@@ -75,7 +75,12 @@ namespace RE
 		struct TypeValue
 		{
 			Type value = Type::Utility;
-			Type get() const { return value; }
+			mutable unsigned reads = 0;
+			Type get() const
+			{
+				++reads;
+				return value;
+			}
 		} shaderType;
 	};
 	class BSRenderPass
@@ -139,6 +144,11 @@ int main()
 			Require(group == 3);
 			++object.lightAssignments;
 		};
+		const auto requireNoShaderRead = [&] {
+			const auto reads = shader.shaderType.reads;
+			Require(!C::SkipPointShadowDraw(&pass, shadowTechnique));
+			Require(shader.shaderType.reads == reads);
+		};
 
 		// Both ordinary and actor casters keep native light assignment even when their shadow is culled.
 		for (const bool actor : { false, true }) {
@@ -180,7 +190,7 @@ int main()
 			for (auto* nestedLight : { static_cast<RE::BSShadowLight*>(nullptr), &otherLight }) {
 				try {
 					const C::DrawScope nested{ nestedLight };
-					Require(!C::SkipPointShadowDraw(&pass, shadowTechnique));
+					requireNoShaderRead();
 					throw 1;
 				} catch (int) {}
 				Require(C::SkipPointShadowDraw(&pass, shadowTechnique));
@@ -191,15 +201,18 @@ int main()
 			Require(workerKept);
 
 			C::active = false;
-			Require(!C::SkipPointShadowDraw(&pass, shadowTechnique));
+			requireNoShaderRead();
 			C::active = true;
 			globals::state->loading = true;
-			Require(!C::SkipPointShadowDraw(&pass, shadowTechnique));
+			requireNoShaderRead();
 			globals::state->loading = false;
+			globals::state = nullptr;
+			requireNoShaderRead();
+			globals::state = &globals::testState;
 			clockMs += 251;
-			Require(!C::SkipPointShadowDraw(&pass, shadowTechnique));
+			requireNoShaderRead();
 			clockMs = captured->sampledAt - 1;
-			Require(!C::SkipPointShadowDraw(&pass, shadowTechnique));
+			requireNoShaderRead();
 			clockMs = captured->sampledAt;
 			light.worldTranslate.x += 1;
 			Require(!C::SkipPointShadowDraw(&pass, shadowTechnique));
@@ -216,7 +229,7 @@ int main()
 			C::snapshot.Publish(closeEye);
 			Require(!C::SkipPointShadowDraw(&pass, shadowTechnique));
 			C::snapshot.Publish({});
-			Require(!C::SkipPointShadowDraw(&pass, shadowTechnique));
+			requireNoShaderRead();
 			C::snapshot.Publish(captured);
 			Require(C::SkipPointShadowDraw(&pass, shadowTechnique));
 		}
@@ -230,7 +243,7 @@ int main()
 		Require(geometry.lightAssignments == assignments);
 		{
 			const C::DrawScope scope{ &light };
-			Require(!C::SkipPointShadowDraw(&pass, shadowTechnique));
+			requireNoShaderRead();
 		}
 		C::active = false;
 		C::Append(&culler, geometry, 3);

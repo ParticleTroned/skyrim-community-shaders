@@ -7,6 +7,8 @@
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 #include <RE/B/BSCullingProcess.h>
+#include <RE/B/BSRenderPass.h>
+#include <RE/B/BSShader.h>
 #include <RE/B/BSShadowDirectionalLight.h>
 #include <algorithm>
 #include <atomic>
@@ -222,10 +224,9 @@ namespace LightLimitFixDetail::ShadowCulling
 	bool SkipPointShadowDraw(const RE::BSRenderPass* pass, std::uint32_t technique)
 	{
 		const auto* light = DrawScope::Current();
-		if (!light || !pass || !pass->shader || !pass->geometry ||
-			!VRShadowBatch::IsIsolatedShadowPass(pass->shader->shaderType.get() == RE::BSShader::Type::Utility,
-				technique, pass->numLights, pass->numShadowLights))
+		if (!light || !pass)
 			return false;
+		// Inactive or unknown light scopes leave queued render-pass state untouched.
 		const auto captured = CurrentSnapshot();
 		if (!captured)
 			return false;
@@ -233,6 +234,10 @@ namespace LightLimitFixDetail::ShadowCulling
 			const auto& camera = captured->cameras[i];
 			if (camera.pass != Pass::Point || camera.pointOwner.get() != light)
 				continue;
+			if (!pass->shader || !pass->geometry ||
+				!VRShadowBatch::IsIsolatedShadowPass(pass->shader->shaderType.get() == RE::BSShader::Type::Utility,
+					technique, pass->numLights, pass->numShadowLights))
+				return false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			pointDrawsTested.fetch_add(1, std::memory_order_relaxed);
 #endif

@@ -72,7 +72,7 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-balanced",
-    "presetVersion": "d2026.10.28.1",
+    "presetVersion": "d2026.10.30.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
@@ -80,7 +80,7 @@
     },
     "settingsContract": {
       "revision": 18,
-      "sourceTreeSha256": "CE551F69C6032747D86A4A6D71247515E078DF63DF22E83A3849D9508A67D115"
+      "sourceTreeSha256": "3E9FA004AEB01996B6510E777306400C825F54C679AC8165C82AA6B9504D677F"
     }
   },
   "Upscaling": {
@@ -99,7 +99,7 @@
     "frameGenerationMode": 0,
     "frameLimitMode": 1,
     "fsr4RuntimeEnable": true,
-    "fsr4RuntimeSelectionSchemaVersion": 1,
+    "fsr4RuntimeSelectionSchemaVersion": 2,
     "periphery_taa_center_area": 0.30000001192092896,
     "periphery_taa_center_blend_feather": 0.05000000074505806,
     "periphery_taa_enable": false,

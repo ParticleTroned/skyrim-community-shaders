@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.10.28.1",
+    "packageVersion": "d2026.10.30.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "5008058BC406C39D54389F7377E85038404092654ECF0B9FEF1FC93F0F0DBC88"
+        "sha256": "48A05A3F1FE81C3E9E351AF303B96D005C78A07346CC59D9A4A500A7979DDF6B"
     },
     "runtimeSettingsContract": {
         "revision": 18,
-        "sourceTreeSha256": "CE551F69C6032747D86A4A6D71247515E078DF63DF22E83A3849D9508A67D115",
+        "sourceTreeSha256": "3E9FA004AEB01996B6510E777306400C825F54C679AC8165C82AA6B9504D677F",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -472,7 +472,7 @@
             "reason": "fall back to FSR when DLSS is unavailable"
         },
         { "path": ["Upscaling", "fsr4RuntimeEnable"], "value": true },
-        { "path": ["Upscaling", "fsr4RuntimeSelectionSchemaVersion"], "value": 1 },
+        { "path": ["Upscaling", "fsr4RuntimeSelectionSchemaVersion"], "value": 2 },
         { "path": ["Upscaling", "dlssPreset"], "value": 1 },
         { "path": ["Upscaling", "dlssSharpener"], "value": 1 },
         { "path": ["Upscaling", "sharpnessDLSS"], "value": 0.699999988079071 },

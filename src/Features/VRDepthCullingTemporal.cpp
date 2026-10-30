@@ -19,6 +19,9 @@
 #include <utility>
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Globals.h"
+#	include "Profiler.h"
+
 #	include <chrono>
 #endif
 
@@ -48,7 +51,8 @@ namespace VRDepthCullingTemporal
 			SubmissionPolicy::Scene scene{};
 			std::uint64_t resourceGeneration = 0;
 			std::uint32_t frame = 0;
-			std::uint32_t sourceWidth = 0, sourceHeight = 0, activeWidth = 0, activeHeight = 0;
+			std::uint32_t sourceWidth = 0, sourceHeight = 0;
+			float activeWidth = 0, activeHeight = 0;
 			std::uintptr_t sourceView = 0, reducedTarget = 0, camera = 0;
 			SubmissionPolicy::DepthConvention convention = SubmissionPolicy::DepthConvention::Standard;
 			Reason reason = Reason::MissingDepth;
@@ -84,6 +88,9 @@ namespace VRDepthCullingTemporal
 		std::atomic_uint64_t g_policyEpoch{ 2 };
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		VRDepthCullingTelemetryPolicy::WriterGate g_telemetryGate;
+		std::atomic_uint64_t g_recoveryChecks{ 0 }, g_coherentEarlyExits{ 0 };
+		std::atomic_uint64_t g_submissionValidationCalls{ 0 }, g_depthEvidenceValidationCalls{ 0 };
+		std::atomic_uint64_t g_maximumPromotedPerReadback{ 0 };
 		std::atomic_uint64_t g_envelopeMisses{ 0 };
 		std::atomic_uint64_t g_recoveryAttempts{ 0 };
 		std::atomic_uint64_t g_objectsInspected{ 0 };
@@ -122,9 +129,9 @@ namespace VRDepthCullingTemporal
 
 		struct RecoveryTelemetryScope
 		{
-			RecoveryTelemetryScope()
+			explicit RecoveryTelemetryScope(const VRDepthCullingTelemetryPolicy::WriterScope& a_writer)
 			{
-				if (!g_telemetryGate.TryEnter())
+				if (!a_writer.IsActive())
 					return;
 				active = true;
 				started = std::chrono::steady_clock::now();
@@ -155,7 +162,6 @@ namespace VRDepthCullingTemporal
 				g_totalDurationNanoseconds.fetch_add(elapsed, std::memory_order_relaxed);
 				UpdateMaximum(g_maximumDurationNanoseconds, elapsed);
 				g_durationHistogram[VRDepthCullingTelemetryPolicy::DurationBin(elapsed)].fetch_add(1, std::memory_order_relaxed);
-				g_telemetryGate.Leave();
 			}
 
 			bool active = false;
@@ -172,9 +178,10 @@ namespace VRDepthCullingTemporal
 			std::uint64_t directEligible = 0;
 		};
 
-		void RecordSubmission(Reason a_reason, const SubmissionPolicy::Submission& a_stamp, std::uint32_t a_promoted = 0)
+		void RecordSubmission(const VRDepthCullingTelemetryPolicy::WriterScope& a_writer,
+			Reason a_reason, const SubmissionPolicy::Submission& a_stamp, std::uint32_t a_promoted = 0)
 		{
-			if (!g_telemetryGate.TryEnter())
+			if (!a_writer.IsActive())
 				return;
 			const bool ageKnown = a_stamp.produced && a_stamp.frameKnown && globals::state;
 			const auto age = ageKnown ? SubmissionPolicy::Age(a_stamp.frame, globals::state->frameCount) : 0;
@@ -183,7 +190,6 @@ namespace VRDepthCullingTemporal
 			g_lastProducerAge.store(age, std::memory_order_relaxed);
 			g_lastProducerAgeKnown.store(ageKnown, std::memory_order_relaxed);
 			g_transitionPromoted.fetch_add(a_promoted, std::memory_order_relaxed);
-			g_telemetryGate.Leave();
 		}
 #endif
 
@@ -292,7 +298,7 @@ namespace VRDepthCullingTemporal
 					              cache.sourceDesc.ArraySize == 1 && cache.sourceDesc.SampleDesc.Count == 1 &&
 					              view.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D && view.Texture2D.MostDetailedMip == 0 &&
 					              (view.Format == DXGI_FORMAT_R32_FLOAT || view.Format == DXGI_FORMAT_R24_UNORM_X8_TYPELESS) &&
-					              cache.reducedDesc.Width > 1 && cache.reducedDesc.Width % 2 == 0 && cache.reducedDesc.Height > 0 &&
+					              SubmissionPolicy::IsSupportedRasterExtent(cache.reducedDesc.Width, cache.reducedDesc.Height) &&
 					              cache.reducedDesc.ArraySize == 1 && cache.reducedDesc.SampleDesc.Count == 1;
 				}
 			}
@@ -312,8 +318,8 @@ namespace VRDepthCullingTemporal
 				evidence.reason = Reason::LayoutChanged;
 				return;
 			}
-			evidence.activeWidth = static_cast<std::uint32_t>(evidence.sourceWidth * widthRatio);
-			evidence.activeHeight = static_cast<std::uint32_t>(evidence.sourceHeight * heightRatio);
+			evidence.activeWidth = evidence.sourceWidth * widthRatio;
+			evidence.activeHeight = evidence.sourceHeight * heightRatio;
 			if (!SubmissionPolicy::IsSupportedStereoLayout(evidence.sourceWidth, evidence.sourceHeight, evidence.activeWidth, evidence.activeHeight)) {
 				evidence.reason = Reason::LayoutChanged;
 				return;
@@ -388,45 +394,82 @@ namespace VRDepthCullingTemporal
 		void RecoverHighRiskObjects(const SubmissionPolicy::Batch& a_batch, const SubmissionPolicy::Handoff::Consumed& a_consumed,
 			const SubmissionPolicy::ReadbackProjection& a_currentProjection)
 		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			CS_PROFILE_CPU_SCOPE("VR::DepthCullingRecovery");
+#endif
 			if (!g_cullingEnabled.load(std::memory_order_acquire) ||
 				g_mode.load(std::memory_order_acquire) != Mode::Balanced) {
 				return;
 			}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const VRDepthCullingTelemetryPolicy::WriterScope telemetryWriter(g_telemetryGate);
+			const bool diagnosticsActive = telemetryWriter.IsActive();
+			bool coherentEarlyExit = false, submissionValidated = false, depthValidated = false;
+			std::uint64_t observedPromotions = 0;
+			// Keep all stages of this readback on the same side of a telemetry reset.
+			const SKSE::stl::scope_exit publishDiagnostics([&] {
+				if (!diagnosticsActive)
+					return;
+				g_recoveryChecks.fetch_add(1, std::memory_order_relaxed);
+				g_coherentEarlyExits.fetch_add(coherentEarlyExit, std::memory_order_relaxed);
+				g_submissionValidationCalls.fetch_add(submissionValidated, std::memory_order_relaxed);
+				g_depthEvidenceValidationCalls.fetch_add(depthValidated, std::memory_order_relaxed);
+				UpdateMaximum(g_maximumPromotedPerReadback, observedPromotions);
+			});
+#endif
 			const auto cullingEpoch = g_cullingEpoch.load(std::memory_order_acquire);
 			const auto policyEpoch = g_policyEpoch.load(std::memory_order_acquire);
 			if ((policyEpoch & 1u) != 0)
 				return;
 			auto* camera = RE::Main::WorldRootCamera();
 			const auto& stamp = a_consumed.stamp;
-			auto reason = SubmissionPolicy::Match(stamp, a_batch, a_consumed.sequence, cullingEpoch, policyEpoch);
-			if (reason != Reason::None) {
-#ifdef DEVBENCH_BRIDGE_ENABLED
-				RecordSubmission(reason, stamp);
-#endif
-				return;
-			}
 			if (g_producerPoseEpoch.load(std::memory_order_acquire) != cullingEpoch) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
-				RecordSubmission(Reason::EpochMismatch, stamp);
+				RecordSubmission(telemetryWriter, Reason::EpochMismatch, stamp);
 #endif
 				return;
 			}
 
 			MotionDelta motion{};
+			if (!camera || !TryCalculateMotionDelta(camera->world, motion)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				RecordSubmission(telemetryWriter, Reason::InvalidView, stamp);
+#endif
+				return;
+			}
+			// Keeping native results requires no submission or depth revalidation.
+			if (IsViewCoherent(true, motion.rotationCosine, motion.translationSquared)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				coherentEarlyExit = true;
+#endif
+				return;
+			}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			submissionValidated = true;
+#endif
+			auto reason = SubmissionPolicy::Match(stamp, a_batch, a_consumed.sequence, cullingEpoch, policyEpoch);
+			if (reason != Reason::None) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				RecordSubmission(telemetryWriter, reason, stamp);
+#endif
+				return;
+			}
 			reason = g_producerDepth.reason;
-			if (reason == Reason::None && (!camera || g_producerDepth.camera != reinterpret_cast<std::uintptr_t>(camera) ||
-											  !TryCalculateMotionDelta(camera->world, motion)))
+			if (reason == Reason::None && g_producerDepth.camera != reinterpret_cast<std::uintptr_t>(camera))
 				reason = Reason::InvalidView;
 			DepthEvidence currentDepth{};
 			if (reason == Reason::None) {
 				// Revalidate replaced resources; compatible packed stereo sizes need not match.
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				depthValidated = true;
+#endif
 				CaptureDepthEvidence(currentDepth);
 				reason = currentDepth.reason;
 			}
-			if (reason == Reason::None && g_producerDepth.scene != currentDepth.scene)
-				reason = Reason::SceneChanged;
 			if (reason == Reason::None && !SubmissionPolicy::Matches(a_currentProjection, currentDepth.camera, cullingEpoch, policyEpoch))
 				reason = Reason::InvalidView;
+			if (reason == Reason::None && g_producerDepth.scene != currentDepth.scene)
+				reason = Reason::SceneChanged;
 			if (reason == Reason::None) {
 				for (std::size_t eye = 0; eye < currentDepth.eyes.size(); ++eye) {
 					if (!SubmissionPolicy::SameProjection(g_producerDepth.eyes[eye], currentDepth.eyes[eye]) ||
@@ -436,33 +479,17 @@ namespace VRDepthCullingTemporal
 			}
 			if (reason == Reason::None && SubmissionPolicy::IsCameraCut(motion.rotationCosine, motion.translationSquared))
 				reason = Reason::CameraCut;
-			if (reason != Reason::None) {
-				// Only this consumed, matched registration owns these slots. The caller resets it next.
-				if (!IsBalancedRecoveryActive(cullingEpoch, policyEpoch))
-					return;
-				auto* results = reinterpret_cast<std::uint32_t*>(a_batch.results);
-				[[maybe_unused]] const auto promoted = SubmissionPolicy::RecoverDiscontinuity(a_consumed, a_batch, cullingEpoch, policyEpoch,
-					{ results, a_batch.count });
+			if (!SubmissionPolicy::CanRecover(reason)) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
-				RecordSubmission(reason, stamp, promoted);
+				RecordSubmission(telemetryWriter, reason, stamp);
 #endif
 				return;
 			}
+			if (reason == Reason::None && (g_producerDepth.resourceGeneration != currentDepth.resourceGeneration ||
+											  g_producerDepth.sourceView != currentDepth.sourceView || g_producerDepth.reducedTarget != currentDepth.reducedTarget))
+				reason = Reason::CompatibleResourceChange;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			RecordSubmission(g_producerDepth.resourceGeneration != currentDepth.resourceGeneration ||
-									 g_producerDepth.sourceView != currentDepth.sourceView || g_producerDepth.reducedTarget != currentDepth.reducedTarget ?
-								 Reason::CompatibleResourceChange :
-								 Reason::None,
-				stamp);
-#endif
-			const bool viewCoherent = IsViewCoherent(
-				true,
-				motion.rotationCosine,
-				motion.translationSquared);
-			if (viewCoherent)
-				return;
-#ifdef DEVBENCH_BRIDGE_ENABLED
-			RecoveryTelemetryScope telemetry;
+			RecoveryTelemetryScope telemetry(telemetryWriter);
 			if (telemetry.active)
 				ClearLastRecoveryStatus();
 #endif
@@ -544,11 +571,12 @@ namespace VRDepthCullingTemporal
 				return;
 			}
 
-			for (std::size_t index = 0; index < candidates.Size(); ++index)
-				results[candidates[index].index] = 1;
+			[[maybe_unused]] const auto promotedCount = SubmissionPolicy::ApplyRecovery(reason, a_consumed, a_batch, cullingEpoch, policyEpoch,
+				{ results, objectCount }, candidates);
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			const auto promotedCount = static_cast<std::uint32_t>(candidates.Size());
+			observedPromotions = promotedCount;
+			RecordSubmission(telemetryWriter, reason, stamp, reason == Reason::ProjectionChanged || reason == Reason::SceneChanged || reason == Reason::CameraCut ? promotedCount : 0);
 			if (telemetry.active) {
 				telemetry.promoted = promotedCount;
 				g_lastObjectCount.store(objectCount, std::memory_order_relaxed);
@@ -562,25 +590,35 @@ namespace VRDepthCullingTemporal
 
 		struct DepthCullingReadback
 		{
+			static void ReadNative(void* a_culler)
+			{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				CS_PROFILE_CPU_SCOPE("VR::NativeDepthReadback");
+#endif
+				func(a_culler);
+			}
+
 			static void thunk(void* a_culler)
 			{
 				g_pendingReadbackProjection = {};
 				const auto consumed = g_handoff.Consume();
 				g_depthPrepared = false;
 				if (!g_cullingEnabled.load(std::memory_order_acquire) || g_mode.load(std::memory_order_acquire) != Mode::Balanced) {
-					func(a_culler);
+					ReadNative(a_culler);
 					return;
 				}
 				const auto cullingEpoch = g_cullingEpoch.load(std::memory_order_acquire);
 				const auto policyEpoch = g_policyEpoch.load(std::memory_order_acquire);
 				const auto projection = CaptureReadbackProjection(cullingEpoch, policyEpoch);
 				const auto batch = ReadBatch(a_culler);
-				func(a_culler);
+				ReadNative(a_culler);
 				if (ReadBatch(a_culler) == batch)
 					RecoverHighRiskObjects(batch, consumed, projection);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-				else
-					RecordSubmission(Reason::BatchMismatch, consumed.stamp);
+				else {
+					const VRDepthCullingTelemetryPolicy::WriterScope telemetryWriter(g_telemetryGate);
+					RecordSubmission(telemetryWriter, Reason::BatchMismatch, consumed.stamp);
+				}
 #endif
 				if (IsBalancedRecoveryActive(cullingEpoch, policyEpoch))
 					g_pendingReadbackProjection = projection;
@@ -627,6 +665,9 @@ namespace VRDepthCullingTemporal
 				func(a_scene);
 				if (!g_cullingEnabled.load(std::memory_order_acquire) || g_mode.load(std::memory_order_acquire) != Mode::Balanced)
 					return;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				CS_PROFILE_CPU_SCOPE("VR::DepthCullingProducerValidation");
+#endif
 				CaptureDepthEvidence(g_preparedDepth);
 				// Compare live frusta at readback on both sides; depth rendering uses temporary camera bounds.
 				if (g_preparedDepth.reason == Reason::None) {
@@ -734,6 +775,11 @@ namespace VRDepthCullingTemporal
 			.cullingEnabled = cullingEnabled,
 			.telemetryEnabled = g_telemetryGate.IsEnabled(),
 			.mode = mode,
+			.recoveryChecks = g_recoveryChecks.load(std::memory_order_relaxed),
+			.coherentEarlyExits = g_coherentEarlyExits.load(std::memory_order_relaxed),
+			.submissionValidationCalls = g_submissionValidationCalls.load(std::memory_order_relaxed),
+			.depthEvidenceValidationCalls = g_depthEvidenceValidationCalls.load(std::memory_order_relaxed),
+			.maximumPromotedPerReadback = g_maximumPromotedPerReadback.load(std::memory_order_relaxed),
 			.envelopeMisses = g_envelopeMisses.load(std::memory_order_relaxed),
 			.recoveryAttempts = g_recoveryAttempts.load(std::memory_order_relaxed),
 			.objectsInspected = g_objectsInspected.load(std::memory_order_relaxed),
@@ -778,6 +824,11 @@ namespace VRDepthCullingTemporal
 	{
 		if (!g_telemetryGate.TryLockForReset())
 			return false;
+		g_recoveryChecks.store(0, std::memory_order_relaxed);
+		g_coherentEarlyExits.store(0, std::memory_order_relaxed);
+		g_submissionValidationCalls.store(0, std::memory_order_relaxed);
+		g_depthEvidenceValidationCalls.store(0, std::memory_order_relaxed);
+		g_maximumPromotedPerReadback.store(0, std::memory_order_relaxed);
 		g_envelopeMisses.store(0, std::memory_order_relaxed);
 		g_recoveryAttempts.store(0, std::memory_order_relaxed);
 		g_objectsInspected.store(0, std::memory_order_relaxed);

@@ -231,15 +231,28 @@ namespace
 		for (auto invalid : { Batch{ 1, 2, 0, 200, 0 }, Batch{ 1, 2, 3, 0, 0 }, Batch{ 1, 2, 3, 4097, 0 }, Batch{ 1, 2, 3, 200, 2 } })
 			if (IsValid(invalid))
 				return false;
-		// Compatible scaling remains valid; partial eyes and out-of-range extents do not.
+		// Native viewports retain fractional eye widths at arbitrary dynamic scales.
 		if (!IsSupportedStereoLayout(4096, 2048, 4096, 2048) || !IsSupportedStereoLayout(4096, 2048, 2048, 1024) ||
-			!IsSupportedStereoLayout(2048, 1024, 1024, 512))
+			!IsSupportedStereoLayout(2048, 1024, 1024, 512) || !IsSupportedStereoLayout(4096, 2048, 2047, 1024) ||
+			!IsSupportedStereoLayout(4096, 2048, 2047.75f, 1023.5f) || !IsSupportedRasterExtent(775, 430))
 			return false;
 		for (auto layout : { std::array<unsigned, 4>{ 0, 0, 0, 0 }, { 4095, 2048, 2048, 1024 },
-				 { 4096, 2048, 2047, 1024 }, { 4096, 2048, 4098, 1024 }, { 4096, 2048, 4096, 2049 },
+				 { 4096, 2048, 4098, 1024 }, { 4096, 2048, 4096, 2049 },
 				 { 4096, 2048, 0, 1024 }, { 4096, 2048, 2048, 0 } })
-			if (IsSupportedStereoLayout(layout[0], layout[1], layout[2], layout[3]))
+			if (IsSupportedStereoLayout(layout[0], layout[1], static_cast<float>(layout[2]), static_cast<float>(layout[3])))
 				return false;
+		for (float invalid : { -1.0f, 0.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+			if (IsSupportedStereoLayout(4096, 2048, invalid, 1024) || IsSupportedStereoLayout(4096, 2048, 2048, invalid) ||
+				IsSupportedRasterExtent(invalid, 430) || IsSupportedRasterExtent(775, invalid))
+				return false;
+		}
+		for (auto width : { 1550u, 2016u, 3100u, 4032u }) {
+			for (auto scale : { .33333334f, .5f, .6666667f, .77f, 1.0f }) {
+				if (!IsSupportedStereoLayout(width, 2240, width * scale, 2240 * scale) ||
+					!IsSupportedRasterExtent(width / 2, 1120))
+					return false;
+			}
+		}
 		Eye eye{};
 		eye.projection[0] = eye.projection[5] = 1;
 		eye.viewport = { 0, 1, 1, 0 };
@@ -353,17 +366,42 @@ namespace
 		std::array<std::uint32_t, 4098> results{};
 		results.front() = results.back() = 0xDEADBEEF;
 		results[1] = 9;
+		const auto nativeResults = results;
 		const Batch batch{ 1, 2, reinterpret_cast<std::uintptr_t>(&results[1]), 4096, 0 };
+		CandidateSet<kBalancedPromotionBudget> candidates;
+		for (std::uint32_t index = 0; index < batch.count; ++index)
+			candidates.Add({ index, static_cast<float>(index), true });
 		Handoff handoff;
 		handoff.Publish({ batch, 0, 4, 6, 10, true });
 		auto consumed = handoff.Consume();
-		if (RecoverDiscontinuity(consumed, batch, 4, 6, { &results[1], 4096 }) != 4095 ||
-			results[1] != 9 || results.front() != 0xDEADBEEF || results.back() != 0xDEADBEEF)
+		for (std::size_t index = 0; index < static_cast<std::size_t>(Reason::Count); ++index) {
+			const auto reason = static_cast<Reason>(index);
+			const bool recoverable = reason == Reason::None || reason == Reason::CompatibleResourceChange ||
+			                         reason == Reason::ProjectionChanged || reason == Reason::SceneChanged || reason == Reason::CameraCut;
+			results = nativeResults;
+			const auto promoted = ApplyRecovery(reason, consumed, batch, 4, 6, { &results[1], 4096 }, candidates);
+			if (CanRecover(reason) != recoverable || promoted != (recoverable ? kBalancedPromotionBudget : 0) ||
+				results.front() != nativeResults.front() || results.back() != nativeResults.back())
+				return false;
+			for (std::uint32_t slot = 0; slot < batch.count; ++slot) {
+				const auto expected = recoverable && slot >= batch.count - kBalancedPromotionBudget ? 1 : nativeResults[slot + 1];
+				if (results[slot + 1] != expected)
+					return false;
+			}
+		}
+		results = nativeResults;
+		if (CanRecover(Reason::Count) || CanRecover(static_cast<Reason>(255)))
 			return false;
-		results[2] = 0;
+		// Persistently unavailable metadata must not erase useful native occlusion each frame.
+		Handoff retry;
+		for (int frame = 0; frame < 100; ++frame) {
+			retry.Publish({ batch, 0, 4, 6, static_cast<std::uint32_t>(frame), true });
+			if (ApplyRecovery(Reason::MissingDepth, retry.Consume(), batch, 4, 6, { &results[1], 4096 }, candidates) || results != nativeResults)
+				return false;
+		}
 		auto empty = handoff.Consume();
 		if (Match(empty.stamp, batch, empty.sequence, 4, 6) != Reason::MissingProducer ||
-			RecoverDiscontinuity(empty, batch, 4, 6, { &results[1], 4096 }) || results[2] != 0)
+			ApplyRecovery(Reason::CameraCut, empty, batch, 4, 6, { &results[1], 4096 }, candidates) || results != nativeResults)
 			return false;
 		// Recycled addresses and equal counts still require a new publication in this lifetime.
 		if (Match(consumed.stamp, batch, empty.sequence, 4, 6) != Reason::BatchMismatch)
@@ -371,16 +409,25 @@ namespace
 		handoff.Publish({ batch, 0, 4, 6, 12, true });
 		handoff.Invalidate();
 		empty = handoff.Consume();
-		if (RecoverDiscontinuity(empty, batch, 4, 6, { &results[1], 4096 }) || results[2] != 0)
+		if (ApplyRecovery(Reason::SceneChanged, empty, batch, 4, 6, { &results[1], 4096 }, candidates) || results != nativeResults)
 			return false;
 		handoff.Publish({ batch, 0, 4, 6, 13, true });
 		consumed = handoff.Consume();
-		if (RecoverDiscontinuity(consumed, batch, 5, 6, { &results[1], 4096 }) ||
-			RecoverDiscontinuity(consumed, batch, 4, 8, { &results[1], 4096 }) ||
-			RecoverDiscontinuity(consumed, batch, 4, 6, { &results[2], 4096 }) ||
-			RecoverDiscontinuity(consumed, batch, 4, 6, { &results[1], 4095 }) || results[2] != 0)
+		if (ApplyRecovery(Reason::CameraCut, consumed, batch, 5, 6, { &results[1], 4096 }, candidates) ||
+			ApplyRecovery(Reason::CameraCut, consumed, batch, 4, 8, { &results[1], 4096 }, candidates) ||
+			ApplyRecovery(Reason::CameraCut, consumed, batch, 4, 6, { &results[2], 4096 }, candidates) ||
+			ApplyRecovery(Reason::CameraCut, consumed, batch, 4, 6, { &results[1], 4095 }, candidates) || results != nativeResults)
 			return false;
-		return RecoverDiscontinuity(consumed, batch, 4, 6, { &results[1], 4096 }) == 1;
+		CandidateSet<kBalancedPromotionBudget> invalid;
+		invalid.Add({ 1, 1, true });
+		invalid.Add({ batch.count, 2, true });
+		if (ApplyRecovery(Reason::SceneChanged, consumed, batch, 4, 6, { &results[1], 4096 }, invalid) || results != nativeResults)
+			return false;
+		CandidateSet<kBalancedPromotionBudget> duplicate;
+		duplicate.Add({ 0, 3, true });
+		duplicate.Add({ 1, 2, true });
+		duplicate.Add({ 1, 1, true });
+		return ApplyRecovery(Reason::SceneChanged, consumed, batch, 4, 6, { &results[1], 4096 }, duplicate) == 1 && results[1] == 9 && results[2] == 1;
 	}
 
 	constexpr bool CoversMutuallyExclusiveModes()

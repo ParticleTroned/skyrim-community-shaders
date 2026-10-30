@@ -130,15 +130,28 @@ namespace VRDepthCullingSubmissionPolicy
 		return Reason::None;
 	}
 
-	/** A discontinuity may expose only the slots owned by this consumed submission. */
-	inline std::uint32_t RecoverDiscontinuity(const Handoff::Consumed& a_consumed, const Batch& a_batch,
-		std::uint64_t a_cullingEpoch, std::uint64_t a_policyEpoch, std::span<std::uint32_t> a_results)
+	/** Valid discontinuities use the same ranked recovery budget as ordinary motion. */
+	constexpr bool CanRecover(Reason a_reason)
 	{
-		if (Match(a_consumed.stamp, a_batch, a_consumed.sequence, a_cullingEpoch, a_policyEpoch) != Reason::None ||
+		return a_reason == Reason::None || a_reason == Reason::CompatibleResourceChange ||
+		       a_reason == Reason::ProjectionChanged || a_reason == Reason::SceneChanged || a_reason == Reason::CameraCut;
+	}
+
+	/** Apply at most the shared budget to ranked candidates in this consumed registration. */
+	inline std::uint32_t ApplyRecovery(Reason a_reason, const Handoff::Consumed& a_consumed, const Batch& a_batch,
+		std::uint64_t a_cullingEpoch, std::uint64_t a_policyEpoch, std::span<std::uint32_t> a_results,
+		const VRDepthCullingTemporalPolicy::CandidateSet<VRDepthCullingTemporalPolicy::kBalancedPromotionBudget>& a_candidates)
+	{
+		if (!CanRecover(a_reason) ||
+			Match(a_consumed.stamp, a_batch, a_consumed.sequence, a_cullingEpoch, a_policyEpoch) != Reason::None ||
 			a_results.size() != a_batch.count || reinterpret_cast<std::uintptr_t>(a_results.data()) != a_batch.results)
 			return 0;
+		for (std::size_t index = 0; index < a_candidates.Size(); ++index)
+			if (a_candidates[index].index >= a_results.size())
+				return 0;
 		std::uint32_t promoted = 0;
-		for (auto& result : a_results) {
+		for (std::size_t index = 0; index < a_candidates.Size(); ++index) {
+			auto& result = a_results[a_candidates[index].index];
 			if (result == 0) {
 				result = 1;
 				++promoted;
@@ -153,12 +166,18 @@ namespace VRDepthCullingSubmissionPolicy
 		return a_consumer - a_producer;
 	}
 
-	/** Both eyes must occupy whole, equally sized rectangles inside the source. */
-	constexpr bool IsSupportedStereoLayout(std::uint32_t a_sourceWidth, std::uint32_t a_sourceHeight,
-		std::uint32_t a_activeWidth, std::uint32_t a_activeHeight)
+	/** Native stereo rasterization permits fractional eye widths, including odd reduced targets. */
+	inline bool IsSupportedRasterExtent(double a_width, double a_height)
+	{
+		return std::isfinite(a_width) && std::isfinite(a_height) && a_width >= 2 && a_height >= 1;
+	}
+
+	/** The source stores whole eyes; dynamic viewports scale those eyes without integer rounding. */
+	inline bool IsSupportedStereoLayout(std::uint32_t a_sourceWidth, std::uint32_t a_sourceHeight,
+		float a_activeWidth, float a_activeHeight)
 	{
 		return a_sourceWidth >= 2 && a_sourceWidth % 2 == 0 && a_sourceHeight > 0 &&
-		       a_activeWidth >= 2 && a_activeWidth % 2 == 0 && a_activeHeight > 0 &&
+		       IsSupportedRasterExtent(a_activeWidth, a_activeHeight) &&
 		       a_activeWidth <= a_sourceWidth && a_activeHeight <= a_sourceHeight;
 	}
 

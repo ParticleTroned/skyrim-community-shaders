@@ -50,6 +50,11 @@ namespace VRDepthCullingTemporal
 		bool cullingEnabled = false;
 		bool telemetryEnabled = true;
 		Mode mode = Mode::Balanced;
+		std::uint64_t recoveryChecks = 0;
+		std::uint64_t coherentEarlyExits = 0;
+		std::uint64_t submissionValidationCalls = 0;
+		std::uint64_t depthEvidenceValidationCalls = 0;
+		std::uint64_t maximumPromotedPerReadback = 0;
 		std::uint64_t envelopeMisses = 0;
 		std::uint64_t recoveryAttempts = 0;
 		std::uint64_t objectsInspected = 0;

@@ -21,6 +21,27 @@ int main()
 	}
 
 	WriterGate gate;
+	{
+		const WriterScope sample(gate);
+		gate.SetEnabled(false);
+		if (!sample.IsActive() || gate.TryLockForReset())
+			throw std::runtime_error("disabling telemetry split an admitted sample");
+	}
+	if (!gate.TryLockForReset())
+		throw std::runtime_error("sample destruction leaked writer ownership");
+	{
+		const WriterScope rejected(gate);
+		gate.SetEnabled(true);
+		gate.UnlockAfterReset();
+		if (rejected.IsActive())
+			throw std::runtime_error("rejected sample resumed after reset or enablement");
+		const WriterScope next(gate);
+		if (!next.IsActive() || gate.TryLockForReset())
+			throw std::runtime_error("next sample did not retain reset exclusion");
+	}
+	if (!gate.TryLockForReset())
+		throw std::runtime_error("rejected sample corrupted writer ownership");
+	gate.UnlockAfterReset();
 	std::latch entered{ 1 };
 	std::latch release{ 1 };
 	std::thread writer([&] {

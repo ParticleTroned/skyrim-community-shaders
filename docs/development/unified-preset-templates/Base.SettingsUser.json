@@ -953,13 +953,17 @@
     "ParticleLightsSaturation": 1.0,
     "ParticleRadius": 1.0,
     "ShadowCulling": {
+      "actorPartDistanceMeters": 7.14,
+      "actorPartRadiusCentimeters": 11.424,
+      "actorPartReturnDistanceMeters": 6.426,
       "sun": true,
       "torch": true,
       "actors": true,
       "interiorTorches": true,
       "sunDistanceMeters": 20.0,
       "torchDistanceMeters": 15.0,
-      "actorDistanceMeters": 50.0
+      "actorDistanceMeters": 50.0,
+      "smallActorParts": true
     },
     "StrictContactShadowBudget": 4,
     "UseParticleLights087LegacyMode": false

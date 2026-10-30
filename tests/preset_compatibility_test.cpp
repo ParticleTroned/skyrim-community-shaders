@@ -1,3 +1,4 @@
+#include "Features/LightLimitFix/ShadowCullingPolicy.h"
 #include "PresetCompatibility.h"
 
 #include <nlohmann/json.hpp>
@@ -57,6 +58,10 @@ int main(int argc, char** argv)
 		assert(nr.at("neuralRenderingNetwork") == 0);
 		assert(preset.at("Terrain Blending").at("LandscapeSeams") == 0);
 		assert(preset.at("Performance Overlay").at("ShowRenderTargets") == false);
+		const auto& shadowCulling = preset.at("Light Limit Fix").at("ShadowCulling");
+		for (const auto field : { "smallActorParts", "actorPartDistanceMeters", "actorPartReturnDistanceMeters", "actorPartRadiusCentimeters" })
+			assert(shadowCulling.contains(field));
+		assert(shadowCulling.get<LightLimitFixDetail::ShadowCulling::Settings>() == LightLimitFixDetail::ShadowCulling::Settings{});
 		assert(preset.at("Sky Sync").at("DisabledWorldspaces") == nlohmann::json::array(
 																	  { "Blackreach", "AlftandWorld", "Sovngarde", "DLC01SoulCairn", "DLC01Boneyard", "DLC2ApocryphaWorld" }));
 	}
@@ -98,7 +103,7 @@ int main(int argc, char** argv)
 		}
 	}
 	for (const auto presetId : { "csx-unified-performance", "csx-unified-balanced", "csx-unified-quality" }) {
-		for (const auto revision : { 15u, 16u, 17u }) {
+		for (const auto revision : { 15u, 16u, 17u, 18u }) {
 			auto legacy = CompatiblePreset();
 			auto& marker = legacy["Preset Compatibility"];
 			marker["presetId"] = presetId;

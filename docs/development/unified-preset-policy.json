@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.10.30.1",
+    "packageVersion": "d2026.10.30.2",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "48A05A3F1FE81C3E9E351AF303B96D005C78A07346CC59D9A4A500A7979DDF6B"
+        "sha256": "49ED2327AEE5F5CF063EBD4C64858A1BF8D3BFE433E46BD85C41E03C7F9476E9"
     },
     "runtimeSettingsContract": {
-        "revision": 18,
-        "sourceTreeSha256": "3E9FA004AEB01996B6510E777306400C825F54C679AC8165C82AA6B9504D677F",
+        "revision": 19,
+        "sourceTreeSha256": "E87BC5EAD37109A5FE5393CE63C1245A5E8ACF51BBA244D48706926A07644ED3",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -804,6 +804,19 @@
             { "path": ["Light Limit Fix", "ShadowCulling", "sunDistanceMeters"], "value": 20.0 },
             { "path": ["Light Limit Fix", "ShadowCulling", "torchDistanceMeters"], "value": 15.0 },
             { "path": ["Light Limit Fix", "ShadowCulling", "actorDistanceMeters"], "value": 50.0 },
+            { "path": ["Light Limit Fix", "ShadowCulling", "smallActorParts"], "value": true },
+            {
+                "path": ["Light Limit Fix", "ShadowCulling", "actorPartDistanceMeters"],
+                "value": 7.14
+            },
+            {
+                "path": ["Light Limit Fix", "ShadowCulling", "actorPartReturnDistanceMeters"],
+                "value": 6.426
+            },
+            {
+                "path": ["Light Limit Fix", "ShadowCulling", "actorPartRadiusCentimeters"],
+                "value": 11.424
+            },
             { "path": ["Extended Materials", "ParallaxStrength"], "value": 1.0 },
             { "path": ["Screenshot", "SettingsSchemaVersion"], "value": 2 },
             { "path": ["Screenshot", "Sequence", "Schedule", "Basis"], "value": "game_frames" },

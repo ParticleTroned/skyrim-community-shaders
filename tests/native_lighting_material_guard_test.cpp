@@ -20,6 +20,8 @@ namespace
 	int particleCalls = 0;
 	int terrainCalls = 0;
 	int interiorCalls = 0;
+	int shadowCalls = 0;
+	bool shadowRejected = false;
 	std::atomic<int> warnings = 0;
 	std::atomic<int> materialProbeReads = 0;
 	struct WarningSnapshot
@@ -52,7 +54,7 @@ namespace
 
 	void ResetCalls()
 	{
-		nativeCalls = particleCalls = terrainCalls = interiorCalls = 0;
+		nativeCalls = particleCalls = terrainCalls = interiorCalls = shadowCalls = 0;
 		materialProbeReads = 0;
 		argumentsPreserved = true;
 	}
@@ -226,6 +228,16 @@ namespace globals::features
 	} interiorSun;
 }
 
+namespace LightLimitFixDetail::ShadowCulling
+{
+	bool SkipPointShadowDraw(const RE::BSRenderPass* pass, uint32_t drawTechnique)
+	{
+		++shadowCalls;
+		argumentsPreserved &= pass == expectedPass && drawTechnique == expectedTechnique;
+		return shadowRejected;
+	}
+}
+
 namespace Hooks
 {
 	struct BSBatchRenderer_RenderPassImmediately1
@@ -308,6 +320,7 @@ int main()
 			Check(particleCalls == (allowed && entry != 3 ? 1 : 0), "Material rejection must precede the particle callback");
 			Check(terrainCalls == (allowed && entry == 1 ? 1 : 0), "Material rejection must precede terrain routing");
 			Check(interiorCalls == (allowed && (entry == 1 || entry == 3) ? 1 : 0), "Material rejection must precede raster-state mutation");
+			Check(shadowCalls == (allowed ? 1 : 0), "Material rejection must precede point-shadow policy reads");
 			Check(argumentsPreserved, "Accepted draws must preserve all native call arguments");
 			if (allowed && vrRuntime)
 				Check(materialProbeReads == 1, "Ordinary VR admission must probe material validity exactly once per entry");
@@ -412,6 +425,19 @@ int main()
 	}
 	Check(warnings == 6, "Warnings must be bounded once per rejection reason");
 	runIndex(-1, true);
+
+	shadowRejected = true;
+	for (const bool runtime : { false, true }) {
+		vrRuntime = runtime;
+		for (auto entry : entries) {
+			ResetCalls();
+			entry(&pass, technique, true, renderFlags);
+			Check(nativeCalls == 0 && interiorCalls == 0 && shadowCalls == 1 && argumentsPreserved,
+				"Every draw route must apply point-shadow rejection before native drawing or raster-state mutation");
+		}
+	}
+	shadowRejected = false;
+	vrRuntime = true;
 
 	ResetCalls();
 	expectedPass = &pass;

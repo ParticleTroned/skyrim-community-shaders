@@ -16,12 +16,11 @@ namespace ShadowStartupFixture
 	std::string failure;
 	namespace RE
 	{
-		constexpr std::array<std::uintptr_t, 1> VTABLE_BSCullingProcess{ 1 }, VTABLE_BSParabolicCullingProcess{ 2 };
+		constexpr std::array<std::uintptr_t, 1> VTABLE_BSCullingProcess{ 1 };
 	}
 	using AppendFunction = void (*)();
-	AppendFunction appendOriginal = nullptr, parabolicOriginal = nullptr;
+	AppendFunction appendOriginal = nullptr;
 	void Append() {}
-	void Parabolic() {}
 	void Original() {}
 	void* Module(const wchar_t*) { return spsLoaded ? reinterpret_cast<void*>(1) : nullptr; }
 	namespace REL
@@ -53,9 +52,9 @@ namespace ShadowStartupFixture
 		Require(conflict && !available && writes == 0, "SPS detection still replaced native shadow hooks");
 		conflict = spsLoaded = false;
 		Install();
-		Require(available && writes == 2, "Native shadow hooks were not installed without SPS");
+		Require(available && writes == 1, "Sun collection hook was not installed without SPS");
 		Install();
-		Require(writes == 2, "Repeated initialization chained the hook to itself");
+		Require(writes == 1, "Repeated initialization chained the hook to itself");
 	}
 }
 namespace ShadowSnapshotFixture

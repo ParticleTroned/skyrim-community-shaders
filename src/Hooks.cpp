@@ -40,6 +40,7 @@
 #include "Features/GrassOptimizations/GrassBucketRenderer.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/LightLimitFix/ShadowCulling.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/TerrainBlending.h"
@@ -2072,7 +2073,8 @@ namespace Hooks
 		uint32_t a_renderFlags)
 	{
 		if (ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique) ||
-			ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
+			ShouldSkipRenderPassForParticleLights(a_pass, a_technique) ||
+			LightLimitFixDetail::ShadowCulling::SkipPointShadowDraw(a_pass, a_technique)) {
 			return;
 		}
 
@@ -2134,7 +2136,8 @@ namespace Hooks
 			uint32_t a_renderFlags)
 		{
 			if (ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique) ||
-				ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
+				ShouldSkipRenderPassForParticleLights(a_pass, a_technique) ||
+				LightLimitFixDetail::ShadowCulling::SkipPointShadowDraw(a_pass, a_technique)) {
 				return;
 			}
 
@@ -2151,6 +2154,8 @@ namespace Hooks
 
 	static void DrawAdmittedRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 	{
+		if (LightLimitFixDetail::ShadowCulling::SkipPointShadowDraw(a_pass, a_technique))
+			return;
 		if (globals::features::interiorSun.loaded) {
 			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
 		}

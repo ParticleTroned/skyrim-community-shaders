@@ -4,6 +4,7 @@
 #include <limits>
 #include <optional>
 
+#include "Features/LightLimitFix/ShadowCullingDrawScope.h"
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
 #include "Features/Upscaling/NeuralRendering/ExposureCapture.h"
@@ -245,6 +246,7 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
+			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{ nullptr };
 			CS_GPU_PASS("SharedScene::DirectionalShadows");
 			const bool annotate = globals::state->frameAnnotations;
 			if (annotate)
@@ -263,6 +265,7 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
+			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{ light };
 			const bool annotate = globals::state->frameAnnotations;
 			if (annotate)
 				globals::state->BeginPerfEvent("Spot Light Shadowmaps");
@@ -280,6 +283,7 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
+			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{ light };
 			const bool annotate = globals::state->frameAnnotations;
 			if (annotate)
 				globals::state->BeginPerfEvent("Omnidirectional Light Shadowmaps");
@@ -545,6 +549,11 @@ namespace FrameAnnotations
 		// Shared profiling stages must remain available when annotation capture is off.
 		stl::write_vfunc<0xA, BSShadowDirectionalLight_RenderShadowmaps>(
 			RE::VTABLE_BSShadowDirectionalLight[0]);
+		// Point-shadow draw admission requires these scopes even when annotations are disabled.
+		stl::write_vfunc<0xA, BSShadowFrustumLight_RenderShadowmaps>(
+			RE::VTABLE_BSShadowFrustumLight[0]);
+		stl::write_vfunc<0xA, BSShadowParabolicLight_RenderShadowmaps>(
+			RE::VTABLE_BSShadowParabolicLight[0]);
 		stl::detour_thunk<Main_RenderWaterEffects>(REL::RelocationID(35561, 36560));
 
 		if (!globals::state->frameAnnotations)
@@ -1196,11 +1205,6 @@ namespace FrameAnnotations
 			stl::write_vfunc<0x36, BSCubeMapCamera_RenderCubemap>(RE::VTABLE_BSCubeMapCamera[0]);
 		else
 			stl::write_vfunc<0x35, BSCubeMapCamera_RenderCubemap>(RE::VTABLE_BSCubeMapCamera[0]);
-
-		stl::write_vfunc<0xA, BSShadowFrustumLight_RenderShadowmaps>(
-			RE::VTABLE_BSShadowFrustumLight[0]);
-		stl::write_vfunc<0xA, BSShadowParabolicLight_RenderShadowmaps>(
-			RE::VTABLE_BSShadowParabolicLight[0]);
 
 		stl::detour_thunk<BSBatchRenderer_RenderBatches>(REL::RelocationID(100852, 107642));
 		stl::detour_thunk<Main_RenderDepth>(REL::RelocationID(100421, 107139));

@@ -23,6 +23,8 @@ caster thresholds and nearest-cascade protection reference that policy.
 Distance defaults are rounded to 20/15/50 metres for sun/torch/NPCs. CSX adds
 retained camera snapshots, stereo checks, actor-root distance protection
 and independent Light Limit Fix settings.
+SPS 1.0.70's point-light collection fix also informed CSX's draw-only rejection;
+CSX uses its existing native light scopes and shared render-pass hooks.
 
 CSX has its own streaming policy, stereo demand calculation, validated DDS
 reader, bounded restoration cache, remembered-size format, upload and GPU

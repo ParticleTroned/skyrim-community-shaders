@@ -1,11 +1,12 @@
 #include "ShadowCulling.h"
+#include "EngineFixes/VRShadowBatchPolicy.h"
 #include "Globals.h"
+#include "ShadowCullingDrawScope.h"
 #include "ShadowCullingSnapshot.h"
 #include "State.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 #include <RE/B/BSCullingProcess.h>
-#include <RE/B/BSParabolicCullingProcess.h>
 #include <RE/B/BSShadowDirectionalLight.h>
 #include <algorithm>
 #include <atomic>
@@ -41,9 +42,9 @@ namespace LightLimitFixDetail::ShadowCulling
 		bool conflict = false;
 		std::string failure;
 		using AppendFunction = void (*)(RE::BSCullingProcess*, RE::BSGeometry&, std::int32_t);
-		AppendFunction appendOriginal = nullptr, parabolicOriginal = nullptr;
+		AppendFunction appendOriginal = nullptr;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		std::atomic_uint64_t sunSkipped{ 0 }, torchSkipped{ 0 }, actorSkipped{ 0 };
+		std::atomic_uint64_t sunSkipped{ 0 }, torchSkipped{ 0 }, actorSkipped{ 0 }, pointDrawsTested{ 0 };
 #endif
 		struct Caster
 		{
@@ -84,39 +85,34 @@ namespace LightLimitFixDetail::ShadowCulling
 			result.dynamic = result.protectedGeometry = true;
 			return result;
 		}
-		bool Skip(RE::BSCullingProcess* culler, RE::BSGeometry& geometry, const RE::NiCamera* shadowCamera = nullptr)
+		std::shared_ptr<const Snapshot> CurrentSnapshot()
 		{
-			if (!active.load(std::memory_order_acquire) || !culler || !globals::state || globals::state->IsSaveLoadSafeModeActive())
-				return false;
+			if (!active.load(std::memory_order_acquire) || !globals::state || globals::state->IsSaveLoadSafeModeActive())
+				return {};
 			thread_local SnapshotPublication<Snapshot>::Reader reader{ snapshot };
 			const auto captured = reader.Acquire();
 			const auto now = GetTickCount64();
 			if (!captured || now < captured->sampledAt || now - captured->sampledAt > 250)
-				return false;
-			const auto* camera = shadowCamera ? shadowCamera : culler->camera;
-			const Camera* matched = nullptr;
-			for (unsigned i = 0; i < captured->cameraCount; ++i)
-				if (captured->cameras[i].owner.get() == camera) {
-					matched = &captured->cameras[i];
-					break;
-				}
-			if (!matched)
-				return false;
+				return {};
+			return captured;
+		}
+		bool Skip(const Snapshot& captured, const Camera& matched, RE::BSGeometry& geometry)
+		{
 			Demand demand;
-			demand.pass = matched->pass;
-			demand.cascade = matched->cascade;
-			demand.eyeCount = captured->eyeCount;
-			demand.sunElevationSine = captured->sunSine;
-			demand.interior = captured->interior;
+			demand.pass = matched.pass;
+			demand.cascade = matched.cascade;
+			demand.eyeCount = captured.eyeCount;
+			demand.sunElevationSine = captured.sunSine;
+			demand.interior = captured.interior;
 			demand.radius = geometry.worldBound.radius;
 			const std::array<double, 3> center{ geometry.worldBound.center.x, geometry.worldBound.center.y, geometry.worldBound.center.z };
-			if (!BoundsMayCull(captured->settings, demand, center, captured->eyes))
+			if (!BoundsMayCull(captured.settings, demand, center, captured.eyes))
 				return false;
-			if (matched->pass == Pass::Point) {
-				const auto* light = matched->pointOwner.get();
-				if (!light || light->light.get() != matched->pointSource.get() ||
-					light->worldTranslate != matched->lightPosition || !light->light ||
-					light->light->GetLightRuntimeData().radius.x != matched->lightRadius)
+			if (matched.pass == Pass::Point) {
+				const auto* light = matched.pointOwner.get();
+				if (!light || light->light.get() != matched.pointSource.get() ||
+					light->worldTranslate != matched.lightPosition || !light->light ||
+					light->light->GetLightRuntimeData().radius.x != matched.lightRadius)
 					return false;
 			}
 			const auto caster = Classify(geometry);
@@ -124,7 +120,7 @@ namespace LightLimitFixDetail::ShadowCulling
 			demand.dynamic = caster.dynamic;
 			demand.protectedGeometry = caster.protectedGeometry;
 			const auto minimumShadowRadius = demand.pass == Pass::Sun ? demand.radius / demand.sunElevationSine : demand.radius;
-			if (!CasterMayCull(captured->settings, demand) || minimumShadowRadius >= (demand.actor ? ActorShadowRadius : ObjectShadowRadius))
+			if (!CasterMayCull(captured.settings, demand) || minimumShadowRadius >= (demand.actor ? ActorShadowRadius : ObjectShadowRadius))
 				return false;
 			std::array<double, 3> actorRoot{};
 			if (caster.actorRoot) {
@@ -135,12 +131,12 @@ namespace LightLimitFixDetail::ShadowCulling
 				return SurfaceDistance(center, demand.radius, position, caster.actorRoot ? &actorRoot : nullptr);
 			};
 			for (unsigned i = 0; i < demand.eyeCount; ++i)
-				demand.eyeDistance[i] = distance(captured->eyes[i]) - EyeDistanceMargin;
+				demand.eyeDistance[i] = distance(captured.eyes[i]) - EyeDistanceMargin;
 			if (demand.pass == Pass::Point) {
-				demand.lightDistance = distance({ matched->lightPosition.x, matched->lightPosition.y, matched->lightPosition.z });
-				demand.lightRadius = matched->lightRadius;
+				demand.lightDistance = distance({ matched.lightPosition.x, matched.lightPosition.y, matched.lightPosition.z });
+				demand.lightRadius = matched.lightRadius;
 			}
-			const bool skip = ShouldCull(captured->settings, demand);
+			const bool skip = ShouldCull(captured.settings, demand);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (skip) {
 				(demand.pass == Pass::Sun ? sunSkipped : torchSkipped).fetch_add(1, std::memory_order_relaxed);
@@ -152,14 +148,20 @@ namespace LightLimitFixDetail::ShadowCulling
 		}
 		void Append(RE::BSCullingProcess* culler, RE::BSGeometry& geometry, std::int32_t alphaGroup)
 		{
-			if (!Skip(culler, geometry))
-				appendOriginal(culler, geometry, alphaGroup);
-		}
-		void Parabolic(RE::BSCullingProcess* culler, RE::BSGeometry& geometry, std::int32_t alphaGroup)
-		{
-			const auto* camera = static_cast<RE::BSParabolicCullingProcess*>(culler)->lightCamera.get();
-			if (!Skip(culler, geometry, camera))
-				parabolicOriginal(culler, geometry, alphaGroup);
+			if (culler) {
+				if (const auto captured = CurrentSnapshot()) {
+					for (unsigned i = 0; i < captured->cameraCount; ++i) {
+						const auto& camera = captured->cameras[i];
+						if (camera.owner.get() != culler->camera)
+							continue;
+						// Point-light collection also assigns illumination; only sun casters may be omitted here.
+						if (camera.pass == Pass::Sun && Skip(*captured, camera, geometry))
+							return;
+						break;
+					}
+				}
+			}
+			appendOriginal(culler, geometry, alphaGroup);
 		}
 		bool HasEligibleCamera(const Snapshot& captured) noexcept
 		{
@@ -217,9 +219,30 @@ namespace LightLimitFixDetail::ShadowCulling
 			}
 		}
 	}
+	bool SkipPointShadowDraw(const RE::BSRenderPass* pass, std::uint32_t technique)
+	{
+		const auto* light = DrawScope::Current();
+		if (!light || !pass || !pass->shader || !pass->geometry ||
+			!VRShadowBatch::IsIsolatedShadowPass(pass->shader->shaderType.get() == RE::BSShader::Type::Utility,
+				technique, pass->numLights, pass->numShadowLights))
+			return false;
+		const auto captured = CurrentSnapshot();
+		if (!captured)
+			return false;
+		for (unsigned i = 0; i < captured->cameraCount; ++i) {
+			const auto& camera = captured->cameras[i];
+			if (camera.pass != Pass::Point || camera.pointOwner.get() != light)
+				continue;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			pointDrawsTested.fetch_add(1, std::memory_order_relaxed);
+#endif
+			return Skip(*captured, camera, *pass->geometry);
+		}
+		return false;
+	}
 	void Install()
 	{
-		if (appendOriginal || parabolicOriginal || conflict)
+		if (appendOriginal || conflict)
 			return;
 		conflict = GetModuleHandleW(L"SPS.dll") != nullptr;
 		if (conflict) {
@@ -227,9 +250,8 @@ namespace LightLimitFixDetail::ShadowCulling
 			return;
 		}
 		try {
-			REL::Relocation<std::uintptr_t> normal{ RE::VTABLE_BSCullingProcess[0] }, parabolic{ RE::VTABLE_BSParabolicCullingProcess[0] };
+			REL::Relocation<std::uintptr_t> normal{ RE::VTABLE_BSCullingProcess[0] };
 			appendOriginal = reinterpret_cast<AppendFunction>(normal.write_vfunc(0x18, &Append));
-			parabolicOriginal = reinterpret_cast<AppendFunction>(parabolic.write_vfunc(0x18, &Parabolic));
 			available = true;
 		} catch (const std::exception& error) {
 			failure = error.what();
@@ -340,6 +362,7 @@ namespace LightLimitFixDetail::ShadowCulling
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		result["sunSkipped"] = sunSkipped.load();
 		result["torchSkipped"] = torchSkipped.load();
+		result["pointDrawsTested"] = pointDrawsTested.load();
 		result["npcSkipped"] = actorSkipped.load();
 #endif
 		return result;

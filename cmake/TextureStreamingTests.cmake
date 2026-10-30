@@ -5,6 +5,26 @@ target_link_libraries(texture_streaming_policy_test PRIVATE nlohmann_json::nlohm
 add_controller_test(shadow_culling_bounds_test ShadowCullingBounds tests/shadow_culling_bounds_test.cpp)
 target_link_libraries(shadow_culling_bounds_test PRIVATE nlohmann_json::nlohmann_json)
 
+set(_shadow_culling_draw_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/shadow-culling-draw")
+set(_shadow_culling_draw_headers
+    "${_shadow_culling_draw_dir}/shadow_culling_state.h"
+    "${_shadow_culling_draw_dir}/shadow_culling_collection.h"
+    "${_shadow_culling_draw_dir}/shadow_culling_draw.h")
+add_custom_command(OUTPUT ${_shadow_culling_draw_headers}
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_shadow_culling_draw_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_shadow_culling_draw.cmake"
+    DEPENDS src/Features/LightLimitFix/ShadowCulling.cpp tests/extract_source_region.cmake
+        tests/extract_shadow_culling_draw.cmake VERBATIM)
+add_custom_target(shadow_culling_draw_sources DEPENDS ${_shadow_culling_draw_headers})
+foreach(_shadow_draw_variant IN ITEMS plain devbench)
+    add_controller_test(shadow_culling_draw_${_shadow_draw_variant}_test ShadowCullingDraw_${_shadow_draw_variant} tests/shadow_culling_draw_test.cpp)
+    add_dependencies(shadow_culling_draw_${_shadow_draw_variant}_test shadow_culling_draw_sources)
+    target_include_directories(shadow_culling_draw_${_shadow_draw_variant}_test PRIVATE "${_shadow_culling_draw_dir}")
+    target_link_libraries(shadow_culling_draw_${_shadow_draw_variant}_test PRIVATE nlohmann_json::nlohmann_json)
+endforeach()
+target_compile_definitions(shadow_culling_draw_devbench_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+
 set(_streaming_maintenance_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/streaming-maintenance")
 set(_streaming_tick_header "${_streaming_maintenance_dir}/streaming_tick_under_test.h")
 set(_streaming_select_header "${_streaming_maintenance_dir}/streaming_select_under_test.h")

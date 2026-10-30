@@ -335,6 +335,11 @@ is licensed under GPL-3.0-or-later with its
 [upstream exceptions](package/SKSE/Plugins/CommunityShaders/Licenses/SPS/EXCEPTIONS.md).
 These notices accompany future CSX packages.
 
+Point-light shadow culling preserves native object collection and lighting
+assignment. It omits only eligible shadow-map draws within a known point-light
+render scope. Unknown draws retain their shadows; sun-shadow culling remains
+independent.
+
 Pressure-only streaming uses sparse inventory learning when no reductions
 are needed. Disabling remembered sizes also skips that learning work.
 Pressure detection, pending operations and reduced-texture restoration

@@ -18846,36 +18846,40 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 	const auto status = NeuralRendering::Renderer::Instance().GetSnapshot();
 	const bool renderScaleAvailable = IsNeuralRenderingUpscalingAvailable();
 	const bool reducedResolution = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution;
-	if (!renderScaleAvailable) {
+	if (reducedResolution && !renderScaleAvailable && runtimeInstalled && hardwareSupported && !status.failureLatched && !status.quarantined) {
 		const auto desiredProfile = GetPendingVRRenderScaleDesiredProfile();
 		const auto configuredMethod = desiredProfile.method;
 		const auto quality = desiredProfile.qualityMode;
-		const bool renderScale = desiredProfile.renderScaleModePreference;
+		const bool renderScale = desiredProfile.renderScaleModeEnabled;
 		const char* blocker = GetNeuralRenderingUpscalingProfileBlocker(GetNeuralRenderingMode(), configuredMethod, quality, renderScale);
-		if (blocker) {
-			const char* profileName = nullptr;
-			if (globals::game::isVR && settings.neuralRenderingEnabled && IsVRFpsStabilizerSyncActive()) {
-				const auto profiles = GetVRFpsStabilizerSessionConfig();
-				const bool interior = Util::IsInterior();
-				const auto& profile = interior ? profiles.interior : profiles.exterior;
-				const auto target = ResolveVRFpsStabilizerTransitionTarget(*this, profile);
-				if (profile.HasAnyUpscalingSetting() && target.method == configuredMethod &&
-					target.qualityMode == quality && target.renderScaleModePreference == renderScale)
-					profileName = interior ? "Interior" : "Exterior";
-			}
-			if (profileName)
-				Util::Text::WrappedWarning("%s paused: VR FPS Stabilizer %s profile, %s.", reducedResolution ? "NR Before DLSS" : "NR", profileName, blocker);
-			else
-				Util::Text::WrappedWarning("%s %s: %s.", reducedResolution ? "NR Before DLSS" : "NR", settings.neuralRenderingEnabled ? "paused" : "unavailable", blocker);
-			if (!reducedResolution)
-				ImGui::TextWrapped("Check the selected upscaling profile. After upscaling runs at output resolution.");
-			else if (!GetNeuralRenderingUpscalingProfileBlocker(GetNeuralRenderingMode(), configuredMethod, quality, true))
+		if (IsOpenCompositeUpscalingBlocked()) {
+			Util::Text::WrappedWarning("%s", kOpenCompositeRenderScaleBlockWarning);
+			ImGui::TextWrapped("Use SteamVR to enable CSX Render Scale and NR Before DLSS.");
+		} else if (IsRenderDocUpscalingBlocked()) {
+			Util::Text::WrappedWarning("NR Before DLSS is waiting: %s, so DLSS is disabled.", GetRenderDocUpscalingBlockReason());
+			ImGui::TextWrapped("Disable RenderDoc capture and restart without RenderDoc to use Before DLSS.");
+		} else if (blocker) {
+			Util::Text::WrappedWarning("NR Before DLSS is waiting: incompatible upscaling setting (%s).", blocker);
+			if (!GetNeuralRenderingUpscalingProfileBlocker(GetNeuralRenderingMode(), configuredMethod, quality, true))
 				ImGui::TextWrapped("Enable Render Scale in Upscaling to use Before DLSS.");
 			else
 				ImGui::TextWrapped("%s", globals::game::isVR ?
-											 "Choose scaled DLSS with Render Scale, or select After upscaling." :
-											 "Choose scaled DLSS, or select After upscaling.");
+											 "Select below-native DLSS and enable Render Scale in Upscaling to use Before DLSS." :
+											 "Select below-native DLSS in Upscaling to use Before DLSS.");
+		} else if (globals::game::isVR && IsVRStartupNativeFallbackRestartRequired()) {
+			Util::Text::WrappedWarning("NR Before DLSS is waiting: Render Scale startup activation failed; rendering remains at native resolution.");
+			ImGui::TextWrapped("Open Upscaling for Render Scale recovery options, or restart the game to retry.");
+		} else if (globals::game::isVR && IsVRStartupMainMenuRenderStateActive()) {
+			Util::Text::WrappedWarning("NR Before DLSS is waiting: the main menu uses None with Render Scale off.");
+			ImGui::TextWrapped("Load a save to activate your DLSS and Render Scale settings.");
 		} else {
+			const char* activeBlocker = GetNeuralRenderingUpscalingProfileBlocker(GetNeuralRenderingMode(),
+				GetRuntimeUpscaleMethod(), GetRuntimeQualityMode(), GetVRRenderScaleModeRequested());
+			if (activeBlocker)
+				Util::Text::WrappedWarning("NR Before DLSS is waiting: selected upscaling settings are compatible, but current rendering is still blocked by %s.", activeBlocker);
+			else
+				Util::Text::WrappedWarning("NR Before DLSS is waiting: Render Scale is selected but not active.");
+			ImGui::TextWrapped("Check the active upscaling and Render Scale status in Upscaling.");
 			static bool loggedScalingWait = false;
 			if (!loggedScalingWait && globals::state && globals::state->IsDeveloperMode()) {
 				logger::debug("[NeuralRendering] Renderscale NR is waiting for scaling to become active.");
@@ -18883,8 +18887,8 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 			}
 		}
 		if (settings.neuralRenderingEnabled)
-			ImGui::TextDisabled("Choose compatible scaling, turn NR off, or change its rendering mode. Your settings are retained.");
-	} else if (runtimeInstalled && !settings.neuralRenderingEnabled)
+			ImGui::TextWrapped("Alternatively, select After upscaling in NR > Mode, or turn NR off. Your settings are retained.");
+	} else if (renderScaleAvailable && runtimeInstalled && !settings.neuralRenderingEnabled)
 		ImGui::TextDisabled("NR is off. Actor and colour preferences are retained.");
 	if (!renderScaleAvailable && runtimeInstalled && settings.neuralRenderingEnabled) {
 		if (ImGui::Button("Turn off NR"))

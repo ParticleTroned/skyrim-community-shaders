@@ -466,9 +466,9 @@ bool TrackedShadowCheckbox(const char* label, bool* value)
 	ObserveShadowControl(label);
 	return changed;
 }
-bool TrackedShadowSlider(const char* label, float* value, float minimum, float maximum, const char* format)
+bool TrackedShadowSlider(const char* label, float* value, float minimum, float maximum, const char* format, ImGuiSliderFlags flags = 0)
 {
-	const bool changed = Util::Widgets::SliderFloat(label, value, minimum, maximum, format);
+	const bool changed = Util::Widgets::SliderFloat(label, value, minimum, maximum, format, flags);
 	ObserveShadowControl(label);
 	shadowControls.at(label).minimum = minimum;
 	shadowControls.at(label).maximum = maximum;
@@ -2308,9 +2308,16 @@ int main()
 					const auto original = shadows.settings.ShadowCulling;
 					for (const char* slider : { "Sun shadow distance", "Torch shadow distance", "NPC distance" }) {
 						const auto observed = shadowControls.at(slider);
-						require(observed.minimum == 5 && observed.maximum == 300, "All native shadow sliders must expose 5..300 metres");
+						require(observed.minimum == 5 && observed.maximum == 300, "Existing shadow distance sliders retain 5..300 metres");
 					}
-					for (const char* control : { "Sun shadows", "Torch shadows", "Distant NPC shadows", "Indoor torches", "Sun shadow distance", "Torch shadow distance", "NPC distance" }) {
+					for (const char* slider : { "Small part cutoff distance", "Small part return distance" }) {
+						const auto observed = shadowControls.at(slider);
+						const float maximum = std::string_view(slider) == "Small part cutoff distance" ? MaximumDistanceMeters : original.actorPartDistanceMeters;
+						require(observed.minimum == 0 && observed.maximum == maximum, "Actor-part sliders expose ordered metre ranges");
+					}
+					const auto radius = shadowControls.at("Small part radius");
+					require(radius.minimum == 0 && radius.maximum == MaximumActorPartRadiusCentimeters, "Actor-part radius uses bounded centimetres with zero/off");
+					for (const char* control : { "Sun shadows", "Torch shadows", "Distant NPC shadows", "Small actor part shadows", "Indoor torches", "Sun shadow distance", "Torch shadow distance", "NPC distance", "Small part radius", "Small part cutoff distance", "Small part return distance" }) {
 						const auto observed = shadowControls.at(control);
 						require(observed.disabled == sps, "SPS alone gates native shadow controls independently of contact shadows");
 						require(!sps || observed.alpha < shadowControls.at("Enable Point Light Contact Shadows").alpha, "SPS greys native shadow controls while leaving contact shadows bright");
@@ -2323,11 +2330,56 @@ int main()
 					if (!sps) {
 						click(shadowControls.at("Sun shadows").center, draw);
 						require(shadows.settings.ShadowCulling.sun != original.sun, "native shadow controls remain editable without SPS");
+						click(shadowControls.at("Small actor part shadows").center, draw);
+						require(shadows.settings.ShadowCulling.smallActorParts != original.smallActorParts, "actor-part culling can be toggled independently");
 					}
 				}
 			}
 			conflict = false;
 			available = true;
+			globals::features::vr.headset = false;
+			Settings tuned;
+			const auto draw = [&] {
+				ImGui::PushItemWidth(300);
+				const SKSE::stl::scope_exit restoreWidth([] { ImGui::PopItemWidth(); });
+				DrawSettings(tuned, true);
+			};
+			const auto enter = [&](const char* label, const char* text) {
+				frame(draw);
+				frame(draw);
+				const auto bounds = Util::controls.at(std::format("Adjust {}. Double-click the value to enter a number.", label));
+				io.AddKeyEvent(ImGuiMod_Ctrl, true);
+				click({ bounds.Min.x + 30, bounds.Min.y + ImGui::GetFrameHeight() * .5f }, draw);
+				io.AddKeyEvent(ImGuiMod_Ctrl, false);
+				frame(draw);
+				require(GImGui->TempInputId != 0, "Actor-part slider supports native numeric entry");
+				io.AddInputCharactersUTF8(text);
+				frame(draw);
+				key(ImGuiKey_Enter, draw);
+				Validate(tuned);
+			};
+			enter("Small part radius", "25");
+			require(tuned.actorPartRadiusCentimeters == 25, "Small part size is independently editable in centimetres");
+			enter("Small part radius", "100");
+			require(tuned.actorPartRadiusCentimeters == MaximumActorPartRadiusCentimeters, "Small part size numeric entry is bounded");
+			enter("Small part radius", "0");
+			require(!tuned.ActorPartsEnabled() && tuned.actorPartRadiusCentimeters == 0, "Zero small part size disables the policy");
+			enter("Small part cutoff distance", "5");
+			require(tuned.actorPartDistanceMeters == 5 && tuned.actorPartReturnDistanceMeters == 5, "Lowering cutoff clamps the return distance");
+			enter("Small part return distance", "2");
+			require(tuned.actorPartReturnDistanceMeters == 2, "Return distance remains independently editable");
+			enter("Small part return distance", "100");
+			require(tuned.actorPartReturnDistanceMeters == 5, "Return input cannot exceed the cutoff");
+			enter("Small part cutoff distance", "0");
+			require(tuned.actorPartDistanceMeters == 0 && tuned.actorPartReturnDistanceMeters == 5, "Zero cutoff disables without losing the return setting");
+			enter("Small part return distance", "100");
+			require(tuned.actorPartReturnDistanceMeters == 100, "Return can be configured while cutoff is disabled");
+			enter("Small part cutoff distance", "5");
+			require(tuned.actorPartReturnDistanceMeters == 5, "Re-enabling a smaller cutoff clamps the return setting");
+			enter("Small part return distance", "0");
+			require(!tuned.ActorPartsEnabled() && tuned.actorPartReturnDistanceMeters == 0, "Zero return slider disables the policy");
+			frame(draw);
+			require(tuned.smallActorParts, "Editing part distances preserves the default-on toggle");
 		}
 		bool checked = true;
 		bool checkboxDisabled = false;

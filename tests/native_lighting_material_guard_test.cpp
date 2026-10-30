@@ -230,7 +230,7 @@ namespace globals::features
 
 namespace LightLimitFixDetail::ShadowCulling
 {
-	bool SkipPointShadowDraw(const RE::BSRenderPass* pass, uint32_t drawTechnique)
+	bool SkipShadowDraw(const RE::BSRenderPass* pass, uint32_t drawTechnique)
 	{
 		++shadowCalls;
 		argumentsPreserved &= pass == expectedPass && drawTechnique == expectedTechnique;

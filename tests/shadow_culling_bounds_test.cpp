@@ -19,7 +19,10 @@ bool BaselineShouldCull(const C::Settings& settings, const C::Demand& demand)
 		return false;
 	if (demand.pass == C::Pass::Point && demand.interior && !settings.interiorTorches)
 		return false;
-	if (demand.actor) {
+	if (demand.actorPart) {
+		if (!settings.smallActorParts || !demand.actor || settings.actorPartDistanceMeters == 0 || settings.actorPartReturnDistanceMeters == 0 || settings.actorPartRadiusCentimeters == 0)
+			return false;
+	} else if (demand.actor) {
 		if (!settings.actors)
 			return false;
 	} else if (demand.dynamic || (demand.pass == C::Pass::Sun ? !settings.sun || demand.cascade < 1 : !settings.torch)) {
@@ -34,10 +37,12 @@ bool BaselineShouldCull(const C::Settings& settings, const C::Demand& demand)
 	} else {
 		shadowRadius /= demand.sunElevationSine;
 	}
-	if (!std::isfinite(shadowRadius) || shadowRadius >= (demand.actor ? 256 : 150))
+	if (!std::isfinite(shadowRadius) || shadowRadius >= (demand.actorPart ? settings.actorPartRadiusCentimeters / 1.428 : demand.actor ? 256 :
+																																		 150))
 		return false;
-	const auto minimum = (demand.actor ? settings.actorDistanceMeters : demand.pass == C::Pass::Sun ? settings.sunDistanceMeters :
-																									  settings.torchDistanceMeters) /
+	const auto minimum = (demand.actorPart ? settings.actorPartReturnDistanceMeters : demand.actor            ? settings.actorDistanceMeters :
+																				  demand.pass == C::Pass::Sun ? settings.sunDistanceMeters :
+																												settings.torchDistanceMeters) /
 	                     0.01428;
 	for (unsigned eye = 0; eye < demand.eyeCount; ++eye) {
 		const auto distance = demand.eyeDistance[eye];
@@ -76,7 +81,7 @@ int main()
 		Require(layer["ShadowCulling"].size() == 1, "Repeated migration changed the remaining preferences");
 		const auto alias = C::Parse({ { "minimumDistanceMeters", 42 } }, settings);
 		Require(alias.sunDistanceMeters == 42 && alias.torchDistanceMeters == 42, "Legacy session distance alias changed");
-		for (const auto& bad : { nlohmann::json{ { "sunDistanceMeters", 4 } }, nlohmann::json{ { "torchDistanceMeters", 4.999 } }, nlohmann::json{ { "actorDistanceMeters", 4 } }, nlohmann::json{ { "torchDistanceMeters", 301 } },
+		for (const auto& bad : { nlohmann::json{ { "sunDistanceMeters", 0 } }, nlohmann::json{ { "torchDistanceMeters", 4.999 } }, nlohmann::json{ { "actorDistanceMeters", 0 } }, nlohmann::json{ { "torchDistanceMeters", 301 } },
 				 nlohmann::json{ { "sunDistanceMeters", "20" } }, nlohmann::json{ { "minimumDistanceMeters", 50 }, { "sunDistanceMeters", 25 } } }) {
 			bool rejected = false;
 			try {
@@ -108,12 +113,15 @@ int main()
 
 		std::mt19937_64 random(0x534841444f57);
 		std::uniform_real_distribution<double> coordinate(-30000, 30000), radius(0.01, 400), sun(0.01, 1);
-		unsigned accepted = 0, fastKeeps = 0;
+		unsigned accepted = 0, partsAccepted = 0, fastKeeps = 0;
 		for (unsigned sample = 0; sample < 200000; ++sample) {
 			C::Demand demand;
 			demand.pass = sample % 2 ? C::Pass::Sun : C::Pass::Point;
 			demand.eyeCount = sample % 3 ? 2 : 1;
 			demand.radius = radius(random);
+			demand.actorPart = sample % 4 < 2;
+			if (demand.actorPart)
+				demand.radius /= 40;
 			demand.sunElevationSine = sun(random);
 			demand.interior = sample % 7 == 0;
 			demand.actor = sample % 3 == 0;
@@ -123,10 +131,14 @@ int main()
 			settings.sun = sample % 5 != 0;
 			settings.torch = sample % 9 != 0;
 			settings.actors = sample % 4 != 0;
+			settings.smallActorParts = sample % 8 != 0;
 			settings.interiorTorches = sample % 2 == 0;
 			settings.sunDistanceMeters = float(5 + sample % 296);
 			settings.torchDistanceMeters = float(300 - sample % 296);
 			settings.actorDistanceMeters = float(5 + sample % 296);
+			settings.actorPartDistanceMeters = float(sample % 301);
+			settings.actorPartReturnDistanceMeters = settings.actorPartDistanceMeters * float(sample % 11) / 10;
+			settings.actorPartRadiusCentimeters = float(sample % 501) / 10;
 			std::array<double, 3> center{ coordinate(random), coordinate(random), coordinate(random) };
 			std::array<double, 3> actorRoot{ coordinate(random), coordinate(random), coordinate(random) };
 			std::array<std::array<double, 3>, 2> eyes{ { { 0, 0, 0 }, { 4.4, 0, 0 } } };
@@ -146,10 +158,11 @@ int main()
 			const bool possible = C::BoundsMayCull(settings, demand, center, eyes);
 			Require(!authoritative || possible, "Early keep changed an authoritative culling decision");
 			accepted += authoritative;
+			partsAccepted += authoritative && demand.actorPart;
 			fastKeeps += !possible;
 		}
-		Require(accepted > 100 && fastKeeps > 10000, "Property coverage did not exercise both outcomes");
-		std::cout << "PASS: distance migration, independent controls, SPS thresholds and 200000 conservative broad-phase cases\n";
+		Require(accepted > 100 && partsAccepted > 100 && accepted > partsAccepted + 100 && fastKeeps > 10000, "Property coverage did not exercise both policies and outcomes");
+		std::cout << "PASS: distance migration, independent controls, SPS thresholds and 200000 ordinary/actor-part broad-phase cases\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

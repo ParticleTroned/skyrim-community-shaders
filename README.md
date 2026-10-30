@@ -73,6 +73,24 @@ Native shadow culling under **Light Limit Fix > Performance** defaults to on,
 including indoor torches. Separate sun, torch and NPC distance sliders default
 to **20 m, 15 m and 50 m**, each adjustable from **5 to 300 m**. Old automatic
 distances migrate to these defaults; subsequently saved slider choices remain.
+The advanced **Small actor part shadows** option defaults to on. It omits
+tiny skinned actor-part shadow draws using actor-position distance with
+hysteresis, while retaining stereo and projected-shadow safeguards. Its
+radius slider defaults to **11.424 cm** (radius, not diameter) and allows
+**0 to 50 cm**. Cutoff and return distance sliders default to
+**7.14 m / 6.426 m** before the fixed movement margin; the menu also shows
+the effective **14.45 m / 13.74 m** distance gates. Other safeguards may
+retain shadows beyond those gates.
+Both distances allow **0 to 300 m**. Setting any of the three sliders to
+**0 disables tiny-part culling** without changing the checkbox. With a
+positive cutoff, return cannot exceed cutoff. Saved explicit off choices
+remain off. The policy preserves native collection and leaves the existing
+distant-NPC policy independent.
+DevBench's `shadow_culling` action exposes `smallActorParts`,
+`actorPartRadiusCentimeters`, `actorPartDistanceMeters` and
+`actorPartReturnDistanceMeters` inside `shadowCulling`. Partial updates
+preserve omitted settings and reject an invalid resulting distance pair
+before applying changes.
 Texture Streaming defaults to **off**, with **On pressure** selected and
 continuous streaming off when enabled. Explicit saved enable choices remain.
 

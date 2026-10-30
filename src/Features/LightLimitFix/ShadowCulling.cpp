@@ -1,4 +1,5 @@
 #include "ShadowCulling.h"
+#include "ActorShadowHistory.h"
 #include "EngineFixes/VRShadowBatchPolicy.h"
 #include "Globals.h"
 #include "ShadowCullingDrawScope.h"
@@ -32,12 +33,16 @@ namespace LightLimitFixDetail::ShadowCulling
 		{
 			Settings settings;
 			RE::NiPointer<RE::ShadowSceneNode> scene;
+			// The retained scene directly owns its sun; intrusive release would delete it prematurely.
+			const RE::BSShadowLight* sunIdentity = nullptr;
+			std::shared_ptr<ActorShadowHistory> actorPartHistory;
 			std::array<Camera, 72> cameras;
 			std::array<std::array<double, 3>, 2> eyes{};
 			unsigned cameraCount = 0, eyeCount = 0;
 			double sunSine = 0;
 			bool interior = false;
 			std::uint64_t sampledAt = 0;
+			std::uint32_t frame = 0;
 		};
 		SnapshotPublication<Snapshot> snapshot;
 		std::atomic_bool available{ false }, active{ false };
@@ -47,11 +52,13 @@ namespace LightLimitFixDetail::ShadowCulling
 		AppendFunction appendOriginal = nullptr;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		std::atomic_uint64_t sunSkipped{ 0 }, torchSkipped{ 0 }, actorSkipped{ 0 }, pointDrawsTested{ 0 };
+		std::atomic_uint64_t actorPartDrawsSkipped{ 0 };
 #endif
 		struct Caster
 		{
 			bool actor = false, dynamic = true, protectedGeometry = true;
 			const RE::NiAVObject* actorRoot = nullptr;
+			RE::TESObjectREFR* actorReference = nullptr;
 		};
 		Caster Classify(const RE::BSGeometry& geometry)
 		{
@@ -71,11 +78,12 @@ namespace LightLimitFixDetail::ShadowCulling
 			unsigned depthCounter = 0;
 			for (const RE::NiAVObject* object = &geometry; object; object = object->parent) {
 				result.dynamic |= object->GetControllers() != nullptr;
-				if (const auto* reference = Util::GetOwnUserData(object)) {
+				if (auto* reference = Util::GetOwnUserData(object)) {
 					result.actor = reference->IsActor();
-					if (result.actor)
+					if (result.actor) {
 						result.actorRoot = object;
-					else {
+						result.actorReference = reference;
+					} else {
 						const auto* base = reference->GetBaseObject();
 						result.dynamic |= !base || (base->GetFormType() != RE::FormType::Static && base->GetFormType() != RE::FormType::Land);
 					}
@@ -94,11 +102,29 @@ namespace LightLimitFixDetail::ShadowCulling
 			thread_local SnapshotPublication<Snapshot>::Reader reader{ snapshot };
 			const auto captured = reader.Acquire();
 			const auto now = GetTickCount64();
-			if (!captured || now < captured->sampledAt || now - captured->sampledAt > 250)
+			if (!captured || now < captured->sampledAt || now - captured->sampledAt > SnapshotMaxAgeMs)
 				return {};
 			return captured;
 		}
-		bool Skip(const Snapshot& captured, const Camera& matched, RE::BSGeometry& geometry)
+		std::shared_ptr<ActorShadowHistory> ActorPartHistoryFor(const Snapshot& captured, const std::shared_ptr<const Snapshot>& previous)
+		{
+			if (!captured.settings.ActorPartsEnabled())
+				return {};
+			if (previous && previous->settings == captured.settings && previous->scene.get() == captured.scene.get() &&
+				previous->actorPartHistory && captured.frame >= previous->frame &&
+				captured.sampledAt >= previous->sampledAt && captured.sampledAt - previous->sampledAt <= SnapshotMaxAgeMs)
+				return previous->actorPartHistory;
+			return std::make_shared<ActorShadowHistory>(ActorPartDistances(captured.settings));
+		}
+		bool BeyondActorPartDistance(const Snapshot& captured, const Caster& caster)
+		{
+			if (!captured.actorPartHistory || !caster.actorReference || caster.protectedGeometry)
+				return false;
+			const auto position = caster.actorReference->GetPosition();
+			return captured.actorPartHistory->Beyond(caster.actorReference->GetHandle().native_handle(),
+				{ position.x, position.y, position.z }, captured.eyes, captured.eyeCount, captured.sampledAt, captured.frame);
+		}
+		bool Skip(const Snapshot& captured, const Camera& matched, RE::BSGeometry& geometry, bool actorPart = false)
 		{
 			Demand demand;
 			demand.pass = matched.pass;
@@ -107,6 +133,18 @@ namespace LightLimitFixDetail::ShadowCulling
 			demand.sunElevationSine = captured.sunSine;
 			demand.interior = captured.interior;
 			demand.radius = geometry.worldBound.radius;
+			demand.actorPart = actorPart;
+			Caster caster;
+			if (actorPart) {
+				if (!PassMayCull(captured.settings, demand) || !captured.actorPartHistory ||
+					!std::isfinite(demand.radius) || demand.radius <= 0 || demand.radius >= ShadowRadiusLimit(captured.settings, true, true) ||
+					!geometry.GetGeometryRuntimeData().skinInstance)
+					return false;
+				caster = Classify(geometry);
+				// Observe nearby actors too, so returning inside the band clears every part's distance decision.
+				if (!BeyondActorPartDistance(captured, caster))
+					return false;
+			}
 			const std::array<double, 3> center{ geometry.worldBound.center.x, geometry.worldBound.center.y, geometry.worldBound.center.z };
 			if (!BoundsMayCull(captured.settings, demand, center, captured.eyes))
 				return false;
@@ -117,12 +155,13 @@ namespace LightLimitFixDetail::ShadowCulling
 					light->light->GetLightRuntimeData().radius.x != matched.lightRadius)
 					return false;
 			}
-			const auto caster = Classify(geometry);
+			if (!actorPart)
+				caster = Classify(geometry);
 			demand.actor = caster.actor;
 			demand.dynamic = caster.dynamic;
 			demand.protectedGeometry = caster.protectedGeometry;
 			const auto minimumShadowRadius = demand.pass == Pass::Sun ? demand.radius / demand.sunElevationSine : demand.radius;
-			if (!CasterMayCull(captured.settings, demand) || minimumShadowRadius >= (demand.actor ? ActorShadowRadius : ObjectShadowRadius))
+			if (!CasterMayCull(captured.settings, demand) || minimumShadowRadius >= ShadowRadiusLimit(captured.settings, demand.actor, actorPart))
 				return false;
 			std::array<double, 3> actorRoot{};
 			if (caster.actorRoot) {
@@ -141,9 +180,13 @@ namespace LightLimitFixDetail::ShadowCulling
 			const bool skip = ShouldCull(captured.settings, demand);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (skip) {
-				(demand.pass == Pass::Sun ? sunSkipped : torchSkipped).fetch_add(1, std::memory_order_relaxed);
-				if (demand.actor)
-					actorSkipped.fetch_add(1, std::memory_order_relaxed);
+				if (actorPart)
+					actorPartDrawsSkipped.fetch_add(1, std::memory_order_relaxed);
+				else {
+					(demand.pass == Pass::Sun ? sunSkipped : torchSkipped).fetch_add(1, std::memory_order_relaxed);
+					if (demand.actor)
+						actorSkipped.fetch_add(1, std::memory_order_relaxed);
+				}
 			}
 #endif
 			return skip;
@@ -176,6 +219,11 @@ namespace LightLimitFixDetail::ShadowCulling
 			return std::any_of(captured.cameras.begin(), captured.cameras.begin() + captured.cameraCount, [&](const Camera& camera) {
 				demand.pass = camera.pass;
 				demand.cascade = camera.cascade;
+				demand.actorPart = true;
+				demand.actor = true;
+				if (PassMayCull(captured.settings, demand) && CasterMayCull(captured.settings, demand))
+					return true;
+				demand.actorPart = false;
 				if (!PassMayCull(captured.settings, demand))
 					return false;
 				demand.actor = false;
@@ -221,7 +269,12 @@ namespace LightLimitFixDetail::ShadowCulling
 			}
 		}
 	}
-	bool SkipPointShadowDraw(const RE::BSRenderPass* pass, std::uint32_t technique)
+	bool NeedsSunDrawScope()
+	{
+		const auto captured = CurrentSnapshot();
+		return captured && captured->settings.ActorPartsEnabled() && captured->sunIdentity;
+	}
+	bool SkipShadowDraw(const RE::BSRenderPass* pass, std::uint32_t technique)
 	{
 		const auto* light = DrawScope::Current();
 		if (!light || !pass)
@@ -230,20 +283,31 @@ namespace LightLimitFixDetail::ShadowCulling
 		const auto captured = CurrentSnapshot();
 		if (!captured)
 			return false;
-		for (unsigned i = 0; i < captured->cameraCount; ++i) {
-			const auto& camera = captured->cameras[i];
-			if (camera.pass != Pass::Point || camera.pointOwner.get() != light)
-				continue;
-			if (!pass->shader || !pass->geometry ||
-				!VRShadowBatch::IsIsolatedShadowPass(pass->shader->shaderType.get() == RE::BSShader::Type::Utility,
-					technique, pass->numLights, pass->numShadowLights))
-				return false;
+		Camera sunCamera;
+		sunCamera.pass = Pass::Sun;
+		const bool sun = captured->sunIdentity == light;
+		if (sun && !captured->settings.ActorPartsEnabled())
+			return false;
+		const Camera* camera = sun ? &sunCamera : nullptr;
+		if (!sun) {
+			for (unsigned i = 0; i < captured->cameraCount; ++i) {
+				const auto& candidate = captured->cameras[i];
+				if (candidate.pass == Pass::Point && candidate.pointOwner.get() == light) {
+					camera = &candidate;
+					break;
+				}
+			}
+		}
+		if (!camera || !pass->shader || !pass->geometry ||
+			!VRShadowBatch::IsIsolatedShadowPass(pass->shader->shaderType.get() == RE::BSShader::Type::Utility,
+				technique, pass->numLights, pass->numShadowLights))
+			return false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		if (!sun)
 			pointDrawsTested.fetch_add(1, std::memory_order_relaxed);
 #endif
-			return Skip(*captured, camera, *pass->geometry);
-		}
-		return false;
+		return (!sun && Skip(*captured, *camera, *pass->geometry)) ||
+		       (captured->settings.ActorPartsEnabled() && Skip(*captured, *camera, *pass->geometry, true));
 	}
 	void Install()
 	{
@@ -275,6 +339,7 @@ namespace LightLimitFixDetail::ShadowCulling
 			auto captured = std::make_shared<Snapshot>();
 			captured->settings = settings;
 			captured->sampledAt = GetTickCount64();
+			captured->frame = globals::state->frameCount;
 			captured->eyeCount = globals::game::isVR ? 2 : 1;
 			for (unsigned i = 0; i < captured->eyeCount; ++i) {
 				const auto position = Util::GetEyePosition(i);
@@ -295,6 +360,8 @@ namespace LightLimitFixDetail::ShadowCulling
 				return;
 			}
 			captured->scene.reset(scene);
+			if (settings.ActorPartsEnabled())
+				captured->actorPartHistory = ActorPartHistoryFor(*captured, snapshot.Read());
 			captured->interior = globals::game::smState->interior;
 			auto& data = scene->GetRuntimeData();
 			{
@@ -304,6 +371,8 @@ namespace LightLimitFixDetail::ShadowCulling
 					const double length = std::hypot(double(direction.x), double(direction.y), double(direction.z));
 					captured->sunSine = std::isfinite(length) && length > 0 ? std::abs(direction.z) / length : 0;
 					CaptureLight(*captured, data.sunShadowDirLight, Pass::Sun);
+					if (captured->cameraCount)
+						captured->sunIdentity = data.sunShadowDirLight;
 				}
 				for (const auto& light : data.activeShadowLights)
 					if (light && light.get() != data.sunShadowDirLight)
@@ -353,8 +422,22 @@ namespace LightLimitFixDetail::ShadowCulling
 		Util::AddTooltip("Default: 50 m. Nearby actor roots and large projected shadows remain protected.");
 		if (advanced) {
 			ImGui::Spacing();
+			Util::Widgets::Checkbox("Small actor part shadows", &settings.smallActorParts);
+			Util::AddTooltip("Omit tiny skinned actor-part shadows only while drawing shadow maps. Separate cutoff and return distances reduce repeated switching; both eyes, nearby lights and large projected shadows remain protected. On by default.");
+			Util::Widgets::SliderFloat("Small part radius", &settings.actorPartRadiusCentimeters, 0, MaximumActorPartRadiusCentimeters, "%.2f cm", ImGuiSliderFlags_AlwaysClamp);
+			Util::AddTooltip("0 disables small actor-part shadow culling. Positive values set the maximum bounding-sphere radius of an eligible part and its projected shadow, not its diameter. Default: about 11.42 cm. Larger values allow more parts to qualify. Distance, both-eye, near-light and projected-size safeguards still apply.");
+			if (Util::Widgets::SliderFloat("Small part cutoff distance", &settings.actorPartDistanceMeters, 0, MaximumDistanceMeters, "%.2f m", ImGuiSliderFlags_AlwaysClamp) && settings.actorPartDistanceMeters > 0)
+				settings.actorPartReturnDistanceMeters = std::min(settings.actorPartReturnDistanceMeters, settings.actorPartDistanceMeters);
+			Util::AddTooltip("0 disables small actor-part shadow culling without changing the return distance. Positive values start omitting eligible shadows beyond this actor distance, plus the fixed movement margin. Default: 7.14 m before the margin. A positive cutoff below the return distance also lowers the return distance. All three small-part sliders must be positive to enable this rule.");
+			Util::Widgets::SliderFloat("Small part return distance", &settings.actorPartReturnDistanceMeters, 0, settings.actorPartDistanceMeters > 0 ? settings.actorPartDistanceMeters : MaximumDistanceMeters, "%.2f m", ImGuiSliderFlags_AlwaysClamp);
+			Util::AddTooltip("0 disables small actor-part shadow culling. Positive values restore shadows when the actor returns within this distance, plus the fixed movement margin. Default: 6.426 m before the margin. Equal positive cutoff and return distances remove the return band. All three small-part sliders must be positive to enable this rule.");
+			if (settings.ActorPartsEnabled())
+				ImGui::TextWrapped("With movement margin: cutoff %.2f m / return %.2f m. Other shadow safeguards may retain shadows.",
+					settings.actorPartDistanceMeters + EyeDistanceMargin * MetersPerUnit, settings.actorPartReturnDistanceMeters + EyeDistanceMargin * MetersPerUnit);
+			else
+				ImGui::TextWrapped("Small actor-part culling is off. Enable its checkbox and set all three sliders above 0.");
 			Util::Widgets::Checkbox("Indoor torches", &settings.interiorTorches);
-			Util::AddTooltip("Allow torch and NPC shadow culling indoors. Near lights and large projected shadows remain protected.");
+			Util::AddTooltip("Allow torch, NPC and small actor-part shadow culling indoors. Near lights and large projected shadows remain protected.");
 		}
 	}
 	nlohmann::json Status(const Settings& settings)
@@ -368,6 +451,7 @@ namespace LightLimitFixDetail::ShadowCulling
 		result["sunSkipped"] = sunSkipped.load();
 		result["torchSkipped"] = torchSkipped.load();
 		result["pointDrawsTested"] = pointDrawsTested.load();
+		result["actorPartDrawsSkipped"] = actorPartDrawsSkipped.load();
 		result["npcSkipped"] = actorSkipped.load();
 #endif
 		return result;

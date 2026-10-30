@@ -2074,7 +2074,7 @@ namespace Hooks
 	{
 		if (ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique) ||
 			ShouldSkipRenderPassForParticleLights(a_pass, a_technique) ||
-			LightLimitFixDetail::ShadowCulling::SkipPointShadowDraw(a_pass, a_technique)) {
+			LightLimitFixDetail::ShadowCulling::SkipShadowDraw(a_pass, a_technique)) {
 			return;
 		}
 
@@ -2137,7 +2137,7 @@ namespace Hooks
 		{
 			if (ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique) ||
 				ShouldSkipRenderPassForParticleLights(a_pass, a_technique) ||
-				LightLimitFixDetail::ShadowCulling::SkipPointShadowDraw(a_pass, a_technique)) {
+				LightLimitFixDetail::ShadowCulling::SkipShadowDraw(a_pass, a_technique)) {
 				return;
 			}
 
@@ -2154,7 +2154,7 @@ namespace Hooks
 
 	static void DrawAdmittedRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 	{
-		if (LightLimitFixDetail::ShadowCulling::SkipPointShadowDraw(a_pass, a_technique))
+		if (LightLimitFixDetail::ShadowCulling::SkipShadowDraw(a_pass, a_technique))
 			return;
 		if (globals::features::interiorSun.loaded) {
 			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);

@@ -4,6 +4,7 @@
 #include <limits>
 #include <optional>
 
+#include "Features/LightLimitFix/ShadowCulling.h"
 #include "Features/LightLimitFix/ShadowCullingDrawScope.h"
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
@@ -246,7 +247,9 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
-			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{ nullptr };
+			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{
+				LightLimitFixDetail::ShadowCulling::NeedsSunDrawScope() ? light : nullptr
+			};
 			CS_GPU_PASS("SharedScene::DirectionalShadows");
 			const bool annotate = globals::state->frameAnnotations;
 			if (annotate)

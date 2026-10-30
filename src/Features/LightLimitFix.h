@@ -309,6 +309,7 @@ public:
 		settings.ShadowCulling.sun = a_enabled && defaults.ShadowCulling.sun;
 		settings.ShadowCulling.torch = a_enabled && defaults.ShadowCulling.torch;
 		settings.ShadowCulling.actors = a_enabled && defaults.ShadowCulling.actors;
+		settings.ShadowCulling.smallActorParts = a_enabled && defaults.ShadowCulling.smallActorParts;
 	}
 	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableParticleLights || settings.EnableContactShadows || settings.EnableParticleContactShadows || settings.ShadowCulling.Active(); }
@@ -333,13 +334,14 @@ public:
 			settings.ShadowCulling.sun = defaults.ShadowCulling.sun;
 			settings.ShadowCulling.torch = defaults.ShadowCulling.torch;
 			settings.ShadowCulling.actors = defaults.ShadowCulling.actors;
+			settings.ShadowCulling.smallActorParts = defaults.ShadowCulling.smallActorParts;
 			return;
 		}
 
 		settings.EnableParticleLights = false;
 		SetContactShadowsEnabled(false);
 		settings.EnableParticleContactShadows = false;
-		settings.ShadowCulling.sun = settings.ShadowCulling.torch = settings.ShadowCulling.actors = false;
+		settings.ShadowCulling.sun = settings.ShadowCulling.torch = settings.ShadowCulling.actors = settings.ShadowCulling.smallActorParts = false;
 	}
 	virtual json CapturePerformanceCostMeasurementState() const override
 	{

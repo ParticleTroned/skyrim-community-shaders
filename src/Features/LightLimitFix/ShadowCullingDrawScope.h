@@ -9,7 +9,7 @@ namespace RE
 
 namespace LightLimitFixDetail::ShadowCulling
 {
-	/** Bind point-shadow rejection to the synchronous native light render; null scopes suspend it. */
+	/** Bind shadow rejection to the synchronous native light render; null scopes suspend it. */
 	class DrawScope
 	{
 	public:

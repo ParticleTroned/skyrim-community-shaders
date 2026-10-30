@@ -25,6 +25,11 @@ retained camera snapshots, stereo checks, actor-root distance protection
 and independent Light Limit Fix settings.
 SPS 1.0.70's point-light collection fix also informed CSX's draw-only rejection;
 CSX uses its existing native light scopes and shared render-pass hooks.
+The small actor-part shadow policy references SPS 1.0.70's draw-only
+filter, real-actor ownership check, 8-unit part radius and actor-position
+distance with a 10% return band. CSX retains stereo and projected-shadow
+protection, uses native actor handles for bounded history, and exposes
+independent radius and distance sliders with this option on by default. This adaptation was made on 2026-10-30.
 
 CSX has its own streaming policy, stereo demand calculation, validated DDS
 reader, bounded restoration cache, remembered-size format, upload and GPU

@@ -79,14 +79,14 @@ struct IndependentSettings
 {
 	unsigned qualityMode = 0;
 	bool neuralRenderingEnabled = false;
-	float neuralRenderingIntensity = 0.8f;
+	float neuralRenderingIntensity = 1.75f;
 	unsigned neuralCharacterDebugView = 0;
 	unsigned neuralCharacterMaskTestMode = 0;
 	bool neuralCharacterCurrentContextEnabled = false;
 	bool neuralCharacterGpuMaskSupportEnabled = false;
-	unsigned neuralRenderingModelResolutionPercent = 100;
+	unsigned neuralRenderingModelResolutionPercent = 90;
 	bool neuralRenderingGuidedReconstruction = true;
-	unsigned neuralRenderingPeripheralCompressionPercent = 25;
+	unsigned neuralRenderingPeripheralCompressionPercent = 100;
 	bool neuralRenderingPauseInCombat = true;
 	bool neuralRenderingPressureResolutionEnabled = true;
 	unsigned neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
@@ -102,7 +102,7 @@ int main()
 	};
 	const auto defaults = NeuralRendering::RenderingSettings(Json(IndependentSettings{}));
 	require(defaults.at("neuralRenderingGuidedReconstruction") == true);
-	require(defaults.at("neuralRenderingPeripheralCompressionPercent") == 25);
+	require(defaults.at("neuralRenderingPeripheralCompressionPercent") == 100);
 	require(defaults.at("neuralRenderingPauseInCombat") == true);
 	require(NeuralRendering::PersistentRenderingSettings({ { "neuralRenderingGuidedReconstruction", true } }).at("neuralRenderingGuidedReconstruction") == true);
 	require(defaults.at("neuralRenderingCentralAreaPercent") == 100 && defaults.at("neuralRenderingCentralFeatherPixels") == 64);

@@ -72,15 +72,15 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-quality",
-    "presetVersion": "d2026.10.31.6",
+    "presetVersion": "d2026.10.31.7",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
       "maximumVersionExclusive": "3.22"
     },
     "settingsContract": {
-      "revision": 28,
-      "sourceTreeSha256": "C537FC996FE591F371E4FD0446B5EE9D596CFE2DF7DA602D0E3A9BB9D9604E24"
+      "revision": 29,
+      "sourceTreeSha256": "B2BCCCA84F44FB17C68ED608A40AFAD173825F546A7D6627FC1A5E766812A70D"
     }
   },
   "Upscaling": {
@@ -157,19 +157,20 @@
       "neuralRenderingBlendFeather": 0.05000000074505806,
       "neuralRenderingDirectCommit": true,
       "neuralRenderingGuidedReconstruction": true,
-      "neuralRenderingPeripheralCompressionPercent": 25,
+      "neuralRenderingPeripheralCompressionPercent": 100,
       "neuralRenderingPauseInCombat": true,
       "neuralRenderingEnabled": false,
       "neuralRenderingFovOnly": false,
       "neuralRenderingRenderscaleFov": false,
       "neuralRenderingInsertionPoint": 0,
-      "neuralRenderingIntensity": 0.800000011920929,
-      "neuralRenderingLocalStructure": 0.8999999761581421,
-      "neuralRenderingLocalTone": 0.75,
+      "neuralRenderingIntensity": 1.75,
+      "neuralRenderingLocalStructure": 1.5,
+      "neuralRenderingLocalTone": 1.25,
       "neuralRenderingMode": 2,
-      "neuralRenderingPreset": 3,
+      "neuralRenderingModelResolutionPercent": 90,
+      "neuralRenderingPreset": 4,
       "neuralRenderingSingleSubrectScale": 1.0,
-      "neuralRenderingSkinStructure": 0.8999999761581421,
+      "neuralRenderingSkinStructure": 1.3,
       "neuralRenderingStyle": 1,
       "neuralRenderingNetwork": 0,
       "neuralRenderingUICorrection": false

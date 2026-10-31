@@ -102,7 +102,7 @@ namespace globals
 				unsigned neuralRenderingMode = 0;
 				unsigned neuralRenderingModelResolutionPercent = 100;
 				bool neuralRenderingGuidedReconstruction = true;
-				unsigned neuralRenderingPeripheralCompressionPercent = 25;
+				unsigned neuralRenderingPeripheralCompressionPercent = 100;
 				bool neuralRenderingPauseInCombat = true;
 				bool neuralRenderingPressureResolutionEnabled = true;
 				bool neuralRenderingPrewarmEnabled = true;
@@ -663,7 +663,7 @@ int main()
 		ImGui::Clear("Pause NR during combat");
 		DrawNeuralRuntimeSettings(settings, true);
 		require(!settings.neuralRenderingPauseInCombat && settings.neuralRenderingModelResolutionPercent == 100, "Combat control must retain NR resolution");
-		require(settings.neuralRenderingPeripheralCompressionPercent == 25, "Peripheral compression must default to 25 percent");
+		require(settings.neuralRenderingPeripheralCompressionPercent == 100, "Peripheral compression must default to 100 percent");
 		for (int percent : { 20, 100, 0 }) {
 			ImGui::Clear("Peripheral compression");
 			ImGui::sliderEditValue = static_cast<float>(percent);

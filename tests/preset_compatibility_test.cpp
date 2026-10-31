@@ -58,7 +58,13 @@ int main(int argc, char** argv)
 		assert(nr.at("neuralRenderingNetwork") == 0);
 		assert(!nr.contains("neuralRenderingReconstructionFilter"));
 		assert(nr.at("neuralRenderingGuidedReconstruction") == true);
-		assert(nr.at("neuralRenderingPeripheralCompressionPercent") == 25);
+		assert(nr.at("neuralRenderingPeripheralCompressionPercent") == 100);
+		assert(nr.at("neuralRenderingModelResolutionPercent") == 90);
+		assert(nr.at("neuralRenderingPreset") == 4);
+		assert(nr.at("neuralRenderingIntensity") == 1.75);
+		assert(nr.at("neuralRenderingLocalTone") == 1.25);
+		assert(nr.at("neuralRenderingLocalStructure") == 1.5);
+		assert(nr.at("neuralRenderingSkinStructure") == 1.3);
 		assert(nr.at("neuralRenderingPauseInCombat") == true);
 		assert(preset.at("Terrain Blending").at("LandscapeSeams") == 0);
 		assert(preset.at("Performance Overlay").at("ShowRenderTargets") == false);

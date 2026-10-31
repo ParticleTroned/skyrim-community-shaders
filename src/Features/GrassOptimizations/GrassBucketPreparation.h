@@ -46,7 +46,6 @@ namespace GrassPreparation
 		}
 	}
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	struct Bucket
 	{
 		std::vector<size_t> sources;
@@ -106,5 +105,4 @@ namespace GrassPreparation
 			BuildRuns(bucket.runs, bucket.sources.size(), [&](size_t index) -> const Source& { return sources[bucket.sources[index]]; });
 		return buckets;
 	}
-#endif
 }

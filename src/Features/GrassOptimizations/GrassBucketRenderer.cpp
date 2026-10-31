@@ -21,19 +21,19 @@
 #include "Utils/LazyShader.h"
 #include <DirectXPackedVector.h>
 
+#include <BS_thread_pool.hpp>
 #include <bit>
+#include <chrono>
 #include <cstring>
 #include <d3dcompiler.h>
 #include <filesystem>
+#include <future>
 #include <mutex>
 #include <shared_mutex>
 #include <string_view>
 #include <tuple>
 #include <unordered_map>
 #ifdef DEVBENCH_BRIDGE_ENABLED
-#	include <BS_thread_pool.hpp>
-#	include <chrono>
-#	include <future>
 #	include <unordered_set>
 #endif
 
@@ -639,7 +639,6 @@ struct GrassBucketRenderer::Impl
 	RE::NiPoint3 currentOrigin;
 	GrassPolicy::Settings frameSettings;
 	float frameCollisionStrength = GrassCollision::kDefaultCollisionStrength;
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	struct PreparationJob
 	{
 		std::vector<Source> sources;
@@ -649,15 +648,19 @@ struct GrassBucketRenderer::Impl
 	};
 	std::unique_ptr<PreparationJob> preparationJob;
 	std::unique_ptr<BS::thread_pool<>> preparationWorker;
-	std::atomic_uint64_t preparationRequest{ 0 }, preparationAppliedRequest{ 0 };
-	std::atomic_bool preparationPending{ false }, preparationFailed{ false }, preparationActive{ false };
+	std::atomic_uint64_t preparationRequest{ 1 }, preparationAppliedRequest{ 0 };
+	std::atomic_bool preparationFailed{ false };
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::atomic_bool preparationPending{ false }, preparationActive{ false };
 	std::atomic_uint64_t preparationSubmitted{ 0 }, preparationPublished{ 0 }, preparationDiscarded{ 0 }, preparationRejectedBuckets{ 0 };
 	std::atomic_uint64_t preparationRenderNanoseconds{ 0 }, preparationWorkerNanoseconds{ 0 }, preparationFrames{ 0 };
+#endif
 	uint64_t preparationValidatedRevision = UINT64_MAX;
 	bool PrepareBackground();
 	void EndBackgroundPreparation(const GrassPolicy::Settings& settings);
 	bool CurrentBucket(std::span<const Source> sources) const;
 	void ReindexBuckets();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	std::atomic_bool diagnostics{ false };
 	GrassTelemetry::Channel telemetry;
 	GrassTelemetry::Work frameWork;
@@ -737,11 +740,9 @@ struct GrassBucketRenderer::Impl
 GrassBucketRenderer::GrassBucketRenderer() : impl(std::make_unique<Impl>()) {}
 GrassBucketRenderer::~GrassBucketRenderer()
 {
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	// A worker borrows its snapshot; join before releasing native owners on this thread.
 	impl->preparationWorker.reset();
 	impl->preparationJob.reset();
-#endif
 	// Releasing the last native owner can call the deleting-destructor hook.
 	impl->queuedGroups.clear();
 }
@@ -1376,9 +1377,7 @@ void GrassBucketRenderer::EndFrame()
 	for (auto& bucket : impl->dormantBuckets)
 		bucket.plan.Retire();
 	const auto settings = globals::features::grassOptimizations.GetSettings();
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	impl->EndBackgroundPreparation(settings);
-#endif
 	impl->UpdateLODDemand(settings);
 }
 
@@ -1433,10 +1432,8 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 	lock.unlock();
 	UpdateLODDemand(frameSettings);
 	lock.lock();
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	if (PrepareBackground())
 		return;
-#endif
 	if (!frameSettings.Enabled || failed)
 		return;
 	if (preparedRevision == residentRevision && preparedBatching == frameSettings.CrossCellBatching) {
@@ -1563,7 +1560,6 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 #endif
 }
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
 bool GrassBucketRenderer::Impl::CurrentBucket(std::span<const Source> sources) const
 {
 	if (sources.empty() || !sources.front().queue || sources.front().queue->members.size() != sources.size() ||
@@ -1604,7 +1600,9 @@ void GrassBucketRenderer::Impl::ReindexBuckets()
 		return false;
 	});
 	residentRecordBytes += dormantBytes;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	publishedResultBytes.store(resultBytes, std::memory_order_relaxed);
+#endif
 }
 
 // The render thread owns snapshots and publication; the worker only borrows immutable captures.
@@ -1617,15 +1615,26 @@ bool GrassBucketRenderer::Impl::PrepareBackground()
 		preparationAppliedRequest.store(request, std::memory_order_relaxed);
 	}
 	const bool active = (request & 1) && !preparationFailed.load(std::memory_order_relaxed) && frameSettings.Enabled && !failed;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	preparationActive.store(active, std::memory_order_relaxed);
+#endif
 	try {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		bool published = false;
+#endif
 		if (preparationJob && preparationJob->result.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
 			const auto retireJob = SKSE::stl::scope_exit([&] {
 				preparationJob.reset();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				preparationPending.store(false, std::memory_order_relaxed);
+#endif
 			});
-			if (active && preparationJob->request == request && preparationJob->batching == frameSettings.CrossCellBatching) {
+			const bool applicable = active && preparationJob->request == request && preparationJob->batching == frameSettings.CrossCellBatching;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (!applicable)
+				++preparationDiscarded;
+#endif
+			if (applicable) {
 				auto preparedBuckets = preparationJob->result.get();
 				std::vector<Bucket> completed;
 				completed.reserve(preparedBuckets.size());
@@ -1635,7 +1644,9 @@ bool GrassBucketRenderer::Impl::PrepareBackground()
 					for (auto index : layout.sources)
 						bucket.sources.push_back(std::move(preparationJob->sources[index]));
 					if (!CurrentBucket(bucket.sources)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 						++preparationRejectedBuckets;
+#endif
 						continue;
 					}
 					bucket.instances = layout.instances;
@@ -1649,17 +1660,20 @@ bool GrassBucketRenderer::Impl::PrepareBackground()
 				residentRecordBytes = 0;
 				ReuseRecordBuffers(previous);
 				ReindexBuckets();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				if (diagnostics.load(std::memory_order_relaxed)) {
 					++bucketRebuilds;
 					admittedSources.fetch_add(admitted.size(), std::memory_order_relaxed);
 				}
+#endif
 				preparedRevision = preparationJob->revision;
 				preparedBatching = preparationJob->batching;
 				preparationValidatedRevision = residentRevision;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				++preparationPublished;
 				published = true;
-			} else
-				++preparationDiscarded;
+#endif
+			}
 		}
 		if (!active)
 			return false;
@@ -1684,23 +1698,33 @@ bool GrassBucketRenderer::Impl::PrepareBackground()
 			if (!preparationWorker)
 				preparationWorker = std::make_unique<BS::thread_pool<>>(1);
 			job->result = preparationWorker->submit_task([this, input = job.get()] {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				const auto start = std::chrono::steady_clock::now();
+#endif
 				auto result = GrassPreparation::Build(std::span<const Source>(input->sources), CompatibilityHash, CompatibleCaptured);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				preparationWorkerNanoseconds.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count(), std::memory_order_relaxed);
+#endif
 				return result;
 			});
 			preparationJob = std::move(job);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			preparationPending.store(true, std::memory_order_relaxed);
 			++preparationSubmitted;
+#endif
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (!published && !preparationJob && diagnostics.load(std::memory_order_relaxed))
 			++persistentBucketFrames;
+#endif
 		RefreshFades();
 		return true;
 	} catch (const std::exception& error) {
 		logger::warn("Grass worker preparation unavailable; restoring synchronous preparation: {}", error.what());
 		preparationFailed.store(true, std::memory_order_relaxed);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		preparationActive.store(false, std::memory_order_relaxed);
+#endif
 		preparedRevision = UINT64_MAX;
 		return false;
 	}
@@ -1713,15 +1737,18 @@ void GrassBucketRenderer::Impl::EndBackgroundPreparation(const GrassPolicy::Sett
 		(request & 1) && !preparationFailed.load(std::memory_order_relaxed) &&
 		(!preparationJob || (preparationJob->request == request && preparationJob->batching == settings.CrossCellBatching)))
 		return;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	preparationActive.store(false, std::memory_order_relaxed);
+#endif
 	// Retire unused snapshots outside captureMutex even when no grass draws arrive.
 	if (preparationJob && preparationJob->result.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
 		preparationJob.reset();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		preparationPending.store(false, std::memory_order_relaxed);
 		++preparationDiscarded;
+#endif
 	}
 }
-#endif
 
 // The caller holds captureMutex so native fades and generation snapshots agree.
 void GrassBucketRenderer::Impl::RefreshFades()

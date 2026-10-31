@@ -16,15 +16,15 @@ ROOT = Path(__file__).resolve().parents[1]
 class GrassPreparationLifecycleTests(unittest.TestCase):
     def test_pending_stale_disabled_failed_and_shutdown(self):
         source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
-        fields = source[source.index("\tstruct PreparationJob\n"):source.index("\tstd::atomic_bool diagnostics")]
+        fields = source[source.index("\tstruct PreparationJob\n"):source.index("#ifdef DEVBENCH_BRIDGE_ENABLED\n\tstd::atomic_bool diagnostics")]
         methods = "\n".join(block(source, signature) for signature in (
             "bool GrassBucketRenderer::Impl::CurrentBucket(",
             "void GrassBucketRenderer::Impl::ReindexBuckets(",
             "bool GrassBucketRenderer::Impl::PrepareBackground(",
             "void GrassBucketRenderer::Impl::EndBackgroundPreparation(",
             "void GrassBucketRenderer::EndFrame(",
-            "void GrassBucketRenderer::SetBackgroundPreparationEnabled(",
             "GrassBucketRenderer::~GrassBucketRenderer("))
+        methods += "\n#ifdef DEVBENCH_BRIDGE_ENABLED\n" + block(source, "void GrassBucketRenderer::SetBackgroundPreparationEnabled(") + "\n#endif\n"
         driver = r'''
 #include "Features/GrassOptimizations/GrassBucketPreparation.h"
 #include <chrono>
@@ -125,6 +125,7 @@ struct GrassBucketRenderer {
 };
 METHODS
 void Require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
+#ifdef DEVBENCH_BRIDGE_ENABLED
 void CheckUnusedRetirement() {
     for (int reason = 0; reason < 4; ++reason) {
         GrassBucketRenderer renderer;
@@ -166,7 +167,10 @@ int main() {
     try {
         GrassBucketRenderer renderer;
         auto& state = *renderer.impl;
-        Require(state.preparationRequest == 0 && !state.PrepareBackground(), "Experiment did not default off");
+        Require(state.preparationRequest == 1, "Background preparation did not default on");
+        state.frameSettings.Enabled = false;
+        Require(!state.PrepareBackground() && !state.preparationWorker, "Disabled GO started a preparation worker");
+        state.frameSettings.Enabled = true;
         auto a = std::make_shared<Queue>(); a->members = {1,2};
         auto b = std::make_shared<Queue>(); b->members = {3};
         for (uintptr_t id : {1,2,3}) {
@@ -252,6 +256,49 @@ int main() {
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }
+#else
+int main() {
+    try {
+        GrassBucketRenderer renderer;
+        auto& state = *renderer.impl;
+        Require(state.preparationRequest == 1, "Production background preparation did not default on");
+        state.frameSettings.Enabled = false;
+        Require(!state.PrepareBackground() && !state.preparationWorker, "Disabled production GO created a worker");
+        state.frameSettings.Enabled = true;
+        Source item{}; item.identity = 1; item.queue = std::make_shared<Queue>(); item.queue->members = {1};
+        state.residents.emplace(1, std::move(item));
+        Require(state.PrepareBackground() && state.preparationJob && state.admitted.empty(), "Default production path did not retain native fallback while pending");
+        BS::Complete(); state.PrepareBackground();
+        Require(state.admitted.contains(1) && !state.preparationJob, "Production worker result did not publish");
+        state.PrepareBackground();
+        Require(!state.preparationJob && BS::pools == 1, "Production stable frame created redundant work");
+        state.residents.at(1).groups.front().count = GrassPolicy::kMaxBatchInstances + 1;
+        ++state.residentRevision;
+        state.PrepareBackground(); BS::Complete();
+        Require(!state.PrepareBackground() && state.preparationFailed && !state.preparationJob, "Production failure did not restore synchronous preparation");
+        Require(!state.PrepareBackground(), "Failed production worker retried without recovery");
+        {
+            GrassBucketRenderer ending;
+            auto& pending = *ending.impl;
+            Source retained{}; retained.identity = 2; retained.queue = std::make_shared<Queue>(); retained.queue->members = {2};
+            const auto ownerThread = std::this_thread::get_id();
+            bool releasedOnOwner = false;
+            retained.nativeOwner = std::shared_ptr<int>(new int, [&](int* p) { releasedOnOwner = std::this_thread::get_id() == ownerThread; delete p; });
+            auto owner = std::weak_ptr(retained.nativeOwner);
+            pending.residents.emplace(2, std::move(retained));
+            pending.PrepareBackground(); pending.residents.clear();
+            BS::Complete(); ++globals::state->frameCount;
+            ending.EndFrame();
+            Require(!pending.preparationJob && owner.expired() && releasedOnOwner, "Idle production snapshot did not retire on its owner thread");
+            --globals::state->frameCount;
+            pending.residents.emplace(2, Source{2}); ++pending.residentRevision;
+            pending.PrepareBackground();
+        }
+        Require(!BS::pending, "Production shutdown did not drain its borrowed snapshot");
+        return 0;
+    } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+}
+#endif
 '''.replace("FIELDS", fields).replace("METHODS", methods)
         compiler = os.environ.get("CXX") or shutil.which("cl")
         self.assertIsNotNone(compiler, "Run in the MSVC developer environment")
@@ -260,12 +307,16 @@ int main() {
             cpp = directory / "driver.cpp"
             executable = directory / "driver.exe"
             cpp.write_text(driver, encoding="utf-8")
-            command = [compiler, "/nologo", "/std:c++latest", "/EHsc", "/W4", "/WX", "/DDEVBENCH_BRIDGE_ENABLED",
-                       "/I" + str(ROOT / "src"), str(cpp), "/Fe:" + str(executable)]
-            result = subprocess.run(command, cwd=directory, capture_output=True, text=True, timeout=60)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            result = subprocess.run([str(executable)], cwd=directory, capture_output=True, text=True, timeout=10)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for devbench in (False, True):
+                with self.subTest(devbench=devbench):
+                    command = [compiler, "/nologo", "/std:c++latest", "/EHsc", "/W4", "/WX",
+                               "/I" + str(ROOT / "src"), str(cpp), "/Fe:" + str(executable)]
+                    if devbench:
+                        command.append("/DDEVBENCH_BRIDGE_ENABLED")
+                    result = subprocess.run(command, cwd=directory, capture_output=True, text=True, timeout=60)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    result = subprocess.run([str(executable)], cwd=directory, capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

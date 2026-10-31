@@ -11,16 +11,15 @@ upstream PRs in draft until runtime testing is complete.
 - [Integration source](https://github.com/ParticleTroned/skyrim-community-shaders/tree/build/os-dev-nr-integration-20261031)
 - [Integration build runs and artifacts](https://github.com/ParticleTroned/skyrim-community-shaders/actions/workflows/nr-integration-test.yaml)
 
-The integration merges these branch heads in the same order as the intended PR
-publication order. Each feature branch independently starts at the upstream
+The integration merges these branch heads in the same order as their upstream PRs were opened. Each feature branch independently starts at the upstream
 `dev` commit above; the PRs are not stacked on each other.
 
 | Order | Implementation | Feature branch | Included head |
 | --- | --- | --- | --- |
-| 1 | RGB-guided reconstruction | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031) | `5d35eb601d2c1068bec9a3a2bc52b0d8fa6bb3b9` |
-| 2 | Peripheral compression | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `dd9c974e75f72d90128f5133b30205b9425da31d` |
-| 3 | Pause NR during combat | [Combat pause](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-combat-pause-20261031) | `ae0420524922d658d023b6417761677f55a584fc` |
-| 4 | Reduced-model material selection | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031) | `7027450d985d4ecdc459619988c695ab1d655e95` |
+| 1 | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053) | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031) | `5d35eb601d2c1068bec9a3a2bc52b0d8fa6bb3b9` |
+| 2 | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054) | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `dd9c974e75f72d90128f5133b30205b9425da31d` |
+| 3 | [Pause NR during combat (#1055)](https://github.com/alandtse/open-shaders/pull/1055) | [Combat pause](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-combat-pause-20261031) | `ae0420524922d658d023b6417761677f55a584fc` |
+| 4 | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031) | `7027450d985d4ecdc459619988c695ab1d655e95` |
 
 The source commits being ported are, respectively, `edf95c6253b53aa45e541e6c0b5e730457dc2e68`,
 `d7d640ac48553310db01d0a8af6d56e70ffe24c6`,
@@ -88,8 +87,10 @@ of the requested feature.
 
 Start with NR enabled, Model Scale 1, compression 0, combat pause off, all
 materials selected, and no actor crop, calibration, mirrored-eye or diagnostic
-input transforms. In VR, start with Separate eyes, then repeat the combined
-cases with Parallel eyes and Side by side. Alternate eyes intentionally retains
+input transforms. Keep **Use resolution-scaled NR motion** enabled, diagnostic
+options off, and conversion, exposure and composite modes at their production
+settings. In VR, start with Separate eyes, then repeat the combined cases with
+Parallel eyes and Side by side. Alternate eyes intentionally retains
 the ordinary sampling route and is not the mode for testing compression.
 
 | Case | Settings | What to verify |
@@ -114,7 +115,8 @@ For material selection, test all selected, one excluded category, partial
 strengths, and edge softness 0 and 4. All selected should match normal NR; a
 retained native provider binding reuses an identity mask. Selecting fewer
 materials changes where NR appears, not the amount of model evaluation work.
-An unavailable native provider must not disable a valid reduced-model compositor.
+A rejected native material-protection path must not disable a valid reduced-model
+compositor.
 
 ## Evidence and remaining validation
 

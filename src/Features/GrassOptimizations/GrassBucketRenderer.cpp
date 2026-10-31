@@ -208,6 +208,7 @@ namespace
 		uint64_t descriptor = 0;
 		uint32_t indexCount = 0;
 		float radius = 0;
+		bool farLOD = false;
 	};
 	using Outcome = GrassPassCache::Outcome;
 	using PassKey = GrassPassCache::Key;
@@ -2129,6 +2130,7 @@ Mesh GrassBucketRenderer::Impl::LoadLODMesh(const LODKey& key)
 	if (!mesh.indexCount || !Finite(bound.center) || !std::isfinite(bound.radius) || bound.radius <= 0)
 		return {};
 	mesh.radius = bound.center.Length() + bound.radius;
+	mesh.farLOD = key.tier == 1;
 	if (!std::isfinite(mesh.radius))
 		return {};
 	mesh.vertices.copy_from(reinterpret_cast<ID3D11Buffer*>(geometry.rendererData->vertexBuffer));
@@ -2598,7 +2600,8 @@ void GrassBucketRenderer::Impl::UploadCulling()
 			for (uint32_t tier = 0; tier < 3; ++tier)
 				for (uint32_t eye = 0; eye < params.eyes; ++eye) {
 					const auto index = tier * params.eyes + eye;
-					const DrawConstants draw{ 1, eye, index * params.capacity, frameSettings.CollisionDistance, params.origin };
+					const uint32_t enabled = 1u | (tier == 2 && plan.meshes[tier].farLOD ? 2u : 0u);
+					const DrawConstants draw{ enabled, eye, index * params.capacity, frameSettings.CollisionDistance, params.origin };
 					std::memcpy(bytes + kDrawOffset + index * 256, &draw, sizeof(draw));
 				}
 		}

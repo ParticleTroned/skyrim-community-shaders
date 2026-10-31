@@ -2,6 +2,8 @@
 #include "d3d11_shader_test.h"
 
 #include <array>
+#include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
@@ -187,6 +189,27 @@ float4 VerifyLegacyColor(float4 input : COLOR0) : SV_Target0 {
 			"Combined PBR grass changed legacy color conversion or light scaling");
 	}
 
+	void CheckBillboardResources(bool vr)
+	{
+		constexpr const char* source = R"(
+#include "RunGrass.hlsl"
+PS_OUTPUT VerifyLegacyColor(PS_INPUT input, bool frontFace : SV_IsFrontFace) {
+    input.VertexMult = -2;
+    return main(input, frontFace);
+}
+)";
+		auto defines = GrassDefines(false, vr, true, true, false, true, true, true);
+		auto bytecode = CompileProgram(defines.data(), false, source);
+		ComPtr<ID3D11ShaderReflection> reflection;
+		Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
+		for (const char* name : { "TexNormalSampler", "TexRMAOSSampler", "TexSubsurfaceSampler", "PerMaterial", "LightLimitFix::lightGrid" }) {
+			D3D11_SHADER_INPUT_BIND_DESC binding{};
+			Require(FAILED(reflection->GetResourceBindingDescByName(name, &binding)), "Far billboard retained detailed lighting resources");
+		}
+		CheckBinding(reflection.Get(), "TexBaseSampler", 0);
+		CheckBinding(reflection.Get(), "TexShadowMaskSampler", 1);
+	}
+
 	unsigned CheckRetainedShaderPairs()
 	{
 		unsigned compiled = 0;
@@ -226,6 +249,8 @@ int main()
 		unsigned compiled = 0;
 		CheckSimplifiedPBR(false);
 		CheckSimplifiedPBR(true);
+		CheckBillboardResources(false);
+		CheckBillboardResources(true);
 		for (bool optimized : { false, true }) {
 			for (bool vr : { false, true }) {
 				CheckLegacyColor(vr);

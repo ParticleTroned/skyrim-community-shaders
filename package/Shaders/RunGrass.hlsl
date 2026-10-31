@@ -197,6 +197,11 @@ float3 GetWindDisplacement(VS_INPUT input, bool previous)
 	return displacement;
 }
 
+float3x3 GetGrassInstanceRotation(VS_INPUT input)
+{
+	return float3x3(input.InstanceData2.xyz, input.InstanceData3.xyz, float3(input.InstanceData4.x, input.InstanceData2.w, input.InstanceData3.w));
+}
+
 #	ifdef GRASS_LIGHTING
 float4 GetMSPosition(VS_INPUT input, float3x3 world3x3)
 #	else
@@ -241,7 +246,7 @@ VS_OUTPUT main(VS_INPUT input)
 	if (GrassBatchEnabled)
 		eyeIndex = Stereo::GetEyeIndexVS(GrassBatchEye);
 #		endif
-	float3x3 world3x3 = float3x3(input.InstanceData2.xyz, input.InstanceData3.xyz, float3(input.InstanceData4.x, input.InstanceData2.w, input.InstanceData3.w));
+	float3x3 world3x3 = GetGrassInstanceRotation(input);
 
 	float4 msPosition = GetMSPosition(input, world3x3);
 
@@ -291,7 +296,7 @@ VS_OUTPUT main(VS_INPUT input)
 #		ifdef GRASS_OPTIMIZATIONS
 	if (GrassBatchEnabled) {
 		vsout.Color.w = perInstanceFade;
-		vsout.VertexMult = GetGrassBatchSimpleShading(input.InstanceID) ? -1 : 0;
+		vsout.VertexMult = GetGrassBatchShading(input.InstanceID);
 	}
 #		endif
 
@@ -397,7 +402,7 @@ VS_OUTPUT main(VS_INPUT input)
 #		ifdef GRASS_OPTIMIZATIONS
 	if (GrassBatchEnabled) {
 		vsout.Color.w = perInstanceFade;
-		vsout.VertexMult = GetGrassBatchSimpleShading(input.InstanceID) ? -1 : 0;
+		vsout.VertexMult = GetGrassBatchShading(input.InstanceID);
 	}
 #		endif
 
@@ -406,6 +411,11 @@ VS_OUTPUT main(VS_INPUT input)
 
 	vsout.AmbientColor.xyz = input.InstanceData1.www * (AmbientColor.xyz * input.Color.xyz);
 	vsout.AmbientColor.w = ShadowClampValue;
+#		ifdef GRASS_OPTIMIZATIONS
+	// Basic shading leaves this varying unused; far billboards carry authored normals here.
+	if (GrassBatchEnabled & 2u)
+		vsout.AmbientColor.xyz = mul(GetGrassInstanceRotation(input), input.Normal.xyz * 2.0 - 1.0);
+#		endif
 
 	vsout.ViewSpacePosition = mul(WorldView[eyeIndex], msPosition).xyz;
 	vsout.WorldPosition = mul(World[eyeIndex], msPosition);
@@ -546,21 +556,53 @@ float3 ApplyGrassWetDarkening(float3 baseColor)
 	return baseColor * (1.0 - wetDarkening);
 }
 
-// This is the original non-Grass-Lighting shader path. It is shared by the
-// boot-disabled permutation and the runtime-disabled Grass Lighting path.
-// Foliage Lighting can opt in to its small grass-scattering augmentation.
-// Preserve native shader conditions when the batching permutation is absent.
 #	ifdef GRASS_OPTIMIZATIONS
 #		define GRASS_DETAILED(condition) (!(input.VertexMult < 0) && (condition))
+#		define GRASS_BILLBOARD (input.VertexMult < -1.5)
 #	else
 #		define GRASS_DETAILED(condition) condition
+#		define GRASS_BILLBOARD false
 #	endif
 
+float4 SampleGrassLightingBaseColor(float2 texCoord, out bool complex, bool fullTexture = false)
+{
+	float x, y;
+	TexBaseSampler.GetDimensions(x, y);
+	float3 complexTest = TexBaseSampler.Load(int3(0, int(y) - 1, 0)).xyz * 2.0 - 1.0;
+	complex = abs(length(complexTest) - 1.0) < SharedData::grassLightingSettings.ComplexGrassThreshold;
+#	if defined(PBR_GRASS)
+	fullTexture = fullTexture || (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::PBRGrass);
+#	endif
+	complex = complex && !fullTexture;
+	float4 baseColor;
+	if (complex) {
+		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, float2(texCoord.x, texCoord.y * 0.5), SharedData::MipBias);
+	} else {
+		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, texCoord, SharedData::MipBias);
+	}
+	return baseColor;
+}
+
+// Basic and far-billboard shading share alpha, shadows and deferred outputs.
 PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 {
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 
-	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias);
+	const bool billboard = GRASS_BILLBOARD;
+	float4 baseColor;
+	if (billboard) {
+		bool complex;
+		const bool pbrTexture = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::PBRGrass;
+		baseColor = SampleGrassLightingBaseColor(input.TexCoord.xy, complex, pbrTexture);
+		if (pbrTexture)
+			baseColor.xyz = Color::PBRDiffuse(baseColor.xyz);
+		else
+			baseColor.xyz = Color::Diffuse(baseColor.xyz);
+		if (SharedData::grassLightingSettings.Enabled && ((!complex && !pbrTexture) || SharedData::grassLightingSettings.OverrideComplexGrassSettings))
+			baseColor.xyz *= SharedData::grassLightingSettings.BasicGrassBrightness;
+	} else {
+		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias);
+	}
 
 #	if defined(RENDER_DEPTH) || defined(DO_ALPHA_TEST)
 	float diffuseAlpha = input.Color.w * baseColor.w;
@@ -609,11 +651,22 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 	float3 diffuseColor = directionalLightColor;
 
 	float3 normal = -normalize(cross(ddx_coarse(input.WorldPosition.xyz), ddy_coarse(input.WorldPosition.xyz)));
+	if (billboard) {
+		// Authored upward tilt keeps vertical cards lit by overhead sunlight.
+#		ifdef GRASS_LIGHTING
+		float3 billboardNormal = normalize(input.VertexNormal.xyz);
+#		else
+		float3 billboardNormal = normalize(input.AmbientColor.xyz);
+#		endif
+		diffuseColor *= abs(dot(billboardNormal, SharedData::DirLightDirection.xyz)) * Color::VanillaNormalization();
+	}
+	// An upward ambient normal keeps billboard ambient light independent of the viewed face.
+	float3 ambientNormal = billboard ? float3(0, 0, 1) : normal;
 	float3 viewDirection = -input.WorldPosition.xyz * rsqrt(max(dot(input.WorldPosition.xyz, input.WorldPosition.xyz), 1e-8f));
 	float3 foliageNormal = normal;
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GrassSphereNormal) && dot(foliageNormal, viewDirection) < 0.0)
 		foliageNormal = -foliageNormal;
-	[branch] if (SharedData::foliageLightingSettings.EnableGrassScattering != 0)
+	[branch] if (!billboard && SharedData::foliageLightingSettings.EnableGrassScattering != 0)
 		diffuseColor += directionalLightColor * GetFoliageTransmission(dot(foliageNormal, SharedData::DirLightDirection.xyz), dot(viewDirection, SharedData::DirLightDirection.xyz)) * Color::VanillaNormalization();
 
 #		if defined(LIGHT_LIMIT_FIX)
@@ -676,17 +729,17 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 #			else
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 #			endif
-	float skylightingDiffuse = Skylighting::GetVertexSkylightingDiffuse(positionMSSkylight, normal, vertexAO);
+	float skylightingDiffuse = Skylighting::GetVertexSkylightingDiffuse(positionMSSkylight, ambientNormal, vertexAO);
 #		endif  // SKYLIGHTING
 
-	float3 directionalAmbientColor = Color::Ambient(max(0, SharedData::GetAmbient(normal)));
+	float3 directionalAmbientColor = Color::Ambient(max(0, SharedData::GetAmbient(ambientNormal)));
 
 #		if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
 #			if defined(SKYLIGHTING)
-		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(directionalAmbientColor, -normal, skylightingDiffuse);
+		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(directionalAmbientColor, -ambientNormal, skylightingDiffuse);
 #			else
-		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -normal);
+		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -ambientNormal);
 #			endif
 	}
 #		endif
@@ -754,6 +807,9 @@ float GetWrappedDiffuseMultiplier(float angle, float wrapAmount, bool useWrapped
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
+#		if defined(GRASS_OPTIMIZATIONS)
+	[branch] if (GRASS_BILLBOARD) return RenderBasicGrass(input, frontFace);
+#		endif
 	[branch] if (!SharedData::grassLightingSettings.Enabled) return RenderBasicGrass(input, frontFace);
 #		if defined(PBR_GRASS)
 	[branch] if (SharedData::truePBRSettings.Enabled &&
@@ -762,23 +818,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 
-	float x;
-	float y;
-	TexBaseSampler.GetDimensions(x, y);
-
-	float3 complexTest = TexBaseSampler.Load(int3(0, int(y) - 1, 0)).xyz * 2.0 - 1.0;
-	float complexLength = length(complexTest);
-	bool complex = abs(complexLength - 1.0) < SharedData::grassLightingSettings.ComplexGrassThreshold;
-#		if defined(PBR_GRASS)
-	complex = complex && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::PBRGrass);
-#		endif
-
-	float4 baseColor;
-	if (complex) {
-		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, float2(input.TexCoord.x, input.TexCoord.y * 0.5), SharedData::MipBias);
-	} else {
-		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias);
-	}
+	bool complex;
+	float4 baseColor = SampleGrassLightingBaseColor(input.TexCoord.xy, complex);
 
 	baseColor.xyz = Color::Diffuse(baseColor.xyz);
 

@@ -5,7 +5,7 @@
 
 cbuffer GrassBatch : register(b9)
 {
-	uint GrassBatchEnabled;
+	uint GrassBatchEnabled;  // Bit 0 selects batch records; bit 1 selects far-billboard lighting.
 	uint GrassBatchEye;
 	uint GrassBatchBase;
 	float GrassBatchCollisionDistance;
@@ -34,9 +34,10 @@ float GetGrassBatchFade(uint instanceId)
 	return abs(GrassInstanceExtras[GrassBatchBase + instanceId].originFade.w);
 }
 
-bool GetGrassBatchSimpleShading(uint instanceId)
+float GetGrassBatchShading(uint instanceId)
 {
-	return GrassBatchEnabled && GrassInstanceExtras[GrassBatchBase + instanceId].originFade.w < 0;
+	// Negative values select cheaper shading; -2 is reserved for far billboards.
+	return (GrassBatchEnabled & 2u) ? -2 : (GrassInstanceExtras[GrassBatchBase + instanceId].originFade.w < 0 ? -1 : 0);
 }
 
 float3 GetGrassBatchOffset(uint instanceId)

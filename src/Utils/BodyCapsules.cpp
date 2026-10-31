@@ -3,6 +3,7 @@
 #include "Globals.h"
 #include "State.h"
 #include "Utils/ActorUtils.h"
+#include "Utils/Finite.h"
 #include "Utils/Game.h"
 #include "Utils/HiggsInterface.h"
 #include "Utils/SkinnedMesh.h"
@@ -36,14 +37,17 @@ namespace Util::BodyCapsules
 		constexpr size_t IndexFinger = 1;
 		constexpr size_t PinkyFinger = 4;
 		constexpr float MaxMovePerFrame = 8.0f;
-		constexpr uint64_t AppendageKeyBase = 0x100000000ull;
+		constexpr uint64_t AppendageKeyBase = 0x80000000ull;
+		constexpr size_t MaxFitMeshes = 16;
+		constexpr size_t MaxFitSamplesPerMesh = 4096;
+		constexpr float TeleportDistance = 300.0f;
 		constexpr size_t RightHandKeyOffset = 64;
 		constexpr size_t HeldKeyOffset = 128;
 		constexpr size_t MaxPartsPerHeld = 4;
 
 		uint64_t MakeKey(RE::FormID a_owner, size_t a_index)
 		{
-			return (static_cast<uint64_t>(a_owner) << 8) ^ static_cast<uint64_t>(a_index);
+			return (static_cast<uint64_t>(a_owner) << 32) | static_cast<uint64_t>(a_index);
 		}
 
 		/** @brief Skeleton node name of a hand (index 0) or of one finger joint (index 1 to 15). */
@@ -100,19 +104,28 @@ namespace Util::BodyCapsules
 		size_t meshes = 0;
 
 		std::vector<Util::SkinnedVertex> vertices;
+		size_t sampledMeshes = 0;
 		Util::ForEachActorGeometry(a_player, [&](RE::BSGeometry* a_geometry) {
-			if (!Util::ReadSkinnedVertices(a_geometry, vertices))
-				return;
 			const auto* skin = a_geometry->GetGeometryRuntimeData().skinInstance.get();
+			if (sampledMeshes >= MaxFitMeshes || !Util::HasUsableSkin(skin))
+				return;
 
+			bool hasHandBone = false;
 			std::vector<std::optional<size_t>> handSlotOfBone(skin->numMatrices);
 			for (uint32_t bone = 0; bone < skin->numMatrices; ++bone) {
 				const RE::NiAVObject* boneNode = skin->bones[bone];
 				if (!boneNode || !boneNode->name.c_str())
 					continue;
-				if (const auto found = slotOfName.find(boneNode->name.c_str()); found != slotOfName.end())
+				if (const auto found = slotOfName.find(boneNode->name.c_str()); found != slotOfName.end()) {
 					handSlotOfBone[bone] = found->second;
+					hasHandBone = true;
+				}
 			}
+			if (!hasHandBone)
+				return;
+			++sampledMeshes;
+			if (!Util::ReadSkinnedVertices(a_geometry, vertices, MaxFitSamplesPerMesh))
+				return;
 
 			std::array<std::vector<float>, 2 * HandNodeCount> distances;
 			std::array<std::vector<float>, 2 * HandNodeCount> alongAxis;
@@ -130,6 +143,8 @@ namespace Util::BodyCapsules
 
 				const RE::NiTransform skinToBone = skin->skinData->GetBoneDataSkinToBone(skinBone);
 				const float3 point = ToFloat3(skinToBone * vertex.position);
+				if (!std::isfinite(point.LengthSquared()) || !std::isfinite(end->LengthSquared()))
+					continue;
 				const bool distal = handSlot % HandNodeCount != 0 && (handSlot % HandNodeCount - 1) % JointsPerFinger == JointsPerFinger - 1;
 				const float along = point.Dot(*end) / std::max(end->LengthSquared(), 1e-4f);
 				const float t = distal ? std::max(along, 0.0f) : std::clamp(along, 0.0f, 1.0f);
@@ -178,7 +193,7 @@ namespace Util::BodyCapsules
 		logger::info("[Fur Shells] Fitted hand capsule radii from {} meshes: fingers {:.2f}, palm {:.2f}", meshes, GetAverageFingerRadius(), GetAveragePalmRadius());
 	}
 
-	void Tracker::Push(Capsule a_capsule, size_t a_index)
+	void Tracker::Push(Capsule a_capsule, size_t a_index, const void* a_source)
 	{
 		if (!std::isfinite(a_capsule.radius) || a_capsule.radius <= 0.0f ||
 			!std::isfinite(a_capsule.pointA.LengthSquared()) || !std::isfinite(a_capsule.pointB.LengthSquared()))
@@ -186,14 +201,13 @@ namespace Util::BodyCapsules
 		const float3 center = (a_capsule.pointA + a_capsule.pointB) * 0.5f;
 		const uint64_t key = MakeKey(a_capsule.owner, a_index) + (a_capsule.appendage ? AppendageKeyBase : 0);
 		a_capsule.move = float3{};
-		if (const auto previous = previousCenters.find(key); previous != previousCenters.end()) {
-			float3 move = center - previous->second;
+		if (const auto previous = previousCenters.find(key); previous != previousCenters.end() && previous->second.source == a_source) {
+			const float3 move = center - previous->second.center;
 			const float length = move.Length();
-			if (length > MaxMovePerFrame)
-				move *= MaxMovePerFrame / length;
-			a_capsule.move = move;
+			if (std::isfinite(length) && length <= TeleportDistance)
+				a_capsule.move = move * (std::min(length, MaxMovePerFrame) / std::max(length, 1e-4f));
 		}
-		currentCenters[key] = center;
+		currentCenters[key] = { center, a_source };
 		capsules.push_back(a_capsule);
 	}
 
@@ -204,31 +218,36 @@ namespace Util::BodyCapsules
 			return;
 
 		const float distance = a_camera.GetDistance(a_actor->GetPosition());
-		std::vector<Util::ShapeCollisionCapsule> shapes;
+		struct Shape
+		{
+			Util::ShapeCollisionCapsule capsule;
+			const RE::bhkNiCollisionObject* source;
+		};
+		std::vector<Shape> shapes;
 		RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 			Util::ShapeCollisionCapsule capsule;
 			if (Util::GetShapeCollisionCapsule(a_object, capsule) && capsule.radius >= MinActorCapsuleRadius &&
 				capsule.radius >= distance * MinRadiusPerDistance) {
-				shapes.push_back(capsule);
+				shapes.push_back({ capsule, a_object });
 				if (shapes.size() > MaxCapsulesPerActor) {
-					const auto smallest = std::ranges::min_element(shapes, {}, &Util::ShapeCollisionCapsule::radius);
+					const auto smallest = std::ranges::min_element(shapes, {}, [](const Shape& shape) { return shape.capsule.radius; });
 					shapes.erase(smallest);
 				}
 			}
 			return RE::BSVisit::BSVisitControl::kContinue;
 		});
 
-		std::ranges::sort(shapes, [](const auto& a, const auto& b) { return a.radius > b.radius; });
+		std::ranges::sort(shapes, [](const auto& a, const auto& b) { return a.capsule.radius > b.capsule.radius; });
 		if (shapes.size() > MaxCapsulesPerActor)
 			shapes.resize(MaxCapsulesPerActor);
 
 		for (size_t index = 0; index < shapes.size(); ++index) {
 			Capsule capsule;
-			capsule.pointA = ToFloat3(shapes[index].pointA);
-			capsule.pointB = ToFloat3(shapes[index].pointB);
-			capsule.radius = shapes[index].radius;
+			capsule.pointA = ToFloat3(shapes[index].capsule.pointA);
+			capsule.pointB = ToFloat3(shapes[index].capsule.pointB);
+			capsule.radius = shapes[index].capsule.radius;
 			capsule.owner = a_actor->GetFormID();
-			Push(capsule, index);
+			Push(capsule, index, shapes[index].source);
 		}
 	}
 
@@ -243,6 +262,7 @@ namespace Util::BodyCapsules
 		handNodeRoot = root;
 		handNodesFound = 0;
 		fitSignature = 0;
+		handRadii = {};
 		RE::NiNode* rootNode = root ? root->AsNode() : nullptr;
 		for (size_t side = 0; side < handNodes.size(); ++side) {
 			for (size_t index = 0; index < HandNodeCount; ++index) {
@@ -270,16 +290,17 @@ namespace Util::BodyCapsules
 		};
 
 		const RE::FormID owner = a_player->GetFormID();
-		size_t index = a_left ? 0 : RightHandKeyOffset;
-		const auto add = [&](const float3& a_a, const float3& a_b, float a_radius) {
+		const size_t handOffset = a_left ? 0 : RightHandKeyOffset;
+		const float handScale = nodes[0] ? Util::ClampFinite(std::abs(nodes[0]->world.scale), 0.1f, 10.0f, 1.0f) : 1.0f;
+		const auto add = [&](size_t a_index, const float3& a_a, const float3& a_b, float a_radius) {
 			Capsule capsule;
 			capsule.pointA = a_a;
 			capsule.pointB = a_b;
-			capsule.radius = a_radius;
+			capsule.radius = a_radius * handScale;
 			capsule.owner = owner;
 			capsule.appendage = true;
 			capsule.side = a_left ? 0 : 1;
-			Push(capsule, index++);
+			Push(capsule, handOffset + a_index, handNodeRoot);
 		};
 
 		std::array<float3, FingerCount> knuckles{};
@@ -292,22 +313,22 @@ namespace Util::BodyCapsules
 			if (!complete)
 				continue;
 			const auto& radii = handRadii[a_left ? 0 : 1].finger;
-			add(joints[0], joints[1], radii[finger * JointsPerFinger]);
-			add(joints[1], joints[2], radii[finger * JointsPerFinger + 1]);
+			add(finger * JointsPerFinger, joints[0], joints[1], radii[finger * JointsPerFinger]);
+			add(finger * JointsPerFinger + 1, joints[1], joints[2], radii[finger * JointsPerFinger + 1]);
 			const float tipRadius = radii[finger * JointsPerFinger + 2];
 			const float3 distalAxis = joints[2] - joints[1];
 			const float tipExtent = handRadii[a_left ? 0 : 1].tipExtent[finger];
-			const float3 tip = tipExtent > 0.0f ? joints[2] + distalAxis * (std::max(tipExtent - tipRadius, 0.0f) / std::max(distalAxis.Length(), 1e-4f)) : joints[2] + distalAxis * FingertipLengthScale;
-			add(joints[2], tip, tipRadius);
+			const float3 tip = tipExtent > 0.0f ? joints[2] + distalAxis * (std::max(tipExtent - tipRadius, 0.0f) * handScale / std::max(distalAxis.Length(), 1e-4f)) : joints[2] + distalAxis * FingertipLengthScale;
+			add(finger * JointsPerFinger + 2, joints[2], tip, tipRadius);
 			knuckles[finger] = joints[0];
 			hasKnuckle[finger] = true;
 		}
 
 		float3 hand;
 		if (hasKnuckle[IndexFinger] && hasKnuckle[PinkyFinger]) {
-			add(knuckles[IndexFinger], knuckles[PinkyFinger], handRadii[a_left ? 0 : 1].finger[IndexFinger * JointsPerFinger]);
+			add(FingerCount * JointsPerFinger, knuckles[IndexFinger], knuckles[PinkyFinger], handRadii[a_left ? 0 : 1].finger[IndexFinger * JointsPerFinger]);
 			if (position(0, hand))
-				add(hand, (knuckles[IndexFinger] + knuckles[PinkyFinger]) * 0.5f, handRadii[a_left ? 0 : 1].palm);
+				add(FingerCount * JointsPerFinger + 1, hand, (knuckles[IndexFinger] + knuckles[PinkyFinger]) * 0.5f, handRadii[a_left ? 0 : 1].palm);
 		}
 	}
 
@@ -329,7 +350,7 @@ namespace Util::BodyCapsules
 					capsule.owner = a_player->GetFormID();
 					capsule.appendage = true;
 					capsule.side = side;
-					Push(capsule, HeldKeyOffset + (slot * MaxPartsPerHeld + part) * 2 + static_cast<size_t>(side));
+					Push(capsule, HeldKeyOffset + (slot * MaxPartsPerHeld + part) * 2 + static_cast<size_t>(side), object);
 				}
 			};
 			const auto* equipped = a_player->GetEquippedObject(left);
@@ -340,7 +361,7 @@ namespace Util::BodyCapsules
 				add(higgs->GetWeaponRigidBody(left), 0);
 			if (higgs->IsHoldingObject(left))
 				add(higgs->GetGrabbedRigidBody(left), 1);
-			if (handNodesFound == 0)
+			if (!handNodes[side].nodes[0])
 				add(higgs->GetHandRigidBody(left), 2);
 		}
 	}

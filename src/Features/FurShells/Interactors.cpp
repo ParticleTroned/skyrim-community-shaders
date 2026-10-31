@@ -71,7 +71,7 @@ namespace FurInteractors
 		a_memory.samples.clear();
 		a_memory.bones.clear();
 		std::vector<Util::SkinnedVertex> vertices;
-		if (!Util::ReadSkinnedVertices(const_cast<RE::BSGeometry*>(a_geometry), vertices))
+		if (!Util::ReadSkinnedVertices(const_cast<RE::BSGeometry*>(a_geometry), vertices, MaxPressSamples))
 			return;
 
 		const auto* skin = a_geometry->GetGeometryRuntimeData().skinInstance.get();
@@ -82,14 +82,14 @@ namespace FurInteractors
 			boneSides[bone] = Util::BodyCapsules::HandBoneSide(name);
 		}
 
-		const size_t stride = std::max<size_t>(1, (vertices.size() + MaxPressSamples - 1) / MaxPressSamples);
-		for (size_t index = 0; index < vertices.size(); index += stride) {
-			const Util::SkinnedVertex& vertex = vertices[index];
+		for (const Util::SkinnedVertex& vertex : vertices) {
 			const auto dominant = Util::DominantBone(vertex);
 			if (!dominant || !a_memory.bones[*dominant])
 				continue;
 			const uint16_t bone = *dominant;
-			a_memory.samples.push_back({ bone, boneSides[bone], skin->skinData->GetBoneDataSkinToBone(bone) * vertex.position });
+			const auto local = skin->skinData->GetBoneDataSkinToBone(bone) * vertex.position;
+			if (std::isfinite(local.SqrLength()))
+				a_memory.samples.push_back({ bone, boneSides[bone], local });
 		}
 	}
 
@@ -102,10 +102,12 @@ namespace FurInteractors
 		MeshMemory& mesh = memory[a_geometry];
 		mesh.usedFrame = frame;
 		const auto* skin = static_cast<const RE::NiSkinInstance*>(a_skin);
-		if (mesh.skin != a_skin || mesh.root != skin->rootParent ||
+		if (mesh.skin != a_skin || mesh.partition != skin->skinPartition.get() || mesh.root != skin->rootParent ||
+			(!mesh.bones.empty() && mesh.bones.size() != skin->numMatrices) ||
 			mesh.center.GetDistance(a_geometry->worldBound.center) > 300.0f ||
 			(!mesh.bones.empty() && mesh.bones.front().get() != skin->bones[0])) {
 			mesh.skin = a_skin;
+			mesh.partition = skin->skinPartition.get();
 			mesh.root = skin->rootParent;
 			mesh.dents.clear();
 			mesh.measuredFrame = UINT32_MAX;
@@ -115,13 +117,16 @@ namespace FurInteractors
 		return mesh;
 	}
 
-	size_t Memory::Nearest(const RE::BSGeometry* a_geometry, std::span<const Capsule> a_candidates, std::span<Capsule> a_out)
+	size_t Memory::Nearest(const RE::BSGeometry* a_geometry, RE::FormID a_wearer, std::span<const Capsule> a_candidates, std::span<Capsule> a_out)
 	{
 #ifdef TRACY_SUPPORT
 		ZoneScopedN("FurShells::Nearest");
 #endif
 		const auto* skin = a_geometry->GetGeometryRuntimeData().skinInstance.get();
-		if (!Util::HasUsableSkin(skin)) {
+		if (a_out.empty())
+			return 0;
+		a_candidates = a_candidates.first(std::min(a_candidates.size(), Util::BodyCapsules::MaxSelectedCapsules));
+		if (a_candidates.size() <= a_out.size() || !Util::HasUsableSkin(skin)) {
 			const size_t keep = std::min(a_out.size(), a_candidates.size());
 			std::copy_n(a_candidates.begin(), keep, a_out.begin());
 			return keep;
@@ -129,27 +134,28 @@ namespace FurInteractors
 
 		MeshMemory& mesh = Prepare(a_geometry, skin);
 		const size_t keep = std::min(a_out.size(), a_candidates.size());
-		if (a_candidates.size() <= a_out.size() || mesh.samples.empty()) {
+		if (mesh.samples.empty()) {
 			std::copy_n(a_candidates.begin(), keep, a_out.begin());
 			return keep;
 		}
 
-		std::vector<float3> positions;
-		positions.reserve(mesh.samples.size());
-		for (const PressSample& sample : mesh.samples)
-			positions.push_back(Util::ToFloat3(mesh.bones[sample.bone]->world * sample.local));
+		std::array<float3, MaxPressSamples> positions{};
+		for (size_t index = 0; index < mesh.samples.size(); ++index) {
+			const auto& sample = mesh.samples[index];
+			positions[index] = Util::ToFloat3(mesh.bones[sample.bone]->world * sample.local);
+		}
 
-		std::vector<std::pair<float, size_t>> gaps;
-		gaps.reserve(a_candidates.size());
+		std::array<std::pair<float, size_t>, Util::BodyCapsules::MaxSelectedCapsules> storage;
+		auto gaps = std::span(storage).first(a_candidates.size());
 		for (size_t index = 0; index < a_candidates.size(); ++index) {
 			const Capsule& capsule = a_candidates[index];
 			float nearest = FLT_MAX;
-			for (size_t sample = 0; sample < positions.size(); ++sample) {
-				if (capsule.side >= 0 && mesh.samples[sample].side == capsule.side)
+			for (size_t sample = 0; sample < mesh.samples.size(); ++sample) {
+				if (a_wearer != 0 && capsule.owner == a_wearer && capsule.side >= 0 && mesh.samples[sample].side == capsule.side)
 					continue;
 				nearest = std::min(nearest, (positions[sample] - capsule.ClosestPointOnAxis(positions[sample])).LengthSquared());
 			}
-			gaps.emplace_back(std::sqrt(nearest) - capsule.radius, index);
+			gaps[index] = { std::sqrt(nearest) - capsule.radius, index };
 		}
 		std::ranges::partial_sort(gaps, gaps.begin() + static_cast<std::ptrdiff_t>(keep));
 		for (size_t index = 0; index < keep; ++index)
@@ -157,13 +163,21 @@ namespace FurInteractors
 		return keep;
 	}
 
-	size_t Memory::Remember(const RE::BSGeometry* a_geometry, float a_furLength, size_t a_count, std::array<Capsule, MaxCapsulesPerPass>& a_capsules)
+	size_t Memory::Remember(const RE::BSGeometry* a_geometry, RE::FormID a_wearer, float a_furLength, size_t a_count, std::array<Capsule, MaxCapsulesPerPass>& a_capsules)
 	{
 #ifdef TRACY_SUPPORT
 		ZoneScopedN("FurShells::Remember");
 #endif
 		const auto* skin = a_geometry->GetGeometryRuntimeData().skinInstance.get();
-		if (!Util::HasUsableSkin(skin) || a_furLength <= 0.0f)
+		a_count = std::min(a_count, a_capsules.size());
+		if (!Util::HasUsableSkin(skin) || !std::isfinite(a_furLength) || a_furLength <= 0.0f)
+			return a_count;
+		const auto live = std::span(a_capsules).first(a_count);
+		const bool canDent = std::ranges::any_of(live, [](const Capsule& capsule) {
+			return capsule.appendage && capsule.radius <= MaxDentRadius;
+		});
+		const auto existing = memory.find(a_geometry);
+		if (!canDent && (existing == memory.end() || existing->second.dents.empty()))
 			return a_count;
 
 		MeshMemory& mesh = Prepare(a_geometry, skin);
@@ -179,7 +193,7 @@ namespace FurInteractors
 				const PressSample* nearestSample = nullptr;
 				float3 pressPoint;
 				for (const PressSample& sample : mesh.samples) {
-					if (capsule.side >= 0 && sample.side == capsule.side)
+					if (a_wearer != 0 && capsule.owner == a_wearer && capsule.side >= 0 && sample.side == capsule.side)
 						continue;
 					const float3 position = Util::ToFloat3(mesh.bones[sample.bone]->world * sample.local);
 					const float3 closest = capsule.ClosestPointOnAxis(position);
@@ -196,11 +210,17 @@ namespace FurInteractors
 					continue;
 
 				const RE::NiAVObject* bone = mesh.bones[nearestSample->bone].get();
+				const float scale = std::abs(bone->world.scale);
+				if (!std::isfinite(scale) || scale < 1e-4f)
+					continue;
 				const RE::NiPoint3 local = bone->world.Invert() * RE::NiPoint3{ pressPoint.x, pressPoint.y, pressPoint.z };
+				if (!std::isfinite(local.SqrLength()))
+					continue;
+				const float localRadius = capsule.radius / scale;
 				const float recover = DentRecoverBase + DentRecoverPerDepth * press;
 				Dent* dent = nullptr;
 				for (Dent& existing : mesh.dents) {
-					if (existing.bone.get() == bone && existing.local.GetDistance(local) < std::max(capsule.radius, 0.5f * existing.radius))
+					if (existing.bone.get() == bone && existing.local.GetDistance(local) < std::max(localRadius, 0.5f * existing.radius))
 						dent = &existing;
 				}
 				if (!dent && mesh.dents.size() < MaxDentsPerMesh)
@@ -213,7 +233,7 @@ namespace FurInteractors
 				}
 				dent->bone.reset(const_cast<RE::NiAVObject*>(bone));
 				dent->local = local;
-				dent->radius = capsule.radius;
+				dent->radius = localRadius;
 				dent->depth = press;
 				dent->recoverSeconds = std::max(dent->recoverSeconds, recover);
 				dent->refreshedFrame = frame;
@@ -225,9 +245,12 @@ namespace FurInteractors
 			if (dent.refreshedFrame == frame || count >= MaxCapsulesPerPass)
 				continue;
 			const RE::NiPoint3 position = dent.bone->world * dent.local;
+			const float radius = dent.radius * std::abs(dent.bone->world.scale);
+			if (!std::isfinite(position.SqrLength()) || !std::isfinite(radius) || radius <= 0.0f)
+				continue;
 			Capsule ghost;
 			ghost.pointA = ghost.pointB = Util::ToFloat3(position);
-			ghost.radius = dent.radius;
+			ghost.radius = radius;
 			ghost.strength = std::clamp(dent.depth, 0.0f, 1.0f);
 			ghost.remembered = true;
 			a_capsules[count++] = ghost;

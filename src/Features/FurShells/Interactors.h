@@ -34,23 +34,25 @@ namespace FurInteractors
 		/**
 		 * @brief Records how deeply the live capsules press into a mesh's fur, and appends its recovering dents as fading capsules.
 		 * @param a_geometry The fur mesh.
+		 * @param a_wearer Owner of the fur mesh, or zero when unknown.
 		 * @param a_furLength The fur's current length.
 		 * @param a_count How many live capsules a_capsules holds.
 		 * @param a_capsules The live capsules, which receive the dents after them.
 		 * @return The new total, live capsules plus dents.
 		 */
-		size_t Remember(const RE::BSGeometry* a_geometry, float a_furLength, size_t a_count, std::array<Capsule, MaxCapsulesPerPass>& a_capsules);
+		size_t Remember(const RE::BSGeometry* a_geometry, RE::FormID a_wearer, float a_furLength, size_t a_count, std::array<Capsule, MaxCapsulesPerPass>& a_capsules);
 
 		/**
 		 * @brief Keeps the capsules nearest a fur mesh's surface, so a fingertip is not dropped for a palm capsule that is nearer the mesh centre.
 		 * @details Distance is measured to the skinned mesh vertices. A hand and finger capsule ignores the vertices driven by that same hand's bones, such as its own
 		 *          gauntlet, which the hand fills and would otherwise take every slot. A mesh without skin data keeps the first capsules in the order given.
 		 * @param a_geometry The fur mesh.
+		 * @param a_wearer Owner of the fur mesh, or zero when unknown.
 		 * @param a_candidates Capsules within reach of the mesh.
 		 * @param a_out Receives up to its size of the nearest candidates.
 		 * @return How many entries of a_out were filled.
 		 */
-		size_t Nearest(const RE::BSGeometry* a_geometry, std::span<const Capsule> a_candidates, std::span<Capsule> a_out);
+		size_t Nearest(const RE::BSGeometry* a_geometry, RE::FormID a_wearer, std::span<const Capsule> a_candidates, std::span<Capsule> a_out);
 
 		/** @brief How many dents all meshes are remembering. */
 		[[nodiscard]] size_t GetDentCount() const;
@@ -60,8 +62,8 @@ namespace FurInteractors
 		struct Dent
 		{
 			RE::NiPointer<RE::NiAVObject> bone;
-			RE::NiPoint3 local;  ///< Press point in the bone's space.
-			float radius = 0.0f;
+			RE::NiPoint3 local;           ///< Press point in the bone's space.
+			float radius = 0.0f;          ///< Radius in bone-local units, transformed with the press point.
 			float depth = 0.0f;           ///< Press depth, 0 to 1, falling as the fur recovers.
 			float recoverSeconds = 0.0f;  ///< Time constant of the exponential recovery, longer after a deeper press.
 			uint32_t refreshedFrame = 0;
@@ -78,6 +80,7 @@ namespace FurInteractors
 		struct MeshMemory
 		{
 			const void* skin = nullptr;
+			const void* partition = nullptr;
 			const RE::NiAVObject* root = nullptr;
 			RE::NiPoint3 center{};
 			std::vector<RE::NiPointer<RE::NiAVObject>> bones;

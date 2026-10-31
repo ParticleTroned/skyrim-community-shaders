@@ -38,10 +38,11 @@ namespace Util
 	 *          `skin->skinData->GetBoneDataSkinToBone(vertex.bone[slot])`. Partitions without CPU vertex data, positions or
 	 *          skinning are skipped.
 	 * @param a_geometry Skinned geometry.
-	 * @param a_vertices Receives the vertices, replacing its contents.
+	 * @param a_vertices Receives evenly spaced samples, replacing its contents.
+	 * @param a_maxSamples Maximum vertices decoded, including rejected inputs (clamped to 4096).
 	 * @return False when the geometry has no usable CPU vertex data.
 	 */
-	[[nodiscard]] bool ReadSkinnedVertices(RE::BSGeometry* a_geometry, std::vector<SkinnedVertex>& a_vertices);
+	[[nodiscard]] bool ReadSkinnedVertices(RE::BSGeometry* a_geometry, std::vector<SkinnedVertex>& a_vertices, size_t a_maxSamples);
 
 	/** @brief The skin bone that carries most of a vertex, or nothing when it has no valid bone or none weighs at least MinDominantBoneWeight. */
 	[[nodiscard]] inline std::optional<uint16_t> DominantBone(const SkinnedVertex& a_vertex)

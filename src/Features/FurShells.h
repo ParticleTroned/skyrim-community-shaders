@@ -2,6 +2,7 @@
 
 #include "FurShells/InertiaSpring.h"
 #include "FurShells/Interactors.h"
+#include <array>
 #include <atomic>
 #include <cfloat>
 #include <optional>
@@ -96,7 +97,7 @@ struct FurShells : Feature
 	virtual void PostPostLoad() override;
 	virtual void Reset() override;
 	virtual void GenerateShaderPermutations(RE::BSShader* a_shader) override;
-	std::string_view GetShaderCacheAbiVersion() override { return "4"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "5"; }
 	bool SupportsPerformanceCostMeasurement() const override { return true; }
 	bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
 	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
@@ -187,14 +188,16 @@ private:
 		float TipWeight;
 		float Pad0 = 0.0f;
 		float Pad1 = 0.0f;
+		std::array<float, 4> PreviousShape{};
 		Dynamics Current{};
 		Dynamics Previous{};
 	};
 	static_assert(offsetof(PerPass, Density) == 32);
 	static_assert(offsetof(PerPass, TipWeight) == 36);
-	static_assert(offsetof(PerPass, Current) == 48);
-	static_assert(offsetof(PerPass, Previous) == 704);
-	static_assert(sizeof(PerPass) == 1360);
+	static_assert(offsetof(PerPass, PreviousShape) == 48);
+	static_assert(offsetof(PerPass, Current) == 64);
+	static_assert(offsetof(PerPass, Previous) == 720);
+	static_assert(sizeof(PerPass) == 1376);
 
 	struct DeferredPass
 	{
@@ -217,6 +220,8 @@ private:
 		RE::NiSourceTexturePtr shell;
 		ShellData* data = nullptr;
 		bool emptyOverlay = false;
+		bool retryLoad = false;
+		uint32_t resolvedFrame = 0;
 	};
 
 	struct ShellLookup
@@ -272,6 +277,7 @@ private:
 	void DrawInertiaSettings();
 	bool IsTouchActive() const { return settings.EnableTouch && (settings.TouchStrength > 0.0f || settings.ShowTouchEdges); }
 	void ClearDynamics();
+	void StartAssetScan();
 
 	ShellLookup FindShell(RE::BSRenderPass* a_pass);
 	const FrameBody* FindFrameBody(RE::BSGeometry* a_geometry) const;
@@ -320,7 +326,12 @@ private:
 	{
 		Dynamics current{};
 		Dynamics previous{};
+		std::array<float, 4> shape{};
+		std::array<float, 4> previousShape{};
 		const void* skin = nullptr;
+		const void* partition = nullptr;
+		const RE::NiAVObject* root = nullptr;
+		RE::NiPoint3 center{};
 		uint32_t frame = 0;
 	};
 	struct InertiaState
@@ -328,6 +339,7 @@ private:
 		FurInertia::Spring spring;
 		uint32_t frame = 0;
 		const void* skin = nullptr;
+		const RE::NiAVObject* root = nullptr;
 	};
 	std::unordered_map<const RE::BSGeometry*, DynamicsState> dynamicsStates;
 	std::unordered_map<const RE::BSGeometry*, InertiaState> inertiaStates;
@@ -343,6 +355,7 @@ private:
 	float lastWindSpeed = 0.0f;
 	std::atomic<bool> shellAssetsPresent{ true };
 	std::jthread shellAssetScan;
+	bool shellAssetScanStarted = false;
 
 	eastl::unique_ptr<ConstantBuffer> perPassCB;
 	winrt::com_ptr<ID3D11BlendState> noColorWrite;

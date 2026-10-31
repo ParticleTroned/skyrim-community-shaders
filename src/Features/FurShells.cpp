@@ -88,6 +88,7 @@ namespace
 	constexpr uint32_t VertexPerPassSlot = 7;
 	constexpr uint32_t PixelPerPassSlot = 10;
 	constexpr uint32_t ResolvesPerFrame = 16;
+	constexpr uint32_t TextureRetryFrames = 120;
 	constexpr size_t MaxEntries = 8192;
 	constexpr size_t MaxMissingShells = 65536;
 	constexpr uint32_t MaxOverrideSize = 65536;
@@ -180,18 +181,63 @@ namespace
 		return a_shellPath.substr(0, a_shellPath.size() - 4) + ".json";
 	}
 
+	struct SettingRange
+	{
+		std::string_view name;
+		double minimum;
+		double maximum;
+	};
+
+	constexpr SettingRange SettingRanges[]{
+		{ "ShellCount", 1, MaxShells },
+		{ "Length", 0.05, 6 },
+		{ "BodyLength", 0.05, 3 },
+		{ "Droop", 0, 2 },
+		{ "RootThreshold", 0, 1 },
+		{ "TipThreshold", 0, 1 },
+		{ "RootDarkening", 0, 1 },
+		{ "ShellColor", 0, 1 },
+		{ "FadeStart", 0, 8000 },
+		{ "FadeEnd", 0, 8000 },
+		{ "MinFurPixels", 0, MaxMinFurPixels },
+		{ "WindStrength", 0, 2 },
+		{ "WetStrength", 0, 1 },
+		{ "TouchStrength", 0, 2 },
+		{ "ContactLimit", 1, FurInteractors::MaxLiveCapsulesPerPass },
+		{ "ContactRange", 100, 1600 },
+		{ "InertiaStrength", 0, FurInertia::MaxStrength },
+		{ "InertiaPreset", 0, 2 },
+		{ "InertiaFrequency", FurInertia::MinFrequencyHz, FurInertia::MaxTuningFrequencyHz },
+		{ "InertiaGain", 0.1, FurInertia::MaxGain },
+		{ "InertiaLengthExponent", 0, FurInertia::MaxLengthExponent },
+		{ "InertiaDroopExponent", 0, FurInertia::MaxDroopExponent },
+		{ "InertiaMaxBend", 0.05, FurInertia::MaxBendLimit },
+	};
+
+	const SettingRange& GetSettingRange(std::string_view a_name)
+	{
+		const auto found = std::ranges::find(SettingRanges, a_name, &SettingRange::name);
+		if (found == std::end(SettingRanges))
+			throw std::logic_error("Missing fur range: " + std::string(a_name));
+		return *found;
+	}
+
 	void ClampOverride(FurShells::ShellOverride& a_values)
 	{
 		const FurShells::ShellOverride defaults;
+		const auto clamp = [](std::string_view name, float value, float fallback) {
+			const auto& range = GetSettingRange(name);
+			return Util::ClampFinite(value, static_cast<float>(range.minimum), static_cast<float>(range.maximum), fallback);
+		};
 		a_values.ShellCount = std::clamp(a_values.ShellCount, 1u, MaxShells);
-		a_values.Length = Util::ClampFinite(a_values.Length, 0.05f, 6.0f, defaults.Length);
-		a_values.Droop = Util::ClampFinite(a_values.Droop, 0.0f, 2.0f, defaults.Droop);
-		a_values.RootThreshold = Util::ClampFinite(a_values.RootThreshold, 0.0f, 1.0f, defaults.RootThreshold);
-		a_values.TipThreshold = Util::ClampFinite(a_values.TipThreshold, 0.0f, 1.0f, defaults.TipThreshold);
-		a_values.RootDarkening = Util::ClampFinite(a_values.RootDarkening, 0.0f, 1.0f, defaults.RootDarkening);
-		a_values.ShellColor = Util::ClampFinite(a_values.ShellColor, 0.0f, 1.0f, defaults.ShellColor);
-		a_values.FadeEnd = Util::ClampFinite(a_values.FadeEnd, 0.0f, 8000.0f, defaults.FadeEnd);
-		a_values.FadeStart = Util::ClampFinite(a_values.FadeStart, 0.0f, a_values.FadeEnd, std::min(defaults.FadeStart, a_values.FadeEnd));
+		a_values.Length = clamp("Length", a_values.Length, defaults.Length);
+		a_values.Droop = clamp("Droop", a_values.Droop, defaults.Droop);
+		a_values.RootThreshold = clamp("RootThreshold", a_values.RootThreshold, defaults.RootThreshold);
+		a_values.TipThreshold = clamp("TipThreshold", a_values.TipThreshold, defaults.TipThreshold);
+		a_values.RootDarkening = clamp("RootDarkening", a_values.RootDarkening, defaults.RootDarkening);
+		a_values.ShellColor = clamp("ShellColor", a_values.ShellColor, defaults.ShellColor);
+		a_values.FadeEnd = clamp("FadeEnd", a_values.FadeEnd, defaults.FadeEnd);
+		a_values.FadeStart = std::min(clamp("FadeStart", a_values.FadeStart, defaults.FadeStart), a_values.FadeEnd);
 	}
 
 	void ValidateSettingsObject(const json& a_values, bool a_global)
@@ -205,33 +251,11 @@ namespace
 			if (defaults.at(name).is_boolean()) {
 				if (!value.is_boolean())
 					throw std::invalid_argument(name + " must be boolean");
-			} else if (name == "InertiaPreset" || name == "ContactLimit") {
-				const int minimum = name == "ContactLimit" ? 1 : 0;
-				const int maximum = name == "ContactLimit" ? 8 : 2;
-				if (!value.is_number_integer() || value.get<double>() < minimum || value.get<double>() > maximum)
-					throw std::invalid_argument(name + " is outside its integer range");
-			} else if (name == "ShellCount") {
-				if (!value.is_number_integer() || value.get<double>() < 1 || value.get<double>() > MaxShells)
-					throw std::invalid_argument("ShellCount must be an integer from 1 to 32");
 			} else {
-				const double maximum = name == "ContactRange" ? 1600.0 : name == "InertiaFrequency"                                                                               ? 100.0 :
-				                                                     name == "InertiaGain"                                                                                        ? 4.0 :
-				                                                     name == "InertiaLengthExponent"                                                                              ? 2.5 :
-				                                                     name == "InertiaDroopExponent"                                                                               ? 1.5 :
-				                                                     (name == "WindStrength" || name == "TouchStrength" || name == "InertiaStrength" || name == "InertiaMaxBend") ? 2.0 :
-				                                                     name == "Length"                                                                                             ? 6.0 :
-				                                                     name == "BodyLength"                                                                                         ? 3.0 :
-				                                                     name == "Droop"                                                                                              ? 2.0 :
-				                                                     name == "MinFurPixels"                                                                                       ? MaxMinFurPixels :
-				                                                     name.starts_with("Fade")                                                                                     ? 8000.0 :
-				                                                                                                                                                                    1.0;
-				const double minimum = name == "ContactRange" ? 100.0 : name == "InertiaFrequency"           ? 0.5 :
-				                                                    name == "InertiaGain"                    ? 0.1 :
-				                                                    name == "InertiaMaxBend"                 ? 0.05 :
-				                                                    name == "Length" || name == "BodyLength" ? 0.05 :
-				                                                                                               0.0;
-				if (!value.is_number() || !std::isfinite(value.get<double>()) || value.get<double>() < minimum || value.get<double>() > maximum)
-					throw std::invalid_argument(name + " is outside its finite range");
+				const auto& range = GetSettingRange(name);
+				if (!value.is_number() || (defaults.at(name).is_number_integer() && !value.is_number_integer()) ||
+					!std::isfinite(value.get<double>()) || value.get<double>() < range.minimum || value.get<double>() > range.maximum)
+					throw std::invalid_argument(name + " is outside its finite range or has the wrong numeric type");
 			}
 		}
 	}
@@ -257,7 +281,7 @@ namespace
 			candidates[1] = "textures\\" + stem.substr(pbrPrefix.size()) + "_shell.dds";
 
 		for (const auto& candidate : candidates) {
-			if (candidate.empty() || !RE::BSResourceNiBinaryStream(candidate).good())
+			if (!IsSafeTexturePath(candidate) || !RE::BSResourceNiBinaryStream(candidate).good())
 				continue;
 			a_exists = true;
 
@@ -303,7 +327,7 @@ void FurShells::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "Layers drawn up close. Each one is another lighting pass over the fur.");
 
-	ImGui::SliderFloat("Length", &settings.Length, 0.1f, 6.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat("Length", &settings.Length, 0.05f, 6.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "Fur length in game units.");
 
@@ -575,8 +599,7 @@ void FurShells::Reset()
 	maxInertia = windSpeed = 0.0f;
 	maxTouchPerPass = 0;
 	touchNearestGap = FLT_MAX;
-	if (!settings.Enabled || globals::state->IsMainOrLoadingMenuOpen() ||
-		(globals::game::deltaTime && *globals::game::deltaTime <= 0.0f)) {
+	if (!settings.Enabled || globals::state->IsMainOrLoadingMenuOpen()) {
 		ClearDynamics();
 	} else {
 		std::erase_if(inertiaStates, [this](const auto& entry) { return !settings.EnableInertia || frameIndex - entry.second.frame > 120; });
@@ -662,9 +685,11 @@ FurShells::ShellLookup FurShells::FindShell(RE::BSRenderPass* a_pass)
 		return lastLookup;
 
 	auto it = entries.find(diffuse);
-	if (it == entries.end() || it->second.name != diffuse->name) {
+	if (it == entries.end() || it->second.name != diffuse->name ||
+		(it->second.retryLoad && frameIndex - it->second.resolvedFrame >= TextureRetryFrames)) {
 		RE::NiSourceTexturePtr shell;
 		ShellData* data = nullptr;
+		bool unavailable = false;
 		std::string previousPath;
 		const char* setPath = material->textureSet ? material->textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse) : nullptr;
 		for (const char* diffusePath : { diffuse->name.c_str(), setPath }) {
@@ -681,6 +706,7 @@ FurShells::ShellLookup FurShells::FindShell(RE::BSRenderPass* a_pass)
 			bool exists = false;
 			std::string shellPath;
 			shell = LoadShell(path, exists, shellPath);
+			unavailable |= exists && !shell;
 			if (shell) {
 				if (!shellTextures.contains(shellPath) && shellTextures.size() >= MaxEntries)
 					return {};
@@ -698,9 +724,10 @@ FurShells::ShellLookup FurShells::FindShell(RE::BSRenderPass* a_pass)
 		}
 
 		const bool emptyOverlay = Util::NormalizeTexturePath(diffuse->name.c_str()) == EmptyOverlayPath || (setPath && Util::NormalizeTexturePath(setPath) == EmptyOverlayPath);
+		const bool retryLoad = unavailable && !shell;
 		if (entries.size() >= MaxEntries)
 			entries.clear();
-		it = entries.insert_or_assign(diffuse, Entry{ diffuse->name, std::move(shell), data, emptyOverlay }).first;
+		it = entries.insert_or_assign(diffuse, Entry{ diffuse->name, std::move(shell), data, emptyOverlay, retryLoad, frameIndex }).first;
 	}
 
 	lastDiffuse = diffuse;
@@ -757,6 +784,7 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 		return;
 
 	auto* state = globals::state;
+	StartAssetScan();
 	if ((state->permutationData.ExtraShaderDescriptor & ReflectionsFlag) != 0 || !IsFurTechnique(state->currentPixelDescriptor))
 		return;
 
@@ -798,7 +826,8 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 	const auto distanceShells = static_cast<uint32_t>(std::lround(static_cast<float>(std::min(values.ShellCount, MaxShells)) * fade));
 	if (fade <= 0.0f || (settings.DistanceShellBudget && distanceShells == 0))
 		return;
-	const float pixels = GetFurPixels(values.Length, distance);
+	const float worldScale = skinInstance && skinInstance->rootParent ? skinInstance->rootParent->world.scale : geometry->world.scale;
+	const float pixels = GetFurPixels(FurInertia::GetWorldLength(values.Length, worldScale), distance);
 	const float density = (settings.DistanceShellBudget ? 1.0f : fade) * (settings.MinFurPixels > 0.0f ? std::clamp(pixels / settings.MinFurPixels, 0.0f, 1.0f) : 1.0f);
 	if (density <= 0.0f)
 		return;
@@ -845,20 +874,24 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 void FurShells::FillTouch(Dynamics& a_perPass, const RE::BSGeometry* a_geometry, float a_length)
 {
 	std::array<FurInteractors::Capsule, FurInteractors::MaxCapsulesPerPass> touches;
+	const auto wearer = GetWearer(a_geometry);
+	const auto* skin = a_geometry->GetGeometryRuntimeData().skinInstance.get();
+	const float scale = skin && skin->rootParent ? skin->rootParent->world.scale : a_geometry->world.scale;
+	const float worldLength = FurInertia::GetWorldLength(a_length, scale);
 	size_t count = 0;
 	if (IsTouchActive()) {
 		std::array<FurInteractors::Capsule, Util::BodyCapsules::MaxSelectedCapsules> candidates;
-		const size_t found = Util::BodyCapsules::GetTracker().Select(a_geometry->worldBound.center, a_geometry->worldBound.radius, std::max(10.0f, a_length * 3.0f), GetWearer(a_geometry), candidates, touchNearestGap);
+		const size_t found = Util::BodyCapsules::GetTracker().Select(a_geometry->worldBound.center, a_geometry->worldBound.radius, std::max(10.0f, worldLength * 3.0f), wearer, candidates, touchNearestGap);
 		const size_t limit = std::min<size_t>(settings.ContactLimit, FurInteractors::MaxLiveCapsulesPerPass);
 		if (settings.PreciseContactSelection)
-			count = dentMemory.Nearest(a_geometry, std::span(candidates.data(), found), std::span(touches.data(), limit));
+			count = dentMemory.Nearest(a_geometry, wearer, std::span(candidates.data(), found), std::span(touches.data(), limit));
 		else {
 			count = std::min(found, limit);
 			std::copy_n(candidates.begin(), count, touches.begin());
 		}
 	}
 	if (IsTouchActive() && settings.EnableDentRecovery)
-		count = dentMemory.Remember(a_geometry, a_length, count, touches);
+		count = dentMemory.Remember(a_geometry, wearer, worldLength, count, touches);
 	maxTouchPerPass = std::max(maxTouchPerPass, static_cast<uint32_t>(count));
 	a_perPass.TouchCount = static_cast<float>(count);
 	a_perPass.TouchStrength = settings.TouchStrength;
@@ -956,13 +989,18 @@ float3 FurShells::GetInertia(const RE::BSGeometry* a_geometry, float a_length, f
 
 	const auto& center = a_geometry->worldBound.center;
 	const float3 position{ center.x, center.y, center.z };
+	if (!std::isfinite(position.LengthSquared())) {
+		inertiaStates.erase(a_geometry);
+		return {};
+	}
 	const auto* skin = a_geometry->GetGeometryRuntimeData().skinInstance.get();
+	const auto* root = skin ? skin->rootParent : a_geometry->parent;
 	if (!inertiaStates.contains(a_geometry) && inertiaStates.size() >= 512)
 		return {};
-	auto [it, inserted] = inertiaStates.try_emplace(a_geometry, InertiaState{ FurInertia::Spring::At(position), frameIndex, skin });
+	auto [it, inserted] = inertiaStates.try_emplace(a_geometry, InertiaState{ FurInertia::Spring::At(position), frameIndex, skin, root });
 	auto& state = it->second;
-	if (state.skin != skin || frameIndex - state.frame > 1) {
-		state = { FurInertia::Spring::At(position), frameIndex, skin };
+	if (state.skin != skin || state.root != root || frameIndex - state.frame > 1) {
+		state = { FurInertia::Spring::At(position), frameIndex, skin, root };
 	}
 	if (state.frame != frameIndex) {
 		state.frame = frameIndex;
@@ -997,13 +1035,24 @@ void FurShells::ClearDynamics()
 
 void FurShells::FillDynamics(PerPass& a_perPass, const RE::BSGeometry* a_geometry)
 {
-	if (!settings.EnableWind && !settings.EnableWetFur && !IsTouchActive() && !settings.EnableInertia)
+	const std::array<float, 4> shape{ a_perPass.Length, a_perPass.ShellCount, a_perPass.Droop, 0.0f };
+	a_perPass.PreviousShape = shape;
+	if (globals::state->IsMainOrLoadingMenuOpen())
 		return;
 	const auto* skin = a_geometry->GetGeometryRuntimeData().skinInstance.get();
+	const auto* partition = skin ? skin->skinPartition.get() : nullptr;
+	const auto* root = skin ? skin->rootParent : a_geometry->parent;
+	const auto& center = a_geometry->worldBound.center;
+	if (!std::isfinite(center.SqrLength()))
+		return;
 	auto previous = dynamicsStates.find(a_geometry);
-	if (previous != dynamicsStates.end() && previous->second.frame == frameIndex && previous->second.skin == skin) {
+	const bool sameMesh = previous != dynamicsStates.end() && previous->second.skin == skin &&
+	                      previous->second.partition == partition && previous->second.root == root &&
+	                      previous->second.center.GetDistance(center) <= FurInertia::TeleportDistance;
+	if (sameMesh && previous->second.frame == frameIndex && previous->second.shape == shape) {
 		a_perPass.Current = previous->second.current;
 		a_perPass.Previous = previous->second.previous;
+		a_perPass.PreviousShape = previous->second.previousShape;
 		return;
 	}
 	const auto wind = GetWind();
@@ -1018,9 +1067,11 @@ void FurShells::FillDynamics(PerPass& a_perPass, const RE::BSGeometry* a_geometr
 		Util::BodyCapsules::GetTracker().Update(settings.ContactRange, settings.FitHandCapsules, settings.EnableHeldObjects);
 		FillTouch(a_perPass.Current, a_geometry, a_perPass.Length);
 	}
-	a_perPass.Previous = previous != dynamicsStates.end() && previous->second.skin == skin && previous->second.frame + 1 == frameIndex ? previous->second.current : a_perPass.Current;
+	const bool consecutive = sameMesh && previous->second.frame + 1 == frameIndex;
+	a_perPass.Previous = consecutive ? previous->second.current : a_perPass.Current;
+	a_perPass.PreviousShape = consecutive ? previous->second.shape : shape;
 	if (previous != dynamicsStates.end() || dynamicsStates.size() < 512)
-		dynamicsStates.insert_or_assign(a_geometry, DynamicsState{ a_perPass.Current, a_perPass.Previous, skin, frameIndex });
+		dynamicsStates.insert_or_assign(a_geometry, DynamicsState{ a_perPass.Current, a_perPass.Previous, shape, a_perPass.PreviousShape, skin, partition, root, center, frameIndex });
 }
 
 void FurShells::BeginOverlayPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, const FrameBody& a_body)
@@ -1142,6 +1193,7 @@ const FurShells::DepthStates* FurShells::GetDepthStates(ID3D11DepthStencilState*
 		D3D11_DEPTH_STENCIL_DESC desc;
 		a_source->GetDesc(&desc);
 
+		const auto stencilWriteMask = desc.StencilWriteMask;
 		D3D11_DEPTH_STENCIL_DESC overlayDesc = desc;
 		overlayDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
 		overlayDesc.StencilWriteMask = 0;
@@ -1149,12 +1201,14 @@ const FurShells::DepthStates* FurShells::GetDepthStates(ID3D11DepthStencilState*
 		desc.DepthEnable = TRUE;
 		desc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
 		desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+		desc.StencilWriteMask = 0;
 
 		auto* device = globals::d3d::device;
 		if (SUCCEEDED(device->CreateDepthStencilState(&desc, states.prepass.put()))) {
 			Util::SetResourceName(states.prepass.get(), "FurShells::PrepassDepthState");
 			desc.DepthFunc = D3D11_COMPARISON_EQUAL;
 			desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+			desc.StencilWriteMask = stencilWriteMask;
 			if (SUCCEEDED(device->CreateDepthStencilState(&desc, states.shade.put())))
 				Util::SetResourceName(states.shade.get(), "FurShells::ShadeDepthState");
 			if (SUCCEEDED(device->CreateDepthStencilState(&overlayDesc, states.overlay.put())))
@@ -1506,8 +1560,10 @@ json FurShells::Control(const json& a_args)
 		it->second.overridden = true;
 		UpdateOverrideFadeEnd();
 	}
+	const bool settingsChanged = json(settings) != json(next);
 	settings = next;
-	ClearDynamics();
+	if (settingsChanged || action == "apply" || action == "reload")
+		ClearDynamics();
 	return GetDiagnostics();
 }
 #endif
@@ -1568,9 +1624,22 @@ void FurShells::PostPostLoad()
 	stl::write_vfunc<0x6, Hooks::BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 	stl::write_vfunc<0x7, Hooks::BSLightingShader_RestoreGeometry>(RE::VTABLE_BSLightingShader[0]);
 	logger::info("[Fur Shells] Installed hooks");
-	shellAssetScan = std::jthread([this](std::stop_token stop) {
-		const bool present = FurShellAssets::AnyShellTextures(std::filesystem::path("Data"), stop);
-		shellAssetsPresent.store(present, std::memory_order_relaxed);
-		logger::info("[Fur Shells] Shell asset scan: {}", present ? "present or unconfirmed" : "none found");
-	});
+	if (settings.Enabled)
+		StartAssetScan();
+}
+
+void FurShells::StartAssetScan()
+{
+	if (shellAssetScanStarted)
+		return;
+	shellAssetScanStarted = true;
+	try {
+		shellAssetScan = std::jthread([this](std::stop_token stop) {
+			const bool present = FurShellAssets::AnyShellTextures(std::filesystem::path("Data"), stop);
+			shellAssetsPresent.store(present, std::memory_order_relaxed);
+			logger::info("[Fur Shells] Shell asset scan: {}", present ? "present or unconfirmed" : "none found");
+		});
+	} catch (const std::exception& error) {
+		logger::warn("[Fur Shells] Asset scan could not start; retaining texture lookup: {}", error.what());
+	}
 }

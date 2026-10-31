@@ -108,7 +108,7 @@ namespace Util::BodyCapsules
 
 		void AddActorCapsules(RE::Actor* a_actor, const RE::NiPoint3& a_camera);
 		void AddHandCapsules(RE::Actor* a_player, bool a_left);
-		void Push(Capsule a_capsule, size_t a_index);
+		void Push(Capsule a_capsule, size_t a_index, const void* a_source);
 		void RefreshHandNodes(RE::Actor* a_player);
 		void AddHeldCapsules(RE::Actor* a_player);
 
@@ -121,8 +121,13 @@ namespace Util::BodyCapsules
 		void FitRadii(RE::Actor* a_player);
 
 		std::vector<Capsule> capsules;
-		std::unordered_map<uint64_t, float3> previousCenters;
-		std::unordered_map<uint64_t, float3> currentCenters;
+		struct MotionSample
+		{
+			float3 center;
+			const void* source = nullptr;
+		};
+		std::unordered_map<uint64_t, MotionSample> previousCenters;
+		std::unordered_map<uint64_t, MotionSample> currentCenters;
 		std::array<HandNodes, 2> handNodes;
 		const RE::NiAVObject* handNodeRoot = nullptr;
 		size_t handNodesFound = 0;

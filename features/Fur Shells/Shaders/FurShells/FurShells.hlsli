@@ -38,6 +38,7 @@ namespace FurShells
 		float Density;
 		float TipWeight;
 		float2 Pad;
+		float4 PreviousShape;
 		Dynamics Current;
 		Dynamics Previous;
 	};
@@ -156,7 +157,7 @@ namespace FurShells
 	 * @details Bends quadratically with layer height, scales with wind speed squared, and is capped at WindMaxBend of the fur length so layers never separate.
 	 *          Surfaces facing away from the wind keep WindLeeShare of the push.
 	 */
-	float3 GetWindDisplacement(bool previous, float3 a_worldNormal, float a_shell)
+	float3 GetWindDisplacement(bool previous, float3 a_worldNormal, float a_shell, float a_worldLength)
 	{
 		[branch] if (all((previous ? Previous.Wind : Current.Wind).xyz == 0.0)) return 0.0;
 		float3 velocity = (previous ? Previous.Wind : Current.Wind).xyz;
@@ -164,7 +165,7 @@ namespace FurShells
 		float3 direction = velocity / max(speed, 1e-4);
 		float exposure = lerp(WindLeeShare, 1.0, saturate(-dot(a_worldNormal, direction)));
 		float bend = saturate(speed * speed) * exposure * WindMaxBend;
-		return direction * (bend * a_shell * a_shell * Length);
+		return direction * (bend * a_shell * a_shell * a_worldLength);
 	}
 
 	/** @brief World-space lag of the fur tips behind the mesh's motion, bending quadratically with layer height; wet fur clings and lags less. */
@@ -174,9 +175,9 @@ namespace FurShells
 	}
 
 	/** @brief Limits the combined wind and inertia push of a layer to WindInertiaMaxBend of the layer's own wet-shortened height in world units, so layers never separate. */
-	float3 LimitBend(float3 a_bend, float a_shell, float a_wetLength, float a_worldScale)
+	float3 LimitBend(float3 a_bend, float a_shell, float a_wetLength, float a_worldLength)
 	{
-		float limit = WindInertiaMaxBend * Length * a_wetLength * a_worldScale * a_shell * a_shell;
+		float limit = WindInertiaMaxBend * a_worldLength * a_wetLength * a_shell * a_shell;
 		float bendLength = length(a_bend);
 		return bendLength > limit ? a_bend * (limit / bendLength) : a_bend;
 	}
@@ -237,13 +238,14 @@ namespace FurShells
 	float3 GetDisplacement(bool previous, float3 worldPosition, float3 normalVector, float shell, uint eyeIndex, out float3 debug)
 	{
 		float wetLength = GetWetLength((previous ? Previous.WetStrength : Current.WetStrength));
-		float droop = min(Droop * GetWetDroop((previous ? Previous.WetStrength : Current.WetStrength)) * shell * shell, Length * wetLength * shell);
+		float worldLength = (previous ? PreviousShape.x : Length) * length(normalVector);
+		float droop = min((previous ? PreviousShape.z : Droop) * GetWetDroop((previous ? Previous.WetStrength : Current.WetStrength)) * shell * shell, worldLength * wetLength * shell);
 		debug = 0.0;
 		[branch] if ((previous ? Previous.TouchCount : Current.TouchCount) <= 0.0 && all((previous ? Previous.Wind : Current.Wind).xyz == 0.0) && all((previous ? Previous.Inertia : Current.Inertia) == 0.0)) return float3(0.0, 0.0, -droop);
 		float scale = length(normalVector);
 		float3 normal = normalVector / max(scale, 1e-6);
-		float3 touch = GetTouchDisplacement(previous, worldPosition + (previous ? Previous.TouchEye[eyeIndex] : Current.TouchEye[eyeIndex]).xyz, normal, shell, Length * wetLength, debug);
-		float3 bend = LimitBend(GetWindDisplacement(previous, normal, shell) + GetInertiaDisplacement(previous, shell, (previous ? Previous.WetStrength : Current.WetStrength)), shell, wetLength, scale);
+		float3 touch = GetTouchDisplacement(previous, worldPosition + (previous ? Previous.TouchEye[eyeIndex] : Current.TouchEye[eyeIndex]).xyz, normal, shell, worldLength * wetLength, debug);
+		float3 bend = LimitBend(GetWindDisplacement(previous, normal, shell, worldLength) + GetInertiaDisplacement(previous, shell, (previous ? Previous.WetStrength : Current.WetStrength)), shell, wetLength, worldLength);
 		return float3(0.0, 0.0, -droop) + bend + touch;
 	}
 #endif
@@ -271,9 +273,9 @@ namespace FurShells
 		return float4(lerp(float3(0.0, 1.0, 1.0), float3(1.0, 1.0, 0.0), a_debug.x), 0.6);
 	}
 
-	float GetShell(uint shellIndex)
+	float GetShell(uint shellIndex, float shellCount)
 	{
-		return saturate((ShellCount - float(shellIndex)) / max(ShellCount, 1.0));
+		return saturate((shellCount - float(shellIndex)) / max(shellCount, 1.0));
 	}
 
 #if defined(PSHADER)

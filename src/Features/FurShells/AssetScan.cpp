@@ -25,11 +25,19 @@ namespace FurShellAssets
 		bool LooseShellMayExist(const std::filesystem::path& a_dataDir, std::stop_token a_stop)
 		{
 			std::error_code ec;
-			std::filesystem::recursive_directory_iterator it(a_dataDir / "textures", ec);
+			const auto textures = a_dataDir / "textures";
+			const auto attributes = GetFileAttributesW(textures.c_str());
+			if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+				return true;
+			std::filesystem::recursive_directory_iterator it(textures, ec);
 			if (ec == std::errc::no_such_file_or_directory)
 				return false;
 			for (const std::filesystem::recursive_directory_iterator end; !ec && it != end; it.increment(ec)) {
 				if (a_stop.stop_requested())
+					return true;
+				// A skipped directory link cannot establish that the texture tree is empty.
+				const auto entryAttributes = GetFileAttributesW(it->path().c_str());
+				if (entryAttributes == INVALID_FILE_ATTRIBUTES || (entryAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
 					return true;
 				const bool regular = it->is_regular_file(ec);
 				if (!ec && regular && EndsWithShell(Util::PathToUtf8(it->path().filename())))

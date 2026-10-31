@@ -1,12 +1,13 @@
 #include "SkinnedMesh.h"
 
 #include <DirectXPackedVector.h>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
 namespace Util
 {
-	bool ReadSkinnedVertices(RE::BSGeometry* a_geometry, std::vector<SkinnedVertex>& a_vertices)
+	bool ReadSkinnedVertices(RE::BSGeometry* a_geometry, std::vector<SkinnedVertex>& a_vertices, size_t a_maxSamples)
 	{
 		a_vertices.clear();
 		const auto* skin = a_geometry ? a_geometry->GetGeometryRuntimeData().skinInstance.get() : nullptr;
@@ -15,8 +16,20 @@ namespace Util
 			partitionSet->numPartitions > partitionSet->partitions.size())
 			return false;
 
+		const size_t budget = std::min<size_t>(a_maxSamples, 4096);
+		if (budget == 0)
+			return false;
+		size_t totalVertices = 0;
+		for (uint32_t index = 0; index < partitionSet->numPartitions; ++index)
+			totalVertices += partitionSet->partitions[index].vertices;
+		const size_t sampleStride = std::max<size_t>(1, (totalVertices + budget - 1) / budget);
+		size_t vertexBase = 0;
+		a_vertices.reserve(std::min(totalVertices, budget));
+
 		for (uint32_t partitionIndex = 0; partitionIndex < partitionSet->numPartitions; ++partitionIndex) {
 			const auto& part = partitionSet->partitions[partitionIndex];
+			const size_t firstVertex = (sampleStride - vertexBase % sampleStride) % sampleStride;
+			vertexBase += part.vertices;
 			RE::BSGraphics::VertexDesc desc = part.vertexDesc;
 			if (!part.bones || !part.buffData || !part.buffData->rawVertexData || !desc.HasFlag(RE::BSGraphics::Vertex::VF_SKINNED) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX))
 				continue;
@@ -26,7 +39,7 @@ namespace Util
 			const bool fullPosition = desc.HasFlag(RE::BSGraphics::Vertex::VF_FULLPREC) || desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_TEXCOORD0) >= 16;
 			const uint32_t positionBytes = fullPosition ? 12u : 6u;
 			if (stride < positionBytes || skinOffset < positionBytes || skinOffset + 12 > stride ||
-				part.vertices > partitionSet->vertexCount || part.numBones == 0 || part.numBones > 256 || a_vertices.size() + part.vertices > 262144)
+				part.vertices > partitionSet->vertexCount || part.numBones == 0 || part.numBones > 256)
 				continue;
 			if (part.buffData->vertexBuffer) {
 				D3D11_BUFFER_DESC buffer{};
@@ -34,8 +47,7 @@ namespace Util
 				if (static_cast<uint64_t>(part.vertices) * stride > buffer.ByteWidth)
 					continue;
 			}
-			a_vertices.reserve(a_vertices.size() + part.vertices);
-			for (uint16_t vertex = 0; vertex < part.vertices; ++vertex) {
+			for (size_t vertex = firstVertex; vertex < part.vertices; vertex += sampleStride) {
 				const uint8_t* data = part.buffData->rawVertexData + static_cast<size_t>(vertex) * stride;
 				float position[3];
 				if (fullPosition) {

@@ -144,7 +144,7 @@ namespace FurInertia
 				*this = At(a_position);
 				return;
 			}
-			if (deltaTime <= 0.0f)
+			if (deltaTime < 1e-5f)
 				return;
 
 			const float blend = 1.0f - std::exp(-deltaTime / VelocitySmoothing);
@@ -160,6 +160,10 @@ namespace FurInertia
 			offset = target + (deviation + decayed * deltaTime) * fade;
 			velocity = (velocity - decayed * (omega * deltaTime)) * fade;
 
+			if (!std::isfinite(offset.LengthSquared()) || !std::isfinite(velocity.LengthSquared())) {
+				*this = At(a_position);
+				return;
+			}
 			const float length = offset.Length();
 			if (length > a_maxOffset) {
 				offset *= a_maxOffset / length;

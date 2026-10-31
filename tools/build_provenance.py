@@ -390,9 +390,16 @@ def render_header(manifest: dict[str, Any]) -> str:
     identity = manifest["identity"]
     source = identity["source"]
     shader_cache = identity["shaderCache"]
+    resource_provenance = (
+        f" [CSX commit={source['commit']}; Build ID={manifest['buildId']}; "
+        f"source={'dirty' if source['dirty'] else 'clean'}]"
+    )
     embedded_manifest = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return f"""#pragma once
 
+#ifdef RC_INVOKED
+#define CSX_BUILD_PROVENANCE_RESOURCE {cpp_string(resource_provenance)}
+#else
 #include <string_view>
 
 namespace CSX::EmbeddedBuildProvenance
@@ -407,6 +414,7 @@ namespace CSX::EmbeddedBuildProvenance
     inline constexpr bool SOURCE_DIRTY = {str(source['dirty']).lower()};
     inline constexpr auto MANIFEST_JSON = R"CSXPROV({embedded_manifest})CSXPROV"sv;
 }}
+#endif
 """
 
 

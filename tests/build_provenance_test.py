@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import sys
@@ -21,6 +22,77 @@ SPEC.loader.exec_module(PROVENANCE)
 
 
 class BuildProvenanceTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows DLL version resources")
+    def test_version_resource_tracks_embedded_identity(self) -> None:
+        tool_names = ("rc.exe", "link.exe", "cl.exe", "pwsh")
+        if not all(shutil.which(name) for name in tool_names):
+            self.skipTest("MSVC, Windows SDK and PowerShell tools are required")
+
+        def run_tool(*args: str) -> str:
+            result = subprocess.run(args, capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result.stdout
+
+        template = (ROOT / "cmake/Version.rc.in").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory(prefix="csx-version-resource-") as temporary:
+            root = Path(temporary)
+            readback = root / "read-version.ps1"
+            readback.write_text(
+                'param([string] $DllPath)\n'
+                '$ErrorActionPreference = "Stop"\n'
+                '$version = [Diagnostics.FileVersionInfo]::GetVersionInfo($DllPath)\n'
+                '$version | Select-Object FileVersion, ProductVersion | ConvertTo-Json -Compress\n',
+                encoding="utf-8",
+            )
+            for runtime in ("SE", "VR"):
+                for dirty in (False, True):
+                    with self.subTest(runtime=runtime, dirty=dirty):
+                        commit = ("b" if dirty else "a") * 40
+                        build_id = PROVENANCE.sha256_bytes(f"{runtime}:{dirty}".encode())
+                        manifest = {
+                            "buildId": build_id,
+                            "identity": {
+                                "source": {"commit": commit, "dirty": dirty},
+                                "shaderCache": {"abiId": "c" * 64},
+                                "build": {"configuration": "Release"},
+                            },
+                            "sourceDisplay": {"describe": f"test-{commit}"},
+                        }
+                        PROVENANCE.write_if_changed(
+                            root / "BuildProvenance.generated.h", PROVENANCE.render_header(manifest)
+                        )
+                        resource = template
+                        for key, value in {
+                            "PROJECT_VERSION_MAJOR": "3", "PROJECT_VERSION_MINOR": "21",
+                            "PROJECT_VERSION_PATCH": "0", "PROJECT_VERSION": "3.21.0",
+                            "PROJECT_NAME": "CommunityShaders", "PROJECT_DESCRIPTION": "CSX",
+                            "CSX_BUILD_LABEL": f"CSX 3.21.0-{runtime}",
+                        }.items():
+                            resource = resource.replace(f"@{key}@", value)
+                        self.assertNotIn("@", resource)
+                        (root / "version.rc").write_text(resource, encoding="utf-8")
+                        run_tool("rc.exe", "/nologo", "/i", str(root), "/fo", str(root / "version.res"), str(root / "version.rc"))
+                        artifact = root / "version.dll"
+                        run_tool("link.exe", "/nologo", "/dll", "/noentry", "/machine:x64", f"/out:{artifact}", str(root / "version.res"))
+
+                        metadata = json.loads(run_tool("pwsh", "-NoProfile", "-File", str(readback), str(artifact)))
+                        self.assertEqual(PROVENANCE.windows_file_version(artifact), "3.21.0.0")
+                        self.assertEqual(metadata["ProductVersion"], f"CSX 3.21.0-{runtime}")
+                        self.assertEqual(
+                            metadata["FileVersion"],
+                            f"3.21.0.0 [CSX commit={commit}; Build ID={build_id}; "
+                            f"source={'dirty' if dirty else 'clean'}]",
+                        )
+                        source = root / "header.cpp"
+                        source.write_text(
+                            '#include "BuildProvenance.generated.h"\n'
+                            f'static_assert(CSX::EmbeddedBuildProvenance::BUILD_ID == "{build_id}");\n'
+                            f'static_assert(CSX::EmbeddedBuildProvenance::SOURCE_COMMIT == "{commit}");\n'
+                            f'static_assert(CSX::EmbeddedBuildProvenance::SOURCE_DIRTY == {str(dirty).lower()});\n',
+                            encoding="utf-8",
+                        )
+                        run_tool("cl.exe", "/nologo", "/std:c++20", "/WX", "/c", f"/Fo{root / 'header.obj'}", str(source))
+
     @unittest.skipUnless(os.name == "nt", "Windows executable version metadata")
     def test_executable_version_is_read_from_file(self) -> None:
         actual = PROVENANCE.windows_file_version(Path(sys.executable))

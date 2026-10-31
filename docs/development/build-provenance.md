@@ -31,6 +31,26 @@ The verifier recalculates the canonical Build ID and artifact SHA-256 and
 fails if either identity is inconsistent. Compare the deployed DLL with
 its manifest and build receipt before attributing a runtime result.
 
+## Crash log identity
+
+The DLL's `FileVersion` text includes the full source commit, Build ID and
+dirty-source state from the same generated header as its runtime identity.
+This metadata refreshes before compilation; it does not depend on the
+installed package name or a sidecar read during a crash. The fixed numeric
+file/product versions and SKSE plugin identity remain unchanged.
+
+Crash Logger SSE AE VR 1.25.0 uses its raw `FileVersion` fallback for CSX's
+branded `ProductVersion`, producing an entry such as:
+
+```text
+CommunityShaders.dll v<version> [CSX commit=<commit>; Build ID=<id>; source=clean]
+```
+
+Other crash loggers must support this string fallback to include the extra
+identity. Older DLLs cannot gain it without rebuilding. A dirty-source
+build identifies its base commit; use the Build ID and manifest to
+distinguish the local edits.
+
 ## Shader cache identities
 
 `Info.ini` records build, artifact, shader ABI, and compiler identities.

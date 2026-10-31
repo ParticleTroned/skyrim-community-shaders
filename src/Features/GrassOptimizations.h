@@ -22,6 +22,7 @@ struct GrassOptimizations : Feature
 	bool SupportsVR() override { return true; }
 	std::string_view GetShaderCacheAbiVersion() override { return "native-cell-buckets-v8"; }
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
+	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
 	void DrawSettings() override;
 	bool HasPerformanceSettings() const override { return true; }
 	void DrawPerformanceSettings(bool advanced) override;

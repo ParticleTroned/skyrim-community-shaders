@@ -106,6 +106,12 @@ std::pair<std::string, std::vector<std::string>> GrassOptimizations::GetFeatureS
 		{ "Independent distant density, fading and mesh cost controls", "Optional middle/far meshes and simpler distant shading", "Separate grass Hi-Z switch for performance comparisons" } };
 }
 
+Feature::SettingsHeaderStatus GrassOptimizations::GetSettingsHeaderStatus() const
+{
+	const bool available = renderer->IsRenderingAvailable();
+	return { available ? "Ready" : "Unavailable", !available };
+}
+
 void GrassOptimizations::DrawSettings()
 {
 	MenuUI::SettingsPage page("GrassOptimizations", {

@@ -26,6 +26,7 @@
 #include <chrono>
 #include <cstring>
 #include <d3dcompiler.h>
+#include <detours/detours.h>
 #include <filesystem>
 #include <future>
 #include <mutex>
@@ -39,6 +40,38 @@
 
 namespace
 {
+#if defined(ENABLE_SKYRIM_SE) || defined(ENABLE_SKYRIM_AE)
+	uintptr_t FindFlatGrassDrawCall(uintptr_t function, uintptr_t target)
+	{
+		// These bounds enclose the native SE/AE loop, not an individual draw call.
+		const auto begin = function + REL::Relocate(0x660, 0x648);
+		const auto end = function + REL::Relocate(0x759, 0x73A);
+		constexpr size_t maxInstructionBytes = 15;
+		const auto text = REL::Module::get().segment(REL::Segment::textx);
+		if (begin < text.address() || end <= begin || end - text.address() > text.size() ||
+			text.size() - (end - text.address()) < maxInstructionBytes)
+			return 0;
+		uintptr_t match = 0;
+		__try {
+			for (auto instruction = begin; instruction < end;) {
+				void* destination = nullptr;
+				const auto next = reinterpret_cast<uintptr_t>(DetourCopyInstruction(nullptr, nullptr, reinterpret_cast<void*>(instruction), &destination, nullptr));
+				if (next <= instruction || next - instruction > maxInstructionBytes || next > end)
+					return 0;
+				if (next - instruction == 5 && *reinterpret_cast<const uint8_t*>(instruction) == 0xE8 && reinterpret_cast<uintptr_t>(destination) == target) {
+					if (match)
+						return 0;
+					match = instruction;
+				}
+				instruction = next;
+			}
+		} __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+			return 0;
+		}
+		return match;
+	}
+#endif
+
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	inline constexpr UINT kCullUAVCount = 4;
 #else
@@ -2882,7 +2915,17 @@ void GrassBucketRenderer::InstallHooks()
 {
 	if (impl->installed)
 		return;
-	const auto callsite = REL::RelocationID(100847, 107637).address() + REL::Relocate(0x663, 0x64B, 0x75B);
+	const auto function = REL::RelocationID(100847, 107637).address();
+	auto callsite = function + 0x75B;
+#if defined(ENABLE_SKYRIM_SE) || defined(ENABLE_SKYRIM_AE)
+	if (!REL::Module::IsVR()) {
+		callsite = FindFlatGrassDrawCall(function, REL::RelocationID(75479, 77265).address());
+		if (!callsite) {
+			logger::warn("Grass optimization hook unavailable: native SE/AE draw loop is unsupported or modified");
+			return;
+		}
+	}
+#endif
 	if (*reinterpret_cast<const uint8_t*>(callsite) != 0xE8) {
 		logger::warn("Grass optimization hook unavailable: native draw instruction differs");
 		return;

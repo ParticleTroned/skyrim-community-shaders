@@ -310,18 +310,27 @@ void TestSettingsAndPayload()
 	static_assert(offsetof(MeshBlending::PerFrame, DepthBias) == 8u);
 	static_assert(offsetof(MeshBlending::PerFrame, MaximumGap) == 12u);
 	static_assert(offsetof(MeshBlending::PerFrame, Padding0) == 16u);
-	static_assert(offsetof(MeshBlending::PerFrame, Padding1) == 20u);
+	static_assert(offsetof(MeshBlending::PerFrame, ProjectedSnowEdgeWidth) == 20u);
 	static_assert(offsetof(MeshBlending::PerFrame, Padding2) == 24u);
 	static_assert(offsetof(MeshBlending::PerFrame, Padding3) == 28u);
 	MeshBlending feature;
 	feature.settings = json::object().get<MeshBlending::Settings>();
 	Require(feature.IsRuntimeEnabled(), "default enabled NIF controls were inactive");
+	feature.settings.ProjectedSnowEnabled = 0u;
 
 	feature.settings.NifEnabled = 0u;
 	Require(!feature.IsRuntimeEnabled(), "disabled NIF mechanism remained active");
 	feature.settings.NifEnabled = 1u;
 	feature.settings.BlendStrength = 0.0f;
 	Require(!feature.IsRuntimeEnabled(), "zero NIF strength remained active");
+	feature.settings.NifEnabled = 0u;
+	feature.settings.ProjectedSnowEnabled = 1u;
+	Require(feature.IsRuntimeEnabled(), "snow-only operation depended on NIF strength");
+	feature.settings.ProjectedSnowEdgeWidth = 0.0f;
+	Require(!feature.IsRuntimeEnabled(), "zero snow width remained active");
+	feature.settings.ProjectedSnowEdgeWidth = 2.0f;
+	feature.settings.ProjectedSnowEnabled = 0u;
+	feature.settings.NifEnabled = 1u;
 
 	feature.settings.BlendStrength = 1.0f;
 	feature.settings.DetectionMode = static_cast<std::uint32_t>(MeshBlending::DetectionMode::kAllowListOnly);
@@ -344,7 +353,7 @@ void TestSettingsAndPayload()
 	const auto payload = feature.GetCommonBufferData();
 	Require(payload.BlendStrength == 1.0f && payload.MaximumGap == 384.0f,
 		"GPU payload did not apply the shared finite-value sanitizer");
-	Require(payload.Padding0 == 0u && payload.Padding2 == 0.0f && payload.Padding3 == 0.0f && payload.Padding1 == 0.0f, "GPU padding was not zero");
+	Require(payload.Padding0 == 0u && payload.Padding2 == 0.0f && payload.Padding3 == 0.0f, "GPU padding was not zero");
 }
 
 int main()

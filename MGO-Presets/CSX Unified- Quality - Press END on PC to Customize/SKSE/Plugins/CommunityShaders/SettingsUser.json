@@ -79,8 +79,8 @@
       "maximumVersionExclusive": "3.22"
     },
     "settingsContract": {
-      "revision": 26,
-      "sourceTreeSha256": "1E1D707F19CD1244F61D664DFD15561AD4BB34398515B00D4FE92E8899D57443"
+      "revision": 27,
+      "sourceTreeSha256": "934625A8D9176192CABCFAD29D3D4B6178BFD96818A85A92ACF0E80FCCED70C7"
     }
   },
   "Upscaling": {

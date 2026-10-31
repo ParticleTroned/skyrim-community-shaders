@@ -30,10 +30,12 @@ namespace CSX::Api::MeshBlendingDevBench
 	inline constexpr Setting Settings[] = {
 		{ "Enabled", ValueKind::Toggle, 0, 1 },
 		{ "NifEnabled", ValueKind::Toggle, 0, 1 },
+		{ "ProjectedSnowEnabled", ValueKind::Toggle, 0, 1 },
 		{ "BlendStrength", ValueKind::Number, 0, 1 },
 		{ "BlendWidth", ValueKind::Number, 0.01, 256 },
 		{ "DepthBias", ValueKind::Number, 0, 128 },
 		{ "MaximumGap", ValueKind::Number, 0.01, 4096 },
+		{ "ProjectedSnowEdgeWidth", ValueKind::Number, 0, 16 },
 		{ "DetectionMode", ValueKind::Integer, 0, 2 },
 		{ "MaximumDistance", ValueKind::Number, 0, 65536 },
 		{ "BoundsExpansion", ValueKind::Number, 0, 1024 },

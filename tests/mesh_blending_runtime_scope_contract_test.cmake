@@ -109,14 +109,17 @@ foreach(_required IN ITEMS
     endif()
 endforeach()
 
-foreach(_forbidden IN ITEMS
+foreach(_required IN ITEMS
     "ProjectedSnowEnabled"
     "ProjectedSnowEdgeWidth"
     "TryPrepareProjectedSnow"
+    "BuildOverlaySourceState(a_pass, source)"
+    "MaterialFeature::kMultiIndexTriShapeSnow"
+    "projectedSnowExceptions"
 )
-    string(FIND "${_runtime}" "${_forbidden}" _position)
-    if(NOT _position EQUAL -1)
-        message(FATAL_ERROR "Future snow implementation remains in the NIF stage: ${_forbidden}")
+    string(FIND "${_runtime}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR "Snow admission contract is missing: ${_required}")
     endif()
 endforeach()
 

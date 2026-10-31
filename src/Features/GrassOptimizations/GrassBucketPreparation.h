@@ -53,6 +53,18 @@ namespace GrassPreparation
 		uint32_t instances = 0;
 	};
 
+	/** @brief Restrict candidate lookup to a visibility queue and its captured mesh contract. */
+	struct BucketKey
+	{
+		const void* queue;
+		size_t contractHash;
+		bool operator==(const BucketKey&) const = default;
+		struct Hash
+		{
+			size_t operator()(const BucketKey& key) const { return std::hash<const void*>{}(key.queue) ^ key.contractHash; }
+		};
+	};
+
 	/** @brief Sort and group an immutable snapshot; the result owns indices and record layouts only. */
 	template <class Source, class Hash, class Compatible>
 	std::vector<Bucket> Build(std::span<const Source> sources, Hash hash, Compatible compatible)
@@ -72,7 +84,7 @@ namespace GrassPreparation
 			return std::less<>{}(sources[a].identity, sources[b].identity);
 		});
 		std::vector<Bucket> buckets;
-		std::unordered_multimap<size_t, size_t> candidates;
+		std::unordered_multimap<BucketKey, size_t, BucketKey::Hash> candidates;
 		for (auto sourceIndex : order) {
 			const auto& source = sources[sourceIndex];
 			uint32_t count = 0;
@@ -81,14 +93,14 @@ namespace GrassPreparation
 					throw std::length_error("Grass preparation instance capacity exceeded");
 				count += group.count;
 			}
-			const auto key = hash(source);
+			const BucketKey key{ source.queue.get(), hash(source) };
 			size_t index = buckets.size();
 			if (source.queue && source.queue->batching) {
 				const auto [begin, end] = candidates.equal_range(key);
 				for (auto candidate = begin; candidate != end; ++candidate) {
 					const auto& bucket = buckets[candidate->second];
 					const auto& first = sources[bucket.sources.front()];
-					if (first.queue == source.queue && compatible(first, source) && bucket.instances <= GrassPolicy::kMaxBatchInstances - count) {
+					if (compatible(first, source) && bucket.instances <= GrassPolicy::kMaxBatchInstances - count) {
 						index = candidate->second;
 						break;
 					}

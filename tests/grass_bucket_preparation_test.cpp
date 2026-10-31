@@ -42,7 +42,7 @@ namespace
 		for (int repeat = 0; repeat < 100; ++repeat) {
 			std::shuffle(sources.begin(), sources.end(), random);
 			const auto result = Build(sources);
-			Require(result.size() == 3, "Hash collisions combined different materials or queues");
+			Require(result.size() == 3, "Different materials or queues were combined");
 			Require(result[0].sources.size() == 2 && result[0].instances == 2, "Compatible sources did not batch");
 			Require(sources[result[0].sources[0]].identity == 1 && sources[result[0].sources[1]].identity == 4,
 				"Layout changed with capture order");
@@ -51,6 +51,9 @@ namespace
 		}
 		queue->batching = false;
 		Require(Build(sources).size() == sources.size(), "Disabled cross-cell batching combined sources");
+		queue->batching = true;
+		const auto partitioned = GrassPreparation::Build(std::span<const Source>(sources), [](const Source& source) { return source.identity; }, [](const Source&, const Source&) { return true; });
+		Require(partitioned.size() == sources.size(), "Queue lookup lost the captured mesh hash partition");
 		Require(Build({}).empty(), "Empty scene produced buckets");
 	}
 	void CheckRuns()

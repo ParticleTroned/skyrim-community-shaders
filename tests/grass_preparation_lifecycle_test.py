@@ -55,7 +55,7 @@ template<class... T> struct thread_pool {
 };
 }
 struct Lifetime { std::atomic_bool alive{true}; std::atomic_uint64_t generation{0}; };
-struct Queue { bool batching = true; std::vector<uintptr_t> members; };
+struct Queue { bool batching = true; std::vector<uintptr_t> members; std::atomic_bool compatible{true}; };
 struct Group {
     uint32_t count = 1;
     std::array<float, 3> lo{}, hi{};
@@ -71,10 +71,11 @@ struct Source {
     std::vector<Group> groups{Group{}};
     std::shared_ptr<int> nativeOwner;
     bool contractValid = true;
+    std::string model;
 };
 std::function<void()> beforeHash;
 size_t CompatibilityHash(const Source&) { if (beforeHash) beforeHash(); return 0; }
-bool CompatibleCaptured(const Source&, const Source&) { return true; }
+bool CompatibleCaptured(const Source& a, const Source& b) { return a.model == b.model; }
 bool CurrentContract(const Source& source) { return source.contractValid; }
 struct Admission { size_t bucket, source; };
 struct Bucket {
@@ -125,6 +126,27 @@ struct GrassBucketRenderer {
 };
 METHODS
 void Require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
+void CheckChangedModelAndSplitQueue() {
+    GrassBucketRenderer renderer;
+    auto& state = *renderer.impl;
+    const auto queue = std::make_shared<Queue>(); queue->members = {1,2};
+    for (uintptr_t id : {1,2}) {
+        Source item{}; item.identity = id; item.queue = queue;
+        state.residents.emplace(id, std::move(item));
+    }
+    state.PrepareBackground(); BS::Complete();
+    state.residents.at(1).model = "changed.nif"; ++state.residentRevision;
+    state.PrepareBackground();
+    Require(state.admitted.empty(), "Old model metadata was published after the resident model changed");
+    Require(queue->compatible, "A stale job invalidated the newer queue");
+    BS::Complete(); state.PrepareBackground();
+    Require(state.admitted.empty() && !queue->compatible, "A split queue was left permanently eligible without complete batch coverage");
+    const auto replacement = std::make_shared<Queue>(); replacement->members = {1};
+    state.residents.at(1).queue = replacement;
+    queue->members = {2}; queue->compatible = true; ++state.residentRevision;
+    state.PrepareBackground(); BS::Complete(); state.PrepareBackground();
+    Require(state.admitted.size() == 2 && !state.preparationJob, "Reassigned queues did not recover batching");
+}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 void CheckUnusedRetirement() {
     for (int reason = 0; reason < 4; ++reason) {
@@ -202,6 +224,7 @@ int main() {
         Require(!nativeOwner.expired(), "Worker released a captured native owner");
         Require(state.PrepareBackground() && state.admitted.size() == 1 && state.admitted.contains(3),
             "Stale partial queue published or unaffected queue was lost");
+        Require(a->compatible, "Stale partial coverage invalidated the newer queue membership");
         Require(nativeOwner.expired() && releasedOnOwner, "Native snapshot was not retired on its owner thread");
         Require(state.preparationRejectedBuckets == 1 && state.preparationSubmitted == 2, "Revision change did not coalesce into one replacement job");
         ++state.residents.at(3).lifetime->generation; ++state.residents.at(3).generation; ++state.residentRevision;
@@ -253,6 +276,7 @@ int main() {
         }
         Require(!BS::pending, "Renderer shutdown did not drain its borrowed snapshot");
         CheckUnusedRetirement();
+        CheckChangedModelAndSplitQueue();
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }
@@ -295,6 +319,7 @@ int main() {
             pending.PrepareBackground();
         }
         Require(!BS::pending, "Production shutdown did not drain its borrowed snapshot");
+        CheckChangedModelAndSplitQueue();
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

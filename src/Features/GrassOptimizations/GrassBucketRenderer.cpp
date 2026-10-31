@@ -1465,7 +1465,7 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 	std::sort(sources.begin(), sources.end(), [](const Source& a, const Source& b) {
 		return std::less<RE::BSMultiStreamInstanceTriShape*>{}(a.identity, b.identity);
 	});
-	std::unordered_multimap<size_t, size_t> compatibleBuckets;
+	std::unordered_multimap<GrassPreparation::BucketKey, size_t, GrassPreparation::BucketKey::Hash> compatibleBuckets;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	std::unordered_map<std::string, size_t> modelRepresentatives;
 #endif
@@ -1515,12 +1515,12 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 		}
 #endif
 		size_t index = buckets.size();
-		const auto hash = CompatibilityHash(source);
+		const GrassPreparation::BucketKey key{ source.queue.get(), CompatibilityHash(source) };
 		if (source.queue && source.queue->batching) {
-			const auto [rangeBegin, rangeEnd] = compatibleBuckets.equal_range(hash);
+			const auto [rangeBegin, rangeEnd] = compatibleBuckets.equal_range(key);
 			for (auto candidate = rangeBegin; candidate != rangeEnd; ++candidate) {
 				const auto i = candidate->second;
-				if (buckets[i].sources.front().queue == source.queue && Compatible(buckets[i].sources.front(), source) && buckets[i].instances <= GrassPolicy::kMaxBatchInstances - count) {
+				if (Compatible(buckets[i].sources.front(), source) && buckets[i].instances <= GrassPolicy::kMaxBatchInstances - count) {
 					index = i;
 					break;
 				}
@@ -1528,7 +1528,7 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 		}
 		if (index == buckets.size()) {
 			buckets.emplace_back();
-			compatibleBuckets.emplace(hash, index);
+			compatibleBuckets.emplace(key, index);
 		}
 		buckets[index].instances += count;
 		buckets[index].sources.push_back(std::move(source));
@@ -1570,7 +1570,8 @@ bool GrassBucketRenderer::Impl::CurrentBucket(std::span<const Source> sources) c
 		if (!source.lifetime->alive.load(std::memory_order_acquire) || live == residents.end() ||
 			live->second.lifetime != source.lifetime || live->second.generation != source.generation ||
 			source.generation != source.lifetime->generation.load(std::memory_order_acquire) ||
-			live->second.queue != source.queue || source.queue != sources.front().queue || !CurrentContract(source))
+			live->second.queue != source.queue || source.queue != sources.front().queue ||
+			live->second.model != source.model || !CurrentContract(source))
 			return false;
 	}
 	return true;
@@ -1644,6 +1645,10 @@ bool GrassBucketRenderer::Impl::PrepareBackground()
 					for (auto index : layout.sources)
 						bucket.sources.push_back(std::move(preparationJob->sources[index]));
 					if (!CurrentBucket(bucket.sources)) {
+						const auto& queue = bucket.sources.front().queue;
+						// A current split must be requeued; stale work must not invalidate newer membership.
+						if (preparationJob->revision == residentRevision && queue && bucket.sources.size() != queue->members.size())
+							queue->compatible.store(false, std::memory_order_relaxed);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 						++preparationRejectedBuckets;
 #endif

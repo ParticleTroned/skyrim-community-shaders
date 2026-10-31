@@ -160,6 +160,10 @@ contradict this policy.
 
 ## Validation and long-running work
 
+-   **Live game scope:** Interact with or inspect the running game only when
+    the user explicitly requests it for the current task. Earlier in-game
+    testing does not authorize live checks or setting changes during later
+    source review, default-setting changes, builds, or commits.
 -   **Prioritize fast execution, measurement, and analysis.** Perform only the
     requested work, start as soon as the necessary checks are satisfied, and
     return results promptly. Preparation and reporting must not dominate a

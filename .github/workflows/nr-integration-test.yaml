@@ -121,7 +121,7 @@ jobs:
               @{ feature = 'Guided model reconstruction'; originalCommit = 'edf95c6253b53aa45e541e6c0b5e730457dc2e68'; prHead = '5d35eb601d2c1068bec9a3a2bc52b0d8fa6bb3b9' }
               @{ feature = 'Peripheral compression'; originalCommit = 'd7d640ac48553310db01d0a8af6d56e70ffe24c6'; prHead = 'dd9c974e75f72d90128f5133b30205b9425da31d' }
               @{ feature = 'Combat pause'; originalCommit = 'e83a0a72bbdb830757b9da03236809c6952c2553'; prHead = 'ae0420524922d658d023b6417761677f55a584fc' }
-              @{ feature = 'Scene selection'; originalCommit = '0a7b11ac2aacbe19bcfc28115548c270adf85088'; prHead = '7027450d985d4ecdc459619988c695ab1d655e95' }
+              @{ feature = 'Scene selection'; originalCommit = '0a7b11ac2aacbe19bcfc28115548c270adf85088'; prHead = '25a52c53dc93f5932594696582a723fb91c15565' }
             )
             inputAio = $archive.Name
             inputAioSha256 = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()

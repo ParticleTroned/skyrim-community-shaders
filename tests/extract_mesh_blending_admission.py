@@ -30,7 +30,9 @@ def extract(root: Path, commonlib: Path, output: Path) -> None:
         "std::string MeshBlending::BuildModelPath(",
         "std::string MeshBlending::BuildNodePath(",
         "MeshBlending::Classification MeshBlending::ClassifyOnCacheMiss(",
+        "bool MeshBlending::TryPrepareProjectedSnow(",
     )]
+    methods.append("#ifdef DEVBENCH_BRIDGE_ENABLED\n" + function(source, "void MeshBlending::RecordRejection(") + "#endif\n")
     (output / "mesh_blending_admission_under_test.h").write_text(
         helpers + "\n" + "\n".join(methods), encoding="utf-8")
 

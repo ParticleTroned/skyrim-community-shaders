@@ -70,6 +70,8 @@ json MeshBlending::ControlDevBench(const json& a_request)
 							 { "eligibleSources", diagnostics.eligibleSources },
 							 { "classificationAccepts", diagnostics.classificationAccepts },
 							 { "activeDraws", diagnostics.activeDraws },
+							 { "projectedSnowCandidates", diagnostics.projectedSnowCandidates },
+							 { "projectedSnowActiveDraws", diagnostics.projectedSnowActiveDraws },
 							 { "sourceRejects", diagnostics.sourceRejects },
 							 { "scopeRejects", diagnostics.scopeRejects },
 							 { "distanceRejects", diagnostics.distanceRejects },

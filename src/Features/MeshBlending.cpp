@@ -1,4 +1,5 @@
 #include "MeshBlending.h"
+#include "MeshBlendingSnowPolicy.h"
 
 #include "../Globals.h"
 #include "../ShaderCache.h"
@@ -204,8 +205,9 @@ namespace
 std::pair<std::string, std::vector<std::string>> MeshBlending::GetFeatureSummary()
 {
 	return {
-		"Softens existing alpha-blended static NIF overlays without an extra render pass.",
+		"Softens existing alpha-blended static NIF and multi-index snow overlays without an extra render pass.",
 		{ "Conservative static-object selection with deny-first rules",
+			"Separate NIF intersection and multi-index snow edge controls",
 			"Generated rules retain current receiver validation",
 			"Bounded cache and traversal with a configurable distance limit",
 			"Flat-screen and VR eye-correct depth sampling" }
@@ -1300,7 +1302,7 @@ void MeshBlending::RecordRejection(RejectionReason a_reason)
 bool MeshBlending::TryPrepareProjectedSnow(RE::BSRenderPass* a_pass)
 {
 	auto* state = globals::state;
-	if (!state || !a_pass || !a_pass->geometry || !a_pass->shaderProperty) {
+	if (!state) {
 		return false;
 	}
 
@@ -1313,25 +1315,50 @@ bool MeshBlending::TryPrepareProjectedSnow(RE::BSRenderPass* a_pass)
 	if (!runtimePolicyEnabled && !discoveryCaptureActive) {
 		return false;
 	}
+	const bool collectDiagnostics = state->IsDeveloperMode();
+	const auto rejectSource = [&](RejectionReason a_reason) {
+		if (collectDiagnostics)
+			++diagnostics.sourceRejects;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordRejection(a_reason);
+#else
+		(void)a_reason;
+#endif
+		return false;
+	};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (collectDiagnostics)
+		++diagnostics.projectedSnowCandidates;
+#endif
+	if (!a_pass || !a_pass->geometry || !a_pass->shaderProperty)
+		return rejectSource(RejectionReason::kMissingGeometry);
+	constexpr auto requiredFlags = CSX::MeshBlendingSnowPolicy::RequiredFlags<ShaderFlag>();
+	if ((a_pass->shaderProperty->flags.underlying() & requiredFlags) != requiredFlags)
+		return rejectSource(RejectionReason::kSnowMaterialFamily);
 
 	SourceState source;
-	if (!BuildOverlaySourceState(a_pass, source)) {
-		return false;
+	RejectionReason rejection = RejectionReason::kNone;
+	if (!BuildOverlaySourceState(a_pass, source, &rejection)) {
+		return rejectSource(rejection);
 	}
-	constexpr auto requiredFlags = ToMask(ShaderFlag::kProjectedUV) |
-	                               ToMask(ShaderFlag::kMultiIndexSnow);
-	constexpr auto projectedSnowExceptions = ToMask(ShaderFlag::kProjectedUV) | ToMask(ShaderFlag::kMultiIndexSnow);
-	if ((source.shaderFlags & requiredFlags) != requiredFlags ||
-		(source.shaderFlags & (kExcludedShaderFlags & ~projectedSnowExceptions)) != 0u) {
-		return false;
+	const auto eligibility = CSX::MeshBlendingSnowPolicy::Classify<ShaderFlag>(
+		source.shaderFlags, source.material->GetFeature(), kExcludedShaderFlags);
+	if (eligibility != CSX::MeshBlendingSnowPolicy::Eligibility::kAccepted) {
+		return rejectSource(eligibility == CSX::MeshBlendingSnowPolicy::Eligibility::kExcludedFlags ?
+								RejectionReason::kShaderFlags :
+								RejectionReason::kSnowMaterialFamily);
 	}
-	if (source.material->GetFeature() != MaterialFeature::kMultiIndexTriShapeSnow) {
-		return false;
-	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (collectDiagnostics)
+		++diagnostics.eligibleSources;
+#endif
 	if (!IsInsideDistanceBubble(source.geometry->worldBound, state->frameCount)) {
-		if (state->IsDeveloperMode()) {
+		if (collectDiagnostics) {
 			++diagnostics.distanceRejects;
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordRejection(RejectionReason::kDistance);
+#endif
 		return false;
 	}
 
@@ -1339,7 +1366,7 @@ bool MeshBlending::TryPrepareProjectedSnow(RE::BSRenderPass* a_pass)
 		source,
 		state->frameCount,
 		discoveryCaptureActive,
-		state->IsDeveloperMode());
+		collectDiagnostics);
 	if (classification == Classification::kRejected) {
 		return false;
 	}
@@ -1350,8 +1377,11 @@ bool MeshBlending::TryPrepareProjectedSnow(RE::BSRenderPass* a_pass)
 
 	state->permutationData.ExtraShaderDescriptor |=
 		static_cast<std::uint32_t>(State::ExtraShaderDescriptors::MeshBlending);
-	if (state->IsDeveloperMode()) {
+	if (collectDiagnostics) {
 		++diagnostics.activeDraws;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		++diagnostics.projectedSnowActiveDraws;
+#endif
 	}
 	++diagnostics.currentFrameActive;
 	return true;
@@ -1392,8 +1422,7 @@ void MeshBlending::PrepareLightingDraw(RE::BSRenderPass* a_pass)
 		return;
 	}
 	const auto passShaderFlags = a_pass && a_pass->shaderProperty ? a_pass->shaderProperty->flags.underlying() : 0u;
-	const auto projectedSnowFlags = ToMask(ShaderFlag::kProjectedUV) | ToMask(ShaderFlag::kMultiIndexSnow);
-	if ((passShaderFlags & projectedSnowFlags) == projectedSnowFlags) {
+	if ((passShaderFlags & ToMask(ShaderFlag::kProjectedUV)) != 0u) {
 		TryPrepareProjectedSnow(a_pass);
 		return;
 	}
@@ -1463,6 +1492,9 @@ void MeshBlending::DrawDiagnostics() const
 		static_cast<unsigned long long>(diagnostics.drawCalls),
 		static_cast<unsigned long long>(diagnostics.eligibleSources),
 		static_cast<unsigned long long>(diagnostics.classificationAccepts));
+	ImGui::Text("Projected snow candidates: %llu; active overlay draws: %llu",
+		static_cast<unsigned long long>(diagnostics.projectedSnowCandidates),
+		static_cast<unsigned long long>(diagnostics.projectedSnowActiveDraws));
 	ImGui::TextWrapped("Counters count draw observations while blending or recording is enabled. Accepted classifications can be recording-only; active draws receive the blend descriptor. Neither proves that a pixel intersected a surface.");
 	for (std::size_t index = 1u; index < diagnostics.rejections.size(); ++index) {
 		if (diagnostics.rejections[index] != 0u)
@@ -1508,7 +1540,7 @@ void MeshBlending::DrawDiscoverySettings()
 		"Authored AllowList, DenyList, and unknown extension fields are preserved.",
 		"Clear Detected NIF Rules"
 	};
-	ImGui::SeparatorText("NIF recording");
+	ImGui::SeparatorText("NIF and snow overlay recording");
 	ImGui::TextWrapped("Automatic selects eligible overlays for blending. Recording is a separate, session-only switch; enable it below to retain model/node identities.");
 	auto* state = globals::state;
 	const bool mutationBlocked = state && state->IsPersistentMutationBlocked();
@@ -1517,7 +1549,7 @@ void MeshBlending::DrawDiscoverySettings()
 	bool captureEnabled = discoveryCaptureEnabled.load(std::memory_order_relaxed);
 	if (mutationBlocked || ruleFileBlocked || captureSaturated)
 		ImGui::BeginDisabled();
-	if (ImGui::Checkbox("Record Eligible NIF Overlays", &captureEnabled)) {
+	if (ImGui::Checkbox("Record Eligible NIF and Snow Overlays", &captureEnabled)) {
 		SetDiscoveryCaptureEnabled(captureEnabled);
 		discoveryStatus = captureEnabled && !discoveryCaptureEnabled.load(std::memory_order_relaxed) ?
 		                      "The recording limit is reached. Save or clear the current results." :
@@ -1612,9 +1644,9 @@ void MeshBlending::DrawSettings()
 	if (auto tooltip = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Controls NIF intersection fades. Zero disables NIF blending work.");
 	}
-	ImGui::SliderFloat("Projected snow edge width", &settings.ProjectedSnowEdgeWidth, 0.0f, 8.0f, "%.2f pixels");
+	ImGui::SliderFloat("Projected snow overlay width", &settings.ProjectedSnowEdgeWidth, 0.0f, 8.0f, "%.2f pixels");
 	if (auto tooltip = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Softens accepted multi-index projected-snow cutoffs. Zero preserves the original hard discard.");
+		ImGui::Text("Softens accepted multi-index alpha snow overlays. Zero preserves the original hard discard. Ordinary True PBR projected materials retain their existing material interpolation.");
 	}
 	ImGui::SliderFloat("NIF blend width", &settings.BlendWidth, 0.25f, 128.0f, "%.2f units");
 	ImGui::SliderFloat("NIF depth bias", &settings.DepthBias, 0.0f, 16.0f, "%.2f units");
@@ -1678,8 +1710,11 @@ void MeshBlending::DrawMechanismToggles()
 	if (ImGui::Checkbox("NIF overlay intersection blending", &nifEnabled))
 		settings.NifEnabled = nifEnabled ? 1u : 0u;
 	bool snowEnabled = settings.ProjectedSnowEnabled != 0u;
-	if (ImGui::Checkbox("Projected snow edges", &snowEnabled))
+	if (ImGui::Checkbox("Projected snow overlay edges", &snowEnabled))
 		settings.ProjectedSnowEnabled = snowEnabled ? 1u : 0u;
+	if (auto tooltip = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Applies to multi-index alpha snow overlays that pass the overlay safety checks. Ordinary True PBR projected materials use their existing material interpolation.");
+	}
 }
 
 void MeshBlending::DrawEssentialSettings()

@@ -52,6 +52,8 @@ int main()
 	const auto schema = Schema();
 	const auto& fields = schema.at("properties").at("settings").at("properties");
 	assert(fields.size() == std::size(Settings));
+	assert(fields.at("ProjectedSnowEnabled").at("description").get<std::string>().find("multi-index alpha snow overlays") != std::string::npos);
+	assert(fields.at("ProjectedSnowEdgeWidth").at("description").get<std::string>().find("zero") != std::string::npos);
 	for (const auto& field : Settings) {
 		assert(fields.contains(field.name));
 	}

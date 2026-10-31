@@ -87,6 +87,10 @@ namespace CSX::Api::MeshBlendingDevBench
 			}
 			properties[std::string(field.name)] = std::move(schema);
 		}
+		properties["ProjectedSnowEnabled"]["description"] =
+			"Enable edge blending for eligible multi-index alpha snow overlays. Ordinary True PBR projected materials retain their existing material interpolation.";
+		properties["ProjectedSnowEdgeWidth"]["description"] =
+			"Screen-space edge width for accepted multi-index alpha snow overlays; zero preserves the original hard discard.";
 		return {
 			{ "type", "object" },
 			{ "additionalProperties", false },
@@ -113,7 +117,7 @@ namespace CSX::Api::MeshBlendingDevBench
 								{ "diagnosticsEnabled", { { "type", "boolean" } } },
 								{ "rejections", { { "type", "object" }, { "description", "First failed admission gate per observed draw; cached rejections retain their reason. Counters require global Debug mode." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } },
 								{ "discovery", { { "type", "object" }, { "description", "Recorded unique identities, repeated observations and dropped identities. Recording is separate from Automatic mode and diagnostic resets." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } },
-								{ "diagnostics", { { "type", "object" }, { "description", "Draw observations while blending or recording is enabled: drawCalls precedes scope/source checks; eligibleSources passes overlay render-state checks; classificationAccepts passes ownership/rules/receiver checks; activeDraws receives the shader descriptor. Counts are not unique meshes or proof of visible pixel blending." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } } } }
+								{ "diagnostics", { { "type", "object" }, { "description", "Draw observations while blending or recording is enabled: drawCalls precedes scope/source checks; eligibleSources passes overlay render-state checks; classificationAccepts passes ownership/rules/receiver checks; activeDraws receives the shader descriptor. projectedSnowCandidates includes unsupported projected material families; projectedSnowActiveDraws counts accepted multi-index alpha snow overlays. Counts are not unique meshes or proof of visible pixel blending." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } } } }
 		};
 	}
 }

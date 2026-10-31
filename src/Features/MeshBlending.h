@@ -229,6 +229,8 @@ private:
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		std::uint64_t eligibleSources = 0u;
 		std::uint64_t classificationAccepts = 0u;
+		std::uint64_t projectedSnowCandidates = 0u;
+		std::uint64_t projectedSnowActiveDraws = 0u;
 		std::array<std::uint64_t, static_cast<std::size_t>(CSX::MeshBlendingPolicy::RejectionReason::kCount)> rejections{};
 #endif
 	};

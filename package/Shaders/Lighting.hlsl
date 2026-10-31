@@ -2842,9 +2842,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(SPARKLE)
 
 #			if defined(MESH_BLENDING_PROJECTED_SNOW_AVAILABLE)
-	// Multi-index projected snow normally has a binary projection discard. On
-	// accepted snow-overlay draws only, retain fragments in a derivative-sized
-	// edge band and pass fractional coverage to the final alpha.
+	// Fractional coverage is safe only on accepted alpha overlays.
+	// Keep the derivative work inside the enabled draw branch.
 	[branch] if (SharedData::meshBlendingSettings.ProjectedSnowEdgeWidth > 0.0f && MeshBlending::ShouldApply())
 	{
 		meshBlendingProjectedSnowCoverage = MeshBlending::ComputeProjectedSnowCoverage(
@@ -4365,11 +4364,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Diffuse.w = alpha;
 #	endif
 
+#	if defined(DEFERRED) && defined(TERRAIN_BLENDING)
+	[flatten] if (SharedData::terrainBlendingSettings.Enabled)
+	{
+		psout.Diffuse.w = blendFactorTerrain;
+	}
+#	endif
+
+	// Finalize coverage before copying alpha to motion vectors and G-buffer outputs.
 #	if defined(MESH_BLENDING_PROJECTED_SNOW_AVAILABLE)
 	psout.Diffuse.w *= meshBlendingProjectedSnowCoverage;
 #	endif
 
-#	if defined(MESH_BLENDING_AVAILABLE) && !defined(DEFERRED)
+#	if defined(MESH_BLENDING_AVAILABLE)
 	[branch] if (MeshBlending::ShouldApply())
 	{
 		psout.Diffuse.w *= MeshBlending::ComputeFade(screenUV, input.Position.z, eyeIndex);
@@ -4400,21 +4407,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(DEFERRED)
 
-#		if defined(TERRAIN_BLENDING)
-	[flatten] if (SharedData::terrainBlendingSettings.Enabled)
-	{
-		psout.Diffuse.w = blendFactorTerrain;
-	}
-#		endif
-
-#		if defined(MESH_BLENDING_AVAILABLE)
-	[branch] if (MeshBlending::ShouldApply())
-	{
-		psout.Diffuse.w *= MeshBlending::ComputeFade(screenUV, input.Position.z, eyeIndex);
-	}
-#		endif
-
-	psout.MotionVectors.zw = float2(0.0, psout.Diffuse.w);
 	psout.Specular = float4(specularColor, psout.Diffuse.w);
 	psout.Albedo = float4(outputAlbedo, psout.Diffuse.w);
 

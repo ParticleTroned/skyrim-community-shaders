@@ -56,7 +56,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 namespace
 {
 	constexpr float kVRCullDistanceMin = 0.0f;
-	constexpr float kVRCullDistanceMax = 20480.0f;
+	constexpr float kVRCullDistanceMax = 40960.0f;
 	constexpr int kResolutionModeMin = 0;
 	constexpr int kResolutionModeMax = 2;
 	constexpr int kNumSlicesMin = 1;

@@ -39,7 +39,7 @@ namespace
 	constexpr float kVRBaseSamplesMin = 16.0f;
 	constexpr float kVRBaseSamplesMax = 96.0f;
 	constexpr float kVRCullDistanceMin = 0.0f;
-	constexpr float kVRCullDistanceMax = 20480.0f;
+	constexpr float kVRCullDistanceMax = 40960.0f;
 	constexpr float kSurfaceThicknessMin = 0.005f;
 	constexpr float kSurfaceThicknessMax = 0.05f;
 	constexpr float kBilinearThresholdMin = 0.02f;

@@ -1,0 +1,205 @@
+name: Mesh CI main sync (temporary)
+
+on:
+  push:
+    branches: [codex/mesh-ci-contract-repair-20261031]
+    paths: [.github/workflows/mesh-ci-main-sync.yaml]
+
+permissions:
+  contents: read
+
+jobs:
+  restack:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 47aa4096dbd6bc76cb8e490066e218bd09bb200e
+          fetch-depth: 1
+      - uses: actions/checkout@v6
+        with:
+          repository: nlohmann/json
+          ref: v3.12.0
+          path: build/ci-json
+          sparse-checkout: include
+          persist-credentials: false
+      - uses: TheMrMilchmann/setup-msvc-dev@v4.0.0
+        with:
+          arch: x64
+      - name: Integrate latest main, regenerate contracts, and test all three trees
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $main = 'f140c878138fe2783a6a4ad40420a3a2a996ccd0'
+          $items = @(
+              @{ id='nif'; source='codex/mesh-blending-nif'; sha='47aa4096dbd6bc76cb8e490066e218bd09bb200e' },
+              @{ id='snow'; source='codex/mesh-blending-projected-snow'; sha='38b14d6cd6457cd8c8bb3f3c6cab5d64276657b2' },
+              @{ id='land'; source='codex/mesh-blending-land-materials'; sha='37bbfe90ec0d0fa8ea540e6289924ef02a583dce' }
+          )
+          function Assert-RemoteHead([string]$branch, [string]$sha) {
+              $remote = git ls-remote --heads origin "refs/heads/$branch"
+              if ($LASTEXITCODE -ne 0 -or -not $remote -or ($remote -split '\s+')[0] -cne $sha) { throw "Remote moved: $branch" }
+          }
+          Assert-RemoteHead 'main-VR' $main
+          foreach ($item in $items) { Assert-RemoteHead $item.source $item.sha }
+          git fetch --no-tags --unshallow origin $main $items[0].sha $items[1].sha $items[2].sha
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot fetch reviewed histories.' }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          $metadata = @('docs/development/unified-preset-policy.json', 'docs/development/generated-unified-preset-report.json', 'src/PresetCompatibility.h')
+          foreach ($tier in @('Performance', 'Balanced', 'Quality')) {
+              $metadata += "MGO-Presets/CSX Unified- $tier - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json"
+          }
+          $helper = Join-Path $env:RUNNER_TEMP 'mesh-main-policy.py'
+          @'
+          import json, os, re, subprocess
+          from pathlib import Path
+
+          def check(ok, message):
+              if not ok:
+                  raise RuntimeError(message)
+
+          def source(ref, path):
+              return subprocess.check_output(['git', 'show', ref + ':' + path]).decode('utf-8-sig')
+
+          def write(path, text):
+              with Path(path).open('w', encoding='utf-8', newline='\n') as handle:
+                  handle.write(text)
+
+          def replace_once(text, old, new):
+              check(text.count(old) == 1, 'Expected one occurrence: ' + old)
+              return text.replace(old, new)
+
+          main, original = os.environ['SYNC_MAIN'], os.environ['SYNC_ORIGINAL']
+          policy_path = 'docs/development/unified-preset-policy.json'
+          main_policy = json.loads(source(main, policy_path))
+          old_text = source(original, policy_path)
+          old_policy = json.loads(old_text)
+          revision = old_policy['runtimeSettingsContract']['revision'] + 1
+          check(revision in (27, 28, 29), 'Unexpected child contract revision')
+          check(main_policy['runtimeSettingsContract']['revision'] == 26, 'Unexpected main revision')
+          if os.environ['SYNC_PHASE'] == 'prepare':
+              text = replace_once(old_text, '"packageVersion": ' + json.dumps(old_policy['packageVersion']), '"packageVersion": ' + json.dumps(main_policy['packageVersion']))
+              text = replace_once(text, old_policy['baseTemplate']['sha256'], main_policy['baseTemplate']['sha256'])
+              pattern = r'("runtimeSettingsContract"\s*:\s*\{\s*"revision"\s*:\s*)\d+'
+              text, count = re.subn(pattern, lambda match: match[1] + str(revision), text)
+              check(count == 1, 'Missing policy contract revision')
+              write(policy_path, text)
+              header_path = 'src/PresetCompatibility.h'
+              header, count = re.subn(r'(kSettingsContractRevision\s*=\s*)\d+', lambda match: match[1] + str(revision), source(original, header_path))
+              check(count == 1, 'Missing C++ contract revision')
+              write(header_path, header)
+              cpp_path = 'src/PresetCompatibility.cpp'
+              cpp = Path(cpp_path).read_text(encoding='utf-8-sig')
+              dynamic = 'a_evaluation.settingsContractRevision < PresetCompatibility::kSettingsContractRevision'
+              if dynamic not in cpp:
+                  pattern = r'(a_current\.minor == 21 && \(a_evaluation\.settingsContractRevision >= 15 && )a_evaluation\.settingsContractRevision <= \d+'
+                  cpp, count = re.subn(pattern, lambda match: match[1] + dynamic, cpp)
+                  check(count == 1, 'Cannot identify the current-runtime legacy revision limit')
+                  write(cpp_path, cpp)
+              check(cpp.count(dynamic) == 1, 'Unexpected legacy compatibility predicate')
+              print(f'Prepared contract revision {revision}; latest main defaults retained')
+          else:
+              after_policy = json.loads(Path(policy_path).read_text(encoding='utf-8-sig'))
+              expected = old_policy
+              expected['packageVersion'] = main_policy['packageVersion']
+              expected['baseTemplate'] = main_policy['baseTemplate']
+              expected['runtimeSettingsContract']['revision'] = revision
+              expected['runtimeSettingsContract']['sourceTreeSha256'] = after_policy['runtimeSettingsContract']['sourceTreeSha256']
+              check(expected == after_policy, 'Unexpected policy changes')
+              for tier in ('Performance', 'Balanced', 'Quality'):
+                  path = f'MGO-Presets/CSX Unified- {tier} - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json'
+                  before = json.loads(source(original, path))
+                  upstream = json.loads(source(main, path))
+                  after = json.loads(Path(path).read_text(encoding='utf-8-sig'))
+                  before['Neural Rendering'] = upstream['Neural Rendering']
+                  marker = before['Preset Compatibility']
+                  marker['presetVersion'] = main_policy['packageVersion']
+                  marker['settingsContract'] = {k: after_policy['runtimeSettingsContract'][k] for k in ('revision', 'sourceTreeSha256')}
+                  check(before == after, f'Unexpected preset setting changes: {tier}')
+              # All changed upstream files apart from reconciled contract metadata
+              # must remain byte-for-byte identical to the reviewed main update.
+              paths = subprocess.check_output(['git', 'diff-tree', '--no-commit-id', '--name-only', '-r', main]).decode().splitlines()
+              reconciled = set(os.environ['SYNC_METADATA'].split('|')) | {'src/PresetCompatibility.cpp'}
+              for path in paths:
+                  if path not in reconciled:
+                      expected = source(main, path).replace('\r\n', '\n')
+                      actual = Path(path).read_text(encoding='utf-8-sig').replace('\r\n', '\n')
+                      check(actual == expected, 'Upstream update lost or changed: ' + path)
+              print(f'Revision {revision}: only the reviewed main defaults and contract metadata changed')
+          '@ | Set-Content -Path $helper -Encoding utf8
+
+          $env:SYNC_MAIN = $main
+          $env:SYNC_METADATA = $metadata -join '|'
+          $parent = $main
+          $outputs = @()
+          $summary = @()
+          foreach ($item in $items) {
+              $output = "codex/mesh-ci-main-sync-$($item.id)-20261031"
+              $existing = git ls-remote --heads origin "refs/heads/$output"
+              if ($LASTEXITCODE -ne 0 -or $existing) { throw "Output already exists: $output" }
+              git checkout --detach $item.sha
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot select reviewed child tree.' }
+              git merge --no-ff --no-commit $parent
+              $mergeExit = $LASTEXITCODE
+              if ($mergeExit -notin @(0, 1)) { throw 'Merge failed.' }
+              $conflicts = @(git diff --name-only --diff-filter=U)
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect conflicts.' }
+              foreach ($path in $conflicts) {
+                  if ($path -notin $metadata) { throw "Unreviewed source conflict: $path" }
+              }
+              if ($mergeExit -eq 1 -and $conflicts.Count -eq 0) { throw 'Unexpected merge failure.' }
+              # Preserve each child's feature schema; regenerate all derived fields.
+              git restore --source=$($item.sha) --staged --worktree -- @metadata
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot restore reviewed child metadata for regeneration.' }
+              $env:SYNC_ORIGINAL = $item.sha
+              $env:SYNC_PHASE = 'prepare'
+              python $helper
+              if ($LASTEXITCODE -ne 0) { throw 'Policy reconciliation failed.' }
+              $contractFailure = $null
+              try { & ./tools/generate-unified-presets.ps1 -Check } catch { $contractFailure = $_.Exception.Message }
+              if (-not $contractFailure -or $contractFailure -cnotmatch 'Runtime settings contract changed: expected ([0-9A-F]{64}), got ([0-9A-F]{64})\.') {
+                  throw "Expected source fingerprint update; got: $contractFailure"
+              }
+              $oldHash = $Matches[1]
+              $newHash = $Matches[2]
+              $policyPath = 'docs/development/unified-preset-policy.json'
+              $text = [System.IO.File]::ReadAllText((Join-Path $PWD $policyPath))
+              if ([regex]::Matches($text, [regex]::Escape($oldHash)).Count -ne 1) { throw 'Unexpected old fingerprint count.' }
+              [System.IO.File]::WriteAllText((Join-Path $PWD $policyPath), $text.Replace($oldHash, $newHash), [System.Text.UTF8Encoding]::new($false))
+              & ./tools/generate-unified-presets.ps1
+              & ./tools/generate-unified-presets.ps1 -Check
+              pwsh -NoProfile -File ./tests/unified_preset_generator_test.ps1
+              if ($LASTEXITCODE -ne 0) { throw 'Preset generator tests failed.' }
+              $env:SYNC_PHASE = 'verify'
+              python $helper
+              if ($LASTEXITCODE -ne 0) { throw 'Main/feature preservation checks failed.' }
+
+              $outDir = Join-Path $env:RUNNER_TEMP "mesh-preset-test-$($item.id)"
+              New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+              $exe = Join-Path $outDir 'preset_compatibility_test.exe'
+              & cl.exe /nologo /std:c++latest /EHsc /utf-8 /W4 /WX /I src /external:I build/ci-json/include /external:W0 "/Fo$outDir/" "/Fe$exe" tests/preset_compatibility_test.cpp src/PresetCompatibility.cpp
+              if ($LASTEXITCODE -ne 0) { throw 'Native preset compatibility test did not compile.' }
+              & $exe $PWD.Path
+              if ($LASTEXITCODE -ne 0) { throw 'Native preset compatibility test failed.' }
+              git diff --check
+              if ($LASTEXITCODE -ne 0) { throw 'Whitespace validation failed.' }
+              git add -u
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot stage reconciled files.' }
+              git diff --cached --check
+              if ($LASTEXITCODE -ne 0) { throw 'Invalid staged diff.' }
+              git diff --cached --stat
+              git commit -m "merge: sync main NR defaults and validate $($item.id) preset contract"
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot commit checked merge.' }
+              $parent = (git rev-parse HEAD).Trim()
+              $outputs += "${parent}:refs/heads/$output"
+              $summary += "$($item.id)=$parent"
+          }
+          Assert-RemoteHead 'main-VR' $main
+          foreach ($item in $items) { Assert-RemoteHead $item.source $item.sha }
+          git push --atomic origin @outputs
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot publish verified stack atomically.' }
+          ($summary -join "`n") | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append

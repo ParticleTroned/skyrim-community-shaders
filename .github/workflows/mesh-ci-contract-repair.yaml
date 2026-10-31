@@ -9,130 +9,97 @@ permissions:
   contents: read
 
 jobs:
-  refresh:
+  restack:
     runs-on: windows-2025-vs2026
-    timeout-minutes: 20
+    timeout-minutes: 15
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - id: nif
-            sha: 772ef4ce894edee97e07695f8d66e0bbf66e7ebf
-            source: codex/mesh-blending-nif
-            output: codex/mesh-ci-contract-nif-20261031
-          - id: snow
-            sha: 2a35ac01ce2719b26035478d91994d075deefee8
-            source: codex/mesh-blending-projected-snow
-            output: codex/mesh-ci-contract-snow-20261031
-          - id: land
-            sha: b80b39c830c886543c6ef1cc48ee1dd240e421b5
-            source: codex/mesh-blending-land-materials
-            output: codex/mesh-ci-contract-land-20261031
+      actions: read
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ matrix.sha }}
-          fetch-depth: 1
-      - name: Refresh, validate, and stage metadata only
+          ref: bc076e6d95b644cf9ea07839ad9a01637d4269b5
+          fetch-depth: 0
+      - name: Summarize original snow native build errors
         shell: pwsh
         env:
-          EXPECTED_HEAD: ${{ matrix.sha }}
-          SOURCE_BRANCH: ${{ matrix.source }}
-          OUTPUT_BRANCH: ${{ matrix.output }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          @'
+          import os, re, urllib.request
+          url = 'https://api.github.com/repos/ParticleTroned/skyrim-community-shaders/actions/jobs/124623948008/logs'
+          request = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
+          with urllib.request.urlopen(request, timeout=60) as response:
+              text = response.read().decode('utf-8-sig')
+          errors = sorted({line.split('Z ', 1)[-1] for line in text.splitlines() if re.search(r'error (?:C\d+|LNK\d+|MSB\d+)', line)})
+          for error in errors:
+              print(error)
+          if not errors:
+              raise RuntimeError('No compiler errors found in the original failed native build log')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Preserve stacked ancestry and verify exact trees
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $head = (git rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_HEAD) { throw 'Checkout changed.' }
-          $remoteHead = git ls-remote --heads origin "refs/heads/$env:SOURCE_BRANCH"
-          if ($LASTEXITCODE -ne 0 -or -not $remoteHead -or ($remoteHead -split '\s+')[0] -cne $env:EXPECTED_HEAD) {
-              throw 'Source branch moved; refusing to refresh an obsolete tree.'
+          $nif = '49e7a8e99455199f3b72c09585e80d1e393a88ee'
+          $snow = 'bc076e6d95b644cf9ea07839ad9a01637d4269b5'
+          $land = '59768c9c9e054a7a63b8b6a43f396eca747d4700'
+          $metadata = @('docs/development/unified-preset-policy.json', 'docs/development/generated-unified-preset-report.json')
+          foreach ($tier in @('Performance', 'Balanced', 'Quality')) {
+              $metadata += "MGO-Presets/CSX Unified- $tier - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json"
           }
-          $existingOutput = git ls-remote --heads origin "refs/heads/$env:OUTPUT_BRANCH"
-          if ($LASTEXITCODE -ne 0 -or $existingOutput) { throw 'Output branch already exists or cannot be checked.' }
-          if (git status --porcelain) { throw 'Checkout must be clean before regeneration.' }
-
-          $contractFailure = $null
-          try {
-              & ./tools/generate-unified-presets.ps1 -Check
-          } catch {
-              $contractFailure = $_.Exception.Message
-          }
-          if (-not $contractFailure -or $contractFailure -cnotmatch 'Runtime settings contract changed: expected ([0-9A-F]{64}), got ([0-9A-F]{64})\.') {
-              throw "Expected only the reviewed source fingerprint mismatch; got: $contractFailure"
-          }
-          $oldHash = $Matches[1]
-          $newHash = $Matches[2]
-          $policyPath = 'docs/development/unified-preset-policy.json'
-          $reportPath = 'docs/development/generated-unified-preset-report.json'
-          $policyText = [System.IO.File]::ReadAllText((Join-Path $PWD $policyPath))
-          if ([regex]::Matches($policyText, [regex]::Escape($oldHash)).Count -ne 1) {
-              throw 'Expected one source fingerprint in the policy.'
-          }
-          [System.IO.File]::WriteAllText((Join-Path $PWD $policyPath), $policyText.Replace($oldHash, $newHash), [System.Text.UTF8Encoding]::new($false))
-          & ./tools/generate-unified-presets.ps1
-          & ./tools/generate-unified-presets.ps1 -Check
-          pwsh -NoProfile -File ./tests/unified_preset_generator_test.ps1
-          if ($LASTEXITCODE -ne 0) { throw 'Unified preset tests failed.' }
-
-          $env:OLD_CONTRACT_HASH = $oldHash
-          $env:NEW_CONTRACT_HASH = $newHash
-          @'
-          import json, os, subprocess
-          from pathlib import Path
-
-          def check(condition, message):
-              if not condition:
-                  raise RuntimeError(message)
-
-          def original(path):
-              return json.loads(subprocess.check_output(['git', 'show', 'HEAD:' + path]).decode('utf-8-sig'))
-
-          def current(path):
-              return json.loads(Path(path).read_text(encoding='utf-8-sig'))
-
-          old_hash = os.environ['OLD_CONTRACT_HASH']
-          new_hash = os.environ['NEW_CONTRACT_HASH']
-          policy_path = 'docs/development/unified-preset-policy.json'
-          report_path = 'docs/development/generated-unified-preset-report.json'
-          paths = [policy_path, report_path]
-          for tier in ('Performance', 'Balanced', 'Quality'):
-              path = f'MGO-Presets/CSX Unified- {tier} - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json'
-              paths.append(path)
-              before, after = original(path), current(path)
-              contract = before['Preset Compatibility']['settingsContract']
-              check(contract['sourceTreeSha256'] == old_hash, f'Unexpected old hash: {path}')
-              contract['sourceTreeSha256'] = new_hash
-              check(before == after, f'Refusing changed rendering settings or unrelated metadata: {path}')
-              print(f'{tier}: only Preset Compatibility/settingsContract/sourceTreeSha256 changed')
-          before, after = original(policy_path), current(policy_path)
-          check(before['runtimeSettingsContract']['sourceTreeSha256'] == old_hash, 'Unexpected policy hash')
-          before['runtimeSettingsContract']['sourceTreeSha256'] = new_hash
-          check(before == after, 'Policy changed beyond source fingerprint')
-          before, after = original(report_path), current(report_path)
-          before['runtimeSettingsContract']['sourceTreeSha256'] = new_hash
-          check(len(before['tiers']) == len(after['tiers']) == 3, 'Unexpected report tiers')
-          for old, new in zip(before['tiers'], after['tiers']):
-              old['settingsSha256'] = new['settingsSha256']
-          check(before == after, 'Report changed beyond source and generated settings fingerprints')
-          changed = set(subprocess.check_output(['git', 'diff', '--name-only', '-z']).decode().rstrip('\0').split('\0'))
-          check(changed == set(paths), f'Unexpected changed files: {changed}')
-          '@ | python -
-          if ($LASTEXITCODE -ne 0) { throw 'Metadata-only diff verification failed.' }
-          git diff --check
-          if ($LASTEXITCODE -ne 0) { throw 'Whitespace validation failed.' }
-          git diff
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- $policyPath $reportPath
-          foreach ($tier in @('Performance', 'Balanced', 'Quality')) {
-              git add -- "MGO-Presets/CSX Unified- $tier - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json"
-              if ($LASTEXITCODE -ne 0) { throw 'Could not stage preset fingerprint.' }
+          foreach ($sha in @($nif, $snow, $land)) {
+              git cat-file -e "${sha}^{commit}"
+              if ($LASTEXITCODE -ne 0) { throw "Missing reviewed staging commit $sha" }
           }
-          git commit -m 'fix(presets): refresh source fingerprint after mesh interface fix'
-          if ($LASTEXITCODE -ne 0) { throw 'Could not commit metadata.' }
-          git push origin "HEAD:refs/heads/$env:OUTPUT_BRANCH"
-          if ($LASTEXITCODE -ne 0) { throw 'Could not publish isolated repair branch.' }
-          $newHead = (git rev-parse HEAD).Trim()
-          "Staged $env:OUTPUT_BRANCH at $newHead; source fingerprint $newHash" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          foreach ($output in @('codex/mesh-ci-stack-snow-20261031', 'codex/mesh-ci-stack-land-20261031')) {
+              $existing = git ls-remote --heads origin "refs/heads/$output"
+              if ($LASTEXITCODE -ne 0 -or $existing) { throw "Output exists or cannot be checked: $output" }
+          }
+          function Merge-ReviewedParent([string]$parent) {
+              git merge --no-ff --no-commit $parent
+              $mergeExit = $LASTEXITCODE
+              if ($mergeExit -notin @(0, 1)) { throw 'Merge command failed.' }
+              $conflicts = @(git diff --name-only --diff-filter=U)
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect merge conflicts.' }
+              foreach ($path in $conflicts) {
+                  if ($path -notin $metadata) { throw "Unexpected source conflict: $path" }
+                  git checkout --ours -- $path
+                  if ($LASTEXITCODE -ne 0) { throw 'Cannot retain child-specific metadata.' }
+                  git add -- $path
+                  if ($LASTEXITCODE -ne 0) { throw 'Cannot stage child-specific metadata.' }
+              }
+              if ($mergeExit -eq 1 -and $conflicts.Count -eq 0) { throw 'Merge failed without expected metadata conflicts.' }
+              git diff --cached --check
+              if ($LASTEXITCODE -ne 0) { throw 'Invalid staged diff.' }
+          }
+
+          Merge-ReviewedParent $nif
+          git diff --cached --exit-code $snow --
+          if ($LASTEXITCODE -ne 0) { throw 'Snow merge changed the already-tested source tree.' }
+          & ./tools/generate-unified-presets.ps1 -Check
+          git commit -m 'merge: carry NIF CI fixes into projected snow stack'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not commit snow ancestry update.' }
+          $snowFinal = (git rev-parse HEAD).Trim()
+          git push origin 'HEAD:refs/heads/codex/mesh-ci-stack-snow-20261031'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not stage snow ancestry update.' }
+
+          git checkout --detach $land
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot check out LAND staging commit.' }
+          Merge-ReviewedParent $snowFinal
+          $changes = @(git diff --cached --name-only $land --)
+          $harness = 'tests/shaders/runtime_discovered_tests.cpp'
+          if ($changes.Count -ne 1 -or $changes[0] -cne $harness) { throw "Unexpected LAND merge diff: $($changes -join ', ')" }
+          git diff --cached --exit-code $snowFinal -- $harness
+          if ($LASTEXITCODE -ne 0) { throw 'LAND must inherit the exact reviewed shader failure reporting fix.' }
+          & ./tools/generate-unified-presets.ps1 -Check
+          git diff --cached
+          git commit -m 'merge: carry snow CI fixes and shader diagnostics into LAND stack'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not commit LAND ancestry update.' }
+          $landFinal = (git rev-parse HEAD).Trim()
+          git push origin 'HEAD:refs/heads/codex/mesh-ci-stack-land-20261031'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not stage LAND ancestry update.' }
+          "NIF=$nif`nSNOW=$snowFinal`nLAND=$landFinal" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append

@@ -12,6 +12,7 @@
 #	include "Features/FoliageLighting.h"
 #	include "Features/GrassCollision.h"
 #	include "Features/GrassOptimizations.h"
+#	include "Features/GrassOptimizations/GrassBucketRenderer.h"
 #	include "Features/LinearLighting.h"
 #	include "Features/ScreenSpaceGI.h"
 #	include "Features/ScreenSpaceShadows.h"
@@ -888,6 +889,19 @@ namespace
 				return { { "ok", true }, { "action", action }, { "collisionStrength", collision.GetCollisionStrength() }, { "persisted", false }, { "status", BuildStatus() } };
 			});
 		}
+		if (action == "set_grass_background_preparation_enabled") {
+			if (!a_args.contains("enabled") || !a_args["enabled"].is_boolean())
+				return { { "ok", false }, { "error", "enabled must be a boolean" }, { "action", action } };
+			return RunOnMainThread([enabled = a_args["enabled"].get<bool>(), action]() -> json {
+				if (PerformanceTuningRenderer::HasActiveMeasurements())
+					return { { "ok", false }, { "error", "Finish or cancel the performance measurement before changing grass preparation" }, { "action", action } };
+				auto& grass = globals::features::grassOptimizations;
+				if (enabled && (!grass.loaded || !grass.GetRenderer().IsRenderingAvailable()))
+					return { { "ok", false }, { "error", "Grass Optimizations rendering is unavailable" }, { "action", action } };
+				grass.GetRenderer().SetBackgroundPreparationEnabled(enabled);
+				return { { "ok", true }, { "action", action }, { "persisted", false }, { "status", BuildStatus() } };
+			});
+		}
 		if (action == "grass_telemetry") {
 			if (a_args.contains("requestTelemetry") && !a_args["requestTelemetry"].is_boolean())
 				return { { "error", "requestTelemetry must be a boolean" } };
@@ -1465,6 +1479,19 @@ namespace MenuDevBenchBridge
 			document["description"] = document["description"].get<std::string>() +
 			                          " reset_menu_layout queues render-thread recovery on SE, AE and VR: reopen the menu, restore window geometry, sidebar proportions, zoom and font sizing, and reset headset placement in VR. menuLayoutResetPending reports whether the next overlay frame has consumed it. Rendering settings and shader caches are unchanged; theme changes remain unsaved.";
 			document["inputSchema"]["properties"]["action"]["enum"].push_back("grass_telemetry");
+			document["inputSchema"]["properties"]["action"]["enum"].push_back("set_grass_background_preparation_enabled");
+			document["description"] = document["description"].get<std::string>() +
+			                          " set_grass_background_preparation_enabled requires boolean enabled for a DevBench-only, default-off, session-only grass CPU preparation experiment. Applies at the next grass frame on SE/AE/VR; does not save or enable GO. A single worker sorts captured sources, forms compatible buckets and prepares record layouts. Native validation, GPU uploads and drawing stay on the render thread. Unchanged complete queues remain batched; changed or unfinished queues use complete native fallback. Stale queues are rejected at publication. Disabling restores synchronous preparation without waiting for a worker. Active performance measurements block mutation. status.grassOptimizations.backgroundPreparation reports requested enabled, render-thread active, updatePending, pending publication, failed (synchronous fallback), cumulative submitted/published/discarded jobs, rejectedBuckets and frames, renderMilliseconds (all PrepareFrame CPU time) and workerMilliseconds (successful worker layout time). Sample counter deltas for same-build A/B; values do not measure GPU work or establish a speedup. No diagnostic GPU probes are requested.";
+			json preparationProperties = json::object();
+			for (const auto* name : { "enabled", "active", "updatePending", "pending", "failed" })
+				preparationProperties[name] = { { "type", "boolean" } };
+			for (const auto* name : { "submitted", "published", "discarded", "rejectedBuckets", "frames" })
+				preparationProperties[name] = { { "type", "integer" }, { "minimum", 0 } };
+			for (const auto* name : { "renderMilliseconds", "workerMilliseconds" })
+				preparationProperties[name] = { { "type", "number" }, { "minimum", 0 } };
+			document["outputSchema"]["properties"]["status"]["properties"]["grassOptimizations"]["properties"]["backgroundPreparation"] = {
+				{ "type", "object" }, { "properties", std::move(preparationProperties) }
+			};
 			document["inputSchema"]["properties"]["requestTelemetry"] = {
 				{ "type", "boolean" }, { "default", true },
 				{ "description", "grass_telemetry only: false reads the previous publication without requesting another sample." }
@@ -1538,6 +1565,8 @@ namespace MenuDevBenchBridge
 														  { "telemetryError", { { "type", { "string", "null" } }, { "description", "snapshot_failed retains the preceding snapshot after a sampling failure." } } },
 														  { "telemetryScope", { { "type", "string" } } } } }
 			};
+			document["outputSchema"]["properties"]["grassOptimizations"]["properties"]["backgroundPreparation"] =
+				document["outputSchema"]["properties"]["status"]["properties"]["grassOptimizations"]["properties"]["backgroundPreparation"];
 			document["outputSchema"]["properties"]["scene"] = {
 				{ "type", "object" }, { "description", "Main-thread context at the DevBench call, independently framed from the asynchronous grass and profiler samples. Unavailable scene values are omitted." }
 			};

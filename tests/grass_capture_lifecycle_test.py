@@ -266,7 +266,7 @@ int main() {
         source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
         runtime = (ROOT / "src/Features/GrassOptimizations/GrassRuntime.h").read_text(encoding="utf-8")
         methods = "\n".join(block(source, signature) for signature in (
-            "bool CurrentContract(", "bool Compatible(", "size_t CompatibilityHash(",
+            "bool CurrentContract(", "bool CompatibleCaptured(", "bool Compatible(", "size_t CompatibilityHash(",
             "void GrassBucketRenderer::Impl::AssignQueue(",
             "void GrassBucketRenderer::Impl::UnassignQueue(",
             "void GrassBucketRenderer::Impl::EraseResident("))

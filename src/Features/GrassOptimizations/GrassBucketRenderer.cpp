@@ -5,6 +5,7 @@
 #include "Features/GrassOptimizations.h"
 #include "Globals.h"
 #include "GpuPass.h"
+#include "GrassBucketPreparation.h"
 #include "GrassD3DState.h"
 #include "GrassFadeHistory.h"
 #include "GrassFrustum.h"
@@ -30,7 +31,9 @@
 #include <tuple>
 #include <unordered_map>
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include <BS_thread_pool.hpp>
 #	include <chrono>
+#	include <future>
 #	include <unordered_set>
 #endif
 
@@ -213,14 +216,7 @@ namespace
 	{
 		size_t bucket, source;
 	};
-	struct SliceRun
-	{
-		size_t source, firstGroup, lastGroup;
-		uint32_t record, count;
-		std::array<float, 3> lo{}, hi{};
-		float minVariance, maxVariance, basis;
-		bool known;
-	};
+	using SliceRun = GrassPreparation::Run;
 	struct CullResult
 	{
 		std::unique_ptr<Buffer> output, extras, arguments;
@@ -261,28 +257,7 @@ namespace
 
 	void CacheRuns(Bucket& bucket)
 	{
-		uint32_t record = 0;
-		for (size_t source = 0; source < bucket.sources.size(); ++source) {
-			const auto& groups = bucket.sources[source].groups;
-			for (size_t index = 0; index < groups.size(); ++index) {
-				const auto& group = groups[index];
-				if (!bucket.runs.empty() && bucket.runs.back().source == source && bucket.runs.back().known && group.boundsKnown &&
-					groups[bucket.runs.back().firstGroup].birthTime == group.birthTime) {
-					auto& run = bucket.runs.back();
-					run.lastGroup = index;
-					run.count += group.count;
-					for (size_t axis = 0; axis < 3; ++axis) {
-						run.lo[axis] = std::min(run.lo[axis], group.lo[axis]);
-						run.hi[axis] = std::max(run.hi[axis], group.hi[axis]);
-					}
-					run.minVariance = std::min(run.minVariance, group.minVariance);
-					run.maxVariance = std::max(run.maxVariance, group.maxVariance);
-					run.basis = std::max(run.basis, group.maxBasisNorm);
-				} else
-					bucket.runs.push_back({ source, index, index, record, group.count, group.lo, group.hi, group.minVariance, group.maxVariance, group.maxBasisNorm, group.boundsKnown });
-				record += group.count;
-			}
-		}
+		GrassPreparation::BuildRuns(bucket.runs, bucket.sources.size(), [&](size_t source) -> const Source& { return bucket.sources[source]; });
 	}
 
 	size_t RecordLayoutHash(const Bucket& bucket)
@@ -427,10 +402,8 @@ namespace
 		       source.bound.center == bound.center && source.bound.radius == bound.radius &&
 		       source.renderDistance == runtime.renderDistance;
 	}
-	bool Compatible(const Source& a, const Source& b)
+	bool CompatibleCaptured(const Source& a, const Source& b)
 	{
-		if (!CurrentContract(a) || !CurrentContract(b))
-			return false;
 		const bool sameBuffers = a.vertices == b.vertices && a.indices == b.indices;
 		const bool sameModelMesh = !a.model.empty() && a.model == b.model &&
 		                           a.vertexCount == b.vertexCount && a.vertexBytes == b.vertexBytes && a.indexBytes == b.indexBytes;
@@ -438,6 +411,10 @@ namespace
 		       a.descriptor == b.descriptor && a.flags == b.flags && a.triangles == b.triangles &&
 		       a.lights == b.lights && a.lightMask == b.lightMask && a.renderDistance == b.renderDistance && a.wavePeriod == b.wavePeriod && a.model == b.model &&
 		       a.bound.radius == b.bound.radius && a.bound.center == b.bound.center;
+	}
+	bool Compatible(const Source& a, const Source& b)
+	{
+		return CurrentContract(a) && CurrentContract(b) && CompatibleCaptured(a, b);
 	}
 	size_t CompatibilityHash(const Source& source)
 	{
@@ -663,6 +640,23 @@ struct GrassBucketRenderer::Impl
 	GrassPolicy::Settings frameSettings;
 	float frameCollisionStrength = GrassCollision::kDefaultCollisionStrength;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	struct PreparationJob
+	{
+		std::vector<Source> sources;
+		uint64_t revision, request;
+		bool batching;
+		std::future<std::vector<GrassPreparation::Bucket>> result;
+	};
+	std::unique_ptr<PreparationJob> preparationJob;
+	std::unique_ptr<BS::thread_pool<>> preparationWorker;
+	std::atomic_uint64_t preparationRequest{ 0 }, preparationAppliedRequest{ 0 };
+	std::atomic_bool preparationPending{ false }, preparationFailed{ false }, preparationActive{ false };
+	std::atomic_uint64_t preparationSubmitted{ 0 }, preparationPublished{ 0 }, preparationDiscarded{ 0 }, preparationRejectedBuckets{ 0 };
+	std::atomic_uint64_t preparationRenderNanoseconds{ 0 }, preparationWorkerNanoseconds{ 0 }, preparationFrames{ 0 };
+	uint64_t preparationValidatedRevision = UINT64_MAX;
+	bool PrepareBackground();
+	bool CurrentBucket(std::span<const Source> sources) const;
+	void ReindexBuckets();
 	std::atomic_bool diagnostics{ false };
 	GrassTelemetry::Channel telemetry;
 	GrassTelemetry::Work frameWork;
@@ -742,6 +736,11 @@ struct GrassBucketRenderer::Impl
 GrassBucketRenderer::GrassBucketRenderer() : impl(std::make_unique<Impl>()) {}
 GrassBucketRenderer::~GrassBucketRenderer()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	// A worker borrows its snapshot; join before releasing native owners on this thread.
+	impl->preparationWorker.reset();
+	impl->preparationJob.reset();
+#endif
 	// Releasing the last native owner can call the deleting-destructor hook.
 	impl->queuedGroups.clear();
 }
@@ -1384,6 +1383,11 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 	if (frame == now)
 		return;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	const auto preparationStart = std::chrono::steady_clock::now();
+	const SKSE::stl::scope_exit preparationTimer([&] {
+		preparationRenderNanoseconds.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - preparationStart).count(), std::memory_order_relaxed);
+		++preparationFrames;
+	});
 	try {
 		PublishTelemetry();
 	} catch (const std::exception&) {
@@ -1424,6 +1428,10 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 	lock.unlock();
 	UpdateLODDemand(frameSettings);
 	lock.lock();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (PrepareBackground())
+		return;
+#endif
 	if (!frameSettings.Enabled || failed)
 		return;
 	if (preparedRevision == residentRevision && preparedBatching == frameSettings.CrossCellBatching) {
@@ -1549,6 +1557,148 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 	publishedResultBytes.store(resultBytes, std::memory_order_relaxed);
 #endif
 }
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+bool GrassBucketRenderer::Impl::CurrentBucket(std::span<const Source> sources) const
+{
+	if (sources.empty() || !sources.front().queue || sources.front().queue->members.size() != sources.size() ||
+		sources.front().queue->batching != frameSettings.CrossCellBatching)
+		return false;
+	for (const auto& source : sources) {
+		const auto live = residents.find(source.identity);
+		if (!source.lifetime->alive.load(std::memory_order_acquire) || live == residents.end() ||
+			live->second.lifetime != source.lifetime || live->second.generation != source.generation ||
+			source.generation != source.lifetime->generation.load(std::memory_order_acquire) ||
+			live->second.queue != source.queue || source.queue != sources.front().queue || !CurrentContract(source))
+			return false;
+	}
+	return true;
+}
+
+void GrassBucketRenderer::Impl::ReindexBuckets()
+{
+	admitted.clear();
+	residentRecordBytes = resultBytes = 0;
+	for (size_t index = 0; index < buckets.size(); ++index) {
+		const auto& bucket = buckets[index];
+		for (size_t source = 0; source < bucket.sources.size(); ++source)
+			admitted.emplace(bucket.sources[source].identity, Admission{ index, source });
+		if (bucket.records)
+			residentRecordBytes += uint64_t(bucket.recordsCapacity) * GrassPolicy::kRecordBytes;
+		if (bucket.result.output)
+			resultBytes += uint64_t(bucket.result.capacity) * bucket.result.slots * GrassPolicy::kSurvivorBytes + 192;
+	}
+	uint64_t dormantBytes = 0;
+	std::erase_if(dormantBuckets, [&](auto& bucket) {
+		bucket.result = {};
+		const auto bytes = uint64_t(bucket.recordsCapacity) * GrassPolicy::kRecordBytes;
+		if (!bucket.records || bytes > GrassPolicy::kMaxDormantRecordBytes - dormantBytes ||
+			!std::all_of(bucket.sources.begin(), bucket.sources.end(), [](const auto& source) { return source.lifetime->alive.load(std::memory_order_acquire); }))
+			return true;
+		dormantBytes += bytes;
+		return false;
+	});
+	residentRecordBytes += dormantBytes;
+	publishedResultBytes.store(resultBytes, std::memory_order_relaxed);
+}
+
+// The render thread owns snapshots and publication; the worker only borrows immutable captures.
+bool GrassBucketRenderer::Impl::PrepareBackground()
+{
+	const auto request = preparationRequest.load(std::memory_order_acquire);
+	if (request != preparationAppliedRequest.load(std::memory_order_relaxed)) {
+		preparedRevision = preparationValidatedRevision = UINT64_MAX;
+		preparationFailed.store(false, std::memory_order_relaxed);
+		preparationAppliedRequest.store(request, std::memory_order_relaxed);
+	}
+	const bool active = (request & 1) && !preparationFailed.load(std::memory_order_relaxed) && frameSettings.Enabled && !failed;
+	preparationActive.store(active, std::memory_order_relaxed);
+	try {
+		if (preparationJob && preparationJob->result.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+			const auto retireJob = SKSE::stl::scope_exit([&] {
+				preparationJob.reset();
+				preparationPending.store(false, std::memory_order_relaxed);
+			});
+			auto preparedBuckets = preparationJob->result.get();
+			if (active && preparationJob->request == request && preparationJob->batching == frameSettings.CrossCellBatching) {
+				std::vector<Bucket> completed;
+				completed.reserve(preparedBuckets.size());
+				for (auto& layout : preparedBuckets) {
+					Bucket bucket;
+					bucket.sources.reserve(layout.sources.size());
+					for (auto index : layout.sources)
+						bucket.sources.push_back(std::move(preparationJob->sources[index]));
+					if (!CurrentBucket(bucket.sources)) {
+						++preparationRejectedBuckets;
+						continue;
+					}
+					bucket.instances = layout.instances;
+					bucket.runs = std::move(layout.runs);
+					completed.push_back(std::move(bucket));
+				}
+				auto previous = std::move(buckets);
+				for (auto& bucket : dormantBuckets) previous.push_back(std::move(bucket));
+				dormantBuckets.clear();
+				buckets = std::move(completed);
+				residentRecordBytes = 0;
+				ReuseRecordBuffers(previous);
+				ReindexBuckets();
+				if (diagnostics.load(std::memory_order_relaxed)) {
+					++bucketRebuilds;
+					admittedSources.fetch_add(admitted.size(), std::memory_order_relaxed);
+				}
+				preparedRevision = preparationJob->revision;
+				preparedBatching = preparationJob->batching;
+				preparationValidatedRevision = residentRevision;
+				++preparationPublished;
+			} else
+				++preparationDiscarded;
+		}
+		if (!active)
+			return false;
+		if (preparationValidatedRevision != residentRevision || preparedBatching != frameSettings.CrossCellBatching) {
+			// Retain complete unchanged queues; changed queues use the retained native coverage.
+			std::erase_if(buckets, [&](auto& bucket) {
+				if (CurrentBucket(bucket.sources))
+					return false;
+				dormantBuckets.push_back(std::move(bucket));
+				return true;
+			});
+			ReindexBuckets();
+			preparationValidatedRevision = residentRevision;
+		}
+		if (!preparationJob && (preparedRevision != residentRevision || preparedBatching != frameSettings.CrossCellBatching)) {
+			auto job = std::make_unique<PreparationJob>();
+			job->sources.reserve(residents.size());
+			for (const auto& [identity, source] : residents) job->sources.push_back(source);
+			job->revision = residentRevision;
+			job->request = request;
+			job->batching = frameSettings.CrossCellBatching;
+			if (!preparationWorker)
+				preparationWorker = std::make_unique<BS::thread_pool<>>(1);
+			job->result = preparationWorker->submit_task([this, input = job.get()] {
+				const auto start = std::chrono::steady_clock::now();
+				auto result = GrassPreparation::Build(std::span<const Source>(input->sources), CompatibilityHash, CompatibleCaptured);
+				preparationWorkerNanoseconds.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count(), std::memory_order_relaxed);
+				return result;
+			});
+			preparationJob = std::move(job);
+			preparationPending.store(true, std::memory_order_relaxed);
+			++preparationSubmitted;
+		}
+		if (!preparationJob && diagnostics.load(std::memory_order_relaxed))
+			++persistentBucketFrames;
+		RefreshFades();
+		return true;
+	} catch (const std::exception& error) {
+		logger::warn("Grass worker preparation unavailable; restoring synchronous preparation: {}", error.what());
+		preparationFailed.store(true, std::memory_order_relaxed);
+		preparationActive.store(false, std::memory_order_relaxed);
+		preparedRevision = UINT64_MAX;
+		return false;
+	}
+}
+#endif
 
 // The caller holds captureMutex so native fades and generation snapshots agree.
 void GrassBucketRenderer::Impl::RefreshFades()
@@ -2848,6 +2998,15 @@ void GrassBucketRenderer::SetDiagnosticsEnabled(bool enabled)
 	impl->diagnostics.store(enabled, std::memory_order_relaxed);
 	impl->hiZ.SetDiagnosticsEnabled(enabled);
 }
+
+void GrassBucketRenderer::SetBackgroundPreparationEnabled(bool enabled)
+{
+	auto request = impl->preparationRequest.load(std::memory_order_relaxed);
+	do {
+		if (bool(request & 1) == enabled)
+			return;
+	} while (!impl->preparationRequest.compare_exchange_weak(request, ((request + 2) & ~uint64_t(1)) | uint64_t(enabled), std::memory_order_release, std::memory_order_relaxed));
+}
 json GrassBucketRenderer::GetDiagnostics() const
 {
 	auto& self = *impl;
@@ -2903,7 +3062,19 @@ json GrassBucketRenderer::GetDiagnostics() const
 						  { "candidateEyeInstances", s.work.candidateEyeInstances }, { "indirectDraws", s.work.indirectDraws },
 						  { "uploadedRecordBytes", s.work.uploadedRecordBytes } } } };
 	}
-	return { { "telemetrySchema", 1 }, { "telemetry", std::move(telemetry) },
+	const auto request = value(self.preparationRequest);
+	const json preparation = {
+		{ "enabled", bool(request & 1) }, { "active", self.preparationActive.load(std::memory_order_relaxed) },
+		{ "updatePending", request != value(self.preparationAppliedRequest) },
+		{ "pending", self.preparationPending.load(std::memory_order_relaxed) },
+		{ "failed", self.preparationFailed.load(std::memory_order_relaxed) },
+		{ "submitted", value(self.preparationSubmitted) }, { "published", value(self.preparationPublished) },
+		{ "discarded", value(self.preparationDiscarded) }, { "rejectedBuckets", value(self.preparationRejectedBuckets) },
+		{ "frames", value(self.preparationFrames) },
+		{ "renderMilliseconds", double(value(self.preparationRenderNanoseconds)) / 1e6 },
+		{ "workerMilliseconds", double(value(self.preparationWorkerNanoseconds)) / 1e6 }
+	};
+	return { { "telemetrySchema", 1 }, { "telemetry", std::move(telemetry) }, { "backgroundPreparation", preparation },
 		{ "telemetryError", self.telemetryFailed.load(std::memory_order_relaxed) ? json("snapshot_failed") : json(nullptr) },
 		{ "telemetryScope", "resources at publication; work and main-depth culling viewport from last completed grass frame; CPU bytes cover resident snapshot payloads; buffer bytes exclude HiZ textures and native asset ownership; LOD references may be shared with native assets" },
 		{ "hookInstalled", self.installed }, { "renderingAvailable", IsRenderingAvailable() }, { "diagnosticsEnabled", self.diagnostics.load(std::memory_order_relaxed) },
@@ -2942,6 +3113,6 @@ json GrassBucketRenderer::GetDiagnostics() const
 							 { "wideFootprint", value(self.totals[14]) }, { "invalidDepth", value(self.totals[15]) },
 							 { "noDepthCoverage", value(self.totals[16]) }, { "depthNotBehind", value(self.totals[17]) },
 							 { "sampledCells", value(self.totals[18]) } } },
-		{ "counterScope", "cumulative while enabled; GPU counters count eye instances and arrive asynchronously" } };
+		{ "counterScope", "cumulative while enabled; same-model compatibility counters cover synchronous rebuilds; GPU counters count eye instances and arrive asynchronously" } };
 }
 #endif

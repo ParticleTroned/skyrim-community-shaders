@@ -1961,6 +1961,11 @@ if(BUILD_CONTROLLER_TESTS)
 
     add_controller_test(grass_draw_batch_test GrassOptimizationPolicy tests/grass_draw_batch_test.cpp)
     add_controller_test(grass_pass_cache_test GrassPassCache tests/grass_pass_cache_test.cpp)
+    add_controller_test(grass_bucket_preparation_test GrassBucketPreparation tests/grass_bucket_preparation_test.cpp)
+    target_compile_definitions(
+        grass_bucket_preparation_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
     add_controller_test(grass_telemetry_test GrassTelemetry tests/grass_telemetry_test.cpp)
     target_compile_definitions(
         grass_telemetry_test
@@ -3089,6 +3094,18 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(
         GrassCaptureLifecycle
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
+        NAME GrassPreparationLifecycle
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/grass_preparation_lifecycle_test.py"
+    )
+    set_tests_properties(
+        GrassPreparationLifecycle
         PROPERTIES
             LABELS "ControllerTests"
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"

@@ -31,7 +31,8 @@ TEST_CASE("Auto-discovered HLSL tests", "[autodiscovery]")
 			bool success = HLSLTestDiscovery::runTest(test, errorMsg);
 
 			if (!success) {
-				FAIL("Test failed: " << errorMsg);
+				// Compact reporters omit the enclosing dynamic section name.
+				FAIL("Test failed: " << test.displayName << "\n" << errorMsg);
 			}
 
 			INFO("[PASS] " << test.displayName);

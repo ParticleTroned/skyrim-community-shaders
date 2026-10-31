@@ -920,8 +920,10 @@ namespace LightingExtensions
 			} else if (auto* state = globals::state) {
 				// PrepareLightingDraw owns per-draw cleanup while loaded. Preserve the
 				// same cleanup when the feature package is removed at runtime.
-				CSX::MeshBlendingPolicy::ClearDrawDescriptor(
-					state->permutationData.ExtraShaderDescriptor);
+				CSX::MeshBlendingPolicy::ClearDrawDescriptors(
+					state->permutationData.ExtraShaderDescriptor,
+					state->permutationData.ExtraFeatureDescriptor,
+					CSX::MeshBlendingLandscapePolicy::ClassMask);
 			}
 
 			if (globals::game::isVR)
@@ -1919,6 +1921,10 @@ namespace Hooks
 			const bool pbrResult = truePBR.loaded && truePBR.TESObjectLAND_SetupMaterial(land);
 			if (vanillaResult || pbrResult)
 				TerrainSeams::GetInstance().TESObjectLAND_SetupMaterial(land);
+			// Both consumers observe the final vanilla/TruePBR material slots.
+			auto& meshBlending = globals::features::meshBlending;
+			if (meshBlending.loaded)
+				meshBlending.CaptureLandscapeMaterials(land, vanillaResult || pbrResult);
 			return vanillaResult || pbrResult;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

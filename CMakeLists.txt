@@ -1766,16 +1766,6 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
     add_test(
-        NAME MeshBlendingRuntimeScopeContract
-        COMMAND
-            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
-            "${PROJECT_SOURCE_DIR}/tests/mesh_blending_runtime_scope_contract_test.cmake"
-    )
-    set_tests_properties(
-        MeshBlendingRuntimeScopeContract
-        PROPERTIES LABELS "ControllerTests"
-    )
-    add_test(
         NAME MeshBlendingShaderScopeContract
         COMMAND
             "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
@@ -3866,6 +3856,11 @@ if(BUILD_CONTROLLER_TESTS)
     target_compile_definitions(
         mesh_blending_admission_devbench_test
         PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    add_controller_test(
+        mesh_blending_landscape_policy_test
+        MeshBlendingLandscapePolicy
+        tests/mesh_blending_landscape_policy_test.cpp
     )
     set(_mesh_rules_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mesh_rules")
     add_custom_command(

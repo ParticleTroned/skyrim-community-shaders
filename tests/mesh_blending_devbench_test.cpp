@@ -85,6 +85,8 @@ namespace
 			feature.diagnostics.rejections[static_cast<std::size_t>(CSX::MeshBlendingPolicy::RejectionReason::kSnowMaterialFamily)] = 4u;
 			feature.discoveredRuleKeys.emplace("meshes/test.nif", "root/overlay[0]");
 			feature.discoveryDuplicateObservations = 3u;
+			feature.diagnostics.landscapeRegistryHits = 11u;
+			feature.diagnostics.landscapeRegistryMisses = 13u;
 		}
 		~Fixture() { globals::state = nullptr; }
 	};
@@ -95,7 +97,8 @@ namespace
 			feature.diagnostics.drawCalls, feature.diagnostics.currentFrame, feature.diagnostics.traversalLimitRejects,
 			feature.diagnostics.eligibleSources, feature.diagnostics.classificationAccepts, feature.diagnostics.rejections,
 			feature.diagnostics.projectedSnowCandidates, feature.diagnostics.projectedSnowActiveDraws,
-			feature.discoveredRuleKeys, feature.discoveryDuplicateObservations, feature.discoveryDropped };
+			feature.discoveredRuleKeys, feature.discoveryDuplicateObservations, feature.discoveryDropped,
+			feature.diagnostics.landscapeRegistryHits, feature.diagnostics.landscapeRegistryMisses };
 	}
 
 	void TestStatusAndMutation()
@@ -115,6 +118,8 @@ namespace
 		Require(counters.is_object() && counters.at("drawCalls") == (std::uint64_t{ 1 } << 40u) &&
 					counters.at("frame") == 19u && counters.at("traversalLimitRejects") == 7u && !status.contains("drawCalls"),
 			"diagnostics were flattened, truncated or omitted");
+		Require(counters.at("landscapeRegistryHits") == 11u && counters.at("landscapeRegistryMisses") == 13u,
+			"status omitted LAND diagnostic counters");
 		Require(MutationState(feature) == before, "status request mutated feature state");
 		Require(counters.at("eligibleSources") == 13u && counters.at("classificationAccepts") == 5u &&
 					counters.at("projectedSnowCandidates") == 11u && counters.at("projectedSnowActiveDraws") == 3u &&

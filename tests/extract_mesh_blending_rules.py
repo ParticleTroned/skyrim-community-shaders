@@ -15,9 +15,10 @@ def extract(root: Path, output: Path) -> None:
         between(header, "\tenum class DetectionMode", "\t/** Stable model/node selector")
         + between(header, "\tstruct OverrideRule", "\t/** User-facing settings")
         + between(header, "\tstruct Settings", "\tSettings settings;")
+        + between(header, "\tusing LandscapeMaterialKind", "\tstruct DiscoverySaveResult")
         + between(header, "\tstruct DiscoverySaveResult", "\tstatic constexpr std::size_t kCacheSetCount")
         + "\n".join(re.findall(
-            r"^\tstatic constexpr std::size_t kMaximum(?:Rules|RuleLength) = .+;$",
+            r"^\tstatic constexpr std::size_t kMaximum(?:Rules|LandscapeIdentities|RuleLength) = .+;$",
             header, re.MULTILINE))
     )
     (output / "mesh_blending_rule_members.h").write_text(members, encoding="utf-8")
@@ -32,7 +33,11 @@ def extract(root: Path, output: Path) -> None:
     helpers = [
         "\tbool IsFinite(",
         "\tbool IsValidUtf8(",
+        "\tstd::string NormalizeIdentity(",
+        "\tstd::string NormalizeTexturePath(",
         "\tbool IsSafeRuleString(",
+        "\tbool IsPortableLandscapeFormKey(",
+        "\tstd::string BuildLandscapeDiagnosticKey(",
     ]
     methods = [
         "MeshBlending::Settings MeshBlending::Sanitize(",
@@ -40,6 +45,10 @@ def extract(root: Path, output: Path) -> None:
         "bool MeshBlending::IsOverlayPolicyEnabled(",
         "bool MeshBlending::IsRuntimeEnabled(",
         "MeshBlending::CompiledRules MeshBlending::CompileRules(",
+        "std::shared_ptr<const MeshBlending::CompiledLandscapeRules> MeshBlending::CompileLandscapeRules(",
+        "std::optional<MeshBlending::LandscapeMaterialKind> MeshBlending::ParseLandscapeMaterialKind(",
+        "const char* MeshBlending::CanonicalLandscapeMaterialKind(",
+        "MeshBlending::LandscapeMaterialClass MeshBlending::GetLandscapeMaterialClass(",
         "bool MeshBlending::IsDiscoveryCaptureSaturated(",
         "void MeshBlending::SetDiscoveryCaptureEnabled(",
         "bool MeshBlending::LoadRuleFile(",

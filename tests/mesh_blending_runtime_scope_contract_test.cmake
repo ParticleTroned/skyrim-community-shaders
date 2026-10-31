@@ -5,11 +5,12 @@ endif()
 file(READ "${PROJECT_ROOT}/src/Features/MeshBlending.cpp" _implementation)
 file(READ "${PROJECT_ROOT}/src/Features/MeshBlending.h" _header)
 file(READ "${PROJECT_ROOT}/src/Features/MeshBlendingPolicy.h" _policy)
+file(READ "${PROJECT_ROOT}/src/Features/MeshBlendingSnowPolicy.h" _snow_policy)
 file(READ "${PROJECT_ROOT}/src/Utils/FileSystem.cpp" _file_system)
 file(READ "${PROJECT_ROOT}/src/State.h" _state)
 file(READ "${PROJECT_ROOT}/package/Shaders/Common/Permutation.hlsli" _permutation)
 file(READ "${PROJECT_ROOT}/features/Mesh Blending/Shaders/MeshBlending/MeshBlending.hlsli" _mesh_shader)
-set(_runtime "${_implementation}${_header}${_policy}")
+set(_runtime "${_implementation}${_header}${_policy}${_snow_policy}")
 
 string(REGEX MATCH "MeshBlending = 1u << ([0-9]+)" _cpu_flag "${_state}")
 if(NOT _cpu_flag)
@@ -109,14 +110,19 @@ foreach(_required IN ITEMS
     endif()
 endforeach()
 
-foreach(_forbidden IN ITEMS
+foreach(_required IN ITEMS
     "ProjectedSnowEnabled"
     "ProjectedSnowEdgeWidth"
     "TryPrepareProjectedSnow"
+    "BuildOverlaySourceState(a_pass, source, &rejection)"
+    "MaterialFeature::kMultiIndexTriShapeSnow"
+    "MeshBlendingSnowPolicy::Classify<ShaderFlag>"
+    "ShaderFlag::kSnow"
+    "unsupportedSnowMaterialFamily"
 )
-    string(FIND "${_runtime}" "${_forbidden}" _position)
-    if(NOT _position EQUAL -1)
-        message(FATAL_ERROR "Future snow implementation remains in the NIF stage: ${_forbidden}")
+    string(FIND "${_runtime}" "${_required}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR "Snow admission contract is missing: ${_required}")
     endif()
 endforeach()
 

@@ -48,6 +48,7 @@ namespace CSX::MeshBlendingPolicy
 		kTraversalLimit,
 		kDistance,
 		kScope,
+		kSnowMaterialFamily,
 		kCount
 	};
 
@@ -56,7 +57,7 @@ namespace CSX::MeshBlendingPolicy
 		"rendererData", "skinned", "shaderProperty", "depthTestDisabled", "depthWriteEnabled", "material",
 		"invalidAlpha", "invalidBounds", "shaderFlags", "materialFeature", "missingOwner", "nonStaticOwner",
 		"missingRoot", "ancestry", "animatedRoot", "nodeIdentity", "denied", "policy", "modelIdentity",
-		"noReceiver", "traversalLimit", "distance", "scope"
+		"noReceiver", "traversalLimit", "distance", "scope", "unsupportedSnowMaterialFamily"
 	};
 
 	[[nodiscard]] constexpr std::string_view RejectionName(RejectionReason a_reason) noexcept

@@ -3989,6 +3989,43 @@ if(BUILD_CONTROLLER_TESTS)
         mesh_blending_depth_test
         PRIVATE "${_mesh_depth_test_dir}"
     )
+    set(_mesh_snow_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mesh_snow")
+    add_custom_command(
+        OUTPUT
+            "${_mesh_snow_test_dir}/mesh_blending_snow_flags_under_test.h"
+            "${_mesh_snow_test_dir}/mesh_blending_snow_coverage_under_test.h"
+            "${_mesh_snow_test_dir}/mesh_blending_final_alpha_under_test.h"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extract_mesh_blending_snow.py"
+            --source-dir "${PROJECT_SOURCE_DIR}" --output-dir
+            "${_mesh_snow_test_dir}"
+        DEPENDS
+            src/Features/MeshBlending.cpp
+            package/Shaders/Lighting.hlsl
+            "features/Mesh Blending/Shaders/MeshBlending/MeshBlending.hlsli"
+            extern/CommonLibSSE-NG/include/RE/B/BSShaderProperty.h
+            extern/CommonLibSSE-NG/include/RE/B/BSShaderMaterial.h
+            tests/extract_mesh_blending_snow.py
+            tests/extract_adaptive_balance_toggle.py
+        VERBATIM
+    )
+    add_controller_test(
+        mesh_blending_snow_test
+        MeshBlendingSnow
+        tests/mesh_blending_snow_test.cpp
+    )
+    target_sources(
+        mesh_blending_snow_test
+        PRIVATE
+            "${_mesh_snow_test_dir}/mesh_blending_snow_flags_under_test.h"
+            "${_mesh_snow_test_dir}/mesh_blending_snow_coverage_under_test.h"
+            "${_mesh_snow_test_dir}/mesh_blending_final_alpha_under_test.h"
+    )
+    target_include_directories(
+        mesh_blending_snow_test
+        PRIVATE "${_mesh_snow_test_dir}"
+    )
     add_controller_test(
         main_thread_dispatch_policy_test
         MainThreadDispatchPolicy

@@ -79,7 +79,10 @@ namespace
 			feature.diagnostics.traversalLimitRejects = 7u;
 			feature.diagnostics.eligibleSources = 13u;
 			feature.diagnostics.classificationAccepts = 5u;
+			feature.diagnostics.projectedSnowCandidates = 11u;
+			feature.diagnostics.projectedSnowActiveDraws = 3u;
 			feature.diagnostics.rejections[static_cast<std::size_t>(CSX::MeshBlendingPolicy::RejectionReason::kNoReceiver)] = 8u;
+			feature.diagnostics.rejections[static_cast<std::size_t>(CSX::MeshBlendingPolicy::RejectionReason::kSnowMaterialFamily)] = 4u;
 			feature.discoveredRuleKeys.emplace("meshes/test.nif", "root/overlay[0]");
 			feature.discoveryDuplicateObservations = 3u;
 		}
@@ -91,6 +94,7 @@ namespace
 		return { feature.settings, feature.capture, feature.loads, feature.captureWrites,
 			feature.diagnostics.drawCalls, feature.diagnostics.currentFrame, feature.diagnostics.traversalLimitRejects,
 			feature.diagnostics.eligibleSources, feature.diagnostics.classificationAccepts, feature.diagnostics.rejections,
+			feature.diagnostics.projectedSnowCandidates, feature.diagnostics.projectedSnowActiveDraws,
 			feature.discoveredRuleKeys, feature.discoveryDuplicateObservations, feature.discoveryDropped };
 	}
 
@@ -113,6 +117,8 @@ namespace
 			"diagnostics were flattened, truncated or omitted");
 		Require(MutationState(feature) == before, "status request mutated feature state");
 		Require(counters.at("eligibleSources") == 13u && counters.at("classificationAccepts") == 5u &&
+					counters.at("projectedSnowCandidates") == 11u && counters.at("projectedSnowActiveDraws") == 3u &&
+					status.at("rejections").at("unsupportedSnowMaterialFamily") == 4u &&
 					status.at("rejections").at("noReceiver") == 8u && status.at("discovery").at("recordedIdentities") == 1u &&
 					status.at("discovery").at("repeatedObservations") == 3u,
 			"admission counters, rejection reasons and recorded identities were conflated");

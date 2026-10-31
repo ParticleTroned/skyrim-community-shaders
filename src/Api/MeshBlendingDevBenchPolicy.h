@@ -30,10 +30,12 @@ namespace CSX::Api::MeshBlendingDevBench
 	inline constexpr Setting Settings[] = {
 		{ "Enabled", ValueKind::Toggle, 0, 1 },
 		{ "NifEnabled", ValueKind::Toggle, 0, 1 },
+		{ "ProjectedSnowEnabled", ValueKind::Toggle, 0, 1 },
 		{ "BlendStrength", ValueKind::Number, 0, 1 },
 		{ "BlendWidth", ValueKind::Number, 0.01, 256 },
 		{ "DepthBias", ValueKind::Number, 0, 128 },
 		{ "MaximumGap", ValueKind::Number, 0.01, 4096 },
+		{ "ProjectedSnowEdgeWidth", ValueKind::Number, 0, 16 },
 		{ "DetectionMode", ValueKind::Integer, 0, 2 },
 		{ "MaximumDistance", ValueKind::Number, 0, 65536 },
 		{ "BoundsExpansion", ValueKind::Number, 0, 1024 },
@@ -85,6 +87,10 @@ namespace CSX::Api::MeshBlendingDevBench
 			}
 			properties[std::string(field.name)] = std::move(schema);
 		}
+		properties["ProjectedSnowEnabled"]["description"] =
+			"Enable edge blending for eligible multi-index alpha snow overlays. Ordinary True PBR projected materials retain their existing material interpolation.";
+		properties["ProjectedSnowEdgeWidth"]["description"] =
+			"Screen-space edge width for accepted multi-index alpha snow overlays; zero preserves the original hard discard.";
 		return {
 			{ "type", "object" },
 			{ "additionalProperties", false },
@@ -111,7 +117,7 @@ namespace CSX::Api::MeshBlendingDevBench
 								{ "diagnosticsEnabled", { { "type", "boolean" } } },
 								{ "rejections", { { "type", "object" }, { "description", "First failed admission gate per observed draw; cached rejections retain their reason. Counters require global Debug mode." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } },
 								{ "discovery", { { "type", "object" }, { "description", "Recorded unique identities, repeated observations and dropped identities. Recording is separate from Automatic mode and diagnostic resets." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } },
-								{ "diagnostics", { { "type", "object" }, { "description", "Draw observations while blending or recording is enabled: drawCalls precedes scope/source checks; eligibleSources passes overlay render-state checks; classificationAccepts passes ownership/rules/receiver checks; activeDraws receives the shader descriptor. Counts are not unique meshes or proof of visible pixel blending." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } } } }
+								{ "diagnostics", { { "type", "object" }, { "description", "Draw observations while blending or recording is enabled: drawCalls precedes scope/source checks; eligibleSources passes overlay render-state checks; classificationAccepts passes ownership/rules/receiver checks; activeDraws receives the shader descriptor. projectedSnowCandidates includes unsupported projected material families; projectedSnowActiveDraws counts accepted multi-index alpha snow overlays. Counts are not unique meshes or proof of visible pixel blending." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } } } }
 		};
 	}
 }

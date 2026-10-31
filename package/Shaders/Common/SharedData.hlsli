@@ -504,7 +504,7 @@ namespace SharedData
 		float MaximumGap;
 
 		uint Padding0;
-		float Padding1;
+		float ProjectedSnowEdgeWidth;
 		float Padding2;
 		float Padding3;
 	};

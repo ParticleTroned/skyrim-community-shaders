@@ -1,4 +1,5 @@
 #include "Features/MeshBlendingPolicy.h"
+#include "Features/MeshBlendingSnowPolicy.h"
 
 #include <algorithm>
 #include <atomic>
@@ -54,14 +55,14 @@ namespace RE
 #include "mesh_blending_shader_enums.h"
 		const void* rtti = this;
 		const void* GetRTTI() const { return rtti; }
-	};
-	struct BSLightingShaderProperty : BSShaderProperty
-	{
 		struct Flags
 		{
 			std::uint64_t value = static_cast<std::uint64_t>(EShaderPropertyFlag::kZBufferTest);
 			std::uint64_t underlying() const { return value; }
 		} flags;
+	};
+	struct BSLightingShaderProperty : BSShaderProperty
+	{
 		BSShaderMaterial* material = nullptr;
 		float alpha = 1.0f;
 	};
@@ -140,6 +141,14 @@ namespace RE
 	};
 }
 
+struct State
+{
+	enum class ExtraShaderDescriptors : std::uint32_t
+	{
+		MeshBlending = CSX::MeshBlendingPolicy::EnableMask
+	};
+};
+
 namespace globals
 {
 	namespace rtti
@@ -149,6 +158,11 @@ namespace globals
 	}
 	struct StateBoundary
 	{
+		std::uint32_t frameCount = 1u;
+		struct
+		{
+			std::uint32_t ExtraShaderDescriptor = 0u;
+		} permutationData;
 		bool IsDeveloperMode() const { return true; }
 	};
 	StateBoundary stateBoundary;
@@ -185,6 +199,9 @@ struct MeshBlending
 	std::set<std::pair<std::string, std::string>> discoveredRuleKeys;
 	std::atomic_bool discoveryCaptureEnabled = true;
 	bool receiverFound = true, traversalCapped = false;
+	bool runtimeEnabled = true, overlayPolicyEnabled = true, insideDistance = true;
+	Classification classificationResult = Classification::kAutomatic;
+	unsigned classificationCalls = 0u;
 	RE::BSGeometry receiver;
 	bool BuildOverlaySourceState(RE::BSRenderPass*, SourceState&, RejectionReason*) const;
 	bool BuildSourceState(RE::BSRenderPass*, SourceState&, RejectionReason*) const;
@@ -192,6 +209,19 @@ struct MeshBlending
 	std::string BuildModelPath(const SourceState&) const;
 	std::string BuildNodePath(const SourceState&) const;
 	Classification ClassifyOnCacheMiss(const SourceState&, bool, RE::BSGeometry*&, RejectionReason*);
+	bool TryPrepareProjectedSnow(RE::BSRenderPass*);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void RecordRejection(RejectionReason);
+#endif
+	bool IsRuntimeEnabled() const { return runtimeEnabled; }
+	bool IsOverlayPolicyEnabled() const { return overlayPolicyEnabled; }
+	bool IsDiscoveryCaptureActive() const { return discoveryCaptureEnabled.load(); }
+	bool IsInsideDistanceBubble(const RE::NiBound&, std::uint32_t) const { return insideDistance; }
+	Classification GetSourceClassification(SourceState&, std::uint32_t, bool, bool)
+	{
+		++classificationCalls;
+		return classificationResult;
+	}
 	bool HasOpaqueSibling(const SourceState&, bool& capped, RE::BSGeometry*& result)
 	{
 		capped = traversalCapped;
@@ -202,6 +232,17 @@ struct MeshBlending
 };
 
 #include "mesh_blending_admission_under_test.h"
+
+template <class T>
+concept HasProjectedSnowDiagnostics = requires(T& value) {
+	value.projectedSnowCandidates;
+	value.projectedSnowActiveDraws;
+};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+static_assert(HasProjectedSnowDiagnostics<MeshBlending::Diagnostics>);
+#else
+static_assert(!HasProjectedSnowDiagnostics<MeshBlending::Diagnostics>);
+#endif
 
 namespace
 {
@@ -232,6 +273,7 @@ namespace
 		RE::BSRenderPass pass;
 		Fixture()
 		{
+			globals::stateBoundary = {};
 			globals::rtti::NiAlphaPropertyRTTI.value = alpha.rtti;
 			globals::rtti::BSLightingShaderPropertyRTTI.value = shader.rtti;
 			shader.material = &material;
@@ -365,6 +407,75 @@ namespace
 		fixture.geometry.name = "unsafe*selector";
 		classify(fixture, false, RejectionReason::kNodeIdentity);
 	}
+	void TestProjectedSnowAdmission()
+	{
+		const auto snow = [](Fixture& f) {
+			f.shader.flags.value |= CSX::MeshBlendingSnowPolicy::RequiredFlags<ShaderFlag>() | ToMask(ShaderFlag::kSnow);
+			f.material.feature = MaterialFeature::kMultiIndexTriShapeSnow;
+			f.feature.discoveryCaptureEnabled = false;
+			f.feature.settings.DetectionMode = static_cast<std::uint32_t>(MeshBlending::DetectionMode::kStrictAutomatic);
+			f.feature.settings.NifEnabled = 0u;
+			f.feature.settings.ProjectedSnowEnabled = 1u;
+			f.feature.settings.ProjectedSnowEdgeWidth = 2.0f;
+		};
+		Fixture accepted;
+		snow(accepted);
+		globals::state->permutationData.ExtraShaderDescriptor = 8u;
+		Require(accepted.feature.TryPrepareProjectedSnow(&accepted.pass), "engine Snow flag rejected a safe multi-index overlay");
+		Require(globals::state->permutationData.ExtraShaderDescriptor == (8u | CSX::MeshBlendingPolicy::EnableMask) &&
+					accepted.feature.diagnostics.currentFrameActive == 1u && accepted.feature.classificationCalls == 1u,
+			"snow activation did not preserve descriptors or classify exactly once");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		Require(accepted.feature.diagnostics.projectedSnowCandidates == 1u &&
+					accepted.feature.diagnostics.projectedSnowActiveDraws == 1u && accepted.feature.diagnostics.eligibleSources == 1u,
+			"snow admission and active counters were conflated");
+#endif
+		const auto reject = [&](auto mutate, RejectionReason expected) {
+			Fixture f;
+			snow(f);
+			mutate(f);
+			Require(!f.feature.TryPrepareProjectedSnow(&f.pass), "unsafe or unsupported snow draw accepted");
+			Require(globals::state->permutationData.ExtraShaderDescriptor == 0u && f.feature.classificationCalls == 0u,
+				"snow source rejection reached classification or enabled the descriptor");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			Require(f.feature.diagnostics.rejections[static_cast<std::size_t>(expected)] == 1u,
+				"snow rejection omitted its first failed gate");
+			Require(std::count_if(f.feature.diagnostics.rejections.begin(), f.feature.diagnostics.rejections.end(),
+						[](auto value) { return value != 0u; }) == 1,
+				"snow rejection counted more than its first failed gate");
+#else
+			(void)expected;
+#endif
+		};
+		reject([](auto& f) { f.geometry.runtime.alphaProperty.value = nullptr; }, RejectionReason::kAlphaProperty);
+		reject([](auto& f) { f.alpha.test = true; }, RejectionReason::kAlphaTesting);
+		reject([](auto& f) { f.shader.flags.value |= ToMask(ShaderFlag::kEnvMap); }, RejectionReason::kShaderFlags);
+		reject([](auto& f) { f.material.feature = MaterialFeature::kDefault; }, RejectionReason::kSnowMaterialFamily);
+		reject([](auto& f) {
+			f.shader.flags.value &= ~ToMask(ShaderFlag::kMultiIndexSnow);
+			f.material.feature = MaterialFeature::kDefault;
+			f.geometry.runtime.alphaProperty.value = nullptr;
+		},
+			RejectionReason::kSnowMaterialFamily);
+		reject([](auto& f) { f.feature.insideDistance = false; }, RejectionReason::kDistance);
+		Fixture rejected;
+		snow(rejected);
+		rejected.feature.classificationResult = MeshBlending::Classification::kRejected;
+		Require(!rejected.feature.TryPrepareProjectedSnow(&rejected.pass) && rejected.feature.classificationCalls == 1u &&
+					globals::state->permutationData.ExtraShaderDescriptor == 0u,
+			"rejected static classification enabled snow coverage");
+		Fixture disabled;
+		snow(disabled);
+		disabled.feature.settings.ProjectedSnowEdgeWidth = 0.0f;
+		Require(!disabled.feature.TryPrepareProjectedSnow(&disabled.pass) && disabled.feature.classificationCalls == 0u,
+			"zero snow width performed classification work");
+		disabled.feature.settings.ProjectedSnowEdgeWidth = 2.0f;
+		disabled.feature.runtimeEnabled = false;
+		disabled.feature.discoveryCaptureEnabled = true;
+		Require(!disabled.feature.TryPrepareProjectedSnow(&disabled.pass) && disabled.feature.classificationCalls == 1u &&
+					globals::state->permutationData.ExtraShaderDescriptor == 0u,
+			"recording-only snow selection activated blending");
+	}
 }
 
 int main()
@@ -373,7 +484,8 @@ int main()
 		TestSourceAdmission();
 		TestStaticOwnership();
 		TestClassificationDecisions();
-		std::cout << "Production overlay source, static ownership and classification admission passed\n";
+		TestProjectedSnowAdmission();
+		std::cout << "Production overlay source, static ownership, classification and snow admission passed\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

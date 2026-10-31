@@ -111,6 +111,7 @@ file_common_defines:
             - DYNAMIC_CUBEMAPS
             - EXTENDED_MATERIALS
             - EXTENDED_TRANSLUCENCY
+            - MESH_BLENDING
             - IBL
             - ISL
             - LIGHT_LIMIT_FIX
@@ -134,6 +135,7 @@ file_common_defines:
             - DYNAMIC_CUBEMAPS
             - EXTENDED_MATERIALS
             - EXTENDED_TRANSLUCENCY
+            - MESH_BLENDING
             - IBL
             - ISL
             - LIGHT_LIMIT_FIX
@@ -12193,6 +12195,7 @@ shaders:
                   - DYNAMIC_CUBEMAPS
                   - EXTENDED_MATERIALS
                   - EXTENDED_TRANSLUCENCY
+                  - MESH_BLENDING
                   - IBL
                   - ISL
                   - LIGHT_LIMIT_FIX
@@ -13469,6 +13472,7 @@ shaders:
                   - DYNAMIC_CUBEMAPS
                   - EXTENDED_MATERIALS
                   - EXTENDED_TRANSLUCENCY
+                  - MESH_BLENDING
                   - IBL
                   - ISL
                   - LIGHT_LIMIT_FIX

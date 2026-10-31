@@ -3682,6 +3682,11 @@ void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* T
 	singleton.BSLightingShader_SetupGeometry_Before(Pass);
 	if (directionalSlotSafe) {
 		func(This, Pass, RenderFlags);
+	} else if (auto* state = globals::state) {
+		// Unsafe engine passes skip the shared Lighting hook, so its admission
+		// cleanup must run here before a previous transition can carry forward.
+		constexpr auto meshBlendingMask = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::MeshBlending);
+		state->permutationData.ExtraShaderDescriptor &= ~meshBlendingMask;
 	}
 	singleton.BSLightingShader_SetupGeometry_After(Pass);
 }

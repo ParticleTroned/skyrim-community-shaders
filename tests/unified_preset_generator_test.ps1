@@ -124,6 +124,16 @@ try {
     & $isolatedGenerator -OutputRoot $outputRoot -ReportPath $reportPath | Out-Null
     Assert-True $? 'Temporary unified preset generation failed.'
 
+    foreach ($lineEnding in "`r`n", "`n") {
+        foreach ($sourcePath in $policy.runtimeSettingsContract.sources) {
+            $fixtureSource = Join-Path $fixtureRoot ([string]$sourcePath)
+            $sourceText = [System.IO.File]::ReadAllText($fixtureSource, $utf8).Replace("`r`n", "`n")
+            [System.IO.File]::WriteAllText($fixtureSource, $sourceText.Replace("`n", $lineEnding), $utf8)
+        }
+        & $isolatedGenerator -OutputRoot $outputRoot -ReportPath $reportPath -Check | Out-Null
+        Assert-True $? 'Checkout line endings changed the runtime settings contract.'
+    }
+
     $tierProperties = @($policy.tiers.psobject.Properties)
     Assert-True ($tierProperties.Count -eq 3) 'The policy must define exactly three tiers.'
     Assert-True (($tierProperties.Name -join '|') -ceq 'Performance|Balanced|Quality') 'The tier order changed unexpectedly.'

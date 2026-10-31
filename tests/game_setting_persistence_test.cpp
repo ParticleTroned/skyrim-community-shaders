@@ -23,6 +23,7 @@
 #include <type_traits>
 #include <variant>
 
+#include "Utils/BoundedTextRead.h"
 #include <ClibUtil/detail/SimpleIni.h>
 
 using namespace std::literals;

@@ -6,6 +6,7 @@
 #ifdef MODEL_OUTPUT_SELECTION
 #	include "Common/NeuralRenderingSelection.hlsli"
 #	include "Upscaling/NeuralRendering/ModelResolutionStorage.hlsli"
+#	include "Upscaling/NeuralRendering/SceneCategorySelection.hlsli"
 #endif
 
 Texture2D<float4> SourceColor : register(t0);
@@ -123,7 +124,9 @@ float CentralWeight(float2 uv)
 	float selectionWeight = 1.0;
 	if (SelectedOutput != 0u) {
 		const float2 uv = (float2(pixel) + 0.5) / float2(SourceSize);
-		if (SelectionMode != 0u) {
+		if (SelectionMode == 3u) {
+			selectionWeight = SceneCategorySelectionWeight(pixel);
+		} else if (SelectionMode != 0u) {
 			selectionWeight = 0.0;
 			[branch] if (all(uv >= SelectionBounds.xy) && all(uv < SelectionBounds.zw))
 				selectionWeight = NeuralRenderingSelectionWeight(saturate(SelectionMask.Load(int3(pixel, 0))), SelectionMode);
@@ -186,7 +189,7 @@ float CentralWeight(float2 uv)
 	float4 reconstructed = float4(valid ? candidate : source.rgb, source.a);
 #ifdef MODEL_OUTPUT_SELECTION
 	if (SelectedOutput != 0u) {
-		if (SelectionMode != 1u || selectionWeight >= 1.0) {
+		if ((SelectionMode != 1u && SelectionMode != 3u) || selectionWeight >= 1.0) {
 			Result[pixel] = reconstructed;
 			return;
 		}

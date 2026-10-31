@@ -5198,11 +5198,11 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 	}
 
 	bool UsesCharacterVisualIsolation(
-		const Upscaling::Settings& a_settings) noexcept
+		const Upscaling::Settings& a_settings, std::uint32_t a_sourceWorldFrame = std::numeric_limits<std::uint32_t>::max()) noexcept
 	{
 		return Upscaling::IsNeuralRenderingEnabled(a_settings) &&
-		       (a_settings.neuralCharacterRenderingEnabled || a_settings.neuralCharacterSceneStrengthsEnabled) &&
-		       a_settings.neuralCharacterVisualIsolationEnabled;
+		       a_settings.neuralCharacterVisualIsolationEnabled &&
+		       NeuralRendering::IsCharacterMaskActive(BuildCharacterSettings(a_settings, a_sourceWorldFrame));
 	}
 
 	NeuralRendering::CharacterPreparedSelection GetPreparedCharacterSelection(
@@ -5214,7 +5214,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		std::uint32_t a_width,
 		std::uint32_t a_height) noexcept
 	{
-		return UsesCharacterVisualIsolation(a_settings) ?
+		return UsesCharacterVisualIsolation(a_settings, a_sourceWorldFrame) ?
 		           NeuralRendering::CharacterRendering::Instance()
 		               .GetPreparedSelection(
 						   a_featureSlot, a_frameId, a_sourceWorldFrame,
@@ -5271,6 +5271,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 			.settings = BuildCharacterSettings(a_settings, a_sourceWorldFrame),
 			.outputIsJittered = NeuralRendering::RunsBeforeDlss(NeuralRendering::ResolvePipelineArrangement(
 				NeuralRendering::ClampRenderingMode(a_settings.neuralRenderingMode))),
+			.fuseSceneSelection = a_args.modelResolutionPercent < NeuralRendering::kMaximumModelResolutionPercent || a_args.peripheralCompressionPercent != 0,
 		};
 	}
 
@@ -5279,6 +5280,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		const bool requested = args.providerBlending;
 		args.controlMask.Reset();
 		args.actorSelection.Reset();
+		args.sceneCategorySelection.reset();
 		args.actorSelectionSupport = {};
 		args.controlMaskWidth = args.controlMaskHeight = 0;
 		args.providerBlending = false;
@@ -5286,10 +5288,11 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 			return !requested;
 		const auto selection = NeuralRendering::CharacterRendering::Instance().GetPreparedSelection(
 			args.featureSlot, args.frameId, args.sourceWorldFrame, args.generation, args.outputWidth, args.outputHeight);
-		if (!selection.mask || (requested && !selection.providerBlending))
+		if ((!selection.mask && !selection.sceneCategories) || (requested && !selection.providerBlending))
 			return false;
 		// Packed coverage uses the source selection independently of native provider blending.
 		args.actorSelection = selection.mask;
+		args.sceneCategorySelection = selection.sceneCategories;
 		args.actorSelectionSupport = selection.maskSupport;
 		if (!requested)
 			return true;
@@ -5310,6 +5313,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		a_requiresEvaluation = true;
 		a_args.controlMask = nullptr;
 		a_args.actorSelection.Reset();
+		a_args.sceneCategorySelection.reset();
 		a_args.providerBlending = false;
 		a_args.controlMaskWidth = 0;
 		a_args.controlMaskHeight = 0;
@@ -5321,8 +5325,10 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		a_args.packedCropPlanning = {};
 #endif
 		a_args.characterVisualIsolation = false;
+		a_args.sceneCharacterStrengths = false;
 		const auto characterSettings = BuildCharacterSettings(a_settings, a_sourceWorldFrame);
-		if (!NeuralRendering::IsCharacterMaskActive(characterSettings) || !UsesCharacterVisualIsolation(a_settings)) {
+		if (!Upscaling::IsNeuralRenderingEnabled(a_settings) || !a_settings.neuralCharacterVisualIsolationEnabled ||
+			!NeuralRendering::IsCharacterMaskActive(characterSettings)) {
 			a_args.tuning.useAutoMask = true;
 			return true;
 		}
@@ -5356,6 +5362,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 #endif
 		a_args.reset = a_args.reset || result.resetHistory;
 		a_args.characterVisualIsolation = true;
+		a_args.sceneCharacterStrengths = NeuralRendering::UsesSceneCharacterStrengths(characterSettings);
 		a_args.providerBlending = characterSettings.providerBlending;
 		if (a_requiresEvaluation && !a_args.computeSubrect.Fits(
 										a_args.outputWidth, a_args.outputHeight)) {
@@ -19099,7 +19106,7 @@ namespace
 		DrawNeuralIntegerSetting("Peripheral compression", settings.neuralRenderingPeripheralCompressionPercent,
 			0, NeuralRendering::kMaximumPeripheralCompressionPercent, "%d%%");
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("0% disables compression. 20% preserves the inner 80% of the current view scale and compresses the outer band. Follows each eye's active FOV mask shape and centre, or the full rectangular view without FOV. Higher values extend compression inward. Uses the selected NR resolution and supports guided reconstruction. Actor and compact-input routes retain ordinary NR. Applies on release.");
+			ImGui::TextUnformatted("0% disables compression. 20% preserves the inner 80% of the current view scale and compresses the outer band. Follows each eye's active FOV mask shape and centre, or the full rectangular view without FOV. Higher values extend compression inward. Uses the selected NR resolution and supports guided reconstruction. Supports Scene + categories with compositor blending. Actors only, provider blending and compact-input routes retain ordinary NR. Applies on release.");
 		Util::Widgets::Checkbox("Improve low-resolution NR", &settings.neuralRenderingGuidedReconstruction);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Enabled by default. Automatically use source-colour-guided reconstruction below 100% NR resolution. At 100%, or when unsupported, retain the selected filter. NR resolution and strength are unchanged.");
@@ -23475,8 +23482,8 @@ void Upscaling::UpdateVRStartupMainMenuRenderState()
 bool Upscaling::NeedsCharacterCategoryShaders() const
 {
 	return loaded && settings.neuralRenderingEnabled &&
-	       (settings.neuralCharacterRenderingEnabled || settings.neuralCharacterSceneStrengthsEnabled) &&
-	       settings.neuralCharacterVisualIsolationEnabled;
+	       settings.neuralCharacterVisualIsolationEnabled &&
+	       NeuralRendering::IsCharacterMaskActive(GetCharacterNeuralRenderingSettings());
 }
 
 bool Upscaling::IsCharacterNeuralRenderingRouteConfigured() const
@@ -45848,8 +45855,9 @@ bool Upscaling::PrepareReducedResolutionNeuralOutputTarget(uint32_t eye, NeuralR
 	const auto selection = args.characterVisualIsolation ? GetPreparedCharacterSelection(settings, args.featureSlot,
 															   args.frameId, args.sourceWorldFrame, args.generation, args.outputWidth, args.outputHeight) :
 	                                                       NeuralRendering::CharacterPreparedSelection{};
-	if (args.characterVisualIsolation && !selection.mask)
+	if (args.characterVisualIsolation && !selection.mask && !selection.sceneCategories)
 		return false;
+	fuseSelection = fuseSelection || selection.sceneCategories.has_value();
 	auto& selected = foveatedCenterNeuralSelected[eye];
 	const std::string suffix = eye == 0 ? "Left" : "Right";
 	if (!EnsureReducedResolutionNeuralSelected(eye, args.colorInput, args.outputWidth, args.outputHeight))
@@ -45862,6 +45870,7 @@ bool Upscaling::PrepareReducedResolutionNeuralOutputTarget(uint32_t eye, NeuralR
 		output.mask = selection.mask;
 		output.maskSupport = selection.maskSupport;
 		output.providerBlending = selection.providerBlending;
+		output.sceneCategories = selection.sceneCategories;
 		args.modelOutputSelection = std::move(output);
 		foveatedCenterNeuralOut[eye].reset();
 		return true;

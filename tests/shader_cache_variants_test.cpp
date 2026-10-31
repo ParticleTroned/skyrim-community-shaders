@@ -1,3 +1,4 @@
+#include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include <Windows.h>
 #include <ankerl/unordered_dense.h>
 
@@ -208,6 +209,13 @@ struct Upscaling
 		bool neuralCharacterVisualIsolationEnabled = false;
 	} settings;
 	bool NeedsCharacterCategoryShaders() const;
+	NeuralRendering::CharacterSettings GetCharacterNeuralRenderingSettings() const
+	{
+		NeuralRendering::CharacterSettings policy;
+		policy.enabled = settings.neuralCharacterRenderingEnabled;
+		policy.sceneStrengthsEnabled = settings.neuralCharacterSceneStrengthsEnabled;
+		return policy;
+	}
 };
 #include "shader_category_demand.h"
 

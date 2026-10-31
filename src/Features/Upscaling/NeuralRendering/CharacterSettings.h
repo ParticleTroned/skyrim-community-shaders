@@ -189,12 +189,6 @@ namespace NeuralRendering
 		return settings.sceneStrengthsEnabled && !settings.enabled;
 	}
 
-	/** Both coverage scopes consume the same source-frame material mask. */
-	[[nodiscard]] constexpr bool IsCharacterMaskActive(const CharacterSettings& settings) noexcept
-	{
-		return settings.enabled || settings.sceneStrengthsEnabled;
-	}
-
 	/** Resolve coverage scope without changing saved actor-only preferences. */
 	[[nodiscard]] constexpr CharacterSettings ResolveCharacterScopeSettings(CharacterSettings settings) noexcept
 	{
@@ -352,8 +346,11 @@ namespace NeuralRendering
 	[[nodiscard]] constexpr bool IsCharacterCategoryEnabled(
 		CharacterCategory a_category, const CharacterSettings& a_settings) noexcept
 	{
-		return UsesSceneCharacterStrengths(a_settings) ? IsCharacterCategorySelected(a_category, a_settings) :
-		                                                 GetCharacterCategoryStrength(a_category, a_settings) > 0.0f;
+		return UsesSceneCharacterStrengths(a_settings) ?
+		           IsCharacterCategorySelected(a_category, a_settings) &&
+		               (GetCharacterCategoryStrength(a_category, a_settings) != 1.0f || a_settings.debugView != CharacterDebugView::Off ||
+						   a_settings.maskTestMode != CharacterMaskTestMode::Authored) :
+		           GetCharacterCategoryStrength(a_category, a_settings) > 0.0f;
 	}
 
 	/** Scene masks subtract selected edits from full NR; actor masks add them. */
@@ -368,6 +365,21 @@ namespace NeuralRendering
 				                       0.0f;
 		}
 		return strengths;
+	}
+
+	/** Keep diagnostics active; ordinary scene masks exist only for effective edits. */
+	[[nodiscard]] constexpr bool IsCharacterMaskActive(const CharacterSettings& settings) noexcept
+	{
+		if (settings.enabled)
+			return true;
+		if (!settings.sceneStrengthsEnabled)
+			return false;
+		if (settings.debugView != CharacterDebugView::Off || settings.maskTestMode != CharacterMaskTestMode::Authored)
+			return true;
+		for (float reduction : GetCharacterMaskStrengths(settings))
+			if (reduction != 0.0f)
+				return true;
+		return false;
 	}
 
 	[[nodiscard]] constexpr std::uint32_t GetEnabledCharacterCategoryMask(

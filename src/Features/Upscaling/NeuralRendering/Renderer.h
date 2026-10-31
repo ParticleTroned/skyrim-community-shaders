@@ -8,6 +8,7 @@
 #include "MemoryRetirementPolicy.h"
 #include "ModelResolutionPolicy.h"
 #include "RoiDescriptor.h"
+#include "SceneCategorySelection.h"
 #include "StallRecoveryPolicy.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "LifetimeDiagnostics.h"
@@ -226,6 +227,7 @@ namespace NeuralRendering
 		Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> mask;
 		ComputeSubrect maskSupport{};
 		bool providerBlending = false;
+		std::optional<SceneCategorySelection> sceneCategories;
 	};
 
 	/** Optional shader ownership survives backend retirement between spatial planning and preparation. */
@@ -259,6 +261,7 @@ namespace NeuralRendering
 		// R8_UNORM provider-mask transport. Actor blending converts selection to protection.
 		Microsoft::WRL::ComPtr<ID3D11Resource> controlMask;
 		Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> actorSelection;
+		std::optional<SceneCategorySelection> sceneCategorySelection;
 		bool providerBlending = false;
 		ComputeSubrect actorSelectionSupport{};
 		std::uint32_t modelResolutionPercent = 100;
@@ -304,6 +307,8 @@ namespace NeuralRendering
 		std::optional<RoiDescriptor> roi;
 		// Caller guarantees exact outer CSX mask compositing; not the private NGX mask ABI.
 		bool characterVisualIsolation = false;
+		/** Full-scene category strengths are selected in the original output grid. */
+		bool sceneCharacterStrengths = false;
 		bool featureUpscaling = false;
 		Tuning tuning{};
 		bool reset = false;

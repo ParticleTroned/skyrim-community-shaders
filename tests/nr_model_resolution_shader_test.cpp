@@ -1,3 +1,4 @@
+#include "Features/Upscaling/NeuralRendering/ComputeStateGuard.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolution.h"
 #include "GpuPass.h"
 #include "ShaderPackageIncludes.h"
@@ -725,7 +726,7 @@ namespace
 				args[1].colorOutput = rightOutput.texture.Get();
 				Require(ModelResolution::CanUseSharedTargets(args, false), "Raw A/B/C inputs must accept shared preparation");
 				Require(!ModelResolution::CanUseSharedTargets(args, true), "Compact recovery must retain staged inputs");
-				ModelResolution staged, shared;
+				ModelResolution staged, shared, monoAdapter;
 				RendererApplyArgs projected;
 				Require(ModelResolution::Project(args[0], projected) && projected.reset == input.reset &&
 							projected.modelResolutionHistory == ModelResolutionHistory{ input.viewportCrop, percent, input.computeSubrect },
@@ -800,7 +801,7 @@ namespace
 					"Rejected batch changed a valid eye before preflight completed");
 				ModelResolution::Batch mono;
 				const auto monoArgs = std::span(args.data(), 1);
-				Require(shared.Prepare(monoArgs, mono, result, std::span(targets.data(), 1)) && mono.count == 1,
+				Require(monoAdapter.Prepare(monoArgs, mono, result, std::span(targets.data(), 1)) && mono.count == 1,
 					"Direct mono preparation failed");
 				Require(Texture(targets[1].depth, model).Read<float>(device, context) == untouched,
 					"Mono preparation touched the unused eye");
@@ -843,6 +844,8 @@ namespace
 						}
 					context->UpdateSubresource(baseline.arguments[eye].colorOutput, 0, nullptr, neural.data(), static_cast<UINT>(model[0] * sizeof(Pixel)), 0);
 					context->UpdateSubresource(candidate.arguments[eye].colorOutput, 0, nullptr, neural.data(), static_cast<UINT>(model[0] * sizeof(Pixel)), 0);
+					if (eye == 0)
+						context->UpdateSubresource(mono.arguments[0].colorOutput, 0, nullptr, neural.data(), static_cast<UINT>(model[0] * sizeof(Pixel)), 0);
 				}
 				Require(staged.Reconstruct(args, baseline, result), "Staged reference reconstruction failed");
 				staged.Commit(args, baseline);
@@ -850,8 +853,8 @@ namespace
 				const std::vector clear(color.size(), sentinel);
 				context->UpdateSubresource(leftOutput.texture.Get(), 0, nullptr, clear.data(), static_cast<UINT>(source[0] * sizeof(Pixel)), 0);
 				context->UpdateSubresource(rightOutput.texture.Get(), 0, nullptr, clear.data(), static_cast<UINT>(source[0] * sizeof(Pixel)), 0);
-				Require(shared.Reconstruct(monoArgs, mono, result), "Direct mono reconstruction failed");
-				shared.Commit(monoArgs, mono);
+				Require(monoAdapter.Reconstruct(monoArgs, mono, result), "Direct mono reconstruction failed");
+				monoAdapter.Commit(monoArgs, mono);
 				Require(leftOutput.Read<Pixel>(device, context) == expectedLeft && rightOutput.Read<Pixel>(device, context) == clear,
 					"Direct mono output differs or publishes the unused eye");
 				context->UpdateSubresource(leftOutput.texture.Get(), 0, nullptr, clear.data(), static_cast<UINT>(source[0] * sizeof(Pixel)), 0);
@@ -2287,6 +2290,7 @@ namespace
 				Require(adapter.Prepare(args, fallback, result) && fallback.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution, "Guided allocation failure latched an optional shader failure");
 			}
 		}
+		Require(adapter.Prepare(args, batch, result), "Final adapter preparation failed");
 		Require(adapter.AdditionalBytes(args) == 0, "Unchanged eye allocations must be reused");
 		Require(adapter.RetainedBytes(0).value() + adapter.RetainedBytes(1).value() == *estimate,
 			"Admission and retained-allocation accounting disagree");
@@ -2374,6 +2378,10 @@ int main()
 				for (bool mixedGuides : { false, true })
 					for (bool shaped : { false, true })
 						CheckPeripheralAdapter(device.Get(), context.Get(), mixedGuides, shaped);
+				for (bool mixedGuides : { false, true })
+					for (bool shaped : { false, true })
+						CheckPeripheralAdapter(device.Get(), context.Get(), mixedGuides, shaped, 25, true);
+				CheckPeripheralAdapter(device.Get(), context.Get(), false, true, 25, true, true);
 				if (variant == 0)
 					CheckPeripheralAdapter(device.Get(), context.Get(), false, false, 100);
 				if (AdapterCompiler::guided)

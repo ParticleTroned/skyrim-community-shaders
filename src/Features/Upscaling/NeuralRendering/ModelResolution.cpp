@@ -1,4 +1,5 @@
 #include "ModelResolution.h"
+#include "CharacterCategoryFormat.h"
 #include "ComputeStateGuard.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "CharacterMaskReadback.h"
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <format>
 #include <new>
 #include <string>
@@ -143,12 +145,65 @@ namespace NeuralRendering
 			return true;
 		}
 
+		bool ValidSceneCategorySelection(const RendererApplyArgs& input, const SceneCategorySelection& selection)
+		{
+			if (!input.sceneCharacterStrengths || !input.characterVisualIsolation || input.providerBlending || input.controlMask ||
+				input.renderingMode != RenderingMode::ReducedResolution || input.outputWidth != input.viewportCrop.input.Width() ||
+				input.outputHeight != input.viewportCrop.input.Height())
+				return false;
+			const auto& constants = selection.constants;
+			for (const auto& values : { constants.reductions, constants.options, constants.depthLinearization })
+				if (!std::ranges::all_of(values, [](float value) { return std::isfinite(value); }))
+					return false;
+			for (float value : constants.reductions)
+				if (value < 0.0f || value > 1.0f)
+					return false;
+			if (constants.options[0] < 0.0f || constants.options[0] > 1.0f ||
+				(constants.options[1] != 0.0f && constants.options[1] != 1.0f) || constants.options[2] < 0.0f ||
+				constants.depthLinearization[0] <= 0.0f || constants.depthLinearization[1] <= 0.0f ||
+				constants.depthLinearization[2] <= 0.0f || constants.depthLinearization[3] <= 0.0f)
+				return false;
+			const auto eyeBase = static_cast<std::uint64_t>(input.featureSlot % 2u) * input.viewportCrop.fullInput.width;
+			if (constants.sourceMapping[2] != eyeBase || constants.sourceMapping[0] != eyeBase + input.viewportCrop.input.left ||
+				constants.sourceMapping[1] != input.viewportCrop.input.top ||
+				static_cast<std::uint64_t>(constants.authoredRegion[0]) + constants.authoredRegion[2] > input.viewportCrop.fullInput.width ||
+				static_cast<std::uint64_t>(constants.authoredRegion[1]) + constants.authoredRegion[3] > input.viewportCrop.fullInput.height)
+				return false;
+			std::size_t index = 0;
+			for (auto* view : { selection.categories.Get(), selection.authoredDepth.Get(), selection.currentDepth.Get() }) {
+				if (!view)
+					return false;
+				ComPtr<ID3D11Resource> resource;
+				view->GetResource(&resource);
+				D3D11_TEXTURE2D_DESC desc{};
+				D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+				view->GetDesc(&srv);
+				ComPtr<ID3D11Device> owner;
+				if (resource)
+					resource->GetDevice(&owner);
+				if (!ReadDescription(resource.Get(), desc) || !Util::SameIdentity(owner.Get(), input.device) ||
+					srv.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D || srv.Texture2D.MostDetailedMip != 0 || srv.Texture2D.MipLevels != 1 ||
+					(index == 0 ? srv.Format != kCharacterCategoryFormat : !IsSupportedDepthViewFormat(srv.Format)))
+					return false;
+				const auto x = index == 2 ? 0u : constants.sourceMapping[0];
+				const auto y = index == 2 ? 0u : constants.sourceMapping[1];
+				if (static_cast<std::uint64_t>(x) + input.outputWidth > desc.Width ||
+					static_cast<std::uint64_t>(y) + input.outputHeight > desc.Height)
+					return false;
+				++index;
+			}
+			return true;
+		}
+
 		bool ValidateSelectedOutputs(std::span<const RendererApplyArgs> args)
 		{
 			for (std::size_t index = 0; index < args.size(); ++index) {
 				const auto& input = args[index];
-				if (!input.modelOutputSelection)
+				if (!input.modelOutputSelection) {
+					if (input.sceneCategorySelection)
+						return false;
 					continue;
+				}
 				const auto& selection = *input.modelOutputSelection;
 				ComPtr<ID3D11Resource> destination;
 				if (!selection.destination || input.renderingMode != RenderingMode::ReducedResolution)
@@ -177,7 +232,10 @@ namespace NeuralRendering
 				default:
 					return false;
 				}
-				if (input.characterVisualIsolation && !selection.mask)
+				if (input.characterVisualIsolation && !selection.mask && !selection.sceneCategories)
+					return false;
+				if (selection.sceneCategories != input.sceneCategorySelection ||
+					(selection.sceneCategories && (selection.mask || selection.providerBlending || !ValidSceneCategorySelection(input, *selection.sceneCategories))))
 					return false;
 				if (selection.providerBlending != input.providerBlending)
 					return false;
@@ -193,6 +251,16 @@ namespace NeuralRendering
 						source.actorSelection->GetResource(&actorMask);
 					if (source.modelOutputSelection && source.modelOutputSelection->mask)
 						source.modelOutputSelection->mask->GetResource(&outputMask);
+					if (source.sceneCategorySelection) {
+						for (auto* sceneView : { source.sceneCategorySelection->categories.Get(), source.sceneCategorySelection->authoredDepth.Get(), source.sceneCategorySelection->currentDepth.Get() }) {
+							if (!sceneView)
+								return false;
+							ComPtr<ID3D11Resource> resource;
+							sceneView->GetResource(&resource);
+							if (Util::SameIdentity(destination.Get(), resource.Get()))
+								return false;
+						}
+					}
 					for (auto* resource : { source.colorInput, source.depthGuide, source.motionVectors,
 							 source.controlMask.Get(), actorMask.Get(), outputMask.Get() })
 						if (resource && Util::SameIdentity(destination.Get(), resource))
@@ -277,7 +345,7 @@ namespace NeuralRendering
 		bool ValidateTargets(std::span<const RendererApplyArgs> args, std::span<const ModelResolution::Targets> targets, ModelResolution::Sharing sharing)
 		{
 			std::array<ComPtr<IUnknown>, kMaximumRegionEvaluations * 4> identities{};
-			std::array<ComPtr<IUnknown>, kMaximumRegionEvaluations * 7> sources{};
+			std::array<ComPtr<IUnknown>, kMaximumRegionEvaluations * 10> sources{};
 			std::size_t count = 0, sourceCount = 0;
 			for (const auto& input : args) {
 				for (auto* source : { input.colorInput, input.depthGuide, input.motionVectors, input.colorOutput }) {
@@ -290,7 +358,7 @@ namespace NeuralRendering
 						return false;
 					++sourceCount;
 				}
-				for (auto* view : { input.actorSelection.Get(), input.modelOutputSelection ? input.modelOutputSelection->mask.Get() : nullptr }) {
+				for (auto* view : { input.actorSelection.Get(), input.modelOutputSelection ? input.modelOutputSelection->mask.Get() : nullptr, input.sceneCategorySelection ? input.sceneCategorySelection->categories.Get() : nullptr, input.sceneCategorySelection ? input.sceneCategorySelection->authoredDepth.Get() : nullptr, input.sceneCategorySelection ? input.sceneCategorySelection->currentDepth.Get() : nullptr }) {
 					if (!view)
 						continue;
 					ComPtr<ID3D11Resource> selection;
@@ -428,6 +496,7 @@ namespace NeuralRendering
 
 	struct ModelResolution::Work
 	{
+		std::uint64_t contentSerial = 0;
 		AllocationKey allocation{};
 		Color::Texture color, depth, motion, mask, output, reconstructed;
 		ComPtr<ID3D11Resource> sourceColor, sourceMotion, sourceMask;
@@ -758,6 +827,23 @@ namespace NeuralRendering
 		return true;
 	}
 
+	namespace
+	{
+		bool UsesFullSceneCategorySelection(const RendererApplyArgs& input) noexcept
+		{
+			const ComputeSubrect full{ 0, 0, input.outputWidth, input.outputHeight };
+			if (!input.sceneCharacterStrengths || !input.characterVisualIsolation || (!input.actorSelection && !input.sceneCategorySelection) ||
+				input.providerBlending || input.controlMask || !full.IsValid() || input.actorSelectionSupport != full)
+				return false;
+			// Selection stays in source pixels after the compressed residual is reconstructed.
+			const auto& selection = input.modelOutputSelection;
+			if (input.sceneCategorySelection)
+				return selection && selection->sceneCategories && !selection->mask && !selection->providerBlending &&
+				       selection->sceneCategories == input.sceneCategorySelection && selection->maskSupport == full;
+			return !selection || (!selection->providerBlending && selection->mask.Get() == input.actorSelection.Get() && selection->maskSupport == full);
+		}
+	}
+
 	bool ModelResolution::PreparePeripheralCompression(std::span<RendererApplyArgs> args, bool compactInputs, HRESULT& result)
 	{
 		result = E_INVALIDARG;
@@ -782,7 +868,7 @@ namespace NeuralRendering
 			identity = ordinary || input.peripheralOverride == PeripheralCompressionOverride::Identity;
 #endif
 			plans[index] = BuildPeripheralCompressionPlan(*geometry, { input.guideWidth, input.guideHeight }, input.viewportCrop,
-				input.modelResolutionPercent, { .requested = true, .identity = identity, .actorRoute = input.characterVisualIsolation || input.providerBlending || input.actorSelection || input.controlMask || (input.modelOutputSelection && input.modelOutputSelection->mask), .restricted = input.centralArea.Active(), .compactInputs = compactInputs, .compressionPercent = input.peripheralCompressionPercent, .mask = input.peripheralMask });
+				input.modelResolutionPercent, { .requested = true, .identity = identity, .actorRoute = !UsesFullSceneCategorySelection(input) && (input.characterVisualIsolation || input.sceneCharacterStrengths || input.providerBlending || input.actorSelection || input.controlMask || (input.modelOutputSelection && input.modelOutputSelection->mask)), .restricted = input.centralArea.Active(), .compactInputs = compactInputs, .compressionPercent = input.peripheralCompressionPercent, .mask = input.peripheralMask });
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (ordinary)
@@ -889,6 +975,7 @@ namespace NeuralRendering
 		};
 		adapted = input;
 		adapted.modelOutputSelection.reset();
+		adapted.sceneCategorySelection.reset();
 		adapted.modelResolutionPercent = kMaximumModelResolutionPercent;
 		adapted.modelResolutionHistory = ModelResolutionHistory{ input.viewportCrop, input.modelResolutionPercent,
 			SourceRegion(input), reinterpret_cast<std::uintptr_t>(Util::GetComIdentity(input.controlMask.Get()).Get()),
@@ -1140,6 +1227,18 @@ namespace NeuralRendering
 			return Prepare(working, batch, result, targets);
 		}
 		const bool selected = std::ranges::any_of(args, [](const auto& input) { return input.modelOutputSelection.has_value(); });
+		const bool sceneSelected = std::ranges::any_of(args, [](const auto& input) { return input.sceneCategorySelection.has_value(); });
+		if (sceneSelected && !sceneConstants_) {
+			D3D11_BUFFER_DESC desc{};
+			desc.ByteWidth = sizeof(SceneCategorySelectionConstants);
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+			result = args.front().device->CreateBuffer(&desc, nullptr, &sceneConstants_);
+			if (FAILED(result))
+				return false;
+			Util::SetResourceName(sceneConstants_.Get(), "NeuralRendering::SceneCategorySelection");
+		}
+		batch.sceneConstants = sceneSelected ? sceneConstants_ : nullptr;
 		batch.device = args.front().device;
 		batch.context = args.front().context;
 		const bool peripheral = args.front().peripheralCompression.Active();
@@ -1178,6 +1277,8 @@ namespace NeuralRendering
 						return false;
 					slots_[input.featureSlot] = work;
 				}
+				// Reused storage invalidates older preparations before any source or constants change.
+				batch.contentSerials[index] = ++work->contentSerial;
 				if (!EnsureSourceView(input.device, input.colorInput, work->sourceColor, work->colorView,
 						"NeuralRendering::ModelSourceColor", result) ||
 					!EnsureSourceView(input.device, input.motionVectors, work->sourceMotion, work->motionView,
@@ -1218,8 +1319,9 @@ namespace NeuralRendering
 					const auto& selection = *input.modelOutputSelection;
 					const auto& support = selection.maskSupport;
 					work->constants.selectedOutput = 1u;
-					work->constants.selectionMode = !selection.mask ? 0u : selection.providerBlending ? 2u :
-					                                                                                    1u;
+					work->constants.selectionMode = selection.sceneCategories ? 3u : !selection.mask        ? 0u :
+					                                                             selection.providerBlending ? 2u :
+					                                                                                          1u;
 					work->constants.outputStorageFormat = key.outputFormat;
 					work->constants.selectionBounds = { static_cast<float>(support.baseX) / sourceSize.width, static_cast<float>(support.baseY) / sourceSize.height,
 						static_cast<float>(support.baseX + support.width) / sourceSize.width, static_cast<float>(support.baseY + support.height) / sourceSize.height };
@@ -1227,6 +1329,7 @@ namespace NeuralRendering
 					batch.selectionMasks[index] = selection.mask;
 					batch.selectionSupports[index] = selection.maskSupport;
 					batch.providerSelections[index] = selection.providerBlending;
+					batch.sceneSelections[index] = selection.sceneCategories;
 					batch.selectionSources[index] = input.colorInput;
 					batch.selectionDestinations[index] = input.colorOutput;
 				}
@@ -1378,15 +1481,27 @@ namespace NeuralRendering
 			srvs[2] = batch.targets[index].output.srv.Get();
 			if constexpr (Bindings >= 4)
 				srvs[3] = batch.packedCoverage.Get();
-			if constexpr (Bindings == 5)
+			if constexpr (Bindings >= 5)
 				srvs[4] = batch.selectionMasks[index].Get();
+			if constexpr (Bindings == 8) {
+				const auto& scene = batch.sceneSelections[index];
+				if (scene)
+					context->UpdateSubresource(batch.sceneConstants.Get(), 0, nullptr, &scene->constants, 0, 0);
+				auto* buffer = batch.sceneConstants.Get();
+				context->CSSetConstantBuffers(2, 1, &buffer);
+				srvs[5] = scene ? scene->categories.Get() : nullptr;
+				srvs[6] = scene ? scene->authoredDepth.Get() : nullptr;
+				srvs[7] = scene ? scene->currentDepth.Get() : nullptr;
+			}
 			auto* uav = batch.selectedOutputs[index] ? batch.selectedOutputs[index].Get() : work.reconstructed.uav.Get();
 			context->CSSetShader(batch.reconstructionShader.Get(), nullptr, 0);
 			context->CSSetConstantBuffers(0, 1, &cb);
-			if constexpr (ConstantBuffers == 2) {
-				context->UpdateSubresource(batch.peripheralConstants.Get(), 0, nullptr, &batch.peripheralPlans[index].mapping, 0, 0);
-				auto* mapping = batch.peripheralConstants.Get();
-				context->CSSetConstantBuffers(1, 1, &mapping);
+			if constexpr (ConstantBuffers >= 2) {
+				if (batch.peripheralPlans[index].Active()) {
+					context->UpdateSubresource(batch.peripheralConstants.Get(), 0, nullptr, &batch.peripheralPlans[index].mapping, 0, 0);
+					auto* mapping = batch.peripheralConstants.Get();
+					context->CSSetConstantBuffers(1, 1, &mapping);
+				}
 			}
 			context->CSSetShaderResources(0, static_cast<UINT>(srvs.size()), srvs.data());
 			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
@@ -1404,13 +1519,18 @@ namespace NeuralRendering
 		result = E_INVALIDARG;
 		if (batch.count != args.size() || args.empty() || args.size() > batch.resources.size() ||
 			!batch.reconstructionShader || !batch.constants ||
+			(std::ranges::any_of(std::span(batch.sceneSelections.data(), batch.count), [](const auto& selection) { return selection.has_value(); }) && !batch.sceneConstants) ||
 			std::ranges::any_of(std::span(batch.resources.data(), batch.count), [](const auto& work) { return !work; }) ||
 			std::ranges::any_of(std::span(batch.targets.data(), batch.count), [](const auto& target) { return !target.color.srv || !target.output.srv; }))
 			return false;
 		if (!ValidBatchLayout(args) || args.front().device != batch.device.Get() || args.front().context != batch.context.Get())
 			return false;
 		for (std::size_t index = 0; index < args.size(); ++index) {
-			if (args[index].peripheralCompression != batch.peripheralPlans[index])
+			const auto& prepared = batch.arguments[index];
+			if (args[index].frameId != prepared.frameId || args[index].sourceWorldFrame != prepared.sourceWorldFrame ||
+				args[index].generation != prepared.generation || args[index].featureSlot != prepared.featureSlot ||
+				batch.resources[index]->contentSerial != batch.contentSerials[index] ||
+				args[index].peripheralCompression != batch.peripheralPlans[index])
 				return false;
 			if (args[index].reconstructionFilter != batch.arguments[index].reconstructionFilter ||
 				static_cast<std::uint32_t>(args[index].reconstructionFilter) != batch.resources[index]->constants.reconstructionFilter)
@@ -1421,6 +1541,7 @@ namespace NeuralRendering
 								  args[index].colorOutput != batch.selectionDestinations[index].Get() ||
 								  selection->maskSupport != batch.selectionSupports[index] ||
 								  selection->providerBlending != batch.providerSelections[index] ||
+								  selection->sceneCategories != batch.sceneSelections[index] ||
 								  selection->destination.Get() != batch.selectedOutputs[index].Get() ||
 								  selection->mask.Get() != batch.selectionMasks[index].Get())))
 				return false;
@@ -1429,11 +1550,11 @@ namespace NeuralRendering
 			if (!batch.peripheralConstants || batch.packedCoverage)
 				return false;
 			if (std::ranges::any_of(std::span(batch.selectedOutputs.data(), batch.count), [](const auto& output) { return output != nullptr; }))
-				DispatchReconstruction<5, 2>(args, batch);
+				DispatchReconstruction<8, 3>(args, batch);
 			else
 				DispatchReconstruction<3, 2>(args, batch);
 		} else if (std::ranges::any_of(std::span(batch.selectedOutputs.data(), batch.count), [](const auto& output) { return output != nullptr; }))
-			DispatchReconstruction<5>(args, batch);
+			DispatchReconstruction<8, 3>(args, batch);
 		else if (batch.packedCoverage)
 			DispatchReconstruction<4>(args, batch);
 		else
@@ -1484,6 +1605,7 @@ namespace NeuralRendering
 		InvalidateShaders();
 		constants_.Reset();
 		peripheralConstants_.Reset();
+		sceneConstants_.Reset();
 		device_.Reset();
 	}
 

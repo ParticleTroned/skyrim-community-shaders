@@ -9,6 +9,7 @@
 #include "CharacterSettings.h"
 #include "ComputeSubrect.h"
 #include "PackedCropPolicy.h"
+#include "SceneCategorySelection.h"
 
 #include <array>
 #include <cstdint>
@@ -276,6 +277,8 @@ namespace NeuralRendering
 		CharacterSettings settings{};
 		/** True when compositing into the source raster before temporal upscaling. */
 		bool outputIsJittered = false;
+		/** Permit source-frame scene selection inside an already required reconstruction. */
+		bool fuseSceneSelection = false;
 	};
 
 	struct CharacterMaskPrepareResult
@@ -302,6 +305,7 @@ namespace NeuralRendering
 		ComputeSubrect maskSupport{};
 		ComputeSubrect computeSubrect{};
 		bool providerBlending = false;
+		std::optional<SceneCategorySelection> sceneCategories;
 	};
 
 	/** Owns character observations, stable per-eye regions, and R8 selection masks. */

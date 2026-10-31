@@ -1432,6 +1432,10 @@ namespace
 				const auto samplingJitter = NeuralRendering::ResolveCharacterMaskSamplingJitter(
 					outputIsJittered, phase[0], phase[1]);
 				std::copy(samplingJitter.begin(), samplingJitter.end(), constants.jitter);
+				constants.blendOptions[1] = NeuralRendering::UsePixelAlignedCharacterMask(
+												outputIsJittered, width, height, width, height, constants.options[2]) ?
+				                                1u :
+				                                0u;
 				const auto result = gpu.Mask(constants, width, categories);
 				for (std::uint32_t y = 0; y < height; ++y) {
 					for (std::uint32_t x = 0; x < width; ++x) {
@@ -1611,14 +1615,18 @@ namespace
 		constants.eligibilityRectangles[0][1] = 1.0f;
 		constants.eligibilityRectangles[0][2] = 7.0f;
 		constants.eligibilityRectangles[0][3] = 3.0f;
-		const auto dirty = gpu.Mask(constants, 8, std::vector<Tuple>(32, { 0, 85 }), {}, {}, 77);
-		for (std::uint32_t y = 0; y < 4; ++y) {
-			for (std::uint32_t x = 0; x < 8; ++x) {
-				const bool dispatched = x >= 1 && x < 7 && y >= 1 && y < 3;
-				const bool eligible = dispatched && x >= 5;
-				ExpectByte(dirty.pixels[y * 8 + x], eligible ? 255 : dispatched ? 0 :
-																				  77,
-					"Dirty dispatch must clear old region without touching outside");
+		for (bool scene : { false, true }) {
+			constants.blendOptions[0] = scene ? 1u : 0u;
+			const auto dirty = gpu.Mask(constants, 8, std::vector<Tuple>(32, { 0, 85 }), {}, {}, 77);
+			for (std::uint32_t y = 0; y < 4; ++y) {
+				for (std::uint32_t x = 0; x < 8; ++x) {
+					const bool dispatched = x >= 1 && x < 7 && y >= 1 && y < 3;
+					const bool eligible = dispatched && x >= 5;
+					const auto value = !dispatched ? 77 : eligible != scene ? 255 :
+					                                                          0;
+					ExpectByte(dirty.pixels[y * 8 + x], value,
+						"Dirty dispatch must restore the scope background without touching outside");
+				}
 			}
 		}
 

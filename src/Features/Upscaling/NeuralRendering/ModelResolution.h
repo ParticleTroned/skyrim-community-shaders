@@ -37,11 +37,14 @@ namespace NeuralRendering
 		{
 			std::array<RendererApplyArgs, kMaximumRegionEvaluations> arguments{};
 			std::array<std::shared_ptr<Work>, kMaximumRegionEvaluations> resources{};
+			std::array<std::uint64_t, kMaximumRegionEvaluations> contentSerials{};
 			std::array<Targets, kMaximumRegionEvaluations> targets{};
 			std::array<Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView>, kMaximumRegionEvaluations> selectedOutputs{};
 			std::array<Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>, kMaximumRegionEvaluations> selectionMasks{};
 			std::array<ComputeSubrect, kMaximumRegionEvaluations> selectionSupports{};
 			std::array<bool, kMaximumRegionEvaluations> providerSelections{};
+			std::array<std::optional<SceneCategorySelection>, kMaximumRegionEvaluations> sceneSelections{};
+			Microsoft::WRL::ComPtr<ID3D11Buffer> sceneConstants;
 			std::array<Microsoft::WRL::ComPtr<ID3D11Resource>, kMaximumRegionEvaluations> selectionSources{}, selectionDestinations{};
 			Microsoft::WRL::ComPtr<ID3D11Device> device;
 			Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
@@ -86,7 +89,7 @@ namespace NeuralRendering
 
 		/** Prepare both eyes into validated shared targets or private proxies before native evaluation. */
 		bool Prepare(std::span<const RendererApplyArgs>, Batch&, HRESULT&, std::span<const Targets> = {});
-		/** Reconstruct into retained targets; reject filters changed since preparation before dispatch. */
+		/** Reconstruct retained targets only for the prepared source transaction and selection. */
 		bool Reconstruct(std::span<const RendererApplyArgs>, const Batch&, HRESULT&);
 		/** Commit only the original owned rectangles after successful reconstruction. */
 		void Commit(std::span<const RendererApplyArgs>, const Batch&) const;
@@ -133,6 +136,7 @@ namespace NeuralRendering
 		bool lastBatchGuarded_ = false;
 		std::array<std::shared_ptr<Work>, kLogicalFeatureSlotCount> slots_{};
 		Microsoft::WRL::ComPtr<ID3D11Device> device_;
+		Microsoft::WRL::ComPtr<ID3D11Buffer> sceneConstants_;
 		Microsoft::WRL::ComPtr<ID3D11ComputeShader> prepare_, reconstruct_, selection_, guardedSelection_;
 		std::array<Microsoft::WRL::ComPtr<ID3D11ComputeShader>, 8> guidedShaders_{};
 		std::array<bool, 8> guidedShaderFailed_{};

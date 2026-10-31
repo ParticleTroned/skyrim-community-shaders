@@ -334,6 +334,7 @@ namespace NeuralRendering
 				left.parallelEyes == right.parallelEyes &&
 				left.renderingMode == right.renderingMode &&
 				left.providerBlending == right.providerBlending &&
+				left.sceneCharacterStrengths == right.sceneCharacterStrengths &&
 				left.reset == right.reset &&
 				left.synchronizedHistoryReset == right.synchronizedHistoryReset &&
 				left.synchronizedHistoryDiscontinuity ==

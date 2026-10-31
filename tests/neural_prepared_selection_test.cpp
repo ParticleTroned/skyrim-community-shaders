@@ -64,6 +64,7 @@ struct Fixture
 		} prepareKey;
 		bool prepared = true, maskUniform = false;
 		bool providerBlending = false;
+		bool sceneStrengths = false;
 		bool requiresEvaluation = true;
 		bool maskInitialized = true, resetHistoryAfterEmpty = false;
 		bool zeroCoverageBypassResolved = false, zeroCoverageBypassed = false;
@@ -73,6 +74,7 @@ struct Fixture
 		std::uint64_t contentSerial = 1;
 		std::uint32_t width = 99, height = 73;
 		Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> maskSrv;
+		std::optional<SceneCategorySelection> sceneCategories;
 		ComputeSubrect maskWorkSubrect{ 7, 9, 13, 11 };
 		ComputeSubrect computeSubrect{ 3, 5, 40, 30 };
 		std::optional<RoiDescriptor> roi;
@@ -144,6 +146,23 @@ int main()
 		Require(first.providerBlending == slot.providerBlending);
 		Require(first.maskSupport == ComputeSubrect{ 6, 8, 15, 13 });
 		Require(first.computeSubrect == slot.computeSubrect);
+		slot.sceneStrengths = true;
+		{
+			const auto scene = read();
+			Require(scene.maskSupport == ComputeSubrect{ 0, 0, 99, 73 });
+			Require(scene.computeSubrect == slot.computeSubrect);
+		}
+		slot.sceneStrengths = false;
+		slot.sceneCategories.emplace();
+		slot.sceneCategories->categories = &secondMask;
+		{
+			const auto scene = read();
+			Require(!scene.mask && !scene.providerBlending && scene.sceneCategories == slot.sceneCategories);
+			Require(scene.maskSupport == ComputeSubrect{ 0, 0, 99, 73 } && scene.computeSubrect == slot.computeSubrect);
+			Require(!rendering.GetPreparedSelection(slotIndex, 11, 9, 3, 99, 73).sceneCategories);
+			slot.sceneCategories.reset();
+			Require(scene.sceneCategories && scene.sceneCategories->categories.Get() == &secondMask);
+		}
 		// Simulate a producer publishing between consumer operations. The old
 		// value must stay coherent, and the old identity must not see the new slot.
 		++slot.contentSerial;

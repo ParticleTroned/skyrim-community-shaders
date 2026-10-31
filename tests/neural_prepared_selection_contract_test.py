@@ -44,6 +44,8 @@ class PreparedSelectionContract(unittest.TestCase):
         self.assertEqual(upscaling.count("&characterComposite.maskSupport"), 2)
         self.assertIn("&selection.maskSupport", upscaling)
         self.assertIn("&characterSelections[eye].maskSupport", upscaling)
+        self.assertIn("UsesCharacterVisualIsolation(a_settings, a_sourceWorldFrame)", upscaling)
+        self.assertIn("IsCharacterMaskActive(BuildCharacterSettings(a_settings, a_sourceWorldFrame))", upscaling)
 
 
     def test_scaled_c_selection_requires_transaction_completion(self):
@@ -223,7 +225,7 @@ class PreparedSelectionContract(unittest.TestCase):
         self.assertIn("work.constants.packedCoverageGuard = 1u;", adapter)
         self.assertIn("DispatchReconstruction<3>(args, batch)", adapter)
         self.assertIn("DispatchReconstruction<4>(args, batch)", adapter)
-        self.assertIn("DispatchReconstruction<5>(args, batch)", adapter)
+        self.assertIn("DispatchReconstruction<8, 3>(args, batch)", adapter)
         reconstruct = read("features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl")
         self.assertIn("#ifdef PACKED_CROP_COVERAGE_GUARD", reconstruct)
         self.assertRegex(reconstruct, r"if \(PackedPadding != 0u && PackedCoverage\[0\] != 0u\) \{\s*Result\[pixel\] = source;\s*return;")
@@ -235,8 +237,8 @@ class PreparedSelectionContract(unittest.TestCase):
         self.assertIn("readback.frame == a_args.sourceWorldFrame", early)
         self.assertIn("readback.categories == GetEnabledCharacterCategoryMask(a_args.settings)", early)
         self.assertTrue(
-            'slot.maskRoiStatus = sceneStrengths ? "scene_full_region" : authoredMode ? "cpu_geometry_single" : "disabled";' in " ".join(source.split()),
-            "Scene adjustments must report full-region planning separately from actor enclosures",
+            'slot.maskRoiStatus = sceneStrengths ? "scene_full_inference_region_mask" : authoredMode ? "cpu_geometry_single" : "disabled";' in " ".join(source.split()),
+            "Scene adjustments must retain full inference with regional mask work",
         )
         self.assertTrue("const bool cpuProvenEmpty = !sceneStrengths && authoredMode &&" in source,
                         "An empty actor selection cannot bypass ordinary scene NR")

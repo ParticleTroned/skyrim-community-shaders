@@ -1,4 +1,5 @@
 #include "Common/CharacterCategoryMask.hlsli"
+#include "Common/NeuralRenderingVisibility.hlsli"
 
 static const uint EligibilityRegionCapacity = 16u;
 
@@ -22,7 +23,7 @@ cbuffer CharacterMaskCB : register(b0)
 	uint4 DispatchRegion;                                     // output-local offset.xy and dispatch extent.zw
 	uint4 AuthoredRegion;                                     // valid current-frame full-eye source offset.xy/extent.zw
 
-	uint4 BlendOptions;  // ordinary-scene strength adjustments, reserved
+	uint4 BlendOptions;  // ordinary-scene strengths, pixel-aligned sampling, reserved
 #ifdef GPU_CHARACTER_SUPPORT
 	uint4 SupportGrid;  // source tile columns/rows, eye tile base, GPU support enabled
 #endif
@@ -127,17 +128,7 @@ uint ReadAuthoredCategory(int2 localSourcePixel)
 
 float GetCategoryStrength(uint category)
 {
-	if (category == 1u)
-		return CategoryStrengths.x;
-	if (category == 2u)
-		return CategoryStrengths.y;
-	if (category == 3u)
-		return CategoryStrengths.z;
-	if (category == 4u)
-		return CategoryStrengths.w;
-	if (category == 5u)
-		return FeatherOptions.w;
-	return 0.0;
+	return CharacterCategoryMask::Strength(category, CategoryStrengths, FeatherOptions.w);
 }
 
 float ReadAuthoredDepth(int2 localSourcePixel)
@@ -159,8 +150,7 @@ float ReadCurrentDepth(int2 localSourcePixel)
 
 float LinearizeDepth(float rawDepth)
 {
-	return DepthLinearization.w /
-	       max(-rawDepth * DepthLinearization.z + DepthLinearization.x, 1.0e-6);
+	return NeuralRenderingVisibility::LinearDepth(rawDepth, DepthLinearization);
 }
 
 bool IsAuthoredSurfaceVisible(
@@ -187,12 +177,9 @@ bool IsAuthoredSurfaceVisible(
 		return true;
 
 	const float authoredDepth = LinearizeDepth(authoredRawDepth);
-	const float tolerance = max(
-		1.0,
-		max(abs(authoredDepth), abs(currentDepth)) * VisibilityOptions.x);
 	// Later depth may legitimately be farther (cleared or transparent). Reject
 	// only a materially closer surface that now occludes the authored category.
-	return currentDepth + tolerance >= authoredDepth;
+	return NeuralRenderingVisibility::Visible(currentDepth, authoredDepth, VisibilityOptions.x);
 }
 
 float ReconstructEyeDistance(int2 localSourcePixel, float rawDepth)
@@ -321,8 +308,11 @@ void CountCategory(uint category, uint firstCounter)
 	if (insideDispatch && all(outputPixelId < outputSize)) {
 		const float2 outputPixel = float2(outputPixelId) + 0.5;
 		const float2 outputUv = outputPixel / float2(outputSize);
-		const float2 sourcePosition =
-			outputUv * float2(SourceCrop.w, Options.x) - 0.5 - Jitter.xy;
+		const bool pixelAligned = BlendOptions.y != 0u &&
+		                          all(OutputAndSourceSize.xy == uint2(SourceCrop.w, Options.x)) &&
+		                          all(Jitter.xy == 0.0) && Options.z == 0u;
+		const float2 sourcePosition = pixelAligned ? float2(outputPixelId) :
+		                                             outputUv * float2(SourceCrop.w, Options.x) - 0.5 - Jitter.xy;
 		const int2 sourcePixel = int2(floor(sourcePosition + 0.5));
 		float mask = 0.0;
 		if (IsInsideEligibilityRegion(outputPixel)) {
@@ -331,11 +321,13 @@ void CountCategory(uint category, uint firstCounter)
 			const float centerStrength = GetCategoryStrength(centerCategory) * CharacterCategoryMask::DecodeFocusWeight(centerTuple);
 			float centerDepth = 0.0;
 			float centerAuthoredRawDepth = 0.0;
-			const bool centerVisible =
-				IsAuthoredSurfaceVisible(
-					sourcePixel, centerDepth, centerAuthoredRawDepth);
-			const float centerDistanceWeight =
-				GetDistanceWeight(sourcePixel, centerAuthoredRawDepth);
+			const bool needsCenterSurface = !pixelAligned || centerStrength > 0.0 ||
+			                                (measureCoverage && centerCategory != 0u);
+			const bool centerVisible = !needsCenterSurface ||
+			                           IsAuthoredSurfaceVisible(sourcePixel, centerDepth, centerAuthoredRawDepth);
+			const float centerDistanceWeight = needsCenterSurface ?
+			                                       GetDistanceWeight(sourcePixel, centerAuthoredRawDepth) :
+			                                       1.0;
 			const bool centerWithinDistance = centerDistanceWeight > 0.0;
 			// Background depth must not erase a nearby character's subpixel coverage.
 			// Each contributing category sample checks visibility and distance itself.
@@ -355,9 +347,8 @@ void CountCategory(uint category, uint firstCounter)
 					}
 				}
 			}
-			mask = centerEligible ? ReconstructCoverage(
-										sourcePosition, centerCategory, centerDepth) :
-			                        0.0;
+			mask = !centerEligible ? 0.0 : pixelAligned ? centerStrength * centerDistanceWeight :
+			                                              ReconstructCoverage(sourcePosition, centerCategory, centerDepth);
 			// Keep the exact center-surface cull/fade authoritative at the edge.
 			if (centerCategory != 0u)
 				mask = min(mask, centerStrength * centerDistanceWeight);

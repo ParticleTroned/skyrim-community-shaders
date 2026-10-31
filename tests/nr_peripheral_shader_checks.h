@@ -53,10 +53,14 @@ std::optional<std::array<double, 3>> ReferencePeripheralResidual(std::span<const
 
 void CheckPeripheralResidual(ID3D11Device* device, ID3D11DeviceContext* context, NeuralRendering::ModelResolution& adapter,
 	const NeuralRendering::ModelResolution::Batch& batch, const std::array<NeuralRendering::RendererApplyArgs, 2>& args,
-	const std::array<Texture, 2>& outputs, std::span<const Pixel> colors, const std::array<std::vector<Pixel>, 2>& prepared)
+	const std::array<Texture, 2>& outputs, std::span<const Pixel> colors, const std::array<std::vector<Pixel>, 2>& prepared,
+	const Texture& input, std::span<const Texture> masks = {})
 {
 	const auto& plan = args[0].peripheralCompression;
 	const Size source{ plan.source.width, plan.source.height }, model{ plan.model.width, plan.model.height };
+	std::optional<Shader> blend;
+	if (!masks.empty())
+		blend.emplace(device, L"features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl", AdapterCompiler::vr, "features/Upscaling/Shaders");
 	for (unsigned condition : { 0u, 1u, 2u, 3u }) {
 		auto native = prepared;
 		for (UINT eye = 0; eye < args.size(); ++eye) {
@@ -78,7 +82,15 @@ void CheckPeripheralResidual(ID3D11Device* device, ID3D11DeviceContext* context,
 		Require(adapter.Reconstruct(args, batch, result), "Compressed residual reconstruction failed");
 		adapter.Commit(args, batch);
 		for (UINT eye = 0; eye < args.size(); ++eye) {
-			const auto pixels = outputs[eye].Read<Pixel>(device, context);
+			std::optional<Texture> selected;
+			if (!masks.empty() && !args[eye].modelOutputSelection) {
+				selected.emplace(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel));
+				NeuralRendering::ComputeStateGuard<8, 4, NeuralRendering::ComputeStatePolicy::ClearBindingsAndPredication, 3> guard(context);
+				LegacySelect(device, context, *blend, source, outputs[eye], input, &masks[eye],
+					NeuralRendering::ComputeSubrect{ 0, 0, source[0], source[1] }, false, *selected);
+			}
+			const auto pixels = (selected ? *selected : outputs[eye]).Read<Pixel>(device, context);
+			const auto weights = masks.empty() ? std::vector<std::uint8_t>{} : masks[eye].Read<std::uint8_t>(device, context);
 			for (UINT y = 0; y < source[1]; ++y)
 				for (UINT x = 0; x < source[0]; ++x) {
 					const auto i = y * source[0] + x;
@@ -86,16 +98,19 @@ void CheckPeripheralResidual(ID3D11Device* device, ID3D11DeviceContext* context,
 					const double px = position[0] * model[0] - 0.5f, py = position[1] * model[1] - 0.5f;
 					const auto residual = ReferencePeripheralResidual(prepared[eye], native[eye], model, px, py, colors[i], args[eye].reconstructionFilter,
 						batch.reconstructionDecision.mode == NeuralRendering::GuidedReconstructionMode::GuidedLowResolution);
+					const auto weight = weights.empty() ? 1.0f : float(weights[i]) / 255.0f;
 					for (UINT channel = 0; channel < 3; ++channel)
-						Near(pixels[i][channel], colors[i][channel] + (residual ? float((*residual)[channel]) : 0.0f),
+						Near(pixels[i][channel], colors[i][channel] + (residual ? float((*residual)[channel]) * weight : 0.0f),
 							"Compressed residual lost spatial phase, eye isolation or finite fallback");
 					Require(pixels[i][3] == colors[i][3], "Compressed residual changed source alpha");
+					if (weight == 0.0f)
+						Require(pixels[i] == colors[i], "Compressed category selection changed a protected pixel");
 				}
 		}
 	}
 }
 
-void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, bool mixedGuides, bool shaped = false, unsigned compression = 20)
+void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, bool mixedGuides, bool shaped = false, unsigned compression = 20, bool sceneCategories = false, bool directScene = false)
 {
 	using namespace NeuralRendering;
 	constexpr Size source{ 127, 75 };
@@ -114,6 +129,16 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 	Texture motion(device, guides, DXGI_FORMAT_R32G32_FLOAT, velocities);
 	std::array outputs{ Texture(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel)),
 		Texture(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel)) };
+	std::vector<Texture> masks;
+	if (sceneCategories) {
+		for (unsigned eye = 0; eye < outputs.size(); ++eye) {
+			std::vector<std::uint8_t> weights(colors.size());
+			constexpr std::array<std::uint8_t, 4> strengths{ 0, 64, 166, 255 };
+			for (UINT i = 0; i < weights.size(); ++i)
+				weights[i] = directScene && i % 17u == 0u ? 255u : strengths[(i % source[0] / 13u + i / source[0] / 7u + eye) % strengths.size()];
+			masks.emplace_back(device, source, DXGI_FORMAT_R8_UNORM, weights);
+		}
+	}
 	RendererApplyArgs base;
 	base.device = device;
 	base.context = context;
@@ -140,6 +165,27 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 		base.viewportCrop.fullInput = base.viewportCrop.fullOutput;
 		base.viewportCrop.input = base.viewportCrop.output;
 	}
+	std::optional<Texture> categorySource, authoredSelectionDepth, currentSelectionDepth;
+	if (directScene) {
+		Require(sceneCategories && !mixedGuides, "Direct scene fixture requires the pre-DLSS raster");
+		const Size full{ base.viewportCrop.fullInput.width * 2u, base.viewportCrop.fullInput.height };
+		using Tuple = std::array<std::uint16_t, 2>;
+		std::vector<Tuple> tuples(full[0] * full[1]);
+		constexpr std::array<std::uint16_t, 4> codes{ 85, 170, 255, 0 };
+		for (unsigned eye = 0; eye < 2; ++eye)
+			for (UINT y = 0; y < source[1]; ++y)
+				for (UINT x = 0; x < source[0]; ++x) {
+					const auto code = codes[(x / 13u + y / 7u + eye) % codes.size()];
+					const auto index = (y + base.viewportCrop.input.top) * full[0] + eye * base.viewportCrop.fullInput.width + base.viewportCrop.input.left + x;
+					tuples[index] = { 0u, static_cast<std::uint16_t>(code * 257u) };
+				}
+		categorySource.emplace(device, full, DXGI_FORMAT_R16G16_UNORM, tuples);
+		authoredSelectionDepth.emplace(device, full, DXGI_FORMAT_R32_FLOAT, std::vector(full[0] * full[1], 0.75f));
+		std::vector<float> visibleDepth(colors.size(), 1.0f);
+		for (UINT i = 0; i < visibleDepth.size(); i += 17u)
+			visibleDepth[i] = 0.25f;
+		currentSelectionDepth.emplace(device, source, DXGI_FORMAT_R32_FLOAT, visibleDepth);
+	}
 	ComPtr<ID3D11DeviceContext1> context1;
 	Check(context->QueryInterface(IID_PPV_ARGS(&context1)));
 	D3D11_BUFFER_DESC desc{};
@@ -151,12 +197,16 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 	auto* raw = previous.Get();
 	const UINT first = 16, count = 32;
 	context1->CSSetConstantBuffers1(1, 1, &raw, &first, &count);
-	const auto stateRestored = [&] {
+	const auto stateRestored = [&](const char* stage) {
 		ComPtr<ID3D11Buffer> observed;
 		UINT observedFirst = 0, observedCount = 0;
 		context1->CSGetConstantBuffers1(1, 1, &observed, &observedFirst, &observedCount);
+		if (observed != previous || observedFirst != first || observedCount != count)
+			std::cerr << stage << ": peripheral b1 expected " << previous.Get() << ' ' << first << '/' << count << ", observed "
+					  << observed.Get() << ' ' << observedFirst << '/' << observedCount << '\n';
 		Require(observed == previous && observedFirst == first && observedCount == count, "Peripheral dispatch corrupted b1 window");
 	};
+	stateRestored("fixture setup");
 	for (UINT percent : { 30u, 67u, 100u }) {
 		base.modelResolutionPercent = percent;
 		std::array args{ base, base };
@@ -167,6 +217,37 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 			args[eye].colorOutput = outputs[eye].texture.Get();
 			if (!mixedGuides && percent != 30)
 				args[eye].modelOutputSelection = ModelOutputSelection{ outputs[eye].uav };
+			if (sceneCategories) {
+				auto& inputArgs = args[eye];
+				const ComputeSubrect full{ 0, 0, source[0], source[1] };
+				inputArgs.sceneCharacterStrengths = inputArgs.characterVisualIsolation = true;
+				inputArgs.actorSelection = masks[eye].srv;
+				inputArgs.actorSelectionSupport = inputArgs.computeSubrect = full;
+				inputArgs.roi = BuildRoiDescriptor(full, full, { source[0], source[1] }, false);
+				if (directScene)
+					inputArgs.modelOutputSelection = ModelOutputSelection{ outputs[eye].uav };
+				if (inputArgs.modelOutputSelection) {
+					inputArgs.modelOutputSelection->mask = masks[eye].srv;
+					inputArgs.modelOutputSelection->maskSupport = full;
+					if (directScene) {
+						SceneCategorySelection scene;
+						scene.categories = categorySource->srv;
+						scene.authoredDepth = authoredSelectionDepth->srv;
+						scene.currentDepth = currentSelectionDepth->srv;
+						auto& constants = scene.constants;
+						constants.sourceMapping = { eye * base.viewportCrop.fullInput.width + base.viewportCrop.input.left,
+							base.viewportCrop.input.top, eye * base.viewportCrop.fullInput.width, 0u };
+						constants.authoredRegion = { base.viewportCrop.input.left, base.viewportCrop.input.top, source[0], source[1] };
+						constants.reductions = { 1.0f, 191.0f / 255.0f, 89.0f / 255.0f, 0.0f };
+						constants.options = { 0.0f, 1.0f, 0.01f, 0.0f };
+						constants.depthLinearization = { 100.0f, 1.0f, 99.0f, 100.0f };
+						inputArgs.actorSelection.Reset();
+						inputArgs.sceneCategorySelection = scene;
+						inputArgs.modelOutputSelection->mask.Reset();
+						inputArgs.modelOutputSelection->sceneCategories = scene;
+					}
+				}
+			}
 		}
 		ModelResolution adapter;
 		HRESULT result = S_OK;
@@ -176,6 +257,66 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 					  << " reason=" << GetPeripheralCompressionReasonName(args[0].peripheralCompression.reason) << '\n';
 		Require(planned && args[0].peripheralCompression.Active(), "Eligible compression did not plan");
 		const auto plan = args[0].peripheralCompression;
+		if (directScene) {
+			for (bool authored : { false, true }) {
+				auto invalid = args;
+				auto& scene = *invalid[0].sceneCategorySelection;
+				(authored ? scene.authoredDepth : scene.currentDepth) = categorySource->srv;
+				invalid[0].modelOutputSelection->sceneCategories = scene;
+				Require(!adapter.AdditionalBytes(invalid), "A category tuple was admitted as scalar scene depth");
+			}
+			auto inconsistent = args;
+			inconsistent[0].modelOutputSelection->sceneCategories.reset();
+			inconsistent[0].modelOutputSelection->mask = masks[0].srv;
+			Require(!adapter.AdditionalBytes(inconsistent), "Conflicting scene and materialized selections were admitted");
+		}
+		if (sceneCategories) {
+			for (unsigned unsupported = 0; unsupported < 9; ++unsupported) {
+				auto rejected = args;
+				auto& eye = rejected[1];
+				switch (unsupported) {
+				case 0:
+					eye.sceneCharacterStrengths = false;
+					break;
+				case 1:
+					eye.providerBlending = true;
+					break;
+				case 2:
+					eye.controlMask = masks[1].texture;
+					break;
+				case 3:
+					eye.actorSelection.Reset();
+					eye.sceneCategorySelection.reset();
+					break;
+				case 4:
+					--eye.actorSelectionSupport.width;
+					break;
+				case 5:
+					eye.characterVisualIsolation = false;
+					break;
+				case 6:
+					--eye.computeSubrect.width;
+					eye.roi = BuildRoiDescriptor(eye.computeSubrect, eye.computeSubrect, { source[0], source[1] }, true);
+					break;
+				case 7:
+					if (!eye.modelOutputSelection)
+						continue;
+					eye.modelOutputSelection->mask = masks[0].srv;
+					break;
+				case 8:
+					if (!eye.modelOutputSelection)
+						continue;
+					--eye.modelOutputSelection->maskSupport.width;
+					break;
+				}
+				Require(adapter.PreparePeripheralCompression(rejected, false, result) &&
+							!rejected[0].peripheralCompression.Active() && !rejected[1].peripheralCompression.Active(),
+					"Unsupported category/actor policy escaped the stereo compression fallback");
+			}
+			auto compact = args;
+			Require(adapter.PreparePeripheralCompression(compact, true, result) && !compact[0].peripheralCompression.Active(),
+				"Category scope admitted unsupported compact inputs");
+		}
 		const Size model{ plan.model.width, plan.model.height }, grid{ plan.guides.width, plan.guides.height };
 		Require(plan.candidatePixels < plan.baselinePixels && adapter.AdditionalBytes(args).has_value(), "Compressed storage was not admitted");
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -214,7 +355,36 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 		const auto selectionCompilations = AdapterCompiler::ordinarySelectionAttempts;
 		Require(adapter.Prepare(args, batch, result, percent == 30 ? std::span<const ModelResolution::Targets>{} : std::span<const ModelResolution::Targets>(targets)), "Compressed production preparation failed");
 		Require(AdapterCompiler::ordinarySelectionAttempts == selectionCompilations, "Compression compiled an unused ordinary selection shader");
-		stateRestored();
+		Require(bool(batch.sceneConstants) == directScene, "Ordinary selection allocated an unused scene constant buffer");
+		if (directScene) {
+			ModelResolution::Batch replacement;
+			Require(adapter.Prepare(args, replacement, result, percent == 30 ? std::span<const ModelResolution::Targets>{} : std::span<const ModelResolution::Targets>(targets)),
+				"Repeated scene preparation failed");
+			Require(!adapter.Reconstruct(args, batch, result) && result == E_INVALIDARG,
+				"Overwritten scene preparation reached reconstruction");
+			batch = std::move(replacement);
+		}
+		for (unsigned field = 0; field < 4; ++field) {
+			auto stale = args;
+			auto& eye = stale[0];
+			switch (field) {
+			case 0:
+				++eye.frameId;
+				break;
+			case 1:
+				++eye.sourceWorldFrame;
+				break;
+			case 2:
+				++eye.generation;
+				break;
+			case 3:
+				eye.featureSlot += 2;
+				break;
+			}
+			Require(!adapter.Reconstruct(stale, batch, result) && result == E_INVALIDARG,
+				"A different source transaction reached retained reconstruction");
+		}
+		stateRestored("preparation");
 		Require(batch.arguments[0].colorWidth == model[0] && batch.arguments[0].guideWidth == grid[0] &&
 					batch.arguments[0].computeSubrect.Area() == plan.candidatePixels &&
 					batch.arguments[0].modelResolutionHistory->peripheralMapping == plan.mapping,
@@ -259,8 +429,8 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 				for (UINT axis = 0; axis < 2; ++axis)
 					Near(sampledMotion[y * grid[0] + x][axis], after[axis] - before[axis], "Peripheral endpoint motion differs");
 			}
-		CheckPeripheralResidual(device, context, adapter, batch, args, outputs, colors, prepared);
-		stateRestored();
+		CheckPeripheralResidual(device, context, adapter, batch, args, outputs, colors, prepared, input, masks);
+		stateRestored("reconstruction");
 		if (AdapterCompiler::guided && percent == 67) {
 			adapter.InvalidateShaders();
 			AdapterCompiler::failGuided = true;
@@ -269,8 +439,8 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 						fallback.reconstructionShader == args[0].peripheralShaders.reconstruct,
 				"Optional Guided failure lost the compressed reconstruction fallback");
 			AdapterCompiler::failGuided = false;
-			CheckPeripheralResidual(device, context, adapter, fallback, args, outputs, colors, prepared);
-			stateRestored();
+			CheckPeripheralResidual(device, context, adapter, fallback, args, outputs, colors, prepared, input, masks);
+			stateRestored("guided fallback");
 		}
 		if (percent == 100) {
 			for (unsigned failure : { 0u, 1u, 2u, 3u }) {
@@ -314,7 +484,7 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 				const auto pixels = output.Read<Pixel>(device, context);
 				Require(pixels == colors, "Invalid mask fallback changed source colour or alpha");
 			}
-			stateRestored();
+			stateRestored("ordinary fallback");
 		}
 	}
 	ID3D11Buffer* empty = nullptr;

@@ -5484,11 +5484,12 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 			NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode)));
 		settings.neuralRenderingBatchedStereo = true;
 		settings.neuralRenderingDirectCommit = true;
-		settings.neuralRenderingPreset = 3;
-		settings.neuralRenderingIntensity = 0.8f;
-		settings.neuralRenderingLocalTone = 0.75f;
-		settings.neuralRenderingLocalStructure = 0.9f;
-		settings.neuralRenderingSkinStructure = 0.9f;
+		const Upscaling::Settings defaults;
+		settings.neuralRenderingPreset = defaults.neuralRenderingPreset;
+		settings.neuralRenderingIntensity = defaults.neuralRenderingIntensity;
+		settings.neuralRenderingLocalTone = defaults.neuralRenderingLocalTone;
+		settings.neuralRenderingLocalStructure = defaults.neuralRenderingLocalStructure;
+		settings.neuralRenderingSkinStructure = defaults.neuralRenderingSkinStructure;
 		settings.neuralRenderingStyle = NeuralRendering::kDefaultStyle;
 		settings.neuralRenderingNetwork = NeuralRendering::kNetworkDefault;
 		settings.neuralRenderingAutoMask = true;

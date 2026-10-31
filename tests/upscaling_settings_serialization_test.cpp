@@ -66,7 +66,10 @@ int main()
 		from_json(json::object(), settings);
 		Check(settings.neuralRenderingPressureResolutionEnabled && settings.neuralRenderingGuidedReconstruction &&
 				  settings.neuralRenderingPauseInCombat &&
-				  settings.neuralRenderingPeripheralCompressionPercent == 25 && settings.neuralRenderingStyle == 1,
+				  settings.neuralRenderingPeripheralCompressionPercent == 100 && settings.neuralRenderingModelResolutionPercent == 90 &&
+				  settings.neuralRenderingPreset == 4 && settings.neuralRenderingIntensity == 1.75f &&
+				  settings.neuralRenderingLocalTone == 1.25f && settings.neuralRenderingLocalStructure == 1.5f &&
+				  settings.neuralRenderingSkinStructure == 1.3f && settings.neuralRenderingStyle == 1,
 			"Missing NR settings must use the requested defaults");
 	}
 	for (bool enabled : { false, true }) {

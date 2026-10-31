@@ -1,6 +1,7 @@
 """Extract production overlay admission with pinned engine enum boundaries."""
 
 import argparse
+import re
 from pathlib import Path
 
 from extract_adaptive_balance_toggle import between, function
@@ -20,7 +21,9 @@ def extract(root: Path, commonlib: Path, output: Path) -> None:
             "\n".join(function(text, signature) + ";" for signature in signatures), encoding="utf-8")
     (output / "mesh_blending_admission_members.h").write_text(
         "\n".join(function(header, signature) + ";" for signature in (
-            "\tenum class DetectionMode", "\tstruct Settings", "\tstruct SourceState", "\tstruct Diagnostics")),
+            "\tenum class DetectionMode", "\tstruct Settings", "\tstruct SourceState", "\tstruct Diagnostics"))
+        + "\n" + "\n".join(re.findall(
+            r"^\tstatic constexpr std::size_t kMaximumLandscapeIdentities = .+;$", header, re.MULTILINE)),
         encoding="utf-8")
     helpers = between(source, "\tconstexpr std::uint64_t ToMask(", "\tbool IsValidUtf8(")
     methods = [function(source, signature) for signature in (

@@ -6,16 +6,27 @@
 #include "../Utils/Form.h"
 #include "../Utils/Game.h"
 #include "MeshBlendingLandscapeSnapshot.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "../State.h"
+#endif
 
 #include <chrono>
 #include <cstring>
 #include <exception>
+#include <iterator>
 #include <mutex>
 
 namespace
 {
 	namespace Landscape = CSX::MeshBlendingLandscapePolicy;
 	using ShaderFlag = RE::BSShaderProperty::EShaderPropertyFlag;
+	using Rejection = MeshBlendingLandscape::Rejection;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	bool CollectDiagnostics()
+	{
+		return globals::state && globals::state->IsDeveloperMode();
+	}
+#endif
 
 	const RE::BSFixedString& SnapshotName()
 	{
@@ -68,10 +79,10 @@ namespace
 		std::uint32_t count = 0u;
 	};
 
-	bool ReadBindings(const RE::BSShaderMaterial* a_material, TextureBindings& a_bindings)
+	Rejection ReadBindings(const RE::BSShaderMaterial* a_material, TextureBindings& a_bindings)
 	{
 		if (!a_material)
-			return false;
+			return Rejection::MaterialLayout;
 		std::uintptr_t vtable = 0u;
 		std::memcpy(&vtable, a_material, sizeof(vtable));
 		static const auto vanillaVtable = RE::BSLightingShaderMaterialLandscape::VTABLE[0].address();
@@ -88,24 +99,25 @@ namespace
 			for (std::size_t layer = 0u; layer < Landscape::LayerCount; ++layer)
 				a_bindings.diffuse[layer] = material->landscapeBaseColorTextures[layer].get();
 		} else {
-			return false;
+			return Rejection::MaterialLayout;
 		}
-		return a_bindings.count > 0u && a_bindings.count <= Landscape::LayerCount;
+		return a_bindings.count > 0u && a_bindings.count <= Landscape::LayerCount ? Rejection::None : Rejection::LayerCount;
 	}
 
-	bool BuildDrawIdentity(RE::BSGeometry* a_geometry, RE::BSShaderProperty* a_property, std::uint32_t a_childIndex,
+	Rejection BuildDrawIdentity(RE::BSGeometry* a_geometry, RE::BSShaderProperty* a_property, std::uint32_t a_childIndex,
 		Landscape::DrawIdentity& a_identity, TextureBindings& a_bindings)
 	{
 		if (!a_geometry || !a_property || !a_geometry->parent ||
 			a_geometry->GetGeometryRuntimeData().shaderProperty.get() != a_property ||
 			a_property->GetRTTI() != globals::rtti::BSLightingShaderPropertyRTTI.get())
-			return false;
+			return Rejection::ShaderProperty;
 		const auto* property = static_cast<const RE::BSLightingShaderProperty*>(a_property);
 		const auto& children = a_geometry->parent->GetChildren();
 		if (!property->flags.any(ShaderFlag::kMultiTextureLandscape) || a_childIndex >= children.capacity() ||
-			children.capacity() > Landscape::MaximumQuadrantChildren || children[static_cast<std::uint16_t>(a_childIndex)].get() != a_geometry ||
-			!ReadBindings(property->material, a_bindings))
-			return false;
+			children.capacity() > Landscape::MaximumQuadrantChildren || children[static_cast<std::uint16_t>(a_childIndex)].get() != a_geometry)
+			return Rejection::ChildLayout;
+		if (const auto reason = ReadBindings(property->material, a_bindings); reason != Rejection::None)
+			return reason;
 		a_identity.root = reinterpret_cast<std::uintptr_t>(a_geometry->parent);
 		a_identity.geometry = reinterpret_cast<std::uintptr_t>(a_geometry);
 		a_identity.shaderProperty = reinterpret_cast<std::uintptr_t>(a_property);
@@ -116,7 +128,7 @@ namespace
 		a_identity.childIndex = a_childIndex;
 		for (std::size_t layer = 0u; layer < Landscape::LayerCount; ++layer)
 			a_identity.textures[layer] = reinterpret_cast<std::uintptr_t>(a_bindings.diffuse[layer]);
-		return true;
+		return Rejection::None;
 	}
 
 	std::string DiffusePath(const RE::TESLandTexture& a_texture)
@@ -126,7 +138,7 @@ namespace
 		return path ? Landscape::NormalizeTexturePath(path) : std::string{};
 	}
 
-	bool CaptureTexture(const RE::TESLandTexture& a_texture, Landscape::CapturedTexture& a_identity)
+	void CaptureTexture(const RE::TESLandTexture& a_texture, Landscape::CapturedTexture& a_identity)
 	{
 		a_identity.present = true;
 		a_identity.form = Landscape::CanonicalFormKey(Util::GetFormFileKey(&a_texture));
@@ -147,14 +159,14 @@ namespace
 			captured.editorID = materialEditorID ? Landscape::NormalizeIdentity(materialEditorID) : std::string{};
 			captured.name = Landscape::NormalizeIdentity(material->materialName.c_str());
 		}
-		return !a_identity.diffuse.empty();
 	}
 
-	void WarnRejectedCapture(std::size_t a_quadrant)
+	void WarnRejectedCapture(std::size_t a_quadrant, Rejection a_reason)
 	{
 		static std::atomic_uint32_t warnings = 0u;
 		if (warnings.fetch_add(1u, std::memory_order_relaxed) < 4u)
-			logger::warn("[Mesh Blending] LAND quadrant {} has an unsupported layout or texture identity; leaving it unblended", a_quadrant);
+			logger::warn("[Mesh Blending] LAND quadrant {} rejected ({}); leaving it unblended", a_quadrant,
+				MeshBlendingLandscape::RejectionNames[static_cast<std::size_t>(a_reason)]);
 	}
 }
 
@@ -178,36 +190,107 @@ std::size_t MeshBlendingLandscape::GetBlendPairCount() const noexcept
 	return policy.load(std::memory_order_acquire)->blendPairCount;
 }
 
+void MeshBlendingLandscape::BeginDiscoverySession() noexcept
+{
+	if (discoveryEpoch.fetch_add(1u, std::memory_order_acq_rel) == UINT64_MAX)
+		discoveryEpoch.store(1u, std::memory_order_release);
+}
+
 void MeshBlendingLandscape::Capture(RE::TESObjectLAND* a_land, bool a_materialSetupSucceeded, DiscoverySink a_discovery)
 {
-	if (!a_land || !a_land->loadedData)
+	if (!a_land || !a_land->loadedData) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (CollectDiagnostics()) {
+			const std::scoped_lock diagnosticsLock(diagnosticsMutex);
+			++diagnostics.captureAttempts;
+		}
+		RecordRejection(true, Rejection::MissingLand);
+#endif
 		return;
+	}
 	const std::unique_lock lock(metadataMutex);
 	// Revoke every previous quadrant before any allocation or layout validation can fail.
 	for (auto* root : a_land->loadedData->mesh) {
 		if (root)
 			root->RemoveExtraData(PublicationName());
 	}
-	if (!a_materialSetupSucceeded)
-		return;
 	for (std::size_t quadrant = 0u; quadrant < 4u; ++quadrant) {
+		if (!a_land->loadedData->mesh[quadrant] && !a_land->loadedData->defQuadTextures[quadrant] &&
+			std::none_of(std::begin(a_land->loadedData->quadTextures[quadrant]), std::end(a_land->loadedData->quadTextures[quadrant]),
+				[](const auto* texture) { return texture != nullptr; }))
+			continue;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (CollectDiagnostics()) {
+			const std::scoped_lock diagnosticsLock(diagnosticsMutex);
+			++diagnostics.captureAttempts;
+		}
+#endif
 		try {
-			if (!CaptureQuadrant(a_land, quadrant, a_discovery))
-				WarnRejectedCapture(quadrant);
-		} catch (const std::exception& error) {
-			logger::warn("[Mesh Blending] Could not capture LAND quadrant {}: {}", quadrant, error.what());
+			const auto reason = CaptureQuadrant(a_land, quadrant, a_materialSetupSucceeded, a_discovery);
+			if (reason != Rejection::None)
+				WarnRejectedCapture(quadrant, reason);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			else if (CollectDiagnostics()) {
+				const std::scoped_lock diagnosticsLock(diagnosticsMutex);
+				++diagnostics.captureSuccesses;
+			}
+#endif
+		} catch (const std::exception&) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			RecordRejection(true, Rejection::Exception, static_cast<std::uint32_t>(quadrant));
+#endif
+			WarnRejectedCapture(quadrant, Rejection::Exception);
 		}
 	}
 }
 
-bool MeshBlendingLandscape::CaptureQuadrant(RE::TESObjectLAND* a_land, std::size_t a_quadrant, const DiscoverySink& a_discovery)
+MeshBlendingLandscape::Rejection MeshBlendingLandscape::CaptureQuadrant(RE::TESObjectLAND* a_land, std::size_t a_quadrant,
+	bool a_materialSetupSucceeded, const DiscoverySink& a_discovery)
 {
+	const auto reject = [&](Rejection reason, [[maybe_unused]] std::uint32_t layer = Landscape::LayerCount,
+							[[maybe_unused]] std::string_view expected = {}, [[maybe_unused]] std::string_view bound = {}) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordRejection(true, reason, static_cast<std::uint32_t>(a_quadrant), layer, expected, bound);
+#endif
+		return reason;
+	};
 	auto* root = a_land->loadedData->mesh[a_quadrant];
+	std::array<Landscape::CapturedTexture, Landscape::LayerCount> textures{};
+	std::array<RE::TESLandTexture*, Landscape::LayerCount> records{};
+	const auto currentPolicy = policy.load(std::memory_order_acquire);
+	const auto observe = [&](const Landscape::CapturedTexture& texture) {
+		if (a_discovery.capture && texture.present) {
+			const auto view = Landscape::ViewTexture(texture);
+			a_discovery.capture(a_discovery.context, view, Landscape::ClassifyTexture(view, *currentPolicy));
+		}
+	};
+	// Recording identifies readable LTEX records even when their render layout is unsupported.
+	for (std::size_t layer = 0u; layer < Landscape::LayerCount; ++layer) {
+		auto* texture = layer == 0u ? a_land->loadedData->defQuadTextures[a_quadrant] : a_land->loadedData->quadTextures[a_quadrant][layer - 1u];
+		if (layer == 0u && !texture && root)
+			texture = Util::GetDefaultLandTexture();
+		records[layer] = texture;
+		if (texture) {
+			CaptureTexture(*texture, textures[layer]);
+			observe(textures[layer]);
+		}
+	}
+	if (a_discovery.capture) {
+		for (std::size_t extra = Landscape::LayerCount - 1u; extra < std::size(a_land->loadedData->quadTextures[a_quadrant]); ++extra) {
+			if (const auto* texture = a_land->loadedData->quadTextures[a_quadrant][extra]) {
+				Landscape::CapturedTexture identity;
+				CaptureTexture(*texture, identity);
+				observe(identity);
+			}
+		}
+	}
+	if (!a_materialSetupSucceeded)
+		return reject(Rejection::MaterialSetup);
 	if (!root)
-		return true;
+		return reject(Rejection::MissingGeometry);
 	const auto& children = root->GetChildren();
 	if (children.empty() || children.capacity() > Landscape::MaximumQuadrantChildren)
-		return false;
+		return reject(Rejection::ChildLayout);
 	RE::BSGeometry* geometry = nullptr;
 	std::uint32_t childIndex = 0u;
 	for (std::uint16_t child = 0u; child < children.capacity(); ++child) {
@@ -216,63 +299,148 @@ bool MeshBlendingLandscape::CaptureQuadrant(RE::TESObjectLAND* a_land, std::size
 		if (!property || !property->flags.any(ShaderFlag::kMultiTextureLandscape))
 			continue;
 		if (geometry)
-			return false;
+			return reject(Rejection::MultipleGeometries);
 		geometry = candidate;
 		childIndex = child;
 	}
 	if (!geometry || geometry->parent != root)
-		return false;
+		return reject(Rejection::MissingGeometry);
 	Landscape::SnapshotHeader header{ session, nextPublication++, {} };
 	TextureBindings bindings;
-	if (!BuildDrawIdentity(geometry, geometry->GetGeometryRuntimeData().shaderProperty.get(), childIndex, header.draw, bindings))
-		return false;
-	std::array<Landscape::CapturedTexture, Landscape::LayerCount> textures{};
+	if (const auto reason = BuildDrawIdentity(geometry, geometry->GetGeometryRuntimeData().shaderProperty.get(), childIndex, header.draw, bindings);
+		reason != Rejection::None)
+		return reject(reason);
 	for (std::size_t layer = 0u; layer < Landscape::LayerCount; ++layer) {
-		auto* texture = layer == 0u ? a_land->loadedData->defQuadTextures[a_quadrant] : a_land->loadedData->quadTextures[a_quadrant][layer - 1u];
-		if ((layer == 0u && !texture) || (texture && texture->GetFormID() == 0u && bindings.layout == Landscape::MaterialLayout::kVanilla))
-			texture = Util::GetDefaultLandTexture();
-		if (!texture)
+		if (records[layer] && records[layer]->GetFormID() == 0u && bindings.layout == Landscape::MaterialLayout::kVanilla) {
+			textures[layer] = {};
+			if (const auto* texture = Util::GetDefaultLandTexture()) {
+				CaptureTexture(*texture, textures[layer]);
+				observe(textures[layer]);
+			}
+		}
+		if (!textures[layer].present)
 			continue;
-		if (layer >= bindings.count || !bindings.diffuse[layer] || !CaptureTexture(*texture, textures[layer]) ||
-			textures[layer].diffuse != Landscape::NormalizeTexturePath(bindings.diffuse[layer]->name.c_str()))
-			return false;
+		if (layer >= bindings.count)
+			return reject(Rejection::LayerCount, static_cast<std::uint32_t>(layer));
+		if (!bindings.diffuse[layer] || textures[layer].diffuse.empty())
+			return reject(Rejection::MissingTexture, static_cast<std::uint32_t>(layer), textures[layer].diffuse);
+		const auto boundPath = Landscape::NormalizeTexturePath(bindings.diffuse[layer]->name.c_str());
+		if (textures[layer].diffuse != boundPath)
+			return reject(Rejection::TextureIdentity, static_cast<std::uint32_t>(layer), textures[layer].diffuse, boundPath);
 	}
 	const auto words = Landscape::EncodeSnapshot(header, textures);
 	if (!words)
-		return false;
+		return reject(Rejection::SnapshotEncoding);
 	auto snapshot = CreateMetadata(SnapshotName(), *words);
 	auto publication = CreateMetadata(PublicationName(), Landscape::EncodePublication(header));
 	if (!snapshot || !publication)
-		return false;
-	if (a_discovery.capture) {
-		const auto currentPolicy = policy.load(std::memory_order_acquire);
-		for (const auto& texture : textures) {
-			if (texture.present)
-				a_discovery.capture(a_discovery.context, texture, Landscape::ClassifyTexture(texture, *currentPolicy));
-		}
-	}
+		return reject(Rejection::MetadataAllocation);
 	geometry->RemoveExtraData(SnapshotName());
-	if (!geometry->AddExtraData(snapshot.get()))
-		return false;
-	return root->AddExtraData(publication.get());
+	if (!geometry->AddExtraData(snapshot.get()) || !root->AddExtraData(publication.get()))
+		return reject(Rejection::MetadataPublication);
+	return Rejection::None;
 }
 
-bool MeshBlendingLandscape::TryGetClasses(RE::BSRenderPass* a_pass, std::uint32_t& a_classes)
+bool MeshBlendingLandscape::TryGetClasses(RE::BSRenderPass* a_pass, std::uint32_t& a_classes,
+	DiscoverySink a_discovery, bool a_classify)
 {
 	a_classes = 0u;
-	if (!a_pass || !a_pass->geometry)
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (CollectDiagnostics()) {
+		const std::scoped_lock diagnosticsLock(diagnosticsMutex);
+		++diagnostics.drawAttempts;
+	}
+#endif
+	const auto reject = [&]([[maybe_unused]] Rejection reason) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordRejection(false, reason);
+#endif
 		return false;
+	};
+	if (!a_pass || !a_pass->geometry)
+		return reject(Rejection::MissingGeometry);
 	const std::shared_lock lock(metadataMutex);
 	const auto words = ReadMetadata(*a_pass->geometry, SnapshotName());
+	if (words.empty())
+		return reject(Rejection::MissingSnapshot);
 	Landscape::SnapshotHeader header;
 	if (!Landscape::ReadSnapshotHeader(words, header))
-		return false;
+		return reject(Rejection::SnapshotDecoding);
 	Landscape::DrawIdentity current;
 	TextureBindings bindings;
-	if (!BuildDrawIdentity(a_pass->geometry, a_pass->shaderProperty, header.draw.childIndex, current, bindings) ||
-		!Landscape::MatchesPublication(ReadMetadata(*a_pass->geometry->parent, PublicationName()), header, current, session))
-		return false;
+	if (const auto reason = BuildDrawIdentity(a_pass->geometry, a_pass->shaderProperty, header.draw.childIndex, current, bindings);
+		reason != Rejection::None)
+		return reject(reason);
+	if (!Landscape::MatchesPublication(ReadMetadata(*a_pass->geometry->parent, PublicationName()), header, current, session))
+		return reject(Rejection::StalePublication);
 	const auto currentPolicy = policy.load(std::memory_order_acquire);
-	static thread_local Landscape::ClassificationCache<> cache;
-	return cache.Resolve(words, header, *currentPolicy, a_classes);
+	try {
+		if (a_discovery.capture) {
+			static thread_local Landscape::DiscoveryCache<> discoveries;
+			if (!discoveries.Observe(words, header, a_discovery.epoch, *currentPolicy,
+					[&](const Texture& texture, Kind kind) { a_discovery.capture(a_discovery.context, texture, kind); }))
+				return reject(Rejection::SnapshotDecoding);
+		}
+		Landscape::QuadrantClassification classification;
+		if (a_classify) {
+			static thread_local Landscape::ClassificationCache<> cache;
+			if (!cache.Resolve(words, header, *currentPolicy, a_classes, &classification))
+				return reject(Rejection::SnapshotDecoding);
+		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (CollectDiagnostics()) {
+			const std::scoped_lock diagnosticsLock(diagnosticsMutex);
+			++diagnostics.drawSuccesses;
+			if (a_classify) {
+				diagnostics.unknownLayerDraws += classification.unknownLayers != 0u;
+				diagnostics.rejectedPairDraws += classification.pairRejected;
+				diagnostics.zeroClassDraws += classification.classes == 0u;
+			}
+		}
+#endif
+		return true;
+	} catch (const std::exception&) {
+		static std::atomic_uint32_t warnings = 0u;
+		if (warnings.fetch_add(1u, std::memory_order_relaxed) < 4u)
+			logger::warn("[Mesh Blending] Could not observe resident LAND identities; leaving the draw unblended");
+		return reject(Rejection::Exception);
+	}
 }
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+MeshBlendingLandscape::Diagnostics MeshBlendingLandscape::GetDiagnostics() const
+{
+	const std::scoped_lock lock(diagnosticsMutex);
+	return diagnostics;
+}
+
+void MeshBlendingLandscape::ResetDiagnostics()
+{
+	const std::scoped_lock lock(diagnosticsMutex);
+	diagnostics = {};
+}
+
+void MeshBlendingLandscape::RecordSeamBypass()
+{
+	if (CollectDiagnostics()) {
+		const std::scoped_lock lock(diagnosticsMutex);
+		++diagnostics.seamBypasses;
+	}
+}
+
+void MeshBlendingLandscape::RecordRejection(bool a_capture, Rejection a_reason, std::uint32_t a_quadrant,
+	std::uint32_t a_layer, std::string_view a_expected, std::string_view a_bound)
+{
+	if (!CollectDiagnostics())
+		return;
+	const std::scoped_lock lock(diagnosticsMutex);
+	auto& counters = a_capture ? diagnostics.captureRejects : diagnostics.drawRejects;
+	++counters[static_cast<std::size_t>(a_reason)];
+	auto& detail = a_capture ? diagnostics.lastCaptureRejection : diagnostics.lastDrawRejection;
+	detail.reason = a_reason;
+	detail.quadrant = a_quadrant;
+	detail.layer = a_layer;
+	detail.expectedTexture = a_expected.substr(0u, Landscape::MaximumIdentityLength);
+	detail.boundTexture = a_bound.substr(0u, Landscape::MaximumIdentityLength);
+}
+#endif

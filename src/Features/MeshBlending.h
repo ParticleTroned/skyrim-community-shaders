@@ -385,6 +385,7 @@ private:
 	bool IsDiscoveryCaptureActive() const;
 	bool IsDiscoveryCaptureSaturated() const;
 	void SetDiscoveryCaptureEnabled(bool a_enabled);
+	MeshBlendingLandscape::DiscoverySink GetLandscapeDiscoverySink();
 	void CaptureDiscoveredRule(std::string_view a_modelPath, std::string_view a_nodePath);
 	void CaptureDiscoveredLandscape(const MeshBlendingLandscape::Texture& a_texture, LandscapeMaterialKind a_kind);
 	static std::optional<LandscapeMaterialKind> ParseLandscapeMaterialKind(std::string_view a_kind);

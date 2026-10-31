@@ -407,6 +407,8 @@ void MeshBlending::SetDiscoveryCaptureEnabled(bool a_enabled)
 	// Starting must revisit cached rejections, and stopping must discard capture-only
 	// automatic classifications before normal policy operation resumes.
 	InvalidateClassificationCache();
+	if (a_enabled)
+		landscape.BeginDiscoverySession();
 	logger::info("[Mesh Blending] Discovery capture {}", a_enabled ? "started" : "stopped");
 }
 
@@ -500,16 +502,22 @@ void MeshBlending::CaptureDiscoveredLandscape(const MeshBlendingLandscape::Textu
 	}
 }
 
-void MeshBlending::CaptureLandscapeMaterials(RE::TESObjectLAND* a_land, bool a_materialSetupSucceeded)
+MeshBlendingLandscape::DiscoverySink MeshBlending::GetLandscapeDiscoverySink()
 {
 	MeshBlendingLandscape::DiscoverySink discovery;
 	if (IsDiscoveryCaptureActive()) {
 		discovery.context = this;
+		discovery.epoch = landscape.GetDiscoveryEpoch();
 		discovery.capture = [](void* context, const MeshBlendingLandscape::Texture& texture, LandscapeMaterialKind kind) {
 			static_cast<MeshBlending*>(context)->CaptureDiscoveredLandscape(texture, kind);
 		};
 	}
-	landscape.Capture(a_land, a_materialSetupSucceeded, discovery);
+	return discovery;
+}
+
+void MeshBlending::CaptureLandscapeMaterials(RE::TESObjectLAND* a_land, bool a_materialSetupSucceeded)
+{
+	landscape.Capture(a_land, a_materialSetupSucceeded, GetLandscapeDiscoverySink());
 }
 
 void MeshBlending::EnsureRuleFileLoaded()
@@ -1832,12 +1840,21 @@ void MeshBlending::PrepareLightingDraw(RE::BSRenderPass* a_pass)
 		return;
 	}
 	if (landscapePass || lodLandscapePass) {
-		// Borrowed seam layers have no six-slot material policy; keep their native weights.
+		// The seam permutation can borrow eight layers; exclude the entire six-slot geometry.
 		const bool seamPass = (state->modifiedPixelDescriptor & static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams)) != 0u;
-		if (landscapePass && !seamPass && runtimeEnabled && settings.LandscapeLayerBlending != 0u &&
-			IsFinite(settings.LandscapeBlendStrength) && settings.LandscapeBlendStrength > 0.0f) {
+		const bool landscapeEnabled = landscapePass && runtimeEnabled && settings.LandscapeLayerBlending != 0u &&
+		                              IsFinite(settings.LandscapeBlendStrength) && settings.LandscapeBlendStrength > 0.0f;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (landscapeEnabled && seamPass)
+			landscape.RecordSeamBypass();
+#endif
+		const bool classify = landscapeEnabled && !seamPass;
+		if (landscapePass && (classify || discoveryCaptureActive)) {
 			std::uint32_t packedClasses = 0u;
-			if (landscape.TryGetClasses(a_pass, packedClasses)) {
+			const bool validSnapshot = landscape.TryGetClasses(a_pass, packedClasses, GetLandscapeDiscoverySink(), classify);
+			if (!classify)
+				return;
+			if (validSnapshot) {
 				if (collectDiagnostics) {
 					++diagnostics.landscapeRegistryHits;
 				}
@@ -1958,6 +1975,29 @@ void MeshBlending::DrawDiagnostics() const
 	ImGui::Text("LAND snapshots: %llu hits, %llu misses",
 		static_cast<unsigned long long>(diagnostics.landscapeRegistryHits),
 		static_cast<unsigned long long>(diagnostics.landscapeRegistryMisses));
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const auto land = landscape.GetDiagnostics();
+	ImGui::Text("LAND capture: %llu/%llu quadrants; draw validation: %llu/%llu",
+		static_cast<unsigned long long>(land.captureSuccesses), static_cast<unsigned long long>(land.captureAttempts),
+		static_cast<unsigned long long>(land.drawSuccesses), static_cast<unsigned long long>(land.drawAttempts));
+	ImGui::Text("LAND draws: %llu with unknown layers, %llu with rejected pairs, %llu with zero classes, %llu seam bypasses",
+		static_cast<unsigned long long>(land.unknownLayerDraws), static_cast<unsigned long long>(land.rejectedPairDraws),
+		static_cast<unsigned long long>(land.zeroClassDraws), static_cast<unsigned long long>(land.seamBypasses));
+	const auto showRejection = [](const char* stage, const MeshBlendingLandscape::RejectionDetail& detail) {
+		if (detail.reason == MeshBlendingLandscape::Rejection::None)
+			return;
+		const auto reason = MeshBlendingLandscape::RejectionNames[static_cast<std::size_t>(detail.reason)];
+		ImGui::Text("Last LAND %s rejection: %.*s", stage, static_cast<int>(reason.size()), reason.data());
+		if (detail.quadrant < 4u)
+			ImGui::Text("Quadrant %u, layer %u (6 means no specific layer)", detail.quadrant, detail.layer);
+		if (!detail.expectedTexture.empty() || !detail.boundTexture.empty())
+			ImGui::TextWrapped("LTEX diffuse: %s; bound diffuse: %s", detail.expectedTexture.c_str(), detail.boundTexture.c_str());
+	};
+	showRejection("capture", land.lastCaptureRejection);
+	showRejection("draw", land.lastDrawRejection);
+#else
+	ImGui::TextDisabled("Detailed LAND rejection reasons require a DevBench-enabled build.");
+#endif
 	ImGui::TreePop();
 }
 
@@ -1965,7 +2005,7 @@ void MeshBlending::DrawDiscoverySettings()
 {
 	static Util::ConfirmationPopup savePopup{
 		"Save Detected Materials?##MeshBlending",
-		"This atomically merges captured exact NIF model/node pairs and streamed LTEX identities into "
+		"This atomically merges captured exact NIF model/node pairs and observed LTEX identities into "
 		"MeshBlendingRules.json. Generated entries remain separate from manually authored policy.",
 		"Save Detected Materials"
 	};
@@ -1998,7 +2038,9 @@ void MeshBlending::DrawDiscoverySettings()
 	}
 	if (auto tooltip = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Records only NIF identities that are rendered inside the view/distance gates and LTEX identities from streamed LAND cells.\n"
+			"Records eligible NIF/snow overlays, newly loaded LTEX records, and valid resident LAND snapshots observed on draws.\n"
+			"If an earlier LAND capture failed, start recording before reloading or re-entering that cell.\n"
+			"Recording also works with LAND blending disabled. An observed identity does not establish that its geometry can blend.\n"
 			"It does not scan directories or open every NIF. Both categories are bounded and deduplicated in memory.\n"
 			"No disk I/O occurs until Save Detected Materials is pressed. Recording is session-only and pauses performance A/B measurement.");
 	}
@@ -2226,6 +2268,14 @@ void MeshBlending::DrawMechanismToggles()
 	bool landscapeEnabled = settings.LandscapeLayerBlending != 0u;
 	if (ImGui::Checkbox("LAND/LTEX material blending", &landscapeEnabled))
 		settings.LandscapeLayerBlending = landscapeEnabled ? 1u : 0u;
+	if (auto tooltip = Util::HoverTooltipWrapper()) {
+		ImGui::Text(
+			"Supports ordinary terrain with up to six material layers.\n"
+			"Landscape Seam Blending bypasses this effect for the entire affected geometry.\n"
+			"Unknown active materials and pixels containing only soft materials keep their original weights.");
+	}
+	if (landscapeEnabled)
+		ImGui::TextWrapped("LAND blending requires Landscape Seam Blending to be disabled for the affected geometry.");
 }
 
 void MeshBlending::DrawEssentialSettings()

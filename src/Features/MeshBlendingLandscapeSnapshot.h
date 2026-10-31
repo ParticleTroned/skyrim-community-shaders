@@ -215,13 +215,13 @@ namespace CSX::MeshBlendingLandscapePolicy
 			std::uint64_t publication = 0u;
 			std::uint64_t revision = 0u;
 			std::uint64_t used = 0u;
-			std::uint32_t classes = 0u;
+			QuadrantClassification classification;
 		};
 
 	public:
 		/** Recompute bounded copied identities on any policy change or cache eviction. */
 		bool Resolve(std::span<const std::int32_t> a_words, const SnapshotHeader& a_header,
-			const CompiledPolicy& a_policy, std::uint32_t& a_classes)
+			const CompiledPolicy& a_policy, std::uint32_t& a_classes, QuadrantClassification* a_details = nullptr)
 		{
 			auto hash = a_header.publication ^ a_header.session;
 			hash = (hash ^ (hash >> 30u)) * 0xBF58476D1CE4E5B9ull;
@@ -233,7 +233,9 @@ namespace CSX::MeshBlendingLandscapePolicy
 				auto& entry = entries[start + way];
 				if (entry.session == a_header.session && entry.publication == a_header.publication && entry.revision == a_policy.revision) {
 					entry.used = ++clock;
-					a_classes = entry.classes;
+					a_classes = entry.classification.classes;
+					if (a_details)
+						*a_details = entry.classification;
 					return true;
 				}
 				if (entry.used < replacement->used)
@@ -242,13 +244,56 @@ namespace CSX::MeshBlendingLandscapePolicy
 			std::array<TextureView, LayerCount> textures{};
 			if (!DecodeTextureViews(a_words, textures))
 				return false;
-			a_classes = ClassifyQuadrant(textures, a_policy);
-			*replacement = { a_header.session, a_header.publication, a_policy.revision, ++clock, a_classes };
+			const auto classification = ClassifyQuadrantDetails(textures, a_policy);
+			a_classes = classification.classes;
+			if (a_details)
+				*a_details = classification;
+			*replacement = { a_header.session, a_header.publication, a_policy.revision, ++clock, classification };
 			return true;
 		}
 
 	private:
 		std::array<Entry, SetCount * Ways> entries{};
 		std::uint64_t clock = 0u;
+	};
+
+	/** Bounded recording acceleration; evictions may replay observations but never lose identities. */
+	template <std::size_t Capacity = 1024u>
+	class DiscoveryCache
+	{
+		static_assert(std::has_single_bit(Capacity));
+		struct Entry
+		{
+			std::uint64_t session = 0u;
+			std::uint64_t publication = 0u;
+			std::uint64_t epoch = 0u;
+			std::uint64_t revision = 0u;
+			bool operator==(const Entry&) const = default;
+		};
+
+	public:
+		template <class Observer>
+		bool Observe(std::span<const std::int32_t> a_words, const SnapshotHeader& a_header,
+			std::uint64_t a_epoch, const CompiledPolicy& a_policy, Observer&& a_observer)
+		{
+			if (a_epoch == 0u)
+				return true;
+			const Entry key{ a_header.session, a_header.publication, a_epoch, a_policy.revision };
+			auto& entry = entries[(a_header.session ^ a_header.publication) & (Capacity - 1u)];
+			if (entry == key)
+				return true;
+			std::array<TextureView, LayerCount> textures{};
+			if (!DecodeTextureViews(a_words, textures))
+				return false;
+			for (const auto& texture : textures) {
+				if (texture.present)
+					a_observer(texture, ClassifyTexture(texture, a_policy));
+			}
+			entry = key;
+			return true;
+		}
+
+	private:
+		std::array<Entry, Capacity> entries{};
 	};
 }

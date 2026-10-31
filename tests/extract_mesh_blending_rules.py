@@ -51,6 +51,7 @@ def extract(root: Path, output: Path) -> None:
         "MeshBlending::LandscapeMaterialClass MeshBlending::GetLandscapeMaterialClass(",
         "bool MeshBlending::IsDiscoveryCaptureSaturated(",
         "void MeshBlending::SetDiscoveryCaptureEnabled(",
+        "void MeshBlending::CaptureDiscoveredLandscape(",
         "bool MeshBlending::LoadRuleFile(",
         "bool MeshBlending::ReadRuleFileState(",
         "void MeshBlending::ApplyRuleFileState(",

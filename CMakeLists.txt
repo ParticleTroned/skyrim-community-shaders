@@ -3862,6 +3862,57 @@ if(BUILD_CONTROLLER_TESTS)
         MeshBlendingLandscapePolicy
         tests/mesh_blending_landscape_policy_test.cpp
     )
+    set(_mesh_landscape_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/mesh_landscape"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_mesh_landscape_test_dir}/mesh_blending_landscape_under_test.h"
+            "${_mesh_landscape_test_dir}/mesh_blending_landscape_draw_under_test.h"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extract_mesh_blending_landscape.py"
+            --source-dir "${PROJECT_SOURCE_DIR}" --output-dir
+            "${_mesh_landscape_test_dir}"
+        DEPENDS
+            src/Features/MeshBlendingLandscape.cpp
+            src/Features/MeshBlending.cpp
+            tests/extract_mesh_blending_landscape.py
+            tests/extract_adaptive_balance_toggle.py
+        VERBATIM
+    )
+    add_controller_test(
+        mesh_blending_landscape_runtime_test
+        MeshBlendingLandscapeRuntime
+        tests/mesh_blending_landscape_runtime_test.cpp
+    )
+    add_controller_test(
+        mesh_blending_landscape_devbench_test
+        MeshBlendingLandscapeDevBench
+        tests/mesh_blending_landscape_runtime_test.cpp
+    )
+    foreach(
+        _mesh_landscape_target
+        IN
+        ITEMS
+            mesh_blending_landscape_runtime_test
+            mesh_blending_landscape_devbench_test
+    )
+        target_sources(
+            ${_mesh_landscape_target}
+            PRIVATE
+                "${_mesh_landscape_test_dir}/mesh_blending_landscape_under_test.h"
+                "${_mesh_landscape_test_dir}/mesh_blending_landscape_draw_under_test.h"
+        )
+        target_include_directories(
+            ${_mesh_landscape_target}
+            PRIVATE "${_mesh_landscape_test_dir}"
+        )
+    endforeach()
+    target_compile_definitions(
+        mesh_blending_landscape_devbench_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
     set(_mesh_rules_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mesh_rules")
     add_custom_command(
         OUTPUT

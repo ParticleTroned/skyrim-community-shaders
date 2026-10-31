@@ -1,9 +1,11 @@
 #include "Api/MeshBlendingDevBenchPolicy.h"
+#include "Features/MeshBlendingLandscape.h"
 #include "Features/MeshBlendingPolicy.h"
 
 #include <atomic>
 #include <cstdint>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <set>
 #include <stdexcept>
@@ -29,6 +31,12 @@ struct MeshBlending
 {
 #include "mesh_blending_devbench_members.h"
 	Diagnostics diagnostics{};
+	struct LandscapeBoundary
+	{
+		MeshBlendingLandscape::Diagnostics diagnostics;
+		auto GetDiagnostics() const { return diagnostics; }
+		void ResetDiagnostics() { diagnostics = {}; }
+	} landscape;
 	bool loaded = true;
 	bool runtimeEnabled = true;
 	bool capture = false;
@@ -40,6 +48,9 @@ struct MeshBlending
 	std::set<std::pair<std::string, std::string>> discoveredRuleKeys;
 	std::size_t discoveryDuplicateObservations = 0u;
 	std::size_t discoveryDropped = 0u;
+	std::map<std::string, int> discoveredLandscapeIdentities;
+	std::size_t landscapeDiscoveryDuplicateObservations = 0u;
+	std::size_t landscapeDiscoveryDropped = 0u;
 	json settings{ { "Enabled", 1u }, { "NifEnabled", 1u }, { "BlendStrength", 0.75f }, { "BlendWidth", 12.0f } };
 	void SaveSettings(json& value) { value = settings; }
 	void LoadSettings(json& value)
@@ -85,8 +96,15 @@ namespace
 			feature.diagnostics.rejections[static_cast<std::size_t>(CSX::MeshBlendingPolicy::RejectionReason::kSnowMaterialFamily)] = 4u;
 			feature.discoveredRuleKeys.emplace("meshes/test.nif", "root/overlay[0]");
 			feature.discoveryDuplicateObservations = 3u;
+			feature.discoveredLandscapeIdentities.emplace("Skyrim.esm|0x001234", 0);
+			feature.landscapeDiscoveryDuplicateObservations = 4u;
+			feature.landscapeDiscoveryDropped = 2u;
 			feature.diagnostics.landscapeRegistryHits = 11u;
 			feature.diagnostics.landscapeRegistryMisses = 13u;
+			feature.landscape.diagnostics.seamBypasses = 17u;
+			feature.landscape.diagnostics.captureRejects[static_cast<std::size_t>(MeshBlendingLandscape::Rejection::TextureIdentity)] = 19u;
+			feature.landscape.diagnostics.lastCaptureRejection.reason = MeshBlendingLandscape::Rejection::TextureIdentity;
+			feature.landscape.diagnostics.lastCaptureRejection.expectedTexture = "textures/snow.dds";
 		}
 		~Fixture() { globals::state = nullptr; }
 	};
@@ -98,7 +116,9 @@ namespace
 			feature.diagnostics.eligibleSources, feature.diagnostics.classificationAccepts, feature.diagnostics.rejections,
 			feature.diagnostics.projectedSnowCandidates, feature.diagnostics.projectedSnowActiveDraws,
 			feature.discoveredRuleKeys, feature.discoveryDuplicateObservations, feature.discoveryDropped,
-			feature.diagnostics.landscapeRegistryHits, feature.diagnostics.landscapeRegistryMisses };
+			feature.discoveredLandscapeIdentities, feature.landscapeDiscoveryDuplicateObservations, feature.landscapeDiscoveryDropped,
+			feature.diagnostics.landscapeRegistryHits, feature.diagnostics.landscapeRegistryMisses,
+			feature.landscape.diagnostics.seamBypasses, feature.landscape.diagnostics.lastCaptureRejection.expectedTexture };
 	}
 
 	void TestStatusAndMutation()
@@ -120,12 +140,22 @@ namespace
 			"diagnostics were flattened, truncated or omitted");
 		Require(counters.at("landscapeRegistryHits") == 11u && counters.at("landscapeRegistryMisses") == 13u,
 			"status omitted LAND diagnostic counters");
+		const auto& land = status.at("landscapeDiagnostics");
+		Require(land.size() == CSX::Api::MeshBlendingDevBench::LandscapeDiagnosticsSchema().at("properties").size() &&
+					land.at("seamBypasses") == 17u && land.at("captureRejects").at("textureIdentity") == 19u &&
+					land.at("lastCaptureRejection").at("reason") == "textureIdentity" &&
+					land.at("lastCaptureRejection").at("expectedTexture") == "textures/snow.dds" &&
+					land.at("maximumSupportedLayers") == 6u && land.at("landscapeSeams") == "wholeGeometryBypass",
+			"LAND diagnostics omitted reasons, bounded detail or whole-geometry seam policy");
 		Require(MutationState(feature) == before, "status request mutated feature state");
 		Require(counters.at("eligibleSources") == 13u && counters.at("classificationAccepts") == 5u &&
 					counters.at("projectedSnowCandidates") == 11u && counters.at("projectedSnowActiveDraws") == 3u &&
 					status.at("rejections").at("unsupportedSnowMaterialFamily") == 4u &&
 					status.at("rejections").at("noReceiver") == 8u && status.at("discovery").at("recordedIdentities") == 1u &&
-					status.at("discovery").at("repeatedObservations") == 3u,
+					status.at("discovery").at("repeatedObservations") == 3u &&
+					status.at("discovery").at("recordedLandscapeIdentities") == 1u &&
+					status.at("discovery").at("repeatedLandscapeObservations") == 4u &&
+					status.at("discovery").at("droppedLandscapeIdentities") == 2u,
 			"admission counters, rejection reasons and recorded identities were conflated");
 		feature.ruleFileMutationAllowed.store(true);
 		const auto changed = feature.ControlDevBench({ { "settings", { { "NifEnabled", false }, { "BlendWidth", 24.0f } } },
@@ -139,6 +169,10 @@ namespace
 		for (const auto& value : changed.at("rejections"))
 			Require(value == 0u, "reset did not clear rejection reasons");
 		Require(changed.at("discovery") == status.at("discovery"), "diagnostic reset erased recorded identities");
+		Require(changed.at("landscapeDiagnostics").at("seamBypasses") == 0u &&
+					changed.at("landscapeDiagnostics").at("lastCaptureRejection").at("reason") == "none" &&
+					changed.at("landscapeDiagnostics").at("lastCaptureRejection").at("expectedTexture") == "",
+			"reset retained LAND diagnostic counters or detail");
 	}
 
 	void TestInvalidRequestsAreAtomic()

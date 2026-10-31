@@ -1,4 +1,4 @@
-#include "Features/MeshBlendingLandscapePolicy.h"
+#include "Features/MeshBlendingLandscape.h"
 #include "Features/MeshBlendingPolicy.h"
 #include "Utils/Finite.h"
 
@@ -117,6 +117,8 @@ struct MeshBlending
 	struct LandscapeBoundary
 	{
 		std::shared_ptr<const CompiledLandscapeRules> current;
+		std::uint32_t recordingStarts = 0u;
+		void BeginDiscoverySession() noexcept { ++recordingStarts; }
 		void PublishPolicy(std::shared_ptr<const CompiledLandscapeRules> compiled) noexcept { current = std::move(compiled); }
 	} landscape;
 	json ruleFileDocument = json::object();
@@ -140,6 +142,7 @@ struct MeshBlending
 	void InvalidateClassificationCache() { ++cacheGeneration; }
 	bool IsDiscoveryCaptureSaturated() const;
 	void SetDiscoveryCaptureEnabled(bool enabled);
+	void CaptureDiscoveredLandscape(const MeshBlendingLandscape::Texture& texture, LandscapeMaterialKind kind);
 	static CompiledRules CompileRules(const RuleFileState& state);
 	static std::shared_ptr<const CompiledLandscapeRules> CompileLandscapeRules(const RuleFileState& state);
 	static std::optional<LandscapeMaterialKind> ParseLandscapeMaterialKind(std::string_view kind);
@@ -441,11 +444,47 @@ void TestLandscapeMechanismGates()
 	Require(!feature.IsRuntimeEnabled(), "invalid rule-file gate admitted LAND");
 }
 
+void TestLandscapeRecordingCopiesAndBounds()
+{
+	namespace Landscape = CSX::MeshBlendingLandscapePolicy;
+	MeshBlending feature;
+	Load(feature, EmptyDocument());
+	feature.SetDiscoveryCaptureEnabled(true);
+	feature.SetDiscoveryCaptureEnabled(true);
+	Require(feature.landscape.recordingStarts == 1u, "an unchanged recording toggle restarted LAND replay");
+	{
+		Landscape::CapturedTexture copied;
+		copied.present = true;
+		copied.form = "0x123~terrain.esp";
+		copied.diffuse = "textures/landscape/snow.dds";
+		const auto view = Landscape::ViewTexture(copied);
+		feature.CaptureDiscoveredLandscape(view, Landscape::MaterialKind::kSnow);
+		feature.CaptureDiscoveredLandscape(view, Landscape::MaterialKind::kStone);
+	}
+	Require(feature.discoveredLandscapeIdentities.size() == 1u && feature.landscapeDiscoveryDuplicateObservations == 1u &&
+				feature.discoveredLandscapeIdentities.begin()->second.Diffuse == "textures/landscape/snow.dds" &&
+				feature.discoveredLandscapeIdentities.begin()->second.Kind == "Stone",
+		"LAND recording retained borrowed memory, duplicated identities or omitted a classification refresh");
+	for (std::size_t index = 0u; index < MeshBlending::kMaximumLandscapeIdentities; ++index) {
+		Landscape::CapturedTexture copied;
+		copied.present = true;
+		copied.editorID = std::format("layer{}", index);
+		feature.CaptureDiscoveredLandscape(Landscape::ViewTexture(copied), Landscape::MaterialKind::kUnknown);
+	}
+	Require(feature.discoveredLandscapeIdentities.size() == MeshBlending::kMaximumLandscapeIdentities &&
+				feature.landscapeDiscoveryDropped == 1u,
+		"LAND recording exceeded its fixed identity bound or omitted the dropped observation");
+	feature.SetDiscoveryCaptureEnabled(false);
+	feature.SetDiscoveryCaptureEnabled(true);
+	Require(feature.landscape.recordingStarts == 2u, "recording restart did not invalidate LAND replay deduplication");
+}
+
 int main()
 {
 	try {
 		TestSettingsAndPayload();
 		TestLandscapeMechanismGates();
+		TestLandscapeRecordingCopiesAndBounds();
 		TestFailedSavePreservesActivePolicy();
 		TestSuccessfulSaveMergesDiskPolicy();
 		TestConcurrentFileChangeAndClearFailure();

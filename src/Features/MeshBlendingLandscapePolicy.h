@@ -290,6 +290,23 @@ namespace CSX::MeshBlendingLandscapePolicy
 	using CapturedTexture = TextureIdentity<std::string>;
 	using TextureView = TextureIdentity<std::string_view>;
 
+	/** Borrow a copied identity for immediate observation without another string allocation. */
+	[[nodiscard]] inline TextureView ViewTexture(const CapturedTexture& a_texture) noexcept
+	{
+		TextureView view;
+		view.form = a_texture.form;
+		view.editorID = a_texture.editorID;
+		view.diffuse = a_texture.diffuse;
+		view.materialCount = std::min(a_texture.materialCount, MaximumMaterialDepth);
+		view.materialChainValid = a_texture.materialChainValid && a_texture.materialCount <= MaximumMaterialDepth;
+		view.present = a_texture.present;
+		for (std::size_t index = 0u; index < view.materialCount; ++index) {
+			const auto& material = a_texture.materials[index];
+			view.materials[index] = { material.form, material.editorID, material.name };
+		}
+		return view;
+	}
+
 	/** Engine material names are heuristic fallbacks after all exact selectors. */
 	[[nodiscard]] inline MaterialKind ClassifyName(std::string_view a_name) noexcept
 	{
@@ -361,15 +378,29 @@ namespace CSX::MeshBlendingLandscapePolicy
 		return MaterialKind::kUnknown;
 	}
 
+	struct QuadrantClassification
+	{
+		std::uint32_t classes = 0u;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::uint32_t unknownLayers = 0u;
+		bool pairRejected = false;
+#endif
+	};
+
 	/** The shader has six classes, so disallowed known pairs reject the whole quadrant. */
 	template <class String>
-	[[nodiscard]] std::uint32_t ClassifyQuadrant(const std::array<TextureIdentity<String>, LayerCount>& a_textures, const CompiledPolicy& a_policy)
+	[[nodiscard]] QuadrantClassification ClassifyQuadrantDetails(const std::array<TextureIdentity<String>, LayerCount>& a_textures, const CompiledPolicy& a_policy)
 	{
 		std::array<MaterialKind, LayerCount> kinds{};
-		std::uint32_t classes = 0u;
+		QuadrantClassification result;
 		for (std::size_t layer = 0u; layer < LayerCount; ++layer) {
 			kinds[layer] = ClassifyTexture(a_textures[layer], a_policy);
-			classes |= static_cast<std::uint32_t>(GetMaterialClass(kinds[layer])) << (ClassShift + ClassBits * layer);
+			const auto materialClass = GetMaterialClass(kinds[layer]);
+			result.classes |= static_cast<std::uint32_t>(materialClass) << (ClassShift + ClassBits * layer);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (a_textures[layer].present && materialClass == MaterialClass::kUnknown)
+				result.unknownLayers |= 1u << layer;
+#endif
 		}
 		for (std::size_t first = 0u; first < LayerCount; ++first) {
 			const auto firstClass = GetMaterialClass(kinds[first]);
@@ -384,10 +415,22 @@ namespace CSX::MeshBlendingLandscapePolicy
 				if (firstClass == MaterialClass::kHard && secondClass == MaterialClass::kSoft)
 					std::swap(source, receiver);
 				if (!a_policy.blendPairs[source][receiver] &&
-					(firstClass != secondClass || !a_policy.blendPairs[receiver][source]))
-					return 0u;
+					(firstClass != secondClass || !a_policy.blendPairs[receiver][source])) {
+					result.classes = 0u;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					result.pairRejected = true;
+#endif
+					return result;
+				}
 			}
 		}
-		return classes & ClassMask;
+		result.classes &= ClassMask;
+		return result;
+	}
+
+	template <class String>
+	[[nodiscard]] std::uint32_t ClassifyQuadrant(const std::array<TextureIdentity<String>, LayerCount>& a_textures, const CompiledPolicy& a_policy)
+	{
+		return ClassifyQuadrantDetails(a_textures, a_policy).classes;
 	}
 }

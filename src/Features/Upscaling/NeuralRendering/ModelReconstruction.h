@@ -30,12 +30,20 @@ namespace NR::Reconstruction
 		return SanitizeFilter(filter) == kLanczos3Filter ? Mode::Lanczos3 : Mode::Bilinear;
 	}
 
+	/** @brief Model texels needed around the mapped source crop by the selected reconstruction. */
+	[[nodiscard]] constexpr float SupportRadius(Mode mode)
+	{
+		return mode == Mode::Lanczos3 ? 3.0f : 1.0f;
+	}
+
 	/** @brief Resolves the effective model scale and validated per-eye extents before either eye dispatches. */
 	[[nodiscard]] inline Mode Select(uint32_t filter, bool guided, bool rgbGuided, float scale,
-		uint32_t width, uint32_t height, uint32_t modelWidth, uint32_t modelHeight)
+		uint32_t width, uint32_t height, uint32_t modelWidth, uint32_t modelHeight, bool peripheralCompression = false)
 	{
-		if (!std::isfinite(scale) || scale <= 0.0f || scale >= 1.0f || !modelWidth || !modelHeight ||
-			modelWidth >= width || modelHeight >= height)
+		if (!std::isfinite(scale) || scale <= 0.0f || scale > 1.0f || !modelWidth || !modelHeight ||
+			modelWidth > width || modelHeight > height || (modelWidth == width && modelHeight == height))
+			return Mode::Native;
+		if (!peripheralCompression && (scale >= 1.0f || modelWidth == width || modelHeight == height))
 			return Mode::Native;
 		if (!guided)
 			return BasicMode(filter);

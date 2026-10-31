@@ -6,6 +6,9 @@
 #include "Features/Upscaling/NeuralRendering/CropCalibration.h"
 #include "Features/Upscaling/NeuralRendering/Diagnostics.h"
 #include "Features/Upscaling/NeuralRendering/FoveaClip.h"
+#include "Features/Upscaling/NeuralRendering/ModelReconstruction.h"
+#include "Features/Upscaling/NeuralRendering/ModelScale.h"
+#include "Features/Upscaling/NeuralRendering/PeripheralCompression.h"
 #include "Features/Upscaling/NeuralRendering/Runtime.h"
 #include "Features/Upscaling/NeuralRendering/Tuning.h"
 
@@ -64,6 +67,48 @@ TEST_CASE("ToGuideRegion carries the crop's pixels onto the guide rect", "[nr][r
 TEST_CASE("The crop reset tolerance is one alignment step", "[nr][roi]")
 {
 	REQUIRE(NR::ActorRegion::kHistoryTolerancePixels == static_cast<float>(Util::Region::kDefaultPixelAlignment));
+}
+
+TEST_CASE("Compressed crop halos contain every reconstruction tap", "[nr][roi][peripheral]")
+{
+	const std::array rectangles{
+		Util::Region::ScreenBounds{ 0.0f, 0.0f, 1.0f, 1.0f },
+		Util::Region::ScreenBounds{ 0.12f, 0.2f, 0.73f, 0.91f },
+		Util::Region::ScreenBounds{ 0.45f, 0.05f, 0.95f, 0.4f },
+		Util::Region::ScreenBounds{ 0.02f, 0.71f, 0.32f, 0.99f },
+		Util::Region::ScreenBounds{ 0.45f, 0.45f, 0.55f, 0.55f }
+	};
+	for (const auto extent : { std::array{ 1921u, 1081u }, std::array{ 2048u, 2200u } })
+		for (const uint32_t percent : { 20u, 50u, 100u }) {
+			const auto plan = NR::BuildPeripheralCompressionPlan(extent[0], extent[1], extent[0], extent[1], percent, true, 8, 64);
+			REQUIRE(plan.Active());
+			for (const auto& rect : rectangles) {
+				const auto source = Util::Region::PixelRegionFromBounds(rect, extent[0], extent[1], { 0.0f, 0.0f, 0.0f, 0.0f }, 1);
+				const auto [lower, upper] = plan.mapping.TargetBounds(
+					{ float(source.x) / extent[0], float(source.y) / extent[1] },
+					{ float(source.x + source.w) / extent[0], float(source.y + source.h) / extent[1] });
+				for (const auto mode : { NR::Reconstruction::Mode::Bilinear, NR::Reconstruction::Mode::BrightnessGuided, NR::Reconstruction::Mode::RgbGuided, NR::Reconstruction::Mode::Lanczos3 }) {
+					const float padding = NR::Reconstruction::SupportRadius(mode);
+					const auto crop = Util::Region::PixelRegionFromBounds({ lower[0], lower[1], upper[0], upper[1] }, plan.width, plan.height,
+						{ 0.0f, padding, padding, padding }, NR::kModelExtentAlignment);
+					for (unsigned y = 0; y <= 10; ++y)
+						for (unsigned x = 0; x <= 10; ++x) {
+							const auto mapped = plan.mapping.Forward({ (std::lerp(float(source.x), float(source.x + source.w - 1), float(x) / 10) + 0.5f) / extent[0],
+								(std::lerp(float(source.y), float(source.y + source.h - 1), float(y) / 10) + 0.5f) / extent[1] });
+							for (unsigned axis = 0; axis < 2; ++axis) {
+								const auto modelExtent = axis ? plan.height : plan.width;
+								const int base = static_cast<int>(std::floor(mapped[axis] * modelExtent - 0.5f));
+								const bool lanczos = mode == NR::Reconstruction::Mode::Lanczos3;
+								const int first = std::clamp(base - (lanczos ? 2 : 0), 0, int(modelExtent) - 1);
+								const int last = std::clamp(base + (lanczos ? 3 : 1), 0, int(modelExtent) - 1);
+								const auto origin = axis ? crop.y : crop.x, size = axis ? crop.h : crop.w;
+								REQUIRE(first >= int(origin));
+								REQUIRE(last < int(origin + size));
+							}
+						}
+				}
+			}
+		}
 }
 
 TEST_CASE("The actor crop resets NR history on appearance and on a jump beyond one alignment step", "[nr][roi]")

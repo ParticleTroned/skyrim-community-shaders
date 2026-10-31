@@ -547,6 +547,12 @@ cbuffer AlphaTestRefCB : register(b11)
 #		include "IBL/IBL.hlsli"
 #	endif
 
+#	if defined(SNOW_COVER)
+#		define BASIC_SNOW_COVER
+#		define SampColorSampler SampBaseSampler
+#		include "SnowCover/SnowCover.hlsli"
+#	endif
+
 #	define LinearSampler SampBaseSampler
 
 #	include "Common/ShadowSampling.hlsli"
@@ -750,6 +756,17 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 	diffuseColor += directionalAmbientColor;
 
 	float3 albedo = ApplyGrassWetDarkening(baseColor.xyz) * vertexColor;
+#		if defined(SNOW_COVER)
+	[branch] if (SnowCover::IsActive())
+	{
+#			if defined(SKYLIGHTING)
+		float snowSkyVisibility = skylightingDiffuse;
+#			else
+		float snowSkyVisibility = 1.0;
+#			endif
+		SnowCover::ApplyGrassSnow(albedo, normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, false, eyeIndex, TexBaseSampler, false, false);
+	}
+#		endif
 
 	diffuseColor *= albedo;
 	directionalAmbientColor *= albedo;
@@ -933,6 +950,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif  // SKYLIGHTING
 
 	float3 albedo = baseColor.xyz * vertexColor;
+#			if defined(SNOW_COVER)
+	[branch] if (SnowCover::IsActive())
+	{
+#				if defined(SKYLIGHTING)
+		float snowSkyVisibility = skylightingDiffuse;
+#				else
+		float snowSkyVisibility = 1.0;
+#				endif
+		SnowCover::ApplyGrassSnow(albedo, normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, complex, eyeIndex, TexBaseSampler);
+	}
+#			endif
 
 	float dirSoftShadow = dirShadow * dirDetailShadow;
 #			if defined(SKYLIGHTING_SHADOW_VIS)

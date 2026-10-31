@@ -14,6 +14,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/Skylighting.h"
+#include "Features/SnowCover.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
@@ -53,6 +54,7 @@ namespace
 	using UnifiedWaterSettingsCB = UnifiedWater::CommonBufferData;
 	using WaterAppearanceSettingsCB = WaterAppearance::Settings;
 	using BloomSettingsCB = Bloom::Settings;
+	using SnowCoverSettingsCB = SnowCover::PerFrame;
 
 	// Keep these in lock-step with package/Shaders/Common/SharedData.hlsli::FeatureData.
 	struct FeatureDataLayout
@@ -79,6 +81,7 @@ namespace
 		UnifiedWaterSettingsCB unifiedWaterSettings;
 		WaterAppearanceSettingsCB waterAppearanceSettings;
 		BloomSettingsCB bloomSettings;
+		SnowCoverSettingsCB snowCoverSettings;
 	};
 
 	using FeatureDataTuple = std::tuple<
@@ -103,7 +106,8 @@ namespace
 		FoliageLightingSettingsCB,
 		UnifiedWaterSettingsCB,
 		WaterAppearanceSettingsCB,
-		BloomSettingsCB>;
+		BloomSettingsCB,
+		SnowCoverSettingsCB>;
 
 	static_assert(sizeof(GrassLightingSettingsCB) == 32);
 	static_assert(offsetof(GrassLightingSettingsCB, Enabled) == 28);
@@ -208,7 +212,8 @@ namespace
 	static_assert(offsetof(FeatureDataLayout, unifiedWaterSettings) == offsetof(FeatureDataLayout, foliageLightingSettings) + sizeof(FoliageLightingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, waterAppearanceSettings) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, bloomSettings) == offsetof(FeatureDataLayout, waterAppearanceSettings) + sizeof(WaterAppearanceSettingsCB));
-	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, bloomSettings) + sizeof(BloomSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, snowCoverSettings) == offsetof(FeatureDataLayout, bloomSettings) + sizeof(BloomSettingsCB));
+	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, snowCoverSettings) + sizeof(SnowCoverSettingsCB));
 
 	template <class T>
 	void PackField(unsigned char* a_dst, size_t& a_offset, const T& a_value)
@@ -273,5 +278,6 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::foliageLighting.GetCommonBufferData(),
 		globals::features::unifiedWater.GetCommonBufferData(),
 		globals::features::adaptiveBrightness.GetEffectiveWaterAppearanceSettings(),
-		globals::features::adaptiveBrightness.GetEffectiveBloomSettings());
+		globals::features::adaptiveBrightness.GetEffectiveBloomSettings(),
+		globals::features::snowCover.GetCommonBufferData(a_inWorld));
 }

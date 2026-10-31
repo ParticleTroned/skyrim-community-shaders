@@ -185,6 +185,12 @@ const static float DepthOffsets[16] = {
 #		include "IBL/IBL.hlsli"
 #	endif
 
+#	if defined(SNOW_COVER)
+#		define BASIC_SNOW_COVER
+#		define SampColorSampler SampDiffuse
+#		include "SnowCover/SnowCover.hlsli"
+#	endif
+
 #	define LinearSampler SampDiffuse
 
 #	include "Common/ShadowSampling.hlsli"
@@ -247,6 +253,10 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = -normalize(cross(ddx, ddy));
 
+#			if defined(SNOW_COVER)
+	SnowCover::ApplyDistantTreeSnow(baseColor.xyz, normal, input.WorldPosition.xyz, input.TexCoord.xy, eyeIndex, TexDiffuse);
+#			endif
+
 	float3 directionalAmbientColor = max(0, Color::Ambient(SharedData::GetAmbient(normal)));
 #			if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
@@ -279,6 +289,10 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = normalize(cross(ddx, ddy));
+
+#			if defined(SNOW_COVER)
+	SnowCover::ApplyDistantTreeSnow(baseColor.xyz, normal, input.WorldPosition.xyz, input.TexCoord.xy, eyeIndex, TexDiffuse);
+#			endif
 
 	float3 directionalAmbientColor = Color::Ambient(SharedData::GetAmbient(normal));
 #			if defined(IBL)

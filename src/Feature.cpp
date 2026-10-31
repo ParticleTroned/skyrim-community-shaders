@@ -34,6 +34,7 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
+#include "Features/SnowCover.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
@@ -291,6 +292,7 @@ namespace
 			&globals::features::inverseSquareLighting,
 			&globals::features::hairSpecular,
 			&globals::features::furShells,
+			&globals::features::snowCover,
 			&globals::features::terrainVariation,
 			&globals::features::ibl,
 			&globals::features::extendedTranslucency,

@@ -21,6 +21,7 @@
 #include "Feature.h"
 #include "Features/FurShells.h"
 #include "Features/GrassLighting.h"
+#include "Features/SnowCover.h"
 #include "Globals.h"
 #include "GpuPass.h"
 #include "Menu.h"
@@ -2125,11 +2126,18 @@ namespace Hooks
 			globals::features::grassOptimizations.GetRenderer().DrawRenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, a_draw);
 #endif
 		};
-		auto& fur = globals::features::furShells;
-		if (fur.loaded && fur.settings.Enabled && a_pass && a_pass->shader && a_pass->shader->shaderType == RE::BSShader::Type::Lighting)
-			fur.RenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, draw);
+		auto drawWithFur = [&] {
+			auto& fur = globals::features::furShells;
+			if (fur.loaded && fur.settings.Enabled && a_pass && a_pass->shader && a_pass->shader->shaderType == RE::BSShader::Type::Lighting)
+				fur.RenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, draw);
+			else
+				draw();
+		};
+		auto& snow = globals::features::snowCover;
+		if (snow.IsActive() && a_pass && a_pass->shader && a_pass->geometry && a_pass->shader->shaderType == RE::BSShader::Type::Lighting)
+			snow.RenderPass(a_pass, drawWithFur);
 		else
-			draw();
+			drawWithFur();
 	}
 
 	// This is from 1.4.0 but absent in 1.4.6

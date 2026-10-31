@@ -29,6 +29,7 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
+#include "Features/SnowCover.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
@@ -85,6 +86,7 @@ namespace globals
 		HorizonFix horizonFix{};
 		InteriorSun interiorSun{};
 		FurShells furShells{};
+		SnowCover snowCover{};
 		InverseSquareLighting inverseSquareLighting{};
 		ScreenSpaceGI screenSpaceGI{};
 		ScreenSpaceShadows screenSpaceShadows{};

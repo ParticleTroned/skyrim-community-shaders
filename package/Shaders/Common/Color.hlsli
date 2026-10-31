@@ -228,12 +228,19 @@ namespace Color
 		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSrgb(color);
 	}
 
+	float3 Diffuse(float3 color, bool pbrMaterial)
+	{
+		if (pbrMaterial)
+			return PBRDiffuse(color);
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) * SharedData::linearLightingSettings.vanillaDiffuseColorMult : color;
+	}
+
 	float3 Diffuse(float3 color)
 	{
 #	if defined(TRUE_PBR)
-		return PBRDiffuse(color);
+		return Diffuse(color, true);
 #	else
-		return ENABLE_LL_COLOR_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) * SharedData::linearLightingSettings.vanillaDiffuseColorMult : color;
+		return Diffuse(color, false);
 #	endif
 	}
 

@@ -367,6 +367,12 @@ public:
 		CharacterFocusFadeShift = 15,
 		CharacterFocusFadeMask = 255 << CharacterFocusFadeShift,
 		IsAurora = 1 << 23,
+		NoSnow = 1u << 24,
+		NoFoliageTint = 1u << 25,
+		SnowRooftop = 1u << 26,
+		SnowLODTree = 1u << 27,
+		SnowInactive = 1u << 28,
+
 		CharacterFace = 0b01 << CharacterCategoryShift,
 		CharacterSkin = 0b10 << CharacterCategoryShift,
 		CharacterHair = 0b11 << CharacterCategoryShift

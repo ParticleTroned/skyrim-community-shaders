@@ -1160,7 +1160,26 @@ shaders:
     - file: DistantTree.hlsl
       configs:
           PSHADER:
-              common_defines: *id012
+              common_defines:
+                  - CLOUD_SHADOWS
+                  - D3DCOMPILE_DEBUG
+                  - D3DCOMPILE_SKIP_OPTIMIZATION
+                  - DYNAMIC_CUBEMAPS
+                  - IBL
+                  - ISL
+                  - LIGHT_LIMIT_FIX
+                  - LOD_BLENDING
+                  - PSHADER
+                  - SCREEN_SPACE_SHADOWS
+                  - SKYLIGHTING
+                  - SSS
+                  - TERRAIN_BLENDING
+                  - TERRAIN_SHADOWS
+                  - UNIFIED_WATER
+                  - VOLUMETRIC_SHADOWS
+                  - VR
+                  - WATER_EFFECTS
+                  - SNOW_COVER
               entries:
                   - entry: DistantTree:Pixel:0
                     defines: *id001
@@ -1191,7 +1210,26 @@ shaders:
                         - DO_ALPHA_TEST
                         - RENDER_DEPTH
           VSHADER:
-              common_defines: *id013
+              common_defines:
+                  - CLOUD_SHADOWS
+                  - D3DCOMPILE_DEBUG
+                  - D3DCOMPILE_SKIP_OPTIMIZATION
+                  - DYNAMIC_CUBEMAPS
+                  - IBL
+                  - ISL
+                  - LIGHT_LIMIT_FIX
+                  - LOD_BLENDING
+                  - SCREEN_SPACE_SHADOWS
+                  - SKYLIGHTING
+                  - SSS
+                  - TERRAIN_BLENDING
+                  - TERRAIN_SHADOWS
+                  - UNIFIED_WATER
+                  - VOLUMETRIC_SHADOWS
+                  - VR
+                  - VSHADER
+                  - WATER_EFFECTS
+                  - SNOW_COVER
               entries:
                   - entry: DistantTree:Vertex:0
                     defines: *id001
@@ -12223,6 +12261,7 @@ shaders:
                   - VR
                   - WATER_EFFECTS
                   - WETTERNESS
+                  - SNOW_COVER
               entries:
                   - entry: Lighting:Pixel:1
                     defines: []
@@ -13787,6 +13826,7 @@ shaders:
                   - VSHADER
                   - WATER_EFFECTS
                   - WETTERNESS
+                  - SNOW_COVER
               entries:
                   - entry: Lighting:Vertex:0
                     defines: *id001
@@ -13997,6 +14037,7 @@ shaders:
                   - VOLUMETRIC_SHADOWS
                   - VR
                   - WATER_EFFECTS
+                  - SNOW_COVER
               entries:
                   - entry: Grass:Pixel:10007
                     defines: *id015
@@ -14029,6 +14070,7 @@ shaders:
                   - VR
                   - VSHADER
                   - WATER_EFFECTS
+                  - SNOW_COVER
               entries:
                   - entry: Grass:Vertex:10007
                     defines: *id015

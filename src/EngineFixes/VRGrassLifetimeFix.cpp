@@ -34,7 +34,23 @@ namespace VRGrassLifetime
 		ClearChildren clearChildren = nullptr;
 		RE::BGSGrassManager** managerAddress = nullptr;
 		volatile std::uint32_t* groupLockAddress = nullptr;
+		bool lodFixesGroupGuard = false;
 		bool installed = false;
+
+		bool HasLODFixesGroupGuard()
+		{
+			const auto module = GetModuleHandleW(L"SkyrimLODFixes.dll");
+			if (!module)
+				return false;
+			// LOD Fixes installs this guard at plugin load; inspect it before GO wraps the slot.
+			// DLL presence alone does not imply the guard is enabled.
+			const REL::Relocation<std::uintptr_t> table{ RE::VTABLE_BSMultiStreamInstanceTriShape[0] };
+			const auto target = reinterpret_cast<const std::uintptr_t*>(table.address())[0x35];
+			HMODULE owner = nullptr;
+			return GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+					   reinterpret_cast<LPCWSTR>(target), &owner) &&
+			       owner == module;
+		}
 
 		// These words are also acquired by native code; a separate C++ mutex cannot exclude its writers.
 		class NativeLock
@@ -64,10 +80,9 @@ namespace VRGrassLifetime
 			// Match native publication order; culling also writes each group's visibility flag.
 			NativeLock children{ *a_childWord };
 			const std::lock_guard childGuard{ children };
-			// Native traversal uses free_idx, which includes holes, rather than capacity or live size.
-			const auto childSlots = a_node->GetChildren().free_idx();
 			std::optional<Util::GrassGroupLock> groupGuard;
-			if (childSlots != 0)
+			// LOD Fixes owns the leaf lock; GO guards its own reads. Native traversal counts holes in free_idx.
+			if (!lodFixesGroupGuard && a_node->GetChildren().free_idx() != 0)
 				groupGuard.emplace(*groupLockAddress);
 			onVisible(a_node, a_process, a_alphaGroup);
 		}
@@ -120,6 +135,7 @@ bool VRGrassLifetimeFix::TryInstall()
 
 	managerAddress = reinterpret_cast<RE::BGSGrassManager**>(REL::Offset(kManagerRVA).address());
 	groupLockAddress = reinterpret_cast<volatile std::uint32_t*>(REL::Offset(kGroupLockRVA).address());
+	lodFixesGroupGuard = HasLODFixesGroupGuard();
 	onVisible = reinterpret_cast<OnVisible>(REL::Offset(kOnVisibleRVA).address());
 	clearChildren = reinterpret_cast<ClearChildren>(REL::Offset(kClearChildrenRVA).address());
 	struct Operations
@@ -140,5 +156,7 @@ bool VRGrassLifetimeFix::TryInstall()
 		stl::report_and_fail("VR grass lifetime hooks could not be installed atomically. See CSX.log.");
 	}
 	installed = true;
+	if (lodFixesGroupGuard)
+		logger::info("[Engine Fixes] VR grass child protection retained; instance groups use Skyrim LOD Fixes' visibility guard");
 	return true;
 }

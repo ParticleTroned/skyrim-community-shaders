@@ -15,11 +15,13 @@
 #include <source_location>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 namespace RE
 {
+	inline constexpr std::array<std::uintptr_t, 1> VTABLE_BSMultiStreamInstanceTriShape{ 1 };
 	class NiNode
 	{
 	public:
@@ -58,6 +60,9 @@ namespace
 	RE::NiCullingProcess process;
 	volatile std::uint32_t groupsWord = 0;
 	std::array<std::uint8_t, 16> cullCode{}, clearCode{}, lockCode{};
+	std::array<std::uintptr_t, 0x36> shapeTable{};
+	HMODULE lodFixesModule = nullptr;
+	unsigned moduleQueries = 0;
 	bool vr = true;
 	bool verifyChildOwnership = true;
 	int version = 1415;
@@ -90,6 +95,9 @@ RE::NiNode::Children& RE::NiNode::GetChildren()
 namespace logger
 {
 	template <class... Args>
+	void info(const char*, Args&&...)
+	{}
+	template <class... Args>
 	void warn(const char*, Args&&...)
 	{}
 	template <class... Args>
@@ -106,6 +114,12 @@ namespace SKSE
 }
 namespace REL
 {
+	template <class T>
+	struct Relocation
+	{
+		explicit Relocation(std::uintptr_t a_id) { Require(a_id == RE::VTABLE_BSMultiStreamInstanceTriShape[0]); }
+		std::uintptr_t address() const { return reinterpret_cast<std::uintptr_t>(shapeTable.data()); }
+	};
 	struct Module
 	{
 		static bool IsVR() { return vr; }
@@ -164,17 +178,39 @@ long DetourTransactionCommit()
 	return NO_ERROR;
 }
 
+HMODULE TestGetModuleHandleW(LPCWSTR a_name)
+{
+	Require(std::wstring_view(a_name) == L"SkyrimLODFixes.dll");
+	++moduleQueries;
+	return lodFixesModule;
+}
+#define GetModuleHandleW TestGetModuleHandleW
 #include "vr_grass_lifetime_under_test.h"
+#undef GetModuleHandleW
 
 namespace
 {
 	using namespace VRGrassLifetime;
+	void ExternalGuardDetection()
+	{
+		// Module ownership distinguishes an installed hook from an absent or disabled fix.
+		shapeTable[0x35] = reinterpret_cast<std::uintptr_t>(&NativeCull);
+		Require(!HasLODFixesGroupGuard());
+		lodFixesModule = GetModuleHandleW(nullptr);
+		Require(HasLODFixesGroupGuard());
+		shapeTable[0x35] = reinterpret_cast<std::uintptr_t>(&Sleep);
+		Require(!HasLODFixesGroupGuard());
+		shapeTable[0x35] = 0;
+		Require(!HasLODFixesGroupGuard());
+		lodFixesModule = nullptr;
+	}
 	void Installation()
 	{
 		cullCode = kOnVisiblePrefix;
 		clearCode = kClearChildrenPrefix;
 		std::copy(kGroupLockReference.begin(), kGroupLockReference.end(), lockCode.begin());
 		VRGrassLifetimeFix fix;
+		const auto initialQueries = moduleQueries;
 		vr = false;
 		Require(!fix.TryInstall() && transactions == 0);
 		vr = true;
@@ -186,6 +222,7 @@ namespace
 			Require(!fix.TryInstall() && transactions == 0);
 			(*code)[0] ^= 0xFF;
 		}
+		Require(moduleQueries == initialQueries);
 		for (const auto fail : { 1U, 2U }) {
 			failAttach = fail;
 			bool rejected = false;
@@ -200,6 +237,55 @@ namespace
 		Require(fix.TryInstall() && installed);
 		const auto before = transactions;
 		Require(fix.TryInstall() && transactions == before);
+		Require(!lodFixesGroupGuard);
+	}
+
+	void ExternalGuardTraversal()
+	{
+		installed = false;
+		lodFixesModule = GetModuleHandleW(nullptr);
+		shapeTable[0x35] = reinterpret_cast<std::uintptr_t>(&NativeCull);
+		VRGrassLifetimeFix fix;
+		Require(fix.TryInstall() && lodFixesGroupGuard);
+		const auto installedQueries = moduleQueries;
+		lodFixesModule = nullptr;
+		shapeTable[0x35] = reinterpret_cast<std::uintptr_t>(&Sleep);
+		Require(fix.TryInstall() && lodFixesGroupGuard && moduleQueries == installedQueries);
+		unsigned nativeCalls = 0, optimizedCalls = 0;
+		cullAction = [&](RE::NiNode*) {
+			Require(Word(testManager.grassShapeLock) == 1);
+			// A non-recursive third-party acquisition must succeed without releasing child ownership.
+			Require(InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(&groupsWord), 1, 0) == 0);
+			++nativeCalls;
+			InterlockedExchange(reinterpret_cast<volatile LONG*>(&groupsWord), 0);
+			// The leaf hook releases groups before render registration, retaining the child guard.
+			Require(Word(testManager.grassShapeLock) == 1 && Word(groupsWord) == 0);
+			{
+				Util::GrassGroupLock capture{ groupsWord };
+				Require(Word(groupsWord) == 1);
+				Util::GrassGroupLock nested{ groupsWord };
+				++optimizedCalls;
+			}
+			Require(Word(groupsWord) == 0);
+		};
+		CullGrass(&grassNode, &process, -1);
+		Require(nativeCalls == 1 && optimizedCalls == 1);
+		Require(Word(testManager.grassShapeLock) == 0 && Word(groupsWord) == 0);
+		cullAction = [&](RE::NiNode*) {
+			Util::GrassGroupLock capture{ groupsWord };
+			throw std::runtime_error("capture exception");
+		};
+		bool caught = false;
+		try {
+			CullGrass(&grassNode, &process, -1);
+		} catch (const std::runtime_error&) {
+			caught = true;
+		}
+		Require(caught && Word(testManager.grassShapeLock) == 0 && Word(groupsWord) == 0);
+		Require(moduleQueries == installedQueries);
+		cullAction = {};
+		installed = false;
+		Require(fix.TryInstall() && !lodFixesGroupGuard);
 	}
 
 	void PassthroughAndUnwind()
@@ -269,6 +355,11 @@ namespace
 		slots.push_back(std::make_unique<int>(37));
 		std::binary_semaphore borrowed{ 0 }, finishRead{ 0 }, writerStarted{ 0 };
 		cullAction = [&](RE::NiNode*) {
+			Require(Word(groupsWord) == (lodFixesGroupGuard ? 0 : 1));
+			NativeLock groups{ groupsWord };
+			std::optional<std::lock_guard<NativeLock>> leafGuard;
+			if (lodFixesGroupGuard)
+				leafGuard.emplace(groups);
 			auto* array = slots.data();
 			auto* group = array[0].get();
 			borrowed.release();
@@ -437,6 +528,7 @@ int main(int a_argc, char** a_argv)
 {
 	try {
 		testManager.grassNode.value = &grassNode;
+		ExternalGuardDetection();
 		Installation();
 		if (a_argc == 2 && std::string_view(a_argv[1]) == "--benchmark-only") {
 			Benchmark();
@@ -444,6 +536,7 @@ int main(int a_argc, char** a_argv)
 		}
 		PassthroughAndUnwind();
 		NestedGroupReaders();
+		ExternalGuardTraversal();
 		Race(false, false);
 		Race(false, true);
 		Race(true, false);
@@ -452,7 +545,13 @@ int main(int a_argc, char** a_argv)
 		ManagerLifetime();
 		EmptyTraversal();
 		EmptyAfterChildAcquisition();
-		std::cout << "VR grass lifetime: installation, removal, growth, clear, pre-borrow ownership, nested child clear, unwind and lock order passed\n";
+		lodFixesGroupGuard = true;
+		Race(false, false);
+		Race(false, true);
+		Race(true, false);
+		RemovalBeforeBorrow();
+		lodFixesGroupGuard = false;
+		std::cout << "VR grass lifetime: installation, external hook ownership, native fallback, removal, growth, clear, pre-borrow ownership, nested child clear, unwind and lock order passed\n";
 		if (a_argc == 2 && std::string_view(a_argv[1]) == "--benchmark")
 			Benchmark();
 		return 0;

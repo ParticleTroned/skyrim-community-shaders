@@ -82,8 +82,8 @@ struct MeshBlending final : Feature
 
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
 	void DrawSettings() override;
-	bool HasEssentialSettings() const override { return true; }
-	void DrawEssentialSettings() override;
+	bool HasEssentialSettings() const { return true; }
+	void DrawEssentialSettings();
 	bool HasPerformanceSettings() const override { return true; }
 	void DrawPerformanceSettings(bool a_advanced) override;
 	json CapturePerformanceSettingsState() const override;

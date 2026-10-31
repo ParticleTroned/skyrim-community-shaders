@@ -2236,6 +2236,7 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set(_adaptive_balance_test_headers
         "${_adaptive_balance_test_dir}/linear_lighting_members.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_effect_permutation_members.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_members.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_under_test.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_point_lights_under_test.h"
@@ -2257,6 +2258,8 @@ if(BUILD_CONTROLLER_TESTS)
             src/Features/WaterAppearance.cpp
             src/MenuDevBenchBridge.cpp
             src/SettingsMigrations.cpp
+            src/State.cpp
+            src/State.h
             tests/extract_adaptive_balance_toggle.py
         VERBATIM
     )

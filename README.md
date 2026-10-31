@@ -57,6 +57,14 @@ Lighting retains coverage, resolution and rendering quality controls.
 Legacy `godrayFinalBrightness` / `vlIntensity` values remain available for
 preset/API compatibility and have no rendering effect.
 
+Aurora brightness and colour curves are under **Adaptive Balance > Global >
+Lighting > Appearance controls > Auroras**, with detailed lighting enabled.
+The same controls are available in day/night and location profiles.
+Both controls default to 1; reducing
+Aurora Intensity dims sky objects in the game's aurora slot, including
+replacement models. Presets retain these values, and disabling Adaptive Balance
+restores neutral adjustments.
+
 If the CSX menu becomes too small, oversized or inaccessible, press
 **Ctrl+Shift+End** with the game focused. This fixed shortcut reopens the
 menu and resets its position, size, sidebar proportions, zoom and font

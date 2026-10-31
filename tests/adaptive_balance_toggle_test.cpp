@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -45,6 +46,14 @@ struct LinearLighting
 
 namespace RE
 {
+	struct NiAVObject
+	{
+		NiAVObject* parent = nullptr;
+	};
+	struct BSRenderPass
+	{
+		NiAVObject* geometry = nullptr;
+	};
 	struct NiColor
 	{
 		std::array<float, 3> values{};
@@ -109,6 +118,7 @@ namespace RE
 		NiColor skyColor[17]{};
 		float windSpeed = 0.8f;
 		Weather* currentWeather = nullptr;
+		std::shared_ptr<NiAVObject> auroraRoot;
 		static Sky* GetSingleton()
 		{
 			static Sky sky;
@@ -118,10 +128,24 @@ namespace RE
 	float GetSecondsSinceLastFrame() { return 1.0f / 60.0f; }
 }
 const void* GetCurrentPlayerCell(RE::PlayerCharacter* player) { return player->hasCell ? player : nullptr; }
+namespace SIE::ShaderCache
+{
+	enum class EffectShaderFlags : uint32_t
+	{
+		SkyObject = 1 << 24
+	};
+}
 namespace globals
 {
 	struct State
 	{
+#include "adaptive_balance_effect_permutation_members.h"
+		uint32_t currentVertexDescriptor = 0;
+		struct
+		{
+			uint32_t ExtraShaderDescriptor = 0;
+		} permutationData;
+		void UpdateEffectShaderPermutation(RE::BSRenderPass* pass);
 		bool menuOpen = false;
 		std::atomic<uint32_t> frameCountAtomic{ 1 };
 		bool IsMainOrLoadingMenuOpen() const { return menuOpen; }
@@ -1012,15 +1036,63 @@ void CheckAtmosphereMigrationAndValidation()
 	assert(!ValidateAdaptiveBalanceVisuals({ { "cloudBrightness", 1 }, { "unknown", 1 } }).empty());
 }
 
+void CheckAuroraDrawScope()
+{
+	globals::State state;
+	constexpr auto auroraFlag = static_cast<uint32_t>(globals::State::ExtraShaderDescriptors::IsAurora);
+	static_assert(auroraFlag == (1 << 23));
+	constexpr uint32_t otherFlags = ~auroraFlag;
+	static_assert((otherFlags & auroraFlag) == 0);
+	RE::Sky sky;
+	const auto originalRoot = std::make_shared<RE::NiAVObject>();
+	sky.auroraRoot = originalRoot;
+	RE::NiAVObject nested{ sky.auroraRoot.get() }, ribbon{ &nested }, mist;
+	RE::BSRenderPass pass{ &ribbon };
+	const auto previousSky = globals::game::sky;
+	globals::game::sky = &sky;
+	state.currentVertexDescriptor = static_cast<uint32_t>(SIE::ShaderCache::EffectShaderFlags::SkyObject);
+	state.permutationData.ExtraShaderDescriptor = otherFlags;
+	state.UpdateEffectShaderPermutation(&pass);
+	assert(state.permutationData.ExtraShaderDescriptor == (otherFlags | auroraFlag));
+	for (int condition = 0; condition < 6; ++condition) {
+		state.permutationData.ExtraShaderDescriptor = otherFlags | auroraFlag;
+		pass.geometry = condition == 0 ? &mist : condition == 1 ? nullptr :
+		                                                          &ribbon;
+		state.currentVertexDescriptor = condition == 2 ? 0 : static_cast<uint32_t>(SIE::ShaderCache::EffectShaderFlags::SkyObject);
+		globals::game::sky = condition == 3 ? nullptr : &sky;
+		sky.auroraRoot = condition == 4 ? nullptr : originalRoot;
+		state.UpdateEffectShaderPermutation(condition == 5 ? nullptr : &pass);
+		assert(state.permutationData.ExtraShaderDescriptor == otherFlags);
+	}
+	sky.auroraRoot = std::make_shared<RE::NiAVObject>();
+	state.permutationData.ExtraShaderDescriptor |= auroraFlag;
+	state.UpdateEffectShaderPermutation(&pass);
+	assert(state.permutationData.ExtraShaderDescriptor == otherFlags);
+	nested.parent = sky.auroraRoot.get();
+	state.UpdateEffectShaderPermutation(&pass);
+	assert(state.permutationData.ExtraShaderDescriptor == (otherFlags | auroraFlag));
+	globals::game::sky = previousSky;
+	std::cout << "Aurora draw scope: descendants, unrelated draws, absent sky/root/geometry, replaced roots and stale flags passed\n";
+}
+
 void CheckAppearanceProfiles()
 {
 	using namespace AdaptiveBalanceAppearance;
 	const Settings defaults;
 	const json defaultJson = defaults;
 	assert(defaultJson == json(defaultJson.get<Settings>()));
-	assert(!defaultJson.contains("moonIntensity") && !defaultJson.contains("auroraIntensity"));
+	assert(!defaultJson.contains("moonIntensity"));
+	assert(defaultJson.at("auroraIntensity") == 1.0f && defaultJson.at("auroraCurve") == 1.0f);
+	auto legacyJson = defaultJson;
+	legacyJson.erase("auroraIntensity");
+	legacyJson.erase("auroraCurve");
+	assert(json(legacyJson.get<Settings>()) == defaultJson);
 	for (const auto& field : kScalars) {
 		assert(defaults.*field.member == field.neutral);
+		Settings authored;
+		authored.*field.member = field.maximum;
+		const json encoded = authored;
+		assert(encoded.get<Settings>().*field.member == field.maximum);
 		Settings invalid;
 		invalid.*field.member = std::numeric_limits<float>::quiet_NaN();
 		Sanitize(invalid);
@@ -1072,7 +1144,7 @@ void CheckAppearanceProfiles()
 		const auto decoded = encoded.get<Settings>();
 		assert((decoded.*field.member).y == 0.5f);
 	}
-	for (const auto& value : std::vector<json>{ nullptr, true, json::array(), 1.0, json{ { "missingControl", 1.0 } }, json{ { "moonIntensity", 1.0 } }, json{ { "auroraIntensity", 1.0 } } })
+	for (const auto& value : std::vector<json>{ nullptr, true, json::array(), 1.0, json{ { "missingControl", 1.0 } }, json{ { "moonIntensity", 1.0 } } })
 		assert(!ValidateAdaptiveBalanceVisuals({ { "appearance", value } }).empty());
 
 	for (const auto& malformed : std::vector<json>{ nullptr, true, json::array(),
@@ -1351,6 +1423,7 @@ int main()
 	CheckVanillaPointLightRequirements();
 	CheckVolumetricClarity();
 	CheckGodrayContextOwnership();
+	CheckAuroraDrawScope();
 	CheckAppearanceProfiles();
 	CheckSkyGradientOwnership();
 	CheckWeatherColors();

@@ -284,6 +284,19 @@ availability gates. Disabling Adaptive Balance makes both contexts neutral
 and Atmospheric Clarity zero, while preserving saved values. Coverage and
 quality remain Volumetric Lighting settings.
 
+Adaptive Balance profiles expose `appearance.auroraIntensity` (0–5) and
+`appearance.auroraCurve` (0.1–4), both defaulting to 1. These adjust only sky
+objects beneath the active aurora root, including replacement models, and
+preserve alpha and the model's blend mode. Zero intensity removes the RGB
+contribution; visibility still depends on the authored blend mode.
+Global, time-of-day and location layers use the existing
+appearance composition. DevBench `set_adaptive_balance_visuals` accepts these
+fields in `visuals.appearance` when Global `lightingAdvanced` is enabled;
+saved and effective values appear in `status.adaptiveBalanceVisuals`.
+Invalid values reject the entire update. Disabling Adaptive Balance restores
+neutral adjustments without changing saved values; object previews remain
+unadjusted.
+
 Bloom inspection exposes the current Global
 profile as the legacy Default preset; the original inactive custom preset
 bank has no runtime equivalent in Adaptive Balance. Live writes may change

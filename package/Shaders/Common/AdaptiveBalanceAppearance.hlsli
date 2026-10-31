@@ -30,6 +30,19 @@ namespace AdaptiveBalanceAppearance
 		return color;
 	}
 
+#	if defined(LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS)
+	/// Grade aurora-slot sky objects while preserving neutral draws and previews.
+	float3 ApplyAurora(float3 color)
+	{
+#		if defined(SKY_OBJECT) && !defined(MOTIONVECTORS_NORMALS)
+		[branch] if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsAurora)
+			color = ApplyColor(color, SharedData::adaptiveBalanceSettings.appearance.auroraIntensity,
+				SharedData::adaptiveBalanceSettings.appearance.auroraCurve, 1.0, 1.0.xxx);
+#		endif
+		return color;
+	}
+#	endif
+
 	/// Grade the selected ambient lighting before multiplying material albedo.
 	float3 ApplyAmbientSaturation(float3 color, bool linearSpace = false)
 	{

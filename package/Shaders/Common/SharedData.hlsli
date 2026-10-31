@@ -348,7 +348,9 @@ namespace SharedData
 		float godraySaturation;
 		float eyeSpecularBrightness;
 		float eyeBrightness;
-		float padding;
+		float auroraIntensity;
+		float auroraCurve;
+		float3 padding;
 	};
 
 	struct AdaptiveBalanceSettings

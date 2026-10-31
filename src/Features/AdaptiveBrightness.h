@@ -215,7 +215,7 @@ struct AdaptiveBrightness : Feature
 		AdaptiveBalanceAppearanceSettings appearance;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
-	static_assert(sizeof(PerFrameData) == 320);
+	static_assert(sizeof(PerFrameData) == 336);
 	static_assert(offsetof(PerFrameData, appearance) == 112);
 	static_assert(offsetof(PerFrameData, skySaturation) == 32);
 	static_assert(offsetof(PerFrameData, ambientMult) == 36);

@@ -123,7 +123,7 @@ namespace
 			auto* balance = feature->reflection->GetVariableByName("SharedData::adaptiveBalanceSettings");
 			D3D11_SHADER_VARIABLE_DESC desc{};
 			Check(balance->GetDesc(&desc));
-			Require(desc.Size == 320, "Adaptive Balance buffer size changed");
+			Require(desc.Size == 336, "Adaptive Balance buffer size changed");
 			for (auto [name, offset] : { std::pair{ "contrast", 40u }, std::pair{ "saturation", 44u },
 					 std::pair{ "cloudBrightness", 48u }, std::pair{ "cloudSaturation", 52u },
 					 std::pair{ "fogIntensity", 56u }, std::pair{ "sunGlareIntensity", 60u },
@@ -148,7 +148,8 @@ namespace
 					 std::pair{ "particlePointInfluence", 160u }, std::pair{ "cloudShadowStrength", 164u }, std::pair{ "godrayIntensity", 168u },
 					 std::pair{ "godrayOpacity", 172u }, std::pair{ "godrayTint", 176u }, std::pair{ "godrayTintAmount", 188u },
 					 std::pair{ "godraySaturation", 192u }, std::pair{ "eyeSpecularBrightness", 196u },
-					 std::pair{ "eyeBrightness", 200u }, std::pair{ "padding", 204u } }) {
+					 std::pair{ "eyeBrightness", 200u }, std::pair{ "auroraIntensity", 204u },
+					 std::pair{ "auroraCurve", 208u }, std::pair{ "padding", 212u } }) {
 				D3D11_SHADER_TYPE_DESC member{};
 				Check(appearance->GetMemberTypeByName(name)->GetDesc(&member));
 				Require(member.Offset == offset, "Appearance buffer layout differs from C++");
@@ -446,6 +447,42 @@ namespace
 				}
 				checked += unsigned(result.size());
 			}
+		}
+		return checked;
+	}
+
+	unsigned VerifyAuroraAppearance(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
+	{
+		const std::array cases{ std::vector<const char*>{}, std::vector<const char*>{ "SKY_OBJECT" },
+			std::vector<const char*>{ "SKY_OBJECT", "MOTIONVECTORS_NORMALS" } };
+		auto authored = pointLightColors;
+		authored[3] = { 65504, -65504, 32752, 1 };
+		unsigned checked = 0;
+		for (size_t index = 0; index < cases.size(); ++index) {
+			Fixture fixture(device, vr, ShaderMode::Appearance, cases[index]);
+			for (bool linear : { false, true })
+				for (uint32_t scene : { 0u, 1u, 2u })
+					for (bool aurora : { false, true })
+						for (float intensity : { 0.0f, 0.4f, 1.0f, 5.0f })
+							for (float curve : { 0.1f, 1.0f, 2.0f, 4.0f }) {
+								auto appearance = AdaptiveBalanceTest::NeutralAppearance();
+								appearance[51] = intensity;
+								appearance[52] = curve;
+								const bool changed = index == 1 && aurora && scene != 0 && (intensity != 1 || curve != 1);
+								const auto result = fixture.DrawAppearance(context, linear, scene | (aurora ? 1u << 23 : 0), 11,
+									appearance, { 1, 1, 1, 1 }, { 1, 1, 1, 1 }, { 1, 1, 1, 1 }, false, authored);
+								auto expected = authored;
+								if (!changed)
+									RequireAppearanceIdentity(result);
+								else
+									for (auto& pixel : expected)
+										for (size_t c = 0; c < 3; ++c) {
+											const float shaped = curve == 1 ? pixel[c] : std::pow(std::max(pixel[c], 0.0f), curve);
+											pixel[c] = intensity == 0 ? 0 : std::clamp(shaped * intensity, -65504.0f, 65504.0f);
+										}
+								CompareAppearance(result, expected, "Aurora controls changed the wrong draw scope or colour response");
+								checked += unsigned(result.size());
+							}
 		}
 		return checked;
 	}
@@ -1177,6 +1214,7 @@ int main(int argc, char** argv)
 			lightSamples += VerifyLightDrawScopes(device.Get(), context.Get(), vr);
 			appearanceSamples += VerifyAppearanceModes(device.Get(), context.Get(), vr);
 			appearanceSamples += VerifyEyeAppearance(device.Get(), context.Get(), vr);
+			appearanceSamples += VerifyAuroraAppearance(device.Get(), context.Get(), vr);
 			fireSamples += VerifyFireModes(device.Get(), context.Get(), vr);
 			for (bool fade : { false, true })
 				VerifyBlend(device.Get(), context.Get(), vr, fade);

@@ -63,6 +63,8 @@ RWTexture2D<float4> Result : register(u0);
 		graded = color * EyeAppearance::SpecularMultiplier();
 	} else if (appearanceParameters.x == 10) {
 		graded = color * EyeAppearance::SpecularMultiplier(false);
+	} else if (appearanceParameters.x == 11) {
+		graded = AdaptiveBalanceAppearance::ApplyAurora(color);
 	} else if (appearanceParameters.x == 8 || appearanceParameters.x == 9) {
 		graded = color * EyeAppearance::BrightnessMultiplier(appearanceParameters.x == 8);
 	} else {

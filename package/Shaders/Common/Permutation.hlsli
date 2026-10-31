@@ -73,6 +73,7 @@ namespace Permutation
 		static const uint CharacterExcluded = (1 << 14);
 		static const uint CharacterFocusFadeShift = 15;
 		static const uint CharacterFocusFadeMask = (255 << CharacterFocusFadeShift);
+		static const uint IsAurora = (1 << 23);
 		static const uint CharacterFace = (1 << CharacterCategoryShift);
 		static const uint CharacterSkin = (2 << CharacterCategoryShift);
 		static const uint CharacterHair = (3 << CharacterCategoryShift);

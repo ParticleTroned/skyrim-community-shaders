@@ -2112,13 +2112,15 @@ namespace
 	void DrawAppearanceSettings(AdaptiveBalanceAppearanceSettings& appearance)
 	{
 		constexpr std::array groups{ "Direct and Ambient Lighting", "Fog and Clouds", "Sky Gradient",
-			"Stars", "Sky Static Mist", "Particles and Glow Sprites", "Godrays and Cloud Shadows", "Eyes" };
+			"Stars", "Auroras", "Sky Static Mist", "Particles and Glow Sprites", "Godrays and Cloud Shadows", "Eyes" };
 		MenuUI::SectionHeading("Appearance controls");
 		for (const auto* group : groups) {
 			if (!ImGui::CollapsingHeader(group))
 				continue;
 			if (std::string_view(group) == "Eyes")
 				ImGui::TextWrapped("Specular Brightness adjusts eye highlights and reflections. Eye Brightness scales all eye lighting. One preserves the original appearance; zero removes that contribution. Applies to eye materials in the scene, including reflections.");
+			else if (std::string_view(group) == "Auroras")
+				ImGui::TextWrapped("Intensity scales aurora RGB brightness; zero removes its colour contribution while preserving alpha and the model's blend mode. Colour Curve shapes dim colours and HDR highlights before intensity. One preserves the original appearance. Applies to sky objects in the game's aurora slot, including replacement models.");
 			else if (std::string_view(group) == "Godrays and Cloud Shadows")
 				ImGui::TextWrapped("Godray profile adjustments compose over the exterior or interior base in Global > Godrays. Scale 1 and colour contribution 0 preserve that base. Atmospheric Clarity controls broad haze separately. Cloud shadow strength adjusts the active Cloud Shadows feature.");
 			else if (std::string_view(group) == "Particles and Glow Sprites")

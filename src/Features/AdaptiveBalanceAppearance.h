@@ -49,12 +49,16 @@ struct AdaptiveBalanceAppearanceSettings
 	float godraySaturation = 1.0f;
 	float eyeSpecularBrightness = 1.0f;
 	float eyeBrightness = 1.0f;
-	float padding{};
+	float auroraIntensity = 1.0f;
+	float auroraCurve = 1.0f;
+	float3 padding{};
 };
-static_assert(sizeof(AdaptiveBalanceAppearanceSettings) == 208);
+static_assert(sizeof(AdaptiveBalanceAppearanceSettings) == 224);
 static_assert(offsetof(AdaptiveBalanceAppearanceSettings, godraySaturation) == 192);
 static_assert(offsetof(AdaptiveBalanceAppearanceSettings, eyeSpecularBrightness) == 196);
 static_assert(offsetof(AdaptiveBalanceAppearanceSettings, eyeBrightness) == 200);
+static_assert(offsetof(AdaptiveBalanceAppearanceSettings, auroraIntensity) == 204);
+static_assert(offsetof(AdaptiveBalanceAppearanceSettings, auroraCurve) == 208);
 
 namespace AdaptiveBalanceAppearance
 {
@@ -87,6 +91,8 @@ namespace AdaptiveBalanceAppearance
 		ScalarField{ "cloudOpacity", "Cloud Opacity", "Fog and Clouds", &Settings::cloudOpacity, 0.0f, 2.0f, 1.0f },
 		ScalarField{ "starsIntensity", "Stars Intensity", "Stars", &Settings::starsIntensity, 0.0f, 5.0f, 1.0f },
 		ScalarField{ "starsCurve", "Stars Colour Curve", "Stars", &Settings::starsCurve, 0.1f, 4.0f, 1.0f },
+		ScalarField{ "auroraIntensity", "Aurora Intensity", "Auroras", &Settings::auroraIntensity, 0.0f, 5.0f, 1.0f },
+		ScalarField{ "auroraCurve", "Aurora Colour Curve", "Auroras", &Settings::auroraCurve, 0.1f, 4.0f, 1.0f },
 		ScalarField{ "skyTopIntensity", "Upper Sky Intensity", "Sky Gradient", &Settings::skyTopIntensity, 0.0f, 5.0f, 1.0f },
 		ScalarField{ "skyMiddleIntensity", "Middle Sky Intensity", "Sky Gradient", &Settings::skyMiddleIntensity, 0.0f, 5.0f, 1.0f },
 		ScalarField{ "skyHorizonIntensity", "Horizon Intensity", "Sky Gradient", &Settings::skyHorizonIntensity, 0.0f, 5.0f, 1.0f },

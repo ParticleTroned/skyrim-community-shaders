@@ -358,6 +358,7 @@ public:
 		CharacterExcluded = 1 << 14,
 		CharacterFocusFadeShift = 15,
 		CharacterFocusFadeMask = 255 << CharacterFocusFadeShift,
+		IsAurora = 1 << 23,
 		CharacterFace = 0b01 << CharacterCategoryShift,
 		CharacterSkin = 0b10 << CharacterCategoryShift,
 		CharacterHair = 0b11 << CharacterCategoryShift
@@ -416,6 +417,8 @@ public:
 	 * @param a_pass Lighting render pass to inspect.
 	 */
 	void UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass);
+	/** Flags sky-object draws under the active sky's aurora root; clears stale flags on every effect draw. */
+	void UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass);
 	bool HasDirectionalShadows() const;
 
 	struct PermutationCB

@@ -31,9 +31,13 @@ def extract(root, output):
     water = read("WaterAppearance.cpp")
     menu = (root / "src/MenuDevBenchBridge.cpp").read_text(encoding="utf-8-sig")
     migrations = (root / "src/SettingsMigrations.cpp").read_text(encoding="utf-8-sig")
+    state = (root / "src/State.cpp").read_text(encoding="utf-8-sig")
+    state_header = (root / "src/State.h").read_text(encoding="utf-8-sig")
     output.mkdir(parents=True, exist_ok=True)
     (output / "linear_lighting_members.h").write_text(
         between(linear, "\tstruct Settings", "\tstruct alignas(16) PerFrameData"), encoding="utf-8")
+    (output / "adaptive_balance_effect_permutation_members.h").write_text(
+        between(state_header, "\tenum class ExtraShaderDescriptors", "\tenum class ExtraFeatureDescriptors"), encoding="utf-8")
     (output / "adaptive_balance_members.h").write_text(
         between(header, "\tenum class Profile", "\tstruct LocationOverrideTarget")
         + between(header, "\tstruct Settings", "\tstruct alignas(16) VanillaPointLightData")
@@ -45,6 +49,7 @@ def extract(root, output):
     (output / "adaptive_balance_weather_hook_under_test.h").write_text(
         function(weather_hook, "\t\tstatic void thunk("), encoding="utf-8")
     bodies = [
+        function(state, "void State::UpdateEffectShaderPermutation(").replace("State::", "globals::State::"),
         between(source, "AdaptiveBrightness::ProfileSettings AdaptiveBrightness::ProfileSettings::AdjustmentDefaults()", "namespace"),
         between(source, "\tconstexpr float kBrightnessMin", "\tconstexpr std::size_t kMaxOverrideHierarchyDepth"),
         function(source, "\tbool UsesClassifiedPointLightMultipliers("),

@@ -884,6 +884,7 @@ namespace EffectExtensions
 
 			auto state = globals::state;
 			ExternalEmittance::UpdatePermutation(pass);
+			state->UpdateEffectShaderPermutation(pass);
 
 			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::EffectShadows);
 

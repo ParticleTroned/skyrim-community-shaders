@@ -1025,6 +1025,9 @@ PS_OUTPUT main(PS_INPUT input)
 	if (skyStaticTransparency != 0.0)
 		finalColor.xyz = lerp(finalColor.xyz, 1.0.xxx, skyStaticTransparency);
 #	endif
+#	if !defined(MOTIONVECTORS_NORMALS)
+	finalColor.xyz = AdaptiveBalanceAppearance::ApplyAurora(finalColor.xyz);
+#	endif
 	psout.Diffuse = finalColor;
 #	if defined(LIGHTING) && defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
 	if (SharedData::lightLimitFixSettings.EnableLightsVisualisation) {

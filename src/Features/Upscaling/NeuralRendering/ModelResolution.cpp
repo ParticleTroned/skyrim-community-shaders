@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <format>
 #include <new>
 #include <string>
@@ -38,10 +39,11 @@ namespace NeuralRendering
 			std::uint32_t packedCount = 0, packedCoverageGuard = 0;
 			std::array<std::uint32_t, 2> unpackedSize{};
 			std::array<PackedCropLayout::Tile, kMaximumPackedCrops> packedTiles{};
-			std::uint32_t selectionMode = 0, outputStorageFormat = 0, selectedOutput = 0, reconstructionFilter = 0;
+			std::uint32_t selectionMode = 0, outputStorageFormat = 0, selectedOutput = 0, selectionPadding = 0;
 			std::array<float, 4> selectionBounds{};
 		};
 		static_assert(sizeof(Constants) == 352);
+		static_assert(offsetof(Constants, selectionBounds) == 336);
 		static_assert(sizeof(PackedCropLayout::Tile) == 48);
 
 		bool ReadDescription(ID3D11Resource* resource, D3D11_TEXTURE2D_DESC& desc)
@@ -133,8 +135,7 @@ namespace NeuralRendering
 				return false;
 			for (std::size_t index = 0; index < args.size(); ++index) {
 				const auto& input = args[index];
-				if (!IsValidReconstructionFilter(input.reconstructionFilter) || input.reconstructionFilter != args.front().reconstructionFilter ||
-					input.peripheralCompression.Active() != args.front().peripheralCompression.Active() ||
+				if (input.peripheralCompression.Active() != args.front().peripheralCompression.Active() ||
 					input.featureSlot >= kLogicalFeatureSlotCount || !Util::SameIdentity(input.device, args.front().device) ||
 					!Util::SameIdentity(input.context, args.front().context))
 					return false;
@@ -1311,7 +1312,6 @@ namespace NeuralRendering
 					input.centralArea.Scale(), input.centralArea.horizontalScale, static_cast<float>(input.centralArea.featherPixels), input.centralArea.Active() ? 1u : 0u,
 					input.centralArea.offset, { static_cast<float>(input.centralArea.finalOutput.width), static_cast<float>(input.centralArea.finalOutput.height) }
 				};
-				work->constants.reconstructionFilter = static_cast<std::uint32_t>(input.reconstructionFilter);
 				work->constants.packedCount = geometry->packedCrops.count;
 				work->constants.unpackedSize = { geometry->packedCrops.unpackedExtent.width, geometry->packedCrops.unpackedExtent.height };
 				work->constants.packedTiles = geometry->packedCrops.tiles;
@@ -1410,7 +1410,7 @@ namespace NeuralRendering
 		for (std::size_t index = 0; index < args.size(); ++index) {
 			const auto& input = guidedInputs[index];
 			batch.arguments[index].executionContext.modelReconstruction = ModelReconstructionEvidence{
-				batch.reconstructionDecision, input.effectivePercent, input.target, input.unpackedModel, args[index].reconstructionFilter,
+				batch.reconstructionDecision, input.effectivePercent, input.target, input.unpackedModel,
 				input.enabled, batch.arguments[index].modelResolutionHistory->packedCrops.count != 0, input.matchedReferenceDomain
 			};
 		}
@@ -1531,9 +1531,6 @@ namespace NeuralRendering
 				args[index].generation != prepared.generation || args[index].featureSlot != prepared.featureSlot ||
 				batch.resources[index]->contentSerial != batch.contentSerials[index] ||
 				args[index].peripheralCompression != batch.peripheralPlans[index])
-				return false;
-			if (args[index].reconstructionFilter != batch.arguments[index].reconstructionFilter ||
-				static_cast<std::uint32_t>(args[index].reconstructionFilter) != batch.resources[index]->constants.reconstructionFilter)
 				return false;
 			const auto& selection = args[index].modelOutputSelection;
 			if (static_cast<bool>(selection) != static_cast<bool>(batch.selectedOutputs[index]) ||

@@ -42,7 +42,6 @@ namespace NeuralRendering
 		GuidedReconstructionDecision decision{};
 		std::uint32_t effectivePercent = 100;
 		UpscalingDLSS::Extent target{}, unpackedModel{};
-		ReconstructionFilter basicFilter = ReconstructionFilter::Bilinear;
 		bool enabled = false, packed = false, matchedReferenceDomain = false;
 		bool operator==(const ModelReconstructionEvidence&) const = default;
 	};

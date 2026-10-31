@@ -20,7 +20,6 @@ namespace NeuralRendering
 	{
 		std::optional<RenderingMode> renderingMode;
 		uint32_t modelResolutionPercent = 100;
-		ReconstructionFilter reconstructionFilter = ReconstructionFilter::Bilinear;
 		bool guidedReconstructionEnabled = false;
 		std::uint32_t peripheralCompressionPercent = 0;
 		PeripheralMask peripheralMask{};
@@ -55,7 +54,6 @@ struct Upscaling
 	struct
 	{
 		uint32_t neuralRenderingModelResolutionPercent = 100;
-		uint32_t neuralRenderingReconstructionFilter = 0;
 		bool neuralRenderingGuidedReconstruction = true;
 		unsigned neuralRenderingPeripheralCompressionPercent = 0;
 		bool neuralRenderingFovOnly = false, neuralRenderingRenderscaleFov = false;
@@ -100,12 +98,9 @@ int main()
 	if (!experiment.Configure(NeuralRendering::GuidedReconstructionOverride::GuidedExperiment, 2, experiment.Status().revision))
 		throw std::runtime_error("Comparison setup failed");
 #endif
-	for (const uint32_t value : { 0u, 1u, 2u, 0xffffffffu }) {
-		upscaling.settings.neuralRenderingReconstructionFilter = value;
+	for (unsigned repeat = 0; repeat < 4; ++repeat) {
 		upscaling.SetNeuralExecutionContext(args, {}, {}, {});
 		++calls;
-		if (args.reconstructionFilter != (value == 1u ? NeuralRendering::ReconstructionFilter::Lanczos3 : NeuralRendering::ReconstructionFilter::Bilinear))
-			throw std::runtime_error("Reconstruction filter was lost or accepted an invalid value");
 	}
 	if (!args.guidedReconstructionEnabled)
 		throw std::runtime_error("Guided enable was lost at admission");

@@ -2,6 +2,7 @@
 #include "Features/Upscaling/NeuralRendering/NetworkSelection.h"
 #include "Features/Upscaling/NeuralRendering/PrewarmPolicy.h"
 #include "Features/Upscaling/NeuralRendering/ShaderInvalidation.h"
+#include "Features/Upscaling/NeuralRendering/Style.h"
 #include "Features/Upscaling/NeuralRendering/TuningLimits.h"
 
 #include <atomic>
@@ -118,7 +119,7 @@ namespace NeuralRendering
 	{
 		std::uint32_t networkPreset = kNetworkDefault;
 		float intensity = .8f, localToneStrength = .75f, localStructureStrength = .9f, skinStructureStrength = .9f;
-		std::uint32_t style = 3;
+		std::uint32_t style = kDefaultStyle;
 		bool useAutoMask = true, uiCorrection = false;
 		float singleSubrectScale = 1;
 	};
@@ -230,6 +231,9 @@ namespace
 			const auto metadata = DiscoverInstalledRuntimeMetadata();
 			Require(metadata.networkSelectionSupported == (major == 310 && minor == 9),
 				"explicit networks must be restricted to the known runtime family");
+			Require(ResolveNetworkPreset(kNetworkDefault, metadata.networkSelectionSupported) ==
+						(major == 310 && minor == 9 ? kNetworkNewer : kNetworkDefault),
+				"Default must follow the installed DLL family without selecting another DLL");
 			Require(metadata.installed && metadata.tuningLimits.intensity == intensity &&
 						metadata.tuningLimits.localToneStrength == 2 && metadata.tuningLimits.localStructureStrength == structure &&
 						metadata.tuningLimits.skinStructureStrength == structure,
@@ -255,6 +259,8 @@ namespace
 			"retirement must restore cached installation limits without another filesystem query");
 		runtime.networkSelectionSupported_.reset();
 		Require(runtime.SupportsNetworkSelection(), "unprobed network support must use cached installed metadata");
+		Require(runtime.GetNetworkPreset(kNetworkDefault) == kNetworkNewer,
+			"Default (310.9) must explicitly select the newer network");
 		runtime.networkSelectionSupported_ = false;
 		Require(!runtime.SupportsNetworkSelection() && runtime.GetNetworkPreset(kNetworkLegacy) == kNetworkDefault,
 			"probed unsupported networks must resolve to default even with supported installed metadata");
@@ -361,8 +367,9 @@ namespace
 		const auto layout = BuildNativeEvaluationLayout(extent, extent, extent, {}, { 0, 0, 320, 192 }, { true, 320.f, 192.f }, false);
 		ID3D12GraphicsCommandList commands;
 		ID3D12Resource resource;
-		for (const auto network : { kNetworkDefault, kNetworkLegacy, kNetworkNewer }) {
+		for (const auto selection : { kNetworkDefault, kNetworkLegacy, kNetworkNewer }) {
 			Runtime warm, lazy;
+			const auto network = warm.GetNetworkPreset(selection);
 			warm.tuningLimits_ = lazy.tuningLimits_ = GetTuningLimitsForVersion(310, 9);
 			Tuning tuning;
 			tuning.networkPreset = network;
@@ -401,6 +408,23 @@ namespace
 		Require(defaultNetwork.PrepareFeature(&commands, 2, layout) &&
 					creates.back().at("DLSSNR.Hint.Render.Preset") == kNetworkDefault,
 			"initialized unsupported families must retain default creation");
+		for (const auto selection : { kNetworkDefault, kNetworkLegacy, kNetworkNewer }) {
+			Runtime legacy;
+			legacy.networkSelectionSupported_ = false;
+			legacy.tuningLimits_ = GetTuningLimitsForVersion(310, 8);
+			Tuning tuning;
+			tuning.networkPreset = legacy.GetNetworkPreset(selection);
+			tuning.localStructureStrength = 1.75f;
+			Require(tuning.networkPreset == kNetworkDefault &&
+						legacy.PrepareFeature(&commands, 2, layout, nullptr, nullptr, false, nullptr, tuning.networkPreset) &&
+						creates.back().at("DLSSNR.Hint.Render.Preset") == kNetworkDefault,
+				"A 310.8 DLL must keep native default for every saved network choice");
+			const auto createdLegacy = creates.size();
+			Require(legacy.Execute(&commands, 2, &resource, &resource, &resource, &resource, nullptr, layout, tuning, false) &&
+						creates.size() == createdLegacy &&
+						evaluations.back().at("DLSSNR.LocalStructureStrength") == std::bit_cast<std::uint32_t>(1.75f),
+				"310.8 defaults must preserve their range and reuse the prepared model");
+		}
 	}
 
 	void InvalidationAndLease()

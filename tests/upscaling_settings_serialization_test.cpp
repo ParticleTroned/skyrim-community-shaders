@@ -3,6 +3,7 @@
 #include "Features/Upscaling/NeuralRendering/CharacterSettingsJson.h"
 #include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Features/Upscaling/NeuralRendering/Style.h"
 
 #include <cstdlib>
 #include <format>
@@ -43,6 +44,31 @@ void Check(bool condition, const char* message)
 
 int main()
 {
+	for (unsigned style : { 0u, 1u, 2u, 3u }) {
+		Upscaling::Settings settings;
+		from_json({ { "neuralRenderingStyle", style } }, settings);
+		Check(settings.neuralRenderingStyle == std::min(style, 2u) &&
+				  json(settings).at("neuralRenderingStyle") == std::min(style, 2u),
+			"Styles must round-trip and legacy style 3 must migrate to Cinematic");
+	}
+	for (const auto& invalid : { json(-1), json(4), json(1.0), json(true), json("Natural"), json(nullptr), json(0x100000002ULL) }) {
+		Upscaling::Settings settings;
+		bool rejected = false;
+		try {
+			from_json({ { "neuralRenderingStyle", invalid } }, settings);
+		} catch (const std::exception&) {
+			rejected = true;
+		}
+		Check(rejected, "Invalid styles must not reach settings");
+	}
+	{
+		Upscaling::Settings settings;
+		from_json(json::object(), settings);
+		Check(settings.neuralRenderingPressureResolutionEnabled && settings.neuralRenderingGuidedReconstruction &&
+				  settings.neuralRenderingPauseInCombat &&
+				  settings.neuralRenderingPeripheralCompressionPercent == 25 && settings.neuralRenderingStyle == 1,
+			"Missing NR settings must use the requested defaults");
+	}
 	for (bool enabled : { false, true }) {
 		Upscaling::Settings settings;
 		from_json({ { "neuralRenderingGuidedReconstruction", enabled } }, settings);
@@ -77,25 +103,7 @@ int main()
 		from_json({ { "neuralRenderingPauseInCombat", enabled } }, settings);
 		Check(settings.neuralRenderingPauseInCombat == enabled && json(settings).at("neuralRenderingPauseInCombat") == enabled, "Combat pause did not round-trip");
 		from_json(json::object(), settings);
-		Check(!settings.neuralRenderingPauseInCombat, "Legacy settings must disable combat pausing");
-	}
-	for (unsigned filter : { 0u, 1u }) {
-		Upscaling::Settings settings;
-		from_json({ { "neuralRenderingReconstructionFilter", filter } }, settings);
-		Check(settings.neuralRenderingReconstructionFilter == filter && json(settings).at("neuralRenderingReconstructionFilter") == filter,
-			"Reconstruction filter did not round-trip");
-		for (const auto& invalid : { json(-1), json(2), json(1.0), json(true), json("lanczos3"), json(nullptr), json(0x100000001ULL) }) {
-			const auto previous = settings;
-			bool rejected = false;
-			try {
-				from_json({ { "neuralRenderingReconstructionFilter", invalid } }, settings);
-			} catch (const std::invalid_argument&) {
-				rejected = true;
-			}
-			Check(rejected && settings == previous, "Invalid filter partially changed the saved configuration");
-		}
-		from_json(json::object(), settings);
-		Check(settings.neuralRenderingReconstructionFilter == 0, "Legacy settings must default to bilinear");
+		Check(settings.neuralRenderingPauseInCombat, "Missing combat settings must default on");
 	}
 	for (bool vr : { false, true }) {
 		REL::Module::vr = vr;

@@ -15,9 +15,9 @@ std::array<float, 4> PeripheralSamplingBounds(const NeuralRendering::PeripheralM
 }
 
 std::optional<std::array<double, 3>> ReferencePeripheralResidual(std::span<const Pixel> prepared, std::span<const Pixel> neural,
-	Size model, double px, double py, const Pixel& source, NeuralRendering::ReconstructionFilter filter, bool guided)
+	Size model, double px, double py, const Pixel& source, bool guided)
 {
-	auto result = ReferenceResidual(prepared, neural, model, { { 0, 0 }, model }, px, py, filter);
+	auto result = ReferenceResidual(prepared, neural, model, { { 0, 0 }, model }, px, py);
 	if (!guided || !result)
 		return result;
 	double scale = std::max({ std::abs(double(source[0])), std::abs(double(source[1])), std::abs(double(source[2])) });
@@ -96,7 +96,7 @@ void CheckPeripheralResidual(ID3D11Device* device, ID3D11DeviceContext* context,
 					const auto i = y * source[0] + x;
 					const auto position = args[eye].peripheralCompression.mapping.Forward({ (float(x) + 0.5f) / source[0], (float(y) + 0.5f) / source[1] });
 					const double px = position[0] * model[0] - 0.5f, py = position[1] * model[1] - 0.5f;
-					const auto residual = ReferencePeripheralResidual(prepared[eye], native[eye], model, px, py, colors[i], args[eye].reconstructionFilter,
+					const auto residual = ReferencePeripheralResidual(prepared[eye], native[eye], model, px, py, colors[i],
 						batch.reconstructionDecision.mode == NeuralRendering::GuidedReconstructionMode::GuidedLowResolution);
 					const auto weight = weights.empty() ? 1.0f : float(weights[i]) / 255.0f;
 					for (UINT channel = 0; channel < 3; ++channel)
@@ -154,7 +154,6 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 	base.renderingMode = mixedGuides ? RenderingMode::FullResolution : RenderingMode::ReducedResolution;
 	base.featureUpscaling = mixedGuides;
 	base.reset = true;
-	base.reconstructionFilter = AdapterCompiler::filter;
 	base.peripheralCompressionPercent = compression;
 	base.guidedReconstructionEnabled = AdapterCompiler::guided;
 	base.peripheralMask = { { 0.47f, 0.52f }, { 0.32f, 0.32f }, shaped };
@@ -472,7 +471,7 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 		args[1].peripheralMask.active = true;
 		args[1].peripheralMask.radii[0] = 0.0f;
 		Require(adapter.PreparePeripheralCompression(args, false, result) && !args[0].peripheralCompression.Active() && !args[1].peripheralCompression.Active(), "Unsupported eye failed to retain ordinary pair");
-		if (percent == 67 && !shaped && !mixedGuides && !AdapterCompiler::guided && AdapterCompiler::filter == ReconstructionFilter::Bilinear) {
+		if (percent == 67 && !shaped && !mixedGuides && !AdapterCompiler::guided) {
 			args[1].peripheralMask.radii[0] = std::numeric_limits<float>::quiet_NaN();
 			ModelResolution::Batch fallback;
 			Require(adapter.PreparePeripheralCompression(args, false, result) && adapter.Prepare(args, fallback, result), "Invalid mask prevented ordinary preparation");

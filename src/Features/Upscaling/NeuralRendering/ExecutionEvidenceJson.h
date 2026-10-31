@@ -92,7 +92,7 @@ namespace NeuralRendering::Evidence
 		return { { "mode", GetGuidedReconstructionModeName(value->decision.mode) },
 			{ "reason", GetGuidedReconstructionReasonName(value->decision.reason) }, { "effectivePercent", value->effectivePercent },
 			{ "target", ExtentJson(value->target) }, { "unpackedModel", ExtentJson(value->unpackedModel) },
-			{ "basicFilter", GetReconstructionFilterName(value->basicFilter) }, { "enabled", value->enabled },
+			{ "basicFilter", "bilinear" }, { "enabled", value->enabled },
 			{ "packed", value->packed }, { "matchedReferenceDomain", value->matchedReferenceDomain },
 			{ "kernel", value->decision.mode == GuidedReconstructionMode::GuidedLowResolution ? Json("2x2") : Json(nullptr) } };
 	}

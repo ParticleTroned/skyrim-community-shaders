@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "DEDA499AAFB9E71E0942578B839E5EB0797BF47C0945DE1C0E4BADDF63293124"
+        "sha256": "D34F65FA20600074E16ABF88E06F1A3D4D33D020D970214532EA92525A4B4C13"
     },
     "runtimeSettingsContract": {
         "revision": 25,
-        "sourceTreeSha256": "BB3D76EDEEA1218807666FDAE3F550C02AF67B1CF0F14C0A5746B2FDA765C733",
+        "sourceTreeSha256": "194376F1374C858A3BF4BF60AD51042D9133B13AD468C946A58732C6E7556122",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -44,6 +44,7 @@
                 "src/Features/Upscaling/NeuralRendering/DevelopmentDiagnostics.h",
                 "src/Features/Upscaling/NeuralRendering/PipelinePolicy.h",
                 "src/Features/Upscaling/NeuralRendering/RegionCapacity.h",
+                "src/Features/Upscaling/NeuralRendering/Style.h",
                 "src/Features/VolumetricLightingTuning.h",
                 "src/Features/VolumetricLightingTuningMigration.h",
                 "src/Features/VR/MenuPositioningPolicy.h",
@@ -157,6 +158,7 @@
             "src/Features/Upscaling/NeuralRendering/DevelopmentDiagnostics.h",
             "src/Features/Upscaling/NeuralRendering/PipelinePolicy.h",
             "src/Features/Upscaling/NeuralRendering/RegionCapacity.h",
+            "src/Features/Upscaling/NeuralRendering/Style.h",
             "src/Features/VolumetricLighting.cpp",
             "src/Features/VolumetricLighting.h",
             "src/Features/VolumetricLightingTuning.h",

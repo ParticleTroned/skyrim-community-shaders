@@ -44,9 +44,6 @@ int main()
 			baseline.neuralRenderingCentralAreaPercent = 100;
 			baseline.neuralRenderingCentralFeatherPixels = 64;
 			const auto key = BuildNeuralRenderingSettingsKey(baseline);
-			auto filter = baseline;
-			filter.neuralRenderingReconstructionFilter = 1;
-			require((BuildNeuralRenderingSettingsKey(filter) != key) == enabled);
 			auto guided = baseline;
 			guided.neuralRenderingGuidedReconstruction = !baseline.neuralRenderingGuidedReconstruction;
 			require((BuildNeuralRenderingSettingsKey(guided) != key) == enabled);

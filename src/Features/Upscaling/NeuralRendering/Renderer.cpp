@@ -329,7 +329,6 @@ namespace NeuralRendering
 				left.insertionPoint == right.insertionPoint &&
 				left.featureUpscaling == right.featureUpscaling &&
 				left.modelResolutionPercent == right.modelResolutionPercent &&
-				left.reconstructionFilter == right.reconstructionFilter &&
 				left.pressureResolutionEnabled == right.pressureResolutionEnabled &&
 				left.parallelEyes == right.parallelEyes &&
 				left.renderingMode == right.renderingMode &&
@@ -358,7 +357,7 @@ namespace NeuralRendering
 			       validStrength(a_tuning.localToneStrength) &&
 			       validStrength(a_tuning.localStructureStrength) &&
 			       validStrength(a_tuning.skinStructureStrength) &&
-			       a_tuning.style <= 3 &&
+			       a_tuning.style <= kMaximumStyle &&
 			       std::isfinite(a_tuning.singleSubrectScale) &&
 			       a_tuning.singleSubrectScale >= 0.25f &&
 			       a_tuning.singleSubrectScale <= 1.0f;
@@ -1156,8 +1155,6 @@ namespace NeuralRendering
 			return fail("feature-slot generation must be nonzero");
 		if (!IsValidInsertionPoint(a_args.insertionPoint))
 			return fail("Feature 18 insertion point is invalid");
-		if (!IsValidReconstructionFilter(a_args.reconstructionFilter))
-			return fail("NR reconstruction filter is invalid");
 		if (!IsValidModelResolutionPercent(a_args.modelResolutionPercent))
 			return fail("NR model resolution must be an integer percentage from 30 to 100");
 		if (colorConfiguration_.Enabled() &&
@@ -1616,7 +1613,6 @@ namespace NeuralRendering
 			snapshot_.generation = a_args.generation;
 			snapshot_.insertionPoint = a_args.insertionPoint;
 			snapshot_.modelResolutionPercent = a_args.modelResolutionPercent;
-			snapshot_.reconstructionFilter = a_args.reconstructionFilter;
 			snapshot_.modelSharedInputs = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			snapshot_.modelOutputSelected = false;
@@ -3276,7 +3272,6 @@ namespace NeuralRendering
 				snapshot_.packedCropLayout = projected && telemetryProxy.modelResolutionHistory ? telemetryProxy.modelResolutionHistory->packedCrops : PackedCropLayout{};
 #endif
 				snapshot_.modelResolutionPercent = observed.modelResolutionPercent;
-				snapshot_.reconstructionFilter = observed.reconstructionFilter;
 				snapshot_.modelSharedInputs = sharedInputsPrepared;
 				snapshot_.modelSourceWidth = observed.outputWidth;
 				snapshot_.modelSourceHeight = observed.outputHeight;

@@ -372,7 +372,6 @@ namespace FSRTemporalTuningPolicy
 	OP(neuralRenderingInsertionPoint)               \
 	OP(neuralRenderingBatchedStereo)                \
 	OP(neuralRenderingDirectCommit)                 \
-	OP(neuralRenderingReconstructionFilter)         \
 	OP(neuralRenderingPeripheralCompressionPercent) \
 	OP(neuralRenderingPauseInCombat)                \
 	OP(neuralRenderingGuidedReconstruction)         \
@@ -436,8 +435,8 @@ void from_json(const json& a_json, Upscaling::Settings& a_settings)
 	if (const auto value = a_json.find("neuralRenderingPeripheralCompressionPercent"); value != a_json.end() &&
 																					   !NeuralRendering::ParseBoundedInteger(*value, 0u, NeuralRendering::kMaximumPeripheralCompressionPercent))
 		throw std::invalid_argument("NR peripheral compression must be an integer from 0 to 100 percent");
-	if (const auto value = a_json.find("neuralRenderingReconstructionFilter"); value != a_json.end() && !NeuralRendering::ParseBoundedInteger(*value, 0u, 1u))
-		throw std::invalid_argument("NR reconstruction filter must be 0 (bilinear) or 1 (Advanced)");
+	if (const auto value = a_json.find("neuralRenderingStyle"); value != a_json.end() && !NeuralRendering::ParseBoundedInteger(*value, 0u, 3u))
+		throw std::invalid_argument("NR style must be 0 (Standard), 1 (Natural) or 2 (Cinematic); legacy 3 maps to Cinematic");
 	for (const auto& [name, minimum, maximum] : {
 			 std::tuple{ "neuralRenderingCentralAreaPercent", NeuralRendering::kMinimumCentralAreaPercent, NeuralRendering::kMaximumCentralAreaPercent },
 			 std::tuple{ "neuralRenderingCentralFeatherPixels", 0u, NeuralRendering::kMaximumCentralFeatherPixels } }) {
@@ -448,6 +447,7 @@ void from_json(const json& a_json, Upscaling::Settings& a_settings)
 	parsed.name = a_json.value(#name, defaults.name);
 	UPSCALING_SETTINGS_JSON_FIELDS(UPSCALING_READ_JSON_FIELD)
 #undef UPSCALING_READ_JSON_FIELD
+	parsed.neuralRenderingStyle = NeuralRendering::ClampStyle(parsed.neuralRenderingStyle);
 	if (!a_json.contains("neuralRenderingPeripheralCompressionPercent")) {
 		if (const auto legacy = a_json.find("neuralRenderingPeripheralCompression"); legacy != a_json.end()) {
 			if (!legacy->is_boolean())
@@ -5123,11 +5123,10 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		settings.neuralRenderingInsertionPoint = static_cast<uint>(
 			NeuralRendering::ResolveInsertionPoint(NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode)));
 		settings.neuralRenderingPreset = std::min(settings.neuralRenderingPreset, 4u);
-		settings.neuralRenderingReconstructionFilter = static_cast<uint>(NeuralRendering::ClampReconstructionFilter(settings.neuralRenderingReconstructionFilter));
 		settings.neuralRenderingModelResolutionPercent = std::clamp(settings.neuralRenderingModelResolutionPercent,
 			NeuralRendering::kMinimumModelResolutionPercent, NeuralRendering::kMaximumModelResolutionPercent);
 		NeuralRendering::Runtime::Instance().GetTuningLimits(settings.neuralRenderingNetwork).Sanitize(settings);
-		settings.neuralRenderingStyle = std::min(settings.neuralRenderingStyle, 3u);
+		settings.neuralRenderingStyle = NeuralRendering::ClampStyle(settings.neuralRenderingStyle);
 		settings.neuralRenderingNetwork = NeuralRendering::SanitizeNetworkSelection(settings.neuralRenderingNetwork);
 		settings.neuralRenderingSingleSubrectScale = std::clamp(
 			std::isfinite(settings.neuralRenderingSingleSubrectScale) ?
@@ -5490,7 +5489,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		settings.neuralRenderingLocalTone = 0.75f;
 		settings.neuralRenderingLocalStructure = 0.9f;
 		settings.neuralRenderingSkinStructure = 0.9f;
-		settings.neuralRenderingStyle = 3;
+		settings.neuralRenderingStyle = NeuralRendering::kDefaultStyle;
 		settings.neuralRenderingNetwork = NeuralRendering::kNetworkDefault;
 		settings.neuralRenderingAutoMask = true;
 		settings.neuralRenderingUICorrection = false;
@@ -6776,7 +6775,6 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		add(a_settings.neuralRenderingBatchedStereo);
 		add(a_settings.neuralRenderingDirectCommit);
 		add(NeuralRendering::EffectiveModelResolutionPercent(mode, a_settings.neuralRenderingModelResolutionPercent));
-		add(static_cast<uint64_t>(NeuralRendering::ClampReconstructionFilter(a_settings.neuralRenderingReconstructionFilter)));
 		add(a_settings.neuralRenderingGuidedReconstruction);
 		add(a_settings.neuralRenderingPeripheralCompressionPercent);
 		add(a_settings.neuralRenderingPauseInCombat);
@@ -19091,28 +19089,28 @@ namespace
 
 	void DrawNeuralModelResolutionSettings(Upscaling::Settings& settings)
 	{
-		Util::Widgets::Checkbox("Pause NR during combat", &settings.neuralRenderingPauseInCombat);
-		Util::AddTooltip("Pause NR for both eyes during player combat. Normal upscaling continues. Resume after three continuous seconds of unpaused gameplay out of combat, with fresh history. NR resources stay cached while memory permits.");
 		DrawNeuralIntegerSetting("NR Model Resolution", settings.neuralRenderingModelResolutionPercent,
 			NeuralRendering::kMinimumModelResolutionPercent, NeuralRendering::kMaximumModelResolutionPercent, "%d%%");
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Set NR resolution in any mode, independently of scene resolution, upscaling and strength. Lower may soften detail; 100% keeps original NR resolution. Applies on release.");
-		int filter = static_cast<int>(NeuralRendering::ClampReconstructionFilter(settings.neuralRenderingReconstructionFilter));
-		const char* filters[] = { "Bilinear", "Advanced" };
-		if (Util::Widgets::Combo("NR reconstruction filter", &filter, filters, 2))
-			settings.neuralRenderingReconstructionFilter = static_cast<std::uint32_t>(NeuralRendering::ClampReconstructionFilter(static_cast<std::uint32_t>(filter)));
-		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Bilinear is the inexpensive default. Advanced can preserve sharper NR changes at reduced NR resolution, with possible ringing and extra GPU cost. Original scene detail and alpha are preserved.");
 		DrawNeuralIntegerSetting("Peripheral compression", settings.neuralRenderingPeripheralCompressionPercent,
 			0, NeuralRendering::kMaximumPeripheralCompressionPercent, "%d%%");
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("0% disables compression. 20% preserves the inner 80% of the current view scale and compresses the outer band. Follows each eye's active FOV mask shape and centre, or the full rectangular view without FOV. Higher values extend compression inward. Uses the selected NR resolution and supports guided reconstruction. Supports Scene + categories with compositor blending. Actors only, provider blending and compact-input routes retain ordinary NR. Applies on release.");
-		Util::Widgets::Checkbox("Improve low-resolution NR", &settings.neuralRenderingGuidedReconstruction);
-		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Enabled by default. Automatically use source-colour-guided reconstruction below 100% NR resolution. At 100%, or when unsupported, retain the selected filter. NR resolution and strength are unchanged.");
+			ImGui::TextUnformatted("100% compresses the whole view for maximum performance savings; 0% turns it off. Default 25% compresses the outer band. Increasing the percentage extends this band inward toward the centre, following the FOV mask shape or the rectangular view without FOV.");
+	}
+
+	void DrawNeuralRuntimeSettings(Upscaling::Settings& settings, bool showDebugControls)
+	{
 		Util::Widgets::Checkbox("Lower NR resolution under memory pressure", &settings.neuralRenderingPressureResolutionEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("When GPU memory is scarce, temporarily lower NR resolution by 10-point steps to 30%, then restore it gradually after sustained headroom. The slider keeps your target; scene resolution, textures and strength stay unchanged.");
+			ImGui::TextUnformatted("Enabled by default. When GPU memory is scarce, temporarily lower NR resolution by 10-point steps to 30%, then restore it gradually after sustained headroom. The slider keeps your target; scene resolution, textures and strength stay unchanged.");
+		if (showDebugControls) {
+			Util::Widgets::Checkbox("Improve low-resolution NR", &settings.neuralRenderingGuidedReconstruction);
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Enabled by default. Automatically use source-colour-guided reconstruction below 100% NR resolution. At 100%, or when unsupported, use bilinear reconstruction when needed. The saved choice applies at every logging level. NR resolution and strength are unchanged.");
+		}
+		Util::Widgets::Checkbox("Pause NR during combat", &settings.neuralRenderingPauseInCombat);
+		Util::AddTooltip("Enabled by default. Pause NR for both eyes during player combat. Normal upscaling continues. Resume after three continuous seconds of unpaused gameplay out of combat, with fresh history. NR resources stay cached while memory permits.");
 	}
 
 	void DrawNeuralCentralAreaSettings(Upscaling::Settings& settings)
@@ -19173,17 +19171,14 @@ namespace
 			"Skin Structure", &settings.neuralRenderingSkinStructure, 0.0f, limits.skinStructureStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Adjust skin detail in the shared NR result. Selection > Skin Strength sets how much appears on selected bodies.");
-		static constexpr const char* styles[]{
-			"Style 0", "Style 1", "Style 2", "Style 3"
-		};
 		int style = static_cast<int>(settings.neuralRenderingStyle);
 		if (Util::Widgets::Combo(
-				"Style", &style, styles, IM_ARRAYSIZE(styles))) {
+				"Style", &style, NeuralRendering::kStyleNames.data(), static_cast<int>(NeuralRendering::kStyleNames.size()))) {
 			settings.neuralRenderingStyle = static_cast<uint>(style);
 			customTuningChanged = true;
 		}
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Choose one of four appearance styles. Compare in the same scene; numbers are not quality levels.");
+			ImGui::TextUnformatted("Choose Standard, Natural or Cinematic. Compare in the same scene; styles are appearances, not quality levels.");
 		if (customTuningChanged)
 			settings.neuralRenderingPreset = 0;
 		MenuUI::DetailNote("Intensity sets the shared NR result. Selection's material strengths set how much each material receives.");
@@ -19239,7 +19234,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 		MenuUI::SettingsPage page("NeuralRendering", {
 														 { "mode", "Mode", "Where NR runs", std::format("{} / {}", modeName, coverageName), true, true, "Set the foundation", "Mode & coverage", "Choose where NR runs before tuning its appearance." },
 														 { "blending", "Blending", "How selected edits are applied", blendingName, true, true, nullptr, nullptr, "Choose how your strength adjustments are applied." },
-														 { "look", "Look", "Preset, detail and overall intensity", std::format("Style {} / Intensity {:.2f}", settings.neuralRenderingStyle, settings.neuralRenderingIntensity), true, true, "Shape the shared picture", nullptr, "One appearance for the scene and all selected actors." },
+														 { "look", "Look", "Preset, detail and overall intensity", std::format("{} / Intensity {:.2f}", NeuralRendering::kStyleNames[NeuralRendering::ClampStyle(settings.neuralRenderingStyle)], settings.neuralRenderingIntensity), true, true, "Shape the shared picture", nullptr, "One appearance for the scene and all selected actors." },
 														 { "colour", "Colour", "Colour and lighting preservation", "Refine the shared appearance", true, true, nullptr, nullptr, "Refine colour while preserving the lighting you prefer." },
 														 { "selection", "Selection", "Actor types, materials and strengths", selectionName, true, true, "Refine where it is applied", nullptr, "Choose where the enhancement appears and adjust its strength." },
 														 { "actors", "Actors", "Optional: distance, focus and edges", settings.neuralCharacterRenderingEnabled ? "Actor coverage and edges" : "Not used in scene mode", true, true, nullptr, nullptr, "With Actors only selected, refine distance, coverage and edges.", settings.neuralCharacterRenderingEnabled && (!usesFov || fovAvailable) },
@@ -19249,14 +19244,16 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 		if (page.Is("mode")) {
 			auto& runtime = NeuralRendering::Runtime::Instance();
 			{
-				auto networkGuard = Util::DisableGuard(!runtime.SupportsNetworkSelection());
-				static constexpr const char* networks[]{ "Runtime default", "Legacy (310.8-like)", "Newer" };
-				int network = static_cast<int>(NeuralRendering::SanitizeNetworkSelection(settings.neuralRenderingNetwork));
-				if (Util::Widgets::Combo("NR network", &network, networks, IM_ARRAYSIZE(networks))) {
-					settings.neuralRenderingNetwork = static_cast<uint>(network);
+				const bool supported = runtime.SupportsNetworkSelection();
+				auto networkGuard = Util::DisableGuard(!supported);
+				static constexpr const char* networks[]{ "Default (310.9)", "Legacy (310.8)" };
+				static constexpr const char* installedDefault[]{ "Installed DLL default" };
+				int network = supported && settings.neuralRenderingNetwork == NeuralRendering::kNetworkLegacy ? 1 : 0;
+				if (Util::Widgets::Combo("NR network", &network, supported ? networks : installedDefault, supported ? IM_ARRAYSIZE(networks) : IM_ARRAYSIZE(installedDefault))) {
+					settings.neuralRenderingNetwork = network == 1 ? NeuralRendering::kNetworkLegacy : NeuralRendering::kNetworkDefault;
 					runtime.GetTuningLimits(settings.neuralRenderingNetwork).Sanitize(settings);
 				}
-				Util::AddTooltip("Choose a network inside the same 310.9 DLL. Runtime default preserves the provider's choice; on 310.9 it is assumed to use Newer and uses the Newer slider ranges. Legacy uses the older, slower network and can give a stronger, more detailed NR effect, with the 310.8 slider ranges. Newer favours performance with a lighter enhancement and the 310.9 ranges. Switching clamps values to the selected network's limits and recreates both eye models.");
+				Util::AddTooltip("Choose a network inside the same 310.9 DLL. Default (310.9) explicitly selects the newer network for performance. Legacy (310.8) selects the older network with the 310.8 slider ranges. Other DLLs use their own default network. Switching clamps values to the selected network's limits and recreates both eye models.");
 			}
 			if (!runtime.SupportsNetworkSelection())
 				ImGui::TextDisabled("This runtime uses its default network; explicit choices require 310.9.");
@@ -19298,6 +19295,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 				DrawNeuralExecutionSettings(settings);
 				DrawNeuralCentralAreaSettings(settings);
 			}
+			DrawNeuralRuntimeSettings(settings, debugMode);
 		}
 		const bool reducedResolution = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution;
 		const bool missingFov = NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov) &&

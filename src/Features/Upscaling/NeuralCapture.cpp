@@ -12,7 +12,6 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 	args.renderingMode = GetNeuralRenderingMode();
 	args.modelResolutionPercent = NeuralRendering::EffectiveModelResolutionPercent(
 		*args.renderingMode, settings.neuralRenderingModelResolutionPercent);
-	args.reconstructionFilter = NeuralRendering::ClampReconstructionFilter(settings.neuralRenderingReconstructionFilter);
 	args.guidedReconstructionEnabled = settings.neuralRenderingGuidedReconstruction;
 	args.peripheralCompressionPercent = settings.neuralRenderingPeripheralCompressionPercent;
 	args.peripheralMask = {};

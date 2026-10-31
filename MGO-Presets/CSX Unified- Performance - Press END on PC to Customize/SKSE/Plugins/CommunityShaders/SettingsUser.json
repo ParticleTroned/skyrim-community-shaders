@@ -80,7 +80,7 @@
     },
     "settingsContract": {
       "revision": 25,
-      "sourceTreeSha256": "BB3D76EDEEA1218807666FDAE3F550C02AF67B1CF0F14C0A5746B2FDA765C733"
+      "sourceTreeSha256": "194376F1374C858A3BF4BF60AD51042D9133B13AD468C946A58732C6E7556122"
     }
   },
   "Upscaling": {
@@ -156,10 +156,9 @@
       "neuralRenderingBatchedStereo": true,
       "neuralRenderingBlendFeather": 0.05000000074505806,
       "neuralRenderingDirectCommit": true,
-      "neuralRenderingReconstructionFilter": 0,
       "neuralRenderingGuidedReconstruction": true,
-      "neuralRenderingPeripheralCompressionPercent": 0,
-      "neuralRenderingPauseInCombat": false,
+      "neuralRenderingPeripheralCompressionPercent": 25,
+      "neuralRenderingPauseInCombat": true,
       "neuralRenderingEnabled": false,
       "neuralRenderingFovOnly": false,
       "neuralRenderingRenderscaleFov": false,
@@ -171,7 +170,7 @@
       "neuralRenderingPreset": 3,
       "neuralRenderingSingleSubrectScale": 1.0,
       "neuralRenderingSkinStructure": 0.8999999761581421,
-      "neuralRenderingStyle": 3,
+      "neuralRenderingStyle": 1,
       "neuralRenderingNetwork": 0,
       "neuralRenderingUICorrection": false
     },

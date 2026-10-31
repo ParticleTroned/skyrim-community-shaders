@@ -31,7 +31,6 @@ cbuffer ModelResolutionConstants : register(b0)
 	uint SelectionMode;
 	uint OutputStorageFormat;
 	uint SelectedOutput;
-	uint ReconstructionFilter;
 	float4 SelectionBounds;
 };
 

@@ -101,17 +101,16 @@ namespace globals
 				bool neuralCharacterOtherActorsEnabled = NeuralRendering::CharacterPolicy::kDefaultOtherActors;
 				unsigned neuralRenderingMode = 0;
 				unsigned neuralRenderingModelResolutionPercent = 100;
-				unsigned neuralRenderingReconstructionFilter = 0;
 				bool neuralRenderingGuidedReconstruction = true;
-				unsigned neuralRenderingPeripheralCompressionPercent = 0;
-				bool neuralRenderingPauseInCombat = false;
+				unsigned neuralRenderingPeripheralCompressionPercent = 25;
+				bool neuralRenderingPauseInCombat = true;
 				bool neuralRenderingPressureResolutionEnabled = true;
 				bool neuralRenderingPrewarmEnabled = true;
 				float neuralRenderingSingleSubrectScale = 1.0f;
 				bool neuralRenderingAutoMask = true, neuralRenderingUICorrection = false;
 				bool neuralRenderingParallelEyes = true;
 				unsigned neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
-				unsigned neuralRenderingPreset = 1, neuralRenderingStyle = 0, neuralRenderingNetwork = 0;
+				unsigned neuralRenderingPreset = 1, neuralRenderingStyle = NeuralRendering::kDefaultStyle, neuralRenderingNetwork = 0;
 				float neuralRenderingIntensity = 1.0f, neuralRenderingLocalTone = 1.0f;
 				float neuralRenderingLocalStructure = 1.0f, neuralRenderingSkinStructure = 1.0f;
 				unsigned neuralCharacterCropMode = 1;
@@ -652,20 +651,19 @@ int main()
 	{
 		Upscaling::Settings settings;
 		require(settings.neuralRenderingPressureResolutionEnabled, "Automatic pressure resolution defaults on");
-		require(settings.neuralRenderingReconstructionFilter == 0, "Bilinear must remain the default");
 		require(settings.neuralRenderingGuidedReconstruction, "Guided reconstruction must default on");
 		ImGui::Clear("Improve low-resolution NR");
-		DrawNeuralModelResolutionSettings(settings);
-		require(!settings.neuralRenderingGuidedReconstruction && settings.neuralRenderingModelResolutionPercent == 100 && settings.neuralRenderingReconstructionFilter == 0,
-			"Guided toggle changed independent model scale or Basic filter");
+		DrawNeuralRuntimeSettings(settings, true);
+		require(!settings.neuralRenderingGuidedReconstruction && settings.neuralRenderingModelResolutionPercent == 100,
+			"Guided toggle changed independent model scale");
 		ImGui::Clear("Improve low-resolution NR");
-		DrawNeuralModelResolutionSettings(settings);
+		DrawNeuralRuntimeSettings(settings, true);
 		require(settings.neuralRenderingGuidedReconstruction, "Guided reconstruction could not be re-enabled");
-		require(!settings.neuralRenderingPauseInCombat, "Combat pausing must default off");
+		require(settings.neuralRenderingPauseInCombat, "Combat pausing must default on");
 		ImGui::Clear("Pause NR during combat");
-		DrawNeuralModelResolutionSettings(settings);
-		require(settings.neuralRenderingPauseInCombat && settings.neuralRenderingModelResolutionPercent == 100, "Combat control must retain NR resolution");
-		require(!settings.neuralRenderingPeripheralCompressionPercent, "Peripheral compression must default off");
+		DrawNeuralRuntimeSettings(settings, true);
+		require(!settings.neuralRenderingPauseInCombat && settings.neuralRenderingModelResolutionPercent == 100, "Combat control must retain NR resolution");
+		require(settings.neuralRenderingPeripheralCompressionPercent == 25, "Peripheral compression must default to 25 percent");
 		for (int percent : { 20, 100, 0 }) {
 			ImGui::Clear("Peripheral compression");
 			ImGui::sliderEditValue = static_cast<float>(percent);
@@ -675,19 +673,12 @@ int main()
 				"Compression slider changed guided or NR scale settings");
 		}
 
-		for (const auto [value, expected] : { std::pair{ 1, 1u }, std::pair{ 0, 0u }, std::pair{ 2, 0u } }) {
-			ImGui::Clear("NR reconstruction filter");
-			ImGui::comboEditValue = value;
-			DrawNeuralModelResolutionSettings(settings);
-			require(settings.neuralRenderingReconstructionFilter == expected && settings.neuralRenderingModelResolutionPercent == 100,
-				"Filter selection changed model resolution or accepted an invalid value");
-		}
 		ImGui::Clear("Lower NR resolution under memory pressure");
-		DrawNeuralModelResolutionSettings(settings);
+		DrawNeuralRuntimeSettings(settings, true);
 		require(!settings.neuralRenderingPressureResolutionEnabled && settings.neuralRenderingModelResolutionPercent == 100,
 			"Opting out of pressure reduction must retain the requested resolution");
 		ImGui::Clear("Lower NR resolution under memory pressure");
-		DrawNeuralModelResolutionSettings(settings);
+		DrawNeuralRuntimeSettings(settings, true);
 		require(settings.neuralRenderingPressureResolutionEnabled && settings.neuralRenderingModelResolutionPercent == 100, "Pressure toggle changed requested model resolution");
 		ImGui::Clear("NR Model Resolution");
 		ImGui::sliderEditValue = 75;
@@ -764,6 +755,7 @@ int main()
 		Upscaling::Settings supported{};
 		supported.neuralRenderingMode = 2;
 		supported.neuralRenderingPressureResolutionEnabled = false;
+		supported.neuralRenderingPeripheralCompressionPercent = 0;
 		auto compressed = supported;
 		compressed.neuralRenderingPeripheralCompressionPercent = 20;
 		require(NeuralRendering::PrewarmConfigurationBlocker(compressed, true), "Compression must defer prewarm");
@@ -823,15 +815,29 @@ int main()
 				upscaling.settings.neuralRenderingPressureResolutionEnabled = false;
 				upscaling.settings.neuralRenderingParallelEyes = enabled;
 				upscaling.settings.neuralRenderingPrewarmEnabled = enabled;
-				for (const auto level : { spdlog::level::debug, spdlog::level::info, spdlog::level::debug }) {
+				upscaling.settings.neuralRenderingGuidedReconstruction = enabled;
+				for (const auto level : { spdlog::level::debug, spdlog::level::info, spdlog::level::off, spdlog::level::trace, spdlog::level::debug }) {
 					visibilityState.level = level;
 					ImGui::Clear();
 					upscaling.DrawSelectionControls();
-					const bool visible = vr && level == spdlog::level::debug;
+					const bool debugControls = level == spdlog::level::debug || level == spdlog::level::trace;
+					const bool visible = vr && debugControls;
 					require(ImGui::Seen("Parallel Eyes") == visible && ImGui::Seen("Prewarm NR while loading") == visible,
 						"Execution settings are visible only in VR Debug controls");
 					require(upscaling.settings.neuralRenderingParallelEyes == enabled && upscaling.settings.neuralRenderingPrewarmEnabled == enabled,
 						"Returning to Info or changing runtime must preserve both saved execution preferences");
+					require(ImGui::Seen("Improve low-resolution NR") == debugControls && !ImGui::Seen("NR reconstruction filter"),
+						"Only the guided reconstruction toggle belongs in Debug/Trace");
+					require(upscaling.settings.neuralRenderingGuidedReconstruction == enabled,
+						"Info and logging-off redraws must preserve the guided reconstruction preference");
+					const auto position = [](const char* label) { return std::find(ImGui::items.begin(), ImGui::items.end(), label); };
+					require(position("Peripheral compression") < position("Lower NR resolution under memory pressure") &&
+								position("Lower NR resolution under memory pressure") < position("Pause NR during combat"),
+						"Resolution and compression must precede the ordered bottom toggles");
+					if (debugControls)
+						require(position("Lower NR resolution under memory pressure") < position("Improve low-resolution NR") &&
+									position("Improve low-resolution NR") < position("Pause NR during combat"),
+							"Debug controls must retain pressure, guided and combat ordering");
 				}
 			}
 		}
@@ -931,7 +937,7 @@ int main()
 	}
 	for (bool supported : { false, true }) {
 		NeuralRendering::networkSelectionSupported = supported;
-		for (unsigned network = 0; network <= 2; ++network) {
+		for (unsigned network = 0; network <= 1; ++network) {
 			auto& upscaling = globals::features::upscaling;
 			upscaling.settings = {};
 			upscaling.settings.neuralRenderingEnabled = true;

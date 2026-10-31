@@ -1528,7 +1528,9 @@ namespace NeuralRendering
 		ID3D12Resource* a_controlMask, bool a_providerBlending,
 		RuntimeExecutionEvidence* a_evidence, std::uint32_t a_networkPreset)
 	{
-		if (a_networkPreset != GetNetworkPreset(a_networkPreset)) {
+		// Creation receives native presets, including zero for provider-default fallback paths.
+		if (a_networkPreset != SanitizeNetworkSelection(a_networkPreset) ||
+			(!SupportsNetworkSelection() && a_networkPreset != kNetworkDefault)) {
 			SetFailureLocked(RuntimeStatus::FeatureCreateFailed, RuntimeFailureStage::FeatureConfiguration,
 				"Feature 18 network preset is unsupported by the installed runtime", static_cast<std::uint32_t>(E_INVALIDARG));
 			return false;

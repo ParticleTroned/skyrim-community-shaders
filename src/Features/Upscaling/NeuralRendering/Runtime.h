@@ -3,6 +3,7 @@
 #include "CapacityFallback.h"
 #include "NetworkSelection.h"
 #include "RegionCapacity.h"
+#include "Style.h"
 #include "TuningLimits.h"
 
 #include "ExecutionEvidence.h"
@@ -94,7 +95,7 @@ namespace NeuralRendering
 		float localToneStrength = 0.75f;
 		float localStructureStrength = 0.9f;
 		float skinStructureStrength = 0.9f;
-		std::uint32_t style = 3;
+		std::uint32_t style = kDefaultStyle;
 		bool useAutoMask = true;
 		bool uiCorrection = false;
 		// Private Feature 18 single-rectangle compute ROI.  One means the

@@ -14,8 +14,10 @@
 #include "Upscaling/NeuralRendering/CharacterRendering.h"
 #include "Upscaling/NeuralRendering/CombatPausePolicy.h"
 #include "Upscaling/NeuralRendering/MainDepthPresentation.h"
+#include "Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Upscaling/NeuralRendering/PreDlssInputHistory.h"
+#include "Upscaling/NeuralRendering/Style.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/VRMenuPointerOverlay.h"
@@ -496,10 +498,9 @@ public:
 		bool neuralRenderingBatchedStereo = true;
 		bool neuralRenderingDirectCommit = true;
 		uint neuralRenderingModelResolutionPercent = 100;
-		uint neuralRenderingReconstructionFilter = 0;
 		bool neuralRenderingGuidedReconstruction = true;
-		uint neuralRenderingPeripheralCompressionPercent = 0;
-		bool neuralRenderingPauseInCombat = false;
+		uint neuralRenderingPeripheralCompressionPercent = 25;
+		bool neuralRenderingPauseInCombat = true;
 		bool neuralRenderingPressureResolutionEnabled = true;
 		uint neuralRenderingCentralAreaPercent = NeuralRendering::kMaximumCentralAreaPercent;
 		uint neuralRenderingCentralFeatherPixels = NeuralRendering::kDefaultCentralFeatherPixels;
@@ -508,7 +509,7 @@ public:
 		float neuralRenderingLocalTone = 0.75f;
 		float neuralRenderingLocalStructure = 0.9f;
 		float neuralRenderingSkinStructure = 0.9f;
-		uint neuralRenderingStyle = 3;
+		uint neuralRenderingStyle = NeuralRendering::kDefaultStyle;
 		uint neuralRenderingNetwork = 0;
 		bool neuralRenderingAutoMask = true;
 		bool neuralRenderingUICorrection = false;

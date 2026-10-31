@@ -40,18 +40,6 @@ int main()
 		if (!value)
 			throw std::runtime_error("Neural Rendering request validation invariant");
 	};
-	for (const auto& [name, expected] : { std::pair{ "bilinear", NeuralRendering::ReconstructionFilter::Bilinear }, std::pair{ "lanczos3", NeuralRendering::ReconstructionFilter::Lanczos3 } }) {
-		NeuralRenderingConfigurationRequest request;
-		json error;
-		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "reconstructionFilter", name } }, request, error));
-		require(request.HasAnyControl() && request.reconstructionFilter == expected);
-	}
-	for (const auto& value : { json(nullptr), json(true), json(0), json(1.0), json("Lanczos3"), json("nearest"), json::array(), json::object() }) {
-		NeuralRenderingConfigurationRequest request;
-		json error;
-		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "reconstructionFilter", value } }, request, error));
-		require(!request.reconstructionFilter && error.at("errorCode") == "nr_reconstruction_filter_invalid");
-	}
 	for (bool enabled : { false, true }) {
 		NeuralRenderingConfigurationRequest request;
 		json error;
@@ -136,8 +124,20 @@ int main()
 	const auto& declaredActions = descriptor.at("inputSchema").at("properties").at("action").at("enum");
 	require(std::find(declaredActions.begin(), declaredActions.end(), "nr_peripheral_compare") != declaredActions.end());
 	require(descriptor.at("inputSchema").at("properties").at("guidedReconstruction").at("default") == true);
-	require(descriptor.at("inputSchema").at("properties").at("peripheralCompressionPercent").at("default") == 0);
-	require(descriptor.at("inputSchema").at("properties").at("pauseInCombat").at("default") == false);
+	require(descriptor.at("inputSchema").at("properties").at("peripheralCompressionPercent").at("default") == 25);
+	require(descriptor.at("inputSchema").at("properties").at("pauseInCombat").at("default") == true);
+	for (const auto& value : { json(0), json(1u), json(2), json(-1), json(3), json(1.5), json(true), json("2"), json(nullptr), json(UINT64_MAX) }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		const bool accepted = TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "style", value } }, request, error);
+		const bool valid = value.is_number_integer() && value >= 0 && value <= 2;
+		require(accepted == valid);
+		if (accepted)
+			require(request.style == value.get<std::uint32_t>() && request.HasImageTuningOverrides());
+		else
+			require(error.at("errorCode") == (value.is_number_integer() ? "nr_style_out_of_range" : "nr_style_type_invalid"));
+	}
+	require(descriptor.at("inputSchema").at("properties").at("style").at("maximum") == 2);
 	for (const auto& value : { json(0), json(1u), json(2), json(-1), json(3), json(1.5), json(true), json("2"), json(nullptr), json(UINT64_MAX) }) {
 		NeuralRenderingConfigurationRequest request;
 		json error;

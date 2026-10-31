@@ -8,6 +8,8 @@ extract_between("${source}" "\tWandPoseUpdateMode GetWandPoseUpdateMode(" "\tvoi
 file(READ "${PROJECT_ROOT}/src/Features/VR/Input.cpp" source)
 extract_between("${source}" "\tvoid ObserveRawTriggerReleases(" "\tvoid ResetVRImGuiButtonState()" "ui_vr_trigger_release.h")
 extract_between("${source}" "\tstruct ScrollAccum" "\tenum class CursorOwner" "ui_vr_scroll_types.h")
+extract_between("${source}" "\tstd::array<RE::ButtonMapping, kNumVRInputMappings> GetVRInputMappings(" "\tvoid UpdateMenuNavigationKey(" "ui_vr_input_mappings.h")
+extract_between("${source}" "\tvoid UpdateMenuNavigationKey(" "\tvoid ObserveRawTriggerReleases(" "ui_vr_navigation_release.h")
 extract_between("${source}" "\tsize_t GetThumbstickIndexForController(" "\tbool ApplyThumbstickCursorDelta(" "ui_vr_scroll_refresh.h")
 extract_between("${source}" "\tRefreshMenuThumbstickInput(*this);" "\tif (useWandNavigation)" "ui_vr_scroll_poll.h")
 extract_between("${source}" "\tbool ApplyThumbstickCursorDelta(" "\tvoid ApplyThumbstickCursor(" "ui_vr_cursor_delta.h")

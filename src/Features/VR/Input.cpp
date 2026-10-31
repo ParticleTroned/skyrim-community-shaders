@@ -35,6 +35,8 @@ namespace
 
 	bool gPrevPrimaryVRInputStates[kNumVRInputMappings] = {};
 	bool gPrevSecondaryVRInputStates[kNumVRInputMappings] = {};
+	// Gameplay-held buttons are latched without becoming ImGui key owners.
+	std::array<std::array<bool, kNumVRInputMappings>, 2> gMenuNavigationKeyOwners{};
 	bool gVRMouseButtonDown[ImGuiMouseButton_COUNT] = {};
 	bool gLastObservedMouseButtonDown[ImGuiMouseButton_COUNT] = {};
 	std::array<ControllerDevice, ImGuiMouseButton_COUNT> gVRMouseButtonOwners = [] {
@@ -97,6 +99,65 @@ namespace
 		} };
 	}
 
+	void UpdateMenuNavigationKey(bool a_secondary, size_t a_mappingIndex, bool a_pressed)
+	{
+		(a_secondary ? gPrevSecondaryVRInputStates : gPrevPrimaryVRInputStates)[a_mappingIndex] = a_pressed;
+		auto& owner = gMenuNavigationKeyOwners[a_secondary ? 1 : 0][a_mappingIndex];
+		// A gameplay latch owns no ImGui key, including a desktop keyboard's modifier.
+		if (owner == a_pressed)
+			return;
+		owner = a_pressed;
+		const auto mapping = GetVRInputMappings(a_secondary)[a_mappingIndex];
+		const auto peerMappings = GetVRInputMappings(!a_secondary);
+		const auto& peerOwners = gMenuNavigationKeyOwners[a_secondary ? 0 : 1];
+		bool peerPressed = false;
+		for (size_t index = 0; index < peerMappings.size(); ++index)
+			peerPressed |= peerOwners[index] && peerMappings[index].isKeyEvent && peerMappings[index].key == mapping.key;
+		auto& io = ImGui::GetIO();
+		if (mapping.isShift)
+			io.AddKeyEvent(ImGuiMod_Shift, a_pressed);
+		io.AddKeyEvent(static_cast<ImGuiKey>(mapping.key), a_pressed || peerPressed);
+	}
+
+	void ResetMenuNavigationKeyState()
+	{
+		for (const bool secondary : { false, true }) {
+			const auto& owners = gMenuNavigationKeyOwners[secondary ? 1 : 0];
+			for (size_t index = 0; index < owners.size(); ++index)
+				if (owners[index])
+					UpdateMenuNavigationKey(secondary, index, false);
+		}
+		std::fill_n(gPrevPrimaryVRInputStates, kNumVRInputMappings, false);
+		std::fill_n(gPrevSecondaryVRInputStates, kNumVRInputMappings, false);
+	}
+
+	void ObserveRawMenuNavigationReleases(VR& a_vr, bool a_secondary, const vr::VRControllerState_t& a_state)
+	{
+		const auto mappings = GetVRInputMappings(a_secondary);
+		auto& controller = a_secondary ? a_vr.secondaryControllerState : a_vr.primaryControllerState;
+		auto* previous = a_secondary ? gPrevSecondaryVRInputStates : gPrevPrimaryVRInputStates;
+		bool released = false;
+		for (size_t index = 0; index < mappings.size(); ++index) {
+			const auto& mapping = mappings[index];
+			if (!mapping.isKeyEvent ||
+				(a_state.ulButtonPressed & vr::ButtonMaskFromId(static_cast<vr::EVRButtonId>(mapping.keyCode))) != 0)
+				continue;
+			auto& button = controller[mapping.keyCode];
+			if (!button.isPressed && !previous[index])
+				continue;
+			// Other menu hooks can consume releases after CSX has forwarded the press.
+			button.OnEvent(false, Util::GetNowSecs());
+			released = true;
+			if (previous[index])
+				UpdateMenuNavigationKey(a_secondary, index, false);
+		}
+		if (released) {
+			// Re-arm shortcut edges without activating a binding from a polled sample.
+			a_vr.UpdateNeuralRenderingToggleFromInput(false);
+			(void)a_vr.UpdateOverlayMenuStateFromInput(false);
+		}
+	}
+
 	void ObserveRawTriggerReleases(VR& a_vr)
 	{
 		if (std::none_of(gBlockRawTriggerUntilRelease.begin(), gBlockRawTriggerUntilRelease.end(), [](bool blocked) { return blocked; }))
@@ -127,20 +188,8 @@ namespace
 
 	void ResetVRImGuiButtonState()
 	{
+		ResetMenuNavigationKeyState();
 		auto& io = ImGui::GetIO();
-		for (const bool secondary : { false, true }) {
-			const auto mappings = GetVRInputMappings(secondary);
-			const bool* previous = secondary ? gPrevSecondaryVRInputStates : gPrevPrimaryVRInputStates;
-			for (std::size_t index = 0; index < mappings.size(); ++index) {
-				if (previous[index] && mappings[index].isKeyEvent) {
-					io.AddKeyEvent(static_cast<ImGuiKey>(mappings[index].key), false);
-					if (mappings[index].isShift)
-						io.AddKeyEvent(ImGuiMod_Shift, false);
-				}
-			}
-		}
-		std::fill_n(gPrevPrimaryVRInputStates, kNumVRInputMappings, false);
-		std::fill_n(gPrevSecondaryVRInputStates, kNumVRInputMappings, false);
 		for (int button = 0; button < ImGuiMouseButton_COUNT; ++button) {
 			if (gDispatchedWandMouseButtonDown[button] || gVRMouseButtonDown[button])
 				io.AddMouseButtonEvent(button, false);
@@ -213,6 +262,7 @@ namespace
 			vr::VRControllerState_t state{};
 			if (index < poses.size() && poses[index].bPoseIsValid && poses[index].bDeviceIsConnected &&
 				Util::TryGetRuntimeControllerState(index, state)) {
+				ObserveRawMenuNavigationReleases(a_vr, hand == ControllerDevice::Secondary, state);
 				// Skyrim's thumbstick/trackpad is OpenVR axis 0; queued events may omit its neutral state.
 				const auto& axis = state.rAxis[0];
 				if (std::isfinite(axis.x) && std::isfinite(axis.y) && std::abs(axis.x) <= 1.0f && std::abs(axis.y) <= 1.0f)
@@ -485,9 +535,7 @@ void VR::ProcessVRButtonEvent(const Menu::KeyEvent& event)
 			}
 			if (curr != prevStates[i]) {
 				if (mappings[i].isKeyEvent) {
-					if (mappings[i].isShift)
-						io.AddKeyEvent(ImGuiMod_Shift, curr);
-					io.AddKeyEvent(static_cast<ImGuiKey>(mappings[i].key), curr);
+					UpdateMenuNavigationKey(isSecondary, i, curr);
 				} else if (mappings[i].logicalButton >= 0 && mappings[i].logicalButton < ImGuiMouseButton_COUNT) {
 					const int logicalButton = mappings[i].logicalButton;
 					const bool useWandPointing = !testMode && CanUseWandPointing();

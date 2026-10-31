@@ -41,8 +41,11 @@ namespace vr
 		VRCompositorError_None,
 		VRCompositorError_RequestFailed
 	};
-	constexpr uint32_t k_EButton_SteamVR_Trigger = 33;
-	constexpr uint64_t ButtonMaskFromId(uint32_t button) { return uint64_t{ 1 } << button; }
+	enum EVRButtonId
+	{
+		k_EButton_SteamVR_Trigger = 33
+	};
+	constexpr uint64_t ButtonMaskFromId(EVRButtonId button) { return uint64_t{ 1 } << button; }
 	struct TrackedDevicePose_t
 	{
 		bool bPoseIsValid = true, bDeviceIsConnected = true;
@@ -152,8 +155,12 @@ namespace RE
 	{
 		struct Keys
 		{
-			static constexpr size_t kTrigger = 0;
-			static constexpr size_t kGrip = 1;
+			static constexpr uint32_t kTrigger = 33;
+			static constexpr uint32_t kGrip = 2;
+			static constexpr uint32_t kBY = 1;
+			static constexpr uint32_t kXA = 7;
+			static constexpr uint32_t kJoystickTrigger = 32;
+			static constexpr uint32_t kTouchpadClick = 35;
 		};
 		static bool IsLeftHandedMode() { return Runtime::leftHanded; }
 		static bool IsPrimaryController(size_t device) { return device == Runtime::PhysicalHand(0); }
@@ -175,14 +182,32 @@ namespace RE
 			bool isPressed = false;
 			void OnEvent(bool pressed, double) { isPressed = pressed; }
 		};
-		std::array<Button, 2> buttons{};
+		std::array<Button, 64> buttons{};
 		Button& operator[](size_t key) { return buttons.at(key); }
 		const Button& operator[](size_t key) const { return buttons.at(key); }
 	};
+	struct ButtonMapping
+	{
+		uint32_t keyCode;
+		int logicalButton;
+		bool isKeyEvent;
+		int key;
+		bool isShift;
+	};
 }
 
+constexpr int VK_TAB = 0x09;
+constexpr int VK_RETURN = 0x0D;
 namespace Util
 {
+	namespace Input
+	{
+		ImGuiKey VirtualKeyToImGuiKey(int key)
+		{
+			Require(key == VK_TAB || key == VK_RETURN, "navigation mappings must use Tab or Enter");
+			return key == VK_TAB ? ImGuiKey_Tab : ImGuiKey_Enter;
+		}
+	}
 	double GetNowSecs() { return 0.0; }
 #include "ui_vr_runtime_state.h"
 	vr::TrackedDeviceIndex_t GetControllerIndexForDevice(ControllerDevice role, bool leftHanded)
@@ -230,6 +255,18 @@ struct VR
 	bool ocuPointerAvailable = false;
 	bool customVRCursorVisible = false;
 	ImVec2 customVRCursorPos{};
+	unsigned shortcutLatchUpdates = 0;
+	void UpdateNeuralRenderingToggleFromInput(bool allowActivation)
+	{
+		Require(!allowActivation, "physical release recovery must not activate a neural-rendering shortcut");
+		++shortcutLatchUpdates;
+	}
+	bool UpdateOverlayMenuStateFromInput(bool allowActivation)
+	{
+		Require(!allowActivation, "physical release recovery must not activate a menu shortcut");
+		++shortcutLatchUpdates;
+		return false;
+	}
 	void ReleaseOCUPointerState() {}
 	void ReleaseMenuImGuiInputState();
 	void PollThumbstickInput();
@@ -243,25 +280,21 @@ namespace
 #include "ui_vr_cursor_delta.h"
 #include "ui_vr_scroll_types.h"
 	std::unordered_map<size_t, ScrollAccum> gVRScrollAccums;
-#include "ui_vr_scroll_refresh.h"
 	bool gWandActivationPending = false;
 	bool gHasOCUPointerInputSource = false;
 	bool gUsingOCUPointerInput = false;
 	bool gHasLastMenuNavigationMode = false;
 	bool gLastMenuNavigationUsesWand = false;
 	std::array<bool, 2> gBlockRawTriggerUntilRelease{};
-	bool gPrevPrimaryVRInputStates[2]{};
-	bool gPrevSecondaryVRInputStates[2]{};
+	constexpr size_t kNumVRInputMappings = 6;
+	bool gPrevPrimaryVRInputStates[kNumVRInputMappings]{};
+	bool gPrevSecondaryVRInputStates[kNumVRInputMappings]{};
+	std::array<std::array<bool, kNumVRInputMappings>, 2> gMenuNavigationKeyOwners{};
+#include "ui_vr_input_mappings.h"
+#include "ui_vr_navigation_release.h"
+#include "ui_vr_scroll_refresh.h"
 #include "ui_vr_trigger_release.h"
-	struct Mapping
-	{
-		size_t keyCode;
-	};
-	std::array<Mapping, 2> GetVRInputMappings(bool)
-	{
-		return { Mapping{ 0 }, Mapping{ 1 } };
-	}
-	void CancelWandMouseInput(VR&) {}
+	void CancelWandMouseInput(VR&) { ResetMenuNavigationKeyState(); }
 	void ResetCursorOwnershipState() {}
 }
 
@@ -285,6 +318,7 @@ struct ScrollFixture
 	ScrollFixture(bool mouse, size_t role, bool trickle, bool leftHanded) : hand(role), mouseNavigation(mouse)
 	{
 		Runtime::Reset(leftHanded);
+		ResetMenuNavigationKeyState();
 		gVRScrollAccums.clear();
 		auto& io = ImGui::GetIO();
 		io.IniFilename = nullptr;
@@ -425,6 +459,148 @@ static void CheckLostEvents(ScrollFixture& f)
 	f.Frame();
 }
 
+static void CheckSwallowedNavigationRelease(ScrollFixture& f)
+{
+	const auto mappings = GetVRInputMappings(f.hand == 1);
+	for (size_t mappingIndex = 0; mappingIndex < mappings.size(); ++mappingIndex) {
+		const auto mapping = mappings[mappingIndex];
+		if (!mapping.isKeyEvent)
+			continue;
+		const auto key = static_cast<ImGuiKey>(mapping.key);
+		auto& button = f.Controller()[mapping.keyCode];
+		auto* previous = f.hand == 0 ? gPrevPrimaryVRInputStates : gPrevSecondaryVRInputStates;
+		const auto index = Runtime::indices[Runtime::PhysicalHand(f.hand)];
+		auto& raw = Runtime::system.states[index];
+		button.OnEvent(true, 0);
+		UpdateMenuNavigationKey(f.hand == 1, mappingIndex, true);
+		raw.ulButtonPressed |= vr::ButtonMaskFromId(static_cast<vr::EVRButtonId>(mapping.keyCode));
+		f.Frames(2);
+		Require(ImGui::IsKeyDown(key), "a physically held navigation button must remain down");
+
+		// Another input hook consumes the release; only the physical snapshot changes.
+		const auto previousLatchUpdates = f.vr.shortcutLatchUpdates;
+		raw.ulButtonPressed = 0;
+		f.Frames(3);
+		Require(!ImGui::IsKeyDown(key) && !button.isPressed && !previous[mappingIndex],
+			"a swallowed controller release must not leave ImGui navigation repeating");
+		Require(f.vr.shortcutLatchUpdates == previousLatchUpdates + 2,
+			"a recovered release must also reconcile shortcut latches without activating them");
+		if (key == ImGuiKey_Tab && f.hand == 1)
+			Require(!ImGui::GetIO().KeyShift, "a swallowed secondary B/Y release must clear its navigation modifier");
+		const auto stoppedAt = f.body->Scroll;
+		f.Frames(90);
+		Require(f.body->Scroll.x == stoppedAt.x && f.body->Scroll.y == stoppedAt.y,
+			"controller handoff must not keep scrolling through repeated navigation");
+	}
+}
+
+static void CheckNavigationReleaseOwnership(ScrollFixture& f)
+{
+	const auto rawIndex = Runtime::indices[Runtime::PhysicalHand(f.hand)];
+	const auto peerIndex = Runtime::indices[Runtime::PhysicalHand(1 - f.hand)];
+	const auto mappings = GetVRInputMappings(f.hand == 1);
+	for (size_t mappingIndex = 0; mappingIndex < mappings.size(); ++mappingIndex) {
+		const auto mapping = mappings[mappingIndex];
+		if (!mapping.isKeyEvent)
+			continue;
+		const auto key = static_cast<ImGuiKey>(mapping.key);
+		const auto mask = vr::ButtonMaskFromId(static_cast<vr::EVRButtonId>(mapping.keyCode));
+		auto& peer = f.hand == 0 ? f.vr.secondaryControllerState : f.vr.primaryControllerState;
+		for (bool swallowed : { false, true }) {
+			f.Controller()[mapping.keyCode].OnEvent(true, 0);
+			peer[mapping.keyCode].OnEvent(true, 0);
+			Runtime::system.states[rawIndex].ulButtonPressed = mask;
+			Runtime::system.states[peerIndex].ulButtonPressed = mask;
+			UpdateMenuNavigationKey(f.hand == 1, mappingIndex, true);
+			UpdateMenuNavigationKey(f.hand == 0, mappingIndex, true);
+			f.Frames(2);
+			Runtime::system.states[rawIndex].ulButtonPressed = 0;
+			if (!swallowed) {
+				f.Controller()[mapping.keyCode].OnEvent(false, 0);
+				UpdateMenuNavigationKey(f.hand == 1, mappingIndex, false);
+			}
+			f.Frames(3);
+			Require(ImGui::IsKeyDown(key), "releasing one hand must preserve the other hand's held navigation key");
+			Runtime::system.states[peerIndex].ulButtonPressed = 0;
+			f.Frames(3);
+			Require(!ImGui::IsKeyDown(key) && !ImGui::GetIO().KeyShift, "the last navigation owner must release the shared key and modifier");
+		}
+
+		f.Controller()[mapping.keyCode].OnEvent(true, 0);
+		UpdateMenuNavigationKey(f.hand == 1, mappingIndex, true);
+		Runtime::system.readable[rawIndex] = false;
+		f.Frames(2);
+		Require(ImGui::IsKeyDown(key) && f.Controller()[mapping.keyCode].isPressed, "failed physical reads must not infer a navigation release");
+		Runtime::system.readable[rawIndex] = true;
+		f.Frames(3);
+		Require(!ImGui::IsKeyDown(key), "a verified neutral sample must recover navigation after an unavailable read");
+
+		f.Controller()[mapping.keyCode].OnEvent(true, 0);
+		peer[mapping.keyCode].OnEvent(true, 0);
+		Runtime::system.states[peerIndex].ulButtonPressed = mask;
+		f.vr.ReleaseMenuImGuiInputState();
+		f.Frames(3);
+		Require(!ImGui::IsKeyDown(key), "a peer button held during gameplay must not become a UI press during release recovery");
+		Runtime::system.states[peerIndex].ulButtonPressed = 0;
+		f.Frames(3);
+
+		f.Controller()[mapping.keyCode].OnEvent(true, 0);
+		Runtime::system.states[rawIndex].ulButtonPressed = mask;
+		UpdateMenuNavigationKey(f.hand == 1, mappingIndex, true);
+		f.Frames(2);
+		CancelWandMouseInput(f.vr);
+		f.Frames(3);
+		Require(!ImGui::IsKeyDown(key) && !ImGui::GetIO().KeyShift && !gMenuNavigationKeyOwners[f.hand][mappingIndex],
+			"navigation reset must release owned keys and modifiers without polling a new press");
+		Runtime::system.states[rawIndex].ulButtonPressed = 0;
+		f.Frames(3);
+	}
+}
+
+static void CheckUnownedNavigationRelease(ScrollFixture& f)
+{
+	enum class ReleasePath
+	{
+		PhysicalPoll,
+		QueuedEvent,
+		Reset
+	};
+	const auto mappings = GetVRInputMappings(f.hand == 1);
+	auto& raw = Runtime::system.states[Runtime::indices[Runtime::PhysicalHand(f.hand)]];
+	for (size_t index = 0; index < mappings.size(); ++index) {
+		const auto mapping = mappings[index];
+		if (!mapping.isKeyEvent)
+			continue;
+		const auto key = static_cast<ImGuiKey>(mapping.key);
+		for (auto path : { ReleasePath::PhysicalPoll, ReleasePath::QueuedEvent, ReleasePath::Reset }) {
+			f.Controller()[mapping.keyCode].OnEvent(true, 0);
+			raw.ulButtonPressed = vr::ButtonMaskFromId(static_cast<vr::EVRButtonId>(mapping.keyCode));
+			f.vr.ReleaseMenuImGuiInputState();
+			f.Frames(3);
+			auto& io = ImGui::GetIO();
+			io.AddKeyEvent(ImGuiMod_Shift, true);
+			io.AddKeyEvent(key, true);
+			f.Frames(2);
+			if (path == ReleasePath::Reset) {
+				CancelWandMouseInput(f.vr);
+			} else {
+				raw.ulButtonPressed = 0;
+				if (path == ReleasePath::QueuedEvent) {
+					f.Controller()[mapping.keyCode].OnEvent(false, 0);
+					UpdateMenuNavigationKey(f.hand == 1, index, false);
+				}
+			}
+			f.Frames(3);
+			Require(ImGui::IsKeyDown(key) && io.KeyShift,
+				"releasing an unowned gameplay button must preserve desktop keys and modifiers");
+			raw.ulButtonPressed = 0;
+			io.AddKeyEvent(key, false);
+			io.AddKeyEvent(ImGuiMod_Shift, false);
+			f.Frames(3);
+		}
+	}
+}
+
 static void CheckPartialSteps(ScrollFixture& f)
 {
 	f.Stick(0, -.75f);
@@ -559,8 +735,8 @@ static void CheckTriggerReleaseReads(bool leftHanded)
 	Require(!gBlockRawTriggerUntilRelease[1] && !gPrevSecondaryVRInputStates[0] &&
 				gPrevPrimaryVRInputStates[1] && gPrevSecondaryVRInputStates[1],
 		"trigger release must preserve other held menu buttons");
-	Require(!vrFeature.primaryControllerState.buttons[0].isPressed && !vrFeature.secondaryControllerState.buttons[0].isPressed &&
-				vrFeature.primaryControllerState.buttons[1].isPressed && vrFeature.secondaryControllerState.buttons[1].isPressed,
+	Require(!vrFeature.primaryControllerState[RE::BSOpenVRControllerDevice::Keys::kTrigger].isPressed && !vrFeature.secondaryControllerState[RE::BSOpenVRControllerDevice::Keys::kTrigger].isPressed &&
+				vrFeature.primaryControllerState[RE::BSOpenVRControllerDevice::Keys::kGrip].isPressed && vrFeature.secondaryControllerState[RE::BSOpenVRControllerDevice::Keys::kGrip].isPressed,
 		"observed releases must also clear cached triggers without changing unrelated buttons");
 	const auto readsAfterRelease = Runtime::system.reads + Runtime::compositor.reads;
 	ObserveRawTriggerReleases(vrFeature);
@@ -568,7 +744,7 @@ static void CheckTriggerReleaseReads(bool leftHanded)
 
 	for (int failure = 0; failure < 17; ++failure) {
 		Runtime::Reset(leftHanded);
-		vrFeature.primaryControllerState.buttons[0].isPressed = true;
+		vrFeature.primaryControllerState[RE::BSOpenVRControllerDevice::Keys::kTrigger].isPressed = true;
 		vrFeature.ReleaseMenuImGuiInputState();
 		gBlockRawTriggerUntilRelease[1] = false;
 		switch (failure) {
@@ -725,6 +901,9 @@ int main()
 						CheckLostEvents(fixture);
 						CheckPartialSteps(fixture);
 						CheckUnavailableInput(fixture);
+						CheckSwallowedNavigationRelease(fixture);
+						CheckNavigationReleaseOwnership(fixture);
+						CheckUnownedNavigationRelease(fixture);
 					}
 		std::cout << "VR menu scrolling passed (16 navigation/hand/queue/handedness combinations)\n";
 		return 0;

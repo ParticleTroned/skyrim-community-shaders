@@ -1,6 +1,7 @@
 #include <cassert>
 #include <cstdint>
 
+#include "Features/MeshBlendingLandscapePolicy.h"
 #include "Features/MeshBlendingPolicy.h"
 
 namespace RE

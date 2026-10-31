@@ -975,13 +975,21 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "TerrainBlending/TerrainBlending.hlsli"
 #	endif
 
-#	if defined(MESH_BLENDING) && !defined(LOD) && !defined(LODLANDSCAPE) && !defined(LANDSCAPE) && \
-		defined(MULTI_INDEX) && defined(PROJECTED_UV) && defined(SPARKLE) &&                        \
-		!defined(BACK_LIGHTING) && !defined(DO_ALPHA_TEST)
+#	if defined(MESH_BLENDING) && !defined(LOD) && !defined(LODLANDSCAPE) &&                                 \
+		(defined(LANDSCAPE) ||                                                                               \
+			(defined(MULTI_INDEX) && defined(PROJECTED_UV) && defined(SPARKLE) && !defined(BACK_LIGHTING) && \
+				!defined(DO_ALPHA_TEST)))
 #		include "MeshBlending/MeshBlending.hlsli"
-#		define MESH_BLENDING_PROJECTED_SNOW_AVAILABLE
+// Borrowed seam layers have no six-layer material classification.
+#		if defined(LANDSCAPE) && !defined(LANDSCAPE_SEAMS)
+#			define MESH_BLENDING_LANDSCAPE_AVAILABLE
+#		endif
+#		if defined(MULTI_INDEX) && defined(PROJECTED_UV) && defined(SPARKLE) && !defined(BACK_LIGHTING) && \
+			!defined(DO_ALPHA_TEST)
+#			define MESH_BLENDING_PROJECTED_SNOW_AVAILABLE
+#		endif
 #	elif defined(MESH_BLENDING) &&                                                                                     \
-		!defined(LOD) && !defined(LODLANDSCAPE) && !defined(LANDSCAPE) &&                                               \
+		!defined(LOD) && !defined(LODLANDSCAPE) &&                                                                      \
 		!defined(SKIN) && !defined(SKINNED) && !defined(HAIR) && !defined(EYE) && !defined(TREE_ANIM) &&                \
 		!defined(FACEGEN) && !defined(FACEGEN_RGB_TINT) && !defined(PROJECTED_UV) && !defined(DEPTH_WRITE_DECALS) &&    \
 		!defined(ENVMAP) &&                                                                                             \
@@ -2467,6 +2475,27 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		input.LandBlendWeights2.xy /= totalWeight;
 	}
 
+#		if defined(MESH_BLENDING_LANDSCAPE_AVAILABLE)
+	// POM and height blending consume the material policy once; shadow bases,
+	// probes and final material sampling then share the resulting weights.
+	bool meshBlendingLandscapeWeightsChanged = false;
+	[branch] if (SharedData::meshBlendingSettings.EnableLandscapeBlending != 0u &&
+				 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::MeshBlendingLandscapeClasses) != 0u)
+	{
+		float4 meshBlendingLandscapeWeights1 = input.LandBlendWeights1;
+		float2 meshBlendingLandscapeWeights2 = input.LandBlendWeights2.xy;
+		meshBlendingLandscapeWeightsChanged = MeshBlending::RemapLandscapeWeights(
+			meshBlendingLandscapeWeights1,
+			meshBlendingLandscapeWeights2,
+			Permutation::ExtraFeatureDescriptor,
+			SharedData::meshBlendingSettings.LandscapeBlendStrength);
+		if (meshBlendingLandscapeWeightsChanged) {
+			input.LandBlendWeights1 = meshBlendingLandscapeWeights1;
+			input.LandBlendWeights2.xy = meshBlendingLandscapeWeights2;
+		}
+	}
+#		endif
+
 	float3 blendedRGB = 0;
 	float blendedAlpha = 0;
 	float3 blendedNormalRGB = 0;
@@ -2549,6 +2578,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #		endif  // EMAT
 
+#		if defined(MESH_BLENDING_LANDSCAPE_AVAILABLE)
+#			if !defined(TRUE_PBR)
+	// Height blending may further change the policy-adjusted material mix.
+	if (meshBlendingLandscapeWeightsChanged) {
+		shininess = dot(input.LandBlendWeights1, LandscapeTexture1to4IsSpecPower) +
+		            dot(input.LandBlendWeights2.xy, LandscapeTexture5to6IsSpecPower.xy);
+	}
+#			endif
+#		endif
 #	endif  // LANDSCAPE
 
 #	if defined(SPARKLE)

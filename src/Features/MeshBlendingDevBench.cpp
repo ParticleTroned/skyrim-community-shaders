@@ -43,6 +43,7 @@ json MeshBlending::ControlDevBench(const json& a_request)
 	}
 	if (a_request.value("resetDiagnostics", false)) {
 		diagnostics = {};
+		landscape.ResetDiagnostics();
 	}
 	json rejections = json::object();
 	for (std::size_t index = 1u; index < diagnostics.rejections.size(); ++index)
@@ -51,8 +52,26 @@ json MeshBlending::ControlDevBench(const json& a_request)
 	{
 		std::scoped_lock lock(discoveryMutex);
 		discovery = { { "recordedIdentities", discoveredRuleKeys.size() },
-			{ "repeatedObservations", discoveryDuplicateObservations }, { "droppedIdentities", discoveryDropped } };
+			{ "repeatedObservations", discoveryDuplicateObservations }, { "droppedIdentities", discoveryDropped },
+			{ "recordedLandscapeIdentities", discoveredLandscapeIdentities.size() },
+			{ "repeatedLandscapeObservations", landscapeDiscoveryDuplicateObservations }, { "droppedLandscapeIdentities", landscapeDiscoveryDropped } };
 	}
+	const auto land = landscape.GetDiagnostics();
+	json captureRejects = json::object();
+	json drawRejects = json::object();
+	for (std::size_t reason = 1u; reason < MeshBlendingLandscape::RejectionNames.size(); ++reason) {
+		const auto name = std::string(MeshBlendingLandscape::RejectionNames[reason]);
+		captureRejects[name] = land.captureRejects[reason];
+		drawRejects[name] = land.drawRejects[reason];
+	}
+
+	const auto rejectionDetail = [](const MeshBlendingLandscape::RejectionDetail& detail) {
+		return json{
+			{ "reason", MeshBlendingLandscape::RejectionNames[static_cast<std::size_t>(detail.reason)] },
+			{ "quadrant", detail.quadrant }, { "layer", detail.layer },
+			{ "expectedTexture", detail.expectedTexture }, { "boundTexture", detail.boundTexture }
+		};
+	};
 
 	return {
 		{ "available", loaded },
@@ -63,24 +82,23 @@ json MeshBlending::ControlDevBench(const json& a_request)
 		{ "ruleFileError", ruleFileLoadError },
 		{ "discoveryCapture", IsDiscoveryCaptureActive() },
 		{ "diagnosticsEnabled", globals::state && globals::state->IsDeveloperMode() },
-		{ "rejections", std::move(rejections) },
-		{ "discovery", std::move(discovery) },
-		{ "diagnostics", { { "frame", diagnostics.currentFrame },
-							 { "drawCalls", diagnostics.drawCalls },
-							 { "eligibleSources", diagnostics.eligibleSources },
-							 { "classificationAccepts", diagnostics.classificationAccepts },
-							 { "activeDraws", diagnostics.activeDraws },
-							 { "projectedSnowCandidates", diagnostics.projectedSnowCandidates },
-							 { "projectedSnowActiveDraws", diagnostics.projectedSnowActiveDraws },
-							 { "sourceRejects", diagnostics.sourceRejects },
-							 { "scopeRejects", diagnostics.scopeRejects },
-							 { "distanceRejects", diagnostics.distanceRejects },
-							 { "cacheHits", diagnostics.cacheHits },
-							 { "cacheMisses", diagnostics.cacheMisses },
-							 { "cacheEvictions", diagnostics.cacheEvictions },
-							 { "rootTraversals", diagnostics.rootTraversals },
-							 { "nodesVisited", diagnostics.nodesVisited },
-							 { "traversalLimitRejects", diagnostics.traversalLimitRejects } } }
+		{ "landscapeDiagnostics", {
+									  { "maximumSupportedLayers", CSX::MeshBlendingLandscapePolicy::LayerCount },
+									  { "landscapeSeams", "wholeGeometryBypass" },
+									  { "captureAttempts", land.captureAttempts },
+									  { "captureSuccesses", land.captureSuccesses },
+									  { "drawAttempts", land.drawAttempts },
+									  { "drawSuccesses", land.drawSuccesses },
+									  { "unknownLayerDraws", land.unknownLayerDraws },
+									  { "rejectedPairDraws", land.rejectedPairDraws },
+									  { "zeroClassDraws", land.zeroClassDraws },
+									  { "seamBypasses", land.seamBypasses },
+									  { "captureRejects", std::move(captureRejects) },
+									  { "drawRejects", std::move(drawRejects) },
+									  { "lastCaptureRejection", rejectionDetail(land.lastCaptureRejection) },
+									  { "lastDrawRejection", rejectionDetail(land.lastDrawRejection) },
+								  } },
+		{ "rejections", std::move(rejections) }, { "discovery", std::move(discovery) }, { "diagnostics", { { "frame", diagnostics.currentFrame }, { "drawCalls", diagnostics.drawCalls }, { "eligibleSources", diagnostics.eligibleSources }, { "classificationAccepts", diagnostics.classificationAccepts }, { "activeDraws", diagnostics.activeDraws }, { "projectedSnowCandidates", diagnostics.projectedSnowCandidates }, { "projectedSnowActiveDraws", diagnostics.projectedSnowActiveDraws }, { "sourceRejects", diagnostics.sourceRejects }, { "scopeRejects", diagnostics.scopeRejects }, { "distanceRejects", diagnostics.distanceRejects }, { "cacheHits", diagnostics.cacheHits }, { "cacheMisses", diagnostics.cacheMisses }, { "cacheEvictions", diagnostics.cacheEvictions }, { "rootTraversals", diagnostics.rootTraversals }, { "nodesVisited", diagnostics.nodesVisited }, { "traversalLimitRejects", diagnostics.traversalLimitRejects }, { "landscapeRegistryHits", diagnostics.landscapeRegistryHits }, { "landscapeRegistryMisses", diagnostics.landscapeRegistryMisses } } }
 	};
 }
 

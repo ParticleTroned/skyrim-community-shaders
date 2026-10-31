@@ -6,6 +6,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <stdexcept>
 #include <type_traits>
@@ -197,6 +198,7 @@ struct MeshBlending
 	std::uint32_t classificationLogs = 0u;
 	std::mutex discoveryMutex;
 	std::set<std::pair<std::string, std::string>> discoveredRuleKeys;
+	std::map<std::string, int> discoveredLandscapeIdentities;
 	std::atomic_bool discoveryCaptureEnabled = true;
 	bool receiverFound = true, traversalCapped = false;
 	bool runtimeEnabled = true, overlayPolicyEnabled = true, insideDistance = true;

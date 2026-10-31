@@ -64,4 +64,8 @@ int main()
 	assert(status.at("properties").at("settings") == schema.at("properties").at("settings"));
 	assert(status.at("properties").at("persisted").at("const") == false);
 	assert(status.at("properties").at("diagnostics").at("additionalProperties").at("minimum") == 0);
+	const auto& landscape = status.at("properties").at("landscapeDiagnostics").at("properties");
+	assert(landscape.at("maximumSupportedLayers").at("const") == 6);
+	assert(landscape.at("landscapeSeams").at("const") == "wholeGeometryBypass");
+	assert(landscape.at("lastCaptureRejection").at("properties").at("expectedTexture").at("maxLength") == 512);
 }

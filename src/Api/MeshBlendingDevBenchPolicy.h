@@ -32,10 +32,12 @@ namespace CSX::Api::MeshBlendingDevBench
 		{ "NifEnabled", ValueKind::Toggle, 0, 1 },
 		{ "ProjectedSnowEnabled", ValueKind::Toggle, 0, 1 },
 		{ "BlendStrength", ValueKind::Number, 0, 1 },
+		{ "LandscapeBlendStrength", ValueKind::Number, 0, 1 },
 		{ "BlendWidth", ValueKind::Number, 0.01, 256 },
 		{ "DepthBias", ValueKind::Number, 0, 128 },
 		{ "MaximumGap", ValueKind::Number, 0.01, 4096 },
 		{ "ProjectedSnowEdgeWidth", ValueKind::Number, 0, 16 },
+		{ "LandscapeLayerBlending", ValueKind::Toggle, 0, 1 },
 		{ "DetectionMode", ValueKind::Integer, 0, 2 },
 		{ "MaximumDistance", ValueKind::Number, 0, 65536 },
 		{ "BoundsExpansion", ValueKind::Number, 0, 1024 },
@@ -96,9 +98,37 @@ namespace CSX::Api::MeshBlendingDevBench
 			{ "additionalProperties", false },
 			{ "properties", { { "settings", { { "type", "object" }, { "additionalProperties", false }, { "properties", std::move(properties) },
 												{ "description", "Partial session settings; omitted values are preserved. MaximumGap is raised to at least DepthBias + BlendWidth. The response reports sanitized effective settings." } } },
-								{ "discoveryCapture", { { "type", "boolean" }, { "description", "Record accepted overlay model/node identities independently of Automatic blending. Session-only and bounded; does not write the rule file." } } },
+								{ "discoveryCapture", { { "type", "boolean" }, { "description", "Record bounded accepted NIF/snow overlay identities, newly loaded LTEX records, and valid resident LAND snapshots observed on draws. Works with blending disabled and does not write the rule file; observations do not guarantee render eligibility. If an earlier LAND capture failed, start recording before reloading or re-entering that cell." } } },
 								{ "resetDiagnostics", { { "type", "boolean" }, { "description", "Reset Mesh Blending diagnostic counters for a new observation." } } } } }
 		};
+	}
+
+	/** Capture failures, draw validation, and policy outcomes have independent counts. */
+	inline nlohmann::json LandscapeDiagnosticsSchema()
+	{
+		using json = nlohmann::json;
+		const json counter{ { "type", "integer" }, { "minimum", 0 } };
+		json properties = json::object();
+		for (const auto* name : { "captureAttempts", "captureSuccesses", "drawAttempts", "drawSuccesses",
+				 "unknownLayerDraws", "rejectedPairDraws", "zeroClassDraws", "seamBypasses" })
+			properties[name] = counter;
+		properties["maximumSupportedLayers"] = { { "type", "integer" }, { "const", 6 } };
+		properties["landscapeSeams"] = { { "type", "string" }, { "const", "wholeGeometryBypass" },
+			{ "description", "The Landscape Seam Blending permutation bypasses LAND material blending for the entire geometry, including non-seam pixels." } };
+		properties["captureRejects"] = properties["drawRejects"] = { { "type", "object" }, { "additionalProperties", counter } };
+		properties["lastCaptureRejection"] = properties["lastDrawRejection"] = {
+			{ "type", "object" },
+			{ "additionalProperties", false },
+			{ "properties", {
+								{ "reason", { { "type", "string" } } },
+								{ "quadrant", { { "type", "integer" }, { "minimum", 0 }, { "maximum", 4 }, { "description", "Zero-based quadrant; 4 means not applicable." } } },
+								{ "layer", { { "type", "integer" }, { "minimum", 0 }, { "maximum", 6 }, { "description", "Zero-based layer; 6 means not applicable." } } },
+								{ "expectedTexture", { { "type", "string" }, { "maxLength", 512 } } },
+								{ "boundTexture", { { "type", "string" }, { "maxLength", 512 } } },
+							} },
+		};
+		return { { "type", "object" }, { "additionalProperties", false }, { "properties", std::move(properties) },
+			{ "description", "Bounded LAND developer diagnostics. Unknown-layer counts do not establish which layers affect a pixel; shader weights determine the final result." } };
 	}
 
 	/** Describe readback separately from other feature actions' settings objects. */
@@ -116,7 +146,8 @@ namespace CSX::Api::MeshBlendingDevBench
 								{ "discoveryCapture", { { "type", "boolean" } } },
 								{ "diagnosticsEnabled", { { "type", "boolean" } } },
 								{ "rejections", { { "type", "object" }, { "description", "First failed admission gate per observed draw; cached rejections retain their reason. Counters require global Debug mode." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } },
-								{ "discovery", { { "type", "object" }, { "description", "Recorded unique identities, repeated observations and dropped identities. Recording is separate from Automatic mode and diagnostic resets." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } },
+								{ "discovery", { { "type", "object" }, { "description", "Recorded unique identities, repeated observations and dropped identities for NIF/snow overlays; corresponding Landscape fields count LTEX records. Recording is separate from Automatic mode and diagnostic resets." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } },
+								{ "landscapeDiagnostics", LandscapeDiagnosticsSchema() },
 								{ "diagnostics", { { "type", "object" }, { "description", "Draw observations while blending or recording is enabled: drawCalls precedes scope/source checks; eligibleSources passes overlay render-state checks; classificationAccepts passes ownership/rules/receiver checks; activeDraws receives the shader descriptor. projectedSnowCandidates includes unsupported projected material families; projectedSnowActiveDraws counts accepted multi-index alpha snow overlays. Counts are not unique meshes or proof of visible pixel blending." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } } } }
 		};
 	}

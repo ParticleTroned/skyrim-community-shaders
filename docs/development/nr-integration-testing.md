@@ -20,10 +20,10 @@ The integration merges these branch heads in the same order as their upstream PR
 
 | Order | Implementation | Feature branch | Included head |
 | --- | --- | --- | --- |
-| 1 | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053) | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031) | `d46caeeb0f8a65900c4929acd9a47e1a6fdb5811` |
-| 2 | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054) | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `3d92d13db16351f3382b6959d0845143e6155f5f` |
+| 1 | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053) | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031) | `78168211e93f8e8172dc98346e3f4fba9b0408fd` |
+| 2 | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054) | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `d6cc796de3b9f093763daf9d053c21ef813818e7` |
 | 3 | [Pause NR during combat (#1055)](https://github.com/alandtse/open-shaders/pull/1055) | [Combat pause](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-combat-pause-20261031) | `ae0420524922d658d023b6417761677f55a584fc` |
-| 4 | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031) | `65e417ce92e7e41c9c0427681f32622f6f9538a3` |
+| 4 | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031) | `2aba84a644f3b72f8d767007b1799428b53bfab8` |
 
 The source commits being ported are, respectively, `edf95c6253b53aa45e541e6c0b5e730457dc2e68`,
 `d7d640ac48553310db01d0a8af6d56e70ffe24c6`,

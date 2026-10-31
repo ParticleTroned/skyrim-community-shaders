@@ -41,6 +41,7 @@
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LightLimitFix/ShadowCulling.h"
+#include "Features/MeshBlending.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/TerrainBlending.h"
@@ -913,6 +914,16 @@ namespace LightingExtensions
 			CharacterCategoryAuthoring::Update(pass);
 			globals::features::terrainVariation.UpdateMeshPermutation(pass);
 
+			auto& meshBlending = globals::features::meshBlending;
+			if (meshBlending.loaded) {
+				meshBlending.PrepareLightingDraw(pass);
+			} else if (auto* state = globals::state) {
+				// PrepareLightingDraw owns per-draw cleanup while loaded. Preserve the
+				// same cleanup when the feature package is removed at runtime.
+				CSX::MeshBlendingPolicy::ClearDrawDescriptor(
+					state->permutationData.ExtraShaderDescriptor);
+			}
+
 			if (globals::game::isVR)
 				CSX::Api::BeginAcceptedDrawGeometry(pass);
 			func(shader, pass, renderFlags);
@@ -1253,7 +1264,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	if (!ShouldRecordCSFramePhaseDiag()) {
 		func(isCompute);
 		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
-		globals::state->Draw();
+		globals::state->Draw(isCompute);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (globals::features::upscaling.IsNeuralRenderingEnabled())
 			NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
@@ -1276,7 +1287,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	RecordCSFrameHookPhase(CSFrameHookPhase::TerrainOnSetDirtyStates, frame, phaseEndTicks - phaseStartTicks);
 
 	phaseStartTicks = phaseEndTicks;
-	globals::state->Draw();
+	globals::state->Draw(isCompute);
 	phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::StateDraw, frame, phaseEndTicks - phaseStartTicks);
 #ifdef DEVBENCH_BRIDGE_ENABLED

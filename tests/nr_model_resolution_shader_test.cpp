@@ -2329,8 +2329,9 @@ int main()
 					for (bool shaped : { false, true })
 						CheckPeripheralAdapter(device.Get(), context.Get(), mixedGuides, shaped, 25, true);
 				CheckPeripheralAdapter(device.Get(), context.Get(), false, true, 25, true, true);
-				if (!AdapterCompiler::guided)
-					CheckPeripheralAdapter(device.Get(), context.Get(), false, false, 100);
+				for (bool mixedGuides : { false, true })
+					for (bool shaped : { false, true })
+						CheckPeripheralAdapter(device.Get(), context.Get(), mixedGuides, shaped, 100);
 				if (AdapterCompiler::guided)
 					CheckGuidedEdges(device.Get(), context.Get(), vr);
 				CheckAdapter(device.Get(), context.Get());

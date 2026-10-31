@@ -19108,7 +19108,7 @@ namespace
 		if (showDebugControls) {
 			Util::Widgets::Checkbox("Improve low-resolution NR", &settings.neuralRenderingGuidedReconstruction);
 			if (auto tooltip = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted("Enabled by default. Automatically use source-colour-guided reconstruction below 100% NR resolution. At 100%, or when unsupported, use bilinear reconstruction when needed. The saved choice applies at every logging level. NR resolution and strength are unchanged.");
+				ImGui::TextUnformatted("Enabled by default. Improve reconstruction when NR resolution or peripheral compression reduces the working image, including compression at 100% NR resolution. Unsupported inputs use bilinear reconstruction. The saved choice applies at every logging level.");
 		}
 		Util::Widgets::Checkbox("Pause NR during combat", &settings.neuralRenderingPauseInCombat);
 		Util::AddTooltip("Enabled by default. Pause NR for both eyes during player combat. Normal upscaling continues. Resume after three continuous seconds of unpaused gameplay out of combat, with fresh history. NR resources stay cached while memory permits.");

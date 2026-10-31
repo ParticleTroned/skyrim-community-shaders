@@ -10,8 +10,6 @@
 
 namespace NeuralRendering
 {
-	inline constexpr std::uint32_t kMaximumGuidedResolutionPercent = kMaximumModelResolutionPercent - 1;
-
 	enum class GuidedReconstructionMode
 	{
 		Basic,
@@ -41,7 +39,7 @@ namespace NeuralRendering
 	/** Qualification is independent for pre-DLSS and final-image reconstruction. */
 	struct GuidedReconstructionQualification
 	{
-		std::uint32_t maximumPercent = kMaximumGuidedResolutionPercent;
+		std::uint32_t maximumPercent = kMaximumModelResolutionPercent;
 		bool beforeUpscaling = true, afterUpscaling = true;
 	};
 	inline constexpr GuidedReconstructionQualification kGuidedReconstructionQualification{};
@@ -54,6 +52,7 @@ namespace NeuralRendering
 		UpscalingDLSS::Extent target{}, unpackedModel{};
 		InsertionPoint insertion = kDefaultInsertionPoint;
 		bool matchedReferenceDomain = false;
+		bool peripheralCompression = false;
 	};
 
 	/** Decide once for the complete transaction from already validated CPU metadata. */
@@ -68,8 +67,13 @@ namespace NeuralRendering
 		for (const auto& input : inputs) {
 			if (!input.enabled)
 				return basic(Disabled);
-			if (!IsValidModelResolutionPercent(input.effectivePercent) || !input.target.IsValid() || !input.unpackedModel.IsValid() ||
-				input.unpackedModel != BuildModelResolutionExtent(input.target.width, input.target.height, input.effectivePercent))
+			if (!IsValidModelResolutionPercent(input.effectivePercent) || !input.target.IsValid() || !input.unpackedModel.IsValid())
+				return basic(InvalidGeometry);
+			const auto ordinaryModel = BuildModelResolutionExtent(input.target.width, input.target.height, input.effectivePercent);
+			// Only an admitted compression plan permits a grid smaller than the uniform NR scale.
+			if (input.peripheralCompression ?
+					(input.unpackedModel.width > ordinaryModel.width || input.unpackedModel.height > ordinaryModel.height || input.unpackedModel == ordinaryModel) :
+					input.unpackedModel != ordinaryModel)
 				return basic(InvalidGeometry);
 			if (input.unpackedModel.width >= input.target.width || input.unpackedModel.height >= input.target.height)
 				return basic(NoReduction);

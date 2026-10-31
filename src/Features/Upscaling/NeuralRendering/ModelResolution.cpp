@@ -1295,10 +1295,9 @@ namespace NeuralRendering
 				}
 				// The outer proxy retains unedited source values even when native colour processing encodes its own copy.
 				guidedInputs[index] = { input.guidedReconstructionEnabled, input.modelResolutionPercent, geometry->sourceSize,
-					geometry->packedCrops.count ? geometry->packedCrops.unpackedExtent : peripheral ? input.peripheralCompression.ordinaryModel :
-																									  geometry->modelSize,
+					geometry->packedCrops.count ? geometry->packedCrops.unpackedExtent : geometry->modelSize,
 					input.insertionPoint,
-					key.colorFormat == key.outputFormat && (key.colorFormat == DXGI_FORMAT_R32G32B32A32_FLOAT || OutputFormat(key.colorFormat) != 0u) };
+					key.colorFormat == key.outputFormat && (key.colorFormat == DXGI_FORMAT_R32G32B32A32_FLOAT || OutputFormat(key.colorFormat) != 0u), peripheral };
 				const auto source = geometry->sourceRegion;
 				const auto model = geometry->modelRegion;
 				work->constants = {

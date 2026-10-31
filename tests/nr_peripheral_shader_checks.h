@@ -152,6 +152,7 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 	base.guideHeight = guides[1];
 	base.viewportCrop = UpscalingDLSS::ViewportCrop::Identity(guides[0], guides[1], source[0], source[1]);
 	base.renderingMode = mixedGuides ? RenderingMode::FullResolution : RenderingMode::ReducedResolution;
+	base.insertionPoint = ResolveInsertionPoint(*base.renderingMode);
 	base.featureUpscaling = mixedGuides;
 	base.reset = true;
 	base.peripheralCompressionPercent = compression;
@@ -351,10 +352,37 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 				}
 			}
 		}
+		if (AdapterCompiler::guided && percent == 100) {
+			auto unsupported = args;
+			unsupported[1].guidedReconstructionEnabled = false;
+			ModelResolution::Batch fallback;
+			const auto attempts = AdapterCompiler::guidedAttempts;
+			Require(adapter.Prepare(unsupported, fallback, result) && fallback.reconstructionDecision.reason == GuidedReconstructionReason::Disabled,
+				"One disabled eye did not retain Basic compression for the pair at full NR resolution");
+			Require(AdapterCompiler::guidedAttempts == attempts, "Disabled guidance compiled an unused shader");
+		}
 		const auto selectionCompilations = AdapterCompiler::ordinarySelectionAttempts;
 		Require(adapter.Prepare(args, batch, result, percent == 30 ? std::span<const ModelResolution::Targets>{} : std::span<const ModelResolution::Targets>(targets)), "Compressed production preparation failed");
+		Require(batch.reconstructionDecision.mode == (AdapterCompiler::guided ? GuidedReconstructionMode::GuidedLowResolution : GuidedReconstructionMode::Basic),
+			"Compression did not select reconstruction from the actual reduced grid");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		for (const auto& eye : batch.arguments) {
+			const auto& evidence = eye.executionContext.modelReconstruction;
+			Require(evidence && eye.executionContext.peripheralCompression && evidence->effectivePercent == percent &&
+						evidence->unpackedModel == eye.executionContext.peripheralCompression->model,
+				"Compression reconstruction evidence lost the actual sampling grid");
+		}
+#endif
 		Require(AdapterCompiler::ordinarySelectionAttempts == selectionCompilations, "Compression compiled an unused ordinary selection shader");
 		Require(bool(batch.sceneConstants) == directScene, "Ordinary selection allocated an unused scene constant buffer");
+		if (AdapterCompiler::guided && percent == 100) {
+			const auto compilations = AdapterCompiler::calls;
+			ModelResolution::Batch warmed;
+			Require(adapter.Prepare(args, warmed, result, targets) && warmed.reconstructionShader == batch.reconstructionShader &&
+						AdapterCompiler::calls == compilations,
+				"Repeated compressed preparation recompiled the guided shader");
+			batch = std::move(warmed);
+		}
 		if (directScene) {
 			ModelResolution::Batch replacement;
 			Require(adapter.Prepare(args, replacement, result, percent == 30 ? std::span<const ModelResolution::Targets>{} : std::span<const ModelResolution::Targets>(targets)),
@@ -430,13 +458,17 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 			}
 		CheckPeripheralResidual(device, context, adapter, batch, args, outputs, colors, prepared, input, masks);
 		stateRestored("reconstruction");
-		if (AdapterCompiler::guided && percent == 67) {
+		if (AdapterCompiler::guided && (percent == 67 || percent == 100)) {
 			adapter.InvalidateShaders();
 			AdapterCompiler::failGuided = true;
 			ModelResolution::Batch fallback;
 			Require(adapter.Prepare(args, fallback, result) && fallback.reconstructionDecision.reason == GuidedReconstructionReason::ShaderUnavailable &&
 						fallback.reconstructionShader == args[0].peripheralShaders.reconstruct,
 				"Optional Guided failure lost the compressed reconstruction fallback");
+			const auto attempts = AdapterCompiler::guidedAttempts;
+			Require(adapter.Prepare(args, fallback, result) && AdapterCompiler::guidedAttempts == attempts &&
+						fallback.reconstructionDecision.reason == GuidedReconstructionReason::ShaderUnavailable,
+				"Failed compressed guidance retried compilation on the next frame");
 			AdapterCompiler::failGuided = false;
 			CheckPeripheralResidual(device, context, adapter, fallback, args, outputs, colors, prepared, input, masks);
 			stateRestored("guided fallback");

@@ -1,4 +1,5 @@
 #include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
+#include "Features/Upscaling/NeuralRendering/PeripheralCompressionPolicy.h"
 
 #include <array>
 #include <stdexcept>
@@ -20,7 +21,7 @@ namespace
 		GuidedReconstructionInput input{ true, 50, { 2001, 1001 }, { 1001, 501 }, InsertionPoint::UpscaledCenter, true };
 		std::array pair{ input, input };
 		const auto reason = [&](GuidedReconstructionInput value) { return SelectGuidedReconstruction(std::span(&value, 1), qualified).reason; };
-		Require(qualified.maximumPercent == 99 && qualified.beforeUpscaling && qualified.afterUpscaling);
+		Require(qualified.maximumPercent == 100 && qualified.beforeUpscaling && qualified.afterUpscaling);
 		Require(SelectGuidedReconstruction(pair).reason == Eligible);
 		Require(SelectGuidedReconstruction(pair, qualified).mode == GuidedReconstructionMode::GuidedLowResolution);
 		for (auto route : { InsertionPoint::UpscaledCenter, InsertionPoint::FinalLdrPreUi }) {
@@ -61,6 +62,50 @@ namespace
 		Require(SelectGuidedReconstruction(pair, { 50, false, true }).reason == Unqualified);
 		pair[0].insertion = pair[1].insertion = InsertionPoint::FinalLdrPreUi;
 		Require(SelectGuidedReconstruction(pair, { 50, false, true }).reason == Eligible);
+	}
+
+	void CheckCompressionPolicy()
+	{
+		using namespace NeuralRendering;
+		using enum GuidedReconstructionReason;
+		constexpr UpscalingDLSS::Extent source{ 1921, 1081 };
+		const auto crop = UpscalingDLSS::ViewportCrop::Identity(source.width, source.height, source.width, source.height);
+		for (bool shaped : { false, true }) {
+			for (auto percent : { 30u, 90u, 99u, 100u }) {
+				const auto geometry = BuildModelResolutionGeometry(crop, source, { 0, 0, source.width, source.height }, percent, source);
+				Require(geometry.has_value());
+				for (auto compression : { 0u, 1u, 25u, 100u }) {
+					const auto plan = BuildPeripheralCompressionPlan(*geometry, source, crop, percent,
+						{ .requested = true, .compressionPercent = compression, .mask = { { 0.47f, 0.53f }, { 0.43f, 0.36f }, shaped } });
+					Require(plan.Active() == (compression != 0));
+					for (auto route : { InsertionPoint::UpscaledCenter, InsertionPoint::FinalLdrPreUi }) {
+						GuidedReconstructionInput input{ true, percent, source, plan.model, route, true, plan.Active() };
+						std::array pair{ input, input };
+						const auto expected = compression == 0 && percent == 100 ? NoReduction : Eligible;
+						Require(SelectGuidedReconstruction(pair).reason == expected);
+						Require(SelectGuidedReconstruction(std::span(&input, 1)).reason == expected);
+						pair[1].enabled = false;
+						if (expected == Eligible)
+							Require(SelectGuidedReconstruction(pair).reason == Disabled);
+					}
+				}
+			}
+		}
+		GuidedReconstructionInput input{ true, 100, source, { 961, 541 }, InsertionPoint::UpscaledCenter, true, true };
+		const auto reason = [&](GuidedReconstructionInput value) { return SelectGuidedReconstruction(std::span(&value, 1)).reason; };
+		Require(reason(input) == Eligible);
+		input.peripheralCompression = false;
+		Require(reason(input) == InvalidGeometry);
+		input.peripheralCompression = true;
+		input.unpackedModel = source;
+		Require(reason(input) == InvalidGeometry);
+		input.unpackedModel = { source.width + 1, source.height / 2 };
+		Require(reason(input) == InvalidGeometry);
+		input.effectivePercent = 50;
+		input.unpackedModel = { 1000, 500 };
+		Require(reason(input) == InvalidGeometry);
+		input.unpackedModel = {};
+		Require(reason(input) == InvalidGeometry);
 	}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -129,6 +174,7 @@ namespace
 int main()
 {
 	CheckPolicy();
+	CheckCompressionPolicy();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	CheckComparison();
 #endif

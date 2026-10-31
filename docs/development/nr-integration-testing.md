@@ -8,6 +8,10 @@ upstream PRs in draft until runtime testing is complete.
 
 ## Build and source
 
+The combined source branch and downloadable Actions artifacts live in
+`ParticleTroned/skyrim-community-shaders`. Only the four independent draft PRs
+target `alandtse/open-shaders:dev`.
+
 - [Integration source](https://github.com/ParticleTroned/skyrim-community-shaders/tree/build/os-dev-nr-integration-20261031)
 - [Integration build runs and artifacts](https://github.com/ParticleTroned/skyrim-community-shaders/actions/workflows/nr-integration-test.yaml)
 

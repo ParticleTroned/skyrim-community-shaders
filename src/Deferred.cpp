@@ -19,6 +19,7 @@
 
 #include "Features/CSEditor.h"
 #include "Features/DynamicCubemaps.h"
+#include "Features/FurShells.h"
 #include "Features/IBL.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
@@ -1035,6 +1036,10 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
 			terrainBlending.RenderTerrainBlendingPasses();
 		}
+
+		auto& fur = globals::features::furShells;
+		if (fur.loaded && fur.settings.Enabled)
+			fur.OnBeforeBlendedDecals();
 
 		const auto& upscaling = globals::features::upscaling;
 		if (deferred && deferred->deferredPass && deferred->IsCharacterCategoryEnabled() && !deferred->IsCharacterCategoryCaptureReady())

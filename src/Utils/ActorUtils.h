@@ -2,6 +2,8 @@
 
 #pragma once
 #include "RE/Skyrim.h"
+#include <functional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -15,6 +17,12 @@ namespace RE
 
 namespace Util
 {
+	/** @brief A Havok or Gamebryo point as the float3 the shaders and constant buffers use. */
+	inline float3 ToFloat3(const RE::NiPoint3& a_point)
+	{
+		return { a_point.x, a_point.y, a_point.z };
+	}
+
 	struct ShapeCollisionCapsule
 	{
 		RE::NiPoint3 pointA, pointB;
@@ -22,6 +30,25 @@ namespace Util
 	};
 	/** @brief Extract a world-space capsule or enclosing sphere; preserve outputs on failure. */
 	bool GetShapeCollisionCapsule(RE::bhkNiCollisionObject* object, ShapeCollisionCapsule& result);
+
+	/**
+	 * @brief Reduces a rigid body's shape to world-space capsules, so each part of a weapon is covered by its own capsule.
+	 * @details A capsule shape is used as it is. Any other shape, such as a box or convex hull, becomes a capsule along the longest
+	 *          side of its bounds in the body's own frame, with the mean of the other two half sides as its radius, so a haft or a
+	 *          blade stays long and thin. A shape list gives one capsule per child, such as one for an axe's haft and one for its
+	 *          head, or a single capsule from the bounding box it keeps when it has more children than a_capsules holds.
+	 * @param a_body Rigid body that is in a physics world.
+	 * @param a_capsules Receives the capsules.
+	 * @return How many entries of a_capsules were filled.
+	 */
+	size_t GetRigidBodyCapsules(RE::bhkRigidBody* a_body, std::span<ShapeCollisionCapsule> a_capsules);
+
+	/** Visits currently loaded actors while each resolved handle is retained. */
+	void ForEachLoadedActor(const std::function<void(RE::Actor*)>& a_callback);
+	/** Visits geometry beneath a loaded scene root. */
+	void ForEachGeometry(RE::NiAVObject* a_root, const std::function<void(RE::BSGeometry*)>& a_callback);
+	/** Visits distinct first- and third-person geometry roots. */
+	void ForEachActorGeometry(RE::Actor* a_actor, const std::function<void(RE::BSGeometry*)>& a_callback);
 
 	/**
      * @brief Extracts a world-space sphere centered on transformed shape geometry.

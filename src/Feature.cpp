@@ -14,6 +14,7 @@
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/FoliageLighting.h"
+#include "Features/FurShells.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/GrassOptimizations.h"
@@ -289,6 +290,7 @@ namespace
 			&globals::features::lodBlending,
 			&globals::features::inverseSquareLighting,
 			&globals::features::hairSpecular,
+			&globals::features::furShells,
 			&globals::features::terrainVariation,
 			&globals::features::ibl,
 			&globals::features::extendedTranslucency,

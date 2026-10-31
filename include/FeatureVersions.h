@@ -18,6 +18,7 @@ namespace FeatureVersions
         {"ExtendedMaterials"sv,    {1,4,1}},
         {"ExtendedTranslucency"sv, {1,0,0}},
         {"FoliageLighting"sv,      {1,0,0}},
+        {"FurShells"sv,            {1,0,0}},
         {"GrassCollision"sv,       {3,0,6}},
         {"GrassLighting"sv,        {2,0,6}},
         {"GrassOptimizations"sv,   {1,1,0}},

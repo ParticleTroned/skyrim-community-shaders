@@ -817,7 +817,7 @@ namespace SIE
 			MTLandLODBlend = 19,
 		};
 
-		enum class LightingShaderFlags
+		enum class LightingShaderFlags : uint32_t
 		{
 			VC = 1 << 0,
 			Skinned = 1 << 1,
@@ -843,7 +843,10 @@ namespace SIE
 			DoAlphaTest = 1 << 20,
 			Snow = 1 << 21,
 			CharacterLight = 1 << 22,
-			AdditionalAlphaMask = 1 << 23
+			AdditionalAlphaMask = 1 << 23,
+			// Fur variants occupy the two bits above the lighting technique field.
+			FurShells = 1u << 30,
+			FurShellsDepth = 1u << 31
 		};
 
 		enum class BloodSplatterShaderTechniques

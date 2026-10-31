@@ -19,6 +19,7 @@
 #include "Utils/VanityCamera.h"
 
 #include "Feature.h"
+#include "Features/FurShells.h"
 #include "Features/GrassLighting.h"
 #include "Globals.h"
 #include "GpuPass.h"
@@ -2115,6 +2116,22 @@ namespace Hooks
 	}
 #endif
 
+	static void DrawFeatureRenderPass(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags, void (*a_draw)(RE::BSRenderPass*, uint32_t, bool, uint32_t))
+	{
+		auto draw = [&] {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			ProfileGrassRenderPass(a_pass, [&] { globals::features::grassOptimizations.GetRenderer().DrawRenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, a_draw); });
+#else
+			globals::features::grassOptimizations.GetRenderer().DrawRenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, a_draw);
+#endif
+		};
+		auto& fur = globals::features::furShells;
+		if (fur.loaded && fur.settings.Enabled && a_pass && a_pass->shader && a_pass->shader->shaderType == RE::BSShader::Type::Lighting)
+			fur.RenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, draw);
+		else
+			draw();
+	}
+
 	// This is from 1.4.0 but absent in 1.4.6
 	void BSBatchRenderer_RenderPassImmediately1::thunk(
 		RE::BSRenderPass* a_pass,
@@ -2129,11 +2146,7 @@ namespace Hooks
 		}
 
 		// Original call from 1.4.0
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		ProfileGrassRenderPass(a_pass, [&] { globals::features::grassOptimizations.GetRenderer().DrawRenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, func.get()); });
-#else
-		globals::features::grassOptimizations.GetRenderer().DrawRenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, func.get());
-#endif
+		DrawFeatureRenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, func.get());
 	}
 
 	static void DrawAdmittedRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags);
@@ -2192,11 +2205,7 @@ namespace Hooks
 			}
 
 			// Original call
-#ifdef DEVBENCH_BRIDGE_ENABLED
-			ProfileGrassRenderPass(a_pass, [&] { globals::features::grassOptimizations.GetRenderer().DrawRenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, func.get()); });
-#else
-			globals::features::grassOptimizations.GetRenderer().DrawRenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, func.get());
-#endif
+			DrawFeatureRenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, func.get());
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;  // This is from 1.4.0 but absent in 1.4.6
@@ -2210,11 +2219,7 @@ namespace Hooks
 			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
 		}
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		ProfileGrassRenderPass(a_pass, [&] { globals::features::grassOptimizations.GetRenderer().DrawRenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, BSBatchRenderer_RenderPassImmediately2::func.get()); });
-#else
-		globals::features::grassOptimizations.GetRenderer().DrawRenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, BSBatchRenderer_RenderPassImmediately2::func.get());
-#endif
+		DrawFeatureRenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, BSBatchRenderer_RenderPassImmediately2::func.get());
 	}
 
 	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)

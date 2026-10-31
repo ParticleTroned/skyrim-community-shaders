@@ -432,9 +432,9 @@ namespace
 constexpr bool TestDescriptorIsolation()
 {
 	using namespace CSX::MeshBlendingPolicy;
-	static_assert(EnableMask == 0x00800000u);
-	static_assert((EnableMask & 0x007FFFFFu) == 0u);
-	for (const auto other : { 0u, 1u << 9, 1u << 10, 0x007FFFFFu, 0xFF7FFFFFu }) {
+	static_assert(EnableMask == 0x01000000u);
+	static_assert((EnableMask & 0x00FFFFFFu) == 0u);
+	for (const auto other : { 0u, 1u << 9, 1u << 10, 0x00FFFFFFu, 0xFEFFFFFFu }) {
 		std::uint32_t shader = other | EnableMask;
 		ClearDrawDescriptor(shader);
 		if (shader != other)

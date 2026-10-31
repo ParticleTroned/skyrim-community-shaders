@@ -41,7 +41,7 @@ foreach(_required IN ITEMS
     "Util::GetOwnUserData"
     "GetAppCulled()"
     "GetChildren().capacity()"
-    "ResolveStaticOwner(a_source)"
+    "ResolveStaticOwner(a_source,"
     "cached->signature != signature"
     "MatchesRuleIdentity"
     "RequiresReceiverValidation(cached->classification)"

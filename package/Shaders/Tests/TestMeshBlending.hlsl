@@ -45,11 +45,11 @@
 
 /// @tags mesh-blending, descriptor-isolation
 [numthreads(1, 1, 1)] void TestMeshBlendingDescriptorIsolation() {
-	ASSERT(AreEqual, MeshBlending::kEnableMask, 0x00800000u);
-	ASSERT(AreEqual, MeshBlending::kEnableMask & 0x007FFFFFu, 0u);
+	ASSERT(AreEqual, MeshBlending::kEnableMask, 0x01000000u);
+	ASSERT(AreEqual, MeshBlending::kEnableMask & 0x00FFFFFFu, 0u);
 	ASSERT(IsFalse, MeshBlending::ShouldApplyDescriptor(1u | (1u << 9), 1u, 2u));
 	ASSERT(IsFalse, MeshBlending::ShouldApplyDescriptor(MeshBlending::kEnableMask, 1u, 2u));
 	ASSERT(IsTrue, MeshBlending::ShouldApplyDescriptor(1u | MeshBlending::kEnableMask | 0x007FFFFCu, 1u, 2u));
 	ASSERT(IsFalse, MeshBlending::ShouldApplyDescriptor(3u | MeshBlending::kEnableMask, 1u, 2u));
-	ASSERT(AreEqual, (0x007FFFFFu | MeshBlending::kEnableMask) & ~MeshBlending::kEnableMask, 0x007FFFFFu);
+	ASSERT(AreEqual, (0x00FFFFFFu | MeshBlending::kEnableMask) & ~MeshBlending::kEnableMask, 0x00FFFFFFu);
 }

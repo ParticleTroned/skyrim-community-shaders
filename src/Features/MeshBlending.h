@@ -113,6 +113,7 @@ struct MeshBlending final : Feature
 private:
 	using Classification = CSX::MeshBlendingPolicy::CachedClassification;
 	using CompiledRules = CSX::MeshBlendingPolicy::CompiledRules;
+	using RejectionReason = CSX::MeshBlendingPolicy::RejectionReason;
 	static constexpr std::size_t kMaximumRootDepth = 64u;
 
 	struct SourceState
@@ -197,6 +198,9 @@ private:
 		std::uint32_t classifiedFrame = 0u;
 		std::uint32_t lastUsedFrame = 0u;
 		bool occupied = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RejectionReason rejection = RejectionReason::kNone;
+#endif
 	};
 
 	struct Diagnostics
@@ -220,6 +224,11 @@ private:
 		std::uint32_t currentFrame = 0u;
 		std::uint32_t currentFrameActive = 0u;
 		std::uint32_t lastFrameActive = 0u;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::uint64_t eligibleSources = 0u;
+		std::uint64_t classificationAccepts = 0u;
+		std::array<std::uint64_t, static_cast<std::size_t>(CSX::MeshBlendingPolicy::RejectionReason::kCount)> rejections{};
+#endif
 	};
 
 	struct DiscoverySaveResult
@@ -281,9 +290,9 @@ private:
 	void InvalidateClassificationCache();
 	void BeginDiagnosticsFrame(std::uint32_t a_frame);
 	/** Validates alpha overlays; each caller applies its narrower material/flag policy. */
-	bool BuildOverlaySourceState(RE::BSRenderPass* a_pass, SourceState& a_source) const;
-	bool BuildSourceState(RE::BSRenderPass* a_pass, SourceState& a_source) const;
-	bool ResolveStaticOwner(SourceState& a_source) const;
+	bool BuildOverlaySourceState(RE::BSRenderPass* a_pass, SourceState& a_source, RejectionReason* a_rejection = nullptr) const;
+	bool BuildSourceState(RE::BSRenderPass* a_pass, SourceState& a_source, RejectionReason* a_rejection = nullptr) const;
+	bool ResolveStaticOwner(SourceState& a_source, RejectionReason* a_rejection = nullptr) const;
 	bool IsInsideDistanceBubble(const RE::NiBound& a_bound, std::uint32_t a_frame);
 	Signature BuildSourceSignature(const SourceState& a_source) const;
 	void CompleteOwnershipSignature(const SourceState& a_source, Signature& a_signature) const;
@@ -296,7 +305,8 @@ private:
 		const Signature& a_signature,
 		std::uint32_t a_frame,
 		Classification a_classification,
-		RE::BSGeometry* a_receiver = nullptr);
+		RE::BSGeometry* a_receiver = nullptr,
+		RejectionReason a_rejection = RejectionReason::kNone);
 	Classification GetSourceClassification(
 		SourceState& a_source,
 		std::uint32_t a_frame,
@@ -305,7 +315,8 @@ private:
 	Classification ClassifyOnCacheMiss(
 		const SourceState& a_source,
 		bool a_captureDiscovery,
-		RE::BSGeometry*& a_receiver);
+		RE::BSGeometry*& a_receiver,
+		RejectionReason* a_rejection = nullptr);
 	bool HasOpaqueSibling(
 		const SourceState& a_source,
 		bool& a_hitTraversalLimit,
@@ -317,6 +328,9 @@ private:
 	std::string BuildModelPath(const SourceState& a_source) const;
 	std::string BuildNodePath(const SourceState& a_source) const;
 	void DrawDiagnostics() const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void RecordRejection(RejectionReason a_reason);
+#endif
 	bool IsDiscoveryCaptureActive() const;
 	bool IsDiscoveryCaptureSaturated() const;
 	void SetDiscoveryCaptureEnabled(bool a_enabled);

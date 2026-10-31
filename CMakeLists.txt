@@ -3823,6 +3823,50 @@ if(BUILD_CONTROLLER_TESTS)
         MeshBlendingPolicy
         tests/mesh_blending_policy_test.cpp
     )
+    set(_mesh_admission_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/mesh_admission"
+    )
+    set(_mesh_admission_headers
+        "${_mesh_admission_test_dir}/mesh_blending_shader_enums.h"
+        "${_mesh_admission_test_dir}/mesh_blending_material_enums.h"
+        "${_mesh_admission_test_dir}/mesh_blending_alpha_enums.h"
+        "${_mesh_admission_test_dir}/mesh_blending_admission_members.h"
+        "${_mesh_admission_test_dir}/mesh_blending_admission_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_mesh_admission_headers}
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extract_mesh_blending_admission.py"
+            --source-dir "${PROJECT_SOURCE_DIR}" --output-dir
+            "${_mesh_admission_test_dir}"
+        DEPENDS
+            src/Features/MeshBlending.h
+            src/Features/MeshBlending.cpp
+            tests/extract_mesh_blending_admission.py
+            tests/extract_adaptive_balance_toggle.py
+            extern/CommonLibSSE-NG/include/RE/B/BSShaderProperty.h
+            extern/CommonLibSSE-NG/include/RE/B/BSShaderMaterial.h
+            extern/CommonLibSSE-NG/include/RE/N/NiAlphaProperty.h
+        VERBATIM
+    )
+    foreach(_variant IN ITEMS production devbench)
+        set(_admission_target "mesh_blending_admission_${_variant}_test")
+        add_controller_test(
+            ${_admission_target}
+            "MeshBlendingAdmission_${_variant}"
+            tests/mesh_blending_admission_test.cpp
+        )
+        target_sources(${_admission_target} PRIVATE ${_mesh_admission_headers})
+        target_include_directories(
+            ${_admission_target}
+            PRIVATE "${_mesh_admission_test_dir}"
+        )
+    endforeach()
+    target_compile_definitions(
+        mesh_blending_admission_devbench_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
     set(_mesh_rules_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mesh_rules")
     add_custom_command(
         OUTPUT
@@ -3905,6 +3949,10 @@ if(BUILD_CONTROLLER_TESTS)
     target_link_libraries(
         mesh_blending_devbench_test
         PRIVATE nlohmann_json::nlohmann_json
+    )
+    target_compile_definitions(
+        mesh_blending_devbench_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
     )
     set(_mesh_depth_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mesh_depth")
     add_custom_command(

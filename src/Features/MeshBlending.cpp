@@ -38,6 +38,7 @@ namespace
 	static_assert(CSX::MeshBlendingPolicy::EnableMask == static_cast<std::uint32_t>(State::ExtraShaderDescriptors::MeshBlending));
 	using ShaderFlag = RE::BSShaderProperty::EShaderPropertyFlag;
 	using MaterialFeature = RE::BSShaderMaterial::Feature;
+	using CSX::MeshBlendingPolicy::RejectSource;
 
 	constexpr std::uint32_t kRuleFileSchemaVersion = 4u;
 	constexpr std::uint32_t kOldestSupportedRuleFileSchemaVersion = 1u;
@@ -106,7 +107,6 @@ namespace
 		case MaterialFeature::kDefault:
 		case MaterialFeature::kParallax:
 		case MaterialFeature::kParallaxOcc:
-		case MaterialFeature::kMultilayerParallax:
 			return true;
 		default:
 			return false;
@@ -202,7 +202,7 @@ namespace
 std::pair<std::string, std::vector<std::string>> MeshBlending::GetFeatureSummary()
 {
 	return {
-		"Blends eligible NIF transition overlays without an extra render pass.",
+		"Softens existing alpha-blended static NIF overlays without an extra render pass.",
 		{ "Conservative static-object selection with deny-first rules",
 			"Generated rules retain current receiver validation",
 			"Bounded cache and traversal with a configurable distance limit",
@@ -715,72 +715,90 @@ void MeshBlending::ClearDiscoveredRules()
 	discoveryDropped = 0u;
 }
 
-bool MeshBlending::BuildOverlaySourceState(RE::BSRenderPass* a_pass, SourceState& a_source) const
+bool MeshBlending::BuildOverlaySourceState(RE::BSRenderPass* a_pass, SourceState& a_source, RejectionReason* a_rejection) const
 {
 	if (!a_pass || !a_pass->geometry || !a_pass->shaderProperty) {
-		return false;
+		return RejectSource(a_rejection, RejectionReason::kMissingGeometry);
 	}
 
 	a_source.geometry = a_pass->geometry;
 	auto& runtimeData = a_source.geometry->GetGeometryRuntimeData();
 	a_source.alphaProperty = runtimeData.alphaProperty.get();
 	if (!a_source.alphaProperty ||
-		a_source.alphaProperty->GetRTTI() != globals::rtti::NiAlphaPropertyRTTI.get() ||
-		!a_source.alphaProperty->GetAlphaBlending() ||
-		a_source.alphaProperty->GetAlphaTesting() ||
-		a_source.alphaProperty->GetSrcBlendMode() != RE::NiAlphaProperty::AlphaFunction::kSrcAlpha ||
-		a_source.alphaProperty->GetDestBlendMode() != RE::NiAlphaProperty::AlphaFunction::kInvSrcAlpha) {
-		return false;
+		a_source.alphaProperty->GetRTTI() != globals::rtti::NiAlphaPropertyRTTI.get()) {
+		return RejectSource(a_rejection, RejectionReason::kAlphaProperty);
 	}
-	if (!runtimeData.rendererData || runtimeData.skinInstance) {
-		return false;
+	if (!a_source.alphaProperty->GetAlphaBlending()) {
+		return RejectSource(a_rejection, RejectionReason::kAlphaBlending);
+	}
+	if (a_source.alphaProperty->GetAlphaTesting()) {
+		return RejectSource(a_rejection, RejectionReason::kAlphaTesting);
+	}
+	if (a_source.alphaProperty->GetSrcBlendMode() != RE::NiAlphaProperty::AlphaFunction::kSrcAlpha ||
+		a_source.alphaProperty->GetDestBlendMode() != RE::NiAlphaProperty::AlphaFunction::kInvSrcAlpha) {
+		return RejectSource(a_rejection, RejectionReason::kBlendMode);
+	}
+	if (!runtimeData.rendererData) {
+		return RejectSource(a_rejection, RejectionReason::kRendererData);
+	}
+	if (runtimeData.skinInstance) {
+		return RejectSource(a_rejection, RejectionReason::kSkinned);
 	}
 
 	auto* shaderProperty = runtimeData.shaderProperty.get();
 	if (!shaderProperty || shaderProperty != a_pass->shaderProperty ||
 		shaderProperty->GetRTTI() != globals::rtti::BSLightingShaderPropertyRTTI.get()) {
-		return false;
+		return RejectSource(a_rejection, RejectionReason::kShaderProperty);
 	}
 	a_source.shaderProperty = static_cast<RE::BSLightingShaderProperty*>(shaderProperty);
 	a_source.shaderFlags = a_source.shaderProperty->flags.underlying();
-	if ((a_source.shaderFlags & ToMask(ShaderFlag::kZBufferTest)) == 0u ||
-		(a_source.shaderFlags & ToMask(ShaderFlag::kZBufferWrite)) != 0u) {
-		return false;
+	if ((a_source.shaderFlags & ToMask(ShaderFlag::kZBufferTest)) == 0u) {
+		return RejectSource(a_rejection, RejectionReason::kDepthTest);
+	}
+	if ((a_source.shaderFlags & ToMask(ShaderFlag::kZBufferWrite)) != 0u) {
+		return RejectSource(a_rejection, RejectionReason::kDepthWrite);
 	}
 
 	a_source.material = a_source.shaderProperty->material;
 	if (!a_source.material ||
-		a_source.material->GetType() != RE::BSShaderMaterial::Type::kLighting ||
-		!IsFinite(a_source.shaderProperty->alpha) ||
-		a_source.shaderProperty->alpha <= 0.0f ||
-		!IsFiniteBound(a_source.geometry->worldBound)) {
-		return false;
+		a_source.material->GetType() != RE::BSShaderMaterial::Type::kLighting) {
+		return RejectSource(a_rejection, RejectionReason::kMaterial);
+	}
+	if (!IsFinite(a_source.shaderProperty->alpha) || a_source.shaderProperty->alpha <= 0.0f) {
+		return RejectSource(a_rejection, RejectionReason::kAlpha);
+	}
+	if (!IsFiniteBound(a_source.geometry->worldBound)) {
+		return RejectSource(a_rejection, RejectionReason::kBounds);
 	}
 	a_source.owner = GetBoundedOwner(a_source.geometry, kMaximumRootDepth);
 	return true;
 }
 
-bool MeshBlending::BuildSourceState(RE::BSRenderPass* a_pass, SourceState& a_source) const
+bool MeshBlending::BuildSourceState(RE::BSRenderPass* a_pass, SourceState& a_source, RejectionReason* a_rejection) const
 {
-	return BuildOverlaySourceState(a_pass, a_source) &&
-	       (a_source.shaderFlags & kExcludedShaderFlags) == 0u &&
-	       IsSafeMaterialFeature(a_source.material->GetFeature());
+	if (!BuildOverlaySourceState(a_pass, a_source, a_rejection))
+		return false;
+	if ((a_source.shaderFlags & kExcludedShaderFlags) != 0u)
+		return RejectSource(a_rejection, RejectionReason::kShaderFlags);
+	if (!IsSafeMaterialFeature(a_source.material->GetFeature()))
+		return RejectSource(a_rejection, RejectionReason::kMaterialFeature);
+	return true;
 }
 
-bool MeshBlending::ResolveStaticOwner(SourceState& a_source) const
+bool MeshBlending::ResolveStaticOwner(SourceState& a_source, RejectionReason* a_rejection) const
 {
 	a_source.nodePathLength = 0u;
 	if (!a_source.owner) {
-		return false;
+		return RejectSource(a_rejection, RejectionReason::kOwner);
 	}
 	auto* baseObject = a_source.owner->GetBaseObject();
 	if (!baseObject || baseObject->GetFormType() != RE::FormType::Static) {
-		return false;
+		return RejectSource(a_rejection, RejectionReason::kNonStaticOwner);
 	}
 
 	a_source.root = a_source.owner->Get3D();
 	if (!a_source.root) {
-		return false;
+		return RejectSource(a_rejection, RejectionReason::kRoot);
 	}
 
 	bool belongsToRoot = false;
@@ -794,12 +812,12 @@ bool MeshBlending::ResolveStaticOwner(SourceState& a_source) const
 		}
 		auto* parent = current->parent;
 		if (GetLinkedChild(parent, current->parentIndex) != current) {
-			return false;
+			return RejectSource(a_rejection, RejectionReason::kAncestry);
 		}
 		current = parent;
 	}
 	if (!belongsToRoot) {
-		return false;
+		return RejectSource(a_rejection, RejectionReason::kAncestry);
 	}
 	std::reverse(a_source.nodeParts.begin(), a_source.nodeParts.begin() + a_source.nodePathLength);
 
@@ -905,7 +923,8 @@ void MeshBlending::StoreClassification(
 	const Signature& a_signature,
 	std::uint32_t a_frame,
 	Classification a_classification,
-	RE::BSGeometry* a_receiver)
+	RE::BSGeometry* a_receiver,
+	RejectionReason a_rejection)
 {
 	const auto mixedKey = (a_signature.geometry >> 4u) ^ (a_signature.geometry >> 17u) ^ (a_signature.geometry >> 29u);
 	const std::size_t setStart = (mixedKey & (kCacheSetCount - 1u)) * kCacheWays;
@@ -936,6 +955,11 @@ void MeshBlending::StoreClassification(
 		a_frame,
 		true
 	};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	classificationCache[replacement].rejection = a_rejection;
+#else
+	(void)a_rejection;
+#endif
 }
 MeshBlending::Classification MeshBlending::GetSourceClassification(
 	SourceState& a_source,
@@ -952,12 +976,16 @@ MeshBlending::Classification MeshBlending::GetSourceClassification(
 	if (cached && cached->classification == Classification::kRejected) {
 		if (a_collectDiagnostics)
 			++diagnostics.cacheHits;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordRejection(cached->rejection);
+#endif
 		return Classification::kRejected;
 	}
 
+	RejectionReason rejection = RejectionReason::kNone;
 	if (a_collectDiagnostics)
 		++diagnostics.ownerResolutionAttempts;
-	if (!ResolveStaticOwner(a_source)) {
+	if (!ResolveStaticOwner(a_source, &rejection)) {
 		if (a_collectDiagnostics) {
 			++diagnostics.sourceRejects;
 			++diagnostics.cacheMisses;
@@ -965,7 +993,10 @@ MeshBlending::Classification MeshBlending::GetSourceClassification(
 		if (cached)
 			cached->occupied = false;
 		if (sourceStateCacheAllowed)
-			StoreClassification(a_source, signature, a_frame, Classification::kRejected);
+			StoreClassification(a_source, signature, a_frame, Classification::kRejected, nullptr, rejection);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordRejection(rejection);
+#endif
 		return Classification::kRejected;
 	}
 	CompleteOwnershipSignature(a_source, signature);
@@ -992,6 +1023,9 @@ MeshBlending::Classification MeshBlending::GetSourceClassification(
 	Classification classification = Classification::kRejected;
 	if (cached) {
 		classification = cached->classification;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		rejection = cached->rejection;
+#endif
 		if (a_collectDiagnostics) {
 			++diagnostics.cacheHits;
 		}
@@ -1000,9 +1034,15 @@ MeshBlending::Classification MeshBlending::GetSourceClassification(
 			++diagnostics.cacheMisses;
 		}
 		RE::BSGeometry* receiver = nullptr;
-		classification = ClassifyOnCacheMiss(a_source, a_captureDiscovery, receiver);
-		StoreClassification(a_source, signature, a_frame, classification, receiver);
+		classification = ClassifyOnCacheMiss(a_source, a_captureDiscovery, receiver, &rejection);
+		StoreClassification(a_source, signature, a_frame, classification, receiver, rejection);
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (classification == Classification::kRejected)
+		RecordRejection(rejection);
+	else if (a_collectDiagnostics)
+		++diagnostics.classificationAccepts;
+#endif
 	if (a_collectDiagnostics) {
 		if (classification == Classification::kAllowedByRule || classification == Classification::kDetectedByRule) {
 			++diagnostics.ruleAccepts;
@@ -1168,11 +1208,16 @@ bool MeshBlending::ValidateCachedReceiver(const SourceState& a_source, const Cac
 MeshBlending::Classification MeshBlending::ClassifyOnCacheMiss(
 	const SourceState& a_source,
 	bool a_captureDiscovery,
-	RE::BSGeometry*& a_receiver)
+	RE::BSGeometry*& a_receiver,
+	RejectionReason* a_rejection)
 {
 	a_receiver = nullptr;
-	if (a_source.root->HasAnimation()) {
+	const auto reject = [&](RejectionReason a_reason) {
+		(void)RejectSource(a_rejection, a_reason);
 		return Classification::kRejected;
+	};
+	if (a_source.root->HasAnimation()) {
+		return reject(RejectionReason::kAnimatedRoot);
 	}
 
 	const std::string modelPath = BuildModelPath(a_source);
@@ -1182,12 +1227,12 @@ MeshBlending::Classification MeshBlending::ClassifyOnCacheMiss(
 	const bool needsNodePath = compiledRules.NeedsNodePath(modelPath);
 	std::string nodePath = needsNodePath ? BuildNodePath(a_source) : std::string{};
 	if (needsNodePath && nodePath.empty()) {
-		return Classification::kRejected;
+		return reject(RejectionReason::kNodeIdentity);
 	}
 
 	const auto ruleMatch = compiledRules.Match(modelPath, nodePath);
 	if (ruleMatch == CSX::MeshBlendingPolicy::RuleMatch::kDeny) {
-		return Classification::kRejected;
+		return reject(RejectionReason::kDenied);
 	}
 	if (ruleMatch == CSX::MeshBlendingPolicy::RuleMatch::kAuthored) {
 		if (logClassification) {
@@ -1211,17 +1256,17 @@ MeshBlending::Classification MeshBlending::ClassifyOnCacheMiss(
 		}
 	}
 	if (!detectedMatch && !automaticBlendingEnabled && !captureHasCapacity) {
-		return Classification::kRejected;
+		return reject(RejectionReason::kPolicy);
 	}
 	if (modelPath.empty()) {
-		return Classification::kRejected;
+		return reject(RejectionReason::kModelIdentity);
 	}
 	bool hitTraversalLimit = false;
 	if (!HasOpaqueSibling(a_source, hitTraversalLimit, a_receiver)) {
-		if (hitTraversalLimit && globals::state->IsDeveloperMode()) {
+		if (hitTraversalLimit && globals::state && globals::state->IsDeveloperMode()) {
 			++diagnostics.traversalLimitRejects;
 		}
-		return Classification::kRejected;
+		return reject(hitTraversalLimit ? RejectionReason::kTraversalLimit : RejectionReason::kNoReceiver);
 	}
 	if (captureHasCapacity) {
 		if (nodePath.empty()) {
@@ -1237,6 +1282,15 @@ MeshBlending::Classification MeshBlending::ClassifyOnCacheMiss(
 	}
 	return detectedMatch ? Classification::kDetectedByRule : Classification::kAutomatic;
 }
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+void MeshBlending::RecordRejection(RejectionReason a_reason)
+{
+	const auto index = static_cast<std::size_t>(a_reason);
+	if (globals::state && globals::state->IsDeveloperMode() && index > 0u && index < diagnostics.rejections.size())
+		++diagnostics.rejections[index];
+}
+#endif
 
 void MeshBlending::PrepareLightingDraw(RE::BSRenderPass* a_pass)
 {
@@ -1267,6 +1321,9 @@ void MeshBlending::PrepareLightingDraw(RE::BSRenderPass* a_pass)
 		if (collectDiagnostics) {
 			++diagnostics.scopeRejects;
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordRejection(RejectionReason::kScope);
+#endif
 		return;
 	}
 	const bool nifRuntimeEnabled = runtimeEnabled && settings.NifEnabled != 0u &&
@@ -1276,16 +1333,27 @@ void MeshBlending::PrepareLightingDraw(RE::BSRenderPass* a_pass)
 	}
 
 	SourceState source;
-	if (!BuildSourceState(a_pass, source)) {
+	RejectionReason rejection = RejectionReason::kNone;
+	if (!BuildSourceState(a_pass, source, &rejection)) {
 		if (collectDiagnostics) {
 			++diagnostics.sourceRejects;
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordRejection(rejection);
+#endif
 		return;
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (collectDiagnostics)
+		++diagnostics.eligibleSources;
+#endif
 	if (!IsInsideDistanceBubble(source.geometry->worldBound, state->frameCount)) {
 		if (collectDiagnostics) {
 			++diagnostics.distanceRejects;
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordRejection(RejectionReason::kDistance);
+#endif
 		return;
 	}
 	const auto classification = GetSourceClassification(
@@ -1318,6 +1386,20 @@ void MeshBlending::DrawDiagnostics() const
 	}
 	ImGui::Text("Active draws: %u last frame, %u this frame", diagnostics.lastFrameActive, diagnostics.currentFrameActive);
 	ImGui::Text("Lifetime active draws: %llu", static_cast<unsigned long long>(diagnostics.activeDraws));
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	ImGui::Text("Observed draws: %llu; eligible overlays: %llu; accepted classifications: %llu",
+		static_cast<unsigned long long>(diagnostics.drawCalls),
+		static_cast<unsigned long long>(diagnostics.eligibleSources),
+		static_cast<unsigned long long>(diagnostics.classificationAccepts));
+	ImGui::TextWrapped("Counters count draw observations while blending or recording is enabled. Accepted classifications can be recording-only; active draws receive the blend descriptor. Neither proves that a pixel intersected a surface.");
+	for (std::size_t index = 1u; index < diagnostics.rejections.size(); ++index) {
+		if (diagnostics.rejections[index] != 0u)
+			ImGui::Text("%s: %llu", CSX::MeshBlendingPolicy::RejectionNames[index].data(),
+				static_cast<unsigned long long>(diagnostics.rejections[index]));
+	}
+#else
+	ImGui::TextDisabled("Detailed rejection reasons require a DevBench-enabled build.");
+#endif
 	ImGui::Text("Cache: %llu hits, %llu misses, %llu evictions",
 		static_cast<unsigned long long>(diagnostics.cacheHits),
 		static_cast<unsigned long long>(diagnostics.cacheMisses),
@@ -1355,6 +1437,7 @@ void MeshBlending::DrawDiscoverySettings()
 		"Clear Detected NIF Rules"
 	};
 	ImGui::SeparatorText("NIF recording");
+	ImGui::TextWrapped("Automatic selects eligible overlays for blending. Recording is a separate, session-only switch; enable it below to retain model/node identities.");
 	auto* state = globals::state;
 	const bool mutationBlocked = state && state->IsPersistentMutationBlocked();
 	const bool ruleFileBlocked = !ruleFileMutationAllowed.load(std::memory_order_acquire);
@@ -1362,7 +1445,7 @@ void MeshBlending::DrawDiscoverySettings()
 	bool captureEnabled = discoveryCaptureEnabled.load(std::memory_order_relaxed);
 	if (mutationBlocked || ruleFileBlocked || captureSaturated)
 		ImGui::BeginDisabled();
-	if (ImGui::Checkbox("Record Visible NIF Identities", &captureEnabled)) {
+	if (ImGui::Checkbox("Record Eligible NIF Overlays", &captureEnabled)) {
 		SetDiscoveryCaptureEnabled(captureEnabled);
 		discoveryStatus = captureEnabled && !discoveryCaptureEnabled.load(std::memory_order_relaxed) ?
 		                      "The recording limit is reached. Save or clear the current results." :
@@ -1384,7 +1467,7 @@ void MeshBlending::DrawDiscoverySettings()
 		duplicateCount = discoveryDuplicateObservations;
 		droppedCount = discoveryDropped;
 	}
-	ImGui::Text("Session: %zu / %zu unique; %zu duplicates; %zu dropped", discoveredCount, kMaximumRules, duplicateCount, droppedCount);
+	ImGui::Text("Recorded identities: %zu / %zu unique; %zu repeated; %zu dropped", discoveredCount, kMaximumRules, duplicateCount, droppedCount);
 	ImGui::Text("Persisted: %zu authored allow, %zu detected allow, %zu deny", allowList.size(), detectedAllowList.size(), denyList.size());
 	ImGui::TextDisabled("Rule file: Data/SKSE/Plugins/CommunityShaders/MeshBlendingRules.json");
 	if (ruleFileBlocked)
@@ -1440,6 +1523,7 @@ void MeshBlending::DrawSettings()
 		settings.Enabled = enabled ? 1u : 0u;
 	}
 	DrawMechanismToggles();
+	ImGui::TextWrapped("NIF blending requires an existing alpha-blended, depth-tested overlay with depth writes disabled on a static object. Automatic additionally requires a nearby opaque sibling in the same NIF. Ordinary opaque meshes are outside this mechanism's scope.");
 
 	bool classifierChanged = false;
 	int detectionMode = static_cast<int>(settings.DetectionMode);
@@ -1502,6 +1586,8 @@ void MeshBlending::DrawSettings()
 			settings.DeveloperLogging = developerLogging ? 1u : 0u;
 		}
 		DrawDiagnostics();
+	} else {
+		ImGui::TextDisabled("Enable global Debug mode to inspect classifier counters.");
 	}
 
 	SanitizeSettings();
@@ -1513,7 +1599,7 @@ void MeshBlending::DrawSettings()
 void MeshBlending::DrawMechanismToggles()
 {
 	bool nifEnabled = settings.NifEnabled != 0u;
-	if (ImGui::Checkbox("NIF intersection blending", &nifEnabled))
+	if (ImGui::Checkbox("NIF overlay intersection blending", &nifEnabled))
 		settings.NifEnabled = nifEnabled ? 1u : 0u;
 }
 
@@ -1550,7 +1636,7 @@ void MeshBlending::DrawPerformanceSettings(bool a_advanced)
 		ImGui::Text("Rejects overlays beyond this camera/eye-centered distance before owner lookup.");
 	}
 	if (IsDiscoveryCaptureActive()) {
-		ImGui::TextDisabled("Stop Record Visible Material Identities before running a feature-cost measurement.");
+		ImGui::TextDisabled("Stop recording before running a feature-cost measurement.");
 	}
 	if (a_advanced) {
 		ImGui::Text("Mode: %s; active draws: %u last frame, %u this frame", DetectionModeName(settings.DetectionMode), diagnostics.lastFrameActive, diagnostics.currentFrameActive);

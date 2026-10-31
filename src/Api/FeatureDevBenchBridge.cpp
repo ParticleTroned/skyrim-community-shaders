@@ -444,7 +444,7 @@ namespace CSX::Api::FeatureDevBenchBridge
 		static const std::string registeredDescriptor = [descriptor] {
 			auto expanded = json::parse(descriptor);
 			expanded["description"] = expanded.at("description").get<std::string>() +
-			                          " mesh_blending inspects and changes session Mesh Blending settings, controls bounded discovery and reports admission/cache counters. No rule files or presets are written. Counters require developer mode; CPU policy readback does not prove GPU resource contents or visual quality.";
+			                          " mesh_blending inspects and changes session Mesh Blending settings for existing alpha-blended static NIF overlays, controls recording independently of Automatic mode and reports observed/eligible/accepted/active draws, bounded rejection reasons and unique recorded identities. No rule files or presets are written. Counters require developer mode; CPU policy readback does not prove GPU resource contents or visual quality.";
 			expanded["inputSchema"]["properties"]["action"]["enum"].push_back("mesh_blending");
 			expanded["inputSchema"]["properties"]["meshBlending"] = CSX::Api::MeshBlendingDevBench::Schema();
 			expanded["outputSchema"]["properties"]["result"]["properties"]["meshBlending"] = CSX::Api::MeshBlendingDevBench::StatusSchema();

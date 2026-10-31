@@ -44,6 +44,15 @@ json MeshBlending::ControlDevBench(const json& a_request)
 	if (a_request.value("resetDiagnostics", false)) {
 		diagnostics = {};
 	}
+	json rejections = json::object();
+	for (std::size_t index = 1u; index < diagnostics.rejections.size(); ++index)
+		rejections[std::string(CSX::MeshBlendingPolicy::RejectionNames[index])] = diagnostics.rejections[index];
+	json discovery;
+	{
+		std::scoped_lock lock(discoveryMutex);
+		discovery = { { "recordedIdentities", discoveredRuleKeys.size() },
+			{ "repeatedObservations", discoveryDuplicateObservations }, { "droppedIdentities", discoveryDropped } };
+	}
 
 	return {
 		{ "available", loaded },
@@ -54,8 +63,12 @@ json MeshBlending::ControlDevBench(const json& a_request)
 		{ "ruleFileError", ruleFileLoadError },
 		{ "discoveryCapture", IsDiscoveryCaptureActive() },
 		{ "diagnosticsEnabled", globals::state && globals::state->IsDeveloperMode() },
+		{ "rejections", std::move(rejections) },
+		{ "discovery", std::move(discovery) },
 		{ "diagnostics", { { "frame", diagnostics.currentFrame },
 							 { "drawCalls", diagnostics.drawCalls },
+							 { "eligibleSources", diagnostics.eligibleSources },
+							 { "classificationAccepts", diagnostics.classificationAccepts },
 							 { "activeDraws", diagnostics.activeDraws },
 							 { "sourceRejects", diagnostics.sourceRejects },
 							 { "scopeRejects", diagnostics.scopeRejects },

@@ -90,7 +90,7 @@ namespace CSX::Api::MeshBlendingDevBench
 			{ "additionalProperties", false },
 			{ "properties", { { "settings", { { "type", "object" }, { "additionalProperties", false }, { "properties", std::move(properties) },
 												{ "description", "Partial session settings; omitted values are preserved. MaximumGap is raised to at least DepthBias + BlendWidth. The response reports sanitized effective settings." } } },
-								{ "discoveryCapture", { { "type", "boolean" }, { "description", "Start or stop bounded session discovery without writing the rule file." } } },
+								{ "discoveryCapture", { { "type", "boolean" }, { "description", "Record accepted overlay model/node identities independently of Automatic blending. Session-only and bounded; does not write the rule file." } } },
 								{ "resetDiagnostics", { { "type", "boolean" }, { "description", "Reset Mesh Blending diagnostic counters for a new observation." } } } } }
 		};
 	}
@@ -109,7 +109,9 @@ namespace CSX::Api::MeshBlendingDevBench
 								{ "ruleFileError", { { "type", "string" } } },
 								{ "discoveryCapture", { { "type", "boolean" } } },
 								{ "diagnosticsEnabled", { { "type", "boolean" } } },
-								{ "diagnostics", { { "type", "object" }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } } } }
+								{ "rejections", { { "type", "object" }, { "description", "First failed admission gate per observed draw; cached rejections retain their reason. Counters require global Debug mode." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } },
+								{ "discovery", { { "type", "object" }, { "description", "Recorded unique identities, repeated observations and dropped identities. Recording is separate from Automatic mode and diagnostic resets." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } },
+								{ "diagnostics", { { "type", "object" }, { "description", "Draw observations while blending or recording is enabled: drawCalls precedes scope/source checks; eligibleSources passes overlay render-state checks; classificationAccepts passes ownership/rules/receiver checks; activeDraws receives the shader descriptor. Counts are not unique meshes or proof of visible pixel blending." }, { "additionalProperties", { { "type", "integer" }, { "minimum", 0 } } } } } } }
 		};
 	}
 }

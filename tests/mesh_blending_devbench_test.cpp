@@ -1,8 +1,11 @@
 #include "Api/MeshBlendingDevBenchPolicy.h"
+#include "Features/MeshBlendingPolicy.h"
 
 #include <atomic>
 #include <cstdint>
 #include <iostream>
+#include <mutex>
+#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -33,6 +36,10 @@ struct MeshBlending
 	std::uint32_t captureWrites = 0u;
 	std::atomic_bool ruleFileMutationAllowed = true;
 	std::string ruleFileLoadError;
+	std::mutex discoveryMutex;
+	std::set<std::pair<std::string, std::string>> discoveredRuleKeys;
+	std::size_t discoveryDuplicateObservations = 0u;
+	std::size_t discoveryDropped = 0u;
 	json settings{ { "Enabled", 1u }, { "NifEnabled", 1u }, { "BlendStrength", 0.75f }, { "BlendWidth", 12.0f } };
 	void SaveSettings(json& value) { value = settings; }
 	void LoadSettings(json& value)
@@ -70,6 +77,11 @@ namespace
 			feature.diagnostics.drawCalls = std::uint64_t{ 1 } << 40u;
 			feature.diagnostics.currentFrame = 19u;
 			feature.diagnostics.traversalLimitRejects = 7u;
+			feature.diagnostics.eligibleSources = 13u;
+			feature.diagnostics.classificationAccepts = 5u;
+			feature.diagnostics.rejections[static_cast<std::size_t>(CSX::MeshBlendingPolicy::RejectionReason::kNoReceiver)] = 8u;
+			feature.discoveredRuleKeys.emplace("meshes/test.nif", "root/overlay[0]");
+			feature.discoveryDuplicateObservations = 3u;
 		}
 		~Fixture() { globals::state = nullptr; }
 	};
@@ -77,7 +89,9 @@ namespace
 	json MutationState(const MeshBlending& feature)
 	{
 		return { feature.settings, feature.capture, feature.loads, feature.captureWrites,
-			feature.diagnostics.drawCalls, feature.diagnostics.currentFrame, feature.diagnostics.traversalLimitRejects };
+			feature.diagnostics.drawCalls, feature.diagnostics.currentFrame, feature.diagnostics.traversalLimitRejects,
+			feature.diagnostics.eligibleSources, feature.diagnostics.classificationAccepts, feature.diagnostics.rejections,
+			feature.discoveredRuleKeys, feature.discoveryDuplicateObservations, feature.discoveryDropped };
 	}
 
 	void TestStatusAndMutation()
@@ -98,6 +112,10 @@ namespace
 					counters.at("frame") == 19u && counters.at("traversalLimitRejects") == 7u && !status.contains("drawCalls"),
 			"diagnostics were flattened, truncated or omitted");
 		Require(MutationState(feature) == before, "status request mutated feature state");
+		Require(counters.at("eligibleSources") == 13u && counters.at("classificationAccepts") == 5u &&
+					status.at("rejections").at("noReceiver") == 8u && status.at("discovery").at("recordedIdentities") == 1u &&
+					status.at("discovery").at("repeatedObservations") == 3u,
+			"admission counters, rejection reasons and recorded identities were conflated");
 		feature.ruleFileMutationAllowed.store(true);
 		const auto changed = feature.ControlDevBench({ { "settings", { { "NifEnabled", false }, { "BlendWidth", 24.0f } } },
 			{ "discoveryCapture", true }, { "resetDiagnostics", true } });
@@ -107,6 +125,9 @@ namespace
 			"valid mixed request did not apply each session change exactly once");
 		for (const auto& value : changed.at("diagnostics"))
 			Require(value == 0u, "reset did not clear reported diagnostics");
+		for (const auto& value : changed.at("rejections"))
+			Require(value == 0u, "reset did not clear rejection reasons");
+		Require(changed.at("discovery") == status.at("discovery"), "diagnostic reset erased recorded identities");
 	}
 
 	void TestInvalidRequestsAreAtomic()

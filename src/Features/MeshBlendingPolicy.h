@@ -16,6 +16,68 @@ namespace CSX::MeshBlendingPolicy
 {
 	inline constexpr std::uint32_t EnableMask = 1u << 24;
 
+	/** First failed overlay admission check; counters count observations, not meshes. */
+	enum class RejectionReason : std::uint8_t
+	{
+		kNone,
+		kMissingGeometry,
+		kAlphaProperty,
+		kAlphaBlending,
+		kAlphaTesting,
+		kBlendMode,
+		kRendererData,
+		kSkinned,
+		kShaderProperty,
+		kDepthTest,
+		kDepthWrite,
+		kMaterial,
+		kAlpha,
+		kBounds,
+		kShaderFlags,
+		kMaterialFeature,
+		kOwner,
+		kNonStaticOwner,
+		kRoot,
+		kAncestry,
+		kAnimatedRoot,
+		kNodeIdentity,
+		kDenied,
+		kPolicy,
+		kModelIdentity,
+		kNoReceiver,
+		kTraversalLimit,
+		kDistance,
+		kScope,
+		kCount
+	};
+
+	inline constexpr std::array<std::string_view, static_cast<std::size_t>(RejectionReason::kCount)> RejectionNames{
+		"none", "missingGeometry", "alphaProperty", "alphaBlendingDisabled", "alphaTesting", "blendMode",
+		"rendererData", "skinned", "shaderProperty", "depthTestDisabled", "depthWriteEnabled", "material",
+		"invalidAlpha", "invalidBounds", "shaderFlags", "materialFeature", "missingOwner", "nonStaticOwner",
+		"missingRoot", "ancestry", "animatedRoot", "nodeIdentity", "denied", "policy", "modelIdentity",
+		"noReceiver", "traversalLimit", "distance", "scope"
+	};
+
+	[[nodiscard]] constexpr std::string_view RejectionName(RejectionReason a_reason) noexcept
+	{
+		const auto index = static_cast<std::size_t>(a_reason);
+		return index < RejectionNames.size() ? RejectionNames[index] : "invalidReason";
+	}
+
+	/** Preserve admission in ordinary builds without collecting diagnostic state. */
+	[[nodiscard]] inline bool RejectSource(RejectionReason* a_reason, RejectionReason a_value) noexcept
+	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_reason)
+			*a_reason = a_value;
+#else
+		(void)a_reason;
+		(void)a_value;
+#endif
+		return false;
+	}
+
 	/** Clear the Mesh-owned bit while preserving other shader descriptors. */
 	inline constexpr void ClearDrawDescriptor(std::uint32_t& shader) noexcept
 	{

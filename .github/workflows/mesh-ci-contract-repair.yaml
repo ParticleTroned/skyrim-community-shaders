@@ -1,0 +1,111 @@
+name: Mesh CI contract repair (temporary)
+
+on:
+  push:
+    branches: [codex/mesh-ci-contract-repair-20261031]
+    paths: [.github/workflows/mesh-ci-contract-repair.yaml]
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: nif
+            sha: 772ef4ce894edee97e07695f8d66e0bbf66e7ebf
+            source: codex/mesh-blending-nif
+            output: codex/mesh-ci-contract-nif-20261031
+          - id: snow
+            sha: 2a35ac01ce2719b26035478d91994d075deefee8
+            source: codex/mesh-blending-projected-snow
+            output: codex/mesh-ci-contract-snow-20261031
+          - id: land
+            sha: b80b39c830c886543c6ef1cc48ee1dd240e421b5
+            source: codex/mesh-blending-land-materials
+            output: codex/mesh-ci-contract-land-20261031
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.sha }}
+          fetch-depth: 1
+      - name: Identify shader assertion candidates
+        if: matrix.id == 'snow'
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          for path in sorted(Path('package/Shaders/Tests').glob('*')):
+              if path.suffix not in ('.hlsl', '.hlsli'):
+                  continue
+              lines = path.read_text(encoding='utf-8-sig').splitlines()
+              if len(lines) >= 85 and 'ASSERT' in lines[84]:
+                  print(f'=== {path}:85 ===')
+                  for i in range(max(0, 84-25), min(len(lines), 85+5)):
+                      print(f'{i+1}: {lines[i]}')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Refresh, validate, and stage metadata only
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ matrix.sha }}
+          SOURCE_BRANCH: ${{ matrix.source }}
+          OUTPUT_BRANCH: ${{ matrix.output }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_HEAD) { throw 'Checkout changed.' }
+          $remoteHead = git ls-remote --heads origin "refs/heads/$env:SOURCE_BRANCH"
+          if ($LASTEXITCODE -ne 0 -or -not $remoteHead -or ($remoteHead -split '\s+')[0] -cne $env:EXPECTED_HEAD) {
+              throw 'Source branch moved; refusing to refresh an obsolete tree.'
+          }
+          $existingOutput = git ls-remote --heads origin "refs/heads/$env:OUTPUT_BRANCH"
+          if ($LASTEXITCODE -ne 0 -or $existingOutput) { throw 'Output branch already exists or cannot be checked.' }
+          if (git status --porcelain) { throw 'Checkout must be clean before regeneration.' }
+
+          $contractFailure = $null
+          try {
+              & ./tools/generate-unified-presets.ps1 -Check
+          } catch {
+              $contractFailure = $_.Exception.Message
+          }
+          if (-not $contractFailure -or $contractFailure -cnotmatch 'Runtime settings contract changed: expected ([0-9A-F]{64}), got ([0-9A-F]{64})\.') {
+              throw "Expected only the reviewed source fingerprint mismatch; got: $contractFailure"
+          }
+          $oldHash = $Matches[1]
+          $newHash = $Matches[2]
+          $policyPath = 'docs/development/unified-preset-policy.json'
+          $reportPath = 'docs/development/generated-unified-preset-report.json'
+          $policyText = [System.IO.File]::ReadAllText((Join-Path $PWD $policyPath))
+          if ([regex]::Matches($policyText, [regex]::Escape($oldHash)).Count -ne 1) {
+              throw 'Expected one source fingerprint in the policy.'
+          }
+          [System.IO.File]::WriteAllText((Join-Path $PWD $policyPath), $policyText.Replace($oldHash, $newHash), [System.Text.UTF8Encoding]::new($false))
+          & ./tools/generate-unified-presets.ps1
+          & ./tools/generate-unified-presets.ps1 -Check
+          pwsh -NoProfile -File ./tests/unified_preset_generator_test.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Unified preset tests failed.' }
+
+          $changed = @(git diff --name-only)
+          if ($LASTEXITCODE -ne 0 -or $changed.Count -ne 2 -or $policyPath -notin $changed -or $reportPath -notin $changed) {
+              throw "Refusing changes outside the two contract metadata files: $($changed -join ', ')"
+          }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Whitespace validation failed.' }
+          git diff -- $policyPath $reportPath
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- $policyPath $reportPath
+          if ($LASTEXITCODE -ne 0) { throw 'Could not stage metadata.' }
+          git commit -m 'fix(presets): refresh source fingerprint after mesh interface fix'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not commit metadata.' }
+          git push origin "HEAD:refs/heads/$env:OUTPUT_BRANCH"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish isolated repair branch.' }
+          $newHead = (git rev-parse HEAD).Trim()
+          "Staged $env:OUTPUT_BRANCH at $newHead; source fingerprint $newHash" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append

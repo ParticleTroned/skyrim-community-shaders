@@ -21,6 +21,8 @@ class GrassPreparationLifecycleTests(unittest.TestCase):
             "bool GrassBucketRenderer::Impl::CurrentBucket(",
             "void GrassBucketRenderer::Impl::ReindexBuckets(",
             "bool GrassBucketRenderer::Impl::PrepareBackground(",
+            "void GrassBucketRenderer::Impl::EndBackgroundPreparation(",
+            "void GrassBucketRenderer::EndFrame(",
             "void GrassBucketRenderer::SetBackgroundPreparationEnabled(",
             "GrassBucketRenderer::~GrassBucketRenderer("))
         driver = r'''
@@ -29,6 +31,7 @@ class GrassPreparationLifecycleTests(unittest.TestCase):
 #include <future>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <utility>
 namespace SKSE::stl {
@@ -37,8 +40,10 @@ template<class F> struct scope_exit { F f; scope_exit(F fn): f(fn) {} ~scope_exi
 namespace logger { template<class... T> void warn(T&&...) {} }
 namespace BS {
 std::function<void()> pending;
+std::thread worker;
 int pools = 0;
-void Complete() { auto task = std::exchange(pending, {}); if (task) task(); }
+void Start() { if (pending) worker = std::thread(std::exchange(pending, {})); }
+void Complete() { Start(); if (worker.joinable()) worker.join(); }
 template<class... T> struct thread_pool {
     thread_pool(int threads) { if (threads != 1) throw std::runtime_error("Unbounded worker count"); ++pools; }
     ~thread_pool() { Complete(); }
@@ -67,30 +72,44 @@ struct Source {
     std::shared_ptr<int> nativeOwner;
     bool contractValid = true;
 };
-size_t CompatibilityHash(const Source&) { return 0; }
+std::function<void()> beforeHash;
+size_t CompatibilityHash(const Source&) { if (beforeHash) beforeHash(); return 0; }
 bool CompatibleCaptured(const Source&, const Source&) { return true; }
 bool CurrentContract(const Source& source) { return source.contractValid; }
 struct Admission { size_t bucket, source; };
 struct Bucket {
+    struct { void Retire() {} } plan;
     std::vector<Source> sources;
     std::vector<GrassPreparation::Run> runs;
     uint32_t instances = 0, recordsCapacity = 0;
     std::unique_ptr<int> records;
     struct { std::unique_ptr<int> output; uint32_t capacity = 0, slots = 0; } result;
 };
+using QueuedGroup = int;
+namespace globals {
+    struct State { uint32_t frameCount = 1; } storage;
+    auto* state = &storage;
+    namespace features {
+        struct { GrassPolicy::Settings settings; auto GetSettings() { return settings; } } grassOptimizations;
+    }
+}
 struct GrassBucketRenderer {
     struct Impl {
         FIELDS
         uint64_t residentRevision = 0, preparedRevision = UINT64_MAX, residentRecordBytes = 0, resultBytes = 0;
         bool preparedBatching = true, failed = false;
-        struct { bool CrossCellBatching = true, Enabled = true; } frameSettings;
+        GrassPolicy::Settings frameSettings;
+        uint32_t frame = 1;
+        std::mutex captureMutex;
         std::atomic_uint64_t publishedResultBytes{0};
         std::atomic_bool diagnostics{false};
         std::atomic_uint64_t bucketRebuilds{0}, admittedSources{0}, persistentBucketFrames{0};
         std::unordered_map<uintptr_t, Source> residents;
         std::unordered_map<uintptr_t, Admission> admitted;
         std::vector<Bucket> buckets, dormantBuckets;
-        std::vector<int> queuedGroups;
+        std::vector<std::shared_ptr<const QueuedGroup>> queuedGroups;
+        void ClearDrawContext() {}
+        void UpdateLODDemand(const GrassPolicy::Settings&) {}
         void ReuseRecordBuffers(std::vector<Bucket>&) {}
         void RefreshFades() {
             for (const auto& bucket : buckets) for (const auto& source : bucket.sources) {
@@ -101,10 +120,48 @@ struct GrassBucketRenderer {
     };
     std::unique_ptr<Impl> impl = std::make_unique<Impl>();
     ~GrassBucketRenderer();
+    void EndFrame();
     void SetBackgroundPreparationEnabled(bool enabled);
 };
 METHODS
 void Require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
+void CheckUnusedRetirement() {
+    for (int reason = 0; reason < 4; ++reason) {
+        GrassBucketRenderer renderer;
+        auto& state = *renderer.impl;
+        auto& settings = globals::features::grassOptimizations.settings;
+        settings = state.frameSettings;
+        globals::state->frameCount = state.frame;
+        Source item{}; item.identity = 1; item.queue = std::make_shared<Queue>(); item.queue->members = {1};
+        const auto ownerThread = std::this_thread::get_id();
+        bool releasedOnOwner = false, releasedOutsideLock = false;
+        item.nativeOwner = std::shared_ptr<int>(new int, [&](int* p) {
+            releasedOnOwner = std::this_thread::get_id() == ownerThread;
+            releasedOutsideLock = state.captureMutex.try_lock();
+            if (releasedOutsideLock) state.captureMutex.unlock();
+            delete p;
+        });
+        auto owner = std::weak_ptr(item.nativeOwner);
+        state.residents.emplace(1, std::move(item));
+        renderer.SetBackgroundPreparationEnabled(true); state.PrepareBackground();
+        state.residents.clear();
+        renderer.EndFrame();
+        Require(state.preparationPending, "EndFrame waited for unfinished preparation");
+        ++globals::state->frameCount; renderer.EndFrame();
+        Require(state.preparationPending && !owner.expired(), "Idle retirement waited for or released a borrowed snapshot");
+        --globals::state->frameCount;
+        BS::Complete(); renderer.EndFrame();
+        Require(state.preparationPending && !owner.expired(), "Active same-frame result was discarded before publication");
+        if (reason == 0) ++globals::state->frameCount;
+        if (reason == 1) settings.Enabled = false;
+        if (reason == 2) renderer.SetBackgroundPreparationEnabled(false);
+        if (reason == 3) settings.CrossCellBatching = false;
+        renderer.EndFrame();
+        Require(!state.preparationPending && !state.preparationActive && state.preparationDiscarded == 1,
+            "Unused completed snapshot was retained without further grass draws");
+        Require(owner.expired() && releasedOnOwner && releasedOutsideLock, "Unused native owners retired on the wrong thread or under captureMutex");
+    }
+}
 int main() {
     try {
         GrassBucketRenderer renderer;
@@ -124,10 +181,20 @@ int main() {
         std::weak_ptr<int> nativeOwner = state.residents.at(2).nativeOwner;
         renderer.SetBackgroundPreparationEnabled(true);
         Require(state.PrepareBackground() && state.preparationPending && state.admitted.empty(), "Pending job did not preserve native fallback");
+        std::promise<void> entered, release;
+        auto started = entered.get_future(); auto resume = release.get_future();
+        bool gated = false;
+        beforeHash = [&] {
+            if (!gated) { gated = true; entered.set_value(); resume.wait(); }
+        };
+        BS::Start(); started.wait();
         state.residents.at(2).lifetime->alive = false;
         state.residents.erase(2); a->members = {1}; ++state.residentRevision;
-        Require(state.PrepareBackground() && state.preparationSubmitted == 1, "Pending work blocked or duplicated submission");
+        const bool remainedPending = state.PrepareBackground() && state.preparationSubmitted == 1;
+        release.set_value();
         BS::Complete();
+        beforeHash = {};
+        Require(remainedPending, "Pending work blocked or duplicated submission");
         Require(!nativeOwner.expired(), "Worker released a captured native owner");
         Require(state.PrepareBackground() && state.admitted.size() == 1 && state.admitted.contains(3),
             "Stale partial queue published or unaffected queue was lost");
@@ -143,11 +210,14 @@ int main() {
         BS::Complete();
         Require(!state.PrepareBackground() && !state.preparationPending && state.preparationPublished == published && state.preparationDiscarded == 1,
             "Disabled worker result was published");
+        state.diagnostics = true;
         renderer.SetBackgroundPreparationEnabled(true); state.PrepareBackground(); BS::Complete(); state.PrepareBackground();
         Require(state.admitted.size() == 2 && !state.preparationPending, "Re-enabled preparation did not publish all current queues");
+        Require(state.bucketRebuilds == 1 && state.persistentBucketFrames == 0, "Publication frame was also counted as reuse");
         const auto submitted = state.preparationSubmitted.load();
         state.PrepareBackground();
         Require(state.preparationSubmitted == submitted && BS::pools == 1, "Stable frame rebuilt or created another worker");
+        Require(state.persistentBucketFrames == 1, "Stable frame was not counted as reuse");
         auto snapshot = state.buckets.front().sources;
         const auto identity = snapshot.front().identity;
         const auto lifetime = state.residents.at(identity).lifetime;
@@ -163,7 +233,14 @@ int main() {
         state.PrepareBackground(); BS::Complete();
         Require(!state.PrepareBackground() && state.preparationFailed && !state.preparationPending, "Worker failure did not restore synchronous fallback");
         Require(!state.PrepareBackground(), "Failed worker retried without a new toggle");
+        renderer.SetBackgroundPreparationEnabled(false); renderer.SetBackgroundPreparationEnabled(true);
+        state.PrepareBackground(); BS::Complete();
+        renderer.SetBackgroundPreparationEnabled(false); renderer.SetBackgroundPreparationEnabled(true);
         state.residents.at(1).groups.front().count = 1;
+        Require(state.PrepareBackground() && !state.preparationFailed && state.preparationPending,
+            "Obsolete worker failure disabled a newly toggled run");
+        BS::Complete(); state.PrepareBackground();
+        Require(!state.preparationFailed && state.admitted.size() == 2, "Fresh run did not recover from obsolete failure");
         renderer.SetBackgroundPreparationEnabled(false); renderer.SetBackgroundPreparationEnabled(true);
         Require(state.PrepareBackground() && !state.preparationFailed && state.preparationPending, "Fresh toggle did not recover after failure");
         {
@@ -171,6 +248,7 @@ int main() {
             renderer.impl.swap(ending.impl);
         }
         Require(!BS::pending, "Renderer shutdown did not drain its borrowed snapshot");
+        CheckUnusedRetirement();
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

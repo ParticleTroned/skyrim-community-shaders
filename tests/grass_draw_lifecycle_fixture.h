@@ -429,6 +429,7 @@ public:
 		void ClearDrawContext() noexcept;
 		bool HasActiveDrawContext() const noexcept;
 		void UpdateLODDemand(const GrassPolicy::Settings&) {}
+		void EndBackgroundPreparation(const GrassPolicy::Settings&) {}
 		void PrepareCulling(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry);
 		void CopyGeometryConstants();
 		void RestoreCurrentGeometry();

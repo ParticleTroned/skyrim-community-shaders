@@ -128,6 +128,7 @@ struct GrassBucketRenderer {
         GrassLOD::Cache<LODKey, Mesh> lodMeshes;
         std::vector<Bucket> buckets{1}, dormantBuckets{1};
         void UpdateLODDemand(const GrassPolicy::Settings&);
+        void EndBackgroundPreparation(const GrassPolicy::Settings&) {}
         std::array<const Mesh*, 2> LODMeshes(const Source&);
         static inline std::array<unsigned, 2> loadCounts{}, loadModes{};
         static inline Property* changePropertyOnLoad = nullptr;

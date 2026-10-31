@@ -655,6 +655,7 @@ struct GrassBucketRenderer::Impl
 	std::atomic_uint64_t preparationRenderNanoseconds{ 0 }, preparationWorkerNanoseconds{ 0 }, preparationFrames{ 0 };
 	uint64_t preparationValidatedRevision = UINT64_MAX;
 	bool PrepareBackground();
+	void EndBackgroundPreparation(const GrassPolicy::Settings& settings);
 	bool CurrentBucket(std::span<const Source> sources) const;
 	void ReindexBuckets();
 	std::atomic_bool diagnostics{ false };
@@ -1374,7 +1375,11 @@ void GrassBucketRenderer::EndFrame()
 		bucket.plan.Retire();
 	for (auto& bucket : impl->dormantBuckets)
 		bucket.plan.Retire();
-	impl->UpdateLODDemand(globals::features::grassOptimizations.GetSettings());
+	const auto settings = globals::features::grassOptimizations.GetSettings();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	impl->EndBackgroundPreparation(settings);
+#endif
+	impl->UpdateLODDemand(settings);
 }
 
 void GrassBucketRenderer::Impl::PrepareFrame()
@@ -1614,13 +1619,14 @@ bool GrassBucketRenderer::Impl::PrepareBackground()
 	const bool active = (request & 1) && !preparationFailed.load(std::memory_order_relaxed) && frameSettings.Enabled && !failed;
 	preparationActive.store(active, std::memory_order_relaxed);
 	try {
+		bool published = false;
 		if (preparationJob && preparationJob->result.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
 			const auto retireJob = SKSE::stl::scope_exit([&] {
 				preparationJob.reset();
 				preparationPending.store(false, std::memory_order_relaxed);
 			});
-			auto preparedBuckets = preparationJob->result.get();
 			if (active && preparationJob->request == request && preparationJob->batching == frameSettings.CrossCellBatching) {
+				auto preparedBuckets = preparationJob->result.get();
 				std::vector<Bucket> completed;
 				completed.reserve(preparedBuckets.size());
 				for (auto& layout : preparedBuckets) {
@@ -1651,6 +1657,7 @@ bool GrassBucketRenderer::Impl::PrepareBackground()
 				preparedBatching = preparationJob->batching;
 				preparationValidatedRevision = residentRevision;
 				++preparationPublished;
+				published = true;
 			} else
 				++preparationDiscarded;
 		}
@@ -1686,7 +1693,7 @@ bool GrassBucketRenderer::Impl::PrepareBackground()
 			preparationPending.store(true, std::memory_order_relaxed);
 			++preparationSubmitted;
 		}
-		if (!preparationJob && diagnostics.load(std::memory_order_relaxed))
+		if (!published && !preparationJob && diagnostics.load(std::memory_order_relaxed))
 			++persistentBucketFrames;
 		RefreshFades();
 		return true;
@@ -1696,6 +1703,22 @@ bool GrassBucketRenderer::Impl::PrepareBackground()
 		preparationActive.store(false, std::memory_order_relaxed);
 		preparedRevision = UINT64_MAX;
 		return false;
+	}
+}
+
+void GrassBucketRenderer::Impl::EndBackgroundPreparation(const GrassPolicy::Settings& settings)
+{
+	const auto request = preparationRequest.load(std::memory_order_acquire);
+	if (frame == globals::state->frameCount && settings.Enabled && !failed &&
+		(request & 1) && !preparationFailed.load(std::memory_order_relaxed) &&
+		(!preparationJob || (preparationJob->request == request && preparationJob->batching == settings.CrossCellBatching)))
+		return;
+	preparationActive.store(false, std::memory_order_relaxed);
+	// Retire unused snapshots outside captureMutex even when no grass draws arrive.
+	if (preparationJob && preparationJob->result.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+		preparationJob.reset();
+		preparationPending.store(false, std::memory_order_relaxed);
+		++preparationDiscarded;
 	}
 }
 #endif

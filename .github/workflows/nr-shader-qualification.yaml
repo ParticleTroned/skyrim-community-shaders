@@ -1,0 +1,72 @@
+name: NR shader qualification
+
+on:
+  push:
+    branches: [build/os-dev-nr-shader-check-20261031]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nr-shader-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nr-shader-preflight:
+    name: Validate NR supplementary shaders (${{ matrix.runtime }})
+    if: github.repository == 'ParticleTroned/skyrim-community-shaders' && github.ref == 'refs/heads/build/os-dev-nr-shader-check-20261031'
+    runs-on: windows-2025-vs2026
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [SE, VR]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install shader validation dependency
+        run: python -m pip install git+https://github.com/alandtse/hlslkit.git@d0ed83ab12fc48b9ee03ddf61b21e80bfa5c3778
+      - name: Compile NR requests with production FXC flags
+        shell: python
+        env:
+          NR_PREFLIGHT_RUNTIME: ${{ matrix.runtime }}
+        run: |
+          import importlib.util
+          import os
+          import shutil
+          import sys
+          from pathlib import Path
+          from unittest.mock import patch
+
+          sys.path.insert(0, str(Path('tools').resolve()))
+          spec = importlib.util.spec_from_file_location('shader_cache', 'tools/build-shader-cache.py')
+          builder = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(builder)
+
+          fxc = shutil.which('fxc.exe')
+          if not fxc:
+              sdk = Path(os.environ['ProgramFiles(x86)']) / 'Windows Kits/10/bin'
+              candidates = sorted(sdk.glob('*/x64/fxc.exe'), reverse=True)
+              if not candidates:
+                  raise RuntimeError('Windows SDK FXC is required for NR preflight.')
+              fxc = str(candidates[0])
+
+          runtime = os.environ['NR_PREFLIGHT_RUNTIME']
+          stage = Path('build/nr-preflight/Shaders')
+          builder.stage_merged_shaders(stage)
+          requests = {
+              relative: request
+              for relative, request in builder.extra_shader_requests(builder.REPO, runtime).items()
+              if request['source'].startswith('Upscaling/NeuralRendering/')
+          }
+          if not requests:
+              raise RuntimeError(f'No NR supplementary requests found for {runtime}.')
+          print(f'{runtime}: validating {len(requests)} NR requests with {fxc}', flush=True)
+          with patch.object(builder, 'extra_shader_requests', return_value=requests):
+              builder.compile_extra_shaders(
+                  Path('build/nr-preflight') / runtime, stage, runtime, fxc, os.cpu_count() or 4)

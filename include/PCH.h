@@ -86,12 +86,9 @@ namespace stl
 	long detour_thunk(REL::RelocationID a_relId)
 	{
 		const auto address = a_relId.address();
-		T::func = address;
-		const auto result = Util::AttachDetour(reinterpret_cast<PVOID*>(&T::func), reinterpret_cast<PVOID>(T::thunk));
-		if (result.error != NO_ERROR) {
+		const auto result = Util::InstallDetour(address, reinterpret_cast<PVOID*>(&T::func), reinterpret_cast<PVOID>(T::thunk));
+		if (result.error != NO_ERROR)
 			SKSE::log::error("[Hooks] Detour attach failed at 0x{:X} (error {})", address, result.error);
-			T::func = 0;
-		}
 		return result.error;
 	}
 
@@ -99,8 +96,7 @@ namespace stl
 	void detour_thunk_ignore_func(REL::RelocationID a_relId)
 	{
 		const auto address = a_relId.address();
-		auto target = reinterpret_cast<PVOID>(address);
-		const auto result = Util::AttachDetour(&target, reinterpret_cast<PVOID>(T::thunk));
+		const auto result = Util::InstallDetour(address, nullptr, reinterpret_cast<PVOID>(T::thunk));
 		if (result.error != NO_ERROR)
 			SKSE::log::error("[Hooks] Detour attach failed at 0x{:X} (error {})", address, result.error);
 	}

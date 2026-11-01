@@ -171,7 +171,7 @@ void UnifiedWater::DrawOverlay()
 
 	if (waterCache->IsBuildRunning()) {
 		auto progressTitle = T(TKEY("generating_water_cache"), "Generating Water Cache:");
-		auto percent = static_cast<float>(snapshot.completed) / static_cast<float>(snapshot.total);
+		auto percent = snapshot.total ? static_cast<float>(snapshot.completed) / static_cast<float>(snapshot.total) : 0.0f;
 		auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", snapshot.completed, snapshot.total, 100 * percent);
 
 		ImGui::SetNextWindowPos(ImVec2(pos, pos + vOffset));
@@ -234,14 +234,15 @@ void UnifiedWater::DataLoaded()
 	logger::debug("[Unified Water] Water mesh loaded");
 	auto loadedFlowmap = std::make_unique<Flowmap>();
 	auto loadedWaterCache = std::make_unique<WaterCache>();
-	const bool loadOrderChanged = LoadOrderChanged();
+	uint64_t pendingHash = 0;
+	const bool loadOrderChanged = LoadOrderChanged(pendingHash);
 	const bool flowmapLoaded = loadOrderChanged ? loadedFlowmap->RegenerateAndLoadFlowmap() : loadedFlowmap->LoadOrGenerateFlowmap();
 	if (!flowmapLoaded || !loadedFlowmap->IsValid() || !gFlowMapSourceTex || !gFlowMapSize ||
 		!gDisplacementMeshFlowCellOffset || !gDisplacementCellTexCoordOffset || !gDisplacementMeshPos) {
 		fail("Flowmap initialization failed");
 		return;
 	}
-	const bool cachesStarted = loadOrderChanged ? loadedWaterCache->RegenerateCaches() : loadedWaterCache->LoadOrGenerateCaches();
+	const bool cachesStarted = loadOrderChanged ? loadedWaterCache->RegenerateCaches(false) : loadedWaterCache->LoadOrGenerateCaches(false);
 	while (loadedWaterCache->IsBuildRunning())
 		std::this_thread::sleep_for(100ms);
 	if (!cachesStarted || loadedWaterCache->HasBuildFailed()) {
@@ -258,6 +259,8 @@ void UnifiedWater::DataLoaded()
 	SetFlowmapTex();
 	failedLoadedMessage.clear();
 	waterDataReady.store(true, std::memory_order_release);
+	if (loadOrderChanged && !PersistLoadOrderHash(pendingHash))
+		logger::warn("[Unified Water] Could not persist completed cache hash; initialization will retry next launch");
 
 	if (!MenuOpenCloseEventHandler::Register()) {
 		logger::warn("[Unified Water] MenuOpenCloseEventHandler registration failed");
@@ -372,7 +375,7 @@ namespace
 	}
 }
 
-bool UnifiedWater::LoadOrderChanged()
+bool UnifiedWater::LoadOrderChanged(uint64_t& pendingHash)
 {
 	auto* dataHandler = RE::TESDataHandler::GetSingleton();
 	if (!dataHandler)
@@ -412,13 +415,17 @@ bool UnifiedWater::LoadOrderChanged()
 	const bool changed = hash != existingHash;
 	logger::debug("[Unified Water] Load order hash: computed={:#x} persisted={:#x} changed={}", hash, existingHash, changed);
 
-	if (changed) {
-		std::error_code ec;
-		std::filesystem::create_directories(path.parent_path(), ec);
-		WriteHashFile(path, hash);
-	}
+	pendingHash = hash;
 
 	return changed;
+}
+
+bool UnifiedWater::PersistLoadOrderHash(uint64_t hash)
+{
+	const auto path = Util::PathHelpers::GetCommunityShaderPath() / "UWLoadOrder.hash";
+	std::error_code ec;
+	std::filesystem::create_directories(path.parent_path(), ec);
+	return !ec && WriteHashFile(path, hash);
 }
 
 void UnifiedWater::SetFlowmapTex() const

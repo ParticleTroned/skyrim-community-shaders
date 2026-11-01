@@ -5,6 +5,39 @@
 #include "/Shaders/Common/PBRMath.hlsli"
 #include "/Test/STF/ShaderTestFramework.hlsli"
 
+/// @tags pbr, hair, black, regression
+[numthreads(1, 1, 1)] void TestHairScatterBlackAlbedo() {
+	const float shadows[3] = { 0.0, 0.5, 1.0 };
+	const float3 colors[3] = { float3(0, 0, 0), float3(1e-8, 0, 0), float3(0, 1e-8, 1e-8) };
+	for (uint i = 0; i < 3; ++i) {
+		float luminance = dot(colors[i], float3(0.2125, 0.7154, 0.0721));
+		for (uint j = 0; j < 3; ++j) {
+			float3 tint = PBR::GetHairScatterTint(colors[i], luminance, shadows[j]);
+			float3 scatter = sqrt(colors[i]) * tint;
+			ASSERT(IsTrue, all(isfinite(tint)) && all(isfinite(scatter)));
+			ASSERT(IsTrue, all(scatter >= 0.0));
+			if (i == 0) {
+				ASSERT(IsTrue, all(scatter == 0.0));
+			}
+			if (j == 2) {
+				ASSERT(IsTrue, all(tint == 1.0));
+			}
+		}
+	}
+}
+
+	/// @tags pbr, hair, regression
+	[numthreads(1, 1, 1)] void TestHairScatterOrdinaryAlbedo()
+{
+	const float3 baseColor = float3(0.1, 0.25, 0.5);
+	const float luminance = dot(baseColor, float3(0.2125, 0.7154, 0.0721));
+	float3 directTint = PBR::GetHairScatterTint(baseColor, luminance, 0.0);
+	ASSERT(IsTrue, all(abs(directTint * luminance - baseColor) < 1e-6));
+	float3 partialTint = PBR::GetHairScatterTint(baseColor, luminance, 0.5);
+	ASSERT(IsTrue, all(abs(partialTint * partialTint * luminance - baseColor) < 1e-6));
+	ASSERT(IsTrue, all(PBR::GetHairScatterTint(baseColor, luminance, 1.0) == 1.0));
+}
+
 /// @tags pbr, ior, material
 [numthreads(1, 1, 1)] void TestIORToF0() {
 	// Test 1: Air/Glass (n=1.5): F0 = ((1-1.5)/(1+1.5))^2 = 0.04

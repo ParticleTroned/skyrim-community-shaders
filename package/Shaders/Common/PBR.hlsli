@@ -100,7 +100,7 @@ namespace PBR
 		float wrappedNdotL = saturate((dot(fakeN, L) + wrap) / ((1 + wrap) * (1 + wrap)));
 		float diffuseScatter = (1 / Math::PI) * lerp(wrappedNdotL, diffuseKajiya, 0.33);
 		float luma = Color::RGBToLuminance(material.BaseColor);
-		float3 scatterTint = pow(material.BaseColor / luma, 1 - shadow);
+		float3 scatterTint = GetHairScatterTint(material.BaseColor, luma, shadow);
 		S += sqrt(material.BaseColor) * diffuseScatter * scatterTint;
 
 		return S;

@@ -123,6 +123,12 @@ namespace PBR
 		return exp(-0.5 * Theta * Theta / (B_safe * B_safe)) / (sqrt(Math::TAU) * B_safe);
 	}
 
+	/** @brief Keeps black hair absorption finite and avoids zero-to-zero powers in fully shadowed scattering. */
+	float3 GetHairScatterTint(float3 baseColor, float luminance, float shadow)
+	{
+		return shadow < 1.0 ? pow(baseColor / max(luminance, EPSILON_DIVISION), 1.0 - shadow) : 1.0;
+	}
+
 	/// @brief Calculate wetness specular contribution for direct lighting
 	/// @param N Surface normal
 	/// @param V View direction

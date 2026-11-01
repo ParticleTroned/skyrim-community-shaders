@@ -364,6 +364,18 @@ foreach(_dir IN LISTS FEATURE_SHADER_DIRS)
     )
 endforeach()
 
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/extern/AntiLag2-SDK/ffx_antilag2_dx12.h")
+    message(
+        FATAL_ERROR
+        "Anti-Lag 2 SDK missing: git submodule update --init extern/AntiLag2-SDK"
+    )
+endif()
+target_include_directories(
+    ${PROJECT_NAME}
+    SYSTEM
+    PRIVATE "${CMAKE_SOURCE_DIR}/extern/AntiLag2-SDK"
+)
+
 target_include_directories(
     ${PROJECT_NAME}
     BEFORE
@@ -3945,6 +3957,20 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(
         VRSubmitInputFreshnessContract
         PROPERTIES LABELS "ControllerTests"
+    )
+    add_controller_test(anti_lag2_test AntiLag2 tests/anti_lag2_test.cpp)
+    target_sources(anti_lag2_test PRIVATE src/Features/Upscaling/AntiLag2.cpp)
+    target_include_directories(
+        anti_lag2_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/extern/AntiLag2-SDK"
+    )
+    target_compile_definitions(
+        anti_lag2_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    target_link_libraries(
+        anti_lag2_test
+        PRIVATE Microsoft::DirectX-Headers dxguid
     )
     add_controller_test(
         reflex_policy_test

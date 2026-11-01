@@ -1413,6 +1413,22 @@ bool FidelityFX::ResetFrameGenerationRenderContext() noexcept
 	return resetComplete;
 }
 
+bool FidelityFX::WaitForFrameGenerationPresents() noexcept
+{
+	if (swapChainContextIndeterminate)
+		return false;
+	if (!swapChainContextValid)
+		return true;
+	ffx::DispatchDescFrameGenerationSwapChainWaitForPresentsDX12 wait{};
+	bool crashed = false;
+	const auto result = DispatchFrameGenerationProtected(&swapChainContext, &wait.header, crashed);
+	if (crashed || result != FFX_API_RETURN_OK) {
+		QuarantineFrameGenerationForSession("presentation drain");
+		return false;
+	}
+	return true;
+}
+
 bool FidelityFX::ResetFrameGenerationContexts() noexcept
 {
 	if (!ResetFrameGenerationRenderContext()) {

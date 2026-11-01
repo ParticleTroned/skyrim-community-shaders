@@ -23,6 +23,14 @@ pwsh ./tools/cmake.ps1 --preset ALL
 pwsh ./tools/cmake.ps1 --build --preset CSmain
 ```
 
+The AMD Anti-Lag 2 headers are pinned in `extern/AntiLag2-SDK`. Existing
+checkouts must initialize that submodule before configuring, including VR
+builds of the shared source:
+
+```powershell
+pwsh ./tools/git.ps1 submodule update --init extern/AntiLag2-SDK
+```
+
 Keep local deployment configuration in the ignored `CMakeUserPresets.json`.
 Use `CMakeUserPresets.json.template` as a starting point. `CMakePresets.json`
 lists the tracked presets; local presets can add deployment destinations.

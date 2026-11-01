@@ -10,6 +10,16 @@
 #include <optional>
 #include <stdexcept>
 #include <utility>
+#include <vector>
+
+enum class FrameEvent
+{
+	Published,
+	Submitted,
+	Marked,
+	Presented
+};
+std::vector<FrameEvent> frameEvents;
 
 using UINT = unsigned;
 using uint = unsigned;
@@ -91,7 +101,9 @@ struct Gpu
 	{}
 	template <class... Args>
 	void ExecuteCommandLists(Args...)
-	{}
+	{
+		frameEvents.push_back(FrameEvent::Submitted);
+	}
 	template <class... Args>
 	void CopyResource(Args...)
 	{
@@ -173,6 +185,7 @@ struct SwapChain
 	HRESULT Present(UINT, UINT)
 	{
 		++presents;
+		frameEvents.push_back(FrameEvent::Presented);
 		if (throwOnPresent)
 			throw std::runtime_error("injected present failure");
 		return result;
@@ -183,6 +196,15 @@ struct SwapChain
 
 struct DX12SwapChain
 {
+	struct AntiLag
+	{
+		bool suspended = false;
+		void Suspend() { suspended = true; }
+		void Publish(SwapChain*) { frameEvents.push_back(FrameEvent::Published); }
+		void MarkEndOfRendering() { frameEvents.push_back(FrameEvent::Marked); }
+	} antiLag2;
+	void ReportAntiLag2Failure() {}
+
 	Gpu gpu;
 	SwapChain backend;
 	SwapChain* swapChain = &backend;
@@ -347,6 +369,7 @@ namespace
 
 	Upscaling& Reset()
 	{
+		frameEvents.clear();
 		auto& upscaling = globals::features::upscaling;
 		std::destroy_at(&upscaling);
 		std::construct_at(&upscaling);
@@ -505,13 +528,17 @@ namespace
 			Check(present(DXGI_PRESENT_TEST) == S_OK && u.ShouldUseFrameGenerationThisFrame(),
 				"test present consumed inputs");
 			Check(u.fidelityFX.presents == 0 && chain.gpu.clears == 0, "test present performed frame work");
+			Check(frameEvents == std::vector{ FrameEvent::Presented }, "test present issued latency notifications");
 			chain.backend.result = DXGI_ERROR_WAS_STILL_DRAWING;
 			Check(present(0) == DXGI_ERROR_WAS_STILL_DRAWING && u.ShouldUseFrameGenerationThisFrame(),
 				"retryable present consumed inputs");
 			Check(chain.gpu.clears == 0, "retryable present cleared UI");
 			chain.backend.result = S_OK;
+			frameEvents.clear();
 			Check(present(0) == S_OK && u.fidelityFX.lastUse, "prepared frame did not generate");
 			Check(u.limiterUsedGeneration, "readiness was consumed before the frame limiter");
+			Check(frameEvents == std::vector{ FrameEvent::Published, FrameEvent::Submitted, FrameEvent::Marked, FrameEvent::Presented },
+				"Anti-Lag notifications do not bracket submitted frame/presentation");
 			Check(!u.ShouldUseFrameGenerationThisFrame() && chain.gpu.clears == 1,
 				"completed present retained readiness or missed UI clearing");
 			Check(present(0) == S_OK && !u.fidelityFX.lastUse, "second present reused consumed inputs");
@@ -550,6 +577,8 @@ namespace
 			}
 			Check(FAILED(chain.Present(0, 0)), "injected failure did not fail presentation");
 			Check(!u.ShouldUseFrameGenerationThisFrame(), "failed presentation retained readiness");
+			if (failure >= 2)
+				Check(chain.antiLag2.suspended, "fatal present did not stop driver delays");
 		}
 		auto& u = Reset();
 		u.PrepareFrameGenerationInputs();

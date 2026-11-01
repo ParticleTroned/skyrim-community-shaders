@@ -12,7 +12,47 @@
 #include "../../Utils/ResourceName.h"
 #include "../Upscaling.h"
 #include "FidelityFX.h"
+#include "Hooks.h"
 #include "Streamline.h"
+
+void DX12SwapChain::InitializeAntiLag2()
+try {
+	if (REL::Module::IsVR())
+		return;
+	winrt::com_ptr<IDXGIDevice> dxgiDevice;
+	winrt::com_ptr<IDXGIAdapter> adapter;
+	DXGI_ADAPTER_DESC desc{};
+	if (FAILED(d3d11Device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put()))) ||
+		FAILED(dxgiDevice->GetAdapter(adapter.put())) || FAILED(adapter->GetDesc(&desc)) || desc.VendorId != 0x1002)
+		return;
+	const HRESULT result = antiLag2.Initialize(d3d12Device.get());
+	logger::info("[AntiLag2] Driver initialization: 0x{:08X}", static_cast<uint32_t>(result));
+	if (result != S_OK)
+		return;
+	const bool installed = Hooks::InstallAntiLag2BeforeInputPoll();
+	antiLag2.SetHookReady(installed);
+	if (!installed)
+		logger::warn("[AntiLag2] Pre-input hook unavailable; leaving AMD latency control disabled");
+	antiLag2.Request(globals::features::upscaling.settings.antiLag2Enabled);
+} catch (const std::exception& error) {
+	antiLag2.SetHookReady(false);
+	logger::warn("[AntiLag2] Optional initialization failed: {}", error.what());
+}
+
+void DX12SwapChain::ReportAntiLag2Failure()
+{
+	if (!antiLag2.TakeFailure())
+		return;
+	const auto status = antiLag2.GetStatus();
+	logger::warn("[AntiLag2] {} failed: 0x{:08X}; delay suspended until restart (disable=0x{:08X}, driverEnabled={})",
+		status.operation, static_cast<uint32_t>(status.result), static_cast<uint32_t>(status.disableResult), status.driverEnabled);
+}
+
+void DX12SwapChain::UpdateAntiLag2BeforeInput()
+{
+	antiLag2.BeforeInput();
+	ReportAntiLag2Failure();
+}
 
 void DX12SwapChain::CreateD3D12Device(IDXGIAdapter* a_adapter)
 {
@@ -102,10 +142,13 @@ void DX12SwapChain::CreateInterop()
 	swapChainProxy = new DXGISwapChainProxy(*this, swapChain);
 
 	RecreateWrappedResources(swapChainDesc);
+	InitializeAntiLag2();
 }
 
 bool DX12SwapChain::ResetUnpublished() noexcept
 {
+	antiLag2.Suspend();
+	ReportAntiLag2Failure();
 	auto& upscaling = globals::features::upscaling;
 	auto& fidelityFX = globals::features::upscaling.fidelityFX;
 	if (!RetireAllocatorFenceWaits()) {
@@ -113,7 +156,8 @@ bool DX12SwapChain::ResetUnpublished() noexcept
 		logger::critical("[DX12SwapChain] Unpublished proxy has an unretired allocator wait; retaining the complete candidate generation");
 		return false;
 	}
-	if (!fidelityFX.ResetFrameGenerationContexts()) {
+	if ((antiLag2.GetStatus().available && !fidelityFX.WaitForFrameGenerationPresents()) ||
+		!fidelityFX.ResetFrameGenerationContexts()) {
 		lifecycle.CancelConstruction(false, upscaling.d3d12SwapChainActive);
 		logger::critical(
 			"[DX12SwapChain] Unpublished proxy cleanup left FidelityFX ownership indeterminate; retaining the complete candidate generation");
@@ -131,6 +175,7 @@ bool DX12SwapChain::ResetUnpublished() noexcept
 
 void DX12SwapChain::ResetResources() noexcept
 {
+	antiLag2.ReleaseAfterPresentDestruction();
 	globals::features::upscaling.InvalidateFrameGenerationInputs();
 	swapChain = nullptr;
 	swapChainOwner = nullptr;
@@ -200,6 +245,8 @@ void DX12SwapChain::OnProxyDestroyed(IDXGISwapChain4* a_swapChain) noexcept
 		return;
 	if (!lifecycle.BeginRetirement())
 		return;
+	antiLag2.Suspend();
+	ReportAntiLag2Failure();
 
 	auto& upscaling = globals::features::upscaling;
 	if (!RetireAllocatorFenceWaits()) {
@@ -207,7 +254,8 @@ void DX12SwapChain::OnProxyDestroyed(IDXGISwapChain4* a_swapChain) noexcept
 		lifecycle.CompleteRetirement(false, upscaling.d3d12SwapChainActive);
 		return;
 	}
-	if (!upscaling.fidelityFX.ResetFrameGenerationContexts()) {
+	if ((antiLag2.GetStatus().available && !upscaling.fidelityFX.WaitForFrameGenerationPresents()) ||
+		!upscaling.fidelityFX.ResetFrameGenerationContexts()) {
 		logger::critical(
 			"[DX12SwapChain] Published proxy destruction left FidelityFX ownership indeterminate; retaining every dependent D3D resource");
 		lifecycle.CompleteRetirement(false, upscaling.d3d12SwapChainActive);
@@ -272,6 +320,8 @@ HRESULT DX12SwapChain::ResizeBuffers(UINT bufferCount, UINT width, UINT height, 
 	auto& fidelityFX = globals::features::upscaling.fidelityFX;
 	if (!fidelityFX.ResetFrameGenerationRenderContext()) {
 		runtimeQuarantined = true;
+		antiLag2.Suspend();
+		ReportAntiLag2Failure();
 		return E_FAIL;
 	}
 
@@ -293,6 +343,8 @@ HRESULT DX12SwapChain::ResizeBuffers(UINT bufferCount, UINT width, UINT height, 
 		return refresh;
 	if (!fidelityFX.SetupFrameGeneration()) {
 		runtimeQuarantined = true;
+		antiLag2.Suspend();
+		ReportAntiLag2Failure();
 		logger::error("[DX12SwapChain] Resized frame-generation context creation failed; quarantining the proxy");
 		return E_FAIL;
 	}
@@ -325,6 +377,8 @@ HRESULT DX12SwapChain::ResizeBuffers1(
 	auto& fidelityFX = globals::features::upscaling.fidelityFX;
 	if (!fidelityFX.ResetFrameGenerationRenderContext()) {
 		runtimeQuarantined = true;
+		antiLag2.Suspend();
+		ReportAntiLag2Failure();
 		return E_FAIL;
 	}
 
@@ -351,6 +405,8 @@ HRESULT DX12SwapChain::ResizeBuffers1(
 		return refresh;
 	if (!fidelityFX.SetupFrameGeneration()) {
 		runtimeQuarantined = true;
+		antiLag2.Suspend();
+		ReportAntiLag2Failure();
 		logger::error("[DX12SwapChain] Resized frame-generation context creation failed; quarantining the proxy");
 		return E_FAIL;
 	}
@@ -364,6 +420,8 @@ HRESULT DX12SwapChain::RefreshAfterResize(DXGI_FORMAT publicFormat) noexcept
 		HRESULT result = swapChain->GetDesc1(&resizedDesc);
 		if (FAILED(result)) {
 			runtimeQuarantined = true;
+			antiLag2.Suspend();
+			ReportAntiLag2Failure();
 			return result;
 		}
 
@@ -393,6 +451,8 @@ HRESULT DX12SwapChain::RefreshAfterResize(DXGI_FORMAT publicFormat) noexcept
 			result = swapChain->GetBuffer(1, IID_PPV_ARGS(newBuffers[1].put()));
 		if (FAILED(result)) {
 			runtimeQuarantined = true;
+			antiLag2.Suspend();
+			ReportAntiLag2Failure();
 			return result;
 		}
 
@@ -417,6 +477,8 @@ HRESULT DX12SwapChain::RefreshAfterResize(DXGI_FORMAT publicFormat) noexcept
 		logger::error("[DX12SwapChain] Resize refresh failed; quarantining the proxy");
 	}
 	runtimeQuarantined = true;
+	antiLag2.Suspend();
+	ReportAntiLag2Failure();
 	return E_FAIL;
 }
 
@@ -427,6 +489,8 @@ HRESULT DX12SwapChain::RestoreFrameGenerationAfterFailedResize() noexcept
 		return refresh;
 	if (!globals::features::upscaling.fidelityFX.SetupFrameGeneration()) {
 		runtimeQuarantined = true;
+		antiLag2.Suspend();
+		ReportAntiLag2Failure();
 		logger::error("[DX12SwapChain] Failed resize could not restore the prior frame-generation context; quarantining the proxy");
 		return E_FAIL;
 	}
@@ -555,6 +619,8 @@ HRESULT DX12SwapChain::PresentInternal(
 
 	auto fail = [this](HRESULT a_result, const char* a_operation) {
 		runtimeQuarantined = true;
+		antiLag2.Suspend();
+		ReportAntiLag2Failure();
 		logger::error("[DX12SwapChain] {} failed with 0x{:08X}; quarantining the proxy", a_operation, static_cast<uint32_t>(a_result));
 		return a_result;
 	};
@@ -609,6 +675,7 @@ HRESULT DX12SwapChain::PresentInternal(
 			commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(afterCopy.size()), afterCopy.data());
 		}
 
+		antiLag2.Publish(swapChain);
 		const bool useFrameGeneration = upscaling.ShouldUseFrameGenerationThisFrame() &&
 		                                upscaling.streamline.EnsureReflexDisabledForFrameGeneration();
 		if (!CSX::NvidiaPipelinePolicy::CanContinueBasePresentation(
@@ -622,6 +689,8 @@ HRESULT DX12SwapChain::PresentInternal(
 
 		ID3D12CommandList* commandListsToExecute[] = { commandLists[frameIndex].get() };
 		commandQueue->ExecuteCommandLists(1, commandListsToExecute);
+		antiLag2.MarkEndOfRendering();
+		ReportAntiLag2Failure();
 
 		// Present the frame
 		const HRESULT presentResult = presentParameters ?
@@ -663,6 +732,8 @@ HRESULT DX12SwapChain::PresentInternal(
 		logger::error("[DX12SwapChain] Present raised an unknown exception; quarantining the proxy");
 	}
 	runtimeQuarantined = true;
+	antiLag2.Suspend();
+	ReportAntiLag2Failure();
 	return E_FAIL;
 }
 

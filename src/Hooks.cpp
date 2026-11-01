@@ -1488,6 +1488,37 @@ struct BSShaderRenderTargets_Create
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
+namespace
+{
+	struct AntiLag2BeforeInputPoll
+	{
+		static void thunk(RE::BSInputDeviceManager* a_manager, float a_delta)
+		{
+			globals::features::upscaling.dx12SwapChain.UpdateAntiLag2BeforeInput();
+			func(a_manager, a_delta);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+}
+
+bool Hooks::InstallAntiLag2BeforeInputPoll()
+{
+	if (REL::Module::IsVR())
+		return false;
+	if (AntiLag2BeforeInputPoll::func.address())
+		return true;
+	const auto version = REL::Module::get().version();
+	if (version != REL::Version{ 1, 5, 97, 0 } && version != REL::Version{ 1, 6, 1170, 0 } &&
+		version != REL::Version{ 1, 7, 104, 0 })
+		return false;
+	const REL::RelocationID entry(67315, 68617);
+	const auto text = REL::Module::get().segment(REL::Segment::textx);
+	const auto address = entry.address();
+	if (address < text.address() || address >= text.address() + text.size())
+		return false;
+	return stl::detour_thunk<AntiLag2BeforeInputPoll>(entry) == NO_ERROR;
+}
+
 struct BSInputDeviceManager_PollInputDevices
 {
 	static void thunk(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent* const* a_events)

@@ -26,6 +26,8 @@ namespace Hooks
 	void DrawRenderPassImmediately(RE::BSRenderPass* pass, uint32_t technique, bool alphaTest, uint32_t renderFlags);
 	void Install();
 	void InstallEarlyHooks();
+	/** Installs AMD's optional pre-input callback only on supported SE/AE runtimes. */
+	bool InstallAntiLag2BeforeInputPoll();
 	std::shared_mutex& GetRenderTargetRecreationMutex();
 	bool RecreateRenderTargets();
 	using VRRenderTargetRecreatePreparation = void (*)(void*);

@@ -361,6 +361,7 @@ namespace FSRTemporalTuningPolicy
 	OP(frameGenerationMode)                         \
 	OP(frameGenerationForceEnable)                  \
 	OP(frameGenerationAllowInMenus)                 \
+	OP(antiLag2Enabled)                             \
 	OP(streamlineLogLevel)                          \
 	OP(sharpnessFSR)                                \
 	OP(sharpnessDLSS)                               \
@@ -17994,6 +17995,23 @@ void Upscaling::DrawSettings()
 
 			DrawFrameGenerationForceEnableToggle(*this);
 
+			const auto antiLagStatus = dx12SwapChain.GetAntiLag2Status();
+			{
+				const auto disabled = Util::DisableGuard(!settings.antiLag2Enabled && (!antiLagStatus.available || antiLagStatus.faulted || antiLagStatus.suspended));
+				if (Util::Widgets::Checkbox("AMD Anti-Lag 2", &settings.antiLag2Enabled))
+					dx12SwapChain.RequestAntiLag2(settings.antiLag2Enabled);
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextWrapped("Default off. Reduces input latency on supported AMD hardware with FSR Frame Generation. Adds driver calls and intentional CPU waiting; FPS and latency effects in CSX are unmeasured. Uses no additional FPS cap. Changes apply before the next input poll.");
+			}
+			ImGui::Text("Anti-Lag 2: %s", antiLagStatus.faulted    ? "Failed - restart required" :
+										  antiLagStatus.suspended  ? "Suspended" :
+										  !antiLagStatus.available ? "Unavailable" :
+										  antiLagStatus.active     ? "Active" :
+										  settings.antiLag2Enabled ? "Pending" :
+																	 "Off");
+			if (!antiLagStatus.available || antiLagStatus.faulted)
+				ImGui::TextWrapped("%s (0x%08X)", antiLagStatus.operation, static_cast<unsigned>(antiLagStatus.result));
+
 			Util::Widgets::Checkbox("Frame Generation in Menus", &settings.frameGenerationAllowInMenus);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Keeps frame generation active while game menus are open.");
@@ -21449,6 +21467,7 @@ void Upscaling::LoadSettings(json& o_json)
 		previousSettings,
 		currentDesiredProfile,
 		"upscaling settings reload");
+	dx12SwapChain.RequestAntiLag2(settings.antiLag2Enabled);
 	if (!HandleNeuralRenderingSettingsTransition(previousSettings, "upscaling settings reload"))
 		NeuralRendering::CopyRenderingSettings(settings, previousSettings);
 	InvalidateFrameScopedUpscalingState();
@@ -21477,6 +21496,7 @@ void Upscaling::RestoreDefaultSettings()
 	settings.reflexUseMarkersToOptimize = true;
 	settings.reflexLowLatencyBoost = false;
 	settings.reflexUseFPSLimit = false;
+	dx12SwapChain.RequestAntiLag2(settings.antiLag2Enabled);
 	SanitizeUpscalingSettings(settings);
 	if (!SetFSRSharedGuideInputsEnabled(settings.fsrSharedGuideInputs))
 		settings.fsrSharedGuideInputs = previousSettings.fsrSharedGuideInputs;

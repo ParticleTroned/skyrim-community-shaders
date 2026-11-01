@@ -171,6 +171,8 @@ public:
 	bool SetupFrameGeneration();
 	bool ResetFrameGenerationRenderContext() noexcept;
 	bool ResetFrameGenerationContexts() noexcept;
+	/** Drains queued FSR presents before releasing externally published driver contexts. */
+	bool WaitForFrameGenerationPresents() noexcept;
 	bool Present(bool a_useFrameGeneration) noexcept;
 	ffxReturnCode_t DispatchFrameGenerationCallback(ffxDispatchDescFrameGeneration* a_parameters) noexcept;
 

@@ -470,6 +470,7 @@ public:
 		uint frameGenerationMode = 0;  // Disabled by default
 		uint frameGenerationForceEnable = 0;
 		bool frameGenerationAllowInMenus = false;
+		bool antiLag2Enabled = false;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = REL::Module::IsVR() ? 0.9f : 0.0f;
 		bool fsrSharedGuideInputs = true;

@@ -35,6 +35,11 @@
 #include <sl_version.h>
 #pragma warning(pop)
 
+namespace UpscalingTextures
+{
+	struct VRInputSourceDescriptions;
+}
+
 class Streamline
 {
 public:
@@ -666,7 +671,8 @@ public:
 		const std::array<uint32_t, 2>& a_outputHeights,
 		const std::array<ID3D11Resource*, 2>& a_colorInputs) const noexcept;
 
-	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
+	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors,
+		const UpscalingTextures::VRInputSourceDescriptions* a_sourceDescriptions = nullptr);
 	bool UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 		ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 		uint32_t renderWidth, uint32_t renderHeight, uint32_t outputWidth, uint32_t outputHeight,

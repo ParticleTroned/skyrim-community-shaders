@@ -3480,7 +3480,8 @@ bool Streamline::UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D1
 		false, 0u, Upscaling::kDLSSPresetK, viewportCrop);
 }
 
-bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)
+bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors,
+	const UpscalingTextures::VRInputSourceDescriptions* a_sourceDescriptions)
 {
 	auto state = globals::state;
 
@@ -3549,6 +3550,14 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			vendorLifecycleMutationDeferred ?
 				upscaling.GetExistingVRVendorProviderSnapshot() :
 				Upscaling::VRExistingVendorProviderSnapshot{};
+		UpscalingTextures::VRInputSourceDescriptions localDescriptions;
+		if (!a_sourceDescriptions || !a_sourceDescriptions->Matches(a_upscalingTexture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask)) {
+			if (!localDescriptions.Capture(a_upscalingTexture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask)) {
+				upscaling.dlssUpscaleOutputInSharpenerTexture = false;
+				return false;
+			}
+			a_sourceDescriptions = &localDescriptions;
+		}
 		if (vendorLifecycleMutationDeferred &&
 			!upscaling.AreActiveVRIntermediateTexturesCompatible(
 				Upscaling::UpscaleMethod::kDLSS,
@@ -3560,7 +3569,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				a_motionVectors,
 				a_reactiveMask,
 				a_transparencyCompositionMask,
-				contractGeneration)) {
+				contractGeneration, a_sourceDescriptions)) {
 			upscaling.dlssUpscaleOutputInSharpenerTexture = false;
 			return false;
 		}
@@ -3612,7 +3621,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				a_reactiveMask,
 				a_transparencyCompositionMask,
 				false,
-				true)) {
+				true, a_sourceDescriptions)) {
 			static bool loggedPrepareFailure = false;
 			if (!loggedPrepareFailure) {
 				logger::warn("[Streamline] VR DLSS/DLAA skipped because per-eye input preparation failed.");

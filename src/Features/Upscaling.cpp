@@ -7741,7 +7741,8 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		return IsKnownGameMenuContextActive();
 	}
 
-	bool TryGetTexture2DDesc(ID3D11Resource* resource, D3D11_TEXTURE2D_DESC& outDesc)
+	bool TryGetTexture2DDesc(ID3D11Resource* resource, D3D11_TEXTURE2D_DESC& outDesc,
+		winrt::com_ptr<ID3D11Texture2D>* owner = nullptr)
 	{
 		if (!resource)
 			return false;
@@ -7751,6 +7752,8 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 			return false;
 
 		texture->GetDesc(&outDesc);
+		if (owner)
+			*owner = std::move(texture);
 		return true;
 	}
 
@@ -43117,11 +43120,44 @@ ID3D11PixelShader* Upscaling::GetVRMenuLayerCompositePS()
 		"main", "Upscaling::VRMenuLayerCompositePS");
 }
 
+bool UpscalingTextures::TextureSourceDescription::Capture(ID3D11Resource* a_source)
+{
+	if (Matches(a_source))
+		return true;
+	TextureSourceDescription captured;
+	if (!TryGetTexture2DDesc(a_source, captured.desc_, &captured.texture_)) {
+		*this = {};
+		return false;
+	}
+	captured.source_ = a_source;
+	*this = std::move(captured);
+	return true;
+}
+
+bool UpscalingTextures::VRInputSourceDescriptions::Capture(ID3D11Resource* a_color, ID3D11Resource* a_motion,
+	ID3D11Resource* a_reactive, ID3D11Resource* a_transparency)
+{
+	if (Matches(a_color, a_motion, a_reactive, a_transparency))
+		return true;
+	VRInputSourceDescriptions captured;
+	if (!captured.color.Capture(a_color) || !captured.motion.Capture(a_motion) ||
+		!captured.reactive.Capture(a_reactive) || !captured.transparency.Capture(a_transparency)) {
+		*this = {};
+		return false;
+	}
+	*this = std::move(captured);
+	return true;
+}
+
 eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
-	bool copyBindFlags, bool createSRV, bool createUAV, const char* name, bool createRTV, bool shareWithRuntime, DXGI_FORMAT formatOverride)
+	bool copyBindFlags, bool createSRV, bool createUAV, const char* name, bool createRTV, bool shareWithRuntime, DXGI_FORMAT formatOverride,
+	const UpscalingTextures::TextureSourceDescription* sourceDescription)
 {
 	D3D11_TEXTURE2D_DESC srcDesc;
-	static_cast<ID3D11Texture2D*>(src)->GetDesc(&srcDesc);
+	if (sourceDescription && sourceDescription->Matches(src))
+		srcDesc = sourceDescription->Desc();
+	else
+		static_cast<ID3D11Texture2D*>(src)->GetDesc(&srcDesc);
 	const DXGI_FORMAT textureFormat = formatOverride != DXGI_FORMAT_UNKNOWN ?
 	                                      formatOverride :
 	                                      srcDesc.Format;
@@ -43487,14 +43523,19 @@ bool Upscaling::GetFoveatedEncodeRegions(uint32_t inputWidthPerEye, uint32_t inp
 	return true;
 }
 
-bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name, DXGI_FORMAT formatOverride)
+bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name, DXGI_FORMAT formatOverride,
+	const UpscalingTextures::TextureSourceDescription* sourceDescription)
 {
 	if (!source || !width || !height)
 		return false;
 
-	D3D11_TEXTURE2D_DESC sourceDesc{};
-	if (!TryGetTexture2DDesc(source, sourceDesc))
-		return false;
+	UpscalingTextures::TextureSourceDescription localDescription;
+	if (!sourceDescription || !sourceDescription->Matches(source)) {
+		if (!localDescription.Capture(source))
+			return false;
+		sourceDescription = &localDescription;
+	}
+	const auto& sourceDesc = sourceDescription->Desc();
 	const DXGI_FORMAT textureFormat = formatOverride != DXGI_FORMAT_UNKNOWN ?
 	                                      formatOverride :
 	                                      sourceDesc.Format;
@@ -43538,7 +43579,7 @@ bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3
 		try {
 			texture = CreateTextureFromSource(
 				source, width, height, copyBindFlags, createSRV, createUAV,
-				name, createRTV, false, textureFormat);
+				name, createRTV, false, textureFormat, sourceDescription);
 		} catch (const std::exception& e) {
 			LogWarnOnce(loggedTextureCreateFailure, createFailureMessage(), e);
 			MarkSubmitStageDeviceLostIfNeeded(e, name ? name : "foveated texture creation");
@@ -43931,14 +43972,19 @@ bool Upscaling::EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visuali
 	}
 }
 
-bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* colorSource)
+bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* colorSource,
+	const UpscalingTextures::TextureSourceDescription* sourceDescription)
 {
 	if (!outputWidthPerEye || !outputHeight || !colorSource)
 		return false;
 
-	D3D11_TEXTURE2D_DESC colorDesc{};
-	if (!TryGetTexture2DDesc(colorSource, colorDesc))
-		return false;
+	UpscalingTextures::TextureSourceDescription colorDescription;
+	if (!sourceDescription || !sourceDescription->Matches(colorSource)) {
+		if (!colorDescription.Capture(colorSource))
+			return false;
+		sourceDescription = &colorDescription;
+	}
+	const auto& colorDesc = sourceDescription->Desc();
 	const auto& regionPlan = foveatedRectCache.plan;
 	if (!regionPlan.IsValid() || regionPlan.outputWidthPerEye != outputWidthPerEye || regionPlan.outputHeight != outputHeight)
 		return false;
@@ -43996,6 +44042,7 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 				auto& historyColorTexture = peripheryTAAHistoryColor[eye][historySlot];
 				const bool recreateHistoryColor =
 					!historyColorTexture ||
+					!historyColorTexture->resource ||
 					historyColorTexture->desc.Width != historyWidth ||
 					historyColorTexture->desc.Height != historyHeight ||
 					historyColorTexture->desc.Format != colorDesc.Format ||
@@ -44011,7 +44058,7 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 						true,
 						true,
 						false,
-						kHistoryColorNames[eye][historySlot])) {
+						kHistoryColorNames[eye][historySlot], DXGI_FORMAT_UNKNOWN, sourceDescription)) {
 					DestroyPeripheryTAAResources();
 					return false;
 				}
@@ -44019,6 +44066,7 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 				auto& velocityTexture = peripheryTAAVelocityHistory[eye][historySlot];
 				const bool recreateVelocity =
 					!velocityTexture ||
+					!velocityTexture->resource ||
 					velocityTexture->desc.Width != historyWidth ||
 					velocityTexture->desc.Height != historyHeight ||
 					velocityTexture->desc.Format != DXGI_FORMAT_R16G16_FLOAT ||
@@ -44038,6 +44086,7 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 				auto& lockTexture = peripheryTAALockHistory[eye][historySlot];
 				const bool recreateLock =
 					!lockTexture ||
+					!lockTexture->resource ||
 					lockTexture->desc.Width != historyWidth ||
 					lockTexture->desc.Height != historyHeight ||
 					lockTexture->desc.Format != DXGI_FORMAT_R16_FLOAT ||
@@ -48206,7 +48255,8 @@ VRSubmitTemporalSnapshot::Key Upscaling::GetPeripheryTAAHistoryKey(UpscaleMethod
 	};
 }
 
-FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput)
+FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput,
+	const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions)
 {
 	if (!globals::game::isVR)
 		return FidelityFX::UpscaleResult::Failed;
@@ -48275,9 +48325,10 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMeth
 	// written the per-eye motion/reactive/transparency resources used by
 	// Periphery TAA, and this pass must not overwrite them.
 	const bool copyDepthInput = !visualizeMask && (a_upscaleMethod == UpscaleMethod::kDLSS || usePeripheryTAA);
-	if (!PreparePerEyeInputs(colorTexture, depthTexture, motionVectors, reactiveMask, transparencyMask, false, copyDepthInput))
+	if (!PreparePerEyeInputs(colorTexture, depthTexture, motionVectors, reactiveMask, transparencyMask, false, copyDepthInput, sourceDescriptions))
 		return FidelityFX::UpscaleResult::Failed;
-	if (usePeripheryTAA && !EnsurePeripheryTAAResources(outputWidthPerEye, outputHeight, colorTexture))
+	if (usePeripheryTAA && !EnsurePeripheryTAAResources(outputWidthPerEye, outputHeight, colorTexture,
+			sourceDescriptions ? &sourceDescriptions->color : nullptr))
 		return FidelityFX::UpscaleResult::Failed;
 
 	const auto peripheryHistoryKey = usePeripheryTAA ?
@@ -48785,7 +48836,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchSubmitStageFoveatedVendorEye(Upscal
 }
 
 bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
-	ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration)
+	ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration,
+	const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions)
 {
 	if (!colorSrc || !mvecSrc || !reactiveSrc || !transparencySrc ||
 		!inWidth || !inHeight || !outWidth || !outHeight) {
@@ -48794,9 +48846,13 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 
 	// All buffers are per-eye: Streamline validates all extents against the input color texture
 	// dimensions, so every tagged resource must be isolated per-eye at {0,0}.
-	D3D11_TEXTURE2D_DESC colorSrcDesc{};
-	if (!TryGetTexture2DDesc(colorSrc, colorSrcDesc))
-		return false;
+	UpscalingTextures::VRInputSourceDescriptions localDescriptions;
+	if (!sourceDescriptions || !sourceDescriptions->Matches(colorSrc, mvecSrc, reactiveSrc, transparencySrc)) {
+		if (!localDescriptions.Capture(colorSrc, mvecSrc, reactiveSrc, transparencySrc))
+			return false;
+		sourceDescriptions = &localDescriptions;
+	}
+	const auto& colorSrcDesc = sourceDescriptions->color.Desc();
 	const bool presentationOutputActive = IsPresentationUpscalingActive();
 	// Keep submit-stage output copy-compatible with the stereo source. The desktop
 	// mirror writeback uses CopySubresourceRegion into that source texture.
@@ -48814,10 +48870,12 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 	for (int i = 0; i < 2; i++) {
 		std::string suffix = (i == 0) ? "Left" : "Right";
 
-		replacement.colorIn[i] = CreateTextureFromSource(colorSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscale_ColorIn_" + suffix).c_str());
+		replacement.colorIn[i] = CreateTextureFromSource(colorSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscale_ColorIn_" + suffix).c_str(),
+			false, false, DXGI_FORMAT_UNKNOWN, &sourceDescriptions->color);
 		replacement.colorOut[i] =
 			colorOutFormat == colorSrcDesc.Format ?
-				CreateTextureFromSource(colorSrc, outWidth, outHeight, false, true, true, ("Upscale_ColorOut_" + suffix).c_str(), requiresColorOutRTV) :
+				CreateTextureFromSource(colorSrc, outWidth, outHeight, false, true, true, ("Upscale_ColorOut_" + suffix).c_str(), requiresColorOutRTV,
+					false, DXGI_FORMAT_UNKNOWN, &sourceDescriptions->color) :
 				CreateNamedTexture2D(outWidth, outHeight, colorOutFormat, true, true, requiresColorOutRTV, ("Upscale_ColorOut_" + suffix).c_str());
 
 		// Typed depth can be cropped per eye without depth-stencil copy restrictions.
@@ -48873,9 +48931,12 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 			replacement.linearDepth[i]->CreateUAV(linearUAVDesc);
 		}
 
-		replacement.motionVectors[i] = CreateTextureFromSource(mvecSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::MotionVectors_" + suffix).c_str(), false, shareGuidesWithRuntime);
-		replacement.reactiveMask[i] = CreateTextureFromSource(reactiveSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::Reactive_" + suffix).c_str(), false, shareGuidesWithRuntime);
-		replacement.transparencyMask[i] = CreateTextureFromSource(transparencySrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::Transparency_" + suffix).c_str(), false, shareGuidesWithRuntime);
+		replacement.motionVectors[i] = CreateTextureFromSource(mvecSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::MotionVectors_" + suffix).c_str(), false, shareGuidesWithRuntime,
+			DXGI_FORMAT_UNKNOWN, &sourceDescriptions->motion);
+		replacement.reactiveMask[i] = CreateTextureFromSource(reactiveSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::Reactive_" + suffix).c_str(), false, shareGuidesWithRuntime,
+			DXGI_FORMAT_UNKNOWN, &sourceDescriptions->reactive);
+		replacement.transparencyMask[i] = CreateTextureFromSource(transparencySrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::Transparency_" + suffix).c_str(), false, shareGuidesWithRuntime,
+			DXGI_FORMAT_UNKNOWN, &sourceDescriptions->transparency);
 	}
 	for (uint32_t eye = 0; eye < 2; ++eye) {
 		if (!replacement.colorIn[eye] ||
@@ -48940,20 +49001,21 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 }
 
 void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
-	ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration)
+	ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration,
+	const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions)
 {
 	if (!inWidth || !inHeight || !outWidth || !outHeight)
 		return;
-	D3D11_TEXTURE2D_DESC colorSrcDesc{};
-	D3D11_TEXTURE2D_DESC mvecSrcDesc{};
-	D3D11_TEXTURE2D_DESC reactiveSrcDesc{};
-	D3D11_TEXTURE2D_DESC transparencySrcDesc{};
-	if (!TryGetTexture2DDesc(colorSrc, colorSrcDesc) ||
-		!TryGetTexture2DDesc(mvecSrc, mvecSrcDesc) ||
-		!TryGetTexture2DDesc(reactiveSrc, reactiveSrcDesc) ||
-		!TryGetTexture2DDesc(transparencySrc, transparencySrcDesc)) {
-		return;
+	UpscalingTextures::VRInputSourceDescriptions localDescriptions;
+	if (!sourceDescriptions || !sourceDescriptions->Matches(colorSrc, mvecSrc, reactiveSrc, transparencySrc)) {
+		if (!localDescriptions.Capture(colorSrc, mvecSrc, reactiveSrc, transparencySrc))
+			return;
+		sourceDescriptions = &localDescriptions;
 	}
+	const auto& colorSrcDesc = sourceDescriptions->color.Desc();
+	const auto& mvecSrcDesc = sourceDescriptions->motion.Desc();
+	const auto& reactiveSrcDesc = sourceDescriptions->reactive.Desc();
+	const auto& transparencySrcDesc = sourceDescriptions->transparency.Desc();
 	const bool presentationOutputActive = IsPresentationUpscalingActive();
 	// Must match CreateVRIntermediateTextures(), otherwise the active output can
 	// make the desktop mirror writeback fail its format compatibility check.
@@ -49031,7 +49093,7 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 	if (needsRecreate) {
 		logger::debug("[Upscaling] (Re)creating VR intermediates: active per-eye in {}x{}, allocated in {}x{}, out {}x{} generation {} stableFSRBounds={}",
 			inWidth, inHeight, allocationInWidth, allocationInHeight, outWidth, outHeight, contractGeneration, BoolText(useStableFSRInputBounds));
-		(void)CreateVRIntermediateTextures(inWidth, inHeight, outWidth, outHeight, colorSrc, mvecSrc, reactiveSrc, transparencySrc, contractGeneration);
+		(void)CreateVRIntermediateTextures(inWidth, inHeight, outWidth, outHeight, colorSrc, mvecSrc, reactiveSrc, transparencySrc, contractGeneration, sourceDescriptions);
 	} else if (generationChanged) {
 		// Compatible FSR resources are allocated to the maximum per-eye display
 		// bounds. Advancing contract ownership must not change their D3D identity.
@@ -49262,7 +49324,8 @@ bool Upscaling::ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2
 }
 
 bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* depthSrc, ID3D11Resource* mvecSrc,
-	ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs, bool copyDepthInput)
+	ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs, bool copyDepthInput,
+	const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions)
 {
 	if (!globals::game::isVR)
 		return false;
@@ -49303,7 +49366,7 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 			mvecSrc,
 			reactiveSrc,
 			transparencySrc,
-			contractGeneration)) {
+			contractGeneration, sourceDescriptions)) {
 		return false;
 	}
 
@@ -49461,7 +49524,8 @@ bool Upscaling::AreActiveVRIntermediateTexturesCompatible(
 	ID3D11Resource* a_motionVectorSource,
 	ID3D11Resource* a_reactiveSource,
 	ID3D11Resource* a_transparencySource,
-	uint32_t a_contractGeneration) const
+	uint32_t a_contractGeneration,
+	const UpscalingTextures::VRInputSourceDescriptions* a_sourceDescriptions) const
 {
 	if (HasQuarantinedVRGuideInputs() || !globals::game::isVR ||
 		!IsVendorUpscalingMethod(a_upscaleMethod) ||
@@ -49470,16 +49534,16 @@ bool Upscaling::AreActiveVRIntermediateTexturesCompatible(
 		return false;
 	}
 
-	D3D11_TEXTURE2D_DESC colorDesc{};
-	D3D11_TEXTURE2D_DESC motionDesc{};
-	D3D11_TEXTURE2D_DESC reactiveDesc{};
-	D3D11_TEXTURE2D_DESC transparencyDesc{};
-	if (!TryGetTexture2DDesc(a_colorSource, colorDesc) ||
-		!TryGetTexture2DDesc(a_motionVectorSource, motionDesc) ||
-		!TryGetTexture2DDesc(a_reactiveSource, reactiveDesc) ||
-		!TryGetTexture2DDesc(a_transparencySource, transparencyDesc)) {
-		return false;
+	UpscalingTextures::VRInputSourceDescriptions localDescriptions;
+	if (!a_sourceDescriptions || !a_sourceDescriptions->Matches(a_colorSource, a_motionVectorSource, a_reactiveSource, a_transparencySource)) {
+		if (!localDescriptions.Capture(a_colorSource, a_motionVectorSource, a_reactiveSource, a_transparencySource))
+			return false;
+		a_sourceDescriptions = &localDescriptions;
 	}
+	const auto& colorDesc = a_sourceDescriptions->color.Desc();
+	const auto& motionDesc = a_sourceDescriptions->motion.Desc();
+	const auto& reactiveDesc = a_sourceDescriptions->reactive.Desc();
+	const auto& transparencyDesc = a_sourceDescriptions->transparency.Desc();
 
 	const bool stableFSRInputBounds = a_upscaleMethod == UpscaleMethod::kFSR;
 	if (!stableFSRInputBounds &&
@@ -50247,6 +50311,9 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 	}
 	if (!temporalAAMask.SRV || !normals.SRV || !sourceMotionVector.SRV || !depth.depthSRV || !encodeShader)
 		return false;
+	UpscalingTextures::VRInputSourceDescriptions sourceDescriptions;
+	if (!sourceDescriptions.Capture(colorSource, motionVectors, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get()))
+		return false;
 	if (ShouldDeferVRVendorLifecycleMutation() &&
 		!AreActiveVRIntermediateTexturesCompatible(
 			upscaleMethod,
@@ -50258,13 +50325,13 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 			motionVectors,
 			reactiveMaskTexture->resource.get(),
 			transparencyCompositionMaskTexture->resource.get(),
-			contractGeneration)) {
+			contractGeneration, &sourceDescriptions)) {
 		return false;
 	}
 
 	try {
 		EnsureVRIntermediateTextures(inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight,
-			colorSource, motionVectors, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), contractGeneration);
+			colorSource, motionVectors, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), contractGeneration, &sourceDescriptions);
 	} catch (const std::exception& e) {
 		logger::warn("[Upscaling] Submit-stage vendor upscaling failed to create intermediates: {}", e.what());
 		MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage intermediate creation");
@@ -67694,6 +67761,7 @@ void Upscaling::Upscale()
 		!vendorLifecycleMutationDeferred &&
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) && !foveatedTransitionBypass;
 	bool encodedVRFoveatedRegions = false;
+	UpscalingTextures::VRInputSourceDescriptions sourceDescriptions;
 
 	auto encodeUpscalingTextures = [&](bool forceFullVREncode) -> bool {
 		encodedVRFoveatedRegions = false;
@@ -67778,6 +67846,13 @@ void Upscaling::Upscale()
 			}
 			const uint32_t contractGeneration =
 				GetVRVendorEvaluationContractGeneration(upscaleMethod);
+			if (!sourceDescriptions.Capture(main.texture, motionVector.texture,
+					reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get())) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				recordMainPassStage(VRMainPassDispatchStage::EncodePrerequisitesMissing);
+#endif
+				return false;
+			}
 			if (vendorLifecycleMutationDeferred &&
 				!AreActiveVRIntermediateTexturesCompatible(
 					upscaleMethod,
@@ -67789,7 +67864,7 @@ void Upscaling::Upscale()
 					motionVector.texture,
 					reactiveMaskTexture->resource.get(),
 					transparencyCompositionMaskTexture->resource.get(),
-					contractGeneration)) {
+					contractGeneration, &sourceDescriptions)) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				recordMainPassStage(VRMainPassDispatchStage::EncodeActiveIntermediatesIncompatible);
 #endif
@@ -67798,7 +67873,7 @@ void Upscaling::Upscale()
 
 			try {
 				EnsureVRIntermediateTextures(eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut,
-					main.texture, motionVector.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), contractGeneration);
+					main.texture, motionVector.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), contractGeneration, &sourceDescriptions);
 			} catch (const std::exception& e) {
 				logger::warn("[Upscaling] Failed to create VR encode intermediates: {}", e.what());
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -67959,7 +68034,7 @@ void Upscaling::Upscale()
 					motionVectorResource,
 					reactiveMaskTexture->resource.get(),
 					transparencyCompositionMaskTexture->resource.get(),
-					foveatedOutput);
+					foveatedOutput, &sourceDescriptions);
 				if (foveatedResult == FidelityFX::UpscaleResult::Deferred) {
 					RequestHistoryReset();
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -68006,7 +68081,7 @@ void Upscaling::Upscale()
 						flatNeuralInput ? foveatedCenterNeuralSelected[0]->resource.get() : main.texture,
 						reactiveMaskTexture->resource.get(),
 						transparencyCompositionMaskTexture->resource.get(),
-						motionVectorResource);
+						motionVectorResource, globals::game::isVR ? &sourceDescriptions : nullptr);
 				}
 				if (!globals::game::isVR)
 					flatDlssInputHistory.Complete(flatNeuralInput, vendorDispatchCompleted);
@@ -68037,7 +68112,7 @@ void Upscaling::Upscale()
 					reactiveMaskTexture->resource.get(),
 					transparencyCompositionMaskTexture->resource.get(),
 					motionVectorResource,
-					settings.sharpnessFSR);
+					settings.sharpnessFSR, globals::game::isVR ? &sourceDescriptions : nullptr);
 				vendorDispatchCompleted =
 					fsrResult == FidelityFX::UpscaleResult::Ready;
 #ifdef DEVBENCH_BRIDGE_ENABLED

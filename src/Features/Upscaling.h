@@ -21,6 +21,7 @@
 #include "Upscaling/NeuralRendering/Style.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
+#include "Upscaling/TextureSourceDescriptions.h"
 #include "Upscaling/VRMenuPointerOverlay.h"
 #include "Upscaling/VROrdinarySaveRecovery.h"
 #include "Upscaling/VRPresentationStretchTelemetryPolicy.h"
@@ -3029,9 +3030,11 @@ public:
 
 	// Helper to create/resize per-eye buffers matching source formats
 	bool CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
-		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0);
+		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0,
+		const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions = nullptr);
 	void EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
-		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0);
+		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0,
+		const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions = nullptr);
 	bool EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
 		ID3D11Resource* colorSrc, bool allowResourceCreation = true, DXGI_FORMAT colorFormat = DXGI_FORMAT_R8G8B8A8_UNORM);
 	struct VRExistingVendorProviderSnapshot
@@ -3052,12 +3055,14 @@ public:
 
 	// Helper: Create a Texture2D matching source format at a given size
 	static eastl::unique_ptr<Texture2D> CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
-		bool copyBindFlags = false, bool createSRV = false, bool createUAV = false, const char* name = nullptr, bool createRTV = false, bool shareWithRuntime = false, DXGI_FORMAT formatOverride = DXGI_FORMAT_UNKNOWN);
+		bool copyBindFlags = false, bool createSRV = false, bool createUAV = false, const char* name = nullptr, bool createRTV = false, bool shareWithRuntime = false, DXGI_FORMAT formatOverride = DXGI_FORMAT_UNKNOWN,
+		const UpscalingTextures::TextureSourceDescription* sourceDescription = nullptr);
 
 	// Shared Pipeline Steps
 	/** Prepares color and optional guides after encoding; DLSS depth is already encoded. */
 	bool PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* depthSrc, ID3D11Resource* mvecSrc,
-		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true);
+		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true,
+		const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions = nullptr);
 	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;
 	/** Rejects any guide retained by an unsafe optional-provider ownership domain. */
 	bool HasQuarantinedVRGuideInputs() const;
@@ -3072,7 +3077,8 @@ public:
 		ID3D11Resource* a_motionVectorSource,
 		ID3D11Resource* a_reactiveSource,
 		ID3D11Resource* a_transparencySource,
-		uint32_t a_contractGeneration) const;
+		uint32_t a_contractGeneration,
+		const UpscalingTextures::VRInputSourceDescriptions* a_sourceDescriptions = nullptr) const;
 	bool AreExistingVRSubmitVendorResourcesCompatible(
 		UpscaleMethod a_upscaleMethod,
 		const VRExistingVendorProviderSnapshot& a_provider,
@@ -4286,7 +4292,8 @@ public:
 	/** Legal eye/crop extraction from a depth SRV into numeric raw R32_FLOAT depth. */
 	bool CopyRawDepthRegion(ID3D11Resource* source, Texture2D& destination,
 		const D3D11_BOX& sourceBox, UINT destinationX = 0, UINT destinationY = 0);
-	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name, DXGI_FORMAT formatOverride = DXGI_FORMAT_UNKNOWN);
+	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name, DXGI_FORMAT formatOverride = DXGI_FORMAT_UNKNOWN,
+		const UpscalingTextures::TextureSourceDescription* sourceDescription = nullptr);
 	bool PrepareSubmitNeuralFloatResources(uint32_t eyeIndex, ID3D11Resource* source, uint32_t width, uint32_t height, bool directCommit, bool validateOnly);
 	ID3D11Resource* GetSubmitNeuralFloatEvaluationOutput(uint32_t eyeIndex, bool directCommit) const noexcept;
 	bool CommitSubmitNeuralFloatOutput(uint32_t eyeIndex, bool directCommit,
@@ -4298,14 +4305,16 @@ public:
 	void UnbindUpscalingResources();
 	void AbandonFoveatedResourcesUnsafe();
 	void DestroyFoveatedResources();
-	bool EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* colorSource);
+	bool EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* colorSource,
+		const UpscalingTextures::TextureSourceDescription* sourceDescription = nullptr);
 	bool EnsurePeripheryTAATileBuffer(uint32_t eyeIndex, uint32_t tileCapacity);
 	bool BuildPeripheryTAATileList(uint32_t eyeIndex, uint32_t outputWidth, uint32_t outputHeight, float centerScale, float taaOuterScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY, uint32_t coveragePadding, uint32_t& outTileCount);
 	void DestroyPeripheryTAAResources();
 	/** Returns the producer and resource contract used by both periphery history dispatch routes. */
 	[[nodiscard]] VRSubmitTemporalSnapshot::Key GetPeripheryTAAHistoryKey(UpscaleMethod a_upscaleMethod, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight) const;
 	/** Preserves lifecycle deferral without publishing incomplete vendor output. */
-	[[nodiscard]] FidelityFX::UpscaleResult DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput = nullptr);
+	[[nodiscard]] FidelityFX::UpscaleResult DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput = nullptr,
+		const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions = nullptr);
 	enum class NeuralCenterPhase : uint8_t
 	{
 		Disabled,

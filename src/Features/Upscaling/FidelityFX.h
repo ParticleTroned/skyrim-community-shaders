@@ -45,6 +45,11 @@
 
 class WrappedResource;
 
+namespace UpscalingTextures
+{
+	struct VRInputSourceDescriptions;
+}
+
 class FidelityFX
 {
 public:
@@ -265,7 +270,8 @@ public:
 	RuntimeUpscalerDispatchSnapshot GetRuntimeUpscalerDispatchSnapshotForRenderThread() const;
 #endif
 
-	UpscaleResult Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_depth, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness);
+	UpscaleResult Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_depth, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness,
+		const UpscalingTextures::VRInputSourceDescriptions* a_sourceDescriptions = nullptr);
 	/** Preserves lifecycle deferral without publishing output or reporting a dispatch failure. */
 	UpscaleResult UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 		ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,

@@ -4504,7 +4504,8 @@ FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(
 	return StereoUpscaleResult::NotHandled;
 }
 
-FidelityFX::UpscaleResult FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_depth, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
+FidelityFX::UpscaleResult FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_depth, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness,
+	const UpscalingTextures::VRInputSourceDescriptions* a_sourceDescriptions)
 {
 	auto state = globals::state;
 	if (!state || !a_depth)
@@ -4525,7 +4526,7 @@ FidelityFX::UpscaleResult FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture
 	const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
 
 	if (splitPerEyeContexts) {
-		if (!upscaling.PreparePerEyeInputs(a_upscalingTexture, a_depth, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask, false, false)) {
+		if (!upscaling.PreparePerEyeInputs(a_upscalingTexture, a_depth, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask, false, false, a_sourceDescriptions)) {
 			static bool loggedPrepareFailure = false;
 			if (!loggedPrepareFailure) {
 				logger::warn("[FidelityFX] VR FSR skipped because per-eye input preparation failed.");

@@ -7,4 +7,6 @@ include("${CMAKE_CURRENT_LIST_DIR}/extract_source_region.cmake")
 extract_between("${_source}" "\ttemplate <class Fn>\n\tstruct ScopeExit" "\tconstexpr float kPeripheryTAAOuterScaleMin" "depth_encode_scope_exit.h")
 extract_between("${_source}" "\tstd::uintptr_t GetCOMIdentityAddress(" "\tbool IsRenderScaleQualityMode(" "depth_encode_identity.h")
 extract_between("${_source}" "\tbool TryGetTexture2DDesc(" "\tbool SameTexture2DDesc(" "depth_encode_texture_desc.h")
+extract_between("${_source}" "bool UpscalingTextures::TextureSourceDescription::Capture("
+    "eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(" "depth_encode_source_descriptions.h")
 extract_between("${_source}" "\tbool ViewReferencesResource(" "\tbool HasCompatibleCommonVendorViews(" "depth_encode_validation.h")

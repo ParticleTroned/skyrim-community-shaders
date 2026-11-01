@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include "Features/Upscaling/TextureSourceDescriptions.h"
 #include "Utils/ShaderInclude.h"
 #include "d3d11_shader_test.h"
 
@@ -229,6 +230,35 @@ namespace
 	}
 }
 
+#include "depth_encode_source_descriptions.h"
+
+void VerifySourceDescriptions(ID3D11Device* device)
+{
+	auto source = MakeTexture(device, 8, 4, DXGI_FORMAT_R32_FLOAT, 0, "DescriptionSource");
+	auto replacement = MakeTexture(device, 8, 4, DXGI_FORMAT_R32_FLOAT, 0, "DescriptionReplacement");
+	auto* original = source.resource.get();
+	UpscalingTextures::TextureSourceDescription description;
+	Require(description.Capture(original) && description.Matches(original), "Source capture failed");
+	Require(!description.Matches(replacement.resource.get()), "Equal dimensions allowed a different source identity");
+	source.resource = nullptr;
+	D3D11_TEXTURE2D_DESC retained{};
+	Require(TryGetTexture2DDesc(original, retained) && retained.Width == 8 && retained.Height == 4,
+		"Description did not retain source ownership after the caller released it");
+	Require(description.Capture(original) && description.Desc().Format == DXGI_FORMAT_R32_FLOAT,
+		"Retained source capture did not preserve immutable geometry");
+	Require(description.Capture(replacement.resource.get()) && description.Matches(replacement.resource.get()),
+		"Description did not refresh for a replacement source");
+	Require(!description.Capture(nullptr) && !description.Matches(replacement.resource.get()) && description.Desc().Width == 0,
+		"Failed capture retained a reusable description");
+
+	UpscalingTextures::VRInputSourceDescriptions inputs;
+	auto* texture = replacement.resource.get();
+	Require(inputs.Capture(texture, texture, texture, texture) && inputs.Matches(texture, texture, texture, texture),
+		"VR source group capture failed");
+	Require(!inputs.Capture(texture, texture, nullptr, texture) && !inputs.color.Matches(texture),
+		"Partial VR capture retained an earlier operation's source ownership");
+}
+
 int main()
 {
 	try {
@@ -236,6 +266,7 @@ int main()
 		ComPtr<ID3D11DeviceContext> context;
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
 			D3D11_SDK_VERSION, device.put(), nullptr, context.put()));
+		VerifySourceDescriptions(device.get());
 		VerifyShader(device.get(), context.get(), "DLSS", true);
 		VerifyShader(device.get(), context.get(), "FSR", true);
 		VerifyShader(device.get(), context.get(), "FSR", false);

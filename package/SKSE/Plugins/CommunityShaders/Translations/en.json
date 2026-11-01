@@ -1936,6 +1936,7 @@
     "feature.light_limit_fix.warp_visibility_gate_tooltip": "Skips the Warped reprojection for a light that is off screen or whose\nshadow edge would move by under a pixel, and copies the cached depth\ninstead.",
     "feature.light_limit_fix.warp_zero_demand_skip": "Skip Warp for Unseen Lights",
     "feature.light_limit_fix.warp_zero_demand_skip_tooltip": "Skips the Warped reprojection for a light the GPU measures as lighting\nnothing on screen across many samples. Requires the Shadow Atlas.",
+    "feature.light_limit_fix.water_contact_candidates": "Water Contact Candidates (0: unchanged)",
     "feature.linear_lighting.ambient_multiplier": "Ambient Multiplier",
     "feature.linear_lighting.description": "Linear Lighting does internal color space conversion to improve lighting calculation accuracy.",
     "feature.linear_lighting.enable": "Enable Linear Lighting",

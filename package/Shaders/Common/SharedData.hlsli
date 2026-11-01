@@ -118,7 +118,7 @@ namespace SharedData
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
 		uint EnableParticleContactShadows;
-		uint pad1;
+		uint WaterContactCandidateBudget;
 	};
 
 	struct WetnessEffectsSettings

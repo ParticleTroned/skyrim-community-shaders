@@ -86,6 +86,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	include "Common/ReverseZ.hlsli"
 #	include "Common/Shading.hlsli"
 #	include "Common/Color.hlsli"
+#	include "Common/WaterContactCandidates.hlsli"
 
 #	define WATER
 
@@ -1389,7 +1390,9 @@ PS_OUTPUT main(PS_INPUT input)
 				                                  !(light.lightFlags & LightLimitFix::LightFlags::Simple);
 				float contactShadowFalloff = saturate(lightDist * light.invRadius);
 				bool passesContactIntensityGate = (1.0 - contactShadowFalloff * contactShadowFalloff) > SharedData::lightLimitFixSettings.ContactShadowMinIntensity;
-				if (canContactShadow && passesContactIntensityGate) {
+				if (canContactShadow && passesContactIntensityGate &&
+					WaterContactCandidates::Contains(uint2(LightLimitFix::lightGrid[clusterIndex].pad0[0], LightLimitFix::lightGrid[clusterIndex].pad0[1]),
+						i, SharedData::lightLimitFixSettings.WaterContactCandidateBudget)) {
 					float3 lightPositionVS = mul(FrameBuffer::CameraView[eyeIndex], float4(light.positionWS[eyeIndex].xyz, 1)).xyz;
 					lightShadow *= LightLimitFix::ContactShadows(viewPosition, screenNoise, normalize(lightPositionVS - viewPosition), lightDist, contactShadowSteps, eyeIndex);
 				}

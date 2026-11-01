@@ -10,6 +10,7 @@ namespace PointLightFlags
 		PortalStrict = (1u << 0),
 		Shadow = (1u << 1),
 		Simple = (1u << 2),
+		AffectWater = (1u << 3),
 
 		Initialised = (1u << 8),
 		Disabled = (1u << 9),

@@ -815,9 +815,10 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", processedShaders, totalShaders, 100 * percent);
 
 	if (shaderCache->IsCompiling()) {
-		const bool hasFeatureSetRevertPending = shaderCache->HasFeatureSetRevertPending();
-		const bool hasFeatureSetChanges = shaderCache->HasFeatureSetChanges();
-		const bool isDiskCacheHeld = shaderCache->IsDiskCacheHeld();
+		const auto rollback = shaderCache->GetRollbackFlags();
+		const bool hasFeatureSetRevertPending = rollback.featureSetRevertPending;
+		const bool hasFeatureSetChanges = rollback.featureSetChanged;
+		const bool isDiskCacheHeld = rollback.diskCacheHeld;
 		const size_t loadFailureCount = FeatureIssues::CountLoadFailures();
 
 		ImGui::SetNextWindowPos(ImVec2(pos, pos));
@@ -832,8 +833,8 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 				"Previous cache restored.\n"
 				"Restart to use it.");
 		} else if (hasFeatureSetChanges) {
-			if (shaderCache->HasFeatureSetCacheBackup()) {
-				const char* restoreStatus = shaderCache->HasPreviousDiskCache() ?
+			if (rollback.featureSetCacheBackedUp) {
+				const char* restoreStatus = rollback.previousDiskCacheAvailable ?
 				                                "Previous cache saved. Restore is available after compilation finishes." :
 				                                "Previous cache saved. Restore availability will be verified after compilation finishes.";
 				ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s\n%s",

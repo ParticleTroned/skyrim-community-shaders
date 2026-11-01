@@ -76,11 +76,12 @@ namespace
 		{
 			if (!IsOwnerThread())
 				return Status::kWrongThread;
-			RefreshRevision();
+			const auto rollback = RefreshRevision();
 			auto* cache = globals::shaderCache;
 			auto* state = globals::state;
 			thread_local ResponseStrings strings;
 			strings.statistics = cache ? cache->GetShaderStatsString() : std::string{};
+			const bool diskCacheRequested = cache && cache->IsDiskCache();
 			a_output = {
 				.structSize = sizeof(Snapshot001),
 				.available = cache && state ? 1u : 0u,
@@ -89,16 +90,16 @@ namespace
 				.customShadersRequested = cache && cache->IsEnableRequested() ? 1u : 0u,
 				.customShadersEffective = cache && cache->IsEnabled() ? 1u : 0u,
 				.customShaderTransitionPending = cache && cache->IsEnableRequested() != cache->IsEnabled() ? 1u : 0u,
-				.diskCacheRequested = cache && cache->IsDiskCache() ? 1u : 0u,
-				.diskCacheActive = cache && cache->IsDiskCacheActive() ? 1u : 0u,
-				.diskCacheHeld = cache && cache->IsDiskCacheHeld() ? 1u : 0u,
+				.diskCacheRequested = diskCacheRequested ? 1u : 0u,
+				.diskCacheActive = diskCacheRequested && rollback.AllowsDiskCache() ? 1u : 0u,
+				.diskCacheHeld = rollback.diskCacheHeld ? 1u : 0u,
 				.asyncCompilation = cache && cache->IsAsync() ? 1u : 0u,
 				.skipUnchangedShaders = cache && cache->IsSkipUnchangedShaders() ? 1u : 0u,
 				.compiling = cache && cache->IsCompiling() ? 1u : 0u,
 				.activeShaderCapture = cache && (cache->IsCapturingActiveShaders() || cache->IsAwaitingMenuCloseCapture()) ? 1u : 0u,
-				.previousCacheAvailable = cache && cache->HasPreviousDiskCache() ? 1u : 0u,
-				.featureSetChanged = cache && cache->HasFeatureSetChanges() ? 1u : 0u,
-				.featureSetRevertPending = cache && cache->HasFeatureSetRevertPending() ? 1u : 0u,
+				.previousCacheAvailable = rollback.previousDiskCacheAvailable ? 1u : 0u,
+				.featureSetChanged = rollback.featureSetChanged ? 1u : 0u,
+				.featureSetRevertPending = rollback.featureSetRevertPending ? 1u : 0u,
 				.persistentMutationBlocked = state && state->IsPersistentMutationBlocked() ? 1u : 0u,
 				.saveLoadSafeModeActive = state && state->IsSaveLoadSafeModeActive() ? 1u : 0u,
 				.totalTasks = cache ? cache->GetTotalTasks() : 0,
@@ -361,11 +362,12 @@ namespace
 		CSX::Api::ShaderPolicyState BuildPolicyState(const OwnedMutation& a_mutation) const
 		{
 			auto* cache = globals::shaderCache;
+			const auto rollback = cache ? cache->GetRollbackFlags() : SIE::ShaderCache::RollbackFlags{};
 			return {
 				.available = cache && globals::state,
 				.compiling = cache && cache->IsCompiling(),
-				.previousCacheAvailable = cache && cache->HasPreviousDiskCache(),
-				.diskCacheHeld = cache && cache->IsDiskCacheHeld(),
+				.previousCacheAvailable = rollback.previousDiskCacheAvailable,
+				.diskCacheHeld = rollback.diskCacheHeld,
 				.featureFound = a_mutation.featureName.empty() ? false : FindFeature(a_mutation.featureName) != nullptr,
 				.persistentMutationBlocked = globals::state && globals::state->IsPersistentMutationBlocked(),
 				.stateRevision = revision,
@@ -381,17 +383,19 @@ namespace
 			return found == features.end() ? nullptr : *found;
 		}
 
-		std::string BuildFingerprint() const
+		std::string BuildFingerprint(const SIE::ShaderCache::RollbackFlags& a_rollback) const
 		{
 			auto* cache = globals::shaderCache;
 			auto* state = globals::state;
 			if (!cache || !state)
 				return "unavailable";
 			std::ostringstream value;
-			value << cache->IsEnableRequested() << cache->IsEnabled() << cache->IsDiskCache()
-			      << cache->IsDiskCacheActive() << cache->IsDiskCacheHeld() << cache->IsAsync()
-			      << cache->IsSkipUnchangedShaders() << cache->HasPreviousDiskCache()
-			      << cache->HasFeatureSetChanges() << cache->HasFeatureSetRevertPending();
+			const bool diskCacheRequested = cache->IsDiskCache();
+			value << cache->IsEnableRequested() << cache->IsEnabled() << diskCacheRequested
+				  << (diskCacheRequested && a_rollback.AllowsDiskCache())
+				  << a_rollback.diskCacheHeld << cache->IsAsync()
+				  << cache->IsSkipUnchangedShaders() << a_rollback.previousDiskCacheAvailable
+				  << a_rollback.featureSetChanged << a_rollback.featureSetRevertPending;
 			for (auto* feature : Feature::GetFeatureList()) {
 				if (feature)
 					value << '|' << feature->GetShortName() << '=' << state->IsFeatureDisabled(feature->GetShortName());
@@ -399,18 +403,22 @@ namespace
 			return value.str();
 		}
 
-		void RefreshRevision(bool a_force = false)
+		SIE::ShaderCache::RollbackFlags RefreshRevision(bool a_force = false)
 		{
-			const auto current = BuildFingerprint();
+			const auto rollback = globals::shaderCache ?
+			                          globals::shaderCache->GetRollbackFlags() :
+			                          SIE::ShaderCache::RollbackFlags{};
+			const auto current = BuildFingerprint(rollback);
 			if (fingerprint.empty()) {
 				fingerprint = current;
-				return;
+				return rollback;
 			}
 			if (a_force || current != fingerprint) {
 				fingerprint = current;
 				++revision;
 				preflights.clear();
 			}
+			return rollback;
 		}
 
 		void TrimPreflights()

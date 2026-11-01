@@ -4447,6 +4447,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/cache_invalidation_test.cpp
     )
     add_controller_test(
+        cache_rollback_state_test
+        CacheRollbackState
+        tests/cache_rollback_state_test.cpp
+    )
+    add_controller_test(
         shader_compilation_scheduling_policy_test
         ShaderCompilationSchedulingPolicy
         tests/shader_compilation_scheduling_policy_test.cpp

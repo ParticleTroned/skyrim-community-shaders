@@ -292,20 +292,22 @@ void HomePageRenderer::RenderCacheMismatchSection()
 		Util::Text::WrappedWarning("Shader cache status is not available yet.");
 		return;
 	}
-	if (!shaderCache->IsDiskCacheHeld() && !shaderCache->HasFeatureSetChanges() &&
-		!shaderCache->HasFeatureSetRevertPending() && !shaderCache->HasPreviousDiskCache()) {
+	const auto flags = shaderCache->GetRollbackFlags();
+	if (!flags.diskCacheHeld && !flags.featureSetChanged &&
+		!flags.featureSetRevertPending && !flags.previousDiskCacheAvailable) {
 		MenuUI::DetailNote("Your shader cache matches the current feature setup. No cache action is needed.");
 		return;
 	}
 
+	const auto rollback = shaderCache->GetRollbackState();
 	auto* menu = Menu::GetSingleton();
-	const bool featureSetChanged = shaderCache->HasFeatureSetChanges();
-	const bool revertPending = shaderCache->HasFeatureSetRevertPending();
-	const bool featureSetCacheBackedUp = shaderCache->HasFeatureSetCacheBackup();
-	const bool featureSetCacheSelectivelySeeded = shaderCache->HasSelectivelySeededFeatureSetCache();
-	const bool previousCacheAvailable = shaderCache->HasPreviousDiskCache();
-	const bool cacheHeld = shaderCache->IsDiskCacheHeld() && !featureSetChanged && !revertPending;
-	const bool featureChangeHeld = shaderCache->IsDiskCacheHeld() && featureSetChanged && !featureSetCacheBackedUp;
+	const bool featureSetChanged = rollback.flags.featureSetChanged;
+	const bool revertPending = rollback.flags.featureSetRevertPending;
+	const bool featureSetCacheBackedUp = rollback.flags.featureSetCacheBackedUp;
+	const bool featureSetCacheSelectivelySeeded = rollback.flags.featureSetCacheSelectivelySeeded;
+	const bool previousCacheAvailable = rollback.flags.previousDiskCacheAvailable;
+	const bool cacheHeld = rollback.flags.diskCacheHeld && !featureSetChanged && !revertPending;
+	const bool featureChangeHeld = rollback.flags.diskCacheHeld && featureSetChanged && !featureSetCacheBackedUp;
 
 	MenuUI::SectionHeading("Shader Cache Changes");
 
@@ -347,8 +349,8 @@ void HomePageRenderer::RenderCacheMismatchSection()
 	ImGui::Spacing();
 
 	using MismatchKind = Util::CacheInvalidation::CacheMismatch::Kind;
-	const auto& mismatches = (cacheHeld || featureChangeHeld) ? shaderCache->GetCacheMismatches() :
-	                                                            shaderCache->GetPreviousCacheMismatches();
+	const auto& mismatches = (cacheHeld || featureChangeHeld) ? rollback.cacheMismatches :
+	                                                            rollback.previousCacheMismatches;
 	for (const auto& mismatch : mismatches) {
 		const char* detail = mismatch.detail.c_str();
 		if (mismatch.kind == MismatchKind::EnabledFlip) {

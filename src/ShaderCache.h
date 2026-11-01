@@ -20,6 +20,7 @@
 
 #include "ShaderCompilationSchedulingPolicy.h"
 #include "Utils/CacheInvalidation.h"
+#include "Utils/CacheRollbackState.h"
 #include "Utils/ContentHash.h"
 #include "Utils/ShaderAllocation.h"
 #include "Utils/ShaderContentReuse.h"
@@ -529,19 +530,22 @@ namespace SIE
 
 		using CacheMismatch = Util::CacheInvalidation::CacheMismatch;
 
-		const std::vector<CacheMismatch>& GetCacheMismatches() const { return cacheMismatches; }
-		const std::vector<CacheMismatch>& GetPreviousCacheMismatches() const { return previousCacheMismatches; }
-		bool HasFeatureSetChanges() const { return featureSetChanged; }
-		bool HasFeatureSetRevertPending() const { return featureSetRevertPending.load(std::memory_order_acquire); }
-		bool HasFeatureSetCacheBackup() const { return featureSetCacheBackedUp; }
-		bool HasSelectivelySeededFeatureSetCache() const { return featureSetCacheSelectivelySeeded; }
-		bool HasPreviousDiskCache() const { return previousDiskCacheAvailable; }
-		bool IsDiskCacheHeld() const { return diskCacheHeld.load(std::memory_order_acquire); }
+		using RollbackFlags = Util::CacheRollbackState::Flags;
+		using RollbackState = Util::CacheRollbackState::Snapshot;
+
+		/** @brief Read coherent rollback flags without locking or copying mismatch lists. */
+		RollbackFlags GetRollbackFlags() const { return rollbackState.GetFlags(); }
+		/** @brief Copy rollback flags and owned mismatch details from one publication. */
+		RollbackState GetRollbackState() const { return rollbackState.GetSnapshot(); }
+		bool HasFeatureSetChanges() const { return GetRollbackFlags().featureSetChanged; }
+		bool HasFeatureSetRevertPending() const { return GetRollbackFlags().featureSetRevertPending; }
+		bool HasFeatureSetCacheBackup() const { return GetRollbackFlags().featureSetCacheBackedUp; }
+		bool HasSelectivelySeededFeatureSetCache() const { return GetRollbackFlags().featureSetCacheSelectivelySeeded; }
+		bool HasPreviousDiskCache() const { return GetRollbackFlags().previousDiskCacheAvailable; }
+		bool IsDiskCacheHeld() const { return GetRollbackFlags().diskCacheHeld; }
 		bool IsDiskCacheActive() const
 		{
-			return isDiskCache.load(std::memory_order_acquire) &&
-			       !diskCacheHeld.load(std::memory_order_acquire) &&
-			       !featureSetRevertPending.load(std::memory_order_acquire);
+			return isDiskCache.load(std::memory_order_acquire) && GetRollbackFlags().AllowsDiskCache();
 		}
 		void AcceptCacheRebuild();
 
@@ -1147,9 +1151,10 @@ namespace SIE
 		void ManageCompilationSet(std::stop_token stoken);
 		void ProcessCompilationSet(std::stop_token stoken, SIE::ShaderCompilationTask task);
 		void ProcessDeferredDiskWrites(std::stop_token stoken);
-		bool BackupActiveDiskCache(const std::vector<std::string>& a_changedDefines);
+		bool BackupActiveDiskCache(const std::vector<std::string>& a_changedDefines, RollbackState& a_state);
 		void DeleteActiveDiskCache();
-		void RefreshPreviousDiskCacheInfo();
+		void RefreshPreviousDiskCacheInfo(RollbackState& a_state,
+			std::optional<std::vector<CacheMismatch>> a_retained = std::nullopt);
 
 		~ShaderCache();
 
@@ -1168,14 +1173,10 @@ namespace SIE
 		std::atomic_bool enableRequested{ true };
 		std::atomic_bool pendingDisableAfterVRNativeRestore{ false };
 		std::atomic_bool isDiskCache{ true };
-		std::atomic_bool diskCacheHeld{ false };
-		bool featureSetChanged = false;
-		std::atomic_bool featureSetRevertPending{ false };
-		bool featureSetCacheBackedUp = false;
-		bool featureSetCacheSelectivelySeeded = false;
-		bool previousDiskCacheAvailable = false;
-		std::vector<CacheMismatch> cacheMismatches;
-		std::vector<CacheMismatch> previousCacheMismatches;
+		// Lifecycle writers serialize before taking compilation or disk locks.
+		// Published-state readers never hold this mutex or perform disk I/O.
+		std::mutex cacheLifecycleMutex;
+		Util::CacheRollbackState rollbackState;
 		static constexpr size_t kMaxRecentCompileFailures = 32;
 		mutable std::mutex compileFailuresMutex;
 		std::deque<CompileFailure> recentCompileFailures;

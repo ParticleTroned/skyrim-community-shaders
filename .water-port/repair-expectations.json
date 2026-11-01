@@ -1,0 +1,84 @@
+{
+  "04-flowmap": {
+    "src/Features/UnifiedWater/Flowmap.cpp": "19c264fb68d4da10270d49f9fe57ed7ed333786875a1360128fc67179c16b811"
+  },
+  "02-refraction": {
+    "package/Shaders/Water.hlsl": "d45be830f93f9257d2723f559e8ffdc1bdd605d6fcb1d3bcaae991a6cf82c51e",
+    "package/Shaders/Tests/TestWaterRefraction.hlsl": "ce9f8ffa9b5a1c5817da8ba1ecdc8bb81429f1420b346f69078f4a0f42c946a6",
+    "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
+    "package/Shaders/Common/WaterRefraction.hlsli": "43e91afe6c2c83fa326b53a472ee728c9b7f6b5da060f17563cd5a83f553c7ea",
+    "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1"
+  },
+  "06-cache": {
+    "src/Features/UnifiedWater/Flowmap.cpp": "19c264fb68d4da10270d49f9fe57ed7ed333786875a1360128fc67179c16b811"
+  },
+  "03-child-worldspace": {
+    "src/Features/UnifiedWater.cpp": "95b104586b7f7309b43cad1acc20fff0936803add76a13f5f20094fb0c1c7267"
+  },
+  "08-parallax": {
+    "package/Shaders/Tests/TestWaterParallaxMath.hlsl": "6637f51f95bf68544c77d342b4ded03f457e5a064b550c232dfc7aa37d7a3662",
+    "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
+    "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
+    "package/Shaders/Common/WaterParallaxMath.hlsli": "37437251f7bcb81fa8f62570c395eb8bb216c7daac2800e69105e4ba20e41e25",
+    "features/Water Effects/Shaders/WaterEffects/WaterParallax.hlsli": "6ed0be70b955e3407f5f685b7dbe25179d7628075d6b94ce41e7f2eeb5fc0d1f"
+  },
+  "09-history": {
+    "src/Hooks.cpp": "288b5a911bada877adcbafbdcbe6330307d4720fafafe73e0dd2018755646761"
+  },
+  "10a-reflection-source": {
+    "package/Shaders/Water.hlsl": "95cf1c1bf72f7cf33e0a6a442e1450260eebc4d36ac3d4c448a20d2dc65466f1",
+    "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
+    "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1"
+  },
+  "10b-ssr": {
+    "package/Shaders/Water.hlsl": "1ac511835fa67a7d99cc8b4bcb15546d6261dfa4ce0a0aadfe8938f0a08ed864",
+    "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
+    "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1"
+  },
+  "10c-reflection-height": {
+    "package/Shaders/Water.hlsl": "462bf6a7972ab4404b8a15d78443b474d478cd53809af2acf3f0508cf946513e",
+    "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
+    "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1"
+  },
+  "11b-contact-candidates": {
+    "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
+    "package/Shaders/Tests/TestWaterContactCandidates.hlsl": "971172370ec0b1cf2a40935ad28fbedda0dc71155ca8840ff9ea59a86f4ac3ca",
+    "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
+    "package/Shaders/Common/WaterContactCandidates.hlsli": "83e647769b39100b5e1c9390fa0f24546b172170039ce0fb7740ad05ef26e2bd",
+    "features/Light Limit Fix/Shaders/LightLimitFix/WaterContactCandidatesCS.hlsl": "266e453ab19b7fa30d482e852fe55b3a80fbf1a76c9101c0d15aae357e87c2a7"
+  },
+  "shallow-base": {
+    "package/Shaders/Water.hlsl": "9777626c637c8bf182a7c2f9127bcf42e32df021571b85d3e9de964899b579c7",
+    "package/Shaders/Tests/TestWaterRefraction.hlsl": "ce9f8ffa9b5a1c5817da8ba1ecdc8bb81429f1420b346f69078f4a0f42c946a6",
+    "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
+    "package/Shaders/Common/WaterRefraction.hlsli": "43e91afe6c2c83fa326b53a472ee728c9b7f6b5da060f17563cd5a83f553c7ea",
+    "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
+    "src/Features/UnifiedWater/Flowmap.cpp": "19c264fb68d4da10270d49f9fe57ed7ed333786875a1360128fc67179c16b811"
+  },
+  "01-shallow": {
+    "package/Shaders/Water.hlsl": "5eb79eeb878c7d3fdd12768074f03f4e71a7f8ee697096bb0cf757888e9a6504",
+    "package/Shaders/Tests/TestWaterRefraction.hlsl": "ce9f8ffa9b5a1c5817da8ba1ecdc8bb81429f1420b346f69078f4a0f42c946a6",
+    "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
+    "package/Shaders/Common/WaterRefraction.hlsli": "43e91afe6c2c83fa326b53a472ee728c9b7f6b5da060f17563cd5a83f553c7ea",
+    "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
+    "features/Unified Water/Shaders/UnifiedWater/ShallowSurface.hlsli": "02fadffb996552f0ec8012834d1577ccd7bd3f93609716c3ff26520a2bbdfa69",
+    "src/Features/UnifiedWater/Flowmap.cpp": "19c264fb68d4da10270d49f9fe57ed7ed333786875a1360128fc67179c16b811"
+  },
+  "integration": {
+    "src/Hooks.cpp": "288b5a911bada877adcbafbdcbe6330307d4720fafafe73e0dd2018755646761",
+    "package/Shaders/Water.hlsl": "781cea4f59996aa3ae1962a842b1e54b1fda117e0157a39d9b856a1f7ca3f022",
+    "package/Shaders/Tests/TestWaterParallaxMath.hlsl": "6637f51f95bf68544c77d342b4ded03f457e5a064b550c232dfc7aa37d7a3662",
+    "package/Shaders/Tests/TestWaterRefraction.hlsl": "ce9f8ffa9b5a1c5817da8ba1ecdc8bb81429f1420b346f69078f4a0f42c946a6",
+    "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
+    "package/Shaders/Tests/TestWaterContactCandidates.hlsl": "971172370ec0b1cf2a40935ad28fbedda0dc71155ca8840ff9ea59a86f4ac3ca",
+    "package/Shaders/Common/WaterRefraction.hlsli": "43e91afe6c2c83fa326b53a472ee728c9b7f6b5da060f17563cd5a83f553c7ea",
+    "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
+    "package/Shaders/Common/WaterContactCandidates.hlsli": "83e647769b39100b5e1c9390fa0f24546b172170039ce0fb7740ad05ef26e2bd",
+    "package/Shaders/Common/WaterParallaxMath.hlsli": "37437251f7bcb81fa8f62570c395eb8bb216c7daac2800e69105e4ba20e41e25",
+    "features/Water Effects/Shaders/WaterEffects/WaterParallax.hlsli": "6ed0be70b955e3407f5f685b7dbe25179d7628075d6b94ce41e7f2eeb5fc0d1f",
+    "features/Light Limit Fix/Shaders/LightLimitFix/WaterContactCandidatesCS.hlsl": "266e453ab19b7fa30d482e852fe55b3a80fbf1a76c9101c0d15aae357e87c2a7",
+    "features/Unified Water/Shaders/UnifiedWater/ShallowSurface.hlsli": "02fadffb996552f0ec8012834d1577ccd7bd3f93609716c3ff26520a2bbdfa69",
+    "src/Features/UnifiedWater.cpp": "c17c78f54a139a60f09b7907b323b86fac6445889a7a463a470ec82c53a8038f",
+    "src/Features/UnifiedWater/Flowmap.cpp": "a4b0a724788935e262ad68a746fc33cc6254a32d44250398c9a8ace1c7dcb399"
+  }
+}

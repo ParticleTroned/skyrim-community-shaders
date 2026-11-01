@@ -158,13 +158,13 @@ bool Flowmap::LoadFlowmap(const std::filesystem::path& file)
 	}
 
 	D3D11_RESOURCE_DIMENSION resourceDimension;
-	sourceTex->rendererTexture->texture->GetType(&resourceDimension);
+	Util::AsReal(sourceTex->rendererTexture->texture)->GetType(&resourceDimension);
 	if (resourceDimension != D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
 		logger::error("[Unified Water] [Flowmap] Resource is not a 2D texture: {}", path);
 		return false;
 	}
 	D3D11_TEXTURE2D_DESC desc;
-	static_cast<ID3D11Texture2D*>(sourceTex->rendererTexture->texture)->GetDesc(&desc);
+	static_cast<ID3D11Texture2D*>(Util::AsReal(sourceTex->rendererTexture->texture))->GetDesc(&desc);
 	// Texture quality may strip top mips; normalized UVs still cover the same cells.
 	const bool sizeMatches = WaterFlowmapLayout::MatchesTexture(desc.Width, desc.Height, dimensions[0], dimensions[1]);
 	if (!sizeMatches || desc.ArraySize != 1 || desc.SampleDesc.Count != 1) {
@@ -173,7 +173,7 @@ bool Flowmap::LoadFlowmap(const std::filesystem::path& file)
 	}
 
 	D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc;
-	sourceTex->rendererTexture->resourceView->GetDesc(&viewDesc);
+	Util::AsReal(sourceTex->rendererTexture->resourceView)->GetDesc(&viewDesc);
 	if (viewDesc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D) {
 		logger::error("[Unified Water] [Flowmap] Texture view must expose a 2D map: {}", path);
 		return false;

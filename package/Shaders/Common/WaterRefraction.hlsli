@@ -2,6 +2,7 @@
 #define __WATER_REFRACTION_HLSLI__
 
 #include "Common/VR.hlsli"
+#include "Common/WaterFinite.hlsli"
 
 namespace WaterRefraction
 {
@@ -15,7 +16,7 @@ namespace WaterRefraction
 #else
 		const float2 minimumSize = float2(1, 1);
 #endif
-		if (!all(isfinite(refractionRenderSize)) || !all(isfinite(depthRenderSize)) ||
+		if (!all(WaterFinite::IsFinite(refractionRenderSize)) || !all(WaterFinite::IsFinite(depthRenderSize)) ||
 			any(refractionRenderSize < minimumSize) || any(depthRenderSize < minimumSize))
 			return false;
 
@@ -34,8 +35,8 @@ namespace WaterRefraction
 	/** Uses the undistorted position when projection fails, then bounds the sample footprint. */
 	float2 ClampUV(float2 uv, float2 fallbackUV, float2 minUV, float2 maxUV)
 	{
-		if (!all(isfinite(uv)))
-			uv = all(isfinite(fallbackUV)) ? fallbackUV : (minUV + maxUV) * 0.5;
+		if (!all(WaterFinite::IsFinite(uv)))
+			uv = all(WaterFinite::IsFinite(fallbackUV)) ? fallbackUV : (minUV + maxUV) * 0.5;
 		return clamp(uv, minUV, maxUV);
 	}
 }

@@ -3,21 +3,17 @@
 #include "D3D12Interop.h"
 #include "DevelopmentDiagnostics.h"
 #include "Util.h"
+#include "Utils/CryptoHash.h"
 
 #include <Windows.h>
 #include <algorithm>
 #include <array>
-#include <bcrypt.h>
 #include <chrono>
-#include <cmath>
 #include <d3d12.h>
 #include <exception>
 #include <format>
-#include <iomanip>
 #include <nvsdk_ngx.h>
 #include <nvsdk_ngx_defs_dlssnr.h>
-#include <sstream>
-#include <vector>
 #include <wrl/client.h>
 
 namespace NeuralRendering
@@ -25,7 +21,7 @@ namespace NeuralRendering
 	namespace
 	{
 		constexpr wchar_t kRuntimeName[] = L"nvngx_dlssnr.dll";
-		constexpr REL::Version kMinimumRuntimeVersion{ 310, 9, 16, 0 };
+		constexpr REL::Version kMinimumRuntimeVersion{ 310, 8, 0, 0 };
 		constexpr auto kFeatureDlssNr = NVSDK_NGX_Feature_DLSSNR;
 		class ScopedHandle
 		{
@@ -126,76 +122,13 @@ namespace NeuralRendering
 
 		bool ComputeFileSha256(HANDLE a_file, std::string& a_hash, std::string& a_error)
 		{
-			LARGE_INTEGER beginning{};
-			if (!SetFilePointerEx(a_file, beginning, nullptr, FILE_BEGIN)) {
-				a_error = std::format("SetFilePointerEx failed with {}", GetLastError());
+			try {
+				a_hash = Util::CryptoHash::ToHex(Util::CryptoHash::Sha256File(a_file));
+				return true;
+			} catch (const std::exception& error) {
+				a_error = error.what();
 				return false;
 			}
-
-			BCRYPT_ALG_HANDLE algorithm = nullptr;
-			NTSTATUS status = BCryptOpenAlgorithmProvider(
-				&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
-			if (status < 0) {
-				a_error = std::format("BCryptOpenAlgorithmProvider failed 0x{:08X}", static_cast<std::uint32_t>(status));
-				return false;
-			}
-
-			DWORD objectBytes = 0;
-			DWORD copiedBytes = 0;
-			status = BCryptGetProperty(
-				algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectBytes),
-				sizeof(objectBytes), &copiedBytes, 0);
-			if (status < 0) {
-				BCryptCloseAlgorithmProvider(algorithm, 0);
-				a_error = std::format("BCryptGetProperty failed 0x{:08X}", static_cast<std::uint32_t>(status));
-				return false;
-			}
-
-			std::vector<UCHAR> hashObject(objectBytes);
-			BCRYPT_HASH_HANDLE hash = nullptr;
-			status = BCryptCreateHash(
-				algorithm, &hash, hashObject.data(),
-				static_cast<ULONG>(hashObject.size()), nullptr, 0, 0);
-			if (status < 0) {
-				BCryptCloseAlgorithmProvider(algorithm, 0);
-				a_error = std::format("BCryptCreateHash failed 0x{:08X}", static_cast<std::uint32_t>(status));
-				return false;
-			}
-
-			std::vector<UCHAR> buffer(1024 * 1024);
-			while (status >= 0) {
-				DWORD bytesRead = 0;
-				if (!ReadFile(
-						a_file, buffer.data(), static_cast<DWORD>(buffer.size()),
-						&bytesRead, nullptr)) {
-					a_error = std::format("ReadFile failed with {}", GetLastError());
-					BCryptDestroyHash(hash);
-					BCryptCloseAlgorithmProvider(algorithm, 0);
-					return false;
-				}
-				if (!bytesRead)
-					break;
-				status = BCryptHashData(hash, buffer.data(), bytesRead, 0);
-			}
-
-			std::array<UCHAR, 32> digest{};
-			if (status >= 0) {
-				status = BCryptFinishHash(
-					hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
-			}
-			BCryptDestroyHash(hash);
-			BCryptCloseAlgorithmProvider(algorithm, 0);
-			if (status < 0) {
-				a_error = std::format("SHA-256 hashing failed 0x{:08X}", static_cast<std::uint32_t>(status));
-				return false;
-			}
-
-			std::ostringstream hashText;
-			hashText << std::hex << std::uppercase << std::setfill('0');
-			for (const auto byte : digest)
-				hashText << std::setw(2) << static_cast<unsigned int>(byte);
-			a_hash = hashText.str();
-			return true;
 		}
 
 	}
@@ -314,15 +247,10 @@ namespace NeuralRendering
 			SetFailureLocked(RuntimeStatus::HashFailed, RuntimeFailureStage::Hash, std::move(hashError));
 			return false;
 		}
-		if (_stricmp(hash_.c_str(), CSX_NR_RUNTIME_SHA256) != 0) {
-			SetFailureLocked(RuntimeStatus::IdentityFailed, RuntimeFailureStage::Identity,
-				"NR runtime does not match the pinned unmodified NVIDIA SDK");
-			return false;
-		}
 		const auto version = Util::GetDllVersion(path_.wstring());
 		if (!version || *version < kMinimumRuntimeVersion) {
 			SetFailureLocked(RuntimeStatus::VersionRejected, RuntimeFailureStage::Version,
-				"NR runtime has no compatible official version resource");
+				"NR runtime requires a readable version resource of 310.8 or newer");
 			return false;
 		}
 		version_ = Util::GetFormattedVersion(*version);
@@ -330,11 +258,11 @@ namespace NeuralRendering
 		tuningLimits_ = GetTuningLimitsForVersion(version->major(), version->minor());
 		networkSelectionSupported_ = NeuralRendering::SupportsNetworkSelection(version->major(), version->minor());
 		backend_->providerFile.Reset(verifiedFile.Release());
-		trust_ = RuntimeTrust::OfficialPackageVerified;
+		trust_ = RuntimeTrust::VersionAccepted;
 		status_ = RuntimeStatus::Ready;
 		failureStage_ = RuntimeFailureStage::None;
 		ngxResult_ = 0;
-		detail_ = std::format("official NR SDK verified hash={} version={}", hash_, version_);
+		detail_ = std::format("user-supplied NR runtime admitted hash={} version={}", hash_, version_);
 		LogOnceLocked(probeLogEmitted_, "probe", true);
 		return true;
 	}
@@ -676,11 +604,12 @@ namespace NeuralRendering
 		if (status_ != RuntimeStatus::Initialized || !a_commandList ||
 			a_slot >= kFeatureSlotCount || !a_color || !a_depth ||
 			!a_motionVectors || !a_output || !layoutViolation.empty() ||
-			!std::isfinite(a_tuning.intensity) ||
-			!std::isfinite(a_tuning.localToneStrength) ||
-			!std::isfinite(a_tuning.localStructureStrength) ||
-			!std::isfinite(a_tuning.skinStructureStrength) ||
-			!std::isfinite(a_tuning.singleSubrectScale) ||
+			!Util::IsFinite(a_tuning.intensity) ||
+			!Util::IsFinite(a_tuning.localToneStrength) ||
+			!Util::IsFinite(a_tuning.localStructureStrength) ||
+			!Util::IsFinite(a_tuning.skinStructureStrength) ||
+			!Util::IsFinite(a_tuning.singleSubrectScale) ||
+			a_tuning.style > kMaximumStyle ||
 			a_tuning.singleSubrectScale < 0.25f ||
 			a_tuning.singleSubrectScale > 1.0f ||
 			a_tuning.uiCorrection || !controlMaskContractValid) {
@@ -919,12 +848,28 @@ namespace NeuralRendering
 		if (abandonRequested_.load(std::memory_order_acquire) || abandoned_)
 			return false;
 		bool succeeded = true;
+		struct Failure
+		{
+			RuntimeStatus status;
+			RuntimeFailureStage stage;
+			std::string detail;
+			std::uint32_t result;
+		};
+		std::optional<Failure> firstFailure;
 		for (std::uint32_t slot = 0; slot < kFeatureSlotCount; ++slot) {
 			if (!ResetFeatureLocked(slot)) {
 				if (a_stopOnFailure)
 					return false;
+				if (!firstFailure)
+					firstFailure = Failure{ status_, failureStage_, detail_, ngxResult_ };
 				succeeded = false;
 			}
+		}
+		if (firstFailure) {
+			status_ = firstFailure->status;
+			failureStage_ = firstFailure->stage;
+			detail_ = std::move(firstFailure->detail);
+			ngxResult_ = firstFailure->result;
 		}
 		if (succeeded)
 			successfulFrames_ = 0;
@@ -1239,8 +1184,8 @@ namespace NeuralRendering
 		switch (a_trust) {
 		case RuntimeTrust::Unknown:
 			return "unknown";
-		case RuntimeTrust::OfficialPackageVerified:
-			return "official-package-verified";
+		case RuntimeTrust::VersionAccepted:
+			return "version-accepted";
 		}
 		return "unknown";
 	}

@@ -58,5 +58,3 @@ endblock()
 target_include_directories(${PROJECT_NAME} PRIVATE
     "${NEURAL_RENDERING_SDK_INCLUDE_DIR}")
 target_link_libraries(${PROJECT_NAME} PRIVATE NgxSdk)
-target_compile_definitions(${PROJECT_NAME} PRIVATE
-    CSX_NR_RUNTIME_SHA256="${NEURAL_RENDERING_RUNTIME_SHA256}")

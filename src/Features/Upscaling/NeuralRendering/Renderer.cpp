@@ -353,7 +353,7 @@ namespace NeuralRendering
 		bool IsFiniteTuning(const Tuning& a_tuning) noexcept
 		{
 			const auto validStrength = [](float a_value) {
-				return std::isfinite(a_value) && a_value >= 0.0f && a_value <= 2.0f;
+				return Util::IsFinite(a_value) && a_value >= 0.0f && a_value <= 2.0f;
 			};
 			return a_tuning.networkPreset <= kNetworkNewer &&
 			       validStrength(a_tuning.intensity) &&
@@ -361,7 +361,7 @@ namespace NeuralRendering
 			       validStrength(a_tuning.localStructureStrength) &&
 			       validStrength(a_tuning.skinStructureStrength) &&
 			       a_tuning.style <= kMaximumStyle &&
-			       std::isfinite(a_tuning.singleSubrectScale) &&
+			       Util::IsFinite(a_tuning.singleSubrectScale) &&
 			       a_tuning.singleSubrectScale >= 0.25f &&
 			       a_tuning.singleSubrectScale <= 1.0f;
 		}
@@ -3130,18 +3130,21 @@ namespace NeuralRendering
 	{
 		auto* shaderStorage = &actorProtectionCS_;
 		auto* compileFailed = &actorProtectionCompileFailed_;
-		std::vector<std::pair<const char*, const char*>> defines;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (slot.resourceKey.controlMaskFormat == DXGI_FORMAT_R8G8B8A8_UNORM) {
 			shaderStorage = &nativeControlMaskCS_;
 			compileFailed = &nativeControlMaskCompileFailed_;
-			defines.emplace_back("NR_NATIVE_CONTROL_MASK", "1");
 		}
 #endif
 		auto& shader = *shaderStorage;
 		if (*compileFailed)
 			return false;
 		if (!shader) {
+			std::vector<std::pair<const char*, const char*>> defines;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (slot.resourceKey.controlMaskFormat == DXGI_FORMAT_R8G8B8A8_UNORM)
+				defines.emplace_back("NR_NATIVE_CONTROL_MASK", "1");
+#endif
 			*compileFailed = true;
 			shader.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
 				L"Data/Shaders/DLSS5ActorProtectionCS.hlsl", defines, "cs_5_0", "main")));

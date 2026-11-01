@@ -6,7 +6,6 @@
 #include "Utils/Finite.h"
 
 #include <array>
-#include <cmath>
 #include <initializer_list>
 #include <string_view>
 
@@ -104,7 +103,7 @@ namespace NeuralRendering
 		if (a_hasControlMask ? a_layout.controlMask != a_layout.output : a_layout.controlMask != NativeImageRegion{})
 			return "native control-mask presence or rectangle differs from output";
 		for (const float scale : a_layout.motionVectorScale) {
-			if (!std::isfinite(scale) || scale <= 0.0f)
+			if (!Util::IsFinite(scale) || scale <= 0.0f)
 				return "native motion conversion must be finite and positive";
 		}
 		for (const float jitter : a_layout.jitterPixels)

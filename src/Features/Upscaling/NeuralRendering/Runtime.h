@@ -53,7 +53,7 @@ namespace NeuralRendering
 	enum class RuntimeTrust
 	{
 		Unknown,
-		OfficialPackageVerified
+		VersionAccepted
 	};
 
 	enum class RuntimeFailureStage
@@ -103,7 +103,7 @@ namespace NeuralRendering
 		static constexpr const char* kMissingRuntimeNotice =
 			"Missing DLL: Shaders/Upscaling/Streamline/nvngx_dlssnr.dll";
 		static constexpr const char* kUserRuntimeNotice =
-			"NR runtime is not included. Install NVIDIA's official 310.9.16 nvngx_dlssnr.dll "
+			"NR runtime is not included. Install your own compatible nvngx_dlssnr.dll (310.8 or newer) "
 			"under Shaders/Upscaling/Streamline under its license terms, then restart.";
 		static constexpr const char* kUnsupportedHardwareNotice =
 			"Incompatible GPU detected. Neural Rendering requires an NVIDIA GPU.";

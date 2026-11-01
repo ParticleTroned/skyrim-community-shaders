@@ -347,9 +347,10 @@ through the pinned [Streamline submodule](extern/Streamline-DX12).
 Neural Rendering uses NVIDIA's separate `ngx_sdk_dlnr` package, also used by
 [RTX Remix 1.6.1](https://github.com/NVIDIAGameWorks/rtx-remix/releases/tag/remix-1.6.1).
 [NeuralRenderingSDKPin.cmake](cmake/NeuralRenderingSDKPin.cmake) pins its official
-download, archive SHA-256, runtime SHA-256 and original license. Every build
-and package excludes `nvngx_dlssnr.dll`; the user must obtain the official
-310.9.16 runtime under NVIDIA's terms and install it separately under
+download, archive SHA-256, reference runtime SHA-256 and original license.
+The SDK pin does not restrict installed runtime hashes. Every build and
+package excludes `nvngx_dlssnr.dll`; users supply a compatible runtime
+(310.8 or newer) under its license terms and install it separately under
 `Shaders/Upscaling/Streamline/`, then restart. Missing runtimes retain the
 existing disabled controls and installation notice. Core and AIO packages
 retain the unchanged `nvngx_dlssnr.license.txt` beside the Streamline files.

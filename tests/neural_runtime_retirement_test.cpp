@@ -6,6 +6,7 @@
 #include <functional>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -233,6 +234,9 @@ namespace
 		Require(runtime.nativeReleases_.size() == Runtime::kFeatureSlotCount && runtime.resident_[1] && !runtime.resident_[3],
 			"Warm fail-fast behavior changed cold reset cleanup");
 		Require(runtime.parameterObject_.resetCalls == 0, "Cold feature reset unexpectedly cleared parameter bindings");
+		Require(runtime.status_ == RuntimeStatus::FeatureReleaseFailed && runtime.failureStage_ == RuntimeFailureStage::FeatureRelease &&
+					runtime.ngxResult_ == Runtime::kInjectedResult && runtime.detail_ == "injected native release failure",
+			"Later successful releases concealed the first cold-retirement failure");
 	}
 }
 

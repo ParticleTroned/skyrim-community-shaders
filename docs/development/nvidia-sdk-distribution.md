@@ -3,8 +3,9 @@
 Streamline source and runtime inputs are pinned to the official NVIDIA
 repository and release archive. Neural Rendering is a separate NVIDIA SDK
 package referenced by the pinned RTX Remix revision in
-`cmake/NeuralRenderingSDKPin.cmake`. Do not substitute a community mirror,
-patched runtime, preview binary or another application's project identity.
+`cmake/NeuralRenderingSDKPin.cmake`. Build-time SDK inputs must retain their
+verified official source; use only the CSX project identity. The SDK pin
+does not restrict the user-installed NR runtime to that package hash.
 
 ## Building and packaging
 
@@ -35,8 +36,11 @@ verified SDK header cache must already be populated for offline DLL
 development. Configure once with runtime downloads enabled to prepare it. Missing
 Streamline runtime inputs block runtime installation and packaging. An absent
 user NR runtime does not block builds or packages; it disables NR in game.
-Existing runtime
-directories retain the ordinary skip-mode deployment policy.
+Compatible user-supplied NR versions 310.8 and newer retain the existing
+version admission policy, with final feature availability checked by NGX.
+Runtime SHA-256 values identify the installed file for diagnostics; they
+are not an allowlist. Existing runtime directories retain the ordinary
+skip-mode deployment policy.
 
 ## NVIDIA license obligations
 

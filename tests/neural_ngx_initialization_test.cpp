@@ -121,7 +121,7 @@ namespace NeuralRendering
 	enum class RuntimeTrust
 	{
 		Unknown,
-		OfficialPackageVerified
+		VersionAccepted
 	};
 	struct Runtime
 	{
@@ -140,6 +140,7 @@ namespace NeuralRendering
 		RuntimeTrust trust_ = RuntimeTrust::Unknown;
 		std::filesystem::path path_;
 		std::string hash_, version_, detail_;
+		std::optional<int> evaluationSuccessDetail_;
 		std::optional<int> tuningLimits_, networkSelectionSupported_;
 		NgxDriverRequirements driverRequirements_;
 		std::unique_ptr<Backend> backend_;
@@ -155,9 +156,9 @@ namespace NeuralRendering
 		{
 			backend_ = std::make_unique<Backend>();
 			path_ = std::filesystem::current_path() / "Testing/NgxSdk/nvngx_dlssnr.dll";
-			hash_ = "verified-provider";
+			hash_ = "user-provider";
 			version_ = "310.9.16";
-			trust_ = RuntimeTrust::OfficialPackageVerified;
+			trust_ = RuntimeTrust::VersionAccepted;
 			status_ = RuntimeStatus::Ready;
 			return true;
 		}
@@ -212,7 +213,9 @@ namespace
 		Require(initializedProject == NvidiaProject::kId && featurePath == healthy.path_.parent_path(), "SDK used the wrong project or feature path");
 		Require(calls == std::vector<std::string>{ "init", "capabilities", "available", "allocate" }, "SDK startup order changed");
 		Require(healthy.Initialize(&device, data) && calls.size() == 4 && device.references == 1, "Healthy SDK was initialized twice");
-		Require(healthy.ShutdownLocked() && device.references == 0 && !healthy.backend_, "Healthy SDK ownership was not retired");
+		healthy.evaluationSuccessDetail_ = 1;
+		Require(healthy.ShutdownLocked() && device.references == 0 && !healthy.backend_ && !healthy.evaluationSuccessDetail_,
+			"Healthy SDK ownership or deferred evaluation detail was not retired");
 		Require(calls == std::vector<std::string>{ "init", "capabilities", "available", "allocate", "retire_features", "destroy_params", "destroy_caps", "shutdown" }, "SDK teardown order changed");
 
 		for (unsigned failure = 0; failure < 4; ++failure) {
@@ -230,7 +233,7 @@ namespace
 			}
 			Require(!runtime.Initialize(&device, data), "SDK startup failure was accepted");
 			Require(device.references == 0 && !runtime.backend_ && !runtime.parameters_, "SDK rollback leaked owned maps or device");
-			Require(runtime.hash_ == "verified-provider" && runtime.version_ == "310.9.16", "SDK rollback lost provider identity");
+			Require(runtime.hash_ == "user-provider" && runtime.version_ == "310.9.16", "SDK rollback lost provider identity");
 			Require(runtime.ngxResult_ == (failure == 2 ? NVSDK_NGX_Result_FAIL_FeatureNotSupported : kFailure), "SDK rollback lost the primary result");
 			Require(calls.back() == "shutdown", "SDK rollback did not shut down the owning device");
 			if (failure == 3)

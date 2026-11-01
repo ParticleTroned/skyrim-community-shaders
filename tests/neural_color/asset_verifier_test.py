@@ -25,6 +25,9 @@ class AssetTests(unittest.TestCase):
         manifest.parent.mkdir(parents=True); manifest.write_text("[Info]\nVersion = 1-5-0\n")
         for name in assets.NAMES:
             (self.shaders / name).write_text('#include "Upscaling/NeuralRendering/ColorCommon.hlsli"\n' if name.endswith(".hlsl") else "// fixture\n")
+        external = self.root / "package/Shaders/DLSS5ActorProtectionCS.hlsl"
+        external.parent.mkdir(parents=True)
+        external.write_text("// fixture\n")
         self.producers = self.root / "src/Features/Upscaling/NeuralRendering"
         self.producers.mkdir(parents=True)
         for producer, shaders in assets.RUNTIME_SHADERS.items():
@@ -48,6 +51,26 @@ class AssetTests(unittest.TestCase):
 
     def test_missing_include(self):
         (self.shaders / "ColorCommon.hlsli").write_text('#include "Missing.hlsli"\n')
+        self.assertFalse(assets.verify(self.root)["ok"])
+
+    def test_shared_dependency_closure_is_hash_checked(self):
+        (self.shaders / "PeripheralCompression.hlsli").write_text('#include "Common/FoveatedMask.hlsli"\n')
+        common = self.root / "package/Shaders/Common"
+        common.mkdir()
+        (common / "FoveatedMask.hlsli").write_text('#include "Common/Shared.hlsli"\n')
+        (common / "Shared.hlsli").write_text("// fixture\n")
+        result = assets.verify(self.root)
+        self.assertTrue(result["ok"], result)
+        for row in result["assets"]:
+            dest = self.deployed / row["destination"]
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(self.root / row["source"], dest)
+        self.assertTrue(assets.verify(self.root, self.deployed)["ok"])
+        (self.deployed / "Shaders/Common/Shared.hlsli").write_text("// stale\n")
+        self.assertFalse(assets.verify(self.root, self.deployed)["ok"])
+
+    def test_missing_external_mask_shader_is_rejected(self):
+        (self.root / "package/Shaders/DLSS5ActorProtectionCS.hlsl").unlink()
         self.assertFalse(assets.verify(self.root)["ok"])
 
     def test_missing_reference_colour_helper(self):

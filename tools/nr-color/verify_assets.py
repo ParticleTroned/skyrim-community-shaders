@@ -12,11 +12,13 @@ SHADERS = Path("Shaders/Upscaling/NeuralRendering")
 RUNTIME_SHADERS = {
     "ColorPipeline.cpp": ("ColorPrepareCS.hlsl", "ColorReconstructCS.hlsl", "ColorMeasureCS.hlsl"),
     "ExposureCapture.cpp": ("ColorExposureCS.hlsl",),
-    "ModelResolution.cpp": ("ModelResolutionPrepareCS.hlsl", "ModelResolutionReconstructCS.hlsl"),
+    "ModelResolution.cpp": ("ModelResolutionPrepareCS.hlsl", "ModelResolutionReconstructCS.hlsl", "ModelResolutionCoverageCS.hlsl"),
     "Renderer.cpp": ("CopyDepthGuideCS.hlsl", "CopyCompactDepthGuideCS.hlsl"),
 }
 EXTERNAL_RUNTIME_SHADERS = {"Renderer.cpp": {"Data/Shaders/DLSS5ActorProtectionCS.hlsl"}}
-NAMES = ("ColorCommon.hlsli", "NvidiaReferenceColor.hlsli", "ModelResolutionCommon.hlsli", *(name for names in RUNTIME_SHADERS.values() for name in names))
+NAMES = ("ColorCommon.hlsli", "NvidiaReferenceColor.hlsli", "ModelResolutionCommon.hlsli",
+         "ModelResolutionGuided.hlsli", "ModelResolutionStorage.hlsli", "SceneCategorySelection.hlsli",
+         "PeripheralCompression.hlsli", *(name for names in RUNTIME_SHADERS.values() for name in names))
 MANIFEST_VERSION = re.compile(r"^\s*Version\s*=\s*(\d+)-(\d+)-(\d+)\s*$", re.MULTILINE)
 REGISTRY_VERSION = re.compile(r'"NeuralRendering"sv,\s*\{\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}')
 RUNTIME_TOKENS = re.compile(
@@ -27,6 +29,8 @@ RUNTIME_TOKENS = re.compile(
 def verify(root: Path, deployed_data: Path | None = None) -> dict:
     mappings = [(FEATURE / "Shaders/Features/NeuralRendering.ini", Path("Shaders/Features/NeuralRendering.ini"))]
     mappings += [(FEATURE / SHADERS / name, SHADERS / name) for name in NAMES]
+    mappings += [(Path("package") / Path(name.removeprefix("Data/")), Path(name.removeprefix("Data/")))
+                 for name in sorted({name for paths in EXTERNAL_RUNTIME_SHADERS.values() for name in paths})]
     errors: list[str] = []
     rows: list[dict] = []
     registry = root / "include/FeatureVersions.h"
@@ -68,9 +72,20 @@ def verify(root: Path, deployed_data: Path | None = None) -> dict:
             if path.suffix in (".hlsl", ".hlsli"):
                 for include in re.findall(r'^\s*#\s*include\s+"([^"]+)"', text, re.M):
                     # Util::CustomInclude resolves every include from Data/Shaders.
-                    dependency = (root / FEATURE / "Shaders" / include).resolve()
+                    include_path = Path(include)
+                    if include_path.is_absolute() or ".." in include_path.parts:
+                        errors.append(f"Invalid shader include {include} from {source}")
+                        continue
+                    shared = include_path.parts[:1] == ("Common",)
+                    provider = Path("package") if shared else FEATURE
+                    dependency_source = provider / "Shaders" / include_path
+                    dependency = (root / dependency_source).resolve()
                     if not dependency.is_file():
                         errors.append(f"Unresolved shader include {include} from {source}")
+                    elif shared and dependency not in packaged:
+                        # Shared helpers belong to the core package; walk and hash their closure too.
+                        packaged.add(dependency)
+                        mappings.append((dependency_source, Path("Shaders") / include_path))
                     elif dependency not in packaged:
                         # A locally present helper not in the deployment mapping is
                         # not a complete shader package. Every mapped include is

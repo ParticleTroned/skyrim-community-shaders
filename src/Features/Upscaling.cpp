@@ -54,8 +54,8 @@
 #include "Upscaling/VRRenderScaleDevBenchBridge.h"
 #include "Upscaling/VRRenderScaleModePolicy.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
-#include "Utils/D3D.h"
 #include "Utils/ComIdentity.h"
+#include "Utils/D3D.h"
 #include "Utils/D3DContextProtection.h"
 #include "Utils/DeviceContextState.h"
 #include "Utils/FileSystem.h"
@@ -19594,10 +19594,10 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 					static_cast<unsigned long long>(neuralStatus.successes),
 					static_cast<unsigned long long>(neuralStatus.failures));
 				ImGui::TextDisabled(
-					"The user-supplied official NVIDIA NR 310.9.16 runtime must match the pinned SDK SHA-256.");
+					"Any compatible user-supplied NR 310.8 or newer runtime is accepted; SHA-256 is diagnostic only.");
 				ImGui::TextColored(
 					Util::Colors::GetWarning(),
-					"NVIDIA license terms apply. Developer Mode and Streamline logging do not bypass runtime validation.");
+					"User-supplied NR DLLs execute in-process. NVIDIA license terms and NGX compatibility checks apply.");
 
 				if (settings.neuralCharacterRenderingEnabled || settings.neuralCharacterSceneStrengthsEnabled) {
 					const auto characterStatus =
@@ -46406,7 +46406,8 @@ namespace
 					return std::nullopt;
 			}
 			auto settingsKey = a_args[0].characterVisualIsolation || a_args[1].characterVisualIsolation ?
-			                       std::optional<uint64_t>{ 0 } : std::nullopt;
+			                       std::optional<uint64_t>{ 0 } :
+			                       std::nullopt;
 			if (!FinalizePreparedNeuralStereoInputs(a_upscaling, a_results, a_args, settingsKey ? &*settingsKey : nullptr))
 				return std::nullopt;
 			const auto arrangement = a_upscaling.GetNeuralRenderingArrangement();
@@ -46438,7 +46439,7 @@ namespace
 				!globals::state || globals::state->frameCount != args_[0].frameId ||
 				globals::d3d::device != args_[0].device || globals::d3d::context != args_[0].context ||
 				(settingsKey_ && (BuildNeuralRenderingSettingsKey(upscaling_->settings, false) != *settingsKey_ ||
-					upscaling_->settings.neuralCharacterCropMode != characterCropMode_)) ||
+									 upscaling_->settings.neuralCharacterCropMode != characterCropMode_)) ||
 				BuildNeuralCenterEyeMask(*results_, &Upscaling::NeuralCenterDispatchResult::prepared) != expectedEyeMask_ ||
 				BuildNeuralCenterEyeMask(*results_, &Upscaling::NeuralCenterDispatchResult::bypassed) != bypassedEyeMask_) {
 				upscaling_->RequestHistoryReset();
@@ -47989,7 +47990,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 		}
 	}
 	const auto routeRole = params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
-	                          NeuralStereoRouteRole::Submit : NeuralStereoRouteRole::Main;
+	                           NeuralStereoRouteRole::Submit :
+	                           NeuralStereoRouteRole::Main;
 	const uint32_t frame = state->frameCount;
 	const auto dispatchPreparedComposite = [&](auto&& dispatch, uint64_t pixels) {
 		const auto capture = neuralResult && neuralResult->applied ?
@@ -48009,7 +48011,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 	const bool fusePreparedCenter =
 		preparedCenter && !isolateCharacterOutput &&
 		(!IsNeuralRenderingRequested() || NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(),
-			settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov)) &&
+											  settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov)) &&
 		(!neuralResult || !neuralResult->applied ||
 			(settings.neuralRenderingSingleSubrectScale == 1.0f && settings.neuralRenderingCentralAreaPercent == 100 &&
 				!UsesCharacterVisualIsolation(settings))) &&
@@ -48353,7 +48355,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 				characterComposite.baseline,
 				characterComposite.mask.Get(), 0u, false,
 				characterComposite.mask ? &characterComposite.maskSupport : nullptr, characterComposite.providerBlending);
-		}, static_cast<uint64_t>(blendVisibleOutput.Width()) * blendVisibleOutput.Height());
+		},
+			static_cast<uint64_t>(blendVisibleOutput.Width()) * blendVisibleOutput.Height());
 		return blended ? FidelityFX::UpscaleResult::Ready : FidelityFX::UpscaleResult::Failed;
 	}
 
@@ -48480,7 +48483,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMeth
 	if (!PreparePerEyeInputs(colorTexture, depthTexture, motionVectors, reactiveMask, transparencyMask, false, copyDepthInput, sourceDescriptions))
 		return FidelityFX::UpscaleResult::Failed;
 	if (usePeripheryTAA && !EnsurePeripheryTAAResources(outputWidthPerEye, outputHeight, colorTexture,
-			sourceDescriptions ? &sourceDescriptions->color : nullptr))
+							   sourceDescriptions ? &sourceDescriptions->color : nullptr))
 		return FidelityFX::UpscaleResult::Failed;
 
 	const auto peripheryHistoryKey = usePeripheryTAA ?

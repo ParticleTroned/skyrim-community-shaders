@@ -1875,14 +1875,13 @@ foreach(_sdk_contract IN ITEMS
     [[NVSDK_NGX_D3D12_ReleaseFeature(]]
     [[NVSDK_NGX_D3D12_DestroyParameters(]]
     [[NVSDK_NGX_D3D12_Shutdown1(]]
-    [[CSX_NR_RUNTIME_SHA256]]
 )
     string(FIND "${_runtime_source}" "${_sdk_contract}" _position)
     if(_position EQUAL -1)
         message(FATAL_ERROR "Official NR SDK contract is missing: ${_sdk_contract}")
     endif()
 endforeach()
-foreach(_forbidden IN ITEMS [[GetProcAddress(]] [[LoadLibraryExW(]]
+foreach(_forbidden IN ITEMS [[CSX_NR_RUNTIME_SHA256]] [[GetProcAddress(]] [[LoadLibraryExW(]]
         [[VirtualProtect(]] [[RuntimeCallerPath]] [[spoofedPath]]
         [[NVSDK_NGX_GetApplicationId]] [[NVSDK_NGX_GetAPIVersion]])
     string(FIND "${_runtime_source}" "${_forbidden}" _position)

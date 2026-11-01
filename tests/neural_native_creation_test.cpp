@@ -634,6 +634,44 @@ namespace
 		Require(!runtime.PrepareFeature(&commands, 0, layout, &resource, &resource, true),
 			"A live mask-ABI change skipped safe feature retirement");
 	}
+
+	void InvalidSdkInputs()
+	{
+		using namespace NeuralRendering;
+		const UpscalingDLSS::Extent extent{ 320, 192 };
+		const auto layout = BuildNativeEvaluationLayout(extent, extent, extent, {}, { 0, 0, 320, 192 }, { true, 320.f, 192.f }, false);
+		ID3D12GraphicsCommandList commands;
+		ID3D12Resource resource;
+		for (unsigned field = 0; field < 6; ++field) {
+			Runtime runtime;
+			Tuning tuning;
+			const auto nan = std::bit_cast<float>(0x7fc00000u);
+			switch (field) {
+			case 0:
+				tuning.intensity = nan;
+				break;
+			case 1:
+				tuning.localToneStrength = nan;
+				break;
+			case 2:
+				tuning.localStructureStrength = nan;
+				break;
+			case 3:
+				tuning.skinStructureStrength = nan;
+				break;
+			case 4:
+				tuning.singleSubrectScale = nan;
+				break;
+			case 5:
+				tuning.style = kMaximumStyle + 1;
+				break;
+			}
+			const auto before = creates.size();
+			Require(!runtime.Execute(&commands, 0, &resource, &resource, &resource, &resource, nullptr, layout, tuning, false),
+				"Invalid tuning reached the SDK");
+			Require(creates.size() == before, "Invalid tuning created a native feature");
+		}
+	}
 }
 
 int main()
@@ -646,6 +684,7 @@ int main()
 		InvalidationAndLease();
 		DepthEncoding();
 		SdkMaskAndParameterConsistency();
+		InvalidSdkInputs();
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

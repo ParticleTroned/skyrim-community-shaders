@@ -511,6 +511,8 @@ target_include_directories(deferred_mask_test PRIVATE "${_deferred_mask_test_dir
 
 set(_neural_native_creation_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/neural-native-creation")
 set(_neural_native_headers "${_neural_native_creation_dir}/neural_native_key_under_test.h"
+    "${_neural_native_creation_dir}/neural_runtime_minimum_under_test.h"
+    "${_neural_native_creation_dir}/neural_runtime_probe_under_test.h"
     "${_neural_native_creation_dir}/neural_native_creation_under_test.h"
     "${_neural_native_creation_dir}/neural_installed_metadata_under_test.h"
     "${_neural_native_creation_dir}/neural_runtime_tuning_under_test.h"
@@ -536,9 +538,16 @@ add_custom_command(OUTPUT ${_neural_native_headers}
 add_controller_test(neural_native_creation_test NeuralNativeCreation tests/neural_native_creation_test.cpp)
 target_sources(neural_native_creation_test PRIVATE ${_neural_native_headers})
 target_include_directories(neural_native_creation_test PRIVATE "${_neural_native_creation_dir}")
+add_controller_test(neural_runtime_admission_test NeuralRuntimeAdmission tests/neural_runtime_admission_test.cpp)
+target_sources(neural_runtime_admission_test PRIVATE ${_neural_native_headers})
+target_include_directories(neural_runtime_admission_test PRIVATE "${_neural_native_creation_dir}")
 add_controller_test(neural_ngx_initialization_test NeuralNgxInitialization tests/neural_ngx_initialization_test.cpp)
 target_sources(neural_ngx_initialization_test PRIVATE ${_neural_native_headers})
 target_include_directories(neural_ngx_initialization_test PRIVATE "${_neural_native_creation_dir}")
+add_controller_test(crypto_hash_file_test CryptoHashFile tests/crypto_hash_file_test.cpp)
+target_sources(crypto_hash_file_test PRIVATE src/Utils/CryptoHash.cpp)
+target_compile_definitions(crypto_hash_file_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(crypto_hash_file_test PRIVATE bcrypt)
 add_controller_test(neural_ngx_statistics_test NeuralNgxStatistics tests/neural_ngx_statistics_test.cpp)
 target_compile_definitions(neural_ngx_statistics_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
 target_sources(neural_ngx_statistics_test PRIVATE ${_neural_native_headers})

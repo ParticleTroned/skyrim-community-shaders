@@ -4,6 +4,10 @@ endif()
 include("${PROJECT_ROOT}/tests/extract_source_region.cmake")
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/Runtime.cpp" source)
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+extract_between("${source}" "constexpr REL::Version kMinimumRuntimeVersion"
+    "constexpr auto kFeatureDlssNr" "neural_runtime_minimum_under_test.h")
+extract_between("${source}" "bool Runtime::ProbeLocked("
+    "bool Runtime::Probe(" "neural_runtime_probe_under_test.h")
 extract_between("${source}" "bool Runtime::FeatureConfiguration::Matches("
     "Runtime& Runtime::Instance()" "neural_native_key_under_test.h")
 extract_between("${source}" "bool Runtime::PrepareFeature("

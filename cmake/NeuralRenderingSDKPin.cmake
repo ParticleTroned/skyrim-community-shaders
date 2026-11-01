@@ -4,6 +4,7 @@ set(NEURAL_RENDERING_SDK_URL
     "https://d1oqksizpb0e3d.cloudfront.net/${NEURAL_RENDERING_SDK_PACKAGE}")
 set(NEURAL_RENDERING_SDK_ARCHIVE_SHA256
     "4bb8651b3ac2180f23df1f39422c489810a13d445a94dc836c876c18c93ecefe")
+# Reference package identity only; user-supplied runtimes are not hash-pinned.
 set(NEURAL_RENDERING_RUNTIME_SHA256
     "2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f")
 # The package and its download origin are declared by this official Remix revision.

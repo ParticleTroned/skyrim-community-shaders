@@ -138,7 +138,7 @@ int main()
 			if (args.renderingMode != mode || args.modelResolutionPercent != expected)
 				throw std::runtime_error("Renderer lost the selected NR mode or model resolution");
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			const auto expectedJitter = mode == RenderingMode::ReducedResolution ? std::array{ 0.25f, -0.375f } : std::array<float, 2>{};
+			const auto expectedJitter = mode == RenderingMode::ReducedResolution ? std::array{ -0.25f, 0.375f } : std::array<float, 2>{};
 #else
 			const std::array<float, 2> expectedJitter{};
 #endif

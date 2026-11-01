@@ -22,6 +22,7 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/Format.h"
+#include "Utils/TracyZones.h"
 #include "Utils/UI.h"
 
 void AdvancedSettingsRenderer::RenderAdvancedSettings(
@@ -606,6 +607,15 @@ void AdvancedSettingsRenderer::RenderRuntimeDebugControls()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Enable detailed frame annotations for debugging render passes and draw calls.");
 	}
+
+#ifdef TRACY_SUPPORT
+	bool perDrawZones = Util::TracyZones::PerDrawZonesEnabled();
+	if (Util::Widgets::Checkbox("Tracy Per-Draw Zones", &perDrawZones))
+		Util::TracyZones::SetPerDrawZones(perDrawZones);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Record State::Draw and its nested CPU zones in Tracy. Off by default to keep traces small. Enable for short captures; detailed traces can consume substantial memory and CPU time. Save settings to retain this choice.");
+	}
+#endif
 
 	// Debug addresses section
 	if (ImGui::TreeNodeEx("Addresses")) {

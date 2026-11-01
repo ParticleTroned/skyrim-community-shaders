@@ -68,6 +68,7 @@
 #include "Utils/FileSystem.h"
 #include "Utils/SettingsOverlay.h"
 #include "Utils/SphericalHarmonics.h"
+#include "Utils/TracyZones.h"
 #include "Utils/WorldLoadTransitionPolicy.h"
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
@@ -471,7 +472,10 @@ namespace
 
 void State::Draw()
 {
-	ZoneScoped;
+#ifdef TRACY_SUPPORT
+	const bool emitTracyDrawZones = Util::TracyZones::PerDrawZonesEnabled();
+#endif
+	CS_DRAW_ZONE(stateDrawZone, "State::Draw", emitTracyDrawZones);
 	const bool stateDrawDiagActive = ShouldRecordStateDrawPhaseDiag();
 	const uint32_t stateDrawDiagFrame = stateDrawDiagActive ? frameCount : 0;
 	if (stateDrawDiagActive)
@@ -522,37 +526,37 @@ void State::Draw()
 		}
 
 		if (csEditor.loaded || weatherPicker.loaded) {
-			ZoneScopedN("WeatherManager::UpdateFeatures");
+			CS_DRAW_ZONE(weatherZone, "WeatherManager::UpdateFeatures", emitTracyDrawZones);
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::WeatherUpdateFeatures, stateDrawDiagFrame, stateDrawDiagActive);
 			WeatherManager::GetSingleton()->UpdateFeatures();
 		}
 
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
-			ZoneScopedN("TerrainBlending::TerrainShaderHacks");
+			CS_DRAW_ZONE(terrainBlendingZone, "TerrainBlending::TerrainShaderHacks", emitTracyDrawZones);
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::TerrainShaderHacks, stateDrawDiagFrame, stateDrawDiagActive);
 			terrainBlending.TerrainShaderHacks();
 		}
 
 		if (cloudShadows.loaded) {
-			ZoneScopedN("CloudShadows::SkyShaderHacks");
+			CS_DRAW_ZONE(cloudShadowsZone, "CloudShadows::SkyShaderHacks", emitTracyDrawZones);
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::CloudShadowShaderHacks, stateDrawDiagFrame, stateDrawDiagActive);
 			cloudShadows.SkyShaderHacks();
 		}
 
 		if (terrainHelper.loaded) {
-			ZoneScopedN("TerrainHelper::SetShaderResources");
+			CS_DRAW_ZONE(terrainHelperZone, "TerrainHelper::SetShaderResources", emitTracyDrawZones);
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::TerrainHelperResources, stateDrawDiagFrame, stateDrawDiagActive);
 			terrainHelper.SetShaderResouces(context);
 		}
 
 		if (truePBR.loaded) {
-			ZoneScopedN("TruePBR::SetShaderResources");
+			CS_DRAW_ZONE(truePBRZone, "TruePBR::SetShaderResources", emitTracyDrawZones);
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::TruePBRResources, stateDrawDiagFrame, stateDrawDiagActive);
 			truePBR.SetShaderResouces(context);
 		}
 
 		if (volumetricShadows.loaded) {
-			ZoneScopedN("VolumetricShadows::SetShaderResources");
+			CS_DRAW_ZONE(volumetricShadowsZone, "VolumetricShadows::SetShaderResources", emitTracyDrawZones);
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::VolumetricShadowResources, stateDrawDiagFrame, stateDrawDiagActive);
 			volumetricShadows.SetShaderResources(context, selectedCustomPixelShaderType);
 		}
@@ -1535,6 +1539,9 @@ void State::SaveToJson(
 	advanced["Background Compiler Threads"] = shaderCache->backgroundCompilationThreadCount;
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
 	advanced["Frame Annotations"] = frameAnnotations;
+#ifdef TRACY_SUPPORT
+	advanced["Tracy Per-Draw Zones"] = Util::TracyZones::PerDrawZonesEnabled();
+#endif
 	advanced["Refraction Scale"] = refractionScale;
 	advanced["PBR Metal Reflection Scale"] = pbrMetalReflectionScale;
 	advanced["PBR Metal Highlight Scale"] = pbrMetalHighlightScale;
@@ -1609,6 +1616,9 @@ void State::LoadFromJson(
 	}
 
 	globals::features::truePBR.enableVerboseJsonLogging = false;
+#ifdef TRACY_SUPPORT
+	Util::TracyZones::SetPerDrawZones(false);
+#endif
 	if (settings.contains("Advanced") && settings["Advanced"].is_object()) {
 		json& advanced = settings["Advanced"];
 		// The compilation pool is constructed at the responsive hardware-derived
@@ -1636,6 +1646,10 @@ void State::LoadFromJson(
 			frameAnnotations = advanced["Frame Annotations"];
 			useFrameAnnotations = frameAnnotations;
 		}
+#ifdef TRACY_SUPPORT
+		if (advanced.contains("Tracy Per-Draw Zones") && advanced["Tracy Per-Draw Zones"].is_boolean())
+			Util::TracyZones::SetPerDrawZones(advanced["Tracy Per-Draw Zones"].get<bool>());
+#endif
 		if (advanced.contains("Refraction Scale") && advanced["Refraction Scale"].is_number())
 			refractionScale = std::clamp(advanced["Refraction Scale"].get<float>(), 0.0f, 2.0f);
 		if (advanced.contains("PBR Metal Reflection Scale") && advanced["PBR Metal Reflection Scale"].is_number())

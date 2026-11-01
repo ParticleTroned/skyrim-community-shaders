@@ -241,6 +241,17 @@ The tools build in Release; production presets keep them optional and keep
 Tracy instrumentation disabled. Existing binaries remain at their original
 protocol until rebuilt, so retain their matched tools for older captures.
 
+Detailed `State::Draw` CPU zones are off by default in Tracy builds to
+limit trace volume. Enable **Tracy Per-Draw Zones** under Advanced >
+Diagnostics > Runtime Debug for short captures. With DevBench enabled, use
+`communityshaders.profiler` with
+`{"action":"tracy_per_draw_zones","enabled":true}`; omit `enabled` to
+inspect availability and the current preference. Save settings to persist
+the choice. Builds without Tracy report `available: false` and reject
+changes. This control leaves CSX pass profiling and frame annotations
+independent. Detailed captures can increase CPU overhead and memory use;
+this is a capture-volume control, not a measured gameplay speedup.
+
 When using custom preset you can call BuildRelease.bat with an parameter to specify which preset to configure eg:
 `.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`
 

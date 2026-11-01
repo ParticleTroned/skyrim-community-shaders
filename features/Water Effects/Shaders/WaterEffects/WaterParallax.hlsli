@@ -117,7 +117,7 @@ namespace WaterEffects
 			return 0.0.xx;
 
 		float3 viewDirection = normalize(input.WPosition.xyz);
-		if (!all(isfinite(viewDirection)) || abs(viewDirection.z) < 1e-5)
+		if (!all(WaterFinite::IsFinite(viewDirection)) || abs(viewDirection.z) < 1e-5)
 			return 0.0.xx;
 		float2 parallaxOffsetTS = viewDirection.xy / -viewDirection.z;
 
@@ -175,7 +175,7 @@ namespace WaterEffects
 	{
 		float viewDotUp = -viewDirection.z;
 
-		if (!all(isfinite(viewDirection)) || viewDotUp < FlowmapParallaxMinViewDotUp || SharedData::csUtilitySettings.waterParallaxStrength == 0.0)
+		if (!all(WaterFinite::IsFinite(viewDirection)) || viewDotUp < FlowmapParallaxMinViewDotUp || SharedData::csUtilitySettings.waterParallaxStrength == 0.0)
 			return 0.0.xx;
 
 		float2 parallaxDir = viewDirection.xy / -viewDirection.z;
@@ -190,7 +190,7 @@ namespace WaterEffects
 		if (!FoveatedIsShaderDetailActive(detail))
 			return 0.0;
 		float viewDotUp = -viewDirection.z;
-		if (!all(isfinite(viewDirection)) || viewDotUp < FlowmapParallaxMinViewDotUp || SharedData::csUtilitySettings.waterParallaxStrength == 0.0)
+		if (!all(WaterFinite::IsFinite(viewDirection)) || viewDotUp < FlowmapParallaxMinViewDotUp || SharedData::csUtilitySettings.waterParallaxStrength == 0.0)
 			return 0.0;
 
 		float2 parallaxDir = GetFlowmapParallaxDirection(viewDirection);
@@ -244,7 +244,7 @@ namespace WaterEffects
 		if (!FoveatedIsShaderDetailActive(detail) || SharedData::csUtilitySettings.waterParallaxStrength == 0.0 || normalsAmplitude == 0.0)
 			return 0.0.xx;
 
-		if (!all(isfinite(viewDirection)) || abs(viewDirection.z) < 1e-5)
+		if (!all(WaterFinite::IsFinite(viewDirection)) || abs(viewDirection.z) < 1e-5)
 			return 0.0.xx;
 		float2 parallaxOffsetTS = viewDirection.xy / -viewDirection.z;
 		parallaxOffsetTS *= FlowmapParallaxUVScale * SharedData::csUtilitySettings.waterParallaxStrength;

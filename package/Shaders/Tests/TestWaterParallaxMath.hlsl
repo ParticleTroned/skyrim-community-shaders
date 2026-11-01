@@ -16,3 +16,11 @@
 	ASSERT(AreEqual, WaterParallaxMath::Budget(0.5), 36u);
 	ASSERT(AreEqual, WaterParallaxMath::Budget(asfloat(0x7fc00000)), 64u);
 }
+
+[numthreads(1, 1, 1)]
+void TestWaterParallaxNonFiniteBudgetUsesFullCap()
+{
+	ASSERT(AreEqual, WaterParallaxMath::Budget(asfloat(0x7f800000u)), 64u);
+	ASSERT(AreEqual, WaterParallaxMath::Budget(asfloat(0xff800000u)), 64u);
+	ASSERT(AreEqual, WaterParallaxMath::Budget(asfloat(0xffc00001u)), 64u);
+}

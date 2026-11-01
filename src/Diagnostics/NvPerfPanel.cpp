@@ -1,6 +1,8 @@
 #include "Diagnostics/NvPerf.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Utils/StringUtils.h"
+
 #	include <algorithm>
 #	include <cmath>
 #	include <imgui.h>
@@ -115,9 +117,10 @@ namespace NvPerf
 		ImGui::TextWrapped("Duration counters use nanoseconds; rate units are shown in the column labels.");
 		for (const auto& metric : result->unsupportedMetrics) ImGui::Text("Unsupported: %s", FormatMetric(metric).c_str());
 		if (result->csvWritten) {
-			ImGui::TextWrapped("CSV: %s", result->csvPath.string().c_str());
+			const auto pathText = Util::PathToUtf8(result->csvPath);
+			ImGui::TextWrapped("CSV: %s", pathText.c_str());
 			if (ImGui::Button("Copy CSV path"))
-				ImGui::SetClipboardText(result->csvPath.string().c_str());
+				ImGui::SetClipboardText(pathText.c_str());
 		}
 		if (!result->exportError.empty())
 			ImGui::TextWrapped("CSV export failed: %s", result->exportError.c_str());

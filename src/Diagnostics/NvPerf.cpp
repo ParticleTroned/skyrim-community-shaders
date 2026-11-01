@@ -13,6 +13,7 @@
 #	include "Globals.h"
 #	include "State.h"
 #	include "Utils/FileSystem.h"
+#	include "Utils/StringUtils.h"
 
 #	include <algorithm>
 #	include <array>
@@ -441,7 +442,7 @@ namespace NvPerf
 			// The import is delay-loaded: it must be loaded by path before the first NVPW call, which would otherwise
 			// raise rather than fail.
 			if (!::GetModuleHandleW(L"nvperf_grfx_host.dll") && !::LoadLibraryExW(device.libraryPath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)) {
-				device.error = std::format("could not load {}", device.libraryPath.string());
+				device.error = std::format("could not load {}", Util::PathToUtf8(device.libraryPath));
 				logger::info("[NvPerf] {}", device.error);
 				return false;
 			}

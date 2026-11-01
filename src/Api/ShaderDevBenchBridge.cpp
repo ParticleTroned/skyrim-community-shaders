@@ -9,6 +9,7 @@
 #	include "Globals.h"
 #	include "ShaderCache.h"
 #	include "Utils/FileSystem.h"
+#	include "Utils/StringUtils.h"
 
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
@@ -23,6 +24,7 @@
 #	include <optional>
 #	include <stdexcept>
 #	include <string>
+#	include <system_error>
 
 namespace
 {
@@ -261,7 +263,15 @@ namespace
 			if (a_args.contains("path")) {
 				if (!a_args["path"].is_string())
 					return Foundation().MakeError(a_args, "invalid_path", "path must be a string", "validation", false, "path");
-				const std::filesystem::path requested = a_args["path"].get<std::string>();
+				const auto& pathText = a_args["path"].get_ref<const std::string&>();
+				if (pathText.find('\0') != std::string::npos)
+					return Foundation().MakeError(a_args, "invalid_path", "path must not contain null characters", "validation", false, "path");
+				std::filesystem::path requested;
+				try {
+					requested = std::filesystem::u8path(pathText);
+				} catch (const std::system_error&) {
+					return Foundation().MakeError(a_args, "invalid_path", "path must be valid UTF-8", "validation", false, "path");
+				}
 				const bool hasParentTraversal = std::any_of(
 					requested.begin(), requested.end(), [](const auto& a_part) { return a_part == ".."; });
 				if (requested.empty() || requested.filename().empty() || requested.is_absolute() ||
@@ -300,7 +310,7 @@ namespace
 			auto response = Foundation().MakeEnvelope(a_args, true);
 			response["result"] = {
 				{ "action", "exportTrace" },
-				{ "path", destination.string() },
+				{ "path", Util::PathToUtf8(destination) },
 				{ "success", true },
 			};
 			return response;
@@ -441,7 +451,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 					"commandId":{"type":"string","minLength":1,"maxLength":128},
 					"expectedBuildId":{"type":"string"},
 					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile","exportTrace"],"description":"snapshot includes compilation.contentDedupeTasks for shared bytecode and activeReuseTasks/previousReuseTasks for verified disk content reuse. backgroundCompile atomically enables background compilation and wakes the dispatcher; result.changed reports whether the mode changed."},
-					"path":{"type":"string","description":"exportTrace only: destination relative to the Community Shaders log directory; defaults to compile-trace.json."},
+					"path":{"type":"string","description":"exportTrace only: UTF-8 destination relative to the Community Shaders log directory; defaults to compile-trace.json. The returned path is UTF-8. Null characters, malformed UTF-8 and paths outside that directory are rejected."},
 					"mutation":{
 						"type":"object",
 						"required":["action","expectedStateRevision"],

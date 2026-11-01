@@ -46,6 +46,7 @@
 #include "Utils/ShaderDefines.h"
 #include "Utils/ShaderInclude.h"
 #include "Utils/ShaderSourceProvenance.h"
+#include "Utils/StringUtils.h"
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/Upscaling.h"
@@ -5986,27 +5987,29 @@ namespace SIE
 							  { "sourceSizeBytes", record.sourceSizeBytes } } } });
 		}
 
+		std::string pathText = "<unprintable path>";
 		try {
+			pathText = Util::PathToUtf8(a_path);
 			if (!a_path.parent_path().empty()) {
 				std::filesystem::create_directories(a_path.parent_path());
 			}
 			std::ofstream file(a_path);
 			if (!file.is_open()) {
-				logger::warn("ExportCompileTrace: failed to open {} for writing", a_path.string());
+				logger::warn("ExportCompileTrace: failed to open {} for writing", pathText);
 				return false;
 			}
 			file << events.dump(2);
 			file.flush();
 			if (!file.good()) {
-				logger::warn("ExportCompileTrace: write to {} failed", a_path.string());
+				logger::warn("ExportCompileTrace: write to {} failed", pathText);
 				return false;
 			}
 		} catch (const std::exception& e) {
-			logger::warn("ExportCompileTrace: failed writing {}: {}", a_path.string(), e.what());
+			logger::warn("ExportCompileTrace: failed writing {}: {}", pathText, e.what());
 			return false;
 		}
 
-		logger::info("ExportCompileTrace: wrote {} task records to {}", records.size(), a_path.string());
+		logger::info("ExportCompileTrace: wrote {} task records to {}", records.size(), pathText);
 		return true;
 	}
 

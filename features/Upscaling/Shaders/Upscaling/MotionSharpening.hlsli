@@ -29,4 +29,12 @@ int2 MotionSharpeningColorPixel(int2 pixel, uint4 outputRect)
 	return clamp(pixel, int2(outputRect.xy), int2(outputRect.xy + outputRect.zw) - 1);
 }
 
+// Preserve each fixed filter's outer-edge policy while isolating an explicit packed-eye seam.
+int2 FixedSharpeningColorPixel(int2 pixel, uint centerX, uint outputSplitX)
+{
+	if (outputSplitX != 0u)
+		pixel.x = centerX < outputSplitX ? min(pixel.x, int(outputSplitX) - 1) : max(pixel.x, int(outputSplitX));
+	return pixel;
+}
+
 #endif

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <span>
 
 namespace MotionSharpening
 {
@@ -84,6 +85,22 @@ namespace MotionSharpening
 		return Contains({ 0, 0, colorWidth, colorHeight }, region.output) &&
 		       Contains({ 0, 0, motionWidth, motionHeight }, region.sourceEye) &&
 		       Contains(region.sourceEye, region.source);
+	}
+
+	/** Output ownership is independent of motion: one full image or two adjacent packed eyes. */
+	constexpr bool CoversOutput(std::span<const Region> regions, uint32_t width, uint32_t height) noexcept
+	{
+		if (regions.empty() || regions.size() > 2 || !width || !height)
+			return false;
+		uint32_t nextX = 0;
+		for (const auto& region : regions) {
+			const auto& output = region.output;
+			if (!Contains({ 0, 0, width, height }, output) || output.x != nextX ||
+				output.y != 0 || output.height != height)
+				return false;
+			nextX += output.width;
+		}
+		return nextX == width;
 	}
 
 	/** UV motion is normalized to the full engine eye, even for a cropped output. */

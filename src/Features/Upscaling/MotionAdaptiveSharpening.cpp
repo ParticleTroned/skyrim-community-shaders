@@ -93,18 +93,12 @@ namespace UpscalingSharpener
 			!std::isfinite(baseStrength))
 			return fixedFallback();
 
-		uint64_t coveredPixels = 0;
+		if (!MotionSharpening::CoversOutput(regions, outputWidth, outputHeight))
+			return fixedFallback();
 		for (const auto& region : regions) {
 			if (!MotionSharpening::IsValid(region, outputWidth, outputHeight, motionDesc.Width, motionDesc.Height))
 				return fixedFallback();
-			coveredPixels += static_cast<uint64_t>(region.output.width) * region.output.height;
 		}
-		if (coveredPixels != static_cast<uint64_t>(outputWidth) * outputHeight ||
-			(regions.size() == 2 &&
-				(regions[0].output.y != 0 || regions[1].output.y != 0 || regions[0].output.x != 0 ||
-					regions[0].output.height != outputHeight || regions[1].output.height != outputHeight ||
-					regions[1].output.x != regions[0].output.width)))
-			return fixedFallback();
 
 		if (!EnsureResources())
 			return fixedFallback(MotionStatus::ShaderUnavailable);
@@ -161,7 +155,7 @@ namespace UpscalingSharpener
 					.maximumGain = pass == Pass::RCAS ? MotionSharpening::kMaximumRCASGain : MotionSharpening::kMaximumLumaGain,
 				};
 				if (!UpscalingSharpener::DispatchComputePass(motionAdaptiveComputeShader.get(), motionAdaptiveConfigCB.get(), config,
-						inputSRV, outputUAV, pass, motionVectors, region.output.width, region.output.height))
+						inputSRV, outputUAV, pass, region.output.width, region.output.height, motionVectors))
 					return fixedFallback(MotionStatus::DispatchFailed);
 			}
 #ifdef DEVBENCH_BRIDGE_ENABLED

@@ -68684,31 +68684,33 @@ void Upscaling::ApplySharpening()
 	std::array<MotionSharpening::Region, 2> motionRegions{};
 	uint32_t motionRegionCount = 0;
 	ID3D11ShaderResourceView* motionSRV = nullptr;
-	if (settings.motionAdaptiveRCAS && !ShouldResetHistoryThisFrame() &&
+	const uint32_t eyeCount = globals::game::isVR ? 2u : 1u;
+	const uint32_t outputWidth = sharpenerTexture->desc.Width;
+	const uint32_t outputHeight = sharpenerTexture->desc.Height;
+	// This main-pass target is packed stereo; output ownership survives every motion fallback.
+	if (outputWidth && outputHeight && outputWidth % eyeCount == 0) {
+		const uint32_t outputEyeWidth = outputWidth / eyeCount;
+		for (uint32_t eye = 0; eye < eyeCount; ++eye)
+			motionRegions[eye].output = { eye * outputEyeWidth, 0, outputEyeWidth, outputHeight };
+		motionRegionCount = eyeCount;
+	}
+	if (motionRegionCount && settings.motionAdaptiveRCAS && !ShouldResetHistoryThisFrame() &&
 		!runtimeResolutionPlan.menuContextActive && !runtimeResolutionPlan.loadingMenuActive) {
 		const auto renderSize = runtimeResolutionPlan.engineRenderSize;
-		const uint32_t eyeCount = globals::game::isVR ? 2u : 1u;
-		const uint32_t outputWidth = sharpenerTexture->desc.Width;
-		const uint32_t outputHeight = sharpenerTexture->desc.Height;
 		if (std::isfinite(renderSize.x) && std::isfinite(renderSize.y) &&
 			renderSize.x >= eyeCount && renderSize.y >= 1.0f &&
-			renderSize.x <= D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION && renderSize.y <= D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION &&
-			outputWidth % eyeCount == 0) {
+			renderSize.x <= D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION && renderSize.y <= D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) {
 			const uint32_t inputEyeWidth = static_cast<uint32_t>(renderSize.x / eyeCount);
 			const uint32_t inputHeight = static_cast<uint32_t>(renderSize.y);
-			const uint32_t outputEyeWidth = outputWidth / eyeCount;
 			for (uint32_t eye = 0; eye < eyeCount; ++eye) {
-				motionRegions[eye] = {
-					.output = { eye * outputEyeWidth, 0, outputEyeWidth, outputHeight },
-					.source = { eye * inputEyeWidth, 0, inputEyeWidth, inputHeight },
-					.sourceEye = { eye * inputEyeWidth, 0, inputEyeWidth, inputHeight },
-				};
+				motionRegions[eye].source = { eye * inputEyeWidth, 0, inputEyeWidth, inputHeight };
+				motionRegions[eye].sourceEye = motionRegions[eye].source;
 			}
-			motionRegionCount = eyeCount;
 			motionSRV = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].SRV;
 		}
 	}
 	if (!shouldApplySharpening ||
+		!motionRegionCount ||
 		!main.UAV ||
 		!sharpenerTexture->srv ||
 		!DispatchDLSSSharpener(*this, sharpenerTexture->srv.get(), main.UAV, motionSRV,

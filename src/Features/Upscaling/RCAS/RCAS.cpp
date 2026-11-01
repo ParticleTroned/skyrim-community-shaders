@@ -3,12 +3,6 @@
 #include "../../../Util.h"
 #include "../SharpenerDispatch.h"
 
-struct RCASConfig
-{
-	float sharpness;
-	float3 pad;
-};
-
 RCAS::~RCAS()
 {
 	delete rcasConfigCB;
@@ -26,7 +20,7 @@ void RCAS::Initialize(bool enableMotionAdaptive)
 		CreateComputeShader();
 	if (!rcasConfigCB) {
 		logger::info("[RCAS] Creating resources");
-		rcasConfigCB = new ConstantBuffer(ConstantBufferDesc<RCASConfig>(), "Upscaling::RCASConfig");
+		rcasConfigCB = new ConstantBuffer(ConstantBufferDesc<UpscalingSharpener::FixedConfig>(), "Upscaling::RCASConfig");
 	}
 }
 
@@ -42,7 +36,7 @@ bool RCAS::ApplyMotionAdaptiveSharpen(ID3D11ShaderResourceView* inputSRV, ID3D11
 	ID3D11ShaderResourceView* motionVectors, std::span<const MotionSharpening::Region> regions)
 {
 	return motionAdaptive.Apply(inputSRV, outputUAV, sharpness, baseStrength, settings, motionVectors, regions,
-		[&]() { return ApplySharpen(inputSRV, outputUAV, sharpness); });
+		[&]() { return ApplySharpen(inputSRV, outputUAV, sharpness, regions); });
 }
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -58,7 +52,8 @@ void RCAS::CreateComputeShader()
 	rcasComputeShader.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\RCAS\\RCAS.hlsl", defines, "cs_5_0"));
 }
 
-bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV, float sharpness)
+bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV, float sharpness,
+	std::span<const MotionSharpening::Region> regions)
 {
 	if (!inputSRV || !outputUAV)
 		return false;
@@ -79,14 +74,14 @@ bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAcces
 		return false;
 	}
 
-	RCASConfig config{};
+	UpscalingSharpener::FixedConfig config{};
 	config.sharpness = sharpness;
 
-	return UpscalingSharpener::DispatchComputePass(
+	return UpscalingSharpener::DispatchFixedComputePass(
 		rcasComputeShader.get(),
 		rcasConfigCB,
 		config,
 		inputSRV,
 		outputUAV,
-		UpscalingSharpener::Pass::RCAS);
+		UpscalingSharpener::Pass::RCAS, regions);
 }

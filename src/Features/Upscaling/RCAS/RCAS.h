@@ -40,9 +40,11 @@ public:
 	 * @param inputTexture SRV of the texture to sharpen (typically kMAIN render target).
 	 * @param outputUAV UAV to write sharpened result to.
 	 * @param sharpness Sharpening strength (0.0 = no sharpening, higher = more sharp).
+	 * @param regions Optional output ownership, independent of motion validity.
 	 * @return true when the RCAS dispatch is submitted; false when required resources are unavailable.
 	 */
-	bool ApplySharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV, float sharpness);
+	bool ApplySharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV, float sharpness,
+		std::span<const MotionSharpening::Region> regions = {});
 
 	/** Applies bounded motion adjustment, retaining fixed RCAS when motion is unavailable or invalid. */
 	bool ApplyMotionAdaptiveSharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV,

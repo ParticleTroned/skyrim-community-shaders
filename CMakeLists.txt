@@ -3182,18 +3182,10 @@ if(BUILD_CONTROLLER_TESTS)
             LABELS "ControllerTests"
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
     )
-    add_controller_test(
+    add_d3d_shader_test(
         motion_sharpening_runtime_compile_test
         MotionSharpeningRuntimeCompile
         tests/motion_sharpening_runtime_compile_test.cpp
-    )
-    target_link_libraries(
-        motion_sharpening_runtime_compile_test
-        PRIVATE d3dcompiler.lib
-    )
-    set_tests_properties(
-        MotionSharpeningRuntimeCompile
-        PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     )
     set(_core_settings_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/core_settings_test"

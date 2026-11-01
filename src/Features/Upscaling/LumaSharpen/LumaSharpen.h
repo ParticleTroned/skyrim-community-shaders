@@ -4,6 +4,7 @@
 #include "../MotionAdaptiveSharpening.h"
 
 #include <d3d11_4.h>
+#include <span>
 #include <winrt/base.h>
 
 /**
@@ -28,7 +29,9 @@ public:
 		       (!a_motionAdaptive || motionAdaptive.CanApplyWithoutResourceCreation());
 	}
 
-	bool ApplySharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV, float sharpness);
+	/** Optional output regions preserve packed-eye bounds independently of motion inputs. */
+	bool ApplySharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV, float sharpness,
+		std::span<const MotionSharpening::Region> regions = {});
 	/** Adjusts luminance sharpening using the shared per-eye motion policy and fixed fallback. */
 	bool ApplyMotionAdaptiveSharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV,
 		float sharpness, float baseStrength, const MotionSharpening::Settings& settings,

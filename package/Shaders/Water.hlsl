@@ -1015,7 +1015,7 @@ struct DiffuseOutput
 
 DiffuseOutput GetWaterDiffuseColorWithoutRefraction(float3 normal, float3 viewDirection, float fresnel)
 {
-	DiffuseOutput output;
+	DiffuseOutput output = (DiffuseOutput)0;
 	output.refractionColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), fresnel) * GetLdotN(normal);
 	output.refractionDiffuseColor = output.refractionColor;
 	output.depth = 1;
@@ -1035,9 +1035,9 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 	RefractionTex.GetDimensions(refractionDimensions.x, refractionDimensions.y);
 	float2 refractionRenderSize = float2(refractionDimensions) * FrameBuffer::DynamicResolutionParams1.xy;
 	float2 depthRenderSize = FrameBuffer::DynamicResolutionParams1.xy / VPOSOffset.xy;
-	float2 refractionMinUV;
-	float2 refractionMaxUV;
-	if (!WaterRefraction::TryGetUVBounds(refractionRenderSize, depthRenderSize, eyeIndex, refractionMinUV, refractionMaxUV))
+	float2 refractionMinUV = 0.0;
+	float2 refractionMaxUV = 0.0;
+	[flatten] if (!WaterRefraction::TryGetUVBounds(refractionRenderSize, depthRenderSize, eyeIndex, refractionMinUV, refractionMaxUV))
 		return GetWaterDiffuseColorWithoutRefraction(normal, viewDirection, fresnel);
 
 	float2 fallbackRefractionUV = FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy * VPOSOffset.xy + VPOSOffset.zw;
@@ -1068,8 +1068,8 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 	float muddiness = SharedData::enbSettings.EnableWater ? SharedData::enbSettings.WaterMuddiness : 1.0;
 	float4 candidateDistanceMul = float4(1, muddiness, 1, 1) * refractionPlaneMul *
 		float4(length(refractionDepthAdjustedViewDirection).xx, abs(refractionViewSurfaceAngle).xx) / FogParam.z;
-	bool validRefraction = isfinite(refractionDepth) && isfinite(refractionPlaneMul) &&
-		refractionPlaneMul >= 0.0 && all(isfinite(candidateDistanceMul));
+	bool validRefraction = WaterFinite::IsFinite(refractionDepth) && WaterFinite::IsFinite(refractionPlaneMul) &&
+		refractionPlaneMul >= 0.0 && all(WaterFinite::IsFinite(candidateDistanceMul));
 
 	if (validRefraction) {
 		float rawRefractionDepth = DepthTex.Load(float3(refractionScreenPosition, 0)).x;
@@ -1078,10 +1078,10 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 #					else
 		float4 candidateWorldPosition = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], float4((refractionUvRaw * 2 - 1) * float2(1, -1), rawRefractionDepth, 1));
 #					endif
-		validRefraction = all(isfinite(candidateWorldPosition)) && abs(candidateWorldPosition.w) > 1e-6;
+		validRefraction = all(WaterFinite::IsFinite(candidateWorldPosition)) && abs(candidateWorldPosition.w) > 1e-6;
 		if (validRefraction) {
 			float3 candidatePosition = candidateWorldPosition.xyz / candidateWorldPosition.w;
-			validRefraction = all(isfinite(candidatePosition));
+			validRefraction = all(WaterFinite::IsFinite(candidatePosition));
 			if (validRefraction) {
 				depth = refractionDepth;
 				distanceMul = saturate(candidateDistanceMul);
@@ -1125,13 +1125,13 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 		refractionDiffuseColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), distanceMul.y);
 	}
 
-	DiffuseOutput output;
+	DiffuseOutput output = (DiffuseOutput)0;
 	output.refractionColor = refractionColor;
 	output.refractionDiffuseColor = refractionDiffuseColor;
 	output.depth = depth;
 	output.refractionMul = saturate(refractionMul * SharedData::csUtilitySettings.waterMuddiness);
 	float3 refractedDelta = refractionWorldPosition.xyz - input.WPosition.xyz;
-	output.refractedViewDirection = all(isfinite(refractedDelta)) && dot(refractedDelta, refractedDelta) > 1e-6 ? normalize(refractedDelta) : viewDirection;
+	output.refractedViewDirection = all(WaterFinite::IsFinite(refractedDelta)) && dot(refractedDelta, refractedDelta) > 1e-6 ? normalize(refractedDelta) : viewDirection;
 	return output;
 #			else
 	return GetWaterDiffuseColorWithoutRefraction(normal, viewDirection, fresnel);

@@ -172,6 +172,14 @@ public:
 
 	bool HasGIResources() const { return activeResourceProfile == kResourceProfileFullGI; }
 	bool IsResourceProfileRestartPending() const { return settings.ResourceProfile != activeResourceProfile; }
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const char* GetPerformanceComparisonBlockReason(const json& target) const override
+	{
+		return IsResourceProfileRestartPending() || target.value("ResourceProfile", settings.ResourceProfile) != activeResourceProfile ?
+		           "SSGI resource profile requires a restart" :
+		           nullptr;
+	}
+#endif
 	bool IsGIActive() const { return settings.EnableGI && HasGIResources(); }
 	bool IsSpecularGIActive() const { return IsGIActive() && settings.EnableExperimentalSpecularGI; }
 

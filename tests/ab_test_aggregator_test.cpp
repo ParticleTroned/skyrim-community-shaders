@@ -168,6 +168,31 @@ namespace
 		Check(aggregator.GetCoverage() == ABTestCoverage::Insufficient, "A masked B's failed valid-frame threshold");
 	}
 
+	void EverySwitchHasIndependentSettling()
+	{
+		ABTestAggregator aggregator;
+		aggregator.SetSettleFrames(3);
+		aggregator.OnABSwitch(ABVariant::A, start);
+		Frames(aggregator, 3, 90.0f);
+		Frames(aggregator, 4, 10.0f);
+		aggregator.OnABSwitch(ABVariant::B, start + 5s);
+		Frames(aggregator, 3, 90.0f);
+		Frames(aggregator, 4, 20.0f);
+		aggregator.OnABSwitch(ABVariant::A, start + 10s);
+		Frames(aggregator, 2, 90.0f);
+		aggregator.OnTestEnd(start + 11s);
+		const auto rows = aggregator.GetAggregatedResults();
+		Check(rows.size() == 1 && rows[0].meanA == 10 && rows[0].meanB == 20 &&
+				  rows[0].frameCountA == 4 && rows[0].frameCountB == 4,
+			"switch warm-up polluted means or a short final interval");
+		aggregator.Clear();
+		aggregator.OnABSwitch(ABVariant::A, start + 20s);
+		Frames(aggregator, 3, 90.0f);
+		Frames(aggregator, 1, 10.0f);
+		aggregator.OnTestEnd(start + 21s);
+		Check(aggregator.GetTotalFrameCount() == 1, "clear discarded the settling policy");
+	}
+
 	void StatisticsUseTheExistingMedianContract()
 	{
 		Check(Util::Median({}) == 0 && Util::Median({ 3 }) == 3, "empty or single median changed");
@@ -210,6 +235,7 @@ int main()
 		InvalidFramesAreRejectedBeforeBuildingHistory();
 		CoverageRequiresBothVariants();
 		PoorCoverageInOneVariantCannotBeHidden();
+		EverySwitchHasIndependentSettling();
 		StatisticsUseTheExistingMedianContract();
 		SignedResidualsDoNotInvalidateMeasuredFrames();
 		std::cout << "A/B warm-up, lifecycle, sampling, coverage and aggregation checks passed\n";

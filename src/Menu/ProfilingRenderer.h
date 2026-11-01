@@ -82,6 +82,8 @@ public:
 	/** Draws Off/GPU/CPU controls and live timing graphs for one feature. */
 	static void RenderFeatureTimers(const std::string& featurePrefix);
 	static PerformanceTimingSummary CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture = true);
+	/** @brief Reads shared runtime frame identities without calculating feature timing histories. */
+	static PerformanceTimingSummary CaptureFrameTimingSummary(bool requestCapture = true);
 	/** Draws both feature timing views, preserving owned versus shared attribution. */
 	static void RenderFeaturePerformanceSummary(const std::string& featurePrefix);
 

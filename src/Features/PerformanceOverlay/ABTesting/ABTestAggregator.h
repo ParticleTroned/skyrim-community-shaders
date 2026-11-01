@@ -1,5 +1,7 @@
 #pragma once
+#include "ABComparison.h"
 #include "Features/PerformanceOverlay/DrawCallRow.h"
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <memory>
@@ -8,6 +10,7 @@
 
 // A/B Testing constants
 constexpr size_t kFrameHistoryBaseline = 30;
+constexpr uint32_t kABSwitchSettleFrames = 45;
 constexpr size_t kMinimumFramesForAnalysis = 10;
 constexpr float kOutlierMultiplier = 3.0f;
 constexpr float kMaxOutlierFrameTime = 100.0f;
@@ -18,13 +21,6 @@ constexpr float kMinimumTestDuration = 10.0f;        // At least 10 seconds
 constexpr float kMinimumValidFramesPercent = 80.0f;  // At least 80% valid frames
 constexpr int kMinimumSamplesForMarginal = 30;       // Minimum for marginal validity
 constexpr float kMinimumDurationForMarginal = 5.0f;  // Minimum duration for marginal validity
-
-// Only define ABVariant here
-enum class ABVariant
-{
-	A,
-	B
-};
 
 struct AggregatedDrawCallStats
 {
@@ -62,6 +58,7 @@ struct ABInterval
 	std::chrono::steady_clock::time_point endTime;
 	bool warmup = false;
 	int excludedFrames = 0;  // Frames excluded due to outliers or shader compilation
+	uint32_t framesSeen = 0;
 };
 
 class ABTestAggregator
@@ -72,6 +69,8 @@ public:
 	/** Start an interval; initial B intervals are unmeasured until A starts. */
 	void OnABSwitch(ABVariant variant, Clock::time_point now = Clock::now());
 	void OnFrame(const std::vector<DrawCallRow>& rows);
+	/** @brief Discards transition frames after every configuration switch. */
+	void SetSettleFrames(uint32_t frames) { settleFrames = std::min(frames, 600u); }
 	/** Finalize the measured interval, or discard an unfinished warm-up. */
 	void OnTestEnd(Clock::time_point now = Clock::now());
 	/** Cached summaries of completed measured intervals; callers own the returned copy. */
@@ -105,4 +104,5 @@ private:
 	// Frame history for outlier detection
 	std::array<std::vector<float>, 2> recentFrameTimes;
 	bool initialBWarmupPending = true;
+	uint32_t settleFrames = 0;
 };

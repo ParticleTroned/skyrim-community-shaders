@@ -18,6 +18,9 @@
 #include "CSEditor/EditorWindow.h"
 #include "Feature.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Features/PerformanceOverlay/ABTesting/ABComparisonRunner.h"
+#endif
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Globals.h"
@@ -3240,6 +3243,9 @@ bool PerformanceTuningRenderer::CancelUserMeasurements()
 
 void PerformanceTuningRenderer::NotifyConfigurationChanging()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	ABComparisonRunner::Get().ConfigurationReplacing();
+#endif
 	// Restore owned state before a replacement configuration can take ownership.
 	if (HasActiveMeasurements())
 		CancelActiveMeasurements();
@@ -3315,10 +3321,42 @@ void PerformanceTuningRenderer::NotifyMenuClosed()
 
 bool PerformanceTuningRenderer::HasActiveMeasurements()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (ABComparisonRunner::Get().IsRunning())
+		return true;
+#endif
 	return g_quickScan.controller.Active() || IsAnyFeatureCostMeasurementActive() || IsUpscalingCostSweepRunning() || g_featureCostBatch.active;
 }
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+json PerformanceTuningRenderer::CaptureComparisonSettings()
+{
+	auto result = CaptureQuickScanSettings();
+	result["$blockedShader"] = globals::shaderCache->blockedKeyIndex;
+	result["$shaderDefinesGeneration"] = globals::state->GetShaderDefinesGeneration();
+	result["$shadersRequested"] = globals::shaderCache->IsEnableRequested();
+	return result;
+}
+
+const char* PerformanceTuningRenderer::GetComparisonEnvironmentError()
+{
+	return GetFeatureCostEnvironmentError();
+}
+
+const char* PerformanceTuningRenderer::GetComparisonFeatureBlockReason(Feature* feature)
+{
+	if (!feature || !feature->loaded || !feature->SupportsPerformanceCostMeasurement())
+		return "feature has no reversible runtime comparison state";
+	const auto name = feature->GetShortName();
+	if (name == "Upscaling" || name == "VR")
+		return "use the dedicated upscaling/depth controls; these states share render-scale or other feature ownership";
+	for (const auto& [setting, constraint] : FeatureConstraints::GetAllActiveConstraints()) {
+		if (setting.featureShortName == name && constraint.isConstrained)
+			return "another feature controls this feature's settings";
+	}
+	return GetFeatureToggleBlockReason(feature);
+}
+
 nlohmann::json PerformanceTuningRenderer::StartDevBenchFeatureCostMeasurement(
 	std::string_view a_featureShortName)
 {

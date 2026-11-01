@@ -21,7 +21,7 @@ extract_between("${source}"
     "bool ProfilingRenderer::RenderEnabledControl" "profiling_views.h")
 extract_between("${source}"
     "void ProfilingRenderer::RenderFeatureTimers"
-    "ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanceTimingSummary"
+    "ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CaptureFrameTimingSummary"
     "profiling_controls.h")
 file(READ "${PROJECT_ROOT}/src/Menu/PerformanceTuningRenderer.cpp" tuning)
 extract_between("${tuning}" "void RenderMetricCounter"

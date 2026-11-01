@@ -39,6 +39,10 @@ void ABTestAggregator::OnFrame(const std::vector<DrawCallRow>& rows)
 {
 	if (!currentInterval || currentInterval->warmup)
 		return;
+	if (currentInterval->framesSeen < settleFrames) {
+		++currentInterval->framesSeen;
+		return;
+	}
 
 	const auto total = std::ranges::find_if(rows, [](const auto& row) { return row.shaderType == -1; });
 	if (total == rows.end() || total->frameTime <= 0.0f || total->frameTime > kMaxOutlierFrameTime ||

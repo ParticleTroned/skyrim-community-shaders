@@ -1342,7 +1342,7 @@ void ProfilingRenderer::RenderFeaturePerformanceSummary(const std::string& featu
 	RenderFeatureTimingData(featurePrefix, FeatureTimingMode::CPU, false);
 }
 
-ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture)
+ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CaptureFrameTimingSummary(bool requestCapture)
 {
 	PerformanceTimingSummary summary;
 	summary.frameCount = globals::state ? globals::state->frameCount : 0;
@@ -1355,6 +1355,24 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 		profiler.SetUserEnabled(true);
 	if (requestCapture)
 		profiler.RequestCapture();
+
+	if (globals::game::isVR) {
+		CaptureOpenVRGameTiming(summary);
+	} else {
+		summary.frameMs = GetAverageGameFrameMs(summary.frameSampleMs, summary.hasFrameSample);
+		CaptureFlatGameTiming(profiler, summary);
+	}
+	NormalizeGameFrameTiming(summary);
+	summary.valid = summary.hasFrameSample || summary.hasGameGpuSample || summary.hasGameCpuSample;
+	return summary;
+}
+
+ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture)
+{
+	auto summary = CaptureFrameTimingSummary(requestCapture);
+	if (!globals::profiler)
+		return summary;
+	auto& profiler = *globals::profiler;
 
 	struct TimingBucket
 	{
@@ -1408,12 +1426,6 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 		}
 	}
 
-	if (globals::game::isVR) {
-		CaptureOpenVRGameTiming(summary);
-	} else {
-		summary.frameMs = GetAverageGameFrameMs(summary.frameSampleMs, summary.hasFrameSample);
-		CaptureFlatGameTiming(profiler, summary);
-	}
 	if (gpuTotalSamples.HasSamples())
 		summary.gpuTotalMs = gpuTotalSamples.GetStats(false).avgMs;
 	if (cpuTotalSamples.HasSamples())

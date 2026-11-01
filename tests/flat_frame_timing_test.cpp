@@ -223,6 +223,22 @@ namespace
 		Check(f.context.activeDisjointQueries == 0, "release left a whole-frame disjoint interval open");
 	}
 
+	void AcceptedPresentCadence()
+	{
+		Util::FlatFrameTiming::History history;
+		history.Complete({}, 100, true);
+		Check(!history.samples.back().hasFrame, "first Present invented frame cadence");
+		history.Complete({}, 125, true);
+		Check(history.samples.back().hasFrame && history.samples.back().frameMs == 25, "Present wait missing from cadence");
+		const auto epoch = history.epoch;
+		history.Complete({}, 120, true);
+		Check(history.epoch > epoch && !history.samples.back().hasFrame, "backward clock reused cadence");
+		history.Complete({}, 145, false);
+		Check(history.samples.empty(), "rejected Present retained cadence");
+		history.Complete({}, 170, true);
+		Check(!history.samples.back().hasFrame, "cadence bridged a rejected Present");
+	}
+
 	void MeasurementAssociation()
 	{
 		using namespace Util::FlatFrameTiming;
@@ -282,6 +298,7 @@ int main()
 		LateReadinessWaitsForNextPresent();
 		ResetAndDisable();
 		SharedPassRingAndUnsupportedPath();
+		AcceptedPresentCadence();
 		MeasurementAssociation();
 		std::cout << "Flat frame timing and VR isolation cases passed\n";
 		return 0;

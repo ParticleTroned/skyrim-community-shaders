@@ -5271,6 +5271,17 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE src/Features/PerformanceOverlay/ABTesting/ABTestAggregator.cpp
     )
 
+    add_controller_test(
+        ab_comparison_test
+        ABComparison
+        tests/ab_comparison_test.cpp
+    )
+    target_sources(
+        ab_comparison_test
+        PRIVATE src/Features/PerformanceOverlay/ABTesting/ABComparison.cpp
+    )
+    target_compile_definitions(ab_comparison_test PRIVATE AB_COMPARISON_TEST)
+
     add_executable(
         api_editor_contract_test
         EXCLUDE_FROM_ALL

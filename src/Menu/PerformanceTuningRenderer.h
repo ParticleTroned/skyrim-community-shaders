@@ -34,6 +34,12 @@ public:
 	static void NotifyMenuClosed();
 	static bool HasActiveMeasurements();
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	/** @brief Captures existing feature settings to invalidate externally changed comparisons. */
+	static nlohmann::json CaptureComparisonSettings();
+	/** @brief Shared gameplay/editor admission check for captured-setting comparisons. */
+	static const char* GetComparisonEnvironmentError();
+	/** @brief Shared scene/weather ownership check for reversible feature controls. */
+	static const char* GetComparisonFeatureBlockReason(Feature* feature);
 	/** Starts one surfaced feature's closed-menu cost comparison. */
 	static nlohmann::json StartDevBenchFeatureCostMeasurement(
 		std::string_view a_featureShortName);

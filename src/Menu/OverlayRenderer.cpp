@@ -1,4 +1,7 @@
 #include "OverlayRenderer.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Features/PerformanceOverlay/ABTesting/ABComparisonRunner.h"
+#endif
 #include "BackgroundBlur.h"
 #include "HomePageRenderer.h"
 #include "OverlayPolicy.h"
@@ -433,6 +436,9 @@ void OverlayRenderer::RenderOverlay(
 {
 	// Advance closed-menu work before choosing the VR canvas. Completion can
 	// reopen CS and restore the user's saved headset presentation this frame.
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	ABComparisonRunner::Get().Update();
+#endif
 	PerformanceTuningRenderer::UpdateClosedMenuMeasurement();
 	HandleVRSetup();
 	ApplyVROverlayDisplaySize();

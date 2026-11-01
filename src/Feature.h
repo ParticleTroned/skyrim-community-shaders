@@ -144,6 +144,10 @@ public:
 	virtual bool UsesTotalPerformanceCostMeasurement() const { return false; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) { (void)a_enabled; }
 	virtual bool IsPerformanceCostMeasurementReady() const { return true; }
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** @brief Rejects captured comparison states that cannot take effect without restarting. */
+	virtual const char* GetPerformanceComparisonBlockReason(const json&) const { return nullptr; }
+#endif
 	virtual const char* GetPerformanceCostMeasurementWaitText() const { return "Waiting for settings to apply"; }
 	virtual double GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const
 	{

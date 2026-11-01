@@ -437,19 +437,18 @@ float ComputeHmdRejectionRelaxation(float2 hmdDelta)
 	float2 inputTextureUV = ToInputTextureUV(inputUV);
 	const bool groupFastPath = !historyValid || gTileFastPathMode != kTileFastPathNone;
 
-	const uint groupThreadIndex = groupThreadID.y * 8u + groupThreadID.x;
-	for (uint cacheIndex = groupThreadIndex; cacheIndex < kCurrentCacheDim * kCurrentCacheDim; cacheIndex += 64u) {
-		if (!groupFastPath) {
+	// The first barrier makes this decision uniform; inactive output lanes
+	// must still populate the cache and reach the second barrier.
+	if (!groupFastPath) {
+		const uint groupThreadIndex = groupThreadID.y * 8u + groupThreadID.x;
+		for (uint cacheIndex = groupThreadIndex; cacheIndex < kCurrentCacheDim * kCurrentCacheDim; cacheIndex += 64u) {
 			int2 cacheOffset = int2((int)(cacheIndex % kCurrentCacheDim), (int)(cacheIndex / kCurrentCacheDim));
 			int2 samplePos = gCurrentCacheBase + cacheOffset;
 			gCurrentColorCache[cacheIndex] = LoadCurrentSampleClamped(samplePos);
 			gCurrentDepthCache[cacheIndex] = LoadDepthClamped(samplePos);
-		} else {
-			gCurrentColorCache[cacheIndex] = 0.0.xxxx;
-			gCurrentDepthCache[cacheIndex] = DepthOrder::Far();
 		}
+		GroupMemoryBarrierWithGroupSync();
 	}
-	GroupMemoryBarrierWithGroupSync();
 
 	if (!pixelValid)
 		return;

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <array>
-#include <d3d11_1.h>
+#include <d3d11_4.h>
 #include <wrl/client.h>
 
 namespace NeuralRendering
@@ -29,7 +29,13 @@ namespace NeuralRendering
 			context_->CSGetShader(shader_.GetAddressOf(), classes_.data(), &classCount_);
 			context_->CSGetShaderResources(0, SRVCount, srvs_.data());
 			context_->CSGetUnorderedAccessViews(0, UAVCount, uavs_.data());
-			if (SUCCEEDED(context_->QueryInterface(IID_PPV_ARGS(context1_.GetAddressOf()))))
+			if (FAILED(context_->QueryInterface(IID_PPV_ARGS(context1_.GetAddressOf())))) {
+				// Some wrappers expose the derived interface but reject the D3D11.1 interface.
+				Microsoft::WRL::ComPtr<ID3D11DeviceContext4> context4;
+				if (SUCCEEDED(context_->QueryInterface(IID_PPV_ARGS(context4.GetAddressOf()))))
+					context1_ = context4;
+			}
+			if (context1_)
 				context1_->CSGetConstantBuffers1(0, ConstantBufferCount, buffers_.data(), firstConstant_.data(), constantCount_.data());
 			else
 				context_->CSGetConstantBuffers(0, ConstantBufferCount, buffers_.data());

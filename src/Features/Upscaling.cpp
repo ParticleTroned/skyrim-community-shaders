@@ -65488,16 +65488,16 @@ uint32_t Upscaling::GetVRVendorEvaluationContractGeneration(
 		return 0;
 
 	const auto& boot = perfMode.GetBootSnapshot();
+	if (IsVRRenderScaleModeLatched() &&
+		boot.valid &&
+		boot.active &&
+		boot.method == a_upscaleMethod)
+		return boot.generation;
+
 	const auto provider = GetExistingVRVendorProviderSnapshot();
 	return VRVendorRelatchPolicy::SelectVendorEvaluationGeneration({
-		.renderScaleActive =
-			IsVRRenderScaleModeLatched() &&
-			boot.valid &&
-			boot.active &&
-			boot.method == a_upscaleMethod,
 		.publishedProviderMatches =
 			provider.valid && provider.method == a_upscaleMethod,
-		.renderScaleGeneration = boot.generation,
 		.publishedProviderGeneration = provider.contractGeneration,
 	});
 }

@@ -3542,9 +3542,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		uint32_t eyeWidthIn = (uint32_t)(renderSize.x / 2);
 		uint32_t eyeHeightIn = (uint32_t)renderSize.y;
 		const uint32_t contractGeneration =
-			upscaling.IsVRRenderScaleModeLatched() ?
-				upscaling.GetActiveVRRenderScaleContractGeneration() :
-				0u;
+			upscaling.GetVRVendorEvaluationContractGeneration(Upscaling::UpscaleMethod::kDLSS);
 		const bool vendorLifecycleMutationDeferred =
 			upscaling.ShouldDeferVRVendorLifecycleMutation() || upscaling.ShouldReuseOrdinarySaveResources();
 		const auto existingProvider =

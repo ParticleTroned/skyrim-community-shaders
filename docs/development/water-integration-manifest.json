@@ -43,7 +43,7 @@
     {
       "id": "02-refraction",
       "branch": "work/os-water-02-refraction-20261101",
-      "commit": "edb8d43e1ed5f1f01d9d6baad77376058fdb306a",
+      "commit": "e3e44eaaa9163b225d113c2704f2b5ce3adad61f",
       "parents": [
         "d64dc05b60d38774f43797b9d4e6c1f357b8b1f8"
       ],
@@ -54,10 +54,10 @@
       ],
       "changedFilesSha256": {
         "package/Shaders/Common/WaterRefraction.hlsli": "43e91afe6c2c83fa326b53a472ee728c9b7f6b5da060f17563cd5a83f553c7ea",
-        "package/Shaders/Tests/TestWaterRefraction.hlsl": "ce9f8ffa9b5a1c5817da8ba1ecdc8bb81429f1420b346f69078f4a0f42c946a6",
+        "package/Shaders/Tests/TestWaterRefraction.hlsl": "31279503ea5ac9c36bef16b0a691f5a7b6248e09fb4ff452b39aa41b5cf739f4",
         "package/Shaders/Water.hlsl": "d45be830f93f9257d2723f559e8ffdc1bdd605d6fcb1d3bcaae991a6cf82c51e",
         "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
-        "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a"
+        "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243"
       },
       "originalCommit": "101d67d123c31053e8c328c821b67b592af2ff40",
       "repairParents": [
@@ -72,7 +72,20 @@
         "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
         "package/Shaders/Tests/TestWaterRefraction.hlsl": "ce9f8ffa9b5a1c5817da8ba1ecdc8bb81429f1420b346f69078f4a0f42c946a6",
         "package/Shaders/Water.hlsl": "d45be830f93f9257d2723f559e8ffdc1bdd605d6fcb1d3bcaae991a6cf82c51e"
-      }
+      },
+      "followupHistory": [
+        {
+          "before": "edb8d43e1ed5f1f01d9d6baad77376058fdb306a",
+          "after": "e3e44eaaa9163b225d113c2704f2b5ce3adad61f",
+          "parents": [
+            "edb8d43e1ed5f1f01d9d6baad77376058fdb306a"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243",
+            "package/Shaders/Tests/TestWaterRefraction.hlsl": "31279503ea5ac9c36bef16b0a691f5a7b6248e09fb4ff452b39aa41b5cf739f4"
+          }
+        }
+      ]
     },
     {
       "id": "06-cache",
@@ -166,7 +179,7 @@
     {
       "id": "08-parallax",
       "branch": "work/os-water-08-parallax-20261101",
-      "commit": "c19346745a3766de2a81482853ffd3b5eb8e0473",
+      "commit": "87621e7f8a25033a2f33330b71b87152f4e29453",
       "parents": [
         "d64dc05b60d38774f43797b9d4e6c1f357b8b1f8"
       ],
@@ -180,7 +193,7 @@
         "package/SKSE/Plugins/CommunityShaders/Translations/en.json": "c52747acc1a2bdd4d65b0f72d4aa0cfe3b3fd6c2dacfc8207edcc9f6743608a7",
         "package/Shaders/Common/SharedData.hlsli": "91c0bdfe108eaa46209267088279241d82faaedce3a28492a1a3b9180220b19b",
         "package/Shaders/Common/WaterParallaxMath.hlsli": "37437251f7bcb81fa8f62570c395eb8bb216c7daac2800e69105e4ba20e41e25",
-        "package/Shaders/Tests/TestWaterParallaxMath.hlsl": "6637f51f95bf68544c77d342b4ded03f457e5a064b550c232dfc7aa37d7a3662",
+        "package/Shaders/Tests/TestWaterParallaxMath.hlsl": "93671fb6f95a176debd30984d0891700f54704be6b13cf6414e9baf88bb39462",
         "package/Shaders/Water.hlsl": "b178a714b3508fea587cc00b221c44b33004d2245198e31ac991182e50f29fec",
         "src/FeatureBuffer.cpp": "d3c51acda9cdfcba6e1e1c74b7510a51a1a71420113bfe6fca69edce92cc386a",
         "src/Features/CSUtility.cpp": "c5c28c4a825fdd7b235f430e1573de4c563ab69ddebcca17aee87f5f031a014c",
@@ -188,7 +201,7 @@
         "src/Features/WaterEffects.cpp": "5871591aa9a378576927c6f93fc78e5ab6270450d4cc6b2fb2609dfaa67cb66e",
         "src/Features/WaterEffects.h": "e4369d0234c048fd9900651b5791a7c6b8fbd259fa2df5e6ff1b53bc04726162",
         "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
-        "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a"
+        "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243"
       },
       "originalCommit": "b48143a395808623688947ae08bb1f41b2a2c82b",
       "repairParents": [
@@ -203,7 +216,20 @@
         "package/Shaders/Common/WaterParallaxMath.hlsli": "37437251f7bcb81fa8f62570c395eb8bb216c7daac2800e69105e4ba20e41e25",
         "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
         "package/Shaders/Tests/TestWaterParallaxMath.hlsl": "6637f51f95bf68544c77d342b4ded03f457e5a064b550c232dfc7aa37d7a3662"
-      }
+      },
+      "followupHistory": [
+        {
+          "before": "c19346745a3766de2a81482853ffd3b5eb8e0473",
+          "after": "87621e7f8a25033a2f33330b71b87152f4e29453",
+          "parents": [
+            "c19346745a3766de2a81482853ffd3b5eb8e0473"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243",
+            "package/Shaders/Tests/TestWaterParallaxMath.hlsl": "93671fb6f95a176debd30984d0891700f54704be6b13cf6414e9baf88bb39462"
+          }
+        }
+      ]
     },
     {
       "id": "09-history",
@@ -233,7 +259,7 @@
     {
       "id": "10a-reflection-source",
       "branch": "work/os-water-10a-reflection-source-20261101",
-      "commit": "7e8db0dfac00471b6c02bc578b2275abee8e223b",
+      "commit": "9e08766a025b4e621cce78fd80eef6080a2b40e9",
       "parents": [
         "d64dc05b60d38774f43797b9d4e6c1f357b8b1f8"
       ],
@@ -244,7 +270,7 @@
       "changedFilesSha256": {
         "package/Shaders/Water.hlsl": "95cf1c1bf72f7cf33e0a6a442e1450260eebc4d36ac3d4c448a20d2dc65466f1",
         "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
-        "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a"
+        "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243"
       },
       "originalCommit": "1d935270720df700a2f1280909b0ea32756e87e5",
       "repairParents": [
@@ -257,12 +283,24 @@
         "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
         "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
         "package/Shaders/Water.hlsl": "95cf1c1bf72f7cf33e0a6a442e1450260eebc4d36ac3d4c448a20d2dc65466f1"
-      }
+      },
+      "followupHistory": [
+        {
+          "before": "7e8db0dfac00471b6c02bc578b2275abee8e223b",
+          "after": "9e08766a025b4e621cce78fd80eef6080a2b40e9",
+          "parents": [
+            "7e8db0dfac00471b6c02bc578b2275abee8e223b"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243"
+          }
+        }
+      ]
     },
     {
       "id": "10b-ssr",
       "branch": "work/os-water-10b-ssr-20261101",
-      "commit": "e2c02d614f41211b7c24c0eeab7cf35c95554797",
+      "commit": "76ce4e459da2d1aa410178befe51aa7defd6b76b",
       "parents": [
         "1d935270720df700a2f1280909b0ea32756e87e5"
       ],
@@ -273,7 +311,7 @@
       "changedFilesSha256": {
         "package/Shaders/Water.hlsl": "1ac511835fa67a7d99cc8b4bcb15546d6261dfa4ce0a0aadfe8938f0a08ed864",
         "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
-        "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a"
+        "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243"
       },
       "originalCommit": "6b6436cba02925f78b379eb6c4a05d7bcedfea9e",
       "repairParents": [
@@ -287,12 +325,25 @@
         "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
         "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
         "package/Shaders/Water.hlsl": "1ac511835fa67a7d99cc8b4bcb15546d6261dfa4ce0a0aadfe8938f0a08ed864"
-      }
+      },
+      "followupHistory": [
+        {
+          "before": "e2c02d614f41211b7c24c0eeab7cf35c95554797",
+          "after": "76ce4e459da2d1aa410178befe51aa7defd6b76b",
+          "parents": [
+            "e2c02d614f41211b7c24c0eeab7cf35c95554797",
+            "9e08766a025b4e621cce78fd80eef6080a2b40e9"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243"
+          }
+        }
+      ]
     },
     {
       "id": "10c-reflection-height",
       "branch": "work/os-water-10c-reflection-height-20261101",
-      "commit": "7574f53e4dc77e4d5f071bfdd3d86b79835fe064",
+      "commit": "47b79a46cc0aa4c743510a3e7d044ead639cac53",
       "parents": [
         "1d935270720df700a2f1280909b0ea32756e87e5"
       ],
@@ -307,7 +358,7 @@
         "src/Features/LODBlending.cpp": "097f100d0936ceed83ebe0de3b0a8d1b5db00c433121fe62b6ca472b36ae2881",
         "src/Features/LODBlending.h": "7e105a544f12e410e6df6ae75ff15bd310d4360ced925fbda99d0110387bac58",
         "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
-        "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a"
+        "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243"
       },
       "originalCommit": "add49f697a7f13ed5459980772a781543de23159",
       "repairParents": [
@@ -321,7 +372,20 @@
         "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
         "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
         "package/Shaders/Water.hlsl": "462bf6a7972ab4404b8a15d78443b474d478cd53809af2acf3f0508cf946513e"
-      }
+      },
+      "followupHistory": [
+        {
+          "before": "7574f53e4dc77e4d5f071bfdd3d86b79835fe064",
+          "after": "47b79a46cc0aa4c743510a3e7d044ead639cac53",
+          "parents": [
+            "7574f53e4dc77e4d5f071bfdd3d86b79835fe064",
+            "9e08766a025b4e621cce78fd80eef6080a2b40e9"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243"
+          }
+        }
+      ]
     },
     {
       "id": "11a-light-eligibility",
@@ -346,7 +410,7 @@
     {
       "id": "11b-contact-candidates",
       "branch": "work/os-water-11b-contact-candidates-20261101",
-      "commit": "62307f346f213e35b8fb23c3afb91e7326dc55ec",
+      "commit": "0a1f389f04756f89bfff4cc34f7081096b35162e",
       "parents": [
         "4005635b03664f650062328d851c7502ea0189e0"
       ],
@@ -355,16 +419,16 @@
         23
       ],
       "changedFilesSha256": {
-        "features/Light Limit Fix/Shaders/LightLimitFix/WaterContactCandidatesCS.hlsl": "266e453ab19b7fa30d482e852fe55b3a80fbf1a76c9101c0d15aae357e87c2a7",
+        "features/Light Limit Fix/Shaders/LightLimitFix/WaterContactCandidatesCS.hlsl": "dc6d85af1594857323de05745af67620dec385dd8eb6ac1d09c4d7090b703320",
         "package/SKSE/Plugins/CommunityShaders/Translations/en.json": "b364995c6570c6bfed0faaf6e7401a89db923795975bfda5691731a3ee59336c",
         "package/Shaders/Common/SharedData.hlsli": "83342c12dce7f9d11427e85100b81189ab01f37fd4f63fdebb9834d962bd6e39",
-        "package/Shaders/Common/WaterContactCandidates.hlsli": "83e647769b39100b5e1c9390fa0f24546b172170039ce0fb7740ad05ef26e2bd",
-        "package/Shaders/Tests/TestWaterContactCandidates.hlsl": "971172370ec0b1cf2a40935ad28fbedda0dc71155ca8840ff9ea59a86f4ac3ca",
+        "package/Shaders/Common/WaterContactCandidates.hlsli": "46fc7c00afb55e4b5bd56e52da4c5ff45f36e99113c73eb46080fae50ed5eae6",
+        "package/Shaders/Tests/TestWaterContactCandidates.hlsl": "47eae8117ef01ce5ae690940eefe5e4c446f030149b418f4f52e92aa4685ec85",
         "package/Shaders/Water.hlsl": "dccfec8f219aeb00a6da3cfc93bcb6f84c0cbfb372ccd896cba20fea4763d05e",
         "src/Features/LightLimitFix.cpp": "0b4be599b262eb057f2725bbb9dd024972b8c86277009a47299768c46723d9f5",
         "src/Features/LightLimitFix.h": "d4c087f3b74d775570ad60150b7a11dddd951b6434288f032b2918126d3fa27b",
         "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
-        "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a"
+        "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243"
       },
       "originalCommit": "a1d130be86a762ac0ead83574f851bc785f627a8",
       "repairParents": [
@@ -379,12 +443,27 @@
         "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
         "package/Shaders/Tests/TestWaterContactCandidates.hlsl": "971172370ec0b1cf2a40935ad28fbedda0dc71155ca8840ff9ea59a86f4ac3ca",
         "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a"
-      }
+      },
+      "followupHistory": [
+        {
+          "before": "62307f346f213e35b8fb23c3afb91e7326dc55ec",
+          "after": "0a1f389f04756f89bfff4cc34f7081096b35162e",
+          "parents": [
+            "62307f346f213e35b8fb23c3afb91e7326dc55ec"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243",
+            "package/Shaders/Tests/TestWaterContactCandidates.hlsl": "47eae8117ef01ce5ae690940eefe5e4c446f030149b418f4f52e92aa4685ec85",
+            "package/Shaders/Common/WaterContactCandidates.hlsli": "46fc7c00afb55e4b5bd56e52da4c5ff45f36e99113c73eb46080fae50ed5eae6",
+            "features/Light Limit Fix/Shaders/LightLimitFix/WaterContactCandidatesCS.hlsl": "dc6d85af1594857323de05745af67620dec385dd8eb6ac1d09c4d7090b703320"
+          }
+        }
+      ]
     },
     {
       "id": "shallow-base",
       "branch": "work/os-water-shallow-base-20261101",
-      "commit": "2bcf3eb92d809b189485d73d68479a2563d145bd",
+      "commit": "02b839baa6006dfa3012060694a03fc42f63dfde",
       "parents": [
         "1074a4b0ab15f50703d6ae482522384224b66058",
         "101d67d123c31053e8c328c821b67b592af2ff40"
@@ -394,7 +473,7 @@
       "changedFilesSha256": {
         "package/Shaders/Common/SharedData.hlsli": "62830efd72cd26bbf9b19a92e0d11b8524abe94239d3d9f9e659c6525d6a4c44",
         "package/Shaders/Common/WaterRefraction.hlsli": "43e91afe6c2c83fa326b53a472ee728c9b7f6b5da060f17563cd5a83f553c7ea",
-        "package/Shaders/Tests/TestWaterRefraction.hlsl": "ce9f8ffa9b5a1c5817da8ba1ecdc8bb81429f1420b346f69078f4a0f42c946a6",
+        "package/Shaders/Tests/TestWaterRefraction.hlsl": "31279503ea5ac9c36bef16b0a691f5a7b6248e09fb4ff452b39aa41b5cf739f4",
         "package/Shaders/Water.hlsl": "9777626c637c8bf182a7c2f9127bcf42e32df021571b85d3e9de964899b579c7",
         "src/FeatureBuffer.cpp": "8b66b061ef9f4fafcbed30eb2970e7864fa81ec0d2c4e3185ecaaf6bcfa7f147",
         "src/Features/UnifiedWater.cpp": "1971714549920dffa064ab64d6b16117509f84595e27a1c988b378c489afbd87",
@@ -406,7 +485,7 @@
         "tests/cpp/CMakeLists.txt": "a3d02b4a7f97ced171840e3422c1d591c16fae28f4f772ca7040f795614e1c89",
         "tests/cpp/test_water_flowmap_layout.cpp": "3347e75184c017c250476cc260b61aeb4045b8e94ce840ad02d2d143605e6d87",
         "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
-        "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a"
+        "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243"
       },
       "originalCommit": "59a05576f09ab3eef9b6650fe9f88d0d5df652ae",
       "repairParents": [
@@ -425,12 +504,26 @@
         "package/Shaders/Tests/TestWaterRefraction.hlsl": "ce9f8ffa9b5a1c5817da8ba1ecdc8bb81429f1420b346f69078f4a0f42c946a6",
         "package/Shaders/Water.hlsl": "9777626c637c8bf182a7c2f9127bcf42e32df021571b85d3e9de964899b579c7",
         "src/Features/UnifiedWater/Flowmap.cpp": "19c264fb68d4da10270d49f9fe57ed7ed333786875a1360128fc67179c16b811"
-      }
+      },
+      "followupHistory": [
+        {
+          "before": "2bcf3eb92d809b189485d73d68479a2563d145bd",
+          "after": "02b839baa6006dfa3012060694a03fc42f63dfde",
+          "parents": [
+            "2bcf3eb92d809b189485d73d68479a2563d145bd",
+            "e3e44eaaa9163b225d113c2704f2b5ce3adad61f"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243",
+            "package/Shaders/Tests/TestWaterRefraction.hlsl": "31279503ea5ac9c36bef16b0a691f5a7b6248e09fb4ff452b39aa41b5cf739f4"
+          }
+        }
+      ]
     },
     {
       "id": "01-shallow",
       "branch": "work/os-water-01-shallow-20261101",
-      "commit": "9261fcb3266152710b67b3ad2d1a1a7f38a7940c",
+      "commit": "cd7370c1b80e8190ffb92a7edfb93375ff92d09f",
       "parents": [
         "59a05576f09ab3eef9b6650fe9f88d0d5df652ae"
       ],
@@ -448,8 +541,8 @@
         "src/Features/UnifiedWater.h": "73eeed0380a83dc288bbad0b99ccd5e8e8c83e93a5b245b51cb69fdcfb8dd2b7",
         "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
         "package/Shaders/Common/WaterRefraction.hlsli": "43e91afe6c2c83fa326b53a472ee728c9b7f6b5da060f17563cd5a83f553c7ea",
-        "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
-        "package/Shaders/Tests/TestWaterRefraction.hlsl": "ce9f8ffa9b5a1c5817da8ba1ecdc8bb81429f1420b346f69078f4a0f42c946a6",
+        "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243",
+        "package/Shaders/Tests/TestWaterRefraction.hlsl": "31279503ea5ac9c36bef16b0a691f5a7b6248e09fb4ff452b39aa41b5cf739f4",
         "src/Features/UnifiedWater/Flowmap.cpp": "19c264fb68d4da10270d49f9fe57ed7ed333786875a1360128fc67179c16b811"
       },
       "originalCommit": "74099182b4bf03e29947eecb67ad2e44d12c8936",
@@ -468,26 +561,40 @@
         "package/Shaders/Tests/TestWaterRefraction.hlsl": "ce9f8ffa9b5a1c5817da8ba1ecdc8bb81429f1420b346f69078f4a0f42c946a6",
         "package/Shaders/Water.hlsl": "5eb79eeb878c7d3fdd12768074f03f4e71a7f8ee697096bb0cf757888e9a6504",
         "src/Features/UnifiedWater/Flowmap.cpp": "19c264fb68d4da10270d49f9fe57ed7ed333786875a1360128fc67179c16b811"
-      }
+      },
+      "followupHistory": [
+        {
+          "before": "9261fcb3266152710b67b3ad2d1a1a7f38a7940c",
+          "after": "cd7370c1b80e8190ffb92a7edfb93375ff92d09f",
+          "parents": [
+            "9261fcb3266152710b67b3ad2d1a1a7f38a7940c",
+            "02b839baa6006dfa3012060694a03fc42f63dfde"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243",
+            "package/Shaders/Tests/TestWaterRefraction.hlsl": "31279503ea5ac9c36bef16b0a691f5a7b6248e09fb4ff452b39aa41b5cf739f4"
+          }
+        }
+      ]
     }
   ],
-  "status": "CI repairs applied; rerun Windows, SE/VR shader and unit validation. In-game validation is not established.",
+  "status": "Shader compiler compatibility follow-up applied; final validation pending.",
   "integrationChangedFilesSha256": {
     "features/Light Limit Fix/Shaders/LightLimitFix/Common.hlsli": "cc5a524e5ce7a984495abe7ba1b90f504c9479e96121ee3742c21cb462911358",
-    "features/Light Limit Fix/Shaders/LightLimitFix/WaterContactCandidatesCS.hlsl": "266e453ab19b7fa30d482e852fe55b3a80fbf1a76c9101c0d15aae357e87c2a7",
+    "features/Light Limit Fix/Shaders/LightLimitFix/WaterContactCandidatesCS.hlsl": "dc6d85af1594857323de05745af67620dec385dd8eb6ac1d09c4d7090b703320",
     "features/Unified Water/Shaders/UnifiedWater/ShallowSurface.hlsli": "02fadffb996552f0ec8012834d1577ccd7bd3f93609716c3ff26520a2bbdfa69",
     "features/Water Effects/Shaders/WaterEffects/WaterParallax.hlsli": "6ed0be70b955e3407f5f685b7dbe25179d7628075d6b94ce41e7f2eeb5fc0d1f",
     "package/SKSE/Plugins/CommunityShaders/Translations/en.json": "082bd72f7c8ef63421c8506a892b3a19ba23c8588e99faae1c4f4f3b2fd778c6",
     "package/Shaders/Common/PointLightFlags.hlsli": "ca55f679e2047dbef0c81b0db941e734c20193be2c522dc742d120d24d3cce2d",
     "package/Shaders/Common/SharedData.hlsli": "52d10217bf3e15f1fdd7c25f13c317891ddc2e428a4957d0602db566630cc1b9",
-    "package/Shaders/Common/WaterContactCandidates.hlsli": "83e647769b39100b5e1c9390fa0f24546b172170039ce0fb7740ad05ef26e2bd",
+    "package/Shaders/Common/WaterContactCandidates.hlsli": "46fc7c00afb55e4b5bd56e52da4c5ff45f36e99113c73eb46080fae50ed5eae6",
     "package/Shaders/Common/WaterFinite.hlsli": "3dc39313488d0224c600224e9e3579f098dcc845b891dc7735b9fa5ec26635a1",
     "package/Shaders/Common/WaterParallaxMath.hlsli": "37437251f7bcb81fa8f62570c395eb8bb216c7daac2800e69105e4ba20e41e25",
     "package/Shaders/Common/WaterRefraction.hlsli": "43e91afe6c2c83fa326b53a472ee728c9b7f6b5da060f17563cd5a83f553c7ea",
-    "package/Shaders/Tests/TestWaterContactCandidates.hlsl": "971172370ec0b1cf2a40935ad28fbedda0dc71155ca8840ff9ea59a86f4ac3ca",
-    "package/Shaders/Tests/TestWaterFinite.hlsl": "bec586c354e163ccca0b682cc038c02ffae859bb0dc950b0aaf2f925c731530a",
-    "package/Shaders/Tests/TestWaterParallaxMath.hlsl": "6637f51f95bf68544c77d342b4ded03f457e5a064b550c232dfc7aa37d7a3662",
-    "package/Shaders/Tests/TestWaterRefraction.hlsl": "ce9f8ffa9b5a1c5817da8ba1ecdc8bb81429f1420b346f69078f4a0f42c946a6",
+    "package/Shaders/Tests/TestWaterContactCandidates.hlsl": "47eae8117ef01ce5ae690940eefe5e4c446f030149b418f4f52e92aa4685ec85",
+    "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243",
+    "package/Shaders/Tests/TestWaterParallaxMath.hlsl": "93671fb6f95a176debd30984d0891700f54704be6b13cf6414e9baf88bb39462",
+    "package/Shaders/Tests/TestWaterRefraction.hlsl": "31279503ea5ac9c36bef16b0a691f5a7b6248e09fb4ff452b39aa41b5cf739f4",
     "package/Shaders/Water.hlsl": "781cea4f59996aa3ae1962a842b1e54b1fda117e0157a39d9b856a1f7ca3f022",
     "src/FeatureBuffer.cpp": "c872cfdb0e29a85b404d1a3b1b0589e3cf5071e5411db08537ae064122979e7a",
     "src/Features/CSUtility.cpp": "c5c28c4a825fdd7b235f430e1573de4c563ab69ddebcca17aee87f5f031a014c",
@@ -693,6 +800,122 @@
         "package/Shaders/Water.hlsl": "5eb79eeb878c7d3fdd12768074f03f4e71a7f8ee697096bb0cf757888e9a6504",
         "src/Features/UnifiedWater/Flowmap.cpp": "19c264fb68d4da10270d49f9fe57ed7ed333786875a1360128fc67179c16b811"
       }
+    }
+  ],
+  "ciFollowups": [
+    {
+      "repository": "ParticleTroned/skyrim-community-shaders",
+      "failedRun": 41302393633,
+      "previousIntegration": "a72099c42e5c404e5942f5b69ae9b52880896441",
+      "updates": [
+        {
+          "id": "02-refraction",
+          "branch": "work/os-water-02-refraction-20261101",
+          "before": "edb8d43e1ed5f1f01d9d6baad77376058fdb306a",
+          "after": "e3e44eaaa9163b225d113c2704f2b5ce3adad61f",
+          "parents": [
+            "edb8d43e1ed5f1f01d9d6baad77376058fdb306a"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243",
+            "package/Shaders/Tests/TestWaterRefraction.hlsl": "31279503ea5ac9c36bef16b0a691f5a7b6248e09fb4ff452b39aa41b5cf739f4"
+          }
+        },
+        {
+          "id": "08-parallax",
+          "branch": "work/os-water-08-parallax-20261101",
+          "before": "c19346745a3766de2a81482853ffd3b5eb8e0473",
+          "after": "87621e7f8a25033a2f33330b71b87152f4e29453",
+          "parents": [
+            "c19346745a3766de2a81482853ffd3b5eb8e0473"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243",
+            "package/Shaders/Tests/TestWaterParallaxMath.hlsl": "93671fb6f95a176debd30984d0891700f54704be6b13cf6414e9baf88bb39462"
+          }
+        },
+        {
+          "id": "10a-reflection-source",
+          "branch": "work/os-water-10a-reflection-source-20261101",
+          "before": "7e8db0dfac00471b6c02bc578b2275abee8e223b",
+          "after": "9e08766a025b4e621cce78fd80eef6080a2b40e9",
+          "parents": [
+            "7e8db0dfac00471b6c02bc578b2275abee8e223b"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243"
+          }
+        },
+        {
+          "id": "10b-ssr",
+          "branch": "work/os-water-10b-ssr-20261101",
+          "before": "e2c02d614f41211b7c24c0eeab7cf35c95554797",
+          "after": "76ce4e459da2d1aa410178befe51aa7defd6b76b",
+          "parents": [
+            "e2c02d614f41211b7c24c0eeab7cf35c95554797",
+            "9e08766a025b4e621cce78fd80eef6080a2b40e9"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243"
+          }
+        },
+        {
+          "id": "10c-reflection-height",
+          "branch": "work/os-water-10c-reflection-height-20261101",
+          "before": "7574f53e4dc77e4d5f071bfdd3d86b79835fe064",
+          "after": "47b79a46cc0aa4c743510a3e7d044ead639cac53",
+          "parents": [
+            "7574f53e4dc77e4d5f071bfdd3d86b79835fe064",
+            "9e08766a025b4e621cce78fd80eef6080a2b40e9"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243"
+          }
+        },
+        {
+          "id": "11b-contact-candidates",
+          "branch": "work/os-water-11b-contact-candidates-20261101",
+          "before": "62307f346f213e35b8fb23c3afb91e7326dc55ec",
+          "after": "0a1f389f04756f89bfff4cc34f7081096b35162e",
+          "parents": [
+            "62307f346f213e35b8fb23c3afb91e7326dc55ec"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243",
+            "package/Shaders/Tests/TestWaterContactCandidates.hlsl": "47eae8117ef01ce5ae690940eefe5e4c446f030149b418f4f52e92aa4685ec85",
+            "package/Shaders/Common/WaterContactCandidates.hlsli": "46fc7c00afb55e4b5bd56e52da4c5ff45f36e99113c73eb46080fae50ed5eae6",
+            "features/Light Limit Fix/Shaders/LightLimitFix/WaterContactCandidatesCS.hlsl": "dc6d85af1594857323de05745af67620dec385dd8eb6ac1d09c4d7090b703320"
+          }
+        },
+        {
+          "id": "shallow-base",
+          "branch": "work/os-water-shallow-base-20261101",
+          "before": "2bcf3eb92d809b189485d73d68479a2563d145bd",
+          "after": "02b839baa6006dfa3012060694a03fc42f63dfde",
+          "parents": [
+            "2bcf3eb92d809b189485d73d68479a2563d145bd",
+            "e3e44eaaa9163b225d113c2704f2b5ce3adad61f"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243",
+            "package/Shaders/Tests/TestWaterRefraction.hlsl": "31279503ea5ac9c36bef16b0a691f5a7b6248e09fb4ff452b39aa41b5cf739f4"
+          }
+        },
+        {
+          "id": "01-shallow",
+          "branch": "work/os-water-01-shallow-20261101",
+          "before": "9261fcb3266152710b67b3ad2d1a1a7f38a7940c",
+          "after": "cd7370c1b80e8190ffb92a7edfb93375ff92d09f",
+          "parents": [
+            "9261fcb3266152710b67b3ad2d1a1a7f38a7940c",
+            "02b839baa6006dfa3012060694a03fc42f63dfde"
+          ],
+          "files": {
+            "package/Shaders/Tests/TestWaterFinite.hlsl": "8ff50b50f29aaa049b756c07529e76d5601bff4df962d130a377f6b69d15f243",
+            "package/Shaders/Tests/TestWaterRefraction.hlsl": "31279503ea5ac9c36bef16b0a691f5a7b6248e09fb4ff452b39aa41b5cf739f4"
+          }
+        }
+      ]
     }
   ]
 }

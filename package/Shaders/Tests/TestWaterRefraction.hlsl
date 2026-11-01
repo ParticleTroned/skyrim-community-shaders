@@ -29,6 +29,6 @@ void TestWaterRefractionRejectsNonFiniteFootprints()
 [numthreads(1, 1, 1)]
 void TestWaterRefractionFallsBackFromInfinity()
 {
-	float2 value = WaterRefraction::ClampUV(float2(asfloat(0xff800000u), 0.5), float2(asfloat(0x7fc00000u), 0.5), 0.1.xx, 0.9.xx);
+	float2 value = WaterRefraction::ClampUV(float2(asfloat(((1u << 31) | 0x7f800000u)), 0.5), float2(asfloat(0x7fc00000u), 0.5), 0.1.xx, 0.9.xx);
 	ASSERT(IsTrue, all(abs(value - 0.5.xx) < 1e-6));
 }

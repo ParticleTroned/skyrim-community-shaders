@@ -25,7 +25,7 @@
 void TestWaterCandidateEmptySentinelIsUnsigned()
 {
 	uint2 packed = WaterContactCandidates::Empty();
-	ASSERT(IsTrue, all(packed == uint2(0xffffffffu, 0xffffffffu)));
+	ASSERT(IsTrue, all(packed == uint2(~0u, ~0u)));
 	[unroll] for (uint slot = 0; slot < WaterContactCandidates::MaxCandidates; ++slot)
 		ASSERT(AreEqual, WaterContactCandidates::Load(packed, slot), WaterContactCandidates::EmptyIndex);
 }

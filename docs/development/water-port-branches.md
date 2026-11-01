@@ -7,20 +7,20 @@ No upstream PRs. These are preparation branches, not merge-approved changes.
 | Work branch | Commit | Type | Required parent |
 |---|---|---|---|
 | `work/os-water-04-flowmap-20261101` | `1dcf4adc6e` | BUG / CORRECTION | pinned baseline |
-| `work/os-water-02-refraction-20261101` | `edb8d43e1e` | BUG / CORRECTION | pinned baseline |
+| `work/os-water-02-refraction-20261101` | `e3e44eaaa9` | BUG / CORRECTION | pinned baseline |
 | `work/os-water-06-cache-20261101` | `99de91ced5` | BUG / CORRECTION | 04-flowmap |
 | `work/os-water-03-child-worldspace-20261101` | `88b92dd7d9` | CORRECTION | pinned baseline |
 | `work/os-water-05-lifetime-20261101` | `dfc440cd21` | CORRECTION | pinned baseline |
 | `work/os-water-07-flowmap-lock-20261101` | `3202b55301` | CORRECTION | pinned baseline |
-| `work/os-water-08-parallax-20261101` | `c19346745a` | CORRECTION / FEATURE | pinned baseline |
+| `work/os-water-08-parallax-20261101` | `87621e7f8a` | CORRECTION / FEATURE | pinned baseline |
 | `work/os-water-09-history-20261101` | `76b2b5c420` | CORRECTION | pinned baseline |
-| `work/os-water-10a-reflection-source-20261101` | `7e8db0dfac` | BUG | pinned baseline |
-| `work/os-water-10b-ssr-20261101` | `e2c02d614f` | CORRECTION | 10a-reflection-source |
-| `work/os-water-10c-reflection-height-20261101` | `7574f53e4d` | FEATURE | 10a-reflection-source |
+| `work/os-water-10a-reflection-source-20261101` | `9e08766a02` | BUG | pinned baseline |
+| `work/os-water-10b-ssr-20261101` | `76ce4e459d` | CORRECTION | 10a-reflection-source |
+| `work/os-water-10c-reflection-height-20261101` | `47b79a46cc` | FEATURE | 10a-reflection-source |
 | `work/os-water-11a-light-eligibility-20261101` | `4005635b03` | BUG | pinned baseline |
-| `work/os-water-11b-contact-candidates-20261101` | `62307f346f` | CORRECTION | 11a-light-eligibility |
-| `work/os-water-shallow-base-20261101` | `2bcf3eb92d` | INTEGRATION | 04-flowmap, 02-refraction |
-| `work/os-water-01-shallow-20261101` | `9261fcb326` | FEATURE | shallow-base |
+| `work/os-water-11b-contact-candidates-20261101` | `0a1f389f04` | CORRECTION | 11a-light-eligibility |
+| `work/os-water-shallow-base-20261101` | `02b839baa6` | INTEGRATION | 04-flowmap, 02-refraction |
+| `work/os-water-01-shallow-20261101` | `cd7370c1b8` | FEATURE | shallow-base |
 
 ## Scope and test controls
 
@@ -56,3 +56,5 @@ The failed integration run 41299604824 is followed by source fixes in the origin
 Repairs cover SDK/REX D3D type bridging (4), explicit node pointers (3), signed target bounds (9), FXC-safe finite checks and initialized refraction fallback (2, 8, 10a, 1), and unsigned candidate sentinels (11b). Shared finite helpers have direct shader tests. The 64-step cap, reverse-Z handling, strict warning gates and runtime-DLL exclusion remain unchanged.
 
 Windows compilation and SE/VR shader validation must pass on the new integration commit before installation. In-game correctness and performance still require the existing test matrix.
+
+Shader follow-up: all SE/VR water permutations compiled cleanly in both depth conventions in run 41302393633. Its remaining candidate-loop warning and DXC high-bit literal test failures are addressed without changing compiler flags or warning limits. Final validation must still pass on this follow-up.

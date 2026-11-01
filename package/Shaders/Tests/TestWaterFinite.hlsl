@@ -5,14 +5,14 @@
 void TestWaterFiniteClassifiesIEEE754Values()
 {
 	ASSERT(IsTrue, WaterFinite::IsFinite(asfloat(0x00000000u)));
-	ASSERT(IsTrue, WaterFinite::IsFinite(asfloat(0x80000000u)));
+	ASSERT(IsTrue, WaterFinite::IsFinite(asfloat((1u << 31))));
 	ASSERT(IsTrue, WaterFinite::IsFinite(asfloat(0x00000001u)));
 	ASSERT(IsTrue, WaterFinite::IsFinite(asfloat(0x7f7fffffu)));
-	ASSERT(IsTrue, WaterFinite::IsFinite(asfloat(0xff7fffffu)));
+	ASSERT(IsTrue, WaterFinite::IsFinite(asfloat(((1u << 31) | 0x7f7fffffu))));
 	ASSERT(IsFalse, WaterFinite::IsFinite(asfloat(0x7f800000u)));
-	ASSERT(IsFalse, WaterFinite::IsFinite(asfloat(0xff800000u)));
+	ASSERT(IsFalse, WaterFinite::IsFinite(asfloat(((1u << 31) | 0x7f800000u))));
 	ASSERT(IsFalse, WaterFinite::IsFinite(asfloat(0x7fc00000u)));
-	ASSERT(IsFalse, WaterFinite::IsFinite(asfloat(0xffc00001u)));
+	ASSERT(IsFalse, WaterFinite::IsFinite(asfloat(((1u << 31) | 0x7fc00001u))));
 }
 
 [numthreads(1, 1, 1)]

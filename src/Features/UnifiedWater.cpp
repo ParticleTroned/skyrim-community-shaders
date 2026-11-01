@@ -247,7 +247,7 @@ void UnifiedWater::TryCompleteDeferredChildWorldspaceCull(RE::TES* tes)
 	if (!tes || !tes->gridCells)
 		return;
 
-	if (CullAllWaterLODParents(*gWaterLOD, tes))
+	if (CullAllWaterLODParents(gWaterLOD->get(), tes))
 		pendingChildWsCull.store(false, std::memory_order_release);
 }
 void UnifiedWater::DrawSettings()
@@ -685,7 +685,7 @@ void UnifiedWater::TES_SetWorldSpace::thunk(RE::TES* tes, RE::TESWorldSpace* wor
 		// Try an immediate cull with tes (globals::game::tes may still be null).
 		// Newly transitioned cells are often not attached yet, so deferred retries are still needed.
 		if (uw.gWaterLOD && *uw.gWaterLOD && tes && tes->gridCells)
-			CullAllWaterLODParents(*uw.gWaterLOD, tes);
+			CullAllWaterLODParents(uw.gWaterLOD->get(), tes);
 
 		// Keep deferred retries enabled until attached cells are observed and culled.
 		uw.pendingChildWsCull.store(true, std::memory_order_release);

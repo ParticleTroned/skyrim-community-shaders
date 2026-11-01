@@ -1,0 +1,42 @@
+name: Water shader compatibility follow-up
+
+on:
+  push:
+    branches: [build/os-water-preparation-20261101]
+    paths: [.github/workflows/water-shader-followup.yaml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: water-prepare-branches
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'ParticleTroned/skyrim-community-shaders' && github.ref == 'refs/heads/build/os-water-preparation-20261101'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: ParticleTroned/skyrim-community-shaders
+          ref: a72099c42e5c404e5942f5b69ae9b52880896441
+          path: source
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Apply and atomically publish reviewed follow-ups
+        run: python control/.water-port/publish_shader_followup.py
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: water-shader-followup
+          path: water-shader-followup/
+          if-no-files-found: warn
+          retention-days: 30

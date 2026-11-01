@@ -4,8 +4,45 @@
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 
 using std::uint32_t;
+using std::uint64_t;
+struct ID3D11Device {};
+struct ID3D11DeviceContext {};
+struct ID3D11Resource {};
+struct ID3D11ShaderResourceView {};
+namespace winrt
+{
+	template <class T>
+	struct com_ptr
+	{
+		T* pointer = nullptr;
+		com_ptr() = default;
+		com_ptr(com_ptr&& other) noexcept : pointer(std::exchange(other.pointer, nullptr)) {}
+		com_ptr& operator=(com_ptr&& other) noexcept
+		{
+			if (this != &other)
+				pointer = std::exchange(other.pointer, nullptr);
+			return *this;
+		}
+		void copy_from(T* value) { pointer = value; }
+		explicit operator bool() const { return pointer != nullptr; }
+	};
+}
+namespace globals
+{
+	struct State { uint32_t frameCount = 1; } stateStorage;
+	State* state = &stateStorage;
+}
+namespace globals::d3d
+{
+	ID3D11Device deviceStorage;
+	ID3D11DeviceContext contextStorage;
+	ID3D11Device* device = &deviceStorage;
+	ID3D11DeviceContext* context = &contextStorage;
+}
 namespace globals::game
 {
 	bool isVR = true;
@@ -15,9 +52,20 @@ namespace NeuralRendering
 {
 	struct RendererApplyArgs
 	{
+		ID3D11Device* device = globals::d3d::device;
+		ID3D11DeviceContext* context = globals::d3d::context;
+		ID3D11Resource* colorInput = nullptr;
+		ID3D11Resource* depthGuide = nullptr;
+		ID3D11Resource* motionVectors = nullptr;
+		ID3D11Resource* colorOutput = nullptr;
+		ID3D11ShaderResourceView* depthGuideSRV = nullptr;
 		uint32_t featureSlot = 0, frameId = 1, sourceWorldFrame = 1;
 		std::uint64_t generation = 1;
+		InsertionPoint insertionPoint = InsertionPoint::UpscaledCenter;
+		ComputeSubrect computeSubrect{};
+		UpscalingDLSS::ViewportCrop viewportCrop{};
 		bool modelRequired = false, pressureResolutionEnabled = false;
+		bool characterVisualIsolation = false;
 		uint32_t modelResolutionPercent = 100;
 		std::optional<int> modelOutputSelection;
 	};
@@ -110,6 +158,11 @@ struct Upscaling
 		bool prepared = false, bypassed = false, applied = false, attempted = false;
 	};
 	NeuralRendering::PipelineArrangement arrangement = NeuralRendering::PipelineArrangement::NeuralThenDlss;
+	struct Settings
+	{
+		uint64_t policy = 1;
+		uint32_t neuralCharacterCropMode = 0;
+	} settings;
 	uint32_t resets = 0, composites = 0, outputTargets = 0;
 	bool targetsSucceed = true;
 	bool PrepareReducedResolutionNeuralOutputTarget(uint32_t, NeuralRendering::RendererApplyArgs& args, bool fuse)
@@ -138,18 +191,128 @@ namespace
 #include "neural_eye_mask_under_test.h"
 
 	bool finalizeSucceeds = true;
-	bool FinalizePreparedNeuralStereoInputs(Upscaling&, std::array<Upscaling::NeuralCenterDispatchResult, 2>&,
-		std::array<NeuralRendering::RendererApplyArgs, 2>&) { return finalizeSucceeds; }
+	uint32_t finalizeCalls = 0;
+	bool FinalizePreparedNeuralStereoInputs(Upscaling& upscaling, std::array<Upscaling::NeuralCenterDispatchResult, 2>&,
+		std::array<NeuralRendering::RendererApplyArgs, 2>&, uint64_t* settingsKey = nullptr)
+	{
+		++finalizeCalls;
+		if (settingsKey)
+			*settingsKey = upscaling.settings.policy;
+		return finalizeSucceeds;
+	}
+	uint32_t settingsKeyReads = 0;
+	uint64_t BuildNeuralRenderingSettingsKey(const Upscaling::Settings& settings, bool includeCropMode)
+	{
+		++settingsKeyReads;
+		return settings.policy + (includeCropMode ? settings.neuralCharacterCropMode : 0);
+	}
+#include "neural_stereo_output_targets_under_test.h"
+#include "neural_finalized_dispatch_under_test.h"
 #include "neural_empty_dispatch_under_test.h"
+#include "neural_final_ldr_plan_under_test.h"
 	void Require(bool value)
 	{
 		if (!value)
 			throw std::runtime_error("NoWork reached the backend or changed pair delivery");
 	}
+
+	void CheckFinalizedFinalLdrPlans()
+	{
+		for (bool vr : { false, true }) {
+			globals::game::isVR = vr;
+			const uint32_t all = vr ? 3u : 1u;
+			for (uint32_t empty = 0; empty <= all; ++empty) {
+				for (bool batched : { false, true }) {
+					Upscaling upscaling;
+					upscaling.arrangement = NeuralRendering::PipelineArrangement::DlssThenNeural;
+					auto& backend = NeuralRendering::Renderer::Instance();
+					backend = {};
+					NeuralRendering::CharacterRendering::Instance() = {};
+					std::array<Upscaling::NeuralCenterDispatchResult, 2> results{};
+					std::array<NeuralRendering::RendererApplyArgs, 2> args{};
+					ID3D11Resource originalResource, replacementResource;
+					for (uint32_t eye = 0; eye < (vr ? 2u : 1u); ++eye) {
+						args[eye].featureSlot = eye;
+						args[eye].insertionPoint = NeuralRendering::InsertionPoint::FinalLdrPreUi;
+						args[eye].computeSubrect = { 4, 5, 6, 7 };
+						args[eye].viewportCrop = UpscalingDLSS::ViewportCrop::Identity(16, 16, 16, 16);
+						args[eye].colorInput = &originalResource;
+						results[eye].prepared = true;
+						results[eye].bypassed = (empty & (1u << eye)) != 0;
+					}
+					finalizeCalls = 0;
+					auto plan = FinalizedFinalLdrNeuralInputs::Create(upscaling, results, args, batched, Upscaling::NeuralStereoRouteRole::Main);
+					Require(plan.has_value() && finalizeCalls == 1);
+					static_assert(std::is_const_v<std::remove_reference_t<decltype(plan->Args())>>);
+					args[0].frameId = args[0].sourceWorldFrame = 99;
+					args[0].generation = 99;
+					args[0].computeSubrect = {};
+					args[0].viewportCrop = {};
+					args[0].colorInput = &replacementResource;
+					upscaling.arrangement = NeuralRendering::PipelineArrangement::NeuralThenDlss;
+					Require(plan->Args()[0].frameId == 1 && plan->Args()[0].sourceWorldFrame == 1 && plan->Args()[0].generation == 1 &&
+						plan->Args()[0].computeSubrect == NeuralRendering::ComputeSubrect{ 4, 5, 6, 7 } && plan->Args()[0].viewportCrop.IsIdentity() &&
+						plan->Args()[0].colorInput == &originalResource);
+					Require(plan->WillEvaluate() == (empty != all));
+					auto movedPlan = std::move(*plan);
+					Require(!plan->Evaluate().pairApplied && backend.entries == 0 && upscaling.resets == 1);
+					*plan = std::move(movedPlan);
+					Require(!movedPlan.Evaluate().pairApplied && backend.entries == 0 && upscaling.resets == 2);
+					const auto evaluation = plan->Evaluate();
+					Require(finalizeCalls == 1 && evaluation.preparedEyeMask == all && evaluation.bypassedEyeMask == empty &&
+						evaluation.pairBypassed == (empty == all) && evaluation.pairApplied == (empty != all));
+					Require(upscaling.outputTargets == 0 && upscaling.composites == 0);
+					Require(backend.admittedEyes == ((all & ~empty) & 1u) + (((all & ~empty) >> 1u) & 1u));
+					const auto entries = backend.entries;
+					(void)plan->Evaluate();
+					Require(backend.entries == entries && upscaling.resets == 3 && finalizeCalls == 1);
+				}
+			}
+		}
+		globals::game::isVR = false;
+		for (uint32_t changed = 0; changed < 5; ++changed) {
+			Upscaling upscaling;
+			upscaling.arrangement = NeuralRendering::PipelineArrangement::DlssThenNeural;
+			NeuralRendering::Renderer::Instance() = {};
+			std::array<Upscaling::NeuralCenterDispatchResult, 2> results{};
+			std::array<NeuralRendering::RendererApplyArgs, 2> args{};
+			args[0].insertionPoint = NeuralRendering::InsertionPoint::FinalLdrPreUi;
+			args[0].characterVisualIsolation = true;
+			results[0].prepared = true;
+			finalizeCalls = 0;
+			settingsKeyReads = 0;
+			auto plan = FinalizedFinalLdrNeuralInputs::Create(upscaling, results, args, true, Upscaling::NeuralStereoRouteRole::Main);
+			Require(plan.has_value() && settingsKeyReads == 0);
+			switch (changed) {
+			case 0: ++upscaling.settings.policy; break;
+			case 1: ++globals::state->frameCount; break;
+			case 2: results[0].prepared = false; break;
+			case 3: results[0].bypassed = true; break;
+			case 4: ++upscaling.settings.neuralCharacterCropMode; break;
+			}
+			Require(!plan->Evaluate().pairApplied && NeuralRendering::Renderer::Instance().entries == 0 &&
+				upscaling.resets == 1 && finalizeCalls == 1);
+			Require(settingsKeyReads == (changed == 1 ? 0u : 1u));
+			globals::state->frameCount = 1;
+		}
+		Upscaling upscaling;
+		std::array<Upscaling::NeuralCenterDispatchResult, 2> results{};
+		std::array<NeuralRendering::RendererApplyArgs, 2> args{};
+		args[0].insertionPoint = NeuralRendering::InsertionPoint::FinalLdrPreUi;
+		finalizeCalls = 0;
+		Require(!FinalizedFinalLdrNeuralInputs::Create(upscaling, results, args, true, Upscaling::NeuralStereoRouteRole::Main));
+		Require(finalizeCalls == 0);
+		results[0].prepared = true;
+		finalizeSucceeds = false;
+		Require(!FinalizedFinalLdrNeuralInputs::Create(upscaling, results, args, true, Upscaling::NeuralStereoRouteRole::Main));
+		Require(finalizeCalls == 1 && args[0].frameId == 1);
+		finalizeSucceeds = true;
+	}
 }
 
 int main()
 {
+	CheckFinalizedFinalLdrPlans();
 	for (bool vr : { false, true })
 		for (bool batched : { false, true })
 			for (bool deferred : { false, true }) {

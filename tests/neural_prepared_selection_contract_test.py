@@ -61,11 +61,19 @@ class PreparedSelectionContract(unittest.TestCase):
         self.assertNotIn("CopyResource(", target)
         self.assertNotIn("Dispatch(", target)
         start = source.index("NeuralStereoEvaluationSummary EvaluatePreparedNeuralStereo(")
+        preparation = source[start:source.index("\n\t}", start)]
+        self.assertLess(preparation.index("FinalizePreparedNeuralStereoInputs("),
+                        preparation.index("PrepareNeuralStereoOutputTargets("))
+        self.assertLess(preparation.index("PrepareNeuralStereoOutputTargets("),
+                        preparation.index("EvaluateFinalizedNeuralStereo("))
+        start = source.index("bool PrepareNeuralStereoOutputTargets(")
+        targets = source[start:source.index("\n\t}", start)]
+        self.assertLess(targets.index("ModelResolution::Required("),
+                        targets.index("PrepareReducedResolutionNeuralOutputTarget("))
+        start = source.index("NeuralStereoEvaluationSummary EvaluateFinalizedNeuralStereo(")
         evaluation = source[start:source.index("\n\t}", start)]
-        self.assertLess(evaluation.index("FinalizePreparedNeuralStereoInputs("),
-                        evaluation.index("ModelResolution::Required("))
-        self.assertLess(evaluation.index("PrepareReducedResolutionNeuralOutputTarget("),
-                        evaluation.index("Renderer::Instance().ApplyStereo("))
+        self.assertLess(evaluation.index("Renderer::Instance().ApplyStereo("),
+                        evaluation.index("outcome.WasOutputSelected("))
         self.assertIn("args.modelOutputSelection ? outcome.WasOutputSelected(args.featureSlot)", evaluation)
         self.assertIn("a_upscaling.PrepareReducedResolutionNeuralOutput(eye, args)", evaluation)
         start = source.index("bool BindPreparedActorBlending(")

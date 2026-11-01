@@ -46122,7 +46122,8 @@ namespace
 	bool FinalizePreparedNeuralStereoInputs(
 		Upscaling& a_upscaling,
 		std::array<Upscaling::NeuralCenterDispatchResult, 2>& a_results,
-		std::array<NeuralRendering::RendererApplyArgs, 2>& a_batchArgs)
+		std::array<NeuralRendering::RendererApplyArgs, 2>& a_batchArgs,
+		uint64_t* a_settingsKey = nullptr)
 	{
 		if (BuildNeuralCenterEyeMask(a_results, &Upscaling::NeuralCenterDispatchResult::prepared) != (globals::game::isVR ? 0b11u : 0b01u))
 			return true;
@@ -46155,6 +46156,8 @@ namespace
 				const bool reset = a_batchArgs[0].reset || a_batchArgs[1].reset;
 				a_batchArgs[0].reset = a_batchArgs[1].reset = reset;
 			}
+			if (a_settingsKey)
+				*a_settingsKey = prepareArgs[0].cropConfigurationKey;
 		}
 		// Validate both eye plans before converting the regions inference will read.
 		// Final-LDR conversion follows rollback setup in its caller.
@@ -46181,15 +46184,6 @@ namespace
 		return true;
 	}
 
-	bool WillEvaluatePreparedNeuralStereo(
-		const std::array<Upscaling::NeuralCenterDispatchResult, 2>& a_results) noexcept
-	{
-		return BuildNeuralCenterEyeMask(
-				   a_results, &Upscaling::NeuralCenterDispatchResult::prepared) == (globals::game::isVR ? 0b11u : 0b01u) &&
-		       BuildNeuralCenterEyeMask(
-				   a_results, &Upscaling::NeuralCenterDispatchResult::bypassed) != (globals::game::isVR ? 0b11u : 0b01u);
-	}
-
 	void ResolveAbortedCharacterFeature18Preparations(
 		const std::array<Upscaling::NeuralCenterDispatchResult, 2>& a_results,
 		const std::array<NeuralRendering::RendererApplyArgs, 2>& a_args) noexcept
@@ -46209,28 +46203,16 @@ namespace
 		}
 	}
 
-	NeuralStereoEvaluationSummary EvaluatePreparedNeuralStereo(
+	bool PrepareNeuralStereoOutputTargets(
 		Upscaling& a_upscaling,
 		std::array<Upscaling::NeuralCenterDispatchResult, 2>& a_results,
 		std::array<NeuralRendering::RendererApplyArgs, 2>& a_batchArgs,
-		bool a_batchedStereo,
-		Upscaling::NeuralStereoRouteRole a_routeRole)
+		NeuralRendering::PipelineArrangement a_arrangement)
 	{
-		if (!FinalizePreparedNeuralStereoInputs(a_upscaling, a_results, a_batchArgs)) {
-			a_upscaling.RequestHistoryReset();
-			return {};
-		}
-		NeuralStereoEvaluationSummary summary{
-			.preparedEyeMask = BuildNeuralCenterEyeMask(
-				a_results, &Upscaling::NeuralCenterDispatchResult::prepared),
-			.successfulEyeMask = BuildNeuralCenterEyeMask(
-				a_results, &Upscaling::NeuralCenterDispatchResult::applied),
-		};
-		summary.bypassedEyeMask = BuildNeuralCenterEyeMask(
-			a_results, &Upscaling::NeuralCenterDispatchResult::bypassed);
 		const uint32_t evaluationEyeMask =
-			summary.preparedEyeMask & ~summary.bypassedEyeMask & 0b11u;
-		if (evaluationEyeMask && NeuralRendering::RunsBeforeDlss(a_upscaling.GetNeuralRenderingArrangement())) {
+			BuildNeuralCenterEyeMask(a_results, &Upscaling::NeuralCenterDispatchResult::prepared) &
+			~BuildNeuralCenterEyeMask(a_results, &Upscaling::NeuralCenterDispatchResult::bypassed) & 0b11u;
+		if (evaluationEyeMask && NeuralRendering::RunsBeforeDlss(a_arrangement)) {
 			bool fuseSelection = false, pressureResolutionEnabled = false;
 			for (uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye) {
 				if (evaluationEyeMask & (1u << eye)) {
@@ -46242,11 +46224,31 @@ namespace
 												 NeuralRendering::Renderer::Instance().ModelResolutionCeiling() < NeuralRendering::kMaximumModelResolutionPercent);
 			for (uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye) {
 				if ((evaluationEyeMask & (1u << eye)) && !a_upscaling.PrepareReducedResolutionNeuralOutputTarget(eye, a_batchArgs[eye], fuseSelection)) {
-					a_upscaling.RequestHistoryReset();
-					return {};
+					return false;
 				}
 			}
 		}
+		return true;
+	}
+
+	NeuralStereoEvaluationSummary EvaluateFinalizedNeuralStereo(
+		Upscaling& a_upscaling,
+		std::array<Upscaling::NeuralCenterDispatchResult, 2>& a_results,
+		const std::array<NeuralRendering::RendererApplyArgs, 2>& a_batchArgs,
+		bool a_batchedStereo,
+		Upscaling::NeuralStereoRouteRole a_routeRole,
+		NeuralRendering::PipelineArrangement a_arrangement)
+	{
+		NeuralStereoEvaluationSummary summary{
+			.preparedEyeMask = BuildNeuralCenterEyeMask(
+				a_results, &Upscaling::NeuralCenterDispatchResult::prepared),
+			.successfulEyeMask = BuildNeuralCenterEyeMask(
+				a_results, &Upscaling::NeuralCenterDispatchResult::applied),
+		};
+		summary.bypassedEyeMask = BuildNeuralCenterEyeMask(
+			a_results, &Upscaling::NeuralCenterDispatchResult::bypassed);
+		const uint32_t evaluationEyeMask =
+			summary.preparedEyeMask & ~summary.bypassedEyeMask & 0b11u;
 		std::array<bool, 2> evaluatedEyes{};
 		std::array<bool, 2> successfulEyes{};
 
@@ -46288,7 +46290,7 @@ namespace
 					succeeded,
 					a_batchArgs[eye].frameId);
 			}
-			if (applied && NeuralRendering::RunsBeforeDlss(a_upscaling.GetNeuralRenderingArrangement())) {
+			if (applied && NeuralRendering::RunsBeforeDlss(a_arrangement)) {
 				for (uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye) {
 					if ((evaluationEyeMask & (1u << eye)) == 0)
 						continue;
@@ -46344,6 +46346,125 @@ namespace
 			a_upscaling.RequestHistoryReset();
 		return summary;
 	}
+
+	NeuralStereoEvaluationSummary EvaluatePreparedNeuralStereo(
+		Upscaling& a_upscaling,
+		std::array<Upscaling::NeuralCenterDispatchResult, 2>& a_results,
+		std::array<NeuralRendering::RendererApplyArgs, 2>& a_batchArgs,
+		bool a_batchedStereo,
+		Upscaling::NeuralStereoRouteRole a_routeRole)
+	{
+		if (!FinalizePreparedNeuralStereoInputs(a_upscaling, a_results, a_batchArgs)) {
+			a_upscaling.RequestHistoryReset();
+			return {};
+		}
+		const auto arrangement = a_upscaling.GetNeuralRenderingArrangement();
+		if (!PrepareNeuralStereoOutputTargets(a_upscaling, a_results, a_batchArgs, arrangement)) {
+			a_upscaling.RequestHistoryReset();
+			return {};
+		}
+		return EvaluateFinalizedNeuralStereo(a_upscaling, a_results, a_batchArgs, a_batchedStereo, a_routeRole, arrangement);
+	}
+
+	class FinalizedFinalLdrNeuralInputs
+	{
+	public:
+		/** Freezes one validated eye set, its source identity, policy and inference regions. */
+		static std::optional<FinalizedFinalLdrNeuralInputs> Create(
+			Upscaling& a_upscaling,
+			std::array<Upscaling::NeuralCenterDispatchResult, 2>& a_results,
+			std::array<NeuralRendering::RendererApplyArgs, 2>& a_args,
+			bool a_batchedStereo, Upscaling::NeuralStereoRouteRole a_role)
+		{
+			const uint32_t expectedEyeMask = globals::game::isVR ? 0b11u : 0b01u;
+			if (BuildNeuralCenterEyeMask(a_results, &Upscaling::NeuralCenterDispatchResult::prepared) != expectedEyeMask)
+				return std::nullopt;
+			for (uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye) {
+				if (a_args[eye].insertionPoint != NeuralRendering::InsertionPoint::FinalLdrPreUi)
+					return std::nullopt;
+			}
+			auto settingsKey = a_args[0].characterVisualIsolation || a_args[1].characterVisualIsolation ?
+			                       std::optional<uint64_t>{ 0 } : std::nullopt;
+			if (!FinalizePreparedNeuralStereoInputs(a_upscaling, a_results, a_args, settingsKey ? &*settingsKey : nullptr))
+				return std::nullopt;
+			const auto arrangement = a_upscaling.GetNeuralRenderingArrangement();
+			if (!PrepareNeuralStereoOutputTargets(a_upscaling, a_results, a_args, arrangement)) {
+				a_upscaling.RequestHistoryReset();
+				return std::nullopt;
+			}
+			return FinalizedFinalLdrNeuralInputs(a_upscaling, a_results, std::move(a_args),
+				a_batchedStereo, a_role, expectedEyeMask, settingsKey, arrangement);
+		}
+
+		FinalizedFinalLdrNeuralInputs(const FinalizedFinalLdrNeuralInputs&) = delete;
+		FinalizedFinalLdrNeuralInputs& operator=(const FinalizedFinalLdrNeuralInputs&) = delete;
+		FinalizedFinalLdrNeuralInputs(FinalizedFinalLdrNeuralInputs&&) = default;
+		FinalizedFinalLdrNeuralInputs& operator=(FinalizedFinalLdrNeuralInputs&&) = default;
+
+		/** The rollback, conversion and evaluation consumers share these immutable arguments. */
+		[[nodiscard]] const auto& Args() const { return args_; }
+		/** Uses the empty-region decisions frozen during finalisation. */
+		[[nodiscard]] bool WillEvaluate() const { return bypassedEyeMask_ != expectedEyeMask_; }
+
+		/** Consumes this operation's validated plan without repeating character finalisation. */
+		NeuralStereoEvaluationSummary Evaluate()
+		{
+			// Moving the retained device/context transfers this plan's evaluation authority.
+			if (std::exchange(evaluated_, true) ||
+				!deviceOwner_ || !contextOwner_ ||
+				(globals::game::isVR ? 0b11u : 0b01u) != expectedEyeMask_ ||
+				!globals::state || globals::state->frameCount != args_[0].frameId ||
+				globals::d3d::device != args_[0].device || globals::d3d::context != args_[0].context ||
+				(settingsKey_ && (BuildNeuralRenderingSettingsKey(upscaling_->settings, false) != *settingsKey_ ||
+					upscaling_->settings.neuralCharacterCropMode != characterCropMode_)) ||
+				BuildNeuralCenterEyeMask(*results_, &Upscaling::NeuralCenterDispatchResult::prepared) != expectedEyeMask_ ||
+				BuildNeuralCenterEyeMask(*results_, &Upscaling::NeuralCenterDispatchResult::bypassed) != bypassedEyeMask_) {
+				upscaling_->RequestHistoryReset();
+				return {};
+			}
+			return EvaluateFinalizedNeuralStereo(*upscaling_, *results_, args_, batchedStereo_, role_, arrangement_);
+		}
+
+	private:
+		FinalizedFinalLdrNeuralInputs(Upscaling& a_upscaling,
+			std::array<Upscaling::NeuralCenterDispatchResult, 2>& a_results,
+			std::array<NeuralRendering::RendererApplyArgs, 2>&& a_args,
+			bool a_batchedStereo, Upscaling::NeuralStereoRouteRole a_role,
+			uint32_t a_expectedEyeMask, std::optional<uint64_t> a_settingsKey,
+			NeuralRendering::PipelineArrangement a_arrangement) :
+			upscaling_(&a_upscaling), results_(&a_results), args_(std::move(a_args)),
+			settingsKey_(a_settingsKey), characterCropMode_(a_upscaling.settings.neuralCharacterCropMode),
+			expectedEyeMask_(a_expectedEyeMask),
+			bypassedEyeMask_(BuildNeuralCenterEyeMask(a_results, &Upscaling::NeuralCenterDispatchResult::bypassed)),
+			batchedStereo_(a_batchedStereo), role_(a_role), arrangement_(a_arrangement)
+		{
+			deviceOwner_.copy_from(args_[0].device);
+			contextOwner_.copy_from(args_[0].context);
+			for (uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye) {
+				resourceOwners_[eye][0].copy_from(args_[eye].colorInput);
+				resourceOwners_[eye][1].copy_from(args_[eye].depthGuide);
+				resourceOwners_[eye][2].copy_from(args_[eye].motionVectors);
+				resourceOwners_[eye][3].copy_from(args_[eye].colorOutput);
+				depthViewOwners_[eye].copy_from(args_[eye].depthGuideSRV);
+			}
+		}
+
+		Upscaling* upscaling_;
+		std::array<Upscaling::NeuralCenterDispatchResult, 2>* results_;
+		std::array<NeuralRendering::RendererApplyArgs, 2> args_;
+		winrt::com_ptr<ID3D11Device> deviceOwner_;
+		winrt::com_ptr<ID3D11DeviceContext> contextOwner_;
+		std::array<std::array<winrt::com_ptr<ID3D11Resource>, 4>, 2> resourceOwners_;
+		std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 2> depthViewOwners_;
+		// Mask preparation excludes crop mode from its key, so retain that control separately.
+		std::optional<uint64_t> settingsKey_;
+		uint32_t characterCropMode_;
+		uint32_t expectedEyeMask_, bypassedEyeMask_;
+		bool batchedStereo_;
+		Upscaling::NeuralStereoRouteRole role_;
+		NeuralRendering::PipelineArrangement arrangement_;
+		bool evaluated_ = false;
+	};
 }
 
 bool Upscaling::PrepareFlatReducedResolutionNeuralInput(ID3D11Resource* color, ID3D11Resource* depth,
@@ -46758,9 +46879,10 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 		CS_GPU_PASS("Upscaling::NeuralFinalLdrPreUi");
 		std::array<NeuralCenterDispatchResult, 2> neuralResults{};
 		std::array<NeuralRendering::RendererApplyArgs, 2> neuralArgs{};
+		std::optional<FinalizedFinalLdrNeuralInputs> finalizedInputs;
 		auto resolveAbortedCharacterPreparations = ScopeExit([&]() noexcept {
 			ResolveAbortedCharacterFeature18Preparations(
-				neuralResults, neuralArgs);
+				neuralResults, finalizedInputs ? finalizedInputs->Args() : neuralArgs);
 		});
 		const bool directCommit = settings.neuralRenderingDirectCommit;
 		const bool isolateCharacterOutput =
@@ -46862,15 +46984,15 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 		}
 		lateStage = LateStage::Evaluation;
 		lateEye = 2u;
-		if (!FinalizePreparedNeuralStereoInputs(*this, neuralResults, neuralArgs))
+		finalizedInputs = FinalizedFinalLdrNeuralInputs::Create(*this, neuralResults, neuralArgs,
+			settings.neuralRenderingBatchedStereo, a_role);
+		if (!finalizedInputs)
 			return false;
+		const auto& finalizedArgs = finalizedInputs->Args();
 		for (std::uint32_t eye = 0; eye < eyeCount; ++eye)
-			rollbackSubrects[eye] = neuralArgs[eye].computeSubrect;
-		if (!WillEvaluatePreparedNeuralStereo(neuralResults)) {
-			const auto evaluation = EvaluatePreparedNeuralStereo(
-				*this, neuralResults, neuralArgs,
-				settings.neuralRenderingBatchedStereo,
-				a_role);
+			rollbackSubrects[eye] = finalizedArgs[eye].computeSubrect;
+		if (!finalizedInputs->WillEvaluate()) {
+			const auto evaluation = finalizedInputs->Evaluate();
 			a_result.preparedEyeMask = evaluation.preparedEyeMask;
 			a_result.bypassedEyeMask = evaluation.bypassedEyeMask;
 			a_result.bypassedNoCharacters = evaluation.pairBypassed;
@@ -46883,10 +47005,10 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				continue;
 			const auto& target = a_targets[eye];
 			const auto& rect = foveatedRectCache.rects[eye];
-			const auto& computeSubrect = neuralArgs[eye].computeSubrect;
+			const auto& computeSubrect = finalizedArgs[eye].computeSubrect;
 			if (!computeSubrect.Fits(rect.outputWidth, rect.outputHeight))
 				return false;
-			CS_GPU_DETAIL_PASS("NeuralRendering::InputPreparation", neuralArgs[eye].executionContext.inputPreparation);
+			CS_GPU_DETAIL_PASS("NeuralRendering::InputPreparation", finalizedArgs[eye].executionContext.inputPreparation);
 			const D3D11_BOX sourceBox{
 				target.baseOffsetX + rect.outputOffsetX + computeSubrect.baseX,
 				rect.outputOffsetY + computeSubrect.baseY,
@@ -46918,10 +47040,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 
 		lateStage = LateStage::Evaluation;
 		lateEye = 2u;
-		const auto evaluation = EvaluatePreparedNeuralStereo(
-			*this, neuralResults, neuralArgs,
-			settings.neuralRenderingBatchedStereo,
-			a_role);
+		const auto evaluation = finalizedInputs->Evaluate();
 		a_result.preparedEyeMask = evaluation.preparedEyeMask;
 		a_result.attemptedEyeMask = BuildNeuralCenterEyeMask(
 			neuralResults, &NeuralCenterDispatchResult::attempted);
@@ -46940,7 +47059,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			if (neuralResults[eye].bypassed)
 				continue;
 			if (!CommitSubmitNeuralFloatOutput(
-					eye, directCommit, neuralArgs[eye].computeSubrect)) {
+					eye, directCommit, finalizedArgs[eye].computeSubrect)) {
 				return false;
 			}
 		}
@@ -46982,7 +47101,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			auto blendVisibleOutput =
 				foveatedRectCache.plan.eyes[eye].output;
 			blendVisibleOutput = RestrictVisibleOutputToComputeSubrect(
-				blendVisibleOutput, rect, neuralArgs[eye].computeSubrect);
+				blendVisibleOutput, rect, finalizedArgs[eye].computeSubrect);
 			if (!blendVisibleOutput.IsValid()) {
 				restoreCommittedCenters();
 				RequestHistoryReset();

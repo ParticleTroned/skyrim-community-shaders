@@ -50,3 +50,9 @@ extract("\tuint32_t BuildNeuralCenterEyeMask(" "\n\t}"
     neural_eye_mask_under_test.h)
 extract("\tNeuralStereoEvaluationSummary EvaluatePreparedNeuralStereo(" "\n\t}"
     neural_empty_dispatch_under_test.h)
+extract("\tbool PrepareNeuralStereoOutputTargets(" "\n\t}"
+    neural_stereo_output_targets_under_test.h)
+extract("\tNeuralStereoEvaluationSummary EvaluateFinalizedNeuralStereo(" "\n\t}"
+    neural_finalized_dispatch_under_test.h)
+extract("\tclass FinalizedFinalLdrNeuralInputs\n" "\n\t};"
+    neural_final_ldr_plan_under_test.h)

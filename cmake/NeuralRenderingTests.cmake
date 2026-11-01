@@ -392,6 +392,9 @@ set(_neural_selection_headers
     "${_neural_selection_test_dir}/neural_disposition_under_test.h"
     "${_neural_selection_test_dir}/neural_eye_mask_under_test.h"
     "${_neural_selection_test_dir}/neural_empty_dispatch_under_test.h"
+    "${_neural_selection_test_dir}/neural_stereo_output_targets_under_test.h"
+    "${_neural_selection_test_dir}/neural_finalized_dispatch_under_test.h"
+    "${_neural_selection_test_dir}/neural_final_ldr_plan_under_test.h"
     "${_neural_selection_test_dir}/neural_preparation_evidence_under_test.h"
     "${_neural_selection_test_dir}/neural_prepared_result_under_test.h"
     "${_neural_selection_test_dir}/neural_prepared_selection_under_test.h")

@@ -218,7 +218,7 @@ class MemoryRecoveryContracts(unittest.TestCase):
                           "bool Renderer::State::RetryWorkingResolutionLocked(",
                           "void Renderer::State::FinishMemoryRecoveryLocked("):
             self.assertIn("PublishModelResolutionCeilingLocked()", body(RENDERER, signature))
-        evaluation = body(UPSCALING, "NeuralStereoEvaluationSummary EvaluatePreparedNeuralStereo(")
+        evaluation = body(UPSCALING, "bool PrepareNeuralStereoOutputTargets(")
         self.assertEqual(evaluation.count("ModelResolutionCeiling()"), 1)
         self.assertIn("pressureResolutionEnabled &&", evaluation)
         self.assertNotIn("modelResolutionPercent =", evaluation)

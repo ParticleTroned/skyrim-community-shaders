@@ -729,7 +729,7 @@ foreach(_final_ldr_float_contract IN ITEMS
     [[DispatchSubmitStageColorRegion( neuralFinalLdrColorIn[eye]->srv.get(), submitNeuralFloatColorIn[eye]->uav.get()]]
     [[args.colorInput = submitNeuralFloatColorIn[eye]->resource.get()]]
     [[args.colorOutput = GetSubmitNeuralFloatEvaluationOutput(eye, directCommit)]]
-    [[CommitSubmitNeuralFloatOutput( eye, directCommit, neuralArgs[eye].computeSubrect)]]
+    [[CommitSubmitNeuralFloatOutput( eye, directCommit, finalizedArgs[eye].computeSubrect)]]
     [[DispatchFoveatedBlendPass( submitNeuralFloatColorOut[eye]->srv.get()]]
     [[uint32_t finalLdrColorMode = 1u]]
     [[switch (targetUavDescs[0].Format)]]

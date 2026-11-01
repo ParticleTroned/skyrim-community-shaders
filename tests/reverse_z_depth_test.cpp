@@ -505,42 +505,60 @@ RWBuffer<uint> Output : register(u0);
 	}
 	void TestSceneVertexShaders()
 	{
-		for (const auto* path : { L"package/Shaders/Effect.hlsl", L"package/Shaders/Lighting.hlsl" }) {
-			for (bool vr : { false, true }) {
-				for (bool reversed : { true, false }) {
-					for (bool skinned : { false, true }) {
-						for (bool motionVectors : { false, true }) {
-							std::vector<D3D_SHADER_MACRO> defines{ { "VSHADER", nullptr }, { "NORMALS", nullptr } };
-							if (vr)
-								defines.push_back({ "VR", nullptr });
-							if (reversed)
-								defines.push_back({ "REVERSE_Z", nullptr });
-							if (skinned)
-								defines.push_back({ "SKINNED", nullptr });
-							if (motionVectors)
-								defines.push_back({ "MOTIONVECTORS_NORMALS", nullptr });
-							defines.push_back({ nullptr, nullptr });
-							PackageIncludes includes{ "package/Shaders" };
-							winrt::com_ptr<ID3DBlob> code, errors;
-							const auto result = D3DCompileFromFile(path, defines.data(), &includes, "main", "vs_5_0",
-								D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
-								0, code.put(), errors.put());
-							if (errors)
-								std::cerr << static_cast<const char*>(errors->GetBufferPointer());
-							Require(SUCCEEDED(result), "Production scene vertex shader failed to compile");
-							winrt::com_ptr<ID3D11ShaderReflection> reflection;
-							Require(SUCCEEDED(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.put()))), "Scene shader reflection failed");
-							auto* frame = reflection->GetConstantBufferByName("VS_PerFrame");
-							for (const auto& [name, offset] : { std::pair{ "Proj", vr ? 128u : 64u },
-									 std::pair{ "ViewProj", vr ? 256u : 128u } }) {
-								D3D11_SHADER_VARIABLE_DESC variable{};
-								Require(SUCCEEDED(frame->GetVariableByName(name)->GetDesc(&variable)) && variable.StartOffset == offset,
-									"Scene vertex frame constants changed their native offsets");
-							}
-							if (skinned) {
-								D3D11_SHADER_VARIABLE_DESC pivot{};
-								Require(SUCCEEDED(frame->GetVariableByName("BonesPivot")->GetDesc(&pivot)) && pivot.StartOffset == (vr ? 1280u : 640u),
-									"Scene vertex skinning pivot changed its native offset");
+		for (const auto& [path, furVariants] : { std::pair{ L"package/Shaders/Effect.hlsl", 1 }, std::pair{ L"package/Shaders/Lighting.hlsl", 3 } }) {
+			for (int furVariant = 0; furVariant < furVariants; ++furVariant) {
+				for (bool vr : { false, true }) {
+					for (bool reversed : { true, false }) {
+						for (bool skinned : { false, true }) {
+							for (bool motionVectors : { false, true }) {
+								std::vector<D3D_SHADER_MACRO> defines{ { "VSHADER", nullptr }, { "NORMALS", nullptr } };
+								if (vr)
+									defines.push_back({ "VR", nullptr });
+								if (reversed)
+									defines.push_back({ "REVERSE_Z", nullptr });
+								if (skinned)
+									defines.push_back({ "SKINNED", nullptr });
+								if (motionVectors)
+									defines.push_back({ "MOTIONVECTORS_NORMALS", nullptr });
+								if (furVariants > 1)
+									defines.push_back({ "SNOW_COVER", nullptr });
+								if (furVariant > 0)
+									defines.push_back({ "FUR_SHELLS", nullptr });
+								if (furVariant > 1)
+									defines.push_back({ "MODELSPACENORMALS", nullptr });
+								defines.push_back({ nullptr, nullptr });
+								PackageIncludes includes{ "package/Shaders", "features/Fur Shells/Shaders" };
+								winrt::com_ptr<ID3DBlob> code, errors;
+								const auto result = D3DCompileFromFile(path, defines.data(), &includes, "main", "vs_5_0",
+									D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+									0, code.put(), errors.put());
+								if (errors)
+									std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+								Require(SUCCEEDED(result), "Production scene vertex shader failed to compile");
+								winrt::com_ptr<ID3D11ShaderReflection> reflection;
+								Require(SUCCEEDED(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.put()))), "Scene shader reflection failed");
+								D3D11_SHADER_DESC shaderDesc{};
+								Require(SUCCEEDED(reflection->GetDesc(&shaderDesc)), "Scene shader resource reflection failed");
+								UINT frameBindings = 0;
+								for (UINT resource = 0; resource < shaderDesc.BoundResources; ++resource) {
+									D3D11_SHADER_INPUT_BIND_DESC binding{};
+									Require(SUCCEEDED(reflection->GetResourceBindingDesc(resource, &binding)), "Scene shader binding reflection failed");
+									if (binding.Type == D3D_SIT_CBUFFER && binding.BindPoint == 12)
+										++frameBindings;
+								}
+								Require(frameBindings == 1, "Scene vertex shader must have exactly one active b12 buffer");
+								auto* frame = reflection->GetConstantBufferByName("VS_PerFrame");
+								for (const auto& [name, offset] : { std::pair{ "Proj", vr ? 128u : 64u },
+										 std::pair{ "ViewProj", vr ? 256u : 128u } }) {
+									D3D11_SHADER_VARIABLE_DESC variable{};
+									Require(SUCCEEDED(frame->GetVariableByName(name)->GetDesc(&variable)) && variable.StartOffset == offset,
+										"Scene vertex frame constants changed their native offsets");
+								}
+								if (skinned) {
+									D3D11_SHADER_VARIABLE_DESC pivot{};
+									Require(SUCCEEDED(frame->GetVariableByName("BonesPivot")->GetDesc(&pivot)) && pivot.StartOffset == (vr ? 1280u : 640u),
+										"Scene vertex skinning pivot changed its native offset");
+								}
 							}
 						}
 					}

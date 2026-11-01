@@ -45,6 +45,13 @@ All helper filenames retain the runtime's `.cso` suffix, including pixel and
 vertex helpers; validators use the recorded profile to check their DXBC stage.
 Do not relabel these files or substitute the engine descriptor-key scheme.
 
+Both bundled profiles target the default Reverse-Z renderer. Engine shaders
+use the feature factory's empty `REVERSE_Z` value, except Utility shaders,
+which use `REVERSE_Z=1`. Standalone helpers also use `REVERSE_Z=1`; the VR
+inventory includes the native occluder and hidden-area-mask adapters. These values must match
+the runtime exactly. A different boot depth convention uses separate cache
+identities and compiles missing entries on demand.
+
 These entries increase offline compilation, package size and cache indexing.
 They avoid matching runtime compilations; they do not change shader rendering
 work or guarantee a frame-rate improvement. Existing archives without a
@@ -146,8 +153,9 @@ Trace/debug logging selects
 the separate developer cache, so release-cache reuse must be tested at Info
 level or above.
 
-The shipped cache inventory does **not** cover feature-specific shaders
-compiled through `Util::CompileShader` or direct `D3DCompile*` paths.
+The shipped cache covers the declared `Util::CompileShader` helper inventory
+above. Other feature-specific requests and direct `D3DCompile*` paths remain
+outside that inventory.
 `Util::CompileShader` persists successful runtime compilations for later
 reuse, using the existing optimized/developer managed lanes or the loose
 cache when no managed layout is installed. Its identity includes the source
@@ -169,8 +177,9 @@ For grass, this separate path covers `GrassCullingCS`, its DevBench
 and `TestBoundsCS`; DevBench additionally compiles its clipping/refinement
 A/B, polygon-baseline and diagnostic variants. Production excludes these
 DevBench variants. Setup warms these shaders in memory; `Util::CompileShader` callers can
-reuse their runtime-generated records on later launches, but the offline
-managed cache builder does not package them. Keep their HLSL and includes in the
+reuse their runtime-generated records on later launches. The offline builder
+packages the default `GrassCullingCS` request; the remaining grass and Hi-Z
+helpers stay on demand. Keep their HLSL and includes in the
 AIO and validate them through `GrassBatchShader` and the Hi-Z shader suite.
 The existing standalone upscaling and foveated validation inventories likewise
 prove compilation, not inclusion in the managed cache pack.

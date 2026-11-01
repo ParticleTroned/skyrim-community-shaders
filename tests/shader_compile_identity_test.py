@@ -55,6 +55,35 @@ class ShaderCompileIdentityTests(unittest.TestCase):
         self.assertFalse(any(task["source"].startswith("DynamicCubemaps/") for task in disabled))
         self.assertFalse(any(task["source"].startswith("ScreenSpaceGI/") for task in disabled))
 
+    def test_standalone_depth_conventions_have_disjoint_cache_keys(self) -> None:
+        for runtime in ("SE", "VR"):
+            standard = standalone.resolve_tasks(runtime, {"ReverseZ": False}, "test-abi")
+            reversed_tasks = standalone.resolve_tasks(runtime, {"ReverseZ": True}, "test-abi")
+            self.assertTrue(standard.keys().isdisjoint(reversed_tasks))
+            self.assertTrue(all(("REVERSE_Z", "1") in task["defines"] for task in reversed_tasks.values()))
+            self.assertFalse(any(name == "REVERSE_Z" for task in standard.values() for name, _ in task["defines"]))
+            adapters = {task["source"]: task["profile"] for task in reversed_tasks.values() if task["source"].startswith("ReverseZ/")}
+            self.assertEqual(adapters, {
+                "ReverseZ/OccluderDepthDownscalePS.hlsl": "ps_5_0",
+                "ReverseZ/OccluderBoxVS.hlsl": "vs_5_0",
+                "ReverseZ/HiddenAreaMeshVS.hlsl": "vs_5_0",
+            } if runtime == "VR" else {})
+
+    def test_engine_depth_macros_match_runtime_factories(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            for runtime, name in (("SE", "shader-validation.yaml"), ("VR", "shader-validation-vr.yaml")):
+                for enabled in (True, False):
+                    profile = BUILDER.SHIPPED_CACHE_PROFILE
+                    filtered = BUILDER.filter_profile_defines(
+                        REPO / ".github/configs" / name,
+                        Path(temporary) / f"{runtime}-{enabled}.yaml", yaml, profile,
+                        feature_states={"ReverseZ": enabled},
+                    )
+                    for source, _, _, defines in parse_shader_configs(str(filtered)):
+                        depth = [value for value in defines if value.partition("=")[0] == "REVERSE_Z"]
+                        expected = ["REVERSE_Z=1" if source == "Utility.hlsl" else "REVERSE_Z="] if enabled else []
+                        self.assertEqual(depth, expected, source)
+
     def test_standalone_pack_paths_fail_closed(self) -> None:
         path = "Standalone/" + "a" * 32 + ".cso"
         for source in ("../evil.hlsl", "/evil.hlsl", "C:/evil.hlsl", "folder/../evil.hlsl", "folder\\evil.hlsl", "./evil.hlsl"):

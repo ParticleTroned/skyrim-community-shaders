@@ -75,8 +75,17 @@ def release_requests(runtime: str, features: dict[str, bool]) -> list[dict]:
         if runtime == "VR":
             macros.append(("VR", ""))
         macros.extend(((STAGES[profile][0], ""), ("WINPC", ""), ("DX11", "")))
+        if features.get("ReverseZ", False):
+            macros.append(("REVERSE_Z", "1"))
         requests.append({"source": validate_source(source), "profile": profile, "entry": entry, "defines": macros})
 
+    if runtime == "VR":
+        for source, profile in (
+            ("ReverseZ/OccluderDepthDownscalePS.hlsl", "ps_5_0"),
+            ("ReverseZ/OccluderBoxVS.hlsl", "vs_5_0"),
+            ("ReverseZ/HiddenAreaMeshVS.hlsl", "vs_5_0"),
+        ):
+            add(source, feature="ReverseZ", profile=profile)
     for source in ("CopyShadowDataCS.hlsl", "Common/DepthPyramidBaseCS.hlsl", "Common/DepthPyramidSPD.hlsl"):
         add(source)
     add("Common/DepthPyramidBaseCS.hlsl", [("BASE_REDUCTION", "4")])

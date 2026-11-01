@@ -1,0 +1,45 @@
+name: Repair water work branches
+
+on:
+  push:
+    branches: [build/os-water-preparation-20261101]
+    paths: [.github/workflows/water-repair-branches.yaml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: water-prepare-branches
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.repository == 'ParticleTroned/skyrim-community-shaders' && github.ref == 'refs/heads/build/os-water-preparation-20261101'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout reviewed repair instructions
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - name: Checkout failed integration in the fork
+        uses: actions/checkout@v6
+        with:
+          repository: ParticleTroned/skyrim-community-shaders
+          ref: d0840e116ebc4071834177497152cf865af63985
+          path: source
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Apply, verify and publish repair commits
+        run: python control/.water-port/publish_repairs.py
+      - name: Upload repair patches and verified commit manifest
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: water-ci-repairs
+          path: water-ci-repairs/
+          if-no-files-found: warn
+          retention-days: 30

@@ -98,7 +98,7 @@ namespace
 		Require(reason(input) == InvalidGeometry);
 		input.peripheralCompression = true;
 		input.unpackedModel = source;
-		Require(reason(input) == InvalidGeometry);
+		Require(reason(input) == Eligible);
 		input.unpackedModel = { source.width + 1, source.height / 2 };
 		Require(reason(input) == InvalidGeometry);
 		input.effectivePercent = 50;
@@ -106,6 +106,36 @@ namespace
 		Require(reason(input) == InvalidGeometry);
 		input.unpackedModel = {};
 		Require(reason(input) == InvalidGeometry);
+	}
+
+	void CheckAsymmetricCompression()
+	{
+		using namespace NeuralRendering;
+		const auto plan = [](UpscalingDLSS::Extent source, UpscalingDLSS::Extent guides, unsigned percent, unsigned compression) {
+			const auto crop = UpscalingDLSS::ViewportCrop::Identity(guides.width, guides.height, source.width, source.height);
+			const auto geometry = BuildModelResolutionGeometry(crop, source, { 0, 0, source.width, source.height }, percent, guides);
+			Require(geometry.has_value());
+			return BuildPeripheralCompressionPlan(*geometry, guides, crop, percent, { .requested = true, .compressionPercent = compression });
+		};
+		for (const auto percent : { 39u, 100u }) {
+			const std::array<UpscalingDLSS::Extent, 2> sources = percent == 39 ?
+			                                                         std::array<UpscalingDLSS::Extent, 2>{ { { 307, 202 }, { 16282, 3519 } } } :
+			                                                         std::array<UpscalingDLSS::Extent, 2>{ { { 2, 2 }, { 1921, 1081 } } };
+			const auto secondGuides = percent == 39 ? UpscalingDLSS::Extent{ 8141, 1759 } : sources[1];
+			const auto compression = percent == 39 ? 61u : 1u;
+			std::array plans{ plan(sources[0], sources[0], percent, compression), plan(sources[1], secondGuides, percent, compression) };
+			ReconcilePeripheralCompression(plans);
+			Require(plans[0].Active() && plans[1].Active());
+			Require(plans[0].candidatePixels == plans[0].baselinePixels && plans[1].candidatePixels < plans[1].baselinePixels);
+			for (auto route : { InsertionPoint::UpscaledCenter, InsertionPoint::FinalLdrPreUi }) {
+				std::array<GuidedReconstructionInput, 2> inputs{};
+				for (unsigned eye = 0; eye < inputs.size(); ++eye)
+					inputs[eye] = { true, percent, sources[eye], plans[eye].model, route, true, plans[eye].Active() };
+				Require(SelectGuidedReconstruction(inputs).reason == GuidedReconstructionReason::Eligible);
+				inputs[1].matchedReferenceDomain = false;
+				Require(SelectGuidedReconstruction(inputs).reason == GuidedReconstructionReason::UnsupportedDomain);
+			}
+		}
 	}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -175,6 +205,7 @@ int main()
 {
 	CheckPolicy();
 	CheckCompressionPolicy();
+	CheckAsymmetricCompression();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	CheckComparison();
 #endif

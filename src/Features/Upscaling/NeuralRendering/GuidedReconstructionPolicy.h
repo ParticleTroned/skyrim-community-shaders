@@ -73,12 +73,12 @@ namespace NeuralRendering
 			if (!IsValidModelResolutionPercent(input.effectivePercent) || !input.target.IsValid() || !input.unpackedModel.IsValid())
 				return basic(InvalidGeometry);
 			const auto ordinaryModel = BuildModelResolutionExtent(input.target.width, input.target.height, input.effectivePercent);
-			// Only an admitted compression plan permits a grid smaller than the uniform NR scale.
+			// An admitted stereo compression plan may keep one eye at its ordinary grid size.
 			if (input.peripheralCompression ?
-					(input.unpackedModel.width > ordinaryModel.width || input.unpackedModel.height > ordinaryModel.height || input.unpackedModel == ordinaryModel) :
+					(input.unpackedModel.width > ordinaryModel.width || input.unpackedModel.height > ordinaryModel.height) :
 					input.unpackedModel != ordinaryModel)
 				return basic(InvalidGeometry);
-			if (input.unpackedModel.width >= input.target.width || input.unpackedModel.height >= input.target.height)
+			if (!input.peripheralCompression && (input.unpackedModel.width >= input.target.width || input.unpackedModel.height >= input.target.height))
 				return basic(NoReduction);
 			if (input.insertion != InsertionPoint::UpscaledCenter && input.insertion != InsertionPoint::FinalLdrPreUi)
 				return basic(UnsupportedRoute);

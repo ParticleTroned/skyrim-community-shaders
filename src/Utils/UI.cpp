@@ -10,6 +10,7 @@
 #include "Menu/ThemeManager.h"
 #include "PerfUtils.h"
 #include "ShaderCache.h"
+#include "StringUtils.h"
 #include "WeatherManager.h"
 
 #ifndef DIRECTINPUT_VERSION
@@ -1431,12 +1432,8 @@ namespace Util
 		if (searchQuery.empty())
 			return true;
 
-		std::string lowerText = text;
-		std::string lowerQuery = searchQuery;
-
-		// Convert all to lowercase for case-insensitive search
-		std::transform(lowerText.begin(), lowerText.end(), lowerText.begin(), ::tolower);
-		std::transform(lowerQuery.begin(), lowerQuery.end(), lowerQuery.begin(), ::tolower);
+		const auto lowerText = Util::ToLowerAscii(text);
+		const auto lowerQuery = Util::ToLowerAscii(searchQuery);
 
 		return lowerText.find(lowerQuery) != std::string::npos;
 	}

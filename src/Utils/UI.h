@@ -15,6 +15,7 @@
 #include "../Menu/ThemeManager.h"
 #include "Utils/Input.h"
 #include "Utils/ShaderCacheClearScope.h"
+#include "Utils/StringUtils.h"
 
 // Forward declarations
 struct ID3D11Device;
@@ -964,8 +965,7 @@ namespace Util
 		if (currentFilterText.empty()) {
 			filteredRows = originalRows;
 		} else {
-			std::string filterLower = currentFilterText;
-			std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
+			const auto filterLower = Util::ToLowerAscii(currentFilterText);
 
 			for (const auto& row : originalRows) {
 				bool passesFilter = false;
@@ -973,8 +973,7 @@ namespace Util
 
 				if (searchColumn == 0) {  // All Columns
 					for (const auto& field : filterableFields) {
-						std::string fieldLower = field;
-						std::transform(fieldLower.begin(), fieldLower.end(), fieldLower.begin(), ::tolower);
+						const auto fieldLower = Util::ToLowerAscii(field);
 						if (fieldLower.find(filterLower) != std::string::npos) {
 							passesFilter = true;
 							break;
@@ -983,8 +982,7 @@ namespace Util
 				} else {  // Specific column (searchColumn is 1-indexed for columns)
 					int columnIndex = searchColumn - 1;
 					if (columnIndex >= 0 && static_cast<size_t>(columnIndex) < filterableFields.size()) {
-						std::string fieldLower = filterableFields[columnIndex];
-						std::transform(fieldLower.begin(), fieldLower.end(), fieldLower.begin(), ::tolower);
+						const auto fieldLower = Util::ToLowerAscii(filterableFields[columnIndex]);
 						passesFilter = fieldLower.find(filterLower) != std::string::npos;
 					}
 				}
@@ -1474,8 +1472,7 @@ namespace Util
 			}
 
 			std::vector<T> filteredRows;
-			std::string filterLower = filterText;
-			std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
+			const auto filterLower = Util::ToLowerAscii(filterText);
 
 			for (const auto& row : originalRows) {
 				bool passesFilter = false;
@@ -1483,8 +1480,7 @@ namespace Util
 
 				if (searchColumn == 0) {  // All Columns
 					for (const auto& field : filterableFields) {
-						std::string fieldLower = field;
-						std::transform(fieldLower.begin(), fieldLower.end(), fieldLower.begin(), ::tolower);
+						const auto fieldLower = Util::ToLowerAscii(field);
 						if (fieldLower.find(filterLower) != std::string::npos) {
 							passesFilter = true;
 							break;
@@ -1493,8 +1489,7 @@ namespace Util
 				} else {  // Specific column (searchColumn is 1-indexed for columns)
 					int columnIndex = searchColumn - 1;
 					if (columnIndex >= 0 && static_cast<size_t>(columnIndex) < filterableFields.size()) {
-						std::string fieldLower = filterableFields[columnIndex];
-						std::transform(fieldLower.begin(), fieldLower.end(), fieldLower.begin(), ::tolower);
+						const auto fieldLower = Util::ToLowerAscii(filterableFields[columnIndex]);
 						passesFilter = fieldLower.find(filterLower) != std::string::npos;
 					}
 				}

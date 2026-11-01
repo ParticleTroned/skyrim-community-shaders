@@ -2,6 +2,7 @@
 
 #include "../Globals.h"
 #include "../Utils/FileSystem.h"
+#include "../Utils/StringUtils.h"
 #include "ThemeManager.h"
 
 #include <algorithm>
@@ -488,8 +489,7 @@ namespace Util
 						continue;
 					}
 
-					auto extension = entry.path().extension().string();
-					std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+					const auto extension = Util::ToLowerAscii(entry.path().extension().string());
 					if (extension != ".ttf" && extension != ".otf") {
 						continue;
 					}
@@ -608,8 +608,7 @@ namespace Util
 			}
 
 			auto isValidExtension = [](const std::filesystem::path& candidate) {
-				auto extension = candidate.extension().string();
-				std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+				const auto extension = Util::ToLowerAscii(candidate.extension().string());
 				return extension == ".ttf" || extension == ".otf";
 			};
 

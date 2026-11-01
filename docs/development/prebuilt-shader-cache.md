@@ -15,7 +15,8 @@ older builds when `CSX.log` is absent, or read an explicit `-LogFile` path.
 ## Purpose and scope
 
 The cache distributes compiled DXBC for CSX' engine-managed
-pixel, vertex, and compute shader permutations. It is not a GPU-driver cache,
+pixel, vertex, and compute shader permutations and standalone helper shaders.
+It is not a GPU-driver cache,
 so it is not tied to a particular GPU vendor. It is tied to all of the
 following:
 
@@ -25,6 +26,30 @@ following:
 -   the shipped shader source and recursive includes;
 -   compiler flags and the resolved stage, feature, descriptor, and custom defines;
 -   the permutation inventory in the matching validation YAML.
+
+`tools/standalone_shader_cache.py` adds helper requests using the existing
+runtime keys, compiler flags and macro serialization. Its inventory covers
+Dynamic Cubemaps, lighting, grass collision/culling, skylighting, terrain,
+subsurface scattering, volumetric shadows, sharpening, deferred composition and shared
+depth/menu helpers. SSGI includes all three resolutions and AO/GI resource
+modes with each runtime's default temporal/adaptive policy. Screen-space
+shadow coverage includes VR per-eye sample counts 1–128 and desktop counts
+8–256 in steps of eight. Custom settings outside this inventory, experimental
+SSGI variants, custom defines and developer shaders compile on demand.
+
+The builder derives active features from each cache's `Info.ini`, verifies
+source/include content, and puts the additional records in the existing
+managed pack. `standaloneInputs` in `PackManifest.json` records their source
+and shader profile for offline compatibility and bytecode-stage validation.
+All helper filenames retain the runtime's `.cso` suffix, including pixel and
+vertex helpers; validators use the recorded profile to check their DXBC stage.
+Do not relabel these files or substitute the engine descriptor-key scheme.
+
+These entries increase offline compilation, package size and cache indexing.
+They avoid matching runtime compilations; they do not change shader rendering
+work or guarantee a frame-rate improvement. Existing archives without a
+standalone inventory remain supported. Measure archive size, cache load cost
+and first-use behavior before release.
 
 The default `shipped` release profile:
 

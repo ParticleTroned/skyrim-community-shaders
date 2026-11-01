@@ -57,6 +57,7 @@ from shader_cache_manifest import (
     prepare_fxc_defines,
 )
 from shader_bytecode import validate_dxbc
+import standalone_shader_cache
 
 REPO = Path(__file__).resolve().parent.parent
 CACHE_DIRECTORY = "ShaderCache"
@@ -738,10 +739,11 @@ def shader_pack_record_identity(
     relative: str,
     content_contract: str,
     registrations: list[dict[str, Any]],
+    source: str | None = None,
 ) -> dict[str, str]:
     family = relative.split("/", 1)[0].lower()
     applicable = applicable_compatibility_registrations(
-        registrations, family, f"Shaders/{family}.hlsl"
+        registrations, family, f"Shaders/{source}" if source else f"Shaders/{family}.hlsl"
     )
     requirement = canonical_compatibility_requirement_set(applicable)
     domain = canonical_compatibility_domain_set(applicable)
@@ -778,7 +780,7 @@ def shader_pack_record_identity(
 class PackagedCompatibilityInventory:
     """Verify exported record identities and the coverage of declared variants."""
 
-    def __init__(self, source_root: Path, declared_variants: list[str]) -> None:
+    def __init__(self, source_root: Path, declared_variants: list[str], standalone_inputs: dict | None = None) -> None:
         variants = compatibility_variant_manifest(source_root)
         if (
             not isinstance(declared_variants, list)
@@ -787,6 +789,7 @@ class PackagedCompatibilityInventory:
         ):
             raise SystemExit("packaged cache declares an unknown compatibility variant")
         self.variants = {name: variants[name] for name in declared_variants}
+        self.standalone_inputs = standalone_shader_cache.validate_pack_inputs(standalone_inputs if standalone_inputs is not None else {})
         self.records: dict[str, dict[str, tuple[str, str, str | None, bytes]]] = {}
 
     def inspector(self, file_name: str) -> Callable[[str, str, str, bytes], None]:
@@ -795,7 +798,10 @@ class PackagedCompatibilityInventory:
         def inspect(logical: str, exact: str, metadata_text: str, bytecode: bytes) -> None:
             error = None
             try:
-                validate_dxbc(bytecode, Path(logical.split("|", 1)[0]).suffix)
+                relative = logical.split("|", 1)[0]
+                task = self.standalone_inputs.get(relative)
+                extension = standalone_shader_cache.STAGES[task["profile"]][1] if task else Path(relative).suffix
+                validate_dxbc(bytecode, extension)
             except ValueError as exc:
                 error = str(exc)
             # Only visible records participate in admission; obsolete generations can be ignored.
@@ -805,7 +811,8 @@ class PackagedCompatibilityInventory:
 
     def identify(self, logical: str, exact: str, metadata_text: str, bytecode_error: str | None) -> tuple[set[str], tuple[str, str]]:
         relative = logical.split("|", 1)[0]
-        if not re.fullmatch(r"[A-Za-z0-9_-]+/[0-9A-F]{1,8}(?:_[0-9A-F]{8})?\.(?:pso|vso|cso)", relative):
+        task = self.standalone_inputs.get(relative)
+        if task is None and not re.fullmatch(r"[A-Za-z0-9_-]+/[0-9A-F]{1,8}(?:_[0-9A-F]{8})?\.(?:pso|vso|cso)", relative):
             raise SystemExit(f"packaged shader record has an invalid cache path: {relative!r}")
         try:
             metadata = json.loads(metadata_text)
@@ -818,7 +825,7 @@ class PackagedCompatibilityInventory:
             raise SystemExit(f"invalid packaged shader bytecode {relative}: {bytecode_error}")
         matching = set()
         for name, variant in self.variants.items():
-            expected = shader_pack_record_identity(relative, content, variant["registrations"])
+            expected = shader_pack_record_identity(relative, content, variant["registrations"], task["source"] if task else None)
             if logical == expected["logicalKey"] and exact == expected["exactKey"] and metadata_text == expected["metadata"]:
                 matching.add(name)
         if not matching:
@@ -844,6 +851,8 @@ class PackagedCompatibilityInventory:
         default = coverage.get("default", {})
         if not default:
             raise SystemExit("packaged cache has no default shader records")
+        if missing := self.standalone_inputs.keys() - default.keys():
+            raise SystemExit(f"standalone pack inventory has no shader records: {sorted(missing)[:5]}")
         for name, artifacts in coverage.items():
             if artifacts.keys() != default.keys() or (len(coverage) > 1 and name not in exclusive):
                 raise SystemExit(
@@ -853,7 +862,8 @@ class PackagedCompatibilityInventory:
             changed = False
             for relative, contents in artifacts.items():
                 shared = contents.keys() & default[relative].keys()
-                source = f"{relative.split('/', 1)[0]}.hlsl"
+                task = self.standalone_inputs.get(relative)
+                source = task["source"] if task else f"{relative.split('/', 1)[0]}.hlsl"
                 changes_defines = bool(self.variants[name].get("shaderDefinesBySource", {}).get(source))
                 if not changes_defines and not shared:
                     raise SystemExit(f"packaged cache compatibility records disagree on content coverage: {name}/{relative}")
@@ -934,12 +944,18 @@ def build_managed_shader_packs(
 ) -> dict[str, int]:
     variants = compatibility_variant_manifest(source_root)
     records: dict[str, dict[str, Any]] = {}
+    standalone_inputs: dict[str, dict] = {}
     variant_counts: dict[str, int] = {}
     inputs = [("standard", standard_cache, False)]
     if horizon_cache is not None:
         inputs.append(("horizon-fix", horizon_cache, True))
     for variant_name, cache_dir, horizon_enabled in inputs:
         manifest = read_cache_manifest_entries(cache_dir, f"{runtime}/{variant_name}")
+        variant_inputs = read_standalone_pack_inputs(cache_dir)
+        for relative, task in variant_inputs.items():
+            if relative in standalone_inputs and standalone_inputs[relative] != task:
+                raise SystemExit(f"standalone cache variants disagree on inputs: {relative}")
+            standalone_inputs[relative] = task
         count = 0
         for blob_path in cache_blob_paths(cache_dir):
             relative = blob_path.relative_to(cache_dir).as_posix()
@@ -951,7 +967,8 @@ def build_managed_shader_packs(
                 if horizon_enabled
                 else variants["default"]["registrations"]
             )
-            identity = shader_pack_record_identity(relative, content_contract, registrations)
+            task = variant_inputs.get(relative)
+            identity = shader_pack_record_identity(relative, content_contract, registrations, task["source"] if task else None)
             exact_key = identity["exactKey"]
             bytecode = blob_path.read_bytes()
             previous = records.get(exact_key)
@@ -1017,6 +1034,8 @@ def build_managed_shader_packs(
             for file_name, (lane, generation, entries) in pack_files.items()
         },
     }
+    if standalone_inputs:
+        pack_manifest["standaloneInputs"] = standalone_inputs
     (standard_cache / PACK_MANIFEST_FILE_NAME).write_text(
         json.dumps(pack_manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -1903,16 +1922,8 @@ def remap_imagespace_dirs(cache_dir: Path, runtime: str) -> dict[str, str]:
     return renamed
 
 
-def write_shader_cache_manifest(
-    cache_dir: Path,
-    shader_root: Path,
-    runtime: str,
-    imagespace_remap: dict[str, str],
-    write_manifest: Callable[..., int],
-    shader_cache_abi: str,
-    compile_tasks: list[tuple[str, str, str, list[str]]],
-) -> int:
-    """Hash source/include content and the resolved macros for every blob."""
+def shader_cache_global_state(cache_dir: Path, runtime: str, shader_cache_abi: str) -> str:
+    """Share the exact global digest input between engine and helper tasks."""
     global_defines_state = ("VR;" if runtime == "VR" else "") + (
         f"ShaderCacheABI={shader_cache_abi};"
     )
@@ -1934,13 +1945,29 @@ def write_shader_cache_manifest(
     global_defines_state += "".join(
         f"FeatureShaderABI={name}:{abi};" for name, abi in feature_abis
     )
+    return global_defines_state
+
+
+def write_shader_cache_manifest(
+    cache_dir: Path,
+    shader_root: Path,
+    runtime: str,
+    imagespace_remap: dict[str, str],
+    write_manifest: Callable[..., int],
+    shader_cache_abi: str,
+    compile_tasks: list[tuple[str, str, str, list[str]]],
+    standalone_tasks: dict[str, dict] | None = None,
+) -> int:
+    """Hash source/include content and the resolved macros for every blob."""
+    standalone_arguments = {"standalone_tasks": standalone_tasks} if standalone_tasks is not None else {}
     count = write_manifest(
         cache_dir,
         shader_root,
-        global_defines_state,
+        shader_cache_global_state(cache_dir, runtime, shader_cache_abi),
         cache_dir / MANIFEST_FILE_NAME,
         resolve_source_name=lambda name: imagespace_remap.get(name, name),
         compile_tasks=compile_tasks,
+        **standalone_arguments,
     )
     print(
         f"{runtime}: wrote {count} content digests -> "
@@ -2186,6 +2213,11 @@ def read_cache_manifest_entries(cache_dir: Path, runtime: str) -> dict[str, obje
     return manifest["entries"]
 
 
+def read_standalone_pack_inputs(cache_dir: Path) -> dict:
+    manifest = json.loads((cache_dir / MANIFEST_FILE_NAME).read_text(encoding="utf-8"))
+    return standalone_shader_cache.validate_pack_inputs(manifest.get("standaloneInputs", {}))
+
+
 def validate_cache(
     cache_dir: Path,
     runtime: str,
@@ -2221,6 +2253,7 @@ def validate_cache(
         )
 
     entries = read_cache_manifest_entries(cache_dir, runtime)
+    standalone_inputs = read_standalone_pack_inputs(cache_dir)
     blob_paths = cache_blob_paths(cache_dir)
     if not blob_paths:
         raise SystemExit(f"{runtime}: cache contains no compiled shader blobs")
@@ -2241,7 +2274,9 @@ def validate_cache(
             invalid_entries.append(relative_path)
 
         try:
-            validate_dxbc(blob_path.read_bytes(), blob_path.suffix)
+            task = standalone_inputs.get(relative_path)
+            extension = standalone_shader_cache.STAGES[task["profile"]][1] if task else blob_path.suffix
+            validate_dxbc(blob_path.read_bytes(), extension)
         except (OSError, ValueError) as exc:
             invalid_blobs.append(f"{relative_path}: {exc}")
 
@@ -2262,6 +2297,10 @@ def validate_cache(
         )
 
     unexpected_entries = sorted(set(entries) - blob_keys)
+    if missing := standalone_inputs.keys() - blob_keys:
+        raise SystemExit(f"{runtime}: standalone inventory has missing blobs: {sorted(missing)[:5]}")
+    if missing := {key for key in blob_keys if key.startswith("Standalone/")} - standalone_inputs.keys():
+        raise SystemExit(f"{runtime}: standalone blobs have no input inventory: {sorted(missing)[:5]}")
     if unexpected_entries:
         raise SystemExit(
             f"{runtime}: Manifest.json contains {len(unexpected_entries)} entries "
@@ -2688,7 +2727,7 @@ def validate_cache_archive(
             raise SystemExit(f"packaged {runtime} cache pack manifest must be an object")
         pack_set_id = pack_manifest.get("packSetId")
         inventory = PackagedCompatibilityInventory(
-            source_root, pack_manifest.get("compatibilityVariants")
+            source_root, pack_manifest.get("compatibilityVariants"), pack_manifest.get("standaloneInputs", {})
         )
         pack_stats = {
             name: validate_shader_pack(
@@ -2973,6 +3012,11 @@ def build_runtime(
 
         prune_non_cache_files(cache_dir)
         imagespace_remap = remap_imagespace_dirs(cache_dir, runtime)
+        standalone_tasks = standalone_shader_cache.resolve_tasks(
+            runtime, feature_states,
+            shader_cache_global_state(cache_dir, runtime, shader_cache_abi),
+        )
+        standalone_shader_cache.compile_tasks(standalone_tasks, stage, cache_dir, fxc, jobs)
         write_shader_cache_manifest(
             cache_dir,
             stage,
@@ -2981,6 +3025,7 @@ def build_runtime(
             write_manifest,
             shader_cache_abi,
             compile_tasks,
+            standalone_tasks,
         )
         blob_count = validate_cache(
             cache_dir,

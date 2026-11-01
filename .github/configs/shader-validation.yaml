@@ -1,7 +1,7 @@
 captured_shader_variants: 3425
-# Inventory includes normalized Lighting keys, PBR Utility and terrain seam variants.
+# Inventory includes normalized Lighting keys and explicit feature variants.
 # The captured count retains source provenance.
-normalized_shader_variants: 3113
+normalized_shader_variants: 3132
 common_defines:
     - D3DCOMPILE_DEBUG
     - D3DCOMPILE_SKIP_OPTIMIZATION

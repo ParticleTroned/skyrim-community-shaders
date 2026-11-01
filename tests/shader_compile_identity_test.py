@@ -18,6 +18,8 @@ from shader_cache_manifest import compile_task_defines, prepare_fxc_defines, wri
 from hlslkit.compile_shaders import parse_shader_configs
 from hlslkit.shader_digest import combine_hashes, compute_shader_content_digest, hash_string, to_hex
 import yaml
+import standalone_shader_cache as standalone
+from dxbc_fixtures import make_dxbc
 
 spec = importlib.util.spec_from_file_location("cache_builder", REPO / "tools/build-shader-cache.py")
 BUILDER = importlib.util.module_from_spec(spec)
@@ -27,6 +29,117 @@ RUNTIME_TEST = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 and not sys.
 
 
 class ShaderCompileIdentityTests(unittest.TestCase):
+    def test_standalone_key_matches_runtime_fixture(self) -> None:
+        request = {"source": "test.hlsl", "profile": "ps_5_0", "entry": "main",
+                   "defines": [("EXTRA", "1"), ("PSHADER", ""), ("WINPC", ""), ("DX11", "")]}
+        digest = to_hex(standalone.compile_digest(request, "test-abi"))
+        self.assertEqual(digest, "86afdff32904f1c54f253703a78b0748")
+        self.assertEqual(standalone.serialize_defines([("B", None), ("A", "1"), ("B", "")]), "1:A1:11:B0:")
+        self.assertNotEqual(standalone.serialize_defines([("A", "0"), ("A", "1")]),
+                            standalone.serialize_defines([("A", "1"), ("A", "0")]))
+        for changes in ({"entry": "alternate"}, {"profile": "vs_5_0"}, {"source": "other.hlsl"}):
+            self.assertNotEqual(digest, to_hex(standalone.compile_digest({**request, **changes}, "test-abi")))
+        self.assertNotEqual(digest, to_hex(standalone.compile_digest(request, "VR;test-abi")))
+
+    def test_standalone_inventory_sources_and_runtime_gates(self) -> None:
+        roots = BUILDER.shader_source_roots(REPO)
+        features = {name: True for name in BUILDER.packaged_feature_directories(REPO)}
+        for runtime in ("SE", "VR"):
+            tasks = standalone.resolve_tasks(runtime, features, runtime + ";test-abi")
+            self.assertGreater(len(tasks), 30)
+            self.assertLessEqual(len(tasks), 4096)
+            for task in tasks.values():
+                self.assertTrue(any((root / task["source"]).is_file() for root in roots), task["source"])
+                self.assertEqual(any(name == "VR" for name, _ in task["defines"]), runtime == "VR")
+        disabled = standalone.release_requests("SE", {})
+        self.assertFalse(any(task["source"].startswith("DynamicCubemaps/") for task in disabled))
+        self.assertFalse(any(task["source"].startswith("ScreenSpaceGI/") for task in disabled))
+
+    def test_standalone_pack_paths_fail_closed(self) -> None:
+        path = "Standalone/" + "a" * 32 + ".cso"
+        for source in ("../evil.hlsl", "/evil.hlsl", "C:/evil.hlsl", "folder/../evil.hlsl", "folder\\evil.hlsl", "./evil.hlsl"):
+            with self.assertRaises(ValueError):
+                standalone.validate_pack_inputs({path: {"source": source, "profile": "cs_5_0"}})
+        for relative in ("Standalone/1.cso", "Standalone/" + "a" * 32 + ".pso"):
+            with self.assertRaises(ValueError):
+                standalone.validate_pack_inputs({relative: {"source": "test.hlsl", "profile": "cs_5_0"}})
+
+    def test_standalone_source_compatibility_keeps_pack_scope_restrictions(self) -> None:
+        registration = dict(BUILDER.compatibility_variant_manifest(REPO)["legacy-horizon-fix"]["registrations"][0])
+        registration["scopes"] = [{"kind": "shader-source", "value": "DynamicCubemaps/UpdateCubemapCS.hlsl"}]
+        relative = "Standalone/" + "a" * 32 + ".cso"
+        content = "b" * 32
+        self.assertTrue(BUILDER.compatibility_registration_applies(registration, "Standalone", "Shaders/DynamicCubemaps/UpdateCubemapCS.hlsl", set()))
+        self.assertFalse(BUILDER.compatibility_registration_applies(registration, "Standalone", "Shaders/DynamicCubemaps/InferCubemapCS.hlsl", set()))
+        with self.assertRaisesRegex(SystemExit, "unsupported compatibility scope"):
+            BUILDER.shader_pack_record_identity(relative, content, [registration], "DynamicCubemaps/UpdateCubemapCS.hlsl")
+        other = BUILDER.shader_pack_record_identity(relative, content, [registration], "DynamicCubemaps/InferCubemapCS.hlsl")
+        self.assertNotIn(registration["identity"], other["metadata"])
+
+    def test_standalone_compiler_flags_macros_and_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "helper.hlsl").write_text("float4 main() : SV_Target { return 1; }", encoding="utf-8")
+            task = {"source": "helper.hlsl", "profile": "ps_5_0", "entry": "main", "defines": [("EMPTY", ""), ("BARE", None), ("VALUE", "2")]}
+            relative = "Standalone/" + "a" * 32 + ".cso"
+
+            def fake_compile(command, **kwargs):
+                self.assertEqual(command[:9], ["fake-fxc", "/nologo", "/T", "ps_5_0", "/E", "main", "/O3", "/Ges", "/Vd"])
+                self.assertIn("EMPTY= ", command)
+                self.assertIn("BARE", command)
+                self.assertIn("VALUE=2", command)
+                Path(command[command.index("/Fo") + 1]).write_bytes(make_dxbc(stage=0))
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with mock.patch.object(standalone.subprocess, "run", side_effect=fake_compile):
+                standalone.compile_tasks({relative: task}, root, root, "fake-fxc", 1)
+            failure = subprocess.CompletedProcess([], 1, "", "compile failed")
+            with mock.patch.object(standalone.subprocess, "run", return_value=failure), self.assertRaisesRegex(RuntimeError, "compile failed"):
+                standalone.compile_tasks({relative: task}, root, root, "fake-fxc", 1)
+
+    def test_standalone_manifest_and_pack_preserve_sources_and_stages(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "Shaders"
+            source.mkdir()
+            (source / "helper.hlsl").write_text("float4 main() : SV_Target { return 1; }", encoding="utf-8")
+            cache = root / "ShaderCache"
+            (cache / "Standalone").mkdir(parents=True)
+            tasks = {}
+            for profile, stage in (("cs_5_0", 5), ("ps_5_0", 0), ("vs_5_0", 1)):
+                request = {"source": "helper.hlsl", "profile": profile, "entry": "main", "defines": [(standalone.STAGES[profile][0], "")]}
+                digest = standalone.compile_digest(request, "test-abi")
+                relative = f"Standalone/{to_hex(digest)}.cso"
+                tasks[relative] = {**request, "compile_digest": digest}
+                (cache / relative).write_bytes(make_dxbc(stage=stage))
+            manifest_path = cache / "Manifest.json"
+            self.assertEqual(write_manifest(cache, source, "test-abi", manifest_path, compile_tasks=[], standalone_tasks=tasks), 3)
+            manifest = json.loads(manifest_path.read_text())
+            self.assertEqual(len(manifest["standaloneInputs"]), 3)
+            BUILDER.build_managed_shader_packs(REPO, cache, None, "SE", "test")
+            packed = json.loads((cache / "PackManifest.json").read_text())
+            self.assertEqual(packed["standaloneInputs"], manifest["standaloneInputs"])
+            inventory = BUILDER.PackagedCompatibilityInventory(REPO, ["default"], packed["standaloneInputs"])
+            stats = {name: BUILDER.validate_shader_pack(cache / name, lane, packed["packSetId"], inspect_record=inventory.inspector(name))
+                     for name, lane in BUILDER.PACK_LANES.items()}
+            inventory.validate(stats)
+            BUILDER.validate_pack_manifest_contract(packed, "SE", stats)
+            relative, task = next(iter(tasks.items()))
+            identity = BUILDER.shader_pack_record_identity(relative, manifest["entries"][relative], [], task["source"])
+            with self.assertRaises(SystemExit):
+                BUILDER.PackagedCompatibilityInventory(REPO, ["default"]).identify(identity["logicalKey"], identity["exactKey"], identity["metadata"], None)
+            bad = BUILDER.PackagedCompatibilityInventory(REPO, ["default"], packed["standaloneInputs"])
+            bad.inspector("Optimized.A.csxpack")(identity["logicalKey"], identity["exactKey"], identity["metadata"], make_dxbc(stage=1))
+            with self.assertRaises(SystemExit):
+                bad.validate(stats)
+
+    def test_standalone_manifest_requires_every_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = {"source": "missing.hlsl", "profile": "cs_5_0", "entry": "main", "defines": [], "compile_digest": 0}
+            with self.assertRaisesRegex(ValueError, "no output blobs"):
+                write_manifest(root, root, "test", root / "Manifest.json", compile_tasks=[], standalone_tasks={"Standalone/" + "0" * 32 + ".cso": task})
+
     def test_se_release_macros_preserve_requests_with_current_grass_features(self) -> None:
         fixture = json.loads((REPO / "tests/data/shader_cache_se_runtime_trace.json").read_text(encoding="utf-8"))
         distribution = BUILDER.derive_distribution_profile(REPO)
@@ -57,6 +170,9 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                         token if "=" in token else token + "="
                         for token in BUILDER.SHIPPED_CACHE_PROFILE.file_defines[source]
                     )
+                # The preserved capture predates SnowCover's three shader families.
+                if source in {"Lighting.hlsl", "RunGrass.hlsl", "DistantTree.hlsl"}:
+                    defines.append("SNOW_COVER=")
                 captured = compile_task_defines([(source, stages[stage], f"{family}:{stage}:{descriptor}", defines)])
                 for key, expected in captured.items():
                     with self.subTest(source=source, stage=stage, descriptor=descriptor):
@@ -88,6 +204,8 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                     for token in macros.split()
                     if token not in {"D3DCOMPILE_DEBUG", "D3DCOMPILE_SKIP_OPTIMIZATION"}
                 ]
+                # Keep the captured requests intact while applying the current feature scope.
+                defines.append("SNOW_COVER=")
                 captured = compile_task_defines([(source, stages[stage], f"{family}:{stage}:{descriptor}", defines)])
                 for key, expected in captured.items():
                     with self.subTest(stage=stage, descriptor=descriptor):
@@ -234,7 +352,7 @@ class ShaderCompileIdentityTests(unittest.TestCase):
     def test_lighting_inventory_keys_match_runtime_flag_mask(self) -> None:
         flags = {"SPECULAR", "SOFT_LIGHTING", "RIM_LIGHTING", "BACK_LIGHTING"}
         mask = sum(1 << bit for bit in (9, 10, 11, 12))
-        for name, expected in (("shader-validation.yaml", 232), ("shader-validation-vr.yaml", 270)):
+        for name, expected in (("shader-validation.yaml", 246), ("shader-validation-vr.yaml", 284)):
             path = REPO / ".github/configs" / name
             config = yaml.safe_load(path.read_text(encoding="utf-8"))
             BUILDER.validate_captured_variant_count(config, path)

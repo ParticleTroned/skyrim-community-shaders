@@ -277,6 +277,11 @@ int main()
 	SIE::ShaderCache cache;
 	globals::state = &state;
 	globals::shaderCache = &cache;
+	{
+		std::array<D3D_SHADER_MACRO, 5> macros{ { { "EXTRA", "1" }, { "PSHADER", "" }, { "WINPC", "" }, { "DX11", "" }, { nullptr, nullptr } } };
+		const Util::StandaloneShaderRequest request{ L"Data/Shaders/test.hlsl", macros, "ps_5_0", "main", 34818, false };
+		assert(SIE::BuildStandaloneCompileKey(request).packDigest.ToHex() == "86afdff32904f1c54f253703a78b0748");
+	}
 	winrt::com_ptr<ID3D11Device> device;
 	winrt::com_ptr<ID3D11DeviceContext> context;
 	assert(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,

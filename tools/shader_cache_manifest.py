@@ -64,6 +64,7 @@ def write_manifest(
     resolve_source_name: Callable[[str], str] | None = None,
     *,
     compile_tasks: Iterable[CompileTask],
+    standalone_tasks: dict[str, dict] | None = None,
 ) -> int:
     """Fail closed if any blob lacks its exact compiler input or source closure."""
     from hlslkit.shader_digest import (
@@ -80,8 +81,19 @@ def write_manifest(
     digest_cache: dict[str, int | None] = {}
     entries: dict[str, str] = {}
     seen_tasks: set[tuple[str, str]] = set()
+    standalone_tasks = standalone_tasks or {}
+    standalone_inputs = {}
     for blob in sorted(cache_dir.rglob("*")):
         if not blob.is_file() or blob.suffix.lower() not in STAGE_EXTENSIONS.values():
+            continue
+        relative = blob.relative_to(cache_dir).as_posix()
+        if relative in standalone_tasks:
+            task = standalone_tasks[relative]
+            source_digest = compute_shader_content_digest(shader_root / task["source"], shader_root, digest_cache)
+            if source_digest is None:
+                raise ValueError(f"cannot verify standalone shader source: {task['source']}")
+            entries[relative] = to_hex(combine_hashes(source_digest, task["compile_digest"]))
+            standalone_inputs[relative] = {key: task[key] for key in ("source", "profile")}
             continue
         source_name = resolve_source_name(blob.parent.name) if resolve_source_name else blob.parent.name
         task_key = (source_name, blob.name)
@@ -100,12 +112,17 @@ def write_manifest(
         )
     if missing := task_defines.keys() - seen_tasks:
         raise ValueError(f"compiler tasks have no output blobs: {sorted(missing)[:5]}")
+    if missing := standalone_tasks.keys() - standalone_inputs.keys():
+        raise ValueError(f"standalone compiler tasks have no output blobs: {sorted(missing)[:5]}")
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=manifest_path.parent, delete=False) as stream:
             temporary_path = Path(stream.name)
-            json.dump({"schemaVersion": SCHEMA_VERSION, "entries": entries}, stream, sort_keys=True)
+            manifest = {"schemaVersion": SCHEMA_VERSION, "entries": entries}
+            if standalone_inputs:
+                manifest["standaloneInputs"] = standalone_inputs
+            json.dump(manifest, stream, sort_keys=True)
             stream.flush()
             os.fsync(stream.fileno())
         temporary_path.replace(manifest_path)

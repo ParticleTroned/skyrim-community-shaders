@@ -4,6 +4,7 @@
 
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
+#include "Common/HairScattering.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/PBRMath.hlsli"
 #include "Common/Shading.hlsli"
@@ -33,9 +34,7 @@ namespace PBR
 	{
 		float3 S = 0;
 
-		float cosThetaL = sqrt(max(0, 1 - NdotL * NdotL));
-		float cosThetaV = sqrt(max(0, 1 - NdotV * NdotV));
-		float cosThetaD = sqrt((1 + cosThetaL * cosThetaV + NdotV * NdotL) / 2.0);
+		float cosThetaD = HairCosThetaD(NdotL, NdotV);
 
 		const float3 Lp = L - NdotL * N;
 		const float3 Vp = V - NdotV * N;
@@ -93,12 +92,7 @@ namespace PBR
 	{
 		float3 S = 0;
 
-		float diffuseKajiya = 1 - abs(NdotL);
-
-		float3 fakeN = normalize(V - N * NdotV);
-		const float wrap = 1;
-		float wrappedNdotL = saturate((dot(fakeN, L) + wrap) / ((1 + wrap) * (1 + wrap)));
-		float diffuseScatter = (1 / Math::PI) * lerp(wrappedNdotL, diffuseKajiya, 0.33);
+		float diffuseScatter = HairScattering::DiffuseFactor(N, V, L, NdotL, NdotV);
 		float luma = Color::RGBToLuminance(material.BaseColor);
 		float3 scatterTint = GetHairScatterTint(material.BaseColor, luma, shadow);
 		S += sqrt(material.BaseColor) * diffuseScatter * scatterTint;

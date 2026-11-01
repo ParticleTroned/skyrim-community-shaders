@@ -3,7 +3,42 @@
 // Include production PBR math code (constants, flags, and pure math functions)
 // PBRMath.hlsli contains only pure functions with no game-specific dependencies
 #include "/Shaders/Common/PBRMath.hlsli"
+#include "/Shaders/Common/HairScattering.hlsli"
 #include "/Test/STF/ShaderTestFramework.hlsli"
+
+/// @tags pbr, hair, regression
+[numthreads(1, 1, 1)] void TestHairAxialTransmission() {
+	const float2 directions[4] = { float2(1, -1), float2(-1, 1), float2(1.0000001, -1.0000001), float2(0, 0) };
+	for (uint i = 0; i < 4; ++i) {
+		float cosine = PBR::HairCosThetaD(directions[i].x, directions[i].y);
+		ASSERT(IsTrue, isfinite(cosine) && cosine > 0 && cosine <= 1);
+		float exponent = 0.8 / cosine;
+		ASSERT(IsTrue, isfinite(exponent) && isfinite(pow(1.0, exponent)) && isfinite(pow(0.0, exponent)));
+	}
+	ASSERT(IsTrue, abs(PBR::HairCosThetaD(0, 0) - 1.0) < 1e-6);
+}
+
+	/// @tags pbr, hair, black, regression
+	[numthreads(1, 1, 1)] void TestHairAxialDiffuseScattering()
+{
+	const float3 tangent = float3(0, 0, 1);
+	const float3 views[4] = { tangent, -tangent, float3(1e-12, 0, 1), float3(1, 0, 0) };
+	const float3 colors[3] = { float3(0, 0, 0), float3(0, 1e-8, 1e-8), float3(0.1, 0.25, 0.5) };
+	for (uint i = 0; i < 4; ++i) {
+		float factor = HairScattering::DiffuseFactor(tangent, views[i], float3(1, 0, 0), 0, dot(tangent, views[i]));
+		ASSERT(IsTrue, isfinite(factor) && factor >= 0);
+		for (uint j = 0; j < 3; ++j) {
+			float luminance = dot(colors[j], float3(0.2125, 0.7154, 0.0721));
+			float3 scatter = sqrt(colors[j]) * factor * PBR::GetHairScatterTint(colors[j], luminance, 0.5);
+			ASSERT(IsTrue, all(isfinite(scatter)) && all(scatter >= 0));
+			if (j == 0)
+				ASSERT(IsTrue, all(scatter == 0));
+		}
+		float expected = (1 / Math::PI) * lerp(i < 2 ? 0.25 : 0.5, 1.0, 0.33);
+		if (i != 2)
+			ASSERT(IsTrue, abs(factor - expected) < 1e-6);
+	}
+}
 
 /// @tags pbr, hair, black, regression
 [numthreads(1, 1, 1)] void TestHairScatterBlackAlbedo() {

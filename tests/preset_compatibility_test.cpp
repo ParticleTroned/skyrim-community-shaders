@@ -58,6 +58,7 @@ int main(int argc, char** argv)
 		assert(nr.at("neuralRenderingNetwork") == 0);
 		assert(!nr.contains("neuralRenderingReconstructionFilter"));
 		assert(nr.at("neuralRenderingGuidedReconstruction") == true);
+		assert(nr.at("neuralRenderingConfidenceRejectionPercent") == 0);
 		assert(nr.at("neuralRenderingPeripheralCompressionPercent") == 100);
 		assert(nr.at("neuralRenderingModelResolutionPercent") == 90);
 		assert(nr.at("neuralRenderingPreset") == 4);

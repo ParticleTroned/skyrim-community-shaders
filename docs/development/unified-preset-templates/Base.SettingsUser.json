@@ -146,6 +146,7 @@
       "neuralRenderingBlendFeather": 0.05000000074505806,
       "neuralRenderingDirectCommit": true,
       "neuralRenderingGuidedReconstruction": true,
+      "neuralRenderingConfidenceRejectionPercent": 0,
       "neuralRenderingPeripheralCompressionPercent": 100,
       "neuralRenderingPauseInCombat": true,
       "neuralRenderingEnabled": false,

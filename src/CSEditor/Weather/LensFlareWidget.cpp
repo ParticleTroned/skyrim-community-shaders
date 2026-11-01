@@ -75,7 +75,6 @@ void LensFlareWidget::SaveSettings()
 {
 	js["fadeDistRadiusScale"] = settings.fadeDistRadiusScale;
 	js["colorInfluence"] = settings.colorInfluence;
-	originalSettings = settings;
 }
 
 void LensFlareWidget::ApplyChanges()
@@ -94,6 +93,23 @@ void LensFlareWidget::RevertChanges()
 {
 	settings = vanillaSettings;
 	ApplyChanges();
+}
+
+Widget::UndoRestoreAction LensFlareWidget::CaptureUndoState() const
+{
+	const auto snapshot = settings;
+	return [snapshot](Widget& widget) {
+		auto& self = static_cast<LensFlareWidget&>(widget);
+		self.settings = snapshot;
+	};
+}
+
+Widget::UndoRestoreAction LensFlareWidget::CaptureBaselineState() const
+{
+	const auto snapshot = vanillaSettings;
+	return [snapshot](Widget& widget) {
+		static_cast<LensFlareWidget&>(widget).vanillaSettings = snapshot;
+	};
 }
 
 bool LensFlareWidget::HasUnsavedChanges() const

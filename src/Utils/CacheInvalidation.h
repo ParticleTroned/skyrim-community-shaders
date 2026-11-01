@@ -1,5 +1,9 @@
 #pragma once
 
+// Disk shader-cache invalidation logic, kept free of game/SKSE dependencies.
+// Unknown or failed paths degrade to invalidating more, never less: serving a
+// blob compiled under a different feature set is silent corruption.
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -18,10 +22,9 @@ namespace Util::CacheInvalidation
 	{
 		enum class Kind
 		{
-			PluginVersion,
 			ShaderAbi,
 			ShaderCompiler,
-			FeatureVersion,
+			FeatureShaderAbi,
 			EnabledFlip,
 		};
 
@@ -30,7 +33,6 @@ namespace Util::CacheInvalidation
 		std::string feature;
 		std::string detail;
 		bool nowPresent = false;
-		bool nowFailed = false;
 	};
 
 	struct FeatureState
@@ -40,13 +42,14 @@ namespace Util::CacheInvalidation
 		bool loaded = false;
 		std::string version;
 		std::string define;
-		bool failedToLoad = false;
+		std::string shaderAbi;
 	};
 
 	struct CacheIniEntry
 	{
 		bool enabled = false;
 		std::optional<std::string> version;
+		std::optional<std::string> shaderAbi;
 	};
 
 	inline std::vector<CacheMismatch> ClassifyMismatches(
@@ -60,12 +63,13 @@ namespace Util::CacheInvalidation
 		const std::map<std::string, CacheIniEntry>& cacheEntries)
 	{
 		std::vector<CacheMismatch> mismatches;
-		if (!cachedPluginVersion) {
-			mismatches.push_back({ CacheMismatch::Kind::PluginVersion, "Plugin", "Plugin", "no plugin version found in cache" });
-		} else if (*cachedPluginVersion != currentPluginVersion) {
-			mismatches.push_back({ CacheMismatch::Kind::PluginVersion, "Plugin", "Plugin",
-				std::format("version changed (current: {}, cached: {})", currentPluginVersion, *cachedPluginVersion) });
-		}
+
+		// Plugin and feature release versions are provenance, not shader inputs.
+		// Source/include digests validate HLSL changes. C++ or resource-binding
+		// changes that alter a compiled shader contract must bump either the
+		// global ShaderCacheABI or the affected feature's explicit shaderAbi.
+		(void)currentPluginVersion;
+		(void)cachedPluginVersion;
 
 		if (!cachedShaderAbi) {
 			mismatches.push_back({ CacheMismatch::Kind::ShaderAbi, "ShaderABI", "Shader cache ABI", "no shader cache ABI found in cache" });
@@ -91,29 +95,22 @@ namespace Util::CacheInvalidation
 					feature.loaded ?
 						"installed/enabled now, but the cache was built without it" :
 						"the cache was built with it, but it is now uninstalled or disabled at boot",
-					feature.loaded, !feature.loaded && feature.failedToLoad });
+					feature.loaded });
 				continue;
 			}
 
-			if (feature.loaded) {
-				const auto& cachedVersion = it->second.version;
-				if (!cachedVersion || *cachedVersion != feature.version) {
-					mismatches.push_back({ CacheMismatch::Kind::FeatureVersion, feature.shortName, feature.name,
-						std::format("version changed (installed: {}, cached: {})", feature.version,
-							cachedVersion ? *cachedVersion : "<none>") });
+			const std::optional<std::string> cachedFeatureShaderAbi =
+				it != cacheEntries.end() ? it->second.shaderAbi : std::nullopt;
+			if (feature.loaded && (!feature.shaderAbi.empty() || cachedFeatureShaderAbi.has_value())) {
+				if (cachedFeatureShaderAbi.value_or("") != feature.shaderAbi) {
+					mismatches.push_back({ CacheMismatch::Kind::FeatureShaderAbi, feature.shortName, feature.name,
+						std::format("shader contract changed (current: {}, cached: {})", feature.shaderAbi,
+							cachedFeatureShaderAbi ? *cachedFeatureShaderAbi : "<none>") });
 				}
 			}
 		}
 
 		return mismatches;
-	}
-
-	inline bool HasFailedFeature(const std::vector<CacheMismatch>& mismatches)
-	{
-		return std::ranges::any_of(mismatches,
-			[](const CacheMismatch& mismatch) {
-				return mismatch.kind == CacheMismatch::Kind::EnabledFlip && !mismatch.nowPresent && mismatch.nowFailed;
-			});
 	}
 
 	inline std::optional<bool> RootShaderReferencesToken(
@@ -125,17 +122,16 @@ namespace Util::CacheInvalidation
 			static const std::regex includeRe(R"#(^\s*#\s*include\s+"([^"]+)")#");
 			std::set<std::filesystem::path> visited;
 			std::vector<std::filesystem::path> queue{ root };
+
 			while (!queue.empty()) {
 				auto file = queue.back().lexically_normal();
 				queue.pop_back();
-				if (!visited.insert(file).second) {
+				if (!visited.insert(file).second)
 					continue;
-				}
 
 				std::ifstream stream(file);
-				if (!stream) {
+				if (!stream)
 					return std::nullopt;
-				}
 
 				std::string line;
 				while (std::getline(stream, line)) {
@@ -145,20 +141,18 @@ namespace Util::CacheInvalidation
 						};
 						const bool beforeOk = pos == 0 || !isIdent(line[pos - 1]);
 						const bool afterOk = pos + token.size() >= line.size() || !isIdent(line[pos + token.size()]);
-						if (beforeOk && afterOk) {
+						if (beforeOk && afterOk)
 							return true;
-						}
 					}
 
-					std::smatch match;
-					if (std::regex_search(line, match, includeRe)) {
-						auto byRoot = shadersRoot / match[1].str();
-						auto byLocal = file.parent_path() / match[1].str();
-						if (std::filesystem::exists(byRoot)) {
+					std::smatch m;
+					if (std::regex_search(line, m, includeRe)) {
+						const auto byRoot = shadersRoot / m[1].str();
+						const auto byLocal = file.parent_path() / m[1].str();
+						if (std::filesystem::exists(byRoot))
 							queue.push_back(byRoot);
-						} else if (std::filesystem::exists(byLocal)) {
+						else if (std::filesystem::exists(byLocal))
 							queue.push_back(byLocal);
-						}
 					}
 				}
 			}
@@ -169,189 +163,135 @@ namespace Util::CacheInvalidation
 		}
 	}
 
-	inline bool TryPartialInvalidation(
+	struct CacheFamilyPlan
+	{
+		std::vector<std::filesystem::path> affected;
+		std::vector<std::filesystem::path> retained;
+		std::vector<std::filesystem::path> unclassified;
+	};
+
+	inline std::optional<CacheFamilyPlan> PlanCacheFamilies(
 		const std::filesystem::path& cacheRoot,
 		const std::filesystem::path& shadersRoot,
-		const std::vector<std::string>& defines,
-		size_t* outDeleted = nullptr,
-		size_t* outKept = nullptr,
-		bool* outDestructivePartialFailure = nullptr)
+		const std::vector<std::string>& defines)
 	{
-		if (outDeleted) {
-			*outDeleted = 0;
-		}
-		if (outKept) {
-			*outKept = 0;
-		}
-		if (outDestructivePartialFailure) {
-			*outDestructivePartialFailure = false;
-		}
-
-		bool deletionStarted = false;
 		try {
-			if (defines.empty()) {
-				return false;
-			}
-			for (const auto& define : defines) {
-				if (define.empty()) {
-					return false;
-				}
-			}
+			if (defines.empty() || std::ranges::any_of(defines, [](const std::string& define) { return define.empty(); }))
+				return std::nullopt;
 
-			// Cache-directory names for ImageSpace techniques do not always equal
-			// their source filename. Index every real IS root plus the shared Utility
-			// root, and memoize dependency scans used by remapped techniques.
+			// ImageSpace cache directories use runtime technique names rather than
+			// source stems. Resolve those names against all ImageSpace entry points
+			// before deciding which families may be retained.
 			std::vector<std::filesystem::path> imageSpaceRoots;
-			bool hasImageSpaceUtility = false;
 			for (const auto& entry : std::filesystem::directory_iterator(shadersRoot)) {
-				if (!entry.is_regular_file() || entry.path().extension() != L".hlsl") {
-					continue;
-				}
-				const auto stem = entry.path().stem().wstring();
-				if (stem.starts_with(L"IS") || stem == L"Utility") {
+				if (entry.is_regular_file() && entry.path().extension() == L".hlsl" &&
+					(entry.path().stem().wstring().starts_with(L"IS") || entry.path().stem() == L"Utility")) {
 					imageSpaceRoots.push_back(entry.path());
-					hasImageSpaceUtility = hasImageSpaceUtility || stem == L"Utility";
 				}
 			}
-
 			std::map<std::pair<std::filesystem::path, std::string>, std::optional<bool>> referenceCache;
 			const auto referencesDefine = [&](const std::filesystem::path& root, const std::string& define) -> const std::optional<bool>& {
 				auto [it, inserted] = referenceCache.try_emplace({ root, define });
-				if (inserted) {
+				if (inserted)
 					it->second = RootShaderReferencesToken(root, define, shadersRoot);
-				}
 				return it->second;
 			};
 
-			// Finish every source/include scan before touching the cache. A scan
-			// failure therefore leaves the active cache intact for rollback.
-			std::vector<std::filesystem::path> toDelete;
-			size_t kept = 0;
+			CacheFamilyPlan plan;
 			for (const auto& entry : std::filesystem::directory_iterator(cacheRoot)) {
-				if (!entry.is_directory()) {
+				if (!entry.is_directory())
 					continue;
-				}
 
-				const auto directoryName = entry.path().filename().wstring();
-				const auto root = shadersRoot / (directoryName + L".hlsl");
+				const auto dirName = entry.path().filename().wstring();
+				const auto root = shadersRoot / (dirName + L".hlsl");
 				bool affected = false;
-				const bool isImageSpace = directoryName.starts_with(L"IS") || directoryName == L"ReflectionsRayTracing";
+				bool classified = true;
+				const bool isImageSpace = dirName.starts_with(L"IS") || dirName == L"ReflectionsRayTracing";
 				if (isImageSpace) {
-					if (!hasImageSpaceUtility) {
-						return false;
-					}
-					bool techniqueResolved = false;
+					bool sourceResolved = false;
 					for (const auto& imageSpaceRoot : imageSpaceRoots) {
 						const auto sourceName = imageSpaceRoot.stem().wstring();
 						const bool isUtility = sourceName == L"Utility";
-						const bool matchesTechnique = directoryName.starts_with(sourceName) ||
-						                              (sourceName.starts_with(L"IS") && directoryName.starts_with(sourceName.substr(2)));
-						if (!isUtility && !matchesTechnique) {
+						const bool matchesTechnique = dirName.starts_with(sourceName) ||
+						                              (sourceName.starts_with(L"IS") && dirName.starts_with(sourceName.substr(2)));
+						if (!isUtility && !matchesTechnique)
 							continue;
-						}
-						techniqueResolved = techniqueResolved || matchesTechnique;
+
+						sourceResolved = sourceResolved || matchesTechnique;
 						for (const auto& define : defines) {
 							const auto& refs = referencesDefine(imageSpaceRoot, define);
-							if (!refs.has_value()) {
-								return false;
-							}
+							if (!refs.has_value())
+								return std::nullopt;
 							if (*refs) {
 								affected = true;
 								break;
 							}
 						}
-						if (affected) {
+						if (affected)
 							break;
-						}
 					}
-					// An unknown remapping cannot be proven independent of the define.
-					affected = affected || !techniqueResolved;
+					classified = sourceResolved;
+					// Unknown remaps cannot be proven independent of the changed feature.
+					affected = affected || !sourceResolved;
 				} else if (std::filesystem::exists(root)) {
 					for (const auto& define : defines) {
 						const auto& refs = referencesDefine(root, define);
-						if (!refs.has_value()) {
-							return false;
-						}
+						if (!refs.has_value())
+							return std::nullopt;
 						if (*refs) {
 							affected = true;
 							break;
 						}
 					}
 				} else {
-					return false;
+					classified = false;
+					affected = true;
 				}
 
-				if (affected) {
-					toDelete.push_back(entry.path());
-				} else {
-					++kept;
-				}
+				(affected ? plan.affected : plan.retained).push_back(entry.path());
+				if (!classified)
+					plan.unclassified.push_back(entry.path());
 			}
 
-			const auto countEntries = [](const std::filesystem::path& path) -> std::optional<size_t> {
-				std::error_code error;
-				std::filesystem::recursive_directory_iterator it(path, error);
-				const std::filesystem::recursive_directory_iterator end;
-				if (error) {
-					return std::nullopt;
-				}
-
-				size_t count = 0;
-				while (it != end) {
-					++count;
-					it.increment(error);
-					if (error) {
-						return std::nullopt;
-					}
-				}
-				return count;
+			auto byName = [](const auto& left, const auto& right) {
+				return left.filename().native() < right.filename().native();
 			};
+			std::ranges::sort(plan.affected, byName);
+			std::ranges::sort(plan.retained, byName);
+			std::ranges::sort(plan.unclassified, byName);
+			return plan;
+		} catch (...) {
+			return std::nullopt;
+		}
+	}
 
-			std::map<std::filesystem::path, size_t> entryCounts;
-			for (const auto& path : toDelete) {
-				const auto count = countEntries(path);
-				if (!count) {
-					return false;
-				}
-				entryCounts.emplace(path, *count);
-			}
+	inline bool ApplyCacheFamilyPlan(
+		const CacheFamilyPlan& plan,
+		size_t* outDeleted = nullptr,
+		size_t* outKept = nullptr)
+	{
+		try {
+			for (const auto& family : plan.affected)
+				std::filesystem::remove_all(family);
 
-			size_t deleted = 0;
-			for (const auto& path : toDelete) {
-				deletionStarted = true;
-				std::error_code removeError;
-				std::filesystem::remove_all(path, removeError);
-				if (!removeError) {
-					++deleted;
-					if (outDeleted) {
-						*outDeleted = deleted;
-					}
-					continue;
-				}
-
-				std::error_code existsError;
-				const bool stillExists = std::filesystem::exists(path, existsError);
-				const auto after = !existsError && stillExists ? countEntries(path) : std::optional<size_t>{ 0 };
-				const bool inspectionUncertain = existsError || !after;
-				const bool partiallyRemoved = !inspectionUncertain && (!stillExists || *after < entryCounts.at(path));
-				if (outDestructivePartialFailure) {
-					*outDestructivePartialFailure = deleted > 0 || partiallyRemoved || inspectionUncertain;
-				}
-				return false;
-			}
-
-			if (outDeleted) {
-				*outDeleted = deleted;
-			}
-			if (outKept) {
-				*outKept = kept;
-			}
+			if (outDeleted)
+				*outDeleted = plan.affected.size();
+			if (outKept)
+				*outKept = plan.retained.size();
 			return true;
 		} catch (...) {
-			if (outDestructivePartialFailure && deletionStarted) {
-				*outDestructivePartialFailure = true;
-			}
 			return false;
 		}
+	}
+
+	inline bool TryPartialInvalidation(
+		const std::filesystem::path& cacheRoot,
+		const std::filesystem::path& shadersRoot,
+		const std::vector<std::string>& defines,
+		size_t* outDeleted = nullptr,
+		size_t* outKept = nullptr)
+	{
+		const auto plan = PlanCacheFamilies(cacheRoot, shadersRoot, defines);
+		return plan.has_value() && ApplyCacheFamilyPlan(*plan, outDeleted, outKept);
 	}
 }

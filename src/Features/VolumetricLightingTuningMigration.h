@@ -24,14 +24,22 @@ namespace VolumetricLightingTuning
 		if (!a_settings.is_object())
 			return profile;
 
-		detail::ReadFloat(a_settings, "ShaftIntensity", profile.ShaftIntensity);
-		detail::ReadFloat(a_settings, "Opacity", profile.Opacity);
-		detail::ReadFloat(a_settings, "Saturation", profile.Saturation);
-		detail::ReadFloat(a_settings, "CustomColorContribution", profile.CustomColorContribution);
-		detail::ReadFloat(a_settings, "CustomColorRed", profile.CustomColorRed);
-		detail::ReadFloat(a_settings, "CustomColorGreen", profile.CustomColorGreen);
-		detail::ReadFloat(a_settings, "CustomColorBlue", profile.CustomColorBlue);
+		for (const auto& field : kProfileFields)
+			detail::ReadFloat(a_settings, field.name, profile.*field.member);
 		return SanitizeProfile(profile);
+	}
+
+	inline void to_json(nlohmann::json& a_json, const Profile& a_profile)
+	{
+		a_json = nlohmann::json::object();
+		const auto profile = SanitizeProfile(a_profile);
+		for (const auto& field : kProfileFields)
+			a_json[field.name] = profile.*field.member;
+	}
+
+	inline void from_json(const nlohmann::json& a_json, Profile& a_profile)
+	{
+		a_profile = ReadProfile(a_json);
 	}
 
 	inline Profile ReadLegacyProfile(const nlohmann::json& a_settings)
@@ -40,14 +48,9 @@ namespace VolumetricLightingTuning
 		if (!a_settings.is_object())
 			return profile;
 
-		if (!detail::ReadFloat(a_settings, "GodrayShaftIntensity", profile.ShaftIntensity))
-			detail::ReadFloat(a_settings, "GodrayIntensity", profile.ShaftIntensity);
-		detail::ReadFloat(a_settings, "GodrayOpacity", profile.Opacity);
-		detail::ReadFloat(a_settings, "GodraySaturation", profile.Saturation);
-		detail::ReadFloat(a_settings, "CustomColorContribution", profile.CustomColorContribution);
-		detail::ReadFloat(a_settings, "CustomColorRed", profile.CustomColorRed);
-		detail::ReadFloat(a_settings, "CustomColorGreen", profile.CustomColorGreen);
-		detail::ReadFloat(a_settings, "CustomColorBlue", profile.CustomColorBlue);
+		detail::ReadFloat(a_settings, "GodrayIntensity", profile.ShaftIntensity);
+		for (const auto& field : kProfileFields)
+			detail::ReadFloat(a_settings, field.legacyName, profile.*field.member);
 		return SanitizeProfile(profile);
 	}
 }

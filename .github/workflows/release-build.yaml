@@ -98,7 +98,7 @@ jobs:
                   name: ShaderCache-SE
                   path: dist/
 
-            - name: Assemble AIO with selectable shader cache
+            - name: Assemble AIO with optional managed shader cache
               shell: pwsh
               run: |
                   $aioArchives = @(Get-ChildItem -LiteralPath dist -Filter 'CSX_AIO-*.7z' -File)

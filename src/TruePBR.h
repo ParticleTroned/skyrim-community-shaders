@@ -1,6 +1,9 @@
 #pragma once
 
 #include "Feature.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include <atomic>
+#endif
 
 struct GlintParameters
 {
@@ -15,7 +18,7 @@ struct TruePBR : Feature
 {
 public:
 	virtual std::string GetName() override { return "True PBR"; }
-	virtual std::string GetDisplayName() override { return T("feature.true_pbr.name", "True PBR"); }
+	std::string GetDisplayName() override { return T("feature.true_pbr.name", "True PBR"); }
 	virtual std::string GetShortName() override { return "TruePBR"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kMaterials; }
 	virtual bool IsCore() const override { return true; }
@@ -25,34 +28,19 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return std::make_pair(
-			"True PBR replaces Skyrim's legacy material system with physically-based rendering. "
-			"Mod authors can supply PBR texture sets (roughness, metallic, displacement, etc.) "
-			"that are interpreted in a physically correct BRDF, producing realistic surface "
-			"response to lighting across all weather and time-of-day conditions.",
+			T("feature.true_pbr.makes_supported_materials_respond_more_realis_f68e216f", "Makes supported materials respond more realistically to light."),
 			std::vector<std::string>{
-				"Physically-based BRDF (energy-conserving specular & diffuse)",
-				"Roughness, metallic, and displacement map support",
-				"Clearcoat, subsurface scattering, and fuzz layers",
-				"Procedural glint rendering for sparkle effects",
-				"Full landscape and decal PBR support" });
+				T("feature.true_pbr.physically_based_brdf", "Physically-based BRDF"),
+				T("feature.true_pbr.roughness_metallic_and_displacement_map_support", "Roughness, metallic, and displacement map support"),
+				T("feature.true_pbr.clearcoat_subsurface_scattering_fuzz_and_glint_layers", "Clearcoat, subsurface scattering, fuzz, and glint layers"),
+				T("feature.true_pbr.landscape_and_decal_pbr_support", "Landscape and decal PBR support") });
 	}
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool) override;
 	virtual json CapturePerformanceSettingsState() const override;
-	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
-	{
-		return { 15,
-			T("menu.performance_tuning.feature.true_pbr.comparison_label", "Off"),
-			T("menu.performance_tuning.feature.true_pbr.comparison_details", "True PBR material shading is switched off.") };
-	}
-	virtual json GetPerformanceTuningUserSettingsMask() const override
-	{
-		return { { "Enabled", true } };
-	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled != 0; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.Enabled = a_enabled ? 1u : 0u; }
@@ -60,10 +48,10 @@ public:
 	virtual void Prepass() override;
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
-
 	virtual void SaveSettings(json& o_json) override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
+	virtual void RestoreDefaultSettingsForLoad() override { settings = {}; }
 
 	struct alignas(16) Settings
 	{
@@ -71,15 +59,37 @@ public:
 		float pbrMetalReflectionScale = 1.0f;
 		float pbrMetalHighlightScale = 1.0f;
 		uint Enabled = true;
+		uint GrassEnabled = false;
+		uint pad[3]{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
+	static_assert(sizeof(Settings) == 32);
 
 	Settings settings;
-
-	/** @brief When true, logs each PBR JSON file path during load. Off by default. */
+	/** @brief Controls per-file PBR JSON logging; failures remain visible when disabled. */
 	bool enableVerboseJsonLogging = false;
 
 	bool TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land);
+	/** Identify terrain by registered material ownership for optional seam blending. */
+	bool IsPBRLandscapeGeometry(RE::BSGeometry* geometry) const;
+	/** Preserve authored grass maps before the engine interns the material. */
+	void SetupGrassMaterial(RE::BSLightingShaderProperty* source, RE::BSLightingShaderProperty* grass);
+	/** Identify authored grass without dereferencing an unregistered PBR material. */
+	[[nodiscard]] bool IsPBRGrassMaterial(const RE::BSShaderMaterial* material) const;
+	/** Bind authored grass through the unchanged native technique and geometry ABI. */
+	void SetupGrassShaderMaterial(RE::BSShader* shader, const RE::BSLightingShaderMaterialBase* material);
+	/** Report whether the requested material path has both lighting features available. */
+	[[nodiscard]] bool IsPBRGrassEnabled() const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Enable bounded material-setup counters independently of rendering settings. */
+	void SetGrassDiagnosticsEnabled(bool enabled);
+	/** Guard all additional grass measurement work in diagnostic builds. */
+	[[nodiscard]] bool IsGrassDiagnosticsEnabled() const { return grassDiagnosticsEnabled.load(std::memory_order_relaxed); }
+	/** Snapshot setup counters; these count material binds rather than instances. */
+	[[nodiscard]] json GetGrassDiagnostics() const;
+#endif
+	/** @brief Reports whether the raw lighting technique uses custom material setup instead of native setup. */
+	[[nodiscard]] bool UsesCustomMaterialSetup(uint32_t rawTechnique) const;
 	bool BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material);
 
 	void SetShaderResources(ID3D11DeviceContext* a_context);
@@ -143,4 +153,14 @@ public:
 	PBRMaterialObjectData* selectedPbrMaterialObject = nullptr;
 
 	RE::BGSTextureSet* currentTextureSet = nullptr;
+
+private:
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::atomic_bool grassDiagnosticsEnabled{ false };
+	std::atomic_uint64_t grassMaterialsCreated{ 0 };
+	std::atomic_uint64_t grassMaterialSetups{ 0 };
+	std::atomic_uint64_t grassPBRMaterialSetups{ 0 };
+	std::atomic_uint64_t grassShaderFallbackSetups{ 0 };
+	std::atomic_uint64_t grassMissingRmaos{ 0 };
+#endif
 };

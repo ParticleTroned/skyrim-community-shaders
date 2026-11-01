@@ -1,5 +1,6 @@
 #pragma once
 
+#include "MaterialRegistry.h"
 #include "TruePBR.h"
 
 enum class PBRFlags : uint32_t
@@ -28,6 +29,7 @@ enum class PBRShaderFlags : uint32_t
 	HairMarschner = 1 << 10,
 	Glint = 1 << 11,
 	ProjectedGlint = 1 << 12,
+	GrassHasRmaos = 1 << 13,
 };
 
 class BSLightingShaderMaterialPBR : public RE::BSLightingShaderMaterialBase
@@ -104,7 +106,7 @@ public:
 
 	const GlintParameters& GetGlintParameters() const;
 
-	inline static std::unordered_map<BSLightingShaderMaterialPBR*, MaterialExtensions> All;
+	inline static PBRMaterialRegistry<BSLightingShaderMaterialPBR, MaterialExtensions> All;
 
 	// members
 	RE::BSShaderMaterial::Feature loadedWithFeature = RE::BSShaderMaterial::Feature::kDefault;

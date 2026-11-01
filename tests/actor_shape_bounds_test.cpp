@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <immintrin.h>
@@ -51,14 +52,17 @@ namespace RE
 	struct hkpShape : hkReferencedObject
 	{
 		hkpShapeType type = hkpShapeType::kSphere;
+		NiPoint3 center;
+		NiPoint3 halfExtents{ 2, 2, 2 };
 		mutable int projectionCalls = 0;
 		float GetMaximumProjection(const hkVector4& direction) const
 		{
 			++projectionCalls;
 			alignas(16) float axis[4];
 			_mm_store_ps(axis, direction.quad);
-			// Fixed responses exercise the existing fallback formula, not Havok semantics.
-			return 2.0f * (axis[0] + axis[1] + axis[2]);
+			// Axis support projections include the local center with the direction's sign.
+			return center.x * axis[0] + center.y * axis[1] + center.z * axis[2] +
+			       halfExtents.x * std::abs(axis[0]) + halfExtents.y * std::abs(axis[1]) + halfExtents.z * std::abs(axis[2]);
 		}
 	};
 	struct hkpCapsuleShape : hkpShape
@@ -111,9 +115,16 @@ namespace RE
 			output = massCenter;
 		}
 	};
+	struct bhkBlendCollisionObject;
 	struct bhkNiCollisionObject
 	{
+		virtual ~bhkNiCollisionObject() = default;
+		virtual bhkBlendCollisionObject* AsBhkBlendCollisionObject() { return nullptr; }
 		Borrowed<bhkEntity> body;
+	};
+	struct bhkBlendCollisionObject : bhkNiCollisionObject
+	{
+		bhkBlendCollisionObject* AsBhkBlendCollisionObject() override { return this; }
 	};
 }
 
@@ -262,21 +273,140 @@ namespace
 		RE::hkpListShape list;
 		f.rigid.collidable.shape = &list;
 		ExpectRejected(&f.object);
+		float radius = 31;
+		Check(!Util::ExtractShapeBound(&list, radius) && radius == 31, "unsupported list radius accepted or published");
 		Check(list.projectionCalls == 0 && f.wrapper.massCenterCalls == 0 && f.wrapper.transformCalls == 0, "rejected shape reached Havok accessors");
+	}
+	void BlendCollisionLists()
+	{
+		Fixture f;
+		RE::hkpListShape list;
+		list.center = { 1, 2, 3 };
+		list.halfExtents = { 2, 3, 6 };
+		f.rigid.collidable.shape = &list;
+		RE::bhkBlendCollisionObject blend;
+		blend.body.value = &f.wrapper;
+		f.wrapper.transform.rotation.col0 = { 0, 1, 0, 0 };
+		f.wrapper.transform.rotation.col1 = { -1, 0, 0, 0 };
+		f.wrapper.transform.translation = { 10, 20, 30, 0 };
+		RE::bhkWorld::scale = 2;
+		RE::NiPoint3 center;
+		float radius = 0;
+		Check(Util::GetShapeBound(&blend, center, radius), "blend collision list rejected");
+		Check(Near(center.x, 16) && Near(center.y, 42) && Near(center.z, 66) && Near(radius, 14),
+			"blend collision list has incorrect transformed bounds");
+		Check(list.projectionCalls == 6 && f.wrapper.transformCalls == 1 && f.wrapper.massCenterCalls == 0,
+			"blend collision list did not use projected geometry");
+
+		list.projectionCalls = 0;
+		ExpectRejected(&f.object);
+		radius = 31;
+		Check(!Util::ExtractShapeBound(&list, radius) && radius == 31, "context-free list radius accepted or published");
+		Check(list.projectionCalls == 0, "unsupported list reached projections");
+
+		for (float invalid : { -1.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+			list.halfExtents = { 2, invalid, 6 };
+			ExpectRejected(&blend);
+		}
+		list.halfExtents = {};
+		ExpectRejected(&blend);
+		f.rigid.collidable.shape = nullptr;
+		ExpectRejected(&blend);
+		blend.body.value = nullptr;
+		ExpectRejected(&blend);
 	}
 	void NonCapsuleFallback()
 	{
 		Fixture f;
 		RE::hkpShape sphere;
+		sphere.center = { 1, 2, 3 };
 		f.rigid.collidable.shape = &sphere;
+		f.wrapper.transform.rotation.col0 = { 0, 1, 0, 0 };
+		f.wrapper.transform.rotation.col1 = { -1, 0, 0, 0 };
+		f.wrapper.transform.translation = { 10, 20, 30, 0 };
 		RE::bhkWorld::scale = 3;
 		RE::NiPoint3 center;
 		float radius = 0;
 		Check(Util::GetShapeBound(&f.object, center, radius), "fallback rejected");
-		Check(Near(center.x, 300) && Near(center.y, 600) && Near(center.z, 900) && Near(radius, 6), "fallback center or projection formula changed");
-		Check(f.wrapper.massCenterCalls == 1 && f.wrapper.transformCalls == 0 && sphere.projectionCalls == 6, "fallback accessor path changed");
-		f.wrapper.massCenter = { std::numeric_limits<float>::quiet_NaN(), 0, 0, 0 };
+		Check(Near(center.x, 24) && Near(center.y, 63) && Near(center.z, 99) && Near(radius, 6), "non-capsule bound is not centered on transformed geometry");
+		Check(f.wrapper.massCenterCalls == 0 && f.wrapper.transformCalls == 1 && sphere.projectionCalls == 6, "non-capsule bound used center of mass or repeated projections");
+		f.wrapper.transform.translation = { std::numeric_limits<float>::quiet_NaN(), 0, 0, 0 };
 		ExpectRejected(&f.object);
+	}
+	void NonCapsuleGeometry()
+	{
+		struct Case
+		{
+			RE::hkpShapeType type;
+			RE::NiPoint3 halfExtents;
+			float radius;
+		};
+		const std::array<Case, 5> cases{ {
+			{ RE::hkpShapeType::kSphere, { 2, 2, 2 }, 2 },
+			{ RE::hkpShapeType::kBox, { 2, 3, 6 }, 7 },
+			{ RE::hkpShapeType::kCylinder, { 2, 2, 6 }, std::sqrt(44.0f) },
+			{ RE::hkpShapeType::kConvexVertices, { 2, 3, 6 }, 7 },
+			{ RE::hkpShapeType::kTriangle, { 2, 3, 6 }, 7 },
+		} };
+		for (const auto& test : cases)
+			for (const RE::NiPoint3 offset : { RE::NiPoint3{}, RE::NiPoint3{ 17, -19, 23 } })
+				for (float scale : { 1.0f, 3.0f }) {
+					RE::hkpShape shape;
+					shape.type = test.type;
+					shape.center = offset;
+					shape.halfExtents = test.halfExtents;
+					RE::bhkWorld::scale = scale;
+					float radius = 0;
+					Check(Util::ExtractShapeBound(&shape, radius) && Near(radius, test.radius * scale),
+						"non-capsule radius depends on local offset or loses its extents");
+				}
+	}
+	void InvalidNonCapsules()
+	{
+		Fixture f;
+		RE::hkpShape shape;
+		f.rigid.collidable.shape = &shape;
+		const auto rejected = [&] {
+			ExpectRejected(&f.object);
+			float radius = 31;
+			Check(!Util::ExtractShapeBound(&shape, radius) && radius == 31, "invalid projected radius accepted or published");
+		};
+		const float nan = std::numeric_limits<float>::quiet_NaN();
+		const float inf = std::numeric_limits<float>::infinity();
+		for (float invalid : { 0.0f, -1.0f, nan, inf, -inf }) {
+			RE::bhkWorld::scale = invalid;
+			rejected();
+		}
+		RE::bhkWorld::scale = 1;
+		for (float invalid : { -1.0f, nan, inf, -inf }) {
+			shape.halfExtents = { 2, invalid, 2 };
+			rejected();
+		}
+		shape.halfExtents = {};
+		rejected();
+		shape.halfExtents = { 2, 2, 2 };
+		shape.center = { nan, 0, 0 };
+		rejected();
+		shape.center = {};
+		shape.halfExtents = { std::numeric_limits<float>::min(), 0, 0 };
+		RE::bhkWorld::scale = std::numeric_limits<float>::min();
+		rejected();
+	}
+	void LargeNonCapsules()
+	{
+		RE::hkpShape shape;
+		const float limit = std::numeric_limits<float>::max();
+		shape.halfExtents = { limit, limit, limit };
+		RE::bhkWorld::scale = 1;
+		float radius = 0;
+		Check(Util::ExtractShapeBound(&shape, radius) && radius == limit, "representable sphere radius overflowed projections");
+		shape.type = RE::hkpShapeType::kBox;
+		shape.halfExtents = { limit * .5f, limit * .5f, limit * .5f };
+		Check(Util::ExtractShapeBound(&shape, radius) && std::abs(double(radius) / limit - std::sqrt(3.0) * .5) < 1e-6,
+			"representable box radius overflowed intermediate arithmetic");
+		RE::bhkWorld::scale = 2;
+		radius = 31;
+		Check(!Util::ExtractShapeBound(&shape, radius) && radius == 31, "unrepresentable projected radius was published");
 	}
 }
 
@@ -286,6 +416,10 @@ int main()
 	CapsuleGeometry();
 	InvalidCapsules();
 	MissingAndUnsupportedShapes();
+	BlendCollisionLists();
 	NonCapsuleFallback();
+	NonCapsuleGeometry();
+	InvalidNonCapsules();
+	LargeNonCapsules();
 	return failures == 0 ? 0 : 1;
 }

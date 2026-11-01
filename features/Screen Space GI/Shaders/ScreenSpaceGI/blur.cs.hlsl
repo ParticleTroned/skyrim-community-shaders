@@ -90,18 +90,18 @@ float2x2 getRotationMatrix(float noise)
 	const float2 frameScale = FrameDim * RcpTexDim;
 
 	float radius = BlurRadius;
-#ifdef TEMPORAL_DENOISER
+#if defined(TEMPORAL_DENOISER)
 	float accumFrames = srcAccumFrames[dtid];
 	radius = lerp(radius, 2, 1 / (1 + accumFrames * 255));
 #endif
 	const uint numSamples = 8;
 
 	const float2 uv = (dtid + .5) * RCP_OUT_FRAME_DIM;
-	const float2 screenPos = uv;
+	const float2 screenPos = (uv);
 
 	float depth = READ_DEPTH(srcDepth, dtid);
 	float3 pos = ScreenToViewPosition(screenPos, depth);
-	float3 normal = GBuffer::DecodeNormal(FULLRES_LOAD(srcNormalRoughness, dtid, uv, samplerLinearClamp).xy);
+	float3 normal = GBuffer::DecodeNormal(FULLRES_LOAD(srcNormalRoughness, dtid, uv * frameScale, samplerLinearClamp).xy);
 
 	const float2 pixelDirRBViewspaceSizeAtCenterZ = depth.xx * NDCToViewMul.xy * RCP_OUT_FRAME_DIM;
 	const float worldRadius = radius * pixelDirRBViewspaceSizeAtCenterZ.x;
@@ -110,8 +110,8 @@ float2x2 getRotationMatrix(float noise)
 
 	TvBv[0] *= worldRadius;
 	TvBv[1] *= worldRadius;
-#ifdef TEMPORAL_DENOISER
-	halfAngle *= 1 - lerp(0, 0.8, sqrt(accumFrames / (float)MaxAccumFrames));
+#if defined(TEMPORAL_DENOISER)
+	halfAngle *= 1 - lerp(0, 0.8, sqrt(saturate(accumFrames * 255 / max((float)MaxAccumFrames, 1.0))));
 #endif
 
 	const float4 ilY = srcIlY[dtid];
@@ -128,14 +128,16 @@ float2x2 getRotationMatrix(float noise)
 
 		float2 poissonOffset = g_Poisson8[i].xy;
 
+		// Project blur offsets within the active viewport.
 		float3 viewSamplePos = pos + TvBv[0] * poissonOffset.x + TvBv[1] * poissonOffset.y;
-		float2 screenPosSample = FrameBuffer::ViewToUV(viewSamplePos);
+		float2 screenPosSample = FrameBuffer::ViewToUV(viewSamplePos, true);
+
 
 		if (any(screenPosSample < 0) || any(screenPosSample > 1)) {
 				continue;
 		}
 
-		float2 uvSample = screenPosSample;
+		float2 uvSample = (screenPosSample);
 		uvSample = (floor(uvSample * OUT_FRAME_DIM) + 0.5) * RCP_OUT_FRAME_DIM;  // Snap to the pixel centre
 
 		float depthSample = srcDepth.SampleLevel(samplerPointClamp, uvSample * frameScale, RES_MIP);

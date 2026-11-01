@@ -9,9 +9,12 @@
 #include <unordered_map>
 #include <vector>
 
+#include "AdaptiveBalanceDepthOfField.h"
+#include "AdaptiveBalanceGodraySettings.h"
 #include "Bloom.h"
 #include "Buffer.h"
 #include "LinearLighting.h"
+#include "Menu/AdaptiveBalancePresets.h"
 #include "SharedLighting.h"
 #include "WaterAppearance.h"
 
@@ -36,7 +39,7 @@ struct AdaptiveBrightness : Feature
 
 	virtual inline std::string GetName() override { return std::string(kFeatureName); }
 	virtual inline std::string GetShortName() override { return std::string(kFeatureShortName); }
-	virtual inline std::string GetDisplayName() override { return std::string(kFeatureDisplayName); }
+	std::string GetDisplayName() override { return T("feature.adaptive_brightness.name", "Adaptive Balance"); }
 	virtual inline std::string_view GetShaderDefineName() override { return "ADAPTIVE_BALANCE"; }
 	virtual bool HasShaderDefine(RE::BSShader::Type a_shaderType) override
 	{
@@ -49,11 +52,12 @@ struct AdaptiveBrightness : Feature
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Balances scene lighting, atmosphere and bloom by location and exterior time of day.",
-			{ "Separate exterior day and night balance profiles",
-				"Separate interior, dungeon, and dwelling profiles",
-				"Hierarchical worldspace, region, city, location, and cell profiles with COC codes",
-				"Shared light calibration with per-profile Bloom and water appearance controls" }
+			T("feature.adaptive_brightness.balances_scene_lighting_atmosphere_and_bloom_04b4ab92", "Balances scene lighting, atmosphere and bloom by location and exterior time of day."),
+			{ T("feature.adaptive_brightness.separate_exterior_day_and_night_balance_profiles", "Separate exterior day and night balance profiles"),
+				T("feature.adaptive_brightness.separate_interior_dungeon_and_dwelling_profiles", "Separate interior, dungeon, and dwelling profiles"),
+				T("feature.adaptive_brightness.hierarchical_worldspace_region_city_location_e5429612", "Hierarchical worldspace, region, city, location, and cell profiles with COC codes"),
+				T("feature.adaptive_brightness.unified_global_and_per_profile_lighting_color_4c4dc735", "Unified global and per-profile Lighting, Color, Bloom, Water, and wind adjustment layers"),
+				T("feature.adaptive_brightness.global_scene_and_underwater_depth_of_field_wi_eb9ee91d", "Global scene and underwater depth of field with independent underwater fog blur correction") }
 		};
 	}
 
@@ -70,24 +74,55 @@ struct AdaptiveBrightness : Feature
 	};
 
 	static constexpr std::size_t kProfileCount = static_cast<std::size_t>(Profile::Count);
+	static constexpr float kMoonReflectionStrengthMin = 0.0f;
+	static constexpr float kMoonReflectionStrengthMax = 2.0f;
+	static constexpr float kMoonReflectionStrengthDefault = 1.0f;
+
+	struct WaterWindSettings
+	{
+		bool overrideEnabled = false;
+		bool enabled = false;
+		float calmWaveMultiplier = 1.0f;
+		float strongWindWaveMultiplier = 1.0f;
+	};
 
 	struct ProfileSettings
 	{
 		float brightness = 1.0f;
+		float contrast = 1.0f;
+		float saturation = 1.0f;
 		bool advanced = false;
 		bool bloomAdvanced = false;
 		bool waterAdvanced = false;
 
 		float skyBrightnessMult = 1.0f;
 		float skySaturation = 1.0f;
+		float cloudBrightnessMult = 1.0f;
+		float cloudSaturation = 1.0f;
+		float fogIntensity = 1.0f;
+		float sunGlareIntensity = 1.0f;
+		float effectBrightness = 1.0f;
+		float skyStaticBrightness = 1.0f;
+		float skyStaticTransparency = 0.0f;
 		float directionalLightMult = 1.0f;
 		float pointLightMult = 1.0f;
+		float pointLightSaturation = 1.0f;
+		float pointLightCurve = 1.0f;
+		float fireIntensity = 1.0f;
+		float fireSaturation = 1.0f;
+		float fireCurve = 1.0f;
+		float linearPointLightMult = 1.0f;
+		float spotlightMult = 1.0f;
+		float linearSpotlightMult = 1.0f;
+		float omnidirectionalBulbMult = 1.0f;
+		float linearOmnidirectionalBulbMult = 1.0f;
 		float ambientMult = 1.0f;
 		float emitColorMult = 1.0f;
 		float glowmapMult = 1.0f;
 		float effectLightingMult = 1.0f;
 
 		float skyGammaOffset = 0.0f;
+		float cloudGammaOffset = 0.0f;
 		float fogGammaOffset = 0.0f;
 		float fogAlphaGammaOffset = 0.0f;
 		float waterGammaOffset = 0.0f;
@@ -95,6 +130,11 @@ struct AdaptiveBrightness : Feature
 
 		Bloom::Profile bloom;
 		WaterAppearance::Profile water;
+		WaterWindSettings waterWind;
+		AdaptiveBalanceAppearanceSettings appearance;
+
+		static ProfileSettings AdjustmentDefaults();
+		static ProfileSettings GlobalDefaults();
 	};
 
 	struct LocationOverride
@@ -104,6 +144,7 @@ struct AdaptiveBrightness : Feature
 		std::string type = "Location";
 		std::string cocCode;
 		ProfileSettings profile;
+		bool layered = false;
 	};
 
 	struct LocationOverrideTarget
@@ -127,11 +168,16 @@ struct AdaptiveBrightness : Feature
 	struct Settings
 	{
 		bool enabled = true;
-		bool globalLightingEnabled = true;
+		bool useAmbientEffectLighting = false;
+		float godrayFinalBrightness = AdaptiveBalanceGodray::kDefault;  // Legacy preset/API storage; no rendering effect.
+		float volumetricClarity = AdaptiveBalanceGodray::kClarityDefault;
+		AdaptiveBalanceGodray::Profiles godrays;
+		float moonReflectionStrength = kMoonReflectionStrengthDefault;
 		float dayStartHour = 9.0f;
 		float nightStartHour = 21.0f;
 		float transitionHours = 1.0f;
-		SharedLightingSettings lighting;
+		ProfileSettings globalProfile = ProfileSettings::GlobalDefaults();
+		AdaptiveBalanceDepthOfField::Settings depthOfField;
 		std::array<ProfileSettings, kProfileCount> profiles{};
 		std::vector<LocationOverride> locationOverrides;
 	} settings;
@@ -148,12 +194,44 @@ struct AdaptiveBrightness : Feature
 		float linearOmnidirectionalBulbMult;
 		float skySaturation;
 		float ambientMult;
-		float pad[2]{};
+		float contrast;
+		float saturation;
+		float cloudBrightness;
+		float cloudSaturation;
+		float fogIntensity;
+		float sunGlareIntensity;
+		uint32_t useAmbientEffectLighting;
+		float skyStaticTransparency;
+		float effectBrightness;
+		float skyStaticBrightness;
+		float pointLightSaturation;
+		float fireIntensity;
+		float fireSaturation;
+		float fireCurve;
+		float pointLightCurve;
+		float moonReflectionStrength;
+		float pointLightCurvePadding[2];
+		AdaptiveBalanceAppearanceSettings appearance;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
-	static_assert(sizeof(PerFrameData) == 48);
+	static_assert(sizeof(PerFrameData) == 336);
+	static_assert(offsetof(PerFrameData, appearance) == 112);
 	static_assert(offsetof(PerFrameData, skySaturation) == 32);
 	static_assert(offsetof(PerFrameData, ambientMult) == 36);
+	static_assert(offsetof(PerFrameData, contrast) == 40);
+	static_assert(offsetof(PerFrameData, saturation) == 44);
+	static_assert(offsetof(PerFrameData, cloudBrightness) == 48);
+	static_assert(offsetof(PerFrameData, fogIntensity) == 56);
+	static_assert(offsetof(PerFrameData, useAmbientEffectLighting) == 64);
+	static_assert(offsetof(PerFrameData, skyStaticTransparency) == 68);
+	static_assert(offsetof(PerFrameData, effectBrightness) == 72);
+	static_assert(offsetof(PerFrameData, skyStaticBrightness) == 76);
+	static_assert(offsetof(PerFrameData, pointLightSaturation) == 80);
+	static_assert(offsetof(PerFrameData, fireIntensity) == 84);
+	static_assert(offsetof(PerFrameData, fireSaturation) == 88);
+	static_assert(offsetof(PerFrameData, fireCurve) == 92);
+	static_assert(offsetof(PerFrameData, pointLightCurve) == 96);
+	static_assert(offsetof(PerFrameData, moonReflectionStrength) == 100);
 
 	struct alignas(16) VanillaPointLightData
 	{
@@ -178,22 +256,14 @@ struct AdaptiveBrightness : Feature
 	static constexpr const char* kDefaultFullPresetName = "Default";
 	static constexpr std::size_t kInvalidLocationOverrideIndex = static_cast<std::size_t>(-1);
 
-	struct LocationOverrideCache
+	struct LocationLayerCache
 	{
 		uint32_t worldspaceFormID = 0;
 		uint32_t locationFormID = 0;
 		uint32_t cellFormID = 0;
 		uint64_t lookupVersion = 0;
-		std::size_t overrideIndex = kInvalidLocationOverrideIndex;
-		bool inInterior = true;
+		std::vector<const LocationOverride*> layers;
 		bool valid = false;
-	};
-
-	enum class ProfileTabSurface : std::size_t
-	{
-		Advanced,
-		Essentials,
-		Count
 	};
 
 	enum class ContextProfileScope : std::size_t
@@ -217,6 +287,11 @@ struct AdaptiveBrightness : Feature
 		Locations
 	};
 
+	MenuUI::AdaptiveBalancePresets::State presetUI;
+	MenuUI::AdaptiveBalancePresets::State lastDrawnPresetUI;
+	std::vector<std::string> presetFiles;
+	std::string presetFileStatus;
+	bool presetFilesDirty = true;
 	std::string globalPresetName = kDefaultGlobalPresetName;
 	std::string globalPresetStatus;
 	std::string selectedLocationOverrideKey;
@@ -232,29 +307,58 @@ struct AdaptiveBrightness : Feature
 	std::string fullPresetStatus;
 	std::string locationOverrideEditKey;
 	std::optional<ProfileSettings> locationOverrideEditProfile;
-	std::array<ProfileTabSyncState, static_cast<std::size_t>(ProfileTabSurface::Count)> profileTabSyncStates{};
+	ProfileTabSyncState profileTabSyncState{};
 	std::string contextSectionSyncKey;
 	bool contextSectionSyncInitialized = false;
 	int contextSectionLastDrawFrame = -1;
 	mutable std::unordered_map<std::string, std::size_t> locationOverrideLookup;
-	mutable LocationOverrideCache locationOverrideCache;
+	mutable LocationLayerCache locationLayerCache;
 	mutable uint64_t locationOverrideLookupVersion = 0;
 	mutable bool locationOverrideLookupDirty = true;
+	mutable float smoothedWaterWindSpeed = 0.0f;
+	mutable uint32_t smoothedWaterWindFrame = 0;
+	mutable bool waterWindSmoothingInitialized = false;
+	mutable bool commonBufferNeedsVanillaPointLights = false;
+	bool performanceCostMeasurementEnabled = true;
+	bool weatherColorHookInstalled = false;
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Keeps the overview toggle independent of scene activity and resource readiness. */
+	bool IsPerformanceToggleEnabled() const override { return settings.enabled; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return IsRuntimeEnabled(); }
+	virtual bool UsesTotalPerformanceCostMeasurement() const override { return true; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	/** Persists the native master switch without using the temporary measurement bypass. */
+	void SetPerformanceToggleEnabled(bool a_enabled) override { SetEnabled(a_enabled); }
+	/** Restores both the native switch and temporary bypass after an overview toggle or comparison. */
+	void RestorePerformanceCostMeasurementState(const json& a_state) override;
+	virtual bool IsPerformanceCostMeasurementReady() const override { return IsRuntimeAvailable(); }
+	virtual const char* GetPerformanceCostMeasurementWaitText() const override { return T("feature.adaptive_brightness.waiting_for_a_gameplay_cell", "Waiting for a gameplay cell"); }
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
 	virtual void SetupResources() override;
 	virtual void PostPostLoad() override;
+	virtual void DataLoaded() override;
 
+	bool IsRuntimeAvailable() const;
 	/// Enables only Adaptive Balance adjustments; independent renderer features retain their state.
 	void SetEnabled(bool a_enabled);
 	bool IsRuntimeEnabled() const;
+	/** Return smooth volumetric haze suppression, or zero while Adaptive Balance is bypassed. */
+	float GetEffectiveVolumetricClarity() const;
+	/** Compose context and profile godray tuning, or return neutral while disabled. */
+	VolumetricLightingTuning::Profile GetEffectiveGodrayProfile(bool a_interior) const;
+	/** Resolves the exterior night specular multiplier; neutral indoors and while bypassed. */
+	float GetEffectiveMoonReflectionStrength() const;
+	/** Resolves shared lighting and refreshes its matching per-draw point-light requirement. */
 	PerFrameData GetCommonBufferData() const;
+	/** Uses the latest shared-lighting buffer state without recomposing profiles for each draw. */
 	bool NeedsVanillaPointLightData() const;
 	void UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount, uint32_t a_bufferRegister);
 	EffectiveLinearLightingSettings GetEffectiveLinearLightingSettings(
@@ -276,7 +380,13 @@ struct AdaptiveBrightness : Feature
 	LinearLighting::Settings LerpSettings(const LinearLighting::Settings& a_a, const LinearLighting::Settings& a_b, float a_t) const;
 	SharedLightingSettings ApplyProfile(const SharedLightingSettings& a_base, const ProfileSettings& a_profile) const;
 	SharedLightingSettings LerpSettings(const SharedLightingSettings& a_a, const SharedLightingSettings& a_b, float a_t) const;
+	Bloom::Profile ApplyProfile(const Bloom::Profile& a_base, const ProfileSettings& a_profile) const;
+	WaterAppearance::Profile ApplyProfile(const WaterAppearance::Profile& a_base, const ProfileSettings& a_profile) const;
+	WaterWindSettings ApplyProfile(const WaterWindSettings& a_base, const ProfileSettings& a_profile) const;
+	float GetSmoothedWaterWindSpeed() const;
+	void ResetWaterWindSmoothing() const;
 	ActiveProfileBlend GetActiveProfileBlend() const;
+	const std::vector<const LocationOverride*>& GetActiveLocationLayers() const;
 	Profile GetInteriorProfile() const;
 	Profile GetCurrentProfileForUI() const;
 	const LocationOverride* GetActiveLocationOverride() const;
@@ -285,7 +395,7 @@ struct AdaptiveBrightness : Feature
 	float GetExteriorNightFactor() const;
 	std::string GetContextLabel() const;
 	static const char* GetProfileName(Profile a_profile);
-	std::optional<Profile> SyncSelectedProfileTabToContext(ProfileTabSurface a_surface);
+	std::optional<Profile> SyncSelectedProfileTabToContext();
 	std::optional<ContextSection> SyncContextSection();
 	void DrawExteriorTimeSettings();
 	void DrawProfile(Profile a_profile, bool a_allowEdits = true);
@@ -296,26 +406,32 @@ struct AdaptiveBrightness : Feature
 		bool a_allowEdits,
 		const char* a_saveLabel,
 		bool a_closeWhenFinished);
-	void DrawCurrentContextProfileTab(
+	void DrawCurrentContextProfileControls(
 		ContextProfileScope a_scope,
 		bool a_showAdvancedControls,
-		bool a_allowEdits,
-		bool a_select);
-	void DrawContextProfilePresetControls(
-		ContextProfileScope a_scope,
-		const LocationOverrideTarget& a_target,
-		const LocationOverride* a_locationOverride,
 		bool a_allowEdits);
+	void DrawPresetShortcut(ContextProfileScope a_scope);
 	void DrawProfileSettings(
 		ProfileSettings& a_profile,
 		const char* a_sectionTitle = "Profile Values",
 		bool a_showAdvancedControls = true,
 		bool a_allowEdits = true);
-	void DrawGlobalRendererSettings();
-	void DrawGlobalPresetControls();
+	void DrawProfileControls(
+		ProfileSettings& a_profile,
+		const char* a_tabBarID,
+		bool a_showAdvancedControls,
+		bool a_globalLayer,
+		bool a_allowEdits);
+	void DrawGlobalSettings(bool a_showAdvancedControls);
+	void DrawLightingSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
+	/// Draws whole-scene grading controls independent of detailed lighting adjustments.
+	void DrawColorSettings(ProfileSettings& a_profile);
+	void DrawGodraySettings();
+	void DrawBloomSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
+	void DrawWaterSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
+	void DrawWaterWindSettings(ProfileSettings& a_profile, bool a_globalLayer);
+	void DrawPresets();
 	void DrawLocationOverrides(bool a_includePresetControls = true, bool a_showAdvancedControls = true, bool a_allowEdits = true);
-	void DrawLocationOverridePresetControls();
-	void DrawFullPresetControls();
 	void SaveCurrentLocationOverride(const LocationOverrideTarget& a_target);
 	void ClearLocationOverrideSelection();
 	void InvalidateProfileTabSync();
@@ -340,7 +456,6 @@ struct AdaptiveBrightness : Feature
 	std::size_t FindLocationOverrideIndexByForm(const RE::TESForm* a_form) const;
 	std::size_t ResolveWorldspaceHierarchyOverrideIndex(const RE::TESWorldSpace* a_worldspace) const;
 	std::size_t ResolveLocationHierarchyOverrideIndex(const RE::BGSLocation* a_location) const;
-	std::size_t ResolveLocationOverrideIndex() const;
 	void NormalizeLocationOverrides();
 	void MarkLocationOverrideLookupDirty();
 	void EnsureLocationOverrideLookup() const;

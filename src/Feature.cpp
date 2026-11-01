@@ -1,10 +1,20 @@
 #include "Feature.h"
+#include "Features/GrassOptimizations.h"
+#include "Features/NeuralRenderingFeature.h"
+#include "Features/TerrainSeams.h"
+#include "Features/TextureStreaming.h"
+#include "Features/WeatherPicker.h"
+#include "Features/Wetterness.h"
+#include "LegacyUtilityCompatibility.h"
+#include "Menu/PerformanceTuningRenderer.h"
+#include "Menu/SettingsPage.h"
+#include "SettingsOverrideManager.h"
+#include "Utils/UI.h"
 
 #include "FeatureIssues.h"
 #include "FeatureVersions.h"
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
-#include "Features/CSUtility.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExponentialHeightFog.h"
@@ -231,12 +241,16 @@ bool Feature::ValidateCache(CSimpleIniA& a_ini)
 	}
 
 	if (loaded) {
-		auto versionInCache = a_ini.GetValue(ini_name.c_str(), "Version");
-		if (strcmp(versionInCache, version.c_str()) != 0) {
-			logger::info("Change in version detected. Installed {} but {} in Disk Cache", version, versionInCache);
+		const auto shaderAbi = GetShaderCacheAbiVersion();
+		const auto shaderAbiInCache = a_ini.GetValue(ini_name.c_str(), "ShaderCacheABI");
+		const std::string_view cachedShaderAbi = shaderAbiInCache ? shaderAbiInCache : "";
+		if (cachedShaderAbi != shaderAbi) {
+			logger::info(
+				"Shader cache contract changed for {}. Installed {} but {} in Disk Cache",
+				name,
+				shaderAbi.empty() ? "<none>" : shaderAbi,
+				cachedShaderAbi.empty() ? "<none>" : cachedShaderAbi);
 			return false;
-		} else {
-			logger::info("Installed version and cached version match.");
 		}
 	}
 
@@ -249,11 +263,19 @@ void Feature::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 	auto ini_name = GetShortName();
 	a_ini.SetBoolValue(ini_name.c_str(), "Enabled", loaded);
 	a_ini.SetValue(ini_name.c_str(), "Version", version.c_str());
+	const auto shaderAbi = GetShaderCacheAbiVersion();
+	if (!shaderAbi.empty())
+		a_ini.SetValue(ini_name.c_str(), "ShaderCacheABI", std::string(shaderAbi).c_str());
+	else
+		a_ini.Delete(ini_name.c_str(), "ShaderCacheABI");
 }
 
 const std::vector<Feature*>& Feature::GetFeatureList()
 {
 	static std::vector<Feature*> features = {
+		&globals::features::grassOptimizations,
+		&globals::features::wetterness,
+		&globals::features::weatherPicker,
 		&globals::features::truePBR,
 		&globals::features::foliageLighting,
 		&globals::features::adaptiveBrightness,
@@ -285,13 +307,14 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::ibl,
 		&globals::features::extendedTranslucency,
 		&globals::features::upscaling,
+		&globals::features::neuralRendering,
+		&TextureStreaming::Instance(),
 		&globals::features::renderDoc,
 		&globals::features::csEditor,
 		&globals::features::screenshotFeature,
 		&globals::features::linearLighting,
 		&globals::features::unifiedWater,
 		&globals::features::horizonFix,
-		&globals::features::csUtility,
 		&globals::features::exponentialHeightFog,
 		&globals::features::hdrDisplay,
 		&globals::features::skin
@@ -302,6 +325,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 
 Feature* Feature::FindFeatureByShortName(const std::string& shortName)
 {
+	if (auto* legacy = LegacyUtilityCompatibility::Find(shortName, true))
+		return legacy;
 	for (auto* feature : GetFeatureList()) {
 		if (feature->loaded && feature->GetShortName() == shortName)
 			return feature;
@@ -396,6 +421,8 @@ void Feature::DrawUnloadedUI()
 
 std::string Feature::GetFeatureRequiredVersion(const std::string& shortName)
 {
+	if (LegacyUtilityCompatibility::IsAlias(shortName))
+		return "1.6.0";
 	if (shortName.empty()) {
 		return "unknown";
 	}
@@ -409,6 +436,11 @@ std::string Feature::GetFeatureRequiredVersion(const std::string& shortName)
 
 bool Feature::IsFeatureKnown(const std::string& shortName, REL::Version* outVersion)
 {
+	if (LegacyUtilityCompatibility::IsAlias(shortName)) {
+		if (outVersion)
+			*outVersion = REL::Version{ 1, 6, 0 };
+		return true;
+	}
 	if (shortName.empty()) {
 		return false;
 	}
@@ -422,4 +454,143 @@ bool Feature::IsFeatureKnown(const std::string& shortName, REL::Version* outVers
 	}
 
 	return false;
+}
+
+bool Feature::ReapplyOverrideSettings()
+{
+	auto overrideManager = SettingsOverrideManager::GetSingleton();
+	std::string featureName = GetShortName();
+
+	if (!overrideManager || !overrideManager->HasFeatureOverrides(featureName)) {
+		return false;
+	}
+
+	// Get base settings and apply overrides fresh
+	json originalSettings;
+	auto* weatherRegistry =
+		WeatherVariables::GlobalWeatherRegistry::GetSingleton();
+	auto* weatherManager = WeatherManager::GetSingleton();
+	const bool hasWeatherSupport =
+		weatherRegistry->HasWeatherSupport(featureName);
+	const auto synchronizeWeatherBaseline = [&]() {
+		if (!hasWeatherSupport)
+			return;
+		weatherRegistry->CaptureFeatureUserSettings(featureName);
+		weatherManager->NotifyUserSettingsChanged();
+		weatherManager->RefreshFeatureOverrides();
+	};
+	const auto activeVariables =
+		weatherManager->GetActiveVariablesForFeature(featureName);
+	weatherRegistry->SerializeFeatureUserSettings(featureName, activeVariables, [&]() {
+		SaveSettings(originalSettings);
+	});
+
+	// Apply overrides to the settings (without user customizations)
+	json featureJson = originalSettings;
+	size_t appliedCount = overrideManager->ReapplyFeatureOverrides(featureName, featureJson);
+
+	if (appliedCount == 0)
+		return false;
+
+	const auto restoreOriginalSettings = [&]() noexcept {
+		bool settingsRestored = false;
+		try {
+			LoadSettings(originalSettings);
+			settingsRestored = true;
+		} catch (const std::exception& e) {
+			logger::error(
+				"Failed to restore settings after applying overrides for {}: {}",
+				featureName, e.what());
+		} catch (...) {
+			logger::error(
+				"Failed to restore settings after applying overrides for {}",
+				featureName);
+		}
+
+		if (!settingsRestored) {
+			try {
+				RestoreDefaultSettings();
+			} catch (const std::exception& e) {
+				logger::error(
+					"Failed to restore defaults after override recovery failed for {}: {}",
+					featureName, e.what());
+				return;
+			} catch (...) {
+				logger::error(
+					"Failed to restore defaults after override recovery failed for {}",
+					featureName);
+				return;
+			}
+			logger::warn("Restored defaults after override recovery failed for {}", featureName);
+		}
+
+		// A weather refresh failure must not discard successfully recovered settings.
+		try {
+			synchronizeWeatherBaseline();
+		} catch (const std::exception& e) {
+			logger::error(
+				"Failed to synchronize weather after override recovery for {}: {}",
+				featureName, e.what());
+		} catch (...) {
+			logger::error(
+				"Failed to synchronize weather after override recovery for {}",
+				featureName);
+		}
+	};
+
+	try {
+		LoadSettings(featureJson);
+	} catch (const std::exception& e) {
+		logger::warn(
+			"Failed to validate reapplied override settings for {}: {}",
+			featureName, e.what());
+		restoreOriginalSettings();
+		return false;
+	} catch (...) {
+		logger::warn(
+			"Failed to validate reapplied override settings for {}",
+			featureName);
+		restoreOriginalSettings();
+		return false;
+	}
+
+	// Do not discard the user's persisted customizations unless an override was
+	// successfully prepared and the file can actually be removed.
+	if (!overrideManager->DeleteUserOverride(featureName)) {
+		restoreOriginalSettings();
+		return false;
+	}
+
+	synchronizeWeatherBaseline();
+	return true;
+}
+
+Feature* Feature::FindRegisteredFeatureByShortName(const std::string& shortName)
+{
+	if (auto* legacy = LegacyUtilityCompatibility::Find(shortName, false))
+		return legacy;
+	for (auto* feature : GetFeatureList()) {
+		if (feature && feature->GetShortName() == shortName)
+			return feature;
+	}
+	return nullptr;
+}
+
+void Feature::DrawSettingsEnabledControl()
+{
+	PerformanceTuningRenderer::RenderFeatureEnabledControl(this);
+}
+
+void Feature::DrawSettings()
+{
+	MenuUI::SettingsPage page(GetShortName().c_str(), { { "about", T("feature.common.how_it_works", "How it works"), T("feature.common.how_it_works_description", "Learn what this feature contributes to the scene."), T("feature.common.automatic_improvements", "Automatic rendering improvements"), true, true, T("feature.common.review_feature", "Review the feature") } });
+	if (page.Is("about")) {
+		const auto [description, keyFeatures] = GetFeatureSummary();
+		MenuUI::DetailText(description.c_str());
+		for (const auto& benefit : keyFeatures)
+			MenuUI::DetailNote(benefit.c_str());
+		MenuUI::DetailNote(SupportsPerformanceCostMeasurement() ?
+							   T("feature.common.header_toggle_help", "No further tuning. Use Enabled in the header to control this feature.") :
+							   T("feature.common.startup_toggle_help", "No further tuning. Change the startup setting in Advanced > Startup, save settings and restart."));
+	}
 }

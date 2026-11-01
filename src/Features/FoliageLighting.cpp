@@ -1,4 +1,6 @@
 #include "FoliageLighting.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include "Globals.h"
 #include "I18n/I18n.h"
@@ -66,13 +68,13 @@ void FoliageLighting::SanitizeSettings(Settings& a_settings)
 	}
 }
 
-void FoliageLighting::DrawSettingsHeaderControls()
+void FoliageLighting::DrawEnabledControl()
 {
 	bool foliageLightingEnabled = IsEnabled();
-	if (ImGui::Checkbox("Enable", &foliageLightingEnabled))
+	if (ImGui::Checkbox(T("feature.foliage_lighting.enable", "Enable"), &foliageLightingEnabled))
 		SetEnabled(foliageLightingEnabled);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Controls all tree foliage and grass lighting additions while preserving their saved tuning.");
+		ImGui::TextUnformatted(T("feature.foliage_lighting.controls_all_tree_foliage_and_grass_lighting_f146e73b", "Controls all tree foliage and grass lighting additions while preserving their saved tuning."));
 }
 
 void FoliageLighting::DrawFoliageScatteringSetting()
@@ -121,15 +123,19 @@ void FoliageLighting::DrawSettings()
 {
 	SanitizeSettings(settings);
 	const bool truePBRActive = IsTruePBRActive();
-	ImGui::BeginDisabled(!IsEnabled());
 
-	if (ImGui::TreeNodeEx(T(TKEY("tree_foliage"), "Tree Foliage"))) {
+	MenuUI::SettingsPage page("FoliageLighting", {
+													 { "trees", T("feature.foliage_lighting.ui_trees", "Trees"), T("feature.foliage_lighting.ui_refine_light_passing_through_tree_leaves", "Refine light passing through tree leaves."), T("feature.foliage_lighting.ui_leaf_translucency", "Leaf translucency"), true, true, T("feature.foliage_lighting.ui_balance_vegetation_lighting", "Balance vegetation lighting") },
+													 { "grass", T("feature.foliage_lighting.grass", "Grass"), T("feature.foliage_lighting.ui_refine_light_passing_through_grass", "Refine light passing through grass."), T("feature.foliage_lighting.ui_grass_translucency", "Grass translucency"), true, true, nullptr },
+												 });
+	const auto controlsDisabled = Util::DisableGuard(!(IsEnabled()));
+	if (page.Is("trees")) {
 		DrawFoliageScatteringSetting();
 		DrawFoliageAmbientBoostSetting(truePBRActive);
 
 		ImGui::BeginDisabled(!truePBRActive || settings.EnableFoliageAmbientBoost == 0);
-		ImGui::SliderFloat(
-			T(TKEY("ambient_amount"), "Ambient Amount"),
+		Util::Widgets::SliderFloat(
+			T("feature.foliage_lighting.ambient_amount", "Ambient Amount"),
 			&settings.FoliageAmbientAmount,
 			kAmbientAmountMin,
 			kAmbientAmountMax,
@@ -138,27 +144,22 @@ void FoliageLighting::DrawSettings()
 		ImGui::EndDisabled();
 		DrawTruePBRDependentTooltip(
 			truePBRActive,
-			T(TKEY("ambient_amount_tooltip"), "Strength of the additive indirect ambient response for animated PBR foliage."));
+			T("feature.foliage_lighting.ambient_amount_tooltip", "Strength of the additive indirect ambient response for animated PBR foliage."));
 
 		DrawFoliageAmbientFlipSetting();
-
-		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx(T(TKEY("grass"), "Grass"))) {
+	if (page.Is("grass")) {
 		DrawGrassScatteringSetting();
-
-		ImGui::TreePop();
 	}
 
-	ImGui::EndDisabled();
 	SanitizeSettings(settings);
 }
 
 void FoliageLighting::DrawPerformanceSettings(bool)
 {
 	SanitizeSettings(settings);
-	DrawSettingsHeaderControls();
+	DrawEnabledControl();
 	ImGui::BeginDisabled(!IsEnabled());
 	const bool truePBRActive = IsTruePBRActive();
 	DrawFoliageScatteringSetting();

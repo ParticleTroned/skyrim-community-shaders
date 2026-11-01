@@ -40,6 +40,7 @@ namespace SharedData
 		float4 VolumetricLightingCustomColor;  // rgb=custom color, w=contribution
 		float VolumetricLightingSaturation;
 		float3 VolumetricLightingPad;
+		float4 VolumetricLightingClarity;  // x=haze suppression, y=shaft intensity
 	};
 
 	struct GrassLightingSettings
@@ -63,7 +64,8 @@ namespace SharedData
 		bool EnableHeightBlending;
 		bool EnableShadows;
 		bool EnableParallaxWarpingFix;
-		uint2 pad0;
+		float ParallaxStrength;
+		uint pad0;
 	};
 
 	struct CubemapCreatorSettings
@@ -81,6 +83,8 @@ namespace SharedData
 		float3 Scale;
 		float2 ZRange;
 		float2 Offset;
+		float ZBlur;
+		float3 pad0;
 	};
 
 	struct LightLimitFixSettings
@@ -137,19 +141,93 @@ namespace SharedData
 		float RippleLifetimeRcp;
 	};
 
+	struct WetternessSettings
+	{
+		row_major float4x4 OcclusionViewProj;
+
+		float Time;
+		float Raining;
+		float Wetness;
+		float PuddleWetness;
+
+		uint EnableWetnessEffects;
+		float MaxRainWetness;
+		float MaxPuddleWetness;
+		float MaxShoreWetness;
+
+		uint ShoreRange;
+		float PuddleRadius;
+		float PuddleMaxAngle;
+		float PuddleMinWetness;
+
+		float MinRainWetness;
+		float SkinWetness;
+		float PuddleLayout;
+		float StoneDryingMultiplier;
+		float DirtDryingMultiplier;
+		float GrassDryingMultiplier;
+		uint EnableRaindropFx;
+
+		uint EnableSplashes;
+		uint EnableRipples;
+		uint EnableModernWetReflection;
+		uint EnableLegacyWetReflection;
+		float WetIndirectSpecularScale;
+		float RaindropFxRange;
+
+		float RaindropGridSizeRcp;
+		float RaindropIntervalRcp;
+		float RaindropChance;
+		float SplashesLifetime;
+
+		float SplashesStrength;
+		float SplashesMinRadius;
+		float SplashesMaxRadius;
+		float RippleStrength;
+
+		float RippleRadius;
+		float RippleBreadth;
+		float RippleLifetimeRcp;
+		float PostRainPuddleWaterStrength;
+
+		float RaindropTransitionFalloff;
+		float WetDarkeningStrength;
+		float WetHighlightReduction;
+		uint EnableForwardReflectionBias;
+		uint EnableVanillaReflectionCompensation;
+		float WetFilmSpecularFloorScale;
+		float ShorePersistentDarkeningStrength;
+		uint PackedPostRainControl;
+		uint PackedRainReflectionControl;
+		// View-depth fade/cull range for dev-style wetness distance fading, in game units.
+		uint WetnessDistanceFadeRangePacked;
+		float RainContactWetnessScale;
+
+		float GrassWetnessPhase;
+		float NightFactor;
+		float GrassWetDarkeningStrength;
+		uint PuddleMaskMode;
+	};
+
 	struct SkylightingSettings
 	{
 		row_major float4x4 OcclusionViewProj;
-		float4 OcclusionDir;
+		float4 OcclusionSHBasis4Pi;
 
-		float4 PosOffset;   // xyz: cell origin in camera model space
-		uint4 ArrayOrigin;  // xyz: array origin
+		float3 PosOffset;  // cell origin in camera model space
+		uint PosOffsetPadding;
+		uint3 ArrayOrigin;  // xyz: array origin
+		uint Enabled;
 		int4 ValidMargin;
+		uint3 ArrayDims;
+		float ProbeFieldSize;
 
 		float MinDiffuseVisibility;
 		float MinSpecularVisibility;
-		uint Enabled;
+		uint ProbeUpdateSliceStart;
+		uint ProbeUpdateSliceCount;
 		uint ShadowDataAvailable;
+		uint3 ShadowDataPadding;
 	};
 
 	struct CloudShadowsSettings
@@ -199,7 +277,8 @@ namespace SharedData
 	struct TerrainVariationSettings
 	{
 		uint enableLODTerrainTilingFix;  ///< 1 = apply variation to LOD terrain.
-		uint3 pad;
+		uint enableMeshSupport;          ///< 1 = apply variation to eligible meshes.
+		uint2 pad;
 	};
 
 	struct IBLSettings
@@ -226,6 +305,48 @@ namespace SharedData
 		float Strength;      // [0, 1.0] The inverse blend weight of the effect
 	};
 
+	struct AdaptiveBalanceAppearanceSettings
+	{
+		float directionalSaturation;
+		float directionalCurve;
+		float ambientSaturation;
+		float fogBrightness;
+		float3 directionalTint;
+		float cloudOpacity;
+		float3 fogTint;
+		float starsIntensity;
+		float3 cloudTint;
+		float starsCurve;
+		float3 skyTopTint;
+		float skyTopIntensity;
+		float3 skyMiddleTint;
+		float skyMiddleIntensity;
+		float3 skyHorizonTint;
+		float skyHorizonIntensity;
+		float skyTopCurve;
+		float skyMiddleCurve;
+		float skyHorizonCurve;
+		float skyStaticCurve;
+		float3 skyStaticTint;
+		float lightSpriteIntensity;
+		float lightSpriteCurve;
+		float particleIntensity;
+		float particleDirectionalInfluence;
+		float particleAmbientInfluence;
+		float particlePointInfluence;
+		float cloudShadowStrength;
+		float godrayIntensity;
+		float godrayOpacity;
+		float3 godrayTint;
+		float godrayTintAmount;
+		float godraySaturation;
+		float eyeSpecularBrightness;
+		float eyeBrightness;
+		float auroraIntensity;
+		float auroraCurve;
+		float3 padding;
+	};
+
 	struct AdaptiveBalanceSettings
 	{
 		float skyBrightness;
@@ -238,7 +359,24 @@ namespace SharedData
 		float linearOmnidirectionalBulbMult;
 		float skySaturation;
 		float ambientMult;
-		float2 pad;
+		float contrast;
+		float saturation;
+		float cloudBrightness;
+		float cloudSaturation;
+		float fogIntensity;
+		float sunGlareIntensity;
+		uint useAmbientEffectLighting;
+		float skyStaticTransparency;
+		float effectBrightness;
+		float skyStaticBrightness;
+		float pointLightSaturation;
+		float fireIntensity;
+		float fireSaturation;
+		float fireCurve;
+		float pointLightCurve;
+		float moonReflectionStrength;
+		float2 padding;
+		AdaptiveBalanceAppearanceSettings appearance;
 	};
 
 	struct LinearLightingSettings
@@ -271,7 +409,8 @@ namespace SharedData
 		float deferredEffectMult;
 		float otherEffectMult;
 		uint enableAdaptiveBrightnessColorAdjustments;
-		uint4 pad0;
+		float cloudGamma;
+		uint3 pad0;
 	};
 
 	struct TerrainBlendingSettings
@@ -279,7 +418,7 @@ namespace SharedData
 		uint Enabled;
 		float TerrainCullDistance;
 		float BlendStrength;
-		float pad0;
+		uint LandscapeSeams;
 	};
 
 	struct ExponentialHeightFogSettings
@@ -327,6 +466,8 @@ namespace SharedData
 		float PBRMetalReflectionScale;
 		float PBRMetalHighlightScale;
 		uint Enabled;
+		uint GrassEnabled;
+		uint3 pad;
 	};
 
 	struct SkinData
@@ -426,6 +567,7 @@ namespace SharedData
 		TerraOccSettings terraOccSettings;
 		LightLimitFixSettings lightLimitFixSettings;
 		WetnessEffectsSettings wetnessEffectsSettings;
+		WetternessSettings wetternessSettings;
 		SkylightingSettings skylightingSettings;
 		CloudShadowsSettings cloudShadowsSettings;
 		LODBlendingSettings lodBlendingSettings;
@@ -459,6 +601,16 @@ namespace SharedData
 	float GetDepth(float2 uv)
 	{
 		return DepthTexture.Load(ConvertUVToSampleCoord(uv)).x;
+	}
+
+	bool IsLODBlendingEnabled()
+	{
+		return lodBlendingSettings.Enabled != 0;
+	}
+
+	bool ShouldDisableTerrainVertexColors()
+	{
+		return IsLODBlendingEnabled() && lodBlendingSettings.DisableTerrainVertexColors != 0;
 	}
 
 	float GetScreenDepth(float depth)

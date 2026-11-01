@@ -88,6 +88,8 @@ public:
 	 * Whether the feature will show up in the GUI menu
 	 */
 	virtual bool IsInMenu() const { return true; }
+	/** @brief Distinguishes an absent optional dependency from a failed package. */
+	virtual bool IsRuntimeDisabledByMissingDependency() const { return false; }
 
 	/**
 	 * Whether the feature should be hidden from user-facing feature lists.
@@ -111,9 +113,19 @@ public:
 	 */
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() { return {}; }
 	virtual void SetupResources() {}
+	/** @brief Recreates only size-dependent resources at a render-owner boundary. */
+	virtual void SetupRenderTargetResources() {}
 	virtual void Reset() {}
+	struct SettingsHeaderStatus
+	{
+		std::string_view label = "Ready";
+		bool needsAttention = false;
+	};
+	virtual SettingsHeaderStatus GetSettingsHeaderStatus() const { return { T("feature.common.ready", "Ready"), false }; }
+	virtual void DrawSettingsEnabledControl();
+	virtual std::string_view GetSettingsFooterText() const { return {}; }
 	virtual void DrawSettingsHeaderControls() {}
-	virtual void DrawSettings() {}
+	virtual void DrawSettings();
 	virtual bool HasEssentialSettings() const { return false; }
 	virtual void DrawEssentialSettings() {}
 	virtual bool HasPerformanceSettings() const { return false; }
@@ -158,6 +170,14 @@ public:
 		return true;
 	}
 	virtual bool SupportsPerformanceCostMeasurement() const { return false; }
+	virtual bool IsPerformanceToggleEnabled() const { return IsPerformanceCostMeasurementEnabled(); }
+	virtual void SetPerformanceToggleEnabled(bool a_enabled) { SetPerformanceCostMeasurementEnabled(a_enabled); }
+	virtual const char* GetPerformanceToggleBlockReason() const { return nullptr; }
+	virtual void RestorePerformanceToggleState(const json& a_state) { RestorePerformanceCostMeasurementState(a_state); }
+	virtual bool UsesTotalPerformanceCostMeasurement() const { return false; }
+	virtual bool RequiresMenuCloseForPerformanceCostMeasurement(bool) const { return false; }
+	virtual bool RequiresMenuCloseForPerformanceCostMeasurementRestore(const json&) const { return false; }
+	virtual uint32_t GetPerformanceCostMeasurementMenuCloseWaitMs() const { return 5000u; }
 	virtual const char* GetPerformanceCostMeasurementUnavailableReason() const { return nullptr; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const { return false; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) { (void)a_enabled; }
@@ -222,6 +242,8 @@ public:
 
 	virtual bool HasFeatureSettings() const { return true; }
 	virtual void RestoreDefaultSettings() {}
+	virtual void RestoreDefaultSettingsForLoad() { RestoreDefaultSettings(); }
+	virtual bool ReapplyOverrideSettings();
 	virtual bool ToggleAtBootSetting();
 
 	/**
@@ -270,6 +292,11 @@ public:
 
 	virtual bool ValidateCache(CSimpleIniA& a_ini);
 	virtual void WriteDiskCacheInfo(CSimpleIniA& a_ini);
+	/** @brief Bumps when non-HLSL changes invalidate this feature's shader layout. */
+	virtual std::string_view GetShaderCacheAbiVersion()
+	{
+		return GetShaderDefineName().empty() ? std::string_view{} : std::string_view{ "1" };
+	}
 	virtual void ClearShaderCache() {}
 	/** @brief Invalidates this feature's shader cache during a scene-scoped clear.
 	 *  Features may override this when they can avoid an eager full-cache rebuild. */
@@ -284,6 +311,7 @@ public:
 	 * @return Pointer to the feature if found and loaded, nullptr otherwise.
 	 */
 	static Feature* FindFeatureByShortName(const std::string& shortName);
+	static Feature* FindRegisteredFeatureByShortName(const std::string& shortName);
 
 	/**
 	 * @brief Gets sorted short names of all loaded features that appear in the menu.

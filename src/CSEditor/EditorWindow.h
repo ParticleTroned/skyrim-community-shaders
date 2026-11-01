@@ -1,9 +1,8 @@
 #pragma once
 
 #include "Buffer.h"
-#include "Utils/VanityCamera.h"
-
 #include "LightEditor.h"
+#include "Utils/VanityCamera.h"
 #include "Weather/CellLightingWidget.h"
 #include "Weather/ImageSpaceWidget.h"
 #include "Weather/LensFlareWidget.h"
@@ -15,6 +14,7 @@
 #include "WeatherUtils.h"
 #include "Widget.h"
 
+#include <atomic>
 #include <cstdint>
 #include <unordered_map>
 
@@ -40,8 +40,20 @@ public:
 	PreviewMode previewMode = PreviewMode::None;
 	const static int maxRecordMarkers = 10;
 
-	// Owned by EditorWindow, created in Draw(), released in destructor
+	// Render-owned viewport copy, released after the editor closes.
 	Texture2D* tempTexture = nullptr;
+
+	/** @brief Screen-space bounds and source dimensions of the current game preview image. */
+	struct ViewportImageRect
+	{
+		ImVec2 min{};
+		ImVec2 max{};
+		ImVec2 renderSize{};
+		bool valid = false;
+	};
+
+	/** @brief Returns the mapping from the most recent rendered Viewport window. */
+	[[nodiscard]] const ViewportImageRect& GetViewportImageRect() const noexcept { return viewportImageRect; }
 
 	// Widget collections owned by EditorWindow, created in SetupResources(), released in destructor
 	using WidgetVec = std::vector<std::unique_ptr<Widget>>;
@@ -65,6 +77,7 @@ public:
 
 	// Owned by EditorWindow, created on demand in ShowObjectsWindow(), released in destructor
 	std::unique_ptr<CellLightingWidget> currentCellLightingWidget;
+	std::unordered_map<std::string, std::unique_ptr<CellLightingWidget>> cachedCellLightingWidgets;
 
 	LightEditor lightEditor;
 
@@ -97,7 +110,6 @@ public:
 	void EnterPreviewMode(PreviewMode mode);
 	void ExitPreviewMode();
 	bool IsInPreviewMode() const { return previewMode != PreviewMode::None; }
-	bool IsViewportActive() const;
 	bool IsPreviewFlying() const { return previewMode == PreviewMode::FreeCamera || previewMode == PreviewMode::PlayMode; }
 	PreviewMode GetPreviewMode() const { return previewMode; }
 	void ToggleFreeCameraLock();
@@ -106,8 +118,13 @@ public:
 	// Vanity camera control
 	Util::VanityCameraSuppressionLease vanityCameraSuppression;
 
-	// Game HUD hiding (tm equivalent)
 	bool gameMenusHidden = false;
+	bool IsViewportActive() const;
+	static bool CanBeOpen();
+	void HideGameMenus();
+	void ShowGameMenus();
+	void SyncExternalTimeScale();
+	static void ResetWeatherLock(bool a_releaseOverride);
 
 	void ShowObjectsWindow();
 
@@ -118,45 +135,43 @@ public:
 	void RenderUI();
 
 	void SetupResources();
+	void EnsureResources();
 
 	void Draw();
+	/** @brief Advances delayed light-reference work independently of editor visibility. */
+	void AdvanceLightEditorDeferredWork();
+	void UpdateOpenState();
+	/** @brief Releases queued preview resources on the render thread before a new ImGui frame. */
+	void ReleasePendingPreviewResources();
+
+	/** @brief Selects and enables the Light Editor after its parent editor has opened. */
+	void ActivateLightEditor();
+	[[nodiscard]] bool IsLightEditorSelected() const;
+	[[nodiscard]] bool IsLightEditorEnabled() const { return lightEditor.IsEnabled(); }
+	[[nodiscard]] bool IsLightPickerActive() const { return lightEditor.IsPicking(); }
+	[[nodiscard]] bool HasLightEditorDeferredWork() const { return lightEditor.HasDeferredWork(); }
+	/** @brief True only when the most recent editor UI pass published a valid preview. */
+	[[nodiscard]] bool IsEditorViewportVisible() const { return open && settings.showViewport && viewportImageRect.valid; }
+	void BeginLightPick() { lightEditor.BeginPick(); }
+	void CancelLightPick() { lightEditor.CancelPick(); }
 
 	void LockWeather(RE::TESWeather* weather);
 	void UnlockWeather();
 	bool IsWeatherLocked() const;
 	RE::TESWeather* GetLockedWeather() const;
-
-	/** @brief Installs the process-wide weather guard hooks. Call once during plugin initialization. */
 	static void InstallWeatherLockHooks();
-
-	/** @brief Returns true only after both weather guard hooks were installed atomically. */
 	static bool AreWeatherLockHooksInstalled();
-
-	/** @brief Repairs the active lock and cancels any queued override release. Call once per frame. */
 	static void MaintainWeatherLock();
+	/** Forces weather on the engine thread, preserving locks and refreshing sky visuals. */
+	static void ForceWeather(RE::Sky* a_sky, RE::TESWeather* a_weather, bool a_override);
 
-	/** @brief Clears lock ownership before a world transition and optionally releases the live override. */
-	static void ResetWeatherLock(bool a_releaseOverride);
-
-	// Time controls
 	void PauseTime();
 	void ResumeTime();
 	inline void TogglePause() { timePaused ? ResumeTime() : PauseTime(); }
 	void ResetTimeScale();
-	/** @brief Returns whether the editor owns a pause request, including while a menu temporarily restores time. */
 	bool IsTimePaused() const { return timePaused; }
-
-	/**
-	 * @brief Keeps time running while a transition-sensitive menu is open and reapplies an
-	 * editor-owned pause after the final such menu closes.
-	 * @param a_needsRunningTime True while any transition-sensitive menu is open.
-	 */
 	void SetTimeRunningForMenu(bool a_needsRunningTime);
 
-	/** @brief Reconciles external time changes and completes any deferred post-menu state write. */
-	void SyncExternalTimeScale();
-
-	/** @brief Drives the time guard from menu transitions that may suspend world rendering. */
 	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
 	{
 	public:
@@ -171,33 +186,25 @@ public:
 		std::uint8_t openMenuMask = 0;
 	};
 
-	/// Draw a game-hour slider. Returns true if calendar is valid.
 	bool DrawGameHourSlider(const char* label = "Game Time", const char* format = "%.2f");
-
-	/// Draw the full time controls panel (pause, game time, timescale).
 	void DrawTimeControls();
 
-	/** @brief Returns true if ESC should close the editor (no popup open and none just consumed ESC this frame). */
+	/** @brief Returns true if ESC should close the editor rather than a child interaction. */
 	bool ShouldHandleEscapeKey();
 
-	/** @brief Set by popup close-on-ESC to suppress the same key-up from also closing the editor. */
+	/** @brief One-shot handoff set when a picker or popup consumes ESC on key-down. */
 	bool suppressNextEditorEscape = false;
 
-	static bool CanBeOpen();
 	void DisableVanityCamera();
 	void RestoreVanityCamera();
-	void HideGameMenus();
-	void ShowGameMenus();
-
-	/// Call every frame from the overlay renderer to track open/close transitions.
-	void UpdateOpenState();
 
 	// Undo system
 	struct UndoState
 	{
-		Widget* widget;
-		json settings;
-		std::string widgetId;
+		std::string widgetIdentity;
+		std::string widgetLabel;
+		bool restoreRuntime = false;
+		Widget::UndoRestoreAction restore;
 	};
 	std::vector<UndoState> undoStack;
 	static const size_t maxUndoStates = 50;
@@ -234,6 +241,7 @@ public:
 		std::vector<std::string> favoriteWidgets;
 		std::map<std::string, std::vector<std::string>> recentWidgets;
 		int maxRecentWidgets = 10;
+
 		bool showViewport = true;
 		std::string selectedCategory = "Weather";
 
@@ -286,15 +294,26 @@ private:
 	void SaveAll();
 	void SaveSettings();
 	void LoadSettings();
+	void SanitizeSettings();
 	void ShowSettingsWindow();
+	bool AddRecordMarker();
+	std::string RenameRecordMarker(const std::string& oldName, const std::string& newName);
+	void DeleteRecordMarker(const std::string& name);
+	std::unordered_map<std::string, std::string> markerLabelBuffers;
 	void Load();
+	bool resourcesInitialized = false;
 	json j;
 	std::string settingsFilename = "EditorSettings";
 	bool showSettingsWindow = false;
 	std::string settingsSelectedCategory = "Flags";
+	bool wasOpen = false;
+	std::atomic_bool previewResourceReleasePending{ false };
+	ViewportImageRect viewportImageRect;
 
 	// Widget focus tracking for Ctrl+W
 	Widget* lastFocusedWidget = nullptr;
+	void OpenCellLightingWidget(RE::TESObjectCELL* cell, bool showNotification, bool requestFocus = false);
+	Widget* FindWidgetByIdentity(std::string_view identity);
 
 	// Time control state
 	bool timePaused = false;
@@ -328,7 +347,6 @@ private:
 	void RefreshJsonAttachmentCache(const std::vector<Widget*>& widgets);
 	bool HasCachedJsonAttachment(Widget* widget) const;
 	void InvalidateJsonAttachmentCache(Widget* widget = nullptr);
-
 	// Objects window filter state
 	enum class FilterColumn : int
 	{

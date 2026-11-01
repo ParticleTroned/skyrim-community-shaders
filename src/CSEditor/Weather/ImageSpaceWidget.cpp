@@ -96,7 +96,7 @@ void ImageSpaceWidget::DrawWidget()
 	auto editorWindow = EditorWindow::GetSingleton();
 
 	if (BeginWidgetWindow()) {
-		DrawWidgetHeader("##ImageSpaceSearch", false, true);
+		DrawWidgetHeader("##ImageSpaceSearch", true, true);
 		DrawSearchDropdown();
 	}
 	BeginScrollableContent("##ISScroll");
@@ -166,10 +166,9 @@ void ImageSpaceWidget::LoadSettings()
 {
 	try {
 		if (!js.empty() && js.contains("Settings") && js["Settings"].is_object()) {
-			const auto& savedSettings = js["Settings"];
-			settings = savedSettings;
-			if (!savedSettings.contains("hdrReceiveBloomThreshold") || !savedSettings["hdrReceiveBloomThreshold"].is_number())
-				settings.hdrReceiveBloomThreshold = vanillaSettings.hdrReceiveBloomThreshold;
+			json mergedSettings = vanillaSettings;
+			mergedSettings.merge_patch(js["Settings"]);
+			settings = mergedSettings;
 		} else {
 			settings = vanillaSettings;
 		}
@@ -184,7 +183,6 @@ void ImageSpaceWidget::LoadSettings()
 void ImageSpaceWidget::SaveSettings()
 {
 	js["Settings"] = settings;
-	originalSettings = settings;
 }
 
 void ImageSpaceWidget::SetImageSpaceValues()
@@ -274,6 +272,23 @@ void ImageSpaceWidget::RevertChanges()
 {
 	settings = vanillaSettings;
 	ApplyChanges();
+}
+
+Widget::UndoRestoreAction ImageSpaceWidget::CaptureUndoState() const
+{
+	const auto snapshot = settings;
+	return [snapshot](Widget& widget) {
+		auto& self = static_cast<ImageSpaceWidget&>(widget);
+		self.settings = snapshot;
+	};
+}
+
+Widget::UndoRestoreAction ImageSpaceWidget::CaptureBaselineState() const
+{
+	const auto snapshot = vanillaSettings;
+	return [snapshot](Widget& widget) {
+		static_cast<ImageSpaceWidget&>(widget).vanillaSettings = snapshot;
+	};
 }
 
 bool ImageSpaceWidget::HasUnsavedChanges() const

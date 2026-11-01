@@ -1,75 +1,26 @@
 #include "FileSystem.h"
 #include <Windows.h>
 #include <atomic>
-#include <chrono>
 #include <cmath>
-#include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <limits>
 #include <psapi.h>
-#include <system_error>
-#include <utility>
-
-namespace
-{
-	std::atomic_uint64_t atomicWriteSequence = 0;
-
-	std::string GetWindowsErrorMessage(DWORD error)
-	{
-		return std::system_category().message(static_cast<int>(error));
-	}
-
-	void CloseTemporaryFileAfterFailure(
-		HANDLE file,
-		std::string& errorMessage)
-	{
-		if (!CloseHandle(file)) {
-			errorMessage += std::format(
-				" Closing the temporary file also failed: {}.",
-				GetWindowsErrorMessage(GetLastError()));
-		}
-	}
-
-	void RemoveTemporaryFile(
-		const std::filesystem::path& path,
-		std::string& errorMessage)
-	{
-		std::error_code ec;
-		std::filesystem::remove(path, ec);
-		if (ec) {
-			errorMessage += std::format(
-				" Temporary file cleanup failed for '{}': {}.",
-				path.string(),
-				ec.message());
-		}
-	}
-
-	Util::FileHelpers::AtomicWriteResult WriteTextFileDirect(
-		const std::filesystem::path& path,
-		std::string_view contents)
-	{
-		std::ofstream output(path, std::ios::binary | std::ios::trunc);
-		if (!output.is_open()) {
-			return { false, std::format("Failed to open '{}' for direct writing.", path.string()) };
-		}
-
-		output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-		output.flush();
-		output.close();
-		if (output.fail()) {
-			return { false, std::format("Failed to write '{}' directly.", path.string()) };
-		}
-
-		return { true, {} };
-	}
-}
 
 namespace Util
 {
 	// Path helper utilities implementation
 	namespace PathHelpers
 	{
+		std::filesystem::path GetCursorsPath()
+		{
+			return GetInterfacePath() / "Cursors";
+		}
+
+		std::filesystem::path GetTranslationsPath()
+		{
+			return GetCommunityShaderPath() / "Translations";
+		}
+
 		std::filesystem::path GetDataPath()
 		{
 			try {
@@ -117,11 +68,6 @@ namespace Util
 			return GetInterfacePath() / "Icons";
 		}
 
-		std::filesystem::path GetCursorsPath()
-		{
-			return GetInterfacePath() / "Cursors";
-		}
-
 		std::filesystem::path GetSettingsUserPath()
 		{
 			return GetCommunityShaderPath() / "SettingsUser.json";
@@ -145,11 +91,6 @@ namespace Util
 		std::filesystem::path GetThemesPath()
 		{
 			return GetCommunityShaderPath() / "Themes";
-		}
-
-		std::filesystem::path GetTranslationsPath()
-		{
-			return GetCommunityShaderPath() / "Translations";
 		}
 
 		std::filesystem::path GetOverridesPath()
@@ -265,14 +206,63 @@ namespace Util
 			if (!path) {
 				return {};
 			}
-			*path /= std::format("{}.log", std::string(Plugin::NAME));
+			*path /= std::format("{}.log", Plugin::NAME);
 			return *path;
 		}
+	}
+
+	bool IsPathWithinDirectory(
+		const std::filesystem::path& basePath,
+		const std::filesystem::path& testPath)
+	{
+		std::error_code error;
+		const auto canonicalBase = std::filesystem::canonical(basePath, error);
+		if (error)
+			return false;
+
+		const auto canonicalTest = std::filesystem::weakly_canonical(testPath, error);
+		if (error)
+			return false;
+
+		auto testPart = canonicalTest.begin();
+		for (auto basePart = canonicalBase.begin(); basePart != canonicalBase.end();
+			++basePart, ++testPart) {
+			if (testPart == canonicalTest.end() ||
+				_wcsicmp(basePart->c_str(), testPart->c_str()) != 0) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	// File system utilities implementation
 	namespace FileHelpers
 	{
+		namespace
+		{
+			bool WriteTextFileDirect(
+				const std::filesystem::path& path,
+				std::string_view contents,
+				std::string& errorMessage)
+			{
+				std::ofstream output(path, std::ios::binary | std::ios::trunc);
+				if (!output.is_open()) {
+					errorMessage = std::format("Could not open {} for a direct write", path.string());
+					return false;
+				}
+
+				output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+				output.flush();
+				output.close();
+				if (!output) {
+					errorMessage = std::format("Could not finish writing {} directly", path.string());
+					return false;
+				}
+
+				return true;
+			}
+		}
+
 		DeletionResult SafeDelete(const std::string& path, const std::string& description)
 		{
 			DeletionResult result;
@@ -307,6 +297,118 @@ namespace Util
 			if (ec) {
 				logger::warn("Failed to create directory '{}': {}", path.string(), ec.message());
 			}
+		}
+
+		JsonFileReadResult ReadJsonFile(
+			const std::filesystem::path& path,
+			nlohmann::json& json,
+			std::string& errorMessage)
+		{
+			errorMessage.clear();
+
+			std::ifstream input(path, std::ios::binary);
+			if (!input.is_open()) {
+				std::error_code existsError;
+				const bool exists = std::filesystem::exists(path, existsError);
+				if (!existsError && !exists)
+					return JsonFileReadResult::NotFound;
+
+				errorMessage = existsError ?
+				                   std::format("Could not inspect the file: {}", existsError.message()) :
+				                   "Could not open the file for reading";
+				return JsonFileReadResult::Error;
+			}
+
+			try {
+				nlohmann::json parsed;
+				input >> parsed;
+				if (input.bad()) {
+					errorMessage = "An I/O error occurred while reading the file";
+					return JsonFileReadResult::Error;
+				}
+
+				json = std::move(parsed);
+				return JsonFileReadResult::Success;
+			} catch (const std::exception& e) {
+				errorMessage = e.what();
+				return JsonFileReadResult::Error;
+			}
+		}
+
+		bool WriteTextFileAtomic(
+			const std::filesystem::path& path,
+			std::string_view contents,
+			std::string& errorMessage,
+			bool allowDirectFallback,
+			bool overwriteExisting)
+		{
+			errorMessage.clear();
+
+			std::error_code directoryError;
+			if (!path.parent_path().empty())
+				std::filesystem::create_directories(path.parent_path(), directoryError);
+			if (directoryError) {
+				errorMessage = std::format("Could not create the settings directory: {}", directoryError.message());
+				return false;
+			}
+
+			static std::atomic_uint64_t nextStagingFileID{ 0 };
+			auto stagingPath = path;
+			stagingPath += std::format(
+				L".community-shaders.{}.{}.tmp",
+				GetCurrentProcessId(),
+				nextStagingFileID.fetch_add(1, std::memory_order_relaxed));
+
+			{
+				std::ofstream output(stagingPath, std::ios::binary | std::ios::trunc);
+				if (!output.is_open()) {
+					errorMessage = std::format("Could not open the staging file {}", stagingPath.string());
+					return false;
+				}
+
+				output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+				output.flush();
+				output.close();
+				if (!output) {
+					std::error_code cleanupError;
+					std::filesystem::remove(stagingPath, cleanupError);
+					errorMessage = std::format("Could not finish writing the staging file {}", stagingPath.string());
+					return false;
+				}
+			}
+
+			if (!MoveFileExW(
+					stagingPath.c_str(),
+					path.c_str(),
+					(overwriteExisting ? MOVEFILE_REPLACE_EXISTING : 0) | MOVEFILE_WRITE_THROUGH)) {
+				const auto windowsError = GetLastError();
+				std::error_code cleanupError;
+				std::filesystem::remove(stagingPath, cleanupError);
+
+				if (!allowDirectFallback || !overwriteExisting) {
+					errorMessage = overwriteExisting ?
+					                   std::format("Could not atomically replace {} (Windows error {}). The original file was retained.", path.string(), windowsError) :
+					                   std::format("Could not create {} (Windows error {}). Existing files were not replaced.", path.string(), windowsError);
+					return false;
+				}
+
+				// Virtualized filesystems can reject replacement while accepting writes to an existing file.
+				logger::warn(
+					"Could not replace {} atomically (Windows error {}); retrying with a direct write",
+					path.string(),
+					windowsError);
+				std::string directWriteError;
+				if (!WriteTextFileDirect(path, contents, directWriteError)) {
+					errorMessage = std::format(
+						"Could not replace the destination (Windows error {}); direct-write fallback also failed: {}",
+						windowsError,
+						directWriteError);
+					return false;
+				}
+				logger::info("Saved {} directly after atomic replacement failed", path.string());
+			}
+
+			return true;
 		}
 
 		std::string SanitizeFileName(std::string name)
@@ -353,161 +455,6 @@ namespace Util
 			}
 
 			return name;
-		}
-
-		AtomicWriteResult WriteTextFileAtomic(
-			const std::filesystem::path& path,
-			std::string_view contents)
-		{
-			if (path.empty() || path.filename().empty())
-				return { false, "Atomic write requires a destination filename." };
-
-			const auto parentPath = path.parent_path();
-			if (!parentPath.empty()) {
-				std::error_code ec;
-				std::filesystem::create_directories(parentPath, ec);
-				if (ec) {
-					return {
-						false,
-						std::format(
-							"Failed to create destination directory '{}': {}",
-							parentPath.string(),
-							ec.message())
-					};
-				}
-			}
-
-			std::filesystem::path temporaryPath;
-			HANDLE temporaryFile = INVALID_HANDLE_VALUE;
-			DWORD createError = ERROR_SUCCESS;
-			const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
-
-			for (std::uint32_t attempt = 0; attempt < 32; ++attempt) {
-				temporaryPath = path;
-				temporaryPath += std::format(
-					".tmp.{}.{}.{}",
-					GetCurrentProcessId(),
-					timestamp,
-					atomicWriteSequence.fetch_add(1, std::memory_order_relaxed));
-
-				temporaryFile = CreateFileW(
-					temporaryPath.c_str(),
-					GENERIC_WRITE,
-					0,
-					nullptr,
-					CREATE_NEW,
-					FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
-					nullptr);
-				if (temporaryFile != INVALID_HANDLE_VALUE)
-					break;
-
-				createError = GetLastError();
-				if (createError != ERROR_FILE_EXISTS && createError != ERROR_ALREADY_EXISTS)
-					break;
-			}
-
-			if (temporaryFile == INVALID_HANDLE_VALUE) {
-				return {
-					false,
-					std::format(
-						"Failed to create temporary file for '{}': {}",
-						path.string(),
-						GetWindowsErrorMessage(createError))
-				};
-			}
-
-			std::size_t offset = 0;
-			while (offset < contents.size()) {
-				const auto remaining = contents.size() - offset;
-				const auto writeSize = static_cast<DWORD>(
-					std::min<std::size_t>(remaining, std::numeric_limits<DWORD>::max()));
-				DWORD bytesWritten = 0;
-				const bool writeSucceeded = WriteFile(
-												temporaryFile,
-												contents.data() + offset,
-												writeSize,
-												&bytesWritten,
-												nullptr) != FALSE;
-				if (!writeSucceeded || bytesWritten == 0) {
-					const DWORD writeError = writeSucceeded ? ERROR_WRITE_FAULT : GetLastError();
-					std::string errorMessage = std::format(
-						"Failed to write temporary file for '{}': {}",
-						path.string(),
-						GetWindowsErrorMessage(writeError));
-					CloseTemporaryFileAfterFailure(temporaryFile, errorMessage);
-					RemoveTemporaryFile(temporaryPath, errorMessage);
-					return { false, std::move(errorMessage) };
-				}
-				offset += bytesWritten;
-			}
-
-			if (!FlushFileBuffers(temporaryFile)) {
-				const DWORD flushError = GetLastError();
-				std::string errorMessage = std::format(
-					"Failed to flush temporary file for '{}': {}",
-					path.string(),
-					GetWindowsErrorMessage(flushError));
-				CloseTemporaryFileAfterFailure(temporaryFile, errorMessage);
-				RemoveTemporaryFile(temporaryPath, errorMessage);
-				return { false, std::move(errorMessage) };
-			}
-
-			if (!CloseHandle(temporaryFile)) {
-				const DWORD closeError = GetLastError();
-				std::string errorMessage = std::format(
-					"Failed to close temporary file for '{}': {}",
-					path.string(),
-					GetWindowsErrorMessage(closeError));
-				RemoveTemporaryFile(temporaryPath, errorMessage);
-				return { false, std::move(errorMessage) };
-			}
-
-			if (!MoveFileExW(
-					temporaryPath.c_str(),
-					path.c_str(),
-					MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-				const DWORD replaceError = GetLastError();
-				const std::string replaceErrorMessage = std::format(
-					"Failed to atomically replace file '{}': {}",
-					path.string(),
-					GetWindowsErrorMessage(replaceError));
-				std::string errorMessage = replaceErrorMessage;
-				RemoveTemporaryFile(temporaryPath, errorMessage);
-
-				// Mod-manager virtual filesystems can reject replacement while still
-				// allowing a normal write to the mapped destination.
-				logger::warn("{}; retrying with a direct write", replaceErrorMessage);
-				auto directResult = WriteTextFileDirect(path, contents);
-				if (!directResult) {
-					directResult.errorMessage = std::format(
-						"{} Direct-write fallback also failed: {}",
-						errorMessage,
-						directResult.errorMessage);
-					return directResult;
-				}
-
-				logger::info("Saved '{}' directly after atomic replacement failed", path.string());
-				return directResult;
-			}
-
-			return { true, {} };
-		}
-
-		AtomicWriteResult WriteJsonFileAtomic(
-			const std::filesystem::path& path,
-			const nlohmann::json& json,
-			int indent)
-		{
-			if (path.empty() || path.filename().empty())
-				return { false, "Atomic JSON write requires a destination filename." };
-
-			std::string serialized;
-			try {
-				serialized = json.dump(indent);
-			} catch (const std::exception& e) {
-				return { false, std::format("Failed to serialize JSON for '{}': {}", path.string(), e.what()) };
-			}
-			return WriteTextFileAtomic(path, serialized);
 		}
 	}
 }
@@ -615,4 +562,23 @@ std::vector<SettingsDiffEntry> Util::FileSystem::LoadJsonDiff(const std::filesys
 	}
 
 	return diffEntries;
+}
+
+namespace Util::FileHelpers
+{
+	AtomicWriteResult WriteTextFileAtomic(const std::filesystem::path& path, std::string_view contents)
+	{
+		AtomicWriteResult result;
+		result.success = WriteTextFileAtomic(path, contents, result.errorMessage, false);
+		return result;
+	}
+
+	AtomicWriteResult WriteJsonFileAtomic(const std::filesystem::path& path, const nlohmann::json& json, int indent)
+	{
+		try {
+			return WriteTextFileAtomic(path, json.dump(indent));
+		} catch (const std::exception& error) {
+			return { false, error.what() };
+		}
+	}
 }

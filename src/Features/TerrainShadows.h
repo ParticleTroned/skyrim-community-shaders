@@ -37,6 +37,8 @@ public:
 	std::uint32_t activeRefreshGeneration = 0;
 	bool fullRefreshActive = false;
 	bool shadowMapValid = false;
+	bool hasPreviousLightDirection = false;
+	RE::NiPoint3 previousLightDirection{};
 
 	enum class ShadowUpdateResult
 	{
@@ -75,6 +77,8 @@ public:
 		float3 Scale;
 		float2 ZRange;
 		float2 Offset;
+		float ZBlur = 0.0f;
+		float3 pad0{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 

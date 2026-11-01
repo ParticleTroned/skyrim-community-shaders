@@ -1,4 +1,7 @@
 #include "TerrainBlending.h"
+#include "GpuPass.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include "Deferred.h"
 #include "Globals.h"
@@ -16,10 +19,22 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainBlending::Settings,
 	Enabled,
 	TerrainCullDistance,
-	BlendStrength)
+	BlendStrength,
+	LandscapeSeams)
 
 namespace
 {
+	uint32_t GetDepthBlendExtent(float a_sceneExtent, uint32_t a_resourceExtent)
+	{
+		if (!a_resourceExtent)
+			return 0;
+
+		if (!std::isfinite(a_sceneExtent) || a_sceneExtent <= 0.0f)
+			return 0;
+
+		return static_cast<uint32_t>(std::clamp(std::round(static_cast<double>(a_sceneExtent)), 1.0, static_cast<double>(a_resourceExtent)));
+	}
+
 	bool IsTerrainBlendingCapturedPass(const RE::BSRenderPass* a_pass, bool& a_isTerrainBlend, bool& a_failed)
 	{
 		a_isTerrainBlend = false;
@@ -167,25 +182,30 @@ namespace
 
 void TerrainBlending::DrawSettings()
 {
-	bool enabled = settings.Enabled != 0;
-	if (ImGui::Checkbox("Enable", &enabled)) {
-		settings.Enabled = enabled ? 1u : 0u;
-	}
+	MenuUI::SettingsPage page("TerrainBlending", {
+													 { "appearance", T("feature.terrain_blending.ui_blending", "Blending"), T("feature.terrain_blending.ui_choose_which_surfaces_blend_then_tune_their_appearance", "Choose which surfaces blend, then tune their appearance."), T("feature.terrain_blending.ui_object_to_ground_transitions", "Object-to-ground transitions"), true, true, T("feature.terrain_blending.ui_shape_terrain_transitions", "Shape terrain transitions") },
+												 });
+	if (!page.Is("appearance"))
+		return;
 
+	Util::Widgets::SliderFloat(T("feature.terrain_blending.ui_blend_strength", "Blend Strength"), &settings.BlendStrength, 0.125f, 1.25f, "%.3f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("enable_tooltip"), "Enable seamless blending between terrain and objects."));
-	}
-
-	ImGui::SliderFloat(T(TKEY("blend_depth"), "Blend Depth"), &settings.BlendStrength, 0.125f, 1.25f, "%.3f");
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("blend_depth_tooltip"), "Scales the terrain blend depth. Lower values make the blend tighter."));
+		ImGui::TextUnformatted(T("feature.terrain_blending.ui_scales_blending_strength_lower_values_make_blending_tighter", "Scales blending strength. Lower values make blending tighter."));
 	}
 
 	ImGui::Spacing();
-	if (ImGui::TreeNodeEx(T(TKEY("performance_options"), "Performance Options"))) {
-		ImGui::SliderFloat(T(TKEY("terrain_cull_distance"), "Terrain Depth Culling Distance"), &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
+	bool seams = settings.LandscapeSeams != 0;
+	if (Util::Widgets::Checkbox(T("feature.terrain_blending.landscape_seams", "Landscape Seam Blending"), &seams))
+		settings.LandscapeSeams = seams ? 1u : 0u;
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextWrapped("%s", T("feature.terrain_blending.ui_blends_texture_borders_between_terrain_quads_using_up_b99680db", "Blends texture borders between terrain quads using up to two neighbouring layers. Requires Terrain Blending and True PBR enabled. Adds GPU and terrain-loading work. Changes apply next frame; off releases seam resources and restores ordinary terrain shading."));
+	}
+
+	ImGui::Spacing();
+	if (ImGui::TreeNodeEx(T("feature.terrain_blending.performance_options", "Performance Options"))) {
+		Util::Widgets::SliderFloat(T("feature.terrain_blending.terrain_cull_distance", "Terrain Depth Culling Distance"), &settings.TerrainCullDistance, 0.0f, 8192.0f, T("feature.terrain_blending.ui_0f_units", "%.0f units"));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("terrain_cull_distance_tooltip"), "Terrain farther than this distance skips terrain depth rendering. Set to 0 to disable culling."));
+			ImGui::TextUnformatted(T("feature.terrain_blending.ui_terrain_farther_than_this_distance_skips_tb_depth_rend_4b75c7fe", "Terrain farther than this distance skips TB depth rendering. Set to 0 to disable culling."));
 		}
 		ImGui::TreePop();
 	}
@@ -194,7 +214,7 @@ void TerrainBlending::DrawSettings()
 void TerrainBlending::DrawEssentialSettings()
 {
 	bool enabled = settings.Enabled != 0;
-	if (ImGui::Checkbox("Enable", &enabled))
+	if (ImGui::Checkbox(T("feature.terrain_blending.enable", "Enable"), &enabled))
 		settings.Enabled = enabled ? 1u : 0u;
 }
 
@@ -202,6 +222,7 @@ void TerrainBlending::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	settings.Enabled = settings.Enabled ? 1u : 0u;
+	settings.LandscapeSeams = settings.LandscapeSeams ? 1u : 0u;
 
 	if (!std::isfinite(settings.TerrainCullDistance)) {
 		settings.TerrainCullDistance = 1024.0f;
@@ -235,6 +256,34 @@ void TerrainBlending::SetupResources()
 {
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
+	static ID3D11Device* shaderDevice = nullptr;
+	if (shaderDevice != device) {
+		ClearShaderCache();
+		shaderDevice = device;
+	}
+
+	if (terrainDepth.texture) {
+		terrainDepth.texture->Release();
+		terrainDepth.texture = nullptr;
+	}
+	if (terrainDepth.depthSRV) {
+		terrainDepth.depthSRV->Release();
+		terrainDepth.depthSRV = nullptr;
+	}
+	if (terrainDepth.views[0]) {
+		terrainDepth.views[0]->Release();
+		terrainDepth.views[0] = nullptr;
+	}
+	delete blendedDepthTexture;
+	blendedDepthTexture = nullptr;
+	delete blendedDepthTexture16;
+	blendedDepthTexture16 = nullptr;
+	delete mainDepthCopy;
+	mainDepthCopy = nullptr;
+	if (terrainDepthStencilState) {
+		terrainDepthStencilState->Release();
+		terrainDepthStencilState = nullptr;
+	}
 
 	{
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -283,6 +332,14 @@ void TerrainBlending::SetupResources()
 		blendedDepthTexture16->CreateSRV(srvDesc);
 		blendedDepthTexture16->CreateUAV(uavDesc);
 
+		texDesc.Format = DXGI_FORMAT_R32_FLOAT;
+		srvDesc.Format = texDesc.Format;
+		uavDesc.Format = texDesc.Format;
+
+		mainDepthCopy = new Texture2D(texDesc, "TerrainBlending::MainDepthCopy");
+		mainDepthCopy->CreateSRV(srvDesc);
+		mainDepthCopy->CreateUAV(uavDesc);
+
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 		depthSRVBackup = mainDepth.depthSRV;
 
@@ -299,6 +356,8 @@ void TerrainBlending::SetupResources()
 		DX::ThrowIfFailed(device->CreateDepthStencilState(&depthStencilDesc, &terrainDepthStencilState));
 		Util::SetResourceName(terrainDepthStencilState, "TerrainBlending::DepthStencilState");
 	}
+
+	depthBlendCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<DepthBlendCB>(), "TerrainBlending::DepthBlendCB");
 }
 
 void TerrainBlending::PostPostLoad()
@@ -363,54 +422,71 @@ void TerrainBlending::ResetTerrainDepth()
 void TerrainBlending::BlendPrepassDepths()
 {
 	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Terrain Blending - Blend Prepass Depths");
-	auto* blendShader = GetDepthBlendShader();
-	if (!blendShader)
-		return;
-
-	if (globals::state->frameAnnotations)
-		globals::state->BeginPerfEvent("Terrain Blending - Blend Prepass Depths");
+	CS_GPU_PASS("TerrainBlending::BlendPrepassDepths");
 
 	auto context = globals::d3d::context;
+	if (!context || !depthBlendCB || !depthSRVBackup || !terrainDepth.texture || !terrainDepth.depthSRV ||
+		!blendedDepthTexture || !blendedDepthTexture->uav ||
+		!blendedDepthTexture16 || !blendedDepthTexture16->uav ||
+		!mainDepthCopy || !mainDepthCopy->uav) {
+		return;
+	}
+	auto* depthBlend = GetDepthBlendShader();
+	if (!depthBlend)
+		return;
+
+	D3D11_TEXTURE2D_DESC terrainDepthDesc{};
+	terrainDepth.texture->GetDesc(&terrainDepthDesc);
+
+	const auto blendSize = Util::ConvertToDynamic(globals::state->screenSize);
+	const uint32_t maxBlendWidth = std::min({ terrainDepthDesc.Width, blendedDepthTexture->desc.Width, blendedDepthTexture16->desc.Width, mainDepthCopy->desc.Width });
+	const uint32_t maxBlendHeight = std::min({ terrainDepthDesc.Height, blendedDepthTexture->desc.Height, blendedDepthTexture16->desc.Height, mainDepthCopy->desc.Height });
+	const uint32_t blendWidth = GetDepthBlendExtent(blendSize.x, maxBlendWidth);
+	const uint32_t blendHeight = GetDepthBlendExtent(blendSize.y, maxBlendHeight);
+	if (!blendWidth || !blendHeight)
+		return;
+
+	DepthBlendCB depthBlendData{};
+	depthBlendData.blendWidth = blendWidth;
+	depthBlendData.blendHeight = blendHeight;
+	depthBlendCB->Update(depthBlendData);
+
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	auto dispatchCount = Util::GetScreenDispatchCount();
-
 	{
-		TracyD3D11Zone(globals::state->tracyCtx, "Terrain Blending - Depth Blend CS");
-
 		ID3D11ShaderResourceView* views[2] = { depthSRVBackup, terrainDepth.depthSRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11UnorderedAccessView* uavs[2] = { blendedDepthTexture->uav.get(), blendedDepthTexture16->uav.get() };
+		ID3D11UnorderedAccessView* uavs[3] = { blendedDepthTexture->uav.get(), blendedDepthTexture16->uav.get(), mainDepthCopy->uav.get() };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
-		context->CSSetShader(blendShader, nullptr, 0);
+		auto buffer = depthBlendCB->CB();
+		context->CSSetConstantBuffers(0, 1, &buffer);
 
-		globals::profiler->BeginPass("TerrainBlending::DepthBlend");
-		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
-		globals::profiler->EndPass();
+		context->CSSetShader(depthBlend, nullptr, 0);
+
+		const uint32_t dispatchX = (blendWidth + 7u) >> 3u;
+		const uint32_t dispatchY = (blendHeight + 7u) >> 3u;
+		{
+			CS_GPU_PASS("TerrainBlending::DepthBlend");
+			context->Dispatch(dispatchX, dispatchY, 1);
+		}
 	}
 
 	ID3D11ShaderResourceView* views[2] = { nullptr, nullptr };
 	context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-	ID3D11UnorderedAccessView* uavs[2] = { nullptr, nullptr };
+	ID3D11UnorderedAccessView* uavs[3] = { nullptr, nullptr, nullptr };
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+	ID3D11Buffer* buffer = nullptr;
+	context->CSSetConstantBuffers(0, 1, &buffer);
 
 	ID3D11ComputeShader* shader = nullptr;
 	context->CSSetShader(shader, nullptr, 0);
 
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
 	stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
-
-	auto renderer = globals::game::renderer;
-	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-
-	context->CopyResource(terrainDepth.texture, mainDepth.texture);
-
-	if (globals::state->frameAnnotations)
-		globals::state->EndPerfEvent();
 }
 
 void TerrainBlending::ClearShaderCache()
@@ -572,7 +648,8 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		return;
 	}
 
-	context->PSSetShaderResources(55, 1, &terrainDepth.depthSRV);
+	auto* mainDepthSnapshot = mainDepthCopy->srv.get();
+	context->PSSetShaderResources(55, 1, &mainDepthSnapshot);
 
 	const uint64_t terrainPassCount = static_cast<uint64_t>(terrainRenderPasses.size());
 	const uint64_t noBlendPassCount = static_cast<uint64_t>(renderPasses.size());

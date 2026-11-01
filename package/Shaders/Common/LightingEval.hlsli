@@ -1,12 +1,19 @@
 #ifndef LIGHTING_EVAL_HLSLI
 #define LIGHTING_EVAL_HLSLI
 #include "Common/LightingCommon.hlsli"
+#include "Common/LightingFlags.hlsli"
 
 #include "Common/BRDF.hlsli"
 #include "Common/Math.hlsli"
 #if defined(TRUE_PBR)
 #	include "Common/PBR.hlsli"
 #endif
+
+float3 SafeNormalizeLighting(float3 v, float3 fallback)
+{
+	float lenSq = dot(v, v);
+	return (lenSq > EPSILON_DIVISION && lenSq == lenSq && lenSq < 1.0e16) ? v * rsqrt(lenSq) : fallback;
+}
 
 #if defined(TRUE_PBR)
 DirectContext CreateDirectLightingContext(float3 worldNormal, float3 coatWorldNormal, float3 vertexNormal, float3 viewDir, float3 coatViewDir, float3 lightDir, float3 coatLightDir, float3 lightColor, float detailedShadow, float softShadow)
@@ -15,19 +22,19 @@ DirectContext CreateDirectLightingContext(float3 worldNormal, float3 vertexNorma
 #endif
 {
 	DirectContext context = (DirectContext)0;
-	context.worldNormal = normalize(worldNormal);
-	context.vertexNormal = normalize(vertexNormal);
-	context.viewDir = normalize(viewDir);
-	context.lightDir = normalize(lightDir);
-	context.halfVector = normalize(context.viewDir + context.lightDir);
+	context.worldNormal = SafeNormalizeLighting(worldNormal, float3(0.0, 0.0, 1.0));
+	context.vertexNormal = SafeNormalizeLighting(vertexNormal, context.worldNormal);
+	context.viewDir = SafeNormalizeLighting(viewDir, context.worldNormal);
+	context.lightDir = SafeNormalizeLighting(lightDir, context.worldNormal);
+	context.halfVector = SafeNormalizeLighting(context.viewDir + context.lightDir, context.worldNormal);
 	context.lightColor = lightColor;
 	context.detailedShadow = detailedShadow;
 	context.softShadow = softShadow;
 #if defined(TRUE_PBR)
-	context.coatWorldNormal = normalize(coatWorldNormal);
-	context.coatViewDir = normalize(coatViewDir);
-	context.coatLightDir = normalize(coatLightDir);
-	context.coatHalfVector = normalize(context.coatViewDir + context.coatLightDir);
+	context.coatWorldNormal = SafeNormalizeLighting(coatWorldNormal, context.worldNormal);
+	context.coatViewDir = SafeNormalizeLighting(coatViewDir, context.coatWorldNormal);
+	context.coatLightDir = SafeNormalizeLighting(coatLightDir, context.coatWorldNormal);
+	context.coatHalfVector = SafeNormalizeLighting(context.coatViewDir + context.coatLightDir, context.coatWorldNormal);
 	[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 	{
 		context.coatLightColor = lightColor * softShadow;
@@ -43,9 +50,9 @@ DirectContext CreateDirectLightingContext(float3 worldNormal, float3 vertexNorma
 IndirectContext CreateIndirectLightingContext(float3 worldNormal, float3 vertexNormal, float3 viewDir)
 {
 	IndirectContext context = (IndirectContext)0;
-	context.worldNormal = normalize(worldNormal);
-	context.vertexNormal = normalize(vertexNormal);
-	context.viewDir = normalize(viewDir);
+	context.worldNormal = SafeNormalizeLighting(worldNormal, float3(0.0, 0.0, 1.0));
+	context.vertexNormal = SafeNormalizeLighting(vertexNormal, context.worldNormal);
+	context.viewDir = SafeNormalizeLighting(viewDir, context.worldNormal);
 	return context;
 }
 
@@ -58,7 +65,7 @@ float3 VanillaSpecular(DirectContext context, float shininess, float2 uv, float2
 	const float3 H = context.halfVector;
 	float HdotN;
 #if defined(ANISO_LIGHTING)
-	const float3 AN = normalize(N * 0.5 + G);
+	const float3 AN = SafeNormalizeLighting(N * 0.5 + G, N);
 	float LdotAN = dot(AN, L);
 	float HdotAN = dot(AN, H);
 	HdotN = 1 - min(1, abs(LdotAN - HdotAN));
@@ -66,14 +73,13 @@ float3 VanillaSpecular(DirectContext context, float shininess, float2 uv, float2
 	HdotN = saturate(dot(H, N));
 #endif
 
-#if defined(SPECULAR)
-	float lightColorMultiplier = exp2(shininess * log2(HdotN));
-
-#elif defined(SPARKLE)
+#if defined(SPARKLE)
 	float lightColorMultiplier = 0;
 #else
 	float lightColorMultiplier = HdotN;
 #endif
+	if (Lighting::HasSpecular())
+		lightColorMultiplier = exp2(shininess * log2(HdotN));
 
 #if defined(ANISO_LIGHTING)
 	lightColorMultiplier *= 0.7 * max(0, L.z);
@@ -120,32 +126,9 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 #if defined(TRUE_PBR)
 	PBR::GetDirectLightInput(lightingOutput, context, material, tbnTr, uv);
 #else
-#	if defined(HAIR) && defined(CS_HAIR)
+#	if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		Hair::GetHairDirectLight(lightingOutput, context, material, tbnTr, uv);
-		return;
-	}
-#	endif
-#	if defined(SKIN) && defined(CS_SKIN)
-	if (SharedData::skinData.skinParams.w > 0.0f) {
-		Skin::SkinDirectLightInput(lightingOutput, context, material);
-		float3 softLightColor = context.lightColor * context.softShadow;
-
-		// SSS fallback for forward skin rendering
-#		if !defined(DEFERRED)
-		const float NdotL = dot(context.worldNormal, context.lightDir);
-#			if defined(SOFT_LIGHTING)
-		lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor;
-#			endif
-
-#			if defined(RIM_LIGHTING)
-		lightingOutput.diffuse += softLightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor;
-#			endif
-
-#			if defined(BACK_LIGHTING)
-		lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor;
-#			endif
-#		endif
 		return;
 	}
 #	endif
@@ -159,18 +142,14 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 		lightingOutput.transmission += material.BaseColor * GetFoliageTransmission(NdotL, dot(context.viewDir, context.lightDir)) * diffuseLightColor * Color::VanillaNormalization();
 	}
 #	endif
-#	if defined(SOFT_LIGHTING)
-	lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor * Color::VanillaNormalization();
-#	endif
+	if (Lighting::HasSoftLighting())
+		lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor * Color::VanillaNormalization();
 
-#	if defined(RIM_LIGHTING)
-	lightingOutput.diffuse += softLightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor * Color::VanillaNormalization();
-#	endif
+	if (Lighting::HasRimLighting())
+		lightingOutput.diffuse += softLightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor * Color::VanillaNormalization();
 
-#	if defined(BACK_LIGHTING)
-	lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor * Color::VanillaNormalization();
-#	endif
-
+	if (Lighting::HasBackLighting())
+		lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor * Color::VanillaNormalization();
 #	if defined(VANILLA_FRESNEL)
 	if (SharedData::vanillaFresnelSettings.Enable && SharedData::vanillaFresnelSettings.EnableGGX) {
 		lightingOutput.specular = diffuseLightColor * MicrofacetSpecular(context, material.F0, material.Roughness) * Color::PBRLightingCompensation * Color::PBRLightingScale;
@@ -190,21 +169,15 @@ void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext
 #if defined(TRUE_PBR)
 	PBR::GetIndirectLobeWeights(lobeWeights, context, material);
 #else
-#	if defined(HAIR) && defined(CS_HAIR)
+#	if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		Hair::GetHairIndirectLobeWeights(lobeWeights, context, material, uv);
 		return;
 	}
 #	endif
-#	if defined(SKIN) && defined(CS_SKIN)
-	if (SharedData::skinData.skinParams.w > 0.0f) {
-		Skin::SkinIndirectLobeWeights(lobeWeights, material, context);
-		return;
-	}
-#	endif
 	lobeWeights.diffuse = material.BaseColor;
 #	if defined(DYNAMIC_CUBEMAPS)
-	if (any(material.F0 > 0.0)) {
+	if (any(material.F0 > 0)) {
 		const float3 N = context.worldNormal;
 		const float3 V = context.viewDir;
 		const float3 VN = context.vertexNormal;
@@ -213,12 +186,196 @@ void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext
 
 		float2 specularBRDF = BRDF::EnvBRDF(material.Roughness, NdotV);
 		lobeWeights.specular = material.F0 * specularBRDF.x + specularBRDF.y;
+		lobeWeights.specular *= 1 + material.F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
+
+		// Horizon specular occlusion
+		// https://marmosetco.tumblr.com/post/81245981087
+		float3 R = reflect(-V, N);
+		float horizon = min(1.0 + dot(R, VN), 1.0);
+		horizon = horizon * horizon;
+		lobeWeights.specular *= horizon;
 	}
 #	endif
 #endif
 }
 
-#if defined(WETNESS_EFFECTS)
+#if defined(WETTERNESS)
+#	include "Wetterness/WetternessHighlights.hlsli"
+
+struct WetReflectionParams
+{
+	float modernWeight;
+	float legacyWeight;
+	float effectiveScale;
+	float forwardBiasEnabled;
+	float vanillaCompensationEnabled;
+	float skinOverdriveScale;
+};
+
+struct WetnessDirectLightingParams
+{
+	float wetnessF0;
+	float wetnessFScale;
+	float lightColorScale;
+	float NdotV;
+	float pointLightHighlightReduction;
+};
+
+float GetSkinWetnessOverdriveScale()
+{
+#	if defined(SKIN) || defined(HAIR)
+	// Preserve exact legacy output for SkinWetness <= 1.0 and only add extra intensity
+	// in the extended slider segment (1.0 .. 1.5).
+	const float skinWetnessOverdriveT = saturate((SharedData::wetternessSettings.SkinWetness - 1.0) / 0.5);
+	return lerp(1.0, 1.8, skinWetnessOverdriveT);
+#	else
+	return 1.0;
+#	endif
+}
+
+WetReflectionParams CreateWetReflectionParams(float wetReflectionScale)
+{
+	WetReflectionParams params = (WetReflectionParams)0;
+
+	const float WET_REFLECTION_SCALE_MAX = 2.0;
+	const float legacyReflectionScaleMax = 1.0;
+	const float wetReflectionScaleClamped = clamp(wetReflectionScale, 0.0, WET_REFLECTION_SCALE_MAX);
+	if (wetReflectionScaleClamped <= 0.0) {
+		return params;
+	}
+
+	const float enableModern = SharedData::wetternessSettings.EnableModernWetReflection != 0 ? 1.0 : 0.0;
+	const float enableLegacy = SharedData::wetternessSettings.EnableLegacyWetReflection != 0 ? 1.0 : 0.0;
+	const float modeCount = enableModern + enableLegacy;
+	if (modeCount <= 0.0) {
+		return params;
+	}
+
+	const float invModeCount = rcp(modeCount);
+	const float modernScale = wetReflectionScaleClamped;
+	const float legacyScale = min(wetReflectionScaleClamped, legacyReflectionScaleMax);
+
+	params.modernWeight = enableModern * invModeCount;
+	params.legacyWeight = enableLegacy * invModeCount;
+	params.effectiveScale = (modernScale * enableModern + legacyScale * enableLegacy) * invModeCount;
+	params.forwardBiasEnabled = SharedData::wetternessSettings.EnableForwardReflectionBias != 0 ? 1.0 : 0.0;
+	params.vanillaCompensationEnabled = SharedData::wetternessSettings.EnableVanillaReflectionCompensation != 0 ? 1.0 : 0.0;
+	params.skinOverdriveScale = GetSkinWetnessOverdriveScale();
+
+	return params;
+}
+
+bool HasWetReflectionParams(WetReflectionParams params)
+{
+	return params.effectiveScale > 1e-4 &&
+	       (params.modernWeight + params.legacyWeight) > 0.0;
+}
+
+float GetWetnessBiasedNdotV(float3 wetnessNormal, float3 viewDir, float forwardBiasEnabled)
+{
+	// Shared by direct and indirect wet reflection so their forward/top-down bias stays matched.
+	float NdotV = saturate(abs(dot(wetnessNormal, viewDir)) + EPSILON_DOT_CLAMP);
+	float forwardBiasAmount = saturate((0.62 - NdotV) / 0.62) * forwardBiasEnabled;
+	float biasedNdotV = max(NdotV, 0.55);
+	return lerp(NdotV, biasedNdotV, forwardBiasAmount);
+}
+
+WetnessDirectLightingParams CreateWetnessDirectLightingParams(float3 wetnessNormal, float3 viewDir, float wetnessStrength, WetReflectionParams reflectionParams)
+{
+	WetnessDirectLightingParams params = (WetnessDirectLightingParams)0;
+	float NdotV = GetWetnessBiasedNdotV(wetnessNormal, viewDir, reflectionParams.forwardBiasEnabled);
+
+	params.wetnessF0 = 0.02 * reflectionParams.modernWeight + wetnessStrength * reflectionParams.legacyWeight;
+	params.wetnessFScale = wetnessStrength * reflectionParams.effectiveScale;
+	params.lightColorScale = reflectionParams.modernWeight + reflectionParams.legacyWeight * 0.1;
+	params.NdotV = NdotV;
+	params.wetnessFScale *= lerp(1.0, 1.18, reflectionParams.forwardBiasEnabled);
+#	if !defined(TRUE_PBR)
+	params.lightColorScale *= lerp(1.0, 1.1, reflectionParams.vanillaCompensationEnabled);
+	params.wetnessFScale *= lerp(1.0, 1.1, reflectionParams.vanillaCompensationEnabled);
+#	endif
+	params.wetnessFScale *= reflectionParams.skinOverdriveScale;
+
+	return params;
+}
+
+void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float roughness, WetnessDirectLightingParams params, inout DirectLightingOutput lightingOutput)
+{
+#	if defined(TRUE_PBR)
+	float3 lightColor = context.coatLightColor;
+#	else
+	float3 lightColor = context.lightColor * context.detailedShadow;
+#	endif
+	lightColor *= params.lightColorScale;
+
+	const float3 N = wetnessNormal;
+	const float3 L = context.lightDir;
+	const float3 H = context.halfVector;
+
+	float NdotL = clamp(dot(N, L), EPSILON_DOT_CLAMP, 1);
+	float NdotH = saturate(dot(N, H));
+	float VdotH = saturate(dot(context.viewDir, H));
+
+	float G = BRDF::Vis_SmithJointApprox(roughness, params.NdotV, NdotL);
+	float3 F = BRDF::F_Schlick(params.wetnessF0, VdotH);
+
+	F *= params.wetnessFScale;
+	F = saturate(F);
+
+	float3 wetnessSpecular;
+	// Keep nighttime distribution and peak compression out of daytime local-light work.
+	[branch] if (params.pointLightHighlightReduction > 0.0)
+	{
+		const float D = Wetterness::GetPointLightDistribution(roughness, NdotH);
+		const float response = D * G * F.x * NdotL;
+		wetnessSpecular = response * Wetterness::GetPointLightHighlightScale(response, params.pointLightHighlightReduction) * lightColor;
+	}
+	else
+	{
+		const float D = BRDF::D_GGX(roughness, NdotH);
+		wetnessSpecular = D * G * F * NdotL * lightColor;
+	}
+
+	lightingOutput.diffuse *= 1 - F;
+	lightingOutput.specular *= 1 - F;
+	lightingOutput.specular += wetnessSpecular;
+}
+
+float3 GetWetnessIndirectLobeWeights(inout IndirectLobeWeights lobeWeights, float3 wetnessNormal, float roughness, float wetnessStrength, IndirectContext context, WetReflectionParams reflectionParams)
+{
+	const float3 N = wetnessNormal;
+	const float3 V = context.viewDir;
+	const float3 VN = context.vertexNormal;
+
+	float NdotV = GetWetnessBiasedNdotV(N, V, reflectionParams.forwardBiasEnabled);
+	float2 specularBRDF = BRDF::EnvBRDF(roughness, NdotV);
+	float3 modernLobeWeight = 0.02 * specularBRDF.x + specularBRDF.y;
+	float3 legacyLobeWeight = saturate(1.0 - roughness) * specularBRDF.x + specularBRDF.y;
+	float glancing = saturate(1.0 - NdotV);
+	legacyLobeWeight *= (1.0 + 0.25 * glancing);
+	float3 specularLobeWeight = (modernLobeWeight * reflectionParams.modernWeight + legacyLobeWeight * reflectionParams.legacyWeight) * wetnessStrength * reflectionParams.effectiveScale;
+	specularLobeWeight *= lerp(1.0, 1.15, reflectionParams.forwardBiasEnabled);
+#	if !defined(TRUE_PBR)
+	specularLobeWeight *= lerp(1.0, 1.12, reflectionParams.vanillaCompensationEnabled);
+#	endif
+	specularLobeWeight *= reflectionParams.skinOverdriveScale;
+	specularLobeWeight = saturate(specularLobeWeight);
+
+	lobeWeights.diffuse *= 1 - specularLobeWeight;
+	lobeWeights.specular *= 1 - specularLobeWeight;
+
+	// Horizon specular occlusion
+	// https://marmosetco.tumblr.com/post/81245981087
+	float3 R = reflect(-V, N);
+	float horizon = min(1.0 + dot(R, VN), 1.0);
+	horizon = horizon * horizon;
+	horizon = lerp(horizon, max(horizon, 0.45), reflectionParams.forwardBiasEnabled);
+	horizon = lerp(horizon, max(horizon, 0.35), reflectionParams.vanillaCompensationEnabled);
+	specularLobeWeight *= horizon;
+
+	return specularLobeWeight;
+}
+#elif defined(WETNESS_EFFECTS)
 void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float roughness, inout DirectLightingOutput lightingOutput)
 {
 	const float wetnessStrength = saturate(1 - roughness);
@@ -250,7 +407,7 @@ void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float 
 	float3 wetnessSpecular = D * G * wetnessF * NdotL * lightColor;
 
 #	if !defined(TRUE_PBR)
-	wetnessSpecular *= Color::PBRLightingCompensation * Color::PBRLightingScale;  // Compensate for GGX on traditional specular
+	wetnessSpecular *= Color::PBRLightingCompensation * Color::PBRLightingScale;
 #	endif
 
 	lightingOutput.diffuse *= 1 - wetnessF;
@@ -265,6 +422,7 @@ float3 GetWetnessIndirectLobeWeights(inout IndirectLobeWeights lobeWeights, floa
 
 	const float3 N = wetnessNormal;
 	const float3 V = context.viewDir;
+	const float3 VN = context.vertexNormal;
 
 	float NdotV = saturate(abs(dot(N, V)) + EPSILON_DOT_CLAMP);
 	float2 specularBRDF = BRDF::EnvBRDF(roughness, NdotV);
@@ -274,6 +432,11 @@ float3 GetWetnessIndirectLobeWeights(inout IndirectLobeWeights lobeWeights, floa
 
 	lobeWeights.diffuse *= 1 - specularLobeWeight;
 	lobeWeights.specular *= 1 - specularLobeWeight;
+
+	float3 R = reflect(-V, N);
+	float horizon = min(1.0 + dot(R, VN), 1.0);
+	horizon = horizon * horizon;
+	specularLobeWeight *= horizon;
 
 	return specularLobeWeight;
 }

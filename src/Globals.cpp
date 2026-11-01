@@ -1,4 +1,10 @@
 #include "Globals.h"
+#include "Features/GrassOptimizations.h"
+#include "Features/NeuralRenderingFeature.h"
+#include "Features/TerrainSeams.h"
+#include "Features/Upscaling/NeuralRendering/ExposureCapture.h"
+#include "Features/WeatherPicker.h"
+#include "Features/Wetterness.h"
 
 #include "Deferred.h"
 #include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
@@ -64,6 +70,10 @@ namespace globals
 
 	namespace features
 	{
+		GrassOptimizations grassOptimizations{};
+		Wetterness wetterness{};
+		WeatherPicker weatherPicker{};
+		NeuralRenderingFeature neuralRendering{};
 		AdaptiveBrightness adaptiveBrightness{};
 		CSUtility csUtility{};
 		CloudShadows cloudShadows{};
@@ -318,10 +328,103 @@ namespace globals
  *
  * This enables interception of resource mapping and unmapping operations for frame buffer caching.
  */
+	struct ID3D11DeviceContext_DrawIndexed
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
+		{
+			UnderwaterDepthOfField::BeforeDraw();
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Indexed);
+			func(This, IndexCount, StartIndexLocation, BaseVertexLocation);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_Draw
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT VertexCount, UINT StartVertexLocation)
+		{
+			UnderwaterDepthOfField::BeforeDraw();
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Direct);
+			func(This, VertexCount, StartVertexLocation);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawIndexedInstanced
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT indexCount, UINT instanceCount, UINT startIndex, INT baseVertex, UINT startInstance)
+		{
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::IndexedInstanced);
+			func(This, indexCount, instanceCount, startIndex, baseVertex, startInstance);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const GrassCollisionVertexProbe::Draw draw{ indexCount, instanceCount, startIndex, startInstance, baseVertex };
+			globals::features::grassCollision.ObserveVertexDraw(This, draw, func.get(), nullptr);
+#endif
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawInstanced
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT vertexCount, UINT instanceCount, UINT startVertex, UINT startInstance)
+		{
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Instanced);
+			func(This, vertexCount, instanceCount, startVertex, startInstance);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawAuto
+	{
+		static void thunk(ID3D11DeviceContext* This)
+		{
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Auto);
+			func(This);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawIndexedInstancedIndirect
+	{
+		static void thunk(ID3D11DeviceContext* This, ID3D11Buffer* arguments, UINT offset)
+		{
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::IndexedIndirect);
+			func(This, arguments, offset);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const GrassCollisionVertexProbe::Draw draw{ .arguments = arguments, .argumentOffset = offset };
+			globals::features::grassCollision.ObserveVertexDraw(This, draw, nullptr, func.get());
+#endif
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawInstancedIndirect
+	{
+		static void thunk(ID3D11DeviceContext* This, ID3D11Buffer* arguments, UINT offset)
+		{
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Indirect);
+			func(This, arguments, offset);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	void InstallD3DHooks(ID3D11DeviceContext* a_context)
 	{
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
-		UnderwaterDepthOfField::InstallD3DHooks(a_context);
+		stl::detour_vfunc<12, ID3D11DeviceContext_DrawIndexed>(a_context);
+		stl::detour_vfunc<13, ID3D11DeviceContext_Draw>(a_context);
+		stl::detour_vfunc<20, ID3D11DeviceContext_DrawIndexedInstanced>(a_context);
+		stl::detour_vfunc<21, ID3D11DeviceContext_DrawInstanced>(a_context);
+		stl::detour_vfunc<38, ID3D11DeviceContext_DrawAuto>(a_context);
+		stl::detour_vfunc<39, ID3D11DeviceContext_DrawIndexedInstancedIndirect>(a_context);
+		stl::detour_vfunc<40, ID3D11DeviceContext_DrawInstancedIndirect>(a_context);
 	}
 }

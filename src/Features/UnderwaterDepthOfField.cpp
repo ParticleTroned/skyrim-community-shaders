@@ -1,9 +1,10 @@
 #include "UnderwaterDepthOfField.h"
 
+#include "AdaptiveBalanceDepthOfField.h"
 #include "Buffer.h"
-#include "CSUtility.h"
 #include "Deferred.h"
 #include "Globals.h"
+#include "GpuPass.h"
 #include "Profiler.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
@@ -81,8 +82,7 @@ namespace
 
 	bool IsCorrectionEnabled()
 	{
-		const auto& csUtility = globals::features::csUtility;
-		return csUtility.IsRuntimeEnabled() && csUtility.settings.fixUnderwaterFogDofBlur;
+		return AdaptiveBalanceDepthOfField::IsCorrectionEnabled();
 	}
 
 	constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 4> kDepthOfFieldInputTargets{
@@ -545,7 +545,7 @@ namespace
 			depthOfFieldInputCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<DepthOfFieldInputConstants>(), "UnderwaterDepthOfField::InputFogCB");
 		depthOfFieldInputCB->Update(constants);
 
-		CS_PROFILE_SCOPE("UnderwaterDepthOfField::InputFog");
+		CS_GPU_PASS("UnderwaterDepthOfField::InputFog");
 		GraphicsStateScope graphicsScope(context);
 		appliedFogToDepthOfFieldInput = DrawDepthOfFieldInputPass(*inputTarget, sharpScratch, maskSRV);
 	}
@@ -611,26 +611,6 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	struct ID3D11DeviceContext_DrawIndexed
-	{
-		static void thunk(ID3D11DeviceContext* This, UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
-		{
-			RunPendingDepthOfFieldInputPass();
-			func(This, IndexCount, StartIndexLocation, BaseVertexLocation);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct ID3D11DeviceContext_Draw
-	{
-		static void thunk(ID3D11DeviceContext* This, UINT VertexCount, UINT StartVertexLocation)
-		{
-			RunPendingDepthOfFieldInputPass();
-			func(This, VertexCount, StartVertexLocation);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
 	struct DepthOfFieldFogged_Render
 	{
 		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
@@ -661,19 +641,9 @@ namespace UnderwaterDepthOfField
 		stl::write_vfunc<0x1, DepthOfFieldMaskedFogged_Render>(RE::VTABLE_BSImagespaceShaderDepthOfFieldMaskedFogged[3]);
 	}
 
-	void InstallD3DHooks(ID3D11DeviceContext* a_context)
+	void BeforeDraw()
 	{
-		if (!a_context)
-			return;
-
-		stl::detour_vfunc<12, ID3D11DeviceContext_DrawIndexed>(a_context);
-		stl::detour_vfunc<13, ID3D11DeviceContext_Draw>(a_context);
-	}
-
-	void ClearShaderCache()
-	{
-		depthOfFieldInputVS.Reset();
-		depthOfFieldInputPS.Reset();
+		RunPendingDepthOfFieldInputPass();
 	}
 
 	void RecordShaderConstants(const RE::ImageSpaceEffectDepthOfField* a_effect, RE::ImageSpaceEffectParam* a_param)

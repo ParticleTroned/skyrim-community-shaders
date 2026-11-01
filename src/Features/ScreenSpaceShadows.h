@@ -1,11 +1,21 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Utils/RuntimeToggle.h"
 #include "Utils/LazyShader.h"
 
 struct ScreenSpaceShadows : Feature
 {
+private:
+	Util::RuntimeToggle runtimeToggle{ true };
+	bool compiledTerrainBlendingDepth = false;
+
 public:
+	bool IsEnabledRequested() const { return runtimeToggle.Get(); }
+	void SetEnabled(bool a_enabled) { runtimeToggle.Set(a_enabled); }
+	bool IsRuntimeEnabled() const { return loaded && bendSettings.Enable != 0; }
+	bool IsPerformanceToggleEnabled() const override { return IsEnabledRequested(); }
+	void SetPerformanceToggleEnabled(bool a_enabled) override { SetEnabled(a_enabled); }
 	virtual inline std::string GetName() override { return "Screen Space Shadows"; }
 	virtual std::string GetDisplayName() override { return T("feature.screen_space_shadows.name", "Screen Space Shadows"); }
 	virtual inline std::string GetShortName() override { return "ScreenSpaceShadows"; }
@@ -53,6 +63,9 @@ public:
 									   // The 'USE_HALF_PIXEL_OFFSET' macro might need to be defined if sampling at exact pixel coordinates isn't precise (e.g., if odd patterns appear in the shadow).
 
 		float2 DynamicRes;
+		uint DynamicSampleCount;
+		uint DynamicReadCount;
+		uint pad[2]{};
 
 		BendSettings settings;
 	};
@@ -67,6 +80,7 @@ public:
 
 	/** @brief Creates the raymarch constant buffer, point border sampler, and shadow output texture. */
 	virtual void SetupResources() override;
+	virtual void SetupRenderTargetResources() override { SetupResources(); }
 
 	/** @brief Draws the ImGui settings UI for screen-space shadow configuration. */
 	virtual void DrawSettings() override;
@@ -96,12 +110,7 @@ public:
 	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
-		if (a_enabled) {
-			bendSettings = BendSettings{};
-			return;
-		}
-
-		bendSettings.Enable = 0u;
+		SetEnabled(a_enabled);
 	}
 	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
@@ -115,7 +124,7 @@ public:
 	/** @brief Releases the raymarch compute shader so it is recompiled on next use. */
 	void InvalidateRaymarchShaders();
 	/** @brief Calculates the resolution-scaled and quantized sample count for the raymarch shader. */
-	uint GetScaledSampleCount() const;
+	uint GetScaledSampleCount(bool a_dynamic = true) const;
 	uint lastCompiledSampleCount = 0;
 	/**
 	 * @brief Returns the compiled raymarch compute shader, recompiling if the sample count changed.

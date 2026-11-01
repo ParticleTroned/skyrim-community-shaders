@@ -3,6 +3,7 @@
 #include "../../Buffer.h"
 #include "../../State.h"
 #include "DLSSGResourceRetention.h"
+#include "DLSSResultPolicy.h"
 
 #include <array>
 #include <atomic>
@@ -12,6 +13,7 @@
 #include <directx/d3d12.h>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string_view>
 #include <vector>
 #include <winrt/base.h>
@@ -51,6 +53,8 @@ public:
 
 	bool enabledAtBoot = false;
 	bool initialized = false;
+	winrt::com_ptr<IUnknown> boundDeviceIdentity;
+	bool deviceBindingAccepted = false;
 	bool triedInitialization = false;
 
 	bool featureDLSS = false;
@@ -99,6 +103,7 @@ public:
 	uint32_t constantsFrame = UINT32_MAX;
 	uint32_t constantsViewport = UINT32_MAX;
 	bool constantsResult = false;
+	DLSSResultPolicy::BudgetWarningThrottle dlssBudgetWarning;
 
 	bool isRTXBelow40series = false;
 	struct DLSSOptionsCache
@@ -264,6 +269,7 @@ private:
 	std::array<FrameTokenSnapshot, sl::MAX_FRAMES_IN_FLIGHT> frameTokens{};
 	std::size_t nextFrameTokenSlot = 0;
 	uint32_t latestFrameTokenFrame = UINT32_MAX;
+	std::optional<uint32_t> frameTokenOrder;
 	[[nodiscard]] sl::FrameToken* GetFrameTokenForFrame(uint32_t a_frame) const;
 	sl::RenderAPI renderAPI;
 	const wchar_t* pluginDir;

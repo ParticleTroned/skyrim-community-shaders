@@ -1,13 +1,20 @@
+#include "I18n/I18n.h"
 #include "VolumetricLighting.h"
+#include "AdaptiveBrightness.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/Game.h"
+#include "Utils/RuntimeToggle.h"
+#include "Utils/UI.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 
+#include "InteriorSun.h"
 #include "LocationContext.h"
-#include "ShaderCache.h"
 #include "SkySync.h"
 #include "State.h"
-#include "VolumetricLightingTuningMigration.h"
+#include "Utils/RendererContextAccess.h"
 
 namespace
 {
@@ -53,14 +60,6 @@ namespace
 		return IsRainWeatherActive(sky->currentWeather, currentWeight) ||
 		       IsRainWeatherActive(sky->lastWeather, lastWeight);
 	}
-
-	bool ShouldSuppressExteriorDuringRain(const VolumetricLighting::Settings& settings, bool inInterior)
-	{
-		return settings.DisableWeatherInteractionDuringRain &&
-		       !inInterior &&
-		       IsRainTransitionActive();
-	}
-
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -69,128 +68,120 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Height,
 	Depth);
 
-namespace VolumetricLightingTuning
-{
-	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-		Profile,
-		ShaftIntensity,
-		Opacity,
-		Saturation,
-		CustomColorContribution,
-		CustomColorRed,
-		CustomColorGreen,
-		CustomColorBlue);
-}
-
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VolumetricLighting::Settings,
 	ExteriorEnabled,
 	DisableWeatherInteractionDuringRain,
-	ExteriorGodrays,
 	ExteriorQuality,
 	ExteriorCustomSize,
 	InteriorEnabled,
-	InteriorGodrays,
 	InteriorQuality,
 	InteriorCustomSize);
 
 void VolumetricLighting::DrawSettings()
 {
+	{
+		std::scoped_lock lock(settingsMutex);
+		SanitizeSettings();
+	}
+	MenuUI::SettingsPage page("VolumetricLighting", {
+														{ "coverage", T("feature.volumetric_lighting.coverage", "Coverage"), T("feature.volumetric_lighting.choose_where_volumetric_lighting_runs", "Choose where volumetric lighting runs."), T("feature.volumetric_lighting.interior_exterior_and_rain", "Interior, exterior and rain"), true, true, T("feature.volumetric_lighting.choose_coverage_and_quality", "Choose coverage and quality") },
+														{ "quality", T("feature.volumetric_lighting.quality", "Quality"), T("feature.volumetric_lighting.balance_volumetric_detail_and_rendering_cost", "Balance volumetric detail and rendering cost."), T("feature.volumetric_lighting.interior_and_exterior_resolution", "Interior and exterior resolution"), true, true, nullptr },
+													});
+	if (!page.Is("coverage") && !page.Is("quality"))
+		return;
+	std::scoped_lock lock(settingsMutex);
+	if (page.Is("coverage")) {
+		Util::Widgets::Checkbox(T("feature.volumetric_lighting.enable_in_exteriors", "Enable in Exteriors"), &settings.ExteriorEnabled);
+		Util::Widgets::Checkbox(T("feature.volumetric_lighting.enable_in_interiors", "Enable in Interiors"), &settings.InteriorEnabled);
+		Util::Widgets::Checkbox(T("feature.volumetric_lighting.disable_during_rain", "Disable during rain"), &settings.DisableWeatherInteractionDuringRain);
+		Util::AddTooltip(T("feature.volumetric_lighting.disable_during_rain_tooltip", "Disables exterior volumetric lighting during rain and restores it afterwards."));
+	}
+	if (page.Is("quality")) {
+		MenuUI::DetailGrid grid("VolumetricQuality", 2, ImGui::GetFontSize() * 32);
+		const Util::Widgets::ControlLayout controls(true);
+		grid.Next();
+		MenuUI::SectionHeading(T("feature.volumetric_lighting.exteriors", "Exteriors"));
+		{
+			const auto disabled = Util::DisableGuard(!settings.ExteriorEnabled);
+			DrawVolumetricLightingSettings(settings.ExteriorQuality, settings.ExteriorCustomSize, false);
+		}
+		grid.Next();
+		MenuUI::SectionHeading(T("feature.volumetric_lighting.interiors", "Interiors"));
+		{
+			const auto disabled = Util::DisableGuard(!settings.InteriorEnabled);
+			DrawVolumetricLightingSettings(settings.InteriorQuality, settings.InteriorCustomSize, true);
+		}
+	}
+}
+
+void VolumetricLighting::DrawPerformanceSettings(bool a_advanced)
+{
+	const char* QualityNames[] = { T("feature.volumetric_lighting.low", "Low"), T("feature.volumetric_lighting.medium", "Medium"), T("feature.volumetric_lighting.high", "High"), T("feature.volumetric_lighting.custom", "Custom") };
+	std::scoped_lock lock(settingsMutex);
 	SanitizeSettings();
 
-	if (ImGui::Checkbox("Disable Exterior Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain))
-		SetupVL();
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Disables exterior volumetric lighting while rain is active and restores it after rain.");
-	}
 
-	DrawGodrayTuningSettings();
-	ImGui::Separator();
 
-	if (ImGui::Checkbox("Enable Volumetric Lighting in Exteriors", &settings.ExteriorEnabled))
-		SetupVL();
+	auto drawQuality = [&](const char* label, int32_t& quality, TextureSize& customSize, bool isInterior) {
+		quality = ClampQualityIndex(quality);
+		Util::Widgets::Combo(label, &quality, QualityNames, static_cast<int>(Quality::Count));
 
-	if (settings.ExteriorEnabled)
-		DrawVolumetricLightingSettings(settings.ExteriorQuality, settings.ExteriorCustomSize, false, !inInterior);
+		if (!a_advanced || static_cast<Quality>(quality) != Quality::Custom) {
+			return;
+		}
 
-	if (ImGui::Checkbox("Enable Volumetric Lighting in Interiors", &settings.InteriorEnabled))
-		SetupVL();
-
-	if (settings.InteriorEnabled)
-		DrawVolumetricLightingSettings(settings.InteriorQuality, settings.InteriorCustomSize, true, inInterior);
-}
-
-void VolumetricLighting::DrawGodrayTuningSettings()
-{
-	ImGui::SeparatorText("Godray Tuning");
-	const bool tuningAvailable = IsImageSpaceReplacementEnabled();
-	if (!tuningAvailable) {
-		ImGui::TextDisabled("Godray tuning requires ImageSpace pixel-shader replacement.");
-	}
-
-	ImGui::BeginDisabled(!tuningAvailable);
-	DrawGodrayProfileSettings("Exterior Godrays", settings.ExteriorGodrays);
-	DrawGodrayProfileSettings("Interior Godrays", settings.InteriorGodrays);
-	ImGui::EndDisabled();
-}
-
-void VolumetricLighting::DrawGodrayProfileSettings(const char* label, GodrayProfile& profile)
-{
-	if (!ImGui::TreeNodeEx(label, ImGuiTreeNodeFlags_DefaultOpen))
-		return;
-
-	ImGui::PushID(label);
-	auto drawSlider = [](const char* sliderLabel, float& value, float minValue, float maxValue, const char* tooltip) {
-		ImGui::SliderFloat(sliderLabel, &value, minValue, maxValue, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(tooltip);
+		auto& [Width, Height, Depth] = FetchCurrentSizeInUnits(isInterior);
+		if (Util::Widgets::SliderInt(isInterior ? T("feature.volumetric_lighting.interior_width", "Interior Width") : T("feature.volumetric_lighting.exterior_width", "Exterior Width"), &Width, 1, 20, FromUnits(Width, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+			customSize.Width = Width * 32;
+		}
+		if (Util::Widgets::SliderInt(isInterior ? T("feature.volumetric_lighting.interior_height", "Interior Height") : T("feature.volumetric_lighting.exterior_height", "Exterior Height"), &Height, 1, 20, FromUnits(Height, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+			customSize.Height = Height * 32;
+		}
+		if (Util::Widgets::SliderInt(isInterior ? T("feature.volumetric_lighting.interior_depth", "Interior Depth") : T("feature.volumetric_lighting.exterior_depth", "Exterior Depth"), &Depth, 1, 64, FromUnits(Depth, 10), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+			customSize.Depth = Depth * 10;
+		}
 	};
 
-	drawSlider("Godray Intensity", profile.ShaftIntensity, 0.0f, VolumetricLightingTuning::kShaftIntensityMax, "Linearly scales volumetric godray brightness.");
-	drawSlider("Godray Opacity", profile.Opacity, 0.0f, VolumetricLightingTuning::kOpacityMax, "Shapes shaft visibility after temporal blending without changing weather density. 1.0 is default.");
-	drawSlider("Godray Saturation", profile.Saturation, 0.0f, VolumetricLightingTuning::kSaturationMax, "Adjusts weather godray saturation while preserving brightness. 1.0 is default.");
+	Util::Widgets::Checkbox(T("feature.volumetric_lighting.enable_in_exteriors", "Enable in Exteriors"), &settings.ExteriorEnabled);
+	if (settings.ExteriorEnabled)
+		drawQuality(T("feature.volumetric_lighting.exterior_quality", "Exterior Quality"), settings.ExteriorQuality, settings.ExteriorCustomSize, false);
 
-	drawSlider("Custom Color Contribution", profile.CustomColorContribution, 0.0f, 1.0f, "Blends your custom color into the authored weather godray color.");
-	const bool customColorDisabled = profile.CustomColorContribution <= VolumetricLightingTuning::kFloatEpsilon;
-	ImGui::BeginDisabled(customColorDisabled);
-	drawSlider("Custom Color Red", profile.CustomColorRed, 0.0f, 1.0f, "Red channel for custom volumetric color.");
-	drawSlider("Custom Color Green", profile.CustomColorGreen, 0.0f, 1.0f, "Green channel for custom volumetric color.");
-	drawSlider("Custom Color Blue", profile.CustomColorBlue, 0.0f, 1.0f, "Blue channel for custom volumetric color.");
-	ImGui::EndDisabled();
-	ImGui::PopID();
-	ImGui::TreePop();
+	Util::Widgets::Checkbox(T("feature.volumetric_lighting.enable_in_interiors", "Enable in Interiors"), &settings.InteriorEnabled);
+	if (settings.InteriorEnabled)
+		drawQuality(T("feature.volumetric_lighting.interior_quality", "Interior Quality"), settings.InteriorQuality, settings.InteriorCustomSize, true);
+
+	Util::Widgets::Checkbox(T("feature.volumetric_lighting.disable_volumetric_lighting_during_rain", "Disable Volumetric Lighting During Rain"), &settings.DisableWeatherInteractionDuringRain);
 }
 
-void VolumetricLighting::DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, const bool isInterior, const bool inLocationType)
+json VolumetricLighting::CapturePerformanceSettingsState() const
 {
+	std::scoped_lock lock(settingsMutex);
+	return settings;
+}
+
+void VolumetricLighting::DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, const bool isInterior)
+{
+	const char* QualityNames[] = { T("feature.volumetric_lighting.low", "Low"), T("feature.volumetric_lighting.medium", "Medium"), T("feature.volumetric_lighting.high", "High"), T("feature.volumetric_lighting.custom", "Custom") };
 	quality = ClampQualityIndex(quality);
 	auto& [Width, Height, Depth] = FetchCurrentSizeInUnits(isInterior);
 
-	if (ImGui::SliderInt(isInterior ? "Interior Quality" : "Exterior Quality", &quality, 0, static_cast<uint8_t>(Quality::Count) - 1, QualityNames[quality])) {
-		if (inLocationType)
-			SetupVL();
-	}
+	Util::Widgets::Combo(isInterior ? T("feature.volumetric_lighting.interior_quality", "Interior Quality") : T("feature.volumetric_lighting.exterior_quality", "Exterior Quality"), &quality, QualityNames, static_cast<int>(Quality::Count));
 
 	const bool isCustomQuality = static_cast<Quality>(quality) == Quality::Custom;
 	if (!isCustomQuality)
 		ImGui::BeginDisabled();
 
-	if (ImGui::SliderInt(isInterior ? "Interior Width" : "Exterior Width", &Width, 1, 20, FromUnits(Width, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+	if (Util::Widgets::SliderInt(isInterior ? T("feature.volumetric_lighting.interior_width", "Interior Width") : T("feature.volumetric_lighting.exterior_width", "Exterior Width"), &Width, 1, 20, FromUnits(Width, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 		customSize.Width = Width * 32;
-		if (inLocationType)
-			SetupVL();
 	}
 
-	if (ImGui::SliderInt(isInterior ? "Interior Height" : "Exterior Height", &Height, 1, 20, FromUnits(Height, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+	if (Util::Widgets::SliderInt(isInterior ? T("feature.volumetric_lighting.interior_height", "Interior Height") : T("feature.volumetric_lighting.exterior_height", "Exterior Height"), &Height, 1, 20, FromUnits(Height, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 		customSize.Height = Height * 32;
-		if (inLocationType)
-			SetupVL();
 	}
 
-	if (ImGui::SliderInt(isInterior ? "Interior Depth" : "Exterior Depth", &Depth, 1, 64, FromUnits(Depth, 10), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+	if (Util::Widgets::SliderInt(isInterior ? T("feature.volumetric_lighting.interior_depth", "Interior Depth") : T("feature.volumetric_lighting.exterior_depth", "Exterior Depth"), &Depth, 1, 64, FromUnits(Depth, 10), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 		customSize.Depth = Depth * 10;
-		if (inLocationType)
-			SetupVL();
 	}
 
 	if (!isCustomQuality)
@@ -252,70 +243,32 @@ VolumetricLighting::TextureSize& VolumetricLighting::FetchCurrentSizeInUnits(con
 	return size;
 }
 
-void VolumetricLighting::DrawEssentialSettings()
-{
-	SanitizeSettings();
-	if (ImGui::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled))
-		SetupVL();
-	if (ImGui::Checkbox("Enable in Interiors", &settings.InteriorEnabled))
-		SetupVL();
-}
-
 void VolumetricLighting::LoadSettings(json& o_json)
 {
+	std::scoped_lock lock(settingsMutex);
 	if (!o_json.is_object()) {
 		settings = {};
 		SanitizeSettings();
 		return;
 	}
 
-	const auto legacyGodrays = VolumetricLightingTuning::ReadLegacyProfile(o_json);
-	auto exteriorGodrays = legacyGodrays;
-	if (const auto it = o_json.find("ExteriorGodrays"); it != o_json.end())
-		exteriorGodrays = VolumetricLightingTuning::ReadProfile(*it);
-	auto interiorGodrays = legacyGodrays;
-	if (const auto it = o_json.find("InteriorGodrays"); it != o_json.end())
-		interiorGodrays = VolumetricLightingTuning::ReadProfile(*it);
-
-	auto baseSettings = o_json;
-	baseSettings.erase("ExteriorGodrays");
-	baseSettings.erase("InteriorGodrays");
-	settings = baseSettings;
-	settings.ExteriorGodrays = exteriorGodrays;
-	settings.InteriorGodrays = interiorGodrays;
+	settings = o_json;
 
 	SanitizeSettings();
 }
 
 void VolumetricLighting::SaveSettings(json& o_json)
 {
+	std::scoped_lock lock(settingsMutex);
 	SanitizeSettings();
 	o_json = settings;
 }
 
-bool VolumetricLighting::NormalizePerformanceTuningUserSettings(json& a_settings) const
-{
-	if (!a_settings.is_object())
-		return false;
-
-	if (!a_settings.contains("ExteriorGodrays"))
-		a_settings["ExteriorGodrays"] = VolumetricLightingTuning::ReadLegacyProfile(a_settings);
-	if (!a_settings.contains("InteriorGodrays"))
-		a_settings["InteriorGodrays"] = VolumetricLightingTuning::ReadLegacyProfile(a_settings);
-
-	for (const auto* legacyKey : { "GodrayIntensity", "GodrayShaftIntensity", "GodrayOpacity", "GodraySaturation",
-			 "CustomColorContribution", "CustomColorRed", "CustomColorGreen", "CustomColorBlue" }) {
-		a_settings.erase(legacyKey);
-	}
-	return true;
-}
-
 void VolumetricLighting::RestoreDefaultSettings()
 {
+	std::scoped_lock lock(settingsMutex);
 	settings = {};
 	SanitizeSettings();
-	if (initialised)
-		SetupVL();
 }
 
 int32_t VolumetricLighting::ClampQualityIndex(int32_t quality)
@@ -334,8 +287,6 @@ VolumetricLighting::TextureSize VolumetricLighting::ClampTextureSize(const Textu
 
 void VolumetricLighting::SanitizeSettings()
 {
-	settings.ExteriorGodrays = VolumetricLightingTuning::SanitizeProfile(settings.ExteriorGodrays);
-	settings.InteriorGodrays = VolumetricLightingTuning::SanitizeProfile(settings.InteriorGodrays);
 	settings.ExteriorQuality = ClampQualityIndex(settings.ExteriorQuality);
 	settings.InteriorQuality = ClampQualityIndex(settings.InteriorQuality);
 	settings.ExteriorCustomSize = ClampTextureSize(settings.ExteriorCustomSize);
@@ -344,86 +295,108 @@ void VolumetricLighting::SanitizeSettings()
 
 bool VolumetricLighting::IsExteriorEnabled() const
 {
+	std::scoped_lock lock(settingsMutex);
 	return settings.ExteriorEnabled;
 }
 
 bool VolumetricLighting::TryGetActiveGodrayProfile(GodrayProfile& profile) const
 {
-	const bool currentlyInInterior = LocationContext::HasInteriorCell();
-	if (currentlyInInterior) {
-		if (!settings.InteriorEnabled || !LocationContext::IsInteriorWithSun())
+	bool interior;
+	{
+		std::scoped_lock lock(settingsMutex);
+		if (!initialised || !runtimeEnabled)
 			return false;
-		profile = VolumetricLightingTuning::SanitizeProfile(settings.InteriorGodrays);
-	} else {
-		if (!settings.ExteriorEnabled)
-			return false;
-		profile = VolumetricLightingTuning::SanitizeProfile(settings.ExteriorGodrays);
+		interior = inInterior;
 	}
-
+	profile = globals::features::adaptiveBrightness.GetEffectiveGodrayProfile(interior);
 	return true;
 }
 
 VolumetricLighting::GodrayProfile VolumetricLighting::GetRuntimeGodrayProfile() const
 {
 	GodrayProfile profile{};
-	if (loaded && IsImageSpaceReplacementEnabled())
-		TryGetActiveGodrayProfile(profile);
+	if (!loaded || !IsImageSpaceReplacementEnabled() || !TryGetActiveGodrayProfile(profile))
+		return profile;
 	return profile;
 }
 
-bool VolumetricLighting::IsPerformanceTuningApplicable() const
+bool VolumetricLighting::IsPerformanceToggleEnabled() const
 {
-	if (!initialised)
-		return false;
-	if (!gVolumetricLightingSizeHigh || !globals::game::bEnableVolumetricLighting)
-		return false;
-	if (inInterior)
-		return inInteriorWithSun;
-
-	return !rainOnlySuppressionActive;
+	std::scoped_lock lock(settingsMutex);
+	return inInterior ? settings.InteriorEnabled : settings.ExteriorEnabled;
 }
 
-const char* VolumetricLighting::GetPerformanceTuningApplicabilityReason() const
+bool VolumetricLighting::IsPerformanceCostMeasurementEnabled() const
 {
-	if (IsPerformanceTuningApplicable())
-		return nullptr;
-	if (!initialised) {
-		return T(
-			"menu.performance_tuning.feature.volumetric_lighting.not_initialized",
-			"Volumetric Lighting has not initialized for the current scene yet.");
-	}
-	if (!gVolumetricLightingSizeHigh || !globals::game::bEnableVolumetricLighting) {
-		return T(
-			"menu.performance_tuning.feature.volumetric_lighting.runtime_unavailable",
-			"Volumetric Lighting cannot be measured because its runtime controls are unavailable.");
-	}
-	if (inInterior && !inInteriorWithSun) {
-		return T(
-			"menu.performance_tuning.feature.volumetric_lighting.interior_without_sun",
-			"The current interior does not support sunlight volumetric lighting, so there is no runtime work to measure.");
-	}
-	if (rainOnlySuppressionActive) {
-		return T(
-			"menu.performance_tuning.feature.volumetric_lighting.rain_suppressed",
-			"Exterior Volumetric Lighting is currently suppressed by the Disable During Rain setting.");
+	std::scoped_lock lock(settingsMutex);
+	return initialised && runtimeEnabled;
+}
+
+void VolumetricLighting::SetPerformanceToggleEnabled(bool a_enabled)
+{
+	std::scoped_lock lock(settingsMutex);
+	(inInterior ? settings.InteriorEnabled : settings.ExteriorEnabled) = a_enabled;
+}
+
+void VolumetricLighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	std::scoped_lock lock(settingsMutex);
+	const Settings defaults{};
+	if (inInterior) {
+		settings.InteriorEnabled = a_enabled;
+		if (a_enabled) {
+			settings.InteriorQuality = defaults.InteriorQuality;
+			settings.InteriorCustomSize = defaults.InteriorCustomSize;
+		}
+	} else {
+		settings.ExteriorEnabled = a_enabled;
+		if (a_enabled) {
+			settings.ExteriorQuality = defaults.ExteriorQuality;
+			settings.ExteriorCustomSize = defaults.ExteriorCustomSize;
+		}
 	}
 
-	return T(
-		"menu.performance_tuning.feature.volumetric_lighting.not_applicable",
-		"Volumetric Lighting has no measurable runtime work in the current scene.");
+	SanitizeSettings();
+}
+
+json VolumetricLighting::CapturePerformanceCostMeasurementState() const
+{
+	std::scoped_lock lock(settingsMutex);
+	return settings;
+}
+
+void VolumetricLighting::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	std::scoped_lock lock(settingsMutex);
+	if (!a_state.is_object())
+		return;
+
+	settings = a_state.get<Settings>();
+	SanitizeSettings();
 }
 
 void VolumetricLighting::SetExteriorEnabled(bool enabled)
 {
+	std::scoped_lock lock(settingsMutex);
 	settings.ExteriorEnabled = enabled;
-
-	if (initialised && !inInterior && globals::game::bEnableVolumetricLighting && gVolumetricLightingSizeHigh) {
-		SetupVL();
-	}
 }
 
-void VolumetricLighting::DataLoaded()
+void VolumetricLighting::RequestRuntimeReset()
 {
+	runtimeResetRequested.store(true, std::memory_order_release);
+}
+
+bool VolumetricLighting::IsRuntimeTransitionBlocked() const
+{
+	const auto* state = globals::state;
+	return Util::IsRuntimeToggleBlocked(state);
+}
+
+bool VolumetricLighting::IsPerformanceCostMeasurementReady() const
+{
+	std::scoped_lock lock(settingsMutex);
+	return runtimeReady.load(std::memory_order_acquire) && !runtimeResetRequested.load(std::memory_order_acquire) &&
+	       settings == runtimeSettings && !IsRuntimeTransitionBlocked();
 }
 
 void VolumetricLighting::PostPostLoad()
@@ -445,30 +418,40 @@ void VolumetricLighting::PostPostLoad()
 
 void VolumetricLighting::SetupResources()
 {
-	vlDataCB = new ConstantBuffer(ConstantBufferDesc<VLData>());
+	RequestRuntimeReset();
+	delete vlDataCB;
+	vlDataCB = new ConstantBuffer(ConstantBufferDesc<VLData>(), "VolumetricLighting::Dimensions");
 }
 
 void VolumetricLighting::UpdateBlurDimensions()
 {
-	const auto* viewport = globals::game::graphicsState;
 	blurDimensionsValid = false;
-	if (!viewport || !vlDataCB)
+	if (!globals::state || !globals::game::graphicsState || !vlDataCB ||
+		!globals::game::cameraNear || !globals::game::cameraFar)
 		return;
 
-	const float2 fullSize{ static_cast<float>(viewport->screenWidth), static_cast<float>(viewport->screenHeight) };
+	const auto fullSize = globals::state->screenSize;
 	const auto renderSize = Util::ConvertToDynamic(fullSize);
-	const auto validDimension = [](float a_size, float a_minimum, float a_maximum) {
-		return std::isfinite(a_size) && a_size >= a_minimum && a_size <= a_maximum;
+	const float minimumWidth = 1.0f;
+	const auto validDimension = [](float size, float minimum, float maximum) {
+		return std::isfinite(size) && size >= minimum && size <= maximum;
 	};
-	if (!validDimension(fullSize.x, 1.0f, D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) ||
+	if (!validDimension(fullSize.x, minimumWidth, D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) ||
 		!validDimension(fullSize.y, 1.0f, D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) ||
-		!validDimension(renderSize.x, 1.0f, fullSize.x) ||
+		!validDimension(renderSize.x, minimumWidth, fullSize.x) ||
 		!validDimension(renderSize.y, 1.0f, fullSize.y)) {
+		return;
+	}
+
+	const auto cameraData = Util::GetCameraData();
+	if (!std::isfinite(cameraData.x) || !std::isfinite(cameraData.y) || !std::isfinite(cameraData.w) ||
+		cameraData.y <= 0.0f || cameraData.x <= cameraData.y || cameraData.w <= 0.0f) {
 		return;
 	}
 
 	const auto fullWidth = static_cast<int32_t>(fullSize.x);
 	const auto fullHeight = static_cast<int32_t>(fullSize.y);
+	// Dynamic bounds live in the constant buffer, not the cached shader wrapper.
 	if (fullWidth != fullScreenX || fullHeight != fullScreenY) {
 		blurHCS = nullptr;
 		blurVCS = nullptr;
@@ -480,52 +463,74 @@ void VolumetricLighting::UpdateBlurDimensions()
 	vlData.screenY = static_cast<int32_t>(renderSize.y);
 	vlData.screenXMin1 = vlData.screenX - 1;
 	vlData.screenYMin1 = vlData.screenY - 1;
+	vlData.cameraData = cameraData;
 	vlDataCB->Update(vlData);
 	blurDimensionsValid = true;
 }
 
 void VolumetricLighting::EarlyPrepass()
 {
-	UpdateBlurDimensions();
-
-	const bool currentlyInInterior = LocationContext::HasInteriorCell();
-	const bool nextInteriorWithSun = LocationContext::IsInteriorWithSun();
-	const bool nextRainSuppressionActive = ShouldSuppressExteriorDuringRain(settings, currentlyInInterior);
-
-	if (initialised &&
-		currentlyInInterior == inInterior &&
-		nextInteriorWithSun == inInteriorWithSun &&
-		nextRainSuppressionActive == rainOnlySuppressionActive)
+	auto* state = globals::state;
+	if (!state || !runtimeController.BeginFrame(state->frameCount))
 		return;
 
-	initialised = true;
-	inInterior = currentlyInInterior;
-	inInteriorWithSun = nextInteriorWithSun;
-	rainOnlySuppressionActive = nextRainSuppressionActive;
-	SetupVL();
+	runtimeReady.store(false, std::memory_order_release);
+	blurDimensionsValid = false;
+	Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
+	if (!ownership)
+		return;
+	// Deferred toggles must not interrupt the active frame's blur bounds.
+	UpdateBlurDimensions();
+	if (IsRuntimeTransitionBlocked())
+		return;
+
+	auto* tes = globals::game::tes;
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	auto* cell = player ? player->GetParentCell() : nullptr;
+	if (!LocationContext::HasAttachedCell(tes, cell) || !gVolumetricLightingSizeHigh || !globals::game::bEnableVolumetricLighting)
+		return;
+	const bool currentlyInInterior = cell->IsInteriorCell();
+
+	Settings requested;
+	{
+		std::scoped_lock lock(settingsMutex);
+		SanitizeSettings();
+		requested = settings;
+	}
+	const bool interiorWithSun = globals::features::interiorSun.IsEnabled() && InteriorSun::IsInteriorWithSun(cell);
+	const bool requestedEnabled = LocationContext::AllowsEnabledLocations(requested.InteriorEnabled && interiorWithSun, requested.ExteriorEnabled, currentlyInInterior);
+	const bool suppressRain = requested.DisableWeatherInteractionDuringRain && !currentlyInInterior && IsRainTransitionActive();
+	const bool enabled = requestedEnabled && !suppressRain;
+	const int32_t quality = LocationContext::SelectInteriorExterior(currentlyInInterior, requested.InteriorQuality, requested.ExteriorQuality);
+	const auto size = static_cast<Quality>(quality) == Quality::Custom ?
+	                      LocationContext::SelectInteriorExterior(currentlyInInterior, requested.InteriorCustomSize, requested.ExteriorCustomSize) :
+	                      defaultSizeHigh;
+	const VolumetricLightingRuntime::Target target{ enabled, enabled, std::min(quality, 2), { size.Width, size.Height, size.Depth } };
+	const bool reset = runtimeResetRequested.exchange(false, std::memory_order_acq_rel);
+	const auto changes = runtimeController.Plan(target, reset);
+	ApplyRuntimeTarget(target, changes);
+	runtimeController.Commit(target);
+	{
+		std::scoped_lock lock(settingsMutex);
+		runtimeSettings = requested;
+		initialised = true;
+		inInterior = currentlyInInterior;
+		runtimeEnabled = enabled;
+		runtimeReady.store(true, std::memory_order_release);
+	}
 }
 
-void VolumetricLighting::SetupVL()
+void VolumetricLighting::ApplyRuntimeTarget(const VolumetricLightingRuntime::Target& target, const VolumetricLightingRuntime::Changes& changes)
 {
-	SanitizeSettings();
-
-	auto* bEnableVolumetricLighting = globals::game::bEnableVolumetricLighting;
-	if (!gVolumetricLightingSizeHigh || !bEnableVolumetricLighting) {
-		return;
+	// The early prepass owns the renderer throughout this engine-state transaction.
+	if (changes.flags) {
+		*globals::game::bEnableVolumetricLighting = target.enabled;
 	}
-
-	const bool requestedRuntimeEnabled = LocationContext::AllowsEnabledLocations(settings.InteriorEnabled && inInteriorWithSun, settings.ExteriorEnabled, inInterior);
-	rainOnlySuppressionActive = ShouldSuppressExteriorDuringRain(settings, inInterior);
-	const bool runtimeEnabled = requestedRuntimeEnabled && !rainOnlySuppressionActive;
-	const int32_t quality = ClampQualityIndex(LocationContext::SelectInteriorExterior(inInterior, settings.InteriorQuality, settings.ExteriorQuality));
-	const TextureSize customSize = LocationContext::SelectInteriorExterior(inInterior, settings.InteriorCustomSize, settings.ExteriorCustomSize);
-
-	*bEnableVolumetricLighting = runtimeEnabled;
-
-	*gVolumetricLightingSizeHigh = static_cast<Quality>(quality) == Quality::Custom ? customSize : defaultSizeHigh;
-	SetVLQuality(GetVLDescriptor(), quality);
-
-	if (!runtimeEnabled)
+	if (changes.quality) {
+		*gVolumetricLightingSizeHigh = { target.highQualitySize[0], target.highQualitySize[1], target.highQualitySize[2] };
+		SetVLQuality(GetVLDescriptor(), target.quality);
+	}
+	if (changes.clearHistory)
 		ClearVolumetricLightingTargets();
 }
 
@@ -571,6 +576,10 @@ void VolumetricLighting::SetVLQuality(VolumetricLightingDescriptor& descriptor, 
 	func(descriptor, std::clamp<uint32_t>(quality, 0, 2));
 }
 
+
+
+
+
 VolumetricLighting::VolumetricLightingDescriptor* VolumetricLighting::ApplyVolumetricLighting_VolumetricLightingDescriptor_Get::thunk()
 {
 	auto* descriptor = func();
@@ -582,9 +591,7 @@ VolumetricLighting::VolumetricLightingDescriptor* VolumetricLighting::ApplyVolum
 		return descriptor;
 	}
 
-	const auto profile = feature.GetRuntimeGodrayProfile();
-	const float skySyncIntensity = globals::features::skySync.GetVolumetricLightingIntensityFactor();
-	const float intensityScale = skySyncIntensity * profile.ShaftIntensity;
+	const float intensityScale = globals::features::skySync.GetVolumetricLightingIntensityFactor();
 	if (VolumetricLightingTuning::IsNear(intensityScale, 1.0f))
 		return descriptor;
 

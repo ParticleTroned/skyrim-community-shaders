@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.Foundation.h>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -25,6 +26,8 @@ public:
 		ID3D11Device5* a_d3d11Device,
 		ID3D12Device* a_d3d12Device,
 		std::string_view a_debugName = {});
+	/** Import a retained typed producer without replacing or mutating its D3D11 storage. */
+	WrappedResource(ID3D11Texture2D*, ID3D12Device*, std::string_view name, HANDLE sharedHandle);
 	~WrappedResource() = default;
 
 	winrt::com_ptr<ID3D11Texture2D> resource11;
@@ -115,6 +118,7 @@ public:
 class DX12SwapChain
 {
 public:
+	~DX12SwapChain();
 	static constexpr UINT kFidelityFXBackBufferCount = 2;
 	static constexpr UINT kDLSSGBackBufferCount = 3;
 	static constexpr UINT kMaximumBackBufferCount = kDLSSGBackBufferCount;
@@ -189,6 +193,15 @@ public:
 	// strictly greater than their initial completed value.
 	UINT64 fenceValue = 1;
 	UINT64 commandAllocatorFenceValues[kMaximumBackBufferCount]{};
+	struct AllocatorFenceWait
+	{
+		winrt::handle event;
+		winrt::com_ptr<ID3D12Fence> fence;
+		UINT64 value = 0;
+	};
+	std::array<std::unique_ptr<AllocatorFenceWait>, kMaximumBackBufferCount> allocatorFenceWaits{};
+	bool allocatorTimeoutLogged = false;
+	bool RetireAllocatorFenceWaits() noexcept;
 	HRESULT presentInteropFailure = S_OK;
 	bool hdrColorSpaceActive = false;
 	bool colorSpaceChangePending = false;

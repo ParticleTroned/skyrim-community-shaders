@@ -1,12 +1,11 @@
+#include "I18n/I18n.h"
 #include "Bloom.h"
 
 #include <algorithm>
 #include <cmath>
 
-#include "I18n/I18n.h"
+#include "Utils/Finite.h"
 #include "Utils/UI.h"
-
-#define I18N_KEY_PREFIX "feature.adaptive_balance.bloom."
 
 namespace
 {
@@ -29,19 +28,15 @@ namespace
 
 	void SanitizeProfileWithDefaults(Bloom::Profile& a_profile, const Bloom::Profile& a_defaults)
 	{
-		const auto clampFiniteOrDefault = [](float a_value, float a_min, float a_max, float a_defaultValue) {
-			return std::isfinite(a_value) ? std::clamp(a_value, a_min, a_max) : a_defaultValue;
-		};
-
-		a_profile.EnhancementIntensity = clampFiniteOrDefault(a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, a_defaults.EnhancementIntensity);
-		a_profile.HaloRadius = clampFiniteOrDefault(a_profile.HaloRadius, 0.0f, kHaloRadiusMax, a_defaults.HaloRadius);
-		a_profile.HaloSpread = clampFiniteOrDefault(a_profile.HaloSpread, 0.0f, 1.0f, a_defaults.HaloSpread);
-		a_profile.BloomSaturation = clampFiniteOrDefault(a_profile.BloomSaturation, 0.0f, kBloomSaturationMax, a_defaults.BloomSaturation);
-		a_profile.BloomTint.x = clampFiniteOrDefault(a_profile.BloomTint.x, 0.0f, 1.0f, a_defaults.BloomTint.x);
-		a_profile.BloomTint.y = clampFiniteOrDefault(a_profile.BloomTint.y, 0.0f, 1.0f, a_defaults.BloomTint.y);
-		a_profile.BloomTint.z = clampFiniteOrDefault(a_profile.BloomTint.z, 0.0f, 1.0f, a_defaults.BloomTint.z);
-		a_profile.CompressionCeiling = clampFiniteOrDefault(a_profile.CompressionCeiling, 0.0f, kCompressionCeilingMax, a_defaults.CompressionCeiling);
-		a_profile.CompressionThreshold = clampFiniteOrDefault(
+		a_profile.EnhancementIntensity = Util::ClampFinite(a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, a_defaults.EnhancementIntensity);
+		a_profile.HaloRadius = Util::ClampFinite(a_profile.HaloRadius, 0.0f, kHaloRadiusMax, a_defaults.HaloRadius);
+		a_profile.HaloSpread = Util::ClampFinite(a_profile.HaloSpread, 0.0f, 1.0f, a_defaults.HaloSpread);
+		a_profile.BloomSaturation = Util::ClampFinite(a_profile.BloomSaturation, 0.0f, kBloomSaturationMax, a_defaults.BloomSaturation);
+		a_profile.BloomTint.x = Util::ClampFinite(a_profile.BloomTint.x, 0.0f, 1.0f, a_defaults.BloomTint.x);
+		a_profile.BloomTint.y = Util::ClampFinite(a_profile.BloomTint.y, 0.0f, 1.0f, a_defaults.BloomTint.y);
+		a_profile.BloomTint.z = Util::ClampFinite(a_profile.BloomTint.z, 0.0f, 1.0f, a_defaults.BloomTint.z);
+		a_profile.CompressionCeiling = Util::ClampFinite(a_profile.CompressionCeiling, 0.0f, kCompressionCeilingMax, a_defaults.CompressionCeiling);
+		a_profile.CompressionThreshold = Util::ClampFinite(
 			a_profile.CompressionThreshold,
 			0.0f,
 			a_profile.CompressionCeiling,
@@ -54,15 +49,12 @@ void Bloom::DrawProfileControls(Profile& a_profile)
 	SanitizeProfile(a_profile);
 	ImGui::PushID(&a_profile);
 
-	const auto* bloomLabel = T(TKEY("amount"), "Bloom");
-	const auto* bloomTooltip = T(TKEY("amount_tooltip"), "Bloom enhancement strength for this profile. 0 turns the enhancement off and keeps Skyrim's vanilla Bloom unchanged; values through 1 blend into the configured enhancement, and higher values amplify it before compression.");
-	const auto* bloomPresetsLabel = T(TKEY("presets"), "Bloom Presets");
 	const auto drawBloomSlider = [&]() {
-		ImGui::SliderFloat(bloomLabel, &a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		DrawTooltip(bloomTooltip);
+		Util::Widgets::SliderFloat(T("feature.bloom.bloom", "Bloom"), &a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		DrawTooltip(T("feature.bloom.this_layer_s_bloom_strength_0_adds_none_detai_01f28a18", "This layer's bloom strength: 0 adds none. Detailed controls can still reshape inherited bloom."));
 	};
 	const auto& style = ImGui::GetStyle();
-	const float bloomLabelWidth = ImGui::CalcTextSize(bloomLabel).x + style.ItemInnerSpacing.x;
+	const float bloomLabelWidth = ImGui::CalcTextSize(T("feature.bloom.bloom", "Bloom")).x + style.ItemInnerSpacing.x;
 	const float minimumSliderWidth = ImGui::CalcTextSize("0.00").x + style.FramePadding.x * 4.0f;
 	float minimumInlineWidth = bloomLabelWidth + minimumSliderWidth + style.CellPadding.x * 2.0f * (kPresetCount + 1);
 	for (uint preset = 0; preset < kPresetCount; ++preset) {
@@ -74,7 +66,7 @@ void Bloom::DrawProfileControls(Profile& a_profile)
 		drawBloomSlider();
 
 	if (ImGui::BeginTable("##BloomQuickControls", 4, ImGuiTableFlags_SizingStretchProp)) {
-		ImGui::TableSetupColumn(bloomPresetsLabel, ImGuiTableColumnFlags_WidthStretch, 1.0f);
+		ImGui::TableSetupColumn(T("feature.bloom.bloom_presets", "Bloom Presets"), ImGuiTableColumnFlags_WidthStretch, 1.0f);
 		for (uint preset = 0; preset < kPresetCount; ++preset) {
 			const auto* name = GetPresetName(preset);
 			const float width = ImGui::CalcTextSize(name).x + style.FramePadding.x * 2.0f;
@@ -88,7 +80,7 @@ void Bloom::DrawProfileControls(Profile& a_profile)
 			drawBloomSlider();
 		} else {
 			ImGui::AlignTextToFramePadding();
-			ImGui::TextUnformatted(bloomPresetsLabel);
+			ImGui::TextUnformatted(T("feature.bloom.bloom_presets", "Bloom Presets"));
 		}
 
 		for (uint preset = 0; preset < kPresetCount; ++preset) {
@@ -107,18 +99,18 @@ void Bloom::DrawProfileControls(Profile& a_profile)
 bool Bloom::DrawAdvancedProfileSettings(Profile& a_profile)
 {
 	bool changed = false;
-	changed |= ImGui::SliderFloat(T(TKEY("halo_radius"), "Halo Radius"), &a_profile.HaloRadius, 0.0f, kHaloRadiusMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-	DrawTooltip(T(TKEY("halo_radius_tooltip"), "Controls the radius of the enhancement's additional bloom samples. Higher values create wider halos."));
-	changed |= ImGui::SliderFloat(T(TKEY("halo_spread"), "Halo Spread"), &a_profile.HaloSpread, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	DrawTooltip(T(TKEY("halo_spread_tooltip"), "Blends between the original bloom and the widened halo samples. Higher values make the halo softer and more spread out."));
-	changed |= ImGui::SliderFloat(T(TKEY("saturation"), "Bloom Saturation"), &a_profile.BloomSaturation, 0.0f, kBloomSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	DrawTooltip(T(TKEY("saturation_tooltip"), "Controls the color saturation of the enhanced bloom. Lower values make it whiter; higher values preserve or exaggerate its tint."));
-	changed |= ImGui::ColorEdit3(T(TKEY("tint"), "Bloom Tint"), reinterpret_cast<float*>(&a_profile.BloomTint));
-	DrawTooltip(T(TKEY("tint_tooltip"), "Colors the bloom halo without changing the underlying scene lighting."));
-	changed |= ImGui::SliderFloat(T(TKEY("compression_ceiling"), "Compression Ceiling"), &a_profile.CompressionCeiling, 0.0f, kCompressionCeilingMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	DrawTooltip(T(TKEY("compression_ceiling_tooltip"), "Maximum Bloom luminance approached by the soft limiter after tint and enhancement strength are applied."));
-	changed |= ImGui::SliderFloat(T(TKEY("compression_threshold"), "Compression Threshold"), &a_profile.CompressionThreshold, 0.0f, a_profile.CompressionCeiling, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	DrawTooltip(T(TKEY("compression_threshold_tooltip"), "Bloom luminance where soft compression starts after tint and enhancement strength are applied."));
+	changed |= Util::Widgets::SliderFloat(T("feature.bloom.halo_radius", "Halo Radius"), &a_profile.HaloRadius, 0.0f, kHaloRadiusMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+	DrawTooltip(T("feature.bloom.controls_the_radius_of_the_enhancement_s_addi_77f17f0f", "Controls the radius of the enhancement's additional bloom samples. Higher values create wider halos."));
+	changed |= Util::Widgets::SliderFloat(T("feature.bloom.halo_spread", "Halo Spread"), &a_profile.HaloSpread, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	DrawTooltip(T("feature.bloom.blend_original_bloom_with_wider_halo_samples_1f023b57", "Blend original bloom with wider halo samples. Higher makes softer, wider halos."));
+	changed |= Util::Widgets::SliderFloat(T("feature.bloom.bloom_saturation", "Bloom Saturation"), &a_profile.BloomSaturation, 0.0f, kBloomSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	DrawTooltip(T("feature.bloom.bloom_color_saturation_lower_whitens_it_highe_e078b458", "Bloom color saturation: lower whitens it; higher preserves or strengthens its tint."));
+	changed |= Util::Widgets::ColorEdit3(T("feature.bloom.bloom_tint", "Bloom Tint"), reinterpret_cast<float*>(&a_profile.BloomTint));
+	DrawTooltip(T("feature.bloom.colors_the_bloom_halo_without_changing_the_un_6523ee97", "Colors the bloom halo without changing the underlying scene lighting."));
+	changed |= Util::Widgets::SliderFloat(T("feature.bloom.compression_ceiling", "Compression Ceiling"), &a_profile.CompressionCeiling, 0.0f, kCompressionCeilingMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	DrawTooltip(T("feature.bloom.maximum_bloom_luminance_approached_by_the_sof_6d40886f", "Maximum Bloom luminance approached by the soft limiter after tint and enhancement strength are applied."));
+	changed |= Util::Widgets::SliderFloat(T("feature.bloom.compression_threshold", "Compression Threshold"), &a_profile.CompressionThreshold, 0.0f, a_profile.CompressionCeiling, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	DrawTooltip(T("feature.bloom.bloom_luminance_where_soft_compression_starts_131dfa52", "Bloom luminance where soft compression starts after tint and enhancement strength are applied."));
 
 	SanitizeProfile(a_profile);
 	return changed;
@@ -153,11 +145,11 @@ const char* Bloom::GetPresetName(uint a_preset)
 {
 	switch (a_preset) {
 	case 1:
-		return T(TKEY("preset_fantasy"), "Fantasy");
+		return T("feature.bloom.fantasy", "Fantasy");
 	case 2:
-		return T(TKEY("preset_dreamy"), "Dreamy");
+		return T("feature.bloom.dreamy", "Dreamy");
 	default:
-		return T(TKEY("preset_default"), "Default");
+		return T("feature.bloom.default", "Default");
 	}
 }
 
@@ -220,5 +212,3 @@ void Bloom::SanitizeProfile(Profile& a_profile)
 {
 	SanitizeProfileWithDefaults(a_profile, Profile{});
 }
-
-#undef I18N_KEY_PREFIX

@@ -5,20 +5,18 @@
 // http://www.diva-portal.org/smash/get/diva2:831762/FULLTEXT01.pdf
 // https://bartwronski.files.wordpress.com/2014/03/ac4_gdc.pdf
 
-#ifndef EXTENDED_MATERIALS_HLSLI
+#if !(defined(EXTENDED_MATERIALS_HLSLI))
 #define EXTENDED_MATERIALS_HLSLI
 
-#if defined(LANDSCAPE)
-#	if defined(TERRAIN_VARIATION)
-#		include "TerrainVariation/TerrainVariation.hlsli"
-#	else
+#if defined(TERRAIN_VARIATION)
+#	include "TerrainVariation/TerrainVariation.hlsli"
+#else
 struct StochasticOffsets
 {
 	float2 offset1;
 	float2 offset2;
 	float tap1Weight;
 };
-#	endif
 #endif
 
 struct DisplacementParams
@@ -77,9 +75,10 @@ namespace ExtendedMaterials
 
 	float GetMipLevelFromDims(float2 coords, float2 textureDims)
 	{
-#if !defined(PARALLAX) && !defined(TRUE_PBR)
+#if (!(defined(PARALLAX))) && (!(defined(TRUE_PBR)))
 		textureDims /= 2.0;
 #endif
+
 
 		float2 texCoordsPerSize = coords * textureDims;
 
@@ -93,7 +92,7 @@ namespace ExtendedMaterials
 		// Compute the current mip level  (* 0.5 is effectively computing a square root before )
 		float mipLevel = max(0.5 * log2(minTexCoordDelta), 0);
 
-#if !defined(PARALLAX) && !defined(TRUE_PBR)
+#if (!(defined(PARALLAX))) && (!(defined(TRUE_PBR)))
 		mipLevel++;
 #endif
 
@@ -113,4 +112,4 @@ namespace ExtendedMaterials
 #include "ExtendedMaterials/ExtendedMaterialsParallaxCore.hlsli"
 }
 
-#endif  // EXTENDED_MATERIALS_HLSLI
+#endif

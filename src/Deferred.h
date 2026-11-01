@@ -3,6 +3,9 @@
 #include "Buffer.h"
 #include "Utils/LazyShader.h"
 #include <DirectXMath.h>
+#include <atomic>
+#include <d3d11_1.h>
+#include <memory>
 #include <optional>
 
 #define ALBEDO RE::RENDER_TARGETS::kINDIRECT
@@ -36,6 +39,11 @@ public:
 	void ReflectionsPrepasses();
 	void EarlyPrepasses();
 	void StartDeferred();
+	/** The allocated mask layout, latched before the deferred pass. */
+	bool IsCharacterCategoryEnabled() const { return characterCategoryEnabled.load(std::memory_order_relaxed); }
+	/** A native shader fallback makes this pass unsuitable for authored capture. */
+	void InvalidateCharacterCategoryCapture() { characterCategoryCaptureValid = false; }
+	bool IsCharacterCategoryCaptureReady() const { return IsCharacterCategoryEnabled() && characterCategoryCaptureValid; }
 	void OverrideBlendStates();
 	void ResetBlendStates();
 	void DeferredPasses();
@@ -74,7 +82,7 @@ public:
 	ID3D11BlendState* compositeColorBlendState = nullptr;
 	ID3D11DepthStencilState* compositeColorDepthStencilState = nullptr;
 	ID3D11RasterizerState* compositeColorRasterizerState = nullptr;
-	Buffer* directionalShadowLights = nullptr;
+	std::unique_ptr<Buffer> directionalShadowLights;
 	Texture2D* deferredCompositeColorCopy = nullptr;
 
 	bool deferredPass = false;
@@ -96,18 +104,31 @@ public:
 		DirectX::XMFLOAT4X3 FocusShadowMapProj[4];
 		// Since PerGeometry is passed between c++ and hlsl, can't have different defines due to strong typing
 		DirectX::XMFLOAT4X3 ShadowMapProj[2][3];
-		DirectX::XMFLOAT4X3 CameraViewProjInverse[2];
+		DirectX::XMFLOAT4X4 CameraViewProjInverse[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerGeometry);
+	static_assert(sizeof(PerGeometry) == 752, "Shadow-copy structured layout must match HLSL");
 
-	ID3D11ComputeShader* copyShadowCS = nullptr;
-	Buffer* perShadow = nullptr;
-	ID3D11ShaderResourceView* shadowView = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> copyShadowCS;
+	std::unique_ptr<Buffer> perShadow;
 
 private:
+	winrt::com_ptr<ID3D11SamplerState> linearSamplerOwner;
+	winrt::com_ptr<ID3D11SamplerState> pointSamplerOwner;
+	winrt::com_ptr<ID3D11Device> resourceDevice;
+	winrt::com_ptr<ID3D11DeviceContext1> shadowCopyContext;
+	ID3D11DeviceContext* resourceContext = nullptr;
 	/// Copies completed opaque depth without changing the active render targets.
 	bool CopySceneDepth();
 	std::optional<uint32_t> finalSceneDepthFrame;
+	void UpdateCharacterCategoryTarget();
+	void CaptureCharacterCategories();
+	std::atomic_bool characterCategoryEnabled{ false };
+	bool characterCategoryCaptureValid = false;
+	std::optional<bool> failedCharacterCategoryMode;
+	std::unique_ptr<Texture2D> authoredCategories;
+	std::unique_ptr<Texture2D> authoredDepth;
+	bool categoryCopyFailureReported = false;
 
 public:
 	struct Hooks

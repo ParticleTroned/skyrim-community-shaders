@@ -1,10 +1,7 @@
 #include "CellLightingWidget.h"
-#include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
 #include "../WeatherUtils.h"
-#include "Utils/UI.h"
-
-#define I18N_KEY_PREFIX "cs_editor."
+#include "I18n/I18n.h"
 
 namespace
 {
@@ -63,10 +60,10 @@ void CellLightingWidget::DrawWidget()
 	}
 
 	if (!cell || !cell->IsInteriorCell()) {
-		Util::Text::Warning("%s", T(TKEY("not_interior_cell"), "This cell is not an interior cell."));
-		ImGui::TextWrapped("%s", T(TKEY("cell_lighting_interior_only"), "Cell Lighting is only available for interior cells."));
+		ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), T("cs_editor.not_interior_cell", "This cell is not an interior cell."));
+		ImGui::TextWrapped(T("editor.cell_lighting_widget.cell_lighting_properties_only_apply_to_interior_cells", "Cell lighting properties only apply to interior cells."));
 	} else if (!cell->GetLighting()) {
-		Util::Text::Error("%s", T(TKEY("no_lighting_data"), "No lighting data available for this cell."));
+		ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), T("cs_editor.no_lighting_data", "No lighting data available for this cell."));
 	} else {
 		bool changed = false;
 
@@ -81,13 +78,13 @@ void CellLightingWidget::DrawWidget()
 					PushInheritedStyle();
 				const bool result = draw();
 				if (inherited) {
-					Util::AddTooltip(T(TKEY("inherited_from_lighting_template"), "Inherited from lighting template"));
+					Util::AddTooltip(T("cs_editor.inherited_from_lighting_template", "Inherited from lighting template"));
 					PopInheritedStyle();
 				}
 				return result;
 			};
 
-			if (ImGui::BeginTabItem(T(TKEY("tab_basic"), "Basic"), nullptr, basicFlags)) {
+			if (ImGui::BeginTabItem(CellLightingTab::kBasic, nullptr, basicFlags)) {
 				BeginScrollableContent("##BasicScroll");
 
 				auto drawMatchedHeader = [&](bool matches, const char* label, auto draw) {
@@ -95,14 +92,14 @@ void CellLightingWidget::DrawWidget()
 						return;
 					if (ShouldOpenSearchSection())
 						ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-					if (ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen)) {
+					if (ImGui::CollapsingHeader(label)) {
 						ImGui::Spacing();
 						draw();
 						ImGui::Spacing();
 					}
 				};
 
-				drawMatchedHeader(MatchesAnySearch({ CellLightingSetting::kAmbientColor, CellLightingSetting::kDirectionalColor }), T(TKEY("ambient_directional"), "Ambient & Directional"), [&]() {
+				drawMatchedHeader(MatchesAnySearch({ CellLightingSetting::kAmbientColor, CellLightingSetting::kDirectionalColor }), "Ambient & Directional", [&]() {
 					changed |= drawInherited(settings.inheritAmbientColor, [&]() {
 						return WeatherUtils::DrawColorEdit(CellLightingSetting::kAmbientColor, settings.ambient);
 					});
@@ -112,14 +109,12 @@ void CellLightingWidget::DrawWidget()
 					});
 				});
 
-				drawMatchedHeader(MatchesAnySearch({ CellLightingSetting::kXYRotation, CellLightingSetting::kZRotation, CellLightingSetting::kDirectionalFade }), T(TKEY("directional_settings"), "Directional Settings"), [&]() {
+				drawMatchedHeader(MatchesAnySearch({ CellLightingSetting::kXYRotation, CellLightingSetting::kZRotation, CellLightingSetting::kDirectionalFade }), "Directional Settings", [&]() {
 					int xyDegrees = settings.directionalXY;
 					int zDegrees = settings.directionalZ;
 					if (DrawIfMatchesSearch(CellLightingSetting::kXYRotation, [&](const char* label) {
 							return drawInherited(settings.inheritDirectionalRotation, [&]() {
-								return DrawWithHighlight(label, [&]() {
-									return ImGui::SliderInt(std::format("{}##{}", T(TKEY("xy_rotation"), "XY Rotation"), CellLightingSetting::kXYRotation).c_str(), &xyDegrees, 0, 360);
-								});
+								return WeatherUtils::DrawSliderInt(label, xyDegrees, 0, 360);
 							});
 						})) {
 						settings.directionalXY = static_cast<uint32_t>(xyDegrees);
@@ -128,9 +123,7 @@ void CellLightingWidget::DrawWidget()
 					ImGui::Spacing();
 					if (DrawIfMatchesSearch(CellLightingSetting::kZRotation, [&](const char* label) {
 							return drawInherited(settings.inheritDirectionalRotation, [&]() {
-								return DrawWithHighlight(label, [&]() {
-									return ImGui::SliderInt(std::format("{}##{}", T(TKEY("z_rotation"), "Z Rotation"), CellLightingSetting::kZRotation).c_str(), &zDegrees, 0, 360);
-								});
+								return WeatherUtils::DrawSliderInt(label, zDegrees, 0, 360);
 							});
 						})) {
 						settings.directionalZ = static_cast<uint32_t>(zDegrees);
@@ -142,7 +135,7 @@ void CellLightingWidget::DrawWidget()
 					});
 				});
 
-				drawMatchedHeader(MatchesAnySearch({ CellLightingSetting::kLightFadeStart, CellLightingSetting::kLightFadeEnd }), T(TKEY("light_fade"), "Light Fade"), [&]() {
+				drawMatchedHeader(MatchesAnySearch({ CellLightingSetting::kLightFadeStart, CellLightingSetting::kLightFadeEnd }), "Light Fade", [&]() {
 					changed |= drawInherited(settings.inheritLightFadeDistances, [&]() {
 						return WeatherUtils::DrawSliderFloat(CellLightingSetting::kLightFadeStart, settings.lightFadeStart, 0.0f, 163840.0f);
 					});
@@ -152,7 +145,7 @@ void CellLightingWidget::DrawWidget()
 					});
 				});
 
-				drawMatchedHeader(MatchesAnySearch({ CellLightingSetting::kClipDistance }), T(TKEY("other"), "Other"), [&]() {
+				drawMatchedHeader(MatchesAnySearch({ CellLightingSetting::kClipDistance }), "Other", [&]() {
 					changed |= drawInherited(settings.inheritClipDistance, [&]() {
 						return WeatherUtils::DrawSliderFloat(CellLightingSetting::kClipDistance, settings.clipDist, 0.0f, 163840.0f);
 					});
@@ -162,7 +155,7 @@ void CellLightingWidget::DrawWidget()
 				ImGui::EndTabItem();
 			}
 
-			if (ImGui::BeginTabItem(T(TKEY("tab_fog"), "Fog"), nullptr, fogFlags)) {
+			if (ImGui::BeginTabItem(CellLightingTab::kFog, nullptr, fogFlags)) {
 				BeginScrollableContent("##FogScroll");
 
 				DrawSearchSectionIfMatches(CellLightingSetting::kFogNearColor, [&](const char*) {
@@ -211,11 +204,11 @@ void CellLightingWidget::DrawWidget()
 				ImGui::EndTabItem();
 			}
 
-			if (ImGui::BeginTabItem(T(TKEY("tab_dalc"), "DALC"), nullptr, dalcFlags)) {
+			if (ImGui::BeginTabItem(CellLightingTab::kDalc, nullptr, dalcFlags)) {
 				BeginScrollableContent("##DALCScroll");
 
 				if (MatchesAnySearch({ CellLightingSetting::kSpecular, CellLightingSetting::kFresnelPower })) {
-					ImGui::SeparatorText(T(TKEY("dalc_header"), "Directional Ambient Lighting (DALC)"));
+					ImGui::SeparatorText(T("cs_editor.dalc_header", "Directional Ambient Lighting (DALC)"));
 					changed |= drawInherited(settings.inheritAmbientColor, [&]() {
 						return WeatherUtils::DrawColorEdit(CellLightingSetting::kSpecular, settings.directionalSpecular);
 					});
@@ -226,7 +219,7 @@ void CellLightingWidget::DrawWidget()
 
 				if (MatchesAnySearch({ CellLightingSetting::kXPlus, CellLightingSetting::kXMinus, CellLightingSetting::kYPlus,
 						CellLightingSetting::kYMinus, CellLightingSetting::kZPlus, CellLightingSetting::kZMinus })) {
-					ImGui::SeparatorText(T(TKEY("directional_colors"), "Directional Colors"));
+					ImGui::SeparatorText(T("cs_editor.directional_colors", "Directional Colors"));
 					changed |= drawInherited(settings.inheritAmbientColor, [&]() {
 						return WeatherUtils::DrawColorEdit(CellLightingSetting::kXPlus, settings.directionalXPlus);
 					});
@@ -251,9 +244,9 @@ void CellLightingWidget::DrawWidget()
 				ImGui::EndTabItem();
 			}
 
-			if (ImGui::BeginTabItem(T(TKEY("tab_inheritance"), "Inheritance"), nullptr, inheritFlags)) {
+			if (ImGui::BeginTabItem(CellLightingTab::kInheritance, nullptr, inheritFlags)) {
 				BeginScrollableContent("##InheritanceScroll");
-				ImGui::TextWrapped("%s", T(TKEY("inherit_flags_desc"), "These flags control which lighting properties are inherited from the cell's lighting template."));
+				ImGui::TextWrapped(T("cs_editor.inherit_flags_desc", "These flags control which lighting properties are inherited from the cell's lighting template."));
 				ImGui::Separator();
 				changed |= WeatherUtils::DrawCheckbox(CellLightingSetting::kInheritAmbientColor, settings.inheritAmbientColor);
 				changed |= WeatherUtils::DrawCheckbox(CellLightingSetting::kInheritDirectionalColor, settings.inheritDirectionalColor);
@@ -490,7 +483,6 @@ void CellLightingWidget::SaveSettings()
 	js["inherit"]["fogPower"] = settings.inheritFogPower;
 	js["inherit"]["fogMax"] = settings.inheritFogMax;
 	js["inherit"]["lightFadeDistances"] = settings.inheritLightFadeDistances;
-	originalSettings = settings;
 }
 
 void CellLightingWidget::ApplyChanges()
@@ -568,6 +560,23 @@ void CellLightingWidget::RevertChanges()
 	ApplyChanges();
 }
 
+Widget::UndoRestoreAction CellLightingWidget::CaptureUndoState() const
+{
+	const auto snapshot = settings;
+	return [snapshot](Widget& widget) {
+		auto& self = static_cast<CellLightingWidget&>(widget);
+		self.settings = snapshot;
+	};
+}
+
+Widget::UndoRestoreAction CellLightingWidget::CaptureBaselineState() const
+{
+	const auto snapshot = vanillaSettings;
+	return [snapshot](Widget& widget) {
+		static_cast<CellLightingWidget&>(widget).vanillaSettings = snapshot;
+	};
+}
+
 bool CellLightingWidget::HasUnsavedChanges() const
 {
 	return !(settings == originalSettings);
@@ -593,10 +602,8 @@ std::vector<Widget::SearchResult> CellLightingWidget::CollectSearchableSettings(
 	std::vector<SearchResult> results;
 	for (const auto& [tab, names] : entries) {
 		for (const auto& name : names) {
-			results.push_back({ WeatherUtils::TranslateControlLabel(name), tab, name });
+			results.push_back({ name, tab, name });
 		}
 	}
 	return results;
 }
-
-#undef I18N_KEY_PREFIX

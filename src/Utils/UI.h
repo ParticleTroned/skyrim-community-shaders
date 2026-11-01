@@ -52,6 +52,90 @@ class Feature;
 
 namespace Util
 {
+	/** Shared outline symbols for menu actions. */
+	enum class ActionGlyph
+	{
+		Texture,
+		Home,
+		General,
+		Advanced,
+		Profiling,
+		PerformanceTuning,
+		Sidebar,
+		SaveSettings,
+		LoadSettings,
+		RestoreDefaults,
+		ClearCache,
+		Close
+	};
+	/** Draw an action symbol within its button bounds using the current theme colour. */
+	void DrawActionGlyph(ImDrawList* a_draw, ActionGlyph a_glyph, ImVec2 a_minimum, ImVec2 a_maximum, ImU32 a_color, bool a_selected = false);
+
+	namespace Widgets
+	{
+		/** Visible right and bottom offsets for one line in the current font, excluding trailing whitespace. */
+		ImVec2 VisibleTextEnd(const char* text);
+
+		/** Scope aligned detail controls without changing the surrounding page typography. */
+		class ControlLayout
+		{
+		public:
+			explicit ControlLayout(bool fullWidth = false);
+			~ControlLayout();
+			ControlLayout(const ControlLayout&) = delete;
+			ControlLayout& operator=(const ControlLayout&) = delete;
+
+		private:
+			int previous;
+		};
+		/** Shared square size, independent of the label font and local frame padding. */
+		float CheckboxSize();
+		/** Checkbox with individual hover help; explicit caller help takes precedence. */
+		bool Checkbox(const char* label, bool* value);
+		/** Shared checkbox for a flag mask, preserving unrelated bits. */
+		bool CheckboxFlags(const char* label, unsigned int* flags, unsigned int mask);
+		/** Aligned dropdown with large, individually selectable options. */
+		bool Combo(const char* label, int* selected, const char* const items[], int count);
+		bool Combo(const char* label, int* selected, const char* items);
+		/** Aligned text and numeric entries with the common control font and hit target. */
+		bool InputText(const char* label, char* text, size_t size, ImGuiInputTextFlags flags = 0);
+		bool InputText(const char* label, std::string* text, ImGuiInputTextFlags flags = 0);
+		bool InputTextWithHint(const char* label, const char* hint, char* text, size_t size, ImGuiInputTextFlags flags = 0);
+		bool InputTextWithHint(const char* label, const char* hint, std::string* text, ImGuiInputTextFlags flags = 0);
+		bool InputTextMultiline(const char* label, char* text, size_t size, const ImVec2& fieldSize = {}, ImGuiInputTextFlags flags = 0);
+		bool InputTextMultiline(const char* label, std::string* text, const ImVec2& fieldSize = {}, ImGuiInputTextFlags flags = 0);
+		bool InputDouble(const char* label, double* value, double step = 0, double fastStep = 0, const char* format = "%.6f", ImGuiInputTextFlags flags = 0);
+		/** Aligned colour fields using the shared detail font and consistent frames. */
+		bool ColorEdit3(const char* label, float color[3], ImGuiColorEditFlags flags = 0);
+		bool ColorEdit4(const char* label, float color[4], ImGuiColorEditFlags flags = 0);
+		/** Scoped custom dropdown using the same field and option sizing as Combo. */
+		class ComboBox
+		{
+		public:
+			ComboBox(const char* label, const char* preview, ImGuiComboFlags flags = 0, bool openImmediately = false);
+			~ComboBox();
+			ComboBox(const ComboBox&) = delete;
+			ComboBox& operator=(const ComboBox&) = delete;
+			explicit operator bool() const;
+
+		private:
+			struct State;
+			std::unique_ptr<State> state;
+		};
+		/** Mutually exclusive secondary choice with a consistent hit target. */
+		bool RadioButton(const char* label, bool active);
+		bool RadioButton(const char* label, int* selected, int value);
+		/** Sliders retain keyboard editing; numeric entry uses validated bounds. */
+		bool SliderScalar(const char* label, ImGuiDataType type, void* value, const void* minimum, const void* maximum, const char* format = nullptr, ImGuiSliderFlags flags = 0);
+		bool SliderFloat(const char* label, float* value, float minimum, float maximum, const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+		/** Preview a float edit and apply it only on release or confirmed numeric entry. */
+		bool SliderFloatOnRelease(const char* label, float* value, float minimum, float maximum, const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+		bool SliderInt(const char* label, int* value, int minimum, int maximum, const char* format = "%d", ImGuiSliderFlags flags = 0);
+		bool SliderFloat2(const char* label, float* value, float minimum, float maximum, const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+		bool SliderFloat3(const char* label, float* value, float minimum, float maximum, const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+		bool SliderAngle(const char* label, float* value, float minimum = -360, float maximum = 360, const char* format = "%.0f deg", ImGuiSliderFlags flags = 0);
+	}
+
 	void UpdateImGuiInput(HWND hwnd, float bufferWidth, float bufferHeight);
 	/**
 	 * Represents a single line and its color for any colored text rendering (tooltips, legends, etc.).
@@ -481,6 +565,7 @@ namespace Util
 	 * @param size Toggle size (optional, defaults to automatic sizing)
 	 * @return True if the toggle state was changed
 	 */
+	ImVec2 FeatureToggleSize(const ImVec2& size = ImVec2(0, 0));
 	bool FeatureToggle(const char* label, bool* enabled, const ImVec2& size = ImVec2(0, 0));
 
 	/**
@@ -1060,6 +1145,14 @@ namespace Util
 	 */
 	namespace Color
 	{
+		/** Readable supporting text, distinct from unavailable controls. */
+		inline ImVec4 SecondaryText()
+		{
+			auto color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+			color.w *= 0.78f;
+			return color;
+		}
+
 		ImVec4 WithAlpha(ImVec4 color, float alpha);
 		ImVec4 Blend(const ImVec4& from, const ImVec4& to, float amount, float alpha);
 		ImVec4 Lift(ImVec4 color, float amount, float alpha);
@@ -1090,6 +1183,7 @@ namespace Util
 		ImVec4 GetWarning();   // Orange - warning (from theme Warning)
 		ImVec4 GetError();     // Red - error/negative (from theme Error)
 		ImVec4 GetInfo();      // Blue - informational (from theme InfoColor)
+		ImVec4 GetRestartNeeded();
 		ImVec4 GetDisabled();  // Gray - disabled items (from theme Disable)
 
 	}
@@ -1107,6 +1201,8 @@ namespace Util
 		void WrappedInfo(const char* fmt, ...) IM_FMTARGS(1);
 		void Disabled(const char* fmt, ...) IM_FMTARGS(1);
 		void WrappedDisabled(const char* fmt, ...) IM_FMTARGS(1);
+		void RestartNeeded(const char* fmt, ...) IM_FMTARGS(1);
+		void WrappedRestartNeeded(const char* fmt, ...) IM_FMTARGS(1);
 	}
 
 	/**
@@ -1338,6 +1434,8 @@ namespace Util
 		std::string header;
 		std::string tooltip;
 		std::function<std::string(const T&)> getValue;
+		bool truncate = false;
+		float widthWeight = 1.0f;
 	};
 
 	/**
@@ -1517,7 +1615,7 @@ namespace Util
 		if (ImGui::BeginTable(table_id, static_cast<int>(columns.size()), flags)) {
 			// Set up columns
 			for (size_t i = 0; i < columns.size(); ++i) {
-				ImGui::TableSetupColumn(columns[i].header.c_str());
+				ImGui::TableSetupColumn(columns[i].header.c_str(), ImGuiTableColumnFlags_WidthStretch, columns[i].widthWeight);
 			}
 			ImGui::TableHeadersRow();
 
@@ -1560,7 +1658,8 @@ namespace Util
 					// All columns are now text-only with highlighting
 					std::string value = column.getValue(row);
 					ImVec4 textColor = getRowTextColor ? getRowTextColor(row) : ImVec4(0, 0, 0, 0);
-					Util::RenderTableCell(value, filterState.filterText, column.tooltip, nullptr, ImVec4(1.0f, 1.0f, 0.0f, 1.0f), true, textColor);
+					const std::string& cellTooltip = column.truncate ? value : column.tooltip;
+					Util::RenderTableCell(value, filterState.filterText, cellTooltip, nullptr, ImVec4(1.0f, 1.0f, 0.0f, 1.0f), !column.truncate, textColor);
 				}
 
 				// Now create the invisible button that covers the entire rendered row

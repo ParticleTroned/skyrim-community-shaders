@@ -1,6 +1,15 @@
+#include "I18n/I18n.h"
 #include "VolumetricShadows.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
+
+#include <algorithm>
+#include <array>
+#include <limits>
 
 #include "Globals.h"
+#include "GpuPass.h"
+#include "Profiler.h"
 #include "State.h"
 #include "Utils/D3D.h"
 
@@ -10,52 +19,82 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
-	constexpr uint32_t kShadowCopySize = 512;
+	bool HasActiveDirectionalShadows()
+	{
+		return globals::state && globals::state->HasDirectionalShadows();
+	}
 
 	void DrawEnabledCheckbox(VolumetricShadows::Settings& a_settings)
 	{
-		ImGui::Checkbox("Enable", &a_settings.Enabled);
+		Util::Widgets::Checkbox(T("feature.volumetric_shadows.enabled", "Enabled"), &a_settings.Enabled);
 	}
 
-	bool GetTexture2DArrayDescription(
-		ID3D11ShaderResourceView* a_srv,
-		uint32_t a_requiredSlices,
-		D3D11_TEXTURE2D_DESC& a_desc)
+	template <class T>
+	void SafeRelease(T*& a_ptr)
+	{
+		if (a_ptr) {
+			a_ptr->Release();
+			a_ptr = nullptr;
+		}
+	}
+
+	constexpr uint32_t kShadowCopySize = 512;
+	constexpr uint32_t kBlurGroupSize = 128;
+	constexpr uint32_t kDownsampleGroupSize = 8;
+
+	bool UsesGroupedDownsample(const D3D11_TEXTURE2D_DESC& a_source, uint32_t a_outputSize)
+	{
+		const uint32_t reduction = a_source.Width / a_outputSize;
+		return a_source.Width == a_source.Height && a_source.Width % a_outputSize == 0 &&
+		       reduction >= 2 && reduction <= 2 * kDownsampleGroupSize && (reduction & (reduction - 1)) == 0;
+	}
+
+	bool TryGetShadowTextureDescription(ID3D11ShaderResourceView* a_srv, D3D11_TEXTURE2D_DESC& a_desc)
 	{
 		if (!a_srv)
 			return false;
 
-		D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
-		a_srv->GetDesc(&viewDesc);
-		if (viewDesc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2DARRAY ||
-			viewDesc.Texture2DArray.ArraySize < a_requiredSlices) {
-			return false;
-		}
-
-		winrt::com_ptr<ID3D11Resource> resource;
-		a_srv->GetResource(resource.put());
-		if (!resource)
+		D3D11_SHADER_RESOURCE_VIEW_DESC view{};
+		a_srv->GetDesc(&view);
+		if (view.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2DARRAY ||
+			view.Texture2DArray.MostDetailedMip != 0 || view.Texture2DArray.ArraySize < 2)
 			return false;
 
-		winrt::com_ptr<ID3D11Texture2D> texture;
-		if (FAILED(resource->QueryInterface(__uuidof(ID3D11Texture2D), texture.put_void())) || !texture)
+		if (!Util::GetTexture2DDesc(a_srv, a_desc))
 			return false;
 
-		texture->GetDesc(&a_desc);
-		return a_desc.Width > 0 &&
-		       a_desc.Height > 0 &&
-		       a_desc.ArraySize >= a_requiredSlices &&
-		       a_desc.SampleDesc.Count == 1;
+		return a_desc.Width > 0 && a_desc.Width <= D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION &&
+		       a_desc.Height > 0 && a_desc.Height <= D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION &&
+		       a_desc.SampleDesc.Count == 1 && a_desc.ArraySize >= 2 &&
+		       view.Texture2DArray.FirstArraySlice <= a_desc.ArraySize - 2;
+	}
+
+	void ClearComputeSRVs(ID3D11DeviceContext* a_context, UINT a_startSlot, UINT a_count)
+	{
+		ID3D11ShaderResourceView* nullSRVs[2]{};
+		a_context->CSSetShaderResources(a_startSlot, a_count, nullSRVs);
+	}
+
+	void ClearComputeUAV(ID3D11DeviceContext* a_context)
+	{
+		ID3D11UnorderedAccessView* nullUAV = nullptr;
+		a_context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 	}
 }
 
 void VolumetricShadows::SetupResources()
 {
-	auto device = globals::d3d::device;
+	auto* device = globals::d3d::device;
+	if (!device)
+		return;
 
-	// Create samplers
-	{
-		D3D11_SAMPLER_DESC samplerDesc = {};
+	if (resourceDevice != device) {
+		ReleaseResources();
+		resourceDevice = device;
+	}
+
+	if (!linearSampler) {
+		D3D11_SAMPLER_DESC samplerDesc{};
 		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
 		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
 		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -67,24 +106,543 @@ void VolumetricShadows::SetupResources()
 		Util::SetResourceName(linearSampler, "VolumetricShadows::LinearSampler");
 	}
 
+	EnsureFallbackShadowTexture();
 	CompileComputeShaders();
 }
 
 void VolumetricShadows::CompileComputeShaders()
 {
-	downsampleShadowMip0CS.Get(L"Data\\Shaders\\VolumetricShadows\\DownsampleShadowCS.hlsl", { { "DOWNSAMPLE_SHADOW_MIP0", nullptr } }, "cs_5_0", "main", "VolumetricShadows::DownsampleShadowMip0CS");
-	downsampleShadowMip1CS.Get(L"Data\\Shaders\\VolumetricShadows\\DownsampleShadowCS.hlsl", { { "DOWNSAMPLE_SHADOW_MIP1", nullptr } }, "cs_5_0", "main", "VolumetricShadows::DownsampleShadowMip1CS");
-	blurShadowHorizontalCS.Get(L"Data\\Shaders\\VolumetricShadows\\BlurShadowCS.hlsl", { { "BLUR_HORIZONTAL", nullptr } }, "cs_5_0", "main", "VolumetricShadows::BlurShadowHorizontalCS");
-	blurShadowVerticalCS.Get(L"Data\\Shaders\\VolumetricShadows\\BlurShadowCS.hlsl", { { "BLUR_VERTICAL", nullptr } }, "cs_5_0", "main", "VolumetricShadows::BlurShadowVerticalCS");
+	downsampleShadowMip0CS.Get(
+		L"Data\\Shaders\\VolumetricShadows\\DownsampleShadowCS.hlsl",
+		{ { "DOWNSAMPLE_SHADOW_MIP0", nullptr } }, "cs_5_0", "main",
+		"VolumetricShadows::DownsampleMip0CS");
+	downsampleShadowMip1CS.Get(
+		L"Data\\Shaders\\VolumetricShadows\\DownsampleShadowCS.hlsl",
+		{ { "DOWNSAMPLE_SHADOW_MIP1", nullptr } }, "cs_5_0", "main",
+		"VolumetricShadows::DownsampleMip1CS");
+	downsampleShadowGeneralMip0CS.Get(
+		L"Data\\Shaders\\VolumetricShadows\\DownsampleShadowCS.hlsl",
+		{ { "DOWNSAMPLE_SHADOW_MIP0", nullptr }, { "DOWNSAMPLE_SHADOW_GENERAL", nullptr } }, "cs_5_0", "main",
+		"VolumetricShadows::DownsampleGeneralMip0CS");
+	downsampleShadowGeneralMip1CS.Get(
+		L"Data\\Shaders\\VolumetricShadows\\DownsampleShadowCS.hlsl",
+		{ { "DOWNSAMPLE_SHADOW_MIP1", nullptr }, { "DOWNSAMPLE_SHADOW_GENERAL", nullptr } }, "cs_5_0", "main",
+		"VolumetricShadows::DownsampleGeneralMip1CS");
+	blurShadowHorizontalCS.Get(
+		L"Data\\Shaders\\VolumetricShadows\\BlurShadowCS.hlsl",
+		{ { "BLUR_HORIZONTAL", nullptr } }, "cs_5_0", "main",
+		"VolumetricShadows::BlurHorizontalCS");
+	blurShadowVerticalCS.Get(
+		L"Data\\Shaders\\VolumetricShadows\\BlurShadowCS.hlsl",
+		{ { "BLUR_VERTICAL", nullptr } }, "cs_5_0", "main",
+		"VolumetricShadows::BlurVerticalCS");
+}
+
+void VolumetricShadows::EnsureFallbackShadowTexture()
+{
+	if (fallbackShadowTexture)
+		return;
+
+	auto* device = globals::d3d::device;
+	if (!device)
+		return;
+
+	constexpr uint32_t fallbackSize = 2;
+	constexpr uint16_t litMoment = std::numeric_limits<uint16_t>::max();
+	std::array<uint16_t, fallbackSize * fallbackSize * 2> mip0{};
+	std::array<uint16_t, 2> mip1{};
+	mip0.fill(litMoment);
+	mip1.fill(litMoment);
+
+	D3D11_TEXTURE2D_DESC texDesc{};
+	texDesc.Width = fallbackSize;
+	texDesc.Height = fallbackSize;
+	texDesc.MipLevels = 2;
+	texDesc.ArraySize = 1;
+	texDesc.Format = DXGI_FORMAT_R16G16_UNORM;
+	texDesc.SampleDesc.Count = 1;
+	texDesc.Usage = D3D11_USAGE_IMMUTABLE;
+	texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+	D3D11_SUBRESOURCE_DATA initialData[2]{};
+	initialData[0].pSysMem = mip0.data();
+	initialData[0].SysMemPitch = fallbackSize * 2 * sizeof(uint16_t);
+	initialData[1].pSysMem = mip1.data();
+	initialData[1].SysMemPitch = 2 * sizeof(uint16_t);
+
+	DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, initialData, &fallbackShadowTexture));
+	Util::SetResourceName(fallbackShadowTexture, "VolumetricShadows::FallbackShadow");
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+	srvDesc.Format = texDesc.Format;
+	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Texture2D.MostDetailedMip = 0;
+	srvDesc.Texture2D.MipLevels = texDesc.MipLevels;
+	DX::ThrowIfFailed(device->CreateShaderResourceView(fallbackShadowTexture, &srvDesc, &fallbackShadowSRV));
+	Util::SetResourceName(fallbackShadowSRV, "VolumetricShadows::FallbackShadow SRV");
+}
+
+bool VolumetricShadows::EnsureShadowCopyTextures()
+{
+	if (shadowCopyTexture && shadowCopySRV && shadowCopyMip0SRV && shadowCopyMip1SRV &&
+		shadowCopyMip0UAV && shadowCopyMip1UAV && shadowBlurTempTexture &&
+		shadowBlurTempMip0SRV && shadowBlurTempMip1SRV && shadowBlurTempMip0UAV && shadowBlurTempMip1UAV)
+		return true;
+	if (shadowCopyAllocationFailed)
+		return false;
+
+	ReleaseShadowCopyTextures();
+	auto* device = globals::d3d::device;
+	if (!device)
+		return false;
+
+	bool complete = false;
+	const SKSE::stl::scope_exit discardPartialResources([&]() noexcept {
+		if (!complete)
+			ReleaseShadowCopyTextures();
+	});
+
+	try {
+		shadowCopyWidth = kShadowCopySize;
+		shadowCopyHeight = kShadowCopySize;
+
+		D3D11_TEXTURE2D_DESC copyDesc{};
+		copyDesc.Width = shadowCopyWidth;
+		copyDesc.Height = shadowCopyHeight;
+		copyDesc.MipLevels = 2;
+		copyDesc.ArraySize = 1;
+		copyDesc.Format = DXGI_FORMAT_R16G16_UNORM;
+		copyDesc.SampleDesc.Count = 1;
+		copyDesc.SampleDesc.Quality = 0;
+		copyDesc.Usage = D3D11_USAGE_DEFAULT;
+		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET;
+
+		DX::ThrowIfFailed(device->CreateTexture2D(&copyDesc, nullptr, &shadowCopyTexture));
+		Util::SetResourceName(shadowCopyTexture, "VolumetricShadows::ShadowCopy");
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = copyDesc.Format;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.MipLevels = 2;
+		DX::ThrowIfFailed(device->CreateShaderResourceView(shadowCopyTexture, &srvDesc, &shadowCopySRV));
+		Util::SetResourceName(shadowCopySRV, "VolumetricShadows::ShadowCopy SRV");
+
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.MipLevels = 1;
+		DX::ThrowIfFailed(device->CreateShaderResourceView(shadowCopyTexture, &srvDesc, &shadowCopyMip0SRV));
+		Util::SetResourceName(shadowCopyMip0SRV, "VolumetricShadows::ShadowCopy SRV mip0");
+
+		srvDesc.Texture2D.MostDetailedMip = 1;
+		DX::ThrowIfFailed(device->CreateShaderResourceView(shadowCopyTexture, &srvDesc, &shadowCopyMip1SRV));
+		Util::SetResourceName(shadowCopyMip1SRV, "VolumetricShadows::ShadowCopy SRV mip1");
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = copyDesc.Format;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+		uavDesc.Texture2D.MipSlice = 0;
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(shadowCopyTexture, &uavDesc, &shadowCopyMip0UAV));
+		Util::SetResourceName(shadowCopyMip0UAV, "VolumetricShadows::ShadowCopy UAV mip0");
+
+		uavDesc.Texture2D.MipSlice = 1;
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(shadowCopyTexture, &uavDesc, &shadowCopyMip1UAV));
+		Util::SetResourceName(shadowCopyMip1UAV, "VolumetricShadows::ShadowCopy UAV mip1");
+
+		DX::ThrowIfFailed(device->CreateTexture2D(&copyDesc, nullptr, &shadowBlurTempTexture));
+		Util::SetResourceName(shadowBlurTempTexture, "VolumetricShadows::ShadowBlurTemp");
+
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.MipLevels = 1;
+		DX::ThrowIfFailed(device->CreateShaderResourceView(shadowBlurTempTexture, &srvDesc, &shadowBlurTempMip0SRV));
+		Util::SetResourceName(shadowBlurTempMip0SRV, "VolumetricShadows::ShadowBlurTemp SRV mip0");
+
+		srvDesc.Texture2D.MostDetailedMip = 1;
+		DX::ThrowIfFailed(device->CreateShaderResourceView(shadowBlurTempTexture, &srvDesc, &shadowBlurTempMip1SRV));
+		Util::SetResourceName(shadowBlurTempMip1SRV, "VolumetricShadows::ShadowBlurTemp SRV mip1");
+
+		uavDesc.Texture2D.MipSlice = 0;
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(shadowBlurTempTexture, &uavDesc, &shadowBlurTempMip0UAV));
+		Util::SetResourceName(shadowBlurTempMip0UAV, "VolumetricShadows::ShadowBlurTemp UAV mip0");
+
+		uavDesc.Texture2D.MipSlice = 1;
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(shadowBlurTempTexture, &uavDesc, &shadowBlurTempMip1UAV));
+		Util::SetResourceName(shadowBlurTempMip1UAV, "VolumetricShadows::ShadowBlurTemp UAV mip1");
+	} catch (const DX::com_exception& error) {
+		shadowCopyAllocationFailed = true;
+		logger::error("Volumetric Shadows moment allocation failed: {}", error.what());
+		return false;
+	}
+	complete = true;
+	return true;
+}
+
+void VolumetricShadows::CopyShadowLightData()
+{
+	shadowCopyValid = false;
+	auto* context = globals::d3d::context;
+	if (!context)
+		return;
+
+	shadowView = nullptr;
+	shadowViewCaptureFrame = UINT32_MAX;
+	context->PSGetShaderResources(4, 1, shadowView.put());
+	if (globals::state)
+		shadowViewCaptureFrame = globals::state->frameCount;
+
+	if (!settings.Enabled || !HasActiveDirectionalShadows()) {
+		SetSharedShadowMapSRV(context, nullptr);
+		return;
+	}
+
+	ZoneScoped;
+	CS_GPU_PASS("VolumetricShadows::CopyShadowLightData");
+
+	SetupResources();
+	// VSM consumers require two filtered moments, including when preparation fails.
+	SetSharedShadowMapSRV(context, fallbackShadowSRV);
+	if (!linearSampler)
+		return;
+
+	D3D11_TEXTURE2D_DESC srcDesc{}, esramDesc{};
+	if (!TryGetShadowTextureDescription(shadowView.get(), srcDesc))
+		return;
+
+	auto* renderer = globals::game::renderer;
+	if (!renderer)
+		return;
+	auto& esramDepthStencil = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM];
+	if (!TryGetShadowTextureDescription(esramDepthStencil.depthSRV, esramDesc))
+		return;
+
+	const bool groupedMip0 = UsesGroupedDownsample(srcDesc, kShadowCopySize);
+	const bool groupedMip1 = UsesGroupedDownsample(srcDesc, kShadowCopySize / 2);
+	auto* downsampleMip0 = groupedMip0 ? downsampleShadowMip0CS.get() : downsampleShadowGeneralMip0CS.get();
+	auto* downsampleMip1 = groupedMip1 ? downsampleShadowMip1CS.get() : downsampleShadowGeneralMip1CS.get();
+	auto* blurHorizontal = blurShadowHorizontalCS.get();
+	auto* blurVertical = blurShadowVerticalCS.get();
+	if (!downsampleMip0 || !downsampleMip1 || !blurHorizontal || !blurVertical)
+		return;
+
+	if (!EnsureShadowCopyTextures())
+		return;
+
+	winrt::com_ptr<ID3D11ComputeShader> previousShader;
+	std::array<ID3D11ClassInstance*, D3D11_SHADER_MAX_INTERFACES> previousInstances{};
+	UINT previousInstanceCount = static_cast<UINT>(previousInstances.size());
+	std::array<ID3D11ShaderResourceView*, 2> previousSRVs{};
+	winrt::com_ptr<ID3D11UnorderedAccessView> previousUAV;
+	winrt::com_ptr<ID3D11SamplerState> previousSampler;
+	winrt::com_ptr<ID3D11Predicate> previousPredicate;
+	BOOL previousPredicateValue = FALSE;
+	context->CSGetShader(previousShader.put(), previousInstances.data(), &previousInstanceCount);
+	context->CSGetShaderResources(0, static_cast<UINT>(previousSRVs.size()), previousSRVs.data());
+	context->CSGetUnorderedAccessViews(0, 1, previousUAV.put());
+	context->CSGetSamplers(0, 1, previousSampler.put());
+	context->GetPredication(previousPredicate.put(), &previousPredicateValue);
+	const SKSE::stl::scope_exit restoreComputeState([&]() noexcept {
+		ClearComputeSRVs(context, 0, 2);
+		ClearComputeUAV(context);
+		context->CSSetShader(previousShader.get(), previousInstances.data(), previousInstanceCount);
+		context->CSSetShaderResources(0, static_cast<UINT>(previousSRVs.size()), previousSRVs.data());
+		auto* uav = previousUAV.get();
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		auto* sampler = previousSampler.get();
+		context->CSSetSamplers(0, 1, &sampler);
+		context->SetPredication(previousPredicate.get(), previousPredicateValue);
+		for (UINT i = 0; i < previousInstanceCount; ++i)
+			SafeRelease(previousInstances[i]);
+		for (auto*& view : previousSRVs)
+			SafeRelease(view);
+	});
+	// Moment preparation must run even when the caller predicates its draws.
+	context->SetPredication(nullptr, FALSE);
+	ClearComputeUAV(context);
+	ID3D11ShaderResourceView* csSRVs[2]{ shadowView.get(), esramDepthStencil.depthSRV };
+	context->CSSetShaderResources(0, 2, csSRVs);
+	context->CSSetSamplers(0, 1, &linearSampler);
+
+	auto downsampleMip = [&](ID3D11ComputeShader* a_shader, ID3D11UnorderedAccessView* a_output, uint32_t a_size, bool a_grouped, bool a_mip1) {
+		context->CSSetUnorderedAccessViews(0, 1, &a_output, nullptr);
+		context->CSSetShader(a_shader, nullptr, 0);
+		CS_GPU_PASS_SELECT(a_mip1, "VolumetricShadows::DownsampleMip1", "VolumetricShadows::DownsampleMip0");
+		const uint32_t dispatchWidth = a_grouped ? srcDesc.Width : a_size;
+		const uint32_t dispatchHeight = a_grouped ? srcDesc.Height : a_size;
+		const uint32_t groupSpan = a_grouped ? 2 * kDownsampleGroupSize : kDownsampleGroupSize;
+		context->Dispatch((dispatchWidth + groupSpan - 1) / groupSpan, (dispatchHeight + groupSpan - 1) / groupSpan, 1);
+	};
+	downsampleMip(downsampleMip0, shadowCopyMip0UAV, kShadowCopySize, groupedMip0, false);
+	downsampleMip(downsampleMip1, shadowCopyMip1UAV, kShadowCopySize / 2, groupedMip1, true);
+	ClearComputeSRVs(context, 0, 2);
+	ClearComputeUAV(context);
+
+	auto blurMip = [&](ID3D11ShaderResourceView* a_input, ID3D11UnorderedAccessView* a_tempUAV, ID3D11ShaderResourceView* a_tempSRV, ID3D11UnorderedAccessView* a_outputUAV, uint32_t a_size, bool a_mip1) {
+		ID3D11ShaderResourceView* blurSRV = a_input;
+		context->CSSetShaderResources(0, 1, &blurSRV);
+		context->CSSetUnorderedAccessViews(0, 1, &a_tempUAV, nullptr);
+		context->CSSetShader(blurHorizontal, nullptr, 0);
+		{
+			CS_GPU_PASS_SELECT(a_mip1, "VolumetricShadows::BlurHMip1", "VolumetricShadows::BlurHMip0");
+			context->Dispatch((a_size + kBlurGroupSize - 1) / kBlurGroupSize, a_size, 1);
+		}
+
+		ClearComputeSRVs(context, 0, 1);
+		ClearComputeUAV(context);
+
+		blurSRV = a_tempSRV;
+		context->CSSetShaderResources(0, 1, &blurSRV);
+		context->CSSetUnorderedAccessViews(0, 1, &a_outputUAV, nullptr);
+		context->CSSetShader(blurVertical, nullptr, 0);
+		{
+			CS_GPU_PASS_SELECT(a_mip1, "VolumetricShadows::BlurVMip1", "VolumetricShadows::BlurVMip0");
+			context->Dispatch(a_size, (a_size + kBlurGroupSize - 1) / kBlurGroupSize, 1);
+		}
+
+		ClearComputeSRVs(context, 0, 1);
+		ClearComputeUAV(context);
+	};
+
+	blurMip(shadowCopyMip0SRV, shadowBlurTempMip0UAV, shadowBlurTempMip0SRV, shadowCopyMip0UAV, kShadowCopySize, false);
+	blurMip(shadowCopyMip1SRV, shadowBlurTempMip1UAV, shadowBlurTempMip1SRV, shadowCopyMip1UAV, kShadowCopySize / 2, true);
+
+	shadowCopyValid = true;
+	SetSharedShadowMapSRV(context, shadowCopySRV);
+}
+
+void VolumetricShadows::SetSharedShadowMapSRV(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_srv)
+{
+	a_context->PSSetShaderResources(kSharedShadowMapShaderSlot, 1, &a_srv);
+}
+
+void VolumetricShadows::SetShaderResources(ID3D11DeviceContext* a_context, RE::BSShader::Type a_shaderType)
+{
+	if (!a_context)
+		return;
+
+	// These families never sample the shared map. Consumers still rebind after native,
+	// deferred or hazard-driven context changes.
+	switch (a_shaderType) {
+	case RE::BSShader::Type::Grass:
+	case RE::BSShader::Type::Sky:
+	case RE::BSShader::Type::BloodSplatter:
+	case RE::BSShader::Type::Utility:
+	case RE::BSShader::Type::DistantTree:
+		return;
+	default:
+		break;
+	}
+
+	const bool hasDirectionalShadows = settings.Enabled && HasActiveDirectionalShadows();
+	if (hasDirectionalShadows)
+		SetupResources();
+
+	ID3D11ShaderResourceView* srv = nullptr;
+	if (hasDirectionalShadows)
+		srv = shadowCopyValid && globals::state && globals::state->frameCount - shadowViewCaptureFrame <= 1u ? shadowCopySRV : fallbackShadowSRV;
+	SetSharedShadowMapSRV(a_context, srv);
+}
+
+void VolumetricShadows::DrawSettings()
+{
+	MenuUI::SettingsPage page("VolumetricShadows", {
+													   { "appearance", T("feature.volumetric_shadows.how_it_works", "How it works"), T("feature.volumetric_shadows.learn_how_light_shafts_use_directional_shadows", "Learn how light shafts use directional shadows."), T("feature.volumetric_shadows.shadows_through_light_shafts", "Shadows through light shafts"), true, true, T("feature.volumetric_shadows.shape_volumetric_shadows", "Shape volumetric shadows") },
+													   { "diagnostics", T("feature.volumetric_shadows.diagnostics", "Diagnostics"), T("feature.volumetric_shadows.inspect_shadow_buffers", "Inspect shadow buffers."), T("feature.volumetric_shadows.diagnostic_shadow_buffers", "Diagnostic shadow buffers"), true, false, nullptr },
+												   });
+
+	if (page.Is("appearance"))
+		MenuUI::DetailText(T("feature.volumetric_shadows.light_shafts_use_the_shared_directional_shado_91bb3c5e", "Light shafts use the shared directional shadow maps. Use Enabled in the header to control this effect, and Diagnostics to inspect its shadow buffers."));
+
+	if (page.Is("diagnostics")) {
+		const auto disabled = Util::DisableGuard(!settings.Enabled);
+		static float debugRescale = .3f;
+		Util::Widgets::SliderFloat(T("feature.volumetric_shadows.view_resize", "View Resize"), &debugRescale, 0.f, 1.f);
+
+		auto displayRT = [&](const char* a_label, ID3D11Texture2D* a_texture, ID3D11ShaderResourceView* a_srv) {
+			if (!a_srv || !a_texture)
+				return;
+
+			D3D11_TEXTURE2D_DESC desc{};
+			a_texture->GetDesc(&desc);
+
+			char label[128];
+			snprintf(label, sizeof(label), "%s (%ux%u)", a_label, desc.Width, desc.Height);
+			if (ImGui::TreeNode(label)) {
+				ImGui::Image(a_srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+				ImGui::TreePop();
+			}
+		};
+
+		displayRT("VSM Cascade 0", shadowCopyTexture, shadowCopyMip0SRV);
+		displayRT("VSM Cascade 1", shadowCopyTexture, shadowCopyMip1SRV);
+	}
+}
+
+void VolumetricShadows::DrawPerformanceSettings(bool)
+{
+	const bool hasActiveDirectionalShadows = HasActiveDirectionalShadows();
+	ImGui::BeginDisabled(!hasActiveDirectionalShadows);
+	DrawEnabledCheckbox(settings);
+	ImGui::EndDisabled();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			T("feature.volumetric_shadows.disabling_skips_the_directional_shadow_map_co_09c11156", "Disabling skips the directional shadow-map copy, downsample, and blur passes."));
+	}
+	if (!hasActiveDirectionalShadows)
+		ImGui::TextDisabled(T("feature.volumetric_shadows.volumetric_shadows_has_no_active_directional_4d287e07", "Volumetric Shadows has no active directional shadows in the current scene."));
+}
+
+json VolumetricShadows::CapturePerformanceSettingsState() const
+{
+	return {
+		{ "Enabled", settings.Enabled }
+	};
+}
+
+bool VolumetricShadows::IsPerformanceCostMeasurementEnabled() const
+{
+	return settings.Enabled && HasActiveDirectionalShadows();
+}
+
+bool VolumetricShadows::IsPerformanceCostMeasurementReady() const
+{
+	return GetRuntimeReadiness(shadowView.get(), settings.Enabled) == RuntimeReadiness::Ready;
+}
+
+void VolumetricShadows::LoadSettings(json& o_json)
+{
+	settings = o_json;
+}
+
+void VolumetricShadows::SaveSettings(json& o_json)
+{
+	o_json = settings;
+}
+
+void VolumetricShadows::RestoreDefaultSettings()
+{
+	settings = {};
 }
 
 void VolumetricShadows::ClearShaderCache()
 {
+	shadowCopyAllocationFailed = false;
+	ReleaseComputeShaders();
+	CompileComputeShaders();
+}
+
+void VolumetricShadows::ReleaseComputeShaders()
+{
 	downsampleShadowMip0CS.Reset();
 	downsampleShadowMip1CS.Reset();
+	downsampleShadowGeneralMip0CS.Reset();
+	downsampleShadowGeneralMip1CS.Reset();
 	blurShadowHorizontalCS.Reset();
 	blurShadowVerticalCS.Reset();
-	CompileComputeShaders();
+}
+
+void VolumetricShadows::ReleaseShadowCopyTextures()
+{
+	SafeRelease(shadowCopySRV);
+	SafeRelease(shadowCopyMip0SRV);
+	SafeRelease(shadowCopyMip1SRV);
+	SafeRelease(shadowCopyMip0UAV);
+	SafeRelease(shadowCopyMip1UAV);
+	SafeRelease(shadowCopyTexture);
+	SafeRelease(shadowBlurTempMip0SRV);
+	SafeRelease(shadowBlurTempMip1SRV);
+	SafeRelease(shadowBlurTempMip0UAV);
+	SafeRelease(shadowBlurTempMip1UAV);
+	SafeRelease(shadowBlurTempTexture);
+	shadowCopyWidth = 0;
+	shadowCopyHeight = 0;
+	shadowCopyValid = false;
+}
+
+void VolumetricShadows::ReleaseTextures()
+{
+	ReleaseShadowCopyTextures();
+	SafeRelease(fallbackShadowSRV);
+	SafeRelease(fallbackShadowTexture);
+	shadowCopyAllocationFailed = false;
+}
+
+void VolumetricShadows::ReleaseSampler()
+{
+	SafeRelease(linearSampler);
+}
+
+void VolumetricShadows::ReleaseResources()
+{
+	ReleaseComputeShaders();
+	ReleaseTextures();
+	ReleaseSampler();
+}
+
+struct CreateDepthStencil_VolumetricLighting
+{
+	static void thunk(RE::BSGraphics::Renderer* This, uint32_t a_target, RE::BSGraphics::DepthStencilTargetProperties* a_properties)
+	{
+		RE::BSGraphics::DepthStencilTargetProperties overriddenProperties = *a_properties;
+		overriddenProperties.height = 1024;
+		overriddenProperties.width = 1024;
+		func(This, a_target, &overriddenProperties);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+void VolumetricShadows::PostPostLoad()
+{
+	stl::write_thunk_call<CreateDepthStencil_VolumetricLighting>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x9DC, 0x9DC));
+}
+
+
+bool VolumetricShadows::IsPerformanceTuningApplicable() const
+{
+	return GetRuntimeReadiness(shadowView.get(), true) == RuntimeReadiness::Ready;
+}
+
+
+const char* VolumetricShadows::GetPerformanceTuningApplicabilityReason() const
+{
+	switch (GetRuntimeReadiness(shadowView.get(), true)) {
+	case RuntimeReadiness::Ready:
+		return nullptr;
+	case RuntimeReadiness::NoDirectionalShadows:
+		return T(
+			"menu.performance_tuning.feature.volumetric_shadows.no_directional_shadows",
+			"Volumetric Shadows only perform runtime work while the scene has an active directional shadow light.");
+	case RuntimeReadiness::NoCapturedShadowMap:
+		return T(
+			"menu.performance_tuning.feature.volumetric_shadows.no_shadow_map",
+			"Volumetric Shadows cannot be measured because no valid directional shadow map was captured this frame.");
+	case RuntimeReadiness::ShaderUnavailable:
+		return T(
+			"menu.performance_tuning.feature.volumetric_shadows.shader_unavailable",
+			"Volumetric Shadows cannot be measured because one or more downsample or blur shaders are unavailable.");
+	case RuntimeReadiness::OutputResourcesUnavailable:
+		return T(
+			"menu.performance_tuning.feature.volumetric_shadows.output_resources_unavailable",
+			"Volumetric Shadows cannot be measured because their downsample or blur textures are incomplete.");
+	case RuntimeReadiness::NoRuntimeResources:
+		return T(
+			"menu.performance_tuning.feature.volumetric_shadows.no_runtime_resources",
+			"Volumetric Shadows cannot be measured because required rendering resources are unavailable.");
+	default:
+		return T(
+			"menu.performance_tuning.feature.volumetric_shadows.not_applicable",
+			"Volumetric Shadows cannot perform runtime work in the current scene.");
+	}
+}
+
+
+void VolumetricShadows::DrawEssentialSettings()
+{
+	DrawEnabledCheckbox(settings);
+}
+
+
+bool VolumetricShadows::HasShaderDefine(RE::BSShader::Type)
+{
+	return true;
 }
 
 VolumetricShadows::RuntimeReadiness VolumetricShadows::GetRuntimeReadiness(
@@ -122,6 +680,8 @@ VolumetricShadows::RuntimeReadiness VolumetricShadows::GetRuntimeReadiness(
 
 	if (!downsampleShadowMip0CS.get() ||
 		!downsampleShadowMip1CS.get() ||
+		!downsampleShadowGeneralMip0CS.get() ||
+		!downsampleShadowGeneralMip1CS.get() ||
 		!blurShadowHorizontalCS.get() ||
 		!blurShadowVerticalCS.get()) {
 		return RuntimeReadiness::ShaderUnavailable;
@@ -136,18 +696,14 @@ VolumetricShadows::RuntimeReadiness VolumetricShadows::GetRuntimeReadiness(
 	}
 
 	D3D11_TEXTURE2D_DESC directionalShadowDesc{};
-	if (!GetTexture2DArrayDescription(a_capturedShadowView, 2, directionalShadowDesc) ||
-		directionalShadowDesc.Width != directionalShadowDesc.Height ||
-		(directionalShadowDesc.Width != 1024u &&
-			directionalShadowDesc.Width != 2048u &&
-			directionalShadowDesc.Width != 4096u)) {
+	if (!TryGetShadowTextureDescription(a_capturedShadowView, directionalShadowDesc)) {
 		return RuntimeReadiness::NoCapturedShadowMap;
 	}
 
 	auto& esramDepthStencil = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM];
 	auto* esramShadowSRV = esramDepthStencil.depthSRV;
 	D3D11_TEXTURE2D_DESC esramShadowDesc{};
-	if (!GetTexture2DArrayDescription(esramShadowSRV, 2, esramShadowDesc))
+	if (!TryGetShadowTextureDescription(esramShadowSRV, esramShadowDesc))
 		return RuntimeReadiness::NoRuntimeResources;
 
 	if (a_requireOutputResources) {
@@ -176,365 +732,4 @@ VolumetricShadows::RuntimeReadiness VolumetricShadows::GetRuntimeReadiness(
 	}
 
 	return RuntimeReadiness::Ready;
-}
-
-void VolumetricShadows::CopyShadowLightData()
-{
-	auto* context = globals::d3d::context;
-	shadowView = nullptr;
-	shadowViewCaptureFrame = UINT32_MAX;
-	if (!context)
-		return;
-
-	context->PSGetShaderResources(4, 1, shadowView.put());
-	if (globals::state)
-		shadowViewCaptureFrame = globals::state->frameCount;
-	if (!settings.Enabled) {
-		// Keep only the current shadow-map identity fresh while Off. Full descriptor,
-		// shader, scene, and output validation belongs to the enabled dispatch path
-		// (and the tuning controller's readiness check), not the runtime baseline.
-		SetSharedShadowMapSRV(context, nullptr);
-		return;
-	}
-
-	RuntimeContext runtimeContext;
-	const auto readiness = GetRuntimeReadiness(shadowView.get(), false, &runtimeContext);
-	if (readiness != RuntimeReadiness::Ready) {
-		SetSharedShadowMapSRV(context, nullptr);
-		return;
-	}
-
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "VolumetricShadows::CopyShadowLightData");
-	bool shadowCopyUpdated = false;
-
-	{
-		// Downsample shadow texture array to fixed 512x512 (mip1: 256x256)
-		{
-			// Lazily create fixed-size output textures
-			if (!shadowCopyTexture) {
-				shadowCopyWidth = kShadowCopySize;
-				shadowCopyHeight = kShadowCopySize;
-
-				D3D11_TEXTURE2D_DESC copyDesc{};
-				copyDesc.Width = kShadowCopySize;
-				copyDesc.Height = kShadowCopySize;
-				copyDesc.MipLevels = 2;
-				copyDesc.ArraySize = 1;
-				copyDesc.Format = DXGI_FORMAT_R16G16_UNORM;
-				copyDesc.SampleDesc.Count = 1;
-				copyDesc.SampleDesc.Quality = 0;
-				copyDesc.Usage = D3D11_USAGE_DEFAULT;
-				copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET;
-				copyDesc.MiscFlags = 0;
-
-				auto device = globals::d3d::device;
-				DX::ThrowIfFailed(device->CreateTexture2D(&copyDesc, nullptr, &shadowCopyTexture));
-				Util::SetResourceName(shadowCopyTexture, "VolumetricShadows::ShadowCopy");
-
-				D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-				srvDesc.Format = copyDesc.Format;
-				srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-				srvDesc.Texture2D.MostDetailedMip = 0;
-				srvDesc.Texture2D.MipLevels = 2;
-				DX::ThrowIfFailed(device->CreateShaderResourceView(shadowCopyTexture, &srvDesc, &shadowCopySRV));
-				Util::SetResourceName(shadowCopySRV, "VolumetricShadows::ShadowCopy SRV");
-
-				// Create mip-specific SRVs for blur passes
-				srvDesc.Texture2D.MostDetailedMip = 0;
-				srvDesc.Texture2D.MipLevels = 1;
-				DX::ThrowIfFailed(device->CreateShaderResourceView(shadowCopyTexture, &srvDesc, &shadowCopyMip0SRV));
-				Util::SetResourceName(shadowCopyMip0SRV, "VolumetricShadows::ShadowCopy SRV mip0");
-
-				srvDesc.Texture2D.MostDetailedMip = 1;
-				srvDesc.Texture2D.MipLevels = 1;
-				DX::ThrowIfFailed(device->CreateShaderResourceView(shadowCopyTexture, &srvDesc, &shadowCopyMip1SRV));
-				Util::SetResourceName(shadowCopyMip1SRV, "VolumetricShadows::ShadowCopy SRV mip1");
-
-				D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-				uavDesc.Format = copyDesc.Format;
-				uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-				uavDesc.Texture2D.MipSlice = 0;
-				DX::ThrowIfFailed(device->CreateUnorderedAccessView(shadowCopyTexture, &uavDesc, &shadowCopyMip0UAV));
-				Util::SetResourceName(shadowCopyMip0UAV, "VolumetricShadows::ShadowCopy UAV mip0");
-
-				uavDesc.Texture2D.MipSlice = 1;
-				DX::ThrowIfFailed(device->CreateUnorderedAccessView(shadowCopyTexture, &uavDesc, &shadowCopyMip1UAV));
-				Util::SetResourceName(shadowCopyMip1UAV, "VolumetricShadows::ShadowCopy UAV mip1");
-
-				// Create temporary texture for blur intermediate result
-				DX::ThrowIfFailed(device->CreateTexture2D(&copyDesc, nullptr, &shadowBlurTempTexture));
-				Util::SetResourceName(shadowBlurTempTexture, "VolumetricShadows::ShadowBlurTemp");
-
-				// Create mip-specific SRVs for blur temp texture
-				srvDesc.Texture2D.MostDetailedMip = 0;
-				srvDesc.Texture2D.MipLevels = 1;
-				DX::ThrowIfFailed(device->CreateShaderResourceView(shadowBlurTempTexture, &srvDesc, &shadowBlurTempMip0SRV));
-				Util::SetResourceName(shadowBlurTempMip0SRV, "VolumetricShadows::ShadowBlurTemp SRV mip0");
-
-				srvDesc.Texture2D.MostDetailedMip = 1;
-				srvDesc.Texture2D.MipLevels = 1;
-				DX::ThrowIfFailed(device->CreateShaderResourceView(shadowBlurTempTexture, &srvDesc, &shadowBlurTempMip1SRV));
-				Util::SetResourceName(shadowBlurTempMip1SRV, "VolumetricShadows::ShadowBlurTemp SRV mip1");
-
-				uavDesc.Texture2D.MipSlice = 0;
-				DX::ThrowIfFailed(device->CreateUnorderedAccessView(shadowBlurTempTexture, &uavDesc, &shadowBlurTempMip0UAV));
-				Util::SetResourceName(shadowBlurTempMip0UAV, "VolumetricShadows::ShadowBlurTemp UAV mip0");
-
-				uavDesc.Texture2D.MipSlice = 1;
-				DX::ThrowIfFailed(device->CreateUnorderedAccessView(shadowBlurTempTexture, &uavDesc, &shadowBlurTempMip1UAV));
-				Util::SetResourceName(shadowBlurTempMip1UAV, "VolumetricShadows::ShadowBlurTemp UAV mip1");
-			}
-
-			// Resource creation can leave a partial set if the device fails midway.
-			// Revalidate the complete dispatch path before binding any of it.
-			if (GetRuntimeReadiness(shadowView.get(), true, &runtimeContext) != RuntimeReadiness::Ready) {
-				SetSharedShadowMapSRV(context, nullptr);
-				return;
-			}
-
-			{
-				{
-					const auto& srcDesc = runtimeContext.directionalShadowDesc;
-
-					ID3D11ShaderResourceView* csSrvs[2]{ runtimeContext.directionalShadowSRV, runtimeContext.esramShadowSRV };
-					context->CSSetShaderResources(0, 2, csSrvs);
-
-					context->CSSetSamplers(0, 1, &linearSampler);
-
-					// Supported source sizes are exact multiples of the 16 input texels
-					// covered by each 8x8 group before the fixed-output reductions.
-					const auto dispatchWidth = srcDesc.Width / 16u;
-					const auto dispatchHeight = srcDesc.Height / 16u;
-
-					// Mip 0 (cascade 1)
-					ID3D11UnorderedAccessView* csUavs[1]{ shadowCopyMip0UAV };
-					context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-					context->CSSetShader(downsampleShadowMip0CS.get(), nullptr, 0);
-					globals::profiler->BeginPass("VolumetricShadows::DownsampleMip0");
-					context->Dispatch(dispatchWidth, dispatchHeight, 1);
-					globals::profiler->EndPass();
-
-					// Mip 1 (cascade 0)
-					csUavs[0] = shadowCopyMip1UAV;
-					context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-					context->CSSetShader(downsampleShadowMip1CS.get(), nullptr, 0);
-					globals::profiler->BeginPass("VolumetricShadows::DownsampleMip1");
-					context->Dispatch(dispatchWidth, dispatchHeight, 1);
-					globals::profiler->EndPass();
-
-					// Unbind SRVs before blur passes
-					csSrvs[0] = nullptr;
-					csSrvs[1] = nullptr;
-					context->CSSetShaderResources(0, 2, csSrvs);
-					csUavs[0] = nullptr;
-					context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-
-					constexpr uint32_t mip0Size = kShadowCopySize;
-					constexpr uint32_t mip1Size = kShadowCopySize / 2;
-
-					// 11x11 separable blur for Mip 0
-					{
-						const uint32_t GROUP_SIZE = 128;
-
-						// Horizontal pass: shadowCopy mip0 -> shadowBlurTemp mip0
-						ID3D11ShaderResourceView* blurSrvs[1]{ shadowCopyMip0SRV };
-						context->CSSetShaderResources(0, 1, blurSrvs);
-						csUavs[0] = shadowBlurTempMip0UAV;
-						context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-						context->CSSetShader(blurShadowHorizontalCS.get(), nullptr, 0);
-						globals::profiler->BeginPass("VolumetricShadows::BlurHMip0");
-						context->Dispatch((mip0Size + GROUP_SIZE - 1) / GROUP_SIZE, mip0Size, 1);
-						globals::profiler->EndPass();
-
-						// Unbind for next pass
-						blurSrvs[0] = nullptr;
-						context->CSSetShaderResources(0, 1, blurSrvs);
-						csUavs[0] = nullptr;
-						context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-
-						// Vertical pass: shadowBlurTemp mip0 -> shadowCopy mip0
-						blurSrvs[0] = shadowBlurTempMip0SRV;
-						context->CSSetShaderResources(0, 1, blurSrvs);
-						csUavs[0] = shadowCopyMip0UAV;
-						context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-						context->CSSetShader(blurShadowVerticalCS.get(), nullptr, 0);
-						globals::profiler->BeginPass("VolumetricShadows::BlurVMip0");
-						context->Dispatch(mip0Size, (mip0Size + GROUP_SIZE - 1) / GROUP_SIZE, 1);
-						globals::profiler->EndPass();
-
-						// Unbind
-						blurSrvs[0] = nullptr;
-						context->CSSetShaderResources(0, 1, blurSrvs);
-						csUavs[0] = nullptr;
-						context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-					}
-
-					// 11x11 separable blur for Mip 1
-					{
-						const uint32_t GROUP_SIZE = 128;
-
-						// Horizontal pass: shadowCopy mip1 -> shadowBlurTemp mip1
-						ID3D11ShaderResourceView* blurSrvs[1]{ shadowCopyMip1SRV };
-						context->CSSetShaderResources(0, 1, blurSrvs);
-						csUavs[0] = shadowBlurTempMip1UAV;
-						context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-						context->CSSetShader(blurShadowHorizontalCS.get(), nullptr, 0);
-						globals::profiler->BeginPass("VolumetricShadows::BlurHMip1");
-						context->Dispatch((mip1Size + GROUP_SIZE - 1) / GROUP_SIZE, mip1Size, 1);
-						globals::profiler->EndPass();
-
-						// Unbind for next pass
-						blurSrvs[0] = nullptr;
-						context->CSSetShaderResources(0, 1, blurSrvs);
-						csUavs[0] = nullptr;
-						context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-
-						// Vertical pass: shadowBlurTemp mip1 -> shadowCopy mip1
-						blurSrvs[0] = shadowBlurTempMip1SRV;
-						context->CSSetShaderResources(0, 1, blurSrvs);
-						csUavs[0] = shadowCopyMip1UAV;
-						context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-						context->CSSetShader(blurShadowVerticalCS.get(), nullptr, 0);
-						globals::profiler->BeginPass("VolumetricShadows::BlurVMip1");
-						context->Dispatch(mip1Size, (mip1Size + GROUP_SIZE - 1) / GROUP_SIZE, 1);
-						globals::profiler->EndPass();
-
-						// Unbind
-						blurSrvs[0] = nullptr;
-						context->CSSetShaderResources(0, 1, blurSrvs);
-						csUavs[0] = nullptr;
-						context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-					}
-
-					// Cleanup CS state
-					ID3D11SamplerState* nullSampler = nullptr;
-					context->CSSetSamplers(0, 1, &nullSampler);
-					context->CSSetShader(nullptr, nullptr, 0);
-					shadowCopyUpdated = true;
-				}
-			}
-		}
-
-		auto* srv = shadowView && shadowCopyUpdated ? shadowCopySRV : nullptr;
-		SetSharedShadowMapSRV(context, srv);
-	}
-}
-
-void VolumetricShadows::SetSharedShadowMapSRV(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_srv)
-{
-	if (a_context)
-		a_context->PSSetShaderResources(kSharedShadowMapShaderSlot, 1, &a_srv);
-}
-
-bool VolumetricShadows::IsPerformanceTuningApplicable() const
-{
-	return GetRuntimeReadiness(shadowView.get(), true) == RuntimeReadiness::Ready;
-}
-
-const char* VolumetricShadows::GetPerformanceTuningApplicabilityReason() const
-{
-	switch (GetRuntimeReadiness(shadowView.get(), true)) {
-	case RuntimeReadiness::Ready:
-		return nullptr;
-	case RuntimeReadiness::NoDirectionalShadows:
-		return T(
-			"menu.performance_tuning.feature.volumetric_shadows.no_directional_shadows",
-			"Volumetric Shadows only perform runtime work while the scene has an active directional shadow light.");
-	case RuntimeReadiness::NoCapturedShadowMap:
-		return T(
-			"menu.performance_tuning.feature.volumetric_shadows.no_shadow_map",
-			"Volumetric Shadows cannot be measured because no valid directional shadow map was captured this frame.");
-	case RuntimeReadiness::ShaderUnavailable:
-		return T(
-			"menu.performance_tuning.feature.volumetric_shadows.shader_unavailable",
-			"Volumetric Shadows cannot be measured because one or more downsample or blur shaders are unavailable.");
-	case RuntimeReadiness::OutputResourcesUnavailable:
-		return T(
-			"menu.performance_tuning.feature.volumetric_shadows.output_resources_unavailable",
-			"Volumetric Shadows cannot be measured because their downsample or blur textures are incomplete.");
-	case RuntimeReadiness::NoRuntimeResources:
-		return T(
-			"menu.performance_tuning.feature.volumetric_shadows.no_runtime_resources",
-			"Volumetric Shadows cannot be measured because required rendering resources are unavailable.");
-	default:
-		return T(
-			"menu.performance_tuning.feature.volumetric_shadows.not_applicable",
-			"Volumetric Shadows cannot perform runtime work in the current scene.");
-	}
-}
-
-void VolumetricShadows::DrawSettings()
-{
-	DrawEnabledCheckbox(settings);
-	ImGui::BeginDisabled(!settings.Enabled);
-
-	ImGui::SeparatorText("Debug");
-
-	if (ImGui::TreeNode("Buffer Viewer")) {
-		static float debugRescale = .3f;
-		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
-
-		auto DisplayRT = [&](const char* label, ID3D11Texture2D* tex, ID3D11ShaderResourceView* srv) {
-			if (srv && tex) {
-				D3D11_TEXTURE2D_DESC desc;
-				tex->GetDesc(&desc);
-				char buf[128];
-				snprintf(buf, sizeof(buf), "%s (%ux%u)", label, desc.Width, desc.Height);
-				if (ImGui::TreeNode(buf)) {
-					ImGui::Image(srv, { desc.Width * debugRescale, desc.Height * debugRescale });
-					ImGui::TreePop();
-				}
-			}
-		};
-
-		DisplayRT("VSM Cascade 0", shadowCopyTexture, shadowCopyMip0SRV);
-		DisplayRT("VSM Cascade 1", shadowCopyTexture, shadowCopyMip1SRV);
-
-		ImGui::TreePop();
-	}
-
-	ImGui::EndDisabled();
-}
-
-void VolumetricShadows::DrawEssentialSettings()
-{
-	DrawEnabledCheckbox(settings);
-}
-
-void VolumetricShadows::LoadSettings(json& o_json)
-{
-	settings = o_json;
-}
-
-void VolumetricShadows::SaveSettings(json& o_json)
-{
-	o_json = settings;
-}
-
-void VolumetricShadows::RestoreDefaultSettings()
-{
-	settings = {};
-}
-
-struct CreateDepthStencil_VolumetricLighting
-{
-	static void thunk(RE::BSGraphics::Renderer* This, uint32_t a_target, RE::BSGraphics::DepthStencilTargetProperties* a_properties)
-	{
-		RE::BSGraphics::DepthStencilTargetProperties properties = *a_properties;
-		properties.height = 1024;
-		properties.width = 1024;
-		func(This, a_target, &properties);
-	}
-	static inline REL::Relocation<decltype(thunk)> func;
-};
-
-void VolumetricShadows::PostPostLoad()
-{
-	stl::write_thunk_call<CreateDepthStencil_VolumetricLighting>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x9DC, 0x9DC));
-}
-
-bool VolumetricShadows::HasShaderDefine(RE::BSShader::Type)
-{
-	return true;
 }

@@ -1,58 +1,7 @@
 #include "RCAS.h"
 
-#include "../../../State.h"
 #include "../../../Util.h"
-
-namespace
-{
-	bool TryGetOutputDimensions(ID3D11UnorderedAccessView* a_uav, uint32_t& o_width, uint32_t& o_height)
-	{
-		o_width = 0;
-		o_height = 0;
-
-		if (!a_uav)
-			return false;
-
-		ID3D11Resource* resource = nullptr;
-		a_uav->GetResource(&resource);
-		if (!resource)
-			return false;
-
-		ID3D11Texture2D* texture = nullptr;
-		const HRESULT hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
-		resource->Release();
-		if (FAILED(hr) || !texture)
-			return false;
-
-		D3D11_TEXTURE2D_DESC textureDesc{};
-		texture->GetDesc(&textureDesc);
-		texture->Release();
-
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-		a_uav->GetDesc(&uavDesc);
-
-		uint32_t mipSlice = 0;
-		switch (uavDesc.ViewDimension) {
-		case D3D11_UAV_DIMENSION_TEXTURE2D:
-			mipSlice = uavDesc.Texture2D.MipSlice;
-			break;
-		case D3D11_UAV_DIMENSION_TEXTURE2DARRAY:
-			mipSlice = uavDesc.Texture2DArray.MipSlice;
-			break;
-		default:
-			return false;
-		}
-
-		o_width = textureDesc.Width >> mipSlice;
-		o_height = textureDesc.Height >> mipSlice;
-		if (!o_width)
-			o_width = 1;
-		if (!o_height)
-			o_height = 1;
-
-		return true;
-	}
-}
+#include "../SharpenerDispatch.h"
 
 struct RCASConfig
 {
@@ -66,15 +15,42 @@ RCAS::~RCAS()
 	rcasConfigCB = nullptr;
 }
 
-void RCAS::Initialize()
+void RCAS::Initialize(bool enableMotionAdaptive)
 {
-	if (rcasConfigCB)
+	if (enableMotionAdaptive)
+		motionAdaptive.Initialize();
+	if (rcasConfigCB && rcasComputeShader)
 		return;
 
-	logger::info("[RCAS] Creating resources");
-	CreateComputeShader();
-	rcasConfigCB = new ConstantBuffer(ConstantBufferDesc<RCASConfig>());
+	if (!rcasComputeShader)
+		CreateComputeShader();
+	if (!rcasConfigCB) {
+		logger::info("[RCAS] Creating resources");
+		rcasConfigCB = new ConstantBuffer(ConstantBufferDesc<RCASConfig>(), "Upscaling::RCASConfig");
+	}
 }
+
+void RCAS::ClearShaderCache()
+{
+	rcasComputeShader = nullptr;
+	shaderUnavailableLogged = false;
+	motionAdaptive.ClearShaderCache();
+}
+
+bool RCAS::ApplyMotionAdaptiveSharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV,
+	float sharpness, float baseStrength, const MotionSharpening::Settings& settings,
+	ID3D11ShaderResourceView* motionVectors, std::span<const MotionSharpening::Region> regions)
+{
+	return motionAdaptive.Apply(inputSRV, outputUAV, sharpness, baseStrength, settings, motionVectors, regions,
+		[&]() { return ApplySharpen(inputSRV, outputUAV, sharpness); });
+}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+const char* RCAS::GetMotionAdaptiveStatus() const noexcept
+{
+	return motionAdaptive.GetStatus();
+}
+#endif
 
 void RCAS::CreateComputeShader()
 {
@@ -84,63 +60,33 @@ void RCAS::CreateComputeShader()
 
 bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV, float sharpness)
 {
-	auto state = globals::state;
-	auto context = globals::d3d::context;
-	auto* profiler = globals::profiler;
-	if (!state || !context || !profiler || !inputSRV || !outputUAV)
+	if (!inputSRV || !outputUAV)
 		return false;
 
-	ZoneScoped;
-	TracyD3D11Zone(state->tracyCtx, "RCAS Sharpening");
+	if (!rcasComputeShader || !rcasConfigCB)
+		Initialize();
 
 	if (!rcasComputeShader) {
-		logger::warn("[RCAS] Compute shader not compiled");
+		if (!shaderUnavailableLogged) {
+			logger::warn("[RCAS] Compute shader not compiled");
+			shaderUnavailableLogged = true;
+		}
 		return false;
 	}
-	if (!rcasConfigCB || !rcasConfigCB->CB()) {
+	shaderUnavailableLogged = false;
+	if (!rcasConfigCB) {
 		logger::warn("[RCAS] Constant buffer not initialized");
-		return false;
-	}
-	profiler->BeginPass("Upscaling::RCAS");
-	state->BeginPerfEvent("RCAS Sharpening");
-
-	uint32_t screenWidth = 0;
-	uint32_t screenHeight = 0;
-	if (!TryGetOutputDimensions(outputUAV, screenWidth, screenHeight)) {
-		logger::warn("[RCAS] Unable to determine output UAV dimensions");
-		profiler->EndPass();
-		state->EndPerfEvent();
 		return false;
 	}
 
 	RCASConfig config{};
 	config.sharpness = sharpness;
 
-	rcasConfigCB->Update(config);
-	auto bufferArray = rcasConfigCB->CB();
-
-	context->CSSetShader(rcasComputeShader.get(), nullptr, 0);
-	context->CSSetConstantBuffers(0, 1, &bufferArray);
-
-	ID3D11ShaderResourceView* srvs[] = { inputSRV };
-	context->CSSetShaderResources(0, 1, srvs);
-
-	ID3D11UnorderedAccessView* uavs[] = { outputUAV };
-	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-	uint32_t dispatchX = (screenWidth + 7) / 8;
-	uint32_t dispatchY = (screenHeight + 7) / 8;
-	context->Dispatch(dispatchX, dispatchY, 1);
-
-	ID3D11ShaderResourceView* nullSRVs[] = { nullptr };
-	context->CSSetShaderResources(0, 1, nullSRVs);
-
-	ID3D11UnorderedAccessView* nullUAVs[] = { nullptr };
-	context->CSSetUnorderedAccessViews(0, 1, nullUAVs, nullptr);
-
-	context->CSSetShader(nullptr, nullptr, 0);
-
-	profiler->EndPass();
-	state->EndPerfEvent();
-	return true;
+	return UpscalingSharpener::DispatchComputePass(
+		rcasComputeShader.get(),
+		rcasConfigCB,
+		config,
+		inputSRV,
+		outputUAV,
+		UpscalingSharpener::Pass::RCAS);
 }

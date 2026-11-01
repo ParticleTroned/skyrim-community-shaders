@@ -1,9 +1,42 @@
 #include "WinApi.h"
+#include "StringUtils.h"
 
 #include "ShaderCompilationSchedulingPolicy.h"
 
+#include <ShlObj.h>
+#include <format>
+#include <shellapi.h>
+
 namespace Util
 {
+	namespace
+	{
+		std::optional<std::filesystem::path> GetKnownFolderPath(REFKNOWNFOLDERID a_folderId)
+		{
+			PWSTR path = nullptr;
+			if (FAILED(SHGetKnownFolderPath(a_folderId, KF_FLAG_DEFAULT, nullptr, &path)) || !path)
+				return std::nullopt;
+			const std::filesystem::path result(path);
+			CoTaskMemFree(path);
+			return result;
+		}
+	}
+
+	bool OpenInShell(const std::filesystem::path& path, std::string& error)
+	{
+		if (path.empty()) {
+			error = "No file or directory was specified.";
+			return false;
+		}
+		const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+		if (result <= 32) {
+			error = std::format("Windows could not open {} (shell error {}).", PathToUtf8(path), result);
+			return false;
+		}
+		error.clear();
+		return true;
+	}
+
 	std::optional<REL::Version> GetDllVersion(const std::wstring& dllPath)
 	{
 		DWORD handle = 0;
@@ -93,10 +126,16 @@ namespace Util
 
 		switch (SelectCooperativeThreadPriority(processPriorityBand)) {
 		case CooperativeThreadPriority::Idle:
+			// HIGH + BELOW_NORMAL has base priority 12 and still outranks a normal
+			// desktop application's base priority 8. IDLE is the only relative
+			// priority in HIGH_PRIORITY_CLASS that yields cooperatively.
 			return THREAD_PRIORITY_IDLE;
 		case CooperativeThreadPriority::Lowest:
+			// ABOVE_NORMAL + LOWEST has base priority 8, equal to a normal app.
 			return THREAD_PRIORITY_LOWEST;
 		default:
+			// NORMAL + BELOW_NORMAL has base priority 7. Lower process classes are
+			// already cooperative and remain safely below ordinary applications.
 			return THREAD_PRIORITY_BELOW_NORMAL;
 		}
 	}
@@ -114,5 +153,15 @@ namespace Util
 		return processPriorityClass != 0 &&
 		       processPriorityClass != REALTIME_PRIORITY_CLASS &&
 		       priorityApplied;
+	}
+
+	std::optional<std::filesystem::path> GetPicturesPath()
+	{
+		return GetKnownFolderPath(FOLDERID_Pictures);
+	}
+
+	std::optional<std::filesystem::path> GetVideosPath()
+	{
+		return GetKnownFolderPath(FOLDERID_Videos);
 	}
 }  // namespace Util

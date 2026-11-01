@@ -1,4 +1,11 @@
 #include "FrameAnnotations.h"
+#include "Features/LightLimitFix/ShadowCulling.h"
+#include "Features/LightLimitFix/ShadowCullingDrawScope.h"
+#include "Features/Upscaling.h"
+#include "Features/Upscaling/NeuralRendering/ExposureCapture.h"
+#include "GpuPass.h"
+#include "Utils/D3D.h"
+#include <optional>
 
 #include <limits>
 
@@ -11,6 +18,37 @@ namespace FrameAnnotations
 {
 	namespace
 	{
+		void ResetWaterReflectionCubemapOnSceneChange()
+		{
+			const auto tes = globals::game::tes;
+			const auto renderer = globals::game::renderer;
+			const auto context = globals::d3d::context;
+			if (!tes || !renderer || !context)
+				return;
+
+			const auto interiorCell = tes->interiorCell;
+			const auto worldSpace = interiorCell ? nullptr : tes->GetRuntimeData2().worldSpace;
+			static const RE::TESObjectCELL* previousInteriorCell = nullptr;
+			static const RE::TESWorldSpace* previousWorldSpace = nullptr;
+			static bool initialized = false;
+			if (initialized && interiorCell == previousInteriorCell && worldSpace == previousWorldSpace)
+				return;
+
+			auto& reflections = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
+			// Retry the scene transition until every face can be cleared together.
+			for (auto* rtv : reflections.cubeSideRTV)
+				if (!rtv)
+					return;
+
+			const float clear[4]{};
+			for (auto* rtv : reflections.cubeSideRTV)
+				context->ClearRenderTargetView(rtv, clear);
+
+			previousInteriorCell = interiorCell;
+			previousWorldSpace = worldSpace;
+			initialized = true;
+		}
+
 		std::string_view CachedDefinesSuffix()
 		{
 			thread_local uint64_t generation = std::numeric_limits<uint64_t>::max();
@@ -44,15 +82,21 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
-			if (globals::state->frameAnnotations) {
+			if (globals::state->drawAnnotationsActive) {
 				uint32_t descriptor = 0;
 				if (globals::game::currentPixelShader && *globals::game::currentPixelShader) {
 					descriptor = (*globals::game::currentPixelShader)->id;
 				}
-				std::string diskPath = std::format("Data/ShaderCache/{}/{:X}{}.pso", shader->fxpFilename, descriptor, CachedDefinesSuffix());
-				const std::string passName = std::format("[{}:{:X}] ({:X}) <{}> {} -> {}", magic_enum::enum_name(ShaderType), descriptor, pass->passEnum,
+				thread_local std::string diskPath;
+				thread_local std::string passName;
+				diskPath.clear();
+				std::format_to(std::back_inserter(diskPath), "Data/ShaderCache/{}/{:X}{}.pso",
+					shader->fxpFilename, descriptor, CachedDefinesSuffix());
+				passName.clear();
+				std::format_to(std::back_inserter(passName), "[{}:{:X}] ({:X}) <{}> {} -> {}",
+					magic_enum::enum_name(ShaderType), descriptor, pass->passEnum,
 					pass->accumulationHint, pass->geometry->name.c_str(), diskPath);
-				globals::state->BeginPerfEvent(passName);
+				globals::state->BeginDrawEvent(passName);
 			}
 
 			func(shader, pass, renderFlags);
@@ -68,8 +112,8 @@ namespace FrameAnnotations
 		{
 			func(shader, pass, renderFlags);
 
-			if (globals::state->frameAnnotations) {
-				globals::state->EndPerfEvent();
+			if (globals::state->drawAnnotationsActive) {
+				globals::state->EndDrawEvent();
 			}
 		}
 
@@ -81,12 +125,23 @@ namespace FrameAnnotations
 	{
 		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
 		{
-			std::string eventName = BuildEventName(EffectType) + " Draw";
-			globals::state->BeginPerfEvent(eventName);
+			const bool annotate = globals::state->frameAnnotations;
+			if (annotate)
+				globals::state->BeginPerfEvent(BuildEventName(EffectType) + " Draw");
+
+			std::optional<NeuralRendering::Color::ExposureProducerScope> exposureScope;
+			if constexpr (EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematic ||
+						  EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade) {
+				globals::state->UpdateFeatureData(true);
+				Util::BindSharedDataConstantBuffersForPS(globals::d3d::context);
+				if (globals::features::upscaling.IsNeuralRenderingEnabled())
+					exposureScope.emplace(static_cast<RE::BSImagespaceShader*>(static_cast<RE::ImageSpaceEffect*>(imageSpaceShader)));
+			}
 
 			func(imageSpaceShader, shape, param);
 
-			globals::state->EndPerfEvent();
+			if (annotate)
+				globals::state->EndPerfEvent();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -97,12 +152,23 @@ namespace FrameAnnotations
 	{
 		static void thunk(void* imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
 		{
-			std::string eventName = BuildEventName(EffectType) + " Dispatch";
-			globals::state->BeginPerfEvent(eventName);
+			const bool annotate = globals::state->frameAnnotations;
+			if (annotate)
+				globals::state->BeginPerfEvent(BuildEventName(EffectType) + " Dispatch");
+
+			std::optional<NeuralRendering::Color::ExposureProducerScope> exposureScope;
+			if constexpr (EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematic ||
+						  EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade) {
+				globals::state->UpdateFeatureData(true);
+				Util::BindSharedDataConstantBuffersForPS(globals::d3d::context);
+				if (globals::features::upscaling.IsNeuralRenderingEnabled())
+					exposureScope.emplace(static_cast<RE::BSImagespaceShader*>(imageSpaceShader));
+			}
 
 			func(imageSpaceShader, a1, a2, a3);
 
-			globals::state->EndPerfEvent();
+			if (annotate)
+				globals::state->EndPerfEvent();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -146,11 +212,18 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
-			globals::state->BeginPerfEvent("Directional Light Shadowmaps");
+			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{
+				LightLimitFixDetail::ShadowCulling::NeedsSunDrawScope() ? light : nullptr
+			};
+			CS_GPU_PASS("SharedScene::DirectionalShadows");
+			const bool annotate = globals::state->frameAnnotations;
+			if (annotate)
+				globals::state->BeginPerfEvent("Directional Light Shadowmaps");
 
 			func(light, a2);
 
-			globals::state->EndPerfEvent();
+			if (annotate)
+				globals::state->EndPerfEvent();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -160,11 +233,15 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
-			globals::state->BeginPerfEvent("Spot Light Shadowmaps");
+			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{ light };
+			const bool annotate = globals::state->frameAnnotations;
+			if (annotate)
+				globals::state->BeginPerfEvent("Spot Light Shadowmaps");
 
 			func(light, a2);
 
-			globals::state->EndPerfEvent();
+			if (annotate)
+				globals::state->EndPerfEvent();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -174,11 +251,15 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
-			globals::state->BeginPerfEvent("Omnidirectional Light Shadowmaps");
+			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{ light };
+			const bool annotate = globals::state->frameAnnotations;
+			if (annotate)
+				globals::state->BeginPerfEvent("Omnidirectional Light Shadowmaps");
 
 			func(light, a2);
 
-			globals::state->EndPerfEvent();
+			if (annotate)
+				globals::state->EndPerfEvent();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -263,11 +344,9 @@ namespace FrameAnnotations
 	{
 		static void thunk()
 		{
-			globals::state->BeginPerfEvent("Water Effects");
-
+			CS_GPU_PASS("Water::RenderWaterEffects");
+			ResetWaterReflectionCubemapOnSceneChange();
 			func();
-
-			globals::state->EndPerfEvent();
 		};
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -350,6 +429,27 @@ namespace FrameAnnotations
 
 	void OnPostPostLoad()
 	{
+		// Shared rendering hooks are independent of optional annotation capture.
+		stl::write_vfunc<0x1,
+			BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRTonemapBlendCinematic>>(
+			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic[3]);
+		stl::write_vfunc<0x1,
+			BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade>>(
+			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[3]);
+		stl::write_vfunc<0xC,
+			BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISHDRTonemapBlendCinematic>>(
+			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic[0]);
+		stl::write_vfunc<0xC,
+			BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade>>(
+			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[0]);
+		stl::write_vfunc<0xA, BSShadowDirectionalLight_RenderShadowmaps>(
+			RE::VTABLE_BSShadowDirectionalLight[0]);
+		stl::write_vfunc<0xA, BSShadowFrustumLight_RenderShadowmaps>(
+			RE::VTABLE_BSShadowFrustumLight[0]);
+		stl::write_vfunc<0xA, BSShadowParabolicLight_RenderShadowmaps>(
+			RE::VTABLE_BSShadowParabolicLight[0]);
+		stl::detour_thunk<Main_RenderWaterEffects>(REL::RelocationID(35561, 36560));
+
 		if (!globals::state->frameAnnotations)
 			return;
 
@@ -438,12 +538,7 @@ namespace FrameAnnotations
 			RE::VTABLE_BSImagespaceShaderRadialBlurMedium[3]);
 		stl::write_vfunc<0x1, BSImagespaceShader_Render<RE::ImageSpaceManager::ISRadialBlurHigh>>(
 			RE::VTABLE_BSImagespaceShaderRadialBlurHigh[3]);
-		stl::write_vfunc<0x1,
-			BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRTonemapBlendCinematic>>(
-			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic[3]);
-		stl::write_vfunc<0x1,
-			BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade>>(
-			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[3]);
+
 		stl::write_vfunc<0x1, BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRDownSample16>>(
 			RE::VTABLE_BSImagespaceShaderHDRDownSample16[3]);
 		stl::write_vfunc<0x1, BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRDownSample4>>(
@@ -711,12 +806,7 @@ namespace FrameAnnotations
 			RE::VTABLE_BSImagespaceShaderRadialBlurMedium[0]);
 		stl::write_vfunc<0xC, BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISRadialBlurHigh>>(
 			RE::VTABLE_BSImagespaceShaderRadialBlurHigh[0]);
-		stl::write_vfunc<0xC,
-			BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISHDRTonemapBlendCinematic>>(
-			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic[0]);
-		stl::write_vfunc<0xC,
-			BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade>>(
-			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[0]);
+
 		stl::write_vfunc<0xC, BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISHDRDownSample16>>(
 			RE::VTABLE_BSImagespaceShaderHDRDownSample16[0]);
 		stl::write_vfunc<0xC, BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISHDRDownSample4>>(
@@ -943,19 +1033,12 @@ namespace FrameAnnotations
 
 		stl::write_vfunc<0x35, BSCubeMapCamera_RenderCubemap>(RE::VTABLE_BSCubeMapCamera[0]);
 
-		stl::write_vfunc<0xA, BSShadowDirectionalLight_RenderShadowmaps>(
-			RE::VTABLE_BSShadowDirectionalLight[0]);
-		stl::write_vfunc<0xA, BSShadowFrustumLight_RenderShadowmaps>(
-			RE::VTABLE_BSShadowFrustumLight[0]);
-		stl::write_vfunc<0xA, BSShadowParabolicLight_RenderShadowmaps>(
-			RE::VTABLE_BSShadowParabolicLight[0]);
-
 		stl::detour_thunk<BSBatchRenderer_RenderBatches>(REL::RelocationID(100852, 107642));
 		stl::detour_thunk<Main_RenderDepth>(REL::RelocationID(100421, 107139));
 		stl::detour_thunk<Main_RenderWorld>(REL::RelocationID(100424, 107142));
 		stl::detour_thunk<Main_RenderFirstPersonView>(REL::RelocationID(100411, 107129));
 		stl::detour_thunk<Main_RenderPlayerView>(REL::RelocationID(35560, 36559));
-		stl::detour_thunk<Main_RenderWaterEffects>(REL::RelocationID(35561, 36560));
+
 		stl::detour_thunk<BSShaderAccumulator_RenderBatches>(REL::RelocationID(99963, 106609));
 		stl::detour_thunk<BSShaderAccumulator_RenderPersistentPassList>(REL::RelocationID(100840, 107630));
 		stl::detour_thunk<BSShaderAccumulator_RenderEffects>(REL::RelocationID(99940, 106585));

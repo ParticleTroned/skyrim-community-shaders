@@ -1,6 +1,9 @@
 #include "ScreenSpaceShadows.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include "Features/TerrainBlending.h"
+#include "Deferred.h"
 #include "I18n/I18n.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -24,35 +27,43 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void ScreenSpaceShadows::DrawSettings()
 {
-	if (ImGui::TreeNodeEx(T(TKEY("general"), "General"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		bool enabled = bendSettings.Enable != 0;
-		if (ImGui::Checkbox(T(TKEY("enable"), "Enable"), &enabled))
-			bendSettings.Enable = enabled ? 1u : 0u;
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("enable_tooltip"), "Enable screen-space contact shadows from the sun/moon direction."));
+	MenuUI::SettingsPage page("ScreenSpaceShadows", {
+														{ "appearance", T("feature.screen_space_shadows.ui_shadows", "Shadows"), T("feature.screen_space_shadows.ui_choose_shadow_coverage_then_refine_strength_and_quality", "Choose shadow coverage, then refine strength and quality."), T("feature.screen_space_shadows.ui_shadow_reach_samples_and_contrast", "Shadow reach, samples and contrast"), true, true, T("feature.screen_space_shadows.ui_shape_contact_shadows", "Shape contact shadows") },
+													});
+	if (!page.Is("appearance"))
+		return;
 
-		int sampleCount = static_cast<int>(bendSettings.SampleCount);
-		if (ImGui::SliderInt(T(TKEY("sample_count"), "Sample Count Multiplier"), &sampleCount, 1, 4))
-			bendSettings.SampleCount = static_cast<uint>(std::clamp(sampleCount, 1, 4));
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("sample_count_tooltip"), "Multiplier for shadow ray sample count. Higher values increase shadow reach at the cost of performance. Adapts to render resolution."));
+	ImGui::Spacing();
+	MenuUI::SectionHeading(T("feature.screen_space_shadows.ui_quality", "Quality"));
 
-		ImGui::SliderFloat(T(TKEY("surface_thickness"), "Surface Thickness"), &bendSettings.SurfaceThickness, 0.005f, 0.05f);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("surface_thickness_tooltip"), "Assumed thickness of surfaces for shadow detection. Lower values produce thinner, more precise shadows."));
-
-		ImGui::SliderFloat(T(TKEY("bilinear_threshold"), "Bilinear Threshold"), &bendSettings.BilinearThreshold, 0.02f, 1.0f);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("bilinear_threshold_tooltip"), "Depth threshold for edge detection during bilinear interpolation. Higher values smooth more aggressively across edges."));
-
-		ImGui::SliderFloat(T(TKEY("shadow_contrast"), "Shadow Contrast"), &bendSettings.ShadowContrast, 0.0f, 4.0f);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shadow_contrast_tooltip"), "Contrast boost for the shadow transition. Higher values produce harder shadow edges."));
-
-		ImGui::Spacing();
-		ImGui::Spacing();
-		ImGui::TreePop();
+	int sampleCount = static_cast<int>(bendSettings.SampleCount);
+	if (Util::Widgets::SliderInt(T("feature.screen_space_shadows.sample_count", "Sample Count Multiplier"), &sampleCount, static_cast<int>(1u), static_cast<int>(4u)))
+		bendSettings.SampleCount = static_cast<uint>(std::clamp(sampleCount, static_cast<int>(1u), static_cast<int>(4u)));
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(T("feature.screen_space_shadows.sample_count_tooltip", "Multiplier for shadow ray sample count. Higher values increase shadow reach at the cost of performance. Adapts to render resolution."));
 	}
+
+	ImGui::Spacing();
+	ImGui::TextUnformatted(T("feature.screen_space_shadows.ui_fine_tuning", "Fine-tuning"));
+	ImGui::Separator();
+
+	Util::Widgets::SliderFloat(T("feature.screen_space_shadows.surface_thickness", "Surface Thickness"), &bendSettings.SurfaceThickness, 0.005f, 0.05f);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(T("feature.screen_space_shadows.ui_makes_contact_shadows_thinner_or_thicker", "Makes contact shadows thinner or thicker."));
+	}
+
+	Util::Widgets::SliderFloat(T("feature.screen_space_shadows.bilinear_threshold", "Bilinear Threshold"), &bendSettings.BilinearThreshold, 0.02f, 1.0f);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(T("feature.screen_space_shadows.ui_balances_edge_sharpness_versus_smoothness", "Balances edge sharpness versus smoothness."));
+	}
+
+	Util::Widgets::SliderFloat(T("feature.screen_space_shadows.shadow_contrast", "Shadow Contrast"), &bendSettings.ShadowContrast, 0.0f, 4.0f);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(T("feature.screen_space_shadows.ui_controls_overall_shadow_darkness", "Controls overall shadow darkness."));
+	}
+
+	ImGui::Spacing();
+	ImGui::Spacing();
 }
 
 void ScreenSpaceShadows::InvalidateRaymarchShaders()
@@ -65,16 +76,22 @@ void ScreenSpaceShadows::ClearShaderCache()
 	InvalidateRaymarchShaders();
 }
 
-uint ScreenSpaceShadows::GetScaledSampleCount() const
+uint ScreenSpaceShadows::GetScaledSampleCount(bool a_dynamic) const
 {
-	float2 renderSize = Util::ConvertToDynamic(float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight });
+	if (!globals::game::graphicsState)
+		return 8u;
+	float2 renderSize{ static_cast<float>(globals::game::graphicsState->screenWidth), static_cast<float>(globals::game::graphicsState->screenHeight) };
+	if (a_dynamic)
+		renderSize = Util::ConvertToDynamic(renderSize);
+	if (!std::isfinite(renderSize.x) || !std::isfinite(renderSize.y) || renderSize.x < 1.0f || renderSize.y < 1.0f)
+		return 8u;
 
 	// Scale sample count based on both dimensions relative to 1920x1080 reference
 	float2 referenceRes = { 1920.0f, 1080.0f };
 	float referenceArea = referenceRes.x * referenceRes.y;
 	float currentArea = renderSize.x * renderSize.y;
 	float areaScale = std::sqrt(currentArea / referenceArea);
-	uint scaledSampleCount = static_cast<uint>(std::round(bendSettings.SampleCount * 60 * areaScale));
+	uint scaledSampleCount = static_cast<uint>(std::clamp(std::round(std::clamp(bendSettings.SampleCount, 1u, 4u) * 60 * areaScale), 8.0f, 1024.0f));
 
 	// Quantize to steps of 8 to prevent frequent recompilation from small DRS oscillations
 	scaledSampleCount = ((scaledSampleCount + 7u) / 8u) * 8u;
@@ -85,9 +102,12 @@ uint ScreenSpaceShadows::GetScaledSampleCount() const
 
 ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarch()
 {
-	uint scaledSampleCount = GetScaledSampleCount();
+	uint scaledSampleCount = GetScaledSampleCount(false);
+	const auto* blendedDepth = globals::features::terrainBlending.GetBlendedDepthSRV();
+	const bool useTerrainBlendingDepth = blendedDepth && Util::GetCurrentSceneDepthSRV(false) == blendedDepth;
 
-	if (scaledSampleCount != lastCompiledSampleCount) {
+	if (scaledSampleCount != lastCompiledSampleCount || compiledTerrainBlendingDepth != useTerrainBlendingDepth) {
+		compiledTerrainBlendingDepth = useTerrainBlendingDepth;
 		lastCompiledSampleCount = scaledSampleCount;
 		InvalidateRaymarchShaders();
 	}
@@ -96,7 +116,7 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarch()
 	std::vector<std::pair<const char*, const char*>> defines{ { "SAMPLE_COUNT", sampleCount.c_str() } };
 	// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
 	// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
-	if (globals::features::terrainBlending.loaded)
+	if (useTerrainBlendingDepth)
 		defines.push_back({ "TERRAIN_BLENDING", "" });
 	return raymarchCS.Get(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", defines, "cs_5_0");
 }
@@ -174,7 +194,7 @@ ScreenSpaceShadows::RuntimeReadiness ScreenSpaceShadows::GetRuntimeReadiness(
 		return RuntimeReadiness::NoDirectionalLight;
 
 	if (a_requireCompiledShader &&
-		(!raymarchCS || lastCompiledSampleCount != GetScaledSampleCount())) {
+		(!raymarchCS || lastCompiledSampleCount != GetScaledSampleCount(false))) {
 		return RuntimeReadiness::ShaderUnavailable;
 	}
 
@@ -217,7 +237,7 @@ void ScreenSpaceShadows::DrawShadows()
 
 	// Helper lambda to calculate light projection
 	auto CalculateLightProjection = [&]() -> std::array<float, 4> {
-		auto viewProjMat = globals::game::frameBufferCached.GetCameraViewProj().Transpose();
+		auto viewProjMat = globals::game::frameBufferCached.GetCameraViewProjUnjittered().Transpose();
 		auto projectedLight = DirectX::SimpleMath::Vector4::Transform(lightProjection, viewProjMat);
 		return { projectedLight.x, projectedLight.y, projectedLight.z, projectedLight.w };
 	};
@@ -247,7 +267,13 @@ void ScreenSpaceShadows::DrawShadows()
 	auto buffer = raymarchCB->CB();
 	context->CSSetConstantBuffers(1, 1, &buffer);
 
-	const auto dynamicRes = runtimeContext.dynamicResolution;
+	auto dynamicRes = runtimeContext.dynamicResolution;
+	D3D11_TEXTURE2D_DESC depthDesc{};
+	if (Util::GetTexture2DDesc(depthSRV, depthDesc) && depthDesc.Width && depthDesc.Height) {
+		dynamicRes.x = renderSize.x / static_cast<float>(depthDesc.Width);
+		dynamicRes.y = renderSize.y / static_cast<float>(depthDesc.Height);
+	}
+	const uint dynamicSamples = std::clamp(GetScaledSampleCount(true), 1u, lastCompiledSampleCount);
 
 	// Shared dispatch logic
 	auto Dispatch = [&](ID3D11ComputeShader* shader, const float* lightProj,
@@ -284,6 +310,8 @@ void ScreenSpaceShadows::DrawShadows()
 				data.NearDepthValue = 0.0f;
 
 				data.DynamicRes = dynamicRes;
+				data.DynamicSampleCount = dynamicSamples;
+				data.DynamicReadCount = dynamicSamples / 64u + 2u;
 
 				data.InvDepthTextureSize[0] = invTexSizeX;
 				data.InvDepthTextureSize[1] = invTexSizeY;
@@ -328,6 +356,7 @@ void ScreenSpaceShadows::DrawShadows()
 
 void ScreenSpaceShadows::Prepass()
 {
+	runtimeToggle.Apply(bendSettings.Enable, globals::state);
 	auto* context = globals::d3d::context;
 	if (!context)
 		return;
@@ -391,14 +420,14 @@ const char* ScreenSpaceShadows::GetPerformanceTuningApplicabilityReason() const
 
 void ScreenSpaceShadows::DrawEssentialSettings()
 {
-	bool enabled = bendSettings.Enable != 0;
-	if (ImGui::Checkbox("Enable", &enabled))
-		bendSettings.Enable = enabled ? 1u : 0u;
+	bool enabled = IsEnabledRequested();
+	if (ImGui::Checkbox(T("feature.screen_space_shadows.enable", "Enable"), &enabled))
+		SetEnabled(enabled);
 }
 
 void ScreenSpaceShadows::LoadSettings(json& o_json)
 {
-	bendSettings = o_json;
+	runtimeToggle.ReplaceSettings(bendSettings, o_json.get<BendSettings>(), &BendSettings::Enable);
 	const BendSettings defaults{};
 	bendSettings.Enable = bendSettings.Enable != 0 ? 1u : 0u;
 	bendSettings.SampleCount = std::clamp(bendSettings.SampleCount, 1u, 4u);
@@ -416,11 +445,12 @@ void ScreenSpaceShadows::LoadSettings(json& o_json)
 void ScreenSpaceShadows::SaveSettings(json& o_json)
 {
 	o_json = bendSettings;
+	o_json["Enable"] = IsEnabledRequested() ? 1u : 0u;
 }
 
 void ScreenSpaceShadows::RestoreDefaultSettings()
 {
-	bendSettings = {};
+	runtimeToggle.ReplaceSettings(bendSettings, BendSettings{}, &BendSettings::Enable);
 }
 
 bool ScreenSpaceShadows::HasShaderDefine(RE::BSShader::Type)
@@ -430,11 +460,29 @@ bool ScreenSpaceShadows::HasShaderDefine(RE::BSShader::Type)
 
 void ScreenSpaceShadows::SetupResources()
 {
-	raymarchCB = new ConstantBuffer(ConstantBufferDesc<RaymarchCB>(), "SSS::RaymarchCB");
+	auto device = globals::d3d::device;
+	if (!device)
+		return;
+	static ID3D11Device* shaderDevice = nullptr;
+	if (shaderDevice != device) {
+		ClearShaderCache();
+		shaderDevice = device;
+	}
+
+	delete raymarchCB;
+	raymarchCB = nullptr;
+	raymarchCB = new ConstantBuffer(ConstantBufferDesc<RaymarchCB>(), "ScreenSpaceShadows::RaymarchCB");
+
+
+
+	if (pointBorderSampler) {
+		pointBorderSampler->Release();
+		pointBorderSampler = nullptr;
+	}
+	delete screenSpaceShadowsTexture;
+	screenSpaceShadowsTexture = nullptr;
 
 	{
-		auto device = globals::d3d::device;
-
 		D3D11_SAMPLER_DESC samplerDesc = {};
 		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
 		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_BORDER;
@@ -448,12 +496,25 @@ void ScreenSpaceShadows::SetupResources()
 		samplerDesc.BorderColor[2] = 1.0f;
 		samplerDesc.BorderColor[3] = 1.0f;
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointBorderSampler));
-		Util::SetResourceName(pointBorderSampler, "SSS::PointBorderSampler");
+		Util::SetResourceName(pointBorderSampler, "ScreenSpaceShadows::PointBorderSampler");
 	}
 
 	{
 		auto renderer = globals::game::renderer;
+		if (!renderer)
+			return;
+
+		static bool loggedMissingShadowMask = false;
+		static bool loggedShadowResourceAllocationFailure = false;
 		auto shadowMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK];
+		if (!shadowMask.texture || !shadowMask.SRV) {
+			if (!loggedMissingShadowMask) {
+				logger::warn("[ScreenSpaceShadows] Skipping setup because kSHADOW_MASK is unavailable after render-target recreation.");
+				loggedMissingShadowMask = true;
+			}
+			return;
+		}
+		loggedMissingShadowMask = false;
 
 		D3D11_TEXTURE2D_DESC texDesc{};
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
@@ -471,9 +532,29 @@ void ScreenSpaceShadows::SetupResources()
 			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 }
 		};
-		screenSpaceShadowsTexture = new Texture2D(texDesc, "SSS::ShadowTexture");
-		screenSpaceShadowsTexture->CreateSRV(srvDesc);
-		screenSpaceShadowsTexture->CreateUAV(uavDesc);
+
+		try {
+			auto screenSpaceShadowsReplacement = std::make_unique<Texture2D>(texDesc, "ScreenSpaceShadows::ShadowTexture");
+			screenSpaceShadowsReplacement->CreateSRV(srvDesc);
+			screenSpaceShadowsReplacement->CreateUAV(uavDesc);
+
+
+
+			screenSpaceShadowsTexture = screenSpaceShadowsReplacement.release();
+			loggedShadowResourceAllocationFailure = false;
+		} catch (const std::exception& e) {
+			if (!loggedShadowResourceAllocationFailure) {
+				logger::warn("[ScreenSpaceShadows] Skipping setup because shadow resources could not be allocated after render-target recreation: {}", e.what());
+				loggedShadowResourceAllocationFailure = true;
+			}
+			return;
+		} catch (...) {
+			if (!loggedShadowResourceAllocationFailure) {
+				logger::warn("[ScreenSpaceShadows] Skipping setup because shadow resources could not be allocated after render-target recreation.");
+				loggedShadowResourceAllocationFailure = true;
+			}
+			return;
+		}
 	}
 }
 #undef I18N_KEY_PREFIX

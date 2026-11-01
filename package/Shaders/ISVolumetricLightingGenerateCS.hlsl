@@ -16,8 +16,16 @@ RWTexture3D<float> DensityRW : register(u0);
 
 #	define LinearSampler ShadowmapSampler
 
-#	include "Common/Framebuffer.hlsli"
+#	include "Common/FrameBuffer.hlsli"
 #	include "Common/SharedData.hlsli"
+
+#if defined(TERRAIN_SHADOWS)
+#		include "TerrainShadows/TerrainShadows.hlsli"
+#endif
+
+#if defined(CLOUD_SHADOWS)
+#		include "CloudShadows/CloudShadows.hlsli"
+#endif
 
 #	include "Common/ShadowSampling.hlsli"
 
@@ -25,13 +33,13 @@ cbuffer PerTechnique : register(b0)
 {
 	row_major float4x4 CameraViewProj : packoffset(c0);
 	row_major float4x4 CameraViewProjInverse : packoffset(c4);
-	float4x3 ShadowMapProj[3] : packoffset(c8);
+	float4x3 ShadowMapProj[1][3] : packoffset(c8);
 	float3 EndSplitDistances : packoffset(c17.x);
 	float ShadowMapCount : packoffset(c17.w);
 	float EnableShadowCasting : packoffset(c18);
 	float3 DirLightDirection : packoffset(c19);
 	float3 TextureDimensions : packoffset(c20);
-	float3 WindInput : packoffset(c21);
+	float3 WindInput[1] : packoffset(c21);
 	float InverseDensityScale : packoffset(c21.w);
 	float3 PosAdjust : packoffset(c22);
 	float IterationIndex : packoffset(c22.w);
@@ -53,7 +61,8 @@ cbuffer PerTechnique : register(b0)
 	};
 
 	float3 normalizedCoordinates = float3(dispatchID.xy + 0.5, dispatchID.z - 1.0) * rcp(TextureDimensions.xyz);
-	float3 depthUv = normalizedCoordinates + StepCoefficients[IterationIndex];
+	float2 uv = normalizedCoordinates.xy;
+	float3 depthUv = (normalizedCoordinates) + StepCoefficients[IterationIndex];
 	float depth = InverseRepartitionTex.SampleLevel(InverseRepartitionSampler, depthUv.z, 0);
 	float4 positionCS = float4(2 * depthUv.x - 1, 1 - 2 * depthUv.y, depth, 1);
 
@@ -70,7 +79,7 @@ cbuffer PerTechnique : register(b0)
 		uint cascadeIndex = ShadowMapCount >= 3.0f && shadowMapDepth > EndSplitDistances.y ? 2 : shadowMapDepth > EndSplitDistances.x ? 1 :
 		                                                                                                                                0;
 		float shadowMapThreshold = cascadeIndex == 0 ? 0.01f : 0.0f;
-		float4x3 lightProjectionMatrix = ShadowMapProj[cascadeIndex];
+		float4x3 lightProjectionMatrix = ShadowMapProj[0][cascadeIndex];
 
 		float3 positionLS = mul(transpose(lightProjectionMatrix), float4(positionWS.xyz, 1)).xyz;
 		float shadowMapValue = ShadowmapTex.SampleLevel(ShadowmapSampler, float3(positionLS.xy, cascadeIndex), 0);
@@ -82,20 +91,21 @@ cbuffer PerTechnique : register(b0)
 		}
 	}
 
-	float3 noiseUv = 0.0125 * (InverseDensityScale * (positionWS.xyz + WindInput));
+	float3 noiseUv = 0.0125 * (InverseDensityScale * (positionWS.xyz + WindInput[0]));
 	float noise = NoiseTex.SampleLevel(NoiseSampler, noiseUv, 0);
 	float densityFactor = noise * (1 - 0.75 * smoothstep(0, 1, saturate(2 * positionWS.z / 300)));
 	float densityContribution = lerp(1, densityFactor, DensityContribution);
 
-	float LdotN = dot(normalize(-positionWS.xyz), DirLightDirection);
+	float3 viewDirection = normalize(-positionWS.xyz);
+	float LdotN = dot(viewDirection, DirLightDirection);
 	float phaseFactor = (1 - PhaseScattering * PhaseScattering) * rcp(4 * Math::PI * (1 - LdotN * PhaseScattering));
 	float phaseContribution = lerp(1, phaseFactor, PhaseContribution);
 
 	float shadowContribution = noShadow;
 
-#	if defined(TERRAIN_SHADOWS) || defined(CLOUD_SHADOWS)
+#if (defined(TERRAIN_SHADOWS)) || (defined(CLOUD_SHADOWS))
 	shadowContribution *= sqrt(ShadowSampling::GetWorldShadow(positionWS.xyz, PosAdjust));
-#	endif
+#endif
 
 	float vl = shadowContribution * densityContribution * phaseContribution;
 

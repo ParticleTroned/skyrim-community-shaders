@@ -11,6 +11,14 @@ namespace LocationContext
 	bool HasInteriorCell();
 	bool IsInteriorWithSun();
 
+	/** @brief Reject missing or inconsistent destinations during cell handoffs. */
+	template <class TES, class Cell>
+	bool HasAttachedCell(const TES* tes, const Cell* cell)
+	{
+		return tes && cell && cell->IsAttached() &&
+		       (cell->IsInteriorCell() ? tes->interiorCell == cell : tes->interiorCell == nullptr);
+	}
+
 	constexpr bool AllowsInteriorOnly(bool a_interiorOnly, bool a_inInterior) noexcept
 	{
 		return !a_interiorOnly || a_inInterior;

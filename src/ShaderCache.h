@@ -2,19 +2,34 @@
 
 #include <BS_thread_pool.hpp>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <efsw/efsw.hpp>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <winrt/base.h>
+#include <wrl/client.h>
 
 #include "ShaderCompilationSchedulingPolicy.h"
 #include "Utils/CacheInvalidation.h"
 #include "Utils/ContentHash.h"
+#include "Utils/ShaderAllocation.h"
+#include "Utils/ShaderContentReuse.h"
 #include "Utils/WinApi.h"
 
 using namespace std::chrono;
+
+namespace Util
+{
+	struct StandaloneShaderRequest;
+}
 
 namespace ShaderConstants
 {
@@ -22,8 +37,13 @@ namespace ShaderConstants
 	{
 		static const LightingPS& Get()
 		{
-			static LightingPS instance{};
+			static LightingPS instance = GetFlat();
 			return instance;
+		}
+
+		static LightingPS GetFlat()
+		{
+			return LightingPS{};
 		}
 
 		const int32_t NumLightNumShadowLight = 0;
@@ -76,7 +96,6 @@ namespace ShaderConstants
 		const int32_t LandscapeTexture4GlintParameters = 47;
 		const int32_t LandscapeTexture5GlintParameters = 48;
 		const int32_t LandscapeTexture6GlintParameters = 49;
-
 		const int32_t MaterialObjectRGBScale = 50;  // RGB multipliers for material objects
 
 		const int32_t ShadowSampleParam = -1;
@@ -89,25 +108,30 @@ namespace ShaderConstants
 		const int32_t PreviousWorldMat = -1;
 	};
 
+	/** Reflection indices for grass material constants; geometry indices stay native. */
 	struct GrassPS
 	{
 		static const GrassPS& Get()
 		{
-			static GrassPS instance{};
+			static const GrassPS instance;
 			return instance;
 		}
-
-		const int32_t PBRFlags = 0;
-		const int32_t PBRParams1 = 1;
-		const int32_t PBRParams2 = 2;
+		const int32_t PBRFlags = 15;
+		const int32_t PBRParams1 = 16;
+		const int32_t PBRParams2 = 17;
 	};
 
 	struct EffectPS
 	{
 		static const EffectPS& Get()
 		{
-			static EffectPS instance{};
+			static EffectPS instance = GetFlat();
 			return instance;
+		}
+
+		static EffectPS GetFlat()
+		{
+			return EffectPS{};
 		}
 
 		const int32_t PropertyColor = 0;
@@ -158,6 +182,8 @@ namespace SIE
 		size_t GetId() const;
 		static size_t MakeId(ShaderClass shaderClass, RE::BSShader::Type shaderType, uint32_t descriptor);
 		std::string GetString() const;
+		/** @brief Returns the HLSL source path compiled by this task. */
+		std::wstring GetSourcePath() const;
 
 		/// LPT scheduling score: higher = more expensive = should be dispatched first.
 		/// Based on shader type, class, descriptor complexity, and known heavy defines.
@@ -165,7 +191,9 @@ namespace SIE
 		int GetPriority() const { return cachedPriority; }
 		void SetEnqueuedQpc(int64_t qpc) { enqueuedQpc = qpc; }
 		int64_t GetEnqueuedQpc() const { return enqueuedQpc; }
+		/** @brief Records the compilation batch that owns this task. */
 		void SetGeneration(uint64_t a_generation) { generation = a_generation; }
+		/** @brief Returns the compilation batch that owns this task. */
 		uint64_t GetGeneration() const { return generation; }
 
 		bool operator==(const ShaderCompilationTask& other) const;
@@ -212,8 +240,11 @@ namespace SIE
 
 	class CompilationSet
 	{
+		friend class ShaderCache;
+
 	public:
 		LARGE_INTEGER lastReset;
+		std::atomic<int64_t> lastResetQpc{ 0 };
 		LARGE_INTEGER lastCalculation;
 		std::atomic<int64_t> completionTime;  // When compilation completed (QuadPart equivalent)
 		LARGE_INTEGER frequency;
@@ -223,6 +254,7 @@ namespace SIE
 		{
 			QueryPerformanceFrequency(&frequency);
 			QueryPerformanceCounter(&lastReset);
+			lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
 			QueryPerformanceCounter(&lastCalculation);
 			completionTime.store(0, std::memory_order_relaxed);
 		}
@@ -230,9 +262,27 @@ namespace SIE
 		std::optional<ShaderCompilationTask> WaitTake(std::stop_token stoken);
 		void Add(const ShaderCompilationTask& task);
 		void Complete(const ShaderCompilationTask& task);
-		void MarkPhaseStarted();
+		/** @brief Frees a dispatch slot and wakes WaitTake(). Call for every
+		 *  dispatched task, including stale-generation and stopped tasks. */
+		void ReleaseDispatchSlot();
+		/** @brief Counts a cache hit if it belongs to the active generation. */
+		void IncCacheHit(std::optional<uint64_t> a_taskGeneration);
+		/** @brief Counts a source compile if it belongs to the active generation. */
+		void IncSourceCompile(std::optional<uint64_t> a_taskGeneration);
+		/** @brief Counts shared bytecode reuse only for the active generation. */
+		void IncContentDedupe(std::optional<uint64_t> a_taskGeneration);
+		/** @brief Records verified disk content reuse for the active generation. */
+		void IncContentReuse(bool a_previous, std::optional<uint64_t> a_taskGeneration);
+		/** @brief Latches timing when a current-generation source compile begins. */
+		void MarkPhaseStarted(std::optional<uint64_t> a_taskGeneration);
+		/** @brief Returns whether a task still belongs to the active compilation batch. */
+		bool IsCurrentGeneration(const ShaderCompilationTask& task) const
+		{
+			return task.GetGeneration() == generation.load(std::memory_order_acquire);
+		}
 		void Clear();
-		void BumpGeneration() { generation.fetch_add(1, std::memory_order_release); }
+		/** @brief Invalidates active tasks before cache maps begin clearing. */
+		void BumpGeneration();
 		bool IsInProgress(size_t a_taskId);
 		void Forget(const std::unordered_set<size_t>& a_taskIds);
 		static std::string GetHumanTime(double a_totalMs);
@@ -241,18 +291,22 @@ namespace SIE
 		std::atomic<uint64_t> completedTasks = 0;
 		std::atomic<uint64_t> totalTasks = 0;
 		std::atomic<uint64_t> failedTasks = 0;
+		std::atomic<uint32_t> dispatchedTasksInFlight = 0;  // tasks admitted by WaitTake's throttle
 		std::atomic<uint64_t> cacheHitTasks = 0;            // number of compiles of a previously seen shader combo
 		std::atomic<uint64_t> diskHitTasks = 0;             // tasks resolved from disk cache rather than compiled
-		std::atomic<uint64_t> sourceCompileTasks = 0;       // tasks that reached source compilation after cache lookup
+		std::atomic<uint64_t> sourceCompileTasks = 0;       // actual compiler invocations after cache lookup
+		std::atomic<uint64_t> contentDedupeTasks = 0;       // tasks reusing identical preprocessed bytecode
+		std::atomic<uint64_t> activeReuseTasks = 0;         // content hits in installed packs or active loose cache
+		std::atomic<uint64_t> previousReuseTasks = 0;       // content hits in the complete loose rollback cache
 		std::atomic<uint64_t> diskHitPriorityWeight = 0;    // cumulative priority weight of disk-hit tasks
-		LARGE_INTEGER compilationPhaseStart = { 0 };        // enqueue time of first confirmed non-disk-hit task
+		LARGE_INTEGER compilationPhaseStart = { 0 };        // QPC timestamp when the first real source compile begins
 		std::atomic<bool> compilationPhaseStarted = false;  // set when first actual compilation begins
 		std::atomic<uint64_t> slowTasks = 0;                // shaders taking >= 2s
 		std::atomic<uint64_t> verySlowTasks = 0;            // shaders taking >= 8s
 		std::atomic<uint64_t> totalPriorityWeight = 0;      // sum of (GetPriority()+1) for all queued tasks
 		std::atomic<uint64_t> completedPriorityWeight = 0;  // sum of (GetPriority()+1) for completed/failed tasks
 		std::atomic<uint32_t> heavyTasksInFlight = 0;       // number of dispatched heavy (>= kHeavyPriorityThreshold) tasks still running
-		std::atomic<uint64_t> generation = 0;               // bumped by Clear(); tags tasks so stale workers cannot republish
+		std::atomic<uint64_t> generation = 0;               // incremented by Clear() to invalidate detached workers
 		std::mutex compilationMutex;
 
 		/// Per-task timing record stored for post-mortem analysis and developer UI.
@@ -264,6 +318,8 @@ namespace SIE
 			int priority = 0;               // estimated compile weight (see ComputePriority)
 			int defineCount = 0;            // popcount of descriptor — active define permutations
 			uintmax_t sourceSizeBytes = 0;  // HLSL source file size at compile time
+			uint32_t threadId = 0;          // worker thread id at compile time
+			int64_t startQpc = 0;           // QueryPerformanceCounter ticks at compile start
 		};
 
 		/// On-demand parallelism metrics derived from task timings.
@@ -287,6 +343,12 @@ namespace SIE
 
 		/// Returns a copy of the N records with the highest elapsedMs, sorted descending.
 		std::vector<SlowTaskRecord> GetTopSlowTasks(size_t n = 3) const;
+		/** @brief Returns every task record collected for the current build. */
+		std::vector<SlowTaskRecord> GetAllTaskRecords() const;
+		/** @brief Returns the QPC tick used as the current build generation marker. */
+		int64_t GetLastResetQpc() const { return lastResetQpc.load(std::memory_order_relaxed); }
+		/** @brief Returns QPC ticks per second for task timestamp conversion. */
+		int64_t GetQpcFrequency() const { return frequency.QuadPart; }
 
 		/// Computes parallelism metrics on demand from collected task timings.
 		std::optional<ParallelismStats> GetParallelismStats() const;
@@ -305,6 +367,7 @@ namespace SIE
 		ShaderCompilationTask::Status status;
 		system_clock::time_point compileTime = system_clock::now();
 		bool loadedFromDisk = false;  ///< true when the shader blob was read from the disk cache rather than compiled
+		/** Generation that owns a Pending entry. Completed entries remain valid until cleared. */
 		uint64_t generation = 0;
 	};
 
@@ -341,7 +404,11 @@ namespace SIE
 		inline static bool IsShaderSourceAvailable(const RE::BSShader& shader);
 
 		bool IsCompiling();
+		void TryCompleteStartupCompilationPhase();
 		bool IsEnabled() const;
+		bool IsEnableRequested() const;
+		/** Restores the persisted startup state without scheduling runtime transitions. */
+		void RestoreEnabledSetting(bool value);
 		void SetEnabled(bool value);
 		bool IsAsync() const;
 		void SetAsync(bool value);
@@ -351,28 +418,48 @@ namespace SIE
 
 		bool IsDiskCache() const;
 		void SetDiskCache(bool value);
-		using CacheMismatch = Util::CacheInvalidation::CacheMismatch;
-		std::vector<CacheMismatch> GetCacheMismatches() const;
-		std::vector<CacheMismatch> GetPreviousCacheMismatches() const;
-		bool HasFeatureSetChanges() const { return featureSetChanged.load(std::memory_order_relaxed); }
-		bool HasFeatureSetRevertPending() const { return featureSetRevertPending.load(std::memory_order_relaxed); }
-		bool HasFeatureSetCacheBackup() const { return featureSetCacheBackedUp.load(std::memory_order_relaxed); }
-		bool HasPreviousDiskCache() const { return previousDiskCacheAvailable.load(std::memory_order_relaxed); }
-		bool IsDiskCacheHeld() const { return diskCacheHeld.load(std::memory_order_relaxed); }
-		bool IsDiskCacheActive() const
-		{
-			return isDiskCache.load(std::memory_order_relaxed) &&
-			       !diskCacheHeld.load(std::memory_order_relaxed) &&
-			       !featureSetRevertPending.load(std::memory_order_relaxed);
-		}
-		void AcceptCacheRebuild();
+		/** Reuses verified standalone bytecode, retrying source when device creation rejects a hit.
+		 * Callbacks run synchronously; only accepted bytecode with stable source inputs is persisted. */
+		bool CompileStandaloneShaderCached(
+			const Util::StandaloneShaderRequest& a_request,
+			const std::function<winrt::com_ptr<ID3DBlob>()>& a_compile,
+			const std::function<bool(ID3DBlob*)>& a_createShader);
+		void PersistCompiledShaderBlob(
+			ID3DBlob* a_shaderBlob,
+			bool a_developerMode,
+			const std::wstring& a_diskPath,
+			const std::filesystem::path& a_shaderPath,
+			const Util::ContentHash::Hash128& a_compileStateDigest,
+			const Util::ContentHash::Hash128& a_packCompileStateDigest,
+			const Util::ContentHash::Hash128& a_sourceDigest,
+			uint64_t a_diskCacheGeneration,
+			bool a_flushManifest = false,
+			std::optional<Util::ShaderContentReuse::Identity> a_contentIdentity = std::nullopt);
+		void SetSaveLoadDiskPersistenceBlocked(bool a_blocked);
 		void DeleteDiskCache();
 		void ValidateDiskCache();
 		void CommitFeatureSetChange();
 		bool RestorePreviousDiskCache();
 		void WriteDiskCacheInfo();
-		void WriteDiskCacheInfoWhenReady();
-		void WritePendingDiskCacheInfoIfNeeded();
+
+		using CacheMismatch = Util::CacheInvalidation::CacheMismatch;
+
+		const std::vector<CacheMismatch>& GetCacheMismatches() const { return cacheMismatches; }
+		const std::vector<CacheMismatch>& GetPreviousCacheMismatches() const { return previousCacheMismatches; }
+		bool HasFeatureSetChanges() const { return featureSetChanged; }
+		bool HasFeatureSetRevertPending() const { return featureSetRevertPending.load(std::memory_order_acquire); }
+		bool HasFeatureSetCacheBackup() const { return featureSetCacheBackedUp; }
+		bool HasSelectivelySeededFeatureSetCache() const { return featureSetCacheSelectivelySeeded; }
+		bool HasPreviousDiskCache() const { return previousDiskCacheAvailable; }
+		bool IsDiskCacheHeld() const { return diskCacheHeld.load(std::memory_order_acquire); }
+		bool IsDiskCacheActive() const
+		{
+			return isDiskCache.load(std::memory_order_acquire) &&
+			       !diskCacheHeld.load(std::memory_order_acquire) &&
+			       !featureSetRevertPending.load(std::memory_order_acquire);
+		}
+		void AcceptCacheRebuild();
+
 		bool IsSkipUnchangedShaders() const;
 		void SetSkipUnchangedShaders(bool value);
 		bool UseFileWatcher() const;
@@ -407,7 +494,9 @@ namespace SIE
 
 		void Clear();
 		void Clear(RE::BSShader::Type a_type);
+		/** @brief Requests a full cache clear on the render thread. */
 		void RequestClear();
+		/** @brief Drains a pending full-clear request on the render thread. */
 		void ProcessPendingClear();
 		/**
    		* @brief Clears and marks shaders for recompilation based on the given path.
@@ -431,20 +520,29 @@ namespace SIE
 		*/
 		bool Clear(const std::string& a_path);
 
+		/** @brief Publishes a result unless its task is stale or an eviction consumes it.
+		 *  @return True when a_blob remains usable by the caller. */
 		bool AddCompletedShader(
+			const std::string& key,
 			ShaderClass shaderClass,
 			const RE::BSShader& shader,
 			uint32_t descriptor,
 			ID3DBlob* a_blob,
 			const std::wstring& a_diskPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
+			const Util::ContentHash::Hash128& a_packCompileStateDigest,
+			bool a_developerMode,
 			bool fromDisk = false,
-			std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			std::optional<uint64_t> a_taskGeneration = std::nullopt,
+			std::optional<Util::ContentHash::Hash128> a_sourceDigest = std::nullopt,
+			std::optional<Util::ShaderContentReuse::Identity> a_contentIdentity = std::nullopt);
 
 		enum class ClaimResult
 		{
 			CacheHit,  // Already compiled; use the returned blob
-			Claimed    // Claimed as Pending; caller must compile and call AddCompletedShader
+			Failed,    // Retry only after the entry is invalidated
+			Claimed,   // Claimed as Pending; caller must compile and call AddCompletedShader
+			RejectedStale
 		};
 		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(
 			const std::string& key,
@@ -458,24 +556,56 @@ namespace SIE
 		ID3DBlob* GetCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor);
 		bool IsShaderLoadedFromDisk(const std::string& a_key);
 		ShaderCompilationTask::Status GetShaderStatus(const std::string& a_key);
-		bool IsShaderKeyAbsent(const std::string& a_key);
 		std::string GetShaderStatsString(bool a_timeOnly = false, bool a_elapsedOnly = false);
 
+		/** @brief Warms AO-only shaders and, when requested, their deferred category variants. */
+		void PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories);
+
 		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor);
+		/** Return an existing vertex shader by exact descriptor without compiling or scheduling work. */
+		RE::BSGraphics::VertexShader* GetVertexShaderIfCached(const RE::BSShader& shader, uint32_t descriptor);
+		/** @brief Retain a requested graphics shader under the cache lock, safe against concurrent eviction. */
+		winrt::com_ptr<ID3D11VertexShader> RetainVertexShader(const RE::BSShader& shader, uint32_t descriptor);
+		/** @brief Retain the exact requested pixel variant without deferred category fallback. */
+		winrt::com_ptr<ID3D11PixelShader> RetainPixelShader(const RE::BSShader& shader, uint32_t descriptor);
+		/** @brief Changes when cached graphics resources are removed or replaced, including targeted clears. */
+		uint64_t GetGraphicsShaderRevision() const noexcept { return graphicsShaderRevision.load(std::memory_order_acquire); }
+		/** Reserved pixel descriptor bit for the authored category output layout. */
+		static constexpr uint32_t GetCharacterCategoryFlag(RE::BSShader::Type type)
+		{
+			switch (type) {
+			case RE::BSShader::Type::Lighting:
+				return 1u << 5;
+			case RE::BSShader::Type::Grass:
+			case RE::BSShader::Type::DistantTree:
+			case RE::BSShader::Type::Sky:
+			case RE::BSShader::Type::Effect:
+				return 1u << 9;
+			default:
+				return 0;
+			}
+		}
+
+		/** Cached lookups never schedule compilation; draw lookups permit compatible deferred fallback. */
+		enum class PixelShaderLookup
+		{
+			Compile,
+			Draw,
+			Cached
+		};
+
+		/** Draw lookups may use the other deferred category layout while the exact variant compiles. */
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader& shader,
-			uint32_t descriptor);
+			uint32_t descriptor, PixelShaderLookup a_lookup = PixelShaderLookup::Compile);
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 
 		RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader& shader,
-			uint32_t descriptor,
-			std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader& shader,
-			uint32_t descriptor,
-			std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		RE::BSGraphics::ComputeShader* MakeAndAddComputeShader(const RE::BSShader& shader,
-			uint32_t descriptor,
-			std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
 		static std::string GetDefinesString(const RE::BSShader& shader, uint32_t descriptor);
 
@@ -489,12 +619,40 @@ namespace SIE
 		 * entries whose status is `ShaderCompilationTask::Status::Failed`.
 		 */
 		uint64_t GetCurrentFailedCount();
+		/** @brief Diagnostic details retained for a failed source compilation. */
+		struct CompileFailure
+		{
+			std::string key;
+			std::string path;
+			std::string error;
+			uint64_t epoch = 0;
+			uint32_t frame = 0;
+		};
+		/** @brief Adds a failure to the bounded, thread-safe diagnostic history. */
+		void RecordCompileFailure(std::string a_key, std::string a_path, std::string a_error);
+		/** @brief Returns recent failures from oldest to newest. */
+		std::vector<CompileFailure> GetRecentCompileFailures() const
+		{
+			std::lock_guard lock(compileFailuresMutex);
+			return { recentCompileFailures.begin(), recentCompileFailures.end() };
+		}
 		uint64_t GetTotalTasks();
 		uint64_t GetDiskHitTasks();
 		uint64_t GetSourceCompileTasks();
-		void IncCacheHitTasks();
-		void IncSourceCompileTasks();
-		void MarkCompilationPhaseStarted();
+		/** @brief Returns tasks reusing bytecode from another shader key. */
+		uint64_t GetContentDedupeTasks();
+		/** @brief Returns verified content hits in installed packs or the active loose cache. */
+		uint64_t GetActiveReuseTasks();
+		/** @brief Returns verified content hits in the loose rollback cache. */
+		uint64_t GetPreviousReuseTasks();
+		/** @brief Counts reuse without charging stale tasks to a new batch. */
+		void IncContentReuseTasks(bool a_previous, std::optional<uint64_t> a_taskGeneration = std::nullopt);
+		/** @brief Records shared bytecode reuse for the active generation. */
+		void IncContentDedupeTasks(std::optional<uint64_t> a_taskGeneration = std::nullopt);
+		void IncCacheHitTasks(std::optional<uint64_t> a_taskGeneration = std::nullopt);
+		void IncSourceCompileTasks(std::optional<uint64_t> a_taskGeneration = std::nullopt);
+		/** @brief Marks the start of a real source compilation. */
+		void MarkCompilationPhaseStarted(std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		void ToggleErrorMessages();
 		void DisableShaderBlocking();
 		void IterateShaderBlock(bool a_forward = true);
@@ -507,7 +665,19 @@ namespace SIE
 
 		/// Returns a copy of the top-N slowest task records from the last build, sorted descending.
 		std::vector<CompilationSet::SlowTaskRecord> GetTopSlowTasks(size_t n = 3);
+		/** @brief Returns every task record collected for the current build. */
+		std::vector<CompilationSet::SlowTaskRecord> GetAllTaskRecords();
+		/** @brief Returns the current build's QPC generation marker. */
+		int64_t GetLastResetQpc();
+		/** @brief Returns QPC ticks per second for task timestamp conversion. */
+		int64_t GetQpcFrequency();
 		std::optional<CompilationSet::ParallelismStats> GetParallelismStats();
+
+		/**
+		 * @brief Writes current-build task records in Chrome Trace Event Format.
+		 * @return True on success; false for an empty record set or write failure.
+		 */
+		bool ExportCompileTrace(const std::filesystem::path& a_path);
 
 		/**
 		 * @brief Clears all shaders of a specific type from the shader map.
@@ -538,8 +708,14 @@ namespace SIE
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(Util::GetPerformanceCoreCount()) / 2, 1);
 		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(compilationThreadCount) };
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
-		std::atomic_bool backgroundCompilation{ false };
-		std::atomic_bool menuLoaded{ false };
+		/** @brief Sets compilation mode and wakes the dispatcher; returns the previous mode. */
+		bool SetBackgroundCompilation(bool value);
+		std::atomic<bool> backgroundCompilation = false;
+		std::atomic<bool> menuLoaded = false;
+		// Set only after DataLoaded and the initial compilation batch have both
+		// completed. Keep this distinct from menu/UI lifecycle state so early menu
+		// initialization or background-mode entry cannot raise worker priority.
+		std::atomic<bool> startupCompilationComplete = false;
 
 		enum class LightingShaderTechniques
 		{
@@ -571,10 +747,12 @@ namespace SIE
 			Skinned = 1 << 1,
 			ModelSpaceNormals = 1 << 2,
 			// flags 3 to 8 are unused by vanilla
-			// Community Shaders start
+			// CSX start
 			TruePbr = 1 << 3,
 			Deferred = 1 << 4,
-			// Community Shaders end
+			// Bit 5 belongs to the character-category output layout.
+			LandscapeSeams = 1 << 6,
+			// CSX end
 			Specular = 1 << 9,
 			SoftLighting = 1 << 10,
 			RimLighting = 1 << 11,
@@ -626,7 +804,6 @@ namespace SIE
 		enum class GrassShaderTechniques
 		{
 			RenderDepth = 8,
-			TruePbr = 9,
 		};
 
 		enum class GrassShaderFlags
@@ -730,6 +907,7 @@ namespace SIE
 			LodObject = 1 << 27,
 			LocalMapFogOfWar = 1 << 28,
 			OpaqueEffect = 1 << 29,
+			TruePbr = 1u << 30,
 		};
 
 		// Shader blocking data for developer mode
@@ -770,7 +948,7 @@ namespace SIE
 			SecondWindow
 		};
 
-		// One second at 60 Hz; the timeout also bounds unusually slow frame delivery.
+		// One second at 60 Hz.
 		static constexpr uint32_t kActiveShaderCaptureFrames = 60;
 		static constexpr std::chrono::milliseconds kActiveShaderCaptureTimeout{ 2000 };
 
@@ -787,8 +965,7 @@ namespace SIE
 		HANDLE managementThread = nullptr;
 
 	private:
-		struct hlslRecord;
-
+		/** @brief Returns true when Clear() invalidated an asynchronous task. */
 		bool IsTaskStale(std::optional<uint64_t> a_taskGeneration) const
 		{
 			return a_taskGeneration &&
@@ -796,22 +973,26 @@ namespace SIE
 		}
 
 		void StartActiveShaderCaptureWindow(ActiveShaderCaptureStage a_stage);
+		/** @brief Releases one runtime variant; callers own bytecode, disk and task eviction. */
+		void EvictShaderResources(
+			RE::BSShader::Type a_type,
+			uint32_t a_descriptor,
+			ShaderClass a_shaderClass);
 		void EvictShader(
 			const std::string& a_key,
 			RE::BSShader::Type a_type,
 			uint32_t a_descriptor,
 			ShaderClass a_shaderClass);
 		void DeleteScopedDiskCacheEntries(const std::vector<std::wstring>& a_diskPaths);
-		bool TryDeferEviction(const hlslRecord& a_record);
-		bool ApplyDeferredEviction(const std::string& a_key);
 
 		std::atomic<uint32_t> activeShaderCaptureFramesRemaining{ 0 };
 		ActiveShaderCaptureStage activeShaderCaptureStage = ActiveShaderCaptureStage::Idle;
 		std::chrono::steady_clock::time_point activeShaderCaptureDeadline;
 		bool activeShaderCaptureMenuWasVisible = false;
 		std::atomic<std::thread::id> activeShaderCaptureThread{};
-		ankerl::unordered_dense::map<std::string, ActiveShaderInfo> capturedShaders;
-		std::unordered_set<std::string> clearedThisCaptureCycle;
+		ankerl::unordered_dense::map<size_t, ActiveShaderInfo> capturedShaders;
+		std::unordered_set<size_t> clearedThisCaptureCycle;
+		std::unordered_set<std::string> clearedBytecodeThisCaptureCycle;
 		size_t lastScopedClearCount = 0;
 		double lastScopedClearMs = 0.0;
 
@@ -823,56 +1004,88 @@ namespace SIE
 			SIE::ShaderClass shaderClass;
 			std::wstring diskPath;
 			Util::ContentHash::Hash128 compileStateDigest;
+			Util::ContentHash::Hash128 packCompileStateDigest;
+			bool developerMode = false;
+			std::optional<Util::ContentHash::Hash128> sourceDigest;
+			Microsoft::WRL::ComPtr<ID3DBlob> compiledBlob;
+			std::optional<Util::ShaderContentReuse::Identity> contentIdentity;
 
 			bool operator<(const hlslRecord& other) const
 			{
 				return key < other.key;
 			}
 		};
+		struct DeferredEviction
+		{
+			hlslRecord record;
+			bool waitForTaskCompletion = false;
+			bool applying = false;
+		};
+
+		/** @brief Parks a_record while its shader-map entry is pending. */
+		bool TryDeferEviction(const hlslRecord& a_record);
+		/** @brief Applies a parked eviction when its owning compile may be retired. */
+		bool ApplyDeferredEviction(const std::string& a_key, bool a_taskCompleted = false);
+
+		struct DeferredDiskWrite
+		{
+			Microsoft::WRL::ComPtr<ID3DBlob> shaderBlob;
+			std::wstring diskPath;
+			std::filesystem::path shaderPath;
+			Util::ContentHash::Hash128 compileStateDigest;
+			Util::ContentHash::Hash128 packCompileStateDigest;
+			Util::ContentHash::Hash128 sourceDigest;
+			bool developerMode = false;
+			uint64_t diskCacheGeneration = 0;
+			std::optional<Util::ShaderContentReuse::Identity> contentIdentity;
+		};
 		ShaderCache();
 		void ManageCompilationSet(std::stop_token stoken);
 		void ProcessCompilationSet(std::stop_token stoken, SIE::ShaderCompilationTask task);
-		enum class PreviousCacheInfoValidation
-		{
-			RequireReadableInfo,
-			ValidatedBeforeMove,
-		};
-		bool BackupActiveDiskCache();
-		bool DeleteActiveDiskCache();
+		void ProcessDeferredDiskWrites(std::stop_token stoken);
+		bool BackupActiveDiskCache(const std::vector<std::string>& a_changedDefines);
+		void DeleteActiveDiskCache();
 		void RefreshPreviousDiskCacheInfo();
-		bool SetPreviousCacheRestoreCandidate(std::vector<CacheMismatch> mismatches, PreviousCacheInfoValidation a_infoValidation);
 
 		~ShaderCache();
 
-		template <typename ShaderType>
+		template <typename ShaderType, typename Deleter = std::default_delete<ShaderType>>
 		using ShaderMapArray = std::array<
-			ankerl::unordered_dense::map<uint32_t, std::unique_ptr<ShaderType>>,
+			ankerl::unordered_dense::map<uint32_t, std::unique_ptr<ShaderType, Deleter>>,
 			RE::BSShader::Type::Total>;
 
-		ShaderMapArray<RE::BSGraphics::VertexShader> vertexShaders;
+		ShaderMapArray<RE::BSGraphics::VertexShader,
+			Util::ShaderAllocation::TrailingBytesDeleter<RE::BSGraphics::VertexShader>>
+			vertexShaders;
 		ShaderMapArray<RE::BSGraphics::PixelShader> pixelShaders;
 		ShaderMapArray<RE::BSGraphics::ComputeShader> computeShaders;
 
-		bool isEnabled = true;
+		std::atomic_bool isEnabled{ true };
+		std::atomic_bool enableRequested{ true };
 		std::atomic_bool isDiskCache{ true };
 		std::atomic_bool diskCacheHeld{ false };
-		std::atomic_bool featureSetChanged{ false };
+		bool featureSetChanged = false;
 		std::atomic_bool featureSetRevertPending{ false };
-		std::atomic_bool featureSetCacheBackedUp{ false };
-		std::atomic_bool previousDiskCacheAvailable{ false };
-		std::atomic_bool diskCacheInfoWritePending{ false };
-		mutable std::mutex cacheStateMutex;
+		bool featureSetCacheBackedUp = false;
+		bool featureSetCacheSelectivelySeeded = false;
+		bool previousDiskCacheAvailable = false;
 		std::vector<CacheMismatch> cacheMismatches;
 		std::vector<CacheMismatch> previousCacheMismatches;
+		static constexpr size_t kMaxRecentCompileFailures = 32;
+		mutable std::mutex compileFailuresMutex;
+		std::deque<CompileFailure> recentCompileFailures;
 		std::vector<std::string> heldMismatchDefines;
-		bool isSkipUnchangedShaders = true;  ///< when true, recompile a disk-cached shader only if its source is newer
+		std::atomic<bool> isSkipUnchangedShaders = true;  ///< Permit verified disk hits; false compiles from source while retaining disk writes.
 		bool isAsync = true;
 		bool isDump = false;
 		bool hideError = false;
 		bool useFileWatcher = false;
-		std::atomic<bool> pendingClear{ false };
+		std::atomic_bool pendingClear{ false };
+
+		bool ShouldUseAsyncCompilation() const;
 
 		std::stop_source ssource;
+		std::atomic_uint64_t graphicsShaderRevision{ 0 };
 		std::mutex vertexShadersMutex;
 		std::mutex pixelShadersMutex;
 		std::mutex computeShadersMutex;
@@ -884,8 +1097,21 @@ namespace SIE
 		std::mutex modifiedMapMutex;                                                              // guard for modifiedShaderMap
 		ankerl::unordered_dense::map<std::string, std::set<hlslRecord>> hlslToShaderMap{};        // hashmap linking specific hlsl files to shader keys in shaderMap
 		std::mutex hlslMapMutex;                                                                  // guard for hlslToShaderMap
-		ankerl::unordered_dense::map<std::string, hlslRecord> deferredEvictions;
-		std::atomic<size_t> deferredEvictionCount{ 0 };
+		ankerl::unordered_dense::map<std::string, DeferredEviction> deferredEvictions;            // pending hot-reload evictions; guarded by mapMutex
+		std::atomic<size_t> deferredEvictionCount{ 0 };                                           // lock-free empty fast path
+
+		std::unordered_map<std::string, DeferredDiskWrite> deferredDiskWrites;
+		std::deque<std::string> deferredDiskWriteOrder;
+		static constexpr std::size_t kMaximumDeferredDiskWrites = 8192;
+		static constexpr std::size_t kDeferredDiskWriteBatchSize = 64;
+		std::mutex deferredDiskWritesMutex;
+		std::condition_variable_any deferredDiskWritesCV;
+		std::jthread deferredDiskWriterJthread;
+		std::atomic_bool acceptDeferredDiskWrites{ true };
+		std::atomic_bool deferredDiskWriteLimitReported{ false };
+		std::atomic_bool saveLoadDiskPersistenceBlocked{ false };
+		std::size_t deferredDiskWritesInFlight = 0;  // guarded by deferredDiskWritesMutex
+		bool deferredManifestFlushPending = false;   // guarded by deferredDiskWritesMutex
 
 		// efsw file watcher
 		efsw::FileWatcher* fileWatcher = nullptr;
@@ -917,7 +1143,7 @@ namespace SIE
 		 *
 		 * @return Void. Updates internal state and modifies `clearCache` and `fileDone` by reference.
 		 */
-		void UpdateCache(const std::filesystem::path& filePath, SIE::ShaderCache* cache, bool& clearCache, bool& retFlag);
+		void UpdateCache(const std::filesystem::path& filePath, SIE::ShaderCache* cache, bool& retFlag);
 		void processQueue();
 		void handleFileAction(efsw::WatchID, const std::string& dir, const std::string& filename, efsw::Action action, std::string) override;
 

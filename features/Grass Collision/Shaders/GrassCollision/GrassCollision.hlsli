@@ -12,6 +12,8 @@ namespace GrassCollision
 		uint BoundingBoxCount;
 
 		float CameraHeightDelta;
+		float CollisionStrength;
+		float PreviousCollisionStrength;
 	}
 
 	const static uint TEXTURE_SIZE = 512;
@@ -133,10 +135,15 @@ namespace GrassCollision
 		previousCollision = ComputeNormalFromHeights(previousCollisionCenter, previousCollisionX, previousCollisionY, delta) * avgPreviousAmount;
 	}
 
-	void GetDisplacedPosition(VS_INPUT input, float3 position, out float3 displacement, out float3 previousDisplacement)
+	void GetDisplacedPosition(VS_INPUT input, float3 position, out float3 displacement, out float3 previousDisplacement, float collisionDistance = 2048.0)
 	{
+		if (collisionDistance <= 0.0) {
+			displacement = 0.0;
+			previousDisplacement = 0.0;
+			return;
+		}
 		float3 worldPosition = mul(World, float4(position.xyz, 1.0)).xyz;
-		float nearFactor = smoothstep(2048.0, 0.0, length(worldPosition));
+		float nearFactor = smoothstep(collisionDistance, 0.0, length(worldPosition));
 
 		if (input.Color.w > 0.0 && nearFactor > 0.0) {
 			float3 worldPositionCentre = mul(World, float4(input.InstanceData1.xyz, 1.0)).xyz;
@@ -158,8 +165,12 @@ namespace GrassCollision
 			// Scale grass by wind amount (detect rocks and bottom of some grass)
 			float alpha = saturate(input.Color.w * 10.0);
 
-			displacement = collision * alpha * nearFactor * 0.75;
-			previousDisplacement = previousCollision * alpha * nearFactor * 0.75;
+			displacement = collision * alpha * nearFactor * 0.75 * CollisionStrength;
+			previousDisplacement = previousCollision * alpha * nearFactor * 0.75 * PreviousCollisionStrength;
+			// Strength must not push a vertex below its instance root.
+			float minimumDisplacementZ = -max(0.0, maximumDepth);
+			displacement.z = max(displacement.z, minimumDisplacementZ);
+			previousDisplacement.z = max(previousDisplacement.z, minimumDisplacementZ);
 		} else {
 			displacement = 0.0;
 			previousDisplacement = 0.0;

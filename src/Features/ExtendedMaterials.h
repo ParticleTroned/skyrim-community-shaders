@@ -22,6 +22,9 @@ struct ExtendedMaterials : Feature
 
 	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
+	static constexpr float kMinParallaxStrength = 0.0f;
+	static constexpr float kMaxParallaxStrength = 2.0f;
+
 	struct alignas(16) Settings
 	{
 		uint EnableComplexMaterial = 1;
@@ -33,7 +36,8 @@ struct ExtendedMaterials : Feature
 		uint EnableShadows = 1;
 		uint EnableParallaxWarpingFix = 1;
 
-		uint pad[2]{};
+		float ParallaxStrength = 1.0f;
+		uint pad{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
 
@@ -79,4 +83,5 @@ struct ExtendedMaterials : Feature
 
 private:
 	static void SanitizeSettings(Settings& a_settings);
+	void DrawParallaxStrength();
 };

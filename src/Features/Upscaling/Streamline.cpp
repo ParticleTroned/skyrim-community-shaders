@@ -21,7 +21,12 @@
 #include "../../Util.h"
 #include "../Upscaling.h"
 #include "DX12SwapChain.h"
+#include "CameraReprojection.h"
+#include "NeuralRendering/MonoRenderer.h"
+#include <bit>
 #include "ReflexPolicy.h"
+#include "NvidiaBoundedLog.h"
+#include "Utils/ComIdentity.h"
 
 namespace
 {
@@ -72,6 +77,18 @@ namespace
 			stl::utf16_to_utf8(a_path.wstring()).value_or("<unknown>"),
 			a_error);
 		return nullptr;
+	}
+
+	bool InvokeStreamlineShutdownProtected(PFun_slShutdown* shutdown, sl::Result& result)
+	{
+		if (!shutdown) return false;
+#ifdef _MSC_VER
+		__try {
+#endif
+			result = shutdown(); return true;
+#ifdef _MSC_VER
+		} __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+#endif
 	}
 
 	bool IsHDRDLSSInputFormat(DXGI_FORMAT a_format)
@@ -165,6 +182,10 @@ namespace
 
 void LoggingCallback(sl::LogType type, const char* msg)
 {
+	std::array<char, 4096> bounded{};
+	const auto copied = CSX::NvidiaBoundedLog::Copy(msg, bounded.data(), bounded.size());
+	if (copied == CSX::NvidiaBoundedLog::CopyResult::Unreadable) return;
+	msg = bounded.data();
 	// Remove trailing newlines from the raw message
 	std::string rawMsg(msg);
 	while (!rawMsg.empty() && (rawMsg.back() == '\n' || rawMsg.back() == '\r'))
@@ -267,15 +288,28 @@ void Streamline::LoadInterposer()
 
 	sl::Preferences pref{};
 
-	const sl::Feature dx11Features[] = { sl::kFeatureDLSS, sl::kFeatureReflex, sl::kFeaturePCL };
-	const sl::Feature dx12Features[] = { sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL };
+	const auto available = [&](const wchar_t* name, bool signedPlugin) {
+		const auto path = pluginDirAbsolute / name;
+		std::error_code error;
+		const bool valid = std::filesystem::is_regular_file(path, error) && !error &&
+			(!signedPlugin || sl::security::verifyEmbeddedSignature(path.c_str()));
+		if (!valid) logger::warn("[Streamline] Optional component unavailable or invalid: {}", stl::utf16_to_utf8(name).value_or("component"));
+		return valid;
+	};
+	if (!available(L"sl.common.dll", true)) return;
+	std::vector<sl::Feature> requestedFeatures;
 	if (IsDLSSGInstance()) {
-		pref.featuresToLoad = dx12Features;
-		pref.numFeaturesToLoad = _countof(dx12Features);
+		if (!available(L"sl.dlss_g.dll", true) || !available(L"nvngx_dlssg.dll", false) ||
+			!available(L"sl.reflex.dll", true) || !available(L"sl.pcl.dll", true)) return;
+		requestedFeatures = { sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL };
 	} else {
-		pref.featuresToLoad = dx11Features;
-		pref.numFeaturesToLoad = _countof(dx11Features);
+		if (available(L"sl.dlss.dll", true) && available(L"nvngx_dlss.dll", false)) requestedFeatures.push_back(sl::kFeatureDLSS);
+		if (available(L"sl.reflex.dll", true)) requestedFeatures.push_back(sl::kFeatureReflex);
+		if (available(L"sl.pcl.dll", true)) requestedFeatures.push_back(sl::kFeaturePCL);
 	}
+	if (requestedFeatures.empty()) return;
+	pref.featuresToLoad = requestedFeatures.data();
+	pref.numFeaturesToLoad = static_cast<uint32_t>(requestedFeatures.size());
 
 	// Set log level from settings
 	switch (globals::features::upscaling.settings.streamlineLogLevel) {
@@ -400,7 +434,12 @@ bool Streamline::Shutdown()
 	}
 	if (!slShutdown)
 		return false;
-	const sl::Result result = slShutdown();
+	sl::Result result = sl::Result::eErrorNotInitialized;
+	bool returned = false;
+	try { returned = InvokeStreamlineShutdownProtected(slShutdown, result); }
+	catch (const std::exception& error) { logger::warn("[Streamline] Shutdown raised an exception: {}", error.what()); }
+	catch (...) { logger::warn("[Streamline] Shutdown raised an unknown exception"); }
+	if (!returned) return false;
 	const bool shutdownComplete =
 		result == sl::Result::eOk ||
 		result == sl::Result::eErrorNotInitialized ||
@@ -414,6 +453,8 @@ bool Streamline::Shutdown()
 	}
 
 	initialized = false;
+	boundDeviceIdentity = nullptr;
+	deviceBindingAccepted = false;
 	featureDLSS = false;
 	featureDLSSG = false;
 	dlssgResources.OnShutdownSucceeded();
@@ -676,14 +717,22 @@ bool Streamline::SetD3DDevice(void* a_device)
 	if (!initialized || !slSetD3DDevice || !a_device)
 		return false;
 
+	winrt::com_ptr<IUnknown> identity;
+	if (FAILED(static_cast<IUnknown*>(a_device)->QueryInterface(IID_PPV_ARGS(identity.put())))) return false;
+	if (deviceBindingAccepted && Util::SameIdentity(boundDeviceIdentity.get(), identity.get())) return true;
+	deviceBindingAccepted = false;
 	const sl::Result result = slSetD3DDevice(a_device);
 	if (result != sl::Result::eOk) {
 		logger::error(
 			"[Streamline {}] slSetD3DDevice failed: {}",
 			IsDLSSGInstance() ? "DX12" : "DX11",
 			magic_enum::enum_name(result));
+		featureDLSS = featureDLSSG = featureReflex = featurePCL = false;
 		return false;
 	}
+	boundDeviceIdentity = std::move(identity);
+	deviceBindingAccepted = true;
+	InvalidateDLSSOptionsCache(); reflexOptionsCache = {}; ResetFrameTracking();
 	return true;
 }
 
@@ -746,6 +795,9 @@ bool Streamline::EnsureFrameToken()
 
 	const uint32_t currentFrame = globals::state->frameCount;
 	const std::lock_guard lock(frameTokenMutex);
+	if (frameTokenOrder && currentFrame != *frameTokenOrder &&
+		*frameTokenOrder - currentFrame < 0x80000000u)
+		return false;
 	for (const auto& slot : frameTokens) {
 		if (slot.Matches(currentFrame)) {
 			latestFrameTokenFrame = currentFrame;
@@ -761,8 +813,8 @@ bool Streamline::EnsureFrameToken()
 			latestFrameTokenFrame = UINT32_MAX;
 		return false;
 	}
-	if (!token) {
-		logger::error("[Streamline] Frame token request succeeded without a token");
+	if (!token || requestedFrame != currentFrame || static_cast<uint32_t>(*token) != currentFrame) {
+		logger::error("[Streamline] Frame token identity does not match the requested frame");
 		if (latestFrameTokenFrame == currentFrame)
 			latestFrameTokenFrame = UINT32_MAX;
 		return false;
@@ -770,6 +822,7 @@ bool Streamline::EnsureFrameToken()
 	frameTokens[nextFrameTokenSlot] = { token, currentFrame };
 	nextFrameTokenSlot = (nextFrameTokenSlot + 1) % frameTokens.size();
 	latestFrameTokenFrame = currentFrame;
+	frameTokenOrder = currentFrame;
 	return true;
 }
 
@@ -825,19 +878,26 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport)
 	slConstants.cameraNear = *globals::game::cameraNear;
 	slConstants.cameraFar = *globals::game::cameraFar;
 
-	auto viewMatrix = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
-	auto cameraViewToClip = globals::game::frameBufferCached.GetCameraProjUnjittered().Transpose();
-
+	const auto viewMatrix = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
+	const auto& cameraPosition = globals::game::frameBufferCached.GetCameraPosAdjust();
+	const auto& previousCameraPosition = globals::game::frameBufferCached.GetCameraPreviousPosAdjust();
+	const auto matrices = UpscalingCamera::BuildReprojection(
+		viewMatrix,
+		globals::game::frameBufferCached.GetCameraViewProjUnjittered().Transpose(),
+		globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered().Transpose(),
+		float3(cameraPosition.x - previousCameraPosition.x,
+			cameraPosition.y - previousCameraPosition.y, cameraPosition.z - previousCameraPosition.z));
 	slConstants.cameraMotionIncluded = sl::Boolean::eTrue;
 	slConstants.cameraPinholeOffset = { 0.f, 0.f };
 	slConstants.cameraRight = { viewMatrix._11, viewMatrix._12, viewMatrix._13 };
 	slConstants.cameraUp = { viewMatrix._21, viewMatrix._22, viewMatrix._23 };
 	slConstants.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
-	slConstants.cameraPos = *(sl::float3*)&globals::game::frameBufferCached.GetCameraPosAdjust();
-	slConstants.cameraViewToClip = *(sl::float4x4*)&cameraViewToClip;
+	slConstants.cameraPos = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
+	slConstants.cameraViewToClip = std::bit_cast<sl::float4x4>(matrices.cameraViewToClip);
+	slConstants.clipToCameraView = std::bit_cast<sl::float4x4>(matrices.clipToCameraView);
+	slConstants.clipToPrevClip = std::bit_cast<sl::float4x4>(matrices.clipToPrevClip);
+	slConstants.prevClipToClip = std::bit_cast<sl::float4x4>(matrices.prevClipToClip);
 	slConstants.depthInverted = sl::Boolean::eFalse;
-
-	recalculateCameraMatrices(slConstants);
 
 	auto& upscaling = globals::features::upscaling;
 	upscaling.PrepareHistoryResetForCurrentFrame();
@@ -1103,7 +1163,11 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp,
 	if (state && state->frameAnnotations)
 		state->EndPerfEvent();
 
-	if (evalResult != sl::Result::eOk) {
+	if (evalResult == sl::Result::eWarnOutOfVRAM)
+		NeuralRendering::MonoRenderer::Instance().ReportDlssMemoryPressure();
+	if (evalResult == sl::Result::eWarnOutOfVRAM && dlssBudgetWarning.ShouldLog(currentFrame))
+		logger::warn("[Streamline] DLSS completed with a memory-budget warning; retaining the valid output");
+	if (!DLSSResultPolicy::IsEvaluationSuccessful(evalResult)) {
 		static sl::ViewportHandle lastLoggedEvalErrorViewport{};
 		static sl::Result lastLoggedEvalErrorResult{};
 		if (lastLoggedEvalErrorViewport != vp || lastLoggedEvalErrorResult != evalResult) {
@@ -1130,7 +1194,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp,
 		}
 	}
 
-	return evalResult == sl::Result::eOk;
+	return DLSSResultPolicy::IsEvaluationSuccessful(evalResult);
 }
 
 bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)

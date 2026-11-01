@@ -37,6 +37,7 @@ struct LinearLighting : Feature
 		float effectGamma = 1.4f;
 		float effectAlphaGamma = 1.55f;
 		float skyGamma = 1.8f;
+		float cloudGamma = 1.8f;
 		float waterGamma = 1.8f;
 		float vlGamma = 1.8f;
 
@@ -87,7 +88,8 @@ struct LinearLighting : Feature
 		float deferredEffectMult;
 		float otherEffectMult;
 		uint enableAdaptiveBrightnessColorAdjustments;
-		uint pad0[4];
+		float cloudGamma;
+		uint pad0[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 

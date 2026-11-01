@@ -11,6 +11,14 @@ struct Feature;
 class FeatureListRenderer
 {
 public:
+	static std::vector<Feature*> GetMenuFeatures();
+	static void SetSidebarVisible(bool visible);
+	static bool IsSidebarVisible();
+	static void ResetSidebarVisibility();
+	static void ResetLayout();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	static std::string GetBuiltInPageMenuEntryId(const std::string& page);
+#endif
 	struct BuiltInMenu
 	{
 		std::string name;
@@ -64,7 +72,7 @@ private:
 		static bool IsFeatureInstalled(const std::string& featureName);
 		void RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded, bool sceneControlled);
 		void RenderFeatureSettings(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage, bool sceneControlled);
-		static void RenderRestoreDefaultsButton(Feature* feat, bool isDisabled, bool isLoaded);
+		static void RenderRestoreDefaultsButton(Feature* feat, bool isDisabled, bool isLoaded, float availableWidth);
 		void RenderReactiveConstraintWarningDialog();
 	};
 

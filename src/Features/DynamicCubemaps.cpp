@@ -1,14 +1,16 @@
+#include "I18n/I18n.h"
 #include "DynamicCubemaps.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 
-#include "I18n/I18n.h"
+#include "GpuPass.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Util.h"
 #include "Utils/D3D.h"
-
-#define I18N_KEY_PREFIX "feature.dynamic_cubemaps."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DynamicCubemaps::Settings,
@@ -18,7 +20,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 uint32_t DynamicCubemaps::SanitizeCubemapResolution(uint32_t a_resolution)
 {
-	return a_resolution == kPerformanceCubemapResolution ? kPerformanceCubemapResolution : kQualityCubemapResolution;
+	return a_resolution == kQualityCubemapResolution || a_resolution == kPerformanceCubemapResolution ? a_resolution : Settings{}.CubemapResolution;
 }
 
 void DynamicCubemaps::RefreshActiveCubemapResolution()
@@ -30,13 +32,35 @@ void DynamicCubemaps::RefreshActiveCubemapResolution()
 	}
 }
 
+bool DynamicCubemaps::SetCubemapResolution(uint32_t a_resolution)
+{
+	if (a_resolution != kPerformanceCubemapResolution && a_resolution != kQualityCubemapResolution)
+		return false;
+
+	settings.CubemapResolution = a_resolution;
+	RefreshActiveCubemapResolution();
+	return true;
+}
+
 uint32_t DynamicCubemaps::GetCubemapResolutionForResourceCreation()
 {
 	if (!cubemapResolutionLocked) {
-		logger::info("Using {}x{} dynamic cubemap reflections with {} mip levels", activeCubemapResolution, activeCubemapResolution, activeCubemapMipLevels);
+		logger::info(
+			"Using {}x{} dynamic cubemap reflections with {} mip levels",
+			activeCubemapResolution,
+			activeCubemapResolution,
+			activeCubemapMipLevels);
 	}
 	cubemapResolutionLocked = true;
 	return activeCubemapResolution;
+}
+
+namespace
+{
+	RE::NiPoint3 GetCubemapCaptureAnchorPosition()
+	{
+		return Util::GetEyePosition();
+	}
 }
 
 std::vector<std::pair<std::string_view, std::string_view>> DynamicCubemaps::GetShaderDefineOptions()
@@ -51,52 +75,48 @@ std::vector<std::pair<std::string_view, std::string_view>> DynamicCubemaps::GetS
 
 void DynamicCubemaps::DrawSettings()
 {
-	const char* resolutionPreview = settings.CubemapResolution == kPerformanceCubemapResolution ?
-	                                    T(TKEY("resolution_performance"), "128 x 128 (Performance)") :
-	                                    T(TKEY("resolution_quality"), "256 x 256 (Quality)");
-	if (ImGui::BeginCombo(T(TKEY("reflection_resolution"), "Reflection Resolution"), resolutionPreview)) {
-		const bool performanceSelected = settings.CubemapResolution == kPerformanceCubemapResolution;
-		if (ImGui::Selectable(T(TKEY("resolution_performance"), "128 x 128 (Performance)"), performanceSelected)) {
-			settings.CubemapResolution = kPerformanceCubemapResolution;
-		}
-		if (performanceSelected) {
-			ImGui::SetItemDefaultFocus();
-		}
+	MenuUI::SettingsPage page("DynamicCubemaps", {
+													 { "quality", T("feature.dynamic_cubemaps.quality", "Quality"), T("feature.dynamic_cubemaps.choose_reflection_resolution_first", "Choose reflection resolution first."), T("feature.dynamic_cubemaps.reflection_resolution_and_cost", "Reflection resolution and cost"), true, true, T("feature.dynamic_cubemaps.choose_reflection_quality", "Choose reflection quality") },
+													 { "reflections", T("feature.dynamic_cubemaps.reflections", "Reflections"), T("feature.dynamic_cubemaps.choose_nearby_reflection_detail_and_quality", "Choose nearby reflection detail and quality."), T("feature.dynamic_cubemaps.nearby_water_reflections", "Nearby water reflections"), true, true, nullptr },
+													 { "environment", T("feature.dynamic_cubemaps.authoring", "Authoring"), T("feature.dynamic_cubemaps.create_and_export_a_reflection_texture", "Create and export a reflection texture."), T("feature.dynamic_cubemaps.cubemap_creation_and_export", "Cubemap creation and export"), true, true, T("feature.dynamic_cubemaps.refine_updates_and_authoring", "Refine updates and authoring") },
+												 });
 
-		const bool qualitySelected = settings.CubemapResolution == kQualityCubemapResolution;
-		if (ImGui::Selectable(T(TKEY("resolution_quality"), "256 x 256 (Quality)"), qualitySelected)) {
-			settings.CubemapResolution = kQualityCubemapResolution;
+	if (page.Is("quality")) {
+		const std::array<MenuUI::Choice, 2> choices{ { { "performance", T("feature.dynamic_cubemaps.performance", "Performance"), T("feature.dynamic_cubemaps.128_x_128_reflections", "128 x 128 reflections"), T("feature.dynamic_cubemaps.lower_reflection_cost_and_detail", "Lower reflection cost and detail.") },
+			{ "quality", T("feature.dynamic_cubemaps.quality", "Quality"), T("feature.dynamic_cubemaps.256_x_256_reflections", "256 x 256 reflections"), T("feature.dynamic_cubemaps.more_reflection_detail_at_higher_cost", "More reflection detail at higher cost.") } } };
+		const int choice = MenuUI::ChoiceCards("Reflection resolution", settings.CubemapResolution == kPerformanceCubemapResolution ? 0 : 1, choices);
+		if (choice >= 0)
+			SetCubemapResolution(choice == 0 ? kPerformanceCubemapResolution : kQualityCubemapResolution);
+		if (IsCubemapResolutionRestartRequired()) {
+			Util::Text::WrappedWarning(
+				T("feature.dynamic_cubemaps.resolution_restart_required", "Restart the game to apply the new reflection resolution. The current session remains at %u x %u."),
+				activeCubemapResolution,
+				activeCubemapResolution);
 		}
-		if (qualitySelected) {
-			ImGui::SetItemDefaultFocus();
+	}
+	if (page.Is("reflections")) {
+		bool enabledSSR = settings.EnabledSSR != 0;
+		if (Util::Widgets::Checkbox(T("feature.dynamic_cubemaps.enable_screen_space_reflections", "Enable Screen Space Reflections"), &enabledSSR)) {
+			settings.EnabledSSR = enabledSSR ? 1u : 0u;
+			recompileFlag = true;
 		}
-		ImGui::EndCombo();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextWrapped("%s", T(TKEY("reflection_resolution_tooltip"), "Controls dynamic reflection quality and cost. Use 128 x 128 for performance or 256 x 256 for quality."));
-	}
-	if (settings.CubemapResolution != activeCubemapResolution) {
-		Util::Text::WrappedWarning(
-			T(TKEY("resolution_restart_required"), "Restart the game to apply the new reflection resolution. The current session remains at %u x %u."),
-			activeCubemapResolution,
-			activeCubemapResolution);
-	}
-
-	if (ImGui::TreeNodeEx(T(TKEY("screen_space_reflections"), "Screen Space Reflections"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		recompileFlag |= ImGui::Checkbox("Enable", reinterpret_cast<bool*>(&settings.EnabledSSR));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("enable_ssr_tooltip"), "Enable Screen Space Reflections on Water"));
+			ImGui::Text(T("feature.dynamic_cubemaps.enable_ssr_tooltip", "Enable Screen Space Reflections on Water"));
+
 		}
-		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx(T(TKEY("dynamic_cubemap_creator"), "Dynamic Cubemap Creator"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Text("%s", T(TKEY("creator_info"), "You must enable creator mode by adding the shader define CREATOR"));
-		ImGui::Checkbox(T(TKEY("enable_creator"), "Enable Creator"), reinterpret_cast<bool*>(&settings.EnabledCreator));
+	if (page.Is("environment")) {
+		static std::string exportMessage;
+		static bool exportFailed = false;
+		ImGui::Text(T("feature.dynamic_cubemaps.creator_info", "You must enable creator mode by adding the shader define CREATOR"));
+		bool enabledCreator = settings.EnabledCreator != 0;
+		if (Util::Widgets::Checkbox(T("feature.dynamic_cubemaps.enable_creator", "Enable Creator"), &enabledCreator))
+			settings.EnabledCreator = enabledCreator ? 1u : 0u;
 		if (settings.EnabledCreator) {
-			ImGui::ColorEdit3(T(TKEY("color"), "Color"), reinterpret_cast<float*>(&settings.CubemapColor));
-			ImGui::SliderFloat(T(TKEY("roughness"), "Roughness"), &settings.CubemapColor.w, 0.0f, 1.0f, "%.2f");
-			if (ImGui::Button(T(TKEY("export"), "Export"))) {
+			Util::Widgets::ColorEdit3(T("feature.dynamic_cubemaps.color", "Color"), reinterpret_cast<float*>(&settings.CubemapColor));
+			Util::Widgets::SliderFloat(T("feature.dynamic_cubemaps.roughness", "Roughness"), &settings.CubemapColor.w, 0.0f, 1.0f, "%.2f");
+			if (ImGui::Button(T("feature.dynamic_cubemaps.export", "Export"))) {
 				auto device = globals::d3d::device;
 				auto context = globals::d3d::context;
 
@@ -142,6 +162,7 @@ void DynamicCubemaps::DrawSettings()
 
 				try {
 					DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, subresourceData, tempTexture.put()));
+					Util::SetResourceName(tempTexture.get(), "DynamicCubemaps::CreatorExport");
 					DX::ThrowIfFailed(CaptureTexture(device, context, tempTexture.get(), image));
 
 					if (std::filesystem::create_directories(defaultDynamicCubeMapSavePath)) {
@@ -154,38 +175,45 @@ void DynamicCubemaps::DrawSettings()
 
 					if (std::filesystem::exists(DynamicCubeMapSavePath)) {
 						logger::info("DynamicCubeMap Creator file for {} already exists, skipping.", filename.string());
+						exportMessage = std::format("Already exists: {}", DynamicCubeMapSavePath.string());
+						exportFailed = false;
 					} else {
 						DX::ThrowIfFailed(SaveToDDSFile(image.GetImages(), image.GetImageCount(), image.GetMetadata(), DirectX::DDS_FLAGS::DDS_FLAGS_NONE, DynamicCubeMapSavePath.c_str()));
 						logger::info("DynamicCubeMap Creator file for {} written", filename.string());
+						exportMessage = std::format("Saved: {}", DynamicCubeMapSavePath.string());
+						exportFailed = false;
 					}
 
 				} catch (const std::exception& e) {
 					logger::error("Failed in DynamicCubeMap Creator file: {} {}", defaultDynamicCubeMapSavePath, e.what());
+					exportMessage = std::format("Cubemap export failed: {}", e.what());
+					exportFailed = true;
 				}
 
 				image.Release();
 			}
 		}
-		ImGui::TreePop();
+		if (!exportMessage.empty()) {
+			if (exportFailed)
+				Util::Text::WrappedError("%s", exportMessage.c_str());
+			else
+				MenuUI::DetailText(exportMessage.c_str());
+		}
 	}
-}
 
-void DynamicCubemaps::DrawEssentialSettings()
-{
-	bool enabled = settings.EnabledSSR != 0;
-	if (ImGui::Checkbox("Enable", &enabled)) {
-		settings.EnabledSSR = enabled ? 1u : 0u;
-		recompileFlag = true;
-	}
 }
 
 void DynamicCubemaps::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	if (settings.CubemapResolution != kPerformanceCubemapResolution && settings.CubemapResolution != kQualityCubemapResolution) {
-		logger::warn("Unsupported dynamic cubemap resolution {}; using {}", settings.CubemapResolution, kQualityCubemapResolution);
+		logger::warn(
+			"Unsupported dynamic cubemap resolution {}; using {}",
+			settings.CubemapResolution,
+			Settings{}.CubemapResolution);
 	}
 	RefreshActiveCubemapResolution();
+
 	recompileFlag = true;
 }
 
@@ -194,21 +222,28 @@ void DynamicCubemaps::SaveSettings(json& o_json)
 	o_json = settings;
 }
 
+
+
 void DynamicCubemaps::RestoreDefaultSettings()
 {
 	settings = {};
 	RefreshActiveCubemapResolution();
+
 	recompileFlag = true;
+}
+
+bool DynamicCubemaps::IsSSRRuntimeActive() const
+{
+	return loaded && settings.EnabledSSR != 0;
 }
 
 void DynamicCubemaps::DataLoaded()
 {
+
 	MenuOpenCloseEventHandler::Register();
 }
 
-void DynamicCubemaps::PostPostLoad()
-{
-}
+
 
 RE::BSEventNotifyControl MenuOpenCloseEventHandler::ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
@@ -242,6 +277,11 @@ bool MenuOpenCloseEventHandler::Register()
 
 void DynamicCubemaps::ClearShaderCache()
 {
+	resetCapture[0] = resetCapture[1] = true;
+	cubemapValid[0] = cubemapValid[1] = false;
+	nextTask = NextTask::kCapture;
+	detectCaptureLightingCS.Reset();
+	detectCaptureLightingReflectionsCS.Reset();
 	updateCubemapCS.Reset();
 	updateCubemapReflectionsCS.Reset();
 	updateCubemapFakeReflectionsCS.Reset();
@@ -252,128 +292,156 @@ void DynamicCubemaps::ClearShaderCache()
 	bc6hEncodeCS.Reset();
 }
 
+ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderDetectLighting(bool a_reflections)
+{
+	if (a_reflections && !fakeReflections)
+		return detectCaptureLightingReflectionsCS.Get(
+			L"Data\\Shaders\\DynamicCubemaps\\DetectCaptureLightingCS.hlsl", { { "REFLECTIONS", "" } }, "cs_5_0", "main",
+			"DynamicCubemaps::DetectCaptureLightingReflectionsCS");
+	return detectCaptureLightingCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\DetectCaptureLightingCS.hlsl", {}, "cs_5_0", "main",
+		"DynamicCubemaps::DetectCaptureLightingCS");
+}
+
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdate()
 {
-	return updateCubemapCS.Get(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", {}, "cs_5_0");
+	return updateCubemapCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", {}, "cs_5_0", "main",
+		"DynamicCubemaps::UpdateCubemapCS");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdateReflections()
 {
-	return updateCubemapReflectionsCS.Get(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", { { "REFLECTIONS", "" } }, "cs_5_0");
+	return updateCubemapReflectionsCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl",
+		{ { "REFLECTIONS", "" } }, "cs_5_0", "main",
+		"DynamicCubemaps::UpdateCubemapReflectionsCS");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdateFakeReflections()
 {
-	return updateCubemapFakeReflectionsCS.Get(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", { { "FAKEREFLECTIONS", "" } }, "cs_5_0");
+	return updateCubemapFakeReflectionsCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl",
+		{ { "FAKEREFLECTIONS", "" } }, "cs_5_0", "main",
+		"DynamicCubemaps::UpdateCubemapFakeReflectionsCS");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrence()
 {
-	return inferCubemapCS.Get(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", {}, "cs_5_0");
+	return inferCubemapCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", {}, "cs_5_0", "main",
+		"DynamicCubemaps::InferCubemapCS");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrenceReflections()
 {
-	return inferCubemapReflectionsCS.Get(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", { { "REFLECTIONS", "" } }, "cs_5_0");
+	return inferCubemapReflectionsCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl",
+		{ { "REFLECTIONS", "" } }, "cs_5_0", "main",
+		"DynamicCubemaps::InferCubemapReflectionsCS");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrenceFakeReflections()
 {
-	return inferCubemapFakeReflectionsCS.Get(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", { { "FAKEREFLECTIONS", "" } }, "cs_5_0");
+	return inferCubemapFakeReflectionsCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl",
+		{ { "FAKEREFLECTIONS", "" } }, "cs_5_0", "main",
+		"DynamicCubemaps::InferCubemapFakeReflectionsCS");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderSpecularIrradiance()
 {
-	return specularIrradianceCS.Get(L"Data\\Shaders\\DynamicCubemaps\\SpecularIrradianceCS.hlsl", {}, "cs_5_0");
+	return specularIrradianceCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\SpecularIrradianceCS.hlsl", {}, "cs_5_0", "main",
+		"DynamicCubemaps::SpecularIrradianceCS");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderBC6HEncode()
 {
-	return bc6hEncodeCS.Get(L"Data\\Shaders\\DynamicCubemaps\\BC6HEncodeCS.hlsl", {}, "cs_5_0");
+	return bc6hEncodeCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\BC6HEncodeCS.hlsl", {}, "cs_5_0", "main",
+		"DynamicCubemaps::BC6HEncodeCS");
 }
 
 bool DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 {
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
+	auto* detector = GetComputeShaderDetectLighting(a_reflections);
+	auto* shader = a_reflections ?
+	                   (fakeReflections ? GetComputeShaderUpdateFakeReflections() : GetComputeShaderUpdateReflections()) :
+	                   GetComputeShaderUpdate();
+	if (!shader || !detector || !captureLightingState || !updateCubemapCB || !context || !renderer)
+		return false;
 
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (!depth.depthSRV || !main.SRV)
+		return false;
 
-	ID3D11ShaderResourceView* srvs[2] = { depth.depthSRV, main.SRV };
-	context->CSSetShaderResources(0, 2, srvs);
-
-	uint index = a_reflections ? 1 : 0;
-
-	ID3D11UnorderedAccessView* uavs[3];
-	if (a_reflections) {
-		uavs[0] = envCaptureReflectionsTexture->uav.get();
-		uavs[1] = envCaptureRawReflectionsTexture->uav.get();
-		uavs[2] = envCapturePositionReflectionsTexture->uav.get();
-	} else {
-		uavs[0] = envCaptureTexture->uav.get();
-		uavs[1] = envCaptureRawTexture->uav.get();
-		uavs[2] = envCapturePositionTexture->uav.get();
-	}
-
-	if (resetCapture[index]) {
-		float clearColor[4]{ 0, 0, 0, 0 };
-		context->ClearUnorderedAccessViewFloat(uavs[0], clearColor);
-		context->ClearUnorderedAccessViewFloat(uavs[1], clearColor);
-		context->ClearUnorderedAccessViewFloat(uavs[2], clearColor);
-		resetCapture[index] = false;
-	}
-
-	context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
-
+	const uint index = a_reflections ? 1 : 0;
+	const auto captureAnchor = GetCubemapCaptureAnchorPosition();
+	const float3 currentCaptureAnchor{ captureAnchor.x, captureAnchor.y, captureAnchor.z };
+	const float captureTime = globals::state->timer;
 	UpdateCubemapCB updateData{};
-
-	static float3 cameraPreviousPosAdjust[2] = { { 0, 0, 0 }, { 0, 0, 0 } };
-	updateData.CameraPreviousPosAdjust = cameraPreviousPosAdjust[index];
-
-	auto eyePosition = Util::GetEyePosition();
-
-	cameraPreviousPosAdjust[index] = { eyePosition.x, eyePosition.y, eyePosition.z };
-
+	updateData.CameraPosAdjustDelta = previousCaptureAnchor[index] - currentCaptureAnchor;
+	updateData.CapturePadding0 = 0;
+	updateData.CaptureIndex = index;
+	updateData.CaptureDeltaTime = std::max(0.0f, captureTime - previousCaptureTime[index]);
+	updateData.ResetCapture = resetCapture[index] || captureTime < previousCaptureTime[index];
 	updateCubemapCB->Update(updateData);
 
-	ID3D11Buffer* buffer = updateCubemapCB->CB();
-	context->CSSetConstantBuffers(0, 1, &buffer);
+	// Private bindings must be released even if capture exits before publication.
+	const SKSE::stl::scope_exit releaseBindings([&]() noexcept {
+		ID3D11UnorderedAccessView* uavs[4]{};
+		ID3D11ShaderResourceView* srvs[2]{};
+		ID3D11Buffer* buffer = nullptr;
+		ID3D11SamplerState* sampler = nullptr;
+		context->CSSetUnorderedAccessViews(0, 4, uavs, nullptr);
+		context->CSSetShaderResources(0, 2, srvs);
+		context->CSSetConstantBuffers(0, 1, &buffer);
+		context->CSSetSamplers(0, 1, &sampler);
+		context->CSSetShader(nullptr, nullptr, 0);
+	});
 
+	ID3D11ShaderResourceView* srvs[2] = { depth.depthSRV, main.SRV };
+	ID3D11UnorderedAccessView* uavs[4] = {
+		(a_reflections ? envCaptureReflectionsTexture : envCaptureTexture)->uav.get(),
+		(a_reflections ? envCaptureRawReflectionsTexture : envCaptureRawTexture)->uav.get(),
+		(a_reflections ? envCapturePositionReflectionsTexture : envCapturePositionTexture)->uav.get(),
+		captureLightingState->UAV()
+	};
+	ID3D11Buffer* buffer = updateCubemapCB->CB();
+	context->CSSetShaderResources(0, 2, srvs);
+	context->CSSetUnorderedAccessViews(0, 4, uavs, nullptr);
+	context->CSSetConstantBuffers(0, 1, &buffer);
 	context->CSSetSamplers(0, 1, &computeSampler);
 
-	auto* shader = a_reflections ? (fakeReflections ? GetComputeShaderUpdateFakeReflections() : GetComputeShaderUpdateReflections()) : GetComputeShaderUpdate();
-	if (shader) {
-		context->CSSetShader(shader, nullptr, 0);
-		globals::profiler->BeginPass(a_reflections ? "DynamicCubemaps::CaptureReflections" : "DynamicCubemaps::Capture");
-		context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 8.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 8.0f), 6);
-		globals::profiler->EndPass();
+	context->CSSetShader(detector, nullptr, 0);
+	{
+		CS_GPU_PASS_SELECT(a_reflections, "DynamicCubemaps::DetectLightingReflections", "DynamicCubemaps::DetectLighting");
+		context->Dispatch(1, 1, 1);
 	}
-
-	uavs[0] = nullptr;
-	uavs[1] = nullptr;
-	uavs[2] = nullptr;
-	context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
-
-	srvs[0] = nullptr;
-	srvs[1] = nullptr;
-	context->CSSetShaderResources(0, 2, srvs);
-
-	buffer = nullptr;
-	context->CSSetConstantBuffers(0, 1, &buffer);
-
-	context->CSSetShader(nullptr, nullptr, 0);
-
-	ID3D11SamplerState* nullSampler = { nullptr };
-	context->CSSetSamplers(0, 1, &nullSampler);
-
-	return shader != nullptr;
+	context->CSSetShader(shader, nullptr, 0);
+	{
+		CS_GPU_PASS_SELECT(a_reflections, "DynamicCubemaps::CaptureReflections", "DynamicCubemaps::Capture");
+		context->Dispatch((envCaptureTexture->desc.Width + 7u) / 8u, (envCaptureTexture->desc.Height + 7u) / 8u, 6);
+	}
+	previousCaptureAnchor[index] = currentCaptureAnchor;
+	previousCaptureTime[index] = captureTime;
+	resetCapture[index] = false;
+	return true;
 }
 
 bool DynamicCubemaps::Inferrence(bool a_reflections)
 {
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
+	auto* shader = a_reflections ?
+	                   (fakeReflections ? GetComputeShaderInferrenceFakeReflections() : GetComputeShaderInferrenceReflections()) :
+	                   GetComputeShaderInferrence();
+	if (!shader)
+		return false;
 
 	// Infer local reflection information
 	ID3D11UnorderedAccessView* uav = envInferredTexture->uav.get();
@@ -389,12 +457,11 @@ bool DynamicCubemaps::Inferrence(bool a_reflections)
 
 	context->CSSetSamplers(0, 1, &computeSampler);
 
-	auto* shader = a_reflections ? (fakeReflections ? GetComputeShaderInferrenceFakeReflections() : GetComputeShaderInferrenceReflections()) : GetComputeShaderInferrence();
-	if (shader) {
-		context->CSSetShader(shader, nullptr, 0);
-		globals::profiler->BeginPass(a_reflections ? "DynamicCubemaps::InferReflections" : "DynamicCubemaps::Infer");
+	context->CSSetShader(shader, nullptr, 0);
+
+	{
+		CS_GPU_PASS_SELECT(a_reflections, "DynamicCubemaps::InferReflections", "DynamicCubemaps::Infer");
 		context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 8.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 8.0f), 6);
-		globals::profiler->EndPass();
 	}
 
 	srvs[0] = nullptr;
@@ -410,52 +477,50 @@ bool DynamicCubemaps::Inferrence(bool a_reflections)
 
 	ID3D11SamplerState* sampler = nullptr;
 	context->CSSetSamplers(0, 1, &sampler);
-
-	return shader != nullptr;
+	return true;
 }
 
 bool DynamicCubemaps::Irradiance(bool a_reflections)
 {
 	auto context = globals::d3d::context;
+	auto* shader = GetComputeShaderSpecularIrradiance();
+	if (!shader)
+		return false;
 	const auto mipLevels = activeCubemapMipLevels;
 
 	// Copy cubemap to other resources
 	for (uint face = 0; face < 6; face++) {
 		uint srcSubresourceIndex = D3D11CalcSubresource(0, face, mipLevels);
-		context->CopySubresourceRegion(a_reflections ? envReflectionsTexture->resource.get() : envTexture->resource.get(), D3D11CalcSubresource(0, face, mipLevels), 0, 0, 0, envInferredTexture->resource.get(), srcSubresourceIndex, nullptr);
+		context->CopySubresourceRegion(envFilteredTexture->resource.get(), D3D11CalcSubresource(0, face, mipLevels), 0, 0, 0, envInferredTexture->resource.get(), srcSubresourceIndex, nullptr);
 	}
 
 	// Compute pre-filtered specular environment map.
-	auto* shader = GetComputeShaderSpecularIrradiance();
 	{
 		auto srv = envInferredTexture->srv.get();
 		context->GenerateMips(srv);
 
 		context->CSSetShaderResources(0, 1, &srv);
 		context->CSSetSamplers(0, 1, &computeSampler);
-		if (shader) {
-			context->CSSetShader(shader, nullptr, 0);
+		context->CSSetShader(shader, nullptr, 0);
 
-			ID3D11Buffer* buffer = spmapCB->CB();
-			context->CSSetConstantBuffers(0, 1, &buffer);
+		ID3D11Buffer* buffer = spmapCB->CB();
+		context->CSSetConstantBuffers(0, 1, &buffer);
 
-			float const delta_roughness = 1.0f / std::max(float(mipLevels - 1), 1.0f);
+		float const delta_roughness = 1.0f / std::max(float(mipLevels - 1), 1.0f);
 
-			std::uint32_t size = std::max(envTexture->desc.Width, envTexture->desc.Height) / 2;
+		std::uint32_t size = std::max(envTexture->desc.Width, envTexture->desc.Height) / 2;
 
-			globals::profiler->BeginPass(a_reflections ? "DynamicCubemaps::IrradianceReflections" : "DynamicCubemaps::Irradiance");
-			for (std::uint32_t level = 1; level < mipLevels; level++, size /= 2) {
-				const UINT numGroups = (UINT)std::max(1u, (size + 7u) / 8u);
+		CS_GPU_PASS_SELECT(a_reflections, "DynamicCubemaps::IrradianceReflections", "DynamicCubemaps::Irradiance");
+		for (std::uint32_t level = 1; level < mipLevels; level++, size /= 2) {
+			const UINT numGroups = (UINT)std::max(1u, (size + 7u) / 8u);
 
-				const SpecularMapFilterSettingsCB spmapConstants = { level * delta_roughness };
-				spmapCB->Update(spmapConstants);
+			const SpecularMapFilterSettingsCB spmapConstants = { level * delta_roughness };
+			spmapCB->Update(spmapConstants);
 
-				auto uav = a_reflections ? uavReflectionsArray[level - 1] : uavArray[level - 1];
+			auto uav = filteredUAVs[level - 1].get();
 
-				context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-				context->Dispatch(numGroups, numGroups, 6);
-			}
-			globals::profiler->EndPass();
+			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+			context->Dispatch(numGroups, numGroups, 6);
 		}
 	}
 
@@ -469,8 +534,7 @@ bool DynamicCubemaps::Irradiance(bool a_reflections)
 	context->CSSetShader(nullptr, 0, 0);
 	context->CSSetConstantBuffers(0, 1, &nullBuffer);
 	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
-
-	return shader != nullptr;
+	return true;
 }
 
 bool DynamicCubemaps::CompressToBC6H(bool a_reflections)
@@ -483,7 +547,7 @@ bool DynamicCubemaps::CompressToBC6H(bool a_reflections)
 		return false;
 	}
 
-	auto* srcSRV = a_reflections ? envReflectionsTextureArraySRV : envTextureArraySRV;
+	auto* srcSRV = envFilteredTextureArraySRV.get();
 
 	context->CSSetShader(shader, nullptr, 0);
 	context->CSSetShaderResources(0, 1, &srcSRV);
@@ -493,26 +557,28 @@ bool DynamicCubemaps::CompressToBC6H(bool a_reflections)
 
 	std::uint32_t mipDim = std::max(envTexture->desc.Width, envTexture->desc.Height);
 
-	globals::profiler->BeginPass(a_reflections ? "DynamicCubemaps::BC6HReflections" : "DynamicCubemaps::BC6H");
-	for (std::uint32_t level = 0; level < bc6hMipLevels; ++level) {
-		std::uint32_t srcWidth = std::max(1u, mipDim >> level);
-		std::uint32_t srcHeight = std::max(1u, mipDim >> level);
-		std::uint32_t blocksX = std::max(1u, srcWidth / 4);
-		std::uint32_t blocksY = std::max(1u, srcHeight / 4);
+	{
+		CS_GPU_PASS_SELECT(a_reflections, "DynamicCubemaps::BC6HReflections", "DynamicCubemaps::BC6H");
+		for (std::uint32_t level = 0; level < bc6hMipLevels; ++level) {
+			std::uint32_t srcWidth = std::max(1u, mipDim >> level);
+			std::uint32_t srcHeight = std::max(1u, mipDim >> level);
+			std::uint32_t blocksX = std::max(1u, srcWidth / 4);
+			std::uint32_t blocksY = std::max(1u, srcHeight / 4);
 
-		BC6HEncodeCB cbData{};
-		cbData.TextureSizeInBlocksX = blocksX;
-		cbData.TextureSizeInBlocksY = blocksY;
-		cbData.MipLevel = level;
-		bc6hEncodeCB->Update(cbData);
+			BC6HEncodeCB cbData{};
+			cbData.TextureSizeInBlocksX = blocksX;
+			cbData.TextureSizeInBlocksY = blocksY;
+			cbData.MipLevel = level;
+			bc6hEncodeCB->Update(cbData);
 
-		context->CSSetUnorderedAccessViews(0, 1, &bc6hScratchUAVs[level], nullptr);
+			auto* uav = bc6hScratchUAVs[level].get();
+			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
-		std::uint32_t dispatchX = std::max(1u, (blocksX + 7) / 8);
-		std::uint32_t dispatchY = std::max(1u, (blocksY + 7) / 8);
-		context->Dispatch(dispatchX, dispatchY, 6);
+			std::uint32_t dispatchX = std::max(1u, (blocksX + 7) / 8);
+			std::uint32_t dispatchY = std::max(1u, (blocksY + 7) / 8);
+			context->Dispatch(dispatchX, dispatchY, 6);
+		}
 	}
-	globals::profiler->EndPass();
 
 	{
 		ID3D11ShaderResourceView* nullSRV = nullptr;
@@ -524,23 +590,52 @@ bool DynamicCubemaps::CompressToBC6H(bool a_reflections)
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
 
-	// BC formats are bitwise-compatible with matching block-equivalent uncompressed
-	// formats for CopyResource: an R32G32B32A32_UINT (W/4 × H/4) resource maps 1:1
-	// to a BC6H_UF16 (W × H) resource because each block is 16 bytes either way.
-	auto dst = a_reflections ? envReflectionsTextureBC6H : envTextureBC6H;
-	context->CopyResource(dst->resource.get(), bc6hScratchTexture->resource.get());
-
+	// Each UINT4 texel contains one BC6H block, including the padded 2x2 and 1x1 mips.
+	auto* dst = (a_reflections ? envReflectionsTextureBC6H : envTextureBC6H).get();
+	{
+		CS_GPU_PASS_SELECT(a_reflections, "DynamicCubemaps::PublishReflections", "DynamicCubemaps::Publish");
+		for (uint32_t level = 0; level < bc6hMipLevels; ++level) {
+			const bool tail = level >= bc6hScratchMipLevels;
+			auto* src = (tail ? bc6hTailScratchTexture : bc6hScratchTexture).get();
+			for (uint32_t face = 0; face < dst->desc.ArraySize; ++face) {
+				const auto srcSubresource = tail ?
+				                                D3D11CalcSubresource(0, (level - bc6hScratchMipLevels) * dst->desc.ArraySize + face, 1) :
+				                                D3D11CalcSubresource(level, face, bc6hScratchMipLevels);
+				context->CopySubresourceRegion(dst->resource.get(), D3D11CalcSubresource(level, face, bc6hMipLevels),
+					0, 0, 0, src->resource.get(), srcSubresource, nullptr);
+			}
+		}
+		context->CopyResource((a_reflections ? envReflectionsTexture : envTexture)->resource.get(), envFilteredTexture->resource.get());
+	}
+	cubemapValid[a_reflections ? 1 : 0] = true;
 	return true;
 }
+
+
+
+
+
+
+
+
+
+
 
 void DynamicCubemaps::UpdateCubemap()
 {
 	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Cubemap Update");
+	CS_GPU_PASS("DynamicCubemaps::UpdateCubemap");
 
 	auto context = globals::d3d::context;
-	ID3D11Buffer* sharedBuffers[2]{ globals::state->sharedDataCB->CB(), globals::state->featureDataCB->CB() };
-	context->CSSetConstantBuffers(5, 2, sharedBuffers);
+	if (!context || !captureResourcesReady)
+		return;
+	Util::BindSharedDataConstantBuffersForCS(context);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (captureRefreshRequested.exchange(false, std::memory_order_acq_rel)) {
+		resetCapture[0] = resetCapture[1] = true;
+		nextTask = NextTask::kCapture;
+	}
+#endif
 
 	// Reset capture when game time jumps (wait menu, timescale changes, console commands)
 	if (auto calendar = globals::game::calendar) {
@@ -551,7 +646,6 @@ void DynamicCubemaps::UpdateCubemap()
 		if (hoursPassedDiff >= 0.01f) {  // ~36 seconds game time
 			resetCapture[0] = true;
 			resetCapture[1] = true;
-			// Restart before stale intermediate mips from the pre-jump capture reach compression.
 			nextTask = NextTask::kCapture;
 		}
 	}
@@ -564,6 +658,8 @@ void DynamicCubemaps::UpdateCubemap()
 			shaderCache->Clear(RE::BSShader::Types::ImageSpace);
 		recompileFlag = false;
 	}
+
+
 
 	switch (nextTask) {
 	case NextTask::kCapture:
@@ -606,6 +702,13 @@ void DynamicCubemaps::UpdateCubemap()
 			nextTask = NextTask::kCapture;
 		break;
 	}
+
+}
+
+ID3D11ShaderResourceView* DynamicCubemaps::GetPublishedCubemap(bool a_reflections) const
+{
+	const auto* texture = a_reflections ? envReflectionsTexture : envTexture;
+	return cubemapValid[a_reflections ? 1 : 0] && texture ? texture->srv.get() : nullptr;
 }
 
 void DynamicCubemaps::PostDeferred()
@@ -613,17 +716,165 @@ void DynamicCubemaps::PostDeferred()
 	auto context = globals::d3d::context;
 
 	ID3D11ShaderResourceView* views[2] = {
-		(activeReflections ? envReflectionsTextureBC6H : envTextureBC6H)->srv.get(),
-		envTextureBC6H->srv.get()
+		cubemapValid[activeReflections ? 1 : 0] ? (activeReflections ? envReflectionsTextureBC6H : envTextureBC6H)->srv.get() : nullptr,
+		cubemapValid[0] ? envTextureBC6H->srv.get() : nullptr
 	};
 	context->PSSetShaderResources(30, 2, views);
 }
 
+bool DynamicCubemaps::SetupCapturePublicationResources(const D3D11_TEXTURE2D_DESC& a_desc, const D3D11_SHADER_RESOURCE_VIEW_DESC& a_srvDesc)
+{
+	if (!a_desc.Width || !a_desc.Height || a_desc.ArraySize != 6 ||
+		a_desc.MipLevels < 2 || a_desc.MipLevels > filteredUAVs.size() + 1) {
+		logger::error("Dynamic cubemap dimensions or mip count are unsupported; capture disabled");
+		return false;
+	}
+
+	try {
+		auto device = globals::d3d::device;
+		auto filtered = std::make_unique<Texture2D>(a_desc, "DynamicCubemaps::EnvFiltered");
+		filtered->CreateSRV(a_srvDesc);
+		std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, 8> views;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = a_desc.Format;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+		uavDesc.Texture2DArray.ArraySize = 6;
+		for (uint32_t level = 1; level < a_desc.MipLevels; ++level) {
+			uavDesc.Texture2DArray.MipSlice = level;
+			DX::ThrowIfFailed(device->CreateUnorderedAccessView(filtered->resource.get(), &uavDesc, views[level - 1].put()));
+			Util::SetResourceName(views[level - 1].get(), "DynamicCubemaps::EnvFiltered UAV mip%u", level);
+		}
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC arrayDesc{};
+		arrayDesc.Format = a_desc.Format;
+		arrayDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+		arrayDesc.Texture2DArray.ArraySize = 6;
+		arrayDesc.Texture2DArray.MipLevels = a_desc.MipLevels;
+		winrt::com_ptr<ID3D11ShaderResourceView> arrayView;
+		DX::ThrowIfFailed(device->CreateShaderResourceView(filtered->resource.get(), &arrayDesc, arrayView.put()));
+		Util::SetResourceName(arrayView.get(), "DynamicCubemaps::EnvFiltered ArraySRV");
+
+		auto lighting = std::make_unique<StructuredBuffer>(
+			StructuredBufferDesc<CaptureLightingState>(uint64_t(1), true, false), 1, "DynamicCubemaps::CaptureLightingState");
+		lighting->CreateUAV();
+		const UINT clear[4]{};
+		globals::d3d::context->ClearUnorderedAccessViewUint(lighting->UAV(), clear);
+
+		envFilteredTexture = std::move(filtered);
+		filteredUAVs = std::move(views);
+		envFilteredTextureArraySRV = std::move(arrayView);
+		captureLightingState = std::move(lighting);
+		return true;
+	} catch (const winrt::hresult_error& error) {
+		logger::error("Dynamic cubemap publication resources failed (HRESULT {}); capture disabled", error.code().value);
+	} catch (const std::exception& error) {
+		logger::error("Dynamic cubemap publication resources failed ({}); capture disabled", error.what());
+	}
+	return false;
+}
+
+bool DynamicCubemaps::SetupCompressionResources(const D3D11_TEXTURE2D_DESC& a_desc)
+{
+	if ((a_desc.Width != kPerformanceCubemapResolution && a_desc.Width != kQualityCubemapResolution) ||
+		a_desc.Height != a_desc.Width || a_desc.ArraySize != 6 || a_desc.SampleDesc.Count != 1 ||
+		a_desc.MipLevels != static_cast<UINT>(std::bit_width(a_desc.Width)) || a_desc.MipLevels > bc6hScratchUAVs.size()) {
+		logger::error("Dynamic cubemap compression dimensions or mip count are unsupported; capture disabled");
+		return false;
+	}
+
+	auto* device = globals::d3d::device;
+	const uint32_t scratchMipLevels = std::bit_width(a_desc.Width / 4);
+	D3D11_TEXTURE2D_DESC scratchDesc{};
+	scratchDesc.Width = a_desc.Width / 4;
+	scratchDesc.Height = a_desc.Height / 4;
+	scratchDesc.MipLevels = scratchMipLevels;
+	scratchDesc.ArraySize = a_desc.ArraySize;
+	scratchDesc.Format = DXGI_FORMAT_R32G32B32A32_UINT;
+	scratchDesc.SampleDesc.Count = 1;
+	scratchDesc.Usage = D3D11_USAGE_DEFAULT;
+	scratchDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+	auto scratch = std::make_unique<Texture2D>(scratchDesc, "DynamicCubemaps::BC6HScratch");
+
+	// Every mip below 4x4 still needs one block per face; it cannot shrink with the scratch chain.
+	auto tailDesc = scratchDesc;
+	tailDesc.Width = 1;
+	tailDesc.Height = 1;
+	tailDesc.MipLevels = 1;
+	tailDesc.ArraySize = a_desc.ArraySize * (a_desc.MipLevels - scratchMipLevels);
+	auto tailScratch = std::make_unique<Texture2D>(tailDesc, "DynamicCubemaps::BC6HTailScratch");
+
+	decltype(bc6hScratchUAVs) views;
+	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+	uavDesc.Format = scratchDesc.Format;
+	uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+	uavDesc.Texture2DArray.ArraySize = a_desc.ArraySize;
+	for (uint32_t level = 0; level < a_desc.MipLevels; ++level) {
+		const bool tail = level >= scratchMipLevels;
+		uavDesc.Texture2DArray.MipSlice = tail ? 0 : level;
+		uavDesc.Texture2DArray.FirstArraySlice = tail ? a_desc.ArraySize * (level - scratchMipLevels) : 0;
+		auto* texture = (tail ? tailScratch : scratch).get();
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(texture->resource.get(), &uavDesc, views[level].put()));
+		Util::SetResourceName(views[level].get(), "DynamicCubemaps::%s UAV mip%u", tail ? "BC6HTailScratch" : "BC6HScratch", level);
+	}
+
+	D3D11_TEXTURE2D_DESC compressedDesc{};
+	compressedDesc.Width = a_desc.Width;
+	compressedDesc.Height = a_desc.Height;
+	compressedDesc.MipLevels = a_desc.MipLevels;
+	compressedDesc.ArraySize = a_desc.ArraySize;
+	compressedDesc.Format = DXGI_FORMAT_BC6H_UF16;
+	compressedDesc.SampleDesc.Count = 1;
+	compressedDesc.Usage = D3D11_USAGE_DEFAULT;
+	compressedDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	compressedDesc.MiscFlags = D3D11_RESOURCE_MISC_TEXTURECUBE;
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+	srvDesc.Format = compressedDesc.Format;
+	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
+	srvDesc.TextureCube.MipLevels = a_desc.MipLevels;
+	auto environment = std::make_unique<Texture2D>(compressedDesc, "DynamicCubemaps::EnvTextureBC6H");
+	environment->CreateSRV(srvDesc);
+	auto reflections = std::make_unique<Texture2D>(compressedDesc, "DynamicCubemaps::EnvReflectionsBC6H");
+	reflections->CreateSRV(srvDesc);
+
+	bc6hScratchTexture = std::move(scratch);
+	bc6hTailScratchTexture = std::move(tailScratch);
+	bc6hScratchUAVs = std::move(views);
+	envTextureBC6H = std::move(environment);
+	envReflectionsTextureBC6H = std::move(reflections);
+	bc6hScratchMipLevels = scratchMipLevels;
+	bc6hMipLevels = a_desc.MipLevels;
+	return true;
+}
+
 void DynamicCubemaps::SetupResources()
 {
+	captureResourcesReady = false;
+	cubemapValid[0] = cubemapValid[1] = false;
+	try {
+		SetupResourcesImpl();
+	} catch (const winrt::hresult_error& error) {
+		logger::error("Dynamic cubemap resources failed (HRESULT {}); capture disabled", error.code().value);
+	} catch (const std::exception& error) {
+		logger::error("Dynamic cubemap resources failed ({}); capture disabled", error.what());
+	}
+}
+
+void DynamicCubemaps::SetupResourcesImpl()
+{
+	cubemapValid[0] = cubemapValid[1] = false;
+	resetCapture[0] = resetCapture[1] = true;
+	nextTask = NextTask::kCapture;
+	envFilteredTexture.reset();
+	envFilteredTextureArraySRV = nullptr;
+	captureLightingState.reset();
+	for (auto& view : filteredUAVs)
+		view = nullptr;
 	const auto requestedCubemapResolution = GetCubemapResolutionForResourceCreation();
 	auto mipLevels = activeCubemapMipLevels;
 
+	GetComputeShaderDetectLighting(false);
+	GetComputeShaderDetectLighting(true);
 	GetComputeShaderUpdate();
 	GetComputeShaderUpdateReflections();
 	GetComputeShaderInferrence();
@@ -659,7 +910,7 @@ void DynamicCubemaps::SetupResources()
 				texDesc.Height,
 				requestedCubemapResolution,
 				requestedCubemapResolution);
-			activeCubemapResolution = std::min(texDesc.Width, texDesc.Height);
+			activeCubemapResolution = std::max(1u, std::min(texDesc.Width, texDesc.Height));
 			activeCubemapMipLevels = std::bit_width(activeCubemapResolution);
 			mipLevels = activeCubemapMipLevels;
 		}
@@ -673,6 +924,8 @@ void DynamicCubemaps::SetupResources()
 
 		texDesc.MipLevels = mipLevels;
 		texDesc.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
+		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		srvDesc.Format = texDesc.Format;
 		srvDesc.TextureCube.MipLevels = mipLevels;
 
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
@@ -682,27 +935,27 @@ void DynamicCubemaps::SetupResources()
 		uavDesc.Texture2DArray.FirstArraySlice = 0;
 		uavDesc.Texture2DArray.ArraySize = texDesc.ArraySize;
 
-		envCaptureTexture = new Texture2D(texDesc);
+		envCaptureTexture = new Texture2D(texDesc, "DynamicCubemaps::Capture");
 		envCaptureTexture->CreateSRV(srvDesc);
 		envCaptureTexture->CreateUAV(uavDesc);
 
-		envCaptureRawTexture = new Texture2D(texDesc);
+		envCaptureRawTexture = new Texture2D(texDesc, "DynamicCubemaps::CaptureRaw");
 		envCaptureRawTexture->CreateSRV(srvDesc);
 		envCaptureRawTexture->CreateUAV(uavDesc);
 
-		envCapturePositionTexture = new Texture2D(texDesc);
+		envCapturePositionTexture = new Texture2D(texDesc, "DynamicCubemaps::CapturePosition");
 		envCapturePositionTexture->CreateSRV(srvDesc);
 		envCapturePositionTexture->CreateUAV(uavDesc);
 
-		envCaptureReflectionsTexture = new Texture2D(texDesc);
+		envCaptureReflectionsTexture = new Texture2D(texDesc, "DynamicCubemaps::CaptureReflections");
 		envCaptureReflectionsTexture->CreateSRV(srvDesc);
 		envCaptureReflectionsTexture->CreateUAV(uavDesc);
 
-		envCaptureRawReflectionsTexture = new Texture2D(texDesc);
+		envCaptureRawReflectionsTexture = new Texture2D(texDesc, "DynamicCubemaps::CaptureRawReflections");
 		envCaptureRawReflectionsTexture->CreateSRV(srvDesc);
 		envCaptureRawReflectionsTexture->CreateUAV(uavDesc);
 
-		envCapturePositionReflectionsTexture = new Texture2D(texDesc);
+		envCapturePositionReflectionsTexture = new Texture2D(texDesc, "DynamicCubemaps::CapturePositionReflections");
 		envCapturePositionReflectionsTexture->CreateSRV(srvDesc);
 		envCapturePositionReflectionsTexture->CreateUAV(uavDesc);
 
@@ -710,135 +963,51 @@ void DynamicCubemaps::SetupResources()
 		srvDesc.Format = texDesc.Format;
 		uavDesc.Format = texDesc.Format;
 
-		envTexture = new Texture2D(texDesc);
+		envTexture = new Texture2D(texDesc, "DynamicCubemaps::EnvTexture");
 		envTexture->CreateSRV(srvDesc);
 		envTexture->CreateUAV(uavDesc);
 
-		envReflectionsTexture = new Texture2D(texDesc);
+		envReflectionsTexture = new Texture2D(texDesc, "DynamicCubemaps::EnvReflections");
 		envReflectionsTexture->CreateSRV(srvDesc);
 		envReflectionsTexture->CreateUAV(uavDesc);
 
-		// Texture2DArray SRVs used by BC6H encoder (Load() requires array dimension, not TextureCube)
-		{
-			D3D11_SHADER_RESOURCE_VIEW_DESC arraySRVDesc = {};
-			arraySRVDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
-			arraySRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
-			arraySRVDesc.Texture2DArray.FirstArraySlice = 0;
-			arraySRVDesc.Texture2DArray.ArraySize = 6;
-			arraySRVDesc.Texture2DArray.MostDetailedMip = 0;
-			arraySRVDesc.Texture2DArray.MipLevels = mipLevels;
-			DX::ThrowIfFailed(device->CreateShaderResourceView(envTexture->resource.get(), &arraySRVDesc, &envTextureArraySRV));
-			Util::SetResourceName(envTextureArraySRV, "DynamicCubemaps::EnvTexture ArraySRV");
-			DX::ThrowIfFailed(device->CreateShaderResourceView(envReflectionsTexture->resource.get(), &arraySRVDesc, &envReflectionsTextureArraySRV));
-			Util::SetResourceName(envReflectionsTextureArraySRV, "DynamicCubemaps::EnvReflections ArraySRV");
+		if (!SetupCapturePublicationResources(texDesc, srvDesc))
+			return;
+
+		const float clear[4]{};
+		for (auto* texture : { envTexture, envReflectionsTexture }) {
+			globals::d3d::context->ClearUnorderedAccessViewFloat(texture->uav.get(), clear);
+			globals::d3d::context->GenerateMips(texture->srv.get());
 		}
 
 		envInferredTexture = new Texture2D(texDesc, "DynamicCubemaps::EnvInferred");
 		envInferredTexture->CreateSRV(srvDesc);
 		envInferredTexture->CreateUAV(uavDesc);
 
-		// BC6H scratch: R32G32B32A32_UINT at quarter-resolution, 6-face array.
-		// Encoded directly into here via UAV, then CopyResource'd to the BC6H texture.
-		// Mip count must match the BC6H target so block-equivalent dimensions align.
-		{
-			std::uint32_t scratchBase = std::max(1u, texDesc.Width / 4);
-			bc6hMipLevels = 0;
-			for (std::uint32_t d = scratchBase; d > 0; d >>= 1)
-				++bc6hMipLevels;
-			// Clamp: must not exceed envTexture's mip count (source reads) or the UAV array size.
-			bc6hMipLevels = std::min<std::uint32_t>(bc6hMipLevels, mipLevels);
-			bc6hMipLevels = std::min<std::uint32_t>(bc6hMipLevels, static_cast<std::uint32_t>(std::size(bc6hScratchUAVs)));
+		if (!SetupCompressionResources(texDesc))
+			return;
 
-			D3D11_TEXTURE2D_DESC scratchDesc = {};
-			scratchDesc.Width = scratchBase;
-			scratchDesc.Height = std::max(1u, texDesc.Height / 4);
-			scratchDesc.MipLevels = bc6hMipLevels;
-			scratchDesc.ArraySize = 6;
-			scratchDesc.Format = DXGI_FORMAT_R32G32B32A32_UINT;
-			scratchDesc.SampleDesc.Count = 1;
-			scratchDesc.Usage = D3D11_USAGE_DEFAULT;
-			scratchDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-			scratchDesc.MiscFlags = 0;
-			bc6hScratchTexture = new Texture2D(scratchDesc, "DynamicCubemaps::BC6HScratch");
-
-			D3D11_UNORDERED_ACCESS_VIEW_DESC scratchUAVDesc = {};
-			scratchUAVDesc.Format = DXGI_FORMAT_R32G32B32A32_UINT;
-			scratchUAVDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
-			scratchUAVDesc.Texture2DArray.FirstArraySlice = 0;
-			scratchUAVDesc.Texture2DArray.ArraySize = 6;
-			for (std::uint32_t level = 0; level < bc6hMipLevels; ++level) {
-				scratchUAVDesc.Texture2DArray.MipSlice = level;
-				DX::ThrowIfFailed(device->CreateUnorderedAccessView(bc6hScratchTexture->resource.get(), &scratchUAVDesc, &bc6hScratchUAVs[level]));
-				Util::SetResourceName(bc6hScratchUAVs[level], "DynamicCubemaps::BC6HScratch UAV mip%u", level);
-			}
-		}
-
-		// BC6H compressed cubemap textures (shader-read-only).
-		{
-			D3D11_TEXTURE2D_DESC bc6hDesc = {};
-			bc6hDesc.Width = texDesc.Width;
-			bc6hDesc.Height = texDesc.Height;
-			bc6hDesc.MipLevels = bc6hMipLevels;
-			bc6hDesc.ArraySize = 6;
-			bc6hDesc.Format = DXGI_FORMAT_BC6H_UF16;
-			bc6hDesc.SampleDesc.Count = 1;
-			bc6hDesc.Usage = D3D11_USAGE_DEFAULT;
-			bc6hDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-			bc6hDesc.MiscFlags = D3D11_RESOURCE_MISC_TEXTURECUBE;
-
-			D3D11_SHADER_RESOURCE_VIEW_DESC bc6hSRVDesc = {};
-			bc6hSRVDesc.Format = DXGI_FORMAT_BC6H_UF16;
-			bc6hSRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
-			bc6hSRVDesc.TextureCube.MostDetailedMip = 0;
-			bc6hSRVDesc.TextureCube.MipLevels = bc6hMipLevels;
-
-			envTextureBC6H = new Texture2D(bc6hDesc, "DynamicCubemaps::EnvTextureBC6H");
-			envTextureBC6H->CreateSRV(bc6hSRVDesc);
-
-			envReflectionsTextureBC6H = new Texture2D(bc6hDesc, "DynamicCubemaps::EnvReflectionsBC6H");
-			envReflectionsTextureBC6H->CreateSRV(bc6hSRVDesc);
-		}
-
-		updateCubemapCB = new ConstantBuffer(ConstantBufferDesc<UpdateCubemapCB>(), "DynamicCubemaps::UpdateCubemapCB");
+		updateCubemapCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<UpdateCubemapCB>(), "DynamicCubemaps::UpdateCubemapCB");
 	}
 
 	{
-		bc6hEncodeCB = new ConstantBuffer(ConstantBufferDesc<BC6HEncodeCB>(), "DynamicCubemaps::BC6HEncodeCB");
+		bc6hEncodeCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<BC6HEncodeCB>(), "DynamicCubemaps::BC6HEncodeCB");
 	}
 
 	{
-		spmapCB = new ConstantBuffer(ConstantBufferDesc<SpecularMapFilterSettingsCB>(), "DynamicCubemaps::SpmapCB");
-	}
-
-	{
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-		uavDesc.Format = envTexture->desc.Format;
-		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
-
-		uavDesc.Texture2DArray.FirstArraySlice = 0;
-		uavDesc.Texture2DArray.ArraySize = envTexture->desc.ArraySize;
-
-		for (std::uint32_t level = 1; level < mipLevels; ++level) {
-			uavDesc.Texture2DArray.MipSlice = level;
-			DX::ThrowIfFailed(device->CreateUnorderedAccessView(envTexture->resource.get(), &uavDesc, &uavArray[level - 1]));
-			Util::SetResourceName(uavArray[level - 1], "DynamicCubemaps::EnvTexture UAV mip%u", level);
-		}
-
-		for (std::uint32_t level = 1; level < mipLevels; ++level) {
-			uavDesc.Texture2DArray.MipSlice = level;
-			DX::ThrowIfFailed(device->CreateUnorderedAccessView(envReflectionsTexture->resource.get(), &uavDesc, &uavReflectionsArray[level - 1]));
-			Util::SetResourceName(uavReflectionsArray[level - 1], "DynamicCubemaps::EnvReflections UAV mip%u", level);
-		}
+		spmapCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<SpecularMapFilterSettingsCB>(), "DynamicCubemaps::SpmapCB");
 	}
 
 	{
 		DirectX::CreateDDSTextureFromFile(device, L"Data\\Shaders\\DynamicCubemaps\\defaultcubemap.dds", nullptr, &defaultCubemap);
 	}
+	captureResourcesReady = true;
 }
 
 void DynamicCubemaps::Reset()
 {
-	activeReflections = globals::state->activeReflections;
+	realActiveReflections = globals::state->activeReflections;
+	activeReflections = realActiveReflections;
 
 	if (globals::game::sky)
 		fakeReflections = activeReflections && globals::game::sky->flags.any(RE::Sky::Flags::kHideSky);
@@ -849,5 +1018,6 @@ void DynamicCubemaps::Reset()
 		activeReflections = true;
 		fakeReflections = true;
 	}
+
+
 }
-#undef I18N_KEY_PREFIX

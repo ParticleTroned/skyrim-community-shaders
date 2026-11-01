@@ -1,4 +1,20 @@
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+#	include "Diagnostics/NvPerf.h"
+#endif
 #include "State.h"
+#include "Diagnostics/EngineStutterMonitor.h"
+#include "EngineFixes/LODBlendRingFix.h"
+#include "Features/InteriorSun.h"
+#include "Features/LightLimitFix/ShadowCulling.h"
+#include "Features/TerrainSeams.h"
+#include "Features/TextureStreaming.h"
+#include "I18n/I18n.h"
+#include "PresetCompatibility.h"
+#include "SettingsMigrations.h"
+#include "SettingsSerialization.h"
+#include "Utils/SettingsOverlay.h"
+#include "Utils/WorldLoadTransitionPolicy.h"
+#include <RE/B/BGSSaveLoadGame.h>
 
 #include <codecvt>
 
@@ -20,6 +36,7 @@
 #include "Features/Upscaling.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
+#include "Features/Wetterness.h"
 #include "Menu.h"
 #include "Menu/PerformanceTuningRenderer.h"
 #include "SceneSettingsManager.h"
@@ -136,6 +153,10 @@ void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 void State::Draw()
 {
 	ZoneScoped;
+	CSX_CODE_EVALUATION_SCOPE(drawScope, currentShader && currentShader->shaderType.get() == RE::BSShader::Type::Sky &&
+												 (currentPixelDescriptor & 255) == static_cast<uint32_t>(SIE::ShaderCache::SkyShaderTechniques::SunGlare) ?
+											 "State::Draw[Sky::SunGlare]" :
+											 "State::Draw");
 
 	auto shaderCache = globals::shaderCache;
 	auto weatherManager = globals::weatherManager;
@@ -143,51 +164,75 @@ void State::Draw()
 	auto& terrainBlending = globals::features::terrainBlending;
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
-	auto& csEditor = globals::features::csEditor;
 	auto& skin = globals::features::skin;
 	auto& truePBR = globals::features::truePBR;
 	auto context = globals::d3d::context;
 	auto& volumetricShadows = globals::features::volumetricShadows;
+
+	if (pendingPostLoadRuntimeReset.exchange(false, std::memory_order_acq_rel)) {
+		CSX_CODE_EVALUATION_SCOPE(resetScope, "State::PostLoadRuntimeReset");
+		globals::OnDataLoaded();
+		weatherManager->ClearCache();
+		globals::features::lightLimitFix.Reset();
+		globals::features::interiorSun.isInteriorWithSun = false;
+		globals::features::wetterness.ResetRuntimeStateAfterGameLoad();
+		logger::info("Applied deferred post-load runtime reset");
+	}
 
 	if (shaderCache->IsEnabled()) {
 		const bool sceneManagersReady =
 			PerformanceTuningRenderer::PrepareForSceneUpdate();
 
 		// Process deferred cell transitions (interior detection)
-		if (sceneManagersReady)
+		if (sceneManagersReady) {
+			CSX_CODE_EVALUATION_SCOPE(sceneScope, "State::SceneSettingsUpdate");
 			sceneSettingsManager->Update();
+		}
 
-		if (sceneManagersReady && csEditor.loaded) {
+		if (sceneManagersReady) {
+			CSX_CODE_EVALUATION_SCOPE(weatherScope, "WeatherManager::UpdateFeatures");
 			ZoneScopedN("WeatherManager::UpdateFeatures");
 			weatherManager->UpdateFeatures();
 		}
 
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
+			CSX_CODE_EVALUATION_SCOPE(terrainScope, "TerrainBlending::TerrainShaderHacks");
 			ZoneScopedN("TerrainBlending::TerrainShaderHacks");
 			terrainBlending.TerrainShaderHacks();
 		}
 
 		if (cloudShadows.loaded) {
+			CSX_CODE_EVALUATION_SCOPE(cloudScope, "CloudShadows::SkyShaderHacks");
 			ZoneScopedN("CloudShadows::SkyShaderHacks");
 			cloudShadows.SkyShaderHacks();
 		}
 
 		if (terrainHelper.loaded) {
+			CSX_CODE_EVALUATION_SCOPE(terrainResourcesScope, "TerrainHelper::SetShaderResources");
 			ZoneScopedN("TerrainHelper::SetShaderResources");
 			terrainHelper.SetShaderResources(context);
 		}
 
 		if (skin.loaded) {
+			CSX_CODE_EVALUATION_SCOPE(skinScope, "Skin::SetShaderResources");
 			ZoneScopedN("Skin::SetShaderResources");
 			skin.SetShaderResources(context);
 		}
 
 		if (truePBR.loaded) {
+			CSX_CODE_EVALUATION_SCOPE(pbrScope, "TruePBR::SetShaderResources");
 			ZoneScopedN("TruePBR::SetShaderResources");
 			truePBR.SetShaderResources(context);
 		}
 
+		if (volumetricShadows.loaded) {
+			CSX_CODE_EVALUATION_SCOPE(shadowsScope, "VolumetricShadows::SetShaderResources");
+			ZoneScopedN("VolumetricShadows::SetShaderResources");
+			volumetricShadows.SetShaderResources(context, selectedCustomPixelShaderType);
+		}
+
 		if (permutationData != permutationDataPrevious) {
+			CSX_CODE_EVALUATION_SCOPE(permutationScope, "State::PermutationCBUpdate");
 			permutationCB->Update(permutationData);
 			permutationDataPrevious = permutationData;
 		}
@@ -195,17 +240,28 @@ void State::Draw()
 		if (currentShader && updateShader) {
 			if (currentShader->shaderType.get() == RE::BSShader::Type::Utility) {
 				if (currentPixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask)) {
+					CSX_CODE_EVALUATION_SCOPE(shadowCopyScope, "State::ShadowDataCopy");
 					if (volumetricShadows.loaded)
 						volumetricShadows.CopyShadowLightData();
+					else
+						globals::deferred->CopyShadowData();
 					if (globals::features::exponentialHeightFog.loaded)
 						globals::features::exponentialHeightFog.CaptureDirectionalShadowMap();
 				}
 			}
 		}
 
-		if (globals::menu->overlayVisible && globals::features::performanceOverlay.loaded && globals::features::performanceOverlay.IsOverlayVisible())
+		if (globals::menu->overlayVisible && globals::features::performanceOverlay.loaded && globals::features::performanceOverlay.IsOverlayVisible()) {
+			CSX_CODE_EVALUATION_SCOPE(overlayScope, "State::DebugOverlay");
 			Debug();
+		}
 
+		if (currentShader && globals::profiler && globals::profiler->IsRenderTargetCaptureActive()) {
+			if (auto* shadow = globals::game::shadowState) {
+				const auto& runtime = shadow->GetRuntimeData();
+				globals::profiler->CountRenderTargetDraw(runtime.depthStencil, static_cast<uint32_t>(runtime.renderTargets[0]));
+			}
+		}
 		updateShader = false;
 	}
 }
@@ -265,10 +321,277 @@ void State::Debug()
 	}
 }
 
+namespace
+{
+	float2 GetMainRenderTargetSize()
+	{
+		auto* renderer = globals::game::renderer;
+		if (!renderer) {
+			return {};
+		}
+
+		const auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+		if (!main.texture) {
+			return {};
+		}
+
+		D3D11_TEXTURE2D_DESC texDesc{};
+		main.texture->GetDesc(&texDesc);
+		return { static_cast<float>(texDesc.Width), static_cast<float>(texDesc.Height) };
+	}
+	const wchar_t* WidenAnnotation(std::wstring& a_buffer, std::string_view a_title)
+	{
+		a_buffer.resize(a_title.size());
+		std::copy(a_title.begin(), a_title.end(), a_buffer.begin());
+		return a_buffer.c_str();
+	}
+	void ExtendFrameDeadline(
+		std::atomic_uint32_t& a_target,
+		uint32_t a_currentFrame,
+		uint32_t a_frameCount)
+	{
+		uint32_t current = a_target.load(std::memory_order_acquire);
+		for (;;) {
+			const uint32_t extended = Util::WorldLoadTransition::ExtendDeadline(
+				current, a_currentFrame, a_frameCount);
+			if (extended == current)
+				return;
+			if (a_target.compare_exchange_weak(
+					current,
+					extended,
+					std::memory_order_acq_rel,
+					std::memory_order_acquire)) {
+				return;
+			}
+		}
+	}
+}
+
+bool State::IsSaveLoadSafeModeActive() const
+{
+	return saveLoadSafeModeActive.load(std::memory_order_acquire);
+}
+
+bool State::IsWorldLoadTransitionActive() const
+{
+	return worldLoadTransitionActive.load(std::memory_order_acquire);
+}
+
+bool State::IsEngineSaveLoadActivityActive() const
+{
+	return engineSaveLoadActivityActive.load(std::memory_order_acquire);
+}
+
+uint64_t State::GetOrdinarySaveRenderRecoveryToken() const
+{
+	std::lock_guard lock(saveLoadSafeModeMutex);
+	const uint64_t recoveryState = saveLoadRenderRecoveryState;
+	if ((recoveryState & kSaveLoadRenderRecoverySourceMask) !=
+			static_cast<uint64_t>(SaveLoadRenderRecoverySource::OrdinarySave) ||
+		!engineSaveLoadActivityKnown ||
+		IsEngineSaveLoadActivityActive()) {
+		return 0;
+	}
+	return recoveryState;
+}
+
+bool State::IsPersistentMutationBlocked() const
+{
+	return persistentMutationBlocked.load(std::memory_order_acquire);
+}
+
+void State::RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource a_source)
+{
+	const auto previousSource = static_cast<SaveLoadRenderRecoverySource>(
+		saveLoadRenderRecoveryState & kSaveLoadRenderRecoverySourceMask);
+	const auto source = previousSource == SaveLoadRenderRecoverySource::Other ?
+	                        SaveLoadRenderRecoverySource::Other :
+	                        a_source;
+	const uint64_t nextGeneration =
+		(saveLoadRenderRecoveryState & ~kSaveLoadRenderRecoverySourceMask) + kSaveLoadRenderRecoverySourceMask + 1;
+	saveLoadRenderRecoveryState = nextGeneration | static_cast<uint64_t>(source);
+}
+
+void State::NotifyOrdinarySave(uint32_t a_currentFrame)
+{
+	ExtendSaveGamePersistenceSafeMode(a_currentFrame, kSaveLoadSafeModeGraceFrames);
+}
+
+void State::BeginSaveLoadSafeMode(uint32_t a_currentFrame)
+{
+	std::lock_guard lock(saveLoadSafeModeMutex);
+	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
+	worldLoadTransitionStartFrame.store(currentFrame, std::memory_order_release);
+	worldLoadTransitionEndFrame.store(0, std::memory_order_release);
+	worldLoadTransitionActive.store(true, std::memory_order_release);
+	saveLoadSafeModeStartFrame.store(currentFrame, std::memory_order_release);
+	saveLoadSafeModeEndFrame.store(0, std::memory_order_release);
+	if (globals::shaderCache)
+		globals::shaderCache->SetSaveLoadDiskPersistenceBlocked(true);
+	saveLoadSafeModeActive.store(true, std::memory_order_release);
+	persistentMutationBlocked.store(true, std::memory_order_release);
+	RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::Other);
+}
+
+void State::ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount)
+{
+	std::lock_guard lock(saveLoadSafeModeMutex);
+	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
+	if (worldLoadTransitionStartFrame.load(std::memory_order_acquire) == 0)
+		worldLoadTransitionStartFrame.store(currentFrame, std::memory_order_release);
+	ExtendFrameDeadline(worldLoadTransitionEndFrame, currentFrame, a_frameCount);
+	worldLoadTransitionActive.store(true, std::memory_order_release);
+	ExtendSaveLoadSafeModeImpl(currentFrame, a_frameCount);
+	RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::Other);
+}
+
+void State::ExtendSaveGamePersistenceSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount)
+{
+	std::lock_guard lock(saveLoadSafeModeMutex);
+	ExtendSaveLoadSafeModeImpl(a_currentFrame, a_frameCount);
+	RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::OrdinarySave);
+}
+
+void State::ExtendSaveLoadSafeModeImpl(uint32_t a_currentFrame, uint32_t a_frameCount)
+{
+	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
+	if (saveLoadSafeModeStartFrame.load(std::memory_order_acquire) == 0) {
+		saveLoadSafeModeStartFrame.store(currentFrame, std::memory_order_release);
+	}
+	ExtendFrameDeadline(saveLoadSafeModeEndFrame, currentFrame, a_frameCount);
+	if (globals::shaderCache)
+		globals::shaderCache->SetSaveLoadDiskPersistenceBlocked(true);
+	saveLoadSafeModeActive.store(true, std::memory_order_release);
+	persistentMutationBlocked.store(true, std::memory_order_release);
+}
+
+void State::BeginPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount)
+{
+	std::lock_guard lock(saveLoadSafeModeMutex);
+	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
+	ExtendFrameDeadline(persistentMutationBlockEndFrame, currentFrame, a_frameCount);
+	persistentMutationBlocked.store(true, std::memory_order_release);
+}
+
+void State::ExtendPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount)
+{
+	std::lock_guard lock(saveLoadSafeModeMutex);
+	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
+	ExtendFrameDeadline(persistentMutationBlockEndFrame, currentFrame, a_frameCount);
+	persistentMutationBlocked.store(true, std::memory_order_release);
+}
+
+void State::UpdateSaveLoadSafeMode()
+{
+	std::lock_guard lock(saveLoadSafeModeMutex);
+	const uint32_t currentFrame = std::max(frameCount, 1u);
+	bool safeModeActive = saveLoadSafeModeActive.load(std::memory_order_acquire);
+	const bool wasSafeModeActive = safeModeActive;
+
+	bool engineStateKnown = false;
+	Util::WorldLoadTransition::EngineSignals engineSignals;
+	if (auto* saveLoad = RE::BGSSaveLoadGame::GetSingleton()) {
+		engineStateKnown = true;
+		engineSignals = {
+			.loading = saveLoad->GetSaveGameLoading(),
+			.saving = saveLoad->GetSaveGameSaving(),
+			.initializingForms = saveLoad->GetInitingForms(),
+			.deferredFormInitialization = saveLoad->GetDeferInitForms(),
+			.positioningPlayer = saveLoad->GetPositioningPlayerCharacter(),
+		};
+	}
+	const bool engineSaving = engineSignals.saving;
+	const bool engineLoadingOrInitializing = engineSignals.ReplacesWorldState();
+	const bool engineSaveLoadActive = engineSignals.RequiresPersistenceGuard();
+	engineSaveLoadActivityActive.store(
+		engineSaveLoadActive,
+		std::memory_order_release);
+	engineSaveLoadActivityKnown = engineStateKnown;
+	const bool ordinarySaveRecoveryUnsafe = !engineStateKnown ||
+	                                        engineLoadingOrInitializing || IsMainOrLoadingMenuOpen() || pendingPostLoadRuntimeReset;
+	if (ordinarySaveRecoveryUnsafe) {
+		RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::Other);
+	} else if (engineSaving && !engineSavingWasActive) {
+		RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::OrdinarySave);
+	}
+	engineSavingWasActive = engineSaving;
+
+	{
+		const auto worldTransition = Util::WorldLoadTransition::Advance(
+			{
+				.active = worldLoadTransitionActive.load(std::memory_order_acquire),
+				.startFrame = worldLoadTransitionStartFrame.load(std::memory_order_acquire),
+				.endFrame = worldLoadTransitionEndFrame.load(std::memory_order_acquire),
+			},
+			engineSignals,
+			currentFrame,
+			kSaveLoadSafeModeGraceFrames,
+			kSaveLoadSafeModeFallbackFrames);
+		worldLoadTransitionStartFrame.store(worldTransition.startFrame, std::memory_order_release);
+		worldLoadTransitionEndFrame.store(worldTransition.endFrame, std::memory_order_release);
+		worldLoadTransitionActive.store(worldTransition.active, std::memory_order_release);
+	}
+
+	if (engineSaveLoadActive) {
+		if (!safeModeActive) {
+			if (globals::shaderCache)
+				globals::shaderCache->SetSaveLoadDiskPersistenceBlocked(true);
+			saveLoadSafeModeStartFrame.store(currentFrame, std::memory_order_release);
+		}
+		ExtendFrameDeadline(
+			saveLoadSafeModeEndFrame,
+			currentFrame,
+			kSaveLoadSafeModeGraceFrames);
+		safeModeActive = true;
+		saveLoadSafeModeActive.store(true, std::memory_order_release);
+	} else if (safeModeActive) {
+		const uint32_t endFrame = saveLoadSafeModeEndFrame.load(std::memory_order_acquire);
+		if (endFrame != 0) {
+			if (Util::WorldLoadTransition::ReachedDeadline(currentFrame, endFrame)) {
+				safeModeActive = false;
+				saveLoadSafeModeActive.store(false, std::memory_order_release);
+				saveLoadSafeModeStartFrame.store(0, std::memory_order_release);
+				saveLoadSafeModeEndFrame.store(0, std::memory_order_release);
+			}
+		} else {
+			const uint32_t startFrame = saveLoadSafeModeStartFrame.load(std::memory_order_acquire);
+			if (startFrame != 0 && currentFrame - startFrame >= kSaveLoadSafeModeFallbackFrames) {
+				logger::warn("Save/load safe mode timed out after {} frames without a completion event", currentFrame - startFrame);
+				safeModeActive = false;
+				saveLoadSafeModeActive.store(false, std::memory_order_release);
+				saveLoadSafeModeStartFrame.store(0, std::memory_order_release);
+				saveLoadSafeModeEndFrame.store(0, std::memory_order_release);
+			}
+		}
+	}
+
+	uint32_t mutationBlockEndFrame = persistentMutationBlockEndFrame.load(std::memory_order_acquire);
+	if (mutationBlockEndFrame != 0 &&
+		Util::WorldLoadTransition::ReachedDeadline(currentFrame, mutationBlockEndFrame)) {
+		persistentMutationBlockEndFrame.store(0, std::memory_order_release);
+		mutationBlockEndFrame = 0;
+	}
+
+	const bool mutationGraceActive =
+		mutationBlockEndFrame != 0 &&
+		!Util::WorldLoadTransition::ReachedDeadline(currentFrame, mutationBlockEndFrame);
+	persistentMutationBlocked.store(safeModeActive || mutationGraceActive, std::memory_order_release);
+
+	if (wasSafeModeActive && !safeModeActive && globals::shaderCache)
+		globals::shaderCache->SetSaveLoadDiskPersistenceBlocked(false);
+
+	if (!safeModeActive && !ordinarySaveRecoveryUnsafe) {
+		saveLoadRenderRecoveryState &= ~kSaveLoadRenderRecoverySourceMask;
+	}
+}
+
 void State::Reset()
 {
-	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
-	if (!globals::game::ui->GameIsPaused())
+	selectedCustomPixelShaderType = RE::BSShader::Type::None;
+	auto& terrain = globals::features::terrainBlending;
+	TerrainSeams::GetInstance().Update(terrain.loaded && terrain.settings.Enabled && terrain.settings.LandscapeSeams &&
+									   globals::features::truePBR.loaded && globals::features::truePBR.settings.Enabled);
+	if (globals::game::ui && !globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
 
 	// Cache menu open states once per frame to avoid repeated IsMenuOpen calls
@@ -283,12 +606,21 @@ void State::Reset()
 		isMapMenuOpen = false;
 	}
 
+	UpdateSaveLoadSafeMode();
+	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
+
 	lastModifiedPixelDescriptor = 0;
 	lastModifiedVertexDescriptor = 0;
 	lastPixelDescriptor = 0;
 	lastVertexDescriptor = 0;
 	std::memset(&permutationDataPrevious, 0xFF, sizeof(PermutationCB));
+	globals::features::performanceOverlay.UpdateRenderTargetCapture();
+	globals::profiler->SetEngineFrameCount(frameCount);
 	frameCount++;
+	frameCountAtomic.store(frameCount, std::memory_order_release);
+	UpdateSaveLoadSafeMode();
+	RefreshDrawAnnotations();
+	LODBlendRingFix::GetInstance().Update();
 	globals::shaderCache->TickActiveShaderCapture(globals::menu && globals::menu->IsEnabled);
 	globals::shaderCache->ProcessPendingClear();
 
@@ -314,14 +646,17 @@ void State::Setup()
 	if (moonAndStarsLoaded)
 		logger::info("Moon and Stars detected, compatibility enabled");
 
+	const auto publicationGeneration = BeginRenderTargetResourcePublication();
 	SetupResources();
 
 	// Probe typed UAV load support before features set up their resources, so any
 	// gating logic that wants to read the log can run during feature SetupResources.
 	CheckTypedUAVLoadSupport();
 
-	Feature::ForEachLoadedFeature("SetupResources", [](Feature* feature) { feature->SetupResources(); });
+	uint32_t loadedFeatureSetupCount = 0;
+	Feature::ForEachLoadedFeature("SetupResources", [&](Feature* feature) { feature->SetupResources(); ++loadedFeatureSetupCount; });
 	globals::deferred->SetupResources();
+	CompleteRenderTargetResourcePublication(publicationGeneration, loadedFeatureSetupCount);
 
 	// Load per-weather settings after features are setup
 	globals::weatherManager->LoadPerWeatherSettingsFromDisk();
@@ -330,92 +665,240 @@ void State::Setup()
 	globals::sceneSettingsManager->LoadAll();
 }
 
-static std::string GetConfigPath(State::ConfigMode a_configMode)
+static std::filesystem::path GetConfigPath(State::ConfigMode a_configMode)
 {
 	switch (a_configMode) {
 	case State::ConfigMode::USER:
-		return Util::PathHelpers::GetSettingsUserPath().string();
+		return Util::PathHelpers::GetSettingsUserPath();
 	case State::ConfigMode::TEST:
-		return Util::PathHelpers::GetSettingsTestPath().string();
+		return Util::PathHelpers::GetSettingsTestPath();
 	case State::ConfigMode::THEME:
-		return Util::PathHelpers::GetSettingsThemePath().string();
+		return Util::PathHelpers::GetSettingsThemePath();
 	case State::ConfigMode::DEFAULT:
 	default:
-		return Util::PathHelpers::GetSettingsDefaultPath().string();
+		return Util::PathHelpers::GetSettingsDefaultPath();
 	}
 }
 
-void State::Load(ConfigMode a_configMode, bool a_allowReload)
+bool State::RestoreDefaultSettings(std::string& a_error)
 {
-	json settings;
+	a_error.clear();
+	if (!globals::menu || !globals::shaderCache) {
+		a_error = T("menu.defaults.not_ready", "Settings are not ready to restore defaults.");
+		return false;
+	}
+	if (IsPersistentMutationBlocked() || PerformanceTuningRenderer::HasActiveMeasurements()) {
+		a_error = T("menu.defaults.busy", "Defaults were not restored. Finish the current save, load or performance comparison first.");
+		return false;
+	}
+	json defaults;
+	const auto read = Util::FileHelpers::ReadJsonFile(GetConfigPath(ConfigMode::DEFAULT), defaults, a_error);
+	if (read != Util::FileHelpers::JsonFileReadResult::Success) {
+		a_error = read == Util::FileHelpers::JsonFileReadResult::NotFound ? T("menu.defaults.missing", "Defaults were not restored because SettingsDefault.json is missing.") :
+		                                                                    std::format("{} {}", T("menu.defaults.read_failed", "Defaults could not be read:"), a_error);
+		return false;
+	}
+	if (!defaults.is_object()) {
+		a_error = T("menu.defaults.invalid_object", "Defaults were not restored because SettingsDefault.json must contain an object.");
+		return false;
+	}
+	for (const char* section : { "Menu", "General", "Advanced" }) {
+		if (!defaults.contains(section) || !defaults[section].is_object()) {
+			a_error = std::vformat(T("menu.defaults.invalid_section", "Defaults were not restored because the {} section is missing or invalid."), std::make_format_args(section));
+			return false;
+		}
+	}
+	// Restoring tuning must not reopen the first-time setup dialog.
+	if (globals::menu)
+		defaults["Menu"]["FirstTimeSetupCompleted"] = globals::menu->GetSettings().FirstTimeSetupCompleted;
+	if (!globals::menu->PrepareSettingsMutation()) {
+		a_error = T("menu.defaults.baseline_failed", "Could not preserve the saved-settings baseline before restoring defaults.");
+		return false;
+	}
+	json previous;
+	try {
+		SaveToJson(previous, false);
+	} catch (const std::exception& e) {
+		a_error = std::format("{} {}", T("menu.defaults.snapshot_failed", "Could not preserve current settings before restoring defaults:"), e.what());
+		return false;
+	}
+	bool restored = false;
+	try {
+		LoadFromJson(defaults);
+		restored = true;
+	} catch (const std::exception& e) {
+		a_error = std::format("{} {}", T("menu.defaults.apply_failed", "Defaults could not be applied:"), e.what());
+		try {
+			LoadFromJson(previous);
+		} catch (const std::exception& rollback) {
+			a_error += std::format(" {} {}", T("menu.defaults.rollback_failed", "Current settings could not be recovered:"), rollback.what());
+		}
+		logger::warn("{}", a_error);
+	}
+	WeatherManager::GetSingleton()->RefreshFeatureOverrides();
+	if (globals::menu) {
+		globals::menu->RequestSettingsDirtyCheck();
+		if (restored)
+			globals::menu->ClearSettingsSaveResult();
+	}
+	return restored;
+}
+
+void State::Load(
+	ConfigMode a_configMode,
+	bool a_allowReload,
+	SettingsApplyMode a_applyMode)
+{
+	json settings = json::object();
 	bool errorDetected = false;
 
-	auto configFolderPath = std::filesystem::path(GetConfigPath(a_configMode)).parent_path().string();
-	auto defaultConfigFilePath = GetConfigPath(ConfigMode::DEFAULT);
-	auto userConfigFilePath = GetConfigPath(ConfigMode::USER);
+	const auto configPath = GetConfigPath(a_configMode);
+	const auto configFolderPath = configPath.parent_path();
+	const auto defaultConfigFilePath = GetConfigPath(ConfigMode::DEFAULT);
 
 	try {
 		std::filesystem::create_directories(configFolderPath);
 	} catch (const std::filesystem::filesystem_error& e) {
-		logger::warn("Error creating directory during Load ({}) : {}\n", configFolderPath, e.what());
-		errorDetected = true;
+		logger::warn("Error creating directory during Load ({}): {}", configFolderPath.string(), e.what());
 	}
 
-	// Attempt to load the config file
-	auto tryLoadConfig = [&](const std::string& path) -> bool {
-		std::ifstream i(path);
-		logger::info("Attempting to open config file: {}", path);
-		if (!i.is_open()) {
-			logger::warn("Unable to open config file: {}", path);
-			return false;
+	auto tryLoadConfig = [](const std::filesystem::path& a_path, json& o_settings) {
+		logger::info("Attempting to open config file: {}", a_path.string());
+
+		std::string errorMessage;
+		const auto result = Util::FileHelpers::ReadJsonFile(a_path, o_settings, errorMessage);
+		if (result == Util::FileHelpers::JsonFileReadResult::Success && !o_settings.is_object()) {
+			logger::warn("Config file must contain a JSON object: {}", a_path.string());
+			return Util::FileHelpers::JsonFileReadResult::Error;
 		}
-		try {
-			i >> settings;
-			i.close();
-			return true;
-		} catch (const nlohmann::json::parse_error& e) {
-			logger::warn("Error parsing json config file ({}) : {}\n", path, e.what());
-			i.close();
-			return false;
-		}
+
+		if (result == Util::FileHelpers::JsonFileReadResult::Error)
+			logger::warn("Unable to read config file {}: {}", a_path.string(), errorMessage);
+		return result;
 	};
 
-	// LOADING ORDER: Default → User → Overrides → User Overrides (.user files)
+	auto canonicalizeConfig = [](const std::filesystem::path& a_path, const json& a_settings) {
+		std::string errorMessage;
+		const auto result = SettingsSerialization::CanonicalizeFile(a_path, a_settings, errorMessage);
+		if (result == SettingsSerialization::CanonicalizationResult::Rewritten) {
+			logger::info("Reordered settings to match the UI: {}", a_path.string());
+		} else if (result == SettingsSerialization::CanonicalizationResult::Error) {
+			logger::warn("Could not reorder settings file {}: {}", a_path.string(), errorMessage);
+		}
+		return result;
+	};
+
+	auto generateFallbackSettingsInMemory = [&]() {
+		settings = json::object();
+		std::fill(enabledClasses, enabledClasses + magic_enum::enum_integer(RE::BSShader::Type::Total) - 1, true);
+		try {
+			SaveToJson(settings, true);
+			return true;
+		} catch (const std::exception& e) {
+			logger::error("Could not generate fallback settings in memory: {}", e.what());
+		} catch (...) {
+			logger::error("Could not generate fallback settings in memory due to an unknown error");
+		}
+		return false;
+	};
+
+	// LOADING ORDER: Default -> User -> Overrides -> User Overrides (.user files)
 
 	// Step 1: Always start with default settings
-	logger::info("Loading default settings from: {}", defaultConfigFilePath);
-	if (!tryLoadConfig(defaultConfigFilePath)) {
-		logger::info("No default config ({}), generating new one", defaultConfigFilePath);
+	logger::info("Loading default settings from: {}", defaultConfigFilePath.string());
+	const auto defaultResult = tryLoadConfig(defaultConfigFilePath, settings);
+	bool loadedDefaultFromDisk = defaultResult == Util::FileHelpers::JsonFileReadResult::Success;
+	if (defaultResult == Util::FileHelpers::JsonFileReadResult::NotFound) {
+		logger::info("No usable default config ({}), generating a new one", defaultConfigFilePath.string());
 		std::fill(enabledClasses, enabledClasses + magic_enum::enum_integer(RE::BSShader::Type::Total) - 1, true);
 		Save(ConfigMode::DEFAULT);
-		// Attempt to load the newly created config
-		if (!tryLoadConfig(defaultConfigFilePath)) {
-			logger::error("Error opening newly created default config file ({})\n", defaultConfigFilePath);
+		loadedDefaultFromDisk =
+			tryLoadConfig(defaultConfigFilePath, settings) == Util::FileHelpers::JsonFileReadResult::Success;
+		if (!loadedDefaultFromDisk) {
+			logger::warn("Could not persist default settings; continuing with an in-memory baseline");
+			if (!generateFallbackSettingsInMemory())
+				return;
+		}
+	} else if (defaultResult == Util::FileHelpers::JsonFileReadResult::Error) {
+		logger::error("Default config is invalid or unreadable; preserving it and using an in-memory baseline: {}", defaultConfigFilePath.string());
+		if (!generateFallbackSettingsInMemory())
 			return;
+	}
+	if (loadedDefaultFromDisk) {
+		canonicalizeConfig(defaultConfigFilePath, settings);
+		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
+		if (auto adaptiveIt = settings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+			adaptiveIt != settings.end())
+			SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
+	}
+
+	// Step 2: Apply user settings on top of defaults.
+	if (a_configMode == ConfigMode::USER) {
+		json userSettings;
+		const auto userResult = tryLoadConfig(configPath, userSettings);
+		if (userResult == Util::FileHelpers::JsonFileReadResult::Success) {
+			auto presetCompatibility = PresetCompatibility::Evaluate(userSettings, Plugin::VERSION_LABEL);
+			PresetCompatibility::Publish(presetCompatibility);
+			if (!presetCompatibility.ShouldApply()) {
+				logger::error(
+					"Rejected user settings without modifying {}: {}",
+					configPath.string(),
+					presetCompatibility.message);
+			} else {
+				if (presetCompatibility.disposition == PresetCompatibility::Disposition::kCompatible)
+					logger::info("Accepted marked preset: {}", presetCompatibility.message);
+				canonicalizeConfig(configPath, userSettings);
+				const auto adaptiveBalanceIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+				const auto legacyAdaptiveBrightnessIt =
+					userSettings.find(SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data());
+				const bool userDefinedAdaptiveBalance =
+					(adaptiveBalanceIt != userSettings.end() && adaptiveBalanceIt->is_object()) ||
+					(legacyAdaptiveBrightnessIt != userSettings.end() && legacyAdaptiveBrightnessIt->is_object());
+				SettingsMigrations::MigrateAdaptiveBalanceRootLayer(userSettings, true);
+				if (const auto sourceAdaptiveIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+					sourceAdaptiveIt != userSettings.end() && SettingsMigrations::HasForcedLegacyWaterAppearance(*sourceAdaptiveIt)) {
+					if (auto targetAdaptiveIt = settings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+						targetAdaptiveIt != settings.end())
+						SettingsMigrations::ClearExplicitAdaptiveBalanceWaterProfiles(*targetAdaptiveIt);
+				}
+				if (auto adaptiveIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+					adaptiveIt != userSettings.end())
+					SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
+				for (const auto& [key, value] : userSettings.items()) {
+					if (Util::Settings::OverlayCoreSettings(settings, key, value))
+						continue;
+					auto existingIt = settings.find(key);
+					if (!userDefinedAdaptiveBalance &&
+						key == SettingsMigrations::kAdaptiveBalanceSettingsName &&
+						existingIt != settings.end() && existingIt->is_object() && value.is_object()) {
+						// Migration can synthesize a partial destination section in an
+						// otherwise-CSUtility-only user file. Overlay that patch so it does
+						// not replace richer Adaptive Balance defaults from Settings.json.
+						existingIt->merge_patch(value);
+					} else {
+						settings[key] = value;
+					}
+				}
+				logger::info("Applied user settings from: {}", configPath.string());
+			}
+		} else if (userResult == Util::FileHelpers::JsonFileReadResult::NotFound) {
+			PresetCompatibility::Publish(PresetCompatibility::Evaluate(json::object(), Plugin::VERSION_LABEL));
+			logger::info("No user config file found at: {}", configPath.string());
+		} else {
+			PresetCompatibility::Evaluation evaluation;
+			evaluation.disposition = PresetCompatibility::Disposition::kRejected;
+			evaluation.currentVersion = std::string{ Plugin::VERSION_LABEL };
+			evaluation.message = "SettingsUser.json is unreadable; defaults remain active and the source file is protected from overwrite.";
+			PresetCompatibility::Publish(std::move(evaluation));
 		}
 	}
 
-	// Step 2: Apply user settings on top of defaults (user preferences)
-	if (a_configMode == ConfigMode::USER) {
-		json userSettings;
-		std::ifstream userFile(userConfigFilePath);
-		if (userFile.is_open()) {
-			try {
-				userFile >> userSettings;
-				userFile.close();
-
-				// Merge user settings on top of defaults
-				for (auto& [key, value] : userSettings.items()) {
-					settings[key] = value;
-				}
-				logger::info("Applied user settings from: {}", userConfigFilePath);
-			} catch (const nlohmann::json::parse_error& e) {
-				logger::warn("Error parsing user config file: {}", e.what());
-				userFile.close();
-			}
-		} else {
-			logger::info("No user config file found at: {}", userConfigFilePath);
-		}
+	// Retire legacy distances before a separate-field override can merge with them.
+	try {
+		if (auto lighting = settings.find("Light Limit Fix"); lighting != settings.end())
+			LightLimitFixDetail::ShadowCulling::MigrateLegacyOverride(*lighting);
+	} catch (const std::exception& error) {
+		logger::warn("Shadow-culling migration deferred to feature validation: {}", error.what());
 	}
 
 	// Step 3: Discover and prepare overrides (applied after user settings, so overrides take priority)
@@ -438,11 +921,12 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 			logger::info("Applied global user override customizations");
 		}
 	}
+	SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
 
 	try {
 		// Load core settings (Menu, Advanced, General, Replace Original Shaders)
 		logger::info("Loading core settings");
-		LoadFromJson(settings);
+		LoadFromJson(settings, false, a_applyMode);
 		// Ensure 'Disable at Boot' section exists in the JSON
 		if (!settings.contains("Disable at Boot") || !settings["Disable at Boot"].is_object()) {
 			// Initialize to an empty object if it doesn't exist
@@ -452,6 +936,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		json& disabledFeaturesJson = settings["Disable at Boot"];
 		logger::info("Loading 'Disable at Boot' settings");
 
+		disabledFeatures.clear();
 		for (auto& [featureName, featureStatus] : disabledFeaturesJson.items()) {
 			if (featureStatus.is_boolean()) {
 				disabledFeatures[featureName] = featureStatus.get<bool>();
@@ -459,7 +944,6 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 				logger::warn("Invalid entry for feature '{}' in 'Disable at Boot', expected boolean.", featureName);
 			}
 		}
-
 		// Once DataLoaded has run, a full settings reload must not repeat feature
 		// validation or lifecycle registration; only live settings may change.
 		const bool runtimeReload = globals::shaderCache->menuLoaded.load(std::memory_order_relaxed);
@@ -496,7 +980,8 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 					}
 
 					// Apply feature-specific overrides on top (overrides take priority over user settings)
-					if (overridesDiscovered > 0 && overrideManager->HasFeatureOverrides(featureName)) {
+					if (overrideManager->HasFeatureOverrides(featureName) ||
+						(featureName == SettingsMigrations::kAdaptiveBalanceFeatureName && overrideManager->HasUserOverride(featureName))) {
 						json featureJson;
 						feature->SaveSettings(featureJson);  // Get current settings as JSON
 
@@ -545,26 +1030,33 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 			}
 		}
 
+		WeatherManager::GetSingleton()->NotifyUserSettingsChanged();
+
 		const auto currentVersion = std::string{ Plugin::VERSION_LABEL };
-		if (settings["Version"].is_string() && settings["Version"].get<std::string>() != currentVersion) {
-			logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], currentVersion);
-			Save(a_configMode);  // Use original config mode
+		const auto versionIt = settings.find("Version");
+		if (versionIt == settings.end() || !versionIt->is_string() || versionIt->get<std::string>() != currentVersion) {
+			const auto loadedVersion = versionIt != settings.end() && versionIt->is_string() ?
+			                               versionIt->get<std::string>() :
+			                               std::string{ "<missing or invalid>" };
+			logger::info("Loaded config for version {}; version {} will be written on save", loadedVersion, currentVersion);
 		}
 
 		FeatureIssues::ScanForOrphanedFeatureINIs();
 
 		logger::info("Loading Settings Complete");
 	} catch (const json::exception& e) {
-		logger::info("General JSON error accessing settings: {}; recreating config", e.what());
-		Save(a_configMode);
+		logger::warn("General JSON error accessing settings: {}; preserving the source config", e.what());
 		errorDetected = true;
 	} catch (const std::exception& e) {
-		logger::info("General error accessing settings: {}; recreating config", e.what());
-		Save(a_configMode);
+		logger::warn("General error accessing settings: {}; preserving the source config", e.what());
 		errorDetected = true;
 	}
-	if (errorDetected && a_allowReload)
-		Load(a_configMode, false);
+	if (errorDetected && a_allowReload && a_configMode != ConfigMode::DEFAULT) {
+		logger::warn("Loading default settings after the selected config failed");
+		Load(ConfigMode::DEFAULT, false, a_applyMode);
+	}
+	if (!errorDetected && globals::menu)
+		globals::menu->ResetSettingsDirtyState();
 }
 
 void State::SaveToJson(
@@ -572,6 +1064,7 @@ void State::SaveToJson(
 	bool a_includeMissingUnloadedFeatures)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
+	SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
 	const auto shaderCache = globals::shaderCache;
 
 	globals::menu->Save(settings["Menu"]);
@@ -589,7 +1082,7 @@ void State::SaveToJson(
 	settings["Advanced"] = advanced;
 
 	json general;
-	general["Enable Shaders"] = shaderCache->IsEnabled();
+	general["Enable Shaders"] = shaderCache->IsEnableRequested();
 	general["Enable Disk Cache"] = shaderCache->IsDiskCache();
 	general["Skip Unchanged Shaders"] = shaderCache->IsSkipUnchangedShaders();
 	general["Enable Async"] = shaderCache->IsAsync();
@@ -611,17 +1104,35 @@ void State::SaveToJson(
 
 	settings["Version"] = std::string{ Plugin::VERSION_LABEL };
 
-	// Save feature settings without performing disk I/O. Preserve an existing
-	// section for any feature which is unavailable in this session.
+	// Save feature settings.
+	auto* weatherRegistry =
+		WeatherVariables::GlobalWeatherRegistry::GetSingleton();
 	for (auto* feature : Feature::GetFeatureList()) {
+		// Preserve the last valid settings for features which were disabled, missing,
+		// or incompatible and therefore never loaded into memory.
 		const std::string settingsName = feature->GetName();
-		if (feature->loaded || (a_includeMissingUnloadedFeatures && !settings.contains(settingsName)))
-			feature->Save(settings);
+		if (feature->loaded || (a_includeMissingUnloadedFeatures && !settings.contains(settingsName))) {
+			if (feature->loaded) {
+				const auto activeVariables =
+					WeatherManager::GetSingleton()->GetActiveVariablesForFeature(
+						feature->GetShortName());
+				weatherRegistry->SerializeFeatureUserSettings(
+					feature->GetShortName(), activeVariables, [&]() {
+						feature->Save(settings);
+					});
+			} else {
+				feature->Save(settings);
+			}
+		}
 	}
 }
 
-void State::LoadFromJson(nlohmann::json& settings)
+void State::LoadFromJson(nlohmann::json& settings, bool a_loadFeatureSettings, SettingsApplyMode a_applyMode)
 {
+	if (!PerformanceTuningRenderer::NotifyConfigurationChanging())
+		throw std::runtime_error("Current performance comparison settings could not be restored; configuration was not changed.");
+	if (a_loadFeatureSettings)
+		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
 	std::lock_guard<std::mutex> lock(m_mutex);
 	const auto shaderCache = globals::shaderCache;
 
@@ -666,8 +1177,12 @@ void State::LoadFromJson(nlohmann::json& settings)
 
 	if (settings.contains("General") && settings["General"].is_object()) {
 		json& general = settings["General"];
-		if (general.contains("Enable Shaders") && general["Enable Shaders"].is_boolean())
-			shaderCache->SetEnabled(general["Enable Shaders"]);
+		if (general.contains("Enable Shaders") && general["Enable Shaders"].is_boolean()) {
+			if (a_applyMode == SettingsApplyMode::StartupHydration)
+				shaderCache->RestoreEnabledSetting(general["Enable Shaders"]);
+			else
+				shaderCache->SetEnabled(general["Enable Shaders"]);
+		}
 		if (general.contains("Enable Disk Cache") && general["Enable Disk Cache"].is_boolean())
 			shaderCache->SetDiskCache(general["Enable Disk Cache"]);
 		if (general.contains("Skip Unchanged Shaders") && general["Skip Unchanged Shaders"].is_boolean())
@@ -707,7 +1222,7 @@ void State::LoadFromJson(nlohmann::json& settings)
 
 	// Load feature settings (only for already-loaded features)
 	for (auto* feature : Feature::GetFeatureList()) {
-		if (feature->loaded) {
+		if (a_loadFeatureSettings && feature->loaded) {
 			feature->ReloadSettings(settings);
 		}
 	}
@@ -715,6 +1230,11 @@ void State::LoadFromJson(nlohmann::json& settings)
 
 bool State::Save(ConfigMode a_configMode)
 {
+	if (IsPersistentMutationBlocked()) {
+		if (globals::menu)
+			globals::menu->ReportSettingsSaveResult(false, "Settings cannot be saved during game save/load. Try again after loading completes.");
+		return false;
+	}
 	const std::filesystem::path configPath = GetConfigPath(a_configMode);
 	const std::string configName = configPath.filename().string();
 	const auto reportFailure = [&](std::string a_logMessage, std::string a_userMessage) {
@@ -813,6 +1333,8 @@ bool State::Save(ConfigMode a_configMode)
 				std::format("{} was written, but {} could not be persisted. Try saving again; see CommunityShaders.log.", configName, failureDetails));
 		}
 
+		if (globals::menu)
+			globals::menu->ResetSettingsDirtyState();
 		if (globals::menu)
 			globals::menu->ReportSettingsSaveResult(true, std::format("Settings saved successfully to {}.", configName));
 	}
@@ -979,43 +1501,64 @@ void State::SetupResources()
 
 	frameTimingActive = false;
 
-	auto renderer = globals::game::renderer;
+	delete permutationCB;
+	permutationCB = nullptr;
+	delete sharedDataCB;
+	sharedDataCB = nullptr;
+	delete featureDataCB;
+	featureDataCB = nullptr;
+	pPerf = nullptr;
+#ifdef TRACY_ENABLE
+	if (tracyCtx) {
+		TracyD3D11Destroy(tracyCtx);
+		tracyCtx = nullptr;
+	}
+#endif
 
-	permutationCB = new ConstantBuffer(ConstantBufferDesc<PermutationCB>());
-	sharedDataCB = new ConstantBuffer(ConstantBufferDesc<SharedDataCB>());
+	permutationCB = new ConstantBuffer(ConstantBufferDesc<PermutationCB>(), "State::Permutation");
+	sharedDataCB = new ConstantBuffer(ConstantBufferDesc<SharedDataCB>(), "State::SharedData");
 
-	auto [data, size] = GetFeatureBufferData(false);
-	(void)data;
-	// Feature data is dynamically packed and only needs D3D11's 16-byte CB alignment.
-	featureDataCB = new ConstantBuffer(ConstantBufferDesc((uint32_t)size, true, 16));
+	const auto featureDataSize = GetFeatureBufferData(false).second;
+	featureDataCB = new ConstantBuffer(ConstantBufferDesc((uint32_t)featureDataSize), "State::FeatureData");
 
 	// Grab main texture to get resolution
-	D3D11_TEXTURE2D_DESC texDesc{};
-	renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture->GetDesc(&texDesc);
+	// Use the physical main texture so dynamic resize and target recreation agree.
+	screenSize = GetMainRenderTargetSize();
+	if (globals::d3d::context) {
+		globals::d3d::context->QueryInterface(
+			__uuidof(REX::W32::ID3DUserDefinedAnnotation),
+			reinterpret_cast<void**>(pPerf.ReleaseAndGetAddressOf()));
+	}
 
-	globals::d3d::context->QueryInterface(__uuidof(pPerf), reinterpret_cast<void**>(&pPerf));
+	if (globals::profiler && globals::d3d::device && globals::d3d::context) {
+		globals::profiler->Initialize(globals::d3d::device, globals::d3d::context);
+		if (frameAnnotations) {
+			globals::profiler->SetPerfEventCallbacks(
+				[this](std::string_view a_title) { BeginPerfEvent(a_title); },
+				[this](std::string_view) { EndPerfEvent(); });
+		} else {
+			globals::profiler->SetPerfEventCallbacks({}, {});
+		}
+	}
 
 	featureLevel = globals::d3d::device->GetFeatureLevel();
+	setupResourcesDevice = globals::d3d::device;
+	setupResourcesContext = globals::d3d::context;
 
 	tracyCtx = TracyD3D11Context(globals::d3d::device, globals::d3d::context);
 #ifdef TRACY_ENABLE
 	Feature::SetTracyCtx(tracyCtx);
 #endif
-
-	globals::profiler->Initialize(globals::d3d::device, globals::d3d::context);
-
-	if (frameAnnotations) {
-		globals::profiler->SetPerfEventCallbacks(
-			[this](std::string_view name) { BeginPerfEvent(name); },
-			[this](std::string_view) { EndPerfEvent(); });
-	} else {
-		globals::profiler->SetPerfEventCallbacks({}, {});
-	}
 }
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred)
 {
 	auto deferred = globals::deferred;
+	const auto categoryFlag = SIE::ShaderCache::GetCharacterCategoryFlag(a_shader.shaderType.get());
+	a_vertexDescriptor &= ~categoryFlag;
+	a_pixelDescriptor &= ~categoryFlag;
+	if ((deferred->deferredPass || a_forceDeferred) && deferred->IsCharacterCategoryEnabled())
+		a_pixelDescriptor |= categoryFlag;
 
 	if (a_shader.shaderType.get() != RE::BSShader::Type::Utility && a_shader.shaderType.get() != RE::BSShader::Type::ImageSpace) {
 		switch (a_shader.shaderType.get()) {
@@ -1034,7 +1577,8 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::AnisoLighting |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr);
+										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr |
+										(uint32_t)SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
 
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::ShadowDir |
@@ -1115,11 +1659,16 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			}
 			break;
 		}
+	} else if (a_shader.shaderType.get() == RE::BSShader::Type::Utility) {
+		a_vertexDescriptor &= ~static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::TruePbr);
 	}
 }
 
 void State::BeginPerfEvent(std::string_view title)
 {
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+	NvPerf::PushRange(title);
+#endif
 #ifdef TRACY_ENABLE
 	// Use dynamic source location so Tracy displays the title as the zone name
 	// rather than the static function name "BeginPerfEvent".
@@ -1132,11 +1681,17 @@ void State::BeginPerfEvent(std::string_view title)
 	const TracyCZoneCtx ctx = ___tracy_emit_zone_begin_alloc(srcloc, true);
 	s_tracyPerfZones.push_back(ctx);
 #endif
-	pPerf->BeginEvent(std::wstring(title.begin(), title.end()).c_str());
+	if (pPerf.Get()) {
+		thread_local std::wstring wideTitle;
+		pPerf->BeginEvent(WidenAnnotation(wideTitle, title));
+	}
 }
 
 void State::EndPerfEvent()
 {
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+	NvPerf::PopRange();
+#endif
 #ifdef TRACY_ENABLE
 	if (!s_tracyPerfZones.empty()) {
 		TracyCZoneEnd(s_tracyPerfZones.back());
@@ -1145,12 +1700,16 @@ void State::EndPerfEvent()
 		logger::warn("EndPerfEvent called without a matching BeginPerfEvent");
 	}
 #endif
-	pPerf->EndEvent();
+	if (pPerf.Get())
+		pPerf->EndEvent();
 }
 
 void State::SetPerfMarker(std::string_view title)
 {
-	pPerf->SetMarker(std::wstring(title.begin(), title.end()).c_str());
+	if (pPerf.Get()) {
+		thread_local std::wstring wideMarker;
+		pPerf->SetMarker(WidenAnnotation(wideMarker, title));
+	}
 }
 
 void State::SetAdapterDescription(const std::wstring& description)
@@ -1228,6 +1787,9 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 			data.MipBias = 0;
 		}
 
+		if (a_inWorld && !isMainMenuOpen && !isLoadingMenuOpen)
+			TextureStreaming::Instance().CaptureWorldDemand(data.MipBias);
+
 		data.RefractionScale = refractionScale;
 		const auto& volumetricShadows = globals::features::volumetricShadows;
 		data.VolumetricShadowsEnabled = volumetricShadows.loaded && volumetricShadows.settings.Enabled;
@@ -1236,6 +1798,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		                               VolumetricLighting::GodrayProfile{};
 		data.VolumetricLightingOpacity = godrayProfile.Opacity;
 		data.VolumetricLightingSaturation = godrayProfile.Saturation;
+		data.VolumetricLightingClarity = { a_inWorld ? globals::features::adaptiveBrightness.GetEffectiveVolumetricClarity() : AdaptiveBalanceGodray::kClarityDefault, godrayProfile.ShaftIntensity, 0.0f, 0.0f };
 		data.VolumetricLightingCustomColor = {
 			godrayProfile.CustomColorRed,
 			godrayProfile.CustomColorGreen,
@@ -1377,5 +1940,255 @@ void State::LoadTheme()
 
 bool State::HasDirectionalShadows() const
 {
-	return !Util::IsInterior() || globals::features::interiorSun.IsActiveInteriorSun();
+	if (!Util::IsInterior())
+		return true;
+
+	return globals::features::interiorSun.IsActiveInteriorSun();
+}
+
+void State::SetupRenderTargetResources()
+{
+	const bool stateResourcesMissing =
+		!permutationCB ||
+		!sharedDataCB ||
+		!featureDataCB;
+	const bool d3dDeviceChanged =
+		setupResourcesDevice != globals::d3d::device ||
+		setupResourcesContext != globals::d3d::context;
+
+	if (stateResourcesMissing || d3dDeviceChanged) {
+		Setup();
+		return;
+	}
+	const uint64_t publicationGeneration =
+		BeginRenderTargetResourcePublication();
+
+	const auto mainRenderTargetSize = GetMainRenderTargetSize();
+	if (mainRenderTargetSize.x > 0.0f && mainRenderTargetSize.y > 0.0f) {
+		screenSize = mainRenderTargetSize;
+	}
+	featureLevel = globals::d3d::device->GetFeatureLevel();
+
+	// Resize only resources tied to recreated render targets.
+	// Keep disk/world discovery and full feature setup on State::Setup().
+	uint32_t loadedFeatureSetupCount = 0;
+	Feature::ForEachLoadedFeature("SetupRenderTargetResources", [&](Feature* feature) {
+		feature->SetupRenderTargetResources();
+		++loadedFeatureSetupCount;
+	});
+	globals::deferred->SetupResources();
+	CompleteRenderTargetResourcePublication(
+		publicationGeneration,
+		loadedFeatureSetupCount);
+}
+
+uint64_t State::BeginRenderTargetResourcePublication() noexcept
+{
+	const uint64_t previousGeneration =
+		renderTargetResourcePublicationGeneration.fetch_add(
+			1,
+			std::memory_order_acq_rel);
+	return previousGeneration + 1;
+}
+
+void State::InvalidateRenderTargetResourcePublication() noexcept
+{
+	(void)BeginRenderTargetResourcePublication();
+}
+
+void State::CompleteRenderTargetResourcePublication(
+	uint64_t a_generation,
+	uint32_t a_loadedFeatureSetupCount)
+{
+	// The publication proves only the coordinated setup boundary: every loaded
+	// feature callback returned and Deferred completed for this main-target size.
+	// Exact required engine targets remain validated by the render-scale probe;
+	// optional feature degradation remains owned by each feature.
+	if (a_generation == 0 ||
+		a_generation != renderTargetResourcePublicationGeneration.load(
+							std::memory_order_acquire)) {
+		return;
+	}
+
+	const auto mainRenderTargetSize = GetMainRenderTargetSize();
+	const uint32_t width = mainRenderTargetSize.x > 0.0f ?
+	                           static_cast<uint32_t>(mainRenderTargetSize.x) :
+	                           0u;
+	const uint32_t height = mainRenderTargetSize.y > 0.0f ?
+	                            static_cast<uint32_t>(mainRenderTargetSize.y) :
+	                            0u;
+	auto publication = std::make_shared<RenderTargetResourcePublication>();
+	publication->generation = a_generation;
+	publication->width = width;
+	publication->height = height;
+	publication->loadedFeatureSetupCount = a_loadedFeatureSetupCount;
+	publication->device = globals::d3d::device;
+	publication->context = globals::d3d::context;
+	publication->deferredSetupAcknowledged = true;
+	publication->complete =
+		width != 0 &&
+		height != 0 &&
+		publication->device != nullptr &&
+		publication->context != nullptr &&
+		publication->device == setupResourcesDevice &&
+		publication->context == setupResourcesContext &&
+		publication->deferredSetupAcknowledged;
+	std::shared_ptr<const RenderTargetResourcePublication> completedPublication =
+		std::move(publication);
+	auto observedPublication = GetRenderTargetResourcePublication();
+	while (true) {
+		if (a_generation != renderTargetResourcePublicationGeneration.load(
+								std::memory_order_acquire)) {
+			return;
+		}
+		if (observedPublication &&
+			observedPublication->generation >= a_generation) {
+			return;
+		}
+		if (renderTargetResourcePublication.compare_exchange_weak(
+				observedPublication,
+				completedPublication,
+				std::memory_order_release,
+				std::memory_order_acquire)) {
+			break;
+		}
+	}
+	if (a_generation == renderTargetResourcePublicationGeneration.load(
+							std::memory_order_acquire)) {
+		completedRenderTargetResourcePublicationGeneration.store(
+			a_generation,
+			std::memory_order_release);
+	}
+}
+
+uint64_t State::GetCompletedRenderTargetResourcePublicationGeneration() const
+{
+	const auto publication = GetRenderTargetResourcePublication();
+	if (!publication || !publication->complete)
+		return 0u;
+
+	const uint64_t generation = publication->generation;
+	const bool isCurrent =
+		generation != 0 &&
+		generation == renderTargetResourcePublicationGeneration.load(
+						  std::memory_order_acquire) &&
+		generation == completedRenderTargetResourcePublicationGeneration.load(
+						  std::memory_order_acquire);
+	return isCurrent ? generation : 0u;
+}
+
+bool State::HasCompleteRenderTargetResourcePublication(
+	uint32_t a_width,
+	uint32_t a_height) const
+{
+	return GetRenderTargetResourcePublicationDiagnostics(a_width, a_height).current;
+}
+
+State::RenderTargetResourcePublicationDiagnostics State::GetRenderTargetResourcePublicationDiagnostics(
+	uint32_t a_expectedWidth,
+	uint32_t a_expectedHeight) const noexcept
+{
+	RenderTargetResourcePublicationDiagnostics diagnostics{
+		.expectedWidth = a_expectedWidth,
+		.expectedHeight = a_expectedHeight,
+		.evaluated = true,
+	};
+	const auto publication = GetRenderTargetResourcePublication();
+	diagnostics.currentGeneration = renderTargetResourcePublicationGeneration.load(
+		std::memory_order_acquire);
+	diagnostics.completedGeneration = completedRenderTargetResourcePublicationGeneration.load(
+		std::memory_order_acquire);
+	if (!publication)
+		return diagnostics;
+
+	diagnostics.publishedGeneration = publication->generation;
+	diagnostics.publishedWidth = publication->width;
+	diagnostics.publishedHeight = publication->height;
+	diagnostics.loadedFeatureSetupCount = publication->loadedFeatureSetupCount;
+	diagnostics.present = publication->generation != 0;
+	diagnostics.complete = publication->complete;
+	diagnostics.deferredSetupAcknowledged = publication->deferredSetupAcknowledged;
+	diagnostics.generationMatchesCurrent =
+		diagnostics.present &&
+		publication->generation == diagnostics.currentGeneration;
+	diagnostics.generationMatchesCompleted =
+		diagnostics.present &&
+		publication->generation == diagnostics.completedGeneration;
+	diagnostics.dimensionsMatch = diagnostics.present &&
+	                              publication->width == a_expectedWidth &&
+	                              publication->height == a_expectedHeight;
+	diagnostics.deviceMatches = diagnostics.present &&
+	                            publication->device != nullptr &&
+	                            publication->device == globals::d3d::device;
+	diagnostics.contextMatches = diagnostics.present &&
+	                             publication->context != nullptr &&
+	                             publication->context == globals::d3d::context;
+	diagnostics.current = diagnostics.complete &&
+	                      diagnostics.generationMatchesCurrent &&
+	                      diagnostics.generationMatchesCompleted &&
+	                      diagnostics.dimensionsMatch &&
+	                      diagnostics.deviceMatches &&
+	                      diagnostics.contextMatches;
+	return diagnostics;
+}
+
+State::RenderTargetResourcePublicationDiagnostics
+State::GetCurrentMainRenderTargetResourcePublicationDiagnostics() const noexcept
+{
+	const auto mainRenderTargetSize = GetMainRenderTargetSize();
+	const uint32_t width = mainRenderTargetSize.x > 0.0f ?
+	                           static_cast<uint32_t>(mainRenderTargetSize.x) :
+	                           0u;
+	const uint32_t height = mainRenderTargetSize.y > 0.0f ?
+	                            static_cast<uint32_t>(mainRenderTargetSize.y) :
+	                            0u;
+	return GetRenderTargetResourcePublicationDiagnostics(width, height);
+}
+
+void State::RefreshDrawAnnotations()
+{
+	drawAnnotationsActive = frameAnnotations &&
+	                        ((pPerf.Get() && pPerf->GetStatus()) ||
+								GetModuleHandleW(L"renderdoc.dll") ||
+								GetModuleHandleW(L"WinPixGpuCapturer.dll"));
+}
+
+void State::BeginDrawEvent(std::string_view title)
+{
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+	NvPerf::PushRange(title);
+#endif
+	// Keep high-frequency draw annotations available to RenderDoc/PIX without
+	// creating a dynamic Tracy source location for every geometry draw.
+	if (pPerf.Get()) {
+		thread_local std::wstring wideTitle;
+		pPerf->BeginEvent(WidenAnnotation(wideTitle, title));
+	}
+}
+
+void State::EndDrawEvent()
+{
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+	NvPerf::PopRange();
+#endif
+	if (pPerf.Get())
+		pPerf->EndEvent();
+}
+
+void State::UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass)
+{
+	constexpr auto isAurora = static_cast<uint32_t>(ExtraShaderDescriptors::IsAurora);
+	permutationData.ExtraShaderDescriptor &= ~isAurora;
+	if (!a_pass || !a_pass->geometry ||
+		!(currentVertexDescriptor & static_cast<uint32_t>(SIE::ShaderCache::EffectShaderFlags::SkyObject)))
+		return;
+	const auto sky = globals::game::sky;
+	if (!sky || !sky->auroraRoot)
+		return;
+	for (const RE::NiAVObject* node = a_pass->geometry; node; node = node->parent) {
+		if (node == sky->auroraRoot.get()) {
+			permutationData.ExtraShaderDescriptor |= isAurora;
+			return;
+		}
+	}
 }

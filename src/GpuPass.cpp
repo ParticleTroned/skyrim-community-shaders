@@ -1,0 +1,105 @@
+#include "GpuPass.h"
+
+#include "Globals.h"
+#include "Profiler.h"
+#include "State.h"
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+#	include "Diagnostics/NvPerf.h"
+#endif
+
+#ifdef TRACY_ENABLE
+ScopedGpuPass::ScopedGpuPass(const tracy::SourceLocationData* a_sourceLocation, std::string_view a_name, const Util::PassTimingHandle& a_capture, bool a_detailOnly) :
+	detailOnly(a_detailOnly)
+{
+	if (detailOnly && !a_capture)
+		return;
+#	ifdef DEVBENCH_BRIDGE_ENABLED
+	stutterScope.emplace(a_name);
+#	endif
+	auto* profiler = globals::profiler;
+	auto* state = globals::state;
+
+	if (profiler)
+		profilerActive = detailOnly ? profiler->BeginDetailPass(a_name, a_capture) : profiler->BeginPass(a_name, false, a_capture);
+	else
+		Profiler::MarkCaptureUnavailable(a_capture, "profiler_uninitialized", detailOnly);
+
+	cpuZone.emplace(a_sourceLocation, -1, true);
+
+	if (state && state->tracyCtx)
+		gpuZone.emplace(state->tracyCtx, a_sourceLocation, true);
+
+	if (state && (state->frameAnnotations
+#	if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+					 || NvPerf::RangesActive()
+#	endif
+						 )) {
+		state->BeginDrawEvent(a_name);
+		annotationOpen = true;
+	}
+}
+#endif
+
+ScopedGpuPass::ScopedGpuPass(std::string_view a_name, const Util::PassTimingHandle& a_capture, bool a_detailOnly) :
+	detailOnly(a_detailOnly)
+{
+	if (detailOnly && !a_capture)
+		return;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	stutterScope.emplace(a_name);
+#endif
+	auto* profiler = globals::profiler;
+	auto* state = globals::state;
+
+	if (profiler)
+		profilerActive = detailOnly ? profiler->BeginDetailPass(a_name, a_capture) : profiler->BeginPass(a_name, false, a_capture);
+	else
+		Profiler::MarkCaptureUnavailable(a_capture, "profiler_uninitialized", detailOnly);
+
+#ifdef TRACY_ENABLE
+	cpuZone.emplace(
+		uint32_t(0),
+		"GpuPass", sizeof("GpuPass") - 1,
+		"ScopedGpuPass", sizeof("ScopedGpuPass") - 1,
+		a_name.data(), a_name.size(),
+		uint32_t(0), -1, true);
+
+	if (state && state->tracyCtx) {
+		gpuZone.emplace(state->tracyCtx,
+			uint32_t(0),
+			"GpuPass", sizeof("GpuPass") - 1,
+			"ScopedGpuPass", sizeof("ScopedGpuPass") - 1,
+			a_name.data(), a_name.size(),
+			0, true);
+	}
+#endif
+
+	if (state && (state->frameAnnotations
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+					 || NvPerf::RangesActive()
+#endif
+						 )) {
+		state->BeginDrawEvent(a_name);
+		annotationOpen = true;
+	}
+}
+
+ScopedGpuPass::~ScopedGpuPass()
+{
+	auto* state = globals::state;
+
+	if (annotationOpen && state)
+		state->EndDrawEvent();
+
+#ifdef TRACY_ENABLE
+	gpuZone.reset();
+	cpuZone.reset();
+#endif
+
+	if (profilerActive && globals::profiler) {
+		if (detailOnly)
+			globals::profiler->EndDetailPass();
+		else
+			globals::profiler->EndPass(false);
+	}
+}

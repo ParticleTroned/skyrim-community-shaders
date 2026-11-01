@@ -1,0 +1,11 @@
+# Validate source payloads before an install changes its destination.
+set(_nr_source_roots
+    "@CMAKE_SOURCE_DIR@/package"
+    "@FEATURE_PATHS@"
+    "@STREAMLINE_RUNTIME_FEATURE_ROOT@")
+foreach(_nr_source_root IN LISTS _nr_source_roots)
+    if(NOT "${_nr_source_root}" STREQUAL "")
+        set(NR_PACKAGE_ROOT "${_nr_source_root}")
+        include("@CMAKE_SOURCE_DIR@/cmake/VerifyNeuralRenderingPayload.cmake")
+    endif()
+endforeach()

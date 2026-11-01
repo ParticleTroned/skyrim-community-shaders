@@ -1,10 +1,11 @@
+#include "I18n/I18n.h"
+#include "Utils/UI.h"
 #pragma once
 
-#include "../I18n/I18n.h"
 #include "Util.h"
 #include "Widget.h"
 #include <cctype>
-#include <format>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <string>
@@ -36,6 +37,8 @@ public:
 	// Call every frame with current item active state. Returns true if undo should be pushed.
 	bool UpdateActiveState(const std::string& key, bool isNowActive, double currentTime, double debounceDelay = DefaultDebounceDelay)
 	{
+		(void)currentTime;
+		(void)debounceDelay;
 		bool isPreviouslyActive = wasActive[key];
 		wasActive[key] = isNowActive;
 
@@ -45,13 +48,10 @@ public:
 			return true;  // Signal to push undo
 		}
 
-		// Reset undo flag when slider is released and idle
-		if (!isNowActive && undoPushedForSession[key]) {
-			auto it = lastChangeTime.find(key);
-			if (it == lastChangeTime.end() || currentTime - it->second >= debounceDelay) {
-				undoPushedForSession[key] = false;
-			}
-		}
+		// Every activation is a distinct undoable edit. Palette usage remains
+		// debounced separately through GetCompletedEntries().
+		if (!isNowActive && isPreviouslyActive)
+			undoPushedForSession[key] = false;
 
 		return false;
 	}
@@ -119,6 +119,8 @@ namespace WidgetDefaults
 	constexpr float kMinHeight = 150.0f;
 	constexpr float kInitialWidth = 580.0f;
 	constexpr float kInitialHeight = 580.0f;
+	constexpr float kMaxWidth = 16384.0f;
+	constexpr float kMaxHeight = 16384.0f;
 	constexpr float kSliderWidthRatio = 0.6f;  ///< Fraction of available width for slider/input controls
 	constexpr float kTODLabelWidth = 150.0f;   ///< Default label column width for time-of-day tables
 }
@@ -172,33 +174,10 @@ namespace PropertyDrawer
 // ============================================================================
 namespace WidgetFactory
 {
-	inline const char* TranslateWidgetTypeName(std::string_view widgetTypeName)
-	{
-		if (widgetTypeName == "Weather")
-			return T("cs_editor.widget_type_weather", "Weather");
-		if (widgetTypeName == "ImageSpace")
-			return T("cs_editor.widget_type_imagespace", "ImageSpace");
-		if (widgetTypeName == "Lighting")
-			return T("cs_editor.widget_type_lighting", "Lighting");
-		if (widgetTypeName == "Cell Lighting")
-			return T("cs_editor.widget_type_cell_lighting", "Cell Lighting");
-		if (widgetTypeName == "Volumetric Lighting")
-			return T("cs_editor.widget_type_volumetric_lighting", "Volumetric Lighting");
-		if (widgetTypeName == "Precipitation")
-			return T("cs_editor.widget_type_precipitation", "Precipitation");
-		if (widgetTypeName == "Lens Flare")
-			return T("cs_editor.widget_type_lens_flare", "Lens Flare");
-		if (widgetTypeName == "Visual Effect")
-			return T("cs_editor.widget_type_visual_effect", "Visual Effect");
-
-		// Fallback: use T() to cache a stable null-terminated copy
-		return T(std::string(widgetTypeName).c_str(), std::string(widgetTypeName).c_str());
-	}
-
-	// Populate a widget container from a form array
-	// WidgetType must have a constructor taking FormType*
+	/// Populate from a form array using a shared initialization-batch name index.
+	/// WidgetType must have a constructor taking FormType*.
 	template <typename WidgetType, typename FormType>
-	void PopulateWidgets(std::vector<std::unique_ptr<Widget>>& widgets)
+	void PopulateWidgets(std::vector<std::unique_ptr<Widget>>& widgets, Util::FormEditorIDIndex& editorIDs)
 	{
 		auto dataHandler = RE::TESDataHandler::GetSingleton();
 		if (!dataHandler)
@@ -210,16 +189,17 @@ namespace WidgetFactory
 		for (auto form : formArray) {
 			if (form) {
 				auto widget = std::make_unique<WidgetType>(form);
-				widget->CacheFormData();
-				widget->Load(false);
+				widget->CacheFormData(&editorIDs);
+				widget->RestoreRememberedBaseline();
+				widget->Load(false, false);
 				widgets.push_back(std::move(widget));
 			}
 		}
 	}
 
-	// Populate a widget container with SimpleFormWidget for cache-only purposes
+	/// Populate cache-only widgets using a shared initialization-batch name index.
 	template <typename FormType>
-	void PopulateSimpleWidgets(std::vector<std::unique_ptr<Widget>>& widgets)
+	void PopulateSimpleWidgets(std::vector<std::unique_ptr<Widget>>& widgets, Util::FormEditorIDIndex& editorIDs)
 	{
 		auto dataHandler = RE::TESDataHandler::GetSingleton();
 		if (!dataHandler)
@@ -232,7 +212,7 @@ namespace WidgetFactory
 			if (form) {
 				auto widget = std::make_unique<SimpleFormWidget>();
 				widget->form = form;
-				widget->CacheFormData();
+				widget->CacheFormData(&editorIDs);
 				widgets.push_back(std::move(widget));
 			}
 		}
@@ -259,7 +239,7 @@ namespace WidgetFactory
 		for (auto& widget : widgets) {
 			if (widget->IsOpen()) {
 				++count;
-				if (ImGui::MenuItem(std::format("{}: {}", TranslateWidgetTypeName(widget->GetWidgetTypeName()), widget->GetEditorID()).c_str()))
+				if (ImGui::MenuItem(std::format("{}: {}", widget->GetWidgetTypeName(), widget->GetEditorID()).c_str()))
 					ImGui::SetWindowFocus(widget->GetWindowTitle().c_str());
 			}
 		}
@@ -273,8 +253,7 @@ namespace WidgetFactory
 		for (auto& widget : widgets) {
 			if (widget->IsOpen()) {
 				hasOpen = true;
-				auto editorId = widget->GetEditorID();
-				if (ImGui::MenuItem(std::vformat(T("cs_editor.save_widget", "Save {}"), std::make_format_args(editorId)).c_str()))
+				if (ImGui::MenuItem(fmt::format(fmt::runtime(T("cs_editor.save_widget", "Save {}")), widget->GetEditorID()).c_str()))
 					widget->Save();
 			}
 		}
@@ -287,8 +266,7 @@ namespace WidgetFactory
 	{
 		if (widgets.empty())
 			return;
-		auto typeName = TranslateWidgetTypeName(widgets[0]->GetWidgetTypeName());
-		if (ImGui::MenuItem(std::vformat(T("cs_editor.close_all_widgets", "Close All {} Widgets"), std::make_format_args(typeName)).c_str())) {
+		if (ImGui::MenuItem(fmt::format(fmt::runtime(T("cs_editor.close_all_widgets", "Close All {} Widgets")), widgets[0]->GetWidgetTypeName()).c_str())) {
 			for (auto& widget : widgets)
 				widget->SetOpen(false);
 		}
@@ -389,10 +367,12 @@ namespace WeatherUtils
 		// True if the normalized path ends with ".dds".
 		bool HasDdsExtension(std::string_view path);
 
-		// True if the file exists under Data/textures/ (accepts paths with or without the leading "textures\").
+		// True if the texture is available as a loose file or archive resource.
+		// Accepts paths with or without the leading "textures\".
 		bool ExistsOnDisk(std::string_view path);
 
-		// Build a BSA-style resource path ("Textures\\<path>" with .dds appended if missing).
+		// Build a validated BSA-style resource path ("Textures\\<path>" with .dds appended if missing).
+		// Returns an empty string for absolute, rooted, or traversing paths.
 		std::string BuildResourcePath(std::string_view path);
 	}
 
@@ -400,14 +380,66 @@ namespace WeatherUtils
 	RE::TESForm* FindFormByEditorID(std::string_view editorID, const std::vector<std::unique_ptr<Widget>>& widgets);
 	std::string FindEditorIDByForm(const RE::TESForm* form, const std::vector<std::unique_ptr<Widget>>& widgets);
 
+	template <typename T>
+	T* FindFormByEditorIDOrFileKey(std::string_view identifier)
+	{
+		if (identifier.empty())
+			return nullptr;
+
+		const std::string id(identifier);
+		std::string fileKey = id;
+		static constexpr std::string_view kFallbackPrefixes[] = {
+			"IS_",
+			"VL_",
+			"Particle_",
+			"LensFlare_",
+			"VisualEffect_",
+			"Form_",
+		};
+
+		for (const auto prefix : kFallbackPrefixes) {
+			if (fileKey.starts_with(prefix)) {
+				fileKey = fileKey.substr(prefix.size());
+				break;
+			}
+		}
+
+		// Saved weather-editor references may use the load-order-stable SPID key.
+		if (fileKey.starts_with("0x") || fileKey.starts_with("0X")) {
+			if (const auto formID = Util::SpidToFormId(fileKey)) {
+				if (auto* form = RE::TESForm::LookupByID<T>(formID)) {
+					return form;
+				}
+			}
+		}
+
+		auto* dataHandler = RE::TESDataHandler::GetSingleton();
+		if (!dataHandler)
+			return nullptr;
+
+		auto& forms = dataHandler->GetFormArray<T>();
+		for (auto* form : forms) {
+			if (!form)
+				continue;
+
+			if (Util::GetFormFileKey(form) == fileKey || Util::GetFormEditorID(form) == id) {
+				return form;
+			}
+		}
+
+		return nullptr;
+	}
+
 	// Set the current widget for undo tracking (should be called at start of widget Draw())
 	void SetCurrentWidget(Widget* widget);
+	void PushWidgetUndo(Widget* widget);
 
 	// UI helper functions
-	const char* TranslateControlLabel(std::string_view label);
 	bool DrawSliderInt8(const std::string& label, int& property);
 	bool DrawColorEdit(const std::string& l, float3& property, Widget* widget = nullptr);
 	bool DrawSliderUint8(const std::string& label, int& property);
+	bool DrawSliderInt(const std::string& label, int& property, int min, int max, Widget* widget = nullptr);
+	bool DrawSliderUint32(const std::string& label, std::uint32_t& property, std::uint32_t min, std::uint32_t max, Widget* widget = nullptr, const char* format = "%u");
 	bool DrawSliderFloat(const std::string& label, float& property, float min = 0.0f, float max = 1.0f, Widget* widget = nullptr, const char* format = "%.3f");
 	bool DrawCheckbox(const std::string& label, bool& value, Widget* widget = nullptr);
 
@@ -417,7 +449,7 @@ namespace WeatherUtils
 		// invoked with (T* form, std::string editorID) for each enumerable entry.
 		template <typename T, typename ForEachEntry>
 		bool DrawFormComboBody(const char* label, T*& currentForm, const std::string& currentEditorID,
-			bool showFormID, bool allowNone, float width, ForEachEntry forEachEntry)
+			bool showFormID, bool allowNone, float width, Widget* widget, ForEachEntry forEachEntry)
 		{
 			bool changed = false;
 
@@ -430,14 +462,15 @@ namespace WeatherUtils
 				                  std::format("{} (0x{:08X})", effectiveID, currentForm->GetFormID()) :
 				                  effectiveID;
 			} else {
-				previewText = ::T("cs_editor.none_filter", "None");
+				previewText = "None";
 			}
 
 			if (width > 0.0f)
 				ImGui::SetNextItemWidth(width);
 
-			if (ImGui::BeginCombo(label, previewText.c_str())) {
-				if (allowNone && ImGui::Selectable(::T("cs_editor.none_filter", "None"), currentForm == nullptr)) {
+			if (auto combo = Util::Widgets::ComboBox(label, previewText.c_str())) {
+				if (allowNone && ImGui::Selectable(T("cs_editor.none_filter", "None"), currentForm == nullptr) && currentForm != nullptr) {
+					WeatherUtils::PushWidgetUndo(widget);
 					currentForm = nullptr;
 					changed = true;
 				}
@@ -447,14 +480,14 @@ namespace WeatherUtils
 					                             std::format("{} (0x{:08X})", editorID, form->GetFormID()) :
 					                             editorID;
 					bool isSelected = (currentForm == form);
-					if (ImGui::Selectable(comboLabel.c_str(), isSelected)) {
+					if (ImGui::Selectable(comboLabel.c_str(), isSelected) && !isSelected) {
+						WeatherUtils::PushWidgetUndo(widget);
 						currentForm = form;
 						changed = true;
 					}
 					if (isSelected)
 						ImGui::SetItemDefaultFocus();
 				});
-				ImGui::EndCombo();
 			}
 
 			return changed;
@@ -464,19 +497,19 @@ namespace WeatherUtils
 	// Generic form picker combo box using cached widget EditorIDs for performance
 	// Returns true if selection changed
 	template <typename T, typename WidgetContainer>
-	bool DrawFormPickerCached(const char* label, T*& currentForm, const WidgetContainer& widgets, bool showFormID = true, bool allowNone = true, float width = 450.0f)
+	bool DrawFormPickerCached(const char* label, T*& currentForm, const WidgetContainer& widgets, bool showFormID = true, bool allowNone = true, float width = 450.0f, Widget* trackingWidget = nullptr)
 	{
 		std::string currentEditorID;
 		if (currentForm) {
-			for (const auto& widget : widgets) {
-				if (widget->form == currentForm) {
-					currentEditorID = widget->GetEditorID();
+			for (const auto& cachedWidget : widgets) {
+				if (cachedWidget && cachedWidget->form == currentForm) {
+					currentEditorID = cachedWidget->GetEditorID();
 					break;
 				}
 			}
 		}
 
-		return detail::DrawFormComboBody<T>(label, currentForm, currentEditorID, showFormID, allowNone, width,
+		return detail::DrawFormComboBody<T>(label, currentForm, currentEditorID, showFormID, allowNone, width, trackingWidget,
 			[&](auto&& visit) {
 				for (const auto& widget : widgets) {
 					if (widget && widget->form)
@@ -487,7 +520,7 @@ namespace WeatherUtils
 
 	// Legacy form picker (slow - only use if widgets not available)
 	template <typename T, typename Container>
-	bool DrawFormPicker(const char* label, T*& currentForm, const Container& formArray, bool showFormID = true, bool allowNone = true, float width = 450.0f)
+	bool DrawFormPicker(const char* label, T*& currentForm, const Container& formArray, bool showFormID = true, bool allowNone = true, float width = 450.0f, Widget* widget = nullptr)
 	{
 		auto getEditorID = [](T* form) -> std::string {
 			if (!form)
@@ -498,7 +531,7 @@ namespace WeatherUtils
 			return std::format("{:08X}", form->GetFormID());
 		};
 
-		return detail::DrawFormComboBody<T>(label, currentForm, getEditorID(currentForm), showFormID, allowNone, width,
+		return detail::DrawFormComboBody<T>(label, currentForm, getEditorID(currentForm), showFormID, allowNone, width, widget,
 			[&](auto&& visit) {
 				for (auto form : formArray) {
 					if (form)

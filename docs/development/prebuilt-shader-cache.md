@@ -1,145 +1,148 @@
 # Prebuilt SE Shader Cache
 
-This is the maintainer runbook for the distributable shader cache on the
-`cs-1.7-PL-SE` branch. Use `tools/build-shader-cache.py`; do not rename or merge
-cache blobs by hand.
+This is the maintainer runbook for the distributable SE/AE shader cache. Use
+`tools/build-shader-cache.py` from the same checkout as the release core.
 
-## Scope
+## Managed layout
 
-The archive supplies optimized DXBC for engine-managed SE pixel, vertex, and
-compute permutations. It contains:
+The standalone archive contains one `ShaderCache/` directory with exactly six
+files:
 
-```text
-ShaderCache/
-|-- Info.ini
-|-- Manifest.json
-`-- <shader directories and .pso/.vso/.cso blobs>
-ShaderCache-HorizonFix/
-|-- Info.ini
-|-- Manifest.json
-`-- <shader directories and .pso/.vso/.cso blobs>
-fomod/
-|-- info.xml
-`-- ModuleConfig.xml
-```
+| File | Purpose |
+| --- | --- |
+| `Optimized.A.csxpack` | Initial optimized shader records |
+| `Optimized.B.csxpack` | Optimized fallback generation |
+| `Developer.A.csxpack` | Initial developer lane, empty in release archives |
+| `Developer.B.csxpack` | Developer fallback generation |
+| `Info.ini` | Plugin/feature provenance and feature shader ABI state |
+| `PackManifest.json` | Pack-set identity, installation baseline, lane and compatibility metadata |
 
-The release AIO places its normal install tree under `Core/` and adds both
-cache profiles plus the same FOMOD at archive root. The installer always
-installs `Core`, then asks whether to install a prebuilt cache. When selected,
-it asks whether Horizon Fix is active.
+The release AIO places its complete install tree under `Core/`, the six cache
+files under `CachePayload/`, and installer metadata under `fomod/`. Its one
+installer page offers **Install the prebuilt shader cache** or **Do not install
+a prebuilt shader cache**. Both choices install all core files, including the
+SE HDR and frame-generation payloads. Selecting the cache maps `CachePayload/`
+directly to `Data/ShaderCache/`.
 
-The cache is tied to the plugin version, feature versions and enabled states,
-shader and recursive-include content, compile flags, custom defines, and the SE
-permutation inventory. It is not a GPU-driver cache and is not vendor-specific.
+Standard and Horizon Fix water records share the optimized pack. The runtime
+selects applicable records using the scoped compatibility registry; the
+installer does not ask which Horizon Fix state is active. Switching that
+companion plugin does not require reinstalling a different cache profile.
 
-The shipped profile merges `package/Shaders` with the feature shader trees from
-the AIO-Release package and omits `Tests`. Hidden AIO features are discovered
-from their C++ `IsHiddenFromUserView()` contracts and excluded exactly as they
-are from AIO-Release; this currently excludes Exponential Height Fog and Skin.
-Wetness Effects remains included and enabled. The profile also enables
-`UNIFIED_WATER` globally and `WETTERNESS` for lighting and water.
-
-Every build produces two complete, independently validated cache profiles. The
-standard `ShaderCache` records `HorizonFix` disabled and compiles Water without
-`HORIZON_FIX`. `ShaderCache-HorizonFix` records it enabled and compiles Water
-with the shader define derived from the feature's C++ contract. Validation
-requires an identical permutation inventory and rejects any changed blob outside
-the Water shader directory. Feature-specific shaders compiled through
-independent helpers are not covered unless they have a declared deterministic
+The cache contains engine-managed pixel, vertex and compute DXBC. It is not a
+GPU-driver cache and is not vendor-specific. Helpers with independent shader
+compilation paths are covered only when they have a declared deterministic
 inventory.
 
-## Contract files
+## Source contracts
 
-| Concern                             | Source of truth                                                                     |
-| ----------------------------------- | ----------------------------------------------------------------------------------- |
-| Builder, validation, and packaging  | `tools/build-shader-cache.py`                                                       |
-| Python and hlslkit pin              | `tools/shader-cache-requirements.txt`                                               |
-| SE permutation inventory            | `.github/configs/shader-validation.yaml`                                            |
-| Runtime digest and manifest         | `src/Utils/ContentHash.h`, `src/Utils/ShaderCacheManifest.h`, `src/ShaderCache.cpp` |
-| CSX/plugin version                  | `CSX_VERSION` in `cmake/CSXVersion.cmake`                                           |
-| Generated core compatibility marker | `CMakeLists.txt` and `cmake/CSXVersion.marker.in`                                   |
-| Feature versions                    | `features/*/Shaders/Features/*.ini`                                                 |
-| Standalone CI                       | `.github/workflows/shader-cache.yaml`                                               |
-| Release integration                 | `.github/workflows/release-build.yaml`                                              |
+| Concern | Source of truth |
+| --- | --- |
+| Builder, pack validation and AIO assembly | `tools/build-shader-cache.py` |
+| Exact compiler macro handling | `tools/shader_cache_compile.py`, `tools/shader_cache_manifest.py` |
+| Structural DXBC validation | `tools/shader_bytecode.py` |
+| Python dependencies and hlslkit revision | `tools/shader-cache-requirements.txt` |
+| SE captured inventory | `.github/configs/shader-validation.yaml` |
+| Global shader ABI | `config/shader-cache-abi.json`, `tools/build_provenance.py` |
+| Scoped external compatibility | `config/shader-compatibility-variants.json` |
+| Runtime content digest and cache | `src/Utils/ContentHash.h`, `src/Utils/ShaderCacheManifest.h`, `src/Utils/ShaderCachePack.h`, `src/ShaderCache.cpp` |
+| Plugin release identity | `cmake/CSXVersion.cmake` |
+| Feature provenance | `features/*/Shaders/Features/*.ini` |
+| Explicit feature shader ABI | `GetShaderCacheAbiVersion()` in feature headers |
+| Standalone/release CI | `.github/workflows/shader-cache.yaml`, `.github/workflows/release-build.yaml` |
 
-The Python and C++ digest implementations form one compatibility contract:
-CRLF-normalized source and recursively resolved includes are hashed, then
-combined with the compile-state digest. A missing or malformed manifest safely
-falls back to the older timestamp validation path.
+Release and feature versions are provenance. Entry validity also includes the
+source/include closure, resolved macro names and values, explicit shader ABI,
+compile state and applicable external compatibility requirements. A matching
+release label alone cannot make different shader inputs compatible.
+
+The builder stages the package shaders and visible AIO feature shaders. Hidden
+features are derived from `IsHiddenFromUserView()` declarations, matching AIO
+packaging. SE Wetness Effects, `VANILLA_FRESNEL` and `HDR_OUTPUT` permutations
+remain in the inventory. The shipped profile enables `UNIFIED_WATER` globally,
+`WETTERNESS` for Lighting, Water and RunGrass, and `PBR_GRASS=1` plus
+`GRASS_OPTIMIZATIONS` for RunGrass.
+
+The captured inventory remains unchanged. The builder adds the separately
+observed SE grass permutations and the character-category output companions
+whose descriptor bits are read from `ShaderCache::GetCharacterCategoryFlag()`.
+Missing permutations continue to compile locally when requested.
 
 ## Prerequisites
 
-Build on Windows with Git, 64-bit Python 3.12, a Windows SDK containing
-`fxc.exe`, and CMake when producing the `.7z` archive. Keep the virtual
-environment outside the repository:
+Full generation requires Windows, 64-bit Python 3.12, a Windows SDK containing
+`fxc.exe`, and CMake for `.7z` packaging. Keep the Python environment outside the
+repository:
 
 ```powershell
-$cacheVenv = Join-Path $env:LOCALAPPDATA "CommunityShaders\shader-cache-venv"
+$cacheVenv = Join-Path $env:LOCALAPPDATA 'CommunityShaders\shader-cache-venv'
 py -3.12 -m venv $cacheVenv
-$cachePython = Join-Path $cacheVenv "Scripts\python.exe"
-& $cachePython -m pip install --upgrade pip
+$cachePython = Join-Path $cacheVenv 'Scripts\python.exe'
 & $cachePython -m pip install -r tools/shader-cache-requirements.txt
 ```
 
-Always use the pinned requirements. The hlslkit manifest writer must remain
-byte-compatible with the runtime.
+Use the pinned hlslkit revision. Its source/include digest implementation is
+part of the runtime contract. The manifest writer refuses non-Windows builds
+because native include-path ordering must agree with the Windows runtime.
+Parsing inventories and testing pack/archive contracts can run on Linux.
 
-## Release build
+## Generate and package
 
 Build from the exact clean commit or tag that supplies the DLL and shaders:
 
 ```powershell
 if (git status --porcelain) {
-    throw "Release shader caches must be built from a clean working tree."
+    throw 'Release shader caches must be built from a clean working tree.'
 }
-
-$releaseLabel = git tag --points-at HEAD |
-    Where-Object { $_ -like "SE-RC*" } |
-    Select-Object -First 1
-if (-not $releaseLabel) {
-    throw "The release commit must have an SE-RC tag."
-}
+$releaseLabel = '<release-tag>'
 & $cachePython tools/build-shader-cache.py `
     --package `
     --package-label $releaseLabel
-if ($LASTEXITCODE -ne 0) {
-    throw "Shader-cache build failed."
-}
+if ($LASTEXITCODE -ne 0) { throw 'Shader-cache build failed.' }
 ```
 
-The builder derives the runtime `Info.ini` identity from the single
-`CSX_VERSION` declaration in `cmake/CSXVersion.cmake`. The DLL startup log,
-saved settings, runtime-generated cache metadata, prebuilt cache metadata,
-Windows product metadata, generated compatibility marker, and FOMOD gate all
-use that same CSX identity. Use `--plugin-version` only when intentionally
-testing another `CSX <major>.<minor>-SE` build. The release tag belongs in
-`--package-label`, not `Info.ini`.
+`Info.ini` uses the `CSX_VERSION` declaration from `cmake/CSXVersion.cmake`.
+`--plugin-version` accepts `CSX <major>.<minor>-SE` for intentional matching-build
+tests. The archive label is independent and belongs in `--package-label`.
+`--runtime SE` is optional; no other runtime inventory is supported.
 
-The builder stages a merged shader tree, applies the shipped profile, validates
-any `captured_shader_variants` guard, compiles the standard and Horizon Fix SE
-inventories, remaps ImageSpace output directories, writes each profile's digest
-manifest and feature metadata, checks every blob for a DXBC signature, verifies
-that only Water bytecode differs between profiles, creates FOMOD metadata,
-validates the archive, and only then publishes output.
+The build performs these steps before publishing output:
 
-The captured validation inventory describes one clean runtime profile. The
-release builder supplements it with the known SE-only permutations in
-`CROSS_MODLIST_SHADER_VARIANTS`; this keeps the distributed cache useful across
-different modlists without mixing VR-only descriptors into the SE package.
-Runtime requests that are absent even from this union remain safe: matching
-entries load from disk and only the unseen permutation compiles from source.
+1. Stage the merged SE shader tree and validate captured inventory counts.
+2. Apply the shipped feature scopes and add the SE grass/category variants.
+3. Resolve every compiler task and reject ambiguous output identities.
+4. Compile standard and Horizon Fix variants with FXC, preserving explicitly
+   empty macro replacements and nonempty values such as `PBR_GRASS=1`.
+5. Remap ImageSpace output using SE technique indices; hash source closures,
+   feature ABI state and the exact resolved macros into a temporary schema-2
+   entry manifest.
+6. Check DXBC headers, chunk bounds, shader stage and program lengths. Require
+   equivalent variant inventories and water-only Horizon Fix bytecode changes.
+7. Build and validate committed managed-pack records, SHA-256 payload/header
+   hashes, scoped compatibility identities and the six-file installation set.
+8. Validate the optional archive and publish through destination-owned staging.
 
-Expected output:
+Expected output is `dist/shader-cache/SE/ShaderCache/` and, with `--package`,
+`dist/shader-cache/ShaderCache-SE-<label>.7z`. Temporary loose blobs and
+`Manifest.json` are removed from the published managed cache.
 
-```text
-dist/shader-cache/
-|-- SE/ShaderCache/...
-|-- SE/ShaderCache-HorizonFix/...
-`-- ShaderCache-SE-<release-label>.7z
+For a deliberately standard-only test cache, pass `--no-include-horizon-fix`.
+Default release validation requires both standard and Horizon Fix coverage.
+Use the same explicit option when assembling a standard-only test AIO.
+
+Useful compiler overrides:
+
+```powershell
+& $cachePython tools/build-shader-cache.py `
+    --package --package-label $releaseLabel `
+    --fxc 'C:\Program Files (x86)\Windows Kits\10\bin\<sdk>\x64\fxc.exe' `
+    --jobs 4
 ```
 
-After building the matching AIO-Release tree, assemble the final archive
-without recompiling shaders:
+## Assemble the SE AIO
+
+The existing release workflow's `--assemble-aio` entry point remains available
+and does not require FXC or hlslkit. After building the matching core:
 
 ```powershell
 pwsh ./tools/cmake.ps1 --build --preset AIO-Release
@@ -150,150 +153,97 @@ pwsh ./tools/cmake.ps1 --build --preset AIO-Release
     --package-label $releaseLabel
 ```
 
-Pass the directory containing `ShaderCache/` and `ShaderCache-HorizonFix/` to
-`--assemble-aio`. `--aio-root` must be the extracted or built AIO root containing
-`SKSE/Plugins/CommunityShaders.dll` and its generated compatibility marker.
-Both roots are validated against the version derived from
-`cmake/CSXVersion.cmake`. The combined output is
-`CSX_AIO-<release-label>.7z`.
+`--assemble-aio` points to the directory containing `ShaderCache/`.
+`--aio-root` points to the complete core with `SKSE/Plugins/CommunityShaders.dll`
+and its generated CSX compatibility marker. Assembly checks feature versions,
+feature sets, the source ABI and every pack before copying either input. It
+rejects links, partial caches and previously integrated staging trees.
 
-Publication refuses arbitrary directories, links, and malformed existing
-outputs. Candidate files are copied through destination-owned staging so final
-ACLs follow the output root. A failed replacement preserves the prior cache.
+The core is copied as a complete tree. A SHA-256 inventory verifies every core
+file after staging and again after extracting the resulting archive. The same
+archive check verifies the cache and the install/no-cache FOMOD mappings. This
+preserves presentation, HDR and frame-generation assets without selecting or
+rewriting their files.
 
-Useful overrides:
+The combined output is `CSX_AIO-<label>.7z`. The release workflow requires the
+cache job to succeed, extracts both artifacts, calls this assembler, and only
+then replaces the original AIO archive. The separate intermediate cache archive
+is removed from release staging after successful assembly.
 
-```powershell
-& $cachePython tools/build-shader-cache.py `
-    --package `
-    --package-label $releaseLabel `
-    --fxc "C:\Program Files (x86)\Windows Kits\10\bin\<sdk>\x64\fxc.exe" `
-    --jobs 4
-```
+Publication refuses arbitrary output trees and linked destinations. Candidates
+are copied through destination-owned staging. Replacement retains the prior
+cache until the validated candidate is installed; a failed replacement restores
+that prior cache. An interrupted recovery directory blocks subsequent
+publication until it is resolved, preserving its contents for recovery.
 
-## Refreshing the SE inventory
+## Installation and runtime behavior
 
-Use a clean SE profile, remove the installed prebuilt cache, clear the runtime
-disk cache, enable Debug or Trace logging, launch the game, and wait until
-shader compilation finishes before exiting. Then use the wrapper:
+Install the integrated AIO using its FOMOD. The default choice installs the
+cache; the other choice installs the entire core and lets the game compile all
+required permutations locally. No mod-manager file probing is needed.
+
+A standalone cache archive has a normal `ShaderCache/` directory at archive
+root and can be installed directly as a Data payload. Do not choose the
+`ShaderCache` directory itself as the data root: that would flatten the six
+files into the wrong location.
+
+The runtime validates each applicable record before use. Changed sources,
+feature shader ABIs, macro values, compilation flags or external compatibility
+requirements cause local compilation for the affected requests. Shader input
+mismatches must never be bypassed merely to reuse cached bytecode.
+
+Optimized and developer records have separate managed lanes. Runtime writes,
+compaction and cache resets can advance generations beyond the installation
+baseline recorded in `PackManifest.json`; the shared manifest contract permits
+those valid transitions. Malformed records or an incomplete managed layout
+are rejected safely. Legacy loose-cache behavior is separate from managed pack
+validation.
+
+## Refresh the captured inventory
+
+Capture a clean SE session after clearing its shader cache, with Debug or Trace
+logging enabled, and wait for compilation to finish before exiting. Use the
+repository wrapper:
 
 ```powershell
 .\.github\configs\generate-shader-configs.ps1 `
-    -LogFile ".tmp\CommunityShaders-clean-trace.log" `
-    -OutputDir ".\.github\configs" `
-    -OutputName "shader-validation.yaml" `
+    -LogFile '.tmp\CommunityShaders-clean-trace.log' `
+    -OutputDir '.\.github\configs' `
+    -OutputName 'shader-validation.yaml' `
     -Force
 ```
 
-Do not call `hlslkit-generate` directly. The wrapper normalizes padded logger
-thread IDs in a temporary file, verifies that generated entries exactly equal
-captured source compilations, records `captured_shader_variants`, and replaces
-the inventory only after validation succeeds.
+The wrapper normalizes padded logger thread IDs, verifies generated entries
+against captured source compilations and records `captured_shader_variants`
+before replacing the inventory. Keep release-only additions in the builder's
+SE overlay so recapturing a single modlist does not remove them.
 
-## Runtime behavior
+## Validation
 
-Matching entries load from disk and are reported as cache loading rather than
-source compilation. Newly compiled blobs update `Manifest.json` through the
-same save path. Manifest state is flushed, pruned, discarded, or reloaded when
-the active cache is partially invalidated, cleared, backed up, or restored.
-Generation guards prevent a compile started before a cache transition from
-writing into the new cache generation.
-
-Smart Clear captures active shader permutations over bounded frames and clears
-only those entries when safe. It excludes queued or in-flight work, forgets
-only completed bookkeeping for evicted permutations, and falls back to a full
-clear when active capture is unavailable or the setting is disabled. Features
-may additionally clear their own scoped cache state through
-`ClearShaderCacheScoped`.
-
-Local compilation remains expected when metadata, sources, enabled features,
-custom defines, partial-precision/flow-control flags, or the requested
-permutation do not match the shipped profile. Never force-load mismatched
-bytecode.
-
-## Validation and release
-
-Successful builder completion verifies:
-
--   both profiles have the same non-empty permutation inventory and every blob
-    begins with `DXBC`;
--   every blob has one lowercase 128-bit manifest digest and no entry is
-    orphaned;
--   both `Info.ini` files contain the expected AIO feature set and differ only
-    in the `HorizonFix/Enabled` state;
--   only Water blobs differ between the standard and Horizon Fix profiles;
--   the archive contains both cache roots and both FOMOD files.
-
-Inspect an archive with:
+With the pinned requirements installed and CMake on `PATH`:
 
 ```powershell
-$cacheArchive = "dist/shader-cache/ShaderCache-SE-$releaseLabel.7z"
-cmake -E tar tf $cacheArchive
-Get-FileHash $cacheArchive -Algorithm SHA256
-```
-
-The standalone workflow uploads one fixed intermediate artifact,
-`ShaderCache-SE`. The release workflow requires that job to succeed, combines
-its two profiles with the matching AIO artifact, and attaches the integrated
-AIO. The standalone cache and unintegrated AIO archives are removed from the
-release staging directory after the combined archive validates.
-
-```powershell
-gh workflow run shader-cache.yaml `
-    --ref <branch-containing-the-workflow> `
-    -f target_ref=<commit-or-tag>
-```
-
-Install the archive with its included FOMOD. The first page asks whether to
-install the prebuilt shader cache. Choosing no cache still installs the complete
-core AIO and lets the game compile all required permutations locally.
-
-### Mod Organizer 2
-
-No MO2 plugin setting or virtual-file dependency check is required. The FOMOD
-deliberately leaves the cache choice to the user so MO2 cannot reject a valid
-installation or silently infer the wrong active mod state.
-
-When the cache is selected, the second page defaults to **With Horizon Fix**.
-Choose **Without Horizon Fix** manually when Horizon Fix is not active. If
-Horizon Fix is enabled or disabled later, reinstall the AIO FOMOD and select the
-matching cache profile. The warning appears in both profile descriptions. A
-wrong choice is safe but causes the mismatched cache to be rejected and shaders
-to compile locally; the runtime never force-loads entries whose feature metadata
-does not match.
-
-The integrated archive keeps both selectable caches below `CacheProfiles/`.
-Neither source payload is named `ShaderCache`, so MO2 cannot confuse the
-standard source with the common `Data/ShaderCache` destination. Packaging also
-checks each source's `Info.ini` and rejects an archive whose selected Horizon
-Fix state does not match its label.
-
-Manually setting the `ShaderCache` folder itself as the data directory bypasses
-the installer gate, flattens the layout, and is invalid.
-
-## Change checklist
-
-Rebuild the cache after shipped shader/include changes, feature metadata or
-profile changes, inventory changes, plugin version changes, cache key or
-descriptor changes, compile-state changes, ImageSpace mapping changes, or a
-digest/hlslkit contract change. For shader changes, run the feature-version
-audit and update the owning canonical feature version when required.
-
-Before changing the hlslkit pin, compare source normalization, include parsing
-and ordering, XXH3-128 representation, hash combination, global compile-state
-text, manifest keys, schema version, and ImageSpace source mapping against the
-C++ runtime. Coordinate incompatible changes in both languages.
-
-Minimum static validation when a full shader build is unavailable:
-
-```powershell
-& $cachePython -c "import ast, pathlib; ast.parse(pathlib.Path('tools/build-shader-cache.py').read_text(encoding='utf-8')); print('Python AST OK')"
+& $cachePython tests/shader_cache_pack_builder_test.py
+& $cachePython tests/shader_cache_packaging_test.py
+& $cachePython tests/shader_cache_se_test.py
 & $cachePython tools/build-shader-cache.py --help
-& $cachePython -c "import pathlib, yaml; [yaml.safe_load(pathlib.Path(p).read_text(encoding='utf-8')) for p in ('.github/workflows/shader-cache.yaml', '.github/workflows/release-build.yaml')]; print('Workflow YAML OK')"
-rg -n "D3DWriteBlobToFile" src
-git diff --check HEAD
 ```
 
-There should be exactly one runtime `D3DWriteBlobToFile` call, inside the
-manifest-aware save helper. Report explicitly when C++ compilation, full HLSL
-generation, or runtime smoke testing was not performed.
+These checks exercise the shared pack-contract corpus, structural DXBC
+validation, compatibility coverage, malformed records, publication retries and
+rollback, real archive packing/extraction, SE macro/inventory preservation and
+the release AIO command line. The AIO fixtures explicitly include HDR and
+frame-generation paths and compare their bytes after assembly. They are not
+compiled game shaders and do not establish rendering correctness.
+
+The standalone cache workflow runs these tests before compiling the release
+inventory. Archive tests require CMake. Inventory/compiler-adapter tests require
+the pinned hlslkit revision; unavailable optional tools are reported as skips.
+A Windows FXC build and in-game SE/AE smoke test remain necessary to verify the
+actual shader bytecode and runtime cache hits.
+
+Before changing the compiler pin or cache format, compare source normalization,
+include ordering, XXH3-128 combination, resolved macro encoding, feature ABI
+state, ImageSpace mapping and pack identities against the C++ runtime. Rebuild
+release caches after changes to any of those inputs or the shipped shader and
+compatibility contracts.

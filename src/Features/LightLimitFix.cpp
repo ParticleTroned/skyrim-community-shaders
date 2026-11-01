@@ -1,14 +1,18 @@
 #include "LightLimitFix.h"
 #include "CSEditor/LightEditor.h"
+#include "EngineFix.h"
 #include "Features/InverseSquareLighting/Common.h"
 #include "Globals.h"
+#include "I18n/I18n.h"
 #include "InverseSquareLighting.h"
+#include "LightLimitFix/ShadowCulling.h"
 #include "LightLimitFix/ShadowLightPolicy.h"
 #include "LinearLighting.h"
 #include "LocationContext.h"
+#include "Menu/SettingsPage.h"
 
 #include "Menu/ThemeManager.h"
-#include "Shadercache.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/D3D.h"
@@ -36,6 +40,46 @@ static constexpr uint MAX_LIGHTS = 1024;
 
 namespace
 {
+	constexpr std::uint32_t kAlphaGeometryGroupCapacityFlat = 512;
+	constexpr std::uint32_t kAlphaGeometryGroupReserve = 64;
+	std::uint32_t* alphaGeometryGroupCount = nullptr;
+	std::uint32_t alphaGeometryGroupLimit = 0;
+	std::atomic<std::uint32_t> alphaGeometryGroupPeak{ 0 };
+	std::atomic<std::uint64_t> alphaGeometryGroupDrops{ 0 };
+
+	struct StartGroupingAlphas
+	{
+		static void* thunk(
+			RE::BSBatchRenderer* a_this,
+			void* a_bound,
+			RE::NiCamera* a_camera,
+			bool a_sortByClosestPoint)
+		{
+			if (alphaGeometryGroupCount && a_camera) {
+				const auto live = *alphaGeometryGroupCount;
+				auto peak = alphaGeometryGroupPeak.load(std::memory_order_relaxed);
+				while (live > peak && !alphaGeometryGroupPeak.compare_exchange_weak(
+										  peak, live, std::memory_order_relaxed)) {
+				}
+
+				if (live >= alphaGeometryGroupLimit) {
+					const auto drops = alphaGeometryGroupDrops.fetch_add(1, std::memory_order_relaxed) + 1;
+					if (drops == 1 || drops % 10000 == 0) {
+						logger::warn(
+							"[LLF] Alpha GeometryGroup ceiling reached ({} live, {} refused)",
+							live,
+							drops);
+					}
+					return nullptr;
+				}
+			}
+
+			return func(a_this, a_bound, a_camera, a_sortByClosestPoint);
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	class ScopedPerfEvent
 	{
 	public:
@@ -275,6 +319,7 @@ namespace
 
 	void SanitizeSettings(LightLimitFix::Settings& a_settings)
 	{
+		LightLimitFixDetail::ShadowCulling::Validate(a_settings.ShadowCulling);
 		a_settings.LightsVisualisationMode = std::min(a_settings.LightsVisualisationMode, kLightsVisualisationModeMax);
 		a_settings.ContactShadowQuality = std::min(a_settings.ContactShadowQuality, kContactShadowQualityMax);
 		a_settings.ContactShadowClusterBudget = std::clamp(a_settings.ContactShadowClusterBudget, kContactShadowClusterBudgetMin, kContactShadowClusterBudgetMax);
@@ -704,6 +749,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ContactShadowClusterBudget,
 	ParticleContactShadowBudget,
 	StrictContactShadowBudget,
+	ShadowCulling,
 	EnableLightsVisualisation,
 	LightsVisualisationMode)
 void LightLimitFix::DrawSettings()
@@ -761,221 +807,210 @@ bool LightLimitFix::RestorePerformanceTuningAuxiliaryState(const json& a_userSet
 
 void LightLimitFix::DrawSettingsPanel(bool a_showEmbeddedInfo)
 {
+	std::optional<MenuUI::SettingsPage> page;
+	if (a_showEmbeddedInfo)
+		page.emplace("LightLimitFix", std::initializer_list<MenuUI::Section>{
+										  { "particles", T("feature.light_limit_fix.ui_particles", "Particles"), T("feature.light_limit_fix.ui_choose_which_small_light_effects_illuminate_the_scene", "Choose which small light effects illuminate the scene."), T("feature.light_limit_fix.ui_small_effects_that_emit_light", "Small effects that emit light"), true, true, T("feature.light_limit_fix.ui_choose_light_sources", "Choose light sources") },
+										  { "placed", T("feature.light_limit_fix.ui_placed_lights", "Placed lights"), T("feature.light_limit_fix.ui_choose_lighting_from_supported_objects", "Choose lighting from supported objects."), T("feature.light_limit_fix.ui_lighting_from_placed_objects", "Lighting from placed objects"), true, true, nullptr, nullptr, nullptr, globals::features::inverseSquareLighting.loaded },
+										  { "shadows", T("feature.light_limit_fix.ui_shadows", "Shadows"), T("feature.light_limit_fix.ui_refine_contact_shadows_and_native_shadow_map_culling", "Refine contact shadows and native shadow-map culling."), T("feature.light_limit_fix.ui_contact_shadows_and_shadow_culling", "Contact shadows and shadow culling"), true, true, T("feature.light_limit_fix.ui_refine_light_interaction", "Refine light interaction") },
+										  { "effects", T("feature.light_limit_fix.ui_heat_distortion", "Heat distortion"), T("feature.light_limit_fix.ui_refine_heat_distortion_around_lights", "Refine heat distortion around lights."), T("feature.light_limit_fix.ui_refraction_around_lights", "Refraction around lights"), true, true, nullptr },
+										  { "diagnostics", T("feature.light_limit_fix.ui_diagnostics", "Diagnostics"), T("feature.light_limit_fix.ui_inspect_light_counts_and_diagnostic_views", "Inspect light counts and diagnostic views."), T("feature.light_limit_fix.ui_light_counts_and_buffer_views", "Light counts and buffer views"), a_showEmbeddedInfo, false, nullptr },
+									  });
+	const auto showSection = [&](const char* id) {
+		return page ? page->Is(id) : std::string_view(id) != "diagnostics";
+	};
+
 	{
-		ImGui::Text("ImageSpace Refraction");
-		DrawHeatWarpStrengthSetting();
+		// Native refraction settings share the same restoration owner.
+		if (showSection("effects")) {
+			ImGui::TextUnformatted(T("feature.light_limit_fix.ui_imagespace_refraction", "ImageSpace Refraction"));
+			DrawHeatWarpStrengthSetting();
 
-		ImGui::Separator();
-		ImGui::Spacing();
-
-		if (ImGui::TreeNodeEx("Particle Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
+			ImGui::Separator();
+			ImGui::Spacing();
+		}
+		if (showSection("particles")) {
+			Util::Widgets::Checkbox(T("feature.light_limit_fix.ui_enable_particle_lights", "Enable Particle Lights"), &settings.EnableParticleLights);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Enables Particle Lights.");
+				ImGui::TextUnformatted(T("feature.light_limit_fix.ui_enables_particle_lights", "Enables Particle Lights."));
 			}
 
 			ImGui::Separator();
-			ImGui::TextWrapped("Particle Lights Performance");
+			const auto particlesDisabled = Util::DisableGuard(!settings.EnableParticleLights);
+			MenuUI::DetailGrid particleGrid("ParticleControls", 2, ImGui::GetFontSize() * 32);
+			const Util::Widgets::ControlLayout controls(true);
+			particleGrid.Next();
+			MenuUI::SectionHeading(T("feature.light_limit_fix.ui_visibility_and_cost", "Visibility and cost"));
 
-			ImGui::Checkbox("Enable Culling", &settings.EnableParticleLightsCulling);
+			Util::Widgets::Checkbox(T("feature.light_limit_fix.ui_enable_culling", "Enable Culling"), &settings.EnableParticleLightsCulling);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Significantly improves performance by not rendering empty textures. Only disable if you are encountering issues.");
+				ImGui::TextUnformatted(T("feature.light_limit_fix.ui_significantly_improves_performance_by_not_rendering_em_8234fe07", "Significantly improves performance by not rendering empty textures. Only disable if you are encountering issues."));
 			}
 
-			ImGui::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection);
+			Util::Widgets::Checkbox(T("feature.light_limit_fix.ui_enable_detection", "Enable Detection"), &settings.EnableParticleLightsDetection);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Adds particle lights to the player light level, so that NPCs can detect them for stealth and gameplay.");
+				ImGui::TextUnformatted(T("feature.light_limit_fix.ui_adds_particle_lights_to_the_player_light_level_so_that_098e4228", "Adds particle lights to the player light level, so that NPCs can detect them for stealth and gameplay."));
 			}
 
-			ImGui::Checkbox("Enable Optimization", &settings.EnableParticleLightsOptimization);
+			Util::Widgets::Checkbox(T("feature.light_limit_fix.ui_enable_optimization", "Enable Optimization"), &settings.EnableParticleLightsOptimization);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Merges vertices which are close enough to each other to improve performance.");
+				ImGui::TextUnformatted(T("feature.light_limit_fix.ui_merges_vertices_which_are_close_enough_to_each_other_t_88aa21c8", "Merges vertices which are close enough to each other to improve performance."));
 			}
 
-			// NEW: clustering controls
-			ImGui::SliderFloat("Cluster Threshold", &settings.ParticleClusterThreshold, kParticleClusterThresholdMin, kParticleClusterThresholdMax, "%.1f");
+			// Bound per-emitter work as well as aggregate light density.
+			Util::Widgets::SliderFloat(T("feature.light_limit_fix.ui_cluster_threshold", "Cluster Threshold"), &settings.ParticleClusterThreshold, kParticleClusterThresholdMin, kParticleClusterThresholdMax, "%.1f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text(
-					"Distance+radius similarity threshold for merging particles into one light.\n"
-					"Higher = more merging, better performance, blurrier lights.\n"
-					"Lower = less merging, more precise, more expensive.");
+				ImGui::TextUnformatted(T("feature.light_limit_fix.ui_particle_light_merge_threshold_based_on_distance_and_r_42e55c4e", "Particle-light merge threshold based on distance and radius. Higher merges more: faster but blurrier. Lower is more precise but costs more."));
 			}
 
-			ImGui::SliderInt("Max Particles per Emitter", &settings.MaxParticlesPerEmitter, kMaxParticlesPerEmitterMin, kMaxParticlesPerEmitterMax);
+			Util::Widgets::SliderInt(T("feature.light_limit_fix.ui_max_particles_per_emitter", "Max Particles per Emitter"), &settings.MaxParticlesPerEmitter, kMaxParticlesPerEmitterMin, kMaxParticlesPerEmitterMax);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text(
-					"Maximum number of particles sampled per emitter per frame.\n"
-					"Higher = closer to the real particle system but more CPU work.\n"
-					"Lower = faster, especially for very dense effects.");
+				ImGui::TextUnformatted(T("feature.light_limit_fix.ui_particle_samples_per_emitter_per_frame_higher_better_m_c0070e80", "Particle samples per emitter per frame. Higher better matches the effect but costs CPU time; lower helps dense effects."));
 			}
 
-			// NEW: distance cutoff for particle lights
-			ImGui::SliderFloat("Max Particle Distance", &settings.MaxParticleDistance, 1000.0f, kMaxParticleDistanceMax, "%.0f");
+			// Distance controls the eligible particle-light set.
+			Util::Widgets::SliderFloat(T("feature.light_limit_fix.ui_max_particle_distance", "Max Particle Distance"), &settings.MaxParticleDistance, 1000.0f, kMaxParticleDistanceMax, "%.0f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text(
-					"Particle lights beyond this distance from the camera are skipped entirely.\n"
-					"Lower = better performance, but distant effects won't contribute light.\n"
-					"Higher = more distant particle lighting, but more cost.");
+				ImGui::TextUnformatted(T("feature.light_limit_fix.ui_skip_particle_lights_beyond_this_camera_distance_lower_7e2fb4ef", "Skip particle lights beyond this camera distance. Lower saves work but removes distant lighting; higher extends lighting at more cost."));
 			}
 
 			ImGui::Spacing();
 			ImGui::Spacing();
 
-			ImGui::TextWrapped("Particle Lights Customisation");
-			ImGui::SliderFloat("Saturation", &settings.ParticleLightsSaturation, kParticleLightsSaturationMin, kParticleLightsSaturationMax, "%.2f");
+			particleGrid.Next();
+			MenuUI::SectionHeading(T("feature.perf_overlay.appearance", "Appearance"));
+			Util::Widgets::SliderFloat(T("feature.adaptive_brightness.saturation", "Saturation"), &settings.ParticleLightsSaturation, kParticleLightsSaturationMin, kParticleLightsSaturationMax, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Particle light saturation.");
+				ImGui::TextUnformatted(T("feature.light_limit_fix.ui_particle_light_saturation", "Particle light saturation."));
 			}
-			ImGui::SliderFloat("Particle Brightness", &settings.ParticleBrightness, kParticleBrightnessMin, kParticleBrightnessMax, "%.2f");
-			ImGui::SliderFloat("Particle Radius", &settings.ParticleRadius, kParticleRadiusMin, kParticleRadiusMax, "%.2f");
-			ImGui::SliderFloat("Billboard Brightness", &settings.BillboardBrightness, kBillboardBrightnessMin, kBillboardBrightnessMax, "%.2f");
-			ImGui::SliderFloat("Billboard Radius", &settings.BillboardRadius, kBillboardRadiusMin, kBillboardRadiusMax, "%.2f");
-			ImGui::Checkbox("v0.8.7 Particle Lights Legacy", &settings.UseParticleLights087LegacyMode);
+			Util::Widgets::SliderFloat(T("feature.light_limit_fix.ui_particle_brightness", "Particle Brightness"), &settings.ParticleBrightness, kParticleBrightnessMin, kParticleBrightnessMax, "%.2f");
+			Util::Widgets::SliderFloat(T("feature.light_limit_fix.ui_particle_radius", "Particle Radius"), &settings.ParticleRadius, kParticleRadiusMin, kParticleRadiusMax, "%.2f");
+			Util::Widgets::SliderFloat(T("feature.light_limit_fix.ui_billboard_brightness", "Billboard Brightness"), &settings.BillboardBrightness, kBillboardBrightnessMin, kBillboardBrightnessMax, "%.2f");
+			Util::Widgets::SliderFloat(T("feature.light_limit_fix.ui_billboard_radius", "Billboard Radius"), &settings.BillboardRadius, kBillboardRadiusMin, kBillboardRadiusMax, "%.2f");
+			Util::Widgets::Checkbox(T("feature.light_limit_fix.ui_legacy_particle_appearance", "Legacy particle appearance"), &settings.UseParticleLights087LegacyMode);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text(
-					"Restores the v0.8.7 particle-light alpha model.\n"
-					"When enabled, brightness comes from material / shader / vertex alpha and RadiusMult affects radius only.\n"
-					"When disabled, the current path uses RadiusMult for both intensity and radius.\n"
-					"This is most noticeable on billboard-backed particle lights.");
+				ImGui::TextUnformatted(T("feature.light_limit_fix.ui_restore_the_v0_8_7_particle_light_alpha_model_material_fac454cd", "Restore the v0.8.7 particle-light alpha model: material/shader/vertex alpha sets brightness; RadiusMult affects only radius. Off uses RadiusMult for intensity and radius. Most visible on billboard lights."));
 			}
 
 			ImGui::Spacing();
 			ImGui::Spacing();
-			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNodeEx("Placed Lights (JSON)", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (showSection("placed")) {
 			const bool jsonPlacedLightsSupported = globals::features::inverseSquareLighting.loaded;
 			ImGui::BeginDisabled(!jsonPlacedLightsSupported);
-			ImGui::SliderFloat("Intensity Scale", &settings.JsonPlacedLightIntensity, kJsonPlacedLightIntensityMin, kJsonPlacedLightIntensityMax, "%.2f");
+			Util::Widgets::SliderFloat(T("feature.light_limit_fix.ui_intensity_scale", "Intensity Scale"), &settings.JsonPlacedLightIntensity, kJsonPlacedLightIntensityMin, kJsonPlacedLightIntensityMax, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text(
-					"Scales intensity for attached runtime lights generated from light records.\n"
-					"This primarily targets Light Placer-style JSON lights.\n"
-					"Requires Inverse Square Lighting runtime metadata to identify those lights.");
+				ImGui::TextUnformatted(T("feature.light_limit_fix.ui_scale_attached_lights_from_light_records_mainly_light_ccc03609", "Scale attached lights from light records, mainly Light Placer JSON lights. Requires Inverse Square Lighting metadata to identify them."));
 			}
 
-			ImGui::Checkbox("Interiors Only", &settings.JsonPlacedLightsInteriorsOnly);
+			Util::Widgets::Checkbox(T("feature.light_limit_fix.ui_interiors_only", "Interiors Only"), &settings.JsonPlacedLightsInteriorsOnly);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Only apply the intensity scale while in interiors.");
+				ImGui::TextUnformatted(T("feature.light_limit_fix.ui_only_apply_the_intensity_scale_while_in_interiors", "Only apply the intensity scale while in interiors."));
 			}
 
-			ImGui::Checkbox("Portal Strict Only", &settings.JsonPlacedLightsPortalStrictOnly);
+			Util::Widgets::Checkbox(T("feature.light_limit_fix.ui_portal_strict_only", "Portal Strict Only"), &settings.JsonPlacedLightsPortalStrictOnly);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Only apply the intensity scale to portal-strict lights.");
+				ImGui::TextUnformatted(T("feature.light_limit_fix.ui_only_apply_the_intensity_scale_to_portal_strict_lights", "Only apply the intensity scale to portal-strict lights."));
 			}
 			ImGui::EndDisabled();
 
-			if (a_showEmbeddedInfo && !jsonPlacedLightsSupported) {
-				ImGui::TextDisabled("Requires Inverse Square Lighting to identify JSON-placed runtime lights.");
+			if (!jsonPlacedLightsSupported) {
+				MenuUI::DetailNote(T("feature.light_limit_fix.ui_placed_light_adjustments_require_inverse_square_lighti_7641783f", "Placed-light adjustments require Inverse Square Lighting. Enable it in its header, or clear its checkbox in Advanced > Startup, save settings and restart if disabled at startup."));
 			}
 
 			ImGui::Spacing();
 			ImGui::Spacing();
-			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNodeEx("Contact Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Checkbox("Enable Point Light Contact Shadows", &settings.EnableContactShadows);
+		if (showSection("shadows")) {
+			ImGui::SeparatorText(T("feature.light_limit_fix.ui_contact_shadows", "Contact shadows"));
+			bool contactShadows = IsContactShadowsRequested();
+			if (Util::Widgets::Checkbox(T("feature.light_limit_fix.enable_point_light_contact_shadows", "Enable Point Light Contact Shadows"), &contactShadows))
+				SetContactShadowsEnabled(contactShadows);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text(
-					"Adds short screen-space contact shadows to LLF point lights.\n"
-					"Uses a cached per-cluster candidate list to limit the number of ray marches.");
+				ImGui::TextUnformatted(T("feature.light_limit_fix.ui_add_short_screen_space_contact_shadows_to_llf_point_li_ad862066", "Add short screen-space contact shadows to LLF point lights. A cached per-cluster list limits ray marches."));
 			}
 
-			ImGui::Checkbox("Interiors Only", &settings.ContactShadowsInteriorsOnly);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Only run LLF contact shadows in interior cells.");
-			}
+			{
+				const auto shadowsDisabled = Util::DisableGuard(!contactShadows);
+				Util::Widgets::Checkbox(T("feature.light_limit_fix.ui_interiors_only", "Interiors Only"), &settings.ContactShadowsInteriorsOnly);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted(T("feature.light_limit_fix.ui_only_run_llf_contact_shadows_in_interior_cells", "Only run LLF contact shadows in interior cells."));
+				}
 
-			const char* qualityOptions[] = { "Low", "Medium", "High" };
-			int contactShadowQuality = static_cast<int>(settings.ContactShadowQuality);
-			if (ImGui::Combo("Quality", &contactShadowQuality, qualityOptions, kContactShadowQualityOptionCount)) {
-				settings.ContactShadowQuality = static_cast<uint>(std::clamp(contactShadowQuality, 0, static_cast<int>(kContactShadowQualityMax)));
-			}
+				const char* qualityOptions[] = { T("feature.light_limit_fix.ui_low", "Low"), T("feature.volumetric_lighting.medium", "Medium"), T("feature.volumetric_lighting.high", "High") };
+				int contactShadowQuality = static_cast<int>(settings.ContactShadowQuality);
+				if (MenuUI::ChoiceSetting(T("feature.light_limit_fix.ui_quality", "Quality"), &contactShadowQuality, qualityOptions, kContactShadowQualityOptionCount)) {
+					settings.ContactShadowQuality = static_cast<uint>(std::clamp(contactShadowQuality, 0, static_cast<int>(kContactShadowQualityMax)));
+				}
 
-			int contactShadowClusterBudget = static_cast<int>(settings.ContactShadowClusterBudget);
-			if (ImGui::SliderInt("Cached Lights per Cluster", &contactShadowClusterBudget, static_cast<int>(kContactShadowClusterBudgetMin), static_cast<int>(kContactShadowClusterBudgetMax))) {
-				settings.ContactShadowClusterBudget = static_cast<uint>(contactShadowClusterBudget);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Maximum cached point and particle lights per cluster that can cast contact shadows. Set to 0 to disable clustered contact shadows.");
-			}
+				int contactShadowClusterBudget = static_cast<int>(settings.ContactShadowClusterBudget);
+				if (Util::Widgets::SliderInt(T("feature.light_limit_fix.ui_cached_lights_per_cluster", "Cached Lights per Cluster"), &contactShadowClusterBudget, static_cast<int>(kContactShadowClusterBudgetMin), static_cast<int>(kContactShadowClusterBudgetMax))) {
+					settings.ContactShadowClusterBudget = static_cast<uint>(contactShadowClusterBudget);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted(T("feature.light_limit_fix.ui_maximum_cached_point_particle_contact_shadow_lights_pe_c47d0822", "Maximum cached point/particle contact-shadow lights per cluster. 0 disables clustered contact shadows."));
+				}
 
-			int strictContactShadowBudget = static_cast<int>(settings.StrictContactShadowBudget);
-			if (ImGui::SliderInt("Strict Light Budget", &strictContactShadowBudget, 0, static_cast<int>(kStrictContactShadowBudgetMax))) {
-				settings.StrictContactShadowBudget = static_cast<uint>(strictContactShadowBudget);
-			}
+				int strictContactShadowBudget = static_cast<int>(settings.StrictContactShadowBudget);
+				if (Util::Widgets::SliderInt(T("feature.light_limit_fix.ui_strict_light_budget", "Strict Light Budget"), &strictContactShadowBudget, 0, static_cast<int>(kStrictContactShadowBudgetMax))) {
+					settings.StrictContactShadowBudget = static_cast<uint>(strictContactShadowBudget);
+				}
 
-			ImGui::Checkbox("Enable Particle Contact Shadows", &settings.EnableParticleContactShadows);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text(
-					"Adds cheaper contact shadows for particle lights.\n"
-					"Keep the particle budget low for fire, smoke, and magic-heavy scenes.");
-			}
+				Util::Widgets::Checkbox(T("feature.light_limit_fix.ui_enable_particle_contact_shadows", "Enable Particle Contact Shadows"), &settings.EnableParticleContactShadows);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted(T("feature.light_limit_fix.ui_adds_cheaper_contact_shadows_for_particle_lights_keep_ff721e1f", "Adds cheaper contact shadows for particle lights.\nKeep the particle budget low for fire, smoke, and magic-heavy scenes."));
+				}
 
-			int particleContactShadowBudget = static_cast<int>(settings.ParticleContactShadowBudget);
-			if (ImGui::SliderInt("Particle Budget per Cluster", &particleContactShadowBudget, 0, static_cast<int>(kParticleContactShadowBudgetMax))) {
-				settings.ParticleContactShadowBudget = static_cast<uint>(particleContactShadowBudget);
+				int particleContactShadowBudget = static_cast<int>(settings.ParticleContactShadowBudget);
+				if (Util::Widgets::SliderInt(T("feature.light_limit_fix.ui_particle_budget_per_cluster", "Particle Budget per Cluster"), &particleContactShadowBudget, 0, static_cast<int>(kParticleContactShadowBudgetMax))) {
+					settings.ParticleContactShadowBudget = static_cast<uint>(particleContactShadowBudget);
+				}
 			}
-
 			ImGui::Spacing();
-			ImGui::TreePop();
+			LightLimitFixDetail::ShadowCulling::DrawSettings(settings.ShadowCulling, a_showEmbeddedInfo);
 		}
 	}
 	auto shaderCache = globals::shaderCache;
 
-	if (a_showEmbeddedInfo) {
-		if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Text(std::format("Clustered Light Count : {}", lightCount).c_str());
-			ImGui::Text(std::format(
-				"Particle Lights Count : {}",
-				particleLightDiagnostics.currentEmitters.load(std::memory_order_relaxed) +
-					particleLightDiagnostics.currentBillboards.load(std::memory_order_relaxed))
-					.c_str());
-			ImGui::Text(std::format(
-				"Particle Emitters / Billboards : {} / {}",
-				particleLightDiagnostics.currentEmitters.load(std::memory_order_relaxed),
-				particleLightDiagnostics.currentBillboards.load(std::memory_order_relaxed))
-					.c_str());
-			ImGui::Text(std::format(
-				"Particle Cache Entries : {}",
-				particleLightDiagnostics.cacheEntries.load(std::memory_order_relaxed))
-					.c_str());
+	if (showSection("diagnostics")) {
+		ImGui::TextUnformatted(fmt::format(fmt::runtime(T("feature.light_limit_fix.ui_clustered_light_count", "Clustered Light Count : {}")), lightCount).c_str());
+		ImGui::TextUnformatted(fmt::format(fmt::runtime(T("feature.light_limit_fix.ui_particle_lights_count", "Particle Lights Count : {}")), particleLightDiagnostics.currentEmitters.load(std::memory_order_relaxed) +
+																																				  particleLightDiagnostics.currentBillboards.load(std::memory_order_relaxed))
+				.c_str());
+		ImGui::TextUnformatted(fmt::format(fmt::runtime(T("feature.light_limit_fix.ui_particle_emitters_billboards", "Particle Emitters / Billboards : {} / {}")), particleLightDiagnostics.currentEmitters.load(std::memory_order_relaxed), particleLightDiagnostics.currentBillboards.load(std::memory_order_relaxed))
+				.c_str());
+		ImGui::TextUnformatted(fmt::format(fmt::runtime(T("feature.light_limit_fix.ui_particle_cache_entries", "Particle Cache Entries : {}")), particleLightDiagnostics.cacheEntries.load(std::memory_order_relaxed))
+				.c_str());
+	}
 
-			ImGui::TreePop();
+	///////////////////////////////
+	if (showSection("diagnostics"))
+		ImGui::SeparatorText(T("feature.light_limit_fix.ui_diagnostics", "Diagnostics"));
+
+	if (showSection("diagnostics")) {
+		Util::Widgets::Checkbox(T("feature.light_limit_fix.ui_enable_lights_visualisation", "Enable Lights Visualisation"), &settings.EnableLightsVisualisation);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(T("feature.light_limit_fix.ui_enables_visualization_of_the_light_limit", "Enables visualization of the light limit\n"));
 		}
 
-		///////////////////////////////
-		ImGui::SeparatorText("Debug");
-
-		if (ImGui::TreeNode("Light Limit Visualization")) {
-			ImGui::Checkbox("Enable Lights Visualisation", &settings.EnableLightsVisualisation);
+		{
+			const char* comboOptions[] = { T("feature.light_limit_fix.ui_light_limit", "Light Limit"), T("feature.light_limit_fix.ui_strict_lights_count", "Strict Lights Count"), T("feature.light_limit_fix.ui_clustered_lights_count", "Clustered Lights Count"), T("feature.light_limit_fix.ui_shadow_mask", "Shadow Mask") };
+			Util::Widgets::Combo(T("feature.light_limit_fix.ui_lights_visualisation_mode", "Lights Visualisation Mode"), (int*)&settings.LightsVisualisationMode, comboOptions, 4);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Enables visualization of the light limit\n");
+				ImGui::TextUnformatted(T("feature.light_limit_fix.ui_visualise_the_light_limit_red_when_the_strict_light_li_f45c04fb", " - Visualise the light limit. Red when the \"strict\" light limit is reached (portal-strict lights).\n - Visualise the number of strict lights.\n - Visualise the number of clustered lights.\n - Visualize the Shadow Mask.\n"));
 			}
-
-			{
-				static const char* comboOptions[] = { "Light Limit", "Strict Lights Count", "Clustered Lights Count", "Shadow Mask" };
-				ImGui::Combo("Lights Visualisation Mode", (int*)&settings.LightsVisualisationMode, comboOptions, 4);
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text(
-						" - Visualise the light limit. Red when the \"strict\" light limit is reached (portal-strict lights).\n"
-						" - Visualise the number of strict lights.\n"
-						" - Visualise the number of clustered lights.\n"
-						" - Visualize the Shadow Mask.\n");
-				}
-			}
-			currentEnableLightsVisualisation = settings.EnableLightsVisualisation;
-			if (previousEnableLightsVisualisation != currentEnableLightsVisualisation) {
-				globals::state->SetDefines(settings.EnableLightsVisualisation ? "LLFDEBUG" : "");
-				shaderCache->Clear(RE::BSShader::Type::Lighting);
-				previousEnableLightsVisualisation = currentEnableLightsVisualisation;
-			}
-			ImGui::Spacing();
-			ImGui::Spacing();
-			ImGui::TreePop();
 		}
+
+		ImGui::Spacing();
+		ImGui::Spacing();
+	}
+	currentEnableLightsVisualisation = settings.EnableLightsVisualisation;
+	if (previousEnableLightsVisualisation != currentEnableLightsVisualisation) {
+		globals::state->SetDefines(settings.EnableLightsVisualisation ? "LLFDEBUG" : "");
+		shaderCache->Clear(RE::BSShader::Type::Lighting);
+		previousEnableLightsVisualisation = currentEnableLightsVisualisation;
 	}
 }
 
@@ -1003,6 +1038,7 @@ void LightLimitFix::DrawOverlay()
 
 LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 {
+	runtimeToggle.Apply(settings.EnableContactShadows, globals::state);
 	PerFrame perFrame{};
 	perFrame.EnableLightsVisualisation = settings.EnableLightsVisualisation;
 	perFrame.LightsVisualisationMode = settings.LightsVisualisationMode;
@@ -1014,10 +1050,9 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 
 void LightLimitFix::SetupResources()
 {
-	const uint32_t screenWidth = globals::game::graphicsState ? globals::game::graphicsState->screenWidth : 1u;
-	const uint32_t screenHeight = globals::game::graphicsState ? globals::game::graphicsState->screenHeight : 1u;
-	clusterSize[0] = ((screenWidth + 63) / 64);
-	clusterSize[1] = ((screenHeight + 63) / 64);
+	auto screenSize = globals::state->screenSize;
+	clusterSize[0] = ((uint)screenSize.x + 63) / 64;
+	clusterSize[1] = ((uint)screenSize.y + 63) / 64;
 	clusterSize[2] = 32;
 	uint clusterCount = clusterSize[0] * clusterSize[1] * clusterSize[2];
 	static ID3D11Device* shaderDevice = nullptr;
@@ -1149,8 +1184,14 @@ void LightLimitFix::SetupResources()
 	}
 }
 
+void LightLimitFix::SetupRenderTargetResources()
+{
+	SetupResources();
+}
+
 void LightLimitFix::Reset()
 {
+	LightLimitFixDetail::ShadowCulling::Update(settings.ShadowCulling, loaded && globals::state && !globals::state->IsFeatureDisabled(GetShortName()));
 	effectLightValidationCache.clear();
 
 	{
@@ -1203,26 +1244,29 @@ void LightLimitFix::PruneParticleLightCache(std::uint32_t a_frame)
 void LightLimitFix::DrawEssentialSettings()
 {
 	ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
-	ImGui::Checkbox("Enable Point Light Contact Shadows", &settings.EnableContactShadows);
+	bool contactShadows = IsContactShadowsRequested();
+	if (ImGui::Checkbox(T("feature.light_limit_fix.enable_point_light_contact_shadows", "Enable Point Light Contact Shadows"), &contactShadows))
+		SetContactShadowsEnabled(contactShadows);
 	DrawHeatWarpStrengthSetting();
 }
 
 void LightLimitFix::LoadSettings(json& o_json)
 {
-	settings = o_json;
+	runtimeToggle.ReplaceSettings(settings, o_json.get<Settings>(), &Settings::EnableContactShadows);
 	SanitizeSettings(settings);
 }
 
 void LightLimitFix::SaveSettings(json& o_json)
 {
 	auto savedSettings = settings;
+	savedSettings.EnableContactShadows = IsContactShadowsRequested();
 	SanitizeSettings(savedSettings);
 	o_json = savedSettings;
 }
 
 void LightLimitFix::RestoreDefaultSettings()
 {
-	settings = {};
+	runtimeToggle.ReplaceSettings(settings, Settings{}, &Settings::EnableContactShadows);
 	SanitizeSettings(settings);
 }
 
@@ -1235,12 +1279,13 @@ RE::NiNode* GetParentRoomNode(RE::NiAVObject* object)
 	static const auto* roomRtti = REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSMultiBoundRoom }.get();
 	static const auto* portalRtti = REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSPortalSharedNode }.get();
 
-	const auto* rtti = object->GetRTTI();
-	if (rtti == roomRtti || rtti == portalRtti) {
-		return static_cast<RE::NiNode*>(object);
+	for (; object; object = object->parent) {
+		const auto* rtti = object->GetRTTI();
+		if (rtti == roomRtti || rtti == portalRtti) {
+			return static_cast<RE::NiNode*>(object);
+		}
 	}
-
-	return GetParentRoomNode(object->parent);
+	return nullptr;
 }
 
 void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass)
@@ -1649,17 +1694,18 @@ void ResolveBillboardTint(
 		}
 	}
 
-	RE::NiColorA siblingEmissiveTint{};
-	bool hasSiblingEmissiveTint = false;
 	const bool vertexTintLooksWhite = hasVertexTint && IsNearWhiteTint(a_reference.baseColor);
 	if (!hasVertexTint || vertexTintLooksWhite) {
-		hasSiblingEmissiveTint = TryGetBillboardSiblingEmissiveTint(a_geometry, siblingEmissiveTint);
-		const bool siblingTintIsNonWhite = hasSiblingEmissiveTint && !IsNearWhiteTint(siblingEmissiveTint);
-
 		const RE::NiColorA materialEmissiveTint = BuildEffectMaterialEmissiveTint(a_material, a_shaderProperty);
 		const float materialEmissiveLuma = GetEmissiveTintLuma(materialEmissiveTint);
 		const bool hasMaterialEmissiveTint = materialEmissiveLuma > 1e-4f;
 		const bool materialTintIsNonWhite = hasMaterialEmissiveTint && !IsNearWhiteTint(materialEmissiveTint);
+
+		RE::NiColorA siblingEmissiveTint{};
+		// The material's non-white tint has priority regardless of nearby geometry.
+		const bool hasSiblingEmissiveTint = !materialTintIsNonWhite &&
+		                                    TryGetBillboardSiblingEmissiveTint(a_geometry, siblingEmissiveTint);
+		const bool siblingTintIsNonWhite = hasSiblingEmissiveTint && !IsNearWhiteTint(siblingEmissiveTint);
 
 		// Resolve fallback from a single source to avoid mixing color from one source
 		// with emissive energy from another. Prefer the billboard's own effect material
@@ -1959,8 +2005,63 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, const ParticleLig
 	return true;
 }
 
+void LightLimitFix::Hooks::InstallAlphaGeometryGroupGuard()
+{
+	if (EngineFix::IsInstalledByEngineFixes("BatchRendererAlphaGeometryGroupOverflow")) {
+		logger::info("[LLF] Skipped alpha GeometryGroup guard (already installed by Engine Fixes)");
+		return;
+	}
+
+	// Decode the counter from ClearAlphaGeometryGroups so the guard stays portable across runtimes.
+	constexpr std::uint8_t kMovDwordImmediateOpcode = 0xC7;
+	constexpr std::uint8_t kRipRelativeModRM = 0x05;
+	constexpr std::uint8_t kReturnOpcode = 0xC3;
+	constexpr std::size_t kMovDwordImmediateSize = 10;
+
+	const auto clearFunction = REL::RelocationID(100856, 107646).address();
+	const auto* code = reinterpret_cast<const std::uint8_t*>(clearFunction);
+	std::uint32_t immediate = 1;
+	std::int32_t displacement = 0;
+	if (clearFunction) {
+		std::memcpy(&displacement, code + 2, sizeof(displacement));
+		std::memcpy(&immediate, code + 6, sizeof(immediate));
+	}
+
+	const bool shapeMatches = clearFunction && code[0] == kMovDwordImmediateOpcode &&
+	                          code[1] == kRipRelativeModRM && immediate == 0 &&
+	                          code[kMovDwordImmediateSize] == kReturnOpcode;
+	const auto counterAddress =
+		shapeMatches ? clearFunction + kMovDwordImmediateSize + displacement : 0;
+	const auto dataSegment = REL::Module::get().segment(REL::Segment::data);
+	if (counterAddress < dataSegment.address() ||
+		counterAddress >= dataSegment.address() + dataSegment.size()) {
+		alphaGeometryGroupCount = nullptr;
+		logger::error(
+			"[LLF] Alpha GeometryGroup guard not installed: "
+			"ClearAlphaGeometryGroups did not decode to a counter in .data");
+		return;
+	}
+
+	alphaGeometryGroupCount = reinterpret_cast<std::uint32_t*>(counterAddress);
+	alphaGeometryGroupLimit =
+		kAlphaGeometryGroupCapacityFlat -
+		kAlphaGeometryGroupReserve;
+	if (const auto result = stl::detour_thunk<StartGroupingAlphas>(REL::RelocationID(100874, 107670));
+		result != 0) {
+		alphaGeometryGroupCount = nullptr;
+		logger::error("[LLF] Failed to install StartGroupingAlphas guard ({})", result);
+		return;
+	}
+
+	logger::info(
+		"[LLF] Installed alpha GeometryGroup guard (limit {}, reserve {})",
+		alphaGeometryGroupLimit,
+		kAlphaGeometryGroupReserve);
+}
+
 void LightLimitFix::PostPostLoad()
 {
+	LightLimitFixDetail::ShadowCulling::Install();
 	globals::features::llf::particleLights.GetConfigs();
 	particleLightsReferences.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 4u);
 	queuedParticleEmitters.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 2u);
@@ -2507,10 +2608,16 @@ void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* T
 
 void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
+	using EffectFlags = SIE::ShaderCache::EffectShaderFlags;
+	constexpr auto sceneLightMask = static_cast<uint32_t>(EffectFlags::Lighting) | static_cast<uint32_t>(EffectFlags::Membrane);
+	const auto* state = globals::state;
+	const bool validateSceneLights = !This || !state || state->currentShader != This ||
+	                                 ((state->currentVertexDescriptor | state->currentPixelDescriptor) & sceneLightMask) != 0;
+
 	// The engine dereferences every raw BSLight/NiLight pair without null or
 	// lifetime checks. Validate each pair on first use per frame; cache hits still
 	// use an SEH-guarded pointer read so changed or unmapped entries are rechecked.
-	if (Pass && Pass->numLights > 0) {
+	if (validateSceneLights && Pass && Pass->numLights > 0) {
 		const std::uint8_t requestedCount = Pass->numLights;
 		RE::BSLight* const* sceneLights = Pass->sceneLights;
 		std::uint8_t validCount = 0;

@@ -1,4 +1,7 @@
 #include "TerrainShadows.h"
+#include "Menu/SettingsPage.h"
+#include "SkySync.h"
+#include "Utils/UI.h"
 
 #include <bit>
 #include <cctype>
@@ -200,9 +203,15 @@ void TerrainShadows::SaveSettings(json& o_json)
 
 void TerrainShadows::DrawSettings()
 {
-	ImGui::Checkbox("Enable", &settings.EnableTerrainShadow);
+	MenuUI::SettingsPage page("TerrainShadows", {
+													{ "appearance", T("feature.terrain_shadows.ui_how_it_works", "How it works"), T("feature.terrain_shadows.ui_learn_how_terrain_shadows_follow_the_landscape", "Learn how terrain shadows follow the landscape."), T("feature.terrain_shadows.ui_landscape_shadow_coverage", "Landscape shadow coverage"), true, true, T("feature.terrain_shadows.ui_shape_terrain_shadows", "Shape terrain shadows") },
+													{ "diagnostics", T("feature.terrain_shadows.ui_diagnostics", "Diagnostics"), T("feature.terrain_shadows.ui_inspect_terrain_shadow_diagnostics", "Inspect terrain shadow diagnostics."), T("feature.terrain_shadows.ui_diagnostic_terrain_views", "Diagnostic terrain views"), true, false, nullptr },
+												});
 
-	if (ImGui::CollapsingHeader(T(TKEY("debug"), "Debug"))) {
+	if (page.Is("appearance")) {
+		MenuUI::DetailText(T("feature.terrain_shadows.ui_shadows_use_the_worldspace_height_map_toggle_enabled_i_5682d0d5", "Shadows use the worldspace height map. Toggle Enabled in the header; inspect terrain data in Diagnostics."));
+	}
+	if (page.Is("diagnostics")) {
 		std::string curr_worldspace = "N/A";
 		std::string curr_worldspace_name = "N/A";
 		auto tes = RE::TES::GetSingleton();
@@ -213,24 +222,24 @@ void TerrainShadows::DrawSettings()
 				curr_worldspace_name = worldspace->GetName();
 			}
 		}
-		ImGui::Text(fmt::format("Current worldspace: {} ({})", curr_worldspace, curr_worldspace_name).c_str());
-		ImGui::Text(fmt::format("Has height map: {}", heightmaps.contains(curr_worldspace)).c_str());
+		ImGui::TextUnformatted(fmt::format(fmt::runtime(T("feature.terrain_shadows.current_worldspace", "Current worldspace: {} ({})")), curr_worldspace, curr_worldspace_name).c_str());
+		ImGui::TextUnformatted(fmt::format(fmt::runtime(T("feature.terrain_shadows.has_height_map", "Has height map: {}")), heightmaps.contains(curr_worldspace)).c_str());
 
 		ImGui::Separator();
 
-		ImGui::BulletText("shadowUpdateCBData");
+		ImGui::BulletText("%s", T("feature.terrain_shadows.shadowupdatecbdata", "shadowUpdateCBData"));
 		ImGui::Indent();
 		{
-			ImGui::Text(fmt::format("LightPxDir: ({}, {})", shadowUpdateCBData.LightPxDir.x, shadowUpdateCBData.LightPxDir.y).c_str());
-			ImGui::Text(fmt::format("LightDeltaZ: ({}, {})", shadowUpdateCBData.LightDeltaZ.x, shadowUpdateCBData.LightDeltaZ.y).c_str());
-			ImGui::Text(fmt::format("StartPxCoord: {}", shadowUpdateCBData.StartPxCoord).c_str());
-			ImGui::Text(fmt::format("PxSize: ({}, {})", shadowUpdateCBData.PxSize.x, shadowUpdateCBData.PxSize.y).c_str());
+			ImGui::TextUnformatted(fmt::format(fmt::runtime(T("feature.terrain_shadows.lightpxdir", "LightPxDir: ({}, {})")), shadowUpdateCBData.LightPxDir.x, shadowUpdateCBData.LightPxDir.y).c_str());
+			ImGui::TextUnformatted(fmt::format(fmt::runtime(T("feature.terrain_shadows.lightdeltaz", "LightDeltaZ: ({}, {})")), shadowUpdateCBData.LightDeltaZ.x, shadowUpdateCBData.LightDeltaZ.y).c_str());
+			ImGui::TextUnformatted(fmt::format(fmt::runtime(T("feature.terrain_shadows.startpxcoord", "StartPxCoord: {}")), shadowUpdateCBData.StartPxCoord).c_str());
+			ImGui::TextUnformatted(fmt::format(fmt::runtime(T("feature.terrain_shadows.pxsize", "PxSize: ({}, {})")), shadowUpdateCBData.PxSize.x, shadowUpdateCBData.PxSize.y).c_str());
 		}
 		ImGui::Unindent();
 
-		if (ImGui::TreeNode(T(TKEY("buffer_viewer"), "Buffer Viewer"))) {
+		if (ImGui::TreeNode(T("feature.terrain_shadows.buffer_viewer", "Buffer Viewer"))) {
 			static float debugRescale = .1f;
-			ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+			Util::Widgets::SliderFloat(T("feature.terrain_shadows.view_resize", "View Resize"), &debugRescale, 0.f, 1.f);
 
 			if (texShadowHeight) {
 				BUFFER_VIEWER_NODE_BULLET(texShadowHeight, debugRescale)
@@ -242,7 +251,7 @@ void TerrainShadows::DrawSettings()
 
 void TerrainShadows::DrawEssentialSettings()
 {
-	ImGui::Checkbox("Enable", &settings.EnableTerrainShadow);
+	ImGui::Checkbox(T("feature.terrain_shadows.enable", "Enable"), &settings.EnableTerrainShadow);
 }
 
 void TerrainShadows::ClearShaderCache()
@@ -456,10 +465,16 @@ TerrainShadows::PerFrame TerrainShadows::GetCommonBufferData()
 	};
 
 	if (isHeightmapReady) {
+		// One heightmap step of light descent spans about two texels across the transition.
+		constexpr float zBlurSteps = 1.0f;
 		auto invScale = cachedHeightmap->pos1 - cachedHeightmap->pos0;
 		data.Scale = float3(1.f, 1.f, 1.f) / invScale;
-		data.Offset = -cachedHeightmap->pos0 * float2{ data.Scale.x, data.Scale.y };
+		// Texel centres lie on terrain vertices anchored at the south-west corner.
+		const float2 halfTexel = { 0.5f / texHeightMap->desc.Width, -0.5f / texHeightMap->desc.Height };
+		data.Offset = float2(-cachedHeightmap->pos0 * float2{ data.Scale.x, data.Scale.y }) + halfTexel;
 		data.ZRange = cachedHeightmap->zRange;
+		const float stepDescent = -0.5f * (shadowUpdateCBData.LightDeltaZ.x + shadowUpdateCBData.LightDeltaZ.y) * (data.ZRange.y - data.ZRange.x);
+		data.ZBlur = stepDescent * zBlurSteps;
 	}
 
 	return data;
@@ -548,7 +563,7 @@ void TerrainShadows::Precompute()
 			.Height = texHeightMap->desc.Height,
 			.MipLevels = 1,
 			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R16G16_UNORM,
+			.Format = DXGI_FORMAT_R16G16_FLOAT,
 			.SampleDesc = { .Count = 1 },
 			.Usage = D3D11_USAGE_DEFAULT,
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
@@ -638,6 +653,9 @@ TerrainShadows::ShadowUpdateResult TerrainShadows::UpdateShadow(bool a_fullRefre
 	static uint maxUpdates;
 	if (shadowUpdateIdx == 0) {
 		auto direction = sunLight->GetWorldDirection();
+		const auto celestial = globals::features::skySync.GetCelestialLightDirection();
+		if (celestial)
+			direction = -*celestial;
 		const auto isFiniteDirection = [](const RE::NiPoint3& a_direction) {
 			return std::isfinite(a_direction.x) && std::isfinite(a_direction.y) && std::isfinite(a_direction.z);
 		};
@@ -649,7 +667,7 @@ TerrainShadows::ShadowUpdateResult TerrainShadows::UpdateShadow(bool a_fullRefre
 			return ShadowUpdateResult::kUnavailable;
 
 		float3 dirLightDir = { direction.x, direction.y, direction.z };
-		if (dirLightDir.z > 0)
+		if (!celestial && dirLightDir.z > 0)
 			dirLightDir = -dirLightDir;
 
 		// in UV
@@ -664,9 +682,12 @@ TerrainShadows::ShadowUpdateResult TerrainShadows::UpdateShadow(bool a_fullRefre
 		dirLightPxDir.x *= width;
 		dirLightPxDir.y *= height;
 		if (!std::isfinite(dirLightPxDir.x) || !std::isfinite(dirLightPxDir.y) ||
-			(std::abs(dirLightPxDir.x) <= FLT_EPSILON && std::abs(dirLightPxDir.y) <= FLT_EPSILON)) {
+			!std::isfinite(dirLightPxDir.z)) {
 			return ShadowUpdateResult::kUnavailable;
 		}
+
+		if (std::abs(dirLightPxDir.x) <= FLT_EPSILON && std::abs(dirLightPxDir.y) <= FLT_EPSILON)
+			dirLightPxDir = { 1.0f, 0.0f, dirLightPxDir.z };
 
 		float stepMult;
 		if (abs(dirLightPxDir.x) >= abs(dirLightPxDir.y)) {
@@ -687,11 +708,12 @@ TerrainShadows::ShadowUpdateResult TerrainShadows::UpdateShadow(bool a_fullRefre
 		// soft shadow angles
 		float lenUV = float2{ dirLightDir.x, dirLightDir.y }.Length();
 		float dirLightAngle = atan2(-dirLightDir.z, lenUV);
-		float shadowSofteningRadiusAngle = RE::NI_PI / 180.f;
-		float upperAngle = std::max(0.f, dirLightAngle - shadowSofteningRadiusAngle);
-		float lowerAngle = std::min(RE::NI_HALF_PI - 1e-2f, dirLightAngle + shadowSofteningRadiusAngle);
+		float shadowSofteningRadiusAngle = 4.0f * RE::NI_PI / 180.f;
+		float upperAngle = std::clamp(dirLightAngle - shadowSofteningRadiusAngle, 0.0f, RE::NI_HALF_PI - 1e-2f);
+		float lowerAngle = std::clamp(dirLightAngle + shadowSofteningRadiusAngle, 0.0f, RE::NI_HALF_PI - 1e-2f);
 
-		shadowUpdateCBData.LightDeltaZ = -(lenUV / invScale.z * stepMult) * float2{ std::tan(upperAngle), std::tan(lowerAngle) };
+		const float stepLength = float2{ dirLightPxDir.x * invScale.x / width, dirLightPxDir.y * invScale.y / height }.Length();
+		shadowUpdateCBData.LightDeltaZ = -(stepLength / invScale.z) * float2{ std::tan(upperAngle), std::tan(lowerAngle) };
 	}
 
 	shadowUpdateCBData.StartPxCoord = edgePxCoord + signDir * shadowUpdateIdx * updateLength;
@@ -752,6 +774,22 @@ void TerrainShadows::EarlyPrepass()
 	LoadHeightmap();
 
 	const auto requestedRefreshGeneration = Util::GetCompletedCelestialTransitionGeneration();
+	if (auto* light = GetShadowUpdateSunLight()) {
+		auto direction = light->GetWorldDirection();
+		if (const auto celestial = globals::features::skySync.GetCelestialLightDirection())
+			direction = -*celestial;
+		else if (direction.z > 0.0f)
+			direction = -direction;
+		const float length = direction.Unitize();
+		if (std::isfinite(length) && length > FLT_EPSILON) {
+			if (hasPreviousLightDirection && Util::HasDirectionalLightDiscontinuity(direction, previousLightDirection))
+				BeginFullRefresh(requestedRefreshGeneration);
+			previousLightDirection = direction;
+			hasPreviousLightDirection = true;
+		} else {
+			hasPreviousLightDirection = false;
+		}
+	}
 	if (!settings.EnableTerrainShadow)
 		return;
 

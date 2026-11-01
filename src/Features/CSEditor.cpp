@@ -1,5 +1,8 @@
 #include "CSEditor.h"
+#include "CSEditor/WeatherUtils.h"
 #include "I18n/I18n.h"
+#include "Utils/FileSystem.h"
+#include <unordered_map>
 
 #define I18N_KEY_PREFIX "feature.cs_editor."
 
@@ -21,6 +24,144 @@
 namespace
 {
 	constexpr const char* kJsonExtension = ".json";
+
+	bool HasJsonExtension(const std::filesystem::path& path)
+	{
+		return _stricmp(path.extension().string().c_str(), kJsonExtension) == 0;
+	}
+
+	struct OverrideLoadStats
+	{
+		size_t applied = 0;
+		size_t skipped = 0;
+		size_t failed = 0;
+	};
+
+	bool LoadOverrideJson(const std::filesystem::directory_entry& entry, json& out,
+		OverrideLoadStats& stats, std::string_view label)
+	{
+		std::string errorMessage;
+		if (Util::FileHelpers::ReadJsonFile(entry.path(), out, errorMessage) !=
+			Util::FileHelpers::JsonFileReadResult::Success) {
+			logger::warn("Failed to read {} override file ({}): {}", label, entry.path().string(), errorMessage);
+			stats.failed++;
+			return false;
+		}
+
+		if (!out.is_object()) {
+			logger::warn("Skipping {} override file with non-object JSON: {}", label, entry.path().string());
+			stats.skipped++;
+			return false;
+		}
+
+		return true;
+	}
+
+	void LogOverrideStats(std::string_view label, const OverrideLoadStats& stats)
+	{
+		if (stats.applied > 0 || stats.failed > 0) {
+			logger::info("Applied saved {} overrides: applied={}, skipped={}, failed={}",
+				label, stats.applied, stats.skipped, stats.failed);
+		}
+	}
+
+	template <class WidgetType, class FormType>
+	bool ApplyWidgetOverride(FormType* form, const json& settingsJson)
+	{
+		if (!form || !settingsJson.is_object())
+			return false;
+
+		WidgetType widget(form);
+		if (!widget.form)
+			return false;
+
+		widget.CacheFormData();
+		widget.RememberBaseline();
+		widget.js = settingsJson;
+		try {
+			widget.LoadSettings();
+		} catch (const std::exception& e) {
+			logger::error("Failed to apply saved CS Editor override for {}: {}", widget.GetEditorID(), e.what());
+			return false;
+		}
+		return true;
+	}
+
+	template <class WidgetType, class FormType>
+	OverrideLoadStats ApplySavedWidgetOverrides(const char* folderName, const char* label,
+		bool warnUnmatched = true)
+	{
+		OverrideLoadStats stats;
+		const auto folderPath = Util::PathHelpers::GetCommunityShaderPath() / folderName;
+		std::error_code ec;
+		if (!std::filesystem::exists(folderPath, ec) || !std::filesystem::is_directory(folderPath, ec))
+			return stats;
+
+		try {
+			for (const auto& entry : std::filesystem::directory_iterator(folderPath)) {
+				if (!entry.is_regular_file() || !HasJsonExtension(entry.path()))
+					continue;
+
+				json settingsJson;
+				if (!LoadOverrideJson(entry, settingsJson, stats, label))
+					continue;
+
+				const auto formKey = entry.path().stem().string();
+				auto* form = WeatherUtils::FindFormByEditorIDOrFileKey<FormType>(formKey);
+				if (!form) {
+					if (warnUnmatched) {
+						logger::warn("{} override file has no matching form: {}", label, entry.path().string());
+						stats.failed++;
+					} else {
+						stats.skipped++;
+					}
+					continue;
+				}
+
+				if (ApplyWidgetOverride<WidgetType>(form, settingsJson))
+					stats.applied++;
+				else
+					stats.failed++;
+			}
+		} catch (const std::filesystem::filesystem_error& e) {
+			logger::warn("Error scanning {} override directory ({}): {}", label, folderPath.string(), e.what());
+			stats.failed++;
+		}
+
+		LogOverrideStats(label, stats);
+		return stats;
+	}
+
+	bool HasWeatherRecordOverrides(const json& weatherData)
+	{
+		if (!weatherData.is_object())
+			return false;
+
+		static constexpr std::string_view kRecordKeys[] = {
+			"weatherProperties",
+			"weatherColors",
+			"fogProperties",
+			"atmosphereColors",
+			"dalc",
+			"clouds",
+			"precipitationDataRef",
+			"referenceEffectRef",
+		};
+
+		for (const auto key : kRecordKeys) {
+			if (weatherData.contains(key))
+				return true;
+		}
+
+		for (size_t i = 0; i < ColorTimes::kTotal; i++) {
+			if (weatherData.contains(std::format("imageSpaceRef_{}", i)) ||
+				weatherData.contains(std::format("volumetricLightingRef_{}", i))) {
+				return true;
+			}
+		}
+
+		return false;
+	}
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -40,6 +181,7 @@ void CSEditor::DataLoaded()
 {
 	s_dataAvailable = true;
 	EditorWindow::MenuOpenCloseEventHandler::Register();
+	ApplySavedEditorOverrides();
 }
 
 bool CSEditor::HasWidgetJsonFiles()
@@ -49,7 +191,7 @@ bool CSEditor::HasWidgetJsonFiles()
 
 	const auto communityShaderPath = Util::PathHelpers::GetCommunityShaderPath();
 	for (const auto folderName : Widget::kSaveFolderNames) {
-		const auto widgetSettingsPath = communityShaderPath / std::filesystem::path(folderName);
+		const auto widgetSettingsPath = communityShaderPath / std::filesystem::path(std::string(folderName));
 		std::error_code ec;
 		const bool isDirectory = std::filesystem::is_directory(widgetSettingsPath, ec);
 		if (ec) {
@@ -105,7 +247,7 @@ void CSEditor::EnsureDataLoaded()
 		return;
 
 	if (!s_resourcesInitialized) {
-		EditorWindow::GetSingleton()->SetupResources();
+		EditorWindow::GetSingleton()->EnsureResources();
 		s_resourcesInitialized = true;
 	}
 	LoadAllWeathers();
@@ -1225,4 +1367,145 @@ void CSEditor::DrawOverlay()
 bool CSEditor::IsOverlayVisible() const
 {
 	return WeatherDetailsWindow.ShowInOverlay;
+}
+
+void CSEditor::ApplySavedEditorOverrides()
+{
+	Widget::BeginWeatherReinitBatch();
+	const SKSE::stl::scope_exit endWeatherReinitBatch([]() noexcept {
+		Widget::EndWeatherReinitBatch();
+	});
+
+	ApplySavedWidgetOverrides<LightingTemplateWidget, RE::BGSLightingTemplate>("Lighting Templates", "lighting-template");
+	ApplySavedWidgetOverrides<ImageSpaceWidget, RE::TESImageSpace>("ImageSpaces", "imagespace");
+	ApplySavedWidgetOverrides<VolumetricLightingWidget, RE::BGSVolumetricLighting>("Volumetric Lighting", "volumetric-lighting");
+	ApplySavedWidgetOverrides<PrecipitationWidget, RE::BGSShaderParticleGeometryData>("Precipitation", "precipitation");
+	ApplySavedWidgetOverrides<ReferenceEffectWidget, RE::BGSReferenceEffect>("Visual Effects", "visual-effect");
+	ApplySavedWidgetOverrides<LensFlareWidget, RE::BGSLensFlare>("Other Editor Widgets", "lens-flare", false);
+	ApplySavedWidgetOverrides<CellLightingWidget, RE::TESObjectCELL>("Cell Lighting", "cell-lighting");
+
+	ApplySavedWeatherOverrides();
+}
+
+void CSEditor::ApplySavedWeatherOverrides()
+{
+	auto* dataHandler = RE::TESDataHandler::GetSingleton();
+	if (!dataHandler)
+		return;
+
+	const auto weathersPath = Util::PathHelpers::GetCommunityShaderPath() / "Weathers";
+	std::error_code ec;
+	if (!std::filesystem::exists(weathersPath, ec) || !std::filesystem::is_directory(weathersPath, ec))
+		return;
+
+	std::unordered_map<std::string, RE::TESWeather*> weatherByKey;
+	auto& weatherArray = dataHandler->GetFormArray<RE::TESWeather>();
+	weatherByKey.reserve(weatherArray.size());
+	for (auto* weather : weatherArray) {
+		if (!weather)
+			continue;
+
+		const auto fileKey = Util::GetFormFileKey(weather);
+		weatherByKey.emplace(fileKey, weather);
+		weatherByKey.emplace(std::format("Form_{}", fileKey), weather);
+		if (const auto editorID = Util::GetFormEditorID(weather); !editorID.empty())
+			weatherByKey.emplace(editorID, weather);
+	}
+
+	size_t appliedCount = 0;
+	size_t skippedCount = 0;
+	size_t failedCount = 0;
+	try {
+		for (const auto& entry : std::filesystem::directory_iterator(weathersPath)) {
+			if (!entry.is_regular_file() || !HasJsonExtension(entry.path()))
+				continue;
+
+			json weatherData;
+			std::string errorMessage;
+			if (Util::FileHelpers::ReadJsonFile(entry.path(), weatherData, errorMessage) !=
+				Util::FileHelpers::JsonFileReadResult::Success) {
+				logger::warn("Failed to read weather override file ({}): {}", entry.path().string(), errorMessage);
+				failedCount++;
+				continue;
+			}
+
+			if (!weatherData.is_object()) {
+				logger::warn("Skipping weather override file with non-object JSON: {}", entry.path().string());
+				failedCount++;
+				continue;
+			}
+
+			if (!HasWeatherRecordOverrides(weatherData)) {
+				skippedCount++;
+				continue;
+			}
+
+			const auto weatherKey = entry.path().stem().string();
+			auto weatherIt = weatherByKey.find(weatherKey);
+			if (weatherIt == weatherByKey.end()) {
+				logger::warn("Weather override file has no matching weather record: {}", entry.path().string());
+				failedCount++;
+				continue;
+			}
+
+			if (WeatherWidget::ApplySavedSettings(weatherIt->second, weatherData))
+				appliedCount++;
+			else
+				failedCount++;
+		}
+	} catch (const std::filesystem::filesystem_error& e) {
+		logger::warn("Error scanning weather override directory ({}): {}", weathersPath.string(), e.what());
+		return;
+	}
+
+	if (appliedCount > 0 || failedCount > 0) {
+		logger::info("Applied saved weather record overrides: applied={}, skippedFeatureOnly={}, failed={}",
+			appliedCount, skippedCount, failedCount);
+	}
+}
+
+bool CSEditor::IsDataAvailable()
+{
+	return s_dataAvailable;
+}
+
+bool CSEditor::AreResourcesInitialized()
+{
+	return s_resourcesInitialized;
+}
+
+void CSEditor::DrawLauncherRow(float width, float height)
+{
+	auto* state = globals::state;
+	const bool canOpen = loaded && CanOpenEditorNow();
+	{
+		auto disabled = Util::DisableGuard(!canOpen);
+		if (ImGui::Selectable(fmt::format("    {} ", GetDisplayName()).c_str(), false, ImGuiSelectableFlags_None, { width, height }))
+			OpenEditorWindow();
+	}
+
+	if (!canOpen) {
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			if (!loaded) {
+				ImGui::TextUnformatted(T("feature.cs_editor.cs_editor_is_not_loaded", "CS Editor is not loaded."));
+			} else if (!state) {
+				ImGui::TextUnformatted(T("feature.cs_editor.cs_editor_is_not_ready", "CS Editor is not ready."));
+			} else if (state->isLoadingMenuOpen) {
+				ImGui::TextUnformatted(T("feature.cs_editor.cs_editor_cannot_be_opened_during_a_loading_screen", "CS Editor cannot be opened during a loading screen."));
+			} else {
+				ImGui::TextUnformatted(T("feature.cs_editor.enter_the_game_world_to_open_cs_editor", "Enter the game world to open CS Editor."));
+			}
+		}
+	}
+}
+
+bool CSEditor::CanOpenEditorNow()
+{
+	return s_dataAvailable && EditorWindow::CanBeOpen();
+}
+
+void CSEditor::UpdateWeatherLockAndTime()
+{
+	EditorWindow::MaintainWeatherLock();
+	EditorWindow::GetSingleton()->SyncExternalTimeScale();
 }

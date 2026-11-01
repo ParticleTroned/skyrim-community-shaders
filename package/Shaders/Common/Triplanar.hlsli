@@ -1,20 +1,33 @@
-#ifndef TRIPLANAR_HLSLI
+#if !(defined(TRIPLANAR_HLSLI))
 #define TRIPLANAR_HLSLI
 
 namespace Triplanar
 {
-	static const float BLEND_SHARPNESS = 6.0;  // Power for weight computation; higher = sharper axis transitions
-	static const float STRETCH_CUTOFF = 0.4;   // ~cos(66°) — per-axis alignment below this produces visible stretching
+	static const float BLEND_SHARPNESS = 6.0;  // Implemented as x^6 for cheaper weight computation.
+	static const float STRETCH_CUTOFF = 0.4;   // About cos(66 degrees); lower per-axis alignment visibly stretches.
+	static const float STABLE_NOISE_DENSITY = 16.0;
 
 	/// Compute triplanar blend weights using face normal mask and smooth vertex normal blend.
-	float3 GetWeights(float3 vertexNormal, float3 faceNormal, float sharpness = BLEND_SHARPNESS)
+	float3 GetWeights(float3 vertexNormal, float3 faceNormal)
 	{
 		float3 mask = step(STRETCH_CUTOFF, abs(faceNormal));
-		float3 w = pow(abs(vertexNormal), sharpness) * mask;
+		float3 n = abs(vertexNormal);
+		float3 n2 = n * n;
+		float3 w = n2 * n2 * n2 * mask;
 		return w / (dot(w, 1.0) + EPSILON_DIVISION);
 	}
 
-	/// Weighted triplanar sample blending all 3 planes — stable for alpha/fade values.
+	/// World-stable stochastic selector anchored in projected world space.
+	float StableNoise(float3 worldPos, float scale)
+	{
+		float safeScale = max(abs(scale) * STABLE_NOISE_DENSITY, EPSILON_DIVISION);
+		float3 p = floor(worldPos * safeScale);
+		p = frac(p * 0.1031);
+		p += dot(p, p.yzx + 33.33);
+		return frac((p.x + p.y) * p.z);
+	}
+
+	/// Weighted triplanar sample blending all 3 planes; stable for alpha/fade values.
 	float4 Sample(Texture2D<float4> tex, SamplerState samp, float3 worldPos, float3 weights, float scale)
 	{
 		return tex.Sample(samp, worldPos.yz * scale) * weights.x +
@@ -29,6 +42,12 @@ namespace Triplanar
 		dPdy = ddy(worldPos * scale);
 	}
 
+	/// Select the same projection plane for texture coordinates and normal orientation.
+	uint SelectProjectionPlane(float3 weights, float noise)
+	{
+		return noise < weights.x ? 0 : (noise < weights.x + weights.y ? 1 : 2);
+	}
+
 	/// Stochastic triplanar: select one projection plane via noise, reducing 3 texture reads to 1.
 	float4 SampleStochastic(Texture2D<float4> tex, SamplerState samp, float3 worldPos, float3 weights, float scale, float noise)
 	{
@@ -36,14 +55,34 @@ namespace Triplanar
 		float3 dPdy = 0.0;
 		ComputeGradients(worldPos, scale, dPdx, dPdy);
 
+		uint plane = SelectProjectionPlane(weights, noise);
 		float4 result = 0;
-		if (noise < weights.x)
+		if (plane == 0)
 			result = tex.SampleGrad(samp, worldPos.yz * scale, dPdx.yz, dPdy.yz);
-		else if (noise < weights.x + weights.y)
+		else if (plane == 1)
 			result = tex.SampleGrad(samp, worldPos.xz * scale, dPdx.xz, dPdy.xz);
 		else
 			result = tex.SampleGrad(samp, worldPos.xy * scale, dPdx.xy, dPdy.xy);
 		return result;
+	}
+
+	/// Match a decoded normal's tangent axes to the sign of its projection UV scale.
+	float3 OrientNormalForScale(float3 normal, float scale)
+	{
+		normal.xy *= scale < 0 ? -1 : 1;
+		return normal;
+	}
+
+	/// Whiteout-blend a unit projection normal onto a unit world surface normal; the caller must normalize the result.
+	float3 TransformStochasticNormal(float3 normal, float3 surfaceNormal, float3 weights, float noise)
+	{
+		uint plane = SelectProjectionPlane(weights, noise);
+		if (plane == 0)
+			return float3(normal.z * surfaceNormal.x, normal.x + surfaceNormal.y, normal.y + surfaceNormal.z);
+		else if (plane == 1)
+			return float3(normal.x + surfaceNormal.x, normal.z * surfaceNormal.y, normal.y + surfaceNormal.z);
+		else
+			return float3(normal.x + surfaceNormal.x, normal.y + surfaceNormal.y, normal.z * surfaceNormal.z);
 	}
 
 	/// Stochastic triplanar with mip bias via gradient scaling.
@@ -56,10 +95,11 @@ namespace Triplanar
 		dPdx *= biasScale;
 		dPdy *= biasScale;
 
+		uint plane = SelectProjectionPlane(weights, noise);
 		float4 result = 0;
-		if (noise < weights.x)
+		if (plane == 0)
 			result = tex.SampleGrad(samp, worldPos.yz * scale, dPdx.yz, dPdy.yz);
-		else if (noise < weights.x + weights.y)
+		else if (plane == 1)
 			result = tex.SampleGrad(samp, worldPos.xz * scale, dPdx.xz, dPdy.xz);
 		else
 			result = tex.SampleGrad(samp, worldPos.xy * scale, dPdx.xy, dPdy.xy);
@@ -67,4 +107,4 @@ namespace Triplanar
 	}
 }
 
-#endif  // TRIPLANAR_HLSLI
+#endif

@@ -2,10 +2,31 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+
+namespace RE
+{
+	class BSParticleShaderRainEmitter;
+}
 
 namespace Util
 {
+	/** Rejects implausible addresses; this does not establish pointee lifetime or readability. */
+	[[nodiscard]] inline bool IsLikelyValidPointer(const void* pointer, std::size_t alignment = alignof(void*))
+	{
+		const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+		constexpr std::uintptr_t MinUserModeAddress = 0x10000;
+		constexpr std::uintptr_t MaxUserModeAddress = 0x00007FFFFFFFFFFFULL;
+		return alignment != 0 && (alignment & (alignment - 1)) == 0 &&
+		       address >= MinUserModeAddress && address <= MaxUserModeAddress && (address & (alignment - 1)) == 0;
+	}
+	/** Read only this node's reference ownership without walking its parents. */
+	RE::TESObjectREFR* GetOwnUserData(const RE::NiAVObject* object);
+	/** Resolve a rain emitter only when the native shader property owns that type. */
+	RE::BSParticleShaderRainEmitter* GetRainEmitterFromPrecipGeometry(RE::BSGeometry* a_precipObject);
+	/** Refresh aurora and cloud state after a forced weather transition. */
+	void RefreshForcedWeatherSky(RE::Sky* a_sky);
 	/** @brief Pending celestial synchronization requests consumed by the sky update hook. */
 	struct CelestialTransitionRequest
 	{

@@ -2,77 +2,88 @@
 
 #include "RE/B/BSCoreTypes.h"      // RE::FormID
 #include "RE/B/BSPointerHandle.h"  // RE::ObjectRefHandle
+#include "Utils/Input.h"
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
 namespace RE
 {
 	class NiCamera;
-	class TESObjectREFR;
 	class TESBoundObject;
+	class TESObjectREFR;
 }
 
-/** @brief Resolves the mesh/reference under the cursor via a camera-through-cursor Havok raycast; isolated from LightEditor for testability. */
+/** @brief Resolves a world reference selected through a verified desktop pointer source. */
 struct LightPicker
 {
-	/** @brief Identity of a picked mesh's reference and base object (valid==false until populated). */
+	/** @brief Stable identity and metadata for a picked reference. */
 	struct PickedMesh
 	{
-		RE::ObjectRefHandle refrHandle;  // safe across cell changes
-		RE::FormID baseFormId = 0;       // base object FormID
-		RE::FormID baseLocalFormId = 0;  // plugin-local base ID (supports full and light plugins)
-		std::string editorId;            // base object EditorID (may be empty)
-		std::string modelPath;           // base object .nif path (may be empty)
-		std::string sourcePlugin;        // plugin defining the base FormID (may be empty)
-		std::string refFormEntry;        // reference FormID in LP filter-list form ("0x...~Plugin.esp"); may be empty
+		RE::ObjectRefHandle refrHandle;
+		RE::FormID baseFormId = 0;
+		RE::FormID baseLocalFormId = 0;
+		std::string editorId;
+		std::string modelPath;
+		std::string sourcePlugin;
+		std::string refFormEntry;
 		bool valid = false;
 	};
 
-	/** @brief Which mesh the picker targets: solid collision geometry, or the nearest on-screen effect mesh. */
+	/** @brief Selects collision geometry or a nearby non-collidable effect mesh. */
 	enum class PickMode
 	{
 		kCollision = 0,
 		kEffect = 1
 	};
-	PickMode pickMode = PickMode::kCollision;  // persists across picks
+	PickMode pickMode = PickMode::kCollision;
 
-	/** @brief Enters pick mode; while active, Update() watches for a world click. */
+	/** @brief Enters pick mode and clears any previous result. */
 	void BeginPick();
 	/** @brief Leaves pick mode without producing a result. */
 	void Cancel();
 	[[nodiscard]] bool IsPicking() const { return picking; }
 
-	/** @brief Clears the cached hover hit so Update() recomputes next frame; call when pick mode changes to avoid a stale hit. */
+	/** @brief Clears the cached hover hit so the next valid pointer sample recomputes it. */
 	void InvalidateHover();
 
-	/** @brief Runs once per frame: raycasts on a qualifying left-click and stores a result; handles right-click/ESC cancel. */
+	/** @brief Updates hover state, handles cancellation, and stores a successful world click. */
 	void Update();
 
-	/** @brief Returns and clears the last successful pick (valid==true at most once per pick). */
+	/** @brief Returns and clears the last successful pick. */
 	[[nodiscard]] PickedMesh TakeResult();
 
-	/** @brief Formats a reference into the LP filter-list entry string ("0x{relativeID}~Plugin.esp"), or "" if it has no owner file. */
+	/** @brief Formats a reference for a Light Placer filter list, or returns an empty string. */
 	static std::string FormatRefFormEntry(RE::TESObjectREFR* refr);
 
-	/** @brief Formats a plugin-local FormID + defining plugin into an LP entry string ("0x{localID}~Plugin.esp"). */
+	/** @brief Formats a plugin-local FormID and defining plugin for a Light Placer filter list. */
 	static std::string FormatFormEntry(RE::FormID localFormId, std::string_view ownerPlugin);
 
 private:
-	/** @brief Finds the world NiCamera among the player camera root's children, or nullptr. */
+	enum class PointerSource : std::uint8_t
+	{
+		kUnavailable,
+		kFlatViewport
+	};
+
+	/** @brief Returns a source only when the overlay pointer has a demonstrable world mapping. */
+	static PointerSource GetPointerSource(PickMode mode);
+	/** @brief Finds the single flat-runtime world camera, or nullptr if the choice is ambiguous. */
 	static RE::NiCamera* GetPlayerNiCamera();
-	/** @brief Raycasts through the cursor and resolves the collision mesh/ref under it. */
+	/** @brief Resolves collision geometry through a verified flat ray. */
 	static PickedMesh ResolveUnderCursor(bool logResult = true);
-	/** @brief Resolves the on-screen ref nearest the cursor (effect-mesh pick), skipping collision-reachable ones. */
+	/** @brief Resolves the nearest single-view effect mesh. */
 	static PickedMesh ResolveNearestToCursor(bool logResult = true);
-	/** @brief Fills out's identifying fields (handle, FormID, EditorID, model, plugin) from a ref. */
+	/** @brief Copies reference metadata while the caller retains the reference through a smart pointer. */
 	static void PopulateFromRef(PickedMesh& out, RE::TESObjectREFR* refr, RE::TESBoundObject* baseObj);
 
 	bool picking = false;
 	PickedMesh result;
-	PickedMesh hoverMesh;  // last raycast hit under the cursor (updated per frame)
-	float lastMouseX = -1.f;
-	float lastMouseY = -1.f;
+	PickedMesh hoverMesh;
+	PointerSource hoverPointerSource = PointerSource::kUnavailable;
+	float lastMouseX = -1.0f;
+	float lastMouseY = -1.0f;
 	double lastHoverTime = 0.0;
 	bool hoverDirty = false;
 };

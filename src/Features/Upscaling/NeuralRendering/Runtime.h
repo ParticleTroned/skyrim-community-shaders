@@ -1,0 +1,288 @@
+#pragma once
+
+#include "CapacityFallback.h"
+#include "NetworkSelection.h"
+#include "RegionCapacity.h"
+#include "Style.h"
+#include "TuningLimits.h"
+
+#include "RuntimeExecutionEvidence.h"
+
+#include "NativeEvaluationLayout.h"
+
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
+
+struct ID3D12Device;
+struct ID3D12GraphicsCommandList;
+struct ID3D12Resource;
+
+namespace NeuralRendering
+{
+	enum class RuntimeStatus
+	{
+		NotProbed,
+		NotFound,
+		HashFailed,
+		VersionRejected,
+		LoadFailed,
+		MissingExport,
+		IdentityFailed,
+		Ready,
+		InitializationFailed,
+		CoreUnavailable,
+		ParameterAllocationFailed,
+		Initialized,
+		FeatureConfigurationChanged,
+		FeatureCreateFailed,
+		FeatureEvaluateFailed,
+		FeatureReleaseFailed,
+		ShutdownFailed,
+		UnsafeAbandoned
+	};
+
+	enum class RuntimeTrust
+	{
+		Unknown,
+		VersionAccepted
+	};
+
+	enum class RuntimeFailureStage
+	{
+		None,
+		Discovery,
+		Hash,
+		Version,
+		Load,
+		Identity,
+		Initialization,
+		ParameterCore,
+		ParameterAllocation,
+		FeatureConfiguration,
+		FeatureCreate,
+		FeatureEvaluate,
+		FeatureRelease,
+		Shutdown,
+		UnsafeAbandon
+	};
+
+	enum class ParameterCoreTrust
+	{
+		Unknown,
+		RuntimeIdentityMatched,
+		AuthenticodeVerified
+	};
+
+	enum class ParameterCoreSource
+	{
+		None,
+		Runtime,
+		DriverStore
+	};
+
+	struct Tuning
+	{
+		std::uint32_t networkPreset = kNetworkDefault;
+		float intensity = 0.8f;
+		float localToneStrength = 0.75f;
+		float localStructureStrength = 0.9f;
+		float skinStructureStrength = 0.9f;
+		std::uint32_t style = kDefaultStyle;
+		bool useAutoMask = true;
+		bool uiCorrection = false;
+		// Private Feature 18 single-rectangle compute ROI.  One means the
+		// full resource and remains the production default.
+		float singleSubrectScale = 1.0f;
+	};
+
+	class Runtime
+	{
+	public:
+		// The mono renderer retains one feature for its selected input domain.
+		static constexpr std::size_t kFeatureSlotCount = kLogicalFeatureSlotCount;
+
+		static Runtime& Instance();
+
+		/** Discover the optional provider once per process; installation requires a restart. */
+		[[nodiscard]] static bool IsInstalled() noexcept;
+		static constexpr const char* kMissingRuntimeNotice =
+			"Missing DLL: Shaders/Upscaling/Streamline/nvngx_dlssnr.dll";
+		static constexpr const char* kUnsupportedHardwareNotice =
+			"Incompatible GPU detected. Neural Rendering requires an NVIDIA GPU.";
+
+		Runtime(const Runtime&) = delete;
+		Runtime& operator=(const Runtime&) = delete;
+		~Runtime();
+
+		bool Probe(const std::filesystem::path& a_explicitPath = {});
+		bool Initialize(ID3D12Device* a_device, const std::filesystem::path& a_dataPath = {});
+		/** Records one evaluation from explicit creation/valid/storage domains.
+		 *  The optional attempt flag distinguishes pre-evaluation failures. */
+		bool Execute(
+			ID3D12GraphicsCommandList* a_commandList,
+			std::uint32_t a_slot,
+			ID3D12Resource* a_color,
+			ID3D12Resource* a_depth,
+			ID3D12Resource* a_motionVectors,
+			ID3D12Resource* a_output,
+			ID3D12Resource* a_controlMask,
+			const NativeEvaluationLayout& a_layout,
+			const Tuning& a_tuning,
+			bool a_reset,
+			bool* a_evaluationAttempted = nullptr,
+			RuntimeExecutionEvidence* a_evidence = nullptr,
+			bool a_providerBlending = false);
+
+		/** Record exact feature creation without inference; caller owns submission and retirement. */
+		bool PrepareFeature(ID3D12GraphicsCommandList*, std::uint32_t slot,
+			const NativeEvaluationLayout&, ID3D12Resource* color = nullptr,
+			ID3D12Resource* controlMask = nullptr, bool providerBlending = false,
+			RuntimeExecutionEvidence* evidence = nullptr, std::uint32_t networkPreset = kNetworkDefault);
+		/** Consume first-use reset only after the renderer commits the complete real transaction. */
+		void AcknowledgePresentedFeatures(std::uint32_t slotMask);
+		bool ResetFeature(std::uint32_t a_slot);
+		bool ResetFeatures();
+		/** Releases features and parameter bindings after the caller drains both APIs.
+		 *  Retains only a healthy initialized backend; failure forbids warm reuse. */
+		[[nodiscard]] bool ReleasePassResources();
+		bool Shutdown();
+		/** Permanently detaches unsafe NGX ownership without releasing it. */
+		void AbandonUnsafe() noexcept;
+
+		[[nodiscard]] RuntimeStatus Status() const;
+		[[nodiscard]] RuntimeTrust Trust() const;
+		[[nodiscard]] RuntimeFailureStage FailureStage() const;
+		[[nodiscard]] std::filesystem::path Path() const;
+		[[nodiscard]] std::string Hash() const;
+		[[nodiscard]] std::string Version() const;
+		/** Resolve network limits from probed metadata, or cached installed metadata before initialization. */
+		[[nodiscard]] TuningLimits GetTuningLimits(std::uint32_t selection = kNetworkDefault) const;
+		/** Whether the probed provider, or installed metadata before probing, supports explicit networks. */
+		[[nodiscard]] bool SupportsNetworkSelection() const;
+		/** Resolves a saved selection without changing provider ownership or loading another DLL. */
+		[[nodiscard]] std::uint32_t GetNetworkPreset(std::uint32_t selection) const;
+		[[nodiscard]] std::filesystem::path ParameterCorePath() const;
+		[[nodiscard]] std::string ParameterCoreHash() const;
+		[[nodiscard]] ParameterCoreTrust CoreTrust() const;
+		[[nodiscard]] ParameterCoreSource CoreSource() const;
+		[[nodiscard]] std::string Detail() const;
+		[[nodiscard]] std::uint32_t NgxResult() const;
+		/** Only documented creation failures permit a safely retired smaller retry. */
+		[[nodiscard]] CapacityFailure CreationCapacityFailure() const;
+		[[nodiscard]] std::uint64_t SuccessfulFrames() const;
+		[[nodiscard]] std::uint32_t LastPathProxyHits() const;
+		[[nodiscard]] bool LastPathProxyInstalled() const;
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		struct LifecycleCounts
+		{
+			std::uint64_t creates = 0, releases = 0;
+		};
+		/** Monotonic native-call counts for cache/prewarm comparisons. */
+		[[nodiscard]] LifecycleCounts GetLifecycleCounts() const;
+#endif
+		/** Resident handles only; NVIDIA does not expose their allocation byte size. */
+		[[nodiscard]] std::uint32_t GetResidentFeatureMask() const;
+		/** Checks creation compatibility without changing a resident handle. */
+		[[nodiscard]] bool HasCompatibleFeature(std::uint32_t slot, const NativeEvaluationLayout&, bool providerBlending,
+			std::uint32_t networkPreset = kNetworkDefault) const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Actual creation presets by logical slot; UINT32_MAX denotes no valid configured feature. */
+		[[nodiscard]] std::array<std::uint32_t, kFeatureSlotCount> GetFeatureNetworkPresets() const;
+#endif
+
+	private:
+		struct FeatureConfiguration
+		{
+			std::uint32_t networkPreset = kNetworkDefault;
+			UpscalingDLSS::Extent colorBacking{};
+			NativeCreationExtents creation{};
+			bool featureUpscaling = false;
+			bool providerBlending = false;
+			bool valid = false;
+
+			[[nodiscard]] bool Matches(const NativeEvaluationLayout& a_layout) const;
+		};
+
+		struct RuntimeExports
+		{
+			void* initialize = nullptr;
+			void* createFeature = nullptr;
+			void* evaluateFeature = nullptr;
+			void* releaseFeature = nullptr;
+			void* shutdown = nullptr;
+		};
+
+		struct ParameterCoreExports
+		{
+			void* allocateParameters = nullptr;
+			void* destroyParameters = nullptr;
+		};
+
+		Runtime() = default;
+
+		bool PrepareFeatureLocked(ID3D12GraphicsCommandList*, std::uint32_t,
+			const NativeEvaluationLayout&, ID3D12Resource*, ID3D12Resource*, bool,
+			RuntimeExecutionEvidence*, std::uint32_t);
+		bool ProbeLocked(const std::filesystem::path& a_explicitPath);
+		bool ResetFeatureLocked(std::uint32_t a_slot);
+		bool ResetFeaturesLocked(bool a_stopOnFailure = false);
+		bool ShutdownLocked();
+		void AbandonLocked() noexcept;
+		void LogOnceLocked(bool& a_emitted, const char* a_operation, bool a_succeeded);
+		void SetFailureLocked(RuntimeStatus a_status, RuntimeFailureStage a_stage, std::string a_detail, std::uint32_t a_ngxResult = 0);
+
+		mutable std::recursive_mutex mutex_;
+		std::filesystem::path path_;
+		std::string hash_;
+		std::string version_;
+		std::optional<TuningLimits> tuningLimits_;
+		std::optional<bool> networkSelectionSupported_;
+		std::filesystem::path corePath_;
+		std::string coreHash_;
+		ParameterCoreTrust coreTrust_ = ParameterCoreTrust::Unknown;
+		ParameterCoreSource coreSource_ = ParameterCoreSource::None;
+		std::string detail_;
+		void* module_ = nullptr;
+		void* coreModule_ = nullptr;
+		void* coreFile_ = nullptr;
+		void* device_ = nullptr;
+		void* parameters_ = nullptr;
+		RuntimeExports runtimeExports_{};
+		ParameterCoreExports parameterCoreExports_{};
+		std::array<void*, kFeatureSlotCount> featureHandles_{};
+		std::array<FeatureConfiguration, kFeatureSlotCount> featureConfigurations_{};
+		std::atomic<std::uint32_t> firstEvaluationResetMask_{ 0 };
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		LifecycleCounts lifecycleCounts_{};
+#endif
+		RuntimeStatus status_ = RuntimeStatus::NotProbed;
+		RuntimeTrust trust_ = RuntimeTrust::Unknown;
+		RuntimeFailureStage failureStage_ = RuntimeFailureStage::None;
+		std::uint32_t ngxResult_ = 0;
+		std::uint32_t applicationId_ = 0;
+		std::uint32_t apiVersion_ = 0;
+		std::uint32_t lastPathProxyHits_ = 0;
+		std::uint64_t successfulFrames_ = 0;
+		bool lastPathProxyInstalled_ = false;
+		bool probeLogEmitted_ = false;
+		bool initializationLogEmitted_ = false;
+		bool featureCreateLogEmitted_ = false;
+		bool featureEvaluateLogEmitted_ = false;
+		std::atomic_bool abandonRequested_{ false };
+		bool abandoned_ = false;
+	};
+
+	[[nodiscard]] const char* ToString(RuntimeStatus a_status);
+	[[nodiscard]] const char* ToString(RuntimeTrust a_trust);
+	[[nodiscard]] const char* ToString(RuntimeFailureStage a_stage);
+	[[nodiscard]] const char* ToString(ParameterCoreTrust a_trust);
+	[[nodiscard]] const char* ToString(ParameterCoreSource a_source);
+}

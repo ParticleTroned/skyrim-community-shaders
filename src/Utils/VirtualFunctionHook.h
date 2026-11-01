@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 #include <cstddef>
+#include <cstdint>
 
 struct ID3D11Device;
 struct ID3D11DeviceContext;
@@ -22,9 +23,11 @@ namespace Util
 		DetourAttachResult AttachDetourTransaction(void** a_original, void* a_hook, const Operations& a_operations)
 		{
 			long result = a_operations.Begin();
-			if (result != NO_ERROR)
+			// A busy transaction belongs to an earlier call; other Begin failures can retain ownership.
+			if (result == ERROR_INVALID_OPERATION)
 				return { result, false };
-			result = a_operations.UpdateThread();
+			if (result == NO_ERROR)
+				result = a_operations.UpdateThread();
 			if (result == NO_ERROR)
 				result = a_operations.Attach(a_original, a_hook);
 			if (result != NO_ERROR) {
@@ -52,6 +55,11 @@ namespace Util
 		long detourError = NO_ERROR;
 		VirtualHookMethod method = VirtualHookMethod::Detour;
 	};
+
+	/** Install an optional native table hook with checked publication and no object cloning.
+	 * Original storage must have process lifetime; call only during initialization.
+	 */
+	VirtualHookResult InstallNativeVirtualFunctionHook(std::uintptr_t table, std::size_t slot, void** original, void* hook);
 
 	/**
 	 * @brief Install a graphics hook, retaining the original call target before publication.

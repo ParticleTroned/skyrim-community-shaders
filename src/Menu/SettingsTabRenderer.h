@@ -15,6 +15,7 @@ public:
 	{
 		bool& settingToggleKey;
 		bool& settingsEffectsToggle;
+		bool& settingNeuralRenderingToggleKey;
 		bool& settingSkipCompilationKey;
 		bool& settingOverlayToggleKey;
 		bool& settingShaderBlockPrevKey;      // Debug: shader block previous key
@@ -23,6 +24,7 @@ public:
 		bool& settingScreenshotKey;           // Screenshot capture key
 	};
 
+	/** Draw shared General sections while retaining native SE font and keyboard controls. */
 	static void RenderGeneralSettings(
 		SettingsState& state);
 
@@ -30,11 +32,10 @@ private:
 	static void RenderShadersTab();
 	static void RenderKeybindingsTab(
 		SettingsState& state);
-	static void RenderInterfaceTab();
 
 	static void RenderThemesTab();
 
-	// Interface sub-tabs
+	// Shared page sections
 	static void RenderBehaviorTab();
 	static void RenderFontsTab();
 	static void RenderStylingTab();

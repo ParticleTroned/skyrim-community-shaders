@@ -1,5 +1,5 @@
-set(FFX_RUNTIME_SDK_COMMIT "60f4ea81909200d8542eca14dccb2628b763a9a3")
-include("${CMAKE_CURRENT_LIST_DIR}/CsxDownload.cmake")
+set(FFX_RUNTIME_SDK_COMMIT "7539ae8b6568ad29ed78a753404351daf3b5cca7")
+include("${CMAKE_CURRENT_LIST_DIR}/RuntimePayload.cmake")
 set(
     FFX_RUNTIME_BASE_URL
     "https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/${FFX_RUNTIME_SDK_COMMIT}/Kits/FidelityFX/signedbin"
@@ -14,24 +14,43 @@ file(MAKE_DIRECTORY "${FFX_RUNTIME_DIRECTORY}")
 
 function(download_ffx_runtime _filename _sha256)
     set(_destination "${FFX_RUNTIME_DIRECTORY}/${_filename}")
-    csx_download_verified_asset(
+    csx_prepare_runtime_asset(
         "${FFX_RUNTIME_BASE_URL}/${_filename}"
         "${_destination}"
-        "${_sha256}"
+        "${_sha256}" _available
     )
-    set(FFX_RUNTIME_FILES ${FFX_RUNTIME_FILES} "${_destination}" PARENT_SCOPE)
+    set(FFX_RUNTIME_PAYLOAD_FILES
+        ${FFX_RUNTIME_PAYLOAD_FILES}
+        "${_destination}"
+        PARENT_SCOPE
+    )
+    if(_available)
+        set(FFX_RUNTIME_FILES
+            ${FFX_RUNTIME_FILES}
+            "${_destination}"
+            PARENT_SCOPE
+        )
+    else()
+        set(FFX_RUNTIME_PAYLOAD_MISSING
+            ${FFX_RUNTIME_PAYLOAD_MISSING}
+            "${_destination}"
+            PARENT_SCOPE
+        )
+    endif()
 endfunction()
 
 set(FFX_RUNTIME_FILES "")
+set(FFX_RUNTIME_PAYLOAD_FILES "")
+set(FFX_RUNTIME_PAYLOAD_MISSING "")
 download_ffx_runtime(
     amd_fidelityfx_framegeneration_dx12.dll
-    02297BEEDD285E822D3A64F314CF00FAF378DCEC0EDC47FF0C4DD71B3A8C2F18
+    E6843252F58B0341A0D80F6A20BC0D840643EE95BC48C22CAC08745344577BB6
 )
 download_ffx_runtime(
     amd_fidelityfx_loader_dx12.dll
-    E2D85AA05A9BD9ED8B38935FDF5199372CCA6F74C12015143BB6F945EE1608AA
+    E2191D3C0828BE45EB8AFFD4E3EC0378F2293ADC345B772A7170EDCF3B021ECB
 )
 download_ffx_runtime(
     amd_fidelityfx_upscaler_dx12.dll
-    D0DCCCC74A43C44BA435B7A369B456E0970D8A4464E4BD683119B374F2C9FB46
+    AAD4FCCCCB29084A655F9A4F9F613BD22C8C03FB4A0F8840148CC6543B4CCACE
 )

@@ -56,6 +56,8 @@ struct WaterAppearance
 	static_assert(offsetof(Settings, ParallaxQuality) == 56);
 
 	static void DrawProfileControls(Profile& a_profile);
+	/** Draws the base wave scale independently of optional wind modulation. */
+	static void DrawWaveAmplitudeControl(Profile& a_profile);
 	static void DrawAdvancedProfileSettings(Profile& a_profile);
 	static Settings GetCommonBufferData(const Profile& a_profile);
 	static Profile LerpProfiles(const Profile& a_a, const Profile& a_b, float a_t);

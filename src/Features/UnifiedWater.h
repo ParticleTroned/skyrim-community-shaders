@@ -9,6 +9,8 @@ struct UnifiedWater : OverlayFeature
 {
 	virtual inline std::string GetName() override { return "Unified Water"; }
 	virtual std::string GetDisplayName() override { return T("feature.unified_water.name", "Unified Water"); }
+	virtual bool IsCore() const override { return true; }
+	virtual bool IsDisabledByDefault() const override { return false; }
 	virtual inline std::string GetShortName() override { return "UnifiedWater"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "UNIFIED_WATER"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kWater; }
@@ -19,13 +21,13 @@ struct UnifiedWater : OverlayFeature
 				T("feature.unified_water.key_feature_2", "Completely and fundamentally resolves water LOD mismatch issues."),
 				T("feature.unified_water.key_feature_3", "Provides background systems for water geometry rendering, allowing more advanced water effects."),
 				T("feature.unified_water.key_feature_4", "Improves vanilla performance by using efficient water meshes for distant water.") } };
-	};
-
+	}
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
 
 	struct Settings
 	{
 		std::uint32_t SurfaceVisibilityModelVersion = 12;
+		bool UseOptimisedMeshes = true;
 		bool UseOpenShadersDepthBehaviour = false;
 		float3 WaterTintColor = { 0.0f, 0.35f, 1.0f };
 		float WaterTintStrength = 0.0f;
@@ -124,8 +126,9 @@ struct UnifiedWater : OverlayFeature
 	};
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
+	bool HasEssentialSettings() const override { return true; }
+	void DrawEssentialSettings() override;
+	void DrawSettingsEnabledControl() override;
 
 	virtual void DrawOverlay() override;
 	virtual bool IsOverlayVisible() const override;
@@ -139,13 +142,12 @@ struct UnifiedWater : OverlayFeature
 
 	virtual void RestoreDefaultSettings() override;
 
-	virtual bool IsCore() const override { return true; }
-	virtual bool IsDisabledByDefault() const override { return false; }
 
 	virtual void PostPostLoad() override;
 
 private:
 	RE::NiPointer<RE::BSTriShape> waterMesh;
+	RE::NiPointer<RE::BSTriShape> optimisedWaterMesh;
 	Flowmap* flowmap = nullptr;
 	WaterCache* waterCache = nullptr;
 
@@ -156,9 +158,15 @@ private:
 	RE::NiPoint2* gDisplacementMeshPos = nullptr;
 	RE::NiPoint2* gDisplacementMeshFlowCellOffset = nullptr;
 
+	std::atomic<RE::TESWorldSpace*> currentPlayerWorldSpace{ nullptr };
+	std::atomic<bool> pendingChildWsCull{ false };
+	// Game-thread TES snapshot used by deferred child-worldspace cull fallbacks.
+	std::atomic<RE::TES*> cachedTes{ nullptr };
 	std::atomic_bool exteriorWorldspaceActive{ false };
 	std::atomic_bool mapMenuOpen{ false };
 	std::atomic_bool waterDataReady{ false };
+
+	void TryCompleteDeferredChildWorldspaceCull(RE::TES* tes = nullptr);
 
 	void SetFlowmapTex() const;
 	// Readiness covers safely constructed hook resources. WaterCache publishes

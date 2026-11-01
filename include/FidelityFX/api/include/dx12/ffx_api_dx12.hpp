@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX SDK.
 //
-// Copyright (C) 2025 Advanced Micro Devices, Inc.
+// Copyright (C) 2026 Advanced Micro Devices, Inc.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files(the "Software"), to deal
@@ -34,5 +34,10 @@ template<>
 struct struct_type<ffxCreateBackendDX12Desc> : std::integral_constant<uint64_t, FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12> {};
 
 struct CreateBackendDX12Desc : public InitHelper<ffxCreateBackendDX12Desc> {};
+
+template<>
+struct struct_type<ffxCreateBackendDX12AllocationCallbacksDesc> : std::integral_constant<uint64_t, FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12_ALLOCATION_CALLBACKS> {};
+
+struct CreateBackendDX12AllocationCallbacksDesc : public InitHelper<ffxCreateBackendDX12AllocationCallbacksDesc> {};
 
 }

@@ -16,14 +16,15 @@ add_subdirectory(
 )
 
 # The vendored SDK hardcodes its static libs' output to a single shared
-# ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk directory (see its CMakeLists.txt),
-# reused across every preset's separate build tree. A target's object
-# staleness is tracked inside its build tree, so a different preset or
-# toolset can otherwise overwrite the shared archive with incompatible
-# compile options while the original tree still considers its objects up to
-# date. Always keep MSVC archives local to the tree; this covers both LTO and
-# non-LTO configurations without relying on the global IPO default.
+# ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk directory (see its CMakeLists.txt).
+# Separate presets and configurations can then overwrite an archive while
+# another build tree still considers its own objects up to date. Besides
+# mixing /GL and non-/GL objects, this can feed MSVC LTCG objects produced by
+# a different compiler version to the linker (C1047). Keep every archive in
+# the build tree and configuration that produced it.
 if(MSVC)
+  set(_ffx_archive_root "${CMAKE_BINARY_DIR}/ffx_sdk")
+
   foreach(
     _ffx_target
     ffx_backend_dx11_x64
@@ -35,13 +36,23 @@ if(MSVC)
     if(TARGET ${_ffx_target})
       set_target_properties(
         ${_ffx_target} PROPERTIES
-        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ffx_sdk"
-        ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/ffx_sdk"
-        ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/ffx_sdk"
-        ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/ffx_sdk"
+        ARCHIVE_OUTPUT_DIRECTORY "${_ffx_archive_root}"
       )
+
+      foreach(_ffx_config IN LISTS CMAKE_CONFIGURATION_TYPES)
+        string(TOUPPER "${_ffx_config}" _ffx_config_upper)
+        set_target_properties(
+          ${_ffx_target} PROPERTIES
+          "ARCHIVE_OUTPUT_DIRECTORY_${_ffx_config_upper}" "${_ffx_archive_root}/${_ffx_config}"
+        )
+      endforeach()
     endif()
   endforeach()
+
+  unset(_ffx_archive_root)
+  unset(_ffx_config)
+  unset(_ffx_config_upper)
+  unset(_ffx_target)
 endif()
 
 target_link_libraries(

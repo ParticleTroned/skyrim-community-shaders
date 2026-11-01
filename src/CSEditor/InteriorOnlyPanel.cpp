@@ -1,14 +1,13 @@
 #include "InteriorOnlyPanel.h"
+#include "I18n/I18n.h"
+#include "Utils/UI.h"
 
 #include "../Globals.h"
-#include "../I18n/I18n.h"
 #include "../Menu.h"
 #include "../Menu/ThemeManager.h"
 #include "../SceneSettingsManager.h"
 #include "../Utils/UI.h"
 #include "EditorWindow.h"
-
-#define I18N_KEY_PREFIX "cs_editor."
 
 namespace InteriorOnlyPanel
 {
@@ -47,7 +46,7 @@ namespace InteriorOnlyPanel
 
 	void DrawAddSettingUI()
 	{
-		auto* manager = globals::sceneSettingsManager;
+		auto* manager = SceneSettingsManager::GetSingleton();
 
 		ImGui::Spacing();
 
@@ -55,10 +54,10 @@ namespace InteriorOnlyPanel
 		if (cachedFeatureNames.empty())
 			cachedFeatureNames = SceneSettingsManager::GetInteriorRelevantFeatureNames();
 
-		const char* featurePreview = (selectedFeatureIdx >= 0 && selectedFeatureIdx < static_cast<int>(cachedFeatureNames.size())) ? cachedFeatureNames[selectedFeatureIdx].c_str() : T(TKEY("select_feature"), "Select Feature...");
+		const char* featurePreview = (selectedFeatureIdx >= 0 && selectedFeatureIdx < static_cast<int>(cachedFeatureNames.size())) ? cachedFeatureNames[selectedFeatureIdx].c_str() : "Select Feature...";
 
 		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * C::SCENE_FEATURE_DROPDOWN_RATIO);
-		if (ImGui::BeginCombo("##FeatureSelect", featurePreview)) {
+		if (auto combo = Util::Widgets::ComboBox("##FeatureSelect", featurePreview)) {
 			for (int i = 0; i < static_cast<int>(cachedFeatureNames.size()); ++i) {
 				bool selected = (i == selectedFeatureIdx);
 				if (ImGui::Selectable(cachedFeatureNames[i].c_str(), selected)) {
@@ -69,7 +68,6 @@ namespace InteriorOnlyPanel
 				if (selected)
 					ImGui::SetItemDefaultFocus();
 			}
-			ImGui::EndCombo();
 		}
 
 		ImGui::SameLine();
@@ -78,10 +76,10 @@ namespace InteriorOnlyPanel
 		{
 			auto _ = Util::DisableGuard(selectedFeatureIdx < 0);
 
-			const char* settingPreview = (selectedSettingIdx >= 0 && selectedSettingIdx < static_cast<int>(cachedSettingKeys.size())) ? cachedSettingKeys[selectedSettingIdx].c_str() : T(TKEY("select_setting"), "Select Setting...");
+			const char* settingPreview = (selectedSettingIdx >= 0 && selectedSettingIdx < static_cast<int>(cachedSettingKeys.size())) ? cachedSettingKeys[selectedSettingIdx].c_str() : "Select Setting...";
 
 			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * C::SCENE_SETTING_DROPDOWN_RATIO);
-			if (ImGui::BeginCombo("##SettingSelect", settingPreview)) {
+			if (auto combo = Util::Widgets::ComboBox("##SettingSelect", settingPreview)) {
 				for (int i = 0; i < static_cast<int>(cachedSettingKeys.size()); ++i) {
 					bool selected = (i == selectedSettingIdx);
 					bool alreadyAdded = selectedFeatureIdx >= 0 &&
@@ -98,7 +96,6 @@ namespace InteriorOnlyPanel
 					if (selected)
 						ImGui::SetItemDefaultFocus();
 				}
-				ImGui::EndCombo();
 			}
 		}
 
@@ -108,7 +105,7 @@ namespace InteriorOnlyPanel
 		bool canAdd = selectedFeatureIdx >= 0 && selectedSettingIdx >= 0;
 		{
 			auto _ = Util::DisableGuard(!canAdd);
-			if (ImGui::Button(T(TKEY("add"), "Add"))) {
+			if (ImGui::Button(T("cs_editor.add", "Add"))) {
 				auto& featureName = cachedFeatureNames[selectedFeatureIdx];
 				auto& settingKey = cachedSettingKeys[selectedSettingIdx];
 				auto currentValue = SceneSettingsManager::GetFeatureSettingValue(featureName, settingKey);
@@ -122,7 +119,7 @@ namespace InteriorOnlyPanel
 
 	void DrawSettingEntry(size_t index)
 	{
-		auto* manager = globals::sceneSettingsManager;
+		auto* manager = SceneSettingsManager::GetSingleton();
 		const auto& entries = manager->GetEntries(kSceneType);
 		if (index >= entries.size())
 			return;
@@ -154,7 +151,7 @@ namespace InteriorOnlyPanel
 		case SceneSettingsManager::SettingType::Boolean:
 			{
 				bool val = entry.value.is_boolean() ? entry.value.get<bool>() : (entry.value.get<int>() != 0);
-				if (ImGui::Checkbox("##val", &val)) {
+				if (Util::Widgets::Checkbox("##val", &val)) {
 					// Preserve original JSON type (integer for GPU constant buffer settings, boolean otherwise)
 					if (entry.value.is_boolean())
 						manager->UpdateEntryValue(kSceneType, index, val);
@@ -184,7 +181,7 @@ namespace InteriorOnlyPanel
 			}
 			break;
 		default:
-			ImGui::TextDisabled("%s", T(TKEY("unsupported_type"), "(unsupported type)"));
+			ImGui::TextDisabled(T("cs_editor.unsupported_type", "(unsupported type)"));
 			break;
 		}
 
@@ -197,7 +194,7 @@ namespace InteriorOnlyPanel
 		if (Util::FeatureToggle("##active", &active))
 			manager->TogglePauseEntry(kSceneType, index);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", entry.paused ? T(TKEY("paused_click_resume"), "Paused - click to resume") : T(TKEY("active_click_pause"), "Active - click to pause"));
+			ImGui::Text(entry.paused ? T("cs_editor.paused_click_resume", "Paused - click to resume") : T("cs_editor.active_click_pause", "Active - click to pause"));
 
 		// Delete button
 		ImGui::SameLine();
@@ -215,19 +212,19 @@ namespace InteriorOnlyPanel
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", entry.source == EntrySource::Overwrite ? T(TKEY("delete_overwrite_file"), "Delete overwrite file from disk") : T(TKEY("remove_setting"), "Remove this setting"));
+			ImGui::Text(entry.source == EntrySource::Overwrite ? T("cs_editor.delete_overwrite_file", "Delete overwrite file from disk") : T("cs_editor.remove_setting", "Remove this setting"));
 
 		ImGui::PopID();
 	}
 
 	void Draw()
 	{
-		auto* manager = globals::sceneSettingsManager;
+		auto* manager = SceneSettingsManager::GetSingleton();
 		const auto& entries = manager->GetEntries(kSceneType);
 		auto& theme = globals::menu->GetSettings().Theme;
 
 		// Header
-		ImGui::Text("%s", T(TKEY("interior_only_settings"), "Interior Only Settings"));
+		ImGui::Text(T("cs_editor.interior_only_settings", "Interior Only Settings"));
 
 		ImGui::Separator();
 
@@ -260,29 +257,27 @@ namespace InteriorOnlyPanel
 		if (entries.empty()) {
 			ImGui::Spacing();
 			ImGui::TextColored(theme.StatusPalette.Disable,
-				"%s", T(TKEY("no_interior_settings"), "No interior-only settings configured."));
+				T("editor.interior_only_panel.no_interior_only_settings_configured", "No interior-only settings configured."));
 			ImGui::TextColored(theme.StatusPalette.Disable,
-				"%s", T(TKEY("click_plus_add"), "Click + to add settings that will only apply in interiors."));
+				T("editor.interior_only_panel.click_to_add_settings_that_will_only_apply_in_interiors", "Click + to add settings that will only apply in interiors."));
 			ImGui::Spacing();
-			ImGui::TextWrapped("%s",
-				T(TKEY("interior_settings_override"),
-					"Settings added here will override feature defaults when you enter an interior cell. "
-					"Values revert automatically when you exit."));
+			ImGui::TextWrapped(
+				T("editor.interior_only_panel.overrides_feature_defaults_in_interior_cells_903b54c3", "Overrides feature defaults in interior cells. Original values return when you leave."));
 			return;
 		}
 
 		// --- Overwrite Files Section ---
 		if (!overwriteIndices.empty()) {
 			ImGui::Spacing();
-			ImGui::TextColored(theme.StatusPalette.InfoColor, "%s", T(TKEY("overwrite_files"), "Overwrite Files"));
+			ImGui::TextUnformatted(T("cs_editor.overwrite_files", "Overwrite Files"));
 			ImGui::SameLine();
 
 			bool allPaused = manager->AreAllOverwritesPaused(kSceneType);
-			if (ImGui::SmallButton(allPaused ? T(TKEY("unpause_all"), "Unpause All") : T(TKEY("pause_all"), "Pause All")))
+			if (ImGui::SmallButton(allPaused ? T("cs_editor.unpause_all", "Unpause All") : T("cs_editor.pause_all", "Pause All")))
 				manager->SetAllOverwritesPaused(kSceneType, !allPaused);
 
 			ImGui::SameLine();
-			if (ImGui::SmallButton(T(TKEY("delete_all"), "Delete All")))
+			if (ImGui::SmallButton(T("cs_editor.delete_all", "Delete All")))
 				deleteAllOverwritesPopup.Request();
 
 			ImGui::Separator();
@@ -295,18 +290,16 @@ namespace InteriorOnlyPanel
 		if (!userIndices.empty()) {
 			if (!overwriteIndices.empty()) {
 				ImGui::Spacing();
-				ImGui::TextColored(theme.FeatureHeading.ColorDefault, "%s", T(TKEY("user_settings"), "User Settings"));
+				ImGui::TextUnformatted(T("cs_editor.user_settings", "User Settings"));
 				ImGui::SameLine();
 			}
 
 			bool allUserPaused = manager->AreAllUserPaused(kSceneType);
-			auto pauseAllLabel = std::format("{}##user", allUserPaused ? T(TKEY("unpause_all"), "Unpause All") : T(TKEY("pause_all"), "Pause All"));
-			if (ImGui::SmallButton(pauseAllLabel.c_str()))
+			if (ImGui::SmallButton(allUserPaused ? T("editor.interior_only_panel.unpause_all_user", "Unpause All##user") : T("editor.interior_only_panel.pause_all_user", "Pause All##user")))
 				manager->SetAllUserPaused(kSceneType, !allUserPaused);
 
 			ImGui::SameLine();
-			auto deleteAllLabel = std::format("{}##user", T(TKEY("delete_all"), "Delete All"));
-			if (ImGui::SmallButton(deleteAllLabel.c_str()))
+			if (ImGui::SmallButton(T("editor.interior_only_panel.delete_all_user", "Delete All##user")))
 				deleteAllUserPopup.Request();
 
 			if (!overwriteIndices.empty())
@@ -321,5 +314,3 @@ namespace InteriorOnlyPanel
 		}
 	}
 }
-
-#undef I18N_KEY_PREFIX

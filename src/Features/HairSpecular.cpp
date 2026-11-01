@@ -1,4 +1,6 @@
 #include "HairSpecular.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include "../I18n/I18n.h"
 #include "Utils/D3D.h"
@@ -28,57 +30,66 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void HairSpecular::DrawSettings()
 {
-	ImGui::Checkbox("Enable", (bool*)&settings.Enabled);
-	ImGui::Combo(T(TKEY("hair_mode"), "Hair Mode"), (int*)&settings.HairMode, "Kajiya-Kay\0Marschner\0");
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("hair_mode_tooltip"),
-							  "Select the hair shading model to use.\n"
-							  "Kajiya-Kay is an empirical model that simulates hair specular highlights.\n"
-							  "Marschner is a more physically-based model that simulates hair light interaction.\n"
-							  "Both models are anisotropic and support tangent-based shading.\n"
-							  "Without self-shadowing, Marschner may look overly bright because of transmission.\n"));
+	MenuUI::SettingsPage page("HairSpecular", {
+												  { "model", T("feature.hair_specular.ui_model", "Model"), T("feature.hair_specular.ui_choose_the_hair_lighting_model_first", "Choose the hair lighting model first."), T("feature.hair_specular.ui_kajiya_kay_or_marschner", "Kajiya-Kay or Marschner"), true, true, T("feature.hair_specular.ui_choose_model_and_appearance", "Choose model and appearance") },
+												  { "look", T("feature.hair_specular.ui_look", "Look"), T("feature.hair_specular.ui_balance_brightness_colour_and_shine", "Balance brightness, colour and shine."), T("feature.hair_specular.ui_brightness_colour_and_shine", "Brightness, colour and shine"), true, true, nullptr },
+												  { "highlights", T("feature.grass_lighting.settings.highlights", "Highlights"), T("feature.hair_specular.ui_refine_the_highlights_along_hair_strands", "Refine the highlights along hair strands."), T("feature.hair_specular.ui_strand_highlight_direction", "Strand highlight direction"), true, true, T("feature.hair_specular.ui_refine_highlights_and_shadows", "Refine highlights and shadows") },
+												  { "shadows", T("feature.hair_specular.ui_shadows", "Shadows"), T("feature.hair_specular.ui_refine_how_hair_shadows_itself", "Refine how hair shadows itself."), T("feature.hair_specular.ui_screen_space_self_shadowing", "Screen-space self-shadowing"), true, true, nullptr },
+											  });
+
+	if (page.Is("model")) {
+		const char* hairModels[] = {
+			T("feature.hair_specular.kajiya_kay", "Kajiya-Kay"),
+			T("feature.hair_specular.marschner", "Marschner")
+		};
+		int hairMode = static_cast<int>(settings.HairMode);
+		if (MenuUI::ChoiceSetting(T("feature.hair_specular.hair_mode", "Hair Mode"), &hairMode, hairModels, static_cast<int>(std::size(hairModels))))
+			settings.HairMode = static_cast<uint>(std::clamp(hairMode, 0, 1));
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(T("feature.hair_specular.ui_choose_hair_shading_kajiya_kay_empirical_specular_high_2d4604f9", "Choose hair shading:\nKajiya-Kay: empirical specular highlights.\nMarschner: more physical light interaction; transmission can look too bright without self-shadowing.\nBoth use anisotropic, tangent-based shading."));
+		}
+		ImGui::Spacing();
 	}
-	ImGui::Spacing();
-	ImGui::SliderFloat(T(TKEY("glossiness"), "Glossiness"), &settings.HairGlossiness, 0.0f, settings.HairMode == 0 ? 256.0f : 100.0f, "%.0f");
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("glossiness_tooltip"),
-							  "Controls the glossiness of the hair.\n"
-							  "Glossiness in Kajiya-Kay mode maps to the specular exponent.\n"
-							  "In Marschner mode, it controls the roughness of the hair surface.\n"));
+	if (page.Is("look")) {
+		Util::Widgets::SliderFloat(T("feature.hair_specular.glossiness", "Glossiness"), &settings.HairGlossiness, 0.0f, settings.HairMode == 0 ? 256.0f : 100.0f, "%.0f");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(T("feature.hair_specular.ui_hair_glossiness_specular_exponent_in_kajiya_kay_surfac_4e4575a8", "Hair glossiness: specular exponent in Kajiya-Kay; surface roughness in Marschner."));
+		}
+		Util::Widgets::SliderFloat(T("feature.hair_specular.specular_multiplier", "Specular Multiplier"), &settings.SpecularMult, 0.0f, 10.0f, "%.2f");
+		Util::Widgets::SliderFloat(T("feature.hair_specular.diffuse_multiplier", "Diffuse Multiplier"), &settings.DiffuseMult, 0.0f, 10.0f, "%.2f");
+		Util::Widgets::SliderFloat(T("feature.hair_specular.indirect_specular_multiplier", "Indirect Specular Multiplier"), &settings.SpecularIndirectMult, 0.0f, 10.0f, "%.2f");
+		Util::Widgets::SliderFloat(T("feature.hair_specular.indirect_diffuse_multiplier", "Indirect Diffuse Multiplier"), &settings.DiffuseIndirectMult, 0.0f, 10.0f, "%.2f");
+		Util::Widgets::SliderFloat(T("feature.hair_specular.hair_base_color_multiplier", "Hair Base Color Multiplier"), &settings.BaseColorMult, 0.0f, 10.0f, "%.2f");
+		Util::Widgets::SliderFloat(T("feature.hair_specular.hair_saturation", "Hair Saturation"), &settings.HairSaturation, 0.0f, 5.0f, "%.2f");
+		Util::Widgets::SliderFloat(T("feature.hair_specular.transmission", "Transmission"), &settings.Transmission, 0.0f, 1.0f, "%.2f");
+		ImGui::Spacing();
 	}
-	ImGui::SliderFloat(T(TKEY("specular_multiplier"), "Specular Multiplier"), &settings.SpecularMult, 0.0f, 10.0f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("diffuse_multiplier"), "Diffuse Multiplier"), &settings.DiffuseMult, 0.0f, 10.0f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("indirect_specular_multiplier"), "Indirect Specular Multiplier"), &settings.SpecularIndirectMult, 0.0f, 10.0f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("indirect_diffuse_multiplier"), "Indirect Diffuse Multiplier"), &settings.DiffuseIndirectMult, 0.0f, 10.0f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("hair_base_color_multiplier"), "Hair Base Color Multiplier"), &settings.BaseColorMult, 0.0f, 10.0f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("hair_saturation"), "Hair Saturation"), &settings.HairSaturation, 0.0f, 5.0f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("transmission"), "Transmission"), &settings.Transmission, 0.0f, 1.0f, "%.2f");
-	ImGui::Spacing();
-	ImGui::Checkbox(T(TKEY("enable_tangent_shift"), "Enable Tangent Shift"), (bool*)&settings.EnableTangentShift);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("enable_tangent_shift_tooltip"),
-							  "Enables the use of a tangent shift texture to vary specular highlights across hair strands.\n"
-							  "Result may vary based on the hair model used.\n"));
+	if (page.Is("highlights")) {
+		Util::UIntCheckbox(T("feature.hair_specular.enable_tangent_shift", "Enable Tangent Shift"), settings.EnableTangentShift);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(T("feature.hair_specular.ui_vary_strand_highlights_with_a_tangent_shift_texture_re_12ab14f0", "Vary strand highlights with a tangent-shift texture. Results depend on the hair model."));
+		}
+		if (settings.HairMode == 0) {
+			Util::Widgets::SliderFloat(T("feature.hair_specular.primary_tangent_shift", "Primary Specular Tangent Shift"), &settings.PrimaryTangentShift, -1.0f, 1.0f, "%.2f");
+			Util::Widgets::SliderFloat(T("feature.hair_specular.secondary_tangent_shift", "Secondary Specular Tangent Shift"), &settings.SecondaryTangentShift, -1.0f, 1.0f, "%.2f");
+		}
+		ImGui::Spacing();
 	}
-	if (settings.HairMode == 0) {
-		ImGui::SliderFloat(T(TKEY("primary_tangent_shift"), "Primary Specular Tangent Shift"), &settings.PrimaryTangentShift, -1.0f, 1.0f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("secondary_tangent_shift"), "Secondary Specular Tangent Shift"), &settings.SecondaryTangentShift, -1.0f, 1.0f, "%.2f");
+	if (page.Is("shadows")) {
+		Util::UIntCheckbox(T("feature.hair_specular.enable_self_shadow", "Enable Screen-Space Self Shadow"), settings.EnableSelfShadow);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(T("feature.hair_specular.ui_enable_screen_space_hair_self_shadowing_without_it_mar_23b2677d", "Enable screen-space hair self-shadowing. Without it, Marschner transmission can look too bright."));
+		}
+		const auto shadowsDisabled = Util::DisableGuard(settings.EnableSelfShadow == 0);
+		Util::Widgets::SliderFloat(T("feature.hair_specular.self_shadow_strength", "Self Shadow Strength"), &settings.SelfShadowStrength, 0.0f, 1.0f, "%.2f");
+		Util::Widgets::SliderFloat(T("feature.hair_specular.self_shadow_exponent", "Self Shadow Exponent"), &settings.SelfShadowExponent, 0.0f, 10.0f, "%.2f");
+		Util::Widgets::SliderFloat(T("feature.hair_specular.self_shadow_scale", "Self Shadow Scale"), &settings.SelfShadowScale, 0.0f, 10.0f, "%.2f");
 	}
-	ImGui::Spacing();
-	ImGui::Checkbox(T(TKEY("enable_self_shadow"), "Enable Screen-Space Self Shadow"), (bool*)&settings.EnableSelfShadow);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("enable_self_shadow_tooltip"),
-							  "Enables screen-space self-shadowing for hair.\n"
-							  "Marschner hair model might have overly bright transmission without self-shadowing.\n"));
-	}
-	ImGui::SliderFloat(T(TKEY("self_shadow_strength"), "Self Shadow Strength"), &settings.SelfShadowStrength, 0.0f, 1.0f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("self_shadow_exponent"), "Self Shadow Exponent"), &settings.SelfShadowExponent, 0.0f, 10.0f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("self_shadow_scale"), "Self Shadow Scale"), &settings.SelfShadowScale, 0.0f, 10.0f, "%.2f");
 }
 
 void HairSpecular::DrawEssentialSettings()
 {
-	ImGui::Checkbox("Enable", reinterpret_cast<bool*>(&settings.Enabled));
+	ImGui::Checkbox(T("feature.hair_specular.enable", "Enable"), reinterpret_cast<bool*>(&settings.Enabled));
 }
 
 void HairSpecular::LoadSettings(json& o_json)

@@ -1,6 +1,7 @@
 #ifndef __COLOR_DEPENDENCY_HLSL__
 #define __COLOR_DEPENDENCY_HLSL__
 
+#include "Common/AdaptiveBalanceColorBounds.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/PointLightFlags.hlsli"
 #include "Common/SharedData.hlsli"
@@ -24,7 +25,7 @@
 #	define ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS ENABLE_ADAPTIVE_BRIGHTNESS_COLOR_ADJUSTMENTS
 #endif
 
-// Adaptive Balance shares Linear Lighting's settings payload, but it must
+// Adaptive Brightness shares Linear Lighting's settings payload, but it must
 // not enable Linear Lighting's color-space conversion path.
 #define ENABLE_BRIGHTNESS_ADJUSTMENTS (ENABLE_LL_COLOR_ADJUSTMENTS || ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS)
 
@@ -61,6 +62,7 @@ namespace Color
 	static const uint PointLightFlagOmnidirectionalBulb = POINT_LIGHT_FLAG_OMNIDIRECTIONAL;
 	static const uint PackedPointLightFlagVectorSize = 4;
 	static const uint MaxVanillaPointLightFlags = 8;
+
 	static const uint WhiteDiffuseCategoryAnimal = 1;
 	static const float WhiteDiffuseThresholdObject = 0.80f;
 	static const float WhiteDiffuseThresholdAnimal = 0.78f;
@@ -175,6 +177,9 @@ namespace Color
 		return sign(color) * pow(abs(color), 1.0 / 2.2);
 	}
 
+	// Rec. 709/sRGB and Rec. 2020 primary conversion matrices. Keep these in
+	// the shared color module so every HDR image-space pass uses one canonical
+	// transform pair.
 	static const float3x3 BT709_2_BT2020 = {
 		0.627403914928436279296875f, 0.3292830288410186767578125f, 0.0433130674064159393310546875f,
 		0.069097287952899932861328125f, 0.9195404052734375f, 0.011362315155565738677978515625f,
@@ -219,7 +224,7 @@ namespace Color
 			return out_color * (10000.f / scaling);
 		}
 
-	}  // namespace pq
+	}
 
 	bool UseLinearLightingColorAdjustments()
 	{
@@ -306,14 +311,18 @@ namespace Color
 		return color + whiteExcess * (multiplier - 1.0f) * mask;
 	}
 
+	float3 PBRDiffuse(float3 color)
+	{
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSrgb(color);
+	}
+
 	float3 Diffuse(float3 color)
 	{
 #	if defined(TRUE_PBR)
-		color = ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSrgb(color);
+		return PBRDiffuse(color);
 #	else
-		color = ENABLE_LL_COLOR_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) * SharedData::linearLightingSettings.vanillaDiffuseColorMult : color;
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) * SharedData::linearLightingSettings.vanillaDiffuseColorMult : color;
 #	endif
-		return color;
 	}
 
 	float3 DiffuseAlbedo(float3 color)
@@ -338,13 +347,6 @@ namespace Color
 #	endif
 	}
 
-	float3 DirectionalLight(float3 color, bool isLinear = false)
-	{
-		return Light(color, isLinear) *
-		       ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
-		       SharedData::adaptiveBalanceSettings.directionalLightMult;
-	}
-
 	float GetPointLightMultiplier(bool isLinear)
 	{
 		return isLinear ? SharedData::adaptiveBalanceSettings.linearPointLightMult : SharedData::adaptiveBalanceSettings.pointLightMult;
@@ -359,12 +361,38 @@ namespace Color
 		return 1.0f;
 	}
 
+	bool IsSceneColorDraw()
+	{
+#	if defined(PSHADER) && defined(LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS)
+		return (Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection)) != 0;
+#	else
+		return true;
+#	endif
+	}
+
+	/// Composed Adaptive Balance multiplier, excluding out-of-world object previews.
 	float3 PointLight(float3 color, bool isLinear = false, uint lightFlags = 0, bool preserveHDRIntensity = false)
 	{
-		return Light(color, isLinear, preserveHDRIntensity) *
-		       ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
-		       GetPointLightMultiplier(isLinear) *
-		       GetPointLightTypeMultiplier(isLinear, lightFlags);
+		const float curve = SharedData::adaptiveBalanceSettings.pointLightCurve;
+		const float saturation = SharedData::adaptiveBalanceSettings.pointLightSaturation;
+		const bool grade = IsSceneColorDraw() && (curve != 1.0 || saturation != 1.0);
+		// Grade authored RGB before light conversion; neutral settings retain signed inputs.
+		[branch] if (IsSceneColorDraw() && curve != 1.0)
+			color = pow(max(color, 0.0), curve);
+		color = Light(color, isLinear, preserveHDRIntensity);
+		if (grade)
+			color = AdaptiveBalanceColorBounds::Intermediate(color, ENABLE_LL_COLOR_ADJUSTMENTS);
+		// Neutral profiles preserve the authored color without a gamma round trip.
+		[branch] if (IsSceneColorDraw() && saturation != 1.0)
+		{
+			float3 linearColor = ENABLE_LL_COLOR_ADJUSTMENTS ? color : GammaToLinearSafe(color);
+			linearColor = Saturation(linearColor, saturation);
+			color = ENABLE_LL_COLOR_ADJUSTMENTS ? linearColor : LinearToGammaSafe(linearColor);
+		}
+		color *= ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f);
+		if (IsSceneColorDraw())
+			color = color * GetPointLightMultiplier(isLinear) * GetPointLightTypeMultiplier(isLinear, lightFlags);
+		return grade ? AdaptiveBalanceColorBounds::Output(color) : color;
 	}
 
 	float3 PointLightPreserveHDRIntensity(float3 color, bool isLinear = false, uint lightFlags = 0)
@@ -377,8 +405,11 @@ namespace Color
 #	if defined(PSHADER) && defined(ADAPTIVE_BALANCE) && (defined(ADAPTIVE_BALANCE_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
 		if (lightIndex >= MaxVanillaPointLightFlags)
 			return 0;
-		const uint packedLightIndex = lightIndex % PackedPointLightFlagVectorSize;
-		return lightIndex < PackedPointLightFlagVectorSize ? AdaptiveBalancePointLightFlags0[packedLightIndex] : AdaptiveBalancePointLightFlags1[packedLightIndex];
+
+		// Keep both ternary operands in range. The legacy HLSL compiler evaluates
+		// both vector indices while unrolling Water's literal local-light loop.
+		const uint componentIndex = lightIndex % PackedPointLightFlagVectorSize;
+		return lightIndex < PackedPointLightFlagVectorSize ? AdaptiveBalancePointLightFlags0[componentIndex] : AdaptiveBalancePointLightFlags1[componentIndex];
 #	else
 		return 0;
 #	endif
@@ -390,7 +421,7 @@ namespace Color
 			return pow(abs(color / max(emissiveMult, 1e-5)), SharedData::linearLightingSettings.emitColorGamma) * emissiveMult * SharedData::linearLightingSettings.emitColorMult;
 		}
 
-		// Adaptive Balance only adjusts the multiplier. Keep the engine-authored
+		// Adaptive Brightness only adjusts the multiplier. Keep the engine-authored
 		// emissive value intact so this path does not depend on LLPerGeometry.
 		return ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS ? color * SharedData::linearLightingSettings.emitColorMult : color;
 	}
@@ -415,20 +446,10 @@ namespace Color
 		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.ambientGamma) * SharedData::linearLightingSettings.ambientMult : color;
 	}
 
-	/// Composed Adaptive Balance multiplier, excluding out-of-world object previews.
+	/// Scene adjustments include reflections and exclude out-of-world object previews.
 	float AmbientBalanceMultiplier()
 	{
-#	if defined(PSHADER) && defined(LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS)
-		if ((Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection)) == 0)
-			return 1.0;
-#	endif
-		return SharedData::adaptiveBalanceSettings.ambientMult;
-	}
-
-	/// Apply once after ambient sources are combined, in the renderer's lighting space.
-	float3 ApplyAmbientBalance(float3 color)
-	{
-		return color * AmbientBalanceMultiplier();
+		return IsSceneColorDraw() ? SharedData::adaptiveBalanceSettings.ambientMult : 1.0;
 	}
 
 	float3 Fog(float3 color)
@@ -438,7 +459,9 @@ namespace Color
 
 	float FogAlpha(float alpha)
 	{
-		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(alpha), SharedData::linearLightingSettings.fogAlphaGamma) : alpha;
+		alpha = ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(alpha), SharedData::linearLightingSettings.fogAlphaGamma) : alpha;
+		float intensity = IsSceneColorDraw() ? SharedData::adaptiveBalanceSettings.fogIntensity : 1.0;
+		return intensity == 1.0 ? alpha : saturate(alpha * intensity);
 	}
 
 	float3 Effect(float3 color)
@@ -476,7 +499,11 @@ namespace Color
 
 	float3 Sky(float3 color)
 	{
+#	if defined(CLOUDS)
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.cloudGamma) : color;
+#	else
 		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.skyGamma) : color;
+#	endif
 	}
 
 	float3 Water(float3 color)
@@ -519,12 +546,6 @@ namespace Color
 		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSkyrimGamma(color);
 	}
 
-	/// Match the ambient brightness adjustment for contributions already in linear space.
-	float3 ApplyAmbientBalanceLinear(float3 color)
-	{
-		return color * IrradianceToLinear(AmbientBalanceMultiplier());
-	}
-
 	float VanillaNormalization()
 	{
 		return ENABLE_LL_COLOR_ADJUSTMENTS ? 1.0 / Math::PI : 1.0f;
@@ -539,10 +560,15 @@ namespace Color
 	const static float ReflectionNormalisationScale = 1.0;
 	const static float PBRLightingCompensation = Math::PI;
 
+	float3 PBRDiffuse(float3 color)
+	{
+		return LinearToSrgb(color);
+	}
+
 	float3 Diffuse(float3 color)
 	{
 #	if defined(TRUE_PBR)
-		return LinearToSrgb(color);
+		return PBRDiffuse(color);
 #	else
 		return color;
 #	endif
@@ -557,7 +583,6 @@ namespace Color
 #	endif
 	}
 #endif
-
 	namespace Correct
 	{
 		static const float3x3 BT709_2_OKLABLMS = {
@@ -678,8 +703,10 @@ namespace Color
 			return color;
 		}
 
-	}  // namespace Correct
+	}
 }
+
+#include "Common/AdaptiveBalanceAppearance.hlsli"
 
 // ============================================================================
 // DICE Tonemapping Support
@@ -775,5 +802,7 @@ float3 PQ_to_Linear(float3 c, int clampType = GCT_DEFAULT)
 	float3 lin = pow(max(p - DICE_PQ_C1, 0.0) / (DICE_PQ_C2 - DICE_PQ_C3 * p), 1.0 / DICE_PQ_M1);
 	return (clampType == GCT_MIRROR) ? lin * s : lin;
 }
+
+
 
 #endif  //__COLOR_DEPENDENCY_HLSL__

@@ -51,6 +51,19 @@ namespace ShaderCompilationSchedulingPolicy
 		ProcessNormal,
 	};
 
+	[[nodiscard]] constexpr CompilationPhase SelectCompilationPhase(
+		bool a_startupCompilationComplete) noexcept
+	{
+		return a_startupCompilationComplete ? CompilationPhase::InGame : CompilationPhase::Startup;
+	}
+
+	[[nodiscard]] constexpr bool ShouldCompleteStartupCompilation(
+		bool a_dataLoaded,
+		bool a_compilationActive) noexcept
+	{
+		return a_dataLoaded && !a_compilationActive;
+	}
+
 	[[nodiscard]] constexpr WorkerThreadPriorityMode SelectWorkerThreadPriorityMode(
 		CompilationPhase a_phase) noexcept
 	{

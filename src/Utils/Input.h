@@ -1,6 +1,7 @@
 #pragma once
+#include <cstdint>
 #include <format>
-#include <magic_enum/magic_enum.hpp>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
@@ -69,6 +70,30 @@ struct InputCombo
 {
 private:
 	uint32_t deviceAndKey;  // device in upper bits, key in lower bits
+	static bool tryGetUInt32(const nlohmann::json& value, uint32_t& out)
+	{
+		if (!value.is_number_integer()) {
+			return false;
+		}
+
+		if (value.is_number_unsigned()) {
+			const auto raw = value.get<uint64_t>();
+			if (raw > std::numeric_limits<uint32_t>::max()) {
+				return false;
+			}
+
+			out = static_cast<uint32_t>(raw);
+			return true;
+		}
+
+		const auto raw = value.get<int64_t>();
+		if (raw < 0 || raw > std::numeric_limits<uint32_t>::max()) {
+			return false;
+		}
+
+		out = static_cast<uint32_t>(raw);
+		return true;
+	}
 
 public:
 	/**
@@ -115,6 +140,8 @@ public:
 
 		bool requiresCtrl = false, requiresShift = false, requiresAlt = false;
 		for (size_t i = 0; i < combo.size() - 1; ++i) {
+			if (combo[i].GetDevice() != InputDeviceType::Keyboard)
+				return false;
 			uint32_t modKey = combo[i].GetKey();
 			if (modKey == VK_CONTROL || modKey == VK_LCONTROL || modKey == VK_RCONTROL)
 				requiresCtrl = true;
@@ -122,6 +149,8 @@ public:
 				requiresShift = true;
 			else if (modKey == VK_MENU || modKey == VK_LMENU || modKey == VK_RMENU)
 				requiresAlt = true;
+			else
+				return false;
 		}
 
 		constexpr uint16_t KEY_PRESSED = 0x8000;
@@ -175,7 +204,13 @@ public:
 	 */
 	friend void from_json(const nlohmann::json& j, InputCombo& combo)
 	{
-		combo.deviceAndKey = j.get<uint32_t>();
+		combo.deviceAndKey = 0;
+		uint32_t value = 0;
+		if (!tryGetUInt32(j, value))
+			return;
+		combo.deviceAndKey = value;
+		if (combo.GetDevice() < InputDeviceType::Keyboard || combo.GetDevice() > InputDeviceType::Gamepad || combo.GetKey() == 0)
+			combo.deviceAndKey = 0;
 	}
 
 	/**
@@ -254,21 +289,17 @@ public:
 		static void from_json(const nlohmann::json& j, std::vector<InputCombo>& combos)
 		{
 			combos.clear();
-
+			const auto parse = [&](const nlohmann::json& item) {
+				uint32_t value = 0;
+				if (tryGetUInt32(item, value))
+					parseAndAdd(value, combos);
+			};
 			if (j.is_array()) {
-				// Array format - multiple inputs in combo
-				for (const auto& item : j) {
-					if (item.is_number_integer()) {
-						uint32_t val = item.get<uint32_t>();
-						parseAndAdd(val, combos);
-					}
-				}
-			} else if (j.is_number_integer()) {
-				// Single integer format (backward compatibility)
-				uint32_t val = j.get<uint32_t>();
-				parseAndAdd(val, combos);
+				for (const auto& item : j)
+					parse(item);
+			} else {
+				parse(j);
 			}
-			// Other types (null, string, etc.) leave combos empty
 		}
 
 	private:
@@ -286,7 +317,8 @@ public:
 				// Packed InputCombo with device type in upper bits
 				InputCombo c;
 				c.deviceAndKey = val;
-				combos.push_back(c);
+				if (c.GetDevice() >= InputDeviceType::Keyboard && c.GetDevice() <= InputDeviceType::Gamepad && c.GetKey() != 0)
+					combos.push_back(c);
 			}
 		}
 	};

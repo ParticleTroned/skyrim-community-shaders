@@ -1,4 +1,4 @@
-#ifndef __PBR_MATH_HLSL__
+#if !(defined(__PBR_MATH_HLSL__))
 #define __PBR_MATH_HLSL__
 
 #include "Common/BRDF.hlsli"
@@ -149,9 +149,10 @@ namespace PBR
 	/// @brief Calculate wetness specular lobe weight for indirect lighting
 	/// @param N Surface normal
 	/// @param V View direction
+	/// @param VN Vertex normal (for horizon occlusion)
 	/// @param roughness Surface roughness
 	/// @return Wetness specular lobe weight
-	float3 GetWetnessIndirectSpecularLobeWeight(float3 N, float3 V, float roughness)
+	float3 GetWetnessIndirectSpecularLobeWeight(float3 N, float3 V, float3 VN, float roughness)
 	{
 		const float wetnessF0 = 0.02;
 
@@ -159,8 +160,20 @@ namespace PBR
 		float2 specularBRDF = BRDF::EnvBRDF(roughness, NdotV);
 		float3 specularLobeWeight = wetnessF0 * specularBRDF.x + specularBRDF.y;
 
+		// Horizon specular occlusion
+		// https://marmosetco.tumblr.com/post/81245981087
+		float3 R = reflect(-V, N);
+		float horizon = min(1.0 + dot(R, VN), 1.0);
+		horizon = horizon * horizon;
+		specularLobeWeight *= horizon;
+
 		return specularLobeWeight;
 	}
+	float3 GetWetnessIndirectSpecularLobeWeight(float3 N, float3 V, float roughness)
+	{
+		return GetWetnessIndirectSpecularLobeWeight(N, V, N, roughness);
+	}
+
 }
 
-#endif  // __PBR_MATH_HLSL__
+#endif

@@ -1,5 +1,6 @@
 
 #include "Common/BRDF.hlsli"
+#include "Common/CharacterCategoryMask.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -11,7 +12,7 @@ Texture2D<float3> SpecularTexture : register(t0);
 Texture2D<unorm float3> AlbedoTexture : register(t1);
 Texture2D<unorm float3> NormalRoughnessTexture : register(t2);
 Texture2D<float3> MasksTexture : register(t3);
-Texture2D<unorm float> Masks2Texture : register(t9);
+Texture2D<unorm float2> Masks2Texture : register(t9);
 
 RWTexture2D<float4> MainRW : register(u0);
 RWTexture2D<float4> NormalTAAMaskSpecularMaskRW : register(u1);
@@ -122,7 +123,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 	// Masks2.x stores 1 - vertexAO (Lighting.hlsl only); cleared to 0 for
 	// pixels with no vertex AO contribution, so vertexAO defaults to 1.
-	float vertexAO = 1.0 - Masks2Texture[dispatchID.xy].x;
+	float vertexAO = 1.0 - CharacterCategoryMask::DecodeInverseVertexAo(Masks2Texture[dispatchID.xy]);
 	ssgiAo = saturate(ssgiAo / max(vertexAO, EPSILON_DIVISION));
 
 	float3 linAlbedo = Color::IrradianceToLinear(albedo / Color::PBRLightingScale);
@@ -138,17 +139,17 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 		float3 positionMS = positionWS.xyz;
 		sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, normalWS);
 		float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, normalWS);
-		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(vanillaDALC, -normalWS, skylightingDiffuse) * albedo;
+		directionalAmbientColor = AdaptiveBalanceAppearance::ApplyAmbientSaturation(ImageBasedLighting::GetDiffuseIBLOccluded(vanillaDALC, -normalWS, skylightingDiffuse)) * albedo;
 #		else
-		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(vanillaDALC, -normalWS) * albedo;
+		directionalAmbientColor = AdaptiveBalanceAppearance::ApplyAmbientSaturation(ImageBasedLighting::GetDiffuseIBL(vanillaDALC, -normalWS)) * albedo;
 #		endif
 	} else
 #	endif
 	{
-		directionalAmbientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
+		directionalAmbientColor = AdaptiveBalanceAppearance::ApplyAmbientSaturation(Color::Ambient(max(0, SharedData::GetAmbient(normalWS))));
 		directionalAmbientColor *= albedo;
 	}
-	directionalAmbientColor = Color::ApplyAmbientBalance(directionalAmbientColor);
+	directionalAmbientColor *= Color::AmbientBalanceMultiplier();
 	directionalAmbientColor = Color::RGBToYCoCg(directionalAmbientColor);
 	directionalAmbientColor.x = MasksTexture[dispatchID.xy].z;
 	directionalAmbientColor = Color::YCoCgToRGB(directionalAmbientColor);
@@ -209,8 +210,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 #	if defined(IBL)
 		if (SharedData::iblSettings.EnableIBL) {
-			float3 envSpecular, skySpecular;
-			ImageBasedLighting::ComputeSpecularIBL(
+			finalIrradiance = ImageBasedLighting::ComputeSpecularIBL(
 				EnvTexture,
 				EnvReflectionsTexture,
 				LinearSampler,
@@ -218,10 +218,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 				level,
 				directionalAmbientColorSpecular,
 				skylightingSpecular,
-				skylightingVisibility,
-				envSpecular,
-				skySpecular);
-			finalIrradiance = envSpecular + skySpecular;
+				skylightingVisibility);
 		} else
 #	endif
 		{

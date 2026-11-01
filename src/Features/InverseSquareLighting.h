@@ -41,6 +41,14 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual void PostPostLoad() override;
+	void EarlyPrepass() override;
+	bool SupportsPerformanceCostMeasurement() const override { return true; }
+	bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
+	void SetPerformanceCostMeasurementEnabled(bool enabled) override { SetRuntimeEnabled(enabled); }
+	bool IsPerformanceCostMeasurementReady() const override
+	{
+		return !runtimeSettingsDirty.load(std::memory_order_acquire) && runtimeEnabled.load(std::memory_order_acquire) == settings.Enabled;
+	}
 	bool IsEnabled() const { return loaded && runtimeEnabled.load(std::memory_order_acquire); }
 
 	static float CalculateRadius(float intensity, bool shadowCaster, float cutoffOverride, float size);
@@ -63,6 +71,7 @@ public:
 	virtual bool IsCore() const override { return true; };
 
 private:
+	std::atomic<bool> runtimeSettingsDirty{ true };
 	static constexpr float DefaultCutoff = 0.05f;
 	static constexpr float DefaultShadowCasterCutoff = 0.022f;
 

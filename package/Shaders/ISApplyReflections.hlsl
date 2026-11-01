@@ -27,13 +27,16 @@ PS_OUTPUT main(PS_INPUT input)
 	PS_OUTPUT psout;
 
 	float2 adjustedScreenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord.xy);
+	float2 ssrSourceScreenPosition = adjustedScreenPosition;
+	float2 waterMaskScreenPosition = adjustedScreenPosition;
+	float2 mainBufferScreenPosition = adjustedScreenPosition;
 
-	float2 waterMask = WaterMaskTex.SampleLevel(WaterMaskSampler, adjustedScreenPosition, 0).zw;
-	float3 mainColor = MainBufferTex.Sample(MainBufferSampler, adjustedScreenPosition).xyz;
+	float2 waterMask = WaterMaskTex.SampleLevel(WaterMaskSampler, waterMaskScreenPosition, 0).zw;
+	float3 mainColor = MainBufferTex.Sample(MainBufferSampler, mainBufferScreenPosition).xyz;
 
 	float3 colorOffset = 0.0.xxx;
 	if (1e-5 >= waterMask.x && waterMask.y > 1e-5) {
-		float4 ssrSourceColor = SSRSourceTex.Sample(SSRSourceSampler, adjustedScreenPosition);
+		float4 ssrSourceColor = SSRSourceTex.Sample(SSRSourceSampler, ssrSourceScreenPosition);
 		colorOffset = clamp(SSRParams.x * (ssrSourceColor.xyz * ssrSourceColor.w),
 			0, SSRParams.y * mainColor);
 	}

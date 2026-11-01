@@ -1,15 +1,16 @@
+#define I18N_KEY_PREFIX "cs_editor."
 #include "EditorWindow.h"
+#include "I18n/I18n.h"
 
-#include "../I18n/I18n.h"
 #include "Features/CSEditor.h"
 #include "Features/HDRDisplay.h"
 #include "Features/Upscaling.h"
-#include "Globals.h"
 #include "InteriorOnlyPanel.h"
 #include "Menu.h"
 #include "Menu/BackgroundBlur.h"
 #include "PaletteWindow.h"
 #include "State.h"
+#include "Utils/FileSystem.h"
 #include "Utils/Game.h"
 #include "Utils/Subrect.h"
 #include "Utils/UI.h"
@@ -17,12 +18,13 @@
 #include "WeatherUtils.h"
 #include "imgui_internal.h"
 
-#define I18N_KEY_PREFIX "cs_editor."
-
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <functional>
+#include <imgui_stdlib.h>
+#include <optional>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteColorEntry, r, g, b, useCount, lastUsedTime, isFavorite)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteValueEntry, name, value, useCount, lastUsedTime, isFavorite)
@@ -101,12 +103,16 @@ bool IconButton(const char* label, bool filled, const char* iconType)
 
 	bool result = ImGui::InvisibleButton(label, buttonSize);
 
+	bool hovered = ImGui::IsItemHovered();
+	bool active = ImGui::IsItemActive();
+
+	ImU32 bgColor = active  ? ImGui::GetColorU32(ImGuiCol_ButtonActive) :
+	                hovered ? ImGui::GetColorU32(ImGuiCol_ButtonHovered) :
+	                          ImGui::GetColorU32(ImGuiCol_Button);
 	ImU32 iconColor = ImGui::GetColorU32(ImGuiCol_Text);
 
 	auto* drawList = ImGui::GetWindowDrawList();
-	const ImVec2 buttonMax(cursorPos.x + buttonSize.x, cursorPos.y + buttonSize.y);
-	drawList->AddRectFilled(cursorPos, buttonMax, ImGui::GetColorU32(ImGuiCol_Button), ImGui::GetStyle().FrameRounding);
-	Util::DrawCurrentItemRoundedButtonHighlight(drawList);
+	drawList->AddRectFilled(cursorPos, ImVec2(cursorPos.x + buttonSize.x, cursorPos.y + buttonSize.y), bgColor, ImGui::GetStyle().FrameRounding);
 
 	ImVec2 center(cursorPos.x + buttonSize.x * 0.5f, cursorPos.y + buttonSize.y * 0.5f);
 	float iconSize = buttonSize.x * 0.35f;
@@ -124,25 +130,7 @@ bool IconButton(const char* label, bool filled, const char* iconType)
 
 namespace
 {
-	const char* GetFilterColumnName(int index)
-	{
-		switch (index) {
-		case 0:
-			return T(TKEY("filter_all"), "All");
-		case 1:
-			return T(TKEY("filter_editor_id"), "Editor ID");
-		case 2:
-			return T(TKEY("filter_form_id"), "Form ID");
-		case 3:
-			return T(TKEY("filter_file"), "File");
-		case 4:
-			return T(TKEY("filter_status"), "Status");
-		default:
-			return "";
-		}
-	}
-
-	constexpr int kFilterColumnCount = 5;
+	constexpr const char* kFilterColumnNames[] = { "All", "Editor ID", "Form ID", "File", "Status" };
 }  // namespace
 
 void EditorWindow::ResetObjectsFilter()
@@ -155,8 +143,8 @@ void EditorWindow::ResetObjectsFilter()
 
 bool EditorWindow::MatchesObjectFilter(Widget* w) const
 {
-	static_assert(static_cast<int>(FilterColumn::Count_) == kFilterColumnCount,
-		"kFilterColumnCount must match FilterColumn enum");
+	static_assert(static_cast<int>(FilterColumn::Count_) == IM_ARRAYSIZE(kFilterColumnNames),
+		"kFilterColumnNames must have one entry per FilterColumn value");
 	if (!w)
 		return false;
 	if (m_filterBuffer[0] == '\0')
@@ -205,7 +193,7 @@ std::string EditorWindow::ResolveEditorId(RE::TESForm* form, const WidgetVec& wi
 
 void EditorWindow::ShowObjectsWindow()
 {
-	Util::BeginWithRoundedClose(T(TKEY("weather_lighting_browser"), "CS Editor Browser"), nullptr);
+	Util::BeginWithRoundedClose(T("cs_editor.weather_lighting_browser", "CS Editor Browser"), nullptr);
 
 	// Reset filter state when the user switches categories so stale column
 	// selections (e.g. Status) don't hide all items in the new category.
@@ -218,8 +206,8 @@ void EditorWindow::ShowObjectsWindow()
 	if (ImGui::BeginTable("ObjectTable", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInner)) {
 		// Fixed categories column, objects column fills remaining width
 		const float categoriesWidth = 180.0f * Util::GetUIScale();
-		ImGui::TableSetupColumn(T(TKEY("categories"), "Categories"), ImGuiTableColumnFlags_WidthFixed, categoriesWidth);
-		ImGui::TableSetupColumn(T(TKEY("objects"), "Objects"), ImGuiTableColumnFlags_WidthStretch);
+		ImGui::TableSetupColumn(T("cs_editor.categories", "Categories"), ImGuiTableColumnFlags_WidthFixed, categoriesWidth);
+		ImGui::TableSetupColumn(T("cs_editor.objects", "Objects"), ImGuiTableColumnFlags_WidthStretch);
 
 		ImGui::TableNextRow();
 
@@ -232,33 +220,27 @@ void EditorWindow::ShowObjectsWindow()
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
 		ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4());
 		if (ImGui::BeginListBox("##CategoriesList", { -FLT_MIN, -FLT_MIN })) {
-			ImGui::Text("%s", T(TKEY("categories"), "Categories"));
+			ImGui::Text(T("cs_editor.categories", "Categories"));
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::Spacing();
 
-			struct CategoryOption
-			{
-				const char* id;
-				const char* label;
+			// List of categories
+			const std::pair<const char*, const char*> categories[] = {
+				{ "Weather", T("editor.categories.weather", "Weather") },
+				{ "ImageSpace", T("editor.categories.image_space", "ImageSpace") },
+				{ "Lighting Template", T("editor.categories.lighting_template", "Lighting Template") },
+				{ "Cell Lighting", T("editor.categories.cell_lighting", "Cell Lighting") },
+				{ "Volumetric Lighting", T("editor.categories.volumetric_lighting", "Volumetric Lighting") },
+				{ "Shader Particle Geometry", T("editor.categories.shader_particle_geometry", "Shader Particle Geometry") },
+				{ "Lens Flare", T("editor.categories.lens_flare", "Lens Flare") },
+				{ "Visual Effect", T("editor.categories.visual_effect", "Visual Effect") },
+				{ "Interior Only", T("editor.categories.interior_only", "Interior Only") },
+				{ "Light Editor", T("editor.categories.light_editor", "Light Editor") }
 			};
-			const CategoryOption categories[] = {
-				{ "Weather", T(TKEY("category_weather"), "Weather") },
-				{ "ImageSpace", T(TKEY("category_imagespace"), "ImageSpace") },
-				{ "Lighting Template", T(TKEY("category_lighting_template"), "Lighting Template") },
-				{ "Cell Lighting", T(TKEY("category_cell_lighting"), "Cell Lighting") },
-				{ "Volumetric Lighting", T(TKEY("category_volumetric_lighting"), "Volumetric Lighting") },
-				{ "Shader Particle Geometry", T(TKEY("category_shader_particle"), "Shader Particle Geometry") },
-				{ "Lens Flare", T(TKEY("category_lens_flare"), "Lens Flare") },
-				{ "Visual Effect", T(TKEY("category_visual_effect"), "Visual Effect") },
-				{ "Interior Only", T(TKEY("category_interior_only"), "Interior Only") },
-				{ "Light Editor", T(TKEY("category_lighting_editor"), "Light Editor") }
-			};
-			for (int i = 0; i < IM_ARRAYSIZE(categories); ++i) {
-				// Highlight the selected category
-				if (ImGui::Selectable(categories[i].label, m_selectedCategory == categories[i].id)) {
-					m_selectedCategory = categories[i].id;  // Keep the stable English ID internally
-				}
+			for (const auto& [id, label] : categories) {
+				if (ImGui::Selectable(label, m_selectedCategory == id))
+					m_selectedCategory = id;
 			}
 			ImGui::EndListBox();
 		}
@@ -365,7 +347,7 @@ void EditorWindow::ShowObjectsWindow()
 				if (m_selectedCategory == "Weather") {
 					addWeather(weather);
 					if (sky && sky->lastWeather != weather)
-						addWeather(sky->lastWeather, T(TKEY("transitioning"), "transitioning"));
+						addWeather(sky->lastWeather, "transitioning");
 				} else if (m_selectedCategory == "ImageSpace") {
 					if (weather)
 						addTOD(weather->imageSpaces, imageSpaceWidgets);
@@ -378,18 +360,14 @@ void EditorWindow::ShowObjectsWindow()
 					if (player && player->parentCell && player->parentCell->IsInteriorCell()) {
 						auto* cell = player->parentCell;
 						const char* cellName = cell->GetName();
-						std::string displayName = cellName && cellName[0] ? cellName : T(TKEY("unnamed_cell"), "[Unnamed Cell]");
+						std::string displayName = cellName && cellName[0] ? cellName : "[Unnamed Cell]";
 						activeRecords.push_back({ std::move(displayName), "", cell->GetFormID(),
 							[this, cell]() {
 								if (currentCellLightingWidget && currentCellLightingWidget->cell == cell) {
 									currentCellLightingWidget->SetOpen(true);
 									currentCellLightingWidget->RequestFocus();
 								} else {
-									currentCellLightingWidget = std::make_unique<CellLightingWidget>(cell);
-									currentCellLightingWidget->CacheFormData();
-									currentCellLightingWidget->Load(false);
-									currentCellLightingWidget->SetOpen(true);
-									currentCellLightingWidget->RequestFocus();
+									OpenCellLightingWidget(cell, false, true);
 								}
 							} });
 					}
@@ -419,7 +397,7 @@ void EditorWindow::ShowObjectsWindow()
 				const auto& theme = Menu::GetSingleton()->GetTheme();
 
 				ImGui::PushStyleColor(ImGuiCol_Text, theme.StatusPalette.RestartNeeded);
-				ImGui::Text("%s", T(TKEY("active"), "Active:"));
+				ImGui::Text(T("cs_editor.active", "Active:"));
 				ImGui::PopStyleColor();
 				ImGui::SameLine();
 				const float recordX = ImGui::GetCursorPosX();
@@ -439,7 +417,7 @@ void EditorWindow::ShowObjectsWindow()
 					ImGui::TextDisabled("(0x%08X)", rec.formId);
 					ImGui::SameLine();
 					char btnId[32];
-					snprintf(btnId, sizeof(btnId), "%s##active_%d", T(TKEY("open"), "Open"), i);
+					snprintf(btnId, sizeof(btnId), "Open##active_%d", i);
 					if (ImGui::SmallButton(btnId))
 						rec.open();
 				}
@@ -457,7 +435,7 @@ void EditorWindow::ShowObjectsWindow()
 			// Compute fixed widths once; reuse for both the search bar and the following combo.
 			const auto& style = ImGui::GetStyle();
 			// comboW = preview text + left/right padding + arrow button
-			const float comboW = ImGui::CalcTextSize("Editor ID").x + style.FramePadding.x * 2.0f + ImGui::GetFrameHeight();
+			const float comboW = ImGui::CalcTextSize(T("cs_editor.editor_id", "Editor ID")).x + style.FramePadding.x * 2.0f + ImGui::GetFrameHeight();
 			const float helpW = ImGui::CalcTextSize("(?)").x;
 			const float iconW = ImGui::GetFrameHeight();
 			const float scale = Util::GetUIScale();
@@ -465,35 +443,28 @@ void EditorWindow::ShowObjectsWindow()
 			// Fixed width is the sum of every item that follows the search bar on the same row.
 			// Each SameLine() contributes style.ItemSpacing.x; widths are listed explicitly
 			// so adding or removing a widget only requires updating its own expression.
-			const char* favoritesText = T(TKEY("favorites"), "Favorites");
-			const char* flaggedText = T(TKEY("flagged"), "Flagged");
 			const float fixedW =
-				style.ItemSpacing.x + comboW +                                // combo
-				style.ItemSpacing.x + helpW +                                 // help marker
-				style.ItemSpacing.x + spacerW +                               // spacer before favorites
-				style.ItemSpacing.x + iconW +                                 // fav icon
-				style.ItemSpacing.x + ImGui::CalcTextSize(favoritesText).x +  // "Favorites" label
-				style.ItemSpacing.x + spacerW +                               // spacer before flagged
-				style.ItemSpacing.x + iconW +                                 // flag icon
-				style.ItemSpacing.x + ImGui::CalcTextSize(flaggedText).x;     // "Flagged" label
+				style.ItemSpacing.x + comboW +                                                        // combo
+				style.ItemSpacing.x + helpW +                                                         // help marker
+				style.ItemSpacing.x + spacerW +                                                       // spacer before favorites
+				style.ItemSpacing.x + iconW +                                                         // fav icon
+				style.ItemSpacing.x + ImGui::CalcTextSize(T("cs_editor.favorites", "Favorites")).x +  // T("cs_editor.favorites", "Favorites") label
+				style.ItemSpacing.x + spacerW +                                                       // spacer before flagged
+				style.ItemSpacing.x + iconW +                                                         // flag icon
+				style.ItemSpacing.x + ImGui::CalcTextSize(T("cs_editor.flagged", "Flagged")).x;       // T("cs_editor.flagged", "Flagged") label
 			ImGui::SetNextItemWidth(std::max(50.0f, ImGui::GetContentRegionAvail().x - fixedW));
-			ImGui::InputTextWithHint("##ObjectFilter", T(TKEY("filter_hint"), "Filter... (Ctrl+F)"), m_filterBuffer, sizeof(m_filterBuffer));
+			ImGui::InputTextWithHint("##ObjectFilter", T("cs_editor.filter_hint", "Filter... (Ctrl+F)"), m_filterBuffer, sizeof(m_filterBuffer));
 
 			ImGui::SameLine();
 			ImGui::SetNextItemWidth(comboW);
 			int col = static_cast<int>(m_currentFilterColumn);
-			if (ImGui::Combo("##FilterBy", &col, [](void*, int idx, const char** out) -> bool {
-					*out = GetFilterColumnName(idx);
-					return true; }, nullptr, kFilterColumnCount))
+			const char* filterColumnLabels[] = { T("editor.filter.all", "All"), T("editor.filter.editor_id", "Editor ID"), T("editor.filter.form_id", "Form ID"), T("editor.filter.file", "File"), T("editor.filter.status", "Status") };
+			static_assert(IM_ARRAYSIZE(filterColumnLabels) == IM_ARRAYSIZE(kFilterColumnNames));
+			if (Util::Widgets::Combo("##FilterBy", &col, filterColumnLabels, IM_ARRAYSIZE(filterColumnLabels)))
 				m_currentFilterColumn = static_cast<FilterColumn>(col);
 
 			ImGui::SameLine();
-			Util::HelpMarker(T(TKEY("filter_help"),
-				"Filter the object list by the selected column.\n"
-				"All: searches Editor ID, Form ID, File, and Status.\n"
-				"Status: hides items with no status marker when the search box is non-empty.\n"
-				"Ctrl+F: Focus search\n"
-				"Enter: Open selected"));
+			Util::HelpMarker(T("editor.editor_window.search_the_selected_column_choose_all_to_sear_1bccca5d", "Search the selected column. Choose All to search Editor ID, Form ID, File and Status. A non-empty Status search hides unmarked items.\nCtrl+F: focus search\nEnter: open selection"));
 
 			// Quick filter buttons
 			const ImVec2 filterSpacer(spacerW, 0.0f);
@@ -504,7 +475,7 @@ void EditorWindow::ShowObjectsWindow()
 				m_showOnlyFavorites = !m_showOnlyFavorites;
 			}
 			ImGui::SameLine();
-			ImGui::Text("%s", favoritesText);
+			ImGui::Text(T("cs_editor.favorites", "Favorites"));
 
 			ImGui::SameLine();
 			ImGui::Dummy(filterSpacer);
@@ -513,13 +484,13 @@ void EditorWindow::ShowObjectsWindow()
 				m_showOnlyFlagged = !m_showOnlyFlagged;
 			}
 			ImGui::SameLine();
-			ImGui::Text("%s", flaggedText);
+			ImGui::Text(T("cs_editor.flagged", "Flagged"));
 
 			// Show recent widgets section for current category
 			auto recentIt = settings.recentWidgets.find(m_selectedCategory);
 			if (recentIt != settings.recentWidgets.end() && !recentIt->second.empty()) {
 				ImGui::Spacing();
-				ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("recent"), "Recent:"));
+				ImGui::TextUnformatted(T("cs_editor.recent", "Recent:"));
 				ImGui::SameLine();
 				for (size_t i = 0; i < std::min(size_t(5), recentIt->second.size()); ++i) {
 					if (i > 0)
@@ -553,12 +524,12 @@ void EditorWindow::ShowObjectsWindow()
 
 			// Create a table for the right column with "Name" and "ID" headers. Different weights to prevent truncation.
 			if (ImGui::BeginTable("DetailsTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Sortable)) {
-				ImGui::TableSetupColumn(T(TKEY("fav"), "Fav"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, 38.0f * scale, ColFav);  // Favorite indicator
-				ImGui::TableSetupColumn(T(TKEY("editor_id"), "Editor ID"), ImGuiTableColumnFlags_WidthStretch, 3.5f, ColEditorID);                       // Largest - weather/template names
-				ImGui::TableSetupColumn(T(TKEY("form_id"), "Form ID"), ImGuiTableColumnFlags_WidthFixed, 90.0f * scale, ColFormID);                      // Fixed - 8 hex chars
-				ImGui::TableSetupColumn(T(TKEY("file"), "File"), ImGuiTableColumnFlags_WidthStretch, 2.0f, ColFile);                                     // Medium - plugin names
-				ImGui::TableSetupColumn(T(TKEY("status"), "Status"), ImGuiTableColumnFlags_WidthStretch, 1.5f, ColStatus);                               // Smaller - status text
-				ImGui::TableSetupColumn(T(TKEY("json"), "json"), ImGuiTableColumnFlags_WidthFixed, 55.0f * scale, ColJson);                              // JSON file / delete
+				ImGui::TableSetupColumn(T("cs_editor.fav", "Fav"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, 38.0f * scale, ColFav);  // Favorite indicator
+				ImGui::TableSetupColumn(T("cs_editor.editor_id", "Editor ID"), ImGuiTableColumnFlags_WidthStretch, 3.5f, ColEditorID);                       // Largest - weather/template names
+				ImGui::TableSetupColumn(T("cs_editor.form_id", "Form ID"), ImGuiTableColumnFlags_WidthFixed, 90.0f * scale, ColFormID);                      // Fixed - 8 hex chars
+				ImGui::TableSetupColumn(T("cs_editor.file", "File"), ImGuiTableColumnFlags_WidthStretch, 2.0f, ColFile);                                     // Medium - plugin names
+				ImGui::TableSetupColumn(T("cs_editor.status", "Status"), ImGuiTableColumnFlags_WidthStretch, 1.5f, ColStatus);                               // Smaller - status text
+				ImGui::TableSetupColumn(T("cs_editor.json", "json"), ImGuiTableColumnFlags_WidthFixed, 55.0f * scale, ColJson);                              // JSON file / delete
 
 				ImGui::TableHeadersRow();
 
@@ -655,7 +626,7 @@ void EditorWindow::ShowObjectsWindow()
 								pendingDeleteWidget = widget;
 								pendingDeletePopupRequested = true;
 							}
-							Util::AddTooltip(T(TKEY("delete_json_file"), "Delete JSON file"));
+							Util::AddTooltip(T("cs_editor.delete_json_file", "Delete JSON file"));
 						}
 					}
 				};
@@ -693,10 +664,7 @@ void EditorWindow::ShowObjectsWindow()
 									if (currentCellLightingWidget && currentCellLightingWidget->cell == cell) {
 										currentCellLightingWidget->SetOpen(true);
 									} else {
-										currentCellLightingWidget = std::make_unique<CellLightingWidget>(cell);
-										currentCellLightingWidget->CacheFormData();
-										currentCellLightingWidget->Load();
-										currentCellLightingWidget->SetOpen(true);
+										OpenCellLightingWidget(cell, true);
 									}
 								}
 							}
@@ -721,7 +689,7 @@ void EditorWindow::ShowObjectsWindow()
 
 							// Status column
 							ImGui::TableNextColumn();
-							ImGui::Text("%s", T(TKEY("interior_cell"), "Interior Cell"));
+							ImGui::Text(T("cs_editor.interior_cell", "Interior Cell"));
 
 							// json column (empty for cells - no standalone json)
 							ImGui::TableNextColumn();
@@ -730,8 +698,8 @@ void EditorWindow::ShowObjectsWindow()
 							ImGui::TableNextRow();
 							ImGui::TableSetColumnIndex(1);
 							ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
-							ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Warning, "%s", T(TKEY("cell_lighting_interior_only"), "Cell Lighting is only available for interior cells."));
-							ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Disable, "%s", T(TKEY("currently_exterior_cell"), "You are currently in an exterior cell."));
+							ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Warning, T("cs_editor.cell_lighting_interior_only", "Cell Lighting is only available for interior cells."));
+							ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Disable, T("cs_editor.currently_exterior_cell", "You are currently in an exterior cell."));
 							ImGui::PopTextWrapPos();
 						}
 					} else {
@@ -739,7 +707,7 @@ void EditorWindow::ShowObjectsWindow()
 						ImGui::TableNextRow();
 						ImGui::TableSetColumnIndex(1);
 						ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
-						ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Error, "%s", T(TKEY("player_cell_unavailable"), "Player cell not available."));
+						ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Error, T("cs_editor.player_cell_unavailable", "Player cell not available."));
 						ImGui::PopTextWrapPos();
 					}
 				}
@@ -791,7 +759,7 @@ void EditorWindow::ShowObjectsWindow()
 					}
 
 					// Show ImageSpace and VolumetricLighting info for weather widgets
-					if (!weatherTooltipShownThisFrame && m_selectedCategory == "Weather" && ImGui::IsItemHovered()) {
+					if (!weatherTooltipShownThisFrame && m_selectedCategory == T("cs_editor.category_weather", "Weather") && ImGui::IsItemHovered()) {
 						auto* weatherWidget = dynamic_cast<WeatherWidget*>(sortedWidgets[i]);
 						if (weatherWidget && weatherWidget->weather) {
 							const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
@@ -804,19 +772,19 @@ void EditorWindow::ShowObjectsWindow()
 							Util::SetTooltipPositionNearMouse(estimatedTooltipHeight);
 							if (ImGui::BeginTooltip()) {
 								// ImageSpace info - use widget cache for proper editor IDs
-								ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("imagespace_label"), "ImageSpace:"));
+								ImGui::TextUnformatted(T("cs_editor.imagespace_label", "ImageSpace:"));
 								for (int tod = 0; tod < 4; tod++) {
 									auto name = ResolveEditorId(weatherWidget->weather->imageSpaces[tod], imageSpaceWidgets);
-									ImGui::Text("  %s: %s", TOD::GetPeriodName(tod), name.empty() ? T(TKEY("none_filter"), "None") : name.c_str());
+									ImGui::Text("  %s: %s", TOD::GetPeriodName(tod), name.empty() ? T("cs_editor.none_filter", "None") : name.c_str());
 								}
 
 								ImGui::Spacing();
 
 								// VolumetricLighting info - show short local FormID only
-								ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("volumetric_lighting_label"), "Volumetric Lighting:"));
+								ImGui::TextUnformatted(T("cs_editor.volumetric_lighting_label", "Volumetric Lighting:"));
 								for (int tod = 0; tod < 4; tod++) {
 									auto* f = weatherWidget->weather->volumetricLighting[tod];
-									ImGui::Text("  %s: %s", TOD::GetPeriodName(tod), f ? std::format("0x{:X}", f->GetLocalFormID()).c_str() : T(TKEY("none_filter"), "None"));
+									ImGui::Text("  %s: %s", TOD::GetPeriodName(tod), f ? std::format("0x{:X}", f->GetLocalFormID()).c_str() : T("cs_editor.none_filter", "None"));
 								}
 								ImGui::EndTooltip();
 							}
@@ -841,7 +809,7 @@ void EditorWindow::ShowObjectsWindow()
 							}
 						}
 
-						if (ImGui::MenuItem(T(TKEY("remove"), "Remove"))) {
+						if (ImGui::MenuItem(T("cs_editor.remove", "Remove"))) {
 							markedRecords.erase(editorLabel);
 							Save();
 						}
@@ -901,13 +869,27 @@ void EditorWindow::ShowObjectsWindow()
 
 void EditorWindow::ShowViewportWindow()
 {
-	Util::BeginWithRoundedClose(T(TKEY("viewport"), "Viewport"), nullptr, ImGuiWindowFlags_NoFocusOnAppearing);
+	viewportImageRect = {};
+	const bool visible = Util::BeginWithRoundedClose(std::format("{}###CSEditorViewport", T("cs_editor.viewport", "Viewport")).c_str(), nullptr, ImGuiWindowFlags_NoFocusOnAppearing);
+	if (!visible) {
+		ImGui::End();
+		return;
+	}
 
 	// The size of the image in ImGui																														   // Get the available space in the current window
 	ImVec2 availableSpace = ImGui::GetContentRegionAvail();
+	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+	if (!std::isfinite(availableSpace.x) || !std::isfinite(availableSpace.y) ||
+		!std::isfinite(displaySize.x) || !std::isfinite(displaySize.y) ||
+		availableSpace.x <= 0.0f || availableSpace.y <= 0.0f ||
+		displaySize.x <= 0.0f || displaySize.y <= 0.0f) {
+		ImGui::TextDisabled(T("cs_editor.viewport_unavailable", "Viewport unavailable"));
+		ImGui::End();
+		return;
+	}
 
 	// Calculate aspect ratio of the image
-	float aspectRatio = ImGui::GetIO().DisplaySize.x / ImGui::GetIO().DisplaySize.y;
+	float aspectRatio = displaySize.x / displaySize.y;
 
 	// Determine the size to fit while preserving the aspect ratio
 	ImVec2 imageSize;
@@ -922,11 +904,24 @@ void EditorWindow::ShowViewportWindow()
 	}
 
 	if (tempTexture && tempTexture->srv) {
-		// The preview is a render-target SRV; draw it opaque so its alpha cannot
-		// turn the SE editor viewport into a transparent cutout.
+		// The scene preview must remain opaque regardless of the render target alpha.
+		const ImVec2 imageMin = ImGui::GetCursorScreenPos();
 		Util::Subrect::ImageOpaque(tempTexture->srv.get(), imageSize);
+		if (std::isfinite(imageMin.x) && std::isfinite(imageMin.y) &&
+			std::isfinite(imageSize.x) && std::isfinite(imageSize.y) &&
+			imageSize.x > 0.0f && imageSize.y > 0.0f &&
+			tempTexture->desc.Width > 0 && tempTexture->desc.Height > 0) {
+			viewportImageRect = {
+				.min = imageMin,
+				.max = ImVec2(imageMin.x + imageSize.x, imageMin.y + imageSize.y),
+				.renderSize = ImVec2(
+					static_cast<float>(tempTexture->desc.Width),
+					static_cast<float>(tempTexture->desc.Height)),
+				.valid = true,
+			};
+		}
 	} else {
-		ImGui::TextDisabled("%s", T(TKEY("viewport_unavailable"), "Viewport unavailable"));
+		ImGui::TextDisabled(T("cs_editor.viewport_unavailable", "Viewport unavailable"));
 	}
 
 	ImGui::End();
@@ -962,11 +957,8 @@ void EditorWindow::RenderUI()
 	ImGui::GetStyle().FontScaleMain = settings.editorUIScale;
 
 	if (IsViewportActive()) {
-		auto* backgroundDrawList = ImGui::GetBackgroundDrawList();
-		backgroundDrawList->AddRectFilled({ 0, 0 }, io.DisplaySize, ImGui::GetColorU32(ImGuiCol_ModalWindowDimBg));
-		backgroundDrawList->AddRectFilled(
-			{ 0, 0 }, io.DisplaySize,
-			ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, ThemeManager::Constants::EDITOR_VIEWPORT_BACKGROUND_DIM_ALPHA)));
+		// Dim the game scene using the theme's modal dim background color
+		ImGui::GetBackgroundDrawList()->AddRectFilled({ 0, 0 }, io.DisplaySize, ImGui::GetColorU32(ImGuiCol_ModalWindowDimBg));
 	}
 
 	// Check for Ctrl+Z to undo
@@ -985,13 +977,13 @@ void EditorWindow::RenderUI()
 				ImVec2(window->ClipRect.Max.x, window->ClipRect.Max.y - borderInset), true);
 		}
 
-		if (ImGui::BeginMenu(T(TKEY("file"), "File"))) {
-			if (ImGui::MenuItem(T(TKEY("save_all_open_widgets"), "Save All Open Widgets"), "Ctrl+S")) {
+		if (ImGui::BeginMenu(T("cs_editor.file", "File"))) {
+			if (ImGui::MenuItem(T("cs_editor.save_all_open_widgets", "Save All Open Widgets"), "Ctrl+S")) {
 				SaveAll();
 			}
 
 			// Save individual widgets submenu
-			if (ImGui::BeginMenu(T(TKEY("save"), "Save"))) {
+			if (ImGui::BeginMenu(T("cs_editor.save", "Save"))) {
 				bool hasOpen = false;
 				for (auto* collection : GetWidgetCollections())
 					hasOpen = WidgetFactory::DrawSaveWidgetMenuItems(*collection, hasOpen);
@@ -1003,7 +995,7 @@ void EditorWindow::RenderUI()
 				}
 
 				if (!hasOpen)
-					ImGui::TextDisabled("%s", T(TKEY("no_open_widgets"), "No open widgets"));
+					ImGui::TextDisabled(T("cs_editor.no_open_widgets", "No open widgets"));
 
 				ImGui::EndMenu();
 			}
@@ -1013,12 +1005,12 @@ void EditorWindow::RenderUI()
 				WidgetFactory::DrawCloseAllMenuItem(*collection);
 			ImGui::EndMenu();
 		}
-		if (ImGui::BeginMenu(T(TKEY("settings"), "Settings"))) {
-			if (ImGui::MenuItem(T(TKEY("general_settings"), "General Settings"))) {
+		if (ImGui::BeginMenu(T("cs_editor.settings", "Settings"))) {
+			if (ImGui::MenuItem(T("cs_editor.general_settings", "General Settings"))) {
 				showSettingsWindow = true;
 				settingsSelectedCategory = "General";
 			}
-			if (ImGui::MenuItem(T(TKEY("editor_flags"), "Editor Flags"))) {
+			if (ImGui::MenuItem(T("cs_editor.editor_flags", "Editor Flags"))) {
 				showSettingsWindow = true;
 				settingsSelectedCategory = "Flags";
 			}
@@ -1027,7 +1019,7 @@ void EditorWindow::RenderUI()
 			// Current cell lighting
 			auto player = RE::PlayerCharacter::GetSingleton();
 			if (player && player->parentCell && player->parentCell->IsInteriorCell()) {
-				if (ImGui::MenuItem(T(TKEY("edit_current_cell_lighting"), "Edit Current Cell Lighting"))) {
+				if (ImGui::MenuItem(T("cs_editor.edit_current_cell_lighting", "Edit Current Cell Lighting"))) {
 					// Check if widget already exists
 					bool found = false;
 					if (currentCellLightingWidget && currentCellLightingWidget->cell == player->parentCell) {
@@ -1037,53 +1029,42 @@ void EditorWindow::RenderUI()
 
 					if (!found) {
 						// Create new widget for current cell
-						currentCellLightingWidget = std::make_unique<CellLightingWidget>(player->parentCell);
-						currentCellLightingWidget->CacheFormData();
-						currentCellLightingWidget->Load();
-						currentCellLightingWidget->SetOpen(true);
+						OpenCellLightingWidget(player->parentCell, true);
 					}
 				}
 			} else {
 				ImGui::BeginDisabled();
-				ImGui::MenuItem(T(TKEY("edit_current_cell_lighting"), "Edit Current Cell Lighting"));
+				ImGui::MenuItem(T("cs_editor.edit_current_cell_lighting", "Edit Current Cell Lighting"));
 				ImGui::EndDisabled();
-				Util::AddTooltip(T(TKEY("interior_only_available"), "Only available in interior cells"), ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+				Util::AddTooltip(T("cs_editor.interior_only_available", "Only available in interior cells"), ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 			}
 
 			ImGui::Separator();
 
-			if (ImGui::Checkbox(T(TKEY("auto_apply_changes"), "Auto-Apply Changes"), &settings.autoApplyChanges)) {
+			if (Util::Widgets::Checkbox(T("cs_editor.auto_apply_changes", "Auto-Apply Changes"), &settings.autoApplyChanges)) {
 				Save();
 			}
-			Util::AddTooltip(T(TKEY("auto_apply_changes_tooltip"), "Automatically apply weather changes to the game as you edit"));
+			Util::AddTooltip(T("cs_editor.auto_apply_changes_tooltip", "Automatically apply weather changes to the game as you edit"));
 
-			if (ImGui::Checkbox(T(TKEY("enable_inherit_from_parent"), "Enable Inherit From Parent"), &settings.enableInheritFromParent)) {
+			if (Util::Widgets::Checkbox(T("cs_editor.enable_inherit_from_parent", "Enable Inherit From Parent"), &settings.enableInheritFromParent)) {
 				Save();
 			}
-			Util::AddTooltip(T(TKEY("enable_inherit_tooltip"), "Show inherit from parent options in weather widgets"));
+			Util::AddTooltip(T("cs_editor.enable_inherit_tooltip", "Show inherit from parent options in weather widgets"));
 			ImGui::EndMenu();
 		}
-		if (ImGui::BeginMenu(T(TKEY("window"), "Window"))) {
-			const bool hdrActive = globals::features::hdrDisplay.loaded && globals::features::hdrDisplay.settings.enableHDR;
-			if (hdrActive)
-				ImGui::BeginDisabled();
-			if (ImGui::Checkbox(T(TKEY("viewport"), "Viewport"), &settings.showViewport)) {
-				BackgroundBlur::SetCSEditorActive(settings.showViewport);
+		if (ImGui::BeginMenu(T("cs_editor.window", "Window"))) {
+			if (Util::Widgets::Checkbox(T("cs_editor.viewport", "Viewport"), &settings.showViewport)) {
 				Save();
 			}
-			if (hdrActive) {
-				ImGui::EndDisabled();
-				Util::AddTooltip(T(TKEY("viewport_unavailable_hdr"), "Viewport is unavailable when HDR Display is enabled"), ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
-			}
-			if (ImGui::Checkbox(T(TKEY("palette"), "Palette"), &PaletteWindow::GetSingleton()->open)) {
+			if (Util::Widgets::Checkbox(T("cs_editor.palette", "Palette"), &PaletteWindow::GetSingleton()->open)) {
 			}
 
-			if (ImGui::MenuItem(T(TKEY("reset_window_layout"), "Reset Window Layout"))) {
+			if (ImGui::MenuItem(T("cs_editor.reset_window_layout", "Reset Window Layout"))) {
 				resetLayout = true;
 			}
 
 			ImGui::Separator();
-			ImGui::Text("%s", T(TKEY("open_widgets"), "Open Widgets:"));
+			ImGui::Text(T("cs_editor.open_widgets", "Open Widgets:"));
 
 			int openCount = 0;
 			for (auto* collection : GetWidgetCollections())
@@ -1091,47 +1072,47 @@ void EditorWindow::RenderUI()
 
 			if (currentCellLightingWidget && currentCellLightingWidget->IsOpen()) {
 				++openCount;
-				if (ImGui::MenuItem(std::format("{}: {}", WidgetFactory::TranslateWidgetTypeName(currentCellLightingWidget->GetWidgetTypeName()), currentCellLightingWidget->GetEditorID()).c_str()))
+				if (ImGui::MenuItem(std::format("{}: {}", currentCellLightingWidget->GetWidgetTypeName(), currentCellLightingWidget->GetEditorID()).c_str()))
 					ImGui::SetWindowFocus(currentCellLightingWidget->GetWindowTitle().c_str());
 			}
 
 			if (openCount == 0)
-				ImGui::TextDisabled("%s", T(TKEY("no_widgets_open"), "No widgets open"));
+				ImGui::TextDisabled(T("cs_editor.no_widgets_open", "No widgets open"));
 
 			ImGui::EndMenu();
 		}
-		if (ImGui::BeginMenu(T(TKEY("help"), "Help"))) {
-			ImGui::Text("%s", T(TKEY("cs_editor"), "CS Editor"));
+		if (ImGui::BeginMenu(T("cs_editor.help", "Help"))) {
+			ImGui::Text(T("cs_editor.cs_editor", "CS Editor"));
 			ImGui::Separator();
-			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("keyboard_shortcuts"), "Keyboard Shortcuts:"));
-			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_f"), "Ctrl+F: Focus search"));
-			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_s"), "Ctrl+S: Save all open widgets"));
-			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_w"), "Ctrl+W: Close focused widget"));
-			ImGui::BulletText("%s", T(TKEY("shortcut_enter"), "Enter: Open selected widget"));
-			ImGui::BulletText("%s", T(TKEY("shortcut_esc"), "Esc: Close editor"));
+			ImGui::TextUnformatted(T("cs_editor.keyboard_shortcuts", "Keyboard Shortcuts:"));
+			ImGui::BulletText(T("cs_editor.shortcut_ctrl_f", "Ctrl+F: Focus search"));
+			ImGui::BulletText(T("cs_editor.shortcut_ctrl_s", "Ctrl+S: Save all open widgets"));
+			ImGui::BulletText(T("cs_editor.shortcut_ctrl_w", "Ctrl+W: Close focused widget"));
+			ImGui::BulletText(T("cs_editor.shortcut_enter", "Enter: Open selected widget"));
+			ImGui::BulletText(T("cs_editor.shortcut_esc", "Esc: Close editor"));
 			ImGui::Separator();
-			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("quick_tips"), "Quick Tips:"));
-			ImGui::BulletText("%s", T(TKEY("tip_double_click"), "Double-click to edit"));
-			ImGui::BulletText("%s", T(TKEY("tip_right_click"), "Right-click to mark status"));
-			ImGui::BulletText("%s", T(TKEY("tip_star_favorite"), "Click star icon to favorite"));
-			ImGui::BulletText("%s", T(TKEY("tip_quick_filters"), "Use quick filters for fast sorting"));
-			ImGui::BulletText("%s", T(TKEY("tip_auto_apply"), "Auto-Apply updates game live"));
-			ImGui::BulletText("%s", T(TKEY("tip_lock_weather"), "Lock weather to prevent changes"));
-			ImGui::BulletText("%s", T(TKEY("tip_undo"), "Undo button reverts recent changes (Ctrl+Z)"));
+			ImGui::TextUnformatted(T("cs_editor.quick_tips", "Quick Tips:"));
+			ImGui::BulletText(T("cs_editor.tip_double_click", "Double-click to edit"));
+			ImGui::BulletText(T("cs_editor.tip_right_click", "Right-click to mark status"));
+			ImGui::BulletText(T("cs_editor.tip_star_favorite", "Click star icon to favorite"));
+			ImGui::BulletText(T("cs_editor.tip_quick_filters", "Use quick filters for fast sorting"));
+			ImGui::BulletText(T("cs_editor.tip_auto_apply", "Auto-Apply updates game live"));
+			ImGui::BulletText(T("cs_editor.tip_lock_weather", "Lock weather to prevent changes"));
+			ImGui::BulletText(T("cs_editor.tip_undo", "Undo button reverts recent changes (Ctrl+Z)"));
 			ImGui::Separator();
-			ImGui::Text("%s", T(TKEY("total_objects"), "Total Objects:"));
-			ImGui::BulletText(T(TKEY("weathers_count"), "Weathers: %d"), (int)weatherWidgets.size());
-			ImGui::BulletText(T(TKEY("lighting_count"), "Lighting: %d"), (int)lightingTemplateWidgets.size());
-			ImGui::BulletText(T(TKEY("imagespaces_count"), "ImageSpaces: %d"), (int)imageSpaceWidgets.size());
+			ImGui::Text(T("cs_editor.total_objects", "Total Objects:"));
+			ImGui::BulletText(T("cs_editor.weathers_count", "Weathers: %d"), (int)weatherWidgets.size());
+			ImGui::BulletText(T("cs_editor.lighting_count", "Lighting: %d"), (int)lightingTemplateWidgets.size());
+			ImGui::BulletText(T("cs_editor.imagespaces_count", "ImageSpaces: %d"), (int)imageSpaceWidgets.size());
 			ImGui::Separator();
-			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.CurrentHotkey, T(TKEY("favorites_count"), "Favorites: %d"), (int)settings.favoriteWidgets.size());
+			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.CurrentHotkey, T("cs_editor.favorites_count", "Favorites: %d"), (int)settings.favoriteWidgets.size());
 
 			// Count total recent widgets across all categories
 			int totalRecent = 0;
 			for (const auto& [category, widgets] : settings.recentWidgets) {
 				totalRecent += static_cast<int>(widgets.size());
 			}
-			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.SuccessColor, T(TKEY("recent_count"), "Recent: %d"), totalRecent);
+			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.SuccessColor, T("cs_editor.recent_count", "Recent: %d"), totalRecent);
 			ImGui::EndMenu();
 		}
 
@@ -1152,12 +1133,12 @@ void EditorWindow::RenderUI()
 				if (!canUndo)
 					textColor.w = 0.5f;
 				ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-				if (ImGui::ImageButton("##GlobalUndo", menu->uiIcons.undo.texture, iconButtonSize, ImVec2(0, 0), ImVec2(1, 1), WidgetUI::kIconButtonTransparent, iconTint) && canUndo)
+				if (ImGui::ImageButton("##GlobalUndo", menu->uiIcons.undo.texture, iconButtonSize, ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), iconTint) && canUndo)
 					PerformUndo();
 				ImGui::PopStyleColor();
 			}
 			ImGui::PopStyleVar(2);
-			Util::AddTooltip(canUndo ? std::format("Undo (Ctrl+Z) - {} states", (int)undoStack.size()).c_str() : T(TKEY("undo_no_changes"), "Undo (Ctrl+Z) - No changes to undo"));
+			Util::AddTooltip(canUndo ? std::format("Undo (Ctrl+Z) - {} states", (int)undoStack.size()).c_str() : T("cs_editor.undo_no_changes", "Undo (Ctrl+Z) - No changes to undo"));
 		}
 
 		// Right-aligned items — use SetCursorScreenPos to bypass menu bar GroupOffset
@@ -1216,11 +1197,11 @@ void EditorWindow::RenderUI()
 		if (showPreviewStatus) {
 			std::string hotkey = Util::Input::KeyIdToString(menu->GetSettings().CSEditorToggleKey);
 			if (previewMode == PreviewMode::FreeCamera)
-				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), T(TKEY("preview_free_camera"), " [ %s ] FREE CAMERA (Speed: %.0f)"), hotkey.c_str(), flySpeed);
+				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), " [ %s ] FREE CAMERA (Speed: %.0f)", hotkey.c_str(), flySpeed);
 			else if (previewMode == PreviewMode::FreeCameraLocked)
-				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), T(TKEY("preview_free_camera_locked"), " [ %s ] FREE CAMERA LOCKED"), hotkey.c_str());
+				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), " [ %s ] FREE CAMERA LOCKED", hotkey.c_str());
 			else
-				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), T(TKEY("preview_play_mode"), " [ %s ] PLAY MODE"), hotkey.c_str());
+				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), " [ %s ] PLAY MODE", hotkey.c_str());
 			rightCursor -= itemSpacing + ImGui::CalcTextSize(previewStatusBuf).x;
 			previewStatusX = rightCursor;
 		}
@@ -1228,7 +1209,7 @@ void EditorWindow::RenderUI()
 		// Time paused text
 		float timePausedX = 0;
 		bool showTimePaused = IsTimePaused();
-		const char* timePausedText = T(TKEY("time_paused_status"), " [TIME PAUSED]");
+		const char* timePausedText = T("editor.time_paused", " [TIME PAUSED]");
 		if (showTimePaused) {
 			rightCursor -= itemSpacing + ImGui::CalcTextSize(timePausedText).x;
 			timePausedX = rightCursor;
@@ -1238,10 +1219,10 @@ void EditorWindow::RenderUI()
 		float weatherLockX = 0;
 		char weatherLockBuf[128] = {};
 		auto* lockedWeather = GetLockedWeather();
-		bool showWeatherLock = lockedWeather != nullptr;
+		bool showWeatherLock = IsWeatherLocked() && lockedWeather;
 		if (showWeatherLock) {
 			const char* weatherName = lockedWeather->GetFormEditorID();
-			std::snprintf(weatherLockBuf, sizeof(weatherLockBuf), T(TKEY("locked_weather_status"), " [LOCKED: %s]"), weatherName ? weatherName : T(TKEY("unknown"), "Unknown"));
+			std::snprintf(weatherLockBuf, sizeof(weatherLockBuf), " [LOCKED: %s]", weatherName ? weatherName : "Unknown");
 			rightCursor -= itemSpacing + ImGui::CalcTextSize(weatherLockBuf).x;
 			weatherLockX = rightCursor;
 		}
@@ -1283,10 +1264,10 @@ void EditorWindow::RenderUI()
 			} else {
 				auto hover = menu->GetTheme().Palette.Text;
 				hover.w = kInactiveHoverAlpha;
-				ImGui::PushStyleColor(ImGuiCol_Button, WidgetUI::kIconButtonTransparent);
+				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
 				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover);
 			}
-			bool clicked = ImGui::ImageButton(id, texture, iconButtonSize, ImVec2(0, 0), ImVec2(1, 1), WidgetUI::kIconButtonTransparent, iconTint);
+			bool clicked = ImGui::ImageButton(id, texture, iconButtonSize, ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), iconTint);
 			ImGui::PopStyleColor(2);
 			ImGui::PopStyleVar(2);
 			return clicked;
@@ -1295,22 +1276,30 @@ void EditorWindow::RenderUI()
 		// Preview mode buttons
 		if (hasFreeCam) {
 			bool isActive = previewMode == PreviewMode::FreeCamera || previewMode == PreviewMode::FreeCameraLocked;
-			if (DrawToggleIconButton("##FreeCamera", menu->uiIcons.freeCamera.texture, isActive, freeCameraX))
-				EnterPreviewMode(PreviewMode::FreeCamera);
-			Util::AddTooltip(isActive ? T(TKEY("exit_free_camera"), "Exit Free Camera") : T(TKEY("free_camera_scroll"), "Free Camera (scroll to adjust speed)"));
+			if (DrawToggleIconButton("##FreeCamera", menu->uiIcons.freeCamera.texture, isActive, freeCameraX)) {
+				if (isActive)
+					ExitPreviewMode();
+				else
+					EnterPreviewMode(PreviewMode::FreeCamera);
+			}
+			Util::AddTooltip(isActive ? T("cs_editor.exit_free_camera", "Exit Free Camera") : T("cs_editor.free_camera_scroll", "Free Camera (scroll to adjust speed)"));
 		}
 		if (hasPlayMode) {
 			bool isActive = previewMode == PreviewMode::PlayMode;
-			if (DrawToggleIconButton("##PlayMode", menu->uiIcons.playMode.texture, isActive, playModeX))
-				EnterPreviewMode(PreviewMode::PlayMode);
-			Util::AddTooltip(isActive ? T(TKEY("exit_play_mode"), "Exit Play Mode") : T(TKEY("play_mode_walk"), "Play Mode - Walk around normally"));
+			if (DrawToggleIconButton("##PlayMode", menu->uiIcons.playMode.texture, isActive, playModeX)) {
+				if (isActive)
+					ExitPreviewMode();
+				else
+					EnterPreviewMode(PreviewMode::PlayMode);
+			}
+			Util::AddTooltip(isActive ? T("cs_editor.exit_play_mode", "Exit Play Mode") : T("cs_editor.play_mode_walk", "Play Mode - Walk around normally"));
 		}
 
 		if (hasPauseButton) {
 			bool isPaused = IsTimePaused();
 			if (DrawToggleIconButton("##GlobalPauseTime", menu->uiIcons.pauseTime.texture, isPaused, pauseButtonX))
 				TogglePause();
-			Util::AddTooltip(isPaused ? T(TKEY("resume_time"), "Resume Time") : T(TKEY("pause_time"), "Pause Time"));
+			Util::AddTooltip(isPaused ? T("cs_editor.resume_time", "Resume Time") : T("cs_editor.pause_time", "Pause Time"));
 		}
 
 		// Period text and time slider
@@ -1327,7 +1316,7 @@ void EditorWindow::RenderUI()
 		ImGui::SetCursorScreenPos(ImVec2(xButtonX, cursorY));
 		if (Util::ErrorButton("X", ImVec2(closeButtonSize, closeButtonSize)))
 			open = false;
-		Util::AddTooltip(T(TKEY("close_cs_editor"), "Close CS Editor (Esc)"));
+		Util::AddTooltip(T("cs_editor.close_cs_editor", "Close CS Editor (Esc)"));
 
 		ImGui::PopClipRect();  // End bottom-border clip rect
 
@@ -1361,8 +1350,10 @@ void EditorWindow::RenderUI()
 	const float viewportWidth = availableWidth - browserWidth;
 	ImGui::SetNextWindowSize(ImVec2(browserWidth, availableHeight), layoutCond);
 	ImGui::SetNextWindowPos(ImVec2(pad, menuBarHeight + pad), layoutCond);
+	lightEditor.GatherLights();
 	ShowObjectsWindow();
 
+	viewportImageRect = {};
 	if (IsViewportActive()) {
 		// Size viewport height to match game aspect ratio so the preview fits snugly
 		const float aspectRatio = width / height;
@@ -1376,6 +1367,9 @@ void EditorWindow::RenderUI()
 	} else {
 		viewportBottomY = menuBarHeight + pad;
 	}
+
+	// Picker input needs the exact preview-image mapping published this frame.
+	lightEditor.UpdatePicker();
 
 	auto settingsWindowHeight = height * 0.25f;
 	auto settingsWindowWidth = width * 0.25f;
@@ -1406,6 +1400,8 @@ void EditorWindow::OpenWeatherFeatureSetting(RE::TESWeather* weather, const std:
 	if (!weather) {
 		return;
 	}
+
+	EnsureResources();
 
 	// Open the editor if it's not already open
 	if (!open) {
@@ -1440,60 +1436,158 @@ EditorWindow::~EditorWindow()
 	artObjectWidgets.clear();
 	effectShaderWidgets.clear();
 	currentCellLightingWidget.reset();
+	cachedCellLightingWidgets.clear();
 }
 
 void EditorWindow::SetupResources()
 {
+	if (resourcesInitialized)
+		return;
+
+	if (!RE::TESDataHandler::GetSingleton())
+		return;
+
 	Load();
 	PaletteWindow::GetSingleton()->Load();
 	InvalidateJsonAttachmentCache();
 
+	Util::FormEditorIDIndex editorIDs;
+
 	// Populate all widget collections using WidgetFactory templates
-	WidgetFactory::PopulateWidgets<WeatherWidget, RE::TESWeather>(weatherWidgets);
-	WidgetFactory::PopulateWidgets<LightingTemplateWidget, RE::BGSLightingTemplate>(lightingTemplateWidgets);
-	WidgetFactory::PopulateWidgets<ImageSpaceWidget, RE::TESImageSpace>(imageSpaceWidgets);
-	WidgetFactory::PopulateWidgets<VolumetricLightingWidget, RE::BGSVolumetricLighting>(volumetricLightingWidgets);
-	WidgetFactory::PopulateWidgets<PrecipitationWidget, RE::BGSShaderParticleGeometryData>(precipitationWidgets);
-	WidgetFactory::PopulateWidgets<LensFlareWidget, RE::BGSLensFlare>(lensFlareWidgets);
-	WidgetFactory::PopulateWidgets<ReferenceEffectWidget, RE::BGSReferenceEffect>(referenceEffectWidgets);
+	WidgetFactory::PopulateWidgets<WeatherWidget, RE::TESWeather>(weatherWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<LightingTemplateWidget, RE::BGSLightingTemplate>(lightingTemplateWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<ImageSpaceWidget, RE::TESImageSpace>(imageSpaceWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<VolumetricLightingWidget, RE::BGSVolumetricLighting>(volumetricLightingWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<PrecipitationWidget, RE::BGSShaderParticleGeometryData>(precipitationWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<LensFlareWidget, RE::BGSLensFlare>(lensFlareWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<ReferenceEffectWidget, RE::BGSReferenceEffect>(referenceEffectWidgets, editorIDs);
 
 	// Cache simple form widgets for form picker performance
-	WidgetFactory::PopulateSimpleWidgets<RE::BGSArtObject>(artObjectWidgets);
-	WidgetFactory::PopulateSimpleWidgets<RE::TESEffectShader>(effectShaderWidgets);
+	WidgetFactory::PopulateSimpleWidgets<RE::BGSArtObject>(artObjectWidgets, editorIDs);
+	WidgetFactory::PopulateSimpleWidgets<RE::TESEffectShader>(effectShaderWidgets, editorIDs);
+
+	resourcesInitialized = true;
 }
 
-bool EditorWindow::IsViewportActive() const
+void EditorWindow::EnsureResources()
 {
-	return settings.showViewport && !(globals::features::hdrDisplay.loaded && globals::features::hdrDisplay.settings.enableHDR);
+	SetupResources();
+}
+
+void EditorWindow::OpenCellLightingWidget(RE::TESObjectCELL* cell, bool showNotification, bool requestFocus)
+{
+	if (!cell)
+		return;
+
+	if (currentCellLightingWidget && currentCellLightingWidget->cell == cell) {
+		currentCellLightingWidget->SetOpen(true);
+		if (requestFocus)
+			currentCellLightingWidget->RequestFocus();
+		return;
+	}
+
+	if (lastFocusedWidget == currentCellLightingWidget.get())
+		lastFocusedWidget = nullptr;
+
+	const auto hasUndoState = [&](std::string_view identity) {
+		return std::ranges::any_of(undoStack, [&](const UndoState& state) {
+			return state.widgetIdentity == identity;
+		});
+	};
+	for (auto it = cachedCellLightingWidgets.begin(); it != cachedCellLightingWidgets.end();) {
+		if (!it->second ||
+			(!it->second->HasUnsavedChanges() && !hasUndoState(it->first))) {
+			it = cachedCellLightingWidgets.erase(it);
+		} else {
+			++it;
+		}
+	}
+
+	if (currentCellLightingWidget) {
+		const auto oldIdentity = currentCellLightingWidget->GetStableIdentity();
+		if (currentCellLightingWidget->HasUnsavedChanges() || hasUndoState(oldIdentity))
+			cachedCellLightingWidgets[oldIdentity] = std::move(currentCellLightingWidget);
+		else
+			currentCellLightingWidget.reset();
+	}
+
+	const auto targetIdentity = std::format(
+		"{}/{}",
+		Widget::kCellLightingFolderName,
+		Util::GetFormFileKey(cell));
+	if (auto cached = cachedCellLightingWidgets.find(targetIdentity);
+		cached != cachedCellLightingWidgets.end()) {
+		currentCellLightingWidget = std::move(cached->second);
+		cachedCellLightingWidgets.erase(cached);
+	} else {
+		currentCellLightingWidget = std::make_unique<CellLightingWidget>(cell);
+		currentCellLightingWidget->CacheFormData();
+		currentCellLightingWidget->RememberBaseline();
+		currentCellLightingWidget->RestoreRememberedBaseline();
+		currentCellLightingWidget->Load(showNotification);
+	}
+	currentCellLightingWidget->SetOpen(true);
+	if (requestFocus)
+		currentCellLightingWidget->RequestFocus();
 }
 
 void EditorWindow::UpdateOpenState()
 {
-	static bool wasOpen = false;
-
-	// Delayed light-reference rebuilds and attach operations may outlive the editor window that
-	// started them. Keep their lightweight state machines moving without gathering scene lights.
-	lightEditor.TickDeferredWork();
-
-	if (open && !wasOpen) {
+	AdvanceLightEditorDeferredWork();
+	if (open == wasOpen)
+		return;
+	if (open) {
 		DisableVanityCamera();
 		HideGameMenus();
 		BackgroundBlur::SetCSEditorActive(IsViewportActive());
-
-	} else if (!open && wasOpen) {
+	} else {
+		if (previewMode != PreviewMode::None)
+			ExitPreviewMode();
 		lightEditor.ResetOverrides();
+		suppressNextEditorEscape = false;
+		viewportImageRect = {};
 		RestoreVanityCamera();
 		ShowGameMenus();
 		BackgroundBlur::SetCSEditorActive(false);
+		lastFocusedWidget = nullptr;
+		previewResourceReleasePending.store(true, std::memory_order_release);
 	}
-
 	wasOpen = open;
+}
+
+void EditorWindow::ReleasePendingPreviewResources()
+{
+	if (!previewResourceReleasePending.load(std::memory_order_relaxed) ||
+		!previewResourceReleasePending.exchange(false, std::memory_order_acq_rel))
+		return;
+
+	// Close requests may originate outside rendering or while draw lists still use these SRVs.
+	delete tempTexture;
+	tempTexture = nullptr;
+	for (auto& widget : weatherWidgets)
+		if (auto* weatherWidget = dynamic_cast<WeatherWidget*>(widget.get()))
+			weatherWidget->cloudTextureCache.clear();
+}
+
+void EditorWindow::AdvanceLightEditorDeferredWork()
+{
+	lightEditor.TickDeferredWork();
+}
+
+void EditorWindow::ActivateLightEditor()
+{
+	m_selectedCategory = "Light Editor";
+	lightEditor.SetEnabled(true);
+}
+
+bool EditorWindow::IsLightEditorSelected() const
+{
+	return m_selectedCategory == "Light Editor";
 }
 
 void EditorWindow::Draw()
 {
-	if (open)
-		lightEditor.GatherLights();
+	ReleasePendingPreviewResources();
 
 	// Keep background blur in sync when HDR toggles while the editor stays open
 	{
@@ -1535,7 +1629,7 @@ void EditorWindow::Draw()
 						D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 						framebuffer.SRV->GetDesc(&srvDesc);
 
-						tempTexture = new Texture2D(texDesc);
+						tempTexture = new Texture2D(texDesc, "CSEditor::ViewportCopy");
 						tempTexture->CreateSRV(srvDesc);
 					}
 
@@ -1561,6 +1655,9 @@ void EditorWindow::SaveAll()
 	};
 	for (auto* collection : GetWidgetCollections())
 		saveOpen(*collection);
+	for (auto& [_, widget] : cachedCellLightingWidgets)
+		if (widget && widget->IsOpen())
+			widget->Save();
 	if (currentCellLightingWidget && currentCellLightingWidget->IsOpen())
 		currentCellLightingWidget->Save();
 
@@ -1584,120 +1681,169 @@ void EditorWindow::LoadSettings()
 			logger::warn("Failed to deserialize editor settings; keeping defaults: {}", e.what());
 		}
 	}
+	SanitizeSettings();
 	m_selectedCategory = settings.selectedCategory;
 	SetWidgetTypeSizesFromJson(settings.widgetTypeSizes);
 }
 
+void EditorWindow::SanitizeSettings()
+{
+	if (!std::isfinite(settings.editorUIScale))
+		settings.editorUIScale = 1.0f;
+	settings.editorUIScale = std::clamp(settings.editorUIScale, 0.5f, 2.0f);
+	settings.maxRecentWidgets = std::clamp(settings.maxRecentWidgets, 5, 20);
+
+	auto sanitizeUnit = [](float value, float fallback) {
+		return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : fallback;
+	};
+
+	while (settings.recordMarkers.size() > maxRecordMarkers)
+		settings.recordMarkers.erase(std::prev(settings.recordMarkers.end()));
+	for (auto& [_, color] : settings.recordMarkers) {
+		color.x = sanitizeUnit(color.x, 0.5f);
+		color.y = sanitizeUnit(color.y, 0.5f);
+		color.z = sanitizeUnit(color.z, 0.5f);
+		color.w = sanitizeUnit(color.w, 1.0f);
+	}
+	std::erase_if(settings.markedRecords, [&](const auto& entry) {
+		return !settings.recordMarkers.contains(entry.second);
+	});
+
+	for (auto& [_, recent] : settings.recentWidgets) {
+		std::vector<std::string> sanitized;
+		sanitized.reserve(std::min(recent.size(), static_cast<size_t>(settings.maxRecentWidgets)));
+		for (const auto& id : recent) {
+			if (std::ranges::find(sanitized, id) == sanitized.end())
+				sanitized.push_back(id);
+			if (sanitized.size() == static_cast<size_t>(settings.maxRecentWidgets))
+				break;
+		}
+		recent = std::move(sanitized);
+	}
+
+	constexpr size_t kMaxPaletteEntries = 4096;
+	if (settings.paletteColors.size() > kMaxPaletteEntries)
+		settings.paletteColors.resize(kMaxPaletteEntries);
+	for (auto& entry : settings.paletteColors) {
+		entry.r = sanitizeUnit(entry.r, 0.0f);
+		entry.g = sanitizeUnit(entry.g, 0.0f);
+		entry.b = sanitizeUnit(entry.b, 0.0f);
+		entry.useCount = std::max(entry.useCount, 0);
+		if (!std::isfinite(entry.lastUsedTime) || entry.lastUsedTime < 0.0f)
+			entry.lastUsedTime = 0.0f;
+	}
+
+	if (settings.paletteValues.size() > kMaxPaletteEntries)
+		settings.paletteValues.resize(kMaxPaletteEntries);
+	for (auto& entry : settings.paletteValues) {
+		if (!std::isfinite(entry.value))
+			entry.value = 0.0f;
+		entry.useCount = std::max(entry.useCount, 0);
+		if (!std::isfinite(entry.lastUsedTime) || entry.lastUsedTime < 0.0f)
+			entry.lastUsedTime = 0.0f;
+	}
+
+	for (auto& favorite : settings.paletteFavorites) {
+		favorite.r = sanitizeUnit(favorite.r, 0.0f);
+		favorite.g = sanitizeUnit(favorite.g, 0.0f);
+		favorite.b = sanitizeUnit(favorite.b, 0.0f);
+	}
+}
+
 void EditorWindow::ShowSettingsWindow()
 {
-	Util::BeginWithRoundedClose(T(TKEY("settings"), "Settings"), &showSettingsWindow);
+	Util::BeginWithRoundedClose(T("cs_editor.settings", "Settings"), &showSettingsWindow);
 
 	if (ImGui::BeginTable("SettingsTable", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInner | ImGuiTableFlags_NoHostExtendX)) {
-		ImGui::TableSetupColumn(T(TKEY("options"), "Options"), ImGuiTableColumnFlags_WidthStretch, 0.3f);
+		ImGui::TableSetupColumn(T("cs_editor.options", "Options"), ImGuiTableColumnFlags_WidthStretch, 0.3f);
 		ImGui::TableSetupColumn("##Settings", ImGuiTableColumnFlags_WidthStretch, 0.7f);
 
 		ImGui::TableNextRow();
 
 		ImGui::TableSetColumnIndex(0);
-		struct CategoryOption
-		{
-			const char* id;
-			const char* label;
-		};
-		const CategoryOption options[] = {
-			{ "General", T(TKEY("general"), "General") },
-			{ "Flags", T(TKEY("flags"), "Flags") }
-		};
-		for (const auto& option : options) {
-			if (ImGui::Selectable(option.label, settingsSelectedCategory == option.id)) {
-				settingsSelectedCategory = option.id;
-			}
+		const std::pair<const char*, const char*> options[] = { { "General", T("editor.categories.general", "General") }, { "Flags", T("editor.categories.flags", "Flags") } };
+		for (const auto& [id, label] : options) {
+			if (ImGui::Selectable(label, settingsSelectedCategory == id))
+				settingsSelectedCategory = id;
 		}
 
 		ImGui::TableSetColumnIndex(1);
 
 		if (settingsSelectedCategory == "General") {
-			ImGui::Checkbox(T(TKEY("auto_apply_changes"), "Auto-Apply Changes"), &settings.autoApplyChanges);
-			Util::AddTooltip(T(TKEY("auto_apply_changes_tooltip"), "Automatically apply weather changes to the game as you edit"));
+			if (Util::Widgets::Checkbox(T("editor.editor_window.auto_apply_changes", "Auto-apply changes"), &settings.autoApplyChanges))
+				Save();
+			Util::AddTooltip(T("editor.editor_window.automatically_apply_changes_to_weather_lighti_eeede076", "Automatically apply changes to weather/lighting when editing"));
 
-			ImGui::Checkbox(T(TKEY("use_text_buttons"), "Use text buttons instead of icons"), &settings.useTextButtons);
-			Util::AddTooltip(T(TKEY("text_buttons_tooltip"), "Display action buttons as text labels instead of icons"));
+			if (Util::Widgets::Checkbox(T("cs_editor.use_text_buttons", "Use text buttons instead of icons"), &settings.useTextButtons))
+				Save();
+			Util::AddTooltip(T("cs_editor.text_buttons_tooltip", "Display action buttons as text labels instead of icons"));
 
-			ImGui::Checkbox(T(TKEY("enable_inherit_feature"), "Enable 'Inherit From Parent' feature"), &settings.enableInheritFromParent);
-			Util::AddTooltip(T(TKEY("enable_inherit_feature_tooltip"), "Show checkboxes to copy settings from parent weather (editor-only feature)"));
+			if (Util::Widgets::Checkbox(T("cs_editor.enable_inherit_feature", "Enable 'Inherit From Parent' feature"), &settings.enableInheritFromParent))
+				Save();
+			Util::AddTooltip(T("cs_editor.enable_inherit_feature_tooltip", "Show checkboxes to copy settings from parent weather (editor-only feature)"));
 
 			ImGui::Separator();
-			ImGui::TextUnformatted(T(TKEY("ui_scale"), "UI Scale"));
+			ImGui::TextUnformatted(T("cs_editor.ui_scale", "UI Scale"));
 			ImGui::Spacing();
 
-			if (ImGui::SliderFloat(T(TKEY("editor_ui_scale"), "Editor UI Scale"), &settings.editorUIScale, 0.5f, 2.0f, "%.2f")) {
+			Util::Widgets::SliderFloat(T("cs_editor.editor_ui_scale", "Editor UI Scale"), &settings.editorUIScale, 0.5f, 2.0f, "%.2f");
+			if (ImGui::IsItemDeactivatedAfterEdit()) {
 				Save();
 			}
-			Util::AddTooltip(T(TKEY("editor_ui_scale_tooltip"), "Scale the size of all editor UI elements (0.5 = 50%, 2.0 = 200%)"));
+			Util::AddTooltip(T("cs_editor.editor_ui_scale_tooltip", "Scale the size of all editor UI elements (0.5 = 50%, 2.0 = 200%)"));
 
-			if (Util::ButtonWithFlash(T(TKEY("reset_to_default"), "Reset to 1.0"))) {
+			if (Util::ButtonWithFlash("Reset to 1.0")) {
 				settings.editorUIScale = 1.0f;
 				Save();
 			}
 			ImGui::SameLine();
-			Util::AddTooltip(T(TKEY("reset_ui_scale_tooltip"), "Reset UI scale to default (100%)"));
+			Util::AddTooltip(T("cs_editor.reset_ui_scale_tooltip", "Reset UI scale to default (100%)"));
 
 			ImGui::Separator();
-			ImGui::TextUnformatted(T(TKEY("session_history"), "Session & History"));
+			ImGui::TextUnformatted(T("cs_editor.session_history", "Session & History"));
 			ImGui::Spacing();
 
-			ImGui::SliderInt(T(TKEY("max_recent_widgets"), "Max recent widgets"), &settings.maxRecentWidgets, 5, 20);
-			Util::AddTooltip(T(TKEY("max_recent_widgets_tooltip"), "Maximum number of recent widgets to remember"));
+			Util::Widgets::SliderInt(T("cs_editor.max_recent_widgets", "Max recent widgets"), &settings.maxRecentWidgets, 5, 20);
+			if (ImGui::IsItemDeactivatedAfterEdit())
+				Save();
+			Util::AddTooltip(T("cs_editor.max_recent_widgets_tooltip", "Maximum number of recent widgets to remember"));
 
-			if (Util::ButtonWithFlash(T(TKEY("clear_recent_history"), "Clear Recent History"))) {
+			if (Util::ButtonWithFlash("Clear Recent History")) {
 				settings.recentWidgets.clear();
 				Save();
 			}
 			ImGui::SameLine();
-			if (Util::ButtonWithFlash(T(TKEY("clear_favorites"), "Clear Favorites"))) {
+			if (Util::ButtonWithFlash("Clear Favorites")) {
 				settings.favoriteWidgets.clear();
 				Save();
 			}
 
 		} else if (settingsSelectedCategory == "Flags") {
 			if (ImGui::BeginTable("FlagsTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-				ImGui::TableSetupColumn(T(TKEY("label"), "Label"), ImGuiTableColumnFlags_WidthStretch);
-				ImGui::TableSetupColumn(T(TKEY("colour"), "Colour"), ImGuiTableColumnFlags_WidthStretch);
-				ImGui::TableSetupColumn(T(TKEY("actions"), "Actions"), ImGuiTableColumnFlags_WidthFixed, 60.0f * Util::GetUIScale());
+				ImGui::TableSetupColumn(T("cs_editor.label", "Label"), ImGuiTableColumnFlags_WidthStretch);
+				ImGui::TableSetupColumn(T("cs_editor.colour", "Colour"), ImGuiTableColumnFlags_WidthStretch);
+				ImGui::TableSetupColumn(T("cs_editor.actions", "Actions"), ImGuiTableColumnFlags_WidthFixed, 60.0f * Util::GetUIScale());
 
 				auto& recordMarkers = settings.recordMarkers;
 
-				// Store markers to delete (can't delete while iterating)
-				static std::string markerToDelete;
-				markerToDelete.clear();
-
-				// Store rename info (old name -> new name)
-				static std::pair<std::string, std::string> renameInfo;
-				static bool needsRename = false;
-
-				// Store separate buffers for each marker
-				static std::unordered_map<std::string, std::array<char, 256>> labelBuffers;
+				std::string markerToDelete;
+				std::optional<std::pair<std::string, std::string>> renameInfo;
+				std::erase_if(markerLabelBuffers, [&](const auto& entry) { return !recordMarkers.contains(entry.first); });
 
 				for (auto& recordMarker : recordMarkers) {
+					ImGui::PushID(&recordMarker);
+					const SKSE::stl::scope_exit restoreMarkerId([] { ImGui::PopID(); });
 					ImGui::TableNextRow();
 					ImGui::TableSetColumnIndex(0);
 
-					// Editable label - use separate buffer for each marker
-					auto& labelBuffer = labelBuffers[recordMarker.first];
-					if (labelBuffer[0] == '\0' || labelBuffers.find(recordMarker.first) == labelBuffers.end()) {
-						strncpy_s(labelBuffer.data(), labelBuffer.size(), recordMarker.first.c_str(), labelBuffer.size() - 1);
-						labelBuffer[labelBuffer.size() - 1] = '\0';
-					}
-
+					auto& labelBuffer = markerLabelBuffers.try_emplace(recordMarker.first, recordMarker.first).first->second;
 					ImGui::SetNextItemWidth(-1);
-					if (ImGui::InputText(std::format("##Label{}", recordMarker.first).c_str(), labelBuffer.data(), labelBuffer.size(), ImGuiInputTextFlags_EnterReturnsTrue)) {
-						// Mark for rename only on Enter
-						renameInfo = { recordMarker.first, std::string(labelBuffer.data()) };
-						needsRename = true;
-					}
+					if (ImGui::InputText("##Label", &labelBuffer, ImGuiInputTextFlags_EnterReturnsTrue))
+						renameInfo = { recordMarker.first, labelBuffer };
 
 					ImGui::TableSetColumnIndex(1);
-					if (ImGui::ColorEdit3(std::format("Color##{}", recordMarker.first).c_str(), (float*)&recordMarker.second)) {
+					ImGui::ColorEdit3(T("editor.editor_window.color", "Color"), (float*)&recordMarker.second);
+					if (ImGui::IsItemDeactivatedAfterEdit()) {
 						Save();
 					}
 
@@ -1710,56 +1856,24 @@ void EditorWindow::ShowSettingsWindow()
 					deleteActive.w = 1.0f;
 					{
 						auto styledButton = Util::StyledButtonWrapper(deleteColor, deleteHovered, deleteActive);
-						auto deleteLabel = std::format("{}##{}", T(TKEY("delete"), "Delete"), recordMarker.first);
-						if (ImGui::Button(deleteLabel.c_str(), ImVec2(-1, 0))) {
+						if (ImGui::Button(T("cs_editor.delete", "Delete"), ImVec2(-1, 0))) {
 							markerToDelete = recordMarker.first;
 						}
 					}
 				}
 
-				// Process rename
-				if (needsRename && renameInfo.first != renameInfo.second && !renameInfo.second.empty()) {
-					// Check if new name doesn't already exist
-					if (recordMarkers.find(renameInfo.second) == recordMarkers.end()) {
-						auto color = recordMarkers[renameInfo.first];
-						recordMarkers.erase(renameInfo.first);
-						recordMarkers[renameInfo.second] = color;
-
-						// Update any records that were using the old marker name
-						for (auto& [recordId, markerName] : settings.markedRecords) {
-							if (markerName == renameInfo.first) {
-								markerName = renameInfo.second;
-							}
-						}
-
-						Save();
-					}
-					needsRename = false;
+				if (renameInfo) {
+					const auto error = RenameRecordMarker(renameInfo->first, renameInfo->second);
+					if (!error.empty())
+						ShowNotification(error, Util::Colors::GetWarning());
 				}
-
-				// Process deletion
-				if (!markerToDelete.empty()) {
-					recordMarkers.erase(markerToDelete);
-
-					// Remove any records that were using this marker
-					for (auto it = settings.markedRecords.begin(); it != settings.markedRecords.end();) {
-						if (it->second == markerToDelete) {
-							it = settings.markedRecords.erase(it);
-						} else {
-							++it;
-						}
-					}
-
-					Save();
-				}
+				if (!markerToDelete.empty())
+					DeleteRecordMarker(markerToDelete);
 
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
-
-				if (recordMarkers.size() < maxRecordMarkers && ImGui::Selectable(T(TKEY("add_new_marker"), "Add new marker"))) {
-					recordMarkers.insert({ std::format("New marker {}", recordMarkers.size()), { 0.5f, 0.5f, 0.5f, 1.0f } });
-					Save();
-				}
+				if (recordMarkers.size() < maxRecordMarkers && ImGui::Selectable(T("cs_editor.add_new_marker", "Add new marker")) && !AddRecordMarker())
+					ShowNotification("No marker could be added.", Util::Colors::GetWarning());
 
 				ImGui::EndTable();
 			}
@@ -1770,61 +1884,99 @@ void EditorWindow::ShowSettingsWindow()
 	ImGui::End();
 }
 
+bool EditorWindow::AddRecordMarker()
+{
+	auto& markers = settings.recordMarkers;
+	if (markers.size() >= maxRecordMarkers)
+		return false;
+	std::string name;
+	for (size_t ordinal = 0;; ++ordinal) {
+		name = std::format("New marker {}", ordinal);
+		if (!markers.contains(name))
+			break;
+	}
+	if (!markers.emplace(name, ImVec4(0.5f, 0.5f, 0.5f, 1.0f)).second)
+		return false;
+	markerLabelBuffers.erase(name);
+	Save();
+	return true;
+}
+
+std::string EditorWindow::RenameRecordMarker(const std::string& oldName, const std::string& newName)
+{
+	auto& markers = settings.recordMarkers;
+	const auto source = markers.find(oldName);
+	if (source == markers.end())
+		return "The marker no longer exists.";
+	if (newName.empty())
+		return "Marker names cannot be empty.";
+	if (oldName == newName)
+		return {};
+	if (!markers.emplace(newName, source->second).second)
+		return "A marker with that name already exists.";
+	markers.erase(source);
+	for (auto& [recordId, markerName] : settings.markedRecords) {
+		if (markerName == oldName)
+			markerName = newName;
+	}
+	markerLabelBuffers.erase(oldName);
+	markerLabelBuffers.erase(newName);
+	Save();
+	return {};
+}
+
+void EditorWindow::DeleteRecordMarker(const std::string& name)
+{
+	if (settings.recordMarkers.erase(name) == 0)
+		return;
+	markerLabelBuffers.erase(name);
+	std::erase_if(settings.markedRecords, [&](const auto& record) { return record.second == name; });
+	Save();
+}
+
 void EditorWindow::Save()
 {
-	SaveSettings();
-	const std::string filePath = Util::PathHelpers::GetCommunityShaderPath().string();
-	const std::string file = std::format("{}\\{}.json", filePath, settingsFilename);
+	const auto file = Util::PathHelpers::GetCommunityShaderPath() / std::format("{}.json", settingsFilename);
 
-	std::ofstream settingsFile(file);
-
-	if (!settingsFile.good() || !settingsFile.is_open()) {
-		logger::warn("Failed to open settings file: {}", file);
-		return;
-	}
-
-	if (settingsFile.fail()) {
-		logger::warn("Unable to create settings file: {}", file);
-		settingsFile.close();
-		return;
-	}
-
-	logger::info("Saving settings file: {}", file);
+	logger::info("Saving settings file: {}", file.string());
 
 	try {
-		settingsFile << j.dump(1);
-
-		settingsFile.close();
-	} catch (const nlohmann::json::parse_error& e) {
-		logger::warn("Error parsing settings for settings file ({}) : {}\n", filePath, e.what());
-		settingsFile.close();
+		SaveSettings();
+		std::string errorMessage;
+		if (!Util::FileHelpers::WriteTextFileAtomic(file, j.dump(1), errorMessage)) {
+			logger::warn("Failed to save settings file ({}): {}", file.string(), errorMessage);
+			ShowNotification("Editor settings not saved: " + errorMessage, Util::Colors::GetError());
+		}
+	} catch (const std::exception& e) {
+		logger::warn("Error serializing settings file ({}): {}", file.string(), e.what());
+		ShowNotification("Editor settings not saved: " + std::string(e.what()), Util::Colors::GetError());
 	}
 }
 
 void EditorWindow::Load()
 {
-	std::string filePath = std::format("{}\\{}.json", Util::PathHelpers::GetCommunityShaderPath().string(), settingsFilename);
-
-	std::ifstream settingsFile(filePath);
-
-	if (!std::filesystem::exists(filePath)) {
-		// Does not have any settings so just return.
+	const auto file = Util::PathHelpers::GetCommunityShaderPath() / std::format("{}.json", settingsFilename);
+	json loaded;
+	std::string errorMessage;
+	const auto result = Util::FileHelpers::ReadJsonFile(file, loaded, errorMessage);
+	if (result == Util::FileHelpers::JsonFileReadResult::NotFound)
 		return;
-	}
-
-	if (!settingsFile.good() || !settingsFile.is_open()) {
-		logger::warn("Failed to load settings file: {}", filePath);
+	if (result == Util::FileHelpers::JsonFileReadResult::Error) {
+		logger::warn("Failed to load settings file ({}): {}", file.string(), errorMessage);
 		return;
 	}
 
 	try {
-		j << settingsFile;
-		settingsFile.close();
-	} catch (const nlohmann::json::parse_error& e) {
-		logger::warn("Error parsing settings for file ({}) : {}\n", filePath, e.what());
-		settingsFile.close();
+		if (!loaded.is_object())
+			throw std::runtime_error("root value is not a JSON object");
+		j = std::move(loaded);
+		LoadSettings();
+	} catch (const std::exception& e) {
+		logger::warn("Invalid settings file ({}): {}", file.string(), e.what());
+		j = json::object();
+		settings = Settings{};
+		SetWidgetTypeSizesFromJson(settings.widgetTypeSizes);
 	}
-	LoadSettings();
 }
 
 // A plain ForceWeather does not hold: scripts, climate timers, cell transitions, and
@@ -1864,14 +2016,7 @@ namespace
 		if (!sky || !weather)
 			return;
 
-		CancelPendingWeatherRelease(sky);
-
-		// After detouring, func points to the original trampoline. Calling Sky::ForceWeather
-		// here would re-enter the hook; before installation, the method is the fallback.
-		if (ForceWeatherHook::func.address() != 0)
-			ForceWeatherHook::func(sky, weather, true);
-		else
-			sky->ForceWeather(weather, true);
+		EditorWindow::ForceWeather(sky, weather, true);
 	}
 
 	void SetWeatherHook::thunk(RE::Sky* sky, RE::TESWeather* weather, bool isOverride, bool accelerate)
@@ -1897,15 +2042,26 @@ namespace
 
 	void ForceWeatherHook::thunk(RE::Sky* sky, RE::TESWeather* weather, bool isOverride)
 	{
-		auto* locked = GetActiveWeatherLock();
-		if (!locked) {
-			func(sky, weather, isOverride);
-			return;
-		}
-		if (sky)
-			ReapplyWeatherLock(sky, locked);
+		EditorWindow::ForceWeather(sky, weather, isOverride);
 	}
 }  // namespace
+
+void EditorWindow::ForceWeather(RE::Sky* a_sky, RE::TESWeather* a_weather, bool a_override)
+{
+	if (!a_sky)
+		return;
+	if (auto* locked = GetActiveWeatherLock()) {
+		a_weather = locked;
+		a_override = true;
+	}
+
+	// The saved native entry/trampoline avoids re-entering the installed detour.
+	if (ForceWeatherHook::func.address() != 0)
+		ForceWeatherHook::func(a_sky, a_weather, a_override);
+	else
+		a_sky->ForceWeather(a_weather, a_override);
+	Util::RefreshForcedWeatherSky(a_sky);
+}
 
 void EditorWindow::InstallWeatherLockHooks()
 {
@@ -2309,11 +2465,11 @@ void EditorWindow::DrawTimeControls()
 	if (ImGui::Button(timePaused ? resumeTimeText : pauseTimeText, ImVec2(buttonWidth, 0)))
 		TogglePause();
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("%s", T(TKEY("pause_time_tooltip"), "Pause or resume game time progression"));
+		ImGui::Text("%s", T("cs_editor.pause_time_tooltip", "Pause or resume game time progression"));
 	ImGui::SameLine();
 	DrawGameHourSlider(T(TKEY("game_time"), "Game Time"));
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("%s", T(TKEY("game_time_tooltip"), "Adjust the current game time"));
+		ImGui::Text("%s", T("cs_editor.game_time_tooltip", "Adjust the current game time"));
 
 	// Sync slider with actual value
 	if (timePaused)
@@ -2325,7 +2481,7 @@ void EditorWindow::DrawTimeControls()
 	if (ImGui::Button(resetSpeedText, ImVec2(buttonWidth, 0)))
 		ResetTimeScale();
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T(TKEY("reset_speed_tooltip"), "Reset time speed to vanilla (%.1fx)"), kVanillaTimeScale);
+		ImGui::Text(T("cs_editor.reset_speed_tooltip", "Reset time speed to vanilla (%.1fx)"), kVanillaTimeScale);
 
 	ImGui::SameLine();
 	ImGui::BeginDisabled(timePaused);
@@ -2337,14 +2493,7 @@ void EditorWindow::DrawTimeControls()
 	ImGui::SameLine();
 	ImGui::Text("%.1fx", calendar->timeScale->value);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T(TKEY("time_scale_tooltip"), "Adjust how fast time passes (vanilla: %.1fx)"), kVanillaTimeScale);
-}
-
-bool EditorWindow::CanBeOpen()
-{
-	auto* player = globals::game::player;
-	auto* state = globals::state;
-	return player && player->parentCell && !state->isLoadingMenuOpen && !state->isMainMenuOpen;
+		ImGui::Text(T("cs_editor.time_scale_tooltip", "Adjust how fast time passes (vanilla: %.1fx)"), kVanillaTimeScale);
 }
 
 void EditorWindow::DisableVanityCamera()
@@ -2355,35 +2504,6 @@ void EditorWindow::DisableVanityCamera()
 void EditorWindow::RestoreVanityCamera()
 {
 	vanityCameraSuppression.Release();
-}
-
-void EditorWindow::HideGameMenus()
-{
-	if (gameMenusHidden)
-		return;
-
-	// ShowMenus(false) stops the game from rendering to the back buffer.
-	// Without d3d12SwapChain, blur reads directly from that buffer and would freeze.
-	if (!globals::features::upscaling.d3d12SwapChainActive)
-		return;
-
-	if (auto ui = RE::UI::GetSingleton()) {
-		ui->ShowMenus(false);
-		gameMenusHidden = true;
-		logger::info("Game menus hidden for CS editor");
-	}
-}
-
-void EditorWindow::ShowGameMenus()
-{
-	if (!gameMenusHidden)
-		return;
-
-	if (auto ui = RE::UI::GetSingleton()) {
-		ui->ShowMenus(true);
-		gameMenusHidden = false;
-		logger::info("Game menus restored after CS editor");
-	}
 }
 
 void EditorWindow::EnterPreviewMode(PreviewMode mode)
@@ -2460,6 +2580,13 @@ void EditorWindow::AdjustFlySpeed(float scrollDelta)
 
 bool EditorWindow::ShouldHandleEscapeKey()
 {
+	// Input backlogs can deliver press and release before the next ImGui frame.
+	// Cancel an active picker directly so the same release cannot close its parent.
+	if (lightEditor.IsPicking()) {
+		lightEditor.CancelPick();
+		suppressNextEditorEscape = false;
+		return false;
+	}
 	if (suppressNextEditorEscape) {
 		suppressNextEditorEscape = false;
 		return false;
@@ -2472,12 +2599,19 @@ void EditorWindow::PushUndoState(Widget* widget)
 	if (!widget)
 		return;
 
-	UndoState state;
-	state.widget = widget;
-	state.widgetId = widget->GetEditorID();
-	state.settings = widget->js;
+	auto restore = widget->CaptureUndoState();
+	if (!restore)
+		return;
 
-	undoStack.push_back(state);
+	UndoState state{
+		.widgetIdentity = widget->GetStableIdentity(),
+		.widgetLabel = widget->GetEditorID(),
+		.restoreRuntime =
+			settings.autoApplyChanges && !widget->RequiresManualApply(),
+		.restore = std::move(restore)
+	};
+
+	undoStack.push_back(std::move(state));
 
 	if (undoStack.size() > maxUndoStates) {
 		undoStack.erase(undoStack.begin());
@@ -2489,31 +2623,42 @@ void EditorWindow::PerformUndo()
 	if (undoStack.empty())
 		return;
 
-	UndoState state = undoStack.back();
+	UndoState state = std::move(undoStack.back());
 	undoStack.pop_back();
 
-	if (!state.widget) {
-		for (auto* collection : GetWidgetCollections()) {
-			for (auto& w : *collection) {
-				if (w->GetEditorID() == state.widgetId) {
-					state.widget = w.get();
-					break;
-				}
-			}
-			if (state.widget)
-				break;
+	if (auto* widget = FindWidgetByIdentity(state.widgetIdentity)) {
+		state.restore(*widget);
+		if (state.restoreRuntime)
+			widget->ApplyChanges();
+		ShowNotification(
+			std::format("Undone changes to {}", state.widgetLabel),
+			Menu::GetSingleton()->GetSettings().Theme.StatusPalette.InfoColor,
+			2.0f);
+	} else {
+		ShowNotification(
+			std::format("Cannot undo {} because its editor is no longer active", state.widgetLabel),
+			Menu::GetSingleton()->GetSettings().Theme.StatusPalette.Warning,
+			3.0f);
+	}
+}
+
+Widget* EditorWindow::FindWidgetByIdentity(std::string_view identity)
+{
+	for (auto* collection : GetWidgetCollections()) {
+		for (auto& widget : *collection) {
+			if (widget && widget->GetStableIdentity() == identity)
+				return widget.get();
 		}
 	}
 
-	if (state.widget) {
-		state.widget->js = state.settings;
-		state.widget->LoadSettings();
-		state.widget->ApplyChanges();
-		ShowNotification(
-			std::vformat(T(TKEY("undone_changes_to"), "Undone changes to {}"), std::make_format_args(state.widgetId)),
-			Menu::GetSingleton()->GetSettings().Theme.StatusPalette.InfoColor,
-			2.0f);
-	}
+	if (currentCellLightingWidget && currentCellLightingWidget->GetStableIdentity() == identity)
+		return currentCellLightingWidget.get();
+
+	if (auto cached = cachedCellLightingWidgets.find(std::string(identity));
+		cached != cachedCellLightingWidgets.end())
+		return cached->second.get();
+
+	return nullptr;
 }
 
 void EditorWindow::ShowNotification(const std::string& message, const ImVec4& color, float duration)
@@ -2635,8 +2780,9 @@ void EditorWindow::AddToRecent(const std::string& widgetId, const std::string& c
 	categoryRecent.insert(categoryRecent.begin(), widgetId);
 
 	// Limit size
-	if (categoryRecent.size() > static_cast<size_t>(settings.maxRecentWidgets)) {
-		categoryRecent.resize(settings.maxRecentWidgets);
+	const auto maxRecent = static_cast<size_t>(std::clamp(settings.maxRecentWidgets, 5, 20));
+	if (categoryRecent.size() > maxRecent) {
+		categoryRecent.resize(maxRecent);
 	}
 
 	Save();
@@ -2658,4 +2804,43 @@ bool EditorWindow::IsFavorite(const std::string& widgetId) const
 	return std::find(settings.favoriteWidgets.begin(), settings.favoriteWidgets.end(), widgetId) != settings.favoriteWidgets.end();
 }
 
-#undef I18N_KEY_PREFIX
+bool EditorWindow::CanBeOpen()
+{
+	auto* player = globals::game::player;
+	auto* state = globals::state;
+	return player && player->parentCell && !state->isLoadingMenuOpen && !state->isMainMenuOpen;
+}
+
+bool EditorWindow::IsViewportActive() const
+{
+	return settings.showViewport && !(globals::features::hdrDisplay.loaded && globals::features::hdrDisplay.settings.enableHDR);
+}
+
+void EditorWindow::HideGameMenus()
+{
+	if (gameMenusHidden)
+		return;
+
+	// ShowMenus(false) stops the game from rendering to the back buffer.
+	// Without d3d12SwapChain, blur reads directly from that buffer and would freeze.
+	if (!globals::features::upscaling.d3d12SwapChainActive)
+		return;
+
+	if (auto ui = RE::UI::GetSingleton()) {
+		ui->ShowMenus(false);
+		gameMenusHidden = true;
+		logger::info("Game menus hidden for CS editor");
+	}
+}
+
+void EditorWindow::ShowGameMenus()
+{
+	if (!gameMenusHidden)
+		return;
+
+	if (auto ui = RE::UI::GetSingleton()) {
+		ui->ShowMenus(true);
+		gameMenusHidden = false;
+		logger::info("Game menus restored after CS editor");
+	}
+}

@@ -16,7 +16,7 @@ set(CSX_PLUGIN_VERSION "CSX ${CSX_VERSION}")
 
 option(
     CSX_DEVBENCH_BRIDGE
-    "Expose CSX frame-generation diagnostics through the DevBench host."
+    "Expose CSX developer inspection and capture services through the DevBench host."
     OFF
 )
 if(CSX_DEVBENCH_BRIDGE)
@@ -52,6 +52,15 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     )
 endif()
 
+# Reject incomplete or changed runtime inputs before dependency install actions
+# or the package reset can alter the destination. Guards are configured below.
+set(CSX_RUNTIME_INSTALL_GUARD
+    "${CMAKE_CURRENT_BINARY_DIR}/runtime_payload_install_guard.cmake")
+set(CSX_NEURAL_SOURCE_INSTALL_GUARD
+    "${CMAKE_CURRENT_BINARY_DIR}/nr_source_install_guard.cmake")
+install(SCRIPT "${CSX_RUNTIME_INSTALL_GUARD}" ALL_COMPONENTS)
+install(SCRIPT "${CSX_NEURAL_SOURCE_INSTALL_GUARD}" ALL_COMPONENTS)
+
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 # ########################################################################################################################
@@ -73,7 +82,17 @@ option(
     "Zip the base mod and addons to a AIO 7z file in dist."
     ON
 )
+option(
+    SKIP_RUNTIME_DOWNLOADS
+    "Skip upscaler runtime downloads; allow DLL-only builds with unavailable payloads."
+    OFF
+)
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
+option(NVPERF_SUPPORT "Build developer-only NVIDIA D3D11 hardware counters" OFF)
+set(NVPERF_SDK_ROOT "" CACHE PATH "Nsight Perf SDK directory containing include/nvperf_host.h")
+if(NVPERF_SUPPORT AND NOT CSX_DEVBENCH_BRIDGE)
+    message(FATAL_ERROR "NVPERF_SUPPORT requires CSX_DEVBENCH_BRIDGE=ON")
+endif()
 option(
     BUILD_SHADER_TESTS
     "Build shader unit tests (runs automatically before packaging)"
@@ -98,6 +117,7 @@ set(AIO_EXCLUDED_FEATURE_PACKAGES
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
+message("\tSkip runtime downloads: ${SKIP_RUNTIME_DOWNLOADS}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
 message("\tShader tests: ${BUILD_SHADER_TESTS}")
 message("\tHost C++ tests: ${BUILD_HOST_TESTS}")
@@ -181,8 +201,8 @@ add_custom_target(
         "${VCPKG_OVERLAY_PORTS}" --build-option "TRACY_SUPPORT=${TRACY_SUPPORT}"
         --build-option "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}" --build-option
         "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}" --build-option
-        "ENABLE_SKYRIM_VR=${ENABLE_SKYRIM_VR}" --build-option
         "CSX_DEVBENCH_BRIDGE=${CSX_DEVBENCH_BRIDGE}" --build-option
+        "SKIP_RUNTIME_DOWNLOADS=${SKIP_RUNTIME_DOWNLOADS}" --build-option
         "MSVC_RUNTIME=${CMAKE_MSVC_RUNTIME_LIBRARY}"
         ${_CSX_PROVENANCE_CLEAN_ARG}
     VERBATIM
@@ -228,6 +248,9 @@ find_library(DETOURS_LIBRARY detours REQUIRED)
 include(FidelityFX-SDK)
 include(FidelityFX-Runtime)
 include(Streamline-Runtime)
+csx_configure_runtime_payload()
+include(NvPerf)
+csx_configure_nvperf(${PROJECT_NAME})
 
 set(UPSCALING_RUNTIME_FILES ${FFX_RUNTIME_FILES} ${STREAMLINE_RUNTIME_FILES})
 
@@ -284,6 +307,7 @@ target_link_libraries(
         ${DETOURS_LIBRARY}
         windowscodecs
         bcrypt
+        wintrust
 )
 
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
@@ -628,6 +652,7 @@ string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
 
 # Set AIO directory path used by multiple targets below
 set(AIO_DIR "${CMAKE_CURRENT_BINARY_DIR}/aio")
+csx_stage_nvperf(${PROJECT_NAME})
 set(AIO_INSTALL_STAMP "${CMAKE_CURRENT_BINARY_DIR}/aio_install.stamp")
 
 # Robocopy wrapper for Windows incremental file copy (used by deployment targets).
@@ -655,6 +680,11 @@ list(TRANSFORM FEATURE_PATHS_SLASH APPEND /)
 
 # Install logic for AIO package
 # To copy AIO package at a folder do `${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}`
+configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/NeuralRenderingInstallGuard.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/nr_source_install_guard.cmake"
+    @ONLY
+)
 install(CODE "file(REMOVE_RECURSE \${CMAKE_INSTALL_PREFIX})")
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION SKSE/Plugins COMPONENT SKSE)
 install(
@@ -694,6 +724,12 @@ install(
     COMPONENT StreamlineRuntime
 )
 install(CODE "file(REMOVE \${CMAKE_INSTALL_PREFIX}/Core)" COMPONENT Shaders)
+install(
+    CODE
+        "set(NR_PACKAGE_ROOT \"\${CMAKE_INSTALL_PREFIX}\")\ninclude(\"${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake\")"
+    ALL_COMPONENTS
+)
+
 
 # #######################################################################################################################
 # # Automatic AIO preparation (incremental copy system)
@@ -767,6 +803,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             GLOB _aio_deploy_stamps
             "${CMAKE_CURRENT_BINARY_DIR}/*_deploy.stamp"
             "${CMAKE_CURRENT_BINARY_DIR}/*_plugin.stamp"
+            "${CMAKE_CURRENT_BINARY_DIR}/*_shaders.stamp"
             "${CMAKE_CURRENT_BINARY_DIR}/*_shaders_full.stamp"
             "${CMAKE_CURRENT_BINARY_DIR}/*_shaders_only.stamp"
         )
@@ -853,9 +890,10 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         COMMAND
         ${CMAKE_COMMAND}
         -DMODE=AIO
-        -DAIO_DIR="${AIO_DIR}"
-        -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
-        -DFEATURE_PATHS_FILE="${_feature_paths_list_file}"
+        "-DAIO_DIR=${AIO_DIR}"
+        "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        "-DFEATURE_PATHS_FILE=${_feature_paths_list_file}"
+        -DSKIP_RUNTIME_DOWNLOADS=${SKIP_RUNTIME_DOWNLOADS}
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )
@@ -921,8 +959,12 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         DEPENDS
             ${_AIO_PACKAGE_FILES}
             ${PROJECT_NAME}
+            ${CSX_RUNTIME_INSTALL_GUARD}
+            ${_feature_paths_list_file}
+            ${CMAKE_SOURCE_DIR}/cmake/PreservedRuntimePaths.cmake
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
             ${CMAKE_SOURCE_DIR}/cmake/SyncCSXMarker.cmake
+        VERBATIM
     )
 
     # If AIO was manually (or programmatically) deleted, the stamp is stale —
@@ -963,10 +1005,11 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         VERBATIM
     )
 
-    # Only copy shaders when HLSL files change; copy individually so unchanged
-    # files do not get their timestamps updated.
+    # Track all shader-package assets and preserve unchanged file timestamps.
+    # Runtime configuration, textures, notices and file removals also retrigger staging.
     file(
         GLOB_RECURSE _package_shaders
+        CONFIGURE_DEPENDS
         LIST_DIRECTORIES FALSE
         "${CMAKE_SOURCE_DIR}/package/Shaders/*"
     )
@@ -1003,9 +1046,10 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         COMMAND
         ${CMAKE_COMMAND}
         -DMODE=SHADERS
-        -DAIO_DIR="${AIO_DIR}"
-        -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
-        -DFEATURE_SHADER_PATHS_FILE="${_feature_shader_paths_list_file}"
+        "-DAIO_DIR=${AIO_DIR}"
+        "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        "-DFEATURE_SHADER_PATHS_FILE=${_feature_shader_paths_list_file}"
+        -DSKIP_RUNTIME_DOWNLOADS=${SKIP_RUNTIME_DOWNLOADS}
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )
@@ -1019,6 +1063,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         if(EXISTS "${_fpath}/Shaders")
             file(
                 GLOB_RECURSE _feat_shaders
+                CONFIGURE_DEPENDS
                 LIST_DIRECTORIES FALSE
                 "${_fpath}/Shaders/*"
             )
@@ -1037,8 +1082,12 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         DEPENDS
             ${_shader_copy_inputs}
             ${UPSCALING_RUNTIME_FILES}
+            ${_feature_shader_paths_list_file}
+            ${CSX_RUNTIME_INSTALL_GUARD}
+            ${CMAKE_SOURCE_DIR}/cmake/PreservedRuntimePaths.cmake
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
         COMMENT "Copying changed shaders into AIO/Shaders"
+        VERBATIM
     )
 
     # Standalone target for preparing shaders for CI validation
@@ -1053,14 +1102,9 @@ endif()
 # Automatic deployment to CommunityShaders output directory.
 if(AUTO_PLUGIN_DEPLOYMENT)
     # Detect git HEAD changes (branch switch or new commit) and invalidate stale
-    # deploy state. BuildRelease.bat always reconfigures, so this runs on every
-    # build invocation. When HEAD changes we:
-    #   1. Clear the AIO directory so PREPARE_AIO re-copies everything with
-    #      fresh timestamps (catches content-identical files cmake's
-    #      copy_if_different would otherwise skip).
-    #   2. Delete deploy stamps so CMake re-runs the robocopy commands.
-    # Per-build incremental relies on robocopy's default name+size+timestamp
-    # detection to copy any file whose size or mtime differs from dest.
+    # deploy state. Preserve AIO/Shaders: the shader deploy hop below compares
+    # content, so recreating unchanged staged files would only produce false
+    # runtime FileWatcher events. Non-shader content remains timestamp-deployed.
     execute_process(
         COMMAND git rev-parse --short HEAD
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
@@ -1078,21 +1122,23 @@ if(AUTO_PLUGIN_DEPLOYMENT)
         if(NOT "${_git_head}" STREQUAL "${_prev_git_head}")
             message(
                 STATUS
-                "Git HEAD changed (${_prev_git_head} -> ${_git_head}): clearing AIO shaders and deploy stamps for full redeploy"
+                "Git HEAD changed (${_prev_git_head} -> ${_git_head}): reconciling shaders and clearing non-shader deploy state"
             )
-            # Delete the entire AIO directory so PREPARE_AIO re-copies everything
-            # with fresh timestamps. Without this, copy_if_different skips
-            # content-identical files (shaders, textures, configs, etc.) and
-            # leaves them with old timestamps that previously-deployed files
-            # (e.g. from a manual package install) can beat on timestamp delta.
-            # The DLL is always rebuilt fresh by the C++ compile step so it
-            # doesn't need special handling.
-            file(REMOVE_RECURSE "${AIO_DIR}")
-            # Also clear the PREPARE_AIO / COPY_SHADERS stamps so cmake --build
-            # actually re-runs those targets.
+            # Delete everything under AIO except Shaders. The shader staging
+            # stamp is still cleared so deletion-only changes are reconciled;
+            # copy_if_different preserves the mtimes of unchanged files.
+            file(GLOB _aio_top_entries "${AIO_DIR}/*")
+            foreach(_entry IN LISTS _aio_top_entries)
+                get_filename_component(_entry_name "${_entry}" NAME)
+                if(NOT _entry_name STREQUAL "Shaders")
+                    file(REMOVE_RECURSE "${_entry}")
+                endif()
+            endforeach()
             file(
                 GLOB _build_stamps
                 "${CMAKE_BINARY_DIR}/*_deploy.stamp"
+                "${CMAKE_BINARY_DIR}/*_plugin.stamp"
+                "${CMAKE_BINARY_DIR}/*_shaders.stamp"
                 "${CMAKE_BINARY_DIR}/*_shaders_full.stamp"
                 "${CMAKE_BINARY_DIR}/*_shaders_only.stamp"
                 "${CMAKE_BINARY_DIR}/prepare_aio.stamp"
@@ -1187,66 +1233,45 @@ if(AUTO_PLUGIN_DEPLOYMENT)
 
             list(APPEND DEPLOY_TARGET_HASHES ${DEPLOY_TARGET_HASH}_plugin.stamp)
 
-            # Incremental shader-only copy for fast dev iteration
-            # Depends ONLY on copy_shaders.stamp (no DLL, no PREPARE_AIO)
+            # One canonical shader-sync rule serves shader-only and full
+            # deploys. This avoids concurrent writers to the same ownership
+            # manifest while preserving the fast path's DLL-free dependency
+            # graph. Files are copied only when their content differs.
             add_custom_command(
-                OUTPUT ${DEPLOY_TARGET_HASH}_shaders_only.stamp
+                OUTPUT ${DEPLOY_TARGET_HASH}_shaders.stamp
                 COMMAND
-                    ${CMAKE_COMMAND} -E make_directory
-                    "${DEPLOY_TARGET}/Shaders"
-                # See /XO rationale above on the main deploy block.
-                COMMAND
-                    ${ROBOCOPY_WRAPPER} "${AIO_DIR}/Shaders"
-                    "${DEPLOY_TARGET}/Shaders" "/E" "/COPY:DAT" "/R:1" "/W:1"
-                    "/NFL" "/NDL" "/NJH" "/NJS"
+                    ${CMAKE_COMMAND} "-DSRC_DIR=${AIO_DIR}/Shaders"
+                    "-DDST_DIR=${DEPLOY_TARGET}/Shaders"
+                    "-DMANIFEST_FILE=${CMAKE_CURRENT_BINARY_DIR}/${DEPLOY_TARGET_HASH}_shaders.manifest"
+                    -DSKIP_RUNTIME_DOWNLOADS=${SKIP_RUNTIME_DOWNLOADS} -P
+                    "${CMAKE_SOURCE_DIR}/cmake/SyncShaderDeploy.cmake"
                 COMMAND
                     ${CMAKE_COMMAND} -E touch
-                    ${DEPLOY_TARGET_HASH}_shaders_only.stamp
-                # See the PREPARE_AIO target+stamp rationale above.
+                    ${DEPLOY_TARGET_HASH}_shaders.stamp
+                # Direct source dependencies retain the mtime edge without
+                # naming copy_shaders.stamp here. Naming another custom
+                # command's output can make Visual Studio duplicate that rule
+                # into DEPLOY_ALL.vcxproj and race the real staging writer.
                 DEPENDS
                     prepare_shaders
-                    ${CMAKE_CURRENT_BINARY_DIR}/copy_shaders.stamp
-                COMMENT "Fast shader-only deploy to ${DEPLOY_TARGET}/Shaders"
-            )
-
-            list(
-                APPEND SHADER_ONLY_HASHES
-                ${DEPLOY_TARGET_HASH}_shaders_only.stamp
-            )
-
-            # Full shader copy for packaging (includes PREPARE_AIO dependency)
-            # This ensures DLL is built and all AIO files are ready
-            add_custom_command(
-                OUTPUT ${DEPLOY_TARGET_HASH}_shaders_full.stamp
-                COMMAND
-                    ${CMAKE_COMMAND} -E make_directory
-                    "${DEPLOY_TARGET}/Shaders"
-                # See /XO rationale above on the main deploy block.
-                COMMAND
-                    ${ROBOCOPY_WRAPPER} "${AIO_DIR}/Shaders"
-                    "${DEPLOY_TARGET}/Shaders" "/E" "/COPY:DAT" "/R:1" "/W:1"
-                    "/NFL" "/NDL" "/NJH" "/NJS"
-                COMMAND
-                    ${CMAKE_COMMAND} -E touch
-                    ${DEPLOY_TARGET_HASH}_shaders_full.stamp
-                # Depend on shader source inputs instead of copy_shaders.stamp.
-                # Naming that custom-command output here makes Visual Studio
-                # duplicate its producer into DEPLOY_ALL and race prepare_shaders.
-                # Chain after this target's non-shader deploy for one ordered owner.
-                DEPENDS
-                    prepare_shaders
-                    PREPARE_AIO
                     ${_shader_copy_inputs}
+                    ${FFX_RUNTIME_FILES}
+                    ${STREAMLINE_RUNTIME_FILES}
+                    ${_feature_shader_paths_list_file}
                     ${CMAKE_SOURCE_DIR}/cmake/SyncShaderDeploy.cmake
-                    ${CMAKE_CURRENT_BINARY_DIR}/${DEPLOY_TARGET_HASH}_deploy.stamp
+                    ${CSX_RUNTIME_INSTALL_GUARD}
+                    ${CMAKE_SOURCE_DIR}/cmake/PreservedRuntimePaths.cmake
                 COMMENT
-                    "Full shader deploy to ${DEPLOY_TARGET}/Shaders (with PREPARE_AIO)"
+                    "Content-based shader deploy to ${DEPLOY_TARGET}/Shaders"
+                VERBATIM
             )
+
+            list(APPEND SHADER_ONLY_HASHES ${DEPLOY_TARGET_HASH}_shaders.stamp)
 
             list(APPEND DEPLOY_TARGET_HASHES ${DEPLOY_TARGET_HASH}_deploy.stamp)
             list(
                 APPEND DEPLOY_TARGET_HASHES
-                ${DEPLOY_TARGET_HASH}_shaders_full.stamp
+                ${DEPLOY_TARGET_HASH}_shaders.stamp
             )
         endforeach()
     else()
@@ -1297,6 +1322,9 @@ if(ZIP_TO_DIST)
     add_custom_command(
         TARGET ${PROJECT_NAME}
         POST_BUILD
+        COMMAND
+            ${CMAKE_COMMAND} "-DCMAKE_INSTALL_PREFIX=${ZIP_DIR}" -P
+            "${CSX_RUNTIME_INSTALL_GUARD}"
         COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}"
         COMMAND
             ${CMAKE_COMMAND} -E make_directory "${ZIP_DIR}/SKSE/Plugins"
@@ -1331,6 +1359,9 @@ if(ZIP_TO_DIST)
         COMMAND
             ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix "${ZIP_DIR}"
             --component FidelityFXRuntime
+        COMMAND
+            ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix "${ZIP_DIR}"
+            --component StreamlineRuntime
         COMMAND ${CMAKE_COMMAND} -E remove "${ZIP_DIR}/CORE"
         COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}/Shaders/Tests"
     )
@@ -1340,6 +1371,9 @@ if(ZIP_TO_DIST)
     add_custom_command(
         TARGET ${PROJECT_NAME}
         POST_BUILD
+        COMMAND
+            ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${ZIP_DIR}" -P
+            "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
         COMMAND
             ${CMAKE_COMMAND} -E tar cf ${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP}
             --format=7zip -- .
@@ -1362,6 +1396,9 @@ if(ZIP_TO_DIST)
                 TARGET ${PROJECT_NAME}
                 POST_BUILD
                 COMMAND
+                    ${CMAKE_COMMAND} "-DCMAKE_INSTALL_PREFIX=${FEATURE_ZIP_STAGE}" -P
+                    "${CSX_RUNTIME_INSTALL_GUARD}"
+                COMMAND
                     ${CMAKE_COMMAND} -E remove_directory "${FEATURE_ZIP_STAGE}"
                 COMMAND
                     ${CMAKE_COMMAND} -E copy_directory "${FEATURE_PATH}"
@@ -1369,6 +1406,12 @@ if(ZIP_TO_DIST)
                 COMMAND
                     ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
                     "${FEATURE_ZIP_STAGE}" --component FidelityFXRuntime
+                COMMAND
+                    ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
+                    "${FEATURE_ZIP_STAGE}" --component StreamlineRuntime
+                COMMAND
+                    ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_ZIP_STAGE}" -P
+                    "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
                 COMMAND
                     ${CMAKE_COMMAND} -E chdir "${FEATURE_ZIP_STAGE}"
                     ${CMAKE_COMMAND} -E tar cf
@@ -1379,6 +1422,9 @@ if(ZIP_TO_DIST)
             add_custom_command(
                 TARGET ${PROJECT_NAME}
                 POST_BUILD
+                COMMAND
+                    ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_PATH}" -P
+                    "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
                 COMMAND
                     ${CMAKE_COMMAND} -E tar cf
                     ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z
@@ -1412,6 +1458,9 @@ if(AIO_ZIP_TO_DIST)
     add_custom_command(
         OUTPUT ${AIO_ZIP_STAMP}
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/dist"
+        COMMAND
+            ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${AIO_DIR}" -P
+            "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
         COMMAND ${CMAKE_COMMAND} -E tar cf ${AIO_ARCHIVE} --format=7zip -- .
         COMMAND ${CMAKE_COMMAND} -E touch ${AIO_ZIP_STAMP}
         WORKING_DIRECTORY ${AIO_DIR}
@@ -1450,6 +1499,10 @@ file(
 list(APPEND CORE_SOURCES "$<TARGET_FILE:${PROJECT_NAME}>")
 list(APPEND CORE_SOURCES "${CSX_PROVENANCE_FINAL_MANIFEST}")
 list(APPEND CORE_SOURCES "${CSX_CACHE_MARKER}")
+list(APPEND CORE_SOURCES
+    "${CSX_RUNTIME_INSTALL_GUARD}"
+    "${CSX_NEURAL_SOURCE_INSTALL_GUARD}"
+    "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake")
 
 set(CORE_FEATURE_PATHS "${CMAKE_SOURCE_DIR}/package/")
 
@@ -1470,6 +1523,9 @@ add_custom_command(
     # a newly registered feature cannot be packaged with a stale core binary.
     DEPENDS ${PROJECT_NAME} ${CORE_SOURCES} ${UPSCALING_RUNTIME_FILES}
     COMMAND
+        ${CMAKE_COMMAND} "-DCMAKE_INSTALL_PREFIX=${FEATURE_PATH}" -P
+        "${CSX_RUNTIME_INSTALL_GUARD}"
+    COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
         --component SKSE
     COMMAND
@@ -1482,6 +1538,9 @@ add_custom_command(
         --component StreamlineRuntime
     COMMAND ${CMAKE_COMMAND} -E rm -f -- ${FEATURE_PATH}/Core
     COMMAND ${CMAKE_COMMAND} -E remove_directory "${FEATURE_PATH}/Shaders/Tests"
+    COMMAND
+        ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_PATH}" -P
+        "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
     COMMAND ${CMAKE_COMMAND} -E tar cfv ${CORE_PACKAGE} --format=7zip -- .
     WORKING_DIRECTORY ${FEATURE_PATH}
     COMMENT "Creating Core zip package"
@@ -1508,6 +1567,9 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
         add_custom_command(
             OUTPUT ${FEATURE_PACKAGE}
             COMMAND
+                ${CMAKE_COMMAND} "-DCMAKE_INSTALL_PREFIX=${FEATURE_PACKAGE_STAGE}" -P
+                "${CSX_RUNTIME_INSTALL_GUARD}"
+            COMMAND
                 ${CMAKE_COMMAND} -E remove_directory "${FEATURE_PACKAGE_STAGE}"
             COMMAND
                 ${CMAKE_COMMAND} -E copy_directory "${FEATURE_PATH}"
@@ -1519,15 +1581,22 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
                 ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
                 "${FEATURE_PACKAGE_STAGE}" --component StreamlineRuntime
             COMMAND
+                ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_PACKAGE_STAGE}" -P
+                "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
+            COMMAND
                 ${CMAKE_COMMAND} -E chdir "${FEATURE_PACKAGE_STAGE}"
                 ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip --
                 .
             DEPENDS ${FEATURE_SOURCES} ${UPSCALING_RUNTIME_FILES}
+                ${CSX_RUNTIME_INSTALL_GUARD} ${CSX_NEURAL_SOURCE_INSTALL_GUARD}
             COMMENT "Creating ${FEATURE} zip package"
         )
     else()
         add_custom_command(
             OUTPUT ${FEATURE_PACKAGE}
+            COMMAND
+                ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_PATH}" -P
+                "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
             COMMAND
                 ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip --
                 .
@@ -1577,6 +1646,9 @@ else()
         COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
         COMMAND
             ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
+        COMMAND
+            ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${AIO_DIR}" -P
+            "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
         COMMAND
             ${CMAKE_COMMAND} -E chdir ${AIO_DIR} ${CMAKE_COMMAND} -E tar cfv
             ${AIO_PACKAGE} --format=7zip -- .

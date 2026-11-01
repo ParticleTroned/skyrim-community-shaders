@@ -1,4 +1,9 @@
 #include "Deferred.h"
+#include "Features/Upscaling/NeuralRendering/CharacterCategoryFormat.h"
+#include "GpuPass.h"
+#include "Utils/ComputeState.h"
+#include "Utils/ResourceName.h"
+#include <wrl/client.h>
 
 #include <DDSTextureLoader.h>
 
@@ -33,6 +38,39 @@ struct BlendStates
 	}
 };
 
+static void ReleaseRenderTargetSlot(RE::RENDER_TARGET target)
+{
+	auto renderer = globals::game::renderer;
+	if (!renderer)
+		return;
+
+	auto& data = renderer->GetRuntimeData().renderTargets[target];
+	if (data.SRVCopy) {
+		data.SRVCopy->Release();
+		data.SRVCopy = nullptr;
+	}
+	if (data.textureCopy) {
+		data.textureCopy->Release();
+		data.textureCopy = nullptr;
+	}
+	if (data.UAV) {
+		data.UAV->Release();
+		data.UAV = nullptr;
+	}
+	if (data.RTV) {
+		data.RTV->Release();
+		data.RTV = nullptr;
+	}
+	if (data.SRV) {
+		data.SRV->Release();
+		data.SRV = nullptr;
+	}
+	if (data.texture) {
+		data.texture->Release();
+		data.texture = nullptr;
+	}
+}
+
 void SetupRenderTarget(RE::RENDER_TARGET target, D3D11_TEXTURE2D_DESC texDesc, D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc, D3D11_RENDER_TARGET_VIEW_DESC rtvDesc, D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc, DXGI_FORMAT format, uint bindFlags)
 {
 	auto renderer = globals::game::renderer;
@@ -44,47 +82,51 @@ void SetupRenderTarget(RE::RENDER_TARGET target, D3D11_TEXTURE2D_DESC texDesc, D
 	rtvDesc.Format = format;
 	uavDesc.Format = format;
 
+	Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+	Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
+	Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv;
+	Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> uav;
+	const auto name = std::format("Deferred::{}", magic_enum::enum_name(target));
+	DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, nullptr, texture.GetAddressOf()));
+	Util::SetResourceName(texture.Get(), "%s", name.c_str());
+
+	if (texDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
+		DX::ThrowIfFailed(device->CreateShaderResourceView(texture.Get(), &srvDesc, srv.GetAddressOf()));
+		Util::SetResourceName(srv.Get(), "%s SRV", name.c_str());
+	}
+	if (texDesc.BindFlags & D3D11_BIND_RENDER_TARGET) {
+		DX::ThrowIfFailed(device->CreateRenderTargetView(texture.Get(), &rtvDesc, rtv.GetAddressOf()));
+		Util::SetResourceName(rtv.Get(), "%s RTV", name.c_str());
+	}
+	if (texDesc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) {
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(texture.Get(), &uavDesc, uav.GetAddressOf()));
+		Util::SetResourceName(uav.Get(), "%s UAV", name.c_str());
+	}
+
+	// Publish only a complete target; failures leave the previous layout usable.
 	auto& data = renderer->GetRuntimeData().renderTargets[target];
-
-	if (data.UAV) {
-		data.UAV->Release();
-		data.UAV = nullptr;
-	}
-	if (data.RTV) {
-		data.RTV->Release();
-		data.RTV = nullptr;
-	}
-	if (data.SRVCopy) {
-		data.SRVCopy->Release();
-		data.SRVCopy = nullptr;
-	}
-	if (data.SRV) {
-		data.SRV->Release();
-		data.SRV = nullptr;
-	}
-	if (data.textureCopy) {
-		data.textureCopy->Release();
-		data.textureCopy = nullptr;
-	}
-	if (data.texture) {
-		data.texture->Release();
-		data.texture = nullptr;
-	}
-
-	DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, nullptr, &data.texture));
-
-	if (texDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE)
-		DX::ThrowIfFailed(device->CreateShaderResourceView(data.texture, &srvDesc, &data.SRV));
-
-	if (texDesc.BindFlags & D3D11_BIND_RENDER_TARGET)
-		DX::ThrowIfFailed(device->CreateRenderTargetView(data.texture, &rtvDesc, &data.RTV));
-
-	if (texDesc.BindFlags & D3D11_BIND_UNORDERED_ACCESS)
-		DX::ThrowIfFailed(device->CreateUnorderedAccessView(data.texture, &uavDesc, &data.UAV));
+	ReleaseRenderTargetSlot(target);
+	data.texture = texture.Detach();
+	data.SRV = srv.Detach();
+	data.RTV = rtv.Detach();
+	data.UAV = uav.Detach();
 }
 
 void Deferred::SetupResources()
 {
+	if (resourceDevice.get() != globals::d3d::device) {
+		ClearShaderCache();
+		resourceDevice.copy_from(globals::d3d::device);
+	}
+	shadowCopyContext = nullptr;
+	resourceContext = globals::d3d::context;
+	if (resourceContext)
+		(void)resourceContext->QueryInterface(__uuidof(ID3D11DeviceContext1), shadowCopyContext.put_void());
+	characterCategoryCaptureValid = false;
+	authoredCategories.reset();
+	authoredDepth.reset();
+	categoryCopyFailureReported = false;
+	globals::features::upscaling.SetNeuralSceneCategories(nullptr, nullptr, 0, 0, 0);
 	finalSceneDepthFrame.reset();
 	auto renderer = globals::game::renderer;
 
@@ -136,7 +178,10 @@ void Deferred::SetupResources()
 		// Masks
 		SetupRenderTarget(MASKS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 		// Masks2 (vertexAO; fp16 to allow blending)
-		SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R16_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+		const bool categories = globals::features::upscaling.NeedsCharacterCategoryShaders();
+		SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, categories ? NeuralRendering::kCharacterCategoryFormat : NeuralRendering::kVertexAoFormat, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+		characterCategoryEnabled = categories;
+		failedCharacterCategoryMode.reset();
 
 		// TAA water history buffers need RGBA16: alpha stores premultiplied coverage for ISWaterBlend
 		SetupRenderTarget(RE::RENDER_TARGETS::kWATER_1, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
@@ -154,12 +199,54 @@ void Deferred::SetupResources()
 		samplerDesc.MaxAnisotropy = 1;
 		samplerDesc.MinLOD = 0;
 		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &linearSampler));
-		Util::SetResourceName(linearSampler, "Deferred::LinearSampler");
+		winrt::com_ptr<ID3D11SamplerState> linear, point;
+		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, linear.put()));
+		Util::SetResourceName(linear.get(), "Deferred::LinearSampler");
 
 		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointSampler));
-		Util::SetResourceName(pointSampler, "Deferred::PointSampler");
+		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, point.put()));
+		Util::SetResourceName(point.get(), "Deferred::PointSampler");
+		linearSamplerOwner = std::move(linear);
+		pointSamplerOwner = std::move(point);
+		linearSampler = linearSamplerOwner.get();
+		pointSampler = pointSamplerOwner.get();
+	}
+
+	{
+		D3D11_BUFFER_DESC sbDesc{};
+		sbDesc.Usage = D3D11_USAGE_DEFAULT;
+		sbDesc.CPUAccessFlags = 0;
+		sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.FirstElement = 0;
+		uavDesc.Buffer.Flags = 0;
+
+		std::uint32_t numElements = 1;
+
+		sbDesc.StructureByteStride = sizeof(PerGeometry);
+		sbDesc.ByteWidth = sizeof(PerGeometry) * numElements;
+		auto shadowData = std::make_unique<Buffer>(sbDesc, nullptr, "Deferred::UtilityShadowData");
+		srvDesc.Buffer.NumElements = numElements;
+		shadowData->CreateSRV(srvDesc);
+		uavDesc.Buffer.NumElements = numElements;
+		shadowData->CreateUAV(uavDesc);
+		perShadow = std::move(shadowData);
+
+		copyShadowCS.Get(
+			L"Data\\Shaders\\CopyShadowDataCS.hlsl",
+			{},
+			"cs_5_0",
+			"main",
+			"Deferred::CopyShadowDataCS");
 	}
 
 	// Directional shadow structured buffer (t98): CPU-written each frame, read-only on GPU.
@@ -179,9 +266,9 @@ void Deferred::SetupResources()
 		srvDesc.Buffer.FirstElement = 0;
 		srvDesc.Buffer.NumElements = 1;
 
-		delete directionalShadowLights;
-		directionalShadowLights = new Buffer(sbDesc, nullptr, "Deferred::DirectionalShadowLights");
-		directionalShadowLights->CreateSRV(srvDesc);
+		auto lightData = std::make_unique<Buffer>(sbDesc, nullptr, "Deferred::DirectionalShadowLights");
+		lightData->CreateSRV(srvDesc);
+		directionalShadowLights = std::move(lightData);
 	}
 }
 
@@ -250,6 +337,9 @@ void Deferred::PrepassPasses()
 
 void Deferred::StartDeferred()
 {
+	UpdateCharacterCategoryTarget();
+	characterCategoryCaptureValid = characterCategoryEnabled;
+	globals::features::upscaling.SetNeuralSceneCategories(nullptr, nullptr, 0, 0, 0);
 	finalSceneDepthFrame.reset();
 	if (!globals::state->inWorld)
 		return;
@@ -442,12 +532,7 @@ void Deferred::DeferredPasses()
 
 void Deferred::EndDeferred()
 {
-	if (!globals::state->inWorld)
-		return;
-
-	auto shaderCache = globals::shaderCache;
-
-	if (!shaderCache->IsEnabled())
+	if (!deferredPass)
 		return;
 
 	auto shadowState = globals::game::shadowState;
@@ -607,6 +692,7 @@ void Deferred::CopyShadowLightData()
 
 void Deferred::ClearShaderCache()
 {
+	copyShadowCS.Reset();
 	mainCompositeCS.Reset();
 	mainCompositeInteriorCS.Reset();
 }
@@ -698,6 +784,8 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 		}
 	}
 
+	deferred->CaptureCharacterCategories();
+
 	// Deferred blended decals
 
 	func(This, RenderFlags);
@@ -738,4 +826,169 @@ void Deferred::Hooks::Renderer_ResetState::thunk(void* This)
 	ID3D11Buffer* buffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
 	context->PSSetConstantBuffers(4, 3, buffers);
 	context->CSSetConstantBuffers(5, 2, buffers + 1);
+}
+
+void Deferred::CopyShadowData()
+{
+	CS_GPU_PASS("Deferred::CopyShadowData");
+	auto* context = globals::d3d::context;
+	if (!context)
+		return;
+
+	winrt::com_ptr<ID3D11ShaderResourceView> sourceShadow;
+	context->PSGetShaderResources(4, 1, sourceShadow.put());
+	ID3D11ShaderResourceView* shadowSRVs[2]{ sourceShadow.get(), nullptr };
+	// Clear the previous structured view before writing it or taking a fallback.
+	context->PSSetShaderResources(18, ARRAYSIZE(shadowSRVs), shadowSRVs);
+	if (!shadowCopyContext || resourceContext != context ||
+		resourceDevice.get() != globals::d3d::device || !perShadow || !perShadow->srv || !perShadow->uav)
+		return;
+
+	auto* copyShader = copyShadowCS.Get(
+		L"Data\\Shaders\\CopyShadowDataCS.hlsl",
+		{},
+		"cs_5_0",
+		"main",
+		"Deferred::CopyShadowDataCS");
+	if (!copyShader)
+		return;
+
+	constexpr std::array<UINT, 3> sourceSlots{ 0, 12, 2 };
+	std::array<winrt::com_ptr<ID3D11Buffer>, 3> owners;
+	std::array<ID3D11Buffer*, 3> buffers{};
+	std::array<UINT, 3> first{}, count{};
+	for (std::size_t index = 0; index < sourceSlots.size(); ++index) {
+		shadowCopyContext->PSGetConstantBuffers1(sourceSlots[index], 1, owners[index].put(), &first[index], &count[index]);
+		buffers[index] = owners[index].get();
+		if (!buffers[index])
+			return;
+	}
+
+	{
+		D3DState::ComputeState restore(shadowCopyContext.get(), 1);
+		ID3D11UnorderedAccessView* output = perShadow->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+		for (UINT index = 0; index < buffers.size(); ++index) {
+			if (first[index] != 0 || count[index] != D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT)
+				shadowCopyContext->CSSetConstantBuffers1(index, 1, &buffers[index], &first[index], &count[index]);
+			else
+				context->CSSetConstantBuffers(index, 1, &buffers[index]);
+		}
+		context->CSSetShader(copyShader, nullptr, 0);
+		context->Dispatch(1, 1, 1);
+	}
+
+	shadowSRVs[1] = perShadow->srv.get();
+	context->PSSetShaderResources(18, ARRAYSIZE(shadowSRVs), shadowSRVs);
+}
+
+void Deferred::UpdateCharacterCategoryTarget()
+{
+	const bool requested = globals::features::upscaling.NeedsCharacterCategoryShaders();
+	if (requested == characterCategoryEnabled) {
+		failedCharacterCategoryMode.reset();
+		return;
+	}
+	if (failedCharacterCategoryMode == requested)
+		return;
+
+	globals::features::upscaling.SetNeuralSceneCategories(nullptr, nullptr, 0, 0, 0);
+	auto& target = globals::game::renderer->GetRuntimeData().renderTargets[MASKS2];
+	try {
+		if (!target.texture || !target.SRV || !target.RTV)
+			throw std::runtime_error("Deferred mask target is incomplete");
+		D3D11_TEXTURE2D_DESC textureDesc{};
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+		target.texture->GetDesc(&textureDesc);
+		target.SRV->GetDesc(&srvDesc);
+		target.RTV->GetDesc(&rtvDesc);
+		SetupRenderTarget(MASKS2, textureDesc, srvDesc, rtvDesc, {},
+			requested ? NeuralRendering::kCharacterCategoryFormat : NeuralRendering::kVertexAoFormat,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+		characterCategoryEnabled = requested;
+		failedCharacterCategoryMode.reset();
+	} catch (const std::exception& error) {
+		// Retry after a settings transition or resource recreation, not every draw.
+		failedCharacterCategoryMode = requested;
+		logger::error("Deferred mask layout switch failed; retaining the previous layout: {}", error.what());
+	}
+}
+
+void Deferred::CaptureCharacterCategories()
+{
+	auto& upscaling = globals::features::upscaling;
+	upscaling.SetNeuralSceneCategories(nullptr, nullptr, 0, 0, 0);
+	if (!deferredPass || !IsCharacterCategoryCaptureReady() ||
+		!upscaling.IsNeuralCharacterSelectionRequested() || !globals::state->inWorld)
+		return;
+	auto* renderer = globals::game::renderer;
+	auto* context = globals::d3d::context;
+	if (!renderer || !context || !globals::d3d::device)
+		return;
+
+	const auto plan = upscaling.GetRuntimeResolutionPlan();
+	const auto width = plan.engineRenderSize.x, height = plan.engineRenderSize.y;
+	if (!width || !height || plan.menuContextActive || plan.loadingMenuActive)
+		return;
+	const auto& categories = renderer->GetRuntimeData().renderTargets[MASKS2];
+	auto* depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
+	if (!categories.SRV || !depth)
+		return;
+
+	try {
+		// Build both copies before publishing either. They retain the exact opaque
+		// mask/depth pair even when decals, first-person geometry or upscaling reuse
+		// the engine attachments later in this frame.
+		const auto prepare = [&](ID3D11ShaderResourceView* source, std::unique_ptr<Texture2D>& copy,
+								 const char* name) -> winrt::com_ptr<ID3D11Texture2D> {
+			winrt::com_ptr<ID3D11Resource> resource;
+			source->GetResource(resource.put());
+			auto texture = resource.as<ID3D11Texture2D>();
+			D3D11_TEXTURE2D_DESC desc{};
+			texture->GetDesc(&desc);
+			if (desc.Width < width || desc.Height < height || desc.ArraySize != 1 ||
+				desc.MipLevels != 1 || desc.SampleDesc.Count != 1)
+				throw std::runtime_error("NR category source has an incompatible viewport or texture layout");
+			D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+			source->GetDesc(&srv);
+			if (srv.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D)
+				throw std::runtime_error("NR category source is not a single-view texture");
+			if (!copy || copy->desc.Width != desc.Width || copy->desc.Height != desc.Height || copy->desc.Format != desc.Format) {
+				desc.Usage = D3D11_USAGE_DEFAULT;
+				desc.CPUAccessFlags = 0;
+				desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+				desc.MiscFlags = 0;
+				auto replacement = std::make_unique<Texture2D>(desc, name);
+				replacement->CreateSRV(srv);
+				copy = std::move(replacement);
+			}
+			return texture;
+		};
+		const auto categoryTexture = prepare(categories.SRV, authoredCategories, "NR::AuthoredCategories");
+		const auto depthTexture = prepare(depth, authoredDepth, "NR::AuthoredDepth");
+		if (authoredCategories->desc.Width != authoredDepth->desc.Width ||
+			authoredCategories->desc.Height != authoredDepth->desc.Height)
+			throw std::runtime_error("NR category and depth extents differ");
+		ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
+		winrt::com_ptr<ID3D11DepthStencilView> previousDepth;
+		context->OMGetRenderTargets(std::size(targets), targets, previousDepth.put());
+		const SKSE::stl::scope_exit restore([&]() noexcept {
+			context->OMSetRenderTargets(std::size(targets), targets, previousDepth.get());
+			for (auto* target : targets)
+				if (target)
+					target->Release();
+		});
+		context->OMSetRenderTargets(0, nullptr, nullptr);
+		context->CopyResource(authoredCategories->resource.get(), categoryTexture.get());
+		context->CopyResource(authoredDepth->resource.get(), depthTexture.get());
+		upscaling.SetNeuralSceneCategories(authoredCategories->srv.get(), authoredDepth->srv.get(),
+			globals::state->frameCount, width, height);
+		categoryCopyFailureReported = false;
+	} catch (const std::exception& error) {
+		characterCategoryCaptureValid = false;
+		if (!categoryCopyFailureReported)
+			logger::warn("NR character guide capture unavailable: {}", error.what());
+		categoryCopyFailureReported = true;
+	}
 }

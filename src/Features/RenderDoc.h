@@ -68,6 +68,8 @@ public:
 	bool HasShaderDefine(RE::BSShader::Type) override { return false; };
 
 	// Settings & UI
+	void DrawSettingsEnabledControl() override;
+	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
 	void DrawSettings() override;
 	bool HasEssentialSettings() const override { return true; }
 	void DrawEssentialSettings() override;
@@ -96,10 +98,7 @@ public:
 	std::string GetOverlayWarningMessage() const;
 
 private:
-	void DrawCaptureEnableToggle();
-	bool DrawCaptureStatus();
-	void DrawCaptureUI();
-	void UpdateCaptureSectionVisibility(bool a_visible);
+	void SetCaptureEnabled(bool a_enabled);
 	bool TriggerConfiguredCapture(bool a_checkDiskSpace = true);
 	uint32_t GetCaptureFrameCount() const;
 	void SetCaptureFrameCount(uint32_t a_frameCount);
@@ -140,7 +139,7 @@ public:
 	std::vector<CaptureFileInfo> cachedCaptureFiles;
 	std::chrono::steady_clock::time_point cacheLastUpdate;
 	bool cacheValid = false;
-	int lastCaptureSectionFrame = -1;
+	bool wasSectionVisible = false;
 
 	// Track files that failed to delete for UI feedback
 	std::unordered_map<std::filesystem::path, std::string> failedDeletions;

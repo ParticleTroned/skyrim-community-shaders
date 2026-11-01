@@ -3,13 +3,20 @@
 #include <atomic>
 
 #include "Buffer.h"
+#include "Utils/RuntimeToggle.h"
 
 struct ScreenSpaceGI : Feature
 {
 private:
+	Util::RuntimeToggle runtimeToggle{ true };
 	static constexpr std::string_view MOD_ID = "130375";
 
 public:
+	bool IsEnabledRequested() const { return runtimeToggle.Get(); }
+	void SetEnabled(bool a_enabled) { runtimeToggle.Set(a_enabled); }
+	bool IsPerformanceToggleEnabled() const override { return IsEnabledRequested(); }
+	void SetPerformanceToggleEnabled(bool a_enabled) override { SetEnabled(a_enabled); }
+	bool IsRuntimeEnabled() const { return loaded && settings.Enabled; }
 	virtual inline std::string GetName() override { return "Screen Space GI"; }
 	virtual std::string GetDisplayName() override { return T("feature.screen_space_gi.name", "Screen Space GI"); }
 	virtual inline std::string GetShortName() override { return "ScreenSpaceGI"; }
@@ -65,6 +72,7 @@ public:
 
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
+	virtual void SetupRenderTargetResources() override { SetupResources(); }
 	virtual void ClearShaderCache() override;
 	void CompileComputeShaders();
 	bool ShadersOK() const;
@@ -96,6 +104,10 @@ public:
 		bool EnableGI = true;
 		bool EnableExperimentalSpecularGI = false;
 		bool EnableVanillaSSAO = false;
+		bool AOInteriorsOnly = false;
+		bool ILInteriorsOnly = false;
+		bool EnableAdaptiveSampling = true;
+		int ResourceProfile = 0;
 		// performance/quality
 		uint NumSlices = 4u;
 		uint NumSteps = 8u;
@@ -121,6 +133,16 @@ public:
 		float BlurRadius = 2.f;
 		float DistanceNormalisation = 2.f;
 	} settings;
+
+	static constexpr int kResourceProfileFullGI = 0;
+	static constexpr int kResourceProfileAOOnly = 1;
+	int activeResourceProfile = kResourceProfileFullGI;
+	bool HasGIResources() const { return activeResourceProfile == kResourceProfileFullGI; }
+	bool IsResourceProfileRestartPending() const { return settings.ResourceProfile != activeResourceProfile; }
+	bool IsGIActive() const { return settings.EnableGI && HasGIResources(); }
+	bool IsSpecularGIActive() const { return IsGIActive() && settings.EnableExperimentalSpecularGI; }
+	bool AllowsAO() const;
+	bool AllowsGI() const;
 
 	struct alignas(16) SSGICB
 	{
@@ -180,15 +202,16 @@ public:
 	eastl::unique_ptr<Texture2D> texIlCoCg[2] = { nullptr };
 	eastl::unique_ptr<Texture2D> texGiSpecular[2] = { nullptr };
 
-	inline auto GetOutputTextures()
+	inline std::tuple<ID3D11ShaderResourceView*, ID3D11ShaderResourceView*, ID3D11ShaderResourceView*, ID3D11ShaderResourceView*> GetOutputTextures()
 	{
-		return (loaded && settings.Enabled && IsRuntimeReady()) ?
-		           std::make_tuple(
-					   texAo[outputAoIdx]->srv.get(),
-					   texIlY[outputIlIdx]->srv.get(),
-					   texIlCoCg[outputIlIdx]->srv.get(),
-					   texGiSpecular[outputAoIdx]->srv.get()) :
-		           std::make_tuple(nullptr, nullptr, nullptr, nullptr);
+		if (!(loaded && settings.Enabled && IsRuntimeReady()) || outputAoIdx >= 2 || outputIlIdx >= 2)
+			return { nullptr, nullptr, nullptr, nullptr };
+		return {
+			AllowsAO() ? texAo[outputAoIdx]->srv.get() : nullptr,
+			AllowsGI() && texIlY[outputIlIdx] ? texIlY[outputIlIdx]->srv.get() : nullptr,
+			AllowsGI() && texIlCoCg[outputIlIdx] ? texIlCoCg[outputIlIdx]->srv.get() : nullptr,
+			AllowsGI() && IsSpecularGIActive() && texGiSpecular[outputAoIdx] ? texGiSpecular[outputAoIdx]->srv.get() : nullptr
+		};
 	}
 
 	winrt::com_ptr<ID3D11SamplerState> linearClampSampler = nullptr;
@@ -198,6 +221,9 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> prefilterRadianceCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> prefilterNormalCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> radianceDisoccCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> radianceDisoccAOOnlyCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> giAOOnlyCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> upsampleAOOnlyCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> giCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> blurCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> upsampleCompute = nullptr;

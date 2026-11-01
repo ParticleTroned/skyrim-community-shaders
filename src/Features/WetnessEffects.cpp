@@ -2,6 +2,11 @@
 #include "CSEditor.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/Game.h"
+#include "Utils/UI.h"
+#include "WeatherPicker.h"
+#include "Wetterness.h"
 
 #define I18N_KEY_PREFIX "feature.wetness_effects."
 
@@ -382,6 +387,13 @@ namespace Ripples
 
 void WetnessEffects::PostPostLoad()
 {
+	if (globals::features::wetterness.loaded) {
+		failedLoadedMessage = T("feature.wetness_effects.replaced", "Wetness Effects was automatically disabled because Wetterness is active. These features cannot run in parallel.");
+		settings.EnableWetnessEffects = 0;
+		loaded = false;
+		logger::warn("[{}] {}", GetName(), failedLoadedMessage);
+		return;
+	}
 	splashesOfStormsLoaded = static_cast<bool>(GetModuleHandle(L"po3_SplashesOfStorms.dll"));
 	if (splashesOfStormsLoaded) {
 		logger::info("[{}] Splashes of Storms detected, compatibility enabled", GetName());
@@ -395,7 +407,7 @@ void WetnessEffects::PostPostLoad()
 bool WetnessEffects::DrawEnabledCheckbox()
 {
 	bool enabled = settings.EnableWetnessEffects != 0;
-	if (ImGui::Checkbox("Enable", &enabled)) {
+	if (ImGui::Checkbox(T("feature.wetness_effects.enable", "Enable"), &enabled)) {
 		settings.EnableWetnessEffects = enabled ? 1u : 0u;
 		Ripples::UpdateSettings();
 	}
@@ -404,265 +416,256 @@ bool WetnessEffects::DrawEnabledCheckbox()
 
 void WetnessEffects::DrawSettings()
 {
-	// Climate Preset Selection - Always visible at the top
-	Util::DrawSectionHeader(T(TKEY("climate_presets"), "Climate Presets"), false, false);
+	MenuUI::SettingsPage page("WetnessEffects", {
+													{ "presets", T("feature.wetness_effects.ui_presets", "Presets"), T("feature.wetterness.choose_the_overall_wet_weather_appearance_first", "Choose the overall wet-weather appearance first."), T("feature.wetterness.wet_weather_baselines", "Wet-weather baselines"), true, true, T("feature.wetness_effects.ui_choose_the_wet_weather_look", "Choose the wet-weather look") },
+													{ "surface", T("feature.wetterness.surfaces", "Surfaces"), T("feature.wetness_effects.ui_refine_wet_surfaces_and_puddles", "Refine wet surfaces and puddles."), T("feature.wetness_effects.ui_wet_surfaces_and_puddles", "Wet surfaces and puddles"), true, true, nullptr },
+													{ "rain", T("feature.wetterness.rain", "Rain"), T("feature.wetterness.choose_raindrops_splashes_and_ripples", "Choose raindrops, splashes and ripples."), T("feature.wetterness.drops_splashes_and_ripples", "Drops, splashes and ripples"), true, true, T("feature.wetness_effects.ui_refine_weather_interaction", "Refine weather interaction") },
+													{ "refine", T("feature.wetness_effects.ui_refine", "Refine"), T("feature.wetness_effects.ui_refine_weather_response_shores_and_puddles", "Refine weather response, shores and puddles."), T("feature.wetness_effects.ui_weather_shore_and_puddle_response", "Weather, shore and puddle response"), true, true, nullptr },
+													{ "diagnostics", T("feature.wetness_effects.ui_diagnostics", "Diagnostics"), T("feature.wetterness.inspect_wetness_diagnostics", "Inspect wetness diagnostics."), T("feature.wetterness.diagnostic_wetness_views", "Diagnostic wetness views"), true, false, nullptr },
+												});
 
-	ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.2f, 0.3f, 0.4f, 0.6f));    // Subtle blue background
-	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.35f, 0.45f, 0.8f));  // Slightly darker for button
+	if (page.Is("presets")) {
+		Util::DrawSectionHeader(T("feature.wetness_effects.climate_presets", "Climate Presets"), false, false);
 
-	// Extract names for combo box
-	const char* presetNames[CLIMATE_PRESET_INFO.size()];
-	for (size_t i = 0; i < CLIMATE_PRESET_INFO.size(); ++i) {
-		presetNames[i] = GetClimatePresetDisplayName(i);
-	}
-	// Map preset enum to combo index (Custom=0, Legacy=1, Nordic=2, Arctic=3, Coastal=4, Monsoon=5)
-	int currentComboIndex = static_cast<int>(climatePreset);
-
-	if (ImGui::Combo(T(TKEY("climate_preset"), "Climate Preset"), &currentComboIndex, presetNames, static_cast<int>(CLIMATE_PRESET_INFO.size()))) {  // Map combo index back to preset enum
-		// Simplified: map combo index directly to enum, with bounds check
-		ClimatePreset newPreset = (currentComboIndex >= 0 && currentComboIndex < static_cast<int>(CLIMATE_PRESET_INFO.size())) ? static_cast<ClimatePreset>(currentComboIndex) : defaultPreset;
-
-		// Update the preset selection
-		climatePreset = newPreset;
-
-		// Apply preset settings (but not for Custom, which just means user-modified)
-		if (newPreset != ClimatePreset::Custom) {
-			ApplyClimatePreset(newPreset);
+		// Extract names for combo box
+		const char* presetNames[CLIMATE_PRESET_INFO.size()];
+		for (size_t i = 0; i < CLIMATE_PRESET_INFO.size(); ++i) {
+			presetNames[i] = GetClimatePresetDisplayName(i);
 		}
-	}
 
-	ImGui::PopStyleColor(2);  // Pop both style colors
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		if (currentComboIndex >= 0 && currentComboIndex < static_cast<int>(CLIMATE_PRESET_INFO.size())) {
-			// Handle Custom preset differently
-			if (currentComboIndex == 0) {  // Custom preset
-				Util::DrawMultiLineTooltip({ T(TKEY("custom_preset_tooltip_0"), "Custom settings - you have modified the preset values."),
-					T(TKEY("custom_preset_tooltip_1"), "Select a preset above to apply predefined climate settings.") });
-			} else {
-				// Build combined description lines for actual presets
-				std::vector<const char*> tooltipLines;
-				tooltipLines.push_back(GetClimatePresetShortDescription(static_cast<size_t>(currentComboIndex)));
-				// Add detailed description
-				for (const char* line : GetClimatePresetDetailedDescription(static_cast<size_t>(currentComboIndex))) {
-					tooltipLines.push_back(line);
-				}
-				tooltipLines.push_back(T(TKEY("effects"), "Effects:"));
-				// Add effect descriptions
-				for (const char* effect : GetClimatePresetEffectDescription(static_cast<size_t>(currentComboIndex))) {
-					tooltipLines.push_back(effect);
-				}
+		int currentComboIndex = static_cast<int>(climatePreset);
 
-				std::vector<std::string> tooltipLinesStr;
-				tooltipLinesStr.reserve(tooltipLines.size());
-				for (const char* line : tooltipLines) {
-					tooltipLinesStr.emplace_back(line);
+		{
+			Util::PresetControlStyleWrapper presetControlStyle;
+			if (MenuUI::ChoiceSetting(T("feature.wetness_effects.climate_preset", "Climate Preset"), &currentComboIndex, presetNames, static_cast<int>(CLIMATE_PRESET_INFO.size()))) {  // Map combo index back to preset enum
+
+				ClimatePreset newPreset = (currentComboIndex >= 0 && currentComboIndex < static_cast<int>(CLIMATE_PRESET_INFO.size())) ? static_cast<ClimatePreset>(currentComboIndex) : defaultPreset;
+
+				climatePreset = newPreset;
+
+				// Apply preset settings (but not for Custom, which just means user-modified)
+				if (newPreset != ClimatePreset::Custom) {
+					ApplyClimatePreset(newPreset);
 				}
-				Util::DrawMultiLineTooltip(tooltipLinesStr);
 			}
 		}
-	}
 
-	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::Spacing();
-
-	if (ImGui::TreeNodeEx(T(TKEY("wetness_effects"), "Wetness Effects"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		DrawEnabledCheckbox();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("enable_wetness_tooltip"), "Enables a wetness effect near water and when it is raining."));
+			if (currentComboIndex >= 0 && currentComboIndex < static_cast<int>(CLIMATE_PRESET_INFO.size())) {
+				// Handle Custom preset differently
+				if (currentComboIndex == 0) {  // Custom preset
+					Util::DrawMultiLineTooltip({ T("feature.wetness_effects.custom_preset_tooltip_0", "Custom settings - you have modified the preset values."),
+						T("feature.wetness_effects.custom_preset_tooltip_1", "Select a preset above to apply predefined climate settings.") });
+				} else {
+					// Build combined description lines for actual presets
+					std::vector<const char*> tooltipLines;
+					tooltipLines.push_back(GetClimatePresetShortDescription(static_cast<size_t>(currentComboIndex)));
+					// Add detailed description
+					for (const char* line : GetClimatePresetDetailedDescription(static_cast<size_t>(currentComboIndex))) {
+						tooltipLines.push_back(line);
+					}
+					tooltipLines.push_back(T("feature.wetness_effects.effects", "Effects:"));
+					// Add effect descriptions
+					for (const char* effect : GetClimatePresetEffectDescription(static_cast<size_t>(currentComboIndex))) {
+						tooltipLines.push_back(effect);
+					}
+
+					std::vector<std::string> tooltipLinesStr;
+					tooltipLinesStr.reserve(tooltipLines.size());
+					for (const char* line : tooltipLines) {
+						tooltipLinesStr.emplace_back(line);
+					}
+					Util::DrawMultiLineTooltip(tooltipLinesStr);
+				}
+			}
 		}
-		ImGui::SliderFloat(T(TKEY("rain_wetness"), "Rain Wetness"), &settings.MaxRainWetness, 0.0f, 2.5f);
+
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Spacing();
+	}
+	if (page.Is("surface")) {
+		Util::Widgets::SliderFloat(T("feature.wetness_effects.rain_wetness", "Rain Wetness"), &settings.MaxRainWetness, 0.0f, 2.5f);
 		if (ImGui::IsItemDeactivatedAfterEdit())
 			DetectCurrentPreset();
-		ImGui::SliderFloat(T(TKEY("grass_wet_roughness"), "Grass Wet Roughness"), &settings.GrassWetnessRoughness, 0.05f, 0.5f, "%.2f");
 
-		ImGui::SliderFloat(T(TKEY("puddle_wetness"), "Puddle Wetness"), &settings.MaxPuddleWetness, 0.0f, 6.0f);
+		Util::Widgets::SliderFloat(T("feature.wetness_effects.grass_wet_roughness", "Grass Wet Roughness"), &settings.GrassWetnessRoughness, 0.05f, 0.5f, "%.2f");
+
+		Util::Widgets::SliderFloat(T("feature.wetness_effects.puddle_wetness", "Puddle Wetness"), &settings.MaxPuddleWetness, 0.0f, 6.0f);
 		if (ImGui::IsItemDeactivatedAfterEdit())
 			DetectCurrentPreset();
 
-		ImGui::SliderFloat(T(TKEY("shore_wetness"), "Shore Wetness"), &settings.MaxShoreWetness, 0.0f, 1.0f);
-		ImGui::TreePop();
+		Util::Widgets::SliderFloat(T("feature.wetness_effects.shore_wetness", "Shore Wetness"), &settings.MaxShoreWetness, 0.0f, 1.0f);
 	}
 
 	ImGui::Spacing();
 	ImGui::Spacing();
 
-	if (ImGui::TreeNodeEx(T(TKEY("raindrop_effects"), "Raindrop Effects"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox(T(TKEY("enable_raindrop_effects"), "Enable Raindrop Effects"), (bool*)&settings.EnableRaindropFx);
+	if (page.Is("rain")) {
+		Util::UIntCheckbox(T("feature.wetness_effects.enable_raindrop_effects", "Enable Raindrop Effects"), settings.EnableRaindropFx);
 
 		ImGui::BeginDisabled(!settings.EnableRaindropFx);
 
-		ImGui::Checkbox(T(TKEY("enable_splashes"), "Enable Splashes"), (bool*)&settings.EnableSplashes);
+		Util::UIntCheckbox(T("feature.wetness_effects.enable_splashes", "Enable Splashes"), settings.EnableSplashes);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("enable_splashes_tooltip"), "Enables small splashes of wetness on dry surfaces."));
-		ImGui::Checkbox(T(TKEY("enable_ripples"), "Enable Ripples"), (bool*)&settings.EnableRipples);
+			ImGui::TextUnformatted(T("feature.wetness_effects.enable_splashes_tooltip", "Enables small splashes of wetness on dry surfaces."));
+		Util::UIntCheckbox(T("feature.wetness_effects.enable_ripples", "Enable Ripples"), settings.EnableRipples);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("enable_ripples_tooltip"), "Enables circular ripples on puddles, and to a less extent other wet surfaces"));
+			ImGui::TextUnformatted(T("feature.wetness_effects.enable_ripples_tooltip", "Enables circular ripples on puddles, and to a less extent other wet surfaces"));
 
 		ImGui::BeginDisabled(splashesOfStormsLoaded);
-		const char* checkboxLabel = splashesOfStormsLoaded ?
-		                                T(TKEY("enable_vanilla_ripples_controlled"), "Enable Vanilla Ripples - Controlled by Splashes of Storms") :
-		                                T(TKEY("enable_vanilla_ripples"), "Enable Vanilla Ripples");
+		std::string checkboxLabel = splashesOfStormsLoaded ?
+		                                T("feature.wetness_effects.enable_vanilla_ripples_controlled", "Enable Vanilla Ripples - Controlled by Splashes of Storms") :
+		                                T("feature.wetness_effects.enable_vanilla_ripples", "Enable Vanilla Ripples");
 
-		if (ImGui::Checkbox(checkboxLabel, (bool*)&settings.EnableVanillaRipples)) {
+		if (Util::UIntCheckbox(checkboxLabel.c_str(), settings.EnableVanillaRipples)) {
 			Ripples::UpdateSettings();  // Update cache when settings change
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			Util::DrawMultiLineTooltip({ T(TKEY("vanilla_ripples_tooltip_0"), "Enables default ripples (e.g., Ripples01)."),
-				T(TKEY("vanilla_ripples_tooltip_1"), "Disabling may not take effect until the next weather change.") });
+			Util::DrawMultiLineTooltip({ T("feature.wetness_effects.vanilla_ripples_tooltip_0", "Enables default ripples (e.g., Ripples01)."),
+				T("feature.wetness_effects.vanilla_ripples_tooltip_1", "Disabling may not take effect until the next weather change.") });
 		}
 		ImGui::EndDisabled();
-		ImGui::SliderFloat(T(TKEY("effect_range"), "Effect Range"), &settings.RaindropFxRange, 1e2f, 2e3f, "%.0f units");
+		Util::Widgets::SliderFloat(T("feature.wetness_effects.effect_range", "Effect Range"), &settings.RaindropFxRange, 1e2f, 2e3f, T("feature.wetness_effects.ui_0f_units", "%.0f units"));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			auto meters = Util::Units::GameUnitsToMeters(settings.RaindropFxRange);
 			std::vector<std::string> tooltipLines = {
-				T(TKEY("effect_range_tooltip"), "Range for raindrop effects"),
+				T("feature.wetness_effects.effect_range_tooltip", "Range for raindrop effects"),
 				Util::Units::FormatDistance(settings.RaindropFxRange),
-				std::vformat(T(TKEY("meters_format"), "{:.2f} meters"), std::make_format_args(meters))
+				fmt::format(fmt::runtime(T("feature.wetness_effects.meters_format", "{:.2f} meters")), Util::Units::GameUnitsToMeters(settings.RaindropFxRange))
 			};
 			Util::DrawMultiLineTooltip(tooltipLines);
 		}
-		if (ImGui::TreeNodeEx(T(TKEY("raindrops"), "Raindrops"))) {
-			ImGui::BulletText(
-				"%s",
-				T(TKEY("raindrops_help"), "At every interval, a raindrop is placed within each grid cell.\nOnly a set portion of raindrops will actually trigger splashes and ripples.\n"));
+		if (page.Is("rain")) {
+			ImGui::BulletText("%s", T("feature.wetness_effects.ui_each_interval_places_a_drop_in_every_grid_cell_only_th_5eebd9c3", "Each interval places a drop in every grid cell. Only the selected fraction produces splashes and ripples."));
 
-			ImGui::SliderFloat(T(TKEY("grid_size"), "Grid Size"), &settings.RaindropGridSize, 1.0f, 10.0f, "%.1f units");
+			Util::Widgets::SliderFloat(T("feature.wetness_effects.grid_size", "Grid Size"), &settings.RaindropGridSize, 1.0f, 10.0f, T("feature.wetness_effects.ui_1f_units", "%.1f units"));
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				std::vector<std::string> tooltipLines = {
-					T(TKEY("grid_size_tooltip_0"), "Spatial grid size for raindrop placement (smaller = more grid cells, higher GPU cost)"),
-					T(TKEY("grid_size_tooltip_1"), "This is the most performance-sensitive setting. Lower only if needed for realism."),
+					T("feature.wetness_effects.grid_size_tooltip_0", "Spatial grid size for raindrop placement (smaller = more grid cells, higher GPU cost)"),
+					T("feature.wetness_effects.grid_size_tooltip_1", "This is the most performance-sensitive setting. Lower only if needed for realism."),
 					Util::Units::FormatDistance(settings.RaindropGridSize)
 				};
 				Util::DrawMultiLineTooltip(tooltipLines);
 			}
-			ImGui::SliderFloat(T(TKEY("interval"), "Interval"), &settings.RaindropInterval, 0.1f, 2.0f, "%.1f sec");
+			Util::Widgets::SliderFloat(T("feature.wetness_effects.interval", "Interval"), &settings.RaindropInterval, 0.1f, 2.0f, T("feature.wetness_effects.ui_1f_sec", "%.1f sec"));
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("%s", T(TKEY("interval_tooltip"), "How often raindrop effects are checked (lower = more frequent, moderate performance impact)"));
+				ImGui::TextUnformatted(T("feature.wetness_effects.interval_tooltip", "How often raindrop effects are checked (lower = more frequent, moderate performance impact)"));
 			}
-			ImGui::SliderFloat(T(TKEY("chance"), "Chance"), &settings.RaindropChance, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			Util::Widgets::SliderFloat(T("feature.wetness_effects.chance", "Chance"), &settings.RaindropChance, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("%s", T(TKEY("chance_tooltip"), "Portion of raindrops that will actually cause splashes and ripples. Higher values increase effect density but have the least performance impact."));
+				ImGui::TextUnformatted(T("feature.wetness_effects.ui_fraction_of_drops_producing_splashes_ripples_higher_ad_c036d89f", "Fraction of drops producing splashes/ripples. Higher adds density with the least performance impact."));
 			}
-			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNodeEx(T(TKEY("splashes"), "Splashes"))) {
-			ImGui::SliderFloat(T(TKEY("strength"), "Strength"), &settings.SplashesStrength, 0.f, 2.f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("min_radius"), "Min Radius"), &settings.SplashesMinRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (page.Is("rain")) {
+			MenuUI::SectionHeading(T("feature.wetness_effects.splashes", "Splashes"));
+			const auto groupDisabled = Util::DisableGuard(settings.EnableSplashes == 0);
+			Util::Widgets::SliderFloat(T("feature.wetterness.strength_splashes", "Strength##Splashes"), &settings.SplashesStrength, 0.f, 2.f, "%.2f");
+			Util::Widgets::SliderFloat(T("feature.wetness_effects.min_radius", "Min Radius"), &settings.SplashesMinRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("portion_of_grid_size"), "As portion of grid size."));
-			ImGui::SliderFloat(T(TKEY("max_radius"), "Max Radius"), &settings.SplashesMaxRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+				ImGui::TextUnformatted(T("feature.wetness_effects.portion_of_grid_size", "As portion of grid size."));
+			Util::Widgets::SliderFloat(T("feature.wetness_effects.max_radius", "Max Radius"), &settings.SplashesMaxRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("portion_of_grid_size"), "As portion of grid size."));
-			ImGui::SliderFloat(T(TKEY("lifetime"), "Lifetime"), &settings.SplashesLifetime, 0.1f, 20.f, "%.1f");
-			ImGui::TreePop();
+				ImGui::TextUnformatted(T("feature.wetness_effects.portion_of_grid_size", "As portion of grid size."));
+			Util::Widgets::SliderFloat(T("feature.wetterness.lifetime_splashes", "Lifetime##Splashes"), &settings.SplashesLifetime, 0.1f, 20.f, "%.1f");
 		}
 
-		if (ImGui::TreeNodeEx(T(TKEY("ripples"), "Ripples"))) {
-			ImGui::SliderFloat(T(TKEY("strength"), "Strength"), &settings.RippleStrength, 0.f, 2.f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("radius"), "Radius"), &settings.RippleRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (page.Is("rain")) {
+			MenuUI::SectionHeading(T("feature.wetness_effects.ripples", "Ripples"));
+			const auto groupDisabled = Util::DisableGuard(settings.EnableRipples == 0);
+			Util::Widgets::SliderFloat(T("feature.wetterness.strength_ripples", "Strength##Ripples"), &settings.RippleStrength, 0.f, 2.f, "%.2f");
+			Util::Widgets::SliderFloat(T("feature.wetness_effects.radius", "Radius"), &settings.RippleRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("portion_of_grid_size"), "As portion of grid size."));
-			ImGui::SliderFloat(T(TKEY("breadth"), "Breadth"), &settings.RippleBreadth, 0.f, 1.f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("lifetime"), "Lifetime"), &settings.RippleLifetime, 0.f, settings.RaindropInterval, "%.2f sec", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::TreePop();
+				ImGui::TextUnformatted(T("feature.wetness_effects.portion_of_grid_size", "As portion of grid size."));
+			Util::Widgets::SliderFloat(T("feature.wetness_effects.breadth", "Breadth"), &settings.RippleBreadth, 0.f, 1.f, "%.2f");
+			Util::Widgets::SliderFloat(T("feature.wetterness.lifetime_ripples", "Lifetime##Ripples"), &settings.RippleLifetime, 0.f, settings.RaindropInterval, T("feature.wetness_effects.ui_2f_sec", "%.2f sec"), ImGuiSliderFlags_AlwaysClamp);
 		}
 
 		ImGui::EndDisabled();
-
-		ImGui::TreePop();
 	}
 
 	ImGui::Spacing();
 	ImGui::Spacing();
 
-	if (ImGui::TreeNodeEx(T(TKEY("advanced"), "Advanced"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::SliderFloat(T(TKEY("weather_transition_speed"), "Weather transition speed"), &settings.WeatherTransitionSpeed, 0.2f, 8.0f);
+	if (page.Is("refine")) {
+		Util::Widgets::SliderFloat(T("feature.wetness_effects.weather_transition_speed", "Weather transition speed"), &settings.WeatherTransitionSpeed, 0.2f, 8.0f);
 		if (ImGui::IsItemDeactivatedAfterEdit())
 			DetectCurrentPreset();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("weather_transition_speed_tooltip"), "How fast wetness appears when raining and how quickly it dries after rain has stopped."));
+			ImGui::TextUnformatted(T("feature.wetness_effects.weather_transition_speed_tooltip", "How fast wetness appears when raining and how quickly it dries after rain has stopped."));
 		}
 
-		ImGui::SliderFloat(T(TKEY("min_rain_wetness"), "Min Rain Wetness"), &settings.MinRainWetness, 0.0f, 0.9f);
+		Util::Widgets::SliderFloat(T("feature.wetness_effects.min_rain_wetness", "Min Rain Wetness"), &settings.MinRainWetness, 0.0f, 0.9f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("min_rain_wetness_tooltip"), "The minimum amount an object gets wet from rain."));
+			ImGui::TextUnformatted(T("feature.wetness_effects.min_rain_wetness_tooltip", "The minimum amount an object gets wet from rain."));
 		}
 
-		ImGui::SliderFloat(T(TKEY("skin_wetness"), "Skin Wetness"), &settings.SkinWetness, 0.0f, 1.0f);
+		Util::Widgets::SliderFloat(T("feature.wetness_effects.skin_wetness", "Skin Wetness"), &settings.SkinWetness, 0.0f, 1.0f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("skin_wetness_tooltip"), "How wet character skin and hair get during rain."));
+			ImGui::TextUnformatted(T("feature.wetness_effects.skin_wetness_tooltip", "How wet character skin and hair get during rain."));
 		}
-		ImGui::SliderInt(T(TKEY("shore_range"), "Shore Range"), (int*)&settings.ShoreRange, 1, 64);
+		Util::Widgets::SliderInt(T("feature.wetness_effects.shore_range", "Shore Range"), (int*)&settings.ShoreRange, 1, 64);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			auto meters = Util::Units::GameUnitsToMeters(static_cast<float>(settings.ShoreRange));
 			std::vector<std::string> tooltipLines = {
-				T(TKEY("shore_range_tooltip"), "The maximum distance from a body of water that Shore Wetness affects"),
+				T("feature.wetness_effects.shore_range_tooltip", "The maximum distance from a body of water that Shore Wetness affects"),
 				Util::Units::FormatDistance(static_cast<float>(settings.ShoreRange)),
-				std::vformat(T(TKEY("meters_format"), "{:.2f} meters"), std::make_format_args(meters))
+				fmt::format(fmt::runtime(T("feature.wetness_effects.meters_format", "{:.2f} meters")), Util::Units::GameUnitsToMeters(static_cast<float>(settings.ShoreRange)))
 			};
 			Util::DrawMultiLineTooltip(tooltipLines);
 		}
-		ImGui::SliderFloat(T(TKEY("puddle_radius"), "Puddle Radius"), &settings.PuddleRadius, 0.3f, 3.0f);
+		Util::Widgets::SliderFloat(T("feature.wetness_effects.puddle_radius", "Puddle Radius"), &settings.PuddleRadius, 0.3f, 3.0f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			auto puddleMeters = Util::Units::GameUnitsToMeters(settings.PuddleRadius);
 			std::vector<std::string> tooltipLines = {
-				T(TKEY("puddle_radius_tooltip"), "The radius used to determine puddle size and location"),
+				T("feature.wetness_effects.puddle_radius_tooltip", "The radius used to determine puddle size and location"),
 				Util::Units::FormatDistance(settings.PuddleRadius),
-				std::vformat(T(TKEY("meters_format"), "{:.2f} meters"), std::make_format_args(puddleMeters))
+				fmt::format(fmt::runtime(T("feature.wetness_effects.meters_format", "{:.2f} meters")), Util::Units::GameUnitsToMeters(settings.PuddleRadius))
 			};
 			Util::DrawMultiLineTooltip(tooltipLines);
 		}
 
-		ImGui::SliderFloat(T(TKEY("puddle_max_angle"), "Puddle Max Angle"), &settings.PuddleMaxAngle, 0.6f, 1.0f);
+		Util::Widgets::SliderFloat(T("feature.wetness_effects.puddle_max_angle", "Puddle Max Angle"), &settings.PuddleMaxAngle, 0.6f, 1.0f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("puddle_max_angle_tooltip"), "How flat a surface needs to be for puddles to form on it."));
+			ImGui::TextUnformatted(T("feature.wetness_effects.puddle_max_angle_tooltip", "How flat a surface needs to be for puddles to form on it."));
 		}
 
-		ImGui::SliderFloat(T(TKEY("puddle_min_wetness"), "Puddle Min Wetness"), &settings.PuddleMinWetness, 0.0f, 1.0f);
+		Util::Widgets::SliderFloat(T("feature.wetness_effects.puddle_min_wetness", "Puddle Min Wetness"), &settings.PuddleMinWetness, 0.0f, 1.0f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("puddle_min_wetness_tooltip"), "The wetness value at which puddles start to form."));
+			ImGui::TextUnformatted(T("feature.wetness_effects.puddle_min_wetness_tooltip", "The wetness value at which puddles start to form."));
 		}
-
-		ImGui::TreePop();
 	}
 
 	ImGui::Spacing();
 	ImGui::Spacing();
-	auto& csEditor = globals::features::csEditor;
-	if (csEditor.loaded) {
-		if (ImGui::SmallButton(T(TKEY("open_weather_picker"), "Open Weather Picker"))) {
-			// Navigate to the replacement feature in the menu
-			Menu::GetSingleton()->SelectFeatureMenu(csEditor.GetShortName());
+	auto& weatherPicker = globals::features::weatherPicker;
+	if ((page.Is("presets") || page.Is("diagnostics")) && weatherPicker.loaded) {
+		if (ImGui::Button(T("feature.wetness_effects.open_weather_picker", "Open Weather Picker"))) {
+			Menu::GetSingleton()->SelectFeatureMenu(weatherPicker.GetShortName());
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("open_weather_picker_tooltip"), "Open the Weather Picker in CS Utility"));
+			ImGui::TextUnformatted(T("feature.wetterness.open_the_weather_picker", "Open the Weather Picker."));
 		}
 	}
 
-	if (ImGui::TreeNodeEx(T(TKEY("debug"), "Debug"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox(T(TKEY("enable_wetness_override"), "Enable Wetness Override"), &debugSettings.EnableWetnessOverride);
-		ImGui::Checkbox(T(TKEY("enable_puddle_override"), "Enable Puddle Override"), &debugSettings.EnablePuddleOverride);
-		ImGui::Checkbox(T(TKEY("enable_rain_override"), "Enable Rain Override"), &debugSettings.EnableRainOverride);
-		ImGui::Checkbox(T(TKEY("enable_interior_exterior_override"), "Enable Interior/Exterior Override"), &debugSettings.EnableIntExOverride);
+	if (page.Is("diagnostics")) {
+		Util::Widgets::Checkbox(T("feature.wetness_effects.enable_wetness_override", "Enable Wetness Override"), &debugSettings.EnableWetnessOverride);
+		Util::Widgets::Checkbox(T("feature.wetness_effects.enable_puddle_override", "Enable Puddle Override"), &debugSettings.EnablePuddleOverride);
+		Util::Widgets::Checkbox(T("feature.wetness_effects.enable_rain_override", "Enable Rain Override"), &debugSettings.EnableRainOverride);
+		Util::Widgets::Checkbox(T("feature.wetness_effects.enable_interior_exterior_override", "Enable Interior/Exterior Override"), &debugSettings.EnableIntExOverride);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"%s", T(TKEY("interior_exterior_override_tooltip"), "If disabled, will only use the exterior value. "));
+			ImGui::TextUnformatted(T("feature.wetness_effects.interior_exterior_override_tooltip", "If disabled, will only use the exterior value. "));
 		}
 
 		if (debugSettings.EnableWetnessOverride) {
-			ImGui::SliderFloat2(T(TKEY("wetness_in_exterior"), "Wetness In/Exterior"), &debugSettings.WetnessOverride.x, 0.0f, 2.0f);
+			Util::Widgets::SliderFloat2(T("feature.wetness_effects.wetness_in_exterior", "Wetness In/Exterior"), &debugSettings.WetnessOverride.x, 0.0f, 2.0f);
 		}
 
 		if (debugSettings.EnablePuddleOverride) {
-			ImGui::SliderFloat2(T(TKEY("puddle_wetness_in_exterior"), "Puddle Wetness In/Exterior"), &debugSettings.PuddleWetnessOverride.x, 0.0f, 2.0f);
+			Util::Widgets::SliderFloat2(T("feature.wetness_effects.puddle_wetness_in_exterior", "Puddle Wetness In/Exterior"), &debugSettings.PuddleWetnessOverride.x, 0.0f, 2.0f);
 		}
 
 		if (debugSettings.EnableRainOverride) {
-			ImGui::SliderFloat2(T(TKEY("rain_in_exterior"), "Rain In/Exterior"), &debugSettings.RainOverride.x, 0.0f, 1.0f);
+			Util::Widgets::SliderFloat2(T("feature.wetness_effects.rain_in_exterior", "Rain In/Exterior"), &debugSettings.RainOverride.x, 0.0f, 1.0f);
 		}
-		ImGui::TreePop();
 	}
 }
 
@@ -686,40 +689,40 @@ void WetnessEffects::DrawPerformanceSettings(bool)
 
 	DrawEnabledCheckbox();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Enables surface wetness and rain-driven effects.");
-		ImGui::TextUnformatted("The measured cost depends on the current weather and visible surfaces.");
+		ImGui::TextUnformatted(T("feature.wetness_effects.enables_surface_wetness_and_rain_driven_effects", "Enables surface wetness and rain-driven effects."));
+		ImGui::TextUnformatted(T("feature.wetness_effects.the_measured_cost_depends_on_the_current_weat_2deaefa7", "The measured cost depends on the current weather and visible surfaces."));
 	}
 
 	ImGui::BeginDisabled(settings.EnableWetnessEffects == 0);
 	drawToggle("Raindrop Effects", settings.EnableRaindropFx);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Enables per-pixel raindrop evaluation while it is raining.");
+		ImGui::TextUnformatted(T("feature.wetness_effects.enables_per_pixel_raindrop_evaluation_while_i_d5f43f59", "Enables per-pixel raindrop evaluation while it is raining."));
 	}
 
 	ImGui::BeginDisabled(settings.EnableRaindropFx == 0);
-	ImGui::SliderFloat("Raindrop Range", &settings.RaindropFxRange, 100.0f, 2000.0f, "%.0f units");
+	ImGui::SliderFloat(T("feature.wetness_effects.raindrop_range", "Raindrop Range"), &settings.RaindropFxRange, 100.0f, 2000.0f, "%.0f units");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Limits the distance at which visible water pixels evaluate raindrop effects.");
-		ImGui::TextUnformatted("Lower values reduce the affected water-screen coverage; solid-surface wetness currently uses no range gate.");
+		ImGui::TextUnformatted(T("feature.wetness_effects.limits_the_distance_at_which_visible_water_pi_9f0c2933", "Limits the distance at which visible water pixels evaluate raindrop effects."));
+		ImGui::TextUnformatted(T("feature.wetness_effects.lower_values_reduce_the_affected_water_screen_497a4287", "Lower values reduce the affected water-screen coverage; solid-surface wetness currently uses no range gate."));
 	}
 
 	drawToggle("Splashes", settings.EnableSplashes);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Enables small splashes of wetness on dry surfaces.");
+		ImGui::TextUnformatted(T("feature.wetness_effects.enable_splashes_tooltip", "Enables small splashes of wetness on dry surfaces."));
 
 	drawToggle("Ripples", settings.EnableRipples);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Enables circular ripples on puddles and other wet surfaces.");
+		ImGui::TextUnformatted(T("feature.wetness_effects.enables_circular_ripples_on_puddles_and_other_49339585", "Enables circular ripples on puddles and other wet surfaces."));
 
 	ImGui::BeginDisabled(splashesOfStormsLoaded);
 	if (drawToggle("Vanilla Ripples", settings.EnableVanillaRipples))
 		Ripples::UpdateSettings();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		if (splashesOfStormsLoaded)
-			ImGui::TextUnformatted("Controlled by Splashes of Storms.");
+			ImGui::TextUnformatted(T("feature.wetness_effects.controlled_by_splashes_of_storms", "Controlled by Splashes of Storms."));
 		else
-			ImGui::TextUnformatted("Enables the game's original water ripple objects.");
-		ImGui::TextUnformatted("A weather change may be required before this takes effect.");
+			ImGui::TextUnformatted(T("feature.wetness_effects.enables_the_game_s_original_water_ripple_objects", "Enables the game's original water ripple objects."));
+		ImGui::TextUnformatted(T("feature.wetness_effects.a_weather_change_may_be_required_before_this_6440d97c", "A weather change may be required before this takes effect."));
 	}
 	ImGui::EndDisabled();
 	ImGui::EndDisabled();
@@ -775,11 +778,11 @@ static void DrawRainTypeLabel(const char* prefix, float rate)
 	ImGui::SameLine();
 	ImGui::TextColored(valueColor, "(%s)", label);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Meteorological rain types:");
-		ImGui::BulletText("Light: <2.5 mm/hr");
-		ImGui::BulletText("Moderate: 2.5 - 7.5 mm/hr");
-		ImGui::BulletText("Heavy: 7.5 - 15 mm/hr");
-		ImGui::BulletText("Extreme: >15 mm/hr");
+		ImGui::Text(T("feature.wetness_effects.meteorological_rain_types", "Meteorological rain types:"));
+		ImGui::BulletText(T("feature.wetness_effects.light_2_5_mm_hr", "Light: <2.5 mm/hr"));
+		ImGui::BulletText(T("feature.wetness_effects.moderate_2_5_7_5_mm_hr", "Moderate: 2.5 - 7.5 mm/hr"));
+		ImGui::BulletText(T("feature.wetness_effects.heavy_7_5_15_mm_hr", "Heavy: 7.5 - 15 mm/hr"));
+		ImGui::BulletText(T("feature.wetness_effects.extreme_15_mm_hr", "Extreme: >15 mm/hr"));
 	}
 }
 
@@ -800,16 +803,7 @@ float WetnessEffects::GetRainIntensity(RE::NiPointer<RE::BSGeometry> precipObjec
 		return 0.0f;
 	}
 
-	auto& effect = precipObject->GetGeometryRuntimeData().shaderProperty;
-	auto shaderProp = effect.get();
-	auto particleShaderProperty = netimmerse_cast<RE::BSParticleShaderProperty*>(shaderProp);
-
-	if (!particleShaderProperty || !particleShaderProperty->particleEmitter) {
-		return 0.0f;
-	}
-
-	auto rain = (RE::BSParticleShaderRainEmitter*)(particleShaderProperty->particleEmitter);
-	if (!rain->emitterType.any(RE::BSParticleShaderEmitter::EMITTER_TYPE::kRain)) {
+	if (!Util::GetRainEmitterFromPrecipGeometry(precipObject.get())) {
 		return 0.0f;
 	}
 
@@ -946,11 +940,7 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData() const
 						if (!precipObject) {
 							precipObject = precip->lastPrecip;
 						}
-						if (precipObject) {
-							auto& effect = precipObject->GetGeometryRuntimeData().shaderProperty;
-							auto shaderProp = effect.get();
-							auto particleShaderProperty = netimmerse_cast<RE::BSParticleShaderProperty*>(shaderProp);
-							auto rain = (RE::BSParticleShaderRainEmitter*)(particleShaderProperty->particleEmitter);
+						if (auto* rain = Util::GetRainEmitterFromPrecipGeometry(precipObject.get())) {
 							data.OcclusionViewProj = rain->occlusionProjection;
 						}
 					}
@@ -1103,12 +1093,12 @@ void WetnessEffects::DrawWeatherAnalysis() const
 			// const auto& climate = GetClimateSettings(climatePreset); // Unused, remove to fix warning treated as error
 			const auto& presetInfo = CLIMATE_PRESET_INFO[static_cast<size_t>(climatePreset)];
 
-			ImGui::Text("Active Preset: %s", presetInfo.name);
+			ImGui::Text(T("feature.wetness_effects.active_preset_s", "Active Preset: %s"), presetInfo.name);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("%s", presetInfo.shortDescription);
 			}
 
-			ImGui::Text("Precipitation Rate Calculation");
+			ImGui::Text(T("feature.wetness_effects.precipitation_rate_calculation", "Precipitation Rate Calculation"));
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				Util::DrawMultiLineTooltip({ "Precipitation rates are calculated using shader mechanics:",
 					"- Raindrop chance (probability per interval)",
@@ -1120,12 +1110,12 @@ void WetnessEffects::DrawWeatherAnalysis() const
 
 			// Show current preset-applied values vs defaults
 			Settings defaultSettings{};
-			ImGui::Text("Current Settings (applied from preset):");
+			ImGui::Text(T("feature.wetness_effects.current_settings_applied_from_preset", "Current Settings (applied from preset):"));
 			ImGui::Indent();
-			ImGui::Text("Rain Wetness: %.2f (default %.2f × %.1fx)", settings.MaxRainWetness, defaultSettings.MaxRainWetness, presetInfo.settings.wetnessMultiplier);
-			ImGui::Text("Puddle Wetness: %.2f (default %.2f × %.1fx)", settings.MaxPuddleWetness, defaultSettings.MaxPuddleWetness, presetInfo.settings.puddleMultiplier);
-			ImGui::Text("Transition Speed: %.2f (default %.2f × %.1fx)", settings.WeatherTransitionSpeed, defaultSettings.WeatherTransitionSpeed, presetInfo.settings.transitionSpeed);
-			ImGui::Text("Raindrop Chance: %.1f%% (preset value)", settings.RaindropChance * 100.0f);
+			ImGui::Text(T("feature.wetness_effects.rain_wetness_2f_default_2f_1fx", "Rain Wetness: %.2f (default %.2f × %.1fx)"), settings.MaxRainWetness, defaultSettings.MaxRainWetness, presetInfo.settings.wetnessMultiplier);
+			ImGui::Text(T("feature.wetness_effects.puddle_wetness_2f_default_2f_1fx", "Puddle Wetness: %.2f (default %.2f × %.1fx)"), settings.MaxPuddleWetness, defaultSettings.MaxPuddleWetness, presetInfo.settings.puddleMultiplier);
+			ImGui::Text(T("feature.wetness_effects.transition_speed_2f_default_2f_1fx", "Transition Speed: %.2f (default %.2f × %.1fx)"), settings.WeatherTransitionSpeed, defaultSettings.WeatherTransitionSpeed, presetInfo.settings.transitionSpeed);
+			ImGui::Text(T("feature.wetness_effects.raindrop_chance_1f_preset_value", "Raindrop Chance: %.1f%% (preset value)"), settings.RaindropChance * 100.0f);
 			ImGui::Unindent();
 		}
 		ImGui::Spacing();
@@ -1143,8 +1133,8 @@ void WetnessEffects::DrawWeatherAnalysis() const
 				presetSettings.raindropChance, presetSettings.raindropGridSize, presetSettings.raindropInterval);
 
 			if (ImGui::BeginTable("RainAnalysis", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders)) {
-				ImGui::TableSetupColumn("Current Shader State", ImGuiTableColumnFlags_WidthStretch, 0.5f);
-				ImGui::TableSetupColumn("Precipitation Analysis", ImGuiTableColumnFlags_WidthStretch, 0.5f);
+				ImGui::TableSetupColumn(T("feature.wetness_effects.current_shader_state", "Current Shader State"), ImGuiTableColumnFlags_WidthStretch, 0.5f);
+				ImGui::TableSetupColumn(T("feature.wetness_effects.precipitation_analysis", "Precipitation Analysis"), ImGuiTableColumnFlags_WidthStretch, 0.5f);
 				ImGui::TableHeadersRow();
 
 				ImGui::TableNextRow();
@@ -1153,11 +1143,11 @@ void WetnessEffects::DrawWeatherAnalysis() const
 				Util::DrawColorCodedValue("Rain Intensity", frameData.Raining * 100.0f, std::format("{:.1f}%", frameData.Raining * 100.0f), Util::ColorCodedValueConfig::HighIsGood(10.0f, 50.0f, 80.0f));
 				Util::DrawColorCodedValue("Wetness", frameData.Wetness * 100.0f, std::format("{:.1f}%", frameData.Wetness * 100.0f), Util::ColorCodedValueConfig::HighIsGood(25.0f, 60.0f, 85.0f));
 				Util::DrawColorCodedValue("Puddle Wetness", frameData.PuddleWetness * 100.0f, std::format("{:.1f}%", frameData.PuddleWetness * 100.0f), Util::ColorCodedValueConfig::HighIsGood(15.0f, 40.0f, 70.0f));
-				ImGui::Text("Puddle Formation: %.1f%% min wetness", frameData.settings.PuddleMinWetness * 100.0f);
-				ImGui::Text("Weather Transition: %.1f%%", sky->currentWeatherPct * 100.0f);
-				ImGui::Text("Raindrop Chance: %.1f%%", frameData.settings.RaindropChance * 100.0f);
-				ImGui::Text("Grid Size: %.2f m (%.1f units)", gridSizeMeters, gridSizeGameUnits);
-				ImGui::Text("Interval: %.1f sec", intervalSeconds);
+				ImGui::Text(T("feature.wetness_effects.puddle_formation_1f_min_wetness", "Puddle Formation: %.1f%% min wetness"), frameData.settings.PuddleMinWetness * 100.0f);
+				ImGui::Text(T("feature.wetness_effects.weather_transition_1f", "Weather Transition: %.1f%%"), sky->currentWeatherPct * 100.0f);
+				ImGui::Text(T("feature.wetness_effects.raindrop_chance_1f", "Raindrop Chance: %.1f%%"), frameData.settings.RaindropChance * 100.0f);
+				ImGui::Text(T("feature.wetness_effects.grid_size_2f_m_1f_units", "Grid Size: %.2f m (%.1f units)"), gridSizeMeters, gridSizeGameUnits);
+				ImGui::Text(T("feature.wetness_effects.interval_1f_sec", "Interval: %.1f sec"), intervalSeconds);
 
 				ImGui::TableNextColumn();
 				// Live (Current):

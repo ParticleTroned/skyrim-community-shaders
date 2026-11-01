@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <atomic>
 #include <optional>
 
@@ -8,78 +7,99 @@ struct Skylighting : Feature
 {
 private:
 	static constexpr std::string_view MOD_ID = "139352";
+	bool HasProbeUpdateResources() const;
+	float3 GetProbeCellSize() const;
+	float3 GetProbeCell(float3 a_eyePosition) const;
+	/** @brief Returns a cutoff only when the capture height matches a recent world grid. */
+	std::optional<float> GetOcclusionCullBelowZ() const;
+	struct WorldProbeGrid
+	{
+		float bottomZ;
+		uint32_t frame;
+	};
+	std::optional<WorldProbeGrid> worldProbeGrid;
+	std::optional<float> occlusionCullBelowZ;
+	/** @brief Selects a due capture quadrant without consuming pending probe work. */
+	bool PrepareOcclusionCapture();
+	bool probeUpdateBufferEnabled = false;
+	bool probeUpdateShadowDataAvailable = false;
+	/** @brief Clears directional history with valid UAVs and the visibility SRV unbound. */
+	void ClearShadowHistory();
 
 public:
+
 	virtual inline std::string GetName() override { return "Skylighting"; }
-	virtual std::string GetDisplayName() override { return T("feature.skylighting.name", "Skylighting"); }
+	std::string GetDisplayName() override { return T("feature.skylighting.name", "Skylighting"); }
 	virtual inline std::string GetShortName() override { return "Skylighting"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual inline std::string_view GetShaderDefineName() override { return "SKYLIGHTING"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return { T("feature.skylighting.description", "Simulates realistic ambient lighting by calculating sky occlusion and directional lighting, providing more accurate and natural illumination in outdoor environments."),
+		return {
+			T("feature.skylighting.shades_ambient_light_where_objects_block_the_sky", "Shades ambient light where objects block the sky."),
 			{ T("feature.skylighting.key_feature_1", "Sky occlusion calculation for ambient lighting"),
 				T("feature.skylighting.key_feature_2", "Directional skylighting based on environment geometry"),
 				T("feature.skylighting.key_feature_3", "Enhanced ambient lighting for outdoor scenes"),
 				T("feature.skylighting.key_feature_4", "Support for varying sky illumination intensities"),
-				T("feature.skylighting.key_feature_5", "Integration with existing lighting systems") } };
-	};
-
+				T("feature.skylighting.key_feature_5", "Integration with existing lighting systems") }
+		};
+	}
 	virtual bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
-	virtual void DrawPerformanceSettings(bool) override;
-	virtual void ApplyPerformanceSettings() override;
-	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
-	{
-		return { 4,
-			T("menu.performance_tuning.feature.skylighting.comparison_label", "Off"),
-			T("menu.performance_tuning.feature.skylighting.comparison_details", "the in-game Enable Skylighting toggle is switched off, so probe updates stop and ambient shading plus reflection occlusion fall back to the unoccluded path.") };
-	}
-	virtual json GetPerformanceTuningUserSettingsMask() const override
-	{
-		return {
-			{ "MaxZenith", true },
-			{ "MinDiffuseVisibility", true },
-			{ "MinSpecularVisibility", true },
-			{ "EnableSkylighting", true },
-			{ "IncludeMarkedRoofOccluders", true }
-		};
-	}
+	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Keeps the overview toggle independent of scene activity and resource readiness. */
+	bool IsPerformanceToggleEnabled() const override { return settings.EnableSkylighting; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override;
-	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual bool IsPerformanceCostMeasurementReady() const override;
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual const char* GetPerformanceCostMeasurementWaitText() const override;
 	virtual double GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const override;
-	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
-	void DrawSettingsPanel(bool a_showEmbeddedInfo);
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 
 	virtual void SetupResources() override;
+	virtual void SetupRenderTargetResources() override;
 	virtual void ClearShaderCache() override;
 	void CompileComputeShaders();
 
 	virtual void Prepass() override;
+	virtual void EarlyPrepass() override;
 
 	virtual void PostPostLoad() override;
+	virtual bool IsCore() const override { return true; };
 
 	//////////////////////////////////////////////////////////////////////////////////
 
 	struct Settings
 	{
+		static constexpr float kWorldCellSize = 4096.0f;
+		static constexpr float kPerformanceProbeFieldSizeCells = 2.5f;
+		static constexpr float kBalancedProbeFieldSizeCells = 3.1666667f;
+		static constexpr float kDefaultProbeFieldSizeCells = kBalancedProbeFieldSizeCells;
+		static constexpr float kMinProbeFieldSizeCells = kPerformanceProbeFieldSizeCells;
+		static constexpr float kMaxProbeFieldSizeCells = 8.0f;
+		static constexpr float kDefaultProbeFieldSize = kWorldCellSize * kDefaultProbeFieldSizeCells;
+
 		float MaxZenith = 3.1415926f / 2.f;  // 90 deg
 		float MinDiffuseVisibility = 0.1f;
 		float MinSpecularVisibility = 0.1f;
+		float ProbeFieldSize = kDefaultProbeFieldSize;  // XY probe field size in world units
+		uint ProbeGridQuality = 1;                      // 0: performance, 1: balanced, 2: quality
 		bool EnableSkylighting = true;
+		bool EnableIncrementalProbeUpdates = true;
+		uint StableSliceCount = 11;
+		bool EnableReducedUpdateFrequency = true;
+		uint OcclusionUpdateInterval = 6;
+		uint ProbeUpdateInterval = 13;
 		bool IncludeMarkedRoofOccluders = true;
 	} settings;
 
@@ -88,19 +108,25 @@ public:
 		REX::W32::XMFLOAT4X4 OcclusionViewProj;
 		float4 OcclusionSHBasis4Pi;
 
-		float4 PosOffset;     // cell origin in camera model space
-		uint ArrayOrigin[4];  // xyz: array origin, w: max accum frames
+		float3 PosOffset;  // cell origin in camera model space
+		uint PosOffsetPadding{};
+		uint ArrayOrigin[3];  // xyz: array origin
+		uint Enabled;
 		int ValidMargin[4];
+		uint ArrayDims[3];
+		float ProbeFieldSize;
 
 		float MinDiffuseVisibility;
 		float MinSpecularVisibility;
-		uint Enabled;
+		uint ProbeUpdateSliceStart;
+		uint ProbeUpdateSliceCount;
 		uint ShadowDataAvailable;
+		uint ShadowDataPadding[3]{};
 	};
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 
 	SkylightingCB GetCommonBufferData(bool a_inWorld);
-	bool IsRuntimeActive() const { return loaded && settings.EnableSkylighting; }
+	bool IsRuntimeActive() const { return loaded && settings.EnableSkylighting && !resourceRebuildFailed.load(std::memory_order_acquire); }
 	bool HasCurrentShadowData() const;
 
 	winrt::com_ptr<ID3D11SamplerState> comparisonSampler = nullptr;
@@ -108,6 +134,7 @@ public:
 	Texture2D* texOcclusion = nullptr;
 	Texture3D* texProbeArray = nullptr;
 	Texture3D* texAccumFramesArray = nullptr;
+	ID3D11Device* resourceDevice = nullptr;
 	Texture3D* texShadowBitmask = nullptr;
 	Texture3D* texShadowVisibility = nullptr;
 
@@ -115,32 +142,47 @@ public:
 
 	// misc parameters
 	uint probeArrayDims[3] = { 256, 256, 128 };
-	float occlusionDistance = 10000.f;
 
 	// cached variables
+	std::atomic_bool queuedRebuildSkylighting{ false };
+	std::atomic_bool resourceRebuildFailed{ false };
+	std::optional<uint32_t> runtimeSettingsFrame;
 	std::atomic_bool queuedResetSkylighting{ true };
+	bool needsOcclusionRefresh = true;
 	std::optional<bool> previousInteriorState;
+	bool shadowHistoryNeedsReset = false;
 	bool inOcclusion = false;
 	REX::W32::XMFLOAT4X4 OcclusionTransform;
 	float4 OcclusionDir;
 	uint frameCount = 0;
-
-	// UpdateProbesCS needs 15 samples for full confidence. Occlusion rendering
-	// rotates through four quadrants, so each quadrant must reach that count
-	// after a reset before a performance measurement can consume the probes.
-	static constexpr uint kProbeOcclusionQuadrantCount = 4;
-	static constexpr uint kProbeConfidenceSampleCount = 15;
-	std::array<uint, kProbeOcclusionQuadrantCount> probeRefreshCounts{};
-	uint64_t occlusionCaptureSerial = 0;
-	uint64_t probeUpdateCaptureSerial = 0;
-	uint occlusionCaptureQuadrant = 0;
+	std::optional<uint32_t> lastOcclusionRenderFrame;
+	std::optional<uint> lastProbeUpdateCapture;
+	std::optional<uint32_t> lastProbeUpdateFrame;
+	uint occlusionCaptureCorner = 0;
+	uint nextOcclusionCorner = 0;
+	uint probeUpdateCapture = 0;
+	float3 prevCellID = { 0, 0, 0 };
+	float3 probeUpdateCellID = { 0, 0, 0 };
+	float4 occlusionSHBasis4Pi = { 3.5449078f, 0, 0, 0 };
+	uint probeUpdateSliceStart = 0;
+	uint probeUpdateSliceCount = 128;
+	uint probeUpdateSliceCursor = 0;
+	uint probeUpdateCornerMask = 0;
+	uint activeSliceCount = 0;
+	// Fifteen confidence samples require fifteen complete quadrant sweeps.
+	static constexpr uint kProbeHistoryWarmupUpdates = 60;
+	uint forcedFullUpdateFrames = kProbeHistoryWarmupUpdates;
+	bool forceProbeUpdateThisFrame = true;
 
 	/** @brief Queues a render-thread history rebuild without touching graphics resources. */
-	void QueueResetSkylighting();
-	/** @brief Clears probe history on the render thread. */
+	void QueueResetSkylighting(bool rebuild = false);
+	/** @brief Block sampling while reset/rebuild work is pending or failed. */
+	bool HasPendingReset() const;
+	/** @brief Clears probe history on the render thread and requires a fresh occlusion capture. */
 	void ResetSkylighting();
-	/** @brief Tracks interior transitions and queues stale outdoor history for replacement. */
+	/** @brief Checks the render-thread location state and invalidates history on transitions. */
 	bool UpdateInteriorState();
+	void ApplyProbeGridQuality();
 
 	std::chrono::time_point<std::chrono::system_clock> lastUpdateTimer = std::chrono::system_clock::now();
 
@@ -166,6 +208,8 @@ public:
 		static void thunk(RE::NiCamera* a_camera, RE::NiFrustum* a_frustum);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+
+
 
 	// Event handler
 	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>

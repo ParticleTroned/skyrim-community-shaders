@@ -1,0 +1,72 @@
+#pragma once
+
+#include "GrassOptimizations/GrassPolicy.h"
+#include "GrassOptimizations/GrassRuntime.h"
+#include <atomic>
+
+#include <memory>
+#include <mutex>
+
+class GrassBucketRenderer;
+
+/** @brief Batch native grass across compatible cells with optional instance culling and mesh LOD. */
+struct GrassOptimizations : Feature
+{
+	GrassOptimizations();
+	~GrassOptimizations();
+	std::string GetName() override { return "Grass Optimizations"; }
+	std::string GetDisplayName() override { return T("feature.grass_optimizations.name", "Grass Optimizations"); }
+	std::string GetShortName() override { return "GrassOptimizations"; }
+	std::string_view GetCategory() const override { return FeatureCategories::kFoliage; }
+	std::string_view GetShaderDefineName() override { return "GRASS_OPTIMIZATIONS"; }
+	bool HasShaderDefine(RE::BSShader::Type type) override { return type == RE::BSShader::Type::Grass; }
+	std::string_view GetShaderCacheAbiVersion() override { return "native-cell-buckets-v8"; }
+	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
+	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
+	void DrawSettings() override;
+	bool HasPerformanceSettings() const override { return true; }
+	void DrawPerformanceSettings(bool advanced) override;
+	json CapturePerformanceSettingsState() const override;
+	bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Keeps the overview toggle independent of scene activity and resource readiness. */
+	bool IsPerformanceToggleEnabled() const override { return IsEnabled(); }
+	bool IsPerformanceCostMeasurementEnabled() const override;
+	void SetPerformanceCostMeasurementEnabled(bool enabled) override { SetEnabled(enabled); }
+	bool IsPerformanceCostMeasurementReady() const override;
+	const char* GetPerformanceCostMeasurementWaitText() const override { return T("feature.grass_optimizations.waiting_for_rendering", "Waiting for grass rendering"); }
+	json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
+	/** @brief Restore all grass controls after a cost comparison. */
+	void RestorePerformanceCostMeasurementState(const json& state) override;
+	void LoadSettings(json& settings) override;
+	void SaveSettings(json& settings) override;
+	void RestoreDefaultSettings() override;
+	void SetupResources() override;
+	void ClearShaderCache() override;
+	void Reset() override;
+	void PostPostLoad() override;
+	/** @brief Stage a toggle; changes take effect at the next grass pass without recompilation. */
+	void SetEnabled(bool enabled);
+	bool IsEnabled() const;
+	bool IsCrossCellBatchingEnabled() const;
+	bool IsHookInstalled() const;
+	GrassPolicy::Settings GetSettings() const;
+	/** @brief Validate a complete settings transaction before publishing it. */
+	bool SetSettings(const GrassPolicy::Settings& settings, std::string& error);
+	/** @brief Apply a validated partial settings transaction; unknown fields reject the whole update. */
+	bool UpdateSettings(const json& update, std::string& error);
+	/** @brief Preserve the property wind phase captured before native setup advances it. */
+	void PrepareGeometry(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry, std::optional<uint32_t> nativeWindTimer);
+	GrassBucketRenderer& GetRenderer() { return *renderer; }
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void SetDiagnosticsEnabled(bool enabled);
+	/** @brief Request lightweight cache and frame-work telemetry for DevBench. */
+	void RequestTelemetry();
+	json GetDiagnostics() const;
+#endif
+private:
+	void DrawControls(bool advanced, std::string_view section = {});
+	mutable std::mutex settingsMutex;
+	GrassPolicy::Settings settings;
+	std::atomic_uint32_t queueSettings{ 3 };
+	std::unique_ptr<GrassBucketRenderer> renderer;
+};

@@ -2,16 +2,25 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 
 namespace Util::GenerationClaim
 {
+	/**
+	 * @brief Outcomes from attempting to claim a generation-owned cache entry.
+	 */
 	enum class ClaimOutcome
 	{
 		CacheHit,
+		Failed,
 		Claimed,
-		MustWait
+		MustWait,
+		RejectedStale
 	};
 
+	/**
+	 * @brief Outcomes from attempting to publish a generation-owned result.
+	 */
 	enum class PublishOutcome
 	{
 		Published,
@@ -19,6 +28,12 @@ namespace Util::GenerationClaim
 		RejectedStaleCleanedPending
 	};
 
+	/**
+	 * @brief Claims a cache key without blocking.
+	 *
+	 * The caller owns synchronization. A MustWait result means another task owns
+	 * the Pending entry; wait on the associated condition variable and retry.
+	 */
 	template <class Traits, class Map, class MakePending>
 	std::pair<ClaimOutcome, typename Map::iterator> TryClaim(
 		Map& a_map,
@@ -27,12 +42,19 @@ namespace Util::GenerationClaim
 		uint64_t a_liveGeneration,
 		MakePending&& a_makePending)
 	{
+		if (a_callerGeneration && *a_callerGeneration != a_liveGeneration) {
+			return { ClaimOutcome::RejectedStale, a_map.end() };
+		}
+
 		if (auto it = a_map.find(a_key); it != a_map.end()) {
 			if (Traits::IsPending(it->second)) {
 				return { ClaimOutcome::MustWait, it };
 			}
 			if (Traits::IsCompleted(it->second) && Traits::HasPayload(it->second)) {
 				return { ClaimOutcome::CacheHit, it };
+			}
+			if (Traits::IsFailed(it->second)) {
+				return { ClaimOutcome::Failed, it };
 			}
 		}
 
@@ -42,6 +64,12 @@ namespace Util::GenerationClaim
 		return { ClaimOutcome::Claimed, inserted.first };
 	}
 
+	/**
+	 * @brief Publishes a result unless its captured generation is stale.
+	 *
+	 * A stale publisher may erase only its own matching Pending entry. It must
+	 * never disturb a newer claim or an already completed result.
+	 */
 	template <class Traits, class Map, class MakeEntry>
 	PublishOutcome TryPublish(
 		Map& a_map,

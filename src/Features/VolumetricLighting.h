@@ -1,7 +1,11 @@
 #pragma once
 
 #include "RE/B/BSVolumetricLightingRenderData.h"
+#include "VolumetricLightingRuntime.h"
 #include "VolumetricLightingTuning.h"
+
+#include <atomic>
+#include <mutex>
 
 struct VolumetricLighting : Feature
 {
@@ -13,122 +17,82 @@ public:
 		int32_t Width = 320;
 		int32_t Height = 192;
 		int32_t Depth = 90;
+
+		bool operator==(const TextureSize&) const = default;
 	};
 
 	struct Settings
 	{
 		bool ExteriorEnabled = true;
 		bool DisableWeatherInteractionDuringRain = false;
-		GodrayProfile ExteriorGodrays;
 		int32_t ExteriorQuality = 2;
 		TextureSize ExteriorCustomSize;
 		bool InteriorEnabled = true;
-		GodrayProfile InteriorGodrays;
 		int32_t InteriorQuality = 2;
 		TextureSize InteriorCustomSize;
+
+		bool operator==(const Settings&) const = default;
 	};
 
+private:
 	Settings settings;
+	Settings runtimeSettings;
+	mutable std::mutex settingsMutex;
 
-	bool enabledAtBoot = false;
-
+public:
 	virtual inline std::string GetName() override { return "Volumetric Lighting"; }
-	virtual std::string GetDisplayName() override { return T("feature.volumetric_lighting.name", "Volumetric Lighting"); }
+	std::string GetDisplayName() override { return T("feature.volumetric_lighting.name", "Volumetric Lighting"); }
 	virtual inline std::string GetShortName() override { return "VolumetricLighting"; }
+	virtual std::string_view GetShaderCacheAbiVersion() override { return "godray-depth-separated-haze-5"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return { T("feature.volumetric_lighting.description", "Volumetric Lighting creates realistic light scattering effects through fog, dust, and atmospheric particles.\nThis adds dramatic god rays and atmospheric depth to both interior and exterior environments."),
+		return {
+			T("feature.volumetric_lighting.adds_shafts_of_light_and_atmospheric_scatteri_44f3856c", "Adds shafts of light and atmospheric scattering through fog and dust."),
 			{ T("feature.volumetric_lighting.key_feature_1", "Realistic light scattering"),
 				T("feature.volumetric_lighting.key_feature_2", "God rays and atmospheric effects"),
 				T("feature.volumetric_lighting.key_feature_3", "Separate interior/exterior settings"),
 				T("feature.volumetric_lighting.key_feature_4", "Configurable quality levels"),
-				T("feature.volumetric_lighting.key_feature_5", "Enhanced atmospheric immersion") } };
-	};
+				T("feature.volumetric_lighting.key_feature_5", "Enhanced atmospheric immersion") }
+		};
+	}
 
 	virtual void SaveSettings(json&) override;
 	virtual void LoadSettings(json&) override;
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
+	bool HasEssentialSettings() const override { return true; }
+	void DrawEssentialSettings() override { DrawPerformanceSettings(false); }
 	virtual bool HasPerformanceSettings() const override { return true; }
-	virtual void ApplyPerformanceSettings() override
-	{
-		if (initialised)
-			SetupVL();
-	}
-	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
-	{
-		return { 7,
-			T("menu.performance_tuning.feature.volumetric_lighting.comparison_label", "Off"),
-			T("menu.performance_tuning.feature.volumetric_lighting.comparison_details", "Volumetric Lighting is switched off for the current interior/exterior context.") };
-	}
-	virtual bool IsPerformanceTuningApplicable() const override;
-	virtual const char* GetPerformanceTuningApplicabilityReason() const override;
-	virtual json GetPerformanceTuningUserSettingsMask() const override
-	{
-		return {
-			{ "ExteriorEnabled", true },
-			{ "DisableWeatherInteractionDuringRain", true },
-			{ "ExteriorGodrays", { { "ShaftIntensity", true },
-									 { "Opacity", true },
-									 { "Saturation", true },
-									 { "CustomColorContribution", true },
-									 { "CustomColorRed", true },
-									 { "CustomColorGreen", true },
-									 { "CustomColorBlue", true } } },
-			{ "ExteriorQuality", true },
-			{ "ExteriorCustomSize", true },
-			{ "InteriorEnabled", true },
-			{ "InteriorGodrays", { { "ShaftIntensity", true },
-									 { "Opacity", true },
-									 { "Saturation", true },
-									 { "CustomColorContribution", true },
-									 { "CustomColorRed", true },
-									 { "CustomColorGreen", true },
-									 { "CustomColorBlue", true } } },
-			{ "InteriorQuality", true },
-			{ "InteriorCustomSize", true }
-		};
-	}
-	virtual bool NormalizePerformanceTuningUserSettings(json& a_settings) const override;
+	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
-	virtual bool IsPerformanceCostMeasurementEnabled() const override
-	{
-		return inInterior ? settings.InteriorEnabled : settings.ExteriorEnabled;
-	}
-	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
-	{
-		const Settings defaults{};
-		if (a_enabled) {
-			settings.ExteriorEnabled = defaults.ExteriorEnabled;
-			settings.InteriorEnabled = defaults.InteriorEnabled;
-		} else {
-			settings.ExteriorEnabled = false;
-			settings.InteriorEnabled = false;
-		}
-
-		if (initialised)
-			SetupVL();
-	}
-	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
-	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
-	{
-		auto state = a_state;
-		LoadSettings(state);
-		if (initialised)
-			SetupVL();
-	}
+	/** Returns the requested enable setting for the current interior/exterior context. */
+	bool IsPerformanceToggleEnabled() const override;
+	virtual bool IsPerformanceCostMeasurementEnabled() const override;
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	/** Uses the native runtime control without replacing the current tuning. */
+	void SetPerformanceToggleEnabled(bool a_enabled) override;
+	virtual json CapturePerformanceCostMeasurementState() const override;
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
+	/** @return The latest requested exterior setting, including changes awaiting a safe frame. */
 	bool IsExteriorEnabled() const;
+	/** @brief Stage an exterior preference from any thread; never touches engine or graphics state. */
 	void SetExteriorEnabled(bool enabled);
-	/** @return The active context's sanitized tuning, or a neutral profile when unavailable. */
+	/** @brief Reconcile engine state at the next safe render boundary after a load. */
+	void RequestRuntimeReset();
+	bool IsPerformanceCostMeasurementReady() const override;
+	const char* GetPerformanceCostMeasurementWaitText() const override { return T("feature.volumetric_lighting.waiting_for_volumetric_lighting_transition", "Waiting for volumetric lighting transition"); }
+	/** @return Adaptive Balance tuning for the active renderer context, or neutral when unavailable. */
 	GodrayProfile GetRuntimeGodrayProfile() const;
-	virtual void DataLoaded() override;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
 	virtual void EarlyPrepass() override;
+
+
+
+
 
 	virtual bool IsCore() const override { return true; };
 
@@ -137,14 +101,20 @@ public:
 	RE::BSImagespaceShader* GetOrCreateRaymarchCS(RE::BSComputeShader* computeShader);
 	RE::BSImagespaceShader* GetOrCreateBlurHCS(RE::BSComputeShader* computeShader);
 	RE::BSImagespaceShader* GetOrCreateBlurVCS(RE::BSComputeShader* computeShader);
-	/** @brief Whether the current render area is safe for replacement blur dispatch. */
+	/** @brief Whether the current render area and camera are safe for replacement blur dispatch. */
 	bool HasValidBlurDimensions() const { return blurDimensionsValid; }
-	/** @brief Bind active blur bounds at b1 after selecting a replacement shader. */
+	/** @brief Bind active blur bounds and camera data at b1 after selecting a replacement shader. */
 	void SetDimensionsCB() const;
-	/** @brief Set both active-area dispatch axes for the horizontal blur. */
+	/** @brief Set both dispatch axes within the active render area. */
 	void SetGroupCountsHCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const;
 	/** @brief Set both active-area dispatch axes for the vertical blur. */
 	void SetGroupCountsVCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const;
+
+	// hooks
+
+
+
+
 
 private:
 	using VolumetricLightingDescriptor = RE::BSVolumetricLightingRenderData;
@@ -159,13 +129,12 @@ private:
 	static VolumetricLightingDescriptor& GetVLDescriptor();
 	static void SetVLQuality(VolumetricLightingDescriptor& descriptor, std::uint32_t quality);
 
-	void DrawGodrayTuningSettings();
-	void DrawGodrayProfileSettings(const char* label, GodrayProfile& profile);
-	void DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, bool isInterior, bool inLocationType);
+	void DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, bool isInterior);
 	TextureSize& FetchCurrentSizeInUnits(bool interior);
 	bool TryGetActiveGodrayProfile(GodrayProfile& profile) const;
 	void SanitizeSettings();
-	void SetupVL();
+	bool IsRuntimeTransitionBlocked() const;
+	void ApplyRuntimeTarget(const VolumetricLightingRuntime::Target& target, const VolumetricLightingRuntime::Changes& changes);
 	void UpdateBlurDimensions();
 	void ClearVolumetricLightingTargets();
 	static int32_t ClampQualityIndex(int32_t quality);
@@ -190,10 +159,12 @@ private:
 	TextureSize* gVolumetricLightingSizeMedium = nullptr;
 	TextureSize* gVolumetricLightingSizeLow = nullptr;
 
+	std::atomic_bool runtimeResetRequested{ true };
+	std::atomic_bool runtimeReady{ false };
+	VolumetricLightingRuntime::Controller runtimeController;
+	bool runtimeEnabled = false;
 	bool initialised = false;
 	bool inInterior = false;
-	bool inInteriorWithSun = false;
-	bool rainOnlySuppressionActive = false;
 	VolumetricLightingDescriptor runtimeDescriptor{};
 
 	struct VLData
@@ -202,7 +173,10 @@ private:
 		int32_t screenY;
 		int32_t screenXMin1;
 		int32_t screenYMin1;
+		float4 cameraData;
 	};
+	STATIC_ASSERT_ALIGNAS_16(VLData);
+	static_assert(sizeof(VLData) == 32);
 	VLData vlData = VLData();
 	ConstantBuffer* vlDataCB = nullptr;
 	bool blurDimensionsValid = false;

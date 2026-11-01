@@ -25,12 +25,15 @@ public:
 	void SaveSettings() override;
 	void ApplyChanges() override;
 	void RevertChanges() override;
+	UndoRestoreAction CaptureUndoState() const override;
+	UndoRestoreAction CaptureBaselineState() const override;
 	bool HasUnsavedChanges() const override;
 	std::vector<SearchResult> CollectSearchableSettings() const override;
 
 	RE::BGSReferenceEffect* referenceEffect = nullptr;
 
 private:
+	void MarkSavedState() override { originalSettings = settings; }
 	void LoadFromGameSettings();
 
 	struct Settings

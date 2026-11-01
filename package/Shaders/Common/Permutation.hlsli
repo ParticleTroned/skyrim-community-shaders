@@ -65,6 +65,7 @@ namespace Permutation
 		static const uint GrayscaleToColor = (1 << 19);
 		static const uint GrayscaleToAlpha = (1 << 20);
 		static const uint IgnoreTexAlpha = (1 << 21);
+		static const uint SkyObject = (1 << 24);
 	}
 
 	namespace ExtraFlags
@@ -78,6 +79,19 @@ namespace Permutation
 		static const uint IsFemale = (1 << 6);
 		static const uint IsEye = (1 << 7);
 		static const uint AdditiveLighting = (1 << 8);
+		static const uint EffectShadows = (1 << 24);
+		static const uint IsTree = (1 << 25);
+		static const uint PBRGrass = (1 << 9);
+		static const uint PBRGrassShading = (1 << 10);
+		static const uint CharacterCategoryShift = 11;
+		static const uint CharacterCategoryMask = (7 << CharacterCategoryShift);
+		static const uint CharacterExcluded = (1 << 14);
+		static const uint CharacterFocusFadeShift = 15;
+		static const uint CharacterFocusFadeMask = (255 << CharacterFocusFadeShift);
+		static const uint IsAurora = (1 << 23);
+		static const uint CharacterFace = (1 << CharacterCategoryShift);
+		static const uint CharacterSkin = (2 << CharacterCategoryShift);
+		static const uint CharacterHair = (3 << CharacterCategoryShift);
 	}
 
 	namespace ExtraFeatureFlags
@@ -89,6 +103,7 @@ namespace Permutation
 		static const int THLand4HasDisplacement = (1 << 4);
 		static const int THLand5HasDisplacement = (1 << 5);
 		static const int THLandHasDisplacement = (1 << 9);
+		static const int TVMeshVariation = (1 << 10);
 	}
 
 	cbuffer PerShader : register(b4)

@@ -4,6 +4,8 @@ struct CloudShadows : Feature
 {
 private:
 	static constexpr std::string_view MOD_ID = "139185";
+	bool occlusionClearedWithoutClouds = false;
+	bool ClearOcclusionWithoutClouds();
 
 public:
 	struct alignas(16) Settings
@@ -14,6 +16,8 @@ public:
 	};
 
 	Settings settings;
+	/** Composes cloud opacity without changing the saved settings. */
+	Settings GetCommonBufferData() const;
 
 	virtual inline std::string GetName() override { return "Cloud Shadows"; }
 	virtual std::string GetDisplayName() override { return T("feature.cloud_shadows.name", "Cloud Shadows"); }

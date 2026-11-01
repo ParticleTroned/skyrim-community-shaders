@@ -2,7 +2,6 @@
 
 #include "Feature.h"
 #include "Globals.h"
-#include "Menu/PerformanceTuningRenderer.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Game.h"
@@ -10,6 +9,24 @@
 #include <filesystem>
 #include <fstream>
 #include <unordered_set>
+
+namespace
+{
+	bool AreAllEntriesPaused(
+		const std::vector<SceneSettingsManager::SettingEntry>& entries,
+		SceneSettingsManager::EntrySource source)
+	{
+		bool found = false;
+		for (const auto& entry : entries) {
+			if (entry.source != source)
+				continue;
+			found = true;
+			if (!entry.paused)
+				return false;
+		}
+		return found;
+	}
+}
 
 // --- Path Resolution ---
 
@@ -192,6 +209,8 @@ void SceneSettingsManager::TogglePauseEntry(SceneType type, size_t index)
 	auto& vec = GetEntriesMut(type);
 	if (index < vec.size()) {
 		vec[index].paused = !vec[index].paused;
+		if (vec[index].source == EntrySource::User)
+			SaveUserSettings(type);
 		ReapplyIfActive();
 	}
 }
@@ -206,7 +225,6 @@ bool SceneSettingsManager::HasOverwriteEntries(SceneType type) const
 
 void SceneSettingsManager::SetAllOverwritesPaused(SceneType type, bool paused)
 {
-	allOverwritesPausedMap[type] = paused;
 	for (auto& entry : GetEntriesMut(type))
 		if (entry.source == EntrySource::Overwrite)
 			entry.paused = paused;
@@ -215,8 +233,7 @@ void SceneSettingsManager::SetAllOverwritesPaused(SceneType type, bool paused)
 
 bool SceneSettingsManager::AreAllOverwritesPaused(SceneType type) const
 {
-	auto it = allOverwritesPausedMap.find(type);
-	return it != allOverwritesPausedMap.end() && it->second;
+	return AreAllEntriesPaused(GetEntries(type), EntrySource::Overwrite);
 }
 
 void SceneSettingsManager::DeleteAllOverwrites(SceneType type)
@@ -234,23 +251,21 @@ void SceneSettingsManager::DeleteAllOverwrites(SceneType type)
 		return e.source == EntrySource::Overwrite;
 	});
 
-	allOverwritesPausedMap[type] = false;
 	ReapplyIfActive();
 }
 
 void SceneSettingsManager::SetAllUserPaused(SceneType type, bool paused)
 {
-	allUserPausedMap[type] = paused;
 	for (auto& entry : GetEntriesMut(type))
 		if (entry.source == EntrySource::User)
 			entry.paused = paused;
+	SaveUserSettings(type);
 	ReapplyIfActive();
 }
 
 bool SceneSettingsManager::AreAllUserPaused(SceneType type) const
 {
-	auto it = allUserPausedMap.find(type);
-	return it != allUserPausedMap.end() && it->second;
+	return AreAllEntriesPaused(GetEntries(type), EntrySource::User);
 }
 
 void SceneSettingsManager::DeleteAllUserSettings(SceneType type)
@@ -260,7 +275,6 @@ void SceneSettingsManager::DeleteAllUserSettings(SceneType type)
 		return e.source == EntrySource::User;
 	});
 
-	allUserPausedMap[type] = false;
 	SaveUserSettings(type);
 	ReapplyIfActive();
 }
@@ -278,10 +292,6 @@ void SceneSettingsManager::UpdateEntryValue(SceneType type, size_t index, const 
 
 	// Only apply if no active overwrite covers this key (overwrites take priority)
 	if (isCurrentlyApplied && !vec[index].paused && !IsFeaturePaused(vec[index].featureShortName)) {
-		if (!PerformanceTuningRenderer::PrepareForSceneSettingsTransition()) {
-			queuedReapply = true;
-			return;
-		}
 		if (vec[index].source == EntrySource::Overwrite ||
 			!HasActiveOverwrite(type, vec[index].featureShortName, vec[index].settingKey))
 			ApplySettingToFeature(vec[index]);
@@ -295,7 +305,7 @@ RE::BSEventNotifyControl SceneSettingsManager::MenuOpenCloseEventHandler::Proces
 	RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
 	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME && !a_event->opening) {
-		// Defer cell transition to next frame — cell data isn't available yet
+		// Defer cell transition to next frame ? cell data isn't available yet
 		// when this event fires. Same pattern as Skylighting::queuedResetSkylighting.
 		GetSingleton()->queuedCellTransition = true;
 	}
@@ -311,8 +321,6 @@ void SceneSettingsManager::Update()
 	if (isCurrentlyApplied) {
 		bool isMainOrLoading = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
 		if (isMainOrLoading) {
-			if (!PerformanceTuningRenderer::PrepareForSceneSettingsTransition())
-				return;
 			RevertToExteriorSettings();
 			isCurrentlyApplied = false;
 		}
@@ -322,9 +330,6 @@ void SceneSettingsManager::Update()
 		queuedCellTransition = false;
 		OnCellTransition();
 	}
-
-	if (queuedReapply)
-		ReapplyIfActive();
 }
 
 void SceneSettingsManager::OnCellTransition()
@@ -335,18 +340,10 @@ void SceneSettingsManager::OnCellTransition()
 		interior = sky->mode.get() != RE::Sky::Mode::kFull;
 
 	if (interior && !isCurrentlyApplied) {
-		if (!PerformanceTuningRenderer::PrepareForSceneSettingsTransition()) {
-			queuedCellTransition = true;
-			return;
-		}
 		SaveExteriorSettings(SceneType::InteriorOnly);
 		ApplySettings(SceneType::InteriorOnly);
 		isCurrentlyApplied = true;
 	} else if (!interior && isCurrentlyApplied) {
-		if (!PerformanceTuningRenderer::PrepareForSceneSettingsTransition()) {
-			queuedCellTransition = true;
-			return;
-		}
 		RevertToExteriorSettings();
 		isCurrentlyApplied = false;
 	}
@@ -354,15 +351,8 @@ void SceneSettingsManager::OnCellTransition()
 
 void SceneSettingsManager::ReapplyIfActive()
 {
-	if (!isCurrentlyApplied) {
-		queuedReapply = false;
+	if (!isCurrentlyApplied)
 		return;
-	}
-	if (!PerformanceTuningRenderer::PrepareForSceneSettingsTransition()) {
-		queuedReapply = true;
-		return;
-	}
-	queuedReapply = false;
 
 	// Full revert + re-apply so removed/paused entries get exterior values restored
 	RevertToExteriorSettings();
@@ -449,7 +439,7 @@ void SceneSettingsManager::SaveExteriorSettings(SceneType type)
 
 void SceneSettingsManager::ApplySettings(SceneType type)
 {
-	// Apply user entries first, then overwrites — overwrites win via last-write-wins
+	// Apply user entries first, then overwrites ? overwrites win via last-write-wins
 	for (const auto& entry : GetEntries(type)) {
 		if (entry.source != EntrySource::User || !IsEntryActive(entry))
 			continue;
@@ -515,6 +505,7 @@ void SceneSettingsManager::ApplySettingToFeature(const SettingEntry& entry)
 void SceneSettingsManager::SaveUserSettings(SceneType type)
 {
 	auto path = GetSettingsFilePath(type);
+	Util::FileHelpers::EnsureDirectoryExists(path.parent_path());
 
 	auto& vec = GetEntries(type);
 	json data = json::array();
@@ -531,17 +522,15 @@ void SceneSettingsManager::SaveUserSettings(SceneType type)
 	}
 
 	auto typeName = GetSceneTypeName(type);
-	const auto writeResult = Util::FileHelpers::WriteJsonFileAtomic(path, data, 2);
-	if (!writeResult) {
-		logger::error(
-			"[SceneSettings] Failed to save {} settings at '{}': {}",
-			typeName,
-			path.string(),
-			writeResult.errorMessage);
-		return;
+	try {
+		std::string errorMessage;
+		if (Util::FileHelpers::WriteTextFileAtomic(path, data.dump(2), errorMessage))
+			logger::info("[SceneSettings] Saved {} {} user settings", data.size(), typeName);
+		else
+			logger::error("[SceneSettings] Failed to save {} settings: {}", typeName, errorMessage);
+	} catch (const std::exception& e) {
+		logger::error("[SceneSettings] Failed to save {} settings: {}", typeName, e.what());
 	}
-
-	logger::info("[SceneSettings] Saved {} {} user settings", data.size(), typeName);
 }
 
 void SceneSettingsManager::LoadUserSettings(SceneType type)
@@ -652,7 +641,7 @@ void SceneSettingsManager::DiscoverOverwrites(SceneType type)
 				continue;
 			}
 
-			// Count non-metadata settings — must have exactly one
+			// Count non-metadata settings ? must have exactly one
 			int settingCount = 0;
 			std::string settingKey;
 			json settingValue;

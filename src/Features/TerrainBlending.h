@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Utils/LazyShader.h"
+#include "Buffer.h"
+#include <memory>
 
 /** @brief Provides seamless depth-based blending between terrain and objects to eliminate harsh transitions. */
 struct TerrainBlending : Feature
@@ -34,9 +36,17 @@ public:
 		uint32_t Enabled = true;
 		float TerrainCullDistance = 1024.0f;
 		float BlendStrength = 1.0f;
-		float pad0 = 0.0f;
+		uint32_t LandscapeSeams = false;
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
+
+	struct alignas(16) DepthBlendCB
+	{
+		uint32_t blendWidth = 0;
+		uint32_t blendHeight = 0;
+		uint32_t pad[2] = {};
+	};
+	STATIC_ASSERT_ALIGNAS_16(DepthBlendCB);
 
 	Settings settings;
 
@@ -61,6 +71,8 @@ public:
 	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled != 0; }
+	/** Keeps configured blend and culling values when toggled in the header. */
+	void SetPerformanceToggleEnabled(bool a_enabled) override { settings.Enabled = a_enabled ? 1u : 0u; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
 		if (a_enabled) {
@@ -88,6 +100,7 @@ public:
 
 	/** @brief Creates GPU resources including depth textures, blended depth buffers, and stencil states. */
 	virtual void SetupResources() override;
+	void SetupRenderTargetResources() override { SetupResources(); }
 
 	/** @brief Returns the terrain depth-offset vertex shader, compiling on first use. */
 	ID3D11VertexShader* GetTerrainOffsetVertexShader();
@@ -131,6 +144,9 @@ public:
 
 	Texture2D* blendedDepthTexture = nullptr;
 	Texture2D* blendedDepthTexture16 = nullptr;
+	Texture2D* mainDepthCopy = nullptr;
+	std::unique_ptr<ConstantBuffer> depthBlendCB;
+	ID3D11ShaderResourceView* GetBlendedDepthSRV() const { return blendedDepthTexture ? blendedDepthTexture->srv.get() : nullptr; }
 
 	RE::BSGraphics::DepthStencilData terrainDepth;
 

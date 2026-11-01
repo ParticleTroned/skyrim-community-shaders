@@ -4,8 +4,12 @@
 #include "Feature.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/FSRTemporalTuningSerialization.h"
 #include "Upscaling/RCAS/RCAS.h"
+#include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/Streamline.h"
+#include "Upscaling/ReflexBackend.h"
+#include "Upscaling/NeuralRendering/MonoPolicy.h"
 #include "Utils/LazyShader.h"
 #include <atomic>
 #include <cstdint>
@@ -55,6 +59,24 @@ public:
 		kDLSS
 	};
 
+	struct MonoProfile
+	{
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		uint32_t qualityMode = 0, dlssPreset = 0;
+		bool fsrAutomatic = false;
+		bool operator==(const MonoProfile&) const = default;
+	};
+	/** Stage one validated mono profile; resource changes remain owned by the next render boundary. */
+	bool RequestMonoProfile(UpscaleMethod method, uint32_t qualityMode, uint32_t dlssPreset, bool fsrAutomatic);
+	/** Require both the requested settings and the applied mono resource state to match. */
+	[[nodiscard]] bool IsMonoProfileSelected(UpscaleMethod method, uint32_t qualityMode, uint32_t dlssPreset, bool fsrAutomatic) const;
+	[[nodiscard]] MonoProfile GetMonoConfiguredProfile() const;
+	[[nodiscard]] MonoProfile GetMonoEffectiveProfile() const;
+	[[nodiscard]] bool HasMonoEffectiveProfile() const;
+	[[nodiscard]] bool IsMonoProfileMutationBlocked() const;
+	/** Atomically validates the requested profile before staging fresh runtime contexts. */
+	bool SetFSRTemporalTuningSettings(const FSRTemporalTuningPolicy::Settings&);
+
 	// Shared DLSS/FSR/FSR4 render-scale presets:
 	// 0=Native AA/DLAA, 1=Hoshipa, 2=Ultra Quality, 3=Quality,
 	// 4=Balanced, 5=Performance, 6=Ultra Performance
@@ -91,6 +113,8 @@ public:
 		}
 	}
 
+	enum class DLSSSharpenerMode : uint32_t { Off, RCAS, LumaUnsharp };
+
 	struct Settings
 	{
 		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;
@@ -106,6 +130,13 @@ public:
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.0f;
 		float sharpnessDLSS = kDefaultDLSSSharpness;
+		uint dlssSharpenerMode = static_cast<uint>(DLSSSharpenerMode::RCAS);
+		bool motionAdaptiveRCAS = false;
+		float motionSharpnessAdjustment = -0.5f;
+		float motionSharpnessThreshold = 2.0f;
+		float motionSharpnessCap = 1.0f;
+		FSRTemporalTuningPolicy::Settings fsrTemporalTuning{};
+		bool fsrSharedGuideInputs = true;
 		bool fsr4RuntimeEnable = true;
 		uint fsr4RuntimeSelectionSchemaVersion = kFsr4RuntimeSelectionSchemaVersion;
 		bool reflexLowLatencyMode = true;
@@ -116,6 +147,44 @@ public:
 	};
 
 	Settings settings;
+
+	struct RuntimeResolutionPlan
+	{
+		struct Extent { uint32_t x = 0, y = 0; };
+		Extent engineRenderSize, finalOutputSize;
+		bool menuContextActive = false;
+		bool loadingMenuActive = false;
+	};
+	/** Reports actual mono scene and output dimensions, independently of inference resolution. */
+	[[nodiscard]] RuntimeResolutionPlan GetRuntimeResolutionPlan() const;
+	/** Prevents residency changes while world or render resources are being replaced. */
+	[[nodiscard]] bool IsTextureStreamingTransitionActive() const;
+	[[nodiscard]] DLSSSharpenerMode GetDLSSSharpenerMode() const;
+	void DrawSharpeningSettings();
+	void DrawFsrTemporalTuningSettings(bool a_collapsible = true);
+
+	NeuralRendering::MonoSettings neuralSettings{};
+	/** Stable configuration gate for category shader compilation and target allocation. */
+	[[nodiscard]] bool NeedsCharacterCategoryShaders() const;
+	[[nodiscard]] bool IsNeuralRenderingEnabled() const;
+	[[nodiscard]] bool IsNeuralRenderingRequested() const;
+	[[nodiscard]] bool IsNeuralCharacterSelectionRequested() const;
+	[[nodiscard]] const NeuralRendering::MonoSettings& GetNeuralRenderingSettings() const { return neuralSettings; }
+	/** Stage a guarded NR toggle for the next safe render boundary without persisting it. */
+	bool ToggleNeuralRendering(std::string* error = nullptr);
+	/** Shared mutation lock for menu controls and the NR hotkey. */
+	[[nodiscard]] const char* GetNeuralRenderingMutationBlockReason() const;
+	void SetNeuralRenderingFeatureAvailable(bool available) { neuralRenderingFeatureAvailable = available; }
+	NeuralRendering::ActorAdmission ObserveNeuralActor(const NeuralRendering::ActorObservation&);
+	void SetNeuralSceneCategories(ID3D11ShaderResourceView*, ID3D11ShaderResourceView*, uint32_t frame, uint32_t width, uint32_t height);
+	void CaptureNeuralFrameGuides();
+	/** May be called by load/new-game notifications; consumed only on the render thread. */
+	void RequestPostLoadRuntimeReset() noexcept { postLoadRuntimeResetRequested.store(true, std::memory_order_release); }
+	void ApplyFinalNeuralFrame();
+	ID3D11Texture2D* PrepareNeuralUpscalerInput(ID3D11Texture2D*, uint32_t width, uint32_t height);
+	bool neuralRenderingFeatureAvailable = false;
+	uint32_t neuralGuidesFrame = UINT32_MAX, neuralWorldFrame = UINT32_MAX;
+	bool neuralFinalSceneIsHDR = false, previousNeuralUpscalerInput = false;
 
 	struct JitterCB
 	{
@@ -260,6 +329,12 @@ public:
 			{ "dlssgFramesToGenerate", true },
 			{ "sharpnessFSR", true },
 			{ "sharpnessDLSS", true },
+			{ "dlssSharpenerMode", true },
+			{ "motionAdaptiveRCAS", true },
+			{ "motionSharpnessAdjustment", true },
+			{ "motionSharpnessThreshold", true },
+			{ "motionSharpnessCap", true },
+			{ "fsrTemporalTuning", true },
 			{ "fsr4RuntimeEnable", true },
 			{ "fsr4RuntimeSelectionSchemaVersion", true },
 			{ "reflexLowLatencyMode", true },
@@ -365,10 +440,12 @@ public:
 	virtual void ClearShaderCache() override;
 
 	// Static instances instead of singletons
+	static inline Reflex::Backend nativeReflex;
 	static inline Streamline streamline;
 	static inline Streamline streamlineDX12{ sl::RenderAPI::eD3D12, Streamline::DLSSGPluginDir };
 	static inline FidelityFX fidelityFX;  ///< Only for frame generation
 	static inline DX12SwapChain dx12SwapChain;
+	static inline LumaSharpen lumaSharpen;
 	static inline RCAS rcas;  ///< Standalone RCAS sharpening for DLSS
 
 	Util::LazyShader<ID3D11PixelShader> copyDepthToSharedBufferPS;
@@ -434,6 +511,7 @@ public:
 	};
 	std::atomic<BackendLifecycle> backendLifecycle = BackendLifecycle::kRunning;
 	std::atomic_bool backendShutdownRequiresPresent = false;
+	std::atomic_bool postLoadRuntimeResetRequested = false;
 
 	bool CopySharedD3D12Resources(uint32_t& a_renderWidth, uint32_t& a_renderHeight);
 	bool CompositeFrameGenerationUIFallback(bool& a_uiPreparedForOutput);
@@ -516,6 +594,11 @@ public:
 
 private:
 	void DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone);
+	void DrawUpscalingModeSettings(bool a_showEmbeddedInfo, bool a_allowNone);
+	void DrawUpscalingLookSettings();
+	void DrawFrameGenerationSettings(bool a_showEmbeddedInfo);
+	void DrawReflexSettings(bool a_showEmbeddedInfo);
+	void DrawUpscalingDiagnostics();
 	bool renderDocUpscalingBackendSkipLogged = false;
 
 	struct Main_UpdateJitter

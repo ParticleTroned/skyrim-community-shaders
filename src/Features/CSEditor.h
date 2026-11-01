@@ -41,6 +41,11 @@ public:
 	virtual void DataLoaded() override;
 	virtual void Prepass() override;
 
+	void DrawLauncherRow(float width, float height);
+	static bool CanOpenEditorNow();
+	static bool IsDataAvailable();
+	static bool AreResourcesInitialized();
+	static void UpdateWeatherLockAndTime();
 	static void OpenEditorWindow();
 	static void ToggleEditorWindow();
 
@@ -171,6 +176,8 @@ private:
 	static void DisplayWindInfo(RE::TESWeather* weather);
 
 	// Helper functions
+	static void ApplySavedEditorOverrides();
+	static void ApplySavedWeatherOverrides();
 	static bool HasWidgetJsonFiles();
 	static bool ShouldPreloadEditorResources();
 	static void EnsureWeatherListLoaded();

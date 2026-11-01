@@ -164,23 +164,27 @@ namespace PBR
 			lightingOutput.diffuse += detailedLightColor * satNdotL * BRDF::Diffuse_Lambert() * kD;
 			lightingOutput.specular += Fr * detailedLightColor * satNdotL;
 
+			float2 specularBRDF = BRDF::EnvBRDF(material.Roughness, satNdotV);
+			lightingOutput.specular *= 1 + material.F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
+
 #if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 			[branch] if ((PBRFlags & Flags::Fuzz) != 0)
 			{
 				float3 fuzzSpecular = SpecularMicroflakes(material.Roughness, material.FuzzColor, satNdotL, satNdotV, satNdotH, satVdotH) * detailedLightColor * satNdotL;
+				fuzzSpecular *= 1 + material.FuzzColor * (1 / (specularBRDF.x + specularBRDF.y) - 1);
 				lightingOutput.specular = lerp(lightingOutput.specular, fuzzSpecular, material.FuzzWeight);
 			}
 
-#if defined(TREE_ANIM)
+#	if defined(TREE_ANIM)
 			[branch] if (SharedData::foliageLightingSettings.EnableFoliageScattering != 0)
 			{
-				// Animated foliage has no reliable thickness after wind deformation.
-				// Use only the current normal, light, and view angles.
+				// Foliage geometry commonly has a baked thickness of 1, and wind deformation
+				// invalidates any thickness assumption. Use only the current normal/light/view angles.
 				float foliageTransmission = saturate(-NdotL) * BRDF::Diffuse_Lambert();
 				foliageTransmission += GetFoliageTransmission(NdotL, VdotL);
 				lightingOutput.transmission += material.BaseColor * foliageTransmission * detailedLightColor * kD;
 			}
-#endif
+#	endif
 			[branch] if ((PBRFlags & Flags::Subsurface) != 0)
 #	if !defined(TREE_ANIM)
 			{
@@ -232,6 +236,7 @@ namespace PBR
 
 		const float3 N = context.worldNormal;
 		const float3 V = context.viewDir;
+		const float3 VN = context.vertexNormal;
 
 		float NdotV = saturate(dot(N, V));
 
@@ -258,17 +263,20 @@ namespace PBR
 				lobeWeights.diffuse += material.FuzzColor * material.FuzzWeight;
 			}
 #endif
+
 			float2 specularBRDF = BRDF::EnvBRDF(material.Roughness, NdotV);
 			lobeWeights.specular = material.F0 * specularBRDF.x + specularBRDF.y;
 
-			// Energy conservation: diffuse receives only what specular does not reflect
-			lobeWeights.diffuse *= 1 - lobeWeights.specular;
+			float3 kD = 1 - lobeWeights.specular;
+			lobeWeights.diffuse *= kD;
+			lobeWeights.specular *= 1 + material.F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
 
 #if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 			[branch] if ((PBRFlags & Flags::TwoLayer) != 0)
 			{
 				float2 coatSpecularBRDF = BRDF::EnvBRDF(material.CoatRoughness, NdotV);
 				float3 coatSpecularLobeSpecular = material.CoatF0 * coatSpecularBRDF.x + coatSpecularBRDF.y;
+				coatSpecularLobeSpecular *= 1 + material.CoatF0 * (1 / (coatSpecularBRDF.x + coatSpecularBRDF.y) - 1);
 
 				float3 layerAttenuation = 1 - coatSpecularLobeSpecular * material.CoatStrength;
 				lobeWeights.diffuse *= layerAttenuation;
@@ -284,16 +292,25 @@ namespace PBR
 #endif
 		}
 
-		// Apply ambient occlusion with multi-bounce approximation
-		lobeWeights.diffuse *= MultiBounceAO(material.BaseColor, material.AO);
-		float alpha = material.Roughness * material.Roughness;
-		lobeWeights.specular *= SpecularOcclusion(NdotV, alpha, material.AO);
+		// Horizon specular occlusion
+		// https://marmosetco.tumblr.com/post/81245981087
+		float3 R = reflect(-V, N);
+		float horizon = min(1.0 + dot(R, VN), 1.0);
+		horizon = horizon * horizon;
+		lobeWeights.specular *= horizon;
 
+		float3 diffuseAO = MultiBounceAO(material.BaseColor, material.AO);
+		float alpha = material.Roughness * material.Roughness;
+		float specularAO = SpecularOcclusion(NdotV, alpha, material.AO);
+
+		lobeWeights.diffuse *= diffuseAO;
 #if defined(TREE_ANIM)
-		// Add a small AO-independent indirect response for animated foliage.
+		// This is intentionally additive and AO-independent: it restores a small indirect
+		// ambient response for animated foliage after the AO adjustment.
 		[branch] if (SharedData::foliageLightingSettings.EnableFoliageAmbientBoost != 0)
 			lobeWeights.diffuse += material.BaseColor * SharedData::foliageLightingSettings.FoliageAmbientAmount;
 #endif
+		lobeWeights.specular *= specularAO;
 
 		const float metalReflectionScale = lerp(1.0, SharedData::truePBRSettings.PBRMetalReflectionScale, saturate(material.Metallic));
 		lobeWeights.specular *= metalReflectionScale;

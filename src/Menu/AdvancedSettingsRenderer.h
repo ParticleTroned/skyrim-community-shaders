@@ -9,13 +9,25 @@ class Menu;
 class AdvancedSettingsRenderer
 {
 public:
+	/** Draw startup, compilation, diagnostics, capture and testing sections. */
 	static void RenderAdvancedSettings(
 		const std::function<void()>& drawDisableAtBootSettings);
 
 private:
-	static void RenderLoggingSection();
-	static void RenderShaderDebugSection();
+	static void RenderShadersSection();
+	static void RenderDiagnosticsSection();
 	static void RenderDisableAtBootSection(const std::function<void()>& drawDisableAtBootSettings);
-	static void RenderDeveloperSection();
 	static void RenderTestingSection();
+
+	// Helpers used by the sections above
+	static void RenderShaderCompileFlags();
+	static void RenderShaderThreading();
+	static void RenderShaderCacheControls();
+	static void RenderShaderReplacementTable();
+	static void RenderShaderCompileStatistics();
+
+	static void RenderLoggingControls();
+	static void RenderRuntimeDebugControls();
+	static void RenderShaderBlockingPanel();
+	static void RenderCompileTraceExport();
 };

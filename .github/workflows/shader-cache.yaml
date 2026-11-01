@@ -84,6 +84,18 @@ jobs:
               shell: bash
               run: python -m pip install -r tools/shader-cache-requirements.txt
 
+            - name: Verify managed cache and SE packaging contracts
+              shell: pwsh
+              run: |
+                  foreach ($test in @(
+                      'tests/shader_cache_pack_builder_test.py',
+                      'tests/shader_cache_packaging_test.py',
+                      'tests/shader_cache_se_test.py'
+                  )) {
+                      & python $test
+                      if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                  }
+
             - name: Build, validate, and package shader cache
               shell: pwsh
               env:

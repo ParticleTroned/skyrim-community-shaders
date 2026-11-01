@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX SDK.
 //
-// Copyright (C) 2025 Advanced Micro Devices, Inc.
+// Copyright (C) 2026 Advanced Micro Devices, Inc.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files(the "Software"), to deal
@@ -37,7 +37,7 @@ After the panning is done,
 - Default Tuning now gets stuck at targeting ~33ms after panning to a complex scene. GPU utilization significantly lower in this case.
 - Tuning Set B and Tuning Set A are able to recover close to ~19ms because of these 2 tuning result in lower "target frametime delta" than Default Tuning.
 
-However, larger varianceFactor or safetyMarginInMs results in higher variance. As seen in Example #2 bellow.
+However, larger varianceFactor or safetyMarginInMs results in higher variance. As seen in Example #2 below.
 
 Example #2 - FFX_API_FSR sample. Set app fps cap to 33.33ms. Use OCAT to capture 10s at default camera position.
 FSR 3.1.0 FG msbetweenpresents ping-pong between 16.552 (5th-percentile) and 16.832 (95th-percentile). Variance is 0.01116.
@@ -57,16 +57,16 @@ Ignoring the cost of FI,
 "Tuning set B"'s "target frametime delta" of 16.589 results in a bit larger frame to frame delta (or in other words a bit larger variance) vs Default tuning.
 
 TLDR:
-If your game when using FG, frame rate is running at unexpectly low frame rate, after gradual transition from rendering complex to easy scene complexity, you could try setting "Tuning Set B" to recover lost FPS at cost of a bit higher variance.
+If your game when using FG, frame rate is running at an unexpectedly low frame rate, after gradual transition from rendering complex to easy scene complexity, you could try setting "Tuning Set B" to recover lost FPS at cost of a bit higher variance.
 
 */
 
 //struct definition matches FfxSwapchainFramePacingTuning
 typedef struct FfxApiSwapchainFramePacingTuning
 {
-    float safetyMarginInMs; // in Millisecond. Default is 0.1ms
-    float varianceFactor; // valid range [0.0,1.0]. Default is 0.1
-    bool     allowHybridSpin; //Allows pacing spinlock to sleep. Default is false.
-    uint32_t hybridSpinTime;  //How long to spin if allowHybridSpin is true. Measured in timer resolution units. Not recommended to go below 2. Will result in frequent overshoots. Default is 2.
-    bool     allowWaitForSingleObjectOnFence; //Allows WaitForSingleObject instead of spinning for fence value. Default is false.
+    float    safetyMarginInMs;                 ///< Frame pacing sleep time's safety margin in milliseconds. Default is 0.1ms.
+    float    varianceFactor;                   ///< Variance factor for consecutive frame times. Valid range [0.0,1.0], default is 0.1.
+    bool     allowHybridSpin;                  ///< Allows pacing spinlock to sleep. Less precise, but power saving. Default is false.
+    uint32_t hybridSpinTime;                   ///< How long to spin if allowHybridSpin is true, in timer resolution units. Not recommended to go below 2, as it will result in frequent overshoots. Default is 2.
+    bool     allowWaitForSingleObjectOnFence;  ///< Allows WaitForSingleObject instead of spinning for fence value. Default is false.
 } FfxApiSwapchainFramePacingTuning;

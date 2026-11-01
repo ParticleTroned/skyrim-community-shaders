@@ -9,6 +9,14 @@ private:
 	static constexpr std::string_view MOD_ID = "112739";
 
 public:
+	static constexpr std::string_view kShortName = "WetnessEffects";
+	static constexpr bool kExposeInAIOUserInterface = false;
+	static constexpr bool kForceDisableInAIO = true;
+	bool IsForcedDisabledAtBoot() const override { return kForceDisableInAIO; }
+	bool IsInMenu() const override { return kExposeInAIOUserInterface; }
+	bool IsHiddenFromUserView() const override { return !kExposeInAIOUserInterface; }
+	bool DrawFailLoadMessage() const override { return kExposeInAIOUserInterface; }
+	bool IsRuntimeActive() const { return loaded && settings.EnableWetnessEffects != 0; }
 	virtual inline std::string GetName() override { return "Wetness Effects"; }
 	virtual std::string GetDisplayName() override { return T("feature.wetness_effects.name", "Wetness Effects"); }
 	/** @brief Returns the short identifier used for file paths and logging. */

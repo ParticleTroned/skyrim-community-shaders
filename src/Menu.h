@@ -107,12 +107,21 @@ public:
 
 	bool initialized = false;
 	bool IsEnabled = false;
+	/** Apply one native desktop menu transition and measurement notification. */
+	void OpenMenu(bool a_cancelUserMeasurement = false);
+	void CloseMenu();
+	/** Recover desktop geometry and typography at the next frame boundary. */
+	void RequestLayoutReset() { pendingLayoutReset.store(true); }
+	bool IsLayoutResetPending() const { return pendingLayoutReset.load(); }
 
 	void Load(json& o_json);
 	void Save(json& o_json);
 
 	void LoadTheme(json& o_json);
 	void SaveTheme(json& o_json);
+	/** Theme appearance is saved separately from global feature settings. */
+	bool HasUnsavedTheme() const;
+	void AcceptCurrentThemeAsSaved();
 
 	// Multi-theme support
 	std::vector<std::string> DiscoverThemes();
@@ -121,6 +130,14 @@ public:
 
 	void Init();
 	void DrawSettings();
+	bool HasUnsavedSettings() const { return settingsDirty; }
+	/** Whether a feature differs from the last successfully saved settings. */
+	bool HasUnsavedFeatureSettings(const std::string& name) const { return dirtySettingsSections.contains(name); }
+	void RequestSettingsDirtyCheck() { settingsDirtyCheckRequested = true; }
+	/** Establishes a clean baseline before a bulk change, including before the first menu frame. */
+	bool PrepareSettingsMutation() { return EnsureSettingsDirtyBaseline(); }
+	void ResetSettingsDirtyState();
+	void AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSettingsName);
 	void ReportSettingsSaveResult(bool a_success, std::string a_message);
 	void ClearSettingsSaveResult();
 	const std::string& GetSettingsSaveMessage() const { return settingsSaveMessage; }
@@ -145,6 +162,7 @@ public:
 	bool settingToggleKey = false;
 	bool settingSkipCompilationKey = false;
 	bool settingsEffectsToggle = false;
+	bool settingNeuralRenderingToggleKey = false;
 	bool settingOverlayToggleKey = false;
 	bool settingShaderBlockPrevKey = false;  // Debug: capture shader block prev key
 	bool settingShaderBlockNextKey = false;  // Debug: capture shader block next key
@@ -434,6 +452,7 @@ public:
 		std::vector<InputCombo> ToggleKey = { InputCombo::Keyboard(VK_END) };
 		std::vector<InputCombo> SkipCompilationKey = { InputCombo::Keyboard(VK_ESCAPE) };
 		std::vector<InputCombo> EffectToggleKey = { InputCombo::Keyboard(VK_MULTIPLY) };                               // toggle all effects
+		std::vector<InputCombo> NeuralRenderingToggleKey{};
 		std::vector<InputCombo> OverlayToggleKey = { InputCombo::Keyboard(VK_F10) };                                   // Global overlay toggle key for all overlays
 		std::vector<InputCombo> ShaderBlockPrevKey = { InputCombo::Keyboard(VK_PRIOR) };                               // Debug: cycle backward through shaders (PageUp)
 		std::vector<InputCombo> ShaderBlockNextKey = { InputCombo::Keyboard(VK_NEXT) };                                // Debug: cycle forward through shaders (PageDown)
@@ -519,7 +538,21 @@ public:
 	};
 
 private:
+	std::atomic<bool> pendingLayoutReset = false;
+	bool layoutResetKeyHeld = false;
+	void ApplyPendingLayoutReset();
 	Settings settings;
+	json settingsDirtyBaseline = json::object();
+	json savedThemeSnapshot;
+	json CaptureThemeSnapshot() const;
+	bool settingsDirtyBaselineInitialized = false;
+	bool settingsDirty = false;
+	std::unordered_set<std::string> dirtySettingsSections;
+	bool settingsDirtyCheckRequested = false;
+	bool CaptureCurrentSettingsSnapshot(json& a_snapshot);
+	bool EnsureSettingsDirtyBaseline();
+	void UpdateSettingsDirtyState();
+	void UpdateDirtySettingsSections(const json& currentSettings);
 	std::string settingsSaveMessage;
 	bool settingsSaveMessageIsError = false;
 

@@ -1,4 +1,18 @@
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+#	include "Diagnostics/NvPerf.h"
+#endif
 #include "Hooks.h"
+#include "Api/AcceptedDrawService.h"
+#include "Diagnostics/AssetLoadHooks.h"
+#include "Diagnostics/D3DTextureLifetimeTracker.h"
+#include "Diagnostics/EngineStutterMonitor.h"
+#include "Features/GrassOptimizations.h"
+#include "Features/GrassOptimizations/GrassRuntime.h"
+#include "Features/LightLimitFix/ShadowCulling.h"
+#include "Features/TerrainSeams.h"
+#include "Features/Upscaling/NeuralRendering/ExposureCapture.h"
+#include "Utils/CharacterCategoryAuthoring.h"
+#include "Utils/D3DContextProtection.h"
 
 #include "ShaderTools/BSShaderHooks.h"
 #include "Utils/ExternalEmittance.h"
@@ -433,7 +447,7 @@ struct BSShader_LoadShaders
 				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
 				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
 				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor, true);
-				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
+				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, globals::features::upscaling.NeedsCharacterCategoryShaders());
 			}
 		}
 		BSShaderHooks::hk_LoadShaders((REX::BSShader*)shader, stream);
@@ -445,6 +459,23 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 {
 	auto state = globals::state;
 	auto shaderCache = globals::shaderCache;
+
+	state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
+	state->deferredPixelShaderMissing = false;
+	constexpr auto seamsFlag = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
+	if (shader->shaderType.get() == RE::BSShader::Type::Lighting && (pixelDescriptor & seamsFlag)) {
+		bool available = TerrainSeams::GetInstance().IsEnabled() && !skipPixelShader;
+		if (available) {
+			auto vertex = vertexDescriptor;
+			auto pixel = pixelDescriptor;
+			state->ModifyShaderLookup(*shader, vertex, pixel);
+			available = shaderCache->GetVertexShader(*shader, vertex) && shaderCache->GetPixelShader(*shader, pixel);
+		}
+		if (!available) {
+			vertexDescriptor &= ~seamsFlag;
+			pixelDescriptor &= ~seamsFlag;
+		}
+	}
 
 	state->updateShader = true;
 	state->currentShader = shader;
@@ -467,7 +498,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 
 	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect && !UseNativeWaterShaders(*shader)) {
 		RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
-		RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor);
+		RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
 		if (vertexShader == nullptr || (!skipPixelShader && pixelShader == nullptr)) {
 			shaderFound = false;
 		} else {
@@ -481,6 +512,11 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			*globals::game::currentPixelShader = pixelShader;
 			if (pixelShader)
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+			state->selectedCustomPixelShaderType = pixelShader ? shader->shaderType.get() : RE::BSShader::Type::None;
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+					globals::d3d::context, shader, pixelShader,
+					pixelShader ? reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader) : nullptr);
 			state->settingCustomShader = false;
 			shaderFound = true;
 		}
@@ -489,7 +525,9 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	state->lastModifiedVertexDescriptor = state->modifiedVertexDescriptor;
 	state->lastModifiedPixelDescriptor = state->modifiedPixelDescriptor;
 
-	return shaderFound;
+	if (skipPixelShader || !shaderFound || state->deferredPixelShaderMissing)
+		state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
+	return shaderFound && !state->deferredPixelShaderMissing;
 }
 
 namespace EffectExtensions
@@ -498,9 +536,19 @@ namespace EffectExtensions
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
+			CSX::Api::BeginAcceptedDrawGeometry(pass);
 			func(shader, pass, renderFlags);
+			CSX::Api::ActivateAcceptedDrawGeometry(pass);
 
 			ExternalEmittance::UpdatePermutation(pass);
+			auto* state = globals::state;
+			state->UpdateEffectShaderPermutation(pass);
+			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::EffectShadows);
+			if (pass && pass->geometry) {
+				if (auto* property = static_cast<RE::BSShaderProperty*>(pass->geometry->GetGeometryRuntimeData().shaderProperty.get());
+					property && property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kUniformScale))
+					state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::EffectShadows);
+			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -526,13 +574,48 @@ namespace LightingExtensions
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
+			CSX::Api::BeginAcceptedDrawGeometry(pass);
+			TerrainSeams::GetInstance().Restore();
 			globals::state->UpdateLightingShaderPermutation(pass);
-
+			if (pass && (globals::state->modifiedPixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams)))
+				TerrainSeams::GetInstance().Bind(pass->geometry);
+			CharacterCategoryAuthoring::Update(pass);
+			globals::features::terrainVariation.UpdateMeshPermutation(pass);
 			func(shader, pass, renderFlags);
+			auto* state = globals::state;
+			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
+			if (pass && pass->geometry)
+				if (auto* reference = pass->geometry->GetUserData())
+					if (auto* base = reference->GetBaseObject(); base && base->As<RE::TESObjectTREE>())
+						state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
+			CSX::Api::ActivateAcceptedDrawGeometry(pass);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 }
+
+struct BSLightingShader_RestoreGeometry
+{
+	static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t flags)
+	{
+		CSX::Api::SuspendAcceptedDrawGeometry();
+		TerrainSeams::GetInstance().Restore();
+		func(shader, pass, flags);
+		CSX::Api::EndAcceptedDrawGeometry(pass);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+struct BSEffectShader_RestoreGeometry
+{
+	static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t flags)
+	{
+		CSX::Api::SuspendAcceptedDrawGeometry();
+		func(shader, pass, flags);
+		CSX::Api::EndAcceptedDrawGeometry(pass);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
 namespace GrassExtensions
 {
@@ -545,6 +628,7 @@ namespace GrassExtensions
 			auto* lightingProperty = *reinterpret_cast<RE::BSLightingShaderProperty**>(lightingPropertyAddress);
 
 			RE::BSLightingShaderProperty* grassProperty = func(property);
+			globals::features::truePBR.SetupGrassMaterial(lightingProperty, grassProperty);
 
 			if (lightingProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kEffectLighting)) {
 				grassProperty->SetFlags(RE::BSShaderProperty::EShaderPropertyFlag8::kEffectLighting, true);
@@ -557,19 +641,128 @@ namespace GrassExtensions
 
 	struct BSGrassShader_SetupGeometry
 	{
-		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
+		static void SetupNativeGeometry(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			func(shader, pass, renderFlags);
+			const auto& grass = globals::features::grassOptimizations;
+			if (grass.loaded && grass.IsEnabled()) {
+				// Depth and color need the same sampler, including native fallback and batch re-preparation.
+				auto* shadowState = globals::game::shadowState;
+				shadowState->SetPSTextureAddressMode(0, RE::BSGraphics::TextureAddressMode::kClampSClampT);
+				shadowState->SetPSTextureFilterMode(0, RE::BSGraphics::TextureFilterMode::kAnisotropic);
+			}
+		}
+
+		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
+		{
+			// Native setup advances property history before CPU shader constants may be readable.
+			auto* const windProperty = pass ? pass->shaderProperty : nullptr;
+			std::optional<uint32_t> nativeWindTimer;
+			if (windProperty) {
+				auto* property = static_cast<RE::BSGrassShaderProperty*>(windProperty);
+				nativeWindTimer = GrassRuntime::GetPropertyData(property).windTimer;
+			}
+			SetupNativeGeometry(shader, pass, renderFlags);
+			if (pass && pass->shaderProperty != windProperty)
+				nativeWindTimer.reset();
 
 			auto state = globals::state;
 
 			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::GrassSphereNormal);
+			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::PBRGrass);
+			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::PBRGrassShading);
 
 			if (auto* shaderProperty = static_cast<RE::BSShaderProperty*>(pass->geometry->GetGeometryRuntimeData().shaderProperty.get())) {
+				if (globals::features::truePBR.IsPBRGrassMaterial(shaderProperty->material)) {
+					state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::PBRGrass);
+					if (globals::features::truePBR.IsPBRGrassEnabled())
+						state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::PBRGrassShading);
+				}
 				if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kEffectLighting)) {
 					state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::GrassSphereNormal);
 				}
 			}
+			globals::features::grassOptimizations.PrepareGeometry(pass, shader, renderFlags, SetupNativeGeometry, nativeWindTimer);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BSGrassShader_RestoreGeometry
+	{
+		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
+		{
+			globals::features::grassOptimizations.GetRenderer().FinishGeometry(pass);
+			func(shader, pass, renderFlags);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BSGrassShader_SetupTechnique
+	{
+		static bool thunk(RE::BSShader* shader, uint32_t technique)
+		{
+			auto* state = globals::state;
+			state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
+			const bool ready = func(shader, technique);
+			auto* cache = globals::shaderCache;
+			const bool needsCustomPair = globals::features::grassOptimizations.loaded ||
+			                             (globals::features::truePBR.loaded && globals::features::grassLighting.loaded);
+			if (!ready || !needsCustomPair ||
+				!cache->IsEnabled() || !state->ShaderEnabled(RE::BSShader::Type::Grass))
+				return ready;
+			auto* vertex = cache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
+			auto* pixel = cache->GetPixelShader(*shader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
+			if (state->deferredPixelShaderMissing)
+				return false;
+			if (vertex && pixel) {
+				// Native setup must address the reflected constants of the bound grass pair.
+				globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertex->shader), nullptr, 0);
+				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixel->shader), nullptr, 0);
+				state->selectedCustomPixelShaderType = RE::BSShader::Type::Grass;
+				*globals::game::currentVertexShader = vertex;
+				*globals::game::currentPixelShader = pixel;
+				globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
+			} else {
+				if (auto* deferred = globals::deferred; pixel && deferred && deferred->deferredPass) {
+					// A missing custom vertex stage must not restore native outputs into the G-buffer.
+					deferred->InvalidateCharacterCategoryCapture();
+					return false;
+				}
+				auto* nativeVertex = *globals::game::currentVertexShader;
+				auto* nativePixel = *globals::game::currentPixelShader;
+				globals::d3d::context->VSSetShader(nativeVertex ? reinterpret_cast<ID3D11VertexShader*>(nativeVertex->shader) : nullptr, nullptr, 0);
+				globals::d3d::context->PSSetShader(nativePixel ? reinterpret_cast<ID3D11PixelShader*>(nativePixel->shader) : nullptr, nullptr, 0);
+				state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
+			}
+			return ready;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	class GrassBaseMaterial final : public RE::BSLightingShaderMaterialBase
+	{
+	public:
+		RE::BSShaderMaterial* Create() override
+		{
+			return CreateMaterial(RE::BSShaderMaterial::Feature::kDefault);
+		}
+	};
+	static_assert(sizeof(GrassBaseMaterial) == sizeof(RE::BSLightingShaderMaterialBase));
+
+	struct BSGrassShader_SetupMaterial
+	{
+		static void thunk(RE::BSShader* shader, const RE::BSLightingShaderMaterialBase* material)
+		{
+			auto& pbr = globals::features::truePBR;
+			if (!pbr.IsPBRGrassMaterial(material)) {
+				func(shader, material);
+				return;
+			}
+			// Native grass reads the base material layout, even with PBR shading disabled.
+			GrassBaseMaterial legacyMaterial;
+			legacyMaterial.CopyMembers(const_cast<RE::BSLightingShaderMaterialBase*>(material));
+			func(shader, &legacyMaterial);
+			pbr.SetupGrassShaderMaterial(shader, material);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -736,7 +929,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 	auto ret = ptrD3D11CreateDeviceAndSwapChain(pAdapter,
 		DriverType,
 		Software,
-		Flags,
+		Util::ThreadSafeDeviceFlags(Flags),
 		&featureLevel,
 		1,
 		SDKVersion,
@@ -746,13 +939,15 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 		pFeatureLevel,
 		ppImmediateContext);
 
-	return ret;
+	return Util::ValidateDeviceCreation(ret, ppDevice, ppImmediateContext, ppSwapChain);
 }
 
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
 	func(isCompute);
 	globals::state->Draw();
+	if (globals::features::upscaling.IsNeuralRenderingEnabled())
+		NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
 }
 
 struct ID3D11Device_CreateVertexShader
@@ -765,6 +960,47 @@ struct ID3D11Device_CreateVertexShader
 			RegisterShaderBytecode(*ppVertexShader, pShaderBytecode, BytecodeLength);
 
 		return hr;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+struct ID3D11Device_CreateTexture2D
+{
+	static HRESULT STDMETHODCALLTYPE thunk(
+		ID3D11Device* a_device,
+		const D3D11_TEXTURE2D_DESC* a_desc,
+		const D3D11_SUBRESOURCE_DATA* a_initialData,
+		ID3D11Texture2D** a_texture)
+	{
+		HRESULT result;
+		{
+			CSX::Diagnostics::Stutters::AssetScope asset(CSX::Diagnostics::Stutters::AssetKind::Texture, {}, "Texture::CreateD3DResource");
+			result = func(a_device, a_desc, a_initialData, a_texture);
+			asset.Result(SUCCEEDED(result), result);
+			if (a_desc)
+				asset.Dimensions(a_desc->Width, a_desc->Height, a_desc->MipLevels, static_cast<std::uint32_t>(a_desc->Format));
+		}
+		if (SUCCEEDED(result) && a_desc && a_texture && *a_texture) {
+			Diagnostics::D3DTextureLifetimeTracker::OnTextureCreated(
+				*a_texture,
+				*a_desc,
+				reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
+		}
+		return result;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+#endif
+
+struct ID3D11Device_CreateBuffer
+{
+	static HRESULT STDMETHODCALLTYPE thunk(ID3D11Device* a_device, const D3D11_BUFFER_DESC* a_desc, const D3D11_SUBRESOURCE_DATA* a_initialData, ID3D11Buffer** a_buffer)
+	{
+		const HRESULT result = func(a_device, a_desc, a_initialData, a_buffer);
+		if (FAILED(result) && a_buffer)
+			*a_buffer = nullptr;
+		return result;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -832,7 +1068,7 @@ struct BSShaderRenderTargets_Create
 		globals::ReInit();
 		if (!CanSetupRenderingResources())
 			return false;
-		globals::state->Setup();
+		globals::state->SetupRenderTargetResources();
 		return true;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
@@ -934,10 +1170,17 @@ namespace Hooks
 		if ((a_flags & DXGI_PRESENT_TEST) != 0)
 			return a_presentChain(a_swapChain, a_syncInterval, a_flags);
 
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+		NvPerf::OnPresentBegin();
+#endif
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		CSX::Diagnostics::Stutters::Scope stutterPresent("DXGI::PresentHook", CSX::Diagnostics::Stutters::Boundary::Present);
+#endif
 		const bool armStartupMenuBlurSource =
 			!globals::state->startupMenuBlurSourceReady &&
 			globals::state->startupMenuInitializationComplete.load(
 				std::memory_order_acquire);
+		CSX::Api::AdvanceAcceptedDrawFrame(globals::d3d::context);
 		globals::state->Reset();
 
 		const HRESULT result =
@@ -952,6 +1195,9 @@ namespace Hooks
 
 		globals::features::screenshotFeature.ProcessCaptureRequest();
 		TracyD3D11Collect(globals::state->tracyCtx);
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+		NvPerf::OnPresentEnd();
+#endif
 		if (globals::features::upscaling.ProcessBackendShutdownRequest())
 			CompleteDeferredWindowClose();
 		return result;
@@ -1004,6 +1250,13 @@ namespace Hooks
 			stl::detour_vfunc<23, ID3D11Device_CreateSamplerState>(globals::d3d::device);
 
 			globals::InstallD3DHooks(globals::d3d::context);
+			CSX::Api::InitializeAcceptedDrawService(globals::d3d::context);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			stl::detour_vfunc<5, ID3D11Device_CreateTexture2D>(globals::d3d::device);
+			CSX::Diagnostics::Stutters::AssetLoadHooks::SetTextureResourceAvailable(true);
+#endif
+			if (GetModuleHandleW(L"renderdoc.dll"))
+				stl::detour_vfunc<3, ID3D11Device_CreateBuffer>(globals::d3d::device);
 
 			globals::menu->Init();
 		}
@@ -1174,28 +1427,43 @@ namespace Hooks
 		{
 			auto state = globals::state;
 			auto shaderCache = globals::shaderCache;
+			state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
 
-			if (!state->settingCustomShader) {
+			if (!state->settingCustomShader && a_pixelShader) {
 				if (shaderCache->IsEnabled()) {
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
-					if (type > 0 && type < RE::BSShader::Type::Total) {
-						if (state->enabledClasses[type - 1] && !UseNativeWaterShaders(*currentShader)) {
-							RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
-							if (pixelShader) {
-								globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
-								*globals::game::currentPixelShader = a_pixelShader;
-								return;
-							}
+					if (state->ShaderEnabled(type) && !UseNativeWaterShaders(*currentShader)) {
+						RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
+						if (pixelShader) {
+							globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+							state->selectedCustomPixelShaderType = type;
+							*globals::game::currentPixelShader = a_pixelShader;
+							if (globals::features::upscaling.IsNeuralRenderingEnabled())
+								NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+									globals::d3d::context, currentShader, a_pixelShader, reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader));
+							return;
 						}
 					}
 				}
 			}
 
+			if (!state->settingCustomShader && a_pixelShader && state->deferredPixelShaderMissing) {
+				*globals::game::currentPixelShader = a_pixelShader;
+				return;
+			}
+			auto* deferred = globals::deferred;
+			if (!state->settingCustomShader && a_pixelShader && deferred && deferred->deferredPass &&
+				deferred->IsCharacterCategoryEnabled() && state->currentShader &&
+				SIE::ShaderCache::GetCharacterCategoryFlag(state->currentShader->shaderType.get()) != 0)
+				deferred->InvalidateCharacterCategoryCapture();
 			*globals::game::currentPixelShader = a_pixelShader;
 
-			if (a_pixelShader)
-				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(a_pixelShader->shader), NULL, NULL);
+			globals::d3d::context->PSSetShader(a_pixelShader ? reinterpret_cast<ID3D11PixelShader*>(a_pixelShader->shader) : nullptr, NULL, NULL);
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+					globals::d3d::context, state->currentShader, a_pixelShader,
+					a_pixelShader ? reinterpret_cast<ID3D11PixelShader*>(a_pixelShader->shader) : nullptr);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1298,13 +1566,19 @@ namespace Hooks
 		};
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
-#ifdef TRACY_ENABLE
+#if defined(TRACY_ENABLE) || defined(DEVBENCH_BRIDGE_ENABLED)
 	struct Main_Update
 	{
 		static void thunk(RE::Main* a_this, float a2)
 		{
+#	ifdef DEVBENCH_BRIDGE_ENABLED
+			CSX::Diagnostics::Stutters::PublishGameContext();
+			CSX::Diagnostics::Stutters::Scope stutterUpdate("Engine::MainUpdate", CSX::Diagnostics::Stutters::Boundary::Engine);
+#	endif
 			func(a_this, a2);
+#	ifdef TRACY_ENABLE
 			FrameMark;
+#	endif
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1455,9 +1729,11 @@ namespace Hooks
 			bool a_alphaTest,
 			uint32_t a_renderFlags)
 		{
-			if (!ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
-				func(a_pass, a_technique, a_alphaTest, a_renderFlags);
-			}
+			if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique) ||
+				LightLimitFixDetail::ShadowCulling::SkipShadowDraw(a_pass, a_technique))
+				return;
+			globals::features::grassOptimizations.GetRenderer().DrawRenderPass(
+				a_pass, a_technique, a_alphaTest, a_renderFlags, func.get());
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -1550,7 +1826,7 @@ namespace Hooks
 		stl::write_thunk_call<CreateCubemapRenderTarget_Reflections>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0xA25, 0xA25));
 		stl::write_thunk_call<CreateDepthStencil_Reflections>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0xA59, 0xA59));
 
-#ifdef TRACY_ENABLE
+#if defined(TRACY_ENABLE) || defined(DEVBENCH_BRIDGE_ENABLED)
 		stl::write_thunk_call<Main_Update>(REL::RelocationID(35551, 36544).address() + REL::Relocate(0x11F, 0x160));
 #endif
 
@@ -1569,10 +1845,16 @@ namespace Hooks
 
 		logger::info("Installing SetupGeometry hooks");
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
+		stl::write_vfunc<0x7, BSEffectShader_RestoreGeometry>(RE::VTABLE_BSEffectShader[0]);
 		stl::write_vfunc<0x6, SkyExtensions::BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);
 		stl::write_vfunc<0x6, LightingExtensions::BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
+		stl::write_vfunc<0x7, BSLightingShader_RestoreGeometry>(RE::VTABLE_BSLightingShader[0]);
+		CSX::Api::AcceptedDrawGeometryHooksInstalled();
 		stl::write_thunk_call<GrassExtensions::BSGrassShaderProperty_ctor>(REL::RelocationID(15214, 15383).address() + REL::Relocate(0x45B, 0x4F5));
 		stl::write_vfunc<0x6, GrassExtensions::BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
+		stl::write_vfunc<0x7, GrassExtensions::BSGrassShader_RestoreGeometry>(RE::VTABLE_BSGrassShader[0]);
+		stl::write_vfunc<0x2, GrassExtensions::BSGrassShader_SetupTechnique>(RE::VTABLE_BSGrassShader[0]);
+		stl::write_vfunc<0x4, GrassExtensions::BSGrassShader_SetupMaterial>(RE::VTABLE_BSGrassShader[0]);
 
 		logger::info("Hooking TESObjectLAND");
 		stl::detour_thunk<TESObjectLAND_SetupMaterial>(REL::RelocationID(18368, 18791));

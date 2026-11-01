@@ -1,10 +1,8 @@
 #include "LightingTemplateWidget.h"
+#include "I18n/I18n.h"
 
-#include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
 #include "../WeatherUtils.h"
-
-#define I18N_KEY_PREFIX "cs_editor."
 
 namespace
 {
@@ -69,7 +67,7 @@ void LightingTemplateWidget::DrawWidget()
 {
 	WeatherUtils::SetCurrentWidget(this);
 	if (BeginWidgetWindow()) {
-		DrawWidgetHeader("##LightingTemplateSearch", false, true);
+		DrawWidgetHeader("##LightingTemplateSearch", true, true);
 		DrawSearchDropdown();
 	}
 	if (ImGui::BeginTabBar("LightingTemplateSettingsTabs", ImGuiTabBarFlags_None)) {
@@ -77,21 +75,21 @@ void LightingTemplateWidget::DrawWidget()
 		const ImGuiTabItemFlags fogFlags = GetTabFlagsForOverride(LightingTemplateTab::kFog);
 		const ImGuiTabItemFlags dalcFlags = GetTabFlagsForOverride(LightingTemplateTab::kDalc);
 
-		if (ImGui::BeginTabItem(T(TKEY("tab_basic"), "Basic"), nullptr, basicFlags)) {
+		if (ImGui::BeginTabItem(LightingTemplateTab::kBasic, nullptr, basicFlags)) {
 			BeginScrollableContent("##BasicScroll");
 			DrawBasicSettings();
 			EndScrollableContent();
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem(T(TKEY("tab_fog"), "Fog"), nullptr, fogFlags)) {
+		if (ImGui::BeginTabItem(LightingTemplateTab::kFog, nullptr, fogFlags)) {
 			BeginScrollableContent("##FogScroll");
 			DrawFogSettings();
 			EndScrollableContent();
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem(T(TKEY("tab_dalc"), "DALC"), nullptr, dalcFlags)) {
+		if (ImGui::BeginTabItem(LightingTemplateTab::kDalc, nullptr, dalcFlags)) {
 			BeginScrollableContent("##DALCScroll");
 			DrawDALCSettings();
 			EndScrollableContent();
@@ -111,20 +109,20 @@ void LightingTemplateWidget::DrawBasicSettings()
 			return;
 		if (ShouldOpenSearchSection())
 			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-		if (ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader(label)) {
 			ImGui::Spacing();
 			draw();
 			ImGui::Spacing();
 		}
 	};
 
-	drawMatchedHeader(MatchesAnySearch({ LightingTemplateSetting::kAmbientColor, LightingTemplateSetting::kDirectionalColor }), T(TKEY("ambient_directional"), "Ambient & Directional"), [&]() {
+	drawMatchedHeader(MatchesAnySearch({ LightingTemplateSetting::kAmbientColor, LightingTemplateSetting::kDirectionalColor }), "Ambient & Directional", [&]() {
 		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kAmbientColor, settings.ambient);
 		ImGui::Spacing();
 		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kDirectionalColor, settings.directional);
 	});
 
-	drawMatchedHeader(MatchesAnySearch({ LightingTemplateSetting::kDirectionalXY, LightingTemplateSetting::kDirectionalZ, LightingTemplateSetting::kDirectionalFade }), T(TKEY("directional_settings"), "Directional Settings"), [&]() {
+	drawMatchedHeader(MatchesAnySearch({ LightingTemplateSetting::kDirectionalXY, LightingTemplateSetting::kDirectionalZ, LightingTemplateSetting::kDirectionalFade }), "Directional Settings", [&]() {
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kDirectionalXY, settings.directionalXY, 0.0f, 360.0f);
 		ImGui::Spacing();
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kDirectionalZ, settings.directionalZ, 0.0f, 360.0f);
@@ -132,13 +130,13 @@ void LightingTemplateWidget::DrawBasicSettings()
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kDirectionalFade, settings.directionalFade, 0.0f, 10.0f);
 	});
 
-	drawMatchedHeader(MatchesAnySearch({ LightingTemplateSetting::kLightFadeStart, LightingTemplateSetting::kLightFadeEnd }), T(TKEY("light_fade"), "Light Fade"), [&]() {
+	drawMatchedHeader(MatchesAnySearch({ LightingTemplateSetting::kLightFadeStart, LightingTemplateSetting::kLightFadeEnd }), "Light Fade", [&]() {
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kLightFadeStart, settings.lightFadeStart, 0.0f, 163840.0f);
 		ImGui::Spacing();
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kLightFadeEnd, settings.lightFadeEnd, 0.0f, 163840.0f);
 	});
 
-	drawMatchedHeader(MatchesAnySearch({ LightingTemplateSetting::kClipDistance }), T(TKEY("other"), "Other"), [&]() {
+	drawMatchedHeader(MatchesAnySearch({ LightingTemplateSetting::kClipDistance }), "Other", [&]() {
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kClipDistance, settings.clipDist, 0.0f, 163840.0f);
 	});
 
@@ -191,14 +189,14 @@ void LightingTemplateWidget::DrawDALCSettings()
 	bool changed = false;
 
 	if (MatchesAnySearch({ LightingTemplateSetting::kSpecular, LightingTemplateSetting::kFresnelPower })) {
-		ImGui::SeparatorText(T(TKEY("dalc_header"), "Directional Ambient Lighting (DALC)"));
+		ImGui::SeparatorText(T("cs_editor.dalc_header", "Directional Ambient Lighting (DALC)"));
 		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kSpecular, settings.dalc.specular);
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kFresnelPower, settings.dalc.fresnelPower, 0.0f, 10.0f);
 	}
 
 	if (MatchesAnySearch({ LightingTemplateSetting::kXPlus, LightingTemplateSetting::kXMinus, LightingTemplateSetting::kYPlus,
 			LightingTemplateSetting::kYMinus, LightingTemplateSetting::kZPlus, LightingTemplateSetting::kZMinus })) {
-		ImGui::SeparatorText(T(TKEY("directional_colors"), "Directional Colors"));
+		ImGui::SeparatorText(T("cs_editor.directional_colors", "Directional Colors"));
 		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kXPlus, settings.dalc.directional[0].max);
 		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kXMinus, settings.dalc.directional[0].min);
 		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kYPlus, settings.dalc.directional[1].max);
@@ -212,8 +210,6 @@ void LightingTemplateWidget::DrawDALCSettings()
 	}
 }
 
-#undef I18N_KEY_PREFIX
-
 void LightingTemplateWidget::ApplyChanges()
 {
 	if (!CanApplyPersistentChanges())
@@ -226,6 +222,23 @@ void LightingTemplateWidget::RevertChanges()
 {
 	settings = vanillaSettings;
 	ApplyChanges();
+}
+
+Widget::UndoRestoreAction LightingTemplateWidget::CaptureUndoState() const
+{
+	const auto snapshot = settings;
+	return [snapshot](Widget& widget) {
+		auto& self = static_cast<LightingTemplateWidget&>(widget);
+		self.settings = snapshot;
+	};
+}
+
+Widget::UndoRestoreAction LightingTemplateWidget::CaptureBaselineState() const
+{
+	const auto snapshot = vanillaSettings;
+	return [snapshot](Widget& widget) {
+		static_cast<LightingTemplateWidget&>(widget).vanillaSettings = snapshot;
+	};
 }
 
 void LightingTemplateWidget::SetLightingTemplateValues()
@@ -306,9 +319,16 @@ void LightingTemplateWidget::LoadFromGameSettings()
 
 void LightingTemplateWidget::LoadSettings()
 {
-	if (!js.empty()) {
-		settings = js;
-	} else {
+	try {
+		if (!js.empty() && js.is_object()) {
+			json mergedSettings = vanillaSettings;
+			mergedSettings.merge_patch(js);
+			settings = mergedSettings;
+		} else {
+			settings = vanillaSettings;
+		}
+	} catch (const std::exception& e) {
+		logger::error("Failed to load Lighting Template settings for {}: {}", GetEditorID(), e.what());
 		settings = vanillaSettings;
 	}
 	originalSettings = settings;
@@ -318,7 +338,6 @@ void LightingTemplateWidget::LoadSettings()
 void LightingTemplateWidget::SaveSettings()
 {
 	js = settings;
-	originalSettings = settings;
 }
 
 bool LightingTemplateWidget::HasUnsavedChanges() const
@@ -342,7 +361,7 @@ std::vector<Widget::SearchResult> LightingTemplateWidget::CollectSearchableSetti
 	std::vector<SearchResult> results;
 	for (const auto& [tab, names] : entries) {
 		for (const auto& name : names) {
-			results.push_back({ WeatherUtils::TranslateControlLabel(name), tab, name });
+			results.push_back({ name, tab, name });
 		}
 	}
 	return results;

@@ -2,16 +2,16 @@
 // PBR tile bits must match PBR::TerrainFlags in PBRMath.hlsli.
 // Texture registers cannot be indexed by loop variable; hence one macro expansion per layer.
 
-#ifndef __LIGHTING_LANDSCAPE_HLSLI__
+#if !(defined(__LIGHTING_LANDSCAPE_HLSLI__))
 #define __LIGHTING_LANDSCAPE_HLSLI__
 
 #if defined(LANDSCAPE)
 
-#	if !defined(__PERMUTATION_DEPENDENCY_HLSL__)
+#if !(defined(__PERMUTATION_DEPENDENCY_HLSL__))
 #		include "Common/Permutation.hlsli"
-#	endif
+#endif
 
-#	if defined(TRUE_PBR)
+#if defined(TRUE_PBR)
 namespace LandscapeLayers
 {
 	inline bool PbrTileUsesFullPBR(uint tileIndex)
@@ -23,9 +23,9 @@ namespace LandscapeLayers
 		return (PBRFlags & (1u << (tileIndex + 12u))) != 0;
 	}
 }
-#	endif
+#endif
 
-#	if defined(TRUE_PBR)
+#if defined(TRUE_PBR)
 #		define LIGHTING_LANDSCAPE_BLEND_ONE_LAYER_PBR(TILE, COLOR_TEX, COLOR_SAMP, NORM_TEX, NORM_SAMP, RMAOS_TEX, RMAOS_SAMP, PBR_PARAMS3, GLINT_PARAMS, WEIGHT) \
 			[branch] if ((WEIGHT) > 0.01)                                                                                                                          \
 			{                                                                                                                                                      \
@@ -51,7 +51,7 @@ namespace LandscapeLayers
 				}                                                                                                                                                  \
 				else                                                                                                                                               \
 				{                                                                                                                                                  \
-					landRMAOS = float4(1 - glossiness.x, 0, 1, 0);                                                                                                 \
+					landRMAOS = float4(1 - landNormalAlpha, 0, 1, 0);                                                                                             \
 				}                                                                                                                                                  \
 				blendedRMAOS += landRMAOS * weight;                                                                                                                \
 				blendedRGB += landColorRGB * weight;                                                                                                               \
@@ -59,13 +59,13 @@ namespace LandscapeLayers
 				blendedNormalRGB += landNormalRGB * weight;                                                                                                        \
 				blendedNormalAlpha += landNormalAlpha * weight;                                                                                                    \
 			}
-#	else
-#		if defined(SNOW)
+#else
+#if defined(SNOW)
 #			define LIGHTING_LAND_SNOW_ACCUM(SNOW_COMPONENT) \
 				landSnowMask += (SNOW_COMPONENT) * weight * GetLandSnowMaskValue(landColor.w);
-#		else
+#else
 #			define LIGHTING_LAND_SNOW_ACCUM(SNOW_COMPONENT)
-#		endif
+#endif
 #		define LIGHTING_LANDSCAPE_BLEND_ONE_LAYER(TILE, COLOR_TEX, COLOR_SAMP, NORM_TEX, NORM_SAMP, WEIGHT, SNOW_COMPONENT) \
 			[branch] if ((WEIGHT) > 0.01)                                                                                    \
 			{                                                                                                                \
@@ -82,8 +82,8 @@ namespace LandscapeLayers
 				blendedNormalAlpha += landNormalAlpha * weight;                                                              \
 				LIGHTING_LAND_SNOW_ACCUM(SNOW_COMPONENT)                                                                     \
 			}
-#	endif
+#endif
 
-#endif  // LANDSCAPE
+#endif
 
-#endif  // __LIGHTING_LANDSCAPE_HLSLI__
+#endif

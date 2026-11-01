@@ -2,10 +2,11 @@
 #include "Common/FrameBuffer.hlsli"
 #include "Common/SharedData.hlsli"
 
+#if defined(VSHADER)
 struct VS_INPUT
 {
 	float4 Position: POSITION0;
-#if !defined(ENVCUBE)
+#if !(defined(ENVCUBE))
 	float4 Normal: NORMAL0;
 #endif
 	float4 TexCoord0: TEXCOORD0;
@@ -16,6 +17,7 @@ struct VS_INPUT
 #endif
 		TexCoord1: TEXCOORD1;
 };
+#endif
 
 struct VS_OUTPUT
 {
@@ -27,7 +29,7 @@ struct VS_OUTPUT
 #endif
 };
 
-#ifdef VSHADER
+#if defined(VSHADER)
 cbuffer PerTechnique : register(b0)
 {
 	float2 ScaleAdjust : packoffset(c0);
@@ -37,9 +39,9 @@ cbuffer PerGeometry : register(b2)
 {
 	row_major float4x4 WorldViewProj;  // 0
 	row_major float4x4 WorldView;      // 4
-#	if defined(ENVCUBE)
+#if defined(ENVCUBE)
 	row_major float4x4 PrecipitationOcclusionWorldViewProj;  // 8, 16
-#	endif
+#endif
 	float4 fVars0;        // 8, 16 ENVCUBE 12, 20
 	float4 fVars1;        // 9, 17 ENVCUBE 13, 21
 	float4 fVars2;        // 10, 18 ENVCUBE 14, 22
@@ -65,13 +67,15 @@ VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
 
-#	if defined(ENVCUBE)
-#		if defined(RAIN)
+
+
+#if defined(ENVCUBE)
+#if defined(RAIN)
 	float2 positionOffset = input.TexCoord1.xy;
-#		else
+#else
 	float2x2 rotationMatrix = GetRotationMatrix(fVars0.w);
 	float2 positionOffset = mul(rotationMatrix, input.TexCoord1.xy) * ScaleAdjust + mul(rotationMatrix, input.TexCoord1.zw);
-#		endif
+#endif
 
 	float3 normalizedPosition = (fVars0.xyz + input.Position.xyz) / fVars2.xxx;
 	normalizedPosition = normalizedPosition >= -normalizedPosition ? frac(abs(normalizedPosition)) :
@@ -82,14 +86,14 @@ VS_OUTPUT main(VS_INPUT input)
 	msPosition.w = 1;
 
 	float4 viewPosition = mul(WorldViewProj, msPosition);
-#		if defined(RAIN)
+#if defined(RAIN)
 	float4 adjustedMsPosition = msPosition - float4(Velocity.xyz, 0);
 	float positionBlendParam = 0.5 * (1 + input.TexCoord1.y);
 	float4 adjustedViewPosition = mul(WorldViewProj, adjustedMsPosition);
 	float4 finalViewPosition = lerp(adjustedViewPosition, viewPosition, positionBlendParam);
-#		else
+#else
 	float4 finalViewPosition = viewPosition;
-#		endif
+#endif
 	vsout.Position.xy = positionOffset + finalViewPosition.xy;
 	vsout.Position.zw = finalViewPosition.zw;
 	vsout.Color.xyz = 1.0.xxx;
@@ -100,7 +104,7 @@ VS_OUTPUT main(VS_INPUT input)
 	float4 precipitationOcclusionTexCoord = mul(PrecipitationOcclusionWorldViewProj, msPosition);
 	precipitationOcclusionTexCoord.y = -precipitationOcclusionTexCoord.y;
 	vsout.PrecipitationOcclusionTexCoord = precipitationOcclusionTexCoord;
-#	else
+#else
 	float tmp2 = input.Normal.w * input.Position.w;
 	float tmp1 = tmp2 / fVars0.y;
 
@@ -172,7 +176,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 	vsout.Color.w = fVars3.w * color.w;
 	vsout.Color.xyz = color.xyz;
-#	endif
+#endif
 
 	return vsout;
 }
@@ -186,33 +190,33 @@ struct PS_OUTPUT
 	float4 Normal: SV_Target1;
 };
 
-#ifdef PSHADER
+#if defined(PSHADER)
 
-#	if defined(LIGHT_LIMIT_FIX)
+#if defined(LIGHT_LIMIT_FIX)
 #		include "LightLimitFix/LightLimitFix.hlsli"
-#	endif
+#endif
 
-#	if defined(ISL) && defined(LIGHT_LIMIT_FIX)
+#if (defined(ISL)) && (defined(LIGHT_LIMIT_FIX))
 #		include "InverseSquareLighting/InverseSquareLighting.hlsli"
-#	endif
+#endif
 
 SamplerState SampSourceTexture : register(s0);
-#	if defined(GRAYSCALE_TO_COLOR) || defined(GRAYSCALE_TO_ALPHA)
+#if (defined(GRAYSCALE_TO_COLOR)) || (defined(GRAYSCALE_TO_ALPHA))
 SamplerState SampGrayscaleTexture : register(s1);
-#	endif
-#	if defined(ENVCUBE)
+#endif
+#if defined(ENVCUBE)
 SamplerState SampPrecipitationOcclusionTexture : register(s2);
 SamplerState SampUnderwaterMask : register(s3);
-#	endif
+#endif
 
 Texture2D<float4> TexSourceTexture : register(t0);
-#	if defined(GRAYSCALE_TO_COLOR) || defined(GRAYSCALE_TO_ALPHA)
+#if (defined(GRAYSCALE_TO_COLOR)) || (defined(GRAYSCALE_TO_ALPHA))
 Texture2D<float4> TexGrayscaleTexture : register(t1);
-#	endif
-#	if defined(ENVCUBE)
+#endif
+#if defined(ENVCUBE)
 Texture2D<float4> TexPrecipitationOcclusionTexture : register(t2);
 Texture2D<float4> TexUnderwaterMask : register(t3);
-#	endif
+#endif
 
 cbuffer PerGeometry : register(b2)
 {
@@ -220,14 +224,23 @@ cbuffer PerGeometry : register(b2)
 	float3 TextureSize : packoffset(c1);
 };
 
+#if defined(TERRAIN_SHADOWS)
+#		include "TerrainShadows/TerrainShadows.hlsli"
+#endif
+
+#if defined(CLOUD_SHADOWS)
+#		include "CloudShadows/CloudShadows.hlsli"
+#endif
+
 #	define LinearSampler SampSourceTexture
+#	include "Common/Permutation.hlsli"
 #	include "Common/ShadowSampling.hlsli"
 
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
-#	if defined(ENVCUBE)
+#if defined(ENVCUBE)
 	float2 precipitationOcclusionUV = (input.PrecipitationOcclusionTexCoord.xy * 0.5 + 0.5) * TextureSize.x;
 	float precipitationOcclusion = -input.PrecipitationOcclusionTexCoord.z + TexPrecipitationOcclusionTexture.Load(float3(precipitationOcclusionUV, 0)).x;
 	float2 underwaterMaskUv = TextureSize.yz * input.Position.xy;
@@ -235,42 +248,67 @@ PS_OUTPUT main(PS_INPUT input)
 	if (precipitationOcclusion - underwaterMask < 0) {
 		discard;
 	}
-#	endif
+#endif
 
 	float4 sourceColor = TexSourceTexture.Sample(SampSourceTexture, input.TexCoord0);
 	float4 baseColor = input.Color * sourceColor;
-	baseColor.xyz = Color::Diffuse(baseColor.xyz);
-#	if defined(GRAYSCALE_TO_COLOR)
+#if defined(GRAYSCALE_TO_COLOR)
 	float3 grayScaleColor =
 		TexGrayscaleTexture.Sample(SampGrayscaleTexture, float2(sourceColor.y, input.Color.x)).xyz;
 	baseColor.xyz = grayScaleColor;
-#	endif
-#	if defined(GRAYSCALE_TO_ALPHA)
+#endif
+#if defined(GRAYSCALE_TO_ALPHA)
 	float grayScaleAlpha =
 		TexGrayscaleTexture.Sample(SampGrayscaleTexture, float2(sourceColor.w, input.Color.w)).w;
 	baseColor.w = grayScaleAlpha;
-#	endif
+#endif
+
+	baseColor.xyz = Color::Diffuse(baseColor.xyz);
 
 	float3 propertyColor = 0.0;
 
-	float2 uv = input.Position.xy * SharedData::BufferDim.zw;
+	float2 uv = (input.Position.xy * SharedData::BufferDim.zw);
 
 	float4 positionWS = float4(2 * float2(uv.x, -uv.y + 1) - 1, input.Position.z, 1);
 	positionWS = mul(FrameBuffer::CameraViewProjInverse, positionWS);
 	positionWS.xyz = positionWS.xyz / positionWS.w;
 
-	float unusedDetailedShadow;
-	float3 dirLightColor = SharedData::DirLightColor.xyz * ShadowSampling::GetLightingShadow(positionWS.xyz, unusedDetailedShadow);
-	float3 ambientColor = Color::ApplyAmbientBalance(max(0, SharedData::GetAmbient(float3(0, 0, 1))));
+	float llDirLightMult = (Color::UseLinearLightingColorAdjustments() && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
+	float dirWorldShadow = 1.0;
+	// Menu and reflection passes do not share the world shadow coordinates.
+	if ((Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection)) == Permutation::ExtraFlags::InWorld)
+		dirWorldShadow = ShadowSampling::GetWorldShadow(positionWS.xyz, FrameBuffer::CameraPosAdjust.xyz);
+	float dirSoftShadow = 1.0;
+	float dirDetailedShadow = 1.0;
+#if defined(VOLUMETRIC_SHADOWS)
+	if (ShadowSampling::HasDirectionalShadows())
+		dirSoftShadow = ShadowSampling::GetLightingShadow(positionWS.xyz, dirDetailedShadow);
+#endif
+	float3 dirLightColor;
+	if (Color::IsSceneColorDraw() && SharedData::adaptiveBalanceSettings.appearance.directionalCurve != 1.0) {
+		dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5),
+							SharedData::linearLightingSettings.isDirLightLinear, dirWorldShadow * dirSoftShadow * dirDetailedShadow) *
+		                llDirLightMult * 0.5;
+	} else {
+		float3 dirLightRaw = SharedData::DirLightColor.xyz * dirWorldShadow * dirSoftShadow * dirDetailedShadow;
+		dirLightColor = Color::DirectionalLight(dirLightRaw / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult * 0.5;
+	}
+	float3 ambientColor = Color::ApplyAmbientBalance(Color::Ambient(max(0, SharedData::GetAmbient(float3(0, 0, 1)))));
+	if (Color::IsSceneColorDraw()) {
+		if (SharedData::adaptiveBalanceSettings.appearance.particleDirectionalInfluence != 1.0)
+			dirLightColor *= SharedData::adaptiveBalanceSettings.appearance.particleDirectionalInfluence;
+		if (SharedData::adaptiveBalanceSettings.appearance.particleAmbientInfluence != 1.0)
+			ambientColor *= SharedData::adaptiveBalanceSettings.appearance.particleAmbientInfluence;
+	}
 
 	propertyColor += dirLightColor;
 	propertyColor += ambientColor;
 
-#	if defined(LIGHT_LIMIT_FIX)
+#if defined(LIGHT_LIMIT_FIX)
 	uint lightCount = 0;
 	{
-		float3 viewPosition = FrameBuffer::WorldToView(positionWS.xyz);
-		float2 screenUV = FrameBuffer::ViewToUV(viewPosition);
+		float3 viewPosition = FrameBuffer::WorldToView(positionWS.xyz, true);
+		float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true);
 
 		uint clusterIndex = 0;
 		if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
@@ -286,21 +324,26 @@ PS_OUTPUT main(PS_INPUT input)
 				float3 lightDirection = light.positionWS.xyz - positionWS.xyz;
 				float lightDist = length(lightDirection);
 
-#		if defined(ISL)
+#if defined(ISL)
 				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
-#		else
+#else
 				float intensityFactor = saturate(lightDist / light.radius);
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-#		endif
+#endif
 
-				float3 lightColor = light.color.xyz * intensityMultiplier;
+				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
+				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade * 0.5;
+				if (Color::IsSceneColorDraw() && SharedData::adaptiveBalanceSettings.appearance.particlePointInfluence != 1.0)
+					lightColor *= SharedData::adaptiveBalanceSettings.appearance.particlePointInfluence;
 				propertyColor += lightColor;
 			}
 		}
 	}
-#	endif
+#endif
 
 	psout.Color.xyz = propertyColor * baseColor.xyz;
+	psout.Color.xyz = AdaptiveBalanceAppearance::ApplyColor(psout.Color.xyz,
+		SharedData::adaptiveBalanceSettings.appearance.particleIntensity, 1.0, 1.0, 1.0.xxx);
 	psout.Color.w = baseColor.w;
 	psout.Normal.w = baseColor.w;
 	psout.Normal.xyz = float3(0, 1, 0);

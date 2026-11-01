@@ -1,0 +1,153 @@
+#include "Features/TextureStreaming/ConsumerInventory.h"
+#include "Features/TextureStreaming/Diagnostics.h"
+#include "Features/TextureStreaming/Policy.h"
+#include "Features/TextureStreaming/Settings.h"
+#include <cmath>
+#include <iostream>
+#include <stdexcept>
+
+namespace P = TextureStreamingPolicy;
+void Require(bool condition, const char* message)
+{
+	if (!condition)
+		throw std::runtime_error(message);
+}
+int main()
+{
+	try {
+		for (const auto& value : { nlohmann::json(1), nlohmann::json(2u), nlohmann::json(3) })
+			Require(StreamingTextures::ParseMaximumMipDrop(value) == value.get<std::uint32_t>(), "Valid mip limit rejected");
+		for (const auto& value : { nlohmann::json(1.5), nlohmann::json(2.0), nlohmann::json(-1), nlohmann::json(0),
+				 nlohmann::json(4), nlohmann::json(UINT64_MAX), nlohmann::json(true), nlohmann::json("2"), nlohmann::json(nullptr) }) {
+			bool rejected = false;
+			try {
+				(void)StreamingTextures::ParseMaximumMipDrop(value);
+			} catch (const std::invalid_argument&) {
+				rejected = true;
+			}
+			Require(rejected, "Malformed mip limit escaped boundary validation");
+		}
+		for (unsigned selected = 0; selected < 32; ++selected) {
+			StreamingTextures::Categories categories{ (selected & 1u) != 0, (selected & 2u) != 0, (selected & 4u) != 0, (selected & 8u) != 0, (selected & 16u) != 0 };
+			for (unsigned required = 0; required < 32; ++required)
+				Require(categories.Allows(required) == ((required & ~selected) == 0), "A shared consumer escaped category consent");
+			Require(!categories.Allows(32u), "Unknown category was admitted");
+			Require(StreamingTextures::ParseCategories(StreamingTextures::SerializeCategories(categories)) == categories, "Category settings lost a selection");
+		}
+		Require(StreamingTextures::ParseCategories(nlohmann::json::object()) == StreamingTextures::Categories{ false, false, false, false, false }, "An empty replacement retained default coverage");
+		Require(StreamingTextures::ParseCategories({ { "emissiveStatics", true } }) == StreamingTextures::Categories{ false, false, true, false, false }, "Independent category selection enabled another category");
+		for (const auto& value : { nlohmann::json(nullptr), nlohmann::json(true), nlohmann::json::array(),
+				 nlohmann::json{ { "water", true } }, nlohmann::json{ { "alphaTestedStatics", 1 } },
+				 nlohmann::json{ { "landscapeStatics", "true" } }, nlohmann::json{ { "emissiveStatics", nullptr } } }) {
+			bool rejected = false;
+			try {
+				(void)StreamingTextures::ParseCategories(value);
+			} catch (const std::invalid_argument&) {
+				rejected = true;
+			}
+			Require(rejected, "Malformed or unknown category settings were accepted");
+		}
+		Require(StreamingTextures::PathCategories("textures\\architecture\\wall.dds") == 0u, "Ordinary texture became optional");
+		Require(StreamingTextures::PathCategories("textures\\landscape\\rocks\\rock.dds") == StreamingTextures::LandscapeStatics, "Static landscape texture lost its category");
+		for (const auto* path : { "textures\\terrain\\tamriel\\tamriel.4.0.0.dds", "textures\\landscape\\water\\water.dds",
+				 "textures\\water\\water.dds", "textures\\lod\\water.dds", "textures\\dyndolod\\atlas.dds",
+				 "textures\\architecture\\wall_lod.dds", "textures\\trees\\tamriel.treelod.dds", "textures\\trees\\tamriel.objects_n.dds",
+				 "textures\\actors\\character\\face.dds", "textures\\effects\\fire.dds", "textures\\cubemaps\\map.dds",
+				 "textures\\interface\\icon.dds", "textures\\sky\\cloud.dds", "textures\\..\\wall.dds",
+				 "textures\\wall.png", "textures\\d:wall.dds", "architecture\\wall.dds" })
+			Require(!StreamingTextures::PathCategories(path), "Protected water, LOD or special texture path was admitted");
+		std::array<P::Eye, 1> eyes{ P::Eye{ 2000, 2000, 2000, 2000, 1, 1, 500 } };
+		const auto native = P::RequiredEdge(eyes, 1, 256, 0);
+		Require(native == 1024, "Demand must use the active camera");
+		Require(P::DesiredDrop(4096, 13, native, 3) == 2, "Mip selection lost required single-view detail");
+		for (auto scale : { 1.0, 0.8, 0.5, 0.333 }) {
+			auto dlss = eyes;
+			for (auto& eye : dlss) {
+				eye.renderWidth *= scale;
+				eye.renderHeight *= scale;
+			}
+			const double demand = P::RequiredEdge(dlss, 1, 256, std::log2(scale) - 1.0);
+			Require(std::abs(demand - native * 2) < 1e-8, "DLSS finer mip request was lost at lower rendering resolution");
+		}
+		eyes[0].renderHeight = 4000;
+		Require(P::RequiredEdge(eyes, 1, 256, 0) == native * 2, "Demand ignored vertical rendering extent");
+		eyes[0].distanceToBound = 0;
+		Require(P::DesiredDrop(4096, 13, P::RequiredEdge(eyes, 1, 256, 0), 3) == 0, "Invalid camera or near bounds must preserve full detail");
+		Require(P::DesiredDrop(1024, 11, 1, 999) == 2, "Minimum edge or drop limit escaped validation");
+		Require(P::DesiredDrop(8192, 14, 1, 3) == 3, "Maximum mip drop not enforced");
+		StreamingTextures::ConsumerInventory<int> inventory;
+		inventory.Observe(1, 0);
+		inventory.scanning.push_back(10);
+		Require(!inventory.Expired(0), "Unfinished first scan was pruned");
+		inventory.Promote(0);
+		Require(inventory.committed.empty(), "Partial inventory was published");
+		inventory.Observe(2, 1);
+		Require(inventory.verified == 1 && inventory.committed == std::vector<int>{ 10 }, "Unvisited committed consumers were lost at the next scan");
+		inventory.scanning.push_back(20);
+		inventory.Promote(1);
+		Require(inventory.committed == std::vector<int>{ 10 } && !inventory.Expired(1), "In-progress rescan replaced or pruned committed consumers");
+		inventory.Promote(2);
+		Require(inventory.verified == 2 && inventory.committed == std::vector<int>{ 20 }, "Complete inventory was not published");
+		Require(inventory.Expired(3), "A texture absent from the completed scan was retained");
+		inventory.Observe(4, 3);
+		inventory.scanning.push_back(40);
+		inventory.Observe(5, 3);
+		Require(inventory.scanning.empty() && inventory.verified == 2, "An abandoned scan became committed");
+		inventory.Clear();
+		Require(inventory.committed.empty() && inventory.scanning.empty() && !inventory.verified && !inventory.seen, "World invalidation retained consumers");
+		Require(inventory.Expired(0), "Invalidated full-size inventory pinned textures through loading");
+		Require(P::CappedDrop(8192, 256, 14, 1024) == 3, "Size cap was overridden by the distance detail floor");
+		Require(P::CappedDrop(4096, 4096, 13, 0) == 0, "Unlimited retained a size cap");
+		Require(P::CappedDrop(4096, 4096, 13, 8192) == 0, "Cap upscaled a smaller texture");
+		for (const auto reserve : { 256u, 1024u, 8192u }) {
+			StreamingTextures::Options options{ reserve, false, 1024 };
+			Require(StreamingTextures::ParseOptions(StreamingTextures::SerializeOptions(options)) == options, "Residency options did not round-trip");
+		}
+		for (const auto bad : { -1, 0, 255, 257, 8193 }) {
+			auto options = StreamingTextures::SerializeOptions({});
+			options["reserveMiB"] = bad;
+			bool rejected = false;
+			try {
+				(void)StreamingTextures::ParseOptions(options);
+			} catch (const std::invalid_argument&) {
+				rejected = true;
+			}
+			Require(rejected, "Invalid reserve escaped validation");
+		}
+		P::Pressure adjusted;
+		Require(adjusted.Update(1, 1, true, 10000 * P::MiB, 8100 * P::MiB) == P::PressureChange::None, "Old percentage threshold overrode the configured reserve");
+		Require(adjusted.Update(2, 2, true, 10000 * P::MiB, 8100 * P::MiB, 2048 * P::MiB) == P::PressureChange::Entered, "Configured reserve failed to trigger");
+		P::Pressure pressure;
+		Require(pressure.Update(1000, 1000, true, 10000 * P::MiB, 9100 * P::MiB) == P::PressureChange::Entered, "Pressure entry event missing");
+		for (unsigned frame = 0; frame < 1000; ++frame)
+			Require(pressure.Update(1000, 1000, true, 10000 * P::MiB, 9100 * P::MiB) == P::PressureChange::None, "Repeated pressure sample emitted another event");
+		Require(pressure.conserving, "High pressure did not request reclamation");
+		for (std::uint64_t time = 1250; time < 6250; time += 250) {
+			pressure.Update(time, time, true, 10000 * P::MiB, 6000 * P::MiB);
+			Require(pressure.conserving, "Refill started before the healthy observation window");
+		}
+		Require(pressure.Update(6250, 6250, true, 10000 * P::MiB, 6000 * P::MiB) == P::PressureChange::Recovered, "Recovery event missing");
+		Require(pressure.Update(6250, 6250, true, 10000 * P::MiB, 6000 * P::MiB) == P::PressureChange::None, "Repeated recovery emitted another event");
+		Require(!pressure.conserving, "Sustained recovery never allowed refill");
+		pressure.Update(6500, 6500, true, 10000 * P::MiB, 9100 * P::MiB);
+		pressure.Update(7000, 7000, true, 10000 * P::MiB, 6000 * P::MiB);
+		pressure.Update(13000, 13000, true, 10000 * P::MiB, 6000 * P::MiB);
+		Require(pressure.conserving, "A missing observation window authorized refill");
+		pressure.Update(13501, 13000, true, 10000 * P::MiB, 6000 * P::MiB);
+		Require(pressure.healthySince == 0, "Stale budget observation retained a recovery window");
+		StreamingTextures::PressureEpisode episode;
+		Require(!episode.SummaryDue(20000), "Inactive pressure emitted diagnostics");
+		episode.active = true;
+		episode.startedAtMs = 1000;
+		Require(!episode.SummaryDue(999) && !episode.SummaryDue(10999), "Pressure diagnostics reported before the observation window");
+		Require(episode.SummaryDue(11000), "Sustained pressure produced no effectiveness summary");
+		for (std::uint64_t now = 11000; now <= 120000; now += 10)
+			Require(!episode.SummaryDue(now), "Sustained pressure produced frame-rate-dependent logging");
+		episode = { true, false, false, 200000, {} };
+		Require(episode.SummaryDue(210000), "A new pressure episode inherited the old reporting limit");
+		std::cout << "PASS: single-view demand, DLSS bias, minimum detail, inventory publication, hysteresis and pressure observation gaps\n";
+	} catch (const std::exception& error) {
+		std::cerr << error.what() << '\n';
+		return 1;
+	}
+}

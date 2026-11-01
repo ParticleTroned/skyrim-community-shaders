@@ -2,6 +2,8 @@
 
 #include <BS_thread_pool.hpp>
 #include <cmath>
+#include <limits>
+#include <new>
 #include <unordered_set>
 
 #include "Utils/WinApi.h"
@@ -32,6 +34,44 @@ namespace
 		return form;
 	}
 
+	bool TryGetWorldSpaceCellBounds(const RE::TESWorldSpace* worldSpace, int32_t& minX, int32_t& minY, int32_t& maxX, int32_t& maxY, int32_t& width, int32_t& height)
+	{
+		if (!worldSpace)
+			return false;
+
+		const auto wsMin = worldSpace->minimumCoords;
+		const auto wsMax = worldSpace->maximumCoords;
+		const bool invalidCoords =
+			!std::isfinite(wsMin.x) ||
+			!std::isfinite(wsMin.y) ||
+			!std::isfinite(wsMax.x) ||
+			!std::isfinite(wsMax.y) ||
+			wsMin.x == FLT_MIN ||
+			wsMin.y == FLT_MIN ||
+			wsMax.x == FLT_MAX ||
+			wsMax.y == FLT_MAX ||
+			wsMin.x == FLT_MAX ||
+			wsMin.y == FLT_MAX ||
+			wsMax.x == FLT_MIN ||
+			wsMax.y == FLT_MIN;
+		if (invalidCoords)
+			return false;
+
+		Util::WorldToCell(wsMin, minX, minY);
+		Util::WorldToCell(wsMax, maxX, maxY);
+		maxX -= 1;
+		maxY -= 1;
+
+		const int64_t boundsWidth = static_cast<int64_t>(maxX) - static_cast<int64_t>(minX) + 1;
+		const int64_t boundsHeight = static_cast<int64_t>(maxY) - static_cast<int64_t>(minY) + 1;
+		if (boundsWidth <= 0 || boundsHeight <= 0 || boundsWidth > 512 || boundsHeight > 512)
+			return false;
+
+		width = static_cast<int32_t>(boundsWidth);
+		height = static_cast<int32_t>(boundsHeight);
+		return true;
+	}
+
 	template <class T>
 	T* ResolveWaterDataWorldSpace(T* worldSpace)
 	{
@@ -53,31 +93,7 @@ namespace
 
 	bool TryGetWorldSpaceCellBounds(const RE::TESWorldSpace* worldSpace, WorldSpaceCellBounds& bounds)
 	{
-		if (!worldSpace)
-			return false;
-
-		const auto wsMin = worldSpace->minimumCoords;
-		const auto wsMax = worldSpace->maximumCoords;
-
-		if (wsMin.x == FLT_MIN ||
-			wsMin.y == FLT_MIN ||
-			wsMax.x == FLT_MAX ||
-			wsMax.y == FLT_MAX ||
-			wsMin.x == FLT_MAX ||
-			wsMin.y == FLT_MAX ||
-			wsMax.x == FLT_MIN ||
-			wsMax.y == FLT_MIN) {
-			return false;
-		}
-
-		Util::WorldToCell(wsMin, bounds.minX, bounds.minY);
-		Util::WorldToCell(wsMax, bounds.maxX, bounds.maxY);
-		bounds.maxX -= 1;
-		bounds.maxY -= 1;
-		bounds.width = bounds.maxX - bounds.minX + 1;
-		bounds.height = bounds.maxY - bounds.minY + 1;
-
-		return bounds.width > 0 && bounds.height > 0 && bounds.width <= 512 && bounds.height <= 512;
+		return TryGetWorldSpaceCellBounds(worldSpace, bounds.minX, bounds.minY, bounds.maxX, bounds.maxY, bounds.width, bounds.height);
 	}
 }
 
@@ -342,22 +358,23 @@ bool WaterCache::GenerateCaches(CompletionCallback a_onComplete)
 	logger::info("[Unified Water] [Cache] Starting async disk cache build for {} WorldSpaces on {} threads", buildProgress.total.load(), threads);
 
 	for (auto& worldSpace : worldSpaces) {
-		const auto editorID = worldSpace && worldSpace->editorID.c_str() ? std::string{ worldSpace->editorID.c_str() } : std::string{};
-		if (!worldSpace || editorID.empty()) {
+		const auto* editorIDView = worldSpace ? worldSpace->GetFormEditorID() : nullptr;
+		if (!worldSpace || !editorIDView || !*editorIDView) {
 			logger::warn("[Unified Water] [Cache] WorldSpace has no EditorID - skipping");
 			buildProgress.Done(true);
 			continue;
 		}
 
-		async.pool->detach_task([this, worldSpace, editorID] {
+		std::string editorID{ editorIDView };
+		async.pool->detach_task([this, worldSpace, editorID = std::move(editorID)] {
 			DiskCache cache = {};
 			const auto name = std::format("{}_cache.wc", editorID);
 			const auto success = BuildDiskCache(worldSpace, cache) && TryWriteCacheToFile(name, cache.header, cache.instructions);
 			if (success) {
-				logger::debug("[Unified Water] [Cache] {} generation complete", editorID);
+				logger::debug("[Unified Water] [Cache] {} generation complete", editorID.c_str());
 			} else {
 				async.failed.store(true, std::memory_order_relaxed);
-				logger::error("[Unified Water] [Cache] {} generation failed", editorID);
+				logger::error("[Unified Water] [Cache] {} generation failed", editorID.c_str());
 			}
 
 			buildProgress.Done(success);
@@ -465,8 +482,8 @@ bool WaterCache::BuildDiskCache(RE::TESWorldSpace* worldSpace, DiskCache& diskCa
 		maxY = bounds.maxY;
 		hdr.width = bounds.width;
 		hdr.height = bounds.height;
-		hdr.dataCount = 0;
 	}
+	hdr.dataCount = 0;
 
 	logger::debug("[Unified Water] [Cache] {}: Building disk cache...", editorID.c_str());
 
@@ -1000,28 +1017,56 @@ bool WaterCache::TryReadCacheFromFile(const std::string& name, WorldSpaceHeader&
 {
 	namespace fs = std::filesystem;
 	const fs::path path = Util::PathHelpers::GetUnifiedWaterCachePath() / name;
-	if (!fs::exists(path))
+	std::error_code error;
+	if (!fs::exists(path, error)) {
+		if (error)
+			logger::error("[Unified Water] [Cache] Cannot inspect '{}': {}", path.string(), error.message());
 		return false;
+	}
 
-	std::ifstream ifs(path, std::ios::binary);
+	std::ifstream ifs(path, std::ios::binary | std::ios::ate);
 	if (!ifs) {
 		logger::error("[Unified Water] [Cache] Failed to open '{}' for reading", path.string());
 		return false;
 	}
 
-	ifs.read(reinterpret_cast<char*>(&header), sizeof(header));
-	if (!ifs || header.label != Util::FCC("WTCH")) {
+	// Size and payload must come from the same opened file, before allocating from its header.
+	const std::streamoff fileSize = ifs.tellg();
+	if (fileSize < static_cast<std::streamoff>(sizeof(WorldSpaceHeader))) {
+		logger::error("[Unified Water] [Cache] Missing or unreadable header for '{}'", path.string());
+		return false;
+	}
+	ifs.seekg(0, std::ios::beg);
+	WorldSpaceHeader candidateHeader{};
+	ifs.read(reinterpret_cast<char*>(&candidateHeader), sizeof(candidateHeader));
+	if (!ifs || candidateHeader.label != Util::FCC("WTCH") || candidateHeader.dataCount < 0) {
 		logger::error("[Unified Water] [Cache] Invalid or corrupt header for '{}'", path.string());
 		return false;
 	}
 
-	vec.resize(header.dataCount);
-	if (!vec.empty()) {
-		ifs.read(reinterpret_cast<char*>(vec.data()), vec.size() * sizeof(T));
+	const auto count = static_cast<std::uintmax_t>(candidateHeader.dataCount);
+	const auto payloadBytes = static_cast<std::uintmax_t>(fileSize) - sizeof(candidateHeader);
+	if (count > payloadBytes / sizeof(T) || count > vec.max_size() ||
+		count > static_cast<std::uintmax_t>((std::numeric_limits<std::streamsize>::max)()) / sizeof(T)) {
+		logger::error("[Unified Water] [Cache] Payload size mismatch for '{}'", path.string());
+		return false;
+	}
+
+	std::vector<T> candidate;
+	try {
+		candidate.resize(static_cast<std::size_t>(count));
+	} catch (const std::bad_alloc& exception) {
+		logger::error("[Unified Water] [Cache] Cannot allocate payload for '{}': {}", path.string(), exception.what());
+		return false;
+	}
+	if (!candidate.empty()) {
+		ifs.read(reinterpret_cast<char*>(candidate.data()), static_cast<std::streamsize>(count * sizeof(T)));
 		if (!ifs.good()) {
 			logger::error("[Unified Water] [Cache] Failed to read payload for '{}'", path.string());
 			return false;
 		}
 	}
+	header = candidateHeader;
+	vec = std::move(candidate);
 	return true;
 }

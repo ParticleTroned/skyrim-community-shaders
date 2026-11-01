@@ -1,4 +1,6 @@
 #include "Menu.h"
+#include "I18n/I18n.h"
+#include "Menu/DevBenchViewport.h"
 
 #ifndef DIRECTINPUT_VERSION
 #	define DIRECTINPUT_VERSION 0x0800
@@ -30,6 +32,7 @@
 #include "Menu/Fonts.h"
 #include "Menu/HomePageRenderer.h"
 #include "Menu/IconLoader.h"
+#include "Menu/Layout.h"
 #include "Menu/MenuHeaderRenderer.h"
 #include "Menu/OverlayRenderer.h"
 #include "Menu/PerformanceTuningRenderer.h"
@@ -177,6 +180,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ToggleKey,
 	SkipCompilationKey,
 	EffectToggleKey,
+	NeuralRenderingToggleKey,
 	OverlayToggleKey,
 	ShaderBlockPrevKey,
 	ShaderBlockNextKey,
@@ -435,6 +439,7 @@ void Menu::Load(json& o_json)
 	migrateKey(o_json, "ToggleKey", settings.ToggleKey);
 	migrateKey(o_json, "SkipCompilationKey", settings.SkipCompilationKey);
 	migrateKey(o_json, "EffectToggleKey", settings.EffectToggleKey);
+	migrateKey(o_json, "NeuralRenderingToggleKey", settings.NeuralRenderingToggleKey);
 	migrateKey(o_json, "OverlayToggleKey", settings.OverlayToggleKey);
 	migrateKey(o_json, "ShaderBlockPrevKey", settings.ShaderBlockPrevKey);
 	migrateKey(o_json, "ShaderBlockNextKey", settings.ShaderBlockNextKey);
@@ -456,6 +461,7 @@ void Menu::Load(json& o_json)
 	loadComboList(o_json, "ToggleKey", settings.ToggleKey);
 	loadComboList(o_json, "SkipCompilationKey", settings.SkipCompilationKey);
 	loadComboList(o_json, "EffectToggleKey", settings.EffectToggleKey);
+	loadComboList(o_json, "NeuralRenderingToggleKey", settings.NeuralRenderingToggleKey);
 	loadComboList(o_json, "OverlayToggleKey", settings.OverlayToggleKey);
 	loadComboList(o_json, "ShaderBlockPrevKey", settings.ShaderBlockPrevKey);
 	loadComboList(o_json, "ShaderBlockNextKey", settings.ShaderBlockNextKey);
@@ -467,6 +473,7 @@ void Menu::Load(json& o_json)
 		bool hasFontRoles = o_json["Theme"].contains("FontRoles");
 		SanitizeFontRolesJson(o_json["Theme"]);
 		settings.Theme = o_json["Theme"];
+		settings.Theme.GlobalScale = MenuUI::Layout::SanitizeGlobalScale(settings.Theme.GlobalScale);
 		PaletteFromJson(o_json["Theme"], settings.Theme.FullPalette);
 		if (o_json["Theme"].contains("Cursor") && o_json["Theme"]["Cursor"].is_object()) {
 			CursorFromJson(o_json["Theme"]["Cursor"], settings.Theme.Cursor);
@@ -530,6 +537,7 @@ void Menu::Save(json& o_json)
 	InputCombo::ComboList::to_json(o_json["ToggleKey"], settings.ToggleKey);
 	InputCombo::ComboList::to_json(o_json["SkipCompilationKey"], settings.SkipCompilationKey);
 	InputCombo::ComboList::to_json(o_json["EffectToggleKey"], settings.EffectToggleKey);
+	InputCombo::ComboList::to_json(o_json["NeuralRenderingToggleKey"], settings.NeuralRenderingToggleKey);
 	InputCombo::ComboList::to_json(o_json["OverlayToggleKey"], settings.OverlayToggleKey);
 	InputCombo::ComboList::to_json(o_json["ShaderBlockPrevKey"], settings.ShaderBlockPrevKey);
 	InputCombo::ComboList::to_json(o_json["ShaderBlockNextKey"], settings.ShaderBlockNextKey);
@@ -555,6 +563,7 @@ void Menu::LoadTheme(json& o_json)
 		bool hasFontRoles = o_json["Theme"].contains("FontRoles");
 		SanitizeFontRolesJson(o_json["Theme"]);
 		settings.Theme = o_json["Theme"];
+		settings.Theme.GlobalScale = MenuUI::Layout::SanitizeGlobalScale(settings.Theme.GlobalScale);
 		PaletteFromJson(o_json["Theme"], settings.Theme.FullPalette);
 		if (o_json["Theme"].contains("Cursor") && o_json["Theme"]["Cursor"].is_object()) {
 			CursorFromJson(o_json["Theme"]["Cursor"], settings.Theme.Cursor);
@@ -592,6 +601,24 @@ void Menu::SaveTheme(json& o_json)
 	CursorToJson(o_json["Theme"]["Cursor"], settings.Theme.Cursor);
 }
 
+json Menu::CaptureThemeSnapshot() const
+{
+	json snapshot = settings.Theme;
+	PaletteToJson(snapshot, settings.Theme.FullPalette);
+	CursorToJson(snapshot["Cursor"], settings.Theme.Cursor);
+	return snapshot;
+}
+
+bool Menu::HasUnsavedTheme() const
+{
+	return savedThemeSnapshot.is_null() || CaptureThemeSnapshot() != savedThemeSnapshot;
+}
+
+void Menu::AcceptCurrentThemeAsSaved()
+{
+	savedThemeSnapshot = CaptureThemeSnapshot();
+}
+
 std::vector<std::string> Menu::DiscoverThemes()
 {
 	auto themeManager = ThemeManager::GetSingleton();
@@ -622,6 +649,7 @@ bool Menu::LoadThemePreset(const std::string& themeName)
 
 		try {
 			settings.Theme = themeSettings;
+			settings.Theme.GlobalScale = MenuUI::Layout::SanitizeGlobalScale(settings.Theme.GlobalScale);
 			PaletteFromJson(themeSettings, settings.Theme.FullPalette);
 			if (themeSettings.contains("Cursor") && themeSettings["Cursor"].is_object()) {
 				CursorFromJson(themeSettings["Cursor"], settings.Theme.Cursor);
@@ -652,6 +680,7 @@ bool Menu::LoadThemePreset(const std::string& themeName)
 			// Apply background blur enabled state from theme
 			BackgroundBlur::SetEnabled(settings.Theme.BackgroundBlurEnabled);
 
+			AcceptCurrentThemeAsSaved();
 			logger::info("Applied theme preset: {}", themeName);
 			return true;
 		} catch (const std::exception& e) {
@@ -783,6 +812,8 @@ void Menu::Init()
  */
 void Menu::DrawSettings()
 {
+	EnsureSettingsDirtyBaseline();
+	UpdateSettingsDirtyState();
 	// Treat the preview atlas as a per-frame request. The Fonts tab sets this
 	// back to true only while it is actually rendered.
 	const bool previewAtlasWasWanted = wantsFontPreviewAtlas;
@@ -798,45 +829,51 @@ void Menu::DrawSettings()
 
 	ImGui::DockSpaceOverViewport(0, NULL, ImGuiDockNodeFlags_PassthruCentralNode);
 
-	const auto layoutCond = resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
-	ImGui::SetNextWindowPos(Util::GetNativeViewportSizeScaled(0.5f), layoutCond, ImVec2(0.5f, 0.5f));
-	ImGui::SetNextWindowSize(Util::GetNativeViewportSizeScaled(0.8f), layoutCond);
-	resetLayout = false;
-	auto baseTitle = std::string{ Plugin::MENU_TITLE };
-	// Use ### to keep a stable window ID regardless of build suffix, preserving docking state
-	auto title = std::format("{}###CommunityShaders", baseTitle);
-
-	// Determine window flags based on docking state
-	ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar;
-	// Check if this will be docked (we need to peek at the docking state)
-	static bool wasDocked = false;
-	bool willBeDocked = wasDocked;  // Use previous frame's state as approximation
-
-	// Only hide title bar when not docked
-	if (!willBeDocked) {
-		windowFlags |= ImGuiWindowFlags_NoTitleBar;
+	const auto* viewport = ImGui::GetMainViewport();
+	const float padding = MenuUI::Layout::CanvasPadding;
+	const ImVec2 origin{ viewport->WorkPos.x + padding, viewport->WorkPos.y + padding };
+	const ImVec2 available{ std::max(1.0f, viewport->WorkSize.x - padding * 2), std::max(1.0f, viewport->WorkSize.y - padding * 2) };
+	const ImVec2 defaultCenter{ origin.x + available.x * .5f, origin.y + available.y * .5f };
+	const ImVec2 defaultSize{ available.x * .8f, available.y * .8f };
+	const auto minimumSize = MenuUI::Layout::MinimumSize(ImGui::GetFontSize(), available, ImGui::GetStyle().WindowMinSize);
+	const auto title = std::format("{}###CommunityShaders", Plugin::MENU_TITLE);
+	auto* existing = ImGui::FindWindowByName(title.c_str());
+	bool willBeDocked = existing && existing->DockId != 0;
+	ImVec2 center = defaultCenter;
+	ImVec2 size = defaultSize;
+	if (existing && !resetLayout) {
+		center = { existing->Pos.x + existing->SizeFull.x * .5f, existing->Pos.y + existing->SizeFull.y * .5f };
+		size = existing->SizeFull;
 	}
-
-	Util::BeginWithRoundedClose(title.c_str(), &IsEnabled, windowFlags);
-	{
-		// Update docking state tracking
-		bool isDocked = ImGui::IsWindowDocked();
-		wasDocked = isDocked;
-
-		float globalScale = settings.Theme.GlobalScale;
-
-		// Use default global scale (0.0) for built-in themes when GlobalScale equals the default
-		if (std::abs(globalScale - ThemeManager::Constants::DEFAULT_GLOBAL_SCALE) < 0.001f) {
-			globalScale = ThemeManager::Constants::DEFAULT_GLOBAL_SCALE;  // Ensure built-in themes stay at 0.0
-		}
-
-		const float uiScale = exp2(globalScale);  // User's manual GlobalScale for header icons
-		// Check if we can show icons - require setting enabled and at least some icons loaded (for undocked)
-		// For docked mode, always show icons if textures are available
-		bool canShowIcons = settings.Theme.ShowActionIcons &&
-		                    (uiIcons.saveSettings.texture ||
-								uiIcons.loadSettings.texture ||
-								uiIcons.clearCache.texture);  // Always show logo if available, regardless of action icons setting
+	const bool unusableDock = willBeDocked && (size.x < minimumSize.x || size.y < minimumSize.y);
+	if (existing && willBeDocked && (resetLayout || unusableDock)) {
+		ImGui::DockContextProcessUndockWindow(ImGui::GetCurrentContext(), existing);
+		willBeDocked = false;
+		center = defaultCenter;
+		size = defaultSize;
+	}
+	if (!willBeDocked) {
+		const bool repaired = MenuUI::Layout::FitWindow(center, size, origin, available, defaultCenter, defaultSize, minimumSize);
+		const auto condition = resetLayout || repaired || unusableDock ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
+		ImGui::SetNextWindowPos(center, condition, { .5f, .5f });
+		ImGui::SetNextWindowSize(size, condition);
+		ImGui::SetNextWindowSizeConstraints(minimumSize, available);
+	}
+	resetLayout = false;
+	ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+	if (!willBeDocked)
+		flags |= ImGuiWindowFlags_NoTitleBar;
+	const bool visible = [&] {
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, minimumSize);
+		const SKSE::stl::scope_exit restoreMinimum([] { ImGui::PopStyleVar(); });
+		return ImGui::Begin(title.c_str(), &IsEnabled, flags);
+	}();
+	if (visible) {
+		ImGui::SetScrollX(0.0f);
+		ImGui::SetScrollY(0.0f);
+		const bool isDocked = ImGui::IsWindowDocked();
+		const float uiScale = ImGui::GetStyle().FontScaleMain;
+		const bool canShowIcons = settings.Theme.ShowActionIcons;
 		bool showLogo = uiIcons.logo.texture != nullptr;
 
 		// Render header using extracted component
@@ -873,6 +910,11 @@ void Menu::DrawSettings()
 		Util::DrawClearShaderCacheConfirmation();
 	}
 	ImGui::End();
+	const auto* context = ImGui::GetCurrentContext();
+	if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) || ImGui::IsMouseReleased(ImGuiMouseButton_Right) ||
+		(context && (context->ActiveIdHasBeenEditedThisFrame || context->NavActivateId != 0)))
+		RequestSettingsDirtyCheck();
+	UpdateSettingsDirtyState();
 	// Rebuild only when entering or leaving the Fonts UI. This also releases
 	// previews when switching the outer settings page or closing via the title bar.
 	wantsFontPreviewAtlas = IsEnabled && wantsFontPreviewAtlas;
@@ -891,7 +933,7 @@ void Menu::DrawSettings()
  * @brief Renders the General settings tab content
  *
  * Delegates rendering to SettingsTabRenderer for the general configuration panel,
- * which includes Shaders, Keybindings, and Interface sub-tabs. This method provides
+ * which includes input, theme, typography and layout pages. This method provides
  * the callback for key-to-string conversion while maintaining separation of concerns.
  */
 void Menu::DrawGeneralSettings()
@@ -900,6 +942,7 @@ void Menu::DrawGeneralSettings()
 	SettingsTabRenderer::SettingsState state{
 		.settingToggleKey = settingToggleKey,
 		.settingsEffectsToggle = settingsEffectsToggle,
+		.settingNeuralRenderingToggleKey = settingNeuralRenderingToggleKey,
 		.settingSkipCompilationKey = settingSkipCompilationKey,
 		.settingOverlayToggleKey = settingOverlayToggleKey,
 		.settingShaderBlockPrevKey = settingShaderBlockPrevKey,
@@ -931,13 +974,14 @@ void Menu::DrawDisableAtBootSettings()
 	auto& disabledFeatures = state->GetDisabledFeatures();
 
 	ImGui::Text(
-		"Select features to disable at boot. "
-		"This is the same as deleting a feature.ini file. "
-		"Restart will be required to reenable.");
+		T("menu.menu.select_features_to_disable_at_boot_this_is_th_0d79c21c",
+			"Select features to disable at boot. "
+			"This is the same as deleting a feature.ini file. "
+			"Restart will be required to reenable."));
 
 	ImGui::Spacing();
 
-	if (ImGui::CollapsingHeader("Features", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::CollapsingHeader(T("menu.menu.features", "Features"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		// Prepare a sorted list of feature pointers
 		auto featureList = Feature::GetFeatureList();
 		std::sort(featureList.begin(), featureList.end(), [](Feature* a, Feature* b) {
@@ -967,11 +1011,11 @@ void Menu::DrawDisableAtBootSettings()
 
 void Menu::DrawFooter()
 {
-	ImGui::BulletText(std::format("Game Version: {} {}", magic_enum::enum_name(REL::Module::GetRuntime()), Util::GetFormattedVersion(REL::Module::get().version()).c_str()).c_str());
+	ImGui::BulletText("%s", I18n::GetSingleton()->Format("menu.footer.game_version", { { "runtime", std::string(magic_enum::enum_name(REL::Module::GetRuntime())) }, { "version", Util::GetFormattedVersion(REL::Module::get().version()) } }, "Game Version: {runtime} {version}").c_str());
 	ImGui::SameLine();
-	ImGui::BulletText(std::format("D3D12 Swap Chain: {}", globals::features::upscaling.d3d12SwapChainActive ? "Active" : "Inactive").c_str());
+	ImGui::BulletText("%s", I18n::GetSingleton()->Format("menu.footer.d3d12_swap_chain", { { "status", globals::features::upscaling.d3d12SwapChainActive ? T("menu.footer.active", "Active") : T("menu.footer.inactive", "Inactive") } }, "D3D12 Swap Chain: {status}").c_str());
 	ImGui::SameLine();
-	ImGui::BulletText(std::format("GPU: {}", globals::state->adapterDescription.c_str()).c_str());
+	ImGui::BulletText("%s", I18n::GetSingleton()->Format("menu.footer.gpu", { { "name", globals::state->adapterDescription } }, "GPU: {name}").c_str());
 }
 
 /**
@@ -984,8 +1028,52 @@ void Menu::DrawFooter()
  * Handles input event processing, shader compilation status, feature overlays,
  * A/B testing, and ImGui frame management through the specialized renderer component.
  */
+void Menu::ApplyPendingLayoutReset()
+{
+	if (!ImGui::GetCurrentContext() || ImGui::GetCurrentContext()->WithinFrameScope ||
+		!pendingLayoutReset.exchange(false))
+		return;
+
+	EnsureSettingsDirtyBaseline();
+	const ThemeSettings defaults{};
+	settings.Theme.GlobalScale = ThemeManager::Constants::DEFAULT_GLOBAL_SCALE;
+	settings.Theme.FontSize = defaults.FontSize;
+	settings.Theme.Style = defaults.Style;
+	settings.UseResolutionFont = true;
+	for (size_t role = 0; role < settings.Theme.FontRoles.size(); ++role)
+		settings.Theme.FontRoles[role].SizeScale = defaults.FontRoles[role].SizeScale;
+	pendingFontReload = true;
+	featureSearch.clear();
+	pendingFeatureSelection.clear();
+	FeatureListRenderer::ResetLayout();
+	resetLayout = true;
+
+	settingToggleKey = settingSkipCompilationKey = settingsEffectsToggle = false;
+	settingNeuralRenderingToggleKey = settingOverlayToggleKey = false;
+	settingShaderBlockPrevKey = settingShaderBlockNextKey = false;
+	settingCSEditorToggleKey = settingScreenshotKey = false;
+	ImGui::ClearActiveID();
+	ImGui::GetCurrentContext()->MovingWindow = nullptr;
+	if (!ImGui::GetCurrentContext()->OpenPopupStack.empty())
+		ImGui::ClosePopupToLevel(0, false);
+	ImGui::GetIO().ClearInputKeys();
+	if (auto* window = ImGui::FindWindowByName("###CommunityShaders")) {
+		for (auto* child : ImGui::GetCurrentContext()->Windows) {
+			if (child == window || child->RootWindow == window) {
+				child->FontWindowScale = 1.0f;
+				ImGui::SetScrollX(child, 0.0f);
+				ImGui::SetScrollY(child, 0.0f);
+			}
+		}
+	}
+	OpenMenu(true);
+	RequestSettingsDirtyCheck();
+	logger::info("Menu layout, sidebar and typography reset");
+}
+
 void Menu::DrawOverlay()
 {
+	ApplyPendingLayoutReset();
 	// A hotkey can close the menu before DrawSettings runs, so release the
 	// preview request here as well and shrink the atlas between frames.
 	if (!IsEnabled && wantsFontPreviewAtlas) {
@@ -1106,6 +1194,18 @@ void Menu::ProcessInputEventQueue()
 			if (key == event.keyCode)
 				key = MapVirtualKeyEx(event.keyCode, MAPVK_VSC_TO_VK_EX, GetKeyboardLayout(0));
 
+			static const std::vector<InputCombo> resetShortcut{
+				InputCombo::Keyboard(VK_CONTROL), InputCombo::Keyboard(VK_SHIFT), InputCombo::Keyboard(VK_END)
+			};
+			if (key == VK_END && (layoutResetKeyHeld || (event.IsDown() && InputCombo::MatchesKeyboardCombo(resetShortcut, key)))) {
+				if (event.IsDown() && !layoutResetKeyHeld)
+					RequestLayoutReset();
+				layoutResetKeyHeld = event.IsPressed();
+				if (!layoutResetKeyHeld)
+					_comboFiredKeys.erase(key);
+				continue;
+			}
+
 			const bool wasCapturingHotkey = IsCapturingHotkeyInput();
 			const bool allowSetupCloseKey = wasCapturingHotkey && HomePageRenderer::ShouldShowFirstTimeSetup() &&
 			                                (key == VK_RETURN || key == VK_ESCAPE);
@@ -1126,17 +1226,19 @@ void Menu::ProcessInputEventQueue()
 				KeyAction keyActions[] = {
 					{ settings.ToggleKey, [this]() {
 						 if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
-							 const bool wasEnabled = IsEnabled;
-							 IsEnabled = !IsEnabled;
 							 if (IsEnabled)
-								 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
-							 else if (wasEnabled) {
-								 PerformanceTuningRenderer::CancelActiveMeasurements();
-							 }
+								 CloseMenu();
+							 else
+								 OpenMenu();
 						 }
 					 } },
 					{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->backgroundCompilation.store(true, std::memory_order_relaxed); } },
 					{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnabled()); } },
+					{ settings.NeuralRenderingToggleKey, [this]() {
+						 std::string error;
+						 if (!globals::features::upscaling.ToggleNeuralRendering(&error))
+							 ReportSettingsSaveResult(false, std::move(error));
+					 } },
 					{ settings.ShaderBlockPrevKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(); } },
 					{ settings.ShaderBlockNextKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(false); } },
 					{ settings.OverlayToggleKey, []() { Menu::GetSingleton()->overlayVisible = !Menu::GetSingleton()->overlayVisible; } },
@@ -1194,6 +1296,7 @@ void Menu::ProcessInputEventQueue()
 					 } },
 					{ &settings.SkipCompilationKey, &settingSkipCompilationKey, [this](std::vector<InputCombo> keys) { settings.SkipCompilationKey = keys; settingSkipCompilationKey = false; } },
 					{ &settings.EffectToggleKey, &settingsEffectsToggle, [this](std::vector<InputCombo> keys) { settings.EffectToggleKey = keys; settingsEffectsToggle = false; } },
+					{ &settings.NeuralRenderingToggleKey, &settingNeuralRenderingToggleKey, [this](std::vector<InputCombo> keys) { settings.NeuralRenderingToggleKey = keys; settingNeuralRenderingToggleKey = false; } },
 					{ &settings.OverlayToggleKey, &settingOverlayToggleKey, [this](std::vector<InputCombo> keys) { settings.OverlayToggleKey = keys; settingOverlayToggleKey = false; } },
 					{ &settings.ShaderBlockPrevKey, &settingShaderBlockPrevKey, [this](std::vector<InputCombo> keys) { settings.ShaderBlockPrevKey = keys; settingShaderBlockPrevKey = false; } },
 					{ &settings.ShaderBlockNextKey, &settingShaderBlockNextKey, [this](std::vector<InputCombo> keys) { settings.ShaderBlockNextKey = keys; settingShaderBlockNextKey = false; } },
@@ -1265,8 +1368,7 @@ void Menu::ProcessInputEventQueue()
 					} else if (editorWindow && editorWindow->open && editorWindow->ShouldHandleEscapeKey()) {
 						editorWindow->open = false;
 					} else if (IsEnabled && (!editorWindow || !editorWindow->open)) {
-						IsEnabled = false;
-						PerformanceTuningRenderer::CancelActiveMeasurements();
+						CloseMenu();
 					}
 				}
 			} else if (event.IsDown() && !wasCapturingHotkey) {
@@ -1280,7 +1382,7 @@ void Menu::ProcessInputEventQueue()
 			// Don't forward hotkey events to ImGui when input is captured (prevents e.g. End key scrolling the feature list)
 			// SkipCompilationKey (ESC) is excluded — ESC must reach ImGui for menu/dialog close.
 			const std::vector<InputCombo>* hotkeys[] = {
-				&settings.ToggleKey, &settings.EffectToggleKey,
+				&settings.ToggleKey, &settings.EffectToggleKey, &settings.NeuralRenderingToggleKey,
 				&settings.OverlayToggleKey, &settings.ShaderBlockPrevKey, &settings.ShaderBlockNextKey,
 				&settings.CSEditorToggleKey,
 				&settings.ScreenshotKey
@@ -1323,7 +1425,7 @@ void Menu::RecordDirectInputWheelDelta(std::int32_t a_delta)
 
 bool Menu::IsCapturingHotkeyInput() const
 {
-	return settingToggleKey || settingSkipCompilationKey || settingsEffectsToggle ||
+	return settingToggleKey || settingSkipCompilationKey || settingsEffectsToggle || settingNeuralRenderingToggleKey ||
 	       settingOverlayToggleKey || settingShaderBlockPrevKey || settingShaderBlockNextKey || settingCSEditorToggleKey || settingScreenshotKey;
 }
 
@@ -1387,6 +1489,9 @@ bool Menu::IsPreviewFlying()
 
 void Menu::SelectFeatureMenu(const std::string& featureName)
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	MenuUI::DevBenchViewport::Invalidate();
+#endif
 	pendingFeatureSelection = featureName;
 	logger::info("Queued navigation to {} feature menu", featureName);
 }
@@ -1411,4 +1516,128 @@ void Menu::DrawWeatherDetailsWindow()
 	auto& weather = globals::features::csEditor;
 	bool* p_open = &globals::features::csEditor.WeatherDetailsWindow.Enabled;
 	weather.RenderWeatherDetailsWindow(p_open, !weather.WeatherDetailsWindow.ShowInOverlay);
+}
+
+bool Menu::CaptureCurrentSettingsSnapshot(json& a_snapshot)
+{
+	if (!globals::state)
+		return false;
+
+	try {
+		a_snapshot = json::object();
+		globals::state->SaveToJson(a_snapshot, false);
+		return true;
+	} catch (const std::exception& e) {
+		logger::warn("Could not capture current settings for unsaved-change detection: {}", e.what());
+	} catch (...) {
+		logger::warn("Could not capture current settings for unsaved-change detection due to an unknown error");
+	}
+	return false;
+}
+
+bool Menu::EnsureSettingsDirtyBaseline()
+{
+	if (settingsDirtyBaselineInitialized)
+		return true;
+
+	json snapshot;
+	if (!CaptureCurrentSettingsSnapshot(snapshot))
+		return false;
+
+	settingsDirtyBaseline = std::move(snapshot);
+	settingsDirtyBaselineInitialized = true;
+	settingsDirty = false;
+	dirtySettingsSections.clear();
+	return true;
+}
+
+void Menu::ResetSettingsDirtyState()
+{
+	settingsDirtyBaseline = json::object();
+	settingsDirtyBaselineInitialized = false;
+	settingsDirty = false;
+	dirtySettingsSections.clear();
+	settingsDirtyCheckRequested = false;
+	ClearSettingsSaveResult();
+}
+
+void Menu::AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSettingsName)
+{
+	if (a_featureSettingsName.empty() || !EnsureSettingsDirtyBaseline())
+		return;
+
+	json currentSettings;
+	if (!CaptureCurrentSettingsSnapshot(currentSettings))
+		return;
+
+	if (currentSettings.contains(a_featureSettingsName)) {
+		settingsDirtyBaseline[a_featureSettingsName] = currentSettings[a_featureSettingsName];
+	} else {
+		settingsDirtyBaseline.erase(a_featureSettingsName);
+	}
+	settingsDirty = currentSettings != settingsDirtyBaseline;
+	UpdateDirtySettingsSections(currentSettings);
+	ClearSettingsSaveResult();
+}
+
+void Menu::UpdateDirtySettingsSections(const json& currentSettings)
+{
+	dirtySettingsSections.clear();
+	for (const auto& [name, value] : currentSettings.items()) {
+		const auto saved = settingsDirtyBaseline.find(name);
+		if (saved == settingsDirtyBaseline.end() || *saved != value)
+			dirtySettingsSections.insert(name);
+	}
+	for (const auto& [name, value] : settingsDirtyBaseline.items()) {
+		(void)value;
+		if (!currentSettings.contains(name))
+			dirtySettingsSections.insert(name);
+	}
+}
+
+void Menu::UpdateSettingsDirtyState()
+{
+	if (!settingsDirtyCheckRequested)
+		return;
+
+	settingsDirtyCheckRequested = false;
+	if (!EnsureSettingsDirtyBaseline())
+		return;
+
+	json currentSettings;
+	if (CaptureCurrentSettingsSnapshot(currentSettings)) {
+		settingsDirty = currentSettings != settingsDirtyBaseline;
+		UpdateDirtySettingsSections(currentSettings);
+		if (settingsDirty && !settingsSaveMessageIsError)
+			ClearSettingsSaveResult();
+	}
+}
+
+void Menu::OpenMenu(bool a_cancelUserMeasurement)
+{
+	if (a_cancelUserMeasurement)
+		PerformanceTuningRenderer::CancelActiveMeasurements();
+	if (IsEnabled)
+		return;
+	IsEnabled = true;
+	if (ImGui::GetCurrentContext())
+		ImGui::GetIO().ClearInputKeys();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	MenuUI::DevBenchViewport::Invalidate();
+#endif
+}
+
+void Menu::CloseMenu()
+{
+	if (auto* editor = EditorWindow::GetSingleton(); editor && editor->open) {
+		editor->open = false;
+		editor->UpdateOpenState();
+	}
+	IsEnabled = false;
+	if (ImGui::GetCurrentContext())
+		ImGui::GetIO().ClearInputKeys();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	MenuUI::DevBenchViewport::Invalidate();
+#endif
+	PerformanceTuningRenderer::NotifyMenuClosed();
 }

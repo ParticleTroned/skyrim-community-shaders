@@ -1,0 +1,493 @@
+#include "Profiler.h"
+#include "Utils/ResourceName.h"
+
+#include <algorithm>
+#include <cmath>
+#include <iostream>
+#include <stdexcept>
+
+namespace Util
+{
+	void SetResourceName(ID3D11DeviceChild* resource, const char* format, ...)
+	{
+		if (!resource || !std::string_view(format).starts_with("Profiler::"))
+			throw std::runtime_error("profiler query lacks a resource name");
+	}
+}
+
+namespace
+{
+	using Mode = Profiler::CaptureMode;
+	void Check(bool condition, const char* message)
+	{
+		if (!condition)
+			throw std::runtime_error(message);
+	}
+	void Near(float actual, float expected, const char* message)
+	{
+		Check(std::isfinite(actual) && std::abs(actual - expected) < 0.001f, message);
+	}
+	const Profiler::TimerResult& Find(const std::vector<Profiler::TimerResult>& results, std::string_view name)
+	{
+		const auto found = std::find_if(results.begin(), results.end(), [name](const auto& timer) { return timer.name == name; });
+		Check(found != results.end(), "missing timer");
+		return *found;
+	}
+	void Pass(Profiler& profiler, std::string_view name)
+	{
+		Check(profiler.BeginPass(name, false), "pass refused");
+		profiler.EndPass(false);
+	}
+	struct Fixture
+	{
+		ID3D11Device device;
+		ID3D11DeviceContext context;
+		Profiler profiler;
+		explicit Fixture(int failedQueryIndex = -1)
+		{
+			device.failedQueryIndex = failedQueryIndex;
+			profiler.Initialize(&device, &context);
+			profiler.SetUserEnabled(true);
+		}
+		void Arm(Mode mode)
+		{
+			profiler.RequestCapture(mode);
+			profiler.EndFrame(0);
+		}
+		void Drain(uint32_t firstFrame)
+		{
+			for (uint32_t frame = firstFrame; frame < firstFrame + 8; ++frame)
+				profiler.EndFrame(frame);
+		}
+	};
+
+	void ExternalGpuCaptureIsolation()
+	{
+		Fixture f;
+		Check(f.profiler.GetGpuCaptureEpoch() == 0, "idle profiler enables external queries");
+		f.Arm(Mode::CPU);
+		Check(f.profiler.GetGpuCaptureEpoch() == 0, "CPU-only capture enables external queries");
+		f.Arm(Mode::GPU);
+		const auto epoch = f.profiler.GetGpuCaptureEpoch();
+		Check(epoch != 0, "GPU capture lacks an external token");
+		Check(f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 10, 1.5f), "external sample refused");
+		Check(f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 10, 2.5f), "second dispatch sample refused");
+		Check(f.profiler.GetExternalGpuTimings().empty(), "unfinished frame entered the displayed history");
+		Check(f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 11, 0), "measured zero was dropped");
+		auto snapshot = f.profiler.GetExternalGpuTimings();
+		Check(snapshot.size() == 1 && snapshot[0].history.count == 1, "two dispatches produced two frame samples");
+		Near(snapshot[0].history.lastMs, 4, "per-frame inference did not sum both dispatches");
+		Check(!f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 9, 3), "older completion replaced a later frame");
+		Check(!f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 11, -1), "invalid timing entered history");
+		Check(f.profiler.GetResults().empty() && f.profiler.GetTotalTimeMs() == 0, "external GPU time double-counted D3D11 totals");
+		f.Arm(Mode::Both);
+		Check(f.profiler.GetGpuCaptureEpoch() == epoch, "continuous GPU capture invalidated pending samples");
+		Check(f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 12, 1), "frame advance refused");
+		Check(f.profiler.GetExternalGpuTimings()[0].history.count == 2 && f.profiler.GetExternalGpuTimings()[0].history.lastMs == 0, "completed zero timing disappeared");
+		Near(snapshot[0].history.lastMs, 4, "external publication mutated a retained UI snapshot");
+		f.profiler.SetUserEnabled(false);
+		Check(f.profiler.GetGpuCaptureEpoch() == 0 && !f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 12, 2), "disabled profiler accepted a pending readback");
+		f.profiler.SetUserEnabled(true);
+		f.Arm(Mode::GPU);
+		const auto resumedEpoch = f.profiler.GetGpuCaptureEpoch();
+		Check(resumedEpoch && resumedEpoch != epoch && f.profiler.GetExternalGpuTimings().empty(), "new capture reused stale external history");
+		Check(!f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 12, 2), "previous session contaminated resumed capture");
+		f.profiler.ClearTimers();
+		Check(f.profiler.GetGpuCaptureEpoch() != resumedEpoch && !f.profiler.PublishExternalGpuTiming(resumedEpoch, "NeuralRendering::Inference", 13, 2), "clear admitted old pending timings");
+		f.Arm(Mode::CPU);
+		Check(f.profiler.GetGpuCaptureEpoch() == 0, "GPU-to-CPU mode transition retained external acquisition");
+		f.profiler.Release();
+		Check(f.profiler.GetGpuCaptureEpoch() == 0 && f.profiler.GetExternalGpuTimings().empty(), "release retained external history or acquisition");
+	}
+
+	void RetainedEvidenceModes()
+	{
+		using State = Util::PassTimingState;
+		for (const auto mode : { Mode::CPU, Mode::GPU, Mode::Both }) {
+			Fixture f;
+			f.Arm(mode);
+			const auto pass = std::make_shared<Util::PassTimingCapture>();
+			const auto detail = std::make_shared<Util::PassTimingCapture>();
+			const auto clock = profilerTestClock;
+			Check(f.profiler.BeginPass("Retained::Pass", false, pass), "retained pass refused");
+			const bool detailStarted = f.profiler.BeginDetailPass("Retained::Detail", detail);
+			Check(detailStarted == (mode != Mode::CPU), "detail capture ignored source selection");
+			if (detailStarted)
+				f.profiler.EndDetailPass();
+			f.profiler.EndPass(false);
+			f.profiler.EndFrame(1);
+			f.Drain(2);
+			for (const auto& capture : { pass, detail }) {
+				const auto sample = capture->Read();
+				Check(sample.cpuState == (mode == Mode::Both ? State::Ready : State::Unavailable), "CPU evidence ignored capture mode");
+				Check(sample.gpuState == (mode == Mode::CPU ? State::Unavailable : State::Ready), "GPU evidence ignored capture mode");
+				if (mode != Mode::CPU)
+					Check(sample.capturedFrame == 1, "retained sample lost frame identity");
+			}
+			if (mode == Mode::GPU)
+				Check(profilerTestClock == clock, "GPU-only retained capture sampled CPU clock");
+		}
+		Fixture f;
+		f.context.pending = true;
+		f.Arm(Mode::Both);
+		for (unsigned frame = 1; frame <= Profiler::kFrameLatency + 1; ++frame) {
+			const auto capture = std::make_shared<Util::PassTimingCapture>();
+			Check(f.profiler.BeginPass("Fallback::Retained", false, capture), "CPU fallback refused");
+			f.profiler.EndPass(false);
+			f.profiler.RequestCapture(Mode::Both);
+			f.profiler.EndFrame(frame);
+			if (frame == Profiler::kFrameLatency + 1) {
+				Check(capture->Read().gpuState == State::Unavailable, "fallback left GPU evidence pending");
+				Check(capture->Read().cpuState == State::Unavailable, "fallback falsely retained a query sample");
+				Check(f.profiler.GetCapturedCpuFrameCount() == frame, "fallback blocked independent CPU publication");
+			}
+		}
+	}
+
+	void QueryAllocationFailure()
+	{
+		for (const auto mode : { Mode::CPU, Mode::GPU, Mode::Both }) {
+			// Allocation order is frame query, then begin/end for each scope.
+			for (int failedQuery = 0; failedQuery < 5; ++failedQuery) {
+				Fixture f(failedQuery);
+				f.Arm(mode);
+				const auto clock = profilerTestClock;
+				const bool nested = failedQuery >= 3;
+				if (nested)
+					Check(f.profiler.BeginPass("Parent::Healthy", false), "healthy parent refused");
+				const bool acquired = f.profiler.BeginPass("Child::MissingQuery", false);
+				Check(acquired == (mode != Mode::GPU), "query failure ignored capture mode");
+				if (acquired)
+					f.profiler.EndPass(false);
+				if (nested)
+					f.profiler.EndPass(false);
+				f.profiler.EndFrame(1);
+				if (mode == Mode::GPU) {
+					Check(profilerTestClock == clock, "GPU-only query failure sampled CPU clock");
+					Check(f.profiler.GetCpuPublicationCount() == 0, "GPU-only failure published CPU timing");
+				} else {
+					Check(f.profiler.GetCapturedCpuFrameCount() == 1 && f.profiler.GetCpuPublicationCount() == 1, "query failure delayed CPU publication");
+					Near(Find(f.profiler.GetImmediateCpuResults(), "Child::MissingQuery").cpuTimeMs, 1, "query failure lost CPU fallback");
+					Near(f.profiler.GetImmediateCpuTotalTimeMs(), nested ? 3.0f : 1.0f, "query failure corrupted CPU nesting");
+				}
+				if (mode == Mode::CPU || failedQuery == 0)
+					Check(f.context.writes == 0, "unavailable GPU frame issued query writes");
+				f.Drain(2);
+				for (const auto& timer : f.profiler.GetResults()) {
+					if (timer.name == "Child::MissingQuery")
+						Check(!timer.hasGpu && !timer.activeGpu && timer.historyCount == 0, "missing query fabricated a GPU sample");
+				}
+				if (nested && mode != Mode::CPU)
+					Check(Find(f.profiler.GetResults(), "Parent::Healthy").hasGpu, "failed child discarded healthy parent GPU timing");
+
+				f.device.failedQueryIndex = -1;
+				f.device.queryCreations = 0;
+				f.profiler.Initialize(&f.device, &f.context);
+				f.Arm(Mode::Both);
+				Pass(f.profiler, "Recovered::Pass");
+				f.profiler.EndFrame(1);
+				f.Drain(2);
+				const auto& recovered = Find(f.profiler.GetResults(), "Recovered::Pass");
+				Check(recovered.hasCpu && recovered.hasGpu, "device reinitialization did not recover timing");
+			}
+		}
+	}
+
+	void CpuOnlyAndModeSwitch()
+	{
+		Fixture f;
+		f.Arm(Mode::CPU);
+		Check(f.profiler.BeginPass("Root::Outer", false), "CPU-only GPU scope refused");
+		Check(f.profiler.BeginCpuPass("Root::Child"), "CPU child refused");
+		profilerTestClock += 5;
+		f.profiler.EndCpuPass();
+		f.profiler.EndPass(false);
+		f.profiler.RequestCapture(Mode::CPU);
+		f.profiler.EndFrame(1);
+		const auto& root = Find(f.profiler.GetImmediateCpuResults(), "Root::Outer");
+		const auto& child = Find(f.profiler.GetImmediateCpuResults(), "Root::Child");
+		Near(root.cpuTimeMs + child.cpuTimeMs, root.GetOutermostCpuHistorySample(0), "CPU-only nesting double counted");
+		Near(child.GetOutermostCpuHistorySample(0), 0, "same feature child counted in feature total");
+		Check(f.context.writes == 0 && f.profiler.GetCapturedCpuFrameCount() == 1, "CPU-only publication acquired GPU queries or lagged");
+		Check(f.profiler.GetCapturedFrameCount() == 0, "paired publication did not retain its frame");
+		f.profiler.RequestCapture(Mode::GPU);
+		f.profiler.EndFrame(2);
+		Check(!Find(f.profiler.GetImmediateCpuResults(), "Root::Outer").activeCpu, "empty CPU cycle retained activity");
+		Near(f.profiler.GetImmediateCpuTotalTimeMs(), 0, "empty CPU cycle retained a total");
+		const auto cpuClock = profilerTestClock;
+		Pass(f.profiler, "Gpu::Only");
+		Check(!f.profiler.BeginCpuPass("Cpu::Excluded"), "GPU-only mode acquired CPU timing");
+		f.profiler.EndFrame(3);
+		Check(profilerTestClock == cpuClock && f.context.writes != 0, "GPU-only mode read QPC or omitted GPU queries");
+		Check(f.profiler.GetCapturedCpuFrameCount() == 2 && f.profiler.GetCpuPublicationCount() == 2, "GPU-only mode rewrote CPU provenance");
+		f.Drain(4);
+		Check(f.profiler.GetCapturedFrameCount() == 3, "GPU-only result did not drain");
+		f.profiler.ClearTimers();
+		f.Drain(12);
+		Check(f.profiler.GetImmediateCpuResults().empty() && f.profiler.GetResults().empty(), "cleared results resurrected");
+		Check(f.profiler.GetCpuPublicationCount() == 0, "clear retained CPU publication identity");
+	}
+
+	void PendingGpuDoesNotBlockCpu()
+	{
+		Fixture f;
+		f.context.pending = true;
+		f.Arm(Mode::Both);
+		for (uint32_t frame = 1; frame <= Profiler::kFrameLatency + 6; ++frame) {
+			Pass(f.profiler, frame <= Profiler::kFrameLatency ? "Gpu::Queued" : "Cpu::Fallback");
+			f.profiler.RequestCapture(Mode::Both);
+			f.profiler.EndFrame(frame);
+			Check(f.profiler.GetCapturedCpuFrameCount() == frame && f.profiler.GetCpuPublicationCount() == frame, "pending GPU blocked CPU publication");
+			Near(f.profiler.GetImmediateCpuTotalTimeMs(), 1, "CPU measurements merged across engine frames");
+		}
+		Check(f.profiler.GetCapturedFrameCount() == 0, "pending GPU data was published");
+		Check(Find(f.profiler.GetImmediateCpuResults(), "Cpu::Fallback").cpuHistoryCount == 6, "CPU fallback history lost frames");
+		const auto writes = f.context.writes;
+		f.context.pending = false;
+		f.Drain(Profiler::kFrameLatency + 7);
+		Check(f.profiler.GetCapturedFrameCount() == Profiler::kFrameLatency && f.context.writes == writes, "draining fabricated a GPU frame");
+		Check(std::none_of(f.profiler.GetResults().begin(), f.profiler.GetResults().end(), [](const auto& timer) { return timer.name == "Cpu::Fallback"; }), "unpaired CPU frames contaminated the paired view");
+	}
+
+	void CapacityAndMixedNesting()
+	{
+		Fixture f;
+		f.Arm(Mode::Both);
+		Check(f.profiler.BeginPass("Root::Outer", false), "GPU root refused");
+		for (uint32_t index = 1; index < Profiler::kMaxTimers; ++index)
+			Pass(f.profiler, "Root::Repeated");
+		Pass(f.profiler, "Child::Overflow");
+		f.profiler.EndPass(false);
+		f.profiler.EndFrame(1);
+		Check(f.profiler.GetSlotRefusals() == 1, "GPU capacity refusal not counted");
+		const auto& results = f.profiler.GetImmediateCpuResults();
+		float sum = 0;
+		for (const auto& result : results)
+			sum += result.cpuTimeMs;
+		Near(sum, Find(results, "Root::Outer").GetOutermostCpuHistorySample(0), "CPU fallback did not subtract from GPU-backed parent");
+		Check(Find(results, "Child::Overflow").activeCpu, "GPU capacity discarded CPU sample");
+		Check(Find(results, "Root::Repeated").cpuHistoryCount == 1, "repeated name pushed multiple history samples");
+		f.Drain(2);
+		Near(f.profiler.GetResolvedCpuTotalTimeMs(), sum, "paired CPU accounting changed");
+		Fixture cpu;
+		cpu.Arm(Mode::CPU);
+		for (uint32_t index = 0; index < Profiler::kMaxTimers; ++index)
+			Pass(cpu.profiler, "Cpu::Pass");
+		Check(!cpu.profiler.BeginPass("Cpu::Overflow", false) && cpu.profiler.GetCpuSlotRefusals() == 1, "CPU capacity was not bounded or diagnosed");
+	}
+
+	void PartialRingDrain()
+	{
+		for (uint32_t count : { 1u, 2u }) {
+			for (int mode = 0; mode < 3; ++mode) {
+				Fixture f;
+				f.Arm(Mode::Both);
+				for (uint32_t frame = 1; frame <= count; ++frame) {
+					Pass(f.profiler, "Gpu::Partial");
+					f.profiler.RequestCapture(frame < count ? Mode::Both : mode == 1 ? Mode::CPU :
+																					   Mode::None);
+					f.profiler.EndFrame(frame);
+				}
+				if (mode == 2)
+					f.profiler.SetUserEnabled(false);
+				const auto writes = f.context.writes;
+				f.Drain(count + 1);
+				Check(f.profiler.GetCapturedFrameCount() == count && f.context.writes == writes, "partial GPU ring failed to drain without new acquisition");
+			}
+		}
+	}
+
+	void BoundedCaptureIsolation()
+	{
+		Fixture f;
+		f.context.pending = true;
+		uint64_t id = 0;
+		Check(f.profiler.StartBoundedCapture(3, true, id), "bounded capture refused");
+		f.profiler.EndFrame(0);
+		for (uint32_t frame = 1; frame <= 6; ++frame) {
+			Pass(f.profiler, frame <= 3 ? "Capture::Owned" : "Cpu::Independent");
+			f.profiler.RequestCapture(Mode::CPU);
+			f.profiler.EndFrame(frame);
+		}
+		Check(f.profiler.GetBoundedCaptureProgress().submittedFrames == 3 && f.profiler.GetBoundedCaptureProgress().resolvedFrames == 0, "independent CPU publication completed a pending bounded capture");
+		f.context.pending = false;
+		f.Drain(7);
+		const auto* captured = f.profiler.GetBoundedCaptureResults(id);
+		Check(f.profiler.GetBoundedCaptureProgress().state == Profiler::CaptureSessionState::Completed && captured && captured->size() == 1, "bounded capture lost ownership or failed to complete");
+		Check(captured->front().cpuHistoryCount == 3 && captured->front().historyCount == 3, "bounded CPU/GPU frame histories diverged");
+
+		Fixture mid;
+		mid.Arm(Mode::Both);
+		Check(mid.profiler.BeginPass("Before::Session", false), "pre-session pass refused");
+		Check(mid.profiler.StartBoundedCapture(1, false, id), "mid-frame bounded capture refused");
+		mid.profiler.EndPass(false);
+		mid.profiler.EndFrame(1);
+		Check(mid.profiler.GetBoundedCaptureProgress().submittedFrames == 0, "session claimed a pre-existing frame");
+		Pass(mid.profiler, "Session::Owned");
+		mid.profiler.EndFrame(2);
+		mid.Drain(3);
+		captured = mid.profiler.GetBoundedCaptureResults(id);
+		Check(captured && captured->size() == 1 && captured->front().name == "Session::Owned", "mid-frame start contaminated bounded results");
+	}
+
+	void BoundedSparseTimings()
+	{
+		for (bool aligned : { false, true }) {
+			Fixture f;
+			uint64_t id = 0;
+			Check(f.profiler.StartBoundedCapture(4, false, id, aligned), "sparse capture refused");
+			f.profiler.EndFrame(0);
+			for (uint32_t frame = 1; frame <= 4; ++frame) {
+				Pass(f.profiler, "Base::Always");
+				if (frame == 2)
+					Pass(f.profiler, "Sparse::Late");
+				if (frame == 3) {
+					Check(f.profiler.BeginCpuPass("Sparse::Late"), "late CPU timer refused");
+					f.profiler.EndCpuPass();
+				}
+				f.profiler.EndFrame(frame);
+			}
+			f.Drain(5);
+			const auto progress = f.profiler.GetBoundedCaptureProgress();
+			const auto* results = f.profiler.GetBoundedCaptureResults(id);
+			Check(progress.state == Profiler::CaptureSessionState::Completed && !progress.invalidGpuFrames &&
+					  !progress.invalidCpuFrames && results,
+				"sparse valid frames were rejected");
+			const auto& sparse = Find(*results, "Sparse::Late");
+			Check(sparse.historyCount == (aligned ? 4u : 3u) && sparse.cpuHistoryCount == (aligned ? 4u : 3u),
+				"optional sparse alignment changed legacy captures or lost frames");
+			if (aligned) {
+				Near(sparse.GetHistorySample(0), 0, "GPU pre-observation idle frame was lost");
+				Near(sparse.GetCpuHistorySample(0), 0, "CPU pre-observation idle frame was lost");
+				Near(sparse.avgMs, .25f, "sparse GPU mean was biased toward active frames");
+				Near(sparse.cpuAvgMs, .5f, "sparse CPU mean was biased toward active frames");
+				Near(sparse.GetHistorySample(2), 0, "CPU-only update fabricated GPU work");
+			}
+		}
+	}
+
+	void BoundedInvalidTimings()
+	{
+		for (int failure = 0; failure < 5; ++failure) {
+			Fixture f(failure == 3 ? 1 : -1);
+			uint64_t id = 0;
+			Check(f.profiler.StartBoundedCapture(1, false, id, true), "invalid-data capture refused");
+			f.profiler.EndFrame(0);
+			Check(f.profiler.BeginPass("Measured::Pass", false), "pass refused instead of falling back to CPU");
+			if (failure == 4)
+				profilerTestClock -= 10;
+			f.profiler.EndPass(false);
+			f.profiler.EndFrame(1);
+			f.context.disjoint = failure == 0;
+			f.context.failed = failure == 1;
+			f.context.timestampsFailed = failure == 2;
+			f.Drain(2);
+			const auto progress = f.profiler.GetBoundedCaptureProgress();
+			Check(progress.state == Profiler::CaptureSessionState::Completed && progress.resolvedFrames == 1,
+				"invalid queries did not resolve bounded progress");
+			Check(progress.invalidGpuFrames == (failure == 4 ? 0u : 1u) &&
+					  progress.invalidCpuFrames == (failure == 4 ? 1u : 0u),
+				"query errors were silently converted to valid idle timings");
+		}
+	}
+
+	void RequestsRemovalAndReinitialization()
+	{
+		Fixture f;
+		f.profiler.RequestCapture(Mode::CPU);
+		f.profiler.RequestCapture(Mode::GPU);
+		f.profiler.EndFrame(0);
+		Pass(f.profiler, "Feature::Both");
+		f.profiler.EndFrame(1);
+		Check(f.context.writes > 0 && f.profiler.GetCpuPublicationCount() == 1, "capture requests did not combine");
+		f.profiler.ClearTimersForFeature("Feature");
+		f.Drain(2);
+		Check(f.profiler.GetImmediateCpuResults().empty() && f.profiler.GetResults().empty(), "feature removal resurrected queued data");
+		f.profiler.Initialize(&f.device, &f.context);
+		Check(f.profiler.GetCpuPublicationCount() == 0 && f.profiler.GetImmediateCpuResults().empty(), "reinitialization retained CPU data");
+	}
+
+	void LateGpuReadinessDoesNotClaimCpuFallback()
+	{
+		Fixture f;
+		f.context.pending = true;
+		f.Arm(Mode::Both);
+		uint64_t id = 0;
+		for (uint32_t frame = 1; frame <= Profiler::kFrameLatency; ++frame) {
+			Pass(f.profiler, "Before::Queued");
+			if (frame == Profiler::kFrameLatency)
+				Check(f.profiler.StartBoundedCapture(1, false, id), "queued-ring session refused");
+			f.profiler.RequestCapture(Mode::Both);
+			f.profiler.EndFrame(frame);
+		}
+		Pass(f.profiler, "Cpu::Unpaired");
+		f.context.pending = false;
+		f.profiler.EndFrame(Profiler::kFrameLatency + 1);
+		Check(f.profiler.GetBoundedCaptureProgress().submittedFrames == 0, "late GPU readiness claimed a CPU fallback as a paired frame");
+		Check(Find(f.profiler.GetImmediateCpuResults(), "Cpu::Unpaired").activeCpu, "unpaired CPU result was lost");
+		Pass(f.profiler, "Capture::Paired");
+		f.profiler.EndFrame(Profiler::kFrameLatency + 2);
+		f.Drain(Profiler::kFrameLatency + 3);
+		const auto* results = f.profiler.GetBoundedCaptureResults(id);
+		Check(results && results->size() == 1 && results->front().name == "Capture::Paired", "bounded results contain an unpaired fallback");
+	}
+
+	void InvalidGpuAndOpenScopeReset()
+	{
+		for (bool failed : { false, true }) {
+			Fixture f;
+			f.context.failed = failed;
+			f.context.disjoint = !failed;
+			f.Arm(Mode::Both);
+			Pass(f.profiler, "Cpu::Survives");
+			f.profiler.EndFrame(1);
+			Near(f.profiler.GetImmediateCpuTotalTimeMs(), 1, "invalid GPU clock discarded immediate CPU measurement");
+			f.Drain(2);
+			Near(f.profiler.GetResolvedCpuTotalTimeMs(), 1, "invalid GPU clock discarded paired CPU measurement");
+		}
+
+		Fixture f;
+		f.Arm(Mode::Both);
+		Check(f.profiler.BeginPass("Cleared::Gpu", false), "open GPU scope refused");
+		Check(f.profiler.BeginCpuPass("Cleared::Cpu"), "open CPU scope refused");
+		f.profiler.ClearTimers();
+		f.profiler.EndCpuPass();
+		f.profiler.EndPass(false);
+		f.profiler.EndFrame(1);
+		f.Drain(2);
+		Check(f.profiler.GetImmediateCpuResults().empty() && f.profiler.GetResults().empty(), "open scopes republished after clear");
+
+		Fixture disabled;
+		disabled.Arm(Mode::CPU);
+		Check(disabled.profiler.BeginPass("Cpu::Closing", false), "CPU fallback refused");
+		disabled.profiler.SetUserEnabled(false);
+		disabled.profiler.EndPass(false);
+		disabled.profiler.EndFrame(1);
+		Near(disabled.profiler.GetImmediateCpuTotalTimeMs(), 1, "disable lost an already-open CPU fallback");
+		Check(!disabled.profiler.IsEnabled(), "disable re-enabled acquisition");
+	}
+}
+
+int main()
+{
+	try {
+		ExternalGpuCaptureIsolation();
+		RetainedEvidenceModes();
+		QueryAllocationFailure();
+		CpuOnlyAndModeSwitch();
+		PendingGpuDoesNotBlockCpu();
+		CapacityAndMixedNesting();
+		PartialRingDrain();
+		BoundedCaptureIsolation();
+		BoundedSparseTimings();
+		BoundedInvalidTimings();
+		RequestsRemovalAndReinitialization();
+		LateGpuReadinessDoesNotClaimCpuFallback();
+		InvalidGpuAndOpenScopeReset();
+		std::cout << "Profiler capture regression cases passed\n";
+		return 0;
+	} catch (const std::exception& error) {
+		std::cerr << error.what() << '\n';
+		return 1;
+	}
+}

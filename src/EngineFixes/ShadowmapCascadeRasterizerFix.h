@@ -1,21 +1,44 @@
 #pragma once
 
-// This overrides the shadow cascade rasterizers to fix issues with peter panning and self shadowing
+#include "EngineFix.h"
+#include "Utils/GameSetting.h"
+
+// Overrides the shadow cascade rasterizers to fix peter-panning and self-shadowing.
 struct ShadowmapRasterizerFix : EngineFix
 {
 	std::string GetName() override { return "Shadowmap Cascade Rasterizer Fix"; }
 	void Install() override;
 
-	using RasterStateArray = ID3D11RasterizerState* [2][3][12][2];
+	static constexpr int kFill = 2;
+	static constexpr int kCull = 3;
+	static constexpr int kFlatDepth = 12;
+	static constexpr int kScissor = 2;
+	static constexpr int kMaxStates = kFill * kCull * kFlatDepth * kScissor;
+	using RasterStatePtr = ID3D11RasterizerState*;
 
-	static void CloneRasterStates(RasterStateArray* inputArray, int cascade);
+	static int StateCount();
+	static int StateIndex(int fill, int cull, int depth, int scissor);
+	static void CloneRasterStates(RasterStatePtr* inputArray, std::uint32_t cascade);
+	static void ReleaseClonedRasterStates();
 
-	static constexpr uint maxCascades = 3;
-	static inline uint numCascades = 0;
+	static constexpr std::uint32_t maxCascades = 3;
+	static inline int depthDim = kFlatDepth;
+	static inline std::uint32_t numCascades = 1;
+	static inline std::uint32_t currentCascade = 0;
+	static inline bool initialized = false;
 
-	static inline RasterStateArray* gRasterStates = nullptr;
-	static inline RasterStateArray backupGameRasterStates = {};
-	static inline RasterStateArray shadowmapRasterStates[maxCascades] = {};
+	static inline RasterStatePtr* gRasterStates = nullptr;
+	static inline RasterStatePtr backupGameRasterStates[kMaxStates] = {};
+	static inline RasterStatePtr shadowmapRasterStates[maxCascades][kMaxStates] = {};
+
+	struct ShadowMapRasterizerDescriptor
+	{
+		int rasterDepthBias;
+		float rasterDepthBiasClamp;
+		float rasterSlopeScaleBias;
+	};
+
+	static void GetUpdatedRasterDesc(D3D11_RASTERIZER_DESC& outputDesc, ShadowMapRasterizerDescriptor desc);
 
 	static constexpr int firstCascadeDepthBias = 160;
 	static constexpr float firstCascadeDepthBiasClamp = 0.015f;
@@ -29,14 +52,6 @@ struct ShadowmapRasterizerFix : EngineFix
 	static constexpr float thirdCascadeDepthBiasClamp = 0.015f;
 	static constexpr float thirdCascadeSlopeScaleBias = 3.8f;
 
-	struct ShadowMapRasterizerDescriptor
-	{
-		int rasterDepthBias;
-		float rasterDepthBiasClamp;
-		float rasterSlopeScaleBias;
-	};
-	static void GetUpdatedRasterDesc(D3D11_RASTERIZER_DESC& outputDesc, ShadowMapRasterizerDescriptor desc);
-
 	static constexpr ShadowMapRasterizerDescriptor cascadeDescriptors[maxCascades] = {
 		{ firstCascadeDepthBias, firstCascadeDepthBiasClamp, firstCascadeSlopeScaleBias },
 		{ secondCascadeDepthBias, secondCascadeDepthBiasClamp, secondCascadeSlopeScaleBias },
@@ -45,7 +60,7 @@ struct ShadowmapRasterizerFix : EngineFix
 
 	struct BSShadowDirectionalLight_RenderShadowmaps_RenderCascade
 	{
-		static void thunk(RE::BSShadowDirectionalLight* light, void* arg1, void* arg2, uint32_t flags);
+		static void thunk(RE::BSShadowDirectionalLight* light, void* arg1, void* arg2, std::uint32_t flags);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
@@ -54,6 +69,6 @@ struct ShadowmapRasterizerFix : EngineFix
 									"Controls the number of shadow map cascades used for directional lighting. "
 									"Higher values provide better shadow quality but use more GPU resources. "
 									"Maximum of 3 cascades supported. ",
-									static_cast<uintptr_t>(0), 2, 1, 3 } },
+									0, 2, 1, 3 } },
 	};
 };

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <imgui.h>
+#include <cstdint>
+#include <string>
 #include <vector>
 
 namespace Util::Subrect
@@ -21,6 +23,9 @@ namespace Util::Subrect
 		uint32_t h = 1;
 	};
 
+	/** Rounds and clamps crop boundaries to pixels, with a one-pixel minimum on nonempty images. */
+	PixelRegion ResolvePixelRegion(const UVRegion& uv, uint32_t width, uint32_t height);
+
 	struct Preset
 	{
 		std::string name;
@@ -28,16 +33,16 @@ namespace Util::Subrect
 	};
 
 	// "User picks a sub-rectangle of an image" controller. Crop UV is in [0,1]
-	// of the source the caller passes to GetPixelRegion(). Hosts that want
-	// preset-based eye selection seed Left/Right/Full Frame via SeedDefaultPresets.
+	// of the single-view source the caller passes to GetPixelRegion(). Hosts
+	// may supply ordinary rectangular defaults with SeedDefaultPresets().
 	class Controller
 	{
 	public:
 		void LoadSettings(const json& a_json);
 		void SaveSettings(json& a_json) const;
 
-		// Replaces the built-in "Full Frame" placeholder used when JSON has no
-		// CropPresets entry yet. Empty-case only - user edits/deletions persist.
+		// Seeds and materializes defaults while empty, or migrates the legacy sole
+		// Full Frame placeholder. Existing custom crops and user presets are preserved.
 		void SeedDefaultPresets(std::vector<Preset> defaults);
 
 		// uvStartX/uvVisibleWidth window the preview onto a sub-region of the
@@ -66,12 +71,13 @@ namespace Util::Subrect
 		float dragStartUV[2] = { 0.0f, 0.0f };
 
 		void EnsureDefaultPreset();
+		void ReconcileSeededDefaults();
 		void ClampCurrentUV();
 		void ApplyPreset(int index);
 	};
 
 	// Opaque-RGB blend state callback for render-target previews with non-1 alpha.
-	// Paired with ImDrawCallback_ResetRenderState immediately after the image draw.
+	// Paired with ImDrawCallback_ResetRenderState immediately after the Image draw.
 	void OpaquePreviewBlendCallback(const ImDrawList*, const ImDrawCmd*);
 
 	// Draws an ImGui image with opaque RGB blending. Use for render-target SRVs

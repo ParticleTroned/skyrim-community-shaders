@@ -6,8 +6,8 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float3 Color: SV_Target0;
-	float4 Color1: SV_Target1;
+	float3 Color : SV_Target0;
+	float4 Color1 : SV_Target1;
 };
 
 #if defined(PSHADER)
@@ -39,6 +39,22 @@ namespace WaterBlend
 	}
 }
 
+float3 LogToLinear(float3 logColor)
+{
+	const float linearRange = 14.0f;
+	const float linearGrey = 0.18f;
+	const float exposureGrey = 444.0f;
+	return exp2((logColor - exposureGrey / 1023.0) * linearRange) * linearGrey;
+}
+
+float3 LinearToLog(float3 linearColor)
+{
+	const float linearRange = 14.0f;
+	const float linearGrey = 0.18f;
+	const float exposureGrey = 444.0f;
+	return saturate(log2(linearColor) / linearRange - log2(linearGrey) / linearRange + exposureGrey / 1023.0f);
+}
+
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
@@ -50,14 +66,16 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 sourceColor = sourceTex.Sample(sourceSampler, adjustedScreenPosition).xyz;
 	float2 motion = motionBufferTex.Sample(motionBufferSampler, adjustedScreenPosition).xy;
-	float2 motionScreenPosition = input.TexCoord + motion;
+	float2 motionScreenPosition = ((input.TexCoord) + motion);
 	float2 motionAdjustedScreenPosition =
 		FrameBuffer::GetPreviousDynamicResolutionAdjustedScreenPosition(motionScreenPosition);
 	float4 waterHistory =
 		waterHistoryTex.Sample(waterHistorySampler, motionAdjustedScreenPosition).xyzw;
+	waterHistory.xyz = LogToLinear(waterHistory.xyz) - LogToLinear(0);
 
 	float3 finalColor = sourceColor;
-	if (motionScreenPosition.x >= 0 && motionScreenPosition.y >= 0 && motionScreenPosition.x <= 1 &&
+	if (
+		motionScreenPosition.x >= 0 && motionScreenPosition.y >= 0 && motionScreenPosition.x <= 1 &&
 		motionScreenPosition.y <= 1 && waterHistory.w > 0.0 && all(isfinite(waterHistory))) {
 		float historyFactor = 0.95;
 		if (NearFar_Menu_DistanceFactor.z == 0) {
@@ -71,7 +89,7 @@ PS_OUTPUT main(PS_INPUT input)
 				0.1, 0.95);
 			historyFactor = NearFar_Menu_DistanceFactor.w * (distanceFactor * (waterMask * -0.85 + 0.95));
 		}
-		// Un-premultiply history so bilinear filtering against cleared pixels does not darken water edges
+		// Un-premultiply history so bilinear filtering against cleared pixels does not darken water edges.
 		float3 historyColor = waterHistory.xyz / max(waterHistory.w, EPSILON_DIVISION);
 
 		historyFactor *= waterHistory.w;
@@ -79,8 +97,8 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 	float waterCoverage = WaterBlend::GetWaterCoverage(waterMask);
-	// Store premultiplied history so transparent clears filter without dark outlines
-	psout.Color1 = float4(finalColor * waterCoverage, waterCoverage);
+	// Store premultiplied history so transparent clears filter without dark outlines.
+	psout.Color1 = float4(LinearToLog(finalColor * waterCoverage + LogToLinear(0)), waterCoverage);
 	psout.Color = finalColor;
 
 	return psout;

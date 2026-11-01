@@ -1,82 +1,119 @@
 #include "Widget.h"
+#include "I18n/I18n.h"
 
 #include <algorithm>
 #include <format>
 
-#include "../I18n/I18n.h"
 #include "EditorWindow.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/FileSystem.h"
 #include "Utils/UI.h"
 #include "WeatherUtils.h"
 #include "imgui_internal.h"
 
-#define I18N_KEY_PREFIX "cs_editor."
+#include <unordered_map>
+
+namespace
+{
+	std::string ToString(std::string_view value)
+	{
+		return std::string(value.data(), value.size());
+	}
+
+	std::unordered_map<std::string, Widget::UndoRestoreAction>& GetBaselineSnapshots()
+	{
+		static std::unordered_map<std::string, Widget::UndoRestoreAction> snapshots;
+		return snapshots;
+	}
+
+	std::uint32_t weatherReinitBatchDepth = 0;
+	RE::TESWeather* pendingWeatherReinit = nullptr;
+
+	void ReinitializeActiveWeather(RE::TESWeather* weather)
+	{
+		auto* sky = globals::game::sky;
+		if (!weather || !sky || sky->currentWeather != weather)
+			return;
+
+		auto* editor = EditorWindow::GetSingleton();
+		auto* lockedWeather = editor && editor->IsWeatherLocked() ?
+		                          editor->GetLockedWeather() :
+		                          nullptr;
+
+		EditorWindow::ForceWeather(sky, weather, true);
+		sky->ReleaseWeatherOverride();
+
+		if (lockedWeather)
+			EditorWindow::MaintainWeatherLock();
+	}
+}
 
 void Widget::Save()
 {
-	SaveSettings();
-	const auto file = GetSaveFilePath();
-	const auto filePath = std::filesystem::path(file).parent_path();
-
-	if (!std::filesystem::exists(filePath) || !std::filesystem::is_directory(filePath)) {
-		try {
-			std::filesystem::create_directories(filePath);
-		} catch (const std::filesystem::filesystem_error& e) {
-			logger::warn("Error creating directory during Save ({}) : {}\n", filePath.string(), e.what());
-			return;
-		}
-	}
-
-	std::ofstream settingsFile(file);
-	if (!settingsFile.good() || !settingsFile.is_open()) {
-		logger::warn("Failed to open settings file: {}", file);
-		return;
-	}
-
-	if (settingsFile.fail()) {
-		logger::warn("Unable to create settings file: {}", file);
-		settingsFile.close();
-		return;
-	}
-
 	try {
+		SaveSettings();
+		const auto file = GetSaveFilePath();
+
 		// Validate that we have valid JSON to write
 		if (js.is_null()) {
 			logger::warn("{}: Cannot save - JSON data is null", GetEditorID());
-			settingsFile.close();
 			return;
 		}
 
-		settingsFile << js.dump(2);
-		settingsFile.flush();
-
-		if (settingsFile.fail()) {
-			logger::error("{}: Failed to write settings to file", GetEditorID());
-			settingsFile.close();
+		std::string errorMessage;
+		if (!Util::FileHelpers::WriteTextFileAtomic(file, js.dump(2), errorMessage)) {
+			logger::error("{}: Failed to save settings to {}: {}", GetEditorID(), file, errorMessage);
 			return;
 		}
 
-		settingsFile.close();
+		MarkSavedState();
 		EditorWindow::GetSingleton()->OnWidgetJsonAttachmentChanged(this);
 
 	} catch (const nlohmann::json::exception& e) {
 		logger::error("{}: JSON error while saving settings: {}", GetEditorID(), e.what());
-		settingsFile.close();
 	} catch (const std::exception& e) {
 		logger::error("{}: Unexpected error saving settings file: {}", GetEditorID(), e.what());
-		settingsFile.close();
 	}
 }
 
-void Widget::Load(bool showNotification)
+void Widget::RememberBaseline()
 {
-	std::string filePath = GetSaveFilePath();
+	auto restore = CaptureBaselineState();
+	if (restore)
+		GetBaselineSnapshots().try_emplace(GetStableIdentity(), std::move(restore));
+}
 
-	if (!std::filesystem::exists(filePath)) {
+void Widget::RestoreRememberedBaseline()
+{
+	const auto it = GetBaselineSnapshots().find(GetStableIdentity());
+	if (it != GetBaselineSnapshots().end())
+		it->second(*this);
+}
+
+void Widget::Load(bool showNotification, bool applyChanges)
+{
+	const bool previousSuppression = suppressPersistentApply;
+	suppressPersistentApply = previousSuppression || !applyChanges;
+	const SKSE::stl::scope_exit restoreSuppression([&]() noexcept {
+		suppressPersistentApply = previousSuppression;
+	});
+
+	const auto filePath = std::filesystem::path(GetSaveFilePath());
+	auto resetToBaseline = [&]() {
 		js = json();
-		LoadSettings();
+		try {
+			LoadSettings();
+		} catch (const std::exception& e) {
+			logger::error("Failed to restore baseline settings for {}: {}", GetEditorID(), e.what());
+		}
+	};
 
+	json loaded;
+	std::string errorMessage;
+	const auto result = Util::FileHelpers::ReadJsonFile(filePath, loaded, errorMessage);
+	if (result == Util::FileHelpers::JsonFileReadResult::NotFound) {
+		resetToBaseline();
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("No saved file - reset {} to vanilla values", GetEditorID()),
@@ -86,38 +123,22 @@ void Widget::Load(bool showNotification)
 		return;
 	}
 
-	// File exists, load from it
-	std::ifstream settingsFile(filePath);
-
-	if (!settingsFile.good() || !settingsFile.is_open()) {
-		logger::warn("Failed to open settings file: {}", filePath);
+	if (result == Util::FileHelpers::JsonFileReadResult::Error) {
+		logger::warn("Failed to load settings file ({}): {}", filePath.string(), errorMessage);
+		resetToBaseline();
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
-				std::format("Failed to open file for {}", GetEditorID()),
-				Util::Colors::GetWarning(),
+				std::format("Invalid file for {} - reset to vanilla", GetEditorID()),
+				Util::Colors::GetError(),
 				3.0f);
 		}
 		return;
 	}
 
 	try {
-		settingsFile >> js;
-		settingsFile.close();
-
-		// Validate that we loaded valid JSON
-		if (js.is_null()) {
-			logger::warn("{}: Loaded JSON is null, file may be empty or invalid", filePath);
-			if (showNotification) {
-				EditorWindow::GetSingleton()->ShowNotification(
-					std::format("Invalid file for {} - resetting to vanilla", GetEditorID()),
-					Util::Colors::GetWarning(),
-					3.0f);
-			}
-			js = json();
-			LoadSettings();
-			return;
-		}
-
+		if (!loaded.is_object())
+			throw std::runtime_error("root value is not a JSON object");
+		js = std::move(loaded);
 		LoadSettings();
 
 		if (showNotification) {
@@ -126,89 +147,106 @@ void Widget::Load(bool showNotification)
 				Util::Colors::GetSuccess(),
 				3.0f);
 		}
-
-	} catch (const nlohmann::json::parse_error& e) {
-		logger::error("Error parsing settings for file ({}) : {}\n", filePath, e.what());
-		logger::error("Parse error at byte {}: {}", e.byte, e.what());
-		settingsFile.close();
-		if (showNotification) {
-			EditorWindow::GetSingleton()->ShowNotification(
-				std::format("Parse error for {} - resetting to vanilla", GetEditorID()),
-				Util::Colors::GetError(),
-				3.0f);
-		}
-		js = json();
-		LoadSettings();
-		return;
 	} catch (const std::exception& e) {
-		logger::error("Unexpected error loading settings file ({}) : {}\n", filePath, e.what());
-		settingsFile.close();
+		logger::error("Invalid settings file ({}): {}", filePath.string(), e.what());
+		resetToBaseline();
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
-				std::format("Error loading {} - resetting to vanilla", GetEditorID()),
+				std::format("Invalid settings for {} - reset to vanilla", GetEditorID()),
 				Util::Colors::GetError(),
 				3.0f);
 		}
-		js = json();
-		LoadSettings();
-		return;
 	}
 }
 
-void Widget::Delete()
+bool Widget::Delete()
 {
-	std::string filePath = GetSaveFilePath();
-
-	if (!std::filesystem::exists(filePath)) {
-		return;
-	}
-
-	try {
-		std::filesystem::remove(filePath);
-
-		js = json();
-
-		// Reload settings from vanilla/mod defaults
-		LoadSettings();
-
-		// Apply the vanilla values to the game
-		ApplyChanges();
-
-		EditorWindow::GetSingleton()->OnWidgetJsonAttachmentChanged(this);
-
+	const auto filePath = std::filesystem::path(GetSaveFilePath());
+	std::error_code ec;
+	const bool fileExists = std::filesystem::exists(filePath, ec);
+	if (ec) {
+		logger::warn(
+			"Failed to inspect settings file before deletion ({}): {}",
+			filePath.string(), ec.message());
 		EditorWindow::GetSingleton()->ShowNotification(
-			std::format("Deleted {} - reverted to vanilla values", GetEditorID()),
-			Util::Colors::GetSuccess(),
+			std::format("Could not inspect saved settings for {}", GetEditorID()),
+			Util::Colors::GetError(),
 			3.0f);
-	} catch (const std::filesystem::filesystem_error& e) {
-		logger::warn("Error deleting settings file ({}) : {}\n", filePath, e.what());
+		return false;
 	}
+
+	if (fileExists && !std::filesystem::remove(filePath, ec) && ec) {
+		logger::warn(
+			"Failed to delete settings file ({}): {}",
+			filePath.string(), ec.message());
+		EditorWindow::GetSingleton()->ShowNotification(
+			std::format("Could not delete saved settings for {}", GetEditorID()),
+			Util::Colors::GetError(),
+			3.0f);
+		return false;
+	}
+
+	js = json();
+	try {
+		// Reload settings from vanilla/mod defaults only after persistence is gone.
+		LoadSettings();
+	} catch (const std::exception& e) {
+		logger::warn(
+			"Deleted settings file ({}), but failed to restore game values: {}",
+			filePath.string(), e.what());
+		EditorWindow::GetSingleton()->ShowNotification(
+			std::format("Deleted {}, but failed to restore game values", GetEditorID()),
+			Util::Colors::GetError(),
+			3.0f);
+		EditorWindow::GetSingleton()->OnWidgetJsonAttachmentChanged(this);
+		return true;
+	}
+
+	EditorWindow::GetSingleton()->OnWidgetJsonAttachmentChanged(this);
+	EditorWindow::GetSingleton()->ShowNotification(
+		std::format("Deleted {} - reverted to vanilla values", GetEditorID()),
+		Util::Colors::GetSuccess(),
+		3.0f);
+	return true;
 }
 
 bool Widget::HasSavedFile() const
 {
-	return std::filesystem::exists(GetSaveFilePath());
+	const auto filePath = std::filesystem::path(GetSaveFilePath());
+	std::error_code ec;
+	const bool exists = std::filesystem::exists(filePath, ec);
+	if (ec) {
+		logger::warn(
+			"Failed to inspect settings file ({}): {}",
+			filePath.string(), ec.message());
+		return false;
+	}
+	return exists;
 }
 
 bool Widget::CanApplyPersistentChanges() const
 {
-	return true;
+	if (suppressPersistentApply)
+		return false;
+
+	auto* state = State::GetSingleton();
+	return !state || !state->IsPersistentMutationBlocked();
 }
 
 void Widget::DrawMenu()
 {
 	if (ImGui::BeginMenuBar()) {
-		if (ImGui::BeginMenu(T(TKEY("menu"), "Menu"))) {
-			if (ImGui::MenuItem(T(TKEY("save"), "Save"))) {
+		if (ImGui::BeginMenu(T("cs_editor.menu", "Menu"))) {
+			if (ImGui::MenuItem(T("cs_editor.save", "Save"))) {
 				Save();
 			}
-			if (ImGui::MenuItem(T(TKEY("load"), "Load"))) {
+			if (ImGui::MenuItem(T("cs_editor.load", "Load"))) {
 				Load();
 			}
-			if (ImGui::MenuItem(T(TKEY("delete_saved_file"), "Delete Saved File"))) {
+			if (ImGui::MenuItem(T("cs_editor.delete_saved_file", "Delete Saved File"))) {
 				ImGui::OpenPopup("DeleteConfirmation");
 			}
-			if (ImGui::MenuItem(T(TKEY("revert_to_game_values"), "Revert to Game Values"))) {
+			if (ImGui::MenuItem(T("cs_editor.revert_to_game_values", "Revert to Game Values"))) {
 				RevertChanges();
 			}
 
@@ -229,7 +267,7 @@ void Widget::DrawDeleteConfirmationModal(const char* popupId)
 
 	if (auto popup = Util::CenteredPopupModal(popupId)) {
 		deleteConfirmationFrame = ImGui::GetFrameCount();
-		ImGui::Text("%s", T(TKEY("confirm_delete_saved_file"), "Are you sure you want to delete the saved settings file?"));
+		ImGui::Text(T("cs_editor.confirm_delete_saved_file", "Are you sure you want to delete the saved settings file?"));
 		ImGui::Spacing();
 		ImGui::Separator();
 		ImGui::Spacing();
@@ -242,13 +280,12 @@ void Widget::DrawDeleteConfirmationModal(const char* popupId)
 
 		ImGui::SetCursorPosX(cursorX);
 
-		if (ImGui::Button(T(TKEY("yes_delete"), "Yes, Delete"), ImVec2(buttonWidth, 0))) {
-			Delete();
+		if (ImGui::Button(T("cs_editor.yes_delete", "Yes, Delete"), ImVec2(buttonWidth, 0)) && Delete()) {
 			ImGui::CloseCurrentPopup();
 		}
 		ImGui::SameLine();
 
-		if (ImGui::Button(T(TKEY("cancel"), "Cancel"), ImVec2(buttonWidth, 0))) {
+		if (ImGui::Button(T("cs_editor.cancel", "Cancel"), ImVec2(buttonWidth, 0))) {
 			ImGui::CloseCurrentPopup();
 		}
 		ImGui::SetItemDefaultFocus();
@@ -264,21 +301,21 @@ std::string Widget::GetFolderName() const
 {
 	switch (form->GetFormType()) {
 	case RE::FormType::Weather:
-		return std::string(kWeatherFolderName);
+		return ToString(kWeatherFolderName);
 	case RE::FormType::LightingMaster:
-		return std::string(kLightingTemplateFolderName);
+		return ToString(kLightingTemplateFolderName);
 	case RE::FormType::ImageSpace:
-		return std::string(kImageSpaceFolderName);
+		return ToString(kImageSpaceFolderName);
 	case RE::FormType::VolumetricLighting:
-		return std::string(kVolumetricLightingFolderName);
+		return ToString(kVolumetricLightingFolderName);
 	case RE::FormType::ShaderParticleGeometryData:
-		return std::string(kPrecipitationFolderName);
+		return ToString(kPrecipitationFolderName);
 	case RE::FormType::ReferenceEffect:
-		return std::string(kVisualEffectsFolderName);
+		return ToString(kVisualEffectsFolderName);
 	case RE::FormType::Cell:
-		return std::string(kCellLightingFolderName);
+		return ToString(kCellLightingFolderName);
 	default:
-		return std::string(kOtherEditorWidgetsFolderName);
+		return ToString(kOtherEditorWidgetsFolderName);
 	}
 }
 
@@ -297,21 +334,43 @@ bool Widget::BeginWidgetWindow()
 void Widget::ForceWeatherReinit(RE::TESWeather* weather)
 {
 	auto* sky = globals::game::sky;
-	if (weather && sky && sky->currentWeather == weather) {
-		sky->ForceWeather(weather, true);
-		sky->ReleaseWeatherOverride();
-		EditorWindow::MaintainWeatherLock();
+	if (!weather || !sky || sky->currentWeather != weather)
+		return;
+
+	if (weatherReinitBatchDepth != 0) {
+		pendingWeatherReinit = weather;
+		return;
 	}
+
+	ReinitializeActiveWeather(weather);
 }
 
 void Widget::ForceCurrentWeatherReinit()
 {
 	auto* sky = globals::game::sky;
-	if (sky && sky->currentWeather) {
-		sky->ForceWeather(sky->currentWeather, true);
-		sky->ReleaseWeatherOverride();
-		EditorWindow::MaintainWeatherLock();
+	if (sky)
+		ForceWeatherReinit(sky->currentWeather);
+}
+
+void Widget::BeginWeatherReinitBatch()
+{
+	weatherReinitBatchDepth++;
+}
+
+void Widget::EndWeatherReinitBatch()
+{
+	if (weatherReinitBatchDepth == 0) {
+		logger::warn("Unbalanced weather reinitialization batch");
+		return;
 	}
+
+	weatherReinitBatchDepth--;
+	if (weatherReinitBatchDepth != 0)
+		return;
+
+	auto* weather = pendingWeatherReinit;
+	pendingWeatherReinit = nullptr;
+	ReinitializeActiveWeather(weather);
 }
 
 void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSaveLoadRevert, bool showForceWeather, RE::TESWeather* weather)
@@ -333,7 +392,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 			ClearSearchState(true);
 			ImGui::SetKeyboardFocusHere();
 		}
-		ImGui::InputTextWithHint(searchId, T(TKEY("search_settings_hint"), "Search settings (Ctrl+F)"), searchBuffer, sizeof(searchBuffer));
+		ImGui::InputTextWithHint(searchId, T("cs_editor.search_settings_hint", "Search settings (Ctrl+F)"), searchBuffer, sizeof(searchBuffer));
 		searchInputMin = ImGui::GetItemRectMin();
 		searchInputMax = ImGui::GetItemRectMax();
 		if (ImGui::IsItemEdited())
@@ -344,34 +403,36 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		if (!showForceWeather || !weather)
 			return;
 		ImGui::SameLine();
-		auto* lockedWeather = editorWindow->GetLockedWeather();
-		bool isLocked = lockedWeather == weather;
-		const char* lockLabel = isLocked ? T(TKEY("unlock"), "Unlock") : T(TKEY("force_weather"), "Force Weather");
+		bool isLocked = editorWindow->IsWeatherLocked() && editorWindow->GetLockedWeather() == weather;
+		const char* lockLabel = isLocked ? "Unlock" : "Force Weather";
+
+		auto drawButton = [&]() {
+			if (ImGui::Button(lockLabel)) {
+				if (isLocked)
+					editorWindow->UnlockWeather();
+				else
+					editorWindow->LockWeather(weather);
+			}
+		};
 
 		if (isLocked) {
-			ImGui::PushStyleColor(ImGuiCol_Button, WidgetUI::kLockButtonColor);
-			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, WidgetUI::kLockButtonHoverColor);
+			auto lockedButtonStyle = Util::SuccessButtonStyle();
+			drawButton();
+		} else {
+			drawButton();
 		}
-		if (ImGui::Button(lockLabel)) {
-			if (isLocked)
-				editorWindow->UnlockWeather();
-			else
-				editorWindow->LockWeather(weather);
-		}
-		if (isLocked)
-			ImGui::PopStyleColor(2);
 		if (isLocked && !EditorWindow::AreWeatherLockHooksInstalled())
-			Util::AddTooltip(T(TKEY("unlock_weather_hooks_unavailable"), "Unlock Weather (weather-lock hooks failed to install; weather may briefly flash before correcting)"));
+			Util::AddTooltip(T("editor.widget.unlock_weather_weather_lock_hooks_unavailable_2ed27b1c", "Unlock Weather (weather-lock hooks unavailable; weather may briefly flash before correction)"));
 		else
-			Util::AddTooltip(isLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("force_this_weather"), "Force This Weather"));
+			Util::AddTooltip(isLocked ? T("cs_editor.unlock_weather", "Unlock Weather") : T("cs_editor.force_this_weather", "Force This Weather"));
 	};
 
 	auto drawUnsavedIndicator = [&]() {
 		if (!HasUnsavedChanges() || !menu)
 			return;
 		ImGui::SameLine();
-		ImGui::TextColored(menu->GetTheme().StatusPalette.Warning, "%s", T(TKEY("unsaved_changes"), "(UNSAVED CHANGES)"));
-		Util::AddTooltip(T(TKEY("unsaved_changes_tooltip"), "Unsaved changes - click save to keep"));
+		ImGui::TextColored(menu->GetTheme().StatusPalette.Warning, T("cs_editor.unsaved_changes", "(UNSAVED CHANGES)"));
+		Util::AddTooltip(T("cs_editor.unsaved_changes_tooltip", "Unsaved changes - click save to keep"));
 	};
 
 	if (useIcons) {
@@ -385,8 +446,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 
 		// Transparent icon button style
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-		ImGui::PushStyleColor(ImGuiCol_Button, WidgetUI::kIconButtonTransparent);
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, WidgetUI::kIconButtonHover);
+		auto iconButtonStyle = Util::TransparentIconButtonStyle();
 
 		auto iconButton = [&](const char* suffix, void* texture, const char* tooltip, auto callback) {
 			if (!texture)
@@ -400,31 +460,30 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		// Apply button
 		if (showApply && (!editorWindow->settings.autoApplyChanges || RequiresManualApply())) {
 			if (menu->uiIcons.applyToGame.texture) {
-				iconButton("_Apply", menu->uiIcons.applyToGame.texture, T(TKEY("apply_changes"), "Apply changes to the game"), [&]() { ApplyChanges(); });
+				iconButton("_Apply", menu->uiIcons.applyToGame.texture, "Apply changes to the game", [&]() { ApplyChanges(); });
 			} else {
 				ImGui::SameLine();
-				if (ImGui::Button(T(TKEY("apply"), "Apply")))
+				if (ImGui::Button(T("cs_editor.apply", "Apply")))
 					ApplyChanges();
-				Util::AddTooltip(T(TKEY("apply_changes"), "Apply changes to the game"));
+				Util::AddTooltip(T("cs_editor.apply_changes", "Apply changes to the game"));
 			}
 		}
 
 		// Save/Load/Revert/Delete group
 		if (showSaveLoadRevert) {
-			iconButton("_Save", menu->uiIcons.saveSettings.texture, T(TKEY("save_to_file"), "Save to file"), [&]() { Save(); });
-			iconButton("_Load", menu->uiIcons.loadSettings.texture, T(TKEY("load_saved_file"), "Load saved file (or reset to vanilla if no file)"), [&]() { Load(); });
-			iconButton("_Revert", menu->uiIcons.featureSettingRevert.texture, T(TKEY("revert_to_original"), "Revert to original game values"), [&]() { RevertChanges(); });
+			iconButton("_Save", menu->uiIcons.saveSettings.texture, "Save to file", [&]() { Save(); });
+			iconButton("_Load", menu->uiIcons.loadSettings.texture, "Load saved file (or reset to vanilla if no file)", [&]() { Load(); });
+			iconButton("_Revert", menu->uiIcons.featureSettingRevert.texture, "Revert to original game values", [&]() { RevertChanges(); });
 
 			if (HasSavedFile() && menu->uiIcons.deleteSettings.texture) {
 				ImGui::SameLine();
 				if (Util::ErrorImageButton((std::string(searchId) + "_Delete").c_str(), menu->uiIcons.deleteSettings.texture, buttonSize))
 					ImGui::OpenPopup("DeleteConfirmation");
-				Util::AddTooltip(T(TKEY("delete_saved_file_tooltip"), "Delete saved file"));
+				Util::AddTooltip(T("cs_editor.delete_saved_file_tooltip", "Delete saved file"));
 			}
 		}
 
 		drawUnsavedIndicator();
-		ImGui::PopStyleColor(2);
 		ImGui::PopStyleVar(2);
 	} else {
 		if (!menu) {
@@ -444,25 +503,25 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 			// Apply button
 			if (showApply && (!editorWindow->settings.autoApplyChanges || RequiresManualApply())) {
 				ImGui::SameLine();
-				if (Util::SuccessButton(T(TKEY("apply"), "Apply")))
+				if (Util::SuccessButton("Apply"))
 					ApplyChanges();
-				Util::AddTooltip(T(TKEY("apply_changes"), "Apply changes to the game"));
+				Util::AddTooltip(T("cs_editor.apply_changes", "Apply changes to the game"));
 			}
 
 			// Save/Load/Revert/Delete group
 			if (showSaveLoadRevert) {
-				textButton(T(TKEY("save"), "Save"), T(TKEY("save_to_file"), "Save to file"), [&]() { Save(); });
-				textButton(T(TKEY("load"), "Load"), T(TKEY("load_saved_file"), "Load saved file (or reset to vanilla if no file)"), [&]() { Load(); });
+				textButton("Save", "Save to file", [&]() { Save(); });
+				textButton("Load", "Load saved file (or reset to vanilla if no file)", [&]() { Load(); });
 				ImGui::SameLine();
-				if (Util::WarningButton(T(TKEY("revert"), "Revert")))
+				if (Util::WarningButton("Revert"))
 					RevertChanges();
-				Util::AddTooltip(T(TKEY("revert_to_original"), "Revert to original game values"));
+				Util::AddTooltip(T("cs_editor.revert_to_original", "Revert to original game values"));
 
 				if (HasSavedFile()) {
 					ImGui::SameLine();
-					if (Util::ErrorTextButton(T(TKEY("delete"), "Delete")))
+					if (Util::ErrorTextButton("Delete"))
 						ImGui::OpenPopup("DeleteConfirmation");
-					Util::AddTooltip(T(TKEY("delete_saved_file_tooltip"), "Delete saved file"));
+					Util::AddTooltip(T("cs_editor.delete_saved_file_tooltip", "Delete saved file"));
 				}
 			}
 
@@ -474,8 +533,8 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 
 	if (showApply && RequiresManualApply() && editorWindow->settings.autoApplyChanges && menu) {
 		ImGui::SameLine();
-		ImGui::TextColored(menu->GetTheme().StatusPalette.Warning, "%s", T(TKEY("changes_require_manual_apply"), "(Changes require manual apply)"));
-		Util::AddTooltip(T(TKEY("manual_apply_required_tooltip"), "This form type is only re-read by the engine on weather reinit.\nAuto-apply is disabled - use the Apply button."));
+		ImGui::TextColored(menu->GetTheme().StatusPalette.Warning, T("editor.widget.manual_apply_only", "(Manual apply only)"));
+		Util::AddTooltip(T("editor.widget.the_engine_rereads_this_form_only_on_weather_16ebdce0", "The engine rereads this form only on weather reinit. Auto-apply is disabled; use Apply."));
 	}
 
 	ImGui::Separator();
@@ -510,7 +569,7 @@ void Widget::DrawSearchDropdown()
 	ImGui::SetNextWindowPos(searchDropdownAnchor, ImGuiCond_Always);
 	ImGui::SetNextWindowSize(ImVec2(WidgetUI::kSearchDropdownWidth * scale, 0));
 	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0f);
-	const ImVec4 dropdownBg(WidgetUI::kSearchDropdownBgGray, WidgetUI::kSearchDropdownBgGray, WidgetUI::kSearchDropdownBgGray, 1.0f);
+	const ImVec4 dropdownBg = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
 	ImGui::PushStyleColor(ImGuiCol_WindowBg, dropdownBg);
 	const std::string dropdownWindowId = std::format("##SearchDropdown_{}", static_cast<const void*>(this));
 	if (ImGui::Begin(dropdownWindowId.c_str(), nullptr,
@@ -543,9 +602,7 @@ void Widget::DrawSearchDropdown()
 
 			if (searchResults.size() > WidgetUI::kSearchDropdownMaxResults) {
 				ImGui::Separator();
-				auto count = searchResults.size() - WidgetUI::kSearchDropdownMaxResults;
-				auto formatted = std::vformat(T(TKEY("more_results"), "... {} more results"), std::make_format_args(count));
-				ImGui::TextDisabled("%s", formatted.c_str());
+				ImGui::TextDisabled(T("editor.widget.zu_more_results", "... %zu more results"), searchResults.size() - WidgetUI::kSearchDropdownMaxResults);
 			}
 		}
 	}
@@ -611,12 +668,10 @@ void Widget::PushHighlightStyle(const std::string& settingId)
 	const float normalized = std::clamp(elapsed / WidgetUI::kHighlightDurationSeconds, 0.0f, 1.0f);
 	const float triangularFade = 1.0f - std::abs(normalized * 2.0f - 1.0f);
 	const float alpha = std::clamp(WidgetUI::kHighlightMaxAlpha * triangularFade, 0.0f, WidgetUI::kHighlightMaxAlpha);
-	ImVec4 frameBg = WidgetUI::kHighlightFrameBg;
-	ImVec4 frameBgHovered = WidgetUI::kHighlightFrameBgHovered;
-	frameBg.w = alpha;
-	frameBgHovered.w = alpha;
-	ImGui::PushStyleColor(ImGuiCol_FrameBg, frameBg);
-	ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, frameBgHovered);
+	const auto* menu = globals::menu;
+	const ImVec4 highlight = menu ? menu->GetTheme().StatusPalette.InfoColor : ImVec4(0.98f, 0.73f, 0.22f, 1.0f);
+	ImGui::PushStyleColor(ImGuiCol_FrameBg, Util::Color::WithAlpha(highlight, alpha));
+	ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Util::Color::WithAlpha(highlight, std::min(alpha * 1.35f, WidgetUI::kHighlightMaxAlpha)));
 }
 
 void Widget::PopHighlightStyle(const std::string& settingId)
@@ -629,5 +684,3 @@ void Widget::PopHighlightStyle(const std::string& settingId)
 		scrollToHighlighted = false;
 	}
 }
-
-#undef I18N_KEY_PREFIX

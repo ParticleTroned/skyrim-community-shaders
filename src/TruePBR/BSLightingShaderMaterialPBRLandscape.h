@@ -1,6 +1,9 @@
 #pragma once
 
+#include "MaterialRegistry.h"
 #include "TruePBR.h"
+
+#include <span>
 
 class BSLightingShaderMaterialPBRLandscape : public RE::BSLightingShaderMaterialBase
 {
@@ -13,6 +16,8 @@ public:
 	inline static constexpr auto RmaosTexture = static_cast<RE::BSTextureSet::Texture>(5);
 
 	inline static constexpr uint32_t NumTiles = 6;
+	inline static constexpr uint32_t TextureCapacity = NumTiles * 4 + 4;
+	inline static constexpr uint32_t NativeTextureCapacity = 20;
 
 	BSLightingShaderMaterialPBRLandscape();
 	~BSLightingShaderMaterialPBRLandscape();
@@ -35,9 +40,15 @@ public:
 	// then ScrapHeap::Free() to pop this temp. Never use Make() as the Create() implementation.
 	static BSLightingShaderMaterialPBRLandscape* Make();
 
+	/** Collect non-null textures without exceeding the destination or the six terrain layers. */
+	uint32_t CollectTextures(std::span<RE::NiSourceTexture*> textures) const;
+
+	/** Identify canonical PBR terrain before accessing its extended layout. */
+	static const BSLightingShaderMaterialPBRLandscape* GetRegistered(const RE::BSShaderMaterial* material);
+
 	bool HasGlint() const;
 
-	inline static std::unordered_map<BSLightingShaderMaterialPBRLandscape*, std::array<TruePBR::PBRTextureSetData*, NumTiles>> All;
+	inline static PBRMaterialRegistry<BSLightingShaderMaterialPBRLandscape, std::array<TruePBR::PBRTextureSetData*, NumTiles>> All;
 
 	// members
 	std::uint32_t numLandscapeTextures = 0;

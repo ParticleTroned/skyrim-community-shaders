@@ -1,18 +1,32 @@
 ﻿#pragma once
 #include "RE/M/Moon.h"
+#include "RE/N/NiColor.h"
+#include "RE/N/NiDirectionalLight.h"
+#include "RE/N/NiSmartPointer.h"
+#include "WeatherColorAdjustment.h"
 
-#include "Utils/Moon.h"
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace RE
+{
+	class Setting;
+}
 
 struct SkySync : Feature
 {
-private:
-	static constexpr std::string_view MOD_ID = "153543";
-
 public:
+	static constexpr float DefaultHorizonFadeHours = 0.7f;
+	static constexpr float MaxHorizonFadeHours = 1.5f;
+	static constexpr size_t MaxDisabledWorldspaces = 128;
+	static constexpr size_t MaxWorldspaceEditorIDLength = 256;
+
 	virtual inline std::string GetName() override { return "Sky Sync"; }
 	virtual std::string GetDisplayName() override { return T("feature.sky_sync.name", "Sky Sync"); }
+	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL("153543"); }
 	virtual inline std::string GetShortName() override { return "SkySync"; }
-	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kSky; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -24,7 +38,7 @@ public:
 				T("feature.sky_sync.key_feature_4", "Moon light source can be switched between Masser, Secunda, or the brightest"),
 				T("feature.sky_sync.key_feature_5", "Automatic calculation of moon lighting intensity based on moon phase"),
 				T("feature.sky_sync.key_feature_6", "Fixes the sun appearing higher on the horizon when the player gains altitude") } };
-	};
+	}
 
 	struct Settings
 	{
@@ -34,21 +48,33 @@ public:
 		int32_t MoonLightSource = 0;
 		int32_t SunPath = 0;
 		float CustomAngle = -35.0f;
+		float SunriseBeginOffset = 0.0f;
+		float SunriseEndOffset = 0.0f;
+		float SunsetBeginOffset = 0.0f;
+		float SunsetEndOffset = 0.0f;
 		float MinShadowElevation = 10.0f;
 		float ShadowTransitionDuration = 100.0f;
-		bool DimSunlightUnderHorizon = true;
 		bool DimVolumetricLighting = true;
-		float HorizonFadeHours = 0.7f;
 		float NewMoonIntensity = 0.05f;
 		float CrescentMoonIntensity = 0.25f;
 		float FullMoonIntensity = 1.0f;
+		bool DimSunlightUnderHorizon = true;
+		float HorizonFadeHours = DefaultHorizonFadeHours;
+		std::vector<std::string> DisabledWorldspaces = { "Blackreach", "AlftandWorld", "Sovngarde", "DLC01SoulCairn", "DLC01Boneyard", "DLC2ApocryphaWorld" };
 	};
 
 	Settings settings;
 
+	/** Supports a cost comparison through the existing in-game enable toggle. */
+	bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Returns the requested state without changing the feature's configuration. */
+	bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
+	/** Uses the same runtime enable path as the feature's settings panel. */
+	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.Enabled = a_enabled; }
+
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
+	bool HasEssentialSettings() const override { return true; }
+	void DrawEssentialSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -56,8 +82,19 @@ public:
 
 	virtual bool IsCore() const override { return true; }
 	float GetVolumetricLightingIntensityFactor() const;
+	/** Stages bounded sunlight dimming settings for the next sky update. */
+	bool SetSunlightDimming(bool enabled, float fadeHours);
+	/** Returns the direct-light brightness factor applied on the last sky update. */
+	float GetSunlightDimmingFactor() const { return sunlightDimmingFactor; }
+	/** Stages a bounded, case-insensitive exclusion list; invalid input preserves the previous list. */
+	bool SetDisabledWorldspaces(const json& a_worldspaces);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Reports configured exclusions and the last sky-update decision, including pending changes. */
+	json GetWorldspaceStatus() const;
+#endif
 
-	void OnSkyUpdateColors(RE::Sky* sky);
+	/** @brief Returns the active caster's world-space direction before elevation limits, or nullopt when inactive or invalid. */
+	std::optional<RE::NiPoint3> GetCelestialLightDirection() const;
 
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
@@ -65,6 +102,12 @@ public:
 	struct Sky_Update
 	{
 		static void thunk(RE::Sky* sky);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct Moon_Update
+	{
+		static void thunk(RE::Moon* moon, RE::Sky* sky);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
@@ -102,23 +145,49 @@ private:
 	const char* MoonLightSourceNames[static_cast<uint8_t>(MoonLightSource::Count)] = { "Brightest", "Masser", "Secunda" };
 	const char* SunPathNames[static_cast<uint8_t>(SunPath::Count)] = { "Southern Sky", "Northern Sky", "Vanilla", "Custom" };
 
+	struct ClimateTimings
+	{
+		float sunriseBegin;
+		float sunrise;
+		float sunriseEnd;
+		float sunsetBegin;
+		float sunset;
+		float sunsetEnd;
+		float weatherSunriseBegin;
+		float weatherSunriseMiddle;
+		float weatherSunsetMiddle;
+		float weatherSunsetEnd;
+
+		bool Update(const RE::TESClimate* climate);
+		bool IsDayTime(float time) const;
+		float NightHorizonDistance(float time) const;
+		float SunlightDimming(float time, float fadeHours) const;
+	};
+
 	struct ShadowFader
 	{
-		RE::NiPoint3 currentDir = { 0.0f, 0.0f, 1.0f };
-		RE::NiPoint3 startDir = { 0.0f, 0.0f, 1.0f };
-		Caster target = Caster::Sun;
-		Caster previousTarget = Caster::Sun;
+		enum class Phase : uint8_t
+		{
+			None,
+			FadeOut,
+			FadeIn
+		};
+
+		static constexpr float FadeTime = 100.0f;  // 5 seconds at timescale 20
+
+		Phase fadePhase = Phase::None;
+		Caster current = Caster::None;
+		Caster target = Caster::None;
 		float fadeTimer = 0.0f;
-		float immediateTransitionRemaining = 0.0f;
-		bool transitioning = false;
+		float previousHoursPassed = 0.0f;
 		bool sunriseReleased = false;
 		float frozenHeading = 0.0f;
 		bool sunsetHeadingLocked = false;
-		float vlIntensityFactor = 1.0f;
+		std::optional<RE::NiPoint3> celestialDirection;
 
-		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration, float fadeAdvance, bool a_immediateTransition);
-		void LockSunElevation(RE::NiPoint3 dirs[]);
-		static void SetLighting(const RE::Sky* sky, RE::NiPoint3 dir);
+		float Update(const RE::Sun* sun, RE::NiPoint3 dirs[], float intensities[], bool isDayTime, float time, bool a_immediateTransition);
+		void LockSunElevation(RE::NiPoint3 dirs[], float time);
+		static float SetLighting(const RE::Sun* sun, RE::NiPoint3 dir, float intensity);
 		static void SetDirection(RE::NiPoint3& dir, float headingRadians, float elevRadians);
 		static void SetElevation(RE::NiPoint3& dir, float elevRadians);
 		static void ClampDirection(RE::NiPoint3& dir);
@@ -126,60 +195,99 @@ private:
 		void Reset();
 	};
 
+	static constexpr float RenderDistance = 325000.0f;
 	static constexpr float SunHorizonDistance = 280.0f;
 	static constexpr float SunPeakDistance = 400.0f;
+	static constexpr float SunScaleFactor = 48.0f / 2048.0f;
+
 	static constexpr float SouthernSunAngle = 90.0f - 35.0f;
 	static constexpr float NorthernSunAngle = 90.0f + 35.0f;
 	static constexpr float VanillaSunAngle = 90.0f + 5.0f;
+
+	static constexpr float SecundaIntensityFactor = 0.67f;
+	static constexpr float NewMoonIntensityFactor = 0.05f;
+	static constexpr float CrescentMoonIntensityFactor = 0.25f;
+	static constexpr float FullMoonIntensityFactor = 1.0f;
 	static constexpr float DefaultVolumetricLightingIntensityFactor = 1.0f;
+	static constexpr float SecondsPerGameHour = 3600.0f;
 	static constexpr float SunsetHeadingLockThreshold = 0.5f;
 	static constexpr float VLFadeStartAngle = 2.0f;
 	static constexpr float VLFadeEndAngle = 10.0f;
-	static constexpr float MaxHorizonFadeHours = 1.5f;
+	static constexpr float HoursPerDay = 24.0f;
+	static constexpr float MoonFadeHours = 0.5f;
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
+	inline static float* gSunGlareSize = nullptr;
+	inline static RE::Setting* gSunAlphaTransTime = nullptr;
+	inline static uint32_t* gMasserSize = nullptr;
+	inline static uint32_t* gSecundaSize = nullptr;
 
 	bool moonAndStarsLoaded = false;
 	RE::TESObjectCELL* currentCell = nullptr;
-	bool currentCellInterior = false;
-	RE::TESWorldSpace* currentCellWorldspace = nullptr;
+	RE::TESWorldSpace* cachedWorldspace = nullptr;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::string cachedWorldspaceEditorID;
+#endif
+	bool worldspaceCacheValid = false;
+	bool worldspaceDisabled = false;
 	float sunAngle = 90.0f;
 	float currentSkyRotation = D3D11_FLOAT32_MAX;
-	bool immediateTransitionReady = false;
-
-	float4 colors[3] = {};
-	float currentDim = 1.0f;
+	RE::Moon::Phases::Phase masserPhase = RE::Moon::Phases::Phase::kFull;
+	RE::Moon::Phases::Phase secundaPhase = RE::Moon::Phases::Phase::kFull;
+	float GetMoonIntensity(RE::Moon::Phases::Phase a_phase) const;
 	float volumetricLightingIntensityFactor = DefaultVolumetricLightingIntensityFactor;
-	bool sunSetting = false;
-	bool sunRising = false;
-	bool sunBelowHorizon = false;
+	float sunlightDimmingFactor = 1.0f;
+	WeatherColorAdjustment<RE::NiColor> sunlightAdjustment;
+	RE::NiPointer<RE::NiDirectionalLight> adjustedSunlight;
+
+	ClimateTimings timings = {};
+
+	RE::NiPoint3 rawDirections[3];
+	RE::NiPoint3 directions[3];
+	float intensities[3] = {};
 	std::unordered_map<RE::TESWeather*, RE::BGSLensFlare*> suppressedWeatherLensFlares;
 	ShadowFader shadowFader;
 
 	void DisableOnConflict(std::string_view conflictName);
+	void DrawWorldspaceSettings();
+	void UpdateWorldspace();
+	static RE::TESWorldSpace* GetCurrentWorldspace();
 	void ResetRuntimeState();
+	void RestoreSunlight();
 	void ApplyWeatherLensFlareSetting(const RE::Sky* sky);
 	void RestoreWeatherLensFlares();
 	static float NormalizeVolumetricLightingIntensity(float intensity);
 
-	void PreparePendingTransitions();
 	bool Update(const RE::Sky* sky);
+	void PreparePendingTransitions();
+	bool immediateTransitionReady = false;
+	bool currentCellInterior = false;
+	RE::TESWorldSpace* currentCellWorldspace = nullptr;
 
 	void SetSunAngle();
 
 	void SetSkyRotation(const RE::Sky* sky, RE::TESObjectCELL* cell);
 
-	void ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[]);
+	void ProcessSun(const RE::Sun* sun, float time, float altitude, bool isDayTime);
 
-	void ProcessMoon(const RE::Sky* sky, Caster type, RE::NiPoint3 dirs[], float intensities[]);
+	/** @brief Hides the sun disc and glare at and outside the native fade boundaries. */
+	static void HideSunOutsideFadeWindow(const RE::Sky* sky);
+
+	void ProcessMoon(const RE::Moon* moon, float time, Caster type, float altitude, bool isDayTime);
 
 	static void CalculateSunDirectionAndDistance(const RE::Sun* sun, RE::NiPoint3& outDir, float& outDistance);
 
 	static void CalculateAlternateSunDirectionAndDistance(RE::NiPoint3& outDir, float& outDist, float time, float sunrise, float sunset, float sunAngle);
 
+	static RE::NiPoint3 GetApparentDirection(const RE::NiPoint3& dir, float altitude);
+
 	static void SetSunPosition(const RE::Sun* sun, const RE::NiPoint3& dir, float distance);
 
-	static constexpr float RenderDistance = 325000.0f;
-	static RE::NiPoint3 GetApparentDirection(const RE::NiPoint3& dir, float altitude);
-	static float GetPlayerAltitude();
+	static void SetMoonDirection(const RE::Moon* moon, const RE::NiPoint3& dir);
+
+	static float CalculateVisibility(const RE::NiPoint3& dir, float dist, float radius);
+
+	static void SetSunBaseVisibility(const RE::Sun* sun, float visibility);
+
+	static float SmoothStep(float start, float end, float x);
 };

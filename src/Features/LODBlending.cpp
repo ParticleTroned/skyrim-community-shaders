@@ -1,4 +1,7 @@
 #include "LODBlending.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
+#include "WeatherVariableRegistry.h"
 
 #include "../I18n/I18n.h"
 
@@ -21,6 +24,22 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	constexpr const char* kWaterReflectionStrengthSetting = "WaterLODReflectionStrength";
+	bool TryGetWaterReflectionStrength(const json& a_json, const char* a_key, float& a_value)
+	{
+		if (!a_json.contains(a_key)) {
+			return false;
+		}
+
+		try {
+			a_value = a_json.at(a_key).get<float>();
+		} catch (const json::exception&) {
+			return false;
+		}
+
+		return true;
+	}
+
 	constexpr const char* kWaterReflectionStrengthConfigKey = "WaterReflectionStrength";
 	constexpr const char* kEnableWaterReflectionStrengthConfigKey = "EnableWaterReflectionStrength";
 	constexpr float kWaterReflectionStrengthDefault = 1.0f;
@@ -65,7 +84,7 @@ namespace
 	bool DrawEnabledCheckbox(LODBlending::Settings& a_settings)
 	{
 		bool enabled = a_settings.Enabled != 0;
-		if (ImGui::Checkbox("Enable", &enabled))
+		if (Util::Widgets::Checkbox(T("feature.lod_blending.enable", "Enable"), &enabled))
 			a_settings.Enabled = enabled ? 1u : 0u;
 		return enabled;
 	}
@@ -75,7 +94,7 @@ namespace
 		auto& settings = a_feature.settings;
 		auto& applyWaterReflectionStrength = a_feature.EnableWaterReflectionStrength;
 
-		ImGui::Checkbox(T(TKEY("apply_water_reflection_strength"), "Apply LOD Water Reflection Blend"), &applyWaterReflectionStrength);
+		Util::Widgets::Checkbox(T(TKEY("apply_water_reflection_strength"), "Apply LOD Water Reflection Blend"), &applyWaterReflectionStrength);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("apply_water_reflection_strength_tooltip"),
 								  "Toggle the height-faded water reflection strength blend at runtime.\n"
@@ -83,40 +102,50 @@ namespace
 		}
 
 		ImGui::BeginDisabled(!applyWaterReflectionStrength);
-		ImGui::SliderFloat(
+		Util::WeatherUI::SliderFloat(
 			GetWaterReflectionStrengthDisplay(),
+			&a_feature,
+			kWaterReflectionStrengthSetting,
 			&settings.WaterReflectionStrength,
 			kWaterReflectionStrengthMin,
 			kWaterReflectionStrengthMax,
-			"%.2f",
-			ImGuiSliderFlags_AlwaysClamp);
+			"%.2f");
 		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", GetWaterReflectionStrengthTooltip());
 	}
 }
 
+void LODBlending::DrawSettingsEnabledControl()
+{
+	DrawEnabledCheckbox(settings);
+}
+
 void LODBlending::DrawSettings()
 {
 	settings.WaterReflectionStrength = ClampWaterReflectionStrength(settings.WaterReflectionStrength);
-	const bool enabled = DrawEnabledCheckbox(settings);
 
-	ImGui::BeginDisabled(!enabled);
-	ImGui::SliderFloat(T(TKEY("lod_terrain_brightness"), "LOD Terrain Brightness"), &settings.LODTerrainBrightness, 0.01f, 5.f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("lod_object_brightness"), "LOD Object Brightness"), &settings.LODObjectBrightness, 0.01f, 5.f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("lod_object_snow_brightness"), "LOD Object Snow Brightness"), &settings.LODObjectSnowBrightness, 0.01f, 5.f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("lod_terrain_gamma"), "LOD Terrain Gamma"), &settings.LODTerrainGamma, 0.1f, 3.f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("lod_object_gamma"), "LOD Object Gamma"), &settings.LODObjectGamma, 0.1f, 3.f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("lod_object_snow_gamma"), "LOD Object Snow Gamma"), &settings.LODObjectSnowGamma, 0.1f, 3.f, "%.2f");
+	MenuUI::SettingsPage page("LODBlending", {
+												 { "appearance", T("feature.lod_blending.ui_blending", "Blending"), T("feature.lod_blending.ui_choose_the_distant_transition_first_then_tune_its_appearance", "Choose the distant transition first, then tune its appearance."), T("feature.lod_blending.ui_distant_object_transitions", "Distant-object transitions"), true, true, T("feature.lod_blending.ui_refine_distant_transitions", "Refine distant transitions") },
+											 });
+	if (!page.Is("appearance"))
+		return;
+
+	ImGui::BeginDisabled(settings.Enabled == 0);
+	Util::Widgets::SliderFloat(T("feature.lod_blending.lod_terrain_brightness", "LOD Terrain Brightness"), &settings.LODTerrainBrightness, 0.01f, 5.f, "%.2f");
+	Util::Widgets::SliderFloat(T("feature.lod_blending.lod_object_brightness", "LOD Object Brightness"), &settings.LODObjectBrightness, 0.01f, 5.f, "%.2f");
+	Util::Widgets::SliderFloat(T("feature.lod_blending.lod_object_snow_brightness", "LOD Object Snow Brightness"), &settings.LODObjectSnowBrightness, 0.01f, 5.f, "%.2f");
+	Util::Widgets::SliderFloat(T("feature.lod_blending.lod_terrain_gamma", "LOD Terrain Gamma"), &settings.LODTerrainGamma, 0.1f, 3.f, "%.2f");
+	Util::Widgets::SliderFloat(T("feature.lod_blending.lod_object_gamma", "LOD Object Gamma"), &settings.LODObjectGamma, 0.1f, 3.f, "%.2f");
+	Util::Widgets::SliderFloat(T("feature.lod_blending.lod_object_snow_gamma", "LOD Object Snow Gamma"), &settings.LODObjectSnowGamma, 0.1f, 3.f, "%.2f");
 
 	DrawWaterReflectionSettings(*this);
 
 	bool disableTerrainVertexColors = settings.DisableTerrainVertexColors != 0;
-	if (ImGui::Checkbox(T(TKEY("disable_terrain_vertex_colors"), "Disable Terrain Vertex Colors"), &disableTerrainVertexColors))
+	if (Util::Widgets::Checkbox(T("feature.lod_blending.disable_terrain_vertex_colors", "Disable Terrain Vertex Colors"), &disableTerrainVertexColors))
 		settings.DisableTerrainVertexColors = disableTerrainVertexColors ? 1u : 0u;
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("disable_terrain_vertex_colors_tooltip"),
-							  "Disables vertex coloring on nearby terrain. Best combined with terrain LOD generated in xLODGen with Vertex Color Intensity set to 0."));
+		ImGui::TextUnformatted(T("feature.lod_blending.ui_disables_vertex_coloring_on_nearby_terrain_best_combin_e2860dc3", "Disables vertex coloring on nearby terrain. Best combined with terrain LOD generated in xLODGen with Vertex Color Intensity set to 0. "));
 	}
 	ImGui::EndDisabled();
 }
@@ -135,6 +164,8 @@ void LODBlending::LoadSettings(json& o_json)
 	}
 
 	json settingsJson = o_json;
+	if (!settingsJson.contains(kWaterReflectionStrengthConfigKey) && settingsJson.contains(kWaterReflectionStrengthSetting))
+		settingsJson[kWaterReflectionStrengthConfigKey] = settingsJson[kWaterReflectionStrengthSetting];
 	auto strengthIt = settingsJson.find(kWaterReflectionStrengthConfigKey);
 	if (strengthIt != settingsJson.end() && !strengthIt->is_number()) {
 		logger::debug("Ignoring invalid LOD Blending water reflection strength setting");
@@ -175,6 +206,43 @@ void LODBlending::RestoreDefaultSettings()
 {
 	settings = {};
 	EnableWaterReflectionStrength = true;
+}
+
+void LODBlending::RegisterWeatherVariables()
+{
+	auto* registry = WeatherVariables::GlobalWeatherRegistry::GetSingleton()
+	                     ->GetOrCreateFeatureRegistry(GetShortName());
+
+	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
+		kWaterReflectionStrengthSetting,
+		GetWaterReflectionStrengthDisplay(),
+		GetWaterReflectionStrengthTooltip(),
+		&settings.WaterReflectionStrength,
+		kWaterReflectionStrengthDefault,
+		kWaterReflectionStrengthMin, kWaterReflectionStrengthMax));
+}
+
+void LODBlending::NormalizeWeatherSettings(json& o_json)
+{
+	if (!o_json.is_object()) {
+		return;
+	}
+
+	float waterReflectionStrength = kWaterReflectionStrengthDefault;
+	const bool hasWaterReflectionStrength =
+		TryGetWaterReflectionStrength(o_json, kWaterReflectionStrengthSetting, waterReflectionStrength) ||
+		TryGetWaterReflectionStrength(o_json, kWaterReflectionStrengthConfigKey, waterReflectionStrength);
+
+	if (hasWaterReflectionStrength) {
+		o_json[kWaterReflectionStrengthSetting] = ClampWaterReflectionStrength(waterReflectionStrength);
+	} else {
+		o_json.erase(kWaterReflectionStrengthSetting);
+		if (o_json.value("__enabled", false)) {
+			// Enabled override without a valid value should not keep influencing runtime transitions.
+			o_json["__enabled"] = false;
+		}
+	}
+	o_json.erase(kWaterReflectionStrengthConfigKey);
 }
 
 #undef I18N_KEY_PREFIX

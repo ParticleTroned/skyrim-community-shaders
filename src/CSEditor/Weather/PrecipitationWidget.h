@@ -26,17 +26,20 @@ public:
 	void SaveSettings() override;
 	void ApplyChanges() override;
 	void RevertChanges() override;
+	UndoRestoreAction CaptureUndoState() const override;
+	UndoRestoreAction CaptureBaselineState() const override;
 	bool HasUnsavedChanges() const override;
 	std::vector<SearchResult> CollectSearchableSettings() const override;
 
 	RE::BGSShaderParticleGeometryData* precipitation = nullptr;
 
 private:
+	void MarkSavedState() override { originalSettings = settings; }
 	void LoadFromGameSettings();
 
 	// Swaps the live precipitation particle texture (Sky → precip → BSParticleShaderProperty::particleShaderTexture).
 	// Needed because updating BGSShaderParticleGeometryData::particleTexture.textureName alone doesn't reload the GPU texture.
-	void ApplyLiveParticleTexture(const std::string& path);
+	void ApplyLiveParticleTexture(const std::string& resourcePath);
 
 	struct Settings
 	{
@@ -50,7 +53,7 @@ private:
 		uint32_t numSubtexturesX = 1;
 		uint32_t numSubtexturesY = 1;
 		uint32_t particleType = 0;  // 0 = Rain, 1 = Snow
-		float boxSize = 1.0f;
+		uint32_t boxSize = 1;       // SPGD stores this DATA entry as an integer.
 		float particleDensity = 1.0f;
 		std::string particleTexture = "";
 		bool operator==(const Settings&) const = default;

@@ -1,12 +1,12 @@
 #include "Features/LightLimitFix/ParticleLights.h"
 
+#include "Utils/StringUtils.h"
+
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <exception>
 #include <numbers>
-#include <optional>
 
 namespace
 {
@@ -20,25 +20,6 @@ namespace
 			return a_default;
 		}
 		return std::clamp(a_value, a_min, a_max);
-	}
-
-	std::optional<std::string> ExtractIniStem(const std::string& path)
-	{
-		auto lastSeparatorPos = path.find_last_of("\\/");
-		if (lastSeparatorPos == std::string::npos) {
-			logger::error("[LLF] Path incomplete");
-			return std::nullopt;
-		}
-
-		std::string filename = path.substr(lastSeparatorPos + 1);
-		if (filename.size() < 4) {
-			logger::error("[LLF] Path too short");
-			return std::nullopt;
-		}
-
-		filename.erase(filename.length() - 4);  // Remove ".ini"
-		std::transform(filename.begin(), filename.end(), filename.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-		return filename;
 	}
 }
 
@@ -55,6 +36,7 @@ void ParticleLights::GetConfigs()
 		logger::info("[LLF] Loading particle lights configs");
 
 		auto configs = clib_util::distribution::get_configs("Data\\ParticleLights", "", ".ini");
+		std::sort(configs.begin(), configs.end());
 
 		if (configs.empty()) {
 			logger::warn("[LLF] No .ini files were found within the Data\\ParticleLights folder, aborting...");
@@ -92,7 +74,7 @@ void ParticleLights::GetConfigs()
 				kFlickerMovementMax,
 				0.0f);
 
-			const auto filename = ExtractIniStem(path);
+			const auto filename = Util::GetLowercaseStem(path, ".ini");
 			if (!filename) {
 				continue;
 			}
@@ -111,6 +93,7 @@ void ParticleLights::GetConfigs()
 		logger::info("[LLF] Loading particle lights gradients configs");
 
 		auto configs = clib_util::distribution::get_configs("Data\\ParticleLights\\Gradients", "", ".ini");
+		std::sort(configs.begin(), configs.end());
 
 		if (configs.empty()) {
 			logger::warn("[LLF] No .ini files were found within the Data\\ParticleLights\\Gradients folder, aborting...");
@@ -149,7 +132,8 @@ void ParticleLights::GetConfigs()
 					str.remove_prefix(prefix2.size());
 				}
 
-				bool matches = std::strspn(str.data(), cset.data()) == str.size();
+				const bool matches = (str.size() == 6 || str.size() == 8) &&
+				                     str.find_first_not_of(cset) == std::string_view::npos;
 
 				if (matches) {
 					try {
@@ -168,7 +152,7 @@ void ParticleLights::GetConfigs()
 				continue;
 			}
 
-			const auto filename = ExtractIniStem(path);
+			const auto filename = Util::GetLowercaseStem(path, ".ini");
 			if (!filename) {
 				continue;
 			}

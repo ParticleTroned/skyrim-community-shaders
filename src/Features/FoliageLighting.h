@@ -42,7 +42,6 @@ public:
 		};
 	}
 
-	virtual void DrawSettingsHeaderControls() override;
 	virtual void DrawSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool) override;
@@ -64,6 +63,7 @@ public:
 		};
 	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	bool IsPerformanceToggleEnabled() const override { return IsEnabled(); }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override;
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { SetEnabled(a_enabled); }
 	virtual void LoadSettings(json& o_json) override;
@@ -85,6 +85,7 @@ private:
 
 	static Settings GetDisabledSettings();
 	bool HasEnabledContribution() const;
+	void DrawEnabledControl();
 	void DrawFoliageScatteringSetting();
 	void DrawFoliageAmbientBoostSetting(bool a_truePBRActive);
 	void DrawFoliageAmbientFlipSetting();

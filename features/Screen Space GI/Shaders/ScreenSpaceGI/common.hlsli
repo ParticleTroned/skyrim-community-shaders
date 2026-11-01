@@ -15,7 +15,7 @@
 
 // with additional edits by FiveLimbedCat/ProfJack
 
-#ifndef SSGI_COMMON
+#if !(defined(SSGI_COMMON))
 #define SSGI_COMMON
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -86,11 +86,11 @@ float2 filterInf(float2 v) { return float2(filterInf(v.x), filterInf(v.y)); }
 float3 filterInf(float3 v) { return float3(filterInf(v.x), filterInf(v.y), filterInf(v.z)); }
 float4 filterInf(float4 v) { return float4(filterInf(v.x), filterInf(v.y), filterInf(v.z), filterInf(v.w)); }
 
-// screenPos - normalised position in FrameDim
-// uv - normalised position in FrameDim
+// screenPos - normalised position in the active viewport
+// uv - normalised position in the active viewport
 // texCoord - texture coordinate
 
-#ifdef HALF_RES
+#if defined(HALF_RES)
 #	define RES_MIP 1
 #	define READ_DEPTH(tex, px) tex.Load(int3(px, RES_MIP))
 #	define FULLRES_LOAD(tex, px, texCoord, samp) tex.SampleLevel(samp, texCoord, 0)
@@ -112,6 +112,11 @@ float4 filterInf(float4 v) { return float4(filterInf(v.x), filterInf(v.y), filte
 #	define RCP_OUT_FRAME_DIM RcpFrameDim
 #	define OUT_FRAME_SCALE frameScale
 #endif
+
+
+
+
+
 
 ///////////////////////////////////////////////////////////////////////////////
 

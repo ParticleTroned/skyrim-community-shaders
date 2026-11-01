@@ -1,5 +1,7 @@
 #include "BSLightingShaderMaterialPBRLandscape.h"
 
+#include <algorithm>
+
 BSLightingShaderMaterialPBRLandscape::BSLightingShaderMaterialPBRLandscape()
 {
 	std::fill(isPbr.begin(), isPbr.end(), false);
@@ -10,7 +12,7 @@ BSLightingShaderMaterialPBRLandscape::BSLightingShaderMaterialPBRLandscape()
 
 BSLightingShaderMaterialPBRLandscape::~BSLightingShaderMaterialPBRLandscape()
 {
-	All.erase(this);
+	All.Unregister(this);
 }
 
 BSLightingShaderMaterialPBRLandscape* BSLightingShaderMaterialPBRLandscape::Make()
@@ -30,7 +32,7 @@ RE::BSShaderMaterial* BSLightingShaderMaterialPBRLandscape::Create()
 	// calls ScrapHeap::Free() after LinkMaterial — if Create() used scrap heap, it would pop
 	// the canonical off the stack, causing immediate use-after-free in property->material.
 	auto* material = new BSLightingShaderMaterialPBRLandscape();
-	All.try_emplace(material, std::array<TruePBR::PBRTextureSetData*, NumTiles>{});
+	All.Register(material);
 	return material;
 }
 
@@ -60,10 +62,7 @@ void BSLightingShaderMaterialPBRLandscape::CopyMembers(RE::BSShaderMaterial* tha
 	terrainTexFade = pbrThat->terrainTexFade;
 	glintParameters = pbrThat->glintParameters;
 
-	if (auto it = All.find(pbrThat); it != All.end())
-		All[this] = it->second;
-	else
-		All[this] = std::array<TruePBR::PBRTextureSetData*, NumTiles>{};
+	All.Copy(this, pbrThat);
 }
 
 RE::BSShaderMaterial::Feature BSLightingShaderMaterialPBRLandscape::GetFeature() const
@@ -101,7 +100,7 @@ void BSLightingShaderMaterialPBRLandscape::ReceiveValuesFromRootMaterial(bool sk
 	if (terrainNoiseTexture == nullptr) {
 		terrainNoiseTexture = stateData.defaultTextureNormalMap;
 	}
-	for (uint32_t textureIndex = 0; textureIndex < numLandscapeTextures; ++textureIndex) {
+	for (uint32_t textureIndex = 0; textureIndex < std::min(numLandscapeTextures, NumTiles); ++textureIndex) {
 		if (landscapeBaseColorTextures[textureIndex] == nullptr) {
 			landscapeBaseColorTextures[textureIndex] = stateData.defaultTextureBlack;
 		}
@@ -119,40 +118,45 @@ void BSLightingShaderMaterialPBRLandscape::ReceiveValuesFromRootMaterial(bool sk
 
 uint32_t BSLightingShaderMaterialPBRLandscape::GetTextures(RE::NiSourceTexture** textures)
 {
+	// The engine's ForEachTexture owns a fixed twenty-pointer scratch buffer.
+	return textures ? CollectTextures({ textures, NativeTextureCapacity }) : 0;
+}
+
+uint32_t BSLightingShaderMaterialPBRLandscape::CollectTextures(std::span<RE::NiSourceTexture*> textures) const
+{
 	uint32_t textureIndex = 0;
-	if (rimSoftLightingTexture != nullptr) {
-		textures[textureIndex++] = rimSoftLightingTexture.get();
+	const auto append = [&](const auto& texture) {
+		if (texture && textureIndex < textures.size())
+			textures[textureIndex++] = texture.get();
+	};
+	const auto tileCount = std::min(numLandscapeTextures, NumTiles);
+	append(rimSoftLightingTexture);
+	append(specularBackLightingTexture);
+	// Native visitors must retain every diffuse/normal layer and shared terrain texture.
+	for (uint32_t tileIndex = 0; tileIndex < tileCount; ++tileIndex) {
+		append(landscapeBaseColorTextures[tileIndex]);
+		append(landscapeNormalTextures[tileIndex]);
 	}
-	if (specularBackLightingTexture != nullptr) {
-		textures[textureIndex++] = specularBackLightingTexture.get();
-	}
-	for (uint32_t tileIndex = 0; tileIndex < numLandscapeTextures; ++tileIndex) {
-		if (landscapeBaseColorTextures[tileIndex] != nullptr) {
-			textures[textureIndex++] = landscapeBaseColorTextures[tileIndex].get();
-		}
-		if (landscapeNormalTextures[tileIndex] != nullptr) {
-			textures[textureIndex++] = landscapeNormalTextures[tileIndex].get();
-		}
-		if (landscapeDisplacementTextures[tileIndex] != nullptr) {
-			textures[textureIndex++] = landscapeDisplacementTextures[tileIndex].get();
-		}
-		if (landscapeRMAOSTextures[tileIndex] != nullptr) {
-			textures[textureIndex++] = landscapeRMAOSTextures[tileIndex].get();
-		}
-	}
-	if (terrainOverlayTexture != nullptr) {
-		textures[textureIndex++] = terrainOverlayTexture.get();
-	}
-	if (terrainNoiseTexture != nullptr) {
-		textures[textureIndex++] = terrainNoiseTexture.get();
+	append(terrainOverlayTexture);
+	append(terrainNoiseTexture);
+	for (uint32_t tileIndex = 0; tileIndex < tileCount; ++tileIndex) {
+		append(landscapeDisplacementTextures[tileIndex]);
+		append(landscapeRMAOSTextures[tileIndex]);
 	}
 
 	return textureIndex;
 }
 
+const BSLightingShaderMaterialPBRLandscape* BSLightingShaderMaterialPBRLandscape::GetRegistered(const RE::BSShaderMaterial* material)
+{
+	// Membership is tested as an address before dereferencing an unknown derived layout.
+	auto* candidate = reinterpret_cast<const BSLightingShaderMaterialPBRLandscape*>(material);
+	return material && All.Contains(const_cast<BSLightingShaderMaterialPBRLandscape*>(candidate)) ? static_cast<const BSLightingShaderMaterialPBRLandscape*>(material) : nullptr;
+}
+
 bool BSLightingShaderMaterialPBRLandscape::HasGlint() const
 {
-	for (uint32_t textureIndex = 0; textureIndex < numLandscapeTextures; ++textureIndex) {
+	for (uint32_t textureIndex = 0; textureIndex < std::min(numLandscapeTextures, NumTiles); ++textureIndex) {
 		if (glintParameters[textureIndex].enabled) {
 			return true;
 		}

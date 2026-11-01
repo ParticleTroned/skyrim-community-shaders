@@ -1,5 +1,9 @@
 #include "HomePageRenderer.h"
+#include "I18n/I18n.h"
 #include "PCH.h"
+#include "SettingsActions.h"
+#include "SettingsPage.h"
+#include "Utils/WinApi.h"
 
 #include <imgui.h>
 
@@ -64,34 +68,6 @@ namespace
 			DrawCenteredItalicTextLine(line, windowWidth, color);
 		}
 	}
-
-	bool BigRadioButton(const char* label, int* value, int buttonValue, float diameter)
-	{
-		const ImGuiStyle& style = ImGui::GetStyle();
-		const ImVec2 labelSize = ImGui::CalcTextSize(label);
-		const float rowHeight = std::max(diameter, labelSize.y);
-		const ImVec2 pos = ImGui::GetCursorScreenPos();
-		const ImVec2 size(diameter + style.ItemInnerSpacing.x + labelSize.x, rowHeight);
-		const bool selected = *value == buttonValue;
-
-		const bool pressed = ImGui::InvisibleButton(label, size);
-		if (pressed)
-			*value = buttonValue;
-
-		const ImVec2 center(pos.x + diameter * 0.5f, pos.y + rowHeight * 0.5f);
-		const float radius = diameter * 0.5f;
-		const ImU32 bgColor = ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg);
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		drawList->AddCircleFilled(center, radius, bgColor, 32);
-		drawList->AddCircle(center, radius, ImGui::GetColorU32(ImGuiCol_Border), 32, std::max(1.0f, 2.0f * Util::GetUIScale()));
-		if (selected)
-			drawList->AddCircleFilled(center, radius * 0.62f, ImGui::GetColorU32(ImGuiCol_CheckMark), 32);
-		drawList->AddText(
-			ImVec2(pos.x + diameter + style.ItemInnerSpacing.x, pos.y + (rowHeight - labelSize.y) * 0.5f),
-			ImGui::GetColorU32(ImGuiCol_Text), label);
-		return pressed;
-	}
-
 }
 
 // Static member definitions
@@ -109,19 +85,11 @@ bool HomePageRenderer::ShouldSkipKeyRelease(uint32_t key)
 
 void HomePageRenderer::RenderHomePage()
 {
-	ImGui::BeginChild("HomePage", ImVec2(0, 0), false);
-
-	RenderWelcomeSection();
-	ImGui::Spacing();
-
-	RenderCacheMismatchSection();
-
-	// RenderQuickLinksSection();
-	// ImGui::Spacing();
-
-	// RenderFAQSection();
-
-	ImGui::EndChild();
+	MenuUI::SettingsPage page("Home", { { "welcome", T("menu.home.welcome", "Welcome"), T("menu.home.about_community_shaders_expanded_and_its_contributors", "About Community Shaders Expanded and its contributors."), T("menu.home.project_credits_and_community", "Project, credits and community"), true, true, T("menu.home.explore_your_installation", "Explore your installation") }, { "cache", T("menu.home.shader_cache", "Shader cache"), T("menu.home.review_changes_affecting_your_compiled_shaders", "Review changes affecting your compiled shaders."), T("menu.home.shader_cache_compatibility", "Shader cache compatibility"), true, true } }, T("menu.home.welcome", "Welcome"), T("menu.home.choose_a_page_to_get_started", "Choose a page to get started."));
+	if (page.Is("welcome"))
+		RenderWelcomeSection();
+	if (page.Is("cache"))
+		RenderCacheMismatchSection();
 }
 
 void HomePageRenderer::RenderModeSection()
@@ -129,36 +97,24 @@ void HomePageRenderer::RenderModeSection()
 	auto* menu = Menu::GetSingleton();
 	if (!menu)
 		return;
-
 	auto& settings = menu->GetSettings();
 	settings.PerformanceUiMode = std::clamp(settings.PerformanceUiMode, 0, 1);
-	const char* modeLabel = "UI Mode:";
-	const char* essentialsLabel = "Essentials (Recommended)";
-	const char* advancedLabel = "Advanced (Full UI)";
-	const ImGuiStyle& style = ImGui::GetStyle();
-	const float contentWidth = ImGui::GetContentRegionAvail().x;
-	const float radioDiameter = ImGui::GetFrameHeight() * 1.5f;
-	const ImVec2 modeLabelSize = ImGui::CalcTextSize(modeLabel);
-	const float essentialsWidth = radioDiameter + style.ItemInnerSpacing.x + ImGui::CalcTextSize(essentialsLabel).x;
-	const float advancedWidth = radioDiameter + style.ItemInnerSpacing.x + ImGui::CalcTextSize(advancedLabel).x;
-	const float rowWidth = modeLabelSize.x + essentialsWidth + advancedWidth + style.ItemSpacing.x * 3.0f;
-	const float rowHeight = std::max(radioDiameter, modeLabelSize.y);
-	const float rowY = ImGui::GetCursorPosY();
-	const float rowX = ImGui::GetCursorPosX() + std::max(0.0f, (contentWidth - rowWidth) * 0.5f);
-
-	ImGui::SetCursorPos(ImVec2(rowX, rowY + (rowHeight - modeLabelSize.y) * 0.5f));
-	ImGui::TextUnformatted(modeLabel);
-	ImGui::PushID("HomeInterfaceMode");
-	ImGui::SetCursorPos(ImVec2(rowX + modeLabelSize.x + style.ItemSpacing.x, rowY));
-	BigRadioButton(essentialsLabel, &settings.PerformanceUiMode, 0, radioDiameter);
-	ImGui::SetCursorPos(ImVec2(rowX + modeLabelSize.x + style.ItemSpacing.x * 2.0f + essentialsWidth, rowY));
-	BigRadioButton(advancedLabel, &settings.PerformanceUiMode, 1, radioDiameter);
-	ImGui::PopID();
-	ImGui::SetCursorPosY(rowY + rowHeight);
+	const MenuUI::Choice choices[]{
+		{ "essentials", T("menu.home.essentials_recommended", "Essentials (Recommended)"),
+			T("menu.home.essentials_description", "Focus on common visual and performance controls."),
+			T("menu.home.essentials_help", "Keeps the SE Essentials grouping and simplified controls. Your saved settings remain available in Advanced mode.") },
+		{ "advanced", T("menu.home.advanced_full_ui", "Advanced (Full UI)"),
+			T("menu.home.advanced_description", "Show every feature and its detailed settings."),
+			T("menu.home.advanced_help", "Includes diagnostics, developer tools and the full feature list. Switching mode does not change rendering settings.") }
+	};
+	const int selected = MenuUI::ChoiceCards("HomeInterfaceMode", settings.PerformanceUiMode, choices);
+	if (selected >= 0)
+		settings.PerformanceUiMode = selected;
 }
 
 void HomePageRenderer::RenderWelcomeSection()
 {
+	static MenuUI::ActionFeedback feedback;
 	const float scale = Util::GetUIScale();
 	auto menu = Menu::GetSingleton();
 	const auto& theme = menu->GetTheme();
@@ -220,9 +176,9 @@ void HomePageRenderer::RenderWelcomeSection()
 	ImGui::SetCursorPosY(titleAreaBottomY);
 
 	DrawCenteredItalicTextBlock({
-									"This is an unofficial fork of Community Shaders restoring Particle Lights.",
-									"Not affiliated with or endorsed by the Community Shaders team",
-									"- Visit their Discord to get the Original and support their outstanding efforts -",
+									T("menu.home.this_is_an_unofficial_fork_of_community_shaders_restoring_particle_lights", "This is an unofficial fork of Community Shaders restoring Particle Lights."),
+									T("menu.home.not_affiliated_with_or_endorsed_by_the_community_shaders_team", "Not affiliated with or endorsed by the Community Shaders team"),
+									T("menu.home.visit_their_discord_to_get_the_original_and_support_their_outstanding_efforts", "- Visit their Discord to get the Original and support their outstanding efforts -"),
 								},
 		windowSize.x, forkNoticeColor);
 
@@ -295,7 +251,7 @@ void HomePageRenderer::RenderWelcomeSection()
 		const bool hovered = ImGui::IsItemHovered();
 		const bool hasActiveFlash = Util::IsButtonFlashActive("HomeDiscordButton");
 		if (clicked) {
-			ShellExecuteA(NULL, "open", DISCORD_URL, NULL, NULL, SW_SHOWNORMAL);
+			feedback.error = !Util::OpenInShell(DISCORD_URL, feedback.message);
 			Util::TriggerButtonFlash("HomeDiscordButton");
 		}
 		const ImVec2 buttonMin = ImGui::GetItemRectMin();
@@ -323,73 +279,83 @@ void HomePageRenderer::RenderWelcomeSection()
 		ImGui::PopID();
 		ImGui::PopStyleVar();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Open MGO Discord");
+			ImGui::Text(T("menu.home.open_mgo_discord", "Open MGO Discord"));
 		}
-	} else if (Util::ButtonWithFlash("Discord##HomeDiscordButton", discordButtonSize)) {
-		ShellExecuteA(NULL, "open", DISCORD_URL, NULL, NULL, SW_SHOWNORMAL);
+	} else if (Util::ButtonWithFlash(T("menu.home.discord_homediscordbutton", "Discord##HomeDiscordButton"), discordButtonSize)) {
+		feedback.error = !Util::OpenInShell(DISCORD_URL, feedback.message);
 	}
 
 	ImGui::SameLine(0.0f, linkButtonSpacing);
-	if (Util::ButtonWithFlash("GitHub##HomeGitHubButton", ImVec2(githubButtonWidth, linkButtonHeight))) {
-		ShellExecuteA(NULL, "open", GITHUB_URL, NULL, NULL, SW_SHOWNORMAL);
+	if (Util::ButtonWithFlash(T("menu.home.github_homegithubbutton", "GitHub##HomeGitHubButton"), ImVec2(githubButtonWidth, linkButtonHeight))) {
+		feedback.error = !Util::OpenInShell(GITHUB_URL, feedback.message);
 	}
 
 	ImGui::PopStyleVar();
+
+	feedback.Draw();
 }
 
 void HomePageRenderer::RenderCacheMismatchSection()
 {
+	static MenuUI::ActionFeedback feedback;
+	const auto showFeedback = SKSE::stl::scope_exit([&] { feedback.Draw(); });
 	auto* shaderCache = globals::shaderCache;
-	if (!shaderCache || (!shaderCache->IsDiskCacheHeld() &&
-							!shaderCache->HasFeatureSetChanges() &&
-							!shaderCache->HasFeatureSetRevertPending() &&
-							!shaderCache->HasPreviousDiskCache())) {
+	if (!shaderCache) {
+		Util::Text::WrappedWarning(T("menu.home.shader_cache_status_is_not_available_yet", "Shader cache status is not available yet."));
+		return;
+	}
+	if (!shaderCache->IsDiskCacheHeld() && !shaderCache->HasFeatureSetChanges() &&
+		!shaderCache->HasFeatureSetRevertPending() && !shaderCache->HasPreviousDiskCache()) {
+		MenuUI::DetailNote(T("menu.home.your_shader_cache_matches_the_current_feature_setup_no_cache_action_is_needed", "Your shader cache matches the current feature setup. No cache action is needed."));
 		return;
 	}
 
-	auto menu = Menu::GetSingleton();
-	const ImVec4 warningColor = menu ? menu->GetTheme().StatusPalette.Warning : ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
+	auto* menu = Menu::GetSingleton();
+	const char* actionBlockReason = MenuUI::GetGlobalSettingsActionBlockReason(MenuUI::GlobalSettingsAction::ClearShaderCache);
+	if (actionBlockReason)
+		MenuUI::DetailNote(actionBlockReason);
 	const bool featureSetChanged = shaderCache->HasFeatureSetChanges();
 	const bool revertPending = shaderCache->HasFeatureSetRevertPending();
 	const bool featureSetCacheBackedUp = shaderCache->HasFeatureSetCacheBackup();
+	const bool featureSetCacheSelectivelySeeded = shaderCache->HasSelectivelySeededFeatureSetCache();
 	const bool previousCacheAvailable = shaderCache->HasPreviousDiskCache();
 	const bool cacheHeld = shaderCache->IsDiskCacheHeld() && !featureSetChanged && !revertPending;
 	const bool featureChangeHeld = shaderCache->IsDiskCacheHeld() && featureSetChanged && !featureSetCacheBackedUp;
 
-	ImGui::PushStyleColor(ImGuiCol_Text, warningColor);
-	const bool headerOpen = ImGui::CollapsingHeader("Shader Cache Changes", ImGuiTreeNodeFlags_DefaultOpen);
-	ImGui::PopStyleColor();
-	if (!headerOpen) {
-		return;
-	}
+	MenuUI::SectionHeading(T("menu.home.shader_cache_changes", "Shader Cache Changes"));
 
 	if (revertPending) {
 		const ImVec4 restartColor = menu ? menu->GetTheme().StatusPalette.RestartNeeded : ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
-		ImGui::TextColored(restartColor, "%s", "Previous cache restored. Restart to use it.");
+		ImGui::TextColored(restartColor, "%s", T("menu.home.previous_cache_restored_restart_to_use_it", "Previous cache restored. Restart to use it."));
 		ImGui::Spacing();
 		ImGui::Separator();
 		ImGui::Spacing();
 		return;
 	}
 
-	const char* summaryText = "A previous cache is available. Restore it if you want to go back to the earlier feature setup.";
-	const char* actionText = "To go back, restore the previous cache and restart:";
+	const char* summaryText = T("menu.home.a_previous_cache_is_available_restore_it_if_you_want_to_go_back_to_the_earlier_featur", "A previous cache is available. Restore it if you want to go back to the earlier feature setup.");
+	const char* actionText = T("menu.home.to_go_back_restore_the_previous_cache_and_restart", "To go back, restore the previous cache and restart:");
 	if (cacheHeld) {
-		summaryText = "Saved shader cache cannot be used because a required feature is missing or failed to load.";
-		actionText = "Check CS menu > Feature Issues if available. Fix the feature install and restart to use the saved cache, or rebuild the cache for the current setup if the change was intentional:";
+		summaryText = T("menu.home.saved_shader_cache_cannot_be_used_because_a_required_feature_is_missing_or_failed_to_", "Saved shader cache cannot be used because a required feature is missing or failed to load.");
+		actionText = T("menu.home.check_csx_feature_issues_if_present_fix_the_install_and_restart_to_use_the_saved_cach", "Check CSX > Feature Issues if present. Fix the install and restart to use the saved cache, or rebuild for this setup if the change was intentional:");
 	} else if (featureChangeHeld) {
-		summaryText = "Your feature setup changed, but CS could not keep a usable previous cache for restore. CS is building shaders for this session and will rebuild the cache for the current setup when compilation finishes.";
-		actionText = "Restore is unavailable because no usable previous cache was kept for this change. Let compilation finish to rebuild the cache for the current setup.";
+		summaryText = T("menu.home.feature_setup_changed_no_usable_previous_cache_could_be_kept_csx_is_compiling_this_se", "Feature setup changed; no usable previous cache could be kept. CSX is compiling this session's shaders and will rebuild the cache when finished.");
+		actionText = T("menu.home.restore_unavailable_no_usable_previous_cache_was_kept_let_compilation_finish_to_rebui", "Restore unavailable: no usable previous cache was kept. Let compilation finish to rebuild for this setup.");
 	} else if (featureSetChanged && featureSetCacheBackedUp) {
-		if (previousCacheAvailable) {
-			summaryText = "Your feature setup changed. CS saved the previous cache and is building a new cache for the current setup. You can restore the previous cache after compilation finishes.";
+		if (!featureSetCacheSelectivelySeeded) {
+			summaryText = T("menu.home.feature_setup_changed_the_complete_previous_cache_was_saved_but_individual_shader_fam", "Feature setup changed. The complete previous cache was saved, but individual shader families could not be retained safely. The active cache is rebuilding.");
+			actionText = previousCacheAvailable ?
+			                 T("menu.home.let_rebuilding_finish_the_previous_cache_can_then_be_restored", "Let rebuilding finish; the previous cache can then be restored.") :
+			                 T("menu.home.let_compilation_finish_so_csx_can_verify_the_saved_previous_cache", "Let compilation finish so CSX can verify the saved previous cache.");
+		} else if (previousCacheAvailable) {
+			summaryText = T("menu.home.feature_setup_changed_unaffected_shaders_were_kept_and_the_complete_previous_cache_sa", "Feature setup changed. Unaffected shaders were kept and the complete previous cache saved. Only affected shaders are compiling. Restore becomes available when compilation finishes.");
 		} else {
-			summaryText = "Your feature setup changed. CS saved the previous cache and is building a new cache for the current setup. Restore availability will be verified after compilation finishes.";
-			actionText = "Let compilation finish so CS can verify the saved previous cache.";
+			summaryText = T("menu.home.feature_setup_changed_unaffected_shaders_were_kept_only_affected_shaders_are_compilin", "Feature setup changed. Unaffected shaders were kept; only affected shaders are compiling. Restore availability is checked after compilation finishes.");
+			actionText = T("menu.home.let_compilation_finish_so_csx_can_verify_the_saved_previous_cache", "Let compilation finish so CSX can verify the saved previous cache.");
 		}
 	} else if (featureSetChanged) {
-		summaryText = "Your feature setup changed. CS is building a new cache for the current setup. Previous cache is not available for restore.";
-		actionText = "Let compilation finish to rebuild the cache for the current setup.";
+		summaryText = T("menu.home.feature_setup_changed_csx_is_building_a_new_cache_no_previous_cache_is_available_to_r", "Feature setup changed. CSX is building a new cache; no previous cache is available to restore.");
+		actionText = T("menu.home.let_compilation_finish_to_rebuild_the_cache_for_the_current_setup", "Let compilation finish to rebuild the cache for the current setup.");
 	}
 
 	ImGui::TextWrapped("%s", summaryText);
@@ -403,12 +369,12 @@ void HomePageRenderer::RenderCacheMismatchSection()
 		if (mismatch.kind == MismatchKind::EnabledFlip) {
 			if (cacheHeld) {
 				detail = mismatch.nowPresent ?
-				             "enabled now, but missing from the saved cache" :
-				             "in the saved cache, but missing or failed now";
+				             T("menu.home.enabled_now_but_missing_from_the_saved_cache", "enabled now, but missing from the saved cache") :
+				             T("menu.home.in_the_saved_cache_but_missing_or_failed_now", "in the saved cache, but missing or failed now");
 			} else {
 				detail = mismatch.nowPresent ?
-				             "enabled now; previous cache had it disabled" :
-				             "disabled now; previous cache had it enabled";
+				             T("menu.home.enabled_now_previous_cache_had_it_disabled", "enabled now; previous cache had it disabled") :
+				             T("menu.home.disabled_now_previous_cache_had_it_enabled", "disabled now; previous cache had it enabled");
 			}
 		}
 		ImGui::BulletText("%s: %s", mismatch.feature.c_str(), detail);
@@ -418,30 +384,38 @@ void HomePageRenderer::RenderCacheMismatchSection()
 	ImGui::TextWrapped("%s", actionText);
 
 	if (!cacheHeld && !featureChangeHeld) {
-		const bool restoreDisabled = shaderCache->IsCompiling() || !previousCacheAvailable || (featureSetChanged && !featureSetCacheBackedUp);
+		const bool restoreDisabled = actionBlockReason || shaderCache->IsCompiling() || !previousCacheAvailable || (featureSetChanged && !featureSetCacheBackedUp);
 		if (restoreDisabled)
 			ImGui::BeginDisabled();
 
-		const bool restoreClicked = ImGui::Button("Restore Previous Cache");
+		const bool restoreClicked = ImGui::Button(T("menu.home.restore_previous_cache", "Restore Previous Cache"));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Restores the previous cache and resets feature toggles to match it. Restart required.");
+			ImGui::TextUnformatted(T("menu.home.go_back_to_the_earlier_shader_setup_restart_required", "Go back to the earlier shader setup. Restart required."));
 		}
-		if (restoreClicked)
-			shaderCache->RestorePreviousDiskCache();
+		if (restoreClicked && !MenuUI::GetGlobalSettingsActionBlockReason(MenuUI::GlobalSettingsAction::ClearShaderCache)) {
+			if (shaderCache->RestorePreviousDiskCache())
+				feedback = {};
+			else
+				feedback = { T("menu.home.restore_cache_failed", "The previous shader cache could not be restored. Check the log for details."), true };
+		}
 
 		if (restoreDisabled)
 			ImGui::EndDisabled();
 
 		if (shaderCache->IsCompiling())
-			ImGui::TextDisabled("Available after shader compilation finishes.");
+			ImGui::TextDisabled(T("menu.home.available_after_shader_compilation_finishes", "Available after shader compilation finishes."));
 	}
 
 	if (cacheHeld) {
-		if (ImGui::Button("Rebuild Cache for Current Features")) {
+		ImGui::BeginDisabled(actionBlockReason != nullptr);
+		const bool rebuildClicked = ImGui::Button(T("menu.home.rebuild_cache_for_current_features", "Rebuild Cache for Current Features"));
+		ImGui::EndDisabled();
+		if (rebuildClicked && !MenuUI::GetGlobalSettingsActionBlockReason(MenuUI::GlobalSettingsAction::ClearShaderCache)) {
 			shaderCache->AcceptCacheRebuild();
+			feedback = {};
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Rebuilds the disk cache for the current feature setup.");
+			ImGui::TextUnformatted(T("menu.home.keep_the_current_feature_setup_and_rebuild_shaders_for_it", "Keep the current feature setup and rebuild shaders for it."));
 		}
 	}
 

@@ -18,39 +18,65 @@ namespace SIE
 {
 	bool ShaderCache::TryDeferEviction(const hlslRecord& a_record)
 	{
+		const auto taskId = ShaderCompilationTask::MakeId(
+			a_record.shaderClass,
+			a_record.type,
+			a_record.descriptor);
+		// Capture ownership before Clear(path) resets compilation bookkeeping.
+		const bool waitForTaskCompletion = compilationSet.IsInProgress(taskId);
+
 		std::unique_lock lockM{ mapMutex };
-		auto it = shaderMap.find(a_record.key);
-		if (it == shaderMap.end() || it->second.status != ShaderCompilationTask::Status::Pending) {
+		auto shader = shaderMap.find(a_record.key);
+		if (shader == shaderMap.end() ||
+			shader->second.status != ShaderCompilationTask::Status::Pending) {
 			return false;
 		}
 
-		deferredEvictions.insert_or_assign(a_record.key, a_record);
+		auto [eviction, inserted] = deferredEvictions.try_emplace(
+			a_record.key,
+			DeferredEviction{ a_record, waitForTaskCompletion });
+		if (!inserted && !eviction->second.applying) {
+			eviction->second.record = a_record;
+			eviction->second.waitForTaskCompletion |= waitForTaskCompletion;
+		}
 		deferredEvictionCount.store(deferredEvictions.size(), std::memory_order_relaxed);
 		return true;
 	}
 
-	bool ShaderCache::ApplyDeferredEviction(const std::string& a_key)
+	bool ShaderCache::ApplyDeferredEviction(const std::string& a_key, bool a_taskCompleted)
 	{
-		if (deferredEvictionCount.load(std::memory_order_relaxed) == 0) {
+		if (deferredEvictionCount.load(std::memory_order_relaxed) == 0)
 			return false;
-		}
 
-		hlslRecord record;
+		std::optional<DeferredEviction> eviction;
 		{
 			std::unique_lock lockM{ mapMutex };
-			auto it = deferredEvictions.find(a_key);
-			if (it == deferredEvictions.end()) {
+			auto found = deferredEvictions.find(a_key);
+			if (found == deferredEvictions.end() ||
+				found->second.applying ||
+				(found->second.waitForTaskCompletion && !a_taskCompleted)) {
 				return false;
 			}
-			record = it->second;
-			deferredEvictions.erase(it);
-			deferredEvictionCount.store(deferredEvictions.size(), std::memory_order_relaxed);
+			found->second.applying = true;
+			eviction.emplace(found->second);
 		}
 
+		const auto& record = eviction->record;
 		EvictShader(record.key, record.type, record.descriptor, record.shaderClass);
 		DeleteScopedDiskCacheEntries({ record.diskPath });
-		compilationSet.Forget(
-			{ ShaderCompilationTask::MakeId(record.shaderClass, record.type, record.descriptor) });
+		compilationSet.Forget({ ShaderCompilationTask::MakeId(
+			record.shaderClass,
+			record.type,
+			record.descriptor) });
+		{
+			std::unique_lock lockM{ mapMutex };
+			if (auto found = deferredEvictions.find(a_key);
+				found != deferredEvictions.end() && found->second.applying) {
+				deferredEvictions.erase(found);
+			}
+			deferredEvictionCount.store(deferredEvictions.size(), std::memory_order_relaxed);
+		}
+		mapCV.notify_all();
 		return true;
 	}
 
@@ -67,6 +93,7 @@ namespace SIE
 
 		activeShaderCaptureMenuWasVisible = false;
 		clearedThisCaptureCycle.clear();
+		clearedBytecodeThisCaptureCycle.clear();
 		StartActiveShaderCaptureWindow(ActiveShaderCaptureStage::FirstWindow);
 	}
 
@@ -106,7 +133,7 @@ namespace SIE
 
 		const auto currentThread = std::this_thread::get_id();
 		if (currentThread != activeShaderCaptureThread.load(std::memory_order_relaxed)) {
-			// Some overlay paths may submit the click on a different thread from the
+			// Some VR overlay paths may submit the click on a different thread from the
 			// frame reset. Rebind to the actual render thread and restart the window;
 			// this also keeps bulk off-thread shader loading out of the scene capture.
 			activeShaderCaptureFramesRemaining.store(0, std::memory_order_release);
@@ -183,22 +210,31 @@ namespace SIE
 
 		size_t evictedCount = 0;
 		for (const auto& entry : entries) {
-			if (clearedThisCaptureCycle.contains(entry.key))
+			const size_t taskId = ShaderCompilationTask::MakeId(entry.shaderClass, entry.shaderType, entry.descriptor);
+			if (clearedThisCaptureCycle.contains(taskId))
 				continue;
 
-			const size_t taskId = ShaderCompilationTask::MakeId(entry.shaderClass, entry.shaderType, entry.descriptor);
 			// AddCompletedShader publishes a completed blob before the worker installs
-			// the runtime shader and retires its task. Require both phases to finish so
-			// scoped eviction cannot race a late runtime insertion or lose bookkeeping.
-			if (GetShaderStatus(entry.key) == ShaderCompilationTask::Status::Pending ||
-				compilationSet.IsInProgress(taskId)) {
+			// the runtime shader. Keep its task bookkeeping until both phases finish.
+			if (compilationSet.IsInProgress(taskId))
 				continue;
+
+			{
+				// Check and erase under one lock so a fresh pending claim cannot be lost.
+				std::scoped_lock lockM{ mapMutex };
+				auto shader = shaderMap.find(entry.key);
+				if ((shader != shaderMap.end() && shader->second.status == ShaderCompilationTask::Status::Pending) ||
+					deferredEvictions.contains(entry.key)) {
+					continue;
+				}
+				if (clearedBytecodeThisCaptureCycle.insert(entry.key).second)
+					shaderMap.erase(entry.key);
 			}
 
-			EvictShader(entry.key, entry.shaderType, entry.descriptor, entry.shaderClass);
+			EvictShaderResources(entry.shaderType, entry.descriptor, entry.shaderClass);
 			taskIds.insert(taskId);
 			diskPaths.push_back(entry.diskPath);
-			clearedThisCaptureCycle.insert(entry.key);
+			clearedThisCaptureCycle.insert(taskId);
 			++evictedCount;
 		}
 

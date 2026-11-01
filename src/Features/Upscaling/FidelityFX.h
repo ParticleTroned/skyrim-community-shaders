@@ -1,4 +1,7 @@
 #pragma once
+#include "FSRTemporalTuningPolicy.h"
+#include "FSRSharedGuidePolicy.h"
+#include <mutex>
 
 #include <atomic>
 #include <d3d11_4.h>
@@ -50,7 +53,26 @@ public:
 	};
 
 	static constexpr const wchar_t* PluginDir = L"Data\\Shaders\\Upscaling\\FidelityFX";
-	static constexpr uint32_t Fsr3Version = FFX_UPSCALER_MAKE_VERSION(FFX_FSR3_VERSION_MAJOR, FFX_FSR3_VERSION_MINOR, FFX_FSR3_VERSION_PATCH);
+	static constexpr uint32_t HostFsr3Version = FFX_UPSCALER_MAKE_VERSION(FFX_FSR3_VERSION_MAJOR, FFX_FSR3_VERSION_MINOR, FFX_FSR3_VERSION_PATCH);
+	static constexpr uint32_t Fsr3Version = FFX_UPSCALER_MAKE_VERSION(3, 1, 6);
+	static constexpr uint32_t RuntimeAutomaticVersion = 0;
+	struct TemporalTuningSnapshot
+	{
+		FSRTemporalTuningPolicy::Settings requested{}, contextSettings{};
+		FSRTemporalTuningPolicy::Status status = FSRTemporalTuningPolicy::Status::Inactive;
+		uint64_t providerId = 0, requestRevision = 0;
+		uint64_t activeProviderId = 0;
+		std::string providerName;
+		uint32_t requestedVersion = 0, lastDispatchPath = 0;
+		bool supportKnown = false, supportConfirmed = false;
+		uint32_t configuredContexts = 0;
+		int32_t lastConfigureResult = 0;
+		bool dispatched = false;
+		FSRSharedGuidePolicy::CopyWork inputWork{};
+	};
+	/** Queues a validated profile for fresh-context application on the render thread. */
+	bool RequestTemporalTuning(const FSRTemporalTuningPolicy::Settings& settings);
+	[[nodiscard]] TemporalTuningSnapshot GetTemporalTuningSnapshot() const;
 	static constexpr std::wstring_view RuntimeUpscalerDllName = L"amd_fidelityfx_upscaler_dx12.dll";
 	static constexpr std::string_view RuntimeUpscalerDllNameUtf8 = "amd_fidelityfx_upscaler_dx12.dll";
 	~FidelityFX();
@@ -122,6 +144,10 @@ public:
 	std::string GetRuntimeUpscalerProviderName() const;
 	std::string GetRuntimeUpscalerRequestedVersionString() const;
 
+	void SetRuntimeSharedGuideInputsEnabled(bool enabled) noexcept { runtimeSharedGuideInputsEnabled.store(enabled, std::memory_order_release); }
+	[[nodiscard]] bool IsRuntimeSharedGuideQuarantined(ID3D11Resource*) const noexcept;
+	[[nodiscard]] bool IsHostFSR3Supported() const noexcept;
+
 	bool Upscale(ID3D11Resource* a_input, ID3D11Resource* a_output, ID3D11Resource* a_depth, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness);
 	bool UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 		ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
@@ -129,6 +155,13 @@ public:
 		float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness);
 
 private:
+	mutable std::mutex temporalTuningMutex;
+	TemporalTuningSnapshot temporalTuningSnapshot{};
+	std::atomic_uint64_t temporalRequestRevision{ 0 };
+	uint64_t temporalContextRevision = 0;
+	FSRTemporalTuningPolicy::RejectedRequest temporalRejectedRequest{};
+	LifecycleResult ConfigureTemporalTuningContexts(const TemporalTuningSnapshot& request);
+	void PublishTemporalRuntimeSnapshot();
 	LifecycleResult RecordFSRDeviceStatus() noexcept;
 	LifecycleResult RecordRuntimeUpscalerDeviceStatus() noexcept;
 	LifecycleResult ResolveFSRLifecycleFailure(const char* a_operation);
@@ -175,6 +208,7 @@ private:
 	uint64_t pendingRuntimeTeardownD3D11FenceValue = 0;
 	uint64_t pendingRuntimeTeardownD3D12FenceValue = 0;
 	uint64_t runtimeFenceValue = 1;
+	bool runtimeUpscalerIdleProofValid = false;
 
 	static constexpr uint32_t kRuntimeCommandContextCount = 8;
 	struct RuntimeCommandContext
@@ -192,6 +226,15 @@ private:
 	std::unique_ptr<WrappedResource> runtimeReactiveShared[2];
 	std::unique_ptr<WrappedResource> runtimeTransparencyShared[2];
 	std::unique_ptr<WrappedResource> runtimeOutputShared[2];
+
+	struct RuntimeSharedGuideImport
+	{
+		winrt::com_ptr<ID3D11Resource> source;
+		std::unique_ptr<WrappedResource> imported;
+	};
+	std::array<RuntimeSharedGuideImport, FSRSharedGuidePolicy::kGuideCount> runtimeSharedGuideImports{};
+	std::atomic_bool runtimeSharedGuideInputsEnabled{ true };
+	WrappedResource* ResolveRuntimeSharedGuide(FSRSharedGuidePolicy::Guide, ID3D11Resource*, const D3D11_TEXTURE2D_DESC&);
 
 	HMODULE frameGenerationModule = nullptr;
 	HMODULE runtimeUpscalerModule = nullptr;

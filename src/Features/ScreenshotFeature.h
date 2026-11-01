@@ -2,78 +2,105 @@
 
 #include "Feature.h"
 #include "Utils/Subrect.h"
+
 #include <atomic>
-#include <condition_variable>
-#include <filesystem>
-#include <mutex>
-#include <queue>
+#include <chrono>
+#include <functional>
+#include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 
+class ScreenshotApi;
+namespace MenuUI
+{
+	struct ActionFeedback;
+}
+
+/** Owns desktop acquisition and encoding; the service owns request and sequence state. */
 struct ScreenshotFeature : public Feature
 {
-	virtual ~ScreenshotFeature();
-	virtual std::string GetName() override { return "Screenshot"; }
-	virtual std::string GetDisplayName() override { return T("feature.screenshot.name", "Screenshot"); }
-	virtual std::string GetShortName() override { return "Screenshot"; }
-	virtual std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
+	ScreenshotFeature();
+	~ScreenshotFeature() override;
+	std::string GetName() override { return "Screenshot"; }
+	std::string GetDisplayName() override { return T("feature.screenshot.name", "Screenshot"); }
+	std::string GetShortName() override { return "Screenshot"; }
+	std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
+	bool IsInMenu() const override { return true; }
+	void DrawSettingsEnabledControl() override;
+	void DrawSettings() override;
+	bool HasEssentialSettings() const override { return true; }
+	void DrawEssentialSettings() override { DrawSettings(); }
+	void LoadSettings(json&) override;
+	void SaveSettings(json&) override;
+	void Reset() override;
+	void PostPostLoad() override;
 
-	virtual bool IsInMenu() const override;
-
-	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override { DrawSettings(); }
-	virtual void LoadSettings(json& a_json) override;
-	virtual void SaveSettings(json& a_json) override;
-	virtual void Reset() override;
-	virtual void PostPostLoad() override;
-
+	/** Queue a settings-based still capture for the next accepted game Present. */
 	void Capture();
-	// Runs after HDR Present processing so the back buffer matches what's on screen.
+	void RequestUiCapture();
+	/** Retains SE's capture boundary after HDR composition and the accepted game Present. */
 	void ProcessCaptureRequest();
+	/** Mutating API requests are dispatched by the versioned service on the game thread. */
+	json HandleApiRequest(const json&);
+	json RequestApiCapture(std::string_view origin = "csx_menu");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	json HandleReferenceCapture(const json&, std::function<void(const json&)> completion);
+	void SetBurstDeferral(bool);
+#endif
+	bool IsRuntimeEnabled() const noexcept { return loaded && enabled.load(std::memory_order_acquire); }
+	void SetEnabled(bool);
+	std::size_t GetOutstandingCaptureJobCount() const;
+	std::string GetActiveCaptureRequestId() const;
+
 	bool applyCropToScreenshot = true;
-
-	// Settings
 	std::string screenshotPath = "Screenshots";
-	// HDR PNG quantization (7-16); used when HDR Display captures the back buffer.
+	std::string frameCapturePath = "Frame Captures";
 	unsigned int hdrPngBitDepth = 11;
-	// SDR output (HDR captures always use PNG).
 	bool sdrUsePng = true;
-	// After save, put the file path on the clipboard (CF_HDROP).
+	bool frameCaptureUsePng = false;
 	bool copyToClipboard = false;
-
-	std::atomic<bool> captureRequested{ false };
+	struct SequenceDefaults
+	{
+		uint32_t frameCount = 30;
+		uint32_t intervalFrames = 6;
+		uint32_t previewFramesPerSecond = 15;
+		bool writePreviewVideo = false;
+	};
+	SequenceDefaults sequenceDefaults{};
+	std::atomic_bool captureRequested{ false };
 
 private:
-	struct PendingScreenshot
+	friend class ScreenshotApi;
+	enum class CaptureStartResult
 	{
-		winrt::com_ptr<ID3D11Texture2D> stagingTexture;
-		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
-		uint32_t width = 0;
-		uint32_t height = 0;
-		std::filesystem::path outputPath;
-		bool saveAsHdrPng = false;
-		bool saveAsSdrPng = false;
-		int hdrPngBitDepth = 11;
-		bool copyToClipboard = false;
+		Started, SourceBusy, EncoderBackpressure, FeatureDisabled, SourceUnavailable, InvalidDescriptor
 	};
-
-	std::mutex screenshotQueueMutex;
-	std::condition_variable screenshotQueueCV;
-	std::queue<PendingScreenshot> screenshotQueue;
+	struct CaptureState;
+	std::shared_ptr<CaptureState> captureState;
+	std::shared_ptr<ScreenshotApi> screenshotApi;
 	std::thread screenshotWorker;
-	bool screenshotWorkerRunning = false;
+	std::jthread deadlineWorker;
+	std::atomic_bool enabled{ true };
 	Util::Subrect::Controller subrect;
-
-	// SRV-readable copy used when the capture source's own SRV can't be sampled
-	// directly (kFRAMEBUFFER on flat aliases the swap-chain backbuffer).
 	winrt::com_ptr<ID3D11Texture2D> previewCacheTexture;
 	winrt::com_ptr<ID3D11ShaderResourceView> previewCacheSRV;
+	std::string uiSequenceRequestId;
+	std::chrono::steady_clock::time_point nextUiSequencePoll{};
 
-	void EnsureWorkerThread();
-	void StopWorkerThread();
-	void EnqueueScreenshot(PendingScreenshot&& screenshot);
-	void ScreenshotWorkerLoop();
-	void EnsurePreviewCache(ID3D11Texture2D* sourceTexture);
-	static void ShowInGameNotification(std::string message);
+	json BuildCaptureDescriptor(bool usePng, bool clipboard) const;
+	CaptureStartResult TryStartApiCapture(const std::string& requestId, const json& descriptor,
+		const std::string& parentRequestId, uint32_t ordinal);
+	bool CancelApiCapture(std::string_view);
+	void AcquirePendingCapture();
+	static void ScreenshotWorkerLoop(std::shared_ptr<CaptureState>, std::shared_ptr<ScreenshotApi>);
+	static void DeadlineWorkerLoop(std::stop_token, std::shared_ptr<CaptureState>, std::shared_ptr<ScreenshotApi>);
+	void DrawCaptureSource(MenuUI::ActionFeedback&);
+	void DrawCaptureOutput(MenuUI::ActionFeedback&);
+	void DrawCaptureFolder(bool sequence, MenuUI::ActionFeedback&);
+	void DrawCaptureSequence(MenuUI::ActionFeedback&, MenuUI::ActionFeedback&);
+	void DrawCaptureFraming();
+	void PollUiSequence(MenuUI::ActionFeedback&);
+	void EnsurePreviewCache(ID3D11Texture2D*);
+	static void ShowInGameNotification(std::string);
 };

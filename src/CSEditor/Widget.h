@@ -3,7 +3,9 @@
 
 #include "Util.h"
 #include "Utils/Form.h"
+
 #include <array>
+#include <functional>
 #include <string_view>
 
 #include <initializer_list>
@@ -17,38 +19,10 @@ namespace WidgetUI
 	constexpr float kSearchBarWidth = 200.0f;
 	constexpr float kSearchDropdownWidth = 300.0f;
 	constexpr size_t kSearchDropdownMaxResults = 5;
-	constexpr float kSearchDropdownBgGray = 0.16f;
 
 	// Search-result highlight pulse
 	constexpr float kHighlightDurationSeconds = 2.0f;
 	constexpr float kHighlightMaxAlpha = 0.3f;
-	constexpr ImVec4 kHighlightFrameBg = ImVec4(0.3f, 0.6f, 1.0f, 1.0f);
-	constexpr ImVec4 kHighlightFrameBgHovered = ImVec4(0.4f, 0.7f, 1.0f, 1.0f);
-
-	// "Force Weather" lock button colors
-	constexpr ImVec4 kLockButtonColor = ImVec4(0.2f, 0.8f, 0.2f, 1.0f);
-	constexpr ImVec4 kLockButtonHoverColor = ImVec4(0.3f, 0.9f, 0.3f, 1.0f);
-
-	// Inherit checkbox styling (dark frame, grey mark)
-	constexpr ImVec4 kInheritCheckboxFrameBg = ImVec4(0.2f, 0.2f, 0.2f, 1.0f);
-	constexpr ImVec4 kInheritCheckboxMark = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
-
-	// Transparent icon button styling
-	constexpr ImVec4 kIconButtonTransparent = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-	constexpr ImVec4 kIconButtonHover = ImVec4(0.8f, 0.8f, 0.8f, 0.25f);
-
-	// Category section header text (light teal-blue)
-	constexpr ImVec4 kCategoryHeaderColor = ImVec4(0.7f, 0.9f, 1.0f, 1.0f);
-
-	// Help / hint text (light grey)
-	constexpr ImVec4 kHelpTextColor = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
-
-	// Feature override toggle button states (enabled = green, disabled falls back to GetDisabled())
-	constexpr ImVec4 kOverrideEnabledButton = ImVec4(0.2f, 0.7f, 0.2f, 1.0f);
-	constexpr ImVec4 kOverrideEnabledButtonHovered = ImVec4(0.3f, 0.8f, 0.3f, 1.0f);
-	constexpr ImVec4 kOverrideEnabledButtonActive = ImVec4(0.1f, 0.6f, 0.1f, 1.0f);
-	constexpr ImVec4 kOverrideDisabledButtonHovered = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
-	constexpr ImVec4 kOverrideDisabledButtonActive = ImVec4(0.4f, 0.4f, 0.4f, 1.0f);
 
 	// Icon button spacing
 	constexpr float kIconButtonSpacing = 4.0f;
@@ -105,6 +79,13 @@ public:
 	/// Full path to this widget's save file.
 	std::string GetSaveFilePath() const;
 
+	/// Stable identity used for session state such as undo. Unlike a raw pointer,
+	/// this remains safe when an on-demand widget is destroyed and recreated.
+	std::string GetStableIdentity() const
+	{
+		return std::format("{}/{}", GetFolderName(), GetSaveKey());
+	}
+
 	virtual std::string GetFormID() const
 	{
 		if (!form)
@@ -121,7 +102,8 @@ public:
 		return "Generated";
 	}
 
-	void CacheFormData()
+	/// Cache owned names and save keys; the optional batch index is not retained.
+	void CacheFormData(Util::FormEditorIDIndex* editorIDs = nullptr)
 	{
 		if (!form) {
 			cachedEditorID = "Invalid";
@@ -134,7 +116,7 @@ public:
 		cachedSaveKey = Util::GetFormFileKey(form);
 
 		// Try to resolve EditorID via shared utility
-		std::string editorId = Util::GetFormEditorID(form);
+		std::string editorId = Util::GetFormEditorID(form, editorIDs);
 		if (!editorId.empty()) {
 			cachedEditorID = editorId;
 			isFallbackEditorID = false;
@@ -192,10 +174,12 @@ public:
 	}
 
 	void Save();
-	void Load(bool showNotification = true);
+	void Load(bool showNotification = true, bool applyChanges = true);
 	bool HasSavedFile() const;
 
-	virtual void Delete();
+	// Returns true when the saved file is absent after the operation. Runtime
+	// state is reset only after the filesystem operation has succeeded.
+	virtual bool Delete();
 	virtual void LoadSettings() = 0;
 	virtual void SaveSettings() = 0;
 	virtual void ApplyChanges() = 0;
@@ -203,10 +187,21 @@ public:
 	virtual void RevertChanges() { LoadSettings(); }
 	virtual bool HasUnsavedChanges() const { return false; }
 
+	using UndoRestoreAction = std::function<void(Widget&)>;
+	// Restore actions update editor-owned state only. EditorWindow decides whether
+	// the captured edit was auto-applied and mirrors the undo to runtime once.
+	virtual UndoRestoreAction CaptureUndoState() const { return {}; }
+	virtual UndoRestoreAction CaptureBaselineState() const { return {}; }
+	void RememberBaseline();
+	void RestoreRememberedBaseline();
+
 	// Reinitialize weather to apply form refs that are only read at load time.
 	static void ForceWeatherReinit(RE::TESWeather* weather);
 	// Reinitialize the current sky weather (use when the specific weather is unknown).
 	static void ForceCurrentWeatherReinit();
+	// Coalesce repeated active-weather reinitializations during startup override loading.
+	static void BeginWeatherReinitBatch();
+	static void EndWeatherReinitBatch();
 
 	// Override to suppress per-frame auto-apply and show a manual-apply warning in the header.
 	virtual bool RequiresManualApply() const { return false; }
@@ -311,9 +306,14 @@ public:
 	json js = json();
 
 protected:
+	bool IsPersistentApplySuppressed() const { return suppressPersistentApply; }
 	mutable std::string cachedEditorID;
 	mutable std::string cachedSaveKey;
 	mutable bool isFallbackEditorID = false;
+	bool suppressPersistentApply = false;
+	// SaveSettings serializes only. Advance the widget's clean baseline after
+	// the atomic replacement has actually succeeded.
+	virtual void MarkSavedState() = 0;
 	virtual void DrawMenu();
 	std::string GetFolderName() const;
 
@@ -351,5 +351,6 @@ public:
 	const char* GetWidgetTypeName() const override { return ""; }
 	void LoadSettings() override {}
 	void SaveSettings() override {}
+	void MarkSavedState() override {}
 	void ApplyChanges() override {}
 };

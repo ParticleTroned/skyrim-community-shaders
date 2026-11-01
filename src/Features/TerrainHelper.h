@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Utils/RuntimeToggle.h"
+
 struct TerrainHelper : Feature
 {
 private:
@@ -24,7 +26,9 @@ public:
 
 	struct Settings
 	{
+		bool EnableTerrainHelper = true;
 	} settings;
+	Util::RuntimeToggle enabledRequested{ true };
 
 	struct ExtendedSlots
 	{
@@ -33,10 +37,18 @@ public:
 
 	std::shared_mutex extendedSlotsMutex;
 	std::unordered_map<uint32_t, ExtendedSlots> extendedSlots;
-	RE::BGSTextureSet* defaultLandTexture;
-	bool enabled = false;
+	RE::BGSTextureSet* defaultLandTexture = nullptr;
+	bool featureAvailable = false;
 
 	virtual void Load() override;
+	void DrawSettings() override;
+	void LoadSettings(json& a_json) override;
+	void SaveSettings(json& a_json) override;
+	void RestoreDefaultSettings() override;
+	bool SupportsPerformanceCostMeasurement() const override { return featureAvailable; }
+	bool IsPerformanceCostMeasurementEnabled() const override { return enabledRequested.Get(); }
+	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { enabledRequested.Set(a_enabled); }
+	bool IsRuntimeEnabled() const { return featureAvailable && settings.EnableTerrainHelper; }
 	virtual void DataLoaded() override;
 	virtual void PostPostLoad() override;
 	virtual std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }

@@ -867,8 +867,8 @@ namespace FeatureIssues
 							FeatureIssueInfo::IssueType::OBSOLETE, fileInfo);
 
 						logger::warn("Found orphaned obsolete feature INI: {} version {}", featureName, version);
-					} else {
-						// Unknown orphaned feature
+					} else if (!Feature::IsFeatureKnown(featureName)) {
+						// Versioned built-in menus and legacy aliases have no runtime feature object.
 						FeatureFileInfo fileInfo = GetFeatureFileInfo(featureName);
 						AddFeatureIssue(featureName, "unknown",
 							std::format("{} is not recognized by this CS version", featureName),

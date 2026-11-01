@@ -1,0 +1,41 @@
+Skyrim Performance Solution (SPS) reference acknowledgment
+
+Upstream copyright: Copyright (c) 2026 dnai92.
+Nexus author: dani92.
+Official mod: https://www.nexusmods.com/skyrimspecialedition/mods/194164
+Source: https://github.com/dnai92/skyrimPerformanceSolution
+
+CSX texture streaming was developed with reference to SPS. The reference
+covers distance-based demand, GPU copies of lower mip levels, a restoration
+RAM buffer, adjustable VRAM reserve, remembered load sizes and a size cap.
+Preview protection and urgency-ranked restoration also reference SPS.
+CSX idle inventories reuse unchanged demand until a bounded refresh.
+Reduced textures receive service before new demand.
+
+SPS's src/TextureStream.cpp also documents the DDS-loader ABI and its
+SE/AE/VR locations (75721, 77533, 0xDD2B60), and the texture-creation slot
+of BSShaderResourceManager (0xD0 / 8 = 0x1A). These integration details are
+acknowledged at the corresponding CSX hook sites.
+
+CSX shadow culling adapts the sun-angle and point-light magnification
+policy from SPS src/ShadowCulling.cpp, modified on 2026-10-28. Ordinary
+caster thresholds and nearest-cascade protection reference that policy.
+Distance defaults are rounded to 20/15/50 metres for sun/torch/NPCs. CSX adds
+retained camera snapshots, stereo checks, actor-root distance protection
+and independent Light Limit Fix settings.
+SPS 1.0.70's point-light collection fix also informed CSX's draw-only rejection;
+CSX uses its existing native light scopes and shared render-pass hooks.
+The small actor-part shadow policy references SPS 1.0.70's draw-only
+filter, real-actor ownership check, 8-unit part radius and actor-position
+distance with a 10% return band. CSX retains stereo and projected-shadow
+protection, uses native actor handles for bounded history, and exposes
+independent radius and distance sliders with this option on by default. This adaptation was made on 2026-10-30.
+
+CSX has its own streaming policy, stereo demand calculation, validated DDS
+reader, bounded restoration cache, remembered-size format, upload and GPU
+retirement code. SPS binaries and assets are not bundled. The adapted
+shadow policy is marked at its CSX source location.
+
+SPS is GPL-3.0-or-later with the additional permissions in EXCEPTIONS.md.
+The upstream LICENSE and EXCEPTIONS.md are included here unchanged for the
+referenced work. They do not replace CSX's own license and exceptions.

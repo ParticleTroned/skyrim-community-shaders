@@ -1,0 +1,7 @@
+file(READ "${PROJECT_ROOT}/src/Menu/SettingsActions.h" declarations)
+file(READ "${PROJECT_ROOT}/src/Menu/SettingsActions.cpp" source)
+file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+include("${PROJECT_ROOT}/tests/extract_source_region.cmake")
+extract_between("${declarations}" "\tenum class GlobalSettingsAction" "\n\t/**" settings_actions_types.h)
+extract_between("${source}" "namespace MenuUI" "\n\tvoid DrawGlobalSettingsButton" settings_actions_under_test.h)
+file(APPEND "${OUTPUT_DIRECTORY}/settings_actions_under_test.h" "\n}\n")

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace VolumetricLightingTuning
@@ -21,6 +22,24 @@ namespace VolumetricLightingTuning
 		float CustomColorBlue = 1.0f;
 
 		bool operator==(const Profile&) const = default;
+	};
+
+	struct ProfileField
+	{
+		const char* name;
+		const char* legacyName;
+		const char* label;
+		float Profile::* member;
+		float maximum;
+	};
+	inline constexpr std::array kProfileFields{
+		ProfileField{ "ShaftIntensity", "GodrayShaftIntensity", "Godray Intensity", &Profile::ShaftIntensity, kShaftIntensityMax },
+		ProfileField{ "Opacity", "GodrayOpacity", "Godray Opacity", &Profile::Opacity, kOpacityMax },
+		ProfileField{ "Saturation", "GodraySaturation", "Godray Saturation", &Profile::Saturation, kSaturationMax },
+		ProfileField{ "CustomColorContribution", "CustomColorContribution", "Custom Colour Contribution", &Profile::CustomColorContribution, 1.0f },
+		ProfileField{ "CustomColorRed", "CustomColorRed", "Custom Colour Red", &Profile::CustomColorRed, 1.0f },
+		ProfileField{ "CustomColorGreen", "CustomColorGreen", "Custom Colour Green", &Profile::CustomColorGreen, 1.0f },
+		ProfileField{ "CustomColorBlue", "CustomColorBlue", "Custom Colour Blue", &Profile::CustomColorBlue, 1.0f }
 	};
 
 	inline float ClampFinite(float a_value, float a_min, float a_max, float a_fallback)
@@ -46,6 +65,25 @@ namespace VolumetricLightingTuning
 		result.CustomColorGreen = ClampFinite(result.CustomColorGreen, 0.0f, 1.0f, 1.0f);
 		result.CustomColorBlue = ClampFinite(result.CustomColorBlue, 0.0f, 1.0f, 1.0f);
 		return result;
+	}
+
+	/** Multiplies tuning and overlays custom colour without changing the authored profile. */
+	inline Profile ComposeProfiles(const Profile& a_base, const Profile& a_layer)
+	{
+		auto result = SanitizeProfile(a_base);
+		const auto layer = SanitizeProfile(a_layer);
+		result.ShaftIntensity *= layer.ShaftIntensity;
+		result.Opacity *= layer.Opacity;
+		result.Saturation *= layer.Saturation;
+		if (layer.CustomColorContribution > 0.0f) {
+			const float baseWeight = result.CustomColorContribution * (1.0f - layer.CustomColorContribution);
+			const float amount = baseWeight + layer.CustomColorContribution;
+			result.CustomColorRed = (result.CustomColorRed * baseWeight + layer.CustomColorRed * layer.CustomColorContribution) / amount;
+			result.CustomColorGreen = (result.CustomColorGreen * baseWeight + layer.CustomColorGreen * layer.CustomColorContribution) / amount;
+			result.CustomColorBlue = (result.CustomColorBlue * baseWeight + layer.CustomColorBlue * layer.CustomColorContribution) / amount;
+			result.CustomColorContribution = amount;
+		}
+		return SanitizeProfile(result);
 	}
 
 	inline float ApplyOpacityCurve(float a_value, float a_opacity)

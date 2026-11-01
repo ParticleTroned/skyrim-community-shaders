@@ -14,7 +14,7 @@ using json = nlohmann::json;
 struct Feature;
 
 /// Manages scene-specific setting overrides (Interior Only, TimeOfDay, WeatherSpecific).
-/// Zero coupling to individual features — operates via JSON round-trip through Feature::SaveSettings/LoadSettings.
+/// Zero coupling to individual features ? operates via JSON round-trip through Feature::SaveSettings/LoadSettings.
 /// Event-driven: cell transitions detected via MenuOpenCloseEvent, mutations applied immediately.
 class SceneSettingsManager
 {
@@ -164,13 +164,10 @@ private:
 
 	// --- Per scene-type storage ---
 	std::map<SceneType, std::vector<SettingEntry>> entries;
-	std::map<SceneType, bool> allOverwritesPausedMap;
-	std::map<SceneType, bool> allUserPausedMap;
 
 	// --- Interior state tracking ---
 	bool isCurrentlyApplied = false;
 	bool queuedCellTransition = false;
-	bool queuedReapply = false;
 
 	// Stored exterior settings per-feature (only the overridden keys)
 	std::map<std::string, json> savedExteriorSettings;

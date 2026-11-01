@@ -1,16 +1,27 @@
+#include "Upscaling/NeuralRendering/ExposureCapture.h"
 #include "Upscaling.h"
 
 #include "Deferred.h"
 #include "Features/RenderDoc.h"
 #include "HDRDisplay.h"
 #include "Hooks.h"
+#include "LinearLighting.h"
+#include "Menu.h"
+#include "Menu/PerformanceTuningRenderer.h"
+#include "Menu/SettingsPage.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
+#include "Upscaling/FSRTemporalTuningDevBenchBridge.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/FrameGenerationEligibilityPolicy.h"
+#include "Upscaling/MotionSharpeningSettings.h"
+#include "Upscaling/NeuralRendering/MonoRenderer.h"
+#include "Upscaling/NeuralRendering/Runtime.h"
 #include "Upscaling/ReflexPolicy.h"
 #include "Upscaling/Streamline.h"
 #include "Utils/D3D.h"
+#include "Utils/D3DContextProtection.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 #include <Windows.h>
@@ -39,6 +50,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	streamlineLogLevel,
 	sharpnessFSR,
 	sharpnessDLSS,
+	dlssSharpenerMode,
+	motionAdaptiveRCAS,
+	motionSharpnessAdjustment,
+	motionSharpnessThreshold,
+	motionSharpnessCap,
+	fsrTemporalTuning,
+	fsrSharedGuideInputs,
 	fsr4RuntimeEnable,
 	fsr4RuntimeSelectionSchemaVersion,
 	reflexLowLatencyMode,
@@ -143,15 +161,28 @@ namespace
 		       a_lhs.MiscFlags == a_rhs.MiscFlags;
 	}
 
-	bool TextureMatchesRequirements(const std::unique_ptr<Texture2D>& a_texture, const D3D11_TEXTURE2D_DESC& a_expectedDesc, bool a_requireSRV, bool a_requireUAV)
+	bool TextureMatchesRequirements(const std::unique_ptr<Texture2D>& a_texture, const D3D11_TEXTURE2D_DESC& a_expectedDesc, bool a_requireSRV, bool a_requireUAV, bool a_allowCopiedGuide = false)
 	{
-		if (!a_texture || !TextureDescMatches(a_texture->desc, a_expectedDesc))
+		auto expected = a_expectedDesc;
+		if (a_allowCopiedGuide && a_texture && a_texture->desc.MiscFlags == 0) expected.MiscFlags = 0;
+		if (!a_texture || !TextureDescMatches(a_texture->desc, expected))
 			return false;
 		if (a_requireSRV && !a_texture->srv)
 			return false;
 		if (a_requireUAV && !a_texture->uav)
 			return false;
 		return true;
+	}
+
+	std::unique_ptr<Texture2D> CreateOptionalSharedGuide(D3D11_TEXTURE2D_DESC description, const char* name)
+	{
+		try { return std::make_unique<Texture2D>(description, name); }
+		catch (const std::exception&) {
+			if (!description.MiscFlags) throw;
+			description.MiscFlags = 0;
+			logger::debug("[Upscaling] Shared allocation unavailable for {}; using copied input storage.", name);
+			return std::make_unique<Texture2D>(description, name);
+		}
 	}
 
 	D3D11_TEXTURE2D_DESC BuildFlatFsrDepthDesc(const D3D11_TEXTURE2D_DESC& a_mainDesc)
@@ -165,6 +196,7 @@ namespace
 		depthDesc.SampleDesc.Count = 1;
 		depthDesc.Usage = D3D11_USAGE_DEFAULT;
 		depthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		depthDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 		return depthDesc;
 	}
 
@@ -350,29 +382,29 @@ namespace
 	{
 		switch (preset) {
 		case Upscaling::kDLSSPresetJ:
-			ImGui::TextUnformatted("DLAA/Quality/Balanced preset. Slightly less ghosting than K, but more flicker. Speed: about K. Use only if K ghosts.");
+			ImGui::TextUnformatted(T("feature.upscaling.dlaa_quality_balanced_preset_slightly_less_ghosting_than_k_b", "DLAA/Quality/Balanced preset. Slightly less ghosting than K, but more flicker. Speed: about K. Use only if K ghosts."));
 			break;
 		case Upscaling::kDLSSPresetK:
-			ImGui::TextUnformatted("Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users.");
+			ImGui::TextUnformatted(T("feature.upscaling.default_for_dlaa_quality_balanced_best_all_round_stability_a", "Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users."));
 			break;
 		case Upscaling::kDLSSPresetL:
-			ImGui::TextUnformatted("Default for Ultra Performance on newer RTX cards. Sharper and more stable, but higher cost than J/K/F.");
-			ImGui::TextUnformatted("For RTX 3000-series cards, F is usually the better Performance/Ultra Performance choice.");
+			ImGui::TextUnformatted(T("feature.upscaling.default_for_ultra_performance_on_newer_rtx_cards_sharper_and", "Default for Ultra Performance on newer RTX cards. Sharper and more stable, but higher cost than J/K/F."));
+			ImGui::TextUnformatted(T("feature.upscaling.for_rtx_3000_series_cards_f_is_usually_the_better_performanc", "For RTX 3000-series cards, F is usually the better Performance/Ultra Performance choice."));
 			break;
 		case Upscaling::kDLSSPresetM:
-			ImGui::TextUnformatted("Default for Performance on newer RTX cards. Similar image-quality improvements to L, closer in speed to J/K.");
-			ImGui::TextUnformatted("For RTX 3000-series cards, F is usually the better Performance/Ultra Performance choice.");
+			ImGui::TextUnformatted(T("feature.upscaling.default_for_performance_on_newer_rtx_cards_similar_image_qua", "Default for Performance on newer RTX cards. Similar image-quality improvements to L, closer in speed to J/K."));
+			ImGui::TextUnformatted(T("feature.upscaling.for_rtx_3000_series_cards_f_is_usually_the_better_performanc", "For RTX 3000-series cards, F is usually the better Performance/Ultra Performance choice."));
 			break;
 		case Upscaling::kDLSSPresetF:
-			ImGui::TextUnformatted("Legacy/deprecated preset. Best Performance/Ultra Performance starting point for RTX 3000-series cards.");
-			ImGui::TextUnformatted("If you want the adjacent legacy comparison profile, try E.");
+			ImGui::TextUnformatted(T("feature.upscaling.legacy_deprecated_preset_best_performance_ultra_performance", "Legacy/deprecated preset. Best Performance/Ultra Performance starting point for RTX 3000-series cards."));
+			ImGui::TextUnformatted(T("feature.upscaling.if_you_want_the_adjacent_legacy_comparison_profile_try_e", "If you want the adjacent legacy comparison profile, try E."));
 			break;
 		case Upscaling::kDLSSPresetE:
-			ImGui::TextUnformatted("Legacy/deprecated preset. Secondary comparison option next to F for older DLSS behavior.");
-			ImGui::TextUnformatted("On RTX 3000-series cards, start with F first, then compare E if you want another legacy profile.");
+			ImGui::TextUnformatted(T("feature.upscaling.legacy_deprecated_preset_secondary_comparison_option_next_to", "Legacy/deprecated preset. Secondary comparison option next to F for older DLSS behavior."));
+			ImGui::TextUnformatted(T("feature.upscaling.on_rtx_3000_series_cards_start_with_f_first_then_compare_e_i", "On RTX 3000-series cards, start with F first, then compare E if you want another legacy profile."));
 			break;
 		default:
-			ImGui::TextUnformatted("Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users.");
+			ImGui::TextUnformatted(T("feature.upscaling.default_for_dlaa_quality_balanced_best_all_round_stability_a", "Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users."));
 			break;
 		}
 	}
@@ -420,6 +452,14 @@ namespace
 		settings.streamlineLogLevel = std::min<uint>(settings.streamlineLogLevel, 2u);
 		settings.sharpnessFSR = ClampFiniteUnitRange(settings.sharpnessFSR, 0.0f);
 		settings.sharpnessDLSS = ClampFiniteUnitRange(settings.sharpnessDLSS, Upscaling::kDefaultDLSSSharpness);
+		settings.dlssSharpenerMode = std::min<uint>(settings.dlssSharpenerMode, static_cast<uint>(Upscaling::DLSSSharpenerMode::LumaUnsharp));
+		const auto motion = MotionSharpening::Sanitize({ settings.motionAdaptiveRCAS,
+			settings.motionSharpnessAdjustment, settings.motionSharpnessThreshold, settings.motionSharpnessCap });
+		settings.motionSharpnessAdjustment = motion.adjustment;
+		settings.motionSharpnessThreshold = motion.thresholdPixels;
+		settings.motionSharpnessCap = motion.strengthCap;
+		if (!FSRTemporalTuningPolicy::IsValid(settings.fsrTemporalTuning))
+			settings.fsrTemporalTuning = {};
 		if (!std::isfinite(settings.reflexFPSLimit))
 			settings.reflexFPSLimit = 60.0f;
 		settings.reflexFPSLimit = std::clamp(settings.reflexFPSLimit, 20.0f, 240.0f);
@@ -452,23 +492,22 @@ namespace
 	void DrawFrameGenerationEnabledToggle(Upscaling::Settings& a_settings)
 	{
 		bool enabled = a_settings.frameGenerationMode != 0;
-		if (ImGui::Checkbox("Frame Generation", &enabled))
+		if (Util::Widgets::Checkbox(T("feature.upscaling.frame_generation", "Frame Generation"), &enabled))
 			a_settings.frameGenerationMode = enabled ? 1u : 0u;
 	}
 
 	void DrawFrameGenerationForceEnableToggle(Upscaling& a_upscaling, bool a_showEmbeddedInfo = true)
 	{
 		if (a_showEmbeddedInfo)
-			ImGui::TextWrapped("Allows frame generation to function on low refresh rate monitors. Detected: %.2f Hz", a_upscaling.refreshRate);
+			ImGui::TextWrapped(T("feature.upscaling.allows_frame_generation_to_function_on_low_refresh_rate_moni", "Allows frame generation to function on low refresh rate monitors. Detected: %.2f Hz"), a_upscaling.refreshRate);
 		bool forceEnabled = a_upscaling.settings.frameGenerationForceEnable != 0;
-		if (ImGui::Checkbox("Force Enable Frame Generation", &forceEnabled))
+		if (Util::Widgets::Checkbox(T("feature.upscaling.force_enable_frame_generation", "Force Enable Frame Generation"), &forceEnabled))
 			a_upscaling.settings.frameGenerationForceEnable = forceEnabled ? 1u : 0u;
 		if (!a_showEmbeddedInfo) {
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Allows frame generation on low refresh rate monitors. Detected: %.2f Hz", a_upscaling.refreshRate);
+				ImGui::Text(T("feature.upscaling.allows_frame_generation_on_low_refresh_rate_monitors_detecte", "Allows frame generation on low refresh rate monitors. Detected: %.2f Hz"), a_upscaling.refreshRate);
 		}
 	}
-
 }
 
 /**
@@ -492,10 +531,11 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	D3D_FEATURE_LEVEL* pFeatureLevel,
 	ID3D11DeviceContext** ppImmediateContext)
 {
+	Flags = Util::ThreadSafeDeviceFlags(Flags);
 	auto& upscaling = globals::features::upscaling;
 	const auto createOriginalDevice = [&](const D3D_FEATURE_LEVEL* a_featureLevels,
 										  UINT a_featureLevelCount) {
-		return ptrD3D11CreateDeviceAndSwapChainUpscaling(
+		const HRESULT result = ptrD3D11CreateDeviceAndSwapChainUpscaling(
 			pAdapter,
 			DriverType,
 			Software,
@@ -508,6 +548,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 			ppDevice,
 			pFeatureLevel,
 			ppImmediateContext);
+		return Util::ValidateDeviceCreation(result, ppDevice, ppImmediateContext, ppSwapChain);
 	};
 	if (IsRenderDocUpscalingBlocked(true)) {
 		if (!g_renderDocUpscalingD3DHookBypassLogged.exchange(true, std::memory_order_acq_rel)) {
@@ -701,6 +742,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 			publishedSwapChain = std::move(a_swapChain);
 		}
 
+		if (!a_d3d12SwapChainActive)
+			(void)upscaling.nativeReflex.BindDevice(a_device.get(), adapterDesc.VendorId == Streamline::kNvidiaVendorId);
 		*ppDevice = a_device.detach();
 		*ppImmediateContext = a_context.detach();
 		*ppSwapChain = publishedSwapChain.detach();
@@ -753,7 +796,9 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		auto createProxyD3D11Device = [&](winrt::com_ptr<ID3D11Device>& a_device,
 										  winrt::com_ptr<ID3D11DeviceContext>& a_context,
 										  D3D_FEATURE_LEVEL& a_createdFeatureLevel) {
-			return D3D11CreateDevice(
+			auto** deviceOutput = a_device.put();
+			auto** contextOutput = a_context.put();
+			const HRESULT result = D3D11CreateDevice(
 				pAdapter,
 				DriverType,
 				Software,
@@ -761,9 +806,10 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 				&featureLevel,
 				1,
 				SDKVersion,
-				a_device.put(),
+				deviceOutput,
 				&a_createdFeatureLevel,
-				a_context.put());
+				contextOutput);
+			return Util::ValidateDeviceCreation(result, deviceOutput, contextOutput, nullptr);
 		};
 
 		bool dlssgProxyMutationCommitted = false;
@@ -910,7 +956,10 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	winrt::com_ptr<ID3D11Device> nativeDevice;
 	winrt::com_ptr<ID3D11DeviceContext> nativeContext;
 	D3D_FEATURE_LEVEL createdFeatureLevel{};
-	const HRESULT result = ptrD3D11CreateDeviceAndSwapChainUpscaling(
+	auto** swapChainOutput = nativeSwapChain.put();
+	auto** deviceOutput = nativeDevice.put();
+	auto** contextOutput = nativeContext.put();
+	HRESULT result = ptrD3D11CreateDeviceAndSwapChainUpscaling(
 		pAdapter,
 		DriverType,
 		Software,
@@ -919,10 +968,11 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		1,
 		SDKVersion,
 		pSwapChainDesc,
-		nativeSwapChain.put(),
-		nativeDevice.put(),
+		swapChainOutput,
+		deviceOutput,
 		&createdFeatureLevel,
-		nativeContext.put());
+		contextOutput);
+	result = Util::ValidateDeviceCreation(result, deviceOutput, contextOutput, swapChainOutput);
 	if (FAILED(result))
 		return failDeviceGraphCreation(result);
 	if (!publishD3D11GraphWithFallback(
@@ -940,7 +990,27 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 void Upscaling::DrawSettings()
 {
-	DrawSettingsPanel(true, true);
+	MenuUI::SettingsPage page("Upscaling", {
+											   { "mode", T("feature.upscaling.page.mode", "Mode"), T("feature.upscaling.page.mode_help", "Choose your upscaler, quality and render resolution."), T("feature.upscaling.page.mode_summary", "Upscaler and image quality"), true, true, T("feature.upscaling.page.foundation", "Choose the rendering foundation") },
+											   { "tuning", T("feature.upscaling.page.tuning", "Tuning"), T("feature.upscaling.page.tuning_help", "Refine FSR stability and temporal detail."), T("feature.upscaling.page.tuning_summary", "FSR stability and detail"), GetUpscaleMethod() == UpscaleMethod::kFSR, true, T("feature.upscaling.page.quality", "Refine image quality") },
+											   { "look", T("feature.upscaling.page.look", "Sharpening"), T("feature.upscaling.page.look_help", "Refine sharpening after choosing the rendering mode."), T("feature.upscaling.page.look_summary", "Sharpening and clarity") },
+											   { "motion", T("feature.upscaling.page.motion", "Motion"), T("feature.upscaling.page.motion_help", "Choose frame generation, pacing and latency controls."), T("feature.upscaling.page.motion_summary", "Frame generation and Reflex"), true, true, T("feature.upscaling.page.motion_stage", "Refine motion") },
+											   { "diagnostics", T("feature.upscaling.page.diagnostics", "Diagnostics"), T("feature.upscaling.page.diagnostics_help", "Inspect backend state and installed runtime versions."), T("feature.upscaling.page.diagnostics_summary", "Backend status"), true, false },
+										   });
+	if (page.Is("mode"))
+		DrawUpscalingModeSettings(true, true);
+	if (page.Is("tuning"))
+		DrawFsrTemporalTuningSettings(false);
+	if (page.Is("look"))
+		DrawUpscalingLookSettings();
+	if (page.Is("motion")) {
+		MenuUI::SectionHeading(T("feature.upscaling.frame_generation", "Frame Generation"));
+		DrawFrameGenerationSettings(true);
+		MenuUI::SectionHeading(T("feature.upscaling.nvidia_reflex", "NVIDIA Reflex"));
+		DrawReflexSettings(true);
+	}
+	if (page.Is("diagnostics"))
+		DrawUpscalingDiagnostics();
 }
 
 void Upscaling::DrawPerformanceSettings(bool)
@@ -949,6 +1019,26 @@ void Upscaling::DrawPerformanceSettings(bool)
 }
 
 void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
+{
+	DrawUpscalingModeSettings(a_showEmbeddedInfo, a_allowNone);
+	if (GetUpscaleMethod() == UpscaleMethod::kFSR)
+		DrawFsrTemporalTuningSettings();
+	DrawUpscalingLookSettings();
+	if (ImGui::TreeNodeEx(T("feature.upscaling.frame_generation", "Frame Generation"), ImGuiTreeNodeFlags_DefaultOpen)) {
+		DrawFrameGenerationSettings(a_showEmbeddedInfo);
+		ImGui::TreePop();
+	}
+	if (fidelityFX.IsNvidiaAdapterDetected() && ImGui::TreeNodeEx(T("feature.upscaling.nvidia_reflex", "NVIDIA Reflex"), ImGuiTreeNodeFlags_DefaultOpen)) {
+		DrawReflexSettings(a_showEmbeddedInfo);
+		ImGui::TreePop();
+	}
+	if (a_showEmbeddedInfo && ImGui::TreeNode(T("feature.upscaling.backend_diagnostics", "Backend Diagnostics"))) {
+		DrawUpscalingDiagnostics();
+		ImGui::TreePop();
+	}
+}
+
+void Upscaling::DrawUpscalingModeSettings(bool a_showEmbeddedInfo, bool a_allowNone)
 {
 	struct UpscaleUiChoice
 	{
@@ -977,14 +1067,14 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
 
 	std::vector<UpscaleUiChoice> upscaleChoices;
 	if (showNoneChoice)
-		upscaleChoices.push_back({ UpscaleMethod::kNONE, false, "None" });
+		upscaleChoices.push_back({ UpscaleMethod::kNONE, false, T("feature.upscaling.none", "None") });
 	if (!renderDocBlocksUpscaling) {
-		upscaleChoices.push_back({ UpscaleMethod::kTAA, false, "TAA" });
-		upscaleChoices.push_back({ UpscaleMethod::kFSR, false, "AMD FSR3" });
+		upscaleChoices.push_back({ UpscaleMethod::kTAA, false, T("feature.upscaling.taa", "TAA") });
+		upscaleChoices.push_back({ UpscaleMethod::kFSR, false, T("feature.upscaling.amd_fsr3", "AMD FSR3") });
 		if (runtimeFsr4AutoEligible)
-			upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR4" });
+			upscaleChoices.push_back({ UpscaleMethod::kFSR, true, T("feature.upscaling.fsr_automatic", "AMD FSR (Automatic)") });
 		if (featureDLSS)
-			upscaleChoices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
+			upscaleChoices.push_back({ UpscaleMethod::kDLSS, false, T("feature.upscaling.nvidia_dlss", "NVIDIA DLSS") });
 	}
 
 	auto matchesCurrentChoice = [&](const UpscaleUiChoice& choice) {
@@ -1012,25 +1102,27 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
 		}
 	}
 
-	const char* currentMethodLabel = upscaleChoices[methodUiIndex].label;
+	std::vector<const char*> methodLabels;
+	for (const auto& choice : upscaleChoices)
+		methodLabels.push_back(choice.label);
 	if (renderDocBlocksUpscaling)
 		ImGui::BeginDisabled();
-	const bool methodChanged = ImGui::SliderInt("Method", &methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1), currentMethodLabel);
+	const bool methodChanged = MenuUI::ChoiceSetting(T("feature.upscaling.method", "Method"), &methodUiIndex, methodLabels.data(), static_cast<int>(methodLabels.size()));
 	if (renderDocBlocksUpscaling)
 		ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		if (renderDocBlocksUpscaling) {
-			ImGui::Text("Runtime is forced to None while %s.", GetRenderDocUpscalingBlockReason());
+			ImGui::Text(T("feature.upscaling.runtime_is_forced_to_none_while_s", "Runtime is forced to None while %s."), GetRenderDocUpscalingBlockReason());
 		} else {
-			ImGui::TextUnformatted("Selects the upscaling backend.");
+			ImGui::TextUnformatted(T("feature.upscaling.selects_the_upscaling_backend", "Selects the upscaling backend."));
 			if (runtimeFsr4AutoEligible)
 				ImGui::TextUnformatted(showNoneChoice ?
-										   "Range: choose between TAA, DLSS, FSR3, FSR4, or None." :
-										   "Range: choose between TAA, DLSS, FSR3, or FSR4.");
+										   T("feature.upscaling.range_choose_between_taa_dlss_fsr3_fsr4_or_none", "Range: choose between TAA, DLSS, FSR3, FSR4, or None.") :
+										   T("feature.upscaling.range_choose_between_taa_dlss_fsr3_or_fsr4", "Range: choose between TAA, DLSS, FSR3, or FSR4."));
 			else
 				ImGui::TextUnformatted(showNoneChoice ?
-										   "Range: choose between TAA, DLSS, FSR3, or None." :
-										   "Range: choose between TAA, DLSS, or FSR3.");
+										   T("feature.upscaling.range_choose_between_taa_dlss_fsr3_or_none", "Range: choose between TAA, DLSS, FSR3, or None.") :
+										   T("feature.upscaling.range_choose_between_taa_dlss_or_fsr3", "Range: choose between TAA, DLSS, or FSR3."));
 		}
 	}
 	methodUiIndex = std::clamp(methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1));
@@ -1044,7 +1136,7 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
 	if (a_showEmbeddedInfo && renderDocBlocksUpscaling) {
 		ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
 		ImGui::TextWrapped(
-			"Community Shaders Upscaling runs as None while %s to avoid DLSS/FSR backend startup crashes.",
+			T("feature.upscaling.community_shaders_upscaling_runs_as_none_while_s_to_avoid_dl", "Community Shaders Upscaling runs as None while %s to avoid DLSS/FSR backend startup crashes."),
 			GetRenderDocUpscalingBlockReason());
 		ImGui::PopStyleColor();
 	}
@@ -1057,17 +1149,17 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
 	if (a_showEmbeddedInfo && upscaleMethod == UpscaleMethod::kFSR) {
 		const auto& hostFsrSdkLabel = FidelityFX::GetHostFsrSdkLabel();
 		const auto& runtimeFsr3Label = FidelityFX::GetRuntimeUpscalerLabel(FidelityFX::Fsr3Version);
-		ImGui::TextDisabled("FSR path: %s", fidelityFX.GetDisplayedFsrPathLabel().c_str());
+		ImGui::TextDisabled(T("feature.upscaling.fsr_path_s", "FSR path: %s"), fidelityFX.GetDisplayedFsrPathLabel().c_str());
 		if (fidelityFX.IsRuntimeUpscalerFailureLatched()) {
-			ImGui::TextDisabled("Runtime FSR path is latched off after a runtime failure; using %s fallback.", hostFsrSdkLabel.c_str());
+			ImGui::TextDisabled(T("feature.upscaling.runtime_fsr_path_is_latched_off_after_a_runtime_failure_usin", "Runtime FSR path is latched off after a runtime failure; using %s fallback."), hostFsrSdkLabel.c_str());
 		} else if (fidelityFX.IsRuntimeFsr4FailureLatched()) {
-			ImGui::TextDisabled("FSR4 is latched off after a runtime failure; using %s.", runtimeFsr3Label.c_str());
+			ImGui::TextDisabled(T("feature.upscaling.fsr4_is_latched_off_after_a_runtime_failure_using_s", "FSR4 is latched off after a runtime failure; using %s."), runtimeFsr3Label.c_str());
 		} else if (fidelityFX.HasRuntimeUpscalerSupportCheckResult() &&
 				   !fidelityFX.IsRuntimeUpscalerSupportConfirmed()) {
-			ImGui::TextDisabled("Runtime FSR context creation failed; using %s fallback.", hostFsrSdkLabel.c_str());
+			ImGui::TextDisabled(T("feature.upscaling.runtime_fsr_context_creation_failed_using_s_fallback", "Runtime FSR context creation failed; using %s fallback."), hostFsrSdkLabel.c_str());
 		}
 		if (!runtimeUpscalerPresent && runtimeFsr4Requested)
-			ImGui::TextDisabled("FSR4 unavailable: missing FidelityFX upscaler runtime.");
+			ImGui::TextDisabled("%s", T("feature.upscaling.fsr4_unavailable_missing_fidelityfx_upscaler_runtime", "FSR4 unavailable: missing FidelityFX upscaler runtime."));
 	}
 
 	// Display warning for DLSS resolution limits.
@@ -1077,9 +1169,9 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
 		const float screenHeight = static_cast<float>(viewport ? viewport->screenHeight : 0);
 
 		if (screenWidth > streamline.MAX_RESOLUTION || screenHeight > streamline.MAX_RESOLUTION) {
-			Util::Text::Warning("Warning: Requested resolution %.0f x %.0f exceeds maximum supported resolution %d x %d for DLSS.",
+			Util::Text::Warning(T("feature.upscaling.warning_requested_resolution_0f_x_0f_exceeds_maximum_support", "Warning: Requested resolution %.0f x %.0f exceeds maximum supported resolution %d x %d for DLSS."),
 				screenWidth, screenHeight, streamline.MAX_RESOLUTION, streamline.MAX_RESOLUTION);
-			Util::Text::Warning("DLSS will not function. Lower your resolution or select a different upscaling method.");
+			Util::Text::Warning("%s", T("feature.upscaling.dlss_will_not_function_lower_your_resolution_or_select_a_dif", "DLSS will not function. Lower your resolution or select a different upscaling method."));
 		}
 	}
 
@@ -1089,20 +1181,14 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
 		const char* baseLabel = GetQualityModeName(settings.qualityMode, upscaleMethod == UpscaleMethod::kDLSS);
 		std::string labelWithScale = std::format("{} ( {:.2f}x )", baseLabel, GetQualityModeResolutionScale(settings.qualityMode));
 		int qualityMode = static_cast<int>(settings.qualityMode);
-		if (ImGui::SliderInt("Upscale Preset", &qualityMode, 0, static_cast<int>(kQualityModeMaxIndex), labelWithScale.c_str()))
+		if (Util::Widgets::SliderInt(T("feature.upscaling.upscale_preset", "Upscale Preset"), &qualityMode, 0, static_cast<int>(kQualityModeMaxIndex), labelWithScale.c_str()))
 			settings.qualityMode = static_cast<uint>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Controls the shared DLSS/FSR3/FSR4 internal render scale / quality level.");
-			ImGui::TextUnformatted("Range: low 0 (highest quality, lowest performance gain) to high 6 (highest performance gain, lowest quality).");
+			ImGui::TextUnformatted(T("feature.upscaling.controls_the_shared_dlss_fsr3_fsr4_internal_render_scale_qua", "Controls the shared DLSS/FSR3/FSR4 internal render scale / quality level."));
+			ImGui::TextUnformatted(T("feature.upscaling.range_low_0_highest_quality_lowest_performance_gain_to_high", "Range: low 0 (highest quality, lowest performance gain) to high 6 (highest performance gain, lowest quality)."));
 		}
 
-		if (upscaleMethod == UpscaleMethod::kFSR) {
-			ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Adjusts post-upscale sharpness for FSR.");
-				ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
-			}
-		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
+		if (upscaleMethod == UpscaleMethod::kDLSS) {
 			settings.dlssPreset = std::min(settings.dlssPreset, kDLSSPresetMaxIndex);
 
 			int dlssProfileUiIndex = 0;
@@ -1114,253 +1200,274 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo, bool a_allowNone)
 			}
 
 			const int dlssProfileUiMaxIndex = static_cast<int>(kDLSSProfileDisplayOrder.size()) - 1;
-			ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetLabel(kDLSSProfileDisplayOrder[dlssProfileUiIndex]));
+			Util::Widgets::SliderInt(T("feature.upscaling.dlss_profile", "DLSS Profile"), &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetLabel(kDLSSProfileDisplayOrder[dlssProfileUiIndex]));
 			dlssProfileUiIndex = std::clamp(dlssProfileUiIndex, 0, dlssProfileUiMaxIndex);
 			settings.dlssPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				DrawDLSSPresetTooltip(settings.dlssPreset);
 			}
 
-			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Adjusts post-upscale sharpness for DLSS.");
-				ImGui::TextUnformatted("Range: 0.0 off/softest to 1.0 sharpest.");
-			}
-
 			if (a_showEmbeddedInfo && isNvidiaAdapter) {
-				ImGui::TextWrapped("Note: Use K for DLAA/Quality/Balanced. For Performance and Ultra Performance, use L/M on newer RTX cards. On RTX 3000-series cards, start with F and compare E if you want the other legacy profile.");
+				ImGui::TextWrapped("%s", T("feature.upscaling.note_use_k_for_dlaa_quality_balanced_for_performance_and_ult", "Note: Use K for DLAA/Quality/Balanced. For Performance and Ultra Performance, use L/M on newer RTX cards. On RTX 3000-series cards, start with F and compare E if you want the other legacy profile."));
 			}
 		}
 	}
 
+	if (a_showEmbeddedInfo) {
+		const auto dimensions = GetRuntimeResolutionPlan();
+		ImGui::TextDisabled(T("feature.upscaling.render_dimensions", "Scene: %u x %u | Output: %u x %u"),
+			dimensions.engineRenderSize.x, dimensions.engineRenderSize.y, dimensions.finalOutputSize.x, dimensions.finalOutputSize.y);
+		MenuUI::DetailNote(T("feature.upscaling.render_dimensions_help", "The quality preset controls the SE scene resolution. Neural inference resolution is configured independently in Neural Rendering."));
+	}
+}
+
+void Upscaling::DrawUpscalingLookSettings()
+{
+	const auto method = GetUpscaleMethod();
+	if (method == UpscaleMethod::kFSR) {
+		Util::Widgets::SliderFloat(T("feature.upscaling.sharpness", "Sharpness"), &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
+		Util::AddTooltip(T("feature.upscaling.fsr_sharpness_help", "Adjust post-upscale sharpening for FSR. Zero is softest; one is sharpest."));
+	} else if (method == UpscaleMethod::kDLSS) {
+		DrawSharpeningSettings();
+	} else {
+		MenuUI::DetailNote(T("feature.upscaling.sharpener_inactive", "Choose DLSS or FSR in Mode to configure post-upscale sharpening."));
+	}
+}
+
+void Upscaling::DrawFrameGenerationSettings(bool a_showEmbeddedInfo)
+{
 	const bool frameGenerationDx12PathActive = IsFrameGenerationDx12PathActive();
 
-	if (ImGui::TreeNodeEx("Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
-		if (a_showEmbeddedInfo) {
-			ImGui::Text("Frame Generation interpolates real frames with generated ones for a smoother experience");
-			ImGui::Text("Uses NVIDIA DLSS-G when supported, with AMD FSR Frame Generation as fallback");
-			if (UsesDLSSGFrameGeneration())
-				ImGui::TextColored(Util::Colors::GetSuccess(), "Using NVIDIA DLSS-G");
-			else if (frameGenerationDx12PathActive)
-				ImGui::TextColored(Util::Colors::GetInfo(), "Using AMD FSR Frame Generation");
-			else if (streamlineDX12.featureDLSSG)
-				ImGui::Text("NVIDIA DLSS-G is available after restart.");
-			else if (HasFrameGenModule())
-				ImGui::Text("AMD FSR Frame Generation is available.");
-			ImGui::Text("Requires a D3D11 to D3D12 proxy which can create compatibility issues");
-			ImGui::Text("Toggling this setting requires a restart to work correctly");
-
-			bool onlyRequiresRestart = true;
-
-			if (!isWindowed) {
-				Util::Text::Warning("Warning: Requires windowed mode");
-
-				onlyRequiresRestart = false;
-			}
-
-			if (lowRefreshRate && !settings.frameGenerationForceEnable) {
-				Util::Text::Warning("Warning: Requires a high refresh rate monitor or Force Enable Frame Generation");
-
-				onlyRequiresRestart = false;
-			}
-
-			if (fidelityFXMissing) {
-				Util::Text::Warning("Warning: FidelityFX DLLs are not loaded");
-
-				onlyRequiresRestart = false;
-			}
-
-			if (onlyRequiresRestart && settings.frameGenerationMode && !frameGenerationDx12PathActive)
-				Util::Text::Warning("Warning: Requires restart");
-
-			if (!settings.frameGenerationMode && frameGenerationDx12PathActive)
-				Util::Text::Warning("Warning: Requires restart");
-		}
-
-		DrawFrameGenerationEnabledToggle(settings);
-
-		if (dlssgSupportedAtBoot && HasFrameGenModule()) {
-			ImGui::Checkbox("Prefer AMD FSR Frame Generation", &settings.preferFSRFrameGeneration);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted("Selects FSR instead of DLSS-G on a supported NVIDIA GPU. Restart required.");
-		}
-
-		if (UsesDLSSGFrameGeneration()) {
-			const auto maximumGeneratedFrames =
-				streamlineDX12.dlssgState.maximumFramesToGenerate;
-			if (maximumGeneratedFrames == 0) {
-				ImGui::TextDisabled("DLSS-G Frame Multiplier unavailable");
-			} else {
-				const int maximumMultiplier =
-					static_cast<int>(maximumGeneratedFrames + 1u);
-				int multiplier = static_cast<int>(
-					settings.dlssgFramesToGenerate + 1u);
-				multiplier = std::clamp(multiplier, 2, maximumMultiplier);
-				if (ImGui::SliderInt(
-						"DLSS-G Frame Multiplier",
-						&multiplier,
-						2,
-						maximumMultiplier,
-						"%dx")) {
-					settings.dlssgFramesToGenerate =
-						static_cast<uint>(multiplier - 1);
-				}
-			}
-			if (streamlineDX12.dlssgState.consecutiveMissingMarkerStartFrames >=
-				Streamline::kDLSSGDiagnosticFrameThreshold) {
-				Util::Text::Warning(
-					"DLSS-G is waiting for its frame token and SimulationStart marker. Check the Streamline log.");
-			} else if (streamlineDX12.dlssgState.status != sl::DLSSGStatus::eOk) {
-				Util::Text::Warning(
-					"DLSS-G is not generating frames (status 0x%X). Check the Streamline log and NVIDIA driver settings.",
-					static_cast<unsigned>(streamlineDX12.dlssgState.status));
-			} else if (streamlineDX12.dlssgState.consecutiveNoGeneratedPresents >=
-					   Streamline::kDLSSGDiagnosticFrameThreshold) {
-				Util::Text::Warning(
-					"DLSS-G is enabled but no interpolated presents are being reported. Check the Streamline log and NVIDIA driver settings.");
-			}
-		} else if (frameGenerationDx12PathActive) {
-			ImGui::TextDisabled("AMD FSR Frame Generation uses a fixed 2x multiplier.");
-		}
-
-		const bool hostFrameLimiterAvailable =
-			frameGenerationDx12PathActive && !UsesDLSSGFrameGeneration();
-		if (!hostFrameLimiterAvailable)
-			ImGui::BeginDisabled();
-
-		bool flEnabled = settings.frameLimitMode != 0;
-		if (ImGui::Checkbox("Frame Limit (Variable Refresh Rate)", &flEnabled))
-			settings.frameLimitMode = flEnabled ? 1 : 0;
-
-		if (!hostFrameLimiterAvailable)
-			ImGui::EndDisabled();
+	if (a_showEmbeddedInfo) {
+		ImGui::Text("%s", T("feature.upscaling.frame_generation_interpolates_real_frames_with_generated_one", "Frame Generation interpolates real frames with generated ones for a smoother experience"));
+		ImGui::Text("%s", T("feature.upscaling.uses_nvidia_dlss_g_when_supported_with_amd_fsr_frame_generat", "Uses NVIDIA DLSS-G when supported, with AMD FSR Frame Generation as fallback"));
 		if (UsesDLSSGFrameGeneration())
-			ImGui::TextDisabled("DLSS-G owns output pacing; the CSX FSR frame limiter is not applied.");
+			ImGui::TextColored(Util::Colors::GetSuccess(), "%s", T("feature.upscaling.using_nvidia_dlss_g", "Using NVIDIA DLSS-G"));
+		else if (frameGenerationDx12PathActive)
+			ImGui::TextColored(Util::Colors::GetInfo(), "%s", T("feature.upscaling.using_amd_fsr_frame_generation", "Using AMD FSR Frame Generation"));
+		else if (streamlineDX12.featureDLSSG)
+			ImGui::Text("%s", T("feature.upscaling.nvidia_dlss_g_is_available_after_restart", "NVIDIA DLSS-G is available after restart."));
+		else if (HasFrameGenModule())
+			ImGui::Text("%s", T("feature.upscaling.amd_fsr_frame_generation_is_available", "AMD FSR Frame Generation is available."));
+		ImGui::Text("%s", T("feature.upscaling.requires_a_d3d11_to_d3d12_proxy_which_can_create_compatibili", "Requires a D3D11 to D3D12 proxy which can create compatibility issues"));
+		ImGui::Text("%s", T("feature.upscaling.toggling_this_setting_requires_a_restart_to_work_correctly", "Toggling this setting requires a restart to work correctly"));
 
-		DrawFrameGenerationForceEnableToggle(*this, a_showEmbeddedInfo);
+		bool onlyRequiresRestart = true;
 
-		if (UsesDLSSGFrameGeneration())
-			ImGui::BeginDisabled();
-		ImGui::Checkbox("Frame Generation in Menus", &settings.frameGenerationAllowInMenus);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted(
-				UsesDLSSGFrameGeneration() ?
-					"DLSS-G is disabled while the game is paused or showing loading/full-screen menus." :
-					"Keeps FSR frame generation active while game menus are open.");
+		if (!isWindowed) {
+			Util::Text::Warning("%s", T("feature.upscaling.warning_requires_windowed_mode", "Warning: Requires windowed mode"));
+
+			onlyRequiresRestart = false;
 		}
-		if (UsesDLSSGFrameGeneration())
-			ImGui::EndDisabled();
 
-		ImGui::TreePop();
+		if (lowRefreshRate && !settings.frameGenerationForceEnable) {
+			Util::Text::Warning("%s", T("feature.upscaling.warning_requires_a_high_refresh_rate_monitor_or_force_enable", "Warning: Requires a high refresh rate monitor or Force Enable Frame Generation"));
+
+			onlyRequiresRestart = false;
+		}
+
+		if (fidelityFXMissing) {
+			Util::Text::Warning("%s", T("feature.upscaling.warning_fidelityfx_dlls_are_not_loaded", "Warning: FidelityFX DLLs are not loaded"));
+
+			onlyRequiresRestart = false;
+		}
+
+		if (onlyRequiresRestart && settings.frameGenerationMode && !frameGenerationDx12PathActive)
+			Util::Text::Warning("%s", T("feature.upscaling.warning_requires_restart", "Warning: Requires restart"));
+
+		if (!settings.frameGenerationMode && frameGenerationDx12PathActive)
+			Util::Text::Warning("%s", T("feature.upscaling.warning_requires_restart", "Warning: Requires restart"));
 	}
 
+	DrawFrameGenerationEnabledToggle(settings);
+
+	if (dlssgSupportedAtBoot && HasFrameGenModule()) {
+		Util::Widgets::Checkbox(T("feature.upscaling.prefer_amd_fsr_frame_generation", "Prefer AMD FSR Frame Generation"), &settings.preferFSRFrameGeneration);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T("feature.upscaling.selects_fsr_instead_of_dlss_g_on_a_supported_nvidia_gpu_rest", "Selects FSR instead of DLSS-G on a supported NVIDIA GPU. Restart required."));
+	}
+
+	if (UsesDLSSGFrameGeneration()) {
+		const auto maximumGeneratedFrames =
+			streamlineDX12.dlssgState.maximumFramesToGenerate;
+		if (maximumGeneratedFrames == 0) {
+			ImGui::TextDisabled("%s", T("feature.upscaling.dlss_g_frame_multiplier_unavailable", "DLSS-G Frame Multiplier unavailable"));
+		} else {
+			const int maximumMultiplier =
+				static_cast<int>(maximumGeneratedFrames + 1u);
+			int multiplier = static_cast<int>(
+				settings.dlssgFramesToGenerate + 1u);
+			multiplier = std::clamp(multiplier, 2, maximumMultiplier);
+			if (Util::Widgets::SliderInt(
+					T("feature.upscaling.dlss_g_frame_multiplier", "DLSS-G Frame Multiplier"),
+					&multiplier,
+					2,
+					maximumMultiplier,
+					"%dx")) {
+				settings.dlssgFramesToGenerate =
+					static_cast<uint>(multiplier - 1);
+			}
+		}
+		if (streamlineDX12.dlssgState.consecutiveMissingMarkerStartFrames >=
+			Streamline::kDLSSGDiagnosticFrameThreshold) {
+			Util::Text::Warning("%s",
+				T("feature.upscaling.dlss_g_is_waiting_for_its_frame_token_and_simulationstart_ma", "DLSS-G is waiting for its frame token and SimulationStart marker. Check the Streamline log."));
+		} else if (streamlineDX12.dlssgState.status != sl::DLSSGStatus::eOk) {
+			Util::Text::Warning(
+				T("feature.upscaling.dlss_g_is_not_generating_frames_status_0x_x_check_the_stream", "DLSS-G is not generating frames (status 0x%X). Check the Streamline log and NVIDIA driver settings."),
+				static_cast<unsigned>(streamlineDX12.dlssgState.status));
+		} else if (streamlineDX12.dlssgState.consecutiveNoGeneratedPresents >=
+				   Streamline::kDLSSGDiagnosticFrameThreshold) {
+			Util::Text::Warning("%s",
+				T("feature.upscaling.dlss_g_is_enabled_but_no_interpolated_presents_are_being_rep", "DLSS-G is enabled but no interpolated presents are being reported. Check the Streamline log and NVIDIA driver settings."));
+		}
+	} else if (frameGenerationDx12PathActive) {
+		ImGui::TextDisabled("%s", T("feature.upscaling.amd_fsr_frame_generation_uses_a_fixed_2x_multiplier", "AMD FSR Frame Generation uses a fixed 2x multiplier."));
+	}
+
+	const bool hostFrameLimiterAvailable =
+		frameGenerationDx12PathActive && !UsesDLSSGFrameGeneration();
+	if (!hostFrameLimiterAvailable)
+		ImGui::BeginDisabled();
+
+	bool flEnabled = settings.frameLimitMode != 0;
+	if (Util::Widgets::Checkbox(T("feature.upscaling.frame_limit_variable_refresh_rate", "Frame Limit (Variable Refresh Rate)"), &flEnabled))
+		settings.frameLimitMode = flEnabled ? 1 : 0;
+
+	if (!hostFrameLimiterAvailable)
+		ImGui::EndDisabled();
+	if (UsesDLSSGFrameGeneration())
+		ImGui::TextDisabled("%s", T("feature.upscaling.dlss_g_owns_output_pacing_the_csx_fsr_frame_limiter_is_not_a", "DLSS-G owns output pacing; the CSX FSR frame limiter is not applied."));
+
+	DrawFrameGenerationForceEnableToggle(*this, a_showEmbeddedInfo);
+
+	if (UsesDLSSGFrameGeneration())
+		ImGui::BeginDisabled();
+	Util::Widgets::Checkbox(T("feature.upscaling.frame_generation_in_menus", "Frame Generation in Menus"), &settings.frameGenerationAllowInMenus);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			UsesDLSSGFrameGeneration() ?
+				T("feature.upscaling.dlss_g_is_disabled_while_the_game_is_paused_or_showing_loadi", "DLSS-G is disabled while the game is paused or showing loading/full-screen menus.") :
+				T("feature.upscaling.keeps_fsr_frame_generation_active_while_game_menus_are_open", "Keeps FSR frame generation active while game menus are open."));
+	}
+	if (UsesDLSSGFrameGeneration())
+		ImGui::EndDisabled();
+}
+
+void Upscaling::DrawReflexSettings(bool a_showEmbeddedInfo)
+{
+	if (!fidelityFX.IsNvidiaAdapterDetected()) {
+		MenuUI::DetailNote(T("feature.upscaling.reflex_nvidia", "NVIDIA Reflex requires a supported NVIDIA device."));
+		return;
+	}
+	const bool frameGenerationDx12PathActive = IsFrameGenerationDx12PathActive();
 	auto& activeReflex = UsesDLSSGFrameGeneration() ? streamlineDX12 : streamline;
-	if (activeReflex.reflexSupportedOnCurrentAdapter && ImGui::TreeNodeEx("NVIDIA Reflex", ImGuiTreeNodeFlags_DefaultOpen)) {
-		const bool reflexBlockedByFrameGeneration =
-			frameGenerationDx12PathActive && !UsesDLSSGFrameGeneration();
-		const bool reflexAvailable = activeReflex.initialized && activeReflex.featureReflex;
-		const bool reflexControlsAvailable = reflexAvailable && !reflexBlockedByFrameGeneration;
-		const auto markerOptimization = ReflexPolicy::ResolveCSMarkerOptimization(
-			reflexControlsAvailable,
-			activeReflex.featurePCL,
-			settings.reflexUseMarkersToOptimize);
-		if (a_showEmbeddedInfo && UsesDLSSGFrameGeneration())
-			ImGui::TextDisabled("Reflex runs through the DX12 Streamline instance while DLSS-G is active.");
-		if (a_showEmbeddedInfo && reflexBlockedByFrameGeneration) {
-			ImGui::TextDisabled("Reflex is unavailable while the DX12 frame-generation swapchain is active.");
-		}
 
-		if (a_showEmbeddedInfo && !reflexAvailable) {
-			ImGui::TextDisabled("Reflex is not available. Ensure sl.reflex.dll is present and restart.");
-		}
-
-		if (!reflexControlsAvailable)
-			ImGui::BeginDisabled();
-
-		ImGui::Checkbox("Low Latency Mode", &settings.reflexLowLatencyMode);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Cuts input delay by syncing CPU work closer to the GPU.");
-			ImGui::TextUnformatted("Can reduce max FPS a little, but usually feels more responsive.");
-		}
-
-		if (!settings.reflexLowLatencyMode)
-			ImGui::BeginDisabled();
-
-		ImGui::Checkbox("Low Latency Boost", &settings.reflexLowLatencyBoost);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Keeps GPU clocks higher to avoid latency spikes at low GPU load.");
-			ImGui::TextUnformatted("Useful if frametime jumps; costs extra power and heat.");
-		}
-
-		if (!markerOptimization.available)
-			ImGui::BeginDisabled();
-
-		bool markersToOptimize = markerOptimization.enabled;
-		if (ImGui::Checkbox("Use Markers To Optimize", &markersToOptimize) && markerOptimization.available)
-			settings.reflexUseMarkersToOptimize = markersToOptimize;
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Uses frame markers for tighter Reflex timing.");
-			ImGui::TextUnformatted("Requires authoritative full-frame marker coverage.");
-		}
-
-		if (!markerOptimization.available)
-			ImGui::EndDisabled();
-
-		if (a_showEmbeddedInfo && !markerOptimization.available) {
-			ImGui::TextDisabled(
-				reflexControlsAvailable && activeReflex.featurePCL ?
-					"Marker optimization is disabled until authoritative full-frame marker coverage is available." :
-					"Marker optimization unavailable (Reflex/PCL not loaded).");
-		}
-
-		ImGui::Checkbox("Use FPS Limit", &settings.reflexUseFPSLimit);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Uses Reflex's internal FPS cap for steadier frametimes.");
-			ImGui::TextUnformatted("Can lower latency versus uncapped rendering.");
-		}
-
-		if (!settings.reflexLowLatencyMode)
-			ImGui::EndDisabled();
-
-		if (!settings.reflexUseFPSLimit)
-			ImGui::BeginDisabled();
-
-		if (!std::isfinite(settings.reflexFPSLimit))
-			settings.reflexFPSLimit = 60.0f;
-		settings.reflexFPSLimit = std::clamp(settings.reflexFPSLimit, 20.0f, 240.0f);
-		ImGui::SliderFloat("FPS Limit", &settings.reflexFPSLimit, 20.0f, 240.0f, "%.0f");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Set your frame cap target.");
-			ImGui::TextUnformatted("Start about 2-3 FPS below refresh rate (e.g. 117 for 120 Hz).");
-		}
-
-		if (!settings.reflexUseFPSLimit)
-			ImGui::EndDisabled();
-
-		if (!reflexControlsAvailable)
-			ImGui::EndDisabled();
-
-		ImGui::TreePop();
+	const bool reflexBlockedByFrameGeneration =
+		frameGenerationDx12PathActive && !UsesDLSSGFrameGeneration();
+	const auto nativeStatus = nativeReflex.GetStatus();
+	const bool reflexAvailable = UsesDLSSGFrameGeneration() ? activeReflex.initialized && activeReflex.featureReflex :
+	                                                          nativeStatus.deviceBound && (nativeStatus.health == Reflex::Health::Ready || nativeStatus.health == Reflex::Health::Healthy ||
+																							  nativeStatus.health == Reflex::Health::Recovering || nativeStatus.health == Reflex::Health::Exhausted);
+	const bool reflexControlsAvailable = reflexAvailable && !reflexBlockedByFrameGeneration;
+	const auto markerOptimization = ReflexPolicy::ResolveCSMarkerOptimization(
+		reflexControlsAvailable,
+		activeReflex.featurePCL,
+		settings.reflexUseMarkersToOptimize);
+	if (a_showEmbeddedInfo && UsesDLSSGFrameGeneration())
+		ImGui::TextDisabled("%s", T("feature.upscaling.reflex_runs_through_the_dx12_streamline_instance_while_dlss", "Reflex runs through the DX12 Streamline instance while DLSS-G is active."));
+	if (a_showEmbeddedInfo && reflexBlockedByFrameGeneration) {
+		ImGui::TextDisabled("%s", T("feature.upscaling.reflex_is_unavailable_while_the_dx12_frame_generation_swapch", "Reflex is unavailable while the DX12 frame-generation swapchain is active."));
 	}
 
-	if (a_showEmbeddedInfo && ImGui::TreeNodeEx("Backend Diagnostics")) {
-		// Streamline log level selection
-		const char* logLevels[] = { "Off", "Default", "Verbose" };
-		int logLevelIdx = static_cast<int>(settings.streamlineLogLevel);
-		if (ImGui::Combo("Streamline Logging", &logLevelIdx, logLevels, IM_ARRAYSIZE(logLevels))) {
-			settings.streamlineLogLevel = static_cast<uint>(logLevelIdx);
-		}
-		ImGui::TextUnformatted("Changing this requires a restart to take effect.");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Streamline logging controls the verbosity of NVIDIA Streamline backend logs. Useful for debugging issues with DLSS/DLSS-G.");
-		}
-
-		ImGui::Separator();
-		Util::DrawDllVersionTable("AMD FidelityFX DLLs (click to open folder)", FidelityFX::PluginDir, FidelityFX::dllVersions, "ffx_dll_versions");
-		Util::DrawDllVersionTable("NVIDIA Streamline DLLs (click to open folder)", Streamline::PluginDir, Streamline::dllVersions, "sl_dll_versions");
-		Util::DrawDllVersionTable("NVIDIA Streamline DLSS-G DLLs (click to open folder)", Streamline::DLSSGPluginDir, Streamline::dllVersionsDX12, "sl_dlssg_dll_versions");
-		ImGui::TreePop();
+	if (a_showEmbeddedInfo && !reflexAvailable) {
+		ImGui::TextDisabled("%s", T("feature.upscaling.reflex_unavailable", "Reflex is unavailable on the active device or driver."));
 	}
+
+	if (!reflexControlsAvailable)
+		ImGui::BeginDisabled();
+
+	Util::Widgets::Checkbox(T("feature.upscaling.low_latency_mode", "Low Latency Mode"), &settings.reflexLowLatencyMode);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(T("feature.upscaling.cuts_input_delay_by_syncing_cpu_work_closer_to_the_gpu", "Cuts input delay by syncing CPU work closer to the GPU."));
+		ImGui::TextUnformatted(T("feature.upscaling.can_reduce_max_fps_a_little_but_usually_feels_more_responsiv", "Can reduce max FPS a little, but usually feels more responsive."));
+	}
+
+	if (!settings.reflexLowLatencyMode)
+		ImGui::BeginDisabled();
+
+	Util::Widgets::Checkbox(T("feature.upscaling.low_latency_boost", "Low Latency Boost"), &settings.reflexLowLatencyBoost);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(T("feature.upscaling.keeps_gpu_clocks_higher_to_avoid_latency_spikes_at_low_gpu_l", "Keeps GPU clocks higher to avoid latency spikes at low GPU load."));
+		ImGui::TextUnformatted(T("feature.upscaling.useful_if_frametime_jumps_costs_extra_power_and_heat", "Useful if frametime jumps; costs extra power and heat."));
+	}
+
+	if (!markerOptimization.available)
+		ImGui::BeginDisabled();
+
+	bool markersToOptimize = markerOptimization.enabled;
+	if (Util::Widgets::Checkbox(T("feature.upscaling.use_markers_to_optimize", "Use Markers To Optimize"), &markersToOptimize) && markerOptimization.available)
+		settings.reflexUseMarkersToOptimize = markersToOptimize;
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(T("feature.upscaling.uses_frame_markers_for_tighter_reflex_timing", "Uses frame markers for tighter Reflex timing."));
+		ImGui::TextUnformatted(T("feature.upscaling.requires_authoritative_full_frame_marker_coverage", "Requires authoritative full-frame marker coverage."));
+	}
+
+	if (!markerOptimization.available)
+		ImGui::EndDisabled();
+
+	if (a_showEmbeddedInfo && !markerOptimization.available) {
+		ImGui::TextDisabled("%s",
+			reflexControlsAvailable && activeReflex.featurePCL ?
+				T("feature.upscaling.marker_optimization_is_disabled_until_authoritative_full_fra", "Marker optimization is disabled until authoritative full-frame marker coverage is available.") :
+				T("feature.upscaling.marker_optimization_unavailable_reflex_pcl_not_loaded", "Marker optimization unavailable (Reflex/PCL not loaded)."));
+	}
+
+	Util::Widgets::Checkbox(T("feature.upscaling.use_fps_limit", "Use FPS Limit"), &settings.reflexUseFPSLimit);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(T("feature.upscaling.uses_reflex_s_internal_fps_cap_for_steadier_frametimes", "Uses Reflex's internal FPS cap for steadier frametimes."));
+		ImGui::TextUnformatted(T("feature.upscaling.can_lower_latency_versus_uncapped_rendering", "Can lower latency versus uncapped rendering."));
+	}
+
+	if (!settings.reflexLowLatencyMode)
+		ImGui::EndDisabled();
+
+	if (!settings.reflexUseFPSLimit)
+		ImGui::BeginDisabled();
+
+	if (!std::isfinite(settings.reflexFPSLimit))
+		settings.reflexFPSLimit = 60.0f;
+	settings.reflexFPSLimit = std::clamp(settings.reflexFPSLimit, 20.0f, 240.0f);
+	Util::Widgets::SliderFloat(T("feature.upscaling.fps_limit", "FPS Limit"), &settings.reflexFPSLimit, 20.0f, 240.0f, "%.0f");
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(T("feature.upscaling.set_your_frame_cap_target", "Set your frame cap target."));
+		ImGui::TextUnformatted(T("feature.upscaling.start_about_2_3_fps_below_refresh_rate_e_g_117_for_120_hz", "Start about 2-3 FPS below refresh rate (e.g. 117 for 120 Hz)."));
+	}
+
+	if (!settings.reflexUseFPSLimit)
+		ImGui::EndDisabled();
+
+	if (!reflexControlsAvailable)
+		ImGui::EndDisabled();
+}
+
+void Upscaling::DrawUpscalingDiagnostics()
+{
+	// Streamline log level selection
+	const char* logLevels[] = { T("feature.upscaling.sharpener_off", "Off"), T("feature.upscaling.default", "Default"), T("feature.upscaling.verbose", "Verbose") };
+	int logLevelIdx = static_cast<int>(settings.streamlineLogLevel);
+	if (Util::Widgets::Combo(T("feature.upscaling.streamline_logging", "Streamline Logging"), &logLevelIdx, logLevels, IM_ARRAYSIZE(logLevels))) {
+		settings.streamlineLogLevel = static_cast<uint>(logLevelIdx);
+	}
+	ImGui::TextUnformatted(T("feature.upscaling.changing_this_requires_a_restart_to_take_effect", "Changing this requires a restart to take effect."));
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T("feature.upscaling.streamline_logging_controls_the_verbosity_of_nvidia_streamli", "Streamline logging controls the verbosity of NVIDIA Streamline backend logs. Useful for debugging issues with DLSS/DLSS-G."));
+	}
+
+	ImGui::Separator();
+	Util::DrawDllVersionTable(T("feature.upscaling.amd_fidelityfx_dlls_click_to_open_folder", "AMD FidelityFX DLLs (click to open folder)"), FidelityFX::PluginDir, FidelityFX::dllVersions, "ffx_dll_versions");
+	Util::DrawDllVersionTable(T("feature.upscaling.nvidia_streamline_dlls_click_to_open_folder", "NVIDIA Streamline DLLs (click to open folder)"), Streamline::PluginDir, Streamline::dllVersions, "sl_dll_versions");
+	Util::DrawDllVersionTable(T("feature.upscaling.nvidia_streamline_dlss_g_dlls_click_to_open_folder", "NVIDIA Streamline DLSS-G DLLs (click to open folder)"), Streamline::DLSSGPluginDir, Streamline::dllVersionsDX12, "sl_dlssg_dll_versions");
 }
 
 void Upscaling::SaveSettings(json& o_json)
@@ -1450,14 +1557,14 @@ void Upscaling::DrawEssentialSettings()
 		settings.fsr4RuntimeEnable = false;
 	}
 
-	std::vector<UpscaleUiChoice> choices = { { UpscaleMethod::kNONE, false, "None" } };
+	std::vector<UpscaleUiChoice> choices = { { UpscaleMethod::kNONE, false, T("feature.upscaling.none", "None") } };
 	if (!renderDocBlocksUpscaling) {
-		choices.push_back({ UpscaleMethod::kTAA, false, "TAA" });
-		choices.push_back({ UpscaleMethod::kFSR, false, "AMD FSR3" });
+		choices.push_back({ UpscaleMethod::kTAA, false, T("feature.upscaling.taa", "TAA") });
+		choices.push_back({ UpscaleMethod::kFSR, false, T("feature.upscaling.amd_fsr3", "AMD FSR3") });
 		if (runtimeFsr4AutoEligible)
-			choices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR4" });
+			choices.push_back({ UpscaleMethod::kFSR, true, T("feature.upscaling.fsr_automatic", "AMD FSR (Automatic)") });
 		if (featureDLSS)
-			choices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
+			choices.push_back({ UpscaleMethod::kDLSS, false, T("feature.upscaling.nvidia_dlss", "NVIDIA DLSS") });
 	}
 
 	auto matchesCurrentChoice = [&](const UpscaleUiChoice& choice) {
@@ -1475,7 +1582,7 @@ void Upscaling::DrawEssentialSettings()
 	}
 
 	ImGui::BeginDisabled(renderDocBlocksUpscaling);
-	const bool methodChanged = ImGui::SliderInt("Method", &methodIndex, 0, static_cast<int>(choices.size() - 1), choices[methodIndex].label);
+	const bool methodChanged = ImGui::SliderInt(T("feature.upscaling.method", "Method"), &methodIndex, 0, static_cast<int>(choices.size() - 1), choices[methodIndex].label);
 	ImGui::EndDisabled();
 	methodIndex = std::clamp(methodIndex, 0, static_cast<int>(choices.size() - 1));
 	const auto& selected = choices[methodIndex];
@@ -1485,7 +1592,7 @@ void Upscaling::DrawEssentialSettings()
 			settings.fsr4RuntimeEnable = selected.useRuntimeFsr4;
 	}
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted(renderDocBlocksUpscaling ? "Upscaling is disabled while RenderDoc capture is active." : "Selects the upscaling backend.");
+		ImGui::TextUnformatted(renderDocBlocksUpscaling ? T("feature.upscaling.upscaling_is_disabled_while_renderdoc_capture_is_active", "Upscaling is disabled while RenderDoc capture is active.") : T("feature.upscaling.selects_the_upscaling_backend", "Selects the upscaling backend."));
 
 	const auto method = GetUpscaleMethod();
 	if (method != UpscaleMethod::kNONE && method != UpscaleMethod::kTAA) {
@@ -1493,23 +1600,24 @@ void Upscaling::DrawEssentialSettings()
 		const char* baseLabel = GetQualityModeName(settings.qualityMode, method == UpscaleMethod::kDLSS);
 		const std::string qualityLabel = std::format("{} ( {:.2f}x )", baseLabel, GetQualityModeResolutionScale(settings.qualityMode));
 		int qualityMode = static_cast<int>(settings.qualityMode);
-		if (ImGui::SliderInt("Upscale Preset", &qualityMode, 0, static_cast<int>(kQualityModeMaxIndex), qualityLabel.c_str())) {
+		if (ImGui::SliderInt(T("feature.upscaling.upscale_preset", "Upscale Preset"), &qualityMode, 0, static_cast<int>(kQualityModeMaxIndex), qualityLabel.c_str())) {
 			settings.qualityMode = static_cast<uint>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Controls the internal render scale and quality level.");
+			ImGui::TextUnformatted(T("feature.upscaling.controls_the_internal_render_scale_and_quality_level", "Controls the internal render scale and quality level."));
 
 		if (method == UpscaleMethod::kFSR) {
-			ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
+			DrawFsrTemporalTuningSettings();
+			ImGui::SliderFloat(T("feature.upscaling.sharpness", "Sharpness"), &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
 		} else if (method == UpscaleMethod::kDLSS) {
-			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
+			DrawSharpeningSettings();
 		}
 	}
 
-	ImGui::SeparatorText("Frame Generation");
+	ImGui::SeparatorText(T("feature.upscaling.frame_generation", "Frame Generation"));
 	DrawFrameGenerationEnabledToggle(settings);
 	if ((settings.frameGenerationMode != 0) != IsFrameGenerationDx12PathActive())
-		Util::Text::Warning("Warning: Requires restart");
+		Util::Text::Warning("%s", T("feature.upscaling.warning_requires_restart", "Warning: Requires restart"));
 	DrawFrameGenerationForceEnableToggle(*this);
 }
 
@@ -1519,7 +1627,10 @@ void Upscaling::LoadSettings(json& o_json)
 	const bool hasFsr4RuntimeSelectionSchemaVersion = o_json.contains("fsr4RuntimeSelectionSchemaVersion");
 	const bool hasDLSSPreset = o_json.contains("dlssPreset");
 	const uint legacyDLSSPreset = o_json.value("presetDLSS", 0u);
-	settings = o_json;
+	auto normalizedSettings = o_json;
+	if (MotionSharpening::NormalizeLoadedSettings(normalizedSettings))
+		logger::warn("[Upscaling] Invalid optional motion-sharpening values were restored to defaults");
+	settings = normalizedSettings;
 	if (!hasFsr4RuntimeSelectionSchemaVersion)
 		settings.fsr4RuntimeSelectionSchemaVersion = 0;
 	ApplyLegacyFsr4RuntimeSelectionMigration(settings, fidelityFX.GetFsr4AdapterSupport());
@@ -1603,6 +1714,7 @@ struct BSImageSpace_Init_FXAA
 };
 void Upscaling::PostPostLoad()
 {
+	FSRTemporalTuningDevBenchBridge::Install();
 	bool isGOG = !GetModuleHandle(L"steam_api64.dll");
 	stl::detour_thunk<MenuManagerDrawInterfaceStartHook>(REL::RelocationID(79947, 82084));
 
@@ -1656,6 +1768,7 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 	main.UAV->GetDesc(&uavDesc);
 
 	texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	texDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 
 	if (a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR) {
 		texDesc.Format = DXGI_FORMAT_R8_UNORM;
@@ -1663,13 +1776,13 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		uavDesc.Format = texDesc.Format;
 
 		if (!reactiveMaskTexture) {
-			reactiveMaskTexture = std::make_unique<Texture2D>(texDesc);
+			reactiveMaskTexture = CreateOptionalSharedGuide(texDesc, "Upscaling::ReactiveMask");
 			reactiveMaskTexture->CreateSRV(srvDesc);
 			reactiveMaskTexture->CreateUAV(uavDesc);
 		}
 
 		if (!transparencyCompositionMaskTexture) {
-			transparencyCompositionMaskTexture = std::make_unique<Texture2D>(texDesc);
+			transparencyCompositionMaskTexture = CreateOptionalSharedGuide(texDesc, "Upscaling::TransparencyMask");
 			transparencyCompositionMaskTexture->CreateSRV(srvDesc);
 			transparencyCompositionMaskTexture->CreateUAV(uavDesc);
 		}
@@ -1689,7 +1802,7 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		depthUavDesc.Format = depthDesc.Format;
 		depthUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
 
-		fsrDepthTexture = std::make_unique<Texture2D>(depthDesc, "Upscaling::FsrDepth");
+		fsrDepthTexture = CreateOptionalSharedGuide(depthDesc, "Upscaling::FsrDepth");
 		fsrDepthTexture->CreateSRV(depthSrvDesc);
 		fsrDepthTexture->CreateUAV(depthUavDesc);
 	}
@@ -1711,12 +1824,13 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 
 			D3D11_TEXTURE2D_DESC motionTexDesc{};
 			motionVector.texture->GetDesc(&motionTexDesc);
+			motionTexDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 
 			texDesc.Format = motionTexDesc.Format;
 			srvDesc.Format = texDesc.Format;
 			uavDesc.Format = texDesc.Format;
 
-			motionVectorCopyTexture = std::make_unique<Texture2D>(motionTexDesc);
+			motionVectorCopyTexture = CreateOptionalSharedGuide(motionTexDesc, "Upscaling::MotionVectors");
 			motionVectorCopyTexture->CreateSRV(srvDesc);
 			motionVectorCopyTexture->CreateUAV(uavDesc);
 		}
@@ -1779,6 +1893,8 @@ void Upscaling::DestroyAllUpscalingTextureResources()
 
 bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 {
+	(void)fidelityFX.RequestTemporalTuning(settings.fsrTemporalTuning);
+	fidelityFX.SetRuntimeSharedGuideInputsEnabled(settings.fsrSharedGuideInputs);
 	const auto acceptFSRResourceLifecycleResult = [&](FidelityFX::LifecycleResult a_result, const char* a_reason) {
 		if (a_result == FidelityFX::LifecycleResult::Ready) {
 			fsrResourceTransitionPending = false;
@@ -1937,8 +2053,10 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		D3D11_TEXTURE2D_DESC expectedMaskDesc = mainDesc;
 		expectedMaskDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		expectedMaskDesc.Format = DXGI_FORMAT_R8_UNORM;
+		expectedMaskDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 
 		D3D11_TEXTURE2D_DESC expectedMotionVectorDesc = motionVectorDesc;
+		expectedMotionVectorDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 		const auto expectedFsrDepthDesc = BuildFlatFsrDepthDesc(mainDesc);
 		const bool requiresFsrDepth =
 			a_upscalemethod == UpscaleMethod::kFSR;
@@ -1947,10 +2065,10 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		expectedSharpenerDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
 		const bool vendorTextureStateInvalid =
-			!TextureMatchesRequirements(reactiveMaskTexture, expectedMaskDesc, true, true) ||
-			!TextureMatchesRequirements(transparencyCompositionMaskTexture, expectedMaskDesc, true, true) ||
-			!TextureMatchesRequirements(motionVectorCopyTexture, expectedMotionVectorDesc, true, true) ||
-			(requiresFsrDepth && !TextureMatchesRequirements(fsrDepthTexture, expectedFsrDepthDesc, true, true)) ||
+			!TextureMatchesRequirements(reactiveMaskTexture, expectedMaskDesc, true, true, true) ||
+			!TextureMatchesRequirements(transparencyCompositionMaskTexture, expectedMaskDesc, true, true, true) ||
+			!TextureMatchesRequirements(motionVectorCopyTexture, expectedMotionVectorDesc, true, true, true) ||
+			(requiresFsrDepth && !TextureMatchesRequirements(fsrDepthTexture, expectedFsrDepthDesc, true, true, true)) ||
 			(a_upscalemethod == UpscaleMethod::kFSR && !TextureMatchesRequirements(fsrOutputTexture, expectedSharpenerDesc, true, true)) ||
 			(a_upscalemethod == UpscaleMethod::kDLSS && !TextureMatchesRequirements(sharpenerTexture, expectedSharpenerDesc, true, true));
 
@@ -2024,6 +2142,67 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 
 	fsrResourceTransitionPending = false;
 	return true;
+}
+
+bool Upscaling::RequestMonoProfile(UpscaleMethod method, uint32_t qualityMode, uint32_t preset, bool automatic)
+{
+	if (method < UpscaleMethod::kNONE || method > UpscaleMethod::kDLSS || qualityMode > kQualityModeMaxIndex ||
+		preset > kDLSSPresetMaxIndex || IsBackendShutdownRequested() || IsRenderDocUpscalingBlocked() ||
+		(method == UpscaleMethod::kDLSS && (!streamline.featureCheckComplete || !streamline.featureDLSS)))
+		return false;
+	const MonoProfile requested{ method, qualityMode, preset, automatic };
+	if (GetMonoConfiguredProfile() == requested) return true;
+	settings.upscaleMethod = static_cast<uint>(method);
+	if (method != UpscaleMethod::kDLSS) settings.upscaleMethodNoDLSS = static_cast<uint>(method);
+	settings.qualityMode = qualityMode; settings.dlssPreset = preset; settings.fsr4RuntimeEnable = automatic;
+	RequestHistoryReset();
+	return true;
+}
+
+bool Upscaling::SetFSRTemporalTuningSettings(const FSRTemporalTuningPolicy::Settings& requested)
+{
+	if (!fidelityFX.RequestTemporalTuning(requested)) return false;
+	settings.fsrTemporalTuning = requested;
+	return true;
+}
+
+Upscaling::MonoProfile Upscaling::GetMonoConfiguredProfile() const
+{
+	return { static_cast<UpscaleMethod>(streamline.featureDLSS ? settings.upscaleMethod : settings.upscaleMethodNoDLSS),
+		ClampQualityModeUInt(settings.qualityMode), std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex), settings.fsr4RuntimeEnable };
+}
+
+Upscaling::MonoProfile Upscaling::GetMonoEffectiveProfile() const
+{
+	return { performanceCostAppliedUpscaleMethod, performanceCostAppliedQualityMode,
+		performanceCostAppliedDLSSPreset, performanceCostAppliedUpscaleMethod == UpscaleMethod::kFSR ?
+			performanceCostAppliedFSRRuntimeFsr4Active : settings.fsr4RuntimeEnable };
+}
+
+bool Upscaling::IsMonoProfileMutationBlocked() const
+{
+	return IsBackendShutdownRequested() || IsRenderDocUpscalingBlocked();
+}
+
+bool Upscaling::HasMonoEffectiveProfile() const
+{
+	return performanceCostAppliedStateValid && performanceCostAppliedRevision != 0 && upscalingResourcesReady &&
+		!fsrResourceTransitionPending && !AreBackendsRetiringOrShutdown();
+}
+
+bool Upscaling::IsMonoProfileSelected(UpscaleMethod method, uint32_t qualityMode, uint32_t preset, bool automatic) const
+{
+	const MonoProfile requested{ method, qualityMode, preset, automatic };
+	if (GetMonoConfiguredProfile() != requested || !HasMonoEffectiveProfile() || GetUpscaleMethod() != method ||
+		!globals::state || performanceCostLastSuccessfulExecutedRevision != performanceCostAppliedRevision ||
+		performanceCostLastSuccessfulExecutedMethod != method || !IsFrameEvidenceRecent(globals::state->frameCount,
+			performanceCostLastSuccessfulExecutedFrame, kPerformanceMeasurementRecentEvidenceFrames))
+		return false;
+	const bool automaticConfigured = method == UpscaleMethod::kFSR && automatic && fidelityFX.IsRuntimeFsr4Available();
+	return performanceCostAppliedUpscaleMethod == method && performanceCostAppliedQualityMode == qualityMode &&
+		performanceCostAppliedDLSSPreset == preset && performanceCostAppliedFSRRuntimeFsr4Configured == automaticConfigured &&
+		std::abs(performanceCostAppliedResolutionScale.x - resolutionScale.x) <= 1e-4f &&
+		std::abs(performanceCostAppliedResolutionScale.y - resolutionScale.y) <= 1e-4f;
 }
 
 bool Upscaling::IsPerformanceCostMeasurementReady() const
@@ -2222,6 +2401,11 @@ void Upscaling::ConfigureTAA()
 
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
+	if (postLoadRuntimeResetRequested.exchange(false, std::memory_order_acq_rel)) {
+		RequestHistoryReset();
+		neuralGuidesFrame = neuralWorldFrame = UINT32_MAX;
+		NeuralRendering::MonoRenderer::Instance().ResetWorldHistory();
+	}
 	auto upscaleMethod = GetUpscaleMethod();
 
 	// Cache original TAA values for UI
@@ -2353,7 +2537,8 @@ void Upscaling::SetupResources()
 
 	upscalingResourcesReady = CheckResources(GetUpscaleMethod());
 
-	rcas.Initialize();
+	rcas.Initialize(settings.motionAdaptiveRCAS);
+	lumaSharpen.Initialize(settings.motionAdaptiveRCAS);
 
 	if (d3d12SwapChainActive)
 		dx12SwapChain.CreateSharedResources();
@@ -2361,6 +2546,7 @@ void Upscaling::SetupResources()
 
 void Upscaling::ClearShaderCache()
 {
+	NeuralRendering::MonoRenderer::Instance().ResetShaderCache();
 	for (int i = 0; i < 4; ++i) {
 		encodeTexturesCS[i].Reset();
 	}
@@ -2372,6 +2558,8 @@ void Upscaling::ClearShaderCache()
 	upscaleVS.Reset();
 	copyDepthToSharedBufferPS.Reset();
 	compositeFrameGenerationUIFallbackCS.Reset();
+	rcas.ClearShaderCache();
+	lumaSharpen.ClearShaderCache();
 }
 
 bool Upscaling::CopySharedD3D12Resources(
@@ -2832,10 +3020,10 @@ bool Upscaling::IsFrameRateLimitConfigured() const
 {
 	if (IsFrameGenerationDx12PathActive() && !UsesDLSSGFrameGeneration())
 		return settings.frameLimitMode != 0;
-
-	return streamline.initialized &&
-	       streamline.reflexSupportedOnCurrentAdapter &&
-	       streamline.featureReflex && settings.reflexUseFPSLimit;
+	if (UsesDLSSGFrameGeneration())
+		return streamlineDX12.initialized && streamlineDX12.featureReflex && settings.reflexUseFPSLimit;
+	const auto status = nativeReflex.GetStatus();
+	return status.acceptedValid && status.accepted.frameLimitUs != 0;
 }
 
 bool Upscaling::IsFrameGenerationActive() const
@@ -3222,14 +3410,31 @@ void Upscaling::LoadUpscalingSDKs(
 
 void Upscaling::UpdateReflex()
 {
-	if (IsBackendShutdownRequested()) {
+	if (IsBackendShutdownRequested() || !globals::state)
+		return;
+	if (IsFrameGenerationDx12PathActive()) {
+		// The SE DX12 graph retains the sole pacing/marker owner for frame generation.
+		if (!nativeReflex.Disable(GetTickCount64()).disabled)
+			return;
+		if (UsesDLSSGFrameGeneration())
+			streamlineDX12.UpdateReflex();
 		return;
 	}
 
-	if (UsesDLSSGFrameGeneration())
-		streamlineDX12.UpdateReflex();
-	else
-		streamline.UpdateReflex();
+	Reflex::Options options{};
+	options.mode = !settings.reflexLowLatencyMode ? Reflex::Mode::Off :
+		settings.reflexLowLatencyBoost ? Reflex::Mode::Boost : Reflex::Mode::On;
+	const float fps = std::isfinite(settings.reflexFPSLimit) ? std::clamp(settings.reflexFPSLimit, 20.0f, 240.0f) : 60.0f;
+	options.frameLimitUs = settings.reflexUseFPSLimit ? static_cast<uint32_t>(std::lround(1000000.0 / fps)) : 0u;
+	options.useMarkersToOptimize = ReflexPolicy::ResolveCSMarkerOptimization(
+		true, streamline.featurePCL, settings.reflexUseMarkersToOptimize).enabled;
+	const auto outcome = nativeReflex.Update(options, globals::state->frameCount, GetTickCount64());
+	if (outcome.notice == Reflex::Notice::Failure || outcome.notice == Reflex::Notice::Exhausted)
+		logger::warn("[Reflex] Native operation {} failed with {} (attempt {}, state {})",
+			static_cast<uint32_t>(outcome.status.operation), static_cast<int32_t>(outcome.status.nativeStatus),
+			outcome.status.failures, static_cast<uint32_t>(outcome.status.health));
+	else if (outcome.notice == Reflex::Notice::Recovered)
+		logger::info("[Reflex] Native pacing recovered");
 }
 
 void Upscaling::RequestBackendShutdown()
@@ -3299,6 +3504,10 @@ bool Upscaling::ProcessBackendShutdownRequest()
 		return expected == BackendLifecycle::kRetired;
 	}
 
+	if (!NeuralRendering::MonoRenderer::Instance().Retire(true)) {
+		backendLifecycle.store(BackendLifecycle::kShutdownRequested, std::memory_order_release);
+		return false;
+	}
 	if (!streamline.Shutdown()) {
 		backendLifecycle.store(
 			BackendLifecycle::kShutdownRequested,
@@ -3311,6 +3520,8 @@ bool Upscaling::ProcessBackendShutdownRequest()
 			std::memory_order_release);
 		return false;
 	}
+	(void)nativeReflex.Disable(GetTickCount64());
+	(void)nativeReflex.Shutdown();
 	dx12SwapChain.RetireStreamlineProxyGraph();
 	backendShutdownRequiresPresent.store(false, std::memory_order_release);
 	backendLifecycle.store(BackendLifecycle::kRetired, std::memory_order_release);
@@ -3446,6 +3657,24 @@ bool Upscaling::Upscale()
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	const bool requiresFsrDepth =
 		upscaleMethod == UpscaleMethod::kFSR;
+	if (requiresFsrDepth) {
+		bool replaced = false;
+		for (auto* guide : { &fsrDepthTexture, &motionVectorCopyTexture, &reactiveMaskTexture, &transparencyCompositionMaskTexture }) {
+			if (*guide && fidelityFX.IsRuntimeSharedGuideQuarantined((*guide)->resource.get())) {
+				// The failed provider retains the old generation; future D3D11 writes use new storage.
+				guide->reset();
+				replaced = true;
+			}
+		}
+		if (replaced) {
+			try { CreateUpscalingTextureResources(upscaleMethod); }
+			catch (const std::exception& error) {
+				logger::error("[Upscaling] Replacing quarantined FSR guides failed: {}", error.what());
+				return false;
+			}
+			RequestHistoryReset();
+		}
+	}
 	const bool hasEncodeResources =
 		main.texture &&
 		temporalAAMask.SRV &&
@@ -3544,14 +3773,26 @@ bool Upscaling::Upscale()
 		state->BeginPerfEvent("Upscaling");
 		TracyD3D11Zone(state->tracyCtx, "Upscaling Dispatch");
 		ID3D11Resource* motionVectorResource = motionVectorCopyTexture->resource.get();
+		auto* neuralInput = PrepareNeuralUpscalerInput(main.texture, renderWidth, renderHeight);
+		const bool useNeuralInput = neuralInput != nullptr;
+		if (previousNeuralUpscalerInput != useNeuralInput) {
+			RequestHistoryReset();
+			historyResetThisFrame = true;
+		}
+		ID3D11Resource* colorInput = useNeuralInput ? neuralInput : main.texture;
 
 		if (upscaleMethod == UpscaleMethod::kDLSS) {
-			upscaleSuccessful = streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource);
+			upscaleSuccessful = streamline.Upscale(colorInput, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource);
 		} else if (upscaleMethod == UpscaleMethod::kFSR) {
 			ID3D11Resource* fsrDepth = fsrDepthTexture->resource.get();
-			upscaleSuccessful = fidelityFX.Upscale(main.texture, fsrOutputTexture->resource.get(), fsrDepth, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource, settings.sharpnessFSR);
+			upscaleSuccessful = fidelityFX.Upscale(colorInput, fsrOutputTexture->resource.get(), fsrDepth, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource, settings.sharpnessFSR);
 			if (upscaleSuccessful)
 				context->CopyResource(main.texture, fsrOutputTexture->resource.get());
+		}
+		if (upscaleSuccessful) {
+			previousNeuralUpscalerInput = useNeuralInput;
+			if (useNeuralInput)
+				NeuralRendering::MonoRenderer::Instance().AcknowledgePresentation();
 		}
 
 		state->EndPerfEvent();
@@ -3759,6 +4000,244 @@ bool Upscaling::UpscaleDepth()
 	return true;
 }
 
+Upscaling::DLSSSharpenerMode Upscaling::GetDLSSSharpenerMode() const
+{
+	return static_cast<DLSSSharpenerMode>(std::min<uint>(settings.dlssSharpenerMode,
+		static_cast<uint>(DLSSSharpenerMode::LumaUnsharp)));
+}
+
+bool Upscaling::NeedsCharacterCategoryShaders() const
+{
+	return neuralRenderingFeatureAvailable && neuralSettings.enabled &&
+		(neuralSettings.charactersOnly || neuralSettings.sceneCategoryStrengths);
+}
+
+bool Upscaling::IsNeuralRenderingEnabled() const
+{
+	return neuralRenderingFeatureAvailable && neuralSettings.enabled &&
+		fidelityFX.IsNvidiaAdapterDetected() && NeuralRendering::Runtime::IsInstalled();
+}
+
+const char* Upscaling::GetNeuralRenderingMutationBlockReason() const
+{
+	if (!globals::state || !globals::menu)
+		return T("feature.neural_rendering.toggle_not_ready", "Neural rendering settings are not ready.");
+	if (globals::state->IsPersistentMutationBlocked() || PerformanceTuningRenderer::HasActiveMeasurements() ||
+		(globals::shaderCache && (globals::shaderCache->IsCapturingActiveShaders() || globals::shaderCache->IsAwaitingMenuCloseCapture())))
+		return T("feature.neural_rendering.toggle_busy", "Neural rendering settings are locked during save/load, performance measurement or shader capture.");
+	if (IsMonoProfileMutationBlocked())
+		return T("feature.neural_rendering.toggle_backend_busy", "Neural rendering settings are locked during backend shutdown or RenderDoc capture.");
+	return nullptr;
+}
+
+bool Upscaling::ToggleNeuralRendering(std::string* error)
+{
+	if (error)
+		error->clear();
+	const auto reject = [error](const char* reason) {
+		if (error)
+			*error = reason;
+		return false;
+	};
+	if (const auto* reason = GetNeuralRenderingMutationBlockReason())
+		return reject(reason);
+	if (!neuralSettings.enabled) {
+		if (!neuralRenderingFeatureAvailable)
+			return reject(T("feature.neural_rendering.toggle_unavailable", "The Neural Rendering feature is unavailable."));
+		if (!NeuralRendering::Runtime::IsInstalled())
+			return reject(T("feature.neural_rendering.missing", "Install the optional compatible nvngx_dlssnr.dll in Data/Shaders/Upscaling/Streamline, then restart the game."));
+		if (!fidelityFX.IsNvidiaAdapterDetected())
+			return reject(T("feature.neural_rendering.hardware", "Neural rendering requires a supported NVIDIA graphics device."));
+		if (IsFrameGenerationConfigured() || IsFrameGenerationDx12PathActive())
+			return reject(T("feature.neural_rendering.frame_generation_gate", "Neural rendering is suspended while frame generation is configured or its DX12 presentation path is active. Disable frame generation and restart to use neural rendering."));
+		const auto method = GetUpscaleMethod();
+		if (neuralSettings.mode == 2 && method != UpscaleMethod::kDLSS && method != UpscaleMethod::kFSR)
+			return reject(T("feature.neural_rendering.toggle_upscaler_required", "Scene-before-upscaling neural rendering requires DLSS or FSR."));
+		const auto snapshot = NeuralRendering::MonoRenderer::Instance().Snapshot();
+		if (snapshot.quarantined)
+			return reject(T("feature.neural_rendering.toggle_quarantined", "Neural rendering resources are quarantined. Restart the game before enabling it."));
+		if (snapshot.recoveryPending || AreBackendsRetiringOrShutdown())
+			return reject(T("feature.neural_rendering.toggle_recovery", "Wait for backend recovery or resource retirement before enabling neural rendering."));
+	}
+	if (!globals::menu->PrepareSettingsMutation())
+		return reject(T("feature.neural_rendering.toggle_baseline", "Could not preserve the settings baseline. Neural rendering was not changed."));
+	neuralSettings.enabled = !neuralSettings.enabled;
+	RequestHistoryReset();
+	globals::menu->RequestSettingsDirtyCheck();
+	return true;
+}
+
+bool Upscaling::IsNeuralRenderingRequested() const
+{
+	auto* state = globals::state;
+	auto* ui = globals::game::ui;
+	const bool combat = neuralSettings.pauseInCombat && globals::game::player && globals::game::player->IsInCombat();
+	return state && state->inWorld && !IsBackendShutdownRequested() && !IsRenderDocUpscalingBlocked() &&
+		NeuralRendering::AllowsNeuralFrame(neuralRenderingFeatureAvailable && neuralSettings.enabled,
+			NeuralRendering::Runtime::IsInstalled(), fidelityFX.IsNvidiaAdapterDetected(),
+			IsFrameGenerationConfigured(), IsFrameGenerationDx12PathActive(), IsMainMenuContextActive() || IsLoadingMenuContextActive(),
+			state->IsSaveLoadSafeModeActive(), ui && ui->GameIsPaused(), combat);
+}
+
+bool Upscaling::IsNeuralCharacterSelectionRequested() const
+{
+	return NeedsCharacterCategoryShaders() && IsNeuralRenderingRequested();
+}
+
+NeuralRendering::ActorAdmission Upscaling::ObserveNeuralActor(const NeuralRendering::ActorObservation& observation)
+{
+	if (!IsNeuralCharacterSelectionRequested())
+		return { false, 255u, observation.frame, observation.rectangle };
+	return NeuralRendering::MonoRenderer::Instance().ObserveActor(observation, neuralSettings);
+}
+
+void Upscaling::SetNeuralSceneCategories(ID3D11ShaderResourceView* categories, ID3D11ShaderResourceView* depth,
+	uint32_t frame, uint32_t width, uint32_t height)
+{
+	NeuralRendering::MonoRenderer::Instance().SetSceneCategories(categories, depth, frame, width, height);
+}
+
+void Upscaling::CaptureNeuralFrameGuides()
+{
+	neuralGuidesFrame = neuralWorldFrame = UINT32_MAX;
+	neuralFinalSceneIsHDR = false;
+	const bool requested = IsNeuralRenderingRequested();
+	auto& exposure = NeuralRendering::Color::ExposureCapture::Instance();
+	exposure.Request(requested && (neuralSettings.captureExposure || neuralSettings.exposureSource != 0));
+	exposure.RefreshProducers();
+	auto& neural = NeuralRendering::MonoRenderer::Instance();
+	neural.Service(requested, neuralSettings.enabled, neuralSettings.prewarm);
+	const bool menuBoundary = IsMainMenuContextActive() || IsLoadingMenuContextActive();
+	if (!requested && menuBoundary && neuralSettings.prewarm && IsNeuralRenderingEnabled() &&
+		!IsFrameGenerationConfigured() && !IsFrameGenerationDx12PathActive() && !AreBackendsRetiringOrShutdown() &&
+		!IsRenderDocUpscalingBlocked() && globals::state && !globals::state->IsEngineSaveLoadActivityActive() &&
+		globals::game::renderer && globals::d3d::device && globals::d3d::context && upscalingResourcesReady &&
+		(!globals::shaderCache || !globals::shaderCache->IsCompiling())) {
+		const auto plan = GetRuntimeResolutionPlan();
+		auto& targets = globals::game::renderer->GetRuntimeData().renderTargets;
+		auto& hdr = globals::features::hdrDisplay;
+		const bool reduced = neuralSettings.mode == 2;
+		const bool vendor = GetUpscaleMethod() == UpscaleMethod::kDLSS || GetUpscaleMethod() == UpscaleMethod::kFSR;
+		auto* scene = reduced ? targets[RE::RENDER_TARGETS::kMAIN].texture :
+			hdr.loaded && hdr.settings.enableHDR && hdr.hdrTexture ? hdr.hdrTexture->resource.get() : targets[RE::RENDER_TARGETS::kFRAMEBUFFER].texture;
+		const auto dimensions = reduced ? plan.engineRenderSize : plan.finalOutputSize;
+		if (scene && (!reduced || vendor) && dimensions.x && dimensions.y)
+			neural.Prewarm({ globals::d3d::device, globals::d3d::context, scene, globals::state->frameCount,
+				dimensions.x, dimensions.y, globals::features::linearLighting.loaded, true },
+				plan.engineRenderSize.x, plan.engineRenderSize.y, neuralSettings);
+	}
+	if (!requested || !globals::game::renderer || !globals::d3d::device || !globals::d3d::context)
+		return;
+	const auto plan = GetRuntimeResolutionPlan();
+	auto* renderer = globals::game::renderer;
+	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto& motion = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+	if (neural.CaptureGuides(globals::d3d::device, globals::d3d::context, depth.depthSRV, motion.SRV,
+			globals::state->frameCount, plan.engineRenderSize.x, plan.engineRenderSize.y))
+		neuralGuidesFrame = globals::state->frameCount;
+}
+
+ID3D11Texture2D* Upscaling::PrepareNeuralUpscalerInput(ID3D11Texture2D* color, uint32_t width, uint32_t height)
+{
+	if (!IsNeuralRenderingRequested() || neuralSettings.mode != 2 || neuralGuidesFrame != globals::state->frameCount)
+		return nullptr;
+	const auto depth = Util::GetCameraData();
+	return NeuralRendering::MonoRenderer::Instance().Apply({ globals::d3d::device, globals::d3d::context,
+		color, globals::state->frameCount, width, height, globals::features::linearLighting.loaded,
+		ShouldResetHistoryThisFrame(), { depth.x, depth.y, depth.z, depth.w } }, neuralSettings);
+}
+
+void Upscaling::ApplyFinalNeuralFrame()
+{
+	if (!IsNeuralRenderingRequested() || neuralSettings.mode != 0 || !globals::game::renderer ||
+		neuralGuidesFrame != globals::state->frameCount || neuralWorldFrame != globals::state->frameCount)
+		return;
+	auto& hdr = globals::features::hdrDisplay;
+	auto& framebuffer = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER];
+	auto* color = neuralFinalSceneIsHDR && hdr.hdrTexture ? hdr.hdrTexture->resource.get() : framebuffer.texture;
+	if (!color) return;
+	D3D11_TEXTURE2D_DESC description{};
+	color->GetDesc(&description);
+	const auto depth = Util::GetCameraData();
+	auto& neural = NeuralRendering::MonoRenderer::Instance();
+	if (neural.Apply({ globals::d3d::device, globals::d3d::context, color, globals::state->frameCount,
+			description.Width, description.Height, neuralFinalSceneIsHDR && globals::features::linearLighting.loaded,
+			ShouldResetHistoryThisFrame(), { depth.x, depth.y, depth.z, depth.w }, { jitter.x, jitter.y } }, neuralSettings) &&
+		neural.Commit(globals::d3d::device, globals::d3d::context, color))
+		neural.AcknowledgePresentation();
+}
+
+void Upscaling::DrawFsrTemporalTuningSettings(bool a_collapsible)
+{
+	if (a_collapsible && !ImGui::TreeNode(T("feature.upscaling.fsr_temporal_tuning", "Temporal reconstruction tuning")))
+		return;
+	Util::Widgets::Checkbox(T("feature.upscaling.fsr_shared_guides", "Share typed guide textures with runtime FSR"), &settings.fsrSharedGuideInputs);
+	ImGui::TextWrapped("%s", T("feature.upscaling.fsr_shared_guides_help", "Uses the mono depth, motion and mask textures directly when their shared resources are compatible. Other inputs retain the copied path."));
+	auto& tuning = settings.fsrTemporalTuning;
+	Util::Widgets::Checkbox(T("feature.upscaling.fsr_temporal_enable", "Override provider defaults"), &tuning.enabled);
+	ImGui::BeginDisabled(!tuning.enabled);
+	Util::Widgets::SliderFloat(T("feature.upscaling.fsr_velocity", "Velocity factor"), &tuning.velocityFactor, 0.0f, 1.0f);
+	Util::Widgets::SliderFloat(T("feature.upscaling.fsr_reactive", "Reactiveness"), &tuning.reactivenessScale, 0.0f, 4.0f);
+	Util::Widgets::SliderFloat(T("feature.upscaling.fsr_shading", "Shading change response"), &tuning.shadingChangeScale, 0.0f, 4.0f);
+	Util::Widgets::SliderFloat(T("feature.upscaling.fsr_accumulation", "Accumulation per frame"), &tuning.accumulationAddedPerFrame, 0.0f, 1.0f);
+	Util::Widgets::SliderFloat(T("feature.upscaling.fsr_disocclusion", "Minimum disocclusion accumulation"), &tuning.minimumDisocclusionAccumulation, -1.0f, 1.0f);
+	ImGui::EndDisabled();
+	if (ImGui::Button(T("feature.upscaling.fsr_temporal_reset", "Restore provider defaults")))
+		tuning = {};
+	const auto snapshot = fidelityFX.GetTemporalTuningSnapshot();
+	ImGui::Text(T("feature.upscaling.fsr_temporal_status", "Runtime tuning: %s"), FSRTemporalTuningPolicy::StatusLabel(snapshot.status));
+	ImGui::TextWrapped("%s", T("feature.upscaling.fsr_temporal_help", "Applies only to runtime providers supporting all five controls. Unsupported or rejected profiles keep provider defaults. Changes reset reconstruction history."));
+	if (a_collapsible)
+		ImGui::TreePop();
+}
+
+void Upscaling::DrawSharpeningSettings()
+{
+	const char* modes[] = {
+		T("feature.upscaling.sharpener_off", "Off"),
+		T("feature.upscaling.sharpener_rcas", "RCAS"),
+		T("feature.upscaling.sharpener_luma", "Luma Unsharp")
+	};
+	int mode = static_cast<int>(GetDLSSSharpenerMode());
+	if (Util::Widgets::Combo(T("feature.upscaling.sharpener", "Sharpener"), &mode, modes, 3))
+		settings.dlssSharpenerMode = static_cast<uint>(mode);
+	ImGui::BeginDisabled(mode == 0);
+	Util::Widgets::SliderFloat(T("feature.upscaling.sharpness", "Sharpness"), &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
+	Util::Widgets::Checkbox(T("feature.upscaling.motion_sharpening", "Motion-adaptive sharpening"), &settings.motionAdaptiveRCAS);
+	if (settings.motionAdaptiveRCAS) {
+		Util::Widgets::SliderFloat(T("feature.upscaling.motion_adjustment", "Motion adjustment"), &settings.motionSharpnessAdjustment, -1.0f, 1.0f, "%.2f");
+		Util::Widgets::SliderFloat(T("feature.upscaling.motion_threshold", "Motion threshold (pixels)"), &settings.motionSharpnessThreshold, 0.0f, 64.0f, "%.1f");
+		Util::Widgets::SliderFloat(T("feature.upscaling.motion_cap", "Motion sharpness cap"), &settings.motionSharpnessCap, 0.0f, 1.0f, "%.2f");
+	}
+	ImGui::EndDisabled();
+}
+
+Upscaling::RuntimeResolutionPlan Upscaling::GetRuntimeResolutionPlan() const
+{
+	RuntimeResolutionPlan plan;
+	plan.menuContextActive = IsMainMenuContextActive() || (globals::state && globals::state->isMapMenuOpen);
+	plan.loadingMenuActive = IsLoadingMenuContextActive();
+	const auto* viewport = globals::game::graphicsState;
+	if (!viewport)
+		return plan;
+	plan.finalOutputSize = { viewport->screenWidth, viewport->screenHeight };
+	const auto dimension = [](uint32_t output, float ratio) {
+		if (!output || !std::isfinite(ratio) || ratio <= 0.0f)
+			return 0u;
+		return std::clamp(static_cast<uint32_t>(static_cast<double>(output) * std::min(ratio, 1.0f)), 1u, output);
+	};
+	plan.engineRenderSize = { dimension(viewport->screenWidth, resolutionScale.x),
+		dimension(viewport->screenHeight, resolutionScale.y) };
+	return plan;
+}
+
+bool Upscaling::IsTextureStreamingTransitionActive() const
+{
+	return IsLoadingMenuContextActive() || fsrResourceTransitionPending ||
+		AreBackendsRetiringOrShutdown() ||
+		(IsUpscalingActive() && !upscalingResourcesReady);
+}
+
 bool Upscaling::ApplySharpening()
 {
 	if (!dlssSharpenerOutputValid || !sharpenerTexture)
@@ -3784,18 +4263,35 @@ bool Upscaling::ApplySharpening()
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
 	static bool loggedSharpeningFallback = false;
-	const bool wantsSharpening = settings.sharpnessDLSS > 0.0f;
+	const auto mode = GetDLSSSharpenerMode();
+	const bool wantsSharpening = settings.sharpnessDLSS > 0.0f && mode != DLSSSharpenerMode::Off;
 	bool sharpened = false;
 	if (wantsSharpening && main.UAV && sharpenerTexture->srv) {
-		// Match FSR3's slider-to-RCAS conversion exactly.
-		float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
-		currentSharpness = exp2(-currentSharpness);
-		sharpened = rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness);
+		const auto plan = GetRuntimeResolutionPlan();
+		const auto& motion = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+		D3D11_TEXTURE2D_DESC motionDesc{};
+		if (motion.texture)
+			motion.texture->GetDesc(&motionDesc);
+		const MotionSharpening::Region region{
+			{ 0, 0, plan.finalOutputSize.x, plan.finalOutputSize.y },
+			{ 0, 0, plan.engineRenderSize.x, plan.engineRenderSize.y },
+			{ 0, 0, motionDesc.Width, motionDesc.Height }
+		};
+		const MotionSharpening::Settings motionSettings{ settings.motionAdaptiveRCAS,
+			settings.motionSharpnessAdjustment, settings.motionSharpnessThreshold, settings.motionSharpnessCap };
+		const float fixedGain = exp2(2.0f * settings.sharpnessDLSS - 2.0f);
+		const auto regions = std::span<const MotionSharpening::Region>(&region, 1);
+		if (mode == DLSSSharpenerMode::LumaUnsharp)
+			sharpened = lumaSharpen.ApplyMotionAdaptiveSharpen(sharpenerTexture->srv.get(), main.UAV,
+				fixedGain * MotionSharpening::kMaximumLumaGain, settings.sharpnessDLSS, motionSettings, motion.SRV, regions);
+		else
+			sharpened = rcas.ApplyMotionAdaptiveSharpen(sharpenerTexture->srv.get(), main.UAV,
+				fixedGain, settings.sharpnessDLSS, motionSettings, motion.SRV, regions);
 	}
 
 	if (!sharpened) {
 		if (wantsSharpening && !loggedSharpeningFallback) {
-			logger::warn("[Upscaling] RCAS sharpening unavailable; resolving the current DLSS output without sharpening.");
+			logger::warn("[Upscaling] Sharpening unavailable; resolving the current DLSS output without sharpening.");
 			loggedSharpeningFallback = true;
 		}
 		context->CopyResource(main.texture, sharpenerTexture->resource.get());
@@ -3819,6 +4315,7 @@ void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)
 
 void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 {
+	globals::features::upscaling.ApplyFinalNeuralFrame();
 	globals::features::upscaling.PostDisplay();
 
 	// For non-Frame Gen HDR: redirect kFRAMEBUFFER.RTV to UI texture before vanilla UI renders
@@ -3837,6 +4334,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	auto& upscaling = globals::features::upscaling;
 	const auto upscaleMethod = upscaling.GetUpscaleMethod();
 	upscaling.PrepareHistoryResetForCurrentFrame();
+	upscaling.CaptureNeuralFrameGuides();
 	const bool frameGenerationRequested = upscaling.ShouldUseFrameGenerationThisFrame();
 	uint32_t frameGenerationRenderWidth = 0;
 	uint32_t frameGenerationRenderHeight = 0;
@@ -3879,6 +4377,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	if (upscaleMethod == UpscaleMethod::kNONE) {
 		// Keep vanilla TAA/water stabilization state untouched when no upscaler is active.
 		func(a_this, a3, a_target, a_4, a_5);
+		upscaling.neuralWorldFrame = globals::state ? globals::state->frameCount : UINT32_MAX;
 		upscaling.RecordPerformanceCostExecutedPath(upscaleMethod, true);
 		return;
 	}
@@ -3902,6 +4401,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		globals::features::hdrDisplay.RedirectFramebuffer();
 
 	func(a_this, a3, a_target, a_4, a_5);
+	upscaling.neuralWorldFrame = globals::state ? globals::state->frameCount : UINT32_MAX;
+	upscaling.neuralFinalSceneIsHDR = hdrLoaded;
 
 	// Restore kFRAMEBUFFER after ISHDR — hdrTexture now has the HDR scene
 	if (hdrLoaded)

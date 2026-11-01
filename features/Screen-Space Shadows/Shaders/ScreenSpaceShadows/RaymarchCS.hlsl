@@ -29,6 +29,9 @@ cbuffer PerFrame : register(b1)
 								 // The 'USE_HALF_PIXEL_OFFSET' macro might need to be defined if sampling at exact pixel coordinates isn't precise (e.g., if odd patterns appear in the shadow).
 
 	float2 DynamicRes;
+	uint DynamicSampleCount;
+	uint DynamicReadCount;
+	uint2 pad;
 
 	float SurfaceThickness;
 	float BilinearThreshold;
@@ -55,6 +58,8 @@ cbuffer PerFrame : register(b1)
 	parameters.ShadowContrast = ShadowContrast;
 
 	parameters.DynamicRes = DynamicRes;
+	parameters.DynamicSampleCount = DynamicSampleCount;
+	parameters.DynamicReadCount = DynamicReadCount;
 
 	parameters.UsePrecisionOffset = true;
 

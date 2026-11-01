@@ -1,4 +1,10 @@
 #include "InverseSquareLighting.h"
+#include "LocationContext.h"
+#include "Menu/SettingsPage.h"
+#include "State.h"
+#include "Utils/RendererContextAccess.h"
+#include "Utils/RuntimeToggle.h"
+#include "Utils/UI.h"
 
 #include "CSEditor/EditorWindow.h"
 #include "Features/InverseSquareLighting/Common.h"
@@ -61,7 +67,13 @@ bool InverseSquareLighting::DrawEnabledCheckbox()
 
 void InverseSquareLighting::DrawSettings()
 {
-	DrawEnabledCheckbox();
+	MenuUI::SettingsPage page("InverseSquareLighting", {
+														   { "appearance", T("feature.inverse_square_lighting.ui_how_it_works", "How it works"), T("feature.inverse_square_lighting.ui_learn_how_nearby_light_falloff_changes", "Learn how nearby light falloff changes."), T("feature.inverse_square_lighting.ui_nearby_light_falloff", "Nearby light falloff"), true, true, T("feature.inverse_square_lighting.ui_shape_nearby_lighting", "Shape nearby lighting") },
+													   });
+	if (!page.Is("appearance"))
+		return;
+
+	MenuUI::DetailText(T("feature.inverse_square_lighting.ui_nearby_lights_use_physically_based_distance_falloff_us_0aa8c3f7", "Nearby lights use physically based distance falloff. Use Enabled in the header to compare with the original lighting; there are no additional tuning controls."));
 }
 
 void InverseSquareLighting::DrawEssentialSettings()
@@ -89,7 +101,22 @@ void InverseSquareLighting::RestoreDefaultSettings()
 void InverseSquareLighting::SetRuntimeEnabled(bool a_enabled)
 {
 	settings.Enabled = a_enabled;
-	if (runtimeEnabled.exchange(a_enabled, std::memory_order_acq_rel) != a_enabled)
+	runtimeSettingsDirty.store(true, std::memory_order_release);
+}
+
+void InverseSquareLighting::EarlyPrepass()
+{
+	if (!runtimeSettingsDirty.load(std::memory_order_acquire) || Util::IsRuntimeToggleBlocked(globals::state))
+		return;
+	Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
+	if (!ownership || !globals::game::smState || !globals::game::smState->shadowSceneNode[0])
+		return;
+	const auto* player = RE::PlayerCharacter::GetSingleton();
+	const auto* cell = player ? player->GetParentCell() : nullptr;
+	if (!LocationContext::HasAttachedCell(globals::game::tes, cell))
+		return;
+	runtimeSettingsDirty.exchange(false, std::memory_order_acq_rel);
+	if (runtimeEnabled.exchange(settings.Enabled, std::memory_order_acq_rel) != settings.Enabled)
 		ApplyRuntimeStateToActiveLights();
 }
 
@@ -127,6 +154,7 @@ void InverseSquareLighting::ApplyRuntimeStateToActiveLights() const
 
 void InverseSquareLighting::PostPostLoad()
 {
+	runtimeEnabled.store(settings.Enabled, std::memory_order_release);
 	stl::detour_thunk<CreatePointLight>(REL::RelocationID(17208, 17610));
 	stl::detour_thunk<BSLight_GetLuminance>(REL::RelocationID(101303, 108292));
 

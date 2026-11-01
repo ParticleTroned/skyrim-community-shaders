@@ -1,4 +1,7 @@
 #include "Game.h"
+#include <RE/B/BSParticleShaderProperty.h>
+#include <RE/B/BSParticleShaderRainEmitter.h>
+#include <limits>
 
 #include <atomic>
 
@@ -391,3 +394,71 @@ namespace Util
 		WorldToCell(RE::NiPoint2(worldPos.x, worldPos.y), x, y);
 	}
 }  // namespace Util
+
+namespace
+{
+	void ResetModelHandle(RE::ModelDBHandle& a_handle)
+	{
+		if (!a_handle)
+			return;
+
+		if (REL::Module::IsAE()) {
+			auto* entry = a_handle.get();
+			a_handle = {};
+			static REL::Relocation<void (*)(RE::ModelDBHandle::U_Entry*)> release{ REL::ID(15443) };
+			release(entry);
+		} else {
+			using Reset = RE::ModelDBHandle* (*)(RE::ModelDBHandle*, RE::ModelDBHandle::U_Entry*);
+			static REL::Relocation<Reset> reset{ REL::ID(25746) };
+			reset(&a_handle, nullptr);
+		}
+	}
+}
+
+namespace Util
+{
+	RE::TESObjectREFR* GetOwnUserData(const RE::NiAVObject* object)
+	{
+		return object ? object->userData : nullptr;
+	}
+
+	RE::BSParticleShaderRainEmitter* GetRainEmitterFromPrecipGeometry(RE::BSGeometry* a_precipObject)
+	{
+		if (!a_precipObject)
+			return nullptr;
+
+		auto* shaderProperty = a_precipObject->GetGeometryRuntimeData().shaderProperty.get();
+		auto* particleProperty = netimmerse_cast<RE::BSParticleShaderProperty*>(shaderProperty);
+		if (!particleProperty || !particleProperty->particleEmitter)
+			return nullptr;
+
+		auto* emitter = particleProperty->particleEmitter;
+		if (!emitter->emitterType.any(RE::BSParticleShaderEmitter::EMITTER_TYPE::kRain))
+			return nullptr;
+
+		return static_cast<RE::BSParticleShaderRainEmitter*>(emitter);
+	}
+
+	void RefreshForcedWeatherSky(RE::Sky* a_sky)
+	{
+		if (!a_sky)
+			return;
+
+		if (a_sky->auroraRoot) {
+			if (a_sky->root)
+				a_sky->root->DetachChild(a_sky->auroraRoot.get());
+			a_sky->auroraRoot.reset();
+		}
+		ResetModelHandle(a_sky->auroraModel);
+
+		// Defer cloud-pass rebuilding until accumulation; current queues may still borrow these passes.
+		if (a_sky->clouds) {
+			for (const auto& cloud : a_sky->clouds->clouds) {
+				if (cloud) {
+					if (auto* property = skyrim_cast<RE::BSSkyShaderProperty*>(cloud->GetGeometryRuntimeData().shaderProperty.get()))
+						property->lastRenderPassState = (std::numeric_limits<std::int32_t>::max)();
+				}
+			}
+		}
+	}
+}

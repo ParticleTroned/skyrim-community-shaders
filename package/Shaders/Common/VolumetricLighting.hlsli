@@ -1,4 +1,4 @@
-#ifndef __VOLUMETRIC_LIGHTING_DEPENDENCY_HLSL__
+#if !(defined(__VOLUMETRIC_LIGHTING_DEPENDENCY_HLSL__))
 #define __VOLUMETRIC_LIGHTING_DEPENDENCY_HLSL__
 
 #include "Common/Color.hlsli"

@@ -287,3 +287,6 @@ add_custom_target(
     COMMENT "Running host-side C++ unit tests..."
     VERBATIM
 )
+
+add_subdirectory(../portable "${CMAKE_CURRENT_BINARY_DIR}/portable")
+add_dependencies(run_host_tests run_portable_tests)

@@ -1,11 +1,36 @@
+#include "MenuDevBenchBridge.h"
+#include "PerformanceTuningDevBenchBridge.h"
+#include "ProfilerDevBenchBridge.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/NvPerf.h"
+#endif
+#include "Api/AcceptedDrawService.h"
+#include "Api/EditorDevBenchBridge.h"
+#include "Api/EditorService.h"
+#include "Api/FeatureDevBenchBridge.h"
+#include "Api/FeatureService.h"
+#include "Api/ProfilerApiDevBenchBridge.h"
+#include "Api/ProfilerService.h"
+#include "Api/RuntimeThreadAffinity.h"
+#include "Api/ServiceRegistryProvider.h"
+#include "Api/ShaderCompatibilityRegistry.h"
+#include "Api/ShaderDevBenchBridge.h"
+#include "Api/UpscalingDevBenchBridge.h"
+#include "Api/WeatherDevBenchBridge.h"
+#include "Api/WeatherService.h"
 #include "BuildProvenance.h"
 #include "CSEditor/EditorWindow.h"
+#include "Compatibility.h"
 #include "Deferred.h"
+#include "Diagnostics/D3DTextureLifetimeDevBenchBridge.h"
+#include "Diagnostics/EngineStutterMonitor.h"
 #include "Diagnostics/FrameGenerationDevBenchBridge.h"
+#include "Diagnostics/SunReceiverTrace.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/Skylighting.h"
 #include "Features/Upscaling.h"
+#include "Features/VolumetricLighting.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
 #include "Hooks.h"
@@ -14,8 +39,10 @@
 #include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "SceneSettingsManager.h"
+#include "ScreenshotDevBenchBridge.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Utils/CharacterCategoryAuthoring.h"
 #include "Utils/NvApiDrs.h"
 #include "WeatherManager.h"
 
@@ -27,9 +54,39 @@ std::list<std::string> errors;
 
 bool Load();
 
+[[noreturn]] void PushStartupError(std::string message)
+{
+	logger::error("{}", message);
+	errors.push_back(std::move(message));
+	stl::report_and_fail(std::format("CSX cannot start.\n\n{}\n\nResolve this error and restart Skyrim.", errors.back()));
+}
+
+void CommunityShadersAPIMessageHandler(SKSE::MessagingInterface::Message* message)
+{
+	CSX::Api::HandleServiceRegistryMessage(message);
+}
+
+void RegisterCommunityShadersAPIMessageListener()
+{
+	auto messaging = SKSE::GetMessagingInterface();
+	if (!messaging) {
+		PushStartupError("SKSE messaging interface unavailable while registering CSX API message listener. Check CSX.log for details.");
+	}
+
+	if (!messaging->RegisterListener(nullptr, CommunityShadersAPIMessageHandler)) {
+		PushStartupError("Failed to register CSX API message listener. Check CSX.log for details.");
+	}
+
+	logger::info("Registered versioned CSXR API listener for currently loaded plugins");
+}
+
 void ResetRuntimeStateAfterGameLoad()
 {
 	globals::features::skylighting.QueueResetSkylighting();
+	globals::features::volumetricLighting.RequestRuntimeReset();
+	globals::features::upscaling.RequestPostLoadRuntimeReset();
+	if (globals::state)
+		globals::state->pendingPostLoadRuntimeReset.store(true, std::memory_order_release);
 	globals::game::quitGame.store(false, std::memory_order_release);
 	globals::OnDataLoaded();
 	globals::weatherManager->ClearCache();
@@ -95,16 +152,67 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Query(const SKSE::QueryInterface*, 
 	return true;
 }
 
+namespace
+{
+	void CheckIncompatiblePlugins()
+	{
+		for (const auto& plugin : Compatibility::incompatiblePlugins) {
+			const auto probe = Compatibility::ProbePlugin(plugin, L"Data/SKSE/Plugins");
+			if (!probe.present && !probe.error)
+				continue;
+			const auto name = stl::utf16_to_utf8(plugin.dll).value_or("<invalid plugin name>");
+			const auto message = probe.error ? std::format("Cannot check incompatible plugin {}: {}", name, probe.error.message()) :
+			                                   std::format("Incompatible plugin {} detected{}. Remove it to use CSX.", name,
+												   plugin.reason.empty() ? std::string{} : std::format(" ({})", plugin.reason));
+			if (std::ranges::find(errors, message) == errors.end()) {
+				logger::error("{}", message);
+				errors.push_back(message);
+			}
+		}
+	}
+
+	void RegisterRuntimeServices()
+	{
+		CSX::Api::ScheduleRuntimeMainThreadBinding();
+		CSX::Api::InitializeEditorService();
+		CSX::Api::InitializeFeatureService();
+		CSX::Api::InitializeProfilerService();
+		CSX::Api::InitializeWeatherService();
+		CSX::Api::RegisterAcceptedDrawService();
+		CSX::Api::ProfilerApiDevBenchBridge::Install();
+		CSX::Api::EditorDevBenchBridge::Install();
+		CSX::Api::FeatureDevBenchBridge::Install();
+		CSX::Api::ShaderDevBenchBridge::Install();
+		CSX::Api::UpscalingDevBenchBridge::Install();
+		CSX::Api::WeatherDevBenchBridge::Install();
+		ScreenshotDevBenchBridge::Install();
+		ProfilerDevBenchBridge::Install();
+		PerformanceTuningDevBenchBridge::Install();
+		MenuDevBenchBridge::Install();
+		D3DTextureLifetimeDevBenchBridge::Install();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		NvPerf::InstallDevBench();
+#endif
+	}
+}
+
 void MessageHandler(SKSE::MessagingInterface::Message* message)
 {
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
+			CheckIncompatiblePlugins();
+			if (!errors.empty())
+				break;
+			RegisterCommunityShadersAPIMessageListener();
+			RegisterRuntimeServices();
 			CSX::Diagnostics::FrameGenerationDevBenchBridge::Install();
 			break;
 		}
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
+			if (errors.empty())
+				RegisterRuntimeServices();
 			CSX::Diagnostics::FrameGenerationDevBenchBridge::Install();
 			if (errors.empty()) {
 				Deferred::Hooks::Install();
@@ -120,6 +228,10 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// Register scene settings event handler (Interior Only transitions)
 				SceneSettingsManager::MenuOpenCloseEventHandler::Register();
 
+				CSX::Api::FreezeShaderCompatibilityRegistrations();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				Diagnostics::SunReceiverTrace::Install();
+#endif
 				// Now validate disk cache after features have had a chance to modify their state
 				shaderCache->ValidateDiskCache();
 
@@ -139,6 +251,11 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 			if (errors.empty()) {
 				globals::OnDataLoaded();
+				RegisterRuntimeServices();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				CSX::Diagnostics::Stutters::Install();
+#endif
+				CharacterCategoryAuthoring::DataLoaded();
 				EngineFix::InstallOnDataLoadedFixes();
 				FrameAnnotations::OnDataLoaded();
 
@@ -164,6 +281,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		}
 	case SKSE::MessagingInterface::kPreLoadGame:
 		{
+			globals::state->BeginSaveLoadSafeMode(globals::state->frameCount);
 			EditorWindow::ResetWeatherLock(true);
 			PerformanceTuningRenderer::CancelActiveMeasurements(
 				PerformanceTuningRenderer::CancelMode::ClearSession);
@@ -171,6 +289,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		}
 	case SKSE::MessagingInterface::kSaveGame:
 		{
+			globals::state->NotifyOrdinarySave(globals::state->frameCount);
 			break;
 		}
 	case SKSE::MessagingInterface::kPostLoadGame:
@@ -182,6 +301,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			PerformanceTuningRenderer::CancelActiveMeasurements(
 				PerformanceTuningRenderer::CancelMode::ClearSession);
 			if (errors.empty()) {
+				globals::state->ExtendSaveLoadSafeMode(globals::state->frameCount);
 				ResetRuntimeStateAfterGameLoad();
 				if (message->type == SKSE::MessagingInterface::kPostLoadGame)
 					Util::RequestGameLoadTransition();
@@ -209,7 +329,16 @@ bool Load()
 	Util::NvApiDrs::EnsureSkyrimSEDLSSGAllowed();
 
 	auto messaging = SKSE::GetMessagingInterface();
-	messaging->RegisterListener("SKSE", MessageHandler);
+	if (!messaging) {
+		logger::error("SKSE messaging interface unavailable");
+		return false;
+	}
+	CSX::Api::InitializeServiceRegistryProvider();
+	RegisterCommunityShadersAPIMessageListener();
+	if (!messaging->RegisterListener("SKSE", MessageHandler)) {
+		logger::error("Failed to register SKSE message listener");
+		return false;
+	}
 
 	globals::OnInit();
 	globals::ReInit();
@@ -219,7 +348,7 @@ bool Load()
 	// Initialize i18n system (loads English fallback and discovers available locales)
 	I18n::GetSingleton()->Init();
 
-	state->Load();
+	state->Load(State::ConfigMode::USER, true, State::SettingsApplyMode::StartupHydration);
 	state->LoadTheme();  // Load theme settings from SettingsTheme.json
 
 	// Initialize theme system - create default themes and discover existing ones
@@ -230,25 +359,7 @@ bool Load()
 	auto log = spdlog::default_logger();
 	log->set_level(state->GetLogLevel());
 
-	const std::array incompatibleDLLs = {
-		L"Data/SKSE/Plugins/ShaderTools.dll",
-		L"Data/SKSE/Plugins/SSEShaderTools.dll",
-		L"Data/SKSE/Plugins/SkyrimUpscaler.dll",
-		L"Data/SKSE/Plugins/EVLaS.dll",
-		L"Data/SKSE/Plugins/AELAS.dll",
-		L"Data/SKSE/Plugins/SSEReShadeHelper.dll",
-		L"Data/SKSE/Plugins/TAASharpen.dll",
-		L"Data/SKSE/Plugins/NVIDIA_Reflex.dll",
-		L"Data/SKSE/Plugins/MARA.dll"
-	};
-
-	for (const auto dll : incompatibleDLLs) {
-		if (LoadLibrary(dll)) {
-			auto errorMessage = std::format("Incompatible DLL {} detected", stl::utf16_to_utf8(dll).value_or("<unicode conversion error>"s));
-			logger::error("{}", errorMessage);
-			errors.push_back(errorMessage);
-		}
-	}
+	CheckIncompatiblePlugins();
 
 	auto pushMissingDllError = [&](std::string_view dllName) {
 		auto errorMessage = std::format("Required DLL {} was missing", dllName);

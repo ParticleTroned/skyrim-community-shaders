@@ -3,23 +3,39 @@
 
 struct InteriorSun : Feature
 {
+private:
+	std::atomic<bool> runtimeSettingsDirty{ true };
+	static constexpr std::string_view MOD_ID = "153541";
+
 public:
 	virtual inline std::string GetName() override { return "Interior Sun"; }
-	virtual std::string GetDisplayName() override { return T("feature.interior_sun.name", "Interior Sun"); }
+	std::string GetDisplayName() override { return T("feature.interior_sun.name", "Interior Sun"); }
 	virtual inline std::string GetShortName() override { return "InteriorSun"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return { T("feature.interior_sun.description", "Allows for the sun and moon to cast light and shadows into interior spaces."),
+		return {
+			T("feature.interior_sun.lets_sunlight_and_moonlight_cast_light_and_sh_ea11fad6", "Lets sunlight and moonlight cast light and shadows into supported interiors."),
 			{ T("feature.interior_sun.key_feature_1", "Functions only for explicitly enabled interiors"),
 				T("feature.interior_sun.key_feature_2", "Utilizes existing sun, moon, and weather systems"),
 				T("feature.interior_sun.key_feature_3", "Includes an option to force double-sided rendering for unprepared interiors"),
-				T("feature.interior_sun.key_feature_4", "Fixes geometry culling issues that cause light leakage") } };
-	};
+				T("feature.interior_sun.key_feature_4", "Fixes geometry culling issues that cause light leakage") }
+		};
+	}
+	/** Supports a cost comparison through the existing in-game enable toggle. */
+	bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Returns the requested state without changing the feature's configuration. */
+	bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
+	/** Uses the same runtime enable path as the feature's settings panel. */
+	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { SetRuntimeEnabled(a_enabled); }
+	/** Waits for the render-thread toggle transaction to finish. */
+	bool IsPerformanceCostMeasurementReady() const override
+	{
+		return !runtimeSettingsDirty.load(std::memory_order_acquire) &&
+		       runtimeEnabled.load(std::memory_order_acquire) == settings.Enabled;
+	}
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
@@ -35,6 +51,7 @@ public:
 	{
 		bool Enabled = true;
 		bool ForceDoubleSidedRendering = true;
+		bool ForceSingleShadowCascade = true;
 		float InteriorShadowDistance = 5000;
 	};
 
@@ -114,9 +131,11 @@ private:
 	float* gShadowDistance = nullptr;
 	float* gInteriorShadowDistance = nullptr;
 	float vanillaInteriorShadowDistance = 0.0f;
+	RE::Setting* fFirstSliceDistance = nullptr;
 	uint32_t* rasterStateCullMode = nullptr;
 
 	const RE::TESObjectCELL* currentCell = nullptr;
+	RE::NiPointer<RE::BSPortalGraph> currentPortalGraph;
 
 	bool arraysCleared = true;
 	RE::BSTArray<RE::NiPointer<RE::NiAVObject>> currentCellRoomsAndPortals = {};
@@ -126,7 +145,6 @@ private:
 	static RE::TESWorldSpace* enableInteriorSun;
 	static RE::TESWorldSpace* disableInteriorSun;
 
-	bool DrawEnabledCheckbox();
 	void SetRuntimeEnabled(bool a_enabled);
 
 	void ClearArrays();
@@ -136,6 +154,10 @@ private:
 	bool IsInSunDirectionAndWithinShadowDistance(const RE::NiPointer<RE::NiAVObject>& object, const RE::NiPoint3& lightDir, const RE::NiPoint3& playerPos) const;
 
 	void PopulateReplacementJobArrays(const RE::TESObjectCELL* cell, const RE::NiPointer<RE::BSPortalGraph>& portalGraph, const RE::BSShadowDirectionalLight* dirLight, RE::BSTArray<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>& jobArrays);
+
+	bool ShouldForceSingleShadowCascade() const;
+	float GetInteriorShadowDistance() const;
+	void ApplySingleShadowCascade(RE::BSShadowDirectionalLight* dirLight) const;
 
 	static void SetShadowDistance(bool inInterior);
 };

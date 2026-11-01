@@ -1,0 +1,180 @@
+{
+    "schemaVersion": 1,
+    "cases": [
+        { "name": "installation-baseline", "accepted": true },
+        {
+            "name": "different-seed-shader-abi",
+            "accepted": true,
+            "manifestOverrides": { "/shaderCacheABI": "previous-build-abi" }
+        },
+        {
+            "name": "post-append-and-checkpoint",
+            "accepted": true,
+            "fileOverrides": { "Optimized.A.csxpack": { "recordCount": 4 } }
+        },
+        {
+            "name": "post-compaction",
+            "accepted": true,
+            "fileOverrides": { "Optimized.B.csxpack": { "generation": 2, "recordCount": 2 } }
+        },
+        {
+            "name": "post-reset-generation-gap",
+            "accepted": true,
+            "fileOverrides": {
+                "Optimized.A.csxpack": { "generation": 5, "recordCount": 0 },
+                "Optimized.B.csxpack": { "generation": 3, "recordCount": 0 }
+            }
+        },
+        {
+            "name": "near-maximum-adjacent-installation-baseline",
+            "accepted": true,
+            "manifestOverrides": {
+                "/files/Optimized.A.csxpack/generation": 18446744073709551615,
+                "/files/Optimized.B.csxpack/generation": 18446744073709551614
+            },
+            "fileOverrides": {
+                "Optimized.A.csxpack": { "generation": 18446744073709551615 },
+                "Optimized.B.csxpack": { "generation": 18446744073709551614 }
+            }
+        },
+        {
+            "name": "nonadjacent-ascending-installation-baseline",
+            "accepted": false,
+            "manifestOverrides": {
+                "/files/Optimized.A.csxpack/generation": 1,
+                "/files/Optimized.B.csxpack/generation": 3
+            },
+            "fileOverrides": {
+                "Optimized.A.csxpack": { "generation": 1 },
+                "Optimized.B.csxpack": { "generation": 3 }
+            }
+        },
+        {
+            "name": "nonadjacent-descending-installation-baseline",
+            "accepted": false,
+            "manifestOverrides": {
+                "/files/Optimized.A.csxpack/generation": 3,
+                "/files/Optimized.B.csxpack/generation": 1
+            },
+            "fileOverrides": {
+                "Optimized.A.csxpack": { "generation": 3 },
+                "Optimized.B.csxpack": { "generation": 1 }
+            }
+        },
+        {
+            "name": "boolean-schema-version",
+            "accepted": false,
+            "manifestOverrides": { "/schemaVersion": true }
+        },
+        {
+            "name": "floating-schema-version",
+            "accepted": false,
+            "manifestOverrides": { "/schemaVersion": 2.0 }
+        },
+        {
+            "name": "boolean-format-version",
+            "accepted": false,
+            "manifestOverrides": { "/formatVersion": true }
+        },
+        {
+            "name": "floating-format-version",
+            "accepted": false,
+            "manifestOverrides": { "/formatVersion": 1.0 }
+        },
+        {
+            "name": "negative-record-count",
+            "accepted": false,
+            "manifestOverrides": { "/files/Optimized.A.csxpack/recordCount": -1 }
+        },
+        {
+            "name": "null-generation",
+            "accepted": false,
+            "manifestOverrides": { "/files/Optimized.A.csxpack/generation": null }
+        },
+        {
+            "name": "string-lane",
+            "accepted": false,
+            "manifestOverrides": { "/files/Optimized.A.csxpack/lane": "1" }
+        },
+        {
+            "name": "missing-aggregate",
+            "accepted": false,
+            "manifestRemovals": ["/optimizedRecordCount"]
+        },
+        {
+            "name": "missing-baseline-semantics",
+            "accepted": false,
+            "manifestRemovals": ["/fileStateSemantics"]
+        },
+        {
+            "name": "oversized-generation",
+            "accepted": false,
+            "manifestOverrides": { "/files/Optimized.A.csxpack/generation": 18446744073709551616 }
+        },
+        {
+            "name": "swapped-a-b-baselines",
+            "accepted": false,
+            "manifestOverrides": {
+                "/files/Optimized.A.csxpack/generation": 0,
+                "/files/Optimized.A.csxpack/recordCount": 0,
+                "/files/Optimized.B.csxpack/generation": 1,
+                "/files/Optimized.B.csxpack/recordCount": 3
+            }
+        },
+        {
+            "name": "individual-count-mismatch-with-correct-total",
+            "accepted": false,
+            "manifestOverrides": {
+                "/files/Optimized.A.csxpack/recordCount": 2,
+                "/files/Optimized.B.csxpack/recordCount": 1
+            }
+        },
+        {
+            "name": "aggregate-count-mismatch",
+            "accepted": false,
+            "manifestOverrides": { "/optimizedRecordCount": 4 }
+        },
+        {
+            "name": "zero-pack-set-identity",
+            "accepted": false,
+            "manifestOverrides": { "/packSetId": "00000000000000000000000000000000" }
+        },
+        {
+            "name": "actual-pack-set-mismatch",
+            "accepted": false,
+            "fileOverrides": {
+                "Developer.B.csxpack": { "packSetId": "ffffffffffffffffffffffffffffffff" }
+            }
+        },
+        {
+            "name": "duplicate-variant",
+            "accepted": false,
+            "manifestOverrides": { "/compatibilityVariants": ["default", "default"] }
+        },
+        {
+            "name": "missing-default-variant",
+            "accepted": false,
+            "manifestOverrides": { "/compatibilityVariants": ["legacy-horizon-fix"] }
+        },
+        {
+            "name": "missing-fixed-file",
+            "accepted": false,
+            "manifestRemovals": ["/files/Developer.B.csxpack"]
+        },
+        {
+            "name": "equal-actual-generations",
+            "accepted": false,
+            "fileOverrides": { "Optimized.B.csxpack": { "generation": 1 } }
+        },
+        {
+            "name": "invalid-actual-member",
+            "accepted": false,
+            "fileOverrides": { "Optimized.B.csxpack": { "valid": false } }
+        },
+        {
+            "name": "wrong-actual-lane",
+            "accepted": false,
+            "fileOverrides": { "Developer.A.csxpack": { "lane": 1 } }
+        }
+    ]
+}

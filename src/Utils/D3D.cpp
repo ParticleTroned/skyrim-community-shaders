@@ -1,44 +1,57 @@
 #include "D3D.h"
+#include "ComIdentity.h"
 
 #include "Deferred.h"
 #include "Features/TerrainBlending.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/Format.h"
+#include "Utils/RendererContextAccess.h"
+#include "Utils/ShaderDefines.h"
+#include "Utils/ShaderInclude.h"
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 #include <algorithm>
+#include <cstring>
 #include <d3dcompiler.h>
+#include <limits>
 #include <mutex>
+#include <set>
+#include <string>
+#include <string_view>
+#include <tuple>
 
 namespace Util
 {
 	namespace
 	{
-		[[nodiscard]] winrt::com_ptr<IUnknown> GetCOMIdentity(
-			IUnknown* a_object)
-		{
-			winrt::com_ptr<IUnknown> identity;
-			if (a_object)
-				(void)a_object->QueryInterface(IID_PPV_ARGS(identity.put()));
-			return identity;
-		}
+		using ShaderCompileFailureKey = std::tuple<std::wstring, std::string, std::string, uint32_t, std::string>;
+		std::mutex shaderCompileFailuresMutex;
+		std::set<ShaderCompileFailureKey> shaderCompileFailures;
+		uint64_t shaderCompileFailureGeneration = 0;
+	}
+
+	void ClearShaderCompileFailures()
+	{
+		std::lock_guard lock{ shaderCompileFailuresMutex };
+		++shaderCompileFailureGeneration;
+		shaderCompileFailures.clear();
 	}
 
 	bool HaveSameCOMIdentity(IUnknown* a_first, IUnknown* a_second)
 	{
-		const auto firstIdentity = GetCOMIdentity(a_first);
-		const auto secondIdentity = GetCOMIdentity(a_second);
+		const auto firstIdentity = GetComIdentity(a_first);
+		const auto secondIdentity = GetComIdentity(a_second);
 		return firstIdentity && secondIdentity &&
-		       firstIdentity.get() == secondIdentity.get();
+		       firstIdentity.Get() == secondIdentity.Get();
 	}
 
 	bool HaveDistinctCOMIdentity(IUnknown* a_first, IUnknown* a_second)
 	{
-		const auto firstIdentity = GetCOMIdentity(a_first);
-		const auto secondIdentity = GetCOMIdentity(a_second);
+		const auto firstIdentity = GetComIdentity(a_first);
+		const auto secondIdentity = GetComIdentity(a_second);
 		return firstIdentity && secondIdentity &&
-		       firstIdentity.get() != secondIdentity.get();
+		       firstIdentity.Get() != secondIdentity.Get();
 	}
 
 	ScopedComputeBindings::ScopedComputeBindings(
@@ -99,29 +112,32 @@ namespace Util
 		context->CSSetConstantBuffers(0, 1, &rawConstantBuffer);
 	}
 
+	bool GetTexture2DDesc(ID3D11View* a_view, D3D11_TEXTURE2D_DESC& o_desc)
+	{
+		o_desc = {};
+		if (!a_view)
+			return false;
+
+		winrt::com_ptr<ID3D11Resource> resource;
+		a_view->GetResource(resource.put());
+		if (!resource)
+			return false;
+
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		if (FAILED(resource->QueryInterface(IID_PPV_ARGS(texture.put()))))
+			return false;
+
+		texture->GetDesc(&o_desc);
+		return true;
+	}
+
 	bool TryGetDepthSrvDimensions(ID3D11ShaderResourceView* a_depthSrv, uint32_t& o_width, uint32_t& o_height)
 	{
 		o_width = 0;
 		o_height = 0;
-		if (!a_depthSrv)
-			return false;
-
-		ID3D11Resource* resource = nullptr;
-		a_depthSrv->GetResource(&resource);
-		if (!resource)
-			return false;
-
-		ID3D11Texture2D* texture = nullptr;
-		const HRESULT hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
-		resource->Release();
-		if (FAILED(hr) || !texture)
-			return false;
 
 		D3D11_TEXTURE2D_DESC desc{};
-		texture->GetDesc(&desc);
-		texture->Release();
-
-		if (desc.Width == 0 || desc.Height == 0)
+		if (!GetTexture2DDesc(a_depthSrv, desc) || !desc.Width || !desc.Height)
 			return false;
 
 		o_width = desc.Width;
@@ -195,7 +211,7 @@ namespace Util
 	{
 		if (a_rtv) {
 			if (auto r = globals::game::renderer) {
-				for (int i = 0; i < RE::RENDER_TARGETS::kTOTAL; i++) {
+				for (int i = 0; i < GetRenderTargetCount(); i++) {
 					auto rt = r->GetRuntimeData().renderTargets[i];
 					if (a_rtv == rt.RTV) {
 						return rt.SRV;
@@ -210,7 +226,7 @@ namespace Util
 	{
 		if (a_srv) {
 			if (auto r = globals::game::renderer) {
-				for (int i = 0; i < RE::RENDER_TARGETS::kTOTAL; i++) {
+				for (int i = 0; i < GetRenderTargetCount(); i++) {
 					auto rt = r->GetRuntimeData().renderTargets[i];
 					if (a_srv == rt.SRV || a_srv == rt.SRVCopy) {
 						return rt.RTV;
@@ -258,59 +274,67 @@ namespace Util
 
 	void SetResourceName(ID3D11DeviceChild* Resource, const char* Format, ...)
 	{
-		if (!Resource)
+		if (!Resource || !Format)
 			return;
 
-		char buffer[1024];
+		char buffer[1024]{};
 		va_list va;
 
 		va_start(va, Format);
 		int len = _vsnprintf_s(buffer, _TRUNCATE, Format, va);
 		va_end(va);
 
-		Resource->SetPrivateData(WKPDID_D3DDebugObjectNameT, len, buffer);
+		if (len < 0)
+			len = static_cast<int>(strnlen(buffer, sizeof(buffer)));
+		Resource->SetPrivateData(WKPDID_D3DDebugObjectNameT, static_cast<UINT>(len), buffer);
 	}
 
-	struct CustomInclude : public ID3DInclude
+	ID3D11DeviceChild* CompileShader(
+		const wchar_t* FilePath,
+		const std::vector<std::pair<const char*, const char*>>& Defines,
+		const char* ProgramType,
+		const char* Program,
+		ShaderCompileTiming* a_timing)
 	{
-		HRESULT Open([[maybe_unused]] D3D_INCLUDE_TYPE IncludeType, LPCSTR pFileName, [[maybe_unused]] LPCVOID pParentData, LPCVOID* ppData, UINT* pBytes) override
-		{
-			std::filesystem::path filePath = pFileName;
-			filePath = L"Data\\Shaders" / filePath;
+		HRESULT result;
+		return CompileShader(FilePath, Defines, ProgramType, Program, result, a_timing);
+	}
 
-			std::ifstream file(filePath, std::ios::binary);
-			if (!file.is_open()) {
-				*ppData = NULL;
-				*pBytes = 0;
-				return E_FAIL;
-			}
-
-			// Get filesize
-			file.seekg(0, std::ios::end);
-			UINT size = static_cast<UINT>(file.tellg());
-			file.seekg(0, std::ios::beg);
-
-			// Create buffer and read file
-			char* data = new char[size];
-			file.read(data, size);
-			*ppData = data;
-			*pBytes = size;
-			return S_OK;
-		}
-
-		HRESULT Close(LPCVOID pData) override
-		{
-			if (pData)
-				delete[] pData;
-			return S_OK;
-		}
-	};
-
-	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program)
+	ID3D11DeviceChild* CompileShader(
+		const wchar_t* FilePath,
+		const std::vector<std::pair<const char*, const char*>>& Defines,
+		const char* ProgramType,
+		const char* Program,
+		HRESULT& a_result,
+		ShaderCompileTiming* a_timing)
 	{
+		a_result = E_INVALIDARG;
+		const auto queryQpc = []() noexcept {
+			LARGE_INTEGER value{};
+			return QueryPerformanceCounter(&value) && value.QuadPart > 0 ?
+			           static_cast<uint64_t>(value.QuadPart) :
+			           0;
+		};
+		const auto accumulateElapsed = [](
+										   uint64_t& a_destination,
+										   uint64_t a_begin,
+										   uint64_t a_end) noexcept {
+			if (a_begin == 0 || a_end < a_begin)
+				return;
+			const uint64_t elapsed = a_end - a_begin;
+			const uint64_t remaining =
+				std::numeric_limits<uint64_t>::max() - a_destination;
+			a_destination += std::min(elapsed, remaining);
+		};
+		if (!FilePath || !*FilePath || !ProgramType || !Program || !*Program)
+			return nullptr;
 		auto device = globals::d3d::device;
+		a_result = E_FAIL;
+		if (!device || !globals::state || !globals::shaderCache)
+			return nullptr;
+		const bool developerMode = globals::state->IsDeveloperMode();
 
-		CustomInclude include;
+		CustomInclude include(L"Data\\Shaders", FilePath);
 
 		// Build defines (aka convert vector->D3DCONSTANT array)
 		std::vector<D3D_SHADER_MACRO> macros;
@@ -324,7 +348,7 @@ namespace Util
 			}
 		}
 
-		if (globals::state->IsDeveloperMode()) {
+		if (developerMode) {
 			macros.push_back({ "D3DCOMPILE_SKIP_OPTIMIZATION", "" });
 			macros.push_back({ "D3DCOMPILE_DEBUG", "" });
 		}
@@ -345,10 +369,10 @@ namespace Util
 			macros.push_back({ "COMPUTESHADER", "" });
 		else if (!_stricmp(ProgramType, "cs_4_0"))
 			macros.push_back({ "COMPUTESHADER", "" });
-		else if (!_stricmp(ProgramType, "cs_5_1"))
-			macros.push_back({ "COMPUTESHADER", "" });
-		else
+		else {
+			a_result = E_INVALIDARG;
 			return nullptr;
+		}
 
 		// Add null terminating entry
 		macros.push_back({ "WINPC", "" });
@@ -356,7 +380,7 @@ namespace Util
 		macros.push_back({ nullptr, nullptr });
 
 		// Compiler setup
-		uint32_t flags = !globals::state->IsDeveloperMode() ? (D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3) : D3DCOMPILE_DEBUG;
+		uint32_t flags = !developerMode ? (D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3) : D3DCOMPILE_DEBUG;
 		if (globals::state->enablePartialPrecision.load(std::memory_order_relaxed))
 			flags |= D3DCOMPILE_PARTIAL_PRECISION;
 		if (globals::state->enableAvoidFlowControl.load(std::memory_order_relaxed))
@@ -367,20 +391,68 @@ namespace Util
 		if (globals::shaderCache->IsDiskCache())
 			flags |= D3DCOMPILE_SKIP_VALIDATION;
 
-		ID3DBlob* shaderBlob;
-		ID3DBlob* shaderErrors;
+		const ShaderCompileFailureKey failureKey{
+			FilePath, ProgramType, Program, flags, ShaderDefines::Serialize(macros)
+		};
+		uint64_t failureGeneration;
+		{
+			std::lock_guard lock{ shaderCompileFailuresMutex };
+			if (shaderCompileFailures.contains(failureKey))
+				return nullptr;
+			failureGeneration = shaderCompileFailureGeneration;
+		}
+		const auto recordFailure = [&] {
+			std::lock_guard lock{ shaderCompileFailuresMutex };
+			// An edit or reset must not inherit an older in-flight failure.
+			if (failureGeneration == shaderCompileFailureGeneration)
+				shaderCompileFailures.insert(failureKey);
+		};
 
-		if (!std::filesystem::exists(FilePath)) {
-			logger::error("Failed to compile shader; {} does not exist", str);
-			return nullptr;
-		}
-		logger::debug("Compiling {} with {}", str, DefinesToString(macros));
-		if (FAILED(D3DCompileFromFile(FilePath, macros.data(), &include, Program, ProgramType, flags, 0, &shaderBlob, &shaderErrors))) {
-			logger::warn("Shader compilation failed:\n\n{}", shaderErrors ? static_cast<char*>(shaderErrors->GetBufferPointer()) : "Unknown error");
-			return nullptr;
-		}
-		if (shaderErrors)
-			logger::debug("Shader logs:\n{}", static_cast<char*>(shaderErrors->GetBufferPointer()));
+		auto compile = [&]() -> winrt::com_ptr<ID3DBlob> {
+			a_result = E_FAIL;
+			winrt::com_ptr<ID3DBlob> shaderBlob;
+			winrt::com_ptr<ID3DBlob> shaderErrors;
+
+			if (!std::filesystem::exists(FilePath)) {
+				recordFailure();
+				logger::error("Failed to compile shader; {} does not exist", str);
+				return nullptr;
+			}
+			logger::debug("Compiling {} with {}", str, DefinesToString(macros));
+			const uint64_t compilationBegin = a_timing ? queryQpc() : 0;
+			const HRESULT compilationResult = a_result = D3DCompileFromFile(
+				FilePath,
+				macros.data(),
+				&include,
+				Program,
+				ProgramType,
+				flags,
+				0,
+				shaderBlob.put(),
+				shaderErrors.put());
+			if (a_timing) {
+				accumulateElapsed(
+					a_timing->bytecodeCompilationQpcTicks,
+					compilationBegin,
+					queryQpc());
+			}
+			if (FAILED(compilationResult)) {
+				if (compilationResult != E_OUTOFMEMORY)
+					recordFailure();
+				auto errorText = shaderErrors ? std::string_view(static_cast<const char*>(shaderErrors->GetBufferPointer()), shaderErrors->GetBufferSize()) : std::string_view("Unknown error");
+				if (!errorText.empty() && errorText.back() == '\0')
+					errorText.remove_suffix(1);
+				logger::warn("Shader compilation failed:\n\n{}", errorText);
+				return nullptr;
+			}
+			if (shaderErrors) {
+				std::string warnings(static_cast<char*>(shaderErrors->GetBufferPointer()), shaderErrors->GetBufferSize());
+				if (!warnings.empty() && warnings.back() == '\0')
+					warnings.pop_back();
+				logger::debug("[{}] Shader logs:\n{}", str, warnings);
+			}
+			return shaderBlob;
+		};
 
 		auto nameCompiledShader = [&](ID3D11DeviceChild* shader) {
 			SetResourceName(
@@ -391,39 +463,62 @@ namespace Util
 				Program ? Program : "");
 		};
 
-		if (!_stricmp(ProgramType, "ps_5_0")) {
-			ID3D11PixelShader* regShader;
-			DX::ThrowIfFailed(device->CreatePixelShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
-			nameCompiledShader(regShader);
-			return regShader;
-		} else if (!_stricmp(ProgramType, "vs_5_0")) {
-			ID3D11VertexShader* regShader;
-			DX::ThrowIfFailed(device->CreateVertexShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
-			nameCompiledShader(regShader);
-			return regShader;
-		} else if (!_stricmp(ProgramType, "hs_5_0")) {
-			ID3D11HullShader* regShader;
-			DX::ThrowIfFailed(device->CreateHullShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
-			nameCompiledShader(regShader);
-			return regShader;
-		} else if (!_stricmp(ProgramType, "ds_5_0")) {
-			ID3D11DomainShader* regShader;
-			DX::ThrowIfFailed(device->CreateDomainShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
-			nameCompiledShader(regShader);
-			return regShader;
-		} else if (!_stricmp(ProgramType, "cs_5_0")) {
-			ID3D11ComputeShader* regShader;
-			DX::ThrowIfFailed(device->CreateComputeShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
-			nameCompiledShader(regShader);
-			return regShader;
-		} else if (!_stricmp(ProgramType, "cs_4_0")) {
-			ID3D11ComputeShader* regShader;
-			DX::ThrowIfFailed(device->CreateComputeShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
-			nameCompiledShader(regShader);
-			return regShader;
+		HRESULT hr = S_OK;
+		winrt::com_ptr<ID3D11DeviceChild> regShader;
+		auto createShader = [&](ID3DBlob* blob) {
+			regShader = nullptr;
+			const uint64_t objectCreationBegin = a_timing ? queryQpc() : 0;
+			if (!_stricmp(ProgramType, "ps_5_0")) {
+				winrt::com_ptr<ID3D11PixelShader> shader;
+				hr = device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, shader.put());
+				if (SUCCEEDED(hr))
+					regShader.attach(shader.detach());
+			} else if (!_stricmp(ProgramType, "vs_5_0")) {
+				winrt::com_ptr<ID3D11VertexShader> shader;
+				hr = device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, shader.put());
+				if (SUCCEEDED(hr))
+					regShader.attach(shader.detach());
+			} else if (!_stricmp(ProgramType, "hs_5_0")) {
+				winrt::com_ptr<ID3D11HullShader> shader;
+				hr = device->CreateHullShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, shader.put());
+				if (SUCCEEDED(hr))
+					regShader.attach(shader.detach());
+			} else if (!_stricmp(ProgramType, "ds_5_0")) {
+				winrt::com_ptr<ID3D11DomainShader> shader;
+				hr = device->CreateDomainShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, shader.put());
+				if (SUCCEEDED(hr))
+					regShader.attach(shader.detach());
+			} else if (!_stricmp(ProgramType, "cs_5_0") || !_stricmp(ProgramType, "cs_4_0")) {
+				winrt::com_ptr<ID3D11ComputeShader> shader;
+				hr = device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, shader.put());
+				if (SUCCEEDED(hr))
+					regShader.attach(shader.detach());
+			} else {
+				return false;
+			}
+			if (a_timing) {
+				accumulateElapsed(
+					a_timing->d3dObjectCreationQpcTicks,
+					objectCreationBegin,
+					queryQpc());
+			}
+			a_result = FAILED(hr) ? hr : regShader ? S_OK :
+			                                         E_FAIL;
+			return SUCCEEDED(a_result);
+		};
+
+		const StandaloneShaderRequest request{ FilePath, macros, ProgramType, Program, flags, developerMode };
+		if (!globals::shaderCache->CompileStandaloneShaderCached(request, compile, createShader)) {
+			if (FAILED(hr))
+				logger::error("Failed to create shader object for {}:{} (HRESULT 0x{:08X})", str, Program, static_cast<uint32_t>(hr));
+			if (SUCCEEDED(a_result))
+				a_result = E_FAIL;
+			return nullptr;
 		}
 
-		return nullptr;
+		nameCompiledShader(regShader.get());
+		a_result = S_OK;
+		return regShader.detach();
 	}
 
 	// RAII wrapper for D3D mapped resources
@@ -585,12 +680,13 @@ namespace Util
 		D3D11_TEXTURE2D_DESC desc = {};
 		desc.Width = width;
 		desc.Height = height;
-		desc.MipLevels = 1;
+		desc.MipLevels = 0;
 		desc.ArraySize = 1;
 		desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 		desc.SampleDesc.Count = 1;
 		desc.Usage = D3D11_USAGE_DEFAULT;
 		desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
 
 		HRESULT hr = device->CreateTexture2D(&desc, nullptr, outTex);
 		if (FAILED(hr)) {
@@ -638,8 +734,13 @@ namespace Util
 		namespace fs = std::filesystem;
 
 		DirectX::ScratchImage cpuImage;
-		if (const auto hr = CaptureTexture(device, context, tex, cpuImage); FAILED(hr))
-			return hr;
+		{
+			const RendererOwnership ownership(GetRendererContextLock(globals::game::renderer, context), true);
+			if (!ownership)
+				return E_POINTER;
+			if (const auto hr = CaptureTexture(device, context, tex, cpuImage); FAILED(hr))
+				return hr;
+		}
 
 		const auto parent = path.parent_path();
 		std::error_code ec;

@@ -1,18 +1,26 @@
+#include "I18n/I18n.h"
 #include "TruePBR.h"
+#include "Menu/SettingsPage.h"
 
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "TruePBR/BSLightingShaderMaterialPBRLandscape.h"
 
+#include "Features/GrassLighting.h"
 #include "Features/InteriorSun.h"
+#include "Features/TerrainBlending.h"
+#include "Features/TerrainSeams.h"
+#include "Features/Upscaling.h"
 #include "Hooks.h"
-#include "I18n/I18n.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/FileSystem.h"
+#include "Utils/Finite.h"
+#include "Utils/Game.h"
+#include "Utils/UI.h"
 
+#include <atomic>
 #include <mutex>
-
-#define I18N_KEY_PREFIX "feature.true_pbr."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	GlintParameters,
@@ -48,6 +56,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TruePBR::Settings,
 	Enabled,
+	GrassEnabled,
 	VertexAOStrength,
 	pbrMetalReflectionScale,
 	pbrMetalHighlightScale);
@@ -149,21 +158,22 @@ namespace PNState
 		}
 	}
 
-	void SavePBRRecordConfig(const std::string& rootPath, const std::string& editorId, const json& config)
+	bool SavePBRRecordConfig(const std::string& rootPath, const std::string& editorId, const json& config, std::string& error)
 	{
-		std::filesystem::create_directory(rootPath);
-
-		const std::string outputPath = std::format("{}\\{}.json", rootPath, editorId);
-		std::ofstream fileStream(outputPath);
-		if (!fileStream.is_open()) {
-			logger::error("[TruePBR] failed to write {}", outputPath);
-			return;
-		}
 		try {
-			fileStream << std::setw(4) << config;
-		} catch (const nlohmann::json::type_error& e) {
-			logger::error("[TruePBR] failed to serialize {} : {}", outputPath, e.what());
-			return;
+			const std::filesystem::path name(editorId);
+			if (name.empty() || name != name.filename() || name == "." || name == "..")
+				throw std::runtime_error("Material name is not a valid filename.");
+			std::filesystem::create_directories(rootPath);
+			const auto outputPath = std::filesystem::path(rootPath) / (editorId + ".json");
+			if (!Util::FileHelpers::WriteTextFileAtomic(outputPath, config.dump(4), error))
+				throw std::runtime_error(error);
+			error = "Material overrides saved.";
+			return true;
+		} catch (const std::exception& e) {
+			error = std::format("Could not save material overrides: {}", e.what());
+			logger::error("[TruePBR] {}", error);
+			return false;
 		}
 	}
 }
@@ -172,236 +182,216 @@ void SetupPBRLandscapeTextureParameters(BSLightingShaderMaterialPBRLandscape& ma
 
 namespace
 {
+
 	bool DrawEnabledCheckbox(TruePBR::Settings& a_settings)
 	{
 		bool enabled = a_settings.Enabled != 0;
-		if (ImGui::Checkbox(T("feature.true_pbr.enabled", "Enabled"), &enabled))
+		if (Util::Widgets::Checkbox(T("feature.true_pbr.enabled", "Enabled"), &enabled))
 			a_settings.Enabled = enabled ? 1u : 0u;
 		return enabled;
 	}
 
+	void DrawGrassCheckbox(TruePBR::Settings& settings)
+	{
+		bool enabled = settings.GrassEnabled != 0;
+		if (Util::Widgets::Checkbox(T("feature.true_pbr.pbr_grass", "PBR Grass"), &enabled))
+			settings.GrassEnabled = enabled ? 1u : 0u;
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T("feature.true_pbr.use_authored_pbr_grass_materials_for_more_nat_51a0b4b7", "Use authored PBR grass materials for more natural lighting and highlights. Requires Grass Lighting. Ordinary grass stays unchanged. Applies immediately."));
+	}
+
 	void DrawPBRMetalSliders(TruePBR::Settings& settings)
 	{
-		ImGui::SliderFloat("PBR Metal Reflection", &settings.pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("Global multiplier for broad TruePBR metallic reflection response.\n1.0 = default. Lower values reduce overall metal reflectivity; higher values strengthen it.\nDoes not affect non-PBR shading.");
-		ImGui::SliderFloat("PBR Metal Highlight", &settings.pbrMetalHighlightScale, 0.0f, 2.0f, "%.2f");
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("Scales focused direct-light highlights on TruePBR metals.\nUse this to reduce sharp bright hotspots without flattening the broader reflection response.");
+		Util::Widgets::SliderFloat(T("feature.true_pbr.pbr_metal_reflection", "PBR Metal Reflection"), &settings.pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
+		if (ImGui::IsItemHovered()) {
+			ImGui::SetTooltip("Scale broad TruePBR metal reflections: 1.0 = default; lower reduces reflectivity, higher strengthens it. Non-PBR shading stays unchanged.");
+		}
+		Util::Widgets::SliderFloat(T("feature.true_pbr.pbr_metal_highlight", "PBR Metal Highlight"), &settings.pbrMetalHighlightScale, 0.0f, 2.0f, "%.2f");
+		if (ImGui::IsItemHovered()) {
+			ImGui::SetTooltip("Scale focused direct-light highlights on TruePBR metals. Reduce bright hotspots while keeping broad reflections.");
+		}
 	}
 }
 
 void TruePBR::DrawSettings()
 {
-	const bool enabled = DrawEnabledCheckbox(settings);
-	ImGui::BeginDisabled(!enabled);
+	static MenuUI::ActionFeedback feedback;
+	MenuUI::SettingsPage page("TruePBR", {
+											 { "look", T("feature.true_pbr.look", "Look"), T("feature.true_pbr.choose_the_shared_material_appearance_first", "Choose the shared material appearance first.") },
+											 { "textures", T("feature.true_pbr.textures", "Textures"), T("feature.true_pbr.refine_individual_texture_materials", "Refine individual texture materials.") },
+											 { "objects", T("feature.true_pbr.objects", "Objects"), T("feature.true_pbr.refine_the_material_appearance_of_selected_objects", "Refine the material appearance of selected objects.") },
+											 { "diagnostics", T("feature.true_pbr.diagnostics", "Diagnostics"), T("feature.true_pbr.inspect_material_loading_and_diagnostic_controls", "Inspect material loading and diagnostic controls.") },
+										 });
 
-	if (ImGui::TreeNodeEx("Global Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+	const bool enabled = settings.Enabled != 0;
+	ImGui::BeginDisabled(!enabled);
+	if (page.Is("look")) {
 		{
 			DrawPBRMetalSliders(settings);
+			DrawGrassCheckbox(settings);
+			Util::Widgets::SliderFloat(T("feature.true_pbr.vertex_ao_strength", "Vertex AO Strength"), &settings.VertexAOStrength, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		}
-		ImGui::SliderFloat("Vertex AO Strength", &settings.VertexAOStrength, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::TreePop();
 	}
-
-	if (ImGui::TreeNodeEx("Texture Set Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (page.Is("textures")) {
 		if (Util::SearchableCombo("Texture Set", selectedPbrTextureSetName, pbrTextureSets)) {
 			selectedPbrTextureSet = &pbrTextureSets[selectedPbrTextureSetName];
 		}
 
+		if (pbrTextureSets.empty())
+			MenuUI::DetailNote(T("feature.true_pbr.no_authored_pbr_texture_sets_have_been_loaded_83a316f0", "No authored PBR texture sets have been loaded. Load a scene using PBR materials to edit them here."));
 		if (selectedPbrTextureSet != nullptr) {
 			bool wasEdited = false;
-			if (ImGui::SliderFloat("Displacement Scale", &selectedPbrTextureSet->displacementScale, 0.f, 3.f, "%.3f")) {
+			if (Util::Widgets::SliderFloat(T("feature.true_pbr.displacement_scale", "Displacement Scale"), &selectedPbrTextureSet->displacementScale, 0.f, 3.f, "%.3f")) {
 				wasEdited = true;
 			}
-			if (ImGui::SliderFloat("Roughness Scale", &selectedPbrTextureSet->roughnessScale, 0.f, 3.f, "%.3f")) {
+			if (Util::Widgets::SliderFloat(T("feature.true_pbr.roughness_scale", "Roughness Scale"), &selectedPbrTextureSet->roughnessScale, 0.f, 3.f, "%.3f")) {
 				wasEdited = true;
 			}
-			if (ImGui::SliderFloat("Specular Level", &selectedPbrTextureSet->specularLevel, 0.f, 3.f, "%.3f")) {
+			if (Util::Widgets::SliderFloat(T("feature.true_pbr.specular_level", "Specular Level"), &selectedPbrTextureSet->specularLevel, 0.f, 3.f, "%.3f")) {
 				wasEdited = true;
 			}
-			if (ImGui::TreeNodeEx("Subsurface")) {
-				if (ImGui::ColorPicker3("Subsurface Color", &selectedPbrTextureSet->subsurfaceColor.red)) {
+			if (ImGui::TreeNodeEx(T("feature.true_pbr.subsurface", "Subsurface"))) {
+				if (Util::Widgets::ColorEdit3(T("feature.true_pbr.subsurface_color", "Subsurface Color"), &selectedPbrTextureSet->subsurfaceColor.red)) {
 					wasEdited = true;
 				}
-				if (ImGui::SliderFloat("Subsurface Opacity", &selectedPbrTextureSet->subsurfaceOpacity, 0.f, 1.f, "%.3f")) {
+				if (Util::Widgets::SliderFloat(T("feature.true_pbr.subsurface_opacity", "Subsurface Opacity"), &selectedPbrTextureSet->subsurfaceOpacity, 0.f, 1.f, "%.3f")) {
 					wasEdited = true;
 				}
 
 				ImGui::TreePop();
 			}
-			if (ImGui::TreeNodeEx("Coat")) {
-				if (ImGui::ColorPicker3("Coat Color", &selectedPbrTextureSet->coatColor.red)) {
+			if (ImGui::TreeNodeEx(T("feature.true_pbr.coat", "Coat"))) {
+				if (Util::Widgets::ColorEdit3(T("feature.true_pbr.coat_color", "Coat Color"), &selectedPbrTextureSet->coatColor.red)) {
 					wasEdited = true;
 				}
-				if (ImGui::SliderFloat("Coat Strength", &selectedPbrTextureSet->coatStrength, 0.f, 1.f, "%.3f")) {
+				if (Util::Widgets::SliderFloat(T("feature.true_pbr.coat_strength", "Coat Strength"), &selectedPbrTextureSet->coatStrength, 0.f, 1.f, "%.3f")) {
 					wasEdited = true;
 				}
-				if (ImGui::SliderFloat("Coat Roughness", &selectedPbrTextureSet->coatRoughness, 0.f, 1.f, "%.3f")) {
+				if (Util::Widgets::SliderFloat(T("feature.true_pbr.coat_roughness", "Coat Roughness"), &selectedPbrTextureSet->coatRoughness, 0.f, 1.f, "%.3f")) {
 					wasEdited = true;
 				}
-				if (ImGui::SliderFloat("Coat Specular Level", &selectedPbrTextureSet->coatSpecularLevel, 0.f, 1.f, "%.3f")) {
+				if (Util::Widgets::SliderFloat(T("feature.true_pbr.coat_specular_level", "Coat Specular Level"), &selectedPbrTextureSet->coatSpecularLevel, 0.f, 1.f, "%.3f")) {
 					wasEdited = true;
 				}
-				if (ImGui::SliderFloat("Inner Layer Displacement Offset", &selectedPbrTextureSet->innerLayerDisplacementOffset, 0.f, 3.f, "%.3f")) {
+				if (Util::Widgets::SliderFloat(T("feature.true_pbr.inner_layer_displacement_offset", "Inner Layer Displacement Offset"), &selectedPbrTextureSet->innerLayerDisplacementOffset, 0.f, 3.f, "%.3f")) {
 					wasEdited = true;
 				}
 				ImGui::TreePop();
 			}
-			if (ImGui::TreeNodeEx("Glint")) {
-				if (ImGui::Checkbox("Enabled", &selectedPbrTextureSet->glintParameters.enabled)) {
+			if (ImGui::TreeNodeEx(T("feature.true_pbr.glint", "Glint"))) {
+				if (Util::Widgets::Checkbox(T("feature.true_pbr.enabled", "Enabled"), &selectedPbrTextureSet->glintParameters.enabled)) {
 					wasEdited = true;
 				}
 				if (selectedPbrTextureSet->glintParameters.enabled) {
-					if (ImGui::SliderFloat("Screenspace Scale", &selectedPbrTextureSet->glintParameters.screenSpaceScale, 0.f, 3.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat(T("feature.true_pbr.screenspace_scale", "Screenspace Scale"), &selectedPbrTextureSet->glintParameters.screenSpaceScale, 0.f, 3.f, "%.3f")) {
 						wasEdited = true;
 					}
-					if (ImGui::SliderFloat("Log Microfacet Density", &selectedPbrTextureSet->glintParameters.logMicrofacetDensity, 0.f, 40.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat(T("feature.true_pbr.log_microfacet_density", "Log Microfacet Density"), &selectedPbrTextureSet->glintParameters.logMicrofacetDensity, 0.f, 40.f, "%.3f")) {
 						wasEdited = true;
 					}
-					if (ImGui::SliderFloat("Microfacet Roughness", &selectedPbrTextureSet->glintParameters.microfacetRoughness, 0.f, 1.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat(T("feature.true_pbr.microfacet_roughness", "Microfacet Roughness"), &selectedPbrTextureSet->glintParameters.microfacetRoughness, 0.f, 1.f, "%.3f")) {
 						wasEdited = true;
 					}
-					if (ImGui::SliderFloat("Density Randomization", &selectedPbrTextureSet->glintParameters.densityRandomization, 0.f, 5.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat(T("feature.true_pbr.density_randomization", "Density Randomization"), &selectedPbrTextureSet->glintParameters.densityRandomization, 0.f, 5.f, "%.3f")) {
 						wasEdited = true;
 					}
 				}
 				ImGui::TreePop();
 			}
 			if (wasEdited) {
-				for (auto& [material, extensions] : BSLightingShaderMaterialPBR::All) {
+				BSLightingShaderMaterialPBR::All.ForEach([&](auto* material, const auto& extensions) {
 					if (extensions.textureSetData == selectedPbrTextureSet) {
 						material->ApplyTextureSetData(*extensions.textureSetData);
 					}
-				}
-				for (auto& [material, textureSets] : BSLightingShaderMaterialPBRLandscape::All) {
+				});
+				BSLightingShaderMaterialPBRLandscape::All.ForEach([&](auto* material, const auto& textureSets) {
 					for (uint32_t textureSetIndex = 0; textureSetIndex < BSLightingShaderMaterialPBRLandscape::NumTiles; ++textureSetIndex) {
 						if (textureSets[textureSetIndex] == selectedPbrTextureSet) {
 							SetupPBRLandscapeTextureParameters(*material, *textureSets[textureSetIndex], textureSetIndex);
 						}
 					}
-				}
+				});
 			}
 			if (selectedPbrTextureSet != nullptr) {
-				if (ImGui::Button("Save")) {
-					PNState::SavePBRRecordConfig("Data\\PBRTextureSets", selectedPbrTextureSetName, *selectedPbrTextureSet);
+				if (ImGui::Button(T("feature.true_pbr.save_texture_set", "Save texture set"))) {
+					feedback.error = !PNState::SavePBRRecordConfig("Data\\PBRTextureSets", selectedPbrTextureSetName, *selectedPbrTextureSet, feedback.message);
 				}
 			}
 		}
-		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Material Object Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (page.Is("objects")) {
 		if (Util::SearchableCombo("Material Object", selectedPbrMaterialObjectName, pbrMaterialObjects)) {
 			selectedPbrMaterialObject = &pbrMaterialObjects[selectedPbrMaterialObjectName];
 		}
 
+		if (pbrMaterialObjects.empty())
+			MenuUI::DetailNote(T("feature.true_pbr.no_authored_pbr_material_objects_have_been_lo_0a2ef27d", "No authored PBR material objects have been loaded. Load a scene using PBR materials to edit them here."));
 		if (selectedPbrMaterialObject != nullptr) {
 			bool wasEdited = false;
-			if (ImGui::TreeNodeEx("Base Color Scale", ImGuiTreeNodeFlags_DefaultOpen)) {
-				if (ImGui::Button("Reset to 1.0##BaseColorScale")) {
+			if (ImGui::TreeNodeEx(T("feature.true_pbr.base_color_scale", "Base Color Scale"))) {
+				if (ImGui::Button(T("feature.true_pbr.reset_to_1_0_basecolorscale", "Reset to 1.0##BaseColorScale"))) {
 					selectedPbrMaterialObject->baseColorScale = { 1.f, 1.f, 1.f };
 					wasEdited = true;
 				}
 
-				const float indent = ImGui::GetCursorPosX();
-				const float defaultItemWidth = ImGui::CalcItemWidth();
-				const float letterColWidth = ImGui::CalcTextSize("Green").x + ImGui::GetStyle().ItemSpacing.x;
-				const float sliderStartX = indent + letterColWidth;
-				const float sliderWidth = defaultItemWidth - (sliderStartX - ImGui::GetStyle().ItemSpacing.x);
-				const float colorLabelStartX = sliderStartX - ImGui::GetStyle().ItemSpacing.x - letterColWidth;
-
-				ImGui::AlignTextToFramePadding();
-				ImGui::SetCursorPosX(colorLabelStartX);
-				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
-				ImGui::Text("Red");
-				ImGui::PopStyleColor();
-				ImGui::SameLine(sliderStartX);
-				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.4f, 0.1f, 0.1f, 0.6f));
-				ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
-				ImGui::SetNextItemWidth(sliderWidth);
-				if (ImGui::SliderFloat("##BaseColorScaleR", &selectedPbrMaterialObject->baseColorScale[0], 0.f, 10.f, "%.3f")) {
-					wasEdited = true;
+				{
+					ImGui::PushID("BaseColorScale");
+					const auto restoreId = SKSE::stl::scope_exit([] { ImGui::PopID(); });
+					for (int channel = 0; channel < 3; ++channel) {
+						constexpr const char* names[] = { "Red", "Green", "Blue" };
+						wasEdited |= Util::Widgets::SliderFloat(names[channel], &selectedPbrMaterialObject->baseColorScale[channel], 0.f, 10.f, "%.3f");
+					}
 				}
-				ImGui::PopStyleColor(2);
-
-				ImGui::AlignTextToFramePadding();
-				ImGui::SetCursorPosX(colorLabelStartX);
-				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.9f, 0.3f, 1.0f));
-				ImGui::Text("Green");
-				ImGui::PopStyleColor();
-				ImGui::SameLine(sliderStartX);
-				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.4f, 0.1f, 0.6f));
-				ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.3f, 0.9f, 0.3f, 1.0f));
-				ImGui::SetNextItemWidth(sliderWidth);
-				if (ImGui::SliderFloat("##BaseColorScaleG", &selectedPbrMaterialObject->baseColorScale[1], 0.f, 10.f, "%.3f")) {
-					wasEdited = true;
-				}
-				ImGui::PopStyleColor(2);
-
-				ImGui::AlignTextToFramePadding();
-				ImGui::SetCursorPosX(colorLabelStartX);
-				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.3f, 0.9f, 1.0f));
-				ImGui::Text("Blue");
-				ImGui::PopStyleColor();
-				ImGui::SameLine(sliderStartX);
-				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.4f, 0.6f));
-				ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.3f, 0.3f, 0.9f, 1.0f));
-				ImGui::SetNextItemWidth(sliderWidth);
-				if (ImGui::SliderFloat("##BaseColorScaleB", &selectedPbrMaterialObject->baseColorScale[2], 0.f, 10.f, "%.3f")) {
-					wasEdited = true;
-				}
-				ImGui::PopStyleColor(2);
-
 				ImGui::TreePop();
 			}
-			if (ImGui::SliderFloat("Roughness", &selectedPbrMaterialObject->roughness, 0.f, 1.f, "%.3f")) {
+			if (Util::Widgets::SliderFloat(T("feature.true_pbr.roughness", "Roughness"), &selectedPbrMaterialObject->roughness, 0.f, 1.f, "%.3f")) {
 				wasEdited = true;
 			}
-			if (ImGui::SliderFloat("Specular Level", &selectedPbrMaterialObject->specularLevel, 0.f, 1.f, "%.3f")) {
+			if (Util::Widgets::SliderFloat(T("feature.true_pbr.specular_level", "Specular Level"), &selectedPbrMaterialObject->specularLevel, 0.f, 1.f, "%.3f")) {
 				wasEdited = true;
 			}
-			if (ImGui::TreeNodeEx("Glint")) {
-				if (ImGui::Checkbox("Enabled", &selectedPbrMaterialObject->glintParameters.enabled)) {
+			if (ImGui::TreeNodeEx(T("feature.true_pbr.glint", "Glint"))) {
+				if (Util::Widgets::Checkbox(T("feature.true_pbr.enabled", "Enabled"), &selectedPbrMaterialObject->glintParameters.enabled)) {
 					wasEdited = true;
 				}
 				if (selectedPbrMaterialObject->glintParameters.enabled) {
-					if (ImGui::SliderFloat("Screenspace Scale", &selectedPbrMaterialObject->glintParameters.screenSpaceScale, 0.f, 3.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat(T("feature.true_pbr.screenspace_scale", "Screenspace Scale"), &selectedPbrMaterialObject->glintParameters.screenSpaceScale, 0.f, 3.f, "%.3f")) {
 						wasEdited = true;
 					}
-					if (ImGui::SliderFloat("Log Microfacet Density", &selectedPbrMaterialObject->glintParameters.logMicrofacetDensity, 0.f, 40.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat(T("feature.true_pbr.log_microfacet_density", "Log Microfacet Density"), &selectedPbrMaterialObject->glintParameters.logMicrofacetDensity, 0.f, 40.f, "%.3f")) {
 						wasEdited = true;
 					}
-					if (ImGui::SliderFloat("Microfacet Roughness", &selectedPbrMaterialObject->glintParameters.microfacetRoughness, 0.f, 1.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat(T("feature.true_pbr.microfacet_roughness", "Microfacet Roughness"), &selectedPbrMaterialObject->glintParameters.microfacetRoughness, 0.f, 1.f, "%.3f")) {
 						wasEdited = true;
 					}
-					if (ImGui::SliderFloat("Density Randomization", &selectedPbrMaterialObject->glintParameters.densityRandomization, 0.f, 5.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat(T("feature.true_pbr.density_randomization", "Density Randomization"), &selectedPbrMaterialObject->glintParameters.densityRandomization, 0.f, 5.f, "%.3f")) {
 						wasEdited = true;
 					}
 				}
 				ImGui::TreePop();
 			}
 			if (wasEdited) {
-				for (auto& [material, extensions] : BSLightingShaderMaterialPBR::All) {
+				BSLightingShaderMaterialPBR::All.ForEach([&](auto* material, const auto& extensions) {
 					if (extensions.materialObjectData == selectedPbrMaterialObject) {
 						material->ApplyMaterialObjectData(*extensions.materialObjectData);
 					}
-				}
+				});
 			}
 			if (selectedPbrMaterialObject != nullptr) {
-				if (ImGui::Button("Save")) {
-					PNState::SavePBRRecordConfig("Data\\PBRMaterialObjects", selectedPbrMaterialObjectName, *selectedPbrMaterialObject);
+				if (ImGui::Button(T("feature.true_pbr.save_material_object", "Save material object"))) {
+					feedback.error = !PNState::SavePBRRecordConfig("Data\\PBRMaterialObjects", selectedPbrMaterialObjectName, *selectedPbrMaterialObject, feedback.message);
 				}
 			}
 		}
-		ImGui::TreePop();
 	}
 
 	ImGui::EndDisabled();
+	if (page.Is("textures") || page.Is("objects"))
+		feedback.Draw();
 
-	if (ImGui::TreeNodeEx(T(TKEY("debug"), "Debug"))) {
-		ImGui::Checkbox(T(TKEY("enable_verbose_json_logging"), "Enable verbose json logging"), &enableVerboseJsonLogging);
-		ImGui::TreePop();
+	if (page.Is("diagnostics")) {
+		Util::Widgets::Checkbox(T("feature.true_pbr.enable_verbose_json_logging", "Enable verbose JSON logging"), &enableVerboseJsonLogging);
 	}
 }
 
@@ -418,40 +408,52 @@ void TruePBR::DrawPerformanceSettings(bool)
 	DrawEnabledCheckbox(settings);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(
-			"Disabling bypasses True PBR material shading. The cost difference depends on visible PBR content.");
+			T("feature.true_pbr.disabling_bypasses_true_pbr_material_shading_8ba5c323", "Disabling bypasses True PBR material shading. The cost difference depends on visible PBR content."));
 	}
+	DrawGrassCheckbox(settings);
 }
 
 json TruePBR::CapturePerformanceSettingsState() const
 {
 	return {
-		{ "Enabled", settings.Enabled != 0 }
+		{ "Enabled", settings.Enabled != 0 },
+		{ "GrassEnabled", settings.GrassEnabled != 0 }
 	};
 }
 
 void TruePBR::SaveSettings(json& o_json)
 {
 	o_json = settings;
-	o_json["EnableVerboseJsonLogging"] = enableVerboseJsonLogging;
 }
 
 void TruePBR::LoadSettings(json& o_json)
 {
-	settings = o_json;
-	settings.Enabled = settings.Enabled ? 1u : 0u;
-	enableVerboseJsonLogging = o_json.value("EnableVerboseJsonLogging", false);
-}
-
-void TruePBR::RestoreDefaultSettings()
-{
-	settings = {};
-	enableVerboseJsonLogging = false;
+	auto loadedSettings = o_json.get<Settings>();
+	loadedSettings.Enabled = loadedSettings.Enabled ? 1u : 0u;
+	loadedSettings.GrassEnabled = loadedSettings.GrassEnabled ? 1u : 0u;
+	loadedSettings.pbrMetalReflectionScale = Util::ClampFinite(loadedSettings.pbrMetalReflectionScale, 0.0f, 2.0f, 1.0f);
+	loadedSettings.pbrMetalHighlightScale = Util::ClampFinite(loadedSettings.pbrMetalHighlightScale, 0.0f, 2.0f, 1.0f);
+	loadedSettings.VertexAOStrength = Util::ClampFinite(loadedSettings.VertexAOStrength, 0.0f, 1.0f, Settings{}.VertexAOStrength);
+	settings = loadedSettings;
 }
 
 void TruePBR::SetupResources()
 {
 	SetupTextureSetData();
 	SetupMaterialObjectData();
+}
+
+void TruePBR::RestoreDefaultSettings()
+{
+	settings = {};
+	enableVerboseJsonLogging = false;
+
+	if (!globals::state) {
+		return;
+	}
+
+	settings.pbrMetalReflectionScale = 1.0f;
+	settings.pbrMetalHighlightScale = 1.0f;
 }
 
 void TruePBR::Prepass()
@@ -580,12 +582,13 @@ void TruePBR::ReloadTextureSetData()
 			return false;
 		} }, enableVerboseJsonLogging);
 
-	for (const auto& [material, textureSets] : BSLightingShaderMaterialPBRLandscape::All) {
+	BSLightingShaderMaterialPBRLandscape::All.ForEach([](auto* material, const auto& textureSets) {
 		for (uint32_t textureSetIndex = 0; textureSetIndex < BSLightingShaderMaterialPBRLandscape::NumTiles; ++textureSetIndex) {
-			if (const auto* textureSetData = textureSets[textureSetIndex])
+			if (const auto* textureSetData = textureSets[textureSetIndex]) {
 				SetupPBRLandscapeTextureParameters(*material, *textureSetData, textureSetIndex);
+			}
 		}
-	}
+	});
 }
 
 TruePBR::PBRTextureSetData* TruePBR::GetPBRTextureSetData(const RE::TESForm* textureSet)
@@ -677,7 +680,7 @@ namespace Permutations
 		}
 	}
 
-	std::unordered_set<uint32_t> GeneratePBRLightingPixelPermutations()
+	std::unordered_set<uint32_t> GeneratePBRLightingPixelPermutations(bool landscapeSeams)
 	{
 		using enum SIE::ShaderCache::LightingShaderFlags;
 
@@ -694,7 +697,11 @@ namespace Permutations
 		const std::unordered_set<uint32_t> projectedUvFlagValues = GenerateFlagPermutations(projectedUvFlags, projectedUvConstantFlags);
 		const std::unordered_set<uint32_t> lodObjectsFlagValues = GenerateFlagPermutations(lodObjectsFlags, defaultConstantFlags);
 		const std::unordered_set<uint32_t> treeFlagValues = GenerateFlagPermutations(treeFlags, defaultConstantFlags);
-		const std::unordered_set<uint32_t> landFlagValues = GenerateFlagPermutations(landFlags, defaultConstantFlags);
+		std::unordered_set<uint32_t> landFlagValues = GenerateFlagPermutations(landFlags, defaultConstantFlags);
+		if (landscapeSeams) {
+			const auto seamFlagValues = GenerateFlagPermutations(landFlags, defaultConstantFlags | static_cast<uint32_t>(LandscapeSeams));
+			landFlagValues.insert(seamFlagValues.begin(), seamFlagValues.end());
+		}
 
 		std::unordered_set<uint32_t> result;
 		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::None, defaultFlagValues, result);
@@ -706,6 +713,16 @@ namespace Permutations
 		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::MTLandLODBlend, landFlagValues, result);
 		return result;
 	}
+
+	std::unordered_set<uint32_t> GeneratePBRUtilityPixelPermutations()
+	{
+		using enum SIE::ShaderCache::UtilityShaderFlags;
+		constexpr std::array flags{ Vc, AlphaTest, TreeAnim };
+		constexpr uint32_t constantFlags = static_cast<uint32_t>(Texture) |
+		                                   static_cast<uint32_t>(RenderBaseTexture) |
+		                                   static_cast<uint32_t>(TruePbr);
+		return GenerateFlagPermutations(flags, constantFlags);
+	}
 }
 
 void TruePBR::GenerateShaderPermutations(RE::BSShader* shader)
@@ -713,13 +730,35 @@ void TruePBR::GenerateShaderPermutations(RE::BSShader* shader)
 	auto state = globals::state;
 	auto shaderCache = globals::shaderCache;
 	if (shader->shaderType == RE::BSShader::Type::Lighting) {
-		const auto pixelPermutations = Permutations::GeneratePBRLightingPixelPermutations();
+		const bool categories = globals::features::upscaling.NeedsCharacterCategoryShaders();
+		const auto& terrain = globals::features::terrainBlending;
+		// Seam runtime activation happens after startup prewarming, so use the configured state here.
+		const bool landscapeSeams = loaded && settings.Enabled && terrain.loaded && terrain.settings.Enabled && terrain.settings.LandscapeSeams;
+		auto pixelPermutations = Permutations::GeneratePBRLightingPixelPermutations(landscapeSeams);
+		if (landscapeSeams) {
+			constexpr auto seamsFlag = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
+			constexpr auto deferredFlag = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Deferred);
+			for (const auto& entry : shader->pixelShaders) {
+				const auto type = static_cast<SIE::ShaderCache::LightingShaderTechniques>((entry->id >> 24) & 0x3F);
+				if (type != SIE::ShaderCache::LightingShaderTechniques::MTLand && type != SIE::ShaderCache::LightingShaderTechniques::MTLandLODBlend)
+					continue;
+
+				pixelPermutations.insert(entry->id | seamsFlag);
+				pixelPermutations.insert(entry->id | seamsFlag | deferredFlag);
+			}
+		}
 		for (auto descriptor : pixelPermutations) {
 			auto vertexShaderDesriptor = descriptor;
 			auto pixelShaderDescriptor = descriptor;
 			state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
-			std::ignore = shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
+			if (pixelShaderDescriptor & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Deferred))
+				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, categories);
+			else
+				std::ignore = shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
 		}
+	} else if (shader->shaderType == RE::BSShader::Type::Utility) {
+		for (auto descriptor : Permutations::GeneratePBRUtilityPixelPermutations())
+			std::ignore = shaderCache->GetPixelShader(*shader, descriptor);
 	}
 }
 
@@ -749,14 +788,6 @@ struct ExtendedRendererState
 
 namespace
 {
-	bool IsLikelyValidPointer(const void* pointer, std::size_t alignment = alignof(void*))
-	{
-		const auto address = reinterpret_cast<std::uintptr_t>(pointer);
-		constexpr std::uintptr_t MinUserModeAddress = 0x10000;
-		constexpr std::uintptr_t MaxUserModeAddress = 0x00007FFFFFFFFFFFULL;
-		return address >= MinUserModeAddress && address <= MaxUserModeAddress && (address & (alignment - 1)) == 0;
-	}
-
 	const char* GetGeometryName(const RE::BSGeometry* geometry)
 	{
 		return geometry && geometry->name.c_str() ? geometry->name.c_str() : "<null>";
@@ -764,28 +795,30 @@ namespace
 
 	BSLightingShaderMaterialPBR* TryGetRegisteredPBRMaterial(RE::BSShaderProperty* property, RE::BSGeometry* geometry)
 	{
-		if (property == nullptr || !property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting))
+		if (property == nullptr || !property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting)) {
 			return nullptr;
+		}
 
 		auto* material = static_cast<BSLightingShaderMaterialPBR*>(property->material);
-		if (!IsLikelyValidPointer(material)) {
-			static bool loggedInvalidMaterialAddress = false;
-			if (!loggedInvalidMaterialAddress) {
-				loggedInvalidMaterialAddress = true;
+		if (!Util::IsLikelyValidPointer(material)) {
+			static std::atomic_flag loggedInvalidMaterialAddress{};
+			if (!loggedInvalidMaterialAddress.test_and_set(std::memory_order_relaxed)) {
 				logger::error("[TruePBR] Invalid material pointer {:X} (geometry: {}) - keeping original render state",
-					reinterpret_cast<std::uintptr_t>(material), GetGeometryName(geometry));
+					reinterpret_cast<std::uintptr_t>(material),
+					GetGeometryName(geometry));
 			}
 			return nullptr;
 		}
 
-		if (BSLightingShaderMaterialPBR::All.find(material) == BSLightingShaderMaterialPBR::All.end()) {
-			static bool loggedUnknownPBRMaterial = false;
-			if (!loggedUnknownPBRMaterial) {
-				loggedUnknownPBRMaterial = true;
-				logger::warn("[TruePBR] Ignoring unregistered vertex-lighting material on geometry {} to avoid invalid PBR casts", GetGeometryName(geometry));
+		if (!BSLightingShaderMaterialPBR::All.Contains(material)) {
+			static std::atomic_flag loggedUnknownPBRMaterial{};
+			if (!loggedUnknownPBRMaterial.test_and_set(std::memory_order_relaxed)) {
+				logger::warn("[TruePBR] Ignoring unregistered vertex-lighting material on geometry {} to avoid invalid PBR casts",
+					GetGeometryName(geometry));
 			}
 			return nullptr;
 		}
+
 		return material;
 	}
 
@@ -793,31 +826,162 @@ namespace
 	{
 		if (property == nullptr ||
 			!property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting) ||
-			!property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape))
+			!property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape)) {
 			return nullptr;
+		}
 
-		auto* material = static_cast<BSLightingShaderMaterialPBRLandscape*>(property->material);
-		if (!IsLikelyValidPointer(material)) {
-			static bool loggedInvalidLandscapeMaterialAddress = false;
-			if (!loggedInvalidLandscapeMaterialAddress) {
-				loggedInvalidLandscapeMaterialAddress = true;
+		auto* sourceMaterial = property->material;
+		if (!Util::IsLikelyValidPointer(sourceMaterial)) {
+			static std::atomic_flag loggedInvalidLandscapeMaterialAddress{};
+			if (!loggedInvalidLandscapeMaterialAddress.test_and_set(std::memory_order_relaxed)) {
 				logger::error("[TruePBR] Invalid landscape material pointer {:X} (geometry: {}) - keeping original render state",
-					reinterpret_cast<std::uintptr_t>(material), GetGeometryName(geometry));
+					reinterpret_cast<std::uintptr_t>(sourceMaterial),
+					GetGeometryName(geometry));
 			}
 			return nullptr;
 		}
 
-		if (BSLightingShaderMaterialPBRLandscape::All.find(material) == BSLightingShaderMaterialPBRLandscape::All.end()) {
-			static bool loggedUnknownPBRLandscapeMaterial = false;
-			if (!loggedUnknownPBRLandscapeMaterial) {
-				loggedUnknownPBRLandscapeMaterial = true;
-				logger::warn("[TruePBR] Ignoring unregistered landscape PBR material on geometry {} to avoid invalid casts", GetGeometryName(geometry));
+		auto* material = const_cast<BSLightingShaderMaterialPBRLandscape*>(BSLightingShaderMaterialPBRLandscape::GetRegistered(sourceMaterial));
+		if (!material) {
+			static std::atomic_flag loggedUnknownPBRLandscapeMaterial{};
+			if (!loggedUnknownPBRLandscapeMaterial.test_and_set(std::memory_order_relaxed)) {
+				logger::warn("[TruePBR] Ignoring unregistered landscape PBR material on geometry {} to avoid invalid casts",
+					GetGeometryName(geometry));
 			}
 			return nullptr;
 		}
+
 		return material;
 	}
 }
+
+bool TruePBR::IsPBRGrassMaterial(const RE::BSShaderMaterial* material) const
+{
+	return loaded && material != nullptr &&
+	       BSLightingShaderMaterialPBR::All.Contains(const_cast<BSLightingShaderMaterialPBR*>(static_cast<const BSLightingShaderMaterialPBR*>(material)));
+}
+
+bool TruePBR::IsPBRGrassEnabled() const
+{
+	return loaded && settings.Enabled && settings.GrassEnabled &&
+	       globals::features::grassLighting.loaded && globals::features::grassLighting.settings.Enabled;
+}
+
+void TruePBR::SetupGrassMaterial(RE::BSLightingShaderProperty* source, RE::BSLightingShaderProperty* grass)
+{
+	if (source == nullptr || grass == nullptr || grass->material == nullptr ||
+		!source->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting) ||
+		!IsPBRGrassMaterial(source->material))
+		return;
+
+	BSLightingShaderMaterialPBR material;
+	material.CopyMembers(source->material);
+	const auto* generated = static_cast<const RE::BSLightingShaderMaterialBase*>(grass->material);
+	material.diffuseTexture = generated->diffuseTexture;
+	material.textureClampMode = generated->textureClampMode;
+	const auto& defaults = globals::game::graphicsState->GetRuntimeData();
+	if (!material.diffuseTexture)
+		material.diffuseTexture = defaults.defaultTextureWhite;
+	if (!material.normalTexture)
+		material.normalTexture = defaults.defaultTextureNormalMap;
+	if (material.rmaosTexture == defaults.defaultTextureWhite)
+		material.rmaosTexture.reset();
+	// Missing RMAOS is interpreted as a rough, nonmetal surface by the shader.
+	grass->SetMaterial(&material, true);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (grassDiagnosticsEnabled.load(std::memory_order_relaxed)) {
+		grassMaterialsCreated.fetch_add(1, std::memory_order_relaxed);
+		if (!material.rmaosTexture)
+			grassMissingRmaos.fetch_add(1, std::memory_order_relaxed);
+	}
+#endif
+}
+
+void TruePBR::SetupGrassShaderMaterial(RE::BSShader* shader, const RE::BSLightingShaderMaterialBase* material)
+{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const bool diagnostics = grassDiagnosticsEnabled.load(std::memory_order_relaxed);
+	if (diagnostics)
+		grassMaterialSetups.fetch_add(1, std::memory_order_relaxed);
+#endif
+	if (shader->shaderType != RE::BSShader::Type::Grass || !IsPBRGrassMaterial(material) ||
+		!globals::features::grassLighting.loaded)
+		return;
+	// Material constants must follow the shader actually bound, including a pending category fallback.
+	auto* boundShader = *globals::game::currentPixelShader;
+	auto* customShader = boundShader ? globals::shaderCache->GetPixelShader(*shader, boundShader->id, SIE::ShaderCache::PixelShaderLookup::Cached) : nullptr;
+	const auto& constants = ShaderConstants::GrassPS::Get();
+	if (customShader == nullptr || customShader != *globals::game::currentPixelShader ||
+		customShader->constantBuffers[1].buffer == nullptr ||
+		customShader->constantTable[constants.PBRFlags] != 0 ||
+		customShader->constantTable[constants.PBRParams1] != 1 ||
+		customShader->constantTable[constants.PBRParams2] != 4) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (diagnostics)
+			grassShaderFallbackSetups.fetch_add(1, std::memory_order_relaxed);
+#endif
+		return;
+	}
+	const auto* pbr = static_cast<const BSLightingShaderMaterialPBR*>(material);
+	const auto& defaults = globals::game::graphicsState->GetRuntimeData();
+	auto* state = globals::game::shadowState;
+	const auto clampMode = static_cast<RE::BSGraphics::TextureAddressMode>(std::clamp(pbr->textureClampMode, 0, 3));
+	const std::array<RE::NiSourceTexture*, 3> textures{
+		pbr->normalTexture ? pbr->normalTexture.get() : defaults.defaultTextureNormalMap.get(),
+		pbr->rmaosTexture ? pbr->rmaosTexture.get() : defaults.defaultTextureWhite.get(),
+		pbr->featuresTexture0 ? pbr->featuresTexture0.get() : defaults.defaultTextureWhite.get()
+	};
+	for (size_t index = 0; index < textures.size(); ++index) {
+		state->SetPSTexture(index + 2, textures[index] ? textures[index]->rendererTexture : nullptr);
+		state->SetPSTextureAddressMode(index + 2, clampMode);
+		state->SetPSTextureFilterMode(index + 2, RE::BSGraphics::TextureFilterMode::kAnisotropic);
+	}
+	uint32_t flags = pbr->pbrFlags.any(PBRFlags::Subsurface) ? static_cast<uint32_t>(PBRShaderFlags::Subsurface) : 0u;
+	if (pbr->featuresTexture0 && pbr->featuresTexture0 != defaults.defaultTextureWhite)
+		flags |= static_cast<uint32_t>(PBRShaderFlags::HasFeaturesTexture0);
+	if (pbr->rmaosTexture)
+		flags |= static_cast<uint32_t>(PBRShaderFlags::GrassHasRmaos);
+	const std::array<float, 3> parameters{
+		Util::ClampFinite(pbr->GetRoughnessScale(), 0.f, 3.f, 1.f),
+		Util::ClampFinite(pbr->GetSpecularLevel(), 0.f, 3.f, 0.04f), 0.f
+	};
+	const auto& color = pbr->GetSubsurfaceColor();
+	const std::array<float, 4> subsurface{
+		Util::ClampFinite(color.red, 0.f, 1.f, 0.f),
+		Util::ClampFinite(color.green, 0.f, 1.f, 0.f),
+		Util::ClampFinite(color.blue, 0.f, 1.f, 0.f),
+		Util::ClampFinite(pbr->GetSubsurfaceOpacity(), 0.f, 1.f, 0.f)
+	};
+	RE::BSGraphics::Renderer::PreparePSConstantGroup(RE::BSGraphics::ConstantGroupLevel::PerMaterial);
+	state->SetPSConstant(flags, RE::BSGraphics::ConstantGroupLevel::PerMaterial, constants.PBRFlags);
+	state->SetPSConstant(parameters, RE::BSGraphics::ConstantGroupLevel::PerMaterial, constants.PBRParams1);
+	state->SetPSConstant(subsurface, RE::BSGraphics::ConstantGroupLevel::PerMaterial, constants.PBRParams2);
+	RE::BSGraphics::Renderer::FlushPSConstantGroup(RE::BSGraphics::ConstantGroupLevel::PerMaterial);
+	RE::BSGraphics::Renderer::ApplyPSConstantGroup(RE::BSGraphics::ConstantGroupLevel::PerMaterial);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (diagnostics && IsPBRGrassEnabled())
+		grassPBRMaterialSetups.fetch_add(1, std::memory_order_relaxed);
+#endif
+}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+void TruePBR::SetGrassDiagnosticsEnabled(bool enabled)
+{
+	grassDiagnosticsEnabled.store(enabled, std::memory_order_relaxed);
+}
+
+json TruePBR::GetGrassDiagnostics() const
+{
+	return {
+		{ "enabled", grassDiagnosticsEnabled.load(std::memory_order_relaxed) },
+		{ "materialsCreated", grassMaterialsCreated.load(std::memory_order_relaxed) },
+		{ "missingRmaosMaterials", grassMissingRmaos.load(std::memory_order_relaxed) },
+		{ "authoredMaterialSetups", grassMaterialSetups.load(std::memory_order_relaxed) },
+		{ "pbrMaterialSetups", grassPBRMaterialSetups.load(std::memory_order_relaxed) },
+		{ "shaderUnavailableOrDepthSetups", grassShaderFallbackSetups.load(std::memory_order_relaxed) }
+	};
+}
+#endif
 
 struct BSLightingShaderProperty_LoadBinary
 {
@@ -919,6 +1083,14 @@ struct BSLightingShaderProperty_LoadBinary
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
+bool TruePBR::IsPBRLandscapeGeometry(RE::BSGeometry* geometry) const
+{
+	if (!loaded || !settings.Enabled || !geometry)
+		return false;
+	auto* property = static_cast<RE::BSShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get());
+	return TryGetRegisteredPBRLandscapeMaterial(property, geometry) != nullptr;
+}
+
 struct BSLightingShaderProperty_GetRenderPasses
 {
 	static RE::BSShaderProperty::RenderPassArray* thunk(RE::BSLightingShaderProperty* property, RE::BSGeometry* geometry, std::uint32_t renderFlags, RE::BSShaderAccumulator* accumulator)
@@ -927,14 +1099,17 @@ struct BSLightingShaderProperty_GetRenderPasses
 		if (renderPasses == nullptr) {
 			return renderPasses;
 		}
-		if (property == nullptr)
+		if (property == nullptr) {
 			return renderPasses;
-		if (!IsLikelyValidPointer(renderPasses, alignof(RE::BSShaderProperty::RenderPassArray))) {
-			static bool loggedInvalidRenderPassAddress = false;
-			if (!loggedInvalidRenderPassAddress) {
-				loggedInvalidRenderPassAddress = true;
+		}
+		// Guard against invalid hook-chain returns (e.g. other SKSE mods returning non-pointer values), which can surface as cold-breath CTDs.
+		const auto renderPassesAddress = reinterpret_cast<std::uintptr_t>(renderPasses);
+		if (!Util::IsLikelyValidPointer(renderPasses, alignof(RE::BSShaderProperty::RenderPassArray))) {
+			static std::atomic_flag loggedInvalidRenderPassAddress{};
+			if (!loggedInvalidRenderPassAddress.test_and_set(std::memory_order_relaxed)) {
 				logger::error("[TruePBR] Invalid GetRenderPasses pointer {:X} (geometry: {}) - returning null for safety (prevents known cold-breath CTD path)",
-					reinterpret_cast<std::uintptr_t>(renderPasses), GetGeometryName(geometry));
+					renderPassesAddress,
+					GetGeometryName(geometry));
 			}
 			return nullptr;
 		}
@@ -947,6 +1122,10 @@ struct BSLightingShaderProperty_GetRenderPasses
 
 		auto currentPass = renderPasses->head;
 		while (currentPass != nullptr) {
+			if (currentPass->shader == nullptr) {
+				currentPass = currentPass->next;
+				continue;
+			}
 			if (currentPass->shader->shaderType == RE::BSShader::Type::Lighting) {
 				constexpr uint32_t LightingTechniqueStart = 0x4800002D;
 				auto lightingTechnique = currentPass->passEnum - LightingTechniqueStart;
@@ -970,6 +1149,11 @@ struct BSLightingShaderProperty_GetRenderPasses
 				if (issEnabledAndInteriorWithSun)
 					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ShadowDir) | static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::DefShadow);
 
+				if ((lightingType == SIE::ShaderCache::LightingShaderTechniques::MTLand ||
+						lightingType == SIE::ShaderCache::LightingShaderTechniques::MTLandLODBlend) &&
+					TerrainSeams::GetInstance().IsBlended(geometry))
+					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
+
 				lightingTechnique = (static_cast<uint32_t>(lightingType) << 24) | lightingFlags;
 				currentPass->passEnum = lightingTechnique + LightingTechniqueStart;
 			}
@@ -981,17 +1165,62 @@ struct BSLightingShaderProperty_GetRenderPasses
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
-bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
+struct BSLightingShaderProperty_GetRenderPasses_LocalMap
 {
-	if (!settings.Enabled)
+	static RE::BSShaderProperty::RenderPassArray* thunk(RE::BSLightingShaderProperty* property, RE::BSGeometry* geometry, std::uint32_t renderFlags, RE::BSShaderAccumulator* accumulator)
+	{
+		auto* renderPasses = func(property, geometry, renderFlags, accumulator);
+		if (renderPasses == nullptr || property == nullptr)
+			return renderPasses;
+		if (!Util::IsLikelyValidPointer(renderPasses, alignof(RE::BSShaderProperty::RenderPassArray))) {
+			static std::atomic_flag loggedInvalidRenderPassAddress{};
+			if (!loggedInvalidRenderPassAddress.test_and_set(std::memory_order_relaxed))
+				logger::error("[TruePBR] Invalid local-map render-pass pointer {:X} (geometry: {})",
+					reinterpret_cast<std::uintptr_t>(renderPasses), GetGeometryName(geometry));
+			return nullptr;
+		}
+
+		const bool isPbr = globals::features::truePBR.settings.Enabled &&
+		                   (TryGetRegisteredPBRLandscapeMaterial(property, geometry) != nullptr ||
+							   TryGetRegisteredPBRMaterial(property, geometry) != nullptr);
+		using enum SIE::ShaderCache::UtilityShaderFlags;
+		constexpr uint32_t utilityTechniqueStart = 0x2B;
+		for (auto* pass = renderPasses->head; pass != nullptr; pass = pass->next) {
+			if (pass->shader == nullptr || pass->shader->shaderType != RE::BSShader::Type::Utility ||
+				pass->passEnum < utilityTechniqueStart)
+				continue;
+			auto technique = pass->passEnum - utilityTechniqueStart;
+			// Pass arrays can be reused after material or feature settings change.
+			technique &= ~static_cast<uint32_t>(TruePbr);
+			if (isPbr && (technique & static_cast<uint32_t>(RenderBaseTexture)))
+				technique |= static_cast<uint32_t>(TruePbr);
+			pass->passEnum = technique + utilityTechniqueStart;
+		}
+		return renderPasses;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+bool TruePBR::UsesCustomMaterialSetup(uint32_t rawTechnique) const
+{
+	if (!loaded || !settings.Enabled)
 		return false;
 
 	using enum SIE::ShaderCache::LightingShaderTechniques;
-	const auto& lightingPSConstants = ShaderConstants::LightingPS::Get();
-	auto lightingFlags = shader->currentRawTechnique & ~(~0u << 24);
-	auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((shader->currentRawTechnique >> 24) & 0x3F);
-	const bool isObjectTechnique = lightingType == None || lightingType == TreeAnim || lightingType == LODObjects || lightingType == LODObjectHD;
-	if (!(lightingType == LODLand || lightingType == LODLandNoise) && (lightingFlags & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr))) {
+	const auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((rawTechnique >> 24) & 0x3F);
+	return lightingType != LODLand && lightingType != LODLandNoise &&
+	       (rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0;
+}
+
+bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
+{
+	if (UsesCustomMaterialSetup(shader->currentRawTechnique)) {
+		using enum SIE::ShaderCache::LightingShaderTechniques;
+		const auto& lightingPSConstants = ShaderConstants::LightingPS::Get();
+		auto lightingFlags = shader->currentRawTechnique & ~(~0u << 24);
+		auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((shader->currentRawTechnique >> 24) & 0x3F);
+		const bool isObjectTechnique = lightingType == None || lightingType == TreeAnim || lightingType == LODObjects || lightingType == LODObjectHD;
+
 		auto shadowState = globals::game::shadowState;
 		auto renderer = globals::game::renderer;
 		auto graphicsState = globals::game::graphicsState;
@@ -1120,7 +1349,7 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 		} else if (isObjectTechnique) {
 			auto* pbrMaterial = static_cast<const BSLightingShaderMaterialPBR*>(material);
 			const auto renderTargetIndex = pbrMaterial->diffuseRenderTargetSourceIndex;
-			if (renderTargetIndex >= 0 && renderTargetIndex < RE::RENDER_TARGETS::kTOTAL) {
+			if (Util::IsValidRenderTargetIndex(renderTargetIndex)) {
 				shadowState->SetPSTexture(0, renderer->GetRuntimeData().renderTargets[renderTargetIndex]);
 			} else {
 				if (renderTargetIndex != -1) {
@@ -1373,12 +1602,6 @@ void SetupLandscapeTexture(BSLightingShaderMaterialPBRLandscape& material, RE::T
 	}
 }
 
-RE::TESLandTexture* GetDefaultLandTexture()
-{
-	static const auto defaultLandTextureAddress = REL::Relocation<RE::TESLandTexture**>(RELOCATION_ID(514783, 400936));
-	return *defaultLandTextureAddress;
-}
-
 bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 {
 	if (!settings.Enabled || land == nullptr) {
@@ -1418,6 +1641,10 @@ bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 	if (land->loadedData != nullptr && land->loadedData->mesh[0] != nullptr) {
 		land->data.flags.set(static_cast<RE::OBJ_LAND::Flag>(8));
 		for (uint32_t quadIndex = 0; quadIndex < 4; ++quadIndex) {
+			auto* quadMesh = land->loadedData->mesh[quadIndex];
+			if (quadMesh == nullptr || quadMesh->GetChildren().empty() || quadMesh->GetChildren()[0] == nullptr)
+				continue;
+
 			auto shaderProperty = static_cast<RE::BSLightingShaderProperty*>(memoryManager->Allocate(sizeof(RE::BSLightingShaderProperty), 0, false));
 			shaderProperty->Ctor();
 
@@ -1436,18 +1663,22 @@ bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 				material->landscapeRMAOSTextures[textureIndex] = stateData.defaultTextureWhite;
 			}
 
-			auto& textureSets = BSLightingShaderMaterialPBRLandscape::All[material];
+			std::array<TruePBR::PBRTextureSetData*, BSLightingShaderMaterialPBRLandscape::NumTiles> textureSets{};
 
 			if (auto defTexture = land->loadedData->defQuadTextures[quadIndex]) {
 				SetupLandscapeTexture(*material, *defTexture, 0, textureSets);
 			} else {
-				SetupLandscapeTexture(*material, *GetDefaultLandTexture(), 0, textureSets);
+				SetupLandscapeTexture(*material, *Util::GetDefaultLandTexture(), 0, textureSets);
 			}
 			for (uint32_t textureIndex = 0; textureIndex < BSLightingShaderMaterialPBRLandscape::NumTiles - 1; ++textureIndex) {
 				if (auto landTexture = land->loadedData->quadTextures[quadIndex][textureIndex]) {
 					SetupLandscapeTexture(*material, *landTexture, textureIndex + 1, textureSets);
 				}
 			}
+
+			BSLightingShaderMaterialPBRLandscape::All.Update(material, [&textureSets](auto& registeredTextureSets) {
+				registeredTextureSets = textureSets;
+			});
 
 			if (globals::game::bEnableLandFade->GetBool()) {
 				shaderProperty->unk108 = false;
@@ -1469,12 +1700,9 @@ bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 
 			shaderProperty->SetFlags(RE::BSShaderProperty::EShaderPropertyFlag8::kVertexLighting, true);
 
-			const auto& children = land->loadedData->mesh[quadIndex]->GetChildren();
-			auto geometry = children.empty() ? nullptr : static_cast<RE::BSGeometry*>(children[0].get());
+			auto geometry = static_cast<RE::BSGeometry*>(quadMesh->GetChildren()[0].get());
 			shaderProperty->SetupGeometry(geometry);
-			if (geometry != nullptr) {
-				geometry->GetGeometryRuntimeData().shaderProperty = RE::NiPointer(shaderProperty);
-			}
+			geometry->GetGeometryRuntimeData().shaderProperty = RE::NiPointer(shaderProperty);
 
 			globals::game::smState->shadowSceneNode[0]->AttachObject(geometry);
 		}
@@ -1624,40 +1852,42 @@ struct TESBoundObject_Clone3D
 						if (shaderProperty->GetMaterialType() == RE::BSShaderMaterial::Type::kLighting &&
 							shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting)) {
 							if (auto* material = TryGetRegisteredPBRMaterial(shaderProperty, geometry)) {
-								auto& ext = BSLightingShaderMaterialPBR::All[material];
-								const auto prevOwnerRefID = ext.lastOwnerRefFormID;
-
-								// Fork-before-write: if this material instance is already owned
-								// by a different ref whose MATO payload differs from the incoming
-								// one, clone it so we don't contaminate the previous owner's
-								// geometry.  Use pointer identity: GetPBRMaterialObjectData
-								// returns stable addresses into pbrMaterialObjects, so two
-								// different MATOs always produce different pointers regardless of
-								// whether their individual fields (baseColorScale, roughness,
-								// specularLevel, glint) happen to match.
-								const bool wouldContaminate =
-									(prevOwnerRefID != 0) &&
-									(prevOwnerRefID != ref->GetFormID()) &&
-									(ext.materialObjectData != pbrData);
-
-								BSLightingShaderMaterialPBR* targetMat = material;
+								const auto ownerFormID = ref->GetFormID();
+								const auto applyData = [pbrData, ownerFormID](auto* target, auto& extensions) {
+									target->ApplyMaterialObjectData(*pbrData);
+									extensions.materialObjectData = pbrData;
+									extensions.lastOwnerRefFormID = ownerFormID;
+								};
+								bool wouldContaminate = false;
+								if (!BSLightingShaderMaterialPBR::All.TryUpdate(material, [&](auto& extensions) {
+										// Claim and update together so different refs cannot both
+										// overwrite an apparently unowned pooled material.
+										wouldContaminate = extensions.lastOwnerRefFormID != 0 &&
+									                       extensions.lastOwnerRefFormID != ownerFormID &&
+									                       extensions.materialObjectData != pbrData;
+										if (!wouldContaminate) {
+											applyData(material, extensions);
+										}
+									})) {
+									return RE::BSVisit::BSVisitControl::kContinue;
+								}
 
 								if (wouldContaminate) {
-									auto* freshMat = static_cast<BSLightingShaderMaterialPBR*>(material->Create());
-									if (freshMat) {
-										freshMat->CopyMembers(material);
-										shaderProperty->material = freshMat;
-										targetMat = freshMat;
-									} else {
+									// Publish a fully configured unique copy through the engine's
+									// ownership path, with engine calls outside the registry lock.
+									{
+										BSLightingShaderMaterialPBR replacement;
+										replacement.CopyMembers(material);
+										BSLightingShaderMaterialPBR::All.Update(&replacement, [&](auto& extensions) {
+											applyData(&replacement, extensions);
+										});
+										shaderProperty->SetMaterial(&replacement, true);
+									}
+									if (!shaderProperty->material) {
 										logger::warn("[TruePBR] failed to clone PBR material for ref {:08X}; skipping to avoid contamination", ref->GetFormID());
 										return RE::BSVisit::BSVisitControl::kContinue;
 									}
 								}
-
-								targetMat->ApplyMaterialObjectData(*pbrData);
-								auto& targetExt = BSLightingShaderMaterialPBR::All[targetMat];
-								targetExt.materialObjectData = pbrData;
-								targetExt.lastOwnerRefFormID = ref->GetFormID();
 							}
 						}
 					}
@@ -1699,13 +1929,10 @@ struct PBR_TESObjectLAND_SetupMaterial
 {
 	static bool thunk(RE::TESObjectLAND* land)
 	{
-		bool vanillaResult = func(land);
-
-		if (globals::features::truePBR.TESObjectLAND_SetupMaterial(land)) {
-			return true;
-		}
-
-		return vanillaResult;
+		const bool vanillaResult = func(land);
+		const bool pbrResult = globals::features::truePBR.TESObjectLAND_SetupMaterial(land);
+		TerrainSeams::GetInstance().TESObjectLAND_SetupMaterial(land);
+		return pbrResult || vanillaResult;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -1735,6 +1962,7 @@ void TruePBR::PostPostLoad()
 	logger::info("[TruePBR] Hooking BSLightingShaderProperty");
 	stl::write_vfunc<0x18, BSLightingShaderProperty_LoadBinary>(RE::VTABLE_BSLightingShaderProperty[0]);
 	stl::write_vfunc<0x2A, BSLightingShaderProperty_GetRenderPasses>(RE::VTABLE_BSLightingShaderProperty[0]);
+	stl::write_vfunc<0x2C, BSLightingShaderProperty_GetRenderPasses_LocalMap>(RE::VTABLE_BSLightingShaderProperty[0]);
 	stl::detour_thunk<BSLightingShaderProperty_OnLoadTextureSet>(REL::RelocationID(99865, 106510));
 
 	logger::info("[TruePBR] Hooking BSLightingShader");
@@ -1777,7 +2005,7 @@ void TruePBR::DataLoaded()
 
 void TruePBR::SetupDefaultPBRLandTextureSet()
 {
-	auto* defaultLandTexture = GetDefaultLandTexture();
+	auto* defaultLandTexture = Util::GetDefaultLandTexture();
 	if (!defaultLandTexture)
 		return;
 

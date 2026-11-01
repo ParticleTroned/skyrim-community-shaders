@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <unordered_map>
+
 namespace Util
 {
 	// --- SPID Helpers (load-order-portable FormID format) ---
@@ -26,8 +29,21 @@ namespace Util
 	/// Get a display name: "EditorID (localFormId)" or SPID fallback.
 	std::string GetFormDisplayName(RE::FormID formId);
 
+	/// Owns a lazy editor-ID map snapshot for one initialization batch.
+	class FormEditorIDIndex
+	{
+	public:
+		/// Find the first map alias for a form, creating the snapshot on first use.
+		std::string Find(const RE::TESForm* form);
+
+	private:
+		std::unordered_map<const RE::TESForm*, std::string> editorIDs;
+		bool initialized = false;
+	};
+
 	/// Get the EditorID for a form, or empty string if not available.
-	std::string GetFormEditorID(const RE::TESForm* form);
+	/// @param index Optional batch-local snapshot for fallback lookups.
+	std::string GetFormEditorID(const RE::TESForm* form, FormEditorIDIndex* index = nullptr);
 
 	/// Get a file-safe key for a form: always SPID format for load-order independence.
 	std::string GetFormFileKey(const RE::TESForm* form);

@@ -1,4 +1,6 @@
 #include "ExtendedTranslucency.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include "../I18n/I18n.h"
 #include "../ShaderCache.h"
@@ -22,7 +24,7 @@ namespace
 {
 	void DrawEnabledCheckbox(ExtendedTranslucency::Settings& a_settings)
 	{
-		ImGui::Checkbox("Enable", &a_settings.Enabled);
+		ImGui::Checkbox(T("feature.extended_translucency.enable", "Enable"), &a_settings.Enabled);
 	}
 }
 
@@ -104,62 +106,53 @@ void ExtendedTranslucency::PostPostLoad()
 
 void ExtendedTranslucency::DrawSettings()
 {
-	DrawEnabledCheckbox(settings);
+	MenuUI::SettingsPage page("ExtendedTranslucency", {
+														  { "appearance", T("feature.extended_translucency.ui_material", "Material"), T("feature.extended_translucency.ui_choose_the_material_response_then_refine_its_appearance", "Choose the material response, then refine its appearance."), T("feature.extended_translucency.ui_fabric_glass_and_edge_response", "Fabric, glass and edge response"), true, true, T("feature.extended_translucency.ui_choose_the_material_response", "Choose the material response") },
+													  });
+	if (!page.Is("appearance"))
+		return;
+
 	ImGui::BeginDisabled(!settings.Enabled);
 
-	if (ImGui::TreeNodeEx(T(TKEY("translucent_material"), "Translucent Material"), ImGuiTreeNodeFlags_DefaultOpen)) {
+	{
+		MenuUI::SectionHeading(T("feature.extended_translucency.translucent_material", "Translucent Material"));
+		ImGui::PushID("Translucent Material");
 		const char* AlphaModeNames[] = {
-			T(TKEY("alpha_mode_disabled"), "0 - Disabled"),
-			T(TKEY("alpha_mode_rim_edge"), "1 - Rim Edge"),
-			T(TKEY("alpha_mode_isotropic_fabric"), "2 - Isotropic Fabric, Glass, ..."),
-			T(TKEY("alpha_mode_anisotropic_fabric"), "3 - Anisotropic Fabric"),
+			T("feature.extended_translucency.alpha_mode_disabled", "0 - Disabled"),
+			T("feature.extended_translucency.alpha_mode_rim_edge", "1 - Rim Edge"),
+			T("feature.extended_translucency.alpha_mode_isotropic_fabric", "2 - Isotropic Fabric, Glass, ..."),
+			T("feature.extended_translucency.alpha_mode_anisotropic_fabric", "3 - Anisotropic Fabric"),
 		};
 
 		static constexpr int AlphaModeSize = static_cast<int>(std::size(AlphaModeNames));
 
-		bool changed = false;
-		if (ImGui::Combo(T(TKEY("default_material_model"), "Default Material Model"), (int*)&settings.AlphaMode, AlphaModeNames, AlphaModeSize)) {
-			changed = true;
-		}
+		MenuUI::ChoiceSetting(T("feature.extended_translucency.default_material_model", "Default Material Model"), (int*)&settings.AlphaMode, AlphaModeNames, AlphaModeSize);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("default_material_model_tooltip"),
-								  "Anisotropic translucency will adjust the opacity based on your view angle to the translucent surface.\n"
-								  "  - Disabled: No anisotropic translucency, flat alpha.\n"
-								  "  - Rim Edge: Naive rim light effect with no physics model, the edge of the geometry is always opaque even its full transparent.\n"
-								  "  - Isotropic Fabric: Imaginary fabric weaved from threads in one direction, respect normal map, also works well for layer of glass panels.\n"
-								  "  - Anisotropic Fabric: Common fabric weaved from tangent and birnormal direction, ignores normal map.\n"));
+			ImGui::TextUnformatted(T("feature.extended_translucency.ui_opacity_varies_with_viewing_angle_disabled_flat_alpha_a3f5a1fb", "Opacity varies with viewing angle:\n- Disabled: flat alpha.\n- Rim Edge: nonphysical rim; edges stay opaque even at full transparency.\n- Isotropic Fabric: single-direction threads using the normal map; also suits layered glass.\n- Anisotropic Fabric: tangent/bitangent weave; ignores the normal map."));
 		}
-		if (ImGui::Checkbox(T(TKEY("skinned_mesh_only"), "Skinned Mesh Only"), &settings.SkinnedOnly)) {
-			changed = true;
-		}
+		Util::Widgets::Checkbox(T("feature.extended_translucency.skinned_mesh_only", "Skinned Mesh Only"), &settings.SkinnedOnly);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("skinned_mesh_only_tooltip"), "Control if this effect should only apply to skinned mesh. Check this option if you are seeing undesired effects on random objects."));
+			ImGui::TextUnformatted(T("feature.extended_translucency.ui_apply_only_to_skinned_meshes_enable_if_unrelated_objec_8d3d34e3", "Apply only to skinned meshes. Enable if unrelated objects show unwanted effects."));
 		}
 
-		if (ImGui::SliderFloat(T(TKEY("transparency_increase"), "Transparency Increase"), &settings.AlphaReduction, 0, 1.f)) {
-			changed = true;
-		}
+		Util::Widgets::SliderFloat(T("feature.extended_translucency.transparency_increase", "Transparency Increase"), &settings.AlphaReduction, 0, 1.f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("transparency_increase_tooltip"), "Translucent material will make the material more opaque on average, which could be different from the intent. Reduce the alpha to counter this effect and increase the dynamic range of the output."));
+			ImGui::TextUnformatted(T("feature.extended_translucency.ui_translucency_can_make_materials_more_opaque_than_inten_59b67b73", "Translucency can make materials more opaque than intended. Reduce alpha to compensate and widen the output's dynamic range."));
 		}
 
-		if (ImGui::SliderFloat(T(TKEY("softness"), "Softness"), &settings.AlphaSoftness, 0.0f, 1.0f)) {
-			changed = true;
-		}
+		Util::Widgets::SliderFloat(T("feature.extended_translucency.softness", "Softness"), &settings.AlphaSoftness, 0.0f, 1.0f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("softness_tooltip"), "Control the softness of the alpha increase, increase the softness reduce the increased amount of alpha."));
+			ImGui::TextUnformatted(T("feature.extended_translucency.ui_soften_the_alpha_increase_higher_softness_reduces_the_936589dc", "Soften the alpha increase. Higher softness reduces the added opacity."));
 		}
 
-		if (ImGui::SliderFloat(T(TKEY("blend_weight"), "Blend Weight"), &settings.AlphaStrength, 0.0f, 1.0f)) {
-			changed = true;
-		}
+		Util::Widgets::SliderFloat(T("feature.extended_translucency.blend_weight", "Blend Weight"), &settings.AlphaStrength, 0.0f, 1.0f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("blend_weight_tooltip"), "Control the blend weight of the effect applied to the final result."));
+			ImGui::TextUnformatted(T("feature.extended_translucency.ui_set_how_strongly_the_effect_blends_into_the_final_image", "Set how strongly the effect blends into the final image."));
 		}
 
 		ImGui::Spacing();
 		ImGui::Spacing();
-		ImGui::TreePop();
+		ImGui::PopID();
 	}
 
 	ImGui::EndDisabled();

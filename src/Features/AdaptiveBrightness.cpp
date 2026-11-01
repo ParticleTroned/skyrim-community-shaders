@@ -1,28 +1,40 @@
 #include "AdaptiveBrightness.h"
+#include "I18n/I18n.h"
+#include "Menu/SettingsPage.h"
 
 #include "Globals.h"
-#include "I18n/I18n.h"
 #include "InverseSquareLighting.h"
 #include "LocationContext.h"
+#include "SettingsMigrations.h"
 #include "State.h"
+#include "UnderwaterDepthOfField.h"
 #include "Utils/D3D.h"
 #include "Utils/FileSystem.h"
+#include "Utils/Finite.h"
 #include "Utils/Form.h"
+#include "Utils/Game.h"
 #include "Utils/PointLightFlags.h"
+#include "Utils/StringUtils.h"
 #include "Utils/UI.h"
+#include "WeatherColorAdjustment.h"
+#include "WetternessLightingPolicy.h"
 
 #include "RE/B/BGSLocation.h"
 #include "RE/P/PlayerCharacter.h"
 #include "RE/S/Sky.h"
 #include "RE/T/TES.h"
+#include "RE/T/TESClimate.h"
 #include "RE/T/TESObjectCELL.h"
+#include "RE/T/TESWeather.h"
 #include "RE/T/TESWorldSpace.h"
 
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -32,29 +44,56 @@
 #include <unordered_set>
 #include <utility>
 
-#define I18N_KEY_PREFIX "feature.adaptive_balance."
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	AdaptiveBrightness::WaterWindSettings,
+	overrideEnabled,
+	enabled,
+	calmWaveMultiplier,
+	strongWindWaveMultiplier)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::ProfileSettings,
 	brightness,
+	contrast,
+	saturation,
 	advanced,
 	bloomAdvanced,
 	waterAdvanced,
 	skyBrightnessMult,
 	skySaturation,
+	cloudBrightnessMult,
+	cloudSaturation,
+	fogIntensity,
+	sunGlareIntensity,
+	effectBrightness,
+	skyStaticBrightness,
+	skyStaticTransparency,
 	directionalLightMult,
 	pointLightMult,
+	pointLightSaturation,
+	pointLightCurve,
+	fireIntensity,
+	fireSaturation,
+	fireCurve,
+	linearPointLightMult,
+	spotlightMult,
+	linearSpotlightMult,
+	omnidirectionalBulbMult,
+	linearOmnidirectionalBulbMult,
 	ambientMult,
 	emitColorMult,
 	glowmapMult,
 	effectLightingMult,
 	skyGammaOffset,
+	cloudGammaOffset,
 	fogGammaOffset,
 	fogAlphaGammaOffset,
 	waterGammaOffset,
 	vlGammaOffset,
 	bloom,
-	water)
+	water,
+	waterWind,
+	appearance)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::LocationOverride,
@@ -62,21 +101,167 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	name,
 	type,
 	cocCode,
-	profile)
+	profile,
+	layered)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::Settings,
 	enabled,
-	globalLightingEnabled,
+	useAmbientEffectLighting,
+	godrayFinalBrightness,
+	volumetricClarity,
+	godrays,
+	moonReflectionStrength,
 	dayStartHour,
 	nightStartHour,
 	transitionHours,
-	lighting,
+	globalProfile,
+	depthOfField,
 	profiles,
 	locationOverrides)
 
+AdaptiveBrightness::ProfileSettings AdaptiveBrightness::ProfileSettings::AdjustmentDefaults()
+{
+	return {};
+}
+
+AdaptiveBrightness::ProfileSettings AdaptiveBrightness::ProfileSettings::GlobalDefaults()
+{
+	auto profile = AdjustmentDefaults();
+	profile.advanced = true;
+	profile.bloomAdvanced = true;
+	profile.waterAdvanced = true;
+	profile.waterWind.overrideEnabled = true;
+	profile.waterWind.calmWaveMultiplier = 0.65f;
+	profile.waterWind.strongWindWaveMultiplier = 1.35f;
+	return profile;
+}
+
 namespace
 {
+	/** Resolve display text at draw time so switching languages updates existing profiles. */
+	const char* GetLocalizedAppearanceLabel(const char* value)
+	{
+		const std::string_view text = value ? value : "";
+		if (text == "Ambient Saturation")
+			return T("feature.adaptive_brightness.ambient_saturation", "Ambient Saturation");
+		if (text == "Aurora Colour Curve")
+			return T("feature.adaptive_brightness.aurora_colour_curve", "Aurora Colour Curve");
+		if (text == "Aurora Intensity")
+			return T("feature.adaptive_brightness.aurora_intensity", "Aurora Intensity");
+		if (text == "Auroras")
+			return T("feature.adaptive_brightness.auroras", "Auroras");
+		if (text == "Cloud Opacity")
+			return T("feature.adaptive_brightness.cloud_opacity", "Cloud Opacity");
+		if (text == "Cloud Shadow Strength")
+			return T("feature.adaptive_brightness.cloud_shadow_strength", "Cloud Shadow Strength");
+		if (text == "Cloud Tint")
+			return T("feature.adaptive_brightness.cloud_tint", "Cloud Tint");
+		if (text == "Custom Colour Blue")
+			return T("feature.adaptive_brightness.custom_colour_blue", "Custom Colour Blue");
+		if (text == "Custom Colour Contribution")
+			return T("feature.adaptive_brightness.custom_colour_contribution", "Custom Colour Contribution");
+		if (text == "Custom Colour Green")
+			return T("feature.adaptive_brightness.custom_colour_green", "Custom Colour Green");
+		if (text == "Custom Colour Red")
+			return T("feature.adaptive_brightness.custom_colour_red", "Custom Colour Red");
+		if (text == "Direct and Ambient Lighting")
+			return T("feature.adaptive_brightness.direct_and_ambient_lighting", "Direct and Ambient Lighting");
+		if (text == "Directional Colour Curve")
+			return T("feature.adaptive_brightness.directional_colour_curve", "Directional Colour Curve");
+		if (text == "Directional Saturation")
+			return T("feature.adaptive_brightness.directional_saturation", "Directional Saturation");
+		if (text == "Directional Tint")
+			return T("feature.adaptive_brightness.directional_tint", "Directional Tint");
+		if (text == "Dungeon")
+			return T("feature.adaptive_brightness.dungeon", "Dungeon");
+		if (text == "Dwelling")
+			return T("feature.adaptive_brightness.dwelling", "Dwelling");
+		if (text == "Exterior Day")
+			return T("feature.adaptive_brightness.exterior_day", "Exterior Day");
+		if (text == "Exterior Night")
+			return T("feature.adaptive_brightness.exterior_night", "Exterior Night");
+		if (text == "Eye Brightness")
+			return T("feature.adaptive_brightness.eye_brightness", "Eye Brightness");
+		if (text == "Eye Specular Brightness")
+			return T("feature.adaptive_brightness.eye_specular_brightness", "Eye Specular Brightness");
+		if (text == "Eyes")
+			return T("feature.adaptive_brightness.eyes", "Eyes");
+		if (text == "Fog Colour Brightness")
+			return T("feature.adaptive_brightness.fog_colour_brightness", "Fog Colour Brightness");
+		if (text == "Fog Tint")
+			return T("feature.adaptive_brightness.fog_tint", "Fog Tint");
+		if (text == "Fog and Clouds")
+			return T("feature.adaptive_brightness.fog_and_clouds", "Fog and Clouds");
+		if (text == "Glow Sprite Curve")
+			return T("feature.adaptive_brightness.glow_sprite_curve", "Glow Sprite Curve");
+		if (text == "Glow Sprite Intensity")
+			return T("feature.adaptive_brightness.glow_sprite_intensity", "Glow Sprite Intensity");
+		if (text == "Godray Custom Colour")
+			return T("feature.adaptive_brightness.godray_custom_colour", "Godray Custom Colour");
+		if (text == "Godray Custom Colour Contribution")
+			return T("feature.adaptive_brightness.godray_custom_colour_contribution", "Godray Custom Colour Contribution");
+		if (text == "Godray Intensity")
+			return T("feature.adaptive_brightness.godray_intensity", "Godray Intensity");
+		if (text == "Godray Intensity Scale")
+			return T("feature.adaptive_brightness.godray_intensity_scale", "Godray Intensity Scale");
+		if (text == "Godray Opacity")
+			return T("feature.adaptive_brightness.godray_opacity", "Godray Opacity");
+		if (text == "Godray Opacity Scale")
+			return T("feature.adaptive_brightness.godray_opacity_scale", "Godray Opacity Scale");
+		if (text == "Godray Saturation")
+			return T("feature.adaptive_brightness.godray_saturation", "Godray Saturation");
+		if (text == "Godray Saturation Scale")
+			return T("feature.adaptive_brightness.godray_saturation_scale", "Godray Saturation Scale");
+		if (text == "Godrays and Cloud Shadows")
+			return T("feature.adaptive_brightness.godrays_and_cloud_shadows", "Godrays and Cloud Shadows");
+		if (text == "Horizon Curve")
+			return T("feature.adaptive_brightness.horizon_curve", "Horizon Curve");
+		if (text == "Horizon Intensity")
+			return T("feature.adaptive_brightness.horizon_intensity", "Horizon Intensity");
+		if (text == "Horizon Tint")
+			return T("feature.adaptive_brightness.horizon_tint", "Horizon Tint");
+		if (text == "Interior")
+			return T("feature.adaptive_brightness.interior", "Interior");
+		if (text == "Middle Sky Curve")
+			return T("feature.adaptive_brightness.middle_sky_curve", "Middle Sky Curve");
+		if (text == "Middle Sky Intensity")
+			return T("feature.adaptive_brightness.middle_sky_intensity", "Middle Sky Intensity");
+		if (text == "Middle Sky Tint")
+			return T("feature.adaptive_brightness.middle_sky_tint", "Middle Sky Tint");
+		if (text == "Mist Colour Curve")
+			return T("feature.adaptive_brightness.mist_colour_curve", "Mist Colour Curve");
+		if (text == "Mist Tint")
+			return T("feature.adaptive_brightness.mist_tint", "Mist Tint");
+		if (text == "Particle Ambient Influence")
+			return T("feature.adaptive_brightness.particle_ambient_influence", "Particle Ambient Influence");
+		if (text == "Particle Directional Influence")
+			return T("feature.adaptive_brightness.particle_directional_influence", "Particle Directional Influence");
+		if (text == "Particle Intensity")
+			return T("feature.adaptive_brightness.particle_intensity", "Particle Intensity");
+		if (text == "Particle Point Light Influence")
+			return T("feature.adaptive_brightness.particle_point_light_influence", "Particle Point Light Influence");
+		if (text == "Particles and Glow Sprites")
+			return T("feature.adaptive_brightness.particles_and_glow_sprites", "Particles and Glow Sprites");
+		if (text == "Sky Gradient")
+			return T("feature.adaptive_brightness.sky_gradient", "Sky Gradient");
+		if (text == "Sky Static Mist")
+			return T("feature.adaptive_brightness.sky_static_mist", "Sky Static Mist");
+		if (text == "Stars")
+			return T("feature.adaptive_brightness.stars", "Stars");
+		if (text == "Stars Colour Curve")
+			return T("feature.adaptive_brightness.stars_colour_curve", "Stars Colour Curve");
+		if (text == "Stars Intensity")
+			return T("feature.adaptive_brightness.stars_intensity", "Stars Intensity");
+		if (text == "Upper Sky Curve")
+			return T("feature.adaptive_brightness.upper_sky_curve", "Upper Sky Curve");
+		if (text == "Upper Sky Intensity")
+			return T("feature.adaptive_brightness.upper_sky_intensity", "Upper Sky Intensity");
+		if (text == "Upper Sky Tint")
+			return T("feature.adaptive_brightness.upper_sky_tint", "Upper Sky Tint");
+		return value;
+	}
+
 	constexpr uint32_t kMaxVanillaPointLights = 7;
 	constexpr uint32_t kFirstPointLightSceneIndex = 1;
 	constexpr float kBrightnessMin = 0.25f;
@@ -85,10 +270,30 @@ namespace
 	constexpr float kGammaOffsetMax = 1.0f;
 	constexpr float kGlobalSkyBrightnessMax = 2.0f;
 	constexpr float kSkySaturationMax = 2.0f;
+	constexpr float kContrastMin = 0.5f;
+	constexpr float kContrastMax = 2.0f;
+	constexpr float kSaturationMax = 2.0f;
+	constexpr float kPointLightCurveMin = 0.1f;
+	constexpr float kPointLightCurveMax = 4.0f;
+	constexpr float kFireCurveMin = 0.25f;
+	constexpr float kFireCurveMax = 4.0f;
 	constexpr float kGlobalLightingMultiplierMax = 5.0f;
+	constexpr float kWaterWindMultiplierMin = 0.0f;
+	constexpr float kWaterWindMultiplierMax = 2.0f;
+	constexpr float kWaterWindSmoothingSeconds = 2.0f;
+	constexpr float kMaxWaterWindSmoothingFrameTime = 0.25f;
 	constexpr std::size_t kMaxOverrideHierarchyDepth = 64;
 
 	using Profile = AdaptiveBrightness::Profile;
+
+	bool UsesClassifiedPointLightMultipliers(const SharedLightingSettings& a_settings)
+	{
+		return a_settings.linearPointLightMult != a_settings.pointLightMult ||
+		       a_settings.spotlightMult != 1.0f ||
+		       a_settings.linearSpotlightMult != 1.0f ||
+		       a_settings.omnidirectionalBulbMult != 1.0f ||
+		       a_settings.linearOmnidirectionalBulbMult != 1.0f;
+	}
 
 	constexpr std::array<Profile, AdaptiveBrightness::kProfileCount> kProfileOrder{
 		Profile::ExteriorDay,
@@ -96,11 +301,6 @@ namespace
 		Profile::Interior,
 		Profile::Dungeon,
 		Profile::Dwelling
-	};
-	constexpr std::array kEssentialProfileOrder{
-		Profile::ExteriorDay,
-		Profile::ExteriorNight,
-		Profile::Interior
 	};
 
 	constexpr std::array<const char*, AdaptiveBrightness::kProfileCount> kProfileNames{
@@ -116,21 +316,16 @@ namespace
 	constexpr const char* kOverrideTypeCity = "City";
 	constexpr const char* kOverrideTypeCell = "Cell";
 	constexpr const char* kOverrideTypeWorldspace = "Worldspace";
-	constexpr const char* kPresetVersion = "4.2.0";
+	constexpr const char* kPresetVersion = "5.0.0";
 	constexpr std::string_view kLocationOverridesFieldName = "locationOverrides";
 	constexpr std::string_view kProfilesFieldName = "profiles";
-	constexpr std::string_view kPresetDirectoryName = "AdaptiveBalance";
-	constexpr std::string_view kGlobalPresetFilenameSuffix = "_AdaptiveBalance_Global";
-	constexpr std::string_view kLocationPresetFilenameSuffix = "_AdaptiveBalance_LocationOverrides";
-	constexpr std::string_view kWorldspacePresetFilenameSuffix = "_AdaptiveBalance_Worldspace";
-	constexpr std::string_view kRegionPresetFilenameSuffix = "_AdaptiveBalance_Location";
-	constexpr std::string_view kCityPresetFilenameSuffix = "_AdaptiveBalance_City";
-	constexpr std::string_view kFullPresetFilenameSuffix = "_AdaptiveBalance_Full";
-
-	bool IsWorldspaceOverride(const AdaptiveBrightness::LocationOverride* a_locationOverride)
-	{
-		return a_locationOverride && a_locationOverride->type == kOverrideTypeWorldspace;
-	}
+	constexpr std::string_view kLegacyGlobalWaterAppearanceFieldName = SettingsMigrations::kLegacyWaterAppearanceSettingsKey;
+	constexpr std::string_view kGlobalPresetFilenameSuffix = "_AdaptiveBrightness_Global";
+	constexpr std::string_view kLocationPresetFilenameSuffix = "_AdaptiveBrightness_LocationOverrides";
+	constexpr std::string_view kWorldspacePresetFilenameSuffix = "_AdaptiveBrightness_Worldspace";
+	constexpr std::string_view kRegionPresetFilenameSuffix = "_AdaptiveBrightness_Location";
+	constexpr std::string_view kCityPresetFilenameSuffix = "_AdaptiveBrightness_City";
+	constexpr std::string_view kFullPresetFilenameSuffix = "_AdaptiveBrightness_Full";
 
 	enum class PresetKind
 	{
@@ -155,31 +350,31 @@ namespace
 	}
 	static_assert(kContextProfileOrder.size() == ContextScopeIndex(ContextProfileScope::Count));
 
-	constexpr const char* GetContextScopeTabLabel(ContextProfileScope a_scope)
+	const char* GetContextScopeTabLabel(ContextProfileScope a_scope)
 	{
 		switch (a_scope) {
 		case ContextProfileScope::Worldspace:
-			return "Worldspace";
+			return T("feature.adaptive_brightness.worldspace", "Worldspace");
 		case ContextProfileScope::Region:
-			return "Locations";
+			return T("feature.adaptive_brightness.locations", "Locations");
 		case ContextProfileScope::City:
-			return "Cities";
+			return T("feature.adaptive_brightness.cities", "Cities");
 		default:
-			return "Context";
+			return T("feature.adaptive_brightness.context", "Context");
 		}
 	}
 
-	constexpr const char* GetContextScopeName(ContextProfileScope a_scope)
+	const char* GetContextScopeName(ContextProfileScope a_scope)
 	{
 		switch (a_scope) {
 		case ContextProfileScope::Worldspace:
-			return "Worldspace";
+			return T("feature.adaptive_brightness.worldspace", "Worldspace");
 		case ContextProfileScope::Region:
-			return "Location";
+			return T("feature.adaptive_brightness.location", "Location");
 		case ContextProfileScope::City:
-			return "City";
+			return T("feature.adaptive_brightness.city", "City");
 		default:
-			return "Context";
+			return T("feature.adaptive_brightness.context", "Context");
 		}
 	}
 
@@ -220,17 +415,17 @@ namespace
 		}
 	}
 
-	constexpr const char* GetContextScopeDescription(ContextProfileScope a_scope)
+	const char* GetContextScopeDescription(ContextProfileScope a_scope)
 	{
 		switch (a_scope) {
 		case ContextProfileScope::Worldspace:
-			return "Applies throughout the current game worldspace and its child worldspaces.";
+			return T("feature.adaptive_brightness.applies_throughout_the_current_game_worldspac_23b1733d", "Applies throughout the current game worldspace and its child worldspaces.");
 		case ContextProfileScope::Region:
-			return "Applies throughout the current hold or regional location, such as The Reach or The Rift.";
+			return T("feature.adaptive_brightness.applies_throughout_the_current_hold_or_region_47d12ef0", "Applies throughout the current hold or regional location, such as The Reach or The Rift.");
 		case ContextProfileScope::City:
-			return "Applies throughout the current city, town, or settlement, such as Markarth or Riften.";
+			return T("feature.adaptive_brightness.applies_throughout_the_current_city_town_or_s_c3533718", "Applies throughout the current city, town, or settlement, such as Markarth or Riften.");
 		default:
-			return "Applies to the current contextual scope.";
+			return T("feature.adaptive_brightness.applies_to_the_current_contextual_scope", "Applies to the current contextual scope.");
 		}
 	}
 
@@ -254,6 +449,14 @@ namespace
 		return std::isfinite(a_value) ? a_value : a_fallback;
 	}
 
+	float ApplyRelativeValue(float a_base, float a_layer, float a_identity)
+	{
+		if (std::abs(a_identity) <= 0.0001f)
+			return a_base + a_layer;
+
+		return a_base * (a_layer / a_identity);
+	}
+
 	float ClampMultiplier(float a_value)
 	{
 		return std::clamp(SafeFinite(a_value, 1.0f), 0.0f, 10.0f);
@@ -274,17 +477,9 @@ namespace
 		return std::clamp(SafeFinite(a_value, 1.0f), kBrightnessMin, kBrightnessMax);
 	}
 
-	bool UsesClassifiedPointLightMultipliers(const SharedLightingSettings& a_settings)
-	{
-		return a_settings.linearPointLightMult != a_settings.pointLightMult ||
-		       a_settings.spotlightMult != 1.0f ||
-		       a_settings.linearSpotlightMult != 1.0f ||
-		       a_settings.omnidirectionalBulbMult != 1.0f ||
-		       a_settings.linearOmnidirectionalBulbMult != 1.0f;
-	}
-
 	void SanitizeSharedLightingSettings(SharedLightingSettings& a_settings)
 	{
+		AdaptiveBalanceAppearance::Sanitize(a_settings.appearance);
 		const SharedLightingSettings defaults{};
 		const auto clamp = [](float a_value, float a_max, float a_default) {
 			return std::clamp(SafeFinite(a_value, a_default), 0.0f, a_max);
@@ -292,9 +487,23 @@ namespace
 
 		a_settings.skyBrightness = clamp(a_settings.skyBrightness, kGlobalSkyBrightnessMax, defaults.skyBrightness);
 		a_settings.skySaturation = clamp(a_settings.skySaturation, kSkySaturationMax, defaults.skySaturation);
+		a_settings.cloudBrightness = clamp(a_settings.cloudBrightness, kGlobalSkyBrightnessMax, defaults.cloudBrightness);
+		a_settings.cloudSaturation = clamp(a_settings.cloudSaturation, kSkySaturationMax, defaults.cloudSaturation);
+		a_settings.fogIntensity = clamp(a_settings.fogIntensity, kGlobalLightingMultiplierMax, defaults.fogIntensity);
+		a_settings.sunGlareIntensity = clamp(a_settings.sunGlareIntensity, kGlobalLightingMultiplierMax, defaults.sunGlareIntensity);
+		a_settings.effectBrightness = clamp(a_settings.effectBrightness, kGlobalSkyBrightnessMax, defaults.effectBrightness);
+		a_settings.skyStaticBrightness = clamp(a_settings.skyStaticBrightness, kGlobalSkyBrightnessMax, defaults.skyStaticBrightness);
+		a_settings.skyStaticTransparency = clamp(a_settings.skyStaticTransparency, 1.0f, defaults.skyStaticTransparency);
+		a_settings.contrast = Util::ClampFinite(a_settings.contrast, kContrastMin, kContrastMax, defaults.contrast);
+		a_settings.saturation = clamp(a_settings.saturation, kSaturationMax, defaults.saturation);
 		a_settings.ambientMult = ClampMultiplier(a_settings.ambientMult);
 		a_settings.directionalLightMult = clamp(a_settings.directionalLightMult, kGlobalLightingMultiplierMax, defaults.directionalLightMult);
 		a_settings.pointLightMult = clamp(a_settings.pointLightMult, kGlobalLightingMultiplierMax, defaults.pointLightMult);
+		a_settings.pointLightSaturation = clamp(a_settings.pointLightSaturation, kSaturationMax, defaults.pointLightSaturation);
+		a_settings.pointLightCurve = Util::ClampFinite(a_settings.pointLightCurve, kPointLightCurveMin, kPointLightCurveMax, defaults.pointLightCurve);
+		a_settings.fireIntensity = clamp(a_settings.fireIntensity, kGlobalLightingMultiplierMax, defaults.fireIntensity);
+		a_settings.fireSaturation = clamp(a_settings.fireSaturation, kSaturationMax, defaults.fireSaturation);
+		a_settings.fireCurve = Util::ClampFinite(a_settings.fireCurve, kFireCurveMin, kFireCurveMax, defaults.fireCurve);
 		a_settings.linearPointLightMult = clamp(a_settings.linearPointLightMult, kGlobalLightingMultiplierMax, defaults.linearPointLightMult);
 		a_settings.spotlightMult = clamp(a_settings.spotlightMult, kGlobalLightingMultiplierMax, defaults.spotlightMult);
 		a_settings.linearSpotlightMult = clamp(a_settings.linearSpotlightMult, kGlobalLightingMultiplierMax, defaults.linearSpotlightMult);
@@ -451,7 +660,7 @@ namespace
 	{
 		// Keep exported presets outside the live Overrides folder so sharing a preset
 		// does not implicitly turn it into an active feature override on next load.
-		return Util::PathHelpers::GetCommunityShaderPath() / kPresetDirectoryName / "Presets";
+		return Util::PathHelpers::GetCommunityShaderPath() / AdaptiveBrightness::kFeatureShortName.data() / "Presets";
 	}
 
 	std::filesystem::path GetPresetPath(std::string_view a_name, PresetKind a_kind)
@@ -459,22 +668,56 @@ namespace
 		return GetPresetDirectory() / GetPresetFilename(a_name, a_kind);
 	}
 
-	std::filesystem::path GetLocationOverrideLiveOverridePath(std::string_view a_name)
+	std::array<std::filesystem::path, 2> GetPresetImportDirectories(PresetKind a_kind)
 	{
-		return Util::PathHelpers::GetOverridesPath() / GetPresetFilename(a_name, PresetKind::Location);
+		return { GetPresetDirectory(), a_kind == PresetKind::Location ? Util::PathHelpers::GetOverridesPath() : std::filesystem::path{} };
+	}
+
+	void ReadPresetNames(PresetKind a_kind, std::vector<std::string>& a_names, std::string& a_status)
+	{
+		a_names.clear();
+		a_status.clear();
+		std::unordered_set<std::string> seen;
+		std::size_t skipped = 0;
+		const auto suffix = std::format("{}.json", GetPresetFilenameSuffix(a_kind));
+		for (const auto& directory : GetPresetImportDirectories(a_kind)) {
+			try {
+				if (directory.empty() || !std::filesystem::exists(directory))
+					continue;
+				for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+					const auto filename = Util::PathToUtf8(entry.path().filename());
+					if (!entry.is_regular_file() || !EndsWithCaseInsensitive(filename, suffix))
+						continue;
+					const auto key = Util::ToLowerAscii(filename);
+					// A listed filename must resolve back to itself through the existing importer.
+					if (key != Util::ToLowerAscii(GetPresetFilename(filename, a_kind))) {
+						++skipped;
+						continue;
+					}
+					if (seen.insert(key).second)
+						a_names.push_back(filename);
+				}
+			} catch (const std::filesystem::filesystem_error& error) {
+				if (!a_status.empty())
+					a_status += " ";
+				a_status += std::format("Could not list presets: {}", error.what());
+			}
+		}
+		std::ranges::sort(a_names);
+		if (skipped) {
+			if (!a_status.empty())
+				a_status += " ";
+			a_status += std::format("{} file(s) omitted: use letters, numbers, - or _ before the preset suffix.", skipped);
+		}
 	}
 
 	std::optional<std::filesystem::path> ResolvePresetImportPath(std::string_view a_name, PresetKind a_kind)
 	{
-		std::array paths{
-			GetPresetPath(a_name, a_kind),
-			a_kind == PresetKind::Location ? GetLocationOverrideLiveOverridePath(a_name) : std::filesystem::path{}
-		};
-
-		for (const auto& path : paths) {
-			if (path.empty())
+		for (const auto& directory : GetPresetImportDirectories(a_kind)) {
+			if (directory.empty())
 				continue;
 
+			const auto path = directory / GetPresetFilename(a_name, a_kind);
 			std::error_code ec;
 			if (std::filesystem::exists(path, ec) && !ec)
 				return path;
@@ -579,6 +822,7 @@ namespace
 			}
 
 			file >> o_json;
+			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(o_json);
 			return true;
 		} catch (const json::exception& e) {
 			o_status = std::format("Import failed: invalid JSON ({})", e.what());
@@ -589,24 +833,48 @@ namespace
 		}
 	}
 
+	void SanitizeWaterWindSettings(AdaptiveBrightness::WaterWindSettings& a_settings);
+
 	void ClampProfileSettings(AdaptiveBrightness::ProfileSettings& a_profile)
 	{
+		AdaptiveBalanceAppearance::Sanitize(a_profile.appearance);
 		a_profile.brightness = ClampBrightness(a_profile.brightness);
+		a_profile.contrast = Util::ClampFinite(a_profile.contrast, kContrastMin, kContrastMax, 1.0f);
+		a_profile.saturation = Util::ClampFinite(a_profile.saturation, 0.0f, kSaturationMax, 1.0f);
 		a_profile.skyBrightnessMult = ClampMultiplier(a_profile.skyBrightnessMult);
-		a_profile.skySaturation = std::clamp(SafeFinite(a_profile.skySaturation, 1.0f), 0.0f, kSkySaturationMax);
+		a_profile.skySaturation = Util::ClampFinite(a_profile.skySaturation, 0.0f, kSkySaturationMax, 1.0f);
+		a_profile.cloudBrightnessMult = ClampMultiplier(a_profile.cloudBrightnessMult);
+		a_profile.cloudSaturation = Util::ClampFinite(a_profile.cloudSaturation, 0.0f, kSkySaturationMax, 1.0f);
+		a_profile.fogIntensity = Util::ClampFinite(a_profile.fogIntensity, 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+		a_profile.sunGlareIntensity = Util::ClampFinite(a_profile.sunGlareIntensity, 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+		a_profile.skyStaticBrightness = Util::ClampFinite(a_profile.skyStaticBrightness, 0.0f, kGlobalSkyBrightnessMax, 1.0f);
+		a_profile.effectBrightness = Util::ClampFinite(a_profile.effectBrightness, 0.0f, kGlobalSkyBrightnessMax, 1.0f);
+		a_profile.skyStaticTransparency = Util::ClampFinite(a_profile.skyStaticTransparency, 0.0f, 1.0f, 0.0f);
 		a_profile.directionalLightMult = ClampMultiplier(a_profile.directionalLightMult);
 		a_profile.pointLightMult = ClampMultiplier(a_profile.pointLightMult);
+		a_profile.pointLightSaturation = Util::ClampFinite(a_profile.pointLightSaturation, 0.0f, kSaturationMax, 1.0f);
+		a_profile.pointLightCurve = Util::ClampFinite(a_profile.pointLightCurve, kPointLightCurveMin, kPointLightCurveMax, 1.0f);
+		a_profile.fireIntensity = Util::ClampFinite(a_profile.fireIntensity, 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+		a_profile.fireSaturation = Util::ClampFinite(a_profile.fireSaturation, 0.0f, kSaturationMax, 1.0f);
+		a_profile.fireCurve = Util::ClampFinite(a_profile.fireCurve, kFireCurveMin, kFireCurveMax, 1.0f);
+		a_profile.linearPointLightMult = ClampMultiplier(a_profile.linearPointLightMult);
+		a_profile.spotlightMult = ClampMultiplier(a_profile.spotlightMult);
+		a_profile.linearSpotlightMult = ClampMultiplier(a_profile.linearSpotlightMult);
+		a_profile.omnidirectionalBulbMult = ClampMultiplier(a_profile.omnidirectionalBulbMult);
+		a_profile.linearOmnidirectionalBulbMult = ClampMultiplier(a_profile.linearOmnidirectionalBulbMult);
 		a_profile.ambientMult = ClampMultiplier(a_profile.ambientMult);
 		a_profile.emitColorMult = ClampMultiplier(a_profile.emitColorMult);
 		a_profile.glowmapMult = ClampMultiplier(a_profile.glowmapMult);
 		a_profile.effectLightingMult = ClampMultiplier(a_profile.effectLightingMult);
 		a_profile.skyGammaOffset = ClampGammaOffset(a_profile.skyGammaOffset);
+		a_profile.cloudGammaOffset = ClampGammaOffset(a_profile.cloudGammaOffset);
 		a_profile.fogGammaOffset = ClampGammaOffset(a_profile.fogGammaOffset);
 		a_profile.fogAlphaGammaOffset = ClampGammaOffset(a_profile.fogAlphaGammaOffset);
 		a_profile.waterGammaOffset = ClampGammaOffset(a_profile.waterGammaOffset);
 		a_profile.vlGammaOffset = ClampGammaOffset(a_profile.vlGammaOffset);
 		Bloom::SanitizeProfile(a_profile.bloom);
 		WaterAppearance::SanitizeProfile(a_profile.water);
+		SanitizeWaterWindSettings(a_profile.waterWind);
 	}
 
 	void NormalizeBaseProfiles(std::array<AdaptiveBrightness::ProfileSettings, AdaptiveBrightness::kProfileCount>& a_profiles)
@@ -620,6 +888,93 @@ namespace
 		a_settings.dayStartHour = WrapHour(a_settings.dayStartHour);
 		a_settings.nightStartHour = WrapHour(a_settings.nightStartHour);
 		a_settings.transitionHours = std::clamp(SafeFinite(a_settings.transitionHours, 1.0f), 0.0f, 4.0f);
+	}
+
+	void SanitizeWaterWindSettings(AdaptiveBrightness::WaterWindSettings& a_settings)
+	{
+		const AdaptiveBrightness::WaterWindSettings defaults{};
+		a_settings.calmWaveMultiplier = std::clamp(
+			SafeFinite(a_settings.calmWaveMultiplier, defaults.calmWaveMultiplier),
+			kWaterWindMultiplierMin,
+			kWaterWindMultiplierMax);
+		a_settings.strongWindWaveMultiplier = std::clamp(
+			SafeFinite(a_settings.strongWindWaveMultiplier, defaults.strongWindWaveMultiplier),
+			kWaterWindMultiplierMin,
+			kWaterWindMultiplierMax);
+	}
+
+	float GetWaterWindWaveMultiplier(
+		const AdaptiveBrightness::WaterWindSettings& a_settings,
+		float a_windSpeed)
+	{
+		const float windSpeed = std::clamp(SafeFinite(a_windSpeed, 0.0f), 0.0f, 1.0f);
+		return std::lerp(a_settings.calmWaveMultiplier, a_settings.strongWindWaveMultiplier, windSpeed);
+	}
+
+	template <class T, class ApplyLayer>
+	T ApplyLocationLayers(
+		const T& a_globalBase,
+		T a_baseProfile,
+		const std::vector<const AdaptiveBrightness::LocationOverride*>& a_layers,
+		ApplyLayer&& a_applyLayer)
+	{
+		for (const auto* layer : a_layers) {
+			if (!layer)
+				continue;
+			a_baseProfile = a_applyLayer(layer->layered ? a_baseProfile : a_globalBase, layer->profile);
+		}
+		return a_baseProfile;
+	}
+
+	template <class T>
+	struct ComposedProfileBranches
+	{
+		T from;
+		std::optional<T> to{};
+		float factor = 0.0f;
+	};
+
+	template <class T, class ApplyLayer>
+	ComposedProfileBranches<T> ComposeProfileBranches(
+		const T& a_globalBase,
+		const AdaptiveBrightness::ActiveProfileBlend& a_activeProfiles,
+		const std::vector<const AdaptiveBrightness::LocationOverride*>& a_locationLayers,
+		ApplyLayer&& a_applyLayer)
+	{
+		if (!a_activeProfiles.from)
+			return { .from = a_globalBase };
+
+		const auto composeBranch = [&](const AdaptiveBrightness::ProfileSettings& a_profile) {
+			return ApplyLocationLayers(
+				a_globalBase,
+				a_applyLayer(a_globalBase, a_profile),
+				a_locationLayers,
+				a_applyLayer);
+		};
+		auto from = composeBranch(*a_activeProfiles.from);
+		if (!a_activeProfiles.to || a_activeProfiles.from == a_activeProfiles.to)
+			return { .from = std::move(from) };
+
+		return {
+			.from = std::move(from),
+			.to = composeBranch(*a_activeProfiles.to),
+			.factor = std::clamp(SafeFinite(a_activeProfiles.factor, 0.0f), 0.0f, 1.0f)
+		};
+	}
+
+	void NormalizeBaseSettings(AdaptiveBrightness::Settings& a_settings)
+	{
+		a_settings.godrayFinalBrightness = AdaptiveBalanceGodray::SanitizeFinalBrightness(a_settings.godrayFinalBrightness);
+		a_settings.volumetricClarity = AdaptiveBalanceGodray::SanitizeClarity(a_settings.volumetricClarity);
+		a_settings.godrays.exterior = VolumetricLightingTuning::SanitizeProfile(a_settings.godrays.exterior);
+		a_settings.godrays.interior = VolumetricLightingTuning::SanitizeProfile(a_settings.godrays.interior);
+		a_settings.moonReflectionStrength = Util::ClampFinite(a_settings.moonReflectionStrength,
+			AdaptiveBrightness::kMoonReflectionStrengthMin, AdaptiveBrightness::kMoonReflectionStrengthMax, AdaptiveBrightness::kMoonReflectionStrengthDefault);
+		AdaptiveBalanceDepthOfField::SanitizeSettings(a_settings.depthOfField);
+		ClampProfileSettings(a_settings.globalProfile);
+		a_settings.globalProfile.waterWind.overrideEnabled = true;
+		NormalizeExteriorTimeSettings(a_settings);
+		NormalizeBaseProfiles(a_settings.profiles);
 	}
 
 	float GetOptionalFloat(const json& a_json, const char* a_key, float a_fallback)
@@ -638,20 +993,25 @@ namespace
 		}
 	}
 
-	bool MatchesJsonSchema(const json& a_value, const json& a_schema)
+	bool GetOptionalBool(const json& a_json, const char* a_key, bool a_fallback)
 	{
-		if (a_schema.is_number())
-			return a_value.is_number();
-		if (a_schema.is_array()) {
-			if (!a_value.is_array() || a_value.size() != a_schema.size())
-				return false;
-			for (std::size_t index = 0; index < a_schema.size(); ++index) {
-				if (!MatchesJsonSchema(a_value[index], a_schema[index]))
-					return false;
-			}
-			return true;
+		if (!a_json.is_object())
+			return a_fallback;
+
+		const auto it = a_json.find(a_key);
+		if (it == a_json.end())
+			return a_fallback;
+		if (it->is_boolean())
+			return it->get<bool>();
+		if (it->is_number_unsigned())
+			return it->get<uint64_t>() != 0;
+		if (it->is_number_integer())
+			return it->get<int64_t>() != 0;
+		if (it->is_number_float()) {
+			const auto value = it->get<double>();
+			return std::isfinite(value) ? value != 0.0 : a_fallback;
 		}
-		return a_value.type() == a_schema.type();
+		return a_fallback;
 	}
 
 	void NormalizeJsonObjectWithDefaults(json& a_value, const json& a_defaults)
@@ -669,16 +1029,405 @@ namespace
 					*valueIt = defaultValue;
 				else
 					NormalizeJsonObjectWithDefaults(*valueIt, defaultValue);
-			} else if (!MatchesJsonSchema(*valueIt, defaultValue)) {
+			} else if (!SettingsMigrations::MatchesJsonSchema(*valueIt, defaultValue)) {
 				*valueIt = defaultValue;
 			}
 		}
 	}
 
+	std::optional<Bloom::Profile> TryGetBloomProfile(const json& a_value)
+	{
+		if (!a_value.is_object())
+			return std::nullopt;
+
+		try {
+			auto profile = a_value.get<Bloom::Profile>();
+			Bloom::SanitizeProfile(profile);
+			return profile;
+		} catch (const json::exception&) {
+			return std::nullopt;
+		}
+	}
+
+	void SetProfileBloom(json& a_profile, const Bloom::Profile& a_bloom, bool a_advanced)
+	{
+		auto bloom = a_bloom;
+		Bloom::SanitizeProfile(bloom);
+		a_profile["bloom"] = bloom;
+		a_profile["bloomAdvanced"] = a_advanced;
+	}
+
+	std::optional<WaterAppearance::Profile> TryGetWaterAppearanceProfile(json a_value)
+	{
+		if (!a_value.is_object())
+			return std::nullopt;
+
+		try {
+			// Bound quality before the JSON serializer narrows it to an integer.
+			if (auto qualityIt = a_value.find("ParallaxQuality"); qualityIt != a_value.end() && qualityIt->is_number()) {
+				*qualityIt = static_cast<int>(Util::ClampFinite(
+					qualityIt->get<double>(),
+					static_cast<double>(WaterAppearance::Profile::kMinParallaxQuality),
+					static_cast<double>(WaterAppearance::Profile::kMaxParallaxQuality),
+					static_cast<double>(WaterAppearance::Profile::kDefaultParallaxQuality)));
+			}
+			auto profile = a_value.get<WaterAppearance::Profile>();
+			WaterAppearance::SanitizeProfile(profile);
+			return profile;
+		} catch (const json::exception&) {
+			return std::nullopt;
+		}
+	}
+
+	void SetProfileWaterAppearance(json& a_profile, const WaterAppearance::Profile& a_water)
+	{
+		auto water = a_water;
+		WaterAppearance::SanitizeProfile(water);
+		a_profile["water"] = water;
+	}
+
+	void MigrateLegacyProfileLighting(json& a_profile)
+	{
+		if (!a_profile.is_object())
+			return;
+		SettingsMigrations::MigrateCloudProfileSettings(a_profile);
+
+		if (const auto linearPointIt = a_profile.find("linearPointLightMult");
+			linearPointIt != a_profile.end() && linearPointIt->is_number())
+			return;
+
+		if (const auto pointIt = a_profile.find("pointLightMult"); pointIt != a_profile.end() && pointIt->is_number())
+			a_profile["linearPointLightMult"] = *pointIt;
+	}
+
+	void MigrateLegacyProfileWaterAppearance(
+		json& a_profile,
+		const WaterAppearance::Profile& a_globalProfile,
+		bool a_hasLegacyGlobal,
+		bool a_forceGlobal = false)
+	{
+		if (!a_profile.is_object())
+			return;
+
+		const auto waterIt = a_profile.find("water");
+		const bool hasExplicitWater = waterIt != a_profile.end() && waterIt->is_object() &&
+		                              GetOptionalBool(*waterIt, SettingsMigrations::kLegacyWaterProfileExplicitKey.data(), false);
+		if ((!a_forceGlobal || hasExplicitWater) && waterIt != a_profile.end() && waterIt->is_object()) {
+			// Preserve every supported profile field; missing or malformed values
+			// inherit the legacy global value or the current default.
+			json mergedWater = a_hasLegacyGlobal ? json(a_globalProfile) : json(WaterAppearance::Profile{});
+			for (auto& [fieldName, value] : mergedWater.items()) {
+				if (const auto fieldIt = waterIt->find(fieldName); fieldIt != waterIt->end() && SettingsMigrations::MatchesJsonSchema(*fieldIt, value))
+					value = *fieldIt;
+			}
+
+			if (const auto nativeWater = TryGetWaterAppearanceProfile(std::move(mergedWater)))
+				SetProfileWaterAppearance(a_profile, *nativeWater);
+			else
+				SetProfileWaterAppearance(a_profile, WaterAppearance::Profile{});
+			return;
+		}
+
+		if (a_forceGlobal || a_hasLegacyGlobal) {
+			SetProfileWaterAppearance(a_profile, a_globalProfile);
+		} else if (waterIt != a_profile.end()) {
+			// Do not let a malformed profile-native Water field reject the whole
+			// profile or location override.
+			SetProfileWaterAppearance(a_profile, WaterAppearance::Profile{});
+		}
+	}
+
+	Bloom::Profile GetLegacyGlobalBloomProfile(const json& a_settings, bool& o_enabled)
+	{
+		o_enabled = false;
+		auto profile = Bloom::Profile{};
+		const auto bloomIt = a_settings.find("bloomEnhancement");
+		if (bloomIt == a_settings.end() || !bloomIt->is_object())
+			return profile;
+
+		const auto& legacyBloom = *bloomIt;
+		o_enabled = GetOptionalBool(legacyBloom, "Enabled", false);
+		uint preset = 0;
+		if (const auto presetIt = legacyBloom.find("SelectedPreset"); presetIt != legacyBloom.end()) {
+			if (presetIt->is_number_unsigned())
+				preset = static_cast<uint>(std::min<uint64_t>(presetIt->get<uint64_t>(), 2u));
+			else if (presetIt->is_number_integer())
+				preset = static_cast<uint>(std::clamp<int64_t>(presetIt->get<int64_t>(), 0, 2));
+		}
+		const char* profileName = preset == 1 ? "Fantasy" : preset == 2 ? "Dreamy" :
+		                                                                  "Default";
+		if (const auto profileIt = legacyBloom.find(profileName); profileIt != legacyBloom.end() && profileIt->is_object()) {
+			try {
+				profile = profileIt->get<Bloom::Profile>();
+			} catch (const json::exception&) {
+				profile = Bloom::GetPresetProfile(preset);
+			}
+		} else {
+			profile = Bloom::GetPresetProfile(preset);
+		}
+		Bloom::SanitizeProfile(profile);
+		return profile;
+	}
+
+	void MigrateLegacyProfileBloom(
+		json& a_profile,
+		const Bloom::Profile& a_globalProfile,
+		bool a_globalEnabled,
+		bool a_hasLegacyGlobal,
+		bool a_forceGlobal = false)
+	{
+		if (!a_profile.is_object())
+			return;
+
+		const auto bloomIt = a_profile.find("bloom");
+		const auto nativeBloom = bloomIt != a_profile.end() ? TryGetBloomProfile(*bloomIt) : std::nullopt;
+		const auto advancedIt = a_profile.find("bloomAdvanced");
+		const bool hasNativeAdvanced = advancedIt != a_profile.end() && advancedIt->is_boolean();
+		const bool hasLegacyProfileFields =
+			a_profile.contains("bloomOverride") || a_profile.contains("bloomEnabled");
+
+		if (!a_forceGlobal && nativeBloom && (hasNativeAdvanced || !hasLegacyProfileFields)) {
+			// A valid profile-native value wins over stale legacy fields that may
+			// remain after layered settings or override merges. A partial native
+			// profile is also valid: bloomAdvanced defaults to false.
+			SetProfileBloom(a_profile, *nativeBloom, hasNativeAdvanced && advancedIt->get<bool>());
+			a_profile.erase("bloomOverride");
+			a_profile.erase("bloomEnabled");
+			return;
+		}
+
+		if (!a_forceGlobal && !hasLegacyProfileFields &&
+			(a_profile.contains("bloom") || a_profile.contains("bloomAdvanced"))) {
+			// Do not let a malformed native Bloom field fail the entire feature load.
+			SetProfileBloom(a_profile, Bloom::Profile{}, false);
+			return;
+		}
+
+		if (!a_profile.contains("bloomOverride")) {
+			if (a_forceGlobal || a_hasLegacyGlobal) {
+				auto profile = a_globalProfile;
+				if (!a_globalEnabled)
+					profile.EnhancementIntensity = 0.0f;
+				SetProfileBloom(a_profile, profile, false);
+			}
+			return;
+		}
+
+		const bool useProfileBloom = GetOptionalBool(a_profile, "bloomOverride", false);
+		const bool profileBloomEnabled = GetOptionalBool(a_profile, "bloomEnabled", false);
+		auto profile = a_globalProfile;
+		if (useProfileBloom) {
+			if (nativeBloom)
+				profile = *nativeBloom;
+			if (!profileBloomEnabled)
+				profile.EnhancementIntensity = 0.0f;
+		} else if (!a_globalEnabled) {
+			profile.EnhancementIntensity = 0.0f;
+		}
+
+		SetProfileBloom(a_profile, profile, false);
+		a_profile.erase("bloomOverride");
+		a_profile.erase("bloomEnabled");
+	}
+
+	void NormalizeProfileArray(json& a_settings)
+	{
+		auto profilesIt = a_settings.find(kProfilesFieldName.data());
+		if (profilesIt == a_settings.end())
+			return;
+
+		const json defaultProfiles = AdaptiveBrightness::Settings{}.profiles;
+		if (!profilesIt->is_array()) {
+			*profilesIt = defaultProfiles;
+			return;
+		}
+
+		json normalizedProfiles = defaultProfiles;
+		for (std::size_t index = 0; index < std::min(profilesIt->size(), normalizedProfiles.size()); ++index) {
+			if (!(*profilesIt)[index].is_object())
+				continue;
+			normalizedProfiles[index] = (*profilesIt)[index];
+			NormalizeJsonObjectWithDefaults(normalizedProfiles[index], defaultProfiles[index]);
+		}
+		*profilesIt = std::move(normalizedProfiles);
+	}
+
+	void NormalizeLocationOverrideArray(json& a_settings)
+	{
+		auto overridesIt = a_settings.find(kLocationOverridesFieldName.data());
+		if (overridesIt == a_settings.end())
+			return;
+		if (!overridesIt->is_array()) {
+			a_settings.erase(overridesIt);
+			return;
+		}
+
+		const json defaultOverride = AdaptiveBrightness::LocationOverride{};
+		json normalizedOverrides = json::array();
+		for (const auto& locationOverride : *overridesIt) {
+			if (!locationOverride.is_object())
+				continue;
+			auto normalizedOverride = locationOverride;
+			NormalizeJsonObjectWithDefaults(normalizedOverride, defaultOverride);
+			normalizedOverrides.push_back(std::move(normalizedOverride));
+		}
+		*overridesIt = std::move(normalizedOverrides);
+	}
+
+	void NormalizeAdaptiveBalanceSettings(json& a_settings)
+	{
+		if (!a_settings.is_object())
+			return;
+
+		const json defaults = AdaptiveBrightness::Settings{};
+		for (const auto& [key, defaultValue] : defaults.items()) {
+			if (key == kProfilesFieldName || key == kLocationOverridesFieldName)
+				continue;
+			auto valueIt = a_settings.find(key);
+			if (valueIt == a_settings.end())
+				continue;
+			if (defaultValue.is_object()) {
+				if (!valueIt->is_object())
+					*valueIt = defaultValue;
+				else
+					NormalizeJsonObjectWithDefaults(*valueIt, defaultValue);
+			} else if (!SettingsMigrations::MatchesJsonSchema(*valueIt, defaultValue)) {
+				*valueIt = defaultValue;
+			}
+		}
+
+		NormalizeProfileArray(a_settings);
+		NormalizeLocationOverrideArray(a_settings);
+	}
+
+	json MigrateLegacyProfileSettings(const json& a_settings)
+	{
+		if (!a_settings.is_object())
+			return a_settings;
+
+		auto migrated = a_settings;
+		const bool hasLegacyLightingToggle = migrated.contains("globalLightingEnabled") || migrated.contains("rendererControlsEnabled");
+		const bool legacyLightingEnabled = GetOptionalBool(
+			migrated,
+			"globalLightingEnabled",
+			GetOptionalBool(migrated, "rendererControlsEnabled", true));
+		const auto legacyWaterWindIt = migrated.find("waterWind");
+		const bool hasLegacyWaterWind = legacyWaterWindIt != migrated.end() && legacyWaterWindIt->is_object();
+		const auto globalEnabledIt = migrated.find("globalProfileEnabled");
+		const bool removedGlobalLayerWasDisabled =
+			globalEnabledIt != migrated.end() && globalEnabledIt->is_boolean() && !globalEnabledIt->get<bool>();
+
+		const auto existingGlobalProfileIt = migrated.find("globalProfile");
+		json globalProfile = existingGlobalProfileIt != migrated.end() && existingGlobalProfileIt->is_object() ?
+		                         *existingGlobalProfileIt :
+		                         json::object();
+		const auto setFallback = [&](const char* a_name, const json& a_value) {
+			const auto valueIt = globalProfile.find(a_name);
+			if (valueIt == globalProfile.end() || !SettingsMigrations::MatchesJsonSchema(*valueIt, a_value))
+				globalProfile[a_name] = a_value;
+		};
+
+		if (hasLegacyLightingToggle)
+			setFallback("advanced", legacyLightingEnabled);
+		if (const auto lightingIt = migrated.find("lighting"); lightingIt != migrated.end() && lightingIt->is_object()) {
+			constexpr std::array lightingFields{
+				std::pair{ "skyBrightness", "skyBrightnessMult" },
+				std::pair{ "directionalLightMult", "directionalLightMult" },
+				std::pair{ "pointLightMult", "pointLightMult" },
+				std::pair{ "linearPointLightMult", "linearPointLightMult" },
+				std::pair{ "spotlightMult", "spotlightMult" },
+				std::pair{ "linearSpotlightMult", "linearSpotlightMult" },
+				std::pair{ "omnidirectionalBulbMult", "omnidirectionalBulbMult" },
+				std::pair{ "linearOmnidirectionalBulbMult", "linearOmnidirectionalBulbMult" }
+			};
+			for (const auto& [legacyName, profileName] : lightingFields) {
+				if (const auto valueIt = lightingIt->find(legacyName); valueIt != lightingIt->end() && valueIt->is_number())
+					setFallback(profileName, *valueIt);
+			}
+		}
+
+		if (hasLegacyWaterWind) {
+			auto& globalWaterWind = globalProfile["waterWind"];
+			if (!globalWaterWind.is_object())
+				globalWaterWind = json::object();
+			globalWaterWind["overrideEnabled"] = true;
+			const json waterWindDefaults = AdaptiveBrightness::WaterWindSettings{};
+			for (const auto* fieldName : { "enabled", "calmWaveMultiplier", "strongWindWaveMultiplier" }) {
+				if (const auto valueIt = legacyWaterWindIt->find(fieldName); valueIt != legacyWaterWindIt->end()) {
+					const auto defaultIt = waterWindDefaults.find(fieldName);
+					const auto currentIt = globalWaterWind.find(fieldName);
+					if (defaultIt != waterWindDefaults.end() &&
+						SettingsMigrations::MatchesJsonSchema(*valueIt, *defaultIt) &&
+						(currentIt == globalWaterWind.end() || !SettingsMigrations::MatchesJsonSchema(*currentIt, *defaultIt)))
+						globalWaterWind[fieldName] = *valueIt;
+				}
+			}
+		}
+		if (removedGlobalLayerWasDisabled)
+			globalProfile = AdaptiveBrightness::ProfileSettings::GlobalDefaults();
+		SettingsMigrations::MigrateCloudProfileSettings(globalProfile);
+		migrated["globalProfile"] = std::move(globalProfile);
+
+		const auto legacyBloomIt = migrated.find("bloomEnhancement");
+		const bool hasLegacyGlobalBloom = legacyBloomIt != migrated.end() && legacyBloomIt->is_object();
+		bool globalBloomEnabled = false;
+		const auto globalBloomProfile = GetLegacyGlobalBloomProfile(migrated, globalBloomEnabled);
+		const auto legacyWaterIt = migrated.find(kLegacyGlobalWaterAppearanceFieldName.data());
+		const bool hasLegacyGlobalWater = legacyWaterIt != migrated.end() &&
+		                                  SettingsMigrations::HasLegacyUnifiedWaterAppearanceValues(*legacyWaterIt);
+		const bool forceLegacyGlobalWater = hasLegacyGlobalWater && GetOptionalBool(*legacyWaterIt, SettingsMigrations::kLegacyWaterAppearanceForceGlobalKey.data(), false);
+		const auto globalWaterProfile = hasLegacyGlobalWater ?
+		                                    TryGetWaterAppearanceProfile(*legacyWaterIt).value_or(WaterAppearance::Profile{}) :
+		                                    WaterAppearance::Profile{};
+		const auto existingProfilesIt = migrated.find(kProfilesFieldName.data());
+		const bool createdProfilesFromLegacyGlobal =
+			(hasLegacyGlobalBloom || hasLegacyGlobalWater) &&
+			(existingProfilesIt == migrated.end() || !existingProfilesIt->is_array());
+		if (createdProfilesFromLegacyGlobal)
+			migrated[std::string(kProfilesFieldName)] = AdaptiveBrightness::Settings{}.profiles;
+		if (auto profilesIt = migrated.find(kProfilesFieldName.data()); profilesIt != migrated.end() && profilesIt->is_array()) {
+			for (auto& profile : *profilesIt) {
+				MigrateLegacyProfileLighting(profile);
+				MigrateLegacyProfileBloom(
+					profile,
+					globalBloomProfile,
+					globalBloomEnabled,
+					hasLegacyGlobalBloom,
+					createdProfilesFromLegacyGlobal && hasLegacyGlobalBloom);
+				MigrateLegacyProfileWaterAppearance(
+					profile,
+					globalWaterProfile,
+					hasLegacyGlobalWater,
+					forceLegacyGlobalWater || (createdProfilesFromLegacyGlobal && hasLegacyGlobalWater));
+			}
+		}
+		if (auto overridesIt = migrated.find(kLocationOverridesFieldName.data()); overridesIt != migrated.end() && overridesIt->is_array()) {
+			for (auto& locationOverride : *overridesIt) {
+				if (!locationOverride.is_object())
+					continue;
+				if (auto profileIt = locationOverride.find("profile"); profileIt != locationOverride.end()) {
+					MigrateLegacyProfileLighting(*profileIt);
+					MigrateLegacyProfileBloom(*profileIt, globalBloomProfile, globalBloomEnabled, hasLegacyGlobalBloom);
+					MigrateLegacyProfileWaterAppearance(*profileIt, globalWaterProfile, hasLegacyGlobalWater, forceLegacyGlobalWater);
+				}
+			}
+		}
+
+		migrated.erase("rendererControlsEnabled");
+		migrated.erase("globalLightingEnabled");
+		migrated.erase("globalProfileEnabled");
+		migrated.erase("lighting");
+		migrated.erase("waterWind");
+		migrated.erase("bloomEnhancement");
+		migrated.erase(kLegacyGlobalWaterAppearanceFieldName.data());
+		NormalizeAdaptiveBalanceSettings(migrated);
+		return migrated;
+	}
+
 	json MakePresetMetadata(std::string_view a_name, PresetKind a_kind, std::string_view a_type, std::string_view a_description)
 	{
 		return {
-			{ "feature", AdaptiveBrightness::kFeatureName.data() },
+			{ "feature", AdaptiveBrightness::kFeatureShortName.data() },
 			{ "modName", GetPresetModName(a_name, a_kind) },
 			{ "type", std::string(a_type) },
 			{ "version", kPresetVersion },
@@ -689,8 +1438,13 @@ namespace
 	json MakeBasePresetJson(const AdaptiveBrightness::Settings& a_settings, std::string_view a_name, PresetKind a_kind, std::string_view a_type, std::string_view a_description)
 	{
 		return {
-			{ "globalLightingEnabled", a_settings.globalLightingEnabled },
-			{ "lighting", a_settings.lighting },
+			{ "useAmbientEffectLighting", a_settings.useAmbientEffectLighting },
+			{ "godrayFinalBrightness", a_settings.godrayFinalBrightness },
+			{ "volumetricClarity", a_settings.volumetricClarity },
+			{ "godrays", a_settings.godrays },
+			{ "moonReflectionStrength", a_settings.moonReflectionStrength },
+			{ "globalProfile", a_settings.globalProfile },
+			{ "depthOfField", a_settings.depthOfField },
 			{ "dayStartHour", a_settings.dayStartHour },
 			{ "nightStartHour", a_settings.nightStartHour },
 			{ "transitionHours", a_settings.transitionHours },
@@ -705,7 +1459,8 @@ namespace
 			a_locationOverride.name = a_locationOverride.key;
 
 		bool changedLookup = false;
-		if (a_locationOverride.type != kOverrideTypeCell &&
+		if (a_locationOverride.type != kOverrideTypeLocation &&
+			a_locationOverride.type != kOverrideTypeCell &&
 			a_locationOverride.type != kOverrideTypeWorldspace &&
 			a_locationOverride.type != kOverrideTypeRegion &&
 			a_locationOverride.type != kOverrideTypeCity) {
@@ -722,7 +1477,13 @@ namespace
 		LocationOverrideImportStats stats;
 		for (const auto& entry : a_json) {
 			try {
-				auto locationOverride = entry.get<AdaptiveBrightness::LocationOverride>();
+				auto migratedEntry = entry;
+				if (auto profileIt = migratedEntry.find("profile"); profileIt != migratedEntry.end()) {
+					MigrateLegacyProfileLighting(*profileIt);
+					MigrateLegacyProfileBloom(*profileIt, Bloom::Profile{}, false, false);
+					MigrateLegacyProfileWaterAppearance(*profileIt, WaterAppearance::Profile{}, false);
+				}
+				auto locationOverride = migratedEntry.get<AdaptiveBrightness::LocationOverride>();
 				if (!IsValidFormKey(locationOverride.key)) {
 					++stats.skipped;
 					continue;
@@ -788,9 +1549,11 @@ namespace
 				return &*it;
 		}
 
-		if (auto it = a_json.find(AdaptiveBrightness::kFeatureName.data()); it != a_json.end() && it->is_object()) {
-			if (auto profilesIt = it->find(kProfilesFieldName.data()); profilesIt != it->end() && profilesIt->is_array())
-				return &*it;
+		for (const auto* featureName : { AdaptiveBrightness::kFeatureName.data(), AdaptiveBrightness::kFeatureShortName.data(), SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data(), "AdaptiveBalance" }) {
+			if (auto it = a_json.find(featureName); it != a_json.end() && it->is_object()) {
+				if (auto profilesIt = it->find(kProfilesFieldName.data()); profilesIt != it->end() && profilesIt->is_array())
+					return &*it;
+			}
 		}
 
 		return nullptr;
@@ -805,22 +1568,28 @@ namespace
 		}
 
 		try {
+			const auto migratedPreset = MigrateLegacyProfileSettings(*presetJson);
 			auto importedSettings = a_settings;
-			auto importedProfiles = presetJson->at(kProfilesFieldName.data()).get<std::array<AdaptiveBrightness::ProfileSettings, AdaptiveBrightness::kProfileCount>>();
-			NormalizeBaseProfiles(importedProfiles);
+			auto importedProfiles = migratedPreset.at(kProfilesFieldName.data()).get<std::array<AdaptiveBrightness::ProfileSettings, AdaptiveBrightness::kProfileCount>>();
 
-			if (const auto it = presetJson->find("globalLightingEnabled"); it != presetJson->end() && it->is_boolean())
-				importedSettings.globalLightingEnabled = it->get<bool>();
-			if (const auto it = presetJson->find("lighting"); it != presetJson->end() && it->is_object()) {
-				importedSettings.lighting = it->get<SharedLightingSettings>();
-				SanitizeSharedLightingSettings(importedSettings.lighting);
-			}
+			if (const auto it = migratedPreset.find("globalProfile"); it != migratedPreset.end() && it->is_object())
+				importedSettings.globalProfile = it->get<AdaptiveBrightness::ProfileSettings>();
 
-			importedSettings.dayStartHour = GetOptionalFloat(*presetJson, "dayStartHour", importedSettings.dayStartHour);
-			importedSettings.nightStartHour = GetOptionalFloat(*presetJson, "nightStartHour", importedSettings.nightStartHour);
-			importedSettings.transitionHours = GetOptionalFloat(*presetJson, "transitionHours", importedSettings.transitionHours);
-			NormalizeExteriorTimeSettings(importedSettings);
+			if (const auto it = migratedPreset.find("depthOfField"); it != migratedPreset.end())
+				importedSettings.depthOfField = it->get<AdaptiveBalanceDepthOfField::Settings>();
+
+			importedSettings.useAmbientEffectLighting = GetOptionalBool(migratedPreset, "useAmbientEffectLighting", false);
+			importedSettings.godrayFinalBrightness = GetOptionalFloat(migratedPreset, "godrayFinalBrightness", AdaptiveBalanceGodray::kDefault);
+			if (const auto it = migratedPreset.find("godrays"); it != migratedPreset.end())
+				importedSettings.godrays = it->get<AdaptiveBalanceGodray::Profiles>();
+
+			importedSettings.volumetricClarity = GetOptionalFloat(migratedPreset, "volumetricClarity", AdaptiveBalanceGodray::kClarityDefault);
+			importedSettings.moonReflectionStrength = GetOptionalFloat(migratedPreset, "moonReflectionStrength", AdaptiveBrightness::kMoonReflectionStrengthDefault);
+			importedSettings.dayStartHour = GetOptionalFloat(migratedPreset, "dayStartHour", importedSettings.dayStartHour);
+			importedSettings.nightStartHour = GetOptionalFloat(migratedPreset, "nightStartHour", importedSettings.nightStartHour);
+			importedSettings.transitionHours = GetOptionalFloat(migratedPreset, "transitionHours", importedSettings.transitionHours);
 			importedSettings.profiles = std::move(importedProfiles);
+			NormalizeBaseSettings(importedSettings);
 			a_settings = std::move(importedSettings);
 			return true;
 		} catch (const json::exception& e) {
@@ -840,9 +1609,11 @@ namespace
 		if (auto it = a_json.find(kLocationOverridesFieldName.data()); it != a_json.end())
 			return &*it;
 
-		if (auto it = a_json.find(AdaptiveBrightness::kFeatureName.data()); it != a_json.end() && it->is_object()) {
-			if (auto overridesIt = it->find(kLocationOverridesFieldName.data()); overridesIt != it->end())
-				return &*overridesIt;
+		for (const auto* featureName : { AdaptiveBrightness::kFeatureName.data(), AdaptiveBrightness::kFeatureShortName.data(), SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data(), "AdaptiveBalance" }) {
+			if (auto it = a_json.find(featureName); it != a_json.end() && it->is_object()) {
+				if (auto overridesIt = it->find(kLocationOverridesFieldName.data()); overridesIt != it->end())
+					return &*overridesIt;
+			}
 		}
 
 		return nullptr;
@@ -889,20 +1660,6 @@ namespace
 		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
 		ImGui::TextDisabled("%s", a_text);
 		ImGui::PopTextWrapPos();
-	}
-
-	void DrawPresetNameInput(const char* a_label, const char* a_id, std::string& a_name, const std::filesystem::path& a_exportPath, const std::filesystem::path* a_alternateImportPath = nullptr)
-	{
-		ImGui::TextUnformatted(a_label);
-		ImGui::SameLine();
-		const float inputWidth = std::min(280.0f * Util::GetUIScale(), std::max(120.0f, ImGui::GetContentRegionAvail().x * 0.45f));
-		ImGui::SetNextItemWidth(inputWidth);
-		ImGui::InputTextWithHint(a_id, "Preset name", &a_name);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped("Export path: %s", a_exportPath.string().c_str());
-			if (a_alternateImportPath)
-				ImGui::TextWrapped("Import also accepts: %s", a_alternateImportPath->string().c_str());
-		}
 	}
 
 	int CompareString(const std::string& a_lhs, const std::string& a_rhs)
@@ -995,143 +1752,200 @@ namespace
 
 void AdaptiveBrightness::DrawSettingsHeaderControls()
 {
-	bool enabled = settings.enabled;
-	if (ImGui::Checkbox("Enable", &enabled))
-		SetEnabled(enabled);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Enable all Adaptive Balance adjustments across profiles and location overrides.");
-		ImGui::Text("When off, lighting, Bloom, and water appearance adjustments are bypassed.");
+	const auto contextSectionToSelect = SyncContextSection();
+	// Keep exchange navigation stable while the player crosses contextual boundaries.
+	if (MenuUI::SettingsPage::Selected("AdaptiveBrightness") != "presets") {
+		if (contextSectionToSelect == ContextSection::Profiles)
+			MenuUI::SettingsPage::Select("AdaptiveBrightness", "profiles");
+		else if (contextSectionToSelect == ContextSection::Locations)
+			MenuUI::SettingsPage::Select("AdaptiveBrightness", "locations");
 	}
 
 	if (settings.enabled) {
 		const auto contextLabel = GetContextLabel();
 		ImGui::TextWrapped("%s", contextLabel.c_str());
 	} else {
-		ImGui::TextDisabled("Adaptive Balance is off. Saved adjustments are preserved.");
+		ImGui::TextDisabled(T("feature.adaptive_brightness.adaptive_balance_is_off_saved_adjustments_are_preserved", "Adaptive Balance is off. Saved adjustments are preserved."));
 	}
 }
 
 void AdaptiveBrightness::DrawSettings()
 {
-	const auto contextSectionToSelect = SyncContextSection();
-	const ImGuiTabItemFlags profileSectionFlags =
-		contextSectionToSelect == ContextSection::Profiles ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-	const ImGuiTabItemFlags locationSectionFlags =
-		contextSectionToSelect == ContextSection::Locations ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+	MenuUI::SettingsPage page("AdaptiveBrightness", {
+														{ "global", T("feature.adaptive_brightness.global", "Global"), T("feature.adaptive_brightness.start_with_shared_lighting_colour_bloom_water_957a110f", "Start with shared lighting, colour, bloom, water and depth of field."), T("feature.adaptive_brightness.shared_appearance_and_depth_of_field", "Shared appearance and depth of field"), true, true, T("feature.adaptive_brightness.build_the_shared_look", "Build the shared look") },
+														{ "profiles", T("feature.adaptive_brightness.profiles", "Profiles"), T("feature.adaptive_brightness.refine_the_shared_look_for_time_and_location_types", "Refine the shared look for time and location types."), T("feature.adaptive_brightness.time_and_location_profiles", "Time and location profiles"), true, true, nullptr },
+														{ "locations", T("feature.adaptive_brightness.locations", "Locations"), T("feature.adaptive_brightness.add_precise_changes_for_individual_places", "Add precise changes for individual places."), T("feature.adaptive_brightness.exact_places_and_cells", "Exact places and cells"), true, true, T("feature.adaptive_brightness.refine_local_changes", "Refine local changes") },
+														{ "presets", T("feature.adaptive_brightness.presets", "Presets"), T("feature.adaptive_brightness.save_or_load_complete_appearances_and_locatio_37994eb2", "Save or load complete appearances and location collections."), T("feature.adaptive_brightness.complete_looks_and_collections", "Complete looks and collections"), true, true, nullptr },
+													});
 
-	if (ImGui::BeginTabBar("##AdaptiveBalanceSections", ImGuiTabBarFlags_None)) {
-		if (ImGui::BeginTabItem("Profiles", nullptr, profileSectionFlags)) {
-			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and Unified Water appearance used for each time and location type. Context profiles are ordered from broad Worldspace and Location scopes to specific Cities; exact locations and cells remain under Locations.");
-			if (!settings.enabled)
-				ImGui::TextDisabled("Adaptive profile switching is off. Saved profile values can still be reviewed.");
+	if (page.Is("global")) {
+		DrawGlobalSettings(true);
+	}
 
-			ImGui::BeginDisabled(!settings.enabled);
-			DrawExteriorTimeSettings();
-			ImGui::EndDisabled();
+	if (page.Is("profiles")) {
+		ImGui::TextWrapped(T("feature.adaptive_brightness.tune_lighting_atmosphere_bloom_and_water_by_t_4d869c08", "Tune lighting, atmosphere, bloom and water by time and location type. Context profiles are ordered Worldspace > Location > City. Use Locations for exact places and cells."));
+		if (!settings.enabled)
+			ImGui::TextDisabled(T("feature.adaptive_brightness.adaptive_balance_is_off_saved_profile_values_5e3ffd35", "Adaptive Balance is off. Saved profile values can still be reviewed."));
 
-			const auto profileTabToSelect = SyncSelectedProfileTabToContext(ProfileTabSurface::Advanced);
-			const auto contextScopeToSelect = profileTabToSelect ?
-			                                      GetCurrentContextOverrideScope(GetActiveLocationOverride()) :
-			                                      std::nullopt;
-			if (ImGui::BeginTabBar("##AdaptiveBrightnessProfiles", ImGuiTabBarFlags_None)) {
-				for (auto profile : kProfileOrder) {
-					const ImGuiTabItemFlags tabFlags =
-						!contextScopeToSelect && profileTabToSelect && *profileTabToSelect == profile ?
-							ImGuiTabItemFlags_SetSelected :
-							ImGuiTabItemFlags_None;
-					if (ImGui::BeginTabItem(GetProfileName(profile), nullptr, tabFlags)) {
-						DrawProfile(profile, settings.enabled);
-						ImGui::EndTabItem();
-					}
+		ImGui::BeginDisabled(!settings.enabled);
+		DrawExteriorTimeSettings();
+		ImGui::EndDisabled();
 
-					if (profile == Profile::Interior) {
-						for (auto scope : kContextProfileOrder) {
-							DrawCurrentContextProfileTab(
-								scope,
-								true,
-								settings.enabled,
-								contextScopeToSelect && *contextScopeToSelect == scope);
-						}
-					}
-				}
-				ImGui::EndTabBar();
-			}
-			ImGui::EndTabItem();
+		const auto profileTabToSelect = SyncSelectedProfileTabToContext();
+		const auto contextScopeToSelect = profileTabToSelect ?
+		                                      GetCurrentContextOverrideScope(GetActiveLocationOverride()) :
+		                                      std::nullopt;
+		constexpr int profileCount = static_cast<int>(std::size(kProfileOrder));
+		std::vector<const char*> profileNames;
+		for (auto profile : kProfileOrder)
+			profileNames.push_back(GetProfileName(profile));
+		for (auto scope : kContextProfileOrder)
+			profileNames.push_back(GetContextScopeTabLabel(scope));
+		const auto selectionId = ImGui::GetID("AdaptiveBalanceProfile");
+		auto* storage = ImGui::GetStateStorage();
+		int selected = std::clamp(storage->GetInt(selectionId), 0, static_cast<int>(profileNames.size()) - 1);
+		if (contextScopeToSelect) {
+			for (int i = 0; i < static_cast<int>(std::size(kContextProfileOrder)); ++i)
+				if (kContextProfileOrder[i] == *contextScopeToSelect)
+					selected = profileCount + i;
+		} else if (profileTabToSelect) {
+			for (int i = 0; i < profileCount; ++i)
+				if (kProfileOrder[i] == *profileTabToSelect)
+					selected = i;
 		}
+		Util::Widgets::Combo(T("feature.adaptive_brightness.profile", "Profile"), &selected, profileNames.data(), static_cast<int>(profileNames.size()));
+		storage->SetInt(selectionId, selected);
+		if (selected < profileCount)
+			DrawProfile(kProfileOrder[selected], settings.enabled);
+		else
+			DrawCurrentContextProfileControls(kContextProfileOrder[selected - profileCount], true, settings.enabled);
+	}
 
-		if (ImGui::BeginTabItem("Global")) {
-			ImGui::TextWrapped("%s", T(TKEY("global_lighting_description"), "Set the shared lighting baseline multiplied by every active profile."));
-			DrawGlobalRendererSettings();
-			ImGui::EndTabItem();
-		}
+	if (page.Is("locations")) {
+		ImGui::TextWrapped(T("feature.adaptive_brightness.create_precise_profile_overrides_for_worldspa_5477a784", "Create precise profile overrides for worldspaces, regional locations, cities, specific locations, or exact cells."));
+		if (!settings.enabled)
+			ImGui::TextDisabled(T("feature.adaptive_brightness.adaptive_balance_is_off_saved_overrides_can_s_6e69b525", "Adaptive Balance is off. Saved overrides can still be reviewed."));
+		DrawLocationOverrides(false, true, settings.enabled);
+	}
 
-		if (ImGui::BeginTabItem("Locations", nullptr, locationSectionFlags)) {
-			ImGui::TextWrapped("Create precise profile overrides for worldspaces, regional locations, cities, specific locations, or exact cells.");
-			if (!settings.enabled)
-				ImGui::TextDisabled("Adaptive profile switching is off. Saved overrides can still be reviewed.");
-			DrawLocationOverrides(false, true, settings.enabled);
-			ImGui::EndTabItem();
-		}
+	if (page.Is("presets"))
+		DrawPresets();
+}
 
-		if (ImGui::BeginTabItem("Presets")) {
-			ImGui::TextWrapped("Import or export complete balance configurations and location override collections. The Worldspace, Locations, and Cities profile tabs also provide JSON presets for their current scope.");
-			DrawGlobalPresetControls();
-			DrawLocationOverridePresetControls();
-			DrawFullPresetControls();
-			ImGui::EndTabItem();
-		}
-
-		ImGui::EndTabBar();
+void AdaptiveBrightness::DrawProfileControls(
+	ProfileSettings& a_profile,
+	const char* a_tabBarID,
+	bool a_showAdvancedControls,
+	bool a_globalLayer,
+	bool a_allowEdits)
+{
+	ImGui::PushID(a_tabBarID);
+	const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
+	auto* storage = ImGui::GetStateStorage();
+	const auto selectionId = ImGui::GetID("AdjustmentGroup");
+	int selected = std::clamp(storage->GetInt(selectionId), 0, a_globalLayer ? 5 : 3);
+	const char* groups[] = { T("feature.adaptive_brightness.lighting", "Lighting"), T("feature.adaptive_brightness.colour", "Colour"), T("feature.adaptive_brightness.bloom", "Bloom"), T("feature.adaptive_brightness.water", "Water"), T("feature.adaptive_brightness.depth_of_field", "Depth of field"), T("feature.adaptive_brightness.godrays", "Godrays") };
+	if (MenuUI::ChoiceSetting(T("feature.adaptive_brightness.adjust", "Adjust"), &selected, groups, a_globalLayer ? 6 : 4))
+		storage->SetInt(selectionId, selected);
+	const auto disabled = Util::DisableGuard(!a_allowEdits);
+	switch (selected) {
+	case 0:
+		DrawLightingSettings(a_profile, a_showAdvancedControls, a_globalLayer);
+		break;
+	case 1:
+		DrawColorSettings(a_profile);
+		break;
+	case 2:
+		DrawBloomSettings(a_profile, a_showAdvancedControls, a_globalLayer);
+		break;
+	case 3:
+		DrawWaterSettings(a_profile, a_showAdvancedControls, a_globalLayer);
+		break;
+	case 4:
+		AdaptiveBalanceDepthOfField::DrawSettings();
+		break;
+	case 5:
+		DrawGodraySettings();
+		break;
 	}
 }
 
-void AdaptiveBrightness::DrawEssentialSettings()
+void AdaptiveBrightness::DrawGodraySettings()
 {
-	ImGui::SeparatorText("Quick Controls");
-	ImGui::Checkbox(T(TKEY("global_lighting_enabled"), "Enable Global Lighting Calibration"), &settings.globalLightingEnabled);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("global_lighting_enabled_tooltip"), "Applies the shared lighting baseline before the active profile."));
-		ImGui::Text("%s", T(TKEY("global_lighting_independence_tooltip"), "Scene brightness, Bloom, and water appearance profiles remain active when this is off."));
-	}
+	MenuUI::DetailNote(T("feature.adaptive_brightness.these_exterior_and_interior_bases_control_sep_e3c181f9", "These exterior and interior bases control separated light shafts. Global, time and location appearance profiles adjust them further. Disabling Adaptive Balance bypasses all godray tuning and Atmospheric Clarity."));
+	Util::Widgets::SliderFloat(T("feature.adaptive_brightness.atmospheric_clarity", "Atmospheric Clarity"), &settings.volumetricClarity,
+		AdaptiveBalanceGodray::kClarityMin, AdaptiveBalanceGodray::kClarityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextWrapped(T("feature.adaptive_brightness.reduce_broad_volumetric_haze_independently_of_ec183629", "Reduce broad volumetric haze independently of godray intensity, opacity, saturation and tint. Zero retains the haze; one removes it. Depth boundaries protect foreground silhouettes. This is a local contrast separation: broad uniform beams may also fade. Vanilla Fog Intensity controls distance fog separately. Missing depth preserves the original lighting. Works without detailed lighting controls."));
 
-	if (!settings.enabled)
-		ImGui::TextDisabled("Adaptive profile switching is off. Saved profile values can still be reviewed.");
+	MenuUI::DetailGrid grid("GodrayProfiles", 2, ImGui::GetFontSize() * 32);
+	const Util::Widgets::ControlLayout controls(true);
+	const auto drawProfile = [&](const char* label, VolumetricLightingTuning::Profile& profile) {
+		grid.Next();
+		MenuUI::SectionHeading(label);
+		ImGui::PushID(label);
+		const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
+		for (const auto& field : VolumetricLightingTuning::kProfileFields)
+			Util::Widgets::SliderFloat(GetLocalizedAppearanceLabel(field.label), &(profile.*field.member), 0.0f, field.maximum, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		profile = VolumetricLightingTuning::SanitizeProfile(profile);
+	};
+	drawProfile(T("feature.adaptive_brightness.exterior_godrays", "Exterior Godrays"), settings.godrays.exterior);
+	drawProfile(T("feature.adaptive_brightness.interior_godrays", "Interior Godrays"), settings.godrays.interior);
+}
 
-	ImGui::BeginDisabled(!settings.enabled);
-	DrawExteriorTimeSettings();
-	ImGui::EndDisabled();
+void AdaptiveBrightness::DrawGlobalSettings(bool a_showAdvancedControls)
+{
+	ClampProfileSettings(settings.globalProfile);
+	DrawProfileControls(
+		settings.globalProfile,
+		"##AdaptiveBalanceGlobalSettings",
+		a_showAdvancedControls,
+		true,
+		settings.enabled);
+	ClampProfileSettings(settings.globalProfile);
+}
 
-	const auto profileTabToSelect = SyncSelectedProfileTabToContext(ProfileTabSurface::Essentials);
-	auto essentialProfileToSelect = profileTabToSelect;
-	if (essentialProfileToSelect &&
-		*essentialProfileToSelect != Profile::ExteriorDay &&
-		*essentialProfileToSelect != Profile::ExteriorNight) {
-		essentialProfileToSelect = Profile::Interior;
-	}
-	if (ImGui::BeginTabBar("##AdaptiveBrightnessProfilesEssentials", ImGuiTabBarFlags_None)) {
-		for (auto profile : kEssentialProfileOrder) {
-			const ImGuiTabItemFlags tabFlags =
-				essentialProfileToSelect && *essentialProfileToSelect == profile ?
-					ImGuiTabItemFlags_SetSelected :
-					ImGuiTabItemFlags_None;
-			if (ImGui::BeginTabItem(GetProfileName(profile), nullptr, tabFlags)) {
-				auto& profileSettings = settings.profiles[ProfileIndex(profile)];
-				ImGui::PushID(static_cast<int>(ProfileIndex(profile)));
-				DrawProfileSettings(profileSettings, "Profile Values", false, settings.enabled);
-				ImGui::PopID();
-				ImGui::EndTabItem();
-			}
-		}
-		ImGui::EndTabBar();
-	}
+void AdaptiveBrightness::DrawPerformanceSettings(bool a_advanced)
+{
+	DrawSettingsHeaderControls();
+	DrawGlobalSettings(a_advanced);
+}
+
+json AdaptiveBrightness::CapturePerformanceSettingsState() const
+{
+	return {
+		{ "enabled", settings.enabled },
+		{ "useAmbientEffectLighting", settings.useAmbientEffectLighting },
+		{ "godrayFinalBrightness", settings.godrayFinalBrightness },
+		{ "volumetricClarity", settings.volumetricClarity },
+		{ "godrays", settings.godrays },
+		{ "moonReflectionStrength", settings.moonReflectionStrength },
+		{ "globalProfile", settings.globalProfile },
+		{ "depthOfField", settings.depthOfField }
+	};
+}
+
+void AdaptiveBrightness::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_boolean())
+		return;
+	const bool enabled = a_state.get<bool>();
+	SetEnabled(enabled);
+	SetPerformanceCostMeasurementEnabled(enabled);
+}
+
+void AdaptiveBrightness::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	if (performanceCostMeasurementEnabled == a_enabled)
+		return;
+	performanceCostMeasurementEnabled = a_enabled;
+	ResetWaterWindSmoothing();
 }
 
 void AdaptiveBrightness::LoadSettings(json& o_json)
 {
-	settings = o_json;
-	SanitizeSharedLightingSettings(settings.lighting);
-	NormalizeExteriorTimeSettings(settings);
-	NormalizeBaseProfiles(settings.profiles);
+	settings = MigrateLegacyProfileSettings(o_json);
+	NormalizeBaseSettings(settings);
 	globalPresetStatus.clear();
 	if (globalPresetName.empty())
 		globalPresetName = kDefaultGlobalPresetName;
@@ -1150,13 +1964,12 @@ void AdaptiveBrightness::LoadSettings(json& o_json)
 	InvalidateProfileTabSync();
 	NormalizeLocationOverrides();
 	MarkLocationOverrideLookupDirty();
+	ResetWaterWindSmoothing();
 }
 
 void AdaptiveBrightness::SaveSettings(json& o_json)
 {
-	SanitizeSharedLightingSettings(settings.lighting);
-	NormalizeExteriorTimeSettings(settings);
-	NormalizeBaseProfiles(settings.profiles);
+	NormalizeBaseSettings(settings);
 	NormalizeLocationOverrides();
 	o_json = settings;
 }
@@ -1164,7 +1977,7 @@ void AdaptiveBrightness::SaveSettings(json& o_json)
 void AdaptiveBrightness::RestoreDefaultSettings()
 {
 	settings = {};
-	NormalizeExteriorTimeSettings(settings);
+	NormalizeBaseSettings(settings);
 	globalPresetName = kDefaultGlobalPresetName;
 	globalPresetStatus.clear();
 	locationOverridePresetName = kDefaultLocationOverridePresetName;
@@ -1176,6 +1989,7 @@ void AdaptiveBrightness::RestoreDefaultSettings()
 	ClearLocationOverrideSelection();
 	InvalidateProfileTabSync();
 	MarkLocationOverrideLookupDirty();
+	ResetWaterWindSmoothing();
 }
 
 void AdaptiveBrightness::SetupResources()
@@ -1187,13 +2001,13 @@ void AdaptiveBrightness::SetupResources()
 
 const char* AdaptiveBrightness::GetProfileName(Profile a_profile)
 {
-	return kProfileNames[ProfileIndex(a_profile)];
+	return GetLocalizedAppearanceLabel(kProfileNames[ProfileIndex(a_profile)]);
 }
 
-std::optional<AdaptiveBrightness::Profile> AdaptiveBrightness::SyncSelectedProfileTabToContext(ProfileTabSurface a_surface)
+std::optional<AdaptiveBrightness::Profile> AdaptiveBrightness::SyncSelectedProfileTabToContext()
 {
 	if (!GetCurrentPlayerCell(RE::PlayerCharacter::GetSingleton())) {
-		profileTabSyncStates[static_cast<std::size_t>(a_surface)] = {};
+		profileTabSyncState = {};
 		return std::nullopt;
 	}
 
@@ -1220,7 +2034,7 @@ std::optional<AdaptiveBrightness::Profile> AdaptiveBrightness::SyncSelectedProfi
 		}
 	}
 
-	auto& syncState = profileTabSyncStates[static_cast<std::size_t>(a_surface)];
+	auto& syncState = profileTabSyncState;
 	const int currentFrame = ImGui::GetFrameCount();
 	const bool profileTabsWereVisible =
 		syncState.lastDrawFrame >= 0 &&
@@ -1263,25 +2077,25 @@ std::optional<AdaptiveBrightness::ContextSection> AdaptiveBrightness::SyncContex
 		return contextScope ? ContextSection::Profiles : ContextSection::Locations;
 	}
 
-	return ContextSection::Profiles;
+	return std::nullopt;
 }
 
 void AdaptiveBrightness::DrawExteriorTimeSettings()
 {
-	ImGui::SeparatorText("Exterior Schedule");
-	ImGui::SliderFloat("Day Blend Start", &settings.dayStartHour, 0.0f, 24.0f, "%.1f h");
+	ImGui::SeparatorText(T("feature.adaptive_brightness.exterior_schedule", "Exterior Schedule"));
+	Util::Widgets::SliderFloat(T("feature.adaptive_brightness.day_blend_start", "Day Blend Start"), &settings.dayStartHour, 0.0f, 24.0f, "%.1f h");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Hour when the Exterior Day profile starts blending in. It reaches full strength after Blend Duration.");
+		ImGui::Text(T("feature.adaptive_brightness.hour_when_the_exterior_day_profile_starts_blending_in", "Hour when the Exterior Day profile starts blending in."));
 	}
 
-	ImGui::SliderFloat("Night Blend Start", &settings.nightStartHour, 0.0f, 24.0f, "%.1f h");
+	Util::Widgets::SliderFloat(T("feature.adaptive_brightness.night_blend_start", "Night Blend Start"), &settings.nightStartHour, 0.0f, 24.0f, "%.1f h");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Hour when the Exterior Night profile starts blending in. It reaches full strength after Blend Duration.");
+		ImGui::Text(T("feature.adaptive_brightness.hour_when_the_exterior_night_profile_starts_blending_in", "Hour when the Exterior Night profile starts blending in."));
 	}
 
-	ImGui::SliderFloat("Blend Duration", &settings.transitionHours, 0.0f, 4.0f, "%.1f h");
+	Util::Widgets::SliderFloat(T("feature.adaptive_brightness.blend_duration", "Blend Duration"), &settings.transitionHours, 0.0f, 4.0f, "%.1f h");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Hours used after each blend start to reach the selected Exterior profile.");
+		ImGui::Text(T("feature.adaptive_brightness.hours_used_to_blend_between_exterior_day_and_7f0c476e", "Hours used to blend between Exterior Day and Exterior Night."));
 	}
 
 	NormalizeExteriorTimeSettings(settings);
@@ -1305,17 +2119,21 @@ void AdaptiveBrightness::DrawLocationOverrideProfileEditor(
 	bool a_closeWhenFinished)
 {
 	ImGui::PushID(a_locationOverride.key.c_str());
+	ImGui::TextDisabled(
+		a_locationOverride.layered ?
+			T("feature.adaptive_brightness.adjustment_layer_applied_after_broader_location_layers", "Adjustment layer: applied after broader location layers.") :
+			T("feature.adaptive_brightness.legacy_profile_replaces_broader_contextual_la_d22074c9", "Legacy profile: replaces broader contextual layers to preserve its saved appearance."));
 	if (a_allowEdits) {
 		if (auto* editProfile = GetLocationOverrideEditProfile(a_locationOverride)) {
 			DrawProfileSettings(*editProfile, a_sectionTitle, a_showAdvancedControls, true);
 
 			const bool saveEdit = ImGui::Button(a_saveLabel);
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Apply these profile values to the current settings. Use the main Save button to persist them.");
+				ImGui::Text(T("feature.adaptive_brightness.apply_these_profile_values_to_the_current_set_673f0712", "Apply these profile values to the current settings. Use the main Save button to persist them."));
 			ImGui::SameLine();
-			const bool cancelEdit = ImGui::Button("Cancel");
+			const bool cancelEdit = ImGui::Button(T("feature.adaptive_brightness.cancel", "Cancel"));
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Discard unsaved edits to this profile.");
+				ImGui::Text(T("feature.adaptive_brightness.discard_unsaved_edits_to_this_profile", "Discard unsaved edits to this profile."));
 
 			if (saveEdit)
 				a_locationOverride.profile = *editProfile;
@@ -1329,70 +2147,49 @@ void AdaptiveBrightness::DrawLocationOverrideProfileEditor(
 	} else {
 		auto viewProfile = a_locationOverride.profile;
 		DrawProfileSettings(viewProfile, a_sectionTitle, a_showAdvancedControls, false);
-		if (a_closeWhenFinished && ImGui::Button("Close"))
+		if (a_closeWhenFinished && ImGui::Button(T("feature.adaptive_brightness.close", "Close")))
 			ClearLocationOverrideSelection();
 	}
 	ImGui::PopID();
 }
 
-void AdaptiveBrightness::DrawCurrentContextProfileTab(
-	ContextProfileScope a_scope,
-	bool a_showAdvancedControls,
-	bool a_allowEdits,
-	bool a_select)
+void AdaptiveBrightness::DrawCurrentContextProfileControls(
+	ContextProfileScope a_scope, bool a_showAdvancedControls, bool a_allowEdits)
 {
-	const auto tabId = std::format(
-		"{}###AdaptiveBalanceContextProfile{}",
-		GetContextScopeTabLabel(a_scope),
-		ContextScopeIndex(a_scope));
-	const ImGuiTabItemFlags tabFlags = a_select ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-	const bool drawTab = ImGui::BeginTabItem(tabId.c_str(), nullptr, tabFlags);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", GetContextScopeDescription(a_scope));
-		ImGui::Text("Profiles continue into descendant locations and interiors.");
-		ImGui::Text("Exact-cell and more specific location profiles keep priority.");
-	}
-	if (!drawTab)
-		return;
+	ImGui::PushID(static_cast<int>(a_scope));
+	const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
 
 	const auto targets = GetCurrentLocationOverrideTargets();
 	const auto* target = GetContextTarget(targets, a_scope);
 	if (!target) {
-		ImGui::TextDisabled("The current cell has no associated %s scope.", GetContextScopeName(a_scope));
-		ImGui::TextWrapped("This tab remains available so the profile layout does not change while cells are loading or when this scope is not present in the current location hierarchy.");
-		ImGui::EndTabItem();
+		ImGui::TextDisabled(T("feature.adaptive_brightness.the_current_cell_has_no_associated_s_scope", "The current cell has no associated %s scope."), GetContextScopeName(a_scope));
+		ImGui::TextWrapped(T("feature.adaptive_brightness.this_profile_stays_visible_during_cell_loadin_373ab137", "This profile stays visible during cell loading and when its scope is absent from the current location hierarchy."));
 		return;
 	}
 
-	ImGui::TextWrapped("Current %s: %s", GetContextScopeName(a_scope), target->name.c_str());
-	ImGui::TextDisabled("%s form %s", target->type.c_str(), target->key.c_str());
+	ImGui::TextWrapped(T("feature.adaptive_brightness.current_s_s", "Current %s: %s"), GetContextScopeName(a_scope), target->name.c_str());
+	ImGui::TextDisabled(T("feature.adaptive_brightness.s_form_s", "%s form %s"), target->type.c_str(), target->key.c_str());
 	ImGui::TextWrapped("%s", GetContextScopeDescription(a_scope));
 
 	auto* contextProfile = FindLocationOverride(target->key);
-	if (contextProfile && a_scope == ContextProfileScope::Worldspace && !IsWorldspaceOverride(contextProfile))
-		contextProfile = nullptr;
-	if (contextProfile && a_scope != ContextProfileScope::Worldspace && IsWorldspaceOverride(contextProfile))
-		contextProfile = nullptr;
-
 	const auto* inheritedProfile = contextProfile ? nullptr : GetInheritedLocationOverride(*target);
 
 	if (!contextProfile) {
 		if (inheritedProfile) {
-			ImGui::TextWrapped("%s currently inherits the saved broader profile %s. Create a profile here to fork those values and tune Lighting, Bloom, and Water independently.", target->name.c_str(), inheritedProfile->name.c_str());
+			ImGui::TextWrapped(T("feature.adaptive_brightness.s_inherits_saved_broader_profile_s_add_a_laye_25f07062", "%s inherits saved broader profile %s. Add a layer here to adjust Lighting, Color, Bloom and Water."), target->name.c_str(), inheritedProfile->name.c_str());
 		} else {
-			ImGui::TextWrapped("%s currently inherits the %s base profile. Create a profile here to fork those values and tune Lighting, Bloom, and Water independently.", target->name.c_str(), GetProfileName(target->defaultProfile));
+			ImGui::TextWrapped(T("feature.adaptive_brightness.s_inherits_base_profile_s_add_a_layer_here_to_47867108", "%s inherits base profile %s. Add a layer here to adjust Lighting, Color, Bloom and Water."), target->name.c_str(), GetProfileName(target->defaultProfile));
 		}
 		ImGui::BeginDisabled(!a_allowEdits);
 		const auto createLabel = std::format("Create {} Profile", GetContextScopeName(a_scope));
 		if (ImGui::Button(createLabel.c_str()))
 			SaveCurrentLocationOverride(*target);
 		ImGui::EndDisabled();
-		DrawContextProfilePresetControls(a_scope, *target, nullptr, a_allowEdits);
-		ImGui::EndTabItem();
+		DrawPresetShortcut(a_scope);
 		return;
 	}
 
-	ImGui::TextWrapped("%s profile for %s.", GetContextScopeName(a_scope), contextProfile->name.c_str());
+	ImGui::TextWrapped(T("feature.adaptive_brightness.s_profile_for_s", "%s profile for %s."), GetContextScopeName(a_scope), contextProfile->name.c_str());
 	DrawLocationOverrideProfileEditor(
 		*contextProfile,
 		"Profile Values",
@@ -1400,243 +2197,296 @@ void AdaptiveBrightness::DrawCurrentContextProfileTab(
 		a_allowEdits,
 		"Save Profile",
 		false);
-	DrawContextProfilePresetControls(a_scope, *target, contextProfile, a_allowEdits);
-	ImGui::EndTabItem();
+	DrawPresetShortcut(a_scope);
 }
 
-void AdaptiveBrightness::DrawContextProfilePresetControls(
-	ContextProfileScope a_scope,
-	const LocationOverrideTarget& a_target,
-	const LocationOverride* a_locationOverride,
-	bool a_allowEdits)
+void AdaptiveBrightness::DrawPresetShortcut(ContextProfileScope a_scope)
 {
-	ImGui::SeparatorText("Share Profile");
-	DrawHintText("Export stores this scope's Lighting, Bloom, and Water values as a portable JSON profile. Import applies those values to the current scope without changing other saved profiles.");
-
-	const auto scopeIndex = ContextScopeIndex(a_scope);
-	auto& presetName = contextPresetNames[scopeIndex];
-	auto& presetStatus = contextPresetStatuses[scopeIndex];
-	const auto presetKind = GetContextScopePresetKind(a_scope);
-	const auto presetPath = GetPresetPath(presetName, presetKind);
-
-	ImGui::PushID(static_cast<int>(scopeIndex));
-	const auto inputLabel = std::format("{} profile", GetContextScopeName(a_scope));
-	DrawPresetNameInput(inputLabel.c_str(), "##ContextProfilePresetName", presetName, presetPath);
-
-	ImGui::SameLine();
-	ImGui::BeginDisabled(!a_locationOverride);
-	if (ImGui::Button("Export Profile") && a_locationOverride)
-		ExportContextProfile(a_scope, a_target, *a_locationOverride);
-	ImGui::EndDisabled();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Export the current %s profile to JSON.", GetContextScopeName(a_scope));
-
-	ImGui::SameLine();
-	ImGui::BeginDisabled(!a_allowEdits);
-	if (ImGui::Button("Import Profile"))
-		ImportContextProfile(a_scope, a_target);
-	ImGui::EndDisabled();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Apply a shared JSON profile to the current %s scope.", GetContextScopeName(a_scope));
-
-	if (!presetStatus.empty())
-		ImGui::TextWrapped("%s", presetStatus.c_str());
-	ImGui::PopID();
+	if (ImGui::Button(T("feature.adaptive_brightness.import_export_this_profile", "Import / export this profile"))) {
+		presetUI.collection = static_cast<MenuUI::AdaptiveBalancePresets::Collection>(
+			static_cast<int>(MenuUI::AdaptiveBalancePresets::Collection::Worldspace) + static_cast<int>(a_scope));
+		presetFilesDirty = true;
+		MenuUI::SettingsPage::Select("AdaptiveBrightness", "presets");
+	}
+	Util::AddTooltip(T("feature.adaptive_brightness.open_the_shared_presets_screen_for_this_scope_apply_pending_profile", "Open the shared Presets screen for this scope. Apply pending profile edits before exporting."));
 }
 
 void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle, bool a_showAdvancedControls, bool a_allowEdits)
 {
 	ClampProfileSettings(a_profile);
 
-	const auto drawSlider = [](const char* a_label, float& a_value, float a_min, float a_max, const char* a_tooltip) {
-		ImGui::SliderFloat(a_label, &a_value, a_min, a_max, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", a_tooltip);
-		}
-	};
-
-	ImGui::SeparatorText(a_sectionTitle);
-	ImGui::Indent();
-	ImGui::BeginDisabled(!a_allowEdits);
-
-	if (ImGui::BeginTabBar("##ProfileControlSections", ImGuiTabBarFlags_None)) {
-		if (ImGui::BeginTabItem("Lighting")) {
-			drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Overall brightness for this profile. Use it when this location type is too dark or too bright.");
-
-			if (a_showAdvancedControls) {
-				ImGui::Checkbox("Show Detailed Lighting Controls", &a_profile.advanced);
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Shows and enables the detailed lighting and atmosphere values for this profile only.");
-				}
-				if (a_profile.advanced) {
-					ImGui::Indent();
-					ImGui::SeparatorText("Direct Lighting");
-					ImGui::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, 2.0f, "%.2f");
-					if (auto _tt = Util::HoverTooltipWrapper())
-						ImGui::Text("Contextual multiplier applied to the global Sky Brightness value. This is separate from Sky Gamma.");
-					ImGui::SliderFloat("Sky Saturation", &a_profile.skySaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-					if (auto _tt = Util::HoverTooltipWrapper())
-						ImGui::Text("Scales sky color saturation for this profile. One preserves the current colors; zero makes them monochrome.");
-					ImGui::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, 3.0f, "%.2f");
-					ImGui::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, 3.0f, "%.2f");
-
-					ImGui::SeparatorText("Indirect and Material Lighting");
-					ImGui::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, 3.0f, "%.2f");
-					if (auto _tt = Util::HoverTooltipWrapper())
-						ImGui::Text("Scales ambient lighting after vanilla or image-based lighting is selected. One preserves the lighting; zero removes its ambient contribution.");
-					ImGui::SliderFloat("Emissive", &a_profile.emitColorMult, 0.0f, 3.0f, "%.2f");
-					ImGui::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, 3.0f, "%.2f");
-					ImGui::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, 3.0f, "%.2f");
-
-					ImGui::SeparatorText("Atmosphere Gamma Offsets");
-					ImGui::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-					ImGui::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-					ImGui::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-					ImGui::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-					ImGui::Unindent();
-				}
-			}
-			ImGui::EndTabItem();
-		}
-
-		if (ImGui::BeginTabItem("Bloom")) {
-			Bloom::DrawProfileControls(a_profile.bloom);
-			if (a_showAdvancedControls) {
-				ImGui::Checkbox(T(TKEY("bloom.detailed"), "Show Detailed Bloom Controls"), &a_profile.bloomAdvanced);
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("bloom.detailed_tooltip"), "Shows detailed Bloom shaping for this profile. Editing a detailed value activates Bloom at strength 1 if it is currently off; the Bloom slider and presets remain available either way."));
-				if (a_profile.bloomAdvanced) {
-					ImGui::Indent();
-					if (Bloom::DrawAdvancedProfileSettings(a_profile.bloom) && a_profile.bloom.EnhancementIntensity <= 0.0f)
-						a_profile.bloom.EnhancementIntensity = 1.0f;
-					ImGui::Unindent();
-				}
-			}
-			ImGui::EndTabItem();
-		}
-
-		if (ImGui::BeginTabItem("Water")) {
-			WaterAppearance::DrawProfileControls(a_profile.water);
-			if (a_showAdvancedControls) {
-				ImGui::Checkbox("Show Detailed Water Controls", &a_profile.waterAdvanced);
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("Shows detailed water color, surface, reflection, refraction, clarity, caustics, and parallax controls for this profile.");
-				if (a_profile.waterAdvanced) {
-					ImGui::Indent();
-					drawSlider(
-						"Water Color Gamma",
-						a_profile.waterGammaOffset,
-						kGammaOffsetMin,
-						kGammaOffsetMax,
-						"Offsets water color gamma for this profile. This is separate from Water Brightness and the surface appearance controls below.");
-					WaterAppearance::DrawAdvancedProfileSettings(a_profile.water);
-					ImGui::Unindent();
-				}
-			}
-			ImGui::EndTabItem();
-		}
-
-		ImGui::EndTabBar();
-	}
-	ImGui::EndDisabled();
-
-	ImGui::Unindent();
+	MenuUI::SectionHeading(a_sectionTitle);
+	DrawProfileControls(a_profile, "##ProfileControlSections", a_showAdvancedControls, false, a_allowEdits);
 	ClampProfileSettings(a_profile);
 }
 
-void AdaptiveBrightness::DrawGlobalRendererSettings()
+void AdaptiveBrightness::DrawColorSettings(ProfileSettings& a_profile)
 {
-	ImGui::Checkbox(T(TKEY("global_lighting_enabled"), "Enable Global Lighting Calibration"), &settings.globalLightingEnabled);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("global_lighting_detailed_tooltip"), "Applies the shared lighting baseline before each profile's detailed lighting adjustments."));
-		ImGui::Text("%s", T(TKEY("global_lighting_independence_detailed_tooltip"), "Profile brightness, Bloom, and water appearance remain active when this is off."));
-	}
-	if (!settings.globalLightingEnabled)
-		ImGui::TextDisabled("%s", T(TKEY("global_lighting_inactive"), "Global lighting calibration is currently inactive."));
-
-	if (ImGui::BeginTabBar("##AdaptiveBalanceGlobalSections", ImGuiTabBarFlags_None)) {
-		if (ImGui::BeginTabItem("Lighting")) {
-			ImGui::BeginDisabled(!settings.globalLightingEnabled);
-			ImGui::TextWrapped("These baseline values apply to every location. The active profile is multiplied on top.");
-			ImGui::SeparatorText("Shared Baseline");
-			ImGui::SliderFloat("Sky Brightness", &settings.lighting.skyBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::SliderFloat("Sky Saturation", &settings.lighting.skySaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Scales the global sky color saturation before profile adjustments. One preserves the current colors; zero makes them monochrome.");
-			ImGui::SliderFloat("Directional Light", &settings.lighting.directionalLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::SliderFloat("Point Lights", &settings.lighting.pointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-
-			ImGui::SeparatorText("Point-light Type Balance");
-			ImGui::TextWrapped("Subtype values are additional multipliers applied after the active profile's Point Lights value.");
-			ImGui::SliderFloat("Spotlights", &settings.lighting.spotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::SliderFloat("Omnidirectional Bulbs", &settings.lighting.omnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-
-			ImGui::TextWrapped("Linear values target lights authored with linear falloff; they do not require Linear Lighting.");
-			ImGui::SliderFloat("Linear Point Lights", &settings.lighting.linearPointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::SliderFloat("Linear Spotlights", &settings.lighting.linearSpotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::SliderFloat("Linear Omnidirectional Bulbs", &settings.lighting.linearOmnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::EndDisabled();
-			ImGui::EndTabItem();
-		}
-
-		ImGui::EndTabBar();
-	}
-
-	SanitizeSharedLightingSettings(settings.lighting);
+	ImGui::TextWrapped(T("feature.adaptive_brightness.adjust_the_whole_scene_including_sky_lighting_c17d401b", "Adjust the whole scene, including sky, lighting and bloom. One is neutral; Global and active profile adjustments multiply."));
+	Util::Widgets::SliderFloat(T("feature.adaptive_brightness.contrast", "Contrast"), &a_profile.contrast, kContrastMin, kContrastMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted(T("feature.adaptive_brightness.adjust_luminance_around_middle_gray_without_s_fec1a313", "Adjust luminance around middle gray without shifting hue. Lower softens contrast; higher deepens shadows and brightens highlights."));
+	Util::Widgets::SliderFloat(T("feature.adaptive_brightness.saturation", "Saturation"), &a_profile.saturation, 0.0f, kSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted(T("feature.adaptive_brightness.0_monochrome_1_original_colors_higher_stronge_e339452d", "0 = monochrome; 1 = original colors; higher = stronger color. Works with Linear Lighting on or off."));
 }
 
-void AdaptiveBrightness::DrawGlobalPresetControls()
+namespace
 {
-	ImGui::SeparatorText("Global Presets");
-	DrawHintText(T(TKEY("presets.global_description"), "Global presets store global light calibration, the five profiles (including Bloom and water appearance), and exterior timing."));
-	DrawHintText("Import overwrites those profile tabs in the current settings. Saved location overrides are not changed.");
-	ImGui::PushID("GlobalPresetControls");
+	void DrawAppearanceSettings(AdaptiveBalanceAppearanceSettings& appearance)
+	{
+		constexpr std::array groups{ "Direct and Ambient Lighting", "Fog and Clouds", "Sky Gradient",
+			"Stars", "Auroras", "Sky Static Mist", "Particles and Glow Sprites", "Godrays and Cloud Shadows", "Eyes" };
+		MenuUI::SectionHeading(T("feature.adaptive_brightness.appearance_controls", "Appearance controls"));
+		for (const auto* group : groups) {
+			if (!ImGui::CollapsingHeader(GetLocalizedAppearanceLabel(group)))
+				continue;
+			if (std::string_view(group) == "Eyes")
+				ImGui::TextWrapped(T("feature.adaptive_brightness.specular_brightness_adjusts_eye_highlights_an_2f128251", "Specular Brightness adjusts eye highlights and reflections. Eye Brightness scales all eye lighting. One preserves the original appearance; zero removes that contribution. Applies to eye materials in the scene, including reflections."));
+			else if (std::string_view(group) == "Auroras")
+				ImGui::TextWrapped(T("feature.adaptive_brightness.intensity_scales_aurora_rgb_brightness_zero_r_b00af1c2", "Intensity scales aurora RGB brightness; zero removes its colour contribution while preserving alpha and the model's blend mode. Colour Curve shapes dim colours and HDR highlights before intensity. One preserves the original appearance. Applies to sky objects in the game's aurora slot, including replacement models."));
+			else if (std::string_view(group) == "Godrays and Cloud Shadows")
+				ImGui::TextWrapped(T("feature.adaptive_brightness.godray_profile_adjustments_compose_over_the_e_3a6ece6b", "Godray profile adjustments compose over the exterior or interior base in Global > Godrays. Scale 1 and colour contribution 0 preserve that base. Atmospheric Clarity controls broad haze separately. Cloud shadow strength adjusts the active Cloud Shadows feature."));
+			else if (std::string_view(group) == "Particles and Glow Sprites")
+				ImGui::TextWrapped(T("feature.adaptive_brightness.glow_sprites_include_additive_non_fire_effect_de4f6fb9", "Glow sprites include additive non-fire effects, such as some magic. Particle influence adjusts received light; fire has separate controls."));
+			else
+				ImGui::TextWrapped(T("feature.adaptive_brightness.one_and_white_are_neutral_colour_curves_below_d1fc4f83", "One and white are neutral. Colour curves below one lift dim colours; above one deepen them and strengthen HDR highlights."));
+			MenuUI::DetailGrid grid(group, 2, ImGui::GetFontSize() * 32);
+			const Util::Widgets::ControlLayout controls(true);
+			for (const auto& field : AdaptiveBalanceAppearance::kScalars) {
+				if (std::string_view(field.group) != group)
+					continue;
+				grid.Next();
+				Util::Widgets::SliderFloat(GetLocalizedAppearanceLabel(field.label), &(appearance.*field.member), field.minimum, field.maximum, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			}
+			for (const auto& field : AdaptiveBalanceAppearance::kTints) {
+				if (std::string_view(field.group) != group)
+					continue;
+				grid.Next();
+				auto& tint = appearance.*field.member;
+				Util::Widgets::ColorEdit3(GetLocalizedAppearanceLabel(field.label), &tint.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+			}
+		}
+		AdaptiveBalanceAppearance::Sanitize(appearance);
+	}
+}
 
-	const auto presetPath = GetPresetPath(globalPresetName, PresetKind::Global);
-	DrawPresetNameInput("Global preset", "##GlobalPresetName", globalPresetName, presetPath);
+void AdaptiveBrightness::DrawLightingSettings(
+	ProfileSettings& a_profile,
+	bool a_showAdvancedControls,
+	bool a_globalLayer)
+{
+	Util::Widgets::SliderFloat(T("feature.adaptive_brightness.scene_brightness", "Scene Brightness"), &a_profile.brightness, kBrightnessMin, kBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.adaptive_brightness.master_lighting_adjustment_for_this_s_layer", "Master lighting adjustment for this %s layer."), a_globalLayer ? "global" : "profile");
 
-	ImGui::SameLine();
-	if (ImGui::Button("Export Global")) {
-		ExportGlobalPreset();
+	if (a_globalLayer) {
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.moon_reflection_strength", "Moon Reflection Strength"), &settings.moonReflectionStrength,
+			kMoonReflectionStrengthMin, kMoonReflectionStrengthMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextWrapped(T("feature.adaptive_brightness.scale_direct_moonlit_highlights_on_materials_1130c12e", "Scale direct moonlit highlights on materials, wet surfaces and water. Zero removes these highlights; one preserves their strength; two doubles it. Follows the active climate's dusk and dawn. Diffuse moonlight, sky reflections and the moon itself remain independent. This global control works without detailed lighting."));
+		Util::Widgets::Checkbox(T("feature.adaptive_brightness.ambient_lighting_for_effects_and_sky_statics", "Ambient Lighting for Effects and Sky Statics"), &settings.useAmbientEffectLighting);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextWrapped(T("feature.adaptive_brightness.use_ambient_light_including_active_ibl_and_sh_c0229a61", "Use ambient light (including active IBL) and shadowed directional light instead of weather lighting on effect meshes and sky statics. Their Brightness controls still apply. This global switch works without enabling detailed lighting controls."));
+	}
+
+	if (!a_showAdvancedControls)
+		return;
+
+	Util::Widgets::Checkbox(T("feature.adaptive_brightness.show_detailed_lighting_controls", "Show Detailed Lighting Controls"), &a_profile.advanced);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.adaptive_brightness.shows_and_enables_the_detailed_lighting_and_a_8f641101", "Shows and enables the detailed lighting and atmosphere adjustments for this layer."));
+	if (!a_profile.advanced)
+		return;
+
+	{
+		MenuUI::DetailGrid grid("LightingGroups", 2, ImGui::GetFontSize() * 32);
+		const Util::Widgets::ControlLayout controls(true);
+		grid.Next();
+		MenuUI::SectionHeading(T("feature.adaptive_brightness.sky_and_atmosphere", "Sky and atmosphere"));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.sky_brightness", "Sky Brightness"), &a_profile.skyBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.sky_saturation", "Sky Saturation"), &a_profile.skySaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(T("feature.adaptive_brightness.scales_sky_color_saturation_independently_of_7bd8631e", "Scales sky color saturation independently of clouds. One preserves the current colors; zero makes them monochrome."));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.cloud_brightness", "Cloud Brightness"), &a_profile.cloudBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.cloud_saturation", "Cloud Saturation"), &a_profile.cloudSaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.vanilla_fog_intensity", "Vanilla Fog Intensity"), &a_profile.fogIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(T("feature.adaptive_brightness.scales_distance_fog_opacity_zero_removes_it_o_2880be7e", "Scales distance-fog opacity. Zero removes it; one preserves its current strength. Fog gamma remains independent."));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.effect_brightness", "Effect Brightness"), &a_profile.effectBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(T("feature.adaptive_brightness.scales_weather_or_ambient_directional_effect_f8361afe", "Scales weather or ambient/directional effect lighting. One preserves brightness; the Effects lighting multiplier remains independent."));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.sky_static_brightness", "Sky Static Brightness"), &a_profile.skyStaticBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(T("feature.adaptive_brightness.scales_weather_or_ambient_directional_sky_sta_6f3ce216", "Scales weather or ambient/directional sky-static lighting. One preserves brightness."));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.sky_static_transparency", "Sky Static Transparency"), &a_profile.skyStaticTransparency, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(T("feature.adaptive_brightness.fades_sky_static_effect_meshes_such_as_mounta_49202bb4", "Fades sky-static effect meshes such as mountain mist. Zero preserves visibility; one hides them."));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.sun_glare_intensity", "Sun Glare Intensity"), &a_profile.sunGlareIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(T("feature.adaptive_brightness.scales_glare_already_drawn_by_the_engine_zero_eb071f68", "Scales glare already drawn by the engine. Zero removes it; one preserves its brightness. Does not restore missing glare or weather lens flares."));
+		grid.Next();
+		MenuUI::SectionHeading(T("feature.adaptive_brightness.direct_lighting", "Direct lighting"));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.directional_light", "Directional Light"), &a_profile.directionalLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.point_lights", "Point Lights"), &a_profile.pointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.point_light_saturation", "Point Light Saturation"), &a_profile.pointLightSaturation, 0.0f, kSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T("feature.adaptive_brightness.point_light_saturation_including_spotlights_a_8ca70e9e", "Point-light saturation, including spotlights and particles: 0 = monochrome; 1 = original colors. Global and active profiles multiply. Works with Linear Lighting on or off."));
+
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.point_light_colour_curve", "Point Light Colour Curve"), &a_profile.pointLightCurve, kPointLightCurveMin, kPointLightCurveMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T("feature.adaptive_brightness.adjust_point_light_channels_before_intensity_7f1d8b3f", "Adjust point-light channels before intensity and saturation. 1 is neutral; lower lifts dim channels; higher deepens them and strengthens HDR channels. Global and active profiles multiply."));
+
+		MenuUI::SectionHeading(T("feature.adaptive_brightness.point_light_balance", "Point-light balance"));
+		ImGui::TextWrapped(T("feature.adaptive_brightness.subtype_values_multiply_the_point_lights_adju_af6e03bd", "Subtype values multiply the Point Lights adjustment after the active layers are composed."));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.spotlights", "Spotlights"), &a_profile.spotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.omnidirectional_bulbs", "Omnidirectional Bulbs"), &a_profile.omnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::TextWrapped(T("feature.adaptive_brightness.linear_values_target_lights_authored_with_lin_d56b73f3", "Linear values target lights authored with linear falloff; they do not require Linear Lighting."));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.linear_point_lights", "Linear Point Lights"), &a_profile.linearPointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.linear_spotlights", "Linear Spotlights"), &a_profile.linearSpotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.linear_omnidirectional_bulbs", "Linear Omnidirectional Bulbs"), &a_profile.linearOmnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+
+		MenuUI::SectionHeading(T("feature.adaptive_brightness.fire", "Fire"));
+		ImGui::TextWrapped(T("feature.adaptive_brightness.adjusts_visible_flame_effects_cast_lights_rem_5be923c2", "Adjusts visible flame effects. Cast lights remain independent; some similarly authored effects also respond."));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.intensity_fire", "Intensity##Fire"), &a_profile.fireIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T("feature.adaptive_brightness.scales_visible_flame_color_one_preserves_brig_96759545", "Scales visible flame color. One preserves brightness; zero removes its color contribution."));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.saturation_fire", "Saturation##Fire"), &a_profile.fireSaturation, 0.0f, kSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T("feature.adaptive_brightness.zero_makes_flames_monochrome_one_preserves_th_76f4024d", "Zero makes flames monochrome; one preserves their colors; values above one intensify their colors."));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.brightness_curve_fire", "Brightness Curve##Fire"), &a_profile.fireCurve, kFireCurveMin, kFireCurveMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T("feature.adaptive_brightness.adjust_flame_luminance_in_linear_light_withou_a161feb2", "Adjust flame luminance in linear light without shifting hue. 1 is neutral; lower lifts dim parts; higher darkens dim areas and strengthens bright cores."));
+
+		grid.Next();
+		MenuUI::SectionHeading(T("feature.adaptive_brightness.indirect_and_material_lighting", "Indirect and material lighting"));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.ambient", "Ambient"), &a_profile.ambientMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(T("feature.adaptive_brightness.scale_the_selected_vanilla_or_image_based_amb_4188c706", "Scale the selected vanilla or image-based ambient lighting. 1 preserves it; 0 removes it."));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.emissive", "Emissive"), &a_profile.emitColorMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.glowmaps", "Glowmaps"), &a_profile.glowmapMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.effects", "Effects"), &a_profile.effectLightingMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+
+		grid.Next();
+		MenuUI::SectionHeading(T("feature.adaptive_brightness.atmosphere_gamma_offsets", "Atmosphere gamma offsets"));
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.sky", "Sky"), &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.clouds", "Clouds"), &a_profile.cloudGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.fog", "Fog"), &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.fog_transparency", "Fog Transparency"), &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.volumetric_lighting", "Volumetric Lighting"), &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	}
+	DrawAppearanceSettings(a_profile.appearance);
+}
+
+void AdaptiveBrightness::DrawBloomSettings(
+	ProfileSettings& a_profile,
+	bool a_showAdvancedControls,
+	bool a_globalLayer)
+{
+	Bloom::DrawProfileControls(a_profile.bloom);
+	if (a_globalLayer)
+		ImGui::TextDisabled(T("feature.adaptive_brightness.global_bloom_strength_adds_to_every_active_pr_874a17e7", "Global Bloom strength adds to every active profile; detailed shaping can also adjust inherited Bloom."));
+	if (!a_showAdvancedControls)
+		return;
+
+	Util::Widgets::Checkbox(T("feature.adaptive_brightness.show_detailed_bloom_controls", "Show Detailed Bloom Controls"), &a_profile.bloomAdvanced);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.adaptive_brightness.shows_detailed_shaping_that_can_adjust_bloom_dd17b95d", "Shows detailed shaping that can adjust Bloom inherited from earlier layers without adding strength."));
+	if (!a_profile.bloomAdvanced)
+		return;
+
+	ImGui::Indent();
+	Bloom::DrawAdvancedProfileSettings(a_profile.bloom);
+	ImGui::Unindent();
+}
+
+void AdaptiveBrightness::DrawWaterSettings(
+	ProfileSettings& a_profile,
+	bool a_showAdvancedControls,
+	bool a_globalLayer)
+{
+	WaterAppearance::DrawProfileControls(a_profile.water);
+	if (!a_showAdvancedControls)
+		return;
+
+	ImGui::SeparatorText(T("feature.adaptive_brightness.waves_and_wind", "Waves and Wind"));
+	WaterAppearance::DrawWaveAmplitudeControl(a_profile.water);
+	DrawHintText("Wind Response multiplies Base Wave Amplitude between the calm and strong-wind scales. Wind off uses the base alone.");
+	DrawWaterWindSettings(a_profile, a_globalLayer);
+
+	ImGui::Separator();
+	Util::Widgets::Checkbox(T("feature.adaptive_brightness.show_detailed_water_controls", "Show Detailed Water Controls"), &a_profile.waterAdvanced);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.adaptive_brightness.show_this_layer_s_water_color_surface_reflect_9125e497", "Show this layer's water color, surface, reflection, refraction, clarity, caustics and parallax controls."));
+	if (a_profile.waterAdvanced) {
+		ImGui::Indent();
+		Util::Widgets::SliderFloat(T("feature.adaptive_brightness.water_color_gamma", "Water Color Gamma"), &a_profile.waterGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(T("feature.adaptive_brightness.offsets_water_color_gamma_for_this_layer_this_fe9510a8", "Offsets water color gamma for this layer. This is separate from Water Brightness and surface appearance."));
+		WaterAppearance::DrawAdvancedProfileSettings(a_profile.water);
+		ImGui::Unindent();
+	}
+}
+
+void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool a_globalLayer)
+{
+	auto& waterWind = a_profile.waterWind;
+	if (a_globalLayer) {
+		waterWind.overrideEnabled = true;
+		if (Util::Widgets::Checkbox(T("feature.adaptive_brightness.enable_wind_driven_waves", "Enable Wind-Driven Waves"), &waterWind.enabled))
+			ResetWaterWindSmoothing();
+	} else {
+		if (Util::Widgets::Checkbox(T("feature.adaptive_brightness.override_wind_enable", "Override Wind Enable"), &waterWind.overrideEnabled))
+			ResetWaterWindSmoothing();
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(T("feature.adaptive_brightness.leave_off_to_inherit_whether_wind_driven_wave_b654d915", "Leave off to inherit whether wind-driven waves are enabled by earlier global, base, or location layers."));
+		ImGui::BeginDisabled(!waterWind.overrideEnabled);
+		if (Util::Widgets::Checkbox(T("feature.adaptive_brightness.enable_wind_driven_waves", "Enable Wind-Driven Waves"), &waterWind.enabled))
+			ResetWaterWindSmoothing();
+		ImGui::EndDisabled();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("presets.global_export_tooltip"), "Export global lighting calibration, exterior timing, and the five profiles with their Bloom and water appearance settings. Location overrides are not included."));
+		ImGui::Text(T("feature.adaptive_brightness.reads_the_active_sky_wind_speed_including_wea_994fe1b5", "Reads the active Sky wind speed, including weather-record changes made by mods."));
+		ImGui::Text(T("feature.adaptive_brightness.interior_cells_are_calm_and_response_changes_04b95c94", "Interior cells are calm, and response changes are smoothed across weather transitions."));
 	}
 
-	ImGui::SameLine();
-	if (ImGui::Button("Import Global")) {
-		ImportGlobalPreset();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("presets.global_import_tooltip"), "Replace global lighting calibration, exterior timing, and the five profiles with their Bloom and water appearance settings. Saved location overrides stay unchanged."));
-	}
+	SanitizeWaterWindSettings(waterWind);
+	const bool layerDisabled = a_globalLayer ? !waterWind.enabled : waterWind.overrideEnabled && !waterWind.enabled;
+	ImGui::BeginDisabled(layerDisabled);
+	Util::Widgets::SliderFloat(T("feature.adaptive_brightness.calm_wave_scale", "Calm Wave Scale"), &waterWind.calmWaveMultiplier, kWaterWindMultiplierMin, kWaterWindMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.adaptive_brightness.multiply_base_wave_amplitude_in_calm_weather_bbad2334", "Multiply Base Wave Amplitude in calm weather after composing profiles. Final amplitude is capped at 2."));
+	Util::Widgets::SliderFloat(T("feature.adaptive_brightness.strong_wind_wave_scale", "Strong Wind Wave Scale"), &waterWind.strongWindWaveMultiplier, kWaterWindMultiplierMin, kWaterWindMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.adaptive_brightness.multiply_base_wave_amplitude_at_maximum_wind_c85e99cc", "Multiply Base Wave Amplitude at maximum wind after composing profiles. Final amplitude is capped at 2."));
 
-	if (!globalPresetStatus.empty())
-		ImGui::TextWrapped("%s", globalPresetStatus.c_str());
-
-	ImGui::PopID();
+	const float windSpeed = GetSmoothedWaterWindSpeed();
+	const float waveMultiplier = GetWaterWindWaveMultiplier(waterWind, windSpeed);
+	ImGui::TextDisabled(T("feature.adaptive_brightness.layer_wind_0f_wave_adjustment_2fx", "Layer wind: %.0f%%  Wave adjustment: %.2fx"), windSpeed * 100.0f, waveMultiplier);
+	ImGui::EndDisabled();
 }
 
 void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, bool a_showAdvancedControls, bool a_allowEdits)
 {
-	ImGui::SeparatorText("Location Override Profiles");
-	DrawHintText("Match priority is exact cell, specific location, city, regional Location, then game Worldspace. If none match, the interior, dungeon, dwelling, or exterior day/night base profile is used.");
+	ImGui::SeparatorText(T("feature.adaptive_brightness.location_override_profiles", "Location Override Profiles"));
+	DrawHintText("Layers apply after the base profile, from broad to specific: parent/current worldspaces > location hierarchy > exact cell. Legacy profiles replace broader context layers at their position to preserve their saved look.");
 	if (a_includePresetControls) {
 		DrawHintText("Import adds overrides from a preset to the override list below. Later edits change this list, not the preset file.");
 	}
 
 	const auto targets = GetCurrentLocationOverrideTargets();
 	const auto* activeOverride = GetActiveLocationOverride();
+	const auto& activeLayers = GetActiveLocationLayers();
 	std::optional<Profile> currentProfile;
 	if (GetCurrentPlayerCell(RE::PlayerCharacter::GetSingleton()))
 		currentProfile = GetCurrentProfileForUI();
 
 	if (activeOverride && currentProfile) {
-		ImGui::TextWrapped("Using saved override \"%s\" here. Base profile: %s.", activeOverride->name.c_str(), GetProfileName(*currentProfile));
+		ImGui::TextWrapped(T("feature.adaptive_brightness.using_zu_saved_location_layer_s_here_most_spe_d87afdab", "Using %zu saved location layer%s here; most specific is \"%s\". Base profile: %s."), activeLayers.size(), activeLayers.size() == 1 ? "" : "s", activeOverride->name.c_str(), GetProfileName(*currentProfile));
 	} else if (currentProfile) {
-		ImGui::TextWrapped("Using base profile %s here. No saved override matches this place.", GetProfileName(*currentProfile));
+		ImGui::TextWrapped(T("feature.adaptive_brightness.using_base_profile_s_here_no_saved_override_m_3b34435e", "Using base profile %s here. No saved override matches this place."), GetProfileName(*currentProfile));
 	} else {
-		ImGui::TextDisabled("Current location context is unavailable while no cell is loaded.");
+		ImGui::TextDisabled(T("feature.adaptive_brightness.current_location_context_is_unavailable_while_82a31593", "Current location context is unavailable while no cell is loaded."));
 	}
 
 	const auto drawTargetAction = [&](const std::optional<LocationOverrideTarget>& a_target, const char* a_scope, const char* a_description) {
@@ -1660,48 +2510,52 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 			ImGui::Text("%s", a_description);
 		ImGui::SameLine();
 		ImGui::TextDisabled("%s", a_target->name.c_str());
-		ImGui::TextDisabled("Form %s, %s, COC %s", a_target->type.c_str(), a_target->key.c_str(), GetCocLabel(a_target->cocCode));
+		ImGui::TextDisabled(T("feature.adaptive_brightness.form_s_s_coc_s", "Form %s, %s, COC %s"), a_target->type.c_str(), a_target->key.c_str(), GetCocLabel(a_target->cocCode));
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("The COC code is captured from the current cell as a navigation shortcut.");
+			ImGui::Text(T("feature.adaptive_brightness.the_coc_code_is_captured_from_the_current_cel_6297a4a2", "The COC code is captured from the current cell as a navigation shortcut."));
 		ImGui::PopID();
 	};
 
 	drawTargetAction(
 		targets.worldspace,
 		"Worldspace",
-		"Applies throughout this game worldspace and its child worldspaces unless a more specific scope exists.");
+		"Applies throughout this game worldspace and its child worldspaces, before more specific location layers.");
 	drawTargetAction(
 		targets.region,
 		"Location",
-		"Applies throughout this hold or regional location and its descendants unless a city, specific location, or exact-cell override exists.");
+		"Applies throughout this hold or regional location and its descendants, before more specific layers.");
 	drawTargetAction(
 		targets.city,
 		"City",
-		"Applies throughout this city, town, or settlement and its descendants unless a specific location or exact-cell override exists.");
+		"Applies throughout this city, town, or settlement and its descendants, before specific-location and exact-cell layers.");
 	drawTargetAction(
 		targets.location,
 		"Specific Location",
-		"Applies to this specific location and its descendants unless an exact-cell override exists.");
+		"Applies to this specific location and its descendants, before an exact-cell layer.");
 	drawTargetAction(
 		targets.cell,
 		"Exact Cell",
-		"Applies only to this exact cell and takes precedence over location and worldspace overrides.");
+		"Applies only to this exact cell and is composed last.");
 
 	if (!targets.worldspace && !targets.region && !targets.city && !targets.cell && !targets.location) {
-		ImGui::TextDisabled("No current worldspace, location, or cell form is available.");
+		ImGui::TextDisabled(T("feature.adaptive_brightness.no_current_worldspace_location_or_cell_form_i_9cfa3a3c", "No current worldspace, location, or cell form is available."));
 	}
-	ImGui::TextDisabled("%zu saved override%s.", settings.locationOverrides.size(), settings.locationOverrides.size() == 1 ? "" : "s");
+	ImGui::TextDisabled(T("feature.adaptive_brightness.zu_saved_override_s", "%zu saved override%s."), settings.locationOverrides.size(), settings.locationOverrides.size() == 1 ? "" : "s");
 
 	if (a_includePresetControls)
-		DrawLocationOverridePresetControls();
-	ImGui::SeparatorText("Saved Overrides");
+		if (ImGui::Button(T("feature.adaptive_brightness.import_export_location_presets", "Import / export location presets"))) {
+			presetUI.collection = MenuUI::AdaptiveBalancePresets::Collection::Locations;
+			presetFilesDirty = true;
+			MenuUI::SettingsPage::Select("AdaptiveBrightness", "presets");
+		}
+	ImGui::SeparatorText(T("feature.adaptive_brightness.saved_overrides", "Saved Overrides"));
 	DrawHintText(a_allowEdits ?
-					 "These saved overrides are matched by worldspace, regional location, city, specific location, or cell. Click a row to edit it." :
-					 "These saved overrides are matched by worldspace, regional location, city, specific location, or cell. Click a row to review it.");
+					 "Overrides match worldspace, region, city, specific location or cell. Select a row to edit it." :
+					 "Overrides match worldspace, region, city, specific location or cell. Select a row to review it.");
 
 	if (settings.locationOverrides.empty()) {
 		ClearLocationOverrideSelection();
-		ImGui::TextDisabled("No location overrides saved.");
+		ImGui::TextDisabled(T("feature.adaptive_brightness.no_location_overrides_saved", "No location overrides saved."));
 		return;
 	}
 
@@ -1752,11 +2606,11 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 			96.0f * Util::GetUIScale(),
 			ImGui::CalcTextSize("Edit").x + ImGui::CalcTextSize("Copy").x + ImGui::GetStyle().FramePadding.x * 4.0f + ImGui::GetStyle().ItemSpacing.x + 8.0f);
 
-		ImGui::TableSetupColumn("Location", ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_WidthStretch, 2.0f, ColLocation);
-		ImGui::TableSetupColumn("Form", ImGuiTableColumnFlags_WidthFixed, 64.0f * Util::GetUIScale(), ColForm);
-		ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthStretch, 1.6f, ColKey);
-		ImGui::TableSetupColumn("coc", ImGuiTableColumnFlags_WidthStretch, 2.0f, ColCoc);
-		ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_WidthFixed, actionColumnWidth, ColActions);
+		ImGui::TableSetupColumn(T("feature.adaptive_brightness.location", "Location"), ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_WidthStretch, 2.0f, ColLocation);
+		ImGui::TableSetupColumn(T("feature.adaptive_brightness.form", "Form"), ImGuiTableColumnFlags_WidthFixed, 64.0f * Util::GetUIScale(), ColForm);
+		ImGui::TableSetupColumn(T("feature.adaptive_brightness.key", "Key"), ImGuiTableColumnFlags_WidthStretch, 1.6f, ColKey);
+		ImGui::TableSetupColumn(T("feature.adaptive_brightness.coc", "coc"), ImGuiTableColumnFlags_WidthStretch, 2.0f, ColCoc);
+		ImGui::TableSetupColumn(T("feature.adaptive_brightness.actions", "Actions"), ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_WidthFixed, actionColumnWidth, ColActions);
 		ImGui::TableHeadersRow();
 
 		if (auto* sortSpecs = ImGui::TableGetSortSpecs(); sortSpecs && sortSpecs->SpecsCount > 0) {
@@ -1812,28 +2666,28 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 			selectOverride();
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				if (locationOverride.cocCode.empty()) {
-					ImGui::Text("No cell EditorID was saved for this override.");
+					ImGui::Text(T("feature.adaptive_brightness.no_cell_editorid_was_saved_for_this_override", "No cell EditorID was saved for this override."));
 				} else {
-					ImGui::Text("Console: coc %s", locationOverride.cocCode.c_str());
+					ImGui::Text(T("feature.adaptive_brightness.console_coc_s", "Console: coc %s"), locationOverride.cocCode.c_str());
 				}
 			}
 
 			ImGui::TableSetColumnIndex(4);
-			if (ImGui::SmallButton(a_allowEdits ? "Edit" : "View")) {
+			if (ImGui::Button(a_allowEdits ? T("feature.adaptive_brightness.edit", "Edit") : T("feature.adaptive_brightness.view", "View"))) {
 				selectedLocationOverrideKey = locationOverride.key;
 			}
 			ImGui::SameLine();
 			ImGui::BeginDisabled(locationOverride.cocCode.empty());
-			if (ImGui::SmallButton("Copy")) {
+			if (ImGui::Button(T("feature.adaptive_brightness.copy", "Copy"))) {
 				const auto command = std::format("coc {}", locationOverride.cocCode);
 				ImGui::SetClipboardText(command.c_str());
 			}
 			ImGui::EndDisabled();
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Copy the COC command saved with this override.");
+				ImGui::Text(T("feature.adaptive_brightness.copy_the_coc_command_saved_with_this_override", "Copy the COC command saved with this override."));
 			}
 			ImGui::BeginDisabled(!a_allowEdits);
-			if (ImGui::SmallButton("Delete")) {
+			if (ImGui::Button(T("feature.adaptive_brightness.delete", "Delete"))) {
 				deleteIndex = overrideIndex;
 			}
 			ImGui::EndDisabled();
@@ -1849,13 +2703,14 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 				ClearLocationOverrideSelection();
 
 			settings.locationOverrides.erase(settings.locationOverrides.begin() + static_cast<std::ptrdiff_t>(deleteIndex));
+			ResetWaterWindSmoothing();
 			MarkLocationOverrideLookupDirty();
 		}
 	}
 
 	if (auto* selectedOverride = FindLocationOverride(selectedLocationOverrideKey)) {
-		ImGui::SeparatorText(a_allowEdits ? "Edit Location Override Profile" : "View Location Override Profile");
-		ImGui::TextWrapped("%s (%s, %s)", selectedOverride->name.c_str(), selectedOverride->type.c_str(), selectedOverride->key.c_str());
+		ImGui::SeparatorText(a_allowEdits ? T("feature.adaptive_brightness.edit_location_override_profile", "Edit Location Override Profile") : T("feature.adaptive_brightness.view_location_override_profile", "View Location Override Profile"));
+		ImGui::TextWrapped(T("feature.adaptive_brightness.s_s_s", "%s (%s, %s)"), selectedOverride->name.c_str(), selectedOverride->type.c_str(), selectedOverride->key.c_str());
 		DrawLocationOverrideProfileEditor(
 			*selectedOverride,
 			"Override Profile Values",
@@ -1868,76 +2723,118 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 	}
 }
 
-void AdaptiveBrightness::DrawLocationOverridePresetControls()
+void AdaptiveBrightness::DrawPresets()
 {
-	ImGui::SeparatorText("Override Presets");
-	DrawHintText("Override presets store all saved worldspace, regional location, city, specific location, and cell overrides. They do not include the five base profile tabs.");
-	ImGui::PushID("LocationOverridePresetControls");
-
-	const auto presetPath = GetPresetPath(locationOverridePresetName, PresetKind::Location);
-	const auto overridePath = GetLocationOverrideLiveOverridePath(locationOverridePresetName);
-	DrawPresetNameInput("Override preset", "##LocationOverridePresetName", locationOverridePresetName, presetPath, &overridePath);
-
-	ImGui::SameLine();
-	ImGui::BeginDisabled(settings.locationOverrides.empty());
-	if (ImGui::Button("Export Overrides")) {
-		ExportLocationOverrides();
+	namespace Presets = MenuUI::AdaptiveBalancePresets;
+	const auto& theme = globals::menu->GetTheme();
+	const auto palette = [&](bool a_export) {
+		const auto accent = Util::Color::Lift(theme.StatusPalette.InfoColor, a_export ? .10f : -.10f, 1);
+		const auto base = ImGui::GetStyleColorVec4(ImGuiCol_Button);
+		const float tint = a_export ? .30f : .14f;
+		return Presets::Palette{
+			Util::Color::Blend(base, accent, tint, .76f),
+			Util::Color::Blend(base, accent, tint + .12f, .86f),
+			Util::Color::Blend(base, accent, tint + .24f, .94f),
+			Util::Color::Blend(theme.Palette.FrameBorder, accent, .65f, 1)
+		};
+	};
+	const auto exportPalette = palette(true);
+	const auto importPalette = palette(false);
+	const auto targets = GetCurrentLocationOverrideTargets();
+	const std::array contextTargets{
+		targets.worldspace ? &*targets.worldspace : nullptr,
+		targets.region ? &*targets.region : nullptr,
+		targets.city ? &*targets.city : nullptr
+	};
+	Presets::Targets targetNames;
+	for (std::size_t index = 0; index < targetNames.size(); ++index)
+		targetNames[index] = contextTargets[index] ? contextTargets[index]->name : "No current scope";
+	Presets::DrawSelection(presetUI, exportPalette, importPalette, targetNames);
+	const bool changed = lastDrawnPresetUI.mode != presetUI.mode || lastDrawnPresetUI.collection != presetUI.collection;
+	lastDrawnPresetUI = presetUI;
+	presetFilesDirty |= changed || ImGui::IsWindowAppearing();
+	constexpr std::array kinds{ PresetKind::Full, PresetKind::Global, PresetKind::Location, PresetKind::Worldspace, PresetKind::Region, PresetKind::City };
+	static_assert(kinds.size() == static_cast<std::size_t>(Presets::Collection::Count));
+	const auto collectionIndex = static_cast<std::size_t>(presetUI.collection);
+	const auto kind = kinds.at(collectionIndex);
+	std::string* name = &fullPresetName;
+	std::string* status = &fullPresetStatus;
+	const LocationOverrideTarget* target = nullptr;
+	const LocationOverride* profile = nullptr;
+	ContextProfileScope scope = ContextProfileScope::Worldspace;
+	if (presetUI.collection == Presets::Collection::Base) {
+		name = &globalPresetName;
+		status = &globalPresetStatus;
+	} else if (presetUI.collection == Presets::Collection::Locations) {
+		name = &locationOverridePresetName;
+		status = &locationOverridePresetStatus;
+	} else if (collectionIndex >= static_cast<std::size_t>(Presets::Collection::Worldspace)) {
+		const auto scopeIndex = collectionIndex - static_cast<std::size_t>(Presets::Collection::Worldspace);
+		scope = static_cast<ContextProfileScope>(scopeIndex);
+		name = &contextPresetNames.at(scopeIndex);
+		status = &contextPresetStatuses.at(scopeIndex);
+		target = contextTargets.at(scopeIndex);
+		profile = target ? FindLocationOverride(target->key) : nullptr;
 	}
-	ImGui::EndDisabled();
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export the saved override list.");
+	if (changed) {
+		status->clear();
+		presetFileStatus.clear();
 	}
-
-	ImGui::SameLine();
-	if (ImGui::Button("Import Overrides")) {
-		ImportLocationOverrides();
+	const bool importing = presetUI.mode == Presets::Mode::Import;
+	if (importing && presetFilesDirty) {
+		ReadPresetNames(kind, presetFiles, presetFileStatus);
+		presetFilesDirty = false;
 	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Add overrides from this preset to the override list below.");
+	const char* unavailable = nullptr;
+	const auto* editedOverride = locationOverrideEditProfile ? FindLocationOverride(locationOverrideEditKey) : nullptr;
+	if (locationOverrideEditProfile && (!editedOverride || json(*locationOverrideEditProfile) != json(editedOverride->profile)))
+		unavailable = "Apply or cancel the open location edit before exchanging presets.";
+	else if (collectionIndex >= static_cast<std::size_t>(Presets::Collection::Worldspace) && !target)
+		unavailable = "The current cell has no matching scope. Choose another box.";
+	else if (!importing && collectionIndex >= static_cast<std::size_t>(Presets::Collection::Worldspace) && !profile)
+		unavailable = "Create and apply this scope's profile before exporting it.";
+	else if (importing && target && !settings.enabled)
+		unavailable = "Enable Adaptive Balance before importing a contextual profile.";
+	else if (!importing && presetUI.collection == Presets::Collection::Locations && settings.locationOverrides.empty())
+		unavailable = "No location overrides are saved. Complete setup is still available.";
+	const auto& colors = importing ? importPalette : exportPalette;
+	const auto feedback = importing && !presetFileStatus.empty() ?
+	                          std::format("{}{}{}", presetFileStatus, status->empty() ? "" : " ", *status) :
+	                          *status;
+	const auto path = GetPresetPath(*name, kind);
+	const auto pathHint = importing && kind == PresetKind::Location ?
+	                          std::format("Import path: {}\nAlso accepts: {}", path.string(), (Util::PathHelpers::GetOverridesPath() / path.filename()).string()) :
+	                          std::format("{} path: {}", importing ? "Import" : "Export", path.string());
+	if (!Presets::DrawTransfer(presetUI, colors, *name, presetFiles, pathHint, feedback, unavailable, presetFilesDirty))
+		return;
+	bool succeeded = false;
+	switch (presetUI.collection) {
+	case Presets::Collection::Full:
+		succeeded = importing ? ImportFullPreset() : ExportFullPreset();
+		break;
+	case Presets::Collection::Base:
+		succeeded = importing ? ImportGlobalPreset() : ExportGlobalPreset();
+		break;
+	case Presets::Collection::Locations:
+		succeeded = importing ? ImportLocationOverrides() : ExportLocationOverrides();
+		break;
+	default:
+		if (target) {
+			if (importing)
+				succeeded = ImportContextProfile(scope, *target);
+			else if (profile)
+				succeeded = ExportContextProfile(scope, *target, *profile);
+		}
+		break;
 	}
-
-	if (!locationOverridePresetStatus.empty())
-		ImGui::TextWrapped("%s", locationOverridePresetStatus.c_str());
-
-	ImGui::PopID();
-}
-
-void AdaptiveBrightness::DrawFullPresetControls()
-{
-	ImGui::SeparatorText("Full Presets");
-	DrawHintText(T(TKEY("presets.full_description"), "Full presets store global lighting calibration, exterior timing, the five profiles with their Bloom and water appearance settings, and all saved worldspace, location, and cell overrides."));
-	DrawHintText("Import replaces the profile tabs and the saved override list in the current settings.");
-	ImGui::PushID("FullPresetControls");
-
-	const auto presetPath = GetPresetPath(fullPresetName, PresetKind::Full);
-	DrawPresetNameInput("Full preset", "##FullPresetName", fullPresetName, presetPath);
-
-	ImGui::SameLine();
-	if (ImGui::Button("Export Full")) {
-		ExportFullPreset();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("presets.full_export_tooltip"), "Export global lighting calibration, exterior timing, the five profiles with their Bloom and water appearance settings, and all saved overrides."));
-	}
-
-	ImGui::SameLine();
-	if (ImGui::Button("Import Full")) {
-		ImportFullPreset();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("presets.full_import_tooltip"), "Replace global lighting calibration, exterior timing, the five profiles with their Bloom and water appearance settings, and the saved override list."));
-	}
-
-	if (!fullPresetStatus.empty())
-		ImGui::TextWrapped("%s", fullPresetStatus.c_str());
-
-	ImGui::PopID();
+	if (importing && succeeded)
+		*status = "Imported. Use Save Settings to keep it. " + *status;
+	presetFilesDirty = true;
 }
 
 bool AdaptiveBrightness::ExportGlobalPreset()
 {
-	NormalizeExteriorTimeSettings(settings);
-	NormalizeBaseProfiles(settings.profiles);
+	NormalizeBaseSettings(settings);
 
 	const auto path = GetPresetPath(globalPresetName, PresetKind::Global);
 	try {
@@ -1978,6 +2875,7 @@ bool AdaptiveBrightness::ImportGlobalPreset()
 	if (!ApplyBasePresetJson(importedJson, settings, globalPresetStatus))
 		return false;
 
+	ResetWaterWindSmoothing();
 	globalPresetStatus = std::format("Imported global preset from {}.", resolvedPath->filename().string());
 	return true;
 }
@@ -2074,6 +2972,7 @@ bool AdaptiveBrightness::ImportLocationOverrides()
 	settings.locationOverrides = std::move(mergedOverrides);
 	selectedLocationOverrideKey = std::move(lastImportedKey);
 	ResetLocationOverrideEdit();
+	ResetWaterWindSmoothing();
 	MarkLocationOverrideLookupDirty();
 	locationOverridePresetStatus = std::format(
 		"Imported {} location override(s) from {} ({} replaced, {} skipped).",
@@ -2101,6 +3000,7 @@ bool AdaptiveBrightness::ExportContextProfile(
 
 		json exportJson{
 			{ "profile", profile },
+			{ "layered", a_locationOverride.layered },
 			{ "scope", { { "key", a_target.key },
 						   { "name", a_target.name },
 						   { "type", a_target.type } } },
@@ -2155,13 +3055,17 @@ bool AdaptiveBrightness::ImportContextProfile(
 		status = "Import failed: no profile object was found.";
 		return false;
 	}
+	const bool layered = GetOptionalBool(importedJson, "layered", false);
 
-	auto normalizedProfileJson = *profileJson;
-	NormalizeJsonObjectWithDefaults(normalizedProfileJson, json(ProfileSettings{}));
+	auto migratedProfileJson = *profileJson;
+	MigrateLegacyProfileLighting(migratedProfileJson);
+	MigrateLegacyProfileBloom(migratedProfileJson, Bloom::Profile{}, false, false);
+	MigrateLegacyProfileWaterAppearance(migratedProfileJson, WaterAppearance::Profile{}, false);
+	NormalizeJsonObjectWithDefaults(migratedProfileJson, json(ProfileSettings{}));
 
 	ProfileSettings importedProfile;
 	try {
-		importedProfile = normalizedProfileJson.get<ProfileSettings>();
+		importedProfile = migratedProfileJson.get<ProfileSettings>();
 	} catch (const json::exception& e) {
 		status = std::format("Import failed: invalid profile data: {}", e.what());
 		return false;
@@ -2176,16 +3080,19 @@ bool AdaptiveBrightness::ImportContextProfile(
 			.type = a_target.type,
 			.cocCode = a_target.cocCode,
 			.profile = importedProfile,
+			.layered = layered,
 		});
 	} else {
 		targetOverride->name = a_target.name;
 		targetOverride->type = a_target.type;
 		targetOverride->cocCode = a_target.cocCode;
 		targetOverride->profile = importedProfile;
+		targetOverride->layered = layered;
 	}
 
 	selectedLocationOverrideKey = a_target.key;
 	ResetLocationOverrideEdit();
+	ResetWaterWindSmoothing();
 	MarkLocationOverrideLookupDirty();
 	status = std::format(
 		"Imported {} for the current {} {}.",
@@ -2197,8 +3104,7 @@ bool AdaptiveBrightness::ImportContextProfile(
 
 bool AdaptiveBrightness::ExportFullPreset()
 {
-	NormalizeExteriorTimeSettings(settings);
-	NormalizeBaseProfiles(settings.profiles);
+	NormalizeBaseSettings(settings);
 	NormalizeLocationOverrides();
 
 	const auto path = GetPresetPath(fullPresetName, PresetKind::Full);
@@ -2263,6 +3169,7 @@ bool AdaptiveBrightness::ImportFullPreset()
 
 	importedSettings.locationOverrides = std::move(importedOverrides);
 	settings = std::move(importedSettings);
+	ResetWaterWindSmoothing();
 	ClearLocationOverrideSelection();
 	NormalizeLocationOverrides();
 	MarkLocationOverrideLookupDirty();
@@ -2274,14 +3181,9 @@ bool AdaptiveBrightness::ImportFullPreset()
 	return true;
 }
 
-void AdaptiveBrightness::SetEnabled(bool a_enabled)
+bool AdaptiveBrightness::IsRuntimeAvailable() const
 {
-	settings.enabled = a_enabled;
-}
-
-bool AdaptiveBrightness::IsRuntimeEnabled() const
-{
-	if (!loaded || !settings.enabled)
+	if (!loaded)
 		return false;
 
 	auto state = globals::state;
@@ -2289,6 +3191,60 @@ bool AdaptiveBrightness::IsRuntimeEnabled() const
 		return false;
 
 	return GetCurrentPlayerCell(RE::PlayerCharacter::GetSingleton()) != nullptr;
+}
+
+void AdaptiveBrightness::SetEnabled(bool a_enabled)
+{
+	if (settings.enabled == a_enabled)
+		return;
+	settings.enabled = a_enabled;
+	ResetWaterWindSmoothing();
+}
+
+bool AdaptiveBrightness::IsRuntimeEnabled() const
+{
+	return settings.enabled && performanceCostMeasurementEnabled && IsRuntimeAvailable();
+}
+
+float AdaptiveBrightness::GetEffectiveVolumetricClarity() const
+{
+	return IsRuntimeEnabled() ? AdaptiveBalanceGodray::SanitizeClarity(settings.volumetricClarity) : AdaptiveBalanceGodray::kClarityDefault;
+}
+
+VolumetricLightingTuning::Profile AdaptiveBrightness::GetEffectiveGodrayProfile(bool a_interior) const
+{
+	if (!IsRuntimeEnabled())
+		return {};
+	const auto appearance = GetEffectiveSharedLightingSettings().appearance;
+	const VolumetricLightingTuning::Profile layer{
+		.ShaftIntensity = appearance.godrayIntensity,
+		.Opacity = appearance.godrayOpacity,
+		.Saturation = appearance.godraySaturation,
+		.CustomColorContribution = appearance.godrayTintAmount,
+		.CustomColorRed = appearance.godrayTint.x,
+		.CustomColorGreen = appearance.godrayTint.y,
+		.CustomColorBlue = appearance.godrayTint.z,
+	};
+	return VolumetricLightingTuning::ComposeProfiles(a_interior ? settings.godrays.interior : settings.godrays.exterior, layer);
+}
+
+float AdaptiveBrightness::GetEffectiveMoonReflectionStrength() const
+{
+	if (!IsRuntimeEnabled() || LocationContext::Get().inInterior)
+		return kMoonReflectionStrengthDefault;
+
+	const float strength = Util::ClampFinite(settings.moonReflectionStrength,
+		kMoonReflectionStrengthMin, kMoonReflectionStrengthMax, kMoonReflectionStrengthDefault);
+	if (strength == kMoonReflectionStrengthDefault)
+		return strength;
+	const auto* sky = globals::game::sky;
+	if (!sky || sky->mode.get() != RE::Sky::Mode::kFull || !sky->currentClimate)
+		return kMoonReflectionStrengthDefault;
+	const auto& timing = sky->currentClimate->timing;
+	const float nightFactor = WetternessLightingPolicy::NightFactor(sky->currentGameHour,
+		timing.sunrise.begin / 6.0f, timing.sunrise.end / 6.0f,
+		timing.sunset.begin / 6.0f, timing.sunset.end / 6.0f);
+	return std::lerp(kMoonReflectionStrengthDefault, strength, nightFactor);
 }
 
 AdaptiveBrightness::Profile AdaptiveBrightness::GetInteriorProfile() const
@@ -2316,11 +3272,64 @@ AdaptiveBrightness::Profile AdaptiveBrightness::GetCurrentProfileForUI() const
 
 const AdaptiveBrightness::LocationOverride* AdaptiveBrightness::GetActiveLocationOverride() const
 {
-	const auto overrideIndex = ResolveLocationOverrideIndex();
-	if (overrideIndex == kInvalidLocationOverrideIndex || overrideIndex >= settings.locationOverrides.size())
-		return nullptr;
+	const auto& layers = GetActiveLocationLayers();
+	return layers.empty() ? nullptr : layers.back();
+}
 
-	return &settings.locationOverrides[overrideIndex];
+const std::vector<const AdaptiveBrightness::LocationOverride*>& AdaptiveBrightness::GetActiveLocationLayers() const
+{
+	EnsureLocationOverrideLookup();
+	const auto forms = GetCurrentLocationForms();
+	const uint32_t worldspaceFormID = forms.worldspace ? forms.worldspace->GetFormID() : 0;
+	const uint32_t locationFormID = forms.location ? forms.location->GetFormID() : 0;
+	const uint32_t cellFormID = forms.cell ? forms.cell->GetFormID() : 0;
+	if (locationLayerCache.valid &&
+		locationLayerCache.lookupVersion == locationOverrideLookupVersion &&
+		locationLayerCache.worldspaceFormID == worldspaceFormID &&
+		locationLayerCache.locationFormID == locationFormID &&
+		locationLayerCache.cellFormID == cellFormID) {
+		return locationLayerCache.layers;
+	}
+
+	auto& layers = locationLayerCache.layers;
+	layers.clear();
+	std::unordered_set<std::string> seenKeys;
+	const auto appendLayer = [&](const RE::TESForm* a_form) {
+		if (!a_form)
+			return;
+
+		const auto* locationOverride = FindLocationOverride(Util::GetFormFileKey(a_form));
+		if (!locationOverride)
+			return;
+		if (seenKeys.insert(locationOverride->key).second)
+			layers.push_back(locationOverride);
+	};
+
+	std::vector<const RE::TESWorldSpace*> worldspaces;
+	for (auto* worldspace = forms.worldspace;
+		worldspace && worldspaces.size() < kMaxOverrideHierarchyDepth;
+		worldspace = worldspace->parentWorld) {
+		worldspaces.push_back(worldspace);
+	}
+	for (auto it = worldspaces.rbegin(); it != worldspaces.rend(); ++it)
+		appendLayer(*it);
+
+	std::vector<const RE::BGSLocation*> locations;
+	for (auto* location = forms.location;
+		location && locations.size() < kMaxOverrideHierarchyDepth;
+		location = location->parentLoc) {
+		locations.push_back(location);
+	}
+	for (auto it = locations.rbegin(); it != locations.rend(); ++it)
+		appendLayer(*it);
+
+	appendLayer(forms.cell);
+	locationLayerCache.worldspaceFormID = worldspaceFormID;
+	locationLayerCache.locationFormID = locationFormID;
+	locationLayerCache.cellFormID = cellFormID;
+	locationLayerCache.lookupVersion = locationOverrideLookupVersion;
+	locationLayerCache.valid = true;
+	return layers;
 }
 
 const AdaptiveBrightness::LocationOverride* AdaptiveBrightness::GetActiveWorldspaceOverride() const
@@ -2333,8 +3342,7 @@ const AdaptiveBrightness::LocationOverride* AdaptiveBrightness::GetActiveWorldsp
 	if (overrideIndex == kInvalidLocationOverrideIndex || overrideIndex >= settings.locationOverrides.size())
 		return nullptr;
 
-	const auto& locationOverride = settings.locationOverrides[overrideIndex];
-	return IsWorldspaceOverride(&locationOverride) ? &locationOverride : nullptr;
+	return &settings.locationOverrides[overrideIndex];
 }
 
 std::optional<AdaptiveBrightness::ContextProfileScope> AdaptiveBrightness::GetCurrentContextOverrideScope(
@@ -2342,11 +3350,9 @@ std::optional<AdaptiveBrightness::ContextProfileScope> AdaptiveBrightness::GetCu
 {
 	if (!a_locationOverride)
 		return std::nullopt;
-	if (IsWorldspaceOverride(a_locationOverride)) {
-		const auto* worldspaceOverride = GetActiveWorldspaceOverride();
-		if (worldspaceOverride && worldspaceOverride->key == a_locationOverride->key)
-			return ContextProfileScope::Worldspace;
-	}
+	const auto* worldspaceOverride = GetActiveWorldspaceOverride();
+	if (worldspaceOverride && worldspaceOverride->key == a_locationOverride->key)
+		return ContextProfileScope::Worldspace;
 
 	const auto targets = GetCurrentLocationOverrideTargets();
 	for (auto scope = kContextProfileOrder.rbegin(); scope != kContextProfileOrder.rend(); ++scope) {
@@ -2459,11 +3465,8 @@ void AdaptiveBrightness::SaveCurrentLocationOverride(const LocationOverrideTarge
 	locationOverride.type = a_target.type;
 	locationOverride.cocCode = a_target.cocCode;
 
-	const auto* inheritedOverride = GetInheritedLocationOverride(a_target);
-
-	locationOverride.profile = inheritedOverride ?
-	                               inheritedOverride->profile :
-	                               settings.profiles[ProfileIndex(a_target.defaultProfile)];
+	locationOverride.profile = ProfileSettings::AdjustmentDefaults();
+	locationOverride.layered = true;
 
 	selectedLocationOverrideKey = locationOverride.key;
 	settings.locationOverrides.push_back(std::move(locationOverride));
@@ -2479,11 +3482,7 @@ void AdaptiveBrightness::ClearLocationOverrideSelection()
 
 void AdaptiveBrightness::InvalidateProfileTabSync()
 {
-	for (auto& syncState : profileTabSyncStates) {
-		syncState.key.clear();
-		syncState.initialized = false;
-		syncState.lastDrawFrame = -1;
-	}
+	profileTabSyncState = {};
 	contextSectionSyncKey.clear();
 	contextSectionSyncInitialized = false;
 	contextSectionLastDrawFrame = -1;
@@ -2553,9 +3552,7 @@ std::size_t AdaptiveBrightness::ResolveWorldspaceHierarchyOverrideIndex(const RE
 	std::size_t depth = 0;
 	for (auto* current = a_worldspace; current && depth < kMaxOverrideHierarchyDepth; current = current->parentWorld, ++depth) {
 		const auto resolvedIndex = FindLocationOverrideIndexByForm(current);
-		if (resolvedIndex != kInvalidLocationOverrideIndex &&
-			resolvedIndex < settings.locationOverrides.size() &&
-			IsWorldspaceOverride(&settings.locationOverrides[resolvedIndex]))
+		if (resolvedIndex != kInvalidLocationOverrideIndex && resolvedIndex < settings.locationOverrides.size())
 			return resolvedIndex;
 	}
 
@@ -2574,50 +3571,6 @@ std::size_t AdaptiveBrightness::ResolveLocationHierarchyOverrideIndex(const RE::
 	return kInvalidLocationOverrideIndex;
 }
 
-std::size_t AdaptiveBrightness::ResolveLocationOverrideIndex() const
-{
-	EnsureLocationOverrideLookup();
-
-	if (settings.locationOverrides.empty())
-		return kInvalidLocationOverrideIndex;
-
-	const auto forms = GetCurrentLocationForms();
-	const bool inInterior = LocationContext::Get().inInterior;
-	const uint32_t worldspaceFormID = forms.worldspace ? forms.worldspace->GetFormID() : 0;
-	const uint32_t locationFormID = forms.location ? forms.location->GetFormID() : 0;
-	const uint32_t cellFormID = forms.cell ? forms.cell->GetFormID() : 0;
-
-	if (locationOverrideCache.valid &&
-		locationOverrideCache.lookupVersion == locationOverrideLookupVersion &&
-		locationOverrideCache.worldspaceFormID == worldspaceFormID &&
-		locationOverrideCache.locationFormID == locationFormID &&
-		locationOverrideCache.cellFormID == cellFormID &&
-		locationOverrideCache.inInterior == inInterior) {
-		return locationOverrideCache.overrideIndex;
-	}
-
-	// Resolve from most to least specific. Semantic interior profiles and the
-	// exterior schedule are selected only when none of these saved scopes match.
-	auto resolvedIndex = FindLocationOverrideIndexByForm(forms.cell);
-	if (resolvedIndex == kInvalidLocationOverrideIndex)
-		resolvedIndex = ResolveLocationHierarchyOverrideIndex(forms.location);
-	if (resolvedIndex == kInvalidLocationOverrideIndex && forms.worldspace) {
-		resolvedIndex = ResolveWorldspaceHierarchyOverrideIndex(forms.worldspace);
-	}
-
-	locationOverrideCache = {
-		.worldspaceFormID = worldspaceFormID,
-		.locationFormID = locationFormID,
-		.cellFormID = cellFormID,
-		.lookupVersion = locationOverrideLookupVersion,
-		.overrideIndex = resolvedIndex,
-		.inInterior = inInterior,
-		.valid = true,
-	};
-
-	return resolvedIndex;
-}
-
 void AdaptiveBrightness::NormalizeLocationOverrides()
 {
 	if (NormalizeLocationOverrideList(settings.locationOverrides))
@@ -2627,7 +3580,7 @@ void AdaptiveBrightness::NormalizeLocationOverrides()
 void AdaptiveBrightness::MarkLocationOverrideLookupDirty()
 {
 	locationOverrideLookupDirty = true;
-	locationOverrideCache = {};
+	locationLayerCache = {};
 }
 
 void AdaptiveBrightness::EnsureLocationOverrideLookup() const
@@ -2642,7 +3595,7 @@ void AdaptiveBrightness::EnsureLocationOverrideLookup() const
 			locationOverrideLookup[locationOverride.key] = i;
 	}
 
-	locationOverrideCache = {};
+	locationLayerCache = {};
 	locationOverrideLookupDirty = false;
 	++locationOverrideLookupVersion;
 }
@@ -2689,6 +3642,7 @@ LinearLighting::Settings AdaptiveBrightness::GetNeutralLinearLightingSettings() 
 	neutral.effectGamma = 1.0f;
 	neutral.effectAlphaGamma = 1.0f;
 	neutral.skyGamma = 1.0f;
+	neutral.cloudGamma = 1.0f;
 	neutral.waterGamma = 1.0f;
 	neutral.vlGamma = 1.0f;
 	neutral.glowmapMult = 1.0f;
@@ -2719,6 +3673,7 @@ LinearLighting::Settings AdaptiveBrightness::ApplyProfile(const LinearLighting::
 	out.effectLightingMult = ClampMultiplier(out.effectLightingMult * masterScale(0.55f) * advancedMult(a_profile.effectLightingMult));
 
 	out.skyGamma = ClampGamma(out.skyGamma + masterGammaOffset * 0.90f + advancedOffset(a_profile.skyGammaOffset));
+	out.cloudGamma = ClampGamma(out.cloudGamma + masterGammaOffset * 0.90f + advancedOffset(a_profile.cloudGammaOffset));
 	out.fogGamma = ClampGamma(out.fogGamma + masterGammaOffset * 0.75f + advancedOffset(a_profile.fogGammaOffset));
 	out.fogAlphaGamma = ClampGamma(out.fogAlphaGamma + masterGammaOffset * 0.50f + advancedOffset(a_profile.fogAlphaGammaOffset));
 	out.waterGamma = ClampGamma(out.waterGamma + masterGammaOffset * 0.75f + ClampGammaOffset(a_profile.waterGammaOffset));
@@ -2740,6 +3695,7 @@ namespace
 		       a_effective.glowmapMult != a_base.glowmapMult ||
 		       a_effective.effectLightingMult != a_base.effectLightingMult ||
 		       a_effective.skyGamma != a_base.skyGamma ||
+		       a_effective.cloudGamma != a_base.cloudGamma ||
 		       a_effective.fogGamma != a_base.fogGamma ||
 		       a_effective.fogAlphaGamma != a_base.fogAlphaGamma ||
 		       a_effective.waterGamma != a_base.waterGamma ||
@@ -2750,6 +3706,8 @@ namespace
 SharedLightingSettings AdaptiveBrightness::ApplyProfile(const SharedLightingSettings& a_base, const ProfileSettings& a_profile) const
 {
 	auto out = a_base;
+	if (a_profile.advanced)
+		out.appearance = AdaptiveBalanceAppearance::Compose(out.appearance, a_profile.appearance);
 	const float brightness = ClampBrightness(a_profile.brightness);
 	const float brightnessDelta = brightness - 1.0f;
 
@@ -2761,17 +3719,114 @@ SharedLightingSettings AdaptiveBrightness::ApplyProfile(const SharedLightingSett
 	};
 
 	out.skyBrightness = ClampMultiplier(out.skyBrightness * advancedMult(a_profile.skyBrightnessMult));
-	out.skySaturation = std::clamp(
-		SafeFinite(out.skySaturation * advancedMult(a_profile.skySaturation), 1.0f),
-		0.0f,
-		kSkySaturationMax);
+	out.skySaturation = Util::ClampFinite(out.skySaturation * advancedMult(a_profile.skySaturation), 0.0f, kSkySaturationMax, 1.0f);
+	out.cloudBrightness = ClampMultiplier(out.cloudBrightness * advancedMult(a_profile.cloudBrightnessMult));
+	out.cloudSaturation = Util::ClampFinite(out.cloudSaturation * advancedMult(a_profile.cloudSaturation), 0.0f, kSkySaturationMax, 1.0f);
+	out.fogIntensity = Util::ClampFinite(out.fogIntensity * advancedMult(a_profile.fogIntensity), 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+	out.sunGlareIntensity = Util::ClampFinite(out.sunGlareIntensity * advancedMult(a_profile.sunGlareIntensity), 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+	out.effectBrightness = Util::ClampFinite(out.effectBrightness * advancedMult(a_profile.effectBrightness), 0.0f, kGlobalSkyBrightnessMax, 1.0f);
+	out.skyStaticBrightness = Util::ClampFinite(out.skyStaticBrightness * advancedMult(a_profile.skyStaticBrightness), 0.0f, kGlobalSkyBrightnessMax, 1.0f);
+	const float transparency = a_profile.advanced ? Util::ClampFinite(a_profile.skyStaticTransparency, 0.0f, 1.0f, 0.0f) : 0.0f;
+	out.skyStaticTransparency = 1.0f - (1.0f - out.skyStaticTransparency) * (1.0f - transparency);
+	out.contrast = Util::ClampFinite(out.contrast * Util::ClampFinite(a_profile.contrast, kContrastMin, kContrastMax, 1.0f), kContrastMin, kContrastMax, 1.0f);
+	out.saturation = Util::ClampFinite(out.saturation * Util::ClampFinite(a_profile.saturation, 0.0f, kSaturationMax, 1.0f), 0.0f, kSaturationMax, 1.0f);
 	out.ambientMult = ClampMultiplier(out.ambientMult * masterScale(0.95f) * advancedMult(a_profile.ambientMult));
 	out.directionalLightMult = ClampMultiplier(out.directionalLightMult * masterScale(0.70f) * advancedMult(a_profile.directionalLightMult));
 
-	const float pointLightScale = masterScale(0.75f) * advancedMult(a_profile.pointLightMult);
-	out.pointLightMult = ClampMultiplier(out.pointLightMult * pointLightScale);
-	out.linearPointLightMult = ClampMultiplier(out.linearPointLightMult * pointLightScale);
+	const float pointLightBrightness = masterScale(0.75f);
+	const float pointLightSaturation = a_profile.advanced ? Util::ClampFinite(a_profile.pointLightSaturation, 0.0f, kSaturationMax, 1.0f) : 1.0f;
+	out.pointLightSaturation = Util::ClampFinite(out.pointLightSaturation * pointLightSaturation, 0.0f, kSaturationMax, 1.0f);
+	const float pointLightCurve = a_profile.advanced ? Util::ClampFinite(a_profile.pointLightCurve, kPointLightCurveMin, kPointLightCurveMax, 1.0f) : 1.0f;
+	out.pointLightCurve = Util::ClampFinite(out.pointLightCurve * pointLightCurve, kPointLightCurveMin, kPointLightCurveMax, 1.0f);
+	const float fireIntensity = a_profile.advanced ? Util::ClampFinite(a_profile.fireIntensity, 0.0f, kGlobalLightingMultiplierMax, 1.0f) : 1.0f;
+	const float fireSaturation = a_profile.advanced ? Util::ClampFinite(a_profile.fireSaturation, 0.0f, kSaturationMax, 1.0f) : 1.0f;
+	const float fireCurve = a_profile.advanced ? Util::ClampFinite(a_profile.fireCurve, kFireCurveMin, kFireCurveMax, 1.0f) : 1.0f;
+	out.fireIntensity = Util::ClampFinite(out.fireIntensity * fireIntensity, 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+	out.fireSaturation = Util::ClampFinite(out.fireSaturation * fireSaturation, 0.0f, kSaturationMax, 1.0f);
+	out.fireCurve = Util::ClampFinite(out.fireCurve * fireCurve, kFireCurveMin, kFireCurveMax, 1.0f);
+	out.pointLightMult = ClampMultiplier(
+		out.pointLightMult * pointLightBrightness * advancedMult(a_profile.pointLightMult));
+	out.linearPointLightMult = ClampMultiplier(
+		out.linearPointLightMult * pointLightBrightness * advancedMult(a_profile.linearPointLightMult));
+	out.spotlightMult = ClampMultiplier(out.spotlightMult * advancedMult(a_profile.spotlightMult));
+	out.linearSpotlightMult = ClampMultiplier(out.linearSpotlightMult * advancedMult(a_profile.linearSpotlightMult));
+	out.omnidirectionalBulbMult = ClampMultiplier(
+		out.omnidirectionalBulbMult * advancedMult(a_profile.omnidirectionalBulbMult));
+	out.linearOmnidirectionalBulbMult = ClampMultiplier(
+		out.linearOmnidirectionalBulbMult * advancedMult(a_profile.linearOmnidirectionalBulbMult));
 
+	return out;
+}
+
+Bloom::Profile AdaptiveBrightness::ApplyProfile(
+	const Bloom::Profile& a_base,
+	const ProfileSettings& a_profile) const
+{
+	auto base = a_base;
+	auto layer = a_profile.bloom;
+	Bloom::SanitizeProfile(base);
+	Bloom::SanitizeProfile(layer);
+	const Bloom::Profile identity{};
+
+	Bloom::Profile out{
+		base.EnhancementIntensity + layer.EnhancementIntensity,
+		ApplyRelativeValue(base.HaloRadius, layer.HaloRadius, identity.HaloRadius),
+		ApplyRelativeValue(base.HaloSpread, layer.HaloSpread, identity.HaloSpread),
+		ApplyRelativeValue(base.BloomSaturation, layer.BloomSaturation, identity.BloomSaturation),
+		{ ApplyRelativeValue(base.BloomTint.x, layer.BloomTint.x, identity.BloomTint.x),
+			ApplyRelativeValue(base.BloomTint.y, layer.BloomTint.y, identity.BloomTint.y),
+			ApplyRelativeValue(base.BloomTint.z, layer.BloomTint.z, identity.BloomTint.z) },
+		ApplyRelativeValue(base.CompressionThreshold, layer.CompressionThreshold, identity.CompressionThreshold),
+		ApplyRelativeValue(base.CompressionCeiling, layer.CompressionCeiling, identity.CompressionCeiling)
+	};
+	Bloom::SanitizeProfile(out);
+	return out;
+}
+
+WaterAppearance::Profile AdaptiveBrightness::ApplyProfile(
+	const WaterAppearance::Profile& a_base,
+	const ProfileSettings& a_profile) const
+{
+	auto base = a_base;
+	auto layer = a_profile.water;
+	WaterAppearance::SanitizeProfile(base);
+	WaterAppearance::SanitizeProfile(layer);
+	const WaterAppearance::Profile identity{};
+
+	WaterAppearance::Profile out{
+		ApplyRelativeValue(base.WaterBrightness, layer.WaterBrightness, identity.WaterBrightness),
+		ApplyRelativeValue(base.GlobalReflectionAmount, layer.GlobalReflectionAmount, identity.GlobalReflectionAmount),
+		ApplyRelativeValue(base.RefractionAmount, layer.RefractionAmount, identity.RefractionAmount),
+		ApplyRelativeValue(base.SunSpecularMultiplier, layer.SunSpecularMultiplier, identity.SunSpecularMultiplier),
+		ApplyRelativeValue(base.WaveAmplitude, layer.WaveAmplitude, identity.WaveAmplitude),
+		ApplyRelativeValue(base.FresnelMin, layer.FresnelMin, identity.FresnelMin),
+		ApplyRelativeValue(base.FresnelMax, layer.FresnelMax, identity.FresnelMax),
+		ApplyRelativeValue(base.Muddiness, layer.Muddiness, identity.Muddiness),
+		ApplyRelativeValue(base.CausticsStrength, layer.CausticsStrength, identity.CausticsStrength),
+		ApplyRelativeValue(base.CausticsTiling, layer.CausticsTiling, identity.CausticsTiling),
+		ApplyRelativeValue(base.CausticsSpeed, layer.CausticsSpeed, identity.CausticsSpeed),
+		ApplyRelativeValue(base.CausticsDispersion, layer.CausticsDispersion, identity.CausticsDispersion),
+		ApplyRelativeValue(base.ParallaxStrength, layer.ParallaxStrength, identity.ParallaxStrength),
+		static_cast<int>(std::lround(ApplyRelativeValue(static_cast<float>(base.ParallaxQuality), static_cast<float>(layer.ParallaxQuality), static_cast<float>(identity.ParallaxQuality))))
+	};
+	WaterAppearance::SanitizeProfile(out);
+	return out;
+}
+
+AdaptiveBrightness::WaterWindSettings AdaptiveBrightness::ApplyProfile(
+	const WaterWindSettings& a_base,
+	const ProfileSettings& a_profile) const
+{
+	auto out = a_base;
+	auto layer = a_profile.waterWind;
+	SanitizeWaterWindSettings(out);
+	SanitizeWaterWindSettings(layer);
+	if (layer.overrideEnabled)
+		out.enabled = layer.enabled;
+	out.overrideEnabled = true;
+	out.calmWaveMultiplier *= layer.calmWaveMultiplier;
+	out.strongWindWaveMultiplier *= layer.strongWindWaveMultiplier;
+	SanitizeWaterWindSettings(out);
 	return out;
 }
 
@@ -2793,6 +3848,7 @@ LinearLighting::Settings AdaptiveBrightness::LerpSettings(const LinearLighting::
 	out.effectGamma = lerp(a_a.effectGamma, a_b.effectGamma);
 	out.effectAlphaGamma = lerp(a_a.effectAlphaGamma, a_b.effectAlphaGamma);
 	out.skyGamma = lerp(a_a.skyGamma, a_b.skyGamma);
+	out.cloudGamma = lerp(a_a.cloudGamma, a_b.cloudGamma);
 	out.waterGamma = lerp(a_a.waterGamma, a_b.waterGamma);
 	out.vlGamma = lerp(a_a.vlGamma, a_b.vlGamma);
 	out.vanillaDiffuseColorMult = lerp(a_a.vanillaDiffuseColorMult, a_b.vanillaDiffuseColorMult);
@@ -2819,9 +3875,24 @@ SharedLightingSettings AdaptiveBrightness::LerpSettings(const SharedLightingSett
 
 	out.skyBrightness = lerp(a_a.skyBrightness, a_b.skyBrightness);
 	out.skySaturation = lerp(a_a.skySaturation, a_b.skySaturation);
+	out.cloudBrightness = lerp(a_a.cloudBrightness, a_b.cloudBrightness);
+	out.cloudSaturation = lerp(a_a.cloudSaturation, a_b.cloudSaturation);
+	out.fogIntensity = lerp(a_a.fogIntensity, a_b.fogIntensity);
+	out.sunGlareIntensity = lerp(a_a.sunGlareIntensity, a_b.sunGlareIntensity);
+	out.effectBrightness = lerp(a_a.effectBrightness, a_b.effectBrightness);
+	out.skyStaticBrightness = lerp(a_a.skyStaticBrightness, a_b.skyStaticBrightness);
+	out.skyStaticTransparency = lerp(a_a.skyStaticTransparency, a_b.skyStaticTransparency);
+	out.contrast = lerp(a_a.contrast, a_b.contrast);
+	out.saturation = lerp(a_a.saturation, a_b.saturation);
 	out.ambientMult = lerp(a_a.ambientMult, a_b.ambientMult);
 	out.directionalLightMult = lerp(a_a.directionalLightMult, a_b.directionalLightMult);
 	out.pointLightMult = lerp(a_a.pointLightMult, a_b.pointLightMult);
+	out.pointLightSaturation = lerp(a_a.pointLightSaturation, a_b.pointLightSaturation);
+	out.pointLightCurve = lerp(a_a.pointLightCurve, a_b.pointLightCurve);
+	out.fireIntensity = lerp(a_a.fireIntensity, a_b.fireIntensity);
+	out.fireSaturation = lerp(a_a.fireSaturation, a_b.fireSaturation);
+	out.fireCurve = lerp(a_a.fireCurve, a_b.fireCurve);
+	out.appearance = AdaptiveBalanceAppearance::Lerp(a_a.appearance, a_b.appearance, t);
 	out.linearPointLightMult = lerp(a_a.linearPointLightMult, a_b.linearPointLightMult);
 	out.spotlightMult = lerp(a_a.spotlightMult, a_b.spotlightMult);
 	out.linearSpotlightMult = lerp(a_a.linearSpotlightMult, a_b.linearSpotlightMult);
@@ -2835,18 +3906,25 @@ AdaptiveBrightness::EffectiveLinearLightingSettings AdaptiveBrightness::GetEffec
 	const LinearLighting::Settings& a_linearLightingSettings,
 	bool a_linearLightingEnabled) const
 {
-	const auto baseSettings = a_linearLightingEnabled ? a_linearLightingSettings : GetNeutralLinearLightingSettings();
-	auto effectiveSettings = baseSettings;
+	auto baseSettings = a_linearLightingEnabled ? a_linearLightingSettings : GetNeutralLinearLightingSettings();
+	baseSettings.cloudGamma = baseSettings.skyGamma;
+	const bool runtimeAvailable = IsRuntimeEnabled();
+	auto layeredBase = baseSettings;
+	if (runtimeAvailable)
+		layeredBase = ApplyProfile(layeredBase, settings.globalProfile);
+	auto effectiveSettings = layeredBase;
 
-	if (IsRuntimeEnabled()) {
+	if (runtimeAvailable) {
 		const auto activeProfiles = GetActiveProfileBlend();
-		if (activeProfiles.from == activeProfiles.to) {
-			effectiveSettings = ApplyProfile(baseSettings, *activeProfiles.from);
-		} else {
-			const auto fromSettings = ApplyProfile(baseSettings, *activeProfiles.from);
-			const auto toSettings = ApplyProfile(baseSettings, *activeProfiles.to);
-			effectiveSettings = LerpSettings(fromSettings, toSettings, activeProfiles.factor);
-		}
+		const auto& locationLayers = GetActiveLocationLayers();
+		const auto branches = ComposeProfileBranches(
+			layeredBase,
+			activeProfiles,
+			locationLayers,
+			[this](const auto& a_base, const auto& a_layer) { return ApplyProfile(a_base, a_layer); });
+		effectiveSettings = branches.to ?
+		                        LerpSettings(branches.from, *branches.to, branches.factor) :
+		                        branches.from;
 	}
 
 	return {
@@ -2857,20 +3935,25 @@ AdaptiveBrightness::EffectiveLinearLightingSettings AdaptiveBrightness::GetEffec
 
 SharedLightingSettings AdaptiveBrightness::GetEffectiveSharedLightingSettings() const
 {
-	if (!IsRuntimeEnabled())
-		return {};
+	SharedLightingSettings neutralSettings{};
+	SanitizeSharedLightingSettings(neutralSettings);
+	const bool runtimeAvailable = IsRuntimeEnabled();
+	auto layeredBase = neutralSettings;
+	if (runtimeAvailable)
+		layeredBase = ApplyProfile(layeredBase, settings.globalProfile);
+	auto effectiveSettings = layeredBase;
 
-	auto baseSettings = settings.globalLightingEnabled ? settings.lighting : SharedLightingSettings{};
-	SanitizeSharedLightingSettings(baseSettings);
-	auto effectiveSettings = baseSettings;
-
-	const auto activeProfiles = GetActiveProfileBlend();
-	if (activeProfiles.from == activeProfiles.to) {
-		effectiveSettings = ApplyProfile(baseSettings, *activeProfiles.from);
-	} else {
-		const auto fromSettings = ApplyProfile(baseSettings, *activeProfiles.from);
-		const auto toSettings = ApplyProfile(baseSettings, *activeProfiles.to);
-		effectiveSettings = LerpSettings(fromSettings, toSettings, activeProfiles.factor);
+	if (runtimeAvailable) {
+		const auto activeProfiles = GetActiveProfileBlend();
+		const auto& locationLayers = GetActiveLocationLayers();
+		const auto branches = ComposeProfileBranches(
+			layeredBase,
+			activeProfiles,
+			locationLayers,
+			[this](const auto& a_base, const auto& a_layer) { return ApplyProfile(a_base, a_layer); });
+		effectiveSettings = branches.to ?
+		                        LerpSettings(branches.from, *branches.to, branches.factor) :
+		                        branches.from;
 	}
 
 	return effectiveSettings;
@@ -2881,42 +3964,212 @@ Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
 	if (!IsRuntimeEnabled())
 		return Bloom::GetCommonBufferData(Bloom::Profile{}, 0.0f);
 
-	const auto activeProfiles = GetActiveProfileBlend();
-	auto fromProfile = activeProfiles.from->bloom;
-	Bloom::SanitizeProfile(fromProfile);
-	if (activeProfiles.from == activeProfiles.to)
-		return Bloom::GetCommonBufferData(fromProfile, 1.0f);
+	const auto& globalBloom = settings.globalProfile.bloom;
 
-	auto toProfile = activeProfiles.to->bloom;
-	Bloom::SanitizeProfile(toProfile);
-	const float t = std::clamp(SafeFinite(activeProfiles.factor, 0.0f), 0.0f, 1.0f);
-	const auto effectiveProfile = Bloom::LerpProfiles(fromProfile, toProfile, t);
+	const auto activeProfiles = GetActiveProfileBlend();
+	const auto& locationLayers = GetActiveLocationLayers();
+	const auto branches = ComposeProfileBranches(
+		globalBloom,
+		activeProfiles,
+		locationLayers,
+		[this](const auto& a_base, const auto& a_layer) { return ApplyProfile(a_base, a_layer); });
+	const auto effectiveProfile = branches.to ?
+	                                  Bloom::LerpProfiles(branches.from, *branches.to, branches.factor) :
+	                                  branches.from;
 	return Bloom::GetCommonBufferData(effectiveProfile, 1.0f);
 }
 
 WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSettings() const
 {
-	if (!IsRuntimeEnabled())
+	if (!IsRuntimeEnabled()) {
+		ResetWaterWindSmoothing();
 		return WaterAppearance::GetCommonBufferData(WaterAppearance::Profile{});
+	}
 
+	const auto& globalProfile = settings.globalProfile;
+	const auto applyWind = [&](WaterAppearance::Profile water, const WaterWindSettings& waterWind) {
+		if (waterWind.enabled) {
+			water.WaveAmplitude *= GetWaterWindWaveMultiplier(waterWind, GetSmoothedWaterWindSpeed());
+			WaterAppearance::SanitizeProfile(water);
+		}
+		return water;
+	};
+
+	struct WaterLayerState
+	{
+		WaterAppearance::Profile appearance;
+		WaterWindSettings wind;
+	};
+	const WaterLayerState globalWater{
+		.appearance = globalProfile.water,
+		.wind = globalProfile.waterWind,
+	};
 	const auto activeProfiles = GetActiveProfileBlend();
-	auto fromProfile = activeProfiles.from->water;
-	WaterAppearance::SanitizeProfile(fromProfile);
-	if (activeProfiles.from == activeProfiles.to)
-		return WaterAppearance::GetCommonBufferData(fromProfile);
+	const auto& locationLayers = GetActiveLocationLayers();
+	const auto branches = ComposeProfileBranches(
+		globalWater,
+		activeProfiles,
+		locationLayers,
+		[this](const WaterLayerState& a_base, const ProfileSettings& a_layer) {
+			return WaterLayerState{
+				.appearance = ApplyProfile(a_base.appearance, a_layer),
+				.wind = ApplyProfile(a_base.wind, a_layer),
+			};
+		});
+	auto effectiveProfile = applyWind(branches.from.appearance, branches.from.wind);
+	if (branches.to) {
+		const auto toProfile = applyWind(branches.to->appearance, branches.to->wind);
+		effectiveProfile = WaterAppearance::LerpProfiles(effectiveProfile, toProfile, branches.factor);
+	}
 
-	auto toProfile = activeProfiles.to->water;
-	WaterAppearance::SanitizeProfile(toProfile);
-	const float t = std::clamp(SafeFinite(activeProfiles.factor, 0.0f), 0.0f, 1.0f);
-	const auto effectiveProfile = WaterAppearance::LerpProfiles(fromProfile, toProfile, t);
 	return WaterAppearance::GetCommonBufferData(effectiveProfile);
+}
+
+float AdaptiveBrightness::GetSmoothedWaterWindSpeed() const
+{
+	if (LocationContext::Get().inInterior) {
+		ResetWaterWindSmoothing();
+		return 0.0f;
+	}
+
+	float targetWindSpeed = 0.0f;
+	auto* sky = globals::game::sky ? globals::game::sky : RE::Sky::GetSingleton();
+	if (sky) {
+		if (std::isfinite(sky->windSpeed)) {
+			targetWindSpeed = std::clamp(sky->windSpeed, 0.0f, 1.0f);
+		} else if (sky->currentWeather) {
+			targetWindSpeed = Util::Units::WindRawToNormalized(sky->currentWeather->data.windSpeed);
+		}
+	}
+
+	auto* state = globals::state;
+	if (!state) {
+		smoothedWaterWindSpeed = targetWindSpeed;
+		waterWindSmoothingInitialized = true;
+		return targetWindSpeed;
+	}
+
+	const uint32_t currentFrame = state->frameCountAtomic.load(std::memory_order_relaxed);
+	if (!waterWindSmoothingInitialized) {
+		smoothedWaterWindSpeed = targetWindSpeed;
+		smoothedWaterWindFrame = currentFrame;
+		waterWindSmoothingInitialized = true;
+	} else if (currentFrame != smoothedWaterWindFrame) {
+		// Feature data can be assembled more than once per render frame.
+		const float frameTime = std::clamp(
+			SafeFinite(RE::GetSecondsSinceLastFrame(), 0.0f),
+			0.0f,
+			kMaxWaterWindSmoothingFrameTime);
+		const float blend = 1.0f - std::exp(-frameTime / kWaterWindSmoothingSeconds);
+		smoothedWaterWindSpeed = std::lerp(smoothedWaterWindSpeed, targetWindSpeed, blend);
+		smoothedWaterWindFrame = currentFrame;
+	}
+
+	return std::clamp(SafeFinite(smoothedWaterWindSpeed, targetWindSpeed), 0.0f, 1.0f);
+}
+
+void AdaptiveBrightness::ResetWaterWindSmoothing() const
+{
+	smoothedWaterWindSpeed = 0.0f;
+	smoothedWaterWindFrame = 0;
+	waterWindSmoothingInitialized = false;
+}
+
+AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
+{
+	const auto effectiveSettings = GetEffectiveSharedLightingSettings();
+	commonBufferNeedsVanillaPointLights = UsesClassifiedPointLightMultipliers(effectiveSettings);
+
+	PerFrameData data{};
+	data.skyBrightness = effectiveSettings.skyBrightness;
+	data.skySaturation = effectiveSettings.skySaturation;
+	data.cloudBrightness = effectiveSettings.cloudBrightness;
+	data.cloudSaturation = effectiveSettings.cloudSaturation;
+	data.fogIntensity = effectiveSettings.fogIntensity;
+	data.sunGlareIntensity = effectiveSettings.sunGlareIntensity;
+	data.useAmbientEffectLighting = IsRuntimeEnabled() && settings.useAmbientEffectLighting;
+	data.skyStaticTransparency = effectiveSettings.skyStaticTransparency;
+	data.effectBrightness = effectiveSettings.effectBrightness;
+	data.skyStaticBrightness = effectiveSettings.skyStaticBrightness;
+	data.contrast = effectiveSettings.contrast;
+	data.saturation = effectiveSettings.saturation;
+	data.ambientMult = effectiveSettings.ambientMult;
+	data.directionalLightMult = effectiveSettings.directionalLightMult;
+	data.pointLightMult = effectiveSettings.pointLightMult;
+	data.pointLightSaturation = effectiveSettings.pointLightSaturation;
+	data.pointLightCurve = effectiveSettings.pointLightCurve;
+	data.moonReflectionStrength = GetEffectiveMoonReflectionStrength();
+	data.fireIntensity = effectiveSettings.fireIntensity;
+	data.fireSaturation = effectiveSettings.fireSaturation;
+	data.fireCurve = effectiveSettings.fireCurve;
+	data.appearance = effectiveSettings.appearance;
+	data.linearPointLightMult = effectiveSettings.linearPointLightMult;
+	data.spotlightMult = effectiveSettings.spotlightMult;
+	data.linearSpotlightMult = effectiveSettings.linearSpotlightMult;
+	data.omnidirectionalBulbMult = effectiveSettings.omnidirectionalBulbMult;
+	data.linearOmnidirectionalBulbMult = effectiveSettings.linearOmnidirectionalBulbMult;
+	return data;
+}
+
+bool AdaptiveBrightness::NeedsVanillaPointLightData() const
+{
+	if (!loaded)
+		return false;
+
+	if (globals::features::linearLighting.IsRuntimeEnabled())
+		return true;
+
+	return commonBufferNeedsVanillaPointLights;
+}
+
+void AdaptiveBrightness::UpdateVanillaPointLightData(
+	RE::BSRenderPass* a_pass,
+	uint32_t a_lightCount,
+	uint32_t a_bufferRegister)
+{
+	if (!vanillaPointLightCB || !globals::d3d::context || !a_pass || !a_pass->sceneLights)
+		return;
+
+	VanillaPointLightData data{};
+	const uint32_t lightCount = std::min(a_lightCount, kMaxVanillaPointLights);
+#if defined(_MSC_VER)
+	__try
+#endif
+	{
+		for (uint32_t lightIndex = 0; lightIndex < lightCount; ++lightIndex) {
+			const uint32_t sceneLightIndex = lightIndex + kFirstPointLightSceneIndex;
+			if (sceneLightIndex >= a_pass->numLights)
+				break;
+
+			auto* bsLight = a_pass->sceneLights[sceneLightIndex];
+			if (!bsLight)
+				continue;
+
+			auto* niLight = bsLight->light.get();
+			auto pointLightFlags = PointLightFlags::GetVanillaPointLightFlags(bsLight, niLight);
+			if (!globals::features::inverseSquareLighting.IsEnabled())
+				pointLightFlags &= ~PointLightFlags::ToMask(PointLightFlags::Flags::Linear);
+			data.pointLightFlags[lightIndex] = pointLightFlags;
+		}
+	}
+#if defined(_MSC_VER)
+	__except (1) {
+		// A fault invalidates the batch, including its already-classified prefix.
+		data = {};
+		static std::atomic_bool loggedRecovery{ false };
+		if (!loggedRecovery.exchange(true, std::memory_order_relaxed))
+			logger::warn("[AdaptiveBalance] Invalid scene light; uploading neutral point-light classification (further warnings suppressed)");
+	}
+#endif
+
+	vanillaPointLightCB->Update(data);
+
+	ID3D11Buffer* buffer = vanillaPointLightCB->CB();
+	globals::d3d::context->PSSetConstantBuffers(a_bufferRegister, 1, &buffer);
 }
 
 AdaptiveBrightness::ActiveProfileBlend AdaptiveBrightness::GetActiveProfileBlend() const
 {
-	if (const auto* locationOverride = GetActiveLocationOverride())
-		return { .from = &locationOverride->profile, .to = &locationOverride->profile, .factor = 0.0f };
-
 	const auto location = LocationContext::Get();
 
 	if (location.inInterior) {
@@ -2956,90 +4209,55 @@ std::string AdaptiveBrightness::GetContextLabel() const
 	return std::format("Current profile: {} ({:.0f}% night blend)", GetProfileName(dominantProfile), nightFactor * 100.0f);
 }
 
-AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
-{
-	const auto effectiveSettings = GetEffectiveSharedLightingSettings();
-
-	PerFrameData data{};
-	data.skyBrightness = effectiveSettings.skyBrightness;
-	data.skySaturation = effectiveSettings.skySaturation;
-	data.ambientMult = effectiveSettings.ambientMult;
-	data.directionalLightMult = effectiveSettings.directionalLightMult;
-	data.pointLightMult = effectiveSettings.pointLightMult;
-	data.linearPointLightMult = effectiveSettings.linearPointLightMult;
-	data.spotlightMult = effectiveSettings.spotlightMult;
-	data.linearSpotlightMult = effectiveSettings.linearSpotlightMult;
-	data.omnidirectionalBulbMult = effectiveSettings.omnidirectionalBulbMult;
-	data.linearOmnidirectionalBulbMult = effectiveSettings.linearOmnidirectionalBulbMult;
-	return data;
-}
-
-bool AdaptiveBrightness::NeedsVanillaPointLightData() const
-{
-	if (!loaded)
-		return false;
-
-	if (globals::features::linearLighting.IsRuntimeEnabled())
-		return true;
-
-	return settings.globalLightingEnabled &&
-	       UsesClassifiedPointLightMultipliers(settings.lighting);
-}
-
-void AdaptiveBrightness::UpdateVanillaPointLightData(
-	RE::BSRenderPass* a_pass,
-	uint32_t a_lightCount,
-	uint32_t a_bufferRegister)
-{
-	if (!vanillaPointLightCB || !globals::d3d::context || !a_pass || !a_pass->sceneLights)
-		return;
-
-	VanillaPointLightData data{};
-	const uint32_t lightCount = std::min(a_lightCount, kMaxVanillaPointLights);
-	for (uint32_t lightIndex = 0; lightIndex < lightCount; ++lightIndex) {
-		const uint32_t sceneLightIndex = lightIndex + kFirstPointLightSceneIndex;
-		if (sceneLightIndex >= a_pass->numLights)
-			break;
-
-		auto* bsLight = a_pass->sceneLights[sceneLightIndex];
-		if (!bsLight)
-			continue;
-
-		auto* niLight = bsLight->light.get();
-		auto pointLightFlags = PointLightFlags::GetVanillaPointLightFlags(bsLight, niLight);
-		if (!globals::features::inverseSquareLighting.IsEnabled())
-			pointLightFlags &= ~PointLightFlags::ToMask(PointLightFlags::Flags::Linear);
-		data.pointLightFlags[lightIndex] = pointLightFlags;
-	}
-
-	vanillaPointLightCB->Update(data);
-
-	ID3D11Buffer* buffer = vanillaPointLightCB->CB();
-	globals::d3d::context->PSSetConstantBuffers(a_bufferRegister, 1, &buffer);
-}
-
 struct AdaptiveBrightness::Hooks
 {
-	template <class Tag>
-	struct HDRTonemapBlendCinematic_Render
+	struct Sky_UpdateColors
 	{
-		static void thunk(void* a_imageSpaceShader, RE::BSTriShape* a_shape, RE::ImageSpaceEffectParam* a_param)
+		static void thunk(RE::Sky* a_sky, float a_delta)
 		{
-			// The engine may replace pixel-shader constant buffers while preparing
-			// image-space effects. Refresh the live profile data and bind it at the
-			// consuming draw instead of relying on the earlier renderer reset.
-			if (auto* state = globals::state)
-				state->UpdateFeatureData(true);
-			Util::BindSharedDataConstantBuffersForPS(globals::d3d::context);
+			if (a_sky) {
+				effect.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kEffectLighting]);
+				statics.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyStatics]);
+				upper.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyUpper]);
+				middle.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyLower]);
+				horizon.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kHorizon]);
+			} else {
+				effect = {};
+				statics = {};
+				upper = {};
+				middle = {};
+				horizon = {};
+			}
+			func(a_sky, a_delta);
+			if (!a_sky || !a_sky->currentWeather)
+				return;
 
-			func(a_imageSpaceShader, a_shape, a_param);
+			try {
+				const auto lighting = globals::features::adaptiveBrightness.GetEffectiveSharedLightingSettings();
+				effect.Apply(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kEffectLighting], lighting.effectBrightness);
+				statics.Apply(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyStatics], lighting.skyStaticBrightness);
+				const auto& appearance = lighting.appearance;
+				upper.ApplyGrade(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyUpper], appearance.skyTopIntensity, appearance.skyTopCurve,
+					{ appearance.skyTopTint.x, appearance.skyTopTint.y, appearance.skyTopTint.z });
+				middle.ApplyGrade(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyLower], appearance.skyMiddleIntensity, appearance.skyMiddleCurve,
+					{ appearance.skyMiddleTint.x, appearance.skyMiddleTint.y, appearance.skyMiddleTint.z });
+				horizon.ApplyGrade(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kHorizon], appearance.skyHorizonIntensity, appearance.skyHorizonCurve,
+					{ appearance.skyHorizonTint.x, appearance.skyHorizonTint.y, appearance.skyHorizonTint.z });
+				loggedFailure = false;
+			} catch (const std::exception& error) {
+				if (!loggedFailure)
+					logger::warn("[AdaptiveBalance] Weather color adjustment skipped: {}", error.what());
+				loggedFailure = true;
+			}
 		}
-
 		static inline REL::Relocation<decltype(thunk)> func;
+		static inline WeatherColorAdjustment<RE::NiColor> effect;
+		static inline WeatherColorAdjustment<RE::NiColor> statics;
+		static inline WeatherColorAdjustment<RE::NiColor> upper;
+		static inline WeatherColorAdjustment<RE::NiColor> middle;
+		static inline WeatherColorAdjustment<RE::NiColor> horizon;
+		static inline bool loggedFailure = false;
 	};
-
-	struct CinematicTag;
-	struct CinematicFadeTag;
 
 	struct BSWaterShader_SetupGeometry
 	{
@@ -3065,18 +4283,24 @@ struct AdaptiveBrightness::Hooks
 
 	static void Install()
 	{
-		stl::write_vfunc<0x1, HDRTonemapBlendCinematic_Render<CinematicTag>>(
-			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic[3]);
-		stl::write_vfunc<0x1, HDRTonemapBlendCinematic_Render<CinematicFadeTag>>(
-			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[3]);
 		stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
-		logger::info("[AdaptiveBalance] Installed shared-light and Bloom tonemap hooks");
+		logger::info("[AdaptiveBalance] Installed shared-light water hook");
+		const auto error = stl::detour_thunk<Sky_UpdateColors>(REL::RelocationID(25686, 26233));
+		globals::features::adaptiveBrightness.weatherColorHookInstalled = error == NO_ERROR;
+		if (error == NO_ERROR)
+			logger::info("[AdaptiveBalance] Installed weather color hook");
+		else
+			logger::error("[AdaptiveBalance] Weather color hook failed ({}); weather brightness controls are unavailable", error);
 	}
 };
 
 void AdaptiveBrightness::PostPostLoad()
 {
 	Hooks::Install();
+	AdaptiveBalanceDepthOfField::InstallHooks();
 }
 
-#undef I18N_KEY_PREFIX
+void AdaptiveBrightness::DataLoaded()
+{
+	UnderwaterDepthOfField::InstallHooks();
+}

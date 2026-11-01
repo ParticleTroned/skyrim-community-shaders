@@ -146,6 +146,8 @@ struct PerformanceOverlay : OverlayFeature
 				T("feature.performance_overlay.key_feature_6", "Color-coded performance metrics with customizable thresholds"),
 				T("feature.performance_overlay.key_feature_7", "Movable overlay window with persistent positioning") } };
 	}
+	/** Draws the native runtime switch independently of measurement eligibility. */
+	void DrawSettingsEnabledControl() override;
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
@@ -181,6 +183,12 @@ struct PerformanceOverlay : OverlayFeature
 	void UpdateGraphValues();
 	void DrawFPS();
 	void DrawVRAM();
+	void DrawRenderTargetProfiling();
+	void UpdateRenderTargetCapture();
+	void SetRenderTargetsEnabled(bool enabled);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	json GetRenderTargetDiagnostics() const;
+#endif
 	void DrawPostFGFrameTimeGraph();
 
 	// ============================================================================
@@ -291,6 +299,7 @@ struct PerformanceOverlay : OverlayFeature
 		bool ShowInOverlay = true;  // was: Enabled
 		bool ShowDrawCalls = true;
 		bool ShowCSPasses = true;
+		bool ShowRenderTargets = false;
 		bool ShowVRAM = true;
 		bool ShowFPS = true;
 		bool ShowPreFGFrameTimeGraph = true;
@@ -307,6 +316,10 @@ struct PerformanceOverlay : OverlayFeature
 	Settings settings;
 
 private:
+	void DrawRenderTargetControl();
+	void DrawRenderTargets(bool profilingView);
+	bool overlayRenderTargetsRequested = false;
+	bool profilingRenderTargetsRequested = false;
 	// ============================================================================
 	// PRIVATE DATA STRUCTURES
 	// ============================================================================

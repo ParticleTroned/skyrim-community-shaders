@@ -37,6 +37,7 @@ public:
 	static constexpr float HOME_LINK_DISCORD_BUTTON_MAX_WIDTH = 220.0f;
 	static constexpr float HOME_LINK_ROW_PADDING_MARGIN = 40.0f;
 
+	/** Draw the shared welcome and managed-cache pages with native SE mode selection. */
 	static void RenderHomePage();
 
 	// First-time setup management

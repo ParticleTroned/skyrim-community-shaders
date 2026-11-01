@@ -133,6 +133,8 @@ public:
 	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableSubsurfaceScattering; }
+	/** Keeps configured profiles when the header changes the runtime switch. */
+	void SetPerformanceToggleEnabled(bool a_enabled) override { settings.EnableSubsurfaceScattering = a_enabled; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;

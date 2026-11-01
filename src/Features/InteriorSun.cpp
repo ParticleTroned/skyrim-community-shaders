@@ -1,54 +1,78 @@
-﻿#include "InteriorSun.h"
 #include "I18n/I18n.h"
+#include "InteriorSun.h"
+#include "LocationContext.h"
+#include "Menu/SettingsPage.h"
+#include "Profiler.h"
 #include "State.h"
-
-#define I18N_KEY_PREFIX "feature.interior_sun."
+#include "Utils/RendererContextAccess.h"
+#include "Utils/RuntimeToggle.h"
+#include "Utils/UI.h"
 
 #include <numbers>
+
+#include "RE/B/BSMultiBoundRoom.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	InteriorSun::Settings,
 	Enabled,
 	ForceDoubleSidedRendering,
+	ForceSingleShadowCascade,
 	InteriorShadowDistance)
 
-bool InteriorSun::DrawEnabledCheckbox()
+namespace
 {
-	bool enabled = settings.Enabled;
-	if (ImGui::Checkbox("Enable", &enabled))
-		SetRuntimeEnabled(enabled);
-	return enabled;
+	struct ScopedFirstSliceDistanceOverride
+	{
+		ScopedFirstSliceDistanceOverride(RE::Setting* a_setting, float a_value) :
+			setting(a_setting),
+			original(a_setting ? a_setting->data.f : 0.0f),
+			active(a_setting != nullptr)
+		{
+			if (active)
+				setting->data.f = a_value;
+		}
+
+		~ScopedFirstSliceDistanceOverride()
+		{
+			if (active)
+				setting->data.f = original;
+		}
+
+		RE::Setting* setting;
+		float original;
+		bool active;
+	};
 }
 
 void InteriorSun::DrawSettings()
 {
-	const bool enabled = DrawEnabledCheckbox();
+	MenuUI::SettingsPage page("InteriorSun", {
+												 { "appearance", T("feature.interior_sun.sunlight", "Sunlight"), T("feature.interior_sun.enable_interior_sunlight_then_adjust_its_contribution", "Enable interior sunlight, then adjust its contribution."), T("feature.interior_sun.interior_sunlight_contribution", "Interior sunlight contribution"), true, true, T("feature.interior_sun.balance_interior_light", "Balance interior light") },
+											 });
+	if (!page.Is("appearance"))
+		return;
+
+	const bool enabled = settings.Enabled;
 	ImGui::BeginDisabled(!enabled);
 
-	ImGui::Checkbox(T(TKEY("force_double_sided"), "Force Double-Sided Rendering"), &settings.ForceDoubleSidedRendering);
+	Util::Widgets::Checkbox(T("feature.interior_sun.force_double_sided", "Force Double-Sided Rendering"), &settings.ForceDoubleSidedRendering);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("force_double_sided_tooltip"),
-							  "Disables backface culling during sun shadowmap rendering in interiors. "
-							  "Will prevent most light leaking through unmasked/unprepared interiors at a small performance cost. "));
+		ImGui::Text(
+			T("feature.interior_sun.disable_interior_sun_shadow_backface_culling_c691cc61", "Disable interior sun-shadow backface culling to reduce leaks in unmasked/unprepared interiors. Adds a small performance cost."));
 	}
-	if (ImGui::SliderFloat(T(TKEY("interior_shadow_distance"), "Interior Shadow Distance"), &settings.InteriorShadowDistance, 1000.0f, 8000.0f)) {
-		if (gInteriorShadowDistance) {
-			*gInteriorShadowDistance = settings.InteriorShadowDistance;
-			auto tes = RE::TES::GetSingleton();
-			SetShadowDistance(tes && tes->interiorCell);
-		}
-	}
+	Util::Widgets::Checkbox(T("feature.interior_sun.force_single_shadow_cascade", "Force Single Shadow Cascade"), &settings.ForceSingleShadowCascade);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("interior_shadow_distance_tooltip"),
-							  "Sets the distance shadows are rendered at in interiors. "
-							  "Lower values provide higher quality shadows and improved performance but may cause distant interior spaces to light up incorrectly. "));
+		ImGui::Text(
+			T("feature.interior_sun.use_the_high_detail_shadow_split_throughout_i_a55533ab", "Use the high-detail shadow split throughout Interior Sun's distance so prepared wall masks avoid lower-resolution splits."));
+	}
+	if (Util::Widgets::SliderFloat(T("feature.interior_sun.interior_shadow_distance", "Interior Shadow Distance"), &settings.InteriorShadowDistance, 1000.0f, 8000.0f))
+		runtimeSettingsDirty.store(true, std::memory_order_release);
+
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text(
+			T("feature.interior_sun.interior_shadow_distance_lower_improves_quali_465fd64d", "Interior shadow distance. Lower improves quality and performance but may incorrectly light distant interior spaces."));
 	}
 	ImGui::EndDisabled();
-}
-
-void InteriorSun::DrawEssentialSettings()
-{
-	DrawEnabledCheckbox();
 }
 
 void InteriorSun::LoadSettings(json& o_json)
@@ -70,6 +94,8 @@ void InteriorSun::RestoreDefaultSettings()
 
 void InteriorSun::PostPostLoad()
 {
+	// Hooks must honor the startup preference before any guarded render prepass.
+	runtimeEnabled.store(settings.Enabled, std::memory_order_release);
 	// Hooks and patch to enable directional lighting for interiors
 	stl::write_thunk_call<GetWorldSpace>(REL::RelocationID(35562, 36561).address() + REL::Relocate(0x399, 0x37D));
 	stl::write_thunk_call<GetWorldSpace>(REL::RelocationID(35562, 36561).address() + REL::Relocate(0x3AE, 0x392));
@@ -86,11 +112,16 @@ void InteriorSun::PostPostLoad()
 	gShadowDistance = reinterpret_cast<float*>(REL::RelocationID(528314, 415263).address());
 	gInteriorShadowDistance = reinterpret_cast<float*>(REL::RelocationID(513755, 391724).address());
 	vanillaInteriorShadowDistance = *gInteriorShadowDistance;
+	fFirstSliceDistance = RE::GetINISetting("fFirstSliceDistance:Display");
+	if (!fFirstSliceDistance)
+		logger::warn("[Interior Sun] fFirstSliceDistance:Display not found; single shadow cascade mode is unavailable");
 
 	// Patches BSShadowDirectionalLight::SetFrameCamera to read the correct shadow distance value in interior cells
 	const std::uintptr_t address = REL::RelocationID(101499, 108496).address() + REL::Relocate(0xD62, 0xE6C);
 	const std::int32_t displacement = static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(gShadowDistance) - (address + 8));
 	REL::safe_write(address + 4, &displacement, sizeof(displacement));
+
+	stl::write_vfunc<0x10, BSShadowDirectionalLight_UpdateCamera>(RE::VTABLE_BSShadowDirectionalLight[0]);
 
 	rasterStateCullMode = &globals::game::shadowState->GetRuntimeData().rasterStateCullMode;
 	SetRuntimeEnabled(settings.Enabled);
@@ -100,8 +131,29 @@ void InteriorSun::PostPostLoad()
 
 void InteriorSun::EarlyPrepass()
 {
-	const auto* tes = RE::TES::GetSingleton();
+	const auto* tes = globals::game::tes;
 	isInteriorWithSun.store(IsEnabled() && IsInteriorWithSun(tes ? tes->interiorCell : nullptr), std::memory_order_release);
+	const bool applySettings = runtimeSettingsDirty.load(std::memory_order_acquire) && !Util::IsRuntimeToggleBlocked(globals::state);
+	if (!applySettings && (IsActiveInteriorSun() || arraysCleared))
+		return;
+	Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
+	if (!ownership)
+		return;
+	if (applySettings) {
+		const auto* player = RE::PlayerCharacter::GetSingleton();
+		const auto* cell = player ? player->GetParentCell() : nullptr;
+		if (LocationContext::HasAttachedCell(tes, cell) && runtimeSettingsDirty.exchange(false, std::memory_order_acq_rel)) {
+			const bool changed = runtimeEnabled.exchange(settings.Enabled, std::memory_order_acq_rel) != settings.Enabled;
+			const float distance = settings.Enabled ? settings.InteriorShadowDistance : vanillaInteriorShadowDistance;
+			if (gInteriorShadowDistance && (changed || *gInteriorShadowDistance != distance)) {
+				*gInteriorShadowDistance = distance;
+				SetShadowDistance(cell->IsInteriorCell());
+			}
+		}
+		isInteriorWithSun.store(IsEnabled() && IsInteriorWithSun(tes ? tes->interiorCell : nullptr), std::memory_order_release);
+	}
+	if (!IsActiveInteriorSun() && !arraysCleared)
+		ClearArrays();
 }
 
 inline bool InteriorSun::IsInteriorWithSun(const RE::TESObjectCELL* cell)
@@ -111,12 +163,14 @@ inline bool InteriorSun::IsInteriorWithSun(const RE::TESObjectCELL* cell)
 
 RE::TESWorldSpace* InteriorSun::GetWorldSpace::thunk(RE::TES* tes)
 {
-	if (!globals::features::interiorSun.IsEnabled())
-		return func(tes);
-
 	if (tes) {
-		if (const auto cell = tes->interiorCell)
+		if (const auto cell = tes->interiorCell) {
+			// Patched interior callers dereference this result, so disabled mode must still return a non-null sentinel.
+			if (!globals::features::interiorSun.IsEnabled())
+				return disableInteriorSun;
+
 			return IsInteriorWithSun(cell) ? enableInteriorSun : disableInteriorSun;
+		}
 	}
 	return func(tes);
 }
@@ -146,12 +200,12 @@ void InteriorSun::DirShadowLightCulling::thunk(RE::BSShadowDirectionalLight* dir
 		if (portalGraph) {
 			singleton.PopulateReplacementJobArrays(cell, portalGraph, dirLight, jobArrays);
 			passedJobArrays = &singleton.replacementJobArrays;
-		} else
-			singleton.currentCell = nullptr;
+		} else {
+			singleton.ClearArrays();
+		}
 	} else {
 		if (!singleton.arraysCleared)
 			singleton.ClearArrays();
-		singleton.currentCell = nullptr;
 	}
 
 	func(dirLight, *passedJobArrays, nodes);
@@ -161,7 +215,7 @@ RE::BSEventNotifyControl InteriorSun::MenuOpenCloseEventHandler::ProcessEvent(co
 {
 	if (a_event->menuName == RE::MainMenu::MENU_NAME) {
 		if (a_event->opening)
-			globals::features::interiorSun.isInteriorWithSun = false;
+			globals::features::interiorSun.isInteriorWithSun.store(false, std::memory_order_release);
 	}
 
 	return RE::BSEventNotifyControl::kContinue;
@@ -174,35 +228,29 @@ void InteriorSun::ClearArrays()
 	for (auto& jobArray : replacementJobArrays)
 		jobArray.clear();
 
+	currentCell = nullptr;
+	currentPortalGraph.reset();
 	arraysCleared = true;
 }
 
 void InteriorSun::SetRuntimeEnabled(bool a_enabled)
 {
 	settings.Enabled = a_enabled;
-	runtimeEnabled.store(a_enabled, std::memory_order_release);
-
-	const auto* tes = RE::TES::GetSingleton();
-	const auto* interiorCell = tes ? tes->interiorCell : nullptr;
-	isInteriorWithSun.store(a_enabled && loaded && IsInteriorWithSun(interiorCell), std::memory_order_release);
-
-	if (gInteriorShadowDistance) {
-		*gInteriorShadowDistance = a_enabled ? settings.InteriorShadowDistance : vanillaInteriorShadowDistance;
-		SetShadowDistance(interiorCell != nullptr);
-	}
+	runtimeSettingsDirty.store(true, std::memory_order_release);
 }
 
 void InteriorSun::PopulateReplacementJobArrays(const RE::TESObjectCELL* cell, const RE::NiPointer<RE::BSPortalGraph>& portalGraph, const RE::BSShadowDirectionalLight* dirLight, RE::BSTArray<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>& jobArrays)
 {
-	if (cell != currentCell) {
+	CS_PROFILE_CPU_SCOPE("InteriorSun::PrepareShadowJobs");
+	if (cell != currentCell || portalGraph != currentPortalGraph) {
 		InitialiseOnNewCell(portalGraph);
 		currentCell = cell;
+		currentPortalGraph = portalGraph;
 	}
 
 	const auto jobArraySize = jobArrays.size();
 	if (jobArraySize == 0) {
 		ClearArrays();
-		currentCell = nullptr;
 		return;
 	}
 
@@ -228,6 +276,7 @@ void InteriorSun::PopulateReplacementJobArrays(const RE::TESObjectCELL* cell, co
 	auto lightDir = -dirLight->GetShadowDirectionalLightRuntimeData().sunVector;
 	lightDir.Unitize();
 
+	CS_PROFILE_CPU_SCOPE("InteriorSun::SelectShadowCasters");
 	// Add extra rooms and portals that are in the direction of the sun
 	for (const auto& object : currentCellRoomsAndPortals) {
 		if (addedSet.find(object.get()) != addedSet.end() || !IsInSunDirectionAndWithinShadowDistance(object, lightDir, playerPos))
@@ -245,8 +294,9 @@ void InteriorSun::InitialiseOnNewCell(const RE::NiPointer<RE::BSPortalGraph>& po
 	currentCellRoomsAndPortals.clear();
 
 	if (const auto portalSharedNode = portalGraph->portalSharedNode) {
-		for (const auto room : portalGraph->rooms)
-			currentCellRoomsAndPortals.push_back(room);
+		for (const auto room : portalGraph->rooms) {
+			currentCellRoomsAndPortals.push_back(RE::NiPointer<RE::NiAVObject>(static_cast<RE::NiAVObject*>(room.get())));
+		}
 
 		for (auto child : portalGraph->portalSharedNode->GetChildren())
 			currentCellRoomsAndPortals.push_back(child);
@@ -259,7 +309,57 @@ bool InteriorSun::IsInSunDirectionAndWithinShadowDistance(const RE::NiPointer<RE
 	const auto diff = object->worldBound.center - playerPos;
 	const float distance = diff.Length();
 	const float projection = lightDir.Dot(diff);
-	return projection >= -radius && (distance - radius) <= *gShadowDistance;
+	return projection >= -radius && (distance - radius) <= GetInteriorShadowDistance();
+}
+
+bool InteriorSun::ShouldForceSingleShadowCascade() const
+{
+	if (!(IsEnabled() && fFirstSliceDistance && settings.ForceSingleShadowCascade))
+		return false;
+
+	const auto* tes = RE::TES::GetSingleton();
+	return tes && IsInteriorWithSun(tes->interiorCell);
+}
+
+float InteriorSun::GetInteriorShadowDistance() const
+{
+	if (gInteriorShadowDistance)
+		return *gInteriorShadowDistance;
+	if (gShadowDistance)
+		return *gShadowDistance;
+	return settings.InteriorShadowDistance;
+}
+
+void InteriorSun::ApplySingleShadowCascade(RE::BSShadowDirectionalLight* dirLight) const
+{
+	if (!dirLight)
+		return;
+
+	auto& runtimeData = dirLight->GetShadowDirectionalLightRuntimeData();
+	const float shadowDistance = GetInteriorShadowDistance();
+
+	runtimeData.startSplitDistances[0] = 0.0f;
+	runtimeData.endSplitDistances[0] = shadowDistance;
+
+	for (std::uint32_t i = 1; i < 3; ++i) {
+		runtimeData.startSplitDistances[i] = shadowDistance;
+		runtimeData.endSplitDistances[i] = shadowDistance;
+	}
+}
+
+bool InteriorSun::BSShadowDirectionalLight_UpdateCamera::thunk(RE::BSShadowDirectionalLight* a_light, const RE::NiCamera* a_camera)
+{
+	auto& singleton = globals::features::interiorSun;
+	const bool forceSingleCascade = singleton.ShouldForceSingleShadowCascade();
+	const float shadowDistance = singleton.GetInteriorShadowDistance();
+
+	ScopedFirstSliceDistanceOverride firstSliceOverride(forceSingleCascade ? singleton.fFirstSliceDistance : nullptr, shadowDistance);
+	const bool result = func(a_light, a_camera);
+
+	if (result && forceSingleCascade)
+		singleton.ApplySingleShadowCascade(a_light);
+
+	return result;
 }
 
 void InteriorSun::SetShadowDistance(bool inInterior)
@@ -268,4 +368,3 @@ void InteriorSun::SetShadowDistance(bool inInterior)
 	static REL::Relocation<func_t> func{ REL::RelocationID(98978, 105631).address() };
 	func(inInterior);
 }
-#undef I18N_KEY_PREFIX

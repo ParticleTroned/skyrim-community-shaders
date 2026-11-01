@@ -52,6 +52,10 @@ public:
 
 	eastl::unique_ptr<Texture2D> texTangentShift = nullptr;
 
+	bool SupportsPerformanceCostMeasurement() const override { return true; }
+	bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled != 0; }
+	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.Enabled = a_enabled ? 1u : 0u; }
+
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;

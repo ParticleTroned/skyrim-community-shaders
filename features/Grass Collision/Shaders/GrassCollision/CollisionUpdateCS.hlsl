@@ -12,6 +12,8 @@ cbuffer PerFrameCB : register(b0)
 	uint BoundingBoxCount;
 
 	float CameraHeightDelta;
+	float CollisionStrength;
+	float PreviousCollisionStrength;
 }
 
 struct BoundingBoxPacked

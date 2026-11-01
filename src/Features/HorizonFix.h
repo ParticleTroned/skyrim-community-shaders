@@ -15,6 +15,8 @@ struct HorizonFix : Feature
 	virtual std::string GetDisplayName() override { return T("feature.horizon_fix.name", "Horizon Fix"); }
 	virtual inline std::string GetShortName() override { return "HorizonFix"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "HORIZON_FIX"; }
+	// Water's compatibility provider records the installed companion plugin.
+	virtual std::string_view GetShaderCacheAbiVersion() override { return ""; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type a_shaderType) override { return a_shaderType == RE::BSShader::Type::Water; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kWater; }
 
@@ -27,7 +29,12 @@ struct HorizonFix : Feature
 
 	virtual void DrawSettings() override;
 	virtual void PostPostLoad() override;
-	virtual bool IsInMenu() const override;
+	virtual bool IsInMenu() const override { return !pluginDetectionComplete || pluginInstalled; }
+	virtual bool IsRuntimeDisabledByMissingDependency() const override { return pluginDetectionComplete && !pluginInstalled; }
 	virtual bool HasFeatureSettings() const override { return false; }
 	virtual bool IsCore() const override { return true; }
+
+private:
+	bool pluginDetectionComplete = false;
+	bool pluginInstalled = false;
 };

@@ -1,51 +1,15 @@
-#ifndef __HAIR_DEPENDENCY_HLSL__
+#if !(defined(__HAIR_DEPENDENCY_HLSL__))
 #define __HAIR_DEPENDENCY_HLSL__
 
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/Game.hlsli"
 #include "Common/Math.hlsli"
+#include "Hair/HairMath.hlsli"
 
 namespace Hair
 {
 	Texture2D<float> TexTangentShift : register(t73);
-
-	float3 ReorientTangent(float3 T, float3 N)
-	{
-		// Reorient tangent to be orthogonal to normal
-		float3 T_reoriented = normalize(T - N * dot(T, N));
-		return T_reoriented;
-	}
-
-	// [Kajiya et al. 1989, "Rendering fur with three dimensional textures."]
-	// https://doi.org/10.1145/74334.74361
-	float3 D_KajiyaKay(float3 T, float3 H, float n)
-	{
-		float TH = dot(T, H);
-		float sinTH = saturate(1 - TH * TH);
-		float dirAtten = saturate(TH + 1);
-		float norm = (n + 2) / (2 * Math::PI);
-		return dirAtten * norm * pow(sinTH, 0.5 * n);
-	}
-
-	float3 HairF0()
-	{
-		const float n = 1.55;
-		const float F0 = pow((1 - n) / (1 + n), 2);
-		return F0.xxx;
-	}
-
-	float3 ShiftTangent(float3 T, float3 N, float shift)
-	{
-		return normalize(T + N * shift);
-	}
-
-	float3 ShiftNormal(float3 T, float3 N, float shift)
-	{
-		float3 T_shifted = ShiftTangent(T, N, shift);
-		float3 N_shifted = normalize(cross(T_shifted, cross(N, T_shifted)));
-		return N_shifted;
-	}
 
 	float3 ShiftWorldNormal(float3 T, float3 N, float n, float2 uv)
 	{
@@ -100,11 +64,6 @@ namespace Hair
 		float3 specT = (scatterFresnel1 + scatterFresnel2 * scatterColor) * SharedData::hairSpecularSettings.Transmission;
 		dirSpecular = specR * lightColor * SharedData::hairSpecularSettings.SpecularMult;
 		dirTransmission = specT * softColor * SharedData::hairSpecularSettings.SpecularMult;
-	}
-
-	float Hair_g(float B, float Theta)
-	{
-		return exp(-0.5 * Theta * Theta / (B * B)) / (sqrt(Math::TAU) * B);
 	}
 
 	// [Marschner et al. 2003, "Light reflection from human hair fibers."]
@@ -175,32 +134,13 @@ namespace Hair
 		return max(R + TT + TRT, 0);
 	}
 
-	float3 GetHairDiffuseAttenuationKajiyaKay(float3 N, float3 V, float3 L, float shadow, float3 baseColor)
-	{
-		float NdotL = dot(N, L);
-		float NdotV = dot(N, V);
-		float3 S = 0;
-
-		float diffuseKajiya = 1 - abs(NdotL);
-
-		float3 fakeN = normalize(V - N * NdotV);
-		const float wrap = 1;
-		float wrappedNdotL = saturate((dot(fakeN, L) + wrap) / ((1 + wrap) * (1 + wrap)));
-		float diffuseScatter = (1 / Math::PI) * lerp(wrappedNdotL, diffuseKajiya, 0.33);
-		float luma = max(Color::RGBToLuminance(baseColor), 1e-4);
-		float3 scatterTint = shadow < 1 ? pow(abs(baseColor / luma), 1 - shadow) : 1;
-		S += sqrt(baseColor) * diffuseScatter * scatterTint;
-
-		return max(S, 0);
-	}
-
 	void GetHairDirectLightMarschner(out float3 dirDiffuse, out float3 dirSpecular, out float3 dirTransmission, float3 T, float3 L, float3 V, float3 N, float3 VN, DirectContext context, float shininess, float2 uv, float3 baseColor)
 	{
 		float3 lightColor = context.lightColor * Color::PBRLightingCompensation;
 		dirDiffuse = 0;
 		dirSpecular = 0;
 		dirTransmission = 0;
-		const float roughness = 1 - saturate(shininess * 0.01);
+		const float roughness = max(1 - saturate(shininess * 0.01), 0.01);
 
 		if (SharedData::hairSpecularSettings.EnableTangentShift) {
 			const float shift = TexTangentShift.SampleLevel(SampColorSampler, uv, 0).x - 0.5;
@@ -255,12 +195,6 @@ namespace Hair
 		}
 	}
 
-	float3 Saturation(float3 color, float saturation)
-	{
-		float luminance = Color::RGBToLuminance(color);
-		return saturate(lerp(float3(luminance, luminance, luminance), color, saturation));
-	}
-
 	float HairSelfShadow(float3 positionWS, float3 lightDirWS, float noise)
 	{
 		if (!SharedData::hairSpecularSettings.EnableSelfShadow) {
@@ -270,7 +204,7 @@ namespace Hair
 		// Simple raymarch
 		const int stepCount = 4;
 
-		float3 positionVS = FrameBuffer::WorldToView(positionWS);
+		float3 positionVS = FrameBuffer::WorldToView(positionWS, true);
 		float3 lightDirVS = FrameBuffer::WorldToView(lightDirWS, false);
 		lightDirVS *= max(SharedData::hairSpecularSettings.SelfShadowScale * GAME_UNIT_TO_CM, 0.05);
 		float stepSize = 1.0 / stepCount;
@@ -282,7 +216,7 @@ namespace Hair
 		[unroll(stepCount)] for (int i = 0; i < stepCount; ++i)
 		{
 			ray += lightDirVS * stepSize;
-			float2 rayUV = FrameBuffer::ViewToUV(ray);
+			float2 rayUV = FrameBuffer::ViewToUV(ray, true);
 			if (FrameBuffer::IsOutsideFrame(rayUV))
 				continue;
 			float rayDepth = ray.z;
@@ -298,4 +232,4 @@ namespace Hair
 		return lerp(1.0, shadow, SharedData::hairSpecularSettings.SelfShadowStrength);
 	}
 }
-#endif  //__HAIR_DEPENDENCY_HLSL__
+#endif

@@ -1,7 +1,14 @@
 #pragma once
 
+#include <filesystem>
+#include <optional>
+#include <string>
+
 namespace Util
 {
+	/** Opens a file or directory through Windows, returning a visible error on failure. */
+	bool OpenInShell(const std::filesystem::path& path, std::string& error);
+
 	std::optional<REL::Version> GetDllVersion(const std::wstring& dllPath);
 
 	/// Returns the number of logical processors on the highest-efficiency cores
@@ -17,4 +24,8 @@ namespace Util
 
 	/// Applies the process-class-aware cooperative priority to the calling thread.
 	bool SetCurrentThreadCooperativeBackgroundPriority();
+
+	/** Windows user-owned capture roots; unavailable only when shell discovery fails. */
+	std::optional<std::filesystem::path> GetPicturesPath();
+	std::optional<std::filesystem::path> GetVideosPath();
 }  // namespace Util

@@ -9,6 +9,7 @@ public:
 	virtual inline std::string GetName() override { return "Water Effects"; }
 	virtual std::string GetDisplayName() override { return T("feature.water_effects.name", "Water Effects"); }
 	virtual inline std::string GetShortName() override { return "WaterEffects"; }
+	virtual std::string GetFeatureModLink() override { return MakeNexusModURL("112762"); }
 	virtual inline std::string_view GetShaderDefineName() override { return "WATER_EFFECTS"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kWater; }
 

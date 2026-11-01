@@ -156,6 +156,9 @@ public:
 
 	struct Constants
 	{
+		static constexpr float MIN_SCROLLBAR_SIZE = 28.0f;
+		static constexpr float MAX_SCROLLBAR_SIZE = 56.0f;
+
 		// Font size constants
 		static constexpr float DEFAULT_SCREEN_HEIGHT = 1080.0f;       // Default screen resolution to use for subsequent calculations
 		static constexpr float DEFAULT_FONT_RATIO = (7.0f / 360.0f);  // 21px @ 1080p, 28px @ 1440p, 42px @ 4K
@@ -236,6 +239,13 @@ public:
 		static constexpr float BUTTON_ACTIVE_BRIGHTEN = 0.3f;
 		static constexpr float BUTTON_STATUS_TEXT_HOVER_ALPHA = 0.8f;
 		static constexpr float BUTTON_STATUS_TEXT_ACTIVE_ALPHA = 1.0f;
+
+		static constexpr float FLAT_TOGGLE_ON_BLEND = 0.55f;
+		static constexpr float FLAT_TOGGLE_OFF_BLEND = 0.18f;
+		static constexpr float FLAT_TOGGLE_WIDTH_RATIO = 1.6f;
+		static constexpr float FLAT_TOGGLE_HEIGHT_RATIO = 0.8f;
+		static constexpr float FLAT_TOGGLE_KNOB_PADDING = 2.0f;
+		static constexpr float FLAT_TOGGLE_BORDER_SIZE = 1.5f;
 	};
 
 	static ThemeManager* GetSingleton()
@@ -278,10 +288,12 @@ public:
 	 * @param themeSettings Theme settings to save
 	 * @param displayName Display name for the theme
 	 * @param description Description for the theme
+	 * @param error Receives validation or write errors; failed writes retain the existing file.
+	 * @param overwriteExisting False when creating a new theme without replacing a file.
 	 * @return True if theme was saved successfully
 	 */
 	bool SaveTheme(const std::string& themeName, const json& themeSettings,
-		const std::string& displayName, const std::string& description);
+		const std::string& displayName, const std::string& description, std::string& error, bool overwriteExisting = true);
 
 	/**
 	 * @brief Gets theme info by name

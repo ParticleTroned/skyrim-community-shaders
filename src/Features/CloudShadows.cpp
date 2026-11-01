@@ -1,4 +1,9 @@
 #include "CloudShadows.h"
+#include "AdaptiveBrightness.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/Finite.h"
+#include "Utils/UI.h"
+#include <algorithm>
 
 #include "../I18n/I18n.h"
 #include "State.h"
@@ -22,21 +27,32 @@ namespace
 	bool DrawEnabledCheckbox(CloudShadows::Settings& a_settings)
 	{
 		bool enabled = a_settings.Enabled != 0;
-		if (ImGui::Checkbox("Enable", &enabled))
+		if (ImGui::Checkbox(T("feature.cloud_shadows.enable", "Enable"), &enabled))
 			a_settings.Enabled = enabled ? 1u : 0u;
 		return enabled;
 	}
 }
 
+CloudShadows::Settings CloudShadows::GetCommonBufferData() const
+{
+	auto effective = settings;
+	const auto appearance = globals::features::adaptiveBrightness.GetEffectiveSharedLightingSettings().appearance;
+	effective.Opacity = Util::ClampFinite(settings.Opacity * appearance.cloudShadowStrength, 0.0f, 1.0f, 0.8f);
+	return effective;
+}
+
 void CloudShadows::DrawSettings()
 {
-	const bool enabled = DrawEnabledCheckbox(settings);
+	MenuUI::SettingsPage page("CloudShadows", {
+												  { "appearance", T("feature.perf_overlay.appearance", "Appearance"), T("feature.cloud_shadows.ui_enable_cloud_shadows_then_choose_how_dark_they_look", "Enable cloud shadows, then choose how dark they look."), T("feature.cloud_shadows.ui_moving_shade_and_opacity", "Moving shade and opacity"), true, true, T("feature.cloud_shadows.ui_shape_cloud_shadows", "Shape cloud shadows") },
+											  });
+	if (!page.Is("appearance"))
+		return;
 
-	ImGui::BeginDisabled(!enabled);
-	ImGui::SliderFloat(T(TKEY("opacity"), "Opacity"), &settings.Opacity, 0.0f, 1.0f, "%.1f");
+	ImGui::BeginDisabled(settings.Enabled == 0);
+	Util::Widgets::SliderFloat(T("feature.cloud_shadows.opacity", "Opacity"), &settings.Opacity, 0.0f, 1.0f, "%.1f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("opacity_tooltip"),
-							  "Higher values make cloud shadows darker."));
+		ImGui::TextUnformatted(T("feature.cloud_shadows.opacity_tooltip", "Higher values make cloud shadows darker."));
 	}
 	ImGui::EndDisabled();
 }
@@ -51,10 +67,10 @@ void CloudShadows::DrawPerformanceSettings(bool)
 	DrawEnabledCheckbox(settings);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(
-			"Disabling skips cloud-shadow cubemap updates and projection. Measure outdoors under a full sky.");
+			T("feature.cloud_shadows.disabling_skips_cloud_shadow_cubemap_updates_bcc1f7e0", "Disabling skips cloud-shadow cubemap updates and projection. Measure outdoors under a full sky."));
 	}
 	if (!IsCloudShadowSceneReady())
-		ImGui::TextDisabled("Actual cost measurement requires an outdoor scene with a full sky.");
+		ImGui::TextDisabled(T("feature.cloud_shadows.actual_cost_measurement_requires_an_outdoor_s_2366b859", "Actual cost measurement requires an outdoor scene with a full sky."));
 }
 
 json CloudShadows::CapturePerformanceSettingsState() const
@@ -112,15 +128,25 @@ void CloudShadows::SkyShaderHacks()
 	}
 
 	if (overrideSky) {
+		overrideSky = false;
 		auto renderer = globals::game::renderer;
 		auto context = globals::d3d::context;
 
 		auto reflections = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS];
 
 		// render targets
-		ID3D11RenderTargetView* rtvs[4];
-		ID3D11DepthStencilView* dsv;
+		ID3D11RenderTargetView* rtvs[4]{};
+		ID3D11DepthStencilView* dsv = nullptr;
 		context->OMGetRenderTargets(3, rtvs, &dsv);
+		// Only the three queried targets and depth view carry acquired references.
+		const SKSE::stl::scope_exit releaseAcquiredViews([&]() noexcept {
+			for (int i = 0; i < 3; ++i) {
+				if (rtvs[i])
+					rtvs[i]->Release();
+			}
+			if (dsv)
+				dsv->Release();
+		});
 
 		int side = -1;
 		for (int i = 0; i < 6; ++i)
@@ -131,6 +157,7 @@ void CloudShadows::SkyShaderHacks()
 		if (side == -1)
 			return;
 
+		occlusionClearedWithoutClouds = false;
 		CheckResourcesSide(side);
 
 		rtvs[3] = cubemapCloudOccRTVs[side];
@@ -140,19 +167,12 @@ void CloudShadows::SkyShaderHacks()
 		UINT sampleMask = 0xffffffff;
 
 		context->OMSetBlendState(cloudShadowBlendState, blendFactor, sampleMask);
+		// This override follows the engine state flush; the next draw must restore its output state.
+		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
 
 		auto cubemapDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kCUBEMAP_REFLECTIONS];
 		context->PSSetShaderResources(17, 1, &cubemapDepth.depthSRV);
-
-		// Release COM objects to prevent memory leaks
-		for (int i = 0; i < 3; ++i) {
-			if (rtvs[i])
-				rtvs[i]->Release();
-		}
-		if (dsv)
-			dsv->Release();
-
-		overrideSky = false;
 	}
 }
 
@@ -177,6 +197,26 @@ void CloudShadows::ModifySky(RE::BSRenderPass* Pass)
 	}
 }
 
+bool CloudShadows::ClearOcclusionWithoutClouds()
+{
+	auto* sky = globals::game::sky;
+	auto* context = globals::d3d::context;
+	if (!sky || !context || !texCubemapCloudOcc || !texCubemapCloudOcc->resource || !texCubemapCloudOcc->srv ||
+		!std::ranges::all_of(cubemapCloudOccRTVs, [](auto* rtv) { return rtv != nullptr; }))
+		return false;
+
+	if (sky->clouds && sky->clouds->numLayers != 0) {
+		occlusionClearedWithoutClouds = false;
+	} else if (!occlusionClearedWithoutClouds) {
+		// Without cloud draws, per-face capture cannot remove the previous weather's occlusion.
+		const float black[4]{};
+		for (auto* rtv : cubemapCloudOccRTVs)
+			context->ClearRenderTargetView(rtv, black);
+		occlusionClearedWithoutClouds = true;
+	}
+	return true;
+}
+
 void CloudShadows::ReflectionsPrepass()
 {
 	if (!settings.Enabled)
@@ -184,13 +224,15 @@ void CloudShadows::ReflectionsPrepass()
 
 	Util::FrameChecker frameChecker;
 	if (frameChecker.IsNewFrame()) {
-		if ((globals::game::sky->mode.get() != RE::Sky::Mode::kFull) ||
-			!globals::game::sky->currentClimate)
+		if (!IsCloudShadowSceneReady() || !ClearOcclusionWithoutClouds() ||
+			!texCubemapCloudOccCopy || !texCubemapCloudOccCopy->resource || !texCubemapCloudOccCopy->srv)
 			return;
 
 		auto context = globals::d3d::context;
 
-		context->CopyResource(texCubemapCloudOccCopy->resource.get(), texCubemapCloudOcc->resource.get());
+		{
+			context->CopyResource(texCubemapCloudOccCopy->resource.get(), texCubemapCloudOcc->resource.get());
+		}
 
 		ID3D11ShaderResourceView* srv = texCubemapCloudOccCopy->srv.get();
 		context->PSSetShaderResources(25, 1, &srv);
@@ -203,8 +245,7 @@ void CloudShadows::EarlyPrepass()
 	if (!settings.Enabled)
 		return;
 
-	if ((globals::game::sky->mode.get() != RE::Sky::Mode::kFull) ||
-		!globals::game::sky->currentClimate)
+	if (!IsCloudShadowSceneReady() || !ClearOcclusionWithoutClouds())
 		return;
 
 	auto context = globals::d3d::context;
@@ -216,6 +257,7 @@ void CloudShadows::EarlyPrepass()
 
 void CloudShadows::SetupResources()
 {
+	occlusionClearedWithoutClouds = false;
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
 

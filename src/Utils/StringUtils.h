@@ -1,12 +1,20 @@
 #pragma once
 
 #include <cctype>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
 
 namespace Util
 {
+	/** Preserve Unicode filenames when passing paths through JSON and DevBench. */
+	inline std::string PathToUtf8(const std::filesystem::path& path)
+	{
+		const auto text = path.u8string();
+		return { reinterpret_cast<const char*>(text.data()), text.size() };
+	}
+
 	inline std::string ToLowerAscii(std::string_view a_value)
 	{
 		std::string result;

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -122,7 +123,7 @@ namespace
 
 	Util::VirtualHookResult InstallHook(HookState& a_state, void* a_object, std::size_t a_slot,
 		std::size_t a_baseSlots, SlotCountFunction a_slotCount, void** a_original, void* a_hook,
-		AttachFunction a_attach = Util::AttachDetour, decltype(&VirtualProtect) a_protect = VirtualProtect)
+		AttachFunction a_attach = Util::AttachDetour, decltype(&VirtualProtect) a_protect = VirtualProtect, bool a_requireExecutable = false)
 	{
 		using enum Util::VirtualHookMethod;
 		if (!a_object || !a_original || !a_hook || a_slot >= a_baseSlots)
@@ -133,6 +134,14 @@ namespace
 		if (!ReadPointers(&table, a_object, sizeof(table)) || !table ||
 			!ReadPointers(&target, table + a_slot, sizeof(target)) || !target)
 			return { ERROR_NOACCESS };
+
+		if (a_requireExecutable) {
+			MEMORY_BASIC_INFORMATION targetInfo{};
+			constexpr DWORD executable = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+			if (VirtualQuery(target, &targetInfo, sizeof(targetInfo)) != sizeof(targetInfo) || targetInfo.State != MEM_COMMIT ||
+				(targetInfo.Protect & PAGE_GUARD) || !(targetInfo.Protect & executable))
+				return { ERROR_INVALID_ADDRESS };
+		}
 
 		const auto previous = std::find_if(a_state.hooks.begin(), a_state.hooks.end(),
 			[&](const auto& record) { return record.originalStorage == a_original; });
@@ -209,12 +218,12 @@ namespace
 	}
 
 	Util::VirtualHookResult InstallGraphicsHook(void* a_object, std::size_t a_slot, std::size_t a_baseSlots,
-		SlotCountFunction a_slotCount, void** a_original, void* a_hook)
+		SlotCountFunction a_slotCount, void** a_original, void* a_hook, bool a_requireExecutable = false)
 	{
 		try {
 			// Graphics objects can outlive DLL static destructors and retain pointers into these clones.
 			static auto& state = *new HookState;
-			return InstallHook(state, a_object, a_slot, a_baseSlots, a_slotCount, a_original, a_hook);
+			return InstallHook(state, a_object, a_slot, a_baseSlots, a_slotCount, a_original, a_hook, Util::AttachDetour, VirtualProtect, a_requireExecutable);
 		} catch (const std::bad_alloc&) {
 			return { ERROR_NOT_ENOUGH_MEMORY };
 		} catch (const std::system_error&) {
@@ -226,6 +235,14 @@ namespace
 Util::DetourAttachResult Util::AttachDetour(void** a_original, void* a_hook)
 {
 	return detail::AttachDetourTransaction(a_original, a_hook, DetourOperations{});
+}
+
+Util::VirtualHookResult Util::InstallNativeVirtualFunctionHook(std::uintptr_t a_table, std::size_t a_slot, void** a_original, void* a_hook)
+{
+	if (!a_table || a_slot >= ((std::numeric_limits<std::uintptr_t>::max)() - a_table) / sizeof(void*))
+		return { ERROR_INVALID_PARAMETER };
+	void* table = reinterpret_cast<void*>(a_table);
+	return InstallGraphicsHook(&table, a_slot, a_slot + 1, [](void*) -> std::size_t { return 0; }, a_original, a_hook, true);
 }
 
 Util::VirtualHookResult Util::InstallVirtualFunctionHook(ID3D11Device* a_object, std::size_t a_slot, void** a_original, void* a_hook)

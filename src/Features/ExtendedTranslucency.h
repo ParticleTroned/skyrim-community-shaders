@@ -5,9 +5,12 @@
 
 struct ExtendedTranslucency final : Feature
 {
+	static constexpr std::string_view MOD_ID = "150755"sv;
+
 	virtual inline std::string GetName() override { return "Extended Translucency"; }
 	virtual std::string GetDisplayName() override { return T("feature.extended_translucency.name", "Extended Translucency"); }
 	virtual inline std::string GetShortName() override { return "ExtendedTranslucency"; }
+	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual inline std::string_view GetShaderDefineName() override { return "EXTENDED_TRANSLUCENCY"sv; }
 	virtual inline std::string_view GetCategory() const override { return FeatureCategories::kMaterials; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -21,6 +24,9 @@ struct ExtendedTranslucency final : Feature
 	}
 	virtual bool HasShaderDefine(RE::BSShader::Type shaderType) override { return RE::BSShader::Type::Lighting == shaderType; };
 	virtual void PostPostLoad() override;
+	bool SupportsPerformanceCostMeasurement() const override { return true; }
+	bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
+	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.Enabled = a_enabled; }
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;

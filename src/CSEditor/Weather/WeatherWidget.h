@@ -2,6 +2,8 @@
 
 #include "../Widget.h"
 
+#include <winrt/base.h>
+
 using TESWeather = RE::TESWeather;
 using ColorTypes = TESWeather::ColorTypes;
 using ColorTimes = TESWeather::ColorTimes;
@@ -97,9 +99,7 @@ public:
 	Settings vanillaSettings;
 
 	// Cloud texture cache (layer index -> SRV)
-	std::map<int, ID3D11ShaderResourceView*> cloudTextureCache;
-
-	~WeatherWidget();
+	std::map<int, winrt::com_ptr<ID3D11ShaderResourceView>> cloudTextureCache;
 
 	void DrawWidget() override;
 	const char* GetWidgetTypeName() const override { return "Weather"; }
@@ -108,15 +108,16 @@ public:
 
 	WeatherWidget* GetParent();
 	bool HasParent() const;
+	static bool ApplySavedSettings(RE::TESWeather* a_weather, const json& a_settingsJson);
 	void SetWeatherValues();
 	void LoadWeatherValues();
 	void ApplyChanges() override;
 	void RevertChanges() override;
-	void Delete() override;
+	bool Delete() override;
+	UndoRestoreAction CaptureUndoState() const override;
+	UndoRestoreAction CaptureBaselineState() const override;
 	bool HasUnsavedChanges() const override;
 
-	// New methods for per-feature settings
-	void SaveFeatureSettings();
 	void LoadFeatureSettings();
 
 	// Navigation state for opening specific features
@@ -125,6 +126,7 @@ public:
 	void NavigateToFeatureSetting(const std::string& featureName, const std::string& settingName);
 
 private:
+	void MarkSavedState() override;
 	void InitializeInheritFlags();
 	void DrawDALCSettings();
 	void DrawWeatherColorSettings();

@@ -1,13 +1,16 @@
+#include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/LodLandscape.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
-#if defined(RENDER_SHADOWMASK) || defined(RENDER_SHADOWMASKSPOT) || defined(RENDER_SHADOWMASKPB) || defined(RENDER_SHADOWMASKDPB)
+
+#if (defined(RENDER_SHADOWMASK)) || ((defined(RENDER_SHADOWMASKSPOT)) || ((defined(RENDER_SHADOWMASKPB)) || (defined(RENDER_SHADOWMASKDPB))))
 #	define RENDER_SHADOWMASK_ANY
 #endif
 
+#if defined(VSHADER)
 struct VS_INPUT
 {
 	float4 PositionMS: POSITION0;
@@ -28,49 +31,50 @@ struct VS_INPUT
 	float4 BoneIndices: BLENDINDICES0;
 #endif
 };
+#endif
 
 struct VS_OUTPUT
 {
-	float4 PositionCS: SV_POSITION0;
+	float4 PositionCS : SV_POSITION0;
 
-#if !(defined(RENDER_DEPTH) && defined(RENDER_SHADOWMASK_ANY)) && SHADOWFILTER != 2
-#	if (defined(ALPHA_TEST) && ((!defined(RENDER_DEPTH) && !defined(RENDER_SHADOWMAP)) || defined(RENDER_SHADOWMAP_PB))) || defined(RENDER_NORMAL) || defined(DEBUG_SHADOWSPLIT) || defined(RENDER_BASE_TEXTURE)
-	float4 TexCoord0: TEXCOORD0;
-#	endif
+#if (!((defined(RENDER_DEPTH)) && (defined(RENDER_SHADOWMASK_ANY)))) && (SHADOWFILTER != 2)
+#if ((defined(ALPHA_TEST)) && (((!(defined(RENDER_DEPTH))) && (!(defined(RENDER_SHADOWMAP)))) || (defined(RENDER_SHADOWMAP_PB)))) || ((defined(RENDER_NORMAL)) || ((defined(DEBUG_SHADOWSPLIT)) || (defined(RENDER_BASE_TEXTURE))))
+	float4 TexCoord0 : TEXCOORD0;
+#endif
 
-#	if defined(RENDER_NORMAL)
-	float4 Normal: TEXCOORD1;
-#	endif
+#if defined(RENDER_NORMAL)
+	float4 Normal : TEXCOORD1;
+#endif
 
-#	if defined(RENDER_SHADOWMAP_PB)
-	float3 TexCoord1: TEXCOORD2;
-#	elif defined(ALPHA_TEST) && (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP))
-	float4 TexCoord1: TEXCOORD2;
-#	elif defined(ADDITIONAL_ALPHA_MASK)
-	float2 TexCoord1: TEXCOORD2;
-#	endif
+#if defined(RENDER_SHADOWMAP_PB)
+	float3 TexCoord1 : TEXCOORD2;
+#elif (defined(ALPHA_TEST)) && ((defined(RENDER_DEPTH)) || (defined(RENDER_SHADOWMAP)))
+	float4 TexCoord1 : TEXCOORD2;
+#elif defined(ADDITIONAL_ALPHA_MASK)
+	float2 TexCoord1 : TEXCOORD2;
+#endif
 
-#	if defined(LOCALMAP_FOGOFWAR)
-	float Alpha: TEXCOORD3;
-#	endif
+#if defined(LOCALMAP_FOGOFWAR)
+	float Alpha : TEXCOORD3;
+#endif
 
-#	if defined(RENDER_SHADOWMASK_ANY)
-	float4 PositionMS: TEXCOORD5;
-#	endif
+#if defined(RENDER_SHADOWMASK_ANY)
+	float4 PositionMS : TEXCOORD5;
+#endif
 
-#	if defined(ALPHA_TEST) && defined(VC) && defined(RENDER_SHADOWMASK_ANY)
-	float2 Alpha: TEXCOORD4;
-#	elif (defined(ALPHA_TEST) && defined(VC) && !defined(TREE_ANIM)) || defined(RENDER_SHADOWMASK_ANY)
-	float Alpha: TEXCOORD4;
-#	endif
+#if (defined(ALPHA_TEST)) && ((defined(VC)) && (defined(RENDER_SHADOWMASK_ANY)))
+	float2 Alpha : TEXCOORD4;
+#elif ((defined(ALPHA_TEST)) && ((defined(VC)) && (!(defined(TREE_ANIM))))) || (defined(RENDER_SHADOWMASK_ANY))
+	float Alpha : TEXCOORD4;
+#endif
 
-#	if defined(DEBUG_SHADOWSPLIT)
-	float Depth: TEXCOORD2;
-#	endif
+#if defined(DEBUG_SHADOWSPLIT)
+	float Depth : TEXCOORD2;
+#endif
 #endif
 };
 
-#ifdef VSHADER
+#if defined(VSHADER)
 cbuffer PerTechnique : register(b0)
 {
 	float4 HighDetailRange : packoffset(c0);  // loaded cells center in xy, size in zw
@@ -86,7 +90,7 @@ cbuffer PerGeometry : register(b2)
 {
 	float4 ShadowFadeParam : packoffset(c0);
 	row_major float4x4 World : packoffset(c1);
-	float4 EyePos : packoffset(c5);
+	float4 EyePos[1] : packoffset(c5);
 	float4 WaterParams : packoffset(c6);
 	float4 TreeParams : packoffset(c7);
 };
@@ -100,149 +104,151 @@ VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
 
-#	if (defined(RENDER_DEPTH) && defined(RENDER_SHADOWMASK_ANY)) || SHADOWFILTER == 2
+
+
+#if ((defined(RENDER_DEPTH)) && (defined(RENDER_SHADOWMASK_ANY))) || (SHADOWFILTER == 2)
 	vsout.PositionCS.xy = input.PositionMS.xy;
-#		if defined(RENDER_SHADOWMASKDPB) || defined(RENDER_SHADOWMASKSPOT) || defined(RENDER_SHADOWMASKPB)
+#if (defined(RENDER_SHADOWMASKDPB)) || ((defined(RENDER_SHADOWMASKSPOT)) || (defined(RENDER_SHADOWMASKPB)))
 	vsout.PositionCS.z = ShadowFadeParam.z;
-#		else
+#else
 	vsout.PositionCS.z = HighDetailRange.x;
-#		endif
+#endif
 	vsout.PositionCS.w = 1;
-#	elif defined(STENCIL_ABOVE_WATER)
+#elif defined(STENCIL_ABOVE_WATER)
 	vsout.PositionCS.y = WaterParams.x * 2 + input.PositionMS.y;
 	vsout.PositionCS.xzw = input.PositionMS.xzw;
-#	else
+#else
 
 	precise float4 positionMS = float4(input.PositionMS.xyz, 1.0);
 	float4 positionCS = float4(0, 0, 0, 0);
 
 	float3 normalMS = float3(1, 1, 1);
-#		if defined(NORMALS)
+#if defined(NORMALS)
 	normalMS = input.Normal.xyz * 2 - 1;
-#		endif
+#endif
 
-#		if defined(VC) && defined(NORMALS) && defined(TREE_ANIM)
+#if (defined(VC)) && ((defined(NORMALS)) && (defined(TREE_ANIM)))
 	float2 treeTmp1 = SmoothSaturate(abs(2 * frac(float2(0.1, 0.25) * (TreeParams.w * TreeParams.y * TreeParams.x) + dot(input.PositionMS.xyz, 1.0.xxx) + 0.5) - 1));
 	float normalMult = (treeTmp1.x + 0.1 * treeTmp1.y) * (input.Color.w * TreeParams.z);
 	positionMS.xyz += normalMS.xyz * normalMult;
-#		endif
+#endif
 
-#		if defined(LOD_LANDSCAPE)
+#if defined(LOD_LANDSCAPE)
 	positionMS = LodLandscape::AdjustLodLandscapeVertexPositionMS(positionMS, World, HighDetailRange);
-#		endif
+#endif
 
-#		if defined(SKINNED)
+#if defined(SKINNED)
 	precise int4 boneIndices = 765.01.xxxx * input.BoneIndices.xyzw;
 
 	float3x4 worldMatrix = Skinned::GetBoneTransformMatrix(Bones, boneIndices, FrameBuffer::CameraPosAdjust.xyz, input.BoneWeights);
 	precise float4 positionWS = float4(mul(positionMS, transpose(worldMatrix)), 1);
 
 	positionCS = mul(FrameBuffer::CameraViewProj, positionWS);
-#		else
+#else
 	precise float4x4 modelViewProj = mul(FrameBuffer::CameraViewProj, World);
 	positionCS = mul(modelViewProj, positionMS);
-#		endif
+#endif
 
-#		if defined(RENDER_SHADOWMAP) && defined(RENDER_SHADOWMAP_CLAMPED)
+#if (defined(RENDER_SHADOWMAP)) && (defined(RENDER_SHADOWMAP_CLAMPED))
 	positionCS.z = max(0, positionCS.z);
-#		endif
+#endif
 
-#		if defined(LOD_LANDSCAPE)
+#if defined(LOD_LANDSCAPE)
 	vsout.PositionCS = LodLandscape::AdjustLodLandscapeVertexPositionCS(positionCS);
-#		elif defined(RENDER_SHADOWMAP_PB)
+#elif defined(RENDER_SHADOWMAP_PB)
 	float3 positionCSPerspective = positionCS.xyz / positionCS.w;
 	float3 shadowDirection = normalize(normalize(positionCSPerspective) + float3(0, 0, ParabolaParam.y));
 	vsout.PositionCS.xy = shadowDirection.xy / shadowDirection.z;
 	vsout.PositionCS.z = ParabolaParam.x * length(positionCSPerspective);
 	vsout.PositionCS.w = positionCS.w;
-#		else
+#else
 	vsout.PositionCS = positionCS;
-#		endif
+#endif
 
-#		if defined(RENDER_NORMAL)
+#if defined(RENDER_NORMAL)
 	float3 normalVS = float3(1, 1, 1);
-#			if defined(SKINNED)
+#if defined(SKINNED)
 	float3x3 boneRSMatrix = Skinned::GetBoneRSMatrix(Bones, boneIndices, input.BoneWeights);
 	normalMS = normalize(mul(normalMS, transpose(boneRSMatrix)));
 	normalVS = mul(FrameBuffer::CameraView, float4(normalMS, 0)).xyz;
-#			else
+#else
 	normalVS = mul(mul(FrameBuffer::CameraView, World), float4(normalMS, 0)).xyz;
-#			endif
-#			if defined(RENDER_NORMAL_CLAMP)
+#endif
+#if defined(RENDER_NORMAL_CLAMP)
 	normalVS = max(min(normalVS, 0.1), -0.1);
-#			endif
+#endif
 	vsout.Normal.xyz = normalVS;
 
-#			if defined(VC)
+#if defined(VC)
 	vsout.Normal.w = input.Color.w;
-#			else
+#else
 	vsout.Normal.w = 1;
-#			endif
+#endif
 
-#		endif
+#endif
 
-#		if (defined(ALPHA_TEST) && ((!defined(RENDER_DEPTH) && !defined(RENDER_SHADOWMAP)) || defined(RENDER_SHADOWMAP_PB))) || defined(RENDER_NORMAL) || defined(DEBUG_SHADOWSPLIT) || defined(RENDER_BASE_TEXTURE)
+#if ((defined(ALPHA_TEST)) && (((!(defined(RENDER_DEPTH))) && (!(defined(RENDER_SHADOWMAP)))) || (defined(RENDER_SHADOWMAP_PB)))) || ((defined(RENDER_NORMAL)) || ((defined(DEBUG_SHADOWSPLIT)) || (defined(RENDER_BASE_TEXTURE))))
 	float4 texCoord = float4(0, 0, 1, 1);
 	texCoord.xy = input.TexCoord * TexcoordOffset.zw + TexcoordOffset.xy;
 
-#			if defined(RENDER_NORMAL)
+#if defined(RENDER_NORMAL)
 	texCoord.z = max(1, 0.0013333333 * positionCS.z + 0.8);
 
 	float falloff = 1;
-#				if defined(RENDER_NORMAL_FALLOFF)
-#					if defined(SKINNED)
-	falloff = dot(normalMS, normalize(EyePos.xyz - positionWS.xyz));
-#					else
-	falloff = dot(normalMS, normalize(EyePos.xyz - positionMS.xyz));
-#					endif
-#				endif
-	texCoord.w = EyePos.w * falloff;
-#			endif
+#if defined(RENDER_NORMAL_FALLOFF)
+#if defined(SKINNED)
+	falloff = dot(normalMS, normalize(EyePos[0].xyz - positionWS.xyz));
+#else
+	falloff = dot(normalMS, normalize(EyePos[0].xyz - positionMS.xyz));
+#endif
+#endif
+	texCoord.w = EyePos[0].w * falloff;
+#endif
 
 	vsout.TexCoord0 = texCoord;
-#		endif
+#endif
 
-#		if defined(RENDER_SHADOWMAP_PB)
+#if defined(RENDER_SHADOWMAP_PB)
 	vsout.TexCoord1.x = ParabolaParam.x * length(positionCSPerspective);
 	vsout.TexCoord1.y = positionCS.w;
 	precise float parabolaParam = ParabolaParam.y * positionCS.z;
 	vsout.TexCoord1.z = parabolaParam * 0.5 + 0.5;
-#		elif defined(ALPHA_TEST) && (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP))
+#elif (defined(ALPHA_TEST)) && ((defined(RENDER_DEPTH)) || (defined(RENDER_SHADOWMAP)))
 	float4 texCoord1 = float4(0, 0, 0, 0);
 	texCoord1.xy = positionCS.zw;
 	texCoord1.zw = input.TexCoord * TexcoordOffset.zw + TexcoordOffset.xy;
 
 	vsout.TexCoord1 = texCoord1;
-#		elif defined(ADDITIONAL_ALPHA_MASK)
+#elif defined(ADDITIONAL_ALPHA_MASK)
 	vsout.TexCoord1 = positionCS.zw;
-#		elif defined(DEBUG_SHADOWSPLIT)
+#elif defined(DEBUG_SHADOWSPLIT)
 	vsout.Depth = positionCS.z;
-#		endif
+#endif
 
-#		if defined(RENDER_SHADOWMASK_ANY)
+#if defined(RENDER_SHADOWMASK_ANY)
 	vsout.Alpha.x = 1 - pow(saturate(dot(positionCS.xyz, positionCS.xyz) / ShadowFadeParam.x), 8);
 
-#			if defined(SKINNED)
+#if defined(SKINNED)
 	vsout.PositionMS.xyz = positionWS.xyz;
-#			else
+#else
 	vsout.PositionMS.xyz = positionMS.xyz;
-#			endif
+#endif
 	vsout.PositionMS.w = positionCS.z;
-#		endif
+#endif
 
-#		if (defined(ALPHA_TEST) && defined(VC)) || defined(LOCALMAP_FOGOFWAR)
-#			if defined(RENDER_SHADOWMASK_ANY)
+#if ((defined(ALPHA_TEST)) && (defined(VC))) || (defined(LOCALMAP_FOGOFWAR))
+#if defined(RENDER_SHADOWMASK_ANY)
 	vsout.Alpha.y = input.Color.w;
-#			elif !defined(TREE_ANIM)
+#elif !(defined(TREE_ANIM))
 	vsout.Alpha.x = input.Color.w;
-#			endif
-#		endif
+#endif
+#endif
 
-#	endif
+#endif
 
-#	if defined(OFFSET_DEPTH)
-	vsout.PositionCS.z += 10.0;
-#	endif
+#if defined(OFFSET_DEPTH)
+	vsout.PositionCS.z += 5.0;
+#endif
 
 	return vsout;
 }
@@ -252,10 +258,10 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float4 Color: SV_Target0;
+	float4 Color : SV_Target0;
 };
 
-#ifdef PSHADER
+#if defined(PSHADER)
 
 SamplerState SampBaseSampler : register(s0);
 SamplerState SampNormalSampler : register(s1);
@@ -297,11 +303,11 @@ cbuffer PerGeometry : register(b2)
 	float4 AlphaTestRef : packoffset(c2);
 	float4 ShadowLightParam : packoffset(c3);  // Falloff in x, ShadowDistance squared in z
 	float4x3 FocusShadowMapProj[4] : packoffset(c4);
-#	if defined(RENDER_SHADOWMASK)
-	float4x3 ShadowMapProj[3] : packoffset(c16);  // 16, 19, 22
-#	elif defined(RENDER_SHADOWMASKSPOT) || defined(RENDER_SHADOWMASKPB) || defined(RENDER_SHADOWMASKDPB)
-	float4x4 ShadowMapProj[3] : packoffset(c16);
-#	endif
+#if defined(RENDER_SHADOWMASK)
+	float4x3 ShadowMapProj[1][3] : packoffset(c16);  // 16, 19, 22
+#elif (defined(RENDER_SHADOWMASKSPOT)) || ((defined(RENDER_SHADOWMASKPB)) || (defined(RENDER_SHADOWMASKDPB)))
+	float4x4 ShadowMapProj[1][3] : packoffset(c16);
+#endif
 }
 
 cbuffer AlphaTestRefCB : register(b11)
@@ -336,8 +342,7 @@ float SampleDualParaboloidShadowPCF(Texture2DArray<float4> tex, SamplerCompariso
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
-
-#	if defined(ADDITIONAL_ALPHA_MASK)
+#if defined(ADDITIONAL_ALPHA_MASK)
 	uint2 alphaMask = input.PositionCS.xy;
 	alphaMask.x = ((alphaMask.x << 2) & 12);
 	alphaMask.x = (alphaMask.y & 3) | (alphaMask.x & ~3);
@@ -363,105 +368,105 @@ PS_OUTPUT main(PS_INPUT input)
 	if (AlphaTestRef.w - maskValues[alphaMask.x] < 0) {
 		discard;
 	}
-#	endif
+#endif
 
 	float2 baseTexCoord = 0;
-#	if !(defined(RENDER_DEPTH) && defined(RENDER_SHADOWMASK_ANY)) && SHADOWFILTER != 2
-#		if (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP)) && defined(ALPHA_TEST) && !defined(RENDER_SHADOWMAP_PB)
+#if (!((defined(RENDER_DEPTH)) && (defined(RENDER_SHADOWMASK_ANY)))) && (SHADOWFILTER != 2)
+#if ((defined(RENDER_DEPTH)) || (defined(RENDER_SHADOWMAP))) && ((defined(ALPHA_TEST)) && (!(defined(RENDER_SHADOWMAP_PB))))
 	baseTexCoord = input.TexCoord1.zw;
-#		elif (defined(ALPHA_TEST) && ((!defined(RENDER_DEPTH) && !defined(RENDER_SHADOWMAP)) || defined(RENDER_SHADOWMAP_PB))) || defined(RENDER_NORMAL) || defined(DEBUG_SHADOWSPLIT) || defined(RENDER_BASE_TEXTURE)
+#elif ((defined(ALPHA_TEST)) && (((!(defined(RENDER_DEPTH))) && (!(defined(RENDER_SHADOWMAP)))) || (defined(RENDER_SHADOWMAP_PB)))) || ((defined(RENDER_NORMAL)) || ((defined(DEBUG_SHADOWSPLIT)) || (defined(RENDER_BASE_TEXTURE))))
 	baseTexCoord = input.TexCoord0.xy;
-#		endif
-#	endif
+#endif
+#endif
 	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, baseTexCoord, SharedData::MipBias);
 
-#	if defined(RENDER_SHADOWMAP_PB)
+#if defined(RENDER_SHADOWMAP_PB)
 	if (input.TexCoord1.z < 0) {
 		discard;
 	}
-#	endif
+#endif
 
 	float alpha = 1;
-#	if defined(ALPHA_TEST) && !(defined(RENDER_SHADOWMASK_ANY) && defined(RENDER_DEPTH))
+#if (defined(ALPHA_TEST)) && (!((defined(RENDER_SHADOWMASK_ANY)) && (defined(RENDER_DEPTH))))
 	alpha = baseColor.w;
-#		if defined(DEPTH_WRITE_DECALS) && !defined(GRAYSCALE_MASK)
+#if (defined(DEPTH_WRITE_DECALS)) && (!(defined(GRAYSCALE_MASK)))
 	alpha = saturate(1.05 * alpha);
-#		endif
-#		if defined(OPAQUE_EFFECT)
+#endif
+#if defined(OPAQUE_EFFECT)
 	alpha *= BaseColor.w * PropertyColor.w;
-#		endif
-#		if (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP) || ((defined(RENDER_NORMAL) || defined(RENDER_NORMAL_CLEAR)) && defined(DEBUG_COLOR))) && defined(VC) && !defined(TREE_ANIM) && !defined(LOD_OBJECT)
+#endif
+#if ((defined(RENDER_DEPTH)) || ((defined(RENDER_SHADOWMAP)) || (((defined(RENDER_NORMAL)) || (defined(RENDER_NORMAL_CLEAR))) && (defined(DEBUG_COLOR))))) && ((defined(VC)) && ((!(defined(TREE_ANIM))) && (!(defined(LOD_OBJECT)))))
 	alpha *= input.Alpha;
-#		elif defined(RENDER_SHADOWMASK_ANY) && defined(VC)
+#elif (defined(RENDER_SHADOWMASK_ANY)) && (defined(VC))
 	alpha *= input.Alpha.y;
-#		endif
-#		if defined(GRAYSCALE_TO_ALPHA)
+#endif
+#if defined(GRAYSCALE_TO_ALPHA)
 	float grayScaleColor = TexGrayscaleSampler.SampleBias(SampGrayscaleSampler, float2(baseColor.w, alpha), SharedData::MipBias).w;
 	if (grayScaleColor - AlphaTestRef.x < 0) {
 		discard;
 	}
-#		endif
-#		if defined(GRAYSCALE_MASK)
+#endif
+#if defined(GRAYSCALE_MASK)
 	if (baseColor.y - AlphaTestRef.x < 0) {
 		discard;
 	}
-#		elif !defined(RENDER_SHADOWMAP)
+#elif !(defined(RENDER_SHADOWMAP))
 	if (alpha - AlphaTestRef.x < 0) {
 		discard;
 	}
-#		endif
-#	endif
+#endif
+#endif
 
-#	if defined(RENDER_SHADOWMASK_ANY)
+#if defined(RENDER_SHADOWMASK_ANY)
 	float4 shadowColor = 1;
 
 	uint stencilValue = 0;
 	float shadowMapDepth = 0;
-#		if defined(RENDER_DEPTH)
+#if defined(RENDER_DEPTH)
 	float2 depthUv = input.PositionCS.xy * VPOSOffset.xy + VPOSOffset.zw;
 	float depth = TexDepthUtilitySampler.Sample(SampDepthSampler, depthUv).x;
 
 	shadowMapDepth = depth;
 
-#			if defined(FOCUS_SHADOW)
+#if defined(FOCUS_SHADOW)
 	uint3 stencilDimensions;
 	TexStencilSampler.GetDimensions(0, stencilDimensions.x, stencilDimensions.y, stencilDimensions.z);
 	stencilValue = TexStencilSampler.Load(float3(stencilDimensions.xy * depthUv, 0)).x;
-#			endif
-	depthUv = depthUv * FrameBuffer::DynamicResolutionParams2.xy;
+#endif
+	depthUv = (depthUv * FrameBuffer::DynamicResolutionParams2.xy);
 	float4 positionCS = float4(2 * float2(depthUv.x, -depthUv.y + 1) - 1, depth, 1);
 	float4 positionMS = mul(FrameBuffer::CameraViewProjInverse, positionCS);
 	positionMS.xyz = positionMS.xyz / positionMS.w;
 
 	float fadeFactor = 1 - pow(saturate(dot(positionMS.xyz, positionMS.xyz) / ShadowLightParam.z), 8);
-#		else
+#else
 	float4 positionMS = input.PositionMS.xyzw;
 
 	shadowMapDepth = positionMS.w;
 
 	float fadeFactor = input.Alpha.x;
-#		endif
+#endif
 
-	float noise = Random::InterleavedGradientNoise(input.PositionCS.xy, SharedData::FrameCount);
+	float noise = Random::InterleavedGradientNoise((input.PositionCS.xy), SharedData::FrameCount);
 
 	float2 rotation;
 	sincos(Math::TAU * noise, rotation.y, rotation.x);
 	float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
 
-#		if defined(RENDER_SHADOWMASK)
+#if defined(RENDER_SHADOWMASK)
 	if (SharedData::InInterior)
 		shadowColor = float4(0, 0, 0, 0);
 
 	if (EndSplitDistances.z >= shadowMapDepth) {
-		float4x3 lightProjectionMatrix = ShadowMapProj[0];
+		float4x3 lightProjectionMatrix = ShadowMapProj[0][0];
 		float shadowMapThreshold = AlphaTestRef.y;
 		float cascadeIndex = 0;
 		if (2.5 < EndSplitDistances.w && EndSplitDistances.y < shadowMapDepth) {
-			lightProjectionMatrix = ShadowMapProj[2];
+			lightProjectionMatrix = ShadowMapProj[0][2];
 			shadowMapThreshold = AlphaTestRef.z;
 			cascadeIndex = 2;
 		} else if (EndSplitDistances.x < shadowMapDepth) {
-			lightProjectionMatrix = ShadowMapProj[1];
+			lightProjectionMatrix = ShadowMapProj[0][1];
 			shadowMapThreshold = AlphaTestRef.z;
 			cascadeIndex = 1;
 		}
@@ -470,32 +475,32 @@ PS_OUTPUT main(PS_INPUT input)
 
 		float3 positionLS = mul(transpose(lightProjectionMatrix), float4(positionMS.xyz, 1)).xyz;
 
-#			if SHADOWFILTER == 0
+#if SHADOWFILTER == 0
 		float shadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, float3(positionLS.xy, cascadeIndex)).x;
 		if (shadowMapValue >= positionLS.z) {
 			shadowVisibility = 1;
 		}
-#			elif SHADOWFILTER == 1
+#elif SHADOWFILTER == 1
 		shadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(positionLS.xy, cascadeIndex), positionLS.z).x;
-#			elif SHADOWFILTER == 3
+#elif SHADOWFILTER == 3
 		shadowVisibility = SampleShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, positionLS.xy, cascadeIndex, positionLS.z, rotationMatrix, ShadowSampleParam.z);
-#			endif
+#endif
 
 		if (cascadeIndex < 1 && StartSplitDistances.y < shadowMapDepth) {
 			float cascade1ShadowVisibility = 0;
 
-			float3 cascade1PositionLS = mul(transpose(ShadowMapProj[1]), float4(positionMS.xyz, 1)).xyz;
+			float3 cascade1PositionLS = mul(transpose(ShadowMapProj[0][1]), float4(positionMS.xyz, 1)).xyz;
 
-#			if SHADOWFILTER == 0
+#if SHADOWFILTER == 0
 			float cascade1ShadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, float3(cascade1PositionLS.xy, 1)).x;
 			if (cascade1ShadowMapValue >= cascade1PositionLS.z) {
 				cascade1ShadowVisibility = 1;
 			}
-#			elif SHADOWFILTER == 1
+#elif SHADOWFILTER == 1
 			cascade1ShadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(cascade1PositionLS.xy, 1), cascade1PositionLS.z).x;
-#			elif SHADOWFILTER == 3
+#elif SHADOWFILTER == 3
 			cascade1ShadowVisibility = SampleShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, cascade1PositionLS.xy, 1, cascade1PositionLS.z, rotationMatrix, ShadowSampleParam.z);
-#			endif
+#endif
 
 			float cascade1BlendFactor = smoothstep(0, 1, (shadowMapDepth - StartSplitDistances.y) / (EndSplitDistances.x - StartSplitDistances.y));
 			shadowVisibility = lerp(shadowVisibility, cascade1ShadowVisibility, cascade1BlendFactor);
@@ -508,32 +513,32 @@ PS_OUTPUT main(PS_INPUT input)
 			float3 focusShadowMapPosition = mul(transpose(FocusShadowMapProj[focusShadowIndex]), float4(positionMS.xyz, 1));
 			float3 focusShadowMapUv = float3(focusShadowMapPosition.xy, StartSplitDistances.w + focusShadowIndex);
 			float focusShadowMapCompareValue = focusShadowMapPosition.z - 3 * shadowMapThreshold;
-#			if SHADOWFILTER == 3
+#if SHADOWFILTER == 3
 			float focusShadowVisibility = SampleShadowPCF(TexFocusShadowMapSamplerComp, SampFocusShadowMapSamplerComp, focusShadowMapUv.xy, focusShadowMapUv.z, focusShadowMapCompareValue, rotationMatrix, ShadowSampleParam.z);
-#			else
+#else
 			float focusShadowVisibility = TexFocusShadowMapSamplerComp.SampleCmpLevelZero(SampFocusShadowMapSamplerComp, focusShadowMapUv, focusShadowMapCompareValue).x;
-#			endif
+#endif
 			float focusShadowFade = FocusShadowFadeParam[focusShadowIndex];
 			shadowVisibility = min(shadowVisibility, lerp(1, focusShadowVisibility, focusShadowFade));
 		}
 
 		shadowColor.xyzw = lerp(1.0 * !SharedData::InInterior, shadowVisibility, fadeFactor);
 	}
-#		elif defined(RENDER_SHADOWMASKSPOT)
-	float4 positionLS = mul(transpose(ShadowMapProj[0]), float4(positionMS.xyz, 1));
+#elif defined(RENDER_SHADOWMASKSPOT)
+	float4 positionLS = mul(transpose(ShadowMapProj[0][0]), float4(positionMS.xyz, 1));
 	positionLS.xyz /= positionLS.w;
 	float2 shadowMapUv = positionLS.xy * 0.5 + 0.5;
 	float shadowBaseVisibility = 0;
-#			if SHADOWFILTER == 0
+#if SHADOWFILTER == 0
 	float shadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, float3(shadowMapUv, EndSplitDistances.x)).x;
 	if (shadowMapValue >= positionLS.z - AlphaTestRef.y) {
 		shadowBaseVisibility = 1;
 	}
-#			elif SHADOWFILTER == 1
+#elif SHADOWFILTER == 1
 	shadowBaseVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(shadowMapUv, EndSplitDistances.x), positionLS.z - AlphaTestRef.y).x;
-#			elif SHADOWFILTER == 3
+#elif SHADOWFILTER == 3
 	shadowBaseVisibility = SampleShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, positionLS.z - AlphaTestRef.y, rotationMatrix, ShadowSampleParam.z);
-#			endif
+#endif
 	float shadowVisibilityFactor = pow(2 * length(0.5 * positionLS.xy), ShadowLightParam.x);
 	float shadowVisibility = shadowBaseVisibility - shadowVisibilityFactor * shadowBaseVisibility;
 
@@ -543,22 +548,22 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 focusShadowMapUv = float3(focusShadowMapPosition.xy, StartSplitDistances.w + focusShadowIndex);
 		float focusShadowMapCompareValue = focusShadowMapPosition.z - 3 * AlphaTestRef.y;
 		float focusShadowVisibility = 0;
-#			if SHADOWFILTER == 0
+#if SHADOWFILTER == 0
 		float shadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, focusShadowMapUv).x;
 		if (shadowMapValue >= focusShadowMapCompareValue) {
 			focusShadowVisibility = 1;
 		}
-#			elif SHADOWFILTER == 1
+#elif SHADOWFILTER == 1
 		focusShadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, focusShadowMapUv, focusShadowMapCompareValue).x;
-#			elif SHADOWFILTER == 3
+#elif SHADOWFILTER == 3
 		focusShadowVisibility = SampleShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, focusShadowMapUv.xy, focusShadowMapUv.z, focusShadowMapCompareValue, rotationMatrix, ShadowSampleParam.z);
-#			endif
+#endif
 		shadowVisibility = min(shadowVisibility, lerp(1, focusShadowVisibility, FocusShadowFadeParam[focusShadowIndex]));
 	}
 
 	shadowColor.xyzw = fadeFactor * shadowVisibility;
-#		elif defined(RENDER_SHADOWMASKPB)
-	float4 unadjustedPositionLS = mul(transpose(ShadowMapProj[0]), float4(positionMS.xyz, 1));
+#elif defined(RENDER_SHADOWMASKPB)
+	float4 unadjustedPositionLS = mul(transpose(ShadowMapProj[0][0]), float4(positionMS.xyz, 1));
 
 	float shadowVisibility = 0;
 
@@ -567,23 +572,23 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 lightDirection = normalize(normalize(positionLS) + float3(0, 0, 1));
 		float2 shadowMapUv = lightDirection.xy / lightDirection.z * 0.5 + 0.5;
 		float shadowMapCompareValue = saturate(length(positionLS) / ShadowLightParam.x) - AlphaTestRef.y;
-#			if SHADOWFILTER == 0
+#if SHADOWFILTER == 0
 		float shadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, float3(shadowMapUv, EndSplitDistances.x)).x;
 		if (shadowMapValue >= shadowMapCompareValue) {
 			shadowVisibility = 1;
 		}
-#			elif SHADOWFILTER == 1
+#elif SHADOWFILTER == 1
 		shadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(shadowMapUv, EndSplitDistances.x), shadowMapCompareValue).x;
-#			elif SHADOWFILTER == 3
+#elif SHADOWFILTER == 3
 		shadowVisibility = SampleDualParaboloidShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, shadowMapCompareValue, rotationMatrix, ShadowSampleParam.z, false);
-#			endif
+#endif
 	} else {
 		shadowVisibility = 1;
 	}
 
 	shadowColor.xyzw = fadeFactor * shadowVisibility;
-#		elif defined(RENDER_SHADOWMASKDPB)
-	float3 positionLS = mul(transpose(ShadowMapProj[0]), float4(positionMS.xyz, 1)).xyz;
+#elif defined(RENDER_SHADOWMASKDPB)
+	float3 positionLS = mul(transpose(ShadowMapProj[0][0]), float4(positionMS.xyz, 1)).xyz;
 
 	bool lowerHalf = positionLS.z * 0.5 + 0.5 < 0;
 	float3 normalizedPositionLS = normalize(positionLS);
@@ -596,44 +601,44 @@ PS_OUTPUT main(PS_INPUT input)
 	shadowMapUv.y = lowerHalf ? 1.0 - 0.5 * shadowMapUv.y : 0.5 * shadowMapUv.y;
 
 	float shadowVisibility = 0;
-#			if SHADOWFILTER == 0
+#if SHADOWFILTER == 0
 	float shadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, float3(shadowMapUv, EndSplitDistances.x)).x;
 	if (shadowMapValue >= shadowMapCompareValue) {
 		shadowVisibility = 1;
 	}
-#			elif SHADOWFILTER == 1
+#elif SHADOWFILTER == 1
 	shadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(shadowMapUv, EndSplitDistances.x), shadowMapCompareValue).x;
-#			elif SHADOWFILTER == 3
+#elif SHADOWFILTER == 3
 	shadowVisibility = SampleDualParaboloidShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, shadowMapCompareValue, rotationMatrix, ShadowSampleParam.z, lowerHalf);
-#			endif
+#endif
 
 	shadowColor.xyzw = fadeFactor * shadowVisibility;
-#		endif
-#	endif
+#endif
+#endif
 
-#	if defined(TEXTURE)
+#if defined(TEXTURE)
 	float testAlpha = 1;
-#		if defined(RENDER_SHADOWMASK_ANY)
+#if defined(RENDER_SHADOWMASK_ANY)
 	testAlpha = shadowColor.w;
-#		elif defined(DEBUG_SHADOWSPLIT) || defined(RENDER_BASE_TEXTURE)
+#elif (defined(DEBUG_SHADOWSPLIT)) || (defined(RENDER_BASE_TEXTURE))
 	testAlpha = baseColor.w;
-#		elif defined(LOCALMAP_FOGOFWAR)
+#elif defined(LOCALMAP_FOGOFWAR)
 	testAlpha = input.Alpha;
-#		elif (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP)) && defined(ALPHA_TEST)
+#elif ((defined(RENDER_DEPTH)) || (defined(RENDER_SHADOWMAP))) && (defined(ALPHA_TEST))
 	testAlpha = alpha;
-#		elif defined(STENCIL_ABOVE_WATER)
+#elif defined(STENCIL_ABOVE_WATER)
 	testAlpha = 0.5;
-#		elif defined(RENDER_NORMAL_CLEAR) && !defined(DEBUG_COLOR)
+#elif (defined(RENDER_NORMAL_CLEAR)) && (!(defined(DEBUG_COLOR)))
 	testAlpha = 0;
-#		endif
+#endif
 	if (-AlphaTestRefRS + testAlpha < 0) {
 		discard;
 	}
-#	endif
+#endif
 
-#	if defined(RENDER_SHADOWMASK_ANY)
+#if defined(RENDER_SHADOWMASK_ANY)
 	psout.Color.xyzw = shadowColor;
-#	elif defined(DEBUG_SHADOWSPLIT)
+#elif defined(DEBUG_SHADOWSPLIT)
 
 	float3 splitFactor = 0;
 
@@ -652,40 +657,43 @@ PS_OUTPUT main(PS_INPUT input)
 		splitFactor.y += 1;
 	}
 
-#		if defined(DEBUG_COLOR)
+#if defined(DEBUG_COLOR)
 	psout.Color.xyz = (-splitFactor.xyz + DebugColor.xyz) * 0.9 + splitFactor.xyz;
-#		else
+#else
 	psout.Color.xyz = (-splitFactor.xyz + baseColor.xyz) * 0.9 + splitFactor.xyz;
-#		endif
+#endif
 
 	psout.Color.w = baseColor.w;
-#	elif defined(DEBUG_COLOR)
+#elif defined(DEBUG_COLOR)
 	psout.Color = float4(DebugColor.xyz, 1);
-#	elif defined(RENDER_BASE_TEXTURE)
+#elif defined(RENDER_BASE_TEXTURE)
 	psout.Color.xyzw = baseColor;
-#	elif defined(LOCALMAP_FOGOFWAR)
+#if defined(TRUE_PBR)
+	psout.Color.xyz = Color::LinearToSrgb(baseColor.xyz);
+#endif
+#elif defined(LOCALMAP_FOGOFWAR)
 	psout.Color = float4(0, 0, 0, input.Alpha);
-#	elif defined(GRAYSCALE_MASK)
+#elif defined(GRAYSCALE_MASK)
 	psout.Color = float4(input.TexCoord1.x / input.TexCoord1.y, baseColor.yz, alpha);
-#	elif (defined(RENDER_SHADOWMAP) && defined(ALPHA_TEST)) || defined(RENDER_SHADOWMAP_PB)
+#elif ((defined(RENDER_SHADOWMAP)) && (defined(ALPHA_TEST))) || (defined(RENDER_SHADOWMAP_PB))
 	psout.Color = float4(input.TexCoord1.xxx / input.TexCoord1.yyy, alpha);
-#	elif defined(RENDER_DEPTH) && (defined(ALPHA_TEST) || defined(ADDITIONAL_ALPHA_MASK))
+#elif (defined(RENDER_DEPTH)) && ((defined(ALPHA_TEST)) || (defined(ADDITIONAL_ALPHA_MASK)))
 	psout.Color = float4(input.TexCoord1.x / input.TexCoord1.y, 1, 1, alpha);
-#	elif defined(STENCIL_ABOVE_WATER)
+#elif defined(STENCIL_ABOVE_WATER)
 	psout.Color = float4(1, 0, 0, 0.5);
-#	elif defined(RENDER_NORMAL_CLEAR)
+#elif defined(RENDER_NORMAL_CLEAR)
 	psout.Color = float4(0.5, 0.5, 0, 0);
-#	elif defined(RENDER_NORMAL)
+#elif defined(RENDER_NORMAL)
 	float2 normal = 2 * (-0.5 + TexNormalSampler.Sample(SampNormalSampler, input.TexCoord0.xy).xy);
-#		if defined(RENDER_NORMAL_CLAMP)
+#if defined(RENDER_NORMAL_CLAMP)
 	normal = clamp(normal, -0.1, 0.1);
-#		endif
+#endif
 	psout.Color.xy = ((normal * 0.9 + input.Normal.xy) / input.TexCoord0.z) * 0.5 + 0.5;
 	psout.Color.z = input.Normal.w * (RefractionPower * input.TexCoord0.w);
 	psout.Color.w = 1;
-#	else
+#else
 	psout.Color = float4(1, 1, 1, 1);
-#	endif
+#endif
 
 	return psout;
 }

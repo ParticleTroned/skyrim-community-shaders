@@ -3,6 +3,7 @@
 #include "PCH.h"
 
 #include "Buffer.h"
+#include "Diagnostics/EngineStutterMonitor.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "LinearLighting.h"
@@ -971,7 +972,10 @@ namespace
 			return std::forward<PresentCallable>(present)();
 
 		globals::profiler->BeginPresent(syncInterval, flags);
-		const HRESULT presentResult = std::forward<PresentCallable>(present)();
+		const HRESULT presentResult = [&] {
+			CSX_CODE_EVALUATION_SCOPE(presentScope, "SwapChain::PresentDriver");
+			return std::forward<PresentCallable>(present)();
+		}();
 		globals::profiler->CompletePresent(presentResult);
 		globals::profiler->BeginFrame();
 		return presentResult;

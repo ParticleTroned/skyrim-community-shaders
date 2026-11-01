@@ -5,7 +5,9 @@
 #include <Tracy/TracyD3D11.hpp>
 
 #include <Buffer.h>
+#include <REX/W32/COMPTR.h>
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -23,6 +25,43 @@ public:
 	{
 		std::string canonicalText;
 		std::vector<std::pair<std::string, std::string>> defines;
+	};
+
+	struct RenderTargetResourcePublication
+	{
+		// This is a coordinated setup acknowledgement, not an exhaustive inventory
+		// of every optional feature resource. Required physical targets are probed
+		// separately before render-scale publication.
+		uint64_t generation = 0;
+		uint32_t width = 0;
+		uint32_t height = 0;
+		uint32_t loadedFeatureSetupCount = 0;
+		ID3D11Device* device = nullptr;
+		ID3D11DeviceContext* context = nullptr;
+		bool deferredSetupAcknowledged = false;
+		bool complete = false;
+	};
+
+	struct RenderTargetResourcePublicationDiagnostics
+	{
+		uint64_t currentGeneration = 0;
+		uint64_t completedGeneration = 0;
+		uint64_t publishedGeneration = 0;
+		uint32_t expectedWidth = 0;
+		uint32_t expectedHeight = 0;
+		uint32_t publishedWidth = 0;
+		uint32_t publishedHeight = 0;
+		uint32_t loadedFeatureSetupCount = 0;
+		bool evaluated = false;
+		bool present = false;
+		bool complete = false;
+		bool deferredSetupAcknowledged = false;
+		bool generationMatchesCurrent = false;
+		bool generationMatchesCompleted = false;
+		bool dimensionsMatch = false;
+		bool deviceMatches = false;
+		bool contextMatches = false;
+		bool current = false;
 	};
 
 	State()
@@ -54,6 +93,8 @@ public:
 
 	bool updateShader = true;
 	bool settingCustomShader = false;
+	bool deferredPixelShaderMissing = false;
+	RE::BSShader::Type selectedCustomPixelShaderType = RE::BSShader::Type::None;
 	RE::BSShader* currentShader = nullptr;
 	std::string adapterDescription = "";
 
@@ -91,13 +132,42 @@ public:
 	void Reset();
 	/** @brief One-time post-D3D setup: creates resources, probes GPU caps, initializes features. */
 	void Setup();
+	void SetupRenderTargetResources();
+	void InvalidateRenderTargetResourcePublication() noexcept;
+	std::shared_ptr<const RenderTargetResourcePublication> GetRenderTargetResourcePublication() const
+	{
+		return renderTargetResourcePublication.load(std::memory_order_acquire);
+	}
+	uint64_t GetCompletedRenderTargetResourcePublicationGeneration() const;
+	/** Returns the current generation, including an in-progress invalidation. */
+	uint64_t GetRenderTargetResourcePublicationGeneration() const noexcept
+	{
+		return renderTargetResourcePublicationGeneration.load(
+			std::memory_order_acquire);
+	}
+	/** Returns the publication facts used to evaluate the expected target size. */
+	RenderTargetResourcePublicationDiagnostics GetRenderTargetResourcePublicationDiagnostics(
+		uint32_t a_expectedWidth,
+		uint32_t a_expectedHeight) const noexcept;
+	/** Returns publication facts compared with the current physical main target. */
+	RenderTargetResourcePublicationDiagnostics
+	GetCurrentMainRenderTargetResourcePublicationDiagnostics() const noexcept;
+	bool HasCompleteRenderTargetResourcePublication(uint32_t a_width, uint32_t a_height) const;
+
+	enum class SettingsApplyMode
+	{
+		Runtime,
+		StartupHydration
+	};
 
 	/**
 	 * @brief Loads settings from disk (default, then user, then overrides).
 	 * @param a_configMode Which config file to load.
 	 * @param a_allowReload If true, retries once after a parse error.
 	 */
-	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);
+	/** Restore installed defaults in memory with rollback and the existing dirty baseline. */
+	bool RestoreDefaultSettings(std::string& a_error);
+	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true, SettingsApplyMode a_applyMode = SettingsApplyMode::Runtime);
 	/**
 	 * @brief Persists current settings to the config file for the given mode.
 	 * @param a_configMode Which config file to write.
@@ -105,6 +175,28 @@ public:
 	 *         were persisted successfully.
 	 */
 	bool Save(ConfigMode a_configMode = ConfigMode::USER);
+
+	static constexpr uint32_t kSaveLoadSafeModeGraceFrames = 120;
+	static constexpr uint32_t kSaveLoadSafeModeFallbackFrames = 36000;
+	static constexpr uint32_t kSaveMutationBlockGraceFrames = 60;
+
+	bool IsSaveLoadSafeModeActive() const;
+	/** Returns whether actual world replacement or its completion grace is active. */
+	bool IsWorldLoadTransitionActive() const;
+	// Current engine-owned save/load work only. Unlike IsSaveLoadSafeModeActive,
+	// this excludes the fixed post-event grace used for mutation/persistence safety.
+	bool IsEngineSaveLoadActivityActive() const;
+	/** Returns a distinct save token only after known ordinary-save work is idle. */
+	uint64_t GetOrdinarySaveRenderRecoveryToken() const;
+	bool IsPersistentMutationBlocked() const;
+	/** Preserves mutation grace while identifying a save without load/reset work. */
+	void NotifyOrdinarySave(uint32_t a_currentFrame);
+	void BeginSaveLoadSafeMode(uint32_t a_currentFrame);
+	void ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveLoadSafeModeGraceFrames);
+	void ExtendSaveGamePersistenceSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveLoadSafeModeGraceFrames);
+	void BeginPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveMutationBlockGraceFrames);
+	void ExtendPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveMutationBlockGraceFrames);
+	void UpdateSaveLoadSafeMode();
 
 	/**
 	 * @brief Serializes all settings to a JSON object (in-memory, no disk I/O).
@@ -117,7 +209,7 @@ public:
 	 * @brief Restores settings from a JSON object (in-memory, no disk I/O).
 	 * @param i_json Input JSON object to read from.
 	 */
-	void LoadFromJson(nlohmann::json& i_json);
+	void LoadFromJson(nlohmann::json& i_json, bool a_loadFeatureSettings = true, SettingsApplyMode a_applyMode = SettingsApplyMode::Runtime);
 
 	/** @brief Loads the active theme preset from the menu settings. */
 	void LoadTheme();
@@ -204,6 +296,9 @@ public:
 
 	/** @brief Opens a named GPU performance event (D3D annotation + Tracy zone). */
 	void BeginPerfEvent(std::string_view title);
+	void BeginDrawEvent(std::string_view title);
+	void EndDrawEvent();
+	void RefreshDrawAnnotations();
 	/** @brief Closes the most recent GPU performance event. */
 	void EndPerfEvent();
 	/** @brief Inserts a single-point GPU performance marker. */
@@ -213,6 +308,7 @@ public:
 	void SetAdapterDescription(const std::wstring& description);
 
 	bool frameAnnotations = false;
+	bool drawAnnotationsActive = false;
 
 	// Pass D3DCOMPILE_PARTIAL_PRECISION to fxc. With explicit min16float types this is
 	// mostly belt-and-braces in SM5, but it lets the compiler downgrade unmarked float
@@ -246,8 +342,22 @@ public:
 		GrassSphereNormal = 1 << 3,
 		IsSun = 1 << 4,
 		SuppressExternalEmittance = 1 << 5,
+		IsFemale = 1 << 6,
 		IsEye = 1 << 7,
-		AdditiveLighting = 1 << 8
+		AdditiveLighting = 1 << 8,
+		PBRGrass = 1 << 9,
+		PBRGrassShading = 1 << 10,
+		CharacterCategoryShift = 11,
+		CharacterCategoryMask = 0b111 << CharacterCategoryShift,
+		CharacterExcluded = 1 << 14,
+		CharacterFocusFadeShift = 15,
+		CharacterFocusFadeMask = 255 << CharacterFocusFadeShift,
+		IsAurora = 1 << 23,
+		EffectShadows = 1 << 24,
+		IsTree = 1 << 25,
+		CharacterFace = 1 << CharacterCategoryShift,
+		CharacterSkin = 2 << CharacterCategoryShift,
+		CharacterHair = 3 << CharacterCategoryShift
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t
@@ -263,6 +373,18 @@ public:
 	};
 
 	bool inWorld = false;
+	std::atomic_bool pendingPostLoadRuntimeReset{ false };
+	std::atomic_bool saveLoadSafeModeActive{ false };
+	std::atomic_bool engineSaveLoadActivityActive{ false };
+	std::atomic_uint32_t saveLoadSafeModeStartFrame{ 0 };
+	std::atomic_uint32_t saveLoadSafeModeEndFrame{ 0 };
+	// The save/load mutex also serializes world-transition expiry with callbacks.
+	// Save-only events retain their persistence grace without replacing the world.
+	std::atomic_bool worldLoadTransitionActive{ false };
+	std::atomic_uint32_t worldLoadTransitionStartFrame{ 0 };
+	std::atomic_uint32_t worldLoadTransitionEndFrame{ 0 };
+	std::atomic_bool persistentMutationBlocked{ false };
+	std::atomic_uint32_t persistentMutationBlockEndFrame{ 0 };
 	bool activeReflections = false;
 
 	// Cached menu open states, updated once per frame in Reset().
@@ -281,11 +403,13 @@ public:
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
 	void UpdateFeatureData(bool a_inWorld);
+	bool HasDirectionalShadows() const;
 	/**
 	 * @brief Updates the lighting permutation from the current render pass blend state.
 	 * @param a_pass Lighting render pass to inspect.
 	 */
 	void UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass);
+	void UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass);
 	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);
 	bool HasDirectionalShadows() const;
 
@@ -342,6 +466,7 @@ public:
 		float4 VolumetricLightingCustomColor;  // rgb=custom color, w=contribution
 		float VolumetricLightingSaturation;
 		float3 VolumetricLightingPad{};
+		float4 VolumetricLightingClarity{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(SharedDataCB);
 	static_assert(offsetof(SharedDataCB, VolumetricLightingOpacity) == offsetof(SharedDataCB, VolumetricShadowsEnabled) + sizeof(uint));
@@ -356,6 +481,7 @@ public:
 
 	Util::FrameChecker frameChecker;
 	uint frameCount = 0;
+	std::atomic_uint32_t frameCountAtomic{ 0 };
 
 	// Skyrim constants
 	D3D_FEATURE_LEVEL featureLevel;
@@ -441,10 +567,37 @@ public:
 	}
 
 private:
+	uint64_t BeginRenderTargetResourcePublication() noexcept;
+	void CompleteRenderTargetResourcePublication(
+		uint64_t a_generation,
+		uint32_t a_loadedFeatureSetupCount);
+
+	// Keep event deadlines, render provenance and persistence publication indivisible.
+	mutable std::mutex saveLoadSafeModeMutex;
+	enum class SaveLoadRenderRecoverySource : uint64_t
+	{
+		None,
+		OrdinarySave,
+		Other
+	};
+	static constexpr uint64_t kSaveLoadRenderRecoverySourceMask = 3;
+	void RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource a_source);
+	void ExtendSaveLoadSafeModeImpl(uint32_t a_currentFrame, uint32_t a_frameCount);
+	uint64_t saveLoadRenderRecoveryState = 0;
+	bool engineSaveLoadActivityKnown = false;
+	bool engineSavingWasActive = false;
+
 	std::atomic<std::shared_ptr<const ShaderDefinesSnapshot>> shaderDefinesSnapshot{
 		std::make_shared<const ShaderDefinesSnapshot>()
 	};
 	std::atomic<uint64_t> shaderDefinesGeneration{ 0 };
-	std::shared_ptr<REX::W32::ID3DUserDefinedAnnotation> pPerf;
+	std::atomic<std::shared_ptr<const RenderTargetResourcePublication>> renderTargetResourcePublication{
+		std::make_shared<const RenderTargetResourcePublication>()
+	};
+	std::atomic<uint64_t> renderTargetResourcePublicationGeneration{ 0 };
+	std::atomic<uint64_t> completedRenderTargetResourcePublicationGeneration{ 0 };
+	ID3D11Device* setupResourcesDevice = nullptr;
+	ID3D11DeviceContext* setupResourcesContext = nullptr;
+	REX::W32::ComPtr<REX::W32::ID3DUserDefinedAnnotation> pPerf;
 	std::mutex statsMutex;
 };

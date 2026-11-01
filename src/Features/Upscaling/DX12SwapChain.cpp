@@ -411,6 +411,7 @@ HRESULT DX12SwapChain::CreateDLSSGSwapChain(
 
 bool DX12SwapChain::DisableDLSSGCandidate()
 {
+	if (!RetireAllocatorFenceWaits()) return false;
 	// Streamline must release its hooks while all proxied DXGI/D3D objects are alive.
 	if (!globals::features::upscaling.streamlineDX12.Shutdown()) {
 		logger::critical(
@@ -547,13 +548,65 @@ HRESULT DX12SwapChain::WaitForFenceValue(
 	return WaitForFenceValue(d3d12Fence.get(), a_value, a_context);
 }
 
-HRESULT DX12SwapChain::WaitForCommandAllocator(UINT a_index)
+DX12SwapChain::~DX12SwapChain()
 {
-	if (a_index >= kMaximumBackBufferCount)
-		return E_INVALIDARG;
-	return WaitForFenceValue(
-		commandAllocatorFenceValues[a_index],
-		"command-allocator reuse");
+	(void)RetireAllocatorFenceWaits();
+	// A registered event is owned by the queue until its fence completes. If the
+	// driver cannot prove retirement, retain the event and fence for process lifetime.
+	for (auto& wait : allocatorFenceWaits)
+		if (wait) (void)wait.release();
+}
+
+bool DX12SwapChain::RetireAllocatorFenceWaits() noexcept
+{
+	bool retired = true;
+	for (auto& wait : allocatorFenceWaits) {
+		if (!wait) continue;
+		const auto completed = wait->fence ? wait->fence->GetCompletedValue() : 0;
+		if (completed == UINT64_MAX || completed < wait->value) retired = false;
+		else wait.reset();
+	}
+	return retired;
+}
+
+HRESULT DX12SwapChain::WaitForCommandAllocator(UINT index)
+{
+	if (index >= kMaximumBackBufferCount) return E_INVALIDARG;
+	const auto value = commandAllocatorFenceValues[index];
+	if (!value) return S_OK;
+	if (!d3d12Fence) return E_POINTER;
+	const auto removed = [&]() {
+		const auto reason = d3d12Device ? d3d12Device->GetDeviceRemovedReason() : DXGI_ERROR_DEVICE_REMOVED;
+		return FAILED(reason) ? reason : DXGI_ERROR_DEVICE_REMOVED;
+	};
+	const auto completed = d3d12Fence->GetCompletedValue();
+	if (completed == UINT64_MAX) return removed();
+	auto& wait = allocatorFenceWaits[index];
+	if (wait && wait->fence != d3d12Fence) return E_UNEXPECTED;
+	if (wait && completed >= wait->value) wait.reset();
+	if (completed >= value) return S_OK;
+	if (wait) {
+		if (wait->value != value || wait->fence != d3d12Fence) return E_UNEXPECTED;
+	} else {
+		auto candidate = std::make_unique<AllocatorFenceWait>();
+		candidate->event = winrt::handle(CreateEventW(nullptr, FALSE, FALSE, nullptr));
+		if (!candidate->event) {
+			const auto error = GetLastError();
+			return HRESULT_FROM_WIN32(error ? error : ERROR_GEN_FAILURE);
+		}
+		candidate->fence = d3d12Fence; candidate->value = value;
+		const auto registered = d3d12Fence->SetEventOnCompletion(value, candidate->event.get());
+		if (FAILED(registered)) return registered;
+		wait = std::move(candidate);
+	}
+	const DWORD result = WaitForSingleObject(wait->event.get(), 1000);
+	const auto error = result == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+	const auto retired = d3d12Fence->GetCompletedValue();
+	if (retired == UINT64_MAX) return removed();
+	if (retired >= value) { wait.reset(); allocatorTimeoutLogged = false; return S_OK; }
+	if (result == WAIT_TIMEOUT) return DXGI_ERROR_WAS_STILL_DRAWING;
+	if (result == WAIT_FAILED) return HRESULT_FROM_WIN32(error ? error : ERROR_GEN_FAILURE);
+	return E_UNEXPECTED;
 }
 
 HRESULT DX12SwapChain::WaitForInteropIdle()
@@ -657,6 +710,7 @@ HRESULT DX12SwapChain::SynchronizeAfterPresent(
 
 void DX12SwapChain::CreateInterop()
 {
+	if (!RetireAllocatorFenceWaits()) DX::ThrowIfFailed(DXGI_ERROR_WAS_STILL_DRAWING);
 	if (!d3d12Device || !d3d11Device || !swapChain)
 		DX::ThrowIfFailed(E_POINTER);
 
@@ -1071,7 +1125,7 @@ HRESULT DX12SwapChain::PrepareForSwapChainChange()
 		ResetOutputPresentationTiming(true);
 		return result;
 	}
-	return S_OK;
+	return RetireAllocatorFenceWaits() ? S_OK : DXGI_ERROR_WAS_STILL_DRAWING;
 }
 
 bool DX12SwapChain::PrepareForShutdown()
@@ -1131,6 +1185,16 @@ HRESULT DX12SwapChain::PresentInternal(
 						   presentingSwapChain->Present1(SyncInterval, Flags, a_parameters) :
 						   presentingSwapChain->Present(SyncInterval, Flags)) :
 		           DXGI_ERROR_INVALID_CALL;
+
+	if (SUCCEEDED(presentInteropFailure) && frameIndex < activeBackBufferCount && frameIndex < kMaximumBackBufferCount && d3d12Fence) {
+		const auto readiness = WaitForCommandAllocator(frameIndex);
+		if (readiness == DXGI_ERROR_WAS_STILL_DRAWING) {
+			if (!std::exchange(allocatorTimeoutLogged, true))
+				logger::warn("[DX12SwapChain] Allocator completion exceeded one second; retaining prepared inputs for a later Present.");
+			return readiness;
+		}
+		if (FAILED(readiness)) presentInteropFailure = readiness;
+	}
 
 	auto* hdr = globals::features::hdrDisplay.loaded ?
 	                &globals::features::hdrDisplay :
@@ -2451,4 +2515,28 @@ void DX12SwapChain::CreateSharedResources()
 		logger::error(
 			"[DX12SwapChain] Could not create frame-generation shared resources: unknown exception");
 	}
+}
+
+WrappedResource::WrappedResource(ID3D11Texture2D* texture, ID3D12Device* device,
+	std::string_view name, HANDLE sharedHandle)
+{
+	if (!texture || !device || !sharedHandle || sharedHandle == INVALID_HANDLE_VALUE)
+		DX::ThrowIfFailed(E_INVALIDARG);
+	D3D11_TEXTURE2D_DESC description{};
+	texture->GetDesc(&description);
+	if (!description.Width || !description.Height || description.MipLevels != 1 || description.ArraySize != 1 ||
+		description.SampleDesc.Count != 1 || description.SampleDesc.Quality != 0 ||
+		description.Usage != D3D11_USAGE_DEFAULT || description.CPUAccessFlags != 0 ||
+		!(description.MiscFlags & D3D11_RESOURCE_MISC_SHARED_NTHANDLE) ||
+		(description.MiscFlags & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX))
+		DX::ThrowIfFailed(E_INVALIDARG);
+	resource11.copy_from(texture);
+	DX::ThrowIfFailed(device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(resource.put())));
+	const auto opened = resource->GetDesc();
+	if (opened.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || opened.Width != description.Width ||
+		opened.Height != description.Height || opened.DepthOrArraySize != 1 || opened.MipLevels != 1 ||
+		opened.Format != description.Format || opened.SampleDesc.Count != 1 || opened.SampleDesc.Quality != 0)
+		DX::ThrowIfFailed(E_INVALIDARG);
+	const std::wstring wideName(name.begin(), name.end());
+	DX::ThrowIfFailed(resource->SetName(wideName.c_str()));
 }

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Utils/RuntimeToggle.h"
+#include "LightLimitFix/ShadowCullingPolicy.h"
 #include "OverlayFeature.h"
 #include "Utils/LazyShader.h"
 #include "Utils/PointLightFlags.h"
@@ -17,9 +19,14 @@ class ParticleLights;
 struct LightLimitFix : OverlayFeature
 {
 private:
+	Util::RuntimeToggle runtimeToggle{ false };
 	static constexpr std::string_view MOD_ID = "99548";
 
 public:
+	/** Stage contact-shadow changes for the render boundary. */
+	bool IsContactShadowsRequested() const { return runtimeToggle.Get(); }
+	void SetContactShadowsEnabled(bool enabled) { runtimeToggle.Set(enabled); }
+	bool IsPerformanceCostMeasurementReady() const override { return settings.EnableContactShadows == IsContactShadowsRequested(); }
 	virtual inline std::string GetName() override { return "Light Limit Fix"; }
 	virtual inline std::string GetShortName() override { return "LightLimitFix"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
@@ -266,6 +273,7 @@ public:
 	Util::FrameChecker frameChecker;
 
 	virtual void SetupResources() override;
+	void SetupRenderTargetResources() override;
 	virtual void Reset() override;
 
 	virtual void LoadSettings(json& o_json) override;
@@ -342,6 +350,7 @@ public:
 		uint ContactShadowClusterBudget = 4;
 		uint ParticleContactShadowBudget = 1;
 		uint StrictContactShadowBudget = 4;
+		LightLimitFixDetail::ShadowCulling::Settings ShadowCulling;
 	};
 
 	uint clusterSize[3] = { 16 };
@@ -380,7 +389,8 @@ public:
 			{ "ContactShadowQuality", true },
 			{ "ContactShadowClusterBudget", true },
 			{ "ParticleContactShadowBudget", true },
-			{ "StrictContactShadowBudget", true }
+			{ "StrictContactShadowBudget", true },
+			{ "ShadowCulling", true }
 		};
 	}
 	virtual json CapturePerformanceTuningAuxiliaryState() const override;
@@ -388,7 +398,7 @@ public:
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override
 	{
-		return settings.EnableParticleLights || settings.EnableContactShadows || settings.EnableParticleContactShadows;
+		return settings.EnableParticleLights || IsContactShadowsRequested() || settings.EnableParticleContactShadows || settings.ShadowCulling.Active();
 	}
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
@@ -401,7 +411,8 @@ public:
 			settings.MaxParticlesPerEmitter = defaults.MaxParticlesPerEmitter;
 			settings.MaxParticleDistance = defaults.MaxParticleDistance;
 			settings.EnableParticleLightsOptimization = defaults.EnableParticleLightsOptimization;
-			settings.EnableContactShadows = defaults.EnableContactShadows;
+			SetContactShadowsEnabled(defaults.EnableContactShadows);
+			settings.ShadowCulling = defaults.ShadowCulling;
 			settings.ContactShadowsInteriorsOnly = defaults.ContactShadowsInteriorsOnly;
 			settings.EnableParticleContactShadows = defaults.EnableParticleContactShadows;
 			settings.ContactShadowQuality = defaults.ContactShadowQuality;
@@ -412,7 +423,8 @@ public:
 		}
 
 		settings.EnableParticleLights = false;
-		settings.EnableContactShadows = false;
+		SetContactShadowsEnabled(false);
+		settings.ShadowCulling.sun = settings.ShadowCulling.torch = settings.ShadowCulling.actors = settings.ShadowCulling.smallActorParts = false;
 		settings.EnableParticleContactShadows = false;
 	}
 	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
@@ -490,8 +502,11 @@ public:
 		using ValidLight2 = ValidLight<2>;
 		using ValidLight3 = ValidLight<3>;
 
+		static void InstallAlphaGeometryGroupGuard();
+
 		static void Install()
 		{
+			InstallAlphaGeometryGroupGuard();
 			stl::write_thunk_call<AIProcess_CalculateLightValue_GetLuminance>(
 				REL::RelocationID(38900, 39946).address() + REL::Relocate(0x1C9, 0x1D3));
 			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);

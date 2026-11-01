@@ -1,0 +1,8 @@
+file(READ "${PROJECT_ROOT}/src/Api/AcceptedDrawD3D.cpp" source)
+string(FIND "${source}" "namespace CSX::Api" begin)
+if(begin LESS 0)
+    message(FATAL_ERROR "Accepted draw observer implementation was not found")
+endif()
+string(SUBSTRING "${source}" ${begin} -1 implementation)
+file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+file(WRITE "${OUTPUT_DIRECTORY}/accepted_draw_d3d_under_test.h" "${implementation}")

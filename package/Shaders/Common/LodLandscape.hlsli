@@ -1,4 +1,4 @@
-#ifndef __LOD_LANDSCAPE_DEPENDENCY_HLSL__
+#if !(defined(__LOD_LANDSCAPE_DEPENDENCY_HLSL__))
 #define __LOD_LANDSCAPE_DEPENDENCY_HLSL__
 
 namespace LodLandscape
@@ -21,4 +21,4 @@ namespace LodLandscape
 	}
 }
 
-#endif  // __LOD_LANDSCAPE_DEPENDENCY_HLSL__
+#endif

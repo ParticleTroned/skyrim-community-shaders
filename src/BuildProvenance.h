@@ -16,4 +16,6 @@ namespace BuildProvenance
 	std::optional<nlohmann::json> ValidateExpectedBuild(const nlohmann::json& a_args);
 	void AttachProducer(nlohmann::json& a_output);
 	void LogRuntimeIdentity();
+	/** Registers the read-only producer registry when the optional DevBench host is available. */
+	void InstallDevBench();
 }

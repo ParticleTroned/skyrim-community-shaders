@@ -31,6 +31,8 @@ namespace Util
 		 * @return Current working directory / "Data"
 		 */
 		std::filesystem::path GetDataPath();
+		std::filesystem::path GetTranslationsPath();
+		std::filesystem::path GetCursorsPath();
 
 		/**
 		 * Gets the CommunityShaders plugin directory path
@@ -63,12 +65,6 @@ namespace Util
 		std::filesystem::path GetIconsPath();
 
 		/**
-		 * Gets the CommunityShaders Cursors directory path
-		 * @return Interface / "Cursors"
-		 */
-		std::filesystem::path GetCursorsPath();
-
-		/**
 		 * Gets the SettingsUser.json file path
 		 * @return CommunityShaderPath / "SettingsUser.json"
 		 */
@@ -97,12 +93,6 @@ namespace Util
 		 * @return CommunityShaderPath / "Themes"
 		 */
 		std::filesystem::path GetThemesPath();
-
-		/**
-		 * Gets the Translations directory path for i18n locale files
-		 * @return CommunityShaderPath / "Translations"
-		 */
-		std::filesystem::path GetTranslationsPath();
 
 		/**
 		 * Gets the Overrides directory path
@@ -210,21 +200,28 @@ namespace Util
 		std::filesystem::path GetRealPathFromDataRelative(const std::filesystem::path& dataRelativePath);
 
 		/**
-		 * Returns the path to the Community Shaders log file in the default SKSE logging folder.
-		 * @return Documents / "My Games" / "Skyrim..." / "SKSE" / "CommunityShaders.log"
+		 * Returns the path to the CSX log file in the default SKSE logging folder.
+		 * @return Documents / "My Games" / "Skyrim..." / "SKSE" / "CSX.log"
 		 */
 		std::filesystem::path GetLogPath();
 
 	}
 
 	/**
+	 * @brief Returns true when the resolved test path is inside basePath.
+	 *
+	 * Existing symlinks and junctions are resolved before comparison. Invalid
+	 * or unresolvable paths fail closed.
+	 */
+	bool IsPathWithinDirectory(
+		const std::filesystem::path& basePath,
+		const std::filesystem::path& testPath);
+
+	/**
 	 * File system utilities for safe file operations
 	 */
 	namespace FileHelpers
 	{
-		/**
-		 * Result of an atomic file write.
-		 */
 		struct AtomicWriteResult
 		{
 			bool success = false;
@@ -233,17 +230,15 @@ namespace Util
 			explicit operator bool() const noexcept { return success; }
 		};
 
-		/**
-		 * Writes text to a uniquely named sibling file, flushes and closes it,
-		 * then atomically replaces the destination.
-		 *
-		 * @param path Destination file.
-		 * @param contents Fully serialized text to write.
-		 * @return AtomicWriteResult with success status and failure details.
-		 */
-		AtomicWriteResult WriteTextFileAtomic(
-			const std::filesystem::path& path,
-			std::string_view contents);
+		AtomicWriteResult WriteTextFileAtomic(const std::filesystem::path& path, std::string_view contents);
+		AtomicWriteResult WriteJsonFileAtomic(const std::filesystem::path& path, const nlohmann::json& json, int indent = 1);
+
+		enum class JsonFileReadResult
+		{
+			Success,
+			NotFound,
+			Error
+		};
 
 		/**
 		 * Result of a file deletion operation
@@ -270,29 +265,39 @@ namespace Util
 		void EnsureDirectoryExists(const std::filesystem::path& path);
 
 		/**
+		 * Reads a JSON file without modifying the output unless parsing succeeds.
+		 * @param path The JSON file to read
+		 * @param json The parsed JSON value
+		 * @param errorMessage Details when the read fails
+		 * @return Whether the file was read, missing, or invalid/unreadable
+		 */
+		JsonFileReadResult ReadJsonFile(
+			const std::filesystem::path& path,
+			nlohmann::json& json,
+			std::string& errorMessage);
+
+		/**
+		 * Writes text through atomic replacement, with a direct-write fallback for virtualized files.
+		 * @param path The file to write
+		 * @param contents The complete file contents
+		 * @param errorMessage Details when the write fails
+		 * @param allowDirectFallback Permit a non-atomic write if virtualized replacement fails
+		 * @param overwriteExisting Replace an existing file; false creates without clobbering and disables fallback
+		 * @return True when either the atomic replacement or direct-write fallback succeeds
+		 */
+		bool WriteTextFileAtomic(
+			const std::filesystem::path& path,
+			std::string_view contents,
+			std::string& errorMessage,
+			bool allowDirectFallback = true,
+			bool overwriteExisting = true);
+
+		/**
 		 * Replaces Windows-invalid filename characters with underscore.
 		 * @param name Filename or path component to sanitize
 		 * @return Sanitized string safe for use as a filename
 		 */
 		std::string SanitizeFileName(std::string name);
-
-		/**
-		 * Serializes JSON to a uniquely named sibling file, flushes and closes it,
-		 * then atomically replaces the destination.
-		 *
-		 * The existing destination is left intact if serialization, writing,
-		 * flushing, closing, or replacement fails. Temporary files are removed
-		 * on a best-effort basis.
-		 *
-		 * @param path Destination JSON file.
-		 * @param json JSON value to serialize.
-		 * @param indent Indentation passed to nlohmann::json::dump().
-		 * @return AtomicWriteResult with success status and failure details.
-		 */
-		AtomicWriteResult WriteJsonFileAtomic(
-			const std::filesystem::path& path,
-			const nlohmann::json& json,
-			int indent = 1);
 	}
 
 	/**

@@ -1,5 +1,16 @@
-#ifndef EXTENDED_MATERIALS_PARALLAX_CORE_HLSLI
+#if !(defined(EXTENDED_MATERIALS_PARALLAX_CORE_HLSLI))
 #define EXTENDED_MATERIALS_PARALLAX_CORE_HLSLI
+
+#if !(defined(LANDSCAPE))
+float SampleMeshParallaxHeight(Texture2D<float4> tex, SamplerState samp, float2 uv, float mipLevel, uint channel, bool applyMeshTV, StochasticOffsets meshOffset)
+{
+#if defined(TERRAIN_VARIATION)
+	[branch] if (applyMeshTV) return StochasticHeightChannel(tex, samp, uv, mipLevel, channel, meshOffset);
+	else
+#endif
+		return tex.SampleLevel(samp, uv, mipLevel)[channel];
+}
+#endif
 
 #if defined(LANDSCAPE)
 float2 GetParallaxCoords(PS_INPUT input, float distance, float2 coords, float mipLevels[6], float maxTexDim, float3 viewDir, float3x3 tbn, float noise, DisplacementParams params[6],
@@ -7,10 +18,11 @@ float2 GetParallaxCoords(PS_INPUT input, float distance, float2 coords, float mi
 	out float pixelOffset,
 	out float weights[6])
 #else
-float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 viewDir, float3x3 tbn, float noise, Texture2D<float4> tex, SamplerState texSampler, uint channel, DisplacementParams params, out float pixelOffset)
+float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 viewDir, float3x3 tbn, float noise, Texture2D<float4> tex, SamplerState texSampler, uint channel, DisplacementParams params, bool applyMeshTV, StochasticOffsets meshOffset, out float pixelOffset)
 #endif
 {
 	pixelOffset = 0.0;
+	const float strength = SharedData::extendedMaterialSettings.ParallaxStrength;
 #if defined(LANDSCAPE)
 	maxTexDim = maxTexDim;
 #endif
@@ -27,39 +39,41 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 	float blendFactor = SharedData::extendedMaterialSettings.EnableHeightBlending ? sqrt(saturate(1 - nearBlendToFar)) : 0;
 	float4 w1 = lerp(input.LandBlendWeights1, smoothstep(0, 1, input.LandBlendWeights1), blendFactor);
 	float2 w2 = lerp(input.LandBlendWeights2.xy, smoothstep(0, 1, input.LandBlendWeights2.xy), blendFactor);
-#	if defined(TRUE_PBR)
+#if defined(TRUE_PBR)
 	float scale = max(params[0].HeightScale * w1.x, max(params[1].HeightScale * w1.y, max(params[2].HeightScale * w1.z, max(params[3].HeightScale * w1.w, max(params[4].HeightScale * w2.x, params[5].HeightScale * w2.y)))));
 	float scalercp = rcp(max(scale, 1e-4));
 	float maxHeight = 0.1 * scale;
-#	else
+#else
 	float scale = 1;
 	float maxHeight = 0.1 * scale;
-#	endif
+#endif
 #else
 	float scale = params.HeightScale;
 	float maxHeight = 0.1 * scale;
 #endif
+	// Scale ray travel independently of the heights used to blend terrain layers.
+	maxHeight *= strength;
 	float minHeight = maxHeight * 0.5;
 
 	float2 resultCoords = coords;
 
 #if defined(LANDSCAPE)
-	if (nearBlendToFar < 1.0) {
+	if (strength > 0.0 && nearBlendToFar < 1.0) {
 #else
-#	if defined(TRUE_PBR)
-	if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0 || nearBlendToFar < 1.0)
-#	else
-	if (nearBlendToFar < 1.0)
-#	endif
+#if defined(TRUE_PBR)
+	if (strength > 0.0 && ((PBRFlags & PBR::Flags::InterlayerParallax) != 0 || nearBlendToFar < 1.0))
+#else
+	if (strength > 0.0 && nearBlendToFar < 1.0)
+#endif
 	{
 #endif
 #if defined(LANDSCAPE)
-		uint numSteps = uint((max(6, scale * 8) * (1.0 - nearBlendToFar)) + 0.5);
-		numSteps = clamp((numSteps + 3) & ~0x03, 4, max(8, scale * 8));
+		uint numSteps = (uint)((max(6, scale * 8) * (1.0 - nearBlendToFar)) + 0.5);
+		numSteps = (uint)clamp((numSteps + 3u) & ~0x03u, 4, max(8, scale * 8));
 #else
 		const float maxSteps = 16;
-		uint numSteps = uint((maxSteps * (1.0 - nearBlendToFar)) + 0.5);
-		numSteps = clamp((numSteps + 3) & ~0x03, 4, max(6, scale * maxSteps));
+		uint numSteps = (uint)((maxSteps * (1.0 - nearBlendToFar)) + 0.5);
+		numSteps = (uint)clamp((numSteps + 3u) & ~0x03u, 4, max(6, scale * maxSteps));
 #endif
 
 		float stepSize = rcp(numSteps);
@@ -86,16 +100,16 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 
 			float4 currHeight;
 #if defined(LANDSCAPE)
-#	if defined(TRUE_PBR)
+#if defined(TRUE_PBR)
 			currHeight = GetTerrainHeightQuadRayMarch(noise, input, currentOffset[0].xy, currentOffset[0].zw, currentOffset[1].xy, currentOffset[1].zw, mipLevels, params, blendFactor, w1, w2, sharedOffset, weights) * scalercp + 0.5;
-#	else
-			currHeight = GetTerrainHeightQuadRayMarch(noise, input, currentOffset[0].xy, currentOffset[0].zw, currentOffset[1].xy, currentOffset[1].zw, mipLevels, params, blendFactor, w1, w2, sharedOffset, weights) + 0.5;
-#	endif
 #else
-			currHeight.x = tex.SampleLevel(texSampler, currentOffset[0].xy, mipLevel)[channel];
-			currHeight.y = tex.SampleLevel(texSampler, currentOffset[0].zw, mipLevel)[channel];
-			currHeight.z = tex.SampleLevel(texSampler, currentOffset[1].xy, mipLevel)[channel];
-			currHeight.w = tex.SampleLevel(texSampler, currentOffset[1].zw, mipLevel)[channel];
+			currHeight = GetTerrainHeightQuadRayMarch(noise, input, currentOffset[0].xy, currentOffset[0].zw, currentOffset[1].xy, currentOffset[1].zw, mipLevels, params, blendFactor, w1, w2, sharedOffset, weights) + 0.5;
+#endif
+#else
+			currHeight.x = SampleMeshParallaxHeight(tex, texSampler, currentOffset[0].xy, mipLevel, channel, applyMeshTV, meshOffset);
+			currHeight.y = SampleMeshParallaxHeight(tex, texSampler, currentOffset[0].zw, mipLevel, channel, applyMeshTV, meshOffset);
+			currHeight.z = SampleMeshParallaxHeight(tex, texSampler, currentOffset[1].xy, mipLevel, channel, applyMeshTV, meshOffset);
+			currHeight.w = SampleMeshParallaxHeight(tex, texSampler, currentOffset[1].zw, mipLevel, channel, applyMeshTV, meshOffset);
 
 			currHeight = AdjustDisplacementNormalized(currHeight, params);
 #endif
@@ -185,29 +199,31 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 	return resultCoords;
 }
 
-#if !defined(LANDSCAPE)
+#if !(defined(LANDSCAPE))
 // https://advances.realtimerendering.com/s2006/Tatarchuk-POM.pdf
-float GetParallaxSoftShadowMultiplier(float2 coords, float mipLevel, float3 L, float sh0, Texture2D<float4> tex, SamplerState texSampler, uint channel, float quality, float noise, DisplacementParams params)
+float GetParallaxSoftShadowMultiplier(float2 coords, float mipLevel, float3 L, float sh0, Texture2D<float4> tex, SamplerState texSampler, uint channel, float quality, float noise, DisplacementParams params, bool applyMeshTV, StochasticOffsets meshOffset)
 {
-	[branch] if (quality > 0.0)
+	float result = 1.0;
+	[branch] if (quality > 0.0 && SharedData::extendedMaterialSettings.ParallaxStrength > 0.0)
 	{
+		sh0 = AdjustDisplacementNormalized(sh0, params);
 		uint tapCount = ParallaxShadowTapCount(quality);
 		float shadowStrength = ShadowIntensity * (4.0 / tapCount);
-		float2 rayDir = L.xy * 0.1 * params.HeightScale;
+		float2 rayDir = L.xy * 0.1 * params.HeightScale * SharedData::extendedMaterialSettings.ParallaxStrength;
 		float4 multipliers = rcp((float4(1, 2, 3, 4) + noise));
 		float4 sh = sh0.xxxx;
-		sh.x = AdjustDisplacementNormalized(tex.SampleLevel(texSampler, coords + rayDir * multipliers.x, mipLevel)[channel], params);
+		sh.x = AdjustDisplacementNormalized(SampleMeshParallaxHeight(tex, texSampler, coords + rayDir * multipliers.x, mipLevel, channel, applyMeshTV, meshOffset), params);
 		if (quality > 0.25)
-			sh.y = AdjustDisplacementNormalized(tex.SampleLevel(texSampler, coords + rayDir * multipliers.y, mipLevel)[channel], params);
+			sh.y = AdjustDisplacementNormalized(SampleMeshParallaxHeight(tex, texSampler, coords + rayDir * multipliers.y, mipLevel, channel, applyMeshTV, meshOffset), params);
 		if (quality > 0.5)
-			sh.z = AdjustDisplacementNormalized(tex.SampleLevel(texSampler, coords + rayDir * multipliers.z, mipLevel)[channel], params);
+			sh.z = AdjustDisplacementNormalized(SampleMeshParallaxHeight(tex, texSampler, coords + rayDir * multipliers.z, mipLevel, channel, applyMeshTV, meshOffset), params);
 		if (quality > 0.75)
-			sh.w = AdjustDisplacementNormalized(tex.SampleLevel(texSampler, coords + rayDir * multipliers.w, mipLevel)[channel], params);
-		return 1.0 - saturate(dot(max(0, sh - sh0), shadowStrength));
+			sh.w = AdjustDisplacementNormalized(SampleMeshParallaxHeight(tex, texSampler, coords + rayDir * multipliers.w, mipLevel, channel, applyMeshTV, meshOffset), params);
+		result = 1.0 - saturate(dot(max(0, sh - sh0), shadowStrength));
 	}
-	return 1.0;
+	return result;
 }
 
 #endif
 
-#endif  // EXTENDED_MATERIALS_PARALLAX_CORE_HLSLI
+#endif

@@ -10,7 +10,7 @@
 using json = nlohmann::json;
 
 /**
- * @brief Manages layered JSON override system for Community Shaders features
+ * @brief Manages layered JSON override system for CSX features
  *
  * This class handles discovery and application of feature setting overrides
  * from external mod files without requiring changes to existing feature code.
@@ -27,6 +27,10 @@ public:
 		std::string featureName;  // Empty for global overrides
 		std::string filePath;
 		json overrideData;
+		// A source file can carry settings which were moved to another feature.
+		// Routing them through the normal feature map preserves override ordering,
+		// hashing, and user customizations without duplicating the source file.
+		std::unordered_map<std::string, json> routedFeatureData;
 		bool isGlobal = false;
 
 		// Metadata from override file
@@ -84,6 +88,14 @@ public:
 	 * @return True if the feature has overrides available
 	 */
 	bool HasFeatureOverrides(const std::string& featureName) const;
+
+	/**
+	 * @brief Manually reapplies all overrides for a specific feature to the provided JSON
+	 * @param featureName The short name of the feature
+	 * @param featureJson JSON object to apply overrides to
+	 * @return Number of overrides applied
+	 */
+	size_t ReapplyFeatureOverrides(const std::string& featureName, json& featureJson);
 
 	/**
 	 * @brief Enables or disables a specific override
@@ -171,7 +183,7 @@ public:
 	bool HasUserOverride(const std::string& featureName) const;
 
 	/**
-	 * @brief Deletes the saved user customization layer for a feature
+	 * @brief Deletes user override file for a feature (used by "Apply Override" button)
 	 * @param featureName The short name of the feature (or "Global")
 	 * @return True if file was deleted or didn't exist
 	 */
@@ -180,7 +192,7 @@ public:
 	/**
 	 * @brief Computes combined hash of all override files for a feature
 	 * Used to detect when overrides have changed (mod update/reinstall)
-	 * @param featureName The short name of the feature
+	 * @param featureName The short name of the feature, or "Global"
 	 * @return Combined hash string, empty if no overrides
 	 */
 	std::string GetCombinedOverrideHash(const std::string& featureName) const;
@@ -194,7 +206,7 @@ public:
 
 	/**
 	 * @brief Gets the merged override settings for a feature (all overrides applied, no user modifications)
-	 * @param featureName The short name of the feature
+	 * @param featureName The short name of the feature, or "Global"
 	 * @param baseSettings The base settings to start with
 	 * @return Settings with all overrides applied
 	 */
@@ -253,6 +265,13 @@ private:
 
 	std::vector<OverrideInfo> overrides;
 	std::unordered_map<std::string, std::vector<size_t>> featureOverrideMap;  // Maps feature name to override indices
+	bool DeleteUserOverrideFile(const std::string& featureName);
+	/** Clean unchanged legacy sources after their destination has been persisted. */
+	bool CompleteLegacyUtilityUserMigration();
+	/** Removes supported values while preserving unknown fields and inactive presets. */
+	bool RetireLegacyUtilityUserSource(const std::string& a_name, const json* a_expected = nullptr);
+	std::unordered_map<std::string, json> pendingLegacyUtilityUserSources;
+	json pendingLegacyUtilityUserPatch = json::object();
 	bool enabled = true;
 	bool discovered = false;
 

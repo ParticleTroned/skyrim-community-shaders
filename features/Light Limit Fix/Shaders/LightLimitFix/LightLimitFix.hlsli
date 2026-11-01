@@ -1,3 +1,7 @@
+#if defined(DEFERRED) || defined(WATER)
+#	include "LightLimitFix/ContactShadowRay.hlsli"
+#endif
+
 namespace LightLimitFix
 {
 
@@ -126,7 +130,8 @@ namespace LightLimitFix
 
 	float2 GetContactShadowScreenDim()
 	{
-		return SharedData::BufferDim.xy;
+		float2 screenDim = SharedData::BufferDim.xy;
+		return screenDim;
 	}
 
 	float2 GetContactShadowNoiseCoord(float2 screenPosition, float2 screenUV, float2 screenDim)
@@ -155,12 +160,16 @@ namespace LightLimitFix
 		float startOffset = min(lerp(0.35, 0.85, screenNoise), traceDistance * 0.5);
 		float3 startVS = viewPosition + rayDirVS * startOffset;
 		float3 endVS = viewPosition + rayDirVS * traceDistance;
-		if (endVS.z <= SharedData::CameraData.y)
+		if (min(startVS.z, endVS.z) <= max(SharedData::CameraData.y, 0.0))
 			return 1.0;
 
+		float2 startUV = FrameBuffer::ViewToUV(startVS, true);
 		float2 endUV = FrameBuffer::ViewToUV(endVS, true);
+		float2 inverseDepth = rcp(float2(startVS.z, endVS.z));
+		uint2 renderDimensions = GetContactShadowRenderDimensions(SharedData::BufferDim.xy, FrameBuffer::DynamicResolutionParams1.xy);
+		float2 activeScreenDim = screenDim * (float2(renderDimensions) / SharedData::BufferDim.xy);
 
-		float2 rayPixels = (endUV - screenUV) * screenDim;
+		float2 rayPixels = (endUV - startUV) * activeScreenDim;
 		float rayPixelsLength = length(rayPixels);
 		uint sampleCount = min(GetContactShadowMaxSamples(isParticle, quality), max(1u, (uint)ceil(rayPixelsLength / 18.0)));
 
@@ -174,14 +183,15 @@ namespace LightLimitFix
 				break;
 
 			float stepT = (i + 1.0 + screenNoise * 0.5) / (sampleCount + 1.0);
-			float3 raySampleVS = lerp(startVS, endVS, stepT);
-			float2 rayUV = lerp(screenUV, endUV, stepT);
+			float rayDepth = GetContactShadowRayDepth(inverseDepth, stepT);
+			float2 rayUV = lerp(startUV, endUV, stepT);
 
 			if (!IsSaturated(rayUV))
 				break;
 
-			float sceneDepth = SharedData::GetScreenDepth(rayUV);
-			float depthDelta = raySampleVS.z - sceneDepth;
+			int2 depthPixel = ClampContactShadowDepthPixel(SharedData::ConvertUVToSampleCoord(rayUV).xy, renderDimensions);
+			float sceneDepth = SharedData::GetScreenDepth(SharedData::DepthTexture.Load(int3(depthPixel, 0)).x);
+			float depthDelta = rayDepth - sceneDepth;
 			if (sceneDepth > minValidSceneDepth) {
 				contactShadow = max(contactShadow, saturate(depthDelta * depthDeltaMult.x) - saturate(depthDelta * depthDeltaMult.y));
 			}

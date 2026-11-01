@@ -1,3 +1,7 @@
+#include "Menu/SettingsPage.h"
+#include "RE/B/BSShaderRenderTargets.h"
+#include "Utils/GpuMemoryBudget.h"
+#include "Utils/UI.h"
 /**
  * @file PerformanceOverlay.cpp
  * @brief Real-time performance monitoring system for Skyrim Community Shaders
@@ -115,6 +119,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ShowDrawCalls,
 	ShowVRAM,
 	ShowCSPasses,
+	ShowRenderTargets,
 	ShowFPS,
 	ShowPreFGFrameTimeGraph,
 	ShowPostFGFrameTimeGraph,
@@ -142,75 +147,80 @@ static const std::unordered_map<RE::BSShader::Type, std::string> kShaderTypeTool
 // VIRTUAL OVERRIDES (Feature.h interface)
 // ============================================================================
 
+void PerformanceOverlay::DrawSettingsEnabledControl()
+{
+	auto* menu = Menu::GetSingleton();
+	Util::Widgets::Checkbox(T("feature.perf_overlay.enabled", "Enabled"), &settings.ShowInOverlay);
+	if (auto tooltip = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(T("feature.perf_overlay.show_in_overlay_tooltip", "Opens performance overlay in a separate window that stays open\neven when the main menu is closed. "));
+		if (menu) {
+			ImGui::TextUnformatted(T("feature.perf_overlay.toggle_with", "Toggle with "));
+			ImGui::SameLine();
+			ImGui::TextColored(menu->GetTheme().StatusPalette.CurrentHotkey, "%s", Util::Input::KeyIdToString(menu->GetSettings().OverlayToggleKey).c_str());
+		}
+	}
+}
+
 void PerformanceOverlay::DrawSettings()
 {
-	auto menu = Menu::GetSingleton();
-	const auto& themeSettings = menu->GetTheme();
-	const auto& menuSettings = menu->GetSettings();
-	ImGui::Checkbox("Enable", &this->settings.ShowInOverlay);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("show_in_overlay_tooltip"), "Opens performance overlay in a separate window that stays open\neven when the main menu is closed. "));
-		ImGui::Text("%s", T(TKEY("toggle_with"), "Toggle with "));
-		ImGui::SameLine();
-		ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s",
-			Util::Input::KeyIdToString(menuSettings.OverlayToggleKey).c_str());
-	}
+	MenuUI::SettingsPage page("PerformanceOverlay", {
+														{ "counters", T("feature.perf_overlay.ui_counters", "Counters"), T("feature.perf_overlay.ui_choose_which_performance_counters_and_graphs_to_show", "Choose which performance counters and graphs to show."), T("feature.perf_overlay.ui_fps_draw_calls_and_graphs", "FPS, draw calls and graphs"), true, true, T("feature.perf_overlay.ui_choose_information_and_layout", "Choose information and layout"), nullptr, nullptr, settings.ShowInOverlay },
+														{ "appearance", T("feature.perf_overlay.appearance", "Appearance"), T("feature.perf_overlay.ui_refine_size_placement_and_update_speed", "Refine size, placement and update speed."), T("feature.perf_overlay.ui_size_opacity_and_position", "Size, opacity and position"), true, true, nullptr, nullptr, nullptr, settings.ShowInOverlay },
+													});
 
-	if (this->settings.ShowInOverlay) {
-		ImGui::Indent();
+	if (!page.Is("counters") && !page.Is("appearance"))
+		return;
 
-		// Display options
-		ImGui::TextUnformatted(T(TKEY("display_options"), "Display Options"));
-		ImGui::Separator();
+	{
+		const auto disabled = Util::DisableGuard(!settings.ShowInOverlay);
+		if (page.Is("counters")) {
+			// Display options
+			MenuUI::SectionHeading(T("feature.perf_overlay.ui_counters_and_graphs", "Counters and graphs"));
 
-		ImGui::Checkbox(T(TKEY("show_fps"), "Show FPS Counter"), &this->settings.ShowFPS);
-		ImGui::Checkbox(T(TKEY("show_draw_calls"), "Show Draw Calls"), &this->settings.ShowDrawCalls);
-		ImGui::Checkbox(T(TKEY("show_vram"), "Show VRAM Usage"), &this->settings.ShowVRAM);
-		ImGui::Checkbox(T(TKEY("show_cs_passes"), "Show CS Render Passes"), &this->settings.ShowCSPasses);
+			Util::Widgets::Checkbox(T("feature.perf_overlay.show_fps", "Show FPS Counter"), &this->settings.ShowFPS);
+			Util::Widgets::Checkbox(T("feature.perf_overlay.show_draw_calls", "Show Draw Calls"), &this->settings.ShowDrawCalls);
+			Util::Widgets::Checkbox(T("feature.perf_overlay.ui_show_csx_render_passes", "Show CSX Render Passes"), &this->settings.ShowCSPasses);
+			DrawRenderTargetControl();
+			Util::Widgets::Checkbox(T("feature.perf_overlay.show_vram", "Show VRAM Usage"), &this->settings.ShowVRAM);
 
-		const bool showFrameGenerationTiming =
-			ShouldShowFrameGenerationTiming();
-		if (this->settings.ShowFPS && showFrameGenerationTiming) {
-			ImGui::Checkbox(T(TKEY("show_pre_fg_graph"), "Show Pre-FG Frametime Graph"), &this->settings.ShowPreFGFrameTimeGraph);
+			bool isFrameGenerationActive = ShouldShowFrameGenerationTiming();
+			if (this->settings.ShowFPS && isFrameGenerationActive) {
+				Util::Widgets::Checkbox(T("feature.perf_overlay.show_pre_fg_graph", "Show Pre-FG Frametime Graph"), &this->settings.ShowPreFGFrameTimeGraph);
 
-			ImGui::Checkbox(T(TKEY("show_post_fg_graph"), "Show Post-FG Frametime Graph"), &this->settings.ShowPostFGFrameTimeGraph);
-			if (ImGui::IsItemHovered()) {
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("%s", T(TKEY("post_fg_graph_tooltip"), "AMD FSR Frame Generation uses calculated timing data (2x Pre-FG).\nNVIDIA DLSS Frame Generation uses the driver's reported flip count."));
+				Util::Widgets::Checkbox(T("feature.perf_overlay.show_post_fg_graph", "Show Post-FG Frametime Graph"), &this->settings.ShowPostFGFrameTimeGraph);
+				if (ImGui::IsItemHovered()) {
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::TextUnformatted(T("feature.perf_overlay.post_fg_graph_tooltip", "AMD FSR Frame Generation uses calculated timing data (2x Pre-FG).\nNVIDIA DLSS Frame Generation uses the driver's reported flip count."));
+					}
 				}
+			} else if (this->settings.ShowFPS) {
+				Util::Widgets::Checkbox(T("feature.perf_overlay.show_frametime_graph", "Show Frametime Graph"), &this->settings.ShowPreFGFrameTimeGraph);
 			}
-		} else if (this->settings.ShowFPS) {
-			ImGui::Checkbox(T(TKEY("show_frametime_graph"), "Show Frametime Graph"), &this->settings.ShowPreFGFrameTimeGraph);
+
+			ImGui::Spacing();
+			ImGui::Spacing();
 		}
+		if (page.Is("appearance")) {
+			// Appearance settings
+			MenuUI::SectionHeading(T("feature.perf_overlay.ui_size_and_timing", "Size and timing"));
 
-		ImGui::Spacing();
-		ImGui::Spacing();
+			Util::Widgets::SliderFloat(T("feature.perf_overlay.text_size", "Text Size"), &this->settings.TextSize, 0.8f, 1.2f, "%.2f");
+			Util::Widgets::SliderFloat(T("feature.perf_overlay.bg_opacity", "Background Opacity"), &this->settings.BackgroundOpacity, 0.0f, 1.0f, "%.2f");
+			Util::Widgets::Checkbox(T("feature.perf_overlay.show_border", "Show Border"), &this->settings.ShowBorder);
+			Util::Widgets::SliderFloat(T("feature.perf_overlay.update_interval", "Update Interval"), &this->settings.UpdateInterval, 0.001f, PerformanceOverlay::Settings::kMaxUpdateInterval, T("feature.perf_overlay.ui_2f_seconds", "%.2f seconds"));
+			Util::Widgets::SliderInt(T("feature.perf_overlay.frame_history_size", "Frame History Size"), &this->settings.FrameHistorySize,
+				this->settings.kMinFrameHistorySize, this->settings.kMaxFrameHistorySize, "%d", ImGuiSliderFlags_AlwaysClamp);
 
-		// Appearance settings
-		ImGui::TextUnformatted(T(TKEY("appearance"), "Appearance"));
-		ImGui::Separator();
-
-		ImGui::SliderFloat(T(TKEY("text_size"), "Text Size"), &this->settings.TextSize, 0.8f, 1.2f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("bg_opacity"), "Background Opacity"), &this->settings.BackgroundOpacity, 0.0f, 1.0f, "%.2f");
-		ImGui::Checkbox(T(TKEY("show_border"), "Show Border"), &this->settings.ShowBorder);
-		ImGui::SliderFloat(T(TKEY("update_interval"), "Update Interval"), &this->settings.UpdateInterval, 0.001f, PerformanceOverlay::Settings::kMaxUpdateInterval, "%.2f seconds");
-		ImGui::SliderInt(T(TKEY("frame_history_size"), "Frame History Size"), &this->settings.FrameHistorySize,
-			this->settings.kMinFrameHistorySize, this->settings.kMaxFrameHistorySize);
-
-		ImGui::Separator();
-		ImGui::Text("%s", T(TKEY("position"), "Position:"));
-		if (ImGui::Button(T(TKEY("reset_position"), "Reset Position"))) {
-			this->settings.PositionSet = false;
+			ImGui::Separator();
+			ImGui::TextUnformatted(T("feature.perf_overlay.position", "Position:"));
+			if (ImGui::Button(T("feature.perf_overlay.reset_position", "Reset Position"))) {
+				settings.PositionSet = false;
+			}
+			ImGui::SameLine();
+			if (ImGui::Button(T("feature.perf_overlay.restore_defaults", "Restore Defaults")))
+				RestoreDefaultSettings();
+			Util::AddTooltip(T("feature.perf_overlay.restore_defaults_tooltip", "Restores Performance Overlay settings to defaults, including graphs, appearance, and update intervals."));
 		}
-		ImGui::SameLine();
-		if (ImGui::Button(T(TKEY("restore_defaults"), "Restore Defaults"))) {
-			RestoreDefaultSettings();
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted(T(TKEY("restore_defaults_tooltip"), "Restores Performance Overlay settings to defaults, including graphs, appearance, and update intervals."));
-		}
-
-		ImGui::Unindent();
 	}
 }
 
@@ -346,7 +356,7 @@ void PerformanceOverlay::DrawOverlay()
 	bool hasGraphs = this->settings.ShowPreFGFrameTimeGraph ||
 	                 (this->settings.ShowPostFGFrameTimeGraph && this->state.showFrameGenerationTiming);
 	float minWidth = 0.0f;
-	const bool hasWideContent = hasGraphs || this->settings.ShowDrawCalls || this->settings.ShowCSPasses;
+	const bool hasWideContent = hasGraphs || this->settings.ShowDrawCalls || this->settings.ShowCSPasses || this->settings.ShowRenderTargets;
 	if (hasWideContent) {
 		minWidth = Settings::kDefaultContentWidth * scale * this->settings.TextSize;
 	}
@@ -419,6 +429,13 @@ void PerformanceOverlay::DrawOverlay()
 		if (needsSeparator)
 			ImGui::Separator();
 		ProfilingRenderer::RenderStatistics(false, false);
+		needsSeparator = true;
+	}
+
+	if (settings.ShowRenderTargets) {
+		if (needsSeparator)
+			ImGui::Separator();
+		DrawRenderTargets(false);
 		needsSeparator = true;
 	}
 
@@ -538,23 +555,15 @@ void PerformanceOverlay::DrawFPS()
 
 void PerformanceOverlay::DrawVRAM()
 {
-	auto menu = Menu::GetSingleton();
-	if (!menu)
-		return;
-	auto dxgiAdapter3 = menu->GetDXGIAdapter3();
-	if (!dxgiAdapter3)
-		return;
-	DXGI_QUERY_VIDEO_MEMORY_INFO videoMemoryInfo{};
-	HRESULT hr = dxgiAdapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &videoMemoryInfo);
-
-	// Only proceed if the call succeeded and Budget is not zero
-	if (SUCCEEDED(hr) && videoMemoryInfo.Budget > 0) {
+	const auto observation = Util::GpuMemoryBudget::Get().Sample(globals::d3d::device);
+	const auto& videoMemoryInfo = observation.local;
+	if (observation.Fresh(GetTickCount64()) && videoMemoryInfo.Budget > 0) {
 		float currentGpuUsage = videoMemoryInfo.CurrentUsage / (1024.f * 1024.f * 1024.f);
 		float totalGpuMemory = videoMemoryInfo.Budget / (1024.f * 1024.f * 1024.f);
 		float percent = currentGpuUsage / totalGpuMemory;
 
 		// Center the VRAM text
-		ImGui::Text(T(TKEY("vram_usage"), "VRAM Usage:"));
+		ImGui::TextUnformatted(T(TKEY("vram_usage"), "VRAM Usage:"));
 
 		// Use a centered text format for the numeric values
 		std::string vramText = std::format("{:.2f}GB/{:.2f}GB ({:.1f}%)", currentGpuUsage, totalGpuMemory, 100 * percent);
@@ -573,7 +582,7 @@ void PerformanceOverlay::DrawVRAM()
 		ImGui::ProgressBar(percent, ImVec2(ImGui::GetWindowWidth() * 0.9f, 0.0f), "");
 	} else {
 		// Display a fallback message if we couldn't get the VRAM info
-		ImGui::Text("%s", T(TKEY("vram_not_available"), "VRAM Usage: Not available"));
+		ImGui::TextUnformatted(T(TKEY("vram_not_available"), "VRAM Usage: Not available"));
 	}
 }
 
@@ -2074,3 +2083,136 @@ void PerformanceOverlay::UpdateGraphValues()
 	}
 }
 #undef I18N_KEY_PREFIX
+
+namespace
+{
+	std::string RenderTargetBindingName(uint32_t depthStencil, uint32_t renderTarget)
+	{
+		std::string name;
+		if (renderTarget != static_cast<uint32_t>(RE::RENDER_TARGETS::kNONE)) {
+			const auto label = magic_enum::enum_name(static_cast<RE::RENDER_TARGETS::RENDER_TARGET>(renderTarget));
+			name = label.empty() ? std::format("RT {}", renderTarget) : std::string(label);
+		}
+		if (depthStencil != static_cast<uint32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kNONE)) {
+			const auto label = magic_enum::enum_name(static_cast<RE::RENDER_TARGETS_DEPTHSTENCIL::RENDER_TARGET_DEPTHSTENCIL>(depthStencil));
+			if (!name.empty())
+				name += " + ";
+			name += label.empty() ? std::format("DS {}", depthStencil) : std::string(label);
+			name += " (depth)";
+		}
+		return name.empty() ? "None" : name;
+	}
+}
+
+void PerformanceOverlay::SetRenderTargetsEnabled(bool enabled)
+{
+	settings.ShowRenderTargets = enabled;
+	if (!enabled) {
+		overlayRenderTargetsRequested = profilingRenderTargetsRequested = false;
+		if (globals::profiler)
+			globals::profiler->RequestRenderTargetCapture(false);
+	}
+}
+
+void PerformanceOverlay::DrawRenderTargetControl()
+{
+	bool enabled = settings.ShowRenderTargets;
+	if (Util::Widgets::Checkbox(T("feature.perf_overlay.show_render_targets", "Show Render Targets"), &enabled))
+		SetRenderTargetsEnabled(enabled);
+	Util::AddTooltip(T("feature.perf_overlay.collect_approximate_gpu_target_intervals_only_while_this_table_is_vi", "Collect approximate GPU target intervals only while this table is visible and Profiling is enabled. The overlay also requires its Enabled switch. Closing both views stops collection and releases its queries."));
+}
+
+void PerformanceOverlay::DrawRenderTargetProfiling()
+{
+	if (ImGui::CollapsingHeader(T("feature.perf_overlay.render_targets", "Render Targets"))) {
+		DrawRenderTargetControl();
+		if (settings.ShowRenderTargets)
+			DrawRenderTargets(true);
+	}
+}
+
+void PerformanceOverlay::DrawRenderTargets(bool profilingView)
+{
+	if (!loaded || !globals::profiler || !globals::profiler->IsInitialized()) {
+		ImGui::TextDisabled(T("feature.perf_overlay.render_target_profiler_is_unavailable", "Render target profiler is unavailable."));
+		return;
+	}
+	if (!globals::profiler->IsUserEnabled()) {
+		ImGui::TextDisabled(T("feature.perf_overlay.render_target_profiling_is_off_enable_profiling_to_collect", "Render target profiling is off. Enable Profiling to collect."));
+		return;
+	}
+	(profilingView ? profilingRenderTargetsRequested : overlayRenderTargetsRequested) = true;
+	const auto& stats = globals::profiler->GetRenderTargetStats();
+	ImGui::TextUnformatted(T("feature.perf_overlay.render_targets_approximate_d3d11_gpu_intervals", "Render targets: approximate D3D11 GPU intervals"));
+	Util::AddTooltip(RenderTargetStats::kCoverage);
+	ImGui::TextDisabled(T("feature.perf_overlay.includes_intervening_work_and_waits_nr_queues_excluded", "Includes intervening work and waits. NR queues excluded."));
+	if (stats.HasResourceFailure())
+		ImGui::TextDisabled(T("feature.perf_overlay.target_collection_failed_toggle_show_render_targets_off_to_retry", "Target collection failed. Toggle Show Render Targets off to retry."));
+	if (stats.IsSpanLimitHit() || stats.IsBindingLimitHit())
+		ImGui::TextDisabled(T("feature.perf_overlay.collection_limit_reached_this_view_is_incomplete", "Collection limit reached; this view is incomplete."));
+	if (!stats.HasGpuSample())
+		ImGui::TextDisabled(T("feature.perf_overlay.waiting_for_a_valid_gpu_timing_sample", "Waiting for a valid GPU timing sample."));
+	else
+		ImGui::Text("Timed intervals: %.2f ms", stats.GetTimedMs());
+	const auto rows = stats.GetRows();
+	if (rows.empty())
+		return;
+	const auto flags = ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_ScrollY;
+	const float height = ImGui::GetTextLineHeightWithSpacing() * static_cast<float>(std::min<size_t>(rows.size() + 2, 12));
+	if (ImGui::BeginTable("##RenderTargets", 3, flags, ImVec2(0.0f, height))) {
+		const SKSE::stl::scope_exit endTable([] { ImGui::EndTable(); });
+		ImGui::TableSetupScrollFreeze(0, 1);
+		ImGui::TableSetupColumn("Target binding");
+		ImGui::TableSetupColumn("Draw calls");
+		ImGui::TableSetupColumn("GPU interval (ms)");
+		ImGui::TableHeadersRow();
+		for (const auto& row : rows) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(RenderTargetBindingName(row.depthStencil, row.renderTarget).c_str());
+			ImGui::TableNextColumn();
+			ImGui::Text("%.0f", row.drawCalls);
+			ImGui::TableNextColumn();
+			if (stats.HasGpuSample())
+				ImGui::Text("%.2f", row.gpuMs);
+			else
+				ImGui::TextUnformatted("--");
+		}
+	}
+}
+
+void PerformanceOverlay::UpdateRenderTargetCapture()
+{
+	const auto* menu = globals::menu;
+	const bool visible = menu && ((overlayRenderTargetsRequested && settings.ShowInOverlay && menu->overlayVisible) ||
+									 (profilingRenderTargetsRequested && menu->IsEnabled));
+	if (globals::profiler)
+		globals::profiler->RequestRenderTargetCapture(loaded && settings.ShowRenderTargets && visible);
+	overlayRenderTargetsRequested = profilingRenderTargetsRequested = false;
+}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+json PerformanceOverlay::GetRenderTargetDiagnostics() const
+{
+	json result = { { "enabled", settings.ShowRenderTargets }, { "overlayEnabled", settings.ShowInOverlay },
+		{ "profilingEnabled", globals::profiler && globals::profiler->IsUserEnabled() },
+		{ "active", globals::profiler && globals::profiler->IsRenderTargetCaptureActive() },
+		{ "coverage", RenderTargetStats::kCoverage }, { "includedInPassTotals", false } };
+	if (!globals::profiler)
+		return result;
+	const auto& stats = globals::profiler->GetRenderTargetStats();
+	result["allocatedQueries"] = globals::profiler->GetRenderTargetQueryCount();
+	result["resolvedFrames"] = stats.GetResolvedFrames();
+	result["invalidFrames"] = stats.GetInvalidFrames();
+	result["gpuSampleValid"] = stats.HasGpuSample();
+	result["timedGpuMs"] = stats.HasGpuSample() ? json(stats.GetTimedMs()) : json(nullptr);
+	result["spanLimitHit"] = stats.IsSpanLimitHit();
+	result["bindingLimitHit"] = stats.IsBindingLimitHit();
+	result["resourceFailure"] = stats.HasResourceFailure();
+	result["rows"] = json::array();
+	for (const auto& row : stats.GetRows())
+		result["rows"].push_back({ { "name", RenderTargetBindingName(row.depthStencil, row.renderTarget) }, { "depthStencil", row.depthStencil }, { "renderTarget", row.renderTarget },
+			{ "drawCalls", row.drawCalls }, { "gpuMs", stats.HasGpuSample() ? json(row.gpuMs) : json(nullptr) } });
+	return result;
+}
+#endif

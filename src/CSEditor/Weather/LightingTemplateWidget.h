@@ -73,8 +73,11 @@ public:
 	void LoadFromGameSettings();
 	void ApplyChanges() override;
 	void RevertChanges() override;
+	UndoRestoreAction CaptureUndoState() const override;
+	UndoRestoreAction CaptureBaselineState() const override;
 
 private:
+	void MarkSavedState() override { originalSettings = settings; }
 	void DrawDALCSettings();
 	void DrawBasicSettings();
 	void DrawFogSettings();

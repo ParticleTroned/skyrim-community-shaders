@@ -8,7 +8,7 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float4 Color: SV_Target0;
+	float4 Color : SV_Target0;
 };
 
 #if defined(PSHADER)
@@ -38,12 +38,15 @@ cbuffer PerGeometry : register(b2)
 	float4 params7 : packoffset(c7);
 };
 
-float3 SampleBlurredWithSoftening(float2 uv, float2 pixelPos, float2 texelSize)
+float3 SampleBlurredWithSoftening(float2 uv, float2 originalUv, float2 pixelPos, float2 texelSize)
 {
 	float3 result = 0.0f;
 	[unroll] for (int i = 0; i < BlurDither::kSampleCount; i++)
 	{
-		result += BlurredTex.Sample(BlurredSampler, uv + BlurDither::GetOffset(pixelPos, i) * texelSize).xyz;
+		float2 sampleUv = FrameBuffer::ClampDynamicResolutionAdjustedScreenPosition(
+			uv + BlurDither::GetOffset(pixelPos, i) * texelSize,
+			originalUv);
+		result += BlurredTex.Sample(BlurredSampler, sampleUv).xyz;
 	}
 
 	return result / (float)BlurDither::kSampleCount;
@@ -72,7 +75,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 blurColor;
 	[branch] if (params5.w > 0.5f)
 	{
-		blurColor = SampleBlurredWithSoftening(adjustedTexCoord, input.Position.xy, invScreenRes.xy * DOF_DOWNSAMPLE_FACTOR);
+		blurColor = SampleBlurredWithSoftening(adjustedTexCoord, input.TexCoord, input.Position.xy, invScreenRes.xy * DOF_DOWNSAMPLE_FACTOR);
 	}
 	else
 	{
@@ -82,22 +85,22 @@ PS_OUTPUT main(PS_INPUT input)
 	float mask = 1;
 	float4 dofParams = params;
 	float4 dofParams2 = params2;
-#	if defined(MASKED)
+#if defined(MASKED)
 	mask = MaskTex.Sample(ImageSampler, adjustedTexCoord).x;
 	dofParams = lerp(params, params6, mask);
 	dofParams2 = lerp(params2, params7, mask);
-#	endif
+#endif
 
 	float2 dofBlurRange = float2(dofParams2.x, dofParams.x);
 	float focusDistance = dofParams.y;
 
-#	if !defined(MASKED)
+#if !(defined(MASKED))
 	if (params3.z > 0) {
 		focusDistance = AvgDepthTex.Sample(AvgDepthSampler, 0).x;
 		float depthFactor = saturate(focusDistance * params3.z - params3.w);
 		dofBlurRange = lerp(float2(params2.x, params.x), float2(params2.w, params.y), depthFactor);
 	}
-#	endif
+#endif
 
 	float depthCC = DepthTex.Sample(DepthSampler, adjustedTexCoord);
 
@@ -136,24 +139,24 @@ PS_OUTPUT main(PS_INPUT input)
 		finalDepth = Math::GetFinalDepth(depth, near, far);
 
 		float dofStrength = 0;
-#	if defined(DISTANT)
+#if defined(DISTANT)
 		dofStrength = (finalDepth - focusDistance) / dofBlurRange.y;
-#	else
+#else
 		if ((focusDistance > finalDepth || mask == 0) && dofParams2.y != 0) {
 			dofStrength = (focusDistance - finalDepth) / dofBlurRange.y;
 		} else if (finalDepth > focusDistance && dofParams2.z != 0) {
 			dofStrength = (finalDepth - focusDistance) / dofBlurRange.y;
 		}
-#	endif
+#endif
 
 		blurFactor = saturate(dofStrength) * (dofBlurRange.x * (1 - 0.5 * crossSection));
 	}
 
 	float3 finalColor = lerp(imageColor, blurColor, blurFactor);
-#	if defined(FOGGED)
+#if defined(FOGGED)
 	float fogFactor = (params4.w * saturate((finalDepth - params5.y) / (params5.x - params5.y))) * mask;
 	finalColor = lerp(finalColor, params4.xyz, fogFactor);
-#	endif
+#endif
 
 	psout.Color = float4(finalColor, 1);
 

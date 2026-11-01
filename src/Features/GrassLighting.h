@@ -4,6 +4,9 @@
 
 struct GrassLighting : Feature
 {
+private:
+	static constexpr std::string_view MOD_ID = "86502";
+
 public:
 	static constexpr float kGlossinessMin = 1.0f;
 	static constexpr float kGlossinessMax = 100.0f;
@@ -17,6 +20,8 @@ public:
 	virtual inline std::string GetName() override { return "Grass Lighting"; }
 	virtual std::string GetDisplayName() override { return T("feature.grass_lighting.name", "Grass Lighting"); }
 	virtual inline std::string GetShortName() override { return "GrassLighting"; }
+	virtual std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
+	virtual bool IsCore() const override { return true; }
 	virtual inline std::string_view GetShaderDefineName() override { return "GRASS_LIGHTING"; }
 	virtual bool HasShaderDefine(RE::BSShader::Type shaderType) override { return shaderType == RE::BSShader::Type::Grass; };
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kGrass; }
@@ -57,6 +62,7 @@ public:
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool) override;
+	virtual json CapturePerformanceSettingsState() const override;
 	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
 	{
 		return { 11,

@@ -3,6 +3,10 @@
 #include <BuildProvenance.generated.h>
 #include <nlohmann/json.hpp>
 #include <winver.h>
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include <DevBenchAPI.h>
+#	include <atomic>
+#endif
 
 namespace
 {
@@ -54,6 +58,40 @@ namespace
 
 namespace BuildProvenance
 {
+	void InstallDevBench()
+	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		static std::atomic_bool registered{ false };
+		auto* host = DevBenchAPI::GetDevBenchInterface001();
+		if (!host || registered.exchange(true, std::memory_order_acq_rel))
+			return;
+		static constexpr auto descriptor = R"({"description":"Read-only CSX producer registry. Reports the embedded build identity, source commit and dirty-source state; physical DLL hashing remains the deployment harness responsibility. This endpoint does not claim any rendering service is available.","inputSchema":{"type":"object","required":["contractMajor","action","clientId","commandId"],"properties":{"contractMajor":{"type":"integer","const":1},"action":{"type":"string","enum":["registry","capabilities"]},"clientId":{"type":"string","minLength":1,"maxLength":128},"commandId":{"type":"string","minLength":1,"maxLength":128}}}})";
+		host->RegisterTool("communityshaders.build_api", descriptor, [](void*, const char* request, void* sink, DevBenchAPI::WriteFn write) noexcept {
+				try {
+					const auto args = json::parse(request ? request : "{}");
+					const auto action = args.at("action").get<std::string>();
+					if (!args.at("contractMajor").is_number_integer() || args.at("contractMajor") != 1 ||
+						(action != "registry" && action != "capabilities"))
+						throw std::invalid_argument("unsupported producer registry request");
+					for (const auto field : { "clientId", "commandId" }) {
+						const auto value = args.at(field).get<std::string>();
+						if (value.empty() || value.size() > 128)
+							throw std::invalid_argument("invalid clientId or commandId");
+					}
+					const json result{ { "ok", true }, { "contractMajor", 1 }, { "action", action },
+						{ "producer", GetProducer() }, { "readOnly", true } };
+					const auto text = result.dump();
+					write(sink, text.c_str());
+				} catch (const std::exception& error) {
+					const auto text = json{ { "ok", false }, { "error", error.what() } }.dump();
+					write(sink, text.c_str());
+				} catch (...) {
+					write(sink, R"({"ok":false,"error":"producer registry failure"})");
+				} }, nullptr);
+		logger::info("Registered communityshaders.build_api with embedded build {}", GetBuildId());
+#endif
+	}
+
 	std::string_view GetBuildId() { return CSX::EmbeddedBuildProvenance::BUILD_ID; }
 	std::string_view GetShaderCacheAbiId() { return CSX::EmbeddedBuildProvenance::SHADER_CACHE_ABI_ID; }
 	const std::string& GetArtifactSha256() { return GetRuntimeIdentity().artifactSha256; }

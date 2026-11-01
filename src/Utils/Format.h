@@ -129,5 +129,5 @@ namespace Util
 	 * This matches the suffix logic used by SIE::SShaderCache::GetDiskPath so
 	 * that any code building a cache path by hand stays in sync.
 	 */
-	std::string GetShaderDefinesSuffix(const std::string& definesStr);
+	std::string GetShaderDefinesSuffix(std::string_view definesStr);
 }  // namespace Util

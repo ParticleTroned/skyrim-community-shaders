@@ -1,12 +1,20 @@
 #pragma once
-#include "../Features/InverseSquareLighting/Common.h"
+#include "Features/InverseSquareLighting/Common.h"
 #include "LightPicker.h"
-#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <set>
+#include <string>
 #include <string_view>
+#include <unordered_map>
+#include <vector>
+
+namespace Util::Widgets
+{
+	class ComboBox;
+}
 
 namespace RE
 {
@@ -15,22 +23,33 @@ namespace RE
 
 struct LightEditor
 {
-	bool enabled = false;
-	bool disableInvSqLights = false;
-	bool disableRegularLights = false;
-	bool shadowsOnly = false;
-
 	/** @brief Draw the light editor ImGui settings panel. */
 	void DrawSettings();
+	/** @brief Enables or disables editing, restoring live state and cancelling transient work on disable. */
+	void SetEnabled(bool value);
+	[[nodiscard]] bool IsEnabled() const { return enabled; }
+	/** @brief Starts a mesh-pick operation when editing is available. */
+	void BeginPick();
+	/** @brief Cancels the active mesh-pick operation. */
+	void CancelPick();
+	[[nodiscard]] bool IsPicking() const { return picker.IsPicking(); }
+	[[nodiscard]] bool ShouldDisableLight(bool inverseSquare) const;
+	/** @brief True while a reference still needs deferred attach or refresh cleanup. */
+	[[nodiscard]] bool HasDeferredWork() const;
 
 	/** @brief Gather all active scene lights into the internal list for display and editing. */
 	void GatherLights();
+	/** @brief Updates world picking after the viewport has established the current frame's mapping. */
+	void UpdatePicker();
 
 	/** @brief Advance delayed reload/ref-refresh work even while the editor window is closed. */
 	void TickDeferredWork();
 
 	/** @brief Reset all light overrides to their original values. */
 	void ResetOverrides();
+
+	/** @brief Restore the editor to its disabled default state. */
+	void RestoreDefaultSettings();
 
 	/**
 	 * @brief Apply editor overrides to a specific light during rendering.
@@ -40,9 +59,12 @@ struct LightEditor
 	 */
 	bool ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDataExt* runtimeData) const;
 
-	static void ObserveWaterPass(RE::BSRenderPass* pass);
-
 private:
+	bool enabled = false;
+	bool disableInvSqLights = false;
+	bool disableRegularLights = false;
+	bool shadowsOnly = false;
+
 	struct LightInfo
 	{
 		bool isSelected = false;
@@ -86,28 +108,10 @@ private:
 		RE::NiPoint3 pos = {};
 	};
 
-	struct WaterRoutingDiagnostics
-	{
-		bool available = false;
-		bool observerAvailable = false;
-		bool portalStrict = false;
-		bool portalGraphPresent = false;
-		bool affectWater = false;
-		bool shadow = false;
-		bool llfWaterCandidate = false;
-		bool skyrimWaterPassEligible = false;
-
-		std::atomic<RE::BSLight*> target{ nullptr };
-		std::atomic<uint64_t> waterPassCount{ 0 };
-		std::atomic<uint64_t> matchedWaterPassCount{ 0 };
-		std::atomic<uint32_t> lastPassEnum{ 0 };
-		std::atomic<uint32_t> lastSceneLightIndex{ 0 };
-		std::atomic<uint32_t> lastSceneLightCount{ 0 };
-	};
-
 	bool extendedLogMode = false;
 	bool saveColorToLP = false;
 	bool useExternalEmittance = false;
+	bool externalEmittanceChanged = false;
 	bool lpMatchFound = false;
 	bool lpRawDataLoaded = false;
 	bool lpInWhitelist = false;
@@ -150,6 +154,7 @@ private:
 
 	RE::NiPointer<RE::NiLight> hoverFlashNiLight;
 	float hoverFlashOriginalFade = 0.f;
+	float hoverFlashOnFade = 1.0f;
 	bool hoverFlashVisible = true;
 	double hoverFlashLastToggle = 0.0;
 
@@ -165,15 +170,22 @@ private:
 		std::string ownerModelPath;
 		std::string ownerEditorId;
 		bool isLPLight = false;
+		bool ignoreScale = false;
+		float fadeFactor = 1.0f;
+		float radiusFactor = 1.0f;
+		float sizeFactor = 1.0f;
+		ISLCommon::RuntimeLightDataExt runtimeSnapshot = {};
 	};
 
 	LPLightInfo lpInfo;
-	static inline WaterRoutingDiagnostics waterRoutingDiagnostics;
 	RE::NiPointer<RE::NiLight> activeNiLight;
 	RE::NiPointer<RE::BSLight> activeBsLight;
-	RE::TESObjectREFR* activeRefr = nullptr;
+	RE::ObjectRefHandle activeRefr;
 	RE::TESObjectLIGH* activeLigh = nullptr;
 	bool activeIsRef = false;
+
+	/** @brief Resolves and retains the active reference for the duration of a caller's use. */
+	RE::NiPointer<RE::TESObjectREFR> GetActiveRefr() const { return activeRefr.get(); }
 
 	// External-emittance color preview (CS-driven, selected bulb only): the game only drives emittance
 	// color for refs in the cell's emittance maps, so we track the source region's live color ourselves.
@@ -186,9 +198,10 @@ private:
 	std::string originalExternalEmittanceEdid;
 	bool originalUseExternalEmittance = false;
 
-	// Deferred 3D rebuild after a light-flag edit: the engine's async despawn/respawn can complete out of
-	// order if issued back-to-back, so Disable now and Enable a few frames later (coalescing repeat edits).
+	// Deferred 3D rebuild after a light-flag edit: schedule Disable outside light-list iteration, then
+	// Enable a few frames later so async rebuilds cannot strand or race a reference.
 	RE::ObjectRefHandle pendingRefreshRefr;
+	bool pendingRefreshNeedsDisable = false;
 	int32_t pendingRefreshFrames = 0;
 	static constexpr int32_t kRefreshEnableDelay = 3;
 
@@ -202,13 +215,12 @@ private:
 	void RestoreOriginal();
 	/** @brief Writes shadowDepthBias to the active shadow light's runtime data. */
 	void ApplyShadowDepthBias();
-	void DrawWaterRoutingDiagnostics() const;
-	void UpdateWaterRoutingDiagnostics(RE::BSLight* bsLight, RE::NiLight* niLight);
-	static void ClearWaterRoutingDiagnostics();
-	/** @brief Disables refr now and schedules its Enable kRefreshEnableDelay frames later to force a light-flag rebuild. */
+	/** @brief Queues a reference rebuild outside active-light iteration. */
 	void RequestRefRefresh(RE::TESObjectREFR* refr);
 	/** @brief Counts down a pending refresh and fires the deferred Enable; call once per frame before any early-out. */
 	void UpdateRefRefresh();
+	/** @brief Completes or safely cancels delayed reference work before editor state is discarded. */
+	void FinishDeferredCleanup();
 
 	/** @brief Builds the cached LIGH form list on first use. */
 	static void EnsureLighFormListBuilt();
@@ -250,10 +262,10 @@ private:
 	bool SaveAsSeparateEntry(bool includeColor = false);
 	/** @brief Deletes the bulb's matching light entry (and its top-level entry if it was the only light); false on no match. */
 	bool DeleteFromLightPlacer();
-	/** @brief Builds a fresh "data" object from editor state, carrying over unmanaged keys from existingData. */
+	/** @brief Updates managed fields in a copy of an existing data object, preserving all other keys and ordering. */
 	nlohmann::ordered_json BuildEditedData(const nlohmann::ordered_json& existingData, bool includeColor) const;
-	/** @brief Re-orders every light's data/entry keys into the canonical layout. */
-	static void NormalizeConfig(nlohmann::ordered_json& configArray);
+	/** @brief Validates all authored values before any persistent JSON mutation. */
+	bool ValidateCurrentLightValues() const;
 
 	/** @brief Identifies an LP config entry to match: from the selected bulb or the Add-Light picked mesh. */
 	struct MatchContext
@@ -262,7 +274,7 @@ private:
 		std::string ownerEditorId;
 		RE::FormID baseFormId = 0;  // base object FormID of the owner ref
 		std::string lightEDID;
-		RE::TESObjectREFR* refr = nullptr;
+		RE::NiPointer<RE::TESObjectREFR> refr;
 	};
 
 	/** @brief Builds a MatchContext from the currently selected LP bulb. */
@@ -282,7 +294,7 @@ private:
 	bool LoadLPConfig(nlohmann::ordered_json& out) const;
 	/** @brief True if a top-level config entry's models/formIDs identify the context's owner ref. */
 	static bool EntryMatchesContext(const nlohmann::ordered_json& entry, const MatchContext& ctx);
-	/** @brief Finds the light entry matching ctx (optionally applying LP filters), or nullptr. */
+	/** @brief Finds exactly one matching light entry, refusing ambiguous owner or fallback matches. */
 	nlohmann::ordered_json* FindMatchingLightEntry(nlohmann::ordered_json& configArray, const MatchContext& ctx, bool applyFilters = true) const;
 	/** @brief Where a matched light entry lives: its top-level entry + index and "lights" array + index. */
 	struct LightEntryLocation
@@ -298,10 +310,11 @@ private:
 	bool ModifyLPFilterList(bool isWhiteList, bool add);
 	/** @brief Reloads the selected bulb's raw authored state from its LP JSON entry. */
 	bool RefreshLPJsonState();
-	/** @brief Owner-reference scale Light Placer bakes into fade/radius/size for the active LP bulb (1.0 if non-LP or IgnoreScale). */
-	float GetLPRefScale() const;
-	/** @brief Scale used by the original LP state, independent of unsaved IgnoreScale edits. */
-	float GetOriginalLPRefScale() const;
+	/** @brief Effective factors inferred from the live LP bulb for authored fade/radius/size reconstruction. */
+	float GetLPFactor(float inferredFactor) const;
+	float GetLPFadeFactor() const;
+	float GetLPRadiusFactor() const;
+	float GetLPSizeFactor() const;
 	/** @brief Applies the LP flag set to the current runtime light flags. */
 	void SyncLPFlagsToRuntime();
 	/** @brief Mirrors the InverseSquare/Linear falloff bits of an LP flag set onto a runtime light's flags. */
@@ -313,9 +326,12 @@ private:
 	// Add-Light-to-Mesh workflow state.
 	LightPicker picker;
 	bool addLightPopupOpen = false;
+	bool addLightPopupCloseRequested = false;
 	LightPicker::PickedMesh pickedMesh;
-	// The picked mesh's live reference, or nullptr if the handle is stale.
-	RE::TESObjectREFR* PickedRefr() const { return pickedMesh.refrHandle.get().get(); }
+	// The picked mesh's retained live reference, or nullptr if the handle is stale.
+	RE::NiPointer<RE::TESObjectREFR> PickedRefr() const { return pickedMesh.refrHandle.get(); }
+	/** @brief Resolves the picked reference and verifies that its base identity still matches the pick. */
+	RE::NiPointer<RE::TESObjectREFR> ValidatedPickedRefr() const;
 
 	struct AttachedBulb
 	{
@@ -390,12 +406,14 @@ private:
 
 	/** @brief Draws the "Select Mesh" button that starts the light picker. */
 	void DrawAddLightButton();
+	/** @brief Clears mesh-specific popup state and optionally requests closure on the next modal submission. */
+	void ResetAddLightPopupState(bool requestClose);
 	/** @brief Draws the Add-Light modal (add/edit/whitelist/blacklist a bulb on the picked mesh). */
 	void DrawAddLightPopup();
 	/** @brief Draws the modal confirming deletion of the selected LP light entry. */
 	void DrawDeleteConfirmation();
 	/** @brief Opens a persistent-buffer searchable combo (Add-Light style); true while open, with the filter in filterOut. */
-	static bool BeginSearchableCombo(const char* label, const char* preview, const char* searchId,
+	static std::unique_ptr<Util::Widgets::ComboBox> BeginSearchableCombo(const char* label, const char* preview, const char* searchId,
 		char* searchBuf, size_t searchBufSize, std::string_view& filterOut, bool openNow);
 	/** @brief True when an item should be shown for the given combo filter (empty matches everything). */
 	static bool MatchesComboFilter(std::string_view filter, const std::string& text);

@@ -52,10 +52,10 @@ float3 GetSamplingVector(uint3 ThreadID, in RWTexture2DArray<float4> OutputTextu
 	float4 color = EnvCaptureTexture.SampleLevel(LinearSampler, uv, 0);
 
 	float mipLevel = 0.0;
-	const float maxMipLevel = SharedData::cubemapCreatorSettings.MaxMipLevel;
+	const float maxMipLevel = max(SharedData::cubemapCreatorSettings.MaxMipLevel, 1.0);
 	const float mipLevels = maxMipLevel + 1.0;
 
-#if !defined(REFLECTIONS)
+#if !(defined(REFLECTIONS))
 	float k = 1.5;
 	float brightness = k;
 #endif
@@ -76,7 +76,7 @@ float3 GetSamplingVector(uint3 ThreadID, in RWTexture2DArray<float4> OutputTextu
 			tempColor += EnvCaptureTexture.SampleLevel(LinearSampler, float3(0.0, 0.0, 1.0), fallbackMipLevel);
 		}
 
-#if !defined(REFLECTIONS)
+#if !(defined(REFLECTIONS))
 		tempColor *= brightness;
 		brightness *= k;
 #endif
@@ -95,6 +95,8 @@ float3 GetSamplingVector(uint3 ThreadID, in RWTexture2DArray<float4> OutputTextu
 #if defined(REFLECTIONS)
 	color.rgb = lerp(color.rgb, Color::IrradianceToLinear(ReflectionsTexture.SampleLevel(LinearSampler, uv, 0.0).rgb), saturate(mipLevel / maxMipLevel));
 #else
+	if (color.a <= 0.0001)
+		color.rgb = Color::IrradianceToLinear(Color::Ambient(max(0.0, SharedData::GetAmbient(uv))));
 	color.rgb = lerp(color.rgb, color.rgb * DefaultCubemap.SampleLevel(LinearSampler, uv, 0.0).xyz, saturate(mipLevel / maxMipLevel));
 #endif
 

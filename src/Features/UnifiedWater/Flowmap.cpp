@@ -1,5 +1,7 @@
-﻿#include "Flowmap.h"
+#include "Flowmap.h"
 
+#include "Utils/D3DContextProtection.h"
+#include "Utils/RendererContextAccess.h"
 #include "Utils/StringUtils.h"
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
@@ -216,29 +218,10 @@ bool Flowmap::GenerateFlowmap(bool useMips, std::filesystem::path& generatedPath
 		return false;
 	}
 
-	static winrt::com_ptr<REX::W32::ID3D11Multithread> multithread;
-	if (SUCCEEDED(ctx->QueryInterface(multithread.put()))) {
-		multithread->SetMultithreadProtected(TRUE);
-	} else {
-		logger::error("[Unified Water] [Flowmap] ID3D11Multithread not available");
+	if (FAILED(Util::ValidateImmediateContext(ctx))) {
+		logger::error("[Unified Water] [Flowmap] Immediate context is not eligible for shared access");
 		return false;
 	}
-
-	multithread->Enter();
-
-	struct MultithreadGuard
-	{
-		winrt::com_ptr<REX::W32::ID3D11Multithread> mt;
-		MultithreadGuard(winrt::com_ptr<REX::W32::ID3D11Multithread> m) :
-			mt(m) {}
-		~MultithreadGuard()
-		{
-			if (mt) {
-				mt->Leave();
-				mt->SetMultithreadProtected(FALSE);
-			}
-		}
-	} guard(multithread);
 
 	const auto tamriel = RE::TESForm::LookupByEditorID<RE::TESWorldSpace>("Tamriel");
 	if (!tamriel) {
@@ -393,8 +376,15 @@ bool Flowmap::GenerateFlowmap(bool useMips, std::filesystem::path& generatedPath
 	}
 
 	{
+		const Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, ctx), true);
+		if (!ownership) {
+			logger::error("[Unified Water] [Flowmap] Renderer ownership is unavailable");
+			return false;
+		}
 		ctx->ExecuteCommandList(commandList.get(), TRUE);
+	}
 
+	{
 		// A new resource name avoids cached engine textures and preserves the old DDS.
 		const auto generation = static_cast<uint64_t>(t0.time_since_epoch().count());
 		const auto filename = std::format(L"Tamriel-Flowmap.{}.{}.{}.{}.{:016X}.dds", width, height, offsetX, offsetY, generation);

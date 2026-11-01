@@ -5,6 +5,10 @@
 class ParticleLights;
 
 struct CloudShadows;
+struct GrassOptimizations;
+struct Wetterness;
+struct WeatherPicker;
+struct NeuralRenderingFeature;
 struct AdaptiveBrightness;
 struct CSUtility;
 struct DynamicCubemaps;
@@ -71,6 +75,10 @@ namespace globals
 
 	namespace features
 	{
+		extern GrassOptimizations grassOptimizations;
+		extern Wetterness wetterness;
+		extern WeatherPicker weatherPicker;
+		extern NeuralRenderingFeature neuralRendering;
 		extern AdaptiveBrightness adaptiveBrightness;
 		extern CSUtility csUtility;
 		extern CloudShadows cloudShadows;

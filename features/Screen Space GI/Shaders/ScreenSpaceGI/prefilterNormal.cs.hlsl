@@ -16,7 +16,8 @@ float2 NormalMIPFilter(float2 enc0, float2 enc1, float2 enc2, float2 enc3)
 }
 
 groupshared float2 g_scratchNormal[8][8];
-[numthreads(8, 8, 1)] void main(uint2 dispatchThreadID : SV_DispatchThreadID, uint2 groupThreadID : SV_GroupThreadID) {
+[numthreads(8, 8, 1)] void main(uint2 dispatchThreadID : SV_DispatchThreadID, uint2 groupThreadID : SV_GroupThreadID)
+{
 	const float2 frameScale = FrameDim * RcpTexDim;
 
 	// MIP 0

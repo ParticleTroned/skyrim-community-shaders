@@ -31,9 +31,9 @@ namespace
 	std::unordered_map<ImGuiID, float> s_windowOverlapAlpha;
 
 	constexpr ImGuiWindowFlags SKIP_WINDOW_FLAGS = ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove;
-	constexpr const char* MAIN_WINDOW_PREFIX = "Community Shaders";
+	constexpr const char* MAIN_WINDOW_ID = "###CommunityShaders";
 
-	bool IsMainWindow(ImGuiWindow* win) { return win->Name && strncmp(win->Name, MAIN_WINDOW_PREFIX, strlen(MAIN_WINDOW_PREFIX)) == 0; }
+	bool IsMainWindow(ImGuiWindow* win) { return win->Name && strstr(win->Name, MAIN_WINDOW_ID); }
 
 	void DrawShaderCompilationFailures(uint64_t failed, const Menu::ThemeSettings& themeSettings)
 	{
@@ -374,7 +374,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 		}
 
 		if (renderDocAvailable)
-			ImGui::TextColored(themeSettings.StatusPalette.Warning, renderDocInformation.c_str());
+			ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", renderDocInformation.c_str());
 
 		ImGui::End();
 		return;
@@ -391,7 +391,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 			DrawShaderCompilationFailures(failed, themeSettings);
 
 			if (renderDocAvailable)
-				ImGui::TextColored(themeSettings.StatusPalette.Warning, renderDocInformation.c_str());
+				ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", renderDocInformation.c_str());
 
 			ImGui::End();
 		}
@@ -401,7 +401,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 			ImGui::End();
 			return;
 		}
-		ImGui::TextColored(themeSettings.StatusPalette.Warning, renderDocInformation.c_str());
+		ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", renderDocInformation.c_str());
 		ImGui::End();
 	}
 }

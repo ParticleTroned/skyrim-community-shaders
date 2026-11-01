@@ -1,24 +1,25 @@
+#include "Menu/SettingsPage.h"
 // RenderDoc feature implementation providing in-application graphics debugging capabilities
 #include "Features/RenderDoc.h"
+#include "I18n/I18n.h"
+#define I18N_KEY_PREFIX "feature.renderdoc."
 
 #include "Globals.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
+#include "Utils/StringUtils.h"
 // Include additional core headers required by the feature implementation
-#include "I18n/I18n.h"
 #include "Menu.h"
 #include "Plugin.h"
 #include "State.h"
 #include "Utils/UI.h"
-
-#define I18N_KEY_PREFIX "feature.renderdoc."
-
 #include <imgui.h>
 
 // Include the real RenderDoc API and Windows headers only in the implementation
 #include <Renderdoc/renderdoc_app.h>
 #include <algorithm>
 #include <chrono>
+#include <cwchar>
 #include <dxgi.h>
 #include <filesystem>
 #include <format>
@@ -26,6 +27,14 @@
 #include <thread>
 #include <vector>
 #include <windows.h>
+
+namespace
+{
+	bool IsCaptureFile(const std::filesystem::directory_entry& a_entry)
+	{
+		return a_entry.is_regular_file() && _wcsicmp(a_entry.path().extension().c_str(), L".rdc") == 0;
+	}
+}
 
 // Global feature instance implementation
 RenderDoc* RenderDoc::GetSingleton()
@@ -113,9 +122,16 @@ void RenderDoc::Load()
 		auto runtimeName = std::string{ magic_enum::enum_name(REL::Module::GetRuntime()) };
 		auto gameVersion = Util::GetFormattedVersion(REL::Module::get().version());
 
-		// Build the path using std::filesystem so we don't hardcode separators
-		std::filesystem::path fileBase = capturesDir / std::format("Skyrim_{}_{}", runtimeName, gameVersion);
-		renderDocApi->SetCaptureFilePathTemplate(fileBase.string().c_str());
+		// RenderDoc only checks capture names within the current process.
+		SYSTEMTIME sessionStart{};
+		GetSystemTime(&sessionStart);
+		std::filesystem::path fileBase = capturesDir / std::format(
+														   "Skyrim_{}_{}_{:04}{:02}{:02}_{:02}{:02}{:02}_{:03}Z_{}",
+														   runtimeName, gameVersion,
+														   sessionStart.wYear, sessionStart.wMonth, sessionStart.wDay,
+														   sessionStart.wHour, sessionStart.wMinute, sessionStart.wSecond,
+														   sessionStart.wMilliseconds, GetCurrentProcessId());
+		renderDocApi->SetCaptureFilePathTemplate(Util::PathToUtf8(fileBase).c_str());
 	} catch (const std::exception& e) {
 		logger::warn("[RenderDoc] Failed to prepare capture directory/template: {}", e.what());
 	}
@@ -141,101 +157,53 @@ void RenderDoc::Load()
 	logger::info("[RenderDoc] Successfully initialized");
 }
 
+Feature::SettingsHeaderStatus RenderDoc::GetSettingsHeaderStatus() const
+{
+	if (enableRenderDocCapture != IsAvailable())
+		return { T(TKEY("restart_required"), "Restart required"), true };
+	return { IsAvailable() ? T(TKEY("ready"), "Ready") : T(TKEY("off"), "Off"), false };
+}
+
 void RenderDoc::DrawSettings()
 {
-	DrawCaptureEnableToggle();
-	const bool isSectionVisible = DrawCaptureStatus();
-	UpdateCaptureSectionVisibility(isSectionVisible);
-	if (isSectionVisible)
-		DrawCaptureUI();
-}
+	static MenuUI::ActionFeedback feedback;
+	const bool captureReady = enableRenderDocCapture && IsAvailable();
+	if (enableRenderDocCapture && !IsAvailable())
+		Util::Text::WrappedWarning(T("feature.render_doc.renderdoc_unavailable_enable_it_save_settings_65dcebfb", "RenderDoc unavailable. Enable it, save settings and restart. If still unavailable, check that Data/Renderdoc/renderdoc.dll is installed and loads."));
+	else if (!enableRenderDocCapture && IsAvailable())
+		Util::Text::WrappedWarning(T("feature.render_doc.save_settings_and_restart_to_unload_renderdoc_2cec4b67", "Save settings and restart to unload RenderDoc. Capture overhead remains until then."));
+	MenuUI::SettingsPage page("RenderDoc", {
+											   { "capture", T("feature.render_doc.capture", "Capture"), T("feature.render_doc.enable_capture_then_choose_the_frames_to_record", "Enable capture, then choose the frames to record."), T("feature.render_doc.capture_activation_and_frames", "Capture activation and frames"), true, true, T("feature.render_doc.choose_capture_and_storage", "Choose capture and storage"), nullptr, nullptr, captureReady },
+											   { "storage", T("feature.render_doc.storage", "Storage"), T("feature.render_doc.monitor_storage_and_remove_old_captures", "Monitor storage and remove old captures."), T("feature.render_doc.disk_usage_and_cleanup", "Disk usage and cleanup"), true, true, nullptr },
+											   { "files", T("feature.render_doc.files", "Files"), T("feature.render_doc.browse_and_open_recorded_captures", "Browse and open recorded captures."), T("feature.render_doc.recorded_captures", "Recorded captures"), true, true, T("feature.render_doc.review_captured_frames", "Review captured frames") },
+										   });
 
-void RenderDoc::DrawEssentialSettings()
-{
-	DrawCaptureEnableToggle();
-	DrawCaptureStatus();
-	UpdateCaptureSectionVisibility(false);
-}
+	if (!page.Is("capture") && !page.Is("storage") && !page.Is("files"))
+		return;
 
-void RenderDoc::DrawCaptureEnableToggle()
-{
-	bool prevRenderDocCapture = enableRenderDocCapture;
-	if (ImGui::Checkbox("Enable", &enableRenderDocCapture)) {
-		if (enableRenderDocCapture && !prevRenderDocCapture) {
-			globals::state->useFrameAnnotations = globals::state->frameAnnotations;
-			globals::state->frameAnnotations = true;
-		}
-		if (!enableRenderDocCapture && prevRenderDocCapture) {
-			globals::state->frameAnnotations = globals::state->useFrameAnnotations;
-		}
-	}
+	const auto showFeedback = SKSE::stl::scope_exit([&] { feedback.Draw(); });
 
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("enable_capture_tooltip"), "Enable RenderDoc frame capture for providing debug captures to the Community Shaders team."));
-		ImGui::Text("%s", T(TKEY("enable_capture_tooltip2"), "Enabling capture will force-enable frame annotations for easier debugging and will restore the previous setting when disabled."));
-	}
-}
+	// Track section visibility for intelligent cache refreshing
+	bool isSectionVisible = false;
 
-bool RenderDoc::DrawCaptureStatus()
-{
-	const auto& themeSettings = Menu::GetSingleton()->GetTheme();
-	const bool renderDocActive = IsAvailable();
-
-	if (enableRenderDocCapture && !renderDocActive) {
-		ImGui::TextColored(themeSettings.StatusPalette.RestartNeeded, "%s", T(TKEY("restart_to_enable"), "Requires restart to enable RenderDoc capture."));
-		return false;
-	}
-
-	if (!enableRenderDocCapture && renderDocActive) {
-		ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", T(TKEY("restart_to_disable"), "Requires restart to disable RenderDoc capture, performance will be severely impacted."));
-		return false;
-	}
-
-	return enableRenderDocCapture && renderDocActive;
-}
-
-void RenderDoc::UpdateCaptureSectionVisibility(bool a_visible)
-{
-	const auto currentFrame = ImGui::GetFrameCount();
-	const bool wasVisibleRecently = lastCaptureSectionFrame >= 0 &&
-	                                (lastCaptureSectionFrame == currentFrame || lastCaptureSectionFrame == currentFrame - 1);
-
-	if (a_visible && !wasVisibleRecently)
-		InvalidateCaptureCache();
-
-	lastCaptureSectionFrame = a_visible ? currentFrame : -1;
-}
-
-void RenderDoc::DrawCaptureUI()
-{
-	const auto& themeSettings = Menu::GetSingleton()->GetTheme();
+	if (page.Is("capture") && !captureReady)
+		MenuUI::DetailNote(T("feature.render_doc.enable_renderdoc_in_the_header_save_settings_d2e02c24", "Enable RenderDoc in the header, save settings and restart before capturing. Existing captures remain in Storage and Files."));
 	{
+		isSectionVisible = true;
 		// Capture Control Section
 		{
-			auto captureSection = Util::SectionWrapper(T(TKEY("capture_control"), "Capture Control"), T(TKEY("capture_control_tooltip"), "Manual capture creation and basic controls"));
-			if (captureSection) {
-				ImGui::TextColored(themeSettings.StatusPalette.InfoColor, "%s", T(TKEY("capture_active"), "RenderDoc capture is active."));
-				ImGui::SameLine();
-
-				std::string enabledFeaturesPreview;
-				for (auto* feat : Feature::GetFeatureList()) {
-					if (!feat->loaded)
-						continue;
-
-					std::string ver = feat->version.empty() ? std::string("<unknown>") : feat->version;
-					if (!enabledFeaturesPreview.empty())
-						enabledFeaturesPreview += '\n';
-					enabledFeaturesPreview += std::format("- {} ({})", feat->GetShortName(), ver);
-				}
+			if (page.Is("capture")) {
+				const auto disabled = Util::DisableGuard(!captureReady);
+				MenuUI::SectionHeading(T("feature.render_doc.capture_settings", "Capture settings"));
 
 				// Comments input for next capture
 				static char commentsBuffer[kCommentsBufferSize] = { 0 };
 
-				ImGui::InputTextWithHint("##CaptureComments", T(TKEY("comments_hint"), "Additional comments for next capture (optional)"), commentsBuffer, sizeof(commentsBuffer));
+				Util::Widgets::InputTextWithHint(T("feature.render_doc.comments", "Comments"), T(TKEY("comments_hint"), "Additional comments for next capture (optional)"), commentsBuffer, sizeof(commentsBuffer));
 				Util::AddTooltip(T(TKEY("comments_tooltip"), "Additional comments will be appended to automatic metadata and embedded in the .rdc file"));
 
 				int captureFrameCountUI = static_cast<int>(GetCaptureFrameCount());
-				if (ImGui::SliderInt(T(TKEY("capture_frames"), "Capture Frames"), &captureFrameCountUI, static_cast<int>(kMinCaptureFrameCount), static_cast<int>(kMaxCaptureFrameCount), "%d", ImGuiSliderFlags_AlwaysClamp)) {
+				if (Util::Widgets::SliderInt(T(TKEY("capture_frames"), "Capture Frames"), &captureFrameCountUI, static_cast<int>(kMinCaptureFrameCount), static_cast<int>(kMaxCaptureFrameCount), "%d", ImGuiSliderFlags_AlwaysClamp)) {
 					SetCaptureFrameCount(static_cast<uint32_t>(captureFrameCountUI));
 				}
 				Util::AddTooltip(T(TKEY("capture_frames_tooltip"), "Number of consecutive frames to capture. 1 uses a normal RenderDoc capture; higher values use TriggerMultiFrameCapture."));
@@ -259,30 +227,35 @@ void RenderDoc::DrawCaptureUI()
 
 							// Actual capture logic
 							logger::info("[RenderDoc] Manual capture triggered by user");
-							TriggerConfiguredCapture(false);
+							feedback = TriggerConfiguredCapture(false) ?
+							               MenuUI::ActionFeedback{ T("feature.renderdoc.capture_requested", "Capture requested.") } :
+							               MenuUI::ActionFeedback{ T("feature.renderdoc.capture_could_not_start", "Capture could not start. Check RenderDoc availability and free disk space."), true };
 						}
 					} catch (const std::exception& e) {
 						logger::error("[RenderDoc] Exception during capture logic: {}", e.what());
+						feedback = { e.what(), true };
 					}
 				}
 
 				if (ImGui::BeginPopup("Not enough disk space##RenderDoc")) {
-					ImGui::Text("%s", T(TKEY("not_enough_space"), "Not enough free disk space to create a capture."));
-					ImGui::Text(T(TKEY("space_required"), "At least {} MB of free space is required."), GetRequiredCaptureSpaceBytes() / (1024 * 1024));
+					ImGui::Text(T(TKEY("not_enough_space"), "Not enough free disk space to create a capture."));
+					ImGui::Text(T("feature.render_doc.at_least_llu_mb_of_free_space_is_required", "At least %llu MB of free space is required."), static_cast<unsigned long long>(GetRequiredCaptureSpaceBytes() / (1024 * 1024)));
 					if (ImGui::Button(T(TKEY("ok"), "OK"))) {
 						ImGui::CloseCurrentPopup();
 					}
 					ImGui::EndPopup();
 				}
 
-				ImGui::SameLine();
 				if (ImGui::Button(T(TKEY("open_capture_dir"), "Open Capture Directory"))) {
 					// Open the directory where captures are saved
 					try {
 						auto capturesDir = GetCapturesDirectory();
-						ShellExecuteA(nullptr, "open", capturesDir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+						if (!Util::OpenInShell(capturesDir, feedback.message))
+							throw std::runtime_error(feedback.message);
+						feedback = { T("feature.renderdoc.opened_directory", "Opened capture directory.") };
 					} catch (const std::exception& e) {
 						logger::error("[RenderDoc] Exception while trying to open captures directory: {}", e.what());
+						feedback = { e.what(), true };
 					}
 				}
 
@@ -298,6 +271,7 @@ void RenderDoc::DrawCaptureUI()
 							logger::info("[RenderDoc] Copied captures directory path to clipboard: {}", capturesDir);
 						} catch (const std::exception& e) {
 							logger::error("[RenderDoc] Exception while copying directory path: {}", e.what());
+							feedback = { e.what(), true };
 						}
 					}
 					ImGui::EndPopup();
@@ -307,14 +281,13 @@ void RenderDoc::DrawCaptureUI()
 
 		// Disk Usage Section
 		{
-			auto diskSection = Util::SectionWrapper(T(TKEY("disk_usage"), "Disk Usage"), T(TKEY("disk_usage_tooltip"), "Monitor capture storage usage"));
-			if (diskSection) {
+			if (page.Is("storage")) {
 				uint32_t diskUsageMB = CalculateCapturesDiskUsage();
 				float diskUsageGB = static_cast<float>(diskUsageMB) / 1024.0f;
 
 				// Use color-coded value display for disk usage
 				Util::ColorCodedValueConfig diskUsageConfig = Util::ColorCodedValueConfig::HighIsBad(0.1f, 1.0f, 5.0f);
-				diskUsageConfig.tooltipText = T(TKEY("capture_size_tooltip"), "Total size of all capture files in the captures directory");
+				diskUsageConfig.tooltipText = T("feature.renderdoc.total_size_tooltip", "Total size of all capture files in the captures directory");
 
 				Util::DrawColorCodedValue(T(TKEY("capture_size"), "Capture Size"), diskUsageGB, std::format("{:.2f} GB", diskUsageGB), diskUsageConfig);
 
@@ -326,7 +299,7 @@ void RenderDoc::DrawCaptureUI()
 				}
 
 				if (ImGui::BeginPopup("Confirm Clear Captures##RenderDoc")) {
-					ImGui::Text("%s", T(TKEY("confirm_delete"), "Are you sure you want to delete all capture files?"));
+					ImGui::Text(T(TKEY("confirm_delete"), "Are you sure you want to delete all capture files?"));
 					ImGui::Text(T(TKEY("delete_size"), "This will permanently remove %u MB of capture data."), diskUsageMB);
 					ImGui::Separator();
 
@@ -345,8 +318,7 @@ void RenderDoc::DrawCaptureUI()
 
 		// Capture Files Section
 		{
-			auto filesSection = Util::SectionWrapper(T(TKEY("capture_files"), "Capture Files"), T(TKEY("capture_files_tooltip"), "View and manage individual capture files"));
-			if (filesSection) {
+			if (page.Is("files")) {
 				// Get cached capture files (auto-refreshes every 5 seconds)
 				const auto& captureFiles = GetCachedCaptureFiles();
 
@@ -357,10 +329,10 @@ void RenderDoc::DrawCaptureUI()
 				}
 
 				ImGui::SameLine();
-				ImGui::TextDisabled("(%zu files)", captureFiles.size());
+				ImGui::TextDisabled(T("feature.render_doc.zu_files", "(%zu files)"), captureFiles.size());
 
 				if (captureFiles.empty()) {
-					ImGui::TextDisabled("%s", T(TKEY("no_files"), "No capture files found."));
+					ImGui::TextDisabled(T(TKEY("no_files"), "No capture files found."));
 				} else {
 					// Display custom table with double-click and hover support
 					if (ImGui::BeginTable("##RenderDocCaptures", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate)) {
@@ -440,10 +412,13 @@ void RenderDoc::DrawCaptureUI()
 								if (ImGui::IsMouseDoubleClicked(0)) {
 									// Double-clicked - open the file
 									try {
-										ShellExecuteW(nullptr, L"open", file.fullPath.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+										if (!Util::OpenInShell(file.fullPath, feedback.message))
+											throw std::runtime_error(feedback.message);
+										feedback = { fmt::format(fmt::runtime(T("feature.renderdoc.opened_file", "Opened {}.")), file.filename) };
 										logger::info("[RenderDoc] Opened capture file: {}", file.fullPath.string());
 									} catch (const std::exception& e) {
 										logger::error("[RenderDoc] Failed to open capture file '{}': {}", file.fullPath.string(), e.what());
+										feedback = { e.what(), true };
 									}
 								}
 							}
@@ -457,12 +432,12 @@ void RenderDoc::DrawCaptureUI()
 							if (ImGui::IsItemHovered()) {
 								// Calculate time ago dynamically for tooltip
 								std::string currentTimeAgo = Util::FormatTimeAgo(file.lastWriteTime);
-								std::string tooltip = std::format("File: {}\nSize: {}\nCreated: {}",
+								std::string tooltip = fmt::format(fmt::runtime(T("feature.renderdoc.file_tooltip", "File: {}\nSize: {}\nCreated: {}")),
 									file.fullPath.string(), file.sizeStr, currentTimeAgo);
 
 								// Add deletion error message if applicable
 								if (file.deletionFailed && !file.deletionErrorMessage.empty()) {
-									tooltip += std::format("\n\nDeletion Failed: {}", file.deletionErrorMessage);
+									tooltip += fmt::format(fmt::runtime(T("feature.renderdoc.deletion_failed", "\n\nDeletion Failed: {}")), file.deletionErrorMessage);
 								}
 
 								ImGui::SetTooltip("%s", tooltip.c_str());
@@ -481,11 +456,17 @@ void RenderDoc::DrawCaptureUI()
 						ImGui::EndTable();
 					}
 
-					ImGui::TextDisabled("%s", T(TKEY("double_click_hint"), "Double-click a filename to open the capture file"));
-					ImGui::TextDisabled("%s", T(TKEY("hover_hint"), "Hover over filenames for file details"));
+					ImGui::TextDisabled(T(TKEY("double_click_hint"), "Double-click a filename to open the capture file"));
+					ImGui::TextDisabled(T(TKEY("hover_hint"), "Hover over filenames for file details"));
 				}
 			}
 		}
+
+		// Intelligent cache refreshing: refresh when section becomes visible
+		if (isSectionVisible && !wasSectionVisible) {
+			InvalidateCaptureCache();
+		}
+		wasSectionVisible = isSectionVisible;
 	}
 }
 
@@ -509,7 +490,7 @@ uint32_t RenderDoc::CalculateCapturesDiskUsage()
 				break;
 			}
 
-			if (entry.is_regular_file()) {
+			if (IsCaptureFile(entry)) {
 				totalSize += entry.file_size(ec);
 				if (ec) {
 					logger::warn("[RenderDoc] Failed to get file size for '{}': {}", entry.path().string(), ec.message());
@@ -532,7 +513,7 @@ void RenderDoc::ClearFrameCaptures()
 		// Clear previous failed deletion tracking for a fresh start
 		failedDeletions.clear();
 
-		// Remove all files in the captures directory using safe deletion
+		// Keep unrelated files in the capture directory.
 		std::error_code ec;
 		for (const auto& entry : std::filesystem::directory_iterator(path, ec)) {
 			if (ec) {
@@ -540,7 +521,7 @@ void RenderDoc::ClearFrameCaptures()
 				break;
 			}
 
-			if (entry.is_regular_file()) {
+			if (IsCaptureFile(entry)) {
 				// Use safe delete with proper error handling and logging
 				auto deleteResult = Util::FileHelpers::SafeDelete(entry.path().string(), "capture file");
 				if (!deleteResult.success) {
@@ -584,7 +565,7 @@ void RenderDoc::SaveSettings(json& o_json)
 void RenderDoc::LoadSettings(json& o_json)
 {
 	if (o_json.contains("Enable RenderDoc Capture") && o_json["Enable RenderDoc Capture"].is_boolean()) {
-		enableRenderDocCapture = o_json["Enable RenderDoc Capture"];
+		SetCaptureEnabled(o_json["Enable RenderDoc Capture"].get<bool>());
 	}
 	if (!o_json.contains("Capture Frame Count")) {
 		return;
@@ -603,9 +584,35 @@ void RenderDoc::LoadSettings(json& o_json)
 	}
 }
 
+void RenderDoc::SetCaptureEnabled(bool a_enabled)
+{
+	if (auto* state = globals::state) {
+		if (a_enabled) {
+			if (!enableRenderDocCapture || !state->frameAnnotations)
+				state->useFrameAnnotations = state->frameAnnotations;
+			state->frameAnnotations = true;
+		} else if (enableRenderDocCapture && state->frameAnnotations) {
+			state->frameAnnotations = state->useFrameAnnotations;
+		}
+	}
+	enableRenderDocCapture = a_enabled;
+}
+
+void RenderDoc::DrawSettingsEnabledControl()
+{
+	bool enabled = enableRenderDocCapture;
+	if (Util::Widgets::Checkbox(T("feature.render_doc.enabled", "Enabled"), &enabled))
+		SetCaptureEnabled(enabled);
+
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text(T("feature.render_doc.enable_renderdoc_frame_capture_for_providing_4a0eda33", "Enable RenderDoc frame capture for providing debug captures to the CSX maintainers."));
+		ImGui::Text(T("feature.render_doc.capture_enables_frame_annotations_for_debuggi_06591839", "Capture enables frame annotations for debugging. Disabling it restores the previous annotation setting."));
+	}
+}
+
 void RenderDoc::RestoreDefaultSettings()
 {
-	enableRenderDocCapture = false;
+	SetCaptureEnabled(false);
 	SetCaptureFrameCount(1);
 }
 
@@ -623,7 +630,7 @@ void RenderDoc::RefreshCaptureFileCache()
 		auto capturesPath = GetCapturesPath();
 		std::error_code ec;
 		for (const auto& entry : std::filesystem::directory_iterator(capturesPath, ec)) {
-			if (ec || !entry.is_regular_file())
+			if (ec || !IsCaptureFile(entry))
 				continue;
 
 			CaptureFileInfo info;
@@ -753,7 +760,7 @@ bool RenderDoc::HandleCaptureHotkey(uint32_t a_vkKey)
 		return false;
 	}
 
-	if (!IsAvailable()) {
+	if (!enableRenderDocCapture || !IsAvailable()) {
 		return false;
 	}
 
@@ -810,15 +817,6 @@ void RenderDoc::SetCaptureFilePathTemplate(const std::string& a_template)
 
 	renderDocApi->SetCaptureFilePathTemplate(a_template.c_str());
 	logger::info("[RenderDoc] Set capture file path template to: {}", a_template);
-}
-
-bool RenderDoc::IsCapturing() const
-{
-	if (!renderDocApi)
-		return false;
-
-	// RenderDoc API doesn't have a direct IsCapturing method, but we can check if captures are enabled
-	return enableRenderDocCapture && renderDocApi != nullptr;
 }
 
 std::string RenderDoc::GetCapturePath(uint32_t a_index)
@@ -910,7 +908,7 @@ std::string RenderDoc::BuildAutomaticCaptureComments(const std::string& userComm
 	comments += std::format("Skyrim {} {}\n", runtimeName, gameVersion);
 
 	// Plugin version
-	comments += std::format("{}\n", Plugin::VERSION_LABEL);
+	comments += std::format("{}\n", Plugin::BUILD_LABEL);
 
 	// Enabled features
 	const auto& features = Feature::GetFeatureList();
@@ -952,39 +950,28 @@ void RenderDoc::ApplyAutomaticCommentsToNewCaptures()
 		return;  // No new captures
 	}
 
-	// Check for pending user comments and apply them to the first new capture
-	std::string userComments;
-	{
-		std::lock_guard<std::mutex> lock(pendingCommentsMutex);
-		if (!pendingCaptureComments.empty()) {
-			userComments = std::move(pendingCaptureComments);
-			pendingCaptureComments.clear();
-		}
-	}
-
 	// Build automatic comments for new captures
 	std::string automaticComments = BuildAutomaticCaptureComments("");
 
-	// Apply comments to new captures: user comments to first capture, automatic to others
+	// Keep comments and the retry position until a capture path is available.
+	std::lock_guard<std::mutex> lock(pendingCommentsMutex);
 	for (uint32_t i = lastCaptureCount; i < numCaptures; ++i) {
 		std::string capturePath = GetCapturePath(i);
-		if (!capturePath.empty()) {
-			// Use user comments for the first new capture, automatic for subsequent ones
-			const std::string& commentsToApply = (i == lastCaptureCount && !userComments.empty()) ? userComments : automaticComments;
-			renderDocApi->SetCaptureFileComments(capturePath.c_str(), commentsToApply.c_str());
-			logger::info("[RenderDoc] Applied comments to capture {}: {}", i, commentsToApply);
+		if (capturePath.empty()) {
+			break;
 		}
-	}
 
-	lastCaptureCount = numCaptures;
+		const std::string& commentsToApply = !pendingCaptureComments.empty() ? pendingCaptureComments : automaticComments;
+		renderDocApi->SetCaptureFileComments(capturePath.c_str(), commentsToApply.c_str());
+		logger::info("[RenderDoc] Applied comments to capture {}: {}", i, commentsToApply);
+		pendingCaptureComments.clear();
+		lastCaptureCount = i + 1;
+	}
 }
 
 std::string RenderDoc::GetOverlayWarningMessage() const
 {
-	return "WARNING: RenderDoc capture is active, performance will be severely impacted.\n"
-		   "Upscaling and Framegeneration may be incompatible.\n"
-		   "Press F12, Print Screen or press the Capture button in the RenderDoc feature settings.\n"
-		   "Disable RenderDoc capture in the RenderDoc feature settings.";
+	return T("feature.renderdoc.overlay_warning", "RenderDoc capture is active and severely affects performance. CSX Upscaling and Frame Generation are disabled.\nCapture with F12, Print Screen or the RenderDoc page's Capture button. Disable capture on that page.");
 }
 
 void RenderDoc::ClearFailedDeletions()
@@ -992,4 +979,20 @@ void RenderDoc::ClearFailedDeletions()
 	failedDeletions.clear();
 	logger::info("[RenderDoc] Cleared failed deletion tracking");
 }
-#undef I18N_KEY_PREFIX
+
+bool RenderDoc::IsCapturing() const
+{
+	if (!renderDocApi)
+		return false;
+
+	// RenderDoc API doesn't have a direct IsCapturing method, but we can check if captures are enabled
+	return enableRenderDocCapture && renderDocApi != nullptr;
+}
+
+void RenderDoc::DrawEssentialSettings()
+{
+	DrawSettingsEnabledControl();
+	const auto status = GetSettingsHeaderStatus();
+	if (status.needsAttention)
+		Util::Text::WrappedRestartNeeded(status.label.data());
+}

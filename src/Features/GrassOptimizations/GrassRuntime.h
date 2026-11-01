@@ -1,0 +1,117 @@
+#pragma once
+
+#include "Utils/GrassGroupLock.h"
+#include <RE/B/BSGrassShaderProperty.h>
+#include <RE/B/BSMultiStreamInstanceTriShape.h>
+#include <RE/B/BSRenderPass.h>
+#include <REL/Relocation.h>
+#include <SKSE/Impl/PCH.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+
+namespace GrassRuntime
+{
+	/** @brief Retain a borrowed shape only while it is live; the caller excludes its deleting destructor. */
+	inline RE::NiPointer<RE::BSMultiStreamInstanceTriShape> TryRetainShape(RE::BSMultiStreamInstanceTriShape* shape)
+	{
+		RE::stl::atomic_ref refs{ shape->_refCount };
+		auto count = refs.load();
+		while (count && count < UINT32_MAX - 1) {
+			if (refs.compare_exchange_weak(count, count + 1)) {
+				RE::NiPointer<RE::BSMultiStreamInstanceTriShape> retained{ shape };
+				shape->DecRefCount();
+				return retained;
+			}
+		}
+		return {};
+	}
+
+	/** @brief Borrow attached native groups in the same lock order as grass visibility. */
+	class GroupReadLock : public Util::GrassGroupLock
+	{
+	public:
+		GroupReadLock() : GrassGroupLock(Word()) {}
+
+	private:
+		static volatile uint32_t& Word()
+		{
+			static REL::Relocation<volatile uint32_t*> word{ REL::RelocationID(524610, 411250) };
+			return *word;
+		}
+	};
+
+	using SetupGeometry = void (*)(RE::BSShader*, RE::BSRenderPass*, uint32_t);
+	/** @brief Detect structural attachment changes cheaply; in-place edits still require generation hooks. */
+	struct GroupLayout
+	{
+		const void* storage = nullptr;
+		uint32_t slots = 0, active = 0;
+		bool operator==(const GroupLayout&) const = default;
+	};
+	/** @brief Capture native array metadata without scanning groups or trusting cached-file instance totals. */
+	inline GroupLayout CaptureGroupLayout(const RE::BSMultiStreamInstanceTriShape::MULTISTREAM_TRISHAPE_RUNTIME_DATA& data)
+	{
+		return { data.instanceGroups.data(), data.instanceGroups.size(), data.activeGroupCount };
+	}
+	/** @brief Native instance headers initialize only the low 32 bits of their CPU byte width. */
+	inline bool HasInstanceData(const RE::BSGraphics::VertexBuffer& buffer, uint64_t requiredBytes)
+	{
+		return buffer.m_data && requiredBytes <= uint32_t(buffer.byteWidth);
+	}
+	/** @brief Validate native group records; cached shapes need not initialize generation-only instanceSize. */
+	inline bool MatchesInstanceBytes(const RE::BSGraphics::VertexBuffer& buffer, uint64_t requiredBytes)
+	{
+		return requiredBytes && requiredBytes == uint32_t(buffer.byteWidth);
+	}
+	/** @brief Native grass fields follow the runtime-sized lighting property. */
+	struct PropertyData
+	{
+		RE::BSTArray<float> fadeAlphas;
+		std::uint64_t unknown18;
+		RE::BSGraphics::TextureAddressMode clampMode;
+		float wavePeriod;
+		std::uint32_t windTimer;
+		std::uint32_t unknown2C;
+		RE::BSRenderPass* depthPass;
+		RE::BSShaderPropertyLightData lightData;
+		RE::BSShaderProperty::RenderPassArray shadowPasses;
+	};
+	static_assert(offsetof(PropertyData, wavePeriod) == 0x24);
+	static_assert(offsetof(PropertyData, windTimer) == 0x28);
+	static_assert(offsetof(PropertyData, lightData) == 0x38);
+	static_assert(sizeof(PropertyData) == 0x70);
+
+	/** @brief Match persistent grouping state; animation comes from current native draw constants. */
+	inline bool MatchesPersistentProperty(const PropertyData& live, float wavePeriod,
+		std::uint32_t lightMask, std::span<RE::BSLight* const> lights)
+	{
+		return live.wavePeriod == wavePeriod && live.lightData.activeLightMask == lightMask &&
+		       std::equal(lights.begin(), lights.end(), live.lightData.lights.begin(), live.lightData.lights.end());
+	}
+
+	/** @brief Read the native SE/AE property tail. */
+	inline PropertyData& GetPropertyData(RE::BSGrassShaderProperty* property)
+	{
+		return *reinterpret_cast<PropertyData*>(reinterpret_cast<std::byte*>(property) + RE::BSLightingShaderProperty::kSizeFlat);
+	}
+	inline const PropertyData& GetPropertyData(const RE::BSGrassShaderProperty* property)
+	{
+		return GetPropertyData(const_cast<RE::BSGrassShaderProperty*>(property));
+	}
+
+	/** @brief Preserve native wind history; an optional raw phase restores the original draw's previous-wind constant. */
+	inline void PrepareGeometryWithoutAdvancingWind(RE::BSShader* shader, RE::BSRenderPass* pass,
+		uint32_t flags, SetupGeometry setup, std::optional<uint32_t> previousWind = std::nullopt)
+	{
+		auto& data = GetPropertyData(static_cast<RE::BSGrassShaderProperty*>(pass->shaderProperty));
+		const auto saved = data.windTimer;
+		const SKSE::stl::scope_exit restore([&]() noexcept { data.windTimer = saved; });
+		if (previousWind)
+			data.windTimer = *previousWind;
+		setup(shader, pass, flags);
+	}
+}

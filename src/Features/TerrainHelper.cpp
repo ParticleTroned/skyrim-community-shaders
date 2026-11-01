@@ -1,8 +1,47 @@
 #include "TerrainHelper.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include "Globals.h"
 #include "ShaderCache.h"
 #include "State.h"
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(TerrainHelper::Settings, EnableTerrainHelper)
+
+namespace
+{
+	void ClearTerrainHelperRuntimeState();
+}
+
+void TerrainHelper::DrawSettings()
+{
+	MenuUI::SettingsPage page("TerrainHelper", {
+		{ "appearance", T("feature.terrain_helper.how_it_works", "How it works"), T("feature.terrain_helper.help", "Learn how distant terrain matches nearby ground."), T("feature.terrain_helper.matching", "Distant-to-near ground matching"), true, true, T("feature.terrain_helper.refine", "Refine terrain continuity"), nullptr, nullptr, featureAvailable }
+	});
+	if (!featureAvailable) {
+		Util::Text::WrappedWarning(T("feature.terrain_helper.plugin_required", "TerrainHelper.esp was not detected. Install and enable its plugin, then restart to use Terrain Helper."));
+		return;
+	}
+	if (page.Is("appearance"))
+		MenuUI::DetailText(T("feature.terrain_helper.controls", "Match distant terrain to nearby ground using Terrain Helper's companion plugin. Control it with Enabled in the header; no further tuning."));
+}
+
+void TerrainHelper::LoadSettings(json& a_json)
+{
+	enabledRequested.ReplaceSettings(settings, a_json.get<Settings>(), &Settings::EnableTerrainHelper);
+}
+
+void TerrainHelper::SaveSettings(json& a_json)
+{
+	auto saved = settings;
+	saved.EnableTerrainHelper = enabledRequested.Get();
+	a_json = saved;
+}
+
+void TerrainHelper::RestoreDefaultSettings()
+{
+	enabledRequested.ReplaceSettings(settings, Settings{}, &Settings::EnableTerrainHelper);
+}
 
 void TerrainHelper::DataLoaded()
 {
@@ -12,16 +51,17 @@ void TerrainHelper::DataLoaded()
 		logger::info("[Terrain Helper] LandscapeDefault EDID texture set found");
 		defaultLandTexture = defaultLandTextureSet;
 		// only enable if TerrainHelper.esp is loaded
-		enabled = true;
+		featureAvailable = true;
 	} else {
 		logger::warn("[Terrain Helper] LandscapeDefault EDID texture set from TerrainHelper.esp not found. Terrain helper is disabled.");
-		enabled = false;
+		defaultLandTexture = nullptr;
+		featureAvailable = false;
 	}
 }
 
 bool TerrainHelper::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 {
-	if (!enabled) {
+	if (!IsRuntimeEnabled()) {
 		// terrain helper is not enabled
 		return false;
 	}
@@ -121,8 +161,25 @@ struct THExtendedRendererState
 	}
 } thExtendedRendererState;
 
+namespace
+{
+	void ClearTerrainHelperRuntimeState()
+	{
+		if (auto* state = globals::state) {
+			constexpr uint32_t mask = (1u << THExtendedRendererState::NumPSTextures) - 1u;
+			state->permutationData.ExtraFeatureDescriptor &= ~mask;
+			state->permutationData.ExtraFeatureDescriptor &= ~uint(State::ExtraFeatureDescriptors::THLandHasDisplacement);
+		}
+		for (uint32_t i = 0; i < THExtendedRendererState::NumPSTextures; ++i)
+			thExtendedRendererState.SetPSTexture(i, nullptr);
+	}
+}
+
 void TerrainHelper::SetShaderResources(ID3D11DeviceContext* a_context)
 {
+	enabledRequested.Apply(settings.EnableTerrainHelper, globals::state);
+	if (!IsRuntimeEnabled())
+		ClearTerrainHelperRuntimeState();
 	uint32_t mask = thExtendedRendererState.PSResourceModifiedBits;
 
 	if (mask == 0) [[likely]] {
@@ -155,8 +212,10 @@ void TerrainHelper::SetShaderResources(ID3D11DeviceContext* a_context)
 
 void TerrainHelper::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material)
 {
-	if (!enabled) {
+	enabledRequested.Apply(settings.EnableTerrainHelper, globals::state);
+	if (!IsRuntimeEnabled()) {
 		// terrain helper is not enabled
+		ClearTerrainHelperRuntimeState();
 		return;
 	}
 

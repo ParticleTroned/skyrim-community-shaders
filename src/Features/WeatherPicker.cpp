@@ -1,0 +1,1062 @@
+#include "I18n/I18n.h"
+#define I18N_KEY_PREFIX "feature.weather_picker."
+#include "WeatherPicker.h"
+#include "Menu/SettingsPage.h"
+
+#include "Feature.h"
+#include "Menu.h"
+#include "Menu/ThemeManager.h"
+#include "Util.h"
+#include "Utils/Game.h"
+#include "Utils/UI.h"
+#include "WeatherManager.h"
+
+#include "CSEditor.h"
+#include "CSEditor/EditorWindow.h"
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cmath>
+#include <cstring>
+#include <format>
+#include <nlohmann/json.hpp>
+
+namespace
+{
+	struct WeatherFlagInfo
+	{
+		RE::TESWeather::WeatherDataFlag flag;
+		std::string_view canonicalName;
+	};
+
+	constexpr std::array<WeatherFlagInfo, 6> kClassifiedWeatherFlags = { {
+		{ RE::TESWeather::WeatherDataFlag::kPleasant, "Pleasant" },
+		{ RE::TESWeather::WeatherDataFlag::kCloudy, "Cloudy" },
+		{ RE::TESWeather::WeatherDataFlag::kRainy, "Rainy" },
+		{ RE::TESWeather::WeatherDataFlag::kSnow, "Snow" },
+		{ RE::TESWeather::WeatherDataFlag::kPermAurora, "Aurora" },
+		{ RE::TESWeather::WeatherDataFlag::kAuroraFollowsSun, "Aurora Sun" },
+	} };
+
+	const WeatherFlagInfo* FindWeatherFlagInfo(RE::TESWeather::WeatherDataFlag flag)
+	{
+		auto it = std::ranges::find(kClassifiedWeatherFlags, flag, &WeatherFlagInfo::flag);
+		return it != kClassifiedWeatherFlags.end() ? &*it : nullptr;
+	}
+
+	const WeatherFlagInfo* FindWeatherFlagInfo(std::string_view canonicalName)
+	{
+		auto it = std::ranges::find(kClassifiedWeatherFlags, canonicalName, &WeatherFlagInfo::canonicalName);
+		return it != kClassifiedWeatherFlags.end() ? &*it : nullptr;
+	}
+
+	const char* GetWeatherFilterLabel(const WeatherFlagInfo& info)
+	{
+		switch (info.flag) {
+		case RE::TESWeather::WeatherDataFlag::kPleasant:
+			return T(TKEY("pleasant"), "Pleasant");
+		case RE::TESWeather::WeatherDataFlag::kCloudy:
+			return T(TKEY("cloudy"), "Cloudy");
+		case RE::TESWeather::WeatherDataFlag::kRainy:
+			return T(TKEY("rainy"), "Rainy");
+		case RE::TESWeather::WeatherDataFlag::kSnow:
+			return T(TKEY("snow"), "Snow");
+		case RE::TESWeather::WeatherDataFlag::kPermAurora:
+			return T(TKEY("aurora"), "Aurora");
+		case RE::TESWeather::WeatherDataFlag::kAuroraFollowsSun:
+			return T(TKEY("aurora_sun"), "Aurora Sun");
+		default:
+			return info.canonicalName.data();
+		}
+	}
+
+	std::string GetWeatherFlagLabel(std::string_view name)
+	{
+		if (const auto* info = FindWeatherFlagInfo(name))
+			return GetWeatherFilterLabel(*info);
+		if (name == "None")
+			return T(TKEY("none_filter"), "None");
+		if (name.starts_with("Unknown("))
+			return std::string(T(TKEY("unknown"), "Unknown")) + std::string(name.substr(7));
+		return std::string(name);
+	}
+
+	bool DrawAnalysisSectionHeader(const char* label)
+	{
+		constexpr auto flags = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+		return ImGui::TreeNodeEx(label, flags);
+	}
+}
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	WeatherPicker::WeatherDetailsWindowSettings,
+	Enabled,
+	ShowInOverlay,
+	Position,
+	PositionSet)
+
+void WeatherPicker::LoadSettings(json& o_json)
+{
+	WeatherDetailsWindow = o_json;
+}
+
+void WeatherPicker::SaveSettings(json& o_json)
+{
+	o_json = WeatherDetailsWindow;
+}
+
+void WeatherPicker::DataLoaded()
+{
+	s_dataAvailable = true;
+}
+
+void WeatherPicker::Prepass()
+{
+	if (!globals::features::csEditor.loaded)
+		CSEditor::UpdateWeatherLockAndTime();
+}
+
+void WeatherPicker::EnsureWeatherListLoaded()
+{
+	if (!s_dataAvailable)
+		return;
+
+	LoadAllWeathers();
+}
+
+void WeatherPicker::DrawSettings()
+{
+	MenuUI::SettingsPage page("WeatherPicker", {
+												   { "appearance", T("feature.weather_picker.weather", "Weather"), T("feature.weather_picker.choose_and_preview_the_weather", "Choose and preview the weather."), T("feature.weather_picker.weather_selection_and_filters", "Weather selection and filters"), true, true, T("feature.weather_picker.choose_weather_and_time", "Choose weather and time") },
+												   { "time", T("feature.weather_picker.time", "Time"), T("feature.weather_picker.set_the_time_of_day_and_simulation_speed", "Set the time of day and simulation speed."), T("feature.weather_picker.game_time_and_speed", "Game time and speed"), true, true, nullptr },
+												   { "analysis", T("feature.weather_picker.analysis", "Analysis"), T("feature.weather_picker.inspect_current_weather_and_feature_responses", "Inspect current weather and feature responses."), T("feature.weather_picker.weather_status_and_lighting_response", "Weather status and lighting response"), true, true, T("feature.weather_picker.inspect_the_result", "Inspect the result") },
+											   });
+	if (page.Is("time"))
+		DrawTimeControls();
+	if (!page.Is("appearance") && !page.Is("analysis"))
+		return;
+
+	EnsureWeatherListLoaded();
+
+	if (page.Is("appearance")) {
+		if (auto* sky = globals::game::sky; sky && sky->mode.get() == RE::Sky::Mode::kFull)
+			RenderWeatherControls(sky);
+		else
+			MenuUI::DetailNote(T("feature.weather_picker.weather_selection_is_available_after_loading_d8389dde", "Weather selection is available after loading an exterior scene."));
+	}
+	if (page.Is("analysis")) {
+		RenderCoreWeatherDetails(true, false);
+		RenderFeatureWeatherAnalysis();
+		MenuUI::DetailNote(T("feature.weather_picker.enabled_shows_hides_the_weather_details_overl_f84086da", "Enabled shows/hides the weather-details overlay without changing weather or time."));
+	}
+}
+
+void WeatherPicker::DrawSettingsEnabledControl()
+{
+	bool enabled = WeatherDetailsWindow.ShowInOverlay;
+	if (Util::Widgets::Checkbox(T("feature.weather_picker.enabled", "Enabled"), &enabled))
+		SetOverlayVisible(enabled);
+	Util::AddTooltip(T("feature.weather_picker.shows_or_hides_the_weather_details_overlay_we_0774ba0a", "Shows or hides the weather-details overlay. Weather and time are unchanged."));
+}
+
+void WeatherPicker::SetOverlayVisible(bool a_enabled)
+{
+	WeatherDetailsWindow.ShowInOverlay = a_enabled;
+	if (a_enabled && Menu::GetSingleton()->overlayVisible)
+		WeatherDetailsWindow.Enabled = true;
+}
+
+void WeatherPicker::DrawTimeControls()
+{
+	ImGui::SeparatorText(T(TKEY("time_control"), "Time Control"));
+	EditorWindow::GetSingleton()->DrawTimeControls();
+	ImGui::Spacing();
+}
+
+void WeatherPicker::DrawWeatherStatusPanel()
+{
+	ImGui::SeparatorText(T(TKEY("weather_transition"), "Weather Transition"));
+
+	auto* weatherManager = WeatherManager::GetSingleton();
+	auto currentWeathers = weatherManager->GetCurrentWeathers();
+	const auto& theme = Menu::GetSingleton()->GetTheme();
+
+	if (currentWeathers.currentWeather) {
+		ImGui::Text(T(TKEY("current_weather"), "Current Weather: %s"),
+			currentWeathers.currentWeather->GetFormEditorID() ?
+				currentWeathers.currentWeather->GetFormEditorID() :
+				std::format("{:08X}", currentWeathers.currentWeather->GetFormID()).c_str());
+
+		const bool isTransitioning = currentWeathers.lastWeather && currentWeathers.lerpFactor < 1.0f;
+		if (isTransitioning) {
+			ImGui::Text(T(TKEY("transitioning_from"), "Transitioning From: %s"),
+				currentWeathers.lastWeather->GetFormEditorID() ?
+					currentWeathers.lastWeather->GetFormEditorID() :
+					std::format("{:08X}", currentWeathers.lastWeather->GetFormID()).c_str());
+
+			float transitionPct = currentWeathers.lerpFactor * 100.0f;
+			const auto transitionOverlay = std::vformat(T(TKEY("transition_progress"), "Transition: {:.1f}%"), std::make_format_args(transitionPct));
+			ImGui::ProgressBar(currentWeathers.lerpFactor, ImVec2(-1, 0), transitionOverlay.c_str());
+		} else {
+			ImGui::TextDisabled("%s", T(TKEY("no_transition"), "No active weather transition"));
+		}
+	} else {
+		ImGui::TextColored(theme.StatusPalette.Warning, "%s", T(TKEY("no_active_weather"), "No Active Weather"));
+	}
+}
+
+// ================================================================================
+// Weather Picker functionality
+// ================================================================================
+
+void WeatherPicker::ResetWindowLayout()
+{
+	WeatherDetailsWindow.PositionSet = false;
+	resetWindowSize = true;
+}
+
+bool WeatherPicker::CanInteractWithDetails() const
+{
+	auto* menu = Menu::GetSingleton();
+	return !menu->IsPreviewFlying() &&
+	       (menu->ShouldSwallowInput() ||
+			   (globals::game::ui && globals::game::ui->IsMenuOpen(RE::CursorMenu::MENU_NAME)));
+}
+
+void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
+{
+	if (!open || !*open)
+		return;
+
+	auto player = RE::PlayerCharacter::GetSingleton();
+	if (!player || !player->parentCell)
+		return;
+
+	const bool allowInputs = CanInteractWithDetails();
+
+	// Set initial position if not already set
+	const float scale = Util::GetUIScale();
+	const auto* viewport = ImGui::GetMainViewport();
+	const float padding = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
+	if (!WeatherDetailsWindow.PositionSet) {
+		const ImVec2 defaultPosition(
+			viewport->WorkPos.x + viewport->WorkSize.x - padding,
+			viewport->WorkPos.y + padding);
+		ImGui::SetNextWindowPos(defaultPosition, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+		WeatherDetailsWindow.Position = defaultPosition;
+		WeatherDetailsWindow.PositionSet = true;
+	} else {
+		ImGui::SetNextWindowPos(WeatherDetailsWindow.Position, ImGuiCond_FirstUseEver);
+	}
+
+	const ImVec2 availableSize(
+		std::max(1.0f, viewport->WorkSize.x - padding * 2.0f),
+		std::max(1.0f, viewport->WorkSize.y - padding * 2.0f));
+	const ImVec2 defaultSize(
+		std::min(600.0f * scale, availableSize.x),
+		std::min(800.0f * scale, availableSize.y));
+	ImGui::SetNextWindowSize(
+		defaultSize,
+		resetWindowSize ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
+	const ImGuiWindowFlags windowFlags = allowInputs ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs;
+	const auto title = std::format("{}###WeatherPickerDetails", T(TKEY("details_title"), "Weather Details"));
+	const bool visible = Util::BeginWithRoundedClose(title.c_str(), open, windowFlags);
+	// Store the resolved top-left even when the window is collapsed. The initial
+	// placement uses a right-edge pivot, while persisted positions do not.
+	const ImVec2 currentPos = ImGui::GetWindowPos();
+	if (currentPos.x != WeatherDetailsWindow.Position.x || currentPos.y != WeatherDetailsWindow.Position.y) {
+		WeatherDetailsWindow.Position = currentPos;
+	}
+
+	if (visible) {
+		// Controls change the page height substantially, so keep interactive and
+		// read-only scroll positions independent.
+		const char* contentId = allowInputs ? "##InteractiveWeatherDetails" : "##ReadOnlyWeatherDetails";
+		if (ImGui::BeginChild(contentId, { 0, 0 })) {
+			RenderCoreWeatherDetails(allowInputs);
+			RenderFeatureWeatherAnalysis();
+		}
+		ImGui::EndChild();
+	}
+	ImGui::End();
+	resetWindowSize = false;
+}
+
+ImVec4 WeatherPicker::GetWeatherTypeColor(RE::TESWeather* weather)
+{
+	if (!weather) {
+		return Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor;
+	}
+
+	const auto& theme = Menu::GetSingleton()->GetTheme();
+
+	// Priority order for weather classification colors (highest priority first)
+	static const std::vector<RE::TESWeather::WeatherDataFlag> priorityOrder = {
+		RE::TESWeather::WeatherDataFlag::kRainy,
+		RE::TESWeather::WeatherDataFlag::kSnow,
+		RE::TESWeather::WeatherDataFlag::kPermAurora,
+		RE::TESWeather::WeatherDataFlag::kAuroraFollowsSun,
+		RE::TESWeather::WeatherDataFlag::kCloudy,
+		RE::TESWeather::WeatherDataFlag::kPleasant
+	};
+
+	// Check flags in priority order
+	for (const auto& flag : priorityOrder) {
+		if (weather->data.flags.any(flag)) {
+			return GetWeatherFlagColor(flag);
+		}
+	}
+
+	// Check for unclassified/unflagged weather
+	if (weather->data.flags.underlying() == 0) {
+		return Menu::GetSingleton()->GetTheme().StatusPalette.Warning;
+	}
+
+	return theme.StatusPalette.InfoColor;  // Default blue
+}
+
+// --- Helper: Display basic weather info (name, flags, percentage) ---
+void WeatherPicker::DisplayWeatherBasicInfo(RE::TESWeather* weather, float weatherPct)
+{
+	if (!weather) {
+		ImGui::BulletText("%s", T(TKEY("no_weather_found"), "No Weather Found"));
+		return;
+	}
+	std::string weatherText = Util::FormatWeather(weather);
+	ImGui::Bullet();
+	ImGui::SameLine();
+	bool showTooltip = WeatherPicker::RenderMultiColorWeatherName(weather, weatherText);
+	if (showTooltip) {
+		ImGui::BeginTooltip();
+		ImGui::Text(T(TKEY("tooltip_name"), "Name: %s"), weather->GetName() ? weather->GetName() : T(TKEY("unnamed"), "Unnamed"));
+		ImGui::Text(T(TKEY("tooltip_editor_id_2"), "Editor ID: %s"), weather->GetFormEditorID() ? weather->GetFormEditorID() : T(TKEY("none_value"), "None"));
+		ImGui::Text(T(TKEY("tooltip_form_id_2"), "Form ID: 0x%08X"), weather->GetFormID());
+		auto flagNames = WeatherPicker::GetWeatherFlagNames(weather);
+		if (!flagNames.empty()) {
+			std::string joinedFlags = GetWeatherFlagLabel(flagNames[0]);
+			for (size_t j = 1; j < flagNames.size(); ++j) {
+				joinedFlags += ", " + GetWeatherFlagLabel(flagNames[j]);
+			}
+			ImGui::Text(T(TKEY("tooltip_flags"), "Flags: %s"), joinedFlags.c_str());
+		} else {
+			ImGui::Text("%s", T(TKEY("tooltip_flags_none"), "Flags: None"));
+		}
+		ImGui::EndTooltip();
+	}
+	if (weatherPct >= 0.0f) {
+		ImGui::BulletText(T(TKEY("weather_percentage"), "Weather Percentage: %.1f%%"), weatherPct * 100.0f);
+	}
+}
+
+void WeatherPicker::DisplayPrecipitationInfo(RE::TESWeather* weather)
+{
+	if (!weather || !weather->precipitationData) {
+		ImGui::BulletText("%s", T(TKEY("no_precipitation_data"), "Particle Density: No precipitation data"));
+		return;
+	}
+	auto particleDensity = weather->precipitationData->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity).f;
+	ImGui::BulletText(T(TKEY("particle_density"), "Particle Density: %.3f"), particleDensity);
+	GET_INSTANCE_MEMBER(particleTexture, weather->precipitationData)
+	if (!particleTexture.textureName.empty()) {
+		ImGui::BulletText(T(TKEY("particle_texture"), "Particle Texture: %s"), particleTexture.textureName.c_str());
+	} else {
+		ImGui::BulletText("%s", T(TKEY("particle_texture_none"), "Particle Texture: None"));
+	}
+	uint8_t precipBeginFadeIn = weather->data.precipitationBeginFadeIn;
+	uint8_t precipEndFadeOut = weather->data.precipitationEndFadeOut;
+	float precipBeginNormalized = precipBeginFadeIn / 255.0f;
+	float precipEndNormalized = precipEndFadeOut / 255.0f;
+	ImGui::BulletText(T(TKEY("precip_begin_fade_in"), "Precip Begin Fade-In: %.3f (raw %u)"), precipBeginNormalized, precipBeginFadeIn);
+	ImGui::BulletText(T(TKEY("precip_end_fade_out"), "Precip End Fade-Out: %.3f (raw %u)"), precipEndNormalized, precipEndFadeOut);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		Util::DrawMultiLineTooltip({ T(TKEY("precip_fade_info_0"), "Precipitation fade transition parameters:"),
+			T(TKEY("precip_fade_info_1"), "Begin Fade-In: Point where precipitation starts appearing"),
+			T(TKEY("precip_fade_info_2"), "End Fade-Out: Point where precipitation fully disappears"),
+			T(TKEY("precip_fade_info_3"), "Raw values: 0-255 (uint8), Normalized: 0.0-1.0") });
+	}
+}
+
+void WeatherPicker::DisplayLightningInfo(RE::TESWeather* weather, bool showInteractiveElements)
+{
+	if (!weather || (uint8_t)weather->data.thunderLightningFrequency == 0)
+		return;
+	const auto& theme = Menu::GetSingleton()->GetTheme();
+	uint8_t lightningR = weather->data.lightningColor.red;
+	uint8_t lightningG = weather->data.lightningColor.green;
+	uint8_t lightningB = weather->data.lightningColor.blue;
+	ImGui::Text("%s", T(TKEY("lightning_color"), "Lightning Color:"));
+	ImGui::SameLine();
+	float lightningColor[3] = { lightningR / 255.0f, lightningG / 255.0f, lightningB / 255.0f };
+	ImGuiColorEditFlags flags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel;
+	if (!showInteractiveElements) {
+		flags |= ImGuiColorEditFlags_NoPicker | ImGuiColorEditFlags_NoTooltip;
+		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, theme.StatusPalette.Disable.w);
+	}
+	bool colorChanged = Util::Widgets::ColorEdit3("##LightningColor", lightningColor, flags);
+	if (!showInteractiveElements) {
+		ImGui::PopStyleVar();
+	}
+	if (colorChanged && showInteractiveElements) {
+		weather->data.lightningColor.red = static_cast<std::uint8_t>(lightningColor[0] * 255.0f + 0.5f);
+		weather->data.lightningColor.green = static_cast<std::uint8_t>(lightningColor[1] * 255.0f + 0.5f);
+		weather->data.lightningColor.blue = static_cast<std::uint8_t>(lightningColor[2] * 255.0f + 0.5f);
+	}
+	uint8_t thunderFreqRaw = (uint8_t)weather->data.thunderLightningFrequency;
+	ImGui::BulletText(T(TKEY("thunder_frequency"), "Thunder Frequency: %u"), static_cast<unsigned>(thunderFreqRaw));
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		Util::DrawMultiLineTooltip({ T(TKEY("thunder_freq_info_0"), "Thunder frequency raw value (0-255):"),
+			"",
+			T(TKEY("thunder_freq_info_1"), "Known data points from Creation Kit slider:"),
+			T(TKEY("thunder_freq_info_2"), "- Raw 15 = ~100% frequency (highest thunder)"),
+			T(TKEY("thunder_freq_info_3"), "- Raw 76 = ~75% frequency"),
+			T(TKEY("thunder_freq_info_4"), "- Raw 203 = ~20% frequency"),
+			T(TKEY("thunder_freq_info_5"), "- Raw 246 = ~5% frequency"),
+			T(TKEY("thunder_freq_info_6"), "- Raw 255 = ~0% frequency (lowest thunder)"),
+			"",
+			T(TKEY("thunder_freq_info_7"), "Range: 0-255 (unsigned 8-bit integer)"),
+			T(TKEY("thunder_freq_info_8"), "Note: Creation Kit interprets this value non-linearly") });
+	}
+	uint8_t lightningBeginFadeIn = weather->data.thunderLightningBeginFadeIn;
+	uint8_t lightningEndFadeOut = weather->data.thunderLightningEndFadeOut;
+	float lightningBeginNormalized = lightningBeginFadeIn / 255.0f;
+	float lightningEndNormalized = lightningEndFadeOut / 255.0f;
+	ImGui::BulletText(T(TKEY("lightning_begin_fade_in"), "Lightning Begin Fade-In: %.3f (raw %u)"), lightningBeginNormalized, lightningBeginFadeIn);
+	ImGui::BulletText(T(TKEY("lightning_end_fade_out"), "Lightning End Fade-Out: %.3f (raw %u)"), lightningEndNormalized, lightningEndFadeOut);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		Util::DrawMultiLineTooltip({ T(TKEY("lightning_fade_info_0"), "Lightning fade transition parameters:"),
+			T(TKEY("lightning_fade_info_1"), "Begin Fade-In: Point where lightning starts appearing"),
+			T(TKEY("lightning_fade_info_2"), "End Fade-Out: Point where lightning fully disappears"),
+			T(TKEY("lightning_fade_info_3"), "Raw values: 0-255 (uint8), Normalized: 0.0-1.0") });
+	}
+}
+
+void WeatherPicker::DisplayWindInfo(RE::TESWeather* weather)
+{
+	auto sky = globals::game::sky;
+	if (!weather || (weather->data.windSpeed <= 0 && (!sky || sky->windSpeed <= 0.0f)))
+		return;
+	float windSpeedDisplay = weather->data.windSpeed / 255.0f;
+	ImGui::BulletText(T(TKEY("weather_wind_speed"), "Weather Wind Speed: %.2f (raw %d)"), windSpeedDisplay, weather->data.windSpeed);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		std::string windStr = Util::Units::FormatWindSpeed(weather->data.windSpeed);
+		Util::DrawMultiLineTooltip({ T(TKEY("wind_speed_tooltip_0"), "Wind speed from weather definition"),
+			windStr.c_str() });
+	}
+	if (sky) {
+		ImGui::BulletText(T(TKEY("sky_wind_speed"), "Sky Wind Speed: %.2f"), sky->windSpeed);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			Util::DrawMultiLineTooltip({ T(TKEY("sky_wind_tooltip_0"), "Current active wind speed from the sky system"),
+				T(TKEY("sky_wind_tooltip_1"), "This affects particle behavior and wind-based effects") });
+		}
+	}
+	float weatherWindDirDegrees = Util::Units::DirectionRawToDegrees(weather->data.windDirection);
+	ImGui::BulletText(T(TKEY("wind_direction"), "Wind Direction: %.1f\xc2\xb0 (raw %d)"), weatherWindDirDegrees, weather->data.windDirection);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		std::string dirStr = Util::Units::FormatDirection(weather->data.windDirection);
+		Util::DrawMultiLineTooltip({ T(TKEY("wind_direction_tooltip_0"), "Wind direction from weather definition"),
+			dirStr.c_str() });
+	}
+	float weatherWindRangeDegrees = Util::Units::DirectionRangeToDegrees(weather->data.windDirectionRange);
+	ImGui::BulletText(T(TKEY("wind_direction_range"), "Wind Direction Range: %.1f\xc2\xb0 (raw %d)"), weatherWindRangeDegrees, weather->data.windDirectionRange);
+
+	if (auto player = RE::PlayerCharacter::GetSingleton()) {
+		float playerAngleZ = player->GetAngleZ();
+		float playerAngleDegrees = Util::Units::NormalizeDegrees0To360(Util::Units::RadiansToDegrees(playerAngleZ));
+		ImGui::BulletText(T(TKEY("player_direction"), "Player Direction: %.1f\xc2\xb0"), playerAngleDegrees);
+		float effectiveWindDirection = Util::Units::NormalizeDegrees0To360(weatherWindDirDegrees - WIND_DIRECTION_OFFSET);
+		float rawDifference = Util::Units::NormalizeDegreesToSignedRange(effectiveWindDirection - playerAngleDegrees);
+		ImGui::BulletText(T(TKEY("effective_wind_dir"), "Effective Wind Dir: %.1f\xc2\xb0 (raw - %.1f\xc2\xb0)"), effectiveWindDirection, WIND_DIRECTION_OFFSET);
+		ImGui::BulletText(T(TKEY("wind_vs_player"), "Wind vs Player: %.1f\xc2\xb0"), rawDifference);
+		const char* windRelation;
+		if (std::abs(rawDifference) < 30.0f) {
+			windRelation = T(TKEY("tailwind"), "Tailwind (wind behind player)");
+		} else if (std::abs(rawDifference) > 150.0f) {
+			windRelation = T(TKEY("headwind"), "Headwind (wind coming toward player)");
+		} else if (rawDifference > 0) {
+			windRelation = T(TKEY("right_crosswind"), "Right crosswind");
+		} else {
+			windRelation = T(TKEY("left_crosswind"), "Left crosswind");
+		}
+		ImGui::SameLine();
+		Util::Text::RestartNeeded("(%s)", windRelation);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			Util::DrawMultiLineTooltip({
+				T(TKEY("wind_vs_player_tooltip_0"), "Wind relative to player direction:"),
+				T(TKEY("wind_vs_player_tooltip_1"), "- ~0\xc2\xb0 = Tailwind (wind behind player)"),
+				T(TKEY("wind_vs_player_tooltip_2"),
+					"- ~\xc2\xb1"
+					"90\xc2\xb0 = Crosswind (left/right)"),
+				T(TKEY("wind_vs_player_tooltip_3"),
+					"- ~\xc2\xb1"
+					"180\xc2\xb0 = Headwind (wind coming toward player)"),
+			});
+		}
+	}
+}
+
+// --- Main function: now just delegates to helpers ---
+void WeatherPicker::DisplayWeatherInfo(RE::TESWeather* weather, float weatherPct, bool showInteractiveElements)
+{
+	ImGui::SeparatorText(T(TKEY("overview"), "Overview"));
+	WeatherPicker::DisplayWeatherBasicInfo(weather, weatherPct);
+	if (!weather)
+		return;
+
+	ImGui::SeparatorText(T(TKEY("precipitation"), "Precipitation"));
+	WeatherPicker::DisplayPrecipitationInfo(weather);
+
+	if ((uint8_t)weather->data.thunderLightningFrequency != 0) {
+		ImGui::SeparatorText(T(TKEY("lightning"), "Lightning"));
+		WeatherPicker::DisplayLightningInfo(weather, showInteractiveElements);
+	}
+
+	auto sky = globals::game::sky;
+	if (weather->data.windSpeed > 0 || (sky && sky->windSpeed > 0.0f)) {
+		ImGui::SeparatorText(T(TKEY("wind"), "Wind"));
+		WeatherPicker::DisplayWindInfo(weather);
+	}
+}
+
+void WeatherPicker::RenderWeatherControls(RE::Sky* sky)
+{
+	auto* editorWindow = EditorWindow::GetSingleton();
+	ImGui::SeparatorText(T(TKEY("weather_selection"), "Weather Selection"));
+
+	ImGui::Text("%s", T(TKEY("filter_by_weather_type"), "Filter by Weather Type:"));
+	if (ImGui::Button(T(TKEY("select_all"), "Select All"))) {
+		s_weatherFlagFilter = ALL_WEATHER_FLAGS;  // All weather flags (bits 0-6, including unclassified)
+	}
+	ImGui::SameLine();
+	if (ImGui::Button(T(TKEY("clear_all"), "Clear All"))) {
+		s_weatherFlagFilter = 0x00;  // No flags
+	}
+	float filterWidth = 0;
+	for (const auto& filter : kClassifiedWeatherFlags)
+		filterWidth = std::max(filterWidth, ImGui::CalcTextSize(GetWeatherFilterLabel(filter)).x);
+	filterWidth = filterWidth * 14.0f / 12.0f + Util::Widgets::CheckboxSize() + ImGui::GetFontSize() * 2;
+	{
+		MenuUI::DetailGrid filters("WeatherFilters", static_cast<int>(kClassifiedWeatherFlags.size()) + 1, filterWidth);
+		for (const auto& filter : kClassifiedWeatherFlags) {
+			filters.Next();
+			const auto flag = static_cast<uint32_t>(filter.flag);
+			bool enabled = (s_weatherFlagFilter & flag) == flag;
+			ImGui::PushStyleColor(ImGuiCol_Text, GetWeatherFlagColor(filter.flag));
+			if (Util::Widgets::Checkbox(GetWeatherFilterLabel(filter), &enabled))
+				s_weatherFlagFilter = enabled ? s_weatherFlagFilter | flag : s_weatherFlagFilter & ~flag;
+			ImGui::PopStyleColor();
+		}
+		filters.Next();
+		bool unclassified = (s_weatherFlagFilter & UNCLASSIFIED_FLAG) != 0;
+		if (Util::Widgets::Checkbox(T(TKEY("none_filter"), "None"), &unclassified))
+			s_weatherFlagFilter = unclassified ? s_weatherFlagFilter | UNCLASSIFIED_FLAG : s_weatherFlagFilter & ~UNCLASSIFIED_FLAG;
+		Util::AddTooltip(T(TKEY("none_filter_tooltip_0"), "Shows weathers that are not classified under any specific category."));
+	}
+
+	// Update filtered weathers when filter changes
+	if (s_lastWeatherFlagFilter != s_weatherFlagFilter) {
+		UpdateFilteredWeathers();
+		s_selectedWeatherIdx = -1;
+		s_lastWeatherFlagFilter = s_weatherFlagFilter;
+	}
+
+	{
+		MenuUI::DetailGrid actions("WeatherActions", 3);
+		actions.Next();
+		if (ImGui::Button(T(TKEY("reset_weather"), "Reset Weather"))) {
+			sky->ResetWeather();
+			// Update the selection box to reflect the reset weather without double-applying
+			s_selectedWeatherIdx = FindWeatherIndex(sky->defaultWeather);
+			logger::info("[WeatherPicker] Reset weather to default");
+		}
+
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("reset_weather_tooltip"), "Resets weather to default"));
+		}
+
+		// Lock Weather toggle
+		actions.Next();
+		bool isLocked = editorWindow->IsWeatherLocked();
+		bool hooksInstalled = EditorWindow::AreWeatherLockHooksInstalled();
+		const char* lockLabel = isLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("lock_weather"), "Lock Weather");
+
+		if (isLocked) {
+			const auto& theme = Menu::GetSingleton()->GetTheme();
+			ImGui::PushStyleColor(ImGuiCol_Button, theme.StatusPalette.SuccessColor);
+		}
+		if (ImGui::Button(lockLabel)) {
+			if (isLocked) {
+				editorWindow->UnlockWeather();
+			} else if (sky->currentWeather) {
+				editorWindow->LockWeather(sky->currentWeather);
+			}
+		}
+		if (isLocked) {
+			ImGui::PopStyleColor();
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			if (hooksInstalled)
+				ImGui::Text("%s", isLocked ? T(TKEY("unlock_weather_tooltip"), "Unlock weather to allow natural changes") : T(TKEY("lock_weather_tooltip"), "Lock current weather to prevent changes"));
+			else
+				ImGui::TextUnformatted(T("feature.weather_picker.weather_lock_hooks_are_unavailable_the_lock_s_94998bc2", "Weather-lock hooks are unavailable; the lock still works but weather may briefly flash before correction"));
+		}
+
+		actions.Next();
+		Util::Widgets::Checkbox(T(TKEY("accelerate_weather_change"), "Accelerate Weather Change"), &s_accelerateWeatherChange);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("accelerate_weather_change_tooltip"), "When enabled, weather changes instantly"));
+		}
+	}
+	ImGui::BeginDisabled(!s_accelerateWeatherChange);
+	Util::Widgets::Checkbox(T("feature.weather_picker.temporary_weather_preview", "Temporary Weather Preview"), &s_transientAcceleratedWeatherPreview);
+	ImGui::EndDisabled();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		Util::DrawMultiLineTooltip({ T("feature.weather_picker.preview_description", "Previews the selected weather immediately without installing a persistent weather override."),
+			T("feature.weather_picker.preview_duration", "The climate may replace an unlocked preview quickly."),
+			T("feature.weather_picker.preview_lock", "Weather Lock continues to hold the selected weather.") });
+	}
+
+	// Weather Selection - now with colored text
+	std::vector<std::string> weatherLabels;
+	weatherLabels.reserve(s_filteredWeathers.size());
+	for (const auto& weather : s_filteredWeathers) {
+		weatherLabels.push_back(Util::FormatWeather(weather));
+	}
+
+	// Custom combo with colored text
+	const char* comboPreview = (s_selectedWeatherIdx >= 0 && s_selectedWeatherIdx < static_cast<int>(weatherLabels.size())) ?
+	                               weatherLabels[s_selectedWeatherIdx].c_str() :
+	                               T(TKEY("select_weather"), "Select Weather");
+
+	static constexpr const char* kWeatherSearchId = "WeatherPicker";
+
+	if (auto combo = Util::Widgets::ComboBox(T(TKEY("weather"), "Weather"), comboPreview)) {
+		auto searchText = Util::DrawComboSearchInput(kWeatherSearchId);
+
+		for (int i = 0; i < static_cast<int>(s_filteredWeathers.size()); ++i) {
+			const bool isSelected = (s_selectedWeatherIdx == i);
+			auto weather = s_filteredWeathers[i];
+
+			// Filter by EditorID, Name, and FormID only (not classification tags)
+			if (!searchText.empty()) {
+				auto editorId = weather->GetFormEditorID() ? std::string(weather->GetFormEditorID()) : "";
+				auto name = weather->GetName() ? std::string(weather->GetName()) : "";
+				auto formId = std::format("{:08X}", weather->GetFormID());
+
+				if (!Util::StringMatchesSearch(editorId, searchText) &&
+					!Util::StringMatchesSearch(name, searchText) &&
+					!Util::StringMatchesSearch(formId, searchText))
+					continue;
+			}
+
+			ImGui::PushStyleColor(ImGuiCol_Text, GetWeatherTypeColor(weather));
+			bool didSelect = ImGui::Selectable(weatherLabels[i].c_str(), isSelected);
+			ImGui::PopStyleColor();
+
+			if (didSelect) {
+				s_selectedWeatherIdx = i;
+				auto selectedWeather = s_filteredWeathers[i];
+
+				const bool transientPreview = s_accelerateWeatherChange && s_transientAcceleratedWeatherPreview;
+				if (transientPreview)
+					EditorWindow::ForceWeather(sky, selectedWeather, false);
+				else
+					sky->SetWeather(selectedWeather, true, s_accelerateWeatherChange);
+
+				// Retarget the lock so Prepass() enforces the new choice instead of reverting it.
+				if (editorWindow->IsWeatherLocked())
+					editorWindow->LockWeather(selectedWeather);
+
+				Util::ClearComboSearch(kWeatherSearchId);
+				logger::info("[WeatherPicker] Changed weather to: {}", Util::FormatWeather(selectedWeather));
+				break;
+			}
+
+			if (ImGui::IsItemHovered()) {
+				ImGui::BeginTooltip();
+				ImGui::Text(T(TKEY("tooltip_weather_name"), "Weather: %s"), weather->GetName() ? weather->GetName() : T(TKEY("unnamed"), "Unnamed"));
+				ImGui::Text(T(TKEY("tooltip_editor_id"), "Editor ID: %s"), weather->GetFormEditorID() ? weather->GetFormEditorID() : T(TKEY("none_value"), "None"));
+				ImGui::Text(T(TKEY("tooltip_form_id"), "Form ID: 0x%08X"), weather->GetFormID());
+				ImGui::EndTooltip();
+			}
+
+			if (isSelected)
+				ImGui::SetItemDefaultFocus();
+		}
+
+	} else {
+		Util::ClearComboSearch(kWeatherSearchId);
+	}
+}
+
+void WeatherPicker::RenderWeatherInformationDisplay(RE::Sky* sky, bool showInteractiveElements)
+{
+	// Update cache: store current lastWeather if it exists, otherwise keep the cached one
+	if (sky->lastWeather) {
+		s_cachedLastWeather = sky->lastWeather;
+	}
+
+	if (!DrawAnalysisSectionHeader(T(TKEY("current_last_weather_analysis"), "Current & Last Weather Analysis")))
+		return;
+
+	// Use cached last weather for display if sky->lastWeather is null
+	RE::TESWeather* displayLastWeather = sky->lastWeather ? sky->lastWeather : s_cachedLastWeather;
+
+	// Create resizable 2-column table for current and last weather
+	if (ImGui::BeginTable("WeatherComparison", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+		// Set up columns
+		ImGui::TableSetupColumn(T(TKEY("current_weather_column"), "Current Weather"), ImGuiTableColumnFlags_WidthStretch, 0.5f);
+		ImGui::TableSetupColumn(T(TKEY("last_weather_column"), "Last Weather"), ImGuiTableColumnFlags_WidthStretch, 0.5f);
+		ImGui::TableHeadersRow();
+
+		ImGui::TableNextRow();
+
+		// Current Weather Column
+		ImGui::TableNextColumn();
+		ImGui::PushID("CurrentWeather");
+		DisplayWeatherInfo(sky->currentWeather, sky->currentWeatherPct, showInteractiveElements);
+		ImGui::PopID();
+
+		// Last Weather Column
+		ImGui::TableNextColumn();
+		ImGui::PushID("LastWeather");
+		DisplayWeatherInfo(displayLastWeather, std::abs(sky->currentWeatherPct - 1.0f), false);
+		ImGui::PopID();
+
+		ImGui::EndTable();
+	}
+}
+
+void WeatherPicker::RenderCoreWeatherDetails(bool showInteractiveElements, bool showSelectionControls)
+{
+	const auto showError = [](const char* msg) {
+		auto menu = Menu::GetSingleton();
+		const auto& theme = menu->GetTheme();
+		ImGui::TextColored(theme.StatusPalette.Error, "%s", msg);
+	};
+
+	if (auto sky = globals::game::sky) {
+		if (sky->mode.get() == RE::Sky::Mode::kFull) {
+			if (showInteractiveElements && showSelectionControls) {
+				RenderWeatherControls(sky);
+			}
+			DrawWeatherStatusPanel();
+			ImGui::Spacing();
+			ImGui::SeparatorText(T(TKEY("analysis"), "Analysis"));
+			RenderWeatherInformationDisplay(sky, showInteractiveElements);
+			ImGui::Spacing();
+		} else {
+			showError(T(TKEY("sky_not_full"), "Sky not in full mode"));
+		}
+	} else {
+		showError(T(TKEY("sky_not_available"), "Sky not available"));
+	}
+}
+
+void WeatherPicker::LoadAllWeathers()
+{
+	if (s_weathersLoaded)
+		return;
+
+	auto dataHandler = RE::TESDataHandler::GetSingleton();
+	if (dataHandler) {
+		auto& weatherArray = dataHandler->GetFormArray<RE::TESWeather>();
+		s_allWeathers.clear();
+		s_allWeathers.reserve(weatherArray.size());
+		for (auto weather : weatherArray) {
+			if (weather) {
+				s_allWeathers.push_back(weather);
+			}
+		}
+
+		// Sort by name, then editorID, then formID for consistent ordering
+		std::sort(s_allWeathers.begin(), s_allWeathers.end(), WeatherNameComparator{});
+		s_weathersLoaded = true;
+		// Initial population of filtered weathers
+		UpdateFilteredWeathers();
+	}
+}
+
+void WeatherPicker::UpdateFilteredWeathers()
+{
+	s_filteredWeathers.clear();
+	for (auto weather : s_allWeathers) {
+		bool shouldInclude = false;
+
+		// Check if all filters are selected (0x7F = all 7 bits)
+		if (s_weatherFlagFilter == ALL_WEATHER_FLAGS) {
+			shouldInclude = true;
+		} else {
+			// Check regular weather flags
+			uint32_t weatherFlags = weather->data.flags.underlying();
+			if ((weatherFlags & (s_weatherFlagFilter & 0x3F)) != 0) {
+				shouldInclude = true;
+			}
+
+			// Check for None filter (bit 6) - includes weathers that don't match any of our tracked flags
+			if (s_weatherFlagFilter & UNCLASSIFIED_FLAG) {
+				// Define the mask for all the specific weather flags we track
+				uint32_t trackedFlags = static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kPleasant) |
+				                        static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kCloudy) |
+				                        static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kRainy) |
+				                        static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kSnow) |
+				                        static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kPermAurora) |
+				                        static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kAuroraFollowsSun);
+
+				// Include if weather has no flags or only has flags we don't track
+				if ((weatherFlags & trackedFlags) == 0) {
+					shouldInclude = true;
+				}
+			}
+		}
+
+		if (shouldInclude) {
+			s_filteredWeathers.push_back(weather);
+		}
+	}
+}
+
+int WeatherPicker::FindWeatherIndex(RE::TESWeather* targetWeather)
+{
+	if (!targetWeather)
+		return -1;
+	for (size_t i = 0; i < s_filteredWeathers.size(); ++i) {
+		if (s_filteredWeathers[i] == targetWeather) {
+			return static_cast<int>(i);
+		}
+	}
+	return -1;
+}
+
+void WeatherPicker::RenderFeatureWeatherAnalysis()
+{
+	auto sky = globals::game::sky;
+	if (!sky || sky->mode.get() != RE::Sky::Mode::kFull)
+		return;
+
+	// Iterate through all loaded features to show their weather analysis
+	for (auto* feature : Feature::GetFeatureList()) {
+		if (feature->loaded) {
+			// Skip WeatherPicker itself to avoid recursion
+			if (feature == &globals::features::weatherPicker) {
+				continue;
+			}
+
+			// Check if this feature provides weather analysis
+			auto weatherConfig = feature->GetWeatherAnalysisConfig();
+			if (weatherConfig.sectionName.empty()) {
+				continue;  // Skip features that don't provide weather analysis
+			}
+
+			auto featureName = feature->GetShortName();
+			ImGui::PushID(featureName.c_str());
+
+			bool isExpanded = DrawAnalysisSectionHeader(weatherConfig.sectionName.c_str());
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text(T(TKEY("feature_weather_analysis_tooltip"), "%s weather analysis"), feature->GetDisplayName().c_str());
+			}
+
+			if (isExpanded) {
+				if (weatherConfig.drawFunction) {
+					weatherConfig.drawFunction();
+				}
+			}
+
+			ImGui::PopID();
+		}
+	}
+}
+
+std::vector<std::string> WeatherPicker::GetWeatherFlagNames(RE::TESWeather* weather)
+{
+	std::vector<std::string> flagNames;
+	if (!weather) {
+		return flagNames;
+	}
+
+	uint32_t flags = weather->data.flags.underlying();
+	if (flags == 0) {
+		flagNames.push_back("None");
+		return flagNames;
+	}
+
+	// Use magic_enum to iterate through all weather flags
+	for (auto flagValue : magic_enum::enum_values<RE::TESWeather::WeatherDataFlag>()) {
+		if (flagValue != RE::TESWeather::WeatherDataFlag::kNone &&
+			weather->data.flags.any(flagValue)) {
+			if (const auto* info = FindWeatherFlagInfo(flagValue)) {
+				flagNames.emplace_back(info->canonicalName);
+			} else {
+				std::string flagName = std::string(magic_enum::enum_name(flagValue));
+				flagNames.push_back(flagName.starts_with("k") ? flagName.substr(1) : flagName);
+			}
+		}
+	}
+
+	// Check for any unknown flags (flags not covered by the enum)
+	uint32_t knownFlags = 0;
+	for (auto flagValue : magic_enum::enum_values<RE::TESWeather::WeatherDataFlag>()) {
+		if (flagValue != RE::TESWeather::WeatherDataFlag::kNone) {
+			knownFlags |= static_cast<uint32_t>(flagValue);
+		}
+	}
+
+	uint32_t unknownFlags = flags & ~knownFlags;
+	if (unknownFlags != 0) {
+		flagNames.push_back(std::format("Unknown({})", unknownFlags));
+	}
+
+	return flagNames;
+}
+
+bool WeatherPicker::RenderMultiColorWeatherName(RE::TESWeather* weather, const std::string& weatherName)
+{
+	if (!weather) {
+		ImGui::Text("%s", weatherName.c_str());
+		return false;
+	}
+
+	// Get all flags present in this weather
+	std::vector<std::string> flagNames = GetWeatherFlagNames(weather);
+
+	// If no flags or only one flag, use simple single-color display
+	if (flagNames.size() <= 1) {
+		ImVec4 weatherColor = GetWeatherTypeColor(weather);
+		ImGui::PushStyleColor(ImGuiCol_Text, weatherColor);
+		ImGui::Text("%s", weatherName.c_str());
+		ImGui::PopStyleColor();
+		return ImGui::IsItemHovered();
+	}
+	// For multiple flags, create a color-coded display
+	// We'll show the weather name in segments, each with its own color
+
+	// Create a visual representation with colored segments
+	// Format: "WeatherName [Flag1][Flag2][Flag3]"
+
+	// Display the main weather name in the primary color (highest priority flag)
+	ImVec4 primaryColor = GetWeatherTypeColor(weather);
+	ImGui::PushStyleColor(ImGuiCol_Text, primaryColor);
+
+	// Extract base weather name (without the flag suffix)
+	std::string baseName = weatherName;
+	size_t bracketPos = baseName.find(" [");
+	if (bracketPos != std::string::npos) {
+		baseName = baseName.substr(0, bracketPos);
+	}
+
+	ImGui::Text("%s", baseName.c_str());
+	ImGui::PopStyleColor();
+
+	// Check if the main weather name (the most important part) was hovered
+	bool baseNameHovered = ImGui::IsItemHovered();
+
+	// Display flags as colored chips on the same line
+	ImGui::SameLine();
+	ImGui::Text(" ");
+
+	for (size_t i = 0; i < flagNames.size(); ++i) {
+		if (flagNames[i] == "None" || flagNames[i].find("Unknown") == 0) {
+			continue;  // Skip "None" and "Unknown" flags for cleaner display
+		}
+
+		ImGui::SameLine();
+		ImVec4 flagColor = GetWeatherFlagColorByName(flagNames[i]);
+		ImGui::PushStyleColor(ImGuiCol_Text, flagColor);
+		// Keep canonical flags for colors/filtering and localize only their labels.
+		const auto displayFlag = GetWeatherFlagLabel(flagNames[i]);
+		ImGui::Text("[%s]", displayFlag.c_str());
+		ImGui::PopStyleColor();
+	}
+
+	// Return true if the base name (largest, most visible part) was hovered
+	return baseNameHovered;
+}
+
+// Helper function to get color for a specific weather flag
+ImVec4 WeatherPicker::GetWeatherFlagColor(RE::TESWeather::WeatherDataFlag flag)
+{
+	const auto& theme = Menu::GetSingleton()->GetTheme();
+
+	switch (flag) {
+	case RE::TESWeather::WeatherDataFlag::kRainy:
+		return ImVec4(0.4f, 0.7f, 1.0f, 1.0f);  // Light blue for rain
+	case RE::TESWeather::WeatherDataFlag::kSnow:
+		return ImVec4(0.9f, 0.9f, 1.0f, 1.0f);  // Light blue-white for snow
+	case RE::TESWeather::WeatherDataFlag::kPermAurora:
+		return ImVec4(0.8f, 0.4f, 1.0f, 1.0f);  // Purple for aurora
+	case RE::TESWeather::WeatherDataFlag::kAuroraFollowsSun:
+		return ImVec4(0.9f, 0.6f, 1.0f, 1.0f);  // Light purple for aurora follows sun
+	case RE::TESWeather::WeatherDataFlag::kCloudy:
+		return ImVec4(0.7f, 0.7f, 0.7f, 1.0f);  // Gray for cloudy
+	case RE::TESWeather::WeatherDataFlag::kPleasant:
+		return theme.StatusPalette.SuccessColor;  // Green for pleasant
+	default:
+		return theme.StatusPalette.InfoColor;  // Default blue
+	}
+}
+
+// Helper function to get color for a specific flag name
+ImVec4 WeatherPicker::GetWeatherFlagColorByName(const std::string& flagName)
+{
+	if (const auto* info = FindWeatherFlagInfo(flagName)) {
+		return GetWeatherFlagColor(info->flag);
+	}
+
+	// Default for unclassified or unknown flags
+	return Menu::GetSingleton()->GetTheme().StatusPalette.Warning;
+}
+
+std::string WeatherPicker::GetDisplayName(const RE::TESWeather* weather)
+{
+	if (!weather) {
+		return T(TKEY("unknown"), "Unknown");
+	}
+	const char* name = weather->GetName();
+	if (name && strlen(name) > 0) {
+		return std::string(name);
+	}
+	const char* editorID = weather->GetFormEditorID();
+	if (editorID && strlen(editorID) > 0) {
+		return std::string(editorID);
+	}
+	return std::to_string(weather->GetFormID());
+}
+
+#undef I18N_KEY_PREFIX
+
+void WeatherPicker::DrawOverlay()
+{
+	const bool overlayRequested =
+		WeatherDetailsWindow.ShowInOverlay && Menu::GetSingleton()->overlayVisible;
+	const bool wasOverlayRequested = s_previousOverlayRequested;
+	s_previousOverlayRequested = overlayRequested;
+
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	if (!player || !player->parentCell)
+		return;
+
+	// If ShowInOverlay is true and overlay is visible, auto-enable the window if not already enabled
+	if (overlayRequested) {
+		if (!wasOverlayRequested && !WeatherDetailsWindow.Enabled) {
+			WeatherDetailsWindow.Enabled = true;
+		}
+		bool* p_open = &WeatherDetailsWindow.Enabled;
+		RenderWeatherDetailsWindow(p_open);
+	}
+}
+
+bool WeatherPicker::IsOverlayVisible() const
+{
+	const bool overlayRequested =
+		WeatherDetailsWindow.ShowInOverlay && Menu::GetSingleton()->overlayVisible;
+	// Keep one falling-edge frame so DrawOverlay() can reset its edge state.
+	if (!overlayRequested)
+		return s_previousOverlayRequested;
+
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	if (!player || !player->parentCell)
+		return false;
+
+	// A rising edge must run once to reopen the window. Once a user closes it,
+	// stop keeping ImGui alive until the overlay is toggled again.
+	return WeatherDetailsWindow.Enabled || !s_previousOverlayRequested;
+}

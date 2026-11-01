@@ -7,6 +7,7 @@
 #include "Menu.h"
 #include "Menu/Fonts.h"
 #include "Menu/IconLoader.h"
+#include "Menu/SettingsActions.h"
 #include "Menu/ThemeManager.h"
 #include "PerfUtils.h"
 #include "ShaderCache.h"
@@ -47,6 +48,110 @@
 
 namespace Util
 {
+	void DrawActionGlyph(ImDrawList* draw, ActionGlyph glyph, ImVec2 minimum, ImVec2 maximum, ImU32 color, bool selected)
+	{
+		const float extent = std::min(maximum.x - minimum.x, maximum.y - minimum.y);
+		const float inset = extent * .12f;
+		const ImVec2 start{ minimum.x + inset, minimum.y + inset };
+		const float size = extent - inset * 2;
+		const float thickness = std::max(1.0f, extent * .028f);
+		auto point = [&](float x, float y) { return ImVec2{ start.x + size * x, start.y + size * y }; };
+		auto line = [&](float x1, float y1, float x2, float y2) { draw->AddLine(point(x1, y1), point(x2, y2), color, thickness); };
+		auto rectangle = [&](float x1, float y1, float x2, float y2) { draw->AddRect(point(x1, y1), point(x2, y2), color, size * .06f, 0, thickness); };
+		switch (glyph) {
+		case ActionGlyph::Home:
+			draw->PathLineTo(point(.2f, .45f));
+			draw->PathLineTo(point(.5f, .12f));
+			draw->PathLineTo(point(.8f, .45f));
+			draw->PathLineTo(point(.8f, .92f));
+			draw->PathLineTo(point(.2f, .92f));
+			draw->PathStroke(color, ImDrawFlags_Closed, thickness);
+			break;
+		case ActionGlyph::General:
+		case ActionGlyph::RestoreDefaults:
+			draw->AddCircle(point(.5f, .5f), size * .3f, color, 24, thickness);
+			draw->AddCircle(point(.5f, .5f), size * .1f, color, 16, thickness);
+			for (int tooth = 0; tooth < 8; ++tooth) {
+				const float angle = tooth * IM_PI * .25f;
+				line(.5f + std::cos(angle) * .31f, .5f + std::sin(angle) * .31f,
+					.5f + std::cos(angle) * .44f, .5f + std::sin(angle) * .44f);
+			}
+			break;
+		case ActionGlyph::Advanced:
+			draw->PathLineTo(point(.5f, .06f));
+			draw->PathLineTo(point(.94f, .5f));
+			draw->PathLineTo(point(.5f, .94f));
+			draw->PathLineTo(point(.06f, .5f));
+			draw->PathStroke(color, ImDrawFlags_Closed, thickness);
+			break;
+		case ActionGlyph::Profiling:
+			rectangle(.05f, .12f, .95f, .88f);
+			for (const float x : { .275f, .5f, .725f })
+				line(x, .12f, x, .88f);
+			break;
+		case ActionGlyph::PerformanceTuning:
+			for (const float y : { .26f, .5f, .74f }) {
+				draw->PathLineTo(point(.16f, y + .08f));
+				draw->PathBezierCubicCurveTo(point(.35f, y - .22f), point(.65f, y + .22f), point(.84f, y - .08f));
+				draw->PathStroke(color, ImDrawFlags_None, thickness);
+			}
+			break;
+		case ActionGlyph::Sidebar:
+			rectangle(0, 0, 1, 1);
+			line(.32f, 0, .32f, 1);
+			if (selected) {
+				for (const float y : { .28f, .5f, .72f })
+					line(.12f, y, .21f, y);
+			}
+			break;
+		case ActionGlyph::SaveSettings:
+			draw->PathLineTo(point(.08f, 0));
+			draw->PathLineTo(point(.74f, 0));
+			draw->PathLineTo(point(1, .26f));
+			draw->PathLineTo(point(1, .92f));
+			draw->PathLineTo(point(.92f, 1));
+			draw->PathLineTo(point(.08f, 1));
+			draw->PathLineTo(point(0, .92f));
+			draw->PathLineTo(point(0, .08f));
+			draw->PathStroke(color, ImDrawFlags_Closed, thickness);
+			rectangle(.22f, 0, .66f, .34f);
+			rectangle(.2f, .59f, .8f, 1);
+			break;
+		case ActionGlyph::LoadSettings:
+			draw->PathArcTo(point(.5f, .5f), size * .48f, -IM_PI * .75f, IM_PI);
+			draw->PathStroke(color, ImDrawFlags_None, thickness);
+			line(.16f, .16f, .16f, .42f);
+			line(.16f, .16f, .42f, .16f);
+			if (glyph == ActionGlyph::LoadSettings) {
+				line(.5f, .26f, .5f, .52f);
+				line(.5f, .52f, .68f, .64f);
+			}
+			break;
+		case ActionGlyph::ClearCache:
+			draw->PathLineTo(point(.58f, .94f));
+			draw->PathLineTo(point(.06f, .94f));
+			draw->PathLineTo(point(0, .88f));
+			draw->PathLineTo(point(0, .12f));
+			draw->PathLineTo(point(.06f, .06f));
+			draw->PathLineTo(point(.35f, .06f));
+			draw->PathLineTo(point(.48f, .24f));
+			draw->PathLineTo(point(.94f, .24f));
+			draw->PathLineTo(point(1, .3f));
+			draw->PathLineTo(point(1, .57f));
+			draw->PathStroke(color, ImDrawFlags_None, thickness);
+			line(0, .39f, 1, .39f);
+			line(.7f, .7f, 1, 1);
+			line(.7f, 1, 1, .7f);
+			break;
+		case ActionGlyph::Close:
+			line(.05f, .05f, .95f, .95f);
+			line(.05f, .95f, .95f, .05f);
+			break;
+		default:
+			break;
+		}
+	}
+
 	static ImVec2 g_screenScaleRatio = { 1.0f, 1.0f };
 	static ImVec2 g_displaySize = { 0.0f, 0.0f };
 
@@ -271,16 +376,19 @@ namespace Util
 	const char* GetClearShaderCacheTooltip()
 	{
 		if (ResolveShaderCacheClearScope() == ShaderCacheClearScope::ActiveOnly) {
-			return "Clears only shaders drawing the current scene. They recompile as the scene redraws; "
-				   "everything else stays cached. Shift-click selects a full clear.";
+			return T("ui.smart_cache_tooltip", "Clears only shaders drawing the current scene. They recompile as the scene redraws; everything else stays cached. Shift-click selects a full clear.");
 		}
-		return "Clears all compiled shaders from memory and disk cache (if enabled). They recompile when "
-			   "the game next encounters them. Shift-click selects a scene-only smart clear.";
+		return T("ui.full_cache_tooltip", "Clears all compiled shaders from memory and disk cache (if enabled). They recompile when the game next encounters them. Shift-click selects a scene-only smart clear.");
 	}
 
 	// Helper function to perform the actual cache clearing
 	static void PerformClearShaderCache(ShaderCacheClearScope a_scope)
 	{
+		if (const auto* reason = MenuUI::GetGlobalSettingsActionBlockReason(MenuUI::GlobalSettingsAction::ClearShaderCache)) {
+			if (globals::menu)
+				globals::menu->ReportSettingsSaveResult(false, reason);
+			return;
+		}
 		auto* shaderCache = globals::shaderCache;
 		if (!shaderCache)
 			return;
@@ -301,9 +409,10 @@ namespace Util
 		auto* menu = globals::menu;
 		if (!menu)
 			return;
-		if (globals::shaderCache &&
-			(globals::shaderCache->IsCapturingActiveShaders() || globals::shaderCache->IsAwaitingMenuCloseCapture()))
+		if (const auto* reason = MenuUI::GetGlobalSettingsActionBlockReason(MenuUI::GlobalSettingsAction::ClearShaderCache)) {
+			menu->ReportSettingsSaveResult(false, reason);
 			return;
+		}
 
 		// If user has opted to skip confirmation, clear immediately
 		if (menu->GetSettings().SkipClearCacheConfirmation) {
@@ -323,18 +432,15 @@ namespace Util
 			return;
 
 		const bool isSmart = pendingClearScope == ShaderCacheClearScope::ActiveOnly;
-		const char* title = isSmart ? "Clear Active Shaders?" : T("ui.clear_shader_cache", "Clear Shader Cache?");
+		const char* title = isSmart ? T("ui.clear_active_shaders", "Clear Active Shaders?") : T("ui.clear_shader_cache", "Clear Shader Cache?");
 		ImGui::OpenPopup(title);
 
 		if (auto popup = CenteredPopupModal(title, &showClearCacheConfirmation)) {
-			ImGui::Text("%s", isSmart ? "Are you sure you want to clear active shaders?" : T("ui.clear_cache_confirm", "Are you sure you want to clear the shader cache?"));
+			ImGui::Text("%s", isSmart ? T("ui.clear_active_shaders_confirm", "Are you sure you want to clear active shaders?") : T("ui.clear_cache_confirm", "Are you sure you want to clear the shader cache?"));
 			ImGui::Spacing();
 			ImGui::Spacing();
 			if (isSmart) {
-				ImGui::TextWrapped(
-					"This watches the current scene, clears only shaders drawing it, then watches once more "
-					"after this menu closes to catch passes hidden by the overlay. Keep the affected area visible. "
-					"Use a full clear if the problem remains.");
+				ImGui::TextWrapped("%s", T("ui.clear_active_shaders_help", "This watches the current scene, clears only shaders drawing it, then watches once more after this menu closes to catch passes hidden by the overlay. Keep the affected area visible. Use a full clear if the problem remains."));
 			} else {
 				ImGui::TextWrapped(
 					"%s", T("ui.clear_cache_desc",
@@ -359,6 +465,8 @@ namespace Util
 			if (offset > 0)
 				ImGui::SetCursorPosX(offset);
 
+			const auto* clearBlockReason = MenuUI::GetGlobalSettingsActionBlockReason(MenuUI::GlobalSettingsAction::ClearShaderCache);
+			ImGui::BeginDisabled(clearBlockReason != nullptr);
 			if (ImGui::Button(T("ui.clear_cache", "Clear Cache"), ImVec2(buttonWidth, 0))) {
 				// Save preference if checkbox is checked
 				if (dontAskAgainCheckbox) {
@@ -372,6 +480,9 @@ namespace Util
 				ImGui::CloseCurrentPopup();
 			}
 
+			ImGui::EndDisabled();
+			if (clearBlockReason)
+				Util::AddTooltip(clearBlockReason, ImGuiHoveredFlags_AllowWhenDisabled);
 			ImGui::SameLine();
 
 			if (ImGui::Button(T("ui.cancel", "Cancel"), ImVec2(buttonWidth, 0))) {
@@ -1793,6 +1904,11 @@ namespace Util
 			return globals::menu->GetTheme().StatusPalette.InfoColor;
 		}
 
+		ImVec4 GetRestartNeeded()
+		{
+			return globals::menu->GetTheme().StatusPalette.RestartNeeded;
+		}
+
 		ImVec4 GetDisabled()
 		{
 			return globals::menu->GetTheme().StatusPalette.Disable;
@@ -1843,6 +1959,8 @@ namespace Util
 		UTIL_TEXT_WRAPPED(WrappedInfo, GetInfo)
 		UTIL_TEXT(Disabled, GetDisabled)
 		UTIL_TEXT_WRAPPED(WrappedDisabled, GetDisabled)
+		UTIL_TEXT(RestartNeeded, GetRestartNeeded)
+		UTIL_TEXT_WRAPPED(WrappedRestartNeeded, GetRestartNeeded)
 
 #undef UTIL_TEXT
 #undef UTIL_TEXT_WRAPPED
@@ -2330,79 +2448,69 @@ namespace Util
 		return true;
 	}
 
+	ImVec2 FeatureToggleSize(const ImVec2& size)
+	{
+		const float frameHeight = ImGui::GetFrameHeight();
+		return { size.x > 0 ? size.x : frameHeight * ThemeManager::Constants::FLAT_TOGGLE_WIDTH_RATIO,
+			size.y > 0 ? size.y : frameHeight * ThemeManager::Constants::FLAT_TOGGLE_HEIGHT_RATIO };
+	}
+
 	bool FeatureToggle(const char* label, bool* enabled, const ImVec2& size)
 	{
 		if (!enabled)
 			return false;
+		const float textLineHeight = ImGui::GetTextLineHeight();
+		const ImVec2 toggleSize = FeatureToggleSize(size);
 
-		// Calculate appropriate size if not specified - make it smaller
-		ImVec2 toggleSize = size;
-		if (toggleSize.x <= 0) {
-			toggleSize.x = ImGui::GetFrameHeight() * 1.6f;  // Smaller 1.6:1 aspect ratio
-		}
-		if (toggleSize.y <= 0) {
-			toggleSize.y = ImGui::GetFrameHeight() * 0.8f;  // Smaller height
-		}
+		const ImVec2 hitSize(toggleSize.x, std::max(toggleSize.y, textLineHeight));
 
-		// Get theme colors for better integration
-		auto& style = ImGui::GetStyle();
-		auto& colors = style.Colors;
-
-		// Use theme header colors instead of bright green/red
-		ImVec4 toggleBg = *enabled ?
-		                      colors[ImGuiCol_Header] :  // Use header color when enabled
-		                      colors[ImGuiCol_FrameBg];  // Use frame background when disabled
-
-		ImVec4 toggleBgHovered = *enabled ?
-		                             colors[ImGuiCol_HeaderHovered] :  // Use header hovered when enabled
-		                             colors[ImGuiCol_FrameBgHovered];  // Use frame hovered when disabled
-
-		ImVec4 toggleBgActive = *enabled ?
-		                            colors[ImGuiCol_HeaderActive] :  // Use header active when enabled
-		                            colors[ImGuiCol_FrameBgActive];  // Use frame active when disabled
-
-		// Apply toggle styling with border
-		ImGui::PushStyleColor(ImGuiCol_Button, toggleBg);
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, toggleBgHovered);
-		ImGui::PushStyleColor(ImGuiCol_ButtonActive, toggleBgActive);
-		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, toggleSize.y * 0.5f);  // Round ends
-		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);               // Larger border
-
-		// Create unique ID for the toggle
 		ImGui::PushID(label);
-
-		// Draw the toggle button
-		bool clicked = ImGui::Button("", toggleSize);
-
-		// Draw the toggle knob
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		ImVec2 buttonMin = ImGui::GetItemRectMin();
-		ImVec2 buttonMax = ImGui::GetItemRectMax();
-
-		// Calculate knob position and size
-		float knobRadius = (toggleSize.y - 4.0f) * 0.5f;
-		float knobPadding = 2.0f;
-		float knobTravel = toggleSize.x - (knobRadius * 2.0f) - (knobPadding * 2.0f);
-		float knobX = *enabled ?
-		                  buttonMin.x + knobPadding + knobRadius + knobTravel :
-		                  buttonMin.x + knobPadding + knobRadius;
-		float knobY = buttonMin.y + toggleSize.y * 0.5f;
-
-		// Draw knob with theme text color so it stays integrated with transparent surfaces.
-		const ImVec4 knobColorVec = *enabled ?
-		                                Color::Blend(colors[ImGuiCol_Text], toggleBg, 0.08f, 0.96f) :
-		                                Color::Blend(colors[ImGuiCol_Text], toggleBg, 0.18f, 0.88f);
-		ImU32 knobColor = ImGui::ColorConvertFloat4ToU32(knobColorVec);
-		drawList->AddCircleFilled(ImVec2(knobX, knobY), knobRadius, knobColor);
-
-		ImGui::PopID();
-		ImGui::PopStyleVar(2);  // Pop both FrameRounding and FrameBorderSize
-		ImGui::PopStyleColor(3);
-
-		// Handle toggle action
+		constexpr ImGuiButtonFlags buttonFlags = ImGuiButtonFlags_EnableNav;
+		bool clicked = ImGui::InvisibleButton("##FeatureToggleHit", hitSize, buttonFlags);
 		if (clicked) {
 			*enabled = !*enabled;
 		}
+
+		const bool active = *enabled;
+		const bool hovered = ImGui::IsItemHovered();
+		const bool held = ImGui::IsItemActive();
+		const auto& theme = Menu::GetSingleton()->GetTheme();
+		const ImVec4 accent = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+		const ImVec4 trackBase = Color::Blend(theme.Palette.Background, theme.Palette.FrameBorder, active ? 0.34f : 0.28f, 1.0f);
+		const ImVec4 trackHovered = Color::Blend(trackBase, theme.Palette.FrameBorder, active ? 0.30f : 0.26f, 1.0f);
+		const ImVec4 trackActive = Color::Blend(trackBase, theme.Palette.FrameBorder, active ? 0.40f : 0.34f, 1.0f);
+		ImVec4 trackColor = held ? trackActive : (hovered ? trackHovered : trackBase);
+		ImVec4 borderColor = Color::Blend(theme.Palette.FrameBorder, theme.Palette.Background, active ? 0.02f : 0.06f, active ? 1.0f : 0.96f);
+		{
+			const ImVec4 tint = active ? accent : theme.Palette.Text;
+			const float blend = active ? ThemeManager::Constants::FLAT_TOGGLE_ON_BLEND : ThemeManager::Constants::FLAT_TOGGLE_OFF_BLEND;
+			trackColor = Color::Blend(trackColor, tint, blend, trackColor.w);
+			borderColor = Color::Blend(borderColor, tint, blend, borderColor.w);
+		}
+		const ImVec4 knobColor = active ?
+		                             Color::Blend(theme.Palette.Text, trackColor, 0.08f, 0.96f) :
+		                             Color::Blend(theme.Palette.Text, trackColor, 0.18f, 0.88f);
+
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		const ImVec2 hitMin = ImGui::GetItemRectMin();
+		const ImVec2 trackMin(hitMin.x, hitMin.y + (hitSize.y - toggleSize.y) * 0.5f);
+		const ImVec2 trackMax(trackMin.x + toggleSize.x, trackMin.y + toggleSize.y);
+		const float rounding = toggleSize.y * 0.5f;
+		constexpr float borderSize = ThemeManager::Constants::FLAT_TOGGLE_BORDER_SIZE;
+		const auto packColor = [](const ImVec4& color) { return ImGui::GetColorU32(color); };
+		drawList->AddRectFilled(trackMin, trackMax, packColor(trackColor), rounding);
+		drawList->AddRect(trackMin, trackMax, packColor(borderColor), rounding, 0, borderSize);
+
+		constexpr float knobPadding = ThemeManager::Constants::FLAT_TOGGLE_KNOB_PADDING;
+		const float knobRadius = std::max(3.0f, (toggleSize.y - knobPadding * 2.0f) * 0.5f);
+		const float knobTravel = toggleSize.x - (knobRadius * 2.0f) - (knobPadding * 2.0f);
+		const float knobX = active ?
+		                        trackMin.x + knobPadding + knobRadius + knobTravel :
+		                        trackMin.x + knobPadding + knobRadius;
+		const float knobY = trackMin.y + toggleSize.y * 0.5f;
+		drawList->AddCircleFilled(ImVec2(knobX, knobY), knobRadius, packColor(knobColor));
+
+		ImGui::PopID();
 
 		return clicked;
 	}

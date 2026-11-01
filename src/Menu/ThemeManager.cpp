@@ -1,5 +1,7 @@
 #include "ThemeManager.h"
 #include "../Menu.h"
+#include "I18n/I18n.h"
+#include "Layout.h"
 #include "ThemePresets.h"
 
 #include "BackgroundBlur.h"
@@ -185,22 +187,15 @@ void ThemeManager::SetupImGuiStyle(const Menu& menu)
 	// rescale here
 	auto styleCopy = themeSettings.Style;
 
-	float globalScale = themeSettings.GlobalScale;
-
-	// Use default global scale (0.0) for built-in themes when GlobalScale equals the default
-	if (std::abs(globalScale - Constants::DEFAULT_GLOBAL_SCALE) < 0.001f) {
-		globalScale = Constants::DEFAULT_GLOBAL_SCALE;  // Ensure built-in themes stay at 0.0
-	}
-
-	// Scale style sizes by GlobalScale and font-size ratio (theme values target 1080p baseline)
 	float fontScale = 1.0f;
 	auto& io = ImGui::GetIO();
-	if (io.FontDefault) {
-		constexpr float kBaselineFontSize = Constants::DEFAULT_SCREEN_HEIGHT * Constants::DEFAULT_FONT_RATIO;
-		fontScale = io.FontDefault->LegacySize / kBaselineFontSize;
-	}
-	const float scaleFactor = fontScale * exp2(globalScale);
+	const float effectiveScale = MenuUI::Layout::EffectiveScale(themeSettings.GlobalScale,
+		io.FontDefault ? io.FontDefault->LegacySize : Constants::DEFAULT_FONT_SIZE, io.DisplaySize, style.FontScaleDpi);
+	if (io.FontDefault)
+		fontScale = io.FontDefault->LegacySize / Util::kBaselineFontSize;
+	const float scaleFactor = fontScale * effectiveScale;
 	styleCopy.ScaleAllSizes(scaleFactor);
+	styleCopy.ScrollbarSize = std::max(styleCopy.ScrollbarSize, Constants::MIN_SCROLLBAR_SIZE * scaleFactor);
 
 	// ScaleAllSizes skips border and separator sizes — scale them manually, flooring non-zero values at 1px
 	auto scaleSize = [scaleFactor](float value) -> float {
@@ -224,7 +219,7 @@ void ThemeManager::SetupImGuiStyle(const Menu& menu)
 
 	style = styleCopy;
 	style.HoverDelayNormal = themeSettings.TooltipHoverDelay;
-	style.FontScaleMain = exp2(globalScale);
+	style.FontScaleMain = effectiveScale;
 
 	// Always use the unified FullPalette system instead of switching between simple/full
 	// This ensures consistent behavior regardless of UI presentation mode
@@ -534,14 +529,8 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 		return false;
 	}
 
-	float globalScale = themeSettings.GlobalScale;
-
-	// Use default global scale (0.0) for built-in themes when GlobalScale equals the default
-	if (std::abs(globalScale - Constants::DEFAULT_GLOBAL_SCALE) < 0.001f) {
-		globalScale = Constants::DEFAULT_GLOBAL_SCALE;  // Ensure built-in themes stay at 0.0
-	}
-
-	ImGui::GetStyle().FontScaleMain = exp2(globalScale);
+	ImGui::GetStyle().FontScaleMain = MenuUI::Layout::EffectiveScale(themeSettings.GlobalScale,
+		io.FontDefault->LegacySize, io.DisplaySize, ImGui::GetStyle().FontScaleDpi);
 	ImGui::GetStyle().FontSizeBase = 0.0f;  // Force UpdateFontsNewFrame to re-detect from font->LegacySize
 
 	cachedFontSize = fontSize;
@@ -695,58 +684,37 @@ bool ThemeManager::LoadTheme(const std::string& themeName, json& themeSettings)
 }
 
 bool ThemeManager::SaveTheme(const std::string& themeName, const json& themeSettings,
-	const std::string& displayName, const std::string& description)
+	const std::string& displayName, const std::string& description, std::string& error, bool overwriteExisting)
 {
-	if (themeName.empty()) {
-		logger::warn("Cannot save theme with empty name");
+	error.clear();
+	const auto safeFileName = Util::FileHelpers::SanitizeFileName(themeName);
+	if (safeFileName.empty() || IsPresetTheme(safeFileName)) {
+		error = T("menu.themes.invalid_custom_name", "Choose a non-empty custom theme name; built-in themes cannot be overwritten.");
 		return false;
 	}
-	if (IsPresetTheme(themeName)) {
-		logger::warn("Cannot overwrite preset theme: {}", themeName);
-		return false;
-	}
-
-	// Create the full theme JSON structure
-	json fullTheme = {
-		{ "DisplayName", displayName.empty() ? themeName : displayName },
-		{ "Description", description.empty() ? "Custom user theme" : description },
-		{ "Version", "1.0.0" },
-		{ "Author", "User" },
-		{ "Theme", themeSettings }
-	};
-
-	std::string safeFileName = Util::FileHelpers::SanitizeFileName(themeName);
-	auto themesDir = GetThemesDirectory();
-	auto filePath = themesDir / (safeFileName + ".json");
-
-	logger::info("SaveTheme: Saving theme '{}' to file: {}", themeName, filePath.string());
-	logger::debug("SaveTheme: Theme has {} top-level keys", fullTheme.size());
-
+	const auto filePath = GetThemesDirectory() / (safeFileName + ".json");
+	bool written = false;
 	try {
-		// Ensure themes directory exists
-		std::filesystem::create_directories(themesDir);
-		logger::debug("SaveTheme: Themes directory ensured: {}", themesDir.string());
-
-		// Write the theme file
-		std::ofstream file(filePath);
-		if (!file.is_open()) {
-			logger::warn("Failed to create theme file: {}", filePath.string());
+		const json fullTheme = {
+			{ "DisplayName", displayName.empty() ? safeFileName : displayName },
+			{ "Description", description.empty() ? "Custom user theme" : description },
+			{ "Version", "1.0.0" },
+			{ "Author", "User" },
+			{ "Theme", themeSettings }
+		};
+		if (!Util::FileHelpers::WriteTextFileAtomic(filePath, fullTheme.dump(4), error, false, overwriteExisting)) {
+			logger::warn("Could not save theme {}: {}", safeFileName, error);
 			return false;
 		}
-
-		file << fullTheme.dump(4);  // Pretty print with 4-space indentation
-		file.close();
-
-		logger::info("Saved theme: {} to {}", themeName, filePath.string());
-
-		// Refresh themes to include the new one
+		written = true;
 		RefreshThemes();
-
-		return true;
 	} catch (const std::exception& e) {
-		logger::warn("Error saving theme {}: {}", themeName, e.what());
+		error = written ? std::string(T("menu.themes.saved_refresh_failed", "The theme file was saved, but its list could not refresh: ")) + e.what() : e.what();
+		logger::warn("Could not save theme {}: {}", safeFileName, error);
 		return false;
 	}
+	logger::info("Saved theme: {} to {}", safeFileName, filePath.string());
+	return true;
 }
 
 const ThemeManager::ThemeInfo* ThemeManager::GetThemeInfo(const std::string& themeName) const
@@ -771,7 +739,7 @@ std::filesystem::path ThemeManager::GetThemesDirectory() const
 bool ThemeManager::IsPresetTheme(const std::string& themeName) const
 {
 	for (const char* preset : ThemePresets::names) {
-		if (themeName == preset)
+		if (Util::IEquals(themeName, preset))
 			return true;
 	}
 	return false;

@@ -59,6 +59,7 @@ public:
 	const char* GetWidgetTypeName() const override { return "ImageSpace"; }
 	void LoadSettings() override;
 	void SaveSettings() override;
+	void MarkSavedState() override { originalSettings = settings; }
 	bool HasUnsavedChanges() const override;
 	std::vector<SearchResult> CollectSearchableSettings() const override;
 
@@ -67,4 +68,6 @@ public:
 	void LoadFromGameSettings();
 	void ApplyChanges() override;
 	void RevertChanges() override;
+	UndoRestoreAction CaptureUndoState() const override;
+	UndoRestoreAction CaptureBaselineState() const override;
 };

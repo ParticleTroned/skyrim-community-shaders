@@ -118,13 +118,14 @@
         "capture": { "$ref": "#/$defs/capture" },
         "schedule": {
           "type": "object",
+          "description": "Cadence starts at the first unpaused render observation. Paused/loading time is held. Missed slots are reported as drops, never captured in a catch-up burst. game_frames targets Present dispatch frames; wall_clock uses the first Present within each interval. Accepted VR eyes arrive separately and retain actual acquisition/lateness metadata.",
           "properties": {
             "basis": { "enum": ["game_frames", "wall_clock"] },
             "intervalFrames": { "type": "integer", "minimum": 1 },
             "intervalMs": { "type": "integer", "minimum": 1 },
             "startDelayFrames": { "type": "integer", "minimum": 0 },
             "startDelayMs": { "type": "integer", "minimum": 0 },
-            "pausePolicy": { "const": "hold" }
+            "pausePolicy": { "const": "hold", "description": "Hold sequence scheduling during pause/loading; acquired images drain. An interrupted pending acquisition is reported as dropped. Bursts fail continuity if interrupted." }
           },
           "additionalProperties": false
         },

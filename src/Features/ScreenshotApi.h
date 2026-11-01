@@ -5,6 +5,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Features/ScreenshotBurstPolicy.h"
 #endif
+#include "Features/ScreenshotSequencePolicy.h"
 #include "Features/ScreenshotStorageSecurity.h"
 #include "ScreenshotManifestSnapshot.h"
 #include "ScreenshotNeuralDiagnostics.h"
@@ -22,6 +23,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 struct ScreenshotFeature;
@@ -126,6 +128,7 @@ private:
 		uint32_t intervalFrames = 1;
 		uint32_t startDelayFrames = 0;
 		uint32_t intervalMs = 0;
+		uint32_t startDelayMs = 0;
 		uint32_t maximumConsecutiveSkips = 10;
 		uint32_t nextOrdinal = 1;
 		uint32_t scheduled = 0;
@@ -141,8 +144,7 @@ private:
 		uint32_t cancelled = 0;
 		uint32_t consecutiveSkips = 0;
 		uint32_t inFlight = 0;
-		uint64_t nextEngineFrame = 0;
-		std::chrono::steady_clock::time_point nextWallClock{};
+		CSX::ScreenshotPolicy::SequenceClock clock;
 		std::string scheduleBasis = "game_frames";
 		std::string backpressurePolicy = "skip";
 		std::string failurePolicy = "continue";
@@ -302,12 +304,17 @@ private:
 	void TrimLocked();
 	std::size_t CountPendingOperationsLocked() const;
 	void FinishSequenceChildLocked(RequestRecord& a_child);
+	void FinishSourceLocked(RequestRecord& a_record, std::string_view a_state, std::string_view a_error);
 	void TryFinalizeSequenceLocked(SequenceRecord& a_sequence);
 	void FinalizeSequenceLocked(SequenceRecord& a_sequence, const ManifestResult* a_manifestResult);
 	void QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool a_final);
 	void DrainManifestResultsLocked();
 	static void ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_state);
-	std::optional<DueFrame> PrepareDueFrameLocked(uint64_t a_engineFrame);
+	/** Accounts for a bounded number of missed slots before admitting a capture. */
+	std::optional<DueFrame> PrepareDueFrameLocked(uint64_t a_engineFrame, std::chrono::steady_clock::time_point a_now);
+	DueFrame CreateSequenceFrameLocked(SequenceRecord& a_sequence, uint64_t a_engineFrame, std::chrono::steady_clock::time_point a_now);
+	/** Holds paused schedules and returns unacquired sources to cancel outside the API lock. */
+	std::vector<std::pair<std::string, std::string>> UpdateSequenceClocksLocked(uint64_t a_engineFrame, std::chrono::steady_clock::time_point a_now);
 	std::optional<DispatchEntry> PopDispatchLocked();
 	void RequeueDispatchLocked(DispatchEntry a_entry, bool a_manual);
 	bool RemoveQueuedDispatchLocked(std::string_view a_requestId);

@@ -521,12 +521,16 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 		sequence.scheduleBasis = schedule.value("basis", std::string("game_frames"));
 		if (sequence.scheduleBasis != "game_frames" && sequence.scheduleBasis != "wall_clock")
 			return MakeError(a_request, "invalid_field", "schedule basis must be game_frames or wall_clock", "validation", false, "sequence.schedule.basis");
-		sequence.intervalFrames = std::max(1u, schedule.value("intervalFrames", a_feature.sequenceDefaults.intervalFrames));
-		sequence.startDelayFrames = schedule.value("startDelayFrames", 0u);
-		sequence.intervalMs = std::max(1u, schedule.value("intervalMs", 100u));
-		const auto startDelayMs = schedule.value("startDelayMs", 0u);
+		if (schedule.value("pausePolicy", "hold") != "hold")
+			return MakeError(a_request, "invalid_field", "only pausePolicy=hold is supported", "validation", false, "sequence.schedule.pausePolicy");
+		sequence.intervalFrames = sequence.scheduleBasis == "game_frames" ?
+		                              std::max(1u, schedule.value("intervalFrames", a_feature.sequenceDefaults.intervalFrames)) :
+		                              1u;
+		sequence.startDelayFrames = sequence.scheduleBasis == "game_frames" ? schedule.value("startDelayFrames", 0u) : 0u;
+		sequence.intervalMs = sequence.scheduleBasis == "wall_clock" ? std::max(1u, schedule.value("intervalMs", 100u)) : 1u;
+		sequence.startDelayMs = sequence.scheduleBasis == "wall_clock" ? schedule.value("startDelayMs", 0u) : 0u;
 		if (sequence.scheduleBasis == "wall_clock" &&
-			!CSX::ScreenshotPolicy::IsWallClockScheduleWithinLimit(startDelayMs, sequence.intervalMs, frameCount))
+			!CSX::ScreenshotPolicy::IsWallClockScheduleWithinLimit(sequence.startDelayMs, sequence.intervalMs, frameCount))
 			return MakeError(a_request, "invalid_field", "sequence wall-clock span exceeds the advertised limit", "validation", false, "sequence.schedule");
 		if (sequence.scheduleBasis == "game_frames" &&
 			!CSX::ScreenshotPolicy::IsGameFrameScheduleWithinLimit(sequence.startDelayFrames, sequence.intervalFrames, frameCount))
@@ -555,13 +559,13 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 								  { "state", preview.value("requested", false) ? "unsupported" : "not_requested" },
 							  } },
 		};
-		json effectiveSchedule = { { "basis", sequence.scheduleBasis } };
+		json effectiveSchedule = { { "basis", sequence.scheduleBasis }, { "pausePolicy", "hold" } };
 		if (sequence.scheduleBasis == "game_frames") {
 			effectiveSchedule["intervalFrames"] = sequence.intervalFrames;
 			effectiveSchedule["startDelayFrames"] = sequence.startDelayFrames;
 		} else {
 			effectiveSchedule["intervalMs"] = sequence.intervalMs;
-			effectiveSchedule["startDelayMs"] = startDelayMs;
+			effectiveSchedule["startDelayMs"] = sequence.startDelayMs;
 		}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (requestedSequence.contains("burst")) {
@@ -628,8 +632,6 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 				return MakeError(a_request, "busy", "burst requires an idle capture service", "dispatch", true);
 #endif
 			sequence.requestId = requestId;
-			sequence.nextEngineFrame = (globals::state ? globals::state->frameCount : 0u) + sequence.startDelayFrames;
-			sequence.nextWallClock = std::chrono::steady_clock::now() + std::chrono::milliseconds(startDelayMs);
 			try {
 				sequence.directoryLease = CSX::ScreenshotStorage::DirectoryLease::CreateExclusive(
 					std::filesystem::u8path(descriptor["destination"]["resolvedDirectory"].get<std::string>()),
@@ -1632,16 +1634,25 @@ void ScreenshotApi::OnSourceTerminal(std::string_view a_requestId, std::string_v
 	const auto found = requests.find(std::string(a_requestId));
 	if (found == requests.end() || IsTerminal(found->second.state))
 		return;
-	found->second.error = a_error.empty() ? json(nullptr) : json({ { "code", a_error }, { "message", a_error }, { "phase", "source" } });
-	if (!found->second.error.is_null())
-		found->second.errors.push_back(found->second.error);
+	FinishSourceLocked(found->second, a_state, a_error);
+}
+
+void ScreenshotApi::FinishSourceLocked(RequestRecord& a_record, std::string_view a_state, std::string_view a_error)
+{
+	if (a_record.cancelRequested && a_state == "dropped") {
+		a_state = "cancelled";
+		a_error = "client_requested";
+	}
+	a_record.error = a_error.empty() ? json(nullptr) : json({ { "code", a_error }, { "message", a_error }, { "phase", "source" } });
+	if (!a_record.error.is_null())
+		a_record.errors.push_back(a_record.error);
 	if (a_error == "source_timeout")
-		AppendEventLocked(found->second, "source.timeout", { { "reason", a_error } });
-	if (found->second.kind == "sequence_frame" &&
+		AppendEventLocked(a_record, "source.timeout", { { "reason", a_error } });
+	if (a_record.kind == "sequence_frame" &&
 		(a_state == "dropped" || a_error == "source_busy" || a_error == "encoder_backpressure"))
-		AppendEventLocked(found->second, "sequence.frame_dropped", { { "reason", a_error } });
-	TransitionLocked(found->second, std::string(a_state), "request.terminal", { { "reason", a_error } });
-	FinishSequenceChildLocked(found->second);
+		AppendEventLocked(a_record, "sequence.frame_dropped", { { "reason", a_error } });
+	TransitionLocked(a_record, std::string(a_state), "request.terminal", { { "reason", a_error } });
+	FinishSequenceChildLocked(a_record);
 }
 
 void ScreenshotApi::FinishSequenceChildLocked(RequestRecord& a_child)
@@ -1942,12 +1953,57 @@ void ScreenshotApi::DrainManifestResultsLocked()
 	}
 }
 
-std::optional<ScreenshotApi::DueFrame> ScreenshotApi::PrepareDueFrameLocked(uint64_t a_engineFrame)
+ScreenshotApi::DueFrame ScreenshotApi::CreateSequenceFrameLocked(
+	SequenceRecord& a_sequence, uint64_t a_engineFrame, std::chrono::steady_clock::time_point a_now)
 {
-	const auto now = std::chrono::steady_clock::now();
+	DueFrame dueFrame;
+	dueFrame.parentRequestId = a_sequence.requestId;
+	dueFrame.childRequestId = CSX::Api::ServiceFoundation::NewId();
+	dueFrame.ordinal = a_sequence.nextOrdinal++;
+	dueFrame.capture = a_sequence.capture;
+	const auto requestedEngineFrame = a_sequence.clock.nextFrame;
+	const auto requestedWallClock = a_sequence.clock.nextTime;
+	dueFrame.capture["destination"] = {
+		{ "policy", "absolute" },
+		{ "directory", Util::PathToUtf8(a_sequence.directory) },
+		{ "baseName", std::format("frame_{:06}", dueFrame.ordinal) },
+		{ "overwrite", "never" },
+	};
+	++a_sequence.scheduled;
+	++a_sequence.inFlight;
+	a_sequence.clock.Advance(a_sequence.intervalFrames, a_sequence.intervalMs);
+	json childRequest = {
+		{ "action", "capture" },
+		{ "clientId", "sequence:" + a_sequence.requestId },
+		{ "commandId", std::format("frame:{}", dueFrame.ordinal) },
+		{ "contractMajor", kContractMajor },
+	};
+	auto& child = CreateRequestLocked("sequence_frame", childRequest, dueFrame.capture, a_sequence.requestId, dueFrame.ordinal, dueFrame.childRequestId);
+	child.scheduleBasis = a_sequence.scheduleBasis;
+	child.scheduledEngineFrame = a_sequence.scheduleBasis == "game_frames" ? requestedEngineFrame : a_engineFrame;
+	child.scheduledTimestampUs = static_cast<uint64_t>(
+		std::chrono::duration_cast<std::chrono::microseconds>(
+			(a_sequence.scheduleBasis == "wall_clock" ? requestedWallClock : a_now).time_since_epoch())
+			.count());
+	child.scheduledUtc = a_sequence.scheduleBasis == "wall_clock" ?
+	                         TimestampUtcAt(std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+								 std::chrono::system_clock::now() + (requestedWallClock - a_now))) :
+	                         CSX::Api::ServiceFoundation::TimestampUtc();
+	AppendEventLocked(child, "sequence.frame_scheduled", {
+															 { "ordinal", dueFrame.ordinal },
+															 { "requestedEngineFrame", child.scheduledEngineFrame },
+															 { "monotonicTimestampUs", child.scheduledTimestampUs },
+														 });
+	return dueFrame;
+}
+
+std::optional<ScreenshotApi::DueFrame> ScreenshotApi::PrepareDueFrameLocked(
+	uint64_t a_engineFrame, std::chrono::steady_clock::time_point a_now)
+{
 	const auto sequenceCount = sequenceOrder.size();
+	uint32_t slots = 0;
 	for (std::size_t checked = 0; checked < sequenceCount; ++checked) {
-		if (sequenceOrder.empty())
+		if (sequenceOrder.empty() || slots >= CSX::ScreenshotPolicy::MaximumSequenceSlotsPerTick)
 			break;
 		sequenceCursor %= sequenceOrder.size();
 		const auto sequenceId = sequenceOrder[sequenceCursor];
@@ -1956,59 +2012,77 @@ std::optional<ScreenshotApi::DueFrame> ScreenshotApi::PrepareDueFrameLocked(uint
 		if (found == sequences.end())
 			continue;
 		auto& sequence = found->second;
-		const bool sourceBusy =
+		const bool gameFrames = sequence.scheduleBasis == "game_frames";
+		while (!sequence.finalizing && !sequence.stopRequested && !sequence.cancelRequested &&
+			   sequence.nextOrdinal <= sequence.frameCount && slots < CSX::ScreenshotPolicy::MaximumSequenceSlotsPerTick &&
+			   sequence.clock.Due(gameFrames, a_engineFrame, a_now)) {
+			const bool missed = CSX::ScreenshotPolicy::SequenceClock::Missed(gameFrames,
+				sequence.clock.nextFrame, sequence.clock.nextTime, sequence.intervalMs, a_engineFrame, a_now);
+			const bool sourceBusy =
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			sequence.burst ? !sequence.activeChildRequestId.empty() :
+				sequence.burst ? !sequence.activeChildRequestId.empty() :
 #endif
-							 sequence.inFlight != 0;
-		if (sequence.finalizing || sequence.stopRequested || sequence.cancelRequested || sourceBusy || sequence.nextOrdinal > sequence.frameCount)
-			continue;
-		const bool due = sequence.scheduleBasis == "game_frames" ? a_engineFrame >= sequence.nextEngineFrame : now >= sequence.nextWallClock;
-		if (!due)
-			continue;
-		DueFrame dueFrame;
-		dueFrame.parentRequestId = sequence.requestId;
-		dueFrame.childRequestId = CSX::Api::ServiceFoundation::NewId();
-		dueFrame.ordinal = sequence.nextOrdinal++;
-		dueFrame.capture = sequence.capture;
-		const auto requestedEngineFrame = sequence.nextEngineFrame;
-		const auto requestedWallClock = sequence.nextWallClock;
-		dueFrame.capture["destination"] = {
-			{ "policy", "absolute" },
-			{ "directory", Util::PathToUtf8(sequence.directory) },
-			{ "baseName", std::format("frame_{:06}", dueFrame.ordinal) },
-			{ "overwrite", "never" },
-		};
-		++sequence.scheduled;
-		++sequence.inFlight;
-		sequence.activeChildRequestId = dueFrame.childRequestId;
-		sequence.nextEngineFrame += sequence.intervalFrames;
-		sequence.nextWallClock += std::chrono::milliseconds(sequence.intervalMs);
-		json childRequest = {
-			{ "action", "capture" },
-			{ "clientId", "sequence:" + sequence.requestId },
-			{ "commandId", std::format("frame:{}", dueFrame.ordinal) },
-			{ "contractMajor", kContractMajor },
-		};
-		auto& child = CreateRequestLocked("sequence_frame", childRequest, dueFrame.capture, sequence.requestId, dueFrame.ordinal, dueFrame.childRequestId);
-		child.scheduleBasis = sequence.scheduleBasis;
-		child.scheduledEngineFrame = sequence.scheduleBasis == "game_frames" ? requestedEngineFrame : a_engineFrame;
-		child.scheduledTimestampUs = static_cast<uint64_t>(
-			std::chrono::duration_cast<std::chrono::microseconds>(
-				(sequence.scheduleBasis == "wall_clock" ? requestedWallClock : now).time_since_epoch())
-				.count());
-		child.scheduledUtc = sequence.scheduleBasis == "wall_clock" ?
-		                         TimestampUtcAt(std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-									 std::chrono::system_clock::now() + (requestedWallClock - now))) :
-		                         CSX::Api::ServiceFoundation::TimestampUtc();
-		AppendEventLocked(child, "sequence.frame_scheduled", {
-																 { "ordinal", dueFrame.ordinal },
-																 { "requestedEngineFrame", child.scheduledEngineFrame },
-																 { "monotonicTimestampUs", child.scheduledTimestampUs },
-															 });
-		return dueFrame;
+								 sequence.inFlight != 0;
+			auto frame = CreateSequenceFrameLocked(sequence, a_engineFrame, a_now);
+			++slots;
+			if (missed || sourceBusy) {
+				FinishSourceLocked(requests.at(frame.childRequestId), "dropped",
+					missed ? "missed_cadence" : "encoder_backpressure");
+				continue;
+			}
+			sequence.activeChildRequestId = frame.childRequestId;
+			return frame;
+		}
 	}
 	return std::nullopt;
+}
+
+std::vector<std::pair<std::string, std::string>> ScreenshotApi::UpdateSequenceClocksLocked(
+	uint64_t a_engineFrame, std::chrono::steady_clock::time_point a_now)
+{
+	std::vector<std::pair<std::string, std::string>> interruptions;
+	std::optional<bool> paused;
+	for (auto& [_, sequence] : sequences) {
+		if (sequence.finalizing || sequence.stopRequested || sequence.cancelRequested ||
+			(sequence.nextOrdinal > sequence.frameCount && sequence.activeChildRequestId.empty()))
+			continue;
+		if (!paused)
+			paused = (globals::state && globals::state->isLoadingMenuOpen) ||
+			         (globals::game::ui && globals::game::ui->GameIsPaused());
+		std::string reason;
+		if (!sequence.clock.Observe(a_engineFrame, a_now, *paused, sequence.startDelayFrames, sequence.startDelayMs)) {
+			reason = "sequence_clock_regressed";
+			sequence.stopRequested = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (sequence.burst)
+				sequence.continuity.Fail(reason);
+#endif
+			if (auto parent = requests.find(sequence.requestId); parent != requests.end()) {
+				parent->second.error = { { "code", reason }, { "message", reason }, { "phase", "schedule" } };
+				parent->second.errors.push_back(parent->second.error);
+				AppendEventLocked(parent->second, "sequence.clock_failed", parent->second.error);
+			}
+		} else if (*paused) {
+			reason = "paused_during_acquisition";
+		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (*paused && sequence.burst && sequence.continuity.acquired) {
+			sequence.continuity.Fail("paused_during_burst");
+			sequence.stopRequested = true;
+		}
+#endif
+		if (reason.empty())
+			continue;
+		const auto child = requests.find(sequence.activeChildRequestId);
+		if (child == requests.end() || IsTerminal(child->second.state) || child->second.sourceAcquired)
+			continue;
+		if (RemoveQueuedDispatchLocked(child->first)) {
+			FinishSourceLocked(child->second, "dropped", reason);
+		} else {
+			interruptions.emplace_back(child->first, std::move(reason));
+		}
+	}
+	return interruptions;
 }
 
 std::optional<ScreenshotApi::DispatchEntry> ScreenshotApi::PopDispatchLocked()
@@ -2085,6 +2159,8 @@ void ScreenshotApi::Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame)
 	DrainReferenceNotifications();
 #endif
 	std::optional<DispatchEntry> dispatch;
+	std::vector<std::pair<std::string, std::string>> interruptions;
+	const auto now = std::chrono::steady_clock::now();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	bool deferEncoding = false;
 #endif
@@ -2097,14 +2173,8 @@ void ScreenshotApi::Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame)
 					sequence.cancelRequested = true;
 			}
 		}
+		interruptions = UpdateSequenceClocksLocked(a_engineFrame, now);
 		for (auto& [_, sequence] : sequences) {
-#ifdef DEVBENCH_BRIDGE_ENABLED
-			if (sequence.burst && sequence.continuity.acquired && sequence.nextOrdinal <= sequence.frameCount &&
-				((globals::state && globals::state->isLoadingMenuOpen) || (globals::game::ui && globals::game::ui->GameIsPaused()))) {
-				sequence.continuity.Fail("paused_during_burst");
-				sequence.stopRequested = true;
-			}
-#endif
 			TryFinalizeSequenceLocked(sequence);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			deferEncoding |= bool(sequence.burst) && (!sequence.activeChildRequestId.empty() ||
@@ -2112,7 +2182,7 @@ void ScreenshotApi::Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame)
 #endif
 		}
 		if (a_feature.IsRuntimeEnabled() && acceptingRequests) {
-			if (auto due = PrepareDueFrameLocked(a_engineFrame)) {
+			if (auto due = PrepareDueFrameLocked(a_engineFrame, now)) {
 				sequenceDispatchQueue.push_back({
 					.requestId = due->childRequestId,
 					.parentRequestId = due->parentRequestId,
@@ -2124,6 +2194,10 @@ void ScreenshotApi::Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame)
 			}
 			dispatch = PopDispatchLocked();
 		}
+	}
+	for (const auto& [requestId, reason] : interruptions) {
+		if (a_feature.CancelApiCapture(requestId))
+			OnSourceTerminal(requestId, "dropped", reason);
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	a_feature.SetBurstDeferral(deferEncoding);
@@ -2142,6 +2216,18 @@ void ScreenshotApi::Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame)
 			return;
 		}
 		cancelled = found->second.cancelRequested || !acceptingRequests || !a_feature.IsRuntimeEnabled();
+		if (dispatch->sequenceFrame && !cancelled) {
+			const auto& record = found->second;
+			const auto& sequence = sequences.at(record.parentRequestId);
+			const auto targetTime = std::chrono::steady_clock::time_point(std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+				std::chrono::microseconds(record.scheduledTimestampUs)));
+			if (sequence.clock.paused || CSX::ScreenshotPolicy::SequenceClock::Missed(record.scheduleBasis == "game_frames",
+											 record.scheduledEngineFrame, targetTime, sequence.intervalMs, a_engineFrame, now)) {
+				dispatchArbitration.FinishAttempt(dispatchClass, false);
+				FinishSourceLocked(found->second, "dropped", sequence.clock.paused ? "paused_during_acquisition" : "missed_cadence");
+				return;
+			}
+		}
 		expired = std::chrono::steady_clock::now() >= dispatch->expiresAt;
 		if (cancelled || expired)
 			dispatchArbitration.FinishAttempt(dispatchClass, false);

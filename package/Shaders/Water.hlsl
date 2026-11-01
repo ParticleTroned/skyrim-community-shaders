@@ -1357,7 +1357,7 @@ PS_OUTPUT main(PS_INPUT input)
 		{
 			uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
 			LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
-			if (LightLimitFix::IsLightIgnored(light)) {
+			if (LightLimitFix::IsLightIgnored(light) || !(light.lightFlags & LightLimitFix::LightFlags::AffectWater)) {
 				continue;
 			}
 

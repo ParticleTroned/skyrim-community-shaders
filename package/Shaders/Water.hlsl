@@ -906,12 +906,22 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	return result;
 }
 
-float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection, float distanceFactor, float skylightingSpecular)
+float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection, float distanceFactor, float skylightingSpecular, float refractionsDepthFactor, uint eyeIndex)
 {
-#			if !defined(DYNAMIC_CUBEMAPS)
 	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Reflections))
 		return ReflectionColor.xyz * VarAmounts.y * SharedData::csUtilitySettings.waterReflectionAmount;
+
+	[branch] if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Cubemap)) {
+#			if !defined(LOD) && NUM_SPECULAR_LIGHTS == 0
+		float4 planePosition = float4((VarAmounts.w * refractionsDepthFactor) * normal.xy + input.MPosition.xy, input.MPosition.z, 1);
+#			else
+		float4 planePosition = float4(VarAmounts.w * normal.xy, 0, 1);
 #			endif
+		float4 projected = mul(transpose(TextureProj[eyeIndex]), planePosition);
+		if (!all(isfinite(projected)) || abs(projected.w) < 1e-6)
+			return ReflectionColor.xyz * VarAmounts.y * SharedData::csUtilitySettings.waterReflectionAmount;
+		return ReflectionTex.SampleLevel(ReflectionSampler, projected.xy / projected.ww, 0).xyz * SharedData::csUtilitySettings.waterReflectionAmount;
+	}
 
 	float3 R = reflect(viewDirection, WaterParams.y * normal + float3(0, 0, 1 - WaterParams.y));
 
@@ -1283,9 +1293,9 @@ PS_OUTPUT main(PS_INPUT input)
 #			else
 
 #				if defined(SKYLIGHTING)
-	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceBlendFactor, skylightingSpecular);
+	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceBlendFactor, skylightingSpecular, depthControl.y, eyeIndex);
 #				else
-	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceBlendFactor, 1.0);
+	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceBlendFactor, 1.0, depthControl.y, eyeIndex);
 #				endif
 
 	DiffuseOutput diffuseOutput = GetWaterDiffuseColor(input, normal, viewDirection, distanceMul, depthControl.y, fresnel, eyeIndex, viewPosition, depth);

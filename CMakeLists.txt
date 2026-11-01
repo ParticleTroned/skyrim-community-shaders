@@ -2317,6 +2317,7 @@ if(BUILD_CONTROLLER_TESTS)
 
     include("${PROJECT_SOURCE_DIR}/tests/virtual_function_hook.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/engine_overflow_guards.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/light_list_search.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/hang_guards.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/actor_shape_bounds.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/terrain_variation_mesh.cmake")
@@ -4762,6 +4763,10 @@ if(BUILD_CONTROLLER_TESTS)
         tests/screenshot_api_policy_test.cpp
     )
     target_compile_features(screenshot_api_policy_test PRIVATE cxx_std_23)
+    target_compile_definitions(
+        screenshot_api_policy_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
     target_include_directories(
         screenshot_api_policy_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"

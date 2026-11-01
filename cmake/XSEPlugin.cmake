@@ -20,6 +20,15 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 include(AddCXXFiles)
 add_cxx_files("${PROJECT_NAME}")
 
+# Keep AVX2 and link-time code generation out of baseline CPU dispatch.
+set_source_files_properties(
+	"${PROJECT_SOURCE_DIR}/src/Utils/PointerSearchAvx2.cpp"
+	PROPERTIES
+		SKIP_PRECOMPILE_HEADERS ON
+		SKIP_UNITY_BUILD_INCLUSION ON
+		COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/arch:AVX2;/GL->"
+)
+
 configure_file(
 	${CMAKE_CURRENT_SOURCE_DIR}/cmake/Plugin.h.in
 	${CMAKE_CURRENT_BINARY_DIR}/cmake/Plugin.h

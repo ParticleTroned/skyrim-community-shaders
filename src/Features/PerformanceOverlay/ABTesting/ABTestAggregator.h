@@ -59,6 +59,7 @@ struct ABInterval
 	bool warmup = false;
 	int excludedFrames = 0;  // Frames excluded due to outliers or shader compilation
 	uint32_t framesSeen = 0;
+	bool measurementStarted = false;
 };
 
 class ABTestAggregator
@@ -68,7 +69,7 @@ public:
 
 	/** Start an interval; initial B intervals are unmeasured until A starts. */
 	void OnABSwitch(ABVariant variant, Clock::time_point now = Clock::now());
-	void OnFrame(const std::vector<DrawCallRow>& rows);
+	void OnFrame(const std::vector<DrawCallRow>& rows, Clock::time_point now = Clock::now());
 	/** @brief Discards transition frames after every configuration switch. */
 	void SetSettleFrames(uint32_t frames) { settleFrames = std::min(frames, 600u); }
 	/** Finalize the measured interval, or discard an unfinished warm-up. */

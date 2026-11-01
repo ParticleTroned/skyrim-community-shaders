@@ -19,14 +19,14 @@ namespace
 			throw std::runtime_error(message);
 	}
 
-	void Frames(ABTestAggregator& aggregator, int count, float milliseconds)
+	void Frames(ABTestAggregator& aggregator, int count, float milliseconds, Clock::time_point now = start)
 	{
 		DrawCallRow row{};
 		row.label = "Total:";
 		row.shaderType = -1;
 		row.frameTime = milliseconds;
 		for (int i = 0; i < count; ++i)
-			aggregator.OnFrame({ row });
+			aggregator.OnFrame({ row }, now);
 	}
 
 	void InitialWarmupIsExcluded()
@@ -174,10 +174,10 @@ namespace
 		aggregator.SetSettleFrames(3);
 		aggregator.OnABSwitch(ABVariant::A, start);
 		Frames(aggregator, 3, 90.0f);
-		Frames(aggregator, 4, 10.0f);
+		Frames(aggregator, 4, 10.0f, start + 1s);
 		aggregator.OnABSwitch(ABVariant::B, start + 5s);
 		Frames(aggregator, 3, 90.0f);
-		Frames(aggregator, 4, 20.0f);
+		Frames(aggregator, 4, 20.0f, start + 7s);
 		aggregator.OnABSwitch(ABVariant::A, start + 10s);
 		Frames(aggregator, 2, 90.0f);
 		aggregator.OnTestEnd(start + 11s);
@@ -185,12 +185,38 @@ namespace
 		Check(rows.size() == 1 && rows[0].meanA == 10 && rows[0].meanB == 20 &&
 				  rows[0].frameCountA == 4 && rows[0].frameCountB == 4,
 			"switch warm-up polluted means or a short final interval");
+		Check(aggregator.GetVariantStatistics(ABVariant::A).duration == 4.0f &&
+				  aggregator.GetVariantStatistics(ABVariant::B).duration == 3.0f &&
+				  aggregator.GetTestStartTime() == start + 1s && aggregator.GetTestEndTime() == start + 10s &&
+				  aggregator.GetIntervals().size() == 2,
+			"switch settling or an unfinished settling interval inflated measured duration");
 		aggregator.Clear();
 		aggregator.OnABSwitch(ABVariant::A, start + 20s);
 		Frames(aggregator, 3, 90.0f);
-		Frames(aggregator, 1, 10.0f);
+		Frames(aggregator, 1, 10.0f, start + 20s);
 		aggregator.OnTestEnd(start + 21s);
 		Check(aggregator.GetTotalFrameCount() == 1, "clear discarded the settling policy");
+	}
+
+	void SettlingCannotSatisfyCoverage()
+	{
+		ABTestAggregator aggregator;
+		aggregator.SetSettleFrames(1);
+		aggregator.OnABSwitch(ABVariant::A, start);
+		Frames(aggregator, 1, 10.0f);
+		aggregator.OnTestEnd(start + 10s);
+		Check(!aggregator.HasResults() && aggregator.GetTotalTestDuration() == 0 &&
+				  aggregator.GetTestStartTime() == Clock::time_point{},
+			"stopping during settling produced measurement coverage");
+		for (auto variant : { ABVariant::A, ABVariant::B }) {
+			const auto begin = start + (variant == ABVariant::A ? 20s : 40s);
+			aggregator.OnABSwitch(variant, begin);
+			Frames(aggregator, 1, 10.0f, begin);
+			Frames(aggregator, 100, 10.0f, begin + 9s);
+			aggregator.OnTestEnd(begin + 10s);
+		}
+		Check(aggregator.GetCoverage() == ABTestCoverage::Insufficient && aggregator.GetTotalTestDuration() == 2.0f,
+			"excluded settling time satisfied the minimum measured duration");
 	}
 
 	void StatisticsUseTheExistingMedianContract()
@@ -236,6 +262,7 @@ int main()
 		CoverageRequiresBothVariants();
 		PoorCoverageInOneVariantCannotBeHidden();
 		EverySwitchHasIndependentSettling();
+		SettlingCannotSatisfyCoverage();
 		StatisticsUseTheExistingMedianContract();
 		SignedResidualsDoNotInvalidateMeasuredFrames();
 		std::cout << "A/B warm-up, lifecycle, sampling, coverage and aggregation checks passed\n";

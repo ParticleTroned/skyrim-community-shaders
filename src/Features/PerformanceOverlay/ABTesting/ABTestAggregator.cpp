@@ -8,7 +8,7 @@
 void ABTestAggregator::FinishInterval(Clock::time_point now)
 {
 	if (currentInterval) {
-		if (!currentInterval->warmup) {
+		if (!currentInterval->warmup && currentInterval->measurementStarted) {
 			currentInterval->endTime = now;
 			intervals.push_back(std::move(*currentInterval));
 			cachedResults.reset();
@@ -28,20 +28,27 @@ void ABTestAggregator::OnABSwitch(ABVariant variant, Clock::time_point now)
 		initialBWarmupPending = false;
 
 	currentInterval = std::make_unique<ABInterval>(variant, std::vector<std::vector<DrawCallRow>>{}, now, now, warmup);
+	currentInterval->measurementStarted = !warmup && settleFrames == 0;
 
 	// Initialization costs must not contribute to measured duration.
-	if (!warmup && intervals.empty()) {
+	if (currentInterval->measurementStarted && intervals.empty()) {
 		testStartTime = now;
 	}
 }
 
-void ABTestAggregator::OnFrame(const std::vector<DrawCallRow>& rows)
+void ABTestAggregator::OnFrame(const std::vector<DrawCallRow>& rows, Clock::time_point now)
 {
 	if (!currentInterval || currentInterval->warmup)
 		return;
 	if (currentInterval->framesSeen < settleFrames) {
 		++currentInterval->framesSeen;
 		return;
+	}
+	if (!currentInterval->measurementStarted) {
+		currentInterval->measurementStarted = true;
+		currentInterval->startTime = now;
+		if (intervals.empty())
+			testStartTime = now;
 	}
 
 	const auto total = std::ranges::find_if(rows, [](const auto& row) { return row.shaderType == -1; });
@@ -75,7 +82,7 @@ void ABTestAggregator::OnTestEnd(Clock::time_point now)
 		return;
 	FinishInterval(now);
 	if (!intervals.empty())
-		testEndTime = now;
+		testEndTime = intervals.back().endTime;
 }
 
 void ABTestAggregator::Clear()

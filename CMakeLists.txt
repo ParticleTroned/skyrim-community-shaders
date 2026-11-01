@@ -4788,6 +4788,20 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(DevBenchMainThreadDispatch PROPERTIES TIMEOUT 10)
 
+    add_controller_test(
+        devbench_json_test
+        DevBenchJson
+        tests/devbench_json_test.cpp
+    )
+    target_compile_definitions(
+        devbench_json_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    target_link_libraries(
+        devbench_json_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
     add_executable(
         screenshot_api_policy_test
         EXCLUDE_FROM_ALL

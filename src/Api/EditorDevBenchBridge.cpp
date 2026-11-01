@@ -1,6 +1,7 @@
 #include "Api/EditorDevBenchBridge.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Api/DevBenchJson.h"
 
 #	include "Api/DevBenchMainThreadDispatch.h"
 #	include "Api/EditorService.h"
@@ -210,8 +211,12 @@ namespace
 				output = Foundation().Dispatch(args, &BuildResult);
 		} catch (const std::exception& e) { output = Foundation().MakeError(json::object(), "invalid_request", e.what()); }
 		catch (...) { output = Foundation().MakeError(json::object(), "internal_error", "unknown editor API error", "dispatch", true); }
-		try { const auto serialized = output.dump(); a_write(a_sink, serialized.c_str()); }
-		catch (...) { a_write(a_sink, R"({"ok":false,"error":{"code":"serialization_failed"}})"); }
+		try {
+			const auto serialized = CSX::Api::DumpForDevBench(output);
+			a_write(a_sink, serialized.c_str());
+		} catch (...) {
+			a_write(a_sink, R"({"ok":false,"error":{"code":"serialization_failed"}})");
+		}
 	}
 }
 
@@ -223,7 +228,7 @@ namespace CSX::Api::EditorDevBenchBridge
 		auto* devBench = DevBenchAPI::GetDevBenchInterface001();
 		if (!devBench) { logger::info("EditorDevBenchBridge: devbench host not present; editor API tool not registered"); return; }
 		const char* descriptor = R"({
-			"description":"Versioned CSX Editor state, bounded window lifecycle, and Light Editor picker control API. Mutations require preflight then execute with identical arguments and the returned token.",
+			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX Editor state, bounded window lifecycle, and Light Editor picker control API. Mutations require preflight then execute with identical arguments and the returned token.",
 			"inputSchema":{"type":"object","required":["contractMajor","clientId","commandId","action"],"properties":{
 				"contractMajor":{"type":"integer","const":1},"clientId":{"type":"string","minLength":1,"maxLength":128},
 				"commandId":{"type":"string","minLength":1,"maxLength":128},"expectedBuildId":{"type":"string"},
@@ -232,7 +237,8 @@ namespace CSX::Api::EditorDevBenchBridge
 					"action":{"type":"string","enum":["open","close","toggle","reset_layout","exit_preview","open_light_editor","begin_light_pick","cancel_light_pick"],"description":"open_light_editor selects and enables Light Editor; begin_light_pick starts pointer capture after a fresh snapshot reports lightEditor.viewportVisible=true; cancel_light_pick stops only the active picker."},
 					"expectedStateRevision":{"type":"integer","minimum":0},"allowDisruptive":{"type":"boolean","description":"Required for open_light_editor and begin_light_pick, and for preview-disrupting lifecycle actions."},"preflightToken":{"type":"string"}
 				}}
-			}}
+			}},
+			"outputSchema":{"type":"object","description":"Invalid UTF-8 in output strings is replaced with U+FFFD; valid UTF-8 output is unchanged."}
 		})";
 		devBench->RegisterTool("communityshaders.editor_api", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);

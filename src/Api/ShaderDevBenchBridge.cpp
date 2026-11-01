@@ -1,6 +1,7 @@
 #include "Api/ShaderDevBenchBridge.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Api/DevBenchJson.h"
 
 #	include "Api/DevBenchMainThreadDispatch.h"
 #	include "Api/ServiceFoundation.h"
@@ -421,7 +422,7 @@ namespace
 			output = Foundation().MakeError(json::object(), "internal_error", "unknown shader API error", "dispatch", true);
 		}
 		try {
-			const auto serialized = output.dump();
+			const auto serialized = CSX::Api::DumpForDevBench(output);
 			a_write(a_sink, serialized.c_str());
 		} catch (...) {
 			a_write(a_sink, R"({"ok":false,"error":{"code":"serialization_failed"}})");
@@ -441,7 +442,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Versioned CSX shader, feature, compilation, and cache lifecycle API. snapshot.compilation.sourceCompiles counts actual compiler invocations; contentDedupeTasks counts tasks reusing identical preprocessed bytecode across different shader keys. activeReuseTasks counts matching content in installed packs or the active loose cache; previousReuseTasks counts matching content in the loose rollback cache. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait and wakes the dispatcher to apply the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
+			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX shader, feature, compilation, and cache lifecycle API. snapshot.compilation.sourceCompiles counts actual compiler invocations; contentDedupeTasks counts tasks reusing identical preprocessed bytecode across different shader keys. activeReuseTasks counts matching content in installed packs or the active loose cache; previousReuseTasks counts matching content in the loose rollback cache. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait and wakes the dispatcher to apply the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
 			"inputSchema":{
 				"type":"object",
 				"required":["contractMajor","clientId","commandId","action"],
@@ -467,7 +468,8 @@ namespace CSX::Api::ShaderDevBenchBridge
 						}
 					}
 				}
-			}
+			},
+			"outputSchema":{"type":"object","description":"Invalid UTF-8 in output strings is replaced with U+FFFD; valid UTF-8 output is unchanged."}
 		})";
 		devBench->RegisterTool("communityshaders.shader_api", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);

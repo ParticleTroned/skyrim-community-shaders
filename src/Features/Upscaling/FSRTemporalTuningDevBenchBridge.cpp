@@ -1,6 +1,7 @@
 #include "FSRTemporalTuningDevBenchBridge.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Api/DevBenchJson.h"
 
 #	include "Api/DevBenchMainThreadDispatch.h"
 #	include "BuildProvenance.h"
@@ -99,7 +100,7 @@ namespace
 		}
 		BuildProvenance::AttachProducer(output);
 		try {
-			const auto serialized = output.dump();
+			const auto serialized = CSX::Api::DumpForDevBench(output);
 			write(sink, serialized.c_str());
 		} catch (...) {
 			write(sink, R"({"error":"response serialization failed"})");
@@ -119,7 +120,8 @@ void FSRTemporalTuningDevBenchBridge::Install()
 		for (const auto& field : FSRTemporalTuningPolicy::kNumericSettings)
 			settingsProperties[field.name] = { { "type", "number" }, { "minimum", field.minimum }, { "maximum", field.maximum } };
 		return json{
-			{ "description", "Inspect or set optional runtime FSR temporal reconstruction overrides, including automatically selected SDK or driver providers, on SE, AE and VR. Disabled by default. Provider versions are not gated; configuration results determine acceptance of the complete key set. Host FSR retains vendor defaults. set atomically patches requested settings, and render-thread context recreation applies the complete profile to all eyes before dispatch. Rejection recreates untouched vendor defaults and latches that request; provider faults follow runtime quarantine. status also reports selection (automatic or fsr3; null without an active provider), runtimeSupportKnown, runtimeSupportConfirmed, and activeProviderId/providerName (0/null when unavailable); providerId separately retains temporal configuration identity for rejected/faulted requests; legacy dispatch path 3 means the automatic runtime route, not a provider version. status reports requested versus applied settings, configurationApplied, pending/unsupported/rejected/faulted state and last configure result. configurationApplied means all configure calls succeeded, not proof of a visual effect. persist saves the user configuration only when explicitly true. No resolution, provider selection or public upscaling ABI changes." },
+			{ "description", "Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Inspect or set optional runtime FSR temporal reconstruction overrides, including automatically selected SDK or driver providers, on SE, AE and VR. Disabled by default. Provider versions are not gated; configuration results determine acceptance of the complete key set. Host FSR retains vendor defaults. set atomically patches requested settings, and render-thread context recreation applies the complete profile to all eyes before dispatch. Rejection recreates untouched vendor defaults and latches that request; provider faults follow runtime quarantine. status also reports selection (automatic or fsr3; null without an active provider), runtimeSupportKnown, runtimeSupportConfirmed, and activeProviderId/providerName (0/null when unavailable); providerId separately retains temporal configuration identity for rejected/faulted requests; legacy dispatch path 3 means the automatic runtime route, not a provider version. status reports requested versus applied settings, configurationApplied, pending/unsupported/rejected/faulted state and last configure result. configurationApplied means all configure calls succeeded, not proof of a visual effect. persist saves the user configuration only when explicitly true. No resolution, provider selection or public upscaling ABI changes." },
+			{ "outputSchema", { { "type", "object" }, { "description", "Invalid UTF-8 in output strings is replaced with U+FFFD; valid UTF-8 output is unchanged." } } },
 			{ "inputSchema", { { "type", "object" }, { "additionalProperties", false },
 								 { "properties", { { "action", { { "type", "string" }, { "enum", { "status", "set" } }, { "default", "status" } } },
 													 { "settings", { { "type", "object" }, { "additionalProperties", false }, { "minProperties", 1 }, { "properties", std::move(settingsProperties) } } },

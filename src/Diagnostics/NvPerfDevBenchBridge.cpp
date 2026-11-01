@@ -1,6 +1,7 @@
 #include "Diagnostics/NvPerf.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Api/DevBenchJson.h"
 #	include "Api/ServiceFoundation.h"
 #	include "BuildProvenance.h"
 #	include "Utils/StringUtils.h"
@@ -208,15 +209,15 @@ namespace
 				throw std::invalid_argument("request exceeds 32 KiB");
 			const auto args = json::parse(text);
 			if (auto mismatch = BuildProvenance::ValidateExpectedBuild(args)) {
-				const auto response = Foundation().MakeError(args, "producer_mismatch", "loaded build differs from expectedBuildId").dump();
+				const auto response = CSX::Api::DumpForDevBench(Foundation().MakeError(args, "producer_mismatch", "loaded build differs from expectedBuildId"));
 				write(sink, response.c_str());
 				return;
 			}
-			const auto response = Foundation().Dispatch(args, &Handle).dump();
+			const auto response = CSX::Api::DumpForDevBench(Foundation().Dispatch(args, &Handle));
 			write(sink, response.c_str());
 		} catch (const std::exception& error) {
 			try {
-				const auto response = Foundation().MakeError(json::object(), "invalid_request", error.what()).dump();
+				const auto response = CSX::Api::DumpForDevBench(Foundation().MakeError(json::object(), "invalid_request", error.what()));
 				write(sink, response.c_str());
 			} catch (...) {
 				write(sink, R"({"ok":false,"error":{"code":"serialization_failed"}})");
@@ -237,7 +238,7 @@ namespace NvPerf
 		if (!host)
 			return;
 		constexpr const char* descriptor = R"({
-            "description":"Optional developer-only NVIDIA hardware counters for CSX D3D11 immediate-context ranges. Requires NVPERF_SUPPORT and SDK. D3D12 NR eye queues are not instrumented and parallel-eye scheduling is unchanged. One SDK pass per live frame, not deterministic replay: compare only stable workloads. Capture may perturb timings. status queues render-thread probing; repeat with a new commandId. capture is idempotent per clientId/commandId and returns captureId. cancel requires that id. result retains the latest completed capture; detail returns at most 128 ranges per page with nextOffset. Values follow metrics order; nonfinite values are null and mark capture incomplete. Counters are summed per sample, rates time-weighted when duration is included. CSV export errors are separate from capture validity; returned csvPath values are UTF-8. events journals terminal outcomes. Requests expire after five minutes of progressing render frames. Engine ranges require their existing annotation hooks; CSX pass ranges work independently of timing capture.",
+            "description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Optional developer-only NVIDIA hardware counters for CSX D3D11 immediate-context ranges. Requires NVPERF_SUPPORT and SDK. D3D12 NR eye queues are not instrumented and parallel-eye scheduling is unchanged. One SDK pass per live frame, not deterministic replay: compare only stable workloads. Capture may perturb timings. status queues render-thread probing; repeat with a new commandId. capture is idempotent per clientId/commandId and returns captureId. cancel requires that id. result retains the latest completed capture; detail returns at most 128 ranges per page with nextOffset. Values follow metrics order; nonfinite values are null and mark capture incomplete. Counters are summed per sample, rates time-weighted when duration is included. CSV export errors are separate from capture validity; returned csvPath values are UTF-8. events journals terminal outcomes. Requests expire after five minutes of progressing render frames. Engine ranges require their existing annotation hooks; CSX pass ranges work independently of timing capture.",
             "inputSchema":{"type":"object","required":["contractMajor","clientId","commandId","action"],"additionalProperties":false,"properties":{
                 "contractMajor":{"type":"integer","const":1},"contractMinor":{"type":"integer","minimum":0,"maximum":0},
                 "clientId":{"type":"string","minLength":1,"maxLength":128},"commandId":{"type":"string","minLength":1,"maxLength":128},"expectedBuildId":{"type":"string"},
@@ -247,14 +248,14 @@ namespace NvPerf
                 "samples":{"type":"integer","minimum":1,"maximum":64},"delayFrames":{"type":"integer","minimum":0,"maximum":600},
                 "nestingLevels":{"type":"integer","minimum":1,"maximum":8},"captureId":{"type":"integer","minimum":1},"detail":{"type":"boolean"},
                 "offset":{"type":"integer","minimum":0,"maximum":16384},"limit":{"type":"integer","minimum":1,"maximum":128},"afterEventId":{"type":"integer","minimum":0}
-            }},"outputSchema":{"type":"object","required":["ok"],"properties":{"ok":{"type":"boolean"},"result":{"type":"object","properties":{"csvPath":{"type":"string","description":"UTF-8 filesystem path to the capture CSV."}}},"error":{"type":"object"}}}
+            }},"outputSchema":{"description":"Invalid UTF-8 in output strings is replaced with U+FFFD; valid UTF-8 output is unchanged.","type":"object","required":["ok"],"properties":{"ok":{"type":"boolean"},"result":{"type":"object","properties":{"csvPath":{"type":"string","description":"UTF-8 filesystem path to the capture CSV."}}},"error":{"type":"object"}}}
         })";
 		host->RegisterTool("communityshaders.nvperf", descriptor, &ToolHandler, nullptr);
 		SetCompletionCallback([](const CaptureResult& result) {
 			json payload{ { "captureId", result.id }, { "success", result.success }, { "error", result.error }, { "buildId", result.buildId } };
 			Foundation().AppendEvent(std::to_string(result.id), 0, "completed", payload);
 			if (auto* current = DevBenchAPI::GetDevBenchInterface001()) {
-				const auto text = payload.dump();
+				const auto text = CSX::Api::DumpForDevBench(payload);
 				current->EmitEvent("communityshaders.nvperf.completed", text.c_str());
 			}
 		});

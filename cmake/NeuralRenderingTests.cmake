@@ -81,6 +81,10 @@ target_compile_definitions(neural_failure_diagnostics_on_test PRIVATE DEVBENCH_B
 
 add_controller_test(neural_stall_recovery_policy_test NeuralStallRecoveryPolicy tests/neural_stall_recovery_policy_test.cpp)
 add_controller_test(neural_memory_recovery_test NeuralMemoryRecovery tests/neural_memory_recovery_test.cpp)
+add_controller_test(neural_native_memory_test NeuralNativeMemory tests/neural_native_memory_test.cpp)
+add_test(NAME NeuralNativeStartupContract COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/tests/neural_native_startup_contract_test.py")
+set_tests_properties(NeuralNativeStartupContract PROPERTIES LABELS "ControllerTests" TIMEOUT 30)
 set(_neural_memory_publication_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_memory_publication")
 add_custom_command(
     OUTPUT "${_neural_memory_publication_dir}/neural_memory_publication_under_test.h"

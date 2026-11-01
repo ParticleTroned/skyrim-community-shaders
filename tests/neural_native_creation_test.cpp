@@ -25,6 +25,8 @@ namespace Util
 		unsigned majorValue = 310, minorValue = 9;
 		unsigned major() const { return majorValue; }
 		unsigned minor() const { return minorValue; }
+		unsigned patch() const { return 0; }
+		unsigned build() const { return 0; }
 	};
 	std::optional<TestRuntimeVersion> installedVersion = TestRuntimeVersion{};
 	bool versionReadFails = false;

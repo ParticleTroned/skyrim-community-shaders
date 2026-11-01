@@ -402,6 +402,14 @@ namespace NeuralRendering
 			bool installed = false;
 			bool networkSelectionSupported = false;
 			TuningLimits tuningLimits;
+			std::uint64_t allocationVersion = 0;
+
+			template <class Version>
+			static std::uint64_t AllocationVersion(const Version& version) noexcept
+			{
+				return (std::uint64_t(version.major()) << 48) | (std::uint64_t(version.minor()) << 32) |
+				       (std::uint64_t(version.patch()) << 16) | std::uint64_t(version.build());
+			}
 		};
 
 		InstalledRuntimeMetadata DiscoverInstalledRuntimeMetadata()
@@ -412,6 +420,7 @@ namespace NeuralRendering
 				metadata.installed = !path.empty();
 				if (metadata.installed) {
 					if (const auto version = Util::GetDllVersion(path.wstring())) {
+						metadata.allocationVersion = InstalledRuntimeMetadata::AllocationVersion(*version);
 						metadata.tuningLimits = GetTuningLimitsForVersion(version->major(), version->minor());
 						metadata.networkSelectionSupported = NeuralRendering::SupportsNetworkSelection(version->major(), version->minor());
 					}
@@ -1177,6 +1186,7 @@ namespace NeuralRendering
 			return false;
 		}
 		version_ = Util::GetFormattedVersion(*version);
+		allocationVersion_ = InstalledRuntimeMetadata::AllocationVersion(*version);
 		tuningLimits_ = GetTuningLimitsForVersion(version->major(), version->minor());
 		networkSelectionSupported_ = NeuralRendering::SupportsNetworkSelection(version->major(), version->minor());
 		if (*version < kMinimumRuntimeVersion) {
@@ -2221,6 +2231,12 @@ namespace NeuralRendering
 	{
 		std::scoped_lock lock(mutex_);
 		return version_;
+	}
+
+	std::uint64_t Runtime::AllocationVersion() const
+	{
+		std::scoped_lock lock(mutex_);
+		return allocationVersion_ ? allocationVersion_ : GetInstalledRuntimeMetadata().allocationVersion;
 	}
 
 	std::filesystem::path Runtime::ParameterCorePath() const

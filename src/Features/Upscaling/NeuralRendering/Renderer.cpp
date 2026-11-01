@@ -13,6 +13,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "PackedCropEvidenceJson.h"
 #endif
+#include "NativeMemoryPolicy.h"
 #include "PipelinePolicy.h"
 #include "ShaderInvalidation.h"
 #include "Utils/ComIdentity.h"
@@ -674,6 +675,7 @@ namespace NeuralRendering
 			std::uint64_t lastUsedMs = 0;
 			bool resourcesValid = false;
 			bool historyValid = false;
+			bool nativeReady = false, nativeUnpublished = false;
 		};
 
 		struct ValidatedResources
@@ -747,6 +749,20 @@ namespace NeuralRendering
 		MemoryConservationPolicy memoryConservation_{};
 		MemoryRecoveryPolicy memoryRecovery_{};
 		MemoryResolutionPolicy memoryResolution_{};
+		NativeMemoryPolicy nativeMemory_{};
+		NativeStartupObservation nativeStartup_{};
+		std::uint32_t nativeStartupMask_ = 0;
+		std::uint64_t lastNativeRequestMs_ = 0;
+		std::array<std::uint64_t, Runtime::kFeatureSlotCount> nativeCreationGrowth_{};
+		bool nativeStartupDeferred_ = false;
+		std::optional<std::uint32_t> nativeStartupFrame_;
+		NativeMemoryKey NativeMemoryKeyLocked(const ValidatedResources&) const;
+		bool PollNativeStartupLocked();
+		bool NeedsNativeStartupLocked(std::span<const RendererApplyArgs>, std::span<const ValidatedResources>) const;
+		ModelResolution::Sharing ModelResolutionSharingLocked(std::span<const RendererApplyArgs>) const;
+		bool ProjectModelResourcesLocked(const RendererApplyArgs&, RendererApplyArgs&, ValidatedResources&, bool diagnostics = false);
+		void PlanCheaperResolutionLocked(std::span<const RendererApplyArgs>);
+		std::uint64_t nextResolutionProjectionMs_ = 0;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		GuidedReconstructionExperiment reconstructionExperiment_{};
 		PeripheralCompressionExperiment peripheralExperiment_{};
@@ -817,13 +833,17 @@ namespace NeuralRendering
 			}
 			const auto phase = memoryRecovery_.phase;
 			budget.SetOwnerWork(Util::GpuMemoryBudget::Owner::NeuralRendering,
-				phase == MemoryRecoveryPhase::Retiring || phase == MemoryRecoveryPhase::Rebuilding,
+				phase == MemoryRecoveryPhase::Retiring || phase == MemoryRecoveryPhase::Rebuilding || nativeStartup_.active || nativeStartupMask_ != 0,
 				phase == MemoryRecoveryPhase::Waiting   ? memoryRecovery_.admissionDemandBytes :
 				phase == MemoryRecoveryPhase::Probation ? MemoryRecoveryPolicy::kMinimumHeadroom :
 														  0);
 		}
 		void FinishMemoryAdmissionLocked()
 		{
+			if ((nativeStartup_.active || nativeStartupMask_) && !failureLatched_ && !quarantined_) {
+				PublishMemoryBudgetWorkLocked();
+				return;
+			}
 			if (memoryReservation_)
 				Util::GpuMemoryBudget::Get().Sample(memorySampleDevice_.Get(), 0, true);
 			memoryReservation_.Reset();
@@ -844,6 +864,15 @@ namespace NeuralRendering
 			snapshot_.nativeLifecycle = Runtime::Instance().GetLifecycleCounts();
 			snapshot_.prewarmSubmission = interop_.GetLifetimeSnapshot();
 			snapshot_.prewarmReservedBytes = prewarmReservation_.Bytes();
+			snapshot_.nativeStartup = nativeStartup_;
+			snapshot_.nativeStartupReservedBytes = memoryReservation_.Bytes();
+			snapshot_.nativeReadySlotMask = 0;
+			for (std::size_t index = 0; index < slots_.size(); ++index) {
+				if (snapshot_.nativeMemoryKeys[index])
+					snapshot_.nativeMemoryEstimates[index] = nativeMemory_.Project(*snapshot_.nativeMemoryKeys[index]);
+				if (slots_[index].nativeReady)
+					snapshot_.nativeReadySlotMask |= FeatureSlotBit(static_cast<std::uint32_t>(index));
+			}
 			snapshot_.shaderGenerationRequested = shaderInvalidation_.Requested();
 			snapshot_.shaderGenerationApplied = shaderInvalidation_.Applied();
 #endif
@@ -1763,6 +1792,10 @@ namespace NeuralRendering
 		bool a_countApplyFailure)
 	{
 		const HRESULT originalResult = a_result;
+		if (nativeStartup_.active && nativeStartup_.valid)
+			nativeMemory_.Observe(nativeStartup_.key, nativeStartup_.peak - nativeStartup_.baseline);
+		nativeStartup_ = {};
+		nativeStartupMask_ = 0;
 		SetActiveFeatureSlotLocked(a_slot);
 		if (a_countApplyFailure) {
 			Increment(snapshot_.counters.failures);
@@ -1996,6 +2029,9 @@ namespace NeuralRendering
 		}
 
 		slots_ = {};
+		nativeStartup_ = {};
+		nativeStartupMask_ = 0;
+		nativeCreationGrowth_ = {};
 		prewarmReservation_.Reset();
 		prewarm_ = {};
 		prewarmPending_.store(false, std::memory_order_relaxed);
@@ -2263,6 +2299,7 @@ namespace NeuralRendering
 			successfulResolutionPercents_ = {};
 			restorationPreviousPercent_ = 0;
 			memoryResolution_.ClearHealthyWindow();
+			nextResolutionProjectionMs_ = 0;
 		}
 		const bool enabling = first.pressureResolutionEnabled && !memoryResolution_.enabled;
 		if (memoryResolution_.enabled != first.pressureResolutionEnabled) {
@@ -2273,6 +2310,15 @@ namespace NeuralRendering
 		snapshot_.pressureResolutionEnabled = first.pressureResolutionEnabled;
 		if (enabling && memoryRecovery_.phase == MemoryRecoveryPhase::Waiting && memoryResolution_.OnRetired(requested, GetTickCount64()))
 			ResolutionChangedLocked();
+		if (memoryResolution_.enabled && memoryRecovery_.phase == MemoryRecoveryPhase::Waiting &&
+			!memoryRecovery_.healthyWindow && GetTickCount64() >= nextResolutionProjectionMs_ &&
+			GetTickCount64() >= memoryResolution_.lastReductionMs + MemoryResolutionPolicy::kWaitingStepMs) {
+			nextResolutionProjectionMs_ = GetTickCount64() + MemoryResolutionPolicy::kWaitingStepMs;
+			PlanCheaperResolutionLocked(args);
+			if (memoryResolution_.WhileWaiting(requested, memoryRecovery_.sample, GetTickCount64(), true))
+				ResolutionChangedLocked();
+			memoryResolution_.projectedCheaperPercent = 0;
+		}
 		const auto route = first.featureSlot / kEyeCount;
 		if (route >= resolutionLatches_.size())
 			return;
@@ -2336,6 +2382,8 @@ namespace NeuralRendering
 	{
 		if (memoryRecovery_.phase != MemoryRecoveryPhase::Retiring)
 			return true;
+		if (nativeStartup_.active && !PollNativeStartupLocked())
+			return !failureLatched_ && !quarantined_;
 		if (failureLatched_ || quarantined_ || !TeardownBackendLocked(false, false, false, {}, BackendRetirementPolicy::RetainHealthyBackend)) {
 			snapshot_.memoryRecovery = memoryRecovery_;
 			return false;
@@ -2429,6 +2477,7 @@ namespace NeuralRendering
 
 	void Renderer::State::FinishMemoryRecoveryLocked(bool a_succeeded, RendererApplyOutcome& a_outcome)
 	{
+		a_outcome.startupDeferred = nativeStartupDeferred_;
 		if (a_succeeded) {
 			const auto previous = memoryRecovery_.phase;
 			const auto now = GetTickCount64();
@@ -2447,14 +2496,93 @@ namespace NeuralRendering
 		} else {
 			if (memoryRecovery_.phase != MemoryRecoveryPhase::Waiting)
 				memoryRecovery_.BreakActiveObservation();
-			else if (memoryResolution_.WhileWaiting(snapshot_.requestedModelResolutionPercent, memoryRecovery_.sample,
-						 GetTickCount64(), !memoryRecovery_.healthyWindow))
-				ResolutionChangedLocked();
 			memoryResolution_.ClearHealthyWindow();
 			if (!RetireMemoryPressureLocked())
 				a_outcome.memoryPressureBypass = false;
 		}
 		snapshot_.memoryRecovery = memoryRecovery_;
+	}
+
+	bool Renderer::State::ProjectModelResourcesLocked(const RendererApplyArgs& input, RendererApplyArgs& proxy, ValidatedResources& resource, [[maybe_unused]] bool diagnostics)
+	{
+		if (!ModelResolution::Project(input, proxy
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				,
+				diagnostics ? BeginPackedCropAdmissionLocked(input) : nullptr
+#endif
+				))
+			return false;
+		resource.roi = proxy.roi.value_or(BuildRoiDescriptor(std::nullopt, proxy.computeSubrect,
+			{ proxy.outputWidth, proxy.outputHeight }, false));
+		resource.nativeLayout = BuildNativeEvaluationLayout(
+			{ proxy.colorWidth, proxy.colorHeight }, { proxy.guideWidth, proxy.guideHeight },
+			{ proxy.outputWidth, proxy.outputHeight }, { proxy.controlMaskWidth, proxy.controlMaskHeight },
+			proxy.computeSubrect, UpscalingDLSS::BuildMotionVectorPixelScale(proxy.viewportCrop), proxy.featureUpscaling);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ApplyCompactLayoutLocked(proxy, resource);
+#endif
+		FinalizeResourceKeysLocked(proxy, resource);
+		return true;
+	}
+
+	ModelResolution::Sharing Renderer::State::ModelResolutionSharingLocked(std::span<const RendererApplyArgs> args) const
+	{
+		const auto& first = args.front();
+		// Staged proxies must survive retirement when the backend identity changes.
+		const bool stableBackend = !device_ || (SameIdentity(device_.Get(), first.device) && SameIdentity(context_.Get(), first.context));
+		if (!stableBackend || !ModelResolution::CanUseSharedTargets(args, colorConfiguration_.experiments.CompactInputsEnabled()))
+			return ModelResolution::Sharing::Private;
+		return colorConfiguration_.Enabled() ? ModelResolution::Sharing::Guides : ModelResolution::Sharing::All;
+	}
+
+	void Renderer::State::PlanCheaperResolutionLocked(std::span<const RendererApplyArgs> args)
+	{
+		memoryResolution_.projectedCheaperPercent = 0;
+		if (args.empty() || args.size() > kEyeCount)
+			return;
+		std::array<ValidatedResources, kEyeCount> source{};
+		for (std::size_t index = 0; index < args.size(); ++index)
+			if (ValidateLocked(args[index], source[index]
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					,
+					false
+#endif
+					))
+				return;
+		const auto project = [&](std::uint32_t percent) -> std::optional<std::uint64_t> {
+			std::array<RendererApplyArgs, kEyeCount> candidates{}, projected{};
+			std::ranges::copy(args, candidates.begin());
+			auto view = std::span(candidates.data(), args.size());
+			for (auto& candidate : view)
+				candidate.modelResolutionPercent = percent;
+			modelResolution_.PlanPackedCrops(view, true);
+			const bool compact = colorConfiguration_.experiments.CompactInputsEnabled();
+			if (!modelResolution_.PlanPeripheralCompression(view, compact))
+				return std::nullopt;
+			auto resources = source;
+			for (std::size_t index = 0; index < args.size(); ++index)
+				if (!ProjectModelResourcesLocked(view[index], projected[index], resources[index]))
+					return std::nullopt;
+			const auto sharing = ModelResolutionSharingLocked(view);
+			const bool model = std::ranges::any_of(view, [](const auto& input) { return ModelResolution::Required(input); });
+			const auto textures = model ? modelResolution_.AdditionalBytes(view, sharing) : std::optional<std::uint64_t>{ 0 };
+			const auto native = EstimateAdditionalMemoryLocked(std::span(projected.data(), args.size()), std::span(resources.data(), args.size()));
+			if (!textures || !native)
+				return std::nullopt;
+			return Util::GpuMemoryBudget::Add(*textures, *native);
+		};
+		const auto current = memoryResolution_.EffectivePercent(args.front().modelResolutionPercent);
+		const auto baseline = project(current);
+		if (!baseline)
+			return;
+		for (auto percent = current; percent > kMinimumModelResolutionPercent;) {
+			percent = std::max(kMinimumModelResolutionPercent, percent - std::min(percent, MemoryResolutionPolicy::kStepPercent));
+			const auto candidate = project(percent);
+			if (candidate && *candidate < *baseline) {
+				memoryResolution_.projectedCheaperPercent = percent;
+				return;
+			}
+		}
 	}
 
 	std::optional<std::uint64_t> Renderer::State::EstimateAdditionalMemoryLocked(
@@ -2467,19 +2595,21 @@ namespace NeuralRendering
 			const auto bytes = LogicalTextureBytes(format, extent.width, extent.height);
 			if (!bytes)
 				return false;
-			additionalBytes += *bytes;
+			additionalBytes = Util::GpuMemoryBudget::Add(additionalBytes, *bytes);
 			return true;
 		};
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			const auto& resource = a_resources[index];
 			const auto& slot = slots_[a_args[index].featureSlot];
 			const bool replacing = replacingBackend || !slot.resourcesValid || slot.resourceKey != resource.resourceKey;
+			if (!colorConfiguration_.experiments.transportBypass && (replacing || !slot.nativeReady)) {
+				const auto estimate = nativeMemory_.Project(NativeMemoryKeyLocked(resource));
+				if (!estimate)
+					return std::nullopt;
+				additionalBytes = Util::GpuMemoryBudget::Add(additionalBytes, estimate->bytes);
+			}
 			if (replacing) {
 				const auto& layout = resource.nativeLayout;
-				const bool preparedNative = !replacingBackend && (prewarm_.unusedMask & FeatureSlotBit(a_args[index].featureSlot)) &&
-				                            Runtime::Instance().HasCompatibleFeature(a_args[index].featureSlot, layout, resource.resourceKey.providerBlending, resource.resourceKey.networkPreset);
-				if (!preparedNative)
-					additionalBytes += MemoryRecoveryPolicy::kNativeFeatureReserve;
 				if (!append(resource.resourceKey.colorFormat, layout.color.backing) ||
 					!append(DXGI_FORMAT_R32_FLOAT, layout.depth.backing) ||
 					!append(resource.resourceKey.motionFormat, layout.motion.backing) ||
@@ -2499,9 +2629,75 @@ namespace NeuralRendering
 		return additionalBytes;
 	}
 
+	NativeMemoryKey Renderer::State::NativeMemoryKeyLocked(const ValidatedResources& resource) const
+	{
+		const auto& key = resource.resourceKey;
+		return { Runtime::Instance().AllocationVersion(), key.networkPreset, resource.nativeLayout.creation,
+			resource.nativeLayout.color.backing, static_cast<std::uint32_t>(key.colorFormat),
+			static_cast<std::uint32_t>(key.outputFormat), static_cast<std::uint32_t>(key.motionFormat),
+			key.featureUpscaling, key.providerBlending, key.controlMaskPresent };
+	}
+
+	bool Renderer::State::NeedsNativeStartupLocked(std::span<const RendererApplyArgs> args,
+		std::span<const ValidatedResources> resources) const
+	{
+		if (colorConfiguration_.experiments.transportBypass)
+			return false;
+		for (std::size_t index = 0; index < args.size(); ++index) {
+			const auto& slot = slots_[args[index].featureSlot];
+			if (!slot.nativeReady || slot.nativeUnpublished || !slot.resourcesValid || slot.resourceKey != resources[index].resourceKey)
+				return true;
+		}
+		return false;
+	}
+
+	bool Renderer::State::PollNativeStartupLocked()
+	{
+		if (!nativeStartup_.active)
+			return true;
+		const auto fences = interop_.GetLifetimeSnapshot();
+		if (fences.deviceRemoved)
+			return FailLocked(RendererStage::DeviceRemoved, DXGI_ERROR_DEVICE_REMOVED,
+				"device removal during native startup", nativeStartup_.slot, true, true, false);
+		const auto sample = SampleMemoryBudgetLocked(device_.Get(), GetTickCount64(), nativeStartup_.Completed(fences));
+		nativeStartup_.Sample(sample, GetTickCount64());
+		if (!nativeStartup_.Completed(fences)) {
+			const auto now = GetTickCount64();
+			if (now >= nativeStartup_.startedMs && now - nativeStartup_.startedMs > NativeMemoryPolicy::kMaximumObservationMs)
+				return FailLocked(RendererStage::ResetWait, HRESULT_FROM_WIN32(ERROR_TIMEOUT),
+					"native startup completion could not be established", nativeStartup_.slot, true, true, false);
+			nativeStartupDeferred_ = true;
+			return false;
+		}
+		auto& slot = slots_[nativeStartup_.slot];
+		if (nativeStartup_.valid) {
+			const auto growth = nativeStartup_.peak - nativeStartup_.baseline;
+			auto& creationGrowth = nativeCreationGrowth_[nativeStartup_.slot];
+			if (!nativeStartup_.evaluated)
+				creationGrowth = growth;
+			nativeMemory_.Observe(nativeStartup_.key, nativeStartup_.evaluated ? Util::GpuMemoryBudget::Add(creationGrowth, growth) : growth);
+		}
+		if (nativeStartup_.evaluated) {
+			slot.nativeReady = true;
+			slot.nativeUnpublished = true;
+			nativeStartupMask_ &= ~FeatureSlotBit(nativeStartup_.slot);
+			const auto remaining = nativeStartup_.RemainingReservation(memoryReservation_.Bytes(), fences, sample, GetTickCount64());
+			if (!remaining)
+				memoryReservation_.Reset();
+			else if (remaining < memoryReservation_.Bytes()) {
+				auto replacement = Util::GpuMemoryBudget::Get().Reserve(Util::GpuMemoryBudget::Owner::NeuralRendering, device_.Get(), remaining);
+				if (replacement)
+					memoryReservation_ = std::move(replacement);
+			}
+		}
+		nativeStartup_ = {};
+		return true;
+	}
+
 	MemoryBudgetSample Renderer::State::SampleMemoryBudgetLocked(ID3D11Device* a_device, std::uint64_t a_nowMs, bool a_force)
 	{
 		if (memorySampleDevice_.Get() != a_device) {
+			nativeMemory_ = {};
 			memoryRecovery_.InvalidateCapacityLearning();
 			memoryCapacityKeys_ = {};
 			memoryResolution_.ClearHealthyWindow();
@@ -2631,6 +2827,17 @@ namespace NeuralRendering
 			return false;
 		const auto& first = a_args.front();
 		SetRequestTelemetryLocked(first);
+		lastNativeRequestMs_ = GetTickCount64();
+		if (!PollNativeStartupLocked())
+			return false;
+		if (NeedsNativeStartupLocked(a_args, a_resources) && interop_.IsInitialized()) {
+			const auto fences = interop_.GetLifetimeSnapshot();
+			if (nativeStartupFrame_ == first.frameId ||
+				(!fences.deviceRemoved && (!fences.completedKnown || fences.recording || fences.completed < fences.issued))) {
+				nativeStartupDeferred_ = true;
+				return false;
+			}
+		}
 		if (!ServiceRetainedBackendLocked())
 			return false;
 		if (const HRESULT reason = first.device->GetDeviceRemovedReason(); FAILED(reason))
@@ -2677,12 +2884,22 @@ namespace NeuralRendering
 		bool capacityChanged = false;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			auto& key = memoryCapacityKeys_[a_args[index].featureSlot];
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			snapshot_.nativeMemoryKeys[a_args[index].featureSlot] = NativeMemoryKeyLocked(a_resources[index]);
+#endif
 			capacityChanged |= key && *key != a_resources[index].resourceKey;
 			key = a_resources[index].resourceKey;
 		}
 		if (capacityChanged)
 			memoryRecovery_.InvalidateCapacityLearning();
 		const bool admitted = memoryRecovery_.Admit(sample, *additionalBytes, nowMs, pendingBytes);
+		if (admitted) {
+			nativeStartupMask_ = 0;
+			if (!colorConfiguration_.experiments.transportBypass)
+				for (std::size_t index = 0; index < a_args.size(); ++index)
+					if (!slots_[a_args[index].featureSlot].nativeReady || slots_[a_args[index].featureSlot].resourceKey != a_resources[index].resourceKey)
+						nativeStartupMask_ |= FeatureSlotBit(a_args[index].featureSlot);
+		}
 		if (admitted && memoryRetirement_.backendRetained) {
 			memoryRetirement_.Released();
 			backendMaintenancePending_.store(false, std::memory_order_relaxed);
@@ -2690,8 +2907,12 @@ namespace NeuralRendering
 		Util::GpuMemoryBudget::Get().SetOwnerWork(Util::GpuMemoryBudget::Owner::NeuralRendering,
 			memoryRecovery_.phase == MemoryRecoveryPhase::Retiring || (admitted && *additionalBytes != 0),
 			admitted ? 0 : memoryRecovery_.admissionDemandBytes);
-		if (admitted && *additionalBytes)
+		if (admitted && *additionalBytes) {
 			memoryReservation_ = Util::GpuMemoryBudget::Get().Reserve(Util::GpuMemoryBudget::Owner::NeuralRendering, first.device, *additionalBytes);
+			if (!memoryReservation_)
+				return false;
+			prewarmReservation_.Reset();
+		}
 		if (memoryRecovery_.phase == MemoryRecoveryPhase::Retiring) {
 			if (previous != MemoryRecoveryPhase::Retiring)
 				logger::warn("[DLSSNR][Memory] Temporarily using the baseline while retiring NR under memory pressure: usage {:.1f}/{:.1f} MiB, additional {:.1f} MiB, recovery demand {:.1f} MiB, retry level={}",
@@ -2779,6 +3000,7 @@ namespace NeuralRendering
 				Color::Registry::Instance().DropMeasurement();
 #endif
 		slot = {};
+		nativeCreationGrowth_[a_slot] = 0;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (lifetime.enabled)
 			lifetime.record->succeeded = true;
@@ -3138,6 +3360,8 @@ namespace NeuralRendering
 			if (ValidateLocked(a_args[index], resources[index]))
 				return ApplyBatchLocked(a_args, a_outcome);
 		}
+		if (nativeStartup_.active || NeedsNativeStartupLocked(a_args, resources))
+			return ApplyBatchLocked(a_args, a_outcome, a_memoryAdmitted);
 
 		if (!a_memoryAdmitted && !AdmitMemoryLocked(a_args, resources)) {
 			a_outcome.memoryPressureBypass = !failureLatched_ && !quarantined_ && memoryRecovery_.phase != MemoryRecoveryPhase::Ready;
@@ -3257,12 +3481,8 @@ namespace NeuralRendering
 			args = working;
 		}
 		const auto& first = args.front();
-		// A backend identity change retires its slots; staged proxies survive that reset.
-		const bool stableBackend = !device_ || (SameIdentity(device_.Get(), first.device) && SameIdentity(context_.Get(), first.context));
-		const bool sharedTargets = stableBackend && ModelResolution::CanUseSharedTargets(args,
-														colorConfiguration_.experiments.CompactInputsEnabled());
-		const auto sharing = !sharedTargets ? ModelResolution::Sharing::Private : colorConfiguration_.Enabled() ? ModelResolution::Sharing::Guides :
-		                                                                                                          ModelResolution::Sharing::All;
+		const auto sharing = ModelResolutionSharingLocked(args);
+		const bool sharedTargets = sharing != ModelResolution::Sharing::Private;
 		bool sharedInputsPrepared = false;
 		ModelResolution::Batch batch;
 		SetRequestTelemetryLocked(first);
@@ -3305,21 +3525,9 @@ namespace NeuralRendering
 				failure)
 				return FailLocked(RendererStage::Validation, failure.result, std::move(failure.detail), input.featureSlot, false);
 			auto& proxy = projected[index];
-			if (!ModelResolution::Project(input, proxy
-#ifdef DEVBENCH_BRIDGE_ENABLED
-					,
-					BeginPackedCropAdmissionLocked(input)
-#endif
-						))
+			if (!ProjectModelResourcesLocked(input, proxy, resource, true))
 				return FailLocked(RendererStage::Validation, E_INVALIDARG,
 					"model resolution requires supported colour/output grids and valid guide geometry", input.featureSlot, false);
-			resource.roi = proxy.roi.value_or(BuildRoiDescriptor(std::nullopt, proxy.computeSubrect,
-				{ proxy.outputWidth, proxy.outputHeight }, false));
-			resource.nativeLayout = BuildNativeEvaluationLayout(
-				{ proxy.colorWidth, proxy.colorHeight }, { proxy.guideWidth, proxy.guideHeight },
-				{ proxy.outputWidth, proxy.outputHeight }, { proxy.controlMaskWidth, proxy.controlMaskHeight },
-				proxy.computeSubrect, UpscalingDLSS::BuildMotionVectorPixelScale(proxy.viewportCrop), proxy.featureUpscaling);
-			FinalizeResourceKeysLocked(proxy, resource);
 		}
 		const auto additional = modelResolution_.AdditionalBytes(args, sharing);
 		if (!additional)
@@ -3652,11 +3860,14 @@ namespace NeuralRendering
 			colorPipeline_.Poll(a_args.front().context, slot.colorWork);
 		activeStage_ = RendererStage::ResourceCreation;
 		std::array<Slot*, kEyeCount> slots{};
+		std::optional<std::size_t> startupIndex;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			if (!EnsureSlotLocked(a_args[index].featureSlot, resources[index], execution, index))
 				return false;
 			slots[index] = &slots_[a_args[index].featureSlot];
+			if (!slots[index]->nativeReady && !startupIndex && !colorConfiguration_.experiments.transportBypass)
+				startupIndex = index;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (resources[index].compactAttempted)
 				compactRetention_[a_args[index].featureSlot].Commit(resources[index].roi.compactSource);
@@ -3886,6 +4097,10 @@ namespace NeuralRendering
 			snapshot_.performance.maximumD3D11PreparationCpuEnqueueMicroseconds,
 			preparationStarted);
 		preparationTimer.Stop();
+		if (startupIndex && !AdmitMemoryLocked(a_args, std::span(resources.data(), a_args.size()))) {
+			a_outcome.memoryPressureBypass = !failureLatched_ && !quarantined_ && memoryRecovery_.phase != MemoryRecoveryPhase::Ready;
+			return false;
+		}
 
 		activeStage_ = RendererStage::CommandBegin;
 		ID3D12GraphicsCommandList* commandList = nullptr;
@@ -3905,7 +4120,7 @@ namespace NeuralRendering
 
 		ID3D12GraphicsCommandList* parallelCommands = nullptr;
 		// Feature creation stays on the primary queue; only independent, resident eye models overlap.
-		if (a_args.size() == 2 && a_args[0].parallelEyes && !interop_.IsParallelDisabled() && !colorConfiguration_.experiments.transportBypass &&
+		if (!startupIndex && a_args.size() == 2 && a_args[0].parallelEyes && !interop_.IsParallelDisabled() && !colorConfiguration_.experiments.transportBypass &&
 			Runtime::Instance().HasCompatibleFeature(a_args[0].featureSlot, resources[0].nativeLayout, a_args[0].providerBlending, a_args[0].tuning.networkPreset) &&
 			Runtime::Instance().HasCompatibleFeature(a_args[1].featureSlot, resources[1].nativeLayout, a_args[1].providerBlending, a_args[1].tuning.networkPreset))
 			parallelCommands = interop_.ParallelList();
@@ -3935,8 +4150,10 @@ namespace NeuralRendering
 					"shared resources require conflicting states or exceed the batch capacity", a_args[index].featureSlot, true, !aborted);
 			}
 			resourceOffsets[index + 1] = sharedResourceCount;
-			Add(pixelCount, resources[index].roi.inferenceContext.Area());
-			featureSlotMask |= 1u << a_args[index].featureSlot;
+			if (!startupIndex || *startupIndex == index) {
+				Add(pixelCount, resources[index].roi.inferenceContext.Area());
+				featureSlotMask |= 1u << a_args[index].featureSlot;
+			}
 		}
 		const auto resourceSpan =
 			std::span(sharedResources.data(), sharedResourceCount);
@@ -3953,10 +4170,11 @@ namespace NeuralRendering
 		const D3D12InteropSubmissionTiming timing{
 			.frameId = a_args.front().frameId,
 			.pixelCount = pixelCount,
-			.evaluationCount = colorConfiguration_.experiments.transportBypass ? 0u : static_cast<std::uint32_t>(a_args.size()),
+			.evaluationCount = colorConfiguration_.experiments.transportBypass ? 0u : startupIndex ? 1u :
+			                                                                                         static_cast<std::uint32_t>(a_args.size()),
 			.featureSlotMask = featureSlotMask,
 			.insertionPoint = a_args.front().insertionPoint,
-			.logicalEyeCount = logicalEyeCount,
+			.logicalEyeCount = startupIndex ? 1u : logicalEyeCount,
 			.execution = execution,
 		};
 		bool timingScopeOpened = false;
@@ -4027,6 +4245,8 @@ namespace NeuralRendering
 
 		activeStage_ = RendererStage::FeatureEvaluate;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			if (startupIndex && *startupIndex != index)
+				continue;
 			auto& slot = *slots[index];
 			const auto& args = a_args[index];
 			if (colorConfiguration_.experiments.transportBypass) {
@@ -4092,25 +4312,51 @@ namespace NeuralRendering
 			});
 			if (execution)
 				execution->Update([&](auto& evidence) { evidence.regions[index].effectiveReset = effectiveReset; });
-			const bool nativeEvaluated = Runtime::Instance().Execute(
-				index == 1 && parallelCommands ? parallelCommands : commandList,
-				args.featureSlot,
-				slot.color.resource12.Get(),
-				slot.depth.resource12.Get(),
-				slot.motionVectors.resource12.Get(),
-				slot.output.resource12.Get(),
-				args.controlMask ? slot.controlMask.resource12.Get() : nullptr,
-				resources[index].nativeLayout,
-				args.tuning,
-				effectiveReset,
-				&evaluationAttempted,
+			auto* runtimeCapture = execution ? &runtimeEvidence : nullptr;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-				execution || lifetime.enabled || cropEvent ? &runtimeEvidence : nullptr,
-#else
-				execution ? &runtimeEvidence : nullptr,
+			if (lifetime.enabled || cropEvent)
+				runtimeCapture = &runtimeEvidence;
 #endif
-				&interop_,
-				static_cast<std::uint32_t>(index), args.providerBlending);
+			bool nativePrepared = true;
+			RuntimeExecutionEvidence creationEvidence{};
+			if (startupIndex) {
+				const auto sample = SampleMemoryBudgetLocked(args.device, GetTickCount64(), true);
+				nativeStartup_.Begin(NativeMemoryKeyLocked(resources[index]), args.featureSlot, sample, GetTickCount64(), true);
+				if (const auto estimate = nativeMemory_.Project(nativeStartup_.key))
+					nativeStartup_.reservedBytes = estimate->bytes;
+				nativeStartupFrame_ = args.frameId;
+				nativePrepared = Runtime::Instance().PrepareFeature(commandList, args.featureSlot, resources[index].nativeLayout,
+					slot.color.resource12.Get(), args.controlMask ? slot.controlMask.resource12.Get() : nullptr,
+					args.providerBlending, runtimeCapture, args.tuning.networkPreset);
+				creationEvidence = runtimeEvidence;
+				const auto created = SampleMemoryBudgetLocked(args.device, GetTickCount64(), true);
+				nativeStartup_.Sample(created, GetTickCount64());
+			}
+			const bool nativeEvaluated = nativePrepared && Runtime::Instance().Execute(
+															   index == 1 && parallelCommands ? parallelCommands : commandList,
+															   args.featureSlot,
+															   slot.color.resource12.Get(),
+															   slot.depth.resource12.Get(),
+															   slot.motionVectors.resource12.Get(),
+															   slot.output.resource12.Get(),
+															   args.controlMask ? slot.controlMask.resource12.Get() : nullptr,
+															   resources[index].nativeLayout,
+															   args.tuning,
+															   effectiveReset,
+															   &evaluationAttempted, runtimeCapture,
+															   &interop_,
+															   static_cast<std::uint32_t>(index), args.providerBlending);
+			if (startupIndex) {
+				if (creationEvidence.createAttempted) {
+					runtimeEvidence.createAttempted = creationEvidence.createAttempted;
+					runtimeEvidence.createSucceeded = creationEvidence.createSucceeded;
+					runtimeEvidence.createReason = creationEvidence.createReason;
+					runtimeEvidence.createResult = creationEvidence.createResult;
+					runtimeEvidence.createCpuMicroseconds = creationEvidence.createCpuMicroseconds;
+				}
+				const auto sample = SampleMemoryBudgetLocked(args.device, GetTickCount64(), true);
+				nativeStartup_.Sample(sample, GetTickCount64());
+			}
 			if (evaluationAttempted) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				cropDiagnostics.RecordEvaluation(args.featureSlot,
@@ -4171,7 +4417,7 @@ namespace NeuralRendering
 		}
 		transitionEyes(false);
 		activeStage_ = RendererStage::CommandEnd;
-		if (!interop_.EndD3D12()) {
+		if (!interop_.EndD3D12(!startupIndex)) {
 			recordingGuard.active = interop_.IsRecording();
 			return FailLocked(
 				RendererStage::CommandEnd,
@@ -4182,6 +4428,16 @@ namespace NeuralRendering
 		}
 		recordingGuard.active = false;
 		snapshot_.lastCompletedStage = RendererStage::CommandEnd;
+		if (startupIndex) {
+			const auto fences = interop_.GetLifetimeSnapshot();
+			nativeStartup_.fence = fences.fence;
+			nativeStartup_.issued = fences.issued;
+			backendMaintenancePending_.store(true, std::memory_order_relaxed);
+			nativeStartupDeferred_ = true;
+			snapshot_.outputCommitted = false;
+			executionCompletion.failureOverride = RendererStage::None;
+			return false;
+		}
 
 		activeStage_ = RendererStage::OutputCommit;
 		RefreshRuntimeTelemetryLocked();
@@ -4272,6 +4528,8 @@ namespace NeuralRendering
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			slots[index]->historyKey = resources[index].historyKey;
+			a_outcome.spatialHistoryReset |= slots[index]->nativeUnpublished;
+			slots[index]->nativeUnpublished = false;
 			slots[index]->lastUsedMs = GetTickCount64();
 			slots[index]->lastSuccessfulFrame = a_args[index].frameId;
 			slots[index]->lastSuccessfulSourceWorldFrame =
@@ -4442,6 +4700,7 @@ namespace NeuralRendering
 		RendererApplyOutcome* a_outcome)
 	{
 		std::scoped_lock lock(state_->mutex_);
+		state_->nativeStartupDeferred_ = false;
 		const SKSE::stl::scope_exit releaseMemory([&] {
 			state_->FinishMemoryAdmissionLocked();
 		});
@@ -4450,8 +4709,8 @@ namespace NeuralRendering
 		state_->SetActiveFeatureSlotLocked(a_args.featureSlot);
 		try {
 			auto args = a_args;
-			state_->PrepareMemoryResolutionLocked({ &args, 1 });
 			state_->CaptureColorConfiguration(a_args);
+			state_->PrepareMemoryResolutionLocked({ &args, 1 });
 			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRendering", state_->wholePass_);
 			bool succeeded = state_->PreparePeripheralCompressionLocked({ &args, 1 }) && state_->ApplyLocked(args, outcome);
 			if (state_->RetryWorkingResolutionLocked({ &args, 1 }))
@@ -4488,6 +4747,7 @@ namespace NeuralRendering
 		RendererApplyOutcome* a_outcome)
 	{
 		std::scoped_lock lock(state_->mutex_);
+		state_->nativeStartupDeferred_ = false;
 		const SKSE::stl::scope_exit releaseMemory([&] {
 			state_->FinishMemoryAdmissionLocked();
 		});
@@ -4497,8 +4757,8 @@ namespace NeuralRendering
 		state_->SetActiveFeatureSlotLocked(a_args[0].featureSlot);
 		try {
 			auto args = a_args;
-			state_->PrepareMemoryResolutionLocked(args);
 			state_->CaptureColorConfiguration(a_args[0]);
+			state_->PrepareMemoryResolutionLocked(args);
 			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRenderingStereo", state_->wholePass_);
 			bool succeeded = state_->PreparePeripheralCompressionLocked(args) && state_->ApplyStereoLocked(args, outcome);
 			if (state_->RetryWorkingResolutionLocked(args))
@@ -4508,7 +4768,7 @@ namespace NeuralRendering
 			state_->FinishMemoryRecoveryLocked(succeeded, outcome);
 			if (succeeded)
 				Runtime::Instance().AcknowledgePresentedFeatures(outcome.evaluationSucceededFeatureSlotMask);
-			if (!outcome.memoryPressureBypass)
+			if (!outcome.memoryPressureBypass && !outcome.startupDeferred)
 				Increment(succeeded ? state_->snapshot_.counters.stereoSuccesses : state_->snapshot_.counters.stereoFailures);
 			state_->FinishApplyLocked(outcome);
 			if (a_outcome)
@@ -4538,6 +4798,7 @@ namespace NeuralRendering
 		RendererApplyOutcome* a_outcome)
 	{
 		std::scoped_lock lock(state_->mutex_);
+		state_->nativeStartupDeferred_ = false;
 		const SKSE::stl::scope_exit releaseMemory([&] {
 			state_->FinishMemoryAdmissionLocked();
 		});
@@ -4546,8 +4807,8 @@ namespace NeuralRendering
 		state_->SetActiveFeatureSlotLocked(a_args[0].featureSlot);
 		try {
 			auto args = a_args;
-			state_->PrepareMemoryResolutionLocked(args);
 			state_->CaptureColorConfiguration(a_args[0]);
+			state_->PrepareMemoryResolutionLocked(args);
 			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRenderingSequentialStereo", state_->wholePass_);
 			bool succeeded = state_->PreparePeripheralCompressionLocked(args) && state_->ApplySequentialStereoLocked(args, outcome);
 			if (state_->RetryWorkingResolutionLocked(args))
@@ -4648,8 +4909,17 @@ namespace NeuralRendering
 			else if (state_->memoryRecovery_.phase == MemoryRecoveryPhase::Retiring) {
 				(void)state_->RetireMemoryPressureLocked();
 				state_->PublishMemoryBudgetWorkLocked(a_requested);
-			} else
+			} else {
+				if (!state_->PollNativeStartupLocked())
+					return;
+				const auto now = GetTickCount64();
+				if (!a_requested || (now >= state_->lastNativeRequestMs_ && now - state_->lastNativeRequestMs_ >= NativeMemoryPolicy::kIdleReservationMs))
+					state_->nativeStartupMask_ = 0;
+				state_->FinishMemoryAdmissionLocked();
+				state_->PublishMemoryBudgetWorkLocked(a_requested);
 				(void)state_->ServiceRetainedBackendLocked(a_requested);
+				state_->backendMaintenancePending_.store(state_->nativeStartupMask_ || state_->memoryRetirement_.backendRetained, std::memory_order_relaxed);
+			}
 		} catch (...) {
 			state_->QuarantineAfterUnexpectedFailureLocked(
 				RendererStage::Quarantined, Runtime::kFeatureSlotCount, false, 0);
@@ -4681,6 +4951,8 @@ namespace NeuralRendering
 	{
 		auto& policy = prewarm_;
 		if (!policy.BeginOpportunity(opportunity))
+			return;
+		if (!PollNativeStartupLocked())
 			return;
 		if (failureLatched_ || quarantined_ || snapshot_.stallRecovery.pending) {
 			policy.stage = "deferred";
@@ -4723,6 +4995,7 @@ namespace NeuralRendering
 					return;
 				}
 				policy.unusedMask &= ~FeatureSlotBit(slot);
+				nativeCreationGrowth_[slot] = 0;
 				return;
 			}
 			if (policy.backendOwned && !Runtime::Instance().GetResidentFeatureMask()) {
@@ -4796,8 +5069,15 @@ namespace NeuralRendering
 			policy.failed = true;
 			return;
 		}
-		const auto bytes = 2 * MemoryRecoveryPolicy::kNativeFeatureReserve +
-		                   std::uint64_t(extent.width) * extent.height * 128u;
+		const NativeMemoryKey memoryKey{ .runtimeVersion = Runtime::Instance().AllocationVersion(), .network = request->networkPreset, .creation = request->layout.creation, .color = request->layout.color.backing, .upscaling = request->layout.featureUpscaling };
+		const auto estimate = nativeMemory_.Project(memoryKey);
+		if (!estimate) {
+			policy.reason = "invalid_native_dimensions";
+			policy.failed = true;
+			return;
+		}
+		const auto bytes = Util::GpuMemoryBudget::Add(Util::GpuMemoryBudget::Add(estimate->bytes, estimate->bytes),
+			std::uint64_t(extent.width) * extent.height * 128u);
 		const auto budget = SampleMemoryBudgetLocked(device, GetTickCount64(), true);
 		const auto sample = Util::GpuMemoryBudget::Get().Sample(device, MemoryRecoveryPolicy::kSampleIntervalMs);
 		auto preview = memoryRecovery_;
@@ -4859,7 +5139,16 @@ namespace NeuralRendering
 				(void)FailLocked(RendererStage::CommandBegin, interop_.LastError(), "prewarm command begin failed", slot, true, true, false);
 				return;
 			}
-			if (!Runtime::Instance().PrepareFeature(commands, slot, policy.key.layout, nullptr, nullptr, false, nullptr, policy.key.networkPreset)) {
+			const NativeMemoryKey memoryKey{ .runtimeVersion = Runtime::Instance().AllocationVersion(), .network = policy.key.networkPreset, .creation = policy.key.layout.creation, .color = policy.key.layout.color.backing, .upscaling = policy.key.layout.featureUpscaling };
+			const auto baseline = SampleMemoryBudgetLocked(device_.Get(), GetTickCount64(), true);
+			nativeStartup_.Begin(memoryKey, slot, baseline, GetTickCount64(), false);
+			const bool created = Runtime::Instance().PrepareFeature(commands, slot, policy.key.layout, nullptr, nullptr, false, nullptr, policy.key.networkPreset);
+			const auto sample = SampleMemoryBudgetLocked(device_.Get(), GetTickCount64(), true);
+			nativeStartup_.Sample(sample, GetTickCount64());
+			if (!created) {
+				if (nativeStartup_.valid)
+					nativeMemory_.Observe(memoryKey, nativeStartup_.peak - nativeStartup_.baseline);
+				nativeStartup_ = {};
 				const bool aborted = interop_.AbortD3D12();
 				policy.failed = true;
 				policy.stage = "failed";
@@ -4874,9 +5163,14 @@ namespace NeuralRendering
 			}
 			policy.preparedMask |= FeatureSlotBit(slot);
 			policy.unusedMask |= FeatureSlotBit(slot);
-			if (!interop_.EndD3D12()) {
+			if (!interop_.EndD3D12(false)) {
 				policy.failed = true;
 				(void)FailLocked(RendererStage::CommandEnd, interop_.LastError(), "prewarm submission failed", slot, true, true, false);
+			} else {
+				const auto fences = interop_.GetLifetimeSnapshot();
+				nativeStartup_.fence = fences.fence;
+				nativeStartup_.issued = fences.issued;
+				backendMaintenancePending_.store(true, std::memory_order_relaxed);
 			}
 			return;
 		}

@@ -1,4 +1,8 @@
 #pragma once
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "NativeMemoryPolicy.h"
+#endif
 #include "PeripheralCompressionPolicy.h"
 #include "Utils/DepthConvention.h"
 
@@ -211,6 +215,11 @@ namespace NeuralRendering
 		Runtime::LifecycleCounts nativeLifecycle{};
 		LifetimeFenceSnapshot prewarmSubmission{};
 		std::uint64_t prewarmReservedBytes = 0;
+		NativeStartupObservation nativeStartup{};
+		std::array<std::optional<NativeMemoryKey>, Runtime::kFeatureSlotCount> nativeMemoryKeys{};
+		std::array<std::optional<NativeMemoryPolicy::Estimate>, Runtime::kFeatureSlotCount> nativeMemoryEstimates{};
+		std::uint64_t nativeStartupReservedBytes = 0;
+		std::uint32_t nativeReadySlotMask = 0;
 		std::uint64_t shaderGenerationRequested = 0, shaderGenerationApplied = 0;
 #endif
 		RendererCounters counters{};
@@ -337,6 +346,7 @@ namespace NeuralRendering
 		std::uint32_t evaluationSucceededFeatureSlotMask = 0;
 		std::uint32_t selectedOutputFeatureSlotMask = 0;
 		bool memoryPressureBypass = false;
+		bool startupDeferred = false;
 
 		/** True only after every requested private output in the transaction is ready for publication. */
 		[[nodiscard]] bool WasOutputSelected(std::uint32_t featureSlot) const noexcept

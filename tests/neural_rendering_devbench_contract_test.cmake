@@ -74,6 +74,8 @@ set(
     _character_mask_shader_path
     "${PROJECT_ROOT}/package/Shaders/DLSS5CharacterMaskCS.hlsl"
 )
+set(_neural_visibility_shader_path
+    "${PROJECT_ROOT}/package/Shaders/Common/NeuralRenderingVisibility.hlsli")
 set(
     _character_capture_shader_path
     "${PROJECT_ROOT}/package/Shaders/DLSS5CharacterCaptureCS.hlsl"
@@ -144,6 +146,7 @@ foreach(_required_path IN ITEMS
     "${_character_mask_work_policy_path}"
     "${_character_category_shader_path}"
     "${_character_mask_shader_path}"
+    "${_neural_visibility_shader_path}"
     "${_character_capture_shader_path}"
     "${_lighting_shader_path}"
     "${_grass_shader_path}"
@@ -189,6 +192,7 @@ file(READ "${_character_actor_policy_path}" _character_actor_policy)
 file(READ "${_character_mask_work_policy_path}" _character_mask_work_policy)
 file(READ "${_character_category_shader_path}" _character_category_shader)
 file(READ "${_character_mask_shader_path}" _character_mask_shader)
+file(READ "${_neural_visibility_shader_path}" _neural_visibility_shader)
 file(READ "${_character_capture_shader_path}" _character_capture_shader)
 file(READ "${_lighting_shader_path}" _lighting_shader)
 file(READ "${_grass_shader_path}" _grass_shader)
@@ -330,7 +334,10 @@ foreach(_mask_roi_dispatch_contract IN ITEMS
     [[fullSurfaceDispatch || gpuSupport ? 0u : dirtyRegion.baseX]]
     [[fullSurfaceDispatch ?]]
     [[dirtyRegion.width]]
-    [[if (!a_slot.maskInitialized)]]
+    [[const bool resetBackground = !a_slot.maskInitialized || a_slot.maskBackground != background;]]
+    [[if (resetBackground)]]
+    [[a_slot.maskBackground = background;]]
+    [[a_slot.maskInitialized = true;]]
     [[a_slot.previousMaskWorkSubrect = a_slot.maskWorkSubrect;]]
 )
     string(FIND "${_source_contract_text}" "${_mask_roi_dispatch_contract}"
@@ -1629,7 +1636,8 @@ foreach(_source_contract IN ITEMS
     [[character category capture arrived after a newer observation frame]]
     [[capturedFrame_ != sourceWorldFrame]]
     [[const bool logicalEmptyCapture = state_->capturedCategoriesEmpty_;]]
-    [[if (provenEmpty || logicalEmptyCapture) {]]
+    [[if (provenEmpty || logicalEmptyCapture || (sceneStrengths && !fuseScene && plan.regions.empty())) {]]
+    [[float clearValue = sceneStrengths ? 1.0f : 0.0f;]]
     [[state_->ClearMask(]]
     [[slot.requiresEvaluation =]]
     [[const bool cpuProvenEmpty =]]
@@ -2125,8 +2133,8 @@ foreach(_strict_zero_contract IN ITEMS
 endforeach()
 foreach(_geometry_roi_contract IN ITEMS
     [[ResolveStableCharacterComputeSubrect(requiredComputeSubrect, a_args.outputWidth,]]
-    [[slot.maskRoiStatus = sceneStrengths ? "scene_full_region" : authoredMode ? "cpu_geometry_single" :]]
-    [[eye.actorEnclosureCountsAvailable = !sceneStrengths;]]
+    [[slot.maskRoiStatus = sceneStrengths ? "scene_full_inference_region_mask" : authoredMode ? "cpu_geometry_single" :]]
+    [[eye.actorEnclosureCountsAvailable = !fuseScene;]]
     [[slot.prepareKey.sourceWorldFrame != args.sourceWorldFrame]]
     [[slot.prepareKey.generation != args.generation]]
     [[slot.prepareKey.settings != BuildSettingsKey(args.settings)]]
@@ -2375,12 +2383,14 @@ foreach(_mask_shader_contract IN ITEMS
     [[AuthoredFacePixels);]]
     [[CountCategory(centerCategory, VisibleFacePixels);]]
     [[const bool visibilityRejectionEnabled = VisibilityOptions.y >= 0.5;]]
-    [[return currentDepth + tolerance >= authoredDepth;]]
+    [[#include "Common/NeuralRenderingVisibility.hlsli"]]
+    [[return NeuralRenderingVisibility::Visible(currentDepth, authoredDepth, VisibilityOptions.x);]]
     [[CharacterCategoryMask::DecodeCategory(]]
     [[IsAuthoredSurfaceVisible(]]
     [[sourcePixel, centerDepth, centerAuthoredRawDepth)]]
     [[const float centerDistanceWeight =]]
-    [[GetDistanceWeight(sourcePixel, centerAuthoredRawDepth);]]
+    [[const float centerDistanceWeight = needsCenterSurface ?]]
+    [[GetDistanceWeight(sourcePixel, centerAuthoredRawDepth) :]]
     [[const bool centerWithinDistance = centerDistanceWeight > 0.0;]]
     [[centerStrength * centerDistanceWeight]]
     [[neighborDistanceWeight <= 0.0]]
@@ -2404,6 +2414,15 @@ foreach(_mask_shader_contract IN ITEMS
         message(FATAL_ERROR
             "Character mask depth/provenance contract is missing: ${_mask_shader_contract}"
         )
+    endif()
+endforeach()
+foreach(_visibility_contract IN ITEMS
+    [[const float tolerance = max(1.0, max(abs(authoredDepth), abs(currentDepth)) * threshold);]]
+    [[return currentDepth + tolerance >= authoredDepth;]]
+)
+    string(FIND "${_neural_visibility_shader}" "${_visibility_contract}" _visibility_position)
+    if(_visibility_position EQUAL -1)
+        message(FATAL_ERROR "Shared NR depth visibility contract is missing: ${_visibility_contract}")
     endif()
 endforeach()
 foreach(_distance_fade_upload_contract IN ITEMS
@@ -2436,7 +2455,7 @@ endforeach()
 
 string(FIND "${_character_mask_shader}" "bool IsAuthoredSurfaceVisible("
     _visibility_function_begin)
-string(FIND "${_character_mask_shader}" "void CountCategory("
+string(FIND "${_character_mask_shader}" "float ReconstructEyeDistance("
     _visibility_function_end)
 if(_visibility_function_begin EQUAL -1 OR _visibility_function_end EQUAL -1 OR
     NOT _visibility_function_begin LESS _visibility_function_end)
@@ -2455,8 +2474,7 @@ foreach(_visibility_contract IN ITEMS
     [[if (visibilityRejectionEnabled || distanceCullEnabled)]]
     [[authoredRawDepth = ReadAuthoredDepth(localSourcePixel);]]
     [[const float authoredDepth = LinearizeDepth(authoredRawDepth);]]
-    [[const float tolerance = max(]]
-    [[return currentDepth + tolerance >= authoredDepth;]]
+    [[return NeuralRenderingVisibility::Visible(currentDepth, authoredDepth, VisibilityOptions.x);]]
 )
     string(FIND "${_visibility_function}" "${_visibility_contract}"
         _visibility_position)
@@ -3585,7 +3603,7 @@ foreach(_region_contract IN ITEMS
     [[if (args.featureSlot >= kLogicalFeatureSlotCount)]]
     [[resources[index].historyKey.regionIdentity = 0;]]
     [[std::array<Slot*, kEyeCount> slots{};]]
-    [[.logicalEyeCount = logicalEyeCount,]]
+    [[.logicalEyeCount = startupIndex ? 1u : logicalEyeCount,]]
 )
     string(FIND "${_region_batch}" "${_region_contract}" _region_contract_position)
     if(_region_contract_position EQUAL -1)
@@ -3601,7 +3619,7 @@ foreach(_region_stage IN ITEMS
     [[activeStage_ = RendererStage::ColorInputCopy;]]
     [[activeStage_ = RendererStage::ControlMaskCopy;]]
     [[Runtime::Instance().Execute(]]
-    [[if (!interop_.EndD3D12())]]
+    [[if (!interop_.EndD3D12(!startupIndex))]]
     [[activeStage_ = RendererStage::OutputCommit;]]
 )
     string(FIND "${_region_batch}" "${_region_stage}" _region_stage_position)

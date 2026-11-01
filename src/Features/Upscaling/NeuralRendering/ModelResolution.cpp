@@ -946,12 +946,10 @@ namespace NeuralRendering
 		}
 	}
 
-	bool ModelResolution::PreparePeripheralCompression(std::span<RendererApplyArgs> args, bool compactInputs, HRESULT& result)
+	bool ModelResolution::BuildPeripheralPlans(std::span<RendererApplyArgs> args, bool compactInputs, std::span<PeripheralCompressionPlan> plans) const
 	{
-		result = E_INVALIDARG;
-		if (args.empty() || args.size() > kEyeCount)
+		if (args.empty() || args.size() > kEyeCount || plans.size() < args.size())
 			return false;
-		std::array<PeripheralCompressionPlan, kEyeCount> plans{};
 		for (std::size_t index = 0; index < args.size(); ++index) {
 			auto& input = args[index];
 			input.peripheralCompression = {};
@@ -978,6 +976,30 @@ namespace NeuralRendering
 #endif
 		}
 		ReconcilePeripheralCompression(std::span(plans.data(), args.size()));
+		const bool selected = std::ranges::any_of(args, [](const auto& input) { return input.modelOutputSelection.has_value(); });
+		if (device_.Get() == args.front().device && peripheralShaderFailed_[selected ? 1u : 0u])
+			for (std::size_t index = 0; index < args.size(); ++index)
+				if (plans[index].Active())
+					plans[index].reason = PeripheralCompressionReason::ShaderUnavailable;
+		return true;
+	}
+
+	bool ModelResolution::PlanPeripheralCompression(std::span<RendererApplyArgs> args, bool compactInputs) const
+	{
+		std::array<PeripheralCompressionPlan, kEyeCount> plans{};
+		if (!BuildPeripheralPlans(args, compactInputs, plans))
+			return false;
+		for (std::size_t index = 0; index < args.size(); ++index)
+			args[index].peripheralCompression = plans[index];
+		return true;
+	}
+
+	bool ModelResolution::PreparePeripheralCompression(std::span<RendererApplyArgs> args, bool compactInputs, HRESULT& result)
+	{
+		result = E_INVALIDARG;
+		std::array<PeripheralCompressionPlan, kEyeCount> plans{};
+		if (!BuildPeripheralPlans(args, compactInputs, plans))
+			return false;
 		if (plans[0].Active()) {
 			if (!args.front().device || !args.front().context || !ValidBatchLayout(args) || !ValidateSelectedOutputs(args))
 				return false;
@@ -995,7 +1017,7 @@ namespace NeuralRendering
 		for (std::size_t index = 0; index < args.size(); ++index) {
 			args[index].peripheralCompression = plans[index];
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			args[index].executionContext.peripheralCompression = plans[index];
+			args[index].executionContext.peripheralCompression = args[index].peripheralCompression;
 #endif
 		}
 		result = S_OK;

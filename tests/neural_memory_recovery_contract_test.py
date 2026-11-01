@@ -366,7 +366,8 @@ class MemoryRecoveryContracts(unittest.TestCase):
 
     def test_faulted_backend_does_not_reserve_future_streaming_work(self):
         finish = body(RENDERER, "void FinishMemoryAdmissionLocked()", "\t\t")
-        self.assertLess(finish.index("memoryReservation_.Reset()"), finish.index("PublishMemoryBudgetWorkLocked()"))
+        self.assertIn("!failureLatched_ && !quarantined_", finish)
+        self.assertLess(finish.index("memoryReservation_.Reset()"), finish.rindex("PublishMemoryBudgetWorkLocked()"))
         publication = body(RENDERER, "void PublishMemoryBudgetWorkLocked(", "\t\t")
         self.assertIn("if (!requested || failureLatched_ || quarantined_)", publication)
         self.assertNotIn(".Sample(", publication)

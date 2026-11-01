@@ -2,6 +2,7 @@
 #include "Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryRecoveryPolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryRetirementPolicy.h"
+#include "Features/Upscaling/NeuralRendering/NativeMemoryPolicy.h"
 #include "Features/Upscaling/NeuralRendering/NetworkSelection.h"
 #include "Features/Upscaling/NeuralRendering/PeripheralCompressionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/RegionCapacity.h"
@@ -238,6 +239,9 @@ namespace NeuralRendering
 			InteropFixture interop_;
 			std::array<Slot, Runtime::kFeatureSlotCount> slots_{};
 			MemoryRecoveryPolicy memoryRecovery_;
+			NativeMemoryPolicy nativeMemory_;
+			NativeStartupObservation nativeStartup_;
+			std::uint32_t nativeStartupMask_ = 0;
 			MemoryRetirementPolicy memoryRetirement_;
 			std::atomic<bool> backendMaintenancePending_ = false;
 			bool failureLatched_ = false, quarantined_ = false, abandoned = false;

@@ -166,6 +166,8 @@ namespace NeuralRendering
 		[[nodiscard]] std::filesystem::path Path() const;
 		[[nodiscard]] std::string Hash() const;
 		[[nodiscard]] std::string Version() const;
+		/** Cached full provider version for session allocation estimates, including before initialization. */
+		[[nodiscard]] std::uint64_t AllocationVersion() const;
 		/** Resolve network limits from probed metadata, or cached installed metadata before initialization. */
 		[[nodiscard]] TuningLimits GetTuningLimits(std::uint32_t selection = kNetworkDefault) const;
 		/** Whether the probed provider, or installed metadata before probing, supports explicit networks. */
@@ -247,6 +249,7 @@ namespace NeuralRendering
 		std::filesystem::path path_;
 		std::string hash_;
 		std::string version_;
+		std::uint64_t allocationVersion_ = 0;
 		std::optional<TuningLimits> tuningLimits_;
 		std::optional<bool> networkSelectionSupported_;
 		std::filesystem::path corePath_;

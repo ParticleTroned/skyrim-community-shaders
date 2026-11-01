@@ -61,6 +61,8 @@ namespace NeuralRendering
 
 		/** Freeze capacity before memory admission; speculative upgrades preserve the working policy. */
 		void PlanPackedCrops(std::span<RendererApplyArgs>, bool speculative = false) noexcept;
+		/** Project shared peripheral geometry without compiling shaders or allocating GPU resources. */
+		bool PlanPeripheralCompression(std::span<RendererApplyArgs>, bool compactInputs) const;
 		/** Freeze optional mapping and shader ownership after scale/actor planning and before admission. */
 		bool PreparePeripheralCompression(std::span<RendererApplyArgs>, bool compactInputs, HRESULT&);
 		/** Resolve optional shaders before native memory admission; device errors remain fatal. */
@@ -122,6 +124,7 @@ namespace NeuralRendering
 		bool EnsureSelectionShader(bool guarded, HRESULT&);
 		bool EnsureGuidedShader(bool selected, bool guarded, bool peripheral, Microsoft::WRL::ComPtr<ID3D11ComputeShader>&, HRESULT&);
 		bool EnsurePeripheralShaders(const RendererApplyArgs&, bool selected, PeripheralCompressionShaders&, HRESULT&);
+		bool BuildPeripheralPlans(std::span<RendererApplyArgs>, bool compactInputs, std::span<PeripheralCompressionPlan>) const;
 		void DispatchCoverage(std::span<const RendererApplyArgs>, Batch&);
 		template <UINT ConstantBuffers>
 		void DispatchPreparation(std::span<const RendererApplyArgs>, const Batch&);

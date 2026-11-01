@@ -46262,7 +46262,7 @@ namespace
 					successfulEyes[eye] = true;
 				}
 				summary.successfulEyeMask = evaluationEyeMask;
-			} else if (outcome.evaluationAttemptedFeatureSlotMask != 0) {
+			} else if (outcome.evaluationAttemptedFeatureSlotMask != 0 && !outcome.startupDeferred) {
 				a_upscaling.RequestHistoryReset();
 			}
 		} else if (summary.preparedEyeMask != 0) {

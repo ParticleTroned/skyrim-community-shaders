@@ -57,6 +57,11 @@ namespace
 	struct MemoryPublicationState
 	{
 		MemoryRecoveryPolicy memoryRecovery_;
+		struct
+		{
+			bool active = false;
+		} nativeStartup_;
+		std::uint32_t nativeStartupMask_ = 0;
 		bool failureLatched_ = false, quarantined_ = false;
 
 #include "neural_memory_publication_under_test.h"
@@ -301,6 +306,9 @@ namespace
 	{
 		MemoryRecoveryPolicy policy;
 		Require(Observe(policy, {}, 0, 1), "Unavailable monitoring disabled ordinary NR");
+		Require(!Observe(policy, {}, 512 * mib, 2), "Unavailable monitoring admitted new native capacity");
+		Require(policy.phase == MemoryRecoveryPhase::Retiring, "Unknown headroom did not defer native startup");
+		policy = {};
 		Require(!Observe(policy, healthy, 4000 * mib, 2), "Projected allocation ignored the safety reserve");
 		policy.Retired(2);
 		Require(!Observe(policy, healthy, std::numeric_limits<std::uint64_t>::max(), 1000), "Oversized allocation was admitted");

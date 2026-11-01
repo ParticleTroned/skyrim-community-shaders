@@ -63,6 +63,7 @@ class BufferedD3D11Context : public IUnknown
 public:
 	bool holdSubmission = false;
 	int flushes = 0;
+	int waits = 0;
 	BufferedD3D11Context(ID3D12CommandQueue* producer, ID3D12Fence* shared) : queue(producer), fence(shared) {}
 	HRESULT STDMETHODCALLTYPE QueryInterface(REFIID requested, void** object) override
 	{
@@ -91,6 +92,7 @@ public:
 	}
 	HRESULT Wait(ID3D11Fence*, std::uint64_t value)
 	{
+		++waits;
 		commands.emplace_back(false, value);
 		return S_OK;
 	}
@@ -237,6 +239,28 @@ namespace
 		}
 	};
 #include "neural_parallel_eyes_cases.h"
+
+	void PrivateStartupSubmission()
+	{
+		Fixture f;
+		auto& immediate = *f.interop.context11_.Get();
+		ID3D12GraphicsCommandList* list = nullptr;
+		Require(f.interop.BeginD3D12(&list), "private startup could not begin");
+		Require(f.BeginFeatureScope(list, Fixture::Timing(1)), "private startup timing failed");
+		f.Evaluate(list, 0);
+		Require(f.EndFeatureScope(list), "private startup timing close failed");
+		Require(f.interop.EndD3D12(false), "private startup submission failed");
+		Require(immediate.waits == 0 && immediate.flushes == 0,
+			"Private startup blocked or flushed the normal render-scale producer");
+		const auto pending = f.interop.GetLifetimeSnapshot();
+		Require(pending.completedKnown && pending.completed < pending.issued,
+			"Unsubmitted D3D11 inputs incorrectly reported completed startup");
+		Require(f.interop.WaitForIdle(), "test cleanup could not complete private startup");
+		Require(f.interop.BeginD3D12(&list), "published stereo could not follow startup");
+		f.RecordSubmission(list, 43);
+		Require(immediate.waits == 1, "Normal stereo publication lost its D3D11 completion join");
+		Require(f.interop.WaitForIdle(), "published stereo did not drain");
+	}
 
 	void CommandBackpressure()
 	{
@@ -434,6 +458,7 @@ int main()
 		ParallelPartialSubmissionRetirement();
 		ParallelAbortAndCaptureCancellation();
 		CommandBackpressure();
+		PrivateStartupSubmission();
 		OffAndLive();
 		CancelAndFailure();
 		EvaluationIntervals();

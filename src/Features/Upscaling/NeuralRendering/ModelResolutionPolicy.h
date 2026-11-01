@@ -6,6 +6,7 @@
 #include "PackedCropPolicy.h"
 #include "PeripheralMapping.h"
 #include "PipelinePolicy.h"
+#include "ReconstructionTuning.h"
 
 #include <array>
 #include <cstdint>
@@ -50,6 +51,9 @@ namespace NeuralRendering
 		PackedCropLayout packedCrops{};
 		PeripheralMapping peripheralMapping{};
 		std::uint32_t peripheralMappingVersion = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ReconstructionPreparation experimentalPreparation{};
+#endif
 
 		bool operator==(const ModelResolutionHistory&) const = default;
 	};

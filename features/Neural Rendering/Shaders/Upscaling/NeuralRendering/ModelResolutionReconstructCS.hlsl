@@ -55,7 +55,11 @@ float3 TransferCompressedResidual(float3 source, float3 proxy, float3 residual)
 	// Magnitudes keep signed HDR continuous as individual channels cross zero.
 	float sourceY = Color::RGBToLuminance(abs(source));
 	float proxyY = Color::RGBToLuminance(abs(proxy));
-	residual *= proxyY > sourceY ? sourceY / proxyY : 1.0;
+	float transfer = proxyY > sourceY ? sourceY / proxyY : 1.0;
+#	if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NR_SHADOW_TRANSFER_TUNING)
+	transfer = lerp(1.0, transfer, ExperimentalShadowTransfer);
+#	endif
+	residual *= transfer;
 	return residual;
 }
 #endif
@@ -149,6 +153,14 @@ float CentralWeight(float2 uv)
 	// Reconstruct only the matched change; the original image retains its fine detail.
 	precise float3 candidate = source.rgb + residual * weight;
 	valid = valid && all(isfinite(candidate));
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NR_WHOLE_PIXEL_REJECTION)
+	if (OutputFormat == 1u)
+		valid = valid && all(abs(candidate) <= 65504.0);
+	else if (OutputFormat == 2u)
+		valid = valid && all(candidate >= 0.0) && all(candidate <= float3(65024.0, 65024.0, 64512.0));
+	else if (OutputFormat == 3u)
+		valid = valid && all(candidate >= 0.0) && all(candidate <= 1.0);
+#endif
 	// Finite channel overflow saturates continuously; corrupt samples still retain the original pixel.
 	if (OutputFormat == 1u)
 		candidate = clamp(candidate, -65504.0, 65504.0);

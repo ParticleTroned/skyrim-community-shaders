@@ -31,10 +31,14 @@ template <class T>
 concept HasPackedCropDiagnosticField = requires(T value) { value.packedCropPlanning; };
 template <class T>
 concept HasPeripheralDiagnosticField = requires(T value) { value.peripheralCompression; };
+template <class T>
+concept HasReconstructionTuning = requires(T value) { value.reconstructionTuning; };
 #ifdef DEVBENCH_BRIDGE_ENABLED
+static_assert(HasReconstructionTuning<NeuralRendering::RendererApplyArgs>);
 static_assert(HasPackedCropDiagnosticField<NeuralRendering::RendererApplyArgs>);
 static_assert(HasPeripheralDiagnosticField<NeuralRendering::RendererSnapshot>);
 #else
+static_assert(!HasReconstructionTuning<NeuralRendering::RendererApplyArgs>);
 static_assert(!HasPackedCropDiagnosticField<NeuralRendering::RendererApplyArgs>);
 static_assert(!HasPeripheralDiagnosticField<NeuralRendering::RendererSnapshot>);
 #endif
@@ -54,6 +58,9 @@ namespace AdapterCompiler
 	unsigned peripheralAttempts = 0;
 	unsigned peripheralAllocationFailureAttempt = 0;
 	bool throwPeripheralAllocationFailure = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	unsigned experimentalAttempts = 0, experimentalFailure = 0;
+#endif
 }
 
 // Substitute only engine compilation/profiling; the adapter and GPU work are production code.
@@ -69,6 +76,21 @@ ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
 {
 	result = E_FAIL;
 	++AdapterCompiler::calls;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "DEVBENCH_BRIDGE_ENABLED"; })) {
+		++AdapterCompiler::experimentalAttempts;
+		if (AdapterCompiler::experimentalFailure == 1)
+			return nullptr;
+		if (AdapterCompiler::experimentalFailure == 2)
+			throw std::runtime_error("Experimental shader compilation failed");
+		if (AdapterCompiler::experimentalFailure == 3) {
+			result = E_OUTOFMEMORY;
+			return nullptr;
+		}
+		if (AdapterCompiler::experimentalFailure == 4)
+			throw std::bad_alloc{};
+	}
+#endif
 	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "MODEL_OUTPUT_SELECTION"; }) &&
 		std::ranges::none_of(options, [](const auto& option) { return std::string_view(option.first) == "NR_PERIPHERAL_COMPRESSION" || std::string_view(option.first) == "GUIDED_NR_RECONSTRUCTION"; }))
 		++AdapterCompiler::ordinarySelectionAttempts;
@@ -269,12 +291,17 @@ namespace
 		ComPtr<ID3D11ComputeShader> shader;
 		ComPtr<ID3D11ShaderReflection> reflection;
 
-		Shader(ID3D11Device* device, const wchar_t* path, bool vr, const char* featureRoot = "features/Neural Rendering/Shaders", bool zeroGuidance = false)
+		Shader(ID3D11Device* device, const wchar_t* path, bool vr, const char* featureRoot = "features/Neural Rendering/Shaders", bool zeroGuidance = false, [[maybe_unused]] bool legacyOutput = false)
 		{
 			PackageIncludes includes("package/Shaders", featureRoot);
 			std::vector<D3D_SHADER_MACRO> defines;
 			if (vr)
 				defines.push_back({ "VR", "1" });
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			defines.push_back({ "DEVBENCH_BRIDGE_ENABLED", "1" });
+			if (legacyOutput)
+				defines.push_back({ "NR_WHOLE_PIXEL_REJECTION", "1" });
+#endif
 			if (AdapterCompiler::guided && std::filesystem::path(path).filename() == L"ModelResolutionReconstructCS.hlsl")
 				defines.push_back({ "GUIDED_NR_RECONSTRUCTION", "1" });
 			if (zeroGuidance)
@@ -295,7 +322,12 @@ namespace
 
 	void Configure(ConstantBuffer& constants, Size source, Size model, Region sourceRegion, Region modelRegion, bool hasMask, Motion motionScale)
 	{
-		Require(constants.bytes.size() == 352, "Model resolution cbuffer layout changed");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		Require(constants.bytes.size() == 368, "Bridge model resolution cbuffer layout changed");
+		constants.SetVariable("ExperimentalShadowTransfer", 1.0f);
+#else
+		Require(constants.bytes.size() == 352, "Production model resolution cbuffer layout changed");
+#endif
 		constants.SetVariable("SourceSize", source);
 		constants.SetVariable("ModelSize", model);
 		constants.SetVariable("SourceRegionOffset", sourceRegion.offset);
@@ -424,7 +456,7 @@ namespace
 			Near(modelMean[channel], sourceMean[channel], "Odd-size area reduction did not conserve mean color");
 	}
 
-	void CheckReconstruct(ID3D11Device* device, ID3D11DeviceContext* context, Shader& shader, unsigned condition)
+	void CheckReconstruct(ID3D11Device* device, ID3D11DeviceContext* context, Shader& shader, unsigned condition, [[maybe_unused]] bool legacyOutput = false)
 	{
 		struct SaturationCase
 		{
@@ -488,6 +520,10 @@ namespace
 					if (saturation)
 						expected = channel == 0 ? saturation->expectedRed : channel == 2 ? saturation->expectedBlue :
 						                                                                   color[index][channel] + 0.125f;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (legacyOutput && saturation)
+						expected = color[index][channel];
+#endif
 					Near(pixels[index][channel], expected, "Residual reconstruction lost detail, finite saturation or corrupt-sample fallback");
 				}
 				Near(pixels[index][3], color[index][3], "Residual reconstruction changed full-resolution alpha");
@@ -693,6 +729,9 @@ namespace
 		ComPtr<ID3D11Resource> warmedColor;
 		std::optional<ModelResolutionHistory> history;
 		unsigned compiled = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const auto experimentsBeforeDefaults = AdapterCompiler::experimentalAttempts;
+#endif
 		for (const auto [percent, matched] : { std::pair{ 0u, false }, { 10u, false }, { 25u, false }, { 100u, false }, { 100u, true }, { 0u, false } }) {
 			const float proxyValue = matched ? 1.0f : 0.0f;
 			const std::vector<Pixel> reference(model[0] * model[1], Pixel{ proxyValue, proxyValue, proxyValue, 1.0f });
@@ -703,6 +742,28 @@ namespace
 			const auto request = std::span(&args, 1);
 			Require(adapter.Prepare(request, batch, status), "Live confidence tuning preparation failed");
 			Require(batch.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution, "Confidence tuning lost guided reconstruction");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			Require(AdapterCompiler::experimentalAttempts == experimentsBeforeDefaults, "Default comparison settings selected an experimental shader");
+			for (unsigned field = 0; field < 4; ++field) {
+				auto stale = args;
+				switch (field) {
+				case 0:
+					stale.reconstructionTuning.shadowTransferPercent = 0;
+					break;
+				case 1:
+					stale.reconstructionTuning.footprintSubdivisions = 1;
+					break;
+				case 2:
+					stale.reconstructionTuning.perChannelClamping = false;
+					break;
+				case 3:
+					stale.reconstructionTuning.depthSampleMotion = false;
+					break;
+				}
+				Require(!adapter.Reconstruct(std::span(&stale, 1), batch, status) && status == E_INVALIDARG,
+					"Changed comparison settings reached an already prepared batch");
+			}
+#endif
 			if (warmedShader) {
 				Require(AdapterCompiler::calls == compiled && batch.reconstructionShader == warmedShader && batch.targets[0].color.resource == warmedColor,
 					"Changing confidence tuning recompiled a shader or replaced its working texture");
@@ -741,6 +802,48 @@ namespace
 		pair[1].featureSlot = 1;
 		Require(!adapter.Prepare(pair, rejected, status) && status == E_INVALIDARG && AdapterCompiler::calls == compiled,
 			"Different per-eye confidence values escaped the batch boundary");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		args.guidedConfidenceRejectionPercent = 0;
+		for (unsigned invalid : { 0u, 3u, 5u, 100u, std::numeric_limits<unsigned>::max() }) {
+			args.reconstructionTuning.footprintSubdivisions = invalid;
+			Require(!adapter.Prepare(std::span(&args, 1), rejected, status) && status == E_INVALIDARG && AdapterCompiler::calls == compiled,
+				"Invalid footprint reached allocation or compilation");
+		}
+		args.reconstructionTuning = {};
+		args.reconstructionTuning.shadowTransferPercent = 101;
+		Require(!adapter.Prepare(std::span(&args, 1), rejected, status) && status == E_INVALIDARG && AdapterCompiler::calls == compiled,
+			"Invalid shadow transfer reached allocation or compilation");
+		pair = { args, args };
+		pair[0].reconstructionTuning = {};
+		pair[1].featureSlot = 1;
+		pair[1].reconstructionTuning = {};
+		pair[1].reconstructionTuning.depthSampleMotion = false;
+		Require(!adapter.Prepare(pair, rejected, status) && status == E_INVALIDARG && AdapterCompiler::calls == compiled,
+			"Different per-eye experiments escaped the batch boundary");
+		args.reconstructionTuning = {};
+		args.reconstructionTuning.perChannelClamping = false;
+		for (unsigned failure = 1; failure <= 4; ++failure) {
+			adapter.InvalidateShaders();
+			AdapterCompiler::experimentalFailure = failure;
+			const auto expected = failure <= 2 ? E_FAIL : E_OUTOFMEMORY;
+			Require(!adapter.Prepare(std::span(&args, 1), rejected, status) && status == expected,
+				"Experimental shader failure escaped its HRESULT boundary");
+			const auto attempts = AdapterCompiler::experimentalAttempts;
+			Require(!adapter.Prepare(std::span(&args, 1), rejected, status) && status == expected &&
+						AdapterCompiler::experimentalAttempts == attempts + (failure <= 2 ? 0u : 1u),
+				"Experimental shader failure did not retain bounded retry behavior");
+			AdapterCompiler::experimentalFailure = 0;
+			adapter.InvalidateShaders();
+			Require(adapter.Prepare(std::span(&args, 1), rejected, status) && rejected.targets[0].color.resource == warmedColor,
+				"Shader invalidation did not recover the experiment while retaining storage");
+		}
+		const auto warmedCompilations = AdapterCompiler::calls;
+		Require(adapter.Prepare(std::span(&args, 1), rejected, status) && AdapterCompiler::calls == warmedCompilations,
+			"An unchanged experiment recompiled its shader");
+		args.reconstructionTuning = {};
+		Require(adapter.Prepare(std::span(&args, 1), rejected, status) && AdapterCompiler::calls == warmedCompilations,
+			"Returning to production reconstruction recompiled its shader");
+#endif
 	}
 
 	void CheckSharedAdapter(ID3D11Device* device, ID3D11DeviceContext* context, bool guidesOnly)
@@ -2423,6 +2526,7 @@ int main()
 			AdapterCompiler::vr = vr;
 			for (bool guided : { false, true }) {
 				AdapterCompiler::guided = guided;
+				CheckPeripheralStereoRounding(device.Get(), context.Get());
 				for (bool mixedGuides : { false, true })
 					for (bool shaped : { false, true })
 						CheckPeripheralAdapter(device.Get(), context.Get(), mixedGuides, shaped);
@@ -2430,6 +2534,15 @@ int main()
 					for (bool shaped : { false, true })
 						CheckPeripheralAdapter(device.Get(), context.Get(), mixedGuides, shaped, 25, true);
 				CheckPeripheralAdapter(device.Get(), context.Get(), false, true, 25, true, true);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				for (const auto subdivisions : { 1u, 2u, 4u }) {
+					NeuralRendering::ReconstructionTuning tuning;
+					tuning.footprintSubdivisions = subdivisions;
+					tuning.shadowTransferPercent = subdivisions == 2u ? 50u : 0u;
+					tuning.depthSampleMotion = false;
+					CheckPeripheralAdapter(device.Get(), context.Get(), true, true, 20, false, false, tuning);
+				}
+#endif
 				for (bool mixedGuides : { false, true })
 					for (bool shaped : { false, true })
 						CheckPeripheralAdapter(device.Get(), context.Get(), mixedGuides, shaped, 100);
@@ -2453,6 +2566,12 @@ int main()
 				CheckNonIntegerPrepare(device.Get(), context.Get(), prepare, false, true);
 				for (unsigned condition = 0; condition < 10; ++condition)
 					CheckReconstruct(device.Get(), context.Get(), reconstruct, condition);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				Shader legacyReconstruct(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", vr,
+					"features/Neural Rendering/Shaders", false, true);
+				for (unsigned condition = 0; condition < 10; ++condition)
+					CheckReconstruct(device.Get(), context.Get(), legacyReconstruct, condition, true);
+#endif
 				CheckReconstructionKernel(device.Get(), context.Get(), reconstruct);
 			}
 		}

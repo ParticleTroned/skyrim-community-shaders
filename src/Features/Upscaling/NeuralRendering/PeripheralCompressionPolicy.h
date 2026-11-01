@@ -46,6 +46,7 @@ namespace NeuralRendering
 		UpscalingDLSS::ViewportCrop sourceCrop{};
 		ComputeSubrect ownedOutput{}, ordinaryContext{};
 		std::array<float, 2> maximumFootprint{};
+		double minimumScale = 0.0;
 		std::uint32_t uniformPercent = 100, compressionPercent = 0;
 		std::uint64_t baselinePixels = 0, candidatePixels = 0;
 		bool requested = false;
@@ -62,6 +63,57 @@ namespace NeuralRendering
 			       compressionPercent == requestedPercent && mask.active == currentMask.active && (!mask.active || mask == currentMask);
 		}
 	};
+
+	/** Keep both axes monotone as uniform resolution crosses the bounded-filter density floor. */
+	inline void FitPeripheralCompressionGrid(PeripheralCompressionPlan& plan, double minimumScale = 0.0) noexcept
+	{
+		const auto& mapping = plan.mapping;
+		const std::array source{ plan.source.width, plan.source.height };
+		const std::array sourceGuideAxes{ plan.sourceGuides.width, plan.sourceGuides.height };
+		const std::array ordinary{ plan.ordinaryModel.width, plan.ordinaryModel.height };
+		const std::array ordinaryGuides{ plan.ordinaryGuides.width, plan.ordinaryGuides.height };
+		std::array<std::uint32_t, 2> model{}, guides{};
+		plan.model = plan.ordinaryModel;
+		plan.guides = plan.ordinaryGuides;
+		plan.candidatePixels = plan.baselinePixels;
+		plan.maximumFootprint = {};
+		plan.minimumScale = minimumScale = std::max(minimumScale, plan.minimumScale);
+		for (std::size_t axis = 0; axis < 2; ++axis) {
+			const auto floor = static_cast<std::uint32_t>(std::ceil(source[axis] * std::min(minimumScale, 1.0)));
+			const auto compressed = mapping.shaped ? std::clamp(static_cast<std::uint32_t>(std::ceil(static_cast<double>(ordinary[axis]) * mapping.work[axis])), 1u, ordinary[axis]) :
+			                                         (ordinary[axis] * (200u - plan.compressionPercent) + 199u) / 200u;
+			model[axis] = std::min(ordinary[axis], std::max(compressed, floor));
+			// Derive guides from the source ratio, avoiding two independent rounded scale factors.
+			guides[axis] = std::min(ordinaryGuides[axis], static_cast<std::uint32_t>(
+															  (static_cast<std::uint64_t>(sourceGuideAxes[axis]) * model[axis] + source[axis] - 1u) / source[axis]));
+		}
+
+		for (std::size_t axis = 0; axis < 2; ++axis) {
+			const auto other = 1u - axis;
+			const float cross = mapping.shaped ? kPeripheralFovCrossDerivativeBound : 1.0f;
+			const float aspect = mapping.radii[axis] / mapping.radii[other];
+			const float colorStep = mapping.work[axis] / model[axis] + cross * aspect * (1.0f - mapping.edgeSlope) * mapping.work[other] / model[other];
+			const float guideStep = mapping.work[axis] / guides[axis] + cross * aspect * (1.0f - mapping.edgeSlope) * mapping.work[other] / guides[other];
+			plan.maximumFootprint[axis] = std::max(source[axis] * colorStep, sourceGuideAxes[axis] * guideStep) / mapping.edgeSlope;
+			if (!std::isfinite(plan.maximumFootprint[axis]) || plan.maximumFootprint[axis] > kPeripheralMaximumFootprint) {
+				plan.reason = PeripheralCompressionReason::FootprintLimit;
+				return;
+			}
+		}
+
+		plan.model = { model[0], model[1] };
+		plan.guides = { guides[0], guides[1] };
+		if (!ResolveFeatureUpscaling(guides[0], guides[1], model[0], model[1])) {
+			plan.reason = PeripheralCompressionReason::InvalidGeometry;
+			return;
+		}
+		plan.candidatePixels = static_cast<std::uint64_t>(model[0]) * model[1];
+		if (plan.candidatePixels >= plan.baselinePixels) {
+			plan.reason = PeripheralCompressionReason::InsufficientSavings;
+			return;
+		}
+		plan.reason = PeripheralCompressionReason::Experimental;
+	}
 
 	/** Shrink the existing evaluation crop while retaining its calibrated mask and source ownership. */
 	[[nodiscard]] inline PeripheralCompressionPlan BuildPeripheralCompressionPlan(const ModelResolutionGeometry& baseline,
@@ -107,10 +159,7 @@ namespace NeuralRendering
 		mapping.boundaryScale = (1.0f + mapping.protectedFraction) * 0.5f;
 		mapping.edgeSlope = 0.25f;
 		mapping.shaped = support.mask.active ? 1u : 0u;
-		const std::array ordinary{ baseline.modelSize.width, baseline.modelSize.height };
-		const std::array ordinaryGuides{ baseline.modelGuideSize.width, baseline.modelGuideSize.height };
 		const std::array source{ baseline.sourceSize.width, baseline.sourceSize.height };
-		const std::array sourceGuideAxes{ sourceGuides.width, sourceGuides.height };
 		const std::array full{ crop.fullOutput.width, crop.fullOutput.height };
 		const std::array offset{ crop.output.left, crop.output.top };
 		for (std::size_t axis = 0; axis < 2; ++axis) {
@@ -128,7 +177,6 @@ namespace NeuralRendering
 		// Invalid or inactive mask payloads must not poison ordinary transaction comparisons.
 		if (support.mask.active)
 			plan.mask = support.mask;
-		std::array<std::uint32_t, 2> model{}, guides{};
 		PeripheralMapping::Point origin{}, work{};
 		for (std::size_t axis = 0; axis < 2; ++axis) {
 			PeripheralMapping::Point lower{ std::clamp(mapping.center[0], 0.0f, 1.0f), std::clamp(mapping.center[1], 0.0f, 1.0f) };
@@ -139,43 +187,58 @@ namespace NeuralRendering
 			work[axis] = mapping.Forward(upper)[axis] - origin[axis];
 			if (!std::isfinite(work[axis]) || work[axis] <= 0.0f || work[axis] > 1.0f)
 				return reject(InvalidGeometry);
-			model[axis] = mapping.shaped ? std::clamp(static_cast<std::uint32_t>(std::ceil(ordinary[axis] * work[axis])), 1u, ordinary[axis]) :
-			                               (ordinary[axis] * (200u - support.compressionPercent) + 199u) / 200u;
-			guides[axis] = static_cast<std::uint32_t>((static_cast<std::uint64_t>(ordinaryGuides[axis]) * model[axis] + ordinary[axis] - 1u) / ordinary[axis]);
 		}
 		mapping.origin = origin;
 		mapping.work = work;
-
+		// A fixed density floor approaches the ordinary grid before footprint fallback.
+		const std::array sourceGuideAxes{ sourceGuides.width, sourceGuides.height };
 		for (std::size_t axis = 0; axis < 2; ++axis) {
 			const auto other = 1u - axis;
-			const float cross = mapping.shaped ? kPeripheralFovCrossDerivativeBound : 1.0f;
-			const float aspect = mapping.radii[axis] / mapping.radii[other];
-			const float colorStep = mapping.work[axis] / model[axis] + cross * aspect * (1.0f - mapping.edgeSlope) * mapping.work[other] / model[other];
-			const float guideStep = mapping.work[axis] / guides[axis] + cross * aspect * (1.0f - mapping.edgeSlope) * mapping.work[other] / guides[other];
-			plan.maximumFootprint[axis] = std::max(source[axis] * colorStep, sourceGuideAxes[axis] * guideStep) / mapping.edgeSlope;
-			if (!std::isfinite(plan.maximumFootprint[axis]) || plan.maximumFootprint[axis] > kPeripheralMaximumFootprint)
-				return reject(FootprintLimit);
+			const double cross = mapping.shaped ? kPeripheralFovCrossDerivativeBound : 1.0;
+			const double aspect = static_cast<double>(mapping.radii[axis]) / mapping.radii[other];
+			for (const auto& size : { source, sourceGuideAxes })
+				plan.minimumScale = std::max(plan.minimumScale,
+					(mapping.work[axis] + cross * aspect * (1.0 - mapping.edgeSlope) * mapping.work[other] * size[axis] / size[other]) /
+						(mapping.edgeSlope * kPeripheralMaximumFootprint));
 		}
 
-		plan.model = { model[0], model[1] };
-		plan.guides = { guides[0], guides[1] };
-		if (!ResolveFeatureUpscaling(guides[0], guides[1], model[0], model[1]))
-			return reject(InvalidGeometry);
-		plan.candidatePixels = static_cast<std::uint64_t>(model[0]) * model[1];
-		if (plan.candidatePixels >= plan.baselinePixels)
-			return reject(InsufficientSavings);
-		plan.reason = Experimental;
+		FitPeripheralCompressionGrid(plan);
 		return plan;
 	}
 
 	/** Resolve a whole transaction before native work; an unsupported eye preserves the ordinary pair. */
 	inline void ReconcilePeripheralCompression(std::span<PeripheralCompressionPlan> plans) noexcept
 	{
-		if (plans.empty() || std::ranges::all_of(plans, [](const auto& plan) { return plan.Active(); }))
+		if (plans.empty())
 			return;
+		if (std::ranges::all_of(plans, [](const auto& plan) {
+				return plan.Active() || plan.reason == PeripheralCompressionReason::FootprintLimit ||
+			           plan.reason == PeripheralCompressionReason::InsufficientSavings;
+			})) {
+			double minimumScale = 0.0;
+			for (const auto& plan : plans)
+				minimumScale = std::max(minimumScale, plan.minimumScale);
+			for (auto& plan : plans)
+				if (minimumScale > plan.minimumScale)
+					FitPeripheralCompressionGrid(plan, minimumScale);
+		}
+		// An eye can round up to its ordinary size while its peer still saves work.
+		// Keep the shared strategy until the whole pair loses its pixel savings.
+		if (std::ranges::all_of(plans, [](const auto& plan) {
+				return plan.Active() || plan.reason == PeripheralCompressionReason::InsufficientSavings;
+			}) &&
+			std::ranges::any_of(plans, [](const auto& plan) { return plan.Active(); })) {
+			for (auto& plan : plans)
+				plan.reason = PeripheralCompressionReason::Experimental;
+			return;
+		}
 		for (auto& plan : plans)
-			if (plan.Active())
+			if (plan.Active()) {
 				plan.reason = PeripheralCompressionReason::PairUnsupported;
+				plan.model = plan.ordinaryModel;
+				plan.guides = plan.ordinaryGuides;
+				plan.candidatePixels = plan.baselinePixels;
+			}
 	}
 
 	[[nodiscard]] constexpr const char* GetPeripheralCompressionReasonName(PeripheralCompressionReason reason) noexcept

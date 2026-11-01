@@ -32,7 +32,7 @@ function(csx_add_neural_rendering_capture_tests repository_root register_test)
     target_compile_definitions(neural_settings_key_bridge_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
     target_include_directories(neural_settings_key_bridge_test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/neural_settings_key")
 
-    foreach(target IN ITEMS neural_rendering_ui_test neural_feature_settings_test)
+    foreach(target IN ITEMS neural_rendering_ui_test neural_feature_settings_test neural_rendering_request_test)
         target_compile_definitions(${target} PRIVATE DEVBENCH_BRIDGE_ENABLED)
     endforeach()
 

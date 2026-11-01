@@ -416,6 +416,7 @@ struct Upscaling
 		uint32_t neuralRenderingModelResolutionPercent = 100;
 		bool neuralRenderingGuidedReconstruction = true;
 		uint32_t neuralRenderingConfidenceRejectionPercent = 0;
+		NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
 		unsigned neuralRenderingPeripheralCompressionPercent = 0;
 		bool neuralRenderingPauseInCombat = false;
 		bool neuralRenderingPressureResolutionEnabled = true;

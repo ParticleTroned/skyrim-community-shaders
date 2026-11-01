@@ -47,6 +47,9 @@ foreach(_target _test IN ZIP_LISTS _nr_model_targets _nr_model_tests)
     target_include_directories(${_target} PRIVATE "${_nr_accounting_directory}")
 endforeach()
 target_compile_definitions(nr_model_resolution_shader_bridge_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+add_test(NAME NRReconstructionBridgeGate COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/tests/nr_reconstruction_bridge_gate_test.py" --compiler "${CMAKE_CXX_COMPILER}")
+set_tests_properties(NRReconstructionBridgeGate PROPERTIES LABELS "ControllerTests" TIMEOUT 30)
 set_tests_properties(${_nr_model_tests} PROPERTIES TIMEOUT 120)
 set(_neural_failure_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_failure_diagnostics")
 set(_neural_failure_headers

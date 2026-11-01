@@ -6780,7 +6780,13 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		add(a_settings.neuralRenderingDirectCommit);
 		add(NeuralRendering::EffectiveModelResolutionPercent(mode, a_settings.neuralRenderingModelResolutionPercent));
 		add(a_settings.neuralRenderingGuidedReconstruction);
-		// Reconstruction-only confidence tuning preserves native resources and temporal history.
+		add(a_settings.neuralRenderingConfidenceRejectionPercent);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		add(a_settings.neuralReconstructionTuning.shadowTransferPercent);
+		add(a_settings.neuralReconstructionTuning.footprintSubdivisions);
+		add(a_settings.neuralReconstructionTuning.perChannelClamping);
+		add(a_settings.neuralReconstructionTuning.depthSampleMotion);
+#endif
 		add(a_settings.neuralRenderingPeripheralCompressionPercent);
 		add(a_settings.neuralRenderingPauseInCombat);
 		add(a_settings.neuralRenderingPressureResolutionEnabled);
@@ -19111,6 +19117,30 @@ namespace
 		}
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void DrawNeuralReconstructionExperiments(Upscaling::Settings& settings)
+	{
+		if (!ImGui::TreeNode("Reconstruction comparisons (DevBench)"))
+			return;
+		auto& tuning = settings.neuralReconstructionTuning;
+		ImGui::TextWrapped("Session only. Defaults use production shaders. First use warms each experimental variant; measure after the condition settles.");
+		DrawNeuralIntegerSetting("Shadow transfer protection", tuning.shadowTransferPercent, 0, NeuralRendering::kMaximumShadowTransferPercent, "%d%%");
+		Util::AddTooltip("Compressed NR only. 100% bounds brightness transfer into shadows; 0% applies the unbounded residual. Applies on release. Values below 100% share a cached shader; subsequent strength changes do not compile.");
+		int footprint = static_cast<int>(std::ranges::find(NeuralRendering::kReconstructionFootprintSubdivisions, tuning.footprintSubdivisions) - NeuralRendering::kReconstructionFootprintSubdivisions.begin());
+		static constexpr const char* footprints[]{ "1 rectangle", "4 rectangles (production)", "16 rectangles" };
+		if (Util::Widgets::Combo("Preparation footprint", &footprint, footprints, IM_ARRAYSIZE(footprints)))
+			tuning.footprintSubdivisions = NeuralRendering::kReconstructionFootprintSubdivisions[footprint];
+		Util::AddTooltip("Compressed colour and guides share this footprint. First use compiles and caches that preparation variant; subsequent switches reuse it. More rectangles cost arithmetic but do not fetch a source texel twice. Changing preparation resets temporal history without recreating the model.");
+		Util::Widgets::Checkbox("Per-channel output clamping", &tuning.perChannelClamping);
+		Util::AddTooltip("On matches production. Off restores whole-pixel rejection when a finite correction exceeds the output format range. First use warms a cached shader. Corrupt samples always retain the source pixel.");
+		Util::Widgets::Checkbox("Anchor motion at depth sample", &tuning.depthSampleMotion);
+		Util::AddTooltip("Compressed NR only. On matches production. Off anchors motion at the inverse-warped model-cell centre. Changing this resets temporal history without recreating the model.");
+		if (ImGui::Button("Restore production reconstruction"))
+			tuning = {};
+		ImGui::TreePop();
+	}
+#endif
+
 	void DrawNeuralRuntimeSettings(Upscaling::Settings& settings, bool showDebugControls)
 	{
 		Util::Widgets::Checkbox("Lower NR resolution under memory pressure", &settings.neuralRenderingPressureResolutionEnabled);
@@ -19303,6 +19333,9 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 			}
 			ImGui::Spacing();
 			DrawNeuralModelResolutionSettings(settings);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			DrawNeuralReconstructionExperiments(settings);
+#endif
 			if (debugMode) {
 				DrawNeuralExecutionSettings(settings);
 				DrawNeuralCentralAreaSettings(settings);

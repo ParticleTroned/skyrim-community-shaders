@@ -33,6 +33,10 @@ cbuffer ModelResolutionConstants : register(b0)
 	uint SelectedOutput;
 	float GuidedRejectionScale;
 	float4 SelectionBounds;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	float ExperimentalShadowTransfer;
+	uint3 ExperimentalPadding;
+#endif
 };
 
 uint FindPackedCrop(float2 pixel, bool sourceCoordinates)

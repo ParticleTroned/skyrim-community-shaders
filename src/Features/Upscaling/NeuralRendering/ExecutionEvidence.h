@@ -1,4 +1,5 @@
 #pragma once
+#include "ReconstructionTuning.h"
 
 #include "../DLSSViewportCrop.h"
 #include "ComputeSubrect.h"
@@ -44,6 +45,7 @@ namespace NeuralRendering
 		UpscalingDLSS::Extent target{}, unpackedModel{};
 		bool enabled = false, packed = false, matchedReferenceDomain = false;
 		std::uint32_t confidenceRejectionPercent = 0;
+		ReconstructionTuning reconstructionTuning{};
 		bool operator==(const ModelReconstructionEvidence&) const = default;
 	};
 #endif

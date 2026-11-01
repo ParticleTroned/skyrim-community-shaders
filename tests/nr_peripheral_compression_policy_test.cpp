@@ -15,6 +15,12 @@ namespace
 		if (!condition)
 			throw std::runtime_error(message);
 	}
+	void RequireNonIncreasingGrid(const PeripheralCompressionPlan& next, const PeripheralCompressionPlan& previous)
+	{
+		Require(next.model.width <= previous.model.width && next.model.height <= previous.model.height &&
+					next.guides.width <= previous.guides.width && next.guides.height <= previous.guides.height,
+			"Lower NR resolution increased native texture dimensions across compression fallback");
+	}
 	PeripheralCompressionPlan Plan(UpscalingDLSS::Extent source, std::uint32_t percent = 100,
 		UpscalingDLSS::Extent guides = {}, PeripheralCompressionSupport support = { .requested = true })
 	{
@@ -36,6 +42,24 @@ int main()
 		Require(Plan({ 3840, 2160 }, 100, {}, { .requested = true, .compressionPercent = 0 }).reason == PeripheralCompressionReason::Disabled, "Zero did not bypass compression");
 		const auto maximum = Plan({ 3840, 2160 }, 100, {}, { .requested = true, .compressionPercent = 100 });
 		Require(maximum.Active() && maximum.mapping.protectedFraction == 0.0f && maximum.model == UpscalingDLSS::Extent{ 1920, 1080 }, "Maximum compression retained a protected centre");
+		for (const auto source : { UpscalingDLSS::Extent{ 4096, 2048 }, { 2048, 4096 }, { 4096, 512 }, { 1921, 1081 } }) {
+			for (const auto guides : { source, UpscalingDLSS::Extent{ source.width / 2u, source.height / 2u } }) {
+				for (const auto mask : { PeripheralMask{}, PeripheralMask{ { 0.47f, 0.53f }, { 0.43f, 0.36f }, true },
+						 PeripheralMask{ { 0.5f, 0.5f }, { 0.1f, 0.5f }, true } }) {
+					for (const auto compression : { 1u, 20u, 50u, 100u }) {
+						auto previous = Plan(source, 100, guides, { .requested = true, .compressionPercent = compression, .mask = mask });
+						for (auto percent = 99u; percent >= kMinimumModelResolutionPercent; --percent) {
+							const auto next = Plan(source, percent, guides, { .requested = true, .compressionPercent = compression, .mask = mask });
+							RequireNonIncreasingGrid(next, previous);
+							if (next.Active())
+								Require(next.maximumFootprint[0] <= kPeripheralMaximumFootprint && next.maximumFootprint[1] <= kPeripheralMaximumFootprint,
+									"Compression density floor exceeded the shader footprint limit");
+							previous = next;
+						}
+					}
+				}
+			}
+		}
 		Require(Plan({ 1920, 1080 }, 100, {}, { .requested = true, .compressionPercent = 101 }).reason == PeripheralCompressionReason::InvalidGeometry, "Out-of-range slider reached allocation");
 		for (float invalid : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), -1.0f }) {
 			for (unsigned field = 0; field < 4; ++field) {
@@ -50,6 +74,46 @@ int main()
 				Require(rectangular.Active() && rectangular == Plan({ 1920, 1080 }, 50), "Inactive mask changed rectangular compression");
 			}
 		}
+		for (const auto size : { UpscalingDLSS::Extent{ 4096, 2048 }, { 1921, 1081 }, { 13, 7 }, { 2, 2 } }) {
+			for (const auto compression : { 1u, 20u, 100u }) {
+				std::array<PeripheralCompressionPlan, 2> previous{};
+				for (auto percent = 100u; percent >= kMinimumModelResolutionPercent; --percent) {
+					std::array pair{
+						Plan(size, percent, {}, { .requested = true, .compressionPercent = compression }),
+						Plan({ 2049, 2049 }, percent, {}, { .requested = true, .compressionPercent = compression, .mask = { { 0.5f, 0.5f }, { 0.1f, 0.5f }, true } })
+					};
+					ReconcilePeripheralCompression(pair);
+					for (unsigned eye = 0; eye < 2; ++eye) {
+						if (percent < 100)
+							RequireNonIncreasingGrid(pair[eye], previous[eye]);
+					}
+					previous = pair;
+				}
+			}
+		}
+		std::array<PeripheralCompressionPlan, 2> roundingPrevious{};
+		for (auto percent : { 40u, 39u }) {
+			std::array roundingPair{
+				Plan({ 307, 202 }, percent, {}, { .requested = true, .compressionPercent = 61 }),
+				Plan({ 16282, 3519 }, percent, { 8141, 1759 }, { .requested = true, .compressionPercent = 61 })
+			};
+			ReconcilePeripheralCompression(roundingPair);
+			Require(roundingPair[0].Active() && roundingPair[1].Active(), "An ordinary-sized eye discarded its peer's compression savings");
+			if (percent == 39) {
+				Require(roundingPair[0].candidatePixels == roundingPair[0].baselinePixels &&
+							roundingPair[1].candidatePixels < roundingPair[1].baselinePixels,
+					"Rounding fixture lost its asymmetric savings boundary");
+				for (unsigned eye = 0; eye < 2; ++eye)
+					RequireNonIncreasingGrid(roundingPair[eye], roundingPrevious[eye]);
+			}
+			roundingPrevious = roundingPair;
+			ReconcilePeripheralCompression(roundingPair);
+			Require(roundingPair == roundingPrevious, "Stereo reconciliation changed an already reconciled plan");
+		}
+		std::array noSavingsPair{ Plan({ 2, 2 }, 100, {}, { .requested = true, .compressionPercent = 1 }),
+			Plan({ 2, 2 }, 100, {}, { .requested = true, .compressionPercent = 1 }) };
+		ReconcilePeripheralCompression(noSavingsPair);
+		Require(!noSavingsPair[0].Active() && !noSavingsPair[1].Active(), "A pair without pixel savings retained compression passes");
 		float maximumPixelError = 0.0f;
 		for (bool shaped : { false, true }) {
 			for (auto compression : { 1u, 20u, 50u, 100u }) {

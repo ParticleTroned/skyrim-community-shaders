@@ -194,6 +194,7 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		destination.neuralCharacterCurrentContextEnabled = source.neuralCharacterCurrentContextEnabled;
 		destination.neuralCharacterGpuMaskSupportEnabled = source.neuralCharacterGpuMaskSupportEnabled;
+		destination.neuralReconstructionTuning = source.neuralReconstructionTuning;
 #endif
 	}
 }

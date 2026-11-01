@@ -47,6 +47,30 @@ int main()
 			auto guided = baseline;
 			guided.neuralRenderingGuidedReconstruction = !baseline.neuralRenderingGuidedReconstruction;
 			require((BuildNeuralRenderingSettingsKey(guided) != key) == enabled);
+			auto confidence = baseline;
+			confidence.neuralRenderingConfidenceRejectionPercent = 50;
+			require((BuildNeuralRenderingSettingsKey(confidence) != key) == enabled);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			for (unsigned control = 0; control < 4; ++control) {
+				auto comparison = baseline;
+				auto& tuning = comparison.neuralReconstructionTuning;
+				switch (control) {
+				case 0:
+					tuning.shadowTransferPercent = 0;
+					break;
+				case 1:
+					tuning.footprintSubdivisions = 4;
+					break;
+				case 2:
+					tuning.perChannelClamping = false;
+					break;
+				case 3:
+					tuning.depthSampleMotion = false;
+					break;
+				}
+				require((BuildNeuralRenderingSettingsKey(comparison) != key) == enabled);
+			}
+#endif
 			auto peripheral = baseline;
 			peripheral.neuralRenderingPeripheralCompressionPercent = 20;
 			require((BuildNeuralRenderingSettingsKey(peripheral) != key) == enabled);

@@ -38,6 +38,7 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 		args.centralArea.offset = { offset.x, offset.y };
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	args.reconstructionTuning = settings.neuralReconstructionTuning;
 	const auto [peripheralOverride, peripheralChanged] = NeuralRendering::Renderer::Instance().ResolvePeripheralOverride(args.frameId, args.generation);
 	args.peripheralOverride = peripheralOverride;
 	if (peripheralChanged)
@@ -54,6 +55,7 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 #	include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidence.h"
 #	include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidenceJson.h"
 #	include "Features/Upscaling/NeuralRendering/ExecutionEvidenceJson.h"
+#	include "Features/Upscaling/NeuralRendering/ReconstructionTuningJson.h"
 #	include "State.h"
 #	include "Utils/ContentHash.h"
 #	include <algorithm>
@@ -72,6 +74,7 @@ namespace
 		// Capture fingerprints include transient controls even though saves omit them.
 		values["neuralCharacterDebugView"] = settings.neuralCharacterDebugView;
 		values["neuralCharacterMaskTestMode"] = settings.neuralCharacterMaskTestMode;
+		values["experimentalReconstruction"] = NeuralRendering::ReconstructionTuningJson(settings.neuralReconstructionTuning);
 #	ifdef DEVBENCH_BRIDGE_ENABLED
 		values["neuralCharacterCurrentContextEnabled"] = settings.neuralCharacterCurrentContextEnabled;
 		values["neuralCharacterGpuMaskSupportEnabled"] = settings.neuralCharacterGpuMaskSupportEnabled;

@@ -1,6 +1,7 @@
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Features/Upscaling/NeuralRendering/ReconstructionTuning.h"
 #include "Features/Upscaling/NeuralRendering/Runtime.h"
 #include <tuple>
 
@@ -9,9 +10,11 @@
 #include <cmath>
 #include <cstdint>
 #include <format>
+#include <iostream>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <source_location>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -36,10 +39,33 @@ using json = nlohmann::json;
 
 int main()
 {
-	const auto require = [](bool value) {
-		if (!value)
+	const auto require = [](bool value, const std::source_location& location = std::source_location::current()) {
+		if (!value) {
+			std::cerr << "Neural Rendering request validation failed at line " << location.line() << '\n';
 			throw std::runtime_error("Neural Rendering request validation invariant");
+		}
 	};
+	for (const auto* field : { "experimentalShadowTransferPercent", "experimentalFootprintSubdivisions" }) {
+		for (const auto& value : { json(0), json(1), json(2), json(3), json(4), json(50), json(100), json(101),
+				 json(-1), json(1.5), json(true), json(nullptr), json("2"), json::array(), json::object() }) {
+			NeuralRenderingConfigurationRequest request;
+			json error;
+			const bool integer = value.is_number_integer() && value.get<std::int64_t>() >= 0;
+			const bool expected = integer && (std::string_view(field) == "experimentalShadowTransferPercent" ? value <= 100 : value == 1 || value == 2 || value == 4);
+			require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { field, value } }, request, error) == expected);
+			if (expected)
+				require(request.HasAnyControl());
+		}
+	}
+	for (const auto* field : { "experimentalPerChannelClamping", "experimentalDepthSampleMotion" }) {
+		for (const auto& value : { json(false), json(true), json(0), json(1), json("true"), json(nullptr) }) {
+			NeuralRenderingConfigurationRequest request;
+			json error;
+			require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { field, value } }, request, error) == value.is_boolean());
+			if (value.is_boolean())
+				require(request.HasAnyControl());
+		}
+	}
 	for (bool enabled : { false, true }) {
 		NeuralRenderingConfigurationRequest request;
 		json error;
@@ -124,7 +150,7 @@ int main()
 	const auto& declaredActions = descriptor.at("inputSchema").at("properties").at("action").at("enum");
 	require(std::find(declaredActions.begin(), declaredActions.end(), "nr_peripheral_compare") != declaredActions.end());
 	require(descriptor.at("inputSchema").at("properties").at("guidedReconstruction").at("default") == true);
-	require(descriptor.at("inputSchema").at("properties").at("peripheralCompressionPercent").at("default") == 25);
+	require(descriptor.at("inputSchema").at("properties").at("peripheralCompressionPercent").at("default") == 100);
 	require(descriptor.at("inputSchema").at("properties").at("pauseInCombat").at("default") == true);
 	for (const auto& value : { json(0), json(1u), json(2), json(-1), json(3), json(1.5), json(true), json("2"), json(nullptr), json(UINT64_MAX) }) {
 		NeuralRenderingConfigurationRequest request;

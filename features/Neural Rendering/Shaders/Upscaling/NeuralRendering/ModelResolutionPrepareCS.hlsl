@@ -32,7 +32,10 @@ void ModelSourceBounds(float2 pixel, float2 grid, uint2 size, uint2 offset, uint
 }
 
 #ifdef NR_PERIPHERAL_COMPRESSION
-static const uint MODEL_SOURCE_PATCH_COUNT = 4u;
+#	if !defined(DEVBENCH_BRIDGE_ENABLED) || !defined(NR_FOOTPRINT_SUBDIVISIONS)
+#		define NR_FOOTPRINT_SUBDIVISIONS 2
+#	endif
+static const uint MODEL_SOURCE_PATCH_COUNT = NR_FOOTPRINT_SUBDIVISIONS * NR_FOOTPRINT_SUBDIVISIONS;
 #else
 static const uint MODEL_SOURCE_PATCH_COUNT = 1u;
 #endif
@@ -54,8 +57,8 @@ ModelSourceFootprint BuildModelSourceFootprint(float2 pixel, float2 grid, uint2 
 	{
 		float2 position = pixel, patchGrid = grid;
 #ifdef NR_PERIPHERAL_COMPRESSION
-		position = pixel * 2.0 + float2(patch & 1u, patch >> 1u);
-		patchGrid *= 2.0;
+		position = pixel * NR_FOOTPRINT_SUBDIVISIONS + float2(patch % NR_FOOTPRINT_SUBDIVISIONS, patch / NR_FOOTPRINT_SUBDIVISIONS);
+		patchGrid *= NR_FOOTPRINT_SUBDIVISIONS;
 #endif
 		ModelSourceBounds(position, patchGrid, size, offset, end, footprint.lower[patch], footprint.upper[patch]);
 		lower = min(lower, footprint.lower[patch]);
@@ -203,7 +206,10 @@ void PrepareGuides(uint2 id)
 	float2 atlasMotion = motion * MotionVectorScale;
 #ifdef NR_PERIPHERAL_COMPRESSION
 	// Motion belongs to the chosen depth sample, not the centre of its surrounding footprint.
-	const float2 anchor = (float2(nearestPixel) + 0.5) / float2(guideSize);
+	float2 anchor = (float2(nearestPixel) + 0.5) / float2(guideSize);
+#	if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NR_CELL_CENTRE_MOTION)
+	anchor = PeripheralInverse((float2(pixel) + 0.5) / float2(modelGuideSize));
+#	endif
 	atlasMotion = PeripheralForward(anchor + atlasMotion) - PeripheralForward(anchor);
 	atlasMotion = all(isfinite(atlasMotion)) ? atlasMotion : 0.0;
 #endif

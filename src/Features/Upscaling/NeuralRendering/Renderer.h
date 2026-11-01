@@ -8,6 +8,7 @@
 #include "MemoryConservationPolicy.h"
 #include "MemoryRetirementPolicy.h"
 #include "ModelResolutionPolicy.h"
+#include "ReconstructionTuning.h"
 #include "RoiDescriptor.h"
 #include "SceneCategorySelection.h"
 #include "StallRecoveryPolicy.h"
@@ -235,6 +236,9 @@ namespace NeuralRendering
 	{
 		Microsoft::WRL::ComPtr<ID3D11ComputeShader> prepare, reconstruct;
 		Microsoft::WRL::ComPtr<ID3D11Buffer> constants;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ReconstructionPreparation experimentalPreparation{};
+#endif
 	};
 
 	struct RendererApplyArgs
@@ -274,6 +278,7 @@ namespace NeuralRendering
 		PeripheralCompressionPlan peripheralCompression{};
 		PeripheralCompressionShaders peripheralShaders{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		ReconstructionTuning reconstructionTuning{};
 		GuidedReconstructionOverride reconstructionOverride = GuidedReconstructionOverride::Auto;
 		PeripheralCompressionOverride peripheralOverride = PeripheralCompressionOverride::Auto;
 #endif

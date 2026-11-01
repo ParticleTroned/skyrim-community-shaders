@@ -90,6 +90,9 @@ struct IndependentSettings
 	bool neuralRenderingPauseInCombat = true;
 	bool neuralRenderingPressureResolutionEnabled = true;
 	unsigned neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
+#endif
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(IndependentSettings, qualityMode, neuralRenderingEnabled, neuralRenderingIntensity, neuralRenderingModelResolutionPercent, neuralRenderingGuidedReconstruction, neuralRenderingPeripheralCompressionPercent, neuralRenderingPauseInCombat, neuralRenderingPressureResolutionEnabled, neuralRenderingCentralAreaPercent, neuralRenderingCentralFeatherPixels)
 
@@ -238,6 +241,9 @@ int main()
 	live.neuralRenderingModelResolutionPercent = 67;
 	live.neuralRenderingGuidedReconstruction = true;
 	live.neuralRenderingPressureResolutionEnabled = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	live.neuralReconstructionTuning = { 50, 4, false, false };
+#endif
 	IndependentSettings upscalerEdit{ 4, false, 0.0f, 0, 0 };
 	NeuralRendering::CopyRenderingSettings(upscalerEdit, live);
 	require(upscalerEdit.qualityMode == 4 && upscalerEdit.neuralRenderingEnabled);
@@ -245,6 +251,10 @@ int main()
 	require(upscalerEdit.neuralRenderingModelResolutionPercent == 67);
 	require(upscalerEdit.neuralRenderingPressureResolutionEnabled && upscalerEdit.neuralRenderingGuidedReconstruction);
 	require(upscalerEdit.neuralCharacterDebugView == 2 && upscalerEdit.neuralCharacterMaskTestMode == 1);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	require(upscalerEdit.neuralReconstructionTuning == live.neuralReconstructionTuning);
+	require(!Json(upscalerEdit).contains("neuralReconstructionTuning"));
+#endif
 	require(NeuralRendering::RenderingSettings(Json{ { "qualityMode", 4 } }).empty());
 	require(NeuralRendering::RenderingSettings(Json{ { "qualityMode", 4 }, { "neuralRenderingEnabled", false } }).size() == 1);
 

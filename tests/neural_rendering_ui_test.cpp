@@ -2,6 +2,7 @@
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
 #include "Features/Upscaling/NeuralRendering/CombatPausePolicy.h"
+#include "Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryConservationPolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryRecoveryPolicy.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
@@ -25,6 +26,7 @@
 #include <vector>
 
 constexpr int ImGuiHoveredFlags_AllowWhenDisabled = 1;
+constexpr int ImGuiHoveredFlags_DelayNormal = 2;
 constexpr float kPeripheryTAACenterBlendFeatherMin = 0.0f;
 constexpr float kPeripheryTAACenterBlendFeatherMax = 0.25f;
 
@@ -102,6 +104,8 @@ namespace globals
 				unsigned neuralRenderingMode = 0;
 				unsigned neuralRenderingModelResolutionPercent = 100;
 				bool neuralRenderingGuidedReconstruction = true;
+				unsigned neuralRenderingConfidenceRejectionPercent = 0;
+				NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
 				unsigned neuralRenderingPeripheralCompressionPercent = 100;
 				bool neuralRenderingPauseInCombat = true;
 				bool neuralRenderingPressureResolutionEnabled = true;
@@ -459,7 +463,7 @@ namespace Util
 			ImGui::Record(text);
 		}
 	}
-	void AddTooltip(const char* text) { ImGui::tooltips.emplace_back(ImGui::lastItem, text); }
+	void AddTooltip(const char* text, int = 0) { ImGui::tooltips.emplace_back(ImGui::lastItem, text); }
 	bool interior = true;
 	bool IsInterior() { return interior; }
 	class DisableGuard
@@ -648,6 +652,31 @@ int main()
 			throw std::runtime_error(message);
 		}
 	};
+	{
+		Upscaling::Settings settings;
+		for (const auto [selection, divisions] : { std::pair{ 0, 1u }, std::pair{ 1, 2u }, std::pair{ 2, 4u } }) {
+			ImGui::Clear("Preparation footprint");
+			ImGui::comboEditValue = selection;
+			DrawNeuralReconstructionExperiments(settings);
+			require(settings.neuralReconstructionTuning.footprintSubdivisions == divisions && ImGui::treeDepth == 0,
+				"Footprint control selected the wrong variant or left its tree open");
+		}
+		ImGui::Clear("Shadow transfer protection");
+		ImGui::sliderEditValue = 0;
+		ImGui::itemDeactivatedAfterEdit = true;
+		DrawNeuralReconstructionExperiments(settings);
+		require(settings.neuralReconstructionTuning.shadowTransferPercent == 0, "Shadow transfer slider did not apply on release");
+		ImGui::Clear("Per-channel output clamping");
+		DrawNeuralReconstructionExperiments(settings);
+		ImGui::Clear("Anchor motion at depth sample");
+		DrawNeuralReconstructionExperiments(settings);
+		require(!settings.neuralReconstructionTuning.perChannelClamping && !settings.neuralReconstructionTuning.depthSampleMotion,
+			"Reconstruction comparison checkboxes did not apply");
+		ImGui::Clear("Restore production reconstruction");
+		DrawNeuralReconstructionExperiments(settings);
+		require(settings.neuralReconstructionTuning == NeuralRendering::ReconstructionTuning{}, "Production reconstruction did not restore");
+		ImGui::Clear();
+	}
 	{
 		Upscaling::Settings settings;
 		require(settings.neuralRenderingPressureResolutionEnabled, "Automatic pressure resolution defaults on");

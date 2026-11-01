@@ -16,26 +16,30 @@ std::array<float, 4> PeripheralSamplingBounds(const NeuralRendering::PeripheralM
 
 struct ReferencePeripheralFootprint
 {
-	std::array<std::array<float, 4>, 4> patches{};
+	std::array<std::array<float, 4>, 16> patches{};
+	unsigned count = 4;
 	std::array<float, 4> bounds{};
 
 	float Weight(UINT x, UINT y) const
 	{
 		float weight = 0.0f;
-		for (const auto& patch : patches)
+		for (unsigned index = 0; index < count; ++index) {
+			const auto& patch = patches[index];
 			weight += std::max(0.0f, std::min(patch[2], float(x + 1)) - std::max(patch[0], float(x))) *
 			          std::max(0.0f, std::min(patch[3], float(y + 1)) - std::max(patch[1], float(y)));
+		}
 		return weight;
 	}
 };
 
-ReferencePeripheralFootprint PeripheralSamplingFootprint(const NeuralRendering::PeripheralMapping& mapping, UINT x, UINT y, Size grid, Size source)
+ReferencePeripheralFootprint PeripheralSamplingFootprint(const NeuralRendering::PeripheralMapping& mapping, UINT x, UINT y, Size grid, Size source, unsigned subdivisions = 2)
 {
 	ReferencePeripheralFootprint result;
+	result.count = subdivisions * subdivisions;
 	result.bounds = { float(source[0]), float(source[1]), 0.0f, 0.0f };
-	for (UINT patch = 0; patch < result.patches.size(); ++patch) {
-		result.patches[patch] = PeripheralSamplingBounds(mapping, x * 2u + patch % 2u, y * 2u + patch / 2u,
-			{ grid[0] * 2u, grid[1] * 2u }, source);
+	for (UINT patch = 0; patch < result.count; ++patch) {
+		result.patches[patch] = PeripheralSamplingBounds(mapping, x * subdivisions + patch % subdivisions, y * subdivisions + patch / subdivisions,
+			{ grid[0] * subdivisions, grid[1] * subdivisions }, source);
 		for (UINT axis = 0; axis < 2; ++axis) {
 			result.bounds[axis] = std::min(result.bounds[axis], result.patches[patch][axis]);
 			result.bounds[axis + 2] = std::max(result.bounds[axis + 2], result.patches[patch][axis + 2]);
@@ -49,7 +53,12 @@ ReferencePeripheralFootprint PeripheralSamplingFootprint(const NeuralRendering::
 }
 
 std::optional<std::array<double, 3>> ReferencePeripheralResidual(std::span<const Pixel> prepared, std::span<const Pixel> neural,
-	Size model, double px, double py, const Pixel& source, bool guided)
+	Size model, double px, double py, const Pixel& source, bool guided
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	,
+	const NeuralRendering::ReconstructionTuning& tuning
+#endif
+)
 {
 	auto result = ReferenceResidual(prepared, neural, model, { { 0, 0 }, model }, px, py);
 	if (!result)
@@ -88,8 +97,11 @@ std::optional<std::array<double, 3>> ReferencePeripheralResidual(std::span<const
 		sourceY += luminance[c] * std::abs(source[c]);
 		proxyY += luminance[c] * std::abs(proxySum[c]);
 	}
-	if (proxyY > sourceY)
-		for (auto& c : sum) c *= sourceY / proxyY;
+	double transfer = proxyY > sourceY ? sourceY / proxyY : 1.0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	transfer = 1.0 + (transfer - 1.0) * tuning.shadowTransferPercent * 0.01;
+#endif
+	for (auto& c : sum) c *= transfer;
 	return sum;
 }
 
@@ -153,7 +165,12 @@ void CheckPeripheralResidual(ID3D11Device* device, ID3D11DeviceContext* context,
 					const auto position = args[eye].peripheralCompression.mapping.Forward({ (float(x) + 0.5f) / source[0], (float(y) + 0.5f) / source[1] });
 					const double px = position[0] * model[0] - 0.5f, py = position[1] * model[1] - 0.5f;
 					const auto residual = ReferencePeripheralResidual(reference[eye], native[eye], model, px, py, colors[i],
-						batch.reconstructionDecision.mode == NeuralRendering::GuidedReconstructionMode::GuidedLowResolution);
+						batch.reconstructionDecision.mode == NeuralRendering::GuidedReconstructionMode::GuidedLowResolution
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						,
+						args[eye].reconstructionTuning
+#endif
+					);
 					const auto weight = weights.empty() ? 1.0f : float(weights[i]) / 255.0f;
 					for (UINT channel = 0; channel < 3; ++channel)
 						Near(pixels[i][channel], colors[i][channel] + (residual ? float((*residual)[channel]) * weight : 0.0f),
@@ -164,7 +181,12 @@ void CheckPeripheralResidual(ID3D11Device* device, ID3D11DeviceContext* context,
 						const auto sourceY = luminance(colors[i]);
 						const auto magnitude = 0.2125f * std::abs(colors[i][0]) + 0.7154f * std::abs(colors[i][1]) + 0.0721f * std::abs(colors[i][2]);
 						const auto gain = condition == 4 ? 0.25f : -0.25f;
-						Near(luminance(pixels[i]), sourceY + std::min(magnitude, 5.0f) * gain * weight,
+						Near(luminance(pixels[i]), sourceY +
+#ifdef DEVBENCH_BRIDGE_ENABLED
+													   (5.0f + (std::min(magnitude, 5.0f) - 5.0f) * args[eye].reconstructionTuning.shadowTransferPercent * 0.01f) * gain * weight,
+#else
+													   std::min(magnitude, 5.0f) * gain * weight,
+#endif
 							"A bright compressed proxy transferred its absolute edit into a source shadow");
 					}
 					if (weight == 0.0f)
@@ -174,7 +196,73 @@ void CheckPeripheralResidual(ID3D11Device* device, ID3D11DeviceContext* context,
 	}
 }
 
-void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, bool mixedGuides, bool shaped = false, unsigned compression = 20, bool sceneCategories = false, bool directScene = false)
+void CheckPeripheralStereoRounding(ID3D11Device* device, ID3D11DeviceContext* context)
+{
+	using namespace NeuralRendering;
+	constexpr std::array<Size, 2> sizes{ Size{ 307, 202 }, Size{ 1628, 352 } };
+	std::array<std::vector<Pixel>, 2> colors;
+	std::vector<Texture> inputs, depths, motions, outputs;
+	std::array<RendererApplyArgs, 2> args;
+	for (unsigned eye = 0; eye < args.size(); ++eye) {
+		const auto size = sizes[eye];
+		colors[eye].resize(size[0] * size[1]);
+		for (unsigned i = 0; i < colors[eye].size(); ++i)
+			colors[eye][i] = { float(i % 13) * 0.125f, float(i % 7) * 0.25f, 0.4f, float(i % 5) * 0.125f };
+		inputs.emplace_back(device, size, DXGI_FORMAT_R32G32B32A32_FLOAT, colors[eye]);
+		depths.emplace_back(device, size, DXGI_FORMAT_R32_FLOAT, std::vector(colors[eye].size(), 0.5f));
+		motions.emplace_back(device, size, DXGI_FORMAT_R32G32_FLOAT, std::vector(colors[eye].size(), Motion{}));
+		outputs.emplace_back(device, size, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors[eye].size(), sentinel));
+		auto& input = args[eye];
+		input.device = device;
+		input.context = context;
+		input.featureSlot = eye;
+		input.colorInput = inputs.back().texture.Get();
+		input.colorOutput = outputs.back().texture.Get();
+		input.depthGuide = depths.back().texture.Get();
+		input.depthGuideSRV = depths.back().srv.Get();
+		input.motionVectors = motions.back().texture.Get();
+		input.colorWidth = input.outputWidth = input.guideWidth = size[0];
+		input.colorHeight = input.outputHeight = input.guideHeight = size[1];
+		input.viewportCrop = UpscalingDLSS::ViewportCrop::Identity(size[0], size[1], size[0], size[1]);
+		input.renderingMode = RenderingMode::ReducedResolution;
+		input.insertionPoint = ResolveInsertionPoint(*input.renderingMode);
+		input.peripheralCompressionPercent = 61;
+		input.guidedReconstructionEnabled = AdapterCompiler::guided;
+		input.reset = true;
+	}
+	ModelResolution adapter;
+	HRESULT result = S_OK;
+	for (unsigned percent : { 40u, 39u }) {
+		for (auto& eye : args)
+			eye.modelResolutionPercent = percent;
+		Require(adapter.PreparePeripheralCompression(args, false, result), "Stereo rounding planning failed");
+		for (const auto& eye : args)
+			Require(eye.peripheralCompression.Active(), "Stereo rounding discarded compression");
+		if (percent == 39) {
+			Require(args[0].peripheralCompression.candidatePixels == args[0].peripheralCompression.baselinePixels &&
+						args[1].peripheralCompression.candidatePixels < args[1].peripheralCompression.baselinePixels,
+				"Shader fixture lost its asymmetric savings boundary");
+		}
+		Require(adapter.AdditionalBytes(args).has_value(), "Stereo rounding storage was not admitted");
+		ModelResolution::Batch batch;
+		Require(adapter.Prepare(args, batch, result), "Stereo rounding preparation failed");
+		for (unsigned eye = 0; eye < args.size(); ++eye)
+			context->CopyResource(batch.targets[eye].output.resource.Get(), batch.targets[eye].color.resource.Get());
+		Require(adapter.Reconstruct(args, batch, result), "Stereo rounding reconstruction failed");
+		adapter.Commit(args, batch);
+		for (unsigned eye = 0; eye < args.size(); ++eye) {
+			const auto actual = outputs[eye].Read<Pixel>(device, context);
+			Require(actual == colors[eye], "Stereo rounding changed a zero-correction source pixel");
+		}
+	}
+}
+
+void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, bool mixedGuides, bool shaped = false, unsigned compression = 20, bool sceneCategories = false, bool directScene = false
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	,
+	NeuralRendering::ReconstructionTuning tuning = {}
+#endif
+)
 {
 	using namespace NeuralRendering;
 	constexpr Size source{ 127, 75 };
@@ -222,6 +310,12 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 	base.reset = true;
 	base.peripheralCompressionPercent = compression;
 	base.guidedReconstructionEnabled = AdapterCompiler::guided;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	base.reconstructionTuning = tuning;
+	const auto subdivisions = tuning.footprintSubdivisions;
+#else
+	const auto subdivisions = 2u;
+#endif
 	base.peripheralMask = { { 0.47f, 0.52f }, { 0.32f, 0.32f }, shaped };
 	if (shaped)
 		base.viewportCrop = { { guides[0] + 40, guides[1] + 20 }, { 20, 10, guides[0] + 20, guides[1] + 10 },
@@ -482,9 +576,51 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 					batch.arguments[0].modelResolutionHistory->peripheralMapping == plan.mapping,
 			"Projected native geometry/history disagrees with plan");
 		const std::array prepared{ Texture(batch.targets[0].color, model).Read<Pixel>(device, context), Texture(batch.targets[1].color, model).Read<Pixel>(device, context) };
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		{
+			auto stale = args;
+			for (auto& eye : stale)
+				eye.reconstructionTuning.footprintSubdivisions = subdivisions == 2u ? 1u : 2u;
+			ModelResolution::Batch invalid;
+			const auto compiled = AdapterCompiler::calls;
+			Require(!adapter.AdditionalBytes(stale) && !adapter.Prepare(stale, invalid, result) &&
+						result == E_INVALIDARG && AdapterCompiler::calls == compiled,
+				"Changed preparation settings reused a previously selected shader");
+		}
+		if (percent == 67 && mixedGuides && shaped && !sceneCategories && AdapterCompiler::guided) {
+			std::array<ComPtr<ID3D11ComputeShader>, 3> cached;
+			const auto original = args[0].reconstructionTuning;
+			const auto history = batch.arguments[0].modelResolutionHistory;
+			for (const auto divisions : { 1u, 2u, 4u, 1u, 2u, 4u, 2u }) {
+				for (auto& eye : args)
+					eye.reconstructionTuning.footprintSubdivisions = divisions;
+				const auto compilations = AdapterCompiler::calls;
+				Require(adapter.PreparePeripheralCompression(args, false, result), "Footprint switch failed");
+				const auto index = divisions == 1u ? 0u : divisions == 2u ? 1u :
+				                                                            2u;
+				if (cached[index])
+					Require(args[0].peripheralShaders.prepare == cached[index] && AdapterCompiler::calls == compilations,
+						"Returning to a footprint variant recompiled its shader");
+				cached[index] = args[0].peripheralShaders.prepare;
+				ModelResolution::Batch switched;
+				auto expectedHistory = history;
+				expectedHistory->experimentalPreparation = args[0].reconstructionTuning.Preparation();
+				Require(adapter.AdditionalBytes(args, ModelResolution::Sharing::Guides) == 0 && adapter.Prepare(args, switched, result, targets) &&
+							switched.targets[0].color.resource == batch.targets[0].color.resource && switched.arguments[0].modelResolutionHistory == expectedHistory,
+					"Footprint tuning replaced storage or lost its native history reset key");
+				batch = std::move(switched);
+			}
+			for (auto& eye : args)
+				eye.reconstructionTuning = original;
+			ModelResolution::Batch restored;
+			Require(adapter.PreparePeripheralCompression(args, false, result) && adapter.Prepare(args, restored, result, targets),
+				"Original footprint did not restore after the cache sweep");
+			batch = std::move(restored);
+		}
+#endif
 		for (UINT y = 0; y < model[1]; ++y)
 			for (UINT x = 0; x < model[0]; ++x) {
-				const auto footprint = PeripheralSamplingFootprint(plan.mapping, x, y, model, source);
+				const auto footprint = PeripheralSamplingFootprint(plan.mapping, x, y, model, source, subdivisions);
 				const auto [lx, ly, ux, uy] = footprint.bounds;
 				Pixel sum{};
 				float area = 0;
@@ -502,7 +638,7 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 		const auto sampledMotion = Texture(batch.targets[0].motion, grid).Read<Motion>(device, context);
 		for (UINT y = 0; y < grid[1]; ++y)
 			for (UINT x = 0; x < grid[0]; ++x) {
-				const auto footprint = PeripheralSamplingFootprint(plan.mapping, x, y, grid, guides);
+				const auto footprint = PeripheralSamplingFootprint(plan.mapping, x, y, grid, guides, subdivisions);
 				const UINT lx = UINT(std::floor(footprint.bounds[0])), ly = UINT(std::floor(footprint.bounds[1]));
 				const UINT ux = UINT(std::ceil(footprint.bounds[2])), uy = UINT(std::ceil(footprint.bounds[3]));
 				float nearest = 2;
@@ -520,7 +656,11 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 						}
 					}
 				Near(sampledDepth[y * grid[0] + x], nearest, "Peripheral depth surface changed");
-				const NeuralRendering::PeripheralMapping::Point anchor{ (float(nearestPixel[0]) + 0.5f) / guides[0], (float(nearestPixel[1]) + 0.5f) / guides[1] };
+				NeuralRendering::PeripheralMapping::Point anchor{ (float(nearestPixel[0]) + 0.5f) / guides[0], (float(nearestPixel[1]) + 0.5f) / guides[1] };
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (!tuning.depthSampleMotion)
+					anchor = plan.mapping.Inverse({ (float(x) + 0.5f) / grid[0], (float(y) + 0.5f) / grid[1] });
+#endif
 				const auto before = plan.mapping.Forward(anchor), after = plan.mapping.Forward({ anchor[0] + velocity[0] * float(base.viewportCrop.fullInput.width) / guides[0],
 																	  anchor[1] + velocity[1] * float(base.viewportCrop.fullInput.height) / guides[1] });
 				for (UINT axis = 0; axis < 2; ++axis)
@@ -533,7 +673,7 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 			AdapterCompiler::failGuided = true;
 			ModelResolution::Batch fallback;
 			Require(adapter.Prepare(args, fallback, result) && fallback.reconstructionDecision.reason == GuidedReconstructionReason::ShaderUnavailable &&
-						fallback.reconstructionShader == args[0].peripheralShaders.reconstruct,
+						fallback.reconstructionDecision.mode == GuidedReconstructionMode::Basic,
 				"Optional Guided failure lost the compressed reconstruction fallback");
 			const auto attempts = AdapterCompiler::guidedAttempts;
 			Require(adapter.Prepare(args, fallback, result) && AdapterCompiler::guidedAttempts == attempts &&

@@ -159,6 +159,7 @@ struct Upscaling
 		bool neuralRenderingRenderscaleFov = false;
 		bool neuralRenderingFovOnly = false, periphery_taa_enable = false, foveatedVendorDispatch = true;
 		uint32_t neuralRenderingInsertionPoint = 0, neuralRenderingMode = 0;
+		uint32_t neuralRenderingConfidenceRejectionPercent = 0;
 		float foveatedCenterArea = 0.8f, periphery_taa_center_area = 0.3f;
 		float foveatedOuterBlendFeather = 0.05f, periphery_taa_outer_scale = 0.9f, periphery_taa_center_blend_feather = 0.05f;
 		bool foveatedDisableOuterFeather = false;
@@ -559,8 +560,39 @@ void CheckConfirmedCalibrationFailure()
 		"DevBench calibration failure must retain the fit and report no mutation");
 }
 
+void CheckReconstructionHistoryTransition()
+{
+	for (bool vr : { false, true }) {
+		globals::game::isVR = vr;
+		for (bool enabled : { false, true }) {
+			for (unsigned mode : { 0u, 2u }) {
+				auto& renderer = NeuralRendering::Renderer::Instance();
+				renderer = {};
+				Upscaling upscaling;
+				upscaling.settings.neuralRenderingEnabled = enabled;
+				upscaling.settings.neuralRenderingMode = mode;
+				NeuralRendering::NormalizeRenderingCoverage(upscaling.settings, vr);
+				const auto previous = upscaling.settings;
+				upscaling.settings.neuralRenderingConfidenceRejectionPercent = 50;
+				bool retired = true;
+				Require(upscaling.HandleNeuralRenderingSettingsTransition(previous, "reconstruction edit", &retired), "Reconstruction edit was rejected");
+				Require(upscaling.historyResets == unsigned(enabled) && upscaling.invalidations == unsigned(enabled), "Reconstruction edit did not reset history and cached frame state exactly once");
+				Require(upscaling.mainFinalLdrNeuralState.value == (enabled ? 0 : 17) &&
+							upscaling.mainFinalLdrPresentationState.value == (enabled ? 0 : 18),
+					"Reconstruction edit retained stale presentation or invalidated disabled NR");
+				Require(!retired && renderer.resets == 0 && renderer.resourcesRetained, "Reconstruction edit retired healthy native storage");
+				Require(upscaling.HandleNeuralRenderingSettingsTransition(upscaling.settings, "unchanged reconstruction") &&
+							upscaling.historyResets == unsigned(enabled),
+					"Unchanged reconstruction repeated the history reset");
+			}
+		}
+	}
+	globals::game::isVR = true;
+}
+
 int main()
 {
+	CheckReconstructionHistoryTransition();
 	CheckConfirmedCalibrationFailure();
 	CheckMaskSetupConfirmation();
 	CheckManualSetupConfirmation();

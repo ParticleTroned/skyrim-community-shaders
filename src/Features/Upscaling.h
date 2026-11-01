@@ -1,4 +1,5 @@
 #pragma once
+#include "Upscaling/NeuralRendering/ReconstructionTuning.h"
 
 #include "Upscaling/FrameTelemetryRing.h"
 
@@ -500,6 +501,9 @@ public:
 		uint neuralRenderingModelResolutionPercent = 90;
 		bool neuralRenderingGuidedReconstruction = true;
 		uint neuralRenderingConfidenceRejectionPercent = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
+#endif
 		uint neuralRenderingPeripheralCompressionPercent = 100;
 		bool neuralRenderingPauseInCombat = true;
 		bool neuralRenderingPressureResolutionEnabled = true;

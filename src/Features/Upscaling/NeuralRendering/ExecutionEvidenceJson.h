@@ -1,4 +1,5 @@
 #pragma once
+#include "ReconstructionTuningJson.h"
 
 #include "ExecutionEvidence.h"
 #include <algorithm>
@@ -95,6 +96,7 @@ namespace NeuralRendering::Evidence
 			{ "basicFilter", "bilinear" }, { "enabled", value->enabled },
 			{ "packed", value->packed }, { "matchedReferenceDomain", value->matchedReferenceDomain },
 			{ "confidenceRejectionPercent", value->confidenceRejectionPercent },
+			{ "experimentalReconstruction", ReconstructionTuningJson(value->reconstructionTuning) },
 			{ "kernel", value->decision.mode == GuidedReconstructionMode::GuidedLowResolution ? Json("2x2") : Json(nullptr) } };
 	}
 #endif

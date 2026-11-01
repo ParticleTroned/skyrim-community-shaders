@@ -250,6 +250,14 @@ contradict this policy.
 
 ## Repository tooling
 
+-   Before performance work, use the installed Skyrim VR automation skill and
+    its maintained entry point. See the [control routing guide](docs/development/tooling.md#skyrim-vr-control-routing).
+    Reuse the existing fpsVR logger helpers and CSX profiler collector; do not
+    create another runner, key injector, boundary detector, or reporter merely
+    because a tool lookup or first control attempt failed. Keep named protocols'
+    distinct timing and authorization rules. A tooling audit does not authorize
+    starting an assay.
+
 -   When the user invokes `gameft-sw`, follow
     the maintained automation protocol and its locally retained guide: ask
     its exact save-number question and

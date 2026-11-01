@@ -426,6 +426,20 @@ namespace
 
 	void CheckReconstruct(ID3D11Device* device, ID3D11DeviceContext* context, Shader& shader, unsigned condition)
 	{
+		struct SaturationCase
+		{
+			UINT format;
+			float neuralRed, neuralBlue, expectedRed, expectedBlue;
+		};
+		constexpr std::array<SaturationCase, 6> saturationCases{ {
+			{ 1u, 70000.0f, 0.25f, 65504.0f, 0.3f },
+			{ 2u, -1.0f, 0.25f, 0.0f, 0.3f },
+			{ 3u, 2.0f, 0.25f, 1.0f, 0.3f },
+			{ 1u, -70000.0f, 0.25f, -65504.0f, 0.3f },
+			{ 2u, 70000.0f, 70000.0f, 65024.0f, 64512.0f },
+			{ 3u, -1.0f, 0.25f, 0.0f, 0.3f },
+		} };
+		const auto* saturation = condition >= 4 ? &saturationCases.at(condition - 4) : nullptr;
 		constexpr Size source{ 14, 10 }, model{ 7, 5 };
 		constexpr Region sourceRegion{ { 2, 2 }, { 10, 6 } }, modelRegion{ { 1, 1 }, { 5, 3 } };
 		std::vector<Pixel> color(source[0] * source[1]);
@@ -444,9 +458,11 @@ namespace
 					neural[index][0] = std::numeric_limits<float>::quiet_NaN();
 				if (condition == 3)
 					neural[index][1] = std::numeric_limits<float>::infinity();
-				if (condition >= 4)
-					neural[index][0] = condition == 4 ? 70000.0f : condition == 5 ? -1.0f :
-					                                                                2.0f;
+				if (saturation) {
+					neural[index][0] = saturation->neuralRed;
+					neural[index][1] += 0.125f;
+					neural[index][2] = saturation->neuralBlue;
+				}
 			}
 		}
 		Texture input(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, color);
@@ -455,7 +471,7 @@ namespace
 		Texture result(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
 		ConstantBuffer constants(device, shader.reflection.Get(), "ModelResolutionConstants");
 		Configure(constants, source, model, sourceRegion, modelRegion, false, { 1, 1 });
-		constants.SetVariable("OutputFormat", condition >= 4 ? condition - 3 : 0u);
+		constants.SetVariable("OutputFormat", saturation ? saturation->format : 0u);
 		const std::array inputs{ input.srv.Get(), proxy.srv.Get(), outputNeural.srv.Get() };
 		const std::array outputs{ result.uav.Get() };
 		Dispatch(context, shader, constants, sourceRegion.size, inputs, outputs);
@@ -467,8 +483,13 @@ namespace
 					Require(pixels[index] == sentinel, "Reconstruction wrote outside its source ROI");
 					continue;
 				}
-				for (UINT channel = 0; channel < 3; ++channel)
-					Near(pixels[index][channel], color[index][channel] + residual, "Residual reconstruction lost base detail, crossed ROI, or failed finite fallback");
+				for (UINT channel = 0; channel < 3; ++channel) {
+					float expected = color[index][channel] + residual;
+					if (saturation)
+						expected = channel == 0 ? saturation->expectedRed : channel == 2 ? saturation->expectedBlue :
+						                                                                   color[index][channel] + 0.125f;
+					Near(pixels[index][channel], expected, "Residual reconstruction lost detail, finite saturation or corrupt-sample fallback");
+				}
 				Near(pixels[index][3], color[index][3], "Residual reconstruction changed full-resolution alpha");
 			}
 		}
@@ -640,6 +661,86 @@ namespace
 							Require(pixels[i][3] == colors[i][3], "Guidance changed source alpha");
 						}
 				}
+	}
+
+	void CheckGuidedConfidenceTuning(ID3D11Device* device, ID3D11DeviceContext* context)
+	{
+		using namespace NeuralRendering;
+		constexpr Size source{ 8, 4 }, model{ 4, 2 };
+		const std::vector<Pixel> colors(source[0] * source[1], Pixel{ 1.0f, 1.0f, 1.0f, 0.37f });
+		Texture input(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, colors);
+		Texture depth(device, source, DXGI_FORMAT_R32_FLOAT, std::vector(colors.size(), 0.5f));
+		Texture motion(device, source, DXGI_FORMAT_R32G32_FLOAT, std::vector(colors.size(), Motion{}));
+		Texture output(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel));
+		RendererApplyArgs args;
+		ConfigureGuided(args);
+		args.device = device;
+		args.context = context;
+		args.colorInput = input.texture.Get();
+		args.depthGuide = depth.texture.Get();
+		args.depthGuideSRV = depth.srv.Get();
+		args.motionVectors = motion.texture.Get();
+		args.colorOutput = output.texture.Get();
+		args.colorWidth = args.outputWidth = args.guideWidth = source[0];
+		args.colorHeight = args.outputHeight = args.guideHeight = source[1];
+		args.viewportCrop = UpscalingDLSS::ViewportCrop::Identity(source[0], source[1], source[0], source[1]);
+		args.computeSubrect = { 0, 0, source[0], source[1] };
+		args.modelResolutionPercent = 50;
+		args.renderingMode = RenderingMode::FullResolution;
+		args.insertionPoint = ResolveInsertionPoint(*args.renderingMode);
+		ModelResolution adapter;
+		ComPtr<ID3D11ComputeShader> warmedShader;
+		ComPtr<ID3D11Resource> warmedColor;
+		std::optional<ModelResolutionHistory> history;
+		unsigned compiled = 0;
+		for (const auto [percent, matched] : { std::pair{ 0u, false }, { 10u, false }, { 25u, false }, { 100u, false }, { 100u, true }, { 0u, false } }) {
+			const float proxyValue = matched ? 1.0f : 0.0f;
+			const std::vector<Pixel> reference(model[0] * model[1], Pixel{ proxyValue, proxyValue, proxyValue, 1.0f });
+			const std::vector<Pixel> neural(model[0] * model[1], Pixel{ proxyValue + 0.25f, proxyValue + 0.25f, proxyValue + 0.25f, 1.0f });
+			args.guidedConfidenceRejectionPercent = percent;
+			ModelResolution::Batch batch;
+			HRESULT status = S_OK;
+			const auto request = std::span(&args, 1);
+			Require(adapter.Prepare(request, batch, status), "Live confidence tuning preparation failed");
+			Require(batch.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution, "Confidence tuning lost guided reconstruction");
+			if (warmedShader) {
+				Require(AdapterCompiler::calls == compiled && batch.reconstructionShader == warmedShader && batch.targets[0].color.resource == warmedColor,
+					"Changing confidence tuning recompiled a shader or replaced its working texture");
+				Require(batch.arguments[0].modelResolutionHistory == history, "Confidence tuning changed native temporal identity");
+			} else {
+				warmedShader = batch.reconstructionShader;
+				warmedColor = batch.targets[0].color.resource;
+				history = batch.arguments[0].modelResolutionHistory;
+				compiled = AdapterCompiler::calls;
+			}
+			context->UpdateSubresource(batch.targets[0].color.resource.Get(), 0, nullptr, reference.data(), model[0] * sizeof(Pixel), 0);
+			context->UpdateSubresource(batch.targets[0].output.resource.Get(), 0, nullptr, neural.data(), model[0] * sizeof(Pixel), 0);
+			Require(adapter.Reconstruct(request, batch, status), "Live confidence tuning reconstruction failed");
+			adapter.Commit(request, batch);
+			float fade = 1.0f;
+			if (percent != 0u && !matched) {
+				const float threshold = float(percent) * 0.01f;
+				const float phase = std::clamp((1.0f / 17.0f - threshold * 0.5f) / (threshold * 0.5f), 0.0f, 1.0f);
+				fade = phase * phase * (3.0f - 2.0f * phase);
+			}
+			for (const auto& pixel : output.Read<Pixel>(device, context)) {
+				for (unsigned channel = 0; channel < 3; ++channel)
+					Near(pixel[channel], 1.0f + 0.25f * fade, "Unreliable guided corrections did not fade continuously or restore at zero");
+				Require(pixel[3] == colors[0][3], "Confidence rejection changed source alpha");
+			}
+			++args.frameId;
+		}
+		ModelResolution::Batch rejected;
+		HRESULT status = S_OK;
+		args.guidedConfidenceRejectionPercent = kMaximumGuidedConfidenceRejectionPercent + 1;
+		Require(!adapter.Prepare(std::span(&args, 1), rejected, status) && status == E_INVALIDARG && AdapterCompiler::calls == compiled,
+			"Invalid confidence tuning reached allocation or shader compilation");
+		auto pair = std::array{ args, args };
+		pair[0].guidedConfidenceRejectionPercent = 0;
+		pair[1].guidedConfidenceRejectionPercent = 50;
+		pair[1].featureSlot = 1;
+		Require(!adapter.Prepare(pair, rejected, status) && status == E_INVALIDARG && AdapterCompiler::calls == compiled,
+			"Different per-eye confidence values escaped the batch boundary");
 	}
 
 	void CheckSharedAdapter(ID3D11Device* device, ID3D11DeviceContext* context, bool guidesOnly)
@@ -2332,8 +2433,10 @@ int main()
 				for (bool mixedGuides : { false, true })
 					for (bool shaped : { false, true })
 						CheckPeripheralAdapter(device.Get(), context.Get(), mixedGuides, shaped, 100);
-				if (AdapterCompiler::guided)
+				if (AdapterCompiler::guided) {
 					CheckGuidedEdges(device.Get(), context.Get(), vr);
+					CheckGuidedConfidenceTuning(device.Get(), context.Get());
+				}
 				CheckAdapter(device.Get(), context.Get());
 				CheckPackedAdapter(device.Get(), context.Get());
 				CheckCentralArea(device.Get(), context.Get());
@@ -2348,7 +2451,7 @@ int main()
 				for (bool fullScale : { false, true })
 					CheckNonIntegerPrepare(device.Get(), context.Get(), prepare, fullScale);
 				CheckNonIntegerPrepare(device.Get(), context.Get(), prepare, false, true);
-				for (unsigned condition = 0; condition < 7; ++condition)
+				for (unsigned condition = 0; condition < 10; ++condition)
 					CheckReconstruct(device.Get(), context.Get(), reconstruct, condition);
 				CheckReconstructionKernel(device.Get(), context.Get(), reconstruct);
 			}

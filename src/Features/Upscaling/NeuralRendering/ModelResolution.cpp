@@ -39,11 +39,13 @@ namespace NeuralRendering
 			std::uint32_t packedCount = 0, packedCoverageGuard = 0;
 			std::array<std::uint32_t, 2> unpackedSize{};
 			std::array<PackedCropLayout::Tile, kMaximumPackedCrops> packedTiles{};
-			std::uint32_t selectionMode = 0, outputStorageFormat = 0, selectedOutput = 0, selectionPadding = 0;
+			std::uint32_t selectionMode = 0, outputStorageFormat = 0, selectedOutput = 0;
+			float guidedRejectionScale = 0.0f;
 			std::array<float, 4> selectionBounds{};
 		};
 		static_assert(sizeof(Constants) == 352);
 		static_assert(offsetof(Constants, selectionBounds) == 336);
+		static_assert(offsetof(Constants, guidedRejectionScale) == 332);
 		static_assert(sizeof(PackedCropLayout::Tile) == 48);
 
 		bool ReadDescription(ID3D11Resource* resource, D3D11_TEXTURE2D_DESC& desc)
@@ -136,6 +138,8 @@ namespace NeuralRendering
 			for (std::size_t index = 0; index < args.size(); ++index) {
 				const auto& input = args[index];
 				if (input.peripheralCompression.Active() != args.front().peripheralCompression.Active() ||
+					input.guidedConfidenceRejectionPercent > kMaximumGuidedConfidenceRejectionPercent ||
+					input.guidedConfidenceRejectionPercent != args.front().guidedConfidenceRejectionPercent ||
 					input.featureSlot >= kLogicalFeatureSlotCount || !Util::SameIdentity(input.device, args.front().device) ||
 					!Util::SameIdentity(input.context, args.front().context))
 					return false;
@@ -1312,6 +1316,10 @@ namespace NeuralRendering
 					input.centralArea.offset, { static_cast<float>(input.centralArea.finalOutput.width), static_cast<float>(input.centralArea.finalOutput.height) }
 				};
 				work->constants.packedCount = geometry->packedCrops.count;
+				// Precompute the fade interval reciprocal once per region, not once per output pixel.
+				work->constants.guidedRejectionScale = input.guidedConfidenceRejectionPercent ?
+				                                           2.0f * kMaximumGuidedConfidenceRejectionPercent / input.guidedConfidenceRejectionPercent :
+				                                           0.0f;
 				work->constants.unpackedSize = { geometry->packedCrops.unpackedExtent.width, geometry->packedCrops.unpackedExtent.height };
 				work->constants.packedTiles = geometry->packedCrops.tiles;
 				if (input.modelOutputSelection) {
@@ -1410,7 +1418,8 @@ namespace NeuralRendering
 			const auto& input = guidedInputs[index];
 			batch.arguments[index].executionContext.modelReconstruction = ModelReconstructionEvidence{
 				batch.reconstructionDecision, input.effectivePercent, input.target, input.unpackedModel,
-				input.enabled, batch.arguments[index].modelResolutionHistory->packedCrops.count != 0, input.matchedReferenceDomain
+				input.enabled, batch.arguments[index].modelResolutionHistory->packedCrops.count != 0, input.matchedReferenceDomain,
+				args[index].guidedConfidenceRejectionPercent
 			};
 		}
 #endif

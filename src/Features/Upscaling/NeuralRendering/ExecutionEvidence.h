@@ -43,6 +43,7 @@ namespace NeuralRendering
 		std::uint32_t effectivePercent = 100;
 		UpscalingDLSS::Extent target{}, unpackedModel{};
 		bool enabled = false, packed = false, matchedReferenceDomain = false;
+		std::uint32_t confidenceRejectionPercent = 0;
 		bool operator==(const ModelReconstructionEvidence&) const = default;
 	};
 #endif

@@ -499,6 +499,7 @@ public:
 		bool neuralRenderingDirectCommit = true;
 		uint neuralRenderingModelResolutionPercent = 90;
 		bool neuralRenderingGuidedReconstruction = true;
+		uint neuralRenderingConfidenceRejectionPercent = 0;
 		uint neuralRenderingPeripheralCompressionPercent = 100;
 		bool neuralRenderingPauseInCombat = true;
 		bool neuralRenderingPressureResolutionEnabled = true;

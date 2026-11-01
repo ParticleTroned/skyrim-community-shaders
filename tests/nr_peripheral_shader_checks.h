@@ -14,11 +14,45 @@ std::array<float, 4> PeripheralSamplingBounds(const NeuralRendering::PeripheralM
 	return { lower[0], lower[1], upper[0], upper[1] };
 }
 
+struct ReferencePeripheralFootprint
+{
+	std::array<std::array<float, 4>, 4> patches{};
+	std::array<float, 4> bounds{};
+
+	float Weight(UINT x, UINT y) const
+	{
+		float weight = 0.0f;
+		for (const auto& patch : patches)
+			weight += std::max(0.0f, std::min(patch[2], float(x + 1)) - std::max(patch[0], float(x))) *
+			          std::max(0.0f, std::min(patch[3], float(y + 1)) - std::max(patch[1], float(y)));
+		return weight;
+	}
+};
+
+ReferencePeripheralFootprint PeripheralSamplingFootprint(const NeuralRendering::PeripheralMapping& mapping, UINT x, UINT y, Size grid, Size source)
+{
+	ReferencePeripheralFootprint result;
+	result.bounds = { float(source[0]), float(source[1]), 0.0f, 0.0f };
+	for (UINT patch = 0; patch < result.patches.size(); ++patch) {
+		result.patches[patch] = PeripheralSamplingBounds(mapping, x * 2u + patch % 2u, y * 2u + patch / 2u,
+			{ grid[0] * 2u, grid[1] * 2u }, source);
+		for (UINT axis = 0; axis < 2; ++axis) {
+			result.bounds[axis] = std::min(result.bounds[axis], result.patches[patch][axis]);
+			result.bounds[axis + 2] = std::max(result.bounds[axis + 2], result.patches[patch][axis + 2]);
+		}
+	}
+	const auto enclosing = PeripheralSamplingBounds(mapping, x, y, grid, source);
+	Require(std::floor(result.bounds[0]) >= std::floor(enclosing[0]) && std::floor(result.bounds[1]) >= std::floor(enclosing[1]) &&
+				std::ceil(result.bounds[2]) <= std::ceil(enclosing[2]) && std::ceil(result.bounds[3]) <= std::ceil(enclosing[3]),
+		"Subdivided footprint expanded its source fetch bounds");
+	return result;
+}
+
 std::optional<std::array<double, 3>> ReferencePeripheralResidual(std::span<const Pixel> prepared, std::span<const Pixel> neural,
 	Size model, double px, double py, const Pixel& source, bool guided)
 {
 	auto result = ReferenceResidual(prepared, neural, model, { { 0, 0 }, model }, px, py);
-	if (!guided || !result)
+	if (!result)
 		return result;
 	double scale = std::max({ std::abs(double(source[0])), std::abs(double(source[1])), std::abs(double(source[2])) });
 	std::array<Pixel, 4> proxy{}, output{};
@@ -30,24 +64,32 @@ std::optional<std::array<double, 3>> ReferencePeripheralResidual(std::span<const
 		for (unsigned c = 0; c < 3; ++c)
 			scale = std::max(scale, std::abs(double(proxy[tap][c])));
 	}
-	if (scale <= 1e-6)
-		return result;
 	const double fx = px - std::floor(px), fy = py - std::floor(py);
 	const std::array<double, 3> luminance{ 0.2125, 0.7154, 0.0721 };
-	std::array<double, 3> sum{};
+	std::array<double, 3> sum{}, proxySum{};
 	double total = 0;
 	for (unsigned tap = 0; tap < 4; ++tap) {
 		double distance = 0;
-		for (unsigned c = 0; c < 3; ++c) {
+		for (unsigned c = 0; guided && scale > 1e-6 && c < 3; ++c) {
 			const double d = (double(source[c]) - proxy[tap][c]) / scale;
 			distance += luminance[c] * d * d;
 		}
 		const double weight = (tap % 2 ? fx : 1.0 - fx) * (tap / 2 ? fy : 1.0 - fy) / (1.0 + 16.0 * distance);
 		total += weight;
-		for (unsigned c = 0; c < 3; ++c)
+		for (unsigned c = 0; c < 3; ++c) {
 			sum[c] += weight * (double(output[tap][c]) - proxy[tap][c]);
+			proxySum[c] += weight * proxy[tap][c];
+		}
 	}
-	for (auto& c : sum) c /= total;
+	double sourceY = 0, proxyY = 0;
+	for (unsigned c = 0; c < 3; ++c) {
+		sum[c] /= total;
+		proxySum[c] /= total;
+		sourceY += luminance[c] * std::abs(source[c]);
+		proxyY += luminance[c] * std::abs(proxySum[c]);
+	}
+	if (proxyY > sourceY)
+		for (auto& c : sum) c *= sourceY / proxyY;
 	return sum;
 }
 
@@ -61,8 +103,13 @@ void CheckPeripheralResidual(ID3D11Device* device, ID3D11DeviceContext* context,
 	std::optional<Shader> blend;
 	if (!masks.empty())
 		blend.emplace(device, L"features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl", AdapterCompiler::vr, "features/Upscaling/Shaders");
-	for (unsigned condition : { 0u, 1u, 2u, 3u }) {
-		auto native = prepared;
+	for (unsigned condition : { 0u, 1u, 2u, 3u, 4u, 5u, 6u }) {
+		auto reference = prepared;
+		const bool uniformGain = condition == 4 || condition == 6;
+		if (uniformGain)
+			for (auto& eye : reference)
+				std::ranges::fill(eye, Pixel{ 5.0f, 5.0f, 5.0f, 1.0f });
+		auto native = reference;
 		for (UINT eye = 0; eye < args.size(); ++eye) {
 			for (UINT i = 0; i < prepared[eye].size(); ++i) {
 				auto& pixel = native[eye][i];
@@ -71,11 +118,20 @@ void CheckPeripheralResidual(ID3D11Device* device, ID3D11DeviceContext* context,
 				pixel[1] += condition == 0 ? 0.0f : condition == 1 ? -0.25f :
 				                                                     float(int((i / model[0] + eye) % 7) - 3) / 16.0f;
 				pixel[3] = 1;
+				if (uniformGain) {
+					const float value = condition == 4 ? 6.25f : 3.75f;
+					pixel = { value, value, value, 1.0f };
+				}
 			}
 			if (condition == 3) {
 				native[eye][0][0] = std::numeric_limits<float>::quiet_NaN();
 				native[eye][(model[1] / 2) * model[0] + model[0] / 2][1] = std::numeric_limits<float>::infinity();
 			}
+			if (condition == 5) {
+				reference[eye][0][0] = std::numeric_limits<float>::quiet_NaN();
+				reference[eye][(model[1] / 2) * model[0] + model[0] / 2][1] = std::numeric_limits<float>::infinity();
+			}
+			context->UpdateSubresource(batch.targets[eye].color.resource.Get(), 0, nullptr, reference[eye].data(), model[0] * sizeof(Pixel), 0);
 			context->UpdateSubresource(batch.targets[eye].output.resource.Get(), 0, nullptr, native[eye].data(), model[0] * sizeof(Pixel), 0);
 		}
 		HRESULT result = S_OK;
@@ -96,13 +152,21 @@ void CheckPeripheralResidual(ID3D11Device* device, ID3D11DeviceContext* context,
 					const auto i = y * source[0] + x;
 					const auto position = args[eye].peripheralCompression.mapping.Forward({ (float(x) + 0.5f) / source[0], (float(y) + 0.5f) / source[1] });
 					const double px = position[0] * model[0] - 0.5f, py = position[1] * model[1] - 0.5f;
-					const auto residual = ReferencePeripheralResidual(prepared[eye], native[eye], model, px, py, colors[i],
+					const auto residual = ReferencePeripheralResidual(reference[eye], native[eye], model, px, py, colors[i],
 						batch.reconstructionDecision.mode == NeuralRendering::GuidedReconstructionMode::GuidedLowResolution);
 					const auto weight = weights.empty() ? 1.0f : float(weights[i]) / 255.0f;
 					for (UINT channel = 0; channel < 3; ++channel)
 						Near(pixels[i][channel], colors[i][channel] + (residual ? float((*residual)[channel]) * weight : 0.0f),
 							"Compressed residual lost spatial phase, eye isolation or finite fallback");
 					Require(pixels[i][3] == colors[i][3], "Compressed residual changed source alpha");
+					if (uniformGain) {
+						const auto luminance = [](const Pixel& value) { return 0.2125f * value[0] + 0.7154f * value[1] + 0.0721f * value[2]; };
+						const auto sourceY = luminance(colors[i]);
+						const auto magnitude = 0.2125f * std::abs(colors[i][0]) + 0.7154f * std::abs(colors[i][1]) + 0.0721f * std::abs(colors[i][2]);
+						const auto gain = condition == 4 ? 0.25f : -0.25f;
+						Near(luminance(pixels[i]), sourceY + std::min(magnitude, 5.0f) * gain * weight,
+							"A bright compressed proxy transferred its absolute edit into a source shadow");
+					}
 					if (weight == 0.0f)
 						Require(pixels[i] == colors[i], "Compressed category selection changed a protected pixel");
 				}
@@ -118,6 +182,7 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 	std::vector<Pixel> colors(source[0] * source[1]);
 	for (UINT i = 0; i < colors.size(); ++i)
 		colors[i] = { float(i % 13) * 0.125f - 0.5f, float(i % 7) * 1.25f, 0.4f, float(i % 5) * 0.125f };
+	colors[1] = { 0.0f, 0.0f, 0.0f, 0.375f };
 	std::vector<float> depths(guides[0] * guides[1]);
 	std::vector<Motion> velocities(depths.size());
 	for (UINT i = 0; i < depths.size(); ++i) {
@@ -419,38 +484,43 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 		const std::array prepared{ Texture(batch.targets[0].color, model).Read<Pixel>(device, context), Texture(batch.targets[1].color, model).Read<Pixel>(device, context) };
 		for (UINT y = 0; y < model[1]; ++y)
 			for (UINT x = 0; x < model[0]; ++x) {
-				const auto bounds = PeripheralSamplingBounds(plan.mapping, x, y, model, source);
-				const auto [lx, ly, ux, uy] = bounds;
+				const auto footprint = PeripheralSamplingFootprint(plan.mapping, x, y, model, source);
+				const auto [lx, ly, ux, uy] = footprint.bounds;
 				Pixel sum{};
 				float area = 0;
 				for (UINT sy = UINT(std::floor(ly)); sy < UINT(std::ceil(uy)); ++sy)
 					for (UINT sx = UINT(std::floor(lx)); sx < UINT(std::ceil(ux)); ++sx) {
-						const float weight = (std::min(ux, float(sx + 1)) - std::max(lx, float(sx))) * (std::min(uy, float(sy + 1)) - std::max(ly, float(sy)));
+						const float weight = footprint.Weight(sx, sy);
 						area += weight;
 						for (UINT c = 0; c < 4; ++c) sum[c] += colors[sy * source[0] + sx][c] * weight;
 					}
+				Require(area > 0.0f && std::isfinite(area), "Subdivided color footprint lost its finite source area");
 				for (UINT c = 0; c < 4; ++c)
-					Require(std::abs(prepared[0][y * model[0] + x][c] - sum[c] / area) < 0.0005f, "Nonlinear area filter differs from source-cell integral");
+					Require(std::abs(prepared[0][y * model[0] + x][c] - sum[c] / area) < 0.0005f, "Nonlinear area filter differs from subdivided source-cell integral");
 			}
 		const auto sampledDepth = Texture(batch.targets[0].depth, grid).Read<float>(device, context);
 		const auto sampledMotion = Texture(batch.targets[0].motion, grid).Read<Motion>(device, context);
 		for (UINT y = 0; y < grid[1]; ++y)
 			for (UINT x = 0; x < grid[0]; ++x) {
-				const auto bounds = PeripheralSamplingBounds(plan.mapping, x, y, grid, guides);
-				const UINT lx = UINT(std::floor(bounds[0])), ly = UINT(std::floor(bounds[1]));
-				const UINT ux = UINT(std::ceil(bounds[2])), uy = UINT(std::ceil(bounds[3]));
+				const auto footprint = PeripheralSamplingFootprint(plan.mapping, x, y, grid, guides);
+				const UINT lx = UINT(std::floor(footprint.bounds[0])), ly = UINT(std::floor(footprint.bounds[1]));
+				const UINT ux = UINT(std::ceil(footprint.bounds[2])), uy = UINT(std::ceil(footprint.bounds[3]));
 				float nearest = 2;
 				Motion velocity{};
+				Size nearestPixel{};
 				for (UINT sy = ly; sy < uy; ++sy)
 					for (UINT sx = lx; sx < ux; ++sx) {
+						if (footprint.Weight(sx, sy) <= 0.0f)
+							continue;
 						const auto index = sy * guides[0] + sx;
 						if (depths[index] < nearest) {
 							nearest = depths[index];
 							velocity = velocities[index];
+							nearestPixel = { sx, sy };
 						}
 					}
 				Near(sampledDepth[y * grid[0] + x], nearest, "Peripheral depth surface changed");
-				const auto anchor = plan.mapping.Inverse({ (float(x) + 0.5f) / grid[0], (float(y) + 0.5f) / grid[1] });
+				const NeuralRendering::PeripheralMapping::Point anchor{ (float(nearestPixel[0]) + 0.5f) / guides[0], (float(nearestPixel[1]) + 0.5f) / guides[1] };
 				const auto before = plan.mapping.Forward(anchor), after = plan.mapping.Forward({ anchor[0] + velocity[0] * float(base.viewportCrop.fullInput.width) / guides[0],
 																	  anchor[1] + velocity[1] * float(base.viewportCrop.fullInput.height) / guides[1] });
 				for (UINT axis = 0; axis < 2; ++axis)

@@ -3,6 +3,7 @@
 #include "ComparisonLease.h"
 #include "ModelResolutionPolicy.h"
 
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <span>
@@ -10,6 +11,8 @@
 
 namespace NeuralRendering
 {
+	inline constexpr std::uint32_t kMaximumGuidedConfidenceRejectionPercent = 100;
+
 	enum class GuidedReconstructionMode
 	{
 		Basic,

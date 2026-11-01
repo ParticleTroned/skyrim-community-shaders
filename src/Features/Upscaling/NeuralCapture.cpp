@@ -13,6 +13,7 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 	args.modelResolutionPercent = NeuralRendering::EffectiveModelResolutionPercent(
 		*args.renderingMode, settings.neuralRenderingModelResolutionPercent);
 	args.guidedReconstructionEnabled = settings.neuralRenderingGuidedReconstruction;
+	args.guidedConfidenceRejectionPercent = settings.neuralRenderingConfidenceRejectionPercent;
 	args.peripheralCompressionPercent = settings.neuralRenderingPeripheralCompressionPercent;
 	args.peripheralMask = {};
 	if (args.peripheralCompressionPercent && NeuralRendering::RequiresFoveatedMask(*args.renderingMode, settings.neuralRenderingFovOnly,

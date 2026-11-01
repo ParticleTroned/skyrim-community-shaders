@@ -30,7 +30,7 @@ namespace FeatureVersions
         {"LightLimitFix"sv,        {3,5,1}},
         {"LinearLighting"sv,       {1,0,5}},
         {"TextureStreaming"sv,      {1,0,0}},
-        {"NeuralRendering"sv,          {1,6,0}},
+        {"NeuralRendering"sv,          {1,6,2}},
         {"PerformanceOverlay"sv,   {1,2,0}},
         {"PerformanceTuning"sv,    {1,0,0}},
         {"RenderDoc"sv,            {1,1,0}},

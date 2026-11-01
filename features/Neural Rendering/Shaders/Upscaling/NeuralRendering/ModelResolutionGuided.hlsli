@@ -10,7 +10,7 @@ float GuideSimilarity(float3 reference, float3 proxy)
 	return rcp(1.0 + GUIDED_NR_GUIDANCE_STRENGTH * Color::RGBToLuminance(difference * difference));
 }
 
-bool GuidedResidual(float2 position, uint4 bounds, float3 reference, out float3 residual)
+bool GuidedResidual(float2 position, uint4 bounds, float3 reference, out float3 residual, out float3 proxy)
 {
 	const int2 base = int2(floor(position));
 	const float2 phase = frac(position);
@@ -20,6 +20,7 @@ bool GuidedResidual(float2 position, uint4 bounds, float3 reference, out float3 
 	valid = ReadResidual(base + int2(0, 1), bounds, r01, p01) && valid;
 	valid = ReadResidual(base + int2(1, 1), bounds, r11, p11) && valid;
 	residual = lerp(lerp(r00, r10, phase.x), lerp(r01, r11, phase.x), phase.y);
+	proxy = lerp(lerp(p00, p10, phase.x), lerp(p01, p11, phase.x), phase.y);
 	if (!valid || !all(isfinite(reference)))
 		return valid;
 	// One shared magnitude keeps signed HDR distances bounded and invariant to common exposure changes.
@@ -35,8 +36,18 @@ bool GuidedResidual(float2 position, uint4 bounds, float3 reference, out float3 
 	if (!all(isfinite(weights)) || any(weights < 0.0) || !isfinite(normalization) || normalization <= 1e-6)
 		return true;
 	const float3 guided = (weights.x * r00 + weights.y * r10 + weights.z * r01 + weights.w * r11) / normalization;
-	// Poor optional guidance retains the valid bilinear estimate, never a zero neural edit.
-	if (all(isfinite(guided)))
+	const float3 guidedProxy = (weights.x * p00 + weights.y * p10 + weights.z * p01 + weights.w * p11) / normalization;
+	bool validGuided = all(isfinite(guided));
+#ifdef NR_PERIPHERAL_COMPRESSION
+	validGuided = validGuided && all(isfinite(guidedProxy));
+#endif
+	// Invalid optional guidance retains the valid bilinear estimate.
+	if (validGuided) {
 		residual = guided;
+		proxy = guidedProxy;
+		// The unnormalised weight sum retains poor-match confidence that normalization otherwise erases.
+		[branch] if (GuidedRejectionScale > 0.0)
+			residual *= smoothstep(0.0, 1.0, normalization * GuidedRejectionScale - 1.0);
+	}
 	return true;
 }

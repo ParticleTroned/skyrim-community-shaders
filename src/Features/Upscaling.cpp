@@ -376,6 +376,7 @@ namespace FSRTemporalTuningPolicy
 	OP(neuralRenderingPeripheralCompressionPercent) \
 	OP(neuralRenderingPauseInCombat)                \
 	OP(neuralRenderingGuidedReconstruction)         \
+	OP(neuralRenderingConfidenceRejectionPercent)   \
 	OP(neuralRenderingModelResolutionPercent)       \
 	OP(neuralRenderingParallelEyes)                 \
 	OP(neuralRenderingPrewarmEnabled)               \
@@ -439,6 +440,7 @@ void from_json(const json& a_json, Upscaling::Settings& a_settings)
 	if (const auto value = a_json.find("neuralRenderingStyle"); value != a_json.end() && !NeuralRendering::ParseBoundedInteger(*value, 0u, 3u))
 		throw std::invalid_argument("NR style must be 0 (Standard), 1 (Natural) or 2 (Cinematic); legacy 3 maps to Cinematic");
 	for (const auto& [name, minimum, maximum] : {
+			 std::tuple{ "neuralRenderingConfidenceRejectionPercent", 0u, NeuralRendering::kMaximumGuidedConfidenceRejectionPercent },
 			 std::tuple{ "neuralRenderingCentralAreaPercent", NeuralRendering::kMinimumCentralAreaPercent, NeuralRendering::kMaximumCentralAreaPercent },
 			 std::tuple{ "neuralRenderingCentralFeatherPixels", 0u, NeuralRendering::kMaximumCentralFeatherPixels } }) {
 		if (const auto value = a_json.find(name); value != a_json.end() && !NeuralRendering::ParseBoundedInteger(*value, minimum, maximum))
@@ -6778,6 +6780,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		add(a_settings.neuralRenderingDirectCommit);
 		add(NeuralRendering::EffectiveModelResolutionPercent(mode, a_settings.neuralRenderingModelResolutionPercent));
 		add(a_settings.neuralRenderingGuidedReconstruction);
+		// Reconstruction-only confidence tuning preserves native resources and temporal history.
 		add(a_settings.neuralRenderingPeripheralCompressionPercent);
 		add(a_settings.neuralRenderingPauseInCombat);
 		add(a_settings.neuralRenderingPressureResolutionEnabled);
@@ -19098,7 +19101,14 @@ namespace
 		DrawNeuralIntegerSetting("Peripheral compression", settings.neuralRenderingPeripheralCompressionPercent,
 			0, NeuralRendering::kMaximumPeripheralCompressionPercent, "%d%%");
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("100% compresses the whole view for maximum performance savings; 0% turns it off. Default 25% compresses the outer band. Increasing the percentage extends this band inward toward the centre, following the FOV mask shape or the rectangular view without FOV.");
+			ImGui::TextUnformatted("100% compresses the whole view for maximum performance savings; 0% turns it off. Increasing the percentage extends the compressed band inward, following the FOV mask shape or the rectangular view without FOV.");
+		{
+			auto guard = Util::DisableGuard(!settings.neuralRenderingGuidedReconstruction);
+			DrawNeuralIntegerSetting("NR confidence rejection", settings.neuralRenderingConfidenceRejectionPercent,
+				0, NeuralRendering::kMaximumGuidedConfidenceRejectionPercent, "%d%%");
+			Util::AddTooltip("Fade NR changes where source matches are poor. 0% disables rejection; 100% gives the strongest protection and may reduce enhancement. Requires a working image reduced by NR resolution or compression, and Improve low-resolution NR (enabled by default; toggle visible in Debug). Applies on release.",
+				ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+		}
 	}
 
 	void DrawNeuralRuntimeSettings(Upscaling::Settings& settings, bool showDebugControls)

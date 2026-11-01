@@ -31,6 +31,7 @@ cbuffer ModelResolutionConstants : register(b0)
 	uint SelectionMode;
 	uint OutputStorageFormat;
 	uint SelectedOutput;
+	float GuidedRejectionScale;
 	float4 SelectionBounds;
 };
 

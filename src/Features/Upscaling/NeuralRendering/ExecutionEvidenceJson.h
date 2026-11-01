@@ -94,6 +94,7 @@ namespace NeuralRendering::Evidence
 			{ "target", ExtentJson(value->target) }, { "unpackedModel", ExtentJson(value->unpackedModel) },
 			{ "basicFilter", "bilinear" }, { "enabled", value->enabled },
 			{ "packed", value->packed }, { "matchedReferenceDomain", value->matchedReferenceDomain },
+			{ "confidenceRejectionPercent", value->confidenceRejectionPercent },
 			{ "kernel", value->decision.mode == GuidedReconstructionMode::GuidedLowResolution ? Json("2x2") : Json(nullptr) } };
 	}
 #endif

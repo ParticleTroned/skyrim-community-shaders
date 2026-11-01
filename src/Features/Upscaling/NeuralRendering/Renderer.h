@@ -268,6 +268,7 @@ namespace NeuralRendering
 		ComputeSubrect actorSelectionSupport{};
 		std::uint32_t modelResolutionPercent = 100;
 		bool guidedReconstructionEnabled = false;
+		std::uint32_t guidedConfidenceRejectionPercent = 0;
 		std::uint32_t peripheralCompressionPercent = 0;
 		PeripheralMask peripheralMask{};
 		PeripheralCompressionPlan peripheralCompression{};

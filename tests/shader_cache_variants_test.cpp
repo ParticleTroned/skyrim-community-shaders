@@ -1,4 +1,5 @@
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
+#include "Utils/ShaderTrackingKeyCache.h"
 #include <Windows.h>
 #include <ankerl/unordered_dense.h>
 
@@ -73,6 +74,7 @@ namespace RE
 			Type get() const { return value; }
 		} shaderType{ Lighting };
 		std::string fxpFilename = "Shared";
+		std::array<D3D_SHADER_MACRO, 64> macros{};
 	};
 }
 
@@ -99,9 +101,26 @@ namespace SIE
 
 	namespace SShaderCache
 	{
-		std::string GetShaderString(ShaderClass a_class, const RE::BSShader& a_shader, uint32_t, bool)
+		unsigned keyBuilds = 0;
+		void GetShaderDefines(const RE::BSShader& a_shader, uint32_t, std::span<D3D_SHADER_MACRO> a_defines)
 		{
-			return a_shader.fxpFilename + std::to_string(static_cast<int>(a_class));
+			std::copy(a_shader.macros.begin(), a_shader.macros.end(), a_defines.begin());
+		}
+		std::string GetShaderString(ShaderClass a_class, const RE::BSShader& a_shader, uint32_t, bool,
+			const std::array<D3D_SHADER_MACRO, 64>& a_defines)
+		{
+			++keyBuilds;
+			auto key = a_shader.fxpFilename + std::to_string(static_cast<int>(a_class));
+			for (const auto& macro : a_defines) {
+				if (!macro.Name)
+					break;
+				key += ":" + std::string(macro.Name) + "=" + (macro.Definition ? macro.Definition : "");
+			}
+			return key;
+		}
+		std::string GetShaderString(ShaderClass a_class, const RE::BSShader& a_shader, uint32_t a_descriptor, bool a_hashKey)
+		{
+			return GetShaderString(a_class, a_shader, a_descriptor, a_hashKey, a_shader.macros);
 		}
 		std::wstring GetDiskPath(const std::string& a_name, uint32_t a_descriptor, ShaderClass a_class)
 		{
@@ -185,6 +204,8 @@ namespace globals
 	{
 		bool developer = false;
 		bool IsDeveloperMode() const { return developer; }
+		uint64_t definesGeneration = 0;
+		uint64_t GetShaderDefinesGeneration() const { return definesGeneration; }
 	} stateStorage;
 	struct Deferred
 	{
@@ -239,6 +260,84 @@ namespace
 	{
 		a_cache.activeShaderCaptureFramesRemaining.store(1);
 		a_cache.TickActiveShaderCapture(a_menuVisible);
+	}
+
+	void TestTrackingKeyInputs()
+	{
+		Util::ShaderTrackingKeyCache keys;
+		unsigned builds = 0;
+		const auto build = [&] { return std::to_string(++builds); };
+		char name[] = "FEATURE_A";
+		char value[] = "0";
+		std::array<D3D_SHADER_MACRO, 3> macros{ { { name, value }, { nullptr, nullptr }, { "IGNORED", nullptr } } };
+		Require(keys.GetOrCreate(1, "Lighting", macros, build) == "1");
+		Require(keys.GetOrCreate(1, "Lighting", macros, build) == "1");
+		value[0] = '1';
+		Require(keys.GetOrCreate(1, "Lighting", macros, build) == "2");
+		name[8] = 'B';
+		Require(keys.GetOrCreate(1, "Lighting", macros, build) == "3");
+		macros[1] = { "ENABLESSR", nullptr };
+		macros[2] = { nullptr, nullptr };
+		Require(keys.GetOrCreate(1, "Lighting", macros, build) == "4");
+		macros[1].Definition = "";
+		Require(keys.GetOrCreate(1, "Lighting", macros, build) == "4");
+		Require(keys.GetOrCreate(1, "OtherSource", macros, build) == "5");
+		Require(keys.GetOrCreate(2, "OtherSource", macros, build) == "6");
+		macros[1] = { nullptr, nullptr };
+		Require(keys.GetOrCreate(1, "OtherSource", macros, build) == "7");
+		keys.Clear();
+		Require(keys.GetOrCreate(1, "OtherSource", macros, build) == "8");
+	}
+
+	void TestTrackingKeyRetention()
+	{
+		Util::ShaderTrackingKeyCache keys;
+		unsigned builds = 0;
+		const auto build = [&] { return std::to_string(++builds); };
+		for (std::uint64_t id = 0; id < Util::ShaderTrackingKeyCache::kMaxEntries; ++id)
+			keys.GetOrCreate(id, "Lighting", {}, build);
+		bool threw = false;
+		try {
+			keys.GetOrCreate(Util::ShaderTrackingKeyCache::kMaxEntries, "Lighting", {}, []() -> std::string {
+				throw std::runtime_error("injected key-build failure");
+			});
+		} catch (const std::runtime_error&) {
+			threw = true;
+		}
+		Require(threw && keys.GetOrCreate(0, "Lighting", {}, build) == "1");
+		const auto last = keys.GetOrCreate(Util::ShaderTrackingKeyCache::kMaxEntries, "Lighting", {}, build);
+		Require(builds == Util::ShaderTrackingKeyCache::kMaxEntries + 1);
+		keys.GetOrCreate(0, "Lighting", {}, build);
+		Require(builds == Util::ShaderTrackingKeyCache::kMaxEntries + 2);
+		Require(keys.GetOrCreate(Util::ShaderTrackingKeyCache::kMaxEntries, "Lighting", {}, build) == last);
+	}
+
+	void TestTrackingKeyIntegration()
+	{
+		ShaderCache cache;
+		RE::BSShader shader;
+		globals::state->developer = false;
+		SIE::SShaderCache::keyBuilds = 0;
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::keyBuilds == 0 && cache.activeShaders.empty());
+		globals::state->developer = true;
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::keyBuilds == 1 && cache.activeShaders.size() == 1);
+		Require(cache.activeShaders.begin()->second.drawCalls == 2);
+		shader.macros[0] = { "ENABLESSR", nullptr };
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::keyBuilds == 2 && cache.activeShaders.size() == 2);
+		++globals::state->definesGeneration;
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::keyBuilds == 3);
+		globals::state->developer = false;
+		cache.BeginActiveShaderCapture();
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::keyBuilds == 3 && cache.capturedShaders.size() == 1);
+		std::thread bulkLoad([&] { cache.TrackActiveShader(ShaderClass::Pixel, shader, 99); });
+		bulkLoad.join();
+		Require(SIE::SShaderCache::keyBuilds == 3 && cache.capturedShaders.size() == 1);
 	}
 
 	void TestQueueWithSharedBytecode()
@@ -507,6 +606,9 @@ namespace
 int main()
 {
 	try {
+		TestTrackingKeyInputs();
+		TestTrackingKeyRetention();
+		TestTrackingKeyIntegration();
 		TestQueueWithSharedBytecode();
 		TestCaptureAndClearVariants(false);
 		TestCaptureAndClearVariants(true);

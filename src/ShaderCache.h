@@ -23,6 +23,7 @@
 #include "Utils/ContentHash.h"
 #include "Utils/ShaderAllocation.h"
 #include "Utils/ShaderContentReuse.h"
+#include "Utils/ShaderTrackingKeyCache.h"
 #include "Utils/WinApi.h"
 
 using namespace std::chrono;
@@ -1030,6 +1031,8 @@ namespace SIE
 		};
 
 		ankerl::unordered_dense::map<std::string, ActiveShaderInfo> activeShaders;
+		Util::ShaderTrackingKeyCache activeShaderKeys;
+		uint64_t activeShaderKeysDefinesGeneration = 0;
 		mutable std::mutex activeShadersMutex;
 
 		void TrackActiveShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor);

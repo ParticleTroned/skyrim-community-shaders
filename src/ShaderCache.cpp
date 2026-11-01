@@ -6156,8 +6156,18 @@ namespace SIE
 		if (!developerMode && !capturing)
 			return;
 
-		auto key = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
+		std::array<D3D_SHADER_MACRO, 64> defines{};
+		SShaderCache::GetShaderDefines(shader, descriptor, std::span{ defines });
 		std::lock_guard lock(activeShadersMutex);
+		const auto definesGeneration = globals::state->GetShaderDefinesGeneration();
+		if (definesGeneration != activeShaderKeysDefinesGeneration) {
+			activeShaderKeys.Clear();
+			activeShaderKeysDefinesGeneration = definesGeneration;
+		}
+		const auto taskId = ShaderCompilationTask::MakeId(shaderClass, shader.shaderType.get(), descriptor);
+		const auto& key = activeShaderKeys.GetOrCreate(taskId, shader.fxpFilename, defines, [&] {
+			return SShaderCache::GetShaderString(shaderClass, shader, descriptor, true, defines);
+		});
 
 		auto initializeInfo = [&](ActiveShaderInfo& info) {
 			info.key = key;
@@ -6184,7 +6194,6 @@ namespace SIE
 
 		if (capturing) {
 			// Shared bytecode can back several runtime descriptors and disk paths.
-			const auto taskId = ShaderCompilationTask::MakeId(shaderClass, shader.shaderType.get(), descriptor);
 			auto [it, inserted] = capturedShaders.try_emplace(taskId);
 			if (inserted)
 				initializeInfo(it->second);

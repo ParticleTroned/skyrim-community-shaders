@@ -144,14 +144,14 @@ class PreparedSelectionContract(unittest.TestCase):
         bridge = read("src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp")
         descriptor = json.loads(re.search(r'kNeuralRenderingDescriptor = R"nr\((.*?)\)nr"', bridge, re.S).group(1))
         properties = descriptor["outputSchema"]["properties"]["neuralRendering"]["properties"]
-        self.assertEqual(properties["apiVersion"]["const"], 11)
+        self.assertEqual(properties["apiVersion"]["const"], 12)
         last_request = properties["modelResolution"]["properties"]["lastRequest"]["properties"]
         self.assertEqual(last_request["selectedOutput"]["type"], "boolean")
         self.assertIn("actors and packed crops", last_request["sharedInputs"]["description"])
         transport = properties["sourceTransport"]["properties"]
         self.assertEqual(transport["schemaVersion"]["const"], 4)
         self.assertEqual(transport["lastModelOutputSelected"]["type"], "boolean")
-        self.assertIn("API-v11 NR runtime", descriptor["description"])
+        self.assertIn("NGX SDK NR runtime", descriptor["description"])
         self.assertIn("latest request's completed-selection flag", descriptor["description"])
         runtime = properties["characterRendering"]["properties"]["runtime"]["properties"]
         early_bounds = runtime["earlyMaskBounds"]["description"]
@@ -161,7 +161,7 @@ class PreparedSelectionContract(unittest.TestCase):
         compatibility_fence = runtime["eyes"]["items"]["properties"]["maskRoiReadbackFenceValue"]["description"]
         self.assertIn("always zero", compatibility_fence)
         self.assertIn("D3D11 query completion separately", compatibility_fence)
-        self.assertIn('{ "apiVersion", 11 }', bridge)
+        self.assertIn('{ "apiVersion", 12 }', bridge)
         self.assertIn('{ "selectedOutput", snapshot.modelOutputSelected }', bridge)
         renderer = read("src/Features/Upscaling/NeuralRendering/Renderer.cpp")
         start = renderer.index("void Renderer::State::SetRequestTelemetryLocked(")

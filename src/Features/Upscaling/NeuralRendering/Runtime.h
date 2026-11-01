@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -38,7 +39,6 @@ namespace NeuralRendering
 		IdentityFailed,
 		Ready,
 		InitializationFailed,
-		CoreUnavailable,
 		ParameterAllocationFailed,
 		Initialized,
 		FeatureConfigurationChanged,
@@ -52,7 +52,7 @@ namespace NeuralRendering
 	enum class RuntimeTrust
 	{
 		Unknown,
-		VersionAccepted
+		OfficialPackageVerified
 	};
 
 	enum class RuntimeFailureStage
@@ -64,7 +64,6 @@ namespace NeuralRendering
 		Load,
 		Identity,
 		Initialization,
-		ParameterCore,
 		ParameterAllocation,
 		FeatureConfiguration,
 		FeatureCreate,
@@ -72,20 +71,6 @@ namespace NeuralRendering
 		FeatureRelease,
 		Shutdown,
 		UnsafeAbandon
-	};
-
-	enum class ParameterCoreTrust
-	{
-		Unknown,
-		RuntimeIdentityMatched,
-		AuthenticodeVerified
-	};
-
-	enum class ParameterCoreSource
-	{
-		None,
-		Runtime,
-		DriverStore
 	};
 
 	struct Tuning
@@ -174,18 +159,12 @@ namespace NeuralRendering
 		[[nodiscard]] bool SupportsNetworkSelection() const;
 		/** Resolves a saved selection without changing provider ownership or loading another DLL. */
 		[[nodiscard]] std::uint32_t GetNetworkPreset(std::uint32_t selection) const;
-		[[nodiscard]] std::filesystem::path ParameterCorePath() const;
-		[[nodiscard]] std::string ParameterCoreHash() const;
-		[[nodiscard]] ParameterCoreTrust CoreTrust() const;
-		[[nodiscard]] ParameterCoreSource CoreSource() const;
 		/** Formats the latest successful evaluation on demand, or returns the current lifecycle/failure detail. */
 		[[nodiscard]] std::string Detail() const;
 		[[nodiscard]] std::uint32_t NgxResult() const;
 		/** Only documented creation failures permit a safely retired smaller retry. */
 		[[nodiscard]] CapacityFailure CreationCapacityFailure() const;
 		[[nodiscard]] std::uint64_t SuccessfulFrames() const;
-		[[nodiscard]] std::uint32_t LastPathProxyHits() const;
-		[[nodiscard]] bool LastPathProxyInstalled() const;
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		struct LifecycleCounts
@@ -224,26 +203,13 @@ namespace NeuralRendering
 			bool featureUpscaling = false;
 			UpscalingDLSS::Extent color{}, guides{}, output{}, controlMask{};
 			ComputeSubrect outputSubrect{};
-			std::uint32_t pathProxyHits = 0;
 		};
 
-		struct RuntimeExports
-		{
-			void* initialize = nullptr;
-			void* createFeature = nullptr;
-			void* evaluateFeature = nullptr;
-			void* releaseFeature = nullptr;
-			void* shutdown = nullptr;
-		};
+		struct Backend;
 
-		struct ParameterCoreExports
-		{
-			void* allocateParameters = nullptr;
-			void* destroyParameters = nullptr;
-		};
+		Runtime();
 
-		Runtime() = default;
-
+		bool PrepareScratchLocked(std::uint32_t slot);
 		bool PrepareFeatureLocked(ID3D12GraphicsCommandList*, std::uint32_t,
 			const NativeEvaluationLayout&, ID3D12Resource*, ID3D12Resource*, bool,
 			RuntimeExecutionEvidence*, std::uint32_t);
@@ -263,19 +229,11 @@ namespace NeuralRendering
 		std::uint64_t allocationVersion_ = 0;
 		std::optional<TuningLimits> tuningLimits_;
 		std::optional<bool> networkSelectionSupported_;
-		std::filesystem::path corePath_;
-		std::string coreHash_;
-		ParameterCoreTrust coreTrust_ = ParameterCoreTrust::Unknown;
-		ParameterCoreSource coreSource_ = ParameterCoreSource::None;
 		std::string detail_;
 		std::optional<EvaluationSuccessDetail> evaluationSuccessDetail_;
-		void* module_ = nullptr;
-		void* coreModule_ = nullptr;
-		void* coreFile_ = nullptr;
+		std::unique_ptr<Backend> backend_;
 		void* device_ = nullptr;
 		void* parameters_ = nullptr;
-		RuntimeExports runtimeExports_{};
-		ParameterCoreExports parameterCoreExports_{};
 		std::array<void*, kFeatureSlotCount> featureHandles_{};
 		std::array<FeatureConfiguration, kFeatureSlotCount> featureConfigurations_{};
 		std::atomic<std::uint32_t> firstEvaluationResetMask_{ 0 };
@@ -286,11 +244,7 @@ namespace NeuralRendering
 		RuntimeTrust trust_ = RuntimeTrust::Unknown;
 		RuntimeFailureStage failureStage_ = RuntimeFailureStage::None;
 		std::uint32_t ngxResult_ = 0;
-		std::uint32_t applicationId_ = 0;
-		std::uint32_t apiVersion_ = 0;
-		std::uint32_t lastPathProxyHits_ = 0;
 		std::uint64_t successfulFrames_ = 0;
-		bool lastPathProxyInstalled_ = false;
 		bool probeLogEmitted_ = false;
 		bool initializationLogEmitted_ = false;
 		bool featureCreateLogEmitted_ = false;
@@ -302,6 +256,4 @@ namespace NeuralRendering
 	[[nodiscard]] const char* ToString(RuntimeStatus a_status);
 	[[nodiscard]] const char* ToString(RuntimeTrust a_trust);
 	[[nodiscard]] const char* ToString(RuntimeFailureStage a_stage);
-	[[nodiscard]] const char* ToString(ParameterCoreTrust a_trust);
-	[[nodiscard]] const char* ToString(ParameterCoreSource a_source);
 }

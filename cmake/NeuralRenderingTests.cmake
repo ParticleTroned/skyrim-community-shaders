@@ -384,7 +384,6 @@ set(_neural_selection_headers
     "${_neural_selection_test_dir}/neural_source_capture_under_test.h"
     "${_neural_selection_test_dir}/neural_source_admission_under_test.h"
     "${_neural_selection_test_dir}/neural_source_support_under_test.h"
-    "${_neural_selection_test_dir}/neural_authored_mode_under_test.h"
     "${_neural_selection_test_dir}/neural_empty_preflight_under_test.h"
     "${_neural_selection_test_dir}/neural_full_compute_subrect_under_test.h"
     "${_neural_selection_test_dir}/neural_prepared_slot_under_test.h"
@@ -518,18 +517,27 @@ set(_neural_native_headers "${_neural_native_creation_dir}/neural_native_key_und
     "${_neural_native_creation_dir}/neural_runtime_logging_under_test.h"
     "${_neural_native_creation_dir}/neural_runtime_detail_under_test.h"
     "${_neural_native_creation_dir}/neural_runtime_reset_under_test.h"
-    "${_neural_native_creation_dir}/neural_evaluation_success_detail_under_test.h")
+    "${_neural_native_creation_dir}/neural_evaluation_success_detail_under_test.h"
+    "${_neural_native_creation_dir}/neural_sdk_parameters_under_test.h"
+    "${_neural_native_creation_dir}/neural_ngx_initialize_under_test.h"
+    "${_neural_native_creation_dir}/neural_ngx_shutdown_under_test.h")
 add_custom_command(OUTPUT ${_neural_native_headers}
     COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-        "-DOUTPUT_DIRECTORY=${_neural_native_creation_dir}" -P
+        "-DOUTPUT_DIRECTORY=${_neural_native_creation_dir}"
+        "-DNR_SDK_INCLUDE_DIR=${NEURAL_RENDERING_SDK_INCLUDE_DIR}" -P
         "${PROJECT_SOURCE_DIR}/tests/extract_neural_native_creation.cmake"
     DEPENDS src/Features/Upscaling/NeuralRendering/Runtime.cpp
         src/Features/Upscaling/NeuralRendering/Runtime.h
+        "${NEURAL_RENDERING_SDK_INCLUDE_DIR}/nvsdk_ngx_defs_dlssnr.h"
+        extern/Streamline-DX12/external/ngx-sdk/include/nvsdk_ngx_defs.h
         tests/extract_neural_native_creation.cmake tests/extract_source_region.cmake
     VERBATIM)
 add_controller_test(neural_native_creation_test NeuralNativeCreation tests/neural_native_creation_test.cpp)
 target_sources(neural_native_creation_test PRIVATE ${_neural_native_headers})
 target_include_directories(neural_native_creation_test PRIVATE "${_neural_native_creation_dir}")
+add_controller_test(neural_ngx_initialization_test NeuralNgxInitialization tests/neural_ngx_initialization_test.cpp)
+target_sources(neural_ngx_initialization_test PRIVATE ${_neural_native_headers})
+target_include_directories(neural_ngx_initialization_test PRIVATE "${_neural_native_creation_dir}")
 
 add_test(NAME NeuralCachePrewarmWorkflow COMMAND "${Python3_EXECUTABLE}"
     "${PROJECT_SOURCE_DIR}/tests/neural_cache_prewarm_workflow_test.py")

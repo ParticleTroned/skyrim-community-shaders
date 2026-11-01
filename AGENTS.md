@@ -142,6 +142,7 @@ contradict this policy.
 -   Centralize durable constants and UI theme values instead of repeating magic numbers.
 -   Reuse utilities under `src/Utils/` for serialization, formatting, file paths, game settings, UI, and D3D behavior. Reuse cached `globals::game::*` accessors instead of introducing parallel singleton lookups when the cached accessor is valid at that lifecycle point.
 -   Include what is used. Prefer forward declarations in headers and full includes in implementation files where practical.
+-   Preserve the original bytes and notices of pinned vendor SDK inputs. Do not format or normalize `extern/NeuralRenderingSDK/`; its license is verified against the official package. Fetch proprietary NR headers into the verified build cache instead of committing SDK source.
 -   Use callbacks or narrow interfaces between UI components rather than widening private implementation APIs.
 -   Pair every successful `ImGui::BeginTable()` with `ImGui::EndTable()` and use RAII for ImGui style/state changes.
 

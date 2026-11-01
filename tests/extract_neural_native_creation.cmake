@@ -8,8 +8,12 @@ extract_between("${source}" "bool Runtime::FeatureConfiguration::Matches("
     "Runtime& Runtime::Instance()" "neural_native_key_under_test.h")
 extract_between("${source}" "bool Runtime::PrepareFeature("
     "bool Runtime::ResetFeatureLocked(" "neural_native_creation_under_test.h")
+extract_between("${source}" "bool Runtime::Initialize("
+    "bool Runtime::PrepareScratchLocked(" "neural_ngx_initialize_under_test.h")
+extract_between("${source}" "bool Runtime::ShutdownLocked()"
+    "void Runtime::AbandonLocked()" "neural_ngx_shutdown_under_test.h")
 extract_between("${source}" "struct InstalledRuntimeMetadata"
-    "bool QueryFileIdentity(" "neural_installed_metadata_under_test.h")
+    "bool ComputeFileSha256(" "neural_installed_metadata_under_test.h")
 extract_between("${source}" "TuningLimits Runtime::GetTuningLimits(std::uint32_t selection) const"
     "std::string Runtime::Version() const" "neural_runtime_tuning_under_test.h")
 extract_between("${source}" "void Runtime::SetFailureLocked("
@@ -20,4 +24,10 @@ extract_between("${source}" "bool Runtime::ResetFeatureLocked("
     "bool Runtime::HasCompatibleFeature(" "neural_runtime_reset_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/Runtime.h" header)
 extract_between("${header}" "struct EvaluationSuccessDetail\n"
-    "struct RuntimeExports\n" "neural_evaluation_success_detail_under_test.h")
+    "struct Backend;\n" "neural_evaluation_success_detail_under_test.h")
+
+file(READ "${NR_SDK_INCLUDE_DIR}/nvsdk_ngx_defs_dlssnr.h" nr_sdk)
+file(READ "${PROJECT_ROOT}/extern/Streamline-DX12/external/ngx-sdk/include/nvsdk_ngx_defs.h" ngx_sdk)
+string(REGEX MATCHALL "#define[ \t]+NVSDK_NGX_Parameter_[^\r\n]+" sdk_parameters "${nr_sdk}\n${ngx_sdk}")
+list(JOIN sdk_parameters "\n" sdk_parameter_header)
+file(WRITE "${OUTPUT_DIRECTORY}/neural_sdk_parameters_under_test.h" "#pragma once\n${sdk_parameter_header}\n")

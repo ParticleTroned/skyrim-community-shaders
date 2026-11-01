@@ -2,8 +2,8 @@
 
 ## DLL development without runtime downloads
 
-`SKIP_RUNTIME_DOWNLOADS=ON` allows DLL development when the FidelityFX or
-Streamline runtime payloads are unavailable. It defaults to `OFF`. This
+`SKIP_RUNTIME_DOWNLOADS=ON` allows DLL development when the FidelityFX, Streamline or
+Neural Rendering runtime payloads are unavailable. It defaults to `OFF`. This
 option does not supply other dependencies: the compiler, SDK headers,
 submodules and vcpkg dependencies must still be available.
 
@@ -30,6 +30,10 @@ Streamline requires a verified cached archive and a matching extraction
 stamp before staging existing production DLLs and original notices. Missing
 or invalid caches remain on disk and are reported as unavailable payloads.
 Only available files become staging inputs or build dependencies.
+Neural Rendering similarly requires the verified cached SDK archive and
+matching extraction stamp, plus the pinned production DLL and original
+license. Its compile-time header must already exist in the verified SDK
+cache for offline builds. Populate that cache once with downloads enabled.
 
 If required payloads are unavailable, either automatic zip option fails
 configuration. Full installation and runtime-component installation fail

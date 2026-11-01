@@ -153,10 +153,6 @@ namespace NeuralRendering
 		std::string runtimePath;
 		std::string runtimeHash;
 		std::string runtimeVersion;
-		std::string parameterCorePath;
-		std::string parameterCoreHash;
-		std::string parameterCoreTrust = "unknown";
-		std::string parameterCoreSource = "none";
 		RendererStage lastCompletedStage = RendererStage::None;
 		RendererStage failureStage = RendererStage::None;
 		std::int32_t lastResult = 0;
@@ -193,9 +189,7 @@ namespace NeuralRendering
 		std::uint64_t successes = 0;
 		std::uint64_t failures = 0;
 		std::uint64_t runtimeSuccessfulFrames = 0;
-		std::uint32_t runtimeProxyHits = 0;
 		bool featureUpscaling = false;
-		bool runtimeProxyInstalled = false;
 		bool failureLatched = false;
 		bool quarantined = false;
 		bool outputCommitted = false;

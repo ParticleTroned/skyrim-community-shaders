@@ -550,6 +550,9 @@ namespace NeuralRendering
 		static Runtime instance;
 		return instance;
 	}
+	struct Runtime::Backend
+	{};
+	Runtime::Runtime() = default;
 	Runtime::~Runtime() = default;
 	TuningLimits Runtime::GetTuningLimits(std::uint32_t selection) const { return GetTuningLimitsForNetwork(runtimeTuningLimits, ResolveNetworkPreset(selection, networkSelectionSupported)); }
 	bool Runtime::SupportsNetworkSelection() const { return networkSelectionSupported; }

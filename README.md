@@ -328,23 +328,38 @@ The build downloads the production x64 DLLs directly from
 [NVIDIA's Streamline 2.14.16 SDK release](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.16)
 and verifies the archive's pinned SHA-256 in
 [Streamline-Runtime.cmake](cmake/Streamline-Runtime.cmake). These runtime DLLs are
-not checked into this repository. The same archive supplies all five license
+not checked into this repository. The same archive supplies all seven license
 and notice files, copied without modification beside the DLLs under
 `Shaders/Upscaling/Streamline/` in both Core and AIO packages:
 
 -   `license.txt` — Streamline source license.
 -   `nvngx_dlss.license.txt` — NVIDIA RTX SDK terms for DLSS/NGX.
+-   `nis.license.txt` — NVIDIA Image Scaling notice.
 -   `reflex.license.txt` — NVIDIA Reflex SDK terms.
 -   `3rd-party-licenses.md` — Streamline third-party notices.
 -   `NVIDIA Nsight Graphics SDK License (Apache 2.0).txt` — Nsight Graphics SDK terms.
+-   `NVIDIA Nsight Perf SDK License (28Sept2022).pdf` — Nsight Perf SDK terms.
 
 The `StreamlineRuntime` CMake install component includes these notices with its
 DLLs. Source builds obtain the Streamline source license and third-party notices
 through the pinned [Streamline submodule](extern/Streamline-DX12).
 
-The public 2.14.16 SDK archive does not contain `sl.dlss_nr.dll`,
-`nvngx_dlssnr.dll`, or their implementation sources. This update does not package
-DLSS Neural Rendering or add support for it.
+Neural Rendering uses NVIDIA's separate `ngx_sdk_dlnr` package, also used by
+[RTX Remix 1.6.1](https://github.com/NVIDIAGameWorks/rtx-remix/releases/tag/remix-1.6.1).
+[NeuralRenderingSDKPin.cmake](cmake/NeuralRenderingSDKPin.cmake) pins its official
+download, archive SHA-256, runtime SHA-256 and original license. Core and AIO
+packages include `nvngx_dlssnr.dll` and its unchanged
+`nvngx_dlssnr.license.txt` beside the Streamline files. Source builds obtain
+the original NR parameter definitions from the verified SDK cache. The
+complete license is also retained in
+[`extern/NeuralRenderingSDK/`](extern/NeuralRenderingSDK/).
+
+The NVIDIA runtime remains proprietary and subject to its own terms; the
+project's GPL and exceptions do not relicense it. NR uses the documented NGX
+D3D12 SDK with CSX's project ID. Unsupported hardware, drivers and SDK
+operations retain normal rendering. See the
+[NVIDIA SDK distribution guide](docs/development/nvidia-sdk-distribution.md)
+for packaging requirements and release obligations.
 
 ### Texture streaming reference
 

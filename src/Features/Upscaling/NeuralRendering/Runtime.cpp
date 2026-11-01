@@ -1,51 +1,32 @@
 #include "Runtime.h"
+#include "../NvidiaProject.h"
 #include "D3D12Interop.h"
 #include "DevelopmentDiagnostics.h"
-
 #include "Util.h"
 
-#include <Psapi.h>
-#include <Softpub.h>
 #include <Windows.h>
-#include <Wintrust.h>
-
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <bcrypt.h>
 #include <chrono>
 #include <cmath>
-#include <cstring>
-#include <cwctype>
 #include <d3d12.h>
 #include <exception>
 #include <format>
 #include <iomanip>
-#include <memory>
 #include <nvsdk_ngx.h>
+#include <nvsdk_ngx_defs_dlssnr.h>
 #include <sstream>
-#include <utility>
 #include <vector>
+#include <wrl/client.h>
 
 namespace NeuralRendering
 {
 	namespace
 	{
 		constexpr wchar_t kRuntimeName[] = L"nvngx_dlssnr.dll";
-		constexpr REL::Version kMinimumRuntimeVersion{ 310, 8, 0, 0 };
-		constexpr std::array<std::wstring_view, 2> kParameterCoreBasenames{
-			L"nvngx.dll",
-			L"_nvngx.dll",
-		};
-		constexpr auto kFeatureDlssNr = static_cast<NVSDK_NGX_Feature>(18);
-		constexpr std::array<const char*, 5> kRequiredExports{
-			"NVSDK_NGX_D3D12_Init_Ext",
-			"NVSDK_NGX_D3D12_CreateFeature",
-			"NVSDK_NGX_D3D12_EvaluateFeature",
-			"NVSDK_NGX_D3D12_ReleaseFeature",
-			"NVSDK_NGX_D3D12_Shutdown1",
-		};
-
+		constexpr REL::Version kMinimumRuntimeVersion{ 310, 9, 16, 0 };
+		constexpr auto kFeatureDlssNr = NVSDK_NGX_Feature_DLSSNR;
 		class ScopedHandle
 		{
 		public:
@@ -75,300 +56,6 @@ namespace NeuralRendering
 
 		private:
 			HANDLE handle_ = INVALID_HANDLE_VALUE;
-		};
-
-		struct FileIdentity
-		{
-			DWORD volumeSerialNumber = 0;
-			DWORD fileIndexHigh = 0;
-			DWORD fileIndexLow = 0;
-			DWORD fileSizeHigh = 0;
-			DWORD fileSizeLow = 0;
-
-			[[nodiscard]] bool operator==(const FileIdentity&) const = default;
-		};
-
-		using GetUnsignedValue = unsigned int(NVSDK_CONV*)();
-		using InitD3D12 = NVSDK_NGX_Result(NVSDK_CONV*)(
-			unsigned long long, const wchar_t*, ID3D12Device*, NVSDK_NGX_Version,
-			const NVSDK_NGX_Parameter*);
-		using ShutdownD3D12 = NVSDK_NGX_Result(NVSDK_CONV*)(ID3D12Device*);
-		using AllocateParameters = NVSDK_NGX_Result(NVSDK_CONV*)(NVSDK_NGX_Parameter**);
-		using DestroyParameters = NVSDK_NGX_Result(NVSDK_CONV*)(NVSDK_NGX_Parameter*);
-		using CreateFeature = NVSDK_NGX_Result(NVSDK_CONV*)(
-			ID3D12GraphicsCommandList*, NVSDK_NGX_Feature, NVSDK_NGX_Parameter*,
-			NVSDK_NGX_Handle**);
-		using EvaluateFeature = NVSDK_NGX_Result(NVSDK_CONV*)(
-			ID3D12GraphicsCommandList*, const NVSDK_NGX_Handle*,
-			const NVSDK_NGX_Parameter*, PFN_NVSDK_NGX_ProgressCallback);
-		using ReleaseFeature = NVSDK_NGX_Result(NVSDK_CONV*)(NVSDK_NGX_Handle*);
-		using GetModuleFileNameWFunction = DWORD(WINAPI*)(HMODULE, LPWSTR, DWORD);
-
-		struct PathProxyInvocation
-		{
-			HMODULE runtimeModule = nullptr;
-			HMODULE callerModule = nullptr;
-			HMODULE retainedCallerModule = nullptr;
-			std::wstring spoofedPath;
-			std::atomic<std::uint32_t> hits = 0;
-		};
-
-		std::recursive_mutex g_pathProxyMutex;
-		std::shared_ptr<PathProxyInvocation> g_activePathProxy;
-		std::atomic<GetModuleFileNameWFunction> g_originalGetModuleFileNameW = nullptr;
-		HMODULE g_pathProxyRuntime = nullptr;
-		void** g_pathProxySlot = nullptr;
-		bool g_pathProxyHookInstalled = false;
-
-		DWORD WINAPI RuntimeCallerGetModuleFileNameW(HMODULE a_module, LPWSTR a_filename, DWORD a_size)
-		{
-			const auto invocation = std::atomic_load_explicit(
-				&g_activePathProxy, std::memory_order_acquire);
-			if (invocation && a_module == invocation->callerModule && a_filename && a_size &&
-				!invocation->spoofedPath.empty()) {
-				invocation->hits.fetch_add(1, std::memory_order_relaxed);
-				const DWORD length = static_cast<DWORD>(invocation->spoofedPath.size());
-				const DWORD copyLength = std::min(length, a_size - 1);
-				std::memcpy(a_filename, invocation->spoofedPath.data(), copyLength * sizeof(wchar_t));
-				a_filename[copyLength] = L'\0';
-				return copyLength < length ? a_size : length;
-			}
-
-			const auto original = g_originalGetModuleFileNameW.load(std::memory_order_acquire);
-			return original ? original(a_module, a_filename, a_size) : 0;
-		}
-
-		struct ImportSlotExchangeResult
-		{
-			bool exchanged = false;
-			bool protectionRestored = false;
-			bool rolledBack = false;
-		};
-
-		ImportSlotExchangeResult ProtectAndExchangeImportSlot(
-			void** a_slot, void* a_expected, void* a_value)
-		{
-			if (!a_slot || !a_expected || !a_value)
-				return {};
-			DWORD oldProtection = 0;
-			if (!VirtualProtect(a_slot, sizeof(*a_slot), PAGE_READWRITE, &oldProtection))
-				return {};
-			const auto previous = InterlockedCompareExchangePointer(
-				reinterpret_cast<void* volatile*>(a_slot), a_value, a_expected);
-			DWORD ignoredProtection = 0;
-			ImportSlotExchangeResult result{
-				.exchanged = previous == a_expected,
-				.protectionRestored = VirtualProtect(
-										  a_slot, sizeof(*a_slot), oldProtection, &ignoredProtection) != FALSE,
-			};
-			if (result.exchanged && !result.protectionRestored) {
-				const auto rollbackPrevious = InterlockedCompareExchangePointer(
-					reinterpret_cast<void* volatile*>(a_slot), a_expected, a_value);
-				result.rolledBack = rollbackPrevious == a_value;
-				DWORD ignoredRollbackProtection = 0;
-				result.protectionRestored = VirtualProtect(
-												a_slot, sizeof(*a_slot), oldProtection,
-												&ignoredRollbackProtection) != FALSE;
-			}
-			if (result.exchanged && result.protectionRestored && !result.rolledBack)
-				FlushInstructionCache(GetCurrentProcess(), a_slot, sizeof(*a_slot));
-			return result;
-		}
-
-		void* ReadImportSlot(void** a_slot) noexcept
-		{
-			// Pointer-sized aligned loads are atomic on the supported x64 runtime;
-			// unlike CMPXCHG this does not write to a read-only IAT page.
-			return a_slot ? *reinterpret_cast<void* volatile*>(a_slot) : nullptr;
-		}
-
-		void** FindGetModuleFileNameWImportSlot(HMODULE a_runtime)
-		{
-			if (!a_runtime)
-				return nullptr;
-			auto* base = reinterpret_cast<std::byte*>(a_runtime);
-			const auto* dosHeader = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-			if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE || dosHeader->e_lfanew <= 0)
-				return nullptr;
-			const auto* ntHeaders = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dosHeader->e_lfanew);
-			if (ntHeaders->Signature != IMAGE_NT_SIGNATURE)
-				return nullptr;
-
-			const std::size_t imageSize = ntHeaders->OptionalHeader.SizeOfImage;
-			const auto& imports = ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-			if (!imports.VirtualAddress || imports.VirtualAddress >= imageSize ||
-				imports.Size < sizeof(IMAGE_IMPORT_DESCRIPTOR)) {
-				return nullptr;
-			}
-
-			const std::size_t descriptorCount = imports.Size / sizeof(IMAGE_IMPORT_DESCRIPTOR);
-			auto* descriptor = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + imports.VirtualAddress);
-			for (std::size_t descriptorIndex = 0; descriptorIndex < descriptorCount && descriptor[descriptorIndex].Name; ++descriptorIndex) {
-				const auto& current = descriptor[descriptorIndex];
-				if (!current.OriginalFirstThunk || current.OriginalFirstThunk >= imageSize ||
-					!current.FirstThunk || current.FirstThunk >= imageSize) {
-					continue;
-				}
-
-				auto* names = reinterpret_cast<IMAGE_THUNK_DATA*>(base + current.OriginalFirstThunk);
-				auto* functions = reinterpret_cast<IMAGE_THUNK_DATA*>(base + current.FirstThunk);
-				for (std::size_t thunkIndex = 0;; ++thunkIndex) {
-					const auto nameOffset = current.OriginalFirstThunk + thunkIndex * sizeof(IMAGE_THUNK_DATA);
-					const auto functionOffset = current.FirstThunk + thunkIndex * sizeof(IMAGE_THUNK_DATA);
-					if (nameOffset + sizeof(IMAGE_THUNK_DATA) > imageSize ||
-						functionOffset + sizeof(IMAGE_THUNK_DATA) > imageSize ||
-						!names[thunkIndex].u1.AddressOfData) {
-						break;
-					}
-					if (IMAGE_SNAP_BY_ORDINAL(names[thunkIndex].u1.Ordinal))
-						continue;
-					const auto importOffset = static_cast<std::size_t>(names[thunkIndex].u1.AddressOfData);
-					if (importOffset + sizeof(IMAGE_IMPORT_BY_NAME) > imageSize)
-						continue;
-					const auto* import = reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(base + importOffset);
-					if (std::strcmp(reinterpret_cast<const char*>(import->Name), "GetModuleFileNameW") == 0)
-						return reinterpret_cast<void**>(&functions[thunkIndex].u1.Function);
-				}
-			}
-			return nullptr;
-		}
-
-		bool InstallRuntimeCallerPathHook(
-			HMODULE a_runtime, const std::filesystem::path& a_spoofedPath)
-		{
-			if (!a_runtime)
-				return false;
-
-			std::scoped_lock lock(g_pathProxyMutex);
-			const auto active = std::atomic_load_explicit(
-				&g_activePathProxy, std::memory_order_acquire);
-			if (g_pathProxyHookInstalled) {
-				return g_pathProxyRuntime == a_runtime && active &&
-				       active->runtimeModule == a_runtime &&
-				       active->retainedCallerModule && g_pathProxySlot &&
-				       ReadImportSlot(g_pathProxySlot) ==
-				           reinterpret_cast<void*>(&RuntimeCallerGetModuleFileNameW) &&
-				       active->spoofedPath == a_spoofedPath.wstring();
-			}
-
-			void** slot = FindGetModuleFileNameWImportSlot(a_runtime);
-			if (!slot)
-				return false;
-			const auto original = reinterpret_cast<GetModuleFileNameWFunction>(
-				ReadImportSlot(slot));
-			if (!original || original == &RuntimeCallerGetModuleFileNameW)
-				return false;
-
-			auto invocation = std::make_shared<PathProxyInvocation>();
-			invocation->runtimeModule = a_runtime;
-			invocation->spoofedPath = a_spoofedPath.wstring();
-			if (!GetModuleHandleExW(
-					GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-						GET_MODULE_HANDLE_EX_FLAG_PIN,
-					reinterpret_cast<LPCWSTR>(&RuntimeCallerGetModuleFileNameW),
-					&invocation->retainedCallerModule)) {
-				return false;
-			}
-			invocation->callerModule = invocation->retainedCallerModule;
-
-			g_originalGetModuleFileNameW.store(original, std::memory_order_release);
-			std::atomic_store_explicit(
-				&g_activePathProxy, invocation, std::memory_order_release);
-			const auto exchange = ProtectAndExchangeImportSlot(
-				slot, reinterpret_cast<void*>(original),
-				reinterpret_cast<void*>(&RuntimeCallerGetModuleFileNameW));
-			if (!exchange.exchanged || !exchange.protectionRestored ||
-				exchange.rolledBack) {
-				if (ReadImportSlot(slot) ==
-					reinterpret_cast<void*>(&RuntimeCallerGetModuleFileNameW)) {
-					g_pathProxyRuntime = a_runtime;
-					g_pathProxySlot = slot;
-					g_pathProxyHookInstalled = true;
-					return false;
-				}
-				std::atomic_store_explicit(
-					&g_activePathProxy, std::shared_ptr<PathProxyInvocation>{},
-					std::memory_order_release);
-				return false;
-			}
-
-			g_pathProxyRuntime = a_runtime;
-			g_pathProxySlot = slot;
-			g_pathProxyHookInstalled = true;
-			return true;
-		}
-
-		bool UninstallRuntimeCallerPathHook(HMODULE a_runtime)
-		{
-			std::scoped_lock lock(g_pathProxyMutex);
-			if (!g_pathProxyHookInstalled)
-				return true;
-			if (!a_runtime || g_pathProxyRuntime != a_runtime)
-				return false;
-
-			const auto original =
-				g_originalGetModuleFileNameW.load(std::memory_order_acquire);
-			const auto active = std::atomic_load_explicit(
-				&g_activePathProxy, std::memory_order_acquire);
-			if (!original || !g_pathProxySlot || !active ||
-				!active->retainedCallerModule) {
-				return false;
-			}
-			const auto exchange = ProtectAndExchangeImportSlot(
-				g_pathProxySlot,
-				reinterpret_cast<void*>(&RuntimeCallerGetModuleFileNameW),
-				reinterpret_cast<void*>(original));
-			if (!exchange.exchanged ||
-				!exchange.protectionRestored || exchange.rolledBack) {
-				return false;
-			}
-
-			active->retainedCallerModule = nullptr;
-			g_pathProxySlot = nullptr;
-			g_pathProxyRuntime = nullptr;
-			g_pathProxyHookInstalled = false;
-			std::atomic_store_explicit(
-				&g_activePathProxy, std::shared_ptr<PathProxyInvocation>{},
-				std::memory_order_release);
-			// The proxy module was pinned before exchange and remains resident until
-			// process exit, covering callers that already fetched the proxy address.
-			return true;
-		}
-
-		class RuntimeCallerPathCall
-		{
-		public:
-			explicit RuntimeCallerPathCall(HMODULE a_runtime)
-			{
-				std::scoped_lock lock(g_pathProxyMutex);
-				invocation_ = std::atomic_load_explicit(
-					&g_activePathProxy, std::memory_order_acquire);
-				if (g_pathProxyHookInstalled &&
-					g_pathProxyRuntime == a_runtime && g_pathProxySlot &&
-					ReadImportSlot(g_pathProxySlot) ==
-						reinterpret_cast<void*>(&RuntimeCallerGetModuleFileNameW) &&
-					invocation_ && invocation_->runtimeModule == a_runtime &&
-					invocation_->retainedCallerModule) {
-					initialHits_ = invocation_->hits.load(std::memory_order_relaxed);
-					installed_ = true;
-				}
-			}
-
-			RuntimeCallerPathCall(const RuntimeCallerPathCall&) = delete;
-			RuntimeCallerPathCall& operator=(const RuntimeCallerPathCall&) = delete;
-
-			[[nodiscard]] bool IsInstalled() const { return installed_; }
-			[[nodiscard]] std::uint32_t Hits() const
-			{
-				return installed_ ?
-				           invocation_->hits.load(std::memory_order_relaxed) - initialHits_ :
-				           0;
-			}
-
-		private:
-			std::shared_ptr<PathProxyInvocation> invocation_;
-			std::uint32_t initialHits_ = 0;
-			bool installed_ = false;
 		};
 
 		std::filesystem::path ResolveRuntimePath(const std::filesystem::path& a_explicitPath)
@@ -435,24 +122,6 @@ namespace NeuralRendering
 		{
 			static const auto metadata = DiscoverInstalledRuntimeMetadata();
 			return metadata;
-		}
-
-		bool QueryFileIdentity(HANDLE a_file, FileIdentity& a_identity, std::string& a_error)
-		{
-			BY_HANDLE_FILE_INFORMATION information{};
-			if (!GetFileInformationByHandle(a_file, &information)) {
-				a_error = std::format(
-					"GetFileInformationByHandle failed with {}", GetLastError());
-				return false;
-			}
-			a_identity = {
-				.volumeSerialNumber = information.dwVolumeSerialNumber,
-				.fileIndexHigh = information.nFileIndexHigh,
-				.fileIndexLow = information.nFileIndexLow,
-				.fileSizeHigh = information.nFileSizeHigh,
-				.fileSizeLow = information.nFileSizeLow,
-			};
-			return true;
 		}
 
 		bool ComputeFileSha256(HANDLE a_file, std::string& a_hash, std::string& a_error)
@@ -529,540 +198,20 @@ namespace NeuralRendering
 			return true;
 		}
 
-		bool VerifyLoadedModuleIdentity(
-			HMODULE a_module, HANDLE a_verifiedFile, std::string& a_error)
-		{
-			FileIdentity verifiedIdentity;
-			if (!QueryFileIdentity(a_verifiedFile, verifiedIdentity, a_error))
-				return false;
-
-			std::array<wchar_t, 32768> loadedPath{};
-			const DWORD pathLength = GetModuleFileNameW(
-				a_module, loadedPath.data(), static_cast<DWORD>(loadedPath.size()));
-			if (!pathLength || pathLength >= loadedPath.size()) {
-				a_error = std::format("GetModuleFileNameW failed with {}", GetLastError());
-				return false;
-			}
-
-			ScopedHandle loadedFile(CreateFileW(
-				loadedPath.data(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-				FILE_ATTRIBUTE_NORMAL, nullptr));
-			if (loadedFile.Get() == INVALID_HANDLE_VALUE) {
-				a_error = std::format(
-					"could not open the loaded module for identity verification: {}",
-					GetLastError());
-				return false;
-			}
-
-			FileIdentity loadedIdentity;
-			if (!QueryFileIdentity(loadedFile.Get(), loadedIdentity, a_error))
-				return false;
-			if (loadedIdentity != verifiedIdentity) {
-				a_error = "loaded module identity differs from the file that was hashed";
-				return false;
-			}
-			return true;
-		}
-
-		bool HasParameterApi(HMODULE a_module)
-		{
-			return a_module &&
-			       GetProcAddress(a_module, "NVSDK_NGX_D3D12_AllocateParameters") &&
-			       GetProcAddress(a_module, "NVSDK_NGX_D3D12_DestroyParameters");
-		}
-
-		class ScopedModuleReference
-		{
-		public:
-			explicit ScopedModuleReference(HMODULE a_module = nullptr) : module_(a_module) {}
-			~ScopedModuleReference()
-			{
-				if (module_)
-					FreeLibrary(module_);
-			}
-
-			ScopedModuleReference(const ScopedModuleReference&) = delete;
-			ScopedModuleReference& operator=(const ScopedModuleReference&) = delete;
-
-			[[nodiscard]] HMODULE Get() const { return module_; }
-			[[nodiscard]] HMODULE Release()
-			{
-				const HMODULE module = module_;
-				module_ = nullptr;
-				return module;
-			}
-			void Reset(HMODULE a_module)
-			{
-				if (module_)
-					FreeLibrary(module_);
-				module_ = a_module;
-			}
-
-		private:
-			HMODULE module_ = nullptr;
-		};
-
-		struct ParameterCoreSelection
-		{
-			~ParameterCoreSelection()
-			{
-				if (file && file != INVALID_HANDLE_VALUE)
-					CloseHandle(file);
-				if (module)
-					FreeLibrary(module);
-			}
-
-			ParameterCoreSelection() = default;
-			ParameterCoreSelection(const ParameterCoreSelection&) = delete;
-			ParameterCoreSelection& operator=(const ParameterCoreSelection&) = delete;
-
-			[[nodiscard]] HMODULE ReleaseModule()
-			{
-				const HMODULE selected = module;
-				module = nullptr;
-				return selected;
-			}
-
-			[[nodiscard]] HANDLE ReleaseFile()
-			{
-				const HANDLE selected = file;
-				file = INVALID_HANDLE_VALUE;
-				return selected;
-			}
-
-			HMODULE module = nullptr;
-			HANDLE file = INVALID_HANDLE_VALUE;
-			std::filesystem::path path;
-			std::string hash;
-			ParameterCoreTrust trust = ParameterCoreTrust::Unknown;
-			ParameterCoreSource source = ParameterCoreSource::None;
-		};
-
-		std::vector<HMODULE> EnumerateLoadedModules(std::string& a_error)
-		{
-			std::vector<HMODULE> modules(128);
-			DWORD bytesNeeded = 0;
-			for (;;) {
-				if (!K32EnumProcessModules(
-						GetCurrentProcess(), modules.data(),
-						static_cast<DWORD>(modules.size() * sizeof(HMODULE)), &bytesNeeded)) {
-					a_error = std::format("K32EnumProcessModules failed with {}", GetLastError());
-					return {};
-				}
-				if (bytesNeeded <= modules.size() * sizeof(HMODULE))
-					break;
-				modules.resize((bytesNeeded / sizeof(HMODULE)) + 16);
-			}
-			modules.resize(std::min<std::size_t>(modules.size(), bytesNeeded / sizeof(HMODULE)));
-			return modules;
-		}
-
-		bool RetainModuleReference(
-			HMODULE a_module, ScopedModuleReference& a_retained, std::string& a_error)
-		{
-			HMODULE retained = nullptr;
-			if (!GetModuleHandleExW(
-					GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-					reinterpret_cast<LPCWSTR>(a_module), &retained) ||
-				retained != a_module) {
-				const DWORD error = retained ? ERROR_INVALID_HANDLE : GetLastError();
-				if (retained)
-					FreeLibrary(retained);
-				a_error = std::format("GetModuleHandleExW failed with {}", error);
-				return false;
-			}
-			a_retained.Reset(retained);
-			return true;
-		}
-
-		bool GetLoadedModulePath(
-			HMODULE a_module, std::filesystem::path& a_path, std::string& a_error)
-		{
-			std::array<wchar_t, 32768> path{};
-			const DWORD length = GetModuleFileNameW(
-				a_module, path.data(), static_cast<DWORD>(path.size()));
-			if (!length || length >= path.size()) {
-				a_error = std::format("GetModuleFileNameW failed with {}", GetLastError());
-				return false;
-			}
-			a_path = std::filesystem::path(std::wstring(path.data(), length));
-			return true;
-		}
-
-		std::filesystem::path StripExtendedPathPrefix(std::filesystem::path a_path)
-		{
-			auto value = a_path.wstring();
-			if (value.starts_with(L"\\\\?\\UNC\\")) {
-				value = L"\\\\" + value.substr(8);
-			} else if (value.starts_with(L"\\\\?\\")) {
-				value.erase(0, 4);
-			}
-			return std::filesystem::path(std::move(value)).lexically_normal();
-		}
-
-		bool GetFinalFilePath(
-			HANDLE a_file, std::filesystem::path& a_path, std::string& a_error)
-		{
-			constexpr DWORD flags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
-			const DWORD required = GetFinalPathNameByHandleW(a_file, nullptr, 0, flags);
-			if (!required) {
-				a_error = std::format(
-					"GetFinalPathNameByHandleW size query failed with {}", GetLastError());
-				return false;
-			}
-			std::vector<wchar_t> path(static_cast<std::size_t>(required) + 1u);
-			const DWORD length = GetFinalPathNameByHandleW(
-				a_file, path.data(), static_cast<DWORD>(path.size()), flags);
-			if (!length || length >= path.size()) {
-				a_error = std::format("GetFinalPathNameByHandleW failed with {}", GetLastError());
-				return false;
-			}
-			a_path = StripExtendedPathPrefix(
-				std::filesystem::path(std::wstring(path.data(), length)));
-			return true;
-		}
-
-		bool EqualPathComponent(
-			const std::filesystem::path& a_left,
-			const std::filesystem::path& a_right)
-		{
-			return _wcsicmp(a_left.c_str(), a_right.c_str()) == 0;
-		}
-
-		bool IsPathWithinDirectory(
-			const std::filesystem::path& a_path,
-			const std::filesystem::path& a_directory)
-		{
-			const auto path = a_path.lexically_normal();
-			const auto directory = a_directory.lexically_normal();
-			auto pathPart = path.begin();
-			for (auto directoryPart = directory.begin(); directoryPart != directory.end();
-				++directoryPart, ++pathPart) {
-				if (pathPart == path.end() || !EqualPathComponent(*pathPart, *directoryPart))
-					return false;
-			}
-			return pathPart != path.end();
-		}
-
-		struct VersionTranslation
-		{
-			WORD language = 0;
-			WORD codePage = 0;
-		};
-
-		bool QueryVersionString(
-			const std::vector<std::byte>& a_versionData,
-			const VersionTranslation& a_translation,
-			std::wstring_view a_name,
-			std::wstring& a_value)
-		{
-			std::wostringstream query;
-			query << L"\\StringFileInfo\\" << std::uppercase << std::hex << std::setfill(L'0') << std::setw(4) << a_translation.language << std::setw(4) << a_translation.codePage << L'\\' << a_name;
-
-			void* rawValue = nullptr;
-			UINT valueCharacters = 0;
-			if (!VerQueryValueW(
-					a_versionData.data(), query.str().c_str(), &rawValue,
-					&valueCharacters) ||
-				!rawValue || !valueCharacters) {
-				return false;
-			}
-
-			a_value.assign(static_cast<const wchar_t*>(rawValue), valueCharacters);
-			while (!a_value.empty() && a_value.back() == L'\0')
-				a_value.pop_back();
-			return !a_value.empty();
-		}
-
-		bool VerifyNvidiaParameterCoreVersionResource(
-			const std::filesystem::path& a_path, std::string& a_error)
-		{
-			DWORD ignored = 0;
-			const DWORD versionBytes = GetFileVersionInfoSizeW(a_path.c_str(), &ignored);
-			constexpr DWORD kMaximumVersionResourceBytes = 4u * 1024u * 1024u;
-			if (!versionBytes) {
-				a_error = std::format(
-					"NGX parameter core has no readable version resource: {}",
-					GetLastError());
-				return false;
-			}
-			if (versionBytes > kMaximumVersionResourceBytes) {
-				a_error = std::format(
-					"NGX parameter core version resource is too large: {} bytes",
-					versionBytes);
-				return false;
-			}
-
-			std::vector<std::byte> versionData(versionBytes);
-			if (!GetFileVersionInfoW(
-					a_path.c_str(), 0, versionBytes, versionData.data())) {
-				a_error = std::format(
-					"GetFileVersionInfoW failed with {}", GetLastError());
-				return false;
-			}
-
-			void* rawTranslations = nullptr;
-			UINT translationBytes = 0;
-			if (!VerQueryValueW(
-					versionData.data(), L"\\VarFileInfo\\Translation", &rawTranslations,
-					&translationBytes) ||
-				!rawTranslations || translationBytes < sizeof(VersionTranslation) ||
-				translationBytes % sizeof(VersionTranslation) != 0) {
-				a_error = "NGX parameter core version-resource translations are missing or malformed";
-				return false;
-			}
-
-			const auto* translations = static_cast<const VersionTranslation*>(rawTranslations);
-			const std::size_t translationCount = translationBytes / sizeof(VersionTranslation);
-			for (std::size_t index = 0; index < translationCount; ++index) {
-				std::wstring companyName;
-				std::wstring productName;
-				std::wstring originalFilename;
-				if (QueryVersionString(
-						versionData, translations[index], L"CompanyName", companyName) &&
-					QueryVersionString(
-						versionData, translations[index], L"ProductName", productName) &&
-					QueryVersionString(
-						versionData, translations[index], L"OriginalFilename", originalFilename) &&
-					_wcsicmp(companyName.c_str(), L"NVIDIA Corporation") == 0 &&
-					_wcsicmp(productName.c_str(), L"NGX") == 0 &&
-					_wcsicmp(originalFilename.c_str(), L"nvngx.dll") == 0) {
-					return true;
-				}
-			}
-
-			a_error =
-				"NGX parameter core version identity must be CompanyName=NVIDIA Corporation, ProductName=NGX, OriginalFilename=nvngx.dll";
-			return false;
-		}
-
-		bool RequireAbsentAdjacentParameterCore(
-			const std::filesystem::path& a_path, std::string& a_error)
-		{
-			const DWORD attributes = GetFileAttributesW(a_path.c_str());
-			if (attributes != INVALID_FILE_ATTRIBUTES) {
-				a_error = std::format(
-					"adjacent NGX parameter core is forbidden: {}", a_path.string());
-				return false;
-			}
-
-			const DWORD error = GetLastError();
-			if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
-				return true;
-			a_error = std::format(
-				"could not establish absence of adjacent NGX parameter core {}: {}",
-				a_path.string(), error);
-			return false;
-		}
-
-		bool IsTrustedDriverStorePath(
-			const std::filesystem::path& a_path, std::string& a_error)
-		{
-			std::array<wchar_t, 32768> systemDirectory{};
-			const UINT length = GetSystemDirectoryW(
-				systemDirectory.data(), static_cast<UINT>(systemDirectory.size()));
-			if (!length || length >= systemDirectory.size()) {
-				a_error = std::format("GetSystemDirectoryW failed with {}", GetLastError());
-				return false;
-			}
-			const auto driverStore =
-				std::filesystem::path(std::wstring(systemDirectory.data(), length)) /
-				L"DriverStore" / L"FileRepository";
-			if (!IsPathWithinDirectory(a_path, driverStore)) {
-				a_error = "module is outside System32\\DriverStore\\FileRepository";
-				return false;
-			}
-			const auto moduleBasename = a_path.filename().wstring();
-			const bool knownDriverStoreBasename = std::ranges::any_of(
-				kParameterCoreBasenames,
-				[&](const std::wstring_view a_basename) {
-					return _wcsicmp(moduleBasename.c_str(), a_basename.data()) == 0;
-				});
-			if (!knownDriverStoreBasename) {
-				a_error = "module basename is neither nvngx.dll nor _nvngx.dll";
-				return false;
-			}
-			return true;
-		}
-
-		bool VerifyAuthenticodeOffline(
-			const std::filesystem::path& a_path, std::string& a_error)
-		{
-			WINTRUST_FILE_INFO fileInfo{};
-			fileInfo.cbStruct = sizeof(fileInfo);
-			fileInfo.pcwszFilePath = a_path.c_str();
-
-			WINTRUST_DATA trustData{};
-			trustData.cbStruct = sizeof(trustData);
-			trustData.dwUIChoice = WTD_UI_NONE;
-			trustData.fdwRevocationChecks = WTD_REVOKE_NONE;
-			trustData.dwUnionChoice = WTD_CHOICE_FILE;
-			trustData.pFile = &fileInfo;
-			trustData.dwStateAction = WTD_STATEACTION_VERIFY;
-			trustData.dwProvFlags =
-				WTD_REVOCATION_CHECK_NONE | WTD_CACHE_ONLY_URL_RETRIEVAL;
-			trustData.dwUIContext = WTD_UICONTEXT_EXECUTE;
-
-			GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-			const LONG trustResult = WinVerifyTrust(nullptr, &action, &trustData);
-			trustData.dwStateAction = WTD_STATEACTION_CLOSE;
-			(void)WinVerifyTrust(nullptr, &action, &trustData);
-			if (trustResult != ERROR_SUCCESS) {
-				a_error = std::format(
-					"offline Authenticode verification failed 0x{:08X}",
-					static_cast<std::uint32_t>(trustResult));
-				return false;
-			}
-			return true;
-		}
-
-		bool OpenAndVerifyModuleFile(
-			HMODULE a_module,
-			bool a_requireTrustedDriverStore,
-			ScopedHandle& a_file,
-			std::filesystem::path& a_path,
-			std::string& a_hash,
-			std::string& a_error)
-		{
-			std::filesystem::path loadedPath;
-			if (!GetLoadedModulePath(a_module, loadedPath, a_error))
-				return false;
-
-			ScopedHandle lockedFile(CreateFileW(
-				loadedPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-				FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
-			if (lockedFile.Get() == INVALID_HANDLE_VALUE) {
-				a_error = std::format(
-					"could not lock module against writes/deletion: {}", GetLastError());
-				return false;
-			}
-			if (!GetFinalFilePath(lockedFile.Get(), a_path, a_error))
-				return false;
-			if (a_requireTrustedDriverStore && !IsTrustedDriverStorePath(a_path, a_error))
-				return false;
-			if (!VerifyLoadedModuleIdentity(a_module, lockedFile.Get(), a_error))
-				return false;
-			if (!ComputeFileSha256(lockedFile.Get(), a_hash, a_error))
-				return false;
-			if (a_requireTrustedDriverStore && !VerifyAuthenticodeOffline(a_path, a_error))
-				return false;
-			if (a_requireTrustedDriverStore &&
-				!VerifyNvidiaParameterCoreVersionResource(a_path, a_error)) {
-				return false;
-			}
-
-			a_file.Reset(lockedFile.Release());
-			return true;
-		}
-
-		std::string JoinRejections(const std::vector<std::string>& a_rejections)
-		{
-			std::ostringstream description;
-			for (std::size_t index = 0; index < a_rejections.size(); ++index) {
-				if (index)
-					description << "; ";
-				description << a_rejections[index];
-			}
-			return description.str();
-		}
-
-		bool SelectParameterCore(
-			HMODULE a_runtime,
-			RuntimeTrust a_runtimeTrust,
-			std::string_view a_runtimeHash,
-			ParameterCoreSelection& a_selection,
-			std::string& a_error)
-		{
-			if (HasParameterApi(a_runtime)) {
-				if (a_runtimeTrust == RuntimeTrust::Unknown || a_runtimeHash.empty()) {
-					a_error = "runtime parameter exports lack a verified runtime identity";
-					return false;
-				}
-
-				ScopedModuleReference retainedRuntime;
-				if (!RetainModuleReference(a_runtime, retainedRuntime, a_error))
-					return false;
-				ScopedHandle lockedFile;
-				std::filesystem::path corePath;
-				std::string coreHash;
-				if (!OpenAndVerifyModuleFile(
-						a_runtime, false, lockedFile, corePath, coreHash, a_error)) {
-					return false;
-				}
-				if (coreHash != a_runtimeHash) {
-					a_error = "runtime parameter-core hash differs from the probed runtime hash";
-					return false;
-				}
-
-				a_selection.module = retainedRuntime.Release();
-				a_selection.file = lockedFile.Release();
-				a_selection.path = std::move(corePath);
-				a_selection.hash = std::move(coreHash);
-				a_selection.trust = ParameterCoreTrust::RuntimeIdentityMatched;
-				a_selection.source = ParameterCoreSource::Runtime;
-				return true;
-			}
-
-			std::string enumerationError;
-			const auto candidates = EnumerateLoadedModules(enumerationError);
-			if (!enumerationError.empty()) {
-				a_error = std::move(enumerationError);
-				return false;
-			}
-
-			std::vector<std::string> rejections;
-			std::size_t exporterCount = 0;
-			for (const HMODULE candidate : candidates) {
-				ScopedModuleReference retainedCandidate;
-				std::string candidateError;
-				if (!RetainModuleReference(candidate, retainedCandidate, candidateError))
-					continue;
-				if (!HasParameterApi(retainedCandidate.Get()))
-					continue;
-				++exporterCount;
-
-				ScopedHandle lockedFile;
-				std::filesystem::path corePath;
-				std::string coreHash;
-				if (!OpenAndVerifyModuleFile(
-						candidate, true, lockedFile, corePath, coreHash, candidateError)) {
-					if (rejections.size() < 4) {
-						rejections.push_back(std::format(
-							"candidate={}: {}",
-							corePath.empty() ?
-								std::format("0x{:X}", reinterpret_cast<std::uintptr_t>(candidate)) :
-								corePath.string(),
-							candidateError));
-					}
-					continue;
-				}
-
-				if (a_selection.module) {
-					a_error = std::format(
-						"multiple trusted DriverStore parameter cores are loaded: {} and {}",
-						a_selection.path.string(), corePath.string());
-					return false;
-				}
-
-				a_selection.module = retainedCandidate.Release();
-				a_selection.file = lockedFile.Release();
-				a_selection.path = std::move(corePath);
-				a_selection.hash = std::move(coreHash);
-				a_selection.trust = ParameterCoreTrust::AuthenticodeVerified;
-				a_selection.source = ParameterCoreSource::DriverStore;
-			}
-
-			if (!a_selection.module) {
-				a_error = std::format(
-					"no uniquely trusted DriverStore NGX parameter core was found among {} exporters{}{}",
-					exporterCount,
-					rejections.empty() ? "" : ": ",
-					JoinRejections(rejections));
-				return false;
-			}
-			return true;
-		}
 	}
+
+	struct Runtime::Backend
+	{
+		ScopedHandle providerFile;
+		NVSDK_NGX_Parameter* capabilities = nullptr;
+		std::wstring featureDirectory;
+		std::array<const wchar_t*, 1> featurePaths{};
+		NVSDK_NGX_FeatureCommonInfo featureInfo{};
+		std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, kFeatureSlotCount> scratch;
+		std::array<std::size_t, kFeatureSlotCount> scratchBytes{};
+	};
+
+	Runtime::Runtime() = default;
 
 	bool Runtime::FeatureConfiguration::Matches(const NativeEvaluationLayout& a_layout) const
 	{
@@ -1108,7 +257,6 @@ namespace NeuralRendering
 			LogOnceLocked(probeLogEmitted_, "probe", false);
 			break;
 		case RuntimeFailureStage::Initialization:
-		case RuntimeFailureStage::ParameterCore:
 		case RuntimeFailureStage::ParameterAllocation:
 			LogOnceLocked(initializationLogEmitted_, "initialize", false);
 			break;
@@ -1146,122 +294,47 @@ namespace NeuralRendering
 
 	bool Runtime::ProbeLocked(const std::filesystem::path& a_explicitPath)
 	{
-		if (abandonRequested_.load(std::memory_order_acquire) || abandoned_)
+		if (abandonRequested_.load(std::memory_order_acquire) || abandoned_ || !ShutdownLocked())
 			return false;
-		if (!ShutdownLocked())
-			return false;
-
 		path_ = ResolveRuntimePath(a_explicitPath);
 		if (path_.empty()) {
-			SetFailureLocked(
-				RuntimeStatus::NotFound, RuntimeFailureStage::Discovery,
-				"nvngx_dlssnr.dll was not found in Shaders/Upscaling/Streamline");
+			SetFailureLocked(RuntimeStatus::NotFound, RuntimeFailureStage::Discovery, kMissingRuntimeNotice);
 			return false;
 		}
-
-		ScopedHandle verifiedFile(CreateFileW(
-			path_.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-			FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+		backend_ = std::make_unique<Backend>();
+		ScopedHandle verifiedFile(CreateFileW(path_.c_str(), GENERIC_READ, FILE_SHARE_READ,
+			nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
 		if (verifiedFile.Get() == INVALID_HANDLE_VALUE) {
-			SetFailureLocked(
-				RuntimeStatus::HashFailed, RuntimeFailureStage::Hash,
-				std::format(
-					"could not lock the runtime against writes/deletion: {} path={}",
-					GetLastError(), path_.string()));
+			SetFailureLocked(RuntimeStatus::HashFailed, RuntimeFailureStage::Hash,
+				std::format("could not lock NR runtime against writes/deletion: {}", GetLastError()));
 			return false;
 		}
-
 		std::string hashError;
 		if (!ComputeFileSha256(verifiedFile.Get(), hash_, hashError)) {
-			SetFailureLocked(
-				RuntimeStatus::HashFailed, RuntimeFailureStage::Hash,
-				std::format("{} path={}", hashError, path_.string()));
+			SetFailureLocked(RuntimeStatus::HashFailed, RuntimeFailureStage::Hash, std::move(hashError));
 			return false;
 		}
-
+		if (_stricmp(hash_.c_str(), CSX_NR_RUNTIME_SHA256) != 0) {
+			SetFailureLocked(RuntimeStatus::IdentityFailed, RuntimeFailureStage::Identity,
+				"NR runtime does not match the pinned unmodified NVIDIA SDK");
+			return false;
+		}
 		const auto version = Util::GetDllVersion(path_.wstring());
-		if (!version) {
-			SetFailureLocked(
-				RuntimeStatus::VersionRejected, RuntimeFailureStage::Version,
-				"NR runtime has no readable version resource");
+		if (!version || *version < kMinimumRuntimeVersion) {
+			SetFailureLocked(RuntimeStatus::VersionRejected, RuntimeFailureStage::Version,
+				"NR runtime has no compatible official version resource");
 			return false;
 		}
 		version_ = Util::GetFormattedVersion(*version);
 		allocationVersion_ = InstalledRuntimeMetadata::AllocationVersion(*version);
 		tuningLimits_ = GetTuningLimitsForVersion(version->major(), version->minor());
 		networkSelectionSupported_ = NeuralRendering::SupportsNetworkSelection(version->major(), version->minor());
-		if (*version < kMinimumRuntimeVersion) {
-			SetFailureLocked(
-				RuntimeStatus::VersionRejected, RuntimeFailureStage::Version,
-				std::format("expected DLSSNR {} or newer, found {}",
-					Util::GetFormattedVersion(kMinimumRuntimeVersion), version_));
-			return false;
-		}
-		trust_ = RuntimeTrust::VersionAccepted;
-
-		module_ = LoadLibraryExW(
-			path_.c_str(), nullptr,
-			LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-		if (!module_) {
-			SetFailureLocked(
-				RuntimeStatus::LoadFailed, RuntimeFailureStage::Load,
-				std::format("LoadLibraryExW failed with {}", GetLastError()));
-			return false;
-		}
-
-		const auto runtime = static_cast<HMODULE>(module_);
-		std::string identityError;
-		if (!VerifyLoadedModuleIdentity(runtime, verifiedFile.Get(), identityError)) {
-			SetFailureLocked(
-				RuntimeStatus::IdentityFailed, RuntimeFailureStage::Identity,
-				std::format("{} path={}", identityError, path_.string()));
-			FreeLibrary(runtime);
-			module_ = nullptr;
-			return false;
-		}
-		std::array<void*, kRequiredExports.size()> requiredExports{};
-		for (std::size_t index = 0; index < kRequiredExports.size(); ++index) {
-			requiredExports[index] = reinterpret_cast<void*>(
-				GetProcAddress(runtime, kRequiredExports[index]));
-			if (!requiredExports[index]) {
-				SetFailureLocked(
-					RuntimeStatus::MissingExport, RuntimeFailureStage::Load,
-					std::format("missing required export {}", kRequiredExports[index]));
-				FreeLibrary(runtime);
-				module_ = nullptr;
-				return false;
-			}
-		}
-		runtimeExports_ = {
-			.initialize = requiredExports[0],
-			.createFeature = requiredExports[1],
-			.evaluateFeature = requiredExports[2],
-			.releaseFeature = requiredExports[3],
-			.shutdown = requiredExports[4],
-		};
-
-		const auto getApplicationId = reinterpret_cast<GetUnsignedValue>(
-			GetProcAddress(runtime, "NVSDK_NGX_GetApplicationId"));
-		const auto getApiVersion = reinterpret_cast<GetUnsignedValue>(
-			GetProcAddress(runtime, "NVSDK_NGX_GetAPIVersion"));
-		if (!getApplicationId || !getApiVersion) {
-			SetFailureLocked(
-				RuntimeStatus::IdentityFailed, RuntimeFailureStage::Identity,
-				"runtime identity exports are missing");
-			FreeLibrary(runtime);
-			module_ = nullptr;
-			runtimeExports_ = {};
-			return false;
-		}
-
-		applicationId_ = getApplicationId();
-		apiVersion_ = getApiVersion();
+		backend_->providerFile.Reset(verifiedFile.Release());
+		trust_ = RuntimeTrust::OfficialPackageVerified;
 		status_ = RuntimeStatus::Ready;
 		failureStage_ = RuntimeFailureStage::None;
 		ngxResult_ = 0;
-		detail_ = std::format(
-			"admitted runtime ready identity={} hash={} version={} appId=0x{:08X} api=0x{:X}",
-			ToString(trust_), hash_, version_, applicationId_, apiVersion_);
+		detail_ = std::format("official NR SDK verified hash={} version={}", hash_, version_);
 		LogOnceLocked(probeLogEmitted_, "probe", true);
 		return true;
 	}
@@ -1278,237 +351,140 @@ namespace NeuralRendering
 		if (abandonRequested_.load(std::memory_order_acquire) || abandoned_)
 			return false;
 		if (!a_device) {
-			SetFailureLocked(
-				RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
+			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
 				"D3D12 device is null", static_cast<std::uint32_t>(E_INVALIDARG));
 			return false;
 		}
-		if (status_ == RuntimeStatus::Initialized && device_ == a_device) {
-			RuntimeCallerPathCall pathProxy(static_cast<HMODULE>(module_));
-			lastPathProxyInstalled_ = pathProxy.IsInstalled();
-			if (lastPathProxyInstalled_)
-				return true;
-			SetFailureLocked(
-				RuntimeStatus::InitializationFailed,
-				RuntimeFailureStage::Initialization,
-				"NGX caller-path proxy changed after initialization");
+		if (status_ == RuntimeStatus::Initialized && device_ == a_device)
+			return true;
+		if (device_ && !ShutdownLocked())
 			return false;
-		}
-		if (device_) {
-			const auto runtimePath = path_;
-			if (!ShutdownLocked() || !ProbeLocked(runtimePath))
-				return false;
-		}
-		if (!module_ && !ProbeLocked({}))
+		if (status_ != RuntimeStatus::Ready && !ProbeLocked({}))
 			return false;
-
-		const auto runtime = static_cast<HMODULE>(module_);
-		const auto initialize =
-			reinterpret_cast<InitD3D12>(runtimeExports_.initialize);
-		if (!initialize) {
-			SetFailureLocked(
-				RuntimeStatus::MissingExport, RuntimeFailureStage::Load,
-				"NVSDK_NGX_D3D12_Init_Ext disappeared after probe");
-			return false;
-		}
-
-		std::string coreSelectionError;
-		for (const auto parameterCoreBasename : kParameterCoreBasenames) {
-			const auto adjacentCorePath = path_.parent_path() / parameterCoreBasename;
-			if (!RequireAbsentAdjacentParameterCore(adjacentCorePath, coreSelectionError)) {
-				SetFailureLocked(
-					RuntimeStatus::CoreUnavailable, RuntimeFailureStage::ParameterCore,
-					std::move(coreSelectionError));
-				return false;
-			}
-		}
-
-		ParameterCoreSelection coreSelection;
-		if (!SelectParameterCore(
-				runtime,
-				trust_,
-				hash_,
-				coreSelection,
-				coreSelectionError)) {
-			SetFailureLocked(
-				RuntimeStatus::CoreUnavailable, RuntimeFailureStage::ParameterCore,
-				std::format("NGX parameter-core selection failed: {}", coreSelectionError));
-			return false;
-		}
-
-		std::filesystem::path writablePath = a_dataPath;
-		if (writablePath.empty()) {
-			std::array<wchar_t, 32768> temporaryPath{};
-			const DWORD length = GetTempPathW(
-				static_cast<DWORD>(temporaryPath.size()), temporaryPath.data());
-			if (!length || length >= temporaryPath.size()) {
-				SetFailureLocked(
-					RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
-					std::format("GetTempPathW failed with {}", GetLastError()));
-				return false;
-			}
-			writablePath = std::filesystem::path(
-							   std::wstring(temporaryPath.data(), length)) /
-			               L"CommunityShaders-NGX";
-		}
 		std::error_code directoryError;
-		std::filesystem::create_directories(writablePath, directoryError);
+		auto writablePath = a_dataPath;
+		if (writablePath.empty())
+			writablePath = std::filesystem::temp_directory_path(directoryError) / L"CommunityShaders-NGX";
+		if (!directoryError)
+			std::filesystem::create_directories(writablePath, directoryError);
 		if (directoryError) {
-			SetFailureLocked(
-				RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
+			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
 				std::format("could not create NGX data directory: {}", directoryError.message()));
 			return false;
 		}
-
-		lastPathProxyInstalled_ = InstallRuntimeCallerPathHook(
-			runtime, path_.parent_path() / L"nvngx.dll");
-		if (!lastPathProxyInstalled_) {
-			const bool pathProxyRestored =
-				UninstallRuntimeCallerPathHook(runtime);
-			lastPathProxyInstalled_ = !pathProxyRestored;
-			SetFailureLocked(
-				RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
-				pathProxyRestored ?
-					"failed to install the NGX caller-path proxy" :
-					"failed to install and restore the NGX caller-path proxy; runtime retained for safety");
+		backend_->featureDirectory = std::filesystem::absolute(path_.parent_path(), directoryError).wstring();
+		if (directoryError) {
+			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
+				std::format("could not resolve NGX feature directory: {}", directoryError.message()));
 			return false;
 		}
-		RuntimeCallerPathCall pathProxy(runtime);
-		lastPathProxyInstalled_ = pathProxy.IsInstalled();
-		if (!lastPathProxyInstalled_) {
-			const bool pathProxyRestored =
-				UninstallRuntimeCallerPathHook(runtime);
-			lastPathProxyInstalled_ = !pathProxyRestored;
-			SetFailureLocked(
-				RuntimeStatus::InitializationFailed,
-				RuntimeFailureStage::Initialization,
-				pathProxyRestored ?
-					"NGX caller-path proxy changed before initialization" :
-					"NGX caller-path proxy changed before initialization and could not be restored; runtime retained for safety");
-			return false;
-		}
-		const auto initializeResult = initialize(
-			applicationId_, writablePath.c_str(), a_device,
-			static_cast<NVSDK_NGX_Version>(apiVersion_), nullptr);
-		lastPathProxyHits_ = pathProxy.Hits();
-		ngxResult_ = static_cast<std::uint32_t>(initializeResult);
+		backend_->featurePaths[0] = backend_->featureDirectory.c_str();
+		backend_->featureInfo.PathListInfo = { backend_->featurePaths.data(), 1 };
+		const auto initializeResult = NVSDK_NGX_D3D12_Init_with_ProjectID(
+			NvidiaProject::kId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, NvidiaProject::kEngineVersion,
+			writablePath.c_str(), a_device, &backend_->featureInfo);
 		if (NVSDK_NGX_FAILED(initializeResult)) {
-			SetFailureLocked(
-				RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
-				std::format(
-					"NGX initialization failed 0x{:08X} proxyInstalled={} proxyHits={}",
-					ngxResult_, lastPathProxyInstalled_, lastPathProxyHits_),
-				ngxResult_);
-			if (UninstallRuntimeCallerPathHook(runtime)) {
-				lastPathProxyInstalled_ = false;
-			} else {
-				detail_ +=
-					"; caller-path proxy restoration failed and its target was retained";
-				logger::critical("[DLSSNR] {}", detail_);
-			}
+			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
+				std::format("NGX SDK initialization failed 0x{:08X}", static_cast<std::uint32_t>(initializeResult)),
+				static_cast<std::uint32_t>(initializeResult));
 			return false;
 		}
-
 		device_ = a_device;
 		a_device->AddRef();
-		const auto rollbackInitializationFailure = [this]() {
-			const RuntimeStatus primaryStatus = status_;
-			const RuntimeFailureStage primaryStage = failureStage_;
-			const std::string primaryDetail = detail_;
-			const std::uint32_t primaryNgxResult = ngxResult_;
-			const auto runtimePath = path_;
-			const std::string runtimeHash = hash_;
-			const std::string runtimeVersion = version_;
-			const auto runtimeTuningLimits = tuningLimits_;
-			const auto runtimeNetworkSupport = networkSelectionSupported_;
-			const RuntimeTrust runtimeTrust = trust_;
-			const auto corePath = corePath_;
-			const std::string coreHash = coreHash_;
-			const ParameterCoreTrust coreTrust = coreTrust_;
-			const ParameterCoreSource coreSource = coreSource_;
-			const std::uint32_t proxyHits = lastPathProxyHits_;
-
+		const auto rollback = [this]() {
+			const auto primaryStatus = status_;
+			const auto primaryStage = failureStage_;
+			const auto primaryDetail = detail_;
+			const auto primaryResult = ngxResult_;
+			const auto providerPath = path_;
+			const auto providerHash = hash_;
+			const auto providerVersion = version_;
+			const auto providerTrust = trust_;
 			if (ShutdownLocked()) {
-				path_ = runtimePath;
-				hash_ = runtimeHash;
-				version_ = runtimeVersion;
-				tuningLimits_ = runtimeTuningLimits;
-				networkSelectionSupported_ = runtimeNetworkSupport;
-				trust_ = runtimeTrust;
-				corePath_ = corePath;
-				coreHash_ = coreHash;
-				coreTrust_ = coreTrust;
-				coreSource_ = coreSource;
-				lastPathProxyHits_ = proxyHits;
-				lastPathProxyInstalled_ = false;
+				path_ = providerPath;
+				hash_ = providerHash;
+				version_ = providerVersion;
+				trust_ = providerTrust;
 				status_ = primaryStatus;
 				failureStage_ = primaryStage;
 				detail_ = primaryDetail;
-				ngxResult_ = primaryNgxResult;
-				probeLogEmitted_ = true;
-				initializationLogEmitted_ = true;
-				return;
+				ngxResult_ = primaryResult;
+			} else {
+				detail_ = std::format("{}; NGX rollback failed: {}", primaryDetail, detail_);
 			}
-
-			const std::string rollbackDetail = detail_;
-			detail_ = std::format(
-				"{}; NGX initialization rollback failed: {}",
-				primaryDetail,
-				rollbackDetail);
-			logger::critical("[DLSSNR] {}", detail_);
 		};
-
-		corePath_ = std::move(coreSelection.path);
-		coreHash_ = std::move(coreSelection.hash);
-		coreTrust_ = coreSelection.trust;
-		coreSource_ = coreSelection.source;
-		coreModule_ = coreSelection.ReleaseModule();
-		coreFile_ = coreSelection.ReleaseFile();
-		const auto core = static_cast<HMODULE>(coreModule_);
-
-		parameterCoreExports_ = {
-			.allocateParameters = reinterpret_cast<void*>(
-				GetProcAddress(core, "NVSDK_NGX_D3D12_AllocateParameters")),
-			.destroyParameters = reinterpret_cast<void*>(
-				GetProcAddress(core, "NVSDK_NGX_D3D12_DestroyParameters")),
-		};
-		const auto allocateParameters = reinterpret_cast<AllocateParameters>(
-			parameterCoreExports_.allocateParameters);
-		const auto destroyParameters = reinterpret_cast<DestroyParameters>(
-			parameterCoreExports_.destroyParameters);
-		if (!allocateParameters || !destroyParameters) {
-			SetFailureLocked(
-				RuntimeStatus::ParameterAllocationFailed,
-				RuntimeFailureStage::ParameterAllocation,
-				"NGX parameter-core allocation or destruction export is unavailable");
-			rollbackInitializationFailure();
+		const auto capabilityResult = NVSDK_NGX_D3D12_GetCapabilityParameters(&backend_->capabilities);
+		if (NVSDK_NGX_FAILED(capabilityResult) || !backend_->capabilities) {
+			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
+				"NGX SDK capability map allocation failed", static_cast<std::uint32_t>(capabilityResult));
+			rollback();
+			return false;
+		}
+		int available = 0;
+		const auto availabilityResult = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNR_Available, &available);
+		if (NVSDK_NGX_FAILED(availabilityResult) || !available) {
+			int featureResult = 0;
+			const auto featureQuery = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNR_FeatureInitResult, &featureResult);
+			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
+				std::format("NGX SDK NR availability query=0x{:08X} available={} featureQuery=0x{:08X} featureResult={}",
+					static_cast<std::uint32_t>(availabilityResult), available,
+					static_cast<std::uint32_t>(featureQuery), NVSDK_NGX_FAILED(featureQuery) ? "unavailable" : std::format("0x{:08X}", static_cast<std::uint32_t>(featureResult))),
+				static_cast<std::uint32_t>(NVSDK_NGX_FAILED(availabilityResult) ? availabilityResult : NVSDK_NGX_Result_FAIL_FeatureNotSupported));
+			rollback();
 			return false;
 		}
 		NVSDK_NGX_Parameter* parameters = nullptr;
-		const auto allocationResult = allocateParameters(&parameters);
-		ngxResult_ = static_cast<std::uint32_t>(allocationResult);
+		const auto allocationResult = NVSDK_NGX_D3D12_AllocateParameters(&parameters);
 		parameters_ = parameters;
 		if (NVSDK_NGX_FAILED(allocationResult) || !parameters) {
-			SetFailureLocked(
-				RuntimeStatus::ParameterAllocationFailed,
-				RuntimeFailureStage::ParameterAllocation,
-				std::format("NGX parameter allocation failed 0x{:08X}", ngxResult_),
-				ngxResult_);
-			rollbackInitializationFailure();
+			SetFailureLocked(RuntimeStatus::ParameterAllocationFailed, RuntimeFailureStage::ParameterAllocation,
+				std::format("NGX SDK parameter allocation failed 0x{:08X}", static_cast<std::uint32_t>(allocationResult)),
+				static_cast<std::uint32_t>(allocationResult));
+			rollback();
 			return false;
 		}
-
 		status_ = RuntimeStatus::Initialized;
 		failureStage_ = RuntimeFailureStage::None;
-		detail_ = std::format(
-			"NGX Feature 18 runtime initialized identity={} proxyHits={} coreSource={} coreTrust={} coreHash={} corePath={}",
-			ToString(trust_),
-			lastPathProxyHits_,
-			ToString(coreSource_),
-			ToString(coreTrust_),
-			coreHash_,
-			corePath_.string());
+		ngxResult_ = static_cast<std::uint32_t>(allocationResult);
+		detail_ = std::format("official NGX SDK initialized NR with CSX project {}", NvidiaProject::kId);
 		LogOnceLocked(initializationLogEmitted_, "initialize", true);
+		return true;
+	}
+
+	bool Runtime::PrepareScratchLocked(std::uint32_t a_slot)
+	{
+		auto* parameters = static_cast<NVSDK_NGX_Parameter*>(parameters_);
+		std::size_t scratchBytes = 0;
+		const auto scratchResult = NVSDK_NGX_D3D12_GetScratchBufferSize(kFeatureDlssNr, parameters, &scratchBytes);
+		if (NVSDK_NGX_FAILED(scratchResult)) {
+			SetFailureLocked(RuntimeStatus::FeatureCreateFailed, RuntimeFailureStage::FeatureCreate,
+				"NGX SDK scratch-size query failed", static_cast<std::uint32_t>(scratchResult));
+			return false;
+		}
+		if (scratchBytes) {
+			D3D12_HEAP_PROPERTIES heap{};
+			heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+			heap.CreationNodeMask = heap.VisibleNodeMask = 1;
+			D3D12_RESOURCE_DESC desc{};
+			desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+			desc.Width = scratchBytes;
+			desc.Height = desc.DepthOrArraySize = desc.MipLevels = 1;
+			desc.SampleDesc.Count = 1;
+			desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+			desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+			const auto result = static_cast<ID3D12Device*>(device_)->CreateCommittedResource(
+				&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+				nullptr, IID_PPV_ARGS(backend_->scratch[a_slot].ReleaseAndGetAddressOf()));
+			if (FAILED(result)) {
+				SetFailureLocked(RuntimeStatus::FeatureCreateFailed, RuntimeFailureStage::FeatureCreate,
+					"NGX SDK scratch allocation failed", static_cast<std::uint32_t>(result));
+				return false;
+			}
+			backend_->scratch[a_slot]->SetName(std::format(L"NeuralRendering::ScratchSlot{}", a_slot).c_str());
+		}
+		backend_->scratchBytes[a_slot] = scratchBytes;
+		parameters->Set(NVSDK_NGX_Parameter_Scratch, backend_->scratch[a_slot].Get());
+		parameters->Set(NVSDK_NGX_Parameter_Scratch_SizeInBytes, static_cast<unsigned long long>(scratchBytes));
 		return true;
 	}
 
@@ -1563,43 +539,29 @@ namespace NeuralRendering
 		}
 
 		if (!featureHandles_[a_slot]) {
-			const auto createFeature = reinterpret_cast<CreateFeature>(runtimeExports_.createFeature);
-			RuntimeCallerPathCall pathProxy(static_cast<HMODULE>(module_));
-			lastPathProxyInstalled_ = pathProxy.IsInstalled();
-			if (!createFeature || !lastPathProxyInstalled_) {
-				SetFailureLocked(RuntimeStatus::FeatureCreateFailed, RuntimeFailureStage::FeatureCreate,
-					"Feature 18 create export or caller-path proxy is unavailable");
-				return false;
-			}
 			auto* parameters = static_cast<NVSDK_NGX_Parameter*>(parameters_);
 			parameters->Reset();
-			parameters->Set("Width", a_layout.creation.output.width);
-			parameters->Set("Height", a_layout.creation.output.height);
-			parameters->Set("OutWidth", a_layout.creation.output.width);
-			parameters->Set("OutHeight", a_layout.creation.output.height);
-			parameters->Set("DLSSNR.Width", a_layout.creation.output.width);
-			parameters->Set("DLSSNR.Height", a_layout.creation.output.height);
-			parameters->Set("DLSSNR.InputWidth", a_layout.creation.input.width);
-			parameters->Set("DLSSNR.InputHeight", a_layout.creation.input.height);
-			parameters->Set("DLSSNR.OutputWidth", a_layout.creation.output.width);
-			parameters->Set("DLSSNR.OutputHeight", a_layout.creation.output.height);
-			parameters->Set("DLSSNR.Output.Width", a_layout.creation.output.width);
-			parameters->Set("DLSSNR.Output.Height", a_layout.creation.output.height);
+			parameters->Set(NVSDK_NGX_Parameter_Width, a_layout.creation.output.width);
+			parameters->Set(NVSDK_NGX_Parameter_Height, a_layout.creation.output.height);
+			parameters->Set(NVSDK_NGX_Parameter_OutWidth, a_layout.creation.output.width);
+			parameters->Set(NVSDK_NGX_Parameter_OutHeight, a_layout.creation.output.height);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Width, a_layout.creation.output.width);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Height, a_layout.creation.output.height);
+
 			parameters->Set(
-				"DLSSNR.Scale", static_cast<float>(a_layout.creation.output.width) / a_layout.creation.input.width);
-			parameters->Set("DLSSNR.Upscaling", a_layout.featureUpscaling ? 1u : 0u);
-			parameters->Set(
-				"DLSSNR.ScalingRatio",
+				NVSDK_NGX_Parameter_DLSSNR_ScalingRatio,
 				static_cast<float>(a_layout.creation.output.width) / a_layout.creation.input.width);
-			parameters->Set("DLSSNR.Hint.Render.Preset", a_networkPreset);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Hint_Render_Preset, a_networkPreset);
 
 			if (a_providerBlending) {
-				parameters->Set("DLSSNR.ControlMask", static_cast<ID3D12Resource*>(nullptr));
-				parameters->Set("DLSSNR.UIAlpha", a_controlMask);
-				parameters->Set("DLSSNR.Backbuffer", a_color);
-				parameters->Set("DLSSNR.UICorrection", 1u);
-				parameters->Set("DLSSNR.UseAutoMask", 1u);
+				parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ControlMask, static_cast<ID3D12Resource*>(nullptr));
+				parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UIAlpha, a_controlMask);
+				parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Backbuffer, a_color);
+				parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UICorrection, 1);
+				parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UseAutoMask, 1);
 			}
+			if (!PrepareScratchLocked(a_slot))
+				return false;
 			NVSDK_NGX_Handle* handle = nullptr;
 			const auto createStarted = a_evidence ? DiagnosticNow() : std::chrono::steady_clock::time_point{};
 			if (a_evidence) {
@@ -1610,7 +572,7 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			++lifecycleCounts_.creates;
 #endif
-			const auto createResult = createFeature(
+			const auto createResult = NVSDK_NGX_D3D12_CreateFeature(
 				a_commandList, kFeatureDlssNr, parameters, &handle);
 			if (a_evidence) {
 				a_evidence->createCpuMicroseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1620,9 +582,9 @@ namespace NeuralRendering
 				a_evidence->createResult = static_cast<std::uint32_t>(createResult);
 			}
 			ngxResult_ = static_cast<std::uint32_t>(createResult);
-			lastPathProxyHits_ = pathProxy.Hits();
+
 			if (NVSDK_NGX_FAILED(createResult) || !handle) {
-				// A failed private feature create may still transfer a handle. Keep it
+				// A failed NGX feature create may still transfer a handle. Keep it
 				// owned so bounded teardown can release or intentionally abandon it.
 				if (handle)
 					featureHandles_[a_slot] = handle;
@@ -1630,8 +592,8 @@ namespace NeuralRendering
 					RuntimeStatus::FeatureCreateFailed,
 					RuntimeFailureStage::FeatureCreate,
 					std::format(
-						"Feature 18 create failed slot={} result=0x{:08X} trust={} proxyHits={}",
-						a_slot, ngxResult_, ToString(trust_), lastPathProxyHits_),
+						"Feature 18 create failed slot={} result=0x{:08X} trust={}",
+						a_slot, ngxResult_, ToString(trust_)),
 					ngxResult_);
 				return false;
 			}
@@ -1711,89 +673,69 @@ namespace NeuralRendering
 			return false;
 		a_reset = a_reset || (firstEvaluationResetMask_.load(std::memory_order_relaxed) & (1u << a_slot)) != 0;
 
-		const auto runtime = static_cast<HMODULE>(module_);
-		const auto createFeature =
-			reinterpret_cast<CreateFeature>(runtimeExports_.createFeature);
-		const auto evaluateFeature =
-			reinterpret_cast<EvaluateFeature>(runtimeExports_.evaluateFeature);
-		if (!createFeature || !evaluateFeature) {
-			SetFailureLocked(
-				RuntimeStatus::MissingExport, RuntimeFailureStage::Load,
-				"Feature 18 create/evaluate exports disappeared after probe");
-			return false;
-		}
-
 		auto* parameters = static_cast<NVSDK_NGX_Parameter*>(parameters_);
-		RuntimeCallerPathCall pathProxy(runtime);
-		lastPathProxyInstalled_ = pathProxy.IsInstalled();
-		if (!lastPathProxyInstalled_) {
-			SetFailureLocked(
-				RuntimeStatus::FeatureCreateFailed,
-				RuntimeFailureStage::FeatureCreate,
-				"failed to install the NGX caller-path proxy for Feature 18");
-			return false;
-		}
-
 		parameters->Reset();
-		parameters->Set("DLSSNR.Color", a_color);
-		parameters->Set("DLSSNR.Depth", a_depth);
-		parameters->Set("DLSSNR.MVec", a_motionVectors);
-		parameters->Set("DLSSNR.Output", a_output);
+		parameters->Set(NVSDK_NGX_Parameter_Scratch, backend_->scratch[a_slot].Get());
+		parameters->Set(NVSDK_NGX_Parameter_Scratch_SizeInBytes, static_cast<unsigned long long>(backend_->scratchBytes[a_slot]));
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Color, a_color);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Depth, a_depth);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_MVec, a_motionVectors);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Output, a_output);
 		const auto& colorSubrect = a_layout.color.valid;
 		const auto& guideSubrect = a_layout.depth.valid;
 		const auto& motionSubrect = a_layout.motion.valid;
 		const auto& outputSubrect = a_layout.output.valid;
 		const auto& controlMaskSubrect = a_layout.controlMask.valid;
 		if (a_providerBlending) {
-			parameters->Set("DLSSNR.ControlMask", static_cast<ID3D12Resource*>(nullptr));
-			parameters->Set("DLSSNR.UIAlpha", a_controlMask);
-			parameters->Set("DLSSNR.Backbuffer", a_color);
-			parameters->Set("DLSSNR.UIAlphaSubrectBaseX", outputSubrect.baseX);
-			parameters->Set("DLSSNR.UIAlphaSubrectBaseY", outputSubrect.baseY);
-			parameters->Set("DLSSNR.UIAlphaSubrectWidth", outputSubrect.width);
-			parameters->Set("DLSSNR.UIAlphaSubrectHeight", outputSubrect.height);
-			parameters->Set("DLSSNR.BackbufferSubrectBaseX", outputSubrect.baseX);
-			parameters->Set("DLSSNR.BackbufferSubrectBaseY", outputSubrect.baseY);
-			parameters->Set("DLSSNR.BackbufferSubrectWidth", outputSubrect.width);
-			parameters->Set("DLSSNR.BackbufferSubrectHeight", outputSubrect.height);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ControlMask, static_cast<ID3D12Resource*>(nullptr));
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UIAlpha, a_controlMask);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Backbuffer, a_color);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UIAlphaSubrectBaseX, outputSubrect.baseX);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UIAlphaSubrectBaseY, outputSubrect.baseY);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UIAlphaSubrectWidth, outputSubrect.width);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UIAlphaSubrectHeight, outputSubrect.height);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_BackbufferSubrectBaseX, outputSubrect.baseX);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_BackbufferSubrectBaseY, outputSubrect.baseY);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_BackbufferSubrectWidth, outputSubrect.width);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_BackbufferSubrectHeight, outputSubrect.height);
 		} else if (hasControlMask) {
-			parameters->Set("DLSSNR.ControlMask", a_controlMask);
-			parameters->Set("DLSSNR.ControlMaskSubrectBaseX", controlMaskSubrect.baseX);
-			parameters->Set("DLSSNR.ControlMaskSubrectBaseY", controlMaskSubrect.baseY);
-			parameters->Set("DLSSNR.ControlMaskSubrectWidth", controlMaskSubrect.width);
-			parameters->Set("DLSSNR.ControlMaskSubrectHeight", controlMaskSubrect.height);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ControlMask, a_controlMask);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ControlMaskSubrectBaseX, controlMaskSubrect.baseX);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ControlMaskSubrectBaseY, controlMaskSubrect.baseY);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ControlMaskSubrectWidth, controlMaskSubrect.width);
+			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ControlMaskSubrectHeight, controlMaskSubrect.height);
 		}
-		parameters->Set("DLSSNR.ColorSubrectBaseX", colorSubrect.baseX);
-		parameters->Set("DLSSNR.ColorSubrectBaseY", colorSubrect.baseY);
-		parameters->Set("DLSSNR.ColorSubrectWidth", colorSubrect.width);
-		parameters->Set("DLSSNR.ColorSubrectHeight", colorSubrect.height);
-		parameters->Set("DLSSNR.DepthSubrectBaseX", guideSubrect.baseX);
-		parameters->Set("DLSSNR.DepthSubrectBaseY", guideSubrect.baseY);
-		parameters->Set("DLSSNR.DepthSubrectWidth", guideSubrect.width);
-		parameters->Set("DLSSNR.DepthSubrectHeight", guideSubrect.height);
-		parameters->Set("DLSSNR.MVecSubrectBaseX", motionSubrect.baseX);
-		parameters->Set("DLSSNR.MVecSubrectBaseY", motionSubrect.baseY);
-		parameters->Set("DLSSNR.MVecSubrectWidth", motionSubrect.width);
-		parameters->Set("DLSSNR.MVecSubrectHeight", motionSubrect.height);
-		parameters->Set("DLSSNR.OutputSubrectBaseX", outputSubrect.baseX);
-		parameters->Set("DLSSNR.OutputSubrectBaseY", outputSubrect.baseY);
-		parameters->Set("DLSSNR.OutputSubrectWidth", outputSubrect.width);
-		parameters->Set("DLSSNR.OutputSubrectHeight", outputSubrect.height);
-		parameters->Set("DLSSNR.MVecScaleX", a_layout.motionVectorScale[0]);
-		parameters->Set("DLSSNR.MVecScaleY", a_layout.motionVectorScale[1]);
-		parameters->Set("DLSSNR.DepthInverted", a_tuning.depthInverted ? 1u : 0u);
-		parameters->Set("DLSSNR.Enabled", 1u);
-		parameters->Set("DLSSNR.Reset", a_reset ? 1u : 0u);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ColorSubrectBaseX, colorSubrect.baseX);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ColorSubrectBaseY, colorSubrect.baseY);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ColorSubrectWidth, colorSubrect.width);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ColorSubrectHeight, colorSubrect.height);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_DepthSubrectBaseX, guideSubrect.baseX);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_DepthSubrectBaseY, guideSubrect.baseY);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_DepthSubrectWidth, guideSubrect.width);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_DepthSubrectHeight, guideSubrect.height);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_MVecSubrectBaseX, motionSubrect.baseX);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_MVecSubrectBaseY, motionSubrect.baseY);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_MVecSubrectWidth, motionSubrect.width);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_MVecSubrectHeight, motionSubrect.height);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_OutputSubrectBaseX, outputSubrect.baseX);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_OutputSubrectBaseY, outputSubrect.baseY);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_OutputSubrectWidth, outputSubrect.width);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_OutputSubrectHeight, outputSubrect.height);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_MVecScaleX, a_layout.motionVectorScale[0]);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_MVecScaleY, a_layout.motionVectorScale[1]);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_DepthInverted, a_tuning.depthInverted ? 1 : 0);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Enabled, 1);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Reset, a_reset ? 1 : 0);
 		const auto limits = GetTuningLimits(a_tuning.networkPreset);
-		parameters->Set("DLSSNR.Intensity", std::clamp(a_tuning.intensity, 0.0f, limits.intensity));
-		parameters->Set("DLSSNR.LocalToneStrength", std::clamp(a_tuning.localToneStrength, 0.0f, limits.localToneStrength));
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Intensity, std::clamp(a_tuning.intensity, 0.0f, limits.intensity));
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_LocalToneStrength, std::clamp(a_tuning.localToneStrength, 0.0f, limits.localToneStrength));
 		parameters->Set(
-			"DLSSNR.LocalStructureStrength", std::clamp(a_tuning.localStructureStrength, 0.0f, limits.localStructureStrength));
+			NVSDK_NGX_Parameter_DLSSNR_LocalStructureStrength, std::clamp(a_tuning.localStructureStrength, 0.0f, limits.localStructureStrength));
 		parameters->Set(
-			"DLSSNR.SkinStructureStrength", std::clamp(a_tuning.skinStructureStrength, 0.0f, limits.skinStructureStrength));
-		parameters->Set("DLSSNR.UseAutoMask", a_tuning.useAutoMask ? 1u : 0u);
-		parameters->Set("DLSSNR.Style", a_tuning.style);
-		parameters->Set("DLSSNR.UICorrection", a_providerBlending ? 1u : 0u);
+			NVSDK_NGX_Parameter_DLSSNR_SkinStructureStrength, std::clamp(a_tuning.skinStructureStrength, 0.0f, limits.skinStructureStrength));
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UseAutoMask, a_tuning.useAutoMask ? 1 : 0);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Style, a_tuning.style);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UICorrection, a_providerBlending ? 1 : 0);
 
 		if (a_evaluationAttempted)
 			*a_evaluationAttempted = true;
@@ -1802,7 +744,7 @@ namespace NeuralRendering
 		const auto evaluateStarted = a_evidence ? DiagnosticNow() : std::chrono::steady_clock::time_point{};
 		if (a_evidence)
 			a_evidence->evaluateAttempted = true;
-		const auto evaluateResult = evaluateFeature(
+		const auto evaluateResult = NVSDK_NGX_D3D12_EvaluateFeature(
 			a_commandList, static_cast<NVSDK_NGX_Handle*>(featureHandles_[a_slot]),
 			parameters, nullptr);
 		if (a_evidence) {
@@ -1815,14 +757,14 @@ namespace NeuralRendering
 		if (a_timingInterop)
 			a_timingInterop->EndEvaluationTiming(a_commandList, a_timingRegion);
 		ngxResult_ = static_cast<std::uint32_t>(evaluateResult);
-		lastPathProxyHits_ = pathProxy.Hits();
+
 		if (NVSDK_NGX_FAILED(evaluateResult)) {
 			SetFailureLocked(
 				RuntimeStatus::FeatureEvaluateFailed,
 				RuntimeFailureStage::FeatureEvaluate,
 				std::format(
-					"Feature 18 evaluate failed slot={} result=0x{:08X} trust={} proxyHits={}",
-					a_slot, ngxResult_, ToString(trust_), lastPathProxyHits_),
+					"Feature 18 evaluate failed slot={} result=0x{:08X} trust={}",
+					a_slot, ngxResult_, ToString(trust_)),
 				ngxResult_);
 			return false;
 		}
@@ -1839,7 +781,6 @@ namespace NeuralRendering
 			.output = a_layout.creation.output,
 			.controlMask = a_layout.controlMask.backing,
 			.outputSubrect = outputSubrect,
-			.pathProxyHits = lastPathProxyHits_,
 		};
 		LogOnceLocked(featureEvaluateLogEmitted_, "evaluate", true);
 		return true;
@@ -1861,50 +802,37 @@ namespace NeuralRendering
 			evaluationSuccessDetail_.reset();
 		if (!featureHandles_[a_slot]) {
 			featureConfigurations_[a_slot] = {};
+			if (backend_) {
+				backend_->scratch[a_slot].Reset();
+				backend_->scratchBytes[a_slot] = 0;
+			}
 			firstEvaluationResetMask_.fetch_and(~(1u << a_slot), std::memory_order_relaxed);
 			return true;
 		}
-		if (!module_) {
-			SetFailureLocked(
-				RuntimeStatus::FeatureReleaseFailed,
-				RuntimeFailureStage::FeatureRelease,
-				"Feature 18 handle exists without its runtime module");
-			return false;
-		}
-
-		const auto runtime = static_cast<HMODULE>(module_);
-		const auto releaseFeature =
-			reinterpret_cast<ReleaseFeature>(runtimeExports_.releaseFeature);
-		RuntimeCallerPathCall pathProxy(runtime);
-		lastPathProxyInstalled_ = pathProxy.IsInstalled();
-		if (!releaseFeature || !lastPathProxyInstalled_) {
-			SetFailureLocked(
-				RuntimeStatus::FeatureReleaseFailed,
-				RuntimeFailureStage::FeatureRelease,
-				"Feature 18 release export or caller-path proxy is unavailable");
-			return false;
-		}
-
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		++lifecycleCounts_.releases;
 #endif
-		const auto releaseResult = releaseFeature(
+		const auto releaseResult = NVSDK_NGX_D3D12_ReleaseFeature(
 			static_cast<NVSDK_NGX_Handle*>(featureHandles_[a_slot]));
 		ngxResult_ = static_cast<std::uint32_t>(releaseResult);
-		lastPathProxyHits_ = pathProxy.Hits();
+
 		if (NVSDK_NGX_FAILED(releaseResult)) {
 			SetFailureLocked(
 				RuntimeStatus::FeatureReleaseFailed,
 				RuntimeFailureStage::FeatureRelease,
 				std::format(
-					"Feature 18 release failed slot={} result=0x{:08X} proxyHits={}",
-					a_slot, ngxResult_, lastPathProxyHits_),
+					"Feature 18 release failed slot={} result=0x{:08X}",
+					a_slot, ngxResult_),
 				ngxResult_);
 			return false;
 		}
 
 		featureHandles_[a_slot] = nullptr;
 		featureConfigurations_[a_slot] = {};
+		if (backend_) {
+			backend_->scratch[a_slot].Reset();
+			backend_->scratchBytes[a_slot] = 0;
+		}
 		firstEvaluationResetMask_.fetch_and(~(1u << a_slot), std::memory_order_relaxed);
 		if (device_) {
 			status_ = RuntimeStatus::Initialized;
@@ -1985,7 +913,7 @@ namespace NeuralRendering
 		if (abandonRequested_.load(std::memory_order_acquire) || abandoned_ ||
 			status_ != RuntimeStatus::Initialized || failureStage_ != RuntimeFailureStage::None)
 			return false;
-		if (!device_ || !module_ || !coreModule_ || !parameters_) {
+		if (!device_ || !backend_ || !parameters_) {
 			SetFailureLocked(
 				RuntimeStatus::FeatureReleaseFailed,
 				RuntimeFailureStage::FeatureRelease,
@@ -2009,109 +937,39 @@ namespace NeuralRendering
 		}
 		if (abandoned_)
 			return true;
-		if (device_ && module_) {
+		if (device_) {
 			if (!ResetFeaturesLocked())
 				return false;
-
-			if (parameters_) {
-				const auto destroyParameters = reinterpret_cast<DestroyParameters>(
-					parameterCoreExports_.destroyParameters);
-				if (!destroyParameters) {
-					SetFailureLocked(
-						RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
-						"NGX parameter destroy export is unavailable");
+			for (unsigned index = 0; index < 2; ++index) {
+				auto* map = index == 0 ? static_cast<NVSDK_NGX_Parameter*>(parameters_) : backend_->capabilities;
+				if (!map)
+					continue;
+				const auto result = NVSDK_NGX_D3D12_DestroyParameters(map);
+				if (NVSDK_NGX_FAILED(result)) {
+					SetFailureLocked(RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
+						"NGX SDK parameter destruction failed", static_cast<std::uint32_t>(result));
 					return false;
 				}
-				const auto destroyResult = destroyParameters(
-					static_cast<NVSDK_NGX_Parameter*>(parameters_));
-				if (NVSDK_NGX_FAILED(destroyResult)) {
-					SetFailureLocked(
-						RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
-						std::format(
-							"NGX parameter destruction failed 0x{:08X}",
-							static_cast<std::uint32_t>(destroyResult)),
-						static_cast<std::uint32_t>(destroyResult));
-					return false;
-				}
-				parameters_ = nullptr;
+				if (index == 0)
+					parameters_ = nullptr;
+				else
+					backend_->capabilities = nullptr;
 			}
-
-			const auto runtime = static_cast<HMODULE>(module_);
-			const auto shutdown =
-				reinterpret_cast<ShutdownD3D12>(runtimeExports_.shutdown);
-			RuntimeCallerPathCall pathProxy(runtime);
-			lastPathProxyInstalled_ = pathProxy.IsInstalled();
-			if (!shutdown || !lastPathProxyInstalled_) {
-				SetFailureLocked(
-					RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
-					"NGX shutdown export or caller-path proxy is unavailable");
+			const auto result = NVSDK_NGX_D3D12_Shutdown1(static_cast<ID3D12Device*>(device_));
+			if (NVSDK_NGX_FAILED(result)) {
+				SetFailureLocked(RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
+					"NGX SDK shutdown failed", static_cast<std::uint32_t>(result));
 				return false;
 			}
-			const auto shutdownResult = shutdown(static_cast<ID3D12Device*>(device_));
-			ngxResult_ = static_cast<std::uint32_t>(shutdownResult);
-			lastPathProxyHits_ = pathProxy.Hits();
-			if (NVSDK_NGX_FAILED(shutdownResult)) {
-				SetFailureLocked(
-					RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
-					std::format(
-						"NGX shutdown failed 0x{:08X} proxyHits={}",
-						ngxResult_, lastPathProxyHits_),
-					ngxResult_);
-				return false;
-			}
-
 			static_cast<ID3D12Device*>(device_)->Release();
 			device_ = nullptr;
 		}
-
-		if (coreFile_) {
-			if (!CloseHandle(static_cast<HANDLE>(coreFile_))) {
-				SetFailureLocked(
-					RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
-					std::format(
-						"CloseHandle(parameter core file) failed with {}", GetLastError()));
-				return false;
-			}
-			coreFile_ = nullptr;
-		}
-
-		if (coreModule_) {
-			if (!FreeLibrary(static_cast<HMODULE>(coreModule_))) {
-				SetFailureLocked(
-					RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
-					std::format("FreeLibrary(parameter core) failed with {}", GetLastError()));
-				return false;
-			}
-			coreModule_ = nullptr;
-		}
-
-		if (module_) {
-			const auto runtime = static_cast<HMODULE>(module_);
-			if (!UninstallRuntimeCallerPathHook(runtime)) {
-				SetFailureLocked(
-					RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
-					"caller-path proxy restoration failed; runtime retained for safety");
-				return false;
-			}
-			if (!FreeLibrary(runtime)) {
-				SetFailureLocked(
-					RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
-					std::format("FreeLibrary(runtime) failed with {}", GetLastError()));
-				return false;
-			}
-		}
-		module_ = nullptr;
-		runtimeExports_ = {};
-		parameterCoreExports_ = {};
+		backend_.reset();
 		path_.clear();
 		hash_.clear();
 		version_.clear();
 		tuningLimits_.reset();
 		networkSelectionSupported_.reset();
-		corePath_.clear();
-		coreHash_.clear();
-		coreTrust_ = ParameterCoreTrust::Unknown;
-		coreSource_ = ParameterCoreSource::None;
 		detail_.clear();
 		evaluationSuccessDetail_.reset();
 		featureHandles_ = {};
@@ -2121,11 +979,7 @@ namespace NeuralRendering
 		trust_ = RuntimeTrust::Unknown;
 		failureStage_ = RuntimeFailureStage::None;
 		ngxResult_ = 0;
-		applicationId_ = 0;
-		apiVersion_ = 0;
-		lastPathProxyHits_ = 0;
 		successfulFrames_ = 0;
-		lastPathProxyInstalled_ = false;
 		probeLogEmitted_ = false;
 		initializationLogEmitted_ = false;
 		featureCreateLogEmitted_ = false;
@@ -2138,35 +992,19 @@ namespace NeuralRendering
 	{
 		if (abandoned_)
 			return;
-		bool pathProxyRestored = true;
-		try {
-			if (module_) {
-				pathProxyRestored = UninstallRuntimeCallerPathHook(
-					static_cast<HMODULE>(module_));
-			}
-		} catch (...) {
-			pathProxyRestored = false;
-		}
-		// Failed teardown retains NGX ownership intentionally rather than releasing objects that may still be in use.
-		module_ = nullptr;
-		coreModule_ = nullptr;
-		coreFile_ = nullptr;
+		// Unsafe GPU ownership remains resident until process exit.
+		(void)backend_.release();
 		device_ = nullptr;
 		parameters_ = nullptr;
-		runtimeExports_ = {};
-		parameterCoreExports_ = {};
 		featureHandles_ = {};
 		featureConfigurations_ = {};
 		firstEvaluationResetMask_.store(0, std::memory_order_relaxed);
-		lastPathProxyInstalled_ = !pathProxyRestored;
 		failureStage_ = RuntimeFailureStage::UnsafeAbandon;
 		status_ = RuntimeStatus::UnsafeAbandoned;
 		evaluationSuccessDetail_.reset();
 		abandoned_ = true;
 		try {
-			detail_ = pathProxyRestored ?
-			              "NGX objects intentionally retained after unsafe teardown" :
-			              "NGX objects and caller-path proxy intentionally retained after unsafe teardown";
+			detail_ = "NGX SDK objects intentionally retained after unsafe teardown";
 			logger::critical("[DLSSNR] unsafe ownership abandoned: {}", detail_);
 		} catch (...) {
 		}
@@ -2250,41 +1088,17 @@ namespace NeuralRendering
 		return allocationVersion_ ? allocationVersion_ : GetInstalledRuntimeMetadata().allocationVersion;
 	}
 
-	std::filesystem::path Runtime::ParameterCorePath() const
-	{
-		std::scoped_lock lock(mutex_);
-		return corePath_;
-	}
-
-	std::string Runtime::ParameterCoreHash() const
-	{
-		std::scoped_lock lock(mutex_);
-		return coreHash_;
-	}
-
-	ParameterCoreTrust Runtime::CoreTrust() const
-	{
-		std::scoped_lock lock(mutex_);
-		return coreTrust_;
-	}
-
-	ParameterCoreSource Runtime::CoreSource() const
-	{
-		std::scoped_lock lock(mutex_);
-		return coreSource_;
-	}
-
 	std::string Runtime::DetailLocked() const
 	{
 		if (!evaluationSuccessDetail_)
 			return detail_;
 		const auto& detail = *evaluationSuccessDetail_;
 		return std::format(
-			"Feature 18 evaluated slot={} upscaling={} color={}x{} guides={}x{} output={}x{} controlMask={}x{} subrect=({},{} {}x{}) proxyHits={}",
+			"Feature 18 evaluated slot={} upscaling={} color={}x{} guides={}x{} output={}x{} controlMask={}x{} subrect=({},{} {}x{})",
 			detail.slot, detail.featureUpscaling, detail.color.width, detail.color.height,
 			detail.guides.width, detail.guides.height, detail.output.width, detail.output.height,
 			detail.controlMask.width, detail.controlMask.height, detail.outputSubrect.baseX, detail.outputSubrect.baseY,
-			detail.outputSubrect.width, detail.outputSubrect.height, detail.pathProxyHits);
+			detail.outputSubrect.width, detail.outputSubrect.height);
 	}
 
 	std::string Runtime::Detail() const
@@ -2304,7 +1118,7 @@ namespace NeuralRendering
 		std::scoped_lock lock(mutex_);
 		if (failureStage_ != RuntimeFailureStage::FeatureCreate || abandoned_ || abandonRequested_.load(std::memory_order_acquire))
 			return CapacityFailure::Unsafe;
-		if (ngxResult_ == NVSDK_NGX_Result_FAIL_OutOfGPUMemory)
+		if (ngxResult_ == NVSDK_NGX_Result_FAIL_OutOfGPUMemory || ngxResult_ == static_cast<std::uint32_t>(E_OUTOFMEMORY))
 			return CapacityFailure::Pressure;
 		if (ngxResult_ == NVSDK_NGX_Result_FAIL_FeatureNotSupported || ngxResult_ == NVSDK_NGX_Result_FAIL_UnsupportedParameter)
 			return CapacityFailure::Unsupported;
@@ -2315,18 +1129,6 @@ namespace NeuralRendering
 	{
 		std::scoped_lock lock(mutex_);
 		return successfulFrames_;
-	}
-
-	std::uint32_t Runtime::LastPathProxyHits() const
-	{
-		std::scoped_lock lock(mutex_);
-		return lastPathProxyHits_;
-	}
-
-	bool Runtime::LastPathProxyInstalled() const
-	{
-		std::scoped_lock lock(mutex_);
-		return lastPathProxyInstalled_;
 	}
 
 	const char* ToString(RuntimeStatus a_status)
@@ -2350,8 +1152,6 @@ namespace NeuralRendering
 			return "ready";
 		case RuntimeStatus::InitializationFailed:
 			return "initialization-failed";
-		case RuntimeStatus::CoreUnavailable:
-			return "core-unavailable";
 		case RuntimeStatus::ParameterAllocationFailed:
 			return "parameter-allocation-failed";
 		case RuntimeStatus::Initialized:
@@ -2377,8 +1177,8 @@ namespace NeuralRendering
 		switch (a_trust) {
 		case RuntimeTrust::Unknown:
 			return "unknown";
-		case RuntimeTrust::VersionAccepted:
-			return "version-accepted";
+		case RuntimeTrust::OfficialPackageVerified:
+			return "official-package-verified";
 		}
 		return "unknown";
 	}
@@ -2400,8 +1200,6 @@ namespace NeuralRendering
 			return "identity";
 		case RuntimeFailureStage::Initialization:
 			return "initialization";
-		case RuntimeFailureStage::ParameterCore:
-			return "parameter-core";
 		case RuntimeFailureStage::ParameterAllocation:
 			return "parameter-allocation";
 		case RuntimeFailureStage::FeatureConfiguration:
@@ -2420,29 +1218,4 @@ namespace NeuralRendering
 		return "unknown";
 	}
 
-	const char* ToString(ParameterCoreTrust a_trust)
-	{
-		switch (a_trust) {
-		case ParameterCoreTrust::Unknown:
-			return "unknown";
-		case ParameterCoreTrust::RuntimeIdentityMatched:
-			return "runtime-identity-matched";
-		case ParameterCoreTrust::AuthenticodeVerified:
-			return "authenticode-verified";
-		}
-		return "unknown";
-	}
-
-	const char* ToString(ParameterCoreSource a_source)
-	{
-		switch (a_source) {
-		case ParameterCoreSource::None:
-			return "none";
-		case ParameterCoreSource::Runtime:
-			return "runtime";
-		case ParameterCoreSource::DriverStore:
-			return "driver-store";
-		}
-		return "unknown";
-	}
 }

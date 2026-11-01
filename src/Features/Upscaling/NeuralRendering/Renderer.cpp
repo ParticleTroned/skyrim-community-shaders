@@ -1574,14 +1574,8 @@ namespace NeuralRendering
 			snapshot_.runtimePath = runtime.Path().string();
 			snapshot_.runtimeHash = runtime.Hash();
 			snapshot_.runtimeVersion = runtime.Version();
-			snapshot_.parameterCorePath = runtime.ParameterCorePath().string();
-			snapshot_.parameterCoreHash = runtime.ParameterCoreHash();
-			snapshot_.parameterCoreTrust = ToString(runtime.CoreTrust());
-			snapshot_.parameterCoreSource = ToString(runtime.CoreSource());
 			snapshot_.ngxResult = runtime.NgxResult();
 			snapshot_.runtimeSuccessfulFrames = runtime.SuccessfulFrames();
-			snapshot_.runtimeProxyHits = runtime.LastPathProxyHits();
-			snapshot_.runtimeProxyInstalled = runtime.LastPathProxyInstalled();
 #endif
 			if (snapshot_.detail.empty())
 				snapshot_.detail = runtime.Detail();

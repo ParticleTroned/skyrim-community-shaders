@@ -51,6 +51,24 @@ foreach(_relative_path IN LISTS STREAMLINE_OFFICIAL_RUNTIME_PATHS)
     endif()
 endforeach()
 
+
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/NeuralRenderingSDKPin.cmake")
+foreach(_name IN ITEMS nvngx_dlssnr.dll nvngx_dlssnr.license.txt)
+    set(_destination "${_prefix}/Shaders/Upscaling/Streamline/${_name}")
+    list(APPEND _expected "${_destination}")
+    if(NOT _destination IN_LIST _installed)
+        message(FATAL_ERROR "StreamlineRuntime did not install official NR ${_name}")
+    endif()
+    file(SHA256 "${_destination}" _hash)
+    if(_name STREQUAL "nvngx_dlssnr.dll")
+        set(_pinned "${NEURAL_RENDERING_RUNTIME_SHA256}")
+    else()
+        set(_pinned "${NEURAL_RENDERING_SDK_LICENSE_SHA256}")
+    endif()
+    if(NOT _hash STREQUAL _pinned)
+        message(FATAL_ERROR "Installed NR ${_name} differs from the pinned SDK")
+    endif()
+endforeach()
 list(SORT _installed)
 list(SORT _expected)
 if(NOT _installed STREQUAL _expected)
@@ -73,5 +91,5 @@ if(NOT _actual STREQUAL _relative_expected)
 endif()
 message(
     STATUS
-    "StreamlineRuntime installs the exact configured DLLs and five original notices"
+    "StreamlineRuntime installs the exact configured DLLs and eight original notices"
 )

@@ -4,6 +4,7 @@
 #include "Features/Upscaling/NeuralRendering/ShaderInvalidation.h"
 #include "Features/Upscaling/NeuralRendering/Style.h"
 #include "Features/Upscaling/NeuralRendering/TuningLimits.h"
+#include "neural_sdk_parameters_under_test.h"
 
 #include <algorithm>
 #include <atomic>
@@ -56,7 +57,8 @@ namespace logger
 		successLogs.push_back({ operation, std::move(detail) });
 	}
 	template <class... Args>
-	void error(Args&&...) {}
+	void error(Args&&...)
+	{}
 	template <class... Args>
 	void warn(Args&&...)
 	{
@@ -81,7 +83,6 @@ namespace NeuralRendering
 	{};
 	struct ID3D12Resource
 	{};
-	using HMODULE = void*;
 	constexpr std::int32_t E_INVALIDARG = -1, E_PENDING = -2;
 	constexpr unsigned kFeatureDlssNr = 18;
 	constexpr bool NVSDK_NGX_FAILED(int result) { return result != 0; }
@@ -91,17 +92,11 @@ namespace NeuralRendering
 	{
 		std::map<std::string, std::uint64_t> values;
 		void Reset() { values.clear(); }
+		void Set(const char* key, int value) { values[key] = static_cast<std::uint64_t>(value); }
+		void Set(const char* key, unsigned long long value) { values[key] = value; }
 		void Set(const char* key, std::uint32_t value) { values[key] = value; }
 		void Set(const char* key, float value) { values[key] = std::bit_cast<std::uint32_t>(value); }
 		void Set(const char* key, ID3D12Resource* value) { values[key] = reinterpret_cast<std::uintptr_t>(value); }
-	};
-	struct RuntimeCallerPathCall
-	{
-		static inline bool installed = true;
-		static inline unsigned hits = 1;
-		explicit RuntimeCallerPathCall(HMODULE) {}
-		bool IsInstalled() const { return installed; }
-		unsigned Hits() const { return hits; }
 	};
 	struct D3D12Interop
 	{
@@ -125,7 +120,6 @@ namespace NeuralRendering
 		Version,
 		Identity,
 		Initialization,
-		ParameterCore,
 		ParameterAllocation,
 		FeatureConfiguration,
 		FeatureCreate,
@@ -134,7 +128,10 @@ namespace NeuralRendering
 		Load
 	};
 	template <class T>
-	const char* ToString(T) { return "test"; }
+	const char* ToString(T)
+	{
+		return "test";
+	}
 	auto DiagnosticNow() { return std::chrono::steady_clock::now(); }
 	struct RuntimeExecutionEvidence
 	{
@@ -151,14 +148,11 @@ namespace NeuralRendering
 		bool useAutoMask = true, uiCorrection = false, depthInverted = false;
 		float singleSubrectScale = 1;
 	};
-	using CreateFeature = int (*)(ID3D12GraphicsCommandList*, unsigned, NVSDK_NGX_Parameter*, NVSDK_NGX_Handle**);
-	using EvaluateFeature = int (*)(ID3D12GraphicsCommandList*, NVSDK_NGX_Handle*, NVSDK_NGX_Parameter*, void*);
-	using ReleaseFeature = int (*)(NVSDK_NGX_Handle*);
 	std::vector<std::map<std::string, std::uint64_t>> creates, evaluations;
 	int providerCreateResult = 0, providerEvaluateResult = 0;
 	bool returnHandle = true;
 	NVSDK_NGX_Handle providerHandle;
-	int Create(ID3D12GraphicsCommandList*, unsigned feature, NVSDK_NGX_Parameter* parameters, NVSDK_NGX_Handle** output)
+	int NVSDK_NGX_D3D12_CreateFeature(ID3D12GraphicsCommandList*, unsigned feature, NVSDK_NGX_Parameter* parameters, NVSDK_NGX_Handle** output)
 	{
 		if (feature != kFeatureDlssNr)
 			throw std::runtime_error("wrong feature");
@@ -166,12 +160,12 @@ namespace NeuralRendering
 		*output = returnHandle ? &providerHandle : nullptr;
 		return providerCreateResult;
 	}
-	int Evaluate(ID3D12GraphicsCommandList*, NVSDK_NGX_Handle*, NVSDK_NGX_Parameter* parameters, void*)
+	int NVSDK_NGX_D3D12_EvaluateFeature(ID3D12GraphicsCommandList*, NVSDK_NGX_Handle*, NVSDK_NGX_Parameter* parameters, void*)
 	{
 		evaluations.push_back(parameters->values);
 		return providerEvaluateResult;
 	}
-	int Release(NVSDK_NGX_Handle*) { return 0; }
+	int NVSDK_NGX_D3D12_ReleaseFeature(NVSDK_NGX_Handle*) { return 0; }
 	struct Runtime
 	{
 		static constexpr unsigned kFeatureSlotCount = 4;
@@ -197,19 +191,25 @@ namespace NeuralRendering
 		std::array<void*, kFeatureSlotCount> featureHandles_{};
 		std::array<FeatureConfiguration, kFeatureSlotCount> featureConfigurations_{};
 		std::atomic<std::uint32_t> firstEvaluationResetMask_{ 0 };
-		struct Exports
+		struct Scratch
 		{
-			void* createFeature = reinterpret_cast<void*>(&Create);
-			void* evaluateFeature = reinterpret_cast<void*>(&Evaluate);
-			void* releaseFeature = reinterpret_cast<void*>(&Release);
-		} runtimeExports_;
+			ID3D12Resource* Get() const { return nullptr; }
+			void Reset() {}
+		};
+		struct Backend
+		{
+			std::array<Scratch, kFeatureSlotCount> scratch;
+			std::array<std::size_t, kFeatureSlotCount> scratchBytes{};
+		} backendStorage;
+		Backend* backend_ = &backendStorage;
+		bool scratchReady = true;
+		bool PrepareScratchLocked(unsigned) { return scratchReady; }
 		NVSDK_NGX_Parameter parameterStorage;
 		void* parameters_ = &parameterStorage;
-		void* module_ = nullptr;
 		void* device_ = nullptr;
 		bool probeLogEmitted_ = false, initializationLogEmitted_ = false;
-		bool lastPathProxyInstalled_ = false, featureCreateLogEmitted_ = false, featureEvaluateLogEmitted_ = false;
-		unsigned lastPathProxyHits_ = 0, ngxResult_ = 0;
+		bool featureCreateLogEmitted_ = false, featureEvaluateLogEmitted_ = false;
+		unsigned ngxResult_ = 0;
 		std::uint64_t successfulFrames_ = 0;
 		int trust_ = 0;
 		std::string detail_;
@@ -226,10 +226,10 @@ namespace NeuralRendering
 	};
 #include "neural_native_creation_under_test.h"
 #include "neural_native_key_under_test.h"
-#include "neural_runtime_tuning_under_test.h"
-#include "neural_runtime_logging_under_test.h"
 #include "neural_runtime_detail_under_test.h"
+#include "neural_runtime_logging_under_test.h"
 #include "neural_runtime_reset_under_test.h"
+#include "neural_runtime_tuning_under_test.h"
 }
 
 namespace
@@ -317,7 +317,7 @@ namespace
 		const auto evaluationsBefore = evaluations.size();
 		Require(warm.PrepareFeature(&commands, 2, layout), "prewarm failed");
 		Require(creates.back() == lazyParameters, "lazy/prewarm creation parameter mismatch");
-		Require(lazyParameters.at("Width") == 320 && lazyParameters.at("DLSSNR.InputHeight") == 192 && lazyParameters.at("DLSSNR.Upscaling") == 0, "creation contract changed");
+		Require(lazyParameters.at("Width") == 320 && lazyParameters.at("DLSSNR.Height") == 192 && !lazyParameters.contains("DLSSNR.Upscaling"), "creation contract changed");
 		Require(warm.successfulFrames_ == 0 && evaluations.size() == evaluationsBefore, "prewarm evaluated a fabricated frame");
 		const auto created = creates.size();
 		Require(warm.PrepareFeature(&commands, 2, layout) && run(warm, 2, layout), "first use failed");
@@ -377,10 +377,10 @@ namespace
 		Require(!failed.PrepareFeature(&commands, 2, layout) && failed.featureHandles_[2] && !failed.featureConfigurations_[2].valid, "failed non-null handle was lost or advertised reusable");
 		providerCreateResult = 0;
 		Runtime missing;
-		RuntimeCallerPathCall::installed = false;
-		const auto beforeProxy = creates.size();
-		Require(!missing.PrepareFeature(&commands, 2, layout) && creates.size() == beforeProxy, "missing proxy called provider");
-		RuntimeCallerPathCall::installed = true;
+		missing.scratchReady = false;
+		const auto beforeScratchFailure = creates.size();
+		Require(!missing.PrepareFeature(&commands, 2, layout) && creates.size() == beforeScratchFailure, "scratch failure called provider");
+		missing.scratchReady = true;
 		Runtime blendLazy, blendWarm, noBindings;
 		auto blendLayout = layout;
 		blendLayout.controlMask = layout.output;
@@ -406,7 +406,7 @@ namespace
 		ID3D12GraphicsCommandList commands;
 		ID3D12Resource resource;
 		Runtime runtime;
-		runtime.module_ = runtime.device_ = &resource;
+		runtime.device_ = &resource;
 		const auto run = [&](unsigned slot, const NativeEvaluationLayout& layout, ID3D12Resource* mask = nullptr) {
 			Tuning tuning;
 			tuning.useAutoMask = mask == nullptr;
@@ -415,19 +415,16 @@ namespace
 		const auto successLogBegin = logger::successLogs.size();
 		Require(run(0, first) && runtime.detail_.empty(), "successful evaluation eagerly retained a formatted message");
 		const auto firstDetail = runtime.Detail();
-		Require(firstDetail == "Feature 18 evaluated slot=0 upscaling=false color=320x192 guides=320x192 output=320x192 controlMask=0x0 subrect=(0,0 320x192) proxyHits=1",
+		Require(firstDetail == "Feature 18 evaluated slot=0 upscaling=false color=320x192 guides=320x192 output=320x192 controlMask=0x0 subrect=(0,0 320x192)",
 			"first evaluation lost its detail contract");
 		Require(logger::successLogs.back().operation == "evaluate" && logger::successLogs.back().detail == firstDetail,
 			"first-success logging did not resolve the evaluation detail");
 
-		RuntimeCallerPathCall::hits = 7;
 		Require(run(1, latest, &resource) && runtime.detail_.empty(), "peer evaluation eagerly retained a formatted message");
-		RuntimeCallerPathCall::hits = 1;
-		runtime.lastPathProxyHits_ = 99;
 		latest = {};
 		const auto latestDetail = runtime.Detail();
-		Require(latestDetail == "Feature 18 evaluated slot=1 upscaling=true color=640x384 guides=320x192 output=640x384 controlMask=640x384 subrect=(32,16 512x320) proxyHits=7",
-			"on-demand detail did not retain the latest evaluation's own dimensions, slot, subrect and proxy hits");
+		Require(latestDetail == "Feature 18 evaluated slot=1 upscaling=true color=640x384 guides=320x192 output=640x384 controlMask=640x384 subrect=(32,16 512x320)",
+			"on-demand detail did not retain the latest evaluation's own dimensions, slot and subrect");
 		Require(std::count_if(logger::successLogs.begin() + successLogBegin, logger::successLogs.end(),
 					[](const auto& log) { return log.operation == "evaluate"; }) == 1,
 			"a peer success repeated the once-only evaluation log");
@@ -439,14 +436,14 @@ namespace
 		Require(run(0, first), "evaluation after reset failed");
 		providerEvaluateResult = -7;
 		Require(!run(0, first) && !runtime.evaluationSuccessDetail_ &&
-				runtime.status_ == RuntimeStatus::FeatureEvaluateFailed && runtime.failureStage_ == RuntimeFailureStage::FeatureEvaluate &&
-				runtime.ngxResult_ == static_cast<unsigned>(-7) && runtime.Detail().starts_with("Feature 18 evaluate failed slot=0 "),
+					runtime.status_ == RuntimeStatus::FeatureEvaluateFailed && runtime.failureStage_ == RuntimeFailureStage::FeatureEvaluate &&
+					runtime.ngxResult_ == static_cast<unsigned>(-7) && runtime.Detail().starts_with("Feature 18 evaluate failed slot=0 "),
 			"evaluation failure was hidden by the previous success detail");
 		providerEvaluateResult = 0;
 		Require(runtime.ResetFeatureLocked(0) && run(0, first) && runtime.Detail() == firstDetail,
 			"recovery did not replace the failure detail with the current evaluation");
 		Require(runtime.PrepareFeature(&commands, 2, first) && !runtime.evaluationSuccessDetail_ &&
-				runtime.Detail().starts_with("Feature 18 created slot=2 "),
+					runtime.Detail().starts_with("Feature 18 created slot=2 "),
 			"feature creation retained an earlier evaluation detail");
 	}
 

@@ -1,5 +1,6 @@
 #include "Streamline.h"
 #include "Features/ReverseZ.h"
+#include "NvidiaProject.h"
 #include "StreamlineConstants.h"
 
 #include <algorithm>
@@ -1447,7 +1448,7 @@ bool Streamline::LoadInterposer()
 
 	pref.engine = sl::EngineType::eCustom;
 	pref.engineVersion = "1.0.0";
-	pref.projectId = "f8776929-c969-43bd-ac2b-294b4de58aac";
+	pref.projectId = NvidiaProject::kId;
 
 	pref.renderAPI = sl::RenderAPI::eD3D11;
 	pref.flags = sl::PreferenceFlags::eUseManualHooking | sl::PreferenceFlags::eUseFrameBasedResourceTagging;

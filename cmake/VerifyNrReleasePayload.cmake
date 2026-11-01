@@ -33,4 +33,4 @@ if(NOT _actual_names STREQUAL _expected_names)
     message(FATAL_ERROR "NR release Streamline folder contains unexpected files: ${_actual_names}")
 endif()
 
-message(STATUS "NR release contains only pinned Streamline SDK files and no NR DLLs")
+message(STATUS "NR release contains only pinned Streamline and NR SDK files with original notices")

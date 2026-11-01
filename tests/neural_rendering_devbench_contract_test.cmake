@@ -374,8 +374,8 @@ foreach(_dynamic_compute_roi_contract IN ITEMS
     [[bounds = CharacterRegionPolicy::Union(bounds, region);]]
     [[a_args.computeSubrect = result.computeSubrect;]]
     [[MapComputeSubrect(]]
-    [[parameters->Set("DLSSNR.ColorSubrectBaseX", colorSubrect.baseX);]]
-    [[parameters->Set("DLSSNR.OutputSubrectWidth", outputSubrect.width);]]
+    [[parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ColorSubrectBaseX, colorSubrect.baseX);]]
+    [[parameters->Set(NVSDK_NGX_Parameter_DLSSNR_OutputSubrectWidth, outputSubrect.width);]]
     [[CopyTextureSubrect(]]
     [[Add(pixelCount, resources[index].roi.inferenceContext.Area());]]
     [[RestrictVisibleOutputToComputeSubrect(]]
@@ -1034,7 +1034,7 @@ if(NOT _descriptor_two_value_maximum EQUAL 1)
 endif()
 
 foreach(_status_contract IN ITEMS
-    [[{ "apiVersion", 11 }]]
+    [[{ "apiVersion", 12 }]]
     [[{ "implementationMatrix", NeuralImplementationMatrixJson() }]]
     [[{ "insertionPointMatrix", NeuralInsertionPointMatrixJson() }]]
     [[{ "selectedInsertionPoint", NeuralInsertionPointJson(insertionPoint) }]]
@@ -1090,7 +1090,7 @@ foreach(_status_contract IN ITEMS
     [[{ "currentFrame", temporalAdmission.currentFrame }]]
     [[{ "lastWorldRenderFrame", temporalAdmission.lastWorldRenderFrame }]]
     [[{ "lastCompletedWorldRenderFrame", temporalAdmission.lastCompletedWorldRenderFrame }]]
-    [[nr_status returns the API-v11 NR runtime]]
+    [[nr_status returns the NGX SDK NR runtime]]
     [[nr_status exposes lifetimeDiagnostics: a bounded 64-record CPU history]]
     [[NeuralRendering::LifetimeDiagnosticsJson(NeuralRendering::Renderer::Instance().GetLifetimeDiagnostics()]]
     [[{ "neuralRendering", NeuralRenderingStatusJson(a_upscaling) }]]
@@ -1193,7 +1193,7 @@ foreach(_status_contract IN ITEMS
     [[{ "matchesPreparedCharacterMask", featureTimingMatchesPreparedMask }]]
     [[{ "developerModeRequired", false }]]
     [[{ "streamlineLogLevelAffectsAdmission", false }]]
-    [[{ "allowUnlistedPatchedOrUnsignedRuntime", true }]]
+    [[{ "allowUnlistedPatchedOrUnsignedRuntime", false }]]
     [[{ "reason", "D3D11 profile components and asynchronous D3D12 Feature 18 samples are exposed separately; no uncorrelated sum is reported" }]]
     [[{ "foveation", FoveationStatusJson(a_upscaling) }]]
     [[{ "fovPrerequisite", { { "required", fovRequired }, { "available", fovAvailable },]]
@@ -1864,151 +1864,32 @@ string(SUBSTRING "${_runtime_source}" ${_runtime_reset_begin}
 string(SUBSTRING "${_runtime_source}" ${_runtime_shutdown_begin}
     ${_runtime_shutdown_length} _runtime_shutdown)
 
-foreach(_runtime_cache_contract IN ITEMS
-    [[RuntimeExports runtimeExports_{};]]
-    [[ParameterCoreExports parameterCoreExports_{};]]
-    [[reinterpret_cast<InitD3D12>(runtimeExports_.initialize)]]
-    [[reinterpret_cast<CreateFeature>(runtimeExports_.createFeature)]]
-    [[reinterpret_cast<EvaluateFeature>(runtimeExports_.evaluateFeature)]]
-    [[reinterpret_cast<ReleaseFeature>(runtimeExports_.releaseFeature)]]
-    [[reinterpret_cast<ShutdownD3D12>(runtimeExports_.shutdown)]]
-    [[parameterCoreExports_.destroyParameters]]
-    [[InterlockedCompareExchangePointer(]]
-    [[HMODULE retainedCallerModule = nullptr;]]
-    [[active->retainedCallerModule]]
-    [[ReadImportSlot(g_pathProxySlot)]]
-    [[GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS]]
-    [[GET_MODULE_HANDLE_EX_FLAG_PIN]]
-	[[ImportSlotExchangeResult]]
-	[[exchange.protectionRestored]]
-	[[exchange.rolledBack]]
-    [[runtimeExports_ = {]]
-    [[.initialize = requiredExports[0],]]
-    [[parameterCoreExports_ = {]]
-    [[.allocateParameters = reinterpret_cast<void*>(]]
+foreach(_sdk_contract IN ITEMS
+    [[NVSDK_NGX_D3D12_Init_with_ProjectID(]]
+    [[NvidiaProject::kId, NVSDK_NGX_ENGINE_TYPE_CUSTOM]]
+    [[NVSDK_NGX_D3D12_GetCapabilityParameters(]]
+    [[NVSDK_NGX_D3D12_AllocateParameters(]]
+    [[NVSDK_NGX_D3D12_GetScratchBufferSize(]]
+    [[NVSDK_NGX_D3D12_CreateFeature(]]
+    [[NVSDK_NGX_D3D12_EvaluateFeature(]]
+    [[NVSDK_NGX_D3D12_ReleaseFeature(]]
+    [[NVSDK_NGX_D3D12_DestroyParameters(]]
+    [[NVSDK_NGX_D3D12_Shutdown1(]]
+    [[CSX_NR_RUNTIME_SHA256]]
 )
-    string(FIND
-        "${_runtime_header}\n${_runtime_source}"
-        "${_runtime_cache_contract}"
-        _runtime_cache_position
-    )
-    if(_runtime_cache_position EQUAL -1)
-        message(FATAL_ERROR
-            "NR runtime cached-export contract is missing: ${_runtime_cache_contract}"
-        )
+    string(FIND "${_runtime_source}" "${_sdk_contract}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR "Official NR SDK contract is missing: ${_sdk_contract}")
     endif()
 endforeach()
-
-string(FIND "${_runtime_source}"
-    [[bool InstallRuntimeCallerPathHook(]] _hook_install_begin)
-string(FIND "${_runtime_source}"
-    [[bool UninstallRuntimeCallerPathHook(]] _hook_install_end)
-if(_hook_install_begin EQUAL -1 OR _hook_install_end EQUAL -1 OR
-    NOT _hook_install_begin LESS _hook_install_end)
-    message(FATAL_ERROR "NR caller-path hook installation could not be isolated")
-endif()
-math(EXPR _hook_install_length "${_hook_install_end} - ${_hook_install_begin}")
-string(SUBSTRING "${_runtime_source}" ${_hook_install_begin}
-    ${_hook_install_length} _hook_install)
-string(FIND "${_hook_install}"
-    [[&invocation->retainedCallerModule]] _hook_pin_position)
-string(FIND "${_hook_install}"
-    [[ProtectAndExchangeImportSlot(]] _hook_exchange_position)
-if(_hook_pin_position EQUAL -1 OR _hook_exchange_position EQUAL -1 OR
-    NOT _hook_pin_position LESS _hook_exchange_position)
-    message(FATAL_ERROR
-        "NR caller module must be pinned before the vendor IAT is changed"
-    )
-endif()
-string(FIND "${_runtime_source}" [[callerModulePinned]] _late_hook_pin)
-if(NOT _late_hook_pin EQUAL -1)
-    message(FATAL_ERROR
-        "NR caller-path safety must not rely on a fallible teardown-time pin"
-    )
-endif()
-
-string(REGEX MATCHALL
-    "InstallRuntimeCallerPathHook\\("
-    _runtime_hook_installs
-    "${_runtime_source}"
-)
-list(LENGTH _runtime_hook_installs _runtime_hook_install_count)
-if(NOT _runtime_hook_install_count EQUAL 2)
-    message(FATAL_ERROR
-        "NR caller-path hook must have one definition and one lifetime install"
-    )
-endif()
-string(FIND "${_runtime_source}" "RuntimeCallerPathScope" _old_runtime_scope)
-if(NOT _old_runtime_scope EQUAL -1)
-    message(FATAL_ERROR "NR runtime must not reinstall its IAT proxy per NGX call")
-endif()
-
-foreach(_initialize_contract IN ITEMS
-    [[InstallRuntimeCallerPathHook(]]
-    [[RuntimeCallerPathCall pathProxy(runtime);]]
-	[[lastPathProxyInstalled_ = pathProxy.IsInstalled();]]
-    [[initialize(]]
-    [[UninstallRuntimeCallerPathHook(runtime)]]
-)
-    string(FIND "${_runtime_initialize}" "${_initialize_contract}"
-        _initialize_contract_position)
-    if(_initialize_contract_position EQUAL -1)
-        message(FATAL_ERROR
-            "NR initialization hook contract is missing: ${_initialize_contract}"
-        )
+foreach(_forbidden IN ITEMS [[GetProcAddress(]] [[LoadLibraryExW(]]
+        [[VirtualProtect(]] [[RuntimeCallerPath]] [[spoofedPath]]
+        [[NVSDK_NGX_GetApplicationId]] [[NVSDK_NGX_GetAPIVersion]])
+    string(FIND "${_runtime_source}" "${_forbidden}" _position)
+    if(NOT _position EQUAL -1)
+        message(FATAL_ERROR "NR must use the unmodified NVIDIA SDK route: ${_forbidden}")
     endif()
 endforeach()
-string(FIND "${_runtime_initialize}" "InstallRuntimeCallerPathHook("
-    _initialize_install_position)
-string(FIND "${_runtime_initialize}" "const auto initializeResult = initialize("
-    _initialize_call_position)
-if(NOT _initialize_install_position LESS _initialize_call_position)
-    message(FATAL_ERROR "NR caller-path hook must precede NGX initialization")
-endif()
-
-foreach(_execute_contract IN ITEMS
-    [[RuntimeCallerPathCall pathProxy(runtime);]]
-    [[runtimeExports_.createFeature]]
-    [[runtimeExports_.evaluateFeature]]
-)
-    string(FIND "${_runtime_execute}" "${_execute_contract}"
-        _execute_contract_position)
-    if(_execute_contract_position EQUAL -1)
-        message(FATAL_ERROR
-            "NR Execute cached-hook contract is missing: ${_execute_contract}"
-        )
-    endif()
-endforeach()
-foreach(_execute_forbidden IN ITEMS
-    [[InstallRuntimeCallerPathHook(]]
-    [[UninstallRuntimeCallerPathHook(]]
-    [[GetProcAddress(]]
-)
-    string(FIND "${_runtime_execute}" "${_execute_forbidden}"
-        _execute_forbidden_position)
-    if(NOT _execute_forbidden_position EQUAL -1)
-        message(FATAL_ERROR
-            "NR Execute must not perform runtime hook/export setup: ${_execute_forbidden}"
-        )
-    endif()
-endforeach()
-
-foreach(_reset_contract IN ITEMS
-    [[RuntimeCallerPathCall pathProxy(runtime);]]
-    [[runtimeExports_.releaseFeature]]
-)
-    string(FIND "${_runtime_reset}" "${_reset_contract}"
-        _reset_contract_position)
-    if(_reset_contract_position EQUAL -1)
-        message(FATAL_ERROR
-            "NR feature-reset cached-hook contract is missing: ${_reset_contract}"
-        )
-    endif()
-endforeach()
-string(FIND "${_runtime_reset}" "GetProcAddress(" _reset_get_proc)
-if(NOT _reset_get_proc EQUAL -1)
-    message(FATAL_ERROR "NR feature reset must use its cached release export")
-endif()
 
 string(FIND "${_runtime_source}" "bool Runtime::ReleasePassResources()"
     _runtime_warm_release_begin)
@@ -2024,7 +1905,7 @@ foreach(_warm_release_contract IN ITEMS
     [[std::scoped_lock lock(mutex_);]]
     [[abandonRequested_.load(std::memory_order_acquire) || abandoned_]]
     [[status_ != RuntimeStatus::Initialized || failureStage_ != RuntimeFailureStage::None]]
-    [[!device_ || !module_ || !coreModule_ || !parameters_]]
+    [[!device_ || !backend_ || !parameters_]]
     [[if (!ResetFeaturesLocked(true) || abandonRequested_.load(std::memory_order_acquire))]]
 )
     string(FIND "${_runtime_warm_release}" "${_warm_release_contract}"
@@ -2058,26 +1939,14 @@ if(NOT _warm_release_fail_fast)
     message(FATAL_ERROR "NR warm release must preserve the first failed native release")
 endif()
 
-string(FIND "${_runtime_shutdown}" "shutdown(static_cast<ID3D12Device*>(device_))"
-    _runtime_shutdown_call)
-string(FIND "${_runtime_shutdown}" "UninstallRuntimeCallerPathHook(runtime)"
-    _runtime_uninstall_call)
-string(FIND "${_runtime_shutdown}" "FreeLibrary(runtime)"
-    _runtime_free_call)
-if(_runtime_shutdown_call EQUAL -1 OR _runtime_uninstall_call EQUAL -1 OR
-    _runtime_free_call EQUAL -1 OR
-    NOT _runtime_shutdown_call LESS _runtime_uninstall_call OR
-    NOT _runtime_uninstall_call LESS _runtime_free_call)
-    message(FATAL_ERROR
-        "NR shutdown must call NGX shutdown, restore its IAT, then unload"
-    )
+string(FIND "${_runtime_shutdown}" "NVSDK_NGX_D3D12_Shutdown1(" _sdk_shutdown)
+string(FIND "${_runtime_shutdown}" "backend_.reset()" _backend_release)
+if(_sdk_shutdown EQUAL -1 OR NOT _sdk_shutdown LESS _backend_release)
+    message(FATAL_ERROR "NR must shut down the SDK before releasing provider ownership")
 endif()
-string(FIND "${_runtime_source}" [[void Runtime::AbandonLocked() noexcept]]
-    _runtime_abandon_contract)
-string(FIND "${_runtime_source}" [[pathProxyRestored = UninstallRuntimeCallerPathHook(]]
-    _runtime_abandon_restore)
-if(_runtime_abandon_contract EQUAL -1 OR _runtime_abandon_restore EQUAL -1)
-    message(FATAL_ERROR "Unsafe NR abandon must attempt IAT restoration")
+string(FIND "${_runtime_source}" "(void)backend_.release();" _unsafe_retain)
+if(_unsafe_retain EQUAL -1)
+    message(FATAL_ERROR "Unsafe NR teardown must retain SDK and scratch ownership")
 endif()
 
 foreach(_readback_contract IN ITEMS

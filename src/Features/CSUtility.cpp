@@ -218,7 +218,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	causticsSpeed,
 	causticsDispersion,
 	parallaxStrength,
-	parallaxQuality)
+	parallaxQuality,
+	foveatedParallax)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CSUtility::ColorAdjustment,
@@ -466,6 +467,8 @@ void CSUtility::DrawWaterSettings()
 		ImGui::TextWrapped("%s", T(TKEY("water_parallax_quality_tooltip"), "Sets water parallax sampling quality, including flowmaps. 16 matches current quality. Higher values reduce stepping and increase GPU cost."));
 	}
 
+	if (globals::game::isVR)
+		ImGui::Checkbox(T(TKEY("water_foveated_parallax"), "Foveated Water Parallax"), &water.foveatedParallax);
 	SanitizeWaterSettings(water);
 	ImGui::EndTabItem();
 }

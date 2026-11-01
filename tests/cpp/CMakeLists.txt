@@ -57,6 +57,7 @@ set(screenshot_test_sources
 )
 
 add_executable(cpp_tests
+    test_water_flowmap_layout.cpp
     test_main.cpp
     test_antilag2.cpp
     ${screenshot_test_sources}

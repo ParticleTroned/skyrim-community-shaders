@@ -34,6 +34,15 @@ public:
 	/** @brief Binds the caustics texture SRV to the pixel shader for the current frame. */
 	virtual void Prepass() override;
 
+	struct alignas(16) ParallaxFoveationData
+	{
+		float4 region{};
+		float4 centers{};
+	};
+	static_assert(sizeof(ParallaxFoveationData) == 32);
+	/** @brief Returns the active per-eye mask, or mode zero for unchanged full detail. */
+	ParallaxFoveationData GetParallaxFoveationData() const;
+
 	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; };
 };

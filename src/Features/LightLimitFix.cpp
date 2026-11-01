@@ -88,6 +88,9 @@ namespace
 	void SetPointLightTypeFlags(LightLimitFix::LightData& a_light, RE::BSLight* a_bsLight)
 	{
 		PointLightFlags::SetPointLightTypeFlags(a_light.lightFlags, a_bsLight);
+		a_light.lightFlags.reset(LightLimitFix::LightFlags::AffectWater);
+		if (a_bsLight && a_bsLight->affectWater)
+			a_light.lightFlags.set(LightLimitFix::LightFlags::AffectWater);
 	}
 
 	// Tints a hovered/highlighted debug-table row's light magenta in-world so
@@ -122,6 +125,7 @@ namespace
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LightLimitFix::Settings,
 	EnableContactShadows,
+	WaterContactCandidateBudget,
 	ContactShadowMaxSteps,
 	ContactShadowMaxDistance,
 	ContactShadowLength,
@@ -315,6 +319,9 @@ void LightLimitFix::DrawLightStatistics()
 
 void LightLimitFix::DrawContactShadowSettings()
 {
+	constexpr uint kMinWaterCandidates = 0, kMaxWaterCandidates = 8;
+	ImGui::SliderScalar(T("feature.light_limit_fix.water_contact_candidates", "Water Contact Candidates (0: unchanged)"),
+		ImGuiDataType_U32, &settings.WaterContactCandidateBudget, &kMinWaterCandidates, &kMaxWaterCandidates, "%u", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::Checkbox(T("feature.light_limit_fix.enable_contact_shadows", "Enable Contact Shadows"), &settings.EnableContactShadows);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("feature.light_limit_fix.enable_contact_shadows_tooltip", "All point lights (strict and clustered, except simple lights) cast short screen-space shadows. Performance impact."));
@@ -557,6 +564,7 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 
 	PerFrame perFrame{};
 	perFrame.EnableContactShadows = settings.EnableContactShadows;
+	perFrame.WaterContactCandidateBudget = settings.EnableContactShadows ? std::min(settings.WaterContactCandidateBudget, 8u) : 0u;
 	perFrame.ContactShadowMaxSteps = std::clamp<uint32_t>(settings.ContactShadowMaxSteps, 1u, 16u);
 	perFrame.ContactShadowMaxDistance = sanitizeFloat(settings.ContactShadowMaxDistance, 64.0f, 4096.0f);
 	perFrame.ContactShadowLength = sanitizeFloat(settings.ContactShadowLength, 1.0f, 256.0f);
@@ -1259,6 +1267,7 @@ void LightLimitFix::ClearShaderCache()
 	ShadowCasterManager::ClearAtlasShaders();
 	clusterBuildingCS.Reset();
 	clusterCullingCS.Reset();
+	waterContactCandidatesCS.Reset();
 	shadowDemandCS.Reset();
 	shadowDepthPyramidCS.Reset();
 
@@ -1563,6 +1572,8 @@ void LightLimitFix::UpdateStructure()
 		CS_GPU_PASS("LightLimitFix::ClusterCull");
 		LightCullingCB updateData{};
 		updateData.LightCount = lightCount;
+		updateData.WaterCandidateBudget = settings.EnableContactShadows ? std::min(settings.WaterContactCandidateBudget, 8u) : 0u;
+		updateData.ParticleContactEnabled = settings.EnableParticleContactShadows ? 1u : 0u;
 		std::copy(clusterSize, clusterSize + 3, updateData.ClusterSize);
 
 		lightCullingCB->Update(updateData);
@@ -1578,6 +1589,14 @@ void LightLimitFix::UpdateStructure()
 
 		context->CSSetShader(clusterCulling, nullptr, 0);
 		context->Dispatch((clusterSize[0] + 15) / 16, (clusterSize[1] + 15) / 16, (clusterSize[2] + 3) / 4);
+		if (updateData.WaterCandidateBudget != 0) {
+			if (auto* candidates = waterContactCandidatesCS.Get(L"Data\\Shaders\\LightLimitFix\\WaterContactCandidatesCS.hlsl", clusterDefines, "cs_5_0")) {
+				CS_GPU_PASS("LightLimitFix::WaterContactCandidates");
+				context->CSSetShader(candidates, nullptr, 0);
+				context->Dispatch((clusterSize[0] + 7) / 8, (clusterSize[1] + 7) / 8, clusterSize[2]);
+			}
+		}
+
 	}
 
 	context->CSSetShader(nullptr, nullptr, 0);

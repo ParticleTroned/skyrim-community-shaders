@@ -15,9 +15,54 @@
 #include "RE/P/PlayerCharacter.h"
 
 #include <imgui_internal.h>
+#include <algorithm>
+#include <cmath>
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(UnifiedWater::ShallowSettings, ShallowFallbackStrength, DeepConnectionProbeReachUnits, DeepContextDepthUnits, ShoreContactMinFadePixels, ShoreDepthBlendRangeUnits, ShallowSurfaceDepthRangeUnits, ShallowFallbackMaxDistance, DeepContextTransitionUnits)
+
+UnifiedWater::ShallowSettings UnifiedWater::GetShallowSettings() const
+{
+	ShallowSettings result = shallowSettings;
+	const ShallowSettings defaults{};
+	result.ShallowFallbackStrength = std::isfinite(result.ShallowFallbackStrength) ? std::clamp(result.ShallowFallbackStrength, 0.0f, 1.0f) : defaults.ShallowFallbackStrength;
+	result.DeepConnectionProbeReachUnits = std::isfinite(result.DeepConnectionProbeReachUnits) ? std::clamp(result.DeepConnectionProbeReachUnits, 0.0f, 768.0f) : defaults.DeepConnectionProbeReachUnits;
+	result.DeepContextDepthUnits = std::isfinite(result.DeepContextDepthUnits) ? std::clamp(result.DeepContextDepthUnits, 32.0f, 384.0f) : defaults.DeepContextDepthUnits;
+	result.ShoreContactMinFadePixels = std::isfinite(result.ShoreContactMinFadePixels) ? std::clamp(result.ShoreContactMinFadePixels, 0.0f, 4.0f) : defaults.ShoreContactMinFadePixels;
+	result.ShoreDepthBlendRangeUnits = std::isfinite(result.ShoreDepthBlendRangeUnits) ? std::clamp(result.ShoreDepthBlendRangeUnits, 0.0f, 20.0f) : defaults.ShoreDepthBlendRangeUnits;
+	result.ShallowSurfaceDepthRangeUnits = std::isfinite(result.ShallowSurfaceDepthRangeUnits) ? std::clamp(result.ShallowSurfaceDepthRangeUnits, 16.0f, 256.0f) : defaults.ShallowSurfaceDepthRangeUnits;
+	result.ShallowFallbackMaxDistance = std::isfinite(result.ShallowFallbackMaxDistance) ? std::clamp(result.ShallowFallbackMaxDistance, 0.0f, 65536.0f) : defaults.ShallowFallbackMaxDistance;
+	result.DeepContextTransitionUnits = std::isfinite(result.DeepContextTransitionUnits) ? std::clamp(result.DeepContextTransitionUnits, 4.0f, 128.0f) : defaults.DeepContextTransitionUnits;
+	return result;
+}
+
+void UnifiedWater::LoadSettings(json& value)
+{
+	shallowSettings = value;
+	shallowSettings = GetShallowSettings();
+}
+
+void UnifiedWater::SaveSettings(json& value)
+{
+	value = GetShallowSettings();
+}
+
+void UnifiedWater::RestoreDefaultSettings()
+{
+	shallowSettings = {};
+}
 
 namespace
 {
+	void DetachWaterNodeOccurrences(RE::NiNode* parent, RE::NiAVObject* water)
+	{
+		if (!parent || !water)
+			return;
+		for (auto index = parent->GetChildren().size(); index > 0; --index) {
+			if (parent->GetChildren()[index - 1].get() == water)
+				parent->DetachChildAt(index - 1);
+		}
+	}
+
 	bool IsInteriorCellActive()
 	{
 		const auto tes = globals::game::tes;
@@ -125,8 +170,145 @@ namespace
 	}
 }
 
+static bool IsChildWorldSpace(const RE::TESWorldSpace* worldSpace)
+{
+	return worldSpace && worldSpace->parentWorld && worldSpace->parentUseFlags.any(RE::TESWorldSpace::ParentUseFlag::kUseLODData);
+}
+
+static bool ShouldCullAtCell(
+	const RE::TES* tes,
+	int32_t cellX,
+	int32_t cellY,
+	bool* isInGrid = nullptr,
+	bool* isAttached = nullptr)
+{
+	if (isInGrid)
+		*isInGrid = false;
+	if (isAttached)
+		*isAttached = false;
+	if (!tes || !tes->gridCells)
+		return false;
+
+	const auto& gridCells = tes->gridCells;
+	const int32_t offsetX = tes->currentGridX - static_cast<int32_t>(gridCells->length >> 1);
+	const int32_t offsetY = tes->currentGridY - static_cast<int32_t>(gridCells->length >> 1);
+	const int32_t length = static_cast<int32_t>(gridCells->length);
+
+	const int32_t x = cellX - offsetX;
+	const int32_t y = cellY - offsetY;
+	if (x < 0 || y < 0 || x >= length || y >= length)
+		return false;
+
+	if (isInGrid)
+		*isInGrid = true;
+
+	RE::TESObjectCELL* cell = nullptr;
+	if (REL::Module::IsAE() && REL::Module::IsAtLeast(SKSE::RUNTIME_SSE_1_7_99)) {
+		static REL::Relocation<RE::BSReadWriteLock*> terrainCellMapLock{ REL::ID(564236) };
+		const RE::BSReadLockGuard lock(*terrainCellMapLock);
+		cell = gridCells->GetCell(x, y);
+	} else {
+		cell = gridCells->GetCell(x, y);
+	}
+	if (cell) {
+		const bool attached = cell->cellState.any(RE::TESObjectCELL::CellState::kAttached, static_cast<RE::TESObjectCELL::CellState>(6));
+		if (isAttached)
+			*isAttached = attached;
+
+		return attached && cell->cellFlags.any(RE::TESObjectCELL::Flag::kHasWater);
+	}
+
+	return false;
+}
+
+struct CullCompletionState
+{
+	bool foundAttachedCell = false;
+	bool hasPotentiallyAttachableChild = false;
+
+	bool IsComplete() const
+	{
+		return foundAttachedCell && !hasPotentiallyAttachableChild;
+	}
+};
+
+static CullCompletionState CullWaterParentByGridCells(RE::NiNode* waterParent, RE::TES* tes = nullptr)
+{
+	if (!tes)
+		tes = globals::game::tes;
+	if (!tes || !waterParent)
+		return {};
+
+	CullCompletionState state;
+
+	for (const auto& child : waterParent->GetChildren()) {
+		if (!child)
+			continue;
+		int32_t x, y;
+		Util::WorldToCell(child->world.translate, x, y);
+		bool isInGrid = false;
+		bool isAttached = false;
+		const bool cull = ShouldCullAtCell(tes, x, y, &isInGrid, &isAttached);
+		if (isAttached)
+			state.foundAttachedCell = true;
+		else if (isInGrid)
+			state.hasPotentiallyAttachableChild = true;
+		child->SetAppCulled(cull);
+	}
+
+	return state;
+}
+
+static bool CullAllWaterLODParents(RE::NiNode* waterLOD, RE::TES* tes = nullptr)
+{
+	if (!waterLOD)
+		return false;
+
+	CullCompletionState aggregate;
+
+	for (const auto& waterParentPtr : waterLOD->GetChildren()) {
+		if (!waterParentPtr)
+			continue;
+		const auto waterParent = waterParentPtr->AsNode();
+		if (!waterParent)
+			continue;
+		const auto state = CullWaterParentByGridCells(waterParent, tes);
+		aggregate.foundAttachedCell = aggregate.foundAttachedCell || state.foundAttachedCell;
+		aggregate.hasPotentiallyAttachableChild = aggregate.hasPotentiallyAttachableChild || state.hasPotentiallyAttachableChild;
+	}
+
+	return aggregate.IsComplete();
+}
+
+void UnifiedWater::TryCompleteDeferredChildWorldspaceCull(RE::TES* tes)
+{
+	if (!pendingChildWsCull.load(std::memory_order_acquire) ||
+		!IsChildWorldSpace(currentPlayerWorldSpace.load(std::memory_order_acquire)) ||
+		!gWaterLOD || !*gWaterLOD)
+		return;
+
+	if (!tes)
+		tes = cachedTes.load(std::memory_order_acquire);
+	if (!tes || !tes->gridCells)
+		return;
+
+	if (CullAllWaterLODParents(*gWaterLOD, tes))
+		pendingChildWsCull.store(false, std::memory_order_release);
+}
 void UnifiedWater::DrawSettings()
 {
+	ImGui::SliderFloat(T(TKEY("shallow_strength"), "Shallow Surface Strength"), &shallowSettings.ShallowFallbackStrength, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (ImGui::TreeNode(T(TKEY("shallow_controls"), "Shallow Surface Controls"))) {
+		ImGui::SliderFloat(T(TKEY("shallow_deepconnectionprobereachunits"), "Probe Reach"), &shallowSettings.DeepConnectionProbeReachUnits, 0.0f, 768.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T(TKEY("shallow_deepcontextdepthunits"), "Connected Deep Depth"), &shallowSettings.DeepContextDepthUnits, 32.0f, 384.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T(TKEY("shallow_shorecontactminfadepixels"), "Minimum Shore Fade Pixels"), &shallowSettings.ShoreContactMinFadePixels, 0.0f, 4.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T(TKEY("shallow_shoredepthblendrangeunits"), "Shore Fade Depth"), &shallowSettings.ShoreDepthBlendRangeUnits, 0.0f, 20.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T(TKEY("shallow_shallowsurfacedepthrangeunits"), "Shallow Depth Range"), &shallowSettings.ShallowSurfaceDepthRangeUnits, 16.0f, 256.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T(TKEY("shallow_shallowfallbackmaxdistance"), "Maximum Distance"), &shallowSettings.ShallowFallbackMaxDistance, 0.0f, 65536.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T(TKEY("shallow_deepcontexttransitionunits"), "Deep Transition"), &shallowSettings.DeepContextTransitionUnits, 4.0f, 128.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::TreePop();
+	}
+
 	if (ImGui::TreeNodeEx(T(TKEY("debug"), "Debug"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		if (ImGui::Button(T(TKEY("regenerate_flowmap"), "Regenerate Flowmap")) && flowmap) {
 			if (flowmap->RegenerateAndLoadFlowmap())
@@ -171,7 +353,7 @@ void UnifiedWater::DrawOverlay()
 
 	if (waterCache->IsBuildRunning()) {
 		auto progressTitle = T(TKEY("generating_water_cache"), "Generating Water Cache:");
-		auto percent = static_cast<float>(snapshot.completed) / static_cast<float>(snapshot.total);
+		auto percent = snapshot.total ? static_cast<float>(snapshot.completed) / static_cast<float>(snapshot.total) : 0.0f;
 		auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", snapshot.completed, snapshot.total, 100 * percent);
 
 		ImGui::SetNextWindowPos(ImVec2(pos, pos + vOffset));
@@ -203,6 +385,8 @@ bool UnifiedWater::IsOverlayVisible() const
 
 void UnifiedWater::DataLoaded()
 {
+	if (IsWaterDataReady())
+		return;
 	auto args = RE::BSModelDB::DBTraits::ArgsType();
 	args.unk8 = false;
 	args.unkA = false;
@@ -228,33 +412,37 @@ void UnifiedWater::DataLoaded()
 		fail("Water mesh does not contain valid TriShape");
 		return;
 	}
-	waterMesh = RE::NiPointer(waterShape);
+	auto loadedWaterMesh = RE::NiPointer(waterShape);
 	logger::debug("[Unified Water] Water mesh loaded");
+	auto loadedFlowmap = std::make_unique<Flowmap>();
+	auto loadedWaterCache = std::make_unique<WaterCache>();
+	uint64_t pendingHash = 0;
+	const bool loadOrderChanged = LoadOrderChanged(pendingHash);
+	const bool flowmapLoaded = loadOrderChanged ? loadedFlowmap->RegenerateAndLoadFlowmap() : loadedFlowmap->LoadOrGenerateFlowmap();
+	if (!flowmapLoaded || !loadedFlowmap->IsValid() || !gFlowMapSourceTex || !gFlowMapSize ||
+		!gDisplacementMeshFlowCellOffset || !gDisplacementCellTexCoordOffset || !gDisplacementMeshPos) {
+		fail("Flowmap initialization failed");
+		return;
+	}
+	const bool cachesStarted = loadOrderChanged ? loadedWaterCache->RegenerateCaches(false) : loadedWaterCache->LoadOrGenerateCaches(false);
+	while (loadedWaterCache->IsBuildRunning())
+		std::this_thread::sleep_for(100ms);
+	if (!cachesStarted || loadedWaterCache->HasBuildFailed()) {
+		fail("Water cache initialization failed");
+		return;
+	}
 	if (!DisableVanillaWaterLOD()) {
 		fail("Could not disable vanilla water LOD");
 		return;
 	}
-
-	flowmap = new Flowmap();
-	waterCache = new WaterCache();
-
-	if (LoadOrderChanged()) {
-		logger::info("[Unified Water] Load order or plugin version changed, regenerating flowmap and caches");
-
-		if (flowmap->RegenerateAndLoadFlowmap())
-			SetFlowmapTex();
-
-		waterCache->RegenerateCaches();
-	} else {
-		if (flowmap->LoadOrGenerateFlowmap())
-			SetFlowmapTex();
-
-		waterCache->LoadOrGenerateCaches();
-	}
-
-	while (waterCache->IsBuildRunning()) {
-		std::this_thread::sleep_for(100ms);
-	}
+	waterMesh = std::move(loadedWaterMesh);
+	flowmap = loadedFlowmap.release();
+	waterCache = loadedWaterCache.release();
+	SetFlowmapTex();
+	failedLoadedMessage.clear();
+	waterDataReady.store(true, std::memory_order_release);
+	if (loadOrderChanged && !PersistLoadOrderHash(pendingHash))
+		logger::warn("[Unified Water] Could not persist completed cache hash; initialization will retry next launch");
 
 	if (!MenuOpenCloseEventHandler::Register()) {
 		logger::warn("[Unified Water] MenuOpenCloseEventHandler registration failed");
@@ -369,7 +557,7 @@ namespace
 	}
 }
 
-bool UnifiedWater::LoadOrderChanged()
+bool UnifiedWater::LoadOrderChanged(uint64_t& pendingHash)
 {
 	auto* dataHandler = RE::TESDataHandler::GetSingleton();
 	if (!dataHandler)
@@ -409,13 +597,17 @@ bool UnifiedWater::LoadOrderChanged()
 	const bool changed = hash != existingHash;
 	logger::debug("[Unified Water] Load order hash: computed={:#x} persisted={:#x} changed={}", hash, existingHash, changed);
 
-	if (changed) {
-		std::error_code ec;
-		std::filesystem::create_directories(path.parent_path(), ec);
-		WriteHashFile(path, hash);
-	}
+	pendingHash = hash;
 
 	return changed;
+}
+
+bool UnifiedWater::PersistLoadOrderHash(uint64_t hash)
+{
+	const auto path = Util::PathHelpers::GetCommunityShaderPath() / "UWLoadOrder.hash";
+	std::error_code ec;
+	std::filesystem::create_directories(path.parent_path(), ec);
+	return !ec && WriteHashFile(path, hash);
 }
 
 void UnifiedWater::SetFlowmapTex() const
@@ -505,17 +697,21 @@ int32_t UnifiedWater::BSWaterShaderMaterial_ComputeCRC32::thunk(RE::BSWaterShade
 
 bool UnifiedWater::IsWaterDataReady() const
 {
-	return waterCache && waterMesh;
+	return waterDataReady.load(std::memory_order_acquire);
 }
 
 bool UnifiedWater::IsExteriorWorldspaceActive() const
 {
+	if (IsChildWorldSpace(currentPlayerWorldSpace.load(std::memory_order_acquire)))
+		return true;
 	// Interior cells may still inherit stale exterior worldspace state during transitions
 	return exteriorWorldspaceActive.load(std::memory_order_acquire) && !IsInteriorCellActive();
 }
 
 void UnifiedWater::UpdateWaterLODCull() const
 {
+	if (!IsWaterDataReady())
+		return;
 	// Only hide UW's generated LOD root, preserving child tile cull flags
 	if (gWaterLOD && *gWaterLOD) {
 		const bool cull = !IsExteriorWorldspaceActive() && !mapMenuOpen.load(std::memory_order_acquire);
@@ -527,24 +723,57 @@ void UnifiedWater::UpdateWaterLODCull() const
 
 void UnifiedWater::TES_SetWorldSpace::thunk(RE::TES* tes, RE::TESWorldSpace* worldSpace, bool isExterior)
 {
+	const bool enteringChild = IsChildWorldSpace(worldSpace);
+
+	// Set before func so attachment hooks fired inside func see the new worldspace.
+	auto& uw = globals::features::unifiedWater;
+	uw.currentPlayerWorldSpace.store(worldSpace, std::memory_order_release);
+	uw.cachedTes.store(tes, std::memory_order_release);
+	if (!enteringChild)
+		uw.pendingChildWsCull.store(false, std::memory_order_release);  // leaving child WS: discard any stale pending cull
+
 	func(tes, worldSpace, isExterior);
 
-	auto& singleton = globals::features::unifiedWater;
-	singleton.exteriorWorldspaceActive.store(worldSpace && isExterior, std::memory_order_release);
-	if (singleton.IsWaterDataReady())
-		singleton.waterCache->SetCurrentWorldSpace(worldSpace);
-	singleton.UpdateWaterLODCull();
+	uw.exteriorWorldspaceActive.store(worldSpace && isExterior, std::memory_order_release);
+
+	if (!uw.IsWaterDataReady()) {
+		uw.pendingChildWsCull.store(false, std::memory_order_release);
+		uw.UpdateWaterLODCull();
+		return;
+	}
+
+	uw.waterCache->SetCurrentWorldSpace(worldSpace);
+	uw.UpdateWaterLODCull();
+
+	if (enteringChild) {
+		// BGSTerrainBlock_Attach calls Enable() on block attach.
+		// Child-worldspace transitions can keep old LOD blocks attached, so re-enable here.
+		if (const auto waterSystem = RE::TESWaterSystem::GetSingleton())
+			waterSystem->Enable();
+
+		// Try an immediate cull with tes (globals::game::tes may still be null).
+		// Newly transitioned cells are often not attached yet, so deferred retries are still needed.
+		if (uw.gWaterLOD && *uw.gWaterLOD && tes && tes->gridCells)
+			CullAllWaterLODParents(*uw.gWaterLOD, tes);
+
+		// Keep deferred retries enabled until attached cells are observed and culled.
+		uw.pendingChildWsCull.store(true, std::memory_order_release);
+	}
 }
 
 void UnifiedWater::TES_DestroySkyCell::thunk(RE::TES* tes)
 {
 	func(tes);
 
-	auto& singleton = globals::features::unifiedWater;
-	singleton.exteriorWorldspaceActive.store(false, std::memory_order_release);
-	if (singleton.IsWaterDataReady())
-		singleton.waterCache->SetCurrentWorldSpace(nullptr);
-	singleton.UpdateWaterLODCull();
+	auto& uw = globals::features::unifiedWater;
+	uw.currentPlayerWorldSpace.store(nullptr, std::memory_order_release);
+	uw.pendingChildWsCull.store(false, std::memory_order_release);
+	uw.cachedTes.store(nullptr, std::memory_order_release);
+	uw.exteriorWorldspaceActive.store(false, std::memory_order_release);
+
+	if (uw.IsWaterDataReady())
+		uw.waterCache->SetCurrentWorldSpace(nullptr);
+	uw.UpdateWaterLODCull();
 }
 
 void UnifiedWater::BGSTerrainNode_UpdateWaterMeshSubVisibility::thunk(const RE::BGSTerrainNode* node, RE::BSMultiBoundNode* waterParent)
@@ -560,47 +789,7 @@ void UnifiedWater::BGSTerrainNode_UpdateWaterMeshSubVisibility::thunk(const RE::
 	if (node->GetLODLevel() != 4)
 		return;
 
-	const auto tes = globals::game::tes;
-	if (!tes || !tes->gridCells)
-		return;
-
-	const auto& gridCells = tes->gridCells;
-
-	const int32_t offsetX = tes->currentGridX - static_cast<int32_t>(gridCells->length >> 1);
-	const int32_t offsetY = tes->currentGridY - static_cast<int32_t>(gridCells->length >> 1);
-	const int32_t length = static_cast<int32_t>(gridCells->length);
-
-	for (const auto& child : waterParent->GetChildren()) {
-		if (!child)
-			continue;
-
-		int32_t x, y;
-		Util::WorldToCell(child->world.translate, x, y);
-
-		x -= offsetX;
-		y -= offsetY;
-
-		bool cull = false;
-		if (x >= 0 && y >= 0 && x < length && y < length) {
-			RE::TESObjectCELL* cell = nullptr;
-			if (REL::Module::IsAE() && REL::Module::IsAtLeast(SKSE::RUNTIME_SSE_1_7_99)) {
-				// Skyrim 1.7 added a shared lock around the terrain-cell map lookup. Keep
-				// the guard scoped to the lookup, matching the native function.
-				static REL::Relocation<RE::BSReadWriteLock*> terrainCellMapLock{ REL::ID(564236) };
-				const RE::BSReadLockGuard lock(*terrainCellMapLock);
-				cell = gridCells->GetCell(x, y);
-			} else {
-				cell = gridCells->GetCell(x, y);
-			}
-
-			if (cell && cell->cellState.any(RE::TESObjectCELL::CellState::kAttached, static_cast<RE::TESObjectCELL::CellState>(6))) {
-				// Keep LOD visible when a loaded dry cell has no active water to replace it
-				cull = cell->cellFlags.any(RE::TESObjectCELL::Flag::kHasWater);
-			}
-		}
-
-		child->SetAppCulled(cull);
-	}
+	CullWaterParentByGridCells(waterParent);
 }
 
 void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
@@ -708,10 +897,12 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 		{
 			// Held across AddWater so no other thread can reuse this tile's reflection or normals, which keep raw pointers to its material
 			RE::BSSpinLockGuard guard(waterSystem->lock);
+			const auto previousCount = waterSystem->waterObjects.size();
 			waterSystem->AddWater(shape, instruction->form.ptr, instruction->waterHeight, nullptr, true, false);
 
 			// Remove from WaterSystem, will manage it ourselves
-			if (!waterSystem->waterObjects.empty() && waterSystem->waterObjects.back()->shape.get() == shape) {
+			if (waterSystem->waterObjects.size() > previousCount && waterSystem->waterObjects.back() &&
+				waterSystem->waterObjects.back()->shape.get() == shape) {
 				const auto reflections = waterSystem->waterObjects.back()->reflections.get();
 				const auto normals = waterSystem->waterObjects.back()->normals.get();
 				waterSystem->waterObjects.pop_back();
@@ -735,6 +926,7 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	}
 
 	if (auto waterLOD = singleton.gWaterLOD; waterLOD && *waterLOD) {
+		DetachWaterNodeOccurrences(waterLOD->get(), water.get());
 		(*waterLOD)->AttachChild(water.get(), true);
 		singleton.UpdateWaterLODCull();
 	} else if (block->chunk) {
@@ -746,10 +938,19 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 		block->waterAttached = false;
 	}
 	waterSystem->Enable();
+	if (IsChildWorldSpace(singleton.currentPlayerWorldSpace.load(std::memory_order_acquire))) {
+		CullWaterParentByGridCells(water.get(), singleton.cachedTes.load(std::memory_order_acquire));
+	}
 }
 
 void UnifiedWater::BGSTerrainBlock_Detach::thunk(RE::BGSTerrainBlock* block)
 {
+	if (!block)
+		return;
+	if (!globals::features::unifiedWater.IsWaterDataReady()) {
+		func(block);
+		return;
+	}
 	if (!block) {
 		return;
 	}
@@ -771,7 +972,7 @@ void UnifiedWater::BGSTerrainBlock_Detach::thunk(RE::BGSTerrainBlock* block)
 		}
 
 		if (auto waterLOD = globals::features::unifiedWater.gWaterLOD; waterLOD && *waterLOD)
-			(*waterLOD)->DetachChild(water.get());
+			DetachWaterNodeOccurrences(waterLOD->get(), water.get());
 
 		// Park water under the detached chunk so block->water stays valid
 		if (block->chunk) {
@@ -789,8 +990,18 @@ void UnifiedWater::BGSTerrainBlock_Detach::thunk(RE::BGSTerrainBlock* block)
 void UnifiedWater::BSWaterShader_SetupGeometry::thunk(RE::BSShader* waterShader, RE::BSRenderPass* pass, uint32_t renderFlags)
 {
 	auto& singleton = globals::features::unifiedWater;
+	if (singleton.IsWaterDataReady() && singleton.gWaterLOD && *singleton.gWaterLOD && pass && pass->geometry &&
+		pass->geometry->parent && pass->geometry->parent->parent == singleton.gWaterLOD->get()) {
+		const auto prop = pass->geometry->GetGeometryRuntimeData().shaderProperty.get();
+		if (prop && prop->GetRTTI() == globals::rtti::BSWaterShaderPropertyRTTI.get()) {
+			auto* waterProperty = static_cast<RE::BSWaterShaderProperty*>(prop);
+			waterProperty->plane.normal = { 0.0f, 0.0f, 1.0f };
+			waterProperty->plane.constant = pass->geometry->world.translate.z;
+		}
+	}
 
-	if (singleton.IsExteriorWorldspaceActive() && singleton.flowmap && pass && pass->geometry) {
+
+	if (singleton.IsWaterDataReady() && singleton.IsExteriorWorldspaceActive() && pass && pass->geometry) {
 		// ObjectUV.xyz below, xy contains width and height, z contains mesh scale
 		// Previously flowmap size was in x, yz contained flowmap offset for water displacement mesh
 		*singleton.gFlowMapSize = singleton.flowmap->GetWidth();                                            // ObjectUV.x
@@ -819,10 +1030,12 @@ void UnifiedWater::TESWaterSystem_UpdateDisplacementMeshPosition::thunk(RE::TESW
 {
 	func(waterSystem);
 
-	const auto& singleton = globals::features::unifiedWater;
+	auto& singleton = globals::features::unifiedWater;
+	if (singleton.IsWaterDataReady())
+		singleton.TryCompleteDeferredChildWorldspaceCull(singleton.cachedTes.load(std::memory_order_acquire));
 	singleton.UpdateWaterLODCull();
 
-	if (!singleton.flowmap || !singleton.IsExteriorWorldspaceActive())
+	if (!singleton.IsWaterDataReady() || !singleton.IsExteriorWorldspaceActive())
 		return;
 
 	const float posX = singleton.gDisplacementMeshPos->x / 4096.0f;

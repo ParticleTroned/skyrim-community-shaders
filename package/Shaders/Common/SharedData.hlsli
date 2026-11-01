@@ -118,7 +118,7 @@ namespace SharedData
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
 		uint EnableParticleContactShadows;
-		uint pad1;
+		uint WaterContactCandidateBudget;
 	};
 
 	struct WetnessEffectsSettings
@@ -249,7 +249,7 @@ namespace SharedData
 		float LODTerrainGamma;
 		float LODObjectGamma;
 		float LODObjectSnowGamma;
-		float pad0;
+		float WaterReflectionStrength;
 	};
 
 	struct HairSpecularSettings
@@ -760,6 +760,18 @@ namespace SharedData
 	};
 #endif
 
+	struct UnifiedWaterShallowSettings
+	{
+		float ShallowFallbackStrength;
+		float DeepConnectionProbeReachUnits;
+		float DeepContextDepthUnits;
+		float ShoreContactMinFadePixels;
+		float ShoreDepthBlendRangeUnits;
+		float ShallowSurfaceDepthRangeUnits;
+		float ShallowFallbackMaxDistance;
+		float DeepContextTransitionUnits;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -792,6 +804,10 @@ namespace SharedData
 		GrassCollisionData grassCollisionData;
 		HorizonFixSettings horizonFixSettings;
 		RainRefractionSettings rainRefractionSettings;
+		uint4 unifiedWaterRuntime;
+		UnifiedWaterShallowSettings unifiedWaterSettings;
+		float4 waterParallaxFoveation;
+		float4 waterParallaxCenters;
 #if defined(SNOW_COVER) && defined(PSHADER)
 		SnowCoverSettings snowCoverSettings;
 #endif

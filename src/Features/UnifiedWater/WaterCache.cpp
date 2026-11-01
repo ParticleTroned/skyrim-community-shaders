@@ -156,18 +156,20 @@ void WaterCache::GenerateTamrielPrecache()
 	TryWriteCacheToFile("Tamriel_precache.wpc", hdr, cache.heights);
 }
 
-bool WaterCache::LoadOrGenerateCaches()
+bool WaterCache::LoadOrGenerateCaches(bool queuePublication)
 {
 	if (!LoadCaches()) {
 		logger::info("[Unified Water] [Cache] Could not load caches - regenerating...");
-		return RegenerateCaches();
+		return RegenerateCaches(queuePublication);
 	}
 
 	return true;
 }
 
-bool WaterCache::RegenerateCaches()
+bool WaterCache::RegenerateCaches(bool queuePublication)
 {
+	if (async.running.load(std::memory_order_acquire))
+		return false;
 	logger::info("[Unified Water] [Cache] Clearing and regenerating caches...");
 
 	namespace fs = std::filesystem;
@@ -192,7 +194,7 @@ bool WaterCache::RegenerateCaches()
 		}
 	}
 
-	return GenerateCaches();
+	return GenerateCaches(queuePublication);
 }
 
 bool WaterCache::LoadCaches()
@@ -240,7 +242,7 @@ bool WaterCache::LoadCaches()
 		logger::info("[Unified Water] [Cache] Loaded {} / {} worldspace caches ({} unavailable)", newCacheMap->size(), worldSpaces.size(), unavailableCount);
 	}
 
-	if (newCacheMap->empty()) {
+	if (newCacheMap->empty() || unavailableCount != 0) {
 		return false;
 	}
 
@@ -270,7 +272,7 @@ bool WaterCache::LoadCaches()
 	return true;
 }
 
-bool WaterCache::GenerateCaches()
+bool WaterCache::GenerateCaches(bool queuePublication)
 {
 	if (async.running.load()) {
 		logger::warn("[Unified Water] [Cache] Build already running");
@@ -301,17 +303,22 @@ bool WaterCache::GenerateCaches()
 	logger::info("[Unified Water] [Cache] Starting async disk cache build for {} WorldSpaces on {} threads", buildProgress.total.load(), threads);
 
 	for (auto& worldSpace : worldSpaces) {
-		const char* editorID = worldSpace && worldSpace->editorID.c_str() ? worldSpace->editorID.c_str() : "";
+		const char* editorID = worldSpace ? worldSpace->GetFormEditorID() : nullptr;
 		if (!worldSpace || !editorID || !*editorID) {
 			logger::warn("[Unified Water] [Cache] WorldSpace has no EditorID - skipping");
 			buildProgress.Done(true);
 			continue;
 		}
 
-		async.pool->detach_task([this, worldSpace, editorID] {
+		async.pool->detach_task([this, worldSpace, editorID = std::string(editorID)] {
 			DiskCache cache = {};
 			const auto name = std::format("{}_cache.wc", editorID);
-			const auto success = BuildDiskCache(worldSpace, cache) && TryWriteCacheToFile(name, cache.header, cache.instructions);
+			bool success = false;
+			try {
+				success = BuildDiskCache(worldSpace, cache) && TryWriteCacheToFile(name, cache.header, cache.instructions);
+			} catch (const std::exception& error) {
+				logger::error("[Unified Water] [Cache] {}: {}", editorID, error.what());
+			}
 			if (success) {
 				logger::debug("[Unified Water] [Cache] {} generation complete", editorID);
 			} else {
@@ -323,7 +330,7 @@ bool WaterCache::GenerateCaches()
 		});
 	}
 
-	async.monitor = std::jthread([this](const std::stop_token& st) {
+	async.monitor = std::jthread([this, queuePublication](const std::stop_token& st) {
 		using namespace std::chrono_literals;
 		while (!st.stop_requested()) {
 			const auto bp = this->GetBuildProgressSnapshot();
@@ -338,11 +345,44 @@ bool WaterCache::GenerateCaches()
 		buildProgress.Stop();
 
 		logger::info("[Unified Water] [Cache] Disk caches generated in {} ms  ({} / {} complete - {} failed)", buildProgress.ElapsedMs(), buildProgress.completed.load(), buildProgress.total.load(), buildProgress.failed.load());
-		LoadCaches();
-		async.running.store(false);
+		if (!queuePublication) {
+			async.running.store(false, std::memory_order_release);
+			return;
+		}
+		if (auto* tasks = SKSE::GetTaskInterface()) {
+			tasks->AddTask([this] {
+				CompleteBuild();
+				async.running.store(false, std::memory_order_release);
+			});
+		} else {
+			async.failed.store(true, std::memory_order_release);
+			async.running.store(false, std::memory_order_release);
+			logger::error("[Unified Water] [Cache] Game-thread publication is unavailable");
+		}
 	});
 
+	if (!queuePublication) {
+		async.monitor.join();
+		return CompleteBuild();
+	}
 	return true;
+}
+
+bool WaterCache::CompleteBuild()
+{
+	if (async.failed.load(std::memory_order_acquire))
+		return false;
+	bool complete = false;
+	try {
+		complete = LoadCaches();
+	} catch (const std::exception& error) {
+		logger::error("[Unified Water] [Cache] Publication exception: {}", error.what());
+	}
+	if (!complete) {
+		async.failed.store(true, std::memory_order_release);
+		logger::error("[Unified Water] [Cache] Complete runtime publication failed; retaining previous snapshot");
+	}
+	return complete && !async.failed.load(std::memory_order_acquire);
 }
 
 void WaterCache::BuildPreCache(RE::TESWorldSpace* worldSpace, PreCache& cache)

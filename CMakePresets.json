@@ -143,7 +143,7 @@
         },
         {
             "name": "Package-nr",
-            "description": "Build an AIO with the pinned official NVIDIA NR SDK runtime.",
+            "description": "Build an NR-ready AIO with the user-supplied NR DLL excluded.",
             "inherits": "ALL",
             "cacheVariables": {
                 "DEVBENCH_BRIDGE": "OFF",
@@ -214,7 +214,7 @@
         },
         {
             "name": "Package-nr",
-            "description": "Build an AIO with the pinned official NVIDIA NR SDK runtime.",
+            "description": "Build an NR-ready AIO with the user-supplied NR DLL excluded.",
             "configurePreset": "Package-nr",
             "configuration": "Release",
             "targets": ["Package-AIO-Manual"]

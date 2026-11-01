@@ -31,8 +31,9 @@ stamp before staging existing production DLLs and original notices. Missing
 or invalid caches remain on disk and are reported as unavailable payloads.
 Only available files become staging inputs or build dependencies.
 Neural Rendering similarly requires the verified cached SDK archive and
-matching extraction stamp, plus the pinned production DLL and original
-license. Its compile-time header must already exist in the verified SDK
+matching extraction stamp for compile-time headers. NR DLLs are never
+staged, deployed or packaged by a build. Its compile-time header must
+already exist in the verified SDK
 cache for offline builds. Populate that cache once with downloads enabled.
 
 If required payloads are unavailable, either automatic zip option fails

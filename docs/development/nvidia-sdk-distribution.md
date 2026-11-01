@@ -8,8 +8,9 @@ patched runtime, preview binary or another application's project identity.
 
 ## Building and packaging
 
-The normal build verifies both SDK archives before extracting production
-inputs. The NR parameter header remains in the verified SDK build cache;
+The normal build verifies both SDK archives before extracting its
+compile-time inputs and the permitted Streamline runtime files. The NR
+parameter header remains in the verified SDK build cache;
 its original bytes are checked against the package hash. The full NVIDIA
 RTX SDK license is retained unchanged under `extern/NeuralRenderingSDK/`.
 Do not commit or republish the proprietary SDK headers. Streamline supplies the
@@ -18,17 +19,23 @@ matching NGX headers and static dispatcher library. NR uses
 Streamline, followed by the SDK capability, scratch, feature and teardown
 APIs. NVIDIA's dispatcher owns driver/runtime discovery and validation.
 
-`StreamlineRuntime` installs the production DLLs and all original notices,
+`StreamlineRuntime` installs the Streamline production DLLs and all original
+notices,
 including the NR package's complete license under
 `Shaders/Upscaling/Streamline/nvngx_dlssnr.license.txt`. The release guard
-rejects changed binaries, changed or missing licenses, extra NR DLL copies
-and internal-only notices. Keep NVIDIA components separately licensed;
+rejects every NR DLL, changed or missing licenses, changed Streamline
+binaries and internal-only notices. NR object code must be installed by the
+user separately; no build, installer or release may supply it. The verified
+NR SDK cache supplies headers only and must never become a packaging input.
+Keep NVIDIA components separately licensed;
 the GPL linking and modding exceptions do not grant NVIDIA rights.
 
 `SKIP_RUNTIME_DOWNLOADS=ON` can reuse verified cached NR inputs. The
 verified SDK header cache must already be populated for offline DLL
 development. Configure once with runtime downloads enabled to prepare it. Missing
-runtime inputs block runtime installation and packaging. Existing runtime
+Streamline runtime inputs block runtime installation and packaging. An absent
+user NR runtime does not block builds or packages; it disables NR in game.
+Existing runtime
 directories retain the ordinary skip-mode deployment policy.
 
 ## NVIDIA license obligations

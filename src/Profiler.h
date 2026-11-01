@@ -191,6 +191,7 @@ public:
 		endPerfEvent = std::move(endCb);
 	}
 
+	/** @brief Attempts GPU acquisition once per frame; refusal lasts until EndFrame without blocking CPU timing. */
 	void BeginFrame();
 	bool BeginPass(std::string_view name, bool fireCallbacks = true, const PassTimingHandle& capture = {});
 	void EndPass(bool fireCallbacks = true);
@@ -365,6 +366,7 @@ private:
 	std::vector<PendingExternalGpuTiming> externalGpuTimings;
 	void UpdateGpuCaptureEpoch(bool active, bool reset = false);
 	uint64_t activeCaptureSessionId = 0;
+	// Retrying a refused frame at a later pass would record earlier GPU work as zero.
 	bool gpuAcquisitionBlocked = false;
 	// Each successful BeginPass owns either a GPU interval or a CPU fallback scope.
 	std::vector<bool> activePassUsesGpu;

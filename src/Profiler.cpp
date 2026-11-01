@@ -566,15 +566,19 @@ void Profiler::ClearTimersForFeature(const std::string& featureName)
 
 void Profiler::BeginFrame()
 {
-	if (!initialized || !context || frameActive || !IsEnabled() || !Captures(CaptureMode::GPU))
+	if (!initialized || !context || frameActive || gpuAcquisitionBlocked || !IsEnabled() || !Captures(CaptureMode::GPU))
 		return;
 
-	if (!CollectResults())
+	if (!CollectResults()) {
+		gpuAcquisitionBlocked = true;
 		return;
+	}
 
 	auto& frame = frames[writeFrame];
-	if (!frame.disjoint)
+	if (!frame.disjoint) {
+		gpuAcquisitionBlocked = true;
 		return;
+	}
 	ResetFrameState(frame);
 	frame.inFlight = true;
 	if (activeCaptureSessionId == boundedCapture.sessionId && activeCaptureSessionId != 0 &&
@@ -606,7 +610,6 @@ bool Profiler::BeginPass(std::string_view name, bool fireCallbacks, const PassTi
 		BeginFrame();
 	if (!frameActive) {
 		InvalidateCapture(claimedCapture, frames[writeFrame].disjoint ? "query_ring_pending" : "query_creation_failed");
-		gpuAcquisitionBlocked = true;
 		return BeginFallbackCpuPass(name, fireCallbacks);
 	}
 

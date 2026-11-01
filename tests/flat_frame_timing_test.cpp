@@ -133,6 +133,32 @@ namespace
 		}
 	}
 
+	void LateReadinessWaitsForNextPresent()
+	{
+		Fixture f;
+		f.context.pending = true;
+		for (uint32_t frame = 0; frame <= Profiler::kFrameLatency; ++frame)
+			f.Present(frame);
+		const auto reads = f.context.reads;
+		const auto writes = f.context.writes;
+		f.context.pending = false;
+		Check(f.profiler.BeginPass("Flat::Late", false), "refused flat frame lost CPU fallback");
+		f.profiler.EndPass(false);
+		Check(f.context.reads == reads && f.context.writes == writes, "named pass reopened a frame refused at Present");
+		for (uint32_t frame = 4; frame < 12; ++frame)
+			f.Present(frame);
+		bool skipped = false;
+		bool recovered = false;
+		for (const auto& sample : f.profiler.GetFlatTiming()->samples) {
+			if (sample.frame == 4)
+				skipped = sample.hasCpu && sample.resolved && !sample.hasGpu;
+			if (sample.frame == 5)
+				recovered = sample.hasCpu && sample.resolved && sample.hasGpu;
+		}
+		Check(skipped && recovered, "flat timing did not skip the refused frame and recover at the next Present");
+		Check(f.profiler.GetResults().empty(), "late flat pass entered paired GPU history");
+	}
+
 	void SharedPassRingAndUnsupportedPath()
 	{
 		Fixture f;
@@ -253,6 +279,7 @@ int main()
 		RuntimeIsolation();
 		WholeFrameBoundaries();
 		PendingAndFailure();
+		LateReadinessWaitsForNextPresent();
 		ResetAndDisable();
 		SharedPassRingAndUnsupportedPath();
 		MeasurementAssociation();

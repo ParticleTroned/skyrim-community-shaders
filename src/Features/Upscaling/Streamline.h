@@ -1,6 +1,7 @@
 #pragma once
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "FrameTelemetryRing.h"
 #	include "VRRenderScaleRetryTelemetry.h"
 #endif
 
@@ -8,7 +9,6 @@
 #include "../../State.h"
 #include "DLSSResultPolicy.h"
 #include "DLSSViewportCrop.h"
-#include "FrameTelemetryRing.h"
 #include "ReflexBackend.h"
 #include "StreamlineFrameTokenPublication.h"
 #include "VRRelatchDrainFence.h"
@@ -82,6 +82,7 @@ public:
 		std::array<std::array<uint32_t, kDLSSPassEyeCount>, kDLSSPassRouteCount> attempts{};
 		std::array<std::array<uint32_t, kDLSSPassEyeCount>, kDLSSPassRouteCount> successes{};
 	};
+	/** Returns an invalid snapshot when development diagnostics are not built. */
 	[[nodiscard]] DLSSPassTelemetrySnapshot GetDLSSPassTelemetrySnapshot(
 		uint32_t a_frame) const noexcept;
 	struct DLSSViewportCropTelemetrySnapshot
@@ -106,6 +107,7 @@ public:
 		float motionVectorScaleX = 1.0f;
 		float motionVectorScaleY = 1.0f;
 	};
+	/** Returns an invalid snapshot when development diagnostics are not built. */
 	[[nodiscard]] DLSSViewportCropTelemetrySnapshot
 	GetDLSSViewportCropTelemetrySnapshot(
 		DLSSViewportRole a_role,
@@ -121,6 +123,7 @@ public:
 		return roleIndex < kVRDLSSViewportRoleCount ? roleIndex : static_cast<uint32_t>(DLSSViewportRole::FullEye);
 	}
 	static constexpr uint32_t MAX_RESOLUTION = 8192;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	mutable std::mutex dlssPassTelemetryMutex;
 	UpscalingTelemetry::FrameTelemetryRing<
 		DLSSPassTelemetrySnapshot,
@@ -131,6 +134,7 @@ public:
 		std::array<DLSSViewportCropTelemetrySnapshot, kDLSSPassEyeCount>,
 		kVRDLSSViewportRoleCount>
 		dlssViewportCropTelemetry{};
+#endif
 	HMODULE interposer = NULL;
 
 	// SL Interposer Functions

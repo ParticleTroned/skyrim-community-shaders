@@ -33,6 +33,8 @@ checks = {
     "src/FrameAnnotations.cpp": ["ExposureProducerScope"],
     "src/Features/Upscaling.h": ["foveatedMaskBinocularGapVisualization", "NeuralCaptureRecord", "neuralCaptureMutex", "neuralPassTelemetryMutex", "neuralStereoRouteSnapshotMutex", "SetNeuralCaptureExecutionContext"],
     "src/Features/Upscaling.cpp": ["foveatedMaskBinocularGapVisualization", "neuralCaptureMutex", "neuralPassTelemetryMutex", "neuralStereoRouteSnapshotMutex"],
+    "src/Features/Upscaling/Streamline.h": ["dlssPassTelemetryMutex", "dlssPassTelemetryFrames", "dlssViewportCropTelemetryMutex", "dlssViewportCropTelemetry{}"],
+    "src/Features/Upscaling/Streamline.cpp": ["collectPassTelemetry", "publishCropTelemetry", "dlssPassTelemetryMutex", "dlssPassTelemetryFrames", "dlssViewportCropTelemetryMutex", "dlssViewportCropTelemetry["],
     "src/Features/ScreenshotApi.cpp": ["RetainNeuralDiagnostics", "FinalizeNeuralDiagnostics"],
     "src/Features/ScreenshotApi.h": ["diagnosticSnapshot"],
     "src/Features/NeuralRenderingFeature.cpp": ["Json StatusJson", "Json CaptureJson", 'ImGui::TreeNode("Colour experiments and diagnostics")' ],
@@ -67,4 +69,17 @@ with tempfile.TemporaryDirectory(prefix="csx-nr-diagnostics-") as temporary:
                 assert "frameBufferCached.vr = *frameBufferVR" in output[enabled]
                 assert "void ObserveVRFrameBufferUpload" in output[enabled]
                 assert "context->Unmap(resource, subresource)" in output[enabled]
+        if name == "src/Features/Upscaling/Streamline.cpp":
+            for enabled in (False, True):
+                for symbol in ("UpscalingDLSS::EvaluateCropContinuity(",
+                               "UpscalingDLSS::MakeSuccessfulCropHistory(",
+                               "CheckFrameConstants(", "SetDLSSOptions(",
+                               "slEvaluateFeature(sl::kFeatureDLSS,",
+                               "InvalidateDLSSRelatchDrain();",
+                               "NotifyDlssMemoryPressure();",
+                               "dlssBudgetWarningThrottle.ShouldLog(",
+                               "[Streamline] slEvaluateFeature failed",
+                               "GetDLSSPassTelemetrySnapshot(",
+                               "GetDLSSViewportCropTelemetrySnapshot("):
+                    assert symbol in output[enabled], (name, symbol, "production rendering contract missing")
 print("NR capture implementations, hooks and measurement storage are development-only; shared camera observation remains")

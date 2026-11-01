@@ -2917,8 +2917,10 @@ void Streamline::InvalidateDLSSCropHistory()
 		}
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	std::scoped_lock lock(dlssViewportCropTelemetryMutex);
 	dlssViewportCropTelemetry = {};
+#endif
 }
 
 void Streamline::ResetDLSSIdleFences()
@@ -3057,20 +3059,16 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	const bool submitStageVRDLSS =
 		globals::game::isVR &&
 		upscaling.IsPresentationUpscalingActive();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	const auto passRoute =
 		(submitStageVRDLSS ||
 			viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter) ?
 			DLSSPassRoute::Submit :
 			DLSSPassRoute::Main;
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	const bool collectDLSSDiagnostics = ShouldLogDLSSDiagnostics() || IsDLSSDevBenchTraceActive();
+	const bool collectPassTelemetry = upscaling.IsNeuralRenderingRequested() || collectDLSSDiagnostics;
 #endif
-	const bool collectPassTelemetry = upscaling.IsNeuralRenderingRequested()
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	                                  || collectDLSSDiagnostics
-#endif
-		;
 	DLSSDispatchDiagnostics diagnostics{};
 	DLSSDispatchDiagnostics* diagnosticsPtr = &diagnostics;
 	diagnostics.label = label ? label : "DLSS Evaluate";
@@ -3128,7 +3126,6 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		diagnostics.optionsCacheHDR = optionsCache.isHDR;
 		diagnostics.optionsCacheLegacyProfile = optionsCache.useLegacyProfile;
 	};
-#endif
 	const auto publishCropTelemetry = [&](bool a_evaluationSucceeded) {
 		if (!collectPassTelemetry)
 			return;
@@ -3158,10 +3155,11 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		dlssViewportCropTelemetry[GetDLSSViewportRoleIndex(viewportRole)][eyeIndex] =
 			snapshot;
 	};
+#endif
 
 	if (!cropDescriptorValid || !motionVectorScale.valid) {
-		publishCropTelemetry(false);
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		publishCropTelemetry(false);
 		LogDLSSDispatchDiagnostics(
 			DLSSDiagnosticStage::SetConstants,
 			"invalid_crop_descriptor",
@@ -3202,8 +3200,8 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	if (!cropHistory || cropGeneration == 0) {
 		diagnostics.cropResetReason =
 			UpscalingDLSS::CropHistoryResetReason::InvalidGeneration;
-		publishCropTelemetry(false);
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		publishCropTelemetry(false);
 		LogDLSSDispatchDiagnostics(
 			DLSSDiagnosticStage::ResolveViewport,
 			"crop_history_unavailable",
@@ -3226,10 +3224,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	diagnostics.historyResetRequested =
 		upscaling.ShouldResetHistoryThisFrame() || cropContinuity.reset;
-#endif
 	publishCropTelemetry(false);
-
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	DLSSDevBenchTraceSignature devBenchFrameConstantsSignature{};
 	auto* devBenchFrameConstantsSignaturePtr = IsDLSSDevBenchTraceActive() ? &devBenchFrameConstantsSignature : nullptr;
 #endif
@@ -3331,6 +3326,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitStart, "DLSS-EvaluateStart", 0);
 	InvalidateDLSSRelatchDrain();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	if (collectPassTelemetry) {
 		std::scoped_lock lock(dlssPassTelemetryMutex);
 		auto& telemetry = dlssPassTelemetryFrames.GetOrCreate(diagnostics.frame);
@@ -3338,6 +3334,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		                     [static_cast<std::size_t>(passRoute)][eyeIndex];
 		UpscalingTelemetry::SaturatingIncrement(attempts);
 	}
+#endif
 	sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
 	const bool evaluationSucceeded = DLSSResultPolicy::IsEvaluationSuccessful(evalResult);
 	if (evaluationSucceeded) {
@@ -3346,6 +3343,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 			cropGeneration,
 			currentCrop,
 			cropContinuity);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		publishCropTelemetry(true);
 		if (collectPassTelemetry) {
 			std::scoped_lock lock(dlssPassTelemetryMutex);
@@ -3355,6 +3353,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 				UpscalingTelemetry::SaturatingIncrement(successes);
 			}
 		}
+#endif
 	}
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitEnd, "DLSS-EvaluateEnd", 1);
 
@@ -3420,12 +3419,14 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 Streamline::DLSSPassTelemetrySnapshot Streamline::GetDLSSPassTelemetrySnapshot(
 	uint32_t a_frame) const noexcept
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	try {
 		std::scoped_lock lock(dlssPassTelemetryMutex);
 		if (const auto* telemetry = dlssPassTelemetryFrames.Find(a_frame))
 			return *telemetry;
 	} catch (...) {
 	}
+#endif
 
 	DLSSPassTelemetrySnapshot snapshot{};
 	snapshot.frame = a_frame;
@@ -3434,9 +3435,10 @@ Streamline::DLSSPassTelemetrySnapshot Streamline::GetDLSSPassTelemetrySnapshot(
 
 Streamline::DLSSViewportCropTelemetrySnapshot
 Streamline::GetDLSSViewportCropTelemetrySnapshot(
-	DLSSViewportRole a_role,
-	uint32_t a_eyeIndex) const noexcept
+	[[maybe_unused]] DLSSViewportRole a_role,
+	[[maybe_unused]] uint32_t a_eyeIndex) const noexcept
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	try {
 		std::scoped_lock lock(dlssViewportCropTelemetryMutex);
 		const uint32_t eye = std::min<uint32_t>(a_eyeIndex, 1u);
@@ -3444,6 +3446,9 @@ Streamline::GetDLSSViewportCropTelemetrySnapshot(
 	} catch (...) {
 		return {};
 	}
+#else
+	return {};
+#endif
 }
 
 bool Streamline::UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,

@@ -56,6 +56,14 @@ namespace
 namespace globals
 {
 	State* state = &::state;
+	namespace features
+	{
+		struct
+		{
+			unsigned drawCalls = 0;
+			void DrawSettings() { ++drawCalls; }
+		} reverseZ;
+	}
 }
 
 namespace LocationContext
@@ -194,7 +202,9 @@ namespace
 
 	void Draw(VR& a_vr)
 	{
+		const auto reverseZDraws = globals::features::reverseZ.drawCalls;
 		DrawDepthCullingSettings(a_vr, "DepthTest");
+		Require(globals::features::reverseZ.drawCalls == reverseZDraws + 1, "Depth UI did not delegate Reverse Z settings");
 		Require(ids.empty() && openTables == 0 && !controlsDisabled, "Depth UI leaked ImGui state");
 	}
 

@@ -28,6 +28,7 @@ namespace NeuralRendering
 	struct RendererApplyOutcome
 	{
 		bool reconstructionHistoryReset = false, spatialHistoryReset = false;
+		bool startupDeferred = false;
 		uint32_t evaluationAttemptedFeatureSlotMask = 0, successful = 0, selectedOutputFeatureSlotMask = 0;
 		bool WasEvaluationAttempted(uint32_t slot) const { return (evaluationAttemptedFeatureSlotMask & (1u << slot)) != 0; }
 		bool WasEvaluationSuccessful(uint32_t slot) const { return (successful & (1u << slot)) != 0; }
@@ -42,6 +43,7 @@ namespace NeuralRendering
 			return ceiling;
 		}
 		bool succeeds = true, spatialChange = false;
+		bool startupDeferred = false;
 		uint32_t selectionCompletion = 0b11u;
 		static Renderer& Instance()
 		{
@@ -53,7 +55,10 @@ namespace NeuralRendering
 			++entries;
 			++admittedEyes;
 			outcome->spatialHistoryReset = spatialChange;
+			outcome->startupDeferred = startupDeferred;
 			outcome->evaluationAttemptedFeatureSlotMask |= 1u << args.featureSlot;
+			if (startupDeferred)
+				return false;
 			if (succeeds) {
 				outcome->successful |= 1u << args.featureSlot;
 				if (args.modelOutputSelection && (selectionCompletion & (1u << args.featureSlot)))
@@ -145,6 +150,25 @@ namespace
 
 int main()
 {
+	for (bool vr : { false, true })
+		for (bool batched : { false, true })
+			for (bool deferred : { false, true }) {
+				globals::game::isVR = vr;
+				Upscaling upscaling;
+				auto& backend = NeuralRendering::Renderer::Instance();
+				backend = {};
+				backend.succeeds = false;
+				backend.startupDeferred = deferred;
+				std::array<Upscaling::NeuralCenterDispatchResult, 2> results{};
+				std::array<NeuralRendering::RendererApplyArgs, 2> args{};
+				for (uint32_t eye = 0; eye < (vr ? 2u : 1u); ++eye) {
+					results[eye].prepared = true;
+					args[eye].featureSlot = eye;
+				}
+				const auto summary = EvaluatePreparedNeuralStereo(upscaling, results, args, batched, Upscaling::NeuralStereoRouteRole::Main);
+				Require(!summary.pairApplied && summary.successfulEyeMask == 0 && upscaling.composites == 0);
+				Require(upscaling.resets == (deferred ? 0u : 1u));
+			}
 	for (bool vr : { false, true }) {
 		globals::game::isVR = vr;
 		const uint32_t all = vr ? 3u : 1u;

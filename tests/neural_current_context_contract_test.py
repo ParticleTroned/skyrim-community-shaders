@@ -31,7 +31,7 @@ class CurrentContextContract(unittest.TestCase):
         self.assertIn("experimentalCurrentContext", configure["then"]["propertyNames"]["enum"])
         self.assertIn("default false", schema["description"])
         for field, minimum, maximum, default in (
-            ("modelResolutionPercent", 30, 100, 100),
+            ("modelResolutionPercent", 30, 100, 90),
             ("centralAreaPercent", 25, 100, 100),
             ("centralFeatherPixels", 0, 256, 64),
         ):

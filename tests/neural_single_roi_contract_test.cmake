@@ -196,7 +196,7 @@ foreach(_execution_contract IN ITEMS
     [[observation.rect = resources[index].roi.ownedOutput;]]
     [[resources[index].roi.ownedOutput);]]
     [[resources[index].historyKey.regionIdentity = 0;]]
-    [[.logicalEyeCount = logicalEyeCount,]]
+    [[.logicalEyeCount = startupIndex ? 1u : logicalEyeCount,]]
 )
     string(FIND "${_contract_text}" "${_execution_contract}"
         _execution_contract_position)

@@ -1,5 +1,6 @@
 #include "Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/PeripheralCompressionPolicy.h"
+#include "Features/Upscaling/NeuralRendering/ReconstructionTuning.h"
 
 #include <array>
 #include <cstdint>
@@ -21,9 +22,11 @@ namespace NeuralRendering
 		std::optional<RenderingMode> renderingMode;
 		uint32_t modelResolutionPercent = 100;
 		bool guidedReconstructionEnabled = false;
+		std::uint32_t guidedConfidenceRejectionPercent = 0;
 		std::uint32_t peripheralCompressionPercent = 0;
 		PeripheralMask peripheralMask{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		ReconstructionTuning reconstructionTuning{};
 		uint32_t frameId = 1;
 		uint64_t generation = 1;
 		GuidedReconstructionOverride reconstructionOverride = GuidedReconstructionOverride::Auto;
@@ -55,6 +58,10 @@ struct Upscaling
 	{
 		uint32_t neuralRenderingModelResolutionPercent = 100;
 		bool neuralRenderingGuidedReconstruction = true;
+		uint32_t neuralRenderingConfidenceRejectionPercent = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
+#endif
 		unsigned neuralRenderingPeripheralCompressionPercent = 0;
 		bool neuralRenderingFovOnly = false, neuralRenderingRenderscaleFov = false;
 		bool neuralRenderingPressureResolutionEnabled = false;
@@ -93,7 +100,9 @@ int main()
 	NeuralRendering::RendererApplyArgs args;
 	unsigned calls = 0;
 	upscaling.settings.neuralRenderingGuidedReconstruction = true;
+	upscaling.settings.neuralRenderingConfidenceRejectionPercent = 51;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	upscaling.settings.neuralReconstructionTuning = { 37, 4, false, false };
 	auto& experiment = NeuralRendering::Renderer::Instance().experiment;
 	if (!experiment.Configure(NeuralRendering::GuidedReconstructionOverride::GuidedExperiment, 2, experiment.Status().revision))
 		throw std::runtime_error("Comparison setup failed");
@@ -104,7 +113,11 @@ int main()
 	}
 	if (!args.guidedReconstructionEnabled)
 		throw std::runtime_error("Guided enable was lost at admission");
+	if (args.guidedConfidenceRejectionPercent != 51)
+		throw std::runtime_error("Confidence rejection was lost at admission");
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	if (args.reconstructionTuning != upscaling.settings.neuralReconstructionTuning)
+		throw std::runtime_error("Session reconstruction tuning was lost at admission");
 	if (upscaling.resets != 1 || args.reconstructionOverride != NeuralRendering::GuidedReconstructionOverride::GuidedExperiment)
 		throw std::runtime_error("Comparison history transition repeated or was lost");
 	args.frameId += 2;

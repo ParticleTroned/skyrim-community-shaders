@@ -56,7 +56,7 @@ extract_between(
 extract_between(
     "${_upscaling}"
     "const bool sourceMenuContextActive = menuWorldUIBridge ?"
-    "\n\t// Gameplay prompts must not arm menu tails"
+    "\n\tif (vrMenuTransparencyFixActive &&\n\t\t!PrepareVRMenuNativeFallback("
     "vr_menu_capture_owner_under_test.h"
 )
 extract_between(

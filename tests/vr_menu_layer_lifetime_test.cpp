@@ -102,6 +102,8 @@ struct Upscaling
 	std::unique_ptr<Texture> vrMenuFinalCompositeLayer = std::make_unique<Texture>();
 	std::unique_ptr<Texture> vrMenuCommittedCompositeLayer = std::make_unique<Texture>();
 	uint32_t vrMenuFinalCompositeFrame = UINT32_MAX;
+	std::uintptr_t vrMenuNativeFallbackTarget = 0;
+	bool vrMenuNativeFallbackPending = false;
 	uint32_t vrMenuFinalCompositeLayerDrawCount = 0;
 	uint32_t vrMenuDrawInterfaceDepth = 0;
 	bool vrMenuParallelBridgeDrawInProgress = false;

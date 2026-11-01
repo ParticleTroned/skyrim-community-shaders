@@ -39,9 +39,9 @@ void main(uint3 threadId : SV_DispatchThreadID)
 	float3 center = 0.5 * (clusters[index].minPoint.xyz + clusters[index].maxPoint.xyz);
 	float scores[8];
 	uint candidates[8];
-	[unroll] for (uint slot = 0; slot < 8; ++slot) {
-		scores[slot] = -1.0;
-		candidates[slot] = WaterContactCandidates::EmptyIndex;
+	[unroll] for (uint initSlot = 0; initSlot < 8; ++initSlot) {
+		scores[initSlot] = -1.0;
+		candidates[initSlot] = WaterContactCandidates::EmptyIndex;
 	}
 	uint count = min(grid.lightCount, (uint)MAX_CLUSTER_LIGHTS);
 	uint budget = min(WaterCandidateBudget, WaterContactCandidates::MaxCandidates);
@@ -59,20 +59,20 @@ void main(uint3 threadId : SV_DispatchThreadID)
 		if (!WaterFinite::IsFinite(score) || score <= 0.0)
 			continue;
 		uint candidate = local;
-		[unroll] for (uint slot = 0; slot < 8; ++slot) {
-			if (slot < budget && score > scores[slot]) {
-				float oldScore = scores[slot];
-				uint oldCandidate = candidates[slot];
-				scores[slot] = score;
-				candidates[slot] = candidate;
+		[unroll] for (uint rankSlot = 0; rankSlot < 8; ++rankSlot) {
+			if (rankSlot < budget && score > scores[rankSlot]) {
+				float oldScore = scores[rankSlot];
+				uint oldCandidate = candidates[rankSlot];
+				scores[rankSlot] = score;
+				candidates[rankSlot] = candidate;
 				score = oldScore;
 				candidate = oldCandidate;
 			}
 		}
 	}
 	uint2 packed = WaterContactCandidates::Empty();
-	[unroll] for (uint slot = 0; slot < 8; ++slot)
-		WaterContactCandidates::Store(packed, slot, candidates[slot]);
+	[unroll] for (uint packSlot = 0; packSlot < 8; ++packSlot)
+		WaterContactCandidates::Store(packed, packSlot, candidates[packSlot]);
 	grid.pad0[0] = packed.x;
 	grid.pad0[1] = packed.y;
 	lightGrid[index] = grid;

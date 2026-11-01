@@ -1,3 +1,5 @@
+#include "Common/WaterFinite.hlsli"
+
 #			if defined(UNIFIED_WATER) && defined(DEPTH) && (!defined(VERTEX_ALPHA_DEPTH) || defined(VR)) && !defined(UNDERWATER) && !defined(LOD)
 #				define UNIFIED_WATER_SHALLOW_FALLBACK
 
@@ -45,7 +47,7 @@ float GetUnifiedWaterShallowFallbackAvailability(float viewDistance)
 	float maximumDistance = max(
 		SharedData::unifiedWaterSettings.ShallowFallbackMaxDistance,
 		0.0);
-	if (!isfinite(viewDistance) || !isfinite(maximumDistance) || maximumDistance <= 0.0)
+	if (!WaterFinite::IsFinite(viewDistance) || !WaterFinite::IsFinite(maximumDistance) || maximumDistance <= 0.0)
 		return 0.0;
 
 	float fadeRange = min(
@@ -57,7 +59,7 @@ float GetUnifiedWaterShallowFallbackAvailability(float viewDistance)
 
 bool IsUnifiedWaterRawDepthValid(float rawDepth)
 {
-	return isfinite(rawDepth) &&
+	return WaterFinite::IsFinite(rawDepth) &&
 	       FrameBuffer::ToStandardDepth(rawDepth) > 1e-5 &&
 	       FrameBuffer::ToStandardDepth(rawDepth) < 1.0 - 1e-5;
 }
@@ -69,7 +71,7 @@ bool TryGetUnifiedWaterScenePosition(
 	out float3 scenePosition)
 {
 	scenePosition = 0.0.xxx;
-	if (!IsUnifiedWaterRawDepthValid(rawDepth) || !all(isfinite(logicalUV)))
+	if (!IsUnifiedWaterRawDepthValid(rawDepth) || !all(WaterFinite::IsFinite(logicalUV)))
 		return false;
 
 #				if defined(VR)
@@ -82,11 +84,11 @@ bool TryGetUnifiedWaterScenePosition(
 	float4 scenePositionH = mul(
 		FrameBuffer::CameraViewProjInverse[eyeIndex],
 		float4(clipPosition, rawDepth, 1.0));
-	if (!all(isfinite(scenePositionH)) || abs(scenePositionH.w) <= 1e-6)
+	if (!all(WaterFinite::IsFinite(scenePositionH)) || abs(scenePositionH.w) <= 1e-6)
 		return false;
 
 	scenePosition = scenePositionH.xyz / scenePositionH.w;
-	return all(isfinite(scenePosition));
+	return all(WaterFinite::IsFinite(scenePosition));
 }
 
 #				if defined(VR)
@@ -101,8 +103,8 @@ bool TryGetUnifiedWaterVRColumn(
 	waterColumnDepthUnits = -1.0;
 	if (
 		!IsUnifiedWaterRawDepthValid(sceneRawDepth) ||
-		!isfinite(waterSurfaceRawDepth) ||
-		!all(isfinite(waterSurfacePosition)) ||
+		!WaterFinite::IsFinite(waterSurfaceRawDepth) ||
+		!all(WaterFinite::IsFinite(waterSurfacePosition)) ||
 		FrameBuffer::IsNearerDepth(sceneRawDepth, waterSurfaceRawDepth)) {
 		return false;
 	}
@@ -118,14 +120,14 @@ bool TryGetUnifiedWaterVRColumn(
 
 	float3 waterPlaneNormal = ReflectPlane[eyeIndex].xyz;
 	float waterPlaneNormalLength = length(waterPlaneNormal);
-	if (!isfinite(waterPlaneNormalLength) || waterPlaneNormalLength <= 1e-6)
+	if (!WaterFinite::IsFinite(waterPlaneNormalLength) || waterPlaneNormalLength <= 1e-6)
 		return false;
 	waterPlaneNormal /= waterPlaneNormalLength;
 
 	waterColumnDepthUnits = abs(dot(
 		scenePosition - waterSurfacePosition,
 		waterPlaneNormal));
-	return isfinite(waterColumnDepthUnits);
+	return WaterFinite::IsFinite(waterColumnDepthUnits);
 }
 #				endif
 
@@ -163,7 +165,7 @@ bool TryGetUnifiedWaterProbeColumn(
 	probeColumn =
 		belowPlaneSign *
 		dot(scenePosition - waterSurfacePosition, waterPlaneNormal);
-	return isfinite(probeColumn) && probeColumn > 0.0;
+	return WaterFinite::IsFinite(probeColumn) && probeColumn > 0.0;
 }
 
 float GetUnifiedWaterDeepContextWeight(
@@ -177,7 +179,7 @@ float GetUnifiedWaterDeepContextWeight(
 	float3 waterSurfaceDx,
 	float3 waterSurfaceDy)
 {
-	if (!isfinite(centerColumn) || centerColumn < 0.0)
+	if (!WaterFinite::IsFinite(centerColumn) || centerColumn < 0.0)
 		return 0.0;
 
 	float deepDepth = max(
@@ -193,14 +195,14 @@ float GetUnifiedWaterDeepContextWeight(
 		0.0);
 	if (
 		maximumReach <= 0.0 ||
-		!all(isfinite(columnGradient)) ||
-		!all(isfinite(waterSurfaceDx)) ||
-		!all(isfinite(waterSurfaceDy))) {
+		!all(WaterFinite::IsFinite(columnGradient)) ||
+		!all(WaterFinite::IsFinite(waterSurfaceDx)) ||
+		!all(WaterFinite::IsFinite(waterSurfaceDy))) {
 		return 0.0;
 	}
 
 	float gradientMagnitude = length(columnGradient);
-	if (!isfinite(gradientMagnitude) || gradientMagnitude <= 1e-4)
+	if (!WaterFinite::IsFinite(gradientMagnitude) || gradientMagnitude <= 1e-4)
 		return 0.0;
 
 	float2 probeDirection = columnGradient / gradientMagnitude;
@@ -208,7 +210,7 @@ float GetUnifiedWaterDeepContextWeight(
 		probeDirection.x * waterSurfaceDx +
 		probeDirection.y * waterSurfaceDy;
 	float surfaceUnitsPerPixel = length(directionalSurfaceStep);
-	if (!isfinite(surfaceUnitsPerPixel) || surfaceUnitsPerPixel <= 1e-4)
+	if (!WaterFinite::IsFinite(surfaceUnitsPerPixel) || surfaceUnitsPerPixel <= 1e-4)
 		return 0.0;
 
 	int2 renderDimensions = GetUnifiedWaterDepthRenderDimensions();
@@ -221,7 +223,7 @@ float GetUnifiedWaterDeepContextWeight(
 		UnifiedWaterDeepProbeMaxRadiusPixels,
 		length(eyeRenderDimensions));
 	if (
-		!isfinite(requestedRadiusPixels) ||
+		!WaterFinite::IsFinite(requestedRadiusPixels) ||
 		requestedRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels ||
 		representableRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels) {
 		return 0.0;
@@ -238,7 +240,7 @@ float GetUnifiedWaterDeepContextWeight(
 	float probeNearFieldConfidence = 1.0;
 #				if defined(VR)
 	float waterSurfaceViewDistance = length(waterSurfacePosition);
-	if (!isfinite(waterSurfaceViewDistance))
+	if (!WaterFinite::IsFinite(waterSurfaceViewDistance))
 		return 0.0;
 	float nearFieldFadeStart = maximumReach;
 	float nearFieldFadeEnd = max(
@@ -291,14 +293,14 @@ float GetUnifiedWaterDeepContextWeight(
 
 	float3 waterPlaneNormal = ReflectPlane[eyeIndex].xyz;
 	float waterPlaneNormalLength = length(waterPlaneNormal);
-	if (!isfinite(waterPlaneNormalLength) || waterPlaneNormalLength <= 1e-6)
+	if (!WaterFinite::IsFinite(waterPlaneNormalLength) || waterPlaneNormalLength <= 1e-6)
 		return 0.0;
 	waterPlaneNormal /= waterPlaneNormalLength;
 
 	float centerPlaneOffset = dot(
 		centerScenePosition - waterSurfacePosition,
 		waterPlaneNormal);
-	if (!isfinite(centerPlaneOffset) || abs(centerPlaneOffset) <= 1e-4)
+	if (!WaterFinite::IsFinite(centerPlaneOffset) || abs(centerPlaneOffset) <= 1e-4)
 		return 0.0;
 	float belowPlaneSign = centerPlaneOffset < 0.0 ? -1.0 : 1.0;
 
@@ -360,11 +362,11 @@ float GetUnifiedWaterShoreContactWeight(
 		SharedData::unifiedWaterSettings.ShoreContactMinFadePixels,
 		0.0);
 	if (
-		!isfinite(waterColumnDepthUnits) ||
-		!isfinite(blendRange) ||
-		!isfinite(minimumFadePixels))
+		!WaterFinite::IsFinite(waterColumnDepthUnits) ||
+		!WaterFinite::IsFinite(blendRange) ||
+		!WaterFinite::IsFinite(minimumFadePixels))
 		return 0.0;
-	float adaptiveRange = isfinite(depthFootprint) ?
+	float adaptiveRange = WaterFinite::IsFinite(depthFootprint) ?
 	                          minimumFadePixels * max(depthFootprint, 0.0) :
 	                          0.0;
 	float effectiveRange = max(blendRange, adaptiveRange);
@@ -383,9 +385,9 @@ float GetUnifiedWaterShallowSurfaceDepthWeight(float waterColumnDepthUnits)
 		SharedData::unifiedWaterSettings.ShallowSurfaceDepthRangeUnits,
 		1.0);
 	if (
-		!isfinite(waterColumnDepthUnits) ||
+		!WaterFinite::IsFinite(waterColumnDepthUnits) ||
 		waterColumnDepthUnits < 0.0 ||
-		!isfinite(depthRange))
+		!WaterFinite::IsFinite(depthRange))
 		return 0.0;
 
 	float normalizedDepth = saturate(max(waterColumnDepthUnits, 0.0) / depthRange);

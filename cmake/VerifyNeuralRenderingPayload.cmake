@@ -17,7 +17,8 @@ set(_nr_shader_files
     ModelResolutionCoverageCS.hlsl
     ModelResolutionStorage.hlsli
     ModelResolutionPrepareCS.hlsl
-    ModelResolutionReconstructCS.hlsl)
+    ModelResolutionReconstructCS.hlsl
+    SceneCategorySelection.hlsli)
 file(GLOB_RECURSE _nr_entries LIST_DIRECTORIES TRUE
     RELATIVE "${_nr_shader_root}" "${_nr_shader_root}/*")
 foreach(_entry IN LISTS _nr_entries)

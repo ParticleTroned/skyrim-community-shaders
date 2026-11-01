@@ -21,6 +21,6 @@
 void TestWaterParallaxNonFiniteBudgetUsesFullCap()
 {
 	ASSERT(AreEqual, WaterParallaxMath::Budget(asfloat(0x7f800000u)), 64u);
-	ASSERT(AreEqual, WaterParallaxMath::Budget(asfloat(0xff800000u)), 64u);
-	ASSERT(AreEqual, WaterParallaxMath::Budget(asfloat(0xffc00001u)), 64u);
+	ASSERT(AreEqual, WaterParallaxMath::Budget(asfloat(((1u << 31) | 0x7f800000u))), 64u);
+	ASSERT(AreEqual, WaterParallaxMath::Budget(asfloat(((1u << 31) | 0x7fc00001u))), 64u);
 }

@@ -760,6 +760,18 @@ namespace SharedData
 	};
 #endif
 
+	struct UnifiedWaterShallowSettings
+	{
+		float ShallowFallbackStrength;
+		float DeepConnectionProbeReachUnits;
+		float DeepContextDepthUnits;
+		float ShoreContactMinFadePixels;
+		float ShoreDepthBlendRangeUnits;
+		float ShallowSurfaceDepthRangeUnits;
+		float ShallowFallbackMaxDistance;
+		float DeepContextTransitionUnits;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -793,6 +805,7 @@ namespace SharedData
 		HorizonFixSettings horizonFixSettings;
 		RainRefractionSettings rainRefractionSettings;
 		uint4 unifiedWaterRuntime;
+		UnifiedWaterShallowSettings unifiedWaterSettings;
 #if defined(SNOW_COVER) && defined(PSHADER)
 		SnowCoverSettings snowCoverSettings;
 #endif

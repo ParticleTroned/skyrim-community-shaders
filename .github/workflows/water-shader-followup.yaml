@@ -3,7 +3,9 @@ name: Water shader compatibility follow-up
 on:
   push:
     branches: [build/os-water-preparation-20261101]
-    paths: [.github/workflows/water-shader-followup.yaml]
+    paths:
+      - .github/workflows/water-shader-followup.yaml
+      - .water-port/publish_shader_followup.py
   workflow_dispatch:
 
 permissions:

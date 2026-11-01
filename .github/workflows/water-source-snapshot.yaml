@@ -1,0 +1,81 @@
+name: Water port source snapshot
+
+on:
+  push:
+    branches: [build/os-water-preparation-20261101]
+    paths: [.github/workflows/water-source-snapshot.yaml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-snapshot:
+    if: github.repository == 'ParticleTroned/skyrim-community-shaders' && github.ref == 'refs/heads/build/os-water-preparation-20261101'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: ParticleTroned/skyrim-community-shaders
+          ref: d64dc05b60d38774f43797b9d4e6c1f357b8b1f8
+          path: upstream
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: ParticleTroned/skyrim-community-shaders
+          ref: f140c878138fe2783a6a4ad40420a3a2a996ccd0
+          path: donor
+          persist-credentials: false
+      - name: Export tracked text sources only
+        shell: python
+        run: |
+          import hashlib
+          import json
+          import shutil
+          import subprocess
+          from pathlib import Path
+          destination = Path('water-source-snapshot')
+          suffixes = {'.h', '.hpp', '.hxx', '.c', '.cc', '.cpp', '.hlsl', '.hlsli', '.glsl', '.ini', '.json', '.py', '.ps1', '.yaml', '.yml', '.cmake', '.txt', '.md', '.toml', '.bat', '.sh', '.in', '.props', '.targets'}
+          roots = {'src', 'include', 'features', 'package', 'tools', 'tests', '.github', 'cmake'}
+          expected = {'upstream': 'd64dc05b60d38774f43797b9d4e6c1f357b8b1f8', 'donor': 'f140c878138fe2783a6a4ad40420a3a2a996ccd0'}
+          manifest = {}
+          for name, commit in expected.items():
+              root = Path(name)
+              actual = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+              if actual != commit:
+                  raise RuntimeError(f'Unexpected {name} commit: {actual}')
+              paths = subprocess.check_output(['git', '-C', str(root), 'ls-files', '-z']).decode().split('\0')
+              files = {}
+              for relative in paths:
+                  if not relative:
+                      continue
+                  path = Path(relative)
+                  source = root / path
+                  if not source.is_file() or source.is_symlink():
+                      continue
+                  if len(path.parts) > 1 and path.parts[0] not in roots:
+                      continue
+                  if path.suffix.lower() not in suffixes and relative not in {'.gitmodules', '.clang-format', '.gitattributes', 'CMakeLists.txt', 'COPYING', 'LICENSE'}:
+                      continue
+                  data = source.read_bytes()
+                  if b'\0' in data:
+                      continue
+                  try:
+                      data.decode('utf-8-sig')
+                  except UnicodeDecodeError:
+                      continue
+                  output = destination / name / path
+                  output.parent.mkdir(parents=True, exist_ok=True)
+                  output.write_bytes(data)
+                  files[relative] = hashlib.sha256(data).hexdigest()
+              manifest[name] = {'commit': actual, 'files': files}
+          destination.mkdir(exist_ok=True)
+          (destination / 'source-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+          print({name: len(value['files']) for name, value in manifest.items()})
+      - uses: actions/upload-artifact@v7
+        with:
+          name: water-source-snapshot
+          path: water-source-snapshot/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3

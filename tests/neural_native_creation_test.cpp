@@ -85,6 +85,7 @@ namespace NeuralRendering
 	{};
 	constexpr std::int32_t E_INVALIDARG = -1, E_PENDING = -2;
 	constexpr unsigned kFeatureDlssNr = 18;
+	constexpr int NVSDK_NGX_DLSSNR_Mask_Blend_Mode_None = 0, NVSDK_NGX_DLSSNR_Mask_Blend_Mode_Min = 2;
 	constexpr bool NVSDK_NGX_FAILED(int result) { return result != 0; }
 	struct NVSDK_NGX_Handle
 	{};
@@ -174,7 +175,7 @@ namespace NeuralRendering
 			std::uint32_t networkPreset = kNetworkDefault;
 			UpscalingDLSS::Extent colorBacking{};
 			NativeCreationExtents creation{};
-			bool featureUpscaling = false, providerBlending = false, valid = false;
+			bool featureUpscaling = false, providerBlending = false, nativeControlMask = false, valid = false;
 			bool Matches(const NativeEvaluationLayout&) const;
 		};
 #include "neural_evaluation_success_detail_under_test.h"
@@ -598,6 +599,43 @@ void DepthEncoding()
 	}
 }
 
+namespace
+{
+	void SdkMaskAndParameterConsistency()
+	{
+		using namespace NeuralRendering;
+		Runtime runtime;
+		ID3D12GraphicsCommandList commands;
+		ID3D12Resource resource;
+		auto layout = BuildNativeEvaluationLayout({ 640, 384 }, { 320, 192 }, { 640, 384 }, { 640, 384 },
+			{ 0, 0, 640, 384 }, { true, 320.f, 192.f }, true);
+		layout.nativeControlMask = true;
+		layout.jitterPixels = { 0.25f, -0.375f };
+		Tuning tuning;
+		tuning.useAutoMask = true;
+		Require(runtime.PrepareFeature(&commands, 0, layout, &resource, &resource, true), "Native mask preparation failed");
+		const auto creation = creates.back();
+		Require(runtime.Execute(&commands, 0, &resource, &resource, &resource, &resource, &resource,
+					layout, tuning, false, nullptr, nullptr, nullptr, 0, true),
+			"Native mask evaluation failed");
+		const auto& evaluation = evaluations.back();
+		Require(evaluation.at("DLSSNR.ControlMask") == reinterpret_cast<std::uintptr_t>(&resource) &&
+					evaluation.at("DLSSNR.MaskBlendMode") == 2 && evaluation.at("DLSSNR.UseAutoMask") == 1,
+			"RGB strength mask did not combine with the skin automask using Min");
+		Require(!evaluation.contains("DLSSNR.UIAlpha") && evaluation.at("DLSSNR.UICorrection") == 0,
+			"Native strength masking leaked into UI protection");
+		Require(evaluation.at("DLSSNR.ScalingRatio") == creation.at("DLSSNR.ScalingRatio") &&
+					evaluation.at("DLSSNR.ScalingRatio") == std::bit_cast<std::uint32_t>(1.0f),
+			"Guide resolution changed the inference budget or parameter reset changed its ratio");
+		Require(evaluation.at(NVSDK_NGX_Parameter_Jitter_Offset_X) == std::bit_cast<std::uint32_t>(0.25f) &&
+					evaluation.at(NVSDK_NGX_Parameter_Jitter_Offset_Y) == std::bit_cast<std::uint32_t>(-0.375f),
+			"Explicit native jitter was lost before NGX evaluation");
+		layout.nativeControlMask = false;
+		Require(!runtime.PrepareFeature(&commands, 0, layout, &resource, &resource, true),
+			"A live mask-ABI change skipped safe feature retirement");
+	}
+}
+
 int main()
 {
 	try {
@@ -607,6 +645,7 @@ int main()
 		NetworkCreation();
 		InvalidationAndLease();
 		DepthEncoding();
+		SdkMaskAndParameterConsistency();
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

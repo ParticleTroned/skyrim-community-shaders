@@ -1152,6 +1152,15 @@ namespace NeuralRendering
 			return MapComputeSubrect(rect, sourceSize.width, sourceSize.height, modelSize.width, modelSize.height);
 		};
 		adapted = input;
+		if (!input.guideWidth || !input.guideHeight)
+			return false;
+		// A spatially varying map has no single jitter offset; this NR route is stateless.
+		if (input.peripheralCompression.Active() || geometry->packedCrops.count)
+			adapted.jitterPixels = {};
+		else {
+			adapted.jitterPixels[0] *= float(geometry->modelGuideSize.width) / input.guideWidth;
+			adapted.jitterPixels[1] *= float(geometry->modelGuideSize.height) / input.guideHeight;
+		}
 		adapted.modelOutputSelection.reset();
 		adapted.sceneCategorySelection.reset();
 		adapted.modelResolutionPercent = kMaximumModelResolutionPercent;

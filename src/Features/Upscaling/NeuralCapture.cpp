@@ -10,6 +10,13 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 	[[maybe_unused]] const std::array<uint32_t, 2>& guideOrigin) noexcept
 {
 	args.renderingMode = GetNeuralRenderingMode();
+	args.jitterPixels = {};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (args.renderingMode == NeuralRendering::RenderingMode::ReducedResolution) {
+		const auto jitter = GetJitterForDispatch();
+		args.jitterPixels = { jitter.x, jitter.y };
+	}
+#endif
 	args.modelResolutionPercent = NeuralRendering::EffectiveModelResolutionPercent(
 		*args.renderingMode, settings.neuralRenderingModelResolutionPercent);
 	args.guidedReconstructionEnabled = settings.neuralRenderingGuidedReconstruction;

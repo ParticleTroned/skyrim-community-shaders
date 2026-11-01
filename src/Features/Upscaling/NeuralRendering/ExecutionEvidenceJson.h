@@ -2,6 +2,7 @@
 #include "ReconstructionTuningJson.h"
 
 #include "ExecutionEvidence.h"
+#include "NgxCapabilityInfo.h"
 #include <algorithm>
 #include <nlohmann/json.hpp>
 
@@ -14,6 +15,14 @@ namespace NeuralRendering::Evidence
 	{
 		return value ? Json(*value) : Json(nullptr);
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	inline Json DriverRequirementsJson(const NgxDriverRequirements& value)
+	{
+		return { { "needsUpdate", OptionalJson(value.needsUpdate) }, { "minimumMajor", OptionalJson(value.minimumMajor) },
+			{ "minimumMinor", OptionalJson(value.minimumMinor) }, { "updateQuery", OptionalJson(value.updateQuery) },
+			{ "majorQuery", OptionalJson(value.majorQuery) }, { "minorQuery", OptionalJson(value.minorQuery) } };
+	}
+#endif
 	inline Json ExtentJson(const UpscalingDLSS::Extent& value)
 	{
 		return { { "width", value.width }, { "height", value.height } };
@@ -44,6 +53,8 @@ namespace NeuralRendering::Evidence
 			{ "inputInitializationContract", "valid_rectangles_before_evaluation" }, { "nativeReadableFootprint", nullptr },
 			{ "motionSourceUnits", "full_input_normalized" }, { "motionConsumerUnits", "native_guide_pixels" },
 			{ "motionConversion", "native_parameter_scale_once" }, { "motionVectorScale", value.motionVectorScale },
+			{ "jitterPixels", value.jitterPixels }, { "scalingRatio", value.ScalingRatio() },
+			{ "nativeControlMask", value.nativeControlMask },
 			{ "featureUpscaling", value.featureUpscaling } };
 	}
 	/** Rectangular support is a conservative enclosure; exact occupancy has its own producer. */

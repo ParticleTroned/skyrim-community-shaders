@@ -10,6 +10,7 @@
 #include <cstring>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace NeuralRendering::Color
 {
@@ -293,15 +294,19 @@ namespace NeuralRendering::Color
 	}
 	bool Pipeline::EnsureShaders(ID3D11Device* device, [[maybe_unused]] bool diagnostics, HRESULT& result)
 	{
+		std::vector<std::pair<const char*, const char*>> defines;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		defines.emplace_back("NR_NVIDIA_REFERENCE", "1");
+#endif
 		result = E_FAIL;
 		if (compileFailed_)
 			return false;
 		if (!prepare_)
 			prepare_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
-				L"Data/Shaders/Upscaling/NeuralRendering/ColorPrepareCS.hlsl", {}, "cs_5_0", "main")));
+				L"Data/Shaders/Upscaling/NeuralRendering/ColorPrepareCS.hlsl", defines, "cs_5_0", "main")));
 		if (!reconstruct_)
 			reconstruct_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
-				L"Data/Shaders/Upscaling/NeuralRendering/ColorReconstructCS.hlsl", {}, "cs_5_0", "main")));
+				L"Data/Shaders/Upscaling/NeuralRendering/ColorReconstructCS.hlsl", defines, "cs_5_0", "main")));
 		compileFailed_ = !prepare_ || !reconstruct_;
 		if (compileFailed_)
 			return false;
@@ -319,7 +324,7 @@ namespace NeuralRendering::Color
 			measureCompileAttempted_ = true;
 			try {
 				measure_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
-					L"Data/Shaders/Upscaling/NeuralRendering/ColorMeasureCS.hlsl", {}, "cs_5_0", "main")));
+					L"Data/Shaders/Upscaling/NeuralRendering/ColorMeasureCS.hlsl", defines, "cs_5_0", "main")));
 			} catch (...) {
 				measure_.Reset();
 			}

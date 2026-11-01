@@ -151,6 +151,25 @@ class Contracts(unittest.TestCase):
         self.assertIn("SetPredication(predicate_.Get(), predicateValue_)", guard)
         self.assertIn("for (auto& readback : readbacks) readback.Abandon()", source)
 
+    def test_sdk_comparisons_preserve_face_budget_boundaries(self):
+        import json
+        source = (ROOT / "src/Features/NeuralRenderingFeature.cpp").read_text()
+        descriptor = json.loads(source.split('R"schema(', 1)[1].split(')schema"', 1)[0])
+        experiments = descriptor["inputSchema"]["properties"]["experiments"]["properties"]
+        self.assertIn("sdk_diagnostics", descriptor["inputSchema"]["properties"]["action"]["enum"])
+        self.assertFalse(experiments["nativeControlMask"]["default"])
+        self.assertFalse(experiments["nativeJitter"]["default"])
+        self.assertIn("nvidia_reference", experiments["upscaled_center"]["properties"]["transform"]["enum"])
+        renderer = (NR / "Renderer.cpp").read_text()
+        self.assertIn("NativeControlMaskEnabled()", renderer)
+        self.assertIn("NativeJitterEnabled()", renderer)
+        self.assertIn('defines.emplace_back("NR_NATIVE_CONTROL_MASK", "1")', renderer)
+        preparation = (NR / "ModelResolution.cpp").read_text()
+        self.assertIn("if (input.peripheralCompression.Active() || geometry->packedCrops.count)", preparation)
+        self.assertIn("adapted.jitterPixels = {};", preparation)
+        self.assertIn('defines.emplace_back("NR_NVIDIA_REFERENCE", "1")', (NR / "ColorPipeline.cpp").read_text())
+        self.assertIn("#ifdef NR_NVIDIA_REFERENCE", (SHADERS / "ColorCommon.hlsli").read_text())
+
     def test_feature_and_packaging(self):
         source = (ROOT / "src/Feature.cpp").read_text()
         self.assertIn("&NeuralRenderingFeature::Instance()", source)

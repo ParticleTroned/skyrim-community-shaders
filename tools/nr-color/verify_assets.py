@@ -16,7 +16,7 @@ RUNTIME_SHADERS = {
     "Renderer.cpp": ("CopyDepthGuideCS.hlsl", "CopyCompactDepthGuideCS.hlsl"),
 }
 EXTERNAL_RUNTIME_SHADERS = {"Renderer.cpp": {"Data/Shaders/DLSS5ActorProtectionCS.hlsl"}}
-NAMES = ("ColorCommon.hlsli", "ModelResolutionCommon.hlsli", *(name for names in RUNTIME_SHADERS.values() for name in names))
+NAMES = ("ColorCommon.hlsli", "NvidiaReferenceColor.hlsli", "ModelResolutionCommon.hlsli", *(name for names in RUNTIME_SHADERS.values() for name in names))
 MANIFEST_VERSION = re.compile(r"^\s*Version\s*=\s*(\d+)-(\d+)-(\d+)\s*$", re.MULTILINE)
 REGISTRY_VERSION = re.compile(r'"NeuralRendering"sv,\s*\{\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}')
 RUNTIME_TOKENS = re.compile(

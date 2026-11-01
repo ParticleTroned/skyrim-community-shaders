@@ -216,7 +216,7 @@ namespace NeuralRendering
 	bool Runtime::FeatureConfiguration::Matches(const NativeEvaluationLayout& a_layout) const
 	{
 		return valid && colorBacking == a_layout.color.backing &&
-		       creation == a_layout.creation && featureUpscaling == a_layout.featureUpscaling;
+		       creation == a_layout.creation && featureUpscaling == a_layout.featureUpscaling && nativeControlMask == a_layout.nativeControlMask;
 	}
 
 	Runtime& Runtime::Instance()
@@ -400,11 +400,13 @@ namespace NeuralRendering
 			const auto providerHash = hash_;
 			const auto providerVersion = version_;
 			const auto providerTrust = trust_;
+			const auto driverRequirements = driverRequirements_;
 			if (ShutdownLocked()) {
 				path_ = providerPath;
 				hash_ = providerHash;
 				version_ = providerVersion;
 				trust_ = providerTrust;
+				driverRequirements_ = driverRequirements;
 				status_ = primaryStatus;
 				failureStage_ = primaryStage;
 				detail_ = primaryDetail;
@@ -417,6 +419,29 @@ namespace NeuralRendering
 		if (NVSDK_NGX_FAILED(capabilityResult) || !backend_->capabilities) {
 			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
 				"NGX SDK capability map allocation failed", static_cast<std::uint32_t>(capabilityResult));
+			rollback();
+			return false;
+		}
+		int needsUpdatedDriver = 0;
+		const auto driverQuery = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNR_NeedsUpdatedDriver, &needsUpdatedDriver);
+		driverRequirements_.updateQuery = static_cast<std::uint32_t>(driverQuery);
+		if (!NVSDK_NGX_FAILED(driverQuery))
+			driverRequirements_.needsUpdate = needsUpdatedDriver != 0;
+		unsigned minimumMajor = 0, minimumMinor = 0;
+		const auto majorQuery = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNR_MinDriverVersionMajor, &minimumMajor);
+		const auto minorQuery = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNR_MinDriverVersionMinor, &minimumMinor);
+		driverRequirements_.majorQuery = static_cast<std::uint32_t>(majorQuery);
+		driverRequirements_.minorQuery = static_cast<std::uint32_t>(minorQuery);
+		if (!NVSDK_NGX_FAILED(majorQuery))
+			driverRequirements_.minimumMajor = minimumMajor;
+		if (!NVSDK_NGX_FAILED(minorQuery))
+			driverRequirements_.minimumMinor = minimumMinor;
+		if (driverRequirements_.needsUpdate == true) {
+			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
+				std::format("NGX reports that NR requires an updated NVIDIA driver; minimum={}.{}",
+					driverRequirements_.minimumMajor ? std::to_string(*driverRequirements_.minimumMajor) : "unknown",
+					driverRequirements_.minimumMinor ? std::to_string(*driverRequirements_.minimumMinor) : "unknown"),
+				static_cast<std::uint32_t>(NVSDK_NGX_Result_FAIL_OutOfDate));
 			rollback();
 			return false;
 		}
@@ -550,10 +575,10 @@ namespace NeuralRendering
 
 			parameters->Set(
 				NVSDK_NGX_Parameter_DLSSNR_ScalingRatio,
-				static_cast<float>(a_layout.creation.output.width) / a_layout.creation.input.width);
+				a_layout.ScalingRatio());
 			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Hint_Render_Preset, a_networkPreset);
 
-			if (a_providerBlending) {
+			if (a_providerBlending && !a_layout.nativeControlMask) {
 				parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ControlMask, static_cast<ID3D12Resource*>(nullptr));
 				parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UIAlpha, a_controlMask);
 				parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Backbuffer, a_color);
@@ -605,6 +630,7 @@ namespace NeuralRendering
 				.creation = a_layout.creation,
 				.featureUpscaling = a_layout.featureUpscaling,
 				.providerBlending = a_providerBlending,
+				.nativeControlMask = a_layout.nativeControlMask,
 				.valid = true,
 			};
 			evaluationSuccessDetail_.reset();
@@ -642,9 +668,8 @@ namespace NeuralRendering
 			*a_evidence = {};
 		std::scoped_lock lock(mutex_);
 		const bool hasControlMask = a_controlMask != nullptr;
-		const bool controlMaskContractValid = a_providerBlending ?
-		                                          hasControlMask && a_tuning.useAutoMask && a_layout.color == a_layout.output :
-		                                          hasControlMask != a_tuning.useAutoMask;
+		const bool controlMaskContractValid = a_layout.nativeControlMask ? hasControlMask : a_providerBlending ? hasControlMask && a_tuning.useAutoMask && a_layout.color == a_layout.output :
+		                                                                                                         hasControlMask != a_tuning.useAutoMask;
 		if (abandonRequested_.load(std::memory_order_acquire) || abandoned_)
 			return false;
 		const auto layoutViolation = GetNativeEvaluationLayoutViolation(a_layout, hasControlMask);
@@ -675,6 +700,7 @@ namespace NeuralRendering
 
 		auto* parameters = static_cast<NVSDK_NGX_Parameter*>(parameters_);
 		parameters->Reset();
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ScalingRatio, a_layout.ScalingRatio());
 		parameters->Set(NVSDK_NGX_Parameter_Scratch, backend_->scratch[a_slot].Get());
 		parameters->Set(NVSDK_NGX_Parameter_Scratch_SizeInBytes, static_cast<unsigned long long>(backend_->scratchBytes[a_slot]));
 		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Color, a_color);
@@ -686,7 +712,7 @@ namespace NeuralRendering
 		const auto& motionSubrect = a_layout.motion.valid;
 		const auto& outputSubrect = a_layout.output.valid;
 		const auto& controlMaskSubrect = a_layout.controlMask.valid;
-		if (a_providerBlending) {
+		if (a_providerBlending && !a_layout.nativeControlMask) {
 			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ControlMask, static_cast<ID3D12Resource*>(nullptr));
 			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UIAlpha, a_controlMask);
 			parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Backbuffer, a_color);
@@ -723,6 +749,8 @@ namespace NeuralRendering
 		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_OutputSubrectHeight, outputSubrect.height);
 		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_MVecScaleX, a_layout.motionVectorScale[0]);
 		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_MVecScaleY, a_layout.motionVectorScale[1]);
+		parameters->Set(NVSDK_NGX_Parameter_Jitter_Offset_X, a_layout.jitterPixels[0]);
+		parameters->Set(NVSDK_NGX_Parameter_Jitter_Offset_Y, a_layout.jitterPixels[1]);
 		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_DepthInverted, a_tuning.depthInverted ? 1 : 0);
 		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Enabled, 1);
 		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Reset, a_reset ? 1 : 0);
@@ -734,8 +762,10 @@ namespace NeuralRendering
 		parameters->Set(
 			NVSDK_NGX_Parameter_DLSSNR_SkinStructureStrength, std::clamp(a_tuning.skinStructureStrength, 0.0f, limits.skinStructureStrength));
 		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UseAutoMask, a_tuning.useAutoMask ? 1 : 0);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_MaskBlendMode,
+			a_layout.nativeControlMask && a_tuning.useAutoMask ? NVSDK_NGX_DLSSNR_Mask_Blend_Mode_Min : NVSDK_NGX_DLSSNR_Mask_Blend_Mode_None);
 		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_Style, a_tuning.style);
-		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UICorrection, a_providerBlending ? 1 : 0);
+		parameters->Set(NVSDK_NGX_Parameter_DLSSNR_UICorrection, a_providerBlending && !a_layout.nativeControlMask ? 1 : 0);
 
 		if (a_evaluationAttempted)
 			*a_evaluationAttempted = true;
@@ -970,6 +1000,7 @@ namespace NeuralRendering
 		version_.clear();
 		tuningLimits_.reset();
 		networkSelectionSupported_.reset();
+		driverRequirements_ = {};
 		detail_.clear();
 		evaluationSuccessDetail_.reset();
 		featureHandles_ = {};
@@ -1112,6 +1143,37 @@ namespace NeuralRendering
 		std::scoped_lock lock(mutex_);
 		return ngxResult_;
 	}
+
+	NgxDriverRequirements Runtime::DriverRequirements() const
+	{
+		std::scoped_lock lock(mutex_);
+		return driverRequirements_;
+	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	NgxAllocationStatistics Runtime::QueryAllocationStatistics() const
+	{
+		std::scoped_lock lock(mutex_);
+		NgxAllocationStatistics statistics;
+		if (!backend_ || !backend_->capabilities || !device_ || abandoned_ || abandonRequested_.load(std::memory_order_acquire))
+			return statistics;
+		void* callback = nullptr;
+		const auto query = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNRGetStatsCallback, &callback);
+		statistics.callbackQuery = static_cast<std::uint32_t>(query);
+		if (NVSDK_NGX_FAILED(query) || !callback)
+			return statistics;
+		const auto result = reinterpret_cast<PFN_NVSDK_NGX_DLSSNR_GetStatsCallback>(callback)(backend_->capabilities);
+		statistics.callbackResult = static_cast<std::uint32_t>(result);
+		if (NVSDK_NGX_FAILED(result))
+			return statistics;
+		unsigned long long allocated = 0;
+		const auto sizeResult = backend_->capabilities->Get(NVSDK_NGX_Parameter_SizeInBytes, &allocated);
+		statistics.sizeQuery = static_cast<std::uint32_t>(sizeResult);
+		if (!NVSDK_NGX_FAILED(sizeResult))
+			statistics.allocatedBytes = allocated;
+		return statistics;
+	}
+#endif
 
 	CapacityFailure Runtime::CreationCapacityFailure() const
 	{

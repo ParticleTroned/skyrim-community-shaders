@@ -19,6 +19,7 @@
 #include <string_view>
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include <DevBenchAPI.h>
+#	include "Upscaling/NeuralRendering/ExecutionEvidenceJson.h"
 #endif
 
 namespace
@@ -28,7 +29,7 @@ namespace
 	constexpr std::array<const char*, 4> modes{ "legacy_raw", "managed", "preserve_source", "neural_lighting" };
 	static_assert(modes.size() == static_cast<std::size_t>(Mode::Count));
 	constexpr std::array<const char*, 3> domains{ "unknown", "linear", "srgb" };
-	constexpr std::array<const char*, 3> transforms{ "identity", "linear_to_srgb", "reversible_proxy" };
+	constexpr std::array<const char*, 4> transforms{ "identity", "linear_to_srgb", "reversible_proxy", "nvidia_reference" };
 	constexpr std::array<const char*, 3> exposureSources{ "manual", "captured_hdr", "captured_hdr_previous" };
 
 	template <class T, std::size_t N>
@@ -116,10 +117,26 @@ namespace
 		Json result{ { "upscaled_center", ProfileJson(experiments.profiles[0]) },
 			{ "final_ldr_pre_ui", ProfileJson(experiments.profiles[1]) },
 			{ "transportBypass", experiments.transportBypass },
+			{ "nativeJitter", experiments.NativeJitterEnabled() },
+			{ "nativeControlMask", experiments.NativeControlMaskEnabled() },
 			{ "compactInputs", experiments.CompactInputsEnabled() }, { "diagnostics", experiments.diagnostics },
 			{ "captureEngineExposure", experiments.captureEngineExposure },
 			{ "captureFrameEvidence", experiments.captureFrameEvidence }, { "applyModelEdit", experiments.applyModelEdit } };
 		return result;
+	}
+	Json SdkDiagnosticsJson()
+	{
+		auto& runtime = NeuralRendering::Runtime::Instance();
+		const auto driver = runtime.DriverRequirements();
+		const auto statistics = runtime.QueryAllocationStatistics();
+		using NeuralRendering::Evidence::OptionalJson;
+		return { { "ok", true }, { "apiVersion", 3 }, { "mutationApplied", false },
+			{ "runtimeBundled", false }, { "installationNotice", NeuralRendering::Runtime::kUserRuntimeNotice },
+			{ "driverRequirements", NeuralRendering::Evidence::DriverRequirementsJson(driver) },
+			{ "providerStatistics", { { "scope", "provider_aggregate" }, { "queryPerformed", statistics.callbackQuery.has_value() },
+										{ "allocatedBytes", OptionalJson(statistics.allocatedBytes) }, { "callbackQuery", OptionalJson(statistics.callbackQuery) },
+										{ "callbackResult", OptionalJson(statistics.callbackResult) }, { "sizeQuery", OptionalJson(statistics.sizeQuery) },
+										{ "usedForAdmission", false }, { "exactPerEyeCost", false } } } };
 	}
 	void ReadProfile(const Json& object, Profile& profile)
 	{
@@ -242,9 +259,10 @@ namespace
 	}
 	Json AssetsJson()
 	{
-		const std::array<const char*, 6> paths{
+		const std::array<const char*, 7> paths{
 			"Data/Shaders/Features/NeuralRendering.ini",
 			"Data/Shaders/Upscaling/NeuralRendering/ColorCommon.hlsli",
+			"Data/Shaders/Upscaling/NeuralRendering/NvidiaReferenceColor.hlsli",
 			"Data/Shaders/Upscaling/NeuralRendering/ColorPrepareCS.hlsl",
 			"Data/Shaders/Upscaling/NeuralRendering/ColorReconstructCS.hlsl",
 			"Data/Shaders/Upscaling/NeuralRendering/ColorMeasureCS.hlsl",
@@ -273,6 +291,10 @@ namespace
 			const auto action = request.at("action").get<std::string>();
 			if (action == "status" || action == "assets") {
 				Keys(request, { "action" });
+			} else if (action == "sdk_diagnostics") {
+				Keys(request, { "action" });
+				commandRequested = true;
+				response = VRRenderScaleDevBenchBridge::RunRendererCommand([] { return SdkDiagnosticsJson(); });
 			} else if (action == "capture_diagnostics") {
 				Keys(request, { "action", "stamps" });
 				const auto& stamps = request.at("stamps");
@@ -323,11 +345,15 @@ namespace
 								ReadSettings(request.at("settings"), config.settings);
 							if (request.contains("experiments")) {
 								const auto& e = request.at("experiments");
-								Keys(e, { "upscaled_center", "final_ldr_pre_ui", "compactInputs", "transportBypass", "diagnostics", "captureEngineExposure", "captureFrameEvidence", "applyModelEdit" });
+								Keys(e, { "upscaled_center", "final_ldr_pre_ui", "compactInputs", "nativeControlMask", "nativeJitter", "transportBypass", "diagnostics", "captureEngineExposure", "captureFrameEvidence", "applyModelEdit" });
 								if (e.contains("upscaled_center"))
 									ReadProfile(e.at("upscaled_center"), config.experiments.profiles[0]);
 								if (e.contains("final_ldr_pre_ui"))
 									ReadProfile(e.at("final_ldr_pre_ui"), config.experiments.profiles[1]);
+								if (e.contains("nativeJitter"))
+									config.experiments.nativeJitter = e.at("nativeJitter").get<bool>();
+								if (e.contains("nativeControlMask"))
+									config.experiments.nativeControlMask = e.at("nativeControlMask").get<bool>();
 								if (e.contains("compactInputs"))
 									config.experiments.compactInputs = e.at("compactInputs").get<bool>();
 								if (e.contains("transportBypass"))
@@ -378,12 +404,25 @@ namespace
 	Json Descriptor()
 	{
 		return Json::parse(R"schema({
-  "description": "NR colour v3: configure/reset_experiments reserve one command at the completed render-frame boundary. Concurrent or expired unclaimed requests return mutationApplied=false; cancelled commands cannot run later. An admitted command returns its actual result; unexpected command failure reports mutationApplied=null and transport timeouts remain ambiguous. Read-only actions do not require the command queue. compactInputs is a default-off stateless equal-grid C compact-storage experiment; unsupported configurations preserve full-coordinate coverage. It requires live quality/cost qualification before promotion. Managed is experimental and selectable in the menu only in Developer Mode (Debug/Trace). Existing saved managed selections remain visible and unchanged outside Developer Mode; automation retains the managed value. opt-in captureFrameEvidence freezes CPU configuration and outer stereo outcomes for accepted HMD screenshots without enabling colour passes or changing input epochs. Shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. Accepted screenshots additionally retain exact CPU companions in terminal actual.captureDiagnostics; callers need not poll rolling status to recover those captures. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes finalized engine graphics bindings after BSGraphics_SetDirtyStates and CS state updates, before the HDR draw, as well as all seven D3D11 draw forms inside the exact HDR effect scope. The engine boundary remains valid when D3D11 replaces its per-context draw method entries. Compute flushes and unrelated effects are excluded. producerScopes, lastProducerFrame, graphicsStateFlushes, lastGraphicsStateFlushFrame and drawCounts expose the reached boundaries. Each snapshot producer identifies its actual capture boundary. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
+  "description": "NR colour v3: configure/reset_experiments reserve one command at the completed render-frame boundary. Concurrent or expired unclaimed requests return mutationApplied=false; cancelled commands cannot run later. An admitted command returns its actual result; unexpected command failure reports mutationApplied=null and transport timeouts remain ambiguous. Read-only actions do not require the command queue. compactInputs is a default-off stateless equal-grid C compact-storage experiment; unsupported configurations preserve full-coordinate coverage. It requires live quality/cost qualification before promotion. Managed is experimental and selectable in the menu only in Developer Mode (Debug/Trace). Existing saved managed selections remain visible and unchanged outside Developer Mode; automation retains the managed value. opt-in captureFrameEvidence freezes CPU configuration and outer stereo outcomes for accepted HMD screenshots without enabling colour passes or changing input epochs. Shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. Accepted screenshots additionally retain exact CPU companions in terminal actual.captureDiagnostics; callers need not poll rolling status to recover those captures. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes finalized engine graphics bindings after BSGraphics_SetDirtyStates and CS state updates, before the HDR draw, as well as all seven D3D11 draw forms inside the exact HDR effect scope. The engine boundary remains valid when D3D11 replaces its per-context draw method entries. Compute flushes and unrelated effects are excluded. producerScopes, lastProducerFrame, graphicsStateFlushes, lastGraphicsStateFlushFrame and drawCounts expose the reached boundaries. Each snapshot producer identifies its actual capture boundary. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. sdk_diagnostics explicitly queries aggregate NR allocation statistics and cached driver requirements through the public SDK, without loading or initializing NR. Unknown values remain null and estimates/admission remain unchanged. nativeControlMask is a default-off comparison on the existing provider-blending route. nvidia_reference is a default-off filmic SDR/gamma comparison requiring an explicit linear source and one frozen exposure for preparation and HDR reconstruction, with highlight recovery; it is not a calibrated Skyrim preset. No game/profile mutations.",
   "outputSchema": {
     "type": "object",
     "properties": {
       "apiVersion": { "const": 3 },
       "captureEvidenceSchemaVersion": { "const": 1 },
+      "runtimeBundled": { "const": false },
+      "installationNotice": { "type": "string" },
+      "driverRequirements": { "type": "object", "properties": {
+        "needsUpdate": { "type": ["boolean", "null"] },
+        "minimumMajor": { "type": ["integer", "null"] }, "minimumMinor": { "type": ["integer", "null"] },
+        "updateQuery": { "type": ["integer", "null"] }, "majorQuery": { "type": ["integer", "null"] }, "minorQuery": { "type": ["integer", "null"] }
+      } },
+      "providerStatistics": { "type": "object", "properties": {
+        "scope": { "const": "provider_aggregate" }, "queryPerformed": { "type": "boolean" },
+        "allocatedBytes": { "type": ["integer", "null"], "minimum": 0 },
+        "callbackQuery": { "type": ["integer", "null"] }, "callbackResult": { "type": ["integer", "null"] }, "sizeQuery": { "type": ["integer", "null"] },
+        "usedForAdmission": { "const": false }, "exactPerEyeCost": { "const": false }
+      } },
       "exposures": { "type": "array", "maxItems": 64, "items": { "type": "object" } },
       "engineCapture": {
         "type": "object",
@@ -463,6 +502,7 @@ namespace
           "configure",
           "reset_experiments",
           "capture_diagnostics",
+          "sdk_diagnostics",
           "assets"
         ]
       },
@@ -530,7 +570,7 @@ namespace
         "properties": {
           "upscaled_center": {
             "type": "object",
-            "description": "Reduced-resolution input profile. Nonidentity transforms use private floating-point processing and preserve the caller output format. Raw colour ignores this profile. reversible_proxy uses ratio-preserving log2(1+maximum)/32 compression before sRGB encoding.",
+            "description": "Reduced-resolution input profile. Nonidentity transforms use private floating-point processing and preserve the caller output format. Raw colour ignores this profile. reversible_proxy uses ratio-preserving log2(1+maximum)/32 compression before sRGB encoding. nvidia_reference uses filmic SDR and gamma 2.2 with source-based HDR restoration and highlight recovery; linear source declaration and frozen exposure are required.",
             "additionalProperties": false,
             "properties": {
               "domain": {
@@ -546,7 +586,8 @@ namespace
                 "enum": [
                   "identity",
                   "linear_to_srgb",
-                  "reversible_proxy"
+                  "reversible_proxy",
+                  "nvidia_reference"
                 ]
               },
               "exposureMultiplier": {
@@ -566,7 +607,7 @@ namespace
           },
           "final_ldr_pre_ui": {
             "type": "object",
-            "description": "Final-resolution input profile. Nonidentity transforms use private floating-point processing and preserve the caller output format. Raw colour ignores this profile. reversible_proxy uses ratio-preserving log2(1+maximum)/32 compression before sRGB encoding.",
+            "description": "Final-resolution input profile. Nonidentity transforms use private floating-point processing and preserve the caller output format. Raw colour ignores this profile. reversible_proxy uses ratio-preserving log2(1+maximum)/32 compression before sRGB encoding. nvidia_reference uses filmic SDR and gamma 2.2 with source-based HDR restoration and highlight recovery; linear source declaration and frozen exposure are required.",
             "additionalProperties": false,
             "properties": {
               "domain": {
@@ -582,7 +623,8 @@ namespace
                 "enum": [
                   "identity",
                   "linear_to_srgb",
-                  "reversible_proxy"
+                  "reversible_proxy",
+                  "nvidia_reference"
                 ]
               },
               "exposureMultiplier": {
@@ -599,6 +641,14 @@ namespace
                 ]
               }
             }
+          },
+          "nativeJitter": {
+            "type": "boolean", "default": false,
+            "description": "Session-only generic NGX jitter comparison for affine Before-DLSS inputs. Source jitter is mapped to native guide pixels. Compressed, face-mapped and packed stateless inputs supply zero because no global offset represents their spatially varying map. Does not enable temporal NR or alter downstream DLSS reset policy."
+          },
+          "nativeControlMask": {
+            "type": "boolean", "default": false,
+            "description": "Session-only SDK RGB strength-mask comparison on the existing actor provider-blending route. Uses the existing protection pass and a named RGBA8 mask, combined with the skin automask using Min. Other routes, including compressed Scene Before DLSS and face-detail mapping, retain their current compositor. Does not enlarge model or guide grids."
           },
           "compactInputs": {
             "type": "boolean",
@@ -913,9 +963,9 @@ void NeuralRenderingFeature::DrawColourSettings(bool a_diagnosticsOnly)
 			}
 			if (p.domain == Domain::Linear) {
 				transform = static_cast<int>(p.transform);
-				changed |= Util::Widgets::Combo("Model input transform", &transform, "Identity\0Linear to sRGB\0Reversible proxy + sRGB\0");
+				changed |= Util::Widgets::Combo("Model input transform", &transform, "Identity\0Linear to sRGB\0Reversible proxy + sRGB\0NVIDIA reference SDR + highlights\0");
 				if (auto tooltip = Util::HoverTooltipWrapper())
-					ImGui::TextUnformatted("Identity keeps input colour. Linear to sRGB encodes it; Reversible proxy also compresses its range. Reconstruction reverses experimental transforms.");
+					ImGui::TextUnformatted("Identity keeps input colour. The NVIDIA reference comparison applies filmic SDR with gamma 2.2 and restores HDR using the same exposure, while preserving highlights. It is not an invertible codec or a calibrated Skyrim preset.");
 				p.transform = static_cast<Transform>(transform);
 			}
 			if (p.transform == Transform::Identity) {
@@ -937,6 +987,12 @@ void NeuralRenderingFeature::DrawColourSettings(bool a_diagnosticsOnly)
 			}
 			ImGui::PopID();
 		}
+		changed |= Util::Widgets::Checkbox("Native jitter (affine inputs only)", &config.experiments.nativeJitter);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Compare generic NGX jitter offsets on affine Before-DLSS inputs. Compressed face mapping retains stateless NR with zero global jitter; downstream DLSS history policy is unchanged.");
+		changed |= Util::Widgets::Checkbox("Native RGB control mask (provider blending)", &config.experiments.nativeControlMask);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Compare the SDK RGB strength mask with the skin automask. Applies only when actor provider blending is selected; compressed Scene NR keeps the existing compositor and fixed sampling grid.");
 		changed |= Util::Widgets::Checkbox("Transport bypass (skip neural evaluation)", &config.experiments.transportBypass);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Skip model evaluation to inspect colour transport. Diagnostic only; not a valid NR performance result.");

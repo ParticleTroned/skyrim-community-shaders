@@ -520,7 +520,8 @@ set(_neural_native_headers "${_neural_native_creation_dir}/neural_native_key_und
     "${_neural_native_creation_dir}/neural_evaluation_success_detail_under_test.h"
     "${_neural_native_creation_dir}/neural_sdk_parameters_under_test.h"
     "${_neural_native_creation_dir}/neural_ngx_initialize_under_test.h"
-    "${_neural_native_creation_dir}/neural_ngx_shutdown_under_test.h")
+    "${_neural_native_creation_dir}/neural_ngx_shutdown_under_test.h"
+    "${_neural_native_creation_dir}/neural_ngx_statistics_under_test.h")
 add_custom_command(OUTPUT ${_neural_native_headers}
     COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
         "-DOUTPUT_DIRECTORY=${_neural_native_creation_dir}"
@@ -538,6 +539,10 @@ target_include_directories(neural_native_creation_test PRIVATE "${_neural_native
 add_controller_test(neural_ngx_initialization_test NeuralNgxInitialization tests/neural_ngx_initialization_test.cpp)
 target_sources(neural_ngx_initialization_test PRIVATE ${_neural_native_headers})
 target_include_directories(neural_ngx_initialization_test PRIVATE "${_neural_native_creation_dir}")
+add_controller_test(neural_ngx_statistics_test NeuralNgxStatistics tests/neural_ngx_statistics_test.cpp)
+target_compile_definitions(neural_ngx_statistics_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+target_sources(neural_ngx_statistics_test PRIVATE ${_neural_native_headers})
+target_include_directories(neural_ngx_statistics_test PRIVATE "${_neural_native_creation_dir}")
 
 add_test(NAME NeuralCachePrewarmWorkflow COMMAND "${Python3_EXECUTABLE}"
     "${PROJECT_SOURCE_DIR}/tests/neural_cache_prewarm_workflow_test.py")

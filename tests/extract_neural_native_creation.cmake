@@ -12,6 +12,8 @@ extract_between("${source}" "bool Runtime::Initialize("
     "bool Runtime::PrepareScratchLocked(" "neural_ngx_initialize_under_test.h")
 extract_between("${source}" "bool Runtime::ShutdownLocked()"
     "void Runtime::AbandonLocked()" "neural_ngx_shutdown_under_test.h")
+extract_between("${source}" "NgxAllocationStatistics Runtime::QueryAllocationStatistics() const"
+    "#endif" "neural_ngx_statistics_under_test.h")
 extract_between("${source}" "struct InstalledRuntimeMetadata"
     "bool ComputeFileSha256(" "neural_installed_metadata_under_test.h")
 extract_between("${source}" "TuningLimits Runtime::GetTuningLimits(std::uint32_t selection) const"

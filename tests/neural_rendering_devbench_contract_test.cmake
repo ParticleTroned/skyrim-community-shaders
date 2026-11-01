@@ -3391,7 +3391,7 @@ foreach(_character_contract IN ITEMS
 	[[{ "providerBlending", snapshot.providerBlending }]]
 	[[{ "useAutoMask", snapshot.useAutoMask }]]
 	[[{ "feature18UseAutoMask", rendererSnapshot.useAutoMask }]]
-	[[{ "feature18ControlMaskPresent", rendererSnapshot.controlMaskPresent && !rendererSnapshot.providerBlending }]]
+	[[{ "feature18ControlMaskPresent", rendererSnapshot.nativeControlMask }]]
 	[[{ "feature18ProviderBlending", rendererSnapshot.providerBlending }]]
 	[[{ "feature18InvocationMatchesEvidenceFrame", rendererSnapshot.frameId == observedFrame }]]
 	[[{ "controlMaskCopies", snapshot.counters.controlMaskCopies }]]

@@ -1,3 +1,4 @@
+#include "Features/Upscaling/NeuralRendering/NgxCapabilityInfo.h"
 #include "Features/Upscaling/NvidiaProject.h"
 #include "neural_sdk_parameters_under_test.h"
 
@@ -20,6 +21,7 @@ namespace NeuralRendering
 	using NVSDK_NGX_Result = std::uint32_t;
 	constexpr NVSDK_NGX_Result kSuccess = 1, kFailure = 0xBAD00010;
 	constexpr NVSDK_NGX_Result NVSDK_NGX_Result_FAIL_FeatureNotSupported = 0xBAD00001;
+	constexpr NVSDK_NGX_Result NVSDK_NGX_Result_FAIL_OutOfDate = 0xBAD00011;
 	constexpr bool NVSDK_NGX_FAILED(NVSDK_NGX_Result value) { return (value & 0xFFF00000) == 0xBAD00000; }
 	constexpr unsigned NVSDK_NGX_ENGINE_TYPE_CUSTOM = 0;
 	constexpr int E_INVALIDARG = -1;
@@ -27,6 +29,8 @@ namespace NeuralRendering
 	NVSDK_NGX_Result providerInitResult = kSuccess, providerCapabilityResult = kSuccess, providerAvailabilityResult = kSuccess;
 	NVSDK_NGX_Result providerAllocationResult = kSuccess, providerDestroyResult = kSuccess, providerShutdownResult = kSuccess;
 	int providerAvailable = 1;
+	int providerNeedsUpdatedDriver = 0;
+	NVSDK_NGX_Result providerDriverQuery = kSuccess;
 	bool partialAllocation = false;
 	std::string initializedProject;
 	std::wstring featurePath;
@@ -41,12 +45,21 @@ namespace NeuralRendering
 		bool capabilities = false;
 		NVSDK_NGX_Result Get(const char* key, int* value)
 		{
+			if (std::string_view(key) == NVSDK_NGX_Parameter_DLSSNR_NeedsUpdatedDriver) {
+				*value = providerNeedsUpdatedDriver;
+				return providerDriverQuery;
+			}
 			if (std::string_view(key) == NVSDK_NGX_Parameter_DLSSNR_Available) {
 				calls.emplace_back("available");
 				*value = providerAvailable;
 				return providerAvailabilityResult;
 			}
 			return kFailure;
+		}
+		NVSDK_NGX_Result Get(const char* key, unsigned* value)
+		{
+			*value = std::string_view(key) == NVSDK_NGX_Parameter_DLSSNR_MinDriverVersionMajor ? 616u : 92u;
+			return providerDriverQuery;
 		}
 	} capabilityMap{ true }, parameterMap;
 	struct NVSDK_NGX_FeatureCommonInfo
@@ -128,6 +141,7 @@ namespace NeuralRendering
 		std::filesystem::path path_;
 		std::string hash_, version_, detail_;
 		std::optional<int> tuningLimits_, networkSelectionSupported_;
+		NgxDriverRequirements driverRequirements_;
 		std::unique_ptr<Backend> backend_;
 		void* device_ = nullptr;
 		void* parameters_ = nullptr;
@@ -182,6 +196,8 @@ namespace
 		calls.clear();
 		providerInitResult = providerCapabilityResult = providerAvailabilityResult = providerAllocationResult = providerDestroyResult = providerShutdownResult = kSuccess;
 		providerAvailable = 1;
+		providerNeedsUpdatedDriver = 0;
+		providerDriverQuery = kSuccess;
 		partialAllocation = false;
 	}
 	void Run()
@@ -191,6 +207,8 @@ namespace
 		ID3D12Device device;
 		Runtime healthy;
 		Require(healthy.Initialize(&device, data), "SDK initialization failed");
+		Require(healthy.driverRequirements_.needsUpdate == false && healthy.driverRequirements_.minimumMajor == 616 && healthy.driverRequirements_.minimumMinor == 92,
+			"Provider-reported driver requirements were lost");
 		Require(initializedProject == NvidiaProject::kId && featurePath == healthy.path_.parent_path(), "SDK used the wrong project or feature path");
 		Require(calls == std::vector<std::string>{ "init", "capabilities", "available", "allocate" }, "SDK startup order changed");
 		Require(healthy.Initialize(&device, data) && calls.size() == 4 && device.references == 1, "Healthy SDK was initialized twice");
@@ -219,6 +237,19 @@ namespace
 				Require(calls[calls.size() - 3] == "destroy_params", "Partial SDK map was not destroyed before shutdown");
 		}
 
+		Reset();
+		Runtime oldDriver;
+		providerNeedsUpdatedDriver = 1;
+		Require(!oldDriver.Initialize(&device, data) && oldDriver.ngxResult_ == NVSDK_NGX_Result_FAIL_OutOfDate,
+			"An explicit provider driver-update requirement was ignored");
+		Require(oldDriver.driverRequirements_.needsUpdate == true && oldDriver.driverRequirements_.minimumMinor == 92 && device.references == 0,
+			"Driver rejection lost requirements during rollback or retained device ownership");
+		Reset();
+		Runtime unknownDriver;
+		providerDriverQuery = kFailure;
+		Require(unknownDriver.Initialize(&device, data) && !unknownDriver.driverRequirements_.needsUpdate.has_value(),
+			"An unsupported driver query was mistaken for an incompatible GPU");
+		Require(unknownDriver.ShutdownLocked(), "Unknown driver query prevented safe shutdown");
 		Reset();
 		Runtime initFailed;
 		providerInitResult = kFailure;

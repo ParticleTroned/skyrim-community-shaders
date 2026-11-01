@@ -20,6 +20,7 @@ namespace NeuralRendering
 	struct RendererApplyArgs
 	{
 		std::optional<RenderingMode> renderingMode;
+		std::array<float, 2> jitterPixels{};
 		uint32_t modelResolutionPercent = 100;
 		bool guidedReconstructionEnabled = false;
 		std::uint32_t guidedConfidenceRejectionPercent = 0;
@@ -82,6 +83,7 @@ struct Upscaling
 	};
 	auto GetActiveUpscalingFoveatedProfile() const noexcept { return FovProfile{ true, 0.7f, settings.foveatedCenterHorizontalScale, savedOffsets }; }
 	auto GetNeuralRenderingMode() const noexcept { return mode; }
+	auto GetJitterForDispatch() const noexcept { return float2{ 0.25f, -0.375f }; }
 	void SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs&,
 		const UpscalingDLSS::ViewportCrop&, const std::array<uint32_t, 2>&,
 		const std::array<uint32_t, 2>&) noexcept;
@@ -135,6 +137,13 @@ int main()
 			const uint32_t expected = percent >= 30 && percent <= 100 ? percent : 100;
 			if (args.renderingMode != mode || args.modelResolutionPercent != expected)
 				throw std::runtime_error("Renderer lost the selected NR mode or model resolution");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const auto expectedJitter = mode == RenderingMode::ReducedResolution ? std::array{ 0.25f, -0.375f } : std::array<float, 2>{};
+#else
+			const std::array<float, 2> expectedJitter{};
+#endif
+			if (args.jitterPixels != expectedJitter)
+				throw std::runtime_error("NR jitter escaped its declared input phase or build gate");
 		}
 	}
 	for (const auto mode : { RenderingMode::ReducedResolution, RenderingMode::FullResolution, RenderingMode::Foveated })

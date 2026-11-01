@@ -50,6 +50,13 @@ class AssetTests(unittest.TestCase):
         (self.shaders / "ColorCommon.hlsli").write_text('#include "Missing.hlsli"\n')
         self.assertFalse(assets.verify(self.root)["ok"])
 
+    def test_missing_reference_colour_helper(self):
+        (self.shaders / "ColorCommon.hlsli").write_text('#ifdef NR_NVIDIA_REFERENCE\n#include "Upscaling/NeuralRendering/NvidiaReferenceColor.hlsli"\n#endif\n')
+        (self.shaders / "NvidiaReferenceColor.hlsli").unlink()
+        result = assets.verify(self.root)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("NvidiaReferenceColor.hlsli" in error for error in result["errors"]))
+
     def test_sibling_include_is_not_the_runtime_search_path(self):
         (self.shaders / "ColorPrepareCS.hlsl").write_text('#include "ColorCommon.hlsli"\n')
         result = assets.verify(self.root)

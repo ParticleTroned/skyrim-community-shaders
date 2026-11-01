@@ -199,6 +199,7 @@ namespace NeuralRendering
 		bool useAutoMask = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		bool modelOutputSelected = false;
+		bool nativeControlMask = false;
 		PeripheralCompressionPlan peripheralCompression{};
 		GuidedReconstructionDecision guidedReconstruction{};
 		bool reconstructionPrepared = false;
@@ -321,6 +322,8 @@ namespace NeuralRendering
 		bool sceneCharacterStrengths = false;
 		bool featureUpscaling = false;
 		Tuning tuning{};
+		/** Input jitter in guide pixels, independent of optional frame-capture metadata. */
+		std::array<float, 2> jitterPixels{};
 		bool reset = false;
 		// Pair orchestration keeps separate eye submissions on one reset decision.
 		bool synchronizedHistoryReset = false;

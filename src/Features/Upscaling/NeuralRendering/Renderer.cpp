@@ -1089,6 +1089,10 @@ namespace NeuralRendering
 		ComPtr<ID3D11ComputeShader> actorProtectionCS_;
 		ComPtr<ID3D11Buffer> actorProtectionCB_;
 		bool actorProtectionCompileFailed_ = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ComPtr<ID3D11ComputeShader> nativeControlMaskCS_;
+		bool nativeControlMaskCompileFailed_ = false;
+#endif
 		bool PrepareActorProtection(const RendererApplyArgs&, Slot&);
 		RendererSnapshot snapshot_{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -1266,6 +1270,11 @@ namespace NeuralRendering
 			{ a_args.colorWidth, a_args.colorHeight }, { a_args.guideWidth, a_args.guideHeight },
 			a_resources.roi.allocationCapacity, { a_args.controlMaskWidth, a_args.controlMaskHeight },
 			a_resources.roi.inferenceContext, motionVectorScale, a_args.featureUpscaling);
+		a_resources.nativeLayout.jitterPixels = colorConfiguration_.experiments.NativeJitterEnabled() ? a_args.jitterPixels : std::array<float, 2>{};
+		a_resources.nativeLayout.nativeControlMask = hasControlMask &&
+		                                             (!a_args.providerBlending || colorConfiguration_.experiments.NativeControlMaskEnabled());
+		if (!GetNativeEvaluationLayoutViolation(a_resources.nativeLayout, hasControlMask).empty())
+			return fail("native NR parameter layout is invalid");
 		if (!a_resources.nativeLayout.color.valid.Fits(a_args.colorWidth, a_args.colorHeight) ||
 			!a_resources.nativeLayout.depth.valid.Fits(a_args.guideWidth, a_args.guideHeight))
 			return fail("the Feature 18 compute rectangle could not be mapped to its inputs");
@@ -1288,10 +1297,8 @@ namespace NeuralRendering
 				selectionView.Format != DXGI_FORMAT_R8_UNORM || selectionView.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
 				selectionView.Texture2D.MostDetailedMip != 0 || selectionView.Texture2D.MipLevels != 1)
 				return fail("actor selection view does not match the provider mask source");
-		} else if (hasControlMask == a_args.tuning.useAutoMask) {
-			return fail(hasControlMask ?
-							"a control mask requires automatic masking to be disabled" :
-							"automatic masking is required when no control mask is supplied");
+		} else if (!hasControlMask && !a_args.tuning.useAutoMask) {
+			return fail("automatic masking is required when no control mask is supplied");
 		}
 
 		ComPtr<ID3D11Device> contextDevice;
@@ -1340,8 +1347,9 @@ namespace NeuralRendering
 					a_args.controlMaskWidth,
 					a_args.controlMaskHeight));
 			}
-			if (a_resources.controlMask.desc.Format != DXGI_FORMAT_R8_UNORM)
-				return fail("control mask format must be R8_UNORM");
+			const auto expectedMaskFormat = a_args.providerBlending ? DXGI_FORMAT_R8_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
+			if (a_resources.controlMask.desc.Format != expectedMaskFormat)
+				return fail("NR strength masks require RGBA8; UIAlpha selection sources require R8");
 			if ((a_resources.controlMask.desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) == 0)
 				return fail("control mask must be shader-resource capable");
 
@@ -1477,7 +1485,7 @@ namespace NeuralRendering
 			.motionFormat = a_resources.motionVectors.desc.Format,
 			.outputFormat = transformed ? processingFormat : a_resources.output.desc.Format,
 			.controlMaskFormat = hasControlMask ?
-			                         a_resources.controlMask.desc.Format :
+			                         (a_resources.nativeLayout.nativeControlMask ? DXGI_FORMAT_R8G8B8A8_UNORM : a_resources.controlMask.desc.Format) :
 			                         DXGI_FORMAT_UNKNOWN,
 			.controlMaskPresent = hasControlMask,
 			.providerBlending = a_args.providerBlending,
@@ -1648,6 +1656,7 @@ namespace NeuralRendering
 			snapshot_.modelSharedInputs = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			snapshot_.modelOutputSelected = false;
+			snapshot_.nativeControlMask = false;
 			snapshot_.guidedReconstruction = {};
 			snapshot_.reconstructionPrepared = false;
 			diagnosticSourceTransaction_ = a_args.executionContext.sourceTransactionId;
@@ -2042,6 +2051,8 @@ namespace NeuralRendering
 			actorProtectionCompileFailed_ = false;
 			actorProtectionCB_.Reset();
 #ifdef DEVBENCH_BRIDGE_ENABLED
+			nativeControlMaskCS_.Reset();
+			nativeControlMaskCompileFailed_ = false;
 			copyCompactDepthGuideCS_.Reset();
 #endif
 			copyDepthGuideCB_.Reset();
@@ -3117,16 +3128,27 @@ namespace NeuralRendering
 
 	bool Renderer::State::PrepareActorProtection(const RendererApplyArgs& args, Slot& slot)
 	{
-		if (actorProtectionCompileFailed_)
+		auto* shaderStorage = &actorProtectionCS_;
+		auto* compileFailed = &actorProtectionCompileFailed_;
+		std::vector<std::pair<const char*, const char*>> defines;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (slot.resourceKey.controlMaskFormat == DXGI_FORMAT_R8G8B8A8_UNORM) {
+			shaderStorage = &nativeControlMaskCS_;
+			compileFailed = &nativeControlMaskCompileFailed_;
+			defines.emplace_back("NR_NATIVE_CONTROL_MASK", "1");
+		}
+#endif
+		auto& shader = *shaderStorage;
+		if (*compileFailed)
 			return false;
-		if (!actorProtectionCS_) {
-			actorProtectionCompileFailed_ = true;
-			actorProtectionCS_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
-				L"Data/Shaders/DLSS5ActorProtectionCS.hlsl", {}, "cs_5_0", "main")));
-			if (!actorProtectionCS_)
+		if (!shader) {
+			*compileFailed = true;
+			shader.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+				L"Data/Shaders/DLSS5ActorProtectionCS.hlsl", defines, "cs_5_0", "main")));
+			if (!shader)
 				return false;
-			actorProtectionCompileFailed_ = false;
-			Util::SetResourceName(actorProtectionCS_.Get(), "NeuralRendering::ActorProtectionCS");
+			*compileFailed = false;
+			Util::SetResourceName(shader.Get(), "NeuralRendering::ActorProtectionCS");
 		}
 		struct Constants
 		{
@@ -3147,7 +3169,7 @@ namespace NeuralRendering
 		auto* cb = actorProtectionCB_.Get();
 		auto* input = args.actorSelection.Get();
 		auto* output = slot.controlMask.uav11.Get();
-		args.context->CSSetShader(actorProtectionCS_.Get(), nullptr, 0);
+		args.context->CSSetShader(shader.Get(), nullptr, 0);
 		args.context->CSSetConstantBuffers(0, 1, &cb);
 		args.context->CSSetShaderResources(0, 1, &input);
 		args.context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
@@ -3710,6 +3732,9 @@ namespace NeuralRendering
 			SetActiveFeatureSlotLocked(args.featureSlot);
 			SetRequestTelemetryLocked(args);
 			auto validation = ValidateLocked(args, resources[index]);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			snapshot_.nativeControlMask = !validation && resources[index].nativeLayout.nativeControlMask;
+#endif
 			snapshot_.colorFormat =
 				static_cast<std::uint32_t>(resources[index].color.desc.Format);
 			snapshot_.depthSourceFormat =
@@ -5207,6 +5232,8 @@ namespace NeuralRendering
 		actorProtectionCS_.Reset();
 		actorProtectionCompileFailed_ = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		nativeControlMaskCS_.Reset();
+		nativeControlMaskCompileFailed_ = false;
 		copyCompactDepthGuideCS_.Reset();
 #endif
 		colorPipeline_.InvalidateShaders();

@@ -7,6 +7,7 @@ set(_nr_shader_files
     CopyCompactDepthGuideCS.hlsl
     CopyDepthGuideCS.hlsl
     ColorCommon.hlsli
+    NvidiaReferenceColor.hlsli
     ColorExposureCS.hlsl
     ColorMeasureCS.hlsl
     ColorPrepareCS.hlsl

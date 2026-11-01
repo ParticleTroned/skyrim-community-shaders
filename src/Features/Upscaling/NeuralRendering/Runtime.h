@@ -2,6 +2,7 @@
 
 #include "CapacityFallback.h"
 #include "NetworkSelection.h"
+#include "NgxCapabilityInfo.h"
 #include "RegionCapacity.h"
 #include "Style.h"
 #include "TuningLimits.h"
@@ -101,6 +102,9 @@ namespace NeuralRendering
 		[[nodiscard]] static bool IsInstalled() noexcept;
 		static constexpr const char* kMissingRuntimeNotice =
 			"Missing DLL: Shaders/Upscaling/Streamline/nvngx_dlssnr.dll";
+		static constexpr const char* kUserRuntimeNotice =
+			"NR runtime is not included. Install NVIDIA's official 310.9.16 nvngx_dlssnr.dll "
+			"under Shaders/Upscaling/Streamline under its license terms, then restart.";
 		static constexpr const char* kUnsupportedHardwareNotice =
 			"Incompatible GPU detected. Neural Rendering requires an NVIDIA GPU.";
 
@@ -162,11 +166,15 @@ namespace NeuralRendering
 		/** Formats the latest successful evaluation on demand, or returns the current lifecycle/failure detail. */
 		[[nodiscard]] std::string Detail() const;
 		[[nodiscard]] std::uint32_t NgxResult() const;
+		/** Last provider-reported driver requirements, including failed query results. */
+		[[nodiscard]] NgxDriverRequirements DriverRequirements() const;
 		/** Only documented creation failures permit a safely retired smaller retry. */
 		[[nodiscard]] CapacityFailure CreationCapacityFailure() const;
 		[[nodiscard]] std::uint64_t SuccessfulFrames() const;
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Explicit diagnostic query only; does not create features or change memory admission. */
+		[[nodiscard]] NgxAllocationStatistics QueryAllocationStatistics() const;
 		struct LifecycleCounts
 		{
 			std::uint64_t creates = 0, releases = 0;
@@ -174,7 +182,7 @@ namespace NeuralRendering
 		/** Monotonic native-call counts for cache/prewarm comparisons. */
 		[[nodiscard]] LifecycleCounts GetLifecycleCounts() const;
 #endif
-		/** Resident handles only; NVIDIA does not expose their allocation byte size. */
+		/** Resident handles only; provider allocation statistics are aggregate. */
 		[[nodiscard]] std::uint32_t GetResidentFeatureMask() const;
 		/** Checks creation compatibility without changing a resident handle. */
 		[[nodiscard]] bool HasCompatibleFeature(std::uint32_t slot, const NativeEvaluationLayout&, bool providerBlending,
@@ -192,6 +200,7 @@ namespace NeuralRendering
 			NativeCreationExtents creation{};
 			bool featureUpscaling = false;
 			bool providerBlending = false;
+			bool nativeControlMask = false;
 			bool valid = false;
 
 			[[nodiscard]] bool Matches(const NativeEvaluationLayout& a_layout) const;
@@ -229,6 +238,7 @@ namespace NeuralRendering
 		std::uint64_t allocationVersion_ = 0;
 		std::optional<TuningLimits> tuningLimits_;
 		std::optional<bool> networkSelectionSupported_;
+		NgxDriverRequirements driverRequirements_;
 		std::string detail_;
 		std::optional<EvaluationSuccessDetail> evaluationSuccessDetail_;
 		std::unique_ptr<Backend> backend_;

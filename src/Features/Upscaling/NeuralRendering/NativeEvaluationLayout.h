@@ -3,6 +3,7 @@
 #include "../DLSSViewportCrop.h"
 #include "ComputeSubrect.h"
 #include "PipelinePolicy.h"
+#include "Utils/Finite.h"
 
 #include <array>
 #include <cmath>
@@ -23,7 +24,7 @@ namespace NeuralRendering
 	/** Immutable dimensions supplied when creating the native feature. */
 	struct NativeCreationExtents
 	{
-		/** Guide dimensions supplied as DLSSNR.InputWidth/InputHeight. */
+		/** Retained guide capacity; guide spacing is independent of colour inference scaling. */
 		UpscalingDLSS::Extent input{};
 		/** Dimensions supplied as Width/Height and the native output creation keys. */
 		UpscalingDLSS::Extent output{};
@@ -39,7 +40,15 @@ namespace NeuralRendering
 		NativeImageRegion color{}, depth{}, motion{}, output{}, controlMask{};
 		/** Full-input normalized vectors to native guide-pixel displacement; applied once by NGX. */
 		std::array<float, 2> motionVectorScale{};
+		/** Jitter in native guide pixels; nonlinear stateless preparation supplies zero. */
+		std::array<float, 2> jitterPixels{};
 		bool featureUpscaling = false;
+		bool nativeControlMask = false;
+
+		[[nodiscard]] constexpr float ScalingRatio() const noexcept
+		{
+			return color.backing.width ? float(output.backing.width) / color.backing.width : 0.0f;
+		}
 
 		bool operator==(const NativeEvaluationLayout&) const = default;
 	};
@@ -98,6 +107,11 @@ namespace NeuralRendering
 			if (!std::isfinite(scale) || scale <= 0.0f)
 				return "native motion conversion must be finite and positive";
 		}
+		for (const float jitter : a_layout.jitterPixels)
+			if (!Util::IsFinite(jitter))
+				return "native jitter must be finite";
+		if (a_layout.nativeControlMask && !a_hasControlMask)
+			return "native control-mask blending requires an RGBA mask";
 		return {};
 	}
 }

@@ -1,9 +1,12 @@
 #pragma once
 
 #include "DevelopmentDiagnostics.h"
+#include "Utils/Finite.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "NvidiaReferenceColor.h"
+#endif
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cmath>
 #include <cstdint>
 
@@ -30,6 +33,7 @@ namespace NeuralRendering::Color
 		Identity,
 		LinearToSRGB,
 		ReversibleProxy,
+		NvidiaReference,
 		Count
 	};
 	enum class ExposureSource : std::uint32_t
@@ -43,7 +47,7 @@ namespace NeuralRendering::Color
 	[[nodiscard]] inline bool Finite(float value) noexcept
 	{
 		// Also valid with the plugin's /fp:fast compilation options.
-		return (std::bit_cast<std::uint32_t>(value) & 0x7f800000u) != 0x7f800000u;
+		return Util::IsFinite(value);
 	}
 
 	struct Settings
@@ -80,12 +84,32 @@ namespace NeuralRendering::Color
 		bool captureFrameEvidence = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		bool compactInputs = false;
+		bool nativeControlMask = false;
+		bool nativeJitter = false;
 #endif
 		/** Compact storage is a default-off DevBench experiment with full-coordinate fallback. */
 		[[nodiscard]] bool CompactInputsEnabled() const noexcept
 		{
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			return compactInputs;
+#else
+			return false;
+#endif
+		}
+		/** Compare native RGB strength masks only on the existing provider-blending route. */
+		[[nodiscard]] bool NativeControlMaskEnabled() const noexcept
+		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			return nativeControlMask;
+#else
+			return false;
+#endif
+		}
+		/** Explicit affine-input jitter comparison; spatially warped stateless inputs stay at zero. */
+		[[nodiscard]] bool NativeJitterEnabled() const noexcept
+		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			return nativeJitter;
 #else
 			return false;
 #endif
@@ -138,6 +162,7 @@ namespace NeuralRendering::Color
 	[[nodiscard]] inline bool Valid(const Profile& value) noexcept
 	{
 		if (value.domain >= Domain::Count || value.transform >= Transform::Count || value.exposureSource >= ExposureSource::Count ||
+			(!kDevelopmentDiagnostics && value.transform == Transform::NvidiaReference) ||
 			!Finite(value.exposureMultiplier) || value.exposureMultiplier < 1.0f / 256.0f || value.exposureMultiplier > 256.0f)
 			return false;
 		// Capturing an engine exposure does NOT prove a linear source domain.
@@ -168,6 +193,8 @@ namespace NeuralRendering::Color
 	[[nodiscard]] inline bool ChangesInput(const Configuration& oldValue, const Configuration& newValue, std::uint32_t insertion) noexcept
 	{
 		return EffectiveProfile(oldValue, insertion) != EffectiveProfile(newValue, insertion) ||
+		       oldValue.experiments.NativeControlMaskEnabled() != newValue.experiments.NativeControlMaskEnabled() ||
+		       oldValue.experiments.NativeJitterEnabled() != newValue.experiments.NativeJitterEnabled() ||
 		       oldValue.experiments.transportBypass != newValue.experiments.transportBypass;
 	}
 
@@ -225,6 +252,13 @@ namespace NeuralRendering::Color
 			channel *= profile.exposureMultiplier;
 		if (!Finite(output))
 			return false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (profile.transform == Transform::NvidiaReference) {
+			for (auto& channel : output)
+				channel = std::pow(ReferenceTone(channel), 1.0f / 2.2f);
+			return Finite(output);
+		}
+#endif
 		const auto maximum = *std::max_element(output.begin(), output.end());
 		if (profile.transform == Transform::ReversibleProxy && maximum > 0.0f) {
 			const float scale = (std::log1p(maximum) / (kNaturalLogTwo * kProxyLogScale)) / maximum;
@@ -243,6 +277,10 @@ namespace NeuralRendering::Color
 		output = input;
 		if (profile.transform == Transform::Identity)
 			return true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (profile.transform == Transform::NvidiaReference)
+			return false;
+#endif
 		if (*std::min_element(input.begin(), input.end()) < 0.0f)
 			return false;
 		for (auto& channel : output)
@@ -270,6 +308,25 @@ namespace NeuralRendering::Color
 		RGB check{}, inverseInput{}, inverseOutput{}, result{};
 		if (!Finite(baseline))
 			return {};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (profile.transform == Transform::NvidiaReference) {
+			if (!Forward(baseline, profile, check) || !Finite(prepared) || !Finite(neural))
+				return baseline;
+			float peakHdr = 0.0f, shoulder = 0.0f;
+			for (std::size_t i = 0; i < result.size(); ++i) {
+				const float exposed = baseline[i] * profile.exposureMultiplier;
+				const float tone = ReferenceTone(exposed);
+				peakHdr = std::max(peakHdr, exposed);
+				shoulder = std::max(shoulder, check[i]);
+				const float residual = std::pow(std::clamp(neural[i], 0.0f, 1.0f), 2.2f) - std::pow(std::clamp(prepared[i], 0.0f, 1.0f), 2.2f);
+				result[i] = baseline[i] + residual * (baseline[i] / std::max(tone, 1e-6f));
+			}
+			const float highlight = ReferenceShoulder(peakHdr, 1.0f, 8.0f) * ReferenceShoulder(shoulder, 0.75f, 0.99f);
+			for (std::size_t i = 0; i < result.size(); ++i)
+				result[i] = std::lerp(result[i], baseline[i], highlight);
+			return Finite(result) ? result : baseline;
+		}
+#endif
 		if (!Forward(baseline, profile, check) || !Inverse(prepared, profile, inverseInput) || !Inverse(neural, profile, inverseOutput))
 			return baseline;
 		for (std::size_t i = 0; i < result.size(); ++i)

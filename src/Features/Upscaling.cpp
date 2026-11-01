@@ -18887,6 +18887,8 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 	const bool runtimeInstalled = NeuralRendering::Runtime::IsInstalled();
 	if (!runtimeInstalled && hardwareSupported)
 		Util::Text::WrappedWarning("%s", NeuralRendering::Runtime::kMissingRuntimeNotice);
+	if (hardwareSupported)
+		ImGui::TextWrapped("%s", NeuralRendering::Runtime::kUserRuntimeNotice);
 	const auto status = NeuralRendering::Renderer::Instance().GetSnapshot();
 	const bool renderScaleAvailable = IsNeuralRenderingUpscalingAvailable();
 	const bool reducedResolution = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution;
@@ -19277,7 +19279,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 		const auto coverageName = settings.neuralRenderingCentralAreaPercent < NeuralRendering::kMaximumCentralAreaPercent ?
 		                              std::format("{}% central{}", settings.neuralRenderingCentralAreaPercent, usesFov ? " + headset mask" : "") :
 		                              std::string(usesFov ? "Headset mask" : "Whole view");
-		const char* blendingName = settings.neuralCharacterProviderBlending ? "NGX UIAlpha" : "CSX compositor";
+		const bool nativeMaskComparison = NeuralRendering::Color::Registry::Instance().Snapshot().experiments.NativeControlMaskEnabled();
+		const char* blendingName = settings.neuralCharacterProviderBlending ? (nativeMaskComparison ? "NGX RGB mask (comparison)" : "NGX UIAlpha") : "CSX compositor";
 		const char* selectionName = settings.neuralCharacterRenderingEnabled ? "Actors only" : settings.neuralCharacterSceneStrengthsEnabled ? "Scene + category adjustments" :
 		                                                                                                                                       "Entire scene";
 		MenuUI::SettingsPage page("NeuralRendering", {
@@ -19295,14 +19298,14 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 			{
 				const bool supported = runtime.SupportsNetworkSelection();
 				auto networkGuard = Util::DisableGuard(!supported);
-				static constexpr const char* networks[]{ "Default (310.9)", "Legacy (310.8)" };
+				static constexpr const char* networks[]{ "Lightweight (Preset B)", "Legacy (Preset A)" };
 				static constexpr const char* installedDefault[]{ "Installed DLL default" };
 				int network = supported && settings.neuralRenderingNetwork == NeuralRendering::kNetworkLegacy ? 1 : 0;
 				if (Util::Widgets::Combo("NR network", &network, supported ? networks : installedDefault, supported ? IM_ARRAYSIZE(networks) : IM_ARRAYSIZE(installedDefault))) {
 					settings.neuralRenderingNetwork = network == 1 ? NeuralRendering::kNetworkLegacy : NeuralRendering::kNetworkDefault;
 					runtime.GetTuningLimits(settings.neuralRenderingNetwork).Sanitize(settings);
 				}
-				Util::AddTooltip("Choose a network inside the same 310.9 DLL. Default (310.9) explicitly selects the newer network for performance. Legacy (310.8) selects the older network with the 310.8 slider ranges. Other DLLs use their own default network. Switching clamps values to the selected network's limits and recreates both eye models.");
+				Util::AddTooltip("Choose the network independently of appearance style. The saved Default selects lightweight preset B; Legacy selects A. NVIDIA's SDK Default is a separate zero-valued hint, fixed by SDK version. Switching clamps values to the selected network's limits and recreates both eye models.");
 			}
 			if (!runtime.SupportsNetworkSelection())
 				ImGui::TextDisabled("This runtime uses its default network; explicit choices require 310.9.");
@@ -19591,10 +19594,10 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 					static_cast<unsigned long long>(neuralStatus.successes),
 					static_cast<unsigned long long>(neuralStatus.failures));
 				ImGui::TextDisabled(
-					"Any 310.8 or newer nvngx_dlssnr.dll with the required exports is accepted; SHA-256 is diagnostic only.");
+					"The user-supplied official NVIDIA NR 310.9.16 runtime must match the pinned SDK SHA-256.");
 				ImGui::TextColored(
 					Util::Colors::GetWarning(),
-					"Untrusted NR DLLs execute in-process. Developer Mode and Streamline logging do not restrict admission.");
+					"NVIDIA license terms apply. Developer Mode and Streamline logging do not bypass runtime validation.");
 
 				if (settings.neuralCharacterRenderingEnabled || settings.neuralCharacterSceneStrengthsEnabled) {
 					const auto characterStatus =

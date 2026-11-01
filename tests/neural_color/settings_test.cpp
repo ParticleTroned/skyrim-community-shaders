@@ -1,5 +1,6 @@
 #include "Features/Upscaling/NeuralRendering/CaptureEvidence.h"
 #include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
+#include "Features/Upscaling/NeuralRendering/ExecutionEvidenceJson.h"
 #include <algorithm>
 #include <array>
 #include <cstdio>
@@ -11,6 +12,20 @@
 #include <string_view>
 using namespace NeuralRendering::Color;
 using Json = nlohmann::json;
+namespace NeuralRendering
+{
+	struct Runtime
+	{
+		static constexpr const char* kUserRuntimeNotice = "User supplies the NR runtime";
+		static Runtime& Instance()
+		{
+			static Runtime instance;
+			return instance;
+		}
+		NgxDriverRequirements DriverRequirements() const { return {}; }
+		NgxAllocationStatistics QueryAllocationStatistics() const { return { .allocatedBytes = 0, .callbackQuery = 1, .callbackResult = 1, .sizeQuery = 1 }; }
+	};
+}
 namespace DevBenchAPI
 {
 	using WriteFn = void (*)(void*, const char*);
@@ -239,6 +254,15 @@ int main()
 	Require(Call({ { "action", "status" } })["ok"] == true &&
 				VRRenderScaleDevBenchBridge::commands == afterRejectedCommands,
 		"read-only status bypasses frame command queue");
+	const auto beforeSdkQuery = registry.Snapshot();
+	const auto sdk = Call({ { "action", "sdk_diagnostics" } });
+	Require(sdk["runtimeBundled"] == false && sdk["providerStatistics"]["allocatedBytes"] == 0 &&
+				sdk["driverRequirements"]["needsUpdate"].is_null() && sdk["providerStatistics"]["exactPerEyeCost"] == false &&
+				registry.Snapshot().revision == beforeSdkQuery.revision,
+		"SDK diagnostics preserve unknown values, valid zero allocation and registry state");
+	const auto maskComparison = Call({ { "action", "configure" }, { "experiments", { { "nativeControlMask", true }, { "nativeJitter", true } } } });
+	Require(maskComparison["ok"] == true && registry.Snapshot().experiments.nativeControlMask && registry.Snapshot().experiments.nativeJitter,
+		"SDK input comparisons are wired through the registered experiment transaction");
 	feature.SaveSettings(saved);
 	Require(!saved.contains("experiments"),
 		"session experiments are not persisted");

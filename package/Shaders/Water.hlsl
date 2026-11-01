@@ -906,6 +906,26 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	return result;
 }
 
+float3 ApplyWaterReflectionHeight(float3 reflectionColor, uint eyeIndex)
+{
+#			if !defined(LOD_BLENDING)
+	return reflectionColor;
+#			else
+	float strength = SharedData::lodBlendingSettings.WaterReflectionStrength;
+	if (strength < 0.0)
+		return reflectionColor;
+	float planeHeight = SharedData::WaterData[12].w;
+#			if defined(VR)
+	planeHeight += FrameBuffer::CameraPosAdjust[0].z - FrameBuffer::CameraPosAdjust[eyeIndex].z;
+#			endif
+	const float fadeStart = -12000.0;
+	const float fadeEnd = 8000.0;
+	float fade = planeHeight <= -2147483648.0 ? 1.0 : saturate((max(-planeHeight, 0.0) - fadeStart) / (fadeEnd - fadeStart));
+	float weight = saturate(lerp(1.0, VarAmounts.y * strength, fade));
+	return lerp(ReflectionColor.xyz, reflectionColor, weight);
+#			endif
+}
+
 float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection, float distanceFactor, float skylightingSpecular, float refractionsDepthFactor, uint eyeIndex)
 {
 	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Reflections))
@@ -920,14 +940,14 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 		float4 projected = mul(transpose(TextureProj[eyeIndex]), planePosition);
 		if (!all(isfinite(projected)) || abs(projected.w) < 1e-6)
 			return ReflectionColor.xyz * VarAmounts.y * SharedData::csUtilitySettings.waterReflectionAmount;
-		return ReflectionTex.SampleLevel(ReflectionSampler, projected.xy / projected.ww, 0).xyz * SharedData::csUtilitySettings.waterReflectionAmount;
+		return ApplyWaterReflectionHeight(ReflectionTex.SampleLevel(ReflectionSampler, projected.xy / projected.ww, 0).xyz, eyeIndex) * SharedData::csUtilitySettings.waterReflectionAmount;
 	}
 
 	float3 R = reflect(viewDirection, WaterParams.y * normal + float3(0, 0, 1 - WaterParams.y));
 
 #			if defined(DYNAMIC_CUBEMAPS)
 	// [flatten] keeps fxc from raising X4000 on this early return
-	[flatten] if (SharedData::InInterior) return DynamicCubemaps::EnvTexture.SampleLevel(CubeMapSampler, R, 0).xyz * SharedData::csUtilitySettings.waterReflectionAmount;
+	[flatten] if (SharedData::InInterior) return ApplyWaterReflectionHeight(DynamicCubemaps::EnvTexture.SampleLevel(CubeMapSampler, R, 0).xyz, eyeIndex) * SharedData::csUtilitySettings.waterReflectionAmount;
 
 	float3 specularIrradiance = 0.0;
 	if (skylightingSpecular < 1.0)
@@ -967,7 +987,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 	reflectionColor = lerp(reflectionColor, finalSsrReflectionColor, ssrFraction);
 #			endif
 
-	return reflectionColor * SharedData::csUtilitySettings.waterReflectionAmount;
+	return ApplyWaterReflectionHeight(reflectionColor, eyeIndex) * SharedData::csUtilitySettings.waterReflectionAmount;
 }
 
 static const float ShoreFadeDepth = 12.0;

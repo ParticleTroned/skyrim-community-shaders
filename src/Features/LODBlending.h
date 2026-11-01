@@ -29,7 +29,7 @@ struct LODBlending : Feature
 		float LODTerrainGamma = 1;
 		float LODObjectGamma = 1;
 		float LODObjectSnowGamma = 1;
-		float pad;
+		float WaterReflectionStrength = -1.0f;
 	};
 
 	Settings settings;

@@ -1,4 +1,6 @@
 #include "LODBlending.h"
+#include <algorithm>
+#include <cmath>
 
 #include "../I18n/I18n.h"
 #include "../Utils/UI.h"
@@ -13,10 +15,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DisableTerrainVertexColors,
 	LODTerrainGamma,
 	LODObjectGamma,
-	LODObjectSnowGamma)
+	LODObjectSnowGamma,
+	WaterReflectionStrength)
 
 void LODBlending::DrawSettings()
 {
+	ImGui::SliderFloat(T(TKEY("water_reflection_strength"), "Water Reflection Strength (-1: unchanged)"), &settings.WaterReflectionStrength, -1.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat(T(TKEY("lod_terrain_brightness"), "LOD Terrain Brightness"), &settings.LODTerrainBrightness, 0.01f, 5.f, "%.2f");
 	ImGui::SliderFloat(T(TKEY("lod_object_brightness"), "LOD Object Brightness"), &settings.LODObjectBrightness, 0.01f, 5.f, "%.2f");
 	ImGui::SliderFloat(T(TKEY("lod_object_snow_brightness"), "LOD Object Snow Brightness"), &settings.LODObjectSnowBrightness, 0.01f, 5.f, "%.2f");
@@ -35,6 +39,7 @@ void LODBlending::DrawSettings()
 void LODBlending::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	settings.WaterReflectionStrength = std::isfinite(settings.WaterReflectionStrength) ? std::clamp(settings.WaterReflectionStrength, -1.0f, 2.0f) : -1.0f;
 }
 
 void LODBlending::SaveSettings(json& o_json)

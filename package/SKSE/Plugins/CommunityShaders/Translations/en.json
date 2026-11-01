@@ -1961,6 +1961,7 @@
     "feature.lod_blending.lod_terrain_brightness": "LOD Terrain Brightness",
     "feature.lod_blending.lod_terrain_gamma": "LOD Terrain Gamma",
     "feature.lod_blending.name": "LOD Blending",
+    "feature.lod_blending.water_reflection_strength": "Water Reflection Strength (-1: unchanged)",
     "feature.lod_shadows.depth_bias": "Depth bias",
     "feature.lod_shadows.description": "Casts cached sun and moon shadows from terrain, distant objects and trees.",
     "feature.lod_shadows.enabled": "Enable LOD shadows",

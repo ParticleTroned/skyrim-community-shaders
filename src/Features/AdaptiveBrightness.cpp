@@ -4058,9 +4058,10 @@ std::string AdaptiveBrightness::GetContextLabel() const
 
 struct AdaptiveBrightness::Hooks
 {
-	struct Sky_UpdateColors
+	// Sky::Update computes sky colors before GetFog, so this hook can apply weather grading.
+	struct Sky_GetFog
 	{
-		static void thunk(RE::Sky* a_sky, float a_delta)
+		static void thunk(RE::Sky* a_sky)
 		{
 			if (a_sky) {
 				effect.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kEffectLighting]);
@@ -4075,7 +4076,7 @@ struct AdaptiveBrightness::Hooks
 				middle = {};
 				horizon = {};
 			}
-			func(a_sky, a_delta);
+			func(a_sky);
 			if (!a_sky || !a_sky->currentWeather)
 				return;
 
@@ -4132,7 +4133,7 @@ struct AdaptiveBrightness::Hooks
 	{
 		stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
 		logger::info("[AdaptiveBalance] Installed shared-light water hook");
-		const auto error = stl::detour_thunk<Sky_UpdateColors>(REL::RelocationID(25686, 26233));
+		const auto error = stl::detour_thunk<Sky_GetFog>(REL::RelocationID(25686, 26233));
 		globals::features::adaptiveBrightness.weatherColorHookInstalled = error == NO_ERROR;
 		if (error == NO_ERROR)
 			logger::info("[AdaptiveBalance] Installed weather color hook");

@@ -4,6 +4,7 @@
 #include "Features/ScreenshotApiPolicy.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Features/ScreenshotBurstPolicy.h"
+#	include "Features/ScreenshotCaptureProvider.h"
 #endif
 #include "Features/ScreenshotSequencePolicy.h"
 #include "Features/ScreenshotStorageSecurity.h"
@@ -48,6 +49,8 @@ public:
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	/** Admit a DevBench reference PNG and report its terminal receipt outside service locks. */
 	json HandleReferenceRequest(ScreenshotFeature& a_feature, const json& a_request, std::function<void(const json&)> a_completion);
+	/** Route generic host bursts through the same retained sequence API. */
+	json HandleProviderBurst(ScreenshotFeature& a_feature, const json& a_request, std::function<void(const json&)> a_notification);
 #endif
 	void Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame);
 
@@ -103,7 +106,7 @@ private:
 		json errors = json::array();
 		json error = nullptr;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		std::function<void(const json&)> referenceCompletion;
+		std::function<void(const json&)> completion;
 #endif
 		bool acknowledged = false;
 		bool cancelRequested = false;
@@ -136,6 +139,9 @@ private:
 		ScreenshotBurst::Plan burst;
 		ScreenshotBurst::Continuity continuity;
 		json burstSource = nullptr;
+		std::shared_ptr<const CSX::Screenshot::ProviderBurst> providerBurst;
+		json providerPublication = json::object();
+		std::chrono::steady_clock::time_point lastProviderProgress{};
 #endif
 		uint32_t acquired = 0;
 		uint32_t written = 0;
@@ -175,6 +181,9 @@ private:
 		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
 		json header = json::object();
 		std::shared_ptr<const ManifestChildNode> children;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::shared_ptr<const CSX::Screenshot::ProviderBurst> providerBurst;
+#endif
 	};
 
 	struct ManifestResult
@@ -185,6 +194,9 @@ private:
 		bool success = false;
 		std::filesystem::path destination;
 		json artifact = nullptr;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		json providerArtifact = nullptr;
+#endif
 		std::string error;
 	};
 
@@ -219,12 +231,13 @@ private:
 	};
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	struct ReferenceNotification
+	struct CaptureNotification
 	{
 		std::function<void(const json&)> completion;
 		json receipt;
 	};
-	std::vector<ReferenceNotification> referenceNotifications;
+	std::vector<CaptureNotification> captureNotifications;
+	uint64_t nextProviderRunId = 1;
 #endif
 	json DispatchRequest(ScreenshotFeature& a_feature, const json& a_request
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -233,7 +246,7 @@ private:
 #endif
 	);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	void DrainReferenceNotifications();
+	void DrainCaptureNotifications();
 #endif
 	CSX::Api::ServiceFoundation service;
 	mutable std::mutex mutex;

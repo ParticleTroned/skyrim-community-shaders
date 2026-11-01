@@ -1,4 +1,5 @@
 #include "Api/ServiceFoundation.h"
+#include "Features/ScreenshotCaptureProvider.h"
 #include "service_retry_test.h"
 
 #include <iostream>
@@ -36,6 +37,33 @@ int RunTest()
 	ServiceFoundation service({ "csx.test", 1, 2, 3 }, limits);
 	service.SetServerMetadataProvider([] { return json{ { "testServer", true } }; });
 	CheckRetryableCommands(service, Check);
+
+	{
+		ServiceFoundation captureService({ "csx.screenshot", 1, 0, 1 });
+		json host = { { "action", "burst" }, { "requestId", "host-burst" }, { "prefix", "frame" },
+			{ "outputDir", Util::PathToUtf8(std::filesystem::current_path()) }, { "count", 3 } };
+		const auto burst = CSX::Screenshot::ProviderBurstCommand(host, true);
+		int admissions = 0;
+		json retained = { { "requestId", "api-sequence" }, { "state", "running" } };
+		auto admit = [&](const json& command) {
+			++admissions;
+			auto response = captureService.MakeEnvelope(command, true);
+			response["result"] = retained;
+			return response;
+		};
+		const auto firstBurst = captureService.Dispatch(burst, admit);
+		retained["state"] = "cancelled_partial";
+		const auto replayBurst = captureService.Dispatch(burst, admit, [&](std::string_view id) {
+			Check(id == retained.at("requestId").get<std::string>(), "provider replay lost API identity");
+			return retained;
+		});
+		Check(admissions == 1 && replayBurst.at("result").at("state") == "cancelled_partial",
+			"provider retry duplicated a capture or lost API cancellation");
+		Check(firstBurst.at("result").at("requestId") == replayBurst.at("result").at("requestId"), "provider retry changed the API request");
+		host["count"] = 4;
+		const auto changed = captureService.Dispatch(CSX::Screenshot::ProviderBurstCommand(host, true), admit);
+		Check(changed.at("error").at("code") == "idempotency_conflict" && admissions == 1, "provider reuse admitted changed parameters");
+	}
 
 	const auto invalid = service.Dispatch(json::object(), [](const json&) { return json::object(); });
 	Check(!invalid["ok"].get<bool>(), "missing contract major must be rejected");

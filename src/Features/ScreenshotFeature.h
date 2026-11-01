@@ -77,6 +77,8 @@ struct ScreenshotFeature : public Feature
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	/** Capture the host's native reference PNG using the normal screenshot service. */
 	nlohmann::json HandleReferenceCapture(const nlohmann::json& a_request, std::function<void(const nlohmann::json&)> a_completion);
+	/** Share sequence identity, scheduling and cancellation with the generic capture provider. */
+	nlohmann::json HandleProviderBurst(const nlohmann::json& a_request, std::function<void(const nlohmann::json&)> a_notification);
 #endif
 	/** Dispatches a settings-based capture through the public screenshot service and returns its receipt. */
 	nlohmann::json RequestApiCapture(std::string_view a_origin = "csx_menu");

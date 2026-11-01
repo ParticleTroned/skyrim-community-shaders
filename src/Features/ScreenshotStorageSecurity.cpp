@@ -388,6 +388,28 @@ namespace CSX::ScreenshotStorage
 		}
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::shared_ptr<DirectoryLease> DirectoryLease::OpenOutputDirectory(const std::filesystem::path& a_directory)
+	{
+		const auto requested = a_directory.lexically_normal();
+		if (!requested.is_absolute())
+			throw std::invalid_argument("capture output directory must be absolute");
+		std::filesystem::create_directories(requested);
+		ScopedHandle destinationHandle(OpenDirectory(requested));
+		if (destinationHandle.Get() == INVALID_HANDLE_VALUE)
+			throw std::runtime_error(std::format("capture output directory could not be locked (Win32 error {})", GetLastError()));
+		const auto information = ReadIdentity(destinationHandle.Get(), true);
+		const auto resolved = FinalPath(destinationHandle.Get());
+		ScopedHandle directoryHandle(OpenDirectory(resolved));
+		if (directoryHandle.Get() == INVALID_HANDLE_VALUE ||
+			Identity(ReadIdentity(directoryHandle.Get(), true)) != Identity(information))
+			throw std::runtime_error("capture output directory identity changed during admission");
+		return std::shared_ptr<DirectoryLease>(new DirectoryLease(
+			destinationHandle.Release(), directoryHandle.Release(), resolved, resolved,
+			Identity(information), Identity(information)));
+	}
+#endif
+
 	DirectoryLease::~DirectoryLease()
 	{
 		if (directoryHandle)

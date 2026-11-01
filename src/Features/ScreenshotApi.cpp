@@ -283,6 +283,17 @@ void ScreenshotApi::ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_st
 					logger::warn("Screenshot partial manifest cleanup failed with Win32 error {}", GetLastError());
 				result.artifact = DescribeCommittedArtifact(job.destination, committed);
 			}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (job.final && job.providerBurst) {
+				const auto& provider = *job.providerBurst;
+				const auto manifest = CSX::Screenshot::ProviderManifest(document, provider);
+				const auto hostCommitted = WriteJsonAtomically(*provider.manifestDirectory, provider.manifestPath,
+					manifest, job.generation, false);
+				result.providerArtifact = DescribeCommittedArtifact(provider.manifestPath, hostCommitted);
+				result.providerArtifact["width"] = manifest.at("width");
+				result.providerArtifact["height"] = manifest.at("height");
+			}
+#endif
 			result.success = true;
 		} catch (const std::exception& error) {
 			result.error = error.what();
@@ -316,7 +327,9 @@ ScreenshotApi::json ScreenshotApi::HandleReferenceRequest(ScreenshotFeature& a_f
 	if (!a_completion)
 		throw std::invalid_argument("reference capture requires a completion callback");
 	const auto command = CSX::Screenshot::ReferenceCommand(a_request, globals::game::isVR);
-	auto response = DispatchRequest(a_feature, command, a_completion);
+	auto response = DispatchRequest(a_feature, command, [a_completion](const json& receipt) {
+		a_completion(CSX::Screenshot::ReferenceCompletion(receipt));
+	});
 	if (response.value("ok", false)) {
 		const auto& receipt = response.at("result");
 		if (receipt.value("idempotentReplay", false) && IsTerminal(receipt.at("state").get<std::string>()))
@@ -325,20 +338,57 @@ ScreenshotApi::json ScreenshotApi::HandleReferenceRequest(ScreenshotFeature& a_f
 	return response;
 }
 
-void ScreenshotApi::DrainReferenceNotifications()
+ScreenshotApi::json ScreenshotApi::HandleProviderBurst(ScreenshotFeature& a_feature, const json& a_request, std::function<void(const json&)> a_notification)
 {
-	std::vector<ReferenceNotification> ready;
+	if (a_request.value("action", std::string{}) == "burstStatus") {
+		const auto runId = ScreenshotBurst::Read(a_request, "runId", 1, 9007199254740991ull);
+		std::lock_guard lock(mutex);
+		DrainManifestResultsLocked();
+		TrimLocked();
+		for (const auto& [id, sequence] : sequences) {
+			if (sequence.providerBurst && sequence.providerBurst->runId == runId)
+				return { { "ok", true }, { "result", CSX::Screenshot::ProviderBurstStatus(LookupReceiptLocked(id)) } };
+		}
+		throw std::invalid_argument("burst runId is not retained in this API session");
+	}
+	if (a_request.value("action", std::string{}) != "burst" || !a_notification)
+		throw std::invalid_argument("burst requires an action and notification callback");
+	const auto command = CSX::Screenshot::ProviderBurstCommand(a_request, globals::game::isVR);
+	auto notification = [a_notification](const json& receipt) { a_notification(CSX::Screenshot::ProviderBurstStatus(receipt)); };
+	auto response = DispatchRequest(a_feature, command, notification);
+	if (response.value("ok", false)) {
+		json receipt;
+		{
+			std::lock_guard lock(mutex);
+			DrainManifestResultsLocked();
+			receipt = LookupReceiptLocked(response.at("result").at("requestId").get<std::string>());
+		}
+		if (receipt.is_null())
+			return MakeError(command, "request_not_retained", "burst operation has expired; use a new requestId");
+		receipt["idempotentReplay"] = response.at("result").value("idempotentReplay", false);
+		if (receipt.value("idempotentReplay", false) && IsTerminal(receipt.at("state").get<std::string>()))
+			notification(receipt);
+		response["result"] = CSX::Screenshot::ProviderBurstStatus(receipt);
+		response["result"]["queued"] = !response["result"].at("done").get<bool>();
+		response["result"]["idempotentReplay"] = receipt.value("idempotentReplay", false);
+	}
+	return response;
+}
+
+void ScreenshotApi::DrainCaptureNotifications()
+{
+	std::vector<CaptureNotification> ready;
 	{
 		std::lock_guard lock(mutex);
-		ready.swap(referenceNotifications);
+		ready.swap(captureNotifications);
 	}
 	for (auto& notification : ready) {
 		try {
-			notification.completion(CSX::Screenshot::ReferenceCompletion(notification.receipt));
+			notification.completion(notification.receipt);
 		} catch (const std::exception& error) {
-			logger::error("Screenshot reference notification failed: {}", error.what());
+			logger::error("Screenshot capture notification failed: {}", error.what());
 		} catch (...) {
-			logger::error("Screenshot reference notification failed with an unknown exception");
+			logger::error("Screenshot capture notification failed with an unknown exception");
 		}
 	}
 }
@@ -387,6 +437,12 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 )
 {
 	const std::string action = a_request.at("action").get<std::string>();
+	if (a_request.contains("providerBurst")) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (!a_completion || action != "sequence_start")
+#endif
+			return MakeError(a_request, "invalid_field", "providerBurst is reserved for the capture provider");
+	}
 	if (action == "capabilities") {
 		auto response = MakeEnvelope(a_request, true);
 		response["result"] = BuildCapabilities(a_feature);
@@ -473,7 +529,7 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 				return MakeError(a_request, "operation_capacity", "the screenshot pending-operation limit is full", "admission", true);
 			[[maybe_unused]] auto& record = CreateRequestLocked("still", a_request, descriptor, {}, 0, requestId);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			record.referenceCompletion = std::move(a_completion);
+			record.completion = std::move(a_completion);
 #endif
 			manualDispatchQueue.push_back({
 				.requestId = requestId,
@@ -628,14 +684,39 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 			if (!CSX::ScreenshotPolicy::CanAdmitPendingOperations(CountPendingOperationsLocked()))
 				return MakeError(a_request, "operation_capacity", "the screenshot pending-operation limit is full", "admission", true);
 #ifdef DEVBENCH_BRIDGE_ENABLED
+			if (a_request.contains("providerBurst")) {
+				for (const auto& [id, active] : sequences) {
+					if (active.providerBurst && !IsTerminal(requests.at(id).state))
+						return MakeError(a_request, "busy", "a capture provider burst is acquiring or publishing", "admission", true);
+				}
+				if (nextProviderRunId > 9007199254740991ull)
+					return MakeError(a_request, "run_id_exhausted", "capture provider run IDs are exhausted for this session");
+			}
 			if (sequence.burst && CountPendingOperationsLocked() != 0)
 				return MakeError(a_request, "busy", "burst requires an idle capture service", "dispatch", true);
 #endif
 			sequence.requestId = requestId;
 			try {
-				sequence.directoryLease = CSX::ScreenshotStorage::DirectoryLease::CreateExclusive(
-					std::filesystem::u8path(descriptor["destination"]["resolvedDirectory"].get<std::string>()),
-					requestId);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (a_request.contains("providerBurst")) {
+					auto provider = std::make_shared<CSX::Screenshot::ProviderBurst>();
+					provider->options = a_request.at("providerBurst");
+					sequence.directoryLease = CSX::ScreenshotStorage::DirectoryLease::OpenOutputDirectory(
+						std::filesystem::u8path(provider->options.at("outputDir").get<std::string>()));
+					provider->options["outputDir"] = Util::PathToUtf8(sequence.directoryLease->Path());
+					const auto manifest = std::filesystem::u8path(provider->options.at("manifestPath").get<std::string>());
+					provider->manifestDirectory = CSX::ScreenshotStorage::DirectoryLease::OpenOutputDirectory(manifest.parent_path());
+					provider->manifestPath = provider->manifestDirectory->Path() / manifest.filename();
+					if (std::filesystem::exists(provider->manifestPath))
+						throw std::runtime_error("burst manifest destination already exists");
+					provider->options["manifestPath"] = Util::PathToUtf8(provider->manifestPath);
+					provider->runId = nextProviderRunId++;
+					sequence.providerBurst = std::move(provider);
+				} else
+#endif
+					sequence.directoryLease = CSX::ScreenshotStorage::DirectoryLease::CreateExclusive(
+						std::filesystem::u8path(descriptor["destination"]["resolvedDirectory"].get<std::string>()),
+						requestId);
 			} catch (const std::exception& error) {
 				return MakeError(
 					a_request, "destination_unavailable", error.what(), "admission", false,
@@ -647,6 +728,16 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 			sequence.directory = sequence.directoryLease->Path();
 			sequence.partialManifestPath = sequence.directory / "sequence.json.partial";
 			sequence.finalManifestPath = sequence.directory / "sequence.json";
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (sequence.providerBurst) {
+				const auto name = sequence.providerBurst->options.at("prefix").get<std::string>() + "_csx_" + requestId + ".json";
+				sequence.finalManifestPath = sequence.directory / name;
+				sequence.partialManifestPath = sequence.directory / (name + ".partial");
+				sequence.packaging["captureManifest"] = { { "requested", true }, { "state", "pending" } };
+				record.expectedArtifacts = 2;
+				record.completion = std::move(a_completion);
+			}
+#endif
 			sequences.emplace(requestId, std::move(sequence));
 			sequenceOrder.push_back(requestId);
 			auto& stored = sequences.at(requestId);
@@ -676,6 +767,15 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 				return response;
 			}
 			if (auto sequence = sequences.find(requestId); sequence != sequences.end()) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				// Publication uses an immutable snapshot once the last acquisition has drained.
+				if (sequence->second.providerBurst && sequence->second.finalizing) {
+					auto response = MakeEnvelope(a_request, true);
+					response["result"] = MakeSequenceReceipt(found->second, &sequence->second);
+					response["result"]["alreadyFinalizing"] = true;
+					return response;
+				}
+#endif
 				if (action == "sequence_stop") {
 					sequence->second.stopRequested = true;
 					TransitionLocked(found->second, "stop_requested", "sequence.stop_requested");
@@ -1297,8 +1397,8 @@ void ScreenshotApi::TransitionLocked(RequestRecord& a_record, std::string a_stat
 		a_record.terminalUtc = CSX::Api::ServiceFoundation::TimestampUtc();
 		a_record.terminalAt = std::chrono::steady_clock::now();
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		if (a_record.referenceCompletion)
-			referenceNotifications.push_back({ std::move(a_record.referenceCompletion), MakeReceipt(a_record) });
+		if (a_record.completion)
+			captureNotifications.push_back({ std::move(a_record.completion), LookupReceiptLocked(a_record.requestId) });
 #endif
 	}
 	AppendEventLocked(a_record, a_eventType, std::move(a_payload));
@@ -1358,6 +1458,12 @@ ScreenshotApi::json ScreenshotApi::MakeSequenceReceipt(const RequestRecord& a_re
 		receipt["continuity"] = a_sequence->continuity.Receipt(a_sequence->frameCount,
 			a_sequence->written == a_sequence->frameCount && a_sequence->failed == 0 && a_sequence->cancelled == 0 && !a_sequence->cancelRequested);
 		receipt["bufferedPayloadBytes"] = a_sequence->burst.payloadBytes;
+	}
+#endif
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_sequence->providerBurst) {
+		receipt["captureProvider"] = a_sequence->providerPublication;
+		receipt["captureProvider"]["runId"] = a_sequence->providerBurst->runId;
 	}
 #endif
 	receipt["packaging"] = a_sequence->packaging;
@@ -1727,6 +1833,21 @@ void ScreenshotApi::FinishSequenceChildLocked(RequestRecord& a_child)
 			kMaximumSequenceFrames,
 			sequence.nextCheckpointChildCount * 2);
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (sequence.providerBurst) {
+		auto& parent = requests.at(sequence.requestId);
+		if ((a_child.state == "failed" || a_child.state == "failed_partial") && !a_child.error.is_null()) {
+			parent.errors.push_back(a_child.error);
+			if (parent.error.is_null())
+				parent.error = a_child.error;
+		}
+		const auto now = std::chrono::steady_clock::now();
+		if (parent.completion && now - sequence.lastProviderProgress >= std::chrono::milliseconds(250)) {
+			sequence.lastProviderProgress = now;
+			captureNotifications.push_back({ parent.completion, MakeSequenceReceipt(parent, &sequence) });
+		}
+	}
+#endif
 	TryFinalizeSequenceLocked(sequence);
 }
 
@@ -1773,6 +1894,28 @@ void ScreenshotApi::FinalizeSequenceLocked(
 			parent->second.errors.push_back(parent->second.error);
 		}
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_sequence.providerBurst) {
+		if (!manifestWritten)
+			a_sequence.packaging["captureManifest"] = { { "requested", true }, { "state", "failed" },
+				{ "error", a_manifestResult ? a_manifestResult->error : "final manifest was not committed" } };
+		parent->second.expectedArtifacts = 2;
+		parent->second.terminalArtifacts = 2;
+		parent->second.successfulArtifacts = 0;
+		// Preserve a committed CSX manifest even if the companion publication failed.
+		if (a_manifestResult && a_manifestResult->artifact.is_object()) {
+			if (!manifestWritten)
+				parent->second.artifacts.push_back(a_manifestResult->artifact);
+			++parent->second.successfulArtifacts;
+		}
+		if (manifestWritten) {
+			parent->second.artifacts.push_back(a_manifestResult->providerArtifact);
+			++parent->second.successfulArtifacts;
+			a_sequence.providerPublication = a_manifestResult->providerArtifact;
+			a_sequence.providerPublication["manifestPath"] = Util::PathToUtf8(a_sequence.providerBurst->manifestPath);
+		}
+	}
+#endif
 	std::string terminal;
 	if (!manifestWritten)
 		terminal = a_sequence.written == 0 ? "failed" : "failed_partial";
@@ -1789,6 +1932,13 @@ void ScreenshotApi::FinalizeSequenceLocked(
 		terminal = "completed";
 	TransitionLocked(parent->second, terminal, "request.terminal", { { "manifestPath", a_sequence.frameManifest && manifestWritten ? json(Util::PathToUtf8(a_sequence.finalManifestPath)) : json(nullptr) } });
 	a_sequence.directoryLease.reset();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_sequence.providerBurst) {
+		auto retained = std::make_shared<CSX::Screenshot::ProviderBurst>(*a_sequence.providerBurst);
+		retained->manifestDirectory.reset();
+		a_sequence.providerBurst = std::move(retained);
+	}
+#endif
 }
 
 void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool a_final)
@@ -1848,6 +1998,7 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 			.children = a_sequence.manifestChildren,
 		};
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		job.providerBurst = a_sequence.providerBurst;
 		if (a_sequence.burst)
 			job.header["continuity"] = a_sequence.continuity.Receipt(a_sequence.frameCount,
 				a_sequence.written == a_sequence.frameCount && a_sequence.failed == 0 && a_sequence.cancelled == 0 && !a_sequence.cancelRequested);
@@ -1942,6 +2093,15 @@ void ScreenshotApi::DrainManifestResultsLocked()
 			record.packaging["frameManifest"] = result.success ?
 			                                        json({ { "requested", true }, { "state", "written" }, { "path", Util::PathToUtf8(result.destination) } }) :
 			                                        json({ { "requested", true }, { "state", "failed" }, { "error", result.error } });
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (record.providerBurst) {
+				record.packaging["captureManifest"] = result.success ?
+				                                          json({ { "requested", true }, { "state", "written" }, { "path", Util::PathToUtf8(record.providerBurst->manifestPath) } }) :
+				                                          json({ { "requested", true }, { "state", "failed" }, { "error", result.error } });
+				if (result.artifact.is_object())
+					record.packaging["frameManifest"] = { { "requested", true }, { "state", "written" }, { "path", Util::PathToUtf8(result.destination) } };
+			}
+#endif
 			FinalizeSequenceLocked(record, &result);
 		} else if (result.success && result.generation <= record.manifestGeneration) {
 			record.packaging["frameManifest"] = {
@@ -1969,6 +2129,12 @@ ScreenshotApi::DueFrame ScreenshotApi::CreateSequenceFrameLocked(
 		{ "baseName", std::format("frame_{:06}", dueFrame.ordinal) },
 		{ "overwrite", "never" },
 	};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_sequence.providerBurst) {
+		dueFrame.capture["providerOutputPath"] = Util::PathToUtf8(a_sequence.directory /
+																  CSX::Screenshot::ProviderFrameName(a_sequence.providerBurst->options.at("prefix").get<std::string>(), dueFrame.ordinal));
+	}
+#endif
 	++a_sequence.scheduled;
 	++a_sequence.inFlight;
 	a_sequence.clock.Advance(a_sequence.intervalFrames, a_sequence.intervalMs);
@@ -2156,7 +2322,7 @@ void ScreenshotApi::CancelQueuedDispatchesLocked(std::string_view a_code, std::s
 void ScreenshotApi::Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame)
 {
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	DrainReferenceNotifications();
+	DrainCaptureNotifications();
 #endif
 	std::optional<DispatchEntry> dispatch;
 	std::vector<std::pair<std::string, std::string>> interruptions;
@@ -2365,6 +2531,9 @@ bool ScreenshotApi::DrainForShutdown(std::chrono::milliseconds a_timeout)
 		std::lock_guard lock(mutex);
 		DrainManifestResultsLocked();
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	DrainCaptureNotifications();
+#endif
 	return drained;
 }
 

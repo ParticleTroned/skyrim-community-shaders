@@ -2442,6 +2442,12 @@ void ScreenshotFeature::EnsureScreenshotApi()
 }
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+nlohmann::json ScreenshotFeature::HandleProviderBurst(const nlohmann::json& a_request, std::function<void(const nlohmann::json&)> a_notification)
+{
+	EnsureScreenshotApi();
+	return screenshotApi->HandleProviderBurst(*this, a_request, std::move(a_notification));
+}
+
 nlohmann::json ScreenshotFeature::HandleReferenceCapture(const nlohmann::json& a_request, std::function<void(const nlohmann::json&)> a_completion)
 {
 	EnsureScreenshotApi();
@@ -2553,6 +2559,12 @@ ScreenshotFeature::CaptureStartResult ScreenshotFeature::TryStartApiCapture(
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (a_effectiveDescriptor.contains("referenceOutputPath")) {
 			plan.outputPath = std::filesystem::u8path(a_effectiveDescriptor.at("referenceOutputPath").get<std::string>());
+			plan.exactPath = true;
+		}
+#endif
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_effectiveDescriptor.contains("providerOutputPath")) {
+			plan.outputPath = std::filesystem::u8path(a_effectiveDescriptor.at("providerOutputPath").get<std::string>());
 			plan.exactPath = true;
 		}
 #endif

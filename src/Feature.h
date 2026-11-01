@@ -6,6 +6,11 @@
 #ifdef TRACY_ENABLE
 #	include <Tracy/Tracy.hpp>
 #	include <Tracy/TracyD3D11.hpp>
+#	include <algorithm>
+#	include <cstring>
+#	include <initializer_list>
+#	include <span>
+#	include <string_view>
 #endif
 
 struct Feature
@@ -313,27 +318,36 @@ public:
 	 */
 	static bool IsFeatureKnown(const std::string& shortName, REL::Version* outVersion = nullptr);
 
-	/**
-	 * @brief Execute a callable for each loaded feature with optional Tracy CPU profiling
-	 *
-	 * Iterates through all loaded features and calls the provided function with automatic
-	 * CPU profiling zones (ZoneScoped/ZoneName via Tracy) when TRACY_ENABLE is defined.
-	 * Thread-local string formatting is used to minimize per-call overhead.
-	 *
-	 * Usage:
-	 *   Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
-	 *   Feature::ForEachLoadedFeature("Prepass", [](Feature* feature) { feature->Prepass(); });
-	 *
-	 * @param methodName Name of the method being called (used for Tracy zone naming)
-	 * @param callback Callable that receives (Feature*) and performs the operation
-	 */
 	// Called once from State after TracyD3D11Context is created so ForEachLoadedFeature
 	// can emit GPU timer zones without pulling in State headers here.
 #ifdef TRACY_ENABLE
 	inline static TracyD3D11Ctx s_tracyCtx = nullptr;
 	static void SetTracyCtx(TracyD3D11Ctx ctx) noexcept { s_tracyCtx = ctx; }
+
+	/** @brief Writes a terminated "<shortName>::<method>" label without allocating, truncating to fit a nonempty buffer. */
+	static const char* FormatZoneName(std::span<char> a_buffer, std::string_view a_shortName, std::string_view a_method) noexcept
+	{
+		if (a_buffer.empty())
+			return a_buffer.data();
+
+		std::size_t length = 0;
+		for (const auto part : { a_shortName, std::string_view("::"), a_method }) {
+			const auto count = std::min(part.size(), a_buffer.size() - 1 - length);
+			if (count != 0)
+				std::memcpy(a_buffer.data() + length, part.data(), count);
+			length += count;
+		}
+		a_buffer[length] = '\0';
+		return a_buffer.data();
+	}
 #endif
 
+	/**
+	 * @brief Invoke each loaded feature with bounded zone labels when Tracy is compiled in.
+	 * @param methodName Method label for CPU and optional GPU profiling zones.
+	 * @param callback Callable receiving each loaded Feature*.
+	 * @param emitGpuZone Include a GPU zone when a Tracy D3D11 context is available.
+	 */
 	template <typename Func>
 	static inline void ForEachLoadedFeature(std::string_view methodName, Func&& callback, bool emitGpuZone = false)
 	{
@@ -341,10 +355,11 @@ public:
 			if (feature->loaded) {
 #ifdef TRACY_ENABLE
 				{
-					const auto zoneName = std::format("{}::{}", feature->GetShortName(), methodName);
-					ZoneTransientN(___tracy_feature_zone, zoneName.c_str(), true);
+					char zoneNameBuffer[128];
+					const auto* zoneName = FormatZoneName(zoneNameBuffer, feature->GetShortName(), methodName);
+					ZoneTransientN(___tracy_feature_zone, zoneName, true);
 					if (emitGpuZone) {
-						TracyD3D11ZoneTransientS(s_tracyCtx, ___tracy_d3d11_feature_zone, zoneName.c_str(), 0, s_tracyCtx != nullptr);
+						TracyD3D11ZoneTransientS(s_tracyCtx, ___tracy_d3d11_feature_zone, zoneName, 0, s_tracyCtx != nullptr);
 						callback(feature);
 					} else {
 						callback(feature);

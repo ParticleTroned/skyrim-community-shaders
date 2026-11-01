@@ -84,9 +84,9 @@ def repair():
             raise RuntimeError(f'{path}: repaired output differs from the reviewed hash')
     git('add', *changed)
     git('diff', '--cached', '--check')
-    staged = set(git('diff', '--cached', '--name-only', '-z').split('\0'))
+    staged = {path for path in git('diff', '--cached', '--name-only', '-z').split('\0') if path}
     if staged != set(changed):
-        raise RuntimeError('Unexpected staged paths.')
+        raise RuntimeError(f'Unexpected staged paths: {staged ^ set(changed)}')
     return {path: sha256(path) for path in changed}
 
 def commit(subject, parents, body):

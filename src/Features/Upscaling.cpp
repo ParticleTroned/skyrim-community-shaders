@@ -52570,9 +52570,11 @@ bool Upscaling::CopySharedD3D12Resources()
 
 void UpdateCameraData()
 {
-	using func_t = decltype(&UpdateCameraData);
+	using func_t = void (*)(RE::BSGraphics::Renderer*, std::uint32_t);
 	static REL::Relocation<func_t> func{ RELOCATION_ID(75472, 77258) };
-	func();
+	// Match the engine render path so optional camera updates use deterministic flags.
+	constexpr std::uint32_t kEngineRenderCameraFlags = 0;
+	func(globals::game::renderer, kEngineRenderCameraFlags);
 }
 
 void Upscaling::PostDisplay()

@@ -81,6 +81,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	include "Common/FrameBuffer.hlsli"
 #	include "Common/MotionBlur.hlsli"
+#	include "Common/WaterFinite.hlsli"
 #	include "Common/Permutation.hlsli"
 #	include "Common/Random.hlsli"
 #	include "Common/ReverseZ.hlsli"
@@ -918,7 +919,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 		float4 planePosition = float4(VarAmounts.w * normal.xy, 0, 1);
 #			endif
 		float4 projected = mul(transpose(TextureProj[eyeIndex]), planePosition);
-		if (!all(isfinite(projected)) || abs(projected.w) < 1e-6)
+		if (!all(WaterFinite::IsFinite(projected)) || abs(projected.w) < 1e-6)
 			return ReflectionColor.xyz * VarAmounts.y * SharedData::csUtilitySettings.waterReflectionAmount;
 		return ReflectionTex.SampleLevel(ReflectionSampler, projected.xy / projected.ww, 0).xyz * SharedData::csUtilitySettings.waterReflectionAmount;
 	}

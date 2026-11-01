@@ -460,10 +460,8 @@ namespace SIE
 			       type == RE::BSShader::Type::ImageSpace;
 		}
 
-		inline static bool IsSupportedShader(const RE::BSShader& shader)
-		{
-			return IsSupportedShader(shader.shaderType.get());
-		}
+		/** @brief Whether the cache replaces this shader's concrete technique. */
+		static bool IsSupportedShader(const RE::BSShader& shader);
 
 		inline static bool IsShaderSourceAvailable(const RE::BSShader& shader);
 

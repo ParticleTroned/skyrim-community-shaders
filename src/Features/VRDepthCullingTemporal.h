@@ -11,6 +11,8 @@
 
 namespace VRDepthCullingTemporal
 {
+	/** Retire all producer evidence at a scene-depth publication boundary. */
+	void InvalidateDepthGeneration();
 	enum class Mode
 	{
 		Balanced = 0,

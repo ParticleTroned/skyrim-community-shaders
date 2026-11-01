@@ -1,3 +1,4 @@
+#include "Common/ReverseZ.hlsli"
 #include "Upscaling/UpscaleVS.hlsl"
 
 #if defined(PSHADER)
@@ -8,9 +9,9 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float4 RefractionNormals : SV_TARGET0;
-	float SAOCameraZ : SV_TARGET1;
-	float Depth : SV_Depth;
+	float4 RefractionNormals: SV_TARGET0;
+	float SAOCameraZ: SV_TARGET1;
+	float Depth: SV_Depth;
 };
 
 SamplerState LinearSampler : register(s0);
@@ -32,7 +33,7 @@ cbuffer JitterCB : register(b0)
 float SampleMinDepth2x2(float2 uv)
 {
 	float4 depthQuad = DepthTex.GatherRed(LinearSampler, uv);
-	return min(min(depthQuad.x, depthQuad.y), min(depthQuad.z, depthQuad.w));
+	return FrameBuffer::NearestDepth(depthQuad);
 }
 
 float SampleDepthClamped(int2 coord, int2 maxCoord)

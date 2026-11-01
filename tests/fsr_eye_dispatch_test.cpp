@@ -1,3 +1,5 @@
+#include "reverse_z_test_stub.h"
+
 #include "Features/Upscaling/DLSSViewportCrop.h"
 #include "Features/Upscaling/FSRHostLifecyclePolicy.h"
 #include "Features/Upscaling/FSRRuntimeLifecyclePolicy.h"

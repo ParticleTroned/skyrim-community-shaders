@@ -1769,7 +1769,7 @@ namespace NeuralRendering
 		parameters->Set("DLSSNR.OutputSubrectHeight", outputSubrect.height);
 		parameters->Set("DLSSNR.MVecScaleX", a_layout.motionVectorScale[0]);
 		parameters->Set("DLSSNR.MVecScaleY", a_layout.motionVectorScale[1]);
-		parameters->Set("DLSSNR.DepthInverted", 0u);
+		parameters->Set("DLSSNR.DepthInverted", a_tuning.depthInverted ? 1u : 0u);
 		parameters->Set("DLSSNR.Enabled", 1u);
 		parameters->Set("DLSSNR.Reset", a_reset ? 1u : 0u);
 		const auto limits = GetTuningLimits(a_tuning.networkPreset);

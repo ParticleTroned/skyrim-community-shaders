@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include "BackgroundBlur.h"
+#include "Features/ReverseZ.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/VR.h"
 #include "Fonts.h"
@@ -253,12 +254,16 @@ void SettingsTabRenderer::RenderShadersTab()
 {
 	auto shaderCache = globals::shaderCache;
 
-	bool useCustomShaders = shaderCache->IsEnableRequested();
-	if (Util::Widgets::Checkbox("Use Custom Shaders", &useCustomShaders)) {
-		shaderCache->SetEnabled(useCustomShaders);
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Disabling this effectively disables all features. In VR, native render targets are restored first.");
+	{
+		ImGui::BeginDisabled(globals::features::reverseZ.IsActive());
+		const SKSE::stl::scope_exit restoreDisabled([]() noexcept { ImGui::EndDisabled(); });
+		bool useCustomShaders = shaderCache->IsEnableRequested();
+		if (Util::Widgets::Checkbox("Use Custom Shaders", &useCustomShaders))
+			shaderCache->SetEnabled(useCustomShaders);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(globals::features::reverseZ.IsActive() ?
+									   "Reverse Z requires custom shaders. Disable Reverse Z and restart first." :
+									   "Disabling this effectively disables all features. In VR, native render targets are restored first.");
 	}
 
 	bool useDiskCache = shaderCache->IsDiskCache();
@@ -365,6 +370,8 @@ void SettingsTabRenderer::RenderShadersTab()
 				(int)Util::GetPerformanceCoreCount());
 		}
 	}
+	if (!globals::game::isVR)
+		globals::features::reverseZ.DrawSettings();
 }
 
 void SettingsTabRenderer::RenderKeybindingsTab(

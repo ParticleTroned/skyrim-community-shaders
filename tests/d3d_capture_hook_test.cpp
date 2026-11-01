@@ -1,4 +1,5 @@
 #include "Utils/VRFrameBufferUpload.h"
+#include "d3d_resource_naming.h"
 
 #include <d3d11_4.h>
 #include <detours/detours.h>
@@ -79,10 +80,11 @@ namespace
 		CaptureHooks& operator=(const CaptureHooks&) = delete;
 	};
 
-	void ObserveEngineUpload(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const void* source)
+	void ObserveEngineUpload(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, void* source)
 	{
 		CaptureHooks::mapped = nullptr;
 		if (source) {
+			static_cast<unsigned*>(source)[0] ^= 0x10000000;
 			std::memcpy(CaptureHooks::snapshot.data(), source, sizeof(CaptureHooks::snapshot));
 			++CaptureHooks::captures;
 		}
@@ -153,9 +155,13 @@ namespace
 			D3D11_MAPPED_SUBRESOURCE mapped{};
 			Check(context->Map(buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 			std::memcpy(mapped.pData, expected.data(), sizeof(expected));
-			if (useEngineObserver)
-				upload(context.Get(), buffer.Get(), 0, expected.data(), mapped.pData);
-			else
+			if (useEngineObserver) {
+				auto cpuSource = expected;
+				cpuSource[0] ^= 0x80000000;
+				upload(context.Get(), buffer.Get(), 0, cpuSource.data(), mapped.pData);
+				expected[0] ^= 0x10000000;
+				Require(cpuSource[0] == ((frame << 16) ^ 0x80000000));
+			} else
 				context->Unmap(buffer.Get(), 0);
 			Require((multithread->GetMultithreadProtected() != FALSE) == protectedBefore);
 			if (useEngineObserver || frame == 1) {
@@ -169,6 +175,19 @@ namespace
 				Require(CaptureHooks::captures < 64);
 			std::cout << "Late protection: dispatchChanged=" << dispatchChanged << ", captures=" << CaptureHooks::captures << "/64\n";
 		} else {
+			D3D11_BUFFER_DESC readbackDesc = description;
+			readbackDesc.Usage = D3D11_USAGE_STAGING;
+			readbackDesc.BindFlags = 0;
+			readbackDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			ComPtr<ID3D11Buffer> readback;
+			Check(device->CreateBuffer(&readbackDesc, nullptr, &readback));
+			Util::SetResourceName(readback.Get(), "CaptureTest::MappedUploadReadback");
+			context->CopyResource(readback.Get(), buffer.Get());
+			D3D11_MAPPED_SUBRESOURCE gpuBytes{};
+			Check(context->Map(readback.Get(), 0, D3D11_MAP_READ, 0, &gpuBytes));
+			const bool gpuMatchesCache = std::memcmp(gpuBytes.pData, CaptureHooks::snapshot.data(), sizeof(CaptureHooks::snapshot)) == 0;
+			context->Unmap(readback.Get(), 0);
+			Require(gpuMatchesCache);
 			D3D11_MAPPED_SUBRESOURCE mapped{};
 			Check(context->Map(buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 			const auto before = CaptureHooks::snapshot;

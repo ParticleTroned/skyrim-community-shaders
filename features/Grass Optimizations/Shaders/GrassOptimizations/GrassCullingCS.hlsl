@@ -142,7 +142,7 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out 
 		return false;
 	}
 #endif
-	if (DepthMips == 0 || any(lo < -1) || any(hi > 1) || nearest <= 0 || nearest > 1) {
+	if (DepthMips == 0 || any(lo < -1) || any(hi > 1) || !isfinite(nearest) || nearest < 0 || nearest > 1) {
 		reason = 13;
 		return false;
 	}
@@ -171,9 +171,9 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out 
 		reason = 15;
 		return false;
 	}
-	if (farthest >= 1 - 1e-6)
+	if (abs(farthest - DepthOrder::Far()) <= 1e-6)
 		reason = 16;
-	else if (nearest <= farthest + DepthBias)
+	else if (!DepthOrder::IsBehindWithBias(nearest, farthest, DepthBias))
 		reason = 17;
 	return DepthOrder::IsBehindWithBias(nearest, farthest, DepthBias);
 }

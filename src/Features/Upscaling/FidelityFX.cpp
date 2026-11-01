@@ -1,6 +1,7 @@
 #include "FidelityFX.h"
 #include "FSRHostLifecyclePolicy.h"
 #include "FSRRuntimeLifecyclePolicy.h"
+#include "Features/ReverseZ.h"
 #include "VRSubmitColorContract.h"
 #include "VRSubmitTemporalSnapshot.h"
 
@@ -60,6 +61,7 @@ namespace
 			.verticalFov = Util::GetVerticalFOVRad(),
 			.frameTimeMilliseconds = *globals::game::deltaTime * 1000.0f,
 			.historyReset = upscaling.ShouldResetHistoryThisFrame(),
+			.depthConvention = globals::features::reverseZ.GetConvention(),
 		};
 	}
 
@@ -1371,6 +1373,8 @@ bool FidelityFX::SetupFrameGeneration()
 	createFg.displaySize = { swapChain.swapChainDesc.Width, swapChain.swapChainDesc.Height };
 	createFg.maxRenderSize = createFg.displaySize;
 	createFg.flags = FFX_FRAMEGENERATION_ENABLE_ASYNC_WORKLOAD_SUPPORT;
+	if (globals::features::reverseZ.IsActive())
+		createFg.flags |= FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED;
 	createFg.backBufferFormat = ffxApiGetSurfaceFormatDX12(swapChain.swapChainDesc.Format);
 
 	ffx::CreateBackendDX12Desc backendDesc{};
@@ -1758,6 +1762,8 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 		contextDescription.displaySize.width = displayWidth;
 		contextDescription.displaySize.height = displayHeight;
 		contextDescription.flags = FFX_FSR3_ENABLE_UPSCALING_ONLY | FFX_FSR3_ENABLE_AUTO_EXPOSURE;
+		if (globals::features::reverseZ.IsActive())
+			contextDescription.flags |= FFX_FSR3_ENABLE_DEPTH_INVERTED;
 		if constexpr (VRSubmitColorContract::kLegacyFsrHighDynamicRange)
 			contextDescription.flags |= FFX_FSR3_ENABLE_HIGH_DYNAMIC_RANGE;
 		contextDescription.backendInterfaceUpscaling = fsrInterface;
@@ -3465,6 +3471,8 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a
 	for (uint32_t i = 0; i < a_contextCount; ++i) {
 		ffx::CreateContextDescUpscale createDesc{};
 		createDesc.flags = FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+		if (globals::features::reverseZ.IsActive())
+			createDesc.flags |= FFX_UPSCALE_ENABLE_DEPTH_INVERTED;
 		if constexpr (VRSubmitColorContract::kLegacyFsrHighDynamicRange)
 			createDesc.flags |= FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE;
 		createDesc.maxRenderSize = { a_fullRenderWidth, a_fullRenderHeight };

@@ -120,7 +120,7 @@ namespace NeuralRendering
 		std::uint32_t networkPreset = kNetworkDefault;
 		float intensity = .8f, localToneStrength = .75f, localStructureStrength = .9f, skinStructureStrength = .9f;
 		std::uint32_t style = kDefaultStyle;
-		bool useAutoMask = true, uiCorrection = false;
+		bool useAutoMask = true, uiCorrection = false, depthInverted = false;
 		float singleSubrectScale = 1;
 	};
 	using CreateFeature = int (*)(ID3D12GraphicsCommandList*, unsigned, NVSDK_NGX_Parameter*, NVSDK_NGX_Handle**);
@@ -473,6 +473,22 @@ namespace
 		Require(!policy.failed && !policy.Expired(30200), "new explicit request inherited the retired failure");
 	}
 }
+void DepthEncoding()
+{
+	using namespace NeuralRendering;
+	const UpscalingDLSS::Extent extent{ 320, 192 };
+	const auto layout = BuildNativeEvaluationLayout(extent, extent, extent, {}, { 0, 0, 320, 192 }, { true, 320.f, 192.f }, false);
+	ID3D12GraphicsCommandList commands;
+	ID3D12Resource resource;
+	for (bool reverse : { false, true }) {
+		Runtime runtime;
+		Tuning tuning;
+		tuning.depthInverted = reverse;
+		Require(runtime.Execute(&commands, 0, &resource, &resource, &resource, &resource, nullptr, layout, tuning, false, nullptr, nullptr, nullptr, 0, false), "Depth encoding dispatch failed");
+		Require(evaluations.back().at("DLSSNR.DepthInverted") == unsigned(reverse), "NR provider received the wrong guide encoding");
+	}
+}
+
 int main()
 {
 	try {
@@ -480,6 +496,7 @@ int main()
 		NativeCreation();
 		NetworkCreation();
 		InvalidationAndLease();
+		DepthEncoding();
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

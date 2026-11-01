@@ -56,6 +56,9 @@
     "Capture Frame Count": 20,
     "Enable RenderDoc Capture": false
   },
+  "Reverse Z": {
+    "EnableReverseZBuffer": true
+  },
   "Replace Original Shaders": {
     "BloodSplatter": true,
     "DistantTree": true,
@@ -72,15 +75,15 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-quality",
-    "presetVersion": "d2026.10.31.7",
+    "presetVersion": "d2026.11.01.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
       "maximumVersionExclusive": "3.22"
     },
     "settingsContract": {
-      "revision": 26,
-      "sourceTreeSha256": "A982403D0B70DBCA4F9E823F5E96C9B9890D1C9190F69557F90238242FEA39C4"
+      "revision": 28,
+      "sourceTreeSha256": "AA7C6726F4D49524983F3CD65DABBA232D80A3CDCB3C5575BC7625EEA513AFA7"
     }
   },
   "Upscaling": {

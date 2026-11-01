@@ -1,4 +1,5 @@
 #include "Hooks.h"
+#include "Features/ReverseZ.h"
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 #	include "Diagnostics/NvPerf.h"
 #endif
@@ -824,7 +825,10 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		phaseStartTicks = phaseEndTicks;
 	}
 
-	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect && !UseNativeWaterShaders(*shader)) {
+	const bool reverseShaderRequired = globals::features::reverseZ.IsActive() &&
+	                                   SIE::ShaderCache::IsSupportedShader(*shader) &&
+	                                   !(globals::game::isVR && std::strcmp(shader->fxpFilename, "OBBOcclusionTesting") == 0);
+	if (reverseShaderRequired || (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect && !UseNativeWaterShaders(*shader))) {
 		RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
 		RE::BSGraphics::PixelShader* pixelShader = skipPixelShader ? nullptr :
 		                                                             shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
@@ -1389,6 +1393,13 @@ struct BSShaderRenderTargets_Create
 		       globals::d3d::context;
 	}
 
+	static void PrepareCreatedRenderTargets()
+	{
+		globals::ReInit();
+		globals::InstallD3DHooks(globals::d3d::context);
+		globals::features::reverseZ.PrepareDepthTargets();
+	}
+
 	static bool RecreateAndSetupFull()
 	{
 		{
@@ -1397,8 +1408,8 @@ struct BSShaderRenderTargets_Create
 			if (globals::state)
 				globals::state->InvalidateRenderTargetResourcePublication();
 			func();
+			PrepareCreatedRenderTargets();
 		}
-		globals::ReInit();
 		if (!CanSetupRenderingResources())
 			return false;
 		globals::state->Setup();
@@ -1425,6 +1436,7 @@ struct BSShaderRenderTargets_Create
 				if (a_engineCreateEntered)
 					*a_engineCreateEntered = true;
 				func();
+				PrepareCreatedRenderTargets();
 			} catch (...) {
 				// Offered resources must be reclaimed while recreation still owns
 				// the unique table lock. Reachability is untrusted on this path.
@@ -1437,7 +1449,6 @@ struct BSShaderRenderTargets_Create
 				return false;
 			}
 		}
-		globals::ReInit();
 		if (!CanSetupRenderingResources())
 			return false;
 		globals::state->SetupRenderTargetResources();
@@ -1646,6 +1657,7 @@ namespace Hooks
 				stl::detour_vfunc<3, ID3D11Device_CreateBuffer>(globals::d3d::device);
 
 			globals::InstallD3DHooks(globals::d3d::context);
+			globals::features::reverseZ.InstallRuntimeHooks();
 			CSX::Api::InitializeAcceptedDrawService(globals::d3d::context);
 
 			globals::menu->Init();

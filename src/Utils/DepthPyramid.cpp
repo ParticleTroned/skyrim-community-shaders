@@ -87,7 +87,7 @@ void DepthPyramid::Allocate(uint32_t nextWidth, uint32_t nextHeight, uint32_t ey
 }
 
 bool DepthPyramid::Build(ID3D11DeviceContext1* context, ID3D11ShaderResourceView* source,
-	uint32_t sourceWidth, uint32_t sourceHeight, uint32_t activeWidth, uint32_t activeHeight, uint32_t eyes, uint32_t baseReduction)
+	uint32_t sourceWidth, uint32_t sourceHeight, uint32_t activeWidth, uint32_t activeHeight, uint32_t eyes, uint32_t baseReduction, bool sourceHasNearMask)
 {
 	valid = false;
 	if (!context || !source || !texture || !constants || !spdConstants || !counter ||
@@ -110,7 +110,7 @@ bool DepthPyramid::Build(ID3D11DeviceContext1* context, ID3D11ShaderResourceView
 	const auto reduce = [&](UINT mip) {
 		const std::array<UINT, 8> values{ std::max(width >> mip, eyes), std::max(height >> mip, 1u),
 			mip ? std::max(width >> (mip - 1), eyes) : sourceWidth, mip ? std::max(height >> (mip - 1), 1u) : sourceHeight,
-			eyes, mip == 0 ? 1u : 0u, activeWidth, activeHeight };
+			eyes, mip == 0 ? (sourceHasNearMask ? 3u : 1u) : 0u, activeWidth, activeHeight };
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		DX::ThrowIfFailed(context->Map(constants->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 		std::memcpy(mapped.pData, values.data(), sizeof(values));

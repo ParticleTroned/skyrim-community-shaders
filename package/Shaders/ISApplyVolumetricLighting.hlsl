@@ -1,5 +1,6 @@
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/VR.hlsli"
 #include "Common/VRStereoEffects.hlsli"
 
@@ -44,7 +45,7 @@ PS_OUTPUT main(PS_INPUT input)
 	depthScreenPosition = VRStereoEffects::ClampDynamicStereoUVToEyeTexel(
 		screenPosition, eyeIndex, DepthTex, FrameBuffer::DynamicResolutionParams1.xy);
 #	endif
-	float depth = DepthTex.Sample(DepthSampler, depthScreenPosition).x;
+	float depth = FrameBuffer::ToStandardDepth(DepthTex.Sample(DepthSampler, depthScreenPosition).x);
 
 #	ifdef VR
 	if (depth < 0.0001) {  // not a valid location
@@ -98,6 +99,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 												  )
 		                          .x;
+		previousDepth = FrameBuffer::ToStandardDepth(previousDepth);
 
 #	ifdef VR
 		isValid = isValid && abs(previousDepth) > 0.0001;

@@ -15,6 +15,7 @@
 #include "RE/N/NiPoint3.h"
 #include "RE/P/PlayerCharacter.h"
 #include "RenderDoc.h"
+#include "ReverseZ.h"
 #include "ScreenSpaceGI.h"
 #include "ScreenSpaceShadows.h"
 #include "ShaderCache.h"
@@ -1395,6 +1396,7 @@ namespace
 			settings.ClampToValidRanges();
 			a_vr.UpdateDepthBufferCulling();
 		}
+		globals::features::reverseZ.DrawSettings();
 		ImGui::PopID();
 	}
 }

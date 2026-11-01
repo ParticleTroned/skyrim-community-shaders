@@ -14,6 +14,7 @@
 #include "FeatureIssues.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/RenderDoc.h"
+#include "Features/ReverseZ.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -224,6 +225,10 @@ void AdvancedSettingsRenderer::RenderShaderReplacementTable()
 	auto state = globals::state;
 
 	Util::DrawSectionHeader("Replace Original Shaders");
+	ImGui::BeginDisabled(globals::features::reverseZ.IsActive());
+	const SKSE::stl::scope_exit restoreDisabled([]() noexcept { ImGui::EndDisabled(); });
+	if (globals::features::reverseZ.IsActive())
+		ImGui::TextUnformatted("Reverse Z requires shader replacements. Disable Reverse Z and restart to change them.");
 
 	if (ImGui::BeginTable("##ReplaceToggles", 3, ImGuiTableFlags_SizingStretchSame)) {
 		globals::state->ForEachShaderTypeWithIndex([&](auto type, int classIndex) {

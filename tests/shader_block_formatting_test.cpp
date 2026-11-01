@@ -1,3 +1,5 @@
+#include "reverse_z_test_stub.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>

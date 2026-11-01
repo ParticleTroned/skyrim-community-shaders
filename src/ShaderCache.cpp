@@ -2,6 +2,7 @@
 #include "Api/ShaderCompatibilityRegistry.h"
 #include "BuildProvenance.h"
 #include "Features/GrassLighting.h"
+#include "Features/ReverseZ.h"
 #include "TruePBR.h"
 
 #include "Globals.h"
@@ -2030,6 +2031,13 @@ namespace SIE
 				GetUtilityShaderDefines(descriptor, defines);
 				break;
 			}
+			if (globals::features::reverseZ.IsActive() && std::ranges::none_of(defines, [](const auto& macro) { return macro.Name && std::strcmp(macro.Name, "REVERSE_Z") == 0; })) {
+				auto end = std::ranges::find_if(defines, [](const auto& macro) { return macro.Name == nullptr; });
+				if (std::distance(end, defines.end()) < 2)
+					throw std::length_error("Reverse Z shader macro capacity exceeded");
+				*end++ = { "REVERSE_Z", "1" };
+				*end = { nullptr, nullptr };
+			}
 			if (categories) {
 				auto end = std::ranges::find_if(defines, [](const auto& macro) { return macro.Name == nullptr; });
 				if (std::distance(end, defines.end()) < 2)
@@ -3360,6 +3368,14 @@ namespace SIE
 		}
 	}
 
+	bool ShaderCache::IsSupportedShader(const RE::BSShader& shader)
+	{
+		if (!IsSupportedShader(shader.shaderType.get()))
+			return false;
+		uint32_t descriptor = 0;
+		return SShaderCache::ResolveImageSpaceDescriptor(shader, descriptor);
+	}
+
 	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShaderIfCached(const RE::BSShader& shader, uint32_t descriptor)
 	{
 		const auto typeIndex = static_cast<size_t>(shader.shaderType.underlying());
@@ -3384,7 +3400,7 @@ namespace SIE
 			// use vanilla shader
 			return nullptr;
 
-		if (!((ShaderCache::IsSupportedShader(shader) || developerMode && state->IsShaderEnabled(shader)) && state->enableVShaders)) {
+		if (!((ShaderCache::IsSupportedShader(shader) || developerMode && state->IsShaderEnabled(shader)) && (state->enableVShaders || globals::features::reverseZ.IsActive()))) {
 			return nullptr;
 		}
 
@@ -3410,7 +3426,7 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (ShouldUseAsyncCompilation()) {
+		if (ShouldUseAsyncCompilation() && !globals::features::reverseZ.IsActive()) {
 			compilationSet.Add({ ShaderClass::Vertex, shader, descriptor });
 		} else {
 			return MakeAndAddVertexShader(shader, descriptor);
@@ -3466,7 +3482,7 @@ namespace SIE
 			// use vanilla shader
 			return nullptr;
 
-		if (!((ShaderCache::IsSupportedShader(shader) || developerMode && state->IsShaderEnabled(shader)) && state->enablePShaders)) {
+		if (!((ShaderCache::IsSupportedShader(shader) || developerMode && state->IsShaderEnabled(shader)) && (state->enablePShaders || globals::features::reverseZ.IsActive()))) {
 			return nullptr;
 		}
 
@@ -3499,7 +3515,7 @@ namespace SIE
 		if (a_lookup == PixelShaderLookup::Cached)
 			return nullptr;
 		if (!IsSaveLoadSafeModeActive()) {
-			if (ShouldUseAsyncCompilation()) {
+			if (ShouldUseAsyncCompilation() && !globals::features::reverseZ.IsActive()) {
 				compilationSet.Add({ ShaderClass::Pixel, shader, descriptor });
 			} else if (auto* compiled = MakeAndAddPixelShader(shader, descriptor)) {
 				return compiled;
@@ -3524,7 +3540,7 @@ namespace SIE
 	{
 		auto state = globals::state;
 		const bool developerMode = state->IsDeveloperMode();
-		if (!((ShaderCache::IsSupportedShader(shader) || developerMode && state->IsShaderEnabled(shader)) && state->enableCShaders)) {
+		if (!((ShaderCache::IsSupportedShader(shader) || developerMode && state->IsShaderEnabled(shader)) && (state->enableCShaders || globals::features::reverseZ.IsActive()))) {
 			return nullptr;
 		}
 
@@ -3558,7 +3574,7 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (ShouldUseAsyncCompilation()) {
+		if (ShouldUseAsyncCompilation() && !globals::features::reverseZ.IsActive()) {
 			compilationSet.Add({ ShaderClass::Compute, shader, descriptor });
 		} else {
 			return MakeAndAddComputeShader(shader, descriptor);
@@ -4197,6 +4213,7 @@ namespace SIE
 			.enableRequested = IsEnableRequested(),
 			.targetEnabled = value,
 			.mode = ShaderCacheEnablePolicy::ApplyMode::StartupHydration,
+			.customShadersRequired = globals::features::reverseZ.IsActive(),
 		});
 		if (action == ShaderCacheEnablePolicy::Action::None)
 			return;
@@ -4213,6 +4230,7 @@ namespace SIE
 			.enableRequested = IsEnableRequested(),
 			.targetEnabled = value,
 			.mode = ShaderCacheEnablePolicy::ApplyMode::RuntimeTransition,
+			.customShadersRequired = globals::features::reverseZ.IsActive(),
 		});
 		if (action == ShaderCacheEnablePolicy::Action::None)
 			return;

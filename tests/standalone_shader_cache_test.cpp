@@ -1,3 +1,5 @@
+#include "reverse_z_test_stub.h"
+
 #include "Utils/ShaderCacheManifest.h"
 #include "Utils/ShaderCompiler.h"
 #include "Utils/ShaderDefines.h"

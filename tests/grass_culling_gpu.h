@@ -485,12 +485,15 @@ void RunCullingShader(bool vr)
 	}
 }
 
-void RunDepthReduction(bool vr, UINT reduction = 2)
+void RunDepthReduction(bool vr, UINT reduction = 2, bool reversed = false, bool nearMask = false)
 {
 	ComPtr<ID3D11Device> device;
 	ComPtr<ID3D11DeviceContext> context;
 	Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, device.GetAddressOf(), nullptr, context.GetAddressOf()));
-	auto code = Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassDepthCS.hlsl", "cs_5_0", { { "BASE_REDUCTION", reduction == 4 ? "4" : "2" } });
+	std::vector<D3D_SHADER_MACRO> defines{ { "BASE_REDUCTION", reduction == 4 ? "4" : "2" } };
+	if (reversed)
+		defines.push_back({ "REVERSE_Z", "1" });
+	auto code = Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassDepthCS.hlsl", "cs_5_0", defines);
 	ComPtr<ID3D11ShaderReflection> reflection;
 	Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
 	ComPtr<ID3D11ComputeShader> shader;
@@ -501,6 +504,8 @@ void RunDepthReduction(bool vr, UINT reduction = 2)
 	if (vr)
 		for (UINT y = 0; y < extent; ++y)
 			for (UINT x = extent; x < 2 * extent; ++x) pixels[y * 2 * extent + x] = .7f;
+	if (nearMask)
+		pixels[0] = reversed ? 1.0f : 0.0f;
 	const auto texture = [&](UINT width, UINT height, UINT bind, const void* data, UINT pitch, const char* name) {
 		D3D11_TEXTURE2D_DESC desc{};
 		desc.Width = width;
@@ -530,7 +535,7 @@ void RunDepthReduction(bool vr, UINT reduction = 2)
 	params.SetVariable("SourceWidth", extent * eyes);
 	params.SetVariable("SourceHeight", extent);
 	params.SetVariable("Eyes", eyes);
-	params.SetVariable("FirstLevel", 1u);
+	params.SetVariable("FirstLevel", nearMask ? 3u : 1u);
 	params.SetVariable("ActiveWidth", extent * eyes);
 	params.SetVariable("ActiveHeight", extent);
 	params.Bind(context.Get());
@@ -558,7 +563,8 @@ void RunDepthReduction(bool vr, UINT reduction = 2)
 		const auto row = reinterpret_cast<const float*>(static_cast<const uint8_t*>(mapped.pData) + y * mapped.RowPitch);
 		for (UINT eye = 0; eye < eyes; ++eye)
 			for (UINT x = 0; x < 2; ++x) {
-				const float expected = x == 0 && y == 0 ? (eye == 0 ? .2f : .7f) : 1;
+				const float farDepth = reversed ? 0.0f : 1.0f;
+				const float expected = x == 0 && y == 0 ? (eye == 0 ? (nearMask ? farDepth : .2f) : .7f) : farDepth;
 				correct &= row[eye * 2 + x] == expected;
 			}
 	}

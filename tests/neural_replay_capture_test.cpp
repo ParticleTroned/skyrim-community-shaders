@@ -65,6 +65,7 @@ namespace
 			batch.runtime = { { "path", "fixture-only-not-a-runtime.dll" }, { "version", "test-only" }, { "sha256", std::string(64, '0') } };
 			batch.adapter = { { "description", "WARP readback test; no NR performance evidence" } };
 			batch.metadata = { { "frame", 10 }, { "sourceWorldFrame", 10 }, { "generation", 1 },
+				{ "depthConvention", 0 }, { "depthGeneration", 1 },
 				{ "insertionPoint", 0 }, { "mode", 0 }, { "arrangement", 0 }, { "colorRevision", 1 },
 				{ "inputEpoch", 1 }, { "colorConfiguration", Json::object() }, { "tuning", Json::object() } };
 			Eye eye;
@@ -102,6 +103,8 @@ namespace
 		Require(manifest.at("frames").size() == 1);
 		Require(manifest.at("captureTimingIsPerformanceEvidence") == false);
 		const auto& frame = manifest.at("frames").at(0);
+		Require(frame.at("depthConvention") == fixture.batch.metadata.at("depthConvention"));
+		Require(frame.at("depthGeneration") == fixture.batch.metadata.at("depthGeneration"));
 		Require(frame.at("eyes").size() == fixture.batch.eyes.size());
 		for (const auto& eye : frame.at("eyes")) {
 			std::size_t index = 0;
@@ -152,6 +155,8 @@ int main()
 	CheckPayloads(fixture, complete);
 
 	Fixture rgba8(DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R16G16_FLOAT);
+	rgba8.batch.metadata["depthConvention"] = 1;
+	rgba8.batch.metadata["depthGeneration"] = 3;
 	rgba8.batch.metadata["mode"] = 2;
 	rgba8.batch.eyes.push_back(rgba8.batch.eyes[0]);
 	rgba8.batch.eyes[1].slot = 1;
@@ -181,6 +186,17 @@ int main()
 	fixture.context->Flush();
 	WaitWriter();
 	fixture.batch.metadata["colorRevision"] = 1;
+
+	Require(Request(2).at("ok").get<bool>());
+	fixture.batch.metadata["sourceWorldFrame"] = 10;
+	fixture.Offer();
+	fixture.batch.metadata["sourceWorldFrame"] = 11;
+	fixture.batch.metadata["depthGeneration"] = 2;
+	fixture.Offer();
+	Require(Status().at("state") == "failed");
+	fixture.context->Flush();
+	WaitWriter();
+	fixture.batch.metadata["depthGeneration"] = 1;
 
 	Require(Request().at("ok").get<bool>());
 	fixture.batch.eyes[0].featureUpscaling = true;

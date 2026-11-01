@@ -3,6 +3,7 @@
 #include "Common/LodLandscape.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
 #include "Common/VR.hlsli"
@@ -39,47 +40,47 @@ struct VS_INPUT
 
 struct VS_OUTPUT
 {
-	float4 PositionCS : SV_POSITION0;
+	float4 PositionCS: SV_POSITION0;
 
 #if !(defined(RENDER_DEPTH) && defined(RENDER_SHADOWMASK_ANY)) && SHADOWFILTER != 2
 #	if (defined(ALPHA_TEST) && ((!defined(RENDER_DEPTH) && !defined(RENDER_SHADOWMAP)) || defined(RENDER_SHADOWMAP_PB))) || defined(RENDER_NORMAL) || defined(DEBUG_SHADOWSPLIT) || defined(RENDER_BASE_TEXTURE)
-	float4 TexCoord0 : TEXCOORD0;
+	float4 TexCoord0: TEXCOORD0;
 #	endif
 
 #	if defined(RENDER_NORMAL)
-	float4 Normal : TEXCOORD1;
+	float4 Normal: TEXCOORD1;
 #	endif
 
 #	if defined(RENDER_SHADOWMAP_PB)
-	float3 TexCoord1 : TEXCOORD2;
+	float3 TexCoord1: TEXCOORD2;
 #	elif defined(ALPHA_TEST) && (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP))
-	float4 TexCoord1 : TEXCOORD2;
+	float4 TexCoord1: TEXCOORD2;
 #	elif defined(ADDITIONAL_ALPHA_MASK)
-	float2 TexCoord1 : TEXCOORD2;
+	float2 TexCoord1: TEXCOORD2;
 #	endif
 
 #	if defined(LOCALMAP_FOGOFWAR)
-	float Alpha : TEXCOORD3;
+	float Alpha: TEXCOORD3;
 #	endif
 
 #	if defined(RENDER_SHADOWMASK_ANY)
-	float4 PositionMS : TEXCOORD5;
+	float4 PositionMS: TEXCOORD5;
 #	endif
 
 #	if defined(ALPHA_TEST) && defined(VC) && defined(RENDER_SHADOWMASK_ANY)
-	float2 Alpha : TEXCOORD4;
+	float2 Alpha: TEXCOORD4;
 #	elif (defined(ALPHA_TEST) && defined(VC) && !defined(TREE_ANIM)) || defined(RENDER_SHADOWMASK_ANY)
-	float Alpha : TEXCOORD4;
+	float Alpha: TEXCOORD4;
 #	endif
 
 #	if defined(DEBUG_SHADOWSPLIT)
-	float Depth : TEXCOORD2;
+	float Depth: TEXCOORD2;
 #	endif
 #endif
 #if defined(VR)
-	float ClipDistance : SV_ClipDistance0;  // o11
-	float CullDistance : SV_CullDistance0;  // p11
-	uint EyeIndex : EYEIDX0;
+	float ClipDistance: SV_ClipDistance0;  // o11
+	float CullDistance: SV_CullDistance0;  // p11
+	uint EyeIndex: EYEIDX0;
 #endif  // VR
 };
 
@@ -135,9 +136,9 @@ VS_OUTPUT main(VS_INPUT input)
 #	if (defined(RENDER_DEPTH) && defined(RENDER_SHADOWMASK_ANY)) || SHADOWFILTER == 2
 	vsout.PositionCS.xy = input.PositionMS.xy;
 #		if defined(RENDER_SHADOWMASKDPB) || defined(RENDER_SHADOWMASKSPOT) || defined(RENDER_SHADOWMASKPB)
-	vsout.PositionCS.z = ShadowFadeParam.z;
+	vsout.PositionCS.z = (FrameBuffer::IsReverseProjection() ? 1.0 - ShadowFadeParam.z : ShadowFadeParam.z);
 #		else
-	vsout.PositionCS.z = HighDetailRange[eyeIndex].x;
+	vsout.PositionCS.z = (FrameBuffer::IsReverseProjection() ? 1.0 - HighDetailRange[eyeIndex].x : HighDetailRange[eyeIndex].x);
 #		endif
 	vsout.PositionCS.w = 1;
 #	elif defined(STENCIL_ABOVE_WATER)
@@ -252,14 +253,15 @@ VS_OUTPUT main(VS_INPUT input)
 #		endif
 
 #		if defined(RENDER_SHADOWMASK_ANY)
-	vsout.Alpha.x = 1 - pow(saturate(dot(positionCS.xyz, positionCS.xyz) / ShadowFadeParam.x), 8);
+	float3 fadePositionCS = FrameBuffer::ToStandardClip(positionCS);
+	vsout.Alpha.x = 1 - pow(saturate(dot(fadePositionCS, fadePositionCS) / ShadowFadeParam.x), 8);
 
 #			if defined(SKINNED)
 	vsout.PositionMS.xyz = positionWS.xyz;
 #			else
 	vsout.PositionMS.xyz = positionMS.xyz;
 #			endif
-	vsout.PositionMS.w = positionCS.z;
+	vsout.PositionMS.w = FrameBuffer::ToStandardClipZ(positionCS);
 #		endif
 
 #		if (defined(ALPHA_TEST) && defined(VC)) || defined(LOCALMAP_FOGOFWAR)
@@ -273,7 +275,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 #	if defined(OFFSET_DEPTH)
-	vsout.PositionCS.z += 5.0;
+	vsout.PositionCS = FrameBuffer::OffsetClipDepth(vsout.PositionCS, 5.0);
 #	endif
 
 #	ifdef VR
@@ -291,7 +293,7 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float4 Color : SV_Target0;
+	float4 Color: SV_Target0;
 };
 
 #ifdef PSHADER
@@ -484,7 +486,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 depthUv = input.PositionCS.xy * VPOSOffset.xy + VPOSOffset.zw;
 	float depth = TexDepthUtilitySampler.Sample(SampDepthSampler, depthUv).x;
 
-	shadowMapDepth = depth;
+	shadowMapDepth = FrameBuffer::ToStandardDepth(depth);
 
 #			if defined(FOCUS_SHADOW)
 	uint3 stencilDimensions;

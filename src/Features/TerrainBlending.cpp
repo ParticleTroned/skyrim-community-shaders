@@ -1,5 +1,6 @@
 #include "TerrainBlending.h"
 #include "Menu/SettingsPage.h"
+#include "ReverseZ.h"
 #include "Utils/UI.h"
 
 #include "Deferred.h"
@@ -892,6 +893,7 @@ void TerrainBlending::SetupResources()
 		mainDepth.views[0]->GetDesc(&dsvDesc);
 		DX::ThrowIfFailed(device->CreateDepthStencilView(terrainDepth.texture, &dsvDesc, &terrainDepth.views[0]));
 		Util::SetResourceName(terrainDepth.views[0], "TerrainBlending::TerrainDepth DSV");
+		globals::features::reverseZ.RegisterSceneDepthView(terrainDepth.views[0]);
 	}
 
 	{
@@ -914,13 +916,15 @@ void TerrainBlending::SetupResources()
 		uavDesc.Format = texDesc.Format;
 		blendedDepthTexture->CreateUAV(uavDesc);
 
-		texDesc.Format = DXGI_FORMAT_R16_UNORM;
-		srvDesc.Format = texDesc.Format;
-		uavDesc.Format = texDesc.Format;
+		if (!globals::features::reverseZ.IsActive()) {
+			texDesc.Format = DXGI_FORMAT_R16_UNORM;
+			srvDesc.Format = texDesc.Format;
+			uavDesc.Format = texDesc.Format;
 
-		blendedDepthTexture16 = new Texture2D(texDesc, "TerrainBlending::BlendedDepth16");
-		blendedDepthTexture16->CreateSRV(srvDesc);
-		blendedDepthTexture16->CreateUAV(uavDesc);
+			blendedDepthTexture16 = new Texture2D(texDesc, "TerrainBlending::BlendedDepth16");
+			blendedDepthTexture16->CreateSRV(srvDesc);
+			blendedDepthTexture16->CreateUAV(uavDesc);
+		}
 
 		texDesc.Format = DXGI_FORMAT_R32_FLOAT;
 		srvDesc.Format = texDesc.Format;
@@ -1020,7 +1024,7 @@ void TerrainBlending::BlendPrepassDepths()
 	auto context = globals::d3d::context;
 	if (!context || !depthBlendCB || !depthSRVBackup || !terrainDepth.texture || !terrainDepth.depthSRV ||
 		!blendedDepthTexture || !blendedDepthTexture->uav ||
-		!blendedDepthTexture16 || !blendedDepthTexture16->uav ||
+		(!globals::features::reverseZ.IsActive() && (!blendedDepthTexture16 || !blendedDepthTexture16->uav)) ||
 		!mainDepthCopy || !mainDepthCopy->uav) {
 		return;
 	}
@@ -1035,8 +1039,8 @@ void TerrainBlending::BlendPrepassDepths()
 	// TB depth products are sampled during replay with scene pixel coordinates.
 	const bool submitStageSceneDomain = globals::features::upscaling.loaded && globals::features::upscaling.IsSubmitStageUpscalingActive();
 	const auto blendSize = Util::ConvertToDynamic(globals::state->screenSize, submitStageSceneDomain);
-	const uint32_t maxBlendWidth = std::min({ terrainDepthDesc.Width, blendedDepthTexture->desc.Width, blendedDepthTexture16->desc.Width, mainDepthCopy->desc.Width });
-	const uint32_t maxBlendHeight = std::min({ terrainDepthDesc.Height, blendedDepthTexture->desc.Height, blendedDepthTexture16->desc.Height, mainDepthCopy->desc.Height });
+	const uint32_t maxBlendWidth = std::min({ terrainDepthDesc.Width, blendedDepthTexture->desc.Width, (blendedDepthTexture16 ? blendedDepthTexture16->desc.Width : blendedDepthTexture->desc.Width), mainDepthCopy->desc.Width });
+	const uint32_t maxBlendHeight = std::min({ terrainDepthDesc.Height, blendedDepthTexture->desc.Height, (blendedDepthTexture16 ? blendedDepthTexture16->desc.Height : blendedDepthTexture->desc.Height), mainDepthCopy->desc.Height });
 	const uint32_t blendWidth = GetDepthBlendExtent(blendSize.x, maxBlendWidth);
 	const uint32_t blendHeight = GetDepthBlendExtent(blendSize.y, maxBlendHeight);
 	if (!blendWidth || !blendHeight)
@@ -1053,7 +1057,7 @@ void TerrainBlending::BlendPrepassDepths()
 		ID3D11ShaderResourceView* views[2] = { depthSRVBackup, terrainDepth.depthSRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11UnorderedAccessView* uavs[3] = { blendedDepthTexture->uav.get(), blendedDepthTexture16->uav.get(), mainDepthCopy->uav.get() };
+		ID3D11UnorderedAccessView* uavs[3] = { blendedDepthTexture->uav.get(), (blendedDepthTexture16 ? blendedDepthTexture16->uav.get() : nullptr), mainDepthCopy->uav.get() };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		auto buffer = depthBlendCB->CB();

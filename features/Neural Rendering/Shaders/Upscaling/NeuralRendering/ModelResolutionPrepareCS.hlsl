@@ -1,3 +1,4 @@
+#include "Common/DepthOrder.hlsli"
 #include "Upscaling/NeuralRendering/ModelResolutionCommon.hlsli"
 #ifdef NR_PERIPHERAL_COMPRESSION
 #	include "Upscaling/NeuralRendering/PeripheralCompression.hlsli"
@@ -100,7 +101,7 @@ void PrepareGuides(uint2 id)
 		float2 atlasPosition = (float2(pixel) + 0.5) * float2(ModelSize) / float2(modelGuideSize);
 		uint tileIndex = FindPackedCrop(atlasPosition, false);
 		if (tileIndex == PackedCount) {
-			ProxyDepth[pixel] = 1.0;
+			ProxyDepth[pixel] = DepthOrder::Far();
 			ProxyMotion[pixel] = 0.0;
 			return;
 		}
@@ -114,7 +115,7 @@ void PrepareGuides(uint2 id)
 	}
 	uint2 first = min(uint2(floor(lower)), guideSize - 1u);
 	uint2 end = min(uint2(ceil(upper)), guideSize);
-	float nearest = 1.0;
+	float nearest = DepthOrder::Far();
 	float2 motion = 0.0;
 	bool foundDepth = false;
 	// Guide and colour grids retain their own resolutions and matching depth/motion samples.
@@ -124,7 +125,7 @@ void PrepareGuides(uint2 id)
 		{
 			float depth = InputDepth.Load(int3(x, y, 0));
 			float2 velocity = InputMotion.Load(int3(x, y, 0));
-			if (isfinite(depth) && depth >= 0.0 && depth <= 1.0 && all(isfinite(velocity)) && (!foundDepth || depth < nearest)) {
+			if (isfinite(depth) && depth >= 0.0 && depth <= 1.0 && all(isfinite(velocity)) && (!foundDepth || DepthOrder::IsNearer(depth, nearest))) {
 				nearest = depth;
 				motion = velocity;
 				foundDepth = true;

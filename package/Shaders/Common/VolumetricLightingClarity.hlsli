@@ -1,6 +1,8 @@
 #ifndef __VOLUMETRIC_LIGHTING_CLARITY_HLSLI__
 #define __VOLUMETRIC_LIGHTING_CLARITY_HLSLI__
 
+#include "Common/DepthOrder.hlsli"
+
 #include "Common/VR.hlsli"
 #include "Common/VolumetricLighting.hlsli"
 
@@ -41,9 +43,9 @@ namespace VolumetricLighting
 		if (width == 0 || height == 0)
 			return 0.0;
 		float depth = depthSource.Load(int3(clamp(int2(uv * float2(width, height)), 0, int2(width, height) - 1), 0)).x;
-		if (!IsFinite(depth) || depth <= 0.0 || depth > 1.0)
+		if (!IsFinite(depth) || depth < 0.0 || depth > 1.0 || abs(depth - DepthOrder::Near()) <= 1e-6)
 			return 0.0;
-		float denominator = cameraData.x - depth * cameraData.z;
+		float denominator = DepthOrder::Reversed ? cameraData.y + depth * cameraData.z : cameraData.x - depth * cameraData.z;
 		float linearDepth = cameraData.w / max(denominator, 1e-6);
 		return IsFinite(linearDepth) && denominator > 0.0 ? max(linearDepth, 0.0) : 0.0;
 	}

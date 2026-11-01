@@ -98,6 +98,7 @@ namespace NeuralRendering
 		std::uint32_t style = kDefaultStyle;
 		bool useAutoMask = true;
 		bool uiCorrection = false;
+		bool depthInverted = false;
 		// Private Feature 18 single-rectangle compute ROI.  One means the
 		// full resource and remains the production default.
 		float singleSubrectScale = 1.0f;

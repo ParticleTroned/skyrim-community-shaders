@@ -118,6 +118,7 @@ int main(int argc, char** argv) {
         Check(issues.empty(), "Absent feature directory must be accepted");
         std::filesystem::create_directory(Util::PathHelpers::featuresPath);
         WriteINI("PerformanceTuning.ini");
+        WriteINI("ReverseZ.ini");
         WriteINI("FoliageLighting.ini");
         WriteINI("LinearLighting.ini");
         for (const auto* alias : { "CSUtility.ini", "OSUtility.ini", "CS Utility.ini", "OS Utility.ini" })
@@ -129,6 +130,11 @@ int main(int argc, char** argv) {
         std::ofstream(Util::PathHelpers::featuresPath / "Ignored.txt") << "ignored";
         Check(Feature::IsFeatureKnown("PerformanceTuning"), "Missing real version registration");
         Check(FeatureVersions::FEATURE_CORE_NAMES.contains("PerformanceTuning"), "Missing core registration");
+        REL::Version reverseZVersion{};
+        Check(Feature::IsFeatureKnown("ReverseZ", &reverseZVersion), "Reverse Z must pass the production feature-load gate");
+        Check(reverseZVersion.major == 1 && reverseZVersion.minor == 0 && reverseZVersion.patch == 0,
+            "Reverse Z minimum version must match its core manifest");
+        Check(FeatureVersions::FEATURE_CORE_NAMES.contains("ReverseZ"), "Reverse Z must be registered as core");
         Check(!Feature::FindRegisteredFeatureByShortName("PerformanceTuning"), "Fixture must model a built-in menu");
         ScanForOrphanedFeatureINIs(false);
         Check(issues.empty(), "Known metadata-only INI was incorrectly reported");

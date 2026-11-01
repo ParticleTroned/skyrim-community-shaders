@@ -1,4 +1,5 @@
 #include "Streamline.h"
+#include "Features/ReverseZ.h"
 #include "StreamlineConstants.h"
 
 #include <algorithm>
@@ -1947,7 +1948,8 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 	slConstants.cameraUp = { viewMatrix._21, viewMatrix._22, viewMatrix._23 };
 	slConstants.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
 	slConstants.cameraPos = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
-	slConstants.depthInverted = sl::Boolean::eFalse;
+	const auto* depthSnapshot = upscaling.GetSubmitTemporalSnapshotForDispatch();
+	slConstants.depthInverted = (depthSnapshot ? depthSnapshot->key.depthConvention == Depth::Convention::Reversed : globals::features::reverseZ.IsActive()) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 	sl::matrixFullInvert(slConstants.clipToCameraView, slConstants.cameraViewToClip);
 
 	// Preserve each viewport's crop basis around camera-relative reprojection.

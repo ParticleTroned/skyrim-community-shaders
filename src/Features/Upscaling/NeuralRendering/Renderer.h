@@ -1,5 +1,6 @@
 #pragma once
 #include "PeripheralCompressionPolicy.h"
+#include "Utils/DepthConvention.h"
 
 #include "../DLSSViewportCrop.h"
 #include "CaptureEvidence.h"
@@ -253,6 +254,8 @@ namespace NeuralRendering
 		std::shared_ptr<const CharacterPreparationEvidence> characterEvidence;
 		ID3D11Resource* depthGuide = nullptr;
 		ID3D11ShaderResourceView* depthGuideSRV = nullptr;
+		Depth::Convention depthConvention = Depth::Convention::Standard;
+		std::uint64_t depthGeneration = 0;
 		ID3D11Resource* motionVectors = nullptr;
 		ID3D11Resource* colorOutput = nullptr;
 		/** Optional private UAV of colorOutput for fused reduced-resolution reconstruction and selection. */

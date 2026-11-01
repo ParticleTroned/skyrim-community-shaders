@@ -1,5 +1,6 @@
 #include "ScreenSpaceShadows.h"
 #include "Menu/SettingsPage.h"
+#include "ReverseZ.h"
 
 #include "Features/TerrainBlending.h"
 #include "FoveatedCommon.h"
@@ -610,8 +611,8 @@ void ScreenSpaceShadows::DrawShadows()
 				data.WaveOffset[0] = dispatchData.WaveOffset_Shader[0];
 				data.WaveOffset[1] = dispatchData.WaveOffset_Shader[1];
 
-				data.FarDepthValue = 1.0f;
-				data.NearDepthValue = 0.0f;
+				data.FarDepthValue = globals::features::reverseZ.GetFarDepth();
+				data.NearDepthValue = globals::features::reverseZ.GetNearDepth();
 
 				data.DynamicRes = dynamicRes;
 				data.DynamicSampleCount = dynamicSampleCount;
@@ -922,10 +923,10 @@ void ScreenSpaceShadows::SetupResources()
 		samplerDesc.MaxAnisotropy = 1;
 		samplerDesc.MinLOD = 0;
 		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-		samplerDesc.BorderColor[0] = 1.0f;
-		samplerDesc.BorderColor[1] = 1.0f;
-		samplerDesc.BorderColor[2] = 1.0f;
-		samplerDesc.BorderColor[3] = 1.0f;
+		samplerDesc.BorderColor[0] = globals::features::reverseZ.GetFarDepth();
+		samplerDesc.BorderColor[1] = globals::features::reverseZ.GetFarDepth();
+		samplerDesc.BorderColor[2] = globals::features::reverseZ.GetFarDepth();
+		samplerDesc.BorderColor[3] = globals::features::reverseZ.GetFarDepth();
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointBorderSampler));
 	}
 

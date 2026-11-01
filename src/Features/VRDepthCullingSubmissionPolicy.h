@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Utils/DepthConvention.h"
 #include "VRDepthCullingTemporalPolicy.h"
 
 #include <array>
@@ -11,11 +12,8 @@
 
 namespace VRDepthCullingSubmissionPolicy
 {
-	/** Native depth remains standard Z; coverage belongs to the native producer. */
-	enum class DepthConvention : std::uint8_t
-	{
-		Standard
-	};
+	/** Native depth encoding belongs to its producer publication. */
+	using DepthConvention = Depth::Convention;
 	enum class Reason : std::uint8_t
 	{
 		None,

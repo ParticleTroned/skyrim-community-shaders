@@ -1,6 +1,7 @@
 #include "Upscaling.h"
 #include "Api/AcceptedDrawService.h"
 #include "Menu/SettingsPage.h"
+#include "ReverseZ.h"
 #include "Upscaling/FoveatedMaskCalibrationJson.h"
 #include "Upscaling/NeuralRendering/FramebufferTransaction.h"
 #include "Utils/GpuMemoryBudget.h"
@@ -24056,6 +24057,8 @@ void Upscaling::CaptureSubmitTemporalSnapshot()
 		.outputWidth = ClampPositiveDimension(outputSize.x) / 2u,
 		.outputHeight = ClampPositiveDimension(outputSize.y),
 		.compositorCycle = submitTemporalCompositorCycle.load(std::memory_order_acquire),
+		.depthConvention = globals::features::reverseZ.GetConvention(),
+		.depthGeneration = globals::features::reverseZ.GetGeneration(),
 	};
 	auto* depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture;
 	auto* motion = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].texture;
@@ -24080,6 +24083,7 @@ void Upscaling::CaptureSubmitTemporalSnapshot()
 		.verticalFov = Util::GetVerticalFOVRad(),
 		.frameTimeMilliseconds = *globals::game::deltaTime * 1000.0f,
 		.historyReset = captureHistoryReset,
+		.depthConvention = globals::features::reverseZ.GetConvention(),
 	};
 	std::array<SubmitEyeCamera, 2> eyes{};
 	const auto& camera = globals::game::frameBufferCached;
@@ -45422,6 +45426,9 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 			args.colorInput = a_colorInput;
 			args.depthGuide = foveatedCenterDepth[eyeIndex]->resource.get();
 			args.depthGuideSRV = foveatedCenterDepth[eyeIndex]->srv.get();
+			const auto* depthSnapshot = GetSubmitTemporalSnapshotForDispatch();
+			args.depthConvention = depthSnapshot ? depthSnapshot->key.depthConvention : globals::features::reverseZ.GetConvention();
+			args.depthGeneration = depthSnapshot ? depthSnapshot->key.depthGeneration : globals::features::reverseZ.GetGeneration();
 			args.motionVectors = foveatedCenterMotionVectors[eyeIndex]->resource.get();
 			args.colorOutput = neuralOutput;
 			args.colorWidth = a_colorWidth;
@@ -45449,6 +45456,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 			args.featureUpscaling = *featureUpscaling;
 			args.reset = NeuralRendering::RunsBeforeDlss(GetNeuralRenderingArrangement()) || ShouldResetHistoryThisFrame();
 			args.tuning = BuildNeuralRenderingTuning(settings);
+			args.tuning.depthInverted = args.depthConvention == Depth::Convention::Reversed;
 			bool characterEvaluationRequired = true;
 			if (!PrepareCharacterSelectionMask(
 					settings, eyeIndex, neuralSourceFrame,
@@ -46341,6 +46349,9 @@ bool Upscaling::PrepareFlatReducedResolutionNeuralInput(ID3D11Resource* color, I
 		args.colorOutput = foveatedCenterNeuralSelected[0]->resource.get();
 		args.depthGuide = foveatedCenterDepth[0]->resource.get();
 		args.depthGuideSRV = foveatedCenterDepth[0]->srv.get();
+		const auto* depthSnapshot = GetSubmitTemporalSnapshotForDispatch();
+		args.depthConvention = depthSnapshot ? depthSnapshot->key.depthConvention : globals::features::reverseZ.GetConvention();
+		args.depthGeneration = depthSnapshot ? depthSnapshot->key.depthGeneration : globals::features::reverseZ.GetGeneration();
 		args.motionVectors = foveatedCenterMotionVectors[0]->resource.get();
 		args.colorWidth = args.guideWidth = args.outputWidth = width;
 		args.colorHeight = args.guideHeight = args.outputHeight = height;
@@ -46352,6 +46363,7 @@ bool Upscaling::PrepareFlatReducedResolutionNeuralInput(ID3D11Resource* color, I
 		args.featureUpscaling = false;
 		args.reset = true;  // Route C leaves temporal reconstruction to ordinary DLSS.
 		args.tuning = BuildNeuralRenderingTuning(settings);
+		args.tuning.depthInverted = args.depthConvention == Depth::Convention::Reversed;
 		bool requiresEvaluation = true;
 		if (!PrepareCharacterSelectionMask(settings, 0, args.sourceWorldFrame, requiresEvaluation, args))
 			return false;
@@ -46700,6 +46712,9 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			                           emptyGuides.generation == args.generation &&
 			                           (emptyGuides.emptyEyeMask & (1u << eye)) != 0;
 			args.depthGuideSRV = skippedGuides ? nullptr : depthGuides[eye]->srv.get();
+			const auto* depthSnapshot = GetSubmitTemporalSnapshotForDispatch();
+			args.depthConvention = depthSnapshot ? depthSnapshot->key.depthConvention : globals::features::reverseZ.GetConvention();
+			args.depthGeneration = depthSnapshot ? depthSnapshot->key.depthGeneration : globals::features::reverseZ.GetGeneration();
 			args.motionVectors = motionGuides[eye]->resource.get();
 			args.colorOutput = GetSubmitNeuralFloatEvaluationOutput(eye, directCommit);
 			args.colorWidth = rect.outputWidth;
@@ -46736,6 +46751,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			args.featureUpscaling = *featureUpscaling;
 			args.reset = ShouldResetHistoryThisFrame();
 			args.tuning = BuildNeuralRenderingTuning(settings);
+			args.tuning.depthInverted = args.depthConvention == Depth::Convention::Reversed;
 			bool characterEvaluationRequired = true;
 			if (!PrepareCharacterSelectionMask(
 					settings, eye, a_neuralSourceFrame,
@@ -47332,7 +47348,7 @@ void Upscaling::FinalizeMainFinalLdrNeuralPresentation() noexcept
 			!mainFinalLdrDepthProof.SupportsOutputLayout(
 				pending.inputWidthPerEye, pending.inputHeight,
 				pending.outputWidthPerEye, pending.outputHeight,
-				pending.frame, GetCOMIdentityAddress(depth.texture)) ||
+				pending.frame, GetCOMIdentityAddress(depth.texture), globals::features::reverseZ.GetConvention(), globals::features::reverseZ.GetGeneration()) ||
 			!TryGetTexture2DDesc(depth.texture, depthDesc) ||
 			depthDesc.Width != outputLayout.width ||
 			depthDesc.Height != outputLayout.height ||
@@ -58478,7 +58494,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			.inputHeight = eyeHeightIn,
 			.outputWidth = eyeWidthOut,
 			.outputHeight = eyeHeightOut,
-			.compositorCycle = a_compositorCycleToken
+			.compositorCycle = a_compositorCycleToken,
+			.depthConvention = globals::features::reverseZ.GetConvention(),
+			.depthGeneration = globals::features::reverseZ.GetGeneration(),
 		};
 		bool temporalReady = false;
 		uint32_t producerFrame = 0;
@@ -58742,6 +58760,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			.outputWidth = eyeWidthOut,
 			.outputHeight = eyeHeightOut,
 			.compositorCycle = a_compositorCycleToken,
+			.depthConvention = globals::features::reverseZ.GetConvention(),
+			.depthGeneration = globals::features::reverseZ.GetGeneration(),
 		};
 		{
 			std::lock_guard lock(submitTemporalInputsMutex);
@@ -64494,6 +64514,8 @@ const char* Upscaling::GetVRVendorRuntimeLifecyclePhaseName(VRVendorRuntimeLifec
 Upscaling::VRRenderScaleResourceKey Upscaling::BuildVRRenderScaleResourceKey(const VRRenderScaleProfileSnapshot& a_profile) const
 {
 	VRRenderScaleResourceKey key{};
+	key.reversedDepth = globals::features::reverseZ.IsActive();
+	key.additionalDepthBytesPerPixel = globals::features::reverseZ.GetAdditionalDepthBytesPerPixel();
 	key.valid =
 		a_profile.valid &&
 		a_profile.displayEyeWidth != 0 &&
@@ -64553,6 +64575,7 @@ Upscaling::VRRenderScaleResourceCompatibility Upscaling::CompareVRRenderScaleRes
 	}
 
 	compatibility.canReuseRenderTargets =
+		a_current.reversedDepth == a_target.reversedDepth &&
 		a_current.active == a_target.active &&
 		a_current.displayEyeWidth == a_target.displayEyeWidth &&
 		a_current.displayEyeHeight == a_target.displayEyeHeight &&
@@ -64613,6 +64636,7 @@ uint64_t Upscaling::EstimateVRRenderScaleResourceBytes(const VRRenderScaleResour
 	const uint64_t outputPixels =
 		static_cast<uint64_t>(a_key.displayEyeWidth) * a_key.displayEyeHeight * contextCount;
 	uint64_t estimatedBytes = inputPixels * 24u + outputPixels * 8u;
+	estimatedBytes += static_cast<uint64_t>(inputPixels * a_key.additionalDepthBytesPerPixel);
 	if (!a_key.active)
 		return estimatedBytes;
 
@@ -68190,7 +68214,7 @@ void Upscaling::UpscaleDepth()
 		context->PSSetShader(depthUpscalePS, nullptr, 0);
 		context->Draw(3, 0);
 		if (neuralDepthProofRequested)
-			mainFinalLdrDepthProof = { state->frameCount, GetCOMIdentityAddress(depth.texture) };
+			mainFinalLdrDepthProof = { state->frameCount, GetCOMIdentityAddress(depth.texture), globals::features::reverseZ.GetConvention(), globals::features::reverseZ.GetGeneration() };
 
 		// Depth copy is also used on VR. The dynamic no-render-scale underwater
 		// repair needs the original dynamic depth until the mask pass completes.

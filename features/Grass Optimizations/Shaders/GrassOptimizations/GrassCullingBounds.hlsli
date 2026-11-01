@@ -1,6 +1,8 @@
 #ifndef GRASS_CULLING_BOUNDS_HLSLI
 #define GRASS_CULLING_BOUNDS_HLSLI
 
+#include "Common/DepthOrder.hlsli"
+
 float GrassBasisNorm(float3x3 basis)
 {
 	float3 diagonal = float3(dot(basis[0], basis[0]), dot(basis[1], basis[1]), dot(basis[2], basis[2]));
@@ -19,9 +21,11 @@ bool GrassProjectSphere(row_major float4x4 projection, float3 center, float radi
 	float radiusSquared = radius * radius;
 	float wNorm = dot(projection[3].xyz, projection[3].xyz);
 	float denominator = clip.w * clip.w - radiusSquared * wNorm;
+	float nearClip = DepthOrder::Reversed ? clip.w - clip.z : clip.z;
+	float3 nearPlane = DepthOrder::Reversed ? projection[3].xyz - projection[2].xyz : projection[2].xyz;
 	if (!all(isfinite(clip)) || !isfinite(radiusSquared) || radius <= 0 ||
 		clip.w <= 1e-5 || denominator <= 1e-4 * clip.w * clip.w ||
-		clip.z <= radius * length(projection[2].xyz))
+		nearClip <= radius * length(nearPlane))
 		return false;
 	float3 low = 0, high = 0;
 	[unroll] for (uint axis = 0; axis < 3; ++axis)
@@ -44,8 +48,8 @@ bool GrassProjectSphere(row_major float4x4 projection, float3 center, float radi
 	}
 	lo = low.xy;
 	hi = high.xy;
-	nearDepth = low.z;
-	return all(isfinite(low)) && all(isfinite(high)) && nearDepth > 0;
+	nearDepth = DepthOrder::Reversed ? high.z : low.z;
+	return all(isfinite(low)) && all(isfinite(high)) && nearDepth >= 0 && nearDepth <= 1;
 }
 
 #endif

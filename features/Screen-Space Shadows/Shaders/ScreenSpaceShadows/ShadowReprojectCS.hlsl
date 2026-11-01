@@ -9,7 +9,7 @@
 
 #ifdef VR
 
-#	if defined(TERRAIN_BLENDING)
+#	if defined(TERRAIN_BLENDING) || defined(REVERSE_Z)
 Texture2D<float> SrcDepthTexture : register(t0);
 #	else
 Texture2D<unorm float> SrcDepthTexture : register(t0);
@@ -68,7 +68,7 @@ float ApplyFoveatedOutputFade(float shadow, float centerWeight)
 	float sourceShadow = SrcShadowTexture[dtid];
 	float depth = SrcDepthTexture[dtid];
 
-	if (depth < 1e-5 || depth >= 1.0) {
+	if (!DepthOrder::IsInteriorDepth(depth, 1e-5)) {
 		OutShadowTexture[dtid] = sourceShadow;
 		return;
 	}
@@ -92,8 +92,7 @@ float ApplyFoveatedOutputFade(float shadow, float centerWeight)
 	}
 
 	float otherDepth = SrcDepthTexture[reprojection.otherPx];
-	if (otherDepth < 1e-5 ||
-		otherDepth >= 1.0 ||
+	if (!DepthOrder::IsInteriorDepth(otherDepth, 1e-5) ||
 		SharedData::GetScreenDepth(otherDepth) < VR_FP_Z ||
 		!Stereo::IsReprojectionExact(reprojection, depth, otherDepth, kDepthAgreeThreshold)) {
 		OutShadowTexture[dtid] = ApplyFoveatedOutputFade(result, centerWeight);

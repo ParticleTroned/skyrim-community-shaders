@@ -1,4 +1,5 @@
 #include "State.h"
+#include "Features/ReverseZ.h"
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 #	include "Diagnostics/NvPerf.h"
 #endif
@@ -1851,6 +1852,10 @@ void State::SetDefines(std::string a_defines)
 			continue;
 		}
 		auto name = pystring::strip(token[0]);
+		if (name == "REVERSE_Z" || name.starts_with("CSX_DEPTH_ORDER_TEST_")) {
+			logger::warn("Depth convention defines are renderer-owned; ignoring {}", name);
+			continue;
+		}
 		std::string definition;
 		if (token.size() == 2) {
 			definition = pystring::strip(token[1]);
@@ -1879,6 +1884,8 @@ std::shared_ptr<const State::ShaderDefinesSnapshot> State::GetShaderDefinesSnaps
 
 bool State::ShaderEnabled(const RE::BSShader::Type a_type)
 {
+	if (globals::features::reverseZ.IsActive() && SIE::ShaderCache::IsSupportedShader(a_type))
+		return true;
 	if (a_type > RE::BSShader::Type::None && a_type < RE::BSShader::Type::Total) {
 		return enabledClasses[magic_enum::enum_integer(a_type) - 1];
 	}

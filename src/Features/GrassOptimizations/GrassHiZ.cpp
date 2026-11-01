@@ -1,4 +1,5 @@
 #include "GrassHiZ.h"
+#include "Features/ReverseZ.h"
 #include "Globals.h"
 #include "GpuPass.h"
 #include "GrassD3DState.h"
@@ -151,6 +152,8 @@ bool GrassHiZ::Build(ID3D11DeviceContext1* context, uint32_t frame)
 			mainView.Texture2D.MipLevels = 1;
 			if (mainDesc.Format == DXGI_FORMAT_R32_TYPELESS)
 				mainView.Format = DXGI_FORMAT_R32_FLOAT;
+			else if (mainDesc.Format == DXGI_FORMAT_R32G8X24_TYPELESS)
+				mainView.Format = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
 			else if (mainDesc.Format == DXGI_FORMAT_R24G8_TYPELESS)
 				mainView.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
 			else
@@ -223,7 +226,7 @@ bool GrassHiZ::Build(ID3D11DeviceContext1* context, uint32_t frame)
 	CS_GPU_PASS("GrassOptimizations::BuildHiZ");
 #endif
 	OutputState restoreOutputs(context);
-	if (!pyramid.Build(context, source, desc.Width, desc.Height, currentWidth, currentHeight, eyes, 4))
+	if (!pyramid.Build(context, source, desc.Width, desc.Height, currentWidth, currentHeight, eyes, 4, globals::game::isVR && globals::features::reverseZ.IsActive()))
 		GRASS_HIZ_FAIL(Resources);
 
 	scale = { float(currentWidth) / (width * 4), float(currentHeight) / (height * 4), 0, 0 };

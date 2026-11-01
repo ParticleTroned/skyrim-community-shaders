@@ -320,6 +320,8 @@ namespace NeuralRendering
 				left.tuning.style == right.tuning.style &&
 				left.tuning.useAutoMask == right.tuning.useAutoMask &&
 				left.tuning.uiCorrection == right.tuning.uiCorrection &&
+				left.depthConvention == right.depthConvention && left.depthGeneration == right.depthGeneration &&
+				left.tuning.depthInverted == right.tuning.depthInverted &&
 				left.tuning.singleSubrectScale == right.tuning.singleSubrectScale;
 			if (SameIdentity(left.device, right.device) &&
 				SameIdentity(left.context, right.context) &&
@@ -610,6 +612,8 @@ namespace NeuralRendering
 
 		struct HistoryKey
 		{
+			Depth::Convention depthConvention = Depth::Convention::Standard;
+			std::uint64_t depthGeneration = 0;
 			ResourceKey resources{};
 			std::uint64_t generation = 0;
 			InsertionPoint insertionPoint = kDefaultInsertionPoint;
@@ -1235,6 +1239,8 @@ namespace NeuralRendering
 		if (!a_resources.nativeLayout.color.valid.Fits(a_args.colorWidth, a_args.colorHeight) ||
 			!a_resources.nativeLayout.depth.valid.Fits(a_args.guideWidth, a_args.guideHeight))
 			return fail("the Feature 18 compute rectangle could not be mapped to its inputs");
+		if (a_args.tuning.depthInverted != (a_args.depthConvention == Depth::Convention::Reversed))
+			return fail("Feature 18 guide encoding and provider depth flag disagree");
 		if (!IsFiniteTuning(a_args.tuning))
 			return fail("Feature 18 tuning values are outside their validated ranges");
 		if (a_args.tuning.uiCorrection)
@@ -1453,6 +1459,8 @@ namespace NeuralRendering
 		}
 #endif
 		a_resources.historyKey = {
+			.depthConvention = a_args.depthConvention,
+			.depthGeneration = a_args.depthGeneration,
 			.resources = a_resources.resourceKey,
 			.generation = a_args.generation,
 			.insertionPoint = a_args.insertionPoint,
@@ -4308,6 +4316,7 @@ namespace NeuralRendering
 		const auto& tuning = first.tuning;
 		batch.metadata = {
 			{ "frame", first.frameId }, { "sourceWorldFrame", first.sourceWorldFrame }, { "generation", first.generation },
+			{ "depthConvention", static_cast<uint32_t>(first.depthConvention) }, { "depthGeneration", first.depthGeneration },
 			{ "insertionPoint", static_cast<uint32_t>(first.insertionPoint) },
 			{ "mode", static_cast<uint32_t>(*context.renderingMode) },
 			{ "arrangement", static_cast<uint32_t>(ResolvePipelineArrangement(*context.renderingMode)) },
@@ -4318,7 +4327,7 @@ namespace NeuralRendering
 			{ "providerBlending", first.providerBlending },
 			{ "tuning", { { "intensity", tuning.intensity }, { "localToneStrength", tuning.localToneStrength },
 							{ "localStructureStrength", tuning.localStructureStrength }, { "skinStructureStrength", tuning.skinStructureStrength },
-							{ "style", tuning.style }, { "useAutoMask", tuning.useAutoMask }, { "uiCorrection", tuning.uiCorrection },
+							{ "style", tuning.style }, { "useAutoMask", tuning.useAutoMask }, { "uiCorrection", tuning.uiCorrection }, { "depthInverted", tuning.depthInverted },
 							{ "singleSubrectScale", tuning.singleSubrectScale } } },
 			{ "execution", execution ? Evidence::ExecutionJson(*execution) : nlohmann::json(nullptr) },
 			{ "stage", "native_nr_before_colour_reconstruction_and_csx_composite" }

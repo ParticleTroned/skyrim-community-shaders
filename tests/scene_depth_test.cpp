@@ -1,3 +1,5 @@
+#include "reverse_z_test_stub.h"
+
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -252,6 +254,7 @@ struct Fixture
 	Flags flags;
 	Fixture()
 	{
+		globals::features::reverseZ = {};
 		globals::state = &state;
 		globals::shaderCache = &shaderCache;
 		globals::deferred = &deferred;
@@ -281,6 +284,9 @@ void TestSources()
 	Check(!f.deferred.IsSceneDepthFinal(), "A new frame must start with prepass depth");
 	Check(Util::GetCurrentSceneDepthSRV(false) == &f.blendSrv, "Compute prepass depth must retain terrain blending");
 	Check(Util::GetCurrentSceneDepthSRV(true) == &f.blend16Srv, "Pixel prepass depth must retain 16-bit selection");
+	globals::features::reverseZ.active = true;
+	Check(Util::GetCurrentSceneDepthSRV(true) == &f.blendSrv, "Reverse scene depth must retain its floating-point blend");
+	globals::features::reverseZ.active = false;
 	auto& terrain = globals::features::terrainBlending;
 	terrain.blendedDepthTexture16 = nullptr;
 	Check(Util::GetCurrentSceneDepthSRV(true) == &f.copySrv, "Missing blended depth must fall back");

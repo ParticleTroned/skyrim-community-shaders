@@ -1,4 +1,5 @@
 #include "Globals.h"
+#include "Features/ReverseZ.h"
 
 #include "Deferred.h"
 #include "Features/AdaptiveBrightness.h"
@@ -52,6 +53,7 @@
 #include "Utils/VRFrameBufferUpload.h"
 #include <array>
 #include <cstring>
+#include <mutex>
 
 namespace globals
 {
@@ -65,6 +67,7 @@ namespace globals
 	namespace features
 	{
 		AdaptiveBrightness adaptiveBrightness{};
+		ReverseZ reverseZ{};
 		CloudShadows cloudShadows{};
 		Wetterness wetterness{};
 		DynamicCubemaps dynamicCubemaps{};
@@ -270,13 +273,18 @@ namespace globals
 #endif
 	}
 
+	static bool vrFrameBufferUploadHookReady = false;
+	bool IsVRFrameBufferUploadHookReady() { return vrFrameBufferUploadHookReady; }
+
 	void ObserveVRFrameBufferUpload(ID3D11DeviceContext* context, ID3D11Resource* resource,
-		UINT subresource, const void* source)
+		UINT subresource, void* source)
 	{
 		if (context == d3d::context && resource == *game::perFrame && subresource == 0) {
 			game::mappedFrameBuffer = nullptr;
-			if (source)
+			if (source) {
+				features::reverseZ.FixupMappedFrameBufferVR(*static_cast<FrameBufferVR*>(source));
 				CacheFramebuffer(source);
+			}
 		}
 		context->Unmap(resource, subresource);
 	}
@@ -306,7 +314,7 @@ namespace globals
 		auto& trampoline = SKSE::GetTrampoline();
 		const auto observer = reinterpret_cast<std::uintptr_t>(trampoline.allocate(code));
 		trampoline.write_call<6>(upload + 0x7A4, observer);
-		installed = true;
+		installed = vrFrameBufferUploadHookReady = true;
 		logger::info("Installed VR frame-buffer upload observer");
 	}
 
@@ -323,7 +331,7 @@ namespace globals
 		{
 			HRESULT hr = func(This, pResource, Subresource, MapType, MapFlags, pMappedResource);
 			if (hr == S_OK) {
-				if (*globals::game::perFrame.get() == pResource)
+				if (This == d3d::context && Subresource == 0 && *globals::game::perFrame.get() == pResource)
 					globals::game::mappedFrameBuffer = pMappedResource;
 			}
 			return hr;
@@ -340,8 +348,14 @@ namespace globals
 	{
 		static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource)
 		{
-			if (*globals::game::perFrame.get() == pResource && globals::game::mappedFrameBuffer)
-				CacheFramebuffer(globals::game::mappedFrameBuffer->pData);
+			if (This == d3d::context && Subresource == 0 && *globals::game::perFrame.get() == pResource && globals::game::mappedFrameBuffer) {
+				auto* bytes = globals::game::mappedFrameBuffer->pData;
+				if (game::isVR)
+					features::reverseZ.FixupMappedFrameBufferVR(*static_cast<FrameBufferVR*>(bytes));
+				else
+					features::reverseZ.FixupMappedFrameBuffer(*static_cast<FrameBuffer*>(bytes));
+				CacheFramebuffer(bytes);
+			}
 			func(This, pResource, Subresource);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -451,6 +465,12 @@ namespace globals
 	/// Share draw hooks for underwater composition and live HDR observation.
 	void InstallD3DHooks(ID3D11DeviceContext* a_context)
 	{
+		static std::mutex installationMutex;
+		static winrt::com_ptr<ID3D11DeviceContext> installedContext;
+		std::scoped_lock lock(installationMutex);
+		// Native context dispatch can change after first use without replacing the context.
+		if (installedContext.get() == a_context)
+			return;
 		InstallVRFrameBufferUploadHook();
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
@@ -466,5 +486,6 @@ namespace globals
 		stl::detour_vfunc<39, ID3D11DeviceContext_DrawIndexedInstancedIndirect>(a_context);
 		stl::detour_vfunc<40, ID3D11DeviceContext_DrawInstancedIndirect>(a_context);
 #endif
+		installedContext.copy_from(a_context);
 	}
 }

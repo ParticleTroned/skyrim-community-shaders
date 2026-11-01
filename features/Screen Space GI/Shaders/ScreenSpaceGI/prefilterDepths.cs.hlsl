@@ -1,3 +1,4 @@
+#include "Common/ReverseZ.hlsli"
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Copyright (C) 2016-2021, Intel Corporation
 //
@@ -28,7 +29,7 @@ RWTexture2D<float> outDepth4 : register(u4);
 float ClampDepth(float depth)
 {
 #ifdef VR
-	if (depth == 0.0)  // VR 0 indicates a mask
+	if (depth == FrameBuffer::NearPlaneDepth())  // VR hidden-area mask
 		return 0.0;
 #endif
 	depth = ScreenToViewDepth(depth);

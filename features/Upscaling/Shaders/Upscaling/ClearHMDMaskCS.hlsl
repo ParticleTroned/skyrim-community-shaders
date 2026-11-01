@@ -1,4 +1,6 @@
-// Native VR mask pixels have near-zero depth under Standard Z.
+#include "Common/DepthOrder.hlsli"
+
+// Native VR mask pixels use the near endpoint of scene depth.
 // Clearing their color keeps temporal filtering from bleeding into visible pixels.
 //
 // The host accepts only equal-size or upscaling color mappings. An 8x8 color
@@ -26,7 +28,7 @@ static const uint kProbeGridSize = 9;
 
 bool IsHiddenDepth(float depth)
 {
-	return depth <= kHiddenDepthThreshold;
+	return DepthOrder::Reversed ? depth >= 1.0 - kHiddenDepthThreshold : depth <= kHiddenDepthThreshold;
 }
 
 bool IsDepthSampleInRegion(
@@ -96,7 +98,7 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 				continue;
 			}
 			const float depth = DepthIn[uint2(samplePos)];
-			minimumDepth = min(minimumDepth, depth);
+			minimumDepth = DepthOrder::Nearest(minimumDepth, depth);
 			if (IsHiddenDepth(depth))
 				++hiddenSampleCount;
 		}

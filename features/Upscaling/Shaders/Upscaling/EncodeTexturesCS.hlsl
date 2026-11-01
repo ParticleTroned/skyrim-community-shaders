@@ -1,3 +1,4 @@
+#include "Common/ReverseZ.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Upscaling/EncodeTexturesBounds.hlsli"
 
@@ -29,7 +30,7 @@ RWTexture2D<float> DepthOutput : register(u3);
 
 float IsMaskedDepth(float depth)
 {
-	return depth <= MaskDepthThreshold ? 1.0 : 0.0;
+	return (DepthOrder::Reversed ? depth >= 1.0 - MaskDepthThreshold : depth <= MaskDepthThreshold) ? 1.0 : 0.0;
 }
 
 float ComputeMaskEdgeFactor(uint2 sourcePos)
@@ -106,7 +107,7 @@ float ComputeSeamFactor(uint2 sourcePos)
 			float neighborDepth = DepthMask[samplePos];
 
 			// Take neighbor if it's longer AND closer
-			if (neighborDepth < depth) {
+			if (FrameBuffer::IsNearerDepth(neighborDepth, depth)) {
 				float2 neighborMotionVector = MotionVectorMask[samplePos];
 
 				// Square motion vector for length

@@ -1,5 +1,7 @@
 #include "VRDepthCullingTemporal.h"
 
+#include "Features/ReverseZ.h"
+#include "Globals.h"
 #include "State.h"
 #include "Utils/D3D.h"
 #include "VRDepthCullingSubmissionPolicy.h"
@@ -297,16 +299,22 @@ namespace VRDepthCullingTemporal
 					cache.valid = cache.sourceDesc.Width > 1 && cache.sourceDesc.Height > 0 && cache.sourceDesc.Width % 2 == 0 &&
 					              cache.sourceDesc.ArraySize == 1 && cache.sourceDesc.SampleDesc.Count == 1 &&
 					              view.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D && view.Texture2D.MostDetailedMip == 0 &&
-					              (view.Format == DXGI_FORMAT_R32_FLOAT || view.Format == DXGI_FORMAT_R24_UNORM_X8_TYPELESS) &&
+					              (view.Format == DXGI_FORMAT_R32_FLOAT || view.Format == DXGI_FORMAT_R24_UNORM_X8_TYPELESS || view.Format == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS) &&
 					              SubmissionPolicy::IsSupportedRasterExtent(cache.reducedDesc.Width, cache.reducedDesc.Height) &&
 					              cache.reducedDesc.ArraySize == 1 && cache.reducedDesc.SampleDesc.Count == 1;
 				}
 			}
 			if (!cache.valid)
 				return;
+			if (globals::features::reverseZ.IsActive() &&
+				(!globals::features::reverseZ.IsConvertedDepthTarget(RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY) ||
+					!globals::features::reverseZ.IsConvertedDepthTarget(RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_DOWNSAMPLE) ||
+					cache.sourceDesc.Format != DXGI_FORMAT_R32G8X24_TYPELESS || cache.reducedDesc.Format != DXGI_FORMAT_R32G8X24_TYPELESS))
+				return;
 			auto& evidence = a_evidence;
 			evidence.frame = globals::state->frameCount;
 			evidence.resourceGeneration = generation;
+			evidence.convention = globals::features::reverseZ.GetConvention();
 			evidence.sourceView = reinterpret_cast<std::uintptr_t>(source);
 			evidence.reducedTarget = reinterpret_cast<std::uintptr_t>(reduced);
 			evidence.sourceWidth = cache.sourceDesc.Width;
@@ -468,6 +476,8 @@ namespace VRDepthCullingTemporal
 			}
 			if (reason == Reason::None && !SubmissionPolicy::Matches(a_currentProjection, currentDepth.camera, cullingEpoch, policyEpoch))
 				reason = Reason::InvalidView;
+			if (reason == Reason::None && g_producerDepth.convention != currentDepth.convention)
+				reason = Reason::MissingDepth;
 			if (reason == Reason::None && g_producerDepth.scene != currentDepth.scene)
 				reason = Reason::SceneChanged;
 			if (reason == Reason::None) {
@@ -721,6 +731,19 @@ namespace VRDepthCullingTemporal
 		logger::info(
 			"VR: installed temporal depth-culling recovery (default balanced budget {})",
 			kBalancedPromotionBudget);
+	}
+
+	void InvalidateDepthGeneration()
+	{
+		g_handoff.Invalidate();
+		g_pendingReadbackProjection = {};
+		g_preparedDepth = {};
+		g_producerDepth = {};
+		g_depthResources = {};
+		g_depthPrepared = false;
+		g_producerPose = {};
+		g_producerPoseEpoch.store(0, std::memory_order_release);
+		g_cullingEpoch.fetch_add(1, std::memory_order_acq_rel);
 	}
 
 	void SetMode(Mode a_mode)

@@ -4,6 +4,7 @@
 
 class ParticleLights;
 
+struct ReverseZ;
 struct CloudShadows;
 struct AdaptiveBrightness;
 struct Wetterness;
@@ -59,6 +60,8 @@ namespace SIE
 
 namespace globals
 {
+	/** Reports validated native VR upload hook readiness. */
+	bool IsVRFrameBufferUploadHookReady();
 	namespace d3d
 	{
 		extern ID3D11Device* device;
@@ -69,6 +72,7 @@ namespace globals
 	namespace features
 	{
 		extern AdaptiveBrightness adaptiveBrightness;
+		extern ReverseZ reverseZ;
 		extern CloudShadows cloudShadows;
 		extern Wetterness wetterness;
 		extern DynamicCubemaps dynamicCubemaps;

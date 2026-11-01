@@ -1,4 +1,5 @@
 #include "Feature.h"
+#include "Features/ReverseZ.h"
 #include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsPage.h"
 
@@ -259,6 +260,7 @@ namespace
 	const std::vector<Feature*>& GetAllFeatures()
 	{
 		static std::vector<Feature*> features = {
+			&globals::features::reverseZ,
 			&globals::features::truePBR,
 			&globals::features::foliageLighting,
 			&globals::features::adaptiveBrightness,

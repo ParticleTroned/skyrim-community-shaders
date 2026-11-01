@@ -1,3 +1,5 @@
+#include "reverse_z_test_stub.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -68,6 +70,7 @@ namespace RE
 			unsigned underlying() const { return static_cast<unsigned>(value); }
 		} shaderType;
 		const char* fxpFilename = "Lighting";
+		bool imageSpaceMapped = true;
 		std::vector<BSGraphics::PixelShader*> pixelShaders;
 	};
 }
@@ -202,7 +205,10 @@ namespace SIE
 	};
 	namespace SShaderCache
 	{
-		bool ResolveImageSpaceDescriptor(const RE::BSShader&, uint32_t&) { return true; }
+		bool ResolveImageSpaceDescriptor(const RE::BSShader& shader, uint32_t&)
+		{
+			return shader.shaderType.get() != RE::BSShader::Type::ImageSpace || shader.imageSpaceMapped;
+		}
 		std::string GetShaderString(ShaderClass, const RE::BSShader&, uint32_t descriptor, bool)
 		{
 			return std::to_string(descriptor);
@@ -235,7 +241,8 @@ namespace SIE
 			std::set<uint32_t> requests;
 			void Add(Task task) { requests.insert(task.descriptor); }
 		} compilationSet;
-		static bool IsSupportedShader(const RE::BSShader&) { return true; }
+		static bool IsSupportedShader(RE::BSShader::Type) { return true; }
+		static bool IsSupportedShader(const RE::BSShader&);
 		bool IsEnabled() const { return enabled; }
 		bool IsSaveLoadSafeModeActive() const { return safeLoad; }
 		bool ShouldUseAsyncCompilation() const { return async; }
@@ -259,6 +266,7 @@ namespace SIE
 	};
 #include "pixel_lookup.h"
 #include "pixel_prewarm.h"
+#include "shader_support.h"
 }
 namespace Permutations
 {
@@ -367,6 +375,7 @@ struct Fixture
 		native.shader = reinterpret_cast<ID3D11PixelShader*>(&native);
 		globals::features::terrainBlending = {};
 		TerrainSeams::GetInstance().enabled = false;
+		globals::features::reverseZ.active = false;
 	}
 	void Bind(uint32_t descriptor)
 	{
@@ -569,6 +578,44 @@ void TestWarningDeduplication()
 	state.RecordPreparationFailure(args, "category capture pending");
 	Require(logger::warnings == 3);
 }
+void TestNativeImageSpaceAdmission()
+{
+	for (bool reverse : { false, true }) {
+		for (bool skipPixel : { false, true }) {
+			Fixture f;
+			f.shader.shaderType.value = RE::BSShader::Type::ImageSpace;
+			f.shader.fxpFilename = "ISCopy";
+			f.shader.imageSpaceMapped = false;
+			globals::features::reverseZ.active = reverse;
+			Hooks::BSShader_BeginTechnique::func = NativeTechnique;
+			nativeTechniqueReady = true;
+			nativeTechniquePixel = &f.native;
+			Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, 0, 0, skipPixel));
+			Require(f.context.bound == (skipPixel ? nullptr : f.native.shader));
+			Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
+			Require(!f.state.deferredPixelShaderMissing && !f.state.settingCustomShader);
+			Require(f.cache.compiles == 0 && f.cache.compilationSet.requests.empty());
+			nativeTechniqueReady = false;
+			Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, 0, 0, skipPixel));
+		}
+	}
+	Fixture f;
+	f.shader.shaderType.value = RE::BSShader::Type::ImageSpace;
+	globals::features::reverseZ.active = true;
+	f.cache.async = false;
+	f.cache.compilationSucceeds = false;
+	Hooks::BSShader_BeginTechnique::func = NativeTechnique;
+	nativeTechniqueReady = true;
+	nativeTechniquePixel = &f.native;
+	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, 0, 0, false));
+	ID3D11VertexShader replacementVertex;
+	RE::BSGraphics::VertexShader vertex{ &replacementVertex };
+	f.cache.vertex = &vertex;
+	auto* pixel = f.cache.Add(f.shader, 0);
+	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, 0, 0, false));
+	Require(f.context.vertex == &replacementVertex && f.context.bound == pixel->shader);
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::ImageSpace);
+}
 void TestPixelFamilyProof()
 {
 	Fixture f;
@@ -713,6 +760,7 @@ int main()
 			TestSeamTechniqueFallback();
 			TestPBRPrewarming();
 			TestSeamPrewarming();
+			TestNativeImageSpaceAdmission();
 		}
 		TestWarningDeduplication();
 		std::cout << "Category fallback and warning checks: " << assertions << " passed (flat and VR)\n";

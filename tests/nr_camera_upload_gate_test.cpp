@@ -34,6 +34,8 @@ namespace globals
 		ID3D11Resource* frameResource = nullptr;
 		ID3D11Resource** perFrame = &frameResource;
 	}
+	using FrameBufferVR = game::FrameBufferVR;
+	using FrameBuffer = game::FrameBuffer;
 	namespace d3d
 	{
 		ID3D11DeviceContext* context = nullptr;
@@ -45,6 +47,17 @@ namespace globals
 	State* state = &stateStorage;
 	namespace features
 	{
+		struct ReverseZ
+		{
+			bool enabled = false;
+			unsigned fixups = 0;
+			void FixupMappedFrameBufferVR(FrameBufferVR& buffer)
+			{
+				++fixups;
+				if (enabled)
+					buffer.bytes[0] ^= 0x80;
+			}
+		} reverseZ;
 		struct Upscaling
 		{
 			bool enabled = false;
@@ -85,9 +98,15 @@ int main()
 			state->frameCount = updates;
 			for (std::size_t i = 0; i < upload.bytes.size(); ++i)
 				upload.bytes[i] = static_cast<std::uint8_t>((updates * 17) ^ i);
+			features::reverseZ.enabled = frame % 2 == 0;
+			const auto original = upload;
 			game::mappedFrameBuffer = &upload;
 			ObserveVRFrameBufferUpload(&context, &resource, 0, &upload);
-			require(game::frameBufferCached.vr == upload);
+			auto expected = original;
+			if (features::reverseZ.enabled)
+				expected.bytes[0] ^= 0x80;
+			require(upload == expected && game::frameBufferCached.vr == expected);
+			require(features::reverseZ.fixups == updates);
 			require(game::mappedFrameBuffer == nullptr);
 			require(context.unmaps == updates);
 #ifdef DEVBENCH_BRIDGE_ENABLED

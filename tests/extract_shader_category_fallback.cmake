@@ -6,6 +6,8 @@ file(READ "${PROJECT_ROOT}/src/Hooks.cpp" _hooks)
 file(READ "${PROJECT_ROOT}/src/TruePBR.cpp" _pbr)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp" _character)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.h" _character_header)
+extract_between("${_cache}" "bool ShaderCache::IsSupportedShader(const RE::BSShader& shader)"
+    "RE::BSGraphics::VertexShader* ShaderCache::GetVertexShaderIfCached(" "shader_support.h")
 extract_between("${_cache}" "RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader("
     "RE::BSGraphics::ComputeShader* ShaderCache::GetComputeShader(" "pixel_lookup.h")
 extract_between("${_header}" "static constexpr uint32_t GetCharacterCategoryFlag("

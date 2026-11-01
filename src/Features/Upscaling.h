@@ -1011,6 +1011,8 @@ public:
 	/** @brief Backend-neutral identity for resources owned by one physical render-scale contract. */
 	struct VRRenderScaleResourceKey
 	{
+		bool reversedDepth = false;
+		double additionalDepthBytesPerPixel = 0;
 		bool valid = false;
 		bool active = false;
 		UpscaleMethod method = UpscaleMethod::kNONE;

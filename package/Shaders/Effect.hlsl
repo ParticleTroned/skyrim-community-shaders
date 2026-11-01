@@ -1,3 +1,4 @@
+#include "Common/ReverseZ.hlsli"
 #define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
 
 #include "Common/AdaptiveBalanceFire.hlsli"
@@ -105,6 +106,7 @@ cbuffer VS_PerFrame : register(b12)
 {
 #	if !defined(VR)
 	row_major float4x4 ScreenProj[1] : packoffset(c0);
+	row_major float4x4 Proj[1] : packoffset(c4);
 	row_major float4x4 ViewProj[1] : packoffset(c8);
 #		if defined(SKINNED)
 	float3 BonesPivot[1] : packoffset(c40);
@@ -114,6 +116,7 @@ cbuffer VS_PerFrame : register(b12)
 #		endif      // SKINNED
 #	else
 	row_major float4x4 ScreenProj[2] : packoffset(c0);
+	row_major float4x4 Proj[2] : packoffset(c8);
 	row_major float4x4 ViewProj[2] : packoffset(c16);
 #		if defined(SKINNED)
 	float3 BonesPivot[2] : packoffset(c80);
@@ -217,7 +220,12 @@ VS_OUTPUT main(VS_INPUT input)
 		transpose(float3x3(transpose(World[eyeIndex])[0], transpose(World[eyeIndex])[1], transpose(World[eyeIndex])[2]));
 
 #	if defined(SKY_OBJECT)
-	float4x4 viewProj = float4x4(ViewProj[eyeIndex][0], ViewProj[eyeIndex][1], ViewProj[eyeIndex][3], ViewProj[eyeIndex][3]);
+#		ifdef REVERSE_Z
+	float4 skyObjectDepthRow = FrameBuffer::IsReverseProjection(Proj[eyeIndex]) ? 0.0.xxxx : ViewProj[eyeIndex][3];
+#		else
+	float4 skyObjectDepthRow = ViewProj[eyeIndex][3];
+#		endif
+	float4x4 viewProj = float4x4(ViewProj[eyeIndex][0], ViewProj[eyeIndex][1], skyObjectDepthRow, ViewProj[eyeIndex][3]);
 #	else
 	row_major float4x4 viewProj = ViewProj[eyeIndex];
 #	endif
@@ -264,7 +272,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	if !defined(MOTIONVECTORS_NORMALS)
 	float fogColorParam = min(FogParam.w,
-		exp2(FogParam.z * log2(saturate(length(viewPos.xyz) * FogParam.y - FogParam.x))));
+		exp2(FogParam.z * log2(saturate(length(FrameBuffer::ToStandardClip(viewPos, FrameBuffer::IsReverseProjection(Proj[eyeIndex]))) * FogParam.y - FogParam.x))));
 
 	vsout.FogParam.xyz = lerp(FogNearColor.xyz, FogFarColor.xyz, fogColorParam);
 	vsout.FogParam.w = fogColorParam;
@@ -811,6 +819,10 @@ PS_OUTPUT main(PS_INPUT input)
 	float softMul = 1;
 #	if defined(SOFT)
 	float depth = TexDepthSamplerEffect.Load(int3(input.Position.xy, 0)).x;
+#		ifdef REVERSE_Z
+	if (FrameBuffer::IsReverseProjection())
+		depth = 1 - depth;
+#		endif
 	softMul = saturate(-input.TexCoord0.w + LightingInfluence.y / ((1 - depth) * CameraDataEffect.z + CameraDataEffect.y));
 #	endif
 

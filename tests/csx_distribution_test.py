@@ -96,6 +96,9 @@ class CsxDistributionTests(unittest.TestCase):
     def test_grass_optimizations_version_reaches_both_header_registries(self):
         self.assert_feature_header_registries('Grass Optimizations', 'GrassOptimizations')
 
+    def test_reverse_z_version_reaches_both_header_registries(self):
+        self.assert_feature_header_registries('ReverseZ', 'ReverseZ')
+
     def assert_feature_header_registries(self, folder, short_name):
         ini = ROOT / 'features' / folder / 'Shaders/Features' / f'{short_name}.ini'
         version = audit.get_version_from_ini(ini)

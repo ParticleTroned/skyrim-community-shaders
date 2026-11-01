@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.10.31.7",
+    "packageVersion": "d2026.11.01.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "D57E72AA3F30E4FAC56CC96D1C7E7B71C689F6BCEC834D24B4D4B5F883AD920E"
+        "sha256": "8D0B295B1276F99C02D76CB15D7CFECFF25E1A5CAC3F0B6E6EA280F51A6BA2F0"
     },
     "runtimeSettingsContract": {
-        "revision": 26,
-        "sourceTreeSha256": "A982403D0B70DBCA4F9E823F5E96C9B9890D1C9190F69557F90238242FEA39C4",
+        "revision": 28,
+        "sourceTreeSha256": "AA7C6726F4D49524983F3CD65DABBA232D80A3CDCB3C5575BC7625EEA513AFA7",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -120,6 +120,8 @@
             "src/Features/PerformanceOverlay.h",
             "src/Features/RenderDoc.cpp",
             "src/Features/RenderDoc.h",
+            "src/Features/ReverseZ.cpp",
+            "src/Features/ReverseZ.h",
             "src/Features/ScreenshotFeature.cpp",
             "src/Features/ScreenshotFeature.h",
             "src/Features/ScreenSpaceGI.cpp",

@@ -1,6 +1,7 @@
 #include "Common/CharacterCategoryMask.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/VR.hlsli"
 
 #if defined(VSHADER)
@@ -136,7 +137,8 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	endif  // OCCLUSION MOONMASK HORIZFADE
 
-	vsout.Position = mul(WorldViewProj[eyeIndex], inputPosition).xyww;
+	float4 skyClip = mul(WorldViewProj[eyeIndex], inputPosition);
+	vsout.Position = float4(skyClip.xy, FrameBuffer::FarPlaneClipZ(skyClip.w), skyClip.w);
 	vsout.WorldPosition = mul(World[eyeIndex], inputPosition);
 	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], inputPosition);
 

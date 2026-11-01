@@ -4,7 +4,7 @@
 #include "Utils/LazyShader.h"
 #include <d3d11_1.h>
 
-/** @brief Conservative max-depth mip chains with independent packed stereo eyes. */
+/** @brief Conservative farthest-depth mip chains with independent packed stereo eyes. */
 class DepthPyramid
 {
 public:
@@ -12,9 +12,9 @@ public:
 	void Reset();
 	/** @brief Allocate a power-of-two chain stopping before stereo eyes would mix. */
 	void Allocate(uint32_t width, uint32_t height, uint32_t eyes, uint32_t maximumMips = 0);
-	/** @brief Build from standard-Z live depth; unknown samples pad with far depth. */
+	/** @brief Build from matching native depth; only attributed masks are treated as missing coverage. */
 	bool Build(ID3D11DeviceContext1* context, ID3D11ShaderResourceView* source,
-		uint32_t sourceWidth, uint32_t sourceHeight, uint32_t activeWidth, uint32_t activeHeight, uint32_t eyes, uint32_t baseReduction = 2);
+		uint32_t sourceWidth, uint32_t sourceHeight, uint32_t activeWidth, uint32_t activeHeight, uint32_t eyes, uint32_t baseReduction = 2, bool sourceHasNearMask = false);
 	ID3D11ShaderResourceView* SRV() const { return valid ? srv.get() : nullptr; }
 	bool Allocated() const { return texture != nullptr; }
 	uint32_t Mips() const { return mipCount; }

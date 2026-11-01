@@ -2923,12 +2923,58 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE spdlog::spdlog windowsapp.lib
     )
     include("${PROJECT_SOURCE_DIR}/tests/vr_depth_encode.cmake")
+    add_d3d_shader_test(reverse_z_depth_test ReverseZDepth tests/reverse_z_depth_test.cpp)
+    target_link_libraries(reverse_z_depth_test PRIVATE windowsapp.lib)
+    set(_reverse_z_state_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/reverse-z-state"
+    )
+    set(_reverse_z_state_headers)
+    foreach(
+        _part
+        IN
+        ITEMS storage comparison creation hooks getters
+    )
+        list(
+            APPEND _reverse_z_state_headers
+            "${_reverse_z_state_dir}/reverse_z_state_${_part}.h"
+        )
+    endforeach()
+    add_custom_command(
+        OUTPUT ${_reverse_z_state_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_reverse_z_state_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_reverse_z_state.cmake"
+        DEPENDS
+            src/Features/ReverseZ.cpp
+            tests/extract_reverse_z_state.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_d3d_shader_test(reverse_z_state_test ReverseZState tests/reverse_z_state_test.cpp)
+    target_sources(reverse_z_state_test PRIVATE ${_reverse_z_state_headers})
+    target_include_directories(
+        reverse_z_state_test
+        PRIVATE "${_reverse_z_state_dir}"
+    )
+    target_compile_definitions(reverse_z_state_test PRIVATE NOMINMAX)
+    target_link_libraries(reverse_z_state_test PRIVATE windowsapp.lib)
+    add_d3d_shader_test(d3d_capture_hook_test D3DCaptureHook tests/d3d_capture_hook_test.cpp)
+    target_include_directories(
+        d3d_capture_hook_test
+        PRIVATE "${DETOURS_INCLUDE_DIRS}"
+    )
+    target_link_libraries(
+        d3d_capture_hook_test
+        PRIVATE xbyak::xbyak "${DETOURS_LIBRARY}"
+    )
     add_d3d_shader_test(grass_d3d_state_test GrassD3DState tests/grass_d3d_state_test.cpp)
     target_link_libraries(grass_d3d_state_test PRIVATE windowsapp.lib)
     target_compile_definitions(grass_d3d_state_test PRIVATE NOMINMAX)
     add_d3d_shader_test(grass_batch_shader_test GrassBatchShader tests/grass_batch_shader_test.cpp)
     target_sources(grass_batch_shader_test PRIVATE src/Utils/ShaderInclude.cpp)
     target_link_libraries(grass_batch_shader_test PRIVATE spdlog::spdlog)
+    set_tests_properties(GrassBatchShader PROPERTIES TIMEOUT 180)
     add_d3d_shader_test(
         pbr_grass_shader_test
         PBRGrassShader
@@ -2967,6 +3013,18 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(
         FeatureIssueScanner
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
+        NAME ReverseZInitialization
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/reverse_z_initialization_test.py"
+    )
+    set_tests_properties(
+        ReverseZInitialization
         PROPERTIES
             LABELS "ControllerTests"
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"

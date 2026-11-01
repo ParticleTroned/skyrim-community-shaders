@@ -1,3 +1,4 @@
+#include "Common/DepthOrder.hlsli"
 #include "Upscaling/FoveatedBlend.hlsli"
 
 // Custom CSX VR periphery-only TAA.
@@ -24,10 +25,10 @@ cbuffer PeripheryTAACB : register(b0)
 	float2 OutputOffset;
 	float2 Jitter;
 	float2 CenterOffset;
-	float4 Tuning0;  // x=centerScale, y=centerFeather, z=resetHistory, w=taaOuterScale
-	float4 Tuning1;  // x=historyValid, y=centerHorizontalScale, z=tileDispatch, w=tileDispatchWidth
-	float4 Tuning2;  // x=reactivityScale, y=instabilityScale, z=velocityScale, w=lockDecay
-	float4 Tuning3;  // xy=min output color-write bounds, zw=max output color-write bounds
+	float4 Tuning0;      // x=centerScale, y=centerFeather, z=resetHistory, w=taaOuterScale
+	float4 Tuning1;      // x=historyValid, y=centerHorizontalScale, z=tileDispatch, w=tileDispatchWidth
+	float4 Tuning2;      // x=reactivityScale, y=instabilityScale, z=velocityScale, w=lockDecay
+	float4 Tuning3;      // xy=min output color-write bounds, zw=max output color-write bounds
 	float4 HistoryRect;  // xy=full-eye offset, zw=cropped history dimensions
 	row_major float4x4 CurrentViewProjInverse;
 	row_major float4x4 PreviousViewProj;
@@ -55,8 +56,8 @@ RWTexture2D<float4> OutHistoryColor : register(u3);
 
 static const int2 kOffsets3x3[9] = {
 	int2(-1, -1), int2(0, -1), int2(1, -1),
-	int2(-1, 0),  int2(0, 0),  int2(1, 0),
-	int2(-1, 1),  int2(0, 1),  int2(1, 1)
+	int2(-1, 0), int2(0, 0), int2(1, 0),
+	int2(-1, 1), int2(0, 1), int2(1, 1)
 };
 static const float kHmdVelocityDeltaRelaxThresholdPixels = 0.25;
 static const float kHmdVelocityDeltaRelaxScale = 0.24;
@@ -236,18 +237,18 @@ struct NeighborhoodStats
 NeighborhoodStats GatherNeighborhoodStats3x3(float2 inputUV)
 {
 	uint2 inputPos = ToInputPos(inputUV);
-	float minDepth = 1.0;
+	float minDepth = DepthOrder::Far();
 	int2 minPos = int2(inputPos);
 	float3 meanColor = 0.0.xxx;
 	float3 meanSquare = 0.0.xxx;
 	float3 minColor = 65504.0.xxx;
 	float3 maxColor = -65504.0.xxx;
 
-	[unroll]
-	for (uint i = 0; i < 9; ++i) {
+	[unroll] for (uint i = 0; i < 9; ++i)
+	{
 		int2 samplePos = int2(inputPos) + kOffsets3x3[i];
 		float sampleDepth = LoadCachedDepthClamped(samplePos);
-		if (sampleDepth < minDepth) {
+		if (DepthOrder::IsNearer(sampleDepth, minDepth)) {
 			minDepth = sampleDepth;
 			minPos = samplePos;
 		}
@@ -349,7 +350,7 @@ float ComputeDisocclusion(float velocityDeltaPixels, float stabilityBias)
 
 float2 ComputeHmdHistoryDelta(float2 reprojectionUV, float depth)
 {
-	if (depth <= 0.0 || depth >= 0.99995)
+	if (!isfinite(depth) || abs(depth - DepthOrder::Far()) <= 0.00005 || abs(depth - DepthOrder::Near()) <= 1e-6)
 		return 0.0.xx;
 
 	float4 currentClip = float4(reprojectionUV.x * 2.0 - 1.0, 1.0 - reprojectionUV.y * 2.0, depth, 1.0);
@@ -376,9 +377,7 @@ float ComputeHmdRejectionRelaxation(float2 hmdDelta)
 	return saturate((hmdMotionPixels - kHmdVelocityDeltaRelaxThresholdPixels) * kHmdVelocityDeltaRelaxScale);
 }
 
-[numthreads(8, 8, 1)]
-void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 groupThreadID : SV_GroupThreadID)
-{
+[numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 groupThreadID : SV_GroupThreadID) {
 	const bool tileDispatch = Tuning1.z > 0.5;
 	const uint tileDispatchWidth = max(1u, (uint)(Tuning1.w + 0.5));
 	const uint tileIndex = groupID.x + groupID.y * tileDispatchWidth;
@@ -447,7 +446,7 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 			gCurrentDepthCache[cacheIndex] = LoadDepthClamped(samplePos);
 		} else {
 			gCurrentColorCache[cacheIndex] = 0.0.xxxx;
-			gCurrentDepthCache[cacheIndex] = 1.0;
+			gCurrentDepthCache[cacheIndex] = DepthOrder::Far();
 		}
 	}
 	GroupMemoryBarrierWithGroupSync();
@@ -464,7 +463,7 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 		}
 
 		bool outsideTAA = gTileFastPathMode == kTileFastPathOutsideTAA ||
-			FoveatedComputeMaskDistance(outputUV, taaOuterScale, centerHorizontalScale, CenterOffset) > 1.0;
+		                  FoveatedComputeMaskDistance(outputUV, taaOuterScale, centerHorizontalScale, CenterOffset) > 1.0;
 		if (!historyValid || outsideTAA) {
 			float2 passthroughVelocity = CurrentMotionVectors.SampleLevel(LinearSampler, inputTextureUV, 0.0);
 			StoreHistory(outputPos, currentSample, passthroughVelocity, 0.0);

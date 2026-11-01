@@ -17,6 +17,12 @@ bool NeuralRendering::Runtime::IsInstalled() noexcept { return providerInstalled
 
 namespace globals::features
 {
+	struct ReverseZFixture
+	{
+		bool active = false;
+		bool IsActive() const { return active; }
+		double GetAdditionalDepthBytesPerPixel() const { return active ? 20.25 : 0; }
+	} reverseZ;
 	struct AdapterFixture
 	{
 		bool IsNeuralRenderingHardwareSupported() const noexcept { return true; }
@@ -146,6 +152,10 @@ int main()
 			Require(upscaling.liveRequestReads == 0, "Resource-key construction reentered the live pending-request query under its lock");
 			Require(key.foveatedVendorDispatch && !key.peripheryTAA, "Full-image reduced NR must reserve its VR dispatch resources");
 		}
+		globals::features::reverseZ.active = true;
+		const auto reversedKey = upscaling.BuildVRRenderScaleResourceKey(profile);
+		Require(reversedKey.reversedDepth && reversedKey.additionalDepthBytesPerPixel > 0, "Depth format and cost are missing from resource identity");
+		globals::features::reverseZ.active = false;
 		// Desired resources must exist before the incoming mode has latched.
 		upscaling.requested = upscaling.latched = upscaling.active = false;
 		Require(upscaling.BuildVRRenderScaleResourceKey(profile).foveatedVendorDispatch, "Target resources must not depend on the previous live latch");

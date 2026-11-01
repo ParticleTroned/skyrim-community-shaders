@@ -180,7 +180,7 @@ namespace NeuralRendering::Replay
 		Json Invariant(const Batch& batch)
 		{
 			Json result = Json::object();
-			for (const auto* name : { "generation", "insertionPoint", "mode", "arrangement", "colorRevision", "inputEpoch", "colorConfiguration", "tuning" })
+			for (const auto* name : { "generation", "insertionPoint", "mode", "arrangement", "colorRevision", "inputEpoch", "colorConfiguration", "tuning", "depthConvention", "depthGeneration" })
 				result[name] = batch.metadata.at(name);
 			result["runtime"] = batch.runtime;
 			result["adapter"] = batch.adapter;

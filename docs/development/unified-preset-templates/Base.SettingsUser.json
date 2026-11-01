@@ -56,6 +56,9 @@
     "Capture Frame Count": 20,
     "Enable RenderDoc Capture": false
   },
+  "Reverse Z": {
+    "EnableReverseZBuffer": true
+  },
   "Replace Original Shaders": {
     "BloodSplatter": true,
     "DistantTree": true,

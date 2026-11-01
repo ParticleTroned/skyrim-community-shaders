@@ -14,6 +14,8 @@ RWTexture2D<float> Output : register(u0);
 float SafeDepth(uint2 pixel)
 {
 	float value = Source.Load(int3(pixel, 0));
+	if ((FirstLevel & 2u) && value == DepthOrder::Near())
+		return DepthOrder::Far();
 	return isfinite(value) && value >= 0 && value <= 1 ? value : DepthOrder::Far();
 }
 [numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {
@@ -22,14 +24,14 @@ float SafeDepth(uint2 pixel)
 	float maximum = DepthOrder::Near();
 	uint eyeWidth = Width / Eyes;
 	uint eye = id.x / eyeWidth;
-	uint2 base = uint2(id.x % eyeWidth, id.y) * (FirstLevel ? BASE_REDUCTION : 2);
+	uint2 base = uint2(id.x % eyeWidth, id.y) * ((FirstLevel & 1u) ? BASE_REDUCTION : 2);
 	[unroll] for (uint y = 0; y < BASE_REDUCTION; ++y)
 		[unroll] for (uint x = 0; x < BASE_REDUCTION; ++x)
 	{
-		if (!FirstLevel && (x >= 2 || y >= 2))
+		if (!(FirstLevel & 1u) && (x >= 2 || y >= 2))
 			continue;
 		uint2 pixel = base + uint2(x, y);
-		if (FirstLevel) {
+		if (FirstLevel & 1u) {
 			if (pixel.x >= ActiveWidth / Eyes || pixel.y >= ActiveHeight)
 				maximum = DepthOrder::Far();
 			else

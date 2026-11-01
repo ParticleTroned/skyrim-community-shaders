@@ -148,6 +148,12 @@ int main()
 		RunDepthReduction(false, 4);
 		RunDepthReduction(true, 4);
 		RunGrassBounds();
+		RunGrassBounds(true);
+		for (bool vr : { false, true })
+			for (UINT reduction : { 2u, 4u }) {
+				RunDepthReduction(vr, reduction, true);
+				RunDepthReduction(vr, reduction, true, true);
+			}
 		run("Grass collision strength", [] { RunGrassCollisionStrength(); });
 		RunSPDReduction(64, 64, 1);
 		RunSPDReduction(128, 128, 2);

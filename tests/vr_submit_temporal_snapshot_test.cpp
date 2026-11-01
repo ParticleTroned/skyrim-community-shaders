@@ -584,11 +584,31 @@ namespace
 		const bool rightEyeReset = Policy::ResolveHistoryReset(snapshot.scalars.historyReset, historyResetThisFrame, historyResetRequested);
 		return leftEyeReset && rightEyeReset && !snapshot.scalars.historyReset;
 	}
+
+	bool ReversedGuidesKeepProducerEncoding()
+	{
+		auto key = ValidKey();
+		key.depthConvention = Depth::Convention::Reversed;
+		key.depthGeneration = 2;
+		auto scalars = ValidScalars();
+		Snapshot mismatch;
+		if (mismatch.Publish(key, scalars, {}))
+			return false;
+		scalars.depthConvention = key.depthConvention;
+		Snapshot valid;
+		if (!valid.Publish(key, scalars, {}))
+			return false;
+		auto later = key;
+		++later.depthGeneration;
+		return !valid.MatchesForDispatch(later) && !Policy::HasMatchingCameraContract(key, later);
+	}
+
 }
 
 int main()
 {
 	const std::array tests{
+		ReversedGuidesKeepProducerEncoding,
 		CapturedInputsSurviveLaterCameraAndJitterChanges,
 		ExactContractAndSameFrameInvalidation,
 		InvalidInputsCannotBecomePublished,

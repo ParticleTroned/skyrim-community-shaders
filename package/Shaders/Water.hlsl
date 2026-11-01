@@ -1,3 +1,4 @@
+#include "Common/ReverseZ.hlsli"
 #if defined(HORIZON_FIX)
 namespace HorizonFix
 {
@@ -202,14 +203,16 @@ VS_OUTPUT main(VS_INPUT input)
 	float4 worldPos = mul(World[eyeIndex], inputPosition);
 	float4 worldViewPos = mul(WorldViewProj[eyeIndex], inputPosition);
 
-	float heightMult = min((1.0 / 10000.0) * max(worldViewPos.z - 70000, 0), 1);
+	const bool reverseProjection = FrameBuffer::IsReverseProjection(eyeIndex);
+	float heightMult = min((1.0 / 10000.0) * max(FrameBuffer::ToStandardClipZ(worldViewPos, reverseProjection) - 70000, 0), 1);
 
 	vsout.HPosition.xy = worldViewPos.xy;
-	vsout.HPosition.z = heightMult * 0.5 + worldViewPos.z;
+	vsout.HPosition.z = FrameBuffer::OffsetClipDepth(worldViewPos, heightMult * 0.5, reverseProjection).z;
 	vsout.HPosition.w = worldViewPos.w;
 
 #		if defined(HORIZON_FIX)
-	vsout.HPosition.z = min(vsout.HPosition.z, vsout.HPosition.w * HorizonFix::FoldedDepth);
+	float foldedDepth = vsout.HPosition.w * (reverseProjection ? 1.0 - HorizonFix::FoldedDepth : HorizonFix::FoldedDepth);
+	vsout.HPosition.z = reverseProjection ? max(vsout.HPosition.z, foldedDepth) : min(vsout.HPosition.z, foldedDepth);
 #		endif
 
 #		if defined(STENCIL)
@@ -218,7 +221,7 @@ VS_OUTPUT main(VS_INPUT input)
 #		else
 
 #			if !defined(UNIFIED_WATER)
-	float fogDistanceFactor = min(VSFogFarColor.w, pow(saturate(length(worldViewPos.xyz) * VSFogParam.y - VSFogParam.x), NormalsScale.w));
+	float fogDistanceFactor = min(VSFogFarColor.w, pow(saturate(length(FrameBuffer::ToStandardClip(worldViewPos, reverseProjection)) * VSFogParam.y - VSFogParam.x), NormalsScale.w));
 	vsout.FogParam.xyz = lerp(VSFogNearColor.xyz, VSFogFarColor.xyz, fogDistanceFactor);
 	vsout.FogParam.w = fogDistanceFactor;
 #			endif
@@ -642,7 +645,7 @@ float3 GetFlowmapNormal(PS_INPUT input, float2 uvShift, float multiplier, float 
 FlowmapData GetFlowmapDataWorldSpace(PS_INPUT input, float2 uvShift)
 {
 	FlowmapData data = GetFlowmapDataTextureSpace(input, uvShift);
-	float2 flowDirection = -(data.color.xy * 2 - 1);    // Decode direction with 180° correction
+	float2 flowDirection = -(data.color.xy * 2 - 1);    // Decode direction with 180Â° correction
 	data.flowVector = data.flowVector * flowDirection;  // Transform to world space
 	return data;
 }
@@ -658,7 +661,7 @@ FlowmapData GetFlowmapDataWorldSpace(PS_INPUT input, float2 uvShift)
 FlowmapData GetFlowmapDataWorldSpace(FlowmapData textureSpaceData)
 {
 	FlowmapData data = textureSpaceData;
-	float2 flowDirection = -(data.color.xy * 2 - 1);    // Decode direction with 180° correction
+	float2 flowDirection = -(data.color.xy * 2 - 1);    // Decode direction with 180Â° correction
 	data.flowVector = data.flowVector * flowDirection;  // Transform to world space
 	return data;
 }
@@ -888,7 +891,7 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 
 		// Calculate flow-aware ripple offset using centralized timing logic
 		// Parameters: avgFlowmapMultiplier=9.26 (average of GetWaterNormal flowmap normal multipliers: 9.92, 10.64, 8, 8.48)
-		// uvToWorldScale=0.125 (1/8 - relates to 64× texture coordinate scaling factor)
+		// uvToWorldScale=0.125 (1/8 - relates to 64Ã— texture coordinate scaling factor)
 		float2 flowOffset = CS_GET_FLOW_AWARE_RIPPLE_OFFSET(
 			worldFlowData.flowVector,
 			worldFlowData.color.w,      // Flow strength from flowmap alpha
@@ -1059,9 +1062,9 @@ float GetRawScreenDepthWater(float2 screenPosition)
 float ResolveScreenDepthWater(float rawDepth)
 {
 #			if defined(VR)  // VR appears to use hard coded values
-	return rawDepth * 1.01 + -0.01;
+	return FrameBuffer::ToStandardDepth(rawDepth) * 1.01 + -0.01;
 #			else
-	return CameraDataWater.w / (-rawDepth * CameraDataWater.z + CameraDataWater.x);
+	return CameraDataWater.w / (DepthOrder::Reversed ? CameraDataWater.y + rawDepth * CameraDataWater.z : CameraDataWater.x - rawDepth * CameraDataWater.z);
 #			endif
 }
 
@@ -1234,7 +1237,7 @@ bool TryGetUnifiedWaterVRColumn(
 		!IsUnifiedWaterRawDepthValid(sceneRawDepth) ||
 		!isfinite(waterSurfaceRawDepth) ||
 		!all(isfinite(waterSurfacePosition)) ||
-		sceneRawDepth < waterSurfaceRawDepth) {
+		FrameBuffer::IsNearerDepth(sceneRawDepth, waterSurfaceRawDepth)) {
 		return false;
 	}
 
@@ -1691,7 +1694,7 @@ DiffuseOutput GetWaterDiffuseColor(
 		}
 
 #					if defined(HORIZON_FIX)
-		if (refractionRawDepth >= HorizonFix::EmptyDepthThreshold)
+		if (FrameBuffer::ToStandardDepth(refractionRawDepth) >= HorizonFix::EmptyDepthThreshold)
 			distanceMul = 1.0.xxxx;
 #					endif
 #				endif
@@ -1878,7 +1881,7 @@ PS_OUTPUT main(PS_INPUT input)
 	                  saturate(unclampedDistanceMul) :
 	                  0.0.xxxx;
 #					if defined(HORIZON_FIX)
-	if (primaryRawDepth >= HorizonFix::EmptyDepthThreshold)
+	if (FrameBuffer::ToStandardDepth(primaryRawDepth) >= HorizonFix::EmptyDepthThreshold)
 		distanceMul = 1.0.xxxx;
 #					endif
 #				endif

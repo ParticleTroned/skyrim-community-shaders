@@ -42,7 +42,7 @@ float SampleRawDepthClamped(int2 coord, int2 maxCoord)
 float SampleRawMinDepth2x2(float2 uv)
 {
 	float4 depthQuad = SceneDepth.GatherRed(LinearSampler, uv);
-	return min(min(depthQuad.x, depthQuad.y), min(depthQuad.z, depthQuad.w));
+	return FrameBuffer::NearestDepth(depthQuad);
 }
 
 float SampleRawMinDepth3x3(float2 uv)
@@ -53,25 +53,25 @@ float SampleRawMinDepth3x3(float2 uv)
 	int2 maxCoord = int2(width, height) - 1;
 	int2 centerCoord = int2(uv * float2(width, height));
 
-	float row0 = min(
+	float row0 = FrameBuffer::NearerDepth(
 		SampleRawDepthClamped(centerCoord + int2(-1, -1), maxCoord),
-		min(
+		FrameBuffer::NearerDepth(
 			SampleRawDepthClamped(centerCoord + int2(0, -1), maxCoord),
 			SampleRawDepthClamped(centerCoord + int2(1, -1), maxCoord)));
 
-	float row1 = min(
+	float row1 = FrameBuffer::NearerDepth(
 		SampleRawDepthClamped(centerCoord + int2(-1, 0), maxCoord),
-		min(
+		FrameBuffer::NearerDepth(
 			SampleRawDepthClamped(centerCoord + int2(0, 0), maxCoord),
 			SampleRawDepthClamped(centerCoord + int2(1, 0), maxCoord)));
 
-	float row2 = min(
+	float row2 = FrameBuffer::NearerDepth(
 		SampleRawDepthClamped(centerCoord + int2(-1, 1), maxCoord),
-		min(
+		FrameBuffer::NearerDepth(
 			SampleRawDepthClamped(centerCoord + int2(0, 1), maxCoord),
 			SampleRawDepthClamped(centerCoord + int2(1, 1), maxCoord)));
 
-	return min(row0, min(row1, row2));
+	return FrameBuffer::NearerDepth(row0, FrameBuffer::NearerDepth(row1, row2));
 }
 #		endif
 
@@ -83,6 +83,7 @@ bool IsHiddenStencil(uint2 coord)
 	StencilTex.GetDimensions(width, height);
 	int2 maxCoord = int2(width, height) - 1;
 
+	bool hidden = false;
 	[unroll] for (int y = -1; y <= 1; ++y)
 	{
 		[unroll] for (int x = -1; x <= 1; ++x)
@@ -91,11 +92,11 @@ bool IsHiddenStencil(uint2 coord)
 			if (any(sampleCoord < int2(0, 0)) || any(sampleCoord > maxCoord))
 				continue;
 			if (StencilTex.Load(int3(sampleCoord, 0)) > 0)
-				return true;
+				hidden = true;
 		}
 	}
 
-	return false;
+	return hidden;
 }
 #		endif
 #	endif
@@ -149,7 +150,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #		endif
 
-	// WaterData is a 5×5 grid centered on the camera; tile 12 (row 2, col 2) is
+	// WaterData is a 5 by 5 grid centered on the camera; tile 12 (row 2, col 2) is
 	// always the camera's own tile.  Pass eyeIndex so GetWaterData corrects the .w
 	// (water surface height) from eye-0 camera-relative Z into the current eye's frame.
 	float waterHeight = SharedData::GetWaterData(float3(0, 0, 0), eyeIndex).w;
@@ -178,16 +179,16 @@ PS_OUTPUT main(PS_INPUT input)
 		float depth = SceneDepth.Load(int3(depthCoord, 0)).x;
 #		endif
 
-		if (depth > kSkyDepthThreshold) {
+		if (abs(depth - FrameBuffer::FarPlaneDepth()) > kSkyDepthThreshold) {
 			// Geometry pixel: reconstruct world position from depth.
 			// CameraViewProjInverse[eyeIndex] maps clip-space back to the per-eye
 			// camera-relative world space.  waterHeight has been adjusted to the same
 			// frame, so the comparison is correct for both eyes.
 			float4 worldPos = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], float4(ndc, depth, 1.0));
 			worldPos /= worldPos.w;
-			// kSurfaceBias (Skyrim world units, ~1 unit ≈ 1.4 cm) anchors the mask
+			// kSurfaceBias (Skyrim world units, about 1.4 cm each) anchors the mask
 			// threshold relative to the flat waterHeight plane to absorb wave-vertex
-			// displacement (measured max trough ≈ 2.92 units; 3.5 gives margin).
+			// displacement (measured max trough about 2.92 units; 3.5 gives margin).
 			//
 			// When the camera is underwater, expand upward so the near-surface band
 			// remains fogged.
@@ -197,9 +198,9 @@ PS_OUTPUT main(PS_INPUT input)
 			float threshold = (cameraUnderwater && lookingUp) ? waterHeight + kSurfaceBias : waterHeight - kSurfaceBias;
 			psout.UnderwaterMask = (worldPos.z < threshold) ? 1.0 : 0.0;
 		} else {
-			// depth <= kSkyDepthThreshold: sky / unrendered pixels (reversed-Z depth clear value).
+			// Sky samples use the native far endpoint for ray reconstruction.
 			// Unproject to obtain the per-pixel ray direction and decide based on that.
-			float4 worldFarPos = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], float4(ndc, 0.0, 1.0));
+			float4 worldFarPos = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], float4(ndc, FrameBuffer::FarPlaneDepth(), 1.0));
 			worldFarPos /= worldFarPos.w;
 			float3 rayDir = normalize(worldFarPos.xyz);
 			// Per-eye waterHeight > 0 means the water surface is above THIS eye's camera

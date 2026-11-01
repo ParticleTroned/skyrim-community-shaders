@@ -1,0 +1,261 @@
+#include "d3d_resource_naming.h"
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cmath>
+#include <cstring>
+#include <d3d11.h>
+#include <d3dcompiler.h>
+#include <format>
+#include <iostream>
+#include <limits>
+#include <mutex>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <winrt/base.h>
+
+namespace REL
+{
+	template <class Function>
+	using Relocation = Function*;
+}
+namespace logger
+{
+	template <class... Args>
+	void error(const char*, const Args&...)
+	{}
+}
+struct ReverseZ
+{
+	std::string failure;
+	ID3D11DepthStencilView* reverseView = nullptr;
+	bool IsReverseDepthView(ID3D11DepthStencilView* view) const { return view && view == reverseView; }
+	void RejectRendering(const char* reason);
+	ID3D11DepthStencilState* GetReversedState(ID3D11DepthStencilState*);
+	ID3D11RasterizerState* GetReversedRasterizerState(ID3D11RasterizerState*);
+};
+namespace globals
+{
+	namespace d3d
+	{
+		ID3D11Device* device;
+		ID3D11DeviceContext* context;
+	}
+	namespace features
+	{
+		ReverseZ reverseZ;
+	}
+}
+namespace
+{
+#include "reverse_z_state_comparison.h"
+#include "reverse_z_state_storage.h"
+	void ReapplyNearPlaneShader(ID3D11DeviceContext*) {}
+#include "reverse_z_state_getters.h"
+#include "reverse_z_state_hooks.h"
+
+	void Require(bool condition, const char* message)
+	{
+		if (!condition)
+			throw std::runtime_error(message);
+	}
+
+	void TestMenuTargetRefresh(ID3D11Device* device, ID3D11DeviceContext* context)
+	{
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = desc.Height = 2;
+		desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+		desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+		winrt::com_ptr<ID3D11Texture2D> color, readback, depth;
+		Require(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, color.put())), "Menu target creation failed");
+		Util::SetResourceName(color.get(), "ReverseZStateTest::MenuColor");
+		winrt::com_ptr<ID3D11RenderTargetView> colorView;
+		Require(SUCCEEDED(device->CreateRenderTargetView(color.get(), nullptr, colorView.put())), "Menu color view creation failed");
+		Util::SetResourceName(colorView.get(), "ReverseZStateTest::MenuColor RTV");
+		desc.BindFlags = 0;
+		desc.Usage = D3D11_USAGE_STAGING;
+		desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		Require(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, readback.put())), "Menu readback creation failed");
+		Util::SetResourceName(readback.get(), "ReverseZStateTest::MenuReadback");
+		desc.Format = DXGI_FORMAT_D32_FLOAT;
+		desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.CPUAccessFlags = 0;
+		Require(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, depth.put())), "Menu depth creation failed");
+		Util::SetResourceName(depth.get(), "ReverseZStateTest::MenuDepth");
+		winrt::com_ptr<ID3D11DepthStencilView> depthView;
+		Require(SUCCEEDED(device->CreateDepthStencilView(depth.get(), nullptr, depthView.put())), "Menu depth view creation failed");
+		Util::SetResourceName(depthView.get(), "ReverseZStateTest::MenuDepth DSV");
+		const char* program =
+			"float4 vs(uint id:SV_VertexID):SV_Position {"
+			"float2 p=float2((id<<1)&2,id&2);return float4(p*float2(2,-2)+float2(-1,1),0.5,1); }"
+			"float4 ps():SV_Target {return float4(0,1,0,1);}";
+		winrt::com_ptr<ID3DBlob> vertexCode, pixelCode, errors;
+		Require(SUCCEEDED(D3DCompile(program, std::strlen(program), nullptr, nullptr, nullptr, "vs", "vs_5_0", 0, 0, vertexCode.put(), errors.put())), "Menu vertex compilation failed");
+		errors = nullptr;
+		Require(SUCCEEDED(D3DCompile(program, std::strlen(program), nullptr, nullptr, nullptr, "ps", "ps_5_0", 0, 0, pixelCode.put(), errors.put())), "Menu pixel compilation failed");
+		winrt::com_ptr<ID3D11VertexShader> vertex;
+		winrt::com_ptr<ID3D11PixelShader> pixel;
+		Require(SUCCEEDED(device->CreateVertexShader(vertexCode->GetBufferPointer(), vertexCode->GetBufferSize(), nullptr, vertex.put())), "Menu vertex creation failed");
+		Util::SetResourceName(vertex.get(), "ReverseZStateTest::MenuVS");
+		Require(SUCCEEDED(device->CreatePixelShader(pixelCode->GetBufferPointer(), pixelCode->GetBufferSize(), nullptr, pixel.put())), "Menu pixel creation failed");
+		Util::SetResourceName(pixel.get(), "ReverseZStateTest::MenuPS");
+		D3D11_RASTERIZER_DESC rasterDesc{};
+		rasterDesc.FillMode = D3D11_FILL_SOLID;
+		rasterDesc.CullMode = D3D11_CULL_NONE;
+		rasterDesc.DepthClipEnable = TRUE;
+		winrt::com_ptr<ID3D11RasterizerState> raster;
+		Require(SUCCEEDED(device->CreateRasterizerState(&rasterDesc, raster.put())), "Menu rasterizer creation failed");
+		Util::SetResourceName(raster.get(), "ReverseZStateTest::MenuRasterizer");
+		globals::features::reverseZ.reverseView = depthView.get();
+		for (bool reversed : { false, true }) {
+			context->ClearState();
+			g_reverseTargetBound = false;
+			g_projectionReversed = reversed;
+			auto* target = colorView.get();
+			context->OMSetRenderTargets(1, &target, depthView.get());
+			ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, nullptr, 0);
+			RefreshBoundDepthTarget();
+			Require(g_reverseTargetBound, "World activation did not reclassify the already bound depth view");
+			const float staleColor[]{ 1, 0, 0, 1 };
+			context->ClearRenderTargetView(target, staleColor);
+			ID3D11DeviceContext_ClearDepthStencilView::thunk(context, depthView.get(), D3D11_CLEAR_DEPTH, 1, 0);
+			const D3D11_VIEWPORT viewport{ 0, 0, 2, 2, 0, 1 };
+			context->RSSetViewports(1, &viewport);
+			context->RSSetState(raster.get());
+			context->VSSetShader(vertex.get(), nullptr, 0);
+			context->PSSetShader(pixel.get(), nullptr, 0);
+			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			context->Draw(3, 0);
+			context->OMSetRenderTargets(0, nullptr, nullptr);
+			context->CopyResource(readback.get(), color.get());
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			Require(SUCCEEDED(context->Map(readback.get(), 0, D3D11_MAP_READ, 0, &mapped)), "Menu readback failed");
+			const auto result = *static_cast<const uint32_t*>(mapped.pData);
+			context->Unmap(readback.get(), 0);
+			Require(result == 0xff00ff00u, reversed ? "Reversed scene retained stale color" : "Standard menu retained stale color after depth clear reversal");
+		}
+		context->ClearState();
+		globals::features::reverseZ.reverseView = nullptr;
+		g_reverseTargetBound = g_projectionReversed = false;
+	}
+	template <class Hook, size_t Slot>
+	void UseNative(ID3D11DeviceContext* context)
+	{
+		Hook::func = reinterpret_cast<decltype(Hook::func)>((*reinterpret_cast<void***>(context))[Slot]);
+	}
+}
+#include "reverse_z_state_creation.h"
+
+int main()
+{
+	try {
+		winrt::com_ptr<ID3D11Device> device;
+		winrt::com_ptr<ID3D11DeviceContext> context;
+		Require(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+					D3D11_SDK_VERSION, device.put(), nullptr, context.put())),
+			"WARP device creation failed");
+		globals::d3d::device = device.get();
+		globals::d3d::context = context.get();
+		UseNative<ID3D11DeviceContext_OMSetDepthStencilState, 36>(context.get());
+		UseNative<ID3D11DeviceContext_RSSetState, 43>(context.get());
+		UseNative<ID3D11DeviceContext_RSSetViewports, 44>(context.get());
+		UseNative<ID3D11DeviceContext_ClearDepthStencilView, 53>(context.get());
+		UseNative<ID3D11DeviceContext_OMGetDepthStencilState, 92>(context.get());
+		UseNative<ID3D11DeviceContext_RSGetState, 94>(context.get());
+		UseNative<ID3D11DeviceContext_RSGetViewports, 95>(context.get());
+		Require(PrepareRejectedDepthState(device.get()), "Rejection fallback preparation failed");
+		TestMenuTargetRefresh(device.get(), context.get());
+
+		D3D11_DEPTH_STENCIL_DESC depthDesc{};
+		depthDesc.DepthEnable = TRUE;
+		depthDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+		depthDesc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+		depthDesc.StencilEnable = TRUE;
+		depthDesc.StencilReadMask = depthDesc.StencilWriteMask = 0x5a;
+		depthDesc.FrontFace = depthDesc.BackFace = { D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_REPLACE, D3D11_COMPARISON_EQUAL };
+		winrt::com_ptr<ID3D11DepthStencilState> requestedDepth, actualDepth, logicalDepth;
+		Require(SUCCEEDED(device->CreateDepthStencilState(&depthDesc, requestedDepth.put())), "Depth state creation failed");
+		Util::SetResourceName(requestedDepth.get(), "ReverseZStateTest::DepthState");
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context.get(), requestedDepth.get(), 21);
+		context->OMGetDepthStencilState(actualDepth.put(), nullptr);
+		Require(actualDepth.get() == requestedDepth.get(), "Standard domain changed requested state");
+		actualDepth = nullptr;
+		g_reverseTargetBound = g_projectionReversed = true;
+		ReapplyMappedStates(context.get());
+		UINT stencilRef = 0;
+		context->OMGetDepthStencilState(actualDepth.put(), &stencilRef);
+		D3D11_DEPTH_STENCIL_DESC mappedDepth{};
+		actualDepth->GetDesc(&mappedDepth);
+		Require(mappedDepth.DepthFunc == D3D11_COMPARISON_GREATER_EQUAL && stencilRef == 21 &&
+					mappedDepth.StencilEnable && mappedDepth.StencilWriteMask == depthDesc.StencilWriteMask &&
+					mappedDepth.FrontFace.StencilPassOp == D3D11_STENCIL_OP_REPLACE,
+			"Reversal changed stencil or comparison contract");
+		ID3D11DeviceContext_OMGetDepthStencilState::thunk(context.get(), logicalDepth.put(), &stencilRef);
+		Require(logicalDepth.get() == requestedDepth.get() && stencilRef == 21, "Depth getter lost logical ownership");
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context.get(), nullptr, 4);
+		logicalDepth = nullptr;
+		ID3D11DeviceContext_OMGetDepthStencilState::thunk(context.get(), logicalDepth.put(), &stencilRef);
+		Require(!logicalDepth && stencilRef == 4, "Default depth getter did not return null");
+
+		D3D11_VIEWPORT viewport{ 0, 0, 2, 2, 0.2f, 0.7f };
+		ID3D11DeviceContext_RSSetViewports::thunk(context.get(), 1, &viewport);
+		UINT count = 1;
+		D3D11_VIEWPORT observed{};
+		context->RSGetViewports(&count, &observed);
+		Require(std::abs(observed.MinDepth - 0.3f) < 1e-6f && std::abs(observed.MaxDepth - 0.8f) < 1e-6f, "Viewport depth interval was not mirrored");
+		ID3D11DeviceContext_RSGetViewports::thunk(context.get(), &count, &observed);
+		Require(std::memcmp(&observed, &viewport, sizeof(viewport)) == 0, "Viewport getter lost requested interval");
+		ID3D11DeviceContext_RSSetViewports::thunk(context.get(), 0, nullptr);
+		count = 1;
+		ID3D11DeviceContext_RSGetViewports::thunk(context.get(), &count, &observed);
+		Require(count == 0, "Empty viewport binding retained stale entries");
+
+		D3D11_RASTERIZER_DESC rasterDesc{};
+		rasterDesc.FillMode = D3D11_FILL_SOLID;
+		rasterDesc.CullMode = D3D11_CULL_NONE;
+		rasterDesc.DepthClipEnable = TRUE;
+		rasterDesc.DepthBias = 7;
+		rasterDesc.SlopeScaledDepthBias = 2;
+		rasterDesc.DepthBiasClamp = 0.25f;
+		winrt::com_ptr<ID3D11RasterizerState> requestedRaster, actualRaster, logicalRaster;
+		Require(SUCCEEDED(device->CreateRasterizerState(&rasterDesc, requestedRaster.put())), "Rasterizer creation failed");
+		Util::SetResourceName(requestedRaster.get(), "ReverseZStateTest::Rasterizer");
+		ID3D11DeviceContext_RSSetState::thunk(context.get(), requestedRaster.get());
+		context->RSGetState(actualRaster.put());
+		D3D11_RASTERIZER_DESC mappedRaster{};
+		actualRaster->GetDesc(&mappedRaster);
+		Require(mappedRaster.DepthBias == -7 && mappedRaster.SlopeScaledDepthBias == -2 && mappedRaster.DepthBiasClamp == -0.25f, "Rasterizer bias was not mirrored");
+		ID3D11DeviceContext_RSGetState::thunk(context.get(), logicalRaster.put());
+		Require(logicalRaster.get() == requestedRaster.get(), "Rasterizer getter lost logical ownership");
+
+		rasterDesc.DepthBias = std::numeric_limits<INT>::min();
+		requestedRaster = nullptr;
+		Require(SUCCEEDED(device->CreateRasterizerState(&rasterDesc, requestedRaster.put())), "Extreme rasterizer fixture creation failed");
+		Util::SetResourceName(requestedRaster.get(), "ReverseZStateTest::UnrepresentableBias");
+		ID3D11DeviceContext_RSSetState::thunk(context.get(), requestedRaster.get());
+		logicalRaster = nullptr;
+		ID3D11DeviceContext_RSGetState::thunk(context.get(), logicalRaster.put());
+		Require(logicalRaster.get() == requestedRaster.get(), "Rejected rasterizer lost its logical getter state");
+		actualDepth = nullptr;
+		context->OMGetDepthStencilState(actualDepth.put(), nullptr);
+		actualDepth->GetDesc(&mappedDepth);
+		Require(g_renderingRejected && !globals::features::reverseZ.failure.empty() && mappedDepth.DepthFunc == D3D11_COMPARISON_NEVER && !mappedDepth.StencilEnable,
+			"Invalid mirrored state did not fail closed");
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context.get(), requestedDepth.get(), 21);
+		actualDepth = nullptr;
+		context->OMGetDepthStencilState(actualDepth.put(), nullptr);
+		Require(actualDepth.get() == g_rejectedDepthState.get(), "A later state bind bypassed the failure latch");
+		g_reverseTargetBound = false;
+		ReapplyMappedStates(context.get());
+		actualDepth = nullptr;
+		context->OMGetDepthStencilState(actualDepth.put(), nullptr);
+		Require(actualDepth.get() == requestedDepth.get(), "Failure latch changed standard render domains");
+	} catch (const std::exception& error) {
+		std::cerr << error.what() << '\n';
+		return 1;
+	}
+}

@@ -1,6 +1,8 @@
 #ifndef DYNAMIC_CUBEMAPS_CAPTURE_COMMON_HLSLI
 #define DYNAMIC_CUBEMAPS_CAPTURE_COMMON_HLSLI
 
+#include "Common/ReverseZ.hlsli"
+
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/SharedData.hlsli"
@@ -112,7 +114,7 @@ bool IsCaptureDepthFootprintValid(float2 sampleUV, uint eyeIndex)
 		return false;
 
 	float4 depths = DepthTexture.GatherRed(LinearSampler, sampleUV);
-	return all(isfinite(depths)) && all(depths >= 0.0) && all(depths < 1.0);
+	return all(isfinite(depths)) && all(depths >= 0.0) && all(depths <= 1.0) && (DepthOrder::Reversed ? all(depths > 0.0) : all(depths < 1.0));
 }
 
 bool SampleCaptureEye(float3 direction, uint eyeIndex, out float3 position, out float3 color, out float2 uv, out float weight)
@@ -151,9 +153,9 @@ bool SampleCaptureEye(float3 direction, uint eyeIndex, out float3 position, out 
 		return false;
 	float nearWeight = lerp(0.88, 1.0, nearValidity);
 #if defined(REFLECTIONS)
-	float skyMask = suppressSkyAndFrameEdge ? (1.0 - smoothstep(0.9988, 0.99997, depth)) : 1.0;
+	float skyMask = suppressSkyAndFrameEdge ? (1.0 - smoothstep(0.9988, 0.99997, FrameBuffer::ToStandardDepth(depth))) : 1.0;
 #else
-	float skyMask = 1.0 - smoothstep(0.9992, 0.99995, depth);
+	float skyMask = 1.0 - smoothstep(0.9992, 0.99995, FrameBuffer::ToStandardDepth(depth));
 #endif
 	weight = forwardMask * nearWeight * edgeMask * skyMask;
 	if (weight <= 1e-3)

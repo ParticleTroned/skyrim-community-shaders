@@ -6,6 +6,8 @@ namespace
 {
 	using ShaderCacheEnablePolicy::Action;
 	using ShaderCacheEnablePolicy::ApplyMode;
+	static_assert(ShaderCacheEnablePolicy::Resolve({ .targetEnabled = false, .customShadersRequired = true }) == Action::None);
+	static_assert(ShaderCacheEnablePolicy::Resolve({ .targetEnabled = false, .mode = ApplyMode::StartupHydration, .customShadersRequired = true }) == Action::None);
 
 	constexpr bool CoversEveryStateCombination()
 	{

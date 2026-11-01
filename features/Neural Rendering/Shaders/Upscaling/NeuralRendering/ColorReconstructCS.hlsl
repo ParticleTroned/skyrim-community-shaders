@@ -81,34 +81,36 @@ float3 RoundPreserveSourceForStorage(float3 value)
 	float3 preserved = baseline.rgb;
 	if (DetailStrength > 0.0 && baseY > 1e-5 && neuralY > 1e-5 &&
 		all(baseWorking >= 0.0) && all(neuralWorking >= 0.0) && all(isfinite(baseWorking)) && all(isfinite(neuralWorking))) {
-		float residual = (log2(neuralY) - log2(baseY)), weightedResidual = 0.0, totalWeight = 0.0;
-		// Adjacent taps preserve fine detail without reading another crop or atlas padding.
-		[unroll] for (int y = -1; y <= 1; ++y)
-		{
-			[unroll] for (int x = -1; x <= 1; ++x)
+		float residual = (log2(neuralY) - log2(baseY));
+		float acceptedResidual = residual;
+		// Zero preservation uses only the current residual, including resolved Neural Lighting.
+		[branch] if (LightingPreservation != 0.0) {
+			float weightedResidual = 0.0, totalWeight = 0.0;
+			// Adjacent taps preserve fine detail without reading another crop or atlas padding.
+			[unroll] for (int y = -1; y <= 1; ++y)
 			{
-				uint2 p = uint2(clamp(int2(local) + int2(x, y), int2(regionMin), int2(regionMax)));
-				float3 b = ToWorking(Baseline.Load(int3(p, 0)).rgb);
-				float3 n = ToWorking(Candidate(p, Baseline.Load(int3(p, 0)).rgb));
-				float by = Luminance(b), ny = Luminance(n);
-				if (by > 1e-5 && ny > 1e-5 && all(b >= 0.0) && all(n >= 0.0) && all(isfinite(b)) && all(isfinite(n))) {
-					float distance = abs((log2(by) - log2(baseY)));
-					float weight = exp2(-4.0 * distance) * ((x == 0 && y == 0) ? 4.0 : 1.0);
-					weightedResidual += weight * (log2(ny) - log2(by));
-					totalWeight += weight;
+				[unroll] for (int x = -1; x <= 1; ++x)
+				{
+					uint2 p = uint2(clamp(int2(local) + int2(x, y), int2(regionMin), int2(regionMax)));
+					float3 b = ToWorking(Baseline.Load(int3(p, 0)).rgb);
+					float3 n = ToWorking(Candidate(p, Baseline.Load(int3(p, 0)).rgb));
+					float by = Luminance(b), ny = Luminance(n);
+					if (by > 1e-5 && ny > 1e-5 && all(b >= 0.0) && all(n >= 0.0) && all(isfinite(b)) && all(isfinite(n))) {
+						float distance = abs((log2(by) - log2(baseY)));
+						float weight = exp2(-4.0 * distance) * ((x == 0 && y == 0) ? 4.0 : 1.0);
+						weightedResidual += weight * (log2(ny) - log2(by));
+						totalWeight += weight;
+					}
 				}
 			}
+			float lowFrequency = totalWeight > 0.0 ? weightedResidual / totalWeight : residual;
+			if (LightingPreservation == 1.0)
+				acceptedResidual = residual - lowFrequency;
+			else
+				acceptedResidual = residual - LightingPreservation * lowFrequency;
 		}
-		float lowFrequency = totalWeight > 0.0 ? weightedResidual / totalWeight : residual;
 		uint2 edge = min(local - regionMin, regionMax - local);
 		float edgeWeight = saturate(float(min(edge.x, edge.y)) / 4.0);
-		float acceptedResidual;
-		if (LightingPreservation == 1.0)
-			acceptedResidual = residual - lowFrequency;
-		else if (LightingPreservation == 0.0)
-			acceptedResidual = residual;
-		else
-			acceptedResidual = residual - LightingPreservation * lowFrequency;
 		float stops = clamp(acceptedResidual * DetailStrength * edgeWeight, -MaximumDetailStops, MaximumDetailStops);
 		float3 detail = FromWorking(baseWorking * exp2(stops));
 		if (RepresentableRGB(detail))

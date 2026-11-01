@@ -103,7 +103,9 @@ public:
 	struct alignas(16) LightCullingCB
 	{
 		uint LightCount;
-		uint pad[3];
+		uint WaterCandidateBudget;
+		uint ParticleContactEnabled;
+		uint pad;
 		uint ClusterSize[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(LightCullingCB);
@@ -147,7 +149,7 @@ public:
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
 		uint EnableParticleContactShadows;
-		uint pad1;
+		uint WaterContactCandidateBudget;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	// Compile-time size lock catches CPU/GPU cbuffer layout drift. STATIC_ASSERT_ALIGNAS_16
@@ -242,6 +244,7 @@ public:
 
 	Util::LazyShader<ID3D11ComputeShader> clusterBuildingCS;
 	Util::LazyShader<ID3D11ComputeShader> clusterCullingCS;
+	Util::LazyShader<ID3D11ComputeShader> waterContactCandidatesCS;
 	Util::LazyShader<ID3D11ComputeShader> shadowDemandCS;
 	Util::LazyShader<ID3D11ComputeShader> shadowDepthPyramidCS;
 
@@ -483,6 +486,7 @@ public:
 	struct Settings
 	{
 		bool EnableContactShadows = false;
+		uint WaterContactCandidateBudget = 0;
 		// Max raymarch steps at zero depth; linearly ramps to 0 at MaxDistance.
 		uint ContactShadowMaxSteps = 4;
 		// View-space depth at which contact shadows fade fully off.

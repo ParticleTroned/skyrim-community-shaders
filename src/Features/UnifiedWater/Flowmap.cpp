@@ -178,12 +178,6 @@ bool Flowmap::GenerateFlowmap(bool useMips)
 		return false;
 	}
 
-	Util::MultithreadScope guard(ctx);
-	if (!guard) {
-		logger::error("[Unified Water] [Flowmap] ID3D11Multithread not available");
-		return false;
-	}
-
 	const auto tamriel = RE::TESForm::LookupByEditorID<RE::TESWorldSpace>("Tamriel");
 	if (!tamriel) {
 		logger::error("[Unified Water] [Flowmap] Failed to load Tamriel WorldSpace");
@@ -338,6 +332,12 @@ bool Flowmap::GenerateFlowmap(bool useMips)
 	}
 
 	{
+		Util::MultithreadScope guard(ctx);
+		if (!guard) {
+			logger::error("[Unified Water] [Flowmap] ID3D11Multithread not available");
+			return false;
+		}
+
 		ctx->ExecuteCommandList(commandList.get(), TRUE);
 
 		const auto filename = std::format(L"Tamriel-Flowmap.{}.{}.{}.{}.dds", width, height, offsetX, offsetY);

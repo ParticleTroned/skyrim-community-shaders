@@ -2,6 +2,10 @@
 
 #include <shared_mutex>
 #include <new>
+#include <cstdio>
+#include <exception>
+#include <source_location>
+#include <string_view>
 void* operator new[](size_t size, const char* pName, int flags, unsigned debugFlags, const char* file, int line);
 void* operator new[](size_t size, size_t alignment, size_t alignmentOffset, const char* pName, int flags,
 	unsigned debugFlags, const char* file, int line);
@@ -132,31 +136,68 @@ namespace util
 
 namespace DX
 {
-	// Helper class for COM exceptions
+	/** A COM failure with bounded diagnostic text and its original HRESULT. */
 	class com_exception : public std::exception
 	{
 	public:
-		explicit com_exception(HRESULT hr) noexcept :
-			result(hr) {}
-
-		const char* what() const override
+		explicit com_exception(HRESULT hr, const std::source_location& where = std::source_location::current()) noexcept :
+			result(hr)
 		{
-			static char s_str[64] = {};
-			sprintf_s(s_str, "Failure with HRESULT of %08X", static_cast<unsigned int>(result));
-			return s_str;
+			std::string_view file = where.file_name();
+			if (const auto separator = file.find_last_of("\\/"); separator != std::string_view::npos)
+				file.remove_prefix(separator + 1);
+			const int written = std::snprintf(message, sizeof(message), "HRESULT 0x%08X at %.*s:%u",
+				static_cast<unsigned int>(result), static_cast<int>(file.size()), file.data(), static_cast<unsigned int>(where.line()));
+			if (written < 0 || static_cast<std::size_t>(written) >= sizeof(message)) {
+				std::snprintf(message, sizeof(message), "HRESULT 0x%08X at line %u",
+					static_cast<unsigned int>(result), static_cast<unsigned int>(where.line()));
+				return;
+			}
+
+			// Descriptive lookup must not replace the HRESULT when memory is exhausted.
+			wchar_t systemMessage[kSystemMessageCapacity]{};
+			DWORD length = ::FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr,
+				static_cast<DWORD>(result), 0, systemMessage, static_cast<DWORD>(kSystemMessageCapacity), nullptr);
+			while (length && (systemMessage[length - 1] == L'\r' || systemMessage[length - 1] == L'\n' ||
+							  systemMessage[length - 1] == L' ' || systemMessage[length - 1] == L'\t'))
+				--length;
+			const auto prefixLength = static_cast<std::size_t>(written);
+			if (!length || prefixLength + 3 >= sizeof(message))
+				return;
+			message[prefixLength] = ':';
+			message[prefixLength + 1] = ' ';
+			const int converted = ::WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, systemMessage, static_cast<int>(length),
+				message + prefixLength + 2, static_cast<int>(sizeof(message) - prefixLength - 3), nullptr, nullptr);
+			message[converted > 0 ? prefixLength + 2 + static_cast<std::size_t>(converted) : prefixLength] = '\0';
 		}
 
+		const char* what() const noexcept override { return message; }
+
+		/** Returns the unmodified failure code for recovery decisions. */
 		HRESULT Error() const noexcept { return result; }
 
 	private:
+		static constexpr std::size_t kMessageCapacity = 1024;
+		static constexpr std::size_t kSystemMessageCapacity = 256;
+
 		HRESULT result;
+		char message[kMessageCapacity]{};
 	};
 
-	// Helper utility converts D3D API failures into exceptions.
-	inline void ThrowIfFailed(HRESULT hr)
+	namespace detail
+	{
+		// Keep exception storage and diagnostic formatting out of successful call paths.
+		[[noreturn]] __declspec(noinline) inline void ThrowComFailure(HRESULT hr, const std::source_location& where)
+		{
+			throw com_exception(hr, where);
+		}
+	}
+
+	/** Throws a COM exception naming the caller when its HRESULT indicates failure. */
+	inline void ThrowIfFailed(HRESULT hr, const std::source_location& where = std::source_location::current())
 	{
 		if (FAILED(hr)) {
-			throw com_exception(hr);
+			detail::ThrowComFailure(hr, where);
 		}
 	}
 }

@@ -43,6 +43,7 @@
 #include "Features/GrassCollision.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/LightLimitFix/LightAttach.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
@@ -700,6 +701,7 @@ void State::NotifyOrdinarySave(uint32_t a_currentFrame)
 
 void State::BeginSaveLoadSafeMode(uint32_t a_currentFrame)
 {
+	LightLimitFixDetail::LightAttach::Invalidate();
 	std::lock_guard lock(saveLoadSafeModeMutex);
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
 	worldLoadTransitionStartFrame.store(currentFrame, std::memory_order_release);
@@ -716,6 +718,7 @@ void State::BeginSaveLoadSafeMode(uint32_t a_currentFrame)
 
 void State::ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount)
 {
+	LightLimitFixDetail::LightAttach::Invalidate();
 	std::lock_guard lock(saveLoadSafeModeMutex);
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
 	if (worldLoadTransitionStartFrame.load(std::memory_order_acquire) == 0)
@@ -791,6 +794,7 @@ void State::UpdateSaveLoadSafeMode()
 	const bool ordinarySaveRecoveryUnsafe = !engineStateKnown ||
 	                                        engineLoadingOrInitializing || IsMainOrLoadingMenuOpen() || pendingPostLoadRuntimeReset;
 	if (ordinarySaveRecoveryUnsafe) {
+		LightLimitFixDetail::LightAttach::Invalidate();
 		RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::Other);
 	} else if (engineSaving && !engineSavingWasActive) {
 		RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::OrdinarySave);

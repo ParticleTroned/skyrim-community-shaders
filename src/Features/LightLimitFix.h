@@ -10,7 +10,9 @@
 #include "Features/LightLimitFix/ParticleLights.h"
 #include "Features/LightLimitFix/SceneLightSnapshot.h"
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
+#include "Features/LightLimitFix/LightAttach.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -297,7 +299,7 @@ public:
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	/** Includes deferred contact-shadow requests in the overview state. */
-	bool IsPerformanceToggleEnabled() const override { return settings.EnableParticleLights || IsContactShadowsRequested() || settings.EnableParticleContactShadows || settings.ShadowCulling.Active(); }
+	bool IsPerformanceToggleEnabled() const override { return settings.EnableParticleLights || IsContactShadowsRequested() || settings.EnableParticleContactShadows || settings.ShadowCulling.Active() || settings.SkipRedundantLightAttach; }
 	/** Changes effect switches while retaining particle and shadow quality controls. */
 	void SetPerformanceToggleEnabled(bool a_enabled) override
 	{
@@ -309,11 +311,15 @@ public:
 		settings.ShadowCulling.torch = a_enabled && defaults.ShadowCulling.torch;
 		settings.ShadowCulling.actors = a_enabled && defaults.ShadowCulling.actors;
 		settings.ShadowCulling.smallActorParts = a_enabled && defaults.ShadowCulling.smallActorParts;
+		settings.SkipRedundantLightAttach = false;
+		LightLimitFixDetail::LightAttach::Invalidate();
 	}
 	virtual bool IsPerformanceCostMeasurementReady() const override;
-	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableParticleLights || settings.EnableContactShadows || settings.EnableParticleContactShadows || settings.ShadowCulling.Active(); }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableParticleLights || settings.EnableContactShadows || settings.EnableParticleContactShadows || settings.ShadowCulling.Active() || settings.SkipRedundantLightAttach; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
+		settings.SkipRedundantLightAttach = false;
+		LightLimitFixDetail::LightAttach::Invalidate();
 		const Settings defaults{};
 		if (a_enabled) {
 			settings.EnableParticleLights = defaults.EnableParticleLights;
@@ -359,7 +365,9 @@ public:
 			{ "ContactShadowClusterBudget", settings.ContactShadowClusterBudget },
 			{ "ParticleContactShadowBudget", settings.ParticleContactShadowBudget },
 			{ "StrictContactShadowBudget", settings.StrictContactShadowBudget },
-			{ "ShadowCulling", settings.ShadowCulling }
+			{ "ShadowCulling", settings.ShadowCulling },
+			{ "SkipRedundantLightAttach", settings.SkipRedundantLightAttach },
+			{ "LightAttachRefreshFrames", settings.LightAttachRefreshFrames }
 		};
 	}
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
@@ -383,6 +391,10 @@ public:
 		settings.StrictContactShadowBudget = a_state.value("StrictContactShadowBudget", settings.StrictContactShadowBudget);
 		if (a_state.contains("ShadowCulling"))
 			settings.ShadowCulling = LightLimitFixDetail::ShadowCulling::Parse(a_state.at("ShadowCulling"));
+		settings.SkipRedundantLightAttach = a_state.value("SkipRedundantLightAttach", settings.SkipRedundantLightAttach);
+		settings.LightAttachRefreshFrames = std::clamp(a_state.value("LightAttachRefreshFrames", settings.LightAttachRefreshFrames),
+			LightLimitFixDetail::LightAttach::MinimumRefreshFrames, LightLimitFixDetail::LightAttach::MaximumRefreshFrames);
+		LightLimitFixDetail::LightAttach::Invalidate();
 	}
 	virtual void DrawOverlay() override;
 	virtual bool IsOverlayVisible() const override { return settings.EnableLightsVisualisation; }
@@ -449,6 +461,8 @@ public:
 		uint ParticleContactShadowBudget = 1;
 		uint StrictContactShadowBudget = 4;
 		LightLimitFixDetail::ShadowCulling::Settings ShadowCulling;
+		bool SkipRedundantLightAttach = false;
+		int LightAttachRefreshFrames = LightLimitFixDetail::LightAttach::DefaultRefreshFrames;
 	};
 
 	uint clusterSize[3] = { 16 };

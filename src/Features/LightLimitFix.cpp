@@ -5,6 +5,7 @@
 #include "GpuPass.h"
 #include "InverseSquareLighting.h"
 #include "LightLimitFix/ShadowCulling.h"
+#include "LightLimitFix/LightAttach.h"
 #include "LightLimitFix/VRHookPolicy.h"
 #include "LinearLighting.h"
 #include "LocationContext.h"
@@ -699,6 +700,8 @@ namespace
 
 	void SanitizeSettings(LightLimitFix::Settings& a_settings)
 	{
+		a_settings.LightAttachRefreshFrames = std::clamp(a_settings.LightAttachRefreshFrames,
+			LightLimitFixDetail::LightAttach::MinimumRefreshFrames, LightLimitFixDetail::LightAttach::MaximumRefreshFrames);
 		LightLimitFixDetail::ShadowCulling::Validate(a_settings.ShadowCulling);
 		a_settings.LightsVisualisationMode = std::min(a_settings.LightsVisualisationMode, kLightsVisualisationModeMax);
 		a_settings.ContactShadowQuality = std::min(a_settings.ContactShadowQuality, kContactShadowQualityMax);
@@ -1084,6 +1087,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ParticleContactShadowBudget,
 	StrictContactShadowBudget,
 	ShadowCulling,
+	SkipRedundantLightAttach,
+	LightAttachRefreshFrames,
 	EnableLightsVisualisation,
 	LightsVisualisationMode)
 void LightLimitFix::DrawSettings()
@@ -1323,6 +1328,7 @@ void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 	if (!a_advanced) {
 		return;
 	}
+	LightLimitFixDetail::LightAttach::DrawSettings(settings.SkipRedundantLightAttach, settings.LightAttachRefreshFrames);
 
 	ImGui::SeparatorText("Particle Lights");
 	Util::Widgets::Checkbox("Enable Culling", &settings.EnableParticleLightsCulling);
@@ -1538,6 +1544,8 @@ void LightLimitFix::SetupRenderTargetResources()
 
 void LightLimitFix::Reset()
 {
+	LightLimitFixDetail::LightAttach::Update(settings.SkipRedundantLightAttach, settings.LightAttachRefreshFrames,
+		loaded && !globals::state->IsFeatureDisabled(GetShortName()));
 	LightLimitFixDetail::ShadowCulling::Update(settings.ShadowCulling, loaded && !globals::state->IsFeatureDisabled(GetShortName()));
 	effectLightValidationCache.clear();
 	// Frame and load resets release retained lights outside the engine's queue lock.
@@ -1595,6 +1603,7 @@ void LightLimitFix::LoadSettings(json& o_json)
 {
 	runtimeToggle.ReplaceSettings(settings, o_json.get<Settings>(), &Settings::EnableContactShadows);
 	SanitizeSettings(settings);
+	LightLimitFixDetail::LightAttach::Invalidate();
 }
 
 void LightLimitFix::SaveSettings(json& o_json)
@@ -1608,6 +1617,7 @@ void LightLimitFix::RestoreDefaultSettings()
 {
 	runtimeToggle.ReplaceSettings(settings, Settings{}, &Settings::EnableContactShadows);
 	SanitizeSettings(settings);
+	LightLimitFixDetail::LightAttach::Invalidate();
 }
 
 RE::NiNode* GetParentRoomNode(RE::NiAVObject* object)
@@ -3095,6 +3105,7 @@ void LightLimitFix::Hooks::InstallVREffectShaderLightGuards()
 
 void LightLimitFix::PostPostLoad()
 {
+	LightLimitFixDetail::LightAttach::Install();
 	LightLimitFixDetail::ShadowCulling::Install();
 	globals::features::llf::particleLights.GetConfigs();
 	particleLightsReferences.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 4u);

@@ -2318,6 +2318,11 @@ if(BUILD_CONTROLLER_TESTS)
     include("${PROJECT_SOURCE_DIR}/tests/virtual_function_hook.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/engine_overflow_guards.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/light_list_search.cmake")
+    add_controller_test(
+        light_attach_gate_test
+        LightAttachGate
+        tests/light_attach_gate_test.cpp
+    )
     include("${PROJECT_SOURCE_DIR}/tests/hang_guards.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/actor_shape_bounds.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/terrain_variation_mesh.cmake")

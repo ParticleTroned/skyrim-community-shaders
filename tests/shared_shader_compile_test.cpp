@@ -3,6 +3,7 @@
 #include "Utils/ShaderSourceProvenance.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <cctype>
@@ -21,6 +22,19 @@ namespace BuildProvenance
 	std::string GetShaderCompilerIdentity() { return "test-d3dcompiler"; }
 }
 
+namespace RE
+{
+	struct BSShader
+	{
+		enum Type
+		{
+			Lighting,
+			ImageSpace,
+			Total
+		};
+	};
+}
+
 namespace
 {
 	Util::CompileDedupe::Registry& GetCompileDedupe()
@@ -34,11 +48,13 @@ namespace
 	public:
 		std::mutex compilationMutex;
 		std::atomic<uint64_t> generation = 0;
+		std::array<std::atomic<uint64_t>, RE::BSShader::Total> typeEpochs{};
+#include "shared_compile_generation.h"
 		std::atomic<uint64_t> contentDedupeTasks = 0;
 		std::atomic<uint64_t> activeReuseTasks = 0;
 		std::atomic<uint64_t> previousReuseTasks = 0;
-		void IncContentReuse(bool a_previous, std::optional<uint64_t> a_taskGeneration);
-		void IncContentDedupe(std::optional<uint64_t> a_taskGeneration);
+		void IncContentReuse(bool a_previous, RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration);
+		void IncContentDedupe(RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration);
 	};
 
 	// clang-format off
@@ -223,15 +239,25 @@ int main()
 	RuntimeMacrosAndFallback();
 	CompilationSet counters;
 	counters.generation = 2;
-	counters.IncContentDedupe(1);
+	counters.IncContentDedupe(RE::BSShader::Lighting, 1);
 	assert(counters.contentDedupeTasks == 0);
-	counters.IncContentDedupe(2);
-	counters.IncContentDedupe(std::nullopt);
+	counters.IncContentDedupe(RE::BSShader::Lighting, 2);
+	counters.IncContentDedupe(RE::BSShader::Lighting, std::nullopt);
 	assert(counters.contentDedupeTasks == 2);
-	counters.IncContentReuse(false, 1);
-	counters.IncContentReuse(true, 1);
+	counters.IncContentReuse(false, RE::BSShader::Lighting, 1);
+	counters.IncContentReuse(true, RE::BSShader::Lighting, 1);
 	assert(counters.activeReuseTasks == 0 && counters.previousReuseTasks == 0);
-	counters.IncContentReuse(false, 2);
-	counters.IncContentReuse(true, 2);
+	counters.IncContentReuse(false, RE::BSShader::Lighting, 2);
+	counters.IncContentReuse(true, RE::BSShader::Lighting, 2);
 	assert(counters.activeReuseTasks == 1 && counters.previousReuseTasks == 1);
+	++counters.typeEpochs[RE::BSShader::ImageSpace];
+	counters.IncContentDedupe(RE::BSShader::ImageSpace, 2);
+	counters.IncContentReuse(false, RE::BSShader::ImageSpace, 2);
+	counters.IncContentReuse(true, RE::BSShader::ImageSpace, 2);
+	assert(counters.contentDedupeTasks == 2 && counters.activeReuseTasks == 1 && counters.previousReuseTasks == 1);
+	counters.IncContentDedupe(RE::BSShader::Lighting, 2);
+	counters.IncContentDedupe(RE::BSShader::ImageSpace, 3);
+	counters.IncContentReuse(false, RE::BSShader::ImageSpace, 3);
+	counters.IncContentReuse(true, RE::BSShader::Lighting, 2);
+	assert(counters.contentDedupeTasks == 4 && counters.activeReuseTasks == 2 && counters.previousReuseTasks == 2);
 }

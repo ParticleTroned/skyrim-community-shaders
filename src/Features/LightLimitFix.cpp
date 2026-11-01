@@ -1304,7 +1304,8 @@ void LightLimitFix::DrawSettings()
 	currentEnableLightsVisualisation = settings.EnableLightsVisualisation;
 	if (previousEnableLightsVisualisation != currentEnableLightsVisualisation) {
 		globals::state->SetDefines(settings.EnableLightsVisualisation ? "LLFDEBUG" : "");
-		shaderCache->Clear(RE::BSShader::Type::Lighting);
+		// Global defines also affect grass and effect shaders and their active tasks.
+		shaderCache->Clear();
 		previousEnableLightsVisualisation = currentEnableLightsVisualisation;
 	}
 }

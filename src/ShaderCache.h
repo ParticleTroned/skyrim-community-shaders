@@ -1,6 +1,7 @@
 #pragma once
 
 #include <BS_thread_pool.hpp>
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -248,6 +249,8 @@ namespace SIE
 		void SetGeneration(uint64_t a_generation) { generation = a_generation; }
 		/** @brief Returns the compilation batch that owns this task. */
 		uint64_t GetGeneration() const { return generation; }
+		/** @brief Returns the shader category whose invalidation owns this task. */
+		RE::BSShader::Type GetType() const { return shader.shaderType.get(); }
 
 		bool operator==(const ShaderCompilationTask& other) const;
 
@@ -317,21 +320,33 @@ namespace SIE
 		void Complete(const ShaderCompilationTask& task);
 		/** @brief Frees a dispatch slot and wakes WaitTake(). Call for every
 		 *  dispatched task, including stale-generation and stopped tasks. */
-		void ReleaseDispatchSlot();
+		void ReleaseDispatchSlot(const ShaderCompilationTask& a_task);
 		/** @brief Counts a cache hit if it belongs to the active generation. */
-		void IncCacheHit(std::optional<uint64_t> a_taskGeneration);
+		void IncCacheHit(RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration);
 		/** @brief Counts a source compile if it belongs to the active generation. */
-		void IncSourceCompile(std::optional<uint64_t> a_taskGeneration);
+		void IncSourceCompile(RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration);
 		/** @brief Counts shared bytecode reuse only for the active generation. */
-		void IncContentDedupe(std::optional<uint64_t> a_taskGeneration);
+		void IncContentDedupe(RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration);
 		/** @brief Records verified disk content reuse for the active generation. */
-		void IncContentReuse(bool a_previous, std::optional<uint64_t> a_taskGeneration);
+		void IncContentReuse(bool a_previous, RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration);
 		/** @brief Latches timing when a current-generation source compile begins. */
-		void MarkPhaseStarted(std::optional<uint64_t> a_taskGeneration);
+		void MarkPhaseStarted(RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration);
+		/** @brief Combines global and category invalidation without truncating either epoch. */
+		uint64_t LiveGeneration(RE::BSShader::Type a_type) const
+		{
+			const auto global = generation.load(std::memory_order_acquire);
+			const auto index = static_cast<size_t>(a_type);
+			return global + (index < typeEpochs.size() ? typeEpochs[index].load(std::memory_order_acquire) : 0);
+		}
+		/** @brief Accepts an untracked request or a task still current for its category. */
+		bool IsCurrentGeneration(RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration) const
+		{
+			return !a_taskGeneration || *a_taskGeneration == LiveGeneration(a_type);
+		}
 		/** @brief Returns whether a task still belongs to the active compilation batch. */
 		bool IsCurrentGeneration(const ShaderCompilationTask& task) const
 		{
-			return task.GetGeneration() == generation.load(std::memory_order_acquire);
+			return IsCurrentGeneration(task.GetType(), task.GetGeneration());
 		}
 		void Clear();
 		/** @brief Invalidates active tasks before cache maps begin clearing. */
@@ -407,6 +422,11 @@ namespace SIE
 		std::optional<ParallelismStats> GetParallelismStats() const;
 
 	private:
+		/** @brief Invalidates one category and removes its tasks; caller holds compilationMutex and cache map locks. */
+		void ClearTypeLocked(RE::BSShader::Type a_type);
+		/** @brief Finalizes progress after completion or cancellation removes the last pending task. */
+		void NotifyIfComplete();
+		std::array<std::atomic<uint64_t>, RE::BSShader::Type::Total> typeEpochs{};
 		/// Tasks awaiting dispatch, ordered by cached priority and task id.
 		std::set<ShaderCompilationTask, TaskPriorityLess> availableTasks;
 		std::set<ShaderCompilationTask, TaskPriorityLess> tasksInProgress;
@@ -610,9 +630,11 @@ namespace SIE
 		};
 		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(
 			const std::string& key,
+			RE::BSShader::Type a_type,
 			std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		void ResolvePendingFailure(
 			const std::string& key,
+			RE::BSShader::Type a_type,
 			std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
 		ID3DBlob* GetCompletedShader(const std::string& a_key);
@@ -722,13 +744,13 @@ namespace SIE
 		/** @brief Returns verified content hits in the loose rollback cache. */
 		uint64_t GetPreviousReuseTasks();
 		/** @brief Counts reuse without charging stale tasks to a new batch. */
-		void IncContentReuseTasks(bool a_previous, std::optional<uint64_t> a_taskGeneration = std::nullopt);
+		void IncContentReuseTasks(bool a_previous, RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		/** @brief Records shared bytecode reuse for the active generation. */
-		void IncContentDedupeTasks(std::optional<uint64_t> a_taskGeneration = std::nullopt);
-		void IncCacheHitTasks(std::optional<uint64_t> a_taskGeneration = std::nullopt);
-		void IncSourceCompileTasks(std::optional<uint64_t> a_taskGeneration = std::nullopt);
+		void IncContentDedupeTasks(RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration = std::nullopt);
+		void IncCacheHitTasks(RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration = std::nullopt);
+		void IncSourceCompileTasks(RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		/** @brief Marks the start of a real source compilation. */
-		void MarkCompilationPhaseStarted(std::optional<uint64_t> a_taskGeneration = std::nullopt);
+		void MarkCompilationPhaseStarted(RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		void ToggleErrorMessages();
 		void DisableShaderBlocking();
 		void IterateShaderBlock(bool a_forward = true);
@@ -755,14 +777,6 @@ namespace SIE
 		 */
 		bool ExportCompileTrace(const std::filesystem::path& a_path);
 
-		/**
-		 * @brief Clears all shaders of a specific type from the shader map.
-		 *
-		 * This function removes all shaders of the specified type (`RE::BSShader::Type`) from the shader map.
-		 *
-		 * @param a_type The shader type (e.g., Grass, Sky, Water) to be cleared from the map.
-		 */
-		void ClearShaderMap(RE::BSShader::Type a_type);
 		void InsertModifiedShaderMap(const std::string& a_shader, std::chrono::time_point<std::chrono::system_clock> a_time);
 		std::chrono::time_point<std::chrono::system_clock> GetModifiedShaderMapTime(const std::string& a_shader);
 
@@ -1052,6 +1066,11 @@ namespace SIE
 		{
 			return a_taskGeneration &&
 			       *a_taskGeneration != compilationSet.generation.load(std::memory_order_acquire);
+		}
+		/** @brief Checks engine tasks against both full and category-scoped invalidation. */
+		bool IsTaskStale(std::optional<uint64_t> a_taskGeneration, RE::BSShader::Type a_type) const
+		{
+			return !compilationSet.IsCurrentGeneration(a_type, a_taskGeneration);
 		}
 
 		void StartActiveShaderCaptureWindow(ActiveShaderCaptureStage a_stage);

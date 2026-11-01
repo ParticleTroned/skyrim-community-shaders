@@ -33,6 +33,18 @@ extract_between(
     "\n\tvoid CompilationSet::Complete(" "shader_queue_add_under_test.h"
 )
 extract_between(
+    "${_header}" "\t\tuint64_t LiveGeneration("
+    "\n\t\tvoid Clear();" "shader_queue_generation.h"
+)
+extract_between(
+    "${_source}" "\tvoid CompilationSet::ClearTypeLocked("
+    "\n\tvoid CompilationSet::Forget(" "shader_queue_clear_type.h"
+)
+extract_between(
+    "${_source}" "\tvoid CompilationSet::ReleaseDispatchSlot("
+    "\n\tvoid CompilationSet::Add(" "shader_queue_release_slot.h"
+)
+extract_between(
     "${_source}" "\tvoid ShaderCache::TrackActiveShader("
     "\n\tvoid ShaderCache::ResetFrameShaderTracking("
     "shader_capture_tracking_under_test.h"

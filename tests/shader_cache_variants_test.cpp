@@ -12,6 +12,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <source_location>
 #include <stdexcept>
@@ -93,7 +94,7 @@ namespace SIE
 #include "shader_task_identity_under_test.h"
 
 	ShaderCompilationTask::ShaderCompilationTask(ShaderClass a_class, const RE::BSShader& a_shader, uint32_t a_descriptor) :
-		shaderClass(a_class), shader(a_shader), descriptor(a_descriptor), cachedPriority(1)
+		shaderClass(a_class), shader(a_shader), descriptor(a_descriptor), cachedPriority(a_shader.shaderType.get() == RE::BSShader::Lighting ? 600 : 1)
 	{}
 
 	namespace SShaderCache
@@ -113,6 +114,7 @@ namespace SIE
 
 namespace SIE
 {
+	constexpr int kHeavyPriorityThreshold = 500;
 	// Scheduling, engine and disk boundaries are stubbed; the queue admission,
 	// capture declarations, tracking, identity and eviction code comes from source.
 	struct CompilationSet
@@ -121,10 +123,15 @@ namespace SIE
 		std::condition_variable conditionVariable;
 		std::set<ShaderCompilationTask, TaskPriorityLess> availableTasks, tasksInProgress, processedTasks;
 		std::atomic<uint64_t> generation{ 9 }, totalTasks{ 0 }, totalPriorityWeight{ 0 };
+		std::array<std::atomic<uint64_t>, RE::BSShader::Total> typeEpochs{};
+		std::atomic<uint32_t> dispatchedTasksInFlight{ 0 }, heavyTasksInFlight{ 0 };
+#include "shader_queue_generation.h"
 		std::atomic<int64_t> lastResetQpc{ 0 };
 		LARGE_INTEGER lastReset{}, lastCalculation{};
 		std::unordered_set<size_t> forgotten;
 		void Add(const ShaderCompilationTask& task);
+		void ClearTypeLocked(RE::BSShader::Type a_type);
+		void ReleaseDispatchSlot(const ShaderCompilationTask& a_task);
 		bool IsInProgress(size_t a_id)
 		{
 			std::lock_guard lock(compilationMutex);
@@ -196,6 +203,8 @@ namespace SIE
 #include "shader_category_prewarm.h"
 #include "shader_eviction_under_test.h"
 #include "shader_queue_add_under_test.h"
+#include "shader_queue_clear_type.h"
+#include "shader_queue_release_slot.h"
 }
 
 struct Upscaling
@@ -353,6 +362,72 @@ namespace
 		}
 	}
 
+	void TestScopedInvalidation()
+	{
+		RE::BSShader lighting, imageSpace;
+		imageSpace.shaderType.value = RE::BSShader::ImageSpace;
+		SIE::CompilationSet queue;
+		ShaderCompilationTask lightingRequest(ShaderClass::Pixel, lighting, 1);
+		ShaderCompilationTask lightingQueued(ShaderClass::Vertex, lighting, 2);
+		ShaderCompilationTask imageRequest(ShaderClass::Pixel, imageSpace, 3);
+		ShaderCompilationTask imageQueued(ShaderClass::Vertex, imageSpace, 4);
+		ShaderCompilationTask imageFinished(ShaderClass::Pixel, imageSpace, 5);
+		for (const auto& task : { lightingRequest, lightingQueued, imageRequest, imageQueued, imageFinished })
+			queue.Add(task);
+		auto dispatch = [&](const ShaderCompilationTask& task) {
+			auto entry = queue.availableTasks.extract(task);
+			auto dispatched = entry.value();
+			queue.tasksInProgress.insert(std::move(entry));
+			++queue.dispatchedTasksInFlight;
+			if (dispatched.GetPriority() >= SIE::kHeavyPriorityThreshold)
+				++queue.heavyTasksInFlight;
+			return dispatched;
+		};
+		const auto lightingRunning = dispatch(lightingRequest);
+		const auto imageRunning = dispatch(imageRequest);
+		queue.processedTasks.insert(queue.availableTasks.extract(imageFinished));
+		const auto standaloneGeneration = queue.generation.load();
+		{
+			std::lock_guard lock(queue.compilationMutex);
+			queue.ClearTypeLocked(RE::BSShader::ImageSpace);
+		}
+		Require(queue.availableTasks.size() == 1 && queue.availableTasks.contains(lightingQueued));
+		Require(queue.tasksInProgress.size() == 1 && queue.tasksInProgress.contains(lightingRunning));
+		Require(queue.processedTasks.empty());
+		// Finished work stays in cumulative progress; only canceled unfinished work is removed.
+		Require(queue.totalTasks == 3 && queue.totalPriorityWeight == 2 * (lightingRunning.GetPriority() + 1) + imageFinished.GetPriority() + 1);
+		Require(queue.dispatchedTasksInFlight == 2 && queue.heavyTasksInFlight == 1);
+		Require(queue.generation == standaloneGeneration);
+		Require(queue.IsCurrentGeneration(lightingRunning) && !queue.IsCurrentGeneration(imageRunning));
+		queue.Add(imageRunning);
+		const auto replacement = *queue.availableTasks.find(imageRunning);
+		Require(queue.IsCurrentGeneration(replacement));
+		Require(replacement.GetGeneration() != imageRunning.GetGeneration());
+		queue.ReleaseDispatchSlot(imageRunning);
+		Require(queue.tasksInProgress.contains(lightingRunning) && queue.availableTasks.contains(replacement));
+		Require(queue.dispatchedTasksInFlight == 1 && queue.heavyTasksInFlight == 1);
+		queue.ReleaseDispatchSlot(lightingRunning);
+		Require(queue.dispatchedTasksInFlight == 0 && queue.heavyTasksInFlight == 0);
+		++queue.generation;
+		Require(!queue.IsCurrentGeneration(lightingRunning) && !queue.IsCurrentGeneration(replacement));
+		Require(queue.generation != standaloneGeneration);
+	}
+
+	void TestUntruncatedTypeEpoch()
+	{
+		SIE::CompilationSet queue;
+		queue.typeEpochs[RE::BSShader::ImageSpace] = (uint64_t{ 1 } << 24) - 1;
+		const auto previous = queue.LiveGeneration(RE::BSShader::ImageSpace);
+		const auto other = queue.LiveGeneration(RE::BSShader::Lighting);
+		{
+			std::lock_guard lock(queue.compilationMutex);
+			queue.ClearTypeLocked(RE::BSShader::ImageSpace);
+		}
+		Require(queue.LiveGeneration(RE::BSShader::ImageSpace) == previous + 1);
+		Require(queue.LiveGeneration(RE::BSShader::Lighting) == other);
+		Require(queue.totalTasks == 0 && queue.totalPriorityWeight == 0);
+	}
+
 	void TestCategoryVariantIdentity()
 	{
 		for (const auto type : { RE::BSShader::Lighting, RE::BSShader::Grass,
@@ -437,6 +512,8 @@ int main()
 		TestCaptureAndClearVariants(true);
 		TestProtectedVariants();
 		TestStageAndTypeIdentity();
+		TestScopedInvalidation();
+		TestUntruncatedTypeEpoch();
 		TestCategoryVariantIdentity();
 		TestCategoryPrewarm();
 		std::cout << "Shader cache variant checks passed\n";

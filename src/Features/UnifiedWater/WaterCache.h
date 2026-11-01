@@ -64,11 +64,11 @@ public:
 	/** @brief Generates precache height data for Tamriel using extended data sets. */
 	static void GenerateTamrielPrecache();
 	/** @brief Loads caches from disk, or generates them if not found. */
-	bool LoadOrGenerateCaches();
+	bool LoadOrGenerateCaches(bool queuePublication = true);
 	/** @brief Deletes existing caches, regenerates, and reloads them. */
-	bool RegenerateCaches();
+	bool RegenerateCaches(bool queuePublication = true);
 	/** @brief Generates disk caches for all valid worldspaces asynchronously. */
-	bool GenerateCaches();
+	bool GenerateCaches(bool queuePublication = true);
 
 	/** @brief Returns whether an asynchronous cache build is currently running. */
 	bool IsBuildRunning() const { return async.running.load(); }
@@ -208,6 +208,7 @@ private:
 	bool SetCurrentWorldSpaceLocked(const RE::TESWorldSpace* worldSpace);
 
 	bool LoadCaches();
+	bool CompleteBuild();
 
 	static void BuildPreCache(RE::TESWorldSpace* worldSpace, PreCache& cache);
 	static bool BuildDiskCache(RE::TESWorldSpace* worldSpace, DiskCache& diskCache);

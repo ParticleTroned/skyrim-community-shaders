@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
+#include "Utils/StringUtils.h"
 #include <Windows.h>
 
 #include <algorithm>

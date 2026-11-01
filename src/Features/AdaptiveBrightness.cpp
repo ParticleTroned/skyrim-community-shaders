@@ -539,9 +539,9 @@ namespace
 		return Util::PathHelpers::GetCommunityShaderPath() / AdaptiveBrightness::kFeatureShortName.data() / "Presets";
 	}
 
-	std::filesystem::path GetPresetPath(std::string_view a_name, PresetKind a_kind)
+	std::filesystem::path GetPresetPath(std::string_view a_name, PresetKind a_kind, const std::filesystem::path& a_exportFolder = {})
 	{
-		return GetPresetDirectory() / GetPresetFilename(a_name, a_kind);
+		return (a_exportFolder.empty() ? GetPresetDirectory() : a_exportFolder) / GetPresetFilename(a_name, a_kind);
 	}
 
 	std::array<std::filesystem::path, 2> GetPresetImportDirectories(PresetKind a_kind)
@@ -618,61 +618,9 @@ namespace
 			GetPresetDirectory().string());
 	}
 
-	bool WriteJsonFileAtomic(const std::filesystem::path& a_path, const json& a_json)
+	bool WriteJsonFileAtomic(const std::filesystem::path& a_path, const json& a_json, std::string& a_error)
 	{
-		auto tempPath = a_path;
-		tempPath += ".tmp";
-		auto backupPath = a_path;
-		backupPath += ".bak";
-
-		std::ofstream file(tempPath, std::ios::out | std::ios::trunc);
-		if (!file.is_open())
-			return false;
-
-		file << a_json.dump(1);
-		file.flush();
-		file.close();
-		if (file.fail()) {
-			std::error_code removeEc;
-			std::filesystem::remove(tempPath, removeEc);
-			return false;
-		}
-
-		std::error_code ec;
-		if (std::filesystem::exists(backupPath, ec) && !ec)
-			std::filesystem::remove(backupPath, ec);
-		if (ec) {
-			std::filesystem::remove(tempPath, ec);
-			return false;
-		}
-
-		const bool hadExistingFile = std::filesystem::exists(a_path, ec) && !ec;
-		if (ec) {
-			std::filesystem::remove(tempPath, ec);
-			return false;
-		}
-
-		if (hadExistingFile) {
-			std::filesystem::rename(a_path, backupPath, ec);
-			if (ec) {
-				std::filesystem::remove(tempPath, ec);
-				return false;
-			}
-		}
-
-		std::filesystem::rename(tempPath, a_path, ec);
-		if (ec) {
-			std::error_code restoreEc;
-			if (hadExistingFile)
-				std::filesystem::rename(backupPath, a_path, restoreEc);
-			std::filesystem::remove(tempPath, ec);
-			return false;
-		}
-
-		if (hadExistingFile)
-			std::filesystem::remove(backupPath, ec);
-
-		return true;
+		return Util::FileHelpers::WriteTextFileAtomic(a_path, a_json.dump(1), a_error, false);
 	}
 
 	bool ReadJsonPresetFile(const std::filesystem::path& a_path, json& o_json, std::string& o_status)
@@ -2625,7 +2573,8 @@ void AdaptiveBrightness::DrawPresets()
 	Presets::Targets targetNames;
 	for (std::size_t index = 0; index < targetNames.size(); ++index)
 		targetNames[index] = contextTargets[index] ? contextTargets[index]->name : "No current scope";
-	Presets::DrawSelection(presetUI, exportPalette, importPalette, targetNames);
+	const auto previousFolder = presetExportFolder.directory;
+	Presets::DrawSelection(presetUI, exportPalette, importPalette, targetNames, presetExportFolder, GetPresetDirectory());
 	const bool changed = lastDrawnPresetUI.mode != presetUI.mode || lastDrawnPresetUI.collection != presetUI.collection;
 	lastDrawnPresetUI = presetUI;
 	presetFilesDirty |= changed || ImGui::IsWindowAppearing();
@@ -2677,11 +2626,19 @@ void AdaptiveBrightness::DrawPresets()
 	const auto feedback = importing && !presetFileStatus.empty() ?
 	                          std::format("{}{}{}", presetFileStatus, status->empty() ? "" : " ", *status) :
 	                          *status;
-	const auto path = GetPresetPath(*name, kind);
-	const auto pathHint = importing && kind == PresetKind::Location ?
-	                          std::format("Import path: {}\nAlso accepts: {}", path.string(), (Util::PathHelpers::GetOverridesPath() / path.filename()).string()) :
-	                          std::format("{} path: {}", importing ? "Import" : "Export", path.string());
-	if (!Presets::DrawTransfer(presetUI, colors, *name, presetFiles, pathHint, feedback, unavailable, presetFilesDirty))
+	const auto path = GetPresetPath(*name, kind, importing ? std::filesystem::path{} : presetExportFolder.directory);
+	const auto relativePath = GetPresetPath(*name, kind).lexically_relative(Util::PathHelpers::GetDataPath());
+	const auto pathHint = importing ?
+	                          std::format("Import folder (relative to Data): {}\nMod Organizer 2: Put shared presets in this folder inside an enabled mod. Keep the exported filename and use Choose file.\nExpected file: {}{}",
+								  relativePath.parent_path().string(), path.filename().string(),
+								  kind == PresetKind::Location ? std::format("\nAlso accepts location presets in: {}", Util::PathHelpers::GetOverridesPath().lexically_relative(Util::PathHelpers::GetDataPath()).string()) : "") :
+	                      presetExportFolder.directory.empty() ?
+	                          std::format("Export path (relative to Data): {}\nMod Organizer 2: New exports go to Overwrite or the configured output mod.", relativePath.string()) :
+	                          std::format("Export path: {}\nMO2 can still redirect writes if you choose the game's Data folder.", Util::PathToUtf8(path));
+	const bool transfer = Presets::DrawTransfer(presetUI, colors, *name, presetFiles, pathHint, feedback, unavailable, presetFilesDirty);
+	if (previousFolder != presetExportFolder.directory)
+		status->clear();
+	if (!transfer)
 		return;
 	bool succeeded = false;
 	switch (presetUI.collection) {
@@ -2708,14 +2665,17 @@ void AdaptiveBrightness::DrawPresets()
 	presetFilesDirty = true;
 }
 
+std::filesystem::path AdaptiveBrightness::GetPresetExportDirectory() const
+{
+	return presetExportFolder.directory.empty() ? GetPresetDirectory() : presetExportFolder.directory;
+}
+
 bool AdaptiveBrightness::ExportGlobalPreset()
 {
 	NormalizeBaseSettings(settings);
 
-	const auto path = GetPresetPath(globalPresetName, PresetKind::Global);
+	const auto path = GetPresetPath(globalPresetName, PresetKind::Global, presetExportFolder.directory);
 	try {
-		std::filesystem::create_directories(path.parent_path());
-
 		const auto exportJson = MakeBasePresetJson(
 			settings,
 			globalPresetName,
@@ -2723,12 +2683,13 @@ bool AdaptiveBrightness::ExportGlobalPreset()
 			"global",
 			"Adaptive Balance global preset");
 
-		if (!WriteJsonFileAtomic(path, exportJson)) {
-			globalPresetStatus = std::format("Export failed: could not write {}.", path.string());
+		std::string error;
+		if (!WriteJsonFileAtomic(path, exportJson, error)) {
+			globalPresetStatus = std::format("Export failed: {}", error);
 			return false;
 		}
 
-		globalPresetStatus = std::format("Exported global preset to {}.", path.string());
+		globalPresetStatus = std::format("Exported global preset as {}.", path.filename().string());
 		return true;
 	} catch (const std::exception& e) {
 		globalPresetStatus = std::format("Export failed: {}", e.what());
@@ -2765,10 +2726,8 @@ bool AdaptiveBrightness::ExportLocationOverrides()
 		return false;
 	}
 
-	const auto path = GetPresetPath(locationOverridePresetName, PresetKind::Location);
+	const auto path = GetPresetPath(locationOverridePresetName, PresetKind::Location, presetExportFolder.directory);
 	try {
-		std::filesystem::create_directories(path.parent_path());
-
 		json exportJson;
 		exportJson["locationOverrides"] = settings.locationOverrides;
 		exportJson["_metadata"] = MakePresetMetadata(
@@ -2777,12 +2736,13 @@ bool AdaptiveBrightness::ExportLocationOverrides()
 			"locations",
 			"Adaptive Balance location override preset");
 
-		if (!WriteJsonFileAtomic(path, exportJson)) {
-			locationOverridePresetStatus = std::format("Export failed: could not write {}.", path.string());
+		std::string error;
+		if (!WriteJsonFileAtomic(path, exportJson, error)) {
+			locationOverridePresetStatus = std::format("Export failed: {}", error);
 			return false;
 		}
 
-		locationOverridePresetStatus = std::format("Exported {} location override(s) to {}.", settings.locationOverrides.size(), path.string());
+		locationOverridePresetStatus = std::format("Exported {} location override(s) as {}.", settings.locationOverrides.size(), path.filename().string());
 		return true;
 	} catch (const std::exception& e) {
 		locationOverridePresetStatus = std::format("Export failed: {}", e.what());
@@ -2867,13 +2827,11 @@ bool AdaptiveBrightness::ExportContextProfile(
 	const auto scopeIndex = ContextScopeIndex(a_scope);
 	auto& status = contextPresetStatuses[scopeIndex];
 	const auto presetKind = GetContextScopePresetKind(a_scope);
-	const auto path = GetPresetPath(contextPresetNames[scopeIndex], presetKind);
+	const auto path = GetPresetPath(contextPresetNames[scopeIndex], presetKind, presetExportFolder.directory);
 
 	auto profile = a_locationOverride.profile;
 	ClampProfileSettings(profile);
 	try {
-		std::filesystem::create_directories(path.parent_path());
-
 		json exportJson{
 			{ "profile", profile },
 			{ "layered", a_locationOverride.layered },
@@ -2887,16 +2845,17 @@ bool AdaptiveBrightness::ExportContextProfile(
 							   std::format("Adaptive Balance {} profile", GetContextScopeName(a_scope))) }
 		};
 
-		if (!WriteJsonFileAtomic(path, exportJson)) {
-			status = std::format("Export failed: could not write {}.", path.string());
+		std::string error;
+		if (!WriteJsonFileAtomic(path, exportJson, error)) {
+			status = std::format("Export failed: {}", error);
 			return false;
 		}
 
 		status = std::format(
-			"Exported the {} profile for {} to {}.",
+			"Exported the {} profile for {} as {}.",
 			GetContextScopeName(a_scope),
 			a_target.name,
-			path.string());
+			path.filename().string());
 		return true;
 	} catch (const std::exception& e) {
 		status = std::format("Export failed: {}", e.what());
@@ -2983,10 +2942,8 @@ bool AdaptiveBrightness::ExportFullPreset()
 	NormalizeBaseSettings(settings);
 	NormalizeLocationOverrides();
 
-	const auto path = GetPresetPath(fullPresetName, PresetKind::Full);
+	const auto path = GetPresetPath(fullPresetName, PresetKind::Full, presetExportFolder.directory);
 	try {
-		std::filesystem::create_directories(path.parent_path());
-
 		auto exportJson = MakeBasePresetJson(
 			settings,
 			fullPresetName,
@@ -2995,12 +2952,13 @@ bool AdaptiveBrightness::ExportFullPreset()
 			"Adaptive Balance full preset");
 		exportJson["locationOverrides"] = settings.locationOverrides;
 
-		if (!WriteJsonFileAtomic(path, exportJson)) {
-			fullPresetStatus = std::format("Export failed: could not write {}.", path.string());
+		std::string error;
+		if (!WriteJsonFileAtomic(path, exportJson, error)) {
+			fullPresetStatus = std::format("Export failed: {}", error);
 			return false;
 		}
 
-		fullPresetStatus = std::format("Exported full preset with {} location override(s) to {}.", settings.locationOverrides.size(), path.string());
+		fullPresetStatus = std::format("Exported full preset with {} location override(s) as {}.", settings.locationOverrides.size(), path.filename().string());
 		return true;
 	} catch (const std::exception& e) {
 		fullPresetStatus = std::format("Export failed: {}", e.what());

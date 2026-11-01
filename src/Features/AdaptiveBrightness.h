@@ -290,6 +290,7 @@ struct AdaptiveBrightness : Feature
 
 	MenuUI::AdaptiveBalancePresets::State presetUI;
 	MenuUI::AdaptiveBalancePresets::State lastDrawnPresetUI;
+	MenuUI::AdaptiveBalancePresets::ExportFolder presetExportFolder;
 	std::vector<std::string> presetFiles;
 	std::string presetFileStatus;
 	bool presetFilesDirty = true;
@@ -439,6 +440,8 @@ struct AdaptiveBrightness : Feature
 	void ResetLocationOverrideEdit();
 	ProfileSettings* GetLocationOverrideEditProfile(LocationOverride& a_locationOverride);
 	bool ExportGlobalPreset();
+	/** Effective session export folder; the default uses the game's virtual Data path. */
+	std::filesystem::path GetPresetExportDirectory() const;
 	bool ImportGlobalPreset();
 	bool ExportLocationOverrides();
 	bool ImportLocationOverrides();

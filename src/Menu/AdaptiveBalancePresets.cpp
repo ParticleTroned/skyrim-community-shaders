@@ -1,5 +1,6 @@
 #include "AdaptiveBalancePresets.h"
 
+#include "Utils/StringUtils.h"
 #include "Utils/UI.h"
 #include <algorithm>
 #include <format>
@@ -15,8 +16,9 @@ namespace MenuUI::AdaptiveBalancePresets
 		constexpr std::array ids{ "full", "base", "locations", "worldspace", "region", "city" };
 		static_assert(names.size() == static_cast<std::size_t>(Collection::Count) && ids.size() == names.size());
 		constexpr float cardPadding = .4f;
-		constexpr float cardHeight = 2.8f;
+		constexpr float cardHeight = 2.4f;
 		constexpr float minimumNameWidth = 3.0f;
+		constexpr std::size_t maximumFolderEntries = 512;
 
 		struct TransferLayout
 		{
@@ -30,7 +32,7 @@ namespace MenuUI::AdaptiveBalancePresets
 			const auto label = std::format("{} {}", a_mode == Mode::Import ? "Import" : "Export", a_collection);
 			const float gap = ImGui::GetStyle().ItemSpacing.x;
 			const float actionWidth = ImGui::CalcTextSize(label.c_str()).x + ImGui::GetStyle().FramePadding.x * 2;
-			const float pickerWidth = a_mode == Mode::Import ? ImGui::GetFrameHeight() + gap : 0;
+			const float pickerWidth = a_mode == Mode::Import ? ImGui::CalcTextSize("Choose file").x + ImGui::GetStyle().FramePadding.x * 2 + gap : 0;
 			return { label, actionWidth, pickerWidth, a_width - actionWidth - pickerWidth - gap < ImGui::GetTextLineHeight() * minimumNameWidth };
 		}
 
@@ -51,13 +53,135 @@ namespace MenuUI::AdaptiveBalancePresets
 			Util::AddTooltip(a_text);
 		}
 
-		bool ModeButton(const char* a_label, bool a_selected, const Palette& a_palette, float a_width)
+		bool ResolveFolder(std::string_view a_text, std::filesystem::path& a_path, std::string& a_error)
 		{
-			auto colors = Util::StyledButtonWrapper(a_selected ? a_palette.active : a_palette.normal, a_palette.hovered, a_palette.active);
-			const bool clicked = ImGui::Button(a_label, { a_width, 0 });
-			if (a_selected)
-				ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), ImGui::GetColorU32(a_palette.border), ImGui::GetStyle().FrameRounding);
-			return clicked;
+			if (a_text.empty() || a_text.size() > ExportFolder::MaxPathBytes || a_text.find('\0') != a_text.npos) {
+				a_error = std::format("Enter a full folder path of at most {} UTF-8 bytes.", ExportFolder::MaxPathBytes);
+				return false;
+			}
+			try {
+				const auto path = std::filesystem::path(std::u8string(a_text.begin(), a_text.end()));
+				std::error_code error;
+				if (!path.is_absolute() || !std::filesystem::is_directory(path, error) || error) {
+					a_error = "Choose an existing folder using its full path.";
+					return false;
+				}
+				a_path = std::filesystem::canonical(path, error);
+				if (error) {
+					a_error = std::format("Could not resolve the folder: {}", error.message());
+					return false;
+				}
+				a_error.clear();
+				return true;
+			} catch (const std::exception& error) {
+				a_error = std::format("Could not read the folder path: {}", error.what());
+				return false;
+			}
+		}
+
+		void BrowseFolder(ExportFolder& a_folder, const std::filesystem::path& a_path)
+		{
+			std::filesystem::path resolved;
+			if (!ResolveFolder(Util::PathToUtf8(a_path), resolved, a_folder.error))
+				return;
+			a_folder.browsing = std::move(resolved);
+			a_folder.input = Util::PathToUtf8(a_folder.browsing);
+			a_folder.folders.clear();
+			std::error_code error;
+			std::filesystem::directory_iterator iterator(a_folder.browsing, error), end;
+			std::size_t visited = 0;
+			for (; !error && iterator != end; iterator.increment(error)) {
+				std::error_code typeError;
+				if (iterator->is_directory(typeError) && !typeError)
+					a_folder.folders.push_back(iterator->path());
+				if (typeError && a_folder.error.empty())
+					a_folder.error = std::format("Some entries could not be inspected: {}", typeError.message());
+				if (++visited >= maximumFolderEntries) {
+					a_folder.error = "Folder listing limited. Enter a full path to reach an unlisted folder.";
+					break;
+				}
+			}
+			if (error)
+				a_folder.error = std::format("Could not list folders: {}", error.message());
+			std::ranges::sort(a_folder.folders);
+		}
+
+		void BeginFolderBrowse(ExportFolder& a_folder, std::filesystem::path a_defaultFolder)
+		{
+			a_folder.error.clear();
+			if (!a_folder.directory.empty())
+				a_defaultFolder = a_folder.directory;
+			std::error_code error;
+			while (!a_defaultFolder.empty() && !std::filesystem::is_directory(a_defaultFolder, error)) {
+				const auto parent = a_defaultFolder.parent_path();
+				if (parent == a_defaultFolder)
+					break;
+				a_defaultFolder = parent;
+			}
+			BrowseFolder(a_folder, a_defaultFolder);
+		}
+
+		void DrawFolderBrowser(ExportFolder& a_folder, float a_width, ImVec2 a_anchor)
+		{
+			const auto parent = ImGui::GetWindowPos();
+			const auto parentSize = ImGui::GetWindowSize();
+			const float height = std::min(parentSize.y, ImGui::GetTextLineHeightWithSpacing() * 11 + ImGui::GetStyle().WindowPadding.y * 2);
+			ImGui::SetNextWindowPos({ a_anchor.x, std::clamp(a_anchor.y, parent.y, parent.y + parentSize.y - height) }, ImGuiCond_Always);
+			ImGui::SetNextWindowSize({ a_width, height }, ImGuiCond_Always);
+			if (!ImGui::BeginPopup("##ExportFolderPicker"))
+				return;
+			ImGui::TextUnformatted("Export folder");
+			ImGui::SetNextItemWidth(-1);
+			ImGui::InputTextWithHint("##ExportFolderPath", "Full folder path", &a_folder.input);
+			Util::AddTooltip("Enter or paste a full folder path, then use Go.");
+			if (ImGui::Button("Go", {})) {
+				std::filesystem::path resolved;
+				if (ResolveFolder(a_folder.input, resolved, a_folder.error))
+					BrowseFolder(a_folder, resolved);
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Parent folder", {}))
+				BrowseFolder(a_folder, a_folder.browsing.parent_path());
+			ImGui::SameLine();
+			if (ImGui::Button("Drive root", {}))
+				BrowseFolder(a_folder, a_folder.browsing.root_path());
+			std::filesystem::path navigate;
+			const float footerHeight = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().WindowPadding.y;
+			const float listHeight = std::max(ImGui::GetTextLineHeight(), ImGui::GetContentRegionAvail().y - footerHeight);
+			ImGui::BeginChild("##ExportSubfolders", { 0, listHeight }, ImGuiChildFlags_Borders);
+			for (const auto& folder : a_folder.folders) {
+				const auto fullPath = Util::PathToUtf8(folder);
+				const auto name = Util::PathToUtf8(folder.filename());
+				ImGui::PushID(fullPath.c_str());
+				const SKSE::stl::scope_exit restoreFolderId([] { ImGui::PopID(); });
+				const auto origin = ImGui::GetCursorScreenPos();
+				const auto width = ImGui::GetContentRegionAvail().x;
+				if (ImGui::Selectable("##Subfolder", false, ImGuiSelectableFlags_NoAutoClosePopups, { width, ImGui::GetTextLineHeight() }))
+					navigate = folder;
+				RenderLine(ImGui::GetWindowDrawList(), origin, width, name.c_str());
+				Util::AddTooltip(fullPath.c_str());
+			}
+			if (a_folder.folders.empty())
+				SingleLine("No subfolders.", ImGui::GetContentRegionAvail().x);
+			ImGui::EndChild();
+			if (!navigate.empty())
+				BrowseFolder(a_folder, navigate);
+			SingleLine(a_folder.error.empty() ? "Select a subfolder, or use the folder path above." : a_folder.error.c_str(), ImGui::GetContentRegionAvail().x);
+			if (ImGui::Button("Use this folder", {})) {
+				if (a_folder.input.empty())
+					a_folder.error = "Enter a folder path, or select Default folder.";
+				else if (SetExportFolder(a_folder, a_folder.input, a_folder.error))
+					ImGui::CloseCurrentPopup();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Default folder", {})) {
+				SetExportFolder(a_folder, {}, a_folder.error);
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel", {}))
+				ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
 		}
 
 		void DrawBox(State& a_state, Collection a_collection, const char* a_detail, const Palette& a_palette, ImVec2 a_start, ImVec2 a_size)
@@ -85,28 +209,55 @@ namespace MenuUI::AdaptiveBalancePresets
 	const char* CollectionName(Collection a_collection) { return names.at(static_cast<std::size_t>(a_collection)); }
 	const char* CollectionId(Collection a_collection) { return ids.at(static_cast<std::size_t>(a_collection)); }
 
-	void DrawSelection(State& a_state, const Palette& a_export, const Palette& a_import, const Targets& a_targets)
+	bool SetExportFolder(ExportFolder& a_folder, std::string_view a_path, std::string& a_error)
+	{
+		if (a_path.empty()) {
+			a_folder.directory.clear();
+			a_error.clear();
+			return true;
+		}
+		std::filesystem::path resolved;
+		if (!ResolveFolder(a_path, resolved, a_error))
+			return false;
+		a_folder.directory = std::move(resolved);
+		return true;
+	}
+
+	void DrawSelection(State& a_state, const Palette& a_export, const Palette& a_import, const Targets& a_targets,
+		ExportFolder& a_folder, const std::filesystem::path& a_defaultFolder)
 	{
 		const float width = std::max(1.0f, ImGui::GetContentRegionAvail().x);
-		const float gap = ImGui::GetStyle().ItemSpacing.x;
-		const float modeWidth = (width - gap) * .5f;
-		if (ModeButton(a_state.mode == Mode::Export ? "Export (active)###ExportMode" : "Export###ExportMode", a_state.mode == Mode::Export, a_export, modeWidth))
-			a_state.mode = Mode::Export;
-		Util::AddTooltip("Export mode: create a shareable JSON file.");
+		const float line = ImGui::GetTextLineHeight();
+		const float gap = std::max(ImGui::GetStyle().ItemSpacing.x, line * .6f);
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextUnformatted("Mode:");
 		ImGui::SameLine();
-		if (ModeButton(a_state.mode == Mode::Import ? "Import (active)###ImportMode" : "Import###ImportMode", a_state.mode == Mode::Import, a_import, modeWidth))
+		if (ImGui::RadioButton("Export###ExportMode", a_state.mode == Mode::Export))
+			a_state.mode = Mode::Export;
+		Util::AddTooltip("Select export mode, then choose the contents and use the Export button below.");
+		ImGui::SameLine();
+		if (ImGui::RadioButton("Import###ImportMode", a_state.mode == Mode::Import))
 			a_state.mode = Mode::Import;
-		Util::AddTooltip("Import mode: apply a JSON file to your setup.");
+		Util::AddTooltip("Select import mode, then choose the contents and file and use the Import button below.");
+		if (a_state.mode == Mode::Export) {
+			ImGui::SameLine();
+			if (ImGui::Button("Choose folder##ExportFolder", {})) {
+				BeginFolderBrowse(a_folder, a_defaultFolder);
+				ImGui::OpenPopup("##ExportFolderPicker");
+			}
+			const auto folderHint = a_folder.directory.empty() ? "Default Presets folder; MO2 routes new files to Overwrite or the configured output mod." : Util::PathToUtf8(a_folder.directory);
+			Util::AddTooltip(folderHint.c_str());
+			DrawFolderBrowser(a_folder, width, ImGui::GetCursorScreenPos());
+		}
 
 		const auto& palette = a_state.mode == Mode::Export ? a_export : a_import;
 		const auto origin = ImGui::GetCursorScreenPos();
-		const float line = ImGui::GetTextLineHeight();
-		const float verticalGap = line * .5f;
+		const float verticalGap = line * .7f;
 		// Reserve the impact, file action and feedback rows before sizing the diagram.
 		const bool separateAction = std::ranges::any_of(names, [&](const char* title) { return GetTransferLayout(a_state.mode, title, width).separateAction; });
 		const float reserved = line * 2 + ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y * 5 +
 		                       (separateAction ? ImGui::GetFrameHeightWithSpacing() : 0);
-		const float height = std::clamp((ImGui::GetContentRegionAvail().y - reserved - verticalGap * 2) / 3, line * 2.1f, line * cardHeight);
+		const float height = std::clamp((ImGui::GetContentRegionAvail().y - reserved - verticalGap * 2) / 3, line * 2, line * cardHeight);
 		const float half = (width - gap) * .5f;
 		const float third = (width - 2 * gap) / 3;
 		const float secondY = origin.y + height + verticalGap;
@@ -161,11 +312,11 @@ namespace MenuUI::AdaptiveBalancePresets
 		const float gap = ImGui::GetStyle().ItemSpacing.x;
 		const auto rowOrigin = ImGui::GetCursorScreenPos();
 		ImGui::SetNextItemWidth(std::max(1.0f, width - layout.pickerWidth - (layout.separateAction ? 0 : layout.actionWidth + gap)));
-		ImGui::InputTextWithHint("##PresetName", importing ? "Preset name or choose a file" : "Name this preset", &a_name);
+		ImGui::InputTextWithHint("##PresetName", importing ? "Choose file or enter its preset name" : "Name this preset", &a_name);
 		Util::AddTooltip(a_path.c_str());
 		if (importing) {
 			ImGui::SameLine();
-			if (ImGui::ArrowButton("##PresetFiles", ImGuiDir_Down))
+			if (ImGui::Button("Choose file##PresetFiles", {}))
 				ImGui::OpenPopup("##PresetFilePicker");
 			Util::AddTooltip("Choose a matching JSON preset from the Presets folder.");
 			// Anchor above the file row so long filenames cannot push the picker outside the panel.
@@ -178,8 +329,10 @@ namespace MenuUI::AdaptiveBalancePresets
 						a_name = name;
 					Util::AddTooltip(name.c_str());
 				}
-				if (a_files.empty())
-					SingleLine("No presets found. Enter a name to retry.", ImGui::GetContentRegionAvail().x);
+				if (a_files.empty()) {
+					const auto hint = std::format("No matching presets found.\n{}\nChoose the contents matching the file, then reopen Choose file.", a_path);
+					SingleLine(hint.c_str(), ImGui::GetContentRegionAvail().x);
+				}
 				ImGui::EndPopup();
 			}
 		}
@@ -191,9 +344,10 @@ namespace MenuUI::AdaptiveBalancePresets
 			auto disabled = Util::DisableGuard(a_unavailableReason != nullptr);
 			transfer = ImGui::Button(layout.label.c_str(), { layout.separateAction ? width : layout.actionWidth, 0 });
 		}
+		Util::AddTooltip(importing ? "Apply the selected preset file, then use Save Settings to keep the result." : "Write the selected contents to a JSON preset file.");
+		const auto instructions = std::format("{}Choose contents above and {}, then click {}.", importing ? "" : a_path + "\n", importing ? "a file" : "a name", layout.label);
 		SingleLine(a_unavailableReason ? a_unavailableReason : !a_status.empty() ? a_status.c_str() :
-														   importing             ? "After importing, use Save Settings to keep the result." :
-																				   "Choose a box above, name the file, then export.",
+																				   instructions.c_str(),
 			width);
 		return transfer;
 	}

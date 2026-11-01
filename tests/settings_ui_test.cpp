@@ -1,6 +1,7 @@
 #include "Features/GrassOptimizations/GrassPolicy.h"
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
+#include "Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Menu/AdaptiveBalancePresets.h"
 #include "Menu/SettingsActions.h"
@@ -414,6 +415,7 @@ struct Upscaling
 	{
 		uint32_t neuralRenderingModelResolutionPercent = 100;
 		bool neuralRenderingGuidedReconstruction = true;
+		uint32_t neuralRenderingConfidenceRejectionPercent = 0;
 		unsigned neuralRenderingPeripheralCompressionPercent = 0;
 		bool neuralRenderingPauseInCombat = false;
 		bool neuralRenderingPressureResolutionEnabled = true;
@@ -647,8 +649,10 @@ ImGuiID presetNameInputId = 0;
 bool TrackedPresetNameInput(const char* label, const char* hint, std::string* name)
 {
 	const bool changed = ImGui::InputTextWithHint(label, hint, name);
-	presetNameInputId = ImGui::GetItemID();
-	Util::controls["Preset name input"] = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+	if (std::strcmp(label, "##PresetName") == 0) {
+		presetNameInputId = ImGui::GetItemID();
+		Util::controls["Preset name input"] = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+	}
 	return changed;
 }
 bool TrackedPresetButton(const char* label, ImVec2 size)
@@ -834,7 +838,15 @@ int main()
 
 		{
 			namespace Presets = MenuUI::AdaptiveBalancePresets;
+			const auto exportRoot = std::filesystem::current_path() / std::format("preset-folder-test-{}-{}", GetCurrentProcessId(), GetTickCount64());
+			require(std::filesystem::create_directory(exportRoot), "folder browser tests own a fresh directory");
+			const SKSE::stl::scope_exit cleanupExportRoot([&] { std::filesystem::remove_all(exportRoot); });
+			const auto customFolder = exportRoot / std::filesystem::path(u8"Shared_\u00e9_\u6f22##presets");
+			std::filesystem::create_directory(customFolder);
+			const auto regularFile = exportRoot / "not-a-folder.json";
+			std::ofstream(regularFile) << "{}";
 			Presets::State exchange;
+			Presets::ExportFolder exportFolder;
 			const Presets::Palette exportColors{ { .42f, .34f, .12f, 1 }, { .50f, .40f, .16f, 1 }, { .60f, .48f, .20f, 1 }, { .8f, .7f, .4f, 1 } };
 			const Presets::Palette importColors{ { .21f, .17f, .06f, 1 }, { .30f, .24f, .08f, 1 }, { .40f, .32f, .12f, 1 }, { .6f, .5f, .2f, 1 } };
 			const Presets::Targets targets{ "Tamriel", "The Reach", "Markarth" };
@@ -857,7 +869,7 @@ int main()
 						const auto disabled = GImGui->DisabledStackSize;
 						presetLine = ImGui::GetTextLineHeight();
 						presetAvailableHeight = ImGui::GetContentRegionAvail().y;
-						Presets::DrawSelection(exchange, exportColors, importColors, targets);
+						Presets::DrawSelection(exchange, exportColors, importColors, targets, exportFolder, exportRoot / "Presets");
 						transfers += Presets::DrawTransfer(exchange, exchange.mode == Presets::Mode::Export ? exportColors : importColors,
 							name, files, "Presets/example.json", feedback, unavailable, refresh);
 						require(colors == GImGui->ColorStack.Size && disabled == GImGui->DisabledStackSize,
@@ -884,6 +896,13 @@ int main()
 							const auto button = Util::controls.at(action);
 							require(button.Min.x >= 0 && button.Max.x <= panelWidth && button.Max.y <= panelHeight,
 								"preset action stays inside the visible HMD panel");
+							const auto fullBox = Util::controls.at("##full");
+							const auto baseBox = Util::controls.at("##base");
+							const auto locationsBox = Util::controls.at("##locations");
+							require(fullBox.GetHeight() <= presetLine * 2.5f && baseBox.Min.y - fullBox.Max.y >= presetLine * .6f,
+								"compact preset boxes leave visible space for the parent-child connectors");
+							require(locationsBox.Min.x - baseBox.Max.x >= presetLine * .5f,
+								"sibling preset boxes remain visibly separated");
 						}
 						if (mode == Presets::Mode::Import) {
 							refresh = false;
@@ -899,6 +918,20 @@ int main()
 									.c_str());
 							click(Util::controls.at(files[0]).GetCenter(), draw);
 							require(name == files[0] && transfers == 0, "choosing a file preserves its full name and never imports automatically");
+						} else {
+							click(Util::controls.at("Choose folder##ExportFolder").GetCenter(), draw);
+							frame(draw);
+							require(!GImGui->OpenPopupStack.empty(), "Choose folder opens an in-menu browser");
+							const auto* popup = GImGui->OpenPopupStack.back().Window;
+							require(popup != nullptr, "the folder browser has a visible window");
+							require(panelBounds.Contains(popup->Rect()) && popup->ScrollMax.x == 0 && popup->ScrollMax.y == 0,
+								std::format("Folder browser {}x{} font {}: panel ({},{})-({},{}), popup ({},{})-({},{}), horizontal scroll {}",
+									panelWidth, panelHeight, fontSize, panelBounds.Min.x, panelBounds.Min.y, panelBounds.Max.x, panelBounds.Max.y,
+									popup->Pos.x, popup->Pos.y, popup->Rect().Max.x, popup->Rect().Max.y, popup->ScrollMax.x)
+									.c_str());
+							click(Util::controls.at("Cancel").GetCenter(), draw);
+							require(exportFolder.directory.empty() && transfers == 0 && !std::filesystem::exists(exportRoot / "Presets"),
+								"opening and cancelling the browser leaves the destination unchanged and creates no files");
 						}
 					}
 				}
@@ -909,8 +942,31 @@ int main()
 			exchange = {};
 			frame(draw);
 			frame(draw);
+			click(Util::controls.at("Choose folder##ExportFolder").GetCenter(), draw);
+			click(Util::controls.at(Util::PathToUtf8(customFolder)).GetCenter(), draw);
+			require(exportFolder.browsing == std::filesystem::canonical(customFolder) && exportFolder.directory.empty(),
+				"clicking a Unicode subfolder with ImGui marker characters navigates without selecting an export destination");
+			click(Util::controls.at("Parent folder").GetCenter(), draw);
+			exportFolder.input = Util::PathToUtf8(customFolder);
+			click(Util::controls.at("Go").GetCenter(), draw);
+			require(exportFolder.browsing == std::filesystem::canonical(customFolder) && exportFolder.directory.empty(),
+				"browsing a Unicode folder does not select it or export a preset");
+			click(Util::controls.at("Use this folder").GetCenter(), draw);
+			require(exportFolder.directory == std::filesystem::canonical(customFolder) && transfers == 0,
+				"explicit folder selection changes the shared export destination without writing a preset");
+			std::string folderError;
+			for (const auto& invalid : { std::string("relative"), Util::PathToUtf8(exportRoot / "missing"), Util::PathToUtf8(regularFile), std::string(4097, 'x'), std::string("bad\0path", 8) })
+				require(!Presets::SetExportFolder(exportFolder, invalid, folderError) && !folderError.empty() && exportFolder.directory == std::filesystem::canonical(customFolder),
+					"invalid folder input reports an error and preserves the selected destination");
+			click(Util::controls.at("Choose folder##ExportFolder").GetCenter(), draw);
+			exportFolder.input.clear();
+			click(Util::controls.at("Use this folder").GetCenter(), draw);
+			require(exportFolder.directory == std::filesystem::canonical(customFolder) && !exportFolder.error.empty() && !GImGui->OpenPopupStack.empty(),
+				"an empty path cannot silently reset the destination or close the browser");
+			click(Util::controls.at("Default folder").GetCenter(), draw);
+			require(exportFolder.directory.empty() && transfers == 0, "Default folder restores preset routing without writing a file");
 			const auto exportTint = presetButtonColors.at("##full");
-			click(Util::controls.at("Import mode: apply a JSON file to your setup.").GetCenter(), draw);
+			click(Util::controls.at("Select import mode, then choose the contents and file and use the Import button below.").GetCenter(), draw);
 			require(exchange.mode == Presets::Mode::Import && transfers == 0, "switching to import changes mode without applying a file");
 			const auto importTint = presetButtonColors.at("##full");
 			require(importTint.x < exportTint.x && importTint.y < exportTint.y, "import changes the complete diagram to the darker palette");
@@ -938,9 +994,11 @@ int main()
 			require(presetNameInputId != cityInput && GImGui->ActiveId != cityInput,
 				"external collection selection cannot retain the previous collection's text edit buffer");
 			const auto importInput = presetNameInputId;
-			exchange.mode = Presets::Mode::Export;
-			frame(draw);
+			click(Util::controls.at("Select export mode, then choose the contents and use the Export button below.").GetCenter(), draw);
+			require(exchange.mode == Presets::Mode::Export && transfers == 1, "the export mode selector never writes a file");
 			require(presetNameInputId != importInput, "import and export filename fields have independent edit identities");
+			click(Util::controls.at("Export Base appearance").GetCenter(), draw);
+			require(transfers == 2, "only the named export action requests a file write");
 			feedback = "Status line\nSecond line must stay in the tooltip";
 			frame(draw);
 			const auto feedbackBounds = Util::controls.at(feedback);
@@ -965,6 +1023,13 @@ int main()
 			require(std::filesystem::create_directory(root), "preset picker tests own a fresh temporary directory");
 			const SKSE::stl::scope_exit cleanup([&] { std::filesystem::remove_all(root); });
 			const auto directory = GetPresetDirectory();
+			const auto customDirectory = root / "custom-export";
+			std::filesystem::create_directory(customDirectory);
+			for (const auto kind : { PresetKind::Full, PresetKind::Global, PresetKind::Location, PresetKind::Worldspace, PresetKind::Region, PresetKind::City }) {
+				const auto customPath = GetPresetPath("Warm", kind, customDirectory);
+				require(customPath.parent_path() == customDirectory && customPath.filename() == GetPresetPath("Warm", kind).filename(),
+					"every preset export kind uses the chosen folder and preserves its importable filename");
+			}
 			std::filesystem::create_directories(directory);
 			std::filesystem::create_directories(Util::PathHelpers::GetOverridesPath());
 			const auto write = [](const std::filesystem::path& path) { std::ofstream(path) << "{}"; };

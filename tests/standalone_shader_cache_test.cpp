@@ -5,6 +5,7 @@
 #include "Utils/ShaderDefines.h"
 #include "Utils/ShaderInclude.h"
 #include "Utils/ShaderSourceProvenance.h"
+#include "Utils/StringUtils.h"
 
 #include <algorithm>
 #include <atomic>

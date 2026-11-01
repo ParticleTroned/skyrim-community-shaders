@@ -31,6 +31,8 @@ extract_between("${source}" "bool ThemeManager::SaveTheme(" "const ThemeManager:
 file(READ "${PROJECT_ROOT}/src/Utils/FileSystem.cpp" source)
 extract_between("${source}" "\t\tbool WriteTextFileAtomic(" "\t\tstd::string SanitizeFileName(" "ui_atomic_write.h")
 extract_between("${source}" "\t\tstd::string SanitizeFileName(" "\n\t}\n}" "ui_filename.h")
+file(READ "${PROJECT_ROOT}/src/Features/AdaptiveBrightness.cpp" source)
+extract_between("${source}" "\tbool WriteJsonFileAtomic(" "\tbool ReadJsonPresetFile(" "ui_preset_export.h")
 
 file(READ "${PROJECT_ROOT}/src/Menu/BackgroundBlur.cpp" source)
 extract_between("${source}" "\tnamespace\n\t{" "\tvoid CreateBlurTextures(" "ui_blur_initialization.h")

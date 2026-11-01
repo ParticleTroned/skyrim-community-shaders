@@ -21,6 +21,17 @@ string(JSON _preset_state GET "${_descriptor}" outputSchema properties adaptiveB
 if(NOT _preset_state STREQUAL "object")
     message(FATAL_ERROR "Menu UI status must describe the selected Adaptive Balance preset mode and collection")
 endif()
+foreach(_folder_contract IN ITEMS
+    [=[document["inputSchema"]["properties"]["presetExportFolder"]]=]
+    [=[presetStatus["exportFolder"]]=]
+    [=[presetStatus["usesDefaultFolder"]]=]
+    [[Presets::SetExportFolder(candidate, *exportFolder, error)]]
+)
+    string(FIND "${_bridge}" "${_folder_contract}" _folder_contract_position)
+    if(_folder_contract_position LESS 0)
+        message(FATAL_ERROR "Missing preset export folder contract: ${_folder_contract}")
+    endif()
+endforeach()
 foreach(_mode IN ITEMS export import)
     if(NOT _preset_mode MATCHES "\"${_mode}\"")
         message(FATAL_ERROR "Missing preset mode ${_mode}")

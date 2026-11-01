@@ -1,5 +1,6 @@
 #include "Common/FrameBuffer.hlsli"
 #include "Common/WaterContactCandidates.hlsli"
+#include "Common/WaterFinite.hlsli"
 #include "LightLimitFix/Common.hlsli"
 
 cbuffer PerFrame : register(b0)
@@ -55,7 +56,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
 			(particle ? ParticleContactEnabled == 0 : (light.lightFlags & LightFlags::Simple) != 0))
 			continue;
 		float score = CandidateScore(light, center);
-		if (!isfinite(score) || score <= 0.0)
+		if (!WaterFinite::IsFinite(score) || score <= 0.0)
 			continue;
 		uint candidate = local;
 		[unroll] for (uint slot = 0; slot < 8; ++slot) {

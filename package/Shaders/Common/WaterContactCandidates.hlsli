@@ -8,7 +8,7 @@ namespace WaterContactCandidates
 
 	uint2 Empty()
 	{
-		return uint2(0xffffffff, 0xffffffff);
+		return uint2(0xffffffffu, 0xffffffffu);
 	}
 
 	void Store(inout uint2 packed, uint slot, uint index)

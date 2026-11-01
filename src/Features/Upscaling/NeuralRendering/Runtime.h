@@ -178,6 +178,7 @@ namespace NeuralRendering
 		[[nodiscard]] std::string ParameterCoreHash() const;
 		[[nodiscard]] ParameterCoreTrust CoreTrust() const;
 		[[nodiscard]] ParameterCoreSource CoreSource() const;
+		/** Formats the latest successful evaluation on demand, or returns the current lifecycle/failure detail. */
 		[[nodiscard]] std::string Detail() const;
 		[[nodiscard]] std::uint32_t NgxResult() const;
 		/** Only documented creation failures permit a safely retired smaller retry. */
@@ -217,6 +218,15 @@ namespace NeuralRendering
 			[[nodiscard]] bool Matches(const NativeEvaluationLayout& a_layout) const;
 		};
 
+		struct EvaluationSuccessDetail
+		{
+			std::uint32_t slot = 0;
+			bool featureUpscaling = false;
+			UpscalingDLSS::Extent color{}, guides{}, output{}, controlMask{};
+			ComputeSubrect outputSubrect{};
+			std::uint32_t pathProxyHits = 0;
+		};
+
 		struct RuntimeExports
 		{
 			void* initialize = nullptr;
@@ -244,6 +254,7 @@ namespace NeuralRendering
 		void AbandonLocked() noexcept;
 		void LogOnceLocked(bool& a_emitted, const char* a_operation, bool a_succeeded);
 		void SetFailureLocked(RuntimeStatus a_status, RuntimeFailureStage a_stage, std::string a_detail, std::uint32_t a_ngxResult = 0);
+		[[nodiscard]] std::string DetailLocked() const;
 
 		mutable std::recursive_mutex mutex_;
 		std::filesystem::path path_;
@@ -257,6 +268,7 @@ namespace NeuralRendering
 		ParameterCoreTrust coreTrust_ = ParameterCoreTrust::Unknown;
 		ParameterCoreSource coreSource_ = ParameterCoreSource::None;
 		std::string detail_;
+		std::optional<EvaluationSuccessDetail> evaluationSuccessDetail_;
 		void* module_ = nullptr;
 		void* coreModule_ = nullptr;
 		void* coreFile_ = nullptr;

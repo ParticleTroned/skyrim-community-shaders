@@ -511,12 +511,17 @@ set(_neural_native_creation_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/neural-na
 set(_neural_native_headers "${_neural_native_creation_dir}/neural_native_key_under_test.h"
     "${_neural_native_creation_dir}/neural_native_creation_under_test.h"
     "${_neural_native_creation_dir}/neural_installed_metadata_under_test.h"
-    "${_neural_native_creation_dir}/neural_runtime_tuning_under_test.h")
+    "${_neural_native_creation_dir}/neural_runtime_tuning_under_test.h"
+    "${_neural_native_creation_dir}/neural_runtime_logging_under_test.h"
+    "${_neural_native_creation_dir}/neural_runtime_detail_under_test.h"
+    "${_neural_native_creation_dir}/neural_runtime_reset_under_test.h"
+    "${_neural_native_creation_dir}/neural_evaluation_success_detail_under_test.h")
 add_custom_command(OUTPUT ${_neural_native_headers}
     COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
         "-DOUTPUT_DIRECTORY=${_neural_native_creation_dir}" -P
         "${PROJECT_SOURCE_DIR}/tests/extract_neural_native_creation.cmake"
     DEPENDS src/Features/Upscaling/NeuralRendering/Runtime.cpp
+        src/Features/Upscaling/NeuralRendering/Runtime.h
         tests/extract_neural_native_creation.cmake tests/extract_source_region.cmake
     VERBATIM)
 add_controller_test(neural_native_creation_test NeuralNativeCreation tests/neural_native_creation_test.cpp)

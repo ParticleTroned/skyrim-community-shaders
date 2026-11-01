@@ -1095,6 +1095,7 @@ namespace NeuralRendering
 	{
 		status_ = a_status;
 		failureStage_ = a_stage;
+		evaluationSuccessDetail_.reset();
 		detail_ = std::move(a_detail);
 		ngxResult_ = a_ngxResult;
 
@@ -1130,7 +1131,7 @@ namespace NeuralRendering
 			return;
 		a_emitted = true;
 		if (a_succeeded) {
-			logger::info("[DLSSNR] {} succeeded: {}", a_operation, detail_);
+			logger::info("[DLSSNR] {} succeeded: {}", a_operation, DetailLocked());
 		} else {
 			logger::error(
 				"[DLSSNR] {} failed at {}: {} (status={}, ngx=0x{:08X})",
@@ -1644,6 +1645,7 @@ namespace NeuralRendering
 				.providerBlending = a_providerBlending,
 				.valid = true,
 			};
+			evaluationSuccessDetail_.reset();
 			detail_ = std::format(
 				"Feature 18 created slot={} upscaling={} color={}x{} guides={}x{} output={}x{}",
 				a_slot, a_layout.featureUpscaling, a_layout.color.backing.width, a_layout.color.backing.height,
@@ -1828,12 +1830,17 @@ namespace NeuralRendering
 		++successfulFrames_;
 		status_ = RuntimeStatus::Initialized;
 		failureStage_ = RuntimeFailureStage::None;
-		detail_ = std::format(
-			"Feature 18 evaluated slot={} upscaling={} color={}x{} guides={}x{} output={}x{} controlMask={}x{} subrect=({},{} {}x{}) proxyHits={}",
-			a_slot, a_layout.featureUpscaling, a_layout.color.backing.width, a_layout.color.backing.height, a_layout.creation.input.width,
-			a_layout.creation.input.height, a_layout.creation.output.width, a_layout.creation.output.height, a_layout.controlMask.backing.width,
-			a_layout.controlMask.backing.height, outputSubrect.baseX, outputSubrect.baseY,
-			outputSubrect.width, outputSubrect.height, lastPathProxyHits_);
+		detail_.clear();
+		evaluationSuccessDetail_ = EvaluationSuccessDetail{
+			.slot = a_slot,
+			.featureUpscaling = a_layout.featureUpscaling,
+			.color = a_layout.color.backing,
+			.guides = a_layout.creation.input,
+			.output = a_layout.creation.output,
+			.controlMask = a_layout.controlMask.backing,
+			.outputSubrect = outputSubrect,
+			.pathProxyHits = lastPathProxyHits_,
+		};
 		LogOnceLocked(featureEvaluateLogEmitted_, "evaluate", true);
 		return true;
 	}
@@ -1850,6 +1857,8 @@ namespace NeuralRendering
 				static_cast<std::uint32_t>(E_INVALIDARG));
 			return false;
 		}
+		if (evaluationSuccessDetail_ && evaluationSuccessDetail_->slot == a_slot)
+			evaluationSuccessDetail_.reset();
 		if (!featureHandles_[a_slot]) {
 			featureConfigurations_[a_slot] = {};
 			firstEvaluationResetMask_.fetch_and(~(1u << a_slot), std::memory_order_relaxed);
@@ -2104,6 +2113,7 @@ namespace NeuralRendering
 		coreTrust_ = ParameterCoreTrust::Unknown;
 		coreSource_ = ParameterCoreSource::None;
 		detail_.clear();
+		evaluationSuccessDetail_.reset();
 		featureHandles_ = {};
 		featureConfigurations_ = {};
 		firstEvaluationResetMask_.store(0, std::memory_order_relaxed);
@@ -2151,6 +2161,7 @@ namespace NeuralRendering
 		lastPathProxyInstalled_ = !pathProxyRestored;
 		failureStage_ = RuntimeFailureStage::UnsafeAbandon;
 		status_ = RuntimeStatus::UnsafeAbandoned;
+		evaluationSuccessDetail_.reset();
 		abandoned_ = true;
 		try {
 			detail_ = pathProxyRestored ?
@@ -2263,10 +2274,23 @@ namespace NeuralRendering
 		return coreSource_;
 	}
 
+	std::string Runtime::DetailLocked() const
+	{
+		if (!evaluationSuccessDetail_)
+			return detail_;
+		const auto& detail = *evaluationSuccessDetail_;
+		return std::format(
+			"Feature 18 evaluated slot={} upscaling={} color={}x{} guides={}x{} output={}x{} controlMask={}x{} subrect=({},{} {}x{}) proxyHits={}",
+			detail.slot, detail.featureUpscaling, detail.color.width, detail.color.height,
+			detail.guides.width, detail.guides.height, detail.output.width, detail.output.height,
+			detail.controlMask.width, detail.controlMask.height, detail.outputSubrect.baseX, detail.outputSubrect.baseY,
+			detail.outputSubrect.width, detail.outputSubrect.height, detail.pathProxyHits);
+	}
+
 	std::string Runtime::Detail() const
 	{
 		std::scoped_lock lock(mutex_);
-		return detail_;
+		return DetailLocked();
 	}
 
 	std::uint32_t Runtime::NgxResult() const

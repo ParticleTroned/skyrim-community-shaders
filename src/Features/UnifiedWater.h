@@ -129,6 +129,10 @@ private:
 	RE::NiPoint3* gDisplacementMeshPos = nullptr;
 	RE::NiPoint2* gDisplacementMeshFlowCellOffset = nullptr;
 
+	std::atomic<const RE::TESWorldSpace*> currentPlayerWorldSpace{ nullptr };
+	std::atomic<RE::TES*> cachedTes{ nullptr };
+	std::atomic_bool pendingChildWsCull{ false };
+	void TryCompleteDeferredChildWorldspaceCull(RE::TES* tes);
 	std::atomic_bool exteriorWorldspaceActive{ false };
 	std::atomic_bool mapMenuOpen{ false };
 

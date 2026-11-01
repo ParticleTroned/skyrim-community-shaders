@@ -361,7 +361,7 @@ namespace WaterBlendHistory
 			if (const auto shadowState = globals::game::shadowState; shadowState && globals::game::renderer && globals::d3d::context) {
 				GET_INSTANCE_MEMBER(renderTargets, shadowState)
 				const auto target = renderTargets[1];
-				if (target != RE::RENDER_TARGET::kNONE && static_cast<uint32_t>(target) < Util::GetRenderTargetCount()) {
+				if (target != RE::RENDER_TARGET::kNONE && static_cast<uint32_t>(target) < static_cast<uint32_t>(Util::GetRenderTargetCount())) {
 					const auto rtv = globals::game::renderer->GetRuntimeData().renderTargets[target].RTV;
 					if (rtv) {
 						constexpr float clearColor[4] = { 0.f, 0.f, 0.f, 0.f };

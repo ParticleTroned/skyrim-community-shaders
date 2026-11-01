@@ -6,21 +6,21 @@ No upstream PRs. These are preparation branches, not merge-approved changes.
 
 | Work branch | Commit | Type | Required parent |
 |---|---|---|---|
-| `work/os-water-04-flowmap-20261101` | `1074a4b0ab` | BUG / CORRECTION | pinned baseline |
-| `work/os-water-02-refraction-20261101` | `101d67d123` | BUG / CORRECTION | pinned baseline |
-| `work/os-water-06-cache-20261101` | `05eee84c96` | BUG / CORRECTION | 04-flowmap |
-| `work/os-water-03-child-worldspace-20261101` | `1a1b26f1e7` | CORRECTION | pinned baseline |
+| `work/os-water-04-flowmap-20261101` | `1dcf4adc6e` | BUG / CORRECTION | pinned baseline |
+| `work/os-water-02-refraction-20261101` | `edb8d43e1e` | BUG / CORRECTION | pinned baseline |
+| `work/os-water-06-cache-20261101` | `99de91ced5` | BUG / CORRECTION | 04-flowmap |
+| `work/os-water-03-child-worldspace-20261101` | `88b92dd7d9` | CORRECTION | pinned baseline |
 | `work/os-water-05-lifetime-20261101` | `dfc440cd21` | CORRECTION | pinned baseline |
 | `work/os-water-07-flowmap-lock-20261101` | `3202b55301` | CORRECTION | pinned baseline |
-| `work/os-water-08-parallax-20261101` | `b48143a395` | CORRECTION / FEATURE | pinned baseline |
-| `work/os-water-09-history-20261101` | `889a2ba61d` | CORRECTION | pinned baseline |
-| `work/os-water-10a-reflection-source-20261101` | `1d93527072` | BUG | pinned baseline |
-| `work/os-water-10b-ssr-20261101` | `6b6436cba0` | CORRECTION | 10a-reflection-source |
-| `work/os-water-10c-reflection-height-20261101` | `add49f697a` | FEATURE | 10a-reflection-source |
+| `work/os-water-08-parallax-20261101` | `c19346745a` | CORRECTION / FEATURE | pinned baseline |
+| `work/os-water-09-history-20261101` | `76b2b5c420` | CORRECTION | pinned baseline |
+| `work/os-water-10a-reflection-source-20261101` | `7e8db0dfac` | BUG | pinned baseline |
+| `work/os-water-10b-ssr-20261101` | `e2c02d614f` | CORRECTION | 10a-reflection-source |
+| `work/os-water-10c-reflection-height-20261101` | `7574f53e4d` | FEATURE | 10a-reflection-source |
 | `work/os-water-11a-light-eligibility-20261101` | `4005635b03` | BUG | pinned baseline |
-| `work/os-water-11b-contact-candidates-20261101` | `a1d130be86` | CORRECTION | 11a-light-eligibility |
-| `work/os-water-shallow-base-20261101` | `59a05576f0` | INTEGRATION | 04-flowmap, 02-refraction |
-| `work/os-water-01-shallow-20261101` | `74099182b4` | FEATURE | shallow-base |
+| `work/os-water-11b-contact-candidates-20261101` | `62307f346f` | CORRECTION | 11a-light-eligibility |
+| `work/os-water-shallow-base-20261101` | `2bcf3eb92d` | INTEGRATION | 04-flowmap, 02-refraction |
+| `work/os-water-01-shallow-20261101` | `9261fcb326` | FEATURE | shallow-base |
 
 ## Scope and test controls
 
@@ -48,3 +48,11 @@ No 256-step ceiling, blanket Shadow/PortalStrict exclusions, NR runtime DLL, ver
 
 Run Windows plugin compilation, full/release-parity SE/VR shader compilation and shader/C++ unit tests. Then test in-game: corrupt/missing flowmap; failed cache generation and restart retry; child-worldspace and interior/map transitions; shoreline/deep-water output; both VR eyes and render scales; planar/cubemap/SSR permutations; eligible and ineligible engine lights plus particles; candidate budgets 0 and 1-8.
 Check the D3D debug layer and paired GPU timings. Defaults being unchanged does not replace these tests.
+
+## CI repair follow-up
+
+The failed integration run 41299604824 is followed by source fixes in the originating work branches and fast-forward merges into their dependents. No branch history was rewritten.
+
+Repairs cover SDK/REX D3D type bridging (4), explicit node pointers (3), signed target bounds (9), FXC-safe finite checks and initialized refraction fallback (2, 8, 10a, 1), and unsigned candidate sentinels (11b). Shared finite helpers have direct shader tests. The 64-step cap, reverse-Z handling, strict warning gates and runtime-DLL exclusion remain unchanged.
+
+Windows compilation and SE/VR shader validation must pass on the new integration commit before installation. In-game correctness and performance still require the existing test matrix.

@@ -32,8 +32,10 @@ int2 MotionSharpeningColorPixel(int2 pixel, uint4 outputRect)
 // Preserve each fixed filter's outer-edge policy while isolating an explicit packed-eye seam.
 int2 FixedSharpeningColorPixel(int2 pixel, uint centerX, uint outputSplitX)
 {
-	if (outputSplitX != 0u)
-		pixel.x = centerX < outputSplitX ? min(pixel.x, int(outputSplitX) - 1) : max(pixel.x, int(outputSplitX));
+	if (outputSplitX != 0u) {
+		int splitX = (int)outputSplitX;
+		pixel.x = centerX < outputSplitX ? min(pixel.x, splitX - 1) : max(pixel.x, splitX);
+	}
 	return pixel;
 }
 

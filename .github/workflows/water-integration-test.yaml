@@ -86,10 +86,21 @@ jobs:
           command.append(str(stage / 'LightLimitFix/WaterContactCandidatesCS.hlsl'))
           result = subprocess.run(command, capture_output=True, text=True)
           diagnostics = result.stdout + result.stderr
+          Path('build/water-preflight/candidate-diagnostics.log').write_text(diagnostics, encoding='utf-8')
           print(diagnostics)
           warnings = re.findall(r'warning (X\d+):', diagnostics)
           if result.returncode or any(code != 'X1519' for code in warnings):
               raise RuntimeError('Water candidate compute shader failed validation.')
+      - name: Upload water preflight diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: water-preflight-logs-${{ matrix.runtime }}
+          path: |
+            build/water-preflight/**/*.log
+            build/water-preflight/*.yaml
+          if-no-files-found: warn
+          retention-days: 14
 
   build:
     if: github.repository == 'ParticleTroned/skyrim-community-shaders' && github.ref == 'refs/heads/build/os-dev-water-integration-20261101'
@@ -155,8 +166,10 @@ jobs:
             'Shaders/Water.hlsl' = 'package/Shaders/Water.hlsl'
             'Shaders/Common/SharedData.hlsli' = 'package/Shaders/Common/SharedData.hlsli'
             'Shaders/Common/WaterRefraction.hlsli' = 'package/Shaders/Common/WaterRefraction.hlsli'
+            'Shaders/Common/WaterFinite.hlsli' = 'package/Shaders/Common/WaterFinite.hlsli'
             'Shaders/Common/WaterParallaxMath.hlsli' = 'package/Shaders/Common/WaterParallaxMath.hlsli'
             'Shaders/Common/WaterContactCandidates.hlsli' = 'package/Shaders/Common/WaterContactCandidates.hlsli'
+            'Shaders/UnifiedWater/ShallowSurface.hlsli' = 'features/Unified Water/Shaders/UnifiedWater/ShallowSurface.hlsli'
             'Shaders/WaterEffects/WaterParallax.hlsli' = 'features/Water Effects/Shaders/WaterEffects/WaterParallax.hlsli'
             'Shaders/LightLimitFix/WaterContactCandidatesCS.hlsl' = 'features/Light Limit Fix/Shaders/LightLimitFix/WaterContactCandidatesCS.hlsl'
             'Shaders/LightLimitFix/Common.hlsli' = 'features/Light Limit Fix/Shaders/LightLimitFix/Common.hlsli'

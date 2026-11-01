@@ -75,21 +75,21 @@ void LightingTemplateWidget::DrawWidget()
 		const ImGuiTabItemFlags fogFlags = GetTabFlagsForOverride(LightingTemplateTab::kFog);
 		const ImGuiTabItemFlags dalcFlags = GetTabFlagsForOverride(LightingTemplateTab::kDalc);
 
-		if (ImGui::BeginTabItem(LightingTemplateTab::kBasic, nullptr, basicFlags)) {
+		if (ImGui::BeginTabItem(WeatherUtils::BuildLocalizedControlLabel(LightingTemplateTab::kBasic).c_str(), nullptr, basicFlags)) {
 			BeginScrollableContent("##BasicScroll");
 			DrawBasicSettings();
 			EndScrollableContent();
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem(LightingTemplateTab::kFog, nullptr, fogFlags)) {
+		if (ImGui::BeginTabItem(WeatherUtils::BuildLocalizedControlLabel(LightingTemplateTab::kFog).c_str(), nullptr, fogFlags)) {
 			BeginScrollableContent("##FogScroll");
 			DrawFogSettings();
 			EndScrollableContent();
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem(LightingTemplateTab::kDalc, nullptr, dalcFlags)) {
+		if (ImGui::BeginTabItem(WeatherUtils::BuildLocalizedControlLabel(LightingTemplateTab::kDalc).c_str(), nullptr, dalcFlags)) {
 			BeginScrollableContent("##DALCScroll");
 			DrawDALCSettings();
 			EndScrollableContent();
@@ -109,7 +109,7 @@ void LightingTemplateWidget::DrawBasicSettings()
 			return;
 		if (ShouldOpenSearchSection())
 			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-		if (ImGui::CollapsingHeader(label)) {
+		if (ImGui::CollapsingHeader(WeatherUtils::BuildLocalizedControlLabel(label).c_str())) {
 			ImGui::Spacing();
 			draw();
 			ImGui::Spacing();

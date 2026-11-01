@@ -4304,3 +4304,8 @@ void AdaptiveBrightness::DataLoaded()
 {
 	UnderwaterDepthOfField::InstallHooks();
 }
+
+void AdaptiveBrightness::ClearShaderCache()
+{
+	UnderwaterDepthOfField::ClearShaderCache();
+}

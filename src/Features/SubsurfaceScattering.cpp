@@ -52,11 +52,6 @@ namespace
 		return npc ? IsFemaleImpl(npc, 0) : false;
 	}
 
-	inline float ClampHumanSkinControl(float a_value)
-	{
-		return std::clamp(a_value, kHumanSkinControlMin, kHumanSkinControlMax);
-	}
-
 	constexpr float kHumanSkinControlMin = 0.0f;
 	constexpr float kHumanSkinControlMax = 2.0f;
 

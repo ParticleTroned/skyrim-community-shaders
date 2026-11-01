@@ -623,6 +623,7 @@ void State::Reset()
 	LODBlendRingFix::GetInstance().Update();
 	globals::shaderCache->TickActiveShaderCapture(globals::menu && globals::menu->IsEnabled);
 	globals::shaderCache->ProcessPendingClear();
+	globals::shaderCache->WritePendingDiskCacheInfoIfNeeded();
 
 	if (auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton()) {
 		auto& BSImagespaceShaderApplyReflections = imageSpaceManager->GetRuntimeData().BSImagespaceShaderApplyReflections;
@@ -1792,7 +1793,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 
 		data.RefractionScale = refractionScale;
 		const auto& volumetricShadows = globals::features::volumetricShadows;
-		data.VolumetricShadowsEnabled = volumetricShadows.loaded && volumetricShadows.settings.Enabled;
+		data.VolumetricShadowsEnabled = volumetricShadows.loaded && volumetricShadows.settings.Enabled &&
+		                                volumetricShadows.HasSharedShadowMapResources();
 		const auto godrayProfile = a_inWorld ?
 		                               globals::features::volumetricLighting.GetRuntimeGodrayProfile() :
 		                               VolumetricLighting::GodrayProfile{};

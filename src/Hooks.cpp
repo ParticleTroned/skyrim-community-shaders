@@ -1180,6 +1180,9 @@ namespace Hooks
 			!globals::state->startupMenuBlurSourceReady &&
 			globals::state->startupMenuInitializationComplete.load(
 				std::memory_order_acquire);
+		// Reset advances frameCount for the next render; acquisition still reads
+		// the scene, NR result and exposure produced by this completed frame.
+		const uint32_t sourceFrame = globals::state->frameCount;
 		CSX::Api::AdvanceAcceptedDrawFrame(globals::d3d::context);
 		globals::state->Reset();
 
@@ -1193,7 +1196,7 @@ namespace Hooks
 		if (SUCCEEDED(result) && armStartupMenuBlurSource)
 			globals::state->startupMenuBlurSourceReady = true;
 
-		globals::features::screenshotFeature.ProcessCaptureRequest();
+		globals::features::screenshotFeature.ProcessCaptureRequest(sourceFrame);
 		TracyD3D11Collect(globals::state->tracyCtx);
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 		NvPerf::OnPresentEnd();

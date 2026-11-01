@@ -1,6 +1,7 @@
 #pragma once
 #include "Features/InverseSquareLighting/Common.h"
 #include "LightPicker.h"
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -19,6 +20,7 @@ namespace Util::Widgets
 namespace RE
 {
 	class BSLight;
+	class BSRenderPass;
 }
 
 struct LightEditor
@@ -58,6 +60,9 @@ struct LightEditor
 	 * @return True if the light should be rendered, false if it should be suppressed.
 	 */
 	bool ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDataExt* runtimeData) const;
+
+	/** @brief Records whether the selected light appears in an engine water pass. */
+	static void ObserveWaterPass(RE::BSRenderPass* pass);
 
 private:
 	bool enabled = false;
@@ -106,6 +111,25 @@ private:
 		stl::enumeration<ISLCommon::TES_LIGHT_FLAGS_EXT, uint32_t> tesFlags;
 		ISLCommon::RuntimeLightDataExt data = {};
 		RE::NiPoint3 pos = {};
+	};
+
+	struct WaterRoutingDiagnostics
+	{
+		bool available = false;
+		bool observerAvailable = false;
+		bool portalStrict = false;
+		bool portalGraphPresent = false;
+		bool affectWater = false;
+		bool shadow = false;
+		bool llfWaterCandidate = false;
+		bool skyrimWaterPassEligible = false;
+
+		std::atomic<RE::BSLight*> target{ nullptr };
+		std::atomic<uint64_t> waterPassCount{ 0 };
+		std::atomic<uint64_t> matchedWaterPassCount{ 0 };
+		std::atomic<uint32_t> lastPassEnum{ 0 };
+		std::atomic<uint32_t> lastSceneLightIndex{ 0 };
+		std::atomic<uint32_t> lastSceneLightCount{ 0 };
 	};
 
 	bool extendedLogMode = false;
@@ -178,6 +202,7 @@ private:
 	};
 
 	LPLightInfo lpInfo;
+	static inline WaterRoutingDiagnostics waterRoutingDiagnostics;
 	RE::NiPointer<RE::NiLight> activeNiLight;
 	RE::NiPointer<RE::BSLight> activeBsLight;
 	RE::ObjectRefHandle activeRefr;
@@ -215,6 +240,9 @@ private:
 	void RestoreOriginal();
 	/** @brief Writes shadowDepthBias to the active shadow light's runtime data. */
 	void ApplyShadowDepthBias();
+	void DrawWaterRoutingDiagnostics() const;
+	void UpdateWaterRoutingDiagnostics(RE::BSLight* bsLight, RE::NiLight* niLight);
+	static void ClearWaterRoutingDiagnostics();
 	/** @brief Queues a reference rebuild outside active-light iteration. */
 	void RequestRefRefresh(RE::TESObjectREFR* refr);
 	/** @brief Counts down a pending refresh and fires the deferred Enable; call once per frame before any early-out. */

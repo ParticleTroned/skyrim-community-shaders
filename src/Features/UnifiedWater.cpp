@@ -19,6 +19,7 @@
 #include "RE/T/TESWaterReflections.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <imgui_internal.h>
 #include <memory>
@@ -426,6 +427,31 @@ static bool IsChildOfNode(const RE::NiAVObject* object, const RE::NiNode* root)
 	return object == root;
 }
 
+static bool AreDuplicateWaterSurfaces(const RE::TESWaterObject& existing, const RE::TESWaterObject& candidate, RE::NiNode* lodRoot)
+{
+	const auto* first = existing.shape.get();
+	const auto* second = candidate.shape.get();
+	// A position bucket only narrows the search; distinct meshes and water types
+	// can share an origin. Aliased registrations still own the same visible shape.
+	if (!lodRoot || !first || !second || first == second || first->world != second->world ||
+		first->GetType() != RE::BSGeometry::Type::kTriShape || second->GetType() != RE::BSGeometry::Type::kTriShape ||
+		!existing.waterType || existing.waterType != candidate.waterType || existing.flags != candidate.flags ||
+		existing.plane.normal != candidate.plane.normal || existing.plane.constant != candidate.plane.constant ||
+		(!IsChildOfNode(first, lodRoot) && !IsChildOfNode(second, lodRoot)))
+		return false;
+
+	const auto& firstGeometry = first->GetGeometryRuntimeData();
+	const auto& secondGeometry = second->GetGeometryRuntimeData();
+	const auto& firstMesh = first->GetTrishapeRuntimeData();
+	const auto& secondMesh = second->GetTrishapeRuntimeData();
+	return firstGeometry.rendererData && firstGeometry.rendererData == secondGeometry.rendererData &&
+	       std::bit_cast<std::uint64_t>(firstGeometry.vertexDesc) == std::bit_cast<std::uint64_t>(secondGeometry.vertexDesc) &&
+	       firstGeometry.shaderProperty && firstGeometry.shaderProperty == secondGeometry.shaderProperty &&
+	       firstGeometry.alphaProperty == secondGeometry.alphaProperty &&
+	       !firstGeometry.skinInstance && !secondGeometry.skinInstance &&
+	       firstMesh.vertexCount == secondMesh.vertexCount && firstMesh.triangleCount == secondMesh.triangleCount;
+}
+
 static RE::BSTriShape* SelectDuplicateWaterSystemShapeToRemove(RE::BSTriShape* existing, RE::BSTriShape* candidate, RE::NiNode* lodRoot)
 {
 	if (!existing)
@@ -446,11 +472,12 @@ static void RemoveDuplicateWaterSystemObjects(RE::TESWaterSystem* waterSystem, R
 	if (!waterSystem)
 		return;
 
-	static thread_local std::unordered_map<WaterPositionKey, RE::BSTriShape*, WaterPositionKeyHash> shapeByPosition;
-	static thread_local std::vector<RE::BSTriShape*> duplicateShapes;
+	static thread_local std::unordered_map<WaterPositionKey, RE::TESWaterObject*, WaterPositionKeyHash> shapeByPosition;
+	static thread_local std::vector<RE::NiPointer<RE::BSTriShape>> duplicateShapes;
 
 	shapeByPosition.clear();
 	duplicateShapes.clear();
+	const auto releaseDuplicates = SKSE::stl::scope_exit([&]() noexcept { duplicateShapes.clear(); });
 
 	const auto objectCount = waterSystem->waterObjects.size();
 	if (shapeByPosition.bucket_count() < objectCount)
@@ -472,24 +499,32 @@ static void RemoveDuplicateWaterSystemObjects(RE::TESWaterSystem* waterSystem, R
 			continue;
 
 		const auto key = GetWaterPositionKey(shape);
-		const auto [it, inserted] = shapeByPosition.try_emplace(key, shape);
+		const auto [it, inserted] = shapeByPosition.try_emplace(key, waterObject.get());
 		if (inserted)
 			continue;
 
-		const auto existing = it->second;
+		if (!AreDuplicateWaterSurfaces(*it->second, *waterObject, lodRoot))
+			continue;
+		const auto existing = it->second->shape.get();
 		const auto duplicate = SelectDuplicateWaterSystemShapeToRemove(existing, shape, lodRoot);
 		if (duplicate == existing)
-			it->second = shape;
+			it->second = waterObject.get();
 
-		duplicateShapes.push_back(duplicate);
+		duplicateShapes.emplace_back(duplicate);
 	}
 
-	for (const auto shape : duplicateShapes) {
+	// Remove each shape once even when several registrations reference it, while
+	// retaining ownership across RemoveWater's release of native water objects.
+	std::sort(duplicateShapes.begin(), duplicateShapes.end(), [](const auto& a, const auto& b) {
+		return std::less<RE::BSTriShape*>{}(a.get(), b.get());
+	});
+	duplicateShapes.erase(std::unique(duplicateShapes.begin(), duplicateShapes.end()), duplicateShapes.end());
+	for (const auto& shape : duplicateShapes) {
 		if (!shape)
 			continue;
 
 		shape->SetAppCulled(true);
-		waterSystem->RemoveWater(shape);
+		waterSystem->RemoveWater(shape.get());
 	}
 }
 

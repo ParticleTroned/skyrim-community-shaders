@@ -4118,8 +4118,10 @@ void Upscaling::CaptureNeuralFrameGuides()
 		auto& hdr = globals::features::hdrDisplay;
 		const bool reduced = neuralSettings.mode == 2;
 		const bool vendor = GetUpscaleMethod() == UpscaleMethod::kDLSS || GetUpscaleMethod() == UpscaleMethod::kFSR;
-		auto* scene = reduced ? targets[RE::RENDER_TARGETS::kMAIN].texture :
-			hdr.loaded && hdr.settings.enableHDR && hdr.hdrTexture ? hdr.hdrTexture->resource.get() : targets[RE::RENDER_TARGETS::kFRAMEBUFFER].texture;
+		winrt::com_ptr<ID3D11Texture2D> sceneOwner;
+		auto* scene = reduced                                   ? targets[RE::RENDER_TARGETS::kMAIN].texture :
+		              hdr.IsHDROutputActive() && hdr.hdrTexture ? hdr.hdrTexture->resource.get() :
+		                                                          Util::ResolveRenderTargetTexture(targets[RE::RENDER_TARGETS::kFRAMEBUFFER], sceneOwner);
 		const auto dimensions = reduced ? plan.engineRenderSize : plan.finalOutputSize;
 		if (scene && (!reduced || vendor) && dimensions.x && dimensions.y)
 			neural.Prewarm({ globals::d3d::device, globals::d3d::context, scene, globals::state->frameCount,
@@ -4154,7 +4156,9 @@ void Upscaling::ApplyFinalNeuralFrame()
 		return;
 	auto& hdr = globals::features::hdrDisplay;
 	auto& framebuffer = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER];
-	auto* color = neuralFinalSceneIsHDR && hdr.hdrTexture ? hdr.hdrTexture->resource.get() : framebuffer.texture;
+	winrt::com_ptr<ID3D11Texture2D> sceneOwner;
+	auto* color = neuralFinalSceneIsHDR && hdr.hdrTexture ? hdr.hdrTexture->resource.get() :
+	                                                        Util::ResolveRenderTargetTexture(framebuffer, sceneOwner);
 	if (!color) return;
 	D3D11_TEXTURE2D_DESC description{};
 	color->GetDesc(&description);
@@ -4224,7 +4228,10 @@ Upscaling::RuntimeResolutionPlan Upscaling::GetRuntimeResolutionPlan() const
 	const auto dimension = [](uint32_t output, float ratio) {
 		if (!output || !std::isfinite(ratio) || ratio <= 0.0f)
 			return 0u;
-		return std::clamp(static_cast<uint32_t>(static_cast<double>(output) * std::min(ratio, 1.0f)), 1u, output);
+		// Match ConvertToDynamic's float product before truncation. Promoting
+		// the stored ratio first can shrink an otherwise integral viewport by 1.
+		const float scaled = static_cast<float>(output) * std::min(ratio, 1.0f);
+		return static_cast<uint32_t>(std::clamp(static_cast<double>(scaled), 1.0, static_cast<double>(output)));
 	};
 	plan.engineRenderSize = { dimension(viewport->screenWidth, resolutionScale.x),
 		dimension(viewport->screenHeight, resolutionScale.y) };
@@ -4396,13 +4403,12 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	// Redirect kFRAMEBUFFER to float texture before ISHDR runs so HDR values >1.0 survive
 	// When HDR Display is not loaded, ISHDR writes to vanilla kFRAMEBUFFER (SDR path)
-	bool hdrLoaded = globals::features::hdrDisplay.loaded;
-	if (hdrLoaded)
-		globals::features::hdrDisplay.RedirectFramebuffer();
+	const bool hdrLoaded = globals::features::hdrDisplay.loaded;
+	const bool redirectedToHDR = hdrLoaded && globals::features::hdrDisplay.RedirectFramebuffer();
 
 	func(a_this, a3, a_target, a_4, a_5);
 	upscaling.neuralWorldFrame = globals::state ? globals::state->frameCount : UINT32_MAX;
-	upscaling.neuralFinalSceneIsHDR = hdrLoaded;
+	upscaling.neuralFinalSceneIsHDR = redirectedToHDR;
 
 	// Restore kFRAMEBUFFER after ISHDR — hdrTexture now has the HDR scene
 	if (hdrLoaded)

@@ -136,6 +136,324 @@ static std::string_view UnscopeKey(std::string_view key)
 	return pos == std::string_view::npos ? key : key.substr(pos + kScopeSep.size());
 }
 
+const char* WeatherUtils::TranslateControlLabel(std::string_view label)
+{
+	if (label == "Ambient Color")
+		return T("cs_editor.ambient_color", "Ambient Color");
+	if (label == "Directional Color")
+		return T("cs_editor.directional_color", "Directional Color");
+	if (label == "Directional XY")
+		return T("cs_editor.directional_xy", "Directional XY");
+	if (label == "Directional Z")
+		return T("cs_editor.directional_z", "Directional Z");
+	if (label == "Directional Fade")
+		return T("cs_editor.directional_fade", "Directional Fade");
+	if (label == "Light Fade Start")
+		return T("cs_editor.light_fade_start", "Light Fade Start");
+	if (label == "Light Fade End")
+		return T("cs_editor.light_fade_end", "Light Fade End");
+	if (label == "Clip Distance")
+		return T("cs_editor.clip_distance", "Clip Distance");
+	if (label == "Fog Color Near" || label == "Fog Near Color")
+		return T("cs_editor.fog_color_near", "Fog Color Near");
+	if (label == "Fog Color Far" || label == "Fog Far Color")
+		return T("cs_editor.fog_color_far", "Fog Color Far");
+	if (label == "Fog Near")
+		return T("cs_editor.color_fog_near", "Fog Near");
+	if (label == "Fog Far")
+		return T("cs_editor.color_fog_far", "Fog Far");
+	if (label == "Fog Power")
+		return T("cs_editor.fog_power", "Fog Power");
+	if (label == "Fog Clamp" || label == "Fog Clamp (Max)")
+		return T("cs_editor.fog_clamp", "Fog Clamp");
+	if (label == "Specular")
+		return T("cs_editor.dalc_specular", "Specular");
+	if (label == "Fresnel Power")
+		return T("cs_editor.dalc_fresnel_power", "Fresnel Power");
+	if (label == "X+ (Right)")
+		return T("cs_editor.direction_x_plus", "X+ (Right)");
+	if (label == "X- (Left)")
+		return T("cs_editor.direction_x_minus", "X- (Left)");
+	if (label == "Y+ (Front)")
+		return T("cs_editor.direction_y_plus", "Y+ (Front)");
+	if (label == "Y- (Back)")
+		return T("cs_editor.direction_y_minus", "Y- (Back)");
+	if (label == "Z+ (Up)")
+		return T("cs_editor.direction_z_plus", "Z+ (Up)");
+	if (label == "Z- (Down)")
+		return T("cs_editor.direction_z_minus", "Z- (Down)");
+	if (label == "XY Rotation")
+		return T("cs_editor.xy_rotation", "XY Rotation");
+	if (label == "Z Rotation")
+		return T("cs_editor.z_rotation", "Z Rotation");
+	if (label == "Inherit Ambient Color")
+		return T("cs_editor.inherit_ambient_color", "Inherit Ambient Color");
+	if (label == "Inherit Directional Color")
+		return T("cs_editor.inherit_directional_color", "Inherit Directional Color");
+	if (label == "Inherit Fog Color")
+		return T("cs_editor.inherit_fog_color", "Inherit Fog Color");
+	if (label == "Inherit Fog Near")
+		return T("cs_editor.inherit_fog_near", "Inherit Fog Near");
+	if (label == "Inherit Fog Far")
+		return T("cs_editor.inherit_fog_far", "Inherit Fog Far");
+	if (label == "Inherit Directional Rotation")
+		return T("cs_editor.inherit_directional_rotation", "Inherit Directional Rotation");
+	if (label == "Inherit Directional Fade")
+		return T("cs_editor.inherit_directional_fade", "Inherit Directional Fade");
+	if (label == "Inherit Clip Distance")
+		return T("cs_editor.inherit_clip_distance", "Inherit Clip Distance");
+	if (label == "Inherit Fog Power")
+		return T("cs_editor.inherit_fog_power", "Inherit Fog Power");
+	if (label == "Inherit Fog Max (Clamp)")
+		return T("cs_editor.inherit_fog_max_clamp", "Inherit Fog Max (Clamp)");
+	if (label == "Inherit Light Fade Distances")
+		return T("cs_editor.inherit_light_fade_distances", "Inherit Light Fade Distances");
+	if (label == "Type")
+		return T("cs_editor.type", "Type");
+	if (label == "Size X")
+		return T("cs_editor.size_x", "Size X");
+	if (label == "Size Y")
+		return T("cs_editor.size_y", "Size Y");
+	if (label == "Gravity Velocity")
+		return T("cs_editor.gravity_velocity", "Gravity Velocity");
+	if (label == "Rotation Velocity")
+		return T("cs_editor.rotation_velocity", "Rotation Velocity");
+	if (label == "Center Offset Min")
+		return T("cs_editor.center_offset_min", "Center Offset Min");
+	if (label == "Center Offset Max")
+		return T("cs_editor.center_offset_max", "Center Offset Max");
+	if (label == "Start Rotation Range")
+		return T("cs_editor.start_rotation_range", "Start Rotation Range");
+	if (label == "Box Size")
+		return T("cs_editor.box_size", "Box Size");
+	if (label == "Particle Density")
+		return T("cs_editor.particle_density_label", "Particle Density");
+	if (label == "Num Subtextures X")
+		return T("cs_editor.num_subtextures_x", "Num Subtextures X");
+	if (label == "Num Subtextures Y")
+		return T("cs_editor.num_subtextures_y", "Num Subtextures Y");
+	if (label == "Particle Texture")
+		return T("cs_editor.particle_texture_label", "Particle Texture");
+	if (label == "Art Object")
+		return T("cs_editor.art_object", "Art Object");
+	if (label == "Effect Shader")
+		return T("cs_editor.effect_shader", "Effect Shader");
+	if (label == "Face Target")
+		return T("cs_editor.face_target", "Face Target");
+	if (label == "Attach To Camera")
+		return T("cs_editor.attach_to_camera", "Attach To Camera");
+	if (label == "Inherit Rotation")
+		return T("cs_editor.inherit_rotation", "Inherit Rotation");
+	if (label == "Intensity")
+		return T("cs_editor.intensity", "Intensity");
+	if (label == "Contribution")
+		return T("cs_editor.contribution", "Contribution");
+	if (label == "Color")
+		return T("cs_editor.color", "Color");
+	if (label == "Size")
+		return T("cs_editor.size", "Size");
+	if (label == "Wind Speed")
+		return T("cs_editor.wind_speed", "Wind Speed");
+	if (label == "Falling Speed")
+		return T("cs_editor.falling_speed", "Falling Speed");
+	if (label == "Scattering")
+		return T("cs_editor.scattering", "Scattering");
+	if (label == "Range Factor")
+		return T("cs_editor.range_factor", "Range Factor");
+	if (label == "Cloud Layer Speed X")
+		return T("cs_editor.cloud_layer_speed_x", "Cloud Layer Speed X");
+	if (label == "Cloud Layer Speed Y")
+		return T("cs_editor.cloud_layer_speed_y", "Cloud Layer Speed Y");
+
+	if (label == "Basic")
+		return T("cs_editor.tab_basic", "Basic");
+	if (label == "Density")
+		return T("cs_editor.tab_density", "Density");
+	if (label == "Advanced")
+		return T("cs_editor.tab_advanced", "Advanced");
+	if (label == "Fog")
+		return T("cs_editor.tab_fog", "Fog");
+	if (label == "DALC")
+		return T("cs_editor.tab_dalc", "DALC");
+	if (label == "Particle")
+		return T("cs_editor.tab_particle", "Particle");
+	if (label == "Position")
+		return T("cs_editor.tab_position", "Position");
+	if (label == "Texture")
+		return T("cs_editor.tab_texture", "Texture");
+	if (label == "Inheritance")
+		return T("cs_editor.tab_inheritance", "Inheritance");
+	if (label == "Ambient & Directional")
+		return T("cs_editor.ambient_directional", "Ambient & Directional");
+	if (label == "Directional Settings")
+		return T("cs_editor.directional_settings", "Directional Settings");
+	if (label == "Light Fade")
+		return T("cs_editor.light_fade", "Light Fade");
+	if (label == "Other")
+		return T("cs_editor.other", "Other");
+	if (label == "Custom Color")
+		return T("cs_editor.custom_color", "Custom Color");
+	if (label == "RGB Color")
+		return T("cs_editor.rgb_color", "RGB Color");
+	if (label == "Sampling")
+		return T("cs_editor.sampling", "Sampling");
+	if (label == "Custom Color Contribution")
+		return T("cs_editor.custom_color_contribution", "Custom Color Contribution");
+	if (label == "Density Contribution")
+		return T("cs_editor.density_contribution", "Density Contribution");
+	if (label == "Density Size")
+		return T("cs_editor.density_size", "Density Size");
+	if (label == "Phase Function Contribution")
+		return T("cs_editor.phase_function_contribution", "Phase Function Contribution");
+	if (label == "Phase Function Scattering")
+		return T("cs_editor.phase_function_scattering", "Phase Function Scattering");
+	if (label == "Sampling Range Factor")
+		return T("cs_editor.sampling_range_factor", "Sampling Range Factor");
+	if (label == "Sun Damage")
+		return T("cs_editor.sun_damage", "Sun Damage");
+	if (label == "Wind Direction")
+		return T("cs_editor.wind_direction_label", "Wind Direction");
+	if (label == "Wind Direction Range")
+		return T("cs_editor.wind_direction_range_label", "Wind Direction Range");
+	if (label == "Precipitation Begin Fade In")
+		return T("cs_editor.precipitation_begin_fade_in_label", "Precipitation Begin Fade In");
+	if (label == "Precipitation End Fade Out")
+		return T("cs_editor.precipitation_end_fade_out_label", "Precipitation End Fade Out");
+	if (label == "Thunder Lightning Begin Fade In")
+		return T("cs_editor.thunder_lightning_begin_fade_in", "Thunder Lightning Begin Fade In");
+	if (label == "Thunder Lightning End Fade Out")
+		return T("cs_editor.thunder_lightning_end_fade_out", "Thunder Lightning End Fade Out");
+	if (label == "Thunder Lightning Frequency")
+		return T("cs_editor.thunder_lightning_frequency", "Thunder Lightning Frequency");
+	if (label == "Lightning Color")
+		return T("cs_editor.lightning_color_label", "Lightning Color");
+	if (label == "Visual Effect Begin")
+		return T("cs_editor.visual_effect_begin", "Visual Effect Begin");
+	if (label == "Visual Effect End")
+		return T("cs_editor.visual_effect_end", "Visual Effect End");
+	if (label == "Trans Delta")
+		return T("cs_editor.trans_delta", "Trans Delta");
+	if (label == "Directional +X")
+		return T("cs_editor.dalc_directional_x_max", "Directional +X");
+	if (label == "Directional -X")
+		return T("cs_editor.dalc_directional_x_min", "Directional -X");
+	if (label == "Directional +Y")
+		return T("cs_editor.dalc_directional_y_max", "Directional +Y");
+	if (label == "Directional -Y")
+		return T("cs_editor.dalc_directional_y_min", "Directional -Y");
+	if (label == "Directional +Z")
+		return T("cs_editor.dalc_directional_z_max", "Directional +Z");
+	if (label == "Directional -Z")
+		return T("cs_editor.dalc_directional_z_min", "Directional -Z");
+	if (label == "Cloud Color")
+		return T("cs_editor.cloud_color", "Cloud Color");
+	if (label == "Cloud Alpha")
+		return T("cs_editor.cloud_alpha", "Cloud Alpha");
+	if (label == "Near")
+		return T("cs_editor.fog_near", "Near");
+	if (label == "Far")
+		return T("cs_editor.fog_far", "Far");
+	if (label == "Power")
+		return T("cs_editor.fog_power_short", "Power");
+	if (label == "Max")
+		return T("cs_editor.fog_max", "Max");
+	if (label == "Day Near")
+		return T("cs_editor.day_near", "Day Near");
+	if (label == "Day Far")
+		return T("cs_editor.day_far", "Day Far");
+	if (label == "Day Power")
+		return T("cs_editor.day_power", "Day Power");
+	if (label == "Day Max")
+		return T("cs_editor.day_max", "Day Max");
+	if (label == "Night Near")
+		return T("cs_editor.night_near", "Night Near");
+	if (label == "Night Far")
+		return T("cs_editor.night_far", "Night Far");
+	if (label == "Night Power")
+		return T("cs_editor.night_power", "Night Power");
+	if (label == "Night Max")
+		return T("cs_editor.night_max", "Night Max");
+	if (label == "Sunrise")
+		return T("cs_editor.tod_sunrise", "Sunrise");
+	if (label == "Day")
+		return T("cs_editor.tod_day", "Day");
+	if (label == "Sunset")
+		return T("cs_editor.tod_sunset", "Sunset");
+	if (label == "Night")
+		return T("cs_editor.tod_night", "Night");
+	if (label == "Sky Upper")
+		return T("cs_editor.color_sky_upper", "Sky Upper");
+	if (label == "Ambient")
+		return T("cs_editor.color_ambient", "Ambient");
+	if (label == "Sunlight")
+		return T("cs_editor.color_sunlight", "Sunlight");
+	if (label == "Sun")
+		return T("cs_editor.color_sun", "Sun");
+	if (label == "Stars")
+		return T("cs_editor.color_stars", "Stars");
+	if (label == "Sky Lower")
+		return T("cs_editor.color_sky_lower", "Sky Lower");
+	if (label == "Horizon")
+		return T("cs_editor.color_horizon", "Horizon");
+	if (label == "Effect Lighting")
+		return T("cs_editor.color_effect_lighting", "Effect Lighting");
+	if (label == "Cloud LOD Diffuse")
+		return T("cs_editor.color_cloud_lod_diffuse", "Cloud LOD Diffuse");
+	if (label == "Cloud LOD Ambient")
+		return T("cs_editor.color_cloud_lod_ambient", "Cloud LOD Ambient");
+	if (label == "Sky Statics")
+		return T("cs_editor.color_sky_statics", "Sky Statics");
+	if (label == "Water Multiplier")
+		return T("cs_editor.color_water_multiplier", "Water Multiplier");
+	if (label == "Sun Glare")
+		return T("cs_editor.color_sun_glare", "Sun Glare");
+	if (label == "Moon Glare")
+		return T("cs_editor.color_moon_glare", "Moon Glare");
+	if (label == "Unknown")
+		return T("cs_editor.unknown", "Unknown");
+	if (label == "ImageSpace")
+		return T("cs_editor.record_imagespace", "ImageSpace");
+	if (label == "Volumetric Lighting")
+		return T("cs_editor.record_volumetric_lighting", "Volumetric Lighting");
+	if (label == "Precipitation")
+		return T("cs_editor.record_precipitation", "Precipitation");
+	if (label == "Visual Effect")
+		return T("cs_editor.record_visual_effect", "Visual Effect");
+	if (label == "Particle Shader")
+		return T("cs_editor.particle_shader", "Particle Shader");
+
+	if (label == "Lighting (DALC)")
+		return T("cs_editor.lighting_dalc", "Lighting (DALC)");
+	if (label == "Atmosphere Colors")
+		return T("cs_editor.atmosphere_colors", "Atmosphere Colors");
+	if (label == "Clouds")
+		return T("cs_editor.clouds", "Clouds");
+	if (label == "Records")
+		return T("cs_editor.records", "Records");
+	if (label == "Features")
+		return T("cs_editor.features", "Features");
+
+	// Fallback: return the original label via T() which caches a stable null-terminated copy
+	return T(std::string(label).c_str(), std::string(label).c_str());
+}
+
+std::string WeatherUtils::BuildLocalizedControlLabel(const std::string& label)
+{
+	if (label.starts_with("##"))
+		return label;
+
+	const auto idPos = label.find("##");
+	const auto visible = idPos == std::string::npos ? label : label.substr(0, idPos);
+	const auto id = idPos == std::string::npos ? visible : label.substr(idPos + 2);
+	const bool numericId = !id.empty() && std::all_of(id.begin(), id.end(), [](unsigned char c) { return std::isdigit(c); });
+	const auto key = numericId ? visible : id;
+	const auto* translated = WeatherUtils::TranslateControlLabel(key);
+	if (std::string_view(translated) == key)
+		return label;
+
+	return std::format("{}##{}", translated, id);
+}
+
 // Per-widget-type window sizes — shared across all instances of the same widget type
 static std::unordered_map<std::string, ImVec2> s_widgetTypeSizes;
 
@@ -396,7 +714,7 @@ namespace WeatherUtils
 	bool DrawSliderInt8(const std::string& label, int& property)
 	{
 		return DrawTrackedSlider(label, property, nullptr, s_int8Tracker, [&]() {
-			return Util::Widgets::SliderInt(label.c_str(), &property, -127, 127);
+			return Util::Widgets::SliderInt(BuildLocalizedControlLabel(label).c_str(), &property, -127, 127);
 		});
 	}
 
@@ -411,7 +729,7 @@ namespace WeatherUtils
 
 		const float3 previous = property;
 		bool changed = DrawWithWidgetHighlight(effectiveWidget, hid, [&]() {
-			return ImGui::ColorEdit3(l.c_str(), (float*)&property);
+			return ImGui::ColorEdit3(BuildLocalizedControlLabel(l).c_str(), (float*)&property);
 		});
 
 		if (ImGui::IsItemActivated())
@@ -451,7 +769,7 @@ namespace WeatherUtils
 	bool DrawSliderInt(const std::string& label, int& property, int min, int max, Widget* widget)
 	{
 		return DrawTrackedSlider(label, property, widget, s_intTracker, [&]() {
-			return Util::Widgets::SliderInt(label.c_str(), &property, min, max);
+			return Util::Widgets::SliderInt(BuildLocalizedControlLabel(label).c_str(), &property, min, max);
 		});
 	}
 
@@ -465,7 +783,7 @@ namespace WeatherUtils
 	{
 		return DrawTrackedSlider(label, property, widget, s_uint32Tracker, [&]() {
 			return Util::Widgets::SliderScalar(
-				label.c_str(),
+				BuildLocalizedControlLabel(label).c_str(),
 				ImGuiDataType_U32,
 				&property,
 				&min,
@@ -477,7 +795,7 @@ namespace WeatherUtils
 	bool DrawSliderFloat(const std::string& label, float& property, float min, float max, Widget* widget, const char* format)
 	{
 		return DrawTrackedSlider(label, property, widget, s_floatTracker, [&]() {
-			return Util::Widgets::SliderFloat(label.c_str(), &property, min, max, format);
+			return Util::Widgets::SliderFloat(BuildLocalizedControlLabel(label).c_str(), &property, min, max, format);
 		});
 	}
 
@@ -490,7 +808,7 @@ namespace WeatherUtils
 
 		const bool previous = value;
 		const bool changed = DrawWithWidgetHighlight(w, hid, [&]() {
-			return Util::Widgets::Checkbox(label.c_str(), &value);
+			return Util::Widgets::Checkbox(BuildLocalizedControlLabel(label).c_str(), &value);
 		});
 		if (changed)
 			PushUndoWithPreviousValue(w, value, previous);
@@ -507,6 +825,22 @@ namespace TOD
 		if (index >= 0 && index < Count)
 			return names[index];
 		return "Unknown";
+	}
+
+	const char* GetPeriodLabel(int index)
+	{
+		switch (index) {
+		case Sunrise:
+			return T("cs_editor.tod_sunrise", "Sunrise");
+		case Day:
+			return T("cs_editor.tod_day", "Day");
+		case Sunset:
+			return T("cs_editor.tod_sunset", "Sunset");
+		case Night:
+			return T("cs_editor.tod_night", "Night");
+		default:
+			return T("cs_editor.unknown", "Unknown");
+		}
 	}
 
 	float GetCurrentGameTime()
@@ -589,7 +923,7 @@ namespace TOD
 			ImGui::BeginChild(("##todheader_" + std::to_string(i)).c_str(),
 				ImVec2(sliderWidth, ImGui::GetTextLineHeight()), false, ImGuiWindowFlags_NoScrollbar);
 
-			const char* name = GetPeriodName(i);
+			const char* name = GetPeriodLabel(i);
 			float labelWidth = ImGui::CalcTextSize(name).x;
 			float centerOffset = (sliderWidth - labelWidth) * 0.5f;
 			if (centerOffset > 0)
@@ -613,6 +947,7 @@ namespace TOD
 
 	static void DrawCenteredLabel(const char* label)
 	{
+		label = WeatherUtils::TranslateControlLabel(label);
 		ImGui::AlignTextToFramePadding();
 		float colWidth = ImGui::GetColumnWidth();
 		float textWidth = ImGui::CalcTextSize(label).x;
@@ -804,7 +1139,7 @@ namespace TOD
 
 			wasPopupOpen[scopedId] = isPopupOpen;
 
-			Util::AddTooltip(std::format("{} - {:.0f}%", GetPeriodName(i), factors[i] * 100.0f).c_str());
+			Util::AddTooltip(std::format("{} - {:.0f}%", GetPeriodLabel(i), factors[i] * 100.0f).c_str());
 
 			ImGui::EndChild();
 		}

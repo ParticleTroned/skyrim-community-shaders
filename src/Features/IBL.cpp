@@ -132,7 +132,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 const char* IBL::GetPerformanceToggleBlockReason() const
 {
-	return WeatherManager::GetSingleton()->IsVariableOverrideActive(T("feature.ibl.imagebasedlighting", "ImageBasedLighting"), T("feature.ibl.enableibl", "EnableIBL")) ?
+	return WeatherManager::GetSingleton()->IsVariableOverrideActive("ImageBasedLighting", "EnableIBL") ?
 	           T("feature.ibl.pause_this_feature_s_weather_overrides_before_ba3b5860", "Pause this feature's weather overrides before toggling or measuring it.") :
 	           nullptr;
 }

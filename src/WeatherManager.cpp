@@ -323,6 +323,11 @@ bool WeatherManager::GetAllSettingsForWeather(
 	return true;
 }
 
+bool WeatherManager::HasWeatherSettings(RE::TESWeather* weather) const
+{
+	return weather && perWeatherSettingsCache.contains(GetWeatherKey(weather));
+}
+
 bool WeatherManager::IsVariableOverrideActive(
 	const std::string& featureName,
 	const std::string& variableName) const

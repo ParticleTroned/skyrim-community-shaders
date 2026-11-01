@@ -82,6 +82,7 @@ namespace CSX::Api
 		std::optional<CommandRecord> replay;
 		bool conflict = false;
 		bool pending = false;
+		bool capacityExhausted = false;
 		{
 			std::lock_guard lock(mutex);
 			TrimLocked(std::chrono::steady_clock::now());
@@ -91,11 +92,25 @@ namespace CSX::Api
 				if (!conflict && !pending)
 					replay = found->second;
 			} else {
-				CommandRecord command;
-				command.canonicalRequest = canonical;
-				command.action = a_request["action"].get<std::string>();
-				commands.emplace(key, std::move(command));
-				commandOrder.push_back(key);
+				// Reserve capacity before admitting work. A pending oldest command
+				// must neither block completed-record eviction nor lose its identity.
+				if (commands.size() >= limits.maximumCommands) {
+					const auto completed = std::find_if(commandOrder.begin(), commandOrder.end(), [&](const CommandKey& candidate) {
+						return commands.at(candidate).completed;
+					});
+					if (completed != commandOrder.end()) {
+						commands.erase(*completed);
+						commandOrder.erase(completed);
+					}
+				}
+				capacityExhausted = commands.size() >= limits.maximumCommands;
+				if (!capacityExhausted) {
+					CommandRecord command;
+					command.canonicalRequest = canonical;
+					command.action = a_request["action"].get<std::string>();
+					commands.emplace(key, std::move(command));
+					commandOrder.push_back(key);
+				}
 			}
 		}
 
@@ -103,6 +118,8 @@ namespace CSX::Api
 			return MakeError(a_request, "idempotency_conflict", "clientId and commandId were already used with different arguments");
 		if (pending)
 			return MakeError(a_request, "command_in_progress", "an identical command is still being processed", "dispatch", true);
+		if (capacityExhausted)
+			return MakeError(a_request, "service_busy", "command capacity is occupied by in-progress requests", "dispatch", true);
 		if (replay) {
 			json response;
 			if (!replay->requestId.empty() && a_receiptLookup) {
@@ -297,13 +314,6 @@ namespace CSX::Api
 			} else {
 				++position;
 			}
-		}
-		while (commandOrder.size() > limits.maximumCommands) {
-			const auto found = commands.find(commandOrder.front());
-			if (found != commands.end() && !found->second.completed)
-				break;
-			commands.erase(commandOrder.front());
-			commandOrder.pop_front();
 		}
 	}
 

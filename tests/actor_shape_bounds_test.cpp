@@ -7,6 +7,8 @@
 
 namespace RE
 {
+	// Only native ownership, shape support projections and transform accessors are
+	// supplied here. The production bounds/center calculations are included below.
 	struct NiPoint3
 	{
 		float x = 0, y = 0, z = 0;
@@ -144,8 +146,10 @@ namespace Util
 namespace
 {
 	int failures = 0;
+	int checks = 0;
 	void Check(bool condition, const char* message)
 	{
+		++checks;
 		if (!condition) {
 			std::fprintf(stderr, "%s\n", message);
 			++failures;
@@ -421,5 +425,6 @@ int main()
 	NonCapsuleGeometry();
 	InvalidNonCapsules();
 	LargeNonCapsules();
+	std::printf("Actor bounds: 9 case groups, %d checks, %d failures (including blend compounds and transformed geometric centers)\n", checks, failures);
 	return failures == 0 ? 0 : 1;
 }

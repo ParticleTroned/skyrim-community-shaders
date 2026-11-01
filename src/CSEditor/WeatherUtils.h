@@ -308,8 +308,10 @@ namespace TOD
 		Count = 4
 	};
 
-	// Get the name of a time period
+	// Get the stable name of a time period
 	const char* GetPeriodName(int index);
+	// Get the localized time-period label for display.
+	const char* GetPeriodLabel(int index);
 
 	// Get current game time in hours (0-24)
 	float GetCurrentGameTime();
@@ -434,6 +436,10 @@ namespace WeatherUtils
 	void SetCurrentWidget(Widget* widget);
 	void PushWidgetUndo(Widget* widget);
 
+	// Translate display labels without changing stable search or settings keys.
+	const char* TranslateControlLabel(std::string_view label);
+	std::string BuildLocalizedControlLabel(const std::string& label);
+
 	// UI helper functions
 	bool DrawSliderInt8(const std::string& label, int& property);
 	bool DrawColorEdit(const std::string& l, float3& property, Widget* widget = nullptr);
@@ -462,13 +468,13 @@ namespace WeatherUtils
 				                  std::format("{} (0x{:08X})", effectiveID, currentForm->GetFormID()) :
 				                  effectiveID;
 			} else {
-				previewText = "None";
+				previewText = T("cs_editor.none_filter", "None");
 			}
 
 			if (width > 0.0f)
 				ImGui::SetNextItemWidth(width);
 
-			if (auto combo = Util::Widgets::ComboBox(label, previewText.c_str())) {
+			if (auto combo = Util::Widgets::ComboBox(BuildLocalizedControlLabel(label).c_str(), previewText.c_str())) {
 				if (allowNone && ImGui::Selectable(T("cs_editor.none_filter", "None"), currentForm == nullptr) && currentForm != nullptr) {
 					WeatherUtils::PushWidgetUndo(widget);
 					currentForm = nullptr;

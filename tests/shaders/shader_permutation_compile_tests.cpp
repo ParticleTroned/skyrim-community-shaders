@@ -149,3 +149,51 @@ TEST_CASE("Production shader permutations compile with feature includes", "[shad
 			});
 	}
 }
+
+TEST_CASE("SE lighting permutations share material helpers", "[shaders][fxc][permutations][se]")
+{
+	for (const char* wetness : { "WETTERNESS", "WETNESS_EFFECTS" }) {
+		for (bool pbr : { false, true }) {
+			for (bool skylighting : { false, true }) {
+				for (bool deferred : { false, true }) {
+					DYNAMIC_SECTION(wetness << ", PBR=" << pbr << ", Skylighting=" << skylighting << ", Deferred=" << deferred)
+					{
+						std::vector<ShaderMacro> defines{
+							{ "PSHADER" }, { wetness }, { "DYNAMIC_CUBEMAPS" }, { "SPECULAR" }
+						};
+						if (pbr)
+							defines.push_back({ "TRUE_PBR" });
+						if (skylighting)
+							defines.push_back({ "SKYLIGHTING" });
+						if (deferred)
+							defines.push_back({ "DEFERRED" });
+						CompilePermutation(L"Lighting.hlsl", "ps_5_0", defines);
+					}
+				}
+			}
+		}
+	}
+}
+
+TEST_CASE("SE sky and water include their shared dependencies", "[shaders][fxc][permutations][se]")
+{
+	SECTION("Sky with HDR sun output")
+	{
+		CompilePermutation(L"Sky.hlsl", "ps_5_0", { { "PSHADER" }, { "TEX" }, { "HDR_OUTPUT" } });
+	}
+
+	for (const char* wetness : { "WETTERNESS", "WETNESS_EFFECTS" }) {
+		DYNAMIC_SECTION("Water with " << wetness << " and Skylighting")
+		{
+			CompilePermutation(L"Water.hlsl", "ps_5_0", {
+															{ "PSHADER" },
+															{ "SPECULAR" },
+															{ "FLOWMAP" },
+															{ "WATER_EFFECTS" },
+															{ "NUM_SPECULAR_LIGHTS", "0" },
+															{ wetness },
+															{ "SKYLIGHTING" },
+														});
+		}
+	}
+}

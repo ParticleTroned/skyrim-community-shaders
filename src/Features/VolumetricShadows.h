@@ -68,6 +68,8 @@ public:
 	void CopyShadowLightData();
 	/** Refreshes possible consumers; pass None unless the selected custom pixel family is known. */
 	void SetShaderResources(ID3D11DeviceContext* a_context, RE::BSShader::Type a_shaderType);
+	/** Null moment maps are not a lit fallback; consumers stay disabled until ready. */
+	bool HasSharedShadowMapResources() const { return linearSampler && fallbackShadowSRV; }
 
 	Util::LazyShader<ID3D11ComputeShader> downsampleShadowMip0CS;
 	Util::LazyShader<ID3D11ComputeShader> downsampleShadowMip1CS;
@@ -90,6 +92,7 @@ public:
 	bool shadowCopyValid = false;
 	// Retry failed allocation only after shader reset or device recreation.
 	bool shadowCopyAllocationFailed = false;
+	bool fixedResourceAllocationFailed = false;
 
 	ID3D11Texture2D* fallbackShadowTexture = nullptr;
 	ID3D11ShaderResourceView* fallbackShadowSRV = nullptr;

@@ -1,6 +1,7 @@
 #include "Common/CharacterCategoryMask.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/Permutation.hlsli"
 
 #if defined(VSHADER)
 struct VS_INPUT

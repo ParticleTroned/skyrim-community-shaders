@@ -40,12 +40,12 @@ void VolumetricLightingWidget::DrawWidget()
 		const ImGuiTabItemFlags advancedFlags = GetTabFlagsForOverride(VolumetricLightingTab::kAdvanced);
 		auto drawSection = [&](const char* settingId, const char* heading, auto draw) {
 			DrawSearchSectionIfMatches(settingId, [&](const char*) {
-				ImGui::SeparatorText(heading);
+				ImGui::SeparatorText(WeatherUtils::TranslateControlLabel(heading));
 				draw();
 			});
 		};
 
-		if (ImGui::BeginTabItem(VolumetricLightingTab::kBasic, nullptr, basicFlags)) {
+		if (ImGui::BeginTabItem(WeatherUtils::BuildLocalizedControlLabel(VolumetricLightingTab::kBasic).c_str(), nullptr, basicFlags)) {
 			BeginScrollableContent("##BasicScroll");
 			drawSection(VolumetricLightingSetting::kIntensity, "Intensity", [&]() {
 				changed |= WeatherUtils::DrawSliderFloat(VolumetricLightingSetting::kIntensity, settings.intensity, 0.0f, 50.0f);
@@ -66,7 +66,7 @@ void VolumetricLightingWidget::DrawWidget()
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem(VolumetricLightingTab::kDensity, nullptr, densityFlags)) {
+		if (ImGui::BeginTabItem(WeatherUtils::BuildLocalizedControlLabel(VolumetricLightingTab::kDensity).c_str(), nullptr, densityFlags)) {
 			BeginScrollableContent("##DensityScroll");
 			if (MatchesAnySearch({ VolumetricLightingSetting::kContribution, VolumetricLightingSetting::kSize, VolumetricLightingSetting::kWindSpeed, VolumetricLightingSetting::kFallingSpeed })) {
 				ImGui::SeparatorText(T("cs_editor.density_settings", "Density Settings"));
@@ -79,7 +79,7 @@ void VolumetricLightingWidget::DrawWidget()
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem(VolumetricLightingTab::kAdvanced, nullptr, advancedFlags)) {
+		if (ImGui::BeginTabItem(WeatherUtils::BuildLocalizedControlLabel(VolumetricLightingTab::kAdvanced).c_str(), nullptr, advancedFlags)) {
 			BeginScrollableContent("##AdvancedScroll");
 			if (MatchesAnySearch({ VolumetricLightingSetting::kContribution, VolumetricLightingSetting::kScattering })) {
 				ImGui::SeparatorText(T("cs_editor.phase_function", "Phase Function"));

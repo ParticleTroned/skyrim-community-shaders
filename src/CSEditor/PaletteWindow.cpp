@@ -51,7 +51,7 @@ void PaletteWindow::DrawColorsTab()
 
 	// Favorites section at top
 	ImGui::SeparatorText(T("cs_editor.favourites", "Favourites"));
-	ImGui::TextWrapped(T("cs_editor.drag_colours_here", "Drag colours here to save as favourites."));
+	ImGui::TextWrapped("%s", T("cs_editor.drag_colours_here", "Drag colours here to save as favourites."));
 	ImGui::Spacing();
 
 	for (int i = 0; i < maxFavoriteSlots; i++) {
@@ -126,7 +126,7 @@ void PaletteWindow::DrawColorsTab()
 	auto recentColors = GetRecentColors(5);
 
 	if (recentColors.empty()) {
-		ImGui::TextDisabled(T("cs_editor.no_recent_colors", "No recent colors"));
+		ImGui::TextDisabled("%s", T("cs_editor.no_recent_colors", "No recent colors"));
 	} else {
 		for (size_t i = 0; i < recentColors.size(); i++) {
 			if (i > 0)
@@ -161,14 +161,14 @@ void PaletteWindow::DrawColorsTab()
 	ImGui::Spacing();
 	ImGui::TextUnformatted(T("cs_editor.most_used", "Most Used"));
 	ImGui::Spacing();
-	ImGui::TextWrapped(T("cs_editor.fav_most_colours", "Favourite/most commonly used colours here."));
+	ImGui::TextWrapped("%s", T("cs_editor.fav_most_colours", "Favourite/most commonly used colours here."));
 	ImGui::Spacing();
 
 	auto mostUsedColors = GetMostUsedColors(20);
 
 	if (mostUsedColors.empty()) {
-		ImGui::TextDisabled(T("cs_editor.no_frequent_colors", "No frequently used colors yet"));
-		ImGui::TextDisabled(T("cs_editor.colors_3_plus", "(Colors used 3+ times will appear here)"));
+		ImGui::TextDisabled("%s", T("cs_editor.no_frequent_colors", "No frequently used colors yet"));
+		ImGui::TextDisabled("%s", T("cs_editor.colors_3_plus", "(Colors used 3+ times will appear here)"));
 	} else {
 		int colorIndex = 0;
 		for (auto* entry : mostUsedColors) {
@@ -219,7 +219,7 @@ void PaletteWindow::DrawValuesTab()
 	ImGui::SeparatorText(T("cs_editor.recently_used", "Recently Used"));
 	auto recentValues = GetRecentValues(3);
 	if (recentValues.empty()) {
-		ImGui::TextDisabled(T("cs_editor.no_recent_values", "No recent values"));
+		ImGui::TextDisabled("%s", T("cs_editor.no_recent_values", "No recent values"));
 	} else {
 		for (auto* entry : recentValues) {
 			std::string label = std::format("{}: {:.3f}", entry->name, entry->value);
@@ -239,14 +239,14 @@ void PaletteWindow::DrawValuesTab()
 	ImGui::Spacing();
 	ImGui::TextUnformatted(T("cs_editor.most_used", "Most Used"));
 	ImGui::Spacing();
-	ImGui::TextWrapped(T("cs_editor.fav_most_values", "Favourite/most commonly used values here."));
+	ImGui::TextWrapped("%s", T("cs_editor.fav_most_values", "Favourite/most commonly used values here."));
 	ImGui::Spacing();
 
 	auto mostUsedValues = GetMostUsedValues(20);
 
 	if (mostUsedValues.empty()) {
-		ImGui::TextDisabled(T("cs_editor.no_frequent_values", "No frequently used values yet"));
-		ImGui::TextDisabled(T("cs_editor.values_3_plus", "(Values used 3+ times will appear here)"));
+		ImGui::TextDisabled("%s", T("cs_editor.no_frequent_values", "No frequently used values yet"));
+		ImGui::TextDisabled("%s", T("cs_editor.values_3_plus", "(Values used 3+ times will appear here)"));
 	} else {
 		for (auto* entry : mostUsedValues) {
 			std::string label = std::format("{}: {:.3f}##{}", entry->name, entry->value, (void*)entry);

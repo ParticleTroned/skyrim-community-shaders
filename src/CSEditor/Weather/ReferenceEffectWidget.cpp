@@ -58,17 +58,17 @@ void ReferenceEffectWidget::DrawWidget()
 			};
 
 			DrawIfMatchesSearch(ReferenceEffectSetting::kArtObject, [&](const char* label) {
-				ImGui::SeparatorText(label);
+				ImGui::SeparatorText(WeatherUtils::TranslateControlLabel(label));
 				if (editorWindow->artObjectWidgets.empty()) {
-					ImGui::TextDisabled(T("cs_editor.no_art_objects_available", "No Art Objects available"));
+					ImGui::TextDisabled("%s", T("cs_editor.no_art_objects_available", "No Art Objects available"));
 					return false;
 				}
 				return drawFormPicker(label, settings.artObject, editorWindow->artObjectWidgets);
 			});
 			DrawIfMatchesSearch(ReferenceEffectSetting::kEffectShader, [&](const char* label) {
-				ImGui::SeparatorText(label);
+				ImGui::SeparatorText(WeatherUtils::TranslateControlLabel(label));
 				if (editorWindow->effectShaderWidgets.empty()) {
-					ImGui::TextDisabled(T("cs_editor.no_effect_shaders_available", "No Effect Shaders available"));
+					ImGui::TextDisabled("%s", T("cs_editor.no_effect_shaders_available", "No Effect Shaders available"));
 					return false;
 				}
 				return drawFormPicker(label, settings.effectShader, editorWindow->effectShaderWidgets);

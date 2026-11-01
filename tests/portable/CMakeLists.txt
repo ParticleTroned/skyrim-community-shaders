@@ -120,6 +120,10 @@ function(csx_extract_cmake name script)
     set(CSX_PORTABLE_TEST_TARGETS ${CSX_PORTABLE_TEST_TARGETS} PARENT_SCOPE)
 endfunction()
 
+csx_extract_cmake(actor_shape_bounds_test extract_actor_shape_bounds.cmake
+    HEADERS actor_shape_bounds_under_test.h
+    SOURCES "${CSX_PROJECT_ROOT}/src/Utils/ActorUtils.cpp"
+        "${CSX_PROJECT_ROOT}/src/Utils/ActorUtils.h")
 csx_extract_cmake(skylighting_lifecycle_test extract_skylighting_lifecycle.cmake
     HEADERS skylighting_buffer_under_test.h skylighting_lifecycle_under_test.h
     SOURCES "${CSX_PROJECT_ROOT}/src/Features/Skylighting.cpp" "${CSX_PROJECT_ROOT}/src/Features/Skylighting.h")
@@ -162,6 +166,44 @@ function(csx_extract_python name script)
     set(CSX_PORTABLE_TEST_TARGETS ${CSX_PORTABLE_TEST_TARGETS} PARENT_SCOPE)
 endfunction()
 
+csx_extract_python(screenshot_neural_frame_test extract_screenshot_neural_frame.py
+    HEADERS screenshot_frame_members.h screenshot_neural_types.h screenshot_neural_frame_under_test.h
+    SOURCES "${CSX_PROJECT_ROOT}/src/Hooks.cpp" "${CSX_PROJECT_ROOT}/src/Features/ScreenshotFeature.cpp"
+        "${CSX_PROJECT_ROOT}/src/Features/ScreenshotNeuralDiagnostics.cpp"
+        "${CSX_PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/MonoRenderer.cpp"
+        "${CSX_PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/MonoRenderer.h"
+        "${CSX_PROJECT_ROOT}/tests/extract_adaptive_balance_toggle.py")
+csx_extract_python(neural_mono_scene_test extract_neural_mono_scene.py
+    HEADERS neural_hdr_members.h neural_scene_types.h neural_upscaling_members.h neural_mono_scene_under_test.h
+    SOURCES "${CSX_PROJECT_ROOT}/src/Features/Upscaling.cpp" "${CSX_PROJECT_ROOT}/src/Features/Upscaling.h"
+        "${CSX_PROJECT_ROOT}/src/Features/HDRDisplay.cpp" "${CSX_PROJECT_ROOT}/src/Utils/D3D.cpp"
+        "${CSX_PROJECT_ROOT}/src/Utils/Game.cpp"
+        "${CSX_PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/MonoRenderer.h"
+        "${CSX_PROJECT_ROOT}/tests/extract_adaptive_balance_toggle.py")
+csx_extract_python(settings_navigation_test extract_settings_navigation.py
+    HEADERS settings_navigation_under_test.h
+    SOURCES "${CSX_PROJECT_ROOT}/src/Menu/SettingsPage.cpp" "${CSX_PROJECT_ROOT}/src/Menu/SettingsPage.h"
+        "${CSX_PROJECT_ROOT}/tests/extract_adaptive_balance_toggle.py")
+csx_extract_python(shader_cache_lifetime_test extract_shader_cache_lifetime.py
+    HEADERS shader_cache_lifetime_members.h shader_cache_lifetime_under_test.h
+    SOURCES "${CSX_PROJECT_ROOT}/src/ShaderCache.cpp" "${CSX_PROJECT_ROOT}/src/ShaderCache.h"
+        "${CSX_PROJECT_ROOT}/tests/extract_adaptive_balance_toggle.py")
+csx_extract_python(shader_cache_readiness_test extract_shader_cache_readiness.py
+    HEADERS shader_cache_readiness_members.h shader_cache_readiness_under_test.h
+    SOURCES "${CSX_PROJECT_ROOT}/src/ShaderCache.cpp" "${CSX_PROJECT_ROOT}/src/ShaderCache.h"
+        "${CSX_PROJECT_ROOT}/src/State.cpp" "${CSX_PROJECT_ROOT}/src/XSEPlugin.cpp"
+        "${CSX_PROJECT_ROOT}/tests/extract_adaptive_balance_toggle.py")
+csx_extract_python(editor_water_diagnostics_test extract_editor_water_diagnostics.py
+    HEADERS editor_water_diagnostics_members.h editor_water_policy_under_test.h editor_water_diagnostics_under_test.h
+    SOURCES "${CSX_PROJECT_ROOT}/src/CSEditor/LightEditor.h" "${CSX_PROJECT_ROOT}/src/CSEditor/LightEditor.cpp"
+        "${CSX_PROJECT_ROOT}/src/Features/LightLimitFix.h" "${CSX_PROJECT_ROOT}/src/Features/LightLimitFix.cpp"
+        "${CSX_PROJECT_ROOT}/tests/extract_adaptive_balance_toggle.py")
+csx_extract_python(editor_localization_test extract_editor_localization.py
+    HEADERS editor_localization_tracker.h editor_localization_under_test.h editor_weather_status_under_test.h
+    SOURCES "${CSX_PROJECT_ROOT}/src/CSEditor/WeatherUtils.h" "${CSX_PROJECT_ROOT}/src/CSEditor/WeatherUtils.cpp"
+        "${CSX_PROJECT_ROOT}/src/CSEditor/EditorWindow.cpp" "${CSX_PROJECT_ROOT}/src/CSEditor/Widget.cpp"
+        "${CSX_PROJECT_ROOT}/src/WeatherManager.h" "${CSX_PROJECT_ROOT}/src/WeatherManager.cpp"
+        "${CSX_PROJECT_ROOT}/tests/extract_adaptive_balance_toggle.py")
 csx_extract_python(adaptive_balance_dof_test extract_adaptive_balance_dof.py
     HEADERS adaptive_balance_dof_engine_types.h adaptive_balance_dof_under_test.h
     SOURCES "${CSX_PROJECT_ROOT}/src/Features/AdaptiveBalanceDepthOfField.cpp"
@@ -186,7 +228,8 @@ if(MSVC)
 endif()
 
 foreach(script IN ITEMS grass_collision_settings_test screenshot_mono_settings_test screenshot_verify_test
-    d3d_texture_lifetime_test se_performance_ownership_test
+    d3d_texture_lifetime_test se_performance_ownership_test volumetric_shadow_resources_test
+    unified_water_duplicates_test subsurface_helper_region_test render_feature_contracts_test
     feature_issue_scanner_test neural_payload_guard_test streamline_runtime_cache_test shader_deploy_build_rule_test
     shader_cache_pack_builder_test shader_cache_packaging_test shader_cache_se_test)
     add_test(NAME ${script} COMMAND "${CMAKE_COMMAND}" -E env

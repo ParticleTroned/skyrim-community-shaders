@@ -2144,7 +2144,7 @@ void PerformanceOverlay::DrawRenderTargets(bool profilingView)
 	(profilingView ? profilingRenderTargetsRequested : overlayRenderTargetsRequested) = true;
 	const auto& stats = globals::profiler->GetRenderTargetStats();
 	ImGui::TextUnformatted(T("feature.perf_overlay.render_targets_approximate_d3d11_gpu_intervals", "Render targets: approximate D3D11 GPU intervals"));
-	Util::AddTooltip(RenderTargetStats::kCoverage);
+	Util::AddTooltip(T("feature.perf_overlay.render_target_coverage", "Approximate D3D11 intervals by engine depth target and first colour target. Includes intervening work and waits; not isolated target cost. NR queue timings remain separate. Do not add this table to pass or frame totals."));
 	ImGui::TextDisabled(T("feature.perf_overlay.includes_intervening_work_and_waits_nr_queues_excluded", "Includes intervening work and waits. NR queues excluded."));
 	if (stats.HasResourceFailure())
 		ImGui::TextDisabled(T("feature.perf_overlay.target_collection_failed_toggle_show_render_targets_off_to_retry", "Target collection failed. Toggle Show Render Targets off to retry."));
@@ -2153,7 +2153,7 @@ void PerformanceOverlay::DrawRenderTargets(bool profilingView)
 	if (!stats.HasGpuSample())
 		ImGui::TextDisabled(T("feature.perf_overlay.waiting_for_a_valid_gpu_timing_sample", "Waiting for a valid GPU timing sample."));
 	else
-		ImGui::Text("Timed intervals: %.2f ms", stats.GetTimedMs());
+		ImGui::Text(T("feature.perf_overlay.timed_intervals_ms", "Timed intervals: %.2f ms"), stats.GetTimedMs());
 	const auto rows = stats.GetRows();
 	if (rows.empty())
 		return;
@@ -2162,9 +2162,9 @@ void PerformanceOverlay::DrawRenderTargets(bool profilingView)
 	if (ImGui::BeginTable("##RenderTargets", 3, flags, ImVec2(0.0f, height))) {
 		const SKSE::stl::scope_exit endTable([] { ImGui::EndTable(); });
 		ImGui::TableSetupScrollFreeze(0, 1);
-		ImGui::TableSetupColumn("Target binding");
-		ImGui::TableSetupColumn("Draw calls");
-		ImGui::TableSetupColumn("GPU interval (ms)");
+		ImGui::TableSetupColumn(T("feature.perf_overlay.target_binding", "Target binding"));
+		ImGui::TableSetupColumn(T("feature.perf_overlay.draw_calls", "Draw calls"));
+		ImGui::TableSetupColumn(T("feature.perf_overlay.gpu_interval_ms", "GPU interval (ms)"));
 		ImGui::TableHeadersRow();
 		for (const auto& row : rows) {
 			ImGui::TableNextRow();

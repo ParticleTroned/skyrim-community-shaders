@@ -172,11 +172,11 @@ void PrecipitationWidget::DrawWidget()
 			const ImGuiTabItemFlags positionFlags = GetTabFlagsForOverride(PrecipitationTab::kPosition);
 			const ImGuiTabItemFlags textureFlags = GetTabFlagsForOverride(PrecipitationTab::kTexture);
 
-			if (ImGui::BeginTabItem(PrecipitationTab::kParticle, nullptr, particleFlags)) {
+			if (ImGui::BeginTabItem(WeatherUtils::BuildLocalizedControlLabel(PrecipitationTab::kParticle).c_str(), nullptr, particleFlags)) {
 				BeginScrollableContent("##ParticleScroll");
 				DrawIfMatchesSearch(PrecipitationSetting::kType, [&](const char* label) {
 					ImGui::SeparatorText(T("cs_editor.particle_type", "Particle Type"));
-					const char* types[] = { "Rain", "Snow" };
+					const char* types[] = { T("cs_editor.rain", "Rain"), T("cs_editor.snow", "Snow") };
 					int currentType = static_cast<int>(settings.particleType);
 					bool comboChanged = DrawWithHighlight(label, [&]() {
 						return Util::Widgets::Combo(label, &currentType, types, IM_ARRAYSIZE(types));
@@ -202,7 +202,7 @@ void PrecipitationWidget::DrawWidget()
 				ImGui::EndTabItem();
 			}
 
-			if (ImGui::BeginTabItem(PrecipitationTab::kPosition, nullptr, positionFlags)) {
+			if (ImGui::BeginTabItem(WeatherUtils::BuildLocalizedControlLabel(PrecipitationTab::kPosition).c_str(), nullptr, positionFlags)) {
 				BeginScrollableContent("##PositionScroll");
 				if (MatchesAnySearch({ PrecipitationSetting::kCenterOffsetMin, PrecipitationSetting::kCenterOffsetMax, PrecipitationSetting::kStartRotationRange })) {
 					ImGui::SeparatorText(T("cs_editor.offset", "Offset"));
@@ -219,7 +219,7 @@ void PrecipitationWidget::DrawWidget()
 				ImGui::EndTabItem();
 			}
 
-			if (ImGui::BeginTabItem(PrecipitationTab::kTexture, nullptr, textureFlags)) {
+			if (ImGui::BeginTabItem(WeatherUtils::BuildLocalizedControlLabel(PrecipitationTab::kTexture).c_str(), nullptr, textureFlags)) {
 				BeginScrollableContent("##TextureScroll");
 				if (MatchesAnySearch({ PrecipitationSetting::kNumSubtexturesX, PrecipitationSetting::kNumSubtexturesY })) {
 					ImGui::SeparatorText(T("cs_editor.subtextures", "Subtextures"));
@@ -281,9 +281,9 @@ void PrecipitationWidget::DrawWidget()
 					}
 					if (settings.particleTexture != buf && !buf.empty()) {
 						if (!WeatherUtils::TexturePath::HasDdsExtension(buf))
-							ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, T("cs_editor.path_must_end_dds", "Path must end with '.dds'"));
+							ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, "%s", T("cs_editor.path_must_end_dds", "Path must end with '.dds'"));
 						else if (!lastCheckedExists)
-							ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, T("editor.precipitation_widget.texture_not_found_in_loose_files_or_archives", "Texture not found in loose files or archives."));
+							ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, "%s", T("editor.precipitation_widget.texture_not_found_in_loose_files_or_archives", "Texture not found in loose files or archives."));
 					}
 				});
 

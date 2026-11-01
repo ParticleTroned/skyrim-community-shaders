@@ -646,6 +646,12 @@ namespace UnderwaterDepthOfField
 		RunPendingDepthOfFieldInputPass();
 	}
 
+	void ClearShaderCache()
+	{
+		depthOfFieldInputVS.Reset();
+		depthOfFieldInputPS.Reset();
+	}
+
 	void RecordShaderConstants(const RE::ImageSpaceEffectDepthOfField* a_effect, RE::ImageSpaceEffectParam* a_param)
 	{
 		static constexpr std::uint32_t kFoggedOptionIndex = 3;

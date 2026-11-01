@@ -93,20 +93,31 @@ void VolumetricShadows::SetupResources()
 		resourceDevice = device;
 	}
 
-	if (!linearSampler) {
-		D3D11_SAMPLER_DESC samplerDesc{};
-		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.MaxAnisotropy = 1;
-		samplerDesc.MinLOD = 0;
-		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &linearSampler));
-		Util::SetResourceName(linearSampler, "VolumetricShadows::LinearSampler");
-	}
+	if (fixedResourceAllocationFailed)
+		return;
 
-	EnsureFallbackShadowTexture();
+	try {
+		if (!linearSampler) {
+			D3D11_SAMPLER_DESC samplerDesc{};
+			samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+			samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.MaxAnisotropy = 1;
+			samplerDesc.MinLOD = 0;
+			samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+			DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &linearSampler));
+			Util::SetResourceName(linearSampler, "VolumetricShadows::LinearSampler");
+		}
+
+		EnsureFallbackShadowTexture();
+	} catch (const DX::com_exception& error) {
+		ReleaseTextures();
+		ReleaseSampler();
+		fixedResourceAllocationFailed = true;
+		logger::error("Volumetric Shadows fixed-resource allocation failed: {}", error.what());
+		return;
+	}
 	CompileComputeShaders();
 }
 
@@ -140,7 +151,7 @@ void VolumetricShadows::CompileComputeShaders()
 
 void VolumetricShadows::EnsureFallbackShadowTexture()
 {
-	if (fallbackShadowTexture)
+	if (fallbackShadowTexture && fallbackShadowSRV)
 		return;
 
 	auto* device = globals::d3d::device;
@@ -170,16 +181,22 @@ void VolumetricShadows::EnsureFallbackShadowTexture()
 	initialData[1].pSysMem = mip1.data();
 	initialData[1].SysMemPitch = 2 * sizeof(uint16_t);
 
-	DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, initialData, &fallbackShadowTexture));
-	Util::SetResourceName(fallbackShadowTexture, "VolumetricShadows::FallbackShadow");
+	winrt::com_ptr<ID3D11Texture2D> texture;
+	winrt::com_ptr<ID3D11ShaderResourceView> srv;
+	DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, initialData, texture.put()));
+	Util::SetResourceName(texture.get(), "VolumetricShadows::FallbackShadow");
 
 	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 	srvDesc.Format = texDesc.Format;
 	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 	srvDesc.Texture2D.MostDetailedMip = 0;
 	srvDesc.Texture2D.MipLevels = texDesc.MipLevels;
-	DX::ThrowIfFailed(device->CreateShaderResourceView(fallbackShadowTexture, &srvDesc, &fallbackShadowSRV));
-	Util::SetResourceName(fallbackShadowSRV, "VolumetricShadows::FallbackShadow SRV");
+	DX::ThrowIfFailed(device->CreateShaderResourceView(texture.get(), &srvDesc, srv.put()));
+	Util::SetResourceName(srv.get(), "VolumetricShadows::FallbackShadow SRV");
+	SafeRelease(fallbackShadowSRV);
+	SafeRelease(fallbackShadowTexture);
+	fallbackShadowTexture = texture.detach();
+	fallbackShadowSRV = srv.detach();
 }
 
 bool VolumetricShadows::EnsureShadowCopyTextures()
@@ -300,7 +317,7 @@ void VolumetricShadows::CopyShadowLightData()
 	SetupResources();
 	// VSM consumers require two filtered moments, including when preparation fails.
 	SetSharedShadowMapSRV(context, fallbackShadowSRV);
-	if (!linearSampler)
+	if (!HasSharedShadowMapResources())
 		return;
 
 	D3D11_TEXTURE2D_DESC srcDesc{}, esramDesc{};
@@ -524,6 +541,7 @@ void VolumetricShadows::RestoreDefaultSettings()
 
 void VolumetricShadows::ClearShaderCache()
 {
+	fixedResourceAllocationFailed = false;
 	shadowCopyAllocationFailed = false;
 	ReleaseComputeShaders();
 	CompileComputeShaders();
@@ -575,6 +593,7 @@ void VolumetricShadows::ReleaseResources()
 	ReleaseComputeShaders();
 	ReleaseTextures();
 	ReleaseSampler();
+	fixedResourceAllocationFailed = false;
 }
 
 struct CreateDepthStencil_VolumetricLighting
@@ -663,7 +682,7 @@ VolumetricShadows::RuntimeReadiness VolumetricShadows::GetRuntimeReadiness(
 		!globals::d3d::device ||
 		!globals::profiler ||
 		!renderer ||
-		!linearSampler) {
+		!HasSharedShadowMapResources()) {
 		return RuntimeReadiness::NoRuntimeResources;
 	}
 

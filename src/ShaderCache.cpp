@@ -502,11 +502,17 @@ namespace SIE
 
 		bool ManagedShaderPackLayoutPresent();
 
-		Util::ShaderCacheManifest::Manifest& GetShaderCacheManifest()
+		Util::ShaderCacheManifest::Manifest& ShaderCacheManifestStorage()
 		{
 			static Util::ShaderCacheManifest::Manifest manifest;
+			return manifest;
+		}
+
+		Util::ShaderCacheManifest::Manifest& GetShaderCacheManifest()
+		{
+			auto& manifest = ShaderCacheManifestStorage();
 			static std::once_flag loaded;
-			std::call_once(loaded, [] {
+			std::call_once(loaded, [&] {
 				manifest.Load(L"Data/ShaderCache/Manifest.json");
 			});
 			return manifest;
@@ -4194,8 +4200,10 @@ namespace SIE
 			return;
 
 		isDiskCache.store(value, std::memory_order_release);
-		if (!value)
+		if (!value) {
+			diskCacheInfoWritePending.store(false, std::memory_order_release);
 			AdvanceDiskCacheGeneration();
+		}
 	}
 
 	namespace
@@ -4709,6 +4717,7 @@ namespace SIE
 	void ShaderCache::DeleteDiskCache()
 	{
 		std::scoped_lock lock{ compilationSet.compilationMutex, g_diskCacheMutationMutex };
+		diskCacheInfoWritePending.store(false, std::memory_order_release);
 		AdvanceDiskCacheGeneration();
 		if (ManagedShaderPackLayoutPresent()) {
 			const auto reset = ResetManagedShaderPacks();
@@ -5243,6 +5252,7 @@ namespace SIE
 
 		featureSetChanged = false;
 		featureSetRevertPending = true;
+		diskCacheInfoWritePending.store(false, std::memory_order_release);
 		featureSetCacheBackedUp = false;
 		featureSetCacheSelectivelySeeded = false;
 		diskCacheHeld = false;
@@ -5311,6 +5321,37 @@ namespace SIE
 			Plugin::VERSION_LABEL, BuildProvenance::GetBuildId(), BuildProvenance::GetShaderCacheAbiId());
 	}
 
+	void ShaderCache::WriteDiskCacheInfoWhenReady()
+	{
+		diskCacheInfoWritePending.store(true, std::memory_order_release);
+		WritePendingDiskCacheInfoIfNeeded();
+	}
+
+	void ShaderCache::WritePendingDiskCacheInfoIfNeeded()
+	{
+		if (!diskCacheInfoWritePending.load(std::memory_order_acquire))
+			return;
+
+		if (!IsDiskCache() || featureSetRevertPending.load(std::memory_order_acquire) ||
+			(!IsDiskCacheActive() && !HasFeatureSetChanges())) {
+			diskCacheInfoWritePending.store(false, std::memory_order_release);
+			return;
+		}
+
+		// Feature-set metadata belongs to the renderer/UI owner. Compiler workers
+		// only publish their completion counters; frame maintenance consumes them.
+		if (IsCompiling() || saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire))
+			return;
+
+		if (!diskCacheInfoWritePending.exchange(false, std::memory_order_acq_rel))
+			return;
+
+		if (HasFeatureSetChanges())
+			CommitFeatureSetChange();
+		else if (IsDiskCacheActive())
+			WriteDiskCacheInfo();
+	}
+
 	static bool IsEnvVarTruthy(const char* a_name)
 	{
 		char buffer[16] = {};
@@ -5328,6 +5369,10 @@ namespace SIE
 
 	ShaderCache::ShaderCache()
 	{
+		// Storage owners must outlive worker shutdown and the final manifest flush.
+		// Constructing them here keeps all filesystem access lazy.
+		(void)ShaderCacheManifestStorage();
+		(void)ManagedPacks();
 		if (IsEnvVarTruthy("OPENSHADERS_BACKGROUND_COMPILE")) {
 			SetBackgroundCompilation(true);
 			logger::info("OPENSHADERS_BACKGROUND_COMPILE set; starting shaders in background compilation mode");

@@ -23,6 +23,8 @@ namespace CSX::Api
 
 	struct ServiceLimits
 	{
+		// Includes in-progress reservations. Full pending capacity rejects new
+		// commands retryably; completed records may be evicted for admission.
 		std::size_t maximumCommands = 1024;
 		std::size_t maximumEvents = 4096;
 		std::chrono::steady_clock::duration commandRetention = std::chrono::hours(1);

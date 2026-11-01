@@ -99,7 +99,7 @@ struct ID3D11DeviceContext
 		if (query->type == D3D11_QUERY_TIMESTAMP_DISJOINT)
 			--activeDisjointQueries;
 	}
-	HRESULT GetData(ID3D11Query* query, void* output, UINT, UINT)
+	HRESULT GetData(ID3D11Query* query, void* output, UINT size, UINT)
 	{
 		if (!query)
 			throw std::runtime_error("GetData received a missing query");
@@ -110,8 +110,12 @@ struct ID3D11DeviceContext
 			return E_FAIL;
 		if (query->type == D3D11_QUERY_TIMESTAMP_DISJOINT) {
 			const D3D11_QUERY_DATA_TIMESTAMP_DISJOINT value{ 1000, disjoint };
+			if (!output || size != sizeof(value))
+				return E_FAIL;
 			std::memcpy(output, &value, sizeof(value));
 		} else {
+			if (!output || size != sizeof(query->timestamp))
+				return E_FAIL;
 			std::memcpy(output, &query->timestamp, sizeof(query->timestamp));
 		}
 		return S_OK;

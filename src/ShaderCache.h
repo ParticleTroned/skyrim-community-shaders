@@ -441,6 +441,10 @@ namespace SIE
 		void CommitFeatureSetChange();
 		bool RestorePreviousDiskCache();
 		void WriteDiskCacheInfo();
+		/** Request metadata publication after compilation and save/load persistence holds drain. */
+		void WriteDiskCacheInfoWhenReady();
+		/** Consume the request on the renderer's cache-maintenance path, never on a compiler worker. */
+		void WritePendingDiskCacheInfoIfNeeded();
 
 		using CacheMismatch = Util::CacheInvalidation::CacheMismatch;
 
@@ -1066,6 +1070,7 @@ namespace SIE
 		std::atomic_bool diskCacheHeld{ false };
 		bool featureSetChanged = false;
 		std::atomic_bool featureSetRevertPending{ false };
+		std::atomic_bool diskCacheInfoWritePending{ false };
 		bool featureSetCacheBackedUp = false;
 		bool featureSetCacheSelectivelySeeded = false;
 		bool previousDiskCacheAvailable = false;

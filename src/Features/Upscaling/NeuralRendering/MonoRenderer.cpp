@@ -756,6 +756,7 @@ namespace NeuralRendering
 		if (format == DXGI_FORMAT_R32G32B32A32_FLOAT) color.flags = 0;
 		else if (format == DXGI_FORMAT_R11G11B10_FLOAT) color.flags = 0x100;
 		else if (format != DXGI_FORMAT_R16G16B16A16_FLOAT) color.flags = 0x300;
+		Color::ExposureStamp usedExposure{};
 		if (settings.exposureSource != 0 && color.transform != 0) {
 			const Color::ExposureTransaction transaction{ frame.frame, frame.frame, settings.mode == 2 ? 1u : 0u, 0u, 0u,
 				settings.exposureSource == 2 ? Color::ExposureSource::CapturedHDRPrevious : Color::ExposureSource::CapturedHDR };
@@ -764,6 +765,7 @@ namespace NeuralRendering
 				state.historyValid = false; state.Status("waiting_for_captured_exposure", Color::ExposureBindingName(state.exposure.state)); return nullptr;
 			}
 			color.flags |= 4u;
+			usedExposure = state.exposure.evidence.stamp;
 		}
 		if (!Upload(frame.device, frame.context, state.monoBuffer, constants, "NeuralRendering::MonoConstants") ||
 			!Upload(frame.device, frame.context, state.colorBuffer, color, "NeuralRendering::ColorConstants") ||
@@ -836,9 +838,9 @@ namespace NeuralRendering
 		state.evaluatedFrame = frame.frame; state.layout = layout; state.packedLayout = packed;
 		state.snapshot.evaluationFrame = frame.frame;
 		state.snapshot.sourceWidth = frame.width; state.snapshot.sourceHeight = frame.height;
-		state.snapshot.exposureFrame = state.exposure.evidence.stamp.frame;
-		state.snapshot.exposureEpoch = state.exposure.evidence.stamp.epoch;
-		state.snapshot.exposureSequence = state.exposure.evidence.stamp.sequence;
+		state.snapshot.exposureFrame = usedExposure.frame;
+		state.snapshot.exposureEpoch = usedExposure.epoch;
+		state.snapshot.exposureSequence = usedExposure.sequence;
 		state.snapshot.packedCoverageProven = packed.count == 0;
 		state.historyValid = false;
 		ID3D11ShaderResourceView* reconstruction[]{ state.source.srv.Get(), state.modelOutput.srv.Get(), state.modelColor.srv.Get(), state.exposure.srv.Get(),

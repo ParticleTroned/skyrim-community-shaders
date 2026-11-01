@@ -260,11 +260,14 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				FrameAnnotations::OnDataLoaded();
 
 				auto shaderCache = globals::shaderCache;
-				shaderCache->menuLoaded.store(true, std::memory_order_relaxed);
 
 				while (shaderCache->IsCompiling() && !shaderCache->backgroundCompilation.load(std::memory_order_relaxed) && !globals::game::quitGame) {
 					std::this_thread::sleep_for(100ms);
 				}
+				// Empty or already-drained batches have no worker left to complete
+				// startup scheduling; background batches finish from their last worker.
+				shaderCache->menuLoaded.store(true, std::memory_order_release);
+				shaderCache->TryCompleteStartupCompilationPhase();
 
 				if (globals::game::quitGame) {
 					logger::info("Game was closed, skipping feature DataLoaded methods");

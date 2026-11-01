@@ -267,7 +267,7 @@ void Widget::DrawDeleteConfirmationModal(const char* popupId)
 
 	if (auto popup = Util::CenteredPopupModal(popupId)) {
 		deleteConfirmationFrame = ImGui::GetFrameCount();
-		ImGui::Text(T("cs_editor.confirm_delete_saved_file", "Are you sure you want to delete the saved settings file?"));
+		ImGui::TextUnformatted(T("cs_editor.confirm_delete_saved_file", "Are you sure you want to delete the saved settings file?"));
 		ImGui::Spacing();
 		ImGui::Separator();
 		ImGui::Spacing();
@@ -404,7 +404,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 			return;
 		ImGui::SameLine();
 		bool isLocked = editorWindow->IsWeatherLocked() && editorWindow->GetLockedWeather() == weather;
-		const char* lockLabel = isLocked ? "Unlock" : "Force Weather";
+		const char* lockLabel = isLocked ? T("cs_editor.unlock", "Unlock") : T("cs_editor.force_weather", "Force Weather");
 
 		auto drawButton = [&]() {
 			if (ImGui::Button(lockLabel)) {
@@ -431,7 +431,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		if (!HasUnsavedChanges() || !menu)
 			return;
 		ImGui::SameLine();
-		ImGui::TextColored(menu->GetTheme().StatusPalette.Warning, T("cs_editor.unsaved_changes", "(UNSAVED CHANGES)"));
+		ImGui::TextColored(menu->GetTheme().StatusPalette.Warning, "%s", T("cs_editor.unsaved_changes", "(UNSAVED CHANGES)"));
 		Util::AddTooltip(T("cs_editor.unsaved_changes_tooltip", "Unsaved changes - click save to keep"));
 	};
 
@@ -471,9 +471,9 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 
 		// Save/Load/Revert/Delete group
 		if (showSaveLoadRevert) {
-			iconButton("_Save", menu->uiIcons.saveSettings.texture, "Save to file", [&]() { Save(); });
-			iconButton("_Load", menu->uiIcons.loadSettings.texture, "Load saved file (or reset to vanilla if no file)", [&]() { Load(); });
-			iconButton("_Revert", menu->uiIcons.featureSettingRevert.texture, "Revert to original game values", [&]() { RevertChanges(); });
+			iconButton("_Save", menu->uiIcons.saveSettings.texture, T("cs_editor.save_to_file", "Save to file"), [&]() { Save(); });
+			iconButton("_Load", menu->uiIcons.loadSettings.texture, T("cs_editor.load_saved_file", "Load saved file (or reset to vanilla if no file)"), [&]() { Load(); });
+			iconButton("_Revert", menu->uiIcons.featureSettingRevert.texture, T("cs_editor.revert_to_original", "Revert to original game values"), [&]() { RevertChanges(); });
 
 			if (HasSavedFile() && menu->uiIcons.deleteSettings.texture) {
 				ImGui::SameLine();
@@ -510,16 +510,16 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 
 			// Save/Load/Revert/Delete group
 			if (showSaveLoadRevert) {
-				textButton("Save", "Save to file", [&]() { Save(); });
-				textButton("Load", "Load saved file (or reset to vanilla if no file)", [&]() { Load(); });
+				textButton(T("cs_editor.save", "Save"), T("cs_editor.save_to_file", "Save to file"), [&]() { Save(); });
+				textButton(T("cs_editor.load", "Load"), T("cs_editor.load_saved_file", "Load saved file (or reset to vanilla if no file)"), [&]() { Load(); });
 				ImGui::SameLine();
-				if (Util::WarningButton("Revert"))
+				if (Util::WarningButton(T("cs_editor.revert", "Revert")))
 					RevertChanges();
 				Util::AddTooltip(T("cs_editor.revert_to_original", "Revert to original game values"));
 
 				if (HasSavedFile()) {
 					ImGui::SameLine();
-					if (Util::ErrorTextButton("Delete"))
+					if (Util::ErrorTextButton(T("cs_editor.delete", "Delete")))
 						ImGui::OpenPopup("DeleteConfirmation");
 					Util::AddTooltip(T("cs_editor.delete_saved_file_tooltip", "Delete saved file"));
 				}
@@ -533,7 +533,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 
 	if (showApply && RequiresManualApply() && editorWindow->settings.autoApplyChanges && menu) {
 		ImGui::SameLine();
-		ImGui::TextColored(menu->GetTheme().StatusPalette.Warning, T("editor.widget.manual_apply_only", "(Manual apply only)"));
+		ImGui::TextColored(menu->GetTheme().StatusPalette.Warning, "%s", T("editor.widget.manual_apply_only", "(Manual apply only)"));
 		Util::AddTooltip(T("editor.widget.the_engine_rereads_this_form_only_on_weather_16ebdce0", "The engine rereads this form only on weather reinit. Auto-apply is disabled; use Apply."));
 	}
 
@@ -543,17 +543,19 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 	// (called after this function) can anchor itself below the search bar.
 	searchDropdownAnchor = ImGui::GetCursorScreenPos();
 
-	// Rebuild match list only when the query changed; this gates per-frame
+	// Rebuild only when the query or locale changes; this gates per-frame
 	// CollectSearchableSettings() walks plus three case-insensitive searches per entry.
 	if (searchBuffer[0] != '\0') {
-		if (searchResultsForQuery != searchBuffer) {
+		const auto locale = I18n::GetSingleton()->GetCurrentLocale();
+		if (searchResultsForQuery != searchBuffer || searchResultsForLocale != locale) {
 			searchResults = CollectSearchableSettings();
 			std::erase_if(searchResults, [&](const SearchResult& r) {
-				return !ContainsStringIgnoreCase(r.displayName, searchBuffer) &&
-				       !ContainsStringIgnoreCase(r.tabName, searchBuffer) &&
+				return !ContainsStringIgnoreCase(WeatherUtils::TranslateControlLabel(r.displayName), searchBuffer) &&
+				       !ContainsStringIgnoreCase(WeatherUtils::TranslateControlLabel(r.tabName), searchBuffer) &&
 				       !ContainsStringIgnoreCase(r.settingId, searchBuffer);
 			});
 			searchResultsForQuery = searchBuffer;
+			searchResultsForLocale = locale;
 		}
 	} else {
 		ClearSearchState(false);
@@ -590,7 +592,9 @@ void Widget::DrawSearchDropdown()
 			const size_t shown = std::min(WidgetUI::kSearchDropdownMaxResults, searchResults.size());
 			for (size_t i = 0; i < shown; ++i) {
 				const auto& result = searchResults[i];
-				std::string label = result.tabName.empty() ? result.displayName : std::format("{} ({})", result.displayName, result.tabName);
+				const char* displayName = WeatherUtils::TranslateControlLabel(result.displayName);
+				const char* tabName = WeatherUtils::TranslateControlLabel(result.tabName);
+				std::string label = result.tabName.empty() ? displayName : std::format("{} ({})", displayName, tabName);
 
 				ImGui::PushID(static_cast<int>(i));
 				if (ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_NoAutoClosePopups)) {

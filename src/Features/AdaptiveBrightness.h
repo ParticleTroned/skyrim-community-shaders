@@ -345,6 +345,7 @@ struct AdaptiveBrightness : Feature
 	virtual void SetupResources() override;
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
+	virtual void ClearShaderCache() override;
 
 	bool IsRuntimeAvailable() const;
 	/// Enables only Adaptive Balance adjustments; independent renderer features retain their state.

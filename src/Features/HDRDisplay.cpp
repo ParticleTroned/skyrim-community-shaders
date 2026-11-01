@@ -779,16 +779,16 @@ void HDRDisplay::EndUIRendering()
 	renderingUI = false;
 }
 
-void HDRDisplay::RedirectFramebuffer()
+bool HDRDisplay::RedirectFramebuffer()
 {
 	if (!IsHDROutputActive() || !hdrTexture || !hdrTexture->rtv)
-		return;
+		return false;
 
 	if (!GetHDROutputCS())
-		return;
+		return false;
 
 	if (framebufferRedirected)
-		return;
+		return true;
 
 	auto& fb = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kFRAMEBUFFER];
 
@@ -803,6 +803,7 @@ void HDRDisplay::RedirectFramebuffer()
 	fb.RTV = hdrTexture->rtv.get();
 
 	framebufferRedirected = true;
+	return true;
 }
 
 void HDRDisplay::RestoreFramebuffer()

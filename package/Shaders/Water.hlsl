@@ -608,25 +608,25 @@ FlowmapData GetFlowmapDataWorldSpace(FlowmapData textureSpaceData)
 #				include "Wetterness/Wetterness.hlsli"
 #				define CS_GET_FLOW_AWARE_RIPPLE_OFFSET(flowVector, flowStrength, timingScale, flowMultiplier, uvWorldScale) Wetterness::GetFlowAwareRippleOffset(flowVector, flowStrength, timingScale, flowMultiplier, uvWorldScale)
 #				define CS_GET_RAIN_DROPS(worldPos, time, normal, strength) Wetterness::GetRainDrops(worldPos, time, normal, strength)
-#				define CS_REORIENT_NORMAL(n1, n2) Wetterness::ReorientNormal(n1, n2)
+#				define CS_REORIENT_NORMAL(n1, n2) ReorientNormal(n1, n2)
 #				define CS_GET_DEBUG_WETNESS_COLOR_SPECULAR(rippleInfo, rippleMultiplier, splashMultiplier) Wetterness::GetDebugWetnessColorSpecular(rippleInfo, rippleMultiplier, splashMultiplier)
 #				define CS_GET_DEBUG_WETNESS_COLOR_UNDERWATER(rippleInfo, rippleMultiplier, splashMultiplier) Wetterness::GetDebugWetnessColorUnderwater(rippleInfo, rippleMultiplier, splashMultiplier)
 #				define CS_GET_DEBUG_WETNESS_COLOR_STANDARD(rippleInfo, rippleMultiplier, splashMultiplier) Wetterness::GetDebugWetnessColorStandard(rippleInfo, rippleMultiplier, splashMultiplier)
-#if (defined(DEBUG_WETTERNESS)) || (defined(DEBUG_WETNESS_EFFECTS))
+#				if (defined(DEBUG_WETTERNESS)) || (defined(DEBUG_WETNESS_EFFECTS))
 #					define CS_DEBUG_WETNESS
-#endif
+#				endif
 #elif defined(WETNESS_EFFECTS)
 #				define CS_WETNESS_SETTINGS SharedData::wetnessEffectsSettings
 #				include "WetnessEffects/WetnessEffects.hlsli"
 #				define CS_GET_FLOW_AWARE_RIPPLE_OFFSET(flowVector, flowStrength, timingScale, flowMultiplier, uvWorldScale) WetnessEffects::GetFlowAwareRippleOffset(flowVector, flowStrength, timingScale, flowMultiplier, uvWorldScale)
 #				define CS_GET_RAIN_DROPS(worldPos, time, normal, strength) WetnessEffects::GetRainDrops(worldPos, time, normal, strength)
-#				define CS_REORIENT_NORMAL(n1, n2) WetnessEffects::ReorientNormal(n1, n2)
+#				define CS_REORIENT_NORMAL(n1, n2) ReorientNormal(n1, n2)
 #				define CS_GET_DEBUG_WETNESS_COLOR_SPECULAR(rippleInfo, rippleMultiplier, splashMultiplier) WetnessEffects::GetDebugWetnessColorSpecular(rippleInfo, rippleMultiplier, splashMultiplier)
 #				define CS_GET_DEBUG_WETNESS_COLOR_UNDERWATER(rippleInfo, rippleMultiplier, splashMultiplier) WetnessEffects::GetDebugWetnessColorUnderwater(rippleInfo, rippleMultiplier, splashMultiplier)
 #				define CS_GET_DEBUG_WETNESS_COLOR_STANDARD(rippleInfo, rippleMultiplier, splashMultiplier) WetnessEffects::GetDebugWetnessColorStandard(rippleInfo, rippleMultiplier, splashMultiplier)
-#if defined(DEBUG_WETNESS_EFFECTS)
+#				if defined(DEBUG_WETNESS_EFFECTS)
 #					define CS_DEBUG_WETNESS
-#endif
+#				endif
 #endif
 
 #if (defined(WATER_EFFECTS)) && (!(defined(VC)))

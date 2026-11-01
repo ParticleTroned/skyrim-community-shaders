@@ -27,6 +27,28 @@ namespace
 	{
 		Check(std::isfinite(actual) && std::abs(actual - expected) < 0.001f, message);
 	}
+	void QueryOutputBounds()
+	{
+		ID3D11DeviceContext context;
+		ID3D11Query query(D3D11_QUERY_TIMESTAMP_DISJOINT);
+		struct Output
+		{
+			UINT64 timestamp = 17;
+			UINT64 guard = 23;
+		} output;
+		Check(context.GetData(&query, &output.timestamp, sizeof(output.timestamp), 0) == E_FAIL,
+			"query mock accepted an undersized disjoint output");
+		Check(output.timestamp == 17 && output.guard == 23, "query mock overwrote a rejected output");
+		query.type = D3D11_QUERY_TIMESTAMP;
+		Check(context.GetData(&query, nullptr, sizeof(output.timestamp), 0) == E_FAIL,
+			"query mock accepted a missing output");
+		Check(context.GetData(&query, &output, sizeof(output), 0) == E_FAIL,
+			"query mock accepted an oversized timestamp output");
+		query.timestamp = 31;
+		Check(context.GetData(&query, &output.timestamp, sizeof(output.timestamp), 0) == S_OK &&
+				  output.timestamp == 31 && output.guard == 23,
+			"query mock rejected a matching timestamp output");
+	}
 	const Profiler::TimerResult& Find(const std::vector<Profiler::TimerResult>& results, std::string_view name)
 	{
 		const auto found = std::find_if(results.begin(), results.end(), [name](const auto& timer) { return timer.name == name; });
@@ -471,6 +493,7 @@ namespace
 int main()
 {
 	try {
+		QueryOutputBounds();
 		ExternalGpuCaptureIsolation();
 		RetainedEvidenceModes();
 		QueryAllocationFailure();

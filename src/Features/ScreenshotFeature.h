@@ -39,8 +39,8 @@ struct ScreenshotFeature : public Feature
 	/** Queue a settings-based still capture for the next accepted game Present. */
 	void Capture();
 	void RequestUiCapture();
-	/** Retains SE's capture boundary after HDR composition and the accepted game Present. */
-	void ProcessCaptureRequest();
+	/** Capture after HDR composition/Present using the source frame from before State::Reset. */
+	void ProcessCaptureRequest(uint32_t sourceFrame);
 	/** Mutating API requests are dispatched by the versioned service on the game thread. */
 	json HandleApiRequest(const json&);
 	json RequestApiCapture(std::string_view origin = "csx_menu");
@@ -92,7 +92,7 @@ private:
 	CaptureStartResult TryStartApiCapture(const std::string& requestId, const json& descriptor,
 		const std::string& parentRequestId, uint32_t ordinal);
 	bool CancelApiCapture(std::string_view);
-	void AcquirePendingCapture();
+	void AcquirePendingCapture(uint32_t sourceFrame);
 	static void ScreenshotWorkerLoop(std::shared_ptr<CaptureState>, std::shared_ptr<ScreenshotApi>);
 	static void DeadlineWorkerLoop(std::stop_token, std::shared_ptr<CaptureState>, std::shared_ptr<ScreenshotApi>);
 	void DrawCaptureSource(MenuUI::ActionFeedback&);

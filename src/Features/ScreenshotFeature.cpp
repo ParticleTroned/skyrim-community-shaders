@@ -256,37 +256,6 @@ namespace
 		}
 	}
 
-	// Resolves the slot's underlying texture, falling back to QueryInterface on
-	// SRV/RTV when slot.texture is null (kFRAMEBUFFER on flat aliases the swap-
-	// chain backbuffer that way). `holder` keeps the QI refcount alive across
-	// the caller's use of the returned pointer.
-	ID3D11Texture2D* ResolveSlotTexture(
-		const RE::BSGraphics::RenderTargetData& slot,
-		winrt::com_ptr<ID3D11Texture2D>& holder)
-	{
-		if (slot.texture) {
-			return slot.texture;
-		}
-		auto resolveFromView = [&](ID3D11View* view) -> ID3D11Texture2D* {
-			if (!view) {
-				return nullptr;
-			}
-			winrt::com_ptr<ID3D11Resource> resource;
-			view->GetResource(resource.put());
-			if (!resource) {
-				return nullptr;
-			}
-			if (FAILED(resource->QueryInterface(__uuidof(ID3D11Texture2D), holder.put_void()))) {
-				return nullptr;
-			}
-			return holder.get();
-		};
-		if (auto* tex = resolveFromView(slot.SRV)) {
-			return tex;
-		}
-		return resolveFromView(slot.RTV);
-	}
-
 	// Returns the texture that was presented to the display (post-ApplyHDR).
 	ID3D11Texture2D* ResolveDisplayedBackBuffer(winrt::com_ptr<ID3D11Texture2D>& holder)
 	{
@@ -356,7 +325,7 @@ namespace
 		}
 
 		auto& slot = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER];
-		src.texture = ResolveSlotTexture(slot, holder);
+		src.texture = Util::ResolveRenderTargetTexture(slot, holder);
 		src.srv = slot.SRV;
 		src.needsPreviewCache = true;
 		src.description = "kFRAMEBUFFER";
@@ -985,17 +954,17 @@ bool ScreenshotFeature::CancelApiCapture(std::string_view requestId)
 	return true;
 }
 
-void ScreenshotFeature::ProcessCaptureRequest()
+void ScreenshotFeature::ProcessCaptureRequest(uint32_t sourceFrame)
 {
 	if (captureRequested.exchange(false, std::memory_order_acq_rel)) {
 		const auto response = RequestApiCapture("csx_hotkey");
 		if (!response.value("ok", false)) logger::warn("Screenshot request rejected: {}", response.dump());
 	}
-	screenshotApi->Tick(*this, globals::state ? globals::state->frameCount : 0u);
-	AcquirePendingCapture();
+	screenshotApi->Tick(*this, sourceFrame);
+	AcquirePendingCapture(sourceFrame);
 }
 
-void ScreenshotFeature::AcquirePendingCapture()
+void ScreenshotFeature::AcquirePendingCapture(uint32_t sourceFrame)
 {
 	std::shared_ptr<CaptureState::Request> request;
 	{ std::lock_guard lock(captureState->mutex); request = captureState->active; }
@@ -1055,7 +1024,7 @@ void ScreenshotFeature::AcquirePendingCapture()
 			destination.at("baseName").get<std::string>() : "CS_" + request->requestId;
 		CaptureState::Job job;
 		job.requestId = request->requestId; job.context.copy_from(context); job.notify = request->parentRequestId.empty();
-		const uint32_t frame = globals::state->frameCount;
+		const uint32_t frame = sourceFrame;
 		for (const auto& output : descriptor.at("outputs")) {
 			const auto& encoding = output.at("encoding");
 			if ((encoding.at("colourContract") == "hdr10_pq") != hdr) { fail("colour_contract_source_mismatch"); return; }

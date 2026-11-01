@@ -50,6 +50,9 @@ namespace Util
 	 */
 	bool GetTexture2DDesc(ID3D11View* a_view, D3D11_TEXTURE2D_DESC& o_desc);
 	bool TryGetDepthSrvDimensions(ID3D11ShaderResourceView* a_depthSrv, uint32_t& o_width, uint32_t& o_height);
+	/** Resolves SE slots backed only by an SRV/RTV, retaining a queried texture for the caller's scope. */
+	[[nodiscard]] ID3D11Texture2D* ResolveRenderTargetTexture(const RE::BSGraphics::RenderTargetData& a_slot,
+		winrt::com_ptr<ID3D11Texture2D>& a_holder);
 
 	ID3D11ShaderResourceView* GetSRVFromRTV(ID3D11RenderTargetView* a_rtv);
 	ID3D11RenderTargetView* GetRTVFromSRV(ID3D11ShaderResourceView* a_srv);

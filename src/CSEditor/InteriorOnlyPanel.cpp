@@ -54,7 +54,7 @@ namespace InteriorOnlyPanel
 		if (cachedFeatureNames.empty())
 			cachedFeatureNames = SceneSettingsManager::GetInteriorRelevantFeatureNames();
 
-		const char* featurePreview = (selectedFeatureIdx >= 0 && selectedFeatureIdx < static_cast<int>(cachedFeatureNames.size())) ? cachedFeatureNames[selectedFeatureIdx].c_str() : "Select Feature...";
+		const char* featurePreview = (selectedFeatureIdx >= 0 && selectedFeatureIdx < static_cast<int>(cachedFeatureNames.size())) ? cachedFeatureNames[selectedFeatureIdx].c_str() : T("cs_editor.select_feature", "Select Feature...");
 
 		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * C::SCENE_FEATURE_DROPDOWN_RATIO);
 		if (auto combo = Util::Widgets::ComboBox("##FeatureSelect", featurePreview)) {
@@ -76,7 +76,7 @@ namespace InteriorOnlyPanel
 		{
 			auto _ = Util::DisableGuard(selectedFeatureIdx < 0);
 
-			const char* settingPreview = (selectedSettingIdx >= 0 && selectedSettingIdx < static_cast<int>(cachedSettingKeys.size())) ? cachedSettingKeys[selectedSettingIdx].c_str() : "Select Setting...";
+			const char* settingPreview = (selectedSettingIdx >= 0 && selectedSettingIdx < static_cast<int>(cachedSettingKeys.size())) ? cachedSettingKeys[selectedSettingIdx].c_str() : T("cs_editor.select_setting", "Select Setting...");
 
 			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * C::SCENE_SETTING_DROPDOWN_RATIO);
 			if (auto combo = Util::Widgets::ComboBox("##SettingSelect", settingPreview)) {
@@ -181,7 +181,7 @@ namespace InteriorOnlyPanel
 			}
 			break;
 		default:
-			ImGui::TextDisabled(T("cs_editor.unsupported_type", "(unsupported type)"));
+			ImGui::TextDisabled("%s", T("cs_editor.unsupported_type", "(unsupported type)"));
 			break;
 		}
 
@@ -194,7 +194,7 @@ namespace InteriorOnlyPanel
 		if (Util::FeatureToggle("##active", &active))
 			manager->TogglePauseEntry(kSceneType, index);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(entry.paused ? T("cs_editor.paused_click_resume", "Paused - click to resume") : T("cs_editor.active_click_pause", "Active - click to pause"));
+			ImGui::TextUnformatted(entry.paused ? T("cs_editor.paused_click_resume", "Paused - click to resume") : T("cs_editor.active_click_pause", "Active - click to pause"));
 
 		// Delete button
 		ImGui::SameLine();
@@ -212,7 +212,7 @@ namespace InteriorOnlyPanel
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(entry.source == EntrySource::Overwrite ? T("cs_editor.delete_overwrite_file", "Delete overwrite file from disk") : T("cs_editor.remove_setting", "Remove this setting"));
+			ImGui::TextUnformatted(entry.source == EntrySource::Overwrite ? T("cs_editor.delete_overwrite_file", "Delete overwrite file from disk") : T("cs_editor.remove_setting", "Remove this setting"));
 
 		ImGui::PopID();
 	}
@@ -224,7 +224,7 @@ namespace InteriorOnlyPanel
 		auto& theme = globals::menu->GetSettings().Theme;
 
 		// Header
-		ImGui::Text(T("cs_editor.interior_only_settings", "Interior Only Settings"));
+		ImGui::TextUnformatted(T("cs_editor.interior_only_settings", "Interior Only Settings"));
 
 		ImGui::Separator();
 
@@ -256,13 +256,10 @@ namespace InteriorOnlyPanel
 		// Empty state
 		if (entries.empty()) {
 			ImGui::Spacing();
-			ImGui::TextColored(theme.StatusPalette.Disable,
-				T("editor.interior_only_panel.no_interior_only_settings_configured", "No interior-only settings configured."));
-			ImGui::TextColored(theme.StatusPalette.Disable,
-				T("editor.interior_only_panel.click_to_add_settings_that_will_only_apply_in_interiors", "Click + to add settings that will only apply in interiors."));
+			ImGui::TextColored(theme.StatusPalette.Disable, "%s", T("editor.interior_only_panel.no_interior_only_settings_configured", "No interior-only settings configured."));
+			ImGui::TextColored(theme.StatusPalette.Disable, "%s", T("editor.interior_only_panel.click_to_add_settings_that_will_only_apply_in_interiors", "Click + to add settings that will only apply in interiors."));
 			ImGui::Spacing();
-			ImGui::TextWrapped(
-				T("editor.interior_only_panel.overrides_feature_defaults_in_interior_cells_903b54c3", "Overrides feature defaults in interior cells. Original values return when you leave."));
+			ImGui::TextWrapped("%s", T("editor.interior_only_panel.overrides_feature_defaults_in_interior_cells_903b54c3", "Overrides feature defaults in interior cells. Original values return when you leave."));
 			return;
 		}
 

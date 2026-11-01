@@ -26,10 +26,77 @@ namespace
 			{ "commandId", std::move(a_commandId) },
 		};
 	}
+
+	void CheckCommandCapacity()
+	{
+		ServiceLimits limits;
+		limits.maximumCommands = 3;
+		ServiceFoundation service({ "csx.capacity.test" }, limits);
+		const auto outerRequest = Request("start", "long-running");
+		uint32_t calls = 0;
+		const auto success = [&](const json& command) {
+			++calls;
+			return service.MakeEnvelope(command, true);
+		};
+
+		// Keep the oldest reservation pending while newer commands finish. This
+		// deterministically exercises the same ordering as concurrent dispatch.
+		const auto outer = service.Dispatch(outerRequest, [&](const json& command) {
+			for (uint32_t index = 0; index < 64; ++index) {
+				const auto request = Request("start", "completed-" + std::to_string(index));
+				Check(service.Dispatch(request, success)["ok"].get<bool>(), "completed records blocked new commands");
+				Check(service.JournalStatus()["retainedCommands"] <= limits.maximumCommands,
+					"a pending oldest command defeated the retention bound");
+				const auto replay = service.Dispatch(request, success);
+				Check(replay["idempotentReplay"].get<bool>(), "capacity trimming lost the newest completed command");
+			}
+			const auto pending = service.Dispatch(outerRequest, success);
+			Check(pending["error"]["code"] == "command_in_progress", "capacity trimming evicted a pending reservation");
+			return service.MakeEnvelope(command, true);
+		});
+		Check(outer["ok"].get<bool>(), "capacity sweep failed: " + outer.dump());
+		Check(calls == 64, "capacity pressure duplicated a handler");
+
+		ServiceFoundation occupied({ "csx.occupied.test" }, limits);
+		const auto overflowRequest = Request("start", "overflow");
+		uint32_t overflowCalls = 0;
+		const auto overflowHandler = [&](const json& command) {
+			++overflowCalls;
+			return occupied.MakeEnvelope(command, true);
+		};
+		std::function<json(uint32_t)> reserve = [&](uint32_t depth) {
+			const auto request = Request("start", "pending-" + std::to_string(depth));
+			return occupied.Dispatch(request, [&](const json& command) {
+				if (depth + 1 < limits.maximumCommands) {
+					Check(reserve(depth + 1)["ok"].get<bool>(), "available reservation capacity was rejected");
+				} else {
+					const auto overflow = occupied.Dispatch(overflowRequest, overflowHandler);
+					Check(!overflow["ok"].get<bool>() && overflow["error"]["code"] == "service_busy" &&
+							  overflow["error"]["retryable"].get<bool>(),
+						"full pending capacity must reject with a retryable error");
+					Check(overflowCalls == 0, "rejected command executed its handler");
+					Check(occupied.JournalStatus()["retainedCommands"] == limits.maximumCommands,
+						"full pending capacity exceeded the retention bound");
+					const auto pending = occupied.Dispatch(request, overflowHandler);
+					Check(pending["error"]["code"] == "command_in_progress", "full capacity changed duplicate semantics");
+					auto conflicting = request;
+					conflicting["different"] = true;
+					const auto conflict = occupied.Dispatch(conflicting, overflowHandler);
+					Check(conflict["error"]["code"] == "idempotency_conflict", "full capacity changed conflict semantics");
+				}
+				return occupied.MakeEnvelope(command, true);
+			});
+		};
+		Check(reserve(0)["ok"].get<bool>(), "pending reservation completion failed");
+		Check(occupied.Dispatch(overflowRequest, overflowHandler)["ok"].get<bool>(), "rejected command could not retry after capacity recovered");
+		Check(occupied.Dispatch(overflowRequest, overflowHandler)["idempotentReplay"].get<bool>() && overflowCalls == 1,
+			"retried command lost idempotent replay");
+	}
 }
 
 int RunTest()
 {
+	CheckCommandCapacity();
 	ServiceLimits limits;
 	limits.maximumCommands = 8;
 	limits.maximumEvents = 3;

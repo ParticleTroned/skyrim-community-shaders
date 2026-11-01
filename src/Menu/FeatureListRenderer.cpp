@@ -1081,9 +1081,9 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 	auto& themeSettings = globals::menu->GetSettings().Theme;
 
 	if (isDisabled) {
-		ImGui::TextColored(themeSettings.StatusPalette.Disable, T("menu.feature_list_renderer.feature_settings_are_hidden_because_this_feat_3df54bb5", "Feature settings are hidden because this feature is disabled at boot."));
+		ImGui::TextColored(themeSettings.StatusPalette.Disable, "%s", T("menu.feature_list_renderer.feature_settings_are_hidden_because_this_feat_3df54bb5", "Feature settings are hidden because this feature is disabled at boot."));
 		ImGui::Spacing();
-		ImGui::Text(T("menu.features.enable_the_feature_above_to_access_its_configuration_options", "Enable the feature above to access its configuration options."));
+		ImGui::TextWrapped("%s", T("menu.features.enable_in_startup_help", "Enable this feature in Advanced > Startup, save settings and restart the game to access its configuration options."));
 	} else {
 		if (isLoaded) {
 			const bool globalEssentialsMode = globals::menu && globals::menu->IsPerformanceUiMode();

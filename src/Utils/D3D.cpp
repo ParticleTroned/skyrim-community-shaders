@@ -112,6 +112,25 @@ namespace Util
 		context->CSSetConstantBuffers(0, 1, &rawConstantBuffer);
 	}
 
+	ID3D11Texture2D* ResolveRenderTargetTexture(const RE::BSGraphics::RenderTargetData& a_slot,
+		winrt::com_ptr<ID3D11Texture2D>& a_holder)
+	{
+		if (a_slot.texture)
+			return a_slot.texture;
+		const auto fromView = [&](ID3D11View* view) -> ID3D11Texture2D* {
+			if (!view)
+				return nullptr;
+			winrt::com_ptr<ID3D11Resource> resource;
+			view->GetResource(resource.put());
+			if (!resource || FAILED(resource->QueryInterface(__uuidof(ID3D11Texture2D), a_holder.put_void())))
+				return nullptr;
+			return a_holder.get();
+		};
+		if (auto* texture = fromView(a_slot.SRV))
+			return texture;
+		return fromView(a_slot.RTV);
+	}
+
 	bool GetTexture2DDesc(ID3D11View* a_view, D3D11_TEXTURE2D_DESC& o_desc)
 	{
 		o_desc = {};

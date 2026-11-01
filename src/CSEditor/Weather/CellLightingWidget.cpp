@@ -60,10 +60,10 @@ void CellLightingWidget::DrawWidget()
 	}
 
 	if (!cell || !cell->IsInteriorCell()) {
-		ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), T("cs_editor.not_interior_cell", "This cell is not an interior cell."));
-		ImGui::TextWrapped(T("editor.cell_lighting_widget.cell_lighting_properties_only_apply_to_interior_cells", "Cell lighting properties only apply to interior cells."));
+		ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "%s", T("cs_editor.not_interior_cell", "This cell is not an interior cell."));
+		ImGui::TextWrapped("%s", T("editor.cell_lighting_widget.cell_lighting_properties_only_apply_to_interior_cells", "Cell lighting properties only apply to interior cells."));
 	} else if (!cell->GetLighting()) {
-		ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), T("cs_editor.no_lighting_data", "No lighting data available for this cell."));
+		ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s", T("cs_editor.no_lighting_data", "No lighting data available for this cell."));
 	} else {
 		bool changed = false;
 
@@ -84,7 +84,7 @@ void CellLightingWidget::DrawWidget()
 				return result;
 			};
 
-			if (ImGui::BeginTabItem(CellLightingTab::kBasic, nullptr, basicFlags)) {
+			if (ImGui::BeginTabItem(WeatherUtils::BuildLocalizedControlLabel(CellLightingTab::kBasic).c_str(), nullptr, basicFlags)) {
 				BeginScrollableContent("##BasicScroll");
 
 				auto drawMatchedHeader = [&](bool matches, const char* label, auto draw) {
@@ -92,7 +92,7 @@ void CellLightingWidget::DrawWidget()
 						return;
 					if (ShouldOpenSearchSection())
 						ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-					if (ImGui::CollapsingHeader(label)) {
+					if (ImGui::CollapsingHeader(WeatherUtils::BuildLocalizedControlLabel(label).c_str())) {
 						ImGui::Spacing();
 						draw();
 						ImGui::Spacing();
@@ -155,7 +155,7 @@ void CellLightingWidget::DrawWidget()
 				ImGui::EndTabItem();
 			}
 
-			if (ImGui::BeginTabItem(CellLightingTab::kFog, nullptr, fogFlags)) {
+			if (ImGui::BeginTabItem(WeatherUtils::BuildLocalizedControlLabel(CellLightingTab::kFog).c_str(), nullptr, fogFlags)) {
 				BeginScrollableContent("##FogScroll");
 
 				DrawSearchSectionIfMatches(CellLightingSetting::kFogNearColor, [&](const char*) {
@@ -204,7 +204,7 @@ void CellLightingWidget::DrawWidget()
 				ImGui::EndTabItem();
 			}
 
-			if (ImGui::BeginTabItem(CellLightingTab::kDalc, nullptr, dalcFlags)) {
+			if (ImGui::BeginTabItem(WeatherUtils::BuildLocalizedControlLabel(CellLightingTab::kDalc).c_str(), nullptr, dalcFlags)) {
 				BeginScrollableContent("##DALCScroll");
 
 				if (MatchesAnySearch({ CellLightingSetting::kSpecular, CellLightingSetting::kFresnelPower })) {
@@ -244,9 +244,9 @@ void CellLightingWidget::DrawWidget()
 				ImGui::EndTabItem();
 			}
 
-			if (ImGui::BeginTabItem(CellLightingTab::kInheritance, nullptr, inheritFlags)) {
+			if (ImGui::BeginTabItem(WeatherUtils::BuildLocalizedControlLabel(CellLightingTab::kInheritance).c_str(), nullptr, inheritFlags)) {
 				BeginScrollableContent("##InheritanceScroll");
-				ImGui::TextWrapped(T("cs_editor.inherit_flags_desc", "These flags control which lighting properties are inherited from the cell's lighting template."));
+				ImGui::TextWrapped("%s", T("cs_editor.inherit_flags_desc", "These flags control which lighting properties are inherited from the cell's lighting template."));
 				ImGui::Separator();
 				changed |= WeatherUtils::DrawCheckbox(CellLightingSetting::kInheritAmbientColor, settings.inheritAmbientColor);
 				changed |= WeatherUtils::DrawCheckbox(CellLightingSetting::kInheritDirectionalColor, settings.inheritDirectionalColor);

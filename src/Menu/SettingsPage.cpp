@@ -20,12 +20,44 @@ namespace MenuUI
 {
 	namespace
 	{
+		// Section labels are borrowed for one draw. Navigation survives locale
+		// changes, which invalidate every pointer returned by I18n::Get.
+		struct NavigationSection
+		{
+			std::string id, title, summary;
+			bool visible = true, overview = true, showTab = true;
+			std::optional<std::string> disabledReason;
+		};
+
 		struct Navigation
 		{
 			std::string selected = "overview";
 			std::function<bool(std::string_view)> canSelect;
 			bool pending = false;
-			std::vector<Section> sections;
+			std::vector<NavigationSection> sections;
+
+			void SetSections(std::span<const Section> source)
+			{
+				// Reuse vector/string capacity during ordinary menu frames.
+				sections.resize(source.size());
+				for (size_t index = 0; index < source.size(); ++index) {
+					const auto& from = source[index];
+					auto& to = sections[index];
+					to.id = from.id;
+					to.title = from.title;
+					to.summary = from.summary;
+					to.visible = from.visible;
+					to.overview = from.overview;
+					to.showTab = from.showTab;
+					if (from.disabledReason) {
+						if (!to.disabledReason)
+							to.disabledReason.emplace();
+						to.disabledReason->assign(from.disabledReason);
+					} else {
+						to.disabledReason.reset();
+					}
+				}
+			}
 		};
 		std::unordered_map<std::string, Navigation> navigation;
 		Feature* activeFeature = nullptr;
@@ -100,7 +132,7 @@ namespace MenuUI
 	{
 		std::scoped_lock lock(navigationMutex);
 		const auto found = navigation.find(a_page);
-		const bool hasCards = found == navigation.end() || std::ranges::any_of(found->second.sections, [](const Section& step) { return step.visible && step.overview; });
+		const bool hasCards = found == navigation.end() || std::ranges::any_of(found->second.sections, [](const NavigationSection& step) { return step.visible && step.overview; });
 		const float padding = ImGui::GetStyle().WindowPadding.x;
 		const float right = ImGui::GetStyle().ScrollbarSize;
 		const bool detail = found != navigation.end() && found->second.selected != "overview";
@@ -115,7 +147,7 @@ namespace MenuUI
 		const auto found = navigation.find(a_page);
 		if (found == navigation.end())
 			return a_panelWidth;
-		const bool hasCards = std::ranges::any_of(found->second.sections, [](const Section& step) { return step.visible && step.overview; });
+		const bool hasCards = std::ranges::any_of(found->second.sections, [](const NavigationSection& step) { return step.visible && step.overview; });
 		const float padding = ImGui::GetStyle().WindowPadding.x;
 		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - ImGui::GetStyle().ScrollbarSize - padding), hasCards);
 		return padding + grid.rail + (grid.columns - 1) * (grid.width + grid.gap);
@@ -126,7 +158,7 @@ namespace MenuUI
 		std::scoped_lock lock(navigationMutex);
 		const auto found = navigation.find(a_page);
 		// Match the initial header to the setup grid before its first content frame.
-		const bool hasCards = found == navigation.end() || found->second.sections.empty() || std::ranges::any_of(found->second.sections, [](const Section& step) { return step.visible && step.overview; });
+		const bool hasCards = found == navigation.end() || found->second.sections.empty() || std::ranges::any_of(found->second.sections, [](const NavigationSection& step) { return step.visible && step.overview; });
 		const float padding = ImGui::GetStyle().WindowPadding.x;
 		const float right = ImGui::GetStyle().ScrollbarSize;
 		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - right - padding), hasCards);
@@ -138,7 +170,7 @@ namespace MenuUI
 		std::scoped_lock lock(navigationMutex);
 		auto& state = navigation[a_page];
 		if ((std::string_view(a_section) == "profiling" && ProfilingRenderer::GetProfilingDisabledReason()) ||
-			(std::string_view(a_section) != "profiling" && std::ranges::any_of(state.sections, [&](const Section& step) { return step.disabledReason && std::string_view(a_section) == step.id; })))
+			(std::string_view(a_section) != "profiling" && std::ranges::any_of(state.sections, [&](const NavigationSection& step) { return step.disabledReason && std::string_view(a_section) == step.id; })))
 			return false;
 		if (state.canSelect && !state.canSelect(a_section))
 			return false;
@@ -164,7 +196,7 @@ namespace MenuUI
 		std::scoped_lock lock(navigationMutex);
 		const auto page = navigation.find(a_page);
 		if (page == navigation.end() || (std::string_view(a_section) != "overview" &&
-											std::ranges::none_of(page->second.sections, [&](const Section& step) { return step.visible && std::string_view(a_section) == step.id; })))
+											std::ranges::none_of(page->second.sections, [&](const NavigationSection& step) { return step.visible && std::string_view(a_section) == step.id; })))
 			return false;
 		return Select(a_page, a_section);
 	}
@@ -177,7 +209,9 @@ namespace MenuUI
 			auto tabs = nlohmann::json::array({ { { "id", "overview" }, { "title", "Overview" }, { "showTab", true }, { "enabled", true }, { "disabledReason", "" } } });
 			for (const auto& step : state.sections)
 				if (step.visible) {
-					const auto* reason = std::string_view(step.id) == "profiling" ? ProfilingRenderer::GetProfilingDisabledReason() : step.disabledReason;
+					const auto* reason = step.id == "profiling" ? ProfilingRenderer::GetProfilingDisabledReason() :
+					                     step.disabledReason    ? step.disabledReason->c_str() :
+					                                              nullptr;
 					tabs.push_back({ { "id", step.id }, { "title", step.title }, { "summary", step.summary }, { "showTab", step.showTab }, { "enabled", !reason }, { "disabledReason", reason ? reason : "" } });
 				}
 			result.push_back({ { "page", id }, { "selected", state.selected }, { "tabs", std::move(tabs) } });
@@ -213,7 +247,7 @@ namespace MenuUI
 		state.canSelect = std::move(a_canSelect);
 		bool rejectedSelection = false;
 		bool activatedTopTab = false;
-		state.sections = sections;
+		state.SetSections(sections);
 		if (state.selected != "overview" && std::ranges::none_of(sections, [&](const Section& step) {
 				return step.visible && !step.disabledReason && state.selected == step.id;
 			})) {

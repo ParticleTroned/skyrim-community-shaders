@@ -893,13 +893,13 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Wetterness/PuddleMask.hlsli"
 #		define CS_TEX_PRECIP_OCCLUSION Wetterness::TexPrecipOcclusion
 #		define CS_GET_RAIN_DROPS(worldPos, time, normal, strength) Wetterness::GetRainDrops(worldPos, time, normal, strength)
-#		define CS_REORIENT_NORMAL(n1, n2) Wetterness::ReorientNormal(n1, n2)
+#		define CS_REORIENT_NORMAL(n1, n2) ReorientNormal(n1, n2)
 #elif defined(WETNESS_EFFECTS)
 #		define CS_WETNESS_SETTINGS SharedData::wetnessEffectsSettings
 #		include "WetnessEffects/WetnessEffects.hlsli"
 #		define CS_TEX_PRECIP_OCCLUSION WetnessEffects::TexPrecipOcclusion
 #		define CS_GET_RAIN_DROPS(worldPos, time, normal, strength) WetnessEffects::GetRainDrops(worldPos, time, normal, strength)
-#		define CS_REORIENT_NORMAL(n1, n2) WetnessEffects::ReorientNormal(n1, n2)
+#		define CS_REORIENT_NORMAL(n1, n2) ReorientNormal(n1, n2)
 #endif
 
 #if defined(TERRAIN_BLENDING)
@@ -999,22 +999,19 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 	float3 viewDirection,
 	float waterHeight,
 	bool inWorld
-#if (!(defined(SKIN))) && (!(defined(HAIR)))
+#		if (!(defined(SKIN))) && (!(defined(HAIR)))
 	,
 	float3 surfaceBaseColor,
 	float surfaceRoughness
-#endif
-	,
-	float 1.0,
-	bool true
-#if defined(SKYLIGHTING)
+#		endif
+#		if defined(SKYLIGHTING)
 	,
 	sh2 skylightingSH
-#endif
-#if (defined(TERRAIN_VARIATION)) && (defined(LANDSCAPE))
+#		endif
+#		if (defined(TERRAIN_VARIATION)) && (defined(LANDSCAPE))
 	,
 	bool useTerrainVariation
-#endif
+#		endif
 )
 {
 	// Initialize wetness parameters
@@ -1195,7 +1192,7 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 			(CS_WETNESS_SETTINGS.EnableRaindropFx != 0) &&
 			openSkyVisibility > 0.5 &&
 			(rainDropDistance < maxRainDropDistance);
-		const bool raindropOcclusionNeeded = raindropFxActive && true && inRainBlend > 0.0;
+		const bool raindropOcclusionNeeded = raindropFxActive && inRainBlend > 0.0;
 		const bool shelterOcclusionNeeded = puddleOcclusionPhase * roofLikeMask > 1e-3;
 		if ((raindropOcclusionNeeded || shelterOcclusionNeeded) && hasOcclusionViewProj) {
 			float4 precipOcclusionTexCoord = mul(CS_WETNESS_SETTINGS.OcclusionViewProj, float4(input.WorldPosition.xyz, 1));
@@ -1228,8 +1225,8 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 			float openSkyMask = openSkyUpness * openSkyAmbient;
 			puddleRainExposure = lerp(puddleRainExposure, 1.0, openSkyMask);
 		}
-		if (raindropFxActive && true) {
-			float raindropFade = localRainOcclusion * distanceFadeout * 1.0;
+		if (raindropFxActive) {
+			float raindropFade = localRainOcclusion * distanceFadeout;
 
 			if (raindropFade > 0.0)
 #if defined(SKINNED)
@@ -1668,7 +1665,6 @@ struct WetnessDirectLightState
 	float roughness;
 	float pointLightRoughness;
 	float pointLightHighlightReduction;
-	float detailWeight;
 	WetnessDirectLightingParams params;
 };
 
@@ -1680,19 +1676,12 @@ WetnessDirectLightState CreateWetnessDirectLightState(
 	WetReflectionParams wetReflectionParams,
 	float wetDirectSpecularScale,
 	float raindropRippleMask,
-	float pointLightDarkness,
-	float 1.0,
-	bool true)
+	float pointLightDarkness)
 {
 	WetnessDirectLightState state = (WetnessDirectLightState)0;
 	state.normal = wetnessNormal;
 	state.roughness = waterRoughnessSpecular;
 	state.pointLightRoughness = waterRoughnessSpecular;
-	state.detailWeight = 1.0;
-
-	if (!true) {
-		return state;
-	}
 
 	const float wetnessStrength = saturate(1 - waterRoughnessSpecular);
 	if (wetnessStrength <= 0.0) {
@@ -1782,15 +1771,13 @@ WetnessLightingState CreateWetnessLightingState(
 	float wetDirectSpecularScale,
 	float raindropRippleMask,
 	float pointLightDarkness,
-#if defined(DYNAMIC_CUBEMAPS)
+#		if defined(DYNAMIC_CUBEMAPS)
 	float3 wetIndirectNormal,
 	float wetHighlightReflectanceScale,
 	float wetPuddleSkyReflectionScale,
-#endif
+#		endif
 	float postRainOverridePhase,
-	float postRainPuddleReflectionOverrideScale,
-	float 1.0,
-	bool true)
+	float postRainPuddleReflectionOverrideScale)
 {
 	WetnessLightingState state;
 #if defined(DYNAMIC_CUBEMAPS)
@@ -1826,9 +1813,7 @@ WetnessLightingState CreateWetnessLightingState(
 			wetReflectionParams,
 			wetDirectSpecularScale,
 			raindropRippleMask,
-			pointLightDarkness,
-			1.0,
-			true);
+			pointLightDarkness);
 	}
 	return state;
 }
@@ -3079,21 +3064,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		viewPosition,
 		viewDirection,
 		waterHeight,
-		inWorld,
-#if (!(defined(SKIN))) && (!(defined(HAIR)))
+		inWorld
+#		if (!(defined(SKIN))) && (!(defined(HAIR)))
+		,
 		wetnessSurfaceBaseColor,
-		wetnessSurfaceRoughness,
-#endif
-		1.0,
-		true
-#if defined(SKYLIGHTING)
+		wetnessSurfaceRoughness
+#		endif
+#		if defined(SKYLIGHTING)
 		,
 		skylightingSH
-#endif
-#if (defined(TERRAIN_VARIATION)) && (defined(LANDSCAPE))
+#		endif
+#		if (defined(TERRAIN_VARIATION)) && (defined(LANDSCAPE))
 		,
 		true
-#endif
+#		endif
 	);
 
 	float3 wetnessNormal = wetnessSurface.normal;
@@ -3376,16 +3360,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		wetDirectSpecularScale,
 		wetRaindropRippleMask,
 		wetPointLightDarkness,
-#if defined(DYNAMIC_CUBEMAPS)
+#		if defined(DYNAMIC_CUBEMAPS)
 		wetIndirectNormal,
 		wetHighlightReflectanceScale,
 		wetPuddleSkyReflectionScale,
-#endif
+#		endif
 		postRainOverridePhase,
-		postRainPuddleReflectionOverrideScale,
-		1.0,
-		true);
-#endif
+		postRainPuddleReflectionOverrideScale);
+#	endif
 
 	// Directiontal Lighting
 	DirectContext dirLightContext;

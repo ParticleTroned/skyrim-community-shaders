@@ -380,9 +380,9 @@ void LightEditor::DrawExternalEmittanceCombo()
 	EnsureEmittanceFormListBuilt();
 
 	static constexpr const char* kEmittanceComboId = "EmittanceFormCombo";
-	const char* kNoneLabel = "(None)";
+	const char* kNoneLabel = T("feature.light_editor.none", "(None)");
 	const char* preview = externalEmittanceEdid.empty() ? kNoneLabel : externalEmittanceEdid.c_str();
-	const auto externalEmittanceLabel = fmt::format("{}##combo", "External Emittance");
+	const auto externalEmittanceLabel = fmt::format("{}##combo", T("feature.light_editor.external_emittance", "External Emittance"));
 	if (auto combo = Util::Widgets::ComboBox(externalEmittanceLabel.c_str(), preview)) {
 		auto searchText = Util::DrawComboSearchInput(kEmittanceComboId);
 		if (searchText.empty() || Util::StringMatchesSearch(kNoneLabel, searchText)) {
@@ -492,7 +492,7 @@ std::string LightEditor::LighEdidForFormId(RE::FormID formId)
 void LightEditor::DrawSettings()
 {
 	if (State::GetSingleton()->IsPersistentMutationBlocked()) {
-		ImGui::TextDisabled(T("editor.light_editor.light_editor_is_unavailable_while_persistent_413ef544", "Light Editor is unavailable while persistent mutations are blocked."));
+		ImGui::TextDisabled("%s", T("editor.light_editor.light_editor_is_unavailable_while_persistent_413ef544", "Light Editor is unavailable while persistent mutations are blocked."));
 		return;
 	}
 
@@ -569,15 +569,15 @@ void LightEditor::DrawSettings()
 		const float arrowWidth = ImGui::GetFrameHeight();
 
 		const char* filterLabels[] = {
-			"Ref Lights",
-			"Attached Lights",
-			"Other Lights"
+			T("feature.light_editor.filter_ref_lights", "Ref Lights"),
+			T("feature.light_editor.filter_attached_lights", "Attached Lights"),
+			T("feature.light_editor.filter_other_lights", "Other Lights")
 		};
 		const char* sortLabels[] = {
-			"None",
-			"Distance",
-			"FormID",
-			"EditorID"
+			T("feature.light_editor.sort_none", "None"),
+			T("feature.light_editor.sort_distance", "Distance"),
+			T("feature.light_editor.sort_form_id", "FormID"),
+			T("feature.light_editor.sort_editor_id", "EditorID")
 		};
 
 		const float filterComboWidth = ImGui::CalcTextSize(filterLabels[static_cast<int>(FilterOption::AttachedLights)]).x + style.FramePadding.x * 2 + arrowWidth;
@@ -680,6 +680,7 @@ void LightEditor::DrawSettings()
 	}
 
 	ImGui::Spacing();
+	DrawWaterRoutingDiagnostics();
 
 	ImGui::Spacing();
 	ImGui::Separator();
@@ -732,8 +733,8 @@ void LightEditor::DrawSettings()
 					ReloadLPAndReselect();
 					lpMatchFound = true;
 				}
-				const std::string okMsg = fmt::format("Saved to {}", lpInfo.configPath);
-				NotifyResult(ok, okMsg.c_str(), "Save failed \xe2\x80\x94 see log");
+				const std::string okMsg = I18n::GetSingleton()->Format("feature.light_editor.saved_to_config", { { "path", lpInfo.configPath } }, "Saved to {path}");
+				NotifyResult(ok, okMsg.c_str(), T("feature.light_editor.save_failed", "Save failed \xe2\x80\x94 see log"));
 			}
 			if (!lpRawDataLoaded)
 				ImGui::EndDisabled();
@@ -748,10 +749,10 @@ void LightEditor::DrawSettings()
 		}
 
 		ImGui::SameLine();
-		if (Util::ErrorButton("Delete"))
+		if (Util::ErrorButton(T("feature.light_editor.delete_entry", "Delete")))
 			deleteConfirmPopupRequested = true;
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", "Delete this light from Light Placer JSON. If it is the entry's only light, its models/formIDs entry is also removed.");
+			ImGui::Text("%s", T("feature.light_editor.delete_entry_tooltip", "Delete this light entry from the Light Placer JSON.\nIf it is the only light in its entry, the whole models/formIDs entry is removed too."));
 		}
 		DrawDeleteConfirmation();
 	}
@@ -764,8 +765,8 @@ void LightEditor::DrawSettings()
 	if (lpInfo.isLPLight) {
 		auto doFilterButton = [&](bool isWhiteList) {
 			bool& inList = isWhiteList ? lpInWhitelist : lpInBlacklist;
-			const char* addLabel = isWhiteList ? "Add to Whitelist" : "Add to Blacklist";
-			const char* removeLabel = isWhiteList ? "Remove from Whitelist" : "Remove from Blacklist";
+			const char* addLabel = isWhiteList ? T("feature.light_editor.add_to_whitelist", "Add to Whitelist") : T("feature.light_editor.add_to_blacklist", "Add to Blacklist");
+			const char* removeLabel = isWhiteList ? T("feature.light_editor.remove_from_whitelist", "Remove from Whitelist") : T("feature.light_editor.remove_from_blacklist", "Remove from Blacklist");
 			const ImVec4 activeColor = isWhiteList ? Util::Colors::GetSuccess() : Util::Colors::GetError();
 
 			bool clicked = false;
@@ -783,7 +784,7 @@ void LightEditor::DrawSettings()
 			if (clicked) {
 				if (ModifyLPFilterList(isWhiteList, !inList)) {
 					inList = !inList;
-					const char* msg = inList ? (isWhiteList ? "Added to whitelist" : "Added to blacklist") : (isWhiteList ? "Removed from whitelist" : "Removed from blacklist");
+					const char* msg = inList ? (isWhiteList ? T("feature.light_editor.added_to_whitelist", "Added to whitelist") : T("feature.light_editor.added_to_blacklist", "Added to blacklist")) : (isWhiteList ? T("feature.light_editor.removed_from_whitelist", "Removed from whitelist") : T("feature.light_editor.removed_from_blacklist", "Removed from blacklist"));
 					EditorWindow::GetSingleton()->ShowNotification(msg, Util::Colors::GetInfo());
 				} else {
 					EditorWindow::GetSingleton()->ShowNotification(T("feature.light_editor.filter_update_failed", "Filter update failed \xe2\x80\x94 see log"), Util::Colors::GetError());
@@ -805,8 +806,8 @@ void LightEditor::DrawSettings()
 				lpInBlacklist = true;
 			}
 			NotifyResult(ok,
-				"Saved as separate entry",
-				"Save failed \xe2\x80\x94 see log");
+				T("feature.light_editor.saved_as_separate_entry", "Saved as separate entry"),
+				T("feature.light_editor.save_failed", "Save failed \xe2\x80\x94 see log"));
 		}
 		if (!lpRawDataLoaded)
 			ImGui::EndDisabled();
@@ -825,13 +826,13 @@ void LightEditor::DrawSettings()
 
 	if (selected.isAttached) {
 		EnsureLighFormListBuilt();
-		const char* kOriginalLabel = "(Original)";
+		const char* kOriginalLabel = T("feature.light_editor.original", "(Original)");
 		const char* previewEdid = kOriginalLabel;
 		if (const auto* edid = LighEdidPtrForFormId(current.data.lighFormId))
 			previewEdid = edid->c_str();
 
 		static constexpr const char* kLighOverrideId = "LighFormOverride";
-		const auto bulbTypeLabel = fmt::format("{}##combo", "Bulb type");
+		const auto bulbTypeLabel = fmt::format("{}##combo", T("feature.light_editor.bulb_type", "Bulb type"));
 		if (auto combo = Util::Widgets::ComboBox(bulbTypeLabel.c_str(), previewEdid)) {
 			auto searchText = Util::DrawComboSearchInput(kLighOverrideId);
 			if (searchText.empty() || Util::StringMatchesSearch(kOriginalLabel, searchText)) {
@@ -880,10 +881,10 @@ void LightEditor::DrawSettings()
 	WeatherUtils::DrawColorEdit("Color", reinterpret_cast<float3&>(current.data.diffuse));
 	if (lpInfo.isLPLight) {
 		ImGui::SameLine();
-		const auto saveColorLabel = fmt::format("{}##color", "Save");
+		const auto saveColorLabel = fmt::format("{}##color", T("feature.light_editor.save_color", "Save"));
 		Util::Widgets::Checkbox(saveColorLabel.c_str(), &saveColorToLP);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", "Save color to Light Placer. Unchecked preserves the existing JSON color.");
+			ImGui::Text("%s", T("feature.light_editor.save_color_preserve_tooltip", "Save color to Light Placer. Unchecked preserves the existing JSON color."));
 		}
 	}
 
@@ -901,21 +902,21 @@ void LightEditor::DrawSettings()
 	const auto isInvSq = current.data.flags.any(LightLimitFix::LightFlags::InverseSquare);
 
 	// "Intensity" is only meaningful for Inverse Square bulbs; otherwise this value is the light's fade.
-	const char* fadeLabel = isInvSq ? "Intensity" : "Fade";
+	const char* fadeLabel = isInvSq ? T("feature.light_editor.intensity", "Intensity") : T("feature.light_editor.fade", "Fade");
 	drawSlider(fadeLabel, current.data.fade, 0.01f, 16.f, 0.01f, 1024.f, "%.3f");
 
 	if (isInvSq)
 		ImGui::Text(T("feature.light_editor.radius_value", "Radius: %.0f"), computedInverseSquareRadius);
 	else
-		drawSlider("Radius", current.data.radius, 2.f, 8096.f, 2.f, 65536.f, "%.0f");
+		drawSlider(T("feature.light_editor.radius", "Radius"), current.data.radius, 2.f, 8096.f, 2.f, 65536.f, "%.0f");
 
 	if (isInvSq) {
-		drawSlider("Size", current.data.size, 0.01f, 10.0f, 0.01f, 50.0f, "%.3f");
-		WeatherUtils::DrawSliderFloat("Cutoff", current.data.cutoffOverride, 0.01f, 1.f, nullptr, "%.3f");
+		drawSlider(T("feature.light_editor.size", "Size"), current.data.size, 0.01f, 10.0f, 0.01f, 50.0f, "%.3f");
+		WeatherUtils::DrawSliderFloat(T("feature.light_editor.cutoff", "Cutoff"), current.data.cutoffOverride, 0.01f, 1.f, nullptr, "%.3f");
 	}
 
 	if (HasShadowFlags(current.tesFlags.underlying())) {
-		if (drawSlider("Shadow Depth Bias", shadowDepthBias, 0.0f, 50.0f, 0.01f, 50.f, "%.2f"))
+		if (drawSlider(T("feature.light_editor.shadow_depth_bias", "Shadow Depth Bias"), shadowDepthBias, 0.0f, 50.0f, 0.01f, 50.f, "%.2f"))
 			ApplyShadowDepthBias();
 	}
 
@@ -1113,6 +1114,215 @@ void LightEditor::DrawAddLightButton()
 	}
 }
 
+void LightEditor::DrawWaterRoutingDiagnostics() const
+{
+	const auto& diagnostics = waterRoutingDiagnostics;
+	ImGui::SeparatorText(T("feature.light_editor.water_routing_diagnostics", "Water Routing Diagnostics"));
+
+	if (!diagnostics.available) {
+		ImGui::TextDisabled("%s", T("feature.light_editor.water_routing_unavailable", "Runtime light data unavailable."));
+		return;
+	}
+
+	const char* yes = T("feature.light_editor.yes", "Yes");
+	const char* no = T("feature.light_editor.no", "No");
+	if (!ImGui::BeginTable("##WaterRoutingDiagnostics", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+		return;
+
+	auto drawRow = [](const char* label, const char* value, const char* tooltip = nullptr) {
+		ImGui::TableNextRow();
+		ImGui::TableSetColumnIndex(0);
+		ImGui::TextWrapped("%s", label);
+		if (tooltip) {
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(tooltip);
+		}
+		ImGui::TableSetColumnIndex(1);
+		ImGui::TextWrapped("%s", value);
+	};
+
+	drawRow(T("feature.light_editor.runtime_portal_strict", "Runtime Portal Strict"), diagnostics.portalStrict ? yes : no);
+	drawRow(T("feature.light_editor.portal_graph_present", "Portal Graph Present"), diagnostics.portalGraphPresent ? yes : no);
+	drawRow(T("feature.light_editor.affects_water", "Affects Water"), diagnostics.affectWater ? yes : no);
+	drawRow(T("feature.light_editor.shadow_light", "Shadow Light"), diagnostics.shadow ? yes : no);
+	drawRow(
+		T("feature.light_editor.llf_water_candidate", "LLF Water Candidate"),
+		diagnostics.llfWaterCandidate ? yes : no,
+		T("feature.light_editor.llf_water_candidate_tooltip",
+			"Current LLF-owned clustered-water path before cluster, range, intensity, and room culling."));
+	drawRow(
+		T("feature.light_editor.skyrim_water_pass_eligible", "Skyrim Water-Pass Eligible"),
+		diagnostics.skyrimWaterPassEligible ? yes : no,
+		T("feature.light_editor.skyrim_water_pass_eligible_tooltip",
+			"Computed from Affects Water and the LLF ownership gate. Pass observations provide the runtime proof."));
+	drawRow(
+		T("feature.light_editor.potential_duplicate_water_route", "Potential Duplicate Water Route"),
+		diagnostics.llfWaterCandidate && diagnostics.skyrimWaterPassEligible ? yes : no);
+
+	if (!diagnostics.observerAvailable) {
+		drawRow(
+			T("feature.light_editor.water_pass_observation", "Water-Pass Observation"),
+			T("feature.light_editor.unavailable", "Unavailable"),
+			T("feature.light_editor.water_pass_observation_unavailable_tooltip",
+				"Actual water-pass observation requires the Light Limit Fix hook."));
+	} else {
+		const auto waterPassCount = diagnostics.waterPassCount.load(std::memory_order_acquire);
+		const auto matchedWaterPassCount = diagnostics.matchedWaterPassCount.load(std::memory_order_acquire);
+		const auto waterPassCountText = fmt::format("{}", waterPassCount);
+		const auto matchedWaterPassCountText = fmt::format("{}", matchedWaterPassCount);
+		drawRow(T("feature.light_editor.water_pass_calls", "Water-Pass Calls"), waterPassCountText.c_str());
+		drawRow(T("feature.light_editor.selected_light_pass_matches", "Selected-Light Pass Matches"), matchedWaterPassCountText.c_str());
+
+		if (matchedWaterPassCount > 0) {
+			const auto lastMatchText = fmt::format(
+				"pass=0x{:X}, sceneSlot={}, sceneLights={}",
+				diagnostics.lastPassEnum.load(std::memory_order_relaxed),
+				diagnostics.lastSceneLightIndex.load(std::memory_order_relaxed),
+				diagnostics.lastSceneLightCount.load(std::memory_order_relaxed));
+			drawRow(T("feature.light_editor.last_water_pass_match", "Last Water-Pass Match"), lastMatchText.c_str());
+		}
+	}
+
+	ImGui::EndTable();
+}
+
+void LightEditor::UpdateWaterRoutingDiagnostics(RE::BSLight* bsLight, RE::NiLight* niLight)
+{
+	if (!bsLight || !niLight) {
+		ClearWaterRoutingDiagnostics();
+		return;
+	}
+
+	auto& diagnostics = waterRoutingDiagnostics;
+	const bool observerAvailable = globals::features::lightLimitFix.loaded;
+	const bool portalStrict = bsLight->portalStrict;
+	const bool portalGraphPresent = bsLight->portalGraph != nullptr;
+	const bool affectWater = bsLight->affectWater;
+	const bool shadow = bsLight->IsShadowLight();
+	const bool llfShaderActive =
+		globals::features::lightLimitFix.loaded &&
+		globals::shaderCache &&
+		globals::shaderCache->IsEnabled();
+	const bool llfWaterCandidate =
+		llfShaderActive &&
+		LightLimitFix::UsesClusteredWaterPath(bsLight) &&
+		!niLight->GetFlags().any(RE::NiAVObject::Flag::kHidden);
+	const bool skyrimWaterPassEligible =
+		affectWater &&
+		(!globals::features::lightLimitFix.loaded || LightLimitFix::RequiresEngineLightPath(bsLight));
+
+	const bool classificationChanged =
+		!diagnostics.available ||
+		diagnostics.observerAvailable != observerAvailable ||
+		diagnostics.portalStrict != portalStrict ||
+		diagnostics.portalGraphPresent != portalGraphPresent ||
+		diagnostics.affectWater != affectWater ||
+		diagnostics.shadow != shadow ||
+		diagnostics.llfWaterCandidate != llfWaterCandidate ||
+		diagnostics.skyrimWaterPassEligible != skyrimWaterPassEligible;
+	const bool targetChanged = diagnostics.target.load(std::memory_order_acquire) != bsLight;
+
+	if (targetChanged || classificationChanged) {
+		diagnostics.target.store(nullptr, std::memory_order_release);
+		diagnostics.waterPassCount.store(0, std::memory_order_relaxed);
+		diagnostics.matchedWaterPassCount.store(0, std::memory_order_relaxed);
+		diagnostics.lastPassEnum.store(0, std::memory_order_relaxed);
+		diagnostics.lastSceneLightIndex.store(0, std::memory_order_relaxed);
+		diagnostics.lastSceneLightCount.store(0, std::memory_order_relaxed);
+	}
+
+	diagnostics.available = true;
+	diagnostics.observerAvailable = observerAvailable;
+	diagnostics.portalStrict = portalStrict;
+	diagnostics.portalGraphPresent = portalGraphPresent;
+	diagnostics.affectWater = affectWater;
+	diagnostics.shadow = shadow;
+	diagnostics.llfWaterCandidate = llfWaterCandidate;
+	diagnostics.skyrimWaterPassEligible = skyrimWaterPassEligible;
+	diagnostics.target.store(bsLight, std::memory_order_release);
+
+	if (targetChanged || classificationChanged) {
+		logger::debug(
+			"[LightEditor] Water routing selection: BSLight=0x{:X}, NiLight=0x{:X}, "
+			"portalStrict={}, portalGraphPresent={}, portalGraph=0x{:X}, affectWater={}, shadow={}, "
+			"llfWaterCandidate={}, skyrimWaterPassEligible={}",
+			reinterpret_cast<std::uintptr_t>(bsLight),
+			reinterpret_cast<std::uintptr_t>(niLight),
+			portalStrict,
+			portalGraphPresent,
+			reinterpret_cast<std::uintptr_t>(bsLight->portalGraph),
+			affectWater,
+			shadow,
+			llfWaterCandidate,
+			skyrimWaterPassEligible);
+	}
+}
+
+void LightEditor::ClearWaterRoutingDiagnostics()
+{
+	auto& diagnostics = waterRoutingDiagnostics;
+	auto* target = diagnostics.target.exchange(nullptr, std::memory_order_acq_rel);
+	if (target && diagnostics.available) {
+		logger::debug(
+			"[LightEditor] Water routing summary: BSLight=0x{:X}, waterPassCalls={}, "
+			"selectedLightPassMatches={}, lastPass=0x{:X}, lastSceneSlot={}, lastSceneLights={}",
+			reinterpret_cast<std::uintptr_t>(target),
+			diagnostics.waterPassCount.load(std::memory_order_relaxed),
+			diagnostics.matchedWaterPassCount.load(std::memory_order_relaxed),
+			diagnostics.lastPassEnum.load(std::memory_order_relaxed),
+			diagnostics.lastSceneLightIndex.load(std::memory_order_relaxed),
+			diagnostics.lastSceneLightCount.load(std::memory_order_relaxed));
+	}
+	diagnostics.available = false;
+	diagnostics.observerAvailable = false;
+	diagnostics.portalStrict = false;
+	diagnostics.portalGraphPresent = false;
+	diagnostics.affectWater = false;
+	diagnostics.shadow = false;
+	diagnostics.llfWaterCandidate = false;
+	diagnostics.skyrimWaterPassEligible = false;
+	diagnostics.waterPassCount.store(0, std::memory_order_relaxed);
+	diagnostics.matchedWaterPassCount.store(0, std::memory_order_relaxed);
+	diagnostics.lastPassEnum.store(0, std::memory_order_relaxed);
+	diagnostics.lastSceneLightIndex.store(0, std::memory_order_relaxed);
+	diagnostics.lastSceneLightCount.store(0, std::memory_order_relaxed);
+}
+
+void LightEditor::ObserveWaterPass(RE::BSRenderPass* pass)
+{
+	auto& diagnostics = waterRoutingDiagnostics;
+	auto* target = diagnostics.target.load(std::memory_order_acquire);
+	if (!target)
+		return;
+
+	diagnostics.waterPassCount.fetch_add(1, std::memory_order_relaxed);
+	if (!pass || !pass->sceneLights)
+		return;
+
+	const uint32_t sceneLightCount = pass->numLights;
+	for (uint32_t sceneLightIndex = 0; sceneLightIndex < sceneLightCount; ++sceneLightIndex) {
+		if (pass->sceneLights[sceneLightIndex] != target)
+			continue;
+		if (diagnostics.target.load(std::memory_order_acquire) != target)
+			return;
+
+		diagnostics.lastPassEnum.store(pass->passEnum, std::memory_order_relaxed);
+		diagnostics.lastSceneLightIndex.store(sceneLightIndex, std::memory_order_relaxed);
+		diagnostics.lastSceneLightCount.store(sceneLightCount, std::memory_order_relaxed);
+		const auto previousMatchCount = diagnostics.matchedWaterPassCount.fetch_add(1, std::memory_order_release);
+		if (previousMatchCount == 0) {
+			logger::debug(
+				"[LightEditor] Selected BSLight 0x{:X} observed in Skyrim water pass "
+				"(pass=0x{:X}, sceneSlot={}, sceneLights={})",
+				reinterpret_cast<std::uintptr_t>(target),
+				pass->passEnum,
+				sceneLightIndex,
+				sceneLightCount);
+		}
+		return;
+	}
+}
+
 std::vector<std::string> LightEditor::ScanLPConfigPaths() const
 {
 	std::vector<std::string> paths;
@@ -1181,9 +1391,9 @@ void LightEditor::ReloadLPAndReselect()
 int LightEditor::DrawAttachedBulbCombo(const char* searchId, bool openNow)
 {
 	int clicked = -1;
-	const char* preview = (addSelectedBulb >= 0 && addSelectedBulb < (int)attachedBulbs.size()) ? attachedBulbs[addSelectedBulb].lightEDID.c_str() : "Select a bulb";
+	const char* preview = (addSelectedBulb >= 0 && addSelectedBulb < (int)attachedBulbs.size()) ? attachedBulbs[addSelectedBulb].lightEDID.c_str() : T("feature.light_editor.select_a_bulb", "Select a bulb");
 	std::string_view filter;
-	if (auto combo = BeginSearchableCombo("Attached bulb", preview, searchId, addBulbSearch, sizeof(addBulbSearch), filter, openNow)) {
+	if (auto combo = BeginSearchableCombo(T("feature.light_editor.attached_bulb", "Attached bulb"), preview, searchId, addBulbSearch, sizeof(addBulbSearch), filter, openNow)) {
 		for (int i = 0; i < (int)attachedBulbs.size(); ++i) {
 			const auto& bulb = attachedBulbs[i];
 			const std::string label = fmt::format("{}[{}]  ({})", bulb.lightEDID, bulb.index, bulb.configPath);
@@ -1204,11 +1414,11 @@ int LightEditor::DrawAttachedBulbCombo(const char* searchId, bool openNow)
 void LightEditor::DrawLightRecordCombo(const char* searchId)
 {
 	EnsureLighFormListBuilt();
-	const char* preview = "Select a light";
+	const char* preview = T("feature.light_editor.select_a_light", "Select a light");
 	if (const auto* edid = LighEdidPtrForFormId(addSelectedLighFormId))
 		preview = edid->c_str();
 	std::string_view filter;
-	if (auto combo = BeginSearchableCombo("Light record", preview, searchId, addLighSearch, sizeof(addLighSearch), filter, false)) {
+	if (auto combo = BeginSearchableCombo(T("feature.light_editor.light_record", "Light record"), preview, searchId, addLighSearch, sizeof(addLighSearch), filter, false)) {
 		for (auto& [edid, ligh] : s_lighFormList) {
 			if (!MatchesComboFilter(filter, edid))
 				continue;
@@ -1264,12 +1474,13 @@ void LightEditor::ResetAddLightPopupState(bool requestClose)
 
 void LightEditor::DrawAddLightPopup()
 {
+	const auto popupTitle = fmt::format("{}###Select Mesh", T("feature.light_editor.select_mesh", "Select Mesh"));
 	if (addLightPopupOpen) {
 		if (!addPopupPrefsLoaded) {
 			LoadPopupPrefs();
 			addPopupPrefsLoaded = true;
 		}
-		ImGui::OpenPopup("Select Mesh");
+		ImGui::OpenPopup(popupTitle.c_str());
 		addLightPopupOpen = false;
 	}
 
@@ -1278,7 +1489,7 @@ void LightEditor::DrawAddLightPopup()
 	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
 	ImGui::SetNextWindowPos(ImVec2(displaySize.x * 0.5f, displaySize.y * 0.1f), ImGuiCond_Appearing, ImVec2(0.5f, 0.0f));
 	ImGui::SetNextWindowSize(ImVec2(520 * scale, 0), ImGuiCond_Appearing);
-	if (ImGui::BeginPopupModal("Select Mesh", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+	if (ImGui::BeginPopupModal(popupTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
 		if (addLightPopupCloseRequested) {
 			ImGui::CloseCurrentPopup();
 			addLightPopupCloseRequested = false;
@@ -1294,7 +1505,7 @@ void LightEditor::DrawAddLightPopup()
 
 		auto notifyAddFailed = [] {
 			EditorWindow::GetSingleton()->ShowNotification(
-				"Failed to add light \xE2\x80\x94 see log",
+				T("feature.light_editor.add_light_failed", "Failed to add light \xE2\x80\x94 see log"),
 				Util::Colors::GetError());
 		};
 
@@ -1328,8 +1539,8 @@ void LightEditor::DrawAddLightPopup()
 			}
 		};
 
-		const char* noBulbsTip = "This mesh has no attached Light Placer bulbs.";
-		drawModeBtn("Add Light", ModeAddLight, true, "");
+		const char* noBulbsTip = T("feature.light_editor.no_attached_bulbs", "This mesh has no attached Light Placer bulbs.");
+		drawModeBtn(T("feature.light_editor.mode_add_light", "Add Light"), ModeAddLight, true, "");
 		ImGui::SameLine();
 		// Single bulb: "Edit Bulb" fires immediately without entering the mode.
 		if (hasBulbs && attachedBulbs.size() == 1) {
@@ -1345,16 +1556,16 @@ void LightEditor::DrawAddLightPopup()
 				ImGui::CloseCurrentPopup();
 			}
 		} else {
-			drawModeBtn("Edit Bulb", ModeEditBulb, hasBulbs, noBulbsTip);
+			drawModeBtn(T("feature.light_editor.mode_edit_bulb", "Edit Bulb"), ModeEditBulb, hasBulbs, noBulbsTip);
 		}
 		ImGui::SameLine();
-		drawModeBtn("Add to Whitelist", ModeWhitelist, hasBulbs, noBulbsTip);
+		drawModeBtn(T("feature.light_editor.add_to_whitelist", "Add to Whitelist"), ModeWhitelist, hasBulbs, noBulbsTip);
 		ImGui::SameLine();
-		drawModeBtn("Add to Blacklist", ModeBlacklist, hasBulbs, noBulbsTip);
+		drawModeBtn(T("feature.light_editor.add_to_blacklist", "Add to Blacklist"), ModeBlacklist, hasBulbs, noBulbsTip);
 		ImGui::SameLine();
-		drawModeBtn("Remove from List", ModeRemoveFromList,
+		drawModeBtn(T("feature.light_editor.mode_remove_from_list", "Remove from List"), ModeRemoveFromList,
 			!filterListEntries.empty(),
-			"This mesh has no whitelist or blacklist entries.");
+			T("feature.light_editor.no_filter_list_entries", "This mesh has no whitelist or blacklist entries."));
 		ImGui::Separator();
 
 		if (addPopupMode == ModeAddLight) {
@@ -1364,18 +1575,18 @@ void LightEditor::DrawAddLightPopup()
 			};
 
 			if (hasBulbs) {
-				drawSubModeBtn("Add new point", SubModeNewPoint);
+				drawSubModeBtn(T("feature.light_editor.sub_mode_new_point", "Add new point"), SubModeNewPoint);
 				ImGui::SameLine();
-				drawSubModeBtn("Add to entry", SubModeToEntry);
+				drawSubModeBtn(T("feature.light_editor.sub_mode_to_entry", "Add to entry"), SubModeToEntry);
 				ImGui::SameLine();
-				drawSubModeBtn("Add new entry", SubModeNewEntry);
+				drawSubModeBtn(T("feature.light_editor.sub_mode_new_entry", "Add new entry"), SubModeNewEntry);
 				ImGui::Separator();
 			}
 
 			if (!hasBulbs || addLightSubMode == SubModeNewEntry) {
-				const char* configPreview = (addSelectedConfig >= 0 && addSelectedConfig < (int)lpConfigPaths.size()) ? lpConfigPaths[addSelectedConfig].c_str() : "Select a config";
+				const char* configPreview = (addSelectedConfig >= 0 && addSelectedConfig < (int)lpConfigPaths.size()) ? lpConfigPaths[addSelectedConfig].c_str() : T("feature.light_editor.select_a_config", "Select a config");
 				std::string_view cfgFilter;
-				if (auto combo = BeginSearchableCombo("Target JSON", configPreview, "##cfg_search", addConfigSearch, sizeof(addConfigSearch), cfgFilter, false)) {
+				if (auto combo = BeginSearchableCombo(T("feature.light_editor.target_json", "Target JSON"), configPreview, "##cfg_search", addConfigSearch, sizeof(addConfigSearch), cfgFilter, false)) {
 					if (lpConfigPaths.empty())
 						ImGui::TextDisabled("%s", T("feature.light_editor.no_configs_found", "No configs found in Data\\LightPlacer\\"));
 					for (int i = 0; i < (int)lpConfigPaths.size(); ++i) {
@@ -1398,11 +1609,11 @@ void LightEditor::DrawAddLightPopup()
 							addAttachMode = mode;
 					};
 
-					drawAttachBtn("Model", 0, !pickedMesh.modelPath.empty(), "No model path on this object.");
+					drawAttachBtn(T("feature.light_editor.attach_model", "Model"), 0, !pickedMesh.modelPath.empty(), T("feature.light_editor.no_model_path", "No model path on this object."));
 					ImGui::SameLine();
-					drawAttachBtn("FormID", 1, !pickedMesh.sourcePlugin.empty(), "No source plugin on this object.");
+					drawAttachBtn(T("feature.light_editor.attach_form_id", "FormID"), 1, !pickedMesh.sourcePlugin.empty(), T("feature.light_editor.no_source_plugin", "No source plugin on this object."));
 					ImGui::SameLine();
-					drawAttachBtn("EditorID", 2, !pickedMesh.editorId.empty(), "No EditorID on this object.");
+					drawAttachBtn(T("feature.light_editor.attach_editor_id", "EditorID"), 2, !pickedMesh.editorId.empty(), T("feature.light_editor.no_editor_id_on_object", "No EditorID on this object."));
 				}
 
 				if (addSelectedConfig >= 0 && addAttachMode >= 0)
@@ -1525,18 +1736,18 @@ void LightEditor::DrawAddLightPopup()
 					if (selectableButton(label, addFilterEntryType == type, available, unavailTip))
 						addFilterEntryType = type;
 				};
-				drawEntryTypeBtn("Reference", 0, true, "");
+				drawEntryTypeBtn(T("feature.light_editor.entry_type_reference", "Reference"), 0, true, "");
 				ImGui::SameLine();
-				drawEntryTypeBtn("Cell", 1,
+				drawEntryTypeBtn(T("feature.light_editor.entry_type_cell", "Cell"), 1,
 					!cellEdid.empty(),
-					"This mesh's cell has no EditorID.");
+					T("feature.light_editor.no_cell_editor_id", "This mesh's cell has no EditorID."));
 			}
 
 			ImGui::Separator();
 			const bool bulbChosen = (addSelectedBulb >= 0 && addSelectedBulb < (int)attachedBulbs.size());
 			// Append ##confirm to the label so the button has a unique ImGui ID distinct
 			// from the identically-labelled mode selector button rendered in the same popup.
-			const std::string confirmLabel = std::string(addPopupMode == ModeWhitelist ? "Add to Whitelist" : "Add to Blacklist") + "##confirm";
+			const std::string confirmLabel = std::string(addPopupMode == ModeWhitelist ? T("feature.light_editor.add_to_whitelist", "Add to Whitelist") : T("feature.light_editor.add_to_blacklist", "Add to Blacklist")) + "##confirm";
 			ImGui::BeginDisabled(!bulbChosen);
 			const bool confirm = ImGui::Button(confirmLabel.c_str());
 			ImGui::EndDisabled();
@@ -1560,17 +1771,17 @@ void LightEditor::DrawAddLightPopup()
 				if (ok)
 					ScheduleConsoleCommand("reloadlp");
 				NotifyResult(ok,
-					isWhite ? "Added to whitelist" : "Added to blacklist",
-					"Filter update failed \xe2\x80\x94 see log");
+					isWhite ? T("feature.light_editor.added_to_whitelist", "Added to whitelist") : T("feature.light_editor.added_to_blacklist", "Added to blacklist"),
+					T("feature.light_editor.filter_update_failed", "Filter update failed \xe2\x80\x94 see log"));
 				SavePopupPrefs();
 				ImGui::CloseCurrentPopup();
 			}
 		}
 
 		if (addPopupMode == ModeRemoveFromList) {
-			const char* filterPreview = (addSelectedFilterEntry >= 0 && addSelectedFilterEntry < (int)filterListEntries.size()) ? filterListEntries[addSelectedFilterEntry].lightEDID.c_str() : "Select a bulb";
+			const char* filterPreview = (addSelectedFilterEntry >= 0 && addSelectedFilterEntry < (int)filterListEntries.size()) ? filterListEntries[addSelectedFilterEntry].lightEDID.c_str() : T("feature.light_editor.select_a_bulb", "Select a bulb");
 			std::string_view filterSv;
-			if (auto combo = BeginSearchableCombo("Attached bulb", filterPreview, "##filter_search", addFilterSearch, sizeof(addFilterSearch), filterSv, false)) {
+			if (auto combo = BeginSearchableCombo(T("feature.light_editor.attached_bulb", "Attached bulb"), filterPreview, "##filter_search", addFilterSearch, sizeof(addFilterSearch), filterSv, false)) {
 				for (int i = 0; i < (int)filterListEntries.size(); ++i) {
 					const auto& fe = filterListEntries[i];
 					const std::string lbl = fmt::format("[{}]  {}  ({})  \"{}\"",
@@ -1600,8 +1811,8 @@ void LightEditor::DrawAddLightPopup()
 				if (ok)
 					ScheduleConsoleCommand("reloadlp");
 				NotifyResult(ok,
-					"Removed from list",
-					"Filter update failed \xe2\x80\x94 see log");
+					T("feature.light_editor.removed_from_list", "Removed from list"),
+					T("feature.light_editor.filter_update_failed", "Filter update failed \xe2\x80\x94 see log"));
 				SavePopupPrefs();
 				ImGui::CloseCurrentPopup();
 			}
@@ -1639,31 +1850,31 @@ std::string LightEditor::AddEntryTargetString() const
 bool LightEditor::CanAddBulb(std::string& reasonOut) const
 {
 	if (!ValidatedPickedRefr()) {
-		reasonOut = "Picked object has no base record.";
+		reasonOut = T("feature.light_editor.no_base_record", "Picked object has no base record.");
 		return false;
 	}
 	if (addSelectedConfig < 0 || addSelectedConfig >= (int)lpConfigPaths.size()) {
-		reasonOut = "Choose a target JSON.";
+		reasonOut = T("feature.light_editor.choose_target_json", "Choose a target JSON.");
 		return false;
 	}
 	if (addAttachMode < 0) {
-		reasonOut = "Choose an attach type (Model, FormID, or EditorID).";
+		reasonOut = T("feature.light_editor.choose_attach_type", "Choose an attach type (Model, FormID, or EditorID).");
 		return false;
 	}
 	if (addSelectedLighFormId == 0) {
-		reasonOut = "Choose a light record.";
+		reasonOut = T("feature.light_editor.choose_light_record", "Choose a light record.");
 		return false;
 	}
 	if (addAttachMode == 0 && pickedMesh.modelPath.empty()) {
-		reasonOut = "This object has no model path.";
+		reasonOut = T("feature.light_editor.object_no_model_path", "This object has no model path.");
 		return false;
 	}
 	if (addAttachMode == 1 && pickedMesh.sourcePlugin.empty()) {
-		reasonOut = "This object has no source plugin for a FormID entry.";
+		reasonOut = T("feature.light_editor.object_no_source_plugin", "This object has no source plugin for a FormID entry.");
 		return false;
 	}
 	if (addAttachMode == 2 && pickedMesh.editorId.empty()) {
-		reasonOut = "This object has no EditorID.";
+		reasonOut = T("feature.light_editor.object_no_editor_id", "This object has no EditorID.");
 		return false;
 	}
 
@@ -1868,7 +2079,7 @@ void LightEditor::TickDeferredWork()
 				pendingAutoSelectTTL = 10;
 				filterOption = FilterOption::AttachedLights;
 				EditorWindow::GetSingleton()->ShowNotification(
-					fmt::format("Added light to {}", attachConfigPath).c_str(),
+					I18n::GetSingleton()->Format("feature.light_editor.added_light_to_config", { { "path", attachConfigPath } }, "Added light to {path}").c_str(),
 					Util::Colors::GetSuccess());
 				break;
 			default:
@@ -2351,6 +2562,7 @@ void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH
 	activeBsLight.reset(bsLight);
 	if (runtimeInstanceChanged)
 		ApplyShadowDepthBias();
+	UpdateWaterRoutingDiagnostics(bsLight, niLight);
 
 	if (current.data.flags.any(LightLimitFix::LightFlags::InverseSquare)) {
 		const bool isShadow = bsLight && bsLight->IsShadowLight();
@@ -2468,6 +2680,7 @@ bool LightEditor::ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDa
 
 void LightEditor::RestoreOriginal()
 {
+	ClearWaterRoutingDiagnostics();
 	if (!activeNiLight) {
 		activeBsLight.reset();
 		lpRawDataLoaded = false;
@@ -3082,18 +3295,19 @@ bool LightEditor::DeleteFromLightPlacer()
 
 void LightEditor::DrawDeleteConfirmation()
 {
+	const auto popupTitle = fmt::format("{}###Delete", T("feature.light_editor.delete_entry", "Delete"));
 	if (deleteConfirmPopupRequested) {
-		ImGui::OpenPopup("Delete");
+		ImGui::OpenPopup(popupTitle.c_str());
 		deleteConfirmPopupRequested = false;
 	}
 
-	if (auto popup = Util::CenteredPopupModal("Delete")) {
+	if (auto popup = Util::CenteredPopupModal(popupTitle.c_str())) {
 		ImGui::Text("%s", T("feature.light_editor.confirm_delete_entry", "Delete this light entry from the Light Placer JSON?"));
 		ImGui::Spacing();
 		ImGui::Separator();
 		ImGui::Spacing();
 
-		if (Util::ErrorButton("Yes, Delete")) {
+		if (Util::ErrorButton(T("feature.light_editor.yes_delete", "Yes, Delete"))) {
 			const bool ok = DeleteFromLightPlacer();
 			if (ok) {
 				RestoreOriginal();
@@ -3103,8 +3317,8 @@ void LightEditor::DrawDeleteConfirmation()
 				ScheduleConsoleCommand("reloadlp");
 			}
 			NotifyResult(ok,
-				"Deleted entry",
-				"Delete failed \xe2\x80\x94 see log");
+				T("feature.light_editor.deleted_entry", "Deleted entry"),
+				T("feature.light_editor.delete_failed", "Delete failed \xe2\x80\x94 see log"));
 			ImGui::CloseCurrentPopup();
 		}
 		ImGui::SameLine();

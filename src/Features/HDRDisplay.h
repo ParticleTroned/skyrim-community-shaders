@@ -73,8 +73,8 @@ public:
 	void EndUIRendering();
 	bool IsRenderingUI() const { return renderingUI; }
 
-	// Redirect kFRAMEBUFFER to hdrTexture (float16) so ISHDR writes HDR values >1.0
-	void RedirectFramebuffer();
+	// Returns whether ISHDR will write into hdrTexture instead of the SDR framebuffer.
+	bool RedirectFramebuffer();
 	void RestoreFramebuffer();
 
 	// Frame Gen style UI buffer - redirects kFRAMEBUFFER.RTV for vanilla UI capture

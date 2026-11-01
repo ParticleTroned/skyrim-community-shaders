@@ -59,6 +59,8 @@ public:
 	bool GetAllSettingsForWeather(
 		RE::TESWeather* weather,
 		std::map<std::string, json>& o_settings) const;
+	/** Report whether the effective weather cache contains custom settings without copying them. */
+	bool HasWeatherSettings(RE::TESWeather* weather) const;
 	bool IsVariableOverrideActive(
 		const std::string& featureName,
 		const std::string& variableName) const;

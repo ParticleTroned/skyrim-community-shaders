@@ -334,9 +334,9 @@ protected:
 	bool scrollToHighlighted = false;
 	bool navigatedFromSearch = false;
 
-	// Cache the last query searchResults was built for, so per-frame work is skipped
-	// while the buffer is unchanged.
+	// Reuse matching results until the query or translated display labels change.
 	std::string searchResultsForQuery;
+	std::string searchResultsForLocale;
 	bool m_pendingFocus = false;
 
 	void ClearSearchState(bool clearBuffer);

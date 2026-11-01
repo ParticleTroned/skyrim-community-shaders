@@ -220,23 +220,23 @@ void EditorWindow::ShowObjectsWindow()
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
 		ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4());
 		if (ImGui::BeginListBox("##CategoriesList", { -FLT_MIN, -FLT_MIN })) {
-			ImGui::Text(T("cs_editor.categories", "Categories"));
+			ImGui::TextUnformatted(T("cs_editor.categories", "Categories"));
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::Spacing();
 
 			// List of categories
 			const std::pair<const char*, const char*> categories[] = {
-				{ "Weather", T("editor.categories.weather", "Weather") },
-				{ "ImageSpace", T("editor.categories.image_space", "ImageSpace") },
-				{ "Lighting Template", T("editor.categories.lighting_template", "Lighting Template") },
-				{ "Cell Lighting", T("editor.categories.cell_lighting", "Cell Lighting") },
-				{ "Volumetric Lighting", T("editor.categories.volumetric_lighting", "Volumetric Lighting") },
-				{ "Shader Particle Geometry", T("editor.categories.shader_particle_geometry", "Shader Particle Geometry") },
-				{ "Lens Flare", T("editor.categories.lens_flare", "Lens Flare") },
-				{ "Visual Effect", T("editor.categories.visual_effect", "Visual Effect") },
-				{ "Interior Only", T("editor.categories.interior_only", "Interior Only") },
-				{ "Light Editor", T("editor.categories.light_editor", "Light Editor") }
+				{ "Weather", T("cs_editor.category_weather", "Weather") },
+				{ "ImageSpace", T("cs_editor.category_imagespace", "ImageSpace") },
+				{ "Lighting Template", T("cs_editor.category_lighting_template", "Lighting Template") },
+				{ "Cell Lighting", T("cs_editor.category_cell_lighting", "Cell Lighting") },
+				{ "Volumetric Lighting", T("cs_editor.category_volumetric_lighting", "Volumetric Lighting") },
+				{ "Shader Particle Geometry", T("cs_editor.category_shader_particle", "Shader Particle Geometry") },
+				{ "Lens Flare", T("cs_editor.category_lens_flare", "Lens Flare") },
+				{ "Visual Effect", T("cs_editor.category_visual_effect", "Visual Effect") },
+				{ "Interior Only", T("cs_editor.category_interior_only", "Interior Only") },
+				{ "Light Editor", T("cs_editor.category_lighting_editor", "Light Editor") }
 			};
 			for (const auto& [id, label] : categories) {
 				if (ImGui::Selectable(label, m_selectedCategory == id))
@@ -333,7 +333,7 @@ void EditorWindow::ShowObjectsWindow()
 						bool already = std::any_of(activeRecords.begin(), activeRecords.end(),
 							[&](const ActiveRecord& r) { return r.formId == id; });
 						if (!already)
-							activeRecords.push_back({ ResolveEditorId(form, widgets), TOD::GetPeriodName(tod), id, openByFormId(id, &widgets) });
+							activeRecords.push_back({ ResolveEditorId(form, widgets), TOD::GetPeriodLabel(tod), id, openByFormId(id, &widgets) });
 					}
 				};
 
@@ -347,7 +347,7 @@ void EditorWindow::ShowObjectsWindow()
 				if (m_selectedCategory == "Weather") {
 					addWeather(weather);
 					if (sky && sky->lastWeather != weather)
-						addWeather(sky->lastWeather, "transitioning");
+						addWeather(sky->lastWeather, T("cs_editor.transitioning", "transitioning"));
 				} else if (m_selectedCategory == "ImageSpace") {
 					if (weather)
 						addTOD(weather->imageSpaces, imageSpaceWidgets);
@@ -360,7 +360,7 @@ void EditorWindow::ShowObjectsWindow()
 					if (player && player->parentCell && player->parentCell->IsInteriorCell()) {
 						auto* cell = player->parentCell;
 						const char* cellName = cell->GetName();
-						std::string displayName = cellName && cellName[0] ? cellName : "[Unnamed Cell]";
+						std::string displayName = cellName && cellName[0] ? cellName : T("cs_editor.unnamed_cell", "[Unnamed Cell]");
 						activeRecords.push_back({ std::move(displayName), "", cell->GetFormID(),
 							[this, cell]() {
 								if (currentCellLightingWidget && currentCellLightingWidget->cell == cell) {
@@ -397,7 +397,7 @@ void EditorWindow::ShowObjectsWindow()
 				const auto& theme = Menu::GetSingleton()->GetTheme();
 
 				ImGui::PushStyleColor(ImGuiCol_Text, theme.StatusPalette.RestartNeeded);
-				ImGui::Text(T("cs_editor.active", "Active:"));
+				ImGui::TextUnformatted(T("cs_editor.active", "Active:"));
 				ImGui::PopStyleColor();
 				ImGui::SameLine();
 				const float recordX = ImGui::GetCursorPosX();
@@ -416,9 +416,8 @@ void EditorWindow::ShowObjectsWindow()
 					}
 					ImGui::TextDisabled("(0x%08X)", rec.formId);
 					ImGui::SameLine();
-					char btnId[32];
-					snprintf(btnId, sizeof(btnId), "Open##active_%d", i);
-					if (ImGui::SmallButton(btnId))
+					const auto btnId = std::format("{}##active_{}", T("cs_editor.open", "Open"), i);
+					if (ImGui::SmallButton(btnId.c_str()))
 						rec.open();
 				}
 				ImGui::Spacing();
@@ -458,7 +457,7 @@ void EditorWindow::ShowObjectsWindow()
 			ImGui::SameLine();
 			ImGui::SetNextItemWidth(comboW);
 			int col = static_cast<int>(m_currentFilterColumn);
-			const char* filterColumnLabels[] = { T("editor.filter.all", "All"), T("editor.filter.editor_id", "Editor ID"), T("editor.filter.form_id", "Form ID"), T("editor.filter.file", "File"), T("editor.filter.status", "Status") };
+			const char* filterColumnLabels[] = { T("cs_editor.filter_all", "All"), T("cs_editor.filter_editor_id", "Editor ID"), T("cs_editor.filter_form_id", "Form ID"), T("cs_editor.filter_file", "File"), T("cs_editor.filter_status", "Status") };
 			static_assert(IM_ARRAYSIZE(filterColumnLabels) == IM_ARRAYSIZE(kFilterColumnNames));
 			if (Util::Widgets::Combo("##FilterBy", &col, filterColumnLabels, IM_ARRAYSIZE(filterColumnLabels)))
 				m_currentFilterColumn = static_cast<FilterColumn>(col);
@@ -475,7 +474,7 @@ void EditorWindow::ShowObjectsWindow()
 				m_showOnlyFavorites = !m_showOnlyFavorites;
 			}
 			ImGui::SameLine();
-			ImGui::Text(T("cs_editor.favorites", "Favorites"));
+			ImGui::TextUnformatted(T("cs_editor.favorites", "Favorites"));
 
 			ImGui::SameLine();
 			ImGui::Dummy(filterSpacer);
@@ -484,7 +483,7 @@ void EditorWindow::ShowObjectsWindow()
 				m_showOnlyFlagged = !m_showOnlyFlagged;
 			}
 			ImGui::SameLine();
-			ImGui::Text(T("cs_editor.flagged", "Flagged"));
+			ImGui::TextUnformatted(T("cs_editor.flagged", "Flagged"));
 
 			// Show recent widgets section for current category
 			auto recentIt = settings.recentWidgets.find(m_selectedCategory);
@@ -648,7 +647,7 @@ void EditorWindow::ShowObjectsWindow()
 
 							// Display current cell name
 							const char* cellName = cell->GetName();
-							std::string displayName = cellName && cellName[0] ? cellName : "[Unnamed Cell]";
+							std::string displayName = cellName && cellName[0] ? cellName : T("cs_editor.unnamed_cell", "[Unnamed Cell]");
 							std::string label = displayName;
 
 							// Highlight current cell (before TableRowSelectable so hover/active can override)
@@ -689,7 +688,7 @@ void EditorWindow::ShowObjectsWindow()
 
 							// Status column
 							ImGui::TableNextColumn();
-							ImGui::Text(T("cs_editor.interior_cell", "Interior Cell"));
+							ImGui::TextUnformatted(T("cs_editor.interior_cell", "Interior Cell"));
 
 							// json column (empty for cells - no standalone json)
 							ImGui::TableNextColumn();
@@ -698,8 +697,8 @@ void EditorWindow::ShowObjectsWindow()
 							ImGui::TableNextRow();
 							ImGui::TableSetColumnIndex(1);
 							ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
-							ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Warning, T("cs_editor.cell_lighting_interior_only", "Cell Lighting is only available for interior cells."));
-							ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Disable, T("cs_editor.currently_exterior_cell", "You are currently in an exterior cell."));
+							ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Warning, "%s", T("cs_editor.cell_lighting_interior_only", "Cell Lighting is only available for interior cells."));
+							ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Disable, "%s", T("cs_editor.currently_exterior_cell", "You are currently in an exterior cell."));
 							ImGui::PopTextWrapPos();
 						}
 					} else {
@@ -707,7 +706,7 @@ void EditorWindow::ShowObjectsWindow()
 						ImGui::TableNextRow();
 						ImGui::TableSetColumnIndex(1);
 						ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
-						ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Error, T("cs_editor.player_cell_unavailable", "Player cell not available."));
+						ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Error, "%s", T("cs_editor.player_cell_unavailable", "Player cell not available."));
 						ImGui::PopTextWrapPos();
 					}
 				}
@@ -759,7 +758,7 @@ void EditorWindow::ShowObjectsWindow()
 					}
 
 					// Show ImageSpace and VolumetricLighting info for weather widgets
-					if (!weatherTooltipShownThisFrame && m_selectedCategory == T("cs_editor.category_weather", "Weather") && ImGui::IsItemHovered()) {
+					if (!weatherTooltipShownThisFrame && m_selectedCategory == "Weather" && ImGui::IsItemHovered()) {
 						auto* weatherWidget = dynamic_cast<WeatherWidget*>(sortedWidgets[i]);
 						if (weatherWidget && weatherWidget->weather) {
 							const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
@@ -775,7 +774,7 @@ void EditorWindow::ShowObjectsWindow()
 								ImGui::TextUnformatted(T("cs_editor.imagespace_label", "ImageSpace:"));
 								for (int tod = 0; tod < 4; tod++) {
 									auto name = ResolveEditorId(weatherWidget->weather->imageSpaces[tod], imageSpaceWidgets);
-									ImGui::Text("  %s: %s", TOD::GetPeriodName(tod), name.empty() ? T("cs_editor.none_filter", "None") : name.c_str());
+									ImGui::Text("  %s: %s", TOD::GetPeriodLabel(tod), name.empty() ? T("cs_editor.none_filter", "None") : name.c_str());
 								}
 
 								ImGui::Spacing();
@@ -784,7 +783,7 @@ void EditorWindow::ShowObjectsWindow()
 								ImGui::TextUnformatted(T("cs_editor.volumetric_lighting_label", "Volumetric Lighting:"));
 								for (int tod = 0; tod < 4; tod++) {
 									auto* f = weatherWidget->weather->volumetricLighting[tod];
-									ImGui::Text("  %s: %s", TOD::GetPeriodName(tod), f ? std::format("0x{:X}", f->GetLocalFormID()).c_str() : T("cs_editor.none_filter", "None"));
+									ImGui::Text("  %s: %s", TOD::GetPeriodLabel(tod), f ? std::format("0x{:X}", f->GetLocalFormID()).c_str() : T("cs_editor.none_filter", "None"));
 								}
 								ImGui::EndTooltip();
 							}
@@ -883,7 +882,7 @@ void EditorWindow::ShowViewportWindow()
 		!std::isfinite(displaySize.x) || !std::isfinite(displaySize.y) ||
 		availableSpace.x <= 0.0f || availableSpace.y <= 0.0f ||
 		displaySize.x <= 0.0f || displaySize.y <= 0.0f) {
-		ImGui::TextDisabled(T("cs_editor.viewport_unavailable", "Viewport unavailable"));
+		ImGui::TextDisabled("%s", T("cs_editor.viewport_unavailable", "Viewport unavailable"));
 		ImGui::End();
 		return;
 	}
@@ -921,7 +920,7 @@ void EditorWindow::ShowViewportWindow()
 			};
 		}
 	} else {
-		ImGui::TextDisabled(T("cs_editor.viewport_unavailable", "Viewport unavailable"));
+		ImGui::TextDisabled("%s", T("cs_editor.viewport_unavailable", "Viewport unavailable"));
 	}
 
 	ImGui::End();
@@ -995,7 +994,7 @@ void EditorWindow::RenderUI()
 				}
 
 				if (!hasOpen)
-					ImGui::TextDisabled(T("cs_editor.no_open_widgets", "No open widgets"));
+					ImGui::TextDisabled("%s", T("cs_editor.no_open_widgets", "No open widgets"));
 
 				ImGui::EndMenu();
 			}
@@ -1064,7 +1063,7 @@ void EditorWindow::RenderUI()
 			}
 
 			ImGui::Separator();
-			ImGui::Text(T("cs_editor.open_widgets", "Open Widgets:"));
+			ImGui::TextUnformatted(T("cs_editor.open_widgets", "Open Widgets:"));
 
 			int openCount = 0;
 			for (auto* collection : GetWidgetCollections())
@@ -1077,12 +1076,12 @@ void EditorWindow::RenderUI()
 			}
 
 			if (openCount == 0)
-				ImGui::TextDisabled(T("cs_editor.no_widgets_open", "No widgets open"));
+				ImGui::TextDisabled("%s", T("cs_editor.no_widgets_open", "No widgets open"));
 
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu(T("cs_editor.help", "Help"))) {
-			ImGui::Text(T("cs_editor.cs_editor", "CS Editor"));
+			ImGui::TextUnformatted(T("cs_editor.cs_editor", "CS Editor"));
 			ImGui::Separator();
 			ImGui::TextUnformatted(T("cs_editor.keyboard_shortcuts", "Keyboard Shortcuts:"));
 			ImGui::BulletText(T("cs_editor.shortcut_ctrl_f", "Ctrl+F: Focus search"));
@@ -1100,7 +1099,7 @@ void EditorWindow::RenderUI()
 			ImGui::BulletText(T("cs_editor.tip_lock_weather", "Lock weather to prevent changes"));
 			ImGui::BulletText(T("cs_editor.tip_undo", "Undo button reverts recent changes (Ctrl+Z)"));
 			ImGui::Separator();
-			ImGui::Text(T("cs_editor.total_objects", "Total Objects:"));
+			ImGui::TextUnformatted(T("cs_editor.total_objects", "Total Objects:"));
 			ImGui::BulletText(T("cs_editor.weathers_count", "Weathers: %d"), (int)weatherWidgets.size());
 			ImGui::BulletText(T("cs_editor.lighting_count", "Lighting: %d"), (int)lightingTemplateWidgets.size());
 			ImGui::BulletText(T("cs_editor.imagespaces_count", "ImageSpaces: %d"), (int)imageSpaceWidgets.size());
@@ -1163,7 +1162,7 @@ void EditorWindow::RenderUI()
 
 		// Period text
 		char periodBuf[64];
-		std::snprintf(periodBuf, sizeof(periodBuf), "(%s)", TOD::GetPeriodName(TOD::GetActivePeriod()));
+		std::snprintf(periodBuf, sizeof(periodBuf), "(%s)", TOD::GetPeriodLabel(TOD::GetActivePeriod()));
 		float periodWidth = ImGui::CalcTextSize(periodBuf).x;
 		rightCursor -= itemSpacing + periodWidth;
 		const float periodX = rightCursor;
@@ -1197,11 +1196,11 @@ void EditorWindow::RenderUI()
 		if (showPreviewStatus) {
 			std::string hotkey = Util::Input::KeyIdToString(menu->GetSettings().CSEditorToggleKey);
 			if (previewMode == PreviewMode::FreeCamera)
-				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), " [ %s ] FREE CAMERA (Speed: %.0f)", hotkey.c_str(), flySpeed);
+				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), T("cs_editor.preview_free_camera", " [ %s ] FREE CAMERA (Speed: %.0f)"), hotkey.c_str(), flySpeed);
 			else if (previewMode == PreviewMode::FreeCameraLocked)
-				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), " [ %s ] FREE CAMERA LOCKED", hotkey.c_str());
+				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), T("cs_editor.preview_free_camera_locked", " [ %s ] FREE CAMERA LOCKED"), hotkey.c_str());
 			else
-				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), " [ %s ] PLAY MODE", hotkey.c_str());
+				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), T("cs_editor.preview_play_mode", " [ %s ] PLAY MODE"), hotkey.c_str());
 			rightCursor -= itemSpacing + ImGui::CalcTextSize(previewStatusBuf).x;
 			previewStatusX = rightCursor;
 		}
@@ -1209,7 +1208,7 @@ void EditorWindow::RenderUI()
 		// Time paused text
 		float timePausedX = 0;
 		bool showTimePaused = IsTimePaused();
-		const char* timePausedText = T("editor.time_paused", " [TIME PAUSED]");
+		const char* timePausedText = T("cs_editor.time_paused_status", " [TIME PAUSED]");
 		if (showTimePaused) {
 			rightCursor -= itemSpacing + ImGui::CalcTextSize(timePausedText).x;
 			timePausedX = rightCursor;
@@ -1222,7 +1221,7 @@ void EditorWindow::RenderUI()
 		bool showWeatherLock = IsWeatherLocked() && lockedWeather;
 		if (showWeatherLock) {
 			const char* weatherName = lockedWeather->GetFormEditorID();
-			std::snprintf(weatherLockBuf, sizeof(weatherLockBuf), " [LOCKED: %s]", weatherName ? weatherName : "Unknown");
+			std::snprintf(weatherLockBuf, sizeof(weatherLockBuf), T("cs_editor.locked_weather_status", " [LOCKED: %s]"), weatherName ? weatherName : T("cs_editor.unknown", "Unknown"));
 			rightCursor -= itemSpacing + ImGui::CalcTextSize(weatherLockBuf).x;
 			weatherLockX = rightCursor;
 		}
@@ -1761,7 +1760,7 @@ void EditorWindow::ShowSettingsWindow()
 		ImGui::TableNextRow();
 
 		ImGui::TableSetColumnIndex(0);
-		const std::pair<const char*, const char*> options[] = { { "General", T("editor.categories.general", "General") }, { "Flags", T("editor.categories.flags", "Flags") } };
+		const std::pair<const char*, const char*> options[] = { { "General", T("cs_editor.general", "General") }, { "Flags", T("cs_editor.flags", "Flags") } };
 		for (const auto& [id, label] : options) {
 			if (ImGui::Selectable(label, settingsSelectedCategory == id))
 				settingsSelectedCategory = id;
@@ -1792,7 +1791,7 @@ void EditorWindow::ShowSettingsWindow()
 			}
 			Util::AddTooltip(T("cs_editor.editor_ui_scale_tooltip", "Scale the size of all editor UI elements (0.5 = 50%, 2.0 = 200%)"));
 
-			if (Util::ButtonWithFlash("Reset to 1.0")) {
+			if (Util::ButtonWithFlash(T("cs_editor.reset_to_default", "Reset to 1.0"))) {
 				settings.editorUIScale = 1.0f;
 				Save();
 			}
@@ -1808,12 +1807,12 @@ void EditorWindow::ShowSettingsWindow()
 				Save();
 			Util::AddTooltip(T("cs_editor.max_recent_widgets_tooltip", "Maximum number of recent widgets to remember"));
 
-			if (Util::ButtonWithFlash("Clear Recent History")) {
+			if (Util::ButtonWithFlash(T("cs_editor.clear_recent_history", "Clear Recent History"))) {
 				settings.recentWidgets.clear();
 				Save();
 			}
 			ImGui::SameLine();
-			if (Util::ButtonWithFlash("Clear Favorites")) {
+			if (Util::ButtonWithFlash(T("cs_editor.clear_favorites", "Clear Favorites"))) {
 				settings.favoriteWidgets.clear();
 				Save();
 			}
@@ -2151,7 +2150,7 @@ void EditorWindow::LockWeather(RE::TESWeather* weather)
 	g_lockedWeather.store(weather, std::memory_order_release);
 	MaintainWeatherLock();
 
-	logger::info("Weather locked: {}", weather->GetFormEditorID() ? weather->GetFormEditorID() : "Unknown");
+	logger::info("Weather locked: {}", weather->GetFormEditorID() ? weather->GetFormEditorID() : T("cs_editor.unknown", "Unknown"));
 }
 
 void EditorWindow::UnlockWeather()
@@ -2631,12 +2630,12 @@ void EditorWindow::PerformUndo()
 		if (state.restoreRuntime)
 			widget->ApplyChanges();
 		ShowNotification(
-			std::format("Undone changes to {}", state.widgetLabel),
+			std::vformat(T("cs_editor.undone_changes_to", "Undone changes to {}"), std::make_format_args(state.widgetLabel)),
 			Menu::GetSingleton()->GetSettings().Theme.StatusPalette.InfoColor,
 			2.0f);
 	} else {
 		ShowNotification(
-			std::format("Cannot undo {} because its editor is no longer active", state.widgetLabel),
+			I18n::GetSingleton()->Format("cs_editor.undo_editor_unavailable", { { "editor", state.widgetLabel } }, "Cannot undo {editor} because its editor is no longer active"),
 			Menu::GetSingleton()->GetSettings().Theme.StatusPalette.Warning,
 			3.0f);
 	}

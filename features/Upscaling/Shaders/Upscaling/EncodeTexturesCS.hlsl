@@ -67,7 +67,29 @@ float ComputeSeamFactor(uint2 sourcePos)
 	return saturate((seamHalfWidth - seamDistance) / seamHalfWidth);
 }
 
-[numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
+#if defined(DLSS)
+static const uint kEncodeDepthTileDim = 12;
+groupshared float DepthTile[kEncodeDepthTileDim * kEncodeDepthTileDim];
+#endif
+
+[numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID
+#if defined(DLSS)
+	, uint3 groupThreadID : SV_GroupThreadID
+#endif
+) {
+#if defined(DLSS)
+	const int2 tileOrigin = int2(dispatchID.xy - groupThreadID.xy) + int2(SourceOffset + 0.5) - 2;
+	const uint lane = groupThreadID.y * 8 + groupThreadID.x;
+	for (uint index = lane; index < kEncodeDepthTileDim * kEncodeDepthTileDim; index += 8 * 8) {
+		const int2 samplePos = tileOrigin + int2(index % kEncodeDepthTileDim, index / kEncodeDepthTileDim);
+		float sampleDepth = 0.0;
+		if (IsEncodeTextureSourceSampleInBounds(samplePos, int2(TrueSamplingDim), SourceSamplingXBounds))
+			sampleDepth = DepthMask[samplePos];
+		DepthTile[index] = sampleDepth;
+	}
+	// Partial groups must populate the full-eye halo before inactive output lanes leave.
+	GroupMemoryBarrierWithGroupSync();
+#endif
 	uint2 localPos = dispatchID.xy;
 	if (any(localPos >= uint2(DispatchDim)))
 		return;
@@ -76,7 +98,12 @@ float ComputeSeamFactor(uint2 sourcePos)
 	uint2 sourcePos = localPos + sourceOffset;
 	uint2 outputOffset = uint2(OutputOffset + 0.5);
 	uint2 outputPos = localPos + outputOffset;
+#if defined(DLSS)
+	const uint2 tileCenter = groupThreadID.xy + 2;
+	float depth = DepthTile[tileCenter.y * kEncodeDepthTileDim + tileCenter.x];
+#else
 	float depth = DepthMask[sourcePos];
+#endif
 
 	float2 taaMask = TAAMask[sourcePos];
 	float transparencyCompositionMask = NormalsWaterMask[sourcePos].z;
@@ -104,7 +131,8 @@ float ComputeSeamFactor(uint2 sourcePos)
 			if (!IsEncodeTextureSourceSampleInBounds(samplePos, int2(TrueSamplingDim), SourceSamplingXBounds))
 				continue;
 
-			float neighborDepth = DepthMask[samplePos];
+			const uint2 tilePos = uint2(int2(tileCenter) + int2(x, y));
+			float neighborDepth = DepthTile[tilePos.y * kEncodeDepthTileDim + tilePos.x];
 
 			// Take neighbor if it's longer AND closer
 			if (FrameBuffer::IsNearerDepth(neighborDepth, depth)) {

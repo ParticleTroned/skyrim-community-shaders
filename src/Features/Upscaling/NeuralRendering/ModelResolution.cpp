@@ -912,9 +912,9 @@ namespace NeuralRendering
 		const auto& tuning = input.reconstructionTuning;
 		retained.experimentalPreparation = tuning.Preparation();
 		if (tuning.Preparation() != ReconstructionPreparation{}) {
-			const auto index = static_cast<std::size_t>(std::ranges::find(kReconstructionFootprintSubdivisions, tuning.footprintSubdivisions) - kReconstructionFootprintSubdivisions.begin()) * 2u +
-			                   (tuning.depthSampleMotion ? 0u : 1u);
-			auto& entry = experimentalPreparationShaders_[index];
+			const auto preparationIndex = static_cast<std::size_t>(std::ranges::find(kReconstructionFootprintSubdivisions, tuning.footprintSubdivisions) - kReconstructionFootprintSubdivisions.begin()) * 2u +
+			                              (tuning.depthSampleMotion ? 0u : 1u);
+			auto& entry = experimentalPreparationShaders_[preparationIndex];
 			if (!entry.shader) {
 				const char subdivisions[]{ static_cast<char>('0' + tuning.footprintSubdivisions), '\0' };
 				const std::array<std::pair<const char*, const char*>, 4> defines{ { { "DEVBENCH_BRIDGE_ENABLED", "1" }, { "NR_PERIPHERAL_COMPRESSION", "1" },

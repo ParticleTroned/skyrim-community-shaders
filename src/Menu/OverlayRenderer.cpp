@@ -818,7 +818,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 		const bool hasFeatureSetRevertPending = shaderCache->HasFeatureSetRevertPending();
 		const bool hasFeatureSetChanges = shaderCache->HasFeatureSetChanges();
 		const bool isDiskCacheHeld = shaderCache->IsDiskCacheHeld();
-		const bool hasFeatureIssues = FeatureIssues::HasFeatureIssues();
+		const size_t loadFailureCount = FeatureIssues::CountLoadFailures();
 
 		ImGui::SetNextWindowPos(ImVec2(pos, pos));
 		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, kShaderStatusWindowFlags)) {
@@ -849,14 +849,13 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 				"Saved shader cache cannot be used.\n"
 				"A required feature is missing or failed to load.");
 		}
-		if (hasFeatureIssues) {
-			const size_t issueCount = FeatureIssues::GetFeatureIssues().size();
+		if (loadFailureCount) {
 			const auto issueMessage = fmt::format(
 				"WARNING: {} feature{} failed to load (bad install or version mismatch).\n"
 				"Check CSX menu > Feature Issues tab, then quit, fix your mod setup, and restart.\n"
 				"Compiling now bakes the wrong shaders and you will have to recompile after fixing.",
-				issueCount,
-				issueCount == 1 ? "" : "s");
+				loadFailureCount,
+				loadFailureCount == 1 ? "" : "s");
 			ImGui::TextColored(themeSettings.StatusPalette.Error, "%s", issueMessage.c_str());
 		}
 		if (state->IsDeveloperMode()) {

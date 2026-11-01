@@ -61,9 +61,9 @@ namespace CSX::FeatureAPI
 		const char* installedVersion = nullptr;
 		const char* requiredVersion = nullptr;
 		const char* shaderDefineName = nullptr;
-		const char* failureMessage = nullptr;
+		const char* failureMessage = nullptr;  ///< Genuine load failure; expected mod conflicts are summary items.
 		const char* summary = nullptr;
-		const char* summaryItemsJson = nullptr;
+		const char* summaryItemsJson = nullptr;  ///< JSON string array, including any expected mod-conflict reason.
 		std::uint32_t loaded = 0;
 		std::uint32_t core = 0;
 		std::uint32_t inMenu = 0;

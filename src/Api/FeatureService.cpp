@@ -131,7 +131,9 @@ namespace
 			if (a_index >= features.size())
 				return Status::kFeatureNotFound;
 			auto* feature = features[a_index];
-			const auto featureSummary = feature->GetFeatureSummary();
+			auto featureSummary = feature->GetFeatureSummary();
+			if (!feature->loaded && !feature->conflictMessage.empty())
+				featureSummary.second.push_back(feature->conflictMessage);
 			strings.shortName = feature->GetShortName();
 			strings.name = feature->GetName();
 			strings.displayName = feature->GetDisplayName();
@@ -284,6 +286,7 @@ namespace
 				value += feature->loaded ? ":1:" : ":0:";
 				value += feature->version;
 				value += state && state->IsFeatureDisabled(feature->GetShortName()) ? ":D;" : ":E;";
+				value += std::to_string(feature->conflictMessage.size()) + ":" + feature->conflictMessage + ";";
 			}
 			return value;
 		}

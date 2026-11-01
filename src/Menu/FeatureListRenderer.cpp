@@ -993,7 +993,10 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 	const auto maximum = ImGui::GetItemRectMax();
 	const float middle = (start.y + maximum.y) * .5f;
 	const float textLeft = start.x + font * 1.9f;
-	const auto color = menu.name == "Feature Issues" ? globals::menu->GetTheme().StatusPalette.Error : ImGui::GetStyleColorVec4(ImGuiCol_Text);
+	const auto& statusPalette = globals::menu->GetTheme().StatusPalette;
+	const auto color = menu.name == "Feature Issues" ?
+	                       (FeatureIssues::CountLoadFailures() ? statusPalette.Error : statusPalette.Warning) :
+	                       ImGui::GetStyleColorVec4(ImGuiCol_Text);
 	auto* draw = ImGui::GetWindowDrawList();
 	if (icon != icons.end())
 		Util::DrawActionGlyph(draw, icon->second, { start.x + font * .15f, middle - font * .75f }, { start.x + font * 1.65f, middle + font * .75f }, ImGui::GetColorU32(ImGuiCol_Text));
@@ -1053,6 +1056,8 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 		textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
 	} else if (hasFailedMessage) {
 		textColor = feat->version.empty() ? themeSettings.StatusPalette.Disable : themeSettings.StatusPalette.Error;
+	} else if (!feat->conflictMessage.empty()) {
+		textColor = themeSettings.StatusPalette.Warning;
 	} else {
 		// No failed message but not loaded - check if INI file exists
 		if (!std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feat->GetShortName()))) {
@@ -1460,7 +1465,9 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
 				feat->DrawUnloadedUI();
 			} else if (hasFailedMessage) {
-				// Conflict/version failures are rendered below. Do not present them as pending restart.
+				// Load failures are rendered below, independently of restart state.
+			} else if (!feat->conflictMessage.empty()) {
+				feat->DrawUnloadedUI();
 			} else if (IsFeatureInstalled(feat->GetShortName())) {
 				ImGui::Text("This feature will be available after restart.");
 			} else {

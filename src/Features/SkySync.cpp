@@ -320,11 +320,9 @@ void SkySync::DataLoaded()
 
 void SkySync::DisableOnConflict(std::string_view conflictName)
 {
-	failedLoadedMessage = fmt::format("Disabled as {} has been detected, both cannot be used together", conflictName);
-	loaded = false;
+	DisableForConflict(conflictName);
 	settings.Enabled = false;
 	ResetRuntimeState();
-	logger::warn("[Sky Sync] {}", failedLoadedMessage);
 }
 
 void SkySync::ResetRuntimeState()

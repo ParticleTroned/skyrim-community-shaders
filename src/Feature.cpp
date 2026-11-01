@@ -378,6 +378,14 @@ std::vector<std::string> Feature::GetLoadedFeatureNames()
 	return names;
 }
 
+void Feature::DisableForConflict(std::string_view a_conflict)
+{
+	loaded = false;
+	conflictMessage = std::format("This feature is disabled because {} was detected. They cannot be used together.", a_conflict);
+	FeatureIssues::AddFeatureIssue(GetShortName(), version, conflictMessage, FeatureIssues::FeatureIssueInfo::IssueType::CONFLICT);
+	logger::warn("[{}] {}", GetDisplayName(), conflictMessage);
+}
+
 bool Feature::ToggleAtBootSetting()
 {
 	auto state = globals::state;
@@ -507,7 +515,13 @@ void Feature::DrawUnloadedUI()
 		return;
 	}
 
-	// Fallback: Always show missing file message when no specific failure message exists
+	if (!conflictMessage.empty()) {
+		auto& themeSettings = Menu::GetSingleton()->GetTheme();
+		ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", conflictMessage.c_str());
+		return;
+	}
+
+	// Missing-file guidance applies only when no specific reason is available.
 	auto& themeSettings = Menu::GetSingleton()->GetTheme();
 	auto ini_filename = std::format("{}.ini", GetShortName());
 	// Get the minimum required version to include in the error message

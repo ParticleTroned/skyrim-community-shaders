@@ -26,6 +26,8 @@ struct Feature
 	bool loaded = false;
 	std::string version;
 	std::string failedLoadedMessage;
+	/** @brief Explains an expected mod-conflict disable separately from load failures. */
+	std::string conflictMessage;
 
 	virtual std::string GetName() = 0;
 	virtual std::string GetShortName() = 0;
@@ -161,6 +163,8 @@ public:
 			SetPerformanceCostMeasurementEnabled(a_state.get<bool>());
 	}
 	virtual void DrawUnloadedUI();
+	/** @brief Disables this feature for a detected conflict without changing load-failure or boot settings. */
+	void DisableForConflict(std::string_view a_conflict);
 
 	virtual void ReflectionsPrepass() {};
 	virtual void Prepass() {}

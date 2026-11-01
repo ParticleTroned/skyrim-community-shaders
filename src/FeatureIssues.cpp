@@ -109,6 +109,11 @@ namespace FeatureIssues
 		return !s_featureIssues.empty();
 	}
 
+	size_t CountLoadFailures()
+	{
+		return static_cast<size_t>(std::ranges::count_if(s_featureIssues, [](const FeatureIssueInfo& issue) { return !issue.IsConflict(); }));
+	}
+
 	bool HasObsoleteShaderModifyingFeatures()
 	{
 		return std::any_of(s_featureIssues.begin(), s_featureIssues.end(),
@@ -271,11 +276,15 @@ namespace FeatureIssues
 
 		// Check for duplicates before adding
 		auto existingIssue = std::find_if(s_featureIssues.begin(), s_featureIssues.end(),
-			[&shortName](const FeatureIssueInfo& existing) {
-				return existing.shortName == shortName;
+			[&shortName, &issue](const FeatureIssueInfo& existing) {
+				return existing.shortName == shortName && existing.IsConflict() == issue.IsConflict();
 			});
 
 		if (existingIssue != s_featureIssues.end()) {
+			if (issue.IsConflict()) {
+				*existingIssue = std::move(issue);
+				return;
+			}
 			// Update existing issue with new information if this one has more details
 			if (issueType == FeatureIssueInfo::IssueType::OBSOLETE &&
 				existingIssue->issueType == FeatureIssueInfo::IssueType::UNKNOWN) {
@@ -292,6 +301,10 @@ namespace FeatureIssues
 	}
 	bool DeleteFeatureFiles(const FeatureIssueInfo& issue)
 	{
+		if (issue.IsConflict()) {
+			logger::warn("Cannot delete feature files to resolve a mod conflict: {}", issue.shortName);
+			return false;
+		}
 		bool allSuccessful = true;
 		std::vector<std::string> deletedFiles;
 		std::vector<std::string> failedFiles;
@@ -356,6 +369,7 @@ namespace FeatureIssues
 		std::vector<const FeatureIssueInfo*> obsoleteIssues;
 		std::vector<const FeatureIssueInfo*> versionIssues;
 		std::vector<const FeatureIssueInfo*> overrideIssues;
+		std::vector<const FeatureIssueInfo*> conflictIssues;
 		std::string pendingRemoval;
 
 		for (const auto& issue : featureIssues) {
@@ -371,6 +385,8 @@ namespace FeatureIssues
 				versionIssues.push_back(&issue);
 			} else if (issue.IsOverrideFailed()) {
 				overrideIssues.push_back(&issue);
+			} else if (issue.IsConflict()) {
+				conflictIssues.push_back(&issue);
 			}
 		}
 		// Shader Breaking Features Section (most critical)
@@ -405,6 +421,14 @@ namespace FeatureIssues
 				DrawFeatureIssue(*issue, theme.StatusPalette.Warning, pendingRemoval);
 			}
 		}
+		if (auto section = Util::SectionWrapper("Conflicting Mods",
+				"These features were disabled because an incompatible mod was detected. Keep the feature disabled at boot to use that mod, or remove the mod and restart to use the feature.",
+				theme.StatusPalette.Warning, !conflictIssues.empty())) {
+			for (const auto* issue : conflictIssues) {
+				DrawFeatureIssue(*issue, theme.StatusPalette.Warning, pendingRemoval);
+				ImGui::TextWrapped("%s", issue->rejectionReason.c_str());
+			}
+		}
 		// Override Failures Section
 		if (auto section = Util::SectionWrapper("Override Failures",
 				"The following override files failed to load or apply. Check the file format and content.",
@@ -416,7 +440,7 @@ namespace FeatureIssues
 
 		// Grouped pointers must remain valid until every issue has finished drawing.
 		if (!pendingRemoval.empty())
-			std::erase_if(s_featureIssues, [&](const auto& issue) { return issue.shortName == pendingRemoval; });
+			std::erase_if(s_featureIssues, [&](const auto& issue) { return issue.shortName == pendingRemoval && !issue.IsConflict(); });
 
 		// Common cleanup actions section
 		ImGui::TextColored(theme.Palette.Text, "Cleanup Actions:");
@@ -474,6 +498,8 @@ namespace FeatureIssues
 		const auto& theme = menu->GetTheme();
 
 		ImGui::PushID(issue.shortName.c_str());
+		ImGui::PushID(static_cast<int>(issue.issueType));
+		const SKSE::stl::scope_exit restoreIds([] { ImGui::PopID(); ImGui::PopID(); });
 
 		// Show feature name with appropriate color
 		ImGui::Bullet();
@@ -645,7 +671,7 @@ namespace FeatureIssues
 		// Show delete button for:
 		// 1. Features that don't modify shader directories (safe to delete)
 		// 2. Obsolete features with replacements (user can install replacement after deletion)
-		bool canSafelyDelete = (!issue.ModifiedShaderDirectory() || (issue.IsObsolete() && !issue.replacementFeature.empty())) && !IsVersionMismatchForCoreFeature(issue);
+		bool canSafelyDelete = !issue.IsConflict() && (!issue.ModifiedShaderDirectory() || (issue.IsObsolete() && !issue.replacementFeature.empty())) && !IsVersionMismatchForCoreFeature(issue);
 		if (canSafelyDelete) {
 			ImGui::SameLine();
 			std::string deleteButtonId = "Delete##" + issue.shortName;
@@ -711,7 +737,6 @@ namespace FeatureIssues
 				}
 			}
 		}
-		ImGui::PopID();
 	}
 
 	static bool IsVersionMismatchForCoreFeature(const FeatureIssueInfo& issue)
@@ -747,10 +772,6 @@ namespace FeatureIssues
 	{
 		std::filesystem::path featuresPath = Util::PathHelpers::GetFeaturesPath();
 
-		if (!std::filesystem::exists(featuresPath)) {
-			return;
-		}
-
 		// Get list of active feature names
 		std::set<std::string> activeFeatureNames;
 		const auto& features = Feature::GetFeatureList();
@@ -769,11 +790,17 @@ namespace FeatureIssues
 					AddFeatureIssue(feature->GetShortName(), feature->version, feature->failedLoadedMessage,
 						FeatureIssueInfo::IssueType::VERSION_MISMATCH, fileInfo);
 				}
+				if (!feature->loaded && !feature->conflictMessage.empty()) {
+					AddFeatureIssue(feature->GetShortName(), feature->version, feature->conflictMessage,
+						FeatureIssueInfo::IssueType::CONFLICT);
+				}
 			}
 		}
 
 		// Scan for INI files
 		try {
+			if (!std::filesystem::exists(featuresPath))
+				return;
 			for (const auto& entry : std::filesystem::directory_iterator(featuresPath)) {
 				if (entry.is_regular_file() && entry.path().extension() == ".ini") {
 					std::string featureName = entry.path().stem().string();

@@ -15,6 +15,41 @@
 #include "RE/P/PlayerCharacter.h"
 
 #include <imgui_internal.h>
+#include <algorithm>
+#include <cmath>
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(UnifiedWater::ShallowSettings, ShallowFallbackStrength, DeepConnectionProbeReachUnits, DeepContextDepthUnits, ShoreContactMinFadePixels, ShoreDepthBlendRangeUnits, ShallowSurfaceDepthRangeUnits, ShallowFallbackMaxDistance, DeepContextTransitionUnits)
+
+UnifiedWater::ShallowSettings UnifiedWater::GetShallowSettings() const
+{
+	ShallowSettings result = shallowSettings;
+	const ShallowSettings defaults{};
+	result.ShallowFallbackStrength = std::isfinite(result.ShallowFallbackStrength) ? std::clamp(result.ShallowFallbackStrength, 0.0f, 1.0f) : defaults.ShallowFallbackStrength;
+	result.DeepConnectionProbeReachUnits = std::isfinite(result.DeepConnectionProbeReachUnits) ? std::clamp(result.DeepConnectionProbeReachUnits, 0.0f, 768.0f) : defaults.DeepConnectionProbeReachUnits;
+	result.DeepContextDepthUnits = std::isfinite(result.DeepContextDepthUnits) ? std::clamp(result.DeepContextDepthUnits, 32.0f, 384.0f) : defaults.DeepContextDepthUnits;
+	result.ShoreContactMinFadePixels = std::isfinite(result.ShoreContactMinFadePixels) ? std::clamp(result.ShoreContactMinFadePixels, 0.0f, 4.0f) : defaults.ShoreContactMinFadePixels;
+	result.ShoreDepthBlendRangeUnits = std::isfinite(result.ShoreDepthBlendRangeUnits) ? std::clamp(result.ShoreDepthBlendRangeUnits, 0.0f, 20.0f) : defaults.ShoreDepthBlendRangeUnits;
+	result.ShallowSurfaceDepthRangeUnits = std::isfinite(result.ShallowSurfaceDepthRangeUnits) ? std::clamp(result.ShallowSurfaceDepthRangeUnits, 16.0f, 256.0f) : defaults.ShallowSurfaceDepthRangeUnits;
+	result.ShallowFallbackMaxDistance = std::isfinite(result.ShallowFallbackMaxDistance) ? std::clamp(result.ShallowFallbackMaxDistance, 0.0f, 65536.0f) : defaults.ShallowFallbackMaxDistance;
+	result.DeepContextTransitionUnits = std::isfinite(result.DeepContextTransitionUnits) ? std::clamp(result.DeepContextTransitionUnits, 4.0f, 128.0f) : defaults.DeepContextTransitionUnits;
+	return result;
+}
+
+void UnifiedWater::LoadSettings(json& value)
+{
+	shallowSettings = value;
+	shallowSettings = GetShallowSettings();
+}
+
+void UnifiedWater::SaveSettings(json& value)
+{
+	value = GetShallowSettings();
+}
+
+void UnifiedWater::RestoreDefaultSettings()
+{
+	shallowSettings = {};
+}
 
 namespace
 {
@@ -127,6 +162,18 @@ namespace
 
 void UnifiedWater::DrawSettings()
 {
+	ImGui::SliderFloat(T(TKEY("shallow_strength"), "Shallow Surface Strength"), &shallowSettings.ShallowFallbackStrength, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (ImGui::TreeNode(T(TKEY("shallow_controls"), "Shallow Surface Controls"))) {
+		ImGui::SliderFloat(T(TKEY("shallow_deepconnectionprobereachunits"), "Probe Reach"), &shallowSettings.DeepConnectionProbeReachUnits, 0.0f, 768.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T(TKEY("shallow_deepcontextdepthunits"), "Connected Deep Depth"), &shallowSettings.DeepContextDepthUnits, 32.0f, 384.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T(TKEY("shallow_shorecontactminfadepixels"), "Minimum Shore Fade Pixels"), &shallowSettings.ShoreContactMinFadePixels, 0.0f, 4.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T(TKEY("shallow_shoredepthblendrangeunits"), "Shore Fade Depth"), &shallowSettings.ShoreDepthBlendRangeUnits, 0.0f, 20.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T(TKEY("shallow_shallowsurfacedepthrangeunits"), "Shallow Depth Range"), &shallowSettings.ShallowSurfaceDepthRangeUnits, 16.0f, 256.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T(TKEY("shallow_shallowfallbackmaxdistance"), "Maximum Distance"), &shallowSettings.ShallowFallbackMaxDistance, 0.0f, 65536.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T(TKEY("shallow_deepcontexttransitionunits"), "Deep Transition"), &shallowSettings.DeepContextTransitionUnits, 4.0f, 128.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::TreePop();
+	}
+
 	if (ImGui::TreeNodeEx(T(TKEY("debug"), "Debug"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		if (ImGui::Button(T(TKEY("regenerate_flowmap"), "Regenerate Flowmap")) && flowmap) {
 			if (flowmap->RegenerateAndLoadFlowmap())

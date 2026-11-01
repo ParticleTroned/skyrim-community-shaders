@@ -126,6 +126,24 @@ struct UnifiedWater : OverlayFeature
 	/** @brief Supplies readiness to both shader stages without changing compile defines. */
 	RuntimeData GetRuntimeData() const { return { loaded && IsWaterDataReady() ? 1u : 0u }; }
 
+	struct alignas(16) ShallowSettings
+	{
+		float ShallowFallbackStrength = 0.0f;
+		float DeepConnectionProbeReachUnits = 768.0f;
+		float DeepContextDepthUnits = 192.0f;
+		float ShoreContactMinFadePixels = 2.0f;
+		float ShoreDepthBlendRangeUnits = 10.0f;
+		float ShallowSurfaceDepthRangeUnits = 256.0f;
+		float ShallowFallbackMaxDistance = 26000.0f;
+		float DeepContextTransitionUnits = 128.0f;
+	};
+	static_assert(sizeof(ShallowSettings) == 32);
+	ShallowSettings shallowSettings;
+	ShallowSettings GetShallowSettings() const;
+	void LoadSettings(json&) override;
+	void SaveSettings(json&) override;
+	void RestoreDefaultSettings() override;
+
 private:
 	std::atomic_bool waterDataReady{ false };
 	RE::NiPointer<RE::BSTriShape> waterMesh;

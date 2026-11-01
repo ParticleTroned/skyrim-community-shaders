@@ -18,6 +18,16 @@
 
 namespace
 {
+	void DetachWaterNodeOccurrences(RE::NiNode* parent, RE::NiAVObject* water)
+	{
+		if (!parent || !water)
+			return;
+		for (auto index = parent->GetChildren().size(); index > 0; --index) {
+			if (parent->GetChildren()[index - 1].get() == water)
+				parent->DetachChildAt(index - 1);
+		}
+	}
+
 	bool IsInteriorCellActive()
 	{
 		const auto tes = globals::game::tes;
@@ -708,10 +718,12 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 		{
 			// Held across AddWater so no other thread can reuse this tile's reflection or normals, which keep raw pointers to its material
 			RE::BSSpinLockGuard guard(waterSystem->lock);
+			const auto previousCount = waterSystem->waterObjects.size();
 			waterSystem->AddWater(shape, instruction->form.ptr, instruction->waterHeight, nullptr, true, false);
 
 			// Remove from WaterSystem, will manage it ourselves
-			if (!waterSystem->waterObjects.empty() && waterSystem->waterObjects.back()->shape.get() == shape) {
+			if (waterSystem->waterObjects.size() > previousCount && waterSystem->waterObjects.back() &&
+				waterSystem->waterObjects.back()->shape.get() == shape) {
 				const auto reflections = waterSystem->waterObjects.back()->reflections.get();
 				const auto normals = waterSystem->waterObjects.back()->normals.get();
 				waterSystem->waterObjects.pop_back();
@@ -735,6 +747,7 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	}
 
 	if (auto waterLOD = singleton.gWaterLOD; waterLOD && *waterLOD) {
+		DetachWaterNodeOccurrences(waterLOD->get(), water.get());
 		(*waterLOD)->AttachChild(water.get(), true);
 		singleton.UpdateWaterLODCull();
 	} else if (block->chunk) {
@@ -771,7 +784,7 @@ void UnifiedWater::BGSTerrainBlock_Detach::thunk(RE::BGSTerrainBlock* block)
 		}
 
 		if (auto waterLOD = globals::features::unifiedWater.gWaterLOD; waterLOD && *waterLOD)
-			(*waterLOD)->DetachChild(water.get());
+			DetachWaterNodeOccurrences(waterLOD->get(), water.get());
 
 		// Park water under the detached chunk so block->water stays valid
 		if (block->chunk) {

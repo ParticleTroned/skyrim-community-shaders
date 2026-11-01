@@ -584,6 +584,7 @@
     "feature.cs_utility.water_caustics_strength_tooltip": "Scales the underwater light pattern contrast. One preserves the current appearance; zero disables caustics.",
     "feature.cs_utility.water_caustics_tiling": "Caustics Tiling",
     "feature.cs_utility.water_caustics_tiling_tooltip": "Scales how often the caustics pattern repeats. Higher values create smaller patterns.",
+    "feature.cs_utility.water_foveated_parallax": "Foveated Water Parallax",
     "feature.cs_utility.water_fresnel_max": "Fresnel Max",
     "feature.cs_utility.water_fresnel_max_tooltip": "Maximum reflection response at grazing view angles.",
     "feature.cs_utility.water_fresnel_min": "Fresnel Min",

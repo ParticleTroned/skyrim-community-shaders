@@ -1,10 +1,13 @@
 #pragma once
 
+#include "ModelResolutionPolicy.h"
 #include "NativeEvaluationLayout.h"
 #include "PipelinePolicy.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace NeuralRendering
 {
@@ -12,11 +15,11 @@ namespace NeuralRendering
 	template <class Settings>
 	[[nodiscard]] const char* PrewarmConfigurationBlocker(const Settings& settings, bool isVR) noexcept
 	{
-		if (settings.neuralRenderingPeripheralCompressionPercent)
-			return "peripheral_compression_requires_live_geometry";
+		if (!IsValidModelResolutionPercent(settings.neuralRenderingModelResolutionPercent) ||
+			settings.neuralRenderingPeripheralCompressionPercent > kMaximumPeripheralCompressionPercent)
+			return "invalid_model_geometry_policy";
 		const auto mode = ConfiguredRenderingMode(settings.neuralRenderingMode);
 		if (!isVR || mode != RenderingMode::ReducedResolution ||
-			settings.neuralRenderingModelResolutionPercent != 100 || settings.neuralRenderingPressureResolutionEnabled ||
 			settings.neuralRenderingCentralAreaPercent != 100 || settings.neuralRenderingSingleSubrectScale != 1.0f ||
 			RequiresFoveatedMask(mode, settings.neuralRenderingFovOnly, isVR, settings.neuralRenderingRenderscaleFov))
 			return "exact_route_not_supported";
@@ -26,6 +29,17 @@ namespace NeuralRendering
 		return nullptr;
 	}
 
+	/** Authoritative full-view source geometry; the renderer resolves the effective model policy. */
+	struct PrewarmRequest
+	{
+		UpscalingDLSS::Extent source{};
+		std::uintptr_t device = 0, context = 0;
+		std::uint64_t generation = 0;
+		std::uint32_t slotMask = 0, networkPreset = 0;
+		std::uint32_t modelResolutionPercent = 100, peripheralCompressionPercent = 0;
+		bool pressureResolutionEnabled = false;
+	};
+
 	/** Exact creation demand; no image, history, or successful-frame identity. */
 	struct PrewarmKey
 	{
@@ -34,8 +48,29 @@ namespace NeuralRendering
 		std::uint64_t generation = 0;
 		std::uint32_t slotMask = 0;
 		std::uint32_t networkPreset = 0;
+		UpscalingDLSS::Extent source{};
+		bool modelProjection = false;
 		bool operator==(const PrewarmKey&) const = default;
 	};
+
+	/** Conservative stereo transport overlap, including source storage and any model proxies. */
+	[[nodiscard]] inline std::optional<std::uint64_t> PrewarmTransportBytes(const PrewarmKey& key, UpscalingDLSS::Extent colorWork) noexcept
+	{
+		const auto valid = [](UpscalingDLSS::Extent extent) {
+			return extent.IsValid() && extent.width <= kMaximumNeuralImageDimension && extent.height <= kMaximumNeuralImageDimension;
+		};
+		if (!valid(key.source) || !valid(colorWork) || !valid(key.layout.color.backing) ||
+			!valid(key.layout.creation.input) || !valid(key.layout.creation.output))
+			return std::nullopt;
+		const auto pixels = [](UpscalingDLSS::Extent extent) { return std::uint64_t(extent.width) * extent.height; };
+		const auto nativePixels = std::max({ pixels(key.layout.color.backing),
+			pixels(key.layout.creation.input), pixels(key.layout.creation.output) });
+		// Bound RGBA32 colour/output, R32 depth and RG32 motion, without assuming proxy sharing.
+		constexpr std::uint64_t transportBytesPerPixel = 16 + 4 + 8 + 16;
+		const auto sourcePixels = pixels(key.source);
+		const auto proxies = key.modelProjection ? nativePixels * transportBytesPerPixel + sourcePixels * 16 : 0;
+		return 2 * ((sourcePixels + nativePixels) * transportBytesPerPixel + proxies + pixels(colorWork) * 32);
+	}
 
 	/** Bounded optional ownership, separate from successful renderer use. */
 	struct PrewarmPolicy

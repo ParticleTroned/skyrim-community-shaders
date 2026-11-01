@@ -402,7 +402,7 @@ namespace NeuralRendering
 		/** Services retained resources or a latched transient stall; otherwise performs no sampling. */
 		void ServiceBackendMaintenance(bool a_requested);
 		/** Service one optional stage at the completed boundary; false leaves the request unconsumed. */
-		[[nodiscard]] bool ServicePrewarm(const PrewarmKey* request, const char* deferReason,
+		[[nodiscard]] bool ServicePrewarm(const PrewarmRequest* request, const char* deferReason,
 			std::uint64_t opportunity);
 		/** Cheap disabled-path gate; pending unused ownership still needs maintenance. */
 		[[nodiscard]] bool HasPrewarmWork() const noexcept;

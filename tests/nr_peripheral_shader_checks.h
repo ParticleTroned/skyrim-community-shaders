@@ -366,7 +366,9 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 		Require(observed == previous && observedFirst == first && observedCount == count, "Peripheral dispatch corrupted b1 window");
 	};
 	stateRestored("fixture setup");
-	for (UINT percent : { 30u, 67u, 100u }) {
+	for (UINT percent : { 30u, 67u, 90u, 100u }) {
+		if (percent == 90 && (mixedGuides || shaped || sceneCategories))
+			continue;
 		base.modelResolutionPercent = percent;
 		std::array args{ base, base };
 		for (UINT eye = 0; eye < args.size(); ++eye) {
@@ -416,6 +418,44 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 					  << " reason=" << GetPeripheralCompressionReasonName(args[0].peripheralCompression.reason) << '\n';
 		Require(planned && args[0].peripheralCompression.Active(), "Eligible compression did not plan");
 		const auto plan = args[0].peripheralCompression;
+		if (!mixedGuides && !shaped && !sceneCategories) {
+			PrewarmRequest request{
+				.source = { source[0], source[1] },
+				.device = reinterpret_cast<std::uintptr_t>(device),
+				.context = reinterpret_cast<std::uintptr_t>(context),
+				.generation = 1, .slotMask = 0xcu, .networkPreset = 2,
+				.modelResolutionPercent = std::max(90u, percent),
+				.peripheralCompressionPercent = compression, .pressureResolutionEnabled = true,
+			};
+			const auto compiled = AdapterCompiler::calls;
+			const auto warm = adapter.ProjectPrewarm(request, percent);
+			Require(warm && AdapterCompiler::calls == compiled,
+				"Prewarm projection failed or compiled a shader");
+			for (const auto& inputArgs : args) {
+				RendererApplyArgs projected;
+				Require(ModelResolution::Project(inputArgs, projected), "Live model projection failed");
+				const auto layout = BuildNativeEvaluationLayout({ projected.colorWidth, projected.colorHeight },
+					{ projected.guideWidth, projected.guideHeight }, { projected.outputWidth, projected.outputHeight }, {},
+					projected.computeSubrect, UpscalingDLSS::BuildMotionVectorPixelScale(projected.viewportCrop), projected.featureUpscaling);
+				Require(warm->layout == layout && warm->networkPreset == request.networkPreset,
+					"Prewarm and live scale/compression contracts differ");
+			}
+			const auto colorWork = Color::Work::AllocationExtent(warm->layout.output.valid);
+			const auto reserved = PrewarmTransportBytes(*warm, { colorWork[0], colorWork[1] });
+			const auto privateBytes = adapter.AdditionalBytes(args);
+			Require(reserved && privateBytes && *reserved >= *privateBytes,
+				"Prewarm reservation does not cover actual private model allocations");
+			Require(!adapter.ProjectPrewarm(request, 29) && !adapter.ProjectPrewarm(request, 101),
+				"Invalid effective model resolution escaped prewarm validation");
+			request.peripheralCompressionPercent = 0;
+			const auto ordinary = adapter.ProjectPrewarm(request, percent);
+			const auto expected = BuildModelResolutionExtent(source[0], source[1], percent);
+			Require(ordinary && ordinary->layout.creation.input == expected && ordinary->layout.creation.output == expected &&
+						ordinary->modelProjection == (percent != 100) && AdapterCompiler::calls == compiled,
+				"Uncompressed prewarm changed scale rounding or introduced GPU preparation");
+			request.source = {};
+			Require(!adapter.ProjectPrewarm(request, percent), "Missing source geometry must defer prewarm");
+		}
 		if (directScene) {
 			for (bool authored : { false, true }) {
 				auto invalid = args;

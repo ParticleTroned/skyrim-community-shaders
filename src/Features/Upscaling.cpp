@@ -19083,7 +19083,7 @@ namespace
 				if (Util::Widgets::Checkbox("Prewarm NR while loading", &prewarmEnabled))
 					settings.neuralRenderingPrewarmEnabled = prewarmEnabled;
 			}
-			Util::AddTooltip("Enabled by default for supported configurations, inactive for others. The saved choice also applies at Info logging. Prepare NR during the main menu or loading when GPU memory permits. Requires Before DLSS, 100% NR resolution, full coverage and automatic masking, with Actors only, scene category adjustments, UI correction and Lower NR resolution under memory pressure off. Other configurations initialize during gameplay.");
+			Util::AddTooltip("Enabled by default for supported configurations, inactive for others. The saved choice also applies at Info logging. Prepare native NR models during the main menu or loading when GPU memory permits and the effective resolution and compression geometry are known. Supports Before DLSS with full coverage and automatic masking, including reduced NR resolution, peripheral compression and pressure-based resolution. Actors only, scene category adjustments and UI correction must be off. Other configurations initialize during gameplay.");
 		}
 	}
 
@@ -52132,7 +52132,7 @@ void Upscaling::ServiceNeuralRenderingPrewarm()
 		return;
 	neuralPrewarmWasMenu = menu;
 	neuralPrewarmServiceAtMs = now + NeuralRendering::PrewarmPolicy::kRetryIntervalMs;
-	const auto service = [&](const NeuralRendering::PrewarmKey* request, const char* reason) {
+	const auto service = [&](const NeuralRendering::PrewarmRequest* request, const char* reason) {
 		if (renderer.ServicePrewarm(request, reason, opportunity))
 			neuralPrewarmWasEnabled = enabled;
 	};
@@ -52163,20 +52163,16 @@ void Upscaling::ServiceNeuralRenderingPrewarm()
 		motion->GetDesc(&motionDescription);
 	if (motionDescription.Width != std::uint64_t(extent.width) * 2u || motionDescription.Height != extent.height || motionDescription.SampleDesc.Count != 1)
 		return defer("resource_grid_not_authoritative");
-	const UpscalingDLSS::ViewportCrop crop{
-		.fullInput = extent,
-		.input = { 0, 0, extent.width, extent.height },
-		.fullOutput = extent,
-		.output = { 0, 0, extent.width, extent.height }
-	};
-	NeuralRendering::PrewarmKey request{
-		.layout = NeuralRendering::BuildNativeEvaluationLayout(extent, extent, extent, {},
-			{ 0, 0, extent.width, extent.height }, UpscalingDLSS::BuildMotionVectorPixelScale(crop), false),
+	NeuralRendering::PrewarmRequest request{
+		.source = extent,
 		.device = reinterpret_cast<std::uintptr_t>(globals::d3d::device),
 		.context = reinterpret_cast<std::uintptr_t>(globals::d3d::context),
 		.generation = vrRenderScaleNextContractGeneration.load(std::memory_order_acquire),
 		.slotMask = 0xcu,
 		.networkPreset = NeuralRendering::Runtime::Instance().GetNetworkPreset(settings.neuralRenderingNetwork),
+		.modelResolutionPercent = settings.neuralRenderingModelResolutionPercent,
+		.peripheralCompressionPercent = settings.neuralRenderingPeripheralCompressionPercent,
+		.pressureResolutionEnabled = settings.neuralRenderingPressureResolutionEnabled,
 	};
 	service(&request, "none");
 }

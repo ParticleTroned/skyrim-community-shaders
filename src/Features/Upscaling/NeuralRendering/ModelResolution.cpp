@@ -994,6 +994,60 @@ namespace NeuralRendering
 		return true;
 	}
 
+	std::optional<PrewarmKey> ModelResolution::ProjectPrewarm(const PrewarmRequest& request, std::uint32_t effectivePercent) const
+	{
+		if (!request.source.IsValid() || request.source.width > kMaximumNeuralImageDimension || request.source.height > kMaximumNeuralImageDimension ||
+			!request.device || !request.context || !request.generation || request.slotMask != 0xcu ||
+			!IsValidModelResolutionPercent(request.modelResolutionPercent) || !IsValidModelResolutionPercent(effectivePercent) ||
+			effectivePercent > request.modelResolutionPercent || request.peripheralCompressionPercent > kMaximumPeripheralCompressionPercent)
+			return std::nullopt;
+		std::array<RendererApplyArgs, kEyeCount> args{};
+		for (std::uint32_t eye = 0; eye < kEyeCount; ++eye) {
+			auto& input = args[eye];
+			input.device = reinterpret_cast<ID3D11Device*>(request.device);
+			input.context = reinterpret_cast<ID3D11DeviceContext*>(request.context);
+			input.featureSlot = eye + kEyeCount;
+			input.generation = request.generation;
+			input.renderingMode = RenderingMode::ReducedResolution;
+			input.insertionPoint = InsertionPoint::UpscaledCenter;
+			input.colorWidth = input.guideWidth = input.outputWidth = request.source.width;
+			input.colorHeight = input.guideHeight = input.outputHeight = request.source.height;
+			input.computeSubrect = { 0, 0, request.source.width, request.source.height };
+			input.viewportCrop = UpscalingDLSS::ViewportCrop::Identity(request.source.width, request.source.height, request.source.width, request.source.height);
+			input.modelResolutionPercent = effectivePercent;
+			input.peripheralCompressionPercent = request.peripheralCompressionPercent;
+			input.reset = true;
+			// The full-view pre-DLSS route fuses output selection whenever uniform scaling is required.
+			if (effectivePercent < kMaximumModelResolutionPercent)
+				input.modelOutputSelection.emplace();
+		}
+		if (!PlanPeripheralCompression(args, false))
+			return std::nullopt;
+		PrewarmKey key{
+			.device = request.device, .context = request.context, .generation = request.generation,
+			.slotMask = request.slotMask, .networkPreset = request.networkPreset, .source = request.source,
+		};
+		for (const auto& input : args) {
+			if (input.peripheralCompression.reason == PeripheralCompressionReason::InvalidGeometry ||
+				input.peripheralCompression.reason == PeripheralCompressionReason::ShaderUnavailable)
+				return std::nullopt;
+			RendererApplyArgs projected;
+			const bool model = Required(input);
+			if (model && !Project(input, projected))
+				return std::nullopt;
+			const auto& native = model ? projected : input;
+			const auto layout = BuildNativeEvaluationLayout({ native.colorWidth, native.colorHeight },
+				{ native.guideWidth, native.guideHeight }, { native.outputWidth, native.outputHeight }, {},
+				native.computeSubrect, UpscalingDLSS::BuildMotionVectorPixelScale(native.viewportCrop), native.featureUpscaling);
+			if (!GetNativeEvaluationLayoutViolation(layout, false).empty() ||
+				(input.featureSlot != kEyeCount && (layout != key.layout || model != key.modelProjection)))
+				return std::nullopt;
+			key.layout = layout;
+			key.modelProjection = model;
+		}
+		return key;
+	}
+
 	bool ModelResolution::PreparePeripheralCompression(std::span<RendererApplyArgs> args, bool compactInputs, HRESULT& result)
 	{
 		result = E_INVALIDARG;

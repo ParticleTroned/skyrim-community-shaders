@@ -63,6 +63,8 @@ namespace NeuralRendering
 		void PlanPackedCrops(std::span<RendererApplyArgs>, bool speculative = false) noexcept;
 		/** Project shared peripheral geometry without compiling shaders or allocating GPU resources. */
 		bool PlanPeripheralCompression(std::span<RendererApplyArgs>, bool compactInputs) const;
+		/** Projects a full-view prewarm contract through the live scale/compression policies without GPU work. */
+		[[nodiscard]] std::optional<PrewarmKey> ProjectPrewarm(const PrewarmRequest&, std::uint32_t effectivePercent) const;
 		/** Freeze optional mapping and shader ownership after scale/actor planning and before admission. */
 		bool PreparePeripheralCompression(std::span<RendererApplyArgs>, bool compactInputs, HRESULT&);
 		/** Resolve optional shaders before native memory admission; device errors remain fatal. */

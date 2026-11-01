@@ -783,13 +783,19 @@ int main()
 		globals::game::isVR = true;
 		Upscaling::Settings supported{};
 		supported.neuralRenderingMode = 2;
-		supported.neuralRenderingPressureResolutionEnabled = false;
-		supported.neuralRenderingPeripheralCompressionPercent = 0;
-		auto compressed = supported;
-		compressed.neuralRenderingPeripheralCompressionPercent = 20;
-		require(NeuralRendering::PrewarmConfigurationBlocker(compressed, true), "Compression must defer prewarm");
+		supported.neuralRenderingModelResolutionPercent = 90;
 		require(!NeuralRendering::PrewarmConfigurationBlocker(supported, true),
-			"Full-view C supports prewarm with fixed full model resolution and automatic masks");
+			"The default model resolution, compression and pressure settings support prewarm");
+		for (const auto percent : { 30u, 90u, 100u })
+			for (const auto compression : { 0u, 20u, 100u })
+				for (const bool pressure : { false, true }) {
+					auto settings = supported;
+					settings.neuralRenderingModelResolutionPercent = percent;
+					settings.neuralRenderingPeripheralCompressionPercent = compression;
+					settings.neuralRenderingPressureResolutionEnabled = pressure;
+					require(!NeuralRendering::PrewarmConfigurationBlocker(settings, true),
+						"Valid model policies must reach authoritative geometry projection");
+				}
 		require(NeuralRendering::PrewarmConfigurationBlocker(supported, false), "Flat NR must not prewarm");
 		const auto verifyBlocked = [&](const Upscaling::Settings& unsupported) {
 			require(NeuralRendering::PrewarmConfigurationBlocker(unsupported, true), "Unsupported configurations must defer prewarm");
@@ -804,14 +810,15 @@ int main()
 		for (const auto [member, value] : {
 				 std::pair{ &Upscaling::Settings::neuralRenderingMode, 0u },
 				 std::pair{ &Upscaling::Settings::neuralRenderingMode, 1u },
-				 std::pair{ &Upscaling::Settings::neuralRenderingModelResolutionPercent, 90u },
+				 std::pair{ &Upscaling::Settings::neuralRenderingModelResolutionPercent, 29u },
+				 std::pair{ &Upscaling::Settings::neuralRenderingModelResolutionPercent, 101u },
+				 std::pair{ &Upscaling::Settings::neuralRenderingPeripheralCompressionPercent, 101u },
 				 std::pair{ &Upscaling::Settings::neuralRenderingCentralAreaPercent, 75u } }) {
 			auto settings = supported;
 			settings.*member = value;
 			verifyBlocked(settings);
 		}
-		for (const auto member : { &Upscaling::Settings::neuralRenderingPressureResolutionEnabled,
-				 &Upscaling::Settings::neuralRenderingRenderscaleFov, &Upscaling::Settings::neuralCharacterRenderingEnabled,
+		for (const auto member : { &Upscaling::Settings::neuralRenderingRenderscaleFov, &Upscaling::Settings::neuralCharacterRenderingEnabled,
 				 &Upscaling::Settings::neuralCharacterSceneStrengthsEnabled, &Upscaling::Settings::neuralRenderingAutoMask,
 				 &Upscaling::Settings::neuralRenderingUICorrection }) {
 			auto settings = supported;

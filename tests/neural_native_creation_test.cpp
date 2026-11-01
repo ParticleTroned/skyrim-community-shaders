@@ -561,6 +561,28 @@ namespace
 		policy = {};
 		policy.Capture(key, 30200);
 		Require(!policy.failed && !policy.Expired(30200), "new explicit request inherited the retired failure");
+		const UpscalingDLSS::Extent native{ 1600, 900 }, source{ 3200, 1800 }, colorWork{ 1600, 960 };
+		key.source = source;
+		key.modelProjection = true;
+		key.layout = BuildNativeEvaluationLayout(native, native, native, {}, { 0, 0, 1600, 900 }, { true, 1600.f, 900.f }, false);
+		const auto bytes = PrewarmTransportBytes(key, colorWork);
+		const std::uint64_t sourcePixels = 3200u * 1800u, nativePixels = 1600u * 900u;
+		const auto privateProxies = 2 * (nativePixels * (16 + 4 + 8 + 16) + sourcePixels * 16);
+		const auto sourceAndNative = 2 * (sourcePixels + nativePixels) * (16 + 4 + 8 + 16);
+		const auto paddedColor = 2 * 1600u * 960u * 32;
+		Require(bytes && *bytes >= privateProxies + sourceAndNative + paddedColor,
+			"Prewarm admission omitted source, private proxies or padded colour work");
+		auto changedSource = key;
+		++changedSource.source.width;
+		Require(changedSource != key && PrewarmTransportBytes(changedSource, colorWork) > bytes,
+			"A changed source grid must refresh admission even with identical native dimensions");
+		key.modelProjection = false;
+		Require(PrewarmTransportBytes(key, colorWork) == *bytes - privateProxies,
+			"Unscaled prewarm must not reserve unused model proxies");
+		key.source.width = kMaximumNeuralImageDimension + 1;
+		Require(!PrewarmTransportBytes(key, colorWork), "Oversized source geometry escaped admission bounds");
+		key.source = {};
+		Require(!PrewarmTransportBytes(key, colorWork), "Missing source geometry escaped admission bounds");
 	}
 }
 void DepthEncoding()

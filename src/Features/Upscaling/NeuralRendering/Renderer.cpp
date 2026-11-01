@@ -727,7 +727,8 @@ namespace NeuralRendering
 		bool ResetLocked(bool a_resetShader, bool a_destruction,
 			BackendRetirementPolicy a_policy = BackendRetirementPolicy::ReleaseBackend);
 		void ApplyShaderInvalidationLocked();
-		void ServicePrewarmLocked(const PrewarmKey*, const char*, std::uint64_t);
+		std::optional<PrewarmKey> ProjectPrewarmLocked(const PrewarmRequest&, const char*&);
+		void ServicePrewarmLocked(const PrewarmRequest*, const char*, std::uint64_t);
 		void PreparePrewarmFeatureLocked();
 		PrewarmPolicy prewarm_{};
 		Util::GpuMemoryBudget::Reservation prewarmReservation_;
@@ -4931,7 +4932,7 @@ namespace NeuralRendering
 		return state_->prewarmPending_.load(std::memory_order_relaxed);
 	}
 
-	bool Renderer::ServicePrewarm(const PrewarmKey* request, const char* deferReason, std::uint64_t opportunity)
+	bool Renderer::ServicePrewarm(const PrewarmRequest* request, const char* deferReason, std::uint64_t opportunity)
 	{
 		Util::RendererOwnership owner(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
 		if (!owner)
@@ -4947,7 +4948,30 @@ namespace NeuralRendering
 		return true;
 	}
 
-	void Renderer::State::ServicePrewarmLocked(const PrewarmKey* request, const char* deferReason, std::uint64_t opportunity)
+	std::optional<PrewarmKey> Renderer::State::ProjectPrewarmLocked(const PrewarmRequest& request, const char*& reason)
+	{
+		if (memoryRecovery_.phase != MemoryRecoveryPhase::Ready || memoryConservation_.active ||
+			memoryRetirement_.backendRetained || resolutionRestoration_.active) {
+			reason = "memory_policy";
+			return std::nullopt;
+		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (peripheralExperiment_.Status().mode != PeripheralCompressionOverride::Auto ||
+			Color::Registry::Instance().Snapshot().experiments.CompactInputsEnabled()) {
+			reason = "experimental_geometry";
+			return std::nullopt;
+		}
+#endif
+		// Preview preference changes without advancing live pressure policy or stereo latches.
+		auto resolution = memoryResolution_;
+		resolution.SetEnabled(request.pressureResolutionEnabled);
+		auto projected = modelResolution_.ProjectPrewarm(request, resolution.EffectivePercent(request.modelResolutionPercent));
+		if (!projected)
+			reason = "model_geometry_not_authoritative";
+		return projected;
+	}
+
+	void Renderer::State::ServicePrewarmLocked(const PrewarmRequest* sourceRequest, const char* deferReason, std::uint64_t opportunity)
 	{
 		auto& policy = prewarm_;
 		if (!policy.BeginOpportunity(opportunity))
@@ -4975,6 +4999,8 @@ namespace NeuralRendering
 		}
 		const bool completed = !interop_.IsInitialized() ||
 		                       (fences.completedKnown && !fences.recording && !fences.deviceRemoved && fences.completed >= fences.issued);
+		const auto projected = sourceRequest ? ProjectPrewarmLocked(*sourceRequest, deferReason) : std::nullopt;
+		const auto* request = projected ? &*projected : nullptr;
 		const bool changed = request && policy.captured && *request != policy.key;
 		const bool disabled = !request && std::string_view(deferReason) == "disabled";
 		const bool expired = policy.Expired(now);
@@ -5063,8 +5089,9 @@ namespace NeuralRendering
 			return;
 		}
 		// Reserve both opaque models and conservative first-pair transport overlap.
-		const auto& extent = request->layout.creation.output;
-		if (!extent.width || !extent.height || extent.width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION || extent.height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) {
+		const auto colorWork = Color::Work::AllocationExtent(request->layout.output.valid);
+		const auto transportBytes = PrewarmTransportBytes(*request, { colorWork[0], colorWork[1] });
+		if (!transportBytes) {
 			policy.reason = "invalid_dimensions";
 			policy.failed = true;
 			return;
@@ -5077,7 +5104,7 @@ namespace NeuralRendering
 			return;
 		}
 		const auto bytes = Util::GpuMemoryBudget::Add(Util::GpuMemoryBudget::Add(estimate->bytes, estimate->bytes),
-			std::uint64_t(extent.width) * extent.height * 128u);
+			*transportBytes);
 		const auto budget = SampleMemoryBudgetLocked(device, GetTickCount64(), true);
 		const auto sample = Util::GpuMemoryBudget::Get().Sample(device, MemoryRecoveryPolicy::kSampleIntervalMs);
 		auto preview = memoryRecovery_;

@@ -36,6 +36,8 @@ namespace Compatibility
 		{ L"MARA.dll" },
 		{ L"NativeMeshLightFlickerFix.dll",
 			"superseded by Light Limit Fix; both replace the same lighting hooks" },
+		{ L"NMN_DeformableTerrain.dll",
+			"Dynamic Terrain Deformation is not supported alongside CSX Terrain Blending" },
 		shadowFixes
 	};
 

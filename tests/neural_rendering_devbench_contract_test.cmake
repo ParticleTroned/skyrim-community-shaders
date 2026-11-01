@@ -705,8 +705,9 @@ endforeach()
 
 foreach(_upscaled_center_composite_contract IN ITEMS
     [[if (params.centerAlreadyPrepared)]]
-    [[const bool useSubmitNeuralFloatOutput = NeuralRendering::UsesSubmitNeuralFloatBridge( params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter, neuralResult && neuralResult->applied, GetNeuralRenderingArrangement())]]
-    [[centerSRV = submitNeuralFloatColorOut[eyeIndex]->srv.get()]]
+    [[const bool useSubmitNeuralFloatOutput = params.centerAlreadyPrepared && NeuralRendering::UsesSubmitNeuralFloatBridge( params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter, neuralResult && neuralResult->applied, GetNeuralRenderingArrangement())]]
+    [[preparedCenter = submitNeuralFloatColorOut[eyeIndex].get()]]
+    [[ID3D11ShaderResourceView* centerSRV = preparedCenter->srv.get()]]
     [[ResolveSubmitCharacterCompositeInputs(]]
     [[DispatchFoveatedBlendPass( centerSRV, outputColorUAV]]
 )
@@ -3048,9 +3049,9 @@ string(REGEX MATCHALL
     "${_upscaling}"
 )
 list(LENGTH _center_blend_telemetry_sites _center_blend_telemetry_site_count)
-if(NOT _center_blend_telemetry_site_count EQUAL 4)
+if(NOT _center_blend_telemetry_site_count EQUAL 5)
     message(FATAL_ERROR
-        "Both normal-centre blend boundaries must record one attempt and one success"
+        "Direct blends and either prepared composition path must retain attempts and shared success accounting"
     )
 endif()
 

@@ -55,6 +55,7 @@
 #include "Upscaling/VRRenderScaleModePolicy.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
 #include "Utils/D3D.h"
+#include "Utils/ComIdentity.h"
 #include "Utils/D3DContextProtection.h"
 #include "Utils/DeviceContextState.h"
 #include "Utils/FileSystem.h"
@@ -44948,10 +44949,22 @@ bool Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 
 bool Upscaling::DispatchFoveatedSpatialComposite(ID3D11ShaderResourceView* peripherySRV, ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t peripherySourceWidth, uint32_t peripherySourceHeight, uint32_t outputWidth, uint32_t outputHeight, const FoveatedDispatchRect& centerRect, float peripherySourceScaleX, float peripherySourceScaleY, float peripherySourceOffsetX, float peripherySourceOffsetY, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather)
 {
+	CS_GPU_PASS("Upscaling::FoveatedSpatialComposite");
 	if (!peripherySRV || !centerSRV || !outputUAV || !peripherySourceWidth || !peripherySourceHeight ||
 		!outputWidth || !outputHeight || !centerRect.outputWidth || !centerRect.outputHeight || !foveatedSpatialCompositeCB) {
 		return false;
 	}
+
+	Microsoft::WRL::ComPtr<ID3D11Resource> peripheryResource, centerResource, outputResource;
+	peripherySRV->GetResource(peripheryResource.GetAddressOf());
+	centerSRV->GetResource(centerResource.GetAddressOf());
+	outputUAV->GetResource(outputResource.GetAddressOf());
+	const auto outputIdentity = Util::GetComIdentity(outputResource.Get());
+	const auto peripheryIdentity = Util::GetComIdentity(peripheryResource.Get());
+	const auto centerIdentity = Util::GetComIdentity(centerResource.Get());
+	if (!outputIdentity || !peripheryIdentity || !centerIdentity ||
+		outputIdentity == peripheryIdentity || outputIdentity == centerIdentity)
+		return false;
 
 	auto* compositeCS = GetFoveatedSpatialCompositeCS();
 	auto context = globals::d3d::context;
@@ -44983,6 +44996,21 @@ bool Upscaling::DispatchFoveatedSpatialComposite(ID3D11ShaderResourceView* perip
 	ID3D11SamplerState* samplers[1] = { deferred->linearSampler };
 	ID3D11ShaderResourceView* srvs[2] = { peripherySRV, centerSRV };
 	ID3D11UnorderedAccessView* uavs[1] = { outputUAV };
+	Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> previousCenterSRV;
+	context->CSGetShaderResources(1, 1, previousCenterSRV.GetAddressOf());
+	auto clearBindings = ScopeExit([&]() {
+		ID3D11ShaderResourceView* nullSRVs[2]{};
+		ID3D11UnorderedAccessView* nullUAV = nullptr;
+		ID3D11SamplerState* nullSampler = nullptr;
+		ID3D11Buffer* nullCB = nullptr;
+		context->CSSetShaderResources(0, ARRAYSIZE(nullSRVs), nullSRVs);
+		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+		context->CSSetSamplers(0, 1, &nullSampler);
+		context->CSSetConstantBuffers(0, 1, &nullCB);
+		context->CSSetShader(nullptr, nullptr, 0);
+		ID3D11ShaderResourceView* previous = previousCenterSRV.Get();
+		context->CSSetShaderResources(1, 1, &previous);
+	});
 	context->CSSetShader(compositeCS, nullptr, 0);
 	context->CSSetConstantBuffers(0, 1, &cb);
 	context->CSSetSamplers(0, 1, samplers);
@@ -45007,16 +45035,7 @@ bool Upscaling::DispatchFoveatedSpatialComposite(ID3D11ShaderResourceView* perip
 	if (state && state->frameAnnotations)
 		state->EndPerfEvent();
 
-	ID3D11ShaderResourceView* nullSRVs[2] = {};
-	ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
-	ID3D11SamplerState* nullSampler[1] = { nullptr };
-	ID3D11Buffer* nullCB[1] = { nullptr };
-	context->CSSetShaderResources(0, ARRAYSIZE(nullSRVs), nullSRVs);
-	context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-	context->CSSetSamplers(0, 1, nullSampler);
-	context->CSSetConstantBuffers(0, 1, nullCB);
-	context->CSSetShader(nullptr, nullptr, 0);
-	return true;
+	return !MarkSubmitStageDeviceLostIfDeviceRemoved("foveated spatial composite");
 }
 
 FidelityFX::UpscaleResult Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Upscaling::VendorEyeDispatchParams& params)
@@ -47944,54 +47963,114 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 	}
 
 	ID3D11UnorderedAccessView* outputColorUAV = params.outputUAV ? params.outputUAV : vrIntermediateColorOut[eyeIndex]->uav.get();
-	if (!params.usePeripheryTAA && !params.visualizeMask && !params.centerAlreadyPrepared) {
-		const auto centerResult = DispatchSingleFoveatedVendorEye(
-			a_upscaleMethod,
-			eyeIndex,
-			params.centerColorInput,
-			params.centerDepthInput,
-			params.centerMotionVectorsInput,
-			params.centerReactiveMaskInput,
-			params.centerTransparencyMaskInput,
-			params.outputWidthPerEye,
-			params.outputHeight,
-			params.inputWidthPerEye,
-			params.inputHeight,
-			params.centerScale,
-			params.centerHorizontalScale,
-			centerOffset,
-			params.centerBlendFeather,
-			params.centerColorInputBaseOffsetX,
-			params.centerDepthInputBaseOffsetX,
-			params.centerAuxInputBaseOffsetX,
-			outputColorUAV,
-			params.dlssViewportRole,
-			params.submitSourceSubresource,
-			params.submitSourceBoxValid ? &params.submitSourceBox : nullptr,
-			false);
-		if (centerResult != FidelityFX::UpscaleResult::Ready)
-			return centerResult;
+	const auto& centerRect = foveatedRectCache.rects[eyeIndex];
+	auto& centerOutput = foveatedCenterColorOut[eyeIndex];
+	const bool useSubmitNeuralFloatOutput =
+		params.centerAlreadyPrepared &&
+		NeuralRendering::UsesSubmitNeuralFloatBridge(
+			params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter,
+			neuralResult && neuralResult->applied, GetNeuralRenderingArrangement());
+	const bool isolateCharacterOutput =
+		params.centerAlreadyPrepared && neuralResult && neuralResult->applied &&
+		UsesCharacterVisualIsolation(settings) &&
+		NeuralRendering::RunsAfterDlss(GetNeuralRenderingArrangement());
+	const Texture2D* preparedCenter = nullptr;
+	if (params.centerAlreadyPrepared && !params.visualizeMask) {
+		if (!centerOutput || !centerOutput->srv || !centerRect.outputWidth || !centerRect.outputHeight)
+			return FidelityFX::UpscaleResult::Failed;
+		preparedCenter = centerOutput.get();
+		if (useSubmitNeuralFloatOutput && !isolateCharacterOutput) {
+			preparedCenter = submitNeuralFloatColorOut[eyeIndex].get();
+			if (!preparedCenter || !preparedCenter->resource || !preparedCenter->srv)
+				return FidelityFX::UpscaleResult::Failed;
+		}
+	}
+	const auto routeRole = params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
+	                          NeuralStereoRouteRole::Submit : NeuralStereoRouteRole::Main;
+	const uint32_t frame = state->frameCount;
+	const auto dispatchPreparedComposite = [&](auto&& dispatch, uint64_t pixels) {
+		const auto capture = neuralResult && neuralResult->applied ?
+		                         CaptureNeuralStage(routeRole, eyeIndex, frame, params.neuralSourceFrame, params.neuralGeneration, "composite") :
+		                         Util::PassTimingHandle{};
+		const bool composited = [&]() {
+			CS_GPU_DETAIL_PASS("NeuralRendering::CapturedComposite", capture);
+			return dispatch();
+		}();
+		if (composited) {
+			RecordNeuralStageWork(capture, pixels);
+			RecordNeuralPassTelemetry(routeRole, eyeIndex, NeuralPhysicalPass::CenterBlend, false, true, frame);
+		}
+		return composited;
+	};
+	// Fusion samples the entire centre and has neither full-image weighting nor selection overlays.
+	const bool fusePreparedCenter =
+		preparedCenter && !isolateCharacterOutput &&
+		(!IsNeuralRenderingRequested() || NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(),
+			settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov)) &&
+		(!neuralResult || !neuralResult->applied ||
+			(settings.neuralRenderingSingleSubrectScale == 1.0f && settings.neuralRenderingCentralAreaPercent == 100 &&
+				!UsesCharacterVisualIsolation(settings))) &&
+		preparedCenter->resource && preparedCenter->desc.Width == centerRect.outputWidth &&
+		preparedCenter->desc.Height == centerRect.outputHeight &&
+		eyePlan.output.minX == centerRect.outputOffsetX && eyePlan.output.minY == centerRect.outputOffsetY &&
+		eyePlan.output.Width() == centerRect.outputWidth && eyePlan.output.Height() == centerRect.outputHeight &&
+		eyePlan.output.maxX <= params.outputWidthPerEye && eyePlan.output.maxY <= params.outputHeight;
+	if (!params.usePeripheryTAA && !params.visualizeMask && (!params.centerAlreadyPrepared || fusePreparedCenter)) {
+		if (!params.centerAlreadyPrepared) {
+			const auto centerResult = DispatchSingleFoveatedVendorEye(
+				a_upscaleMethod,
+				eyeIndex,
+				params.centerColorInput,
+				params.centerDepthInput,
+				params.centerMotionVectorsInput,
+				params.centerReactiveMaskInput,
+				params.centerTransparencyMaskInput,
+				params.outputWidthPerEye,
+				params.outputHeight,
+				params.inputWidthPerEye,
+				params.inputHeight,
+				params.centerScale,
+				params.centerHorizontalScale,
+				centerOffset,
+				params.centerBlendFeather,
+				params.centerColorInputBaseOffsetX,
+				params.centerDepthInputBaseOffsetX,
+				params.centerAuxInputBaseOffsetX,
+				outputColorUAV,
+				params.dlssViewportRole,
+				params.submitSourceSubresource,
+				params.submitSourceBoxValid ? &params.submitSourceBox : nullptr,
+				false);
+			if (centerResult != FidelityFX::UpscaleResult::Ready)
+				return centerResult;
+		}
 
-		const auto& centerRect = foveatedRectCache.rects[eyeIndex];
-		auto& centerOutput = foveatedCenterColorOut[eyeIndex];
-		const bool composited = centerOutput && centerOutput->srv &&
-		                        DispatchFoveatedSpatialComposite(
-									params.peripherySourceSRV,
-									centerOutput->srv.get(),
-									outputColorUAV,
-									params.peripherySourceWidth,
-									params.peripherySourceHeight,
-									params.outputWidthPerEye,
-									params.outputHeight,
-									centerRect,
-									params.peripherySourceScaleX,
-									params.peripherySourceScaleY,
-									params.peripherySourceOffsetX,
-									params.peripherySourceOffsetY,
-									params.centerScale,
-									params.centerHorizontalScale,
-									centerOffset,
-									params.centerBlendFeather);
+		const auto composite = [&]() {
+			if (!centerOutput || !centerOutput->srv)
+				return false;
+			return DispatchFoveatedSpatialComposite(
+				params.peripherySourceSRV,
+				params.centerAlreadyPrepared ? preparedCenter->srv.get() : centerOutput->srv.get(),
+				outputColorUAV,
+				params.peripherySourceWidth,
+				params.peripherySourceHeight,
+				params.outputWidthPerEye,
+				params.outputHeight,
+				centerRect,
+				params.peripherySourceScaleX,
+				params.peripherySourceScaleY,
+				params.peripherySourceOffsetX,
+				params.peripherySourceOffsetY,
+				params.centerScale,
+				params.centerHorizontalScale,
+				centerOffset,
+				params.centerBlendFeather);
+		};
+		if (params.centerAlreadyPrepared)
+			RecordNeuralPassTelemetry(routeRole, eyeIndex, NeuralPhysicalPass::CenterBlend, true, false, frame);
+		const bool composited = params.centerAlreadyPrepared ?
+		                            dispatchPreparedComposite(composite, static_cast<uint64_t>(params.outputWidthPerEye) * params.outputHeight) :
+		                            composite();
 		return composited ? FidelityFX::UpscaleResult::Ready : FidelityFX::UpscaleResult::Failed;
 	}
 
@@ -48134,7 +48213,6 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 	};
 
 	const auto& preparedRect = foveatedRectCache.rects[eyeIndex];
-	const auto& preparedCenter = foveatedCenterColorOut[eyeIndex];
 	const bool skipPeripheryUnderlay =
 		!params.usePeripheryTAA && !params.visualizeMask && params.centerAlreadyPrepared &&
 		IsNeuralRenderingRequested() && GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution &&
@@ -48142,8 +48220,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 		eyePlan.output.CoversExtent(params.outputWidthPerEye, params.outputHeight) &&
 		preparedRect.outputOffsetX == 0u && preparedRect.outputOffsetY == 0u &&
 		preparedRect.outputWidth == params.outputWidthPerEye && preparedRect.outputHeight == params.outputHeight &&
-		preparedCenter && preparedCenter->srv &&
-		preparedCenter->desc.Width == params.outputWidthPerEye && preparedCenter->desc.Height == params.outputHeight;
+		centerOutput && centerOutput->srv &&
+		centerOutput->desc.Width == params.outputWidthPerEye && centerOutput->desc.Height == params.outputHeight;
 
 	if (params.usePeripheryTAA) {
 		if (hasTaaOuterRegion) {
@@ -48200,23 +48278,9 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 		return FidelityFX::UpscaleResult::Ready;
 	if (params.centerAlreadyPrepared) {
 		const auto& rect = foveatedRectCache.rects[eyeIndex];
-		auto& centerOutput = foveatedCenterColorOut[eyeIndex];
-		if (!centerOutput || !centerOutput->srv || !rect.outputWidth || !rect.outputHeight)
-			return FidelityFX::UpscaleResult::Failed;
-		ID3D11ShaderResourceView* centerSRV = centerOutput->srv.get();
-		const bool useSubmitNeuralFloatOutput =
-			NeuralRendering::UsesSubmitNeuralFloatBridge(
-				params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter,
-				neuralResult && neuralResult->applied, GetNeuralRenderingArrangement());
+		ID3D11ShaderResourceView* centerSRV = preparedCenter->srv.get();
 		CharacterCompositeInputs characterComposite{};
-		const bool isolateCharacterOutput =
-			neuralResult && neuralResult->applied &&
-			UsesCharacterVisualIsolation(settings) &&
-			NeuralRendering::RunsAfterDlss(GetNeuralRenderingArrangement());
 		if (isolateCharacterOutput) {
-			const uint32_t frame = globals::state ?
-			                           globals::state->frameCount :
-			                           std::numeric_limits<uint32_t>::max();
 			bool compositeInputsReady = false;
 			if (useSubmitNeuralFloatOutput) {
 				compositeInputsReady = ResolveSubmitCharacterCompositeInputs(
@@ -48241,32 +48305,12 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 				return FidelityFX::UpscaleResult::Failed;
 			}
 			centerSRV = characterComposite.center;
-		} else if (useSubmitNeuralFloatOutput) {
-			if (!submitNeuralFloatColorOut[eyeIndex] ||
-				!submitNeuralFloatColorOut[eyeIndex]->resource ||
-				!submitNeuralFloatColorOut[eyeIndex]->srv) {
-				return FidelityFX::UpscaleResult::Failed;
-			}
-			centerSRV = submitNeuralFloatColorOut[eyeIndex]->srv.get();
 		}
 
 		const float centerBlendFeather = std::isfinite(params.centerBlendFeather) ?
 		                                     ClampFoveatedBlendFeather(params.centerBlendFeather) :
 		                                     FoveatedCommon::kCenterFeather;
-		const auto routeRole =
-			params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
-				NeuralStereoRouteRole::Submit :
-				NeuralStereoRouteRole::Main;
-		const uint32_t frame = globals::state ?
-		                           globals::state->frameCount :
-		                           std::numeric_limits<uint32_t>::max();
-		RecordNeuralPassTelemetry(
-			routeRole,
-			eyeIndex,
-			NeuralPhysicalPass::CenterBlend,
-			true,
-			false,
-			frame);
+		RecordNeuralPassTelemetry(routeRole, eyeIndex, NeuralPhysicalPass::CenterBlend, true, false, frame);
 		auto blendVisibleOutput =
 			foveatedRectCache.plan.eyes[eyeIndex].output;
 		if (useSubmitNeuralFloatOutput && !isolateCharacterOutput) {
@@ -48290,11 +48334,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 					return FidelityFX::UpscaleResult::Failed;
 			}
 		}
-		const auto capture = neuralResult && neuralResult->applied ? CaptureNeuralStage(routeRole, eyeIndex,
-																		 frame, params.neuralSourceFrame, params.neuralGeneration, "composite") :
-		                                                             Util::PassTimingHandle{};
-		const bool blended = [&]() {
-			CS_GPU_DETAIL_PASS("NeuralRendering::CapturedComposite", capture);
+		const bool blended = dispatchPreparedComposite([&]() {
 			return DispatchFoveatedBlendPass(
 				centerSRV,
 				outputColorUAV,
@@ -48310,17 +48350,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 				characterComposite.baseline,
 				characterComposite.mask.Get(), 0u, false,
 				characterComposite.mask ? &characterComposite.maskSupport : nullptr, characterComposite.providerBlending);
-		}();
-		if (blended) {
-			RecordNeuralStageWork(capture, static_cast<uint64_t>(blendVisibleOutput.Width()) * blendVisibleOutput.Height());
-			RecordNeuralPassTelemetry(
-				routeRole,
-				eyeIndex,
-				NeuralPhysicalPass::CenterBlend,
-				false,
-				true,
-				frame);
-		}
+		}, static_cast<uint64_t>(blendVisibleOutput.Width()) * blendVisibleOutput.Height());
 		return blended ? FidelityFX::UpscaleResult::Ready : FidelityFX::UpscaleResult::Failed;
 	}
 

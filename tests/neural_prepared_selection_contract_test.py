@@ -17,6 +17,39 @@ def read(name):
 
 
 class PreparedSelectionContract(unittest.TestCase):
+    def test_prepared_spatial_fusion_retains_restricted_routes(self):
+        source = read("src/Features/Upscaling.cpp")
+        start = source.index("FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(")
+        composite = source[start:source.index("FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(", start)]
+        gate = composite[composite.index("const bool fusePreparedCenter ="):composite.index("bool peripheryBindingsBound")]
+        for guard in ("!isolateCharacterOutput", "RequiresFoveatedMask(", "neuralRenderingSingleSubrectScale == 1.0f",
+                      "neuralRenderingCentralAreaPercent == 100", "!UsesCharacterVisualIsolation(settings)",
+                      "preparedCenter->resource", "preparedCenter->desc.Width == centerRect.outputWidth",
+                      "preparedCenter->desc.Height == centerRect.outputHeight",
+                      "eyePlan.output.minX == centerRect.outputOffsetX", "eyePlan.output.minY == centerRect.outputOffsetY",
+                      "eyePlan.output.Width() == centerRect.outputWidth", "eyePlan.output.Height() == centerRect.outputHeight"):
+            self.assertIn(guard, gate)
+        self.assertIn("!params.usePeripheryTAA && !params.visualizeMask && (!params.centerAlreadyPrepared || fusePreparedCenter)", gate)
+        self.assertRegex(gate, r"if \(!params.centerAlreadyPrepared\) \{\s*const auto centerResult = DispatchSingleFoveatedVendorEye")
+        self.assertIn("params.centerAlreadyPrepared ? preparedCenter->srv.get() : centerOutput->srv.get()", gate)
+        selection = composite[:composite.index("const bool fusePreparedCenter =")]
+        self.assertIn("neuralResult && neuralResult->applied, GetNeuralRenderingArrangement()", selection)
+        self.assertIn("if (useSubmitNeuralFloatOutput && !isolateCharacterOutput)", selection)
+        self.assertIn("preparedCenter = submitNeuralFloatColorOut[eyeIndex].get()", selection)
+        self.assertIn("const bool skipPeripheryUnderlay", composite)
+        self.assertIn("eyePlan.output.CoversExtent(", composite)
+        self.assertIn("neuralResult->dlssEvaluated", composite)
+        self.assertIn("RestrictVisibleOutputToComputeSubrect(", composite)
+        self.assertIn("ResolveSubmitCharacterCompositeInputs(", composite)
+        self.assertEqual(composite.count("CaptureNeuralStage("), 1)
+        self.assertEqual(composite.count("RecordNeuralStageWork("), 1)
+        start = source.index("bool Upscaling::DispatchFoveatedSpatialComposite(")
+        spatial = source[start:source.index("FidelityFX::UpscaleResult Upscaling::DispatchVendorEyeRegion(", start)]
+        for forbidden_alias in ("outputIdentity == peripheryIdentity", "outputIdentity == centerIdentity"):
+            self.assertLess(spatial.index(forbidden_alias), spatial.index("context->CSSetShaderResources("))
+        self.assertIn("ScopeExit(", spatial)
+        self.assertIn('MarkSubmitStageDeviceLostIfDeviceRemoved("foveated spatial composite")', spatial)
+
     def test_each_neural_override_participates_in_change_detection(self):
         import re
 

@@ -535,7 +535,7 @@ endif()
 
 foreach(_bridge_role IN ITEMS useSubmitNeuralFloatBridge useSubmitNeuralFloatOutput)
     string(REGEX MATCH
-        "const bool ${_bridge_role}[ \t\r\n]*=[ \t\r\n]*NeuralRendering::UsesSubmitNeuralFloatBridge\\([^;]+;"
+        "const bool ${_bridge_role}[ \t\r\n]*=[ \t\r\n]*(params\\.centerAlreadyPrepared[ \t\r\n]*&&[ \t\r\n]*)?NeuralRendering::UsesSubmitNeuralFloatBridge\\([^;]+;"
         _bridge_selection "${_upscaling_source}"
     )
     if(NOT _bridge_selection MATCHES "GetNeuralRenderingArrangement\\(\\)")

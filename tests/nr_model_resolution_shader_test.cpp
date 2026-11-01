@@ -2542,6 +2542,11 @@ int main()
 					tuning.depthSampleMotion = false;
 					CheckPeripheralAdapter(device.Get(), context.Get(), true, true, 20, false, false, tuning);
 				}
+				NeuralRendering::ReconstructionTuning faceTuning;
+				faceTuning.faceDetailProtectionPercent = 100;
+				CheckPeripheralAdapter(device.Get(), context.Get(), false, false, 100, false, false, faceTuning);
+				CheckPeripheralAdapter(device.Get(), context.Get(), false, true, 100, true, true, faceTuning);
+				CheckPeripheralAdapter(device.Get(), context.Get(), true, true, 100, false, false, faceTuning);
 #endif
 				for (bool mixedGuides : { false, true })
 					for (bool shaped : { false, true })

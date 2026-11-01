@@ -6785,6 +6785,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		add(a_settings.neuralRenderingConfidenceRejectionPercent);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		add(a_settings.neuralReconstructionTuning.shadowTransferPercent);
+		add(a_settings.neuralReconstructionTuning.faceDetailProtectionPercent);
 		add(a_settings.neuralReconstructionTuning.footprintSubdivisions);
 		add(a_settings.neuralReconstructionTuning.perChannelClamping);
 		add(a_settings.neuralReconstructionTuning.depthSampleMotion);
@@ -19132,6 +19133,8 @@ namespace
 		if (!ImGui::TreeNode("Reconstruction comparisons (DevBench)"))
 			return;
 		auto& tuning = settings.neuralReconstructionTuning;
+		DrawNeuralIntegerSetting("Face detail protection", tuning.faceDetailProtectionPercent, 0, NeuralRendering::kMaximumFaceDetailProtectionPercent, "%d%%");
+		Util::AddTooltip("Session-only experiment for Scene NR Before DLSS with peripheral compression. Reallocate the existing model pixels toward observed NPC head bounds; never raise NR resolution or allocation. Background detail may decrease. Protection is limited by the sampling footprint budget and may be negligible for a screen-filling face. Zero is off. Requires matching source-frame bounds in both eyes. First use warms cached shaders.");
 		ImGui::TextWrapped("Session only. Defaults use production shaders. First use warms each experimental variant; measure after the condition settles.");
 		DrawNeuralIntegerSetting("Shadow transfer protection", tuning.shadowTransferPercent, 0, NeuralRendering::kMaximumShadowTransferPercent, "%d%%");
 		Util::AddTooltip("Compressed NR only. 100% bounds brightness transfer into shadows; 0% applies the unbounded residual. Applies on release. Values below 100% share a cached shader; subsequent strength changes do not compile.");

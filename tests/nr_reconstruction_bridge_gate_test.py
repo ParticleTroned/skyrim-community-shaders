@@ -14,12 +14,16 @@ units = [
     "src/Features/Upscaling.h",
     "src/Features/Upscaling.cpp",
     "src/Features/Upscaling/NeuralCapture.cpp",
+    "src/Utils/CharacterCategoryAuthoring.cpp",
     *[
         f"src/Features/Upscaling/NeuralRendering/{name}"
         for name in (
             "ReconstructionTuning.h", "ReconstructionTuningJson.h", "Renderer.h",
             "ExecutionEvidence.h", "ExecutionEvidenceJson.h", "ModelResolution.h",
             "ModelResolution.cpp", "ModelResolutionPolicy.h",
+            "FaceDetailMapping.h", "FaceDetailPolicy.h", "PeripheralMapping.h",
+            "PeripheralCompressionPolicy.h", "CharacterRendering.h",
+            "CharacterRendering.cpp", "Renderer.cpp",
         )
     ],
     *[
@@ -27,6 +31,7 @@ units = [
         for name in (
             "ModelResolutionCommon.hlsli", "ModelResolutionPrepareCS.hlsl",
             "ModelResolutionReconstructCS.hlsl",
+            "PeripheralCompression.hlsli",
         )
     ],
 ]
@@ -34,6 +39,7 @@ symbols = re.compile(
     r"\b(?:ReconstructionTuning\w*|ReconstructionPreparation|reconstructionTuning|neuralReconstructionTuning|"
     r"experimentalPreparation\w*|experimentalReconstructionShaders_|experimentalShadowTransfer|experimentalPerChannelClamping|"
     r"experimentalDepthSampleMotion|experimentalPadding|Experimental\w+|"
+    r"FaceDetail\w*|faceDetail\w*|kFaceDetail\w*|kMaximumFaceDetail\w*|ObserveFaceDetail|GetFaceDetailRegions|ApplyFaceDetailProtection|"
     r"EnsureExperimentalShader|SelectExperimentalReconstruction|DrawNeuralReconstructionExperiments)\b"
 )
 with tempfile.TemporaryDirectory(prefix="nr-reconstruction-gate-") as directory:
@@ -45,6 +51,7 @@ with tempfile.TemporaryDirectory(prefix="nr-reconstruction-gate-") as directory:
         outputs = {}
         for bridge in (False, True):
             command = [args.compiler, "/nologo", "/EP", "/TP", "/DNR_PERIPHERAL_COMPRESSION",
+                       "/DNR_FACE_DETAIL_PROTECTION",
                        "/DNR_CELL_CENTRE_MOTION", "/DNR_SHADOW_TRANSFER_TUNING", "/DNR_WHOLE_PIXEL_REJECTION",
                        "/DDEVBENCH_BRIDGE_ENABLED" if bridge else "/UDEVBENCH_BRIDGE_ENABLED", str(unit)]
             result = subprocess.run(command, capture_output=True, text=True, check=True)

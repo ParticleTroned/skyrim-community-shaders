@@ -295,6 +295,7 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 	RendererApplyArgs base;
 	base.device = device;
 	base.context = context;
+	base.sourceWorldFrame = 42;
 	base.colorInput = input.texture.Get();
 	base.depthGuide = depth.texture.Get();
 	base.depthGuideSRV = depth.srv.Get();
@@ -312,6 +313,11 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 	base.guidedReconstructionEnabled = AdapterCompiler::guided;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	base.reconstructionTuning = tuning;
+	if (tuning.faceDetailProtectionPercent) {
+		base.faceDetailRegions.current = true;
+		base.faceDetailRegions.count = 1;
+		base.faceDetailRegions.bounds[0] = { 0.3f, 0.25f, 0.6f, 0.65f };
+	}
 	const auto subdivisions = tuning.footprintSubdivisions;
 #else
 	const auto subdivisions = 2u;
@@ -373,6 +379,10 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 		std::array args{ base, base };
 		for (UINT eye = 0; eye < args.size(); ++eye) {
 			args[eye].featureSlot = eye;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (tuning.faceDetailProtectionPercent && eye == 1)
+				args[eye].faceDetailRegions.bounds[0] = { 0.34f, 0.26f, 0.64f, 0.66f };
+#endif
 			if (shaped && eye == 1)
 				args[eye].peripheralMask.center[0] = 1.0f - args[eye].peripheralMask.center[0];
 			args[eye].colorOutput = outputs[eye].texture.Get();
@@ -423,9 +433,12 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 				.source = { source[0], source[1] },
 				.device = reinterpret_cast<std::uintptr_t>(device),
 				.context = reinterpret_cast<std::uintptr_t>(context),
-				.generation = 1, .slotMask = 0xcu, .networkPreset = 2,
+				.generation = 1,
+				.slotMask = 0xcu,
+				.networkPreset = 2,
 				.modelResolutionPercent = std::max(90u, percent),
-				.peripheralCompressionPercent = compression, .pressureResolutionEnabled = true,
+				.peripheralCompressionPercent = compression,
+				.pressureResolutionEnabled = true,
 			};
 			const auto compiled = AdapterCompiler::calls;
 			const auto warm = adapter.ProjectPrewarm(request, percent);
@@ -456,6 +469,39 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 			request.source = {};
 			Require(!adapter.ProjectPrewarm(request, percent), "Missing source geometry must defer prewarm");
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (tuning.faceDetailProtectionPercent) {
+			const bool faceDetailActive = std::ranges::any_of(args, [](const auto& eye) { return eye.peripheralCompression.mapping.faceDetail.enabled != 0; });
+			for (const auto& eye : args)
+				Require(eye.peripheralShaders.experimentalPreparation.faceDetailProtection == faceDetailActive,
+					"Inactive protection selected an experimental face preparation shader");
+			Require(!mixedGuides || !plan.mapping.faceDetail.enabled, "Face protection escaped the stateless pre-DLSS route");
+			if (!mixedGuides && percent == 100)
+				Require(plan.mapping.faceDetail.enabled != 0, "Face protection did not reach the shaders");
+			auto ordinary = args;
+			for (auto& eye : ordinary) eye.reconstructionTuning.faceDetailProtectionPercent = 0;
+			Require(adapter.PlanPeripheralCompression(ordinary, false), "Baseline face budget planning failed");
+			for (unsigned eye = 0; eye < args.size(); ++eye)
+				Require(args[eye].peripheralCompression.model == ordinary[eye].peripheralCompression.model &&
+							args[eye].peripheralCompression.guides == ordinary[eye].peripheralCompression.guides,
+					"Adaptive face protection increased allocation");
+			auto missingEye = args;
+			missingEye[1].faceDetailRegions.current = false;
+			Require(adapter.PlanPeripheralCompression(missingEye, false) &&
+						!missingEye[0].peripheralCompression.mapping.faceDetail.enabled && !missingEye[1].peripheralCompression.mapping.faceDetail.enabled,
+				"Missing source evidence did not retain ordinary compression for both eyes");
+			for (bool invalidFrame : { false, true }) {
+				auto stale = args;
+				if (invalidFrame)
+					for (auto& eye : stale) eye.sourceWorldFrame = std::numeric_limits<std::uint32_t>::max();
+				else
+					++stale[1].sourceWorldFrame;
+				Require(adapter.PlanPeripheralCompression(stale, false) &&
+							!stale[0].peripheralCompression.mapping.faceDetail.enabled && !stale[1].peripheralCompression.mapping.faceDetail.enabled,
+					"Unmatched or invalid source frames activated face protection");
+			}
+		}
+#endif
 		if (directScene) {
 			for (bool authored : { false, true }) {
 				auto invalid = args;

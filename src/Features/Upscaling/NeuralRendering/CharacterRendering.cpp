@@ -17,6 +17,7 @@
 #include "GpuPass.h"
 #include "Profiler.h"
 #include "Utils/D3D.h"
+#include "Utils/Finite.h"
 #include "Utils/Game.h"
 #include "Utils/GeometryBounds.h"
 #include "Utils/PassTimingCapture.h"
@@ -2402,6 +2403,15 @@ namespace NeuralRendering
 		CharacterCropAdmission cropAdmission_;
 		std::array<CharacterCropResidence, 2> cropPairResidence_{};
 		mutable std::mutex mutex_;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		struct FaceDetailFrame
+		{
+			std::uint32_t frame = std::numeric_limits<std::uint32_t>::max();
+			std::array<std::uint32_t, kFaceDetailMaximumActors> actors{};
+			std::array<FaceDetailRegions, 2> eyes{};
+		};
+		std::array<FaceDetailFrame, 2> faceDetailFrames_{};
+#endif
 		CharacterCategoryFramePolicy categoryFramePolicy_{};
 		mutable std::mutex rejectionFrameMutex_;
 		std::atomic<std::uint32_t> rejectionFrame_{
@@ -2514,6 +2524,65 @@ namespace NeuralRendering
 			return disabled;
 		}
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void CharacterRendering::ObserveFaceDetail(std::uint32_t frame, std::uint32_t actor, const CharacterActorBound& bound)
+	{
+		if (!state_ || frame == std::numeric_limits<std::uint32_t>::max() || !actor || !Util::IsFinite(bound.centerX) || !Util::IsFinite(bound.centerY) ||
+			!Util::IsFinite(bound.centerZ) || !Util::IsFinite(bound.radius) || bound.radius <= 0.0f)
+			return;
+		std::scoped_lock lock(state_->mutex_);
+		auto& observation = state_->faceDetailFrames_[frame % state_->faceDetailFrames_.size()];
+		if (observation.frame != frame) {
+			observation = {};
+			observation.frame = frame;
+		}
+		const auto count = observation.eyes[0].count;
+		if (count >= kFaceDetailMaximumActors || std::find(observation.actors.begin(), observation.actors.begin() + count, actor) != observation.actors.begin() + count)
+			return;
+		observation.actors[count] = actor;
+		const State::Observation sphere{ .center = { bound.centerX, bound.centerY, bound.centerZ }, .radius = bound.radius };
+		constexpr std::uint32_t projectionExtent = 16384;
+		const auto eyeCount = globals::game::isVR ? 2u : 1u;
+		for (std::uint32_t eye = 0; eye < eyeCount; ++eye) {
+			CharacterRect rect{};
+			const auto result = state_->ProjectGeometry(sphere, GetProjectionEyePosition(eye),
+				globals::game::frameBufferCached.GetCameraViewProjUnjittered(eye).Transpose(),
+				globals::game::frameBufferCached.GetCameraViewProj(eye).Transpose(), projectionExtent, projectionExtent, rect);
+			auto& regions = observation.eyes[eye];
+			if (result == CharacterProjectionResult::Visible && rect.IsValid())
+				regions.bounds[count] = { float(rect.minX) / projectionExtent, float(rect.minY) / projectionExtent,
+					float(rect.maxX) / projectionExtent, float(rect.maxY) / projectionExtent };
+			else if (result == CharacterProjectionResult::Uncertain)
+				regions.bounds[count] = { 0.0f, 0.0f, 1.0f, 1.0f };
+			regions.current = (count == 0 || regions.current) && result != CharacterProjectionResult::Uncertain;
+			regions.count = count + 1;
+		}
+	}
+
+	FaceDetailRegions CharacterRendering::GetFaceDetailRegions(std::uint32_t frame, std::uint32_t eye, const UpscalingDLSS::ViewportCrop& crop) const
+	{
+		const auto eyeCount = globals::game::isVR ? 2u : 1u;
+		if (!state_ || frame == std::numeric_limits<std::uint32_t>::max() || eye >= eyeCount || !crop.input.IsValidFor(crop.fullInput))
+			return {};
+		std::scoped_lock lock(state_->mutex_);
+		const auto& observation = state_->faceDetailFrames_[frame % state_->faceDetailFrames_.size()];
+		if (observation.frame != frame)
+			return {};
+		for (std::uint32_t observedEye = 0; observedEye < eyeCount; ++observedEye)
+			if (!observation.eyes[observedEye].current || observation.eyes[observedEye].count != observation.eyes[0].count)
+				return {};
+		auto regions = observation.eyes[eye];
+		for (std::uint32_t i = 0; i < regions.count; ++i) {
+			auto& rect = regions.bounds[i];
+			for (unsigned corner = 0; corner < 2; ++corner) {
+				rect[corner * 2] = std::clamp((rect[corner * 2] * crop.fullInput.width - crop.input.left) / crop.input.Width(), 0.0f, 1.0f);
+				rect[corner * 2 + 1] = std::clamp((rect[corner * 2 + 1] * crop.fullInput.height - crop.input.top) / crop.input.Height(), 0.0f, 1.0f);
+			}
+		}
+		return regions;
+	}
+#endif
 
 	bool CharacterRendering::ShouldAuthorActor(
 		std::uint32_t a_frame,
@@ -4035,6 +4104,9 @@ namespace NeuralRendering
 			state_->observationFrame_ = std::numeric_limits<std::uint32_t>::max();
 			state_->InvalidateProjectionCache();
 			state_->actorAdmissions_.clear();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			state_->faceDetailFrames_ = {};
+#endif
 			for (auto& slot : state_->slots_)
 				State::RetireCoverageEvidence(slot);
 			state_->slots_ = {};

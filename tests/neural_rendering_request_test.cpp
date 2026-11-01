@@ -48,13 +48,13 @@ int main()
 			throw std::runtime_error("Neural Rendering request validation invariant");
 		}
 	};
-	for (const auto* field : { "experimentalShadowTransferPercent", "experimentalFootprintSubdivisions" }) {
+	for (const auto* field : { "experimentalShadowTransferPercent", "experimentalFaceDetailProtectionPercent", "experimentalFootprintSubdivisions" }) {
 		for (const auto& value : { json(0), json(1), json(2), json(3), json(4), json(50), json(100), json(101),
 				 json(-1), json(1.5), json(true), json(nullptr), json("2"), json::array(), json::object() }) {
 			NeuralRenderingConfigurationRequest request;
 			json error;
 			const bool integer = value.is_number_integer() && value.get<std::int64_t>() >= 0;
-			const bool expected = integer && (std::string_view(field) == "experimentalShadowTransferPercent" ? value <= 100 : value == 1 || value == 2 || value == 4);
+			const bool expected = integer && (std::string_view(field) != "experimentalFootprintSubdivisions" ? value <= 100 : value == 1 || value == 2 || value == 4);
 			require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { field, value } }, request, error) == expected);
 			if (expected)
 				require(request.HasAnyControl());

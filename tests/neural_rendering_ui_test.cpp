@@ -669,6 +669,11 @@ int main()
 		ImGui::itemDeactivatedAfterEdit = true;
 		DrawNeuralReconstructionExperiments(settings);
 		require(settings.neuralReconstructionTuning.shadowTransferPercent == 0, "Shadow transfer slider did not apply on release");
+		ImGui::Clear("Face detail protection");
+		ImGui::sliderEditValue = 75;
+		ImGui::itemDeactivatedAfterEdit = true;
+		DrawNeuralReconstructionExperiments(settings);
+		require(settings.neuralReconstructionTuning.faceDetailProtectionPercent == 75, "Face protection slider did not apply on release");
 		ImGui::Clear("Per-channel output clamping");
 		DrawNeuralReconstructionExperiments(settings);
 		ImGui::Clear("Anchor motion at depth sample");

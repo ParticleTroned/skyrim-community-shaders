@@ -242,7 +242,7 @@ int main()
 	live.neuralRenderingGuidedReconstruction = true;
 	live.neuralRenderingPressureResolutionEnabled = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	live.neuralReconstructionTuning = { 50, 4, false, false };
+	live.neuralReconstructionTuning = { .shadowTransferPercent = 50, .footprintSubdivisions = 4, .perChannelClamping = false, .depthSampleMotion = false };
 #endif
 	IndependentSettings upscalerEdit{ 4, false, 0.0f, 0, 0 };
 	NeuralRendering::CopyRenderingSettings(upscalerEdit, live);

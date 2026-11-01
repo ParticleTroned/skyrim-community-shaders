@@ -125,7 +125,12 @@ namespace NeuralRendering
 		bool EnsureCoverage(ID3D11Device*, HRESULT&);
 		bool EnsureSelectionShader(bool guarded, HRESULT&);
 		bool EnsureGuidedShader(bool selected, bool guarded, bool peripheral, Microsoft::WRL::ComPtr<ID3D11ComputeShader>&, HRESULT&);
-		bool EnsurePeripheralShaders(const RendererApplyArgs&, bool selected, PeripheralCompressionShaders&, HRESULT&);
+		bool EnsurePeripheralShaders(const RendererApplyArgs&, bool selected, PeripheralCompressionShaders&, HRESULT&
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			,
+			bool faceDetail
+#endif
+		);
 		bool BuildPeripheralPlans(std::span<RendererApplyArgs>, bool compactInputs, std::span<PeripheralCompressionPlan>) const;
 		void DispatchCoverage(std::span<const RendererApplyArgs>, Batch&);
 		template <UINT ConstantBuffers>
@@ -142,8 +147,8 @@ namespace NeuralRendering
 		};
 		bool EnsureExperimentalShader(ExperimentalShader&, const wchar_t*, std::span<const std::pair<const char*, const char*>>, HRESULT&);
 		bool SelectExperimentalReconstruction(const RendererApplyArgs&, Batch&, bool selected, bool peripheral, HRESULT&);
-		std::array<ExperimentalShader, 6> experimentalPreparationShaders_{};
-		std::array<ExperimentalShader, 64> experimentalReconstructionShaders_{};
+		std::array<ExperimentalShader, 12> experimentalPreparationShaders_{};
+		std::array<ExperimentalShader, 128> experimentalReconstructionShaders_{};
 #endif
 		std::shared_ptr<CoverageWork> coverage_;
 		Microsoft::WRL::ComPtr<ID3D11ComputeShader> coverageShader_, guardedReconstruct_;

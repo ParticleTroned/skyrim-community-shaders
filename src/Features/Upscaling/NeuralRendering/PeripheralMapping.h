@@ -3,6 +3,7 @@
 // Analytic curve adapted from Yuri Grib (BeliyG3), optimizer-fps-dlss5, MIT.
 // See package/SKSE/Plugins/CommunityShaders/Licenses/NeuralRendering/PeripheralCompression.txt.
 #include "../../FoveatedCommon.h"
+#include "FaceDetailMapping.h"
 
 #include <algorithm>
 #include <array>
@@ -32,6 +33,9 @@ namespace NeuralRendering
 		Point origin{}, work{ 1.0f, 1.0f };
 		float protectedFraction = 1.0f, boundaryScale = 1.0f, edgeSlope = 1.0f;
 		std::uint32_t shaped = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		FaceDetailMapping faceDetail{};
+#endif
 		bool operator==(const PeripheralMapping&) const = default;
 
 		/** Rectangle and FOV use the same curve with their respective distance metric. */
@@ -65,13 +69,22 @@ namespace NeuralRendering
 			const Point delta{ source[0] - center[0], source[1] - center[1] };
 			const float radius = Distance(delta);
 			const float scale = radius > protectedFraction ? ForwardRadius(radius) / radius : 1.0f;
-			return { (center[0] + delta[0] * scale - origin[0]) / work[0],
+			Point result{ (center[0] + delta[0] * scale - origin[0]) / work[0],
 				(center[1] + delta[1] * scale - origin[1]) / work[1] };
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			for (unsigned axis = 0; axis < 2; ++axis)
+				result[axis] = faceDetail.Forward(result[axis], axis);
+#endif
+			return result;
 		}
 		[[nodiscard]] Point Inverse(Point target) const noexcept
 		{
 			if (protectedFraction == 1.0f)
 				return target;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			for (unsigned axis = 0; axis < 2; ++axis)
+				target[axis] = faceDetail.Inverse(target[axis], axis);
+#endif
 			const Point delta{ origin[0] + target[0] * work[0] - center[0], origin[1] + target[1] * work[1] - center[1] };
 			const float scale = InverseScale(Distance(delta));
 			return { center[0] + delta[0] * scale, center[1] + delta[1] * scale };
@@ -79,6 +92,12 @@ namespace NeuralRendering
 		/** Bounds contain the whole inverse-mapped cell, including crossings of either mask axis. */
 		[[nodiscard]] std::pair<Point, Point> SourceBounds(Point lower, Point upper) const noexcept
 		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			for (unsigned axis = 0; axis < 2; ++axis) {
+				lower[axis] = faceDetail.Inverse(lower[axis], axis);
+				upper[axis] = faceDetail.Inverse(upper[axis], axis);
+			}
+#endif
 			Point low{}, high{}, nearest{}, farthest{};
 			for (unsigned axis = 0; axis < 2; ++axis) {
 				low[axis] = origin[axis] + lower[axis] * work[axis] - center[axis];
@@ -94,5 +113,10 @@ namespace NeuralRendering
 			return { lower, upper };
 		}
 	};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	static_assert(sizeof(PeripheralMapping) == 192);
+	static_assert(offsetof(PeripheralMapping, faceDetail) == 48);
+#else
 	static_assert(sizeof(PeripheralMapping) == 48);
+#endif
 }

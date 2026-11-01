@@ -8,11 +8,13 @@
 namespace NeuralRendering
 {
 	inline constexpr std::uint32_t kMaximumShadowTransferPercent = 100;
+	inline constexpr std::uint32_t kMaximumFaceDetailProtectionPercent = 100;
 	inline constexpr std::array kReconstructionFootprintSubdivisions{ 1u, 2u, 4u };
 	struct ReconstructionPreparation
 	{
 		std::uint32_t footprintSubdivisions = 2;
 		bool depthSampleMotion = true;
+		bool faceDetailProtection = false;
 		bool operator==(const ReconstructionPreparation&) const = default;
 	};
 
@@ -20,6 +22,7 @@ namespace NeuralRendering
 	struct ReconstructionTuning
 	{
 		std::uint32_t shadowTransferPercent = kMaximumShadowTransferPercent;
+		std::uint32_t faceDetailProtectionPercent = 0;
 		std::uint32_t footprintSubdivisions = 2;
 		bool perChannelClamping = true;
 		bool depthSampleMotion = true;
@@ -31,10 +34,10 @@ namespace NeuralRendering
 		}
 		[[nodiscard]] constexpr bool Valid() const noexcept
 		{
-			return shadowTransferPercent <= kMaximumShadowTransferPercent && ValidFootprint(footprintSubdivisions);
+			return shadowTransferPercent <= kMaximumShadowTransferPercent && faceDetailProtectionPercent <= kMaximumFaceDetailProtectionPercent && ValidFootprint(footprintSubdivisions);
 		}
 		/** Native input identity includes preparation; presentation identity covers all controls. */
-		[[nodiscard]] constexpr ReconstructionPreparation Preparation() const noexcept { return { footprintSubdivisions, depthSampleMotion }; }
+		[[nodiscard]] constexpr ReconstructionPreparation Preparation(bool faceDetailActive = false) const noexcept { return { footprintSubdivisions, depthSampleMotion, faceDetailActive && faceDetailProtectionPercent != 0 }; }
 	};
 }
 #endif

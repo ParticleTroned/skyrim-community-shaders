@@ -167,6 +167,7 @@ class Contracts(unittest.TestCase):
         preparation = (NR / "ModelResolution.cpp").read_text()
         self.assertIn("if (input.peripheralCompression.Active() || geometry->packedCrops.count)", preparation)
         self.assertIn("adapted.jitterPixels = {};", preparation)
+        self.assertIn("mapping.faceDetail = {};", renderer)
         self.assertIn('defines.emplace_back("NR_NVIDIA_REFERENCE", "1")', (NR / "ColorPipeline.cpp").read_text())
         self.assertIn("#ifdef NR_NVIDIA_REFERENCE", (SHADERS / "ColorCommon.hlsli").read_text())
 

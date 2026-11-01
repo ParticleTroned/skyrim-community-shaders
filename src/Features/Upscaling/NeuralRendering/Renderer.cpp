@@ -814,7 +814,12 @@ namespace NeuralRendering
 			for (const auto& input : args) {
 				if (input.featureSlot >= presentedPeripheralMappings_.size())
 					continue;
-				const auto mapping = succeeded && input.peripheralCompression.Active() ? input.peripheralCompression.mapping : PeripheralMapping{};
+				auto mapping = succeeded && input.peripheralCompression.Active() ? input.peripheralCompression.mapping : PeripheralMapping{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				// Stateless NR restores the same scene grid before DLSS; moving heads do not invalidate its history.
+				if (input.renderingMode == RenderingMode::ReducedResolution && input.reset)
+					mapping.faceDetail = {};
+#endif
 				auto& previous = presentedPeripheralMappings_[input.featureSlot];
 				outcome.spatialHistoryReset |= previous != mapping;
 				previous = mapping;

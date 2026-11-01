@@ -2,6 +2,9 @@
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/Renderer.h"
 #include "Globals.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Features/Upscaling/NeuralRendering/CharacterRendering.h"
+#endif
 
 #include <algorithm>
 
@@ -47,6 +50,11 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	args.reconstructionTuning = settings.neuralReconstructionTuning;
+	args.faceDetailRegions = {};
+	if (args.reconstructionTuning.faceDetailProtectionPercent && args.peripheralCompressionPercent &&
+		args.renderingMode == NeuralRendering::RenderingMode::ReducedResolution && !settings.neuralCharacterRenderingEnabled)
+		args.faceDetailRegions = NeuralRendering::CharacterRendering::Instance().GetFaceDetailRegions(
+			args.sourceWorldFrame, args.featureSlot % NeuralRendering::kEyeCount, dlssCrop);
 	const auto [peripheralOverride, peripheralChanged] = NeuralRendering::Renderer::Instance().ResolvePeripheralOverride(args.frameId, args.generation);
 	args.peripheralOverride = peripheralOverride;
 	if (peripheralChanged)

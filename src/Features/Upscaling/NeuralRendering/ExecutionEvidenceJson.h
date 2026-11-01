@@ -95,7 +95,9 @@ namespace NeuralRendering::Evidence
 			{ "baselinePixels", value.baselinePixels }, { "candidatePixels", value.candidatePixels },
 			{ "compressionPercent", value.compressionPercent }, { "protectedFraction", value.mapping.protectedFraction },
 			{ "shape", value.mapping.shaped ? "fov" : "rectangle" }, { "maskCenter", value.mapping.center }, { "maskRadii", value.mapping.radii }, { "workOrigin", value.mapping.origin }, { "workingFraction", value.mapping.work },
-			{ "maximumFootprint", value.maximumFootprint }, { "motionConvention", "normalized_endpoint_difference" } };
+			{ "maximumFootprint", value.maximumFootprint }, { "motionConvention", "normalized_endpoint_difference" },
+			{ "faceDetailProtection", { { "requestedPercent", value.faceDetailRequestedPercent }, { "active", value.mapping.faceDetail.enabled != 0 },
+										  { "regionsCurrent", value.faceDetailRegionsCurrent }, { "observedRegions", value.faceDetailObservedRegions }, { "fixedModelGrid", true } } } };
 	}
 	inline Json ModelReconstructionJson(const std::optional<ModelReconstructionEvidence>& value)
 	{

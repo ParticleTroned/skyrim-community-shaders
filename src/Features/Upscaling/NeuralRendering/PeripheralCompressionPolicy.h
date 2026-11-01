@@ -50,6 +50,10 @@ namespace NeuralRendering
 		std::uint32_t uniformPercent = 100, compressionPercent = 0;
 		std::uint64_t baselinePixels = 0, candidatePixels = 0;
 		bool requested = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::uint32_t faceDetailRequestedPercent = 0, faceDetailObservedRegions = 0;
+		bool faceDetailRegionsCurrent = false;
+#endif
 
 		bool operator==(const PeripheralCompressionPlan&) const = default;
 		[[nodiscard]] bool Active() const noexcept { return reason == PeripheralCompressionReason::Experimental; }

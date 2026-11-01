@@ -1,6 +1,7 @@
 #include "Features/Upscaling/NeuralRendering/PeripheralCompressionPolicy.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
+#	include "Features/Upscaling/NeuralRendering/FaceDetailPolicy.h"
 #endif
 
 #include <iostream>
@@ -181,6 +182,71 @@ int main()
 		Require(history != ModelResolutionHistory{}, "Mapping absent from temporal identity");
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		FaceDetailRegions faces;
+		faces.current = true;
+		faces.count = 1;
+		faces.bounds[0] = { 0.3f, 0.25f, 0.6f, 0.65f };
+		for (const auto mask : { PeripheralMask{}, PeripheralMask{ { 0.47f, 0.53f }, { 0.43f, 0.36f }, true } }) {
+			const auto original = Plan({ 1920, 1080 }, 90, {}, { .requested = true, .compressionPercent = 100, .mask = mask });
+			auto protectedPlan = original;
+			ApplyFaceDetailProtection(protectedPlan, faces, 100, 0.5f);
+			Require(protectedPlan.mapping.faceDetail.enabled != 0, "Face protection did not redistribute a valid partial face");
+			Require(protectedPlan.model == original.model && protectedPlan.guides == original.guides &&
+						protectedPlan.candidatePixels == original.candidatePixels,
+				"Face protection increased the model budget");
+			const auto modelBounds = FaceDetailModelBounds(original.mapping, faces.bounds[0]);
+			const auto& warp = protectedPlan.mapping.faceDetail;
+			for (unsigned axis = 0; axis < 2; ++axis) {
+				const float before = modelBounds[axis + 2] - modelBounds[axis];
+				Require(warp.Forward(modelBounds[axis + 2], axis) - warp.Forward(modelBounds[axis], axis) > before,
+					"Face area received no extra samples");
+				for (unsigned bin = 0; bin < kFaceDetailBins; ++bin)
+					Require((warp.Knot(axis, bin + 1) - warp.Knot(axis, bin)) * kFaceDetailBins >= 0.4999f,
+						"Background sampling density exceeded its fixed-budget limit");
+			}
+			for (unsigned y = 0; y <= 20; ++y)
+				for (unsigned x = 0; x <= 20; ++x) {
+					const PeripheralMapping::Point source{ float(x) / 20, float(y) / 20 };
+					const auto target = protectedPlan.mapping.Forward(source);
+					const auto restored = protectedPlan.mapping.Inverse(target);
+					Require(std::abs(restored[0] - source[0]) < 1e-5f && std::abs(restored[1] - source[1]) < 1e-5f,
+						"Adaptive mapping changed coordinate ownership");
+				}
+			for (unsigned y = 0; y < 12; ++y)
+				for (unsigned x = 0; x < 12; ++x) {
+					const auto [lower, upper] = protectedPlan.mapping.SourceBounds({ float(x) / 12, float(y) / 12 },
+						{ float(x + 1) / 12, float(y + 1) / 12 });
+					for (unsigned sample = 0; sample < 9; ++sample) {
+						const auto source = protectedPlan.mapping.Inverse({ (x + (sample % 3) * 0.5f) / 12, (y + (sample / 3) * 0.5f) / 12 });
+						Require(source[0] >= lower[0] - 1e-5f && source[0] <= upper[0] + 1e-5f &&
+									source[1] >= lower[1] - 1e-5f && source[1] <= upper[1] + 1e-5f,
+							"Adaptive footprint excluded a source sample");
+					}
+				}
+			for (unsigned condition = 0; condition < 10; ++condition) {
+				auto rejected = original;
+				auto region = faces;
+				if (condition == 0)
+					region.current = false;
+				if (condition == 1)
+					region.bounds[0] = { 0, 0, 1, 1 };
+				if (condition == 2)
+					region.bounds[0][0] = std::numeric_limits<float>::quiet_NaN();
+				if (condition == 5)
+					rejected.maximumFootprint[0] = kPeripheralMaximumFootprint;
+				if (condition == 6)
+					rejected.maximumFootprint[0] = std::numeric_limits<float>::infinity();
+				if (condition == 7)
+					region.bounds[0][0] = -0.1f;
+				if (condition == 8)
+					region.bounds[0][2] = std::numeric_limits<float>::max();
+				if (condition == 9)
+					region.count = kFaceDetailMaximumActors + 1u;
+				ApplyFaceDetailProtection(rejected, region, condition == 3 ? 0u : 100u, condition == 4 ? 1.0f : 0.5f);
+				Require(rejected.mapping == original.mapping && rejected.model == original.model,
+					"Unavailable, full-screen, over-budget or disabled protection changed the baseline");
+			}
+		}
 		PeripheralCompressionExperiment lease;
 		using Mode = PeripheralCompressionOverride;
 		Require(!lease.Configure(Mode::CompressedExperiment, 601, 1), "Unbounded lease accepted");

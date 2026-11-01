@@ -283,6 +283,7 @@ namespace NeuralRendering
 		PeripheralCompressionShaders peripheralShaders{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		ReconstructionTuning reconstructionTuning{};
+		FaceDetailRegions faceDetailRegions{};
 		GuidedReconstructionOverride reconstructionOverride = GuidedReconstructionOverride::Auto;
 		PeripheralCompressionOverride peripheralOverride = PeripheralCompressionOverride::Auto;
 #endif

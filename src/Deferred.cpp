@@ -753,7 +753,7 @@ void Deferred::DeferredPasses()
 			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,
 			dynamicCubemaps.loaded ? dynamicCubemaps.GetPublishedCubemap() : nullptr,
 			dynamicCubemaps.loaded ? dynamicCubemaps.GetPublishedCubemap(true) : nullptr,
-			dynamicCubemaps.loaded && skylighting.IsRuntimeActive() ? skylighting.texProbeArray->srv.get() : nullptr,
+			dynamicCubemaps.loaded && skylighting.IsRuntimeActive() && skylighting.texProbeArray ? skylighting.texProbeArray->srv.get() : nullptr,
 			masks2.SRV,
 			ssgi_ao,
 			ssgi_hq_spec ? nullptr : ssgi_y,

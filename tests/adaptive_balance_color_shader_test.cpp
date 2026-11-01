@@ -453,13 +453,25 @@ namespace
 
 	unsigned VerifyAuroraAppearance(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
 	{
-		const std::array cases{ std::vector<const char*>{}, std::vector<const char*>{ "SKY_OBJECT" },
-			std::vector<const char*>{ "SKY_OBJECT", "MOTIONVECTORS_NORMALS" } };
+		struct AuroraCase
+		{
+			std::vector<const char*> pixelDefines;
+			uint32_t vertexDescriptor;
+			bool colorPass;
+		};
+		const std::array cases{
+			AuroraCase{ { "TEXCOORD", "TEXTURE", "VC" }, 0x1000043, true },
+			AuroraCase{ { "ADDBLEND", "TEXCOORD", "TEXTURE", "VC" }, 0x1000443, true },
+			AuroraCase{ { "ADDBLEND", "FALLOFF", "NORMALS", "TEXCOORD", "TEXTURE", "VC" }, 0x1000553, true },
+			AuroraCase{ { "ADDBLEND", "TEXCOORD", "TEXTURE", "VC", "MOTIONVECTORS_NORMALS" }, 0x5000443, false }
+		};
 		auto authored = pointLightColors;
 		authored[3] = { 65504, -65504, 32752, 1 };
 		unsigned checked = 0;
-		for (size_t index = 0; index < cases.size(); ++index) {
-			Fixture fixture(device, vr, ShaderMode::Appearance, cases[index]);
+		for (const auto& shaderCase : cases) {
+			Fixture fixture(device, vr, ShaderMode::Appearance, shaderCase.pixelDefines);
+			// SkyObject is a vertex descriptor bit; the paired pixel shader has no SKY_OBJECT define.
+			fixture.permutation->SetVariable("Permutation::VertexShaderDescriptor", shaderCase.vertexDescriptor);
 			for (bool linear : { false, true })
 				for (uint32_t scene : { 0u, 1u, 2u })
 					for (bool aurora : { false, true })
@@ -468,7 +480,7 @@ namespace
 								auto appearance = AdaptiveBalanceTest::NeutralAppearance();
 								appearance[51] = intensity;
 								appearance[52] = curve;
-								const bool changed = index == 1 && aurora && scene != 0 && (intensity != 1 || curve != 1);
+								const bool changed = shaderCase.colorPass && aurora && scene != 0 && (intensity != 1 || curve != 1);
 								const auto result = fixture.DrawAppearance(context, linear, scene | (aurora ? 1u << 23 : 0), 11,
 									appearance, { 1, 1, 1, 1 }, { 1, 1, 1, 1 }, { 1, 1, 1, 1 }, false, authored);
 								auto expected = authored;

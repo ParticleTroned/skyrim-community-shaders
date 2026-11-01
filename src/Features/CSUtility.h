@@ -83,6 +83,7 @@ struct CSUtility : Feature
 		float causticsDispersion = 1.0f;
 		float parallaxStrength = 1.0f;
 		int parallaxQuality = 16;
+		bool foveatedParallax = false;
 	};
 
 	/** Saturation and gamma adjustments for one color input. */

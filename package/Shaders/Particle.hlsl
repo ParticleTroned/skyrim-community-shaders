@@ -301,7 +301,8 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 propertyColor = 0.0;
 
-	float2 uv = Stereo::ConvertFromStereoUV(input.Position.xy * SharedData::BufferDim.zw, eyeIndex);
+	float2 uv = FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition(input.Position.xy * SharedData::BufferDim.zw);
+	uv = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
 	float4 positionWS = float4(2 * float2(uv.x, -uv.y + 1) - 1, input.Position.z, 1);
 	positionWS = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], positionWS);

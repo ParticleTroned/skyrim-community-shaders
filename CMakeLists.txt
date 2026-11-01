@@ -2898,6 +2898,9 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
+    add_d3d_shader_test(
+        sss_skin_color_test SSSSkinColor tests/sss_skin_color_test.cpp
+    )
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_shadows.cmake")
     add_d3d_shader_test(
         wetterness_highlights_test WetternessHighlights

@@ -1,0 +1,213 @@
+name: Water integration test build
+
+on:
+  push:
+    branches: [build/os-dev-water-integration-20261101]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: water-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  water-preflight:
+    name: Water shader preflight (${{ matrix.runtime }})
+    if: github.repository == 'ParticleTroned/skyrim-community-shaders' && github.ref == 'refs/heads/build/os-dev-water-integration-20261101'
+    runs-on: windows-2025-vs2026
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [SE, VR]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install shader validator
+        run: python -m pip install git+https://github.com/alandtse/hlslkit.git@d0ed83ab12fc48b9ee03ddf61b21e80bfa5c3778 pyyaml
+      - name: Compile water and candidate shaders with production flags
+        shell: python
+        env:
+          WATER_RUNTIME: ${{ matrix.runtime }}
+        run: |
+          import importlib.util
+          import os
+          import re
+          import shutil
+          import subprocess
+          import sys
+          from pathlib import Path
+          import yaml
+
+          sys.path.insert(0, str(Path('tools').resolve()))
+          spec = importlib.util.spec_from_file_location('shader_cache', 'tools/build-shader-cache.py')
+          builder = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(builder)
+          runtime = os.environ['WATER_RUNTIME']
+          fxc = shutil.which('fxc.exe')
+          if not fxc:
+              sdk = Path(os.environ['ProgramFiles(x86)']) / 'Windows Kits/10/bin'
+              candidates = sorted(sdk.glob('*/x64/fxc.exe'), reverse=True)
+              if not candidates:
+                  raise RuntimeError('Windows SDK FXC is required.')
+              fxc = str(candidates[0])
+          stage = Path('build/water-preflight/Shaders')
+          builder.stage_merged_shaders(stage)
+          config_name = 'shader-validation-vr.yaml' if runtime == 'VR' else 'shader-validation.yaml'
+          config = yaml.safe_load((Path('.github/configs') / config_name).read_text())
+          config['shaders'] = [shader for shader in config['shaders'] if shader['file'] == 'Water.hlsl']
+          if not config['shaders']:
+              raise RuntimeError('No water permutations found.')
+          # Exercise both native depth conventions, independent of the default-install setting.
+          for reverse_z in (False, True):
+              depth_config = yaml.safe_load(yaml.safe_dump(config))
+              for shader in depth_config['shaders']:
+                  for settings in shader['configs'].values():
+                      defines = [d for d in settings.get('common_defines', []) if d != 'REVERSE_Z']
+                      if reverse_z:
+                          defines.append('REVERSE_Z')
+                      settings['common_defines'] = defines
+              path = Path('build/water-preflight') / f'{runtime}-{int(reverse_z)}.yaml'
+              path.write_text(yaml.safe_dump(depth_config, sort_keys=False))
+              subprocess.run(['hlslkit-compile', '--fxc', fxc, '--shader-dir', str(stage),
+                  '--output-dir', str(path.with_suffix('')), '--config', str(path),
+                  '--max-warnings', '0', '--suppress-warnings', 'X1519',
+                  '--strip-debug-defines', '--optimization-level', '3', '--dedupe'], check=True)
+          command = [fxc, '/nologo', '/T', 'cs_5_0', '/E', 'main', '/O3', '/Ges', '/Vd',
+                     '/I', str(stage), '/Fo', 'build/water-preflight/WaterContactCandidates.cso']
+          if runtime == 'VR':
+              command.append('/DVR')
+          command.append(str(stage / 'LightLimitFix/WaterContactCandidatesCS.hlsl'))
+          result = subprocess.run(command, capture_output=True, text=True)
+          diagnostics = result.stdout + result.stderr
+          print(diagnostics)
+          warnings = re.findall(r'warning (X\d+):', diagnostics)
+          if result.returncode or any(code != 'X1519' for code in warnings):
+              raise RuntimeError('Water candidate compute shader failed validation.')
+
+  build:
+    if: github.repository == 'ParticleTroned/skyrim-community-shaders' && github.ref == 'refs/heads/build/os-dev-water-integration-20261101'
+    uses: ./.github/workflows/_shared-build.yaml
+    with:
+      ref: ${{ github.sha }}
+      repository: ${{ github.repository }}
+      cmake-preset: ALL
+      run-cpp: true
+      run-shader-validation: true
+      run-shader-tests: true
+      run-cpp-tests: true
+      run-full-config-validation: true
+      release-parity-validation: true
+      cache-artifacts: false
+      upload-compiled-shaders: false
+      cache-key-suffix: -water-integration
+
+  package:
+    name: Verify and package water integration
+    needs: [water-preflight, build]
+    if: github.repository == 'ParticleTroned/skyrim-community-shaders' && github.ref == 'refs/heads/build/os-dev-water-integration-20261101'
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist-artifacts
+          path: integration-dist
+      - name: Verify complete package, runtime exclusion and provenance
+        shell: pwsh
+        env:
+          INTEGRATION_SHA: ${{ github.sha }}
+          INTEGRATION_REPOSITORY: ${{ github.repository }}
+          INTEGRATION_RUN_ID: ${{ github.run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archives = @(Get-ChildItem integration-dist -File -Filter 'CommunityShaders_AIO-*' |
+            Where-Object { $_.Extension -in '.7z', '.zip' })
+          if ($archives.Count -ne 1) { throw "Expected exactly one AIO; found $($archives.Count)." }
+          $archive = $archives[0]
+          $stage = Join-Path $env:GITHUB_WORKSPACE 'water-integration-package'
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          if ($archive.Extension -eq '.zip') {
+            Expand-Archive -LiteralPath $archive.FullName -DestinationPath $stage
+          } else {
+            & 7z x $archive.FullName "-o$stage" -y | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'AIO extraction failed.' }
+          }
+          function Require-Payload([string] $relative) {
+            $file = Get-Item -LiteralPath (Join-Path $stage $relative)
+            if ($file.PSIsContainer -or $file.Length -eq 0) { throw "Empty or invalid payload: $relative" }
+            return $file.FullName
+          }
+          $dll = Require-Payload 'SKSE/Plugins/CommunityShaders.dll'
+          $null = Require-Payload 'SKSE/Plugins/CommunityShaders.pdb'
+          $forbidden = @(Get-ChildItem $stage -Recurse -File -Force | Where-Object { $_.Name -match '(?i)^nvngx_dlssnr.*\.dll$' })
+          if ($forbidden.Count) { throw 'External NR runtime DLL found in AIO; refusing distribution.' }
+          $payload = [ordered]@{
+            'Shaders/Water.hlsl' = 'package/Shaders/Water.hlsl'
+            'Shaders/Common/SharedData.hlsli' = 'package/Shaders/Common/SharedData.hlsli'
+            'Shaders/Common/WaterRefraction.hlsli' = 'package/Shaders/Common/WaterRefraction.hlsli'
+            'Shaders/Common/WaterParallaxMath.hlsli' = 'package/Shaders/Common/WaterParallaxMath.hlsli'
+            'Shaders/Common/WaterContactCandidates.hlsli' = 'package/Shaders/Common/WaterContactCandidates.hlsli'
+            'Shaders/WaterEffects/WaterParallax.hlsli' = 'features/Water Effects/Shaders/WaterEffects/WaterParallax.hlsli'
+            'Shaders/LightLimitFix/WaterContactCandidatesCS.hlsl' = 'features/Light Limit Fix/Shaders/LightLimitFix/WaterContactCandidatesCS.hlsl'
+            'Shaders/LightLimitFix/Common.hlsli' = 'features/Light Limit Fix/Shaders/LightLimitFix/Common.hlsli'
+            'SKSE/Plugins/CommunityShaders/Translations/en.json' = 'package/SKSE/Plugins/CommunityShaders/Translations/en.json'
+          }
+          $hashes = [ordered]@{}
+          foreach ($relative in $payload.Keys) {
+            $packaged = Require-Payload $relative
+            $actual = (Get-FileHash -LiteralPath $packaged -Algorithm SHA256).Hash
+            $expected = (Get-FileHash -LiteralPath $payload[$relative] -Algorithm SHA256).Hash
+            if ($actual -ne $expected) { throw "Package/source mismatch: $relative" }
+            $hashes[$relative] = $actual.ToLowerInvariant()
+          }
+          $sourceManifest = Get-Content docs/development/water-integration-manifest.json -Raw | ConvertFrom-Json
+          $manifest = [ordered]@{
+            repository = $env:INTEGRATION_REPOSITORY
+            integrationCommit = $env:INTEGRATION_SHA
+            upstreamDevCommit = $sourceManifest.upstreamDevCommit
+            donorCommit = $sourceManifest.donorCommit
+            sourceBranches = $sourceManifest.branches
+            workflowRun = "https://github.com/$env:INTEGRATION_REPOSITORY/actions/runs/$env:INTEGRATION_RUN_ID"
+            preset = 'ALL'
+            runtimes = @('SE', 'AE', 'VR')
+            inputAio = $archive.Name
+            inputAioSha256 = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            pluginSha256 = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+            verifiedPayloadSha256 = $hashes
+            externalNrRuntime = 'Not included or required by these water changes.'
+            inGameValidation = 'Not established by CI; follow the test guide.'
+          }
+          $manifest | ConvertTo-Json -Depth 12 | Set-Content (Join-Path $stage 'WATER-INTEGRATION-MANIFEST.json') -Encoding utf8
+          Copy-Item docs/development/water-port-branches.md (Join-Path $stage 'WATER-INTEGRATION-TESTING.md')
+          @"
+          # Open Shaders water integration test build
+
+          Complete AIO for integration commit $env:INTEGRATION_SHA, prepared only in the CSX fork.
+          Install as one mod overriding existing Open Shaders files to keep DLL and shader layouts matched.
+          This is Open Shaders plus the water work branches, not a CSX main-VR replacement build.
+          No upstream PR or release is associated with this test artifact.
+
+          New appearance/performance controls are conservative by default:
+          enable Shallow Surface Strength, Foveated Water Parallax, nonnegative Water Reflection Strength,
+          or Water Contact Candidates 1-8 explicitly when testing those changes.
+          The water parallax hard ceiling remains 64 steps. The debug depth toggle is unchanged.
+          No nvngx_dlssnr.dll is distributed. In-game SE/AE/VR validation remains necessary.
+          See WATER-INTEGRATION-TESTING.md and WATER-INTEGRATION-MANIFEST.json.
+          "@ | Set-Content (Join-Path $stage 'WATER-INTEGRATION-README.md') -Encoding utf8
+      - uses: actions/upload-artifact@v7
+        with:
+          name: water-integration-test-build
+          path: water-integration-package/
+          include-hidden-files: true
+          retention-days: 30
+          if-no-files-found: error

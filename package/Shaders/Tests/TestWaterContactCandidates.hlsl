@@ -20,3 +20,12 @@
 	ASSERT(IsFalse, WaterContactCandidates::Contains(packed, 119, 7));
 	ASSERT(IsFalse, WaterContactCandidates::Contains(packed, 127, 8));
 }
+
+[numthreads(1, 1, 1)]
+void TestWaterCandidateEmptySentinelIsUnsigned()
+{
+	uint2 packed = WaterContactCandidates::Empty();
+	ASSERT(IsTrue, all(packed == uint2(0xffffffffu, 0xffffffffu)));
+	[unroll] for (uint slot = 0; slot < WaterContactCandidates::MaxCandidates; ++slot)
+		ASSERT(AreEqual, WaterContactCandidates::Load(packed, slot), WaterContactCandidates::EmptyIndex);
+}

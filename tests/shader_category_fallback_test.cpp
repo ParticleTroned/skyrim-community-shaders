@@ -109,6 +109,13 @@ struct TestState
 	bool updateShader = false;
 	struct
 	{
+		RE::BSGraphics::VertexShader* vertex = nullptr;
+		RE::BSGraphics::PixelShader* pixel = nullptr;
+		uint32_t vertexDescriptor = 0, pixelDescriptor = 0;
+		bool pixelCleared = false;
+	} techniqueShaderSelection;
+	struct
+	{
 		uint32_t VertexShaderDescriptor = 0, PixelShaderDescriptor = 0;
 	} permutationData;
 	void ModifyShaderLookup(const RE::BSShader&, uint32_t&, uint32_t&) {}
@@ -130,9 +137,13 @@ struct TestDeferred
 struct TestContext
 {
 	ID3D11PixelShader* bound = nullptr;
-	unsigned binds = 0;
+	unsigned binds = 0, vertexBinds = 0;
 	ID3D11VertexShader* vertex = nullptr;
-	void VSSetShader(ID3D11VertexShader* shader, void*, unsigned) { vertex = shader; }
+	void VSSetShader(ID3D11VertexShader* shader, void*, unsigned)
+	{
+		vertex = shader;
+		++vertexBinds;
+	}
 	void PSSetShader(ID3D11PixelShader* shader, void*, unsigned)
 	{
 		bound = shader;
@@ -221,15 +232,29 @@ namespace SIE
 		std::array<std::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::PixelShader>>,
 			static_cast<unsigned>(RE::BSShader::Type::Total)>
 			pixelShaders;
-		std::mutex pixelShadersMutex;
+		struct
+		{
+			std::mutex mutex;
+			unsigned locks = 0;
+			void lock()
+			{
+				mutex.lock();
+				++locks;
+			}
+			void unlock() { mutex.unlock(); }
+		} pixelShadersMutex;
 		std::atomic<unsigned> activeShaderCaptureFramesRemaining{ 0 };
 		int blockedKeyIndex = -1;
 		std::string blockedKey;
 		std::vector<uint32_t> blockedIDs;
 		bool enabled = true, safeLoad = false, async = true, compilationSucceeds = true;
-		unsigned compiles = 0;
+		unsigned compiles = 0, vertexLookups = 0;
 		RE::BSGraphics::VertexShader* vertex = nullptr;
-		auto* GetVertexShader(const RE::BSShader&, uint32_t) { return vertex; }
+		auto* GetVertexShader(const RE::BSShader&, uint32_t)
+		{
+			++vertexLookups;
+			return vertex;
+		}
 		struct Task
 		{
 			ShaderClass stage;
@@ -349,6 +374,8 @@ namespace NeuralRendering
 	};
 }
 unsigned assertions = 0;
+RE::BSGraphics::VertexShader* nativeTechniqueVertex = nullptr;
+bool nativeTechniqueClearPixel = false, nativeTechniqueChangeDescriptors = false;
 void Require(bool condition, const std::source_location& location = std::source_location::current())
 {
 	++assertions;
@@ -376,6 +403,8 @@ struct Fixture
 		globals::features::terrainBlending = {};
 		TerrainSeams::GetInstance().enabled = false;
 		globals::features::reverseZ.active = false;
+		nativeTechniqueVertex = nullptr;
+		nativeTechniqueClearPixel = nativeTechniqueChangeDescriptors = false;
 	}
 	void Bind(uint32_t descriptor)
 	{
@@ -515,9 +544,73 @@ bool nativeTechniqueReady = true;
 RE::BSGraphics::PixelShader* nativeTechniquePixel = nullptr;
 bool NativeTechnique(RE::BSShader*, uint32_t, uint32_t, bool skipPixel)
 {
+	if (nativeTechniqueReady && nativeTechniqueVertex)
+		Hooks::BSShader__BeginTechnique_SetVertexShader::thunk(nullptr, nativeTechniqueVertex);
 	if (nativeTechniqueReady && !skipPixel)
 		Hooks::BSShader__BeginTechnique_SetPixelShader::thunk(nullptr, nativeTechniquePixel);
+	else if (nativeTechniqueReady && nativeTechniqueClearPixel)
+		Hooks::BSShader__BeginTechnique_SetPixelShader::thunk(nullptr, nullptr);
+	if (nativeTechniqueChangeDescriptors) {
+		++globals::state->modifiedVertexDescriptor;
+		++globals::state->modifiedPixelDescriptor;
+	}
 	return nativeTechniqueReady;
+}
+void TestReverseTechniqueSelection()
+{
+	constexpr uint32_t descriptor = 0x10001u;
+	for (bool skipPixel : { false, true }) {
+		for (bool clearPixel : { false, true }) {
+			Fixture f;
+			globals::features::reverseZ.active = true;
+			ID3D11VertexShader nativeVS, customVS;
+			RE::BSGraphics::VertexShader nativeVertex{ &nativeVS }, customVertex{ &customVS };
+			f.cache.vertex = &customVertex;
+			auto* customPixel = f.cache.Add(f.shader, descriptor);
+			nativeTechniqueVertex = &nativeVertex;
+			nativeTechniquePixel = &f.native;
+			nativeTechniqueReady = true;
+			nativeTechniqueClearPixel = clearPixel;
+			Hooks::BSShader_BeginTechnique::func = NativeTechnique;
+			for (unsigned repeat = 1; repeat <= 3; ++repeat) {
+				Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, skipPixel));
+				Require(f.cache.vertexLookups == repeat && f.context.vertexBinds == repeat);
+				Require(f.cache.pixelShadersMutex.locks == (skipPixel ? 0u : repeat));
+				Require(f.context.binds == repeat && f.context.vertex == &customVS);
+				Require(*globals::game::currentVertexShader == &customVertex);
+				Require(f.current == (skipPixel ? nullptr : customPixel));
+				Require(f.context.bound == (skipPixel ? nullptr : customPixel->shader));
+			}
+		}
+	}
+	Fixture f;
+	globals::features::reverseZ.active = true;
+	ID3D11VertexShader nativeVS, customVS;
+	RE::BSGraphics::VertexShader nativeVertex{ &nativeVS }, customVertex{ &customVS };
+	nativeTechniqueVertex = &nativeVertex;
+	nativeTechniquePixel = &f.native;
+	nativeTechniqueReady = true;
+	Hooks::BSShader_BeginTechnique::func = NativeTechnique;
+	f.cache.Add(f.shader, descriptor);
+	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	f.cache.vertex = &customVertex;
+	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	// A new technique without shader setup must not inherit the prior successful pair.
+	nativeTechniqueReady = false;
+	f.cache.vertex = nullptr;
+	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	nativeTechniqueReady = true;
+	f.cache.vertex = &customVertex;
+	f.cache.pixelShaders[0].clear();
+	f.cache.compilationSucceeds = false;
+	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	f.cache.Add(f.shader, descriptor);
+	auto* changedPixel = f.cache.Add(f.shader, descriptor + 1);
+	nativeTechniqueChangeDescriptors = true;
+	const auto previousLookups = f.cache.vertexLookups;
+	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	Require(f.cache.vertexLookups == previousLookups + 2 && f.current == changedPixel);
+	Require(f.context.bound == changedPixel->shader);
 }
 void TestTechniqueAdmission()
 {
@@ -756,6 +849,7 @@ int main()
 			TestBoundGrassVariant();
 			TestNullPixelBinding();
 			TestTechniqueAdmission();
+			TestReverseTechniqueSelection();
 			TestPixelFamilyProof();
 			TestSeamTechniqueFallback();
 			TestPBRPrewarming();

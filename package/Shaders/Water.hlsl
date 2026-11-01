@@ -645,7 +645,7 @@ float3 GetFlowmapNormal(PS_INPUT input, float2 uvShift, float multiplier, float 
 FlowmapData GetFlowmapDataWorldSpace(PS_INPUT input, float2 uvShift)
 {
 	FlowmapData data = GetFlowmapDataTextureSpace(input, uvShift);
-	float2 flowDirection = -(data.color.xy * 2 - 1);    // Decode direction with 180Â° correction
+	float2 flowDirection = -(data.color.xy * 2 - 1);    // Decode direction with 180° correction
 	data.flowVector = data.flowVector * flowDirection;  // Transform to world space
 	return data;
 }
@@ -661,7 +661,7 @@ FlowmapData GetFlowmapDataWorldSpace(PS_INPUT input, float2 uvShift)
 FlowmapData GetFlowmapDataWorldSpace(FlowmapData textureSpaceData)
 {
 	FlowmapData data = textureSpaceData;
-	float2 flowDirection = -(data.color.xy * 2 - 1);    // Decode direction with 180Â° correction
+	float2 flowDirection = -(data.color.xy * 2 - 1);    // Decode direction with 180° correction
 	data.flowVector = data.flowVector * flowDirection;  // Transform to world space
 	return data;
 }
@@ -891,7 +891,7 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 
 		// Calculate flow-aware ripple offset using centralized timing logic
 		// Parameters: avgFlowmapMultiplier=9.26 (average of GetWaterNormal flowmap normal multipliers: 9.92, 10.64, 8, 8.48)
-		// uvToWorldScale=0.125 (1/8 - relates to 64Ã— texture coordinate scaling factor)
+		// uvToWorldScale=0.125 (1/8 - relates to 64× texture coordinate scaling factor)
 		float2 flowOffset = CS_GET_FLOW_AWARE_RIPPLE_OFFSET(
 			worldFlowData.flowVector,
 			worldFlowData.color.w,      // Flow strength from flowmap alpha

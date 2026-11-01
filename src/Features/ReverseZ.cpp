@@ -1026,9 +1026,7 @@ namespace
 	};
 
 	constexpr std::array<uint32_t, 4> kOccluderBoxVSChecksum{ 0x1cdddbca, 0xd69271b6, 0xcfcb199a, 0xcc9674f9 };
-	std::vector<winrt::com_ptr<ID3D11VertexShader>> g_occluderBoxPrograms;
-	std::vector<winrt::com_ptr<ID3D11VertexShader>> g_nearPlanePrograms;
-	std::shared_mutex g_nativeShaderMutex;
+	Depth::NativeVertexShaderRegistry g_nativeVertexShaders;
 	Util::LazyShader<ID3D11VertexShader> g_occluderBoxVS;
 
 	/// Records the engine's occlusion box vertex shader by its DXBC checksum so VSSetShader can swap it.
@@ -1043,13 +1041,7 @@ namespace
 				std::memcpy(checksum.data(), static_cast<const uint8_t*>(pShaderBytecode) + kChecksumOffset, sizeof(checksum));
 				const bool occluder = checksum == kOccluderBoxVSChecksum;
 				if (occluder || Depth::IsFixedNearPlaneVertexProgram(pShaderBytecode, BytecodeLength)) {
-					std::unique_lock lock(g_nativeShaderMutex);
-					auto& programs = occluder ? g_occluderBoxPrograms : g_nearPlanePrograms;
-					if (std::ranges::none_of(programs, [&](const auto& program) { return program.get() == *ppVertexShader; })) {
-						winrt::com_ptr<ID3D11VertexShader> program;
-						program.copy_from(*ppVertexShader);
-						programs.push_back(std::move(program));
-					}
+					g_nativeVertexShaders.Register(*ppVertexShader, occluder ? Depth::NativeVertexProgram::Occluder : Depth::NativeVertexProgram::NearPlane);
 				}
 			}
 			return hr;
@@ -1064,12 +1056,12 @@ namespace
 			if (This == globals::d3d::context)
 				g_boundVertexShader = pVertexShader;
 			if (This == globals::d3d::context) {
-				std::shared_lock lock(g_nativeShaderMutex);
-				if (g_reversalActive.load(std::memory_order_acquire) && globals::features::reverseZ.IsActive() && pVertexShader && std::ranges::any_of(g_occluderBoxPrograms, [&](const auto& program) { return program.get() == pVertexShader; }))
+				const bool active = g_reversalActive.load(std::memory_order_acquire) && globals::features::reverseZ.IsActive();
+				const auto program = active ? g_nativeVertexShaders.Classify(pVertexShader) : Depth::NativeVertexProgram::Other;
+				if (program == Depth::NativeVertexProgram::Occluder)
 					pVertexShader = g_occluderBoxVS.get();
-				const bool nearMask = pVertexShader && g_reversalActive.load(std::memory_order_acquire) && globals::features::reverseZ.IsActive() &&
-				                      (pVertexShader == g_hiddenAreaMeshVS.get() || std::ranges::any_of(g_nearPlanePrograms,
-																						[&](const auto& program) { return program.get() == pVertexShader; }));
+				const bool nearMask = active && pVertexShader &&
+				                      (pVertexShader == g_hiddenAreaMeshVS.get() || program == Depth::NativeVertexProgram::NearPlane);
 				if (nearMask && g_reverseTargetBound)
 					pVertexShader = g_hiddenAreaMeshVS.get();
 				if (nearMask != g_nearMaskBound) {

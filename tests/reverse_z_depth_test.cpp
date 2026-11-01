@@ -4,6 +4,7 @@
 #include "ShaderPackageIncludes.h"
 #include "Utils/DepthConvention.h"
 #include "Utils/NativeDepthShader.h"
+#include "d3d11_shader_test.h"
 #include "d3d_resource_naming.h"
 
 #include <DirectXMath.h>
@@ -17,9 +18,11 @@
 #include <iterator>
 #include <limits>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <winrt/base.h>
+#include <wrl/implements.h>
 
 namespace
 {
@@ -27,6 +30,48 @@ namespace
 	{
 		if (!condition)
 			throw std::runtime_error(message);
+	}
+	struct ShaderIdentity final : Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, ID3D11VertexShader>
+	{
+		explicit ShaderIdentity(std::atomic<unsigned>* a_destroyed) : destroyed(a_destroyed) {}
+		~ShaderIdentity() { ++*destroyed; }
+		void STDMETHODCALLTYPE GetDevice(ID3D11Device** device) override { *device = nullptr; }
+		HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID, UINT*, void*) override { return E_NOTIMPL; }
+		HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID, UINT, const void*) override { return E_NOTIMPL; }
+		HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID, const IUnknown*) override { return E_NOTIMPL; }
+		std::atomic<unsigned>* destroyed;
+	};
+	void TestShaderRegistry()
+	{
+		std::atomic<unsigned> destroyed{ 0 };
+		{
+			Depth::NativeVertexShaderRegistry registry;
+			auto original = Microsoft::WRL::Make<ShaderIdentity>(&destroyed);
+			auto* identity = original.Get();
+			Require(registry.Classify(identity) == Depth::NativeVertexProgram::Other, "Unregistered shader was classified");
+			registry.Register(identity, Depth::NativeVertexProgram::NearPlane);
+			registry.Register(identity, Depth::NativeVertexProgram::NearPlane);
+			original.Reset();
+			Require(destroyed == 0 && registry.Classify(identity) == Depth::NativeVertexProgram::NearPlane,
+				"Registry did not retain the original shader identity");
+			std::atomic<bool> valid{ true };
+			std::jthread reader([&](std::stop_token stop) {
+				while (!stop.stop_requested())
+					if (registry.Classify(identity) != Depth::NativeVertexProgram::NearPlane)
+						valid.store(false, std::memory_order_relaxed);
+			});
+			for (unsigned generation = 0; generation < 128; ++generation) {
+				auto shader = Microsoft::WRL::Make<ShaderIdentity>(&destroyed);
+				const auto program = generation % 2 ? Depth::NativeVertexProgram::NearPlane : Depth::NativeVertexProgram::Occluder;
+				registry.Register(shader.Get(), program);
+				Require(registry.Classify(shader.Get()) == program, "New shader classification was not published before return");
+			}
+			reader.request_stop();
+			reader.join();
+			Require(valid && destroyed == 0, "Concurrent publication lost an older shader generation");
+			Require(registry.Classify(nullptr) == Depth::NativeVertexProgram::Other, "Null shader was classified");
+		}
+		Require(destroyed == 129, "Registry did not release all retained shader generations");
 	}
 	struct Matrix
 	{
@@ -138,6 +183,135 @@ namespace
 			}
 		}
 	}
+	void TestUnderwaterMaskInputs()
+	{
+		using D3D11ShaderTest::Check;
+		for (bool vr : { false, true }) {
+			for (bool reversed : { false, true }) {
+				for (unsigned variant = 0; variant < (vr ? 3u : 1u); ++variant) {
+					std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" } };
+					if (vr)
+						defines.push_back({ "VR", "1" });
+					if (reversed)
+						defines.push_back({ "REVERSE_Z", "1" });
+					if (variant)
+						defines.push_back({ "NO_HMD_STENCIL_MASK", "1" });
+					if (variant == 1)
+						defines.push_back({ "DYNAMIC_SCENE_DEPTH", "1" });
+					if (variant == 2)
+						defines.push_back({ "RAW_SCENE_DEPTH", "1" });
+					defines.push_back({ nullptr, nullptr });
+					PackageIncludes includes{ "package/Shaders", "features/Upscaling/Shaders" };
+					winrt::com_ptr<ID3DBlob> code, errors;
+					const auto result = D3DCompileFromFile(L"features/Upscaling/Shaders/Upscaling/UnderwaterMaskUpscalePS.hlsl",
+						defines.data(), &includes, "main", "ps_5_0",
+						D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+						0, code.put(), errors.put());
+					if (errors)
+						std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+					Check(result);
+					winrt::com_ptr<ID3D11ShaderReflection> reflection;
+					Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.put())));
+					D3D11_SHADER_INPUT_BIND_DESC binding{};
+					const bool readsPreviousMask = SUCCEEDED(reflection->GetResourceBindingDescByName("UnderwaterMask", &binding));
+					Require(readsPreviousMask == (variant != 2), "Underwater mask shader inputs violate the copy-lifetime contract");
+				}
+			}
+		}
+	}
+	void TestUpscaleDepthKernel()
+	{
+		using D3D11ShaderTest::Check;
+		winrt::com_ptr<ID3D11Device> device;
+		winrt::com_ptr<ID3D11DeviceContext> context;
+		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+			D3D11_SDK_VERSION, device.put(), nullptr, context.put()));
+		D3D11_TEXTURE2D_DESC textureDesc{};
+		textureDesc.Width = textureDesc.Height = 3;
+		textureDesc.MipLevels = textureDesc.ArraySize = textureDesc.SampleDesc.Count = 1;
+		textureDesc.Format = DXGI_FORMAT_R32_FLOAT;
+		textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		Check(device->CreateTexture2D(&textureDesc, nullptr, texture.put()));
+		Util::SetResourceName(texture.get(), "ReverseZDepthTest::UpscaleDepthInput");
+		winrt::com_ptr<ID3D11ShaderResourceView> input;
+		Check(device->CreateShaderResourceView(texture.get(), nullptr, input.put()));
+		Util::SetResourceName(input.get(), "ReverseZDepthTest::UpscaleDepthInput SRV");
+		D3D11_BUFFER_DESC bufferDesc{};
+		bufferDesc.ByteWidth = sizeof(float);
+		bufferDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+		winrt::com_ptr<ID3D11Buffer> output, staging;
+		Check(device->CreateBuffer(&bufferDesc, nullptr, output.put()));
+		Util::SetResourceName(output.get(), "ReverseZDepthTest::UpscaleDepthOutput");
+		D3D11_UNORDERED_ACCESS_VIEW_DESC view{};
+		view.Format = DXGI_FORMAT_R32_FLOAT;
+		view.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		view.Buffer.NumElements = 1;
+		winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+		Check(device->CreateUnorderedAccessView(output.get(), &view, uav.put()));
+		Util::SetResourceName(uav.get(), "ReverseZDepthTest::UpscaleDepthOutput UAV");
+		bufferDesc.BindFlags = 0;
+		bufferDesc.Usage = D3D11_USAGE_STAGING;
+		bufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		Check(device->CreateBuffer(&bufferDesc, nullptr, staging.put()));
+		Util::SetResourceName(staging.get(), "ReverseZDepthTest::UpscaleDepthReadback");
+		const char* source = R"(
+#include "Upscaling/DepthRefractionUpscalePS.hlsl"
+RWBuffer<float> Output : register(u0);
+[numthreads(1, 1, 1)] void TestDepthKernel() {
+    Output[0] = SampleNearestDepth3x3(float2(0.5, 0.5));
+})";
+		for (bool vr : { false, true }) {
+			for (bool reversed : { false, true }) {
+				std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" } };
+				if (vr)
+					defines.push_back({ "VR", "1" });
+				if (reversed)
+					defines.push_back({ "REVERSE_Z", "1" });
+				defines.push_back({ nullptr, nullptr });
+				PackageIncludes includes{ "package/Shaders", "features/Upscaling/Shaders" };
+				winrt::com_ptr<ID3DBlob> code, errors, pixelCode;
+				const auto compile = [&](const char* entry, const char* target, ID3DBlob** bytecode) {
+					const auto result = D3DCompile(source, std::strlen(source), nullptr, defines.data(), &includes,
+						entry, target, D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+						0, bytecode, errors.put());
+					if (errors)
+						std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+					Check(result);
+				};
+				compile("main", "ps_5_0", pixelCode.put());
+				compile("TestDepthKernel", "cs_5_0", code.put());
+				winrt::com_ptr<ID3D11ComputeShader> shader;
+				Check(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, shader.put()));
+				Util::SetResourceName(shader.get(), "ReverseZDepthTest::UpscaleDepthKernel");
+				winrt::com_ptr<ID3D11ShaderReflection> reflection;
+				Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.put())));
+				D3D11ShaderTest::ConstantBuffer shared{ device.get(), reflection.get(), "SharedData::SharedData" };
+				shared.SetVariable("SharedData::BufferDim", std::array{ 3.0f, 3.0f, 1.0f / 3.0f, 1.0f / 3.0f });
+				for (unsigned nearest = 0; nearest < 9; ++nearest) {
+					std::array<float, 9> depths;
+					depths.fill(reversed ? 0.1f : 0.9f);
+					const float expected = reversed ? 0.9f : 0.1f;
+					depths[nearest] = expected;
+					context->UpdateSubresource(texture.get(), 0, nullptr, depths.data(), 3 * sizeof(float), 0);
+					shared.Bind(context.get());
+					auto* sourceView = input.get();
+					auto* outputView = uav.get();
+					context->CSSetShaderResources(1, 1, &sourceView);
+					context->CSSetUnorderedAccessViews(0, 1, &outputView, nullptr);
+					context->CSSetShader(shader.get(), nullptr, 0);
+					context->Dispatch(1, 1, 1);
+					context->ClearState();
+					context->CopyResource(staging.get(), output.get());
+					D3D11_MAPPED_SUBRESOURCE mapped{};
+					Check(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped));
+					const float actual = *static_cast<const float*>(mapped.pData);
+					context->Unmap(staging.get(), 0);
+					Require(actual == expected, "Wide depth-upscale kernel selected the wrong surface");
+				}
+			}
+		}
+	}
 	void TestInteriorDepth()
 	{
 		std::ifstream input("package/Shaders/Common/DepthOrder.hlsli");
@@ -201,9 +375,12 @@ int main()
 {
 	try {
 		TestMatrices();
+		TestShaderRegistry();
 		TestMaskIdentity();
 		TestSceneVertexShaders();
 		TestInteriorDepth();
+		TestUnderwaterMaskInputs();
+		TestUpscaleDepthKernel();
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

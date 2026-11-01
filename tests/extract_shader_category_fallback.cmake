@@ -12,7 +12,7 @@ extract_between("${_cache}" "RE::BSGraphics::PixelShader* ShaderCache::GetPixelS
     "RE::BSGraphics::ComputeShader* ShaderCache::GetComputeShader(" "pixel_lookup.h")
 extract_between("${_header}" "static constexpr uint32_t GetCharacterCategoryFlag("
     "/** Draw lookups" "category_flag.h")
-extract_between("${_hooks}" "struct BSShader__BeginTechnique_SetPixelShader"
+extract_between("${_hooks}" "struct BSShader__BeginTechnique_SetVertexShader"
     "struct CreateDepthStencil_PrecipitationMask" "pixel_binding.h")
 extract_between("${_character}" "void Increment(std::uint64_t&"
     "void Increment(std::uint32_t&" "diagnostic_increment.h")

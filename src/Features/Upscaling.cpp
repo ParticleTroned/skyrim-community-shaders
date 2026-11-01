@@ -7556,21 +7556,23 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		ID3D11RenderTargetView* a_underwaterMaskRTV,
 		ID3D11ShaderResourceView* a_underwaterMaskCopySRV,
 		ID3D11ShaderResourceView* a_depthSRV,
-		ID3D11ShaderResourceView* a_stencilSRV)
+		ID3D11ShaderResourceView* a_stencilSRV,
+		Upscaling::UnderwaterMaskUpscaleVariant a_variant)
 	{
+		const bool needsPreviousMask = !UnderwaterMaskUpscaleVariantUsesRawSceneDepth(a_variant);
 		if (!a_context ||
-			!a_underwaterMaskCopyTexture ||
-			!a_underwaterMaskTexture ||
 			!a_underwaterMaskRTV ||
-			!a_underwaterMaskCopySRV ||
-			!a_depthSRV) {
+			!a_depthSRV ||
+			(needsPreviousMask && (!a_underwaterMaskCopyTexture || !a_underwaterMaskTexture || !a_underwaterMaskCopySRV))) {
 			return false;
 		}
 
-		CopyResourceIfNonAliased(a_context, a_underwaterMaskCopyTexture, a_underwaterMaskTexture);
+		// Raw-depth repair reconstructs the mask without sampling its previous contents.
+		if (needsPreviousMask)
+			CopyResourceIfNonAliased(a_context, a_underwaterMaskCopyTexture, a_underwaterMaskTexture);
 		a_context->OMSetDepthStencilState(nullptr, 0x00);
 
-		ID3D11ShaderResourceView* srvs[] = { a_underwaterMaskCopySRV, a_depthSRV, a_stencilSRV };
+		ID3D11ShaderResourceView* srvs[] = { needsPreviousMask ? a_underwaterMaskCopySRV : nullptr, a_depthSRV, a_stencilSRV };
 		a_context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
 		ID3D11RenderTargetView* rtvs[] = { a_underwaterMaskRTV };
@@ -68288,7 +68290,8 @@ void Upscaling::UpscaleDepth()
 			underwaterMask.RTV,
 			underwaterMask.SRVCopy,
 			depthCopy.depthSRV,
-			useVRDynamicDepthNoStencilUnderwaterMask ? nullptr : depthCopy.stencilSRV);
+			useVRDynamicDepthNoStencilUnderwaterMask ? nullptr : depthCopy.stencilSRV,
+			underwaterMaskVariant);
 
 		if (underwaterMaskPassBound) {
 			context->PSSetShader(underwaterMaskPS, nullptr, 0);
@@ -68341,7 +68344,7 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	auto& depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
 	auto& underwaterMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kUNDERWATER_MASK];
 	if (!depth.texture || !depthCopy.texture || !depthCopy.depthSRV ||
-		!underwaterMask.texture || !underwaterMask.textureCopy || !underwaterMask.SRVCopy || !underwaterMask.RTV) {
+		!underwaterMask.texture || !underwaterMask.RTV) {
 		return;
 	}
 	D3D11_TEXTURE2D_DESC underwaterMaskDesc{};
@@ -68351,10 +68354,11 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 
 	ID3D11VertexShader* fullscreenVS = nullptr;
 	ID3D11PixelShader* underwaterMaskPS = nullptr;
+	constexpr auto underwaterMaskVariant = UnderwaterMaskUpscaleVariant::RawDepthNoStencil;
 	static bool loggedSubmitStageUnderwaterShaderFailure = false;
 	try {
 		fullscreenVS = GetUpscaleVS();
-		underwaterMaskPS = GetUnderwaterMaskUpscalePS(UnderwaterMaskUpscaleVariant::RawDepthNoStencil);
+		underwaterMaskPS = GetUnderwaterMaskUpscalePS(underwaterMaskVariant);
 	} catch (const std::exception& e) {
 		LogWarnOnce(
 			loggedSubmitStageUnderwaterShaderFailure,
@@ -68403,19 +68407,19 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	auto bufferArray = jitterCB->CB();
 	context->PSSetConstantBuffers(0, 1, &bufferArray);
 
-	// This repair can run immediately after Skyrim's ISUnderwaterMask pass.
-	// Unbind the vanilla RTV before copying kUNDERWATER_MASK into its SRV copy.
+	// The native pass can leave depth bound; release it before copying the depth source.
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
 	CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
 	const bool underwaterMaskPassBound = BindUnderwaterMaskPassResources(
 		context,
-		underwaterMask.textureCopy,
-		underwaterMask.texture,
+		nullptr,
+		nullptr,
 		underwaterMask.RTV,
-		underwaterMask.SRVCopy,
+		nullptr,
 		depthCopy.depthSRV,
-		nullptr);
+		nullptr,
+		underwaterMaskVariant);
 
 	if (underwaterMaskPassBound) {
 		context->PSSetShader(underwaterMaskPS, nullptr, 0);

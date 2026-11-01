@@ -95,6 +95,14 @@ public:
 
 	bool updateShader = true;
 	bool settingCustomShader = false;
+	// Receipts describe the custom stages actually bound during the current technique setup.
+	struct TechniqueShaderSelection
+	{
+		RE::BSGraphics::VertexShader* vertex = nullptr;
+		RE::BSGraphics::PixelShader* pixel = nullptr;
+		uint32_t vertexDescriptor = 0, pixelDescriptor = 0;
+		bool pixelCleared = false;
+	} techniqueShaderSelection;
 	// A deferred draw must be withheld if neither compatible pixel variant is ready.
 	bool deferredPixelShaderMissing = false;
 	RE::BSShader* currentShader = nullptr;

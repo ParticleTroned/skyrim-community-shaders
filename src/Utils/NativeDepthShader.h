@@ -1,13 +1,69 @@
 #pragma once
 
+#include <atomic>
 #include <cstring>
+#include <d3d11.h>
 #include <d3dcompiler.h>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 #include <wrl/client.h>
 
 namespace Depth
 {
+	enum class NativeVertexProgram
+	{
+		Other,
+		Occluder,
+		NearPlane
+	};
+
+	/** Retains every registered shader generation and publishes immutable entries for bind-time reads. */
+	class NativeVertexShaderRegistry
+	{
+	public:
+		/** Publish classification before returning a newly created native shader to its caller. */
+		void Register(ID3D11VertexShader* shader, NativeVertexProgram program)
+		{
+			if (!shader || program == NativeVertexProgram::Other)
+				return;
+			std::scoped_lock lock(writerMutex);
+			if (Classify(shader) != NativeVertexProgram::Other)
+				return;
+			auto entry = std::make_unique<Entry>();
+			entry->shader = shader;
+			entry->program = program;
+			entry->next = head.load(std::memory_order_relaxed);
+			const auto* published = entry.get();
+			entries.push_back(std::move(entry));
+			head.store(published, std::memory_order_release);
+		}
+
+		/** Read published classifications without locking or acquiring a COM reference. */
+		NativeVertexProgram Classify(ID3D11VertexShader* shader) const
+		{
+			if (shader)
+				for (auto* entry = head.load(std::memory_order_acquire); entry; entry = entry->next)
+					if (entry->shader.Get() == shader)
+						return entry->program;
+			return NativeVertexProgram::Other;
+		}
+
+	private:
+		struct Entry
+		{
+			Microsoft::WRL::ComPtr<ID3D11VertexShader> shader;
+			NativeVertexProgram program = NativeVertexProgram::Other;
+			const Entry* next = nullptr;
+		};
+		// Entries never move or retire while render hooks can read their shader identities.
+		std::vector<std::unique_ptr<Entry>> entries;
+		std::mutex writerMutex;
+		std::atomic<const Entry*> head{ nullptr };
+	};
+
 	/** Match the fixed near-plane program, never infer HMD identity from draw size. */
 	inline bool IsFixedNearPlaneVertexProgram(const void* bytes, size_t size)
 	{

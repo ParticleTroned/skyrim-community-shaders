@@ -30,7 +30,7 @@ cbuffer JitterCB : register(b0)
 	float pad0;
 };
 
-float SampleMinDepth2x2(float2 uv)
+float SampleNearestDepth2x2(float2 uv)
 {
 	float4 depthQuad = DepthTex.GatherRed(LinearSampler, uv);
 	return FrameBuffer::NearestDepth(depthQuad);
@@ -42,32 +42,32 @@ float SampleDepthClamped(int2 coord, int2 maxCoord)
 	return DepthTex.Load(int3(c, 0));
 }
 
-float SampleMinDepth3x3(float2 uv)
+float SampleNearestDepth3x3(float2 uv)
 {
 	// Use cached frame buffer dimensions to avoid per-pixel texture-dimension queries.
 	int2 texSize = int2(SharedData::BufferDim.xy);
 	int2 maxCoord = texSize - 1;
 	int2 centerCoord = int2(uv * SharedData::BufferDim.xy);
 
-	float row0 = min(
+	float row0 = FrameBuffer::NearerDepth(
 		SampleDepthClamped(centerCoord + int2(-1, -1), maxCoord),
-		min(
+		FrameBuffer::NearerDepth(
 			SampleDepthClamped(centerCoord + int2(0, -1), maxCoord),
 			SampleDepthClamped(centerCoord + int2(1, -1), maxCoord)));
 
-	float row1 = min(
+	float row1 = FrameBuffer::NearerDepth(
 		SampleDepthClamped(centerCoord + int2(-1, 0), maxCoord),
-		min(
+		FrameBuffer::NearerDepth(
 			SampleDepthClamped(centerCoord + int2(0, 0), maxCoord),
 			SampleDepthClamped(centerCoord + int2(1, 0), maxCoord)));
 
-	float row2 = min(
+	float row2 = FrameBuffer::NearerDepth(
 		SampleDepthClamped(centerCoord + int2(-1, 1), maxCoord),
-		min(
+		FrameBuffer::NearerDepth(
 			SampleDepthClamped(centerCoord + int2(0, 1), maxCoord),
 			SampleDepthClamped(centerCoord + int2(1, 1), maxCoord)));
 
-	return min(row0, min(row1, row2));
+	return FrameBuffer::NearerDepth(row0, FrameBuffer::NearerDepth(row1, row2));
 }
 
 int2 GetClampedTexelCoord(float2 uv)
@@ -110,7 +110,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if defined(VR)
 	float bilinearDepth = psout.Depth;
-	psout.Depth = (useWideKernel > 0.5f) ? SampleMinDepth3x3(uv) : SampleMinDepth2x2(uv);
+	psout.Depth = (useWideKernel > 0.5f) ? SampleNearestDepth3x3(uv) : SampleNearestDepth2x2(uv);
 	// Keep SAO camera Z smooth to avoid over-occlusion; depth culling uses SV_Depth.
 	psout.SAOCameraZ = bilinearDepth;
 #	else

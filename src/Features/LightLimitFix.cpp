@@ -88,6 +88,9 @@ namespace
 	void SetPointLightTypeFlags(LightLimitFix::LightData& a_light, RE::BSLight* a_bsLight)
 	{
 		PointLightFlags::SetPointLightTypeFlags(a_light.lightFlags, a_bsLight);
+		a_light.lightFlags.reset(LightLimitFix::LightFlags::AffectWater);
+		if (a_bsLight && a_bsLight->affectWater)
+			a_light.lightFlags.set(LightLimitFix::LightFlags::AffectWater);
 	}
 
 	// Tints a hovered/highlighted debug-table row's light magenta in-world so

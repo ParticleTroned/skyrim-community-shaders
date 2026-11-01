@@ -582,6 +582,7 @@ void LightLimitFix::ProcessQueuedParticleLights(eastl::vector<LightData>& lights
 
 		clusteredLight.lightFlags.set(LightFlags::Simple);
 		clusteredLight.lightFlags.set(LightFlags::Particle);
+		clusteredLight.lightFlags.set(LightFlags::AffectWater);
 		AddCachedParticleLights(lightsData, clusteredLight);
 
 		clusteredLights = 0;
@@ -693,6 +694,7 @@ void LightLimitFix::ProcessQueuedParticleLights(eastl::vector<LightData>& lights
 
 			light.lightFlags.set(LightFlags::Simple);
 			light.lightFlags.set(LightFlags::Particle);
+			light.lightFlags.set(LightFlags::AffectWater);
 
 			AddCachedParticleLights(lightsData, light);
 		}

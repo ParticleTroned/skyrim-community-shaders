@@ -87,6 +87,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -42991,33 +42992,26 @@ ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
 	// game's typeless depth allocation.
 	if (upscaleMethod == UpscaleMethod::kFSR &&
 		(globals::game::isVR || runtimeFsrDepthTexture)) {
-		std::vector<std::pair<const char*, const char*>> defines = {
-			{ "FSR", "" },
-			{ "DEPTH_OUTPUT", "" }
-		};
 		return encodeTexturesCSDepthOutput.Get(
-			L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0",
+			L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", { { "FSR", "" }, { "DEPTH_OUTPUT", "" } }, "cs_5_0",
 			"main", "Upscaling::EncodeTexturesDepthOutputCS");
 	}
 
-	std::vector<std::pair<const char*, const char*>> defines;
-	// Add upscale method define
+	const auto getShader = [&](std::initializer_list<std::pair<const char*, const char*>> defines) {
+		return encodeTexturesCS[methodIndex].Get(
+			L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0",
+			"main", "Upscaling::EncodeTexturesCS");
+	};
 	switch (upscaleMethod) {
 	case UpscaleMethod::kDLSS:
-		defines.push_back({ "DLSS", "" });
 		if (globals::game::isVR)
-			defines.push_back({ "DEPTH_OUTPUT", "" });
-		break;
+			return getShader({ { "DLSS", "" }, { "DEPTH_OUTPUT", "" } });
+		return getShader({ { "DLSS", "" } });
 	case UpscaleMethod::kFSR:
-		defines.push_back({ "FSR", "" });
-		break;
+		return getShader({ { "FSR", "" } });
 	default:
-		// No define for NONE or TAA
-		break;
+		return getShader({});
 	}
-	return encodeTexturesCS[methodIndex].Get(
-		L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0",
-		"main", "Upscaling::EncodeTexturesCS");
 }
 
 ID3D11PixelShader* Upscaling::GetDepthRefractionUpscalePS()
@@ -43035,30 +43029,31 @@ ID3D11PixelShader* Upscaling::GetUnderwaterMaskUpscalePS(UnderwaterMaskUpscaleVa
 	                                                                                  underwaterMaskUpscalePS;
 	if (ShouldReuseOrdinarySaveResources() && !shader)
 		return nullptr;
-	std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
+	const auto getShader = [&](std::initializer_list<std::pair<const char*, const char*>> defines) {
+		return shader.Get(
+			L"Data/Shaders/Upscaling/UnderwaterMaskUpscalePS.hlsl", defines,
+			"ps_5_0", "main", "Upscaling::UnderwaterMaskUpscalePS");
+	};
 	if (globals::game::isVR) {
-		defines.push_back({ "VR", "" });
-		if (UnderwaterMaskUpscaleVariantUsesNoHMDStencil(a_variant)) {
-			defines.push_back({ "NO_HMD_STENCIL_MASK", "" });
-		}
-		if (UnderwaterMaskUpscaleVariantUsesRawSceneDepth(a_variant)) {
-			defines.push_back({ "RAW_SCENE_DEPTH", "" });
-		}
+		if (UnderwaterMaskUpscaleVariantUsesRawSceneDepth(a_variant))
+			return getShader({ { "PSHADER", "" }, { "VR", "" }, { "NO_HMD_STENCIL_MASK", "" }, { "RAW_SCENE_DEPTH", "" } });
 		if (UnderwaterMaskUpscaleVariantUsesDynamicSceneDepth(a_variant))
-			defines.push_back({ "DYNAMIC_SCENE_DEPTH", "" });
+			return getShader({ { "PSHADER", "" }, { "VR", "" }, { "NO_HMD_STENCIL_MASK", "" }, { "DYNAMIC_SCENE_DEPTH", "" } });
+		if (UnderwaterMaskUpscaleVariantUsesNoHMDStencil(a_variant))
+			return getShader({ { "PSHADER", "" }, { "VR", "" }, { "NO_HMD_STENCIL_MASK", "" } });
+		return getShader({ { "PSHADER", "" }, { "VR", "" } });
 	}
-	return shader.Get(
-		L"Data/Shaders/Upscaling/UnderwaterMaskUpscalePS.hlsl", defines,
-		"ps_5_0", "main", "Upscaling::UnderwaterMaskUpscalePS");
+	return getShader({ { "PSHADER", "" } });
 }
 
 ID3D11PixelShader* Upscaling::GetCameraMotionVectorsPS()
 {
-	std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
 	if (globals::game::isVR)
-		defines.push_back({ "VR", "" });
+		return cameraMotionVectorsPS.Get(
+			L"Data/Shaders/Upscaling/CameraMotionVectorsPS.hlsl", { { "PSHADER", "" }, { "VR", "" } },
+			"ps_5_0", "main", "Upscaling::CameraMotionVectorsPS");
 	return cameraMotionVectorsPS.Get(
-		L"Data/Shaders/Upscaling/CameraMotionVectorsPS.hlsl", defines,
+		L"Data/Shaders/Upscaling/CameraMotionVectorsPS.hlsl", { { "PSHADER", "" } },
 		"ps_5_0", "main", "Upscaling::CameraMotionVectorsPS");
 }
 
@@ -43975,6 +43970,10 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 
 	bool recreatedResources = false;
 	static bool loggedPeripheryTAAResourceFailure = false;
+	static constexpr const char* kHistoryColorNames[2][2]{
+		{ "Upscale_PeripheryTAA_HistoryColor_Left_0", "Upscale_PeripheryTAA_HistoryColor_Left_1" },
+		{ "Upscale_PeripheryTAA_HistoryColor_Right_0", "Upscale_PeripheryTAA_HistoryColor_Right_1" },
+	};
 
 	try {
 		for (uint32_t eye = 0; eye < 2; ++eye) {
@@ -44012,7 +44011,7 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 						true,
 						true,
 						false,
-						(std::format("Upscale_PeripheryTAA_HistoryColor_{}_{}", suffix, historySlot)).c_str())) {
+						kHistoryColorNames[eye][historySlot])) {
 					DestroyPeripheryTAAResources();
 					return false;
 				}

@@ -298,6 +298,7 @@ void DynamicCubemaps::DrawSettings()
 
 void DynamicCubemaps::LoadSettings(json& o_json)
 {
+	const bool previousSSR = settings.EnabledSSR != 0;
 	settings = o_json;
 	if (settings.CubemapResolution != kPerformanceCubemapResolution && settings.CubemapResolution != kQualityCubemapResolution) {
 		logger::warn(
@@ -309,7 +310,7 @@ void DynamicCubemaps::LoadSettings(json& o_json)
 	if (REL::Module::IsVR() && gameSettingsInitialized) {
 		Util::LoadGameSettings(iniVRCubeMapSettings);
 	}
-	recompileFlag = true;
+	recompileFlag |= shaderSettingsInitialized && previousSSR != (settings.EnabledSSR != 0);
 }
 
 void DynamicCubemaps::SaveSettings(json& o_json)
@@ -326,13 +327,14 @@ void DynamicCubemaps::OnSettingsSaved()
 
 void DynamicCubemaps::RestoreDefaultSettings()
 {
+	const bool previousSSR = settings.EnabledSSR != 0;
 	settings = {};
 	RefreshActiveCubemapResolution();
 	if (REL::Module::IsVR()) {
 		Util::ResetGameSettingsToDefaults(iniVRCubeMapSettings);
 		Util::ResetGameSettingsToDefaults(hiddenVRCubeMapSettings);
 	}
-	recompileFlag = true;
+	recompileFlag |= shaderSettingsInitialized && previousSSR != (settings.EnabledSSR != 0);
 }
 
 bool DynamicCubemaps::IsSSRRuntimeActive() const
@@ -357,6 +359,8 @@ void DynamicCubemaps::DataLoaded()
 
 void DynamicCubemaps::PostPostLoad()
 {
+	// Initial settings are installed before cache admission and shader creation.
+	shaderSettingsInitialized = true;
 	if (REL::Module::IsVR() && settings.EnabledSSR) {
 		std::map<std::string, uintptr_t> earlyhiddenVRCubeMapSettings{
 			{ "bScreenSpaceReflectionEnabled:Display", 0x1ED5BC0 },

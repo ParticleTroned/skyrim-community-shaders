@@ -40,6 +40,7 @@ file(
 set(_output "")
 extract_between("src/Features/DynamicCubemaps.cpp" "void DynamicCubemaps::LoadSettings(" "void DynamicCubemaps::SaveSettings(")
 extract_between("src/Features/DynamicCubemaps.cpp" "void DynamicCubemaps::OnSettingsSaved()" "void DynamicCubemaps::RestoreDefaultSettings()")
+extract_between("src/Features/DynamicCubemaps.cpp" "void DynamicCubemaps::RestoreDefaultSettings()" "bool DynamicCubemaps::IsSSRRuntimeActive()")
 extract_between("src/Features/DynamicCubemaps.cpp" "void DynamicCubemaps::DataLoaded()" "void DynamicCubemaps::PostPostLoad()")
 file(
     WRITE "${OUTPUT_DIRECTORY}/cubemap_game_settings_under_test.h"

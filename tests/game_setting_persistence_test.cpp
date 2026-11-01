@@ -123,6 +123,7 @@ struct MenuOpenCloseEventHandler
 struct json
 {
 	unsigned CubemapResolution = 128;
+	unsigned EnabledSSR = 1;
 };
 
 struct DynamicCubemaps
@@ -132,12 +133,14 @@ struct DynamicCubemaps
 	static constexpr unsigned kPerformanceCubemapResolution = 128;
 	static constexpr unsigned kQualityCubemapResolution = 256;
 	bool gameSettingsInitialized = false;
+	bool shaderSettingsInitialized = false;
 	bool recompileFlag = false;
 	std::map<std::string, Util::GameSetting> iniVRCubeMapSettings;
 	std::map<std::string, Util::GameSetting> hiddenVRCubeMapSettings;
 	std::string GetName() { return "Dynamic Cubemaps"; }
 	void RefreshActiveCubemapResolution() {}
 	void LoadSettings(json&);
+	void RestoreDefaultSettings();
 	void DataLoaded();
 	void OnSettingsSaved();
 };
@@ -346,6 +349,32 @@ namespace
 		cubemaps.OnSettingsSaved();
 		cubemaps.LoadSettings(config);
 		cubemaps.DataLoaded();
+
+		for (const bool vr : { false, true }) {
+			REL::Module::vr = vr;
+			DynamicCubemaps cachePolicy;
+			json changed;
+			changed.EnabledSSR = 0;
+			cachePolicy.LoadSettings(changed);
+			Check(!cachePolicy.recompileFlag, "Startup settings must retain the release cache");
+			cachePolicy.RestoreDefaultSettings();
+			Check(!cachePolicy.recompileFlag, "Startup defaults must retain the release cache");
+			cachePolicy.shaderSettingsInitialized = true;
+			changed.EnabledSSR = 2;
+			changed.CubemapResolution = 256;
+			cachePolicy.LoadSettings(changed);
+			Check(!cachePolicy.recompileFlag, "Unchanged SSR defines must preserve shaders");
+			cachePolicy.RestoreDefaultSettings();
+			Check(!cachePolicy.recompileFlag, "Unchanged default SSR must preserve shaders");
+			changed.EnabledSSR = 0;
+			cachePolicy.LoadSettings(changed);
+			Check(cachePolicy.recompileFlag, "An SSR define change must invalidate shaders");
+			cachePolicy.LoadSettings(changed);
+			Check(cachePolicy.recompileFlag, "An unchanged reload must preserve pending invalidation");
+			cachePolicy.recompileFlag = false;
+			cachePolicy.RestoreDefaultSettings();
+			Check(cachePolicy.recompileFlag, "Restoring a different SSR default must invalidate shaders");
+		}
 	}
 }
 

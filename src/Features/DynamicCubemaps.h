@@ -289,6 +289,7 @@ public:
 
 private:
 	void SetupResourcesImpl();
+	bool shaderSettingsInitialized = false;
 	bool captureResourcesReady = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	std::atomic_bool captureRefreshRequested{ false };

@@ -1,0 +1,52 @@
+name: Prepare water work branches
+
+on:
+  push:
+    branches: [build/os-water-preparation-20261101]
+    paths: [.github/workflows/water-prepare-branches.yaml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: water-prepare-branches
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'ParticleTroned/skyrim-community-shaders' && github.ref == 'refs/heads/build/os-water-preparation-20261101'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout preparation instructions
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - name: Checkout pinned upstream baseline in the fork
+        uses: actions/checkout@v6
+        with:
+          repository: ParticleTroned/skyrim-community-shaders
+          ref: d64dc05b60d38774f43797b9d4e6c1f357b8b1f8
+          path: source
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Checkout pinned CSX donor
+        uses: actions/checkout@v6
+        with:
+          repository: ParticleTroned/skyrim-community-shaders
+          ref: f140c878138fe2783a6a4ad40420a3a2a996ccd0
+          path: donor
+          persist-credentials: false
+      - name: Verify sources and publish new fork branches
+        run: python control/.water-port/publish.py
+      - name: Upload patches, source generator, manifest and local Git bundle
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: water-work-branches
+          path: water-port-artifacts/
+          if-no-files-found: warn
+          retention-days: 30

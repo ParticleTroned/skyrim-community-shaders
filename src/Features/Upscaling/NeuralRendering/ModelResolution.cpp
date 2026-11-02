@@ -85,6 +85,35 @@ namespace NeuralRendering
 			       (view.Format == DXGI_FORMAT_R8_UNORM || view.Format == DXGI_FORMAT_R32_FLOAT);
 		}
 
+		template <class Compile>
+		bool RetainOptionalShader(ID3D11Device* device, ComPtr<ID3D11ComputeShader>& shader, bool& failed,
+			ComPtr<ID3D11ComputeShader>& retained, HRESULT& result, const char* name, unsigned index, Compile&& compile)
+		{
+			if (!shader && !failed) {
+				try {
+					shader.Attach(compile(result));
+					if (!shader && result == E_OUTOFMEMORY)
+						return false;
+					failed = !shader;
+					if (shader)
+						Util::SetResourceName(shader.Get(), name, index);
+				} catch (const std::bad_alloc&) {
+					result = E_OUTOFMEMORY;
+					return false;
+				} catch (const std::exception&) {
+					shader.Reset();
+					failed = true;
+				}
+				// Optional compilation may fall back only while the device remains healthy.
+				result = device->GetDeviceRemovedReason();
+				if (FAILED(result))
+					return false;
+			}
+			result = S_OK;
+			retained = shader;
+			return true;
+		}
+
 		bool CreateTexture(ID3D11Device* device, Color::Texture& texture, UpscalingDLSS::Extent extent,
 			DXGI_FORMAT format, const std::string& name, HRESULT& result)
 		{
@@ -520,6 +549,7 @@ namespace NeuralRendering
 	struct ModelResolution::Work
 	{
 		std::uint64_t contentSerial = 0;
+		bool sharedPreparation = false;
 		AllocationKey allocation{};
 		Color::Texture color, depth, motion, mask, output, reconstructed;
 		ComPtr<ID3D11Resource> sourceColor, sourceMotion, sourceMask;
@@ -1360,9 +1390,8 @@ namespace NeuralRendering
 	bool ModelResolution::EnsureGuidedShader(bool selected, bool guarded, bool peripheral, ComPtr<ID3D11ComputeShader>& retained, HRESULT& result)
 	{
 		const auto index = (selected ? 1u : 0u) | (guarded ? 2u : 0u) | (peripheral ? 4u : 0u);
-		auto& shader = guidedShaders_[index];
-		if (!shader && !guidedShaderFailed_[index]) {
-			try {
+		return RetainOptionalShader(device_.Get(), guidedShaders_[index], guidedShaderFailed_[index], retained, result,
+			"NeuralRendering::GuidedReconstruction%u", index, [&](HRESULT& result) {
 				std::vector<std::pair<const char*, const char*>> defines{ { "GUIDED_NR_RECONSTRUCTION", "1" } };
 				if (peripheral)
 					defines.emplace_back("NR_PERIPHERAL_COMPRESSION", "1");
@@ -1370,28 +1399,22 @@ namespace NeuralRendering
 					defines.emplace_back("MODEL_OUTPUT_SELECTION", "1");
 				if (guarded)
 					defines.emplace_back("PACKED_CROP_COVERAGE_GUARD", "1");
-				shader.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
-					L"Data/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", defines, "cs_5_0", "main", result)));
-				if (!shader && result == E_OUTOFMEMORY)
-					return false;
-				guidedShaderFailed_[index] = !shader;
-				if (shader)
-					Util::SetResourceName(shader.Get(), "NeuralRendering::GuidedReconstruction%u", index);
-			} catch (const std::bad_alloc&) {
-				result = E_OUTOFMEMORY;
-				return false;
-			} catch (const std::exception&) {
-				shader.Reset();
-				guidedShaderFailed_[index] = true;
-			}
-			// An optional compile failure must not conceal device removal or poison Basic.
-			result = device_->GetDeviceRemovedReason();
-			if (FAILED(result))
-				return false;
-		}
-		result = S_OK;
-		retained = shader;
-		return true;
+				return static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+					L"Data/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", defines, "cs_5_0", "main", result));
+			});
+	}
+
+	bool ModelResolution::EnsureSharedPreparationShader(bool peripheral, ComPtr<ID3D11ComputeShader>& retained, HRESULT& result)
+	{
+		const auto index = peripheral ? 1u : 0u;
+		return RetainOptionalShader(device_.Get(), sharedPreparationShaders_[index], sharedPreparationFailed_[index], retained, result,
+			"NeuralRendering::SharedPreparation%u", index, [&](HRESULT& result) {
+				std::vector<std::pair<const char*, const char*>> defines{ { "NR_SHARED_PREPARATION", "1" } };
+				if (peripheral)
+					defines.emplace_back("NR_PERIPHERAL_COMPRESSION", "1");
+				return static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+					L"Data/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl", defines, "cs_5_0", "main", result));
+			});
 	}
 
 	void ModelResolution::DispatchCoverage(std::span<const RendererApplyArgs> args, Batch& batch)
@@ -1547,6 +1570,19 @@ namespace NeuralRendering
 					input.centralArea.offset, { static_cast<float>(input.centralArea.finalOutput.width), static_cast<float>(input.centralArea.finalOutput.height) }
 				};
 				work->constants.packedCount = geometry->packedCrops.count;
+				work->sharedPreparation = input.renderingMode == RenderingMode::ReducedResolution &&
+				                                  !input.characterVisualIsolation && !input.actorSelection && !input.providerBlending &&
+				                                  !input.packedCropsEnabled && !geometry->packedCrops.count &&
+				                                  input.colorWidth == input.guideWidth && input.colorHeight == input.guideHeight &&
+				                                  geometry->modelSize == geometry->modelGuideSize &&
+				                                  source == ComputeSubrect{ 0, 0, sourceSize.width, sourceSize.height } &&
+				                                  input.viewportCrop == UpscalingDLSS::ViewportCrop::Identity(input.guideWidth, input.guideHeight, input.colorWidth, input.colorHeight)
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				                                  && input.reconstructionTuning == ReconstructionTuning{}
+#endif
+				                              ?
+				                              1u :
+				                              0u;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				work->constants.experimentalShadowTransfer = input.reconstructionTuning.shadowTransferPercent * 0.01f;
 #endif
@@ -1659,6 +1695,10 @@ namespace NeuralRendering
 			};
 		}
 #endif
+		if (std::ranges::any_of(std::span(batch.resources.data(), args.size()),
+				[](const auto& work) { return work->sharedPreparation != 0; }) &&
+			!EnsureSharedPreparationShader(peripheral, batch.sharedPreparationShader, result))
+			return false;
 		batch.constants = constants_;
 		if (batch.packedCoverage)
 			DispatchCoverage(args, batch);
@@ -1689,7 +1729,10 @@ namespace NeuralRendering
 			const std::array srvs{ work.colorView.Get(), args[index].depthGuideSRV, work.motionView.Get(), work.allocation.hasMask ? work.maskView.Get() : nullptr };
 			const auto& target = batch.targets[index];
 			const std::array uavs{ target.color.uav.Get(), target.depth.uav.Get(), target.motion.uav.Get(), work.allocation.hasMask ? work.mask.uav.Get() : nullptr };
-			context->CSSetShader(batch.preparationShader.Get(), nullptr, 0);
+			context->CSSetShader(work.sharedPreparation && batch.sharedPreparationShader ?
+									 batch.sharedPreparationShader.Get() :
+									 batch.preparationShader.Get(),
+				nullptr, 0);
 			context->CSSetConstantBuffers(0, 1, &cb);
 			if constexpr (ConstantBuffers == 2) {
 				context->UpdateSubresource(batch.peripheralConstants.Get(), 0, nullptr, &batch.peripheralPlans[index].mapping, 0, 0);
@@ -1828,6 +1871,8 @@ namespace NeuralRendering
 	void ModelResolution::InvalidateShaders() noexcept
 	{
 		prepare_.Reset();
+		sharedPreparationShaders_ = {};
+		sharedPreparationFailed_ = {};
 		reconstruct_.Reset();
 		coverageShader_.Reset();
 		guardedReconstruct_.Reset();

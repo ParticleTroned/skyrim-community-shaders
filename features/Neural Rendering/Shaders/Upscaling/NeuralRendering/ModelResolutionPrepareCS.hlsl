@@ -81,7 +81,56 @@ float ModelSourceWeight(ModelSourceFootprint footprint, float rowWeights[MODEL_S
 	return weight;
 }
 
-void PrepareColor(uint2 id)
+struct GuideDonor
+{
+	float depth;
+	float2 motion;
+	uint2 pixel;
+	bool found;
+};
+
+GuideDonor EmptyGuideDonor()
+{
+	GuideDonor donor;
+	donor.depth = DepthOrder::Far();
+	donor.motion = 0.0;
+	donor.pixel = 0u;
+	donor.found = false;
+	return donor;
+}
+
+void ConsiderGuide(uint2 source, inout GuideDonor donor)
+{
+	float depth = InputDepth.Load(int3(source, 0));
+	if (isfinite(depth) && depth >= 0.0 && depth <= 1.0 && (!donor.found || DepthOrder::IsNearer(depth, donor.depth))) {
+		float2 velocity = InputMotion.Load(int3(source, 0));
+		if (all(isfinite(velocity))) {
+			donor.depth = depth;
+			donor.motion = velocity;
+#ifdef NR_PERIPHERAL_COMPRESSION
+			donor.pixel = source;
+#endif
+			donor.found = true;
+		}
+	}
+}
+
+float2 GuideMotion(GuideDonor donor, uint2 pixel, uint2 guideSize, uint2 modelGuideSize)
+{
+	float2 atlasMotion = donor.motion * MotionVectorScale;
+#ifdef NR_PERIPHERAL_COMPRESSION
+	// Motion is anchored to the winning depth sample in the shared or independent traversal.
+	float2 anchor = (float2(donor.pixel) + 0.5) / float2(guideSize);
+#	if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NR_CELL_CENTRE_MOTION)
+	anchor = PeripheralInverse((float2(pixel) + 0.5) / float2(modelGuideSize));
+#	endif
+	atlasMotion = PeripheralForward(anchor + atlasMotion) - PeripheralForward(anchor);
+	atlasMotion = all(isfinite(atlasMotion)) ? atlasMotion : 0.0;
+#endif
+	return atlasMotion;
+}
+
+void PrepareColor(uint2 id, bool sharedGuides)
 {
 	if (any(id >= ModelRegionSize))
 		return;
@@ -108,6 +157,7 @@ void PrepareColor(uint2 id)
 	uint2 end = uint2(ceil(upper));
 	float4 color = 0.0;
 	float area = 0.0, mask = 0.0;
+	GuideDonor donor = EmptyGuideDonor();
 	// An area filter avoids phase-dependent shimmer when the model grid changes size.
 	[loop] for (uint y = first.y; y < end.y; ++y)
 	{
@@ -119,6 +169,8 @@ void PrepareColor(uint2 id)
 			float weight = ModelSourceWeight(footprint, rowWeights, source.x);
 			if (weight <= 0.0)
 				continue;
+			if (sharedGuides)
+				ConsiderGuide(source, donor);
 			float4 value = InputColor.Load(int3(source, 0));
 			color += (all(isfinite(value)) ? value : 0.0) * weight;
 			area += weight;
@@ -127,6 +179,10 @@ void PrepareColor(uint2 id)
 				mask = max(mask, isfinite(selection) ? saturate(selection) : 0.0);
 			}
 		}
+	}
+	if (sharedGuides) {
+		ProxyDepth[pixel] = donor.depth;
+		ProxyMotion[pixel] = GuideMotion(donor, pixel, SourceSize, ModelSize);
 	}
 	ProxyColor[pixel] = area > 0.0 ? color / area : 0.0;
 	if (HasMask != 0u)
@@ -170,12 +226,7 @@ void PrepareGuides(uint2 id)
 	}
 	uint2 first = min(uint2(floor(lower)), guideSize - 1u);
 	uint2 end = min(uint2(ceil(upper)), guideSize);
-	float nearest = DepthOrder::Far();
-	float2 motion = 0.0;
-#ifdef NR_PERIPHERAL_COMPRESSION
-	uint2 nearestPixel = 0u;
-#endif
-	bool foundDepth = false;
+	GuideDonor donor = EmptyGuideDonor();
 	// Guide and colour grids retain their own resolutions and matching depth/motion samples.
 	[loop] for (uint y = first.y; y < end.y; ++y)
 	{
@@ -190,31 +241,11 @@ void PrepareGuides(uint2 id)
 			if (ModelSourceWeight(footprint, rowWeights, x) <= 0.0)
 				continue;
 #endif
-			float depth = InputDepth.Load(int3(x, y, 0));
-			if (isfinite(depth) && depth >= 0.0 && depth <= 1.0 && (!foundDepth || DepthOrder::IsNearer(depth, nearest))) {
-				float2 velocity = InputMotion.Load(int3(x, y, 0));
-				if (all(isfinite(velocity))) {
-					nearest = depth;
-					motion = velocity;
-#ifdef NR_PERIPHERAL_COMPRESSION
-					nearestPixel = uint2(x, y);
-#endif
-					foundDepth = true;
-				}
-			}
+			ConsiderGuide(uint2(x, y), donor);
 		}
 	}
-	ProxyDepth[pixel] = nearest;
-	float2 atlasMotion = motion * MotionVectorScale;
-#ifdef NR_PERIPHERAL_COMPRESSION
-	// Motion belongs to the chosen depth sample, not the centre of its surrounding footprint.
-	float2 anchor = (float2(nearestPixel) + 0.5) / float2(guideSize);
-#	if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NR_CELL_CENTRE_MOTION)
-	anchor = PeripheralInverse((float2(pixel) + 0.5) / float2(modelGuideSize));
-#	endif
-	atlasMotion = PeripheralForward(anchor + atlasMotion) - PeripheralForward(anchor);
-	atlasMotion = all(isfinite(atlasMotion)) ? atlasMotion : 0.0;
-#endif
+	ProxyDepth[pixel] = donor.depth;
+	float2 atlasMotion = GuideMotion(donor, pixel, guideSize, modelGuideSize);
 	if (packedTileIndex < PackedCount) {
 		PackedCropTile tile = PackedTiles[packedTileIndex];
 		float2 position = (float2(pixel) + 0.5) * float2(ModelSize) / float2(modelGuideSize);
@@ -227,6 +258,11 @@ void PrepareGuides(uint2 id)
 }
 
 [numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {
-	PrepareColor(id.xy);
+#ifdef NR_SHARED_PREPARATION
+	// The retained CPU plan proves identical full-view source/model grids and regions.
+	PrepareColor(id.xy, true);
+#else
+	PrepareColor(id.xy, false);
 	PrepareGuides(id.xy);
+#endif
 }

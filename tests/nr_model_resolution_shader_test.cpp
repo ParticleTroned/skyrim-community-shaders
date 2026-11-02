@@ -54,6 +54,7 @@ namespace AdapterCompiler
 	bool failGuidedAllocation = false, throwGuidedAllocationFailure = false;
 	unsigned guidedAttempts = 0;
 	unsigned ordinarySelectionAttempts = 0;
+	unsigned sharedPreparationFailure = 0, sharedPreparationAttempts = 0;
 	bool failPeripheral = false;
 	unsigned peripheralAttempts = 0;
 	unsigned peripheralAllocationFailureAttempt = 0;
@@ -76,6 +77,18 @@ ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
 {
 	result = E_FAIL;
 	++AdapterCompiler::calls;
+	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "NR_SHARED_PREPARATION"; })) {
+		++AdapterCompiler::sharedPreparationAttempts;
+		if (AdapterCompiler::sharedPreparationFailure == 1)
+			return nullptr;
+		if (AdapterCompiler::sharedPreparationFailure == 2)
+			throw std::runtime_error("Shared preparation compile failure");
+		if (AdapterCompiler::sharedPreparationFailure == 3) {
+			result = E_OUTOFMEMORY;
+			return nullptr;
+		}
+	}
+
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "DEVBENCH_BRIDGE_ENABLED"; })) {
 		++AdapterCompiler::experimentalAttempts;
@@ -403,6 +416,73 @@ namespace
 				Near(motions[index][0], (2 * x + 1) * 0.01f * motionScale[0], "Depth and horizontal motion came from different surfaces");
 				Near(motions[index][1], (2 * y + 1) * 0.02f * motionScale[1], "Depth and vertical motion came from different surfaces");
 				Near(masks[index], maskEnabled ? 0.75f : -11.0f, "Protection mask was diluted or an absent mask was enabled");
+			}
+		}
+	}
+
+	void CheckSharedFootprint(ID3D11Device* device, ID3D11DeviceContext* context, Shader& shader, Shader& shared, bool peripheral, UINT compression)
+	{
+		using namespace NeuralRendering;
+		constexpr Size source{ 27, 15 };
+		const float nan = std::numeric_limits<float>::quiet_NaN();
+		for (UINT percent : { 33u, 50u, 90u, 100u }) {
+			const auto geometry = BuildModelResolutionGeometry(UpscalingDLSS::ViewportCrop::Identity(source[0], source[1], source[0], source[1]),
+				{ source[0], source[1] }, { 0, 0, source[0], source[1] }, percent);
+			Require(geometry.has_value(), "Shared footprint fixture geometry failed");
+			const auto plan = BuildPeripheralCompressionPlan(*geometry, { source[0], source[1] },
+				UpscalingDLSS::ViewportCrop::Identity(source[0], source[1], source[0], source[1]), percent,
+				{ .requested = true, .compressionPercent = compression });
+			const auto modelExtent = peripheral ? plan.model : geometry->modelSize;
+			const Size model{ modelExtent.width, modelExtent.height };
+			std::unique_ptr<ConstantBuffer> mapping;
+			if (peripheral) {
+				Require(plan.Active(), "Shared footprint fixture compression failed");
+				mapping = std::make_unique<ConstantBuffer>(device, shader.reflection.Get(), "PeripheralMappingConstants");
+				std::memcpy(mapping->bytes.data(), &plan.mapping, mapping->bytes.size());
+			}
+			for (UINT eye = 0; eye < 2; ++eye) {
+				std::vector<Pixel> colors(source[0] * source[1]);
+				std::vector<float> depths(colors.size()), masks(colors.size());
+				std::vector<Motion> motions(colors.size());
+				for (UINT i = 0; i < colors.size(); ++i) {
+					colors[i] = { float(i % 17) * .125f + eye, float(i % 5), float(i % 3) * .5f, .375f };
+					if (i % 11 == 0)
+						colors[i][0] = nan;
+					depths[i] = i % 13 == 0 ? nan : float(i % 7) / 6;
+					motions[i] = { i % 9 == 0 ? nan : float(i % 5) * .01f, float(i % 11) * -.02f - eye };
+					masks[i] = i % 13 == 0 ? nan : float(i % 3) * .5f;
+				}
+				Texture color(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, colors);
+				Texture depth(device, source, DXGI_FORMAT_R32_FLOAT, depths);
+				Texture motion(device, source, DXGI_FORMAT_R32G32_FLOAT, motions);
+				Texture mask(device, source, DXGI_FORMAT_R32_FLOAT, masks);
+				Texture proxy(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(model[0] * model[1], sentinel));
+				Texture proxyDepth(device, model, DXGI_FORMAT_R32_FLOAT, std::vector(model[0] * model[1], -11.0f));
+				Texture proxyMotion(device, model, DXGI_FORMAT_R32G32_FLOAT, std::vector(model[0] * model[1], Motion{ -11, -11 }));
+				Texture proxyMask(device, model, DXGI_FORMAT_R32_FLOAT, std::vector(model[0] * model[1], -11.0f));
+				const std::array inputs{ color.srv.Get(), depth.srv.Get(), motion.srv.Get(), eye ? mask.srv.Get() : nullptr };
+				const std::array outputs{ proxy.uav.Get(), proxyDepth.uav.Get(), proxyMotion.uav.Get(), proxyMask.uav.Get() };
+				ConstantBuffer constants(device, shader.reflection.Get(), "ModelResolutionConstants");
+				Configure(constants, source, model, { {}, source }, { {}, model }, eye != 0, { 1, 1 });
+				if (mapping)
+					mapping->Bind(context);
+				Dispatch(context, shader, constants, model, inputs, outputs);
+				const auto baselineColor = proxy.Read<Pixel>(device, context);
+				const auto baselineDepth = proxyDepth.Read<float>(device, context);
+				const auto baselineMotion = proxyMotion.Read<Motion>(device, context);
+				const auto baselineMask = proxyMask.Read<float>(device, context);
+				const std::array untouched{ -11.0f, -11.0f, -11.0f, -11.0f };
+				context->ClearUnorderedAccessViewFloat(proxy.uav.Get(), sentinel.data());
+				for (auto* view : { proxyDepth.uav.Get(), proxyMotion.uav.Get(), proxyMask.uav.Get() })
+					context->ClearUnorderedAccessViewFloat(view, untouched.data());
+				if (mapping)
+					mapping->Bind(context);
+				Dispatch(context, shared, constants, model, inputs, outputs);
+				Require(proxy.Read<Pixel>(device, context) == baselineColor &&
+							proxyDepth.Read<float>(device, context) == baselineDepth &&
+							proxyMotion.Read<Motion>(device, context) == baselineMotion &&
+							proxyMask.Read<float>(device, context) == baselineMask,
+					"Shared traversal changed colour/alpha, depth, motion or mask output");
 			}
 		}
 	}
@@ -2473,6 +2553,38 @@ namespace
 				}
 	}
 
+	void CheckSharedPreparationCache(std::array<NeuralRendering::RendererApplyArgs, 2> args)
+	{
+		using namespace NeuralRendering;
+		for (auto& input : args) input.computeSubrect = { 0, 0, input.outputWidth, input.outputHeight };
+		for (unsigned failure : { 1u, 2u, 3u }) {
+			ModelResolution adapter;
+			ModelResolution::Batch batch;
+			HRESULT result = S_OK;
+			AdapterCompiler::sharedPreparationFailure = failure;
+			const auto attempts = AdapterCompiler::sharedPreparationAttempts;
+			const bool prepared = adapter.Prepare(args, batch, result);
+			Require(prepared == (failure != 3) && !batch.sharedPreparationShader &&
+						(failure != 3 || result == E_OUTOFMEMORY),
+				"Optional shared shader failure changed recovery policy");
+			Require(AdapterCompiler::sharedPreparationAttempts == attempts + 1, "Shared shader failure was not exercised");
+			AdapterCompiler::sharedPreparationFailure = 0;
+			Require(adapter.Prepare(args, batch, result), "Shared shader recovery preparation failed");
+			Require(bool(batch.sharedPreparationShader) == (failure == 3) &&
+						AdapterCompiler::sharedPreparationAttempts == attempts + (failure == 3 ? 2 : 1),
+				"Shared shader failure latch changed");
+			adapter.InvalidateShaders();
+			Require(adapter.Prepare(args, batch, result) && batch.sharedPreparationShader, "Shared shader invalidation did not rearm compilation");
+		}
+		ModelResolution adapter;
+		ModelResolution::Batch batch;
+		HRESULT result = S_OK;
+		args[1].computeSubrect = { 1, 0, args[1].outputWidth - 1, args[1].outputHeight };
+		Require(adapter.Prepare(args, batch, result) && batch.sharedPreparationShader, "Mixed-region preparation rejected a valid generic eye");
+		for (auto& input : args) input.computeSubrect = args[1].computeSubrect;
+		Require(adapter.Prepare(args, batch, result) && !batch.sharedPreparationShader, "Cropped inputs selected the shared traversal");
+	}
+
 	void CheckAdapter(ID3D11Device* device, ID3D11DeviceContext* context)
 	{
 		using namespace NeuralRendering;
@@ -2508,6 +2620,7 @@ namespace
 		ModelResolution adapter;
 		ModelResolution::Batch batch;
 		HRESULT result = S_OK;
+		CheckSharedPreparationCache(args);
 		const auto estimate = adapter.AdditionalBytes(args);
 		Require(estimate && *estimate > 0, "Proxy allocation must be admitted before preparation");
 		Require(adapter.Prepare(args, batch, result), "Production proxy preparation failed");
@@ -2635,6 +2748,22 @@ int main()
 					vr, "features/Neural Rendering/Shaders", false, false,
 					reversed ? std::span<const D3D_SHADER_MACRO>(depthDefines) : std::span<const D3D_SHADER_MACRO>{});
 				CheckGuideDonors(device.Get(), context.Get(), donorShader, reversed);
+				std::vector<D3D_SHADER_MACRO> sharedDefines{ { "NR_SHARED_PREPARATION", "1" } };
+				if (reversed)
+					sharedDefines.push_back({ "REVERSE_Z", "1" });
+				Shader sharedShader(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl",
+					vr, "features/Neural Rendering/Shaders", false, false, sharedDefines);
+				CheckSharedFootprint(device.Get(), context.Get(), donorShader, sharedShader, false, 0);
+				std::vector<D3D_SHADER_MACRO> peripheralDefines{ { "NR_PERIPHERAL_COMPRESSION", "1" } };
+				if (reversed)
+					peripheralDefines.push_back({ "REVERSE_Z", "1" });
+				Shader peripheralShader(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl",
+					vr, "features/Neural Rendering/Shaders", false, false, peripheralDefines);
+				sharedDefines.push_back({ "NR_PERIPHERAL_COMPRESSION", "1" });
+				Shader sharedPeripheralShader(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl",
+					vr, "features/Neural Rendering/Shaders", false, false, sharedDefines);
+				for (UINT compression : { 25u, 50u, 100u })
+					CheckSharedFootprint(device.Get(), context.Get(), peripheralShader, sharedPeripheralShader, true, compression);
 			}
 			for (bool guided : { false, true }) {
 				AdapterCompiler::guided = guided;

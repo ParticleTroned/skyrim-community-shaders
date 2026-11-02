@@ -50,7 +50,7 @@ namespace NeuralRendering
 			Microsoft::WRL::ComPtr<ID3D11Device> device;
 			Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
 			Microsoft::WRL::ComPtr<ID3D11ComputeShader> reconstructionShader;
-			Microsoft::WRL::ComPtr<ID3D11ComputeShader> preparationShader;
+			Microsoft::WRL::ComPtr<ID3D11ComputeShader> preparationShader, sharedPreparationShader;
 			Microsoft::WRL::ComPtr<ID3D11Buffer> peripheralConstants;
 			std::array<PeripheralCompressionPlan, kMaximumRegionEvaluations> peripheralPlans{};
 			Microsoft::WRL::ComPtr<ID3D11Buffer> constants;
@@ -122,6 +122,7 @@ namespace NeuralRendering
 		// CPU policy survives resource retirement without retaining any GPU memory.
 		std::array<CropPlanning, kLogicalFeatureSlotCount> cropPlanning_{};
 		bool EnsureShaders(ID3D11Device*, HRESULT&);
+		bool EnsureSharedPreparationShader(bool peripheral, Microsoft::WRL::ComPtr<ID3D11ComputeShader>&, HRESULT&);
 		bool EnsureCoverage(ID3D11Device*, HRESULT&);
 		bool EnsureSelectionShader(bool guarded, HRESULT&);
 		bool EnsureGuidedShader(bool selected, bool guarded, bool peripheral, Microsoft::WRL::ComPtr<ID3D11ComputeShader>&, HRESULT&);
@@ -158,6 +159,8 @@ namespace NeuralRendering
 		Microsoft::WRL::ComPtr<ID3D11Device> device_;
 		Microsoft::WRL::ComPtr<ID3D11Buffer> sceneConstants_;
 		Microsoft::WRL::ComPtr<ID3D11ComputeShader> prepare_, reconstruct_, selection_, guardedSelection_;
+		std::array<Microsoft::WRL::ComPtr<ID3D11ComputeShader>, 2> sharedPreparationShaders_{};
+		std::array<bool, 2> sharedPreparationFailed_{};
 		std::array<Microsoft::WRL::ComPtr<ID3D11ComputeShader>, 8> guidedShaders_{};
 		std::array<bool, 8> guidedShaderFailed_{};
 		Microsoft::WRL::ComPtr<ID3D11ComputeShader> peripheralPrepare_;

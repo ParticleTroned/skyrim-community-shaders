@@ -158,11 +158,6 @@ void ExtendedTranslucency::DrawSettings()
 	ImGui::EndDisabled();
 }
 
-void ExtendedTranslucency::DrawEssentialSettings()
-{
-	DrawEnabledCheckbox(settings);
-}
-
 void ExtendedTranslucency::LoadSettings(json& o_json)
 {
 	settings = o_json;

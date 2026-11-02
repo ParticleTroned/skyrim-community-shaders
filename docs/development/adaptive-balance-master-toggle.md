@@ -3,8 +3,8 @@
 See [sky and water controls](adaptive-balance-visual-controls.md) for
 their profile composition and rendering behavior.
 
-The `Enable` checkbox sits in the shared feature header, before the
-settings body, in both Essentials and Advanced views. It uses the same
+The `Enabled` checkbox sits in the shared feature header, before the
+settings body. It uses the same
 header path as Foliage Lighting. It controls every adjustment owned by
 Adaptive Balance, across Global, time/interior profiles, and location layers. It
 uses the existing `AdaptiveBrightness.enabled` saved setting. No new

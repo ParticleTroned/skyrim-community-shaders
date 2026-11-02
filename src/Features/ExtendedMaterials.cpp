@@ -110,13 +110,6 @@ void ExtendedMaterials::DrawSettings()
 
 #undef I18N_KEY_PREFIX
 
-void ExtendedMaterials::DrawEssentialSettings()
-{
-	SanitizeSettings(settings);
-	Util::UIntCheckbox(T("feature.extended_materials.enable_complex_material", "Enable Complex Material"), settings.EnableComplexMaterial);
-	Util::UIntCheckbox(T("feature.extended_materials.enable_parallax", "Enable Parallax"), settings.EnableParallax);
-}
-
 void ExtendedMaterials::DrawPerformanceSettings(bool)
 {
 	SanitizeSettings(settings);

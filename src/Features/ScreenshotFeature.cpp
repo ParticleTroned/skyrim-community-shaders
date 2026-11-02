@@ -599,7 +599,7 @@ void ScreenshotFeature::SaveSettings(json& settings)
 void ScreenshotFeature::DrawSettingsEnabledControl()
 {
 	bool active = enabled.load();
-	if (Util::Widgets::Checkbox(T(TKEY("enabled"), "Enable screenshot capture"), &active))
+	if (Util::Widgets::Checkbox(T("menu.features.enabled", "Enabled"), &active))
 		SetEnabled(active);
 }
 

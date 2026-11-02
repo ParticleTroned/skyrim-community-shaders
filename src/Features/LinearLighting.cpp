@@ -127,12 +127,6 @@ void LinearLighting::DrawSettings()
 	}
 }
 
-void LinearLighting::DrawEssentialSettings()
-{
-	SanitizeSettings(settings);
-	Util::UIntCheckbox(T("feature.linear_lighting.enable", "Enable"), settings.enableLinearLighting);
-}
-
 void LinearLighting::DrawPerformanceSettings(bool)
 {
 	SanitizeSettings(settings);

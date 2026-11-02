@@ -2676,13 +2676,10 @@ namespace
 	std::vector<Feature*> BuildPerformanceFeatureList()
 	{
 		std::vector<Feature*> features;
-		const bool essentialsMode =
-			globals::menu && globals::menu->IsPerformanceUiMode();
 		for (auto* feature : Feature::GetFeatureList()) {
 			if (!feature ||
 				!feature->loaded ||
 				feature->IsHiddenFromUserView() ||
-				(essentialsMode && feature->IsHiddenInEssentialsMode()) ||
 				!feature->IsInMenu() ||
 				(!feature->HasPerformanceSettings() && !feature->SupportsPerformanceCostMeasurement())) {
 				continue;
@@ -4339,7 +4336,7 @@ void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature)
 	const bool busy = HasActiveMeasurements();
 	{
 		auto guard = Util::DisableGuard(!a_feature->loaded || !supported || reason || busy);
-		if (Util::Widgets::Checkbox(T("menu.performance_tuning.shared.enabled", "Enabled"), &enabled)) {
+		if (Util::Widgets::Checkbox(T("menu.features.enabled", "Enabled"), &enabled)) {
 			const bool applied = SetRuntimeFeatureEnabled(a_feature, enabled);
 			g_featureCostUiMessage = applied ? "" : T(TKEY("toggle.failed"), "This feature could not change state. Check its settings and runtime requirements.");
 		}
@@ -4367,7 +4364,6 @@ void PerformanceTuningRenderer::RenderMeasurementSuite(Feature* feature)
 	const auto name = feature->GetShortName();
 	ImGui::PushID(name.c_str());
 	const SKSE::stl::scope_exit pop([] { ImGui::PopID(); });
-	RenderFeatureEnabledControl(feature);
 	if (RenderFeatureCostMeasurement(feature, g_costMeasurementStates[name]))
 		StartFeatureCostMeasurement(feature, g_costMeasurementStates[name], timing, ImGui::GetTime());
 	if (!HasActiveMeasurements() && ProfilingRenderer::CanProfileFeature(name))

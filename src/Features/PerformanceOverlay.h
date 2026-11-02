@@ -133,7 +133,6 @@ struct PerformanceOverlay : OverlayFeature
 	std::string GetShortName() override { return "PerformanceOverlay"; }
 	virtual bool IsCore() const override { return true; }
 	virtual bool IsInMenu() const override { return true; }
-	bool IsHiddenInEssentialsMode() const override { return true; }
 	bool IsOverlayVisible() const override { return settings.ShowInOverlay; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
@@ -149,8 +148,6 @@ struct PerformanceOverlay : OverlayFeature
 	/** Draws the native runtime switch independently of measurement eligibility. */
 	void DrawSettingsEnabledControl() override;
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual void DataLoaded() override;
 	void DrawOverlay() override;
 	// Settings persistence and defaults

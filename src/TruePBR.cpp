@@ -395,14 +395,6 @@ void TruePBR::DrawSettings()
 	}
 }
 
-void TruePBR::DrawEssentialSettings()
-{
-	const bool enabled = DrawEnabledCheckbox(settings);
-	ImGui::BeginDisabled(!enabled);
-	DrawPBRMetalSliders(settings);
-	ImGui::EndDisabled();
-}
-
 void TruePBR::DrawPerformanceSettings(bool)
 {
 	DrawEnabledCheckbox(settings);

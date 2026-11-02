@@ -97,11 +97,6 @@ public:
 	virtual bool IsHiddenFromUserView() const { return false; }
 
 	/**
-	 * Whether the feature should be hidden while the menu is in Essentials mode.
-	 */
-	virtual bool IsHiddenInEssentialsMode() const { return false; }
-
-	/**
 	 * Whether to print the INI version missing message when this feature is unloaded
 	 */
 	virtual bool DrawFailLoadMessage() const { return true; }
@@ -122,12 +117,12 @@ public:
 		bool needsAttention = false;
 	};
 	virtual SettingsHeaderStatus GetSettingsHeaderStatus() const { return { T("feature.common.ready", "Ready"), false }; }
+	/** Draw the sole master switch in the shared feature header. */
 	virtual void DrawSettingsEnabledControl();
 	virtual std::string_view GetSettingsFooterText() const { return {}; }
+	/** Additional header information; master switches belong in DrawSettingsEnabledControl(). */
 	virtual void DrawSettingsHeaderControls() {}
 	virtual void DrawSettings();
-	virtual bool HasEssentialSettings() const { return false; }
-	virtual void DrawEssentialSettings() {}
 	virtual bool HasPerformanceSettings() const { return false; }
 	virtual void DrawPerformanceSettings(bool a_advanced)
 	{

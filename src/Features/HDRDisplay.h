@@ -36,6 +36,13 @@ public:
 				T("feature.hdr_display.key_feature_3", "Configurable paper white and peak brightness.") } };
 	};
 
+	static constexpr uint kPaperWhiteMin = 80;
+	static constexpr uint kPaperWhiteMax = 500;
+	static constexpr uint kPeakNitsMin = 400;
+	static constexpr uint kPeakNitsMax = 10000;
+	static constexpr float kUIBrightnessMin = 0.5f;
+	static constexpr float kUIBrightnessMax = 5.0f;
+
 	struct Settings
 	{
 		bool enableHDR = false;           // false = vanilla SDR, true = HDR output
@@ -58,6 +65,9 @@ public:
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void DrawSettings() override;
+	/** Report output detection alongside the shared feature-header switch. */
+	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
+	void DrawSettingsEnabledControl() override;
 
 	virtual void DataLoaded() override;
 	virtual void SetupResources() override;
@@ -192,8 +202,11 @@ public:
 	std::vector<std::pair<RE::RENDER_TARGETS::RENDER_TARGET, SavedRenderTarget>> savedLDRTargets;
 
 private:
-	bool showHDRWarningPopup = false;
-	bool pendingHDREnable = false;
+	bool requestHDREnable = false;
+	/** Validate calibration at configuration and UI mutation boundaries. */
+	static void SanitizeSettings(Settings& values);
+	void SetHDREnabled(bool enabled);
+	void DrawHDRWarningPopup();
 	bool presentSuppressed = false;
 	std::unordered_map<ID3D11BlendState*, winrt::com_ptr<ID3D11BlendState>> patchedBlendStateCache;
 

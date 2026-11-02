@@ -1922,7 +1922,7 @@ void TextureStreaming::DrawSettingsEnabledControl()
 		inventorySuspended = !state->inventoryFailure.empty();
 	}
 	const auto disabled = Util::DisableGuard(conflict || inventorySuspended || !originHookReady.load());
-	if (Util::Widgets::Checkbox(T("feature.texture_streaming.enabled", "Enabled"), &enabled))
+	if (Util::Widgets::Checkbox(T("menu.features.enabled", "Enabled"), &enabled))
 		Configure(enabled, maximum);
 	Util::AddTooltip(T("feature.texture_streaming.turns_texture_streaming_on_or_off_while_keeping_your", "Turns texture streaming on or off while keeping your current tuning."), ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 }

@@ -193,7 +193,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SmartClearShaderCacheDefault,
 	AutoHideFeatureList,
 	SkipConstraintWarning,
-	PerformanceUiMode,
 	RequireShiftToDock,
 	UseResolutionFont,
 	Theme,

@@ -87,11 +87,6 @@ void HairSpecular::DrawSettings()
 	}
 }
 
-void HairSpecular::DrawEssentialSettings()
-{
-	ImGui::Checkbox(T("feature.hair_specular.enable", "Enable"), reinterpret_cast<bool*>(&settings.Enabled));
-}
-
 void HairSpecular::LoadSettings(json& o_json)
 {
 	settings = o_json;

@@ -56,7 +56,6 @@ public:
 	std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 	bool IsCore() const override { return true; }
 	bool IsInMenu() const override { return false; }
-	bool IsHiddenInEssentialsMode() const override { return true; }
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return { T("feature.render_doc.description", "In-application RenderDoc capture support and convenience UI."),
@@ -71,8 +70,6 @@ public:
 	void DrawSettingsEnabledControl() override;
 	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
 	void DrawSettings() override;
-	bool HasEssentialSettings() const override { return true; }
-	void DrawEssentialSettings() override;
 	void RestoreDefaultSettings() override;
 	void LoadSettings(json& o_json) override;
 	void SaveSettings(json& o_json) override;

@@ -601,7 +601,7 @@ void RenderDoc::SetCaptureEnabled(bool a_enabled)
 void RenderDoc::DrawSettingsEnabledControl()
 {
 	bool enabled = enableRenderDocCapture;
-	if (Util::Widgets::Checkbox(T("feature.render_doc.enabled", "Enabled"), &enabled))
+	if (Util::Widgets::Checkbox(T("menu.features.enabled", "Enabled"), &enabled))
 		SetCaptureEnabled(enabled);
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -987,12 +987,4 @@ bool RenderDoc::IsCapturing() const
 
 	// RenderDoc API doesn't have a direct IsCapturing method, but we can check if captures are enabled
 	return enableRenderDocCapture && renderDocApi != nullptr;
-}
-
-void RenderDoc::DrawEssentialSettings()
-{
-	DrawSettingsEnabledControl();
-	const auto status = GetSettingsHeaderStatus();
-	if (status.needsAttention)
-		Util::Text::WrappedRestartNeeded(status.label.data());
 }

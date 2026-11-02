@@ -249,7 +249,7 @@ void TerrainShadows::DrawSettings()
 	}
 }
 
-void TerrainShadows::DrawEssentialSettings()
+void TerrainShadows::DrawPerformanceSettings(bool)
 {
 	ImGui::Checkbox(T("feature.terrain_shadows.enable", "Enable"), &settings.EnableTerrainShadow);
 }

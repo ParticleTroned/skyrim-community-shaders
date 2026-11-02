@@ -111,14 +111,15 @@ void VanillaFresnel::SaveSettings(json& o_json)
 	o_json = settings;
 }
 
-void VanillaFresnel::DrawEssentialSettings()
+void VanillaFresnel::DrawSettingsEnabledControl()
 {
-	ImGui::Checkbox(T("feature.vanilla_fresnel.enable", "Enable"), reinterpret_cast<bool*>(&settings.Enable));
+	bool enabled = settings.Enable != 0;
+	if (Util::Widgets::Checkbox(T("menu.features.enabled", "Enabled"), &enabled))
+		settings.Enable = enabled ? 1u : 0u;
 }
 
 void VanillaFresnel::DrawSettings()
 {
-	ImGui::Checkbox(T("feature.vanilla_fresnel.enable", "Enable"), reinterpret_cast<bool*>(&settings.Enable));
 	ImGui::Checkbox(T(TKEY("enable_ggx"), "Enable Phong to GGX"), reinterpret_cast<bool*>(&settings.EnableGGX));
 	ImGui::Checkbox(T(TKEY("enable_ggx_on_grass"), "Enable Phong to GGX on Grass"), reinterpret_cast<bool*>(&settings.EnableGGXOnGrass));
 	if (!settings.EnableGGX) {

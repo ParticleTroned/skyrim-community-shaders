@@ -1241,15 +1241,6 @@ void LightLimitFix::PruneParticleLightCache(std::uint32_t a_frame)
 	particleLightDiagnostics.cacheEntries.store(particleLightsReferences.size(), std::memory_order_relaxed);
 }
 
-void LightLimitFix::DrawEssentialSettings()
-{
-	ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
-	bool contactShadows = IsContactShadowsRequested();
-	if (ImGui::Checkbox(T("feature.light_limit_fix.enable_point_light_contact_shadows", "Enable Point Light Contact Shadows"), &contactShadows))
-		SetContactShadowsEnabled(contactShadows);
-	DrawHeatWarpStrengthSetting();
-}
-
 void LightLimitFix::LoadSettings(json& o_json)
 {
 	runtimeToggle.ReplaceSettings(settings, o_json.get<Settings>(), &Settings::EnableContactShadows);

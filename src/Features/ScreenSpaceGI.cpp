@@ -530,11 +530,6 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 	}
 }
 
-void ScreenSpaceGI::DrawEssentialSettings()
-{
-	DrawScreenSpaceGIEnabledCheckbox(*this, "Enable");
-}
-
 void ScreenSpaceGI::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
 	SetEnabled(a_enabled);

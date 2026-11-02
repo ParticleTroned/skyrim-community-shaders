@@ -52,8 +52,6 @@ public:
 
 	/** @brief Draws the ImGui settings panel for Terrain Blending configuration. */
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
 	{

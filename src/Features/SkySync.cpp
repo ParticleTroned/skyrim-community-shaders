@@ -1025,11 +1025,6 @@ inline float SkySync::SmoothStep(const float start, const float end, const float
 	return t * t * (3.0f - 2.0f * t);
 }
 
-void SkySync::DrawEssentialSettings()
-{
-	ImGui::Checkbox(T("feature.sky_sync.enable", "Enable"), &settings.Enabled);
-}
-
 void SkySync::PreparePendingTransitions()
 {
 	const auto request = Util::ConsumeCelestialTransitionRequest();

@@ -178,27 +178,6 @@ void GrassLighting::DrawSettings()
 	}
 }
 
-void GrassLighting::DrawEssentialSettings()
-{
-	const bool enabled = DrawEnabledCheckbox();
-
-	ImGui::BeginDisabled(!enabled);
-	ImGui::SliderFloat("Glossiness", &settings.Glossiness, kGlossinessMin, kGlossinessMax, "%.0f", ImGuiSliderFlags_AlwaysClamp);
-	SanitizeSettings();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Specular highlight glossiness for complex grass.");
-
-	ImGui::SliderFloat("Specular Strength", &settings.SpecularStrength, kSpecularStrengthMin, kSpecularStrengthMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	SanitizeSettings();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Specular highlight strength for complex grass.");
-
-	Util::UIntCheckbox(T("feature.grass_lighting.wrapped_lighting", "Wrapped Lighting for Vanilla Grass"), settings.EnableWrappedLighting);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Softens lighting on vanilla/basic grass. Complex grass is unaffected.");
-	ImGui::EndDisabled();
-}
-
 void GrassLighting::DrawPerformanceSettings(bool)
 {
 	const bool enabled = DrawEnabledCheckbox();

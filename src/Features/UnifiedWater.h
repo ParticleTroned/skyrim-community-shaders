@@ -126,8 +126,6 @@ struct UnifiedWater : OverlayFeature
 	};
 
 	virtual void DrawSettings() override;
-	bool HasEssentialSettings() const override { return true; }
-	void DrawEssentialSettings() override;
 	void DrawSettingsEnabledControl() override;
 
 	virtual void DrawOverlay() override;

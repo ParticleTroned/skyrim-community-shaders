@@ -76,11 +76,6 @@ void InverseSquareLighting::DrawSettings()
 	MenuUI::DetailText(T("feature.inverse_square_lighting.ui_nearby_lights_use_physically_based_distance_falloff_us_0aa8c3f7", "Nearby lights use physically based distance falloff. Use Enabled in the header to compare with the original lighting; there are no additional tuning controls."));
 }
 
-void InverseSquareLighting::DrawEssentialSettings()
-{
-	DrawEnabledCheckbox();
-}
-
 void InverseSquareLighting::LoadSettings(json& o_json)
 {
 	settings = o_json;

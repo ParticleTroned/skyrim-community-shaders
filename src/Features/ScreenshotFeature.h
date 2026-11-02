@@ -29,8 +29,6 @@ struct ScreenshotFeature : public Feature
 	bool IsInMenu() const override { return true; }
 	void DrawSettingsEnabledControl() override;
 	void DrawSettings() override;
-	bool HasEssentialSettings() const override { return true; }
-	void DrawEssentialSettings() override { DrawSettings(); }
 	void LoadSettings(json&) override;
 	void SaveSettings(json&) override;
 	void Reset() override;

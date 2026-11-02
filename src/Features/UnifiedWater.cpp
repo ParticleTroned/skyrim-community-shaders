@@ -904,7 +904,7 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 
 void UnifiedWater::DrawSettingsEnabledControl()
 {
-	Util::Widgets::Checkbox(T("feature.unified_water.enabled", "Enabled"), &settings.UseOptimisedMeshes);
+	Util::Widgets::Checkbox(T("menu.features.enabled", "Enabled"), &settings.UseOptimisedMeshes);
 	Util::AddTooltip(T("feature.unified_water.uses_optimized_water_meshes_applies_to_newly_created_water_after_a_l", "Uses optimized water meshes. Applies to newly created water after a location change or restart."));
 }
 
@@ -1727,13 +1727,6 @@ void UnifiedWater::TESWaterSystem_UpdateDisplacementMeshPosition::thunk(RE::TESW
 	// CellTexCoordOffset.xyzw below - applies to displacement water only
 	// Previously the values were calculated relative to the 5x5 flow grid
 	*uw.gDisplacementCellTexCoordOffset = float4(posX + offsetX, height - (posY + offsetY), posX, 1 - posY);
-}
-
-void UnifiedWater::DrawEssentialSettings()
-{
-	SanitizeSettings(settings);
-	ImGui::SeparatorText(T(TKEY("water_appearance"), "Water Appearance"));
-	DrawWaterTintSettings(settings);
 }
 
 #undef I18N_KEY_PREFIX

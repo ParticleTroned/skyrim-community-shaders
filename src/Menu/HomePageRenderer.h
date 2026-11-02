@@ -8,7 +8,7 @@ class HomePageRenderer
 public:
 	// Constants
 	static constexpr const char* DISCORD_URL = "https://discord.gg/utSWStYTx2";
-	static constexpr const char* GITHUB_URL = "https://github.com/ParticleTroned/skyrim-community-shaders/tree/cs-1.7-PL-SE";
+	static constexpr const char* GITHUB_URL = "https://github.com/ParticleTroned/skyrim-community-shaders/tree/main-SE";
 	static constexpr float TITLE_FONT_SCALE = 2.0f;
 	static constexpr float TITLE_PRIMARY_LINE_FONT_SCALE = 1.85f;
 	static constexpr float TITLE_SECONDARY_LINE_FONT_SCALE = 0.85f;
@@ -37,7 +37,7 @@ public:
 	static constexpr float HOME_LINK_DISCORD_BUTTON_MAX_WIDTH = 220.0f;
 	static constexpr float HOME_LINK_ROW_PADDING_MARGIN = 40.0f;
 
-	/** Draw the shared welcome and managed-cache pages with native SE mode selection. */
+	/** Draw the shared welcome and managed-cache pages. */
 	static void RenderHomePage();
 
 	// First-time setup management
@@ -49,7 +49,6 @@ public:
 	static bool ShouldSkipKeyRelease(uint32_t key);
 
 private:
-	static void RenderModeSection();
 	static void RenderWelcomeSection();
 	static void RenderCacheMismatchSection();
 	static void RenderQuickLinksSection();

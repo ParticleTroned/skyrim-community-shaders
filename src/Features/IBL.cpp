@@ -153,7 +153,7 @@ void IBL::RestorePerformanceToggleState(const json& a_state)
 void IBL::DrawSettingsEnabledControl()
 {
 	bool enabled = settings.EnableIBL != 0;
-	if (Util::WeatherUI::Checkbox(T("feature.ibl.enabled", "Enabled"), this, "EnableIBL", &enabled))
+	if (Util::WeatherUI::Checkbox(T("menu.features.enabled", "Enabled"), this, "EnableIBL", &enabled))
 		SetPerformanceToggleEnabled(enabled);
 }
 

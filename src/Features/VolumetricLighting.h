@@ -62,8 +62,6 @@ public:
 	virtual void LoadSettings(json&) override;
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
-	bool HasEssentialSettings() const override { return true; }
-	void DrawEssentialSettings() override { DrawPerformanceSettings(false); }
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;

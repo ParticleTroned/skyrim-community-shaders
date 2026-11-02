@@ -154,7 +154,7 @@ void WeatherPicker::DrawSettings()
 void WeatherPicker::DrawSettingsEnabledControl()
 {
 	bool enabled = WeatherDetailsWindow.ShowInOverlay;
-	if (Util::Widgets::Checkbox(T("feature.weather_picker.enabled", "Enabled"), &enabled))
+	if (Util::Widgets::Checkbox(T("menu.features.enabled", "Enabled"), &enabled))
 		SetOverlayVisible(enabled);
 	Util::AddTooltip(T("feature.weather_picker.shows_or_hides_the_weather_details_overlay_we_0774ba0a", "Shows or hides the weather-details overlay. Weather and time are unchanged."));
 }

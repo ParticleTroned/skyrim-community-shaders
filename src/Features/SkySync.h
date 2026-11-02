@@ -73,8 +73,6 @@ public:
 	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.Enabled = a_enabled; }
 
 	virtual void DrawSettings() override;
-	bool HasEssentialSettings() const override { return true; }
-	void DrawEssentialSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

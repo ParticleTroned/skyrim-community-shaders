@@ -34,8 +34,6 @@ public:
 				T("feature.volumetric_shadows.key_feature_4", "Optimized for effects rendering") } };
 	}
 
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
 	{
 		return { 8,

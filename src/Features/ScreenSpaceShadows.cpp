@@ -418,13 +418,6 @@ const char* ScreenSpaceShadows::GetPerformanceTuningApplicabilityReason() const
 	}
 }
 
-void ScreenSpaceShadows::DrawEssentialSettings()
-{
-	bool enabled = IsEnabledRequested();
-	if (ImGui::Checkbox(T("feature.screen_space_shadows.enable", "Enable"), &enabled))
-		SetEnabled(enabled);
-}
-
 void ScreenSpaceShadows::LoadSettings(json& o_json)
 {
 	runtimeToggle.ReplaceSettings(bendSettings, o_json.get<BendSettings>(), &BendSettings::Enable);

@@ -652,13 +652,6 @@ const char* VolumetricShadows::GetPerformanceTuningApplicabilityReason() const
 	}
 }
 
-
-void VolumetricShadows::DrawEssentialSettings()
-{
-	DrawEnabledCheckbox(settings);
-}
-
-
 bool VolumetricShadows::HasShaderDefine(RE::BSShader::Type)
 {
 	return true;

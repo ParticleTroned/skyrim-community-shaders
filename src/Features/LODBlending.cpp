@@ -84,7 +84,7 @@ namespace
 	bool DrawEnabledCheckbox(LODBlending::Settings& a_settings)
 	{
 		bool enabled = a_settings.Enabled != 0;
-		if (Util::Widgets::Checkbox(T("feature.lod_blending.enable", "Enable"), &enabled))
+		if (Util::Widgets::Checkbox(T("menu.features.enabled", "Enabled"), &enabled))
 			a_settings.Enabled = enabled ? 1u : 0u;
 		return enabled;
 	}
@@ -148,11 +148,6 @@ void LODBlending::DrawSettings()
 		ImGui::TextUnformatted(T("feature.lod_blending.ui_disables_vertex_coloring_on_nearby_terrain_best_combin_e2860dc3", "Disables vertex coloring on nearby terrain. Best combined with terrain LOD generated in xLODGen with Vertex Color Intensity set to 0. "));
 	}
 	ImGui::EndDisabled();
-}
-
-void LODBlending::DrawEssentialSettings()
-{
-	DrawEnabledCheckbox(settings);
 }
 
 void LODBlending::LoadSettings(json& o_json)

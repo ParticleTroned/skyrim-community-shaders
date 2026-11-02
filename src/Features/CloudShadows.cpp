@@ -57,11 +57,6 @@ void CloudShadows::DrawSettings()
 	ImGui::EndDisabled();
 }
 
-void CloudShadows::DrawEssentialSettings()
-{
-	DrawEnabledCheckbox(settings);
-}
-
 void CloudShadows::DrawPerformanceSettings(bool)
 {
 	DrawEnabledCheckbox(settings);

@@ -22,7 +22,7 @@
 
 namespace
 {
-	constexpr float FORK_NOTICE_OFFSET_LINES = 2.0f;
+	constexpr float FORK_NOTICE_OFFSET_LINES = 1.15f;
 	constexpr float FORK_NOTICE_ITALIC_SLANT = 0.18f;
 
 	float CenteredTextX(float windowWidth, float textWidth)
@@ -90,26 +90,6 @@ void HomePageRenderer::RenderHomePage()
 		RenderWelcomeSection();
 	if (page.Is("cache"))
 		RenderCacheMismatchSection();
-}
-
-void HomePageRenderer::RenderModeSection()
-{
-	auto* menu = Menu::GetSingleton();
-	if (!menu)
-		return;
-	auto& settings = menu->GetSettings();
-	settings.PerformanceUiMode = std::clamp(settings.PerformanceUiMode, 0, 1);
-	const MenuUI::Choice choices[]{
-		{ "essentials", T("menu.home.essentials_recommended", "Essentials (Recommended)"),
-			T("menu.home.essentials_description", "Focus on common visual and performance controls."),
-			T("menu.home.essentials_help", "Keeps the SE Essentials grouping and simplified controls. Your saved settings remain available in Advanced mode.") },
-		{ "advanced", T("menu.home.advanced_full_ui", "Advanced (Full UI)"),
-			T("menu.home.advanced_description", "Show every feature and its detailed settings."),
-			T("menu.home.advanced_help", "Includes diagnostics, developer tools and the full feature list. Switching mode does not change rendering settings.") }
-	};
-	const int selected = MenuUI::ChoiceCards("HomeInterfaceMode", settings.PerformanceUiMode, choices);
-	if (selected >= 0)
-		settings.PerformanceUiMode = selected;
 }
 
 void HomePageRenderer::RenderWelcomeSection()
@@ -183,7 +163,6 @@ void HomePageRenderer::RenderWelcomeSection()
 		windowSize.x, forkNoticeColor);
 
 	ImGui::Spacing();
-	RenderModeSection();
 	ImGui::Spacing();
 	ImGui::Dummy(ImVec2(0.0f, 25.0f * scale));
 

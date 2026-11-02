@@ -150,7 +150,7 @@ static const std::unordered_map<RE::BSShader::Type, std::string> kShaderTypeTool
 void PerformanceOverlay::DrawSettingsEnabledControl()
 {
 	auto* menu = Menu::GetSingleton();
-	Util::Widgets::Checkbox(T("feature.perf_overlay.enabled", "Enabled"), &settings.ShowInOverlay);
+	Util::Widgets::Checkbox(T("menu.features.enabled", "Enabled"), &settings.ShowInOverlay);
 	if (auto tooltip = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(T("feature.perf_overlay.show_in_overlay_tooltip", "Opens performance overlay in a separate window that stays open\neven when the main menu is closed. "));
 		if (menu) {
@@ -220,18 +220,6 @@ void PerformanceOverlay::DrawSettings()
 			if (ImGui::Button(T("feature.perf_overlay.restore_defaults", "Restore Defaults")))
 				RestoreDefaultSettings();
 			Util::AddTooltip(T("feature.perf_overlay.restore_defaults_tooltip", "Restores Performance Overlay settings to defaults, including graphs, appearance, and update intervals."));
-		}
-	}
-}
-
-void PerformanceOverlay::DrawEssentialSettings()
-{
-	auto* menu = Menu::GetSingleton();
-	ImGui::Checkbox("Enable", &settings.ShowInOverlay);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Keeps the performance overlay open when the main menu is closed.");
-		if (menu) {
-			ImGui::Text("Toggle with %s", Util::Input::KeyIdToString(menu->GetSettings().OverlayToggleKey).c_str());
 		}
 	}
 }

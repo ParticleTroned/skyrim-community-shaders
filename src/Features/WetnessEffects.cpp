@@ -669,14 +669,6 @@ void WetnessEffects::DrawSettings()
 	}
 }
 
-void WetnessEffects::DrawEssentialSettings()
-{
-	DrawEnabledCheckbox();
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("enable_wetness_tooltip"), "Enables a wetness effect near water and when it is raining."));
-	}
-}
-
 void WetnessEffects::DrawPerformanceSettings(bool)
 {
 	auto drawToggle = [](const char* a_label, uint& a_setting) {

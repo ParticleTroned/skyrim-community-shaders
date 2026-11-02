@@ -244,7 +244,7 @@ void NeuralRenderingFeature::DrawSettingsEnabledControl()
 	{
 		const auto guard = Util::DisableGuard(blocker != nullptr);
 		bool enabled = upscaling.neuralSettings.enabled;
-		if (Util::Widgets::Checkbox(T("feature.neural_rendering.enabled", "Enable neural rendering"), &enabled)) {
+		if (Util::Widgets::Checkbox(T("menu.features.enabled", "Enabled"), &enabled)) {
 			std::string error;
 			if (upscaling.ToggleNeuralRendering(&error))
 				feedback = {};

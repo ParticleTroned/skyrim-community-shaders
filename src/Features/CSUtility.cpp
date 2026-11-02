@@ -46,9 +46,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	sceneDof,
 	underwaterDof)
 
-void CSUtility::DrawSettingsHeaderControls()
+void CSUtility::DrawSettingsEnabledControl()
 {
-	ImGui::Checkbox("Enable DOF Utilities", &settings.enabled);
+	Util::Widgets::Checkbox(T("menu.features.enabled", "Enabled"), &settings.enabled);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Controls the depth-of-field overrides and underwater fog blur correction on this page.");
 }

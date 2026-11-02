@@ -148,11 +148,10 @@ namespace
 		return std::find(CORE_MENU_NAMES.begin(), CORE_MENU_NAMES.end(), menuName) != CORE_MENU_NAMES.end();
 	}
 
-	bool IsFeatureVisibleInMenuMode(Feature* feature, bool essentialsMode)
+	bool IsFeatureVisibleInMenu(Feature* feature)
 	{
 		return feature &&
 		       !feature->IsHiddenFromUserView() &&
-		       !(essentialsMode && feature->IsHiddenInEssentialsMode()) &&
 		       feature->IsInMenu();
 	}
 
@@ -221,43 +220,6 @@ namespace
 
 		selectedMenu = 0;
 	}
-
-	int& GetFeatureUiModeValue(Feature* feature)
-	{
-		static std::unordered_map<std::string, int> featureUiModes;
-		static int fallbackMode = 0;
-		if (!feature)
-			return fallbackMode;
-		return featureUiModes[feature->GetShortName()];
-	}
-
-	bool IsFeatureAdvancedUiMode(Feature* feature)
-	{
-		if (!feature || !globals::menu || !globals::menu->IsPerformanceUiMode())
-			return false;
-		int& mode = GetFeatureUiModeValue(feature);
-		mode = std::clamp(mode, 0, 1);
-		return mode != 0;
-	}
-
-	void DrawFeatureUiModeToggle(Feature* feature)
-	{
-		if (!feature || !globals::menu || !globals::menu->IsPerformanceUiMode())
-			return;
-		int& mode = GetFeatureUiModeValue(feature);
-		mode = std::clamp(mode, 0, 1);
-		bool advanced = mode != 0;
-		ImGui::PushID("FeatureUiMode");
-		if (ImGui::Checkbox(T("menu.features.advanced", "Advanced"), &advanced))
-			mode = advanced ? 1 : 0;
-		ImGui::PopID();
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted(T("menu.features.advanced_tooltip", "Shows every setting for this feature."));
-			ImGui::TextUnformatted(T("menu.features.essentials_tooltip", "Turn it off to return to the simpler Essentials view."));
-		}
-	}
-
-
 
 	/**
 	 * @brief Determines if the left feature panel should be visible based on auto-hide settings and mouse position
@@ -453,9 +415,9 @@ void FeatureListRenderer::RenderFeatureList(
 		}
 	}
 
-	static std::string selectedMenuEntryId;
+	static std::string selectedMenuEntryId = "builtin:Home";
 	if (resetSidebarLayout) {
-		selectedMenuEntryId.clear();
+		selectedMenuEntryId = "builtin:Home";
 		selectedMenu = 0;
 	}
 	auto menuList = BuildMenuList(featureSearch, categoryExpansionStates, drawGeneralSettings, drawAdvancedSettings);
@@ -515,7 +477,6 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		sortedFeatureList.erase(it, sortedFeatureList.end());
 	}
 
-	const bool essentialsMode = globals::menu && globals::menu->IsPerformanceUiMode();
 	auto menuList = std::vector<MenuFuncInfo>{
 		BuiltInMenu{ "Home", []() { HomePageRenderer::RenderHomePage(); } },
 		BuiltInMenu{ PERFORMANCE_TUNING_MENU_NAME, []() { PerformanceTuningRenderer::Render(); } }
@@ -523,24 +484,21 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	// persist correctly. This is acceptable since the list is small and built
 	// infrequently, but could be optimized if performance becomes an issue.
 
-	if (!essentialsMode)
-		menuList.insert(menuList.begin() + 1, BuiltInMenu{ "Profiling", []() {
-			MenuUI::SettingsPage page("Profiling", { { "timings", T("menu.features.profiling.timings", "Timings"),
-				T("menu.features.profiling.description", "Enable profiling, then inspect CPU and GPU work."),
-				T("menu.features.profiling.summary", "Live CPU and GPU timings") } });
-			if (page.Is("timings"))
-				ProfilingRenderer::RenderStatistics();
-		} });
+	menuList.insert(menuList.begin() + 1, BuiltInMenu{ "Profiling", []() {
+														  MenuUI::SettingsPage page("Profiling", { { "timings", T("menu.features.profiling.timings", "Timings"),
+																									 T("menu.features.profiling.description", "Enable profiling, then inspect CPU and GPU work."),
+																									 T("menu.features.profiling.summary", "Live CPU and GPU timings") } });
+														  if (page.Is("timings"))
+															  ProfilingRenderer::RenderStatistics();
+													  } });
 
-	if (!essentialsMode) {
-		menuList.insert(menuList.begin() + 1, BuiltInMenu{ "General", drawGeneralSettings });
-		menuList.insert(menuList.begin() + 2, BuiltInMenu{ "Advanced", drawAdvancedSettings });
-	}
+	menuList.insert(menuList.begin() + 1, BuiltInMenu{ "General", drawGeneralSettings });
+	menuList.insert(menuList.begin() + 2, BuiltInMenu{ "Advanced", drawAdvancedSettings });
 
 	// Group features by category
 	std::map<std::string, std::vector<Feature*>> categorizedFeatures;
 	for (Feature* feat : sortedFeatureList) {
-		if (IsFeatureVisibleInMenuMode(feat, essentialsMode) && feat->loaded) {
+		if (IsFeatureVisibleInMenu(feat) && feat->loaded) {
 			std::string category(feat->GetCategory());
 			categorizedFeatures[category].push_back(feat);
 		}
@@ -590,8 +548,8 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		}
 	}
 
-	auto unloadedFeatures = sortedFeatureList | std::ranges::views::filter([essentialsMode](Feature* feat) {
-		return IsFeatureVisibleInMenuMode(feat, essentialsMode) && !feat->loaded && HasFeatureIni(feat) &&
+	auto unloadedFeatures = sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
+		return IsFeatureVisibleInMenu(feat) && !feat->loaded && HasFeatureIni(feat) &&
 		       (!FeatureIssues::IsObsoleteFeature(feat->GetShortName()) || globals::state->IsDeveloperMode());
 	});
 	if (std::ranges::distance(unloadedFeatures) != 0) {
@@ -680,7 +638,7 @@ void FeatureListRenderer::RenderLeftColumn(
 		}
 
 		// Add Features header and search bar after built-in settings
-		Util::DrawSectionHeader((globals::menu && globals::menu->IsPerformanceUiMode()) ? T("menu.features.essentials", "Essentials") : T("menu.features.features", "Features"), true);
+		Util::DrawSectionHeader(T("menu.features.features", "Features"), true);
 		Util::DrawFeatureSearchBar(featureSearch);
 
 		// Then render the rest (features and categories, but skip already rendered core menus)
@@ -1070,8 +1028,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 		auto guard = Util::DisableGuard(sceneControlled);
 		feat->DrawSettingsHeaderControls();
 	}
-	if (isLoaded && globals::menu->IsPerformanceUiMode())
-		DrawFeatureUiModeToggle(feat);
 	DrawFeatureBanner(feat);
 }
 
@@ -1086,12 +1042,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		ImGui::TextWrapped("%s", T("menu.features.enable_in_startup_help", "Enable this feature in Advanced > Startup, save settings and restart the game to access its configuration options."));
 	} else {
 		if (isLoaded) {
-			const bool globalEssentialsMode = globals::menu && globals::menu->IsPerformanceUiMode();
-			const bool featureAdvancedMode = IsFeatureAdvancedUiMode(feat);
-			const bool essentialsFeatureMode = globalEssentialsMode && !featureAdvancedMode;
-			const bool hasEssentialSettings = essentialsFeatureMode && feat->HasEssentialSettings();
 			auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-			if (!essentialsFeatureMode && weatherRegistry->HasWeatherSupport(feat->GetShortName())) {
+			if (weatherRegistry->HasWeatherSupport(feat->GetShortName())) {
 				bool paused = weatherRegistry->IsFeaturePaused(feat->GetShortName());
 				if (ImGui::Checkbox(T("menu.features.pause_weather_overrides", "Pause Weather Overrides"), &paused)) {
 					WeatherManager::GetSingleton()->SetFeaturePaused(feat->GetShortName(), paused);
@@ -1110,7 +1062,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				const auto& featureShortName = feat->GetShortName();
 				auto* sceneMgr = globals::sceneSettingsManager;
 				bool scenePaused = sceneMgr->IsFeaturePaused(featureShortName);
-				if (!essentialsFeatureMode && (sceneControlled || scenePaused)) {
+				if (sceneControlled || scenePaused) {
 					bool active = !scenePaused;
 					if (Util::FeatureToggle("##PauseSceneSettings", &active))
 						sceneMgr->SetFeaturePaused(featureShortName, !active);
@@ -1129,18 +1081,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				ImGui::BeginDisabled();
 
 			ImVec2 cursorPosBefore = ImGui::GetCursorPos();
-			if (hasEssentialSettings) {
-				feat->DrawEssentialSettings();
-			} else if (essentialsFeatureMode) {
-				ImGui::TextDisabled(T("menu.features.toggle_advanced_in_the_header_to_expose_this_feature_s_full_ui", "Toggle Advanced in the header to expose this feature's full UI"));
-			} else {
-				feat->DrawSettings();
-			}
-
-			if (!globalEssentialsMode && feat != &globals::features::csEditor && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
-				ImGui::SeparatorText(T("menu.features.profiling", "Profiling"));
-				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
-			}
+			feat->DrawSettings();
 
 			ImVec2 cursorPosAfter = ImGui::GetCursorPos();
 

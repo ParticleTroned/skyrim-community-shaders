@@ -6589,7 +6589,8 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 	bool IsSameTerminalFSRResourceRequest(const Upscaling& a_upscaling);
 	bool ShouldRetainInactiveFSROwnership(
 		const Upscaling& a_upscaling,
-		Upscaling::UpscaleMethod a_targetMethod);
+		Upscaling::UpscaleMethod a_targetMethod,
+		std::optional<bool> a_sameTerminalRequest = std::nullopt);
 
 	bool HasPendingVRVendorRuntimeReset(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
 	{
@@ -7038,24 +7039,29 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		return sameTransitionEpoch || failedFSRNativeRecoveryPending;
 	}
 
+	bool IsSameTerminalFSRResourceRequest(const Upscaling& a_upscaling, uint64_t a_requestKey)
+	{
+		return (a_upscaling.fsrResourceFailureRequestKey &&
+				   *a_upscaling.fsrResourceFailureRequestKey == a_requestKey) ||
+		       IsSameTerminalFSRResourceRequest(a_upscaling.GetVRRenderScaleTransitionSnapshot());
+	}
+
 	bool IsSameTerminalFSRResourceRequest(const Upscaling& a_upscaling)
 	{
-		const uint64_t requestKey =
-			BuildFSRResourceLifecycleRequestKey(a_upscaling, Upscaling::UpscaleMethod::kFSR);
-		return (a_upscaling.fsrResourceFailureRequestKey &&
-				   *a_upscaling.fsrResourceFailureRequestKey == requestKey) ||
-		       IsSameTerminalFSRResourceRequest(a_upscaling.GetVRRenderScaleTransitionSnapshot());
+		return IsSameTerminalFSRResourceRequest(a_upscaling,
+			BuildFSRResourceLifecycleRequestKey(a_upscaling, Upscaling::UpscaleMethod::kFSR));
 	}
 
 	bool ShouldRetainInactiveFSROwnership(
 		const Upscaling& a_upscaling,
-		Upscaling::UpscaleMethod a_targetMethod)
+		Upscaling::UpscaleMethod a_targetMethod,
+		std::optional<bool> a_sameTerminalRequest)
 	{
 		return FSRHostLifecyclePolicy::CanRetainQuarantinedHostOwnership(
 				   a_upscaling.fidelityFX.IsHostFSRStateQuarantined(),
 				   a_targetMethod == Upscaling::UpscaleMethod::kFSR) ||
 		       (a_targetMethod != Upscaling::UpscaleMethod::kFSR &&
-				   IsSameTerminalFSRResourceRequest(a_upscaling));
+				   (a_sameTerminalRequest ? *a_sameTerminalRequest : IsSameTerminalFSRResourceRequest(a_upscaling)));
 	}
 
 	const char* BoolText(bool a_value)
@@ -41678,6 +41684,14 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 	const bool currentMethodFSR = a_upscaleMethod == UpscaleMethod::kFSR;
 	const uint32_t activeContractGeneration =
 		GetVRVendorEvaluationContractGeneration(a_upscaleMethod);
+	const bool activeGenerationMismatch =
+		activeContractGeneration != 0 &&
+		((currentMethodDLSS && vrDLSSRuntimeResourceGeneration != 0 && vrDLSSRuntimeResourceGeneration != activeContractGeneration) ||
+			(currentMethodFSR && vrFSRRuntimeResourceGeneration != 0 && vrFSRRuntimeResourceGeneration != activeContractGeneration));
+	if (currentMethodDLSS && !dlssResetPending && !fsrResetPending &&
+		!fsrResourceFailureRequestKey && !activeGenerationMismatch) {
+		return true;
+	}
 	const uint64_t fsrResourceRequestKey =
 		BuildFSRResourceLifecycleRequestKey(*this, UpscaleMethod::kFSR);
 	if (fsrResourceFailureRequestKey &&
@@ -41685,11 +41699,11 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 		fsrResourceFailureRequestKey.reset();
 	}
 	const bool sameTerminalFSRRequest =
-		IsSameTerminalFSRResourceRequest(*this);
+		IsSameTerminalFSRResourceRequest(*this, fsrResourceRequestKey);
 	if (currentMethodFSR && sameTerminalFSRRequest)
 		return false;
 	const bool retainTerminalInactiveFSRResources =
-		ShouldRetainInactiveFSROwnership(*this, a_upscaleMethod);
+		ShouldRetainInactiveFSROwnership(*this, a_upscaleMethod, sameTerminalFSRRequest);
 	const auto latchTerminalFSRFailure = [&](FidelityFX::LifecycleResult a_result) {
 		if (HandleFSRLifecycleDeviceLoss(
 				a_result,
@@ -41699,10 +41713,6 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 		if (a_result == FidelityFX::LifecycleResult::Failed)
 			fsrResourceFailureRequestKey = fsrResourceRequestKey;
 	};
-	const bool activeGenerationMismatch =
-		activeContractGeneration != 0 &&
-		((currentMethodDLSS && vrDLSSRuntimeResourceGeneration != 0 && vrDLSSRuntimeResourceGeneration != activeContractGeneration) ||
-			(currentMethodFSR && vrFSRRuntimeResourceGeneration != 0 && vrFSRRuntimeResourceGeneration != activeContractGeneration));
 	const bool includeInactiveVendorReset = ShouldIncludeInactiveVRVendorReset(*this, a_upscaleMethod);
 	const bool activeResetPending =
 		activeGenerationMismatch ||

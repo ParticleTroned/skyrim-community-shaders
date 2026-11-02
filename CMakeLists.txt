@@ -4000,6 +4000,28 @@ if(BUILD_CONTROLLER_TESTS)
         FSRRuntimeLifecyclePolicy
         tests/fsr_runtime_lifecycle_policy_test.cpp
     )
+    set(_vendor_reset_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/vendor-reset"
+    )
+    set(_vendor_reset_headers
+        "${_vendor_reset_test_dir}/vendor_lifecycle_under_test.h"
+        "${_vendor_reset_test_dir}/vendor_reset_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_vendor_reset_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vendor_reset_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vendor_reset.cmake"
+        DEPENDS src/Features/Upscaling.cpp tests/extract_vendor_reset.cmake
+        VERBATIM
+    )
+    add_controller_test(vendor_runtime_reset_test VendorRuntimeReset tests/vendor_runtime_reset_test.cpp)
+    target_sources(vendor_runtime_reset_test PRIVATE ${_vendor_reset_headers})
+    target_include_directories(
+        vendor_runtime_reset_test
+        PRIVATE "${_vendor_reset_test_dir}"
+    )
     add_controller_test(
         fsr_shared_guides_policy_test
         FSRSharedGuidesPolicy

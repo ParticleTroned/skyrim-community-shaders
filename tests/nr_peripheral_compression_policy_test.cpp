@@ -186,8 +186,8 @@ int main()
 		faces.current = true;
 		faces.count = 1;
 		faces.bounds[0] = { 0.3f, 0.25f, 0.6f, 0.65f };
-		for (const auto mask : { PeripheralMask{}, PeripheralMask{ { 0.47f, 0.53f }, { 0.43f, 0.36f }, true } }) {
-			const auto original = Plan({ 1920, 1080 }, 90, {}, { .requested = true, .compressionPercent = 100, .mask = mask });
+		for (const auto faceMask : { PeripheralMask{}, PeripheralMask{ { 0.47f, 0.53f }, { 0.43f, 0.36f }, true } }) {
+			const auto original = Plan({ 1920, 1080 }, 90, {}, { .requested = true, .compressionPercent = 100, .mask = faceMask });
 			auto protectedPlan = original;
 			ApplyFaceDetailProtection(protectedPlan, faces, 100, 0.5f);
 			Require(protectedPlan.mapping.faceDetail.enabled != 0, "Face protection did not redistribute a valid partial face");

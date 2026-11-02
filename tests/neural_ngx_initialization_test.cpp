@@ -208,7 +208,7 @@ namespace
 		ID3D12Device device;
 		Runtime healthy;
 		Require(healthy.Initialize(&device, data), "SDK initialization failed");
-		Require(healthy.driverRequirements_.needsUpdate == false && healthy.driverRequirements_.minimumMajor == 616 && healthy.driverRequirements_.minimumMinor == 92,
+		Require(healthy.driverRequirements_.needsUpdate == false && healthy.driverRequirements_.minimumMajor == 616u && healthy.driverRequirements_.minimumMinor == 92u,
 			"Provider-reported driver requirements were lost");
 		Require(initializedProject == NvidiaProject::kId && featurePath == healthy.path_.parent_path(), "SDK used the wrong project or feature path");
 		Require(calls == std::vector<std::string>{ "init", "capabilities", "available", "allocate" }, "SDK startup order changed");
@@ -245,7 +245,7 @@ namespace
 		providerNeedsUpdatedDriver = 1;
 		Require(!oldDriver.Initialize(&device, data) && oldDriver.ngxResult_ == NVSDK_NGX_Result_FAIL_OutOfDate,
 			"An explicit provider driver-update requirement was ignored");
-		Require(oldDriver.driverRequirements_.needsUpdate == true && oldDriver.driverRequirements_.minimumMinor == 92 && device.references == 0,
+		Require(oldDriver.driverRequirements_.needsUpdate == true && oldDriver.driverRequirements_.minimumMinor == 92u && device.references == 0,
 			"Driver rejection lost requirements during rollback or retained device ownership");
 		Reset();
 		Runtime unknownDriver;

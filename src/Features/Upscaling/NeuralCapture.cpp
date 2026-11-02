@@ -16,9 +16,9 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 	args.jitterPixels = {};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (args.renderingMode == NeuralRendering::RenderingMode::ReducedResolution) {
-		const auto jitter = GetJitterForDispatch();
+		const auto dispatchJitter = GetJitterForDispatch();
 		// NGX uses the same sign convention as the Streamline DLSS constants.
-		args.jitterPixels = { -jitter.x, -jitter.y };
+		args.jitterPixels = { -dispatchJitter.x, -dispatchJitter.y };
 	}
 #endif
 	args.modelResolutionPercent = NeuralRendering::EffectiveModelResolutionPercent(

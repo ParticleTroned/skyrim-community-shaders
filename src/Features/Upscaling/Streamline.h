@@ -110,6 +110,7 @@ public:
 	/** A submitted evaluation may allocate a native DLSS context even when it fails. */
 	std::optional<bool> dlssNativeDepthInverted;
 	bool dlssEvaluationSucceeded = false;
+	bool dlssResourceReleasePending = false;
 	DLSSResultPolicy::BudgetWarningThrottle dlssBudgetWarning;
 
 	bool isRTXBelow40series = false;
@@ -258,9 +259,13 @@ public:
 	void ResetDLSSGState();
 	[[nodiscard]] bool IsDLSSGInstance() const { return renderAPI == sl::RenderAPI::eD3D12; }
 
-	void DestroyDLSSResources();
+	/** Releases only after GPU completion and SDK success; false retains ownership for retry. */
+	[[nodiscard]] bool DestroyDLSSResources();
 
 private:
+	/** Clears ownership only after successful native release or provider initialization/shutdown. */
+	void ResetDLSSResourceTracking();
+
 	struct FrameTokenSnapshot
 	{
 		sl::FrameToken* token = nullptr;

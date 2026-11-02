@@ -14,6 +14,12 @@ namespace Util
 		return (std::bit_cast<std::uint32_t>(value) & 0x7f800000u) != 0x7f800000u;
 	}
 
+	/** Classify double bits without relying on finite-math compiler assumptions. */
+	[[nodiscard]] constexpr bool IsFinite(double value) noexcept
+	{
+		return (std::bit_cast<std::uint64_t>(value) & 0x7ff0000000000000ULL) != 0x7ff0000000000000ULL;
+	}
+
 	/**
 	 * @brief Clamp finite input to the bounds; return the fallback unchanged for NaN or infinity.
 	 * @pre Bounds are finite and ordered. The caller supplies a trusted fallback.

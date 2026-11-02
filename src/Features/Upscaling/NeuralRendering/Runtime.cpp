@@ -886,7 +886,15 @@ namespace NeuralRendering
 	{
 		std::scoped_lock lock(mutex_);
 		if (abandonRequested_.load(std::memory_order_acquire) || abandoned_ ||
-			status_ != RuntimeStatus::Initialized || failureStage_ != RuntimeFailureStage::None)
+			failureStage_ == RuntimeFailureStage::FeatureRelease || failureStage_ == RuntimeFailureStage::Shutdown)
+			return false;
+		// Failed admission or completed initialization rollback owns no GPU work.
+		if (!device_ && !parameters_ && (!backend_ || !backend_->capabilities) &&
+			std::none_of(featureHandles_.begin(), featureHandles_.end(), [](const auto* handle) { return handle != nullptr; }))
+			return true;
+		const bool failedPass = failureStage_ == RuntimeFailureStage::FeatureCreate ||
+		                        failureStage_ == RuntimeFailureStage::FeatureEvaluate || failureStage_ == RuntimeFailureStage::FeatureConfiguration;
+		if (!failedPass && (status_ != RuntimeStatus::Initialized || failureStage_ != RuntimeFailureStage::None))
 			return false;
 		if (!device_ || !backend_ || !parameters_) {
 			SetFailureLocked(
@@ -900,6 +908,9 @@ namespace NeuralRendering
 
 		// Parameter bindings must not outlive the caller's retired shared textures.
 		static_cast<NVSDK_NGX_Parameter*>(parameters_)->Reset();
+		status_ = RuntimeStatus::Initialized;
+		failureStage_ = RuntimeFailureStage::None;
+		ngxResult_ = 0;
 		detail_ = "NGX Feature 18 pass resources released; initialized runtime retained";
 		return true;
 	}

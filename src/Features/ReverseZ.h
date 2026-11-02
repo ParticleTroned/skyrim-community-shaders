@@ -61,6 +61,7 @@ struct ReverseZ : Feature
 	ID3D11RasterizerState* GetReversedRasterizerState(ID3D11RasterizerState*);
 
 private:
+	struct ContextStateHook;
 	void RejectRendering(const char* reason);
 	void LatchBootState();
 	bool bootLatched = false, requestedThisBoot = false, activationRejectedThisBoot = false;

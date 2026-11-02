@@ -5,6 +5,7 @@
 #include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/DepthConvention.h"
+#include "Utils/Finite.h"
 #include "Utils/UI.h"
 #include <stdexcept>
 
@@ -12,6 +13,7 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <d3d11_1.h>
 #include <format>
 #include <limits>
 #include <memory>
@@ -19,6 +21,7 @@
 #include <shared_mutex>
 #include <type_traits>
 #include <unordered_map>
+#include <wrl/implements.h>
 
 #define I18N_KEY_PREFIX "feature.reverse_z."
 
@@ -543,7 +546,7 @@ ID3D11RasterizerState* ReverseZ::GetReversedRasterizerState(ID3D11RasterizerStat
 		g_reversedRasterStates.insert_or_assign(a_state, std::move(entry));
 		return a_state;
 	}
-	if (desc.DepthBias == std::numeric_limits<INT>::min() || !std::isfinite(desc.SlopeScaledDepthBias) || !std::isfinite(desc.DepthBiasClamp)) {
+	if (desc.DepthBias == std::numeric_limits<INT>::min() || !Util::IsFinite(desc.SlopeScaledDepthBias) || !Util::IsFinite(desc.DepthBiasClamp)) {
 		RejectRendering("Depth bias cannot be represented");
 		return nullptr;
 	}
@@ -918,17 +921,146 @@ namespace
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+
+	struct ContextTracking
+	{
+		winrt::com_ptr<ID3D11DepthStencilState> requestedDepth, boundDepth;
+		winrt::com_ptr<ID3D11RasterizerState> requestedRaster, boundRaster;
+		std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> requestedViewports{}, mappedViewports{};
+		UINT stencilRef = 0, viewportCount = 0;
+		bool flipped = false;
+		ID3D11RenderTargetView* lastClearedCubeFace = nullptr;
+	};
+
+	// The native state owns its logical counterpart, so retired states cannot leak
+	// bookkeeping or transfer it to a later object allocated at the same address.
+	struct SavedContextTracking final : Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IUnknown>
+	{
+		ContextTracking tracking;
+	};
+	constexpr GUID kContextTrackingGuid{ 0x92b4a681, 0xa3b0, 0x4f47, { 0x8b, 0x72, 0x3c, 0x06, 0x76, 0x92, 0x97, 0xb9 } };
+
+	ContextTracking CaptureContextTracking()
+	{
+		ContextTracking state;
+		state.requestedDepth = g_requestedState;
+		state.boundDepth.copy_from(g_boundState);
+		state.requestedRaster = g_requestedRasterState;
+		state.boundRaster.copy_from(g_boundRasterState);
+		std::copy_n(g_requestedViewports, g_requestedViewportCount, state.requestedViewports.begin());
+		std::copy_n(g_mappedViewports, g_requestedViewportCount, state.mappedViewports.begin());
+		state.stencilRef = g_requestedStencilRef;
+		state.viewportCount = g_requestedViewportCount;
+		state.flipped = ShouldFlip();
+		state.lastClearedCubeFace = g_lastClearedCubeFace;
+		return state;
+	}
+
+	HRESULT ReadContextTracking(ID3DDeviceContextState* contextState, winrt::com_ptr<SavedContextTracking>& tracking)
+	{
+		winrt::com_ptr<IUnknown> object;
+		UINT size = sizeof(IUnknown*);
+		const auto result = contextState->GetPrivateData(kContextTrackingGuid, &size, object.put());
+		if (FAILED(result))
+			return result;
+		if (size != sizeof(IUnknown*) || !object)
+			return E_FAIL;
+		tracking.attach(static_cast<SavedContextTracking*>(object.detach()));
+		return S_OK;
+	}
+
+	HRESULT SaveContextTracking(ID3DDeviceContextState* contextState, const ContextTracking& state)
+	{
+		winrt::com_ptr<SavedContextTracking> tracking;
+		auto result = ReadContextTracking(contextState, tracking);
+		if (result == DXGI_ERROR_NOT_FOUND) {
+			auto created = Microsoft::WRL::Make<SavedContextTracking>();
+			if (!created)
+				return E_OUTOFMEMORY;
+			tracking.attach(created.Detach());
+			result = contextState->SetPrivateDataInterface(kContextTrackingGuid, tracking.get());
+		}
+		if (FAILED(result))
+			return result;
+		tracking->tracking = state;
+		return S_OK;
+	}
+
+	void RestoreContextTracking(ID3D11DeviceContext* context, const ContextTracking* state)
+	{
+		bool previouslyFlipped = false;
+		if (state) {
+			g_requestedState = state->requestedDepth;
+			g_boundState = state->boundDepth.get();
+			g_requestedRasterState = state->requestedRaster;
+			g_boundRasterState = state->boundRaster.get();
+			g_requestedStencilRef = state->stencilRef;
+			g_requestedViewportCount = state->viewportCount;
+			std::copy_n(state->requestedViewports.begin(), state->viewportCount, g_requestedViewports);
+			std::copy_n(state->mappedViewports.begin(), state->viewportCount, g_mappedViewports);
+			g_lastClearedCubeFace = state->lastClearedCubeFace;
+			previouslyFlipped = state->flipped;
+		} else {
+			// A state not previously activated under these hooks contains native defaults.
+			ID3D11DeviceContext_OMGetDepthStencilState::func(context, g_requestedState.put(), &g_requestedStencilRef);
+			g_boundState = g_requestedState.get();
+			ID3D11DeviceContext_RSGetState::func(context, g_requestedRasterState.put());
+			g_boundRasterState = g_requestedRasterState.get();
+			g_requestedViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+			ID3D11DeviceContext_RSGetViewports::func(context, &g_requestedViewportCount, g_requestedViewports);
+			std::copy_n(g_requestedViewports, g_requestedViewportCount, g_mappedViewports);
+			g_lastClearedCubeFace = nullptr;
+		}
+		winrt::com_ptr<ID3D11DepthStencilView> depth;
+		context->OMGetRenderTargets(0, nullptr, depth.put());
+		g_reverseTargetBound = globals::features::reverseZ.IsReverseDepthView(depth.get());
+		if (previouslyFlipped != ShouldFlip() || g_renderingRejected.load(std::memory_order_relaxed))
+			ReapplyMappedStates(context);
+	}
 }
+
+struct ReverseZ::ContextStateHook
+{
+	static void thunk(ID3D11DeviceContext1* context, ID3DDeviceContextState* state, ID3DDeviceContextState** previousState)
+	{
+		if (context != globals::d3d::context || !state) {
+			func(context, state, previousState);
+			return;
+		}
+		const auto previousTracking = CaptureContextTracking();
+		winrt::com_ptr<ID3DDeviceContextState> previous;
+		func(context, state, previous.put());
+		if (!previous || FAILED(SaveContextTracking(previous.get(), previousTracking)))
+			globals::features::reverseZ.RejectRendering("Context state tracking could not be retained");
+		winrt::com_ptr<SavedContextTracking> restored;
+		const auto result = ReadContextTracking(state, restored);
+		if (FAILED(result) && result != DXGI_ERROR_NOT_FOUND)
+			globals::features::reverseZ.RejectRendering("Context state tracking could not be restored");
+		RestoreContextTracking(context, restored ? &restored->tracking : nullptr);
+		if (previousState)
+			*previousState = previous.detach();
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
 void ReverseZ::InstallRuntimeHooks()
 {
 	LatchBootState();
-	if (runtimeHooksInstalled || !requestedThisBoot)
+	if (runtimeHooksInstalled || !requestedThisBoot || activationRejectedThisBoot)
 		return;
 	// Frame-buffer observers must be ready before reversed depth targets are published.
 	auto* context = globals::d3d::context;
 	if (!context)
 		return;
+	winrt::com_ptr<ID3D11DeviceContext1> context1;
+	const auto context1Result = context->QueryInterface(__uuidof(ID3D11DeviceContext1), context1.put_void());
+	if (context1Result != E_NOINTERFACE && (FAILED(context1Result) || !context1 || context1.get() != context)) {
+		// A separate interface could bypass the inherited-method hooks and desynchronize their receipts.
+		failure = "Reverse Z requires a consistent native D3D11 context interface";
+		activationRejectedThisBoot = true;
+		logger::error("ReverseZ: {}", failure);
+		return;
+	}
 	context->OMGetDepthStencilState(g_requestedState.put(), &g_requestedStencilRef);
 	g_boundState = g_requestedState.get();
 	context->RSGetState(g_requestedRasterState.put());
@@ -948,6 +1080,8 @@ void ReverseZ::InstallRuntimeHooks()
 	stl::detour_vfunc<94, ID3D11DeviceContext_RSGetState>(context);
 	stl::detour_vfunc<95, ID3D11DeviceContext_RSGetViewports>(context);
 	stl::detour_vfunc<110, ID3D11DeviceContext_ClearState>(context);
+	if (context1)
+		stl::detour_vfunc<131, ContextStateHook>(context1.get());
 
 	logger::info("ReverseZ: installed depth-state, depth-clear and state read-back hooks");
 }

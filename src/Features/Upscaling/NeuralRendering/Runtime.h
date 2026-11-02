@@ -144,7 +144,7 @@ namespace NeuralRendering
 		bool ResetFeature(std::uint32_t a_slot);
 		bool ResetFeatures();
 		/** Releases features and parameter bindings after the caller drains both APIs.
-		 *  Retains only a healthy initialized backend; failure forbids warm reuse. */
+		 *  Recovers failed passes or accepts empty rollback; cleanup failure forbids reuse. */
 		[[nodiscard]] bool ReleasePassResources();
 		bool Shutdown();
 		/** Permanently detaches unsafe NGX ownership without releasing it. */

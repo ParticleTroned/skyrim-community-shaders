@@ -27,10 +27,12 @@ namespace Util
 	};
 }
 std::uint64_t clockMs = 10;
+unsigned forcedSamples = 0;
 MemoryBudgetSample sample{ 16 * 1024 * NativeMemoryPolicy::kMiB, 1000, true, 0, false, clockMs };
 std::uint64_t GetTickCount64() { return clockMs; }
 MemoryBudgetSample MemorySample(int*, bool force = false)
 {
+	forcedSamples += force;
 	if (force && sample.valid)
 		sample.sampledAtMs = ++clockMs;
 	return sample;
@@ -77,7 +79,10 @@ int main()
 	sample.usageBytes = 1300;
 	state.SampleNativeStartup();
 	Require(state.nativeStartup.valid && state.nativeStartup.peak == 1300, "startup sample used a timestamp preceding its forced query");
-	state.PollNativeStartup(clockMs);
+	const auto prewarmSamples = forcedSamples;
+	for (unsigned frame = 0; frame < 120; ++frame)
+		state.PollNativeStartup(clockMs);
+	Require(forcedSamples == prewarmSamples, "unused completed prewarm forced a fresh DXGI memory query every frame");
 	Require(state.nativeReservation.Bytes() == 100 && state.nativeObservations == 0, "creation-only prewarm consumed first-evaluation allowance");
 	Require(state.ReserveNative(key, 0, clockMs, true), "matching evaluation could not adopt prewarm reservation");
 	state.interop.fences.issued = 2;
@@ -90,7 +95,9 @@ int main()
 	Require(state.nativeStartup.active, "another fence identity completed this native startup");
 	state.interop.fences.fence = 1;
 	sample.usageBytes = 1500;
+	const auto completedSamples = forcedSamples;
 	state.PollNativeStartup(clockMs);
+	Require(forcedSamples == completedSamples + 1, "first-evaluation completion did not force its final memory observation");
 	Require(!state.nativeStartup.active && state.nativeReservation.Bytes() == 0 && state.nativeObservations == 1, "completed fresh evaluation retained a duplicate reservation");
 	Require(state.nativeMemory.Project(key)->observedProcessGrowth == 500, "native estimate lost creation plus evaluation growth");
 	Require(state.ReserveNative(key, 100, clockMs, true), "second reservation failed");

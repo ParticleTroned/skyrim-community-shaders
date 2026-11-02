@@ -75,6 +75,12 @@ csx_add_portable_test(neural_reference_devbench_test SOURCE "${CSX_PROJECT_ROOT}
 target_compile_definitions(neural_reference_devbench_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
 csx_add_portable_test(neural_mono_experiments_devbench_test SOURCE "${CSX_PROJECT_ROOT}/tests/neural_mono_experiments_test.cpp")
 target_compile_definitions(neural_mono_experiments_devbench_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+csx_add_portable_test(reverse_z_depth_fastmath_test SOURCE "${CSX_PROJECT_ROOT}/tests/reverse_z_depth_test.cpp")
+if(MSVC)
+    target_compile_options(reverse_z_depth_fastmath_test PRIVATE /fp:fast)
+else()
+    target_compile_options(reverse_z_depth_fastmath_test PRIVATE -ffast-math)
+endif()
 target_sources(api_shader_service_policy_test PRIVATE "${CSX_PROJECT_ROOT}/src/Api/ShaderServicePolicy.cpp")
 target_sources(api_weather_service_policy_test PRIVATE "${CSX_PROJECT_ROOT}/src/Api/WeatherServicePolicy.cpp")
 target_sources(mono_upscaling_api_policy_test PRIVATE
@@ -149,7 +155,7 @@ endif()
 set(_nr_test_directory "${CMAKE_CURRENT_BINARY_DIR}/generated/neural-native-creation")
 set(_nr_test_headers)
 foreach(name IN ITEMS neural_native_key neural_runtime_minimum neural_runtime_probe
-    neural_native_creation neural_installed_metadata neural_runtime_tuning neural_runtime_logging
+    neural_native_creation neural_runtime_retirement neural_installed_metadata neural_runtime_tuning neural_runtime_logging
     neural_runtime_detail neural_runtime_reset neural_evaluation_success_detail neural_sdk_parameters
     neural_ngx_initialize neural_ngx_shutdown neural_ngx_statistics)
     list(APPEND _nr_test_headers "${_nr_test_directory}/${name}_under_test.h")
@@ -302,7 +308,8 @@ endif()
 
 foreach(script IN ITEMS grass_collision_settings_test screenshot_mono_settings_test screenshot_verify_test
     d3d_texture_lifetime_test se_performance_ownership_test se_hdr_ui_test se_upscaling_ui_test
-    se_upscaling_resources_test se_upscaling_depth_contract_test reverse_z_initialization_test volumetric_shadow_resources_test
+    se_upscaling_resources_test se_upscaling_depth_contract_test reverse_z_initialization_test
+    reverse_z_context_state_test reverse_z_settings_mutation_test volumetric_shadow_resources_test
     unified_water_duplicates_test subsurface_helper_region_test render_feature_contracts_test
     feature_issue_scanner_test neural_payload_guard_test streamline_runtime_cache_test shader_deploy_build_rule_test
     preset_export_write_test neural_sdk_cache_test

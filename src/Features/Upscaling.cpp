@@ -1923,7 +1923,8 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		bool fsrResourcesRecreated = false;
 
 		if (dlssResourceSettingsChanged) {
-			streamline.DestroyDLSSResources();
+			if (!streamline.DestroyDLSSResources())
+				return false;
 			RequestHistoryReset();
 		}
 
@@ -1944,9 +1945,10 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 
 		if (upscaleModeChanged) {
 			if (previousVendorUpscalerSelected) {
-				if (previousUpscaleMode == UpscaleMethod::kDLSS && !dlssResourceSettingsChanged)
-					streamline.DestroyDLSSResources();
-				else if (previousUpscaleMode == UpscaleMethod::kFSR && !fsrResourcesRecreated) {
+				if (previousUpscaleMode == UpscaleMethod::kDLSS && !dlssResourceSettingsChanged) {
+					if (!streamline.DestroyDLSSResources())
+						return false;
+				} else if (previousUpscaleMode == UpscaleMethod::kFSR && !fsrResourcesRecreated) {
 					if (!acceptFSRResourceLifecycleResult(
 							fidelityFX.DestroyFSRResources(),
 							"switching away from FSR"))
@@ -2018,7 +2020,8 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 				sourceTextureDescChanged,
 				vendorTextureStateInvalid);
 			if (a_upscalemethod == UpscaleMethod::kDLSS) {
-				streamline.DestroyDLSSResources();
+				if (!streamline.DestroyDLSSResources())
+					return false;
 			} else if (a_upscalemethod == UpscaleMethod::kFSR) {
 				if (!acceptFSRResourceLifecycleResult(
 						fidelityFX.DestroyFSRResources(),

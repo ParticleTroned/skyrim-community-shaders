@@ -169,3 +169,11 @@ layout mocks.
 Native follow-up should use the repository's Windows build and shader-test
 configuration, then verify SE/AE startup-to-world transitions, toggles,
 render scales, NR fallback and frame-generation/HDR presentation in game.
+
+## Subsequent adversarial review
+
+The [second adversarial review](main-se-sync-2026-11-02-adversarial-review.md)
+records six additional corrections and their final Debug/Release results:
+121 tests passed in each configuration, with zero failures or skips. The
+118-test totals above remain the historical validation of the initial
+incremental port. Native Windows and game validation remain outstanding.

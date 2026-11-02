@@ -167,8 +167,11 @@ of copying VR test harnesses into the branch.
 
 ## Validation and remaining environment limits
 
-The definitive test results and review findings are recorded in
+The initial test results are recorded in
 [main-se-sync-2026-11-02-validation.md](main-se-sync-2026-11-02-validation.md).
+The [second adversarial review](main-se-sync-2026-11-02-adversarial-review.md)
+records the subsequent six corrections and final 121-test Debug/Release
+results against the same source scope.
 Portable and supplemental shader diagnostics do not establish a Windows DLL
 build, native FXC bytecode, WARP execution, runtime GPU performance or actual
 Skyrim SE/AE image correctness. Those require the Windows/game environment.

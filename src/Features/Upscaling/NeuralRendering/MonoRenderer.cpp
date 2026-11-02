@@ -381,7 +381,7 @@ namespace NeuralRendering
 			if (!nativeStartup.active || !device)
 				return;
 			const auto current = interop.Snapshot();
-			const auto sample = MemorySample(device.Get(), nativeStartup.Completed(current));
+			const auto sample = MemorySample(device.Get(), nativeStartup.evaluated && nativeStartup.Completed(current));
 			now = GetTickCount64();
 			nativeStartup.Sample(sample, now);
 			if (!nativeStartup.evaluated || !nativeStartup.Completed(current))

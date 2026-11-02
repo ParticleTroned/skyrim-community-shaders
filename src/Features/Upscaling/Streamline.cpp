@@ -131,16 +131,16 @@ namespace
 		return IsHDRDLSSInputFormat(desc.Format);
 	}
 
-	void FlushAndWaitForD3D11Idle(ID3D11DeviceContext* a_context, const char* a_reason)
+	bool FlushAndWaitForD3D11Idle(ID3D11DeviceContext* a_context, const char* a_reason)
 	{
 		if (!a_context)
-			return;
+			return false;
 
 		ID3D11Device* device = nullptr;
 		a_context->GetDevice(&device);
 		if (!device) {
 			a_context->Flush();
-			return;
+			return false;
 		}
 
 		D3D11_QUERY_DESC queryDesc{};
@@ -151,8 +151,10 @@ namespace
 		device->Release();
 
 		if (FAILED(createResult) || !query) {
+			if (query)
+				query->Release();
 			a_context->Flush();
-			return;
+			return false;
 		}
 
 		a_context->End(query);
@@ -160,10 +162,13 @@ namespace
 
 		const ULONGLONG deadline = GetTickCount64() + 1000;
 		BOOL completed = FALSE;
+		bool idle = false;
 		while (true) {
 			const HRESULT dataResult = a_context->GetData(query, &completed, sizeof(completed), 0);
-			if (dataResult == S_OK && completed)
+			if (dataResult == S_OK && completed) {
+				idle = true;
 				break;
+			}
 
 			if (FAILED(dataResult)) {
 				logger::debug("[Streamline] D3D11 idle wait failed before {}: 0x{:08X}", a_reason, static_cast<uint32_t>(dataResult));
@@ -179,6 +184,7 @@ namespace
 		}
 
 		query->Release();
+		return idle;
 	}
 }
 
@@ -409,9 +415,8 @@ void Streamline::LoadInterposer()
 		featureReflex = false;
 		featurePCL = false;
 		reflexSupportedOnCurrentAdapter = false;
-		dlssOptionsCache = {};
 		reflexOptionsCache = {};
-		ResetFrameTracking();
+		ResetDLSSResourceTracking();
 		ResetDLSSGState();
 		logger::info("[Streamline] Successfully initialized Streamline");
 	}
@@ -465,7 +470,7 @@ bool Streamline::Shutdown()
 	loggedDLSSGResourceReleaseFailure = false;
 	featureReflex = false;
 	featurePCL = false;
-	ResetFrameTracking();
+	ResetDLSSResourceTracking();
 	ResetDLSSGState();
 	// Proxied COM objects can retain vtables in the interposer until D3D teardown.
 	// Keep the module mapped; the process loader releases it after object destruction.
@@ -1084,10 +1089,17 @@ void Streamline::ResetFrameTracking()
 	constantsDepthGeneration = UINT64_MAX;
 	constantsNativeDepthInverted = false;
 	constantsResult = false;
-	dlssNativeDepthInverted.reset();
 	dlssEvaluationSucceeded = false;
 	lastReflexSleepFrame = UINT32_MAX;
 	dlssgSimulationStartFrame = UINT32_MAX;
+}
+
+void Streamline::ResetDLSSResourceTracking()
+{
+	dlssNativeDepthInverted.reset();
+	dlssResourceReleasePending = false;
+	InvalidateDLSSOptionsCache();
+	ResetFrameTracking();
 }
 
 bool Streamline::EvaluateDLSS(sl::ViewportHandle vp,
@@ -1102,10 +1114,12 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp,
 	}
 
 	const bool nativeDepthInverted = globals::features::reverseZ.GetNativeDepthConvention() == Depth::Convention::Reversed;
-	if (dlssNativeDepthInverted && *dlssNativeDepthInverted != nativeDepthInverted) {
+	if (dlssResourceReleasePending ||
+		(dlssNativeDepthInverted && *dlssNativeDepthInverted != nativeDepthInverted)) {
 		// Menu and world cameras can use different encodings in one resource generation.
 		// Recreate before acquiring this evaluation's constants and frame token.
-		DestroyDLSSResources();
+		if (!DestroyDLSSResources())
+			return false;
 	}
 
 	sl::Resource colorInRes = { sl::ResourceType::eTex2d, colorIn, 0 };
@@ -1860,38 +1874,40 @@ void Streamline::ResetDLSSGState()
  *
  * Sets the DLSS mode to off and frees all DLSS-related resources associated with the viewport.
  */
-void Streamline::DestroyDLSSResources()
+bool Streamline::DestroyDLSSResources()
 {
-	if (!initialized || !featureDLSS || !slDLSSSetOptions || !slFreeResources) {
+	if (!dlssNativeDepthInverted && !dlssResourceReleasePending) {
 		InvalidateDLSSOptionsCache();
 		ResetFrameTracking();
-		return;
+		return true;
 	}
 
-	sl::DLSSOptions dlssOptions{};
-	dlssOptions.mode = sl::DLSSMode::eOff;
-
-	if (auto context = globals::d3d::context)
-		FlushAndWaitForD3D11Idle(context, "DLSS resource free");
-
-	const auto freeViewport = [&](sl::ViewportHandle a_viewport) {
-		const sl::Result optionsResult = slDLSSSetOptions(a_viewport, dlssOptions);
-		if (optionsResult != sl::Result::eOk) {
-			logger::debug("[Streamline] DLSS off failed for viewport {}: {}",
-				static_cast<uint32_t>(a_viewport),
-				magic_enum::enum_name(optionsResult));
-		}
-
-		const sl::Result freeResult = slFreeResources(sl::kFeatureDLSS, a_viewport);
-		if (freeResult != sl::Result::eOk) {
-			logger::debug("[Streamline] DLSS resource free failed for viewport {}: {}",
-				static_cast<uint32_t>(a_viewport),
-				magic_enum::enum_name(freeResult));
-		}
-	};
-
-	freeViewport(viewport);
+	// Availability changes and failed releases do not surrender native ownership.
+	dlssResourceReleasePending = true;
+	if (!initialized || !slFreeResources ||
+		!FlushAndWaitForD3D11Idle(globals::d3d::context, "DLSS resource free"))
+		return false;
 
 	InvalidateDLSSOptionsCache();
-	ResetFrameTracking();
+	if (slDLSSSetOptions) {
+		sl::DLSSOptions dlssOptions{};
+		dlssOptions.mode = sl::DLSSMode::eOff;
+		const sl::Result optionsResult = slDLSSSetOptions(viewport, dlssOptions);
+		if (optionsResult != sl::Result::eOk) {
+			logger::debug("[Streamline] DLSS off failed for viewport {}: {}",
+				static_cast<uint32_t>(viewport),
+				magic_enum::enum_name(optionsResult));
+		}
+	}
+
+	const sl::Result freeResult = slFreeResources(sl::kFeatureDLSS, viewport);
+	if (freeResult != sl::Result::eOk) {
+		logger::debug("[Streamline] DLSS resource free failed for viewport {}: {}",
+			static_cast<uint32_t>(viewport),
+			magic_enum::enum_name(freeResult));
+		return false;
+	}
+
+	ResetDLSSResourceTracking();
+	return true;
 }

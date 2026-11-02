@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -64,6 +66,17 @@ namespace
 
 	void TestRangeAndEndpoints()
 	{
+		for (std::uint64_t bits : { 0x7ff0000000000000ULL, 0xfff0000000000000ULL, 0x7ff8000000000001ULL, 0x7ff0000000000001ULL }) {
+			volatile auto input = bits;
+			const auto value = std::bit_cast<double>(std::uint64_t(input));
+			Require(!Util::IsFinite(value), "Release finite-math assumptions admitted a non-finite double");
+			Require(!Depth::IsValidRange(1, value) && !Depth::IsValidRange(value, 100000), "Non-finite camera range accepted");
+		}
+		for (std::uint32_t bits : { 0x7f800000u, 0xff800000u, 0x7fc00001u, 0x7f800001u }) {
+			volatile auto input = bits;
+			Require(!Util::IsFinite(std::bit_cast<float>(std::uint32_t(input))), "Release finite-math assumptions admitted a non-finite raster bias");
+		}
+		Require(Util::IsFinite(std::numeric_limits<float>::max()) && Util::IsFinite(std::numeric_limits<double>::max()), "Finite maximum rejected");
 		Require(Depth::IsValidRange(1, 100000), "Valid depth range rejected");
 		for (auto range : { std::array{ 0.0, 10.0 }, std::array{ -1.0, 10.0 }, std::array{ 10.0, 10.0 },
 				 std::array{ 20.0, 10.0 }, std::array{ 1.0, std::numeric_limits<double>::infinity() },

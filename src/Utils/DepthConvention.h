@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cmath>
+#include "Finite.h"
 #include <cstdint>
 
 namespace Depth
@@ -36,7 +36,7 @@ namespace Depth
 	}
 	inline bool IsValidRange(double nearPlane, double farPlane)
 	{
-		return std::isfinite(nearPlane) && std::isfinite(farPlane) && nearPlane > 0 && farPlane > nearPlane;
+		return Util::IsFinite(nearPlane) && Util::IsFinite(farPlane) && nearPlane > 0 && farPlane > nearPlane;
 	}
 	constexpr double Linearize(double depth, double nearPlane, double farPlane, Convention order)
 	{

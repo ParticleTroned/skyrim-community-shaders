@@ -19,6 +19,9 @@
 #	include "BuildProvenance.h"
 #	include "FeatureIssues.h"
 #	include "Globals.h"
+#	include "Menu.h"
+#	include "Menu/PerformanceTuningRenderer.h"
+#	include "State.h"
 #	include "Utils/GpuMemoryBudget.h"
 #	include "PresetCompatibility.h"
 #	include <DevBenchAPI.h>
@@ -174,8 +177,19 @@ namespace
 				return Foundation().MakeError(args, "invalid_settings", "reverseZEnabled must be boolean", "validation", false, "reverseZEnabled");
 			auto result = OnMain([args] {
 				auto& feature = globals::features::reverseZ;
-				if (args.contains("reverseZEnabled"))
-					feature.settings.EnableReverseZBuffer = args.at("reverseZEnabled").get<bool>();
+				if (args.contains("reverseZEnabled")) {
+					const bool requested = args.at("reverseZEnabled").get<bool>();
+					if (feature.settings.EnableReverseZBuffer != requested) {
+						if (!globals::menu || !globals::state)
+							return json{ { "error", "Settings are unavailable" } };
+						if (globals::state->IsPersistentMutationBlocked() || PerformanceTuningRenderer::HasActiveMeasurements())
+							return json{ { "error", "Finish the current save, load or performance comparison before changing settings" } };
+						if (!globals::menu->PrepareSettingsMutation())
+							return json{ { "error", "Could not preserve the settings baseline" } };
+						feature.settings.EnableReverseZBuffer = requested;
+						globals::menu->RequestSettingsDirtyCheck();
+					}
+				}
 				auto status = feature.GetDiagnostics();
 				status["restartRequired"] = true;
 				return status;

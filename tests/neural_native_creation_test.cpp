@@ -107,6 +107,8 @@ namespace NeuralRendering
 	enum class RuntimeStatus
 	{
 		Initialized,
+		InitializationFailed,
+		ShutdownFailed,
 		FeatureConfigurationChanged,
 		FeatureCreateFailed,
 		FeatureEvaluateFailed,
@@ -126,6 +128,7 @@ namespace NeuralRendering
 		FeatureCreate,
 		FeatureEvaluate,
 		FeatureRelease,
+		Shutdown,
 		Load
 	};
 	template <class T>
@@ -166,7 +169,13 @@ namespace NeuralRendering
 		evaluations.push_back(parameters->values);
 		return providerEvaluateResult;
 	}
-	int NVSDK_NGX_D3D12_ReleaseFeature(NVSDK_NGX_Handle*) { return 0; }
+	int providerReleaseResult = 0;
+	unsigned featureReleases = 0;
+	int NVSDK_NGX_D3D12_ReleaseFeature(NVSDK_NGX_Handle*)
+	{
+		++featureReleases;
+		return providerReleaseResult;
+	}
 	struct Runtime
 	{
 		static constexpr unsigned kFeatureSlotCount = kLogicalFeatureSlotCount;
@@ -199,6 +208,7 @@ namespace NeuralRendering
 		};
 		struct Backend
 		{
+			NVSDK_NGX_Parameter* capabilities = nullptr;
 			std::array<Scratch, kFeatureSlotCount> scratch;
 			std::array<std::size_t, kFeatureSlotCount> scratchBytes{};
 		} backendStorage;
@@ -220,6 +230,9 @@ namespace NeuralRendering
 		std::string DetailLocked() const;
 		std::string Detail() const;
 		bool ResetFeatureLocked(std::uint32_t);
+		bool ResetFeaturesLocked(bool = false);
+		bool ResetFeatures();
+		bool ReleasePassResources();
 		bool PrepareFeature(ID3D12GraphicsCommandList*, unsigned, const NativeEvaluationLayout&, ID3D12Resource* = nullptr, ID3D12Resource* = nullptr, bool = false, RuntimeExecutionEvidence* = nullptr, std::uint32_t = kNetworkDefault);
 		bool PrepareFeatureLocked(ID3D12GraphicsCommandList*, unsigned, const NativeEvaluationLayout&, ID3D12Resource*, ID3D12Resource*, bool, RuntimeExecutionEvidence*, std::uint32_t);
 		void AcknowledgePresentedFeatures(unsigned);
@@ -230,6 +243,7 @@ namespace NeuralRendering
 #include "neural_runtime_detail_under_test.h"
 #include "neural_runtime_logging_under_test.h"
 #include "neural_runtime_reset_under_test.h"
+#include "neural_runtime_retirement_under_test.h"
 #include "neural_runtime_tuning_under_test.h"
 }
 
@@ -386,6 +400,72 @@ namespace
 			"evaluation failure was hidden behind success evidence");
 		providerEvaluateResult = 0;
 		Require(runtime.ResetFeatureLocked(0) && run() && runtime.Detail() == detail, "recovery retained stale failure evidence");
+	}
+
+	void RetiredFailureRecovery()
+	{
+		using namespace NeuralRendering;
+		const UpscalingDLSS::Extent extent{ 320, 192 };
+		const auto layout = BuildNativeEvaluationLayout(extent, extent, extent, {}, { 0, 0, 320, 192 }, { true, 320.f, 192.f }, false);
+		ID3D12GraphicsCommandList commands;
+		ID3D12Resource resource;
+		for (const bool returnsHandle : { false, true }) {
+			Runtime runtime;
+			runtime.device_ = &resource;
+			returnHandle = returnsHandle;
+			providerCreateResult = -7;
+			Require(!runtime.PrepareFeature(&commands, 0, layout) && runtime.failureStage_ == RuntimeFailureStage::FeatureCreate,
+				"create failure did not establish the retirement fixture");
+			const auto releases = featureReleases;
+			providerCreateResult = 0;
+			returnHandle = true;
+			Require(runtime.ReleasePassResources() && !runtime.featureHandles_[0] && !runtime.featureConfigurations_[0].valid &&
+						runtime.parameterStorage.values.empty() && runtime.status_ == RuntimeStatus::Initialized &&
+						runtime.failureStage_ == RuntimeFailureStage::None && runtime.firstEvaluationResetMask_.load() == 0 &&
+						featureReleases == releases + unsigned(returnsHandle),
+				"a safely retired failed create could not recover without abandoning the runtime");
+			Require(runtime.PrepareFeature(&commands, 0, layout), "retired failed creation could not retry");
+		}
+		Runtime evaluation;
+		evaluation.device_ = &resource;
+		providerEvaluateResult = -9;
+		Require(!evaluation.Execute(&commands, 0, &resource, &resource, &resource, &resource, nullptr, layout, Tuning{}, false),
+			"evaluate failure did not establish the retirement fixture");
+		providerEvaluateResult = 0;
+		Require(evaluation.ReleasePassResources() && evaluation.PrepareFeature(&commands, 0, layout),
+			"a safely retired failed evaluation could not release its handle and recover");
+
+		Runtime release;
+		release.device_ = &resource;
+		Require(release.PrepareFeature(&commands, 0, layout), "release-failure fixture preparation failed");
+		providerReleaseResult = -11;
+		Require(!release.ReleasePassResources() && release.featureHandles_[0] &&
+					release.failureStage_ == RuntimeFailureStage::FeatureRelease,
+			"failed native release discarded owned handle or reported successful retirement");
+		const auto releases = featureReleases;
+		providerReleaseResult = 0;
+		Require(!release.ReleasePassResources() && featureReleases == releases && release.featureHandles_[0],
+			"failed release was retried without the owner's quarantine decision");
+
+		Runtime rollback;
+		rollback.parameters_ = nullptr;
+		rollback.status_ = RuntimeStatus::InitializationFailed;
+		rollback.failureStage_ = RuntimeFailureStage::Initialization;
+		Require(rollback.ReleasePassResources() && featureReleases == releases &&
+					rollback.failureStage_ == RuntimeFailureStage::Initialization,
+			"an empty initialization rollback was quarantined or lost its original diagnostic");
+		rollback.backendStorage.capabilities = &rollback.parameterStorage;
+		Require(!rollback.ReleasePassResources(), "partial initialization ownership was treated as an empty rollback");
+
+		Runtime shutdown;
+		shutdown.device_ = &resource;
+		shutdown.status_ = RuntimeStatus::ShutdownFailed;
+		shutdown.failureStage_ = RuntimeFailureStage::Shutdown;
+		Require(!shutdown.ReleasePassResources() && featureReleases == releases && shutdown.device_,
+			"partial SDK shutdown was advertised as a reusable runtime");
+		Runtime abandoned;
+		abandoned.abandonRequested_.store(true);
+		Require(!abandoned.ReleasePassResources(), "unsafe ownership was released through the warm cleanup path");
 	}
 
 	void NetworkCreation()
@@ -579,6 +659,7 @@ int main()
 		RuntimeTuningMetadata();
 		NativeCreation();
 		DeferredEvaluationDetail();
+		RetiredFailureRecovery();
 		NetworkCreation();
 		DepthEncoding();
 		SdkMaskAndParameterConsistency();

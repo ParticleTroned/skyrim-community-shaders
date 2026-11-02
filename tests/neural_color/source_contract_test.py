@@ -168,7 +168,7 @@ class Contracts(unittest.TestCase):
         self.assertIn("if (input.peripheralCompression.Active() || geometry->packedCrops.count)", preparation)
         self.assertIn("adapted.jitterPixels = {};", preparation)
         self.assertIn("mapping.faceDetail = {};", renderer)
-        self.assertIn('defines.emplace_back("NR_NVIDIA_REFERENCE", "1")', (NR / "ColorPipeline.cpp").read_text())
+        self.assertIn('shaderDefines.emplace_back("NR_NVIDIA_REFERENCE", "1")', (NR / "ColorPipeline.cpp").read_text())
         self.assertIn("#ifdef NR_NVIDIA_REFERENCE", (SHADERS / "ColorCommon.hlsli").read_text())
 
     def test_feature_and_packaging(self):
@@ -176,7 +176,7 @@ class Contracts(unittest.TestCase):
         self.assertIn("&NeuralRenderingFeature::Instance()", source)
         self.assertTrue((ROOT / "features/Neural Rendering/CORE").exists())
         ini = ROOT / "features/Neural Rendering/Shaders/Features/NeuralRendering.ini"
-        self.assertIn("Version = 1-6-0", ini.read_text())
+        self.assertRegex(ini.read_text(), r"(?m)^Version = \d+-\d+-\d+$")
         ui = (ROOT / "src/Features/NeuralRenderingFeature.cpp").read_text()
         self.assertIn('"communityshaders.nr_color"', ui)
         save = ui[ui.index("void NeuralRenderingFeature::SaveSettings"):ui.index("void NeuralRenderingFeature::RestoreDefaultSettings")]

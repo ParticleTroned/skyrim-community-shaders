@@ -42,6 +42,7 @@
 #include <dxgi1_4.h>
 #include <format>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <span>
 #include <string>
@@ -3133,11 +3134,11 @@ namespace NeuralRendering
 
 	bool Renderer::State::PrepareActorProtection(const RendererApplyArgs& args, Slot& slot)
 	{
-		auto* shaderStorage = &actorProtectionCS_;
+		auto* shaderStorage = std::addressof(actorProtectionCS_);
 		auto* compileFailed = &actorProtectionCompileFailed_;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (slot.resourceKey.controlMaskFormat == DXGI_FORMAT_R8G8B8A8_UNORM) {
-			shaderStorage = &nativeControlMaskCS_;
+			shaderStorage = std::addressof(nativeControlMaskCS_);
 			compileFailed = &nativeControlMaskCompileFailed_;
 		}
 #endif

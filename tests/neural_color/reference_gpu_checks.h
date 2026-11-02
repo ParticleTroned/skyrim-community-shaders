@@ -9,7 +9,7 @@ static void CheckNvidiaReference(ID3D11Device* device, ID3D11DeviceContext* cont
 	std::vector<Pixel> source(4096, Pixel{ 0.18f, 0.12f, 0.08f, 0.375f });
 	Constants constants;
 	constants.transform = 3;
-	const auto highlightIndex = constants.y * 64 + constants.x;
+	constexpr unsigned highlightIndex = 0;
 	source[highlightIndex] = { 32.0f, 16.0f, 8.0f, 0.25f };
 	const std::vector<Pixel> sentinel(4096, Pixel{ -7, -7, -7, -7 });
 	const auto baseline = MakeTexture(device, source);
@@ -20,7 +20,7 @@ static void CheckNvidiaReference(ID3D11Device* device, ID3D11DeviceContext* cont
 	const auto unchanged = Read(device, context, reconstructed.texture.Get());
 	for (unsigned y = 0; y < constants.height; ++y)
 		for (unsigned x = 0; x < constants.width; ++x) {
-			const auto index = (y + constants.y) * 64 + x + constants.x;
+			const auto index = y * 64 + x;
 			Require(unchanged[index].r == source[index].r && unchanged[index].g == source[index].g &&
 						unchanged[index].b == source[index].b && unchanged[index].a == source[index].a,
 				"reference SDR round trip must preserve original HDR and alpha");

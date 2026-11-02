@@ -295,11 +295,11 @@ namespace NeuralRendering::Color
 	bool Pipeline::EnsureShaders(ID3D11Device* device, [[maybe_unused]] bool diagnostics, HRESULT& result)
 	{
 		static const auto defines = [] {
-			std::vector<std::pair<const char*, const char*>> defines;
+			std::vector<std::pair<const char*, const char*>> shaderDefines;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			defines.emplace_back("NR_NVIDIA_REFERENCE", "1");
+			shaderDefines.emplace_back("NR_NVIDIA_REFERENCE", "1");
 #endif
-			return defines;
+			return shaderDefines;
 		}();
 		result = E_FAIL;
 		if (compileFailed_)

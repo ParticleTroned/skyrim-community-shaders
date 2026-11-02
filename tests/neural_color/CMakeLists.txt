@@ -80,7 +80,8 @@ if(WIN32)
 	target_include_directories(nr_framebuffer_gpu_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../src")
 	target_link_libraries(nr_framebuffer_gpu_test PRIVATE d3d11 d3dcompiler)
 	add_test(NAME NRFramebufferWARP COMMAND nr_framebuffer_gpu_test
-		"${CMAKE_CURRENT_LIST_DIR}/../../features/Upscaling/Shaders/Upscaling/ClearHMDMaskCS.hlsl")
+		"${CMAKE_CURRENT_LIST_DIR}/../../features/Upscaling/Shaders/Upscaling/ClearHMDMaskCS.hlsl"
+		"${CMAKE_CURRENT_LIST_DIR}/../../package/Shaders")
     foreach(_test IN ITEMS shader_gpu exposure_shader_gpu)
         add_executable(nr_color_${_test}_test ${_test}_test.cpp)
         target_compile_features(nr_color_${_test}_test PRIVATE cxx_std_20)

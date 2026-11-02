@@ -1,3 +1,4 @@
+#include "../ShaderPackageIncludes.h"
 #include "Features/Upscaling/NeuralRendering/FramebufferTransaction.h"
 #include "Features/Upscaling/NeuralRendering/MainDepthPresentation.h"
 #include <array>
@@ -15,11 +16,12 @@ static void Require(bool value)
 }
 static void Check(HRESULT hr) { Require(SUCCEEDED(hr)); }
 
-static void VerifyPostUpscaleHiddenArea(ID3D11Device* device, ID3D11DeviceContext* context, const char* shaderPath)
+static void VerifyPostUpscaleHiddenArea(ID3D11Device* device, ID3D11DeviceContext* context, const char* shaderPath, const char* shaderRoot)
 {
 	constexpr unsigned eyeWidth = 32, height = 24, width = eyeWidth * 2;
 	ComPtr<ID3DBlob> bytecode, errors;
-	Check(D3DCompileFromFile(std::filesystem::path(shaderPath).c_str(), nullptr, nullptr,
+	PackageIncludes includes(shaderRoot);
+	Check(D3DCompileFromFile(std::filesystem::path(shaderPath).c_str(), nullptr, &includes,
 		"main", "cs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3 | D3DCOMPILE_ENABLE_STRICTNESS,
 		0, &bytecode, &errors));
 	ComPtr<ID3D11ComputeShader> shader;
@@ -101,7 +103,7 @@ static void VerifyPostUpscaleHiddenArea(ID3D11Device* device, ID3D11DeviceContex
 
 int main(int argc, char** argv)
 {
-	Require(argc == 2);
+	Require(argc == 3);
 	ComPtr<ID3D11Device> device;
 	ComPtr<ID3D11DeviceContext> context;
 	D3D_FEATURE_LEVEL level{};
@@ -182,5 +184,5 @@ int main(int argc, char** argv)
 	}
 	Require(read() == baseline);
 	std::puts("Passed non-UAV framebuffer stereo commit, failed-eye preservation, fresh copy and RTV restoration");
-	VerifyPostUpscaleHiddenArea(device.Get(), context.Get(), argv[1]);
+	VerifyPostUpscaleHiddenArea(device.Get(), context.Get(), argv[1], argv[2]);
 }

@@ -17,7 +17,6 @@ struct ReverseZ : Feature
 	std::string_view GetCategory() const override { return FeatureCategories::kDisplay; }
 	bool IsCore() const override { return true; }
 	bool IsInMenu() const override { return false; }
-	bool IsHiddenFromUserView() const override { return true; }
 	bool SupportsVR() override { return true; }
 	std::string_view GetShaderDefineName() override { return "REVERSE_Z"; }
 	bool HasShaderDefine(RE::BSShader::Type) override;

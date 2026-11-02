@@ -5,6 +5,7 @@
 #include "NativeMemoryPolicy.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "FaceDetailPolicy.h"
+#	include "MonoExecutionEvidence.h"
 #endif
 #include "ExposureCapture.h"
 #include "Globals.h"
@@ -190,16 +191,7 @@ namespace NeuralRendering
 		mutable std::mutex mutex;
 		MonoSnapshot snapshot;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		struct ExecutionRecord
-		{
-			std::uint32_t frame = UINT32_MAX;
-			bool prewarm = false, submitted = false, committed = false, historyReset = false;
-			NativeEvaluationLayout layout{};
-			MonoSettings settings{};
-			MonoExperiments experiments{};
-			RuntimeExecutionEvidence native{};
-		};
-		std::array<ExecutionRecord, 16> executions{};
+		std::array<MonoExecutionRecord, 16> executions{};
 		std::size_t executionCursor = 0;
 		MonoExperiments experiments{};
 		FaceDetailRegions faces{};
@@ -1271,7 +1263,8 @@ namespace NeuralRendering
 		RuntimeExecutionEvidence* nativeEvidence = nullptr;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		auto& recorded = state.executions[state.executionCursor++ % state.executions.size()];
-		recorded = { .frame = frame.frame, .historyReset = reset, .layout = layout, .settings = settings, .experiments = state.experiments };
+		recorded = { .frame = frame.frame, .historyReset = reset, .layout = layout, .settings = settings, .experiments = state.experiments,
+			.faceDetail = { state.faceFrame, state.faces.count, state.faces.current, compression.mapping.faceDetail.enabled != 0 } };
 		nativeEvidence = &recorded.native;
 #endif
 		bool preparedNative = true;
@@ -1532,28 +1525,21 @@ namespace NeuralRendering
 		std::scoped_lock lock(state_->mutex);
 		const auto& state = *state_;
 		Json records = Json::array();
-		const auto optional = [](const auto& value) -> Json { return value ? Json(*value) : Json(nullptr); };
 		for (std::size_t offset = 0; offset < state.executions.size(); ++offset) {
 			const auto& record = state.executions[(state.executionCursor + offset) % state.executions.size()];
 			if (record.frame == UINT32_MAX || (sourceFrame != UINT32_MAX && record.frame != sourceFrame))
 				continue;
-			const auto& native = record.native;
-			records.push_back({ { "frame", record.frame }, { "prewarm", record.prewarm }, { "submitted", record.submitted },
-				{ "committed", record.committed }, { "historyReset", record.historyReset }, { "settings", Json(record.settings) }, { "experiments", DescribeMonoExperiments(record.experiments) },
-				{ "inputWidth", record.layout.creation.input.width }, { "inputHeight", record.layout.creation.input.height },
-				{ "outputWidth", record.layout.creation.output.width }, { "outputHeight", record.layout.creation.output.height },
-				{ "createAttempted", native.createAttempted }, { "createSucceeded", native.createSucceeded },
-				{ "evaluateAttempted", native.evaluateAttempted }, { "evaluateSucceeded", native.evaluateSucceeded },
-				{ "createReason", native.createReason ? Json(native.createReason) : Json(nullptr) },
-				{ "createResult", optional(native.createResult) }, { "evaluateResult", optional(native.evaluateResult) },
-				{ "createCpuMicroseconds", optional(native.createCpuMicroseconds) }, { "evaluateCpuMicroseconds", optional(native.evaluateCpuMicroseconds) } });
+			records.push_back(DescribeMonoExecution(record));
 		}
+		Json result{ { "viewCount", 1 }, { "sourceFrame", sourceFrame == UINT32_MAX ? Json(nullptr) : Json(sourceFrame) },
+			{ "diagnosticScope", sourceFrame == UINT32_MAX ? "current_state_and_recent_executions" : "retained_frame" },
+			{ "nativeCalls", std::move(records) }, { "nativeTimingsAreCpu", true }, { "experimentsSessionOnly", true } };
+		if (sourceFrame != UINT32_MAX)
+			return result;
 		const auto fences = state.interop.Snapshot();
 		const auto lifecycle = Runtime::Instance().GetLifecycleCounts();
-		return { { "viewCount", 1 }, { "sourceFrame", sourceFrame == UINT32_MAX ? Json(nullptr) : Json(sourceFrame) },
-			{ "nativeCalls", std::move(records) }, { "nativeTimingsAreCpu", true },
-			{ "experiments", DescribeMonoExperiments(state.experiments) }, { "experimentsSessionOnly", true },
-			{ "faceDetail", { { "sourceFrame", state.faceFrame }, { "observedRegions", state.faces.count }, { "current", state.faces.current }, { "active", state.mapping.faceDetail.enabled != 0 } } },
+		result.update(Json{ { "experiments", DescribeMonoExperiments(state.experiments) },
+			{ "faceDetail", DescribeMonoFaceDetail({ state.faceFrame, state.faces.count, state.faces.current, state.mapping.faceDetail.enabled != 0 }) },
 			{ "lifecycle", { { "creates", lifecycle.creates }, { "releases", lifecycle.releases },
 							   { "residentFeatureMask", Runtime::Instance().GetResidentFeatureMask() }, { "networkPresets", Runtime::Instance().GetFeatureNetworkPresets() } } },
 			{ "memory", { { "phase", ToString(state.memory.phase) }, { "startup", ToString(state.memory.startupKind) },
@@ -1561,7 +1547,8 @@ namespace NeuralRendering
 							{ "nativeStartupPending", state.nativeStartup.active }, { "nativeObservations", state.nativeObservations },
 							{ "adaptiveCeilingPercent", state.resolution.ceilingPercent }, { "reductions", state.resolution.reductions }, { "restorations", state.resolution.restorations } } },
 			{ "fences", { { "initialized", fences.initialized }, { "issued", fences.issued }, { "completed", fences.completed },
-							{ "completedKnown", fences.completedKnown }, { "recording", fences.recording }, { "deviceRemoved", fences.deviceRemoved } } } };
+							{ "completedKnown", fences.completedKnown }, { "recording", fences.recording }, { "deviceRemoved", fences.deviceRemoved } } } });
+		return result;
 	}
 #endif
 	MonoSnapshot MonoRenderer::Snapshot() const { std::scoped_lock lock(state_->mutex); return state_->snapshot; }

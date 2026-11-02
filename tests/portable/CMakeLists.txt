@@ -181,6 +181,12 @@ csx_extract_cmake(neural_mono_startup_test extract_neural_mono_startup.cmake
     HEADERS neural_mono_startup_under_test.h
     SOURCES "${CSX_PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/MonoRenderer.cpp"
         "${CSX_PROJECT_ROOT}/tests/extract_source_region.cmake")
+csx_extract_cmake(neural_mono_evidence_test extract_neural_mono_evidence.cmake
+    HEADERS neural_mono_evidence_under_test.h
+    SOURCES "${CSX_PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/MonoRenderer.cpp"
+        "${CSX_PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/MonoExecutionEvidence.h"
+        "${CSX_PROJECT_ROOT}/tests/extract_source_region.cmake")
+target_compile_definitions(neural_mono_evidence_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
 csx_extract_cmake(scene_depth_test extract_scene_depth.cmake
     HEADERS scene_depth_under_test.h
     SOURCES "${CSX_PROJECT_ROOT}/src/Deferred.cpp" "${CSX_PROJECT_ROOT}/src/Utils/D3D.cpp")

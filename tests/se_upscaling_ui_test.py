@@ -26,7 +26,7 @@ using uint = unsigned;
 constexpr int ImGuiCol_Text = 0;
 namespace input {
     std::string control, selection, click, open, section;
-    int disabled = 0, comboDepth = 0, selectables = 0, reflexDraws = 0;
+    int disabled = 0, comboDepth = 0, tooltipDepth = 0, selectables = 0, reflexDraws = 0;
     std::vector<std::string> combos, checkboxes, texts, tabs;
     bool blocked = false;
     void Reset() { control.clear(); selection.clear(); click.clear(); open.clear(); combos.clear(); checkboxes.clear(); texts.clear(); selectables = 0; }
@@ -46,7 +46,12 @@ namespace ImGui {
 }
 namespace Util {
     struct DisableGuard { bool active; explicit DisableGuard(bool value): active(value) { input::disabled += active; } ~DisableGuard() { input::disabled -= active; } };
-    bool HoverTooltipWrapper() { return false; }
+    struct TooltipGuard {
+        TooltipGuard() { ++input::tooltipDepth; }
+        ~TooltipGuard() { --input::tooltipDepth; }
+        explicit operator bool() const { return false; }
+    };
+    TooltipGuard HoverTooltipWrapper() { return {}; }
     void AddTooltip(const char*) {}
     namespace Colors { int GetWarning() { return 0; } int GetSuccess() { return 0; } int GetInfo() { return 0; } }
     namespace Text { template<class... A> void Warning(const char* text, A&&...) { input::texts.emplace_back(text); } }
@@ -147,7 +152,7 @@ int main() {
         input::selection = std::format("{} ( {:.2f}x )", GetQualityModeName(mode, true), Upscaling::GetQualityModeResolutionScale(mode));
         upscaling.DrawUpscalingModeSettings(true, true);
         assert(upscaling.settings.qualityMode == mode);
-        assert(input::selectables == 7 && input::comboDepth == 0);
+        assert(input::selectables == 7 && input::comboDepth == 0 && input::tooltipDepth == 0);
     }
     for (uint preset : kDLSSProfileDisplayOrder) {
         input::Reset(); input::control = "DLSS Profile"; input::selection = GetDLSSPresetLabel(preset);

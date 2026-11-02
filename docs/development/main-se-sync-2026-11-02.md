@@ -63,6 +63,12 @@ when frame generation conflicts. Reference-color, native control-mask/jitter,
 reconstruction-tuning and face-sampling experiments remain developer-only and
 session-only; settings cannot enable them in a production build.
 
+Retained-frame diagnostics report the actual native jitter, scaling, mask,
+motion and feature-upscaling inputs, alongside the settings that requested
+them. Each frame retains its own face-observation and admission evidence;
+querying a captured frame does not consult later scene, fence or SDK state.
+Prewarm records explicitly contain no face observation.
+
 ### Appearance and UI
 
 Far grass billboards receive light on both faces. Aurora grading uses the
@@ -161,6 +167,8 @@ of copying VR test harnesses into the branch.
 
 ## Validation and remaining environment limits
 
+The definitive test results and review findings are recorded in
+[main-se-sync-2026-11-02-validation.md](main-se-sync-2026-11-02-validation.md).
 Portable and supplemental shader diagnostics do not establish a Windows DLL
 build, native FXC bytecode, WARP execution, runtime GPU performance or actual
 Skyrim SE/AE image correctness. Those require the Windows/game environment.

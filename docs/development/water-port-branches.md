@@ -1,26 +1,26 @@
 # Fork-only water port work branches
 
-Baseline: `d64dc05b60d38774f43797b9d4e6c1f357b8b1f8`. Donor: `f140c878138fe2783a6a4ad40420a3a2a996ccd0`.
+Baseline: `34b4b82881d2507ebba26a958f471a7e5f8a7742`. Donor: `f140c878138fe2783a6a4ad40420a3a2a996ccd0`.
 
 No upstream PRs. These are preparation branches, not merge-approved changes.
 
 | Work branch | Commit | Type | Required parent |
 |---|---|---|---|
-| `work/os-water-04-flowmap-20261101` | `1dcf4adc6e` | BUG / CORRECTION | pinned baseline |
-| `work/os-water-02-refraction-20261101` | `e3e44eaaa9` | BUG / CORRECTION | pinned baseline |
-| `work/os-water-06-cache-20261101` | `99de91ced5` | BUG / CORRECTION | 04-flowmap |
-| `work/os-water-03-child-worldspace-20261101` | `88b92dd7d9` | CORRECTION | pinned baseline |
-| `work/os-water-05-lifetime-20261101` | `dfc440cd21` | CORRECTION | pinned baseline |
-| `work/os-water-07-flowmap-lock-20261101` | `3202b55301` | CORRECTION | pinned baseline |
-| `work/os-water-08-parallax-20261101` | `87621e7f8a` | CORRECTION / FEATURE | pinned baseline |
-| `work/os-water-09-history-20261101` | `76b2b5c420` | CORRECTION | pinned baseline |
-| `work/os-water-10a-reflection-source-20261101` | `9e08766a02` | BUG | pinned baseline |
-| `work/os-water-10b-ssr-20261101` | `76ce4e459d` | CORRECTION | 10a-reflection-source |
-| `work/os-water-10c-reflection-height-20261101` | `47b79a46cc` | FEATURE | 10a-reflection-source |
-| `work/os-water-11a-light-eligibility-20261101` | `4005635b03` | BUG | pinned baseline |
-| `work/os-water-11b-contact-candidates-20261101` | `0a1f389f04` | CORRECTION | 11a-light-eligibility |
-| `work/os-water-shallow-base-20261101` | `02b839baa6` | INTEGRATION | 04-flowmap, 02-refraction |
-| `work/os-water-01-shallow-20261101` | `cd7370c1b8` | FEATURE | shallow-base |
+| `work/os-water-04-flowmap-20261101` | `44fa6cf8a3` | BUG / CORRECTION | pinned baseline |
+| `work/os-water-02-refraction-20261101` | `3793e3b8b2` | BUG / CORRECTION | pinned baseline |
+| `work/os-water-06-cache-20261101` | `0aa22e28b2` | BUG / CORRECTION | 04-flowmap |
+| `work/os-water-03-child-worldspace-20261101` | `1f1b71cffe` | CORRECTION | pinned baseline |
+| `work/os-water-05-lifetime-20261101` | `273bd3a65e` | CORRECTION | pinned baseline |
+| `work/os-water-07-flowmap-lock-20261101` | `7ffc2dced0` | CORRECTION | pinned baseline |
+| `work/os-water-08-parallax-20261101` | `b994fcf16a` | CORRECTION / FEATURE | pinned baseline |
+| `work/os-water-09-history-20261101` | `26910655c9` | CORRECTION | pinned baseline |
+| `work/os-water-10a-reflection-source-20261101` | `5fc5264e37` | BUG | pinned baseline |
+| `work/os-water-10b-ssr-20261101` | `e6287269ce` | CORRECTION | 10a-reflection-source |
+| `work/os-water-10c-reflection-height-20261101` | `155d0bd12a` | FEATURE | 10a-reflection-source |
+| `work/os-water-11a-light-eligibility-20261101` | `83aa665f2f` | BUG | pinned baseline |
+| `work/os-water-11b-contact-candidates-20261101` | `fdaa8ee877` | CORRECTION | 11a-light-eligibility |
+| `work/os-water-shallow-base-20261101` | `00d221df83` | INTEGRATION | 04-flowmap, 02-refraction |
+| `work/os-water-01-shallow-20261101` | `5f12378f91` | FEATURE | shallow-base |
 
 ## Scope and test controls
 
@@ -58,3 +58,9 @@ Repairs cover SDK/REX D3D type bridging (4), explicit node pointers (3), signed 
 Windows compilation and SE/VR shader validation must pass on the new integration commit before installation. In-game correctness and performance still require the existing test matrix.
 
 Shader follow-up: all SE/VR water permutations compiled cleanly in both depth conventions in run 41302393633. Its remaining candidate-loop warning and DXC high-bit literal test failures are addressed without changing compiler flags or warning limits. Final validation must still pass on this follow-up.
+
+## Dev rebase — 2026-11-02
+
+All fourteen code branches, both dependency bases and the integration are rebased onto `34b4b82881d2507ebba26a958f471a7e5f8a7742`. The commit graph and prior CI repair commits are preserved. Production water changes are unchanged; upstream translation additions are retained. No 256-step ceiling, blanket Shadow/PortalStrict exclusions or NR runtime DLL is introduced.
+
+Previous heads are retained under `backup/os-water-pre-dev-34b4b82881-20261102/` when publication completes. Earlier CI runs and packages refer to the old baseline; use the new integration run as the build/install gate. In-game validation is not established by this rebase.

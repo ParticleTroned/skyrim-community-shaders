@@ -1,0 +1,41 @@
+{
+  "newBase": "34b4b82881d2507ebba26a958f471a7e5f8a7742",
+  "oldHeads": {
+    "work/os-water-04-flowmap-20261101": "1dcf4adc6eea60ad2f09a24f16663cb5e1f5429d",
+    "work/os-water-02-refraction-20261101": "e3e44eaaa9163b225d113c2704f2b5ce3adad61f",
+    "work/os-water-06-cache-20261101": "99de91ced50626219fb71f11d23392adb85ae70a",
+    "work/os-water-03-child-worldspace-20261101": "88b92dd7d9eb5248b0acb83bc0c60a5adae9e09c",
+    "work/os-water-05-lifetime-20261101": "dfc440cd215335ab2ae42fbff9812ec93a7fa965",
+    "work/os-water-07-flowmap-lock-20261101": "3202b55301127f0d96d49aa1a0943f525c7ab684",
+    "work/os-water-08-parallax-20261101": "87621e7f8a25033a2f33330b71b87152f4e29453",
+    "work/os-water-09-history-20261101": "76b2b5c42080b4cbf24e21038e3a01f3456f6093",
+    "work/os-water-10a-reflection-source-20261101": "9e08766a025b4e621cce78fd80eef6080a2b40e9",
+    "work/os-water-10b-ssr-20261101": "76ce4e459da2d1aa410178befe51aa7defd6b76b",
+    "work/os-water-10c-reflection-height-20261101": "47b79a46cc0aa4c743510a3e7d044ead639cac53",
+    "work/os-water-11a-light-eligibility-20261101": "4005635b03664f650062328d851c7502ea0189e0",
+    "work/os-water-11b-contact-candidates-20261101": "0a1f389f04756f89bfff4cc34f7081096b35162e",
+    "work/os-water-shallow-base-20261101": "02b839baa6006dfa3012060694a03fc42f63dfde",
+    "work/os-water-01-shallow-20261101": "cd7370c1b80e8190ffb92a7edfb93375ff92d09f",
+    "work/os-water-base-20261101": "d64dc05b60d38774f43797b9d4e6c1f357b8b1f8",
+    "build/os-dev-water-integration-20261101": "362160e22b2b7589590ed9489e34bd31100639cd"
+  },
+  "newHeads": {
+    "work/os-water-04-flowmap-20261101": "44fa6cf8a3d00dbf7809b4ddc613eb96159932e5",
+    "work/os-water-02-refraction-20261101": "3793e3b8b29e06b28292f07c520f620f319c578e",
+    "work/os-water-06-cache-20261101": "0aa22e28b24d346a209f04323435c6ceb26e8242",
+    "work/os-water-03-child-worldspace-20261101": "1f1b71cffe2e519e5f5cc84493485472e875a155",
+    "work/os-water-05-lifetime-20261101": "273bd3a65e6b238ca56b1d588b6b92822417bded",
+    "work/os-water-07-flowmap-lock-20261101": "7ffc2dced0cecc5d80349441a53f9e06cf92f872",
+    "work/os-water-08-parallax-20261101": "b994fcf16a0af4522f8067110abdac1c899ebaaf",
+    "work/os-water-09-history-20261101": "26910655c94aeda47417ec6ea40c4a6e52e2337c",
+    "work/os-water-10a-reflection-source-20261101": "5fc5264e3779158e79cf10623766f3266ea64e06",
+    "work/os-water-10b-ssr-20261101": "e6287269cec2509da27f605950c2e617eb067927",
+    "work/os-water-10c-reflection-height-20261101": "155d0bd12a3c00422033b585fc71ef38f2ea691f",
+    "work/os-water-11a-light-eligibility-20261101": "83aa665f2ffe19c0110409f2530fe121f6dbf2b1",
+    "work/os-water-11b-contact-candidates-20261101": "fdaa8ee877024deb1efc542c8bcaf1068196f607",
+    "work/os-water-shallow-base-20261101": "00d221df83e0f23cd8b33255c10065a5b95b0fc9",
+    "work/os-water-01-shallow-20261101": "5f12378f916d3ada37e919ef9883dd4b9bf8ca00",
+    "work/os-water-base-20261101": "34b4b82881d2507ebba26a958f471a7e5f8a7742",
+    "build/os-dev-water-integration-20261101": "4d8859aa4de9a8ac9d3b568f620d7551a5ec41d5"
+  }
+}

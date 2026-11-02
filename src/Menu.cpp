@@ -1012,7 +1012,7 @@ void Menu::DrawFooter()
 {
 	ImGui::BulletText("%s", I18n::GetSingleton()->Format("menu.footer.game_version", { { "runtime", std::string(magic_enum::enum_name(REL::Module::GetRuntime())) }, { "version", Util::GetFormattedVersion(REL::Module::get().version()) } }, "Game Version: {runtime} {version}").c_str());
 	ImGui::SameLine();
-	ImGui::BulletText("%s", I18n::GetSingleton()->Format("menu.footer.d3d12_swap_chain", { { "status", globals::features::upscaling.d3d12SwapChainActive ? T("menu.footer.active", "Active") : T("menu.footer.inactive", "Inactive") } }, "D3D12 Swap Chain: {status}").c_str());
+	ImGui::BulletText("%s", I18n::GetSingleton()->Format("menu.footer.presentation", { { "api", globals::features::upscaling.d3d12SwapChainActive ? "D3D12" : "D3D11" } }, "Presentation: {api}").c_str());
 	ImGui::SameLine();
 	ImGui::BulletText("%s", I18n::GetSingleton()->Format("menu.footer.gpu", { { "name", globals::state->adapterDescription } }, "GPU: {name}").c_str());
 }

@@ -58,8 +58,13 @@ release label alone cannot make different shader inputs compatible.
 
 The builder stages the package shaders and visible AIO feature shaders. Hidden
 features are derived from `IsHiddenFromUserView()` declarations, matching AIO
-packaging. SE Wetness Effects, `VANILLA_FRESNEL` and `HDR_OUTPUT` permutations
-remain in the inventory. The shipped profile enables `UNIFIED_WATER` globally,
+packaging. The shipped profile strips `WETNESS_EFFECTS` from every permutation
+and records Wetness Effects disabled, matching the runtime's forced-off state.
+This also excludes its feature ABI from each cache record's compile identity.
+Assembly rejects older caches that still mark Wetness Effects enabled;
+changing only `Info.ini` cannot repair their compiled shader identities.
+`VANILLA_FRESNEL` and `HDR_OUTPUT` permutations remain in the inventory.
+The shipped profile enables `UNIFIED_WATER` globally,
 `WETTERNESS` for Lighting, Water and RunGrass, and `PBR_GRASS=1` plus
 `GRASS_OPTIMIZATIONS` for RunGrass.
 

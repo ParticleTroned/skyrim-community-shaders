@@ -106,7 +106,7 @@ class SECacheContractTests(unittest.TestCase):
         self.assertEqual(states, [f"ShaderCacheABI={'a' * 64};FeatureShaderABI=AFeature:1;FeatureShaderABI=ZFeature:2;"])
 
     @unittest.skipUnless(yaml is not None and parse_shader_configs is not None, "pinned hlslkit and PyYAML are required")
-    def test_captured_se_inventory_keeps_hdr_fresnel_and_wetness_permutations(self) -> None:
+    def test_shipped_inventory_keeps_hdr_fresnel_and_excludes_retired_wetness(self) -> None:
         config_path = REPO / ".github/configs/shader-validation.yaml"
         captured = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         BUILDER.validate_captured_variant_count(captured, config_path)
@@ -124,7 +124,7 @@ class SECacheContractTests(unittest.TestCase):
         self.assertEqual(len(tasks), len(compile_task_defines(tasks)))
         by_key = {task[:3]: task[3] for task in tasks}
         self.assertTrue(original_keys <= by_key.keys())
-        preserved = {"HDR_OUTPUT", "VANILLA_FRESNEL", "WETNESS_EFFECTS"}
+        preserved = {"HDR_OUTPUT", "VANILLA_FRESNEL"}
         observed = set()
         for source, stage, entry, defines in original_tasks:
             expected = {BUILDER.normalized_define_name(value) for value in defines} & preserved
@@ -133,7 +133,9 @@ class SECacheContractTests(unittest.TestCase):
             observed |= expected
         self.assertEqual(observed, preserved)
         for source, stage, entry, defines in tasks:
-            self.assertNotIn("VR", {BUILDER.normalized_define_name(value) for value in defines})
+            names = {BUILDER.normalized_define_name(value) for value in defines}
+            self.assertNotIn("VR", names)
+            self.assertNotIn("WETNESS_EFFECTS", names)
             if source == "RunGrass.hlsl":
                 self.assertIn("PBR_GRASS=1", defines)
                 self.assertIn("GRASS_OPTIMIZATIONS=", defines)
@@ -188,6 +190,27 @@ class SECacheAIOTests(unittest.TestCase):
         manifest["shaderCacheABI"] = abi
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         return core, cache_root, version
+
+    def test_aio_rejects_cache_with_runtime_disabled_wetness(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, cache_root, version = self.prepare_fixture(root)
+            (core / "Shaders/Features/WetnessEffects.ini").write_text(
+                "[Info]\nVersion=test-wetness\n", encoding="utf-8",
+            )
+            info_path = cache_root / "ShaderCache/Info.ini"
+            baseline = info_path.read_text(encoding="utf-8")
+            for enabled in ("true", "invalid"):
+                with self.subTest(enabled=enabled):
+                    info_path.write_text(baseline + f"[WetnessEffects]\nEnabled={enabled}\n", encoding="utf-8")
+                    before = BUILDER.ordinary_tree_files(cache_root)
+                    with self.assertRaisesRegex(SystemExit, "WetnessEffects"):
+                        BUILDER.validate_aio_inputs(core, cache_root, version, BUILDER.validate_csx_plugin_version(version))
+                    self.assertEqual(BUILDER.ordinary_tree_files(cache_root), before)
+            info_path.write_text(
+                baseline + "[WetnessEffects]\nEnabled=false\nVersion=test-wetness\n", encoding="utf-8",
+            )
+            BUILDER.validate_aio_inputs(core, cache_root, version, BUILDER.validate_csx_plugin_version(version))
 
     def test_aio_archive_preserves_complete_core_and_optional_cache_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

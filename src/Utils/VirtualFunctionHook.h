@@ -65,6 +65,7 @@ namespace Util
 	 * @brief Install a graphics hook, retaining the original call target before publication.
 	 * The original storage must have process lifetime. Clones cover every known interface
 	 * sharing the object's address and remain alive until process exit. Call during initialization.
+	 * Extended slots require QueryInterface confirmation on the same object pointer.
 	 */
 	VirtualHookResult InstallVirtualFunctionHook(ID3D11Device* a_object, std::size_t a_slot, void** a_original, void* a_hook);
 	/** @copydoc InstallVirtualFunctionHook(ID3D11Device*, std::size_t, void**, void*) */

@@ -374,8 +374,24 @@ void HDRDisplay::DrawSettings()
 	MenuUI::SettingsPage page("HDRDisplay", { { "output", T(TKEY("output"), "Output"), T(TKEY("output_description"), "Check display detection and the requirements for HDR output."), T(TKEY("output_summary"), "Display and Windows HDR"), true, true, T(TKEY("output_stage"), "Check your display") }, { "brightness", T(TKEY("brightness"), "Brightness"), T(TKEY("brightness_description"), "Match reference white and highlights to your display."), T(TKEY("brightness_summary"), "Paper white and peak brightness"), true, true, T(TKEY("brightness_stage"), "Calibrate HDR brightness") }, { "interface", T(TKEY("interface"), "Interface"), T(TKEY("interface_description"), "Balance interface brightness against the scene."), T(TKEY("interface_summary"), "UI brightness and menu behaviour"), true, true } }, T(TKEY("setup_title"), "Your HDR setup"), T(TKEY("setup_guidance"), "Check your display, use Enabled in the header, then calibrate brightness."));
 	if (page.Is("output")) {
 		MenuUI::SectionHeading(T(TKEY("output"), "Output"));
+		if (IsHDROutputActive()) {
+			if (current.enableHDR) {
+				Util::Text::Success(T(TKEY("output_active"), "HDR10 output is active."));
+				MenuUI::DetailText(T(TKEY("output_active_help"), "Adjust paper white and peak brightness in Brightness, and menu brightness in Interface."));
+			} else {
+				Util::Text::WrappedWarning(T(TKEY("output_still_active"), "HDR output is still active after switching it off."));
+				MenuUI::DetailNote(T(TKEY("output_still_active_help"), "The output could not return to SDR. Check CommunityShaders.log for colour-space errors."));
+			}
+		} else if (current.enableHDR) {
+			Util::Text::WrappedWarning(T(TKEY("output_not_active"), "HDR is enabled in settings, but HDR output is not active."));
+			MenuUI::DetailNote(T(TKEY("output_not_active_help"), "Check the display requirements below and CommunityShaders.log for colour-space errors."));
+		} else {
+			MenuUI::DetailText(T(TKEY("output_off"), "HDR output is off."));
+			MenuUI::DetailNote(T(TKEY("output_off_help"), "Enable HDR in the header. Your saved brightness settings are retained while HDR is off."));
+		}
+		MenuUI::SectionHeading(T(TKEY("display_status"), "Display status"));
 		if (isHDRMonitor) {
-			Util::Text::Success(T(TKEY("display_detected"), "HDR Display Detected"));
+			MenuUI::DetailText(T(TKEY("windows_hdr_on"), "Windows HDR is on for the game display."));
 		} else if (isHDRCapableMonitor) {
 			Util::Text::WrappedWarning(T(TKEY("capable_display_windows_hdr_off"), "HDR Capable Display (Windows HDR is off)"));
 			MenuUI::DetailText(T(TKEY("capable_display_windows_hdr_off_tooltip_0"), "Your monitor supports HDR, but Windows HDR is currently disabled."));
@@ -389,7 +405,6 @@ void HDRDisplay::DrawSettings()
 		}
 		if (!isHDRMonitor && current.enableHDR)
 			Util::Text::WrappedWarning(T(TKEY("enabled_without_detected_display"), "HDR is enabled but no HDR display was detected."));
-		MenuUI::DetailNote(T(TKEY("header_toggle_help"), "Use Enabled in the header to control HDR output. Saved brightness settings are retained while it is off."));
 	}
 	if (page.Is("brightness")) {
 		MenuUI::SectionHeading(T(TKEY("brightness"), "Brightness"));

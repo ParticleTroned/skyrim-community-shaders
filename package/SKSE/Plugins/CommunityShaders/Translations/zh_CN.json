@@ -1618,7 +1618,6 @@
     "menu.features.scene_specific_settings": "场景特定设置",
     "menu.features.setting_change_warning_title": "设置更改警告",
     "menu.features.settings_adjusted_warning": "由于功能不兼容，您的部分设置已被自动调整。",
-    "menu.footer.d3d12_swap_chain": "D3D12 交换链：{status}",
     "menu.footer.game_version": "游戏版本：{runtime} {version}",
     "menu.footer.gpu": "GPU：{name}",
     "menu.footer.load": "加载",

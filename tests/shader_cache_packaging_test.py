@@ -640,7 +640,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
         names = self._all_define_names(config)
         self.assertIn("UNIFIED_WATER", names)
         self.assertIn("WETTERNESS", names)
-        self.assertIn("WETNESS_EFFECTS", names)
+        self.assertNotIn("WETNESS_EFFECTS", names)
         self.assertNotIn("D3DCOMPILE_DEBUG", names)
         self.assertNotIn("D3DCOMPILE_SKIP_OPTIMIZATION", names)
         self.assertIn("VANILLA_FRESNEL", names)
@@ -688,7 +688,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
             additional_excluded_defines=frozenset({"HORIZON_FIX"}),
         )
         standard_names = self._all_define_names(standard_config)
-        self.assertIn("WETNESS_EFFECTS", standard_names)
+        self.assertNotIn("WETNESS_EFFECTS", standard_names)
         self.assertNotIn("HORIZON_FIX", standard_names)
 
         horizon_config = BUILDER.apply_cache_profile_defines(
@@ -774,7 +774,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
             root = Path(temporary)
             features_dir = root / "stage" / "Features"
             features_dir.mkdir(parents=True)
-            for feature_name in ("AdaptiveBrightness", "HorizonFix"):
+            for feature_name in ("AdaptiveBrightness", "HorizonFix", "WetnessEffects"):
                 (features_dir / f"{feature_name}.ini").write_text(
                     "[Info]\nVersion = 1-2-3\n",
                     encoding="utf-8",
@@ -796,6 +796,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 states = BUILDER.read_feature_states(cache_dir)
                 self.assertIs(states["HorizonFix"], enabled)
                 self.assertTrue(states["AdaptiveBrightness"])
+                self.assertFalse(states["WetnessEffects"])
                 info = configparser.ConfigParser(interpolation=None)
                 info.read(cache_dir / BUILDER.INFO_FILE_NAME, encoding="utf-8-sig")
                 self.assertFalse(info.has_option("HorizonFix", "ShaderCacheABI"))
@@ -806,6 +807,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
         self.assertEqual(len(compile_states), 2)
         self.assertEqual(compile_states[0], compile_states[1])
         self.assertNotIn("FeatureShaderABI=HorizonFix:", compile_states[0])
+        self.assertNotIn("FeatureShaderABI=WetnessEffects:", compile_states[0])
 
     def test_horizon_variant_delta_rejects_malformed_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

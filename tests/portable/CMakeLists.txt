@@ -232,7 +232,7 @@ if(MSVC)
 endif()
 
 foreach(script IN ITEMS grass_collision_settings_test screenshot_mono_settings_test screenshot_verify_test
-    d3d_texture_lifetime_test se_performance_ownership_test se_hdr_ui_test volumetric_shadow_resources_test
+    d3d_texture_lifetime_test se_performance_ownership_test se_hdr_ui_test se_upscaling_ui_test volumetric_shadow_resources_test
     unified_water_duplicates_test subsurface_helper_region_test render_feature_contracts_test
     feature_issue_scanner_test neural_payload_guard_test streamline_runtime_cache_test shader_deploy_build_rule_test
     shader_cache_pack_builder_test shader_cache_packaging_test shader_cache_se_test)

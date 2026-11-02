@@ -126,13 +126,18 @@ namespace
 		AttachFunction a_attach = Util::AttachDetour, decltype(&VirtualProtect) a_protect = VirtualProtect, bool a_requireExecutable = false)
 	{
 		using enum Util::VirtualHookMethod;
-		if (!a_object || !a_original || !a_hook || a_slot >= a_baseSlots)
+		if (!a_object || !a_original || !a_hook)
 			return { ERROR_INVALID_PARAMETER };
 		std::scoped_lock lock(a_state.mutex);
 		void** table = nullptr;
 		void* target = nullptr;
-		if (!ReadPointers(&table, a_object, sizeof(table)) || !table ||
-			!ReadPointers(&target, table + a_slot, sizeof(target)) || !target)
+		if (!ReadPointers(&table, a_object, sizeof(table)) || !table)
+			return { ERROR_NOACCESS };
+		// A derived interface must prove this table's bounds before its slot is read.
+		const auto slotLimit = a_slot >= a_baseSlots ? a_slotCount(a_object) : a_baseSlots;
+		if (a_slot >= slotLimit)
+			return { ERROR_INVALID_PARAMETER };
+		if (!ReadPointers(&target, table + a_slot, sizeof(target)) || !target)
 			return { ERROR_NOACCESS };
 
 		if (a_requireExecutable) {
@@ -196,7 +201,7 @@ namespace
 				detour.error, ownedTable ? Clone : VTable };
 		}
 
-		const auto slots = a_slotCount(a_object);
+		const auto slots = a_slot >= a_baseSlots ? slotLimit : a_slotCount(a_object);
 		if (slots < a_baseSlots)
 			return { ERROR_INVALID_DATA, detour.error };
 		auto clone = std::make_unique<void*[]>(slots);

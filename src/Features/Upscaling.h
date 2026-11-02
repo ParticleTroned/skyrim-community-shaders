@@ -218,7 +218,6 @@ public:
 	bool lowRefreshRate = false;
 	bool fidelityFXMissing = false;
 	bool d3d12SwapChainActive = false;
-	bool dlssgSupportedAtBoot = false;
 
 	// Timing and scaling
 	double refreshRate = 0.0f;

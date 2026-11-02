@@ -1041,8 +1041,8 @@ SHIPPED_CACHE_PROFILE = CacheProfile(
     name="shipped",
     display_name="Shipped",
     supported_runtimes=frozenset({TARGET_RUNTIME}),
-    disabled_features=frozenset({"HorizonFix"}),
-    excluded_defines=BASE_EXCLUDED_DEFINES,
+    disabled_features=frozenset({"HorizonFix", "WetnessEffects"}),
+    excluded_defines=BASE_EXCLUDED_DEFINES | {"WETNESS_EFFECTS"},
     global_defines=("UNIFIED_WATER",),
     file_defines={
         "Lighting.hlsl": ("WETTERNESS",),
@@ -2901,6 +2901,16 @@ def validate_managed_cache(
         raise SystemExit("managed cache has no ShaderCacheABI")
     if expected_shader_cache_abi is not None and shader_abi != expected_shader_cache_abi:
         raise SystemExit("managed cache ShaderCacheABI does not match the source contract")
+    for feature in SHIPPED_CACHE_PROFILE.disabled_features - {HORIZON_FIX_SHORT_NAME}:
+        try:
+            enabled = info.getboolean(feature, "Enabled", fallback=False)
+        except ValueError as exc:
+            raise SystemExit(f"managed cache has invalid {feature} state: {exc}") from exc
+        if enabled:
+            raise SystemExit(
+                f"managed cache enables runtime-disabled feature {feature}; "
+                "rebuild the cache with the shipped profile"
+            )
     try:
         manifest = json.loads((cache_dir / PACK_MANIFEST_FILE_NAME).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:

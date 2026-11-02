@@ -111,6 +111,91 @@ namespace
 		return FALSE;
 	}
 
+	struct FakeSwapChain : FakeObject
+	{
+		std::size_t slots;
+		ULONG references = 1;
+		bool queryFails = false;
+		FakeSwapChain* queriedObject = nullptr;
+
+		static HRESULT STDMETHODCALLTYPE QueryInterface(FakeSwapChain* object, REFIID iid, void** output)
+		{
+			*output = nullptr;
+			if (object->queryFails)
+				return E_FAIL;
+			const std::size_t requestedSlots =
+				iid == __uuidof(IDXGISwapChain1) ? 29 :
+				iid == __uuidof(IDXGISwapChain2) ? 36 :
+				iid == __uuidof(IDXGISwapChain3) ? 40 :
+				iid == __uuidof(IDXGISwapChain4) ? 41 :
+												   0;
+			if (!requestedSlots || requestedSlots > object->slots)
+				return E_NOINTERFACE;
+			auto* result = object->queriedObject ? object->queriedObject : object;
+			++result->references;
+			*output = result;
+			return S_OK;
+		}
+
+		static ULONG STDMETHODCALLTYPE Release(FakeSwapChain* object)
+		{
+			return --object->references;
+		}
+	};
+
+	std::array<void*, 41> SwapChainTable()
+	{
+		std::array<void*, 41> table;
+		table.fill(reinterpret_cast<void*>(OriginalMethod));
+		table[0] = reinterpret_cast<void*>(FakeSwapChain::QueryInterface);
+		table[2] = reinterpret_cast<void*>(FakeSwapChain::Release);
+		return table;
+	}
+
+	void TestExtendedSwapChainSlots(bool clone)
+	{
+		for (const auto slots : { 18u, 29u, 36u, 40u, 41u }) {
+			for (const auto slot : { 22u, 39u, slots, (std::numeric_limits<unsigned>::max)() }) {
+				HookState state;
+				auto table = SwapChainTable();
+				FakeSwapChain object{ { table.data() }, slots };
+				firstOriginal = nullptr;
+				const auto result = InstallHook(state, &object, slot, 18, SwapChainSlots, &firstOriginal,
+					reinterpret_cast<void*>(FirstHook), DenyDetour, clone ? DenyProtection : VirtualProtect);
+				Require(object.references == 1);
+				if (slot >= slots) {
+					Require(result.error == ERROR_INVALID_PARAMETER && firstOriginal == nullptr);
+					Require(object.table == table.data() && state.hooks.empty() && state.clones.empty());
+					continue;
+				}
+				Require(result.error == NO_ERROR && result.detourError == ERROR_INVALID_BLOCK);
+				Require(result.method == (clone ? Util::VirtualHookMethod::Clone : Util::VirtualHookMethod::VTable));
+				Require(object.Call(slot) == 11 && firstOriginal == reinterpret_cast<void*>(OriginalMethod));
+				const auto tailSlot = slots - 1 == slot ? slots - 2 : slots - 1;
+				Require(object.Call(tailSlot) == 10);
+				Require((object.table != table.data()) == clone);
+			}
+		}
+	}
+
+	void TestExtendedInterfaceProofRequired()
+	{
+		for (bool differentPointer : { false, true }) {
+			HookState state;
+			auto table = SwapChainTable();
+			FakeSwapChain other{ { table.data() }, 41 };
+			FakeSwapChain object{ { table.data() }, 41 };
+			object.queryFails = !differentPointer;
+			object.queriedObject = differentPointer ? &other : nullptr;
+			void* original = nullptr;
+			const auto result = InstallHook(state, &object, 22, 18, SwapChainSlots, &original,
+				reinterpret_cast<void*>(FirstHook), DenyDetour);
+			Require(result.error == ERROR_INVALID_PARAMETER && original == nullptr);
+			Require(object.table == table.data() && state.hooks.empty() && state.clones.empty());
+			Require(object.references == 1 && other.references == 1);
+		}
+	}
+
 	void TestNativeDetourAndBusyTransaction()
 	{
 		HookState state;
@@ -248,6 +333,9 @@ int main()
 {
 	try {
 		TestTransactionOwnership();
+		TestExtendedSwapChainSlots(false);
+		TestExtendedSwapChainSlots(true);
+		TestExtendedInterfaceProofRequired();
 		TestNativeDetourAndBusyTransaction();
 		TestFallbackChaining(false);
 		TestFallbackChaining(true);

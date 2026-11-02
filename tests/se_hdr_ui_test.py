@@ -36,8 +36,8 @@ namespace input {
     int integer = 0, disabled = 0, popupDepth = 0, gridDepth = 0, popupRequests = 0;
     float real = 1;
     bool popupOpen = false;
-    std::vector<std::string> checkboxes;
-    void Reset() { click.clear(); slider.clear(); checkboxes.clear(); }
+    std::vector<std::string> checkboxes, texts;
+    void Reset() { click.clear(); slider.clear(); checkboxes.clear(); texts.clear(); }
 }
 namespace ImGui {
     bool IsPopupOpen(const char*) { return input::popupOpen; }
@@ -85,7 +85,11 @@ namespace Util {
         ~CenteredPopupModal() { input::popupDepth -= open; }
         explicit operator bool() const { return open; }
     };
-    namespace Text { void Warning(const char*) {} void WrappedWarning(const char*) {} void Success(const char*) {} }
+    namespace Text {
+        void Warning(const char* text) { input::texts.emplace_back(text); }
+        void WrappedWarning(const char* text) { input::texts.emplace_back(text); }
+        void Success(const char* text) { input::texts.emplace_back(text); }
+    }
     namespace Widgets {
         bool Checkbox(const char* label, bool* value) {
             input::checkboxes.emplace_back(label);
@@ -118,9 +122,19 @@ namespace MenuUI {
         ~DetailGrid() { --input::gridDepth; }
         void Next() {}
     };
-    void SectionHeading(const char*) {} void DetailText(const char*) {} void DetailNote(const char*) {}
+    void SectionHeading(const char*) {}
+    void DetailText(const char* text) { input::texts.emplace_back(text); }
+    void DetailNote(const char* text) { input::texts.emplace_back(text); }
 }
-namespace globals::features { struct { bool loaded = true, isWindowed = true; } upscaling; }
+namespace globals::features {
+    struct {
+        bool loaded = true, isWindowed = true, d3d12SwapChainActive = false;
+        struct {
+            bool hdrActive = false;
+            bool IsHDRColorSpaceActive() const { return hdrActive; }
+        } dx12SwapChain;
+    } upscaling;
+}
 struct Feature { struct SettingsHeaderStatus { std::string_view label; bool needsAttention; }; };
 struct HDRDisplay : Feature {
     CALIBRATION_LIMITS
@@ -128,11 +142,12 @@ struct HDRDisplay : Feature {
     Settings settings;
     std::mutex settingsMutex;
     bool isHDRMonitor = false, isHDRCapableMonitor = false, wasExclusiveFullscreen = false, requestHDREnable = false;
-    bool pendingAutoDetect = false, outputActive = false, bufferOutputActive = false;
+    bool pendingAutoDetect = false, d3d11HDRColorSpaceActive = false, bufferOutputActive = false;
+    bool loaded = true;
     float cachedDisplayMaxLuminance = 800;
     int dataUpdates = 0, colorSpaceUpdates = 0;
-    void UpdateHDRData() { ++dataUpdates; bufferOutputActive = outputActive && settings.enableHDR; }
-    void UpdateSwapChainColorSpace() { ++colorSpaceUpdates; outputActive = settings.enableHDR; }
+    void UpdateHDRData() { ++dataUpdates; bufferOutputActive = IsHDROutputActive() && settings.enableHDR; }
+    void UpdateSwapChainColorSpace() { ++colorSpaceUpdates; d3d11HDRColorSpaceActive = settings.enableHDR; }
     bool DetectHDR() const { return isHDRMonitor; }
     static void SanitizeSettings(Settings&);
     void LoadSettings(json&);
@@ -143,6 +158,7 @@ struct HDRDisplay : Feature {
     void DrawSettingsEnabledControl();
     void DrawHDRWarningPopup();
     void DrawSettings();
+    bool IsHDROutputActive() const;
 };
 '''
 
@@ -239,10 +255,36 @@ int main() {
     hdr.LoadSettings(unchanged);
     assert(hdr.dataUpdates == beforeReload + 1 && hdr.colorSpaceUpdates == colorsBeforeReload);
     hdr.isHDRMonitor = false; hdr.RestoreDefaultSettings();
-    assert(!hdr.settings.enableHDR && !hdr.outputActive && !hdr.bufferOutputActive);
+    assert(!hdr.settings.enableHDR && !hdr.IsHDROutputActive() && !hdr.bufferOutputActive);
     hdr.isHDRMonitor = true; hdr.RestoreDefaultSettings();
-    assert(hdr.settings.enableHDR && hdr.outputActive && hdr.bufferOutputActive);
+    assert(hdr.settings.enableHDR && hdr.IsHDROutputActive() && hdr.bufferOutputActive);
     assert(hdr.settings.hdrPaperWhite == 203 && hdr.settings.hdrPeakNits == 1000 && hdr.settings.hdrUIBrightness == 1);
+
+    // The page must distinguish the requested setting from the applied output.
+    const int dataBeforeStatus = hdr.dataUpdates, colorsBeforeStatus = hdr.colorSpaceUpdates;
+    for (bool d3d12 : { false, true }) {
+        globals::features::upscaling.d3d12SwapChainActive = d3d12;
+        for (bool requested : { false, true }) {
+            for (bool active : { false, true }) {
+                hdr.settings.enableHDR = requested;
+                hdr.d3d11HDRColorSpaceActive = active;
+                globals::features::upscaling.dx12SwapChain.hdrActive = active;
+                input::Reset(); input::section = "output";
+                hdr.DrawSettings();
+                const std::string expected = active ?
+                    (requested ? "HDR10 output is active." : "HDR output is still active after switching it off.") :
+                    (requested ? "HDR is enabled in settings, but HDR output is not active." : "HDR output is off.");
+                assert(std::ranges::find(input::texts, expected) != input::texts.end());
+                assert(std::ranges::none_of(input::texts, [](const auto& text) {
+                    return text.starts_with("Use Enabled in the header to control HDR output.");
+                }));
+                if (requested)
+                    assert(std::ranges::none_of(input::texts, [](const auto& text) { return text.starts_with("Enable HDR in the header."); }));
+            }
+        }
+    }
+    globals::features::upscaling.d3d12SwapChainActive = false;
+    assert(hdr.dataUpdates == dataBeforeStatus && hdr.colorSpaceUpdates == colorsBeforeStatus);
 
     // Idle menu frames may draw widgets, but must not issue output or popup requests.
     const int dataBeforeIdle = hdr.dataUpdates, colorsBeforeIdle = hdr.colorSpaceUpdates, popupsBeforeIdle = input::popupRequests;
@@ -255,7 +297,7 @@ int main() {
     }
     assert(hdr.dataUpdates == dataBeforeIdle && hdr.colorSpaceUpdates == colorsBeforeIdle && input::popupRequests == popupsBeforeIdle);
     assert(input::disabled == 0 && input::gridDepth == 0 && input::popupDepth == 0);
-    std::cout << "HDR confirmation/cancel/close, output updates, defaults, invalid calibration and 10000 idle UI frames passed\n";
+    std::cout << "HDR confirmation/cancel/close, output updates, D3D11/D3D12 status messages, defaults, invalid calibration and 10000 idle UI frames passed\n";
 }
 '''
 
@@ -274,7 +316,8 @@ class SEHDRUI(unittest.TestCase):
                       "void HDRDisplay::SetHDREnabled(", "void HDRDisplay::DrawSettingsEnabledControl()",
                       "void HDRDisplay::DrawHDRWarningPopup()", "void HDRDisplay::DrawSettings()",
                       "void HDRDisplay::SanitizeSettings(", "void HDRDisplay::LoadSettings(",
-                      "void HDRDisplay::SaveSettings(", "void HDRDisplay::RestoreDefaultSettings()"]
+                      "void HDRDisplay::SaveSettings(", "void HDRDisplay::RestoreDefaultSettings()",
+                      "bool HDRDisplay::IsHDROutputActive()"]
         fixture_text = PRELUDE.replace("SETTINGS_MEMBERS", function(header, "struct Settings\n") + ";")
         limits_start = header.index("static constexpr uint kPaperWhiteMin")
         fixture_text = fixture_text.replace("CALIBRATION_LIMITS", header[limits_start:header.index("struct Settings", limits_start)])

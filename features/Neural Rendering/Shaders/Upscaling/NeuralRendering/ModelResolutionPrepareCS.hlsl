@@ -191,14 +191,16 @@ void PrepareGuides(uint2 id)
 				continue;
 #endif
 			float depth = InputDepth.Load(int3(x, y, 0));
-			float2 velocity = InputMotion.Load(int3(x, y, 0));
-			if (isfinite(depth) && depth >= 0.0 && depth <= 1.0 && all(isfinite(velocity)) && (!foundDepth || DepthOrder::IsNearer(depth, nearest))) {
-				nearest = depth;
-				motion = velocity;
+			if (isfinite(depth) && depth >= 0.0 && depth <= 1.0 && (!foundDepth || DepthOrder::IsNearer(depth, nearest))) {
+				float2 velocity = InputMotion.Load(int3(x, y, 0));
+				if (all(isfinite(velocity))) {
+					nearest = depth;
+					motion = velocity;
 #ifdef NR_PERIPHERAL_COMPRESSION
-				nearestPixel = uint2(x, y);
+					nearestPixel = uint2(x, y);
 #endif
-				foundDepth = true;
+					foundDepth = true;
+				}
 			}
 		}
 	}

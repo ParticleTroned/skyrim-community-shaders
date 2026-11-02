@@ -291,7 +291,8 @@ namespace
 		ComPtr<ID3D11ComputeShader> shader;
 		ComPtr<ID3D11ShaderReflection> reflection;
 
-		Shader(ID3D11Device* device, const wchar_t* path, bool vr, const char* featureRoot = "features/Neural Rendering/Shaders", bool zeroGuidance = false, [[maybe_unused]] bool legacyOutput = false)
+		Shader(ID3D11Device* device, const wchar_t* path, bool vr, const char* featureRoot = "features/Neural Rendering/Shaders", bool zeroGuidance = false, [[maybe_unused]] bool legacyOutput = false,
+			std::span<const D3D_SHADER_MACRO> extraDefines = {})
 		{
 			PackageIncludes includes("package/Shaders", featureRoot);
 			std::vector<D3D_SHADER_MACRO> defines;
@@ -306,6 +307,7 @@ namespace
 				defines.push_back({ "GUIDED_NR_RECONSTRUCTION", "1" });
 			if (zeroGuidance)
 				defines.push_back({ "GUIDED_NR_GUIDANCE_STRENGTH", "0" });
+			defines.insert(defines.end(), extraDefines.begin(), extraDefines.end());
 			defines.push_back({ nullptr, nullptr });
 			ComPtr<ID3DBlob> code, errors;
 			const auto result = D3DCompileFromFile(path, defines.data(), &includes,
@@ -401,6 +403,109 @@ namespace
 				Near(motions[index][0], (2 * x + 1) * 0.01f * motionScale[0], "Depth and horizontal motion came from different surfaces");
 				Near(motions[index][1], (2 * y + 1) * 0.02f * motionScale[1], "Depth and vertical motion came from different surfaces");
 				Near(masks[index], maskEnabled ? 0.75f : -11.0f, "Protection mask was diluted or an absent mask was enabled");
+			}
+		}
+	}
+
+	void CheckGuideDonors(ID3D11Device* device, ID3D11DeviceContext* context, Shader& shader, bool reversed)
+	{
+		constexpr Size source{ 27, 15 }, model{ 9, 5 };
+		const float nan = std::numeric_limits<float>::quiet_NaN(), infinity = std::numeric_limits<float>::infinity();
+		for (unsigned eye = 0; eye < 2; ++eye) {
+			std::vector<Pixel> colors(source[0] * source[1], Pixel{ 0.25f + eye, 0.5f, 0.75f, 0.375f });
+			std::vector<float> depths(colors.size(), 1.0f), masks(colors.size(), 0.75f);
+			std::vector<Motion> motions(colors.size());
+			for (UINT y = 0; y < source[1]; ++y) {
+				for (UINT x = 0; x < source[0]; ++x) {
+					const auto index = y * source[0] + x, donor = (y % 3) * 3 + x % 3;
+					auto& depth = depths[index];
+					auto& motion = motions[index];
+					motion = { float(eye + 1) * (donor + 1) * 0.01f, -float(y + 1) * 0.01f };
+					switch (x / 3) {
+					case 0:
+						depth = donor == 0 ? 0.1f : 0.6f;
+						if (donor == 0)
+							motion[0] = nan;
+						break;
+					case 1:
+						depth = 0.2f;
+						if (donor == 0)
+							motion[0] = nan;
+						break;
+					case 2:
+						depth = 0.2f;
+						break;
+					case 3:
+						depth = donor == 0 ? nan : donor == 1 ? infinity :
+						                       donor == 2     ? -0.1f :
+						                       donor == 3     ? 1.1f :
+						                                        0.4f;
+						break;
+					case 4:
+						depth = nan;
+						break;
+					case 5:
+						depth = 1.0f;
+						break;
+					case 6:
+						depth = donor == 0 ? 0.1f : 0.5f;
+						if (donor == 0)
+							motion[1] = infinity;
+						break;
+					case 7:
+						depth = donor == 0 ? 0.5f : 0.1f;
+						break;
+					case 8:
+						depth = donor == 8 ? 0.7f : 0.3f;
+						if (donor != 8)
+							motion[0] = nan;
+						break;
+					}
+					if (reversed)
+						depth = 1.0f - depth;
+				}
+			}
+			Texture color(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, colors);
+			Texture depth(device, source, DXGI_FORMAT_R32_FLOAT, depths);
+			Texture motion(device, source, DXGI_FORMAT_R32G32_FLOAT, motions);
+			Texture mask(device, source, DXGI_FORMAT_R32_FLOAT, masks);
+			Texture proxy(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(model[0] * model[1], sentinel));
+			Texture proxyDepth(device, model, DXGI_FORMAT_R32_FLOAT, std::vector(model[0] * model[1], -11.0f));
+			Texture proxyMotion(device, model, DXGI_FORMAT_R32G32_FLOAT, std::vector(model[0] * model[1], Motion{ -11, -11 }));
+			Texture proxyMask(device, model, DXGI_FORMAT_R32_FLOAT, std::vector(model[0] * model[1], -11.0f));
+			ConstantBuffer constants(device, shader.reflection.Get(), "ModelResolutionConstants");
+			Configure(constants, source, model, { {}, source }, { {}, model }, eye != 0, { 1, 1 });
+			const std::array inputs{ color.srv.Get(), depth.srv.Get(), motion.srv.Get(), eye ? mask.srv.Get() : nullptr };
+			const std::array outputs{ proxy.uav.Get(), proxyDepth.uav.Get(), proxyMotion.uav.Get(), proxyMask.uav.Get() };
+			Dispatch(context, shader, constants, model, inputs, outputs);
+			const auto actualDepth = proxyDepth.Read<float>(device, context);
+			const auto actualMotion = proxyMotion.Read<Motion>(device, context);
+			const auto actualColor = proxy.Read<Pixel>(device, context);
+			const auto actualMask = proxyMask.Read<float>(device, context);
+			for (UINT y = 0; y < model[1]; ++y) {
+				for (UINT x = 0; x < model[0]; ++x) {
+					float nearest = reversed ? 0.0f : 1.0f;
+					Motion velocity{};
+					bool found = false;
+					for (UINT sy = y * 3; sy < (y + 1) * 3; ++sy) {
+						for (UINT sx = x * 3; sx < (x + 1) * 3; ++sx) {
+							const auto index = sy * source[0] + sx;
+							const float d = depths[index];
+							const auto v = motions[index];
+							if (std::isfinite(d) && d >= 0 && d <= 1 && std::isfinite(v[0]) && std::isfinite(v[1]) &&
+								(!found || (reversed ? d > nearest : d < nearest))) {
+								nearest = d;
+								velocity = v;
+								found = true;
+							}
+						}
+					}
+					const auto index = y * model[0] + x;
+					Require(actualDepth[index] == nearest && actualMotion[index] == velocity,
+						"Preparation changed first-valid, strict-depth or finite-motion donor selection");
+					Require(actualColor[index] == colors.front() && actualMask[index] == (eye ? 0.75f : -11.0f),
+						"Guide selection changed colour, alpha or optional-mask preparation");
+				}
 			}
 		}
 	}
@@ -2524,6 +2629,13 @@ int main()
 		static_assert(NeuralRendering::Color::Work::AllocationExtent(wide)[1] == 384);
 		for (bool vr : { false, true }) {
 			AdapterCompiler::vr = vr;
+			for (bool reversed : { false, true }) {
+				const std::array<D3D_SHADER_MACRO, 1> depthDefines{ D3D_SHADER_MACRO{ "REVERSE_Z", "1" } };
+				Shader donorShader(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl",
+					vr, "features/Neural Rendering/Shaders", false, false,
+					reversed ? std::span<const D3D_SHADER_MACRO>(depthDefines) : std::span<const D3D_SHADER_MACRO>{});
+				CheckGuideDonors(device.Get(), context.Get(), donorShader, reversed);
+			}
 			for (bool guided : { false, true }) {
 				AdapterCompiler::guided = guided;
 				CheckPeripheralStereoRounding(device.Get(), context.Get());

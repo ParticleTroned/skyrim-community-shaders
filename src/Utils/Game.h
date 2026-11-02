@@ -8,6 +8,7 @@
 namespace RE
 {
 	class BSParticleShaderRainEmitter;
+	class TESLandTexture;
 }
 
 namespace Util
@@ -46,6 +47,10 @@ namespace Util
 	void CompleteCelestialTransition();
 	/** @brief Returns the latest completed celestial-transition generation. */
 	[[nodiscard]] std::uint32_t GetCompletedCelestialTransitionGeneration();
+	/** Detects abrupt light-direction changes, ignoring invalid or degenerate vectors. */
+	[[nodiscard]] bool HasDirectionalLightDiscontinuity(const RE::NiPoint3& a_currentDirection, const RE::NiPoint3& a_previousDirection) noexcept;
+	/** Returns the native fallback landscape texture after game data is available. */
+	[[nodiscard]] RE::TESLandTexture* GetDefaultLandTexture();
 
 	float4 TryGetWaterData(float offsetX, float offsetY);
 	float4 GetCameraData();

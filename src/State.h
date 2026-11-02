@@ -369,7 +369,8 @@ public:
 		THLand4HasDisplacement = 1 << 4,
 		THLand5HasDisplacement = 1 << 5,
 		ETMaterialModel = 0b111 << 6,
-		THLandHasDisplacement = 1 << 9
+		THLandHasDisplacement = 1 << 9,
+		TVMeshVariation = 1 << 10
 	};
 
 	bool inWorld = false;
@@ -411,7 +412,6 @@ public:
 	void UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass);
 	void UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass);
 	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);
-	bool HasDirectionalShadows() const;
 
 	struct PermutationCB
 	{
@@ -484,6 +484,7 @@ public:
 	std::atomic_uint32_t frameCountAtomic{ 0 };
 
 	// Skyrim constants
+	float2 screenSize = {};
 	D3D_FEATURE_LEVEL featureLevel;
 
 	TracyD3D11Ctx tracyCtx = nullptr;  // Tracy context

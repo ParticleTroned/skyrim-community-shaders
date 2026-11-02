@@ -19,8 +19,8 @@ preamble = r'''
 #include <cassert>
 #include <unordered_set>
 using json = nlohmann::json;
-static bool hdr = false;
-bool IsFlatHdrScreenshotCapture() { return hdr; }
+static bool hdrEnabled = false;
+bool IsFlatHdrScreenshotCapture() { return hdrEnabled; }
 struct Crop { float x=0,y=0,w=1,h=1; };
 struct Subrect { Crop GetUV() const { return {}; } };
 struct ScreenshotFeature {
@@ -63,7 +63,7 @@ int main() {
  auto sequence=api.NormalizeCaptureDescriptor(feature,json::object(),true);
  assert(sequence["outputs"][0]["encoding"]["format"]=="bmp");
  assert(std::filesystem::path(sequence["destination"]["resolvedDirectory"].get<std::string>()).lexically_normal()==std::filesystem::path("/game/Frames"));
- hdr=true;
+ hdrEnabled=true;
  normal=api.NormalizeCaptureDescriptor(feature,json::object());
  assert(normal["outputs"][0]["encoding"]["colourContract"]=="hdr10_pq");
  assert(normal["outputs"][0]["encoding"]["bitDepth"]==11);
@@ -100,6 +100,7 @@ with tempfile.TemporaryDirectory(prefix='csx-screenshot-settings-') as temporary
     source.write_text(preamble + build + methods + tests, encoding='utf-8')
     if Path(compiler).name.lower() in ('cl', 'cl.exe'):
         command = [compiler, '/nologo', '/std:c++20', '/EHsc', '/O2', '/W4', '/WX',
+                   '/D_SILENCE_CXX20_U8PATH_DEPRECATION_WARNING',
                    '/I' + str(ROOT / 'src'), '/I' + json_include, str(source), '/Fe:' + str(binary)]
     else:
         command = [compiler, '-std=c++20', '-O2', '-Wall', '-Wextra', '-Werror',

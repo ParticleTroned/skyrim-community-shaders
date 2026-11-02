@@ -11,7 +11,7 @@ endif()
 
 message(STATUS "Configuring shader unit tests...")
 
-# Fetch ShaderTestFramework (which will fetch Catch2)
+# Keep test-framework development files out of the game install tree.
 include(FetchContent)
 
 FetchContent_Declare(
@@ -20,6 +20,7 @@ FetchContent_Declare(
     # Pinned to specific commit for build reproducibility (Dec 14, 2025)
     GIT_TAG dcbe56c46d474948c27134f570c50ff7110648f6
     GIT_CONFIG core.longpaths=true  # Enable long path support for Windows
+    EXCLUDE_FROM_ALL
 )
 
 FetchContent_MakeAvailable(ShaderTestFramework)
@@ -121,27 +122,11 @@ target_link_libraries(shader_tests PRIVATE d3dcompiler)
 # Copy all dependent assets (DLLs, shaders, etc.) - must be AFTER target_link_libraries
 copy_all_dependent_assets(shader_tests)
 
-# Add Catch2 for testing (but not Catch2WithMain - we provide our own main() due to CMake 4.0 linking issues)
-FetchContent_Declare(
-    catch2
-    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-    GIT_TAG v3.11.0
-)
-FetchContent_MakeAvailable(Catch2)
-target_link_libraries(shader_tests PRIVATE Catch2::Catch2)
-
-# Workaround: MSVC 14.50+ (VS 2026) has an Internal Compiler Error (ICE C1001)
-# in c2.dll when compiling Catch2 v3.11.0 with default optimizations.
-# Disabling optimizations for Catch2 avoids the ICE; Catch2 is a test harness
-# so the performance impact does not matter.
-if(MSVC AND MSVC_VERSION GREATER_EQUAL 1950)
-    if(TARGET Catch2)
-        target_compile_options(Catch2 PRIVATE /Od)
-    endif()
-    if(TARGET Catch2WithMain)
-        target_compile_options(Catch2WithMain PRIVATE /Od)
-    endif()
+# Share the packaged headers and library with the host tests to keep their ABI aligned.
+if(NOT TARGET Catch2::Catch2)
+    find_package(Catch2 3 CONFIG REQUIRED)
 endif()
+target_link_libraries(shader_tests PRIVATE Catch2::Catch2)
 
 # Define USE_PIX for PIX capture support
 target_compile_definitions(shader_tests PRIVATE USE_PIX)
@@ -159,7 +144,7 @@ add_test(
 
 # Set test properties for better CI output
 set_tests_properties(ShaderTests PROPERTIES
-    TIMEOUT 300  # 5 minute timeout for all shader tests
+    TIMEOUT 1200  # Include optimized FXC permutations alongside GPU unit tests.
     LABELS "Shaders;UnitTests"
 )
 

@@ -187,8 +187,7 @@ PresetCompatibility::Evaluation PresetCompatibility::Evaluate(
 	}
 
 	const Version currentWithoutRuntime{ current->major, current->minor, {} };
-	if ((currentWithoutRuntime < *minimum || currentWithoutRuntime >= *maximum) &&
-		!compatibleLegacyPreset) {
+	if (currentWithoutRuntime < *minimum || currentWithoutRuntime >= *maximum) {
 		return Reject(
 			std::move(evaluation),
 			std::format(

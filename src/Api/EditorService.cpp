@@ -251,7 +251,7 @@ namespace
 				.canOpen = CSEditor::CanOpenEditorNow(),
 				.resourcesInitialized = CSEditor::AreResourcesInitialized(),
 				.editorOpen = editor && editor->open,
-				.menuSessionOpen = menu && menu->IsMenuSessionOpen(),
+				.menuSessionOpen = menu && menu->IsEnabled,
 				.mainMenuOpen = state && state->isMainMenuOpen,
 				.loadingMenuOpen = state && state->isLoadingMenuOpen,
 				.persistentMutationBlocked = state && state->IsPersistentMutationBlocked(),

@@ -149,7 +149,7 @@ namespace Util::Widgets
 			if (!std::isfinite(static_cast<double>(*value)) || !std::isfinite(static_cast<double>(minimum)) ||
 				!std::isfinite(static_cast<double>(maximum)) || minimum > maximum) {
 				ImGui::TextDisabled("%s: unavailable", label);
-				Util::AddTooltip(T("ui.slider.this_value_is_unavailable_load_saved_settings_or_restore_defaults", "This value is unavailable. Load saved settings or restore defaults."));
+				Util::AddTooltip(::T("ui.slider.this_value_is_unavailable_load_saved_settings_or_restore_defaults", "This value is unavailable. Load saved settings or restore defaults."));
 				return false;
 			}
 
@@ -217,7 +217,7 @@ namespace Util::Widgets
 			const float numberY = numberOrigin.y + ImGui::GetFrameHeight() * .5f - (numberDigit->Y0 + numberDigit->Y1) * .5f;
 			ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(), numberFontSize, { numberOrigin.x, numberY }, ImGui::GetColorU32(color), formatted);
 			ImGui::GetWindowDrawList()->PopClipRect();
-			Util::AddTooltip(T("ui.slider.double_click_to_enter_a_value", "Double-click to enter a value."));
+			Util::AddTooltip(::T("ui.slider.double_click_to_enter_a_value", "Double-click to enter a value."));
 			const bool edit = !locked && ImGui::IsItemHovered() &&
 			                  ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
 

@@ -34,8 +34,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void SkySync::DrawSettings()
 {
-	const char* SunPathNames[] = { T("feature.sky_sync.southern_sky", "Southern Sky"), T("feature.sky_sync.northern_sky", "Northern Sky"), T("feature.sky_sync.vanilla", "Vanilla"), T("feature.sky_sync.custom", "Custom") };
-	const char* MoonLightSourceNames[] = { T("feature.sky_sync.brightest", "Brightest"), T("feature.sky_sync.masser", "Masser"), T("feature.sky_sync.secunda", "Secunda") };
+	const char* sunPathLabels[] = { T("feature.sky_sync.southern_sky", "Southern Sky"), T("feature.sky_sync.northern_sky", "Northern Sky"), T("feature.sky_sync.vanilla", "Vanilla"), T("feature.sky_sync.custom", "Custom") };
+	const char* moonLightSourceLabels[] = { T("feature.sky_sync.brightest", "Brightest"), T("feature.sky_sync.masser", "Masser"), T("feature.sky_sync.secunda", "Secunda") };
 	ImGui::SliderFloat(T("feature.sky_sync.shadow_transition_duration", "Shadow transition duration"), &settings.ShadowTransitionDuration, 0.0f, 600.0f);
 	ImGui::Checkbox(T("feature.sky_sync.dim_volumetric_lighting", "Dim volumetric lighting"), &settings.DimVolumetricLighting);
 	ImGui::SliderFloat(T("feature.sky_sync.new_moon_intensity", "New moon intensity"), &settings.NewMoonIntensity, 0.0f, 1.0f);
@@ -60,7 +60,7 @@ void SkySync::DrawSettings()
 		}
 
 		if (settings.UseAlternateSunPath) {
-			if (Util::Widgets::Combo(T("feature.sky_sync.sun_path", "Sun path"), &settings.SunPath, SunPathNames, static_cast<int>(SunPath::Count)))
+			if (Util::Widgets::Combo(T("feature.sky_sync.sun_path", "Sun path"), &settings.SunPath, sunPathLabels, static_cast<int>(SunPath::Count)))
 				SetSunAngle();
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted(T("feature.sky_sync.sun_path_tooltip", "Choose the trajectory the sun takes across the sky."));
@@ -75,7 +75,7 @@ void SkySync::DrawSettings()
 			}
 		}
 
-		Util::Widgets::Combo(T("feature.sky_sync.moon_light_source", "Moon light source"), &settings.MoonLightSource, MoonLightSourceNames, static_cast<int>(MoonLightSource::Count));
+		Util::Widgets::Combo(T("feature.sky_sync.moon_light_source", "Moon light source"), &settings.MoonLightSource, moonLightSourceLabels, static_cast<int>(MoonLightSource::Count));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(T("feature.sky_sync.moon_light_source_tooltip", "Select which moon casts shadows during the night."));
 		}

@@ -247,6 +247,7 @@ void Streamline::LoadInterposer()
 	if (triedInitialization)
 		return;
 	triedInitialization = true;
+	featureCheckComplete = false;
 
 	const std::filesystem::path pluginDirectory = std::filesystem::path(pluginDir);
 	std::error_code pluginPathError;
@@ -453,6 +454,7 @@ bool Streamline::Shutdown()
 	}
 
 	initialized = false;
+	featureCheckComplete = false;
 	boundDeviceIdentity = nullptr;
 	deviceBindingAccepted = false;
 	featureDLSS = false;
@@ -470,6 +472,7 @@ bool Streamline::Shutdown()
 
 void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 {
+	featureCheckComplete = false;
 	logger::info("[Streamline {}] Checking features", IsDLSSGInstance() ? "DX12" : "DX11");
 	auto disableFeatures = [&]() {
 		featureDLSS = false;
@@ -492,6 +495,7 @@ void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 	if (!initialized || !slIsFeatureLoaded || !slGetFeatureRequirements || !slIsFeatureSupported) {
 		logger::warn("[Streamline] Cannot check features because Streamline is not initialized.");
 		disableFeatures();
+		featureCheckComplete = true;
 		return;
 	}
 
@@ -587,6 +591,7 @@ void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 	InvalidateDLSSOptionsCache();
 	reflexOptionsCache = {};
 	ResetFrameTracking();
+	featureCheckComplete = true;
 }
 
 void Streamline::PostDevice()

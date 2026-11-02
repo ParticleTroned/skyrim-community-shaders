@@ -305,6 +305,7 @@ namespace
 		profiler.EndFrame(0);
 		for (uint32_t frame = 1; !flatResolved && std::chrono::steady_clock::now() < flatDeadline; ++frame) {
 			profiler.SetEngineFrameCount(frame);
+			profiler.BeginFrame();
 			Work();
 			profiler.BeginPresent(0, 0);
 			context->Flush();

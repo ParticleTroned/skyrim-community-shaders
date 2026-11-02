@@ -538,13 +538,12 @@ void ProfilingRenderer::RenderGraph()
 	if (maxFrameTimeSec < kMainGraphMinFrameTimeSec)
 		maxFrameTimeSec = kMainGraphMinFrameTimeSec;
 
-	const float uiScale = Util::GetUIScale();
 	const int totalWidth = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x));
 	const int legendWidth = ComputeGraphLegendWidth(totalWidth, ScaleToUiInt(100.0f), 0.42f, ScaleToUiInt(280.0f), ScaleToUiInt(420.0f));
 	const int graphWidth = std::max(1, totalWidth - legendWidth);
-	const float graphHeight = kMainGraphHeight * uiScale;
+	const int graphHeight = ScaleToUiInt(kMainGraphHeight);
 
-	gpuGraph.RenderTimings(static_cast<float>(graphWidth), static_cast<float>(legendWidth), graphHeight, 0, maxFrameTimeSec, uiScale);
+	gpuGraph.RenderTimings(graphWidth, legendWidth, graphHeight, 0, maxFrameTimeSec);
 
 	ImGui::Spacing();
 }
@@ -661,13 +660,12 @@ bool ProfilingRenderer::RenderFeatureTimingGraph(const std::string& featurePrefi
 	if (maxFrameTimeSec < kFeatureGraphMinFrameTimeSec)
 		maxFrameTimeSec = kFeatureGraphMinFrameTimeSec;
 
-	const float uiScale = Util::GetUIScale();
 	const int totalWidth = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x));
 	const int legendWidth = ComputeFeatureGraphLegendWidth(data, totalWidth);
 	const int graphWidth = std::max(1, totalWidth - legendWidth);
-	const float scaledGraphHeight = static_cast<float>(graphHeight) * uiScale;
+	const int scaledGraphHeight = ScaleToUiInt(static_cast<float>(graphHeight));
 
-	graph.RenderTimings(static_cast<float>(graphWidth), static_cast<float>(legendWidth), scaledGraphHeight, 0, maxFrameTimeSec, uiScale);
+	graph.RenderTimings(graphWidth, legendWidth, scaledGraphHeight, 0, maxFrameTimeSec);
 	return true;
 }
 

@@ -117,7 +117,7 @@ void VolumetricLighting::DrawSettings()
 
 void VolumetricLighting::DrawPerformanceSettings(bool a_advanced)
 {
-	const char* QualityNames[] = { T("feature.volumetric_lighting.low", "Low"), T("feature.volumetric_lighting.medium", "Medium"), T("feature.volumetric_lighting.high", "High"), T("feature.volumetric_lighting.custom", "Custom") };
+	const char* qualityLabels[] = { T("feature.volumetric_lighting.low", "Low"), T("feature.volumetric_lighting.medium", "Medium"), T("feature.volumetric_lighting.high", "High"), T("feature.volumetric_lighting.custom", "Custom") };
 	std::scoped_lock lock(settingsMutex);
 	SanitizeSettings();
 
@@ -125,7 +125,7 @@ void VolumetricLighting::DrawPerformanceSettings(bool a_advanced)
 
 	auto drawQuality = [&](const char* label, int32_t& quality, TextureSize& customSize, bool isInterior) {
 		quality = ClampQualityIndex(quality);
-		Util::Widgets::Combo(label, &quality, QualityNames, static_cast<int>(Quality::Count));
+		Util::Widgets::Combo(label, &quality, qualityLabels, static_cast<int>(Quality::Count));
 
 		if (!a_advanced || static_cast<Quality>(quality) != Quality::Custom) {
 			return;
@@ -162,11 +162,11 @@ json VolumetricLighting::CapturePerformanceSettingsState() const
 
 void VolumetricLighting::DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, const bool isInterior)
 {
-	const char* QualityNames[] = { T("feature.volumetric_lighting.low", "Low"), T("feature.volumetric_lighting.medium", "Medium"), T("feature.volumetric_lighting.high", "High"), T("feature.volumetric_lighting.custom", "Custom") };
+	const char* qualityLabels[] = { T("feature.volumetric_lighting.low", "Low"), T("feature.volumetric_lighting.medium", "Medium"), T("feature.volumetric_lighting.high", "High"), T("feature.volumetric_lighting.custom", "Custom") };
 	quality = ClampQualityIndex(quality);
 	auto& [Width, Height, Depth] = FetchCurrentSizeInUnits(isInterior);
 
-	Util::Widgets::Combo(isInterior ? T("feature.volumetric_lighting.interior_quality", "Interior Quality") : T("feature.volumetric_lighting.exterior_quality", "Exterior Quality"), &quality, QualityNames, static_cast<int>(Quality::Count));
+	Util::Widgets::Combo(isInterior ? T("feature.volumetric_lighting.interior_quality", "Interior Quality") : T("feature.volumetric_lighting.exterior_quality", "Exterior Quality"), &quality, qualityLabels, static_cast<int>(Quality::Count));
 
 	const bool isCustomQuality = static_cast<Quality>(quality) == Quality::Custom;
 	if (!isCustomQuality)

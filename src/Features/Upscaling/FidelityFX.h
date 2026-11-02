@@ -1,6 +1,7 @@
 #pragma once
-#include "FSRTemporalTuningPolicy.h"
 #include "FSRSharedGuidePolicy.h"
+#include "FSRTemporalTuningPolicy.h"
+#include "FidelityFXRuntime.h"
 #include <mutex>
 
 #include <atomic>
@@ -22,6 +23,7 @@
 
 #include <FidelityFX/api/include/dx12/ffx_api_dx12.hpp>
 
+#include <FidelityFX/FrameGenerationApi.h>
 #include <FidelityFX/api/include/ffx_api.hpp>
 #include <FidelityFX/api/include/ffx_api_loader.h>
 #include <FidelityFX/framegeneration/include/dx12/ffx_api_framegeneration_dx12.hpp>

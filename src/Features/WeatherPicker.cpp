@@ -356,7 +356,7 @@ void WeatherPicker::DisplayPrecipitationInfo(RE::TESWeather* weather)
 	}
 	auto particleDensity = weather->precipitationData->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity).f;
 	ImGui::BulletText(T(TKEY("particle_density"), "Particle Density: %.3f"), particleDensity);
-	GET_INSTANCE_MEMBER(particleTexture, weather->precipitationData)
+	const auto& particleTexture = weather->precipitationData->GetRuntimeData().particleTexture;
 	if (!particleTexture.textureName.empty()) {
 		ImGui::BulletText(T(TKEY("particle_texture"), "Particle Texture: %s"), particleTexture.textureName.c_str());
 	} else {

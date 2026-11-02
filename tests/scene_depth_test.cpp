@@ -97,6 +97,8 @@ public:
 	bool CopySceneDepth();
 	void EarlyPrepasses();
 	void CopyShadowLightData() {}
+	void CaptureCharacterCategories() { ++categoryCaptures; }
+	int categoryCaptures = 0;
 	void StartDeferred() { deferredPass = true; }
 	void EndDeferred() { end(); }
 	bool deferredPass = false;
@@ -261,6 +263,7 @@ void TestFallbacks()
 				f.renderer.depthStencils[1].texture = &f.copy;
 			};
 		f.Decals();
+		Check(f.deferred.categoryCaptures == 1, "Character categories must be captured before deferred decals finish");
 		Check(f.context.copies == 1, "An early copy or fallback must produce exactly one depth copy");
 		Check(f.copy.content == (mode == 0 || mode == 2 || mode == 4 ? 61 : 43), "Copy must follow terrain and native decals");
 		Check(f.deferred.IsSceneDepthFinal(), "Fallback depth must be published for water");

@@ -82,6 +82,7 @@ namespace CSX::Api
 {
 	using Replay = void (*)(ID3D11DeviceContext*, const CSXAcceptedDrawAPI::Arguments&);
 	unsigned deliveries = 0, indexedCalls = 0, instancedCalls = 0;
+	unsigned indexedTarget = 0, instancedTarget = 0;
 	bool replayNext = false;
 	CSXAcceptedDrawAPI::Arguments last{};
 	void PublishAcceptedDraw(ID3D11DeviceContext* context, const CSXAcceptedDrawAPI::Arguments& args, Replay replay)
@@ -107,12 +108,14 @@ namespace
 	void Indexed(ID3D11DeviceContext*, UINT count, UINT start, INT base)
 	{
 		++CSX::Api::indexedCalls;
+		CSX::Api::indexedTarget = Index;
 		Require(count == 12 && start == 3 && base == -4, "Indexed draw arguments changed");
 	}
 	template <unsigned Index>
 	void Instanced(ID3D11DeviceContext*, UINT count, UINT instances, UINT start, INT base, UINT first)
 	{
 		++CSX::Api::instancedCalls;
+		CSX::Api::instancedTarget = Index;
 		Require(count == 12 && instances == 2 && start == 3 && base == -4 && first == 5, "Instanced draw arguments changed");
 	}
 	template <std::size_t... Index>
@@ -169,7 +172,7 @@ namespace
 }
 
 int main()
-{
+try {
 	using CSX::Api::InstallAcceptedDrawD3DHooks;
 	for (const auto mode : { Util::VirtualHookMethod::Detour, Util::VirtualHookMethod::VTable, Util::VirtualHookMethod::Clone }) {
 		Reset(mode);
@@ -197,6 +200,9 @@ int main()
 		auto table = Table(0, index);
 		ID3D11DeviceContext context{ table.data() };
 		Require(InstallAcceptedDrawD3DHooks(&context), "Independent native methods consumed the wrong slot bank");
+		Draw(context);
+		Require(CSX::Api::indexedTarget == 0 && CSX::Api::instancedTarget == index,
+			"Observer forwarded to another native target");
 	}
 	Require(Util::calls == 9, "Shared indexed target was detoured more than once");
 	auto ninth = Table(0, 8);
@@ -221,4 +227,7 @@ int main()
 	Require(!InstallAcceptedDrawD3DHooks(nullptr) && !InstallAcceptedDrawD3DHooks(&deferred) && Util::calls == 0,
 		"Invalid/deferred contexts changed native dispatch");
 	std::cout << "PASS: shared target reuse, independent slots, replay, capacity and partial-publication failure\n";
+} catch (const std::exception& error) {
+	std::cerr << error.what() << '\n';
+	return 1;
 }

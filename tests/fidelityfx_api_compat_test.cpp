@@ -12,12 +12,15 @@
 #	pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #	pragma GCC diagnostic ignored "-Wunknown-pragmas"
 #endif
+#include "FidelityFX/FrameGenerationApi.h"
 #include "FidelityFX/api/include/ffx_api.h"
 #include "FidelityFX/api/include/ffx_api_types.h"
-#include "FidelityFX/framegeneration/include/ffx_framegeneration.h"
 #include "FidelityFX/upscalers/include/ffx_upscale.h"
 
 static_assert(sizeof(void*) == 8, "SE provider ABI is x64");
+static_assert(sizeof(FfxApiFrameGenerationConfig) == 152 && alignof(FfxApiFrameGenerationConfig) == 8);
+static_assert(offsetof(FfxApiFrameGenerationConfig, frameID) == 136);
+static_assert(offsetof(FfxApiFrameGenerationConfig, drawDebugPacingLines) == 144);
 
 static_assert(sizeof(FfxApiDimensions2D) == 8 && alignof(FfxApiDimensions2D) == 4);
 static_assert(offsetof(FfxApiDimensions2D, width) == 0);

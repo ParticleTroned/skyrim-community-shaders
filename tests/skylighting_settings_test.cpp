@@ -1,15 +1,11 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <limits>
 
-struct Skylighting
-{
-	struct Settings
-	{
-		float MaxZenith = 3.1415926f / 2.0f;
-	};
-};
+using uint = uint32_t;
 
 #include "skylighting_settings_under_test.h"
 

@@ -173,7 +173,7 @@ int main(int argc, char** argv)
 	if (selection == "all" || selection == "search") {
 		Widget widget;
 		translations["cs_editor.wind_speed"] = "Wiatr";
-		std::strcpy(widget.searchBuffer, "Wiatr");
+		std::copy_n("Wiatr", sizeof("Wiatr"), widget.searchBuffer);
 		widget.UpdateSearchForTest();
 		assert(widget.searchResults.size() == 1 && widget.searches == 1);
 		widget.NavigateToSearchResult(widget.searchResults[0]);
@@ -184,7 +184,7 @@ int main(int argc, char** argv)
 		I18n::GetSingleton()->locale = "de";
 		widget.UpdateSearchForTest();
 		assert(widget.searchResults.empty() && widget.searches == 2);
-		std::strcpy(widget.searchBuffer, "Wind Speed");
+		std::copy_n("Wind Speed", sizeof("Wind Speed"), widget.searchBuffer);
 		widget.UpdateSearchForTest();
 		assert(widget.searchResults.size() == 1);
 	}

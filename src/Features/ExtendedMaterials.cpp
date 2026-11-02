@@ -1,6 +1,7 @@
 #include "ExtendedMaterials.h"
 #include "../I18n/I18n.h"
 #include "Menu/SettingsPage.h"
+#include "Utils/Finite.h"
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "feature.extended_materials."
@@ -154,8 +155,7 @@ void ExtendedMaterials::DrawPerformanceSettings(bool)
 		ImGui::TextUnformatted(T("feature.extended_materials.controls_the_additional_soft_shadow_work_perf_479297bb", "Controls the additional soft-shadow work performed by parallax materials."));
 	}
 
-	Util::UIntCheckbox(T("feature.extended_materials.enable_parallax_warping_fix", "Enable Parallax Warping Fix"), settings.EnableParallaxWarpingFix,
-	ParallaxStrength);
+	Util::UIntCheckbox(T("feature.extended_materials.enable_parallax_warping_fix", "Enable Parallax Warping Fix"), settings.EnableParallaxWarpingFix);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(T("feature.extended_materials.controls_derivative_based_curvature_correctio_6561ac2f", "Controls derivative-based curvature correction on extended-material geometry."));
 	}

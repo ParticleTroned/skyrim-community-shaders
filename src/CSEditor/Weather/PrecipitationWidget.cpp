@@ -411,7 +411,7 @@ void PrecipitationWidget::LoadFromGameSettings()
 	settings.particleType = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleType).i;
 	settings.boxSize = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kBoxSize).i;
 	settings.particleDensity = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity).f;
-	GET_INSTANCE_MEMBER(particleTexture, precipitation)
+	auto& particleTexture = precipitation->GetRuntimeData().particleTexture;
 	settings.particleTexture = particleTexture.textureName.c_str();
 }
 
@@ -452,7 +452,7 @@ void PrecipitationWidget::ApplyChanges()
 	SetSetting(precipitation, DataID::kParticleType, settings.particleType);
 	SetSetting(precipitation, DataID::kBoxSize, settings.boxSize);
 	SetSetting(precipitation, DataID::kParticleDensity, settings.particleDensity);
-	GET_INSTANCE_MEMBER(particleTexture, precipitation)
+	auto& particleTexture = precipitation->GetRuntimeData().particleTexture;
 	const std::string resourcePath = WeatherUtils::TexturePath::BuildResourcePath(settings.particleTexture);
 	bool applyLiveTexture = false;
 	if (settings.particleTexture.empty()) {

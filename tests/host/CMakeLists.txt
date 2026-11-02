@@ -188,6 +188,7 @@ add_custom_command(
         "${CMAKE_SOURCE_DIR}/tests/extract_skylighting_settings.cmake"
     DEPENDS
         ${CMAKE_SOURCE_DIR}/src/Features/Skylighting.cpp
+        ${CMAKE_SOURCE_DIR}/src/Features/Skylighting.h
         ${CMAKE_SOURCE_DIR}/tests/extract_skylighting_settings.cmake
     VERBATIM
 )

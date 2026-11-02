@@ -468,14 +468,14 @@ namespace WeatherUtils
 				                  std::format("{} (0x{:08X})", effectiveID, currentForm->GetFormID()) :
 				                  effectiveID;
 			} else {
-				previewText = T("cs_editor.none_filter", "None");
+				previewText = ::T("cs_editor.none_filter", "None");
 			}
 
 			if (width > 0.0f)
 				ImGui::SetNextItemWidth(width);
 
 			if (auto combo = Util::Widgets::ComboBox(BuildLocalizedControlLabel(label).c_str(), previewText.c_str())) {
-				if (allowNone && ImGui::Selectable(T("cs_editor.none_filter", "None"), currentForm == nullptr) && currentForm != nullptr) {
+				if (allowNone && ImGui::Selectable(::T("cs_editor.none_filter", "None"), currentForm == nullptr) && currentForm != nullptr) {
 					WeatherUtils::PushWidgetUndo(widget);
 					currentForm = nullptr;
 					changed = true;

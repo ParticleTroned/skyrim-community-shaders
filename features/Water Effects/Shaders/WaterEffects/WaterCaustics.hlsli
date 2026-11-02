@@ -1,3 +1,6 @@
+#ifndef CSX_WATER_CAUSTICS_HLSLI
+#define CSX_WATER_CAUSTICS_HLSLI
+
 Texture2D<float4> WaterCaustics : register(t65);
 
 namespace WaterEffects
@@ -61,3 +64,5 @@ namespace WaterEffects
 		return result;
 	}
 }
+
+#endif

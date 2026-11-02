@@ -1440,8 +1440,8 @@ int main()
 	CheckAmbientComposition();
 	CheckVisualControls();
 	// Keep zero-identity guards exercised at runtime under Release optimization.
-	for (const auto& [identity, expected] : std::array<std::array<float, 2>, 6>{ { { 0.0f, 2.5f }, { -0.0f, 2.5f }, { 0.0001f, 2.5f },
-			 { -0.0001f, 2.5f }, { 1.0f, 1.0f }, { -1.0f, -1.0f } } }) {
+	for (const auto& [identity, expected] : std::array<std::array<float, 2>, 8>{ { { 0.0f, 2.5f }, { -0.0f, 2.5f }, { 0.0001f, 2.5f },
+			 { -0.0001f, 2.5f }, { 0.0002f, 5000.0f }, { -0.0002f, -5000.0f }, { 1.0f, 1.0f }, { -1.0f, -1.0f } } }) {
 		volatile float runtimeIdentity = identity;
 		assert(Close(ApplyRelativeValue(2.0f, 0.5f, runtimeIdentity), expected));
 	}

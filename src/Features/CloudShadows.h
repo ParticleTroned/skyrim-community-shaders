@@ -8,7 +8,7 @@ private:
 	bool ClearOcclusionWithoutClouds();
 
 public:
-	struct alignas(16) Settings
+	struct Settings
 	{
 		float Opacity = 0.8f;
 		uint Enabled = true;

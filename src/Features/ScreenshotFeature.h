@@ -21,7 +21,7 @@ namespace MenuUI
 struct ScreenshotFeature : public Feature
 {
 	ScreenshotFeature();
-	~ScreenshotFeature() override;
+	~ScreenshotFeature();
 	std::string GetName() override { return "Screenshot"; }
 	std::string GetDisplayName() override { return T("feature.screenshot.name", "Screenshot"); }
 	std::string GetShortName() override { return "Screenshot"; }

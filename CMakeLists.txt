@@ -306,6 +306,7 @@ target_link_libraries(
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
         windowscodecs
+        runtimeobject
         bcrypt
         wintrust
 )

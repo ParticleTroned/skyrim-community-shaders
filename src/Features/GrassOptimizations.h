@@ -17,7 +17,7 @@ struct GrassOptimizations : Feature
 	std::string GetName() override { return "Grass Optimizations"; }
 	std::string GetDisplayName() override { return T("feature.grass_optimizations.name", "Grass Optimizations"); }
 	std::string GetShortName() override { return "GrassOptimizations"; }
-	std::string_view GetCategory() const override { return FeatureCategories::kFoliage; }
+	std::string_view GetCategory() const override { return FeatureCategories::kGrass; }
 	std::string_view GetShaderDefineName() override { return "GRASS_OPTIMIZATIONS"; }
 	bool HasShaderDefine(RE::BSShader::Type type) override { return type == RE::BSShader::Type::Grass; }
 	std::string_view GetShaderCacheAbiVersion() override { return "native-cell-buckets-v8"; }

@@ -451,10 +451,10 @@ namespace
 
 	float ApplyRelativeValue(float a_base, float a_layer, float a_identity)
 	{
-		if (std::abs(a_identity) <= 0.0001f)
-			return a_base + a_layer;
-
-		return a_base * (a_layer / a_identity);
+		constexpr float minimumIdentity = 0.0001f;
+		const float magnitude = std::abs(a_identity);
+		const float divisor = std::copysign(std::max(magnitude, minimumIdentity), a_identity);
+		return magnitude <= minimumIdentity ? a_base + a_layer : a_base * (a_layer / divisor);
 	}
 
 	float ClampMultiplier(float a_value)

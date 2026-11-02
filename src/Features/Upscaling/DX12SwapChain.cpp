@@ -138,7 +138,7 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 
 	auto& fidelityFX = globals::features::upscaling.fidelityFX;
 
-	if (ffx::CreateContext(fidelityFX.swapChainContext, nullptr, ffxSwapChainDesc) != ffx::ReturnCode::Ok) {
+	if (FidelityFXRuntime::CreateContext(fidelityFX.swapChainContext, nullptr, ffxSwapChainDesc) != ffx::ReturnCode::Ok) {
 		logger::critical("[FidelityFX] Failed to create swap chain context!");
 		DX::ThrowIfFailed(E_FAIL);
 	}

@@ -461,9 +461,7 @@ namespace
 				versionName.empty() ? "(unnamed)" : versionName,
 				versionIds[i]);
 
-			if (versionIds[i] == a_requestedVersion ||
-				RuntimeProviderIdMatchesVersion(versionIds[i], a_requestedVersion) ||
-				RuntimeProviderNameMatchesVersion(versionName, a_requestedVersion)) {
+			if (RuntimeProviderMatchesVersion(versionIds[i], versionName, a_requestedVersion)) {
 				a_versionId = versionIds[i];
 				a_versionName = versionName;
 				return true;
@@ -669,7 +667,7 @@ namespace
 		bool dispatchOk = true;
 
 		__try {
-			dispatchOk = ffx::Dispatch(a_context, a_dispatchParameters) == ffx::ReturnCode::Ok;
+			dispatchOk = FidelityFXRuntime::Dispatch(a_context, a_dispatchParameters) == ffx::ReturnCode::Ok;
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
 			a_faulted = true;
 			dispatchOk = false;
@@ -1136,7 +1134,7 @@ void FidelityFX::SetupFrameGeneration()
 	ffx::CreateBackendDX12Desc backendDesc{};
 	backendDesc.device = swapChain.d3d12Device.get();
 
-	if (ffx::CreateContext(frameGenContext, nullptr, createFg, backendDesc) != ffx::ReturnCode::Ok)
+	if (FidelityFXRuntime::CreateContext(frameGenContext, nullptr, createFg, backendDesc) != ffx::ReturnCode::Ok)
 		logger::critical("[FidelityFX] Failed to create frame generation context!");
 }
 
@@ -1235,7 +1233,7 @@ FidelityFX::FrameGenerationPresentResult FidelityFX::Present(bool a_useFrameGene
 	configParameters.generationRect.height = swapChain.swapChainDesc.Height;
 
 	const bool frameGenerationConfigured =
-		ffx::Configure(frameGenContext, configParameters) == ffx::ReturnCode::Ok;
+		FidelityFXRuntime::Configure(frameGenContext, configParameters) == ffx::ReturnCode::Ok;
 	if (!frameGenerationConfigured)
 		logger::critical("[FidelityFX] Failed to configure frame generation!");
 
@@ -1250,7 +1248,7 @@ FidelityFX::FrameGenerationPresentResult FidelityFX::Present(bool a_useFrameGene
 	}
 
 	const bool uiCompositionConfigured =
-		ffx::Configure(swapChainContext, uiConfig) == ffx::ReturnCode::Ok;
+		FidelityFXRuntime::Configure(swapChainContext, uiConfig) == ffx::ReturnCode::Ok;
 	if (!uiCompositionConfigured)
 		logger::critical("[FidelityFX] Failed to configure UI composition!");
 
@@ -1303,7 +1301,7 @@ FidelityFX::FrameGenerationPresentResult FidelityFX::Present(bool a_useFrameGene
 		cameraConfig.cameraPosition[2] = globals::game::frameBufferCached.GetCameraPosAdjust().z;
 
 		frameGenerationPrepared =
-			ffx::Dispatch(frameGenContext, dispatchParameters, cameraConfig) ==
+			FidelityFXRuntime::Dispatch(frameGenContext, dispatchParameters, cameraConfig) ==
 			ffx::ReturnCode::Ok;
 		if (!frameGenerationPrepared)
 			logger::critical("[FidelityFX] Failed to dispatch frame generation!");
@@ -1321,13 +1319,13 @@ FidelityFX::FrameGenerationPresentResult FidelityFX::Present(bool a_useFrameGene
 		configParameters.frameGenerationCallback = nullptr;
 		configParameters.frameGenerationCallbackUserContext = nullptr;
 		const bool frameGenerationDisabled =
-			ffx::Configure(frameGenContext, configParameters) ==
+			FidelityFXRuntime::Configure(frameGenContext, configParameters) ==
 			ffx::ReturnCode::Ok;
 
 		uiConfig.uiResource = FfxApiResource({});
 		uiConfig.flags = 0;
 		const bool uiCompositionDisabled =
-			ffx::Configure(swapChainContext, uiConfig) ==
+			FidelityFXRuntime::Configure(swapChainContext, uiConfig) ==
 			ffx::ReturnCode::Ok;
 		providerMayUseSeparatedUI =
 			!frameGenerationDisabled || !uiCompositionDisabled;

@@ -56,6 +56,8 @@ public:
 	winrt::com_ptr<IUnknown> boundDeviceIdentity;
 	bool deviceBindingAccepted = false;
 	bool triedInitialization = false;
+	/** True after support is resolved or the provider is confirmed unavailable. */
+	bool featureCheckComplete = false;
 
 	bool featureDLSS = false;
 	bool featureDLSSG = false;

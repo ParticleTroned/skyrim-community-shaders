@@ -76,6 +76,7 @@ csx_add_portable_test(api_service_registry_test "${CSX_PROJECT_ROOT}/src/Api/Ser
 csx_add_portable_test(api_runtime_thread_affinity_test "${CSX_PROJECT_ROOT}/src/Api/RuntimeThreadAffinity.cpp")
 csx_add_portable_test(accepted_draw_registry_test "${CSX_PROJECT_ROOT}/src/Api/AcceptedDrawRegistry.cpp")
 csx_add_portable_test(water_appearance_migration_test)
+csx_add_portable_test(preset_compatibility_test "${CSX_PROJECT_ROOT}/src/PresetCompatibility.cpp")
 
 foreach(name IN ITEMS profiler_capture_test se_frame_timing_test)
     csx_add_portable_test(${name}
@@ -87,14 +88,17 @@ endforeach()
 
 csx_add_portable_test(profiler_timing_test)
 if(WIN32)
+    csx_add_portable_test(fidelityfx_runtime_dispatch_test)
+    target_compile_definitions(fidelityfx_runtime_dispatch_test PRIVATE _WINDOWS)
     csx_add_portable_test(device_context_state_test)
-    target_link_libraries(device_context_state_test PRIVATE d3d11 d3dcompiler)
+    target_link_libraries(device_context_state_test PRIVATE d3d11 d3dcompiler runtimeobject)
     if(NOT TARGET spdlog::spdlog)
         find_package(spdlog CONFIG REQUIRED)
     endif()
     target_sources(profiler_timing_test PRIVATE "${CSX_PROJECT_ROOT}/src/Profiler.cpp"
         "${CSX_PROJECT_ROOT}/src/SEFrameTiming.cpp" "${CSX_PROJECT_ROOT}/src/RenderTargetStats.cpp")
-    target_link_libraries(profiler_timing_test PRIVATE d3d11 spdlog::spdlog)
+    target_link_libraries(profiler_timing_test PRIVATE d3d11 spdlog::spdlog runtimeobject)
+    target_compile_definitions(profiler_timing_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 else()
     target_include_directories(profiler_timing_test BEFORE PRIVATE "${CSX_PROJECT_ROOT}/tests/profiler_stubs")
 endif()

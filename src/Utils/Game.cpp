@@ -1,6 +1,8 @@
 #include "Game.h"
 #include <RE/B/BSParticleShaderProperty.h>
 #include <RE/B/BSParticleShaderRainEmitter.h>
+#include <cfloat>
+#include <cmath>
 #include <limits>
 
 #include <atomic>
@@ -34,6 +36,30 @@ namespace
 
 namespace Util
 {
+	bool HasDirectionalLightDiscontinuity(const RE::NiPoint3& a_currentDirection, const RE::NiPoint3& a_previousDirection) noexcept
+	{
+		const auto isFinite = [](const RE::NiPoint3& direction) {
+			return std::isfinite(direction.x) && std::isfinite(direction.y) && std::isfinite(direction.z);
+		};
+		if (!isFinite(a_currentDirection) || !isFinite(a_previousDirection))
+			return false;
+		auto current = a_currentDirection;
+		auto previous = a_previousDirection;
+		const float currentLength = current.Unitize();
+		const float previousLength = previous.Unitize();
+		if (!std::isfinite(currentLength) || !std::isfinite(previousLength) || currentLength <= FLT_EPSILON || previousLength <= FLT_EPSILON)
+			return false;
+		constexpr float threshold = RE::NI_PI / 180.0f;
+		const auto difference = current - previous;
+		return difference.Dot(difference) >= threshold * threshold;
+	}
+
+	RE::TESLandTexture* GetDefaultLandTexture()
+	{
+		static const REL::Relocation<RE::TESLandTexture**> defaultTexture{ RELOCATION_ID(514783, 400936) };
+		return *defaultTexture;
+	}
+
 	void SetCelestialTransitionHandlerAvailable(bool a_available)
 	{
 		celestialTransitionHandlerAvailable.store(a_available, std::memory_order_release);

@@ -524,6 +524,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 
 	float dirShadow = ShadowSampling::HasDirectionalShadows() ? shadowColor.x : 1.0;
 	float dirDetailShadow = 1.0;
+	float3 caustics = 1.0;
 
 	if (GRASS_DETAILED(dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows())) {
 #		if defined(SCREEN_SPACE_SHADOWS)
@@ -536,13 +537,13 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 #		if defined(WATER_EFFECTS)
 		if (dirShadow > 0.0) {
 			float4 waterData = SharedData::GetWaterData(input.WorldPosition.xyz);
-			dirShadow *= WaterEffects::ComputeCaustics(waterData, input.WorldPosition.xyz);
+			caustics = WaterEffects::ComputeCaustics(waterData, input.WorldPosition.xyz);
 		}
 #		endif
 	}
 
 	float llDirLightMult = (Color::UseLinearLightingColorAdjustments() && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-	float3 directionalLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * dirDetailShadow * llDirLightMult;
+	float3 directionalLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * dirDetailShadow * llDirLightMult * caustics;
 	float3 diffuseColor = directionalLightColor;
 
 	float3 normal = -normalize(cross(ddx_coarse(input.WorldPosition.xyz), ddy_coarse(input.WorldPosition.xyz)));

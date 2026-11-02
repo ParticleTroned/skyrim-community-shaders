@@ -20,6 +20,7 @@
 #include <wrl/client.h>
 
 #include "Feature.h"
+#include "FeatureCategories.h"
 #include "FeatureConstraints.h"
 #include "FeatureIssues.h"
 #include "Features/CSEditor.h"
@@ -32,10 +33,10 @@
 #include "Menu/ThemeManager.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
-#include "WeatherManager.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/UI.h"
+#include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
 
 namespace
@@ -552,10 +553,9 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		});
 	}
 
-	// Define category order
-	std::vector<std::string> categoryOrder = { "Display", "Utility", "Characters", "Grass", "Lighting", "Materials", "Post-Processing", "Sky", "Landscape & Textures", "Water", "Other" };
 	// Add categorized features to menu with collapsible headers
-	for (const std::string& category : categoryOrder) {
+	for (const auto categoryView : FeatureCategories::kMenuOrder) {
+		const std::string category{ categoryView };
 		if (categorizedFeatures.find(category) != categorizedFeatures.end() && !categorizedFeatures[category].empty()) {
 			// Initialize expansion state if not exists
 			if (categoryExpansionStates.find(category) == categoryExpansionStates.end()) {
@@ -574,7 +574,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 
 	// Add any categories not in the predefined order
 	for (const auto& [category, features] : categorizedFeatures) {
-		if (std::find(categoryOrder.begin(), categoryOrder.end(), category) == categoryOrder.end() && !features.empty()) {
+		if (std::ranges::find(FeatureCategories::kMenuOrder, std::string_view{ category }) == FeatureCategories::kMenuOrder.end() && !features.empty()) {
 			// Initialize expansion state if not exists
 			if (categoryExpansionStates.find(category) == categoryExpansionStates.end()) {
 				categoryExpansionStates[category] = true;  // Default to expanded

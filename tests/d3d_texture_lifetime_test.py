@@ -179,7 +179,7 @@ void TestCommands() {
         const auto result=Handle(request);
         assert(!result.at("ok").get<bool>());
         assert(result.at("error").at("code")=="invalid_request");
-        assert(result.at("error").at("field")==field);
+        assert(result.at("error").at("field").get<std::string>()==field);
         assert(!result.at("error").at("retryable").get<bool>());
     };
     invalid({{"action","unknown"}},"action");

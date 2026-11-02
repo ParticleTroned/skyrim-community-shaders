@@ -72,6 +72,9 @@ namespace RE
 		};
 		BaseData* currentBaseData = nullptr;
 		BaseData* underwaterBaseData = nullptr;
+		auto& GetImageSpaceData() { return data; }
+		BaseData* GetCurrentBaseData() const { return currentBaseData; }
+		ImageSpaceManager& GetRuntimeData() { return *this; }
 		static inline ImageSpaceManager* instance = nullptr;
 		static ImageSpaceManager* GetSingleton() { return instance; }
 	};
@@ -85,7 +88,6 @@ namespace RE
 		}
 	};
 }
-#define GET_INSTANCE_MEMBER(a_member, a_source) auto& a_member = a_source->a_member
 const void* GetCurrentPlayerCell(RE::PlayerCharacter* a_player) { return a_player->hasCell ? a_player : nullptr; }
 
 struct AdaptiveBrightness

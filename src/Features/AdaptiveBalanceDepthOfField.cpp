@@ -247,7 +247,7 @@ namespace
 		if (!imageSpaceManager)
 			return std::nullopt;
 
-		GET_INSTANCE_MEMBER(data, imageSpaceManager);
+		auto& data = imageSpaceManager->GetImageSpaceData();
 		DofSettings result = DecodeDofPackedValue(
 			data.modData.data[RE::ImageSpaceModData::kDOFStrength],
 			data.modData.data[RE::ImageSpaceModData::kDOFDistance],
@@ -263,7 +263,7 @@ namespace
 		if (!imageSpaceManager)
 			return std::nullopt;
 
-		GET_INSTANCE_MEMBER(underwaterBaseData, imageSpaceManager);
+		auto* underwaterBaseData = imageSpaceManager->GetRuntimeData().underwaterBaseData;
 		if (!underwaterBaseData)
 			return std::nullopt;
 
@@ -544,8 +544,8 @@ namespace
 
 	bool IsCurrentUnderwaterImageSpace(RE::ImageSpaceManager* a_imageSpaceManager)
 	{
-		GET_INSTANCE_MEMBER(currentBaseData, a_imageSpaceManager);
-		GET_INSTANCE_MEMBER(underwaterBaseData, a_imageSpaceManager);
+		auto* currentBaseData = a_imageSpaceManager->GetCurrentBaseData();
+		auto* underwaterBaseData = a_imageSpaceManager->GetRuntimeData().underwaterBaseData;
 		return underwaterBaseData && currentBaseData == underwaterBaseData;
 	}
 
@@ -573,7 +573,7 @@ namespace
 			}
 
 			if (settings.sceneDof.locked) {
-				GET_INSTANCE_MEMBER(data, imageSpaceManager);
+				auto& data = imageSpaceManager->GetImageSpaceData();
 				sceneModData = &data.modData;
 				sceneBackup = {
 					sceneModData->data[RE::ImageSpaceModData::kDOFStrength],
@@ -585,7 +585,7 @@ namespace
 			}
 
 			if (settings.underwaterDof.locked) {
-				GET_INSTANCE_MEMBER(underwaterBaseData, imageSpaceManager);
+				auto* underwaterBaseData = imageSpaceManager->GetRuntimeData().underwaterBaseData;
 				if (underwaterBaseData) {
 					underwaterDepthOfField = &underwaterBaseData->depthOfField;
 					underwaterBackup = *underwaterDepthOfField;

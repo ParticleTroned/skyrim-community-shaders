@@ -2596,7 +2596,7 @@
     "feature.texture_streaming.texture_detail": "Texture detail",
     "feature.texture_streaming.texture_streaming_is_unavailable_because_texture_source_tracking_could": "Texture streaming is unavailable because texture source tracking could not start. Restart the game to try again.",
     "feature.texture_streaming.turns_texture_streaming_on_or_off_while_keeping_your": "Turns texture streaming on or off while keeping your current tuning.",
-    "feature.texture_streaming.unlimited_01k_02k_04k_08k_0": "Unlimited\\01K\\02K\\04K\\08K\\0",
+    "feature.texture_streaming.unlimited": "Unlimited",
     "feature.texture_streaming.viewport_and_mip_bias_aware_detail": "Viewport and mip-bias aware detail",
     "feature.texture_streaming.waiting_for_old_texture_gpu_retirement": "Waiting for old texture GPU retirement",
     "feature.texture_streaming.waiting_for_transition": "Waiting for render-scale or NR transition",

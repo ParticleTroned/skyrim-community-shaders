@@ -1744,8 +1744,8 @@ void TextureStreaming::CaptureWorldDemand(float mipBias)
 		const auto position = Util::GetEyePosition();
 		demand.positions[i] = { position.x, position.y, position.z };
 		demand.forward[i] = { camera.viewForward.x, camera.viewForward.y, camera.viewForward.z };
-		demand.eyes[i] = { plan.engineRenderSize.x / demand.eyeCount, plan.engineRenderSize.y,
-			plan.finalOutputSize.x / demand.eyeCount, plan.finalOutputSize.y,
+		demand.eyes[i] = { static_cast<double>(plan.engineRenderSize.x / demand.eyeCount), static_cast<double>(plan.engineRenderSize.y),
+			static_cast<double>(plan.finalOutputSize.x / demand.eyeCount), static_cast<double>(plan.finalOutputSize.y),
 			std::abs(camera.projMatrixUnjittered._11), std::abs(camera.projMatrixUnjittered._22), 0 };
 	}
 }
@@ -1985,9 +1985,10 @@ void TextureStreaming::DrawSettings()
 		Util::Widgets::Checkbox(T("feature.texture_streaming.remember_sizes", "Remember sizes"), &options.rememberedSizes);
 		Util::AddTooltip(T("feature.texture_streaming.reuse_validated_texture_sizes_across_loads_and_sessions_when", "Reuse validated texture sizes across loads and sessions when streaming is active. New or changed sources load normally first."));
 		constexpr std::array sizes{ 0u, 1024u, 2048u, 4096u, 8192u };
+		const std::array sizeLabels{ T("feature.texture_streaming.unlimited", "Unlimited"), "1K", "2K", "4K", "8K" };
 		int selectedSize = static_cast<int>(std::find(sizes.begin(), sizes.end(), options.maximumSize) - sizes.begin());
 		if (Util::Widgets::Combo(T("feature.texture_streaming.maximum_size", "Maximum size"), &selectedSize,
-				T("feature.texture_streaming.unlimited_01k_02k_04k_08k_0", "Unlimited\01K\02K\04K\08K\0")))
+				sizeLabels.data(), static_cast<int>(sizeLabels.size())))
 			options.maximumSize = sizes[selectedSize];
 		Util::AddTooltip(T("feature.texture_streaming.caps_eligible_textures_even_nearby_and_with_enough_vram", "Caps eligible textures even nearby and with enough VRAM. Reduces fine detail. Protected textures stay full size; Unlimited preserves source detail."));
 		Util::Widgets::SliderInt(T("feature.texture_streaming.maximum_mip_levels_removed", "Maximum mip levels removed"), &maximum, 1, Policy::MaximumDrop, "%d", ImGuiSliderFlags_AlwaysClamp);

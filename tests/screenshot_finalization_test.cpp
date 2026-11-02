@@ -297,7 +297,7 @@ namespace BuildProvenance
 	// Inert environmental metadata; no issued artifact or worker success is inferred.
 	nlohmann::json GetProducer()
 	{
-		nlohmann::json producer;
+		nlohmann::json producer = nlohmann::json::object();
 		const Util::JsonCleanupGuard cleanup(producer);
 		producer["fixture"] = "finalization-input";
 		return nlohmann::json(std::move(producer));

@@ -3,6 +3,7 @@
 #include "DevelopmentDiagnostics.h"
 #include "DirectProvider.h"
 #include "Globals.h"
+#include "NeuralRenderingReference.generated.h"
 #include "NgxFeaturePath.h"
 #include "Util.h"
 #include "Utils/CryptoHash.h"
@@ -310,6 +311,7 @@ namespace NeuralRendering
 			return false;
 		}
 		std::string pathError;
+		identity_.releaseMatch = ClassifyProviderRelease(hash_, kProviderReference.sha256);
 		if (!ResolveNgxFeatureDirectory(verifiedFile.Get(), backend_->featureDirectory, pathError)) {
 			SetFailureLocked(RuntimeStatus::LoadFailed, RuntimeFailureStage::Discovery, std::move(pathError));
 			return false;
@@ -329,7 +331,8 @@ namespace NeuralRendering
 		status_ = RuntimeStatus::Ready;
 		failureStage_ = RuntimeFailureStage::None;
 		ngxResult_ = 0;
-		detail_ = std::format("NR runtime metadata accepted hash={} version={}; publisher and origin unverified", hash_, version_);
+		detail_ = std::format("NR runtime metadata accepted hash={} version={}; release={} reference={} source={}; signature not checked; installation origin unverified",
+			hash_, version_, ToString(identity_.releaseMatch), kProviderReference.package, kProviderReference.source);
 		LogOnceLocked(probeLogEmitted_, "probe", true);
 		return true;
 	}
@@ -386,6 +389,7 @@ namespace NeuralRendering
 			const auto providerHash = hash_;
 			const auto providerVersion = version_;
 			const auto providerTrust = trust_;
+			const auto providerIdentity = identity_;
 			const auto driverRequirements = driverRequirements_;
 			const auto initializationRoute = initializationRoute_;
 			const auto discoveryDetail = discoveryDetail_;
@@ -394,6 +398,7 @@ namespace NeuralRendering
 				hash_ = providerHash;
 				version_ = providerVersion;
 				trust_ = providerTrust;
+				identity_ = providerIdentity;
 				driverRequirements_ = driverRequirements;
 				initializationRoute_ = initializationRoute;
 				discoveryDetail_ = discoveryDetail;
@@ -409,6 +414,9 @@ namespace NeuralRendering
 		const auto providerResult = backend_->provider.Initialize(
 			std::filesystem::path(backend_->featureDirectory) / kRuntimeName, backend_->providerFile.Get(),
 			a_device, writablePath, providerDetail);
+		identity_.initialization = backend_->provider.InitializationAttempted() ?
+		                               (NVSDK_NGX_FAILED(providerResult) ? ProviderInitialization::Failed : ProviderInitialization::Succeeded) :
+		                               ProviderInitialization::NotAttempted;
 		if (NVSDK_NGX_FAILED(providerResult)) {
 			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
 				std::move(providerDetail), static_cast<std::uint32_t>(providerResult));
@@ -464,7 +472,8 @@ namespace NeuralRendering
 			rollback();
 			return false;
 		}
-		detail_ = "legacy NR provider initialized; provider and driver-core parameter APIs retain their own ownership; publisher and origin unverified";
+		detail_ = std::format("legacy NR provider initialized; parameter allocator ownership retained; release={}; signature not checked; installation origin unverified",
+			ToString(identity_.releaseMatch));
 		status_ = RuntimeStatus::Initialized;
 		failureStage_ = RuntimeFailureStage::None;
 		ngxResult_ = static_cast<std::uint32_t>(allocationResult);
@@ -1040,6 +1049,7 @@ namespace NeuralRendering
 		firstEvaluationResetMask_.store(0, std::memory_order_relaxed);
 		status_ = RuntimeStatus::NotProbed;
 		trust_ = RuntimeTrust::Unknown;
+		identity_ = {};
 		failureStage_ = RuntimeFailureStage::None;
 		ngxResult_ = 0;
 		successfulFrames_ = 0;
@@ -1106,6 +1116,19 @@ namespace NeuralRendering
 		std::scoped_lock lock(mutex_);
 		return failureStage_;
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	ProviderIdentity Runtime::Identity() const
+	{
+		std::scoped_lock lock(mutex_);
+		return identity_;
+	}
+
+	const ProviderReference& Runtime::Reference()
+	{
+		return kProviderReference;
+	}
+#endif
 
 	std::filesystem::path Runtime::Path() const
 	{

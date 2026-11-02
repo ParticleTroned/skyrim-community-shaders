@@ -451,6 +451,7 @@ namespace NeuralRendering
 			detail = "direct NR provider initialization prerequisites are invalid";
 			return NVSDK_NGX_Result_FAIL_InvalidParameter;
 		}
+		initializationAttempted_ = false;
 		for (const auto* name : kParameterCoreBasenames) {
 			const auto adjacent = path.parent_path() / name;
 			const auto attributes = GetFileAttributesW(adjacent.c_str());
@@ -491,6 +492,7 @@ namespace NeuralRendering
 			return NVSDK_NGX_Result_FAIL_PlatformError;
 		}
 		// The snippet's exported metadata defines its initializer ABI.
+		initializationAttempted_ = true;
 		const auto result = init(application(), dataPath.c_str(), device, static_cast<NVSDK_NGX_Version>(api()), nullptr);
 		if (NVSDK_NGX_FAILED(result)) {
 			detail = std::format("direct NR provider Init_Ext failed 0x{:08X}", static_cast<unsigned>(result));

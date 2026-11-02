@@ -37,3 +37,7 @@ file(READ "${PROJECT_ROOT}/extern/Streamline-DX12/external/ngx-sdk/include/nvsdk
 string(REGEX MATCHALL "#define[ \t]+NVSDK_NGX_Parameter_[^\r\n]+" sdk_parameters "${nr_sdk}\n${ngx_sdk}")
 list(JOIN sdk_parameters "\n" sdk_parameter_header)
 file(WRITE "${OUTPUT_DIRECTORY}/neural_sdk_parameters_under_test.h" "#pragma once\n${sdk_parameter_header}\n")
+
+file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/Renderer.cpp" renderer)
+extract_between("${renderer}" "RendererSnapshot Renderer::GetSnapshot() const"
+    "std::uint32_t Renderer::ModelResolutionCeiling()" "neural_provider_snapshot_under_test.h")

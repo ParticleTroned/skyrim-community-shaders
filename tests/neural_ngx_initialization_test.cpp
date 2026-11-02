@@ -1,5 +1,6 @@
 #include "Features/Upscaling/NeuralRendering/DriverSupport.h"
 #include "Features/Upscaling/NeuralRendering/NgxCapabilityInfo.h"
+#include "Features/Upscaling/NeuralRendering/ProviderIdentity.h"
 #include "neural_sdk_parameters_under_test.h"
 
 #include <algorithm>
@@ -34,7 +35,7 @@ namespace NeuralRendering
 		NVSDK_NGX_Result destroy = kSuccess, shutdown = kSuccess;
 		NVSDK_NGX_Result driverQuery = kSuccess, majorQuery = kSuccess, minorQuery = kSuccess;
 		int needsUpdate = 0;
-		bool partialAllocation = false, partialCapability = false, nullAllocation = false, unload = true;
+		bool partialAllocation = false, partialCapability = false, nullAllocation = false, unload = true, bind = true;
 	} behavior;
 	struct ID3D12Device
 	{
@@ -69,10 +70,17 @@ namespace NeuralRendering
 	struct DirectProvider
 	{
 		bool active = false;
+		bool initializationAttempted = false;
+		bool InitializationAttempted() const { return initializationAttempted; }
 		unsigned allocations = 0, liveMaps = 0;
 		NVSDK_NGX_Result Initialize(const std::filesystem::path& path, int, ID3D12Device*,
 			const std::filesystem::path&, std::string& detail)
 		{
+			if (!behavior.bind) {
+				detail = "required provider export missing";
+				return kFailure;
+			}
+			initializationAttempted = true;
 			calls.emplace_back("direct_init");
 			if (path.parent_path().filename() != L"PhysicalMod" || path.filename() != kRuntimeName)
 				throw std::runtime_error("Legacy route did not use the locked physical provider");
@@ -163,6 +171,7 @@ namespace NeuralRendering
 		RuntimeStatus status_ = RuntimeStatus::NotProbed;
 		RuntimeFailureStage failureStage_ = RuntimeFailureStage::None;
 		RuntimeTrust trust_ = RuntimeTrust::Unknown;
+		ProviderIdentity identity_;
 		std::filesystem::path path_;
 		std::string hash_, version_, detail_;
 		std::string initializationRoute_ = "NGX_D3D12_DIRECT_PROVIDER", discoveryDetail_;
@@ -184,6 +193,7 @@ namespace NeuralRendering
 			hash_ = "user-provider";
 			version_ = "310.9.16";
 			trust_ = RuntimeTrust::VersionAccepted;
+			identity_ = { ProviderReleaseMatch::NoMatch, ProviderInitialization::NotAttempted };
 			status_ = RuntimeStatus::Ready;
 			return true;
 		}
@@ -233,15 +243,26 @@ namespace
 			Runtime runtime;
 			const bool supported = release >= kMinimumNvidiaDriverRelease;
 			Require(runtime.Initialize(&device, data) == supported, "Driver baseline changed");
-			if (!supported)
+			if (!supported) {
 				Require(calls.empty() && runtime.ngxResult_ == NVSDK_NGX_Result_FAIL_OutOfDate && device.references == 0,
 					"Outdated driver reached the provider");
-			else
+				Require(runtime.identity_.initialization == ProviderInitialization::NotAttempted,
+					"Driver preflight rejection was misreported as a provider attempt");
+			} else
 				Require(runtime.ShutdownLocked(), "Supported driver failed retirement");
 		}
 		Reset();
+		Runtime unbound;
+		behavior.bind = false;
+		Require(!unbound.Initialize(&device, data) && device.references == 0 && !unbound.backend_, "Unbound provider retained ownership");
+		Require(unbound.identity_.initialization == ProviderInitialization::NotAttempted &&
+					std::find(calls.begin(), calls.end(), "direct_init") == calls.end(),
+			"Pre-initialization binding rejection invented a native initialization attempt");
+		Reset();
 		Runtime healthy;
 		Require(healthy.Initialize(&device, data), "Legacy initialization failed");
+		Require(healthy.identity_.releaseMatch == ProviderReleaseMatch::NoMatch && healthy.identity_.initialization == ProviderInitialization::Succeeded,
+			"Successful native initialization must not establish reference provenance");
 		Require(calls == std::vector<std::string>{ "direct_init", "allocate_caps", "populate_caps", "allocate_params" },
 			"Legacy initialization gained SDK discovery or changed ownership order");
 		Require(healthy.initializationRoute_ == "NGX_D3D12_DIRECT_PROVIDER" && healthy.discoveryDetail_.find("not attempted") != std::string::npos,
@@ -250,6 +271,8 @@ namespace
 		healthy.evaluationSuccessDetail_ = 1;
 		Require(healthy.ShutdownLocked() && device.references == 0 && !healthy.backend_ && !healthy.evaluationSuccessDetail_,
 			"Healthy provider retained ownership");
+		Require(healthy.identity_.releaseMatch == ProviderReleaseMatch::Unknown && healthy.identity_.initialization == ProviderInitialization::NotAttempted,
+			"Shutdown retained stale identity or native initialization evidence");
 		Require(calls == std::vector<std::string>{ "direct_init", "allocate_caps", "populate_caps", "allocate_params",
 							 "retire_features", "destroy_params", "destroy_caps", "direct_shutdown", "unload" },
 			"Parameters, native device or modules retired in the wrong order");
@@ -276,6 +299,11 @@ namespace
 			Require(!runtime.Initialize(&device, data), "Failed legacy admission was accepted");
 			Require(device.references == 0 && !runtime.backend_ && !runtime.parameters_, "Rollback leaked provider ownership");
 			Require(runtime.hash_ == "user-provider" && runtime.version_ == "310.9.16", "Rollback lost provider identity");
+			Require(runtime.identity_.releaseMatch == ProviderReleaseMatch::NoMatch &&
+						runtime.identity_.initialization == (failure == 0 ? ProviderInitialization::Failed : ProviderInitialization::Succeeded),
+				"Rollback lost independent identity evidence or invented a successful native call");
+			Require(std::string_view(ToString(runtime.identity_.initialization)) == (failure == 0 ? "legacy_initialization_failed" : "legacy_initialized"),
+				"Provider failure must not be reported as untested");
 			Require(runtime.ngxResult_ == (failure == 4 ? NVSDK_NGX_Result_FAIL_InvalidParameter : kFailure), "Rollback lost the primary result");
 			if (failure == 3)
 				Require(std::find(calls.begin(), calls.end(), "destroy_params") != calls.end(), "Partial allocation was leaked");
@@ -321,6 +349,7 @@ namespace
 			if (failure == 2)
 				behavior.unload = false;
 			Require(!runtime.ShutdownLocked() && device.references == 1 && runtime.backend_, "Failed teardown released owned state");
+			Require(runtime.identity_.initialization == ProviderInitialization::Succeeded, "Failed teardown discarded historical initialization evidence");
 			behavior.destroy = behavior.shutdown = kSuccess;
 			behavior.unload = true;
 			Require(runtime.ShutdownLocked() && device.references == 0, "Retained teardown could not complete");
@@ -342,6 +371,9 @@ namespace
 		Reset();
 		Runtime nullDevice;
 		Require(!nullDevice.Initialize(nullptr, data) && calls.empty(), "Null device reached provider initialization");
+		Require(nullDevice.identity_.initialization == ProviderInitialization::NotAttempted &&
+					std::string_view(ToString(nullDevice.identity_.initialization)) == "untested",
+			"Null device invented a provider attempt");
 	}
 }
 int main()

@@ -514,6 +514,7 @@ set(_neural_native_creation_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/neural-na
 set(_neural_native_headers "${_neural_native_creation_dir}/neural_native_key_under_test.h"
     "${_neural_native_creation_dir}/neural_runtime_minimum_under_test.h"
     "${_neural_native_creation_dir}/neural_runtime_probe_under_test.h"
+    "${_neural_native_creation_dir}/neural_provider_snapshot_under_test.h"
     "${_neural_native_creation_dir}/neural_native_creation_under_test.h"
     "${_neural_native_creation_dir}/neural_installed_metadata_under_test.h"
     "${_neural_native_creation_dir}/neural_runtime_tuning_under_test.h"
@@ -532,6 +533,7 @@ add_custom_command(OUTPUT ${_neural_native_headers}
         "${PROJECT_SOURCE_DIR}/tests/extract_neural_native_creation.cmake"
     DEPENDS src/Features/Upscaling/NeuralRendering/Runtime.cpp
         src/Features/Upscaling/NeuralRendering/Runtime.h
+        src/Features/Upscaling/NeuralRendering/Renderer.cpp
         "${NEURAL_RENDERING_SDK_INCLUDE_DIR}/nvsdk_ngx_defs_dlssnr.h"
         extern/Streamline-DX12/external/ngx-sdk/include/nvsdk_ngx_defs.h
         tests/extract_neural_native_creation.cmake tests/extract_source_region.cmake
@@ -541,10 +543,18 @@ target_sources(neural_native_creation_test PRIVATE ${_neural_native_headers})
 target_include_directories(neural_native_creation_test PRIVATE "${_neural_native_creation_dir}")
 add_controller_test(neural_runtime_admission_test NeuralRuntimeAdmission tests/neural_runtime_admission_test.cpp)
 target_sources(neural_runtime_admission_test PRIVATE ${_neural_native_headers})
-target_include_directories(neural_runtime_admission_test PRIVATE "${_neural_native_creation_dir}")
+target_include_directories(neural_runtime_admission_test PRIVATE
+    "${_neural_native_creation_dir}" "${NEURAL_RENDERING_REFERENCE_INCLUDE_DIR}")
 add_controller_test(neural_ngx_initialization_test NeuralNgxInitialization tests/neural_ngx_initialization_test.cpp)
 target_sources(neural_ngx_initialization_test PRIVATE ${_neural_native_headers})
 target_include_directories(neural_ngx_initialization_test PRIVATE "${_neural_native_creation_dir}")
+foreach(_bridge IN ITEMS on off)
+    add_controller_test(neural_provider_snapshot_${_bridge}_test NeuralProviderSnapshot_${_bridge}
+        tests/neural_provider_snapshot_test.cpp)
+    target_sources(neural_provider_snapshot_${_bridge}_test PRIVATE ${_neural_native_headers})
+    target_include_directories(neural_provider_snapshot_${_bridge}_test PRIVATE "${_neural_native_creation_dir}")
+endforeach()
+target_compile_definitions(neural_provider_snapshot_on_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
 add_library(neural_direct_provider_fixture SHARED tests/neural_direct_provider_fixture.cpp)
 target_compile_definitions(neural_direct_provider_fixture PRIVATE NGX_SNIPPET_BUILD NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(neural_direct_provider_fixture PRIVATE NgxSdk)

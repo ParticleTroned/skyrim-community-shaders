@@ -51,7 +51,17 @@ Compatible user-supplied NR versions 310.8 and newer retain the existing
 version admission policy, with final availability checked by the provider's
 own initializer. CSX does not impose an RTX generation check.
 Runtime SHA-256 values identify the installed file for diagnostics; they
-are not an allowlist. Existing runtime directories retain the ordinary
+are not an allowlist. The cold probe compares the locked file's digest
+with the runtime reference in `cmake/NeuralRenderingSDKPin.cmake`.
+Logs and DevBench distinguish an exact reference match, no reference match,
+and unknown identity. A mismatch does not establish that a DLL was modified;
+an exact match does not establish GPU compatibility or its installation
+source. Signature verification is reported as not checked. Native
+initialization evidence distinguishes untested, failed and successful
+legacy initialization, separately from the dispatch route. DevBench captures
+identity, driver requirements and route under renderer lifecycle ownership
+so a concurrent reset cannot mix those facts from different probes.
+Existing runtime directories retain the ordinary
 skip-mode deployment policy.
 
 ## NVIDIA license obligations

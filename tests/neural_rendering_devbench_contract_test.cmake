@@ -1196,6 +1196,13 @@ foreach(_status_contract IN ITEMS
     [[{ "developerModeRequired", false }]]
     [[{ "streamlineLogLevelAffectsAdmission", false }]]
     [[{ "admissionPolicy", "version_and_provider_initialization" }]]
+    [[{ "identityClassification", NeuralRendering::ToString(snapshot.runtimeIdentity.releaseMatch) }]]
+    [[{ "signatureStatus", "not_checked" }]]
+    [[{ "referenceSha256", NeuralRendering::Runtime::Reference().sha256 }]]
+    [[{ "nativeAbiEvidence", NeuralRendering::ToString(snapshot.runtimeIdentity.initialization) }]]
+    [[{ "driverRequirements", NeuralRendering::Evidence::DriverRequirementsJson(snapshot.runtimeDriverRequirements) }]]
+    [[{ "api", snapshot.runtimeInitializationRoute.first }]]
+    [[{ "sdkDiscoveryDetail", snapshot.runtimeInitializationRoute.second }]]
     [[{ "allowUnlistedPatchedOrUnsignedRuntime", true }]]
     [[{ "reason", "D3D11 profile components and asynchronous D3D12 Feature 18 samples are exposed separately; no uncorrelated sum is reported" }]]
     [[{ "foveation", FoveationStatusJson(a_upscaling) }]]
@@ -3595,3 +3602,27 @@ string(FIND "${_transition}" "a_origin != VRUpscalingTransitionOrigin::RecoveryR
 if(_recovery_exception EQUAL -1 OR _recovery_exception GREATER _dependency_guard)
     message(FATAL_ERROR "NR admission must preserve internal native-target recovery")
 endif()
+
+foreach(_field IN ITEMS exactReleaseMatch evidence signatureStatus installationOrigin referenceSha256 referencePackage referenceSource nativeAbiEvidence loadedFileIdentity)
+    string(JSON _identity_field_type TYPE "${_descriptor_json}"
+        outputSchema properties neuralRendering properties runtime properties providerIdentity properties ${_field})
+    if(NOT _identity_field_type STREQUAL "OBJECT")
+        message(FATAL_ERROR "NR must advertise independent provider identity evidence: ${_field}")
+    endif()
+endforeach()
+string(JSON _signature_status GET "${_descriptor_json}"
+    outputSchema properties neuralRendering properties runtime properties providerIdentity properties signatureStatus const)
+if(NOT _signature_status STREQUAL "not_checked")
+    message(FATAL_ERROR "Reference hashes must not be presented as signature verification")
+endif()
+string(JSON _initialization_failure GET "${_descriptor_json}"
+    outputSchema properties neuralRendering properties runtime properties providerIdentity properties nativeAbiEvidence enum 1)
+if(NOT _initialization_failure STREQUAL "legacy_initialization_failed")
+    message(FATAL_ERROR "NR must distinguish a failed legacy initialization from untested ABI evidence")
+endif()
+foreach(_late_runtime_query IN ITEMS "Runtime::Instance().DriverRequirements()" "Runtime::Instance().GetInitializationRoute()")
+    string(FIND "${_bridge}" "${_late_runtime_query}" _late_query_position)
+    if(NOT _late_query_position EQUAL -1)
+        message(FATAL_ERROR "NR diagnostics must use the captured provider lifecycle: ${_late_runtime_query}")
+    endif()
+endforeach()

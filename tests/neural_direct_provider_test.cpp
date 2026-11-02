@@ -71,11 +71,13 @@ int main(int argc, char** argv)
 		CloseHandle(otherFile);
 		Require(NVSDK_NGX_FAILED(mismatchResult) && detail.find("identity differs") != std::string::npos && mismatched.Unload(),
 			"A different loaded file was accepted");
+		Require(!mismatched.InitializationAttempted(), "File identity failure invented a native initialization attempt");
 		for (unsigned failure : { 1u, 2u, 3u, 4u, 5u, 6u }) {
 			setFailure(failure);
 			NeuralRendering::DirectProvider failed;
 			const auto initialized = failed.Initialize(path, file, device, path.parent_path(), detail);
 			Require(NVSDK_NGX_FAILED(initialized) == (failure == 1) && failed.Active() == (failure != 1), "Native initialization result or ownership was lost");
+			Require(failed.InitializationAttempted(), "Native initializer attempt was not retained");
 			NVSDK_NGX_Parameter* parameters = nullptr;
 			if (failure != 1) {
 				const auto allocated = failed.AllocateParameters(&parameters, detail);

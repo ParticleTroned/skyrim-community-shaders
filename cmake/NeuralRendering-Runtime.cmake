@@ -1,4 +1,7 @@
 include("${CMAKE_CURRENT_LIST_DIR}/NeuralRenderingSDKPin.cmake")
+set(NEURAL_RENDERING_REFERENCE_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/neural-provider")
+configure_file("${CMAKE_CURRENT_LIST_DIR}/NeuralRenderingReference.h.in"
+    "${NEURAL_RENDERING_REFERENCE_INCLUDE_DIR}/NeuralRenderingReference.generated.h" @ONLY)
 include("${CMAKE_CURRENT_LIST_DIR}/RuntimePayload.cmake")
 file(SHA256 "${CMAKE_SOURCE_DIR}/extern/NeuralRenderingSDK/LICENSE.txt" _nr_license_hash)
 if(NOT _nr_license_hash STREQUAL NEURAL_RENDERING_SDK_LICENSE_SHA256)
@@ -56,5 +59,5 @@ block()
 endblock()
 
 target_include_directories(${PROJECT_NAME} PRIVATE
-    "${NEURAL_RENDERING_SDK_INCLUDE_DIR}")
+    "${NEURAL_RENDERING_SDK_INCLUDE_DIR}" "${NEURAL_RENDERING_REFERENCE_INCLUDE_DIR}")
 target_link_libraries(${PROJECT_NAME} PRIVATE NgxSdk)

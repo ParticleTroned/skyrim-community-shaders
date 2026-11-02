@@ -31,6 +31,8 @@ namespace NeuralRendering
 		/** Restores the provider-local import before releasing the module reference. */
 		bool Unload();
 		[[nodiscard]] bool Active() const noexcept { return initialized_; }
+		/** Whether the native initializer was reached after the latest binding checks. */
+		[[nodiscard]] bool InitializationAttempted() const noexcept { return initializationAttempted_; }
 
 		using ScratchSize = NVSDK_NGX_Result(NVSDK_CONV*)(NVSDK_NGX_Feature, const NVSDK_NGX_Parameter*, size_t*);
 		using Create = NVSDK_NGX_Result(NVSDK_CONV*)(ID3D12GraphicsCommandList*, NVSDK_NGX_Feature, const NVSDK_NGX_Parameter*, NVSDK_NGX_Handle**);
@@ -58,5 +60,6 @@ namespace NeuralRendering
 		using Shutdown = NVSDK_NGX_Result(NVSDK_CONV*)(ID3D12Device*);
 		Shutdown shutdown_ = nullptr;
 		bool initialized_ = false;
+		bool initializationAttempted_ = false;
 	};
 }

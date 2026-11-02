@@ -1,6 +1,7 @@
 #include "Features/Upscaling/NeuralRendering/NetworkSelection.h"
 #include "Features/Upscaling/NeuralRendering/NgxFeaturePath.h"
 #include "Features/Upscaling/NeuralRendering/TuningLimits.h"
+#include "NeuralRenderingReference.generated.h"
 
 #include <array>
 #include <atomic>
@@ -119,8 +120,14 @@ namespace NeuralRendering
 		RuntimeStatus status_ = RuntimeStatus::NotFound;
 		RuntimeFailureStage failureStage_ = RuntimeFailureStage::None;
 		RuntimeTrust trust_ = RuntimeTrust::Unknown;
+		ProviderIdentity identity_;
 		unsigned ngxResult_ = 0;
-		bool ShutdownLocked() { return true; }
+		bool ShutdownLocked()
+		{
+			identity_ = {};
+			hash_.clear();
+			return true;
+		}
 		void SetFailureLocked(RuntimeStatus status, RuntimeFailureStage stage, std::string detail)
 		{
 			status_ = status;
@@ -148,16 +155,32 @@ int main()
 	require(NormalizeNgxFeaturePath(LR"(D:\Mods\nvngx_dlssnr.dll)") == LR"(D:\Mods\nvngx_dlssnr.dll)" &&
 				NormalizeNgxFeaturePath(LR"(\\?\Volume{test}\nvngx_dlssnr.dll)").empty(),
 		"Ordinary paths are retained and unsupported extended namespaces fail explicitly");
+	const std::string otherHash(64, '0');
+	std::string uppercaseReference(kProviderReference.sha256);
+	for (auto& c : uppercaseReference)
+		if (c >= 'a' && c <= 'f')
+			c -= 'a' - 'A';
+	require(ClassifyProviderRelease(uppercaseReference, kProviderReference.sha256) == ProviderReleaseMatch::PinnedReference,
+		"Digest comparison must accept uppercase hex");
+	for (const auto hash : { std::string{}, std::string(63, 'a'), std::string(65, 'a'), std::string(64, 'x') })
+		require(ClassifyProviderRelease(hash, kProviderReference.sha256) == ProviderReleaseMatch::Unknown &&
+					ClassifyProviderRelease(kProviderReference.sha256, hash) == ProviderReleaseMatch::Unknown,
+			"Missing or malformed digests cannot establish identity");
 	for (const auto version : { REL::Version{ 310, 8 }, REL::Version{ 310, 9, 16 }, REL::Version{ 311, 0 } }) {
-		for (const char* hash : { "sdk-reference", "different-user-supplied-runtime" }) {
+		for (const auto hash : { kProviderReference.sha256, std::string_view(otherHash) }) {
 			Util::installedVersion = version;
 			installedHash = hash;
 			Runtime runtime;
 			require(runtime.ProbeLocked("nvngx_dlssnr.dll"), "Compatible user runtime was rejected");
 			require(runtime.hash_ == hash && runtime.trust_ == RuntimeTrust::VersionAccepted,
-				"Runtime fingerprint must remain diagnostic, without claiming package verification");
-			require(runtime.detail_.find("metadata accepted") != std::string::npos && runtime.detail_.find("publisher and origin unverified") != std::string::npos,
-				"Metadata admission must not claim verified provider provenance");
+				"Reference identity must not change metadata admission");
+			const auto expectedMatch = hash == kProviderReference.sha256 ? ProviderReleaseMatch::PinnedReference : ProviderReleaseMatch::NoMatch;
+			require(runtime.identity_.releaseMatch == expectedMatch && runtime.identity_.initialization == ProviderInitialization::NotAttempted,
+				"Metadata admission must distinguish reference identity from native initialization");
+			require(runtime.detail_.find(ToString(expectedMatch)) != std::string::npos &&
+						runtime.detail_.find("signature not checked") != std::string::npos &&
+						runtime.detail_.find(kProviderReference.source) != std::string::npos,
+				"Probe diagnostics must identify their evidence without inventing signature verification");
 			require(runtime.backend_->featureDirectory == L"physical-provider-directory", "Admission lost the physical NGX search directory");
 			require(runtime.networkSelectionSupported_ == (version.major() == 310 && version.minor() == 9),
 				"Admission changed the version-specific preset policy");
@@ -180,4 +203,13 @@ int main()
 	hashReadable = false;
 	Runtime unreadable;
 	require(!unreadable.ProbeLocked("nvngx_dlssnr.dll") && unreadable.status_ == RuntimeStatus::HashFailed, "File read failure was concealed");
+	require(unreadable.identity_.releaseMatch == ProviderReleaseMatch::Unknown, "Failed hashing claimed a release identity");
+	hashReadable = true;
+	installedHash = kProviderReference.sha256;
+	Runtime rejectedReference;
+	require(!rejectedReference.ProbeLocked("nvngx_dlssnr.dll") &&
+				rejectedReference.identity_.releaseMatch == ProviderReleaseMatch::PinnedReference,
+		"A known digest must not override missing version metadata or lose its independent evidence");
+	require(!rejectedReference.ProbeLocked({}) && rejectedReference.identity_.releaseMatch == ProviderReleaseMatch::Unknown,
+		"A new failed probe retained stale release evidence");
 }

@@ -32,6 +32,7 @@
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <string>
+#include <utility>
 #include <wrl/client.h>
 
 namespace NeuralRendering
@@ -154,6 +155,11 @@ namespace NeuralRendering
 		std::string runtimeFailureStage = "none";
 		std::string runtimePath;
 		std::string runtimeHash;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ProviderIdentity runtimeIdentity;
+		NgxDriverRequirements runtimeDriverRequirements;
+		std::pair<std::string, std::string> runtimeInitializationRoute;
+#endif
 		std::string runtimeVersion;
 		RendererStage lastCompletedStage = RendererStage::None;
 		RendererStage failureStage = RendererStage::None;

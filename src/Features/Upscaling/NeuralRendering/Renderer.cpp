@@ -1576,11 +1576,7 @@ namespace NeuralRendering
 			auto& runtime = Runtime::Instance();
 			snapshot_.status = ToString(runtime.Status());
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			snapshot_.trust = ToString(runtime.Trust());
 			snapshot_.runtimeFailureStage = ToString(runtime.FailureStage());
-			snapshot_.runtimePath = runtime.Path().string();
-			snapshot_.runtimeHash = runtime.Hash();
-			snapshot_.runtimeVersion = runtime.Version();
 			snapshot_.ngxResult = runtime.NgxResult();
 			snapshot_.runtimeSuccessfulFrames = runtime.SuccessfulFrames();
 #endif
@@ -5377,9 +5373,18 @@ namespace NeuralRendering
 		auto result = state_->SnapshotLocked();
 		const auto& runtime = Runtime::Instance();
 		result.runtimeStatus = runtime.Status();
-		result.runtimeNeedsUpdatedDriver = runtime.DriverRequirements().needsUpdate;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		result.reconstructionOverride = state_->reconstructionExperiment_.Status();
+		result.runtimeIdentity = runtime.Identity();
+		result.trust = ToString(runtime.Trust());
+		result.runtimePath = runtime.Path().string();
+		result.runtimeHash = runtime.Hash();
+		result.runtimeVersion = runtime.Version();
+		result.runtimeDriverRequirements = runtime.DriverRequirements();
+		result.runtimeNeedsUpdatedDriver = result.runtimeDriverRequirements.needsUpdate;
+		result.runtimeInitializationRoute = runtime.GetInitializationRoute();
+#else
+		result.runtimeNeedsUpdatedDriver = runtime.DriverRequirements().needsUpdate;
 #endif
 		const auto parallel = state_->interop_.GetParallelStatus();
 		result.parallelEyesAvailable = parallel.available;

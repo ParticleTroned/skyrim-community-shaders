@@ -4,6 +4,7 @@
 #include "DriverSupport.h"
 #include "NetworkSelection.h"
 #include "NgxCapabilityInfo.h"
+#include "ProviderIdentity.h"
 #include "RegionCapacity.h"
 #include "Style.h"
 #include "TuningLimits.h"
@@ -155,6 +156,12 @@ namespace NeuralRendering
 
 		[[nodiscard]] RuntimeStatus Status() const;
 		[[nodiscard]] RuntimeTrust Trust() const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Cold-probe identity and observed initialization evidence, independent of admission. */
+		[[nodiscard]] ProviderIdentity Identity() const;
+		/** Reference digest and source from the build's single SDK pin. */
+		[[nodiscard]] static const ProviderReference& Reference();
+#endif
 		[[nodiscard]] RuntimeFailureStage FailureStage() const;
 		[[nodiscard]] std::filesystem::path Path() const;
 		[[nodiscard]] std::string Hash() const;
@@ -263,6 +270,7 @@ namespace NeuralRendering
 #endif
 		RuntimeStatus status_ = RuntimeStatus::NotProbed;
 		RuntimeTrust trust_ = RuntimeTrust::Unknown;
+		ProviderIdentity identity_;
 		RuntimeFailureStage failureStage_ = RuntimeFailureStage::None;
 		std::uint32_t ngxResult_ = 0;
 		std::uint64_t successfulFrames_ = 0;

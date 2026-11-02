@@ -655,6 +655,37 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 shader["configs"]["PSHADER"]["common_defines"],
             )
 
+    def test_profile_globals_reach_compiler_stages_without_capture_aliases(self) -> None:
+        import yaml
+        from hlslkit.compile_shaders import parse_shader_configs
+
+        for profile in (BUILDER.SHIPPED_CACHE_PROFILE, BUILDER.PATKA_CACHE_PROFILE):
+            with self.subTest(profile=profile.name), tempfile.TemporaryDirectory() as temporary:
+                original = self._sample_shader_config()
+                original["shaders"].append({"file": "Utility.hlsl", "configs": {
+                    "PSHADER": {"common_defines": [], "entries": [{"entry": "Utility:Pixel:0", "defines": []}]}}})
+                # Captures need not share YAML aliases with their top-level metadata.
+                for shader in original["shaders"]:
+                    for stage_name, stage in shader["configs"].items():
+                        stage["common_defines"] = [[stage_name, "UNIFIED_WATER=1"]]
+                        stage.setdefault("entries", [{"entry": "main:0", "defines": []}])
+                        for entry in stage["entries"]:
+                            entry["defines"].extend(["UNIFIED_WATER=0", "UNIFIED_WATER"])
+                configured = BUILDER.apply_cache_profile_defines(original, profile)
+                configured = BUILDER.apply_cache_profile_defines(configured, profile)
+                BUILDER.prepare_fxc_defines(configured)
+                path = Path(temporary) / "config.yaml"
+                path.write_text(yaml.safe_dump(configured), encoding="utf-8")
+                tasks = parse_shader_configs(str(path))
+                self.assertTrue(tasks)
+                for source, stage, entry, defines in tasks:
+                    selected = [value for value in defines if value.partition("=")[0] == "UNIFIED_WATER"]
+                    self.assertEqual(selected, [] if source == "Utility.hlsl" else ["UNIFIED_WATER="], (source, stage, entry))
+
+        nested = [["UNIFIED_WATER", ["OTHER=1"]]]
+        BUILDER.append_missing_defines(nested, ("UNIFIED_WATER", "OTHER=1", "NEW", "NEW"))
+        self.assertEqual(nested, [["UNIFIED_WATER", ["OTHER=1"]], "NEW"])
+
     def test_bundled_grass_defines_match_native_factory_without_leaking(self) -> None:
         for profile in (BUILDER.SHIPPED_CACHE_PROFILE, BUILDER.PATKA_CACHE_PROFILE):
             with self.subTest(profile=profile.name):

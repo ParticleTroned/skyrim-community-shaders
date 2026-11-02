@@ -42,6 +42,13 @@ The default `shipped` release profile:
 -   omits the VR feature metadata from an SE cache;
 -   compiles optimized release bytecode, without developer/debug defines.
 
+The builder applies profile-wide feature defines to compiler-consumed stage
+lists, including captures without shared YAML aliases. Utility retains its
+runtime exception because it does not consume the feature-macro list.
+Nested captured defines are retained without adding duplicate profile
+entries. Profile-owned macros replace captured values and source scopes;
+top-level define metadata alone does not supply compiler inputs.
+
 `SE` names the shared desktop shader cache for both Special Edition and
 Anniversary Edition. AE uses the SE permutation inventory and cache slot; VR
 uses its own inventory and `VR` compile state. Shared HLSL/include changes

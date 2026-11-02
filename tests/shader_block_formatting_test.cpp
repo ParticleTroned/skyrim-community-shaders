@@ -92,7 +92,7 @@ namespace SIE
 		Pixel,
 		Compute
 	};
-	unsigned formats{}, tracks{}, resolutions{}, compiles{};
+	unsigned formats{}, tracks{}, resolutions{}, compiles{}, queued{};
 	ShaderClass expectedStage;
 	std::uint32_t expectedDescriptor{};
 	bool descriptorValid = true;
@@ -116,6 +116,11 @@ namespace SIE
 	}
 	struct ShaderCache
 	{
+		enum class VertexShaderLookup
+		{
+			Compile,
+			Draw
+		};
 		enum class PixelShaderLookup
 		{
 			Compile,
@@ -140,12 +145,13 @@ namespace SIE
 		};
 		struct Queue
 		{
-			void Add(Task) { ++compiles; }
+			void Add(Task) { ++queued; }
 		} compilationSet;
+		bool async = true, safeMode = false;
 		static bool IsSupportedShader(const RE::BSShader& shader) { return shader.supported; }
 		static unsigned GetCharacterCategoryFlag(RE::BSShader::Type) { return 0; }
-		bool IsSaveLoadSafeModeActive() const { return false; }
-		bool ShouldUseAsyncCompilation() const { return true; }
+		bool IsSaveLoadSafeModeActive() const { return safeMode; }
+		bool ShouldUseAsyncCompilation() const { return async; }
 		void TrackActiveShader(ShaderClass stage, const RE::BSShader&, std::uint32_t descriptor)
 		{
 			Require(stage == expectedStage && descriptor == expectedDescriptor && resolutions == 1);
@@ -167,7 +173,7 @@ namespace SIE
 			return nullptr;
 		}
 		RE::BSGraphics::VertexShader* GetVertexShaderIfCached(const RE::BSShader&, std::uint32_t);
-		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader&, std::uint32_t);
+		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader&, std::uint32_t, VertexShaderLookup = VertexShaderLookup::Draw);
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader&, std::uint32_t, PixelShaderLookup);
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader&, std::uint32_t);
 	};
@@ -211,12 +217,12 @@ namespace
 		}
 		const void* Get(Stage stage, Lookup lookup)
 		{
-			SIE::formats = SIE::tracks = SIE::resolutions = SIE::compiles = logger::messages = 0;
+			SIE::formats = SIE::tracks = SIE::resolutions = SIE::compiles = SIE::queued = logger::messages = 0;
 			SIE::expectedStage = stage;
 			const auto requested = descriptor - SIE::descriptorOffset;
 			switch (stage) {
 			case Stage::Vertex:
-				return cache.GetVertexShader(shader, requested);
+				return cache.GetVertexShader(shader, requested, lookup == Lookup::Compile ? SIE::ShaderCache::VertexShaderLookup::Compile : SIE::ShaderCache::VertexShaderLookup::Draw);
 			case Stage::Pixel:
 				return cache.GetPixelShader(shader, requested, lookup);
 			case Stage::Compute:
@@ -228,7 +234,7 @@ namespace
 		{
 			state.deferredPixelShaderMissing = true;
 			Require(Get(stage, lookup) == (blocked ? nullptr : Resident(stage)));
-			Require(SIE::formats == formats && SIE::compiles == 0);
+			Require(SIE::formats == formats && SIE::compiles == 0 && SIE::queued == 0);
 			Require(SIE::tracks == unsigned(state.developer || cache.activeShaderCaptureFramesRemaining > 0));
 			Require(state.deferredPixelShaderMissing == !(stage == Stage::Pixel && lookup == Lookup::Draw));
 		}
@@ -236,11 +242,37 @@ namespace
 		{
 			state.deferredPixelShaderMissing = true;
 			Require(Get(stage, lookup) == nullptr);
-			Require(SIE::resolutions == resolutions && SIE::tracks == 0 && SIE::formats == 0 && SIE::compiles == 0);
+			Require(SIE::resolutions == resolutions && SIE::tracks == 0 && SIE::formats == 0 && SIE::compiles == 0 && SIE::queued == 0);
 			Require(cache.blockedIDs.empty() && logger::messages == 0);
 			Require(state.deferredPixelShaderMissing == !(stage == Stage::Pixel && lookup == Lookup::Draw));
 		}
 	};
+
+	void TestLookupScheduling()
+	{
+		for (bool reversed : { false, true })
+			for (bool async : { false, true })
+				for (bool safeMode : { false, true })
+					for (auto stage : { Stage::Vertex, Stage::Pixel })
+						for (auto lookup : { Lookup::Compile, Lookup::Draw }) {
+							Fixture f;
+							globals::features::reverseZ.active = reversed;
+							f.cache.async = async;
+							f.cache.safeMode = safeMode;
+							f.Check(stage, lookup, false, 0);
+							f.cache.vertexShaders[0].clear();
+							f.cache.pixelShaders[0].clear();
+							Require(!f.Get(stage, lookup));
+							const bool queue = async && (!reversed || lookup == Lookup::Compile);
+							Require(SIE::queued == unsigned(!safeMode && queue));
+							Require(SIE::compiles == unsigned(!safeMode && !queue));
+							if (stage == Stage::Pixel) {
+								Require(!f.Get(stage, Lookup::Cached));
+								Require(SIE::queued == 0 && SIE::compiles == 0);
+							}
+						}
+		globals::features::reverseZ.active = false;
+	}
 
 	void TestEligibilityBeforeBlocking(Stage stage, Lookup lookup)
 	{
@@ -346,6 +378,7 @@ int main()
 	try {
 		for (const bool vr : { false, true }) {
 			globals::game::isVR = vr;
+			TestLookupScheduling();
 			for (const auto stage : { Stage::Vertex, Stage::Pixel, Stage::Compute }) {
 				for (const auto lookup : { Lookup::Compile, Lookup::Cached, Lookup::Draw }) {
 					TestBlocking(stage, lookup);

@@ -60,6 +60,7 @@ namespace RE
 			Effect,
 			ImageSpace,
 			Utility,
+			Water,
 			Total
 		};
 		struct TypeValue
@@ -88,6 +89,12 @@ namespace REL
 namespace logger
 {
 	unsigned warnings = 0;
+	unsigned errors = 0;
+	template <class... T>
+	void error(const char*, T&&...)
+	{
+		++errors;
+	}
 	template <class... T>
 	void debug(const char*, T&&...)
 	{}
@@ -177,6 +184,11 @@ namespace globals
 	}
 	namespace features
 	{
+		struct UnifiedWater
+		{
+			bool loaded = true;
+			bool RequiresVanillaWaterShaders() const { return false; }
+		} unifiedWater;
 		struct Upscaling
 		{
 			bool IsNeuralRenderingEnabled() const { return false; }
@@ -269,6 +281,7 @@ namespace SIE
 		static bool IsSupportedShader(RE::BSShader::Type) { return true; }
 		static bool IsSupportedShader(const RE::BSShader&);
 		bool IsEnabled() const { return enabled; }
+		std::string GetDefinesString(const RE::BSShader&, uint32_t) const { return {}; }
 		bool IsSaveLoadSafeModeActive() const { return safeLoad; }
 		bool ShouldUseAsyncCompilation() const { return async; }
 		void TrackActiveShader(ShaderClass, const RE::BSShader&, uint32_t) {}
@@ -485,6 +498,26 @@ void TestExactAndProtectedLookups()
 	f.shader.shaderType.value = RE::BSShader::Type::ImageSpace;
 	f.Bind(requested);
 	Require(f.context.bound == f.native.shader && !f.state.deferredPixelShaderMissing);
+}
+void TestReverseWarmupAndWaterFailure()
+{
+	Fixture f;
+	globals::features::reverseZ.active = true;
+	f.deferred.deferredPass = false;
+	f.shader.shaderType.value = RE::BSShader::Type::Water;
+	constexpr uint32_t descriptor = 0x10u;
+	Require(!f.cache.GetPixelShader(f.shader, descriptor, SIE::ShaderCache::PixelShaderLookup::Compile));
+	Require(f.cache.compiles == 0 && f.cache.compilationSet.requests.contains(descriptor));
+	Require(f.cache.GetPixelShader(f.shader, descriptor, SIE::ShaderCache::PixelShaderLookup::Draw));
+	Require(f.cache.compiles == 1);
+	f.cache.pixelShaders[f.shader.shaderType.underlying()].clear();
+	f.cache.compilationSucceeds = false;
+	Hooks::BSShader_BeginTechnique::func = [](RE::BSShader*, uint32_t, uint32_t, bool) { return false; };
+	const auto errors = logger::errors;
+	for (unsigned repeat = 0; repeat < 3; ++repeat)
+		Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	Require(logger::errors == errors + (errors == 0 ? 1 : 0));
+	Require(f.context.vertexBinds == 0 && f.context.binds == 0);
 }
 void TestUnusedCategoriesStayCold()
 {
@@ -845,6 +878,7 @@ int main()
 				for (bool categories : { false, true }) TestLayoutTransitions(type, categories);
 			TestColdAndFailedVariants();
 			TestExactAndProtectedLookups();
+			TestReverseWarmupAndWaterFailure();
 			TestUnusedCategoriesStayCold();
 			TestBoundGrassVariant();
 			TestNullPixelBinding();

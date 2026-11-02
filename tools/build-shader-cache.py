@@ -1458,14 +1458,18 @@ def append_missing_defines(defines: object, names: tuple[str, ...]) -> None:
     if not isinstance(defines, list):
         return
 
-    existing = {
-        normalized_define_name(define)
-        for define in defines
-        if isinstance(define, str)
-    }
+    existing: set[str] = set()
+    pending = list(defines)
+    while pending:
+        value = pending.pop()
+        if isinstance(value, list):
+            pending.extend(value)
+        elif isinstance(value, str):
+            existing.add(normalized_define_name(value))
     for name in names:
         if normalized_define_name(name) not in existing:
             defines.append(name)
+            existing.add(normalized_define_name(name))
 
 
 def append_cross_modlist_variants(config: dict[str, object]) -> None:
@@ -1558,14 +1562,14 @@ def apply_cache_profile_defines(
             *defines,
         )
 
-    # Captures may contain older global scopes; reapply only the selected files.
+    # The selected profile owns these macros, including their values and source scope.
     scoped_defines = {
         define for defines in profile_file_defines.values() for define in defines
     }
     excluded_defines = {
         normalized_define_name(define)
         for define in (
-            profile.excluded_defines | additional_excluded_defines | scoped_defines
+            profile.excluded_defines | additional_excluded_defines | scoped_defines | set(profile.global_defines)
         )
     }
 
@@ -1618,7 +1622,9 @@ def apply_cache_profile_defines(
             continue
 
         file_name = shader.get("file")
-        defines_to_add = profile_file_defines.get(file_name)
+        # Utility bypasses the runtime feature-macro list; other stages consume it.
+        feature_defines = profile.global_defines if file_name != "Utility.hlsl" else ()
+        defines_to_add = (*feature_defines, *profile_file_defines.get(file_name, ()))
         if not defines_to_add or not isinstance(file_name, str):
             continue
 

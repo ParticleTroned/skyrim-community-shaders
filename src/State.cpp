@@ -1,5 +1,6 @@
 #include "State.h"
 #include "Features/ReverseZ.h"
+#include "Features/UnifiedWater.h"
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 #	include "Diagnostics/NvPerf.h"
 #endif
@@ -2114,6 +2115,14 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			break;
 		case RE::BSShader::Type::Water:
 			{
+				// Keep resource readiness in the descriptor so queued compiles retain their variant.
+				const auto nativeWater = (uint32_t)SIE::ShaderCache::WaterShaderFlags::NativeWater;
+				a_vertexDescriptor &= ~nativeWater;
+				a_pixelDescriptor &= ~nativeWater;
+				if (globals::features::unifiedWater.RequiresVanillaWaterShaders()) {
+					a_vertexDescriptor |= nativeWater;
+					a_pixelDescriptor |= nativeWater;
+				}
 				auto flags = ~((uint32_t)SIE::ShaderCache::WaterShaderFlags::Reflections |
 							   (uint32_t)SIE::ShaderCache::WaterShaderFlags::Cubemap |
 							   (uint32_t)SIE::ShaderCache::WaterShaderFlags::Interior);

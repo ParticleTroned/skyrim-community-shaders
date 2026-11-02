@@ -856,6 +856,7 @@ namespace RE { struct BSShader {
 namespace logger { template<class... T> void warn(const char*, T&&...) {} }
 enum class ShaderClass { Vertex, Pixel, Compute };
 struct ShaderCache {
+    enum class PixelShaderLookup { Draw };
     struct Entry { Resource* shader; };
     using Cache = std::array<std::unordered_map<uint32_t, std::unique_ptr<Entry>>, 1>;
     Cache vertexShaders, pixelShaders, computeShaders;
@@ -866,7 +867,7 @@ struct ShaderCache {
         if (evictDuringLookup) EvictShaderResources(RE::BSShader::Type::Grass, descriptor, ShaderClass::Vertex);
         return enabled ? this : nullptr;
     }
-    const void* GetPixelShader(const RE::BSShader&, uint32_t descriptor) {
+    const void* GetPixelShader(const RE::BSShader&, uint32_t descriptor, PixelShaderLookup) {
         if (evictDuringLookup) EvictShaderResources(RE::BSShader::Type::Grass, descriptor, ShaderClass::Pixel);
         return enabled ? this : nullptr;
     }
@@ -908,11 +909,51 @@ int main() {
         result = compile_fixture(driver)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_concurrent_graphics_shader_publication(self):
+        source = (ROOT / "src/ShaderCache.cpp").read_text(encoding="utf-8")
+        methods = "\n".join(block(source, signature) for signature in (
+            "RE::BSGraphics::VertexShader* ShaderCache::MakeAndAddVertexShader(",
+            "RE::BSGraphics::PixelShader* ShaderCache::MakeAndAddPixelShader("))
+        header = (ROOT / "src/ShaderCache.h").read_text(encoding="utf-8")
+        methods += block(header, "bool IsTaskStale(").replace("bool IsTaskStale(", "bool ShaderCache::IsTaskStale(")
+        driver = r'''
+#include "shader_publication_fixture.h"
+METHODS
+int main() {
+    for (bool vertex : {false, true}) {
+        ShaderCache cache;
+        RE::BSShader shader;
+        const auto publish = [&](uint32_t descriptor, std::optional<uint64_t> generation = {}) -> const void* {
+            if (vertex) return cache.MakeAndAddVertexShader(shader, descriptor, generation);
+            return cache.MakeAndAddPixelShader(shader, descriptor, generation);
+        };
+        testDevice.creates = resource.releases = 0;
+        concurrent = true;
+        const void* workerResult = nullptr;
+        std::thread worker([&] { workerResult = publish(7); });
+        const void* drawResult = publish(7);
+        worker.join();
+        concurrent = false;
+        assert(drawResult && drawResult == workerResult);
+        assert(testDevice.creates == 1 && resource.releases == 0 && cache.graphicsShaderRevision == 0);
+        assert(publish(7) == drawResult && testDevice.creates == 1);
+        assert(!publish(7, 0) && !publish(8, 0) && testDevice.creates == 1);
+        failCompile = true;
+        assert(!publish(8) && testDevice.creates == 1);
+        failCompile = false;
+        testDevice.fail = true;
+        assert(!publish(8) && testDevice.creates == 2);
+        testDevice.fail = false;
+        assert(publish(8) && testDevice.creates == 3 && resource.releases == 0);
+    }
+}
+'''.replace("METHODS", methods)
+        result = compile_fixture(driver)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_graphics_revision_invalidation_coverage(self):
         source = (ROOT / "src/ShaderCache.cpp").read_text(encoding="utf-8")
-        for signature in ("void ShaderCache::Clear()", "void ShaderCache::Clear(RE::BSShader::Type",
-                          "RE::BSGraphics::VertexShader* ShaderCache::MakeAndAddVertexShader(",
-                          "RE::BSGraphics::PixelShader* ShaderCache::MakeAndAddPixelShader("):
+        for signature in ("void ShaderCache::Clear()", "void ShaderCache::Clear(RE::BSShader::Type"):
             with self.subTest(signature=signature):
                 self.assertIn("graphicsShaderRevision.fetch_add(1, std::memory_order_release)", block(source, signature))
 

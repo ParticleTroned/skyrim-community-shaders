@@ -133,7 +133,8 @@ namespace
 
 	bool UseNativeWaterShaders(const RE::BSShader& shader)
 	{
-		return shader.shaderType.get() == RE::BSShader::Type::Water && globals::features::unifiedWater.RequiresVanillaWaterShaders();
+		return shader.shaderType.get() == RE::BSShader::Type::Water &&
+		       globals::features::unifiedWater.RequiresVanillaWaterShaders() && !globals::features::reverseZ.IsActive();
 	}
 }
 
@@ -727,6 +728,15 @@ struct BSShader_LoadShaders
 		const bool precompileGrass = shader->shaderType == RE::BSShader::Type::Grass &&
 		                             globals::features::truePBR.loaded && globals::features::grassLighting.loaded;
 		if (shaderCache->IsDiskCache() || shaderCache->IsDump() || precompileGrass) {
+			const auto prepareLookup = [state, shader](uint32_t& vertex, uint32_t& pixel, bool deferred = false) {
+				state->ModifyShaderLookup(*shader, vertex, pixel, deferred);
+				if (shader->shaderType == RE::BSShader::Type::Water) {
+					// Warm the intended UW variant before DataLoaded publishes its resources.
+					const auto nativeWater = static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::NativeWater);
+					vertex &= ~nativeWater;
+					pixel &= ~nativeWater;
+				}
+			};
 			const bool categories = globals::features::upscaling.NeedsCharacterCategoryShaders();
 			if (shaderCache->IsDiskCache()) {
 				Feature::ForEachLoadedFeature("GenerateShaderPermutations", [shader](Feature* feature) {
@@ -741,8 +751,8 @@ struct BSShader_LoadShaders
 				}
 				auto vertexShaderDesriptor = entry->id;
 				auto pixelShaderDescriptor = entry->id;
-				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
-				shaderCache->GetVertexShader(*shader, vertexShaderDesriptor);
+				prepareLookup(vertexShaderDesriptor, pixelShaderDescriptor);
+				shaderCache->GetVertexShader(*shader, vertexShaderDesriptor, SIE::ShaderCache::VertexShaderLookup::Compile);
 			}
 			for (const auto& entry : shader->pixelShaders) {
 				if (entry->shader && shaderCache->IsDump()) {
@@ -751,9 +761,9 @@ struct BSShader_LoadShaders
 				}
 				auto vertexShaderDesriptor = entry->id;
 				auto pixelShaderDescriptor = entry->id;
-				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
+				prepareLookup(vertexShaderDesriptor, pixelShaderDescriptor);
 				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
-				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor, true);
+				prepareLookup(vertexShaderDesriptor, pixelShaderDescriptor, true);
 				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, categories);
 			}
 		}
@@ -779,7 +789,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			auto vertex = vertexDescriptor;
 			auto pixel = pixelDescriptor;
 			state->ModifyShaderLookup(*shader, vertex, pixel);
-			available = shaderCache->GetVertexShader(*shader, vertex) && shaderCache->GetPixelShader(*shader, pixel);
+			available = shaderCache->GetVertexShader(*shader, vertex) && shaderCache->GetPixelShader(*shader, pixel, SIE::ShaderCache::PixelShaderLookup::Draw);
 		}
 		if (!available) {
 			vertexDescriptor &= ~seamsFlag;
@@ -849,6 +859,15 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		}
 		if (vertexShader == nullptr || (!skipPixelShader && pixelShader == nullptr)) {
 			shaderFound = false;
+			if (reverseShaderRequired && shader->shaderType.get() == RE::BSShader::Type::Water) {
+				static std::atomic_flag reported = ATOMIC_FLAG_INIT;
+				if (!reported.test_and_set(std::memory_order_relaxed))
+					logger::error("ReverseZ: Water technique rejected; VS={:X} available={} PS={:X} available={} skipped={} UW-ready={} VS-defines=[{}] PS-defines=[{}]. Check shader compile/create errors; restart after correcting shader inputs",
+						state->modifiedVertexDescriptor, vertexShader != nullptr, state->modifiedPixelDescriptor,
+						pixelShader != nullptr, skipPixelShader, globals::features::unifiedWater.loaded && !globals::features::unifiedWater.RequiresVanillaWaterShaders(),
+						shaderCache->GetDefinesString(*shader, state->modifiedVertexDescriptor),
+						shaderCache->GetDefinesString(*shader, state->modifiedPixelDescriptor));
+			}
 		} else {
 			state->settingCustomShader = true;
 			globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);

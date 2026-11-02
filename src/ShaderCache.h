@@ -624,7 +624,15 @@ namespace SIE
 		/** @brief Warms AO-only shaders and, when requested, their deferred category variants. */
 		void PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories);
 
-		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor);
+		enum class VertexShaderLookup
+		{
+			Compile,
+			Draw
+		};
+
+		/** @brief Compile lookups may queue work; Reverse Z draw lookups require a compatible stage. */
+		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor,
+			VertexShaderLookup a_lookup = VertexShaderLookup::Draw);
 		/** Return an existing vertex shader by exact descriptor without compiling or scheduling work. */
 		RE::BSGraphics::VertexShader* GetVertexShaderIfCached(const RE::BSShader& shader, uint32_t descriptor);
 		/** @brief Retain a requested graphics shader under the cache lock, safe against concurrent eviction. */
@@ -905,6 +913,7 @@ namespace SIE
 			Cubemap = 1 << 8,           // 0x100
 			Flowmap = 1 << 9,           // 0x200
 			BlendNormals = 1 << 10,     // 0x400
+			NativeWater = 1 << 15,      // Custom depth-compatible shaders without UW resources.
 		};
 
 		enum class EffectShaderFlags

@@ -3,6 +3,7 @@
 #include "Feature.h"
 #include "Utils/DepthConvention.h"
 #include <atomic>
+#include <mutex>
 
 namespace globals
 {
@@ -60,6 +61,8 @@ struct ReverseZ : Feature
 	ID3D11RasterizerState* GetReversedRasterizerState(ID3D11RasterizerState*);
 
 private:
+	void RecordFailure(const char* reason, const char* phase, uint64_t targetGeneration);
+	bool RejectDepthPreparation(const char* reason);
 	void RejectRendering(const char* reason);
 	void LatchBootState();
 	bool PrepareNativeShaders();
@@ -69,5 +72,8 @@ private:
 	uint32_t convertedTargetMask = 0;
 	std::atomic_uint64_t generation{ 0 };
 	std::atomic<double> extraDepthBytesPerPixel{ 0 };
+	mutable std::mutex failureMutex;
 	std::string failure;
+	const char* failurePhase = "none";
+	uint64_t failureGeneration = 0;
 };

@@ -376,8 +376,14 @@ void ReverseZ::SaveSettings(json& value) { value = settings; }
 void ReverseZ::RestoreDefaultSettings() { settings = {}; }
 json ReverseZ::GetDiagnostics() const
 {
+	std::scoped_lock lock(failureMutex);
 	return { { "requested", settings.EnableReverseZBuffer }, { "bootRequested", requestedThisBoot },
-		{ "active", IsActive() }, { "renderingBlocked", g_renderingRejected.load(std::memory_order_acquire) }, { "generation", GetGeneration() }, { "additionalDepthBytesPerPixel", GetAdditionalDepthBytesPerPixel() }, { "convertedTargetMask", convertedTargetMask }, { "failure", failure } };
+		{ "active", IsActive() }, { "renderingBlocked", g_renderingRejected.load(std::memory_order_acquire) },
+		{ "generation", GetGeneration() }, { "additionalDepthBytesPerPixel", GetAdditionalDepthBytesPerPixel() },
+		{ "convertedTargetMask", convertedTargetMask }, { "failure", failure },
+		{ "failurePhase", failurePhase }, { "failureGeneration", failureGeneration },
+		{ "activationRejected", activationRejectedThisBoot },
+		{ "restartRequired", !failure.empty() || (bootLatched && requestedThisBoot != (loaded && settings.EnableReverseZBuffer)) } };
 }
 void ReverseZ::DrawSettings()
 {
@@ -386,8 +392,11 @@ void ReverseZ::DrawSettings()
 	ImGui::SeparatorText("Depth precision");
 	ImGui::Checkbox("Enable Reverse Z (restart required)", &settings.EnableReverseZBuffer);
 	ImGui::TextUnformatted(activeThisBoot ? "Active: Reverse Z" : "Active: Standard Z");
+	std::scoped_lock lock(failureMutex);
 	if (!failure.empty())
-		ImGui::TextWrapped("%s", failure.c_str());
+		ImGui::TextWrapped("%s (phase: %s, target generation: %llu). %s Restart to retry Reverse Z, or disable it and restart.",
+			failure.c_str(), failurePhase, static_cast<unsigned long long>(failureGeneration),
+			IsActive() ? "Scene rendering is blocked." : "Standard depth remains active for this session.");
 }
 
 void ReverseZ::LatchBootState()
@@ -417,31 +426,26 @@ bool ReverseZ::PrepareDepthTargets()
 	LatchBootState();
 	if (!requestedThisBoot || activationRejectedThisBoot)
 		return true;
+	if (g_renderingRejected.load(std::memory_order_acquire))
+		return RejectDepthPreparation("Scene rendering already blocked until restart");
 	auto* renderer = globals::game::renderer;
 	auto* device = globals::d3d::device;
-	auto fail = [&](const char* reason) {
-		failure = reason;
-		logger::error("ReverseZ: {}", reason);
-		if (activeThisBoot)
-			throw std::runtime_error(reason);
-		g_renderingRejected.store(false, std::memory_order_release);
-		activationRejectedThisBoot = true;
-		return true;
-	};
-	if (!globals::shaderCache || !globals::shaderCache->IsEnabled() ||
-		(globals::state && (!globals::state->enableVShaders || !globals::state->enablePShaders)))
-		return fail("Reverse Z requires scene vertex and pixel shader replacements");
-	if (!renderer || !device)
-		return fail("Renderer unavailable during depth preparation");
+	if (!globals::shaderCache || !globals::shaderCache->IsEnabled() || !globals::state ||
+		!globals::state->enableVShaders || !globals::state->enablePShaders)
+		return RejectDepthPreparation("Reverse Z requires scene vertex and pixel shader replacements");
+	if (!renderer || !device || !globals::d3d::context)
+		return RejectDepthPreparation("Renderer, device or context unavailable during depth preparation");
+	if (FAILED(device->GetDeviceRemovedReason()))
+		return RejectDepthPreparation("D3D device lost during depth preparation");
 	if (globals::game::isVR && !globals::IsVRFrameBufferUploadHookReady())
-		return fail("Validated VR framebuffer upload hook unavailable");
+		return RejectDepthPreparation("Validated VR framebuffer upload hook unavailable");
 	InstallRuntimeHooks();
 	if (!runtimeHooksInstalled || !cameraHooksInstalled)
-		return fail("Required depth hooks unavailable");
+		return RejectDepthPreparation("Required depth hooks unavailable");
 	if (!PrepareNativeShaders())
-		return fail("Required native VR shader preparation failed");
+		return RejectDepthPreparation("Required native VR shader preparation failed");
 	if (!PrepareRejectedDepthState(device) || !GetReversedState(nullptr) || g_renderingRejected.load(std::memory_order_relaxed))
-		return fail("Default reversed depth state unavailable");
+		return RejectDepthPreparation("Default reversed depth state unavailable");
 	using Data = std::remove_reference_t<decltype(renderer->GetDepthStencilData().depthStencils[0])>;
 	constexpr size_t count = std::extent_v<decltype(Data::views)>;
 	struct Staged
@@ -465,7 +469,7 @@ bool ReverseZ::PrepareDepthTargets()
 		if (!data.texture) {
 			if (target == RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN ||
 				(globals::game::isVR && target == RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_DOWNSAMPLE))
-				return fail("Required scene depth target absent");
+				return RejectDepthPreparation("Required scene depth target absent");
 			continue;
 		}
 		Staged item;
@@ -474,22 +478,22 @@ bool ReverseZ::PrepareDepthTargets()
 		D3D11_TEXTURE2D_DESC desc{};
 		data.texture->GetDesc(&desc);
 		if (desc.Format != kStandardDepthTypeless)
-			return fail("Unexpected scene depth format");
+			return RejectDepthPreparation("Unexpected scene depth format");
 		if (target == RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN)
 			mainPixels = uint64_t(desc.Width) * desc.Height;
 		for (UINT mip = 0; mip < desc.MipLevels; ++mip)
 			extraBytes += uint64_t(std::max(1u, desc.Width >> mip)) * std::max(1u, desc.Height >> mip) * desc.ArraySize * desc.SampleDesc.Count * 4u;
 		desc.Format = kFloatDepthTypeless;
 		if (FAILED(device->CreateTexture2D(&desc, nullptr, item.texture.put())))
-			return fail("Floating-point scene depth allocation failed");
+			return RejectDepthPreparation("Floating-point scene depth allocation failed");
 		Util::SetResourceName(item.texture.get(), "ReverseZ::SceneDepth");
 		for (size_t i = 0; i < count; ++i)
 			if (!RecreateFloatView(device, item.texture.get(), data.views[i], item.views[i]) ||
 				!RecreateFloatView(device, item.texture.get(), data.readOnlyViews[i], item.readOnly[i]))
-				return fail("Scene depth view preparation failed");
+				return RejectDepthPreparation("Scene depth view preparation failed");
 		if (!RecreateFloatView(device, item.texture.get(), data.depthSRV, item.depth) ||
 			!RecreateFloatView(device, item.texture.get(), data.stencilSRV, item.stencil))
-			return fail("Scene depth SRV preparation failed");
+			return RejectDepthPreparation("Scene depth SRV preparation failed");
 		// Staged views are not registered yet, so these clears use physical depth.
 		for (const auto& view : item.views)
 			if (view)
@@ -497,7 +501,7 @@ bool ReverseZ::PrepareDepthTargets()
 		staged.push_back(std::move(item));
 	}
 	if (staged.empty())
-		return fail("No scene depth targets available");
+		return RejectDepthPreparation("No scene depth targets available");
 	// The owner retains the preceding generation before creation. These new
 	// standard resources have never been submitted to the GPU.
 	decltype(g_viewIsReverse) preparedViews;
@@ -532,7 +536,6 @@ bool ReverseZ::PrepareDepthTargets()
 		globals::shaderCache->Clear();
 	depthTargetsConverted = true;
 	extraDepthBytesPerPixel = mainPixels ? double(extraBytes) / mainPixels : 0;
-	failure.clear();
 	VRDepthCullingTemporal::InvalidateDepthGeneration();
 	generation.fetch_add(1, std::memory_order_release);
 	activeThisBoot.store(true, std::memory_order_release);
@@ -548,7 +551,7 @@ bool ReverseZ::IsConvertedDepthTarget(uint32_t a_target) const
 
 bool ReverseZ::IsReverseDepthView(ID3D11DepthStencilView* view) const
 {
-	if (!activeThisBoot || !view || !g_reversalActive.load(std::memory_order_acquire))
+	if (!activeThisBoot || !view || (!g_reversalActive.load(std::memory_order_acquire) && !g_renderingRejected.load(std::memory_order_acquire)))
 		return false;
 	std::shared_lock lock(g_viewMutex);
 	return g_viewIsReverse.contains(view);
@@ -580,11 +583,39 @@ ID3D11DepthStencilView* ReverseZ::ResolveCubemapFaceDepthView(ID3D11RenderTarget
 	return a_depthView;
 }
 
+void ReverseZ::RecordFailure(const char* reason, const char* phase, uint64_t targetGeneration)
+{
+	std::scoped_lock lock(failureMutex);
+	if (!failure.empty())
+		return;
+	failure = reason;
+	failurePhase = phase;
+	failureGeneration = targetGeneration;
+	logger::error("ReverseZ: {} (phase: {}, target generation: {}). {} Restart to retry Reverse Z, or disable it and restart.",
+		failure, failurePhase, failureGeneration,
+		IsActive() ? "Scene rendering blocked." : "Activation declined; standard depth retained for this session.");
+}
+
+bool ReverseZ::RejectDepthPreparation(const char* reason)
+{
+	const bool active = IsActive();
+	g_renderingRejected.store(active, std::memory_order_release);
+	RecordFailure(reason, active ? "target_recreation" : "activation", GetGeneration() + 1);
+	if (active) {
+		std::scoped_lock lock(failureMutex);
+		throw std::runtime_error(failure);
+	}
+	activationRejectedThisBoot = true;
+	return true;
+}
+
 void ReverseZ::RejectRendering(const char* reason)
 {
 	if (!g_renderingRejected.exchange(true, std::memory_order_acq_rel)) {
-		failure = std::format("{}; scene rendering blocked until restart", reason);
-		logger::error("ReverseZ: {}", failure);
+		RecordFailure(reason, IsActive() ? "rendering" : "activation", GetGeneration() + (IsActive() ? 0 : 1));
+		// An invalid first world camera must also block the already-bound menu depth target.
+		if (IsActive() && !g_reversalActive.load(std::memory_order_acquire))
+			RefreshBoundDepthTarget();
 	}
 }
 
@@ -682,16 +713,28 @@ void ReverseZ::ApplyReverseProjection(void* a_cameraStateEntry, const RE::NiCame
 		eyes = { &static_cast<CameraStateEntry*>(a_cameraStateEntry)->viewData, 1 };
 	}
 
-	bool reversed = false;
-	uint32_t eyeIndex = 0;
-	for (auto& viewData : eyes) {
-		const auto& frustum = globals::game::isVR ? a_camera->GetVRRuntimeData().viewFrustumArray[eyeIndex++] : a_camera->GetRuntimeData2().viewFrustum;
+	const auto* frusta = globals::game::isVR ? a_camera->GetVRRuntimeData().viewFrustumArray : &a_camera->GetRuntimeData2().viewFrustum;
+	// Admit the complete camera before changing either eye's depth convention.
+	std::array<ZAxis, kStereoEyeCount> axes{};
+	for (size_t eye = 0; eye < eyes.size(); ++eye) {
+		const auto& frustum = frusta[eye];
 		if (!Depth::IsValidRange(frustum.fNear, frustum.fFar)) {
 			RejectRendering("Invalid camera frustum");
 			ReapplyMappedStates(globals::d3d::context);
 			return;
 		}
-		const auto axis = DetectZAxis(viewData.projMat);
+		axes[eye] = DetectZAxis(eyes[eye].projMat);
+		if ((axes[eye] == ZAxis::kUnknown) != (axes[0] == ZAxis::kUnknown)) {
+			RejectRendering("Inconsistent stereo projection kinds");
+			ReapplyMappedStates(globals::d3d::context);
+			return;
+		}
+	}
+	bool reversed = false;
+	uint32_t eyeIndex = 0;
+	for (auto& viewData : eyes) {
+		const auto axis = axes[eyeIndex];
+		const auto& frustum = frusta[eyeIndex++];
 		if (axis == ZAxis::kUnknown || AlreadyReversed(viewData.projMat, axis))
 			continue;
 
@@ -716,15 +759,27 @@ void ReverseZ::ReversePublishedProjection()
 	if (!IsConvertedDepthTarget(PublishedDepthStencilTarget()))
 		return;
 
-	bool reversed = false;
-	for (uint32_t eye = 0; eye < PublishedEyeCount(); ++eye) {
-		auto* viewData = PublishedViewData(eye);
-		if (!viewData) {
+	std::array<RE::BSGraphics::ViewData*, kStereoEyeCount> eyes{};
+	std::array<ZAxis, kStereoEyeCount> axes{};
+	const auto eyeCount = PublishedEyeCount();
+	for (uint32_t eye = 0; eye < eyeCount; ++eye) {
+		eyes[eye] = PublishedViewData(eye);
+		if (!eyes[eye]) {
 			RejectRendering("Published scene camera unavailable");
 			ReapplyMappedStates(globals::d3d::context);
 			return;
 		}
-		const auto axis = DetectZAxis(viewData->projMat);
+		axes[eye] = DetectZAxis(eyes[eye]->projMat);
+		if ((axes[eye] == ZAxis::kUnknown) != (axes[0] == ZAxis::kUnknown)) {
+			RejectRendering("Inconsistent published projection kinds");
+			ReapplyMappedStates(globals::d3d::context);
+			return;
+		}
+	}
+	bool reversed = false;
+	uint32_t eyeIndex = 0;
+	for (auto* viewData : std::span{ eyes.data(), eyeCount }) {
+		const auto axis = axes[eyeIndex++];
 		if (axis == ZAxis::kUnknown || AlreadyReversed(viewData->projMat, axis))
 			continue;
 		reversed = true;

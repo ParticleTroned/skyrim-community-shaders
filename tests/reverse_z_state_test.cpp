@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <d3d11.h>
 #include <d3dcompiler.h>
@@ -11,10 +12,16 @@
 #include <iostream>
 #include <limits>
 #include <mutex>
+#include <nlohmann/json.hpp>
+#include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
+#include <vector>
 #include <winrt/base.h>
+
+using json = nlohmann::json;
 
 namespace REL
 {
@@ -23,21 +30,115 @@ namespace REL
 }
 namespace logger
 {
+	unsigned errors = 0;
 	template <class... Args>
 	void error(const char*, const Args&...)
-	{}
+	{
+		++errors;
+	}
 }
 struct ReverseZ
 {
+	bool loaded = true, bootLatched = true, requestedThisBoot = true, activationRejectedThisBoot = false;
+	struct
+	{
+		bool EnableReverseZBuffer = true;
+	} settings;
+	std::atomic_bool activeThisBoot{ false };
+	bool depthTargetsConverted = false, runtimeHooksInstalled = true, cameraHooksInstalled = true;
+	uint32_t convertedTargetMask = 0;
+	std::atomic_uint64_t generation{ 0 };
+	std::atomic<double> extraDepthBytesPerPixel{ 0 };
+	mutable std::mutex failureMutex;
 	std::string failure;
-	ID3D11DepthStencilView* reverseView = nullptr;
-	bool IsReverseDepthView(ID3D11DepthStencilView* view) const { return view && view == reverseView; }
+	const char* failurePhase = "none";
+	uint64_t failureGeneration = 0;
+	bool nativeShadersReady = true;
+	unsigned nativePreparations = 0;
+	bool IsActive() const { return activeThisBoot.load(); }
+	uint64_t GetGeneration() const { return generation.load(); }
+	double GetAdditionalDepthBytesPerPixel() const { return extraDepthBytesPerPixel.load(); }
+	void LatchBootState() {}
+	void InstallRuntimeHooks() {}
+	bool PrepareNativeShaders()
+	{
+		++nativePreparations;
+		return nativeShadersReady;
+	}
+	json GetDiagnostics() const;
+	bool PrepareDepthTargets();
+	bool IsConvertedDepthTarget(uint32_t) const;
+	bool IsReverseDepthView(ID3D11DepthStencilView*) const;
+	void RecordFailure(const char*, const char*, uint64_t);
+	bool RejectDepthPreparation(const char*);
 	void RejectRendering(const char* reason);
 	ID3D11DepthStencilState* GetReversedState(ID3D11DepthStencilState*);
 	ID3D11RasterizerState* GetReversedRasterizerState(ID3D11RasterizerState*);
 };
+namespace RE::RENDER_TARGETS_DEPTHSTENCIL
+{
+	enum RENDER_TARGET_DEPTHSTENCIL
+	{
+		kMAIN,
+		kMAIN_COPY,
+		kDECAL_OCCLUSION,
+		kPOST_ZPREPASS_COPY,
+		kPOST_WATER_COPY,
+		kMAIN_DOWNSAMPLE
+	};
+}
+struct DepthTarget
+{
+	ID3D11Texture2D* texture = nullptr;
+	ID3D11DepthStencilView* views[1]{};
+	ID3D11DepthStencilView* readOnlyViews[1]{};
+	ID3D11ShaderResourceView* depthSRV = nullptr;
+	ID3D11ShaderResourceView* stencilSRV = nullptr;
+	~DepthTarget()
+	{
+		if (texture)
+			texture->Release();
+		if (views[0])
+			views[0]->Release();
+		if (readOnlyViews[0])
+			readOnlyViews[0]->Release();
+		if (depthSRV)
+			depthSRV->Release();
+		if (stencilSRV)
+			stencilSRV->Release();
+	}
+};
+struct Renderer
+{
+	struct
+	{
+		DepthTarget depthStencils[6];
+	} data;
+	auto& GetDepthStencilData() { return data; }
+};
 namespace globals
 {
+	struct ShaderCache
+	{
+		bool enabled = true;
+		unsigned clears = 0;
+		bool IsEnabled() const { return enabled; }
+		void Clear() { ++clears; }
+	};
+	ShaderCache cache;
+	ShaderCache* shaderCache = &cache;
+	struct State
+	{
+		bool enableVShaders = true, enablePShaders = true;
+	} stateStorage;
+	State* state = &stateStorage;
+	bool uploadHookReady = true;
+	bool IsVRFrameBufferUploadHookReady() { return uploadHookReady; }
+	namespace game
+	{
+		Renderer* renderer;
+		bool isVR = false;
+	}
 	namespace d3d
 	{
 		ID3D11Device* device;
@@ -48,10 +149,17 @@ namespace globals
 		ReverseZ reverseZ;
 	}
 }
+namespace VRDepthCullingTemporal
+{
+	void InvalidateDepthGeneration() {}
+}
 namespace
 {
 #include "reverse_z_state_comparison.h"
+#include "reverse_z_state_resources.h"
 #include "reverse_z_state_storage.h"
+#include "reverse_z_state_targets.h"
+#include "reverse_z_state_views.h"
 	void ReapplyNearPlaneShader(ID3D11DeviceContext*) {}
 #include "reverse_z_state_getters.h"
 #include "reverse_z_state_hooks.h"
@@ -110,7 +218,10 @@ namespace
 		winrt::com_ptr<ID3D11RasterizerState> raster;
 		Require(SUCCEEDED(device->CreateRasterizerState(&rasterDesc, raster.put())), "Menu rasterizer creation failed");
 		Util::SetResourceName(raster.get(), "ReverseZStateTest::MenuRasterizer");
-		globals::features::reverseZ.reverseView = depthView.get();
+		globals::features::reverseZ.activeThisBoot = true;
+		globals::features::reverseZ.generation = 1;
+		g_reversalActive = true;
+		g_viewIsReverse.emplace(depthView.get(), ViewVerdict{ depthView, true });
 		for (bool reversed : { false, true }) {
 			context->ClearState();
 			g_reverseTargetBound = false;
@@ -138,8 +249,31 @@ namespace
 			context->Unmap(readback.get(), 0);
 			Require(result == 0xff00ff00u, reversed ? "Reversed scene retained stale color" : "Standard menu retained stale color after depth clear reversal");
 		}
+		g_reversalActive = g_reverseTargetBound = false;
+		context->OMSetRenderTargets(0, nullptr, depthView.get());
+		auto& reverse = globals::features::reverseZ;
+		const auto errorsBeforeFailure = logger::errors;
+		reverse.RejectRendering("Invalid camera frustum");
+		winrt::com_ptr<ID3D11DepthStencilState> blockedState;
+		context->OMGetDepthStencilState(blockedState.put(), nullptr);
+		Require(g_reverseTargetBound && blockedState.get() == g_rejectedDepthState.get(),
+			"First world-camera failure left the bound scene target drawing");
+		const auto firstFailure = reverse.GetDiagnostics();
+		Require(firstFailure.at("failurePhase") == "rendering" && firstFailure.at("failureGeneration") == 1 &&
+					firstFailure.at("restartRequired") == true && firstFailure.at("active") == true,
+			"Camera failure lost the active convention or generation");
+		for (unsigned repeat = 0; repeat < 100; ++repeat)
+			reverse.RejectRendering("Published scene camera unavailable");
+		Require(reverse.GetDiagnostics() == firstFailure && logger::errors == errorsBeforeFailure + 1,
+			"Repeated camera failures changed the first reason or flooded the log");
+		// Reset the fixture between independent boot scenarios.
+		reverse.failure.clear();
+		reverse.failurePhase = "none";
+		reverse.failureGeneration = 0;
+		g_renderingRejected = false;
+		g_reversalActive = true;
 		context->ClearState();
-		globals::features::reverseZ.reverseView = nullptr;
+		g_viewIsReverse.clear();
 		g_reverseTargetBound = g_projectionReversed = false;
 	}
 	template <class Hook, size_t Slot>
@@ -149,6 +283,200 @@ namespace
 	}
 }
 #include "reverse_z_state_creation.h"
+#include "reverse_z_state_diagnostics.h"
+#include "reverse_z_state_preparation.h"
+
+namespace
+{
+	void CreateSceneTargets(Renderer& renderer, ID3D11Device* device)
+	{
+		for (auto index : { RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN, RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY,
+				 RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_DOWNSAMPLE }) {
+			auto& target = renderer.data.depthStencils[index];
+			D3D11_TEXTURE2D_DESC desc{};
+			desc.Width = desc.Height = 4;
+			desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+			desc.Format = kStandardDepthTypeless;
+			desc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
+			Require(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &target.texture)), "Scene fixture allocation failed");
+			Util::SetResourceName(target.texture, "ReverseZStateTest::SceneDepth");
+			D3D11_DEPTH_STENCIL_VIEW_DESC view{};
+			view.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+			view.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+			Require(SUCCEEDED(device->CreateDepthStencilView(target.texture, &view, &target.views[0])), "Scene DSV fixture failed");
+			Util::SetResourceName(target.views[0], "ReverseZStateTest::SceneDepth DSV");
+			view.Flags = D3D11_DSV_READ_ONLY_DEPTH | D3D11_DSV_READ_ONLY_STENCIL;
+			Require(SUCCEEDED(device->CreateDepthStencilView(target.texture, &view, &target.readOnlyViews[0])), "Scene read-only fixture failed");
+			Util::SetResourceName(target.readOnlyViews[0], "ReverseZStateTest::SceneDepth RODSV");
+			D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+			srv.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+			srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+			srv.Texture2D.MipLevels = 1;
+			Require(SUCCEEDED(device->CreateShaderResourceView(target.texture, &srv, &target.depthSRV)), "Scene SRV fixture failed");
+			Util::SetResourceName(target.depthSRV, "ReverseZStateTest::SceneDepth SRV");
+		}
+	}
+
+	void CheckFailure(ReverseZ& reverse, bool active, const char* phase, uint64_t failedGeneration)
+	{
+		const auto status = reverse.GetDiagnostics();
+		Require(status.at("active") == active && status.at("renderingBlocked") == active &&
+					status.at("activationRejected") == !active && status.at("restartRequired") == true &&
+					status.at("failurePhase") == phase && status.at("failureGeneration") == failedGeneration &&
+					!status.at("failure").get<std::string>().empty(),
+			"Failure status lost its convention, generation or recovery contract");
+	}
+
+	bool PreparationThrows(ReverseZ& reverse)
+	{
+		bool prepared = false;
+		try {
+			prepared = reverse.PrepareDepthTargets();
+		} catch (const std::runtime_error& error) {
+			Require(reverse.failure == error.what(), "Preparation exception lost the original failure reason");
+			return true;
+		}
+		Require(prepared, "Preparation returned without a safe depth convention");
+		return false;
+	}
+
+	void TestPreparationAdmission(ID3D11Device* device, ID3D11DeviceContext* context)
+	{
+		for (bool active : { false, true }) {
+			for (unsigned fault = 0; fault < 12; ++fault) {
+				Renderer renderer;
+				CreateSceneTargets(renderer, device);
+				ReverseZ reverse;
+				reverse.activeThisBoot = active;
+				reverse.generation = active ? 7 : 0;
+				globals::game::renderer = &renderer;
+				globals::game::isVR = true;
+				g_renderingRejected = false;
+				switch (fault) {
+				case 0:
+					globals::game::renderer = nullptr;
+					break;
+				case 1:
+					globals::d3d::device = nullptr;
+					break;
+				case 2:
+					globals::d3d::context = nullptr;
+					break;
+				case 3:
+					globals::state = nullptr;
+					break;
+				case 4:
+					globals::shaderCache = nullptr;
+					break;
+				case 5:
+					globals::cache.enabled = false;
+					break;
+				case 6:
+					globals::stateStorage.enableVShaders = false;
+					break;
+				case 7:
+					globals::stateStorage.enablePShaders = false;
+					break;
+				case 8:
+					globals::uploadHookReady = false;
+					break;
+				case 9:
+					reverse.cameraHooksInstalled = false;
+					break;
+				case 10:
+					reverse.nativeShadersReady = false;
+					break;
+				case 11:
+					reverse.runtimeHooksInstalled = false;
+					break;
+				}
+				const auto errors = logger::errors;
+				const bool threw = PreparationThrows(reverse);
+				Require(threw == active && reverse.generation == (active ? 7u : 0u), "Preparation failure changed generation or exception policy");
+				CheckFailure(reverse, active, active ? "target_recreation" : "activation", active ? 8 : 1);
+				Require(reverse.nativePreparations == (fault == 10 ? 1u : 0u), "Admission failure performed native shader work");
+				const auto first = reverse.GetDiagnostics();
+				const auto preparations = reverse.nativePreparations;
+				globals::game::renderer = &renderer;
+				globals::d3d::device = device;
+				globals::d3d::context = context;
+				globals::state = &globals::stateStorage;
+				globals::shaderCache = &globals::cache;
+				globals::cache.enabled = globals::stateStorage.enableVShaders = globals::stateStorage.enablePShaders = true;
+				globals::uploadHookReady = true;
+				reverse.cameraHooksInstalled = reverse.runtimeHooksInstalled = reverse.nativeShadersReady = true;
+				Require(PreparationThrows(reverse) == active, "Repaired prerequisites bypassed the boot failure latch");
+				Require(logger::errors == errors + 1 && reverse.GetDiagnostics() == first &&
+							reverse.nativePreparations == preparations,
+					"Retry overwrote the first failure or repeated preparation work");
+			}
+		}
+		g_renderingRejected = false;
+	}
+
+	void TestPreparationTransaction(ID3D11Device* device, ID3D11DeviceContext* context)
+	{
+		for (bool vr : { false, true }) {
+			globals::game::isVR = vr;
+			for (bool active : { false, true }) {
+				ReverseZ reverse;
+				Renderer preceding, recreated, replacement;
+				CreateSceneTargets(preceding, device);
+				globals::game::renderer = &preceding;
+				g_renderingRejected = false;
+				g_viewIsReverse.clear();
+				if (active) {
+					context->OMSetRenderTargets(0, nullptr, preceding.data.depthStencils[0].views[0]);
+					Require(reverse.PrepareDepthTargets() && reverse.IsActive() && reverse.generation == 1, "Cold preparation did not activate");
+					winrt::com_ptr<ID3D11DepthStencilView> bound;
+					context->OMGetRenderTargets(0, nullptr, bound.put());
+					Require(bound.get() == preceding.data.depthStencils[0].views[0], "Successful preparation retained the old depth binding");
+					Require(!reverse.GetDiagnostics().at("restartRequired").get<bool>(), "Healthy activation requested a restart");
+					const auto clears = globals::cache.clears;
+					CreateSceneTargets(recreated, device);
+					globals::game::renderer = &recreated;
+					context->OMSetRenderTargets(0, nullptr, recreated.data.depthStencils[0].views[0]);
+					Require(reverse.PrepareDepthTargets() && reverse.generation == 2 && globals::cache.clears == clears,
+						"Warm recreation changed shader ownership or failed to advance the target generation");
+					bound = nullptr;
+					context->OMGetRenderTargets(0, nullptr, bound.put());
+					Require(bound.get() == recreated.data.depthStencils[0].views[0] &&
+								!g_viewIsReverse.contains(preceding.data.depthStencils[0].views[0]),
+						"Warm recreation retained the previous generation's binding or registration");
+				}
+				context->OMSetRenderTargets(0, nullptr, nullptr);
+				CreateSceneTargets(replacement, device);
+				globals::game::renderer = &replacement;
+				// A valid DSV from an incompatible format must fail after the main target has staged.
+				auto& broken = replacement.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
+				D3D11_TEXTURE2D_DESC desc{};
+				broken.texture->GetDesc(&desc);
+				desc.Format = DXGI_FORMAT_D32_FLOAT;
+				desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+				winrt::com_ptr<ID3D11Texture2D> incompatible;
+				Require(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, incompatible.put())), "Incompatible fixture allocation failed");
+				Util::SetResourceName(incompatible.get(), "ReverseZStateTest::IncompatibleDepth");
+				broken.views[0]->Release();
+				broken.views[0] = nullptr;
+				Require(SUCCEEDED(device->CreateDepthStencilView(incompatible.get(), nullptr, &broken.views[0])), "Incompatible fixture DSV failed");
+				Util::SetResourceName(broken.views[0], "ReverseZStateTest::IncompatibleDepth DSV");
+				const auto* original = replacement.data.depthStencils[0].texture;
+				const auto mask = reverse.convertedTargetMask;
+				const auto viewCount = g_viewIsReverse.size();
+				const auto clears = globals::cache.clears;
+				const bool threw = PreparationThrows(reverse);
+				Require(threw == active && replacement.data.depthStencils[0].texture == original &&
+							reverse.convertedTargetMask == mask && g_viewIsReverse.size() == viewCount && globals::cache.clears == clears,
+					"Failed staging published partial resources or invalidated shader ownership");
+				CheckFailure(reverse, active, active ? "target_recreation" : "activation", active ? 3 : 1);
+				Require(reverse.failure == "Scene depth view preparation failed", "Failure injection missed the D3D view path");
+			}
+		}
+		g_renderingRejected = false;
+		g_viewIsReverse.clear();
+		globals::game::renderer = nullptr;
+	}
+}
 
 int main()
 {
@@ -168,6 +496,8 @@ int main()
 		UseNative<ID3D11DeviceContext_RSGetState, 94>(context.get());
 		UseNative<ID3D11DeviceContext_RSGetViewports, 95>(context.get());
 		Require(PrepareRejectedDepthState(device.get()), "Rejection fallback preparation failed");
+		TestPreparationAdmission(device.get(), context.get());
+		TestPreparationTransaction(device.get(), context.get());
 		TestMenuTargetRefresh(device.get(), context.get());
 
 		D3D11_DEPTH_STENCIL_DESC depthDesc{};

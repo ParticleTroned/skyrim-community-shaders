@@ -3,6 +3,7 @@
 #include "BuildProvenance.h"
 #include "Features/GrassLighting.h"
 #include "Features/ReverseZ.h"
+#include "Features/UnifiedWater.h"
 #include "TruePBR.h"
 
 #include "Globals.h"
@@ -1817,6 +1818,9 @@ namespace SIE
 
 			for (auto* feature : Feature::GetFeatureList()) {
 				if (feature->loaded && feature->HasShaderDefine(RE::BSShader::Type::Water)) {
+					if (feature == &globals::features::unifiedWater &&
+						(descriptor & static_cast<uint32_t>(ShaderCache::WaterShaderFlags::NativeWater)))
+						continue;
 					defines[lastIndex++] = { feature->GetShaderDefineName().data(), nullptr };
 				}
 			}
@@ -3388,7 +3392,7 @@ namespace SIE
 	}
 
 	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShader(const RE::BSShader& shader,
-		uint32_t descriptor)
+		uint32_t descriptor, VertexShaderLookup a_lookup)
 	{
 		if (!SShaderCache::ResolveImageSpaceDescriptor(shader, descriptor)) {
 			return nullptr;
@@ -3426,7 +3430,7 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (ShouldUseAsyncCompilation() && !globals::features::reverseZ.IsActive()) {
+		if (ShouldUseAsyncCompilation() && (a_lookup == VertexShaderLookup::Compile || !globals::features::reverseZ.IsActive())) {
 			compilationSet.Add({ ShaderClass::Vertex, shader, descriptor });
 		} else {
 			return MakeAndAddVertexShader(shader, descriptor);
@@ -3458,7 +3462,7 @@ namespace SIE
 
 	winrt::com_ptr<ID3D11PixelShader> ShaderCache::RetainPixelShader(const RE::BSShader& shader, uint32_t descriptor)
 	{
-		if (!GetPixelShader(shader, descriptor))
+		if (!GetPixelShader(shader, descriptor, PixelShaderLookup::Draw))
 			return {};
 		return RetainShaderResource<ID3D11PixelShader>(pixelShaders, pixelShadersMutex, shader.shaderType.get(), descriptor);
 	}
@@ -3515,7 +3519,7 @@ namespace SIE
 		if (a_lookup == PixelShaderLookup::Cached)
 			return nullptr;
 		if (!IsSaveLoadSafeModeActive()) {
-			if (ShouldUseAsyncCompilation() && !globals::features::reverseZ.IsActive()) {
+			if (ShouldUseAsyncCompilation() && (a_lookup == PixelShaderLookup::Compile || !globals::features::reverseZ.IsActive())) {
 				compilationSet.Add({ ShaderClass::Pixel, shader, descriptor });
 			} else if (auto* compiled = MakeAndAddPixelShader(shader, descriptor)) {
 				return compiled;
@@ -5621,8 +5625,7 @@ namespace SIE
 
 			auto device = globals::d3d::device;
 
-			auto newShader = SShaderCache::CreateVertexShader(*shaderBlob, shader,
-				descriptor);
+			auto newShader = SShaderCache::CreateVertexShader(*shaderBlob, shader, descriptor);
 
 			std::lock_guard lockGuard(vertexShadersMutex);
 			if (IsTaskStale(a_taskGeneration)) {
@@ -5633,6 +5636,10 @@ namespace SIE
 				return nullptr;
 			}
 
+			// A draw and a warm-up may share one blob; preserve the published wrapper's lifetime.
+			auto& typeCache = vertexShaders[static_cast<size_t>(shader.shaderType.get())];
+			if (const auto existing = typeCache.find(descriptor); existing != typeCache.end())
+				return existing->second.get();
 			const auto result = device->CreateVertexShader(shaderBlob->GetBufferPointer(),
 				newShader->byteCodeSize, nullptr, reinterpret_cast<ID3D11VertexShader**>(&newShader->shader));
 			if (FAILED(result)) {
@@ -5642,11 +5649,7 @@ namespace SIE
 					newShader->shader->Release();
 				}
 			} else {
-				auto& entry = vertexShaders[static_cast<size_t>(shader.shaderType.get())][descriptor];
-				if (entry && entry->shader) {
-					entry->shader->Release();
-					graphicsShaderRevision.fetch_add(1, std::memory_order_release);
-				}
+				auto& entry = typeCache[descriptor];
 				entry = std::move(newShader);
 				return entry.get();
 			}
@@ -5667,8 +5670,7 @@ namespace SIE
 
 			auto device = globals::d3d::device;
 
-			auto newShader = SShaderCache::CreatePixelShader(*shaderBlob, shader,
-				descriptor);
+			auto newShader = SShaderCache::CreatePixelShader(*shaderBlob, shader, descriptor);
 
 			std::lock_guard lockGuard(pixelShadersMutex);
 			if (IsTaskStale(a_taskGeneration)) {
@@ -5678,6 +5680,10 @@ namespace SIE
 					descriptor);
 				return nullptr;
 			}
+			// Publication is shared with synchronous draws, so an existing wrapper must survive.
+			auto& typeCache = pixelShaders[static_cast<size_t>(shader.shaderType.get())];
+			if (const auto existing = typeCache.find(descriptor); existing != typeCache.end())
+				return existing->second.get();
 			const auto result = device->CreatePixelShader(shaderBlob->GetBufferPointer(),
 				shaderBlob->GetBufferSize(), nullptr, reinterpret_cast<ID3D11PixelShader**>(&newShader->shader));
 			if (FAILED(result)) {
@@ -5688,11 +5694,7 @@ namespace SIE
 					newShader->shader->Release();
 				}
 			} else {
-				auto& entry = pixelShaders[static_cast<size_t>(shader.shaderType.get())][descriptor];
-				if (entry && entry->shader) {
-					entry->shader->Release();
-					graphicsShaderRevision.fetch_add(1, std::memory_order_release);
-				}
+				auto& entry = typeCache[descriptor];
 				entry = std::move(newShader);
 				return entry.get();
 			}

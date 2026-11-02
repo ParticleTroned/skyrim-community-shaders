@@ -441,7 +441,7 @@ Calculates the depthMultiplier as used in Water.hlsl
 
 VR appears to require use of CameraProjInverse and does not use ProjData
 @param uv UV coords to convert
-@param depth The calculated depth
+@param depth The legacy-adjusted standard depth
 @param eyeIndex The eyeIndex; 0 is left, 1 is right
 @returns depthMultiplier
 */
@@ -449,7 +449,8 @@ float CalculateDepthMultFromUV(float2 uv, float depth, uint eyeIndex = 0)
 {
 	float4 temp;
 	temp.xy = (uv * 2 - 1);
-	temp.z = depth;
+	// The eye inverse uses native depth; retain the legacy water adjustment.
+	temp.z = FrameBuffer::IsReverseProjection(eyeIndex) ? 1.0 - depth : depth;
 	temp.w = 1;
 	temp = mul(FrameBuffer::CameraProjInverse[eyeIndex], temp.xyzw);
 	temp.xyz /= temp.w;
@@ -1188,9 +1189,15 @@ float GetUnifiedWaterShallowFallbackAvailability(float viewDistance)
 
 bool IsUnifiedWaterRawDepthValid(float rawDepth)
 {
-	return isfinite(rawDepth) &&
-	       rawDepth > 1e-5 &&
-	       rawDepth < 1.0 - 1e-5;
+	// Keep the near-plane margin without erasing representable far geometry.
+	if (!DepthOrder::IsInteriorDepth(rawDepth, 1e-5))
+		return false;
+#				if defined(HORIZON_FIX)
+	// Folded far-water backdrops cannot establish shoreline geometry.
+	return FrameBuffer::IsNearerDepth(rawDepth, FrameBuffer::ToNativeDepth(HorizonFix::EmptyDepthThreshold));
+#				else
+	return true;
+#				endif
 }
 
 bool TryGetUnifiedWaterScenePosition(

@@ -2936,7 +2936,17 @@ if(BUILD_CONTROLLER_TESTS)
     foreach(
         _part
         IN
-        ITEMS storage comparison creation hooks getters
+        ITEMS
+            storage
+            comparison
+            creation
+            hooks
+            getters
+            targets
+            views
+            resources
+            preparation
+            diagnostics
     )
         list(
             APPEND _reverse_z_state_headers
@@ -2962,7 +2972,10 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE "${_reverse_z_state_dir}"
     )
     target_compile_definitions(reverse_z_state_test PRIVATE NOMINMAX)
-    target_link_libraries(reverse_z_state_test PRIVATE windowsapp.lib)
+    target_link_libraries(
+        reverse_z_state_test
+        PRIVATE windowsapp.lib nlohmann_json::nlohmann_json
+    )
     add_d3d_shader_test(d3d_capture_hook_test D3DCaptureHook tests/d3d_capture_hook_test.cpp)
     target_include_directories(
         d3d_capture_hook_test
@@ -3029,6 +3042,18 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(
         ReverseZInitialization
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
+        NAME WaterShaderContract
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/water_shader_contract_test.py"
+    )
+    set_tests_properties(
+        WaterShaderContract
         PROPERTIES
             LABELS "ControllerTests"
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"

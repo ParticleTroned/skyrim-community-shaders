@@ -1,7 +1,9 @@
 """Execute production target-creation ordering and context-hook installation."""
 
 import os
+import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -14,6 +16,113 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReverseZInitializationTests(unittest.TestCase):
+    def test_failure_diagnostics_schema(self):
+        source = (ROOT / "src/Features/ReverseZ.cpp").read_text(encoding="utf-8")
+        bridge = (ROOT / "src/Api/FeatureDevBenchBridge.cpp").read_text(encoding="utf-8")
+        descriptor = json.loads(re.search(r'const char\* descriptor = R"\((.*?)\)";', bridge, re.S)[1])
+        properties = descriptor["outputSchema"]["properties"]["result"]["properties"]
+        emitted = set(re.findall(r'\{ "(\w+)",', block(source, "json ReverseZ::GetDiagnostics() const")))
+        self.assertFalse(emitted - properties.keys(), f"Undocumented Reverse Z diagnostics: {emitted - properties.keys()}")
+        action = bridge[bridge.index('if (action == "reverse_z")'):bridge.index('if (action == "sun_receiver")')]
+        self.assertIn("return feature.GetDiagnostics();", action)
+        self.assertNotIn('status["restartRequired"]', action)
+
+    def test_activation_rejects_pre_activation_shader_publication(self):
+        from grass_draw_lifecycle_test import compile_fixture
+
+        source = (ROOT / "src/Features/ReverseZ.cpp").read_text(encoding="utf-8")
+        cache = (ROOT / "src/ShaderCache.cpp").read_text(encoding="utf-8")
+        cache_header = (ROOT / "src/ShaderCache.h").read_text(encoding="utf-8")
+        # D3D staging ends at this unlock; exercise the unchanged publication tail.
+        preparation = block(source, "bool ReverseZ::PrepareDepthTargets()")
+        publication = preparation[preparation.index("lock.unlock();"):]
+        driver = r'''
+#include "shader_publication_fixture.h"
+struct ReverseZ {
+    bool loaded = true, bootLatched = false, requestedThisBoot = false;
+    struct { bool EnableReverseZBuffer = true; } settings;
+    std::atomic_bool activeThisBoot{false};
+    bool depthTargetsConverted = false;
+    double extraDepthBytesPerPixel = 0;
+    std::string failure;
+    std::atomic_uint64_t generation{0};
+    void LatchBootState();
+    bool HasShaderDefine(RE::BSShader::Type);
+    bool PublishPreparedTargets();
+} reverse;
+namespace VRDepthCullingTemporal { void InvalidateDepthGeneration() {} }
+using UINT = unsigned;
+namespace globals::d3d {
+    struct Context { void OMSetRenderTargets(UINT, void**, void*) {} } contextStorage;
+    auto* context = &contextStorage;
+}
+REVERSE_METHODS
+CACHE_METHODS
+bool ReverseZ::PublishPreparedTargets() {
+    std::mutex publicationMutex;
+    std::unique_lock lock(publicationMutex);
+    uint64_t extraBytes = 0, mainPixels = 0;
+    std::array<void*, 1> colorViews{};
+    void* replacementBoundDepth = nullptr;
+    PUBLICATION
+int main() {
+    ShaderCache cache;
+    globals::shaderCache = &cache;
+    RE::BSShader water;
+    Feature feature;
+    Feature::GetFeatureList().push_back(&feature);
+    static const auto before = cache.compilationSet.generation.load();
+    assert(!reverse.HasShaderDefine(RE::BSShader::Type::Water) && reverse.requestedThisBoot);
+    assert(cache.MakeAndAddVertexShader(water, 7, before));
+    assert(cache.MakeAndAddPixelShader(water, 7, before));
+    cache.shaderMap[7] = cache.hlslToShaderMap[7] = 1;
+    cache.deferredEvictions.insert(7);
+    cache.deferredEvictionCount = 1;
+    resource.onRelease = [] {
+        assert(compileDedupe.clears == 1);
+        assert(globals::shaderCache->compilationSet.generation > before);
+    };
+    feature.onClear = [] {
+        assert(!reverse.HasShaderDefine(RE::BSShader::Type::Water));
+        assert(globals::shaderCache->vertexShaders[0].empty());
+        assert(globals::shaderCache->pixelShaders[0].empty());
+    };
+    assert(reverse.PublishPreparedTargets());
+    assert(reverse.HasShaderDefine(RE::BSShader::Type::Water));
+    assert(reverse.depthTargetsConverted && reverse.generation == 1);
+    assert(resource.releases == 2 && cache.compilationSet.generation > before);
+    assert(cache.shaderMap.empty() && cache.hlslToShaderMap.empty());
+    assert(cache.deferredEvictions.empty() && cache.deferredEvictionCount == 0);
+    assert(feature.clears == 1 && globals::deferred->clears == 1);
+    // A delayed worker must not repopulate cleared descriptor slots or replace new stages.
+    assert(!cache.MakeAndAddVertexShader(water, 7, before));
+    assert(!cache.MakeAndAddPixelShader(water, 7, before));
+    assert(cache.vertexShaders[0].empty() && cache.pixelShaders[0].empty());
+    auto* vertex = cache.MakeAndAddVertexShader(water, 7);
+    auto* pixel = cache.MakeAndAddPixelShader(water, 7);
+    assert(vertex && pixel);
+    assert(!cache.MakeAndAddVertexShader(water, 7, before));
+    assert(!cache.MakeAndAddPixelShader(water, 7, before));
+    assert(cache.vertexShaders[0].at(7).get() == vertex && cache.pixelShaders[0].at(7).get() == pixel);
+    const auto current = cache.compilationSet.generation.load();
+    assert(reverse.PublishPreparedTargets() && reverse.generation == 2);
+    assert(cache.compilationSet.generation == current && feature.clears == 1);
+    assert(cache.vertexShaders[0].at(7).get() == vertex && cache.pixelShaders[0].at(7).get() == pixel);
+    assert(testDevice.creates == 4 && resource.releases == 2);
+}
+'''
+        driver = driver.replace("REVERSE_METHODS", "\n".join(block(source, signature) for signature in (
+            "void ReverseZ::LatchBootState(", "bool ReverseZ::HasShaderDefine(")))
+        methods = "\n".join(block(cache, signature) for signature in (
+            "void ShaderCache::Clear()", "RE::BSGraphics::VertexShader* ShaderCache::MakeAndAddVertexShader(",
+            "RE::BSGraphics::PixelShader* ShaderCache::MakeAndAddPixelShader("))
+        methods += block(cache_header, "bool IsTaskStale(").replace("bool IsTaskStale(", "bool ShaderCache::IsTaskStale(")
+        methods += block(cache, "void CompilationSet::BumpGeneration()").replace(
+            "CompilationSet::", "ShaderCache::Queue::")
+        driver = driver.replace("CACHE_METHODS", methods).replace("PUBLICATION", publication)
+        result = compile_fixture(driver)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_camera_upload_and_publication_before_global_range(self):
         compiler = os.environ.get("CXX") or shutil.which("cl")
         self.assertIsNotNone(compiler, "Run in the MSVC developer environment")
@@ -22,6 +131,7 @@ class ReverseZInitializationTests(unittest.TestCase):
         driver = r'''
 #include <DirectXMath.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -72,12 +182,14 @@ std::unordered_set<ID3D11DepthStencilView*> g_viewIsReverse;
 ViewData published[2];
 bool g_projectionReversed = true, converted = true;
 std::atomic<bool> g_reversalActive = false;
+std::atomic<bool> g_renderingRejected = false;
 constexpr uint32_t kStereoEyeCount = 2;
-uint32_t eyeCount = 2;
-uint32_t PublishedEyeCount() { return eyeCount; }
+uint32_t publishedEyeCount = 2;
+uint32_t PublishedEyeCount() { return publishedEyeCount; }
 uint32_t PublishedDepthStencilTarget() { return 0; }
 bool IsConvertedDepthTarget(uint32_t) { return converted; }
-ViewData* PublishedViewData(uint32_t eye) { return &published[eye]; }
+int missingPublishedEye = -1;
+ViewData* PublishedViewData(uint32_t eye) { return static_cast<int>(eye) == missingPublishedEye ? nullptr : &published[eye]; }
 void ReapplyMappedStates(void*) {}
 unsigned bindingRefreshes = 0;
 void RefreshBoundDepthTarget() { ++bindingRefreshes; }
@@ -204,15 +316,15 @@ int main() {
         const auto stereoOnce = vr;
         reverse.FixupMappedFrameBufferVR(vr);
         Require(std::memcmp(&stereoOnce, &vr, sizeof(vr)) == 0, "Repeated stereo upload reversed twice");
-        for (eyeCount = 1; eyeCount <= 2; ++eyeCount) {
-            for (uint32_t eye = 0; eye < eyeCount; ++eye) {
+        for (publishedEyeCount = 1; publishedEyeCount <= 2; ++publishedEyeCount) {
+            for (uint32_t eye = 0; eye < publishedEyeCount; ++eye) {
                 auto& data = published[eye];
                 data.projMat = data.projMatrixUnjittered = Store(XMMatrixTranspose(Load(left)));
                 data.viewProjMat = data.viewProjMatrixUnjittered = data.projMat;
             }
             reverse.ReversePublishedProjection();
             Require(reverse.rejected == 0 && g_reversalActive, "Startup camera publication blocked rendering");
-            for (uint32_t eye = 0; eye < eyeCount; ++eye) {
+            for (uint32_t eye = 0; eye < publishedEyeCount; ++eye) {
                 const auto oncePublished = published[eye];
                 Require(AlreadyReversed(oncePublished.projMat, DetectZAxis(oncePublished.projMat)),
                     "Published eye projection remained standard");
@@ -221,7 +333,7 @@ int main() {
                     "Published eye projection reversed twice");
             }
         }
-        eyeCount = 2;
+        publishedEyeCount = 2;
         for (auto& data : published) {
             data.projMat = data.projMatrixUnjittered = Store(XMMatrixOrthographicLH(2, 2, 1, 100));
             data.viewProjMat = data.viewProjMatrixUnjittered = data.projMat;
@@ -236,6 +348,58 @@ int main() {
         reverse.FixupMappedFrameBuffer(flat);
         Require(std::memcmp(&standard, &flat, sizeof(flat)) == 0, "Standard camera domain changed uploads");
         g_projectionReversed = true;
+        globals::game::isVR = true;
+        const auto rejectedBefore = reverse.rejected;
+        world.vr.viewFrustumArray = nullptr;
+        reverse.ApplyReverseProjection(&stereoEntry, &world);
+        Require(reverse.rejected == rejectedBefore + 1, "Missing stereo frusta did not reject rendering");
+        world.vr.viewFrustumArray = world.frusta;
+        stereoEntry.viewData.resize(1);
+        reverse.ApplyReverseProjection(&stereoEntry, &world);
+        Require(reverse.rejected == rejectedBefore + 2, "Incomplete stereo eyes did not reject rendering");
+        stereoEntry.viewData.resize(2);
+        stereoEntry.viewData.assign(2, startupPublished);
+        const auto beforeInvalidStereo = stereoEntry.viewData;
+        world.frusta[1].fFar = world.frusta[1].fNear;
+        reverse.ApplyReverseProjection(&stereoEntry, &world);
+        Require(reverse.rejected == rejectedBefore + 3, "Invalid second-eye range did not reject rendering");
+        Require(std::memcmp(beforeInvalidStereo.data(), stereoEntry.viewData.data(), 2 * sizeof(ViewData)) == 0,
+            "Invalid second eye partially changed the stereo camera");
+        published[0] = published[1] = startupPublished;
+        missingPublishedEye = 1;
+        reverse.ReversePublishedProjection();
+        Require(reverse.rejected == rejectedBefore + 4, "Missing published eye did not reject rendering");
+        Require(std::memcmp(&startupPublished, &published[0], sizeof(ViewData)) == 0,
+            "Missing second published eye partially changed the stereo camera");
+        missingPublishedEye = -1;
+        globals::game::isVR = false;
+        world.flat.viewFrustum.fNear = 0;
+        reverse.ApplyReverseProjection(&entry, &world);
+        Require(reverse.rejected == rejectedBefore + 5, "Invalid flat range did not reject rendering");
+        globals::game::isVR = true;
+        world.frusta[1].fFar = 100000;
+        for (unsigned orthographicEye = 0; orthographicEye < 2; ++orthographicEye) {
+            for (bool active : {false, true}) {
+                g_reversalActive = active;
+                stereoEntry.viewData.assign(2, startupPublished);
+                stereoEntry.viewData[orthographicEye] = orthographic;
+                const auto before = stereoEntry.viewData;
+                const auto rejected = reverse.rejected;
+                reverse.ApplyReverseProjection(&stereoEntry, &world);
+                Require(reverse.rejected == rejected + 1 && g_reversalActive == active,
+                    "Mixed stereo camera kinds did not reject before activation");
+                Require(std::memcmp(before.data(), stereoEntry.viewData.data(), 2 * sizeof(ViewData)) == 0,
+                    "Mixed stereo camera kinds partially changed the world camera");
+            }
+            g_reversalActive = true;
+            published[0] = published[1] = startupPublished;
+            published[orthographicEye] = orthographic;
+            const std::array before{published[0], published[1]};
+            const auto rejected = reverse.rejected;
+            reverse.ReversePublishedProjection();
+            Require(reverse.rejected == rejected + 1 && std::memcmp(before.data(), published, sizeof(published)) == 0,
+                "Mixed published camera kinds partially changed the stereo camera");
+        }
         reverse.activeThisBoot = false;
         Fill(FlatUploadedEye(flat), 0, 1, 100000);
         const auto inactive = flat;

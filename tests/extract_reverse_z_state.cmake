@@ -8,9 +8,19 @@ extract_between("${source}" "\tstd::mutex g_stateMutex;"
     "\n\tDXGI_FORMAT ToFloatDepthFormat" "reverse_z_state_storage.h")
 extract_between("${source}" "\tD3D11_COMPARISON_FUNC FlipComparison("
     "\n\tenum class ZAxis" "reverse_z_state_comparison.h")
-extract_between("${source}" "void ReverseZ::RejectRendering("
+extract_between("${source}" "void ReverseZ::RecordFailure("
     "void ReverseZ::ApplyReverseProjection(" "reverse_z_state_creation.h")
 extract_between("${source}" "\tstruct ID3D11DeviceContext_OMSetDepthStencilState"
     "\n\tID3D11RenderTargetView* g_lastClearedCubeFace" "reverse_z_state_hooks.h")
 extract_between("${source}" "\tstruct ID3D11DeviceContext_OMGetDepthStencilState"
     "\n\tthread_local bool t_inOccluderDownscale" "reverse_z_state_getters.h")
+extract_between("${source}" "\tusing RENDER_TARGET_DEPTHSTENCIL ="
+    "\n\t// Flat layout" "reverse_z_state_targets.h")
+extract_between("${source}" "\tstd::shared_mutex g_viewMutex;"
+    "\n\tstd::mutex g_stateMutex;" "reverse_z_state_views.h")
+extract_between("${source}" "\tDXGI_FORMAT ToFloatDepthFormat"
+    "\n\tD3D11_COMPARISON_FUNC FlipComparison" "reverse_z_state_resources.h")
+extract_between("${source}" "bool ReverseZ::PrepareDepthTargets()"
+    "\nvoid ReverseZ::RegisterSceneDepthView" "reverse_z_state_preparation.h")
+extract_between("${source}" "json ReverseZ::GetDiagnostics() const"
+    "\nvoid ReverseZ::DrawSettings" "reverse_z_state_diagnostics.h")

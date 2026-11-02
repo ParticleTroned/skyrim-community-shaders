@@ -199,6 +199,12 @@ namespace NeuralRendering
 		};
 		struct Backend
 		{
+			struct Provider
+			{
+				decltype(&NVSDK_NGX_D3D12_CreateFeature) create = &NVSDK_NGX_D3D12_CreateFeature;
+				decltype(&NVSDK_NGX_D3D12_EvaluateFeature) evaluate = &NVSDK_NGX_D3D12_EvaluateFeature;
+				decltype(&NVSDK_NGX_D3D12_ReleaseFeature) release = &NVSDK_NGX_D3D12_ReleaseFeature;
+			} provider;
 			std::array<Scratch, kFeatureSlotCount> scratch;
 			std::array<std::size_t, kFeatureSlotCount> scratchBytes{};
 		} backendStorage;

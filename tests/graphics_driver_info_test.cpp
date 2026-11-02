@@ -210,6 +210,11 @@ int main(int a_argc, char** a_argv)
 			return Util::QueryGraphicsDriverVersion(adapter, a_version);
 		};
 		Require(QueryGraphicsDriverVersion(0x10DE, MAKELONG(1656, 16)).version == "616.56", "RTX 4090 supplied driver");
+		Require(Util::DecodeNvidiaDriverRelease(MAKELONG(1656, 16)) == 61656u, "Decode installed NVIDIA release for comparison");
+		Require(Util::DecodeNvidiaDriverRelease(MAKELONG(1692, 16)) == 61692u, "Decode RTX Remix minimum driver");
+		Require(!Util::DecodeNvidiaDriverRelease(std::nullopt) && !Util::DecodeNvidiaDriverRelease(0) &&
+					!Util::DecodeNvidiaDriverRelease(MAKELONG(10000, 16)),
+			"Missing, zero and malformed driver versions must remain unknown");
 		Require(QueryGraphicsDriverVersion(0x10DE, MAKELONG(2101, 16)).version == "621.01", "RTX 5080 supplied driver");
 		Require(QueryGraphicsDriverVersion(0x10DE, MAKELONG(0, 16)).version == "600.00", "NVIDIA zero padding");
 		Require(!QueryGraphicsDriverVersion(0x10DE, std::nullopt).error.empty(), "Missing Windows version");

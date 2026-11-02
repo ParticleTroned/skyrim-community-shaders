@@ -18,6 +18,11 @@ namespace globals::game
 	bool isVR = true;
 }
 bool NeuralRendering::Runtime::IsInstalled() noexcept { return true; }
+const NeuralRendering::DriverSupport& NeuralRendering::Runtime::GetDriverSupport() noexcept
+{
+	static const DriverSupport support{ kMinimumNvidiaDriverRelease };
+	return support;
+}
 namespace globals
 {
 	struct State

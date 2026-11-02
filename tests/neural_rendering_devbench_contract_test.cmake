@@ -1193,7 +1193,7 @@ foreach(_status_contract IN ITEMS
     [[{ "matchesPreparedCharacterMask", featureTimingMatchesPreparedMask }]]
     [[{ "developerModeRequired", false }]]
     [[{ "streamlineLogLevelAffectsAdmission", false }]]
-    [[{ "admissionPolicy", "version_and_ngx_capabilities" }]]
+    [[{ "admissionPolicy", "version_and_provider_initialization" }]]
     [[{ "allowUnlistedPatchedOrUnsignedRuntime", true }]]
     [[{ "reason", "D3D11 profile components and asynchronous D3D12 Feature 18 samples are exposed separately; no uncorrelated sum is reported" }]]
     [[{ "foveation", FoveationStatusJson(a_upscaling) }]]
@@ -1870,14 +1870,15 @@ foreach(_sdk_contract IN ITEMS
     [[NvidiaProject::kId, NVSDK_NGX_ENGINE_TYPE_CUSTOM]]
     [[NVSDK_NGX_D3D12_GetCapabilityParameters(]]
     [[NVSDK_NGX_D3D12_AllocateParameters(]]
-    [[NVSDK_NGX_D3D12_GetScratchBufferSize(]]
+    [[NVSDK_NGX_D3D12_GetScratchBufferSize]]
     [[NVSDK_NGX_D3D12_CreateFeature(]]
-    [[NVSDK_NGX_D3D12_EvaluateFeature(]]
-    [[NVSDK_NGX_D3D12_ReleaseFeature(]]
+    [[NVSDK_NGX_D3D12_EvaluateFeature]]
+    [[NVSDK_NGX_D3D12_ReleaseFeature]]
     [[NVSDK_NGX_D3D12_DestroyParameters(]]
     [[NVSDK_NGX_D3D12_Shutdown1(]]
 )
-    string(FIND "${_runtime_source}" "${_sdk_contract}" _position)
+    file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/DirectProvider.h" _direct_header)
+    string(FIND "${_runtime_source}${_direct_header}" "${_sdk_contract}" _position)
     if(_position EQUAL -1)
         message(FATAL_ERROR "Official NR SDK contract is missing: ${_sdk_contract}")
     endif()
@@ -3568,10 +3569,18 @@ string(JSON _nvidia_type GET "${_descriptor_json}"
 if(NOT _nvidia_type STREQUAL "boolean")
     message(FATAL_ERROR "NR status must expose active rendering GPU compatibility")
 endif()
-foreach(_guard IN ITEMS "nr_unsupported_gpu" "nr_upscaling_incompatible" "requestedSettings.neuralRenderingFovOnly != previousSettings.neuralRenderingFovOnly")
+foreach(_guard IN ITEMS "nr_unsupported_gpu" "nr_driver_update_required" "nr_upscaling_incompatible" "requestedSettings.neuralRenderingFovOnly != previousSettings.neuralRenderingFovOnly")
     string(FIND "${_bridge}" "${_guard}" _guard_position)
     if(_guard_position EQUAL -1)
         message(FATAL_ERROR "NR configure must preserve GPU and FOV admission: ${_guard}")
+    endif()
+endforeach()
+
+foreach(_field IN ITEMS installedRelease minimumRelease needsUpdate queryResult message)
+    string(JSON _driver_field_type TYPE "${_descriptor_json}"
+        outputSchema properties neuralRendering properties runtime properties driverSupport properties ${_field})
+    if(NOT _driver_field_type STREQUAL "OBJECT")
+        message(FATAL_ERROR "NR must advertise independent driver detection: ${_field}")
     endif()
 endforeach()
 

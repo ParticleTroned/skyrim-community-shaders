@@ -1,6 +1,7 @@
 #pragma once
 #include "ReconstructionTuningJson.h"
 
+#include "DriverSupport.h"
 #include "ExecutionEvidence.h"
 #include "NgxCapabilityInfo.h"
 #include <algorithm>
@@ -16,6 +17,13 @@ namespace NeuralRendering::Evidence
 		return value ? Json(*value) : Json(nullptr);
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	inline Json DriverSupportJson(const DriverSupport& value)
+	{
+		return { { "installedRelease", OptionalJson(value.installedRelease) }, { "minimumRelease", kMinimumNvidiaDriverRelease },
+			{ "needsUpdate", value.installedRelease ? Json(value.RequiresUpdate()) : Json(nullptr) },
+			{ "queryResult", value.queryResult }, { "message", value.Message() } };
+	}
+
 	inline Json DriverRequirementsJson(const NgxDriverRequirements& value)
 	{
 		return { { "needsUpdate", OptionalJson(value.needsUpdate) }, { "minimumMajor", OptionalJson(value.minimumMajor) },

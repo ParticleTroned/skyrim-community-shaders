@@ -17,6 +17,11 @@ using uint32_t = std::uint32_t;
 using json = nlohmann::json;
 bool nrRuntimeInstalled = true;
 bool NeuralRendering::Runtime::IsInstalled() noexcept { return nrRuntimeInstalled; }
+const NeuralRendering::DriverSupport& NeuralRendering::Runtime::GetDriverSupport() noexcept
+{
+	static const DriverSupport support{ kMinimumNvidiaDriverRelease };
+	return support;
+}
 namespace globals
 {
 	struct State

@@ -18564,7 +18564,8 @@ void Upscaling::DrawNeuralRenderingFovWarning(bool a_neuralRenderingMenu) const
 bool Upscaling::IsNeuralRenderingEnabled(const Settings& a_settings) noexcept
 {
 	return a_settings.neuralRenderingEnabled && NeuralRendering::Runtime::IsInstalled() &&
-	       globals::features::upscaling.IsNeuralRenderingHardwareSupported();
+	       globals::features::upscaling.IsNeuralRenderingHardwareSupported() &&
+	       !NeuralRendering::Runtime::GetDriverSupport().RequiresUpdate();
 }
 
 bool Upscaling::ApplyNeuralRenderingFovConstraint(Settings& a_settings) noexcept
@@ -18667,6 +18668,8 @@ bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, s
 			merged[name] = value;
 		}
 		auto candidate = merged.get<Settings>();
+		if (candidate.neuralRenderingEnabled && !settings.neuralRenderingEnabled && NeuralRendering::Runtime::GetDriverSupport().RequiresUpdate())
+			throw std::invalid_argument(NeuralRendering::Runtime::GetDriverSupport().Message());
 
 		candidate.foveatedPeripheryMaskVisualization = settings.foveatedPeripheryMaskVisualization;
 		candidate.neuralCharacterDebugView = settings.neuralCharacterDebugView;
@@ -18836,6 +18839,11 @@ bool Upscaling::ToggleNeuralRendering(std::string* a_error)
 			*a_error = NeuralRendering::Runtime::kUnsupportedHardwareNotice;
 		return false;
 	}
+	if (!settings.neuralRenderingEnabled && NeuralRendering::Runtime::GetDriverSupport().RequiresUpdate()) {
+		if (a_error)
+			*a_error = NeuralRendering::Runtime::GetDriverSupport().Message();
+		return false;
+	}
 	if (!neuralRenderingFeatureAvailable || !NeuralRendering::Runtime::IsInstalled()) {
 		if (a_error)
 			*a_error = !neuralRenderingFeatureAvailable ? "Neural Rendering feature is unavailable" : NeuralRendering::Runtime::kMissingRuntimeNotice;
@@ -18870,11 +18878,12 @@ void Upscaling::DrawNeuralRenderingEnableControl()
 {
 	const bool hardwareSupported = IsNeuralRenderingHardwareSupported();
 	auto hardwareGuard = Util::DisableGuard(!hardwareSupported);
+	const auto& driver = NeuralRendering::Runtime::GetDriverSupport();
 	const bool runtimeInstalled = NeuralRendering::Runtime::IsInstalled();
 	const auto status = NeuralRendering::Renderer::Instance().GetSnapshot();
 	const bool renderScaleAvailable = IsNeuralRenderingUpscalingAvailable();
 	{
-		auto guard = Util::DisableGuard(!runtimeInstalled || !renderScaleAvailable || ((status.failureLatched || status.quarantined) && !settings.neuralRenderingEnabled));
+		auto guard = Util::DisableGuard(!runtimeInstalled || !renderScaleAvailable || ((driver.RequiresUpdate() || status.failureLatched || status.quarantined) && !settings.neuralRenderingEnabled));
 		bool enabled = settings.neuralRenderingEnabled && renderScaleAvailable && hardwareSupported;
 		if (Util::Widgets::Checkbox("Enabled", &enabled)) {
 			std::string error;
@@ -18882,8 +18891,9 @@ void Upscaling::DrawNeuralRenderingEnableControl()
 				logger::warn("[NeuralRendering] UI toggle rejected: {}", error);
 		}
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(!hardwareSupported ? NeuralRendering::Runtime::kUnsupportedHardwareNotice : renderScaleAvailable ? "Enhance scene detail with NR. Off removes its rendering cost and keeps settings. Enabling NR turns FOV + TAA off." :
-																																	  "Before DLSS requires scaled DLSS and, in VR, Render Scale. After upscaling remains available with or without Render Scale.");
+			ImGui::TextUnformatted(!hardwareSupported ? NeuralRendering::Runtime::kUnsupportedHardwareNotice : driver.RequiresUpdate() ? driver.Message().c_str() :
+																										   renderScaleAvailable        ? "Enhance scene detail with NR. Off removes its rendering cost and keeps settings. Enabling NR turns FOV + TAA off." :
+																																		 "Before DLSS requires scaled DLSS and, in VR, Render Scale. After upscaling remains available with or without Render Scale.");
 	}
 }
 
@@ -18892,12 +18902,15 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 	const bool hardwareSupported = IsNeuralRenderingHardwareSupported();
 	if (!hardwareSupported)
 		Util::Text::WrappedWarning("%s", NeuralRendering::Runtime::kUnsupportedHardwareNotice);
+	const auto& driver = NeuralRendering::Runtime::GetDriverSupport();
+	if (hardwareSupported && (!driver.installedRelease || driver.RequiresUpdate()))
+		Util::Text::WrappedWarning("%s", driver.Message().c_str());
 	auto hardwareGuard = Util::DisableGuard(!hardwareSupported);
 	const bool runtimeInstalled = NeuralRendering::Runtime::IsInstalled();
-	if (!runtimeInstalled && hardwareSupported)
+	if (!runtimeInstalled && hardwareSupported) {
 		Util::Text::WrappedWarning("%s", NeuralRendering::Runtime::kMissingRuntimeNotice);
-	if (hardwareSupported)
-		ImGui::TextWrapped("%s", NeuralRendering::Runtime::kUserRuntimeNotice);
+		Util::Text::WrappedWarning("%s", NeuralRendering::Runtime::kUserRuntimeNotice);
+	}
 	const auto status = NeuralRendering::Renderer::Instance().GetSnapshot();
 	const bool renderScaleAvailable = IsNeuralRenderingUpscalingAvailable();
 	const bool reducedResolution = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution;

@@ -14,6 +14,11 @@ namespace globals::game
 }
 bool providerInstalled = true;
 bool NeuralRendering::Runtime::IsInstalled() noexcept { return providerInstalled; }
+const NeuralRendering::DriverSupport& NeuralRendering::Runtime::GetDriverSupport() noexcept
+{
+	static const DriverSupport support{ kMinimumNvidiaDriverRelease };
+	return support;
+}
 
 namespace globals::features
 {

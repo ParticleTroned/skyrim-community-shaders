@@ -544,6 +544,7 @@ namespace MenuUI
 namespace NeuralRendering
 {
 	bool runtimeInstalled = true;
+	DriverSupport installedDriver{ kMinimumNvidiaDriverRelease };
 	bool networkSelectionSupported = true;
 	TuningLimits runtimeTuningLimits;
 	Runtime& Runtime::Instance()
@@ -558,6 +559,7 @@ namespace NeuralRendering
 	TuningLimits Runtime::GetTuningLimits(std::uint32_t selection) const { return GetTuningLimitsForNetwork(runtimeTuningLimits, ResolveNetworkPreset(selection, networkSelectionSupported)); }
 	bool Runtime::SupportsNetworkSelection() const { return networkSelectionSupported; }
 	bool Runtime::IsInstalled() noexcept { return runtimeInstalled; }
+	const DriverSupport& Runtime::GetDriverSupport() noexcept { return installedDriver; }
 	struct Renderer
 	{
 		struct Snapshot
@@ -1231,7 +1233,7 @@ int main()
 	upscaling.settings.neuralRenderingEnabled = false;
 	drawMaster("Enabled");
 	require(ImGui::Disabled("Enabled") && !upscaling.settings.neuralRenderingEnabled &&
-				ImGui::Seen(NeuralRendering::Runtime::kMissingRuntimeNotice),
+				ImGui::Seen(NeuralRendering::Runtime::kMissingRuntimeNotice) && ImGui::Seen(NeuralRendering::Runtime::kUserRuntimeNotice),
 		"Missing runtime must disable NR and name the DLL and installation path");
 	upscaling.settings.neuralRenderingEnabled = true;
 	upscaling.settings.periphery_taa_enable = true;
@@ -1245,8 +1247,9 @@ int main()
 	upscaling.settings.periphery_taa_enable = false;
 	upscaling.settings.neuralRenderingEnabled = false;
 	drawMaster();
-	require(!ImGui::Disabled("Enabled") && !ImGui::Seen(NeuralRendering::Runtime::kMissingRuntimeNotice),
-		"Installed runtime must unlock the feature controls");
+	require(!ImGui::Disabled("Enabled") && !ImGui::Seen(NeuralRendering::Runtime::kMissingRuntimeNotice) &&
+				!ImGui::Seen(NeuralRendering::Runtime::kUserRuntimeNotice),
+		"Installed runtime must unlock the feature controls without installation notices");
 	const auto requirePreferences = [&](const Upscaling::Settings& expected) {
 		require(upscaling.settings.neuralRenderingFovOnly == expected.neuralRenderingFovOnly &&
 					upscaling.settings.neuralRenderingRenderscaleFov == expected.neuralRenderingRenderscaleFov &&
@@ -2260,6 +2263,29 @@ int main()
 	require(!upscaling.ToggleNeuralRendering() && !upscaling.settings.neuralRenderingEnabled,
 		"Bindings cannot enable a missing provider");
 	NeuralRendering::runtimeInstalled = true;
+	NeuralRendering::installedDriver = { 61656u };
+	drawMaster("Enabled");
+	require(ImGui::Disabled("Enabled") && !upscaling.settings.neuralRenderingEnabled &&
+				ImGui::Seen(NeuralRendering::installedDriver.Message()) && ImGui::disableDepth == 0,
+		"Outdated driver disables activation and shows installed/required versions with update instructions");
+	std::string driverError;
+	require(!upscaling.ToggleNeuralRendering(&driverError) && driverError == NeuralRendering::installedDriver.Message(),
+		"Controller activation uses the same driver warning as the UI");
+	upscaling.settings.neuralRenderingEnabled = true;
+	upscaling.settings.periphery_taa_enable = true;
+	require(!upscaling.IsNeuralRenderingRequested() && !upscaling.IsNeuralRenderingRenderScaleRequired() &&
+				!Upscaling::ApplyNeuralRenderingFovConstraint(upscaling.settings) && upscaling.settings.periphery_taa_enable,
+		"Outdated NR preserves ordinary FOV/TAA preferences and does not request rendering or render scale");
+	drawMaster();
+	require(!ImGui::Disabled("Enabled") && upscaling.settings.neuralRenderingEnabled,
+		"Outdated driver retains the saved enabled preference and permits turning NR off");
+	require(upscaling.ToggleNeuralRendering() && !upscaling.settings.neuralRenderingEnabled,
+		"Controller can disable saved NR on an outdated driver");
+	NeuralRendering::installedDriver = {};
+	drawMaster();
+	require(!ImGui::Disabled("Enabled") && ImGui::Seen(NeuralRendering::installedDriver.Message()),
+		"Unknown detection shows the requirement and retains NGX compatibility checks");
+	NeuralRendering::installedDriver = { NeuralRendering::kMinimumNvidiaDriverRelease };
 	renderer.snapshot.quarantined = true;
 	require(!upscaling.ToggleNeuralRendering(), "Bindings cannot enable quarantined NR");
 	renderer.snapshot = {};

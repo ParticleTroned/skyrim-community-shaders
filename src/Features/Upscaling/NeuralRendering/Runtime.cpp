@@ -2,18 +2,24 @@
 #include "../NvidiaProject.h"
 #include "D3D12Interop.h"
 #include "DevelopmentDiagnostics.h"
+#include "DirectProvider.h"
+#include "Globals.h"
+#include "NgxFeaturePath.h"
 #include "Util.h"
 #include "Utils/CryptoHash.h"
+#include "Utils/GraphicsDriverInfo.h"
 
 #include <Windows.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <d3d11.h>
 #include <d3d12.h>
 #include <exception>
 #include <format>
 #include <nvsdk_ngx.h>
 #include <nvsdk_ngx_defs_dlssnr.h>
+#include <utility>
 #include <wrl/client.h>
 
 namespace NeuralRendering
@@ -131,11 +137,41 @@ namespace NeuralRendering
 			}
 		}
 
+		bool ResolveNgxFeatureDirectory(HANDLE file, std::wstring& directory, std::string& error)
+		{
+			const auto required = GetFinalPathNameByHandleW(file, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+			if (!required || required > 32768) {
+				error = std::format("could not size the physical NR runtime path: Windows error {}", GetLastError());
+				return false;
+			}
+			std::wstring path(required, L'\0');
+			const auto written = GetFinalPathNameByHandleW(file, path.data(), required, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+			if (!written || written >= required) {
+				error = std::format("could not resolve the physical NR runtime path: Windows error {}", GetLastError());
+				return false;
+			}
+			path.resize(written);
+			path = NormalizeNgxFeaturePath(std::move(path));
+			if (path.empty()) {
+				error = "NGX requires an ordinary drive or UNC path for the installed NR runtime";
+				return false;
+			}
+			// NGX must discover the same physical provider whose open handle prevents replacement.
+			directory = std::filesystem::path(path).parent_path().wstring();
+			if (directory.empty()) {
+				error = "the physical NR runtime path has no feature directory";
+				return false;
+			}
+			return true;
+		}
+
 	}
 
 	struct Runtime::Backend
 	{
 		ScopedHandle providerFile;
+		DirectProvider provider;
+		bool sdkInitialized = false;
 		NVSDK_NGX_Parameter* capabilities = nullptr;
 		std::wstring featureDirectory;
 		std::array<const wchar_t*, 1> featurePaths{};
@@ -225,6 +261,36 @@ namespace NeuralRendering
 		return GetInstalledRuntimeMetadata().installed;
 	}
 
+	const DriverSupport& Runtime::GetDriverSupport() noexcept
+	{
+		static const DriverSupport unavailable{ std::nullopt, static_cast<std::uint32_t>(E_PENDING) };
+		if (!globals::d3d::device)
+			return unavailable;
+		static const auto support = []() -> DriverSupport {
+			Microsoft::WRL::ComPtr<IDXGIDevice> device;
+			auto result = globals::d3d::device->QueryInterface(IID_PPV_ARGS(device.GetAddressOf()));
+			if (FAILED(result))
+				return { std::nullopt, static_cast<std::uint32_t>(result) };
+			Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+			result = device->GetAdapter(adapter.GetAddressOf());
+			if (FAILED(result))
+				return { std::nullopt, static_cast<std::uint32_t>(result) };
+			DXGI_ADAPTER_DESC description{};
+			result = adapter->GetDesc(&description);
+			if (FAILED(result))
+				return { std::nullopt, static_cast<std::uint32_t>(result) };
+			if (description.VendorId != 0x10DE)
+				return { std::nullopt, static_cast<std::uint32_t>(DXGI_ERROR_UNSUPPORTED) };
+			LARGE_INTEGER version{};
+			result = adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &version);
+			if (FAILED(result))
+				return { std::nullopt, static_cast<std::uint32_t>(result) };
+			const auto release = Util::DecodeNvidiaDriverRelease(version.LowPart);
+			return { release, static_cast<std::uint32_t>(release ? S_OK : E_FAIL) };
+		}();
+		return support;
+	}
+
 	bool Runtime::ProbeLocked(const std::filesystem::path& a_explicitPath)
 	{
 		if (abandonRequested_.load(std::memory_order_acquire) || abandoned_ || !ShutdownLocked())
@@ -245,6 +311,11 @@ namespace NeuralRendering
 		std::string hashError;
 		if (!ComputeFileSha256(verifiedFile.Get(), hash_, hashError)) {
 			SetFailureLocked(RuntimeStatus::HashFailed, RuntimeFailureStage::Hash, std::move(hashError));
+			return false;
+		}
+		std::string pathError;
+		if (!ResolveNgxFeatureDirectory(verifiedFile.Get(), backend_->featureDirectory, pathError)) {
+			SetFailureLocked(RuntimeStatus::LoadFailed, RuntimeFailureStage::Discovery, std::move(pathError));
 			return false;
 		}
 		const auto version = Util::GetDllVersion(path_.wstring());
@@ -289,6 +360,12 @@ namespace NeuralRendering
 			return false;
 		if (status_ != RuntimeStatus::Ready && !ProbeLocked({}))
 			return false;
+		const auto& driver = GetDriverSupport();
+		if (driver.RequiresUpdate()) {
+			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
+				driver.Message(), static_cast<std::uint32_t>(NVSDK_NGX_Result_FAIL_OutOfDate));
+			return false;
+		}
 		std::error_code directoryError;
 		auto writablePath = a_dataPath;
 		if (writablePath.empty())
@@ -298,12 +375,6 @@ namespace NeuralRendering
 		if (directoryError) {
 			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
 				std::format("could not create NGX data directory: {}", directoryError.message()));
-			return false;
-		}
-		backend_->featureDirectory = std::filesystem::absolute(path_.parent_path(), directoryError).wstring();
-		if (directoryError) {
-			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
-				std::format("could not resolve NGX feature directory: {}", directoryError.message()));
 			return false;
 		}
 		backend_->featurePaths[0] = backend_->featureDirectory.c_str();
@@ -318,6 +389,7 @@ namespace NeuralRendering
 			return false;
 		}
 		device_ = a_device;
+		backend_->sdkInitialized = true;
 		a_device->AddRef();
 		const auto rollback = [this]() {
 			const auto primaryStatus = status_;
@@ -329,12 +401,16 @@ namespace NeuralRendering
 			const auto providerVersion = version_;
 			const auto providerTrust = trust_;
 			const auto driverRequirements = driverRequirements_;
+			const auto initializationRoute = initializationRoute_;
+			const auto discoveryDetail = discoveryDetail_;
 			if (ShutdownLocked()) {
 				path_ = providerPath;
 				hash_ = providerHash;
 				version_ = providerVersion;
 				trust_ = providerTrust;
 				driverRequirements_ = driverRequirements;
+				initializationRoute_ = initializationRoute;
+				discoveryDetail_ = discoveryDetail;
 				status_ = primaryStatus;
 				failureStage_ = primaryStage;
 				detail_ = primaryDetail;
@@ -364,7 +440,10 @@ namespace NeuralRendering
 			driverRequirements_.minimumMajor = minimumMajor;
 		if (!NVSDK_NGX_FAILED(minorQuery))
 			driverRequirements_.minimumMinor = minimumMinor;
-		if (driverRequirements_.needsUpdate == true) {
+		int available = 0;
+		const auto availabilityResult = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNR_Available, &available);
+		const bool sdkAvailable = !NVSDK_NGX_FAILED(availabilityResult) && available != 0;
+		if (sdkAvailable && driverRequirements_.needsUpdate == true) {
 			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
 				std::format("NGX reports that NR requires an updated NVIDIA driver; minimum={}.{}",
 					driverRequirements_.minimumMajor ? std::to_string(*driverRequirements_.minimumMajor) : "unknown",
@@ -373,18 +452,24 @@ namespace NeuralRendering
 			rollback();
 			return false;
 		}
-		int available = 0;
-		const auto availabilityResult = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNR_Available, &available);
-		if (NVSDK_NGX_FAILED(availabilityResult) || !available) {
+		if (!sdkAvailable) {
 			int featureResult = 0;
 			const auto featureQuery = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNR_FeatureInitResult, &featureResult);
-			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
-				std::format("NGX SDK NR availability query=0x{:08X} available={} featureQuery=0x{:08X} featureResult={}",
-					static_cast<std::uint32_t>(availabilityResult), available,
-					static_cast<std::uint32_t>(featureQuery), NVSDK_NGX_FAILED(featureQuery) ? "unavailable" : std::format("0x{:08X}", static_cast<std::uint32_t>(featureResult))),
-				static_cast<std::uint32_t>(NVSDK_NGX_FAILED(availabilityResult) ? availabilityResult : NVSDK_NGX_Result_FAIL_FeatureNotSupported));
-			rollback();
-			return false;
+			const auto featureInitializationResult = static_cast<NVSDK_NGX_Result>(featureResult);
+			const auto failureResult = !NVSDK_NGX_FAILED(featureQuery) && NVSDK_NGX_FAILED(featureInitializationResult) ? featureInitializationResult :
+			                           NVSDK_NGX_FAILED(availabilityResult)                                             ? availabilityResult :
+			                                                                                                              NVSDK_NGX_Result_FAIL_FeatureNotSupported;
+			discoveryDetail_ = std::format("NGX SDK NR availability query=0x{:08X} available={} featureQuery=0x{:08X} featureResult={}",
+				static_cast<std::uint32_t>(availabilityResult), available,
+				static_cast<std::uint32_t>(featureQuery), NVSDK_NGX_FAILED(featureQuery) ? "unavailable" : std::format("0x{:08X}", static_cast<std::uint32_t>(featureResult)));
+			if (failureResult != NVSDK_NGX_Result_FAIL_FeatureNotFound &&
+				failureResult != NVSDK_NGX_Result_FAIL_FeatureNotSupported &&
+				failureResult != NVSDK_NGX_Result_FAIL_UnsupportedParameter) {
+				SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
+					discoveryDetail_, static_cast<std::uint32_t>(failureResult));
+				rollback();
+				return false;
+			}
 		}
 		NVSDK_NGX_Parameter* parameters = nullptr;
 		const auto allocationResult = NVSDK_NGX_D3D12_AllocateParameters(&parameters);
@@ -396,10 +481,26 @@ namespace NeuralRendering
 			rollback();
 			return false;
 		}
+		if (!sdkAvailable) {
+			initializationRoute_ = "NGX_D3D12_DIRECT_PROVIDER";
+			logger::warn("[DLSSNR] {}; trying the admitted user provider directly", discoveryDetail_);
+			std::string providerDetail;
+			const auto providerResult = backend_->provider.Initialize(
+				std::filesystem::path(backend_->featureDirectory) / kRuntimeName, backend_->providerFile.Get(),
+				a_device, writablePath, backend_->capabilities, providerDetail);
+			if (NVSDK_NGX_FAILED(providerResult)) {
+				SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
+					std::format("{}; {}", discoveryDetail_, providerDetail), static_cast<std::uint32_t>(providerResult));
+				rollback();
+				return false;
+			}
+			detail_ = std::format("{}; {}", discoveryDetail_, providerDetail);
+		} else {
+			detail_ = std::format("official NGX SDK initialized NR with CSX project {}", NvidiaProject::kId);
+		}
 		status_ = RuntimeStatus::Initialized;
 		failureStage_ = RuntimeFailureStage::None;
 		ngxResult_ = static_cast<std::uint32_t>(allocationResult);
-		detail_ = std::format("official NGX SDK initialized NR with CSX project {}", NvidiaProject::kId);
 		LogOnceLocked(initializationLogEmitted_, "initialize", true);
 		return true;
 	}
@@ -408,7 +509,7 @@ namespace NeuralRendering
 	{
 		auto* parameters = static_cast<NVSDK_NGX_Parameter*>(parameters_);
 		std::size_t scratchBytes = 0;
-		const auto scratchResult = NVSDK_NGX_D3D12_GetScratchBufferSize(kFeatureDlssNr, parameters, &scratchBytes);
+		const auto scratchResult = backend_->provider.scratchSize(kFeatureDlssNr, parameters, &scratchBytes);
 		if (NVSDK_NGX_FAILED(scratchResult)) {
 			SetFailureLocked(RuntimeStatus::FeatureCreateFailed, RuntimeFailureStage::FeatureCreate,
 				"NGX SDK scratch-size query failed", static_cast<std::uint32_t>(scratchResult));
@@ -525,7 +626,7 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			++lifecycleCounts_.creates;
 #endif
-			const auto createResult = NVSDK_NGX_D3D12_CreateFeature(
+			const auto createResult = backend_->provider.create(
 				a_commandList, kFeatureDlssNr, parameters, &handle);
 			if (a_evidence) {
 				a_evidence->createCpuMicroseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
@@ -703,7 +804,7 @@ namespace NeuralRendering
 		const auto evaluateStarted = a_evidence ? DiagnosticNow() : std::chrono::steady_clock::time_point{};
 		if (a_evidence)
 			a_evidence->evaluateAttempted = true;
-		const auto evaluateResult = NVSDK_NGX_D3D12_EvaluateFeature(
+		const auto evaluateResult = backend_->provider.evaluate(
 			a_commandList, static_cast<NVSDK_NGX_Handle*>(featureHandles_[a_slot]),
 			parameters, nullptr);
 		if (a_evidence) {
@@ -771,7 +872,7 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		++lifecycleCounts_.releases;
 #endif
-		const auto releaseResult = NVSDK_NGX_D3D12_ReleaseFeature(
+		const auto releaseResult = backend_->provider.release(
 			static_cast<NVSDK_NGX_Handle*>(featureHandles_[a_slot]));
 		ngxResult_ = static_cast<std::uint32_t>(releaseResult);
 
@@ -811,6 +912,12 @@ namespace NeuralRendering
 	}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	std::pair<std::string, std::string> Runtime::GetInitializationRoute() const
+	{
+		std::scoped_lock lock(mutex_);
+		return { initializationRoute_, discoveryDetail_ };
+	}
+
 	std::array<std::uint32_t, Runtime::kFeatureSlotCount> Runtime::GetFeatureNetworkPresets() const
 	{
 		std::scoped_lock lock(mutex_);
@@ -915,6 +1022,12 @@ namespace NeuralRendering
 		if (device_) {
 			if (!ResetFeaturesLocked())
 				return false;
+			const auto providerResult = backend_->provider.ShutdownDevice(static_cast<ID3D12Device*>(device_));
+			if (NVSDK_NGX_FAILED(providerResult)) {
+				SetFailureLocked(RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
+					"direct NR provider shutdown failed; ownership retained", static_cast<std::uint32_t>(providerResult));
+				return false;
+			}
 			for (unsigned index = 0; index < 2; ++index) {
 				auto* map = index == 0 ? static_cast<NVSDK_NGX_Parameter*>(parameters_) : backend_->capabilities;
 				if (!map)
@@ -930,10 +1043,16 @@ namespace NeuralRendering
 				else
 					backend_->capabilities = nullptr;
 			}
-			const auto result = NVSDK_NGX_D3D12_Shutdown1(static_cast<ID3D12Device*>(device_));
+			const auto result = backend_->sdkInitialized ? NVSDK_NGX_D3D12_Shutdown1(static_cast<ID3D12Device*>(device_)) : NVSDK_NGX_Result_Success;
 			if (NVSDK_NGX_FAILED(result)) {
 				SetFailureLocked(RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
 					"NGX SDK shutdown failed", static_cast<std::uint32_t>(result));
+				return false;
+			}
+			backend_->sdkInitialized = false;
+			if (!backend_->provider.Unload()) {
+				SetFailureLocked(RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
+					"direct NR provider import restoration or unload failed; module retained");
 				return false;
 			}
 			static_cast<ID3D12Device*>(device_)->Release();
@@ -946,6 +1065,8 @@ namespace NeuralRendering
 		tuningLimits_.reset();
 		networkSelectionSupported_.reset();
 		driverRequirements_ = {};
+		initializationRoute_ = "NGX_D3D12_SDK";
+		discoveryDetail_.clear();
 		detail_.clear();
 		evaluationSuccessDetail_.reset();
 		featureHandles_ = {};

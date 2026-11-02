@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CapacityFallback.h"
+#include "DriverSupport.h"
 #include "NetworkSelection.h"
 #include "NgxCapabilityInfo.h"
 #include "RegionCapacity.h"
@@ -21,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 struct ID3D12Device;
 struct ID3D12GraphicsCommandList;
@@ -100,6 +102,8 @@ namespace NeuralRendering
 
 		/** Discover the optional provider once per process; installation requires a restart. */
 		[[nodiscard]] static bool IsInstalled() noexcept;
+		/** Cached rendering-adapter driver check; does not load or initialize NGX. */
+		[[nodiscard]] static const DriverSupport& GetDriverSupport() noexcept;
 		static constexpr const char* kMissingRuntimeNotice =
 			"Missing DLL: Shaders/Upscaling/Streamline/nvngx_dlssnr.dll";
 		static constexpr const char* kUserRuntimeNotice =
@@ -175,6 +179,8 @@ namespace NeuralRendering
 		[[nodiscard]] NativeMemorySnapshot QueryMemorySnapshot() const;
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Selected initialization route and the dispatcher's original discovery result. */
+		[[nodiscard]] std::pair<std::string, std::string> GetInitializationRoute() const;
 		/** Explicit diagnostic query only; does not create features or change memory admission. */
 		[[nodiscard]] NgxAllocationStatistics QueryAllocationStatistics() const;
 		struct LifecycleCounts
@@ -242,6 +248,8 @@ namespace NeuralRendering
 		std::optional<TuningLimits> tuningLimits_;
 		std::optional<bool> networkSelectionSupported_;
 		NgxDriverRequirements driverRequirements_;
+		std::string initializationRoute_ = "NGX_D3D12_SDK";
+		std::string discoveryDetail_;
 		std::string detail_;
 		std::optional<EvaluationSuccessDetail> evaluationSuccessDetail_;
 		std::unique_ptr<Backend> backend_;

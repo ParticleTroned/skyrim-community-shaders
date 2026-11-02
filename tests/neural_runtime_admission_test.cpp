@@ -1,4 +1,5 @@
 #include "Features/Upscaling/NeuralRendering/NetworkSelection.h"
+#include "Features/Upscaling/NeuralRendering/NgxFeaturePath.h"
 #include "Features/Upscaling/NeuralRendering/TuningLimits.h"
 
 #include <array>
@@ -65,6 +66,16 @@ namespace NeuralRendering
 		return true;
 	}
 	std::filesystem::path ResolveRuntimePath(const std::filesystem::path& path) { return path; }
+	bool featureDirectoryResolved = true;
+	bool ResolveNgxFeatureDirectory(int, std::wstring& directory, std::string& error)
+	{
+		if (!featureDirectoryResolved) {
+			error = "physical provider path unavailable";
+			return false;
+		}
+		directory = L"physical-provider-directory";
+		return true;
+	}
 	struct InstalledRuntimeMetadata
 	{
 		static std::uint64_t AllocationVersion(const REL::Version&) { return 1; }
@@ -74,6 +85,7 @@ namespace NeuralRendering
 		Ready,
 		NotFound,
 		HashFailed,
+		LoadFailed,
 		VersionRejected
 	};
 	enum class RuntimeFailureStage
@@ -93,6 +105,7 @@ namespace NeuralRendering
 		struct Backend
 		{
 			ScopedHandle providerFile;
+			std::wstring featureDirectory;
 		};
 		static constexpr const char* kMissingRuntimeNotice = "Missing NR DLL";
 		std::atomic<bool> abandonRequested_ = false;
@@ -127,6 +140,14 @@ int main()
 		if (!passed)
 			throw std::runtime_error(message);
 	};
+	require(NormalizeNgxFeaturePath(LR"(\\?\D:\Mods\Neural Rendering\nvngx_dlssnr.dll)") == LR"(D:\Mods\Neural Rendering\nvngx_dlssnr.dll)",
+		"NGX needs an ordinary physical drive path");
+	require(NormalizeNgxFeaturePath(LR"(\\?\UNC\server\mods\nvngx_dlssnr.dll)") == LR"(\\server\mods\nvngx_dlssnr.dll)" &&
+				NormalizeNgxFeaturePath(LR"(\\?\unc\server\mods\nvngx_dlssnr.dll)") == LR"(\\server\mods\nvngx_dlssnr.dll)",
+		"NGX needs an ordinary UNC path without losing its server prefix");
+	require(NormalizeNgxFeaturePath(LR"(D:\Mods\nvngx_dlssnr.dll)") == LR"(D:\Mods\nvngx_dlssnr.dll)" &&
+				NormalizeNgxFeaturePath(LR"(\\?\Volume{test}\nvngx_dlssnr.dll)").empty(),
+		"Ordinary paths are retained and unsupported extended namespaces fail explicitly");
 	for (const auto version : { REL::Version{ 310, 8 }, REL::Version{ 310, 9, 16 }, REL::Version{ 311, 0 } }) {
 		for (const char* hash : { "sdk-reference", "different-user-supplied-runtime" }) {
 			Util::installedVersion = version;
@@ -135,11 +156,18 @@ int main()
 			require(runtime.ProbeLocked("nvngx_dlssnr.dll"), "Compatible user runtime was rejected");
 			require(runtime.hash_ == hash && runtime.trust_ == RuntimeTrust::VersionAccepted,
 				"Runtime fingerprint must remain diagnostic, without claiming package verification");
+			require(runtime.backend_->featureDirectory == L"physical-provider-directory", "Admission lost the physical NGX search directory");
 			require(runtime.networkSelectionSupported_ == (version.major() == 310 && version.minor() == 9),
 				"Admission changed the version-specific preset policy");
 		}
 	}
 	Util::installedVersion = REL::Version{ 310, 7 };
+	featureDirectoryResolved = false;
+	Runtime unresolvedPath;
+	require(!unresolvedPath.ProbeLocked("nvngx_dlssnr.dll") && unresolvedPath.status_ == RuntimeStatus::LoadFailed &&
+				unresolvedPath.detail_ == "physical provider path unavailable",
+		"An unresolved physical provider must not silently fall back to a virtual NGX search path");
+	featureDirectoryResolved = true;
 	Runtime old;
 	require(!old.ProbeLocked("nvngx_dlssnr.dll") && old.status_ == RuntimeStatus::VersionRejected, "Legacy minimum version was lost");
 	Util::installedVersion.reset();

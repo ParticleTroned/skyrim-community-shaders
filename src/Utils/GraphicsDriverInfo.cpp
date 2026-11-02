@@ -178,19 +178,24 @@ namespace
 
 namespace Util
 {
+	std::optional<std::uint32_t> DecodeNvidiaDriverRelease(std::optional<std::uint32_t> a_windowsVersionLow) noexcept
+	{
+		if (!a_windowsVersionLow || LOWORD(*a_windowsVersionLow) > 9999)
+			return std::nullopt;
+		// NVIDIA documents the final five decimal digits as its public release number.
+		const auto release = (HIWORD(*a_windowsVersionLow) % 10u) * 10000u + LOWORD(*a_windowsVersionLow);
+		return release != 0 ? std::optional<std::uint32_t>(release) : std::nullopt;
+	}
+
 	GraphicsDriverVersion QueryGraphicsDriverVersion(const DXGI_ADAPTER_DESC& a_adapter, std::optional<std::uint32_t> a_windowsVersionLow)
 	{
 		if (a_adapter.VendorId == 0x1002)
 			return QueryAmdRelease(a_adapter.AdapterLuid);
 		if (a_adapter.VendorId != 0x10DE)
 			return {};
-		if (!a_windowsVersionLow || LOWORD(*a_windowsVersionLow) > 9999)
+		const auto release = DecodeNvidiaDriverRelease(a_windowsVersionLow);
+		if (!release)
 			return { "NVIDIA", {}, "Windows driver version unavailable or unrecognized" };
-
-		// NVIDIA documents the final five decimal digits as its public release number.
-		const auto release = (HIWORD(*a_windowsVersionLow) % 10u) * 10000u + LOWORD(*a_windowsVersionLow);
-		if (release == 0)
-			return { "NVIDIA", {}, "Windows driver version is zero" };
-		return { "NVIDIA", std::format("{}.{:02}", release / 100u, release % 100u), {} };
+		return { "NVIDIA", std::format("{}.{:02}", *release / 100u, *release % 100u), {} };
 	}
 }

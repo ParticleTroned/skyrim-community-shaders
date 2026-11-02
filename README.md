@@ -354,6 +354,16 @@ package excludes `nvngx_dlssnr.dll`; users supply a compatible runtime
 `Shaders/Upscaling/Streamline/`, then restart. Missing runtimes retain the
 existing disabled controls and installation notice. Core and AIO packages
 retain the unchanged `nvngx_dlssnr.license.txt` beside the Streamline files.
+NR requires NVIDIA driver **616.92 or newer**, matching the
+[Windows minimum in the pinned RTX Remix source](https://github.com/NVIDIAGameWorks/dxvk-remix/blob/0a6cd5b1ee814ec390c358e0c9c32ece8895ddc0/src/dxvk/dxvk_options.cpp#L42).
+CSX checks the rendering adapter before initializing NGX. Outdated drivers
+disable NR and show the installed and required versions in its settings.
+NGX searches the verified runtime's physical directory, including when the
+DLL is installed through MO2's virtual filesystem.
+Update through the NVIDIA app or nvidia.com/drivers, then restart the game.
+If the version cannot be detected, CSX displays the requirement and retains
+NGX's compatibility checks. Ordinary DLSS, FSR and shared FOV keep their
+existing requirements.
 Source builds obtain the original NR parameter definitions from the
 verified SDK cache. The
 complete license is also retained in

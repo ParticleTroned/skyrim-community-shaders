@@ -13,6 +13,7 @@
 #include <intrin.h>
 #include <iostream>
 #include <new>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -24,6 +25,9 @@ namespace
 	thread_local std::array<std::string_view, 2> failEvents{};
 	thread_local bool persistentEventFailure = false;
 	thread_local unsigned eventFaults = 0;
+	thread_local std::size_t allocationsUntilFailure = 0;
+	thread_local bool countAllocations = false;
+	thread_local std::size_t countedAllocations = 0;
 	enum class StackCaptureStatus : unsigned
 	{
 		NotAttempted,
@@ -83,6 +87,8 @@ namespace
 	{
 		failNextAllocation = failAllAllocations = persistentEventFailure = false;
 		failEvents = {};
+		allocationsUntilFailure = 0;
+		countAllocations = false;
 	}
 	void Require(bool condition, const char* message)
 	{
@@ -93,6 +99,10 @@ namespace
 
 void* operator new(std::size_t size)
 {
+	if (countAllocations)
+		++countedAllocations;
+	if (allocationsUntilFailure && --allocationsUntilFailure == 0)
+		failAllAllocations = true;
 	if (failAllAllocations || std::exchange(failNextAllocation, false)) {
 		// Fixed storage preserves failure sites without allocating during unwinding.
 		auto& allocation = rejectedAllocations[rejectedAllocationCount++ % rejectedAllocations.size()];
@@ -197,6 +207,35 @@ namespace
 			"JSON cleanup allocated, retained children or changed the original fault");
 		std::fprintf(stderr, "JSON-CLEANUP persistent-fault mixed-depth256 PASS allocations=0\n");
 	}
+
+	void RunJsonCopyControl()
+	{
+		json source = { { "mixed", json::array({ nullptr, true, 7, "scalar", json::binary({ 1, 2, 3 }) }) } };
+		const Util::JsonCleanupGuard sourceCleanup(source);
+		json destination;
+		const Util::JsonCleanupGuard destinationCleanup(destination);
+		countedAllocations = 0;
+		countAllocations = true;
+		Util::CopyJsonInto(destination, source);
+		countAllocations = false;
+		Require(destination == source, "guarded JSON copy changed a value or binary subtype");
+		const auto allocations = countedAllocations;
+		Require(allocations > 0 && allocations <= 4096, "guarded JSON copy sweep is missing or unbounded");
+		for (std::size_t nth = 1; nth <= allocations; ++nth) {
+			Util::CopyJsonInto(destination, "sentinel");
+			allocationsUntilFailure = nth;
+			bool caught = false;
+			try {
+				Util::CopyJsonInto(destination, source);
+			} catch (const std::bad_alloc&) {
+				caught = true;
+			}
+			Require(caught && failAllAllocations && allocationsUntilFailure == 0 && destination == "sentinel",
+				"guarded partial JSON copy changed its destination or disarmed failure");
+			ClearFaults();
+		}
+		std::fprintf(stderr, "JSON-COPY persistent-nth=%zu PASS strong-destination=1\n", allocations);
+	}
 }
 
 namespace logger
@@ -211,7 +250,13 @@ namespace logger
 namespace BuildProvenance
 {
 	// Inert environmental metadata; no issued artifact or worker success is inferred.
-	nlohmann::json GetProducer() { return { { "fixture", "finalization-input" } }; }
+	nlohmann::json GetProducer()
+	{
+		nlohmann::json producer;
+		const Util::JsonCleanupGuard cleanup(producer);
+		producer["fixture"] = "finalization-input";
+		return nlohmann::json(std::move(producer));
+	}
 }
 
 // Only lifecycle setup is bound for a CPU fixture; all coordinator records and methods are production code.
@@ -232,6 +277,7 @@ struct ScreenshotFinalizationTest
 		std::filesystem::path root;
 		std::unique_ptr<ScreenshotApi> api;
 		std::weak_ptr<CSX::ScreenshotStorage::DirectoryLease> lease;
+		std::optional<ScreenshotApi::ManifestResult> terminalInput;
 		Case() :
 			root(std::filesystem::temp_directory_path() / ("csx-finalization-" + CSX::Api::ServiceFoundation::NewId())),
 			api(new ScreenshotApi(ScreenshotApi::FinalizationTestTag{}))
@@ -602,6 +648,89 @@ struct ScreenshotFinalizationTest
 		}
 	}
 
+	static void PrepareConstruction(Case& test, unsigned lane, unsigned& callbacks)
+	{
+		test.Record().referenceCompletion = [&](const json&) { ++callbacks; };
+		if (lane == 1)
+			test.terminalInput.emplace(ScreenshotApi::ManifestResult{ .success = false, .error = "worker failure" });
+		test.Sequence().packaging["nested"] = {
+			{ "objects", json::array({ { { "first", "retained" } }, { { "last", "retained" } } }) }
+		};
+		if (lane >= 2) {
+			test.Sequence().frameManifest = false;
+			test.api->TryFinalizeSequenceLocked(test.Sequence());
+			test.Record().finalizationFailure = std::make_exception_ptr(std::runtime_error("retained construction failure"));
+		}
+	}
+
+	static void Construct(Case& test, unsigned lane)
+	{
+		if (lane == 0) {
+			test.Sequence().finalizing = true;
+			test.api->QueueSequenceManifestLocked(test.Sequence(), true);
+		} else if (lane == 1) {
+			test.api->FinalizeSequenceLocked(test.Sequence(), &*test.terminalInput);
+		} else if (lane == 2) {
+			auto receipt = test.api->MakeReceipt(test.Record());
+			const Util::JsonCleanupGuard cleanup(receipt);
+		} else {
+			test.api->DrainReferenceNotifications();
+		}
+	}
+
+	static void PersistentConstruction(unsigned lane)
+	{
+		// Warm lazy runtime state before measuring the exact operation's allocations.
+		for (unsigned pass = 0; pass < 2; ++pass) {
+			Case test;
+			unsigned callbacks = 0;
+			PrepareConstruction(test, lane, callbacks);
+			countedAllocations = 0;
+			countAllocations = pass == 1;
+			Construct(test, lane);
+			countAllocations = false;
+		}
+		const auto allocations = countedAllocations;
+		Require(allocations > 0 && allocations <= 4096, "construction allocation sweep is missing or unbounded");
+		for (std::size_t nth = 1; nth <= allocations; ++nth) {
+			Case test;
+			unsigned callbacks = 0;
+			PrepareConstruction(test, lane, callbacks);
+			allocationsUntilFailure = nth;
+			bool caught = false;
+			try {
+				Construct(test, lane);
+			} catch (const std::bad_alloc&) {
+				caught = true;
+			}
+			Require(failAllAllocations && allocationsUntilFailure == 0,
+				"nth allocation was not reached with persistent failure armed");
+			Require(test.lease.expired() && test.api->CountPendingOperationsLocked() == 0 &&
+						test.api->manifestWorkerState->jobs.empty() && test.api->manifestWorkerState->outstanding == 0,
+				"persistent construction failure retained storage, a job or pending capacity");
+			Require(test.Record().referenceCompletion && callbacks == 0,
+				"persistent construction failure transferred or invoked the callback");
+			if (lane < 2) {
+				Require(!caught && test.Record().state == "failed" && test.Record().finalizationFailure &&
+							test.Sequence().manifestGeneration == 0 && test.Sequence().finalManifestGeneration == 0 &&
+							test.Record().eventIndex == 0,
+					"construction unwind failed terminal commit or changed rejected identities");
+			} else {
+				Require(test.Record().state == "completed" && test.Record().eventIndex == 2,
+					"receipt construction changed the committed terminal identities");
+			}
+			ClearFaults();
+			const auto expectedEvent = lane < 2 ? 0u : 2u;
+			Require(test.api->service.JournalStatus()["latestEventId"] == expectedEvent,
+				"construction failure consumed a journal identity");
+			test.api->DrainReferenceNotifications();
+			test.api->DrainReferenceNotifications();
+			Require(callbacks == 1 && !test.Record().referenceCompletion,
+				"construction recovery lost or duplicated the retained callback");
+		}
+		std::fprintf(stderr, "CONSTRUCTION lane=%u persistent-nth=%zu PASS\n", lane, allocations);
+	}
+
 	static void RunCase(const char* name, void (*test)())
 	{
 		currentCase = name;
@@ -639,6 +768,10 @@ struct ScreenshotFinalizationTest
 		RunCase("queued-child-cancellation", QueuedChildCancellation);
 		RunCase("multiple-artifact-completion", MultipleArtifactCompletion);
 		RunCase("notification-retention", NotificationRetention);
+		RunCase("construction-queue", [] { PersistentConstruction(0); });
+		RunCase("construction-terminal", [] { PersistentConstruction(1); });
+		RunCase("construction-receipt", [] { PersistentConstruction(2); });
+		RunCase("construction-notification", [] { PersistentConstruction(3); });
 		CSX::Api::ServiceFoundation::SetEventAllocationTestHook(nullptr);
 	}
 };
@@ -675,6 +808,7 @@ int main()
 	try {
 		RunCaptureControls();
 		RunJsonCleanupControl();
+		RunJsonCopyControl();
 		ScreenshotFinalizationTest::Run();
 		std::cout << "ScreenshotFinalization PASS\n";
 		return 0;

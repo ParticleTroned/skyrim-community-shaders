@@ -1,4 +1,5 @@
 #include "BuildProvenance.h"
+#include "Utils/JsonCleanup.h"
 
 #include <BuildProvenance.generated.h>
 #include <nlohmann/json.hpp>
@@ -108,20 +109,21 @@ namespace BuildProvenance
 	nlohmann::json GetProducer()
 	{
 		const auto& runtime = GetRuntimeIdentity();
-		return {
-			{ "component", "CommunityShaders" },
-			{ "buildId", CSX::EmbeddedBuildProvenance::BUILD_ID },
-			{ "buildIdShort", CSX::EmbeddedBuildProvenance::BUILD_ID_SHORT },
-			{ "sourceCommit", CSX::EmbeddedBuildProvenance::SOURCE_COMMIT },
-			{ "sourceDescribe", CSX::EmbeddedBuildProvenance::SOURCE_DESCRIBE },
-			{ "configuration", CSX::EmbeddedBuildProvenance::CONFIGURATION },
-			{ "sourceDirty", CSX::EmbeddedBuildProvenance::SOURCE_DIRTY },
-			{ "artifactSha256", runtime.artifactSha256 },
-			{ "manifestVerified", runtime.sidecarVerified },
-			{ "manifestError", runtime.sidecarError.empty() ? json(nullptr) : json(runtime.sidecarError) },
-			{ "shaderCacheAbiId", CSX::EmbeddedBuildProvenance::SHADER_CACHE_ABI_ID },
-			{ "shaderCompilerIdentity", GetShaderCompilerIdentity() },
-		};
+		json producer;
+		const Util::JsonCleanupGuard cleanup(producer);
+		producer["component"] = "CommunityShaders";
+		producer["buildId"] = CSX::EmbeddedBuildProvenance::BUILD_ID;
+		producer["buildIdShort"] = CSX::EmbeddedBuildProvenance::BUILD_ID_SHORT;
+		producer["sourceCommit"] = CSX::EmbeddedBuildProvenance::SOURCE_COMMIT;
+		producer["sourceDescribe"] = CSX::EmbeddedBuildProvenance::SOURCE_DESCRIBE;
+		producer["configuration"] = CSX::EmbeddedBuildProvenance::CONFIGURATION;
+		producer["sourceDirty"] = CSX::EmbeddedBuildProvenance::SOURCE_DIRTY;
+		producer["artifactSha256"] = runtime.artifactSha256;
+		producer["manifestVerified"] = runtime.sidecarVerified;
+		producer["manifestError"] = runtime.sidecarError.empty() ? json(nullptr) : json(runtime.sidecarError);
+		producer["shaderCacheAbiId"] = CSX::EmbeddedBuildProvenance::SHADER_CACHE_ABI_ID;
+		producer["shaderCompilerIdentity"] = GetShaderCompilerIdentity();
+		return json(std::move(producer));
 	}
 
 	std::optional<nlohmann::json> ValidateExpectedBuild(const nlohmann::json& a_args)

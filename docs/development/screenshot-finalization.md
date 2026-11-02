@@ -20,6 +20,13 @@ their jobs. The cleanup utility repeatedly removes scalar or empty-container
 leaves; it uses neither a heap traversal stack nor recursive calls. This keeps
 the original allocation exception observable while the fault remains armed.
 
+Guards are installed on empty owners before any structured fields are built.
+Nested receipt, error and manifest objects are populated incrementally and
+transferred by swap. Structured inputs are copied through an iterative guarded
+tree builder; failed copies leave the destination unchanged. Append operations
+move only complete guarded copies. This also covers producer, continuity and
+reference-completion metadata called from the finalization path.
+
 Reference completion receipts are prepared before callback ownership transfers.
 If receipt allocation fails, the callback remains with the retained request for
 a later drain. Successful preparation preserves terminal-transition order, and
@@ -52,7 +59,14 @@ identities, terminal state, lease release, pending capacity and callback orderin
 An additional mixed-value, 256-level cleanup control keeps persistent allocation
 failure armed and verifies that cleanup attempts no allocation. The three induced
 stack-capture controls are separate from actual SDK stack capture and from the
-finalization assertions.
+finalization assertions. Four construction sweeps first measure each warmed
+queue, terminal, receipt and notification operation, then reject every scalar
+allocation in turn with subsequent failures kept armed. They check mandatory
+state, storage, queue, generation, event and callback custody before clearing
+the fault, then check journal identity and exactly-once callback recovery.
+A separate mixed-value copy sweep checks partial-copy unwind and an unchanged
+destination. These controls do not claim aligned, array or nothrow allocation
+replacement coverage.
 The fixture binds only coordinator lifecycle setup, inert producer metadata and
 logging; it starts no I/O worker and writes no manifest or screenshot.
 The terminal-custody cases additionally drain controlled worker-result inputs,

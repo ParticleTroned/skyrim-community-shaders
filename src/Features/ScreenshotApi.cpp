@@ -68,12 +68,13 @@ namespace
 		const std::filesystem::path& a_path,
 		const CSX::ScreenshotStorage::CommittedArtifact& a_description)
 	{
-		return {
-			{ "path", Util::PathToUtf8(a_path) },
-			{ "bytes", a_description.bytes },
-			{ "committed", true },
-			{ "sha256", a_description.sha256 },
-		};
+		json artifact;
+		const Util::JsonCleanupGuard cleanup(artifact);
+		artifact["path"] = Util::PathToUtf8(a_path);
+		artifact["bytes"] = a_description.bytes;
+		artifact["committed"] = true;
+		artifact["sha256"] = a_description.sha256;
+		return json(std::move(artifact));
 	}
 
 	CSX::ScreenshotStorage::CommittedArtifact WriteJsonAtomically(
@@ -381,6 +382,14 @@ ScreenshotApi::json ScreenshotApi::HandleReferenceRequest(ScreenshotFeature& a_f
 void ScreenshotApi::DrainReferenceNotifications()
 {
 	std::vector<ReferenceNotification> ready;
+	struct Cleanup
+	{
+		std::vector<ReferenceNotification>& notifications;
+		~Cleanup()
+		{
+			for (auto& notification : notifications) Util::ClearJsonWithoutAllocation(notification.receipt);
+		}
+	} cleanup{ ready };
 	{
 		std::lock_guard lock(mutex);
 		for (;;) {
@@ -393,8 +402,12 @@ void ScreenshotApi::DrainReferenceNotifications()
 			if (!next)
 				break;
 			try {
-				auto receipt = CSX::Screenshot::ReferenceCompletion(MakeReceipt(*next));
-				ready.push_back({ {}, std::move(receipt) });
+				auto input = MakeReceipt(*next);
+				const Util::JsonCleanupGuard inputCleanup(input);
+				auto receipt = CSX::Screenshot::ReferenceCompletion(input);
+				const Util::JsonCleanupGuard receiptCleanup(receipt);
+				ready.emplace_back();
+				ready.back().receipt.swap(receipt);
 				ready.back().completion = std::move(next->referenceCompletion);
 			} catch (...) {
 				next->referenceNotificationFailure = std::current_exception();
@@ -1423,24 +1436,28 @@ void ScreenshotApi::TransitionLocked(RequestRecord& a_record, std::string a_stat
 
 ScreenshotApi::json ScreenshotApi::MakeReceipt(const RequestRecord& a_record) const
 {
-	json receipt = {
-		{ "requestId", a_record.requestId },
-		{ "kind", a_record.kind },
-		{ "state", a_record.state },
-		{ "clientId", a_record.clientId },
-		{ "commandId", a_record.commandId },
-		{ "acceptedUtc", a_record.acceptedUtc },
-		{ "terminalUtc", a_record.terminalUtc.empty() ? json(nullptr) : json(a_record.terminalUtc) },
-		{ "requested", a_record.requested },
-		{ "effective", a_record.effective },
-		{ "actual", a_record.actual },
-		{ "artifacts", a_record.artifacts },
-		{ "warnings", a_record.warnings },
-		{ "errors", a_record.errors },
-		{ "error", a_record.error },
-		{ "acknowledged", a_record.acknowledged },
-		{ "artifactProgress", { { "expected", a_record.expectedArtifacts }, { "terminal", a_record.terminalArtifacts }, { "successful", a_record.successfulArtifacts } } },
-	};
+	json receipt;
+	const Util::JsonCleanupGuard receiptCleanup(receipt);
+	receipt["requestId"] = a_record.requestId;
+	receipt["kind"] = a_record.kind;
+	receipt["state"] = a_record.state;
+	receipt["clientId"] = a_record.clientId;
+	receipt["commandId"] = a_record.commandId;
+	receipt["acceptedUtc"] = a_record.acceptedUtc;
+	receipt["terminalUtc"] = a_record.terminalUtc.empty() ? json(nullptr) : json(a_record.terminalUtc);
+	Util::CopyJsonInto(receipt["requested"], a_record.requested);
+	Util::CopyJsonInto(receipt["effective"], a_record.effective);
+	Util::CopyJsonInto(receipt["actual"], a_record.actual);
+	Util::CopyJsonInto(receipt["artifacts"], a_record.artifacts);
+	Util::CopyJsonInto(receipt["warnings"], a_record.warnings);
+	Util::CopyJsonInto(receipt["errors"], a_record.errors);
+	Util::CopyJsonInto(receipt["error"], a_record.error);
+	receipt["acknowledged"] = a_record.acknowledged;
+	Util::PopulateJsonObject(receipt["artifactProgress"], [&](json& progress) {
+		progress["expected"] = a_record.expectedArtifacts;
+		progress["terminal"] = a_record.terminalArtifacts;
+		progress["successful"] = a_record.successfulArtifacts;
+	});
 	if (!a_record.parentRequestId.empty()) {
 		receipt["parentRequestId"] = a_record.parentRequestId;
 		receipt["sequenceOrdinal"] = a_record.sequenceOrdinal;
@@ -1456,51 +1473,57 @@ ScreenshotApi::json ScreenshotApi::MakeReceipt(const RequestRecord& a_record) co
 		} catch (...) {
 			message = "unknown exception";
 		}
-		json error = { { "code", code }, { "message", message }, { "phase", phase } };
-		receipt["errors"].push_back(error);
+		json error;
+		const Util::JsonCleanupGuard errorCleanup(error);
+		error["code"] = code;
+		error["message"] = message;
+		error["phase"] = phase;
+		Util::AppendJsonCopy(receipt["errors"], error);
 		if (receipt["error"].is_null())
-			receipt["error"] = std::move(error);
+			receipt["error"].swap(error);
 	};
 	appendFailure(a_record.completionFailure, "request_completion_failed", "completion");
 	appendFailure(a_record.finalizationFailure, "sequence_finalization_failed", "packaging");
 	appendFailure(a_record.finalizationJournalFailure, "finalization_journal_failed", "journal");
 	appendFailure(a_record.referenceNotificationFailure, "reference_notification_deferred", "notification");
-	return receipt;
+	return json(std::move(receipt));
 }
 
 ScreenshotApi::json ScreenshotApi::MakeSequenceReceipt(const RequestRecord& a_record, const SequenceRecord* a_sequence) const
 {
 	auto receipt = MakeReceipt(a_record);
+	const Util::JsonCleanupGuard cleanup(receipt);
 	if (!a_sequence)
-		return receipt;
-	receipt["counts"] = {
-		{ "requested", a_sequence->frameCount },
-		{ "scheduled", a_sequence->scheduled },
-		{ "acquired", a_sequence->acquired },
-		{ "written", a_sequence->written },
-		{ "dropped", a_sequence->dropped },
-		{ "failed", a_sequence->failed },
-		{ "cancelled", a_sequence->cancelled },
-		{ "inFlight", a_sequence->inFlight },
-	};
-	receipt["manifest"] = {
-		{ "partialPath", a_sequence->frameManifest && !a_sequence->partialManifestPath.empty() ?
-							 json(Util::PathToUtf8(a_sequence->partialManifestPath)) :
-							 json(nullptr) },
-		{ "finalPath", a_sequence->frameManifest &&
-							   a_sequence->packaging["frameManifest"].value("state", std::string{}) == "written" ?
-						   json(Util::PathToUtf8(a_sequence->finalManifestPath)) :
-						   json(nullptr) },
-	};
+		return json(std::move(receipt));
+	Util::PopulateJsonObject(receipt["counts"], [&](json& counts) {
+		counts["requested"] = a_sequence->frameCount;
+		counts["scheduled"] = a_sequence->scheduled;
+		counts["acquired"] = a_sequence->acquired;
+		counts["written"] = a_sequence->written;
+		counts["dropped"] = a_sequence->dropped;
+		counts["failed"] = a_sequence->failed;
+		counts["cancelled"] = a_sequence->cancelled;
+		counts["inFlight"] = a_sequence->inFlight;
+	});
+	Util::PopulateJsonObject(receipt["manifest"], [&](json& manifest) {
+		manifest["partialPath"] = a_sequence->frameManifest && !a_sequence->partialManifestPath.empty() ?
+		                              json(Util::PathToUtf8(a_sequence->partialManifestPath)) :
+		                              json(nullptr);
+		manifest["finalPath"] = a_sequence->frameManifest &&
+		                                a_sequence->packaging["frameManifest"].value("state", std::string{}) == "written" ?
+		                            json(Util::PathToUtf8(a_sequence->finalManifestPath)) :
+		                            json(nullptr);
+	});
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (a_sequence->burst) {
-		receipt["continuity"] = a_sequence->continuity.Receipt(a_sequence->frameCount,
+		auto& continuity = receipt["continuity"];
+		continuity = a_sequence->continuity.Receipt(a_sequence->frameCount,
 			a_sequence->written == a_sequence->frameCount && a_sequence->failed == 0 && a_sequence->cancelled == 0 && !a_sequence->cancelRequested);
 		receipt["bufferedPayloadBytes"] = a_sequence->burst.payloadBytes;
 	}
 #endif
-	receipt["packaging"] = a_sequence->packaging;
-	return receipt;
+	Util::CopyJsonInto(receipt["packaging"], a_sequence->packaging);
+	return json(std::move(receipt));
 }
 
 ScreenshotApi::json ScreenshotApi::LookupReceiptLocked(std::string_view a_requestId) const
@@ -1747,24 +1770,29 @@ void ScreenshotApi::OnArtifactTerminal(
 			}
 		}
 		if (artifactSucceeded) {
-			auto committedArtifact = artifact;
+			json committedArtifact;
 			const Util::JsonCleanupGuard committedCleanup(committedArtifact);
+			Util::CopyJsonInto(committedArtifact, artifact);
 			if (relativeSequencePath)
 				committedArtifact["path"] = Util::PathToUtf8(*relativeSequencePath);
-			committedArtifact["actual"] = a_actual;
-			record.artifacts.push_back(committedArtifact);
-			record.actual["artifacts"].push_back(a_actual);
+			Util::CopyJsonInto(committedArtifact["actual"], a_actual);
+			Util::AppendJsonCopy(record.artifacts, committedArtifact);
+			Util::AppendJsonCopy(record.actual["artifacts"], a_actual);
 			++record.successfulArtifacts;
 			++completedArtifacts;
-			AppendEventLocked(record, "artifact.written", committedArtifact);
+			AppendEventLocked(record, "artifact.written", std::move(committedArtifact));
 		} else {
 			++failedArtifacts;
-			json error = { { "code", "artifact_failed" }, { "message", artifactError.empty() ? "screenshot artifact failed" : artifactError }, { "phase", "encoding" }, { "path", a_path.empty() ? json(nullptr) : json(Util::PathToUtf8(a_path)) } };
+			json error;
 			const Util::JsonCleanupGuard errorCleanup(error);
-			record.errors.push_back(error);
+			error["code"] = "artifact_failed";
+			error["message"] = artifactError.empty() ? "screenshot artifact failed" : artifactError;
+			error["phase"] = "encoding";
+			error["path"] = a_path.empty() ? json(nullptr) : json(Util::PathToUtf8(a_path));
+			Util::AppendJsonCopy(record.errors, error);
 			if (record.error.is_null())
-				record.error = error;
-			AppendEventLocked(record, "artifact.failed", error);
+				Util::CopyJsonInto(record.error, error);
+			AppendEventLocked(record, "artifact.failed", std::move(error));
 		}
 		if (record.terminalArtifacts < record.expectedArtifacts)
 			return;
@@ -1811,15 +1839,33 @@ void ScreenshotApi::OnSourceTerminal(std::string_view a_requestId, std::string_v
 	if (found == requests.end() || IsTerminal(found->second.state))
 		return;
 	try {
-		found->second.error = a_error.empty() ? json(nullptr) : json({ { "code", a_error }, { "message", a_error }, { "phase", "source" } });
+		Util::CopyJsonInto(found->second.error, nullptr);
+		if (!a_error.empty())
+			Util::PopulateJsonObject(found->second.error, [&](json& error) {
+				error["code"] = a_error;
+				error["message"] = a_error;
+				error["phase"] = "source";
+			});
+		json reason;
+		const Util::JsonCleanupGuard reasonCleanup(reason);
+		reason["reason"] = a_error;
 		if (!found->second.error.is_null())
-			found->second.errors.push_back(found->second.error);
-		if (a_error == "source_timeout")
-			AppendEventLocked(found->second, "source.timeout", { { "reason", a_error } });
+			Util::AppendJsonCopy(found->second.errors, found->second.error);
+		if (a_error == "source_timeout") {
+			json payload;
+			const Util::JsonCleanupGuard cleanup(payload);
+			Util::CopyJsonInto(payload, reason);
+			AppendEventLocked(found->second, "source.timeout", std::move(payload));
+		}
 		if (found->second.kind == "sequence_frame" &&
-			(a_state == "dropped" || a_error == "source_busy" || a_error == "encoder_backpressure"))
-			AppendEventLocked(found->second, "sequence.frame_dropped", { { "reason", a_error } });
-		TransitionLocked(found->second, std::string(a_state), "request.terminal", { { "reason", a_error } });
+			(a_state == "dropped" || a_error == "source_busy" || a_error == "encoder_backpressure")) {
+			json payload;
+			const Util::JsonCleanupGuard cleanup(payload);
+			Util::CopyJsonInto(payload, reason);
+			AppendEventLocked(found->second, "sequence.frame_dropped", std::move(payload));
+		}
+		std::string terminal(a_state);
+		TransitionLocked(found->second, std::move(terminal), "request.terminal", std::move(reason));
 	} catch (...) {
 		FailRequestCompletionLocked(found->second, std::current_exception());
 	}
@@ -1881,13 +1927,13 @@ void ScreenshotApi::FinishSequenceChildLocked(RequestRecord& a_child) noexcept
 		completedChild["state"] = a_child.state;
 		completedChild["scheduledEngineFrame"] = a_child.scheduledEngineFrame;
 		completedChild["scheduledTimestampUs"] = a_child.scheduledTimestampUs;
-		completedChild["requested"] = a_child.requested;
-		completedChild["effective"] = a_child.effective;
-		completedChild["actual"] = a_child.actual;
-		completedChild["artifacts"] = a_child.artifacts;
-		completedChild["warnings"] = a_child.warnings;
-		completedChild["errors"] = a_child.errors;
-		completedChild["error"] = a_child.error;
+		Util::CopyJsonInto(completedChild["requested"], a_child.requested);
+		Util::CopyJsonInto(completedChild["effective"], a_child.effective);
+		Util::CopyJsonInto(completedChild["actual"], a_child.actual);
+		Util::CopyJsonInto(completedChild["artifacts"], a_child.artifacts);
+		Util::CopyJsonInto(completedChild["warnings"], a_child.warnings);
+		Util::CopyJsonInto(completedChild["errors"], a_child.errors);
+		Util::CopyJsonInto(completedChild["error"], a_child.error);
 		const bool childUsedFallback = std::ranges::any_of(a_child.warnings, [](const json& warning) {
 			return warning.value("code", std::string{}) == "source_fallback";
 		});
@@ -1985,16 +2031,16 @@ void ScreenshotApi::FinalizeSequenceLocked(
 			parent->second.expectedArtifacts = 1;
 			parent->second.terminalArtifacts = 1;
 			if (manifestWritten) {
-				parent->second.artifacts.push_back(a_manifestResult->artifact);
+				Util::AppendJsonCopy(parent->second.artifacts, a_manifestResult->artifact);
 				parent->second.successfulArtifacts = 1;
 			} else {
 				parent->second.successfulArtifacts = 0;
-				parent->second.error = {
-					{ "code", "manifest_failed" },
-					{ "message", a_manifestResult ? a_manifestResult->error : "final manifest was not committed" },
-					{ "phase", "packaging" },
-				};
-				parent->second.errors.push_back(parent->second.error);
+				Util::PopulateJsonObject(parent->second.error, [&](json& error) {
+					error["code"] = "manifest_failed";
+					error["message"] = a_manifestResult ? a_manifestResult->error : "final manifest was not committed";
+					error["phase"] = "packaging";
+				});
+				Util::AppendJsonCopy(parent->second.errors, parent->second.error);
 			}
 		}
 		std::string terminal;
@@ -2011,7 +2057,10 @@ void ScreenshotApi::FinalizeSequenceLocked(
 			terminal = "completed_with_warnings";
 		else
 			terminal = "completed";
-		TransitionLocked(parent->second, terminal, "request.terminal", { { "manifestPath", a_sequence.frameManifest && manifestWritten ? json(Util::PathToUtf8(a_sequence.finalManifestPath)) : json(nullptr) } });
+		json terminalPayload;
+		const Util::JsonCleanupGuard terminalCleanup(terminalPayload);
+		terminalPayload["manifestPath"] = a_sequence.frameManifest && manifestWritten ? json(Util::PathToUtf8(a_sequence.finalManifestPath)) : json(nullptr);
+		TransitionLocked(parent->second, std::move(terminal), "request.terminal", std::move(terminalPayload));
 		a_sequence.directoryLease.reset();
 	} catch (...) {
 		FailSequenceFinalizationLocked(a_sequence, std::current_exception());
@@ -2023,13 +2072,14 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 	if (!a_sequence.frameManifest)
 		return;
 	try {
-		json packaging = a_sequence.packaging;
+		json packaging;
 		const Util::JsonCleanupGuard packagingCleanup(packaging);
-		packaging["frameManifest"] = {
-			{ "requested", true },
-			{ "state", a_final ? "written" : "partial" },
-			{ "path", Util::PathToUtf8(a_final ? a_sequence.finalManifestPath : a_sequence.partialManifestPath) },
-		};
+		Util::CopyJsonInto(packaging, a_sequence.packaging);
+		Util::PopulateJsonObject(packaging["frameManifest"], [&](json& manifest) {
+			manifest["requested"] = true;
+			manifest["state"] = a_final ? "written" : "partial";
+			manifest["path"] = Util::PathToUtf8(a_final ? a_sequence.finalManifestPath : a_sequence.partialManifestPath);
+		});
 		const auto parent = requests.find(a_sequence.requestId);
 		const auto updatedUtc = CSX::Api::ServiceFoundation::TimestampUtc();
 		if (parent == requests.end())
@@ -2049,46 +2099,65 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 			terminalOutcome = "completed";
 		const bool fallbacksPresent = a_sequence.manifestChildren &&
 		                              a_sequence.manifestChildren->fallbacksPresent;
-		ManifestJob job{
-			.requestId = a_sequence.requestId,
-			.generation = a_sequence.manifestGeneration + 1,
-			.final = a_final,
-			.destination = a_final ? a_sequence.finalManifestPath : a_sequence.partialManifestPath,
-			.partialPath = a_sequence.partialManifestPath,
-			.directoryLease = a_sequence.directoryLease,
-			.header = {
-				{ "contract", { { "name", "csx.screenshot" }, { "major", kContractMajor }, { "minor", kContractMinor }, { "schemaRevision", kSchemaRevision } } },
-				{ "producer", BuildProvenance::GetProducer() },
-				{ "sessionId", service.SessionId() },
-				{ "requestId", a_sequence.requestId },
-				{ "state", a_final ? "final" : "partial" },
-				{ "terminalOutcome", a_final ? json(terminalOutcome) : json(nullptr) },
-				{ "client", parent != requests.end() ? json({ { "clientId", parent->second.clientId }, { "commandId", parent->second.commandId } }) : json::object() },
-				{ "acceptedUtc", parent != requests.end() ? json(parent->second.acceptedUtc) : json(nullptr) },
-				{ "completedUtc", a_final ? json(updatedUtc) : json(nullptr) },
-				{ "requested", a_sequence.requested },
-				{ "effective", a_sequence.effective },
-				{ "actual", { { "children", a_sequence.childCount }, { "fallbacksPresent", fallbacksPresent } } },
-				{ "counts", { { "requested", a_sequence.frameCount }, { "scheduled", a_sequence.scheduled }, { "acquired", a_sequence.acquired }, { "written", a_sequence.written }, { "dropped", a_sequence.dropped }, { "failed", a_sequence.failed }, { "cancelled", a_sequence.cancelled }, { "inFlight", a_sequence.inFlight } } },
-				{ "warnings", parent != requests.end() ? parent->second.warnings : json::array() },
-				{ "errors", parent != requests.end() ? parent->second.errors : json::array() },
-				{ "packaging", packaging },
-				{ "updatedUtc", updatedUtc },
-			},
-			.children = a_sequence.manifestChildren,
-		};
+		ManifestJob job;
 		const Util::JsonCleanupGuard headerCleanup(job.header);
+		job.requestId = a_sequence.requestId;
+		job.generation = a_sequence.manifestGeneration + 1;
+		job.final = a_final;
+		job.destination = a_final ? a_sequence.finalManifestPath : a_sequence.partialManifestPath;
+		job.partialPath = a_sequence.partialManifestPath;
+		job.directoryLease = a_sequence.directoryLease;
+		job.children = a_sequence.manifestChildren;
+		Util::PopulateJsonObject(job.header["contract"], [&](json& contract) {
+			contract["name"] = "csx.screenshot";
+			contract["major"] = kContractMajor;
+			contract["minor"] = kContractMinor;
+			contract["schemaRevision"] = kSchemaRevision;
+		});
+		auto& producer = job.header["producer"];
+		producer = BuildProvenance::GetProducer();
+		job.header["sessionId"] = service.SessionId();
+		job.header["requestId"] = a_sequence.requestId;
+		job.header["state"] = a_final ? "final" : "partial";
+		job.header["terminalOutcome"] = a_final ? json(terminalOutcome) : json(nullptr);
+		Util::PopulateJsonObject(job.header["client"], [&](json& client) {
+			client["clientId"] = parent->second.clientId;
+			client["commandId"] = parent->second.commandId;
+		});
+		job.header["acceptedUtc"] = parent->second.acceptedUtc;
+		job.header["completedUtc"] = a_final ? json(updatedUtc) : json(nullptr);
+		Util::CopyJsonInto(job.header["requested"], a_sequence.requested);
+		Util::CopyJsonInto(job.header["effective"], a_sequence.effective);
+		Util::PopulateJsonObject(job.header["actual"], [&](json& actual) {
+			actual["children"] = a_sequence.childCount;
+			actual["fallbacksPresent"] = fallbacksPresent;
+		});
+		Util::PopulateJsonObject(job.header["counts"], [&](json& counts) {
+			counts["requested"] = a_sequence.frameCount;
+			counts["scheduled"] = a_sequence.scheduled;
+			counts["acquired"] = a_sequence.acquired;
+			counts["written"] = a_sequence.written;
+			counts["dropped"] = a_sequence.dropped;
+			counts["failed"] = a_sequence.failed;
+			counts["cancelled"] = a_sequence.cancelled;
+			counts["inFlight"] = a_sequence.inFlight;
+		});
+		Util::CopyJsonInto(job.header["warnings"], parent->second.warnings);
+		Util::CopyJsonInto(job.header["errors"], parent->second.errors);
+		job.header["packaging"].swap(packaging);
+		job.header["updatedUtc"] = updatedUtc;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		if (a_sequence.burst)
-			job.header["continuity"] = a_sequence.continuity.Receipt(a_sequence.frameCount,
+		if (a_sequence.burst) {
+			auto& continuity = job.header["continuity"];
+			continuity = a_sequence.continuity.Receipt(a_sequence.frameCount,
 				a_sequence.written == a_sequence.frameCount && a_sequence.failed == 0 && a_sequence.cancelled == 0 && !a_sequence.cancelRequested);
+		}
 #endif
-		json queuedEvent = {
-			{ "generation", job.generation },
-			{ "final", a_final },
-			{ "path", Util::PathToUtf8(job.destination) },
-		};
+		json queuedEvent;
 		const Util::JsonCleanupGuard queuedEventCleanup(queuedEvent);
+		queuedEvent["generation"] = job.generation;
+		queuedEvent["final"] = a_final;
+		queuedEvent["path"] = Util::PathToUtf8(job.destination);
 		const auto state = manifestWorkerState;
 		CSX::Screenshot::AdmitManifestJob(*state, a_sequence, std::move(job), service,
 			parent->second, std::move(queuedEvent));
@@ -2107,16 +2176,20 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 			} catch (...) {
 				message = "manifest admission failed with an unknown exception";
 			}
-			a_sequence.packaging["frameManifest"] = {
-				{ "requested", true }, { "state", "failed" }, { "error", message }
-			};
-			if (auto parent = requests.find(a_sequence.requestId); parent != requests.end())
-				AppendEventLocked(parent->second, "packaging.failed", {
-																		  { "generation", a_sequence.manifestGeneration },
-																		  { "final", a_final },
-																		  { "path", Util::PathToUtf8(a_final ? a_sequence.finalManifestPath : a_sequence.partialManifestPath) },
-																		  { "error", message },
-																	  });
+			Util::PopulateJsonObject(a_sequence.packaging["frameManifest"], [&](json& manifest) {
+				manifest["requested"] = true;
+				manifest["state"] = "failed";
+				manifest["error"] = message;
+			});
+			if (auto parent = requests.find(a_sequence.requestId); parent != requests.end()) {
+				json payload;
+				const Util::JsonCleanupGuard payloadCleanup(payload);
+				payload["generation"] = a_sequence.manifestGeneration;
+				payload["final"] = a_final;
+				payload["path"] = Util::PathToUtf8(a_final ? a_sequence.finalManifestPath : a_sequence.partialManifestPath);
+				payload["error"] = message;
+				AppendEventLocked(parent->second, "packaging.failed", std::move(payload));
+			}
 		} catch (...) {
 			a_sequence.manifestReportingFailure = std::current_exception();
 			if (auto parent = requests.find(a_sequence.requestId); parent != requests.end())
@@ -2153,50 +2226,55 @@ void ScreenshotApi::DrainWorkerResultsLocked()
 			if (result.cancelled) {
 				record.finalizing = true;
 				if (record.frameManifest) {
-					record.packaging["frameManifest"] = {
-						{ "requested", true }, { "state", "cancelled" }, { "path", nullptr }
-					};
+					Util::PopulateJsonObject(record.packaging["frameManifest"], [&](json& manifest) {
+						manifest["requested"] = true;
+						manifest["state"] = "cancelled";
+						manifest["path"] = nullptr;
+					});
 					parent->second.terminalArtifacts = parent->second.expectedArtifacts;
 				}
-				TransitionLocked(parent->second, record.stopRequested ? "stopped" : "cancelled", "request.terminal", { { "manifestPath", nullptr } });
+				json payload;
+				const Util::JsonCleanupGuard cleanup(payload);
+				payload["manifestPath"] = nullptr;
+				TransitionLocked(parent->second, record.stopRequested ? "stopped" : "cancelled", "request.terminal", std::move(payload));
 				continue;
 			}
 			if (!result.success || !result.directoryLease) {
 				record.finalizing = true;
-				parent->second.error = {
-					{ "code", "destination_unavailable" },
-					{ "message", result.error.empty() ? "sequence destination preparation failed" : result.error },
-					{ "phase", "preparation" },
-					{ "field", "sequence.capture.destination" },
-				};
-				parent->second.errors.push_back(parent->second.error);
+				Util::PopulateJsonObject(parent->second.error, [&](json& error) {
+					error["code"] = "destination_unavailable";
+					error["message"] = result.error.empty() ? "sequence destination preparation failed" : result.error;
+					error["phase"] = "preparation";
+					error["field"] = "sequence.capture.destination";
+				});
+				Util::AppendJsonCopy(parent->second.errors, parent->second.error);
 				if (record.frameManifest) {
-					record.packaging["frameManifest"] = {
-						{ "requested", true },
-						{ "state", "failed" },
-						{ "path", nullptr },
-						{ "error", parent->second.error },
-					};
+					Util::PopulateJsonObject(record.packaging["frameManifest"], [&](json& manifest) {
+						manifest["requested"] = true;
+						manifest["state"] = "failed";
+						manifest["path"] = nullptr;
+						Util::CopyJsonInto(manifest["error"], parent->second.error);
+					});
 					parent->second.terminalArtifacts = parent->second.expectedArtifacts;
 				}
-				TransitionLocked(parent->second, "failed", "sequence.preparation_failed", {
-																							  { "manifestPath", nullptr },
-																							  { "error", parent->second.error },
-																						  });
+				json payload;
+				const Util::JsonCleanupGuard cleanup(payload);
+				payload["manifestPath"] = nullptr;
+				Util::CopyJsonInto(payload["error"], parent->second.error);
+				TransitionLocked(parent->second, "failed", "sequence.preparation_failed", std::move(payload));
 				continue;
 			}
-			record.capture = std::move(result.capture);
-			record.effective["capture"] = record.capture;
+			record.capture.swap(result.capture);
+			Util::CopyJsonInto(record.effective["capture"], record.capture);
 			record.directoryLease = std::move(result.directoryLease);
 			record.directory = record.directoryLease->Path();
 			record.partialManifestPath = record.directory / "sequence.json.partial";
 			record.finalManifestPath = record.directory / "sequence.json";
-			parent->second.effective["capture"] = record.capture;
-			json preparedPayload = {
-				{ "frameCount", record.frameCount },
-				{ "manifestPath", Util::PathToUtf8(record.partialManifestPath) },
-			};
+			Util::CopyJsonInto(parent->second.effective["capture"], record.capture);
+			json preparedPayload;
 			const Util::JsonCleanupGuard preparedCleanup(preparedPayload);
+			preparedPayload["frameCount"] = record.frameCount;
+			preparedPayload["manifestPath"] = Util::PathToUtf8(record.partialManifestPath);
 			if (record.stopRequested || record.cancelRequested)
 				AppendEventLocked(parent->second, "sequence.prepared", std::move(preparedPayload));
 			else

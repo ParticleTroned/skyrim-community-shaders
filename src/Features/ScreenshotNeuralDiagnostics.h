@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Utils/JsonCleanup.h"
+
 #include <exception>
 #include <functional>
 #include <nlohmann/json.hpp>
@@ -17,12 +19,18 @@ namespace CSX::ScreenshotPolicy
 	{
 		if (auto snapshot = std::exchange(pending, {})) {
 			try {
-				actual["captureDiagnostics"] = snapshot();
+				auto& destination = actual["captureDiagnostics"];
+				auto diagnostic = snapshot();
+				const Util::JsonCleanupGuard cleanup(diagnostic);
+				destination.swap(diagnostic);
 			} catch (const std::exception& error) {
-				actual["captureDiagnostics"] = {
-					{ "schemaVersion", 1 }, { "finalized", true }, { "available", false },
-					{ "reason", "companion_finalization_failed" }, { "detail", error.what() }
-				};
+				Util::PopulateJsonObject(actual["captureDiagnostics"], [&](nlohmann::json& diagnostic) {
+					diagnostic["schemaVersion"] = 1;
+					diagnostic["finalized"] = true;
+					diagnostic["available"] = false;
+					diagnostic["reason"] = "companion_finalization_failed";
+					diagnostic["detail"] = error.what();
+				});
 			}
 		}
 	}

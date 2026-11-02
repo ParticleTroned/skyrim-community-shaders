@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Utils/JsonCleanup.h"
+
 #include <cstdint>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -130,11 +132,16 @@ namespace ScreenshotBurst
 
 		nlohmann::json Receipt(uint32_t requested, bool allWritten) const
 		{
-			return { { "complete", failure.empty() && acquired == requested && allWritten },
-				{ "acquired", acquired }, { "requested", requested },
-				{ "firstEngineFrame", acquired ? nlohmann::json(firstFrame) : nlohmann::json(nullptr) },
-				{ "lastEngineFrame", acquired ? nlohmann::json(lastFrame) : nlohmann::json(nullptr) },
-				{ "failure", failure } };
+			using json = nlohmann::json;
+			json receipt;
+			const Util::JsonCleanupGuard cleanup(receipt);
+			receipt["complete"] = failure.empty() && acquired == requested && allWritten;
+			receipt["acquired"] = acquired;
+			receipt["requested"] = requested;
+			receipt["firstEngineFrame"] = acquired ? json(firstFrame) : json(nullptr);
+			receipt["lastEngineFrame"] = acquired ? json(lastFrame) : json(nullptr);
+			receipt["failure"] = failure;
+			return json(std::move(receipt));
 		}
 	};
 }

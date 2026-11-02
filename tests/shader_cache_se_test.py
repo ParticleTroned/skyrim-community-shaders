@@ -117,6 +117,7 @@ class SECacheContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = BUILDER.filter_profile_defines(
                 config_path, Path(temporary) / "se.yaml", yaml, BUILDER.SHIPPED_CACHE_PROFILE,
+                feature_states={"ReverseZ": True},
                 additional_excluded_defines=distribution.excluded_defines | {distribution.horizon_fix_define},
                 add_cross_modlist_variants=True, source_root=REPO,
             )
@@ -136,12 +137,30 @@ class SECacheContractTests(unittest.TestCase):
             names = {BUILDER.normalized_define_name(value) for value in defines}
             self.assertNotIn("VR", names)
             self.assertNotIn("WETNESS_EFFECTS", names)
+            self.assertIn("REVERSE_Z=1" if source == "Utility.hlsl" else "REVERSE_Z=", defines)
             if source == "RunGrass.hlsl":
                 self.assertIn("PBR_GRASS=1", defines)
                 self.assertIn("GRASS_OPTIMIZATIONS=", defines)
                 self.assertIn("WETTERNESS=", defines)
         self.assertIn(("RunGrass.hlsl", "VSHADER", "Grass:Vertex:0"), by_key)
         self.assertIn(("RunGrass.hlsl", "PSHADER", "Grass:Pixel:10006"), by_key)
+
+    @unittest.skipUnless(yaml is not None and parse_shader_configs is not None, "pinned hlslkit and PyYAML are required")
+    def test_disabled_reverse_z_removes_captured_depth_defines(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "captured.yaml"
+            captured = yaml.safe_load((REPO / ".github/configs/shader-validation.yaml").read_text(encoding="utf-8"))
+            captured["common_defines"].append("REVERSE_Z=1")
+            source.write_text(yaml.safe_dump(captured), encoding="utf-8")
+            filtered = BUILDER.filter_profile_defines(
+                source, root / "standard.yaml", yaml, BUILDER.SHIPPED_CACHE_PROFILE,
+                feature_states={"ReverseZ": False}, source_root=REPO,
+            )
+            tasks = parse_shader_configs(str(filtered))
+            self.assertTrue(tasks)
+            for task in tasks:
+                self.assertNotIn("REVERSE_Z", {BUILDER.normalized_define_name(value) for value in task[3]})
 
     @unittest.skipUnless(parse_shader_configs is not None, "pinned hlslkit is required")
     def test_fxc_adapter_preserves_upstream_validation_and_empty_definitions(self) -> None:

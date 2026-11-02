@@ -106,7 +106,8 @@ bool DepthPyramid::Build(ID3D11DeviceContext1* context, ID3D11ShaderResourceView
 	ID3D11ComputeShader* spd = nullptr;
 	if (globals::d3d::device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_1 && mipCount > 1)
 		spd = spdShader.Get(L"Data\\Shaders\\Common\\DepthPyramidSPD.hlsl", {}, "cs_5_0", "main", "DepthPyramid::SPDCS");
-	D3DState::ComputeState restore(context, spd ? 14u : 4u);
+	D3DState::ComputeState restore(context, spd ? 14u : 4u, true);
+	Util::BindFrameBufferConstantBuffersForCS(context);
 	const auto reduce = [&](UINT mip) {
 		const std::array<UINT, 8> values{ std::max(width >> mip, eyes), std::max(height >> mip, 1u),
 			mip ? std::max(width >> (mip - 1), eyes) : sourceWidth, mip ? std::max(height >> (mip - 1), 1u) : sourceHeight,

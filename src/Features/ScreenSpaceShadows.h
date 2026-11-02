@@ -72,6 +72,7 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(RaymarchCB);
 
 	ID3D11SamplerState* pointBorderSampler = nullptr;
+	ID3D11SamplerState* reversePointBorderSampler = nullptr;
 
 	ConstantBuffer* raymarchCB = nullptr;
 	Util::LazyShader<ID3D11ComputeShader> raymarchCS;

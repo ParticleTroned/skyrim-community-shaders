@@ -1,3 +1,4 @@
+#include "Common/ReverseZ.hlsli"
 #if defined(HORIZON_FIX)
 namespace HorizonFix
 {
@@ -179,39 +180,41 @@ VS_OUTPUT main(VS_INPUT input)
 	float4 worldPos = mul(World, inputPosition);
 	float4 worldViewPos = mul(WorldViewProj, inputPosition);
 
-	float heightMult = min((1.0 / 10000.0) * max(worldViewPos.z - 70000, 0), 1);
+	const bool reverseProjection = FrameBuffer::IsReverseProjection();
+	float heightMult = min((1.0 / 10000.0) * max(FrameBuffer::ToStandardClipZ(worldViewPos, reverseProjection) - 70000, 0), 1);
 
 	vsout.HPosition.xy = worldViewPos.xy;
-	vsout.HPosition.z = heightMult * 0.5 + worldViewPos.z;
+	vsout.HPosition.z = FrameBuffer::OffsetClipDepth(worldViewPos, heightMult * 0.5, reverseProjection).z;
 	vsout.HPosition.w = worldViewPos.w;
 
-#if defined(HORIZON_FIX)
-	vsout.HPosition.z = min(vsout.HPosition.z, vsout.HPosition.w * HorizonFix::FoldedDepth);
-#endif
+#		if defined(HORIZON_FIX)
+	float foldedDepth = vsout.HPosition.w * (reverseProjection ? 1.0 - HorizonFix::FoldedDepth : HorizonFix::FoldedDepth);
+	vsout.HPosition.z = reverseProjection ? max(vsout.HPosition.z, foldedDepth) : min(vsout.HPosition.z, foldedDepth);
+#		endif
 
-#if defined(STENCIL)
+#		if defined(STENCIL)
 	vsout.WorldPosition = worldPos;
 	vsout.PreviousWorldPosition = mul(PreviousWorld, inputPosition);
-#else
+#		else
 
-#if !(defined(UNIFIED_WATER))
-	float fogDistanceFactor = min(VSFogFarColor.w, pow(saturate(length(worldViewPos.xyz) * VSFogParam.y - VSFogParam.x), NormalsScale.w));
+#			if !defined(UNIFIED_WATER)
+	float fogDistanceFactor = min(VSFogFarColor.w, pow(saturate(length(FrameBuffer::ToStandardClip(worldViewPos, reverseProjection)) * VSFogParam.y - VSFogParam.x), NormalsScale.w));
 	vsout.FogParam.xyz = lerp(VSFogNearColor.xyz, VSFogFarColor.xyz, fogDistanceFactor);
 	vsout.FogParam.w = fogDistanceFactor;
-#endif
+#			endif
 
 	vsout.WPosition.xyz = worldPos.xyz;
 	vsout.WPosition.w = length(worldPos.xyz);
 
-#if defined(LOD)
+#			if defined(LOD)
 	float4 posAdjust =
 		ObjectUV.x ? 0.0 : (QPosAdjust[0].xyxy + worldPos.xyxy) / NormalsScale.xxyy;
 
 	vsout.TexCoord1.xyzw = NormalsScroll0 + posAdjust;
-#else
-#if (!(defined(SPECULAR))) || (NUM_SPECULAR_LIGHTS == 0)
+#			else
+#				if (!(defined(SPECULAR))) || (NUM_SPECULAR_LIGHTS == 0)
 	vsout.MPosition.xyzw = inputPosition.xyzw;
-#endif
+#				endif
 
 	float2 posAdjust = worldPos.xy + QPosAdjust[0].xy;
 
@@ -219,86 +222,86 @@ VS_OUTPUT main(VS_INPUT input)
 	float2 scrollAdjust2 = posAdjust / NormalsScale.yy;
 	float2 scrollAdjust3 = posAdjust / NormalsScale.zz;
 
-#if (defined(UNIFIED_WATER)) && (defined(NORMAL_TEXCOORD))
+#				if (defined(UNIFIED_WATER)) && (defined(NORMAL_TEXCOORD))
 	float2 cellShift = float2(floor(ObjectUV.z * 0.5), floor((ObjectUV.z - 1.0) * 0.5));
 	float2 scaledUV = input.TexCoord0.xy * ObjectUV.z - cellShift;
-#endif
+#				endif
 
-#if !((defined(FLOWMAP)) && ((defined(REFRACTIONS)) || ((defined(BLEND_NORMALS)) || ((defined(DEPTH)) || (NUM_SPECULAR_LIGHTS == 0)))))
-#if defined(NORMAL_TEXCOORD)
+#				if !((defined(FLOWMAP)) && ((defined(REFRACTIONS)) || ((defined(BLEND_NORMALS)) || ((defined(DEPTH)) || (NUM_SPECULAR_LIGHTS == 0)))))
+#					if defined(NORMAL_TEXCOORD)
 	float3 normalsScale = 0.001 * NormalsScale.xyz;
 	if (ObjectUV.x) {
 		scrollAdjust1 = input.TexCoord0.xy / normalsScale.xx;
 		scrollAdjust2 = input.TexCoord0.xy / normalsScale.yy;
 		scrollAdjust3 = input.TexCoord0.xy / normalsScale.zz;
 	}
-#else
+#					else
 	if (ObjectUV.x) {
 		scrollAdjust1 = 0.0;
 		scrollAdjust2 = 0.0;
 		scrollAdjust3 = 0.0;
 	}
-#endif
-#endif
+#					endif
+#				endif
 
 	vsout.TexCoord1 = 0.0;
 	vsout.TexCoord2 = 0.0;
-#if defined(FLOWMAP)
-#if !((((defined(SPECULAR)) || (NUM_SPECULAR_LIGHTS == 0)) || ((defined(UNDERWATER)) && (defined(REFRACTIONS)))) && (!(defined(NORMAL_TEXCOORD))))
-#if defined(BLEND_NORMALS)
+#				if defined(FLOWMAP)
+#					if !((((defined(SPECULAR)) || (NUM_SPECULAR_LIGHTS == 0)) || ((defined(UNDERWATER)) && (defined(REFRACTIONS)))) && (!(defined(NORMAL_TEXCOORD))))
+#						if defined(BLEND_NORMALS)
 	vsout.TexCoord1.xy = NormalsScroll0.xy + scrollAdjust1;
 	vsout.TexCoord1.zw = NormalsScroll0.zw + scrollAdjust2;
 	vsout.TexCoord2.xy = NormalsScroll1.xy + scrollAdjust3;
-#else
+#						else
 	vsout.TexCoord1.xy = NormalsScroll0.xy + scrollAdjust1;
 	vsout.TexCoord1.zw = 0.0;
 	vsout.TexCoord2.xy = 0.0;
-#endif
-#endif
-#if !(defined(NORMAL_TEXCOORD))
+#						endif
+#					endif
+#					if !(defined(NORMAL_TEXCOORD))
 	vsout.TexCoord3 = 0.0;
-#elif defined(WADING)
-#if defined(UNIFIED_WATER)
+#					elif defined(WADING)
+#						if defined(UNIFIED_WATER)
 	float2 wadingUV = (input.TexCoord0.xy - 0.5f) * 0.5f;
 	vsout.TexCoord2.zw = (CellTexCoordOffset.xy + wadingUV) / ObjectUV.xy;
 	vsout.TexCoord3.xy = CellTexCoordOffset.zw + wadingUV;
-#else
+#						else
 	vsout.TexCoord2.zw = ((-0.5 + input.TexCoord0.xy) * 0.1 + CellTexCoordOffset.xy) +
 	                     float2(CellTexCoordOffset.z, -CellTexCoordOffset.w + ObjectUV.x) / ObjectUV.xx;
 	vsout.TexCoord3.xy = -0.25 + (input.TexCoord0.xy * 0.5 + ObjectUV.yz);
-#endif
+#						endif
 	vsout.TexCoord3.zw = input.TexCoord0.xy;
-#elif (defined(REFRACTIONS)) || ((NUM_SPECULAR_LIGHTS == 0) || (defined(BLEND_NORMALS)))
-#if defined(UNIFIED_WATER)
+#					elif (defined(REFRACTIONS)) || ((NUM_SPECULAR_LIGHTS == 0) || (defined(BLEND_NORMALS)))
+#						if defined(UNIFIED_WATER)
 	float2 dims = float2(ObjectUV.x, ObjectUV.y);
 	vsout.TexCoord2.zw = (CellTexCoordOffset.xy + scaledUV) / dims;
 	vsout.TexCoord3.xy = CellTexCoordOffset.zw + scaledUV;
 	vsout.TexCoord3.zw = scaledUV;
-#else
+#						else
 	vsout.TexCoord2.zw = (CellTexCoordOffset.xy + input.TexCoord0.xy) / ObjectUV.xx;
 	vsout.TexCoord3.xy = CellTexCoordOffset.zw + input.TexCoord0.xy;
 	vsout.TexCoord3.zw = input.TexCoord0.xy;
-#endif
-#endif
+#						endif
+#					endif
 	vsout.TexCoord4 = ObjectUV.xy;
-#else
+#				else
 	vsout.TexCoord1.xy = NormalsScroll0.xy + scrollAdjust1;
 	vsout.TexCoord1.zw = NormalsScroll0.zw + scrollAdjust2;
 	vsout.TexCoord2.xy = NormalsScroll1.xy + scrollAdjust3;
 	vsout.TexCoord2.z = worldViewPos.w;
 	vsout.TexCoord2.w = 0;
-#if (defined(WADING)) || ((defined(VERTEX_ALPHA_DEPTH)) && (defined(VC)))
+#					if (defined(WADING)) || ((defined(VERTEX_ALPHA_DEPTH)) && (defined(VC)))
 	vsout.TexCoord3 = 0.0;
-#if (defined(NORMAL_TEXCOORD)) && (((!(defined(BLEND_NORMALS))) && (!(defined(VERTEX_ALPHA_DEPTH)))) || (defined(WADING)))
+#						if (defined(NORMAL_TEXCOORD)) && (((!(defined(BLEND_NORMALS))) && (!(defined(VERTEX_ALPHA_DEPTH)))) || (defined(WADING)))
 	vsout.TexCoord3.xy = input.TexCoord0;
-#endif
-#if (defined(VERTEX_ALPHA_DEPTH)) && (defined(VC))
+#						endif
+#						if (defined(VERTEX_ALPHA_DEPTH)) && (defined(VC))
 	vsout.TexCoord3.z = input.Color.w;
-#endif
-#endif
-#endif
-#endif
-#endif
+#						endif
+#					endif
+#				endif
+#			endif
+#		endif
 
 	return vsout;
 }
@@ -956,7 +959,7 @@ float GetRawScreenDepthWater(float2 screenPosition)
 
 float ResolveScreenDepthWater(float rawDepth)
 {
-	return CameraDataWater.w / (-rawDepth * CameraDataWater.z + CameraDataWater.x);
+	return CameraDataWater.w / (DepthOrder::IsReversed() ? CameraDataWater.y + rawDepth * CameraDataWater.z : CameraDataWater.x - rawDepth * CameraDataWater.z);
 }
 
 float GetScreenDepthWater(float2 screenPosition)
@@ -1499,10 +1502,10 @@ DiffuseOutput GetWaterDiffuseColor(
 			refractionWorldPosition.xyz /= refractionWorldPosition.w;
 		}
 
-#if defined(HORIZON_FIX)
-		if (refractionRawDepth >= HorizonFix::EmptyDepthThreshold)
+#					if defined(HORIZON_FIX)
+		if (FrameBuffer::ToStandardDepth(refractionRawDepth) >= HorizonFix::EmptyDepthThreshold)
 			distanceMul = 1.0.xxxx;
-#endif
+#					endif
 #endif
 
 		// The bounds already select the eye; inferring it again from a distorted UV can cross the seam.
@@ -1643,10 +1646,10 @@ PS_OUTPUT main(PS_INPUT input)
 	distanceMul = all(isfinite(unclampedDistanceMul)) ?
 	                  saturate(unclampedDistanceMul) :
 	                  0.0.xxxx;
-#if defined(HORIZON_FIX)
-	if (primaryRawDepth >= HorizonFix::EmptyDepthThreshold)
+#					if defined(HORIZON_FIX)
+	if (FrameBuffer::ToStandardDepth(primaryRawDepth) >= HorizonFix::EmptyDepthThreshold)
 		distanceMul = 1.0.xxxx;
-#endif
+#					endif
 #endif
 #endif
 

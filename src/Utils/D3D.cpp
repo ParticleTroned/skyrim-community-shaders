@@ -1,5 +1,6 @@
 #include "D3D.h"
 #include "ComIdentity.h"
+#include "Features/ReverseZ.h"
 
 #include "Deferred.h"
 #include "Features/TerrainBlending.h"
@@ -175,7 +176,7 @@ namespace Util
 
 		auto& tb = globals::features::terrainBlending;
 		if (tb.loaded && tb.settings.Enabled) {
-			auto* srv = prefer16bit ? (tb.blendedDepthTexture16 ? tb.blendedDepthTexture16->srv.get() : nullptr) : (tb.blendedDepthTexture ? tb.blendedDepthTexture->srv.get() : nullptr);
+			auto* srv = prefer16bit && !globals::features::reverseZ.IsActive() ? (tb.blendedDepthTexture16 ? tb.blendedDepthTexture16->srv.get() : nullptr) : (tb.blendedDepthTexture ? tb.blendedDepthTexture->srv.get() : nullptr);
 			if (srv)
 				return srv;
 		}
@@ -393,6 +394,8 @@ namespace Util
 			return nullptr;
 		}
 
+		if (globals::features::reverseZ.IsActive() && std::ranges::none_of(macros, [](const auto& macro) { return std::strcmp(macro.Name, "REVERSE_Z") == 0; }))
+			macros.push_back({ "REVERSE_Z", "1" });
 		// Add null terminating entry
 		macros.push_back({ "WINPC", "" });
 		macros.push_back({ "DX11", "" });

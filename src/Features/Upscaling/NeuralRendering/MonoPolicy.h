@@ -7,6 +7,7 @@
 #include "NetworkSelection.h"
 #include "PipelinePolicy.h"
 #include "Style.h"
+#include "Utils/Finite.h"
 
 #include <algorithm>
 #include <array>
@@ -27,6 +28,7 @@ namespace NeuralRendering
 		std::uint32_t style = kDefaultStyle;
 		float intensity = 0.8f, localTone = 0.75f, localStructure = 0.9f, skinStructure = 0.9f;
 		bool guidedReconstruction = true, pressureResolution = true, prewarm = false;
+		std::uint32_t guidedConfidenceRejectionPercent = 0;
 		bool pauseInCombat = false;
 		std::uint32_t colorMode = 2;
 		float detailStrength = 1.0f, lightingPreservation = 1.0f;
@@ -50,7 +52,7 @@ namespace NeuralRendering
 
 	[[nodiscard]] inline float FiniteClamp(float value, float minimum, float maximum, float fallback) noexcept
 	{
-		return (std::bit_cast<std::uint32_t>(value) & 0x7f800000u) == 0x7f800000u ? fallback : std::clamp(value, minimum, maximum);
+		return Util::IsFinite(value) ? std::clamp(value, minimum, maximum) : fallback;
 	}
 
 	/** A persisted profile is bounded before it controls allocations, shaders or provider calls. */
@@ -59,6 +61,7 @@ namespace NeuralRendering
 		settings.mode = static_cast<std::uint32_t>(ConfiguredRenderingMode(settings.mode));
 		settings.modelResolutionPercent = std::clamp(settings.modelResolutionPercent, 30u, 100u);
 		settings.peripheralCompressionPercent = std::min(settings.peripheralCompressionPercent, 100u);
+		settings.guidedConfidenceRejectionPercent = std::min(settings.guidedConfidenceRejectionPercent, 100u);
 		settings.network = SanitizeNetworkSelection(settings.network);
 		settings.style = ClampStyle(settings.style);
 		settings.intensity = FiniteClamp(settings.intensity, 0.0f, 2.0f, 0.8f);
@@ -109,7 +112,7 @@ namespace NeuralRendering
 		bool paused, bool combatPaused) noexcept
 	{
 		return enabled && installed && nvidia && !frameGenerationRequested && !dx12FrameGeneration &&
-			!loading && !safeLoad && !paused && !combatPaused;
+		       !loading && !safeLoad && !paused && !combatPaused;
 	}
 
 	/** Conservative support of a mono screen-space superellipse, including its feather. */

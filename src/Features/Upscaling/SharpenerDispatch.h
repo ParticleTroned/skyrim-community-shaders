@@ -5,6 +5,7 @@
 #include "../../GpuPass.h"
 #include "../../Profiler.h"
 #include "../../Utils/D3D.h"
+#include "MotionSharpeningPolicy.h"
 #include "SharpenerBindings.h"
 
 #include <cstdint>
@@ -52,6 +53,16 @@ namespace UpscalingSharpener
 		LumaSharpen
 	};
 
+	/** Fixed RCAS and Luma use the same 16-byte layout; SE has one complete image. */
+	struct FixedConfig
+	{
+		float sharpness = 0.0f;
+		float limit = MotionSharpening::kLumaDetailLimit;
+		float pad[2]{};
+	};
+	static_assert(sizeof(FixedConfig) == 16);
+
+	/** Dispatch dimensions have already been validated against the current output view. */
 	template <class Config>
 	inline bool DispatchComputePass(
 		ID3D11ComputeShader* computeShader,
@@ -60,25 +71,13 @@ namespace UpscalingSharpener
 		ID3D11ShaderResourceView* inputSRV,
 		ID3D11UnorderedAccessView* outputUAV,
 		Pass pass,
-		ID3D11ShaderResourceView* motionSRV = nullptr,
-		uint32_t regionWidth = 0,
-		uint32_t regionHeight = 0)
+		uint32_t outputWidth,
+		uint32_t outputHeight,
+		ID3D11ShaderResourceView* motionSRV = nullptr)
 	{
 		auto context = globals::d3d::context;
-		if (!context || !computeShader || !configCB || !inputSRV || !outputUAV)
+		if (!context || !computeShader || !configCB || !inputSRV || !outputUAV || !outputWidth || !outputHeight)
 			return false;
-
-		uint32_t outputWidth = 0;
-		uint32_t outputHeight = 0;
-		if (!TryGetOutputDimensions(outputUAV, outputWidth, outputHeight)) {
-			return false;
-		}
-		if (motionSRV) {
-			if (!regionWidth || !regionHeight || regionWidth > outputWidth || regionHeight > outputHeight)
-				return false;
-			outputWidth = regionWidth;
-			outputHeight = regionHeight;
-		}
 
 		configCB->Update(config);
 		auto bufferArray = configCB->CB();
@@ -105,5 +104,17 @@ namespace UpscalingSharpener
 		context->CSSetShader(nullptr, nullptr, 0);
 
 		return true;
+	}
+
+	/** Validate output ownership even when adaptive motion or its shader is unavailable. */
+	inline bool DispatchFixedComputePass(ID3D11ComputeShader* computeShader, ConstantBuffer* configCB,
+		const FixedConfig& config, ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV,
+		Pass pass, std::span<const MotionSharpening::Region> regions)
+	{
+		uint32_t width = 0, height = 0;
+		if (!TryGetOutputDimensions(outputUAV, width, height) ||
+			(!regions.empty() && !MotionSharpening::CoversOutput(regions, width, height)))
+			return false;
+		return DispatchComputePass(computeShader, configCB, config, inputSRV, outputUAV, pass, width, height);
 	}
 }

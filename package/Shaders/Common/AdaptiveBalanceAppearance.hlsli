@@ -34,7 +34,8 @@ namespace AdaptiveBalanceAppearance
 	/// Grade aurora-slot sky objects while preserving neutral draws and previews.
 	float3 ApplyAurora(float3 color)
 	{
-#if (defined(SKY_OBJECT)) && (!(defined(MOTIONVECTORS_NORMALS)))
+#			if !defined(MOTIONVECTORS_NORMALS)
+		// SkyObject belongs to the vertex descriptor; pixel draws use the CPU-authored aurora flag.
 		[branch] if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsAurora)
 			color = ApplyColor(color, SharedData::adaptiveBalanceSettings.appearance.auroraIntensity,
 				SharedData::adaptiveBalanceSettings.appearance.auroraCurve, 1.0, 1.0.xxx);

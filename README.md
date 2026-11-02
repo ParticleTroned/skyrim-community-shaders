@@ -51,6 +51,26 @@ Install them manually only if you want them in everywhere.
 -   [Address Library for SKSE](https://www.nexusmods.com/skyrimspecialedition/mods/32444)
     -   Needed for SSE/AE
 
+### Optional mono Neural Rendering
+
+The SE/AE branch keeps its native frame-generation and HDR paths and offers
+mono Neural Rendering through the NVIDIA NGX SDK. NR cannot run together
+with frame generation. Missing or unsupported NR inputs retain normal rendering.
+
+NR runtime binaries are **not included** in source, Core or AIO packages.
+Install your own compatible `nvngx_dlssnr.dll` (310.8 or newer, subject to NGX
+capability checks) in `Data/Shaders/Upscaling/Streamline/`, under its applicable
+license terms, then restart the game.
+
+Source builds obtain the official parameter header from the verified SDK
+cache pinned by [NeuralRenderingSDKPin.cmake](cmake/NeuralRenderingSDKPin.cmake).
+The original SDK license is retained under
+[`extern/NeuralRenderingSDK/`](extern/NeuralRenderingSDK/), and packages place
+the unchanged `nvngx_dlssnr.license.txt` beside the native Streamline files.
+The separate `StreamlineDX12` payload continues to supply SE frame generation.
+See [NVIDIA SDK build inputs](docs/development/nvidia-sdk-distribution.md)
+and the [latest SE synchronization report](docs/development/main-se-sync-2026-11-02.md).
+
 ## Build Instructions
 
 ### Clone the Repository with submodules

@@ -1,13 +1,14 @@
 #pragma once
 
-#include "MonoPolicy.h"
 #include "CharacterSettings.h"
+#include "MonoPolicy.h"
 
 #include <array>
 #include <cstdint>
 #include <d3d11.h>
 #include <string>
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "MonoExperiments.h"
 #	include <nlohmann/json.hpp>
 #endif
 
@@ -22,6 +23,7 @@ namespace NeuralRendering
 		bool linearColor = false, reset = false;
 		std::array<float, 4> depthLinearization{};
 		std::array<float, 2> guideJitter{};
+		std::array<float, 2> nativeJitter{};
 	};
 	struct MonoSnapshot
 	{
@@ -72,6 +74,13 @@ namespace NeuralRendering
 		void ResetShaderCache();
 		MonoSnapshot Snapshot() const;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Session-only input and reconstruction controls, applied at a safe render boundary. */
+		bool SetExperiments(const MonoExperiments&);
+		MonoExperiments Experiments() const;
+		/** Whether observed opaque NPC face bounds are needed by the active experiment. */
+		bool WantsFaceDetail() const noexcept;
+		void ObserveFaceDetail(std::uint32_t frame, std::uint32_t actor, const CharacterRect&,
+			std::uint32_t width, std::uint32_t height);
 		/** CPU snapshot of real native calls; frame-specific copies can outlive the bounded live ring. */
 		nlohmann::json Diagnostics(std::uint32_t sourceFrame = UINT32_MAX) const;
 #endif

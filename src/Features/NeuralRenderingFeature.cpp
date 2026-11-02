@@ -43,7 +43,7 @@ namespace
 
 	void DrawMode(MonoSettings& settings, Upscaling& upscaling)
 	{
-		const char* networks[]{ T("feature.neural_rendering.network_default", "Provider default"), T("feature.neural_rendering.network_legacy", "Legacy network"), T("feature.neural_rendering.network_newer", "Newer network") };
+		const char* networks[]{ T("feature.neural_rendering.network_default", "Default (SDK preset B)"), T("feature.neural_rendering.network_legacy", "SDK preset A (legacy)"), T("feature.neural_rendering.network_newer", "SDK preset B (lightweight)") };
 		int network = static_cast<int>(settings.network);
 		{
 			const auto guard = Util::DisableGuard(!NeuralRendering::Runtime::Instance().SupportsNetworkSelection());
@@ -73,7 +73,7 @@ namespace
 		Util::Widgets::Checkbox(T("feature.neural_rendering.pressure", "Reduce inference resolution during GPU memory pressure"), &settings.pressureResolution);
 		Util::Widgets::Checkbox(T("feature.neural_rendering.prewarm", "Prepare the exact model configuration at a main or loading menu"), &settings.prewarm);
 		if (settings.prewarm)
-			ImGui::TextWrapped("%s", T("feature.neural_rendering.prewarm_help", "Prepares only a known full-scene configuration at an idle renderer boundary, with a 30-second unused lease. Disable adaptive inference resolution and actor/category selection for exact prewarming. Changed geometry retires the unused configuration before inference."));
+			ImGui::TextWrapped("%s", T("feature.neural_rendering.prewarm_help", "Prepares the exact projected mono model, compression and region at an idle menu boundary, with a 30-second unused lease. Automatic resolution uses the current admitted ceiling. Actor/category selection needs live geometry and cannot be prewarmed. Changed geometry retires the unused configuration before inference."));
 		Util::Widgets::Checkbox(T("feature.neural_rendering.combat", "Pause neural rendering during combat"), &settings.pauseInCombat);
 
 		MenuUI::SectionHeading(T("feature.neural_rendering.screen_region", "Screen-space region"));
@@ -92,6 +92,11 @@ namespace
 		const int choice = MenuUI::ChoiceCards("Reconstruction", settings.guidedReconstruction ? 1 : 0, reconstruction);
 		if (choice >= 0)
 			settings.guidedReconstruction = choice == 1;
+		{
+			const auto guard = Util::DisableGuard(!settings.guidedReconstruction);
+			DrawUIntSlider(T("feature.neural_rendering.confidence_rejection", "Guided confidence rejection (%)"), settings.guidedConfidenceRejectionPercent, 0, 100);
+			Util::AddTooltip(T("feature.neural_rendering.confidence_rejection_help", "Reduce neural changes where model samples poorly match the original scene. Zero preserves the ordinary guided result; higher values reject more low-confidence edits."));
+		}
 		MenuUI::DetailNote(T("feature.neural_rendering.blending_help", "Reconstruction preserves the original scene outside the selected region. Material strengths are applied by the SE compositor; select them in Selection."));
 	}
 
@@ -263,7 +268,7 @@ void NeuralRenderingFeature::DrawSettings()
 	auto& upscaling = globals::features::upscaling;
 	auto settings = upscaling.neuralSettings;
 	if (!NeuralRendering::Runtime::IsInstalled())
-		MenuUI::DetailNote(T("feature.neural_rendering.missing", "Install the optional compatible nvngx_dlssnr.dll in Data/Shaders/Upscaling/Streamline, then restart the game."));
+		MenuUI::DetailNote(T("feature.neural_rendering.missing", "The NR runtime is not included. Install your own compatible nvngx_dlssnr.dll (310.8 or newer) in Data/Shaders/Upscaling/Streamline under its license terms, then restart the game."));
 	if (!upscaling.fidelityFX.IsNvidiaAdapterDetected())
 		MenuUI::DetailNote(T("feature.neural_rendering.hardware", "Neural rendering requires a supported NVIDIA graphics device."));
 	if (upscaling.IsFrameGenerationConfigured() || upscaling.IsFrameGenerationDx12PathActive())

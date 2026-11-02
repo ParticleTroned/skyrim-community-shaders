@@ -251,6 +251,24 @@ void CharacterCategoryAuthoring::Update(RE::BSRenderPass* pass)
 	                       static_cast<uint32_t>(State::ExtraShaderDescriptors::CharacterFocusFadeMask);
 	state->permutationData.ExtraShaderDescriptor &= ~flags;
 	auto& upscaling = globals::features::upscaling;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const auto& faceSettings = upscaling.GetNeuralRenderingSettings();
+	if (MonoRenderer::Instance().WantsFaceDetail() && faceSettings.peripheralCompressionPercent &&
+		!faceSettings.charactersOnly && !faceSettings.sceneCategoryStrengths && upscaling.IsNeuralRenderingRequested() &&
+		globals::deferred && globals::deferred->deferredPass && state->inWorld && pass && pass->geometry && pass->shaderProperty) {
+		auto* faceOwner = pass->geometry->GetUserData();
+		auto* faceActor = faceOwner ? faceOwner->As<RE::Actor>() : nullptr;
+		if (faceActor && !faceActor->IsPlayerRef() && faceActor->GetFaceNodeSkinned() &&
+			ClassifyCharacterMaterial(pass->shaderProperty, pass->geometry, faceActor, false).category == CharacterCategory::Face) {
+			const auto facePlan = upscaling.GetRuntimeResolutionPlan();
+			CharacterRect head{};
+			if (!facePlan.menuContextActive && !facePlan.loadingMenuActive &&
+				ProjectBound(faceActor->GetFaceNodeSkinned(), facePlan.engineRenderSize.x, facePlan.engineRenderSize.y, head) == CharacterProjectionResult::Visible)
+				MonoRenderer::Instance().ObserveFaceDetail(state->frameCount, faceActor->GetFormID(), head,
+					facePlan.engineRenderSize.x, facePlan.engineRenderSize.y);
+		}
+	}
+#endif
 	if (!upscaling.IsNeuralCharacterSelectionRequested() || !globals::deferred ||
 		!globals::deferred->deferredPass || !globals::deferred->IsCharacterCategoryEnabled() ||
 		!state->inWorld || !pass || !pass->geometry || !pass->shaderProperty)

@@ -1,5 +1,6 @@
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/ReverseZ.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
 
@@ -37,7 +38,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float2 screenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 	float2 depthScreenPosition = screenPosition;
-	float depth = DepthTex.Sample(DepthSampler, depthScreenPosition).x;
+	float depth = FrameBuffer::ToStandardDepth(DepthTex.Sample(DepthSampler, depthScreenPosition).x);
 
 	float repartition = clamp(RepartitionTex.SampleLevel(RepartitionSampler, depth, 0).x, 0, 0.9999);
 	float2 volumeUV = input.TexCoord;
@@ -58,7 +59,7 @@ PS_OUTPUT main(PS_INPUT input)
 												  previousScreenPosition
 												  )
 		                          .x;
-
+		previousDepth = FrameBuffer::ToStandardDepth(previousDepth);
 
 		float temporalContribution = g_IntensityX_TemporalY.y * (1 - smoothstep(0, 1, min(1, 100 * abs(depth - previousDepth))));
 		psout.VL = lerp(adjustedVl, previousVl, temporalContribution * isValid);

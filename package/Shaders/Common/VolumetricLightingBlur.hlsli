@@ -1,6 +1,8 @@
 #if !(defined(__VOLUMETRIC_LIGHTING_BLUR_HLSLI__))
 #define __VOLUMETRIC_LIGHTING_BLUR_HLSLI__
 
+#	include "Common/DepthOrder.hlsli"
+
 cbuffer VLData : register(b1)
 {
 	int2 screenSize;
@@ -19,7 +21,7 @@ namespace VolumetricLightingBlur
 	float GetLinearDepth(float deviceDepth)
 	{
 		// Validated near/far parameters keep far-plane cancellation from dividing by zero.
-		return cameraData.w / max(cameraData.x - saturate(deviceDepth) * cameraData.z, cameraData.y);
+		return cameraData.w / max(DepthOrder::IsReversed() ? cameraData.y + saturate(deviceDepth) * cameraData.z : cameraData.x - saturate(deviceDepth) * cameraData.z, cameraData.y);
 	}
 
 	/** @brief Filter an interior lane after all clamped halo loads have synchronized. */

@@ -1,5 +1,6 @@
 #include "ScreenSpaceShadows.h"
 #include "Menu/SettingsPage.h"
+#include "ReverseZ.h"
 #include "Utils/UI.h"
 
 #include "Features/TerrainBlending.h"
@@ -140,7 +141,7 @@ ScreenSpaceShadows::RuntimeReadiness ScreenSpaceShadows::GetRuntimeReadiness(
 		!globals::state ||
 		!globals::profiler ||
 		!globals::shaderCache ||
-		!pointBorderSampler ||
+		!pointBorderSampler || !reversePointBorderSampler ||
 		!raymarchCB ||
 		!raymarchCB->CB() ||
 		!screenSpaceShadowsTexture ||
@@ -262,7 +263,8 @@ void ScreenSpaceShadows::DrawShadows()
 	auto uav = screenSpaceShadowsTexture->uav.get();
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
-	context->CSSetSamplers(0, 1, &pointBorderSampler);
+	auto* borderSampler = globals::features::reverseZ.GetNativeDepthConvention() == Depth::Convention::Reversed ? reversePointBorderSampler : pointBorderSampler;
+	context->CSSetSamplers(0, 1, &borderSampler);
 
 	auto buffer = raymarchCB->CB();
 	context->CSSetConstantBuffers(1, 1, &buffer);
@@ -306,8 +308,8 @@ void ScreenSpaceShadows::DrawShadows()
 				data.WaveOffset[0] = dispatchData.WaveOffset_Shader[0];
 				data.WaveOffset[1] = dispatchData.WaveOffset_Shader[1];
 
-				data.FarDepthValue = 1.0f;
-				data.NearDepthValue = 0.0f;
+				data.FarDepthValue = globals::features::reverseZ.GetFarDepth();
+				data.NearDepthValue = globals::features::reverseZ.GetNearDepth();
 
 				data.DynamicRes = dynamicRes;
 				data.DynamicSampleCount = dynamicSamples;
@@ -472,6 +474,10 @@ void ScreenSpaceShadows::SetupResources()
 		pointBorderSampler->Release();
 		pointBorderSampler = nullptr;
 	}
+	if (reversePointBorderSampler) {
+		reversePointBorderSampler->Release();
+		reversePointBorderSampler = nullptr;
+	}
 	delete screenSpaceShadowsTexture;
 	screenSpaceShadowsTexture = nullptr;
 
@@ -484,12 +490,12 @@ void ScreenSpaceShadows::SetupResources()
 		samplerDesc.MaxAnisotropy = 1;
 		samplerDesc.MinLOD = 0;
 		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-		samplerDesc.BorderColor[0] = 1.0f;
-		samplerDesc.BorderColor[1] = 1.0f;
-		samplerDesc.BorderColor[2] = 1.0f;
-		samplerDesc.BorderColor[3] = 1.0f;
+		std::fill(std::begin(samplerDesc.BorderColor), std::end(samplerDesc.BorderColor), Depth::Far(Depth::Convention::Standard));
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointBorderSampler));
 		Util::SetResourceName(pointBorderSampler, "ScreenSpaceShadows::PointBorderSampler");
+		std::fill(std::begin(samplerDesc.BorderColor), std::end(samplerDesc.BorderColor), Depth::Far(Depth::Convention::Reversed));
+		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &reversePointBorderSampler));
+		Util::SetResourceName(reversePointBorderSampler, "ScreenSpaceShadows::ReversePointBorderSampler");
 	}
 
 	{

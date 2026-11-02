@@ -1,3 +1,4 @@
+#include "Common/ReverseZ.hlsli"
 #include "Common/SharedData.hlsli"
 
 cbuffer UpscalingData : register(b0)
@@ -18,8 +19,32 @@ RWTexture2D<float2> MotionVectorOutput : register(u2);
 RWTexture2D<float> DepthOutput : register(u3);
 #endif
 
-[numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
-{
+#if defined(DLSS)
+// One 8x8 output group shares its 5x5 depth neighborhoods, including a two-pixel halo.
+static const uint kEncodeDepthTileDim = 12;
+groupshared float DepthTile[kEncodeDepthTileDim * kEncodeDepthTileDim];
+#endif
+
+[numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID
+#if defined(DLSS)
+	,
+	uint3 groupThreadID : SV_GroupThreadID
+#endif
+) {
+#if defined(DLSS)
+	const int2 tileOrigin = int2(dispatchID.xy - groupThreadID.xy) - 2;
+	const uint lane = groupThreadID.y * 8 + groupThreadID.x;
+	for (uint index = lane; index < kEncodeDepthTileDim * kEncodeDepthTileDim; index += 64) {
+		const int2 samplePos = tileOrigin + int2(index % kEncodeDepthTileDim, index / kEncodeDepthTileDim);
+		float sampleDepth = 0.0;
+		if (all(samplePos >= 0) && all(samplePos < int2(TrueSamplingDim)))
+			sampleDepth = DepthMask[samplePos];
+		DepthTile[index] = sampleDepth;
+	}
+	// Partial groups must also initialize the halo and reach this barrier.
+	GroupMemoryBarrierWithGroupSync();
+#endif
+
 	uint2 srcCoord = dispatchID.xy;
 	if (any(srcCoord >= uint2(TrueSamplingDim)))
 		return;
@@ -34,23 +59,25 @@ RWTexture2D<float> DepthOutput : register(u3);
 #endif
 
 #if defined(DLSS)
-	float depth = DepthMask[srcCoord];
+	const uint2 tileCenter = groupThreadID.xy + 2;
+	float depth = DepthTile[tileCenter.y * kEncodeDepthTileDim + tileCenter.x];
 	float nearFactor = smoothstep(4096.0 * 2.5, 0.0, SharedData::GetScreenDepth(depth));
 
 	// Find longest motion vector in 5x5 neighborhood.
 	float2 longestMotionVector = motionVector;
 	float maxMotionLengthSq = dot(motionVector, motionVector);
 
-	[unroll]
-	for (int y = -2; y <= 2; y++) {
-		[unroll]
-		for (int x = -2; x <= 2; x++) {
+	[unroll] for (int y = -2; y <= 2; y++)
+	{
+		[unroll] for (int x = -2; x <= 2; x++)
+		{
 			int2 samplePos = int2(srcCoord) + int2(x, y);
 			if (any(samplePos < 0) || any(samplePos >= int2(TrueSamplingDim)))
 				continue;
 
-			float neighborDepth = DepthMask[samplePos];
-			if (neighborDepth < depth) {
+			const uint2 tilePos = uint2(int2(tileCenter) + int2(x, y));
+			float neighborDepth = DepthTile[tilePos.y * kEncodeDepthTileDim + tilePos.x];
+			if (FrameBuffer::IsNearerDepth(neighborDepth, depth)) {
 				float2 neighborMotionVector = MotionVectorMask[samplePos];
 				float motionLengthSq = dot(neighborMotionVector, neighborMotionVector);
 
@@ -70,8 +97,8 @@ RWTexture2D<float> DepthOutput : register(u3);
 #endif
 
 #if defined(DEPTH_OUTPUT)
-	// The D3D11/D3D12 runtime bridge requires a typed depth resource.
-	DepthOutput[srcCoord] = DepthMask[srcCoord];
+	// Both FidelityFX paths consume typed standard depth, independent of scene convention.
+	DepthOutput[srcCoord] = FrameBuffer::ToStandardDepth(DepthMask[srcCoord]);
 #endif
 
 	ReactiveMask[srcCoord] = reactiveMask;

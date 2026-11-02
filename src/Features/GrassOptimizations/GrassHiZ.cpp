@@ -151,6 +151,8 @@ bool GrassHiZ::Build(ID3D11DeviceContext1* context, uint32_t frame)
 			mainView.Texture2D.MipLevels = 1;
 			if (mainDesc.Format == DXGI_FORMAT_R32_TYPELESS)
 				mainView.Format = DXGI_FORMAT_R32_FLOAT;
+			else if (mainDesc.Format == DXGI_FORMAT_R32G8X24_TYPELESS)
+				mainView.Format = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
 			else if (mainDesc.Format == DXGI_FORMAT_R24G8_TYPELESS)
 				mainView.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
 			else

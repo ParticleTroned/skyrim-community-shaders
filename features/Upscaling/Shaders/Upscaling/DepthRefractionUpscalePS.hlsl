@@ -3,6 +3,7 @@
 #if defined(PSHADER)
 #	include "Common/FrameBuffer.hlsli"
 #	include "Common/SharedData.hlsli"
+#	include "Common/ReverseZ.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
 
@@ -25,10 +26,10 @@ cbuffer JitterCB : register(b0)
 	float pad0;
 };
 
-float SampleMinDepth2x2(float2 uv)
+float SampleNearestDepth2x2(float2 uv)
 {
 	float4 depthQuad = DepthTex.GatherRed(LinearSampler, uv);
-	return min(min(depthQuad.x, depthQuad.y), min(depthQuad.z, depthQuad.w));
+	return FrameBuffer::NearestDepth(depthQuad);
 }
 
 float SampleDepthClamped(int2 coord, int2 maxCoord)
@@ -37,32 +38,32 @@ float SampleDepthClamped(int2 coord, int2 maxCoord)
 	return DepthTex.Load(int3(c, 0));
 }
 
-float SampleMinDepth3x3(float2 uv)
+float SampleNearestDepth3x3(float2 uv)
 {
 	// Use cached frame buffer dimensions to avoid per-pixel texture-dimension queries.
 	int2 texSize = int2(SharedData::BufferDim.xy);
 	int2 maxCoord = texSize - 1;
 	int2 centerCoord = int2(uv * SharedData::BufferDim.xy);
 
-	float row0 = min(
+	float row0 = FrameBuffer::NearerDepth(
 		SampleDepthClamped(centerCoord + int2(-1, -1), maxCoord),
-		min(
+		FrameBuffer::NearerDepth(
 			SampleDepthClamped(centerCoord + int2(0, -1), maxCoord),
 			SampleDepthClamped(centerCoord + int2(1, -1), maxCoord)));
 
-	float row1 = min(
+	float row1 = FrameBuffer::NearerDepth(
 		SampleDepthClamped(centerCoord + int2(-1, 0), maxCoord),
-		min(
+		FrameBuffer::NearerDepth(
 			SampleDepthClamped(centerCoord + int2(0, 0), maxCoord),
 			SampleDepthClamped(centerCoord + int2(1, 0), maxCoord)));
 
-	float row2 = min(
+	float row2 = FrameBuffer::NearerDepth(
 		SampleDepthClamped(centerCoord + int2(-1, 1), maxCoord),
-		min(
+		FrameBuffer::NearerDepth(
 			SampleDepthClamped(centerCoord + int2(0, 1), maxCoord),
 			SampleDepthClamped(centerCoord + int2(1, 1), maxCoord)));
 
-	return min(row0, min(row1, row2));
+	return FrameBuffer::NearerDepth(row0, FrameBuffer::NearerDepth(row1, row2));
 }
 
 int2 GetClampedTexelCoord(float2 uv)
@@ -91,7 +92,7 @@ PS_OUTPUT main(PS_INPUT input)
 	// Upscale using linear sampling
 	psout.RefractionNormals = RefractionNormals.SampleLevel(LinearSampler, uv, 0);
 	const float bilinearDepth = DepthTex.SampleLevel(LinearSampler, uv, 0);
-	psout.Depth = (useWideKernel > 0.5f) ? SampleMinDepth3x3(uv) : bilinearDepth;
+	psout.Depth = (useWideKernel > 0.5f) ? SampleNearestDepth3x3(uv) : bilinearDepth;
 	psout.SAOCameraZ = psout.Depth;
 
 	return psout;

@@ -1,3 +1,4 @@
+#include "Common/ReverseZ.hlsli"
 
 #include "Common/SharedData.hlsli"
 
@@ -8,7 +9,7 @@
 #if defined(TERRAIN_BLENDING)
 Texture2D<float> DepthTexture : register(t0);  // Depth Buffer Texture (R32_FLOAT)
 #else
-Texture2D<unorm float> DepthTexture : register(t0);  // Depth Buffer Texture (R24_UNORM_X8_TYPELESS)
+Texture2D<SCENE_DEPTH_FORMAT> DepthTexture : register(t0);  // Depth Buffer Texture (R24_UNORM_X8_TYPELESS)
 #endif
 RWTexture2D<unorm float> OutputTexture : register(u0);  // Output screen-space shadow buffer (typically single-channel, 8bit)
 SamplerState PointBorderSampler : register(s0);         // A point sampler, with Wrap Mode set to Clamp-To-Border-Color (D3D12_TEXTURE_ADDRESS_MODE_BORDER), and Border Color set to "FarDepthValue" (typically zero), or some other far-depth value out of DepthBounds.
@@ -46,8 +47,8 @@ cbuffer PerFrame : register(b1)
 
 	parameters.LightCoordinate = LightCoordinate;
 	parameters.WaveOffset = WaveOffset;
-	parameters.FarDepthValue = 1;
-	parameters.NearDepthValue = 0;
+	parameters.FarDepthValue = FarDepthValue;
+	parameters.NearDepthValue = NearDepthValue;
 	parameters.InvDepthTextureSize = InvDepthTextureSize;
 	parameters.DepthTexture = DepthTexture;
 	parameters.OutputTexture = OutputTexture;
@@ -61,7 +62,12 @@ cbuffer PerFrame : register(b1)
 	parameters.DynamicSampleCount = DynamicSampleCount;
 	parameters.DynamicReadCount = DynamicReadCount;
 
+#ifdef REVERSE_Z
+	// The integer precision offset assumes fixed-point standard depth.
+	parameters.UsePrecisionOffset = false;
+#else
 	parameters.UsePrecisionOffset = true;
+#endif
 
 	WriteScreenSpaceShadow(parameters, groupID, groupThreadID);
 }

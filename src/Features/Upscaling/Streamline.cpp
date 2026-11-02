@@ -19,14 +19,16 @@
 #include "../../Hooks.h"
 #include "../../State.h"
 #include "../../Util.h"
+#include "../ReverseZ.h"
 #include "../Upscaling.h"
-#include "DX12SwapChain.h"
 #include "CameraReprojection.h"
+#include "DX12SwapChain.h"
 #include "NeuralRendering/MonoRenderer.h"
-#include <bit>
-#include "ReflexPolicy.h"
 #include "NvidiaBoundedLog.h"
+#include "NvidiaProject.h"
+#include "ReflexPolicy.h"
 #include "Utils/ComIdentity.h"
+#include <bit>
 
 namespace
 {
@@ -335,8 +337,8 @@ void Streamline::LoadInterposer()
 	logger::info("[Streamline] Plugin search path: {}", pluginDirAbsolute.string());
 
 	pref.engine = sl::EngineType::eCustom;
-	pref.engineVersion = "1.0.0";
-	pref.projectId = "f8776929-c969-43bd-ac2b-294b4de58aac";
+	pref.engineVersion = NvidiaProject::kEngineVersion;
+	pref.projectId = NvidiaProject::kId;
 
 	pref.renderAPI = renderAPI;
 	pref.flags = sl::PreferenceFlags::eUseManualHooking;
@@ -860,10 +862,16 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport)
 		return false;
 	const uint32_t currentFrame = globals::state->frameCount;
 	const uint32_t currentViewport = static_cast<uint32_t>(p_viewport);
-	if (constantsFrame == currentFrame && constantsViewport == currentViewport)
+	const auto depthConvention = globals::features::reverseZ.GetNativeDepthConvention();
+	const bool nativeDepthInverted = depthConvention == Depth::Convention::Reversed;
+	const uint64_t depthGeneration = globals::features::reverseZ.GetGeneration();
+	if (constantsFrame == currentFrame && constantsViewport == currentViewport &&
+		constantsDepthGeneration == depthGeneration && constantsNativeDepthInverted == nativeDepthInverted)
 		return constantsResult;
 	constantsFrame = currentFrame;
 	constantsViewport = currentViewport;
+	constantsDepthGeneration = depthGeneration;
+	constantsNativeDepthInverted = nativeDepthInverted;
 	constantsResult = false;
 
 	if (!EnsureFrameToken())
@@ -886,10 +894,19 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport)
 	const auto viewMatrix = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
 	const auto& cameraPosition = globals::game::frameBufferCached.GetCameraPosAdjust();
 	const auto& previousCameraPosition = globals::game::frameBufferCached.GetCameraPreviousPosAdjust();
+	auto viewProjection = globals::game::frameBufferCached.GetCameraViewProjUnjittered().Transpose();
+	auto previousViewProjection = globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered().Transpose();
+	if (IsDLSSGInstance()) {
+		// SE frame generation consumes CopyDepthToSharedBufferPS's standard-depth output.
+		Depth::ToStandardProjection(viewProjection, depthConvention);
+		const auto previousDepthConvention = Depth::FromUploadedViewProjection(
+			globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(), globals::features::reverseZ.IsActive());
+		Depth::ToStandardProjection(previousViewProjection, previousDepthConvention);
+	}
 	const auto matrices = UpscalingCamera::BuildReprojection(
 		viewMatrix,
-		globals::game::frameBufferCached.GetCameraViewProjUnjittered().Transpose(),
-		globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered().Transpose(),
+		viewProjection,
+		previousViewProjection,
 		float3(cameraPosition.x - previousCameraPosition.x,
 			cameraPosition.y - previousCameraPosition.y, cameraPosition.z - previousCameraPosition.z));
 	slConstants.cameraMotionIncluded = sl::Boolean::eTrue;
@@ -902,13 +919,13 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport)
 	slConstants.clipToCameraView = std::bit_cast<sl::float4x4>(matrices.clipToCameraView);
 	slConstants.clipToPrevClip = std::bit_cast<sl::float4x4>(matrices.clipToPrevClip);
 	slConstants.prevClipToClip = std::bit_cast<sl::float4x4>(matrices.prevClipToClip);
-	slConstants.depthInverted = sl::Boolean::eFalse;
+	slConstants.depthInverted = !IsDLSSGInstance() && nativeDepthInverted ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 
 	auto& upscaling = globals::features::upscaling;
 	upscaling.PrepareHistoryResetForCurrentFrame();
 	auto jitter = upscaling.jitter;
 	slConstants.jitterOffset = { -jitter.x, -jitter.y };
-	slConstants.reset = upscaling.ShouldResetHistoryThisFrame() ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+	slConstants.reset = (upscaling.ShouldResetHistoryThisFrame() || (!IsDLSSGInstance() && !dlssEvaluationSucceeded)) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 
 	slConstants.mvecScale = { 1.0f, 1.0f };
 	slConstants.motionVectors3D = sl::Boolean::eFalse;
@@ -1064,7 +1081,11 @@ void Streamline::ResetFrameTracking()
 	}
 	constantsFrame = UINT32_MAX;
 	constantsViewport = UINT32_MAX;
+	constantsDepthGeneration = UINT64_MAX;
+	constantsNativeDepthInverted = false;
 	constantsResult = false;
+	dlssNativeDepthInverted.reset();
+	dlssEvaluationSucceeded = false;
 	lastReflexSleepFrame = UINT32_MAX;
 	dlssgSimulationStartFrame = UINT32_MAX;
 }
@@ -1078,6 +1099,13 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp,
 	if (!initialized || !featureDLSS || !slEvaluateFeature || !slSetTag || !context ||
 		!colorIn || !colorOut || !depth || !mvec || !reactiveMask || !transparencyMask) {
 		return false;
+	}
+
+	const bool nativeDepthInverted = globals::features::reverseZ.GetNativeDepthConvention() == Depth::Convention::Reversed;
+	if (dlssNativeDepthInverted && *dlssNativeDepthInverted != nativeDepthInverted) {
+		// Menu and world cameras can use different encodings in one resource generation.
+		// Recreate before acquiring this evaluation's constants and frame token.
+		DestroyDLSSResources();
 	}
 
 	sl::Resource colorInRes = { sl::ResourceType::eTex2d, colorIn, 0 };
@@ -1199,7 +1227,10 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp,
 		}
 	}
 
-	return DLSSResultPolicy::IsEvaluationSuccessful(evalResult);
+	const bool successful = DLSSResultPolicy::IsEvaluationSuccessful(evalResult);
+	dlssNativeDepthInverted = nativeDepthInverted;
+	dlssEvaluationSucceeded = successful;
+	return successful;
 }
 
 bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)

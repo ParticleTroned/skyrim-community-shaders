@@ -28,7 +28,8 @@ public:
 		       (!a_motionAdaptive || motionAdaptive.CanApplyWithoutResourceCreation());
 	}
 
-	bool ApplySharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV, float sharpness);
+	bool ApplySharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV, float sharpness,
+		std::span<const MotionSharpening::Region> regions = {});
 	/** Adjusts luminance sharpening using the shared single-view motion policy and fixed fallback. */
 	bool ApplyMotionAdaptiveSharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV,
 		float sharpness, float baseStrength, const MotionSharpening::Settings& settings,

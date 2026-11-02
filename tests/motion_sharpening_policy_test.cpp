@@ -26,6 +26,19 @@ namespace
 	}
 	static_assert(CoversGeometry());
 
+	constexpr bool CoversOneCompleteOutput()
+	{
+		const std::array<Region, 1> mono{ Region{ { 0, 0, 1920, 1080 }, {}, {} } };
+		const std::array<Region, 1> cropped{ Region{ { 1, 0, 1919, 1080 }, {}, {} } };
+		const std::array<Region, 2> split{ Region{ { 0, 0, 960, 1080 }, {}, {} }, Region{ { 960, 0, 960, 1080 }, {}, {} } };
+		// Output ownership survives unavailable motion; source geometry is checked separately.
+		return CoversOutput(mono, 1920, 1080) &&
+		       !CoversOutput({}, 1920, 1080) && !CoversOutput(mono, 0, 1080) &&
+		       !CoversOutput(cropped, 1920, 1080) && !CoversOutput(split, 1920, 1080) &&
+		       !CoversOutput(mono, 1921, 1080) && !CoversOutput(mono, 1920, 1079);
+	}
+	static_assert(CoversOneCompleteOutput());
+
 	bool RejectsBeforeNarrowing()
 	{
 		const double maximum = std::numeric_limits<double>::max();
@@ -67,5 +80,5 @@ int main()
 	                   MotionToOutputPixels(1280, 640, 1920) == 3840.0f &&
 	                   MotionToOutputPixels(720, 540, 1080) == 1440.0f &&
 	                   MotionToOutputPixels(1280, 0, 1920) == 0.0f;
-	return CoversGeometry() && settings && units && RejectsBeforeNarrowing() ? 0 : 1;
+	return CoversGeometry() && CoversOneCompleteOutput() && settings && units && RejectsBeforeNarrowing() ? 0 : 1;
 }

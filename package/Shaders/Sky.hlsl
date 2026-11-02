@@ -2,6 +2,7 @@
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Permutation.hlsli"
+#include "Common/ReverseZ.hlsli"
 
 #if defined(VSHADER)
 struct VS_INPUT
@@ -114,7 +115,8 @@ VS_OUTPUT main(VS_INPUT input)
 
 #endif
 
-	vsout.Position = mul(WorldViewProj, inputPosition).xyww;
+	float4 skyClip = mul(WorldViewProj, inputPosition);
+	vsout.Position = float4(skyClip.xy, FrameBuffer::FarPlaneClipZ(skyClip.w), skyClip.w);
 	vsout.WorldPosition = mul(World, inputPosition);
 	vsout.PreviousWorldPosition = mul(PreviousWorld, inputPosition);
 

@@ -1,3 +1,4 @@
+#include "Common/ReverseZ.hlsli"
 #define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
 
 #include "Common/AdaptiveBalanceFire.hlsli"
@@ -95,6 +96,7 @@ struct VS_OUTPUT
 cbuffer VS_PerFrame : register(b12)
 {
 	row_major float4x4 ScreenProj : packoffset(c0);
+	row_major float4x4 Proj : packoffset(c4);
 	row_major float4x4 ViewProj : packoffset(c8);
 #if defined(SKINNED)
 	float3 BonesPivot : packoffset(c40);
@@ -183,13 +185,18 @@ VS_OUTPUT main(VS_INPUT input)
 	precise float3x3 world3x3 =
 		transpose(float3x3(transpose(World)[0], transpose(World)[1], transpose(World)[2]));
 
-#if defined(SKY_OBJECT)
-	float4x4 viewProj = float4x4(ViewProj[0], ViewProj[1], ViewProj[3], ViewProj[3]);
-#else
+#	if defined(SKY_OBJECT)
+#		ifdef REVERSE_Z
+	float4 skyObjectDepthRow = FrameBuffer::IsReverseProjection(Proj) ? 0.0.xxxx : ViewProj[3];
+#		else
+	float4 skyObjectDepthRow = ViewProj[3];
+#		endif
+	float4x4 viewProj = float4x4(ViewProj[0], ViewProj[1], skyObjectDepthRow, ViewProj[3]);
+#	else
 	row_major float4x4 viewProj = ViewProj;
-#endif
+#	endif
 
-#if defined(SKINNED)
+#	if defined(SKINNED)
 	precise int4 actualIndices = 765.01.xxxx * input.BoneIndices.xyzw;
 #if defined(MOTIONVECTORS_NORMALS)
 	float3x4 previousBoneTransformMatrix =
@@ -231,7 +238,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 #if !(defined(MOTIONVECTORS_NORMALS))
 	float fogColorParam = min(FogParam.w,
-		exp2(FogParam.z * log2(saturate(length(viewPos.xyz) * FogParam.y - FogParam.x))));
+		exp2(FogParam.z * log2(saturate(length(FrameBuffer::ToStandardClip(viewPos, FrameBuffer::IsReverseProjection(Proj))) * FogParam.y - FogParam.x))));
 
 	vsout.FogParam.xyz = lerp(FogNearColor.xyz, FogFarColor.xyz, fogColorParam);
 	vsout.FogParam.w = fogColorParam;
@@ -744,6 +751,10 @@ PS_OUTPUT main(PS_INPUT input)
 	float softMul = 1;
 #if defined(SOFT)
 	float depth = TexDepthSamplerEffect.Load(int3(input.Position.xy, 0)).x;
+#		ifdef REVERSE_Z
+	if (FrameBuffer::IsReverseProjection())
+		depth = 1 - depth;
+#		endif
 	softMul = saturate(-input.TexCoord0.w + LightingInfluence.y / ((1 - depth) * CameraDataEffect.z + CameraDataEffect.y));
 #endif
 

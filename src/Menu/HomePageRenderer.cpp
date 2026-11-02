@@ -272,6 +272,10 @@ void HomePageRenderer::RenderWelcomeSection()
 	ImGui::PopStyleVar();
 
 	feedback.Draw();
+	ImGui::Spacing();
+	MenuUI::SectionHeading(T("menu.home.third_party_technologies", "Third-party technologies"));
+	ImGui::TextWrapped("%s", T("menu.home.nvidia_technology_notice", "Includes NVIDIA DLSS / NGX and NVIDIA Reflex technology. NVIDIA GeForce RTX is a trademark of NVIDIA Corporation."));
+	MenuUI::DetailNote(T("menu.home.nvidia_license_location", "NVIDIA components retain their own license terms, included under Shaders/Upscaling/Streamline."));
 }
 
 void HomePageRenderer::RenderCacheMismatchSection()

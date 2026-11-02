@@ -3,6 +3,7 @@
 #include "Common/LodLandscape.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
 
@@ -35,7 +36,7 @@ struct VS_INPUT
 
 struct VS_OUTPUT
 {
-	float4 PositionCS : SV_POSITION0;
+	float4 PositionCS: SV_POSITION0;
 
 #if (!((defined(RENDER_DEPTH)) && (defined(RENDER_SHADOWMASK_ANY)))) && (SHADOWFILTER != 2)
 #if ((defined(ALPHA_TEST)) && (((!(defined(RENDER_DEPTH))) && (!(defined(RENDER_SHADOWMAP)))) || (defined(RENDER_SHADOWMAP_PB)))) || ((defined(RENDER_NORMAL)) || ((defined(DEBUG_SHADOWSPLIT)) || (defined(RENDER_BASE_TEXTURE))))
@@ -108,11 +109,11 @@ VS_OUTPUT main(VS_INPUT input)
 
 #if ((defined(RENDER_DEPTH)) && (defined(RENDER_SHADOWMASK_ANY))) || (SHADOWFILTER == 2)
 	vsout.PositionCS.xy = input.PositionMS.xy;
-#if (defined(RENDER_SHADOWMASKDPB)) || ((defined(RENDER_SHADOWMASKSPOT)) || (defined(RENDER_SHADOWMASKPB)))
-	vsout.PositionCS.z = ShadowFadeParam.z;
-#else
-	vsout.PositionCS.z = HighDetailRange.x;
-#endif
+#		if defined(RENDER_SHADOWMASKDPB) || defined(RENDER_SHADOWMASKSPOT) || defined(RENDER_SHADOWMASKPB)
+	vsout.PositionCS.z = (FrameBuffer::IsReverseProjection() ? 1.0 - ShadowFadeParam.z : ShadowFadeParam.z);
+#		else
+	vsout.PositionCS.z = (FrameBuffer::IsReverseProjection() ? 1.0 - HighDetailRange.x : HighDetailRange.x);
+#		endif
 	vsout.PositionCS.w = 1;
 #elif defined(STENCIL_ABOVE_WATER)
 	vsout.PositionCS.y = WaterParams.x * 2 + input.PositionMS.y;
@@ -225,30 +226,31 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Depth = positionCS.z;
 #endif
 
-#if defined(RENDER_SHADOWMASK_ANY)
-	vsout.Alpha.x = 1 - pow(saturate(dot(positionCS.xyz, positionCS.xyz) / ShadowFadeParam.x), 8);
+#		if defined(RENDER_SHADOWMASK_ANY)
+	float3 fadePositionCS = FrameBuffer::ToStandardClip(positionCS);
+	vsout.Alpha.x = 1 - pow(saturate(dot(fadePositionCS, fadePositionCS) / ShadowFadeParam.x), 8);
 
-#if defined(SKINNED)
+#			if defined(SKINNED)
 	vsout.PositionMS.xyz = positionWS.xyz;
-#else
+#			else
 	vsout.PositionMS.xyz = positionMS.xyz;
-#endif
-	vsout.PositionMS.w = positionCS.z;
-#endif
+#			endif
+	vsout.PositionMS.w = FrameBuffer::ToStandardClipZ(positionCS);
+#		endif
 
-#if ((defined(ALPHA_TEST)) && (defined(VC))) || (defined(LOCALMAP_FOGOFWAR))
-#if defined(RENDER_SHADOWMASK_ANY)
+#		if ((defined(ALPHA_TEST)) && (defined(VC))) || (defined(LOCALMAP_FOGOFWAR))
+#			if defined(RENDER_SHADOWMASK_ANY)
 	vsout.Alpha.y = input.Color.w;
-#elif !(defined(TREE_ANIM))
+#			elif !(defined(TREE_ANIM))
 	vsout.Alpha.x = input.Color.w;
-#endif
-#endif
+#			endif
+#		endif
 
 #endif
 
 #if defined(OFFSET_DEPTH)
-	vsout.PositionCS.z += 5.0;
-#endif
+	vsout.PositionCS = FrameBuffer::OffsetClipDepth(vsout.PositionCS, 5.0);
+#	endif
 
 	return vsout;
 }
@@ -258,7 +260,7 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float4 Color : SV_Target0;
+	float4 Color: SV_Target0;
 };
 
 #if defined(PSHADER)
@@ -426,9 +428,9 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 depthUv = input.PositionCS.xy * VPOSOffset.xy + VPOSOffset.zw;
 	float depth = TexDepthUtilitySampler.Sample(SampDepthSampler, depthUv).x;
 
-	shadowMapDepth = depth;
+	shadowMapDepth = FrameBuffer::ToStandardDepth(depth);
 
-#if defined(FOCUS_SHADOW)
+#			if defined(FOCUS_SHADOW)
 	uint3 stencilDimensions;
 	TexStencilSampler.GetDimensions(0, stencilDimensions.x, stencilDimensions.y, stencilDimensions.z);
 	stencilValue = TexStencilSampler.Load(float3(stencilDimensions.xy * depthUv, 0)).x;

@@ -33,6 +33,13 @@ SDK DLLs or notices do not qualify even if the archive stamp still matches. Miss
 or invalid caches remain on disk and are reported as unavailable payloads.
 Only available files become staging inputs or build dependencies.
 
+Neural Rendering adds a compile-time SDK dependency. Offline configuration
+requires a verified cached NR SDK archive, matching extraction stamp and
+original parameter header. Populate that cache once with
+`SKIP_RUNTIME_DOWNLOADS=OFF`; a cold offline configure reports the missing
+headers instead of downloading them. The NR module extracts only headers
+and the original license. It never stages an NR runtime DLL.
+
 If required payloads are unavailable, either automatic zip option fails
 configuration. Full installation and runtime-component installation fail
 before modifying the destination, including before AIO staging is cleared.
@@ -76,3 +83,15 @@ small local SDK archive fixture. Only the archive URL and digest are replaced by
 fixture inputs. It checks both SE runtime directories, notices, verified cache
 reuse, tampered SDK files, missing manifests and archives, and preservation of
 existing staged files. It does not download an SDK or build a game DLL.
+
+The Streamline payload retains seven original notices in each SE runtime
+directory, including the Image Scaling and Nsight Perf notices. The NR
+package's original license is additionally staged beside the DX11 Streamline
+files. These notice changes do not replace the separate SE frame-generation
+payload or its lifetime/deployment rules.
+
+`tests/neural_sdk_cache_test.py` executes the NR staging module with a small
+local SDK fixture. It checks header-only extraction, original license staging,
+cold/warm offline operation, modified archive/header/stamp rejection, and
+stale NR runtime rejection. A successful fixture test does not test the
+proprietary runtime or grant redistribution rights.

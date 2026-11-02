@@ -137,6 +137,12 @@ namespace globals
 	namespace features
 	{
 		inline TerrainBlending terrainBlending;
+		struct ReverseZ
+		{
+			bool active = false;
+			bool IsActive() const { return active; }
+		};
+		inline ReverseZ reverseZ;
 	}
 }
 struct Feature
@@ -183,6 +189,7 @@ struct Fixture
 		globals::game::stateUpdateFlags = &flags;
 		globals::d3d::context = &context;
 		globals::features::terrainBlending = {};
+		globals::features::reverseZ = {};
 		auto& terrain = globals::features::terrainBlending;
 		terrain.blendedDepthTexture = &blend;
 		terrain.blendedDepthTexture16 = &blend16;
@@ -201,6 +208,9 @@ void TestSources()
 	Check(!f.deferred.IsSceneDepthFinal(), "A new frame must start with prepass depth");
 	Check(Util::GetCurrentSceneDepthSRV(false) == &f.blendSrv, "Compute prepass depth must retain terrain blending");
 	Check(Util::GetCurrentSceneDepthSRV(true) == &f.blend16Srv, "Pixel prepass depth must retain 16-bit selection");
+	globals::features::reverseZ.active = true;
+	Check(Util::GetCurrentSceneDepthSRV(true) == &f.blendSrv, "Reversed scene depth must retain floating-point precision");
+	globals::features::reverseZ.active = false;
 	auto& terrain = globals::features::terrainBlending;
 	terrain.blendedDepthTexture16 = nullptr;
 	Check(Util::GetCurrentSceneDepthSRV(true) == &f.copySrv, "Missing blended depth must fall back");

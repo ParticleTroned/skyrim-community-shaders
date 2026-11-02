@@ -19,6 +19,7 @@ namespace NeuralRendering
 
 		bool enabled = false;
 		std::uint32_t ceilingPercent = kMaximumModelResolutionPercent;
+		std::uint32_t projectedCheaperPercent = 0;
 		std::uint64_t reductions = 0, restorations = 0;
 		bool retired = false, healthyWindow = false;
 		std::uint64_t lastReductionMs = 0, healthySinceMs = 0;
@@ -30,6 +31,7 @@ namespace NeuralRendering
 			if (enabled == value)
 				return;
 			enabled = value;
+			projectedCheaperPercent = 0;
 			ceilingPercent = kMaximumModelResolutionPercent;
 			retired = false;
 			lastReductionMs = 0;
@@ -126,9 +128,10 @@ namespace NeuralRendering
 			if (!IsValidModelResolutionPercent(requested))
 				return false;
 			const auto effective = EffectivePercent(requested);
-			if (effective <= kMinimumModelResolutionPercent)
+			if (!IsValidModelResolutionPercent(projectedCheaperPercent) || projectedCheaperPercent >= effective)
 				return false;
-			ceilingPercent = std::max(kMinimumModelResolutionPercent, effective - kStepPercent);
+			ceilingPercent = projectedCheaperPercent;
+			projectedCheaperPercent = 0;
 			++reductions;
 			return true;
 		}

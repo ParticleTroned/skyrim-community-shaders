@@ -104,7 +104,12 @@ public:
 
 	uint32_t constantsFrame = UINT32_MAX;
 	uint32_t constantsViewport = UINT32_MAX;
+	uint64_t constantsDepthGeneration = UINT64_MAX;
+	bool constantsNativeDepthInverted = false;
 	bool constantsResult = false;
+	/** A submitted evaluation may allocate a native DLSS context even when it fails. */
+	std::optional<bool> dlssNativeDepthInverted;
+	bool dlssEvaluationSucceeded = false;
 	DLSSResultPolicy::BudgetWarningThrottle dlssBudgetWarning;
 
 	bool isRTXBelow40series = false;

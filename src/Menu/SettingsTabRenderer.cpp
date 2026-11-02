@@ -11,6 +11,7 @@
 
 #include "BackgroundBlur.h"
 #include "CursorLoader.h"
+#include "Features/ReverseZ.h"
 #include "Features/ScreenshotFeature.h"
 #include "FontSelector.h"
 #include "Fonts.h"
@@ -258,12 +259,16 @@ void SettingsTabRenderer::RenderShadersTab()
 {
 	auto shaderCache = globals::shaderCache;
 
-	bool useCustomShaders = shaderCache->IsEnableRequested();
-	if (Util::Widgets::Checkbox(T("menu.settings.use_custom_shaders", "Use Custom Shaders"), &useCustomShaders)) {
-		shaderCache->SetEnabled(useCustomShaders);
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T("menu.settings.use_custom_shaders_tooltip", "Disabling this effectively disables all features."));
+	{
+		const bool reverseDepth = globals::features::reverseZ.IsActive();
+		auto disabled = Util::DisableGuard(reverseDepth);
+		bool useCustomShaders = shaderCache->IsEnableRequested();
+		if (Util::Widgets::Checkbox(T("menu.settings.use_custom_shaders", "Use Custom Shaders"), &useCustomShaders))
+			shaderCache->SetEnabled(useCustomShaders);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(reverseDepth ?
+									   T("menu.settings.reverse_z_custom_shaders_required", "Reverse Z requires custom shaders. Disable Reverse Z and restart first.") :
+									   T("menu.settings.use_custom_shaders_tooltip", "Disabling this effectively disables all features."));
 	}
 
 	bool useDiskCache = shaderCache->IsDiskCache();
@@ -369,6 +374,7 @@ void SettingsTabRenderer::RenderShadersTab()
 				(int)Util::GetPerformanceCoreCount());
 		}
 	}
+	globals::features::reverseZ.DrawSettings();
 }
 
 void SettingsTabRenderer::RenderKeybindingsTab(

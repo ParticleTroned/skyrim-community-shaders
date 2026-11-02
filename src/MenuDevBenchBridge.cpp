@@ -27,6 +27,7 @@
 #	include "MenuDepthOfFieldSettingsPolicy.h"
 #	include "State.h"
 #	include "TruePBR.h"
+#	include "Utils/StringUtils.h"
 #	include "Features/GrassLighting.h"
 
 #	include <DevBenchAPI.h>
@@ -51,9 +52,13 @@ namespace
 
 	json AdaptiveBalancePresetUIStatus()
 	{
-		const auto& state = globals::features::adaptiveBrightness.presetUI;
+		const auto& balance = globals::features::adaptiveBrightness;
+		const auto& state = balance.presetUI;
+		const auto& folder = balance.presetExportFolder.directory;
 		return { { "mode", state.mode == MenuUI::AdaptiveBalancePresets::Mode::Import ? "import" : "export" },
-			{ "collection", MenuUI::AdaptiveBalancePresets::CollectionId(state.collection) } };
+			{ "collection", MenuUI::AdaptiveBalancePresets::CollectionId(state.collection) },
+			{ "exportFolder", Util::PathToUtf8(balance.GetPresetExportDirectory()) },
+			{ "usesDefaultFolder", folder.empty() } };
 	}
 
 	json AdaptiveBalanceDepthOfFieldStatus()
@@ -503,6 +508,12 @@ namespace
 				return { { "ok", false }, { "error", "presetMode and presetCollection must be strings" } };
 			const auto mode = a_args["presetMode"].get<std::string>();
 			const auto collection = a_args["presetCollection"].get<std::string>();
+			std::optional<std::string> exportFolder;
+			if (a_args.contains("presetExportFolder")) {
+				if (!a_args["presetExportFolder"].is_string())
+					return { { "ok", false }, { "error", "presetExportFolder must be a string" } };
+				exportFolder = a_args["presetExportFolder"].get<std::string>();
+			}
 			namespace Presets = MenuUI::AdaptiveBalancePresets;
 			std::optional<Presets::Collection> selected;
 			for (int index = 0; index < static_cast<int>(Presets::Collection::Count); ++index) {
@@ -512,7 +523,7 @@ namespace
 			}
 			if ((mode != "export" && mode != "import") || !selected)
 				return { { "ok", false }, { "error", "Unknown preset mode or collection" } };
-			return RunOnMainThread([mode, selected]() -> json {
+			return RunOnMainThread([mode, selected, exportFolder]() -> json {
 				auto& balance = globals::features::adaptiveBrightness;
 				if (!globals::menu || !globals::state || !balance.loaded || !balance.IsInMenu() ||
 					balance.IsHiddenFromUserView() || globals::state->IsFeatureDisabled(balance.GetShortName()))
@@ -520,8 +531,19 @@ namespace
 				if (PerformanceTuningRenderer::HasActiveMeasurements() ||
 					(ImGui::GetCurrentContext() && ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)))
 					return { { "ok", false }, { "error", "Finish the active dialog or performance comparison before navigating" } };
+				Presets::ExportFolder candidate;
+				std::string error;
+				if (exportFolder && !Presets::SetExportFolder(candidate, *exportFolder, error))
+					return { { "ok", false }, { "error", error } };
 				if (!MenuUI::SettingsPage::Select("AdaptiveBrightness", "presets"))
 					return { { "ok", false }, { "error", "Presets navigation is unavailable" } };
+				if (exportFolder) {
+					balance.presetExportFolder.directory = std::move(candidate.directory);
+					balance.globalPresetStatus.clear();
+					balance.locationOverridePresetStatus.clear();
+					balance.fullPresetStatus.clear();
+					balance.contextPresetStatuses.fill({});
+				}
 				balance.presetUI = { mode == "import" ? Presets::Mode::Import : Presets::Mode::Export, *selected };
 				balance.presetFilesDirty = true;
 				globals::menu->SelectFeatureMenu("AdaptiveBrightness");
@@ -847,6 +869,15 @@ namespace MenuDevBenchBridge
 			R"({"description":"Desktop SE/AE menu inspection, bounded page navigation and session settings controls. Mutations are not saved. ui_status reports rendered pages, tabs and a fresh viewport; scroll acceptance is not completion, so inspect appliedGeneration and scrollY later. Navigation and settings mutation are blocked during performance comparisons. restore_defaults applies installed defaults in memory with rollback. Screenshot requests use the versioned screenshot service. Feature rendering uses the native single viewport and preserves SE frame generation.","outputSchema":{"type":"object","properties":{"ok":{"type":"boolean","description":"For UI actions, true means accepted, not completed scrolling. For prepare_coc and prepare_tuning, true only when runtime preparation postconditions are ready; applied and changed describe mutation separately."},"menuOpen":{"type":"boolean"},"viewport":{"type":"object","description":"Latest rendered settings viewport; fresh is false after navigation, closure, a missing context or stale UI frames. appliedGeneration acknowledges issuing a scroll target; verify scrollY in a later observation.","properties":{"fresh":{"type":"boolean"},"page":{"type":"string"},"tab":{"type":"string"},"frame":{"type":"integer"},"scrollY":{"type":"number"},"scrollMaxY":{"type":"number"},"height":{"type":"number"},"pending":{"type":"boolean"},"requestedGeneration":{"type":"integer"},"appliedGeneration":{"type":"integer"}}},"status":{"type":"object","properties":{"grassCollision":{"type":"object","properties":{"loaded":{"type":"boolean"},"enabled":{"type":"boolean"},"collisionStrength":{"type":"number","minimum":0,"maximum":5}}}}},"collisionStrength":{"type":"number","minimum":0,"maximum":5},"adaptiveBalancePresets":{"type":"object","properties":{"mode":{"type":"string","enum":["export","import"]},"collection":{"type":"string","enum":["full","base","locations","worldspace","region","city"]}}}}},"inputSchema":{"type":"object","properties":{"visible":{"type":"boolean","description":"Show or hide the feature sidebar for set_sidebar_visible."},"action":{"type":"string","description":"screenshot is obsolete; use communityshaders.screenshot contractMajor 1 action capture","enum":["status","open","close","screenshot","set_adaptive_balance_enabled","set_adaptive_balance_visuals","set_adaptive_balance_dof","set_foliage_lighting_enabled","set_terrain_variation_mesh_enabled","set_pbr_grass_enabled","set_pbr_grass_diagnostics_enabled","set_truepbr_verbose_json_logging","set_dynamic_cubemap_resolution","set_motion_adaptive_sharpening","set_parallax_strength","set_sky_sync_sunlight","set_grass_optimizations_enabled","set_grass_optimizations_settings","set_grass_hiz_enabled","set_grass_optimizations_diagnostics_enabled","ui_status","open_feature","select_tab","set_sidebar_visible","scroll","restore_defaults","set_grass_collision_strength","set_adaptive_balance_preset_ui"],"default":"status"},"enabled":{"type":"boolean","description":"Boolean state required by a setter action."},"adjustment":{"type":"number","minimum":-1,"maximum":1,"description":"Signed RCAS or Luma Unsharp sharpness adjustment in motion."},"thresholdPixels":{"type":"number","minimum":0,"maximum":64,"description":"Motion threshold in output pixels per frame."},"strengthCap":{"type":"number","minimum":0,"maximum":1,"description":"Maximum adjusted strength on the DLSS sharpness slider scale."},"resolution":{"type":"integer","enum":[128,256],"description":"Dynamic cubemap resolution staged for the next game restart."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."},"visuals":{"type":"object","minProperties":1,"additionalProperties":false,"properties":{"useAmbientEffectLighting":{"type":"boolean","description":"Global ambient/IBL and directional effect lighting, default false; independent of lightingAdvanced."},"lightingAdvanced":{"type":"boolean"},"skySaturation":{"type":"number","minimum":0,"maximum":2},"contrast":{"type":"number","minimum":0.5,"maximum":2},"saturation":{"type":"number","minimum":0,"maximum":2},"pointLightSaturation":{"type":"number","minimum":0,"maximum":2,"default":1,"description":"General point-light saturation; 0 is monochrome and 1 preserves color. Requires Global lightingAdvanced; omission preserves the saved value."},"pointLightCurve":{"type":"number","minimum":0.1,"maximum":4,"default":1,"description":"General point-light colour curve applied per component to nonnegative input RGB before light-space conversion, intensity and saturation; 1 bypasses exactly. Requires Global lightingAdvanced; omission preserves the saved value. Does not change radius or distance falloff."},"fireIntensity":{"type":"number","minimum":0,"maximum":5,"default":1,"description":"Visible flame intensity for classified fire effects; 1 is neutral. Requires Global lightingAdvanced; omission preserves the saved value."},"fireSaturation":{"type":"number","minimum":0,"maximum":2,"default":1,"description":"Visible flame saturation for classified fire effects; 0 is monochrome and 1 is neutral. Requires Global lightingAdvanced; omission preserves the saved value."},"fireCurve":{"type":"number","minimum":0.25,"maximum":4,"default":1,"description":"Visible flame color response curve for classified fire effects; 1 is neutral. Requires Global lightingAdvanced; omission preserves the saved value."},"ambient":{"type":"number","minimum":0,"maximum":5},"causticsStrength":{"type":"number","minimum":0,"maximum":2},"causticsTiling":{"type":"number","minimum":0.25,"maximum":4},"causticsSpeed":{"type":"number","minimum":0,"maximum":3},"causticsDispersion":{"type":"number","minimum":0,"maximum":2},"parallaxStrength":{"type":"number","minimum":0,"maximum":2},"parallaxQuality":{"type":"integer","minimum":4,"maximum":64},"cloudBrightness":{"type":"number","minimum":0,"maximum":2},"cloudSaturation":{"type":"number","minimum":0,"maximum":2},"cloudGammaOffset":{"type":"number","minimum":-1,"maximum":1},"fogIntensity":{"type":"number","minimum":0,"maximum":5},"sunGlareIntensity":{"type":"number","minimum":0,"maximum":5},"effectBrightness":{"type":"number","minimum":0,"maximum":2},"skyStaticBrightness":{"type":"number","minimum":0,"maximum":2},"skyStaticTransparency":{"type":"number","minimum":0,"maximum":1}}},"strength":{"type":"number","minimum":0,"maximum":2,"description":"Global Extended Materials parallax depth; 1 is neutral, 0 disables depth and self-shadows. Water is separate."},"fadeHours":{"type":"number","minimum":0,"maximum":1.5,"description":"Optional Sky Sync direct-light recovery/fade duration on the night side of sunset/sunrise, in game hours; omission preserves the current value."},"grassOptimizations":{"type":"object","minProperties":1,"additionalProperties":false,"properties":{"Enabled":{"type":"boolean"},"CrossCellBatching":{"type":"boolean"},"FrustumCulling":{"type":"boolean"},"DensityReduction":{"type":"boolean"},"EnableMeshLOD":{"type":"boolean"},"EnableMidLOD":{"type":"boolean"},"EnableFarLOD":{"type":"boolean"},"EnableOcclusionCulling":{"type":"boolean"},"MinPixelSize":{"type":"number","minimum":0,"maximum":64},"FullDetailPixelSize":{"type":"number","minimum":0.01,"maximum":256},"MinDensity":{"type":"number","minimum":0,"maximum":1},"MidLODPixelSize":{"type":"number","minimum":0.01,"maximum":128},"FarLODPixelSize":{"type":"number","minimum":0.01,"maximum":128},"MeshLODBandPixels":{"type":"number","minimum":0.01,"maximum":32},"OcclusionBias":{"type":"number","minimum":0,"maximum":0.05},"MeshCostBias":{"type":"number","minimum":0,"maximum":1},"CostBiasStartDistance":{"type":"number","minimum":0,"maximum":20000},"InvisibleFadeCull":{"type":"number","minimum":0,"maximum":1},"RenderDistanceOverride":{"type":"number","minimum":0,"maximum":100000},"EdgeFadeStart":{"type":"number","minimum":0,"maximum":1},"SimpleShadingPixelSize":{"type":"number","minimum":0,"maximum":32},"CollisionDistance":{"type":"number","minimum":0,"maximum":20480,"default":2048}}},"feature":{"type":"string","description":"Feature short name or built-in page ID returned by ui_status."},"tab":{"type":"string","description":"Available section ID reported in ui_status tabs; showTab indicates top-tab visibility. Feature performance and profiling tools open from the bottom overview cards. Feature performance sections combine measurements and both profiling views. All connected features expose an independent profiling section. Its card remains visible while profiling is off, but opening it requires Enabled on the main Profiling page. ui_status tabs report enabled and disabledReason. NeuralRendering GPU mode includes separate D3D12 inference timings; CPU mode does not request GPU timestamps. The PerformanceTuning page exposes quick_scan and compare. quick_scan captures instrumented feature timings together without changing settings; compare retains the individual on/off measurements."},"scrollRatio":{"type":"number","minimum":0,"maximum":1,"description":"Normalized vertical viewport offset for scroll."},"collisionStrength":{"type":"number","minimum":0,"maximum":5,"description":"Grass Collision bending multiplier. 1 is the original strength, 0 removes bending. Used by set_grass_collision_strength."},"presetMode":{"type":"string","enum":["export","import"],"description":"Session-only Adaptive Balance Presets mode; does not read or write a file."},"presetCollection":{"type":"string","enum":["full","base","locations","worldspace","region","city"],"description":"Collection selected in the consolidated Adaptive Balance Presets diagram."}}}})";
 		static const std::string descriptor = [] {
 			auto document = json::parse(baseDescriptor);
+			document["inputSchema"]["properties"]["presetExportFolder"] = {
+				{ "type", "string" }, { "maxLength", MenuUI::AdaptiveBalancePresets::ExportFolder::MaxPathBytes },
+				{ "description", "Optional existing absolute export folder for set_adaptive_balance_preset_ui. UTF-8; empty restores the default Presets folder. Invalid input preserves the destination. Session only; selecting a folder writes no preset and leaves import lookup unchanged." }
+			};
+			auto& presetStatus = document["outputSchema"]["properties"]["adaptiveBalancePresets"]["properties"];
+			presetStatus["exportFolder"] = { { "type", "string" }, { "description", "Effective export folder; the default is the game's virtual Data path and remains subject to MO2 routing." } };
+			presetStatus["usesDefaultFolder"] = { { "type", "boolean" } };
+			document["description"] = document["description"].get<std::string>() +
+			                          " set_adaptive_balance_preset_ui accepts optional presetExportFolder to select an existing absolute export directory or an empty string to restore the default Presets folder. Selection is session-only and writes no files. Invalid paths preserve the prior destination. adaptiveBalancePresets reports exportFolder and usesDefaultFolder. Import lookup continues to use the default preset directories.";
 			document["inputSchema"]["properties"]["action"]["enum"].push_back("set_sky_sync_disabled_worldspaces");
 			const json worldspaceList = {
 				{ "type", "array" }, { "maxItems", SkySync::MaxDisabledWorldspaces },

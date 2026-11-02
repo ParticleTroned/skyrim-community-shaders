@@ -47,6 +47,10 @@ static void CheckComputeState(ID3D11Device* device, ID3D11DeviceContext1* contex
 	Check(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options)));
 	if (options.ConstantBufferOffsetting)
 		context->CSSetConstantBuffers1(0, 1, buffers.data(), &windowFirst, &windowCount);
+	if (options.ConstantBufferOffsetting)
+		context->CSSetConstantBuffers1(12, 1, buffers.data(), &windowFirst, &windowCount);
+	else
+		context->CSSetConstantBuffers(12, 1, buffers.data());
 	D3D11_TEXTURE2D_DESC description{};
 	description.Width = description.Height = 16;
 	description.MipLevels = description.ArraySize = description.SampleDesc.Count = 1;
@@ -80,7 +84,7 @@ static void CheckComputeState(ID3D11Device* device, ID3D11DeviceContext1* contex
 	Util::SetResourceName(predicate.get(), "Test::ComputePredicate");
 	context->SetPredication(predicate.get(), TRUE);
 	{
-		D3DState::ComputeState restore(context, 4);
+		D3DState::ComputeState restore(context, 4, true);
 		winrt::com_ptr<ID3D11Predicate> current;
 		BOOL value = TRUE;
 		context->GetPredication(current.put(), &value);
@@ -88,6 +92,7 @@ static void CheckComputeState(ID3D11Device* device, ID3D11DeviceContext1* contex
 		context->CSSetShader(nullptr, nullptr, 0);
 		std::array<ID3D11Buffer*, 4> emptyBuffers{};
 		context->CSSetConstantBuffers(0, 4, emptyBuffers.data());
+		context->CSSetConstantBuffers(12, 1, emptyBuffers.data());
 		input = nullptr;
 		output = nullptr;
 		context->CSSetShaderResources(2, 1, &input);
@@ -104,6 +109,13 @@ static void CheckComputeState(ID3D11Device* device, ID3D11DeviceContext1* contex
 	if (options.ConstantBufferOffsetting)
 		Require(first[0] == windowFirst && count[0] == windowCount, "compute scope restores CB window");
 	Require(first[2] == 0 && count[2] == D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT, "full CB retains unbounded binding");
+	winrt::com_ptr<ID3D11Buffer> restoredFrame;
+	UINT frameFirst = 0, frameCount = 0;
+	context->CSGetConstantBuffers1(12, 1, restoredFrame.put(), &frameFirst, &frameCount);
+	Require(restoredFrame == buffer, "compute scope restores the scene framebuffer binding");
+	Require(frameFirst == (options.ConstantBufferOffsetting ? windowFirst : 0) &&
+				frameCount == (options.ConstantBufferOffsetting ? windowCount : D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT),
+		"compute scope restores the scene framebuffer window");
 	winrt::com_ptr<ID3D11ShaderResourceView> restoredSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> restoredUAV;
 	winrt::com_ptr<ID3D11ComputeShader> restoredShader;

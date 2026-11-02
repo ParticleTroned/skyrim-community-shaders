@@ -19,7 +19,9 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 DX11 = {"nvngx_dlss.dll", "sl.common.dll", "sl.dlss.dll", "sl.interposer.dll", "sl.pcl.dll", "sl.reflex.dll"}
 DX12 = {"nvngx_dlssg.dll", "sl.common.dll", "sl.dlss_g.dll", "sl.interposer.dll", "sl.pcl.dll", "sl.reflex.dll"}
-NOTICES = {"license.txt", "3rd-party-licenses.md", "NVIDIA Nsight Graphics SDK License (Apache 2.0).txt", "nvngx_dlss.license.txt", "reflex.license.txt"}
+NOTICES = {"license.txt", "3rd-party-licenses.md", "NVIDIA Nsight Graphics SDK License (Apache 2.0).txt", "NVIDIA Nsight Perf SDK License (28Sept2022).pdf", "nis.license.txt", "nvngx_dlss.license.txt", "reflex.license.txt"}
+
+EXPECTED_COUNT = len(DX11) + len(DX12) + 2 * len(NOTICES)
 
 
 class StreamlineRuntimeCacheTest(unittest.TestCase):
@@ -34,7 +36,7 @@ class StreamlineRuntimeCacheTest(unittest.TestCase):
         self.modules.mkdir()
         self.contents = {f"bin/x64/{name}": f"production fixture {name}" for name in DX11 | DX12}
         for name in NOTICES:
-            relative = f"bin/x64/{name}" if name in {"nvngx_dlss.license.txt", "reflex.license.txt"} else name
+            relative = f"bin/x64/{name}" if name in {"nvngx_dlss.license.txt", "reflex.license.txt", "nis.license.txt"} else name
             self.contents[relative] = f"original fixture notice {name}"
         archive = self.root / "official fixture.zip"
         with zipfile.ZipFile(archive, "w") as output:
@@ -80,7 +82,7 @@ class StreamlineRuntimeCacheTest(unittest.TestCase):
 
     def warm(self):
         counts, files = self.configure(False)
-        self.assertEqual(counts, (0, 22, 22))
+        self.assertEqual(counts, (0, EXPECTED_COUNT, EXPECTED_COUNT))
         self.assertEqual(files, [DX11 | NOTICES, DX12 | NOTICES])
         hashes = json.loads(self.manifest.read_text())
         self.assertEqual(set(hashes), set(self.contents))
@@ -89,7 +91,7 @@ class StreamlineRuntimeCacheTest(unittest.TestCase):
 
     def test_cold_skip_has_complete_two_directory_payload_description(self):
         counts, files = self.configure(True)
-        self.assertEqual(counts, (22, 0, 22))
+        self.assertEqual(counts, (EXPECTED_COUNT, 0, EXPECTED_COUNT))
         self.assertEqual(files, [set(), set()])
         self.assertFalse(self.archive.exists(), "Skip mode must not fetch even an available local archive")
         self.assertFalse(self.sdk.exists(), "Skip mode must not extract SDK archives")
@@ -98,7 +100,7 @@ class StreamlineRuntimeCacheTest(unittest.TestCase):
         self.warm()
         unchanged = {p: (p.stat().st_mtime_ns, p.read_bytes()) for p in [self.archive, self.stamp, self.manifest]}
         counts, files = self.configure(True)
-        self.assertEqual(counts, (0, 22, 22))
+        self.assertEqual(counts, (0, EXPECTED_COUNT, EXPECTED_COUNT))
         self.assertEqual(files, [DX11 | NOTICES, DX12 | NOTICES])
         self.assertEqual(unchanged, {p: (p.stat().st_mtime_ns, p.read_bytes()) for p in unchanged})
 
@@ -107,7 +109,7 @@ class StreamlineRuntimeCacheTest(unittest.TestCase):
         (self.sdk / "bin/x64/sl.common.dll").write_text("modified SDK DLL")
         (self.sdk / "license.txt").write_text("modified SDK notice")
         counts, _ = self.configure(True)
-        self.assertEqual(counts, (4, 18, 22))
+        self.assertEqual(counts, (4, EXPECTED_COUNT - 4, EXPECTED_COUNT))
         for directory in ["Streamline", "StreamlineDX12"]:
             self.assertEqual((self.payload / directory / "sl.common.dll").read_text(), self.contents["bin/x64/sl.common.dll"])
             self.assertEqual((self.payload / directory / "license.txt").read_text(), self.contents["license.txt"])
@@ -117,23 +119,23 @@ class StreamlineRuntimeCacheTest(unittest.TestCase):
         self.warm()
         self.manifest.unlink()
         existing = (self.payload / "StreamlineDX12/nvngx_dlssg.dll").read_bytes()
-        self.assertEqual(self.configure(True)[0], (22, 0, 22))
+        self.assertEqual(self.configure(True)[0], (EXPECTED_COUNT, 0, EXPECTED_COUNT))
         self.assertEqual((self.payload / "StreamlineDX12/nvngx_dlssg.dll").read_bytes(), existing)
         self.assertFalse(self.manifest.exists())
 
     def test_invalid_hash_manifest_is_not_replaced_by_skip_mode(self):
         self.warm()
         self.manifest.write_text("not JSON")
-        self.assertEqual(self.configure(True)[0], (22, 0, 22))
+        self.assertEqual(self.configure(True)[0], (EXPECTED_COUNT, 0, EXPECTED_COUNT))
         self.assertEqual(self.manifest.read_text(), "not JSON")
 
     def test_missing_or_modified_archive_is_not_fetched_or_replaced(self):
         self.warm()
         self.archive.unlink()
-        self.assertEqual(self.configure(True)[0], (22, 0, 22))
+        self.assertEqual(self.configure(True)[0], (EXPECTED_COUNT, 0, EXPECTED_COUNT))
         self.assertFalse(self.archive.exists())
         self.archive.write_text("bad cached archive")
-        self.assertEqual(self.configure(True)[0], (22, 0, 22))
+        self.assertEqual(self.configure(True)[0], (EXPECTED_COUNT, 0, EXPECTED_COUNT))
         self.assertEqual(self.archive.read_text(), "bad cached archive")
 
     def test_mismatched_extraction_stamp_does_not_reextract(self):
@@ -141,14 +143,14 @@ class StreamlineRuntimeCacheTest(unittest.TestCase):
         self.stamp.write_text("wrong stamp")
         sentinel = self.sdk / "user-cache-sentinel.txt"
         sentinel.write_text("preserve")
-        self.assertEqual(self.configure(True)[0], (22, 0, 22))
+        self.assertEqual(self.configure(True)[0], (EXPECTED_COUNT, 0, EXPECTED_COUNT))
         self.assertEqual(self.stamp.read_text(), "wrong stamp")
         self.assertEqual(sentinel.read_text(), "preserve")
 
     def test_normal_mode_reextracts_modified_cache_from_verified_archive(self):
         self.warm()
         (self.sdk / "bin/x64/nvngx_dlssg.dll").write_text("bad cached FG")
-        self.assertEqual(self.configure(False)[0], (0, 22, 22))
+        self.assertEqual(self.configure(False)[0], (0, EXPECTED_COUNT, EXPECTED_COUNT))
         self.assertEqual((self.sdk / "bin/x64/nvngx_dlssg.dll").read_text(), self.contents["bin/x64/nvngx_dlssg.dll"])
         self.assertEqual((self.payload / "StreamlineDX12/nvngx_dlssg.dll").read_text(), self.contents["bin/x64/nvngx_dlssg.dll"])
 

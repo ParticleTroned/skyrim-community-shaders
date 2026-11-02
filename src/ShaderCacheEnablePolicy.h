@@ -21,10 +21,13 @@ namespace ShaderCacheEnablePolicy
 		bool enableRequested = true;
 		bool targetEnabled = true;
 		ApplyMode mode = ApplyMode::RuntimeTransition;
+		bool customShadersRequired = false;
 	};
 
 	[[nodiscard]] constexpr Action Resolve(const Inputs& a_inputs) noexcept
 	{
+		if (a_inputs.customShadersRequired && !a_inputs.targetEnabled)
+			return Action::None;
 		if (a_inputs.mode == ApplyMode::StartupHydration) {
 			return a_inputs.enabled == a_inputs.targetEnabled &&
 			               a_inputs.enableRequested == a_inputs.targetEnabled ?

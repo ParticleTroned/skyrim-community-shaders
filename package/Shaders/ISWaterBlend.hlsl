@@ -1,13 +1,14 @@
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Math.hlsli"
+#include "Common/ReverseZ.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float3 Color : SV_Target0;
-	float4 Color1 : SV_Target1;
+	float3 Color: SV_Target0;
+	float4 Color1: SV_Target1;
 };
 
 #if defined(PSHADER)
@@ -79,7 +80,7 @@ PS_OUTPUT main(PS_INPUT input)
 		motionScreenPosition.y <= 1 && waterHistory.w > 0.0 && all(isfinite(waterHistory))) {
 		float historyFactor = 0.95;
 		if (NearFar_Menu_DistanceFactor.z == 0) {
-			float depth = depthBufferTex.Sample(depthBufferSampler, adjustedScreenPosition).x;
+			float depth = FrameBuffer::ToStandardDepth(depthBufferTex.Sample(depthBufferSampler, adjustedScreenPosition).x);
 			float distanceFactor = clamp(250 * ((-NearFar_Menu_DistanceFactor.x +
 													(2 * NearFar_Menu_DistanceFactor.x * NearFar_Menu_DistanceFactor.y) /
 														(-(depth * 2 - 1) *

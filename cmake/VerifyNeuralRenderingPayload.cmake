@@ -13,6 +13,7 @@ set(_nr_shader_files
     MonoPresent.hlsl
     MonoReconstructCS.hlsl
     MonoSelection.hlsli
+    NvidiaReferenceColor.hlsli
     PeripheralCompression.hlsli)
 file(GLOB_RECURSE _nr_entries LIST_DIRECTORIES TRUE
     RELATIVE "${_nr_shader_root}" "${_nr_shader_root}/*")

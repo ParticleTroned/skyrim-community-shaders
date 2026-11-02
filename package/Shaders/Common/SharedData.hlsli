@@ -1,6 +1,8 @@
 #ifndef __SHARED_DATA_DEPENDENCY_HLSL__
 #define __SHARED_DATA_DEPENDENCY_HLSL__
 
+#include "Common/ReverseZ.hlsli"
+
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 
@@ -615,12 +617,12 @@ namespace SharedData
 
 	float GetScreenDepth(float depth)
 	{
-		return (CameraData.w / (-depth * CameraData.z + CameraData.x));
+		return CameraData.w / (FrameBuffer::IsReverseProjection() ? CameraData.y + depth * CameraData.z : CameraData.x - depth * CameraData.z);
 	}
 
 	float4 GetScreenDepths(float4 depths)
 	{
-		return (CameraData.w / (-depths * CameraData.z + CameraData.x));
+		return CameraData.w / (FrameBuffer::IsReverseProjection() ? CameraData.y + depths * CameraData.z : CameraData.x - depths * CameraData.z);
 	}
 
 	float GetScreenDepth(float2 uv)

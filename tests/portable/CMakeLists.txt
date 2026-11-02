@@ -28,7 +28,11 @@ function(csx_add_portable_test name)
     if(TARGET ${name})
         return()
     endif()
-    add_executable(${name} "${CSX_PROJECT_ROOT}/tests/${name}.cpp" ${ARGN})
+    cmake_parse_arguments(PARSE_ARGV 1 ARG "" "SOURCE" "")
+    if(NOT ARG_SOURCE)
+        set(ARG_SOURCE "${CSX_PROJECT_ROOT}/tests/${name}.cpp")
+    endif()
+    add_executable(${name} "${ARG_SOURCE}" ${ARG_UNPARSED_ARGUMENTS})
     target_compile_features(${name} PRIVATE cxx_std_23)
     target_include_directories(${name} PRIVATE "${CSX_PROJECT_ROOT}/src" "${CSX_PROJECT_ROOT}/include")
     target_link_libraries(${name} PRIVATE Threads::Threads nlohmann_json::nlohmann_json)
@@ -56,6 +60,7 @@ foreach(name IN ITEMS
     nr_packed_crop_policy neural_memory_recovery neural_color_policy neural_exposure_policy neural_mono_settings
     fsr_shared_guides_policy neural_stall_recovery_policy neural_mono_compression neural_mono_prewarm input_combo_policy
     native_evaluation_layout character_actor_policy neural_mono_policy mono_upscaling_api_policy
+    reverse_z_depth neural_native_memory neural_reference_policy neural_mono_experiments
     performance_tuning_controller performance_tuning_statistics
     pbr_material_registry volumetric_lighting_tuning_policy
     screenshot_mono_policy screenshot_manifest_snapshot)
@@ -66,6 +71,10 @@ target_compile_definitions(menu_depth_of_field_settings_policy_test PRIVATE DEVB
 target_compile_definitions(neural_exposure_policy_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
 target_compile_definitions(engine_stutter_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
 target_compile_definitions(engine_asset_load_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+csx_add_portable_test(neural_reference_devbench_test SOURCE "${CSX_PROJECT_ROOT}/tests/neural_reference_policy_test.cpp")
+target_compile_definitions(neural_reference_devbench_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+csx_add_portable_test(neural_mono_experiments_devbench_test SOURCE "${CSX_PROJECT_ROOT}/tests/neural_mono_experiments_test.cpp")
+target_compile_definitions(neural_mono_experiments_devbench_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
 target_sources(api_shader_service_policy_test PRIVATE "${CSX_PROJECT_ROOT}/src/Api/ShaderServicePolicy.cpp")
 target_sources(api_weather_service_policy_test PRIVATE "${CSX_PROJECT_ROOT}/src/Api/WeatherServicePolicy.cpp")
 target_sources(mono_upscaling_api_policy_test PRIVATE
@@ -124,10 +133,57 @@ function(csx_extract_cmake name script)
     set(CSX_PORTABLE_TEST_TARGETS ${CSX_PORTABLE_TEST_TARGETS} PARENT_SCOPE)
 endfunction()
 
+set(CSX_NR_SDK_INCLUDE "${NEURAL_RENDERING_SDK_INCLUDE_DIR}" CACHE PATH
+    "Verified official NR SDK include directory for portable NGX contract tests")
+include("${CSX_PROJECT_ROOT}/cmake/NeuralRenderingSDKPin.cmake")
+set(_nr_sdk_header "${CSX_NR_SDK_INCLUDE}/nvsdk_ngx_defs_dlssnr.h")
+if(NOT EXISTS "${_nr_sdk_header}")
+    message(FATAL_ERROR
+        "NR contract tests require CSX_NR_SDK_INCLUDE to point at the official SDK "
+        "headers cached by the main build's NeuralRendering-Runtime.cmake module.")
+endif()
+file(SHA256 "${_nr_sdk_header}" _nr_sdk_header_hash)
+if(NOT _nr_sdk_header_hash STREQUAL NEURAL_RENDERING_SDK_HEADER_SHA256)
+    message(FATAL_ERROR "NR contract tests require the pinned original SDK parameter header")
+endif()
+set(_nr_test_directory "${CMAKE_CURRENT_BINARY_DIR}/generated/neural-native-creation")
+set(_nr_test_headers)
+foreach(name IN ITEMS neural_native_key neural_runtime_minimum neural_runtime_probe
+    neural_native_creation neural_installed_metadata neural_runtime_tuning neural_runtime_logging
+    neural_runtime_detail neural_runtime_reset neural_evaluation_success_detail neural_sdk_parameters
+    neural_ngx_initialize neural_ngx_shutdown neural_ngx_statistics)
+    list(APPEND _nr_test_headers "${_nr_test_directory}/${name}_under_test.h")
+endforeach()
+add_custom_command(OUTPUT ${_nr_test_headers}
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${CSX_PROJECT_ROOT}"
+        "-DOUTPUT_DIRECTORY=${_nr_test_directory}" "-DNR_SDK_INCLUDE_DIR=${CSX_NR_SDK_INCLUDE}"
+        -P "${CSX_PROJECT_ROOT}/tests/extract_neural_native_creation.cmake"
+    DEPENDS "${CSX_PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/Runtime.cpp"
+        "${CSX_PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/Runtime.h"
+        "${_nr_sdk_header}"
+        "${CSX_PROJECT_ROOT}/extern/Streamline-DX12/external/ngx-sdk/include/nvsdk_ngx_defs.h"
+        "${CSX_PROJECT_ROOT}/tests/extract_neural_native_creation.cmake"
+        "${CSX_PROJECT_ROOT}/tests/extract_source_region.cmake"
+    VERBATIM)
+add_custom_target(neural_native_test_sources DEPENDS ${_nr_test_headers})
+foreach(name IN ITEMS neural_native_creation neural_runtime_admission neural_ngx_initialization neural_ngx_statistics)
+    csx_add_portable_test(${name}_test)
+    add_dependencies(${name}_test neural_native_test_sources)
+    target_include_directories(${name}_test PRIVATE "${_nr_test_directory}")
+endforeach()
+target_compile_definitions(neural_ngx_statistics_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+
 csx_extract_cmake(actor_shape_bounds_test extract_actor_shape_bounds.cmake
     HEADERS actor_shape_bounds_under_test.h
     SOURCES "${CSX_PROJECT_ROOT}/src/Utils/ActorUtils.cpp"
         "${CSX_PROJECT_ROOT}/src/Utils/ActorUtils.h")
+csx_extract_cmake(neural_mono_startup_test extract_neural_mono_startup.cmake
+    HEADERS neural_mono_startup_under_test.h
+    SOURCES "${CSX_PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/MonoRenderer.cpp"
+        "${CSX_PROJECT_ROOT}/tests/extract_source_region.cmake")
+csx_extract_cmake(scene_depth_test extract_scene_depth.cmake
+    HEADERS scene_depth_under_test.h
+    SOURCES "${CSX_PROJECT_ROOT}/src/Deferred.cpp" "${CSX_PROJECT_ROOT}/src/Utils/D3D.cpp")
 csx_extract_cmake(skylighting_lifecycle_test extract_skylighting_lifecycle.cmake
     HEADERS skylighting_buffer_under_test.h skylighting_lifecycle_under_test.h
     SOURCES "${CSX_PROJECT_ROOT}/src/Features/Skylighting.cpp" "${CSX_PROJECT_ROOT}/src/Features/Skylighting.h")
@@ -224,6 +280,13 @@ csx_extract_python(adaptive_balance_toggle_test extract_adaptive_balance_toggle.
 csx_extract_python(nvperf_policy_test extract_nvperf_policy.py HEADERS nvperf_policy_extracted.h
     SOURCES "${CSX_PROJECT_ROOT}/src/Diagnostics/NvPerf.cpp" "${CSX_PROJECT_ROOT}/src/Diagnostics/NvPerf.h")
 
+include("${CMAKE_CURRENT_LIST_DIR}/ui-dependencies.cmake")
+csx_extract_python(adaptive_preset_folder_ui_test extract_adaptive_preset_folder_ui.py
+    HEADERS adaptive_preset_folder_ui_under_test.h
+    SOURCES "${CSX_PROJECT_ROOT}/src/Menu/AdaptiveBalancePresets.cpp"
+        "${CSX_PROJECT_ROOT}/src/Menu/AdaptiveBalancePresets.h")
+target_link_libraries(adaptive_preset_folder_ui_test PRIVATE imgui::imgui fmt::fmt)
+
 if(MSVC)
     csx_add_portable_test(adaptive_balance_point_lights_test)
     target_include_directories(adaptive_balance_point_lights_test PRIVATE
@@ -232,9 +295,11 @@ if(MSVC)
 endif()
 
 foreach(script IN ITEMS grass_collision_settings_test screenshot_mono_settings_test screenshot_verify_test
-    d3d_texture_lifetime_test se_performance_ownership_test se_hdr_ui_test se_upscaling_ui_test volumetric_shadow_resources_test
+    d3d_texture_lifetime_test se_performance_ownership_test se_hdr_ui_test se_upscaling_ui_test
+    se_upscaling_resources_test se_upscaling_depth_contract_test reverse_z_initialization_test volumetric_shadow_resources_test
     unified_water_duplicates_test subsurface_helper_region_test render_feature_contracts_test
     feature_issue_scanner_test neural_payload_guard_test streamline_runtime_cache_test shader_deploy_build_rule_test
+    preset_export_write_test neural_sdk_cache_test
     shader_cache_pack_builder_test shader_cache_packaging_test shader_cache_se_test)
     add_test(NAME ${script} COMMAND "${CMAKE_COMMAND}" -E env
         "CXX=${CMAKE_CXX_COMPILER}" "CSX_JSON_INCLUDE=${CSX_JSON_INCLUDE}"

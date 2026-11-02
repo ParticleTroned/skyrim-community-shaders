@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <span>
 
 namespace MotionSharpening
 {
@@ -84,6 +85,14 @@ namespace MotionSharpening
 		return Contains({ 0, 0, colorWidth, colorHeight }, region.output) &&
 		       Contains({ 0, 0, motionWidth, motionHeight }, region.sourceViewport) &&
 		       Contains(region.sourceViewport, region.source);
+	}
+
+	/** SE sharpening owns one complete output, including when motion inputs fall back. */
+	constexpr bool CoversOutput(std::span<const Region> regions, uint32_t width, uint32_t height) noexcept
+	{
+		return regions.size() == 1 && width != 0 && height != 0 &&
+		       regions.front().output.x == 0 && regions.front().output.y == 0 &&
+		       regions.front().output.width == width && regions.front().output.height == height;
 	}
 
 	/** UV motion is normalized to the full engine viewport, even for a cropped output. */

@@ -1,6 +1,7 @@
 #include "Globals.h"
 #include "Features/GrassOptimizations.h"
 #include "Features/NeuralRenderingFeature.h"
+#include "Features/ReverseZ.h"
 #include "Features/TerrainSeams.h"
 #include "Features/Upscaling/NeuralRendering/ExposureCapture.h"
 #include "Features/WeatherPicker.h"
@@ -58,6 +59,7 @@
 #include "TruePBR.h"
 #include "Utils/Game.h"
 #include "WeatherManager.h"
+#include <mutex>
 
 namespace globals
 {
@@ -76,6 +78,7 @@ namespace globals
 		NeuralRenderingFeature neuralRendering{};
 		AdaptiveBrightness adaptiveBrightness{};
 		CSUtility csUtility{};
+		ReverseZ reverseZ{};
 		CloudShadows cloudShadows{};
 		DynamicCubemaps dynamicCubemaps{};
 		ExtendedMaterials extendedMaterials{};
@@ -299,7 +302,7 @@ namespace globals
 		{
 			HRESULT hr = func(This, pResource, Subresource, MapType, MapFlags, pMappedResource);
 			if (hr == S_OK) {
-				if (*globals::game::perFrame.get() == pResource)
+				if (This == d3d::context && Subresource == 0 && *globals::game::perFrame.get() == pResource)
 					globals::game::mappedFrameBuffer = pMappedResource;
 			}
 			return hr;
@@ -316,8 +319,13 @@ namespace globals
 	{
 		static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource)
 		{
-			if (*globals::game::perFrame.get() == pResource && globals::game::mappedFrameBuffer)
-				CacheFramebuffer();
+			if (This == d3d::context && Subresource == 0 && *globals::game::perFrame.get() == pResource && globals::game::mappedFrameBuffer) {
+				auto* bytes = globals::game::mappedFrameBuffer->pData;
+				if (bytes) {
+					features::reverseZ.FixupMappedFrameBuffer(*static_cast<FrameBuffer*>(bytes));
+					CacheFramebuffer();
+				}
+			}
 			func(This, pResource, Subresource);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -417,6 +425,14 @@ namespace globals
 
 	void InstallD3DHooks(ID3D11DeviceContext* a_context)
 	{
+		if (!a_context)
+			return;
+		static std::mutex installationMutex;
+		static winrt::com_ptr<ID3D11DeviceContext> installedContext;
+		std::scoped_lock lock(installationMutex);
+		// Native context dispatch can change after first use without replacing the context.
+		if (installedContext.get() == a_context)
+			return;
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 		stl::detour_vfunc<12, ID3D11DeviceContext_DrawIndexed>(a_context);
@@ -426,5 +442,6 @@ namespace globals
 		stl::detour_vfunc<38, ID3D11DeviceContext_DrawAuto>(a_context);
 		stl::detour_vfunc<39, ID3D11DeviceContext_DrawIndexedInstancedIndirect>(a_context);
 		stl::detour_vfunc<40, ID3D11DeviceContext_DrawInstancedIndirect>(a_context);
+		installedContext.copy_from(a_context);
 	}
 }

@@ -4,6 +4,7 @@
 
 class ParticleLights;
 
+struct ReverseZ;
 struct CloudShadows;
 struct GrassOptimizations;
 struct Wetterness;
@@ -81,6 +82,7 @@ namespace globals
 		extern NeuralRenderingFeature neuralRendering;
 		extern AdaptiveBrightness adaptiveBrightness;
 		extern CSUtility csUtility;
+		extern ReverseZ reverseZ;
 		extern CloudShadows cloudShadows;
 		extern DynamicCubemaps dynamicCubemaps;
 		extern ExtendedMaterials extendedMaterials;

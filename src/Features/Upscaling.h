@@ -20,6 +20,11 @@
 #include <mutex>
 #include <winrt/base.h>
 
+namespace UpscalingTextures
+{
+	struct SourceDescriptions;
+}
+
 /**
  * @brief Provides upscaling functionality including DLSS, FSR and TAA.
  *
@@ -396,12 +401,13 @@ public:
 	UpscaleMethod GetUpscaleMethod() const;
 
 	bool CheckResources(UpscaleMethod a_upscalemethod);
-	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
+	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod,
+		const UpscalingTextures::SourceDescriptions* a_sourceDescriptions = nullptr);
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 	void DestroyAllUpscalingTextureResources();
 
 	Util::LazyShader<ID3D11ComputeShader> encodeTexturesCS[4];          // One for each UpscaleMethod
-	Util::LazyShader<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // FSR: converts game depth to typed R32_FLOAT
+	Util::LazyShader<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // FSR: typed R32_FLOAT in standard depth convention
 	ID3D11ComputeShader* GetEncodeTexturesCS();
 
 	Util::LazyShader<ID3D11PixelShader> depthRefractionUpscalePS;

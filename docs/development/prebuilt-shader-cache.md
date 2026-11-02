@@ -68,6 +68,13 @@ The shipped profile enables `UNIFIED_WATER` globally,
 `WETTERNESS` for Lighting, Water and RunGrass, and `PBR_GRASS=1` plus
 `GRASS_OPTIMIZATIONS` for RunGrass.
 
+Reverse Z compiler inputs come from the selected cache's feature metadata.
+Captured `REVERSE_Z` macros are first removed, then enabled only when the
+selected `ReverseZ` state is enabled. Utility uses `REVERSE_Z=1`; other shader
+classes use the runtime's empty-valued feature macro. The manifest records
+the resulting exact macro values and feature state. This preserves standard
+depth cache generation when Reverse Z is disabled.
+
 The captured inventory remains unchanged. The builder adds the separately
 observed SE grass permutations and the character-category output companions
 whose descriptor bits are read from `ShaderCache::GetCharacterCategoryFlag()`.

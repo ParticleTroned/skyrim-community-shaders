@@ -195,6 +195,11 @@ namespace NeuralRendering
 	LifetimeFenceSnapshot MonoInterop::Snapshot() const noexcept
 	{
 		LifetimeFenceSnapshot snapshot{};
+		snapshot.device = reinterpret_cast<std::uintptr_t>(device12_.Get());
+		snapshot.queue = reinterpret_cast<std::uintptr_t>(queue_.Get());
+		snapshot.fence = reinterpret_cast<std::uintptr_t>(fence12_.Get());
+		snapshot.device11 = reinterpret_cast<std::uintptr_t>(device11_.Get());
+		snapshot.context11 = reinterpret_cast<std::uintptr_t>(context11_.Get());
 		snapshot.initialized = device12_ && queue_ && fence12_ && fence11_;
 		snapshot.recording = recording_;
 		snapshot.issued = value_;

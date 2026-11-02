@@ -20,7 +20,7 @@ namespace NeuralRendering
 		return selection <= kNetworkNewer ? selection : kNetworkDefault;
 	}
 
-	/** Default explicitly selects the newer network; unsupported families retain native zero. */
+	/** Saved Default selects lightweight preset B; Legacy selects A, independently of appearance style. */
 	[[nodiscard]] constexpr std::uint32_t ResolveNetworkPreset(std::uint32_t selection, bool supported) noexcept
 	{
 		return supported ? (SanitizeNetworkSelection(selection) == kNetworkLegacy ? kNetworkLegacy : kNetworkNewer) : kNetworkDefault;

@@ -11,13 +11,15 @@ namespace D3DState
 	class ComputeState
 	{
 	public:
-		explicit ComputeState(ID3D11DeviceContext1* context, UINT usedUAVs = 4) : ctx(context), uavCount(std::min(usedUAVs, 14u))
+		explicit ComputeState(ID3D11DeviceContext1* context, UINT usedUAVs = 4, bool preserveSceneFrameBuffer = false) : ctx(context), uavCount(std::min(usedUAVs, 14u)), preserveFrameBuffer(preserveSceneFrameBuffer)
 		{
 			ctx->CSGetShader(shader.put(), classes.data(), &classCount);
 			std::array<ID3D11Buffer*, 4> rawBuffers{};
 			ctx->CSGetConstantBuffers1(0, static_cast<UINT>(rawBuffers.size()), rawBuffers.data(), first.data(), count.data());
 			for (UINT i = 0; i < buffers.size(); ++i)
 				buffers[i].attach(rawBuffers[i]);
+			if (preserveFrameBuffer)
+				ctx->CSGetConstantBuffers1(12, 1, frameBuffer.put(), &frameBufferFirst, &frameBufferCount);
 			std::array<ID3D11ShaderResourceView*, 3> rawSRVs{};
 			ctx->CSGetShaderResources(0, static_cast<UINT>(rawSRVs.size()), rawSRVs.data());
 			for (UINT i = 0; i < srvs.size(); ++i)
@@ -38,12 +40,16 @@ namespace D3DState
 			std::array<ID3D11Buffer*, 4> rawBuffers{};
 			for (UINT i = 0; i < buffers.size(); ++i)
 				rawBuffers[i] = buffers[i].get();
-			for (UINT i = 0; i < rawBuffers.size(); ++i) {
-				if (rawBuffers[i] && (first[i] != 0 || count[i] != D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT))
-					ctx->CSSetConstantBuffers1(i, 1, &rawBuffers[i], &first[i], &count[i]);
+			const auto restoreBuffer = [&](UINT slot, ID3D11Buffer* buffer, UINT offset, UINT size) {
+				if (buffer && (offset != 0 || size != D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT))
+					ctx->CSSetConstantBuffers1(slot, 1, &buffer, &offset, &size);
 				else
-					ctx->CSSetConstantBuffers(i, 1, &rawBuffers[i]);
-			}
+					ctx->CSSetConstantBuffers(slot, 1, &buffer);
+			};
+			for (UINT i = 0; i < rawBuffers.size(); ++i)
+				restoreBuffer(i, rawBuffers[i], first[i], count[i]);
+			if (preserveFrameBuffer)
+				restoreBuffer(12, frameBuffer.get(), frameBufferFirst, frameBufferCount);
 			std::array<ID3D11ShaderResourceView*, 3> rawSRVs{};
 			for (UINT i = 0; i < srvs.size(); ++i)
 				rawSRVs[i] = srvs[i].get();
@@ -68,6 +74,9 @@ namespace D3DState
 		UINT classCount = static_cast<UINT>(classes.size());
 		std::array<winrt::com_ptr<ID3D11Buffer>, 4> buffers;
 		std::array<UINT, 4> first{}, count{};
+		bool preserveFrameBuffer;
+		winrt::com_ptr<ID3D11Buffer> frameBuffer;
+		UINT frameBufferFirst = 0, frameBufferCount = 0;
 		std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 3> srvs;
 		std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, 14> uavs;
 		winrt::com_ptr<ID3D11Predicate> predicate;

@@ -1,5 +1,6 @@
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
+#include "Common/ReverseZ.hlsli"
 
 #if defined(CSHADER)
 SamplerState ShadowmapSampler : register(s0);
@@ -62,8 +63,8 @@ cbuffer PerTechnique : register(b0)
 
 	float3 normalizedCoordinates = float3(dispatchID.xy + 0.5, dispatchID.z - 1.0) * rcp(TextureDimensions.xyz);
 	float2 uv = normalizedCoordinates.xy;
-	float3 depthUv = (normalizedCoordinates) + StepCoefficients[IterationIndex];
-	float depth = InverseRepartitionTex.SampleLevel(InverseRepartitionSampler, depthUv.z, 0);
+	float3 depthUv = normalizedCoordinates + StepCoefficients[IterationIndex];
+	float depth = FrameBuffer::ToNativeDepth(InverseRepartitionTex.SampleLevel(InverseRepartitionSampler, depthUv.z, 0));
 	float4 positionCS = float4(2 * depthUv.x - 1, 1 - 2 * depthUv.y, depth, 1);
 
 	float4 positionWS = mul(CameraViewProjInverse, positionCS);
@@ -72,7 +73,7 @@ cbuffer PerTechnique : register(b0)
 	float4 positionCSShifted = mul(CameraViewProj, positionWS);
 	positionCSShifted *= rcp(positionCSShifted.w);
 
-	float shadowMapDepth = positionCSShifted.z;
+	float shadowMapDepth = FrameBuffer::ToStandardDepth(positionCSShifted.z);
 
 	bool noShadow = !SharedData::InInterior;
 	if (EndSplitDistances.z >= shadowMapDepth) {

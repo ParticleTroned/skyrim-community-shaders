@@ -2509,6 +2509,7 @@ void LightLimitFix::UpdateStructure()
 		context->CSSetUnorderedAccessViews(0, 1, &clusters_uav, nullptr);
 
 		context->CSSetShader(clusterBuilding, nullptr, 0);
+		Util::BindFrameBufferConstantBuffersForCS(context);
 		globals::profiler->BeginPass("LightLimitFix::ClusterBuild");
 		context->Dispatch((clusterSize[0] + 15) / 16, (clusterSize[1] + 15) / 16, (clusterSize[2] + 3) / 4);
 		globals::profiler->EndPass();

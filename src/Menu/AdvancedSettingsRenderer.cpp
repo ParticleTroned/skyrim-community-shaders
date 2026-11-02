@@ -15,6 +15,7 @@
 #include "FeatureIssues.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/RenderDoc.h"
+#include "Features/ReverseZ.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -227,6 +228,10 @@ void AdvancedSettingsRenderer::RenderShaderReplacementTable()
 	auto state = globals::state;
 
 	Util::DrawSectionHeader(T("menu.advanced.replace_original_shaders", "Replace Original Shaders"));
+	const bool reverseDepth = globals::features::reverseZ.IsActive();
+	auto disabled = Util::DisableGuard(reverseDepth);
+	if (reverseDepth)
+		ImGui::TextUnformatted(T("menu.advanced.reverse_z_replacements_required", "Reverse Z requires shader replacements. Disable Reverse Z and restart to change them."));
 
 	if (ImGui::BeginTable("##ReplaceToggles", 3, ImGuiTableFlags_SizingStretchSame)) {
 		globals::state->ForEachShaderTypeWithIndex([&](auto type, int classIndex) {

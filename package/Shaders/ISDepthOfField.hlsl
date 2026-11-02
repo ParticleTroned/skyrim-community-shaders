@@ -2,13 +2,14 @@
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Math.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/SharedData.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float4 Color : SV_Target0;
+	float4 Color: SV_Target0;
 };
 
 #if defined(PSHADER)
@@ -55,7 +56,7 @@ float3 SampleBlurredWithSoftening(float2 uv, float2 originalUv, float2 pixelPos,
 void CheckOffsetDepth(float2 center, float2 offset, inout float crossSection,
 	inout float totalDepth)
 {
-	float depth = DepthTex.Sample(DepthSampler, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(invScreenRes.xy * offset + center));
+	float depth = FrameBuffer::ToStandardDepth(DepthTex.Sample(DepthSampler, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(invScreenRes.xy * offset + center)));
 
 	float crossSectionDelta = 0;
 	if (depth > 0.999998987) {
@@ -102,7 +103,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #endif
 
-	float depthCC = DepthTex.Sample(DepthSampler, adjustedTexCoord);
+	float depthCC = FrameBuffer::ToStandardDepth(DepthTex.Sample(DepthSampler, adjustedTexCoord));
 
 	float crossSection = 0;
 	float avgDepth = depthCC;

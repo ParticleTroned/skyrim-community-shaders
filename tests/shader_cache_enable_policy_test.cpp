@@ -1,6 +1,7 @@
 #include "ShaderCacheEnablePolicy.h"
 
 #include <cstdint>
+#include <initializer_list>
 
 namespace
 {
@@ -63,6 +64,26 @@ namespace
 			   }) == Action::Hydrate;
 	}
 
+	constexpr bool ReverseDepthRequiresCustomShaders()
+	{
+		for (auto mode : { ApplyMode::StartupHydration, ApplyMode::RuntimeTransition }) {
+			for (bool enabled : { false, true }) {
+				for (bool requested : { false, true }) {
+					if (ShaderCacheEnablePolicy::Resolve({
+							.enabled = enabled,
+							.enableRequested = requested,
+							.targetEnabled = false,
+							.mode = mode,
+							.customShadersRequired = true,
+						}) != Action::None)
+						return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	static_assert(ReverseDepthRequiresCustomShaders());
 	static_assert(CoversEveryStateCombination());
 	static_assert(DuplicateRuntimeEnableIsNoOp());
 	static_assert(StartupDisableHydratesWithoutTransition());

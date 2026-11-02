@@ -88,13 +88,13 @@ function(check_runtime_modules)
     list(LENGTH STREAMLINE_RUNTIME_PAYLOAD_MISSING _streamline_count)
     if(
         NOT _ffx_count EQUAL 3
-        OR NOT _streamline_count EQUAL 22
+        OR NOT _streamline_count EQUAL 26
         OR FFX_RUNTIME_FILES
         OR STREAMLINE_RUNTIME_FILES
     )
         message(
             FATAL_ERROR
-            "Cold skip mode must retain all 25 expected SE payload paths"
+            "Cold skip mode must retain all 29 expected SE payload paths"
         )
     endif()
 
@@ -123,7 +123,7 @@ function(check_runtime_modules)
     list(LENGTH STREAMLINE_RUNTIME_PAYLOAD_MISSING _streamline_count)
     if(
         NOT _ffx_count EQUAL 3
-        OR NOT _streamline_count EQUAL 22
+        OR NOT _streamline_count EQUAL 26
         OR FFX_RUNTIME_FILES
         OR STREAMLINE_RUNTIME_FILES
     )

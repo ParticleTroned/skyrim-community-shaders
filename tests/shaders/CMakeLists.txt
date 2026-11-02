@@ -57,6 +57,10 @@ add_executable(shader_tests
     minimal_test.cpp                   # Provides main()
     runtime_discovered_tests.cpp       # Single test that discovers & runs all HLSL tests
     shader_permutation_compile_tests.cpp # Production FXC compile coverage for runtime permutations
+    reverse_z_tests.cpp               # Native depth order, scene targets and shader conventions
+    grass_billboard_tests.cpp         # Far billboard lighting on both faces
+    upscaling_depth_tests.cpp          # Mono DLSS/FSR depth encoding and group boundaries
+    sss_skin_color_tests.cpp           # Saturation energy, masks and preserved SE skin routing
 
     # Headers (listed for IDE integration and dependency tracking)
     test_common.h                      # Common test utilities
@@ -117,7 +121,7 @@ endforeach()
 
 # Link ShaderTestFramework BEFORE copying assets (so dependencies are resolved)
 target_link_libraries(shader_tests PRIVATE ShaderTestFramework)
-target_link_libraries(shader_tests PRIVATE d3dcompiler)
+target_link_libraries(shader_tests PRIVATE d3d11 d3dcompiler)
 
 # Copy all dependent assets (DLLs, shaders, etc.) - must be AFTER target_link_libraries
 copy_all_dependent_assets(shader_tests)

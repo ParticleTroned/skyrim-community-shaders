@@ -1,6 +1,7 @@
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/MotionBlur.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/SharedData.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
@@ -61,7 +62,7 @@ float4 GetReflectionColor(
 		if (FrameBuffer::IsOutsideFrame(sampleUV))
 			return 0.0;
 
-		float iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV), 0).x;
+		float iterationDepth = FrameBuffer::ToStandardDepth(DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV), 0).x);
 #ifndef UNIFIED_WATER
 		if (iterationDepth > maxValidDepth)
 			continue;
@@ -77,7 +78,7 @@ float4 GetReflectionColor(
 				binaryRaySample = lerp(binaryMinRaySample, binaryMaxRaySample, 0.5);
 
 				sampleUV = binaryRaySample.xy;
-				iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV), 0).x;
+				iterationDepth = FrameBuffer::ToStandardDepth(DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV), 0).x);
 #ifndef UNIFIED_WATER
 				if (iterationDepth > maxValidDepth) {
 					if (iterationDepth < binaryRaySample.z)
@@ -117,7 +118,7 @@ float4 GetReflectionColor(
 				float3 color = ColorTex.SampleLevel(ColorSampler, ConvertRaySample(finalSampleUV), 0).xyz;
 
 				// Final sample to world-space
-				float4 positionWS = float4(float2(finalSampleUV.x, 1.0 - finalSampleUV.y) * 2.0 - 1.0, iterationDepth, 1.0);
+				float4 positionWS = float4(float2(finalSampleUV.x, 1.0 - finalSampleUV.y) * 2.0 - 1.0, FrameBuffer::ToNativeDepth(iterationDepth), 1.0);
 				positionWS = mul(FrameBuffer::CameraViewProjInverse, positionWS);
 				positionWS.xyz = positionWS.xyz / positionWS.w;
 				positionWS.w = 1.0;
@@ -164,15 +165,16 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 viewNormal = DefaultNormal;
 
-	float depth = DepthTex.SampleLevel(DepthSampler, screenPosition, 0).x;
-#ifndef UNIFIED_WATER
+	float nativeDepth = DepthTex.SampleLevel(DepthSampler, screenPosition, 0).x;
+	float depth = FrameBuffer::ToStandardDepth(nativeDepth);
+#	ifndef UNIFIED_WATER
 	if (depth > maxValidDepth)
 		return psout;
 #endif
 	if (!isfinite(SSRParams.y) || SSRParams.y <= 1e-6)
 		return psout;
 
-	float4 positionVS = float4(float2(uv.x, 1.0 - uv.y) * 2.0 - 1.0, depth, 1.0);
+	float4 positionVS = float4(float2(uv.x, 1.0 - uv.y) * 2.0 - 1.0, nativeDepth, 1.0);
 	positionVS = mul(FrameBuffer::CameraProjInverse, positionVS);
 	positionVS.xyz = positionVS.xyz / positionVS.w;
 
@@ -186,10 +188,11 @@ PS_OUTPUT main(PS_INPUT input)
 		return psout;
 	}
 
-	// Project the direction directly to avoid cancellation at distant surfaces.
+	// Direct projection avoids cancellation between nearby screen positions.
 	float4 clipReflectionDirection = mul(FrameBuffer::CameraProj, float4(reflectionDirection, 0.0));
-	float3 ndcPosition = float3(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), depth);
+	float3 ndcPosition = float3(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), nativeDepth);
 	float3 projReflectionDirection = clipReflectionDirection.xyz - ndcPosition * clipReflectionDirection.w;
+	projReflectionDirection.z *= DepthOrder::IsReversed() ? -1.0 : 1.0;
 	projReflectionDirection.xy *= float2(0.5, -0.5);
 	float directionLengthSquared = dot(projReflectionDirection, projReflectionDirection);
 	if (!isfinite(directionLengthSquared) || directionLengthSquared <= 0.0)

@@ -417,6 +417,7 @@ bool DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 	context->CSSetConstantBuffers(0, 1, &buffer);
 	context->CSSetSamplers(0, 1, &computeSampler);
 
+	Util::BindFrameBufferConstantBuffersForCS(context);
 	context->CSSetShader(detector, nullptr, 0);
 	{
 		CS_GPU_PASS_SELECT(a_reflections, "DynamicCubemaps::DetectLightingReflections", "DynamicCubemaps::DetectLighting");

@@ -1,6 +1,7 @@
 #include "Feature.h"
 #include "Features/GrassOptimizations.h"
 #include "Features/NeuralRenderingFeature.h"
+#include "Features/ReverseZ.h"
 #include "Features/TerrainSeams.h"
 #include "Features/TextureStreaming.h"
 #include "Features/WeatherPicker.h"
@@ -273,6 +274,7 @@ void Feature::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 const std::vector<Feature*>& Feature::GetFeatureList()
 {
 	static std::vector<Feature*> features = {
+		&globals::features::reverseZ,
 		&globals::features::grassOptimizations,
 		&globals::features::wetterness,
 		&globals::features::weatherPicker,

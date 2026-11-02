@@ -2,6 +2,7 @@
 
 #include "CapacityFallback.h"
 #include "NetworkSelection.h"
+#include "NgxCapabilityInfo.h"
 #include "RegionCapacity.h"
 #include "Style.h"
 #include "TuningLimits.h"
@@ -15,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -26,6 +28,7 @@ struct ID3D12Resource;
 
 namespace NeuralRendering
 {
+	class MonoInterop;
 	enum class RuntimeStatus
 	{
 		NotProbed,
@@ -37,7 +40,6 @@ namespace NeuralRendering
 		IdentityFailed,
 		Ready,
 		InitializationFailed,
-		CoreUnavailable,
 		ParameterAllocationFailed,
 		Initialized,
 		FeatureConfigurationChanged,
@@ -63,7 +65,6 @@ namespace NeuralRendering
 		Load,
 		Identity,
 		Initialization,
-		ParameterCore,
 		ParameterAllocation,
 		FeatureConfiguration,
 		FeatureCreate,
@@ -71,20 +72,6 @@ namespace NeuralRendering
 		FeatureRelease,
 		Shutdown,
 		UnsafeAbandon
-	};
-
-	enum class ParameterCoreTrust
-	{
-		Unknown,
-		RuntimeIdentityMatched,
-		AuthenticodeVerified
-	};
-
-	enum class ParameterCoreSource
-	{
-		None,
-		Runtime,
-		DriverStore
 	};
 
 	struct Tuning
@@ -97,6 +84,7 @@ namespace NeuralRendering
 		std::uint32_t style = kDefaultStyle;
 		bool useAutoMask = true;
 		bool uiCorrection = false;
+		bool depthInverted = false;
 		// Private Feature 18 single-rectangle compute ROI.  One means the
 		// full resource and remains the production default.
 		float singleSubrectScale = 1.0f;
@@ -105,7 +93,7 @@ namespace NeuralRendering
 	class Runtime
 	{
 	public:
-		// The mono renderer retains one feature for its selected input domain.
+		// The mono route owns one native feature.
 		static constexpr std::size_t kFeatureSlotCount = kLogicalFeatureSlotCount;
 
 		static Runtime& Instance();
@@ -114,6 +102,9 @@ namespace NeuralRendering
 		[[nodiscard]] static bool IsInstalled() noexcept;
 		static constexpr const char* kMissingRuntimeNotice =
 			"Missing DLL: Shaders/Upscaling/Streamline/nvngx_dlssnr.dll";
+		static constexpr const char* kUserRuntimeNotice =
+			"NR runtime is not included. Install your own compatible nvngx_dlssnr.dll (310.8 or newer) "
+			"under Shaders/Upscaling/Streamline under its license terms, then restart.";
 		static constexpr const char* kUnsupportedHardwareNotice =
 			"Incompatible GPU detected. Neural Rendering requires an NVIDIA GPU.";
 
@@ -138,6 +129,9 @@ namespace NeuralRendering
 			bool a_reset,
 			bool* a_evaluationAttempted = nullptr,
 			RuntimeExecutionEvidence* a_evidence = nullptr,
+			MonoInterop* a_timingInterop = nullptr,
+			std::uint64_t a_captureEpoch = 0,
+			std::uint32_t a_frame = 0,
 			bool a_providerBlending = false);
 
 		/** Record exact feature creation without inference; caller owns submission and retirement. */
@@ -162,25 +156,26 @@ namespace NeuralRendering
 		[[nodiscard]] std::filesystem::path Path() const;
 		[[nodiscard]] std::string Hash() const;
 		[[nodiscard]] std::string Version() const;
+		/** Cached full provider version for session allocation estimates, including before initialization. */
+		[[nodiscard]] std::uint64_t AllocationVersion() const;
 		/** Resolve network limits from probed metadata, or cached installed metadata before initialization. */
 		[[nodiscard]] TuningLimits GetTuningLimits(std::uint32_t selection = kNetworkDefault) const;
 		/** Whether the probed provider, or installed metadata before probing, supports explicit networks. */
 		[[nodiscard]] bool SupportsNetworkSelection() const;
 		/** Resolves a saved selection without changing provider ownership or loading another DLL. */
 		[[nodiscard]] std::uint32_t GetNetworkPreset(std::uint32_t selection) const;
-		[[nodiscard]] std::filesystem::path ParameterCorePath() const;
-		[[nodiscard]] std::string ParameterCoreHash() const;
-		[[nodiscard]] ParameterCoreTrust CoreTrust() const;
-		[[nodiscard]] ParameterCoreSource CoreSource() const;
+		/** Formats the latest successful evaluation on demand, or returns the current lifecycle/failure detail. */
 		[[nodiscard]] std::string Detail() const;
 		[[nodiscard]] std::uint32_t NgxResult() const;
+		/** Last provider-reported driver requirements, including failed query results. */
+		[[nodiscard]] NgxDriverRequirements DriverRequirements() const;
 		/** Only documented creation failures permit a safely retired smaller retry. */
 		[[nodiscard]] CapacityFailure CreationCapacityFailure() const;
 		[[nodiscard]] std::uint64_t SuccessfulFrames() const;
-		[[nodiscard]] std::uint32_t LastPathProxyHits() const;
-		[[nodiscard]] bool LastPathProxyInstalled() const;
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Explicit diagnostic query only; does not create features or change memory admission. */
+		[[nodiscard]] NgxAllocationStatistics QueryAllocationStatistics() const;
 		struct LifecycleCounts
 		{
 			std::uint64_t creates = 0, releases = 0;
@@ -188,7 +183,7 @@ namespace NeuralRendering
 		/** Monotonic native-call counts for cache/prewarm comparisons. */
 		[[nodiscard]] LifecycleCounts GetLifecycleCounts() const;
 #endif
-		/** Resident handles only; NVIDIA does not expose their allocation byte size. */
+		/** Resident handles only; provider allocation statistics are aggregate. */
 		[[nodiscard]] std::uint32_t GetResidentFeatureMask() const;
 		/** Checks creation compatibility without changing a resident handle. */
 		[[nodiscard]] bool HasCompatibleFeature(std::uint32_t slot, const NativeEvaluationLayout&, bool providerBlending,
@@ -206,28 +201,25 @@ namespace NeuralRendering
 			NativeCreationExtents creation{};
 			bool featureUpscaling = false;
 			bool providerBlending = false;
+			bool nativeControlMask = false;
 			bool valid = false;
 
 			[[nodiscard]] bool Matches(const NativeEvaluationLayout& a_layout) const;
 		};
 
-		struct RuntimeExports
+		struct EvaluationSuccessDetail
 		{
-			void* initialize = nullptr;
-			void* createFeature = nullptr;
-			void* evaluateFeature = nullptr;
-			void* releaseFeature = nullptr;
-			void* shutdown = nullptr;
+			std::uint32_t slot = 0;
+			bool featureUpscaling = false;
+			UpscalingDLSS::Extent color{}, guides{}, output{}, controlMask{};
+			ComputeSubrect outputSubrect{};
 		};
 
-		struct ParameterCoreExports
-		{
-			void* allocateParameters = nullptr;
-			void* destroyParameters = nullptr;
-		};
+		struct Backend;
 
-		Runtime() = default;
+		Runtime();
 
+		bool PrepareScratchLocked(std::uint32_t slot);
 		bool PrepareFeatureLocked(ID3D12GraphicsCommandList*, std::uint32_t,
 			const NativeEvaluationLayout&, ID3D12Resource*, ID3D12Resource*, bool,
 			RuntimeExecutionEvidence*, std::uint32_t);
@@ -238,25 +230,21 @@ namespace NeuralRendering
 		void AbandonLocked() noexcept;
 		void LogOnceLocked(bool& a_emitted, const char* a_operation, bool a_succeeded);
 		void SetFailureLocked(RuntimeStatus a_status, RuntimeFailureStage a_stage, std::string a_detail, std::uint32_t a_ngxResult = 0);
+		[[nodiscard]] std::string DetailLocked() const;
 
 		mutable std::recursive_mutex mutex_;
 		std::filesystem::path path_;
 		std::string hash_;
 		std::string version_;
+		std::uint64_t allocationVersion_ = 0;
 		std::optional<TuningLimits> tuningLimits_;
 		std::optional<bool> networkSelectionSupported_;
-		std::filesystem::path corePath_;
-		std::string coreHash_;
-		ParameterCoreTrust coreTrust_ = ParameterCoreTrust::Unknown;
-		ParameterCoreSource coreSource_ = ParameterCoreSource::None;
+		NgxDriverRequirements driverRequirements_;
 		std::string detail_;
-		void* module_ = nullptr;
-		void* coreModule_ = nullptr;
-		void* coreFile_ = nullptr;
+		std::optional<EvaluationSuccessDetail> evaluationSuccessDetail_;
+		std::unique_ptr<Backend> backend_;
 		void* device_ = nullptr;
 		void* parameters_ = nullptr;
-		RuntimeExports runtimeExports_{};
-		ParameterCoreExports parameterCoreExports_{};
 		std::array<void*, kFeatureSlotCount> featureHandles_{};
 		std::array<FeatureConfiguration, kFeatureSlotCount> featureConfigurations_{};
 		std::atomic<std::uint32_t> firstEvaluationResetMask_{ 0 };
@@ -267,11 +255,7 @@ namespace NeuralRendering
 		RuntimeTrust trust_ = RuntimeTrust::Unknown;
 		RuntimeFailureStage failureStage_ = RuntimeFailureStage::None;
 		std::uint32_t ngxResult_ = 0;
-		std::uint32_t applicationId_ = 0;
-		std::uint32_t apiVersion_ = 0;
-		std::uint32_t lastPathProxyHits_ = 0;
 		std::uint64_t successfulFrames_ = 0;
-		bool lastPathProxyInstalled_ = false;
 		bool probeLogEmitted_ = false;
 		bool initializationLogEmitted_ = false;
 		bool featureCreateLogEmitted_ = false;
@@ -283,6 +267,4 @@ namespace NeuralRendering
 	[[nodiscard]] const char* ToString(RuntimeStatus a_status);
 	[[nodiscard]] const char* ToString(RuntimeTrust a_trust);
 	[[nodiscard]] const char* ToString(RuntimeFailureStage a_stage);
-	[[nodiscard]] const char* ToString(ParameterCoreTrust a_trust);
-	[[nodiscard]] const char* ToString(ParameterCoreSource a_source);
 }

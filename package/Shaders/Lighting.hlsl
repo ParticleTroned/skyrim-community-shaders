@@ -1,3 +1,4 @@
+#include "Common/ReverseZ.hlsli"
 #define LIGHTING
 #define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
 
@@ -127,6 +128,7 @@ cbuffer PerGeometry : register(b2)
 cbuffer VS_PerFrame : register(b12)
 {
 	row_major float3x3 ScreenProj : packoffset(c0);
+	row_major float4x4 Proj : packoffset(c4);
 	row_major float4x4 ViewProj : packoffset(c8);
 #if defined(SKINNED)
 	float3 BonesPivot : packoffset(c40);
@@ -188,9 +190,10 @@ VS_OUTPUT main(VS_INPUT input)
 
 	vsout.Position = viewPos;
 
-#if (defined(LODLANDNOISE)) || (defined(LODLANDSCAPE))
-	vsout.Position.z += min(1, 1e-4 * max(0, viewPos.z - 70000)) * 0.5;
-#endif
+#	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
+	float lodDepthBias = min(1, 1e-4 * max(0, FrameBuffer::ToStandardClipZ(viewPos, FrameBuffer::IsReverseProjection(Proj)) - 70000)) * 0.5;
+	vsout.Position = FrameBuffer::OffsetClipDepth(vsout.Position, lodDepthBias, FrameBuffer::IsReverseProjection(Proj));
+#	endif
 
 	float2 uv = input.TexCoord0.xy * TexcoordOffset.zw + TexcoordOffset.xy;
 #if defined(LANDSCAPE)
@@ -275,7 +278,7 @@ VS_OUTPUT main(VS_INPUT input)
 #endif
 
 	float fogColorParam = min(FogParam.w,
-		exp2(FogParam.z * log2(saturate(length(viewPos.xyz) * FogParam.y - FogParam.x))));
+		exp2(FogParam.z * log2(saturate(length(FrameBuffer::ToStandardClip(viewPos, FrameBuffer::IsReverseProjection(Proj))) * FogParam.y - FogParam.x))));
 
 	vsout.FogParam.xyz = lerp(FogNearColor.xyz, FogFarColor.xyz, fogColorParam);
 	vsout.FogParam.w = fogColorParam;

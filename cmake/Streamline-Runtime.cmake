@@ -286,7 +286,9 @@ foreach(
         license.txt
         3rd-party-licenses.md
         "NVIDIA Nsight Graphics SDK License (Apache 2.0).txt"
+        "NVIDIA Nsight Perf SDK License (28Sept2022).pdf"
         bin/x64/nvngx_dlss.license.txt
+        bin/x64/nis.license.txt
         bin/x64/reflex.license.txt
 )
     stage_streamline_notice("${_license_relative_path}")

@@ -1,3 +1,4 @@
+#include "Features/ReverseZ.h"
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 #	include "Diagnostics/NvPerf.h"
 #endif
@@ -498,11 +499,24 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	// Only check against non-shader bits
 	state->permutationData.PixelShaderDescriptor &= ~state->modifiedPixelDescriptor;
 
+	state->techniqueShaderSelection = {};
 	bool shaderFound = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
 
-	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect && !UseNativeWaterShaders(*shader)) {
+	const bool reverseShaderRequired = globals::features::reverseZ.IsActive() &&
+	                                   SIE::ShaderCache::IsSupportedShader(*shader);
+	const auto& selected = state->techniqueShaderSelection;
+	const bool customStagesSelected = selected.vertex && selected.vertexDescriptor == state->modifiedVertexDescriptor &&
+	                                  (skipPixelShader || (selected.pixel && selected.pixelDescriptor == state->modifiedPixelDescriptor));
+	if (reverseShaderRequired && shaderFound && customStagesSelected) {
+		// Keep native constant bookkeeping on the same custom pair without binding it twice.
+		*globals::game::currentVertexShader = selected.vertex;
+		*globals::game::currentPixelShader = skipPixelShader ? nullptr : selected.pixel;
+		if (skipPixelShader && !selected.pixelCleared)
+			globals::d3d::context->PSSetShader(nullptr, nullptr, 0);
+	} else if (reverseShaderRequired || (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect && !UseNativeWaterShaders(*shader))) {
 		RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
-		RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
+		RE::BSGraphics::PixelShader* pixelShader = skipPixelShader ? nullptr :
+		                                                             shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
 		if (vertexShader == nullptr || (!skipPixelShader && pixelShader == nullptr)) {
 			shaderFound = false;
 		} else {
@@ -510,12 +524,8 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
 			*globals::game::currentVertexShader = vertexShader;
 			globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
-			if (skipPixelShader) {
-				pixelShader = nullptr;
-			}
 			*globals::game::currentPixelShader = pixelShader;
-			if (pixelShader)
-				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+			globals::d3d::context->PSSetShader(pixelShader ? reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader) : nullptr, NULL, NULL);
 			state->selectedCustomPixelShaderType = pixelShader ? shader->shaderType.get() : RE::BSShader::Type::None;
 			if (globals::features::upscaling.IsNeuralRenderingEnabled())
 				NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
@@ -1056,10 +1066,17 @@ struct BSShaderRenderTargets_Create
 		       globals::d3d::context;
 	}
 
+	static void PrepareCreatedRenderTargets()
+	{
+		globals::ReInit();
+		globals::InstallD3DHooks(globals::d3d::context);
+		globals::features::reverseZ.PrepareDepthTargets();
+	}
+
 	static bool RecreateAndSetupFull()
 	{
 		func();
-		globals::ReInit();
+		PrepareCreatedRenderTargets();
 		if (!CanSetupRenderingResources())
 			return false;
 		globals::state->Setup();
@@ -1069,7 +1086,7 @@ struct BSShaderRenderTargets_Create
 	static bool RecreateAndSetupRenderTargetResources()
 	{
 		func();
-		globals::ReInit();
+		PrepareCreatedRenderTargets();
 		if (!CanSetupRenderingResources())
 			return false;
 		globals::state->SetupRenderTargetResources();
@@ -1257,6 +1274,7 @@ namespace Hooks
 			stl::detour_vfunc<23, ID3D11Device_CreateSamplerState>(globals::d3d::device);
 
 			globals::InstallD3DHooks(globals::d3d::context);
+			globals::features::reverseZ.InstallRuntimeHooks();
 			CSX::Api::InitializeAcceptedDrawService(globals::d3d::context);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			stl::detour_vfunc<5, ID3D11Device_CreateTexture2D>(globals::d3d::device);
@@ -1401,16 +1419,19 @@ namespace Hooks
 		{
 			auto state = globals::state;
 			auto shaderCache = globals::shaderCache;
+			state->techniqueShaderSelection.vertex = nullptr;
 
 			if (!state->settingCustomShader) {
 				if (shaderCache->IsEnabled()) {
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
 					if (type > 0 && type < RE::BSShader::Type::Total) {
-						if (state->enabledClasses[type - 1] && !UseNativeWaterShaders(*currentShader)) {
+						if (state->ShaderEnabled(type) && !UseNativeWaterShaders(*currentShader)) {
 							RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
 							if (vertexShader) {
 								globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
+								state->techniqueShaderSelection.vertex = vertexShader;
+								state->techniqueShaderSelection.vertexDescriptor = state->modifiedVertexDescriptor;
 								*globals::game::currentVertexShader = a_vertexShader;
 								globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
 								return;
@@ -1435,6 +1456,8 @@ namespace Hooks
 			auto state = globals::state;
 			auto shaderCache = globals::shaderCache;
 			state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
+			state->techniqueShaderSelection.pixel = nullptr;
+			state->techniqueShaderSelection.pixelCleared = false;
 
 			if (!state->settingCustomShader && a_pixelShader) {
 				if (shaderCache->IsEnabled()) {
@@ -1444,6 +1467,8 @@ namespace Hooks
 						RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
 						if (pixelShader) {
 							globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+							state->techniqueShaderSelection.pixel = pixelShader;
+							state->techniqueShaderSelection.pixelDescriptor = state->modifiedPixelDescriptor;
 							state->selectedCustomPixelShaderType = type;
 							*globals::game::currentPixelShader = a_pixelShader;
 							if (globals::features::upscaling.IsNeuralRenderingEnabled())
@@ -1467,6 +1492,7 @@ namespace Hooks
 			*globals::game::currentPixelShader = a_pixelShader;
 
 			globals::d3d::context->PSSetShader(a_pixelShader ? reinterpret_cast<ID3D11PixelShader*>(a_pixelShader->shader) : nullptr, NULL, NULL);
+			state->techniqueShaderSelection.pixelCleared = a_pixelShader == nullptr;
 			if (globals::features::upscaling.IsNeuralRenderingEnabled())
 				NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
 					globals::d3d::context, state->currentShader, a_pixelShader,

@@ -1,5 +1,11 @@
 # main-SE synchronization from main-VR
 
+The next incremental synchronization, based on the published SE follow-ups,
+is recorded in [main-se-sync-2026-11-02.md](main-se-sync-2026-11-02.md).
+It advances the source pin from `f140c878` to `da73f53d` and includes a
+complete 39-commit disposition inventory. The record below describes the
+initial port and its review.
+
 ## Scope and source identity
 
 This worktree implements the shared functionality from the pinned `main-VR`

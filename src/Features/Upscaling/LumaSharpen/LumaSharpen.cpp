@@ -5,13 +5,6 @@
 
 #include <algorithm>
 
-struct LumaSharpenConfig
-{
-	float sharpness;
-	float limit;
-	float pad[2];
-};
-
 LumaSharpen::~LumaSharpen()
 {
 	delete lumaSharpenConfigCB;
@@ -29,7 +22,7 @@ void LumaSharpen::Initialize(bool enableMotionAdaptive)
 		CreateComputeShader();
 	if (!lumaSharpenConfigCB) {
 		logger::info("[LumaSharpen] Creating resources");
-		lumaSharpenConfigCB = new ConstantBuffer(ConstantBufferDesc<LumaSharpenConfig>(), "Upscaling::LumaSharpenConfig");
+		lumaSharpenConfigCB = new ConstantBuffer(ConstantBufferDesc<UpscalingSharpener::FixedConfig>(), "Upscaling::LumaSharpenConfig");
 	}
 }
 
@@ -45,7 +38,7 @@ bool LumaSharpen::ApplyMotionAdaptiveSharpen(ID3D11ShaderResourceView* inputSRV,
 	ID3D11ShaderResourceView* motionVectors, std::span<const MotionSharpening::Region> regions)
 {
 	return motionAdaptive.Apply(inputSRV, outputUAV, sharpness, baseStrength, settings, motionVectors, regions,
-		[&]() { return ApplySharpen(inputSRV, outputUAV, sharpness); });
+		[&]() { return ApplySharpen(inputSRV, outputUAV, sharpness, regions); });
 }
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -61,7 +54,8 @@ void LumaSharpen::CreateComputeShader()
 	lumaSharpenComputeShader.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\LumaSharpen\\LumaSharpen.hlsl", defines, "cs_5_0"));
 }
 
-bool LumaSharpen::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV, float sharpness)
+bool LumaSharpen::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV, float sharpness,
+	std::span<const MotionSharpening::Region> regions)
 {
 	if (!inputSRV || !outputUAV)
 		return false;
@@ -82,15 +76,16 @@ bool LumaSharpen::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11Unorder
 		return false;
 	}
 
-	LumaSharpenConfig config{};
+	UpscalingSharpener::FixedConfig config{};
 	config.sharpness = std::clamp(sharpness, 0.0f, MotionSharpening::kMaximumLumaGain);
 	config.limit = MotionSharpening::kLumaDetailLimit;
 
-	return UpscalingSharpener::DispatchComputePass(
+	return UpscalingSharpener::DispatchFixedComputePass(
 		lumaSharpenComputeShader.get(),
 		lumaSharpenConfigCB,
 		config,
 		inputSRV,
 		outputUAV,
-		UpscalingSharpener::Pass::LumaSharpen);
+		UpscalingSharpener::Pass::LumaSharpen,
+		regions);
 }

@@ -4,7 +4,7 @@
 #include "Utils/LazyShader.h"
 #include <d3d11_1.h>
 
-/** @brief Conservative max-depth mip chains for the active scene viewport. */
+/** @brief Conservative farthest-depth mip chains for the active scene viewport. */
 class DepthPyramid
 {
 public:
@@ -12,7 +12,7 @@ public:
 	void Reset();
 	/** @brief Allocate a power-of-two chain for one view. */
 	void Allocate(uint32_t width, uint32_t height, uint32_t eyes, uint32_t maximumMips = 0);
-	/** @brief Build from standard-Z live depth; unknown samples pad with far depth. */
+	/** @brief Build from matching native depth; unknown samples pad with far depth. */
 	bool Build(ID3D11DeviceContext1* context, ID3D11ShaderResourceView* source,
 		uint32_t sourceWidth, uint32_t sourceHeight, uint32_t activeWidth, uint32_t activeHeight, uint32_t eyes, uint32_t baseReduction = 2);
 	ID3D11ShaderResourceView* SRV() const { return valid ? srv.get() : nullptr; }

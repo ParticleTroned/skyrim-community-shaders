@@ -171,6 +171,8 @@ namespace NeuralRendering
 		/** Only documented creation failures permit a safely retired smaller retry. */
 		[[nodiscard]] CapacityFailure CreationCapacityFailure() const;
 		[[nodiscard]] std::uint64_t SuccessfulFrames() const;
+		/** Query only at safe lifecycle boundaries; warm evaluations never collect statistics. */
+		[[nodiscard]] NativeMemorySnapshot QueryMemorySnapshot() const;
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Explicit diagnostic query only; does not create features or change memory admission. */
@@ -230,6 +232,7 @@ namespace NeuralRendering
 		void LogOnceLocked(bool& a_emitted, const char* a_operation, bool a_succeeded);
 		void SetFailureLocked(RuntimeStatus a_status, RuntimeFailureStage a_stage, std::string a_detail, std::uint32_t a_ngxResult = 0);
 		[[nodiscard]] std::string DetailLocked() const;
+		[[nodiscard]] NgxAllocationStatistics QueryAllocationStatisticsLocked() const;
 
 		mutable std::recursive_mutex mutex_;
 		std::filesystem::path path_;

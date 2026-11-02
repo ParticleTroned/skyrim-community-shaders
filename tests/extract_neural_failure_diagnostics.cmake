@@ -26,6 +26,12 @@ if(NOT count EQUAL 5)
 endif()
 extract_between("${source}" "\tvoid Renderer::State::LogFailureDiagnosticsLocked("
     "\tbool Renderer::State::FailLocked(" "neural_failure_capture_under_test.h")
+extract_between("${source}" "\tvoid Renderer::State::LogMemoryLifecycleLocked("
+    "\tMemoryBudgetSample Renderer::State::SampleMemoryBudgetLocked(" "neural_memory_lifecycle_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/neural_memory_lifecycle_under_test.h" lifecycle)
+if(lifecycle MATCHES "(QueryMemorySnapshot|SampleMemoryBudgetLocked|WaitForIdle|GetLifetimeSnapshot|GetDesc|Flush|BeginD3D12|EndD3D12)\\(")
+    message(FATAL_ERROR "Lifecycle logging must use cached facts without driver queries or GPU work")
+endif()
 file(READ "${OUTPUT_DIRECTORY}/neural_failure_capture_under_test.h" capture)
 if(capture MATCHES "(WaitForIdle|Flush|BeginD3D12|EndD3D12|SetOwnerWork|GetDesc)\\(")
     message(FATAL_ERROR "Failure capture must remain read-only and never wait on GPU work")

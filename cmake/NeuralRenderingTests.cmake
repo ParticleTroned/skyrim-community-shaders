@@ -58,6 +58,7 @@ set(_neural_failure_headers
     "${_neural_failure_dir}/neural_failure_resource_key_under_test.h"
     "${_neural_failure_dir}/neural_failure_stage_under_test.h"
     "${_neural_failure_dir}/neural_failure_capture_under_test.h"
+    "${_neural_failure_dir}/neural_memory_lifecycle_under_test.h"
     "${_neural_failure_dir}/neural_reconstruction_finish_under_test.h"
     "${_neural_failure_dir}/neural_stall_service_under_test.h")
 add_custom_command(
@@ -549,7 +550,6 @@ target_sources(crypto_hash_file_test PRIVATE src/Utils/CryptoHash.cpp)
 target_compile_definitions(crypto_hash_file_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(crypto_hash_file_test PRIVATE bcrypt)
 add_controller_test(neural_ngx_statistics_test NeuralNgxStatistics tests/neural_ngx_statistics_test.cpp)
-target_compile_definitions(neural_ngx_statistics_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
 target_sources(neural_ngx_statistics_test PRIVATE ${_neural_native_headers})
 target_include_directories(neural_ngx_statistics_test PRIVATE "${_neural_native_creation_dir}")
 

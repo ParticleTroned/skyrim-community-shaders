@@ -2,6 +2,7 @@
 
 #include "MemoryRecoveryPolicy.h"
 #include "NativeEvaluationLayout.h"
+#include "RegionCapacity.h"
 #include "SubmissionFenceSnapshot.h"
 
 #include <algorithm>
@@ -43,6 +44,24 @@ namespace NeuralRendering
 		{
 			std::uint64_t bytes = 0, observedProcessGrowth = 0;
 			bool observed = false;
+			std::optional<std::uint64_t> observedProviderGrowth;
+			std::optional<std::uint64_t> scratchBytes;
+		};
+
+		/** Independent lower bounds overlap; adding provider bytes to process growth double counts. */
+		struct Observation
+		{
+			std::uint64_t processGrowth = 0;
+			std::optional<std::uint64_t> providerGrowth;
+			std::optional<std::uint64_t> scratchBytes;
+
+			[[nodiscard]] Observation WithCreation(const Observation& creation) const noexcept
+			{
+				// Missing statistics cannot erase a known lower bound from the other phase.
+				return { Add(processGrowth, creation.processGrowth),
+					providerGrowth || creation.providerGrowth ? std::optional{ Add(providerGrowth.value_or(0), creation.providerGrowth.value_or(0)) } : std::nullopt,
+					std::max(scratchBytes, creation.scratchBytes) };
+			}
 		};
 
 		/** Uncalibrated cold allowance scales with every creation grid and allocation mode. */
@@ -71,12 +90,18 @@ namespace NeuralRendering
 				return std::nullopt;
 			for (const auto& entry : entries_)
 				if (entry.valid && entry.key == key)
-					return Estimate{ std::max(*cold, entry.bytes), entry.growth, true };
+					return Estimate{ std::max(*cold, entry.bytes), entry.growth.processGrowth, true, entry.growth.providerGrowth, entry.growth.scratchBytes };
 			return Estimate{ *cold };
 		}
 
 		/** Retain only conservative growth, with a margin for concurrent process allocations. */
 		void Observe(const NativeMemoryKey& key, std::uint64_t growth) noexcept
+		{
+			Observe(key, Observation{ growth });
+		}
+
+		/** Provider and scratch observations can raise admission demand, never lower its cold floor. */
+		void Observe(const NativeMemoryKey& key, const Observation& growth) noexcept
 		{
 			if (!ColdAllowance(key))
 				return;
@@ -90,16 +115,25 @@ namespace NeuralRendering
 				*selected = { .key = key, .valid = true };
 				next_ = (next_ + 1) % entries_.size();
 			}
-			selected->growth = std::max(selected->growth, growth);
-			const auto margin = std::max(kObservationMargin, growth / 4);
-			selected->bytes = std::max(selected->bytes, margin > UINT64_MAX - growth ? UINT64_MAX : growth + margin);
+			selected->growth.processGrowth = std::max(selected->growth.processGrowth, growth.processGrowth);
+			if (growth.providerGrowth)
+				selected->growth.providerGrowth = std::max(selected->growth.providerGrowth.value_or(0), *growth.providerGrowth);
+			selected->growth.scratchBytes = std::max(selected->growth.scratchBytes, growth.scratchBytes);
+			const auto lowerBound = std::max({ growth.processGrowth, growth.providerGrowth.value_or(0), growth.scratchBytes.value_or(0) });
+			const auto margin = std::max(kObservationMargin, lowerBound / 4);
+			selected->bytes = std::max(selected->bytes, Add(lowerBound, margin));
 		}
 
 	private:
+		static constexpr std::uint64_t Add(std::uint64_t left, std::uint64_t right) noexcept
+		{
+			return right > UINT64_MAX - left ? UINT64_MAX : left + right;
+		}
 		struct Entry
 		{
 			NativeMemoryKey key{};
-			std::uint64_t bytes = 0, growth = 0;
+			std::uint64_t bytes = 0;
+			Observation growth{};
 			bool valid = false;
 		};
 		std::array<Entry, kCapacity> entries_{};
@@ -115,6 +149,8 @@ namespace NeuralRendering
 		std::uint64_t fence = 0, issued = 0;
 		std::uint64_t reservedBytes = 0;
 		bool active = false, valid = false, evaluated = false;
+		std::optional<std::uint64_t> providerBaseline;
+		std::uint32_t providerResidentMask = 0;
 
 		void Begin(const NativeMemoryKey& value, std::uint32_t index, MemoryBudgetSample sample,
 			std::uint64_t now, bool evaluation) noexcept
@@ -130,6 +166,21 @@ namespace NeuralRendering
 			         now - startedMs <= NativeMemoryPolicy::kMaximumObservationMs;
 			if (valid)
 				peak = std::max(peak, sample.usageBytes);
+		}
+
+		/** A different resident set cannot establish an incremental provider cost for this startup. */
+		[[nodiscard]] std::optional<NativeMemoryPolicy::Observation> Growth(std::optional<std::uint64_t> provider,
+			std::uint32_t residentMask, std::optional<std::uint64_t> scratchBytes) const noexcept
+		{
+			const auto slotBit = FeatureSlotBit(slot);
+			if (!valid || !slotBit)
+				return std::nullopt;
+			const bool sameOtherFeatures = ((providerResidentMask ^ residentMask) & ~slotBit) == 0;
+			const auto providerGrowth = provider && providerBaseline && *provider >= *providerBaseline &&
+			                                    sameOtherFeatures && (residentMask & slotBit) ?
+			                                std::optional{ *provider - *providerBaseline } :
+			                                std::nullopt;
+			return NativeMemoryPolicy::Observation{ peak - baseline, providerGrowth, scratchBytes };
 		}
 
 		[[nodiscard]] bool Completed(const LifetimeFenceSnapshot& current) const noexcept

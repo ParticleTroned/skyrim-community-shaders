@@ -1099,26 +1099,60 @@ namespace NeuralRendering
 	NgxAllocationStatistics Runtime::QueryAllocationStatistics() const
 	{
 		std::scoped_lock lock(mutex_);
+		return QueryAllocationStatisticsLocked();
+	}
+#endif
+
+	NativeMemorySnapshot Runtime::QueryMemorySnapshot() const
+	{
+		std::scoped_lock lock(mutex_);
+		NativeMemorySnapshot snapshot;
+		if (!backend_ || !device_ || status_ != RuntimeStatus::Initialized || abandoned_ || abandonRequested_.load(std::memory_order_acquire))
+			return snapshot;
+		for (std::size_t slot = 0; slot < kFeatureSlotCount; ++slot) {
+			snapshot.scratchBytes[slot] = backend_->scratchBytes[slot];
+			if (featureHandles_[slot])
+				snapshot.residentMask |= 1u << slot;
+		}
+		snapshot.provider = QueryAllocationStatisticsLocked();
+		snapshot.sampledAtMs = GetTickCount64();
+		snapshot.valid = true;
+		return snapshot;
+	}
+
+	NgxAllocationStatistics Runtime::QueryAllocationStatisticsLocked() const
+	{
 		NgxAllocationStatistics statistics;
 		if (!backend_ || !backend_->capabilities || !device_ || abandoned_ || abandonRequested_.load(std::memory_order_acquire))
 			return statistics;
-		void* callback = nullptr;
-		const auto query = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNRGetStatsCallback, &callback);
-		statistics.callbackQuery = static_cast<std::uint32_t>(query);
-		if (NVSDK_NGX_FAILED(query) || !callback)
-			return statistics;
-		const auto result = reinterpret_cast<PFN_NVSDK_NGX_DLSSNR_GetStatsCallback>(callback)(backend_->capabilities);
-		statistics.callbackResult = static_cast<std::uint32_t>(result);
-		if (NVSDK_NGX_FAILED(result))
-			return statistics;
-		unsigned long long allocated = 0;
-		const auto sizeResult = backend_->capabilities->Get(NVSDK_NGX_Parameter_SizeInBytes, &allocated);
-		statistics.sizeQuery = static_cast<std::uint32_t>(sizeResult);
-		if (!NVSDK_NGX_FAILED(sizeResult))
-			statistics.allocatedBytes = allocated;
+		const auto started = std::chrono::steady_clock::now();
+		const auto queryStatistics = [&] {
+			void* callback = nullptr;
+			const auto query = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNRGetStatsCallback, &callback);
+			statistics.callbackQuery = static_cast<std::uint32_t>(query);
+			if (NVSDK_NGX_FAILED(query) || !callback)
+				return;
+			const auto result = reinterpret_cast<PFN_NVSDK_NGX_DLSSNR_GetStatsCallback>(callback)(backend_->capabilities);
+			statistics.callbackResult = static_cast<std::uint32_t>(result);
+			if (NVSDK_NGX_FAILED(result))
+				return;
+			unsigned long long allocated = 0;
+			const auto sizeResult = backend_->capabilities->Get(NVSDK_NGX_Parameter_SizeInBytes, &allocated);
+			statistics.sizeQuery = static_cast<std::uint32_t>(sizeResult);
+			if (!NVSDK_NGX_FAILED(sizeResult))
+				statistics.allocatedBytes = allocated;
+		};
+		try {
+			queryStatistics();
+		} catch (...) {
+			statistics.queryThrew = true;
+			statistics.allocatedBytes.reset();
+		}
+		statistics.queryMicroseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now() - started)
+				.count());
 		return statistics;
 	}
-#endif
 
 	CapacityFailure Runtime::CreationCapacityFailure() const
 	{

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "RegionCapacity.h"
+#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -13,12 +15,22 @@ namespace NeuralRendering
 		std::optional<std::uint32_t> updateQuery, majorQuery, minorQuery;
 	};
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	/** Aggregate provider accounting; never an exact per-eye cost or an admission budget. */
+	/** Aggregate provider accounting; allocation deltas are observations, never a residency budget. */
 	struct NgxAllocationStatistics
 	{
 		std::optional<std::uint64_t> allocatedBytes;
 		std::optional<std::uint32_t> callbackQuery, callbackResult, sizeQuery;
+		std::uint64_t queryMicroseconds = 0;
+		bool queryThrew = false;
 	};
-#endif
+
+	/** Lifecycle-only provider totals and requested scratch sizes; residency remains an OS observation. */
+	struct NativeMemorySnapshot
+	{
+		NgxAllocationStatistics provider;
+		std::array<std::uint64_t, kLogicalFeatureSlotCount> scratchBytes{};
+		std::uint64_t sampledAtMs = 0;
+		std::uint32_t residentMask = 0;
+		bool valid = false;
+	};
 }

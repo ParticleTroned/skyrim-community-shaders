@@ -124,6 +124,73 @@ namespace
 		Require(!observation.valid, "Developer pressure simulation trained real native demand");
 	}
 
+	void CheckProviderDemand()
+	{
+		NativeMemoryPolicy policy;
+		const NativeMemoryKey key{ .runtimeVersion = 310009, .creation = { { 100, 100 }, { 100, 100 } }, .color = { 100, 100 } };
+		const auto cold = policy.Project(key)->bytes;
+		const auto providerGrowth = cold * 4;
+		policy.Observe(key, NativeMemoryPolicy::Observation{ cold, providerGrowth, cold / 2 });
+		const auto learned = policy.Project(key);
+		Require(learned->observedProviderGrowth == providerGrowth && learned->scratchBytes == cold / 2 &&
+					learned->bytes == providerGrowth + providerGrowth / 4,
+			"Provider growth was ignored or double counted with process/scratch bytes");
+		MemoryRecoveryPolicy coldAdmission, learnedAdmission;
+		const auto budget = Sample(12 * 1024 * NativeMemoryPolicy::kMiB, 1000);
+		Require(coldAdmission.Admit(budget, cold, 1000) && !learnedAdmission.Admit(budget, learned->bytes, 1000) &&
+					learnedAdmission.phase == MemoryRecoveryPhase::Retiring,
+			"Observed native demand did not prevent an unsafe replacement allocation");
+		policy.Observe(key, NativeMemoryPolicy::Observation{ 0, std::nullopt, 0 });
+		Require(policy.Project(key)->bytes == learned->bytes && policy.Project(key)->observedProviderGrowth == providerGrowth,
+			"Unavailable statistics reduced a conservative high-water estimate");
+		policy.Observe(key, NativeMemoryPolicy::Observation{ 0, 0, providerGrowth * 2 });
+		Require(policy.Project(key)->bytes == providerGrowth * 2 + providerGrowth / 2,
+			"Known scratch demand did not raise the future allocation allowance");
+		const NativeMemoryPolicy::Observation creation{ 100, 200, 300 }, evaluation{ 50, 75, 300 };
+		const auto combined = evaluation.WithCreation(creation);
+		Require(combined.processGrowth == 150 && combined.providerGrowth == 275 && combined.scratchBytes == 300,
+			"Creation and first-evaluation observations double counted retained scratch");
+		Require(evaluation.WithCreation({ 100 }).providerGrowth == 75 &&
+					NativeMemoryPolicy::Observation{ 50 }.WithCreation(creation).providerGrowth == 200,
+			"An unavailable phase discarded a known provider lower bound");
+		const auto unknown = NativeMemoryPolicy::Observation{ 50 }.WithCreation({ 100 });
+		Require(!unknown.providerGrowth && !unknown.scratchBytes,
+			"Unavailable provider or scratch statistics became zero");
+		policy.Observe(key, unknown);
+		Require(policy.Project(key)->scratchBytes == providerGrowth * 2,
+			"Unavailable scratch statistics erased known demand");
+		NativeMemoryPolicy partial;
+		partial.Observe(key, NativeMemoryPolicy::Observation{ 0, providerGrowth }.WithCreation({}));
+		Require(partial.Project(key)->bytes > cold && !partial.Project(key)->scratchBytes,
+			"A partial provider observation failed to raise admission demand or invented scratch bytes");
+		partial.Observe(key, NativeMemoryPolicy::Observation{ 0, std::nullopt, 0 });
+		Require(partial.Project(key)->scratchBytes == 0, "Known zero scratch demand became unknown");
+		Require(evaluation.WithCreation({ UINT64_MAX, UINT64_MAX, 0 }).processGrowth == UINT64_MAX &&
+					evaluation.WithCreation({ UINT64_MAX, UINT64_MAX, 0 }).providerGrowth == UINT64_MAX,
+			"Combined observation arithmetic overflowed");
+
+		NativeStartupObservation startup;
+		startup.Begin(key, 2, Sample(1000, 10), 10, true);
+		startup.providerBaseline = 500;
+		startup.providerResidentMask = 3;
+		startup.Sample(Sample(1200, 11), 11);
+		const auto growth = startup.Growth(800, 7, 64);
+		Require(growth && growth->processGrowth == 200 && growth->providerGrowth == 300 && growth->scratchBytes == 64,
+			"Lifecycle observations lost process/provider attribution");
+		Require(startup.Growth(500, 7, 64)->providerGrowth == 0, "Reported zero became unknown");
+		for (auto bytes : { std::optional<std::uint64_t>{}, std::optional<std::uint64_t>{ 499 } })
+			Require(!startup.Growth(bytes, 7, 64)->providerGrowth, "Unknown or decreasing aggregate became incremental bytes");
+		Require(!startup.Growth(800, 6, 64)->providerGrowth && !startup.Growth(800, 3, 0)->providerGrowth,
+			"An unrelated retirement or missing native feature trained provider demand");
+		Require(!startup.Growth(800, 7, std::nullopt)->scratchBytes,
+			"An unavailable runtime snapshot invented scratch bytes");
+		startup.slot = kPhysicalFeatureSlotCount;
+		Require(!startup.Growth(800, 7, 64), "A nonphysical slot trained native demand");
+		startup.slot = 2;
+		startup.valid = false;
+		Require(!startup.Growth(800, 7, 64), "Invalid budget observations trained native demand");
+	}
+
 	void CheckResolution()
 	{
 		MemoryResolutionPolicy policy;
@@ -148,6 +215,7 @@ int main()
 	try {
 		CheckDemand();
 		CheckStartup();
+		CheckProviderDemand();
 		CheckResolution();
 		std::cout << "Native memory policy checks passed\n";
 		return 0;

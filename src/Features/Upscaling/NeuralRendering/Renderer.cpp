@@ -742,11 +742,17 @@ namespace NeuralRendering
 		NativeStartupObservation nativeStartup_{};
 		std::uint32_t nativeStartupMask_ = 0;
 		std::uint64_t lastNativeRequestMs_ = 0;
-		std::array<std::uint64_t, Runtime::kFeatureSlotCount> nativeCreationGrowth_{};
+		std::array<std::optional<NativeMemoryPolicy::Observation>, Runtime::kFeatureSlotCount> nativeCreationGrowth_{};
+		NativeMemorySnapshot nativeMemorySnapshot_{};
+		std::uint32_t pendingMemoryRetirements_ = 0;
+		void FlushMemoryRetirementsLocked() noexcept;
+		void LogMemoryLifecycleLocked(const char* event, std::uint32_t slots = 0,
+			spdlog::level::level_enum level = spdlog::level::info, const NativeMemoryKey* key = nullptr) const noexcept;
 		bool nativeStartupDeferred_ = false;
 		std::optional<std::uint32_t> nativeStartupFrame_;
 		NativeMemoryKey NativeMemoryKeyLocked(const ValidatedResources&) const;
 		bool PollNativeStartupLocked();
+		void BeginNativeStartupLocked(const NativeMemoryKey&, std::uint32_t slot, MemoryBudgetSample, bool evaluation);
 		bool NeedsNativeStartupLocked(std::span<const RendererApplyArgs>, std::span<const ValidatedResources>) const;
 		ModelResolution::Sharing ModelResolutionSharingLocked(std::span<const RendererApplyArgs>) const;
 		bool ProjectModelResourcesLocked(const RendererApplyArgs&, RendererApplyArgs&, ValidatedResources&, bool diagnostics = false);
@@ -835,6 +841,7 @@ namespace NeuralRendering
 		}
 		void FinishMemoryAdmissionLocked()
 		{
+			FlushMemoryRetirementsLocked();
 			if ((nativeStartup_.active || nativeStartupMask_) && !failureLatched_ && !quarantined_) {
 				PublishMemoryBudgetWorkLocked();
 				return;
@@ -1760,6 +1767,7 @@ namespace NeuralRendering
 				observedAtMs, memory.sampledAtMs, memory.sequence, memory.generation,
 				memory.local.CurrentUsage, memory.local.Budget, memory.local.CurrentReservation,
 				memory.local.AvailableForReservation, memory.pendingBytes, memory.recoveryDemandBytes, memory.priorityWork);
+			LogMemoryLifecycleLocked("failure", FeatureSlotBit(a_slot), spdlog::level::err);
 			for (std::size_t index = 0; index < slots_.size(); ++index) {
 				const auto& slot = slots_[index];
 				if (!slot.resourcesValid)
@@ -1983,6 +1991,7 @@ namespace NeuralRendering
 		}
 
 		auto& runtime = Runtime::Instance();
+		const auto retiringFeatures = !alreadyRetained && spdlog::should_log(spdlog::level::info) ? runtime.GetResidentFeatureMask() : 0u;
 		if (!alreadyRetained && runtimeReady_ && !(retainBackend ? runtime.ReleasePassResources() : runtime.ResetFeatures())) {
 			Increment(snapshot_.counters.resetFailures);
 			const bool failed = FailLocked(
@@ -2026,6 +2035,10 @@ namespace NeuralRendering
 			return failed;
 		}
 
+		pendingMemoryRetirements_ |= retiringFeatures;
+		for (std::uint32_t index = 0; index < slots_.size(); ++index)
+			if (slots_[index].resourcesValid)
+				pendingMemoryRetirements_ |= FeatureSlotBit(index);
 		slots_ = {};
 		nativeStartup_ = {};
 		nativeStartupMask_ = 0;
@@ -2054,6 +2067,7 @@ namespace NeuralRendering
 		}
 		runtimeReady_ = retainBackend;
 		runtimeTouched_ = retainBackend;
+		FlushMemoryRetirementsLocked();
 		memoryRecovery_.SetStartupKind(retainBackend ? MemoryStartupKind::Warm : MemoryStartupKind::Cold);
 		if (retainBackend) {
 			const bool newlyRetained = !memoryRetirement_.backendRetained;
@@ -2279,6 +2293,7 @@ namespace NeuralRendering
 		restorationPreviousPercent_ = 0;
 		logger::info("[DLSSNR][Memory] Pressure resolution ceiling {}%; requested {}% (session only)",
 			memoryResolution_.ceilingPercent, snapshot_.requestedModelResolutionPercent);
+		LogMemoryLifecycleLocked("resolution-ceiling-changed");
 	}
 
 	void Renderer::State::PrepareMemoryResolutionLocked(std::span<RendererApplyArgs> args)
@@ -2370,8 +2385,14 @@ namespace NeuralRendering
 		}
 #endif
 		if (succeeded && !args.empty()) {
-			for (const auto& arg : args)
+			std::uint32_t changedMask = 0;
+			for (const auto& arg : args) {
+				if (successfulResolutionPercents_[arg.featureSlot] != arg.modelResolutionPercent)
+					changedMask |= FeatureSlotBit(arg.featureSlot);
 				successfulResolutionPercents_[arg.featureSlot] = arg.modelResolutionPercent;
+			}
+			if (changedMask)
+				LogMemoryLifecycleLocked("resolution-applied", changedMask);
 			if (resolutionRestoration_.active)
 				modelResolution_.ReleaseUnscaledSlots(args);
 		}
@@ -2482,10 +2503,12 @@ namespace NeuralRendering
 			const auto previous = memoryRecovery_.phase;
 			const auto now = GetTickCount64();
 			memoryRecovery_.Succeeded(now);
-			if (previous != memoryRecovery_.phase)
+			if (previous != memoryRecovery_.phase) {
 				logger::info("[DLSSNR][Memory] Recovery phase {} -> {}; demand {:.1f} MiB, rapid relapses={}",
 					ToString(previous), ToString(memoryRecovery_.phase),
 					static_cast<double>(memoryRecovery_.admissionDemandBytes) / MemoryRecoveryPolicy::kMiB, memoryRecovery_.rapidRelapses);
+				LogMemoryLifecycleLocked("recovery-phase-changed");
+			}
 			const auto previousCeiling = memoryResolution_.ceilingPercent;
 			if (memoryResolution_.enabled && memoryResolution_.ObserveSuccess(snapshot_.requestedModelResolutionPercent, memoryRecovery_.sample, now,
 												 Util::GpuMemoryBudget::Get().PendingBytes(Util::GpuMemoryBudget::Owner::NeuralRendering),
@@ -2676,11 +2699,17 @@ namespace NeuralRendering
 		}
 		auto& slot = slots_[nativeStartup_.slot];
 		if (nativeStartup_.valid) {
-			const auto growth = nativeStartup_.peak - nativeStartup_.baseline;
+			nativeMemorySnapshot_ = Runtime::Instance().QueryMemorySnapshot();
+			nativeStartup_.Sample(sample, GetTickCount64());
+			auto growth = nativeStartup_.Growth(nativeMemorySnapshot_.provider.allocatedBytes,
+				nativeMemorySnapshot_.residentMask, nativeMemorySnapshot_.valid ? std::optional{ nativeMemorySnapshot_.scratchBytes[nativeStartup_.slot] } : std::nullopt);
 			auto& creationGrowth = nativeCreationGrowth_[nativeStartup_.slot];
 			if (!nativeStartup_.evaluated)
 				creationGrowth = growth;
-			nativeMemory_.Observe(nativeStartup_.key, nativeStartup_.evaluated ? Util::GpuMemoryBudget::Add(creationGrowth, growth) : growth);
+			else if (growth && creationGrowth)
+				growth = growth->WithCreation(*creationGrowth);
+			if (growth)
+				nativeMemory_.Observe(nativeStartup_.key, *growth);
 		}
 		if (nativeStartup_.evaluated) {
 			slot.nativeReady = true;
@@ -2695,14 +2724,76 @@ namespace NeuralRendering
 					memoryReservation_ = std::move(replacement);
 			}
 		}
+		LogMemoryLifecycleLocked(nativeStartup_.evaluated ? "native-startup-completed" : "native-created",
+			FeatureSlotBit(nativeStartup_.slot), spdlog::level::info, &nativeStartup_.key);
 		nativeStartup_ = {};
 		return true;
+	}
+
+	void Renderer::State::BeginNativeStartupLocked(const NativeMemoryKey& key, std::uint32_t slot,
+		MemoryBudgetSample sample, bool evaluation)
+	{
+		nativeStartup_.Begin(key, slot, sample, GetTickCount64(), evaluation);
+		nativeMemorySnapshot_ = nativeStartup_.valid ? Runtime::Instance().QueryMemorySnapshot() : NativeMemorySnapshot{};
+		nativeStartup_.Sample(sample, GetTickCount64());
+		nativeStartup_.providerBaseline = nativeMemorySnapshot_.provider.allocatedBytes;
+		nativeStartup_.providerResidentMask = nativeMemorySnapshot_.residentMask;
+	}
+
+	void Renderer::State::LogMemoryLifecycleLocked(const char* event, std::uint32_t slots,
+		spdlog::level::level_enum level, const NativeMemoryKey* key) const noexcept
+	{
+		try {
+			if (!spdlog::should_log(level))
+				return;
+			const auto now = GetTickCount64();
+			const auto& native = nativeMemorySnapshot_;
+			const auto& statistics = native.provider;
+			std::uint64_t scratch = 0;
+			for (auto bytes : native.scratchBytes)
+				scratch = Util::GpuMemoryBudget::Add(scratch, bytes);
+			spdlog::log(level,
+				"[DLSSNR][Memory] event={} slot_mask=0x{:X} phase={} requested_percent={} effective_percent={} ceiling_percent={} usage_bytes={} budget_bytes={} budget_fresh={} budget_age_ms={} last_admission_additional_bytes={} last_admission_other_pending_bytes={} last_admission_recovery_demand_bytes={} cached_native_valid={} cached_native_mask=0x{:X} native_age_ms={} cached_provider_allocated_bytes={} cached_scratch_requested_bytes={} stats_query_result={} stats_callback_result={} stats_size_result={} stats_threw={} stats_query_cpu_us={}",
+				event, slots, ToString(memoryRecovery_.phase), snapshot_.requestedModelResolutionPercent,
+				snapshot_.effectiveModelResolutionPercent, memoryResolution_.ceilingPercent, memorySample_.usageBytes,
+				memorySample_.budgetBytes, memorySample_.IsFresh(now),
+				memorySample_.valid && now >= memorySample_.sampledAtMs ? std::to_string(now - memorySample_.sampledAtMs) : "unknown",
+				memoryRecovery_.requiredBytes, memoryRecovery_.pendingBytes, memoryRecovery_.admissionDemandBytes,
+				native.valid, native.residentMask, native.valid && now >= native.sampledAtMs ? std::to_string(now - native.sampledAtMs) : "unknown",
+				statistics.allocatedBytes ? std::to_string(*statistics.allocatedBytes) : "unknown", native.valid ? std::to_string(scratch) : "unknown",
+				statistics.callbackQuery ? std::to_string(*statistics.callbackQuery) : "unknown",
+				statistics.callbackResult ? std::to_string(*statistics.callbackResult) : "unknown",
+				statistics.sizeQuery ? std::to_string(*statistics.sizeQuery) : "unknown", statistics.queryThrew,
+				statistics.callbackQuery || statistics.queryThrew ? std::to_string(statistics.queryMicroseconds) : "unknown");
+			if (key) {
+				const auto estimate = nativeMemory_.Project(*key);
+				spdlog::log(level,
+					"[DLSSNR][Memory] native-capacity: slot_mask=0x{:X}, network={}, guide={}x{}, output={}x{}, color={}x{}, upscaling={}, allowance_bytes={}, observed={}, process_growth_bytes={}, provider_growth_bytes={}, scratch_requested_bytes={}",
+					slots, key->network, key->creation.input.width, key->creation.input.height,
+					key->creation.output.width, key->creation.output.height, key->color.width, key->color.height, key->upscaling,
+					estimate ? std::to_string(estimate->bytes) : "unknown", estimate && estimate->observed,
+					estimate && estimate->observed ? std::to_string(estimate->observedProcessGrowth) : "unknown",
+					estimate && estimate->observedProviderGrowth ? std::to_string(*estimate->observedProviderGrowth) : "unknown",
+					estimate && estimate->scratchBytes ? std::to_string(*estimate->scratchBytes) : "unknown");
+			}
+		} catch (...) {
+			OutputDebugStringA("[DLSSNR][Memory] Lifecycle logging failed; memory policy continues\n");
+		}
+	}
+
+	void Renderer::State::FlushMemoryRetirementsLocked() noexcept
+	{
+		if (!pendingMemoryRetirements_)
+			return;
+		const auto retired = std::exchange(pendingMemoryRetirements_, 0u);
+		LogMemoryLifecycleLocked("retirement-completed", retired);
 	}
 
 	MemoryBudgetSample Renderer::State::SampleMemoryBudgetLocked(ID3D11Device* a_device, std::uint64_t a_nowMs, bool a_force)
 	{
 		if (memorySampleDevice_.Get() != a_device) {
 			nativeMemory_ = {};
+			nativeMemorySnapshot_ = {};
 			memoryRecovery_.InvalidateCapacityLearning();
 			memoryCapacityKeys_ = {};
 			memoryResolution_.ClearHealthyWindow();
@@ -2868,10 +2959,12 @@ namespace NeuralRendering
 			resolutionRestoration_.admitted = true;
 		}
 		memoryConservation_.Update(sample, Util::GpuMemoryBudget::Add(*additionalBytes, pendingBytes), memoryRecovery_.phase != MemoryRecoveryPhase::Ready, nowMs);
-		if (wasConserving != memoryConservation_.active)
+		if (wasConserving != memoryConservation_.active) {
 			logger::info("[DLSSNR][Memory] {}", memoryConservation_.active ?
 													"Memory conservation active; reclaiming optional NR capacity without changing quality" :
 													"Sustained headroom recovered; normal NR caching resumed");
+			LogMemoryLifecycleLocked(memoryConservation_.active ? "conservation-started" : "conservation-ended");
+		}
 		bool reclaimed = false;
 		if (!ReclaimMemoryLocked(a_args, a_resources, nowMs, reclaimed))
 			return false;
@@ -2919,12 +3012,14 @@ namespace NeuralRendering
 			prewarmReservation_.Reset();
 		}
 		if (memoryRecovery_.phase == MemoryRecoveryPhase::Retiring) {
-			if (previous != MemoryRecoveryPhase::Retiring)
+			if (previous != MemoryRecoveryPhase::Retiring) {
 				logger::warn("[DLSSNR][Memory] Temporarily using the baseline while retiring NR under memory pressure: usage {:.1f}/{:.1f} MiB, additional {:.1f} MiB, recovery demand {:.1f} MiB, retry level={}",
 					static_cast<double>(sample.usageBytes) / MemoryRecoveryPolicy::kMiB,
 					static_cast<double>(sample.budgetBytes) / MemoryRecoveryPolicy::kMiB,
 					static_cast<double>(*additionalBytes) / MemoryRecoveryPolicy::kMiB,
 					static_cast<double>(memoryRecovery_.admissionDemandBytes) / MemoryRecoveryPolicy::kMiB, memoryRecovery_.retryLevel);
+				LogMemoryLifecycleLocked("pressure-retirement-started");
+			}
 			if (!RetireMemoryPressureLocked())
 				return false;
 		}
@@ -2937,6 +3032,7 @@ namespace NeuralRendering
 				static_cast<double>(sample.budgetBytes) / MemoryRecoveryPolicy::kMiB,
 				static_cast<double>(memoryRecovery_.admissionDemandBytes) / MemoryRecoveryPolicy::kMiB,
 				static_cast<double>(pendingBytes) / MemoryRecoveryPolicy::kMiB);
+			LogMemoryLifecycleLocked("rebuild-admitted");
 		}
 		snapshot_.memoryRecovery = memoryRecovery_;
 		return admitted;
@@ -3005,7 +3101,8 @@ namespace NeuralRendering
 				Color::Registry::Instance().DropMeasurement();
 #endif
 		slot = {};
-		nativeCreationGrowth_[a_slot] = 0;
+		nativeCreationGrowth_[a_slot].reset();
+		pendingMemoryRetirements_ |= FeatureSlotBit(a_slot);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (lifetime.enabled)
 			lifetime.record->succeeded = true;
@@ -4365,7 +4462,7 @@ namespace NeuralRendering
 			RuntimeExecutionEvidence creationEvidence{};
 			if (startupIndex) {
 				const auto sample = SampleMemoryBudgetLocked(args.device, GetTickCount64(), true);
-				nativeStartup_.Begin(NativeMemoryKeyLocked(resources[index]), args.featureSlot, sample, GetTickCount64(), true);
+				BeginNativeStartupLocked(NativeMemoryKeyLocked(resources[index]), args.featureSlot, sample, true);
 				if (const auto estimate = nativeMemory_.Project(nativeStartup_.key))
 					nativeStartup_.reservedBytes = estimate->bytes;
 				nativeStartupFrame_ = args.frameId;
@@ -5064,7 +5161,9 @@ namespace NeuralRendering
 					return;
 				}
 				policy.unusedMask &= ~FeatureSlotBit(slot);
-				nativeCreationGrowth_[slot] = 0;
+				nativeCreationGrowth_[slot].reset();
+				pendingMemoryRetirements_ |= FeatureSlotBit(slot);
+				FlushMemoryRetirementsLocked();
 				return;
 			}
 			if (policy.backendOwned && !Runtime::Instance().GetResidentFeatureMask()) {
@@ -5211,7 +5310,7 @@ namespace NeuralRendering
 			}
 			const NativeMemoryKey memoryKey{ .runtimeVersion = Runtime::Instance().AllocationVersion(), .network = policy.key.networkPreset, .creation = policy.key.layout.creation, .color = policy.key.layout.color.backing, .upscaling = policy.key.layout.featureUpscaling };
 			const auto baseline = SampleMemoryBudgetLocked(device_.Get(), GetTickCount64(), true);
-			nativeStartup_.Begin(memoryKey, slot, baseline, GetTickCount64(), false);
+			BeginNativeStartupLocked(memoryKey, slot, baseline, false);
 			const bool created = Runtime::Instance().PrepareFeature(commands, slot, policy.key.layout, nullptr, nullptr, false, nullptr, policy.key.networkPreset);
 			const auto sample = SampleMemoryBudgetLocked(device_.Get(), GetTickCount64(), true);
 			nativeStartup_.Sample(sample, GetTickCount64());

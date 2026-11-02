@@ -70,6 +70,12 @@ replacement coverage.
 Fault-armed checks inspect stored scalar references directly and verify that
 the check itself attempts no allocation. JSON-to-scalar equality can construct
 a temporary JSON value inside a nonthrowing operator and is unsuitable here.
+Object builders construct an empty object before indexing it. Implicit null-to-
+container promotion can change the JSON type before allocating its storage;
+allocation failure must not leave that partial value for cleanup to traverse.
+Appending to a null array builds a guarded replacement and publishes it by swap.
+Separate object and null-array sweeps reject each allocation with persistent
+failure armed and require an unchanged null destination.
 The fixture binds only coordinator lifecycle setup, inert producer metadata and
 logging; it starts no I/O worker and writes no manifest or screenshot.
 The terminal-custody cases additionally drain controlled worker-result inputs,

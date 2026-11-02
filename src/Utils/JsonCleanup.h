@@ -79,7 +79,14 @@ namespace Util
 		nlohmann::json copy;
 		const JsonCleanupGuard cleanup(copy);
 		CopyJsonInto(copy, a_source);
-		a_array.push_back(std::move(copy));
+		if (a_array.is_null()) {
+			nlohmann::json array = nlohmann::json::array();
+			const JsonCleanupGuard arrayCleanup(array);
+			array.push_back(std::move(copy));
+			a_array.swap(array);
+		} else {
+			a_array.push_back(std::move(copy));
+		}
 	}
 
 	/** Build an object incrementally before replacing its destination by swap. */

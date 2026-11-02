@@ -109,7 +109,7 @@ namespace BuildProvenance
 	nlohmann::json GetProducer()
 	{
 		const auto& runtime = GetRuntimeIdentity();
-		json producer;
+		json producer = json::object();
 		const Util::JsonCleanupGuard cleanup(producer);
 		producer["component"] = "CommunityShaders";
 		producer["buildId"] = CSX::EmbeddedBuildProvenance::BUILD_ID;

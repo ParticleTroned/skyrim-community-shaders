@@ -68,7 +68,7 @@ namespace
 		const std::filesystem::path& a_path,
 		const CSX::ScreenshotStorage::CommittedArtifact& a_description)
 	{
-		json artifact;
+		json artifact = json::object();
 		const Util::JsonCleanupGuard cleanup(artifact);
 		artifact["path"] = Util::PathToUtf8(a_path);
 		artifact["bytes"] = a_description.bytes;
@@ -1436,7 +1436,7 @@ void ScreenshotApi::TransitionLocked(RequestRecord& a_record, std::string a_stat
 
 ScreenshotApi::json ScreenshotApi::MakeReceipt(const RequestRecord& a_record) const
 {
-	json receipt;
+	json receipt = json::object();
 	const Util::JsonCleanupGuard receiptCleanup(receipt);
 	receipt["requestId"] = a_record.requestId;
 	receipt["kind"] = a_record.kind;
@@ -1473,7 +1473,7 @@ ScreenshotApi::json ScreenshotApi::MakeReceipt(const RequestRecord& a_record) co
 		} catch (...) {
 			message = "unknown exception";
 		}
-		json error;
+		json error = json::object();
 		const Util::JsonCleanupGuard errorCleanup(error);
 		error["code"] = code;
 		error["message"] = message;
@@ -1783,7 +1783,7 @@ void ScreenshotApi::OnArtifactTerminal(
 			AppendEventLocked(record, "artifact.written", std::move(committedArtifact));
 		} else {
 			++failedArtifacts;
-			json error;
+			json error = json::object();
 			const Util::JsonCleanupGuard errorCleanup(error);
 			error["code"] = "artifact_failed";
 			error["message"] = artifactError.empty() ? "screenshot artifact failed" : artifactError;
@@ -1846,7 +1846,7 @@ void ScreenshotApi::OnSourceTerminal(std::string_view a_requestId, std::string_v
 				error["message"] = a_error;
 				error["phase"] = "source";
 			});
-		json reason;
+		json reason = json::object();
 		const Util::JsonCleanupGuard reasonCleanup(reason);
 		reason["reason"] = a_error;
 		if (!found->second.error.is_null())
@@ -2057,7 +2057,7 @@ void ScreenshotApi::FinalizeSequenceLocked(
 			terminal = "completed_with_warnings";
 		else
 			terminal = "completed";
-		json terminalPayload;
+		json terminalPayload = json::object();
 		const Util::JsonCleanupGuard terminalCleanup(terminalPayload);
 		terminalPayload["manifestPath"] = a_sequence.frameManifest && manifestWritten ? json(Util::PathToUtf8(a_sequence.finalManifestPath)) : json(nullptr);
 		TransitionLocked(parent->second, std::move(terminal), "request.terminal", std::move(terminalPayload));
@@ -2153,7 +2153,7 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 				a_sequence.written == a_sequence.frameCount && a_sequence.failed == 0 && a_sequence.cancelled == 0 && !a_sequence.cancelRequested);
 		}
 #endif
-		json queuedEvent;
+		json queuedEvent = json::object();
 		const Util::JsonCleanupGuard queuedEventCleanup(queuedEvent);
 		queuedEvent["generation"] = job.generation;
 		queuedEvent["final"] = a_final;
@@ -2182,7 +2182,7 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 				manifest["error"] = message;
 			});
 			if (auto parent = requests.find(a_sequence.requestId); parent != requests.end()) {
-				json payload;
+				json payload = json::object();
 				const Util::JsonCleanupGuard payloadCleanup(payload);
 				payload["generation"] = a_sequence.manifestGeneration;
 				payload["final"] = a_final;
@@ -2233,7 +2233,7 @@ void ScreenshotApi::DrainWorkerResultsLocked()
 					});
 					parent->second.terminalArtifacts = parent->second.expectedArtifacts;
 				}
-				json payload;
+				json payload = json::object();
 				const Util::JsonCleanupGuard cleanup(payload);
 				payload["manifestPath"] = nullptr;
 				TransitionLocked(parent->second, record.stopRequested ? "stopped" : "cancelled", "request.terminal", std::move(payload));
@@ -2257,7 +2257,7 @@ void ScreenshotApi::DrainWorkerResultsLocked()
 					});
 					parent->second.terminalArtifacts = parent->second.expectedArtifacts;
 				}
-				json payload;
+				json payload = json::object();
 				const Util::JsonCleanupGuard cleanup(payload);
 				payload["manifestPath"] = nullptr;
 				Util::CopyJsonInto(payload["error"], parent->second.error);
@@ -2271,7 +2271,7 @@ void ScreenshotApi::DrainWorkerResultsLocked()
 			record.partialManifestPath = record.directory / "sequence.json.partial";
 			record.finalManifestPath = record.directory / "sequence.json";
 			Util::CopyJsonInto(parent->second.effective["capture"], record.capture);
-			json preparedPayload;
+			json preparedPayload = json::object();
 			const Util::JsonCleanupGuard preparedCleanup(preparedPayload);
 			preparedPayload["frameCount"] = record.frameCount;
 			preparedPayload["manifestPath"] = Util::PathToUtf8(record.partialManifestPath);

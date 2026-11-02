@@ -34,7 +34,7 @@ namespace CSX::Screenshot
 	inline nlohmann::json ReferenceCompletion(const nlohmann::json& receipt)
 	{
 		using json = nlohmann::json;
-		json event;
+		json event = json::object();
 		const Util::JsonCleanupGuard cleanup(event);
 		Util::CopyJsonInto(event["requestId"], receipt.at("commandId"));
 		event["ok"] = false;

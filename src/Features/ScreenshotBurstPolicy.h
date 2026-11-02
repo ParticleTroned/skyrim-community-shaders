@@ -133,7 +133,7 @@ namespace ScreenshotBurst
 		nlohmann::json Receipt(uint32_t requested, bool allWritten) const
 		{
 			using json = nlohmann::json;
-			json receipt;
+			json receipt = json::object();
 			const Util::JsonCleanupGuard cleanup(receipt);
 			receipt["complete"] = failure.empty() && acquired == requested && allWritten;
 			receipt["acquired"] = acquired;

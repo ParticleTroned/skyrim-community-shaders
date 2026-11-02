@@ -241,6 +241,46 @@ namespace
 		}
 		std::fprintf(stderr, "JSON-COPY persistent-nth=%zu PASS strong-destination=1\n", allocations);
 	}
+
+	void RunJsonContainerControl()
+	{
+		currentCase = "json-container";
+		const json source = { { "nested", { { "value", "container allocation control" } } } };
+		for (unsigned lane = 0; lane < 2; ++lane) {
+			const auto populate = [&](json& destination) {
+				if (lane == 0) {
+					Util::PopulateJsonObject(destination, [&](json& object) {
+						Util::CopyJsonInto(object["nested"], source);
+					});
+				} else {
+					Util::AppendJsonCopy(destination, source);
+				}
+			};
+			json complete;
+			const Util::JsonCleanupGuard completeCleanup(complete);
+			countedAllocations = 0;
+			countAllocations = true;
+			populate(complete);
+			countAllocations = false;
+			const auto allocations = countedAllocations;
+			Require(allocations > 0 && allocations <= 4096, "container allocation sweep is missing or unbounded");
+			for (std::size_t nth = 1; nth <= allocations; ++nth) {
+				json destination;
+				const Util::JsonCleanupGuard cleanup(destination);
+				allocationsUntilFailure = nth;
+				bool caught = false;
+				try {
+					populate(destination);
+				} catch (const std::bad_alloc&) {
+					caught = true;
+				}
+				Require(caught && failAllAllocations && allocationsUntilFailure == 0 && destination.is_null(),
+					"container allocation failure corrupted its null destination");
+				ClearFaults();
+			}
+			std::fprintf(stderr, "JSON-CONTAINER lane=%u persistent-nth=%zu PASS strong-destination=1\n", lane, allocations);
+		}
+	}
 }
 
 namespace logger
@@ -814,6 +854,7 @@ int main()
 		RunCaptureControls();
 		RunJsonCleanupControl();
 		RunJsonCopyControl();
+		RunJsonContainerControl();
 		ScreenshotFinalizationTest::Run();
 		std::cout << "ScreenshotFinalization PASS\n";
 		return 0;

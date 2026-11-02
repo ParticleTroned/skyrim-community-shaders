@@ -156,6 +156,8 @@ int main()
 			require(runtime.ProbeLocked("nvngx_dlssnr.dll"), "Compatible user runtime was rejected");
 			require(runtime.hash_ == hash && runtime.trust_ == RuntimeTrust::VersionAccepted,
 				"Runtime fingerprint must remain diagnostic, without claiming package verification");
+			require(runtime.detail_.find("metadata accepted") != std::string::npos && runtime.detail_.find("publisher and origin unverified") != std::string::npos,
+				"Metadata admission must not claim verified provider provenance");
 			require(runtime.backend_->featureDirectory == L"physical-provider-directory", "Admission lost the physical NGX search directory");
 			require(runtime.networkSelectionSupported_ == (version.major() == 310 && version.minor() == 9),
 				"Admission changed the version-specific preset policy");

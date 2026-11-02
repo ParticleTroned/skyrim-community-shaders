@@ -146,6 +146,8 @@ namespace NeuralRendering
 
 	struct RendererSnapshot
 	{
+		RuntimeStatus runtimeStatus = RuntimeStatus::NotProbed;
+		std::optional<bool> runtimeNeedsUpdatedDriver;
 		std::string status = "idle";
 		std::string trust = "unknown";
 		std::string detail;
@@ -410,6 +412,7 @@ namespace NeuralRendering
 		/** Request coalesced shader-only invalidation at the completed-frame maintenance boundary. */
 		void ResetShaderCache();
 
+		/** Observe output and runtime admission under the shared renderer lifecycle lock. */
 		[[nodiscard]] RendererSnapshot GetSnapshot() const;
 		/** Lock-free projection eligibility hint; frame-latched policy remains the authority for model quality. */
 		[[nodiscard]] std::uint32_t ModelResolutionCeiling() const noexcept;

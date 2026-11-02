@@ -27,7 +27,7 @@ namespace NeuralRendering
 	constexpr NVSDK_NGX_Result NVSDK_NGX_Result_FAIL_FeatureNotFound = 0xBAD00004;
 	constexpr NVSDK_NGX_Result NVSDK_NGX_Result_FAIL_UnsupportedParameter = kFailure;
 	constexpr NVSDK_NGX_Result NVSDK_NGX_Result_FAIL_FeatureNotSupported = 0xBAD00001;
-	constexpr NVSDK_NGX_Result NVSDK_NGX_Result_FAIL_OutOfDate = 0xBAD00011;
+	constexpr NVSDK_NGX_Result NVSDK_NGX_Result_FAIL_OutOfDate = 0xBAD0000C;
 	constexpr bool NVSDK_NGX_FAILED(NVSDK_NGX_Result value) { return (value & 0xFFF00000) == 0xBAD00000; }
 	constexpr unsigned NVSDK_NGX_ENGINE_TYPE_CUSTOM = 0;
 	constexpr int E_INVALIDARG = -1;
@@ -44,7 +44,7 @@ namespace NeuralRendering
 	NVSDK_NGX_Result providerAllocationResult = kSuccess, providerDestroyResult = kSuccess, providerShutdownResult = kSuccess;
 	int providerAvailable = 1;
 	int providerNeedsUpdatedDriver = 0;
-	NVSDK_NGX_Result providerDriverQuery = kSuccess;
+	NVSDK_NGX_Result providerDriverQuery = kSuccess, providerMajorQuery = kSuccess, providerMinorQuery = kSuccess;
 	NVSDK_NGX_Result providerFeatureQuery = kFailure, providerFeatureResult = kSuccess;
 	bool partialAllocation = false;
 	std::string initializedProject;
@@ -78,8 +78,15 @@ namespace NeuralRendering
 		}
 		NVSDK_NGX_Result Get(const char* key, unsigned* value)
 		{
-			*value = std::string_view(key) == NVSDK_NGX_Parameter_DLSSNR_MinDriverVersionMajor ? 616u : 92u;
-			return providerDriverQuery;
+			if (std::string_view(key) == NVSDK_NGX_Parameter_DLSSNR_MinDriverVersionMajor) {
+				*value = 616u;
+				return providerMajorQuery;
+			}
+			if (std::string_view(key) == NVSDK_NGX_Parameter_DLSSNR_MinDriverVersionMinor) {
+				*value = 92u;
+				return providerMinorQuery;
+			}
+			return kFailure;
 		}
 	} capabilityMap{ true }, parameterMap;
 	struct NVSDK_NGX_FeatureCommonInfo
@@ -255,7 +262,7 @@ namespace
 		providerInitResult = providerCapabilityResult = providerAvailabilityResult = providerAllocationResult = providerDestroyResult = providerShutdownResult = kSuccess;
 		providerAvailable = 1;
 		providerNeedsUpdatedDriver = 0;
-		providerDriverQuery = kSuccess;
+		providerDriverQuery = providerMajorQuery = providerMinorQuery = kSuccess;
 		providerFeatureQuery = kFailure;
 		providerFeatureResult = kSuccess;
 		partialAllocation = false;
@@ -300,6 +307,9 @@ namespace
 		Require(healthy.Initialize(&device, data), "SDK initialization failed");
 		Require(healthy.driverRequirements_.needsUpdate == false && healthy.driverRequirements_.minimumMajor == 616u && healthy.driverRequirements_.minimumMinor == 92u,
 			"Provider-reported driver requirements were lost");
+		Require(healthy.detail_.find("NGX SDK route initialized") != std::string::npos &&
+					healthy.detail_.find("actual provider identity unverified") != std::string::npos,
+			"SDK dispatch must not attest the provider's identity or origin");
 		Require(initializedProject == NvidiaProject::kId && featurePath == healthy.backend_->featureDirectory &&
 					featurePath != healthy.path_.parent_path(),
 			"SDK must use the verified physical provider directory instead of the virtual Data path");
@@ -342,7 +352,6 @@ namespace
 		Reset();
 		Runtime fallback;
 		providerAvailable = 0;
-		providerNeedsUpdatedDriver = 1;
 		directResult = kSuccess;
 		Require(fallback.Initialize(&device, data) && fallback.initializationRoute_ == "NGX_D3D12_DIRECT_PROVIDER",
 			"Missing SDK feature did not initialize the admitted provider directly");
@@ -364,28 +373,96 @@ namespace
 		directUnloadResult = true;
 		Require(unloadFailure.ShutdownLocked() && device.references == 0 && std::count(calls.begin(), calls.end(), "shutdown") == 1,
 			"Retried import restoration repeated SDK shutdown or leaked the device");
-		Reset();
-		Runtime genuineFailure;
-		providerAvailable = 0;
-		providerFeatureQuery = kSuccess;
-		providerFeatureResult = 0xBAD00002;
-		directResult = kSuccess;
-		Require(!genuineFailure.Initialize(&device, data) && genuineFailure.ngxResult_ == 0xBAD00002 &&
-					std::find(calls.begin(), calls.end(), "direct_init") == calls.end(),
-			"Genuine NGX platform failure was bypassed");
-		Reset();
-		Runtime providerOldDriver;
-		providerNeedsUpdatedDriver = 1;
-		Require(!providerOldDriver.Initialize(&device, data) && providerOldDriver.ngxResult_ == NVSDK_NGX_Result_FAIL_OutOfDate,
-			"An explicit provider driver-update requirement was ignored");
-		Require(providerOldDriver.driverRequirements_.needsUpdate == true && providerOldDriver.driverRequirements_.minimumMinor == 92u && device.references == 0,
-			"Driver rejection lost requirements during rollback or retained device ownership");
+		for (const auto failure : { 0xBAD00002u, NVSDK_NGX_Result_FAIL_OutOfDate }) {
+			Reset();
+			Runtime genuineFailure;
+			providerAvailable = 0;
+			providerFeatureQuery = kSuccess;
+			providerFeatureResult = failure;
+			directResult = kSuccess;
+			Require(!genuineFailure.Initialize(&device, data) && genuineFailure.ngxResult_ == failure &&
+						std::find(calls.begin(), calls.end(), "direct_init") == calls.end() && device.references == 0,
+				"Genuine NGX platform or out-of-date failure was bypassed");
+		}
+		for (const bool available : { false, true }) {
+			for (const bool availabilityQuerySucceeds : { false, true }) {
+				Reset();
+				Runtime providerOldDriver;
+				providerAvailable = available;
+				providerAvailabilityResult = availabilityQuerySucceeds ? kSuccess : kFailure;
+				providerFeatureQuery = kSuccess;
+				providerFeatureResult = NVSDK_NGX_Result_FAIL_FeatureNotFound;
+				providerNeedsUpdatedDriver = 1;
+				directResult = kSuccess;
+				Require(!providerOldDriver.Initialize(&device, data) && providerOldDriver.ngxResult_ == NVSDK_NGX_Result_FAIL_OutOfDate,
+					"An explicit provider driver-update requirement was ignored");
+				Require(providerOldDriver.driverRequirements_.needsUpdate == true && providerOldDriver.driverRequirements_.updateQuery == kSuccess &&
+							providerOldDriver.driverRequirements_.minimumMajor == 616u && providerOldDriver.driverRequirements_.minimumMinor == 92u &&
+							device.references == 0 && !providerOldDriver.backend_ && !providerOldDriver.parameters_,
+					"Driver rejection lost requirements during rollback or retained SDK ownership");
+				Require(std::find(calls.begin(), calls.end(), "direct_init") == calls.end() &&
+							std::find(calls.begin(), calls.end(), "allocate") == calls.end() && calls.back() == "shutdown",
+					"Driver rejection attempted an alternate route or allocated feature parameters");
+				Require(providerOldDriver.detail_.find("minimum=616.92") != std::string::npos &&
+							providerOldDriver.detail_.find("query=0x00000001") != std::string::npos &&
+							providerOldDriver.detail_.find("restart the game") != std::string::npos,
+					"Provider driver rejection lost its actionable diagnostic");
+				if (!available || !availabilityQuerySucceeds)
+					Require(providerOldDriver.discoveryDetail_.find("featureResult=0xBAD00004") != std::string::npos &&
+								providerOldDriver.detail_.find(providerOldDriver.discoveryDetail_) != std::string::npos,
+						"Driver rejection lost the original NGX discovery result");
+			}
+		}
+		for (const bool majorKnown : { false, true }) {
+			for (const bool minorKnown : { false, true }) {
+				Reset();
+				Runtime incompleteDriverRequirement;
+				providerAvailable = 0;
+				providerNeedsUpdatedDriver = 1;
+				providerMajorQuery = majorKnown ? kSuccess : kFailure;
+				providerMinorQuery = minorKnown ? kSuccess : kFailure;
+				directResult = kSuccess;
+				Require(!incompleteDriverRequirement.Initialize(&device, data) && device.references == 0,
+					"An explicit driver requirement depended on optional minimum-version queries");
+				const auto& requirements = incompleteDriverRequirement.driverRequirements_;
+				Require(requirements.minimumMajor.has_value() == majorKnown && requirements.minimumMinor.has_value() == minorKnown &&
+							requirements.majorQuery == providerMajorQuery && requirements.minorQuery == providerMinorQuery,
+					"Failed minimum-version queries exposed unwritten values or lost their results");
+				Require(incompleteDriverRequirement.detail_.find(std::format("minimum={}.{}", majorKnown ? "616" : "unknown", minorKnown ? "92" : "unknown")) != std::string::npos &&
+							std::find(calls.begin(), calls.end(), "direct_init") == calls.end(),
+					"Driver rejection invented a minimum version or reached the direct provider");
+			}
+		}
 		Reset();
 		Runtime unknownDriver;
 		providerDriverQuery = kFailure;
 		Require(unknownDriver.Initialize(&device, data) && !unknownDriver.driverRequirements_.needsUpdate.has_value(),
 			"An unsupported driver query was mistaken for an incompatible GPU");
 		Require(unknownDriver.ShutdownLocked(), "Unknown driver query prevented safe shutdown");
+		Reset();
+		Runtime unknownDirectDriver;
+		providerAvailable = 0;
+		providerNeedsUpdatedDriver = 1;
+		providerDriverQuery = kFailure;
+		directResult = kSuccess;
+		Require(unknownDirectDriver.Initialize(&device, data) && !unknownDirectDriver.driverRequirements_.needsUpdate.has_value(),
+			"A failed driver query must not turn its unwritten value into an explicit update requirement");
+		Require(unknownDirectDriver.ShutdownLocked() && device.references == 0, "Unknown direct driver query retained SDK ownership");
+		Reset();
+		Runtime driverRollbackFailure;
+		providerAvailable = 0;
+		providerNeedsUpdatedDriver = 1;
+		providerShutdownResult = kFailure;
+		directResult = kSuccess;
+		Require(!driverRollbackFailure.Initialize(&device, data) && device.references == 1 && driverRollbackFailure.backend_,
+			"Failed driver-rejection rollback released live SDK ownership");
+		Require(driverRollbackFailure.driverRequirements_.needsUpdate == true &&
+					driverRollbackFailure.detail_.find("requires an updated NVIDIA driver") != std::string::npos &&
+					driverRollbackFailure.detail_.find("rollback failed") != std::string::npos &&
+					std::find(calls.begin(), calls.end(), "direct_init") == calls.end(),
+			"Failed rollback hid the driver rejection or attempted a second route");
+		providerShutdownResult = kSuccess;
+		Require(driverRollbackFailure.ShutdownLocked() && device.references == 0, "Driver-rejection rollback could not finish safe teardown");
 		Reset();
 		Runtime initFailed;
 		providerInitResult = kFailure;

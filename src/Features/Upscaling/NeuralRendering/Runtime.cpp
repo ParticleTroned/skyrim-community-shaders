@@ -333,7 +333,7 @@ namespace NeuralRendering
 		status_ = RuntimeStatus::Ready;
 		failureStage_ = RuntimeFailureStage::None;
 		ngxResult_ = 0;
-		detail_ = std::format("user-supplied NR runtime admitted hash={} version={}", hash_, version_);
+		detail_ = std::format("NR runtime metadata accepted hash={} version={}; publisher and origin unverified", hash_, version_);
 		LogOnceLocked(probeLogEmitted_, "probe", true);
 		return true;
 	}
@@ -443,25 +443,32 @@ namespace NeuralRendering
 		int available = 0;
 		const auto availabilityResult = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNR_Available, &available);
 		const bool sdkAvailable = !NVSDK_NGX_FAILED(availabilityResult) && available != 0;
-		if (sdkAvailable && driverRequirements_.needsUpdate == true) {
+		int featureResult = 0;
+		auto featureQuery = NVSDK_NGX_Result_Success;
+		if (!sdkAvailable) {
+			featureQuery = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNR_FeatureInitResult, &featureResult);
+			discoveryDetail_ = std::format("NGX SDK NR availability query=0x{:08X} available={} featureQuery=0x{:08X} featureResult={}",
+				static_cast<std::uint32_t>(availabilityResult), available,
+				static_cast<std::uint32_t>(featureQuery), NVSDK_NGX_FAILED(featureQuery) ? "unavailable" : std::format("0x{:08X}", static_cast<std::uint32_t>(featureResult)));
+		}
+		if (driverRequirements_.needsUpdate == true) {
+			auto detail = std::format("NGX reports that NR requires an updated NVIDIA driver; minimum={}.{} query=0x{:08X}. Update using the NVIDIA app, then restart the game.",
+				driverRequirements_.minimumMajor ? std::to_string(*driverRequirements_.minimumMajor) : "unknown",
+				driverRequirements_.minimumMinor ? std::to_string(*driverRequirements_.minimumMinor) : "unknown",
+				static_cast<std::uint32_t>(driverQuery));
+			if (!discoveryDetail_.empty())
+				detail += "; " + discoveryDetail_;
 			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
-				std::format("NGX reports that NR requires an updated NVIDIA driver; minimum={}.{}",
-					driverRequirements_.minimumMajor ? std::to_string(*driverRequirements_.minimumMajor) : "unknown",
-					driverRequirements_.minimumMinor ? std::to_string(*driverRequirements_.minimumMinor) : "unknown"),
+				std::move(detail),
 				static_cast<std::uint32_t>(NVSDK_NGX_Result_FAIL_OutOfDate));
 			rollback();
 			return false;
 		}
 		if (!sdkAvailable) {
-			int featureResult = 0;
-			const auto featureQuery = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNR_FeatureInitResult, &featureResult);
 			const auto featureInitializationResult = static_cast<NVSDK_NGX_Result>(featureResult);
 			const auto failureResult = !NVSDK_NGX_FAILED(featureQuery) && NVSDK_NGX_FAILED(featureInitializationResult) ? featureInitializationResult :
 			                           NVSDK_NGX_FAILED(availabilityResult)                                             ? availabilityResult :
 			                                                                                                              NVSDK_NGX_Result_FAIL_FeatureNotSupported;
-			discoveryDetail_ = std::format("NGX SDK NR availability query=0x{:08X} available={} featureQuery=0x{:08X} featureResult={}",
-				static_cast<std::uint32_t>(availabilityResult), available,
-				static_cast<std::uint32_t>(featureQuery), NVSDK_NGX_FAILED(featureQuery) ? "unavailable" : std::format("0x{:08X}", static_cast<std::uint32_t>(featureResult)));
 			if (failureResult != NVSDK_NGX_Result_FAIL_FeatureNotFound &&
 				failureResult != NVSDK_NGX_Result_FAIL_FeatureNotSupported &&
 				failureResult != NVSDK_NGX_Result_FAIL_UnsupportedParameter) {
@@ -483,7 +490,7 @@ namespace NeuralRendering
 		}
 		if (!sdkAvailable) {
 			initializationRoute_ = "NGX_D3D12_DIRECT_PROVIDER";
-			logger::warn("[DLSSNR] {}; trying the admitted user provider directly", discoveryDetail_);
+			logger::warn("[DLSSNR] {}; trying the admitted NR provider directly", discoveryDetail_);
 			std::string providerDetail;
 			const auto providerResult = backend_->provider.Initialize(
 				std::filesystem::path(backend_->featureDirectory) / kRuntimeName, backend_->providerFile.Get(),
@@ -496,7 +503,7 @@ namespace NeuralRendering
 			}
 			detail_ = std::format("{}; {}", discoveryDetail_, providerDetail);
 		} else {
-			detail_ = std::format("official NGX SDK initialized NR with CSX project {}", NvidiaProject::kId);
+			detail_ = std::format("NGX SDK route initialized NR with CSX project {}; actual provider identity unverified", NvidiaProject::kId);
 		}
 		status_ = RuntimeStatus::Initialized;
 		failureStage_ = RuntimeFailureStage::None;

@@ -810,20 +810,41 @@ void NeuralRenderingFeature::SetPerformanceCostMeasurementEnabled(bool a_enabled
 Feature::SettingsHeaderStatus NeuralRenderingFeature::GetSettingsHeaderStatus() const
 {
 	const auto& upscaling = globals::features::upscaling;
+	if (!NeuralRendering::Runtime::IsInstalled())
+		return { "Missing DLL", true };
+	if (!upscaling.IsNeuralRenderingHardwareSupported())
+		return { "Unavailable", true };
+	if (!upscaling.settings.neuralRenderingEnabled)
+		return { "Off", false };
+	if (NeuralRendering::Runtime::GetDriverSupport().RequiresUpdate())
+		return { "Update driver", true };
 	const auto status = NeuralRendering::Renderer::Instance().GetSnapshot();
-	const bool unavailable = !NeuralRendering::Runtime::IsInstalled() || !upscaling.IsNeuralRenderingHardwareSupported();
-	const bool driverOutdated = NeuralRendering::Runtime::GetDriverSupport().RequiresUpdate();
+	if (status.runtimeNeedsUpdatedDriver == true)
+		return { "Update driver", true };
+	if (status.runtimeStatus == NeuralRendering::RuntimeStatus::VersionRejected)
+		return { "Unsupported DLL", true };
 	const bool failed = status.failureLatched || status.quarantined;
-	const bool recovering = upscaling.IsNeuralRenderingRequested() && status.memoryRecovery.phase != NeuralRendering::MemoryRecoveryPhase::Ready;
+	if (failed)
+		return { "Paused", true };
+	const bool recovering = upscaling.IsNeuralRenderingRequested() && status.memoryRecovery.phase != NeuralRendering::MemoryRecoveryPhase::Ready &&
+	                        status.memoryRecovery.phase != NeuralRendering::MemoryRecoveryPhase::Probation;
 	const bool needsFov = NeuralRendering::RequiresFoveatedMask(upscaling.GetNeuralRenderingMode(), upscaling.settings.neuralRenderingFovOnly,
 		globals::game::isVR, upscaling.settings.neuralRenderingRenderscaleFov);
 	const bool waiting = !upscaling.IsNeuralRenderingUpscalingAvailable() || (needsFov && !upscaling.IsNeuralRenderingFovConfigurationAvailable());
-	const std::string_view label = unavailable ? "Unavailable" : driverOutdated ? "Update driver" :
-	                                                         failed             ? "Paused" :
-	                                                         recovering         ? "Recovering" :
-	                                                         waiting            ? "Waiting" :
-	                                                                              "Ready";
-	return { label, unavailable || driverOutdated || failed || recovering || waiting };
+	if (recovering)
+		return { "Recovering", true };
+	if (waiting)
+		return { "Waiting", true };
+	switch (status.runtimeStatus) {
+	case NeuralRendering::RuntimeStatus::NotProbed:
+		return { "Not checked", false };
+	case NeuralRendering::RuntimeStatus::Ready:
+		return { "DLL checked", false };
+	case NeuralRendering::RuntimeStatus::Initialized:
+		return { status.outputCommitted ? "Evaluated" : "Initialized", false };
+	default:
+		return { "Unavailable", true };
+	}
 }
 
 void NeuralRenderingFeature::DrawSettingsEnabledControl()

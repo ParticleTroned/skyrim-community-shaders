@@ -16,7 +16,7 @@ function(extract path start_marker end_marker output)
 endfunction()
 
 extract("src/Features/NeuralRenderingFeature.cpp"
-    "std::string_view NeuralRenderingFeature::GetSettingsFooterText() const"
+    "Feature::SettingsHeaderStatus NeuralRenderingFeature::GetSettingsHeaderStatus() const"
     "void NeuralRenderingFeature::DataLoaded()" draw_settings)
 extract("src/State.cpp"
     "bool State::IsDeveloperMode()"

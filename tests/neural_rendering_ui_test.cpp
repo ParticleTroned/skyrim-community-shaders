@@ -564,7 +564,10 @@ namespace NeuralRendering
 	{
 		struct Snapshot
 		{
+			RuntimeStatus runtimeStatus = RuntimeStatus::NotProbed;
+			std::optional<bool> runtimeNeedsUpdatedDriver;
 			bool quarantined = false, failureLatched = false, parallelEyesDisabled = false;
+			bool outputCommitted = false;
 			bool pressureResolutionEnabled = false;
 			unsigned effectiveModelResolutionPercent = 100;
 			std::string detail;
@@ -642,8 +645,18 @@ nlohmann::json AssetsJson()
 	++assetReads;
 	return nlohmann::json::object();
 }
+struct Feature
+{
+	struct SettingsHeaderStatus
+	{
+		std::string_view label;
+		bool needsAttention;
+	};
+};
 struct NeuralRenderingFeature
 {
+	Feature::SettingsHeaderStatus GetSettingsHeaderStatus() const;
+	void DrawSettingsEnabledControl();
 	std::string_view GetSettingsFooterText() const;
 	void DrawSettings();
 	void DrawColourSettings(bool a_diagnosticsOnly = false);
@@ -658,6 +671,87 @@ int main()
 			throw std::runtime_error(message);
 		}
 	};
+	{
+		auto& upscaling = globals::features::upscaling;
+		auto& renderer = NeuralRendering::Renderer::Instance();
+		const auto savedSettings = upscaling.settings;
+		NeuralRenderingFeature feature;
+		const auto expectHeader = [&](std::string_view label, bool attention = false) {
+			const auto status = feature.GetSettingsHeaderStatus();
+			require(status.label == label && status.needsAttention == attention, "NR header misrepresented observed runtime readiness");
+		};
+		const auto expectWithoutSnapshot = [&](std::string_view label, bool attention = false) {
+			const auto reads = renderer.snapshotReads;
+			expectHeader(label, attention);
+			require(renderer.snapshotReads == reads, "Inactive NR header unnecessarily acquired renderer state");
+		};
+		for (const bool vr : { false, true }) {
+			globals::game::isVR = vr;
+			upscaling.settings.neuralRenderingMode = static_cast<unsigned>(NeuralRendering::RenderingMode::FullResolution);
+			upscaling.settings.neuralRenderingEnabled = false;
+			expectWithoutSnapshot("Off");
+			upscaling.settings.neuralRenderingEnabled = true;
+			expectHeader("Not checked");
+			renderer.snapshot.runtimeStatus = NeuralRendering::RuntimeStatus::Ready;
+			expectHeader("DLL checked");
+			renderer.snapshot.runtimeStatus = NeuralRendering::RuntimeStatus::Initialized;
+			expectHeader("Initialized");
+			renderer.snapshot.outputCommitted = true;
+			expectHeader("Evaluated");
+			renderer.snapshot.memoryRecovery.phase = NeuralRendering::MemoryRecoveryPhase::Probation;
+			expectHeader("Evaluated");
+			for (const auto phase : { NeuralRendering::MemoryRecoveryPhase::Retiring, NeuralRendering::MemoryRecoveryPhase::Waiting,
+					 NeuralRendering::MemoryRecoveryPhase::Rebuilding }) {
+				renderer.snapshot.memoryRecovery.phase = phase;
+				expectHeader("Recovering", true);
+			}
+			renderer.snapshot.memoryRecovery = {};
+			upscaling.settings.neuralRenderingMode = static_cast<unsigned>(NeuralRendering::RenderingMode::ReducedResolution);
+			upscaling.method = Upscaling::UpscaleMethod::kTAA;
+			expectHeader("Waiting", true);
+			upscaling.method = Upscaling::UpscaleMethod::kDLSS;
+			upscaling.settings.neuralRenderingMode = static_cast<unsigned>(NeuralRendering::RenderingMode::FullResolution);
+			renderer.snapshot.quarantined = true;
+			expectHeader("Paused", true);
+			upscaling.settings.neuralRenderingEnabled = false;
+			expectWithoutSnapshot("Off");
+			upscaling.settings.neuralRenderingEnabled = true;
+			renderer.snapshot.quarantined = false;
+			renderer.snapshot.outputCommitted = false;
+			expectHeader("Initialized");
+			renderer.snapshot = {};
+			expectHeader("Not checked");
+			for (auto failure : { NeuralRendering::RuntimeStatus::InitializationFailed, NeuralRendering::RuntimeStatus::FeatureCreateFailed,
+					 NeuralRendering::RuntimeStatus::FeatureEvaluateFailed }) {
+				renderer.snapshot.runtimeStatus = failure;
+				expectHeader("Unavailable", true);
+				renderer.snapshot.failureLatched = true;
+				expectHeader("Paused", true);
+				renderer.snapshot.failureLatched = false;
+			}
+			renderer.snapshot.runtimeStatus = NeuralRendering::RuntimeStatus::VersionRejected;
+			expectHeader("Unsupported DLL", true);
+			renderer.snapshot.failureLatched = true;
+			renderer.snapshot.runtimeStatus = NeuralRendering::RuntimeStatus::InitializationFailed;
+			renderer.snapshot.runtimeNeedsUpdatedDriver = true;
+			expectHeader("Update driver", true);
+			renderer.snapshot.runtimeNeedsUpdatedDriver.reset();
+			expectHeader("Paused", true);
+			renderer.snapshot = {};
+			NeuralRendering::installedDriver = { 61656u };
+			expectWithoutSnapshot("Update driver", true);
+			NeuralRendering::installedDriver = { NeuralRendering::kMinimumNvidiaDriverRelease };
+			NeuralRendering::runtimeInstalled = false;
+			expectWithoutSnapshot("Missing DLL", true);
+			NeuralRendering::runtimeInstalled = true;
+			upscaling.fidelityFX.nvidia = false;
+			expectWithoutSnapshot("Unavailable", true);
+			upscaling.fidelityFX.nvidia = true;
+			renderer.snapshot.runtimeStatus = NeuralRendering::RuntimeStatus::NotProbed;
+		}
+		upscaling.settings = savedSettings;
+		globals::game::isVR = true;
+	}
 	{
 		Upscaling::Settings settings;
 		for (const auto [selection, divisions] : { std::pair{ 0, 1u }, std::pair{ 1, 2u }, std::pair{ 2, 4u } }) {

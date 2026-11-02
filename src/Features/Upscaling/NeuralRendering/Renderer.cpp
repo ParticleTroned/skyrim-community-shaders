@@ -5375,6 +5375,9 @@ namespace NeuralRendering
 	{
 		std::scoped_lock lock(state_->mutex_);
 		auto result = state_->SnapshotLocked();
+		const auto& runtime = Runtime::Instance();
+		result.runtimeStatus = runtime.Status();
+		result.runtimeNeedsUpdatedDriver = runtime.DriverRequirements().needsUpdate;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		result.reconstructionOverride = state_->reconstructionExperiment_.Status();
 #endif

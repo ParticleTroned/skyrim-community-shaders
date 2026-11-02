@@ -24074,6 +24074,7 @@ void Upscaling::EnsureRuntimeResolutionStateCurrent()
 
 void Upscaling::InvalidateFrameScopedUpscalingState()
 {
+	InvalidatePreparedEyeInputs();
 	runtimeResolutionStateLastRefreshFrame = std::numeric_limits<uint32_t>::max();
 	resourceCheckLastCompletedFrame = std::numeric_limits<uint32_t>::max();
 	resourceCheckLastCompletedMethod = UpscaleMethod::kNONE;
@@ -27270,6 +27271,7 @@ void Upscaling::ClearAllVRLowPeakNativeRestoreProgress()
 
 void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 {
+	foveatedBorrowedInputs = {};
 	InvalidateFrameScopedUpscalingState();
 	InvalidateVRRenderScaleStereoPresentationPacket(true);
 	RetiredVRIntermediateTextures retired{};
@@ -30786,8 +30788,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			}
 
 			for (uint32_t eye = 0; eye < 2; ++eye) {
-				if (!foveatedCenterColorIn[eye] ||
-					!foveatedCenterColorIn[eye]->resource ||
+				if (!GetFoveatedCenterInput(eye, UpscalingTextures::CenterInput::Color) ||
+					!GetFoveatedCenterInput(eye, UpscalingTextures::CenterInput::Color)->resource ||
 					!foveatedCenterColorOut[eye] ||
 					!foveatedCenterColorOut[eye]->resource) {
 					return false;
@@ -30795,7 +30797,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 
 				const auto& rect = cache.rects[eye];
 				const auto& planEye = cache.plan.eyes[eye];
-				const auto& input = foveatedCenterColorIn[eye]->desc;
+				const auto& input = GetFoveatedCenterInput(eye, UpscalingTextures::CenterInput::Color)->desc;
 				const auto& output = foveatedCenterColorOut[eye]->desc;
 				if (!planEye.IsValid() ||
 					rect.inputWidth != planEye.input.Width() ||
@@ -30821,8 +30823,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					cache.rects[0].outputHeight,
 					cache.rects[1].outputHeight },
 				std::array<ID3D11Resource*, 2>{
-					foveatedCenterColorIn[0]->resource.get(),
-					foveatedCenterColorIn[1]->resource.get() });
+					GetFoveatedCenterInput(0, UpscalingTextures::CenterInput::Color)->resource.get(),
+					GetFoveatedCenterInput(1, UpscalingTextures::CenterInput::Color)->resource.get() });
 		}();
 		const bool targetFoveatedDLSSSlotRequired =
 			relatchUpscaleMethod == UpscaleMethod::kDLSS &&
@@ -44318,6 +44320,7 @@ bool Upscaling::BuildPeripheryTAATileList(uint32_t eyeIndex, uint32_t outputWidt
 
 void Upscaling::AbandonFoveatedResourcesUnsafe()
 {
+	foveatedBorrowedInputs = {};
 	(void)neuralFinalLdrFramebuffer.release();
 	InvalidateFrameScopedUpscalingState();
 	// An unproven interop idle leaves every submitted foveated resource alive.
@@ -44365,6 +44368,7 @@ void Upscaling::AbandonFoveatedResourcesUnsafe()
 
 void Upscaling::DestroyFoveatedResources()
 {
+	foveatedBorrowedInputs = {};
 	InvalidateFrameScopedUpscalingState();
 	InvalidateVRRenderScaleStereoPresentationPacket(true);
 	NeuralRendering::CharacterRendering::Instance().Invalidate();
@@ -45174,6 +45178,103 @@ FidelityFX::UpscaleResult Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_ups
 	return FidelityFX::UpscaleResult::Failed;
 }
 
+void Upscaling::InvalidatePreparedEyeInputs()
+{
+	++perEyeInputContentSerial;
+	perEyeInputPreparedFrame = std::numeric_limits<uint32_t>::max();
+}
+
+Texture2D* Upscaling::GetFoveatedCenterInput(uint32_t eye, UpscalingTextures::CenterInput role) const
+{
+	if (eye >= 2)
+		return nullptr;
+	const std::array staged{ foveatedCenterColorIn[eye].get(), foveatedCenterDepth[eye].get(),
+		foveatedCenterMotionVectors[eye].get(), foveatedCenterReactiveMask[eye].get(), foveatedCenterTransparencyMask[eye].get() };
+	const std::array prepared{ vrIntermediateColorIn[eye].get(), vrIntermediateDepth[eye].get(),
+		vrIntermediateMotionVectors[eye].get(), vrIntermediateReactiveMask[eye].get(), vrIntermediateTransparencyMask[eye].get() };
+	const auto index = static_cast<size_t>(role);
+	if (index >= staged.size())
+		return nullptr;
+	const auto& bundle = foveatedBorrowedInputs[eye];
+	if (!bundle.device)
+		return staged[index];
+	// Retention checks need allocation identity even after its contents expire.
+	auto* input = prepared[index];
+	return input && bundle.sources[index].Matches(input->resource.get()) &&
+	               bundle.views[index].get() == input->srv.get() ?
+	           input :
+	           nullptr;
+}
+
+bool Upscaling::RetireStagedFoveatedInputs(uint32_t eye)
+{
+	if (!foveatedCenterColorIn[eye] && !foveatedCenterDepth[eye] && !foveatedCenterMotionVectors[eye] &&
+		!foveatedCenterReactiveMask[eye] && !foveatedCenterTransparencyMask[eye])
+		return true;
+	RetiredVRIntermediateTextures retired{};
+	retired.retireFrame = globals::state ? globals::state->frameCount : 0u;
+	const auto transition = GetVRRenderScaleTransitionSnapshot();
+	retired.transitionEpoch = transition.relatchPlan.valid ? transition.relatchPlan.transitionEpoch : transition.applied.transitionEpoch;
+	retired.contractGeneration = transition.relatchPlan.valid ? transition.relatchPlan.contractGeneration : transition.applied.contractGeneration;
+	if (!CanAdmitVRIntermediateRetirement(retired.transitionEpoch))
+		return false;
+	retiredVRIntermediateTextures.reserve(kVRRetiredIntermediateTextureMaxSets);
+	retired.colorIn[eye] = std::move(foveatedCenterColorIn[eye]);
+	retired.depth[eye] = std::move(foveatedCenterDepth[eye]);
+	retired.motionVectors[eye] = std::move(foveatedCenterMotionVectors[eye]);
+	retired.reactiveMask[eye] = std::move(foveatedCenterReactiveMask[eye]);
+	retired.transparencyMask[eye] = std::move(foveatedCenterTransparencyMask[eye]);
+	retired.retirementSerial = vrIntermediateRetirementNextSerial.fetch_add(1, std::memory_order_acq_rel);
+	vrIntermediateRetirementLastIssuedSerial.store(retired.retirementSerial, std::memory_order_release);
+	retiredVRIntermediateTextures.push_back(std::move(retired));
+	ScheduleVRIntermediateTextureCleanup();
+	ServiceVRIntermediateTextureCleanup();
+	UpdateVRIntermediateRetirementSnapshot(retiredVRIntermediateTextures.size() >= kVRRetiredIntermediateTextureMaxSets);
+	InvalidateVRRenderScaleStereoPresentationPacket(true);
+	return true;
+}
+
+bool Upscaling::TryBorrowFoveatedCenterInputs(uint32_t eye, uint32_t width, uint32_t height,
+	uint32_t sourceFrame, uint64_t neuralGeneration, bool validateOnly)
+{
+	const auto* state = globals::state;
+	if (!state || perEyeInputPreparedFrame != state->frameCount || sourceFrame != state->frameCount ||
+		HasQuarantinedVRGuideInputs())
+		return false;
+	const std::array prepared{ vrIntermediateColorIn[eye].get(), vrIntermediateDepth[eye].get(),
+		vrIntermediateMotionVectors[eye].get(), vrIntermediateReactiveMask[eye].get(), vrIntermediateTransparencyMask[eye].get() };
+	UpscalingTextures::FoveatedInputBundle::Sources sources{};
+	UpscalingTextures::FoveatedInputBundle::Views views{};
+	for (size_t index = 0; index < prepared.size(); ++index) {
+		if (!prepared[index])
+			return false;
+		sources[index] = prepared[index]->resource.get();
+		views[index] = prepared[index]->srv.get();
+	}
+	const uint32_t generation = GetVRVendorEvaluationContractGeneration(UpscaleMethod::kDLSS);
+	if (vrIntermediateTextureGeneration != generation)
+		return false;
+	const UpscalingTextures::FoveatedInputBundle::Stamp stamp{
+		.content = perEyeInputContentSerial,
+		.neuralGeneration = neuralGeneration,
+		.depthGeneration = globals::features::reverseZ.GetGeneration(),
+		.frame = state->frameCount,
+		.sourceFrame = sourceFrame,
+		.vendorGeneration = generation,
+		.eye = eye,
+		.reversedDepth = globals::features::reverseZ.GetConvention() == Depth::Convention::Reversed
+	};
+	auto& bundle = foveatedBorrowedInputs[eye];
+	if (validateOnly)
+		return bundle.Matches(globals::d3d::device, globals::d3d::context, sources, views, stamp);
+	UpscalingTextures::FoveatedInputBundle candidate;
+	if (!candidate.Capture(globals::d3d::device, globals::d3d::context, sources, views, width, height, stamp) ||
+		!RetireStagedFoveatedInputs(eye))
+		return false;
+	bundle = std::move(candidate);
+	return true;
+}
+
 FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX, ID3D11UnorderedAccessView* outputUAV, Streamline::DLSSViewportRole dlssViewportRole, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox, bool compositeCenter, NeuralCenterPhase neuralCenterPhase, bool neuralEyeApplied, NeuralCenterDispatchResult* neuralResult, bool neuralDirectCommit, bool neuralDirectOutputMayNeedRestore, NeuralRendering::RendererApplyArgs* neuralBatchArgs, uint32_t neuralSourceFrame, uint64_t neuralGeneration)
 {
 	if (neuralResult)
@@ -45224,6 +45325,34 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 		!NeuralRendering::RunsBeforeDlss(GetNeuralRenderingArrangement());
 	const bool validateStagedResources =
 		neuralCenterPhase == NeuralCenterPhase::Resolve;
+	const bool borrowEligible = neuralRenderingRequested &&
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	                            settings.neuralReconstructionTuning == NeuralRendering::ReconstructionTuning{} &&
+#endif
+	                            NeuralRendering::RunsBeforeDlss(GetNeuralRenderingArrangement()) &&
+	                            !UsesCharacterVisualIsolation(settings) && !settings.neuralCharacterPackedCrops &&
+	                            settings.neuralRenderingSingleSubrectScale == 1.0f &&
+	                            dlssViewportRole == Streamline::DLSSViewportRole::FoveatedCenter &&
+	                            !GetSubmitTemporalSnapshotForDispatch() && !submitSourceBox && submitSourceSubresource == 0 &&
+	                            colorInputBaseOffsetX == 0 && depthInputBaseOffsetX == 0 && auxInputBaseOffsetX == 0 &&
+	                            rect.inputOffsetX == 0 && rect.inputOffsetY == 0 &&
+	                            rect.inputWidth == inputWidthPerEye && rect.inputHeight == inputHeight &&
+	                            rect.outputOffsetX == 0 && rect.outputOffsetY == 0 &&
+	                            rect.outputWidth == outputWidthPerEye && rect.outputHeight == outputHeight &&
+	                            vrIntermediateColorIn[eyeIndex] && colorIn == vrIntermediateColorIn[eyeIndex]->resource.get() &&
+	                            vrIntermediateDepth[eyeIndex] && depthIn == vrIntermediateDepth[eyeIndex]->resource.get() &&
+	                            vrIntermediateMotionVectors[eyeIndex] && motionVectorsIn == vrIntermediateMotionVectors[eyeIndex]->resource.get() &&
+	                            vrIntermediateReactiveMask[eyeIndex] && reactiveMaskIn == vrIntermediateReactiveMask[eyeIndex]->resource.get() &&
+	                            vrIntermediateTransparencyMask[eyeIndex] && transparencyMaskIn == vrIntermediateTransparencyMask[eyeIndex]->resource.get();
+	const bool wasBorrowed = static_cast<bool>(foveatedBorrowedInputs[eyeIndex].device);
+	if (!validateStagedResources)
+		foveatedBorrowedInputs[eyeIndex] = {};
+	const bool borrowedInputs = borrowEligible && (!validateStagedResources || wasBorrowed) &&
+	                            TryBorrowFoveatedCenterInputs(eyeIndex, rect.inputWidth, rect.inputHeight,
+									neuralSourceFrame, neuralGeneration, validateStagedResources);
+	// Resolve must not fall back to stale staged contents after a producer changes.
+	if (validateStagedResources && wasBorrowed && !borrowedInputs)
+		return FidelityFX::UpscaleResult::Failed;
 	const auto prepareFoveatedTexture = [&]<class TexturePointer>(
 											TexturePointer& a_texture,
 											ID3D11Resource* a_source,
@@ -45258,30 +45387,40 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 		       (!a_requireRTV || a_texture->rtv);
 	};
 
-	if (!prepareFoveatedTexture(foveatedCenterColorIn[eyeIndex], colorIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews || NeuralRendering::RunsBeforeDlss(GetNeuralRenderingArrangement()), false, false, ("Upscale_FoveatedCenter_ColorIn_" + suffix).c_str()))
-		return FidelityFX::UpscaleResult::Failed;
 	if (!prepareFoveatedTexture(foveatedCenterColorOut[eyeIndex], colorIn, rect.outputWidth, rect.outputHeight, false, true, createFsrViews, false, ("Upscale_FoveatedCenter_ColorOut_" + suffix).c_str()))
 		return FidelityFX::UpscaleResult::Failed;
-	// FSR already supplies numeric R32 depth. Raw DLSS depth uses the same
-	// numeric storage but must be extracted from DSV sources through an SRV.
-	if (!validateStagedResources) {
-		if (!EnsureFoveatedTexture(foveatedCenterDepth[eyeIndex], depthIn,
-				centerInputAllocationWidth, centerInputAllocationHeight,
-				false, true, true, false, ("Upscale_FoveatedCenter_Depth_" + suffix).c_str(),
-				DXGI_FORMAT_R32_FLOAT))
+	if (!borrowedInputs) {
+		if (!prepareFoveatedTexture(foveatedCenterColorIn[eyeIndex], colorIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews || NeuralRendering::RunsBeforeDlss(GetNeuralRenderingArrangement()), false, false, ("Upscale_FoveatedCenter_ColorIn_" + suffix).c_str()))
 			return FidelityFX::UpscaleResult::Failed;
-	} else if (!foveatedCenterDepth[eyeIndex] || !foveatedCenterDepth[eyeIndex]->resource ||
-			   !foveatedCenterDepth[eyeIndex]->srv || !foveatedCenterDepth[eyeIndex]->uav ||
-			   foveatedCenterDepth[eyeIndex]->desc.Format != DXGI_FORMAT_R32_FLOAT ||
-			   foveatedCenterDepth[eyeIndex]->desc.Width != centerInputAllocationWidth ||
-			   foveatedCenterDepth[eyeIndex]->desc.Height != centerInputAllocationHeight) {
-		return FidelityFX::UpscaleResult::Failed;
+		// FSR already supplies numeric R32 depth. Raw DLSS depth uses the same
+		// numeric storage but must be extracted from DSV sources through an SRV.
+		if (!validateStagedResources) {
+			if (!EnsureFoveatedTexture(foveatedCenterDepth[eyeIndex], depthIn,
+					centerInputAllocationWidth, centerInputAllocationHeight,
+					false, true, true, false, ("Upscale_FoveatedCenter_Depth_" + suffix).c_str(),
+					DXGI_FORMAT_R32_FLOAT))
+				return FidelityFX::UpscaleResult::Failed;
+		} else if (!foveatedCenterDepth[eyeIndex] || !foveatedCenterDepth[eyeIndex]->resource ||
+				   !foveatedCenterDepth[eyeIndex]->srv || !foveatedCenterDepth[eyeIndex]->uav ||
+				   foveatedCenterDepth[eyeIndex]->desc.Format != DXGI_FORMAT_R32_FLOAT ||
+				   foveatedCenterDepth[eyeIndex]->desc.Width != centerInputAllocationWidth ||
+				   foveatedCenterDepth[eyeIndex]->desc.Height != centerInputAllocationHeight) {
+			return FidelityFX::UpscaleResult::Failed;
+		}
+		if (!prepareFoveatedTexture(foveatedCenterMotionVectors[eyeIndex], motionVectorsIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_MVec_" + suffix).c_str()))
+			return FidelityFX::UpscaleResult::Failed;
+		if (!prepareFoveatedTexture(foveatedCenterReactiveMask[eyeIndex], reactiveMaskIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_Reactive_" + suffix).c_str()))
+			return FidelityFX::UpscaleResult::Failed;
+		if (!prepareFoveatedTexture(foveatedCenterTransparencyMask[eyeIndex], transparencyMaskIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_Transparency_" + suffix).c_str()))
+			return FidelityFX::UpscaleResult::Failed;
 	}
-	if (!prepareFoveatedTexture(foveatedCenterMotionVectors[eyeIndex], motionVectorsIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_MVec_" + suffix).c_str()))
-		return FidelityFX::UpscaleResult::Failed;
-	if (!prepareFoveatedTexture(foveatedCenterReactiveMask[eyeIndex], reactiveMaskIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_Reactive_" + suffix).c_str()))
-		return FidelityFX::UpscaleResult::Failed;
-	if (!prepareFoveatedTexture(foveatedCenterTransparencyMask[eyeIndex], transparencyMaskIn, centerInputAllocationWidth, centerInputAllocationHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_Transparency_" + suffix).c_str()))
+
+	auto* centerColor = GetFoveatedCenterInput(eyeIndex, UpscalingTextures::CenterInput::Color);
+	auto* centerDepth = GetFoveatedCenterInput(eyeIndex, UpscalingTextures::CenterInput::Depth);
+	auto* centerMotion = GetFoveatedCenterInput(eyeIndex, UpscalingTextures::CenterInput::Motion);
+	auto* centerReactive = GetFoveatedCenterInput(eyeIndex, UpscalingTextures::CenterInput::Reactive);
+	auto* centerTransparency = GetFoveatedCenterInput(eyeIndex, UpscalingTextures::CenterInput::Transparency);
+	if (!centerColor || !centerDepth || !centerMotion || !centerReactive || !centerTransparency)
 		return FidelityFX::UpscaleResult::Failed;
 
 	bool neuralResourcesReady = neuralRenderingRequested;
@@ -45299,11 +45438,11 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 			directNeuralCommit, validateStagedResources);
 	}
 	if (neuralResourcesReady) {
-		neuralResourcesReady = validateStagedResources ?
-		                           foveatedCenterDepth[eyeIndex] &&
-		                               foveatedCenterDepth[eyeIndex]->srv != nullptr :
+		neuralResourcesReady = (validateStagedResources || borrowedInputs) ?
+		                           centerDepth &&
+		                               centerDepth->srv != nullptr :
 		                           EnsureFoveatedDepthGuideSRV(
-									   *foveatedCenterDepth[eyeIndex],
+									   *centerDepth,
 									   ("Upscale_FoveatedCenter_Depth_" + suffix).c_str());
 	}
 
@@ -45343,11 +45482,11 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 			rect.outputOffsetY + rect.outputHeight,
 		},
 	};
-	vendorParams.colorIn = foveatedCenterColorIn[eyeIndex]->resource.get();
-	vendorParams.depth = foveatedCenterDepth[eyeIndex]->resource.get();
-	vendorParams.motionVectors = foveatedCenterMotionVectors[eyeIndex]->resource.get();
-	vendorParams.reactiveMask = foveatedCenterReactiveMask[eyeIndex]->resource.get();
-	vendorParams.transparencyMask = foveatedCenterTransparencyMask[eyeIndex]->resource.get();
+	vendorParams.colorIn = centerColor->resource.get();
+	vendorParams.depth = centerDepth->resource.get();
+	vendorParams.motionVectors = centerMotion->resource.get();
+	vendorParams.reactiveMask = centerReactive->resource.get();
+	vendorParams.transparencyMask = centerTransparency->resource.get();
 	vendorParams.colorOut = foveatedCenterColorOut[eyeIndex]->resource.get();
 	vendorParams.dlssViewportRole = dlssViewportRole;
 	vendorParams.label = dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
@@ -45477,7 +45616,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 		neuralResult->dlssEvaluated = centerState.dlssEvaluated;
 	}
 	if (!reuseSubmitStageDLSSCenter) {
-		if (neuralCenterPhase != NeuralCenterPhase::Resolve) {
+		if (neuralCenterPhase != NeuralCenterPhase::Resolve && !borrowedInputs) {
 			D3D11_BOX colorSrcBox{
 				colorInputBaseOffsetX + rect.inputOffsetX,
 				rect.inputOffsetY,
@@ -45503,12 +45642,12 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 				1u
 			};
 
-			context->CopySubresourceRegion(foveatedCenterColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, colorIn, 0, &colorSrcBox);
-			if (!CopyRawDepthRegion(depthIn, *foveatedCenterDepth[eyeIndex], depthSrcBox))
+			context->CopySubresourceRegion(centerColor->resource.get(), 0, 0, 0, 0, colorIn, 0, &colorSrcBox);
+			if (!CopyRawDepthRegion(depthIn, *centerDepth, depthSrcBox))
 				return FidelityFX::UpscaleResult::Failed;
-			context->CopySubresourceRegion(foveatedCenterMotionVectors[eyeIndex]->resource.get(), 0, 0, 0, 0, motionVectorsIn, 0, &auxSrcBox);
-			context->CopySubresourceRegion(foveatedCenterReactiveMask[eyeIndex]->resource.get(), 0, 0, 0, 0, reactiveMaskIn, 0, &auxSrcBox);
-			context->CopySubresourceRegion(foveatedCenterTransparencyMask[eyeIndex]->resource.get(), 0, 0, 0, 0, transparencyMaskIn, 0, &auxSrcBox);
+			context->CopySubresourceRegion(centerMotion->resource.get(), 0, 0, 0, 0, motionVectorsIn, 0, &auxSrcBox);
+			context->CopySubresourceRegion(centerReactive->resource.get(), 0, 0, 0, 0, reactiveMaskIn, 0, &auxSrcBox);
+			context->CopySubresourceRegion(centerTransparency->resource.get(), 0, 0, 0, 0, transparencyMaskIn, 0, &auxSrcBox);
 		}
 
 		bool neuralAttempted = false;
@@ -45533,11 +45672,11 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 				neuralOutput = foveatedCenterNeuralOut[eyeIndex]->resource.get();
 			}
 			if (!neuralResourcesReady || !neuralOutput ||
-				!foveatedCenterDepth[eyeIndex] ||
-				!foveatedCenterDepth[eyeIndex]->resource ||
-				!foveatedCenterDepth[eyeIndex]->srv ||
-				!foveatedCenterMotionVectors[eyeIndex] ||
-				!foveatedCenterMotionVectors[eyeIndex]->resource) {
+				!centerDepth ||
+				!centerDepth->resource ||
+				!centerDepth->srv ||
+				!centerMotion ||
+				!centerMotion->resource) {
 				return false;
 			}
 			NeuralRendering::RendererApplyArgs args{};
@@ -45552,12 +45691,12 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 			args.generation = neuralGeneration;
 			args.insertionPoint = NeuralRendering::InsertionPoint::UpscaledCenter;
 			args.colorInput = a_colorInput;
-			args.depthGuide = foveatedCenterDepth[eyeIndex]->resource.get();
-			args.depthGuideSRV = foveatedCenterDepth[eyeIndex]->srv.get();
+			args.depthGuide = centerDepth->resource.get();
+			args.depthGuideSRV = centerDepth->srv.get();
 			const auto* depthSnapshot = GetSubmitTemporalSnapshotForDispatch();
 			args.depthConvention = depthSnapshot ? depthSnapshot->key.depthConvention : globals::features::reverseZ.GetConvention();
 			args.depthGeneration = depthSnapshot ? depthSnapshot->key.depthGeneration : globals::features::reverseZ.GetGeneration();
-			args.motionVectors = foveatedCenterMotionVectors[eyeIndex]->resource.get();
+			args.motionVectors = centerMotion->resource.get();
 			args.colorOutput = neuralOutput;
 			args.colorWidth = a_colorWidth;
 			args.colorHeight = a_colorHeight;
@@ -45744,7 +45883,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 		} else if (neuralCenterPhase == NeuralCenterPhase::Stage) {
 			if (NeuralRendering::RunsBeforeDlss(GetNeuralRenderingArrangement())) {
 				const bool neuralSubmitted = applyNeuralRendering(
-					foveatedCenterColorIn[eyeIndex]->resource.get(),
+					centerColor->resource.get(),
 					rect.inputWidth,
 					rect.inputHeight,
 					rect.inputWidth,
@@ -45752,7 +45891,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 				neuralApplied = neuralSubmitted && !neuralBatchArgs;
 			} else if (NeuralRendering::ReplacesDlss(GetNeuralRenderingArrangement())) {
 				const bool neuralSubmitted = applyNeuralRendering(
-					foveatedCenterColorIn[eyeIndex]->resource.get(),
+					centerColor->resource.get(),
 					rect.inputWidth,
 					rect.inputHeight,
 					rect.outputWidth,
@@ -45981,9 +46120,10 @@ bool Upscaling::EnsureReducedResolutionNeuralSelected(uint32_t eye, ID3D11Resour
 
 bool Upscaling::PrepareReducedResolutionNeuralOutputTarget(uint32_t eye, NeuralRendering::RendererApplyArgs& args, bool fuseSelection)
 {
+	auto* centerColor = GetFoveatedCenterInput(eye, UpscalingTextures::CenterInput::Color);
 	if (eye >= 2 || args.renderingMode != NeuralRendering::RenderingMode::ReducedResolution ||
-		!foveatedCenterColorIn[eye] || !foveatedCenterColorIn[eye]->srv ||
-		!CSX::NvidiaComIdentity::IsSame(args.colorInput, foveatedCenterColorIn[eye]->resource.get()) ||
+		!centerColor || !centerColor->srv ||
+		!CSX::NvidiaComIdentity::IsSame(args.colorInput, centerColor->resource.get()) ||
 		args.colorWidth != args.outputWidth || args.colorHeight != args.outputHeight ||
 		!args.computeSubrect.Fits(args.outputWidth, args.outputHeight))
 		return false;
@@ -46020,8 +46160,9 @@ bool Upscaling::PrepareReducedResolutionNeuralOutputTarget(uint32_t eye, NeuralR
 
 bool Upscaling::PrepareReducedResolutionNeuralOutput(uint32_t eye, const NeuralRendering::RendererApplyArgs& args)
 {
+	auto* centerColor = GetFoveatedCenterInput(eye, UpscalingTextures::CenterInput::Color);
 	auto* context = globals::d3d::context;
-	if (!context || eye >= 2 || !foveatedCenterColorIn[eye] || !foveatedCenterColorIn[eye]->srv ||
+	if (!context || eye >= 2 || !centerColor || !centerColor->srv ||
 		!foveatedCenterNeuralOut[eye] || !foveatedCenterNeuralOut[eye]->srv ||
 		args.colorWidth != args.outputWidth || args.colorHeight != args.outputHeight)
 		return false;
@@ -46055,7 +46196,7 @@ bool Upscaling::PrepareReducedResolutionNeuralOutput(uint32_t eye, const NeuralR
 	const FoveatedRegionPlan::Rect visible{ region.baseX, region.baseY, region.baseX + region.width, region.baseY + region.height };
 	if (!DispatchFoveatedBlendPass(foveatedCenterNeuralOut[eye]->srv.get(), selected->uav.get(),
 			args.outputWidth, args.outputHeight, rect, visible, 1.0f, 1.0f, float2{ 0.0f, 0.0f }, 0.0f, 0,
-			mask ? foveatedCenterColorIn[eye]->srv.get() : nullptr, mask.Get(), 0u, true, mask ? &selection.maskSupport : nullptr, selection.providerBlending))
+			mask ? centerColor->srv.get() : nullptr, mask.Get(), 0u, true, mask ? &selection.maskSupport : nullptr, selection.providerBlending))
 		return false;
 	RecordNeuralStageWork(capture, dispatchedPixels,
 		copyBaseline ? NeuralRendering::LogicalTextureBytes(selected->desc.Format, selected->desc.Width, selected->desc.Height) : 0u);
@@ -49389,6 +49530,8 @@ bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight
 		vrIntermediateColorIn[eye] = std::move(replacementColorIn[eye]);
 		vrIntermediateColorOut[eye] = std::move(replacementColorOut[eye]);
 	}
+	InvalidatePreparedEyeInputs();
+	foveatedBorrowedInputs = {};
 
 	return true;
 }
@@ -49495,6 +49638,7 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 	ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs, bool copyDepthInput,
 	const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions)
 {
+	InvalidatePreparedEyeInputs();
 	if (!globals::game::isVR)
 		return false;
 
@@ -49585,10 +49729,12 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 	if (clearPerEyeInputHMDMask)
 		(void)EnsureHMDMaskClearResources();
 
+	bool sanitized = !clearPerEyeInputHMDMask;
 	if (clearPerEyeInputHMDMask && depthTexture.depthSRV && vrClearHMDMaskCS && vrClearHMDMaskCB) {
+		sanitized = true;
 		for (uint32_t i = 0; i < 2; ++i) {
 			const uint32_t depthOffset = i == 1 ? eyeWidthIn : 0u;
-			(void)DispatchHMDMaskClear(
+			sanitized &= DispatchHMDMaskClear(
 				vrIntermediateColorIn[i]->uav.get(),
 				depthTexture.depthSRV,
 				eyeWidthIn,
@@ -49604,6 +49750,8 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 		}
 	}
 
+	if (sanitized)
+		perEyeInputPreparedFrame = state->frameCount;
 	return true;
 }
 
@@ -50412,6 +50560,7 @@ void Upscaling::ClearVRDirectUpscaledEyeOutput(uint32_t eyeIndex, ID3D11Unordere
 bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource,
 	uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput, bool allowFoveatedRegionEncode, bool* encodedFoveatedRegions, uint32_t contractGeneration, uint32_t eyeMask)
 {
+	InvalidatePreparedEyeInputs();
 	if (encodedFoveatedRegions)
 		*encodedFoveatedRegions = false;
 	eyeMask &= 0x3u;
@@ -57405,6 +57554,7 @@ bool Upscaling::UpdateVRSubmitDesktopMirror(uint32_t eyeIndex, uint32_t currentF
 bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, const VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity& a_submitBoundaryIdentity, bool a_vendorResumeCooldownAtCycleStart, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 	vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation)
 {
+	InvalidatePreparedEyeInputs();
 	const uint64_t a_expectedSubmitPairBoundaryToken = a_submitBoundaryIdentity.scopeToken;
 	const uint64_t a_matchedSubmitPairBoundaryToken = a_submitBoundaryIdentity.matchedToken;
 	const auto a_submitFlags = static_cast<vr::EVRSubmitFlags>(a_submitBoundaryIdentity.submitFlags);
@@ -68068,6 +68218,7 @@ void Upscaling::Upscale()
 				}
 			}
 
+			InvalidatePreparedEyeInputs();
 			auto dispatchEyeEncode = [&](uint32_t eye, uint32_t inputMinX, uint32_t inputMinY, uint32_t inputMaxX, uint32_t inputMaxY) {
 				if (eye >= 2 || inputMaxX <= inputMinX || inputMaxY <= inputMinY)
 					return;

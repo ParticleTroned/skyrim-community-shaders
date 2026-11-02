@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include "Features/Upscaling/FoveatedInputBundle.h"
 #include "Features/Upscaling/TextureSourceDescriptions.h"
 #include "Utils/ShaderInclude.h"
 #include "d3d11_shader_test.h"
@@ -57,8 +58,8 @@ namespace
 				set(base + 7, 3, .5f, -5, 0);
 				set(base + 4, 4, .25f, 0, 5);  // Y-first traversal wins despite the smaller X.
 				set(base + 7, 8, .75f, 0, -5);
-				set(base + 5, 6, .5f, 3, 4);  // A donor tie must retain the centre vector.
-				set(base + 9, 1, .75f, 80, 0);  // Equal depth is not a donor.
+				set(base + 5, 6, .5f, 3, 4);     // A donor tie must retain the centre vector.
+				set(base + 9, 1, .75f, 80, 0);   // Equal depth is not a donor.
 				set(base + 9, 4, .875f, 90, 0);  // Farther depth is not a donor.
 			}
 			set(eyeWidth - 1, 2, .125f, 50, 0);
@@ -391,6 +392,85 @@ void VerifySourceDescriptions(ID3D11Device* device)
 		"Partial VR capture retained an earlier operation's source ownership");
 }
 
+void VerifyBorrowedInputs(ID3D11Device* device, ID3D11DeviceContext* context)
+{
+	using Bundle = UpscalingTextures::FoveatedInputBundle;
+	std::array<Texture2D, Bundle::kCount> textures;
+	Bundle::Sources sources{};
+	Bundle::Views views{};
+	for (UINT i = 0; i < textures.size(); ++i) {
+		textures[i] = MakeTexture(device, 13, 11, DXGI_FORMAT_R32_FLOAT,
+			D3D11_BIND_SHADER_RESOURCE, "BorrowedInput");
+		sources[i] = textures[i].resource.get();
+		views[i] = textures[i].srv.get();
+	}
+	const Bundle::Stamp stamp{ .content = 1, .neuralGeneration = 2, .depthGeneration = 3, .frame = 4, .sourceFrame = 4, .vendorGeneration = 5, .eye = 1, .reversedDepth = true };
+	Bundle bundle;
+	Require(bundle.Capture(device, context, sources, views, 13, 11, stamp) &&
+				bundle.Matches(device, context, sources, views, stamp),
+		"Full-eye input capture failed");
+	for (UINT field = 0; field < 8; ++field) {
+		auto stale = stamp;
+		switch (field) {
+		case 0:
+			++stale.content;
+			break;
+		case 1:
+			++stale.neuralGeneration;
+			break;
+		case 2:
+			++stale.depthGeneration;
+			break;
+		case 3:
+			++stale.frame;
+			break;
+		case 4:
+			++stale.sourceFrame;
+			break;
+		case 5:
+			++stale.vendorGeneration;
+			break;
+		case 6:
+			stale.eye = 0;
+			break;
+		case 7:
+			stale.reversedDepth = false;
+			break;
+		}
+		Require(!bundle.Matches(device, context, sources, views, stale), "Stale borrowed producer was accepted");
+	}
+	ComPtr<ID3D11DeviceContext> deferred;
+	Check(device->CreateDeferredContext(0, deferred.put()));
+	Require(!bundle.Matches(device, deferred.get(), sources, views, stamp), "Changed context was accepted");
+	Bundle deferredBundle;
+	Require(!deferredBundle.Capture(device, deferred.get(), sources, views, 13, 11, stamp) && !deferredBundle.device,
+		"Deferred context captured borrowed inputs without immediate producer ordering");
+	auto replacement = MakeTexture(device, 13, 11, DXGI_FORMAT_R32_FLOAT,
+		D3D11_BIND_SHADER_RESOURCE, "BorrowedReplacement");
+	for (UINT i = 0; i < textures.size(); ++i) {
+		auto changed = sources;
+		changed[i] = replacement.resource.get();
+		Require(!bundle.Matches(device, context, changed, views, stamp), "Replaced source was accepted");
+		auto changedViews = views;
+		changedViews[i] = replacement.srv.get();
+		Require(!bundle.Matches(device, context, sources, changedViews, stamp), "Replaced view was accepted");
+		Bundle invalid;
+		Require(!invalid.Capture(device, context, sources, changedViews, 13, 11, stamp), "Unrelated view was accepted");
+	}
+	Require(!bundle.Capture(device, context, sources, views, 12, 11, stamp) && !bundle.device,
+		"Partial-eye capture retained borrowed ownership");
+	auto invalidDepth = MakeTexture(device, 13, 11, DXGI_FORMAT_R16_FLOAT,
+		D3D11_BIND_SHADER_RESOURCE, "InvalidBorrowedDepth");
+	sources[1] = invalidDepth.resource.get();
+	views[1] = invalidDepth.srv.get();
+	Require(!bundle.Capture(device, context, sources, views, 13, 11, stamp), "Nonnumeric R32 depth was accepted");
+	sources[1] = textures[1].resource.get();
+	views[1] = textures[1].srv.get();
+	Require(bundle.Capture(device, context, sources, views, 13, 11, stamp), "Recapture failed");
+	textures = {};
+	Require(bundle.Matches(device, context, sources, views, stamp), "Bundle did not retain source/view ownership");
+}
+
 int main()
 {
 	try {
@@ -399,6 +479,7 @@ int main()
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
 			D3D11_SDK_VERSION, device.put(), nullptr, context.put()));
 		VerifySourceDescriptions(device.get());
+		VerifyBorrowedInputs(device.get(), context.get());
 		for (const bool vr : { false, true })
 			for (const bool reversed : { false, true }) {
 				VerifyShader(device.get(), context.get(), "DLSS", vr, reversed);

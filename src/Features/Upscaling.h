@@ -6,6 +6,7 @@
 #include "Feature.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/FoveatedInputBundle.h"
 #include "Upscaling/FoveatedMaskCalibration.h"
 #include "Upscaling/FoveatedMaskVisualization.h"
 #include "Upscaling/FoveatedRegionPlan.h"
@@ -3420,6 +3421,16 @@ public:
 	Texture2D* sharpenerTexture = nullptr;
 	bool dlssUpscaleOutputInSharpenerTexture = false;
 	eastl::unique_ptr<Texture2D> foveatedCenterColorIn[2];
+	std::array<UpscalingTextures::FoveatedInputBundle, 2> foveatedBorrowedInputs{};
+	uint64_t perEyeInputContentSerial = 0;
+	uint32_t perEyeInputPreparedFrame = std::numeric_limits<uint32_t>::max();
+	/** Invalidate borrowed contents before any intermediate producer writes. */
+	void InvalidatePreparedEyeInputs();
+	/** Select the current retained input without aliasing either owning texture container. */
+	Texture2D* GetFoveatedCenterInput(uint32_t eye, UpscalingTextures::CenterInput role) const;
+	bool TryBorrowFoveatedCenterInputs(uint32_t eye, uint32_t width, uint32_t height,
+		uint32_t sourceFrame, uint64_t neuralGeneration, bool validateOnly);
+	bool RetireStagedFoveatedInputs(uint32_t eye);
 	eastl::unique_ptr<Texture2D> foveatedCenterColorOut[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterNeuralOut[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterNeuralSelected[2];

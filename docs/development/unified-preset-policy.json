@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.11.01.2",
+    "packageVersion": "d2026.11.02.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "F50FB58BAFAD3FD4E15431EEDAEBC4EB47B774CB13F229658FADB2E39411F850"
+        "sha256": "850887C25657AD856946B26C1CD5411C4954F72E334E1267F074684862CF70F2"
     },
     "runtimeSettingsContract": {
-        "revision": 29,
-        "sourceTreeSha256": "5AB1C9BBC6D4185A5600AC5A1CC9F0A741EC2A7C1DEEA5713E8D09D1FE46865D",
+        "revision": 30,
+        "sourceTreeSha256": "F98DF8D5EBE4DB5B36F446368B29256FD442C6EF5FF2F79CDC2A6E316F0FF8B5",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -799,6 +799,22 @@
                 "value": 0
             },
             { "path": ["Neural Rendering", "colour", "schemaVersion"], "value": 1 },
+            {
+                "path": [
+                    "Neural Rendering",
+                    "rendering",
+                    "neuralRenderingFaceDetailProtectionPercent"
+                ],
+                "value": 0
+            },
+            {
+                "path": [
+                    "Neural Rendering",
+                    "rendering",
+                    "neuralRenderingConfidenceRejectionPercent"
+                ],
+                "value": 0
+            },
             { "path": ["Neural Rendering", "colour", "lightingPreservation"], "value": 1.0 },
             { "path": ["Grass Collision", "CollisionStrength"], "value": 1.0 },
             { "path": ["Light Limit Fix", "ShadowCulling", "sun"], "value": true },

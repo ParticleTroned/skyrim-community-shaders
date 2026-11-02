@@ -107,6 +107,7 @@ namespace globals
 				unsigned neuralRenderingConfidenceRejectionPercent = 0;
 				NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
 				unsigned neuralRenderingPeripheralCompressionPercent = 100;
+				unsigned neuralRenderingFaceDetailProtectionPercent = 0;
 				bool neuralRenderingPauseInCombat = true;
 				bool neuralRenderingPressureResolutionEnabled = true;
 				bool neuralRenderingPrewarmEnabled = true;
@@ -669,11 +670,6 @@ int main()
 		ImGui::itemDeactivatedAfterEdit = true;
 		DrawNeuralReconstructionExperiments(settings);
 		require(settings.neuralReconstructionTuning.shadowTransferPercent == 0, "Shadow transfer slider did not apply on release");
-		ImGui::Clear("Face detail protection");
-		ImGui::sliderEditValue = 75;
-		ImGui::itemDeactivatedAfterEdit = true;
-		DrawNeuralReconstructionExperiments(settings);
-		require(settings.neuralReconstructionTuning.faceDetailProtectionPercent == 75, "Face protection slider did not apply on release");
 		ImGui::Clear("Per-channel output clamping");
 		DrawNeuralReconstructionExperiments(settings);
 		ImGui::Clear("Anchor motion at depth sample");
@@ -701,6 +697,29 @@ int main()
 		DrawNeuralRuntimeSettings(settings, true);
 		require(!settings.neuralRenderingPauseInCombat && settings.neuralRenderingModelResolutionPercent == 100, "Combat control must retain NR resolution");
 		require(settings.neuralRenderingPeripheralCompressionPercent == 100, "Peripheral compression must default to 100 percent");
+		require(settings.neuralRenderingFaceDetailProtectionPercent == 0, "Face detail protection must default off");
+		settings.neuralRenderingMode = static_cast<unsigned>(NeuralRendering::RenderingMode::ReducedResolution);
+		for (bool released : { false, true }) {
+			ImGui::Clear("Face detail protection");
+			ImGui::sliderEditValue = 75;
+			ImGui::itemDeactivatedAfterEdit = released;
+			DrawNeuralModelResolutionSettings(settings);
+			require(settings.neuralRenderingFaceDetailProtectionPercent == (released ? 75u : 0u), "Face protection must apply on release");
+			require(settings.neuralRenderingPeripheralCompressionPercent == 100 && settings.neuralRenderingModelResolutionPercent == 100,
+				"Face protection must retain compression and NR resolution");
+		}
+		for (unsigned unavailable = 0; unavailable < 3; ++unavailable) {
+			settings.neuralRenderingMode = static_cast<unsigned>(unavailable == 0 ? NeuralRendering::RenderingMode::FullResolution : NeuralRendering::RenderingMode::ReducedResolution);
+			settings.neuralRenderingPeripheralCompressionPercent = unavailable == 1 ? 0u : 100u;
+			settings.neuralCharacterRenderingEnabled = unavailable == 2;
+			ImGui::Clear("Face detail protection");
+			ImGui::sliderEditValue = 100;
+			ImGui::itemDeactivatedAfterEdit = true;
+			DrawNeuralModelResolutionSettings(settings);
+			require(settings.neuralRenderingFaceDetailProtectionPercent == 75, "Unavailable face protection must retain its saved value");
+		}
+		settings.neuralCharacterRenderingEnabled = false;
+
 		for (int percent : { 20, 100, 0 }) {
 			ImGui::Clear("Peripheral compression");
 			ImGui::sliderEditValue = static_cast<float>(percent);
@@ -875,7 +894,8 @@ int main()
 					require(upscaling.settings.neuralRenderingGuidedReconstruction == enabled,
 						"Info and logging-off redraws must preserve the guided reconstruction preference");
 					const auto position = [](const char* label) { return std::find(ImGui::items.begin(), ImGui::items.end(), label); };
-					require(position("Peripheral compression") < position("Lower NR resolution under memory pressure") &&
+					require(position("Face detail protection") == position("Peripheral compression") + 1 &&
+								position("Face detail protection") < position("Lower NR resolution under memory pressure") &&
 								position("Lower NR resolution under memory pressure") < position("Pause NR during combat"),
 						"Resolution and compression must precede the ordered bottom toggles");
 					if (debugControls)

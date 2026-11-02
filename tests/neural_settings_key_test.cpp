@@ -51,7 +51,7 @@ int main()
 			confidence.neuralRenderingConfidenceRejectionPercent = 50;
 			require((BuildNeuralRenderingSettingsKey(confidence) != key) == enabled);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			for (unsigned control = 0; control < 5; ++control) {
+			for (unsigned control = 0; control < 4; ++control) {
 				auto comparison = baseline;
 				auto& tuning = comparison.neuralReconstructionTuning;
 				switch (control) {
@@ -67,13 +67,13 @@ int main()
 				case 3:
 					tuning.depthSampleMotion = false;
 					break;
-				case 4:
-					tuning.faceDetailProtectionPercent = 50;
-					break;
 				}
 				require((BuildNeuralRenderingSettingsKey(comparison) != key) == enabled);
 			}
 #endif
+			auto faceProtection = baseline;
+			faceProtection.neuralRenderingFaceDetailProtectionPercent = 75;
+			require((BuildNeuralRenderingSettingsKey(faceProtection) != key) == enabled);
 			auto peripheral = baseline;
 			peripheral.neuralRenderingPeripheralCompressionPercent = 20;
 			require((BuildNeuralRenderingSettingsKey(peripheral) != key) == enabled);

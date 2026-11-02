@@ -314,12 +314,10 @@ namespace NeuralRendering
 	{
 	public:
 		static CharacterRendering& Instance();
-#ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Observe an NPC head once per source frame, without authoring a category texture. */
 		void ObserveFaceDetail(std::uint32_t frame, std::uint32_t actor, const CharacterActorBound& bound);
 		/** Return only source-matched head regions in the pre-DLSS input crop. */
 		[[nodiscard]] FaceDetailRegions GetFaceDetailRegions(std::uint32_t frame, std::uint32_t eye, const UpscalingDLSS::ViewportCrop& crop) const;
-#endif
 
 		CharacterRendering(const CharacterRendering&) = delete;
 		CharacterRendering& operator=(const CharacterRendering&) = delete;

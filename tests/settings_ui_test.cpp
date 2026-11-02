@@ -413,11 +413,13 @@ struct Upscaling
 {
 	struct Settings
 	{
+		uint32_t neuralRenderingMode = static_cast<uint32_t>(NeuralRendering::RenderingMode::ReducedResolution);
 		uint32_t neuralRenderingModelResolutionPercent = 100;
 		bool neuralRenderingGuidedReconstruction = true;
 		uint32_t neuralRenderingConfidenceRejectionPercent = 0;
 		NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
 		unsigned neuralRenderingPeripheralCompressionPercent = 0;
+		unsigned neuralRenderingFaceDetailProtectionPercent = 0;
 		bool neuralRenderingPauseInCombat = false;
 		bool neuralRenderingPressureResolutionEnabled = true;
 		bool neuralCharacterPackedCrops = false;
@@ -2282,9 +2284,12 @@ int main()
 		};
 		for (const auto& test : {
 				 NeuralSliderCase{ "NR Model Resolution", &Upscaling::Settings::neuralRenderingModelResolutionPercent, DrawNeuralModelResolutionSettings, 30, 100 },
+				 NeuralSliderCase{ "Face detail protection", &Upscaling::Settings::neuralRenderingFaceDetailProtectionPercent, DrawNeuralModelResolutionSettings, 0, 100 },
+				 NeuralSliderCase{ "NR confidence rejection", &Upscaling::Settings::neuralRenderingConfidenceRejectionPercent, DrawNeuralModelResolutionSettings, 0, 100 },
 				 NeuralSliderCase{ "NR central area", &Upscaling::Settings::neuralRenderingCentralAreaPercent, DrawNeuralCentralAreaSettings, 25, 100 },
 				 NeuralSliderCase{ "NR central feather", &Upscaling::Settings::neuralRenderingCentralFeatherPixels, DrawNeuralCentralAreaSettings, 0, 256 } }) {
 			Upscaling::Settings neuralSettings;
+			neuralSettings.neuralRenderingPeripheralCompressionPercent = 100;
 			neuralSettings.neuralRenderingCentralAreaPercent = 75;
 			const auto initialValue = neuralSettings.*test.member;
 			auto drawNeuralSlider = [&] {

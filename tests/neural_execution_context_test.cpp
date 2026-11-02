@@ -26,10 +26,11 @@ namespace NeuralRendering
 		std::uint32_t guidedConfidenceRejectionPercent = 0;
 		std::uint32_t peripheralCompressionPercent = 0;
 		PeripheralMask peripheralMask{};
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		ReconstructionTuning reconstructionTuning{};
+		std::uint32_t faceDetailProtectionPercent = 0;
 		FaceDetailRegions faceDetailRegions{};
 		uint32_t sourceWorldFrame = 1;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ReconstructionTuning reconstructionTuning{};
 		uint32_t frameId = 1;
 		uint64_t generation = 1;
 		GuidedReconstructionOverride reconstructionOverride = GuidedReconstructionOverride::Auto;
@@ -40,7 +41,6 @@ namespace NeuralRendering
 		uint32_t featureSlot = 0;
 		CentralArea centralArea{};
 	};
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	struct CharacterRendering
 	{
 		static CharacterRendering& Instance()
@@ -50,6 +50,7 @@ namespace NeuralRendering
 		}
 		FaceDetailRegions GetFaceDetailRegions(uint32_t, uint32_t, const UpscalingDLSS::ViewportCrop&) const { return {}; }
 	};
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	struct Renderer
 	{
 		GuidedReconstructionExperiment experiment;
@@ -73,9 +74,10 @@ struct Upscaling
 		uint32_t neuralRenderingConfidenceRejectionPercent = 0;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
-		bool neuralCharacterRenderingEnabled = false;
 #endif
+		bool neuralCharacterRenderingEnabled = false;
 		unsigned neuralRenderingPeripheralCompressionPercent = 0;
+		unsigned neuralRenderingFaceDetailProtectionPercent = 0;
 		bool neuralRenderingFovOnly = false, neuralRenderingRenderscaleFov = false;
 		bool neuralRenderingPressureResolutionEnabled = false;
 		bool neuralRenderingParallelEyes = false, neuralRenderingBatchedStereo = true;
@@ -122,16 +124,12 @@ int main()
 		throw std::runtime_error("Comparison setup failed");
 #endif
 	for (unsigned repeat = 0; repeat < 4; ++repeat) {
-#ifdef DEVBENCH_BRIDGE_ENABLED
 		args.faceDetailRegions.current = true;
 		args.faceDetailRegions.count = 1;
-#endif
 		upscaling.SetNeuralExecutionContext(args, {}, {}, {});
 		++calls;
-#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (args.faceDetailRegions.current || args.faceDetailRegions.count)
 			throw std::runtime_error("Disabled face protection retained stale bounds in a reused request");
-#endif
 	}
 	if (!args.guidedReconstructionEnabled)
 		throw std::runtime_error("Guided enable was lost at admission");

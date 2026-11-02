@@ -48,7 +48,7 @@ int main()
 			throw std::runtime_error("Neural Rendering request validation invariant");
 		}
 	};
-	for (const auto* field : { "experimentalShadowTransferPercent", "experimentalFaceDetailProtectionPercent", "experimentalFootprintSubdivisions" }) {
+	for (const auto* field : { "experimentalShadowTransferPercent", "faceDetailProtectionPercent", "experimentalFaceDetailProtectionPercent", "experimentalFootprintSubdivisions" }) {
 		for (const auto& value : { json(0), json(1), json(2), json(3), json(4), json(50), json(100), json(101),
 				 json(-1), json(1.5), json(true), json(nullptr), json("2"), json::array(), json::object() }) {
 			NeuralRenderingConfigurationRequest request;
@@ -59,6 +59,14 @@ int main()
 			if (expected)
 				require(request.HasAnyControl());
 		}
+	}
+	{
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "faceDetailProtectionPercent", 75 },
+														  { "experimentalFaceDetailProtectionPercent", 75 } },
+			request, error));
+		require(error.at("errorCode") == "nr_face_detail_protection_invalid");
 	}
 	for (const auto* field : { "experimentalPerChannelClamping", "experimentalDepthSampleMotion" }) {
 		for (const auto& value : { json(false), json(true), json(0), json(1), json("true"), json(nullptr) }) {

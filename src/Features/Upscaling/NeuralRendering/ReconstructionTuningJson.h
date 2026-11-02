@@ -11,7 +11,7 @@ namespace NeuralRendering
 	{
 		return { { "sessionOnly", true }, { "shadowTransferPercent", tuning.shadowTransferPercent },
 			{ "footprintSubdivisions", tuning.footprintSubdivisions }, { "perChannelClamping", tuning.perChannelClamping },
-			{ "depthSampleMotion", tuning.depthSampleMotion }, { "faceDetailProtectionPercent", tuning.faceDetailProtectionPercent } };
+			{ "depthSampleMotion", tuning.depthSampleMotion } };
 	}
 }
 #endif

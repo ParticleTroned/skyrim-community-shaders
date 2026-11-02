@@ -257,7 +257,7 @@ void CheckPeripheralStereoRounding(ID3D11Device* device, ID3D11DeviceContext* co
 	}
 }
 
-void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, bool mixedGuides, bool shaped = false, unsigned compression = 20, bool sceneCategories = false, bool directScene = false
+void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, bool mixedGuides, bool shaped = false, unsigned compression = 20, bool sceneCategories = false, bool directScene = false, unsigned faceDetailPercent = 0
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	,
 	NeuralRendering::ReconstructionTuning tuning = {}
@@ -311,13 +311,14 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 	base.reset = true;
 	base.peripheralCompressionPercent = compression;
 	base.guidedReconstructionEnabled = AdapterCompiler::guided;
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	base.reconstructionTuning = tuning;
-	if (tuning.faceDetailProtectionPercent) {
+	base.faceDetailProtectionPercent = faceDetailPercent;
+	if (faceDetailPercent) {
 		base.faceDetailRegions.current = true;
 		base.faceDetailRegions.count = 1;
 		base.faceDetailRegions.bounds[0] = { 0.3f, 0.25f, 0.6f, 0.65f };
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	base.reconstructionTuning = tuning;
 	const auto subdivisions = tuning.footprintSubdivisions;
 #else
 	const auto subdivisions = 2u;
@@ -379,10 +380,8 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 		std::array args{ base, base };
 		for (UINT eye = 0; eye < args.size(); ++eye) {
 			args[eye].featureSlot = eye;
-#ifdef DEVBENCH_BRIDGE_ENABLED
-			if (tuning.faceDetailProtectionPercent && eye == 1)
+			if (faceDetailPercent && eye == 1)
 				args[eye].faceDetailRegions.bounds[0] = { 0.34f, 0.26f, 0.64f, 0.66f };
-#endif
 			if (shaped && eye == 1)
 				args[eye].peripheralMask.center[0] = 1.0f - args[eye].peripheralMask.center[0];
 			args[eye].colorOutput = outputs[eye].texture.Get();
@@ -469,17 +468,16 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 			request.source = {};
 			Require(!adapter.ProjectPrewarm(request, percent), "Missing source geometry must defer prewarm");
 		}
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		if (tuning.faceDetailProtectionPercent) {
+		if (faceDetailPercent) {
 			const bool faceDetailActive = std::ranges::any_of(args, [](const auto& eye) { return eye.peripheralCompression.mapping.faceDetail.enabled != 0; });
 			for (const auto& eye : args)
-				Require(eye.peripheralShaders.experimentalPreparation.faceDetailProtection == faceDetailActive,
-					"Inactive protection selected an experimental face preparation shader");
+				Require(eye.peripheralShaders.faceDetailProtection == faceDetailActive,
+					"Inactive protection selected a face preparation shader");
 			Require(!mixedGuides || !plan.mapping.faceDetail.enabled, "Face protection escaped the stateless pre-DLSS route");
 			if (!mixedGuides && percent == 100)
 				Require(plan.mapping.faceDetail.enabled != 0, "Face protection did not reach the shaders");
 			auto ordinary = args;
-			for (auto& eye : ordinary) eye.reconstructionTuning.faceDetailProtectionPercent = 0;
+			for (auto& eye : ordinary) eye.faceDetailProtectionPercent = 0;
 			Require(adapter.PlanPeripheralCompression(ordinary, false), "Baseline face budget planning failed");
 			for (unsigned eye = 0; eye < args.size(); ++eye)
 				Require(args[eye].peripheralCompression.model == ordinary[eye].peripheralCompression.model &&
@@ -501,7 +499,6 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 					"Unmatched or invalid source frames activated face protection");
 			}
 		}
-#endif
 		if (directScene) {
 			for (bool authored : { false, true }) {
 				auto invalid = args;

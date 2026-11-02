@@ -16,7 +16,8 @@ namespace NeuralRendering
 	[[nodiscard]] const char* PrewarmConfigurationBlocker(const Settings& settings, bool isVR) noexcept
 	{
 		if (!IsValidModelResolutionPercent(settings.neuralRenderingModelResolutionPercent) ||
-			settings.neuralRenderingPeripheralCompressionPercent > kMaximumPeripheralCompressionPercent)
+			settings.neuralRenderingPeripheralCompressionPercent > kMaximumPeripheralCompressionPercent ||
+			settings.neuralRenderingFaceDetailProtectionPercent > kMaximumFaceDetailProtectionPercent)
 			return "invalid_model_geometry_policy";
 		const auto mode = ConfiguredRenderingMode(settings.neuralRenderingMode);
 		if (!isVR || mode != RenderingMode::ReducedResolution ||

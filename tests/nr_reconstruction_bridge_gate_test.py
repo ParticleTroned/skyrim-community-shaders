@@ -1,4 +1,4 @@
-"""Preprocess the actual integration units to prove experimental controls are absent."""
+"""Keep diagnostics gated while production face protection remains available."""
 
 import argparse
 from pathlib import Path
@@ -39,9 +39,23 @@ symbols = re.compile(
     r"\b(?:ReconstructionTuning\w*|ReconstructionPreparation|reconstructionTuning|neuralReconstructionTuning|"
     r"experimentalPreparation\w*|experimentalReconstructionShaders_|experimentalShadowTransfer|experimentalPerChannelClamping|"
     r"experimentalDepthSampleMotion|experimentalPadding|Experimental\w+|"
-    r"FaceDetail\w*|faceDetail\w*|kFaceDetail\w*|kMaximumFaceDetail\w*|ObserveFaceDetail|GetFaceDetailRegions|ApplyFaceDetailProtection|"
     r"EnsureExperimentalShader|SelectExperimentalReconstruction|DrawNeuralReconstructionExperiments)\b"
 )
+production_symbols = {
+    "Upscaling.h": "neuralRenderingFaceDetailProtectionPercent",
+    "Upscaling.cpp": 'DrawNeuralIntegerSetting("Face detail protection"',
+    "NeuralCapture.cpp": "args.faceDetailProtectionPercent",
+    "CharacterCategoryAuthoring.cpp": "ObserveFaceDetail",
+    "Renderer.h": "faceDetailProtectionPercent",
+    "Renderer.cpp": "mapping.faceDetail = {}",
+    "ModelResolution.cpp": "ApplyFaceDetailProtection",
+    "FaceDetailMapping.h": "struct FaceDetailMapping",
+    "FaceDetailPolicy.h": "ApplyFaceDetailProtection",
+    "PeripheralMapping.h": "FaceDetailMapping faceDetail",
+    "CharacterRendering.h": "ObserveFaceDetail",
+    "CharacterRendering.cpp": "GetFaceDetailRegions",
+    "PeripheralCompression.hlsli": "float FaceDetailForward",
+}
 with tempfile.TemporaryDirectory(prefix="nr-reconstruction-gate-") as directory:
     for index, name in enumerate(units):
         source = (root / name).read_text(encoding="utf-8")
@@ -58,6 +72,10 @@ with tempfile.TemporaryDirectory(prefix="nr-reconstruction-gate-") as directory:
             found = set(symbols.findall(result.stdout))
             if not bridge:
                 assert not found, (name, found)
+                required = production_symbols.get(Path(name).name)
+                if required:
+                    assert required in result.stdout, (name, "missing production face protection", required)
             outputs[bridge] = re.sub(r"^#.*$", "", result.stdout, flags=re.M).strip()
-        assert outputs[False] != outputs[True], (name, "missing bridge positive control")
-print(f"PASS: {len(units)} native/shader units exclude all reconstruction experiments from production")
+        if "DEVBENCH_BRIDGE_ENABLED" in source:
+            assert outputs[False] != outputs[True], (name, "missing bridge positive control")
+print(f"PASS: {len(units)} native/shader units retain production face protection and exclude diagnostic reconstruction experiments")

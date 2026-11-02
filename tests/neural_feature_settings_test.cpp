@@ -87,6 +87,7 @@ struct IndependentSettings
 	unsigned neuralRenderingModelResolutionPercent = 90;
 	bool neuralRenderingGuidedReconstruction = true;
 	unsigned neuralRenderingPeripheralCompressionPercent = 100;
+	unsigned neuralRenderingFaceDetailProtectionPercent = 0;
 	bool neuralRenderingPauseInCombat = true;
 	bool neuralRenderingPressureResolutionEnabled = true;
 	unsigned neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
@@ -94,7 +95,7 @@ struct IndependentSettings
 	NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
 #endif
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(IndependentSettings, qualityMode, neuralRenderingEnabled, neuralRenderingIntensity, neuralRenderingModelResolutionPercent, neuralRenderingGuidedReconstruction, neuralRenderingPeripheralCompressionPercent, neuralRenderingPauseInCombat, neuralRenderingPressureResolutionEnabled, neuralRenderingCentralAreaPercent, neuralRenderingCentralFeatherPixels)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(IndependentSettings, qualityMode, neuralRenderingEnabled, neuralRenderingIntensity, neuralRenderingModelResolutionPercent, neuralRenderingGuidedReconstruction, neuralRenderingPeripheralCompressionPercent, neuralRenderingFaceDetailProtectionPercent, neuralRenderingPauseInCombat, neuralRenderingPressureResolutionEnabled, neuralRenderingCentralAreaPercent, neuralRenderingCentralFeatherPixels)
 
 int main()
 {

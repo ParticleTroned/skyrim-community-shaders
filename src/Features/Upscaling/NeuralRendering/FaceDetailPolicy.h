@@ -1,9 +1,7 @@
 #pragma once
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
-#	include "PeripheralCompressionPolicy.h"
-#	include "ReconstructionTuning.h"
-#	include "Utils/Finite.h"
+#include "PeripheralCompressionPolicy.h"
+#include "Utils/Finite.h"
 
 namespace NeuralRendering
 {
@@ -86,4 +84,3 @@ namespace NeuralRendering
 		plan.maximumFootprint = maximumFootprint;
 	}
 }
-#endif

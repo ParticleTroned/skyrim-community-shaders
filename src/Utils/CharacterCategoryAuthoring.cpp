@@ -232,9 +232,8 @@ void CharacterCategoryAuthoring::Update(RE::BSRenderPass* a_pass)
 					  static_cast<uint32_t>(State::ExtraShaderDescriptors::AdditiveLighting)) == 0);
 	state->permutationData.ExtraShaderDescriptor &= ~categoryFlags;
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	const auto& faceSettings = globals::features::upscaling.settings;
-	if (faceSettings.neuralReconstructionTuning.faceDetailProtectionPercent && faceSettings.neuralRenderingPeripheralCompressionPercent &&
+	if (faceSettings.neuralRenderingFaceDetailProtectionPercent && faceSettings.neuralRenderingPeripheralCompressionPercent &&
 		!faceSettings.neuralCharacterRenderingEnabled && globals::features::upscaling.IsNeuralRenderingEnabled() &&
 		globals::features::upscaling.GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution &&
 		globals::deferred && globals::deferred->deferredPass && state->inWorld && a_pass && a_pass->geometry && a_pass->shaderProperty) {
@@ -244,7 +243,6 @@ void CharacterCategoryAuthoring::Update(RE::BSRenderPass* a_pass)
 			ClassifyCharacterMaterial(a_pass->shaderProperty, a_pass->geometry, faceActor, false, false).category == NeuralRendering::CharacterCategory::Face)
 			NeuralRendering::CharacterRendering::Instance().ObserveFaceDetail(state->frameCount, faceActor->GetFormID(), ReadBound(faceActor->GetFaceNodeSkinned()));
 	}
-#endif
 
 	if (!globals::features::upscaling.IsNeuralRenderingEnabled() ||
 		!globals::deferred || !globals::deferred->deferredPass ||

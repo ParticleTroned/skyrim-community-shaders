@@ -84,6 +84,25 @@ int main()
 		from_json({ { "neuralRenderingPeripheralCompressionPercent", percent } }, settings);
 		Check(settings.neuralRenderingPeripheralCompressionPercent == percent && json(settings).at("neuralRenderingPeripheralCompressionPercent") == percent, "Compression percent did not round-trip");
 	}
+	for (unsigned percent : { 0u, 1u, 75u, 100u }) {
+		Upscaling::Settings settings;
+		from_json({ { "neuralRenderingFaceDetailProtectionPercent", percent } }, settings);
+		Check(settings.neuralRenderingFaceDetailProtectionPercent == percent && json(settings).at("neuralRenderingFaceDetailProtectionPercent") == percent,
+			"Face protection did not round-trip");
+		from_json(json::object(), settings);
+		Check(settings.neuralRenderingFaceDetailProtectionPercent == 0, "Missing face protection must default off");
+	}
+	for (const auto invalid : { json(-1), json(101), json(0.5), json(true), json(nullptr), json("75"), json(std::uint64_t{ 1 } << 32) }) {
+		Upscaling::Settings settings;
+		settings.neuralRenderingFaceDetailProtectionPercent = 75;
+		bool rejected = false;
+		try {
+			from_json({ { "neuralRenderingFaceDetailProtectionPercent", invalid } }, settings);
+		} catch (const std::exception&) {
+			rejected = true;
+		}
+		Check(rejected && settings.neuralRenderingFaceDetailProtectionPercent == 75, "Invalid face protection mutated settings");
+	}
 	for (bool enabled : { false, true }) {
 		Upscaling::Settings settings;
 		from_json({ { "neuralRenderingPeripheralCompression", enabled } }, settings);

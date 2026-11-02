@@ -1,14 +1,14 @@
 #pragma once
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
-#	include <algorithm>
-#	include <array>
-#	include <cmath>
-#	include <cstddef>
-#	include <cstdint>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
 
 namespace NeuralRendering
 {
+	inline constexpr std::uint32_t kMaximumFaceDetailProtectionPercent = 100;
 	inline constexpr std::uint32_t kFaceDetailBins = 16;
 	inline constexpr std::uint32_t kFaceDetailMaximumActors = 64;
 	inline constexpr float kFaceDetailMinimumDensity = 0.5f;
@@ -58,4 +58,3 @@ namespace NeuralRendering
 	static_assert(sizeof(FaceDetailMapping) == 144);
 	static_assert(offsetof(FaceDetailMapping, enabled) == 128);
 }
-#endif

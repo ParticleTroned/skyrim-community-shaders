@@ -148,6 +148,7 @@
       "neuralRenderingGuidedReconstruction": true,
       "neuralRenderingConfidenceRejectionPercent": 0,
       "neuralRenderingPeripheralCompressionPercent": 100,
+      "neuralRenderingFaceDetailProtectionPercent": 0,
       "neuralRenderingPauseInCombat": true,
       "neuralRenderingEnabled": false,
       "neuralRenderingFovOnly": false,

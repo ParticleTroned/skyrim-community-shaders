@@ -189,12 +189,7 @@ namespace NeuralRendering
 		bool EnsureCoverage(ID3D11Device*, HRESULT&);
 		bool EnsureSelectionShader(bool guarded, HRESULT&);
 		bool EnsureGuidedShader(bool selected, bool guarded, bool peripheral, Microsoft::WRL::ComPtr<ID3D11ComputeShader>&, HRESULT&);
-		bool EnsurePeripheralShaders(const RendererApplyArgs&, bool selected, PeripheralCompressionShaders&, HRESULT&
-#ifdef DEVBENCH_BRIDGE_ENABLED
-			,
-			bool faceDetail
-#endif
-		);
+		bool EnsurePeripheralShaders(const RendererApplyArgs&, bool selected, PeripheralCompressionShaders&, HRESULT&, bool faceDetail);
 		bool BuildPeripheralPlans(std::span<RendererApplyArgs>, bool compactInputs, std::span<PeripheralCompressionPlan>) const;
 		void DispatchCoverage(std::span<const RendererApplyArgs>, Batch&);
 		template <UINT ConstantBuffers>
@@ -204,15 +199,20 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		void ServiceCoverageInspection(ID3D11DeviceContext*);
 		PackedCropDiagnostics cropDiagnostics_;
-		struct ExperimentalShader
+#endif
+		struct ShaderVariant
 		{
 			Microsoft::WRL::ComPtr<ID3D11ComputeShader> shader;
 			HRESULT failure = S_OK;
 		};
-		bool EnsureExperimentalShader(ExperimentalShader&, const wchar_t*, std::span<const std::pair<const char*, const char*>>, HRESULT&);
-		bool SelectExperimentalReconstruction(const RendererApplyArgs&, Batch&, bool selected, bool peripheral, HRESULT&);
-		std::array<ExperimentalShader, 12> experimentalPreparationShaders_{};
-		std::array<ExperimentalShader, 128> experimentalReconstructionShaders_{};
+		bool EnsureShaderVariant(ShaderVariant&, const wchar_t*, std::span<const std::pair<const char*, const char*>>, HRESULT&);
+		bool SelectReconstructionVariant(const RendererApplyArgs&, Batch&, bool selected, bool peripheral, HRESULT&);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::array<ShaderVariant, 12> preparationVariants_{};
+		std::array<ShaderVariant, 128> reconstructionVariants_{};
+#else
+		std::array<ShaderVariant, 2> preparationVariants_{};
+		std::array<ShaderVariant, 32> reconstructionVariants_{};
 #endif
 		std::shared_ptr<CoverageWork> coverage_;
 		Microsoft::WRL::ComPtr<ID3D11ComputeShader> coverageShader_, guardedReconstruct_;

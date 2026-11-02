@@ -376,6 +376,7 @@ namespace FSRTemporalTuningPolicy
 	OP(neuralRenderingBatchedStereo)                \
 	OP(neuralRenderingDirectCommit)                 \
 	OP(neuralRenderingPeripheralCompressionPercent) \
+	OP(neuralRenderingFaceDetailProtectionPercent)  \
 	OP(neuralRenderingPauseInCombat)                \
 	OP(neuralRenderingGuidedReconstruction)         \
 	OP(neuralRenderingConfidenceRejectionPercent)   \
@@ -442,6 +443,7 @@ void from_json(const json& a_json, Upscaling::Settings& a_settings)
 	if (const auto value = a_json.find("neuralRenderingStyle"); value != a_json.end() && !NeuralRendering::ParseBoundedInteger(*value, 0u, 3u))
 		throw std::invalid_argument("NR style must be 0 (Standard), 1 (Natural) or 2 (Cinematic); legacy 3 maps to Cinematic");
 	for (const auto& [name, minimum, maximum] : {
+			 std::tuple{ "neuralRenderingFaceDetailProtectionPercent", 0u, NeuralRendering::kMaximumFaceDetailProtectionPercent },
 			 std::tuple{ "neuralRenderingConfidenceRejectionPercent", 0u, NeuralRendering::kMaximumGuidedConfidenceRejectionPercent },
 			 std::tuple{ "neuralRenderingCentralAreaPercent", NeuralRendering::kMinimumCentralAreaPercent, NeuralRendering::kMaximumCentralAreaPercent },
 			 std::tuple{ "neuralRenderingCentralFeatherPixels", 0u, NeuralRendering::kMaximumCentralFeatherPixels } }) {
@@ -6786,12 +6788,12 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		add(a_settings.neuralRenderingConfidenceRejectionPercent);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		add(a_settings.neuralReconstructionTuning.shadowTransferPercent);
-		add(a_settings.neuralReconstructionTuning.faceDetailProtectionPercent);
 		add(a_settings.neuralReconstructionTuning.footprintSubdivisions);
 		add(a_settings.neuralReconstructionTuning.perChannelClamping);
 		add(a_settings.neuralReconstructionTuning.depthSampleMotion);
 #endif
 		add(a_settings.neuralRenderingPeripheralCompressionPercent);
+		add(a_settings.neuralRenderingFaceDetailProtectionPercent);
 		add(a_settings.neuralRenderingPauseInCombat);
 		add(a_settings.neuralRenderingPressureResolutionEnabled);
 		add(a_settings.neuralRenderingCentralAreaPercent);
@@ -19125,6 +19127,15 @@ namespace
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("100% compresses the whole view for maximum performance savings; 0% turns it off. Increasing the percentage extends the compressed band inward, following the FOV mask shape or the rectangular view without FOV.");
 		{
+			const bool available = settings.neuralRenderingMode == static_cast<unsigned>(NeuralRendering::RenderingMode::ReducedResolution) &&
+			                       settings.neuralRenderingPeripheralCompressionPercent != 0 && !settings.neuralCharacterRenderingEnabled;
+			auto guard = Util::DisableGuard(!available);
+			DrawNeuralIntegerSetting("Face detail protection", settings.neuralRenderingFaceDetailProtectionPercent,
+				0, NeuralRendering::kMaximumFaceDetailProtectionPercent, "%d%%");
+			Util::AddTooltip("Shift existing NR samples toward NPC heads to help retain facial detail. 0% is off; 100% requests the strongest redistribution; 75% requests three quarters of that strength, not 75% facial quality or a fixed share of pixels. Background detail may soften. Keeps the same NR model resolution and texture sizes, but adds processing work. Requires Before DLSS, peripheral compression and scene rendering (Actors only off). Protection is limited by safe background sampling and matching head observations in each eye; screen-filling faces may gain little. Applies on release and is saved with NR settings.",
+				ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+		}
+		{
 			auto guard = Util::DisableGuard(!settings.neuralRenderingGuidedReconstruction);
 			DrawNeuralIntegerSetting("NR confidence rejection", settings.neuralRenderingConfidenceRejectionPercent,
 				0, NeuralRendering::kMaximumGuidedConfidenceRejectionPercent, "%d%%");
@@ -19139,8 +19150,6 @@ namespace
 		if (!ImGui::TreeNode("Reconstruction comparisons (DevBench)"))
 			return;
 		auto& tuning = settings.neuralReconstructionTuning;
-		DrawNeuralIntegerSetting("Face detail protection", tuning.faceDetailProtectionPercent, 0, NeuralRendering::kMaximumFaceDetailProtectionPercent, "%d%%");
-		Util::AddTooltip("Session-only experiment for Scene NR Before DLSS with peripheral compression. Reallocate the existing model pixels toward observed NPC head bounds; never raise NR resolution or allocation. Background detail may decrease. Protection is limited by the sampling footprint budget and may be negligible for a screen-filling face. Zero is off. Requires matching source-frame bounds in both eyes. First use warms cached shaders.");
 		ImGui::TextWrapped("Session only. Defaults use production shaders. First use warms each experimental variant; measure after the condition settles.");
 		DrawNeuralIntegerSetting("Shadow transfer protection", tuning.shadowTransferPercent, 0, NeuralRendering::kMaximumShadowTransferPercent, "%d%%");
 		Util::AddTooltip("Compressed NR only. 100% bounds brightness transfer into shadows; 0% applies the unbounded residual. Applies on release. Values below 100% share a cached shader; subsequent strength changes do not compile.");
@@ -45326,6 +45335,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 	const bool validateStagedResources =
 		neuralCenterPhase == NeuralCenterPhase::Resolve;
 	const bool borrowEligible = neuralRenderingRequested &&
+	                            settings.neuralRenderingFaceDetailProtectionPercent == 0 &&
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	                            settings.neuralReconstructionTuning == NeuralRendering::ReconstructionTuning{} &&
 #endif

@@ -243,6 +243,7 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		ReconstructionPreparation experimentalPreparation{};
 #endif
+		bool faceDetailProtection = false;
 	};
 
 	struct RendererApplyArgs
@@ -281,9 +282,10 @@ namespace NeuralRendering
 		PeripheralMask peripheralMask{};
 		PeripheralCompressionPlan peripheralCompression{};
 		PeripheralCompressionShaders peripheralShaders{};
+		std::uint32_t faceDetailProtectionPercent = 0;
+		FaceDetailRegions faceDetailRegions{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		ReconstructionTuning reconstructionTuning{};
-		FaceDetailRegions faceDetailRegions{};
 		GuidedReconstructionOverride reconstructionOverride = GuidedReconstructionOverride::Auto;
 		PeripheralCompressionOverride peripheralOverride = PeripheralCompressionOverride::Auto;
 #endif

@@ -507,6 +507,7 @@ public:
 		NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
 #endif
 		uint neuralRenderingPeripheralCompressionPercent = 100;
+		uint neuralRenderingFaceDetailProtectionPercent = 0;
 		bool neuralRenderingPauseInCombat = true;
 		bool neuralRenderingPressureResolutionEnabled = true;
 		uint neuralRenderingCentralAreaPercent = NeuralRendering::kMaximumCentralAreaPercent;

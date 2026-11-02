@@ -1,9 +1,9 @@
 #include "ModelResolution.h"
 #include "CharacterCategoryFormat.h"
 #include "ComputeStateGuard.h"
+#include "FaceDetailPolicy.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "CharacterMaskReadback.h"
-#	include "FaceDetailPolicy.h"
 #	include <nlohmann/json.hpp>
 #endif
 #include "GpuPass.h"
@@ -173,17 +173,19 @@ namespace NeuralRendering
 		{
 			if (args.empty() || args.size() > kMaximumRegionEvaluations || !args.front().device || !args.front().context)
 				return false;
-#ifdef DEVBENCH_BRIDGE_ENABLED
 			const bool faceDetail = std::ranges::any_of(args, [](const auto& input) { return input.peripheralCompression.mapping.faceDetail.enabled != 0; });
-#endif
 			for (std::size_t index = 0; index < args.size(); ++index) {
 				const auto& input = args[index];
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				if (!input.reconstructionTuning.Valid() || input.reconstructionTuning != args.front().reconstructionTuning)
 					return false;
-				if (input.peripheralCompression.Active() && input.peripheralShaders.experimentalPreparation != input.reconstructionTuning.Preparation(faceDetail))
+				if (input.peripheralCompression.Active() && input.peripheralShaders.experimentalPreparation != input.reconstructionTuning.Preparation())
 					return false;
 #endif
+				if (input.faceDetailProtectionPercent > kMaximumFaceDetailProtectionPercent ||
+					input.faceDetailProtectionPercent != args.front().faceDetailProtectionPercent ||
+					(input.peripheralCompression.Active() && input.peripheralShaders.faceDetailProtection != faceDetail))
+					return false;
 				if (input.peripheralCompression.Active() != args.front().peripheralCompression.Active() ||
 					input.guidedConfidenceRejectionPercent > kMaximumGuidedConfidenceRejectionPercent ||
 					input.guidedConfidenceRejectionPercent != args.front().guidedConfidenceRejectionPercent ||
@@ -794,8 +796,7 @@ namespace NeuralRendering
 		return true;
 	}
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	bool ModelResolution::EnsureExperimentalShader(ExperimentalShader& entry, const wchar_t* path,
+	bool ModelResolution::EnsureShaderVariant(ShaderVariant& entry, const wchar_t* path,
 		std::span<const std::pair<const char*, const char*>> defines, HRESULT& result)
 	{
 		result = entry.failure;
@@ -811,7 +812,7 @@ namespace NeuralRendering
 			const std::vector options(defines.begin(), defines.end());
 			entry.shader.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(path, options, "cs_5_0", "main", result)));
 			if (entry.shader) {
-				Util::SetResourceName(entry.shader.Get(), "NeuralRendering::ExperimentalShader");
+				Util::SetResourceName(entry.shader.Get(), "NeuralRendering::ModelShaderVariant");
 				result = S_OK;
 				return true;
 			}
@@ -831,40 +832,40 @@ namespace NeuralRendering
 		return false;
 	}
 
-	bool ModelResolution::SelectExperimentalReconstruction(const RendererApplyArgs& input, Batch& batch, bool selected, bool peripheral, HRESULT& result)
+	bool ModelResolution::SelectReconstructionVariant(const RendererApplyArgs& input, Batch& batch, bool selected, bool peripheral, HRESULT& result)
 	{
-		const auto& tuning = input.reconstructionTuning;
-		const bool shadow = peripheral && tuning.shadowTransferPercent != kMaximumShadowTransferPercent;
-		const bool faceDetail = peripheral && input.peripheralShaders.experimentalPreparation.faceDetailProtection;
-		if (!shadow && !faceDetail && tuning.perChannelClamping)
+		const bool faceDetail = peripheral && input.peripheralShaders.faceDetailProtection;
+		bool shadow = false, wholePixelRejection = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		shadow = peripheral && input.reconstructionTuning.shadowTransferPercent != kMaximumShadowTransferPercent;
+		wholePixelRejection = !input.reconstructionTuning.perChannelClamping;
+#endif
+		if (!shadow && !faceDetail && !wholePixelRejection)
 			return true;
 		const auto flags = (selected ? 1u : 0u) | (batch.packedCoverage ? 2u : 0u) | (peripheral ? 4u : 0u) |
 		                   (batch.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution ? 8u : 0u) |
-		                   (shadow ? 16u : 0u) | (tuning.perChannelClamping ? 0u : 32u) | (faceDetail ? 64u : 0u);
-		auto& entry = experimentalReconstructionShaders_[flags];
+		                   (faceDetail ? 16u : 0u) | (shadow ? 32u : 0u) | (wholePixelRejection ? 64u : 0u);
+		auto& entry = reconstructionVariants_[flags];
 		if (!entry.shader) {
-			std::array<std::pair<const char*, const char*>, 8> defines{ { { "DEVBENCH_BRIDGE_ENABLED", "1" } } };
+			std::array<std::pair<const char*, const char*>, 8> defines{};
 			constexpr std::array names{ "MODEL_OUTPUT_SELECTION", "PACKED_CROP_COVERAGE_GUARD", "NR_PERIPHERAL_COMPRESSION",
-				"GUIDED_NR_RECONSTRUCTION", "NR_SHADOW_TRANSFER_TUNING", "NR_WHOLE_PIXEL_REJECTION", "NR_FACE_DETAIL_PROTECTION" };
-			std::size_t count = 1;
+				"GUIDED_NR_RECONSTRUCTION", "NR_FACE_DETAIL_PROTECTION", "NR_SHADOW_TRANSFER_TUNING", "NR_WHOLE_PIXEL_REJECTION" };
+			std::size_t count = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			defines[count++] = { "DEVBENCH_BRIDGE_ENABLED", "1" };
+#endif
 			for (std::size_t bit = 0; bit < names.size(); ++bit)
 				if (flags & (1u << bit))
 					defines[count++] = { names[bit], "1" };
-			if (!EnsureExperimentalShader(entry, L"Data/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl",
+			if (!EnsureShaderVariant(entry, L"Data/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl",
 					std::span(defines.data(), count), result))
 				return false;
 		}
 		batch.reconstructionShader = entry.shader;
 		return true;
 	}
-#endif
 
-	bool ModelResolution::EnsurePeripheralShaders(const RendererApplyArgs& input, bool selected, PeripheralCompressionShaders& retained, HRESULT& result
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		,
-		bool faceDetail
-#endif
-	)
+	bool ModelResolution::EnsurePeripheralShaders(const RendererApplyArgs& input, bool selected, PeripheralCompressionShaders& retained, HRESULT& result, bool faceDetail)
 	{
 		auto* device = input.device;
 		if (device_.Get() != device) {
@@ -919,30 +920,37 @@ namespace NeuralRendering
 			Util::SetResourceName(peripheralConstants_.Get(), "NeuralRendering::PeripheralMapping");
 		}
 		retained = { peripheralPrepare_, reconstruction, peripheralConstants_ };
+		retained.faceDetailProtection = faceDetail;
+		std::size_t preparationIndex = faceDetail ? 1u : 0u;
+		bool prepareVariant = faceDetail;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		const auto& tuning = input.reconstructionTuning;
-		const auto preparation = tuning.Preparation(faceDetail);
-		retained.experimentalPreparation = preparation;
-		if (preparation != ReconstructionPreparation{}) {
-			const auto preparationIndex = static_cast<std::size_t>(std::ranges::find(kReconstructionFootprintSubdivisions, tuning.footprintSubdivisions) - kReconstructionFootprintSubdivisions.begin()) * 2u +
-			                              (tuning.depthSampleMotion ? 0u : 1u) + (preparation.faceDetailProtection ? 6u : 0u);
-			auto& entry = experimentalPreparationShaders_[preparationIndex];
+		retained.experimentalPreparation = tuning.Preparation();
+		prepareVariant |= retained.experimentalPreparation != ReconstructionPreparation{};
+		preparationIndex += (static_cast<std::size_t>(std::ranges::find(kReconstructionFootprintSubdivisions, tuning.footprintSubdivisions) - kReconstructionFootprintSubdivisions.begin()) * 2u +
+								(tuning.depthSampleMotion ? 0u : 1u)) *
+		                    2u;
+#endif
+		if (prepareVariant) {
+			auto& entry = preparationVariants_[preparationIndex];
 			if (!entry.shader) {
+				std::array<std::pair<const char*, const char*>, 5> defines{ { { "NR_PERIPHERAL_COMPRESSION", "1" } } };
+				std::size_t count = 1;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				const char subdivisions[]{ static_cast<char>('0' + tuning.footprintSubdivisions), '\0' };
-				std::array<std::pair<const char*, const char*>, 5> defines{ { { "DEVBENCH_BRIDGE_ENABLED", "1" }, { "NR_PERIPHERAL_COMPRESSION", "1" },
-					{ "NR_FOOTPRINT_SUBDIVISIONS", subdivisions } } };
-				std::size_t count = 3;
+				defines[count++] = { "DEVBENCH_BRIDGE_ENABLED", "1" };
+				defines[count++] = { "NR_FOOTPRINT_SUBDIVISIONS", subdivisions };
 				if (!tuning.depthSampleMotion)
 					defines[count++] = { "NR_CELL_CENTRE_MOTION", "1" };
-				if (preparation.faceDetailProtection)
+#endif
+				if (faceDetail)
 					defines[count++] = { "NR_FACE_DETAIL_PROTECTION", "1" };
-				if (!EnsureExperimentalShader(entry, L"Data/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl",
+				if (!EnsureShaderVariant(entry, L"Data/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl",
 						std::span(defines.data(), count), result))
 					return false;
 			}
 			retained.prepare = entry.shader;
 		}
-#endif
 		return true;
 	}
 
@@ -965,7 +973,8 @@ namespace NeuralRendering
 
 	bool ModelResolution::BuildPeripheralPlans(std::span<RendererApplyArgs> args, bool compactInputs, std::span<PeripheralCompressionPlan> plans) const
 	{
-		if (args.empty() || args.size() > kEyeCount || plans.size() < args.size())
+		if (args.empty() || args.size() > kEyeCount || plans.size() < args.size() ||
+			std::ranges::any_of(args, [](const auto& input) { return input.faceDetailProtectionPercent > kMaximumFaceDetailProtectionPercent; }))
 			return false;
 		for (std::size_t index = 0; index < args.size(); ++index) {
 			auto& input = args[index];
@@ -993,27 +1002,27 @@ namespace NeuralRendering
 #endif
 		}
 		ReconcilePeripheralCompression(std::span(plans.data(), args.size()));
-#ifdef DEVBENCH_BRIDGE_ENABLED
 		float minimumDensity = kFaceDetailMinimumDensity;
-		bool faceDetailEligible = args.front().reconstructionTuning.faceDetailProtectionPercent != 0;
+		bool faceDetailEligible = args.front().faceDetailProtectionPercent != 0;
 		for (std::size_t index = 0; index < args.size(); ++index) {
 			const auto& input = args[index];
 			auto& plan = plans[index];
-			plan.faceDetailRequestedPercent = input.reconstructionTuning.faceDetailProtectionPercent;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			plan.faceDetailRequestedPercent = input.faceDetailProtectionPercent;
 			plan.faceDetailRegionsCurrent = input.faceDetailRegions.current;
 			plan.faceDetailObservedRegions = input.faceDetailRegions.count;
+#endif
 			faceDetailEligible &= plan.Active() && input.renderingMode == RenderingMode::ReducedResolution && input.reset &&
 			                      input.faceDetailRegions.current && input.sourceWorldFrame != std::numeric_limits<std::uint32_t>::max() &&
 			                      input.sourceWorldFrame == args.front().sourceWorldFrame &&
-			                      input.reconstructionTuning.faceDetailProtectionPercent == args.front().reconstructionTuning.faceDetailProtectionPercent;
+			                      input.faceDetailProtectionPercent == args.front().faceDetailProtectionPercent;
 			for (const auto footprint : plan.maximumFootprint)
 				minimumDensity = std::max(minimumDensity, footprint / kPeripheralMaximumFootprint * 1.001f);
 		}
 		if (faceDetailEligible)
 			for (std::size_t index = 0; index < args.size(); ++index)
 				ApplyFaceDetailProtection(plans[index], args[index].faceDetailRegions,
-					args[index].reconstructionTuning.faceDetailProtectionPercent, minimumDensity);
-#endif
+					args[index].faceDetailProtectionPercent, minimumDensity);
 		const bool selected = std::ranges::any_of(args, [](const auto& input) { return input.modelOutputSelection.has_value(); });
 		if (device_.Get() == args.front().device && peripheralShaderFailed_[selected ? 1u : 0u])
 			for (std::size_t index = 0; index < args.size(); ++index)
@@ -1101,12 +1110,8 @@ namespace NeuralRendering
 				return false;
 			const bool selected = std::ranges::any_of(args, [](const auto& input) { return input.modelOutputSelection.has_value(); });
 			PeripheralCompressionShaders shaders;
-			if (!EnsurePeripheralShaders(args.front(), selected, shaders, result
-#ifdef DEVBENCH_BRIDGE_ENABLED
-					,
-					std::ranges::any_of(std::span(plans.data(), args.size()), [](const auto& plan) { return plan.mapping.faceDetail.enabled != 0; })
-#endif
-						))
+			if (!EnsurePeripheralShaders(args.front(), selected, shaders, result,
+					std::ranges::any_of(std::span(plans.data(), args.size()), [](const auto& plan) { return plan.mapping.faceDetail.enabled != 0; })))
 				return false;
 			for (std::size_t index = 0; index < args.size(); ++index) {
 				if (!shaders.prepare)
@@ -1622,7 +1627,7 @@ namespace NeuralRendering
 				work->constants.packedCount = geometry->packedCrops.count;
 				work->sharedPreparation = input.renderingMode == RenderingMode::ReducedResolution &&
 				                                  !input.characterVisualIsolation && !input.actorSelection && !input.providerBlending &&
-				                                  !input.packedCropsEnabled && !geometry->packedCrops.count &&
+				                                  !input.packedCropsEnabled && !geometry->packedCrops.count && input.faceDetailProtectionPercent == 0 &&
 				                                  input.colorWidth == input.guideWidth && input.colorHeight == input.guideHeight &&
 				                                  geometry->modelSize == geometry->modelGuideSize &&
 				                                  source == ComputeSubrect{ 0, 0, sourceSize.width, sourceSize.height } &&
@@ -1733,9 +1738,9 @@ namespace NeuralRendering
 			else
 				batch.reconstructionDecision = { GuidedReconstructionMode::Basic, GuidedReconstructionReason::ShaderUnavailable };
 		}
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		if (!SelectExperimentalReconstruction(args.front(), batch, selected, peripheral, result))
+		if (!SelectReconstructionVariant(args.front(), batch, selected, peripheral, result))
 			return false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		for (std::size_t index = 0; index < args.size(); ++index) {
 			const auto& input = guidedInputs[index];
 			batch.arguments[index].executionContext.modelReconstruction = ModelReconstructionEvidence{
@@ -1864,6 +1869,8 @@ namespace NeuralRendering
 			return false;
 		for (std::size_t index = 0; index < args.size(); ++index) {
 			const auto& prepared = batch.arguments[index];
+			if (args[index].faceDetailProtectionPercent != prepared.faceDetailProtectionPercent)
+				return false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (args[index].reconstructionTuning != prepared.reconstructionTuning)
 				return false;
@@ -1941,10 +1948,8 @@ namespace NeuralRendering
 		peripheralPrepare_.Reset();
 		peripheralReconstruct_ = {};
 		peripheralShaderFailed_ = {};
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		experimentalPreparationShaders_ = {};
-		experimentalReconstructionShaders_ = {};
-#endif
+		preparationVariants_ = {};
+		reconstructionVariants_ = {};
 		compileFailed_ = false;
 		packingFailure_ = S_OK;
 	}

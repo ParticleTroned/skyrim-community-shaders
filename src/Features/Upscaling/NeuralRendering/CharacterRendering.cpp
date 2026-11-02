@@ -2403,7 +2403,6 @@ namespace NeuralRendering
 		CharacterCropAdmission cropAdmission_;
 		std::array<CharacterCropResidence, 2> cropPairResidence_{};
 		mutable std::mutex mutex_;
-#ifdef DEVBENCH_BRIDGE_ENABLED
 		struct FaceDetailFrame
 		{
 			std::uint32_t frame = std::numeric_limits<std::uint32_t>::max();
@@ -2411,7 +2410,6 @@ namespace NeuralRendering
 			std::array<FaceDetailRegions, 2> eyes{};
 		};
 		std::array<FaceDetailFrame, 2> faceDetailFrames_{};
-#endif
 		CharacterCategoryFramePolicy categoryFramePolicy_{};
 		mutable std::mutex rejectionFrameMutex_;
 		std::atomic<std::uint32_t> rejectionFrame_{
@@ -2525,7 +2523,6 @@ namespace NeuralRendering
 		}
 	}
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	void CharacterRendering::ObserveFaceDetail(std::uint32_t frame, std::uint32_t actor, const CharacterActorBound& bound)
 	{
 		if (!state_ || frame == std::numeric_limits<std::uint32_t>::max() || !actor || !Util::IsFinite(bound.centerX) || !Util::IsFinite(bound.centerY) ||
@@ -2582,7 +2579,6 @@ namespace NeuralRendering
 		}
 		return regions;
 	}
-#endif
 
 	bool CharacterRendering::ShouldAuthorActor(
 		std::uint32_t a_frame,
@@ -4104,9 +4100,7 @@ namespace NeuralRendering
 			state_->observationFrame_ = std::numeric_limits<std::uint32_t>::max();
 			state_->InvalidateProjectionCache();
 			state_->actorAdmissions_.clear();
-#ifdef DEVBENCH_BRIDGE_ENABLED
 			state_->faceDetailFrames_ = {};
-#endif
 			for (auto& slot : state_->slots_)
 				State::RetireCoverageEvidence(slot);
 			state_->slots_ = {};

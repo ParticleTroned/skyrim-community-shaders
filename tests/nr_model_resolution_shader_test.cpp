@@ -2863,19 +2863,20 @@ int main()
 					for (bool shaped : { false, true })
 						CheckPeripheralAdapter(device.Get(), context.Get(), mixedGuides, shaped, 25, true);
 				CheckPeripheralAdapter(device.Get(), context.Get(), false, true, 25, true, true);
+				for (unsigned facePercent : { 75u, 100u }) {
+					CheckPeripheralAdapter(device.Get(), context.Get(), false, false, 100, false, false, facePercent);
+					CheckPeripheralAdapter(device.Get(), context.Get(), false, true, 100, true, true, facePercent);
+					CheckPeripheralAdapter(device.Get(), context.Get(), true, true, 100, false, false, facePercent);
+				}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				for (const auto subdivisions : { 1u, 2u, 4u }) {
 					NeuralRendering::ReconstructionTuning tuning;
 					tuning.footprintSubdivisions = subdivisions;
 					tuning.shadowTransferPercent = subdivisions == 2u ? 50u : 0u;
 					tuning.depthSampleMotion = false;
-					CheckPeripheralAdapter(device.Get(), context.Get(), true, true, 20, false, false, tuning);
+					CheckPeripheralAdapter(device.Get(), context.Get(), true, true, 20, false, false, 0, tuning);
 				}
-				NeuralRendering::ReconstructionTuning faceTuning;
-				faceTuning.faceDetailProtectionPercent = 100;
-				CheckPeripheralAdapter(device.Get(), context.Get(), false, false, 100, false, false, faceTuning);
-				CheckPeripheralAdapter(device.Get(), context.Get(), false, true, 100, true, true, faceTuning);
-				CheckPeripheralAdapter(device.Get(), context.Get(), true, true, 100, false, false, faceTuning);
+
 #endif
 				for (bool mixedGuides : { false, true })
 					for (bool shaped : { false, true })

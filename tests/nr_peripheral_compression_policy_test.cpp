@@ -1,7 +1,7 @@
+#include "Features/Upscaling/NeuralRendering/FaceDetailPolicy.h"
 #include "Features/Upscaling/NeuralRendering/PeripheralCompressionPolicy.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
-#	include "Features/Upscaling/NeuralRendering/FaceDetailPolicy.h"
 #endif
 
 #include <iostream>
@@ -181,7 +181,6 @@ int main()
 		history.peripheralMappingVersion = PeripheralMapping::kVersion;
 		Require(history != ModelResolutionHistory{}, "Mapping absent from temporal identity");
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
 		FaceDetailRegions faces;
 		faces.current = true;
 		faces.count = 1;
@@ -247,6 +246,7 @@ int main()
 					"Unavailable, full-screen, over-budget or disabled protection changed the baseline");
 			}
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		PeripheralCompressionExperiment lease;
 		using Mode = PeripheralCompressionOverride;
 		Require(!lease.Configure(Mode::CompressedExperiment, 601, 1), "Unbounded lease accepted");

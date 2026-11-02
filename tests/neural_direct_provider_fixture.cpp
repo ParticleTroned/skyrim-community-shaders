@@ -7,10 +7,13 @@ struct ID3D12GraphicsCommandList;
 #include <array>
 #include <cwchar>
 
+#pragma comment(linker, "/export:FixtureForwarded=KERNEL32.GetCurrentProcessId")
+
 namespace
 {
 	unsigned calls = 0;
 	unsigned failure = 0;
+	unsigned metadataCalls = 0;
 	std::array<unsigned, 4> parameterTokens{};
 	std::array<bool, 4> parameterUsed{};
 	bool CorrectCaller(void* address)
@@ -25,7 +28,9 @@ namespace
 
 extern "C"
 {
+	__declspec(dllexport) unsigned FixtureDataExport = 0x13;
 	__declspec(dllexport) unsigned FixtureCalls() { return calls; }
+	__declspec(dllexport) unsigned FixtureMetadataCalls() { return metadataCalls; }
 	__declspec(dllexport) unsigned FixtureParameterCount()
 	{
 		unsigned count = 0;
@@ -37,9 +42,18 @@ extern "C"
 	{
 		failure = value;
 		calls = 0;
+		metadataCalls = 0;
 	}
-	__declspec(dllexport) unsigned NVSDK_CONV NVSDK_NGX_GetApplicationId() { return 42; }
-	__declspec(dllexport) unsigned NVSDK_CONV NVSDK_NGX_GetAPIVersion() { return 0x13; }
+	__declspec(dllexport) unsigned NVSDK_CONV NVSDK_NGX_GetApplicationId()
+	{
+		++metadataCalls;
+		return 42;
+	}
+	__declspec(dllexport) unsigned NVSDK_CONV NVSDK_NGX_GetAPIVersion()
+	{
+		++metadataCalls;
+		return 0x13;
+	}
 #ifndef FIXTURE_WITHOUT_PARAMETERS
 	__declspec(dllexport) NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_D3D12_AllocateParameters(NVSDK_NGX_Parameter** parameters)
 	{

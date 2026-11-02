@@ -17,7 +17,7 @@ namespace NeuralRendering
 		DirectProvider& operator=(const DirectProvider&) = delete;
 		~DirectProvider();
 
-		/** Opens only the admitted file, checks loaded identity, and calls its exported initializer. */
+		/** Checks the admitted image and owned executable exports before calling its initializer. */
 		NVSDK_NGX_Result Initialize(const std::filesystem::path&, HANDLE verifiedFile,
 			ID3D12Device*, const std::filesystem::path& dataPath, std::string& detail);
 		/** Allocates through the admitted provider or a verified, already loaded driver core. */

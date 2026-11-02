@@ -5,6 +5,9 @@
 #include <iostream>
 #include <stdexcept>
 
+void TestDirectProviderContract(const std::filesystem::path&, HANDLE, HMODULE, ID3D12Device*);
+void TestParameterCoreDiscovery(const std::filesystem::path&, HANDLE, const std::filesystem::path&, ID3D12Device*);
+
 namespace
 {
 	void Require(bool value, const char* message)
@@ -35,6 +38,7 @@ int main(int argc, char** argv)
 					!Util::IsPathWithinDirectory(path.parent_path() / L"missing-directory", path),
 			"Parameter core path boundary accepted an unrelated or unavailable root");
 		auto* device = reinterpret_cast<ID3D12Device*>(1);
+		TestDirectProviderContract(path, file, fixture, device);
 		std::string detail;
 		const auto noParametersPath = std::filesystem::absolute(argv[2]);
 		noParametersFile = CreateFileW(noParametersPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -48,8 +52,6 @@ int main(int argc, char** argv)
 		Require(proxy != nullptr, "Could not load allocator-negative proxy fixture");
 		NeuralRendering::DirectProvider untrustedCore;
 		const auto untrustedResult = untrustedCore.Initialize(noParametersPath, noParametersFile, device, path.parent_path(), detail);
-		CloseHandle(noParametersFile);
-		noParametersFile = INVALID_HANDLE_VALUE;
 		const auto noParametersModule = GetModuleHandleW(noParametersPath.filename().c_str());
 		const auto noParametersCalls = reinterpret_cast<unsigned (*)()>(GetProcAddress(noParametersModule, "FixtureCalls"));
 		Require(NVSDK_NGX_FAILED(untrustedResult) && detail.find("DriverStore") != std::string::npos && !untrustedCore.Active() &&
@@ -57,6 +59,10 @@ int main(int argc, char** argv)
 			"An untrusted parameter-core proxy reached native provider initialization");
 		FreeLibrary(proxy);
 		proxy = nullptr;
+		Require(!GetModuleHandleW(proxyPath.filename().c_str()), "Rejected allocator retained a module reference");
+		TestParameterCoreDiscovery(noParametersPath, noParametersFile, proxyPath, device);
+		CloseHandle(noParametersFile);
+		noParametersFile = INVALID_HANDLE_VALUE;
 		std::filesystem::remove(proxyPath);
 		std::filesystem::remove(proxyDirectory);
 		NeuralRendering::DirectProvider missing;
@@ -147,6 +153,8 @@ int main(int argc, char** argv)
 		Require(scratch(static_cast<NVSDK_NGX_Feature>(18), nullptr, &bytes) == NVSDK_NGX_Result_FAIL_PlatformError,
 			"Provider-local import was not restored");
 		FreeLibrary(fixture);
+		fixture = nullptr;
+		Require(!GetModuleHandleW(path.filename().c_str()), "Provider or allocator retained a module reference after retirement");
 		CloseHandle(file);
 		std::cout << "Direct provider identity, caller compatibility, dispatch and retirement passed\n";
 		return 0;

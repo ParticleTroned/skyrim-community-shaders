@@ -564,7 +564,8 @@ target_link_libraries(neural_direct_provider_no_parameters_fixture PRIVATE NgxSd
 add_executable(neural_direct_provider_test EXCLUDE_FROM_ALL tests/neural_direct_provider_test.cpp)
 target_compile_features(neural_direct_provider_test PRIVATE cxx_std_23)
 target_include_directories(neural_direct_provider_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-target_sources(neural_direct_provider_test PRIVATE src/Features/Upscaling/NeuralRendering/DirectProvider.cpp src/Utils/PathValidation.cpp)
+target_sources(neural_direct_provider_test PRIVATE tests/neural_direct_provider_contract_test.cpp
+    src/Features/Upscaling/NeuralRendering/DirectProvider.cpp src/Utils/PathValidation.cpp)
 target_compile_definitions(neural_direct_provider_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(neural_direct_provider_test PRIVATE NgxSdk wintrust version)
 add_dependencies(neural_direct_provider_test neural_direct_provider_fixture neural_direct_provider_no_parameters_fixture)

@@ -5,9 +5,11 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <format>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <softpub.h>
@@ -22,6 +24,76 @@ namespace NeuralRendering
 	namespace
 	{
 		constexpr std::array kParameterCoreBasenames{ L"_nvngx.dll", L"nvngx.dll" };
+
+		template <class T>
+		const T* ReadImageArray(HMODULE module, std::size_t imageSize, std::size_t offset, std::size_t count = 1)
+		{
+			if (!module || !count || offset > imageSize || count > (imageSize - offset) / sizeof(T))
+				return nullptr;
+			const auto base = reinterpret_cast<std::uintptr_t>(module);
+			const auto bytes = count * sizeof(T);
+			if (offset > std::numeric_limits<std::uintptr_t>::max() - base)
+				return nullptr;
+			const auto begin = base + offset;
+			if (begin % alignof(T) || bytes > std::numeric_limits<std::uintptr_t>::max() - begin)
+				return nullptr;
+			const auto end = begin + bytes;
+			for (auto cursor = begin; cursor < end;) {
+				MEMORY_BASIC_INFORMATION memory{};
+				constexpr DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+				                           PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+				if (VirtualQuery(reinterpret_cast<const void*>(cursor), &memory, sizeof(memory)) != sizeof(memory) ||
+					memory.State != MEM_COMMIT || memory.Type != MEM_IMAGE || memory.AllocationBase != module ||
+					!(memory.Protect & readable) || (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)))
+					return nullptr;
+				const auto region = reinterpret_cast<std::uintptr_t>(memory.BaseAddress);
+				if (region > cursor || memory.RegionSize <= cursor - region || memory.RegionSize > std::numeric_limits<std::uintptr_t>::max() - region)
+					return nullptr;
+				cursor = std::min(end, region + memory.RegionSize);
+			}
+			return reinterpret_cast<const T*>(begin);
+		}
+
+		const IMAGE_NT_HEADERS64* ReadImageHeaders(HMODULE module)
+		{
+			constexpr auto unbounded = std::numeric_limits<std::size_t>::max();
+			const auto* dos = ReadImageArray<IMAGE_DOS_HEADER>(module, unbounded, 0);
+			if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0)
+				return nullptr;
+			const auto* nt = ReadImageArray<IMAGE_NT_HEADERS64>(module, unbounded, static_cast<std::size_t>(dos->e_lfanew));
+			if (!nt || nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
+				!(nt->FileHeader.Characteristics & IMAGE_FILE_DLL) || nt->FileHeader.SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER64) ||
+				nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC || nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_IMPORT ||
+				nt->OptionalHeader.SizeOfImage < static_cast<std::size_t>(dos->e_lfanew) + sizeof(*nt))
+				return nullptr;
+			return nt;
+		}
+
+		bool IsExecutableAddress(const void* address, HMODULE owner = nullptr)
+		{
+			MEMORY_BASIC_INFORMATION memory{};
+			constexpr DWORD executable = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+			return address && VirtualQuery(address, &memory, sizeof(memory)) == sizeof(memory) &&
+			       memory.State == MEM_COMMIT && (memory.Protect & executable) && !(memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
+			       (!owner || (memory.Type == MEM_IMAGE && memory.AllocationBase == owner));
+		}
+
+		template <class Function>
+		bool BindExecutableExport(HMODULE module, const char* name, Function& function, std::string& detail)
+		{
+			function = nullptr;
+			const auto address = GetProcAddress(module, name);
+			if (!address) {
+				detail = std::format("NR module is missing required export {}", name);
+				return false;
+			}
+			if (!IsExecutableAddress(reinterpret_cast<const void*>(address), module)) {
+				detail = std::format("NR export {} must resolve to executable code in its owning module", name);
+				return false;
+			}
+			function = reinterpret_cast<Function>(address);
+			return true;
+		}
 
 		struct FileIdentity
 		{
@@ -292,25 +364,21 @@ namespace NeuralRendering
 
 		void** FindGetModuleFileNameWImportSlot(HMODULE a_runtime)
 		{
-			if (!a_runtime)
-				return nullptr;
-			auto* base = reinterpret_cast<std::byte*>(a_runtime);
-			const auto* dosHeader = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-			if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE || dosHeader->e_lfanew <= 0)
-				return nullptr;
-			const auto* ntHeaders = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dosHeader->e_lfanew);
-			if (ntHeaders->Signature != IMAGE_NT_SIGNATURE)
+			const auto* ntHeaders = ReadImageHeaders(a_runtime);
+			if (!ntHeaders)
 				return nullptr;
 
 			const std::size_t imageSize = ntHeaders->OptionalHeader.SizeOfImage;
 			const auto& imports = ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-			if (!imports.VirtualAddress || imports.VirtualAddress >= imageSize ||
-				imports.Size < sizeof(IMAGE_IMPORT_DESCRIPTOR)) {
+			if (!imports.VirtualAddress || imports.Size < sizeof(IMAGE_IMPORT_DESCRIPTOR) ||
+				!ReadImageArray<std::byte>(a_runtime, imageSize, imports.VirtualAddress, imports.Size)) {
 				return nullptr;
 			}
 
 			const std::size_t descriptorCount = imports.Size / sizeof(IMAGE_IMPORT_DESCRIPTOR);
-			auto* descriptor = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + imports.VirtualAddress);
+			const auto* descriptor = ReadImageArray<IMAGE_IMPORT_DESCRIPTOR>(a_runtime, imageSize, imports.VirtualAddress, descriptorCount);
+			if (!descriptor)
+				return nullptr;
 			for (std::size_t descriptorIndex = 0; descriptorIndex < descriptorCount && descriptor[descriptorIndex].Name; ++descriptorIndex) {
 				const auto& current = descriptor[descriptorIndex];
 				if (!current.OriginalFirstThunk || current.OriginalFirstThunk >= imageSize ||
@@ -318,24 +386,24 @@ namespace NeuralRendering
 					continue;
 				}
 
-				auto* names = reinterpret_cast<IMAGE_THUNK_DATA*>(base + current.OriginalFirstThunk);
-				auto* functions = reinterpret_cast<IMAGE_THUNK_DATA*>(base + current.FirstThunk);
-				for (std::size_t thunkIndex = 0;; ++thunkIndex) {
-					const auto nameOffset = current.OriginalFirstThunk + thunkIndex * sizeof(IMAGE_THUNK_DATA);
-					const auto functionOffset = current.FirstThunk + thunkIndex * sizeof(IMAGE_THUNK_DATA);
-					if (nameOffset + sizeof(IMAGE_THUNK_DATA) > imageSize ||
-						functionOffset + sizeof(IMAGE_THUNK_DATA) > imageSize ||
-						!names[thunkIndex].u1.AddressOfData) {
+				const auto thunkCount = std::min(imageSize - current.OriginalFirstThunk, imageSize - current.FirstThunk) / sizeof(IMAGE_THUNK_DATA64);
+				for (std::size_t thunkIndex = 0; thunkIndex < thunkCount; ++thunkIndex) {
+					const auto* name = ReadImageArray<IMAGE_THUNK_DATA64>(a_runtime, imageSize, current.OriginalFirstThunk + thunkIndex * sizeof(IMAGE_THUNK_DATA64));
+					const auto* function = ReadImageArray<IMAGE_THUNK_DATA64>(a_runtime, imageSize, current.FirstThunk + thunkIndex * sizeof(IMAGE_THUNK_DATA64));
+					if (!name || !function)
+						return nullptr;
+					if (!name->u1.AddressOfData) {
 						break;
 					}
-					if (IMAGE_SNAP_BY_ORDINAL(names[thunkIndex].u1.Ordinal))
+					if (IMAGE_SNAP_BY_ORDINAL64(name->u1.Ordinal))
 						continue;
-					const auto importOffset = static_cast<std::size_t>(names[thunkIndex].u1.AddressOfData);
-					if (importOffset + sizeof(IMAGE_IMPORT_BY_NAME) > imageSize)
-						continue;
-					const auto* import = reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(base + importOffset);
-					if (std::strcmp(reinterpret_cast<const char*>(import->Name), "GetModuleFileNameW") == 0)
-						return reinterpret_cast<void**>(&functions[thunkIndex].u1.Function);
+					const auto importOffset = static_cast<std::size_t>(name->u1.AddressOfData);
+					if (importOffset > imageSize || sizeof(WORD) > imageSize - importOffset)
+						return nullptr;
+					constexpr char target[] = "GetModuleFileNameW";
+					const auto* importName = ReadImageArray<char>(a_runtime, imageSize, importOffset + sizeof(WORD), sizeof(target));
+					if (importName && std::memcmp(importName, target, sizeof(target)) == 0)
+						return reinterpret_cast<void**>(const_cast<ULONGLONG*>(&function->u1.Function));
 				}
 			}
 			return nullptr;
@@ -363,7 +431,7 @@ namespace NeuralRendering
 				return false;
 			const auto original = reinterpret_cast<GetModuleFileNameWFunction>(
 				ReadImportSlot(slot));
-			if (!original || original == &RuntimeCallerGetModuleFileNameW)
+			if (!IsExecutableAddress(reinterpret_cast<const void*>(original)) || original == &RuntimeCallerGetModuleFileNameW)
 				return false;
 
 			auto invocation = std::make_shared<PathProxyInvocation>();
@@ -468,20 +536,28 @@ namespace NeuralRendering
 		}
 		if (!VerifyLoadedModuleIdentity(module_, verifiedFile, detail))
 			return NVSDK_NGX_Result_FAIL_InvalidParameter;
+		if (!ReadImageHeaders(module_)) {
+			detail = "direct NR provider requires valid AMD64 PE32+ DLL headers";
+			return NVSDK_NGX_Result_FAIL_NotImplemented;
+		}
 
 		using GetUnsigned = unsigned(NVSDK_CONV*)();
 		using Init = NVSDK_NGX_Result(NVSDK_CONV*)(unsigned long long, const wchar_t*, ID3D12Device*, NVSDK_NGX_Version, const NVSDK_NGX_Parameter*);
-		const auto api = reinterpret_cast<GetUnsigned>(GetProcAddress(module_, "NVSDK_NGX_GetAPIVersion"));
-		const auto application = reinterpret_cast<GetUnsigned>(GetProcAddress(module_, "NVSDK_NGX_GetApplicationId"));
-		const auto init = reinterpret_cast<Init>(GetProcAddress(module_, "NVSDK_NGX_D3D12_Init_Ext"));
-		populate_ = reinterpret_cast<Populate>(GetProcAddress(module_, "NVSDK_NGX_D3D12_PopulateParameters_Impl"));
-		const auto providerScratch = reinterpret_cast<ScratchSize>(GetProcAddress(module_, "NVSDK_NGX_D3D12_GetScratchBufferSize"));
-		const auto providerCreate = reinterpret_cast<Create>(GetProcAddress(module_, "NVSDK_NGX_D3D12_CreateFeature"));
-		const auto providerEvaluate = reinterpret_cast<Evaluate>(GetProcAddress(module_, "NVSDK_NGX_D3D12_EvaluateFeature"));
-		const auto providerRelease = reinterpret_cast<Release>(GetProcAddress(module_, "NVSDK_NGX_D3D12_ReleaseFeature"));
-		shutdown_ = reinterpret_cast<Shutdown>(GetProcAddress(module_, "NVSDK_NGX_D3D12_Shutdown1"));
-		if (!api || !application || !init || !populate_ || !providerScratch || !providerCreate || !providerEvaluate || !providerRelease || !shutdown_) {
-			detail = "direct NR provider is missing required D3D12 exports";
+		GetUnsigned api = nullptr, application = nullptr;
+		Init init = nullptr;
+		ScratchSize providerScratch = nullptr;
+		Create providerCreate = nullptr;
+		Evaluate providerEvaluate = nullptr;
+		Release providerRelease = nullptr;
+		if (!BindExecutableExport(module_, "NVSDK_NGX_GetAPIVersion", api, detail) ||
+			!BindExecutableExport(module_, "NVSDK_NGX_GetApplicationId", application, detail) ||
+			!BindExecutableExport(module_, "NVSDK_NGX_D3D12_Init_Ext", init, detail) ||
+			!BindExecutableExport(module_, "NVSDK_NGX_D3D12_PopulateParameters_Impl", populate_, detail) ||
+			!BindExecutableExport(module_, "NVSDK_NGX_D3D12_GetScratchBufferSize", providerScratch, detail) ||
+			!BindExecutableExport(module_, "NVSDK_NGX_D3D12_CreateFeature", providerCreate, detail) ||
+			!BindExecutableExport(module_, "NVSDK_NGX_D3D12_EvaluateFeature", providerEvaluate, detail) ||
+			!BindExecutableExport(module_, "NVSDK_NGX_D3D12_ReleaseFeature", providerRelease, detail) ||
+			!BindExecutableExport(module_, "NVSDK_NGX_D3D12_Shutdown1", shutdown_, detail)) {
 			return NVSDK_NGX_Result_FAIL_NotImplemented;
 		}
 		if (!BindParameterCore(detail))
@@ -523,23 +599,20 @@ namespace NeuralRendering
 		File selectedFile;
 		Allocate selectedAllocate = nullptr;
 		Destroy selectedDestroy = nullptr;
-		std::array<HMODULE, kParameterCoreBasenames.size() + 1> candidates{ module_ };
-		for (std::size_t i = 0; i < kParameterCoreBasenames.size(); ++i)
-			candidates[i + 1] = GetModuleHandleW(kParameterCoreBasenames[i]);
-		for (const auto candidate : candidates) {
-			if (!candidate || candidate == selected.get())
+		for (std::size_t i = 0; i <= kParameterCoreBasenames.size(); ++i) {
+			HMODULE candidate = nullptr;
+			const DWORD flags = i == 0 ? GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS : 0;
+			const auto identifier = i == 0 ? reinterpret_cast<LPCWSTR>(module_) : kParameterCoreBasenames[i - 1];
+			// Discovery must retain the candidate before inspecting any of its exports.
+			if (!GetModuleHandleExW(flags, identifier, &candidate))
 				continue;
-			const auto allocate = reinterpret_cast<Allocate>(GetProcAddress(candidate, "NVSDK_NGX_D3D12_AllocateParameters"));
-			const auto destroy = reinterpret_cast<Destroy>(GetProcAddress(candidate, "NVSDK_NGX_D3D12_DestroyParameters"));
-			if (!allocate || !destroy)
+			Module retained(candidate);
+			if (candidate == selected.get())
 				continue;
-			HMODULE owner = nullptr;
-			if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-					reinterpret_cast<LPCWSTR>(allocate), &owner))
-				continue;
-			Module retained(owner);
-			HMODULE destroyOwner = nullptr;
-			if (owner != candidate || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(destroy), &destroyOwner) || destroyOwner != owner)
+			Allocate allocate = nullptr;
+			Destroy destroy = nullptr;
+			if (!BindExecutableExport(candidate, "NVSDK_NGX_D3D12_AllocateParameters", allocate, detail) ||
+				!BindExecutableExport(candidate, "NVSDK_NGX_D3D12_DestroyParameters", destroy, detail))
 				continue;
 			File file;
 			if (candidate != module_) {

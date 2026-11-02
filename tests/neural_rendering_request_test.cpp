@@ -201,7 +201,11 @@ int main()
 	require(limitsSchema.at("localToneStrength").at("const") == 2);
 	for (const auto* field : { "intensity", "localStructureStrength", "skinStructureStrength" }) {
 		require(limitsSchema.at(field).at("enum") == json::array({ 1, 2 }));
-		require(descriptor.at("inputSchema").at("properties").at(field).at("description").get<std::string>().find("310.9") != std::string::npos);
+		const auto description = descriptor.at("inputSchema").at("properties").at(field).at("description").get<std::string>();
+		if (std::string_view(field) == "intensity")
+			require(description.find("310.9") != std::string::npos);
+		else
+			require(description.find("preset B") != std::string::npos && description.find("preset A") != std::string::npos);
 	}
 	const auto& performanceSchema = descriptor.at("outputSchema").at("properties").at("neuralRendering").at("properties").at("performance").at("properties");
 	require(performanceSchema.contains("lastFeatureParallel") && performanceSchema.contains("lastEvaluationGpuMicroseconds") &&

@@ -210,6 +210,7 @@ namespace
 
 	void RunJsonCopyControl()
 	{
+		currentCase = "json-copy";
 		json source = { { "mixed", json::array({ nullptr, true, 7, "scalar", json::binary({ 1, 2, 3 }) }) } };
 		const Util::JsonCleanupGuard sourceCleanup(source);
 		json destination;
@@ -230,8 +231,12 @@ namespace
 			} catch (const std::bad_alloc&) {
 				caught = true;
 			}
-			Require(caught && failAllAllocations && allocationsUntilFailure == 0 && destination == "sentinel",
+			const auto rejectedBeforeCheck = rejectedAllocationCount;
+			Require(caught && failAllAllocations && allocationsUntilFailure == 0 && destination.is_string() &&
+						destination.get_ref<const json::string_t&>() == "sentinel",
 				"guarded partial JSON copy changed its destination or disarmed failure");
+			Require(rejectedAllocationCount == rejectedBeforeCheck,
+				"fault-armed JSON copy verification attempted an allocation");
 			ClearFaults();
 		}
 		std::fprintf(stderr, "JSON-COPY persistent-nth=%zu PASS strong-destination=1\n", allocations);

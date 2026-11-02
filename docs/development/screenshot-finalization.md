@@ -67,6 +67,9 @@ the fault, then check journal identity and exactly-once callback recovery.
 A separate mixed-value copy sweep checks partial-copy unwind and an unchanged
 destination. These controls do not claim aligned, array or nothrow allocation
 replacement coverage.
+Fault-armed checks inspect stored scalar references directly and verify that
+the check itself attempts no allocation. JSON-to-scalar equality can construct
+a temporary JSON value inside a nonthrowing operator and is unsuitable here.
 The fixture binds only coordinator lifecycle setup, inert producer metadata and
 logging; it starts no I/O worker and writes no manifest or screenshot.
 The terminal-custody cases additionally drain controlled worker-result inputs,

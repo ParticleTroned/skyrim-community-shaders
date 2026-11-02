@@ -1151,7 +1151,10 @@ namespace
 					"Direct mono preparation failed");
 				Require(Texture(targets[1].depth, model).Read<float>(device, context) == untouched,
 					"Mono preparation touched the unused eye");
-				Require(shared.Prepare(args, candidate, result, targets), "Direct shared-target preparation failed");
+				ModelResolution::Preparation sharedPlan;
+				Require(shared.PlanPreparation(args, sharing, sharedPlan) && shared.AdditionalBytes(sharedPlan) == retained &&
+							shared.Prepare(sharedPlan, candidate, result, targets),
+					"Planned shared-target preparation failed");
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				auto native = targets[0];
 				if (guidesOnly)
@@ -2553,6 +2556,90 @@ namespace
 				}
 	}
 
+	void CheckPreparationPlan(ID3D11Device* device, const std::array<NeuralRendering::RendererApplyArgs, 2>& args)
+	{
+		using namespace NeuralRendering;
+		std::array<ModelResolution::Sources, 2> sources;
+		for (std::size_t index = 0; index < args.size(); ++index) {
+			const auto& input = args[index];
+			auto& source = sources[index];
+			Require(GetTextureInfo(input.colorInput, source.color) && GetTextureInfo(input.depthGuide, source.depth) &&
+						GetTextureInfo(input.motionVectors, source.motion) && GetTextureInfo(input.colorOutput, source.output),
+				"Source metadata capture failed");
+			source.depthView = input.depthGuideSRV;
+			input.depthGuideSRV->GetDesc(&source.depthViewDescription);
+		}
+		ModelResolution adapter, other;
+		ModelResolution::Preparation plan;
+		const auto calls = AdapterCompiler::calls;
+		Require(adapter.PlanPreparation(args, ModelResolution::Sharing::Private, plan, sources) &&
+					adapter.AdditionalBytes(plan).value_or(0) > 0 && adapter.RetainedBytes(0) == 0 && AdapterCompiler::calls == calls,
+			"Pre-admission planning compiled shaders or allocated proxies");
+		Require(plan.Projected()[0].sourceWorldFrame == args[0].sourceWorldFrame && plan.Projected()[0].generation == args[0].generation,
+			"Planning lost source producer identity");
+		ModelResolution::Batch batch, rejected;
+		HRESULT result = S_OK;
+		Require(!other.Prepare(plan, rejected, result), "Another adapter consumed the plan");
+		Require(adapter.Prepare(plan, batch, result), "Owned metadata plan preparation failed");
+		Require(!adapter.Prepare(plan, rejected, result) && !adapter.AdditionalBytes(plan), "Consumed preparation plan was reused");
+		for (unsigned mutation = 0; mutation < 8; ++mutation) {
+			auto changed = args;
+			switch (mutation) {
+			case 0:
+				++changed[0].frameId;
+				break;
+			case 1:
+				++changed[0].sourceWorldFrame;
+				break;
+			case 2:
+				++changed[0].generation;
+				break;
+			case 3:
+				++changed[0].depthGeneration;
+				break;
+			case 4:
+				changed[0].colorInput = args[1].colorInput;
+				break;
+			case 5:
+				changed[0].colorOutput = args[1].colorOutput;
+				break;
+			case 6:
+				changed[0].depthGuideSRV = nullptr;
+				break;
+			case 7:
+				changed[0].depthConvention = args[0].depthConvention == Depth::Convention::Standard ? Depth::Convention::Reversed : Depth::Convention::Standard;
+				break;
+			}
+			Require(!adapter.Reconstruct(changed, batch, result), "Changed producer/source reached reconstruction");
+		}
+		Require(adapter.PlanPreparation(args, ModelResolution::Sharing::Private, plan, sources) && adapter.AdditionalBytes(plan) == 0,
+			"Warm allocation was not reused by the plan");
+		adapter.Reset();
+		Require(!adapter.Prepare(plan, rejected, result) && result == HRESULT_FROM_WIN32(ERROR_RETRY) && adapter.RetainedBytes(0) == 0,
+			"Changed allocation demand bypassed fresh admission");
+		Require(adapter.PlanPreparation(args, ModelResolution::Sharing::Private, plan, sources) && adapter.AdditionalBytes(plan).value_or(0) > 0 &&
+					adapter.Prepare(plan, batch, result),
+			"Replanned allocation failed");
+		for (unsigned mutation = 0; mutation < 4; ++mutation) {
+			auto changed = sources;
+			if (mutation == 0)
+				changed[0].color = changed[1].color;
+			if (mutation == 1)
+				changed[0].depthView = nullptr;
+			if (mutation == 2)
+				changed[0].depthViewDescription.Texture2D.MipLevels = 2;
+			if (mutation == 3)
+				changed[0].motion.desc.Width += 1;
+			Require(!adapter.PlanPreparation(args, ModelResolution::Sharing::Private, plan, changed) && !adapter.AdditionalBytes(plan),
+				"Mismatched source metadata remained reusable");
+		}
+		ComPtr<ID3D11DeviceContext> deferred;
+		Check(device->CreateDeferredContext(0, &deferred));
+		auto changed = args;
+		changed[0].context = changed[1].context = deferred.Get();
+		Require(!adapter.PlanPreparation(changed, ModelResolution::Sharing::Private, plan, sources), "Deferred context accepted an immediate plan");
+	}
+
 	void CheckSharedPreparationCache(std::array<NeuralRendering::RendererApplyArgs, 2> args)
 	{
 		using namespace NeuralRendering;
@@ -2617,6 +2704,7 @@ namespace
 		args[1].featureSlot = 1;
 		args[1].colorInput = inputRight.texture.Get();
 		args[1].colorOutput = outputRight.texture.Get();
+		CheckPreparationPlan(device, args);
 		ModelResolution adapter;
 		ModelResolution::Batch batch;
 		HRESULT result = S_OK;

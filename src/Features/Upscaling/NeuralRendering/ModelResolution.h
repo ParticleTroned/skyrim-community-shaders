@@ -2,6 +2,7 @@
 
 #include "ModelResolutionPolicy.h"
 #include "Renderer.h"
+#include "TextureInfo.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "PackedCropDiagnostics.h"
 #endif
@@ -34,8 +35,58 @@ namespace NeuralRendering
 			Color::Texture color, depth, motion, output;
 		};
 
+		/** Descriptions captured by renderer validation; ownership and depth-view facts stay paired. */
+		struct Sources
+		{
+			TextureInfo color, depth, motion, output;
+			Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> depthView;
+			D3D11_SHADER_RESOURCE_VIEW_DESC depthViewDescription{};
+		};
+
+	private:
+		struct AllocationKey
+		{
+			UpscalingDLSS::Extent sourceSize{}, modelSize{}, modelGuideSize{};
+			DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN, outputFormat = DXGI_FORMAT_UNKNOWN, motionFormat = DXGI_FORMAT_UNKNOWN;
+			bool hasMask = false;
+			ModelResolution::Sharing sharing = ModelResolution::Sharing::Private;
+			bool selectedOutput = false;
+
+			bool operator==(const AllocationKey&) const = default;
+
+			std::optional<std::uint64_t> Bytes() const noexcept;
+		};
+
+	public:
+		/** Single-use snapshot for one synchronous render-owner operation, never a frame cache. */
+		class Preparation
+		{
+		public:
+			Preparation() = default;
+			Preparation(const Preparation&) = delete;
+			Preparation& operator=(const Preparation&) = delete;
+			Preparation(Preparation&&) = delete;
+			Preparation& operator=(Preparation&&) = delete;
+			[[nodiscard]] std::span<const RendererApplyArgs> Projected() const { return { projected_.data(), count_ }; }
+
+		private:
+			friend class ModelResolution;
+			const ModelResolution* owner_ = nullptr;
+			bool ready_ = false;
+			std::size_t count_ = 0;
+			Sharing sharing_ = Sharing::Private;
+			std::uint64_t additional_ = 0;
+			std::array<RendererApplyArgs, kMaximumRegionEvaluations> inputs_{}, projected_{};
+			std::array<Sources, kMaximumRegionEvaluations> sources_{};
+			std::array<ModelResolutionGeometry, kMaximumRegionEvaluations> geometry_{};
+			std::array<AllocationKey, kMaximumRegionEvaluations> allocations_{};
+			Microsoft::WRL::ComPtr<ID3D11Device> device_;
+			Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
+		};
+
 		struct Batch
 		{
+			std::array<Sources, kMaximumRegionEvaluations> sources{};
 			std::array<RendererApplyArgs, kMaximumRegionEvaluations> arguments{};
 			std::array<std::shared_ptr<Work>, kMaximumRegionEvaluations> resources{};
 			std::array<std::uint64_t, kMaximumRegionEvaluations> contentSerials{};
@@ -85,9 +136,21 @@ namespace NeuralRendering
 			,
 			PackedCropAdmissionDiagnostics* diagnostics = nullptr
 #endif
-			) noexcept;
+			,
+			ModelResolutionGeometry* geometry = nullptr) noexcept;
 		/** Shared preparation retains private actor selection and native protection semantics. */
 		static bool CanUseSharedTargets(std::span<const RendererApplyArgs>, bool compactInputs) noexcept;
+		/** Freeze owned sources, effective geometry and demand before admission; no GPU writes. */
+		bool PlanPreparation(std::span<const RendererApplyArgs>, Sharing, Preparation&, std::span<const Sources> = {}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			,
+			std::span<PackedCropAdmissionDiagnostics* const> = {}
+#endif
+		) const;
+		/** Return demand from this operation's validated plan without repeating source queries. */
+		std::optional<std::uint64_t> AdditionalBytes(const Preparation&) const;
+		/** Consume a plan once; changed packing/demand returns ERROR_RETRY for fresh admission. */
+		bool Prepare(Preparation&, Batch&, HRESULT&, std::span<const Targets> = {});
 		/** Count additional private textures before memory admission; shared aliases are excluded. */
 		std::optional<std::uint64_t> AdditionalBytes(std::span<const RendererApplyArgs>, Sharing sharing = Sharing::Private) const;
 		[[nodiscard]] std::optional<std::uint64_t> RetainedBytes(std::uint32_t) const noexcept;

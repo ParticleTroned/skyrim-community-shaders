@@ -16,6 +16,7 @@
 #include "NativeMemoryPolicy.h"
 #include "PipelinePolicy.h"
 #include "ShaderInvalidation.h"
+#include "TextureInfo.h"
 #include "Utils/ComIdentity.h"
 #include "Utils/D3D.h"
 #include "Utils/GpuMemoryBudget.h"
@@ -413,21 +414,6 @@ namespace NeuralRendering
 			       (support.Support2 & a_requiredSupport2) == a_requiredSupport2;
 		}
 
-		struct TextureInfo
-		{
-			ComPtr<ID3D11Texture2D> texture;
-			D3D11_TEXTURE2D_DESC desc{};
-		};
-
-		bool GetTextureInfo(ID3D11Resource* a_resource, TextureInfo& a_info) noexcept
-		{
-			a_info = {};
-			if (!a_resource || FAILED(a_resource->QueryInterface(IID_PPV_ARGS(&a_info.texture))))
-				return false;
-			a_info.texture->GetDesc(&a_info.desc);
-			return true;
-		}
-
 		bool HasExactTextureContract(
 			const D3D11_TEXTURE2D_DESC& a_desc,
 			std::uint32_t a_width,
@@ -691,6 +677,7 @@ namespace NeuralRendering
 			TextureInfo output;
 			std::uintptr_t controlMaskIdentity = 0;
 			DXGI_FORMAT depthViewFormat = DXGI_FORMAT_UNKNOWN;
+			D3D11_SHADER_RESOURCE_VIEW_DESC depthViewDescription{};
 			RoiDescriptor roi{};
 			NativeEvaluationLayout nativeLayout{};
 			ResourceKey resourceKey{};
@@ -720,7 +707,7 @@ namespace NeuralRendering
 		bool ApplySequentialStereoLocked(
 			const std::array<RendererApplyArgs, 2>& a_args,
 			RendererApplyOutcome& a_outcome, bool a_memoryAdmitted = false);
-		bool ApplyModelResolutionLocked(std::span<const RendererApplyArgs>, RendererApplyOutcome&, bool sequential = false);
+		bool ApplyModelResolutionLocked(std::span<const RendererApplyArgs>, RendererApplyOutcome&, bool sequential = false, bool allowReplan = true);
 		bool ApplyBatchLocked(
 			std::span<const RendererApplyArgs> a_args,
 			RendererApplyOutcome& a_outcome, bool a_memoryAdmitted = false);
@@ -763,6 +750,7 @@ namespace NeuralRendering
 		bool NeedsNativeStartupLocked(std::span<const RendererApplyArgs>, std::span<const ValidatedResources>) const;
 		ModelResolution::Sharing ModelResolutionSharingLocked(std::span<const RendererApplyArgs>) const;
 		bool ProjectModelResourcesLocked(const RendererApplyArgs&, RendererApplyArgs&, ValidatedResources&, bool diagnostics = false);
+		void FinalizeModelResourcesLocked(const RendererApplyArgs&, ValidatedResources&);
 		void PlanCheaperResolutionLocked(std::span<const RendererApplyArgs>);
 		std::uint64_t nextResolutionProjectionMs_ = 0;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -1379,7 +1367,7 @@ namespace NeuralRendering
 		a_args.depthGuideSRV->GetResource(&depthViewResource);
 		if (!SameIdentity(a_args.depthGuide, depthViewResource.Get()))
 			return fail("the depth SRV does not reference the supplied depth guide");
-		D3D11_SHADER_RESOURCE_VIEW_DESC depthViewDesc{};
+		auto& depthViewDesc = a_resources.depthViewDescription;
 		a_args.depthGuideSRV->GetDesc(&depthViewDesc);
 		if (depthViewDesc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
 			depthViewDesc.Texture2D.MostDetailedMip != 0 ||
@@ -2524,6 +2512,12 @@ namespace NeuralRendering
 #endif
 				))
 			return false;
+		FinalizeModelResourcesLocked(proxy, resource);
+		return true;
+	}
+
+	void Renderer::State::FinalizeModelResourcesLocked(const RendererApplyArgs& proxy, ValidatedResources& resource)
+	{
 		resource.roi = proxy.roi.value_or(BuildRoiDescriptor(std::nullopt, proxy.computeSubrect,
 			{ proxy.outputWidth, proxy.outputHeight }, false));
 		resource.nativeLayout = BuildNativeEvaluationLayout(
@@ -2534,7 +2528,6 @@ namespace NeuralRendering
 		ApplyCompactLayoutLocked(proxy, resource);
 #endif
 		FinalizeResourceKeysLocked(proxy, resource);
-		return true;
 	}
 
 	ModelResolution::Sharing Renderer::State::ModelResolutionSharingLocked(std::span<const RendererApplyArgs> args) const
@@ -3483,7 +3476,7 @@ namespace NeuralRendering
 	}
 #endif
 
-	bool Renderer::State::ApplyModelResolutionLocked(std::span<const RendererApplyArgs> args, RendererApplyOutcome& outcome, bool sequential)
+	bool Renderer::State::ApplyModelResolutionLocked(std::span<const RendererApplyArgs> args, RendererApplyOutcome& outcome, bool sequential, bool allowReplan)
 	{
 		outcome = {};
 		if (args.empty() || args.size() > kEyeCount)
@@ -3512,7 +3505,7 @@ namespace NeuralRendering
 		bool sharedInputsPrepared = false;
 		ModelResolution::Batch batch;
 		SetRequestTelemetryLocked(first);
-		const SKSE::stl::scope_exit restoreTelemetry([&] {
+		SKSE::stl::scope_exit restoreTelemetry([&] {
 			if constexpr (kDevelopmentDiagnostics) {
 				const auto matched = std::ranges::find_if(args, [&](const auto& value) { return value.featureSlot == snapshot_.featureSlot; });
 				const auto& observed = matched != args.end() ? *matched : first;
@@ -3538,7 +3531,11 @@ namespace NeuralRendering
 				return FailLocked(RendererStage::Validation, E_INVALIDARG, std::move(violation), first.featureSlot, false);
 		}
 		std::array<ValidatedResources, kEyeCount> resources{};
-		std::array<RendererApplyArgs, kEyeCount> projected{};
+		std::array<ModelResolution::Sources, kEyeCount> sources{};
+		ModelResolution::Preparation preparation;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::array<PackedCropAdmissionDiagnostics*, kEyeCount> planningDiagnostics{};
+#endif
 		for (std::size_t index = 0; index < args.size(); ++index) {
 			const auto& input = args[index];
 			auto& resource = resources[index];
@@ -3550,16 +3547,28 @@ namespace NeuralRendering
 				);
 				failure)
 				return FailLocked(RendererStage::Validation, failure.result, std::move(failure.detail), input.featureSlot, false);
-			auto& proxy = projected[index];
-			if (!ProjectModelResourcesLocked(input, proxy, resource, true))
-				return FailLocked(RendererStage::Validation, E_INVALIDARG,
-					"model resolution requires supported colour/output grids and valid guide geometry", input.featureSlot, false);
+			sources[index] = { resource.color, resource.depth, resource.motionVectors, resource.output,
+				ComPtr<ID3D11ShaderResourceView>(input.depthGuideSRV), resource.depthViewDescription };
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			planningDiagnostics[index] = BeginPackedCropAdmissionLocked(input);
+#endif
 		}
-		const auto additional = modelResolution_.AdditionalBytes(args, sharing);
+		if (!modelResolution_.PlanPreparation(args, sharing, preparation, std::span(sources.data(), args.size())
+#ifdef DEVBENCH_BRIDGE_ENABLED
+																			  ,
+				std::span(planningDiagnostics.data(), args.size())
+#endif
+					))
+			return FailLocked(RendererStage::Validation, E_INVALIDARG,
+				"model resolution requires supported colour/output grids and valid guide geometry", first.featureSlot, false);
+		const auto projected = preparation.Projected();
+		for (std::size_t index = 0; index < args.size(); ++index)
+			FinalizeModelResourcesLocked(projected[index], resources[index]);
+		const auto additional = modelResolution_.AdditionalBytes(preparation);
 		if (!additional)
 			return FailLocked(RendererStage::Validation, E_INVALIDARG,
 				"NR model-resolution allocation size could not be established", first.featureSlot, false);
-		if (!AdmitMemoryLocked(std::span(projected.data(), args.size()), std::span(resources.data(), args.size()), *additional)) {
+		if (!AdmitMemoryLocked(projected, std::span(resources.data(), args.size()), *additional)) {
 			outcome.memoryPressureBypass = !failureLatched_ && !quarantined_ && memoryRecovery_.phase != MemoryRecoveryPhase::Ready;
 			return false;
 		}
@@ -3601,9 +3610,15 @@ namespace NeuralRendering
 		}
 		HRESULT result = S_OK;
 		activeStage_ = RendererStage::ResourceCreation;
-		if (!modelResolution_.Prepare(args, batch, result, sharedTargets ? std::span(targets.data(), args.size()) : std::span<const ModelResolution::Targets>{}))
+		if (!modelResolution_.Prepare(preparation, batch, result, sharedTargets ? std::span(targets.data(), args.size()) : std::span<const ModelResolution::Targets>{})) {
+			if (allowReplan && result == HRESULT_FROM_WIN32(ERROR_RETRY)) {
+				// The fresh attempt owns diagnostics for the layout and resources it used.
+				restoreTelemetry.release();
+				return ApplyModelResolutionLocked(args, outcome, sequential, false);
+			}
 			return FailLocked(RendererStage::ResourceCreation, result,
 				"NR model-resolution input preparation failed; original render input retained", first.featureSlot, true);
+		}
 		sharedInputsPrepared = sharedTargets;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (batch.reconstructionDecision.reason == GuidedReconstructionReason::ShaderUnavailable)

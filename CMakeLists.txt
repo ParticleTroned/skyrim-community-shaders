@@ -106,7 +106,7 @@ option(
 )
 option(
     AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES
-    "Exclude feature packages hidden from user-facing feature lists from AIO and package outputs."
+    "Exclude non-core feature packages hidden from user-facing feature lists from AIO and package outputs."
     OFF
 )
 set(AIO_EXCLUDED_FEATURE_PACKAGES
@@ -598,6 +598,9 @@ if(AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES)
             set(_hidden_feature_dir
                 "${FEATURE_DIR_FOR_SHORT_NAME_${_feature_short_name}}"
             )
+            if(EXISTS "${_hidden_feature_dir}/CORE")
+                continue()
+            endif()
             get_filename_component(
                 _feature_dir_name
                 "${_hidden_feature_dir}"

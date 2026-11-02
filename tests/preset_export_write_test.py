@@ -65,8 +65,10 @@ int main(int argc, char** argv) {
     std::string error = "old failure";
     assert(WriteJsonFileAtomic(file, {{"revision", 1}}, error) && error.empty());
     assert(json::parse(Bytes(file))["revision"] == 1);
-    const auto temporary = std::filesystem::path(file.string() + ".tmp");
-    const auto backup = std::filesystem::path(file.string() + ".bak");
+    auto temporary = file;
+    temporary += ".tmp";
+    auto backup = file;
+    backup += ".bak";
     std::ofstream(temporary) << "unrelated temporary data";
     std::ofstream(backup) << "unrelated backup data";
     assert(WriteJsonFileAtomic(file, {{"revision", 2}}, error));

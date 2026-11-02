@@ -28,14 +28,14 @@ namespace Util
 }
 std::uint64_t clockMs = 10;
 unsigned forcedSamples = 0;
-MemoryBudgetSample sample{ 16 * 1024 * NativeMemoryPolicy::kMiB, 1000, true, 0, false, clockMs };
+MemoryBudgetSample memorySample{ 16 * 1024 * NativeMemoryPolicy::kMiB, 1000, true, 0, false, clockMs };
 std::uint64_t GetTickCount64() { return clockMs; }
 MemoryBudgetSample MemorySample(int*, bool force = false)
 {
 	forcedSamples += force;
-	if (force && sample.valid)
-		sample.sampledAtMs = ++clockMs;
-	return sample;
+	if (force && memorySample.valid)
+		memorySample.sampledAtMs = ++clockMs;
+	return memorySample;
 }
 struct Startup
 {
@@ -76,7 +76,7 @@ int main()
 	state.PollNativeStartup(clockMs);
 	Require(state.nativeStartup.active && state.nativeReservation.Bytes() == 100, "pending prewarm released native allowance");
 	state.interop.fences.completed = 1;
-	sample.usageBytes = 1300;
+	memorySample.usageBytes = 1300;
 	state.SampleNativeStartup();
 	Require(state.nativeStartup.valid && state.nativeStartup.peak == 1300, "startup sample used a timestamp preceding its forced query");
 	const auto prewarmSamples = forcedSamples;
@@ -94,7 +94,7 @@ int main()
 	state.PollNativeStartup(clockMs);
 	Require(state.nativeStartup.active, "another fence identity completed this native startup");
 	state.interop.fences.fence = 1;
-	sample.usageBytes = 1500;
+	memorySample.usageBytes = 1500;
 	const auto completedSamples = forcedSamples;
 	state.PollNativeStartup(clockMs);
 	Require(forcedSamples == completedSamples + 1, "first-evaluation completion did not force its final memory observation");
@@ -103,7 +103,7 @@ int main()
 	Require(state.ReserveNative(key, 100, clockMs, true), "second reservation failed");
 	state.interop.fences.issued = state.interop.fences.completed = 3;
 	state.RecordNativeSubmission();
-	sample.valid = false;
+	memorySample.valid = false;
 	clockMs += NativeMemoryPolicy::kMaximumObservationMs + 1;
 	state.PollNativeStartup(clockMs);
 	Require(state.retiring && state.nativeReservation.Bytes() == 100 && state.nativeObservations == 1,

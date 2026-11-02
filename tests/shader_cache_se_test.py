@@ -115,9 +115,21 @@ class SECacheContractTests(unittest.TestCase):
         original_keys = {task[:3] for task in original_tasks}
         distribution = BUILDER.derive_distribution_profile(REPO)
         with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            stage = root / "stage"
+            cache = root / "ShaderCache"
+            cache.mkdir()
+            BUILDER.stage_merged_shaders(REPO, stage, distribution.excluded_packages)
+            BUILDER.write_info_ini(
+                cache, stage, REPO, BUILDER.default_plugin_version(REPO), "SE",
+                BUILDER.SHIPPED_CACHE_PROFILE, "a" * 64,
+            )
+            feature_states = BUILDER.read_feature_states(cache)
+            self.assertTrue(feature_states.get("ReverseZ"))
+            self.assertFalse(feature_states["WetnessEffects"])
             path = BUILDER.filter_profile_defines(
                 config_path, Path(temporary) / "se.yaml", yaml, BUILDER.SHIPPED_CACHE_PROFILE,
-                feature_states={"ReverseZ": True},
+                feature_states=feature_states,
                 additional_excluded_defines=distribution.excluded_defines | {distribution.horizon_fix_define},
                 add_cross_modlist_variants=True, source_root=REPO,
             )

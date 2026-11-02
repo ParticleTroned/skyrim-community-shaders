@@ -178,13 +178,13 @@ struct Streamline {
     bool EnsureFrameToken() { ++tokenRequests; return tokenAvailable; }
     sl::FrameToken* GetFrameTokenForFrame(uint32_t) { return tokenAvailable?&token:nullptr; }
     sl::ViewportHandle viewport=0;
-    sl::Result freeResult=sl::Result::eOk,offResult=sl::Result::eOk;
+    sl::Result freeResourcesResult=sl::Result::eOk,offResult=sl::Result::eOk;
     unsigned offCalls=0;
     bool optionsValid=true;
     std::function<sl::Result(sl::ViewportHandle,const sl::DLSSOptions&)> slDLSSSetOptions=
         [this](auto,const auto& options) { assert(options.mode==sl::DLSSMode::eOff); ++offCalls; return offResult; };
     std::function<sl::Result(uint32_t,sl::ViewportHandle)> slFreeResources=
-        [this](auto feature,auto) { assert(feature==sl::kFeatureDLSS); ++destroyCalls; return freeResult; };
+        [this](auto feature,auto) { assert(feature==sl::kFeatureDLSS); ++destroyCalls; return freeResourcesResult; };
     void InvalidateDLSSOptionsCache() { optionsValid=false; }
     bool DestroyDLSSResources();
     void ResetFrameTracking();
@@ -280,7 +280,7 @@ int main() {
     // even if a later camera switches back to that old convention.
     assert(dlss.FinishEvaluate(sl::Result::eOk,true));
     Publish(false);
-    dlss.freeResult=sl::Result::eFailed;
+    dlss.freeResourcesResult=sl::Result::eFailed;
     const auto freeFailures=dlss.destroyCalls;
     assert(!evaluate() && dlss.destroyCalls==freeFailures+1);
     assert(dlss.dlssResourceReleasePending && dlss.dlssNativeDepthInverted==true && !dlss.optionsValid);
@@ -291,7 +291,7 @@ int main() {
     dlss.featureDLSS=false; // A feature recheck is not evidence of context retirement.
     dlss.ResetFrameTracking();
     assert(!dlss.DestroyDLSSResources() && dlss.dlssResourceReleasePending && dlss.dlssNativeDepthInverted==true);
-    dlss.freeResult=sl::Result::eOk;
+    dlss.freeResourcesResult=sl::Result::eOk;
     assert(dlss.DestroyDLSSResources() && !dlss.dlssResourceReleasePending && !dlss.dlssNativeDepthInverted);
     dlss.featureDLSS=true;
     assert(evaluate() && !dlss.dlssResourceReleasePending && !dlss.dlssNativeDepthInverted);

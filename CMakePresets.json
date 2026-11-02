@@ -74,7 +74,7 @@
         },
         {
             "name": "AIO-Release",
-            "description": "Release configure preset for an AIO output without hidden packaged features.",
+            "description": "Release configure preset for an AIO output without hidden non-core feature packages.",
             "inherits": "ALL",
             "cacheVariables": {
                 "AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES": "ON",

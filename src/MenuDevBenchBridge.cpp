@@ -88,7 +88,7 @@ namespace
 			{ "adjustment", settings.motionSharpnessAdjustment },
 			{ "thresholdPixels", settings.motionSharpnessThreshold },
 			{ "strengthCap", settings.motionSharpnessCap },
-			{ "applicable", upscaling.GetRuntimeUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS &&
+			{ "applicable", upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS &&
 								sharpener != Upscaling::DLSSSharpenerMode::Off && settings.sharpnessDLSS > 0.0f },
 			{ "sharpener", sharpener == Upscaling::DLSSSharpenerMode::Off ? "off" : luma ? "luma_unsharp" :
 																						   "rcas" },

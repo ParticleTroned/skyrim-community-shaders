@@ -1280,7 +1280,7 @@ def feature_contracts(source_root: Path) -> dict[str, FeatureContract]:
 
 
 def derive_distribution_profile(source_root: Path) -> DistributionProfile:
-    """Mirror AIO hidden-feature exclusion and derive Horizon Fix metadata."""
+    """Mirror AIO hidden non-core exclusion and derive Horizon Fix metadata."""
     packages = packaged_feature_directories(source_root)
     contracts = feature_contracts(source_root)
     headers_root = source_root / "src/Features"
@@ -1303,6 +1303,8 @@ def derive_distribution_profile(source_root: Path) -> DistributionProfile:
             raise SystemExit(
                 f"hidden feature {short_name} has no matching packaged feature"
             )
+        if (source_root / "features" / packages[short_name] / "CORE").is_file():
+            continue
         hidden_short_names.add(short_name)
 
     horizon_fix = contracts.get(HORIZON_FIX_SHORT_NAME)

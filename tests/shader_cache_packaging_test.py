@@ -9,6 +9,7 @@ import importlib.util
 import json
 import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -842,6 +843,51 @@ class ShaderCachePackagingTests(unittest.TestCase):
         self.assertNotIn("WetnessEffects", profile.excluded_short_names)
         self.assertNotIn("Wetness Effects", profile.excluded_packages)
         self.assertNotIn("WETNESS_EFFECTS", profile.excluded_defines)
+        self.assertNotIn("ReverseZ", profile.excluded_short_names)
+        self.assertNotIn("ReverseZ", profile.excluded_packages)
+        self.assertNotIn("REVERSE_Z", profile.excluded_defines)
+        self.assertIn("Skin", profile.excluded_short_names)
+        self.assertIn("ExponentialHeightFog", profile.excluded_short_names)
+
+    @unittest.skipUnless(shutil.which("cmake"), "CMake is required for AIO selection")
+    def test_cmake_and_cache_keep_hidden_core_packages(self) -> None:
+        source = (REPO / "CMakeLists.txt").read_text(encoding="utf-8")
+        start = source.index("set(_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE")
+        end = source.index("string(TIMESTAMP", start)
+        production_rule = source[start:end]
+        packages = BUILDER.packaged_feature_directories(REPO)
+        profile = BUILDER.derive_distribution_profile(REPO)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            declarations = [
+                "cmake_minimum_required(VERSION 3.28)", "project(FeatureSelection NONE)",
+                f'set(CMAKE_SOURCE_DIR "{REPO.as_posix()}")',
+                "set(AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES ON)",
+            ]
+            for short_name, package in packages.items():
+                path = (REPO / "features" / package).as_posix()
+                declarations.extend([
+                    f'set(FEATURE_DIR_FOR_SHORT_NAME_{short_name} "{path}")',
+                    f'list(APPEND FEATURE_PATHS "{path}")',
+                ])
+            (root / "CMakeLists.txt").write_text(
+                "\n".join(declarations) + "\n" + production_rule
+                + '\nfile(WRITE "${CMAKE_BINARY_DIR}/selected.txt" "${FEATURE_PATHS}")\n',
+                encoding="utf-8",
+            )
+            for explicit_exclusion in ("", "ReverseZ"):
+                with self.subTest(explicit_exclusion=explicit_exclusion):
+                    build = root / (explicit_exclusion or "default")
+                    result = subprocess.run(
+                        [shutil.which("cmake"), "-S", str(root), "-B", str(build),
+                         f"-DAIO_EXCLUDED_FEATURE_PACKAGES={explicit_exclusion}"],
+                        capture_output=True, text=True, timeout=30,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    selected = {Path(path).name for path in (build / "selected.txt").read_text().split(";")}
+                    expected = set(packages.values()) - profile.excluded_packages - {explicit_exclusion}
+                    self.assertEqual(selected, expected)
+                    self.assertEqual("ReverseZ" in selected, not explicit_exclusion)
 
 
 

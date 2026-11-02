@@ -275,7 +275,7 @@ int main() {
             context.queryResult = E_NOINTERFACE;
             baseOnly.InstallRuntimeHooks();
             Require(baseOnly.runtimeHooksInstalled && !baseOnly.activationRejectedThisBoot && installedSlots.size() == 10 &&
-                std::find(installedSlots.begin(), installedSlots.end(), 131) == installedSlots.end(), "Base-only context attempted an extended-slot hook");
+                std::find(installedSlots.begin(), installedSlots.end(), 131u) == installedSlots.end(), "Base-only context attempted an extended-slot hook");
             installedSlots.clear();
             context.queryResult = S_OK; context.queryAlias = &foreign;
             ReverseZ distinct;

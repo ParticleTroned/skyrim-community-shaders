@@ -34,6 +34,8 @@ The default `shipped` release profile:
     exclusion of legacy `Wetness Effects` sources, metadata and
     `WETNESS_EFFECTS` in both runtimes;
 -   enables `UNIFIED_WATER` globally;
+-   derives Reverse Z compiler inputs from the selected cache's feature
+    metadata, including the runtime's distinct Utility macro value;
 -   removes captured global occurrences of file-scoped defines before enabling
     `WETTERNESS` only for `Lighting.hlsl` and `Water.hlsl`;
 -   removes obsolete captured `VANILLA_FRESNEL` and `HDR_OUTPUT` defines;

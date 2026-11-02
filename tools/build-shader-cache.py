@@ -1806,6 +1806,7 @@ def filter_profile_defines(
     yaml: Any,
     profile: CacheProfile,
     *,
+    feature_states: dict[str, bool],
     additional_excluded_defines: frozenset[str] = frozenset(),
     additional_file_defines: dict[str, tuple[str, ...]] | None = None,
     add_cross_modlist_variants: bool = False,
@@ -1816,10 +1817,19 @@ def filter_profile_defines(
         raise SystemExit(f"shader config must be a YAML mapping: {config_path}")
 
     validate_captured_variant_count(config, config_path)
+    additional_file_defines = dict(additional_file_defines or {})
+    if feature_states.get("ReverseZ", False):
+        for shader in config["shaders"]:
+            source = shader["file"]
+            # Utility uses the runtime fallback; feature-list macros have empty values.
+            depth_define = "REVERSE_Z=1" if source == "Utility.hlsl" else "REVERSE_Z"
+            additional_file_defines[source] = (
+                *additional_file_defines.get(source, ()), depth_define
+            )
     config = apply_cache_profile_defines(
         config,
         profile,
-        additional_excluded_defines=additional_excluded_defines,
+        additional_excluded_defines=additional_excluded_defines | {"REVERSE_Z"},
         additional_file_defines=additional_file_defines,
         add_cross_modlist_variants=add_cross_modlist_variants,
     )
@@ -2897,11 +2907,24 @@ def build_runtime(
                     )
                 additional_file_defines[HORIZON_FIX_SHADER_FILE] = tuple(declared_defines)
 
+        section_count = write_info_ini(
+            cache_dir,
+            stage,
+            source_root,
+            plugin_version,
+            runtime,
+            profile,
+            shader_cache_abi,
+            excluded_features=excluded_features,
+            enabled_overrides=enabled_overrides,
+        )
+        feature_states = read_feature_states(cache_dir)
         filtered_config = filter_profile_defines(
             config_path,
             workspace / f"config-{runtime}-{variant.name}.yaml",
             yaml,
             profile,
+            feature_states=feature_states,
             additional_excluded_defines=additional_excluded_defines,
             additional_file_defines=additional_file_defines,
             add_cross_modlist_variants=add_cross_modlist,
@@ -2940,17 +2963,6 @@ def build_runtime(
 
         prune_non_cache_files(cache_dir)
         imagespace_remap = remap_imagespace_dirs(cache_dir, runtime)
-        section_count = write_info_ini(
-            cache_dir,
-            stage,
-            source_root,
-            plugin_version,
-            runtime,
-            profile,
-            shader_cache_abi,
-            excluded_features=excluded_features,
-            enabled_overrides=enabled_overrides,
-        )
         write_shader_cache_manifest(
             cache_dir,
             stage,
@@ -2970,7 +2982,7 @@ def build_runtime(
             cache_dir,
             blob_count,
             section_count,
-            read_feature_states(cache_dir),
+            feature_states,
         )
 
     if has_horizon_variant:

@@ -36,6 +36,7 @@ class ShaderCompileIdentityTests(unittest.TestCase):
             config = BUILDER.filter_profile_defines(
                 REPO / ".github/configs/shader-validation.yaml",
                 Path(temporary) / "SE.yaml", yaml, BUILDER.SHIPPED_CACHE_PROFILE,
+                feature_states={},
                 additional_excluded_defines=distribution.excluded_defines | {distribution.horizon_fix_define},
                 add_cross_modlist_variants=True,
             )
@@ -73,6 +74,7 @@ class ShaderCompileIdentityTests(unittest.TestCase):
             filtered = BUILDER.filter_profile_defines(
                 REPO / ".github/configs/shader-validation-vr.yaml",
                 Path(temporary) / "VR.yaml", yaml, BUILDER.SHIPPED_CACHE_PROFILE,
+                feature_states={"ReverseZ": False},
                 additional_excluded_defines=frozenset({"HORIZON_FIX"}),
             )
             generated = compile_task_defines(parse_shader_configs(str(filtered)))
@@ -126,6 +128,7 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                     Path(temporary) / f"{runtime}.yaml", yaml,
                     BUILDER.SHIPPED_CACHE_PROFILE,
                     additional_excluded_defines=frozenset({"HORIZON_FIX"}),
+                    feature_states={"ReverseZ": runtime == "VR"},
                 )
                 tasks = parse_shader_configs(str(filtered))
                 self.assertGreater(len(tasks), 1000)
@@ -143,6 +146,7 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                     REPO / ".github/configs" / name,
                     Path(temporary) / f"{runtime}.yaml", yaml,
                     BUILDER.SHIPPED_CACHE_PROFILE,
+                    feature_states={"ReverseZ": runtime == "VR"},
                 )
                 tasks = parse_shader_configs(str(filtered))
                 canonical = compile_task_defines(tasks)
@@ -230,7 +234,7 @@ class ShaderCompileIdentityTests(unittest.TestCase):
     def test_lighting_inventory_keys_match_runtime_flag_mask(self) -> None:
         flags = {"SPECULAR", "SOFT_LIGHTING", "RIM_LIGHTING", "BACK_LIGHTING"}
         mask = sum(1 << bit for bit in (9, 10, 11, 12))
-        for name, expected in (("shader-validation.yaml", 220), ("shader-validation-vr.yaml", 258)):
+        for name, expected in (("shader-validation.yaml", 232), ("shader-validation-vr.yaml", 270)):
             path = REPO / ".github/configs" / name
             config = yaml.safe_load(path.read_text(encoding="utf-8"))
             BUILDER.validate_captured_variant_count(config, path)

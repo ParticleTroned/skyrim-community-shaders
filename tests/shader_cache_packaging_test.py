@@ -681,6 +681,39 @@ class ShaderCachePackagingTests(unittest.TestCase):
                     {key: [entry["entry"] for entry in stage["entries"]] for key, stage in grass_after.items()},
                 )
 
+    def test_reverse_depth_inputs_match_feature_state_and_runtime_macro_values(self) -> None:
+        import yaml
+        from hlslkit.compile_shaders import parse_shader_configs
+
+        cases = (
+            ("VR", BUILDER.SHIPPED_CACHE_PROFILE, {"ReverseZ": True}),
+            ("VR", BUILDER.PATKA_CACHE_PROFILE, {"ReverseZ": True}),
+            ("VR", BUILDER.SHIPPED_CACHE_PROFILE, {"ReverseZ": False}),
+            ("SE", BUILDER.SHIPPED_CACHE_PROFILE, {}),
+        )
+        for runtime, profile, states in cases:
+            with self.subTest(runtime=runtime, profile=profile.name, states=states), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                config = yaml.safe_load(BUILDER.configs_for(REPO)[runtime].read_text(encoding="utf-8"))
+                config["common_defines"].append("REVERSE_Z=0")
+                first_stage = next(iter(config["shaders"][0]["configs"].values()))
+                first_stage["common_defines"].append("REVERSE_Z=1")
+                captured = root / "captured.yaml"
+                captured.write_text(yaml.safe_dump(config), encoding="utf-8")
+                filtered = BUILDER.filter_profile_defines(
+                    captured, root / "filtered.yaml", yaml, profile,
+                    feature_states=states,
+                )
+                tasks = parse_shader_configs(str(filtered))
+                self.assertTrue(tasks)
+                BUILDER.compile_task_defines(tasks)
+                for source, stage, entry, defines in tasks:
+                    depth_defines = [value for value in defines if value.split("=", 1)[0] == "REVERSE_Z"]
+                    expected = []
+                    if states.get("ReverseZ", False):
+                        expected = ["REVERSE_Z=1" if source == "Utility.hlsl" else "REVERSE_Z="]
+                    self.assertEqual(depth_defines, expected, (source, stage, entry))
+
     def test_horizon_variants_layer_onto_the_shipped_profile(self) -> None:
         standard_config = BUILDER.apply_cache_profile_defines(
             copy.deepcopy(self._sample_shader_config()),

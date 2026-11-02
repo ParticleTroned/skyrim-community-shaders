@@ -87,6 +87,8 @@ namespace NeuralRendering
 	constexpr unsigned kFeatureDlssNr = 18;
 	constexpr int NVSDK_NGX_DLSSNR_Mask_Blend_Mode_None = 0, NVSDK_NGX_DLSSNR_Mask_Blend_Mode_Min = 2;
 	constexpr bool NVSDK_NGX_FAILED(int result) { return result != 0; }
+	int providerPopulationResult = 0;
+	unsigned providerPopulationCalls = 0;
 	struct NVSDK_NGX_Handle
 	{};
 	struct NVSDK_NGX_Parameter
@@ -201,6 +203,12 @@ namespace NeuralRendering
 		{
 			struct Provider
 			{
+				int PopulateParameters(NVSDK_NGX_Parameter* parameters)
+				{
+					++providerPopulationCalls;
+					parameters->Set("provider_defaults", 1u);
+					return providerPopulationResult;
+				}
 				decltype(&NVSDK_NGX_D3D12_CreateFeature) create = &NVSDK_NGX_D3D12_CreateFeature;
 				decltype(&NVSDK_NGX_D3D12_EvaluateFeature) evaluate = &NVSDK_NGX_D3D12_EvaluateFeature;
 				decltype(&NVSDK_NGX_D3D12_ReleaseFeature) release = &NVSDK_NGX_D3D12_ReleaseFeature;
@@ -318,17 +326,24 @@ namespace
 		const auto run = [&](Runtime& runtime, unsigned slot, const NativeEvaluationLayout& demand, ID3D12Resource* mask = nullptr, bool provider = false) {
 			return runtime.Execute(&commands, slot, &resource, &resource, &resource, &resource, mask, demand, tuning, false, nullptr, nullptr, nullptr, 0, provider);
 		};
+		Runtime rejectedPopulation;
+		const auto createsBeforePopulationFailure = creates.size();
+		providerPopulationResult = 7;
+		Require(!run(rejectedPopulation, 2, layout) && rejectedPopulation.ngxResult_ == 7 && creates.size() == createsBeforePopulationFailure,
+			"Failed provider population reached native feature creation");
+		providerPopulationResult = 0;
 		Runtime lazy, warm;
 		Require(run(lazy, 2, layout), "lazy creation failed");
 		const auto lazyParameters = creates.back();
 		const auto evaluationsBefore = evaluations.size();
 		Require(warm.PrepareFeature(&commands, 2, layout), "prewarm failed");
 		Require(creates.back() == lazyParameters, "lazy/prewarm creation parameter mismatch");
-		Require(lazyParameters.at("Width") == 320 && lazyParameters.at("DLSSNR.Height") == 192 && !lazyParameters.contains("DLSSNR.Upscaling"), "creation contract changed");
+		Require(lazyParameters.at("Width") == 320 && lazyParameters.at("DLSSNR.Height") == 192 && lazyParameters.at("provider_defaults") == 1 && !lazyParameters.contains("DLSSNR.Upscaling"), "creation contract changed");
 		Require(warm.successfulFrames_ == 0 && evaluations.size() == evaluationsBefore, "prewarm evaluated a fabricated frame");
 		const auto created = creates.size();
+		const auto populations = providerPopulationCalls;
 		Require(warm.PrepareFeature(&commands, 2, layout) && run(warm, 2, layout), "first use failed");
-		Require(creates.size() == created && evaluations.back().at("DLSSNR.Reset") == 1, "first use recreated or lost reset");
+		Require(creates.size() == created && providerPopulationCalls == populations && evaluations.back().at("DLSSNR.Reset") == 1, "first use recreated, repopulated or lost reset");
 		Require(run(warm, 2, layout) && evaluations.back().at("DLSSNR.Reset") == 1, "unpresented transaction consumed reset");
 		warm.AcknowledgePresentedFeatures(1u << 3);
 		Require((warm.firstEvaluationResetMask_.load() & 4u), "peer-only acknowledgement consumed reset");

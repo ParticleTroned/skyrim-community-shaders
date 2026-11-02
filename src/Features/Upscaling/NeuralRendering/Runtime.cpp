@@ -1,5 +1,4 @@
 #include "Runtime.h"
-#include "../NvidiaProject.h"
 #include "D3D12Interop.h"
 #include "DevelopmentDiagnostics.h"
 #include "DirectProvider.h"
@@ -171,11 +170,8 @@ namespace NeuralRendering
 	{
 		ScopedHandle providerFile;
 		DirectProvider provider;
-		bool sdkInitialized = false;
 		NVSDK_NGX_Parameter* capabilities = nullptr;
 		std::wstring featureDirectory;
-		std::array<const wchar_t*, 1> featurePaths{};
-		NVSDK_NGX_FeatureCommonInfo featureInfo{};
 		std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, kFeatureSlotCount> scratch;
 		std::array<std::size_t, kFeatureSlotCount> scratchBytes{};
 	};
@@ -377,20 +373,10 @@ namespace NeuralRendering
 				std::format("could not create NGX data directory: {}", directoryError.message()));
 			return false;
 		}
-		backend_->featurePaths[0] = backend_->featureDirectory.c_str();
-		backend_->featureInfo.PathListInfo = { backend_->featurePaths.data(), 1 };
-		const auto initializeResult = NVSDK_NGX_D3D12_Init_with_ProjectID(
-			NvidiaProject::kId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, NvidiaProject::kEngineVersion,
-			writablePath.c_str(), a_device, &backend_->featureInfo);
-		if (NVSDK_NGX_FAILED(initializeResult)) {
-			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
-				std::format("NGX SDK initialization failed 0x{:08X}", static_cast<std::uint32_t>(initializeResult)),
-				static_cast<std::uint32_t>(initializeResult));
-			return false;
-		}
 		device_ = a_device;
-		backend_->sdkInitialized = true;
 		a_device->AddRef();
+		initializationRoute_ = "NGX_D3D12_DIRECT_PROVIDER";
+		discoveryDetail_ = "legacy provider initialization; NGX SDK discovery not attempted";
 		const auto rollback = [this]() {
 			const auto primaryStatus = status_;
 			const auto primaryStage = failureStage_;
@@ -416,13 +402,31 @@ namespace NeuralRendering
 				detail_ = primaryDetail;
 				ngxResult_ = primaryResult;
 			} else {
-				detail_ = std::format("{}; NGX rollback failed: {}", primaryDetail, detail_);
+				detail_ = std::format("{}; legacy NR rollback failed: {}", primaryDetail, detail_);
 			}
 		};
-		const auto capabilityResult = NVSDK_NGX_D3D12_GetCapabilityParameters(&backend_->capabilities);
-		if (NVSDK_NGX_FAILED(capabilityResult) || !backend_->capabilities) {
+		std::string providerDetail;
+		const auto providerResult = backend_->provider.Initialize(
+			std::filesystem::path(backend_->featureDirectory) / kRuntimeName, backend_->providerFile.Get(),
+			a_device, writablePath, providerDetail);
+		if (NVSDK_NGX_FAILED(providerResult)) {
 			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
-				"NGX SDK capability map allocation failed", static_cast<std::uint32_t>(capabilityResult));
+				std::move(providerDetail), static_cast<std::uint32_t>(providerResult));
+			rollback();
+			return false;
+		}
+		const auto capabilityResult = backend_->provider.AllocateParameters(&backend_->capabilities, providerDetail);
+		if (NVSDK_NGX_FAILED(capabilityResult) || !backend_->capabilities) {
+			SetFailureLocked(RuntimeStatus::ParameterAllocationFailed, RuntimeFailureStage::ParameterAllocation,
+				std::format("legacy capability map allocation failed: {}", providerDetail),
+				static_cast<std::uint32_t>(NVSDK_NGX_FAILED(capabilityResult) ? capabilityResult : NVSDK_NGX_Result_FAIL_InvalidParameter));
+			rollback();
+			return false;
+		}
+		const auto populateResult = backend_->provider.PopulateParameters(backend_->capabilities);
+		if (NVSDK_NGX_FAILED(populateResult)) {
+			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
+				"legacy provider capability population failed", static_cast<std::uint32_t>(populateResult));
 			rollback();
 			return false;
 		}
@@ -440,71 +444,27 @@ namespace NeuralRendering
 			driverRequirements_.minimumMajor = minimumMajor;
 		if (!NVSDK_NGX_FAILED(minorQuery))
 			driverRequirements_.minimumMinor = minimumMinor;
-		int available = 0;
-		const auto availabilityResult = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNR_Available, &available);
-		const bool sdkAvailable = !NVSDK_NGX_FAILED(availabilityResult) && available != 0;
-		int featureResult = 0;
-		auto featureQuery = NVSDK_NGX_Result_Success;
-		if (!sdkAvailable) {
-			featureQuery = backend_->capabilities->Get(NVSDK_NGX_Parameter_DLSSNR_FeatureInitResult, &featureResult);
-			discoveryDetail_ = std::format("NGX SDK NR availability query=0x{:08X} available={} featureQuery=0x{:08X} featureResult={}",
-				static_cast<std::uint32_t>(availabilityResult), available,
-				static_cast<std::uint32_t>(featureQuery), NVSDK_NGX_FAILED(featureQuery) ? "unavailable" : std::format("0x{:08X}", static_cast<std::uint32_t>(featureResult)));
-		}
 		if (driverRequirements_.needsUpdate == true) {
-			auto detail = std::format("NGX reports that NR requires an updated NVIDIA driver; minimum={}.{} query=0x{:08X}. Update using the NVIDIA app, then restart the game.",
-				driverRequirements_.minimumMajor ? std::to_string(*driverRequirements_.minimumMajor) : "unknown",
-				driverRequirements_.minimumMinor ? std::to_string(*driverRequirements_.minimumMinor) : "unknown",
-				static_cast<std::uint32_t>(driverQuery));
-			if (!discoveryDetail_.empty())
-				detail += "; " + discoveryDetail_;
 			SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
-				std::move(detail),
+				std::format("NR provider requires an updated NVIDIA driver; minimum={}.{} query=0x{:08X}. Update using the NVIDIA app, then restart the game.",
+					driverRequirements_.minimumMajor ? std::to_string(*driverRequirements_.minimumMajor) : "unknown",
+					driverRequirements_.minimumMinor ? std::to_string(*driverRequirements_.minimumMinor) : "unknown",
+					static_cast<std::uint32_t>(driverQuery)),
 				static_cast<std::uint32_t>(NVSDK_NGX_Result_FAIL_OutOfDate));
 			rollback();
 			return false;
 		}
-		if (!sdkAvailable) {
-			const auto featureInitializationResult = static_cast<NVSDK_NGX_Result>(featureResult);
-			const auto failureResult = !NVSDK_NGX_FAILED(featureQuery) && NVSDK_NGX_FAILED(featureInitializationResult) ? featureInitializationResult :
-			                           NVSDK_NGX_FAILED(availabilityResult)                                             ? availabilityResult :
-			                                                                                                              NVSDK_NGX_Result_FAIL_FeatureNotSupported;
-			if (failureResult != NVSDK_NGX_Result_FAIL_FeatureNotFound &&
-				failureResult != NVSDK_NGX_Result_FAIL_FeatureNotSupported &&
-				failureResult != NVSDK_NGX_Result_FAIL_UnsupportedParameter) {
-				SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
-					discoveryDetail_, static_cast<std::uint32_t>(failureResult));
-				rollback();
-				return false;
-			}
-		}
 		NVSDK_NGX_Parameter* parameters = nullptr;
-		const auto allocationResult = NVSDK_NGX_D3D12_AllocateParameters(&parameters);
+		const auto allocationResult = backend_->provider.AllocateParameters(&parameters, providerDetail);
 		parameters_ = parameters;
 		if (NVSDK_NGX_FAILED(allocationResult) || !parameters) {
 			SetFailureLocked(RuntimeStatus::ParameterAllocationFailed, RuntimeFailureStage::ParameterAllocation,
-				std::format("NGX SDK parameter allocation failed 0x{:08X}", static_cast<std::uint32_t>(allocationResult)),
-				static_cast<std::uint32_t>(allocationResult));
+				std::format("legacy parameter allocation failed: {}", providerDetail),
+				static_cast<std::uint32_t>(NVSDK_NGX_FAILED(allocationResult) ? allocationResult : NVSDK_NGX_Result_FAIL_InvalidParameter));
 			rollback();
 			return false;
 		}
-		if (!sdkAvailable) {
-			initializationRoute_ = "NGX_D3D12_DIRECT_PROVIDER";
-			logger::warn("[DLSSNR] {}; trying the admitted NR provider directly", discoveryDetail_);
-			std::string providerDetail;
-			const auto providerResult = backend_->provider.Initialize(
-				std::filesystem::path(backend_->featureDirectory) / kRuntimeName, backend_->providerFile.Get(),
-				a_device, writablePath, backend_->capabilities, providerDetail);
-			if (NVSDK_NGX_FAILED(providerResult)) {
-				SetFailureLocked(RuntimeStatus::InitializationFailed, RuntimeFailureStage::Initialization,
-					std::format("{}; {}", discoveryDetail_, providerDetail), static_cast<std::uint32_t>(providerResult));
-				rollback();
-				return false;
-			}
-			detail_ = std::format("{}; {}", discoveryDetail_, providerDetail);
-		} else {
-			detail_ = std::format("NGX SDK route initialized NR with CSX project {}; actual provider identity unverified", NvidiaProject::kId);
-		}
+		detail_ = "legacy NR provider initialized; provider and driver-core parameter APIs retain their own ownership; publisher and origin unverified";
 		status_ = RuntimeStatus::Initialized;
 		failureStage_ = RuntimeFailureStage::None;
 		ngxResult_ = static_cast<std::uint32_t>(allocationResult);
@@ -602,6 +562,12 @@ namespace NeuralRendering
 		if (!featureHandles_[a_slot]) {
 			auto* parameters = static_cast<NVSDK_NGX_Parameter*>(parameters_);
 			parameters->Reset();
+			const auto populateResult = backend_->provider.PopulateParameters(parameters);
+			if (NVSDK_NGX_FAILED(populateResult)) {
+				SetFailureLocked(RuntimeStatus::FeatureCreateFailed, RuntimeFailureStage::FeatureCreate,
+					"legacy provider feature parameter population failed", static_cast<std::uint32_t>(populateResult));
+				return false;
+			}
 			parameters->Set(NVSDK_NGX_Parameter_Width, a_layout.creation.output.width);
 			parameters->Set(NVSDK_NGX_Parameter_Height, a_layout.creation.output.height);
 			parameters->Set(NVSDK_NGX_Parameter_OutWidth, a_layout.creation.output.width);
@@ -1029,20 +995,14 @@ namespace NeuralRendering
 		if (device_) {
 			if (!ResetFeaturesLocked())
 				return false;
-			const auto providerResult = backend_->provider.ShutdownDevice(static_cast<ID3D12Device*>(device_));
-			if (NVSDK_NGX_FAILED(providerResult)) {
-				SetFailureLocked(RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
-					"direct NR provider shutdown failed; ownership retained", static_cast<std::uint32_t>(providerResult));
-				return false;
-			}
 			for (unsigned index = 0; index < 2; ++index) {
 				auto* map = index == 0 ? static_cast<NVSDK_NGX_Parameter*>(parameters_) : backend_->capabilities;
 				if (!map)
 					continue;
-				const auto result = NVSDK_NGX_D3D12_DestroyParameters(map);
+				const auto result = backend_->provider.DestroyParameters(map);
 				if (NVSDK_NGX_FAILED(result)) {
 					SetFailureLocked(RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
-						"NGX SDK parameter destruction failed", static_cast<std::uint32_t>(result));
+						"legacy parameter destruction failed; allocator retained", static_cast<std::uint32_t>(result));
 					return false;
 				}
 				if (index == 0)
@@ -1050,13 +1010,12 @@ namespace NeuralRendering
 				else
 					backend_->capabilities = nullptr;
 			}
-			const auto result = backend_->sdkInitialized ? NVSDK_NGX_D3D12_Shutdown1(static_cast<ID3D12Device*>(device_)) : NVSDK_NGX_Result_Success;
+			const auto result = backend_->provider.ShutdownDevice(static_cast<ID3D12Device*>(device_));
 			if (NVSDK_NGX_FAILED(result)) {
 				SetFailureLocked(RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
-					"NGX SDK shutdown failed", static_cast<std::uint32_t>(result));
+					"legacy provider shutdown failed; ownership retained", static_cast<std::uint32_t>(result));
 				return false;
 			}
-			backend_->sdkInitialized = false;
 			if (!backend_->provider.Unload()) {
 				SetFailureLocked(RuntimeStatus::ShutdownFailed, RuntimeFailureStage::Shutdown,
 					"direct NR provider import restoration or unload failed; module retained");
@@ -1072,7 +1031,7 @@ namespace NeuralRendering
 		tuningLimits_.reset();
 		networkSelectionSupported_.reset();
 		driverRequirements_ = {};
-		initializationRoute_ = "NGX_D3D12_SDK";
+		initializationRoute_ = "NGX_D3D12_DIRECT_PROVIDER";
 		discoveryDetail_.clear();
 		detail_.clear();
 		evaluationSuccessDetail_.reset();
@@ -1108,7 +1067,7 @@ namespace NeuralRendering
 		evaluationSuccessDetail_.reset();
 		abandoned_ = true;
 		try {
-			detail_ = "NGX SDK objects intentionally retained after unsafe teardown";
+			detail_ = "NR provider objects intentionally retained after unsafe teardown";
 			logger::critical("[DLSSNR] unsafe ownership abandoned: {}", detail_);
 		} catch (...) {
 		}

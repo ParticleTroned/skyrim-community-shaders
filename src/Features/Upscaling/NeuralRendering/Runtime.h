@@ -179,7 +179,7 @@ namespace NeuralRendering
 		[[nodiscard]] NativeMemorySnapshot QueryMemorySnapshot() const;
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		/** Selected initialization route and the dispatcher's original discovery result. */
+		/** Selected initialization route and whether SDK discovery was attempted. */
 		[[nodiscard]] std::pair<std::string, std::string> GetInitializationRoute() const;
 		/** Explicit diagnostic query only; does not create features or change memory admission. */
 		[[nodiscard]] NgxAllocationStatistics QueryAllocationStatistics() const;
@@ -248,7 +248,7 @@ namespace NeuralRendering
 		std::optional<TuningLimits> tuningLimits_;
 		std::optional<bool> networkSelectionSupported_;
 		NgxDriverRequirements driverRequirements_;
-		std::string initializationRoute_ = "NGX_D3D12_SDK";
+		std::string initializationRoute_ = "NGX_D3D12_DIRECT_PROVIDER";
 		std::string discoveryDetail_;
 		std::string detail_;
 		std::optional<EvaluationSuccessDetail> evaluationSuccessDetail_;

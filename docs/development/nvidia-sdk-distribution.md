@@ -4,7 +4,7 @@ Streamline source and runtime inputs are pinned to the official NVIDIA
 repository and release archive. Neural Rendering is a separate NVIDIA SDK
 package referenced by the pinned RTX Remix revision in
 `cmake/NeuralRenderingSDKPin.cmake`. Build-time SDK inputs must retain their
-verified official source; use only the CSX project identity. The SDK pin
+verified official source. The SDK pin
 does not restrict the user-installed NR runtime to that package hash.
 
 ## Building and packaging
@@ -15,17 +15,21 @@ parameter header remains in the verified SDK build cache;
 its original bytes are checked against the package hash. The full NVIDIA
 RTX SDK license is retained unchanged under `extern/NeuralRenderingSDK/`.
 Do not commit or republish the proprietary SDK headers. Streamline supplies the
-matching NGX headers and static dispatcher library. NR uses
-`NVSDK_NGX_D3D12_Init_with_ProjectID` with the same CSX project identity as
-Streamline, followed by the SDK capability, scratch, feature and teardown
-APIs. If discovery reports a missing or unsupported NR feature, CSX can
-initialize the admitted user provider through its D3D12 snippet exports.
-This route verifies the loaded file against the locked, hashed file and
-retains SDK ownership of parameter maps. A provider-local import adapter
+matching NGX headers and static dispatcher library. NR retains the SDK's
+parameter types, public setters and verified NR parameter definitions,
+while initializing the admitted provider through its D3D12 snippet exports.
+It does not invoke SDK initialization or feature discovery. Streamline
+continues to use the CSX project identity for its own SDK integration.
+The legacy route verifies the loaded file against the locked, hashed file.
+Parameter allocation and destruction use one retained allocator from that
+provider or an already loaded NVIDIA DriverStore core. A driver core must
+pass physical path, loaded-file identity, version-resource and offline
+Authenticode checks; adjacent parameter-core DLLs are rejected. Parameter
+maps retire before provider shutdown and module release. A provider-local import adapter
 supplies the NGX caller basename expected by snippet entry points. It is
 restored before unloading; unsafe teardown retains module ownership.
 Provider initialization and execution results remain authoritative.
-DevBench reports the selected route and the original discovery result.
+DevBench reports the legacy route and that SDK discovery was not attempted.
 
 `StreamlineRuntime` installs the Streamline production DLLs and all original
 notices,
@@ -44,8 +48,8 @@ development. Configure once with runtime downloads enabled to prepare it. Missin
 Streamline runtime inputs block runtime installation and packaging. An absent
 user NR runtime does not block builds or packages; it disables NR in game.
 Compatible user-supplied NR versions 310.8 and newer retain the existing
-version admission policy, with final availability checked by the SDK or
-the provider's own initializer. CSX does not impose an RTX generation check.
+version admission policy, with final availability checked by the provider's
+own initializer. CSX does not impose an RTX generation check.
 Runtime SHA-256 values identify the installed file for diagnostics; they
 are not an allowlist. Existing runtime directories retain the ordinary
 skip-mode deployment policy.

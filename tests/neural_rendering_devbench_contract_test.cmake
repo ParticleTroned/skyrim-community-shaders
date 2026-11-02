@@ -1090,7 +1090,9 @@ foreach(_status_contract IN ITEMS
     [[{ "currentFrame", temporalAdmission.currentFrame }]]
     [[{ "lastWorldRenderFrame", temporalAdmission.lastWorldRenderFrame }]]
     [[{ "lastCompletedWorldRenderFrame", temporalAdmission.lastCompletedWorldRenderFrame }]]
-    [[nr_status returns the NGX SDK NR runtime]]
+    [[nr_status returns the legacy NR runtime]]
+    [[SDK initialization and feature discovery are not attempted.]]
+    [["api":{"const":"NGX_D3D12_DIRECT_PROVIDER"]]
     [[nr_status exposes lifetimeDiagnostics: a bounded 64-record CPU history]]
     [[NeuralRendering::LifetimeDiagnosticsJson(NeuralRendering::Renderer::Instance().GetLifetimeDiagnostics()]]
     [[{ "neuralRendering", NeuralRenderingStatusJson(a_upscaling) }]]
@@ -1865,30 +1867,33 @@ string(SUBSTRING "${_runtime_source}" ${_runtime_reset_begin}
 string(SUBSTRING "${_runtime_source}" ${_runtime_shutdown_begin}
     ${_runtime_shutdown_length} _runtime_shutdown)
 
-foreach(_sdk_contract IN ITEMS
-    [[NVSDK_NGX_D3D12_Init_with_ProjectID(]]
-    [[NvidiaProject::kId, NVSDK_NGX_ENGINE_TYPE_CUSTOM]]
-    [[NVSDK_NGX_D3D12_GetCapabilityParameters(]]
-    [[NVSDK_NGX_D3D12_AllocateParameters(]]
-    [[NVSDK_NGX_D3D12_GetScratchBufferSize]]
-    [[NVSDK_NGX_D3D12_CreateFeature(]]
-    [[NVSDK_NGX_D3D12_EvaluateFeature]]
-    [[NVSDK_NGX_D3D12_ReleaseFeature]]
-    [[NVSDK_NGX_D3D12_DestroyParameters(]]
-    [[NVSDK_NGX_D3D12_Shutdown1(]]
+foreach(_legacy_contract IN ITEMS
+    [[backend_->provider.Initialize(]]
+    [[backend_->provider.AllocateParameters(]]
+    [[backend_->provider.PopulateParameters(]]
+    [[backend_->provider.DestroyParameters(]]
+    [[backend_->provider.ShutdownDevice(]]
+    [[backend_->provider.scratchSize(]]
+    [[backend_->provider.create(]]
+    [[backend_->provider.evaluate(]]
+    [[backend_->provider.release(]]
 )
-    file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/DirectProvider.h" _direct_header)
-    string(FIND "${_runtime_source}${_direct_header}" "${_sdk_contract}" _position)
+    string(FIND "${_runtime_source}" "${_legacy_contract}" _position)
     if(_position EQUAL -1)
-        message(FATAL_ERROR "Official NR SDK contract is missing: ${_sdk_contract}")
+        message(FATAL_ERROR "Legacy NR ownership contract is missing: ${_legacy_contract}")
     endif()
 endforeach()
 foreach(_forbidden IN ITEMS [[CSX_NR_RUNTIME_SHA256]] [[GetProcAddress(]] [[LoadLibraryExW(]]
         [[VirtualProtect(]] [[RuntimeCallerPath]] [[spoofedPath]]
-        [[NVSDK_NGX_GetApplicationId]] [[NVSDK_NGX_GetAPIVersion]])
+        [[NVSDK_NGX_GetApplicationId]] [[NVSDK_NGX_GetAPIVersion]]
+        [[NVSDK_NGX_D3D12_Init_with_ProjectID(]]
+        [[NVSDK_NGX_D3D12_GetCapabilityParameters(]]
+        [[NVSDK_NGX_D3D12_AllocateParameters(]]
+        [[NVSDK_NGX_D3D12_DestroyParameters(]]
+        [[NVSDK_NGX_D3D12_Shutdown1(]])
     string(FIND "${_runtime_source}" "${_forbidden}" _position)
     if(NOT _position EQUAL -1)
-        message(FATAL_ERROR "NR must use the unmodified NVIDIA SDK route: ${_forbidden}")
+        message(FATAL_ERROR "NR runtime must delegate loading and allocator ownership to its legacy provider: ${_forbidden}")
     endif()
 endforeach()
 
@@ -1940,14 +1945,16 @@ if(NOT _warm_release_fail_fast)
     message(FATAL_ERROR "NR warm release must preserve the first failed native release")
 endif()
 
-string(FIND "${_runtime_shutdown}" "NVSDK_NGX_D3D12_Shutdown1(" _sdk_shutdown)
+string(FIND "${_runtime_shutdown}" "backend_->provider.ShutdownDevice(" _provider_shutdown)
+string(FIND "${_runtime_shutdown}" "backend_->provider.DestroyParameters(" _parameter_destruction)
 string(FIND "${_runtime_shutdown}" "backend_.reset()" _backend_release)
-if(_sdk_shutdown EQUAL -1 OR NOT _sdk_shutdown LESS _backend_release)
-    message(FATAL_ERROR "NR must shut down the SDK before releasing provider ownership")
+if(_provider_shutdown EQUAL -1 OR _parameter_destruction EQUAL -1 OR
+    NOT _parameter_destruction LESS _provider_shutdown OR NOT _provider_shutdown LESS _backend_release)
+    message(FATAL_ERROR "NR must destroy parameter maps before provider shutdown and module release")
 endif()
 string(FIND "${_runtime_source}" "(void)backend_.release();" _unsafe_retain)
 if(_unsafe_retain EQUAL -1)
-    message(FATAL_ERROR "Unsafe NR teardown must retain SDK and scratch ownership")
+    message(FATAL_ERROR "Unsafe NR teardown must retain provider and scratch ownership")
 endif()
 
 foreach(_readback_contract IN ITEMS

@@ -151,7 +151,7 @@ class PreparedSelectionContract(unittest.TestCase):
         transport = properties["sourceTransport"]["properties"]
         self.assertEqual(transport["schemaVersion"]["const"], 4)
         self.assertEqual(transport["lastModelOutputSelected"]["type"], "boolean")
-        self.assertIn("NGX SDK NR runtime", descriptor["description"])
+        self.assertIn("D3D12 NGX API", descriptor["description"])
         self.assertIn("latest request's completed-selection flag", descriptor["description"])
         runtime = properties["characterRendering"]["properties"]["runtime"]["properties"]
         early_bounds = runtime["earlyMaskBounds"]["description"]

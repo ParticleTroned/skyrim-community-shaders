@@ -9,6 +9,7 @@
 
 namespace CSX::RenderMap
 {
+	void RunContextAcquisitionTests();
 	namespace ContextHookFixture
 	{
 		template <class>
@@ -298,10 +299,19 @@ namespace CSX::RenderMap
 			Require(state.calls == 1, "concrete thunk did not call original exactly once");
 			Require(state.view.references == 1 && state.source.references == 1 && state.destination.references == 1,
 				"post-call COM description leaked or over-released references");
+			if (mode == Mode::InactiveStart && getterChange) {
+				Require(!runtime.IsCapturing() && !state.changed && state.context.queries == 0,
+					"inactive entry invoked an optional getter or started capture through it");
+				return;
+			}
 			if (family == Family::Resources && mode == Mode::Stable)
 				Require(state.context.queries > 0 && state.source.descriptions > 0, "SRV concrete getter path was not exercised");
-			if (family == Family::Copy && mode != Mode::Stop)
-				Require(state.source.descriptions > 0 && state.destination.descriptions > 0, "copy descriptions were not exercised");
+			if (family == Family::Copy) {
+				if (mode == Mode::Stable)
+					Require(state.source.descriptions > 0 && state.destination.descriptions > 0, "stable copy descriptions were not exercised");
+				else
+					Require(state.source.descriptions == 0 && state.destination.descriptions == 0, "stale copy acquired resource descriptions");
+			}
 			if (mode == Mode::Stop) {
 				Require(!runtime.IsCapturing(), "stopped call reactivated capture");
 				if (family != Family::PixelShader && family != Family::VertexShader &&
@@ -405,6 +415,7 @@ namespace CSX::RenderMap
 		Exercise(Family::Copy, Mode::Restart, 0, S_OK, true);
 		Exercise(Family::Draw, Mode::InactiveStart, 0, S_OK, true);
 		OriginalException();
+		RunContextAcquisitionTests();
 		GetRuntime().SetImmediateContext(0);
 		current = nullptr;
 	}

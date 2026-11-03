@@ -239,7 +239,7 @@ void Fill(const UploadedEye& eye, float offset, float nearPlane, float farPlane)
     eye.previousViewProj = Store(XMMatrixTranspose(XMMatrixMultiply(view, previous)));
 }
 void CheckReversal(const UploadedEye& eye, const Matrix& before, const Matrix& previous) {
-    Require(!UploadedProjectionIsStandard(eye.proj), "Eye projection was not reversed");
+    Require(AlreadyReversed(eye.proj, ZAxis::kCol2), "Eye projection was not reversed");
     auto expected = before;
     for (int col = 0; col < 4; ++col) expected.m[2][col] = before.m[3][col] - before.m[2][col];
     Require(Equal(eye.proj, expected), "Reversal changed the camera's own depth range");
@@ -253,8 +253,82 @@ void CheckReversal(const UploadedEye& eye, const Matrix& before, const Matrix& p
         Require(Equal(identity, Store(XMMatrixIdentity()), 1e-3f), "Reversed upload has a stale inverse");
     }
 }
+void CheckMixedCameraMatrices() {
+    ReverseZ reverse;
+    RE::NiCamera world;
+    world.flat.viewFrustum = {5, 100000, false};
+    RE::Main::world = &world;
+    // Independent homogeneous z'=w-z transform in uploaded column-vector layout.
+    const auto depthReflection = XMMatrixSet(1, 0, 0, 0, 0, 1, 0, 0,
+        0, 0, -1, 1, 0, 0, 0, 1);
+    for (float headX : {0.0f, 5.0f}) {
+        for (float yaw : {0.0f, 0.3f, 0.6f, XM_PIDIV2, XM_PI})
+        for (float pitch : {-0.75f, -0.35f, 0.0f, 0.35f, 0.75f}) {
+            for (unsigned mask = 0; mask < 32; ++mask) {
+                globals::FrameBufferVR frame{};
+                for (unsigned index = 0; index < 2; ++index) {
+                    auto eye = VRUploadedEye(frame, index);
+                    Fill(eye, index ? 0.03f : -0.03f, 5, 100000);
+                    const auto view = XMMatrixLookToLH(XMVectorSet(headX, 0, 0, 1),
+                        XMVectorSet(std::sin(yaw) * std::cos(pitch), std::sin(pitch),
+                            yaw == XM_PIDIV2 ? 0.0f : std::cos(yaw) * std::cos(pitch), 0), XMVectorSet(0, 1, 0, 0));
+                    eye.viewProj = eye.viewProjUnjittered = Store(XMMatrixMultiply(Load(eye.proj), XMMatrixTranspose(view)));
+                    const std::array matrices{&eye.proj, &eye.viewProj, &eye.viewProjUnjittered,
+                        &eye.projUnjittered, &eye.previousViewProj};
+                    std::array<Matrix, 5> expected;
+                    for (unsigned matrix = 0; matrix < matrices.size(); ++matrix) {
+                        expected[matrix] = Store(XMMatrixMultiply(depthReflection, Load(*matrices[matrix])));
+                        if (mask & (1u << matrix)) *matrices[matrix] = expected[matrix];
+                    }
+                    FixupUploadedEye(eye);
+                    for (unsigned matrix = 0; matrix < matrices.size(); ++matrix)
+                        Require(Equal(*matrices[matrix], expected[matrix]), "Mixed upload reversed a camera matrix twice or left it standard");
+                    const auto point = XMVectorSet(300, 10, 3000, 1);
+                    const auto clip = XMVector4Transform(point, XMMatrixTranspose(Load(expected[1])));
+                    const auto reconstructed = XMVector4Transform(clip, XMMatrixTranspose(Load(eye.viewProjInverse)));
+                    const auto error = XMVectorGetX(XMVector3Length(XMVectorSubtract(point, XMVectorScale(reconstructed, 1 / XMVectorGetW(reconstructed)))));
+                    Require(error < 0.1f, "Fixed water/reflection point moved with the head pose");
+                    for (bool transpose : {false, true}) {
+                        ViewData expectedView{expected[0], expected[3], expected[1], expected[2]};
+                        if (transpose) {
+                            for (auto* matrix : {&expectedView.projMat, &expectedView.projMatrixUnjittered,
+                                    &expectedView.viewProjMat, &expectedView.viewProjMatrixUnjittered})
+                                *matrix = Store(XMMatrixTranspose(Load(*matrix)));
+                        }
+                        auto mixed = expectedView;
+                        unsigned bit = 1;
+                        for (auto* matrix : {&mixed.projMat, &mixed.projMatrixUnjittered,
+                                &mixed.viewProjMat, &mixed.viewProjMatrixUnjittered}) {
+                            if (!(mask & bit))
+                                *matrix = Store(transpose ? XMMatrixMultiply(Load(*matrix), XMMatrixTranspose(depthReflection)) :
+                                    XMMatrixMultiply(depthReflection, Load(*matrix)));
+                            bit <<= 1;
+                        }
+                        CameraStateEntry entry{&world, mixed};
+                        reverse.ApplyReverseProjection(&entry, &world);
+                        published[0] = published[1] = mixed;
+                        reverse.ReversePublishedProjection();
+                        for (const auto& actual : {entry.viewData, published[0], published[1]}) {
+                            Require(Equal(actual.projMat, expectedView.projMat) &&
+                                Equal(actual.projMatrixUnjittered, expectedView.projMatrixUnjittered) &&
+                                Equal(actual.viewProjMat, expectedView.viewProjMat) &&
+                                Equal(actual.viewProjMatrixUnjittered, expectedView.viewProjMatrixUnjittered),
+                                "Mixed native camera matrices do not share a reversed depth convention");
+                        }
+                    }
+                }
+                const auto before = frame;
+                for (unsigned index = 0; index < 2; ++index) FixupUploadedEye(VRUploadedEye(frame, index));
+                Require(std::memcmp(&before, &frame, sizeof(frame)) == 0, "Mixed camera upload was not idempotent");
+            }
+        }
+    }
+    g_reversalActive = false;
+    bindingRefreshes = 0;
+}
 int main() {
     try {
+        CheckMixedCameraMatrices();
         ReverseZ reverse;
         globals::FrameBuffer flat{};
         Fill(FlatUploadedEye(flat), 0, 1, 100000);
@@ -427,7 +501,7 @@ int main() {
             "ZAxis DetectZAxis(", "bool AlreadyReversed(",
             "void ReverseClipZ(Matrix& matrix, ZAxis axis, float", "void ReverseClipZ(Matrix& matrix, ZAxis axis)",
             "struct UploadedEye", "UploadedEye FlatUploadedEye(", "UploadedEye VRUploadedEye(",
-            "bool UploadedProjectionIsStandard(", "void FixupUploadedEye(",
+            "void FixupUploadedEye(",
         ):
             helpers.append(block(source, signature) + (";" if signature.startswith("struct ") else ""))
         methods = [block(source, signature) for signature in (

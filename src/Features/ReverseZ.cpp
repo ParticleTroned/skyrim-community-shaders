@@ -226,10 +226,14 @@ namespace
 		return row2 ? ZAxis::kRow2 : ZAxis::kUnknown;
 	}
 
-	bool AlreadyReversed(const Matrix& a_proj, ZAxis a_axis)
+	bool AlreadyReversed(const Matrix& matrix, ZAxis axis)
 	{
-		const float perspective = a_axis == ZAxis::kCol2 ? a_proj.m[3][2] : a_proj.m[2][3];
-		return a_proj.m[2][2] * perspective <= 0.0f;
+		// The depth and W directions remain parallel after camera rotation/translation.
+		float forwardDepth = 0;
+		for (int component = 0; component < 3; ++component)
+			forwardDepth += axis == ZAxis::kCol2 ? matrix.m[2][component] * matrix.m[3][component] :
+			                                       matrix.m[component][2] * matrix.m[component][3];
+		return forwardDepth <= 0.0f;
 	}
 
 	void ReverseClipZ(Matrix& matrix, ZAxis axis, float nearPlane, float farPlane)
@@ -311,7 +315,7 @@ namespace
 			ReapplyMappedStates(context);
 	}
 
-	/** @brief The seven camera matrices b12 carries per eye, in the order they are reversed. */
+	/** @brief References one eye's uploaded camera matrices and their matching inverses. */
 	struct UploadedEye
 	{
 		Matrix& proj;
@@ -338,30 +342,15 @@ namespace
 			a_frameBuffer.CameraViewProjInverse[a_eye], a_frameBuffer.CameraProjInverse[a_eye], a_frameBuffer.CameraPreviousViewProjUnjittered[a_eye] };
 	}
 
-	bool UploadedProjectionIsStandard(const Matrix& a_proj)
-	{
-		return std::abs(a_proj.m[3][3]) < 1e-4f &&
-		       std::abs(std::abs(a_proj.m[3][2]) - 1.0f) < 1e-3f &&
-		       a_proj.m[2][2] * a_proj.m[3][2] >= 0.0f;
-	}
-
-	/** @brief Reverses one eye's uploaded matrices, which follow the standard convention until now. */
+	/** @brief Normalizes each uploaded camera matrix before deriving its matching inverse. */
 	void FixupUploadedEye(const UploadedEye& eye)
 	{
-		if (UploadedProjectionIsStandard(eye.proj)) {
-			ReverseClipZ(eye.proj, ZAxis::kCol2);
-			ReverseClipZ(eye.viewProj, ZAxis::kCol2);
-			ReverseClipZ(eye.viewProjUnjittered, ZAxis::kCol2);
-			ReverseClipZ(eye.projUnjittered, ZAxis::kCol2);
-		}
+		for (auto* matrix : { &eye.proj, &eye.viewProj, &eye.viewProjUnjittered, &eye.projUnjittered, &eye.previousViewProj })
+			if (!AlreadyReversed(*matrix, ZAxis::kCol2))
+				ReverseClipZ(*matrix, ZAxis::kCol2);
 		eye.projUnjitteredInverse = eye.projUnjittered.Invert();
 		eye.viewProjInverse = eye.viewProj.Invert();
 		eye.projInverse = eye.proj.Invert();
-		float previousZForward = 0;
-		for (int axis = 0; axis < 3; ++axis)
-			previousZForward += eye.previousViewProj.m[2][axis] * eye.previousViewProj.m[3][axis];
-		if (previousZForward > 0)
-			ReverseClipZ(eye.previousViewProj, ZAxis::kCol2);
 	}
 
 }
@@ -736,13 +725,9 @@ void ReverseZ::ApplyReverseProjection(void* a_cameraStateEntry, const RE::NiCame
 	for (auto& viewData : eyes) {
 		const auto axis = axes[eyeIndex];
 		const auto& frustum = frusta[eyeIndex++];
-		if (AlreadyReversed(viewData.projMat, axis))
-			continue;
-
-		ReverseClipZ(viewData.projMat, axis, frustum.fNear, frustum.fFar);
-		ReverseClipZ(viewData.projMatrixUnjittered, axis, frustum.fNear, frustum.fFar);
-		ReverseClipZ(viewData.viewProjMat, axis, frustum.fNear, frustum.fFar);
-		ReverseClipZ(viewData.viewProjMatrixUnjittered, axis, frustum.fNear, frustum.fFar);
+		for (auto* matrix : { &viewData.projMat, &viewData.projMatrixUnjittered, &viewData.viewProjMat, &viewData.viewProjMatrixUnjittered })
+			if (!AlreadyReversed(*matrix, axis))
+				ReverseClipZ(*matrix, axis, frustum.fNear, frustum.fFar);
 	}
 	if (!g_reversalActive.exchange(true, std::memory_order_acq_rel)) {
 		RefreshBoundDepthTarget();
@@ -776,20 +761,15 @@ void ReverseZ::ReversePublishedProjection()
 			return;
 		}
 	}
-	bool reversed = false;
 	uint32_t eyeIndex = 0;
 	for (auto* viewData : std::span{ eyes.data(), eyeCount }) {
 		const auto axis = axes[eyeIndex++];
-		if (axis == ZAxis::kUnknown || AlreadyReversed(viewData->projMat, axis))
+		if (axis == ZAxis::kUnknown)
 			continue;
-		reversed = true;
-		ReverseClipZ(viewData->projMat, axis);
-		ReverseClipZ(viewData->projMatrixUnjittered, axis);
-		ReverseClipZ(viewData->viewProjMat, axis);
-		ReverseClipZ(viewData->viewProjMatrixUnjittered, axis);
+		for (auto* matrix : { &viewData->projMat, &viewData->projMatrixUnjittered, &viewData->viewProjMat, &viewData->viewProjMatrixUnjittered })
+			if (!AlreadyReversed(*matrix, axis))
+				ReverseClipZ(*matrix, axis);
 	}
-	if (reversed)
-		g_reversalActive.store(true, std::memory_order_relaxed);
 }
 
 bool ReverseZ::ExpectPublishedReversal(const RE::NiCamera* a_camera, bool a_renderingCubemap) const

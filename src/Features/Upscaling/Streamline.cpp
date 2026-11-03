@@ -3543,8 +3543,6 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		uint32_t eyeHeightOut = (uint32_t)screenSize.y;
 		uint32_t eyeWidthIn = (uint32_t)(renderSize.x / 2);
 		uint32_t eyeHeightIn = (uint32_t)renderSize.y;
-		const uint32_t contractGeneration =
-			upscaling.GetVRVendorEvaluationContractGeneration(Upscaling::UpscaleMethod::kDLSS);
 		const bool vendorLifecycleMutationDeferred =
 			upscaling.ShouldDeferVRVendorLifecycleMutation() || upscaling.ShouldReuseOrdinarySaveResources();
 		const auto existingProvider =
@@ -3559,21 +3557,6 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			}
 			a_sourceDescriptions = &localDescriptions;
 		}
-		if (vendorLifecycleMutationDeferred &&
-			!upscaling.AreActiveVRIntermediateTexturesCompatible(
-				Upscaling::UpscaleMethod::kDLSS,
-				eyeWidthIn,
-				eyeHeightIn,
-				eyeWidthOut,
-				eyeHeightOut,
-				a_upscalingTexture,
-				a_motionVectors,
-				a_reactiveMask,
-				a_transparencyCompositionMask,
-				contractGeneration, a_sourceDescriptions)) {
-			upscaling.dlssUpscaleOutputInSharpenerTexture = false;
-			return false;
-		}
 		if (vendorLifecycleMutationDeferred) {
 			if (!existingProvider.valid ||
 				existingProvider.method != Upscaling::UpscaleMethod::kDLSS ||
@@ -3581,6 +3564,21 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				existingProvider.renderEyeHeight != eyeHeightIn ||
 				existingProvider.displayEyeWidth != eyeWidthOut ||
 				existingProvider.displayEyeHeight != eyeHeightOut) {
+				upscaling.dlssUpscaleOutputInSharpenerTexture = false;
+				return false;
+			}
+			// Texture and viewport reuse must share one captured provider generation.
+			if (!upscaling.AreActiveVRIntermediateTexturesCompatible(
+					Upscaling::UpscaleMethod::kDLSS,
+					eyeWidthIn,
+					eyeHeightIn,
+					eyeWidthOut,
+					eyeHeightOut,
+					a_upscalingTexture,
+					a_motionVectors,
+					a_reactiveMask,
+					a_transparencyCompositionMask,
+					existingProvider.contractGeneration, a_sourceDescriptions)) {
 				upscaling.dlssUpscaleOutputInSharpenerTexture = false;
 				return false;
 			}

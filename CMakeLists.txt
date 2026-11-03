@@ -3356,6 +3356,33 @@ if(BUILD_CONTROLLER_TESTS)
         VRVendorRelatchPolicy
         tests/vr_vendor_relatch_policy_test.cpp
     )
+    set(_dlss_provider_reuse_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/dlss-provider-reuse"
+    )
+    set(_dlss_provider_reuse_test_header
+        "${_dlss_provider_reuse_test_dir}/dlss_provider_reuse_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_dlss_provider_reuse_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_dlss_provider_reuse_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_dlss_provider_reuse.cmake"
+        DEPENDS
+            src/Features/Upscaling/Streamline.cpp
+            tests/extract_dlss_provider_reuse.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(dlss_provider_reuse_test DLSSProviderReuse tests/dlss_provider_reuse_test.cpp)
+    target_sources(
+        dlss_provider_reuse_test
+        PRIVATE "${_dlss_provider_reuse_test_header}"
+    )
+    target_include_directories(
+        dlss_provider_reuse_test
+        PRIVATE "${_dlss_provider_reuse_test_dir}"
+    )
     add_controller_test(
         system_memory_test
         SystemMemory

@@ -46,10 +46,10 @@ class Contracts(unittest.TestCase):
         observer = source.split("void ObserveVRFrameBufferUpload(", 1)[1].split(
             "void InstallVRFrameBufferUploadHook()", 1)[0]
         self.assertIn("if (context == d3d::context", observer)
-        self.assertIn("if (source)", observer)
-        self.assertLess(observer.index("game::mappedFrameBuffer = nullptr"), observer.index("if (source)"))
+        self.assertIn("if (source && destination)", observer)
+        self.assertLess(observer.index("game::mappedFrameBuffer = nullptr"), observer.index("if (source && destination)"))
         self.assertIn("resource == *game::perFrame && subresource == 0", observer)
-        self.assertLess(observer.index("CacheFramebuffer(source)"), observer.index("context->Unmap("))
+        self.assertLess(observer.index("CacheFramebuffer(&corrected)"), observer.index("context->Unmap("))
         install = source.split("void InstallVRFrameBufferUploadHook()", 1)[1].split("struct ID3D11DeviceContext_Map", 1)[0]
         self.assertIn("if (!game::isVR || installed)", install)
         self.assertIn("SKSE::RUNTIME_VR_1_4_15", install)

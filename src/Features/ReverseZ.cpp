@@ -799,11 +799,12 @@ void ReverseZ::FixupMappedFrameBuffer(globals::FrameBuffer& buffer)
 		FixupUploadedEye(FlatUploadedEye(buffer));
 	}
 }
-void ReverseZ::FixupMappedFrameBufferVR(globals::FrameBufferVR& buffer)
+bool ReverseZ::FixupMappedFrameBufferVR(globals::FrameBufferVR& buffer)
 {
 	if (!activeThisBoot || !g_reversalActive.load(std::memory_order_acquire) || !g_projectionReversed)
-		return;
+		return false;
 	for (uint32_t eye = 0; eye < kStereoEyeCount; ++eye) FixupUploadedEye(VRUploadedEye(buffer, eye));
+	return true;
 }
 
 namespace

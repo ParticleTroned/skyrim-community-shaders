@@ -52,7 +52,8 @@ struct ReverseZ : Feature
 	/** Releases a feature-owned view's retained identity before its owner recreates it. */
 	void UnregisterSceneDepthView(ID3D11DepthStencilView*);
 	void FixupMappedFrameBuffer(globals::FrameBuffer&);
-	void FixupMappedFrameBufferVR(globals::FrameBufferVR&);
+	/** Returns whether reversed camera normalization ran and needs uploading. */
+	bool FixupMappedFrameBufferVR(globals::FrameBufferVR&);
 	void ApplyReverseProjection(void*, const RE::NiCamera*);
 	void ReversePublishedProjection();
 	bool ExpectPublishedReversal(const RE::NiCamera*, bool) const;

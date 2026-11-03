@@ -80,12 +80,13 @@ namespace
 		CaptureHooks& operator=(const CaptureHooks&) = delete;
 	};
 
-	void ObserveEngineUpload(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, void* source)
+	void ObserveEngineUpload(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const void* source, void* destination)
 	{
 		CaptureHooks::mapped = nullptr;
-		if (source) {
-			static_cast<unsigned*>(source)[0] ^= 0x10000000;
+		if (source && destination) {
 			std::memcpy(CaptureHooks::snapshot.data(), source, sizeof(CaptureHooks::snapshot));
+			CaptureHooks::snapshot[0] ^= 0x10000000;
+			std::memcpy(destination, CaptureHooks::snapshot.data(), sizeof(CaptureHooks::snapshot));
 			++CaptureHooks::captures;
 		}
 		context->Unmap(resource, subresource);
@@ -118,17 +119,21 @@ namespace
 
 	void Run(bool useEngineObserver, unsigned protectionMode)
 	{
+		// The native 128-byte copy loop rounds the framebuffer up by one register.
+		constexpr std::size_t nativeUploadSize = 0x580;
+		constexpr unsigned paddingSentinel = 0xD15CA4D;
 		ComPtr<ID3D11Device> device;
 		ComPtr<ID3D11DeviceContext> context;
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
 			D3D11_SDK_VERSION, device.GetAddressOf(), nullptr, context.GetAddressOf()));
 		D3D11_BUFFER_DESC description{};
-		description.ByteWidth = sizeof(CaptureHooks::snapshot);
+		description.ByteWidth = nativeUploadSize;
 		description.Usage = D3D11_USAGE_DYNAMIC;
 		description.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 		description.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 		ComPtr<ID3D11Buffer> buffer;
 		Check(device->CreateBuffer(&description, nullptr, buffer.GetAddressOf()));
+		Util::SetResourceName(buffer.Get(), "CaptureTest::NativeUpload");
 		ComPtr<ID3D11Multithread> multithread;
 		Check(context.As(&multithread));
 		if (protectionMode == 1)
@@ -154,12 +159,15 @@ namespace
 				expected[index] = (frame << 16) ^ (index * 7);
 			D3D11_MAPPED_SUBRESOURCE mapped{};
 			Check(context->Map(buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-			std::memcpy(mapped.pData, expected.data(), sizeof(expected));
+			std::array<unsigned, nativeUploadSize / sizeof(unsigned)> nativeBytes;
+			nativeBytes.fill(paddingSentinel);
+			std::memcpy(nativeBytes.data(), expected.data(), sizeof(expected));
+			std::memcpy(mapped.pData, nativeBytes.data(), sizeof(nativeBytes));
 			if (useEngineObserver) {
 				auto cpuSource = expected;
 				cpuSource[0] ^= 0x80000000;
 				upload(context.Get(), buffer.Get(), 0, cpuSource.data(), mapped.pData);
-				expected[0] ^= 0x10000000;
+				expected[0] ^= 0x90000000;
 				Require(cpuSource[0] == ((frame << 16) ^ 0x80000000));
 			} else
 				context->Unmap(buffer.Get(), 0);
@@ -186,15 +194,19 @@ namespace
 			D3D11_MAPPED_SUBRESOURCE gpuBytes{};
 			Check(context->Map(readback.Get(), 0, D3D11_MAP_READ, 0, &gpuBytes));
 			const bool gpuMatchesCache = std::memcmp(gpuBytes.pData, CaptureHooks::snapshot.data(), sizeof(CaptureHooks::snapshot)) == 0;
+			const auto* gpuWords = static_cast<const unsigned*>(gpuBytes.pData);
+			bool paddingPreserved = true;
+			for (auto index = CaptureHooks::snapshot.size(); index < nativeUploadSize / sizeof(unsigned); ++index)
+				paddingPreserved &= gpuWords[index] == paddingSentinel;
 			context->Unmap(readback.Get(), 0);
-			Require(gpuMatchesCache);
+			Require(gpuMatchesCache && paddingPreserved);
 			D3D11_MAPPED_SUBRESOURCE mapped{};
 			Check(context->Map(buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 			const auto before = CaptureHooks::snapshot;
 			upload(context.Get(), buffer.Get(), 0, before.data(), nullptr);
 			Require(CaptureHooks::captures == 64 && CaptureHooks::snapshot == before);
 			std::cout << "Engine upload, protection mode " << protectionMode
-					  << ": 64/64 complete fresh snapshots; null Map rejected; protection unchanged\n";
+					  << ": 64/64 complete fresh snapshots; null destination skipped; protection unchanged\n";
 		}
 	}
 }

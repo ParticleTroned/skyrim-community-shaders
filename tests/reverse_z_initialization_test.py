@@ -208,7 +208,7 @@ struct ReverseZ {
     bool ExpectPublishedReversal(const RE::NiCamera*, bool) const;
     bool IsReverseDepthView(ID3D11DepthStencilView*) const;
     void FixupMappedFrameBuffer(globals::FrameBuffer&);
-    void FixupMappedFrameBufferVR(globals::FrameBufferVR&);
+    bool FixupMappedFrameBufferVR(globals::FrameBufferVR&);
 };
 CAMERA_HELPERS
 CAMERA_METHODS
@@ -345,7 +345,7 @@ int main() {
         globals::FrameBufferVR startupStereo{};
         for (uint32_t eye = 0; eye < 2; ++eye) Fill(VRUploadedEye(startupStereo, eye), 0, 1, 100000);
         const auto startupStereoBefore = startupStereo;
-        reverse.FixupMappedFrameBufferVR(startupStereo);
+        Require(!reverse.FixupMappedFrameBufferVR(startupStereo), "Startup stereo upload requested a redundant GPU write");
         Require(std::memcmp(&startupStereoBefore, &startupStereo, sizeof(startupStereo)) == 0,
             "Stereo menu upload was reversed before world activation");
         for (auto& data : published) {
@@ -397,12 +397,12 @@ int main() {
         FixupUploadedEye(VRUploadedEye(vr, 1));
         const auto right = vr.CameraProj[1];
         const auto left = vr.CameraProj[0], previous = vr.CameraPreviousViewProjUnjittered[0];
-        reverse.FixupMappedFrameBufferVR(vr);
+        Require(reverse.FixupMappedFrameBufferVR(vr), "Active stereo upload did not request corrected bytes");
         Require(reverse.rejected == 0, "Stereo startup upload blocked rendering because global range is unset");
         CheckReversal(VRUploadedEye(vr, 0), left, previous);
         Require(Equal(right, vr.CameraProj[1]), "Already reversed stereo eye was reversed twice");
         const auto stereoOnce = vr;
-        reverse.FixupMappedFrameBufferVR(vr);
+        Require(reverse.FixupMappedFrameBufferVR(vr), "Reversed stereo upload trusted incoming inverses");
         Require(std::memcmp(&stereoOnce, &vr, sizeof(vr)) == 0, "Repeated stereo upload reversed twice");
         for (publishedEyeCount = 1; publishedEyeCount <= 2; ++publishedEyeCount) {
             for (uint32_t eye = 0; eye < publishedEyeCount; ++eye) {
@@ -507,7 +507,7 @@ int main() {
             helpers.append(block(source, signature) + (";" if signature.startswith("struct ") else ""))
         methods = [block(source, signature) for signature in (
             "void ReverseZ::ReversePublishedProjection(", "void ReverseZ::FixupMappedFrameBuffer(",
-            "void ReverseZ::FixupMappedFrameBufferVR(", "void ReverseZ::ApplyReverseProjection(",
+            "bool ReverseZ::FixupMappedFrameBufferVR(", "void ReverseZ::ApplyReverseProjection(",
             "bool ReverseZ::ExpectPublishedReversal(", "bool ReverseZ::IsReverseDepthView(",
         )]
         driver = driver.replace("FRAME_BUFFER_VR", block(globals_header, "struct FrameBufferVR") + ";")

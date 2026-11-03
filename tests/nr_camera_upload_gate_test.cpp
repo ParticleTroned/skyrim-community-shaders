@@ -1,5 +1,6 @@
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 
 using UINT = unsigned;
@@ -51,11 +52,12 @@ namespace globals
 		{
 			bool enabled = false;
 			unsigned fixups = 0;
-			void FixupMappedFrameBufferVR(FrameBufferVR& buffer)
+			bool FixupMappedFrameBufferVR(FrameBufferVR& buffer)
 			{
 				++fixups;
 				if (enabled)
 					buffer.bytes[0] ^= 0x80;
+				return enabled;
 			}
 		} reverseZ;
 		struct Upscaling
@@ -89,6 +91,7 @@ int main()
 	d3d::context = &context;
 	game::frameResource = &resource;
 	game::FrameBufferVR upload;
+	game::FrameBufferVR destination;
 	unsigned expectedCaptures = 0;
 	unsigned updates = 0;
 	for (const bool enabled : { false, true, false, true, false }) {
@@ -100,12 +103,15 @@ int main()
 				upload.bytes[i] = static_cast<std::uint8_t>((updates * 17) ^ i);
 			features::reverseZ.enabled = frame % 2 == 0;
 			const auto original = upload;
-			game::mappedFrameBuffer = &upload;
-			ObserveVRFrameBufferUpload(&context, &resource, 0, &upload);
+			destination.bytes.fill(0xA5);
+			const auto destinationBefore = destination;
+			game::mappedFrameBuffer = &destination;
+			ObserveVRFrameBufferUpload(&context, &resource, 0, &upload, &destination);
 			auto expected = original;
 			if (features::reverseZ.enabled)
 				expected.bytes[0] ^= 0x80;
-			require(upload == expected && game::frameBufferCached.vr == expected);
+			require(upload == original && game::frameBufferCached.vr == expected);
+			require(destination == (features::reverseZ.enabled ? expected : destinationBefore));
 			require(features::reverseZ.fixups == updates);
 			require(game::mappedFrameBuffer == nullptr);
 			require(context.unmaps == updates);
@@ -116,16 +122,21 @@ int main()
 		}
 	}
 	const auto last = game::frameBufferCached.vr;
+	const auto lastDestination = destination;
 	game::mappedFrameBuffer = &upload;
-	ObserveVRFrameBufferUpload(&context, &resource, 0, nullptr);
+	ObserveVRFrameBufferUpload(&context, &resource, 0, nullptr, &destination);
+	require(game::frameBufferCached.vr == last && game::mappedFrameBuffer == nullptr);
+	game::mappedFrameBuffer = &destination;
+	ObserveVRFrameBufferUpload(&context, &resource, 0, &upload, nullptr);
 	require(game::frameBufferCached.vr == last && game::mappedFrameBuffer == nullptr);
 	upload.bytes.fill(0);
-	ObserveVRFrameBufferUpload(&context, &otherResource, 0, &upload);
-	ObserveVRFrameBufferUpload(&context, &resource, 1, &upload);
+	ObserveVRFrameBufferUpload(&context, &otherResource, 0, &upload, &destination);
+	ObserveVRFrameBufferUpload(&context, &resource, 1, &upload, &destination);
 	ID3D11DeviceContext otherContext;
-	ObserveVRFrameBufferUpload(&otherContext, &resource, 0, &upload);
-	require(game::frameBufferCached.vr == last);
-	require(context.unmaps == updates + 3 && otherContext.unmaps == 1);
+	ObserveVRFrameBufferUpload(&otherContext, &resource, 0, &upload, &destination);
+	require(game::frameBufferCached.vr == last && destination == lastDestination);
+	require(features::reverseZ.fixups == updates);
+	require(context.unmaps == updates + 4 && otherContext.unmaps == 1);
 	require(features::upscaling.captures == expectedCaptures);
 	// The shared SE/AE cache remains independent of VR diagnostic admission.
 	game::isVR = false;

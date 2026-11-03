@@ -10,6 +10,7 @@
 class GrassCollisionVertexProbe
 {
 public:
+	static constexpr uint32_t kCaptureFrames = 30;
 	using DirectDraw = void (*)(ID3D11DeviceContext*, UINT, UINT, UINT, INT, UINT);
 	using IndirectDraw = void (*)(ID3D11DeviceContext*, ID3D11Buffer*, UINT);
 	struct Draw
@@ -26,7 +27,7 @@ public:
 	void Request(uint64_t a_generation, uint32_t a_frame);
 	/** @brief Read paired stream-output observations; empty samples are not a bending verdict. */
 	nlohmann::json Read() const;
-	/** @brief Replay bounded real vertex inputs with the current field and a zero-field baseline. */
+	/** @brief Replay bounded real vertex inputs with the current response and a zero-strength baseline. */
 	void Capture(ID3D11DeviceContext1* a_context, ID3D11VertexShader* a_vertex,
 		const void* a_bytecode, size_t a_bytes, uint32_t a_descriptor, uint32_t a_frame,
 		const Draw& a_draw, DirectDraw a_direct, IndirectDraw a_indirect);

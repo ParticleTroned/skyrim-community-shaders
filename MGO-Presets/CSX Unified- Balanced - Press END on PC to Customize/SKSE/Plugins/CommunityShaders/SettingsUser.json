@@ -75,15 +75,15 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-balanced",
-    "presetVersion": "d2026.11.02.1",
+    "presetVersion": "d2026.11.03.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
       "maximumVersionExclusive": "3.22"
     },
     "settingsContract": {
-      "revision": 30,
-      "sourceTreeSha256": "1DD8D1DF3D1643EE84A101D251C3AAFC934E2EED57987C424CB5C825147AC15B"
+      "revision": 31,
+      "sourceTreeSha256": "115247CCEC1141871B16190CA1207FDB0BE83036AADACEE00042D883546A261D"
     }
   },
   "Upscaling": {
@@ -437,7 +437,17 @@
   "Grass Collision": {
     "CollisionStrength": 1.0,
     "EnableGrassCollision": true,
-    "TrackRagdolls": true
+    "TrackRagdolls": true,
+    "CollisionRadiusScale": 1.0,
+    "GrassInteractionRadius": 25.0,
+    "CollisionImpactStrength": 3.0,
+    "SpringStrength": 5.0,
+    "Damping": 7.5,
+    "MaximumBend": 89.0,
+    "MaximumCompression": 0.2,
+    "CompressionHeight": 10.0,
+    "MaximumCompressibleGrassHeight": 40.0,
+    "CompressionRecovery": 0.25
   },
   "Grass Lighting": {
     "BasicGrassBrightness": 0.75,

@@ -1,6 +1,7 @@
 #include "ShaderCache.h"
 #include "Api/ShaderCompatibilityRegistry.h"
 #include "BuildProvenance.h"
+#include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/ReverseZ.h"
 #include "Features/UnifiedWater.h"
@@ -1610,6 +1611,8 @@ namespace SIE
 			}
 
 			for (auto* feature : Feature::GetFeatureList()) {
+				if ((descriptor & uint32_t(ShaderCache::GrassShaderFlags::NoCollision)) && feature == &globals::features::grassCollision)
+					continue;
 				if (feature->loaded && feature->HasShaderDefine(RE::BSShader::Type::Grass)) {
 					defines[lastIndex++] = { feature->GetShaderDefineName().data(), nullptr };
 				}
@@ -3459,6 +3462,27 @@ namespace SIE
 			return {};
 		return RetainShaderResource<ID3D11VertexShader>(vertexShaders, vertexShadersMutex, shader.shaderType.get(), descriptor);
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	bool ShaderCache::CopyDiagnosticVertexBytecode(RE::BSShader::Type type, ID3D11VertexShader* shader, std::vector<uint8_t>& bytes, uint32_t& descriptor)
+	{
+		std::lock_guard lock(vertexShadersMutex);
+		const auto index = static_cast<size_t>(type);
+		if (index >= vertexShaders.size() || !shader)
+			return false;
+		for (const auto& [id, cached] : vertexShaders[index]) {
+			if (!cached || reinterpret_cast<ID3D11VertexShader*>(cached->shader) != shader)
+				continue;
+			if (!cached->byteCodeSize || cached->byteCodeSize > 16 * 1024 * 1024)
+				return false;
+			const auto* begin = reinterpret_cast<const uint8_t*>(cached.get()) + sizeof(*cached);
+			bytes.assign(begin, begin + cached->byteCodeSize);
+			descriptor = id;
+			return true;
+		}
+		return false;
+	}
+#endif
 
 	winrt::com_ptr<ID3D11PixelShader> ShaderCache::RetainPixelShader(const RE::BSShader& shader, uint32_t descriptor)
 	{

@@ -972,7 +972,7 @@ template<class T> struct Retained { T* value = nullptr; explicit operator bool()
 namespace SIE {
 struct ShaderCache {
     enum class GrassShaderTechniques { RenderDepth = 8 };
-    enum class GrassShaderFlags { AlphaTest = 0x10000 };
+    enum class GrassShaderFlags { NoCollision = 0x400, AlphaTest = 0x10000 };
     static constexpr uint32_t GetCharacterCategoryFlag(RE::BSShader::Type) { return 0x200; }
     struct Vertex { ID3D11VertexShader* shader; };
     struct Pixel { ID3D11PixelShader* shader; };
@@ -984,6 +984,7 @@ struct ShaderCache {
     uint64_t GetGraphicsShaderRevision() const { return revision; }
     unsigned mutateAt = 0;
     unsigned calls = 0;
+    uint32_t lastCollisionFlag = 0;
     int missing = -1;
     unsigned throwAt = 0;
     ShaderCache() {
@@ -991,8 +992,9 @@ struct ShaderCache {
         for (unsigned i = 0; i < pixels.size(); ++i) pixels[i].shader = &pixelObjects[i];
     }
     Retained<ID3D11VertexShader> RetainVertexShader(RE::BSShader&, uint32_t descriptor) {
-        assert(descriptor == 0 || descriptor == 8);
-        const auto index = descriptor == 8 ? 1 : 0;
+        assert((descriptor & ~(8u | 0x400u)) == 0);
+        lastCollisionFlag = descriptor & 0x400u;
+        const auto index = (descriptor & 8u) ? 1 : 0;
         ++calls;
         if (calls == mutateAt) ++revision;
         if (calls == throwAt) throw std::runtime_error("Injected shader-cache failure");
@@ -1016,6 +1018,8 @@ public:
         RE::BSShader* currentNativeShader = &native;
         bool drawShadersChecked = false, drawShadersReady = false;
         uint64_t drawShaderRevision = 0;
+        uint32_t drawCollisionFlag = 0;
+        bool frameCollisionEnabled = true;
         std::array<Retained<ID3D11VertexShader>, 2> drawVertexShaders;
         std::array<Retained<ID3D11PixelShader>, 8> drawPixelShaders;
         bool PrepareDrawShaders();
@@ -1023,6 +1027,20 @@ public:
 };
 METHOD
 int main() {
+    {
+        SIE::ShaderCache cache;
+        globals::shaderCache = &cache;
+        GrassBucketRenderer::Impl renderer;
+        assert(renderer.PrepareDrawShaders() && cache.calls == 10);
+        renderer.frameCollisionEnabled = false;
+        renderer.drawShadersChecked = false;
+        assert(renderer.PrepareDrawShaders() && cache.calls == 20 && cache.lastCollisionFlag == 0x400);
+        renderer.drawShadersChecked = false;
+        assert(renderer.PrepareDrawShaders() && cache.calls == 20);
+        renderer.frameCollisionEnabled = true;
+        renderer.drawShadersChecked = false;
+        assert(renderer.PrepareDrawShaders() && cache.calls == 30 && cache.lastCollisionFlag == 0);
+    }
     for (unsigned failure = 1; failure <= 10; ++failure) {
         SIE::ShaderCache cache;
         globals::shaderCache = &cache;
@@ -1080,6 +1098,59 @@ int main() {
 }
 '''.replace("METHOD", method)
         result = compile_fixture(driver)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_collision_diagnostic_failure_without_heap(self):
+        source = (ROOT / "src/Features/GrassCollision.cpp").read_text(encoding="utf-8")
+        method = block(source, "void GrassCollision::RecordDiagnosticsFailure(")
+        driver = r'''
+#include <array>
+#include <atomic>
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <mutex>
+#include <new>
+bool failAllocation = false;
+void* operator new(std::size_t size) {
+    if (failAllocation) throw std::bad_alloc{};
+    if (void* value = std::malloc(size ? size : 1)) return value;
+    throw std::bad_alloc{};
+}
+void operator delete(void* value) noexcept { std::free(value); }
+void operator delete(void* value, std::size_t) noexcept { std::free(value); }
+struct GrassCollision {
+    std::atomic_bool diagnosticsFailed{false};
+    std::mutex diagnosticsMutex;
+    std::array<char, 512> diagnosticsError{};
+    void RecordDiagnosticsFailure(const char*, const std::exception&) noexcept;
+};
+METHOD
+struct Failure : std::exception {
+    const char* text;
+    explicit Failure(const char* value) : text(value) {}
+    const char* what() const noexcept override { return text; }
+};
+int main() {
+    GrassCollision collision;
+    const Failure shortError("readback failed");
+    std::array<char, 1024> longMessage;
+    longMessage.fill('x');
+    longMessage.back() = 0;
+    const Failure longError(longMessage.data());
+    failAllocation = true;
+    collision.RecordDiagnosticsFailure("field observations", shortError);
+    assert(collision.diagnosticsFailed.load());
+    assert(std::strcmp(collision.diagnosticsError.data(), "field observations: readback failed") == 0);
+    collision.RecordDiagnosticsFailure("draw bindings", longError);
+    assert(std::strncmp(collision.diagnosticsError.data(), "draw bindings: ", 15) == 0);
+    assert(std::strlen(collision.diagnosticsError.data()) == collision.diagnosticsError.size() - 1);
+    failAllocation = false;
+}
+'''.replace("METHOD", method)
+        result = compile_fixture(driver, devbench=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_production_setup_and_draw(self):

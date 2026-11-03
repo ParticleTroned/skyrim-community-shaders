@@ -257,20 +257,22 @@ VS_OUTPUT main(VS_INPUT input)
 	msPosition.xyz += batchOffset;
 #		endif
 
-#		ifdef GRASS_COLLISION
-	float3 displacement, previousDisplacement;
-#			ifdef GRASS_OPTIMIZATIONS
-	VS_INPUT collisionInput = input;
-	collisionInput.InstanceData1.xyz += batchOffset;
-	GrassCollision::GetDisplacedPosition(collisionInput, msPosition.xyz, displacement, previousDisplacement,
-		GrassBatchEnabled ? GrassBatchCollisionDistance : 2048.0);
-#			else
-	GrassCollision::GetDisplacedPosition(input, msPosition.xyz, displacement, previousDisplacement);
-#			endif
-	msPosition.xyz += displacement;
-#		endif  // GRASS_COLLISION
-
+	float4 previousMsPosition = msPosition;
 	msPosition.xyz += windDisplacement;
+	previousMsPosition.xyz += previousWindDisplacement;
+#		ifdef GRASS_COLLISION
+	float3 collisionAxis;
+	float collisionAngle, compressionScale;
+	VS_INPUT collisionInput = input;
+	float collisionDistance = GrassCollision::FADE_DISTANCE;
+#			ifdef GRASS_OPTIMIZATIONS
+	collisionInput.InstanceData1.xyz += batchOffset;
+	if (GrassBatchEnabled)
+		collisionDistance = GrassBatchCollisionDistance;
+#			endif
+	GrassCollision::ApplyDeformation(collisionInput, msPosition.xyz, previousMsPosition.xyz,
+		collisionDistance, collisionAxis, collisionAngle, compressionScale);
+#		endif
 
 	float4 projSpacePosition = mul(WorldViewProj[eyeIndex], msPosition);
 #		if !defined(VR)
@@ -306,17 +308,6 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.ViewSpacePosition = mul(WorldView[eyeIndex], msPosition).xyz;
 	vsout.WorldPosition = mul(World[eyeIndex], msPosition);
 
-	float4 previousMsPosition = GetMSPosition(input, world3x3);
-#		ifdef GRASS_OPTIMIZATIONS
-	previousMsPosition.xyz += batchOffset;
-#		endif
-
-#		ifdef GRASS_COLLISION
-	previousMsPosition.xyz += previousDisplacement;
-#		endif  // GRASS_COLLISION
-
-	previousMsPosition.xyz += previousWindDisplacement;
-
 	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], previousMsPosition);
 #		if defined(VR)
 	Stereo::VR_OUTPUT VRout = Stereo::GetVRVSOutput(projSpacePosition, eyeIndex);
@@ -329,6 +320,9 @@ VS_OUTPUT main(VS_INPUT input)
 	// therefore evaluated there; keep this varying initialized for the enhanced
 	// path and let the basic pixel path ignore it.
 	vsout.VertexNormal.xyz = mul(world3x3, input.Normal.xyz * 2.0 - 1.0);
+#		ifdef GRASS_COLLISION
+	vsout.VertexNormal.xyz = GrassCollision::DeformNormal(vsout.VertexNormal.xyz, collisionAxis, collisionAngle, compressionScale);
+#		endif
 	vsout.VertexNormal.w = input.Color.w;
 
 	return vsout;
@@ -360,20 +354,22 @@ VS_OUTPUT main(VS_INPUT input)
 	msPosition.xyz += batchOffset;
 #		endif
 
-#		ifdef GRASS_COLLISION
-	float3 displacement, previousDisplacement;
-#			ifdef GRASS_OPTIMIZATIONS
-	VS_INPUT collisionInput = input;
-	collisionInput.InstanceData1.xyz += batchOffset;
-	GrassCollision::GetDisplacedPosition(collisionInput, msPosition.xyz, displacement, previousDisplacement,
-		GrassBatchEnabled ? GrassBatchCollisionDistance : 2048.0);
-#			else
-	GrassCollision::GetDisplacedPosition(input, msPosition.xyz, displacement, previousDisplacement);
-#			endif
-	msPosition.xyz += displacement;
-#		endif  // GRASS_COLLISION
-
+	float4 previousMsPosition = msPosition;
 	msPosition.xyz += windDisplacement;
+	previousMsPosition.xyz += previousWindDisplacement;
+#		ifdef GRASS_COLLISION
+	float3 collisionAxis;
+	float collisionAngle, compressionScale;
+	VS_INPUT collisionInput = input;
+	float collisionDistance = GrassCollision::FADE_DISTANCE;
+#			ifdef GRASS_OPTIMIZATIONS
+	collisionInput.InstanceData1.xyz += batchOffset;
+	if (GrassBatchEnabled)
+		collisionDistance = GrassBatchCollisionDistance;
+#			endif
+	GrassCollision::ApplyDeformation(collisionInput, msPosition.xyz, previousMsPosition.xyz,
+		collisionDistance, collisionAxis, collisionAngle, compressionScale);
+#		endif
 
 	float4 projSpacePosition = mul(WorldViewProj[eyeIndex], msPosition);
 #		if !defined(VR)
@@ -413,29 +409,23 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.AmbientColor.w = ShadowClampValue;
 #		ifdef GRASS_OPTIMIZATIONS
 	// Basic shading leaves this varying unused; far billboards carry authored normals here.
-	if (GrassBatchEnabled & 2u)
+	if (GrassBatchEnabled & 2u) {
 		vsout.AmbientColor.xyz = mul(GetGrassInstanceRotation(input), input.Normal.xyz * 2.0 - 1.0);
+#			ifdef GRASS_COLLISION
+		vsout.AmbientColor.xyz = GrassCollision::DeformNormal(vsout.AmbientColor.xyz, collisionAxis, collisionAngle, compressionScale);
+#			endif
+	}
 #		endif
 
 	vsout.ViewSpacePosition = mul(WorldView[eyeIndex], msPosition).xyz;
 	vsout.WorldPosition = mul(World[eyeIndex], msPosition);
 
-	float4 previousMsPosition = GetMSPosition(input);
-#		ifdef GRASS_OPTIMIZATIONS
-	previousMsPosition.xyz += batchOffset;
-#		endif
 #		if defined(VR)
 	Stereo::VR_OUTPUT VRout = Stereo::GetVRVSOutput(projSpacePosition, eyeIndex);
 	vsout.HPosition = VRout.VRPosition;
 	vsout.ClipDistance.x = VRout.ClipDistance;
 	vsout.CullDistance.x = VRout.CullDistance;
 #		endif  // !VR
-
-#		ifdef GRASS_COLLISION
-	previousMsPosition.xyz += previousDisplacement;
-#		endif  // GRASS_COLLISION
-
-	previousMsPosition.xyz += previousWindDisplacement;
 
 	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], previousMsPosition);
 

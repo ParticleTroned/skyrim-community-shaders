@@ -195,7 +195,7 @@ namespace GrassPolicy
 		float RenderDistanceOverride = 0.0f;
 		float EdgeFadeStart = 0.85f;
 		float SimpleShadingPixelSize = 0.0f;
-		float CollisionDistance = 2048.0f;
+		float CollisionDistance = 4096.0f;
 		bool EnableMeshLOD = false;
 		bool EnableMidLOD = true;
 		bool EnableFarLOD = true;

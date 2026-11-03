@@ -120,6 +120,32 @@ namespace Util
 		return true;
 	}
 
+	bool GetShapeCollisionCapsule(RE::bhkNiCollisionObject* object, ShapeCollisionCapsule& result)
+	{
+		auto* body = object && object->body.get() ? object->body.get()->AsBhkRigidBody() : nullptr;
+		auto* rigid = body ? skyrim_cast<RE::hkpRigidBody*>(body->referencedObject.get()) : nullptr;
+		const auto* shape = rigid ? rigid->collidable.GetShape() : nullptr;
+		ShapeCollisionCapsule capsule;
+		if (shape && shape->type == RE::hkpShapeType::kCapsule) {
+			const auto& source = *static_cast<const RE::hkpCapsuleShape*>(shape);
+			const float scale = RE::bhkWorld::GetWorldScaleInverse();
+			if (!std::isfinite(scale) || scale <= 0 || !StoreShapeRadius(double(source.radius) * scale, capsule.radius))
+				return false;
+			RE::hkTransform transform;
+			body->GetTransform(transform);
+			capsule.pointA = TransformHavokPoint(transform, source.vertexA, scale);
+			capsule.pointB = TransformHavokPoint(transform, source.vertexB, scale);
+			if (!IsFinitePoint(capsule.pointA) || !IsFinitePoint(capsule.pointB))
+				return false;
+		} else {
+			if (!GetShapeBound(object, capsule.pointA, capsule.radius))
+				return false;
+			capsule.pointB = capsule.pointA;
+		}
+		result = capsule;
+		return true;
+	}
+
 	bool ExtractShapeBound(const RE::hkpShape* shape, float& radius)
 	{
 		if (!shape || skyrim_cast<const RE::hkpListShape*>(shape))

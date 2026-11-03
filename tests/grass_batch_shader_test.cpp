@@ -1,3 +1,7 @@
+#ifndef NOMINMAX
+#	define NOMINMAX
+#endif
+
 #include "Features/GrassOptimizations/GrassPolicy.h"
 #include "Utils/DepthPyramidPolicy.h"
 #include "Utils/ShaderInclude.h"
@@ -6,6 +10,7 @@
 #include <bit>
 #include <cmath>
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <iostream>
@@ -96,6 +101,13 @@ namespace
 							Check(reflection->GetConstantBufferByName("GrassBatch")->GetVariableByName("GrassBatchCollisionDistance")->GetDesc(&collisionDistance));
 							Require(collisionDistance.StartOffset == 12 && collisionDistance.Size == sizeof(float), "Batch collision distance layout changed");
 						}
+						for (const auto& [name, slot] : std::array<std::pair<const char*, UINT>, 4>{ { { "GrassCollision::GrassCollisionPerFrame", 5 }, { "GrassCollision::Deformation", 100 }, { "GrassCollision::PreviousDeformation", 101 }, { "GrassCollision::DeformationSampler", 15 } } }) {
+							const auto result = reflection->GetResourceBindingDescByName(name, &binding);
+							if (collision)
+								Require(SUCCEEDED(result) && binding.BindPoint == slot, "Collision resource changed register");
+							else
+								Require(FAILED(result), "Disabled vertex permutation retained a collision resource");
+						}
 						Check(reflection->GetResourceBindingDescByName("GrassInstanceExtras", &binding));
 						Require(binding.BindPoint == 2, "Batch fade changed register");
 						Check(reflection->GetResourceBindingDescByName("GrassSourceRecords", &binding));
@@ -110,6 +122,7 @@ namespace
 	}
 
 #include "grass_bounds_gpu.h"
+#include "grass_collision_field_gpu.h"
 #include "grass_collision_strength_gpu.h"
 #include "grass_culling_gpu.h"
 #include "grass_source_index_gpu.h"
@@ -155,6 +168,7 @@ int main()
 				RunDepthReduction(vr, reduction, true, true);
 			}
 		run("Grass collision strength", [] { RunGrassCollisionStrength(); });
+		run("Grass collision field", [] { RunGrassCollisionField(); });
 		RunSPDReduction(64, 64, 1);
 		RunSPDReduction(128, 128, 2);
 		RunSPDReduction(512, 512, 2, 7);

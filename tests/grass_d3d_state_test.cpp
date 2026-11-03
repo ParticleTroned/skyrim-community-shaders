@@ -105,11 +105,12 @@ namespace
 		}
 	};
 
-	void CheckCompute(Fixture& f, UINT requested, bool holes, bool unwind)
+	void CheckCompute(Fixture& f, UINT requested, bool holes, bool unwind, UINT requestedSRVs = 3)
 	{
 		auto* c = f.context.Get();
 		c->ClearState();
 		const UINT used = std::min(requested, 14u);
+		const UINT usedSRVs = std::min(requestedSRVs, 4u);
 		std::array<ID3D11Buffer*, 5> buffers{};
 		std::array<UINT, 5> first{}, count{};
 		for (UINT i = 0; i < buffers.size(); ++i) {
@@ -133,9 +134,9 @@ namespace
 		}
 		c->CSSetShader(f.shader.Get(), nullptr, 0);
 		try {
-			D3DState::ComputeState restore(c, requested);
-			std::array<ID3D11ShaderResourceView*, 3> emptySRVs{};
-			c->CSSetShaderResources(0, 3, emptySRVs.data());
+			D3DState::ComputeState restore(c, requested, requestedSRVs);
+			std::array<ID3D11ShaderResourceView*, 4> emptySRVs{};
+			c->CSSetShaderResources(0, usedSRVs, emptySRVs.data());
 			std::array<ID3D11UnorderedAccessView*, 14> emptyUAVs{};
 			c->CSSetUnorderedAccessViews(0, used, emptyUAVs.data(), nullptr);
 			if (used) {
@@ -252,6 +253,8 @@ int main()
 			Fixture fixture(level);
 			for (bool holes : { false, true })
 				for (bool unwind : { false, true }) {
+					for (UINT usedSRVs : { 4u, 32u })
+						CheckCompute(fixture, 2, holes, unwind, usedSRVs);
 					for (UINT used : { 0u, 1u, 3u, 4u })
 						CheckCompute(fixture, used, holes, unwind);
 					if (level >= D3D_FEATURE_LEVEL_11_1)

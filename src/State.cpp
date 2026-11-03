@@ -40,6 +40,7 @@
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/FoveatedCommon.h"
+#include "Features/GrassCollision.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/PerformanceOverlay.h"
@@ -514,6 +515,7 @@ void State::Draw()
 			globals::features::lightLimitFix.Reset();
 			globals::features::interiorSun.isInteriorWithSun = false;
 			globals::features::wetterness.ResetRuntimeStateAfterGameLoad();
+			globals::features::grassCollision.ResetRuntimeStateAfterGameLoad();
 			pendingPostLoadRuntimeReset = false;
 			logger::info("Applied deferred post-load runtime reset");
 		}
@@ -1938,7 +1940,7 @@ void State::CheckTypedUAVLoadSupport()
 	};
 	static const FormatEntry kFormats[] = {
 		{ DXGI_FORMAT_R11G11B10_FLOAT, "R11G11B10_FLOAT", "Dynamic Cubemaps (envCapture/Raw/Position) — non-HDR" },
-		{ DXGI_FORMAT_R16G16B16A16_FLOAT, "R16G16B16A16_FLOAT", "Dynamic Cubemaps (HDR), Skylighting outProbeArray, Grass Collision (collisionTexture)" },
+		{ DXGI_FORMAT_R16G16B16A16_FLOAT, "R16G16B16A16_FLOAT", "Dynamic Cubemaps (HDR), Skylighting outProbeArray" },
 		{ DXGI_FORMAT_R16G16_UNORM, "R16G16_UNORM", "Terrain Shadows (RWTexShadowHeights)" },
 		{ DXGI_FORMAT_R16G16_FLOAT, "R16G16_FLOAT", "VR Stereo Blend (kMOTION_VECTOR reprojection)" },
 		{ DXGI_FORMAT_R8G8B8A8_UNORM, "R8G8B8A8_UNORM", "HDR Display UI brightness (uiTexture)" },
@@ -2111,6 +2113,15 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 					if (technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Glowmap)
 						a_pixelDescriptor &= ~(0x3F << 24);
 				}
+			}
+			break;
+		case RE::BSShader::Type::Grass:
+			{
+				const auto noCollision = uint32_t(SIE::ShaderCache::GrassShaderFlags::NoCollision);
+				a_vertexDescriptor &= ~noCollision;
+				a_pixelDescriptor &= ~noCollision;
+				if (!globals::features::grassCollision.NeedsVertexDeformation())
+					a_vertexDescriptor |= noCollision;
 			}
 			break;
 		case RE::BSShader::Type::Water:

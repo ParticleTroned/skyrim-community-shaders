@@ -15,6 +15,14 @@ namespace RE
 
 namespace Util
 {
+	struct ShapeCollisionCapsule
+	{
+		RE::NiPoint3 pointA, pointB;
+		float radius;
+	};
+	/** @brief Extract a world-space capsule or enclosing sphere; preserve outputs on failure. */
+	bool GetShapeCollisionCapsule(RE::bhkNiCollisionObject* object, ShapeCollisionCapsule& result);
+
 	/**
      * @brief Extracts a world-space sphere centered on transformed shape geometry.
      * @note List shapes are supported only on blend collision objects, as one enclosing sphere.

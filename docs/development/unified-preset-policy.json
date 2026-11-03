@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.11.02.1",
+    "packageVersion": "d2026.11.03.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "850887C25657AD856946B26C1CD5411C4954F72E334E1267F074684862CF70F2"
+        "sha256": "CD8B66B2AEC02E58FCC18E6C758A886E82BABA911C3680E29C00A5CE6CE10E67"
     },
     "runtimeSettingsContract": {
-        "revision": 30,
-        "sourceTreeSha256": "1DD8D1DF3D1643EE84A101D251C3AAFC934E2EED57987C424CB5C825147AC15B",
+        "revision": 31,
+        "sourceTreeSha256": "115247CCEC1141871B16190CA1207FDB0BE83036AADACEE00042D883546A261D",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -817,6 +817,16 @@
             },
             { "path": ["Neural Rendering", "colour", "lightingPreservation"], "value": 1.0 },
             { "path": ["Grass Collision", "CollisionStrength"], "value": 1.0 },
+            { "path": ["Grass Collision", "CollisionRadiusScale"], "value": 1.0 },
+            { "path": ["Grass Collision", "GrassInteractionRadius"], "value": 25.0 },
+            { "path": ["Grass Collision", "CollisionImpactStrength"], "value": 3.0 },
+            { "path": ["Grass Collision", "SpringStrength"], "value": 5.0 },
+            { "path": ["Grass Collision", "Damping"], "value": 7.5 },
+            { "path": ["Grass Collision", "MaximumBend"], "value": 89.0 },
+            { "path": ["Grass Collision", "MaximumCompression"], "value": 0.2 },
+            { "path": ["Grass Collision", "CompressionHeight"], "value": 10.0 },
+            { "path": ["Grass Collision", "MaximumCompressibleGrassHeight"], "value": 40.0 },
+            { "path": ["Grass Collision", "CompressionRecovery"], "value": 0.25 },
             { "path": ["Light Limit Fix", "ShadowCulling", "sun"], "value": true },
             { "path": ["Light Limit Fix", "ShadowCulling", "torch"], "value": true },
             { "path": ["Light Limit Fix", "ShadowCulling", "actors"], "value": true },

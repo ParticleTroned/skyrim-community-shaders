@@ -24,18 +24,21 @@ namespace
 	constexpr uint32_t kReadbackFrames = 180;
 	struct Vertex
 	{
-		std::array<float, 3> world;
+		std::array<float, 3> world, previousWorld;
 		std::array<float, 4> clip;
+		std::array<float, 3> normal;
+		float authoredWeight;
 	};
-	static_assert(sizeof(Vertex) == 28);
+	static_assert(sizeof(Vertex) == 56);
 
 	struct ReplayState
 	{
 		ID3D11DeviceContext1* context;
-		winrt::com_ptr<ID3D11ShaderResourceView> field;
+		winrt::com_ptr<ID3D11Buffer> constants;
+		UINT first = 0, count = 0;
 		explicit ReplayState(ID3D11DeviceContext1* a_context) : context(a_context)
 		{
-			context->VSGetShaderResources(100, 1, field.put());
+			context->VSGetConstantBuffers1(5, 1, constants.put(), &first, &count);
 		}
 		~ReplayState()
 		{
@@ -43,8 +46,8 @@ namespace
 			std::array<UINT, D3D11_SO_BUFFER_SLOT_COUNT> offsets{};
 			context->SOSetTargets(UINT(empty.size()), empty.data(), offsets.data());
 			context->GSSetShader(nullptr, nullptr, 0);
-			auto* restored = field.get();
-			context->VSSetShaderResources(100, 1, &restored);
+			auto* restored = constants.get();
+			context->VSSetConstantBuffers1(5, 1, &restored, &first, &count);
 		}
 	};
 
@@ -90,7 +93,8 @@ struct GrassCollisionVertexProbe::Impl
 	{
 		uint64_t generation = 0;
 		uint32_t frame = 0;
-		bool pending = false;
+		bool pending = false, hasNormal = false;
+		UINT receiptIndex = 0;
 		std::array<winrt::com_ptr<ID3D11Buffer>, 2> outputs, staging;
 		std::array<winrt::com_ptr<ID3D11Query>, 2> statistics;
 		winrt::com_ptr<ID3D11Buffer> arguments;
@@ -100,18 +104,21 @@ struct GrassCollisionVertexProbe::Impl
 	{
 		winrt::com_ptr<ID3D11VertexShader> vertex;
 		winrt::com_ptr<ID3D11GeometryShader> stream;
+		bool hasNormal = false;
 	};
 	mutable std::mutex mutex;
 	std::atomic<uint64_t> requested{ 0 };
 	uint32_t requestedFrame = 0, pollFrame = UINT32_MAX;
 	uint64_t renderGeneration = 0;
-	std::array<UINT, 2> passCounts{};
+	std::array<UINT, 2> drawOrdinals{}, previousDrawCounts{}, targetOrdinals{};
+	uint32_t captureFrame = UINT32_MAX;
+	UINT attempts = 0;
 	std::array<Pair, kPairLimit> pairs;
 	std::vector<StreamShader> shaders;
 	json records = json::array();
 	size_t skippedPipelines = 0;
 	winrt::com_ptr<ID3D11Device> device;
-	winrt::com_ptr<ID3D11ShaderResourceView> zeroField;
+	winrt::com_ptr<ID3D11Buffer> zeroConstants;
 	winrt::com_ptr<ID3D11ComputeShader> clampArguments;
 	bool capturing = false;
 
@@ -127,23 +134,17 @@ struct GrassCollisionVertexProbe::Impl
 
 	HRESULT EnsureResources(Pair& a_pair)
 	{
-		if (!zeroField) {
-			D3D11_TEXTURE2D_DESC desc{};
-			desc.Width = desc.Height = 512;
-			desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
-			desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-			const std::vector<uint16_t> zeros(512 * 512 * 4, 0);
-			const D3D11_SUBRESOURCE_DATA initial{ zeros.data(), 512 * 8, 0 };
-			winrt::com_ptr<ID3D11Texture2D> texture;
-			auto result = device->CreateTexture2D(&desc, &initial, texture.put());
+		if (!zeroConstants) {
+			D3D11_BUFFER_DESC desc{};
+			desc.ByteWidth = 64;
+			desc.Usage = D3D11_USAGE_IMMUTABLE;
+			desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+			const std::array<float, 16> zeros{};
+			const D3D11_SUBRESOURCE_DATA initial{ zeros.data(), 0, 0 };
+			const auto result = device->CreateBuffer(&desc, &initial, zeroConstants.put());
 			if (FAILED(result))
 				return result;
-			Util::SetResourceName(texture.get(), "GrassCollision::VertexProbeZeroField");
-			result = device->CreateShaderResourceView(texture.get(), nullptr, zeroField.put());
-			if (FAILED(result))
-				return result;
-			Util::SetResourceName(zeroField.get(), "GrassCollision::VertexProbeZeroField SRV");
+			Util::SetResourceName(zeroConstants.get(), "GrassCollision::VertexProbeZeroConstants");
 		}
 		for (UINT i = 0; i < 2; ++i) {
 			D3D11_BUFFER_DESC desc{};
@@ -175,11 +176,12 @@ struct GrassCollisionVertexProbe::Impl
 		return S_OK;
 	}
 
-	HRESULT StreamOutput(ID3D11VertexShader* a_vertex, const void* a_bytes, size_t a_size, ID3D11GeometryShader*& a_result)
+	HRESULT StreamOutput(ID3D11VertexShader* a_vertex, const void* a_bytes, size_t a_size, ID3D11GeometryShader*& a_result, bool& hasNormal)
 	{
 		const auto found = std::find_if(shaders.begin(), shaders.end(), [&](const auto& item) { return item.vertex.get() == a_vertex; });
 		if (found != shaders.end()) {
 			a_result = found->stream.get();
+			hasNormal = found->hasNormal;
 			return S_OK;
 		}
 		if (!a_bytes || !a_size || a_size > 16 * 1024 * 1024 || shaders.size() >= 16)
@@ -209,10 +211,19 @@ struct GrassCollisionVertexProbe::Impl
 				break;
 			}
 		}
-		const std::array<D3D11_SO_DECLARATION_ENTRY, 2> declaration{ { { 0, "POSITION", 1, 0, 3, 0 }, { 0, "SV_Position", 0, 0, 4, 0 } } };
+		hasNormal = false;
+		for (UINT i = 0; i < desc.OutputParameters; ++i) {
+			D3D11_SIGNATURE_PARAMETER_DESC parameter{};
+			if (SUCCEEDED(reflection->GetOutputParameterDesc(i, &parameter)) &&
+				_stricmp(parameter.SemanticName, "POSITION") == 0 && parameter.SemanticIndex == 4)
+				hasNormal = true;
+		}
+		const std::array<D3D11_SO_DECLARATION_ENTRY, 4> declaration{ { { 0, "POSITION", 1, 0, 3, 0 }, { 0, "POSITION", 2, 0, 3, 0 },
+			{ 0, "SV_Position", 0, 0, 4, 0 }, { 0, hasNormal ? "POSITION" : nullptr, hasNormal ? 4u : 0u, 0, 4, 0 } } };
 		const UINT stride = sizeof(Vertex);
 		StreamShader shader;
 		shader.vertex.copy_from(a_vertex);
+		shader.hasNormal = hasNormal;
 		result = device->CreateGeometryShaderWithStreamOutput(a_bytes, a_size, declaration.data(), UINT(declaration.size()),
 			&stride, 1, D3D11_SO_NO_RASTERIZED_STREAM, nullptr, shader.stream.put());
 		if (FAILED(result))
@@ -274,25 +285,42 @@ struct GrassCollisionVertexProbe::Impl
 		return S_OK;
 	}
 
-	json Compare(const Vertex* a_on, const Vertex* a_off, size_t a_count)
+	json Compare(const Vertex* a_on, const Vertex* a_off, size_t a_count, bool hasNormal)
 	{
-		size_t moved = 0, nearVertices = 0, nearMoved = 0, nonFinite = 0;
-		double maximum = 0, maxClip = 0, minimumDistance = std::numeric_limits<double>::infinity();
+		size_t moved = 0, nearVertices = 0, nearMoved = 0, nearWeighted = 0, nonFinite = 0;
+		double maximum = 0, maxPrevious = 0, maxMotionChange = 0, maxNormalAngle = 0, maxClip = 0, minimumDistance = std::numeric_limits<double>::infinity();
 		size_t example = 0;
 		for (size_t i = 0; i < a_count; ++i) {
 			const auto finite = [](const auto& a_values) {
 				return std::all_of(a_values.begin(), a_values.end(), [](float a_value) { return std::isfinite(a_value); });
 			};
-			if (!finite(a_on[i].world) || !finite(a_off[i].world) || !finite(a_on[i].clip) || !finite(a_off[i].clip)) {
+			if (!finite(a_on[i].world) || !finite(a_off[i].world) || !finite(a_on[i].clip) || !finite(a_off[i].clip) || !finite(a_on[i].previousWorld) || !finite(a_off[i].previousWorld) ||
+				(hasNormal && (!finite(a_on[i].normal) || !finite(a_off[i].normal) || !std::isfinite(a_on[i].authoredWeight) || !std::isfinite(a_off[i].authoredWeight)))) {
 				++nonFinite;
 				continue;
 			}
 			const double delta = Distance(a_on[i].world, a_off[i].world);
+			maxPrevious = std::max(maxPrevious, Distance(a_on[i].previousWorld, a_off[i].previousWorld));
+			std::array<float, 3> motionChange{};
+			for (size_t axis = 0; axis < 3; ++axis)
+				motionChange[axis] = (a_on[i].world[axis] - a_off[i].world[axis]) - (a_on[i].previousWorld[axis] - a_off[i].previousWorld[axis]);
+			maxMotionChange = std::max(maxMotionChange, Distance(motionChange, std::array<float, 3>{}));
+			if (hasNormal) {
+				double dot = 0, onLength = 0, offLength = 0;
+				for (size_t axis = 0; axis < 3; ++axis) {
+					dot += double(a_on[i].normal[axis]) * a_off[i].normal[axis];
+					onLength += double(a_on[i].normal[axis]) * a_on[i].normal[axis];
+					offLength += double(a_off[i].normal[axis]) * a_off[i].normal[axis];
+				}
+				if (onLength > 1e-12 && offLength > 1e-12)
+					maxNormalAngle = std::max(maxNormalAngle, std::acos(std::clamp(dot / std::sqrt(onLength * offLength), -1.0, 1.0)));
+			}
 			const double cameraDistance = Distance(a_off[i].world, std::array<float, 3>{});
 			const bool displaced = delta > 0.0001;
 			moved += displaced;
 			nearVertices += cameraDistance < 512;
 			nearMoved += cameraDistance < 512 && displaced;
+			nearWeighted += cameraDistance < 512 && hasNormal && a_off[i].authoredWeight > 0;
 			if (delta > maximum || (maximum == 0 && cameraDistance < minimumDistance))
 				example = i;
 			maximum = std::max(maximum, delta);
@@ -301,11 +329,14 @@ struct GrassCollisionVertexProbe::Impl
 		}
 		json result = {
 			{ "sampledVertices", a_count }, { "movedVertices", moved }, { "nearCameraVertices", nearVertices }, { "nearCameraMovedVertices", nearMoved },
-			{ "nonFiniteVertices", nonFinite }, { "maxWorldDisplacement", maximum }, { "maxClipDisplacement", maxClip },
+			{ "nonFiniteVertices", nonFinite }, { "maxWorldDisplacement", maximum },
+			{ "maxPreviousWorldDisplacement", maxPrevious }, { "maxMotionDeltaChange", maxMotionChange },
+			{ "normalAvailable", hasNormal }, { "nearVerticesWithAuthoredWeight", hasNormal ? json(nearWeighted) : json(nullptr) }, { "maxNormalAngleRadians", hasNormal ? json(maxNormalAngle) : json(nullptr) }, { "maxClipDisplacement", maxClip },
 			{ "minimumCameraDistance", std::isfinite(minimumDistance) ? json(minimumDistance) : json(nullptr) }
 		};
 		if (a_count && nonFinite < a_count)
 			result["example"] = { { "collisionOnWorld", a_on[example].world }, { "collisionOffWorld", a_off[example].world },
+				{ "collisionOnPreviousWorld", a_on[example].previousWorld }, { "collisionOffPreviousWorld", a_off[example].previousWorld },
 				{ "collisionOnClip", a_on[example].clip }, { "collisionOffClip", a_off[example].clip } };
 		return result;
 	}
@@ -330,7 +361,19 @@ nlohmann::json GrassCollisionVertexProbe::Read() const
 	for (const auto& record : impl->records)
 		if (!record.is_null())
 			samples.push_back(record);
-	return { { "schemaVersion", 1 }, { "requestGeneration", impl->requested.load(std::memory_order_acquire) },
+	size_t sampled = 0, near = 0, moved = 0, failed = 0, pending = 0;
+	for (const auto& sample : samples) {
+		sampled += sample.value("sampledVertices", size_t(0));
+		near += sample.value("nearCameraVertices", size_t(0));
+		moved += sample.value("nearCameraMovedVertices", size_t(0));
+		const auto status = sample.value("status", std::string());
+		pending += status == "pending";
+		failed += status != "pending" && status != "completed" && status != "empty";
+	}
+	return { { "schemaVersion", 2 }, { "coverage", sampled == 0 ? "no_vertices" : near == 0 ? "no_near_vertices" :
+																			  moved         ? "near_deformation_observed" :
+																							  "near_vertices_without_deformation" },
+		{ "pendingPairs", pending }, { "failedPairs", failed }, { "captureWindowFrames", kCaptureFrames }, { "maximumAttempts", kCaptureFrames * 2 }, { "requestGeneration", impl->requested.load(std::memory_order_acquire) },
 		{ "maximumPairs", kPairLimit }, { "maximumIndices", kIndexLimit }, { "maximumInstances", kInstanceLimit },
 		{ "skippedPipelines", impl->skippedPipelines }, { "samples", std::move(samples) } };
 }
@@ -347,17 +390,27 @@ void GrassCollisionVertexProbe::Capture(ID3D11DeviceContext1* a_context, ID3D11V
 	{
 		std::scoped_lock lock(impl->mutex);
 		generation = impl->requested.load(std::memory_order_acquire);
-		if (!generation || uint32_t(a_frame - impl->requestedFrame) >= 3)
+		if (!generation || uint32_t(a_frame - impl->requestedFrame) >= kCaptureFrames)
 			return;
 	}
 	if (impl->renderGeneration != generation) {
 		impl->renderGeneration = generation;
-		impl->passCounts = {};
+		impl->drawOrdinals = {};
+		impl->previousDrawCounts = {};
+		impl->captureFrame = UINT32_MAX;
+		impl->attempts = 0;
 		for (auto& pair : impl->pairs)
 			pair.pending = false;
 	}
 	const UINT pass = (a_descriptor & 15) == 8 ? 0 : 1;
-	if (impl->passCounts[pass] >= kPairsPerPass)
+	if (impl->captureFrame != a_frame) {
+		impl->previousDrawCounts = impl->drawOrdinals;
+		impl->drawOrdinals = {};
+		impl->captureFrame = a_frame;
+		for (UINT p = 0; p < 2; ++p)
+			impl->targetOrdinals[p] = (a_frame - impl->requestedFrame) * 7 % std::max(1u, impl->previousDrawCounts[p]);
+	}
+	if (impl->drawOrdinals[pass]++ != impl->targetOrdinals[pass] || impl->attempts >= kCaptureFrames * 2)
 		return;
 	if (!SupportedPipeline(a_context)) {
 		std::scoped_lock lock(impl->mutex);
@@ -365,12 +418,19 @@ void GrassCollisionVertexProbe::Capture(ID3D11DeviceContext1* a_context, ID3D11V
 			++impl->skippedPipelines;
 		return;
 	}
-	const UINT index = pass * kPairsPerPass + impl->passCounts[pass]++;
-	auto& pair = impl->pairs[index];
+	UINT slot = pass * kPairsPerPass;
+	while (slot < (pass + 1) * kPairsPerPass && impl->pairs[slot].pending)
+		++slot;
+	if (slot == (pass + 1) * kPairsPerPass)
+		return;
+	const UINT index = impl->attempts++;
+	auto& pair = impl->pairs[slot];
+	pair.receiptIndex = index;
 	pair.generation = generation;
 	pair.frame = a_frame;
 	json receipt = { { "status", "pending" }, { "capturedFrame", a_frame }, { "shaderDescriptor", a_descriptor },
-		{ "pass", pass ? "color" : "depth" }, { "drawKind", a_draw.arguments ? "indirect" : "native" } };
+		{ "pass", pass ? "color" : "depth" }, { "drawKind", a_draw.arguments ? "indirect" : "native" }, { "drawOrdinal", impl->drawOrdinals[pass] - 1 },
+		{ "argumentOffset", a_draw.arguments ? json(a_draw.argumentOffset) : json(nullptr) } };
 	winrt::com_ptr<ID3D11Device> device;
 	a_context->GetDevice(device.put());
 	HRESULT result = S_OK;
@@ -382,7 +442,7 @@ void GrassCollisionVertexProbe::Capture(ID3D11DeviceContext1* a_context, ID3D11V
 		result = impl->EnsureResources(pair);
 	ID3D11GeometryShader* stream = nullptr;
 	if (SUCCEEDED(result))
-		result = impl->StreamOutput(a_vertex, a_bytecode, a_bytes, stream);
+		result = impl->StreamOutput(a_vertex, a_bytecode, a_bytes, stream, pair.hasNormal);
 	if (SUCCEEDED(result) && a_draw.arguments)
 		result = impl->PrepareArguments(a_context, pair, a_draw);
 	if (SUCCEEDED(result) && !a_draw.arguments &&
@@ -405,8 +465,11 @@ void GrassCollisionVertexProbe::Capture(ID3D11DeviceContext1* a_context, ID3D11V
 		ReplayState restore(a_context);
 		a_context->GSSetShader(stream, nullptr, 0);
 		for (UINT i = 0; i < 2; ++i) {
-			auto* field = i == 0 ? restore.field.get() : impl->zeroField.get();
-			a_context->VSSetShaderResources(100, 1, &field);
+			auto* constants = i == 0 ? restore.constants.get() : impl->zeroConstants.get();
+			if (i == 0)
+				a_context->VSSetConstantBuffers1(5, 1, &constants, &restore.first, &restore.count);
+			else
+				a_context->VSSetConstantBuffers(5, 1, &constants);
 			auto* output = pair.outputs[i].get();
 			const UINT offset = 0;
 			a_context->SOSetTargets(1, &output, &offset);
@@ -431,8 +494,9 @@ void GrassCollisionVertexProbe::Poll(ID3D11DeviceContext1* a_context, uint32_t a
 	if (!a_context || impl->capturing || impl->pollFrame == a_frame)
 		return;
 	impl->pollFrame = a_frame;
-	for (UINT index = 0; index < kPairLimit; ++index) {
-		auto& pair = impl->pairs[index];
+	for (UINT slot = 0; slot < kPairLimit; ++slot) {
+		auto& pair = impl->pairs[slot];
+		const auto index = pair.receiptIndex;
 		if (!pair.pending)
 			continue;
 		if (pair.generation != impl->requested.load(std::memory_order_acquire)) {
@@ -507,7 +571,7 @@ void GrassCollisionVertexProbe::Poll(ID3D11DeviceContext1* a_context, uint32_t a
 		if (!ready)
 			continue;
 		const auto count = size_t(statistics[0].NumPrimitivesWritten) * 3;
-		receipt.update(impl->Compare(static_cast<const Vertex*>(mapped[0].pData), static_cast<const Vertex*>(mapped[1].pData), count));
+		receipt.update(impl->Compare(static_cast<const Vertex*>(mapped[0].pData), static_cast<const Vertex*>(mapped[1].pData), count, pair.hasNormal));
 		const bool invalid = receipt["nonFiniteVertices"].get<size_t>() != 0;
 		finish(invalid ? "invalid_outputs" : count ? "completed" :
 													 "empty",

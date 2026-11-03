@@ -118,16 +118,16 @@
       "neuralCharacterAdaptiveRoiSelectionEnabled": false,
       "neuralCharacterArmorEnabled": false,
       "neuralCharacterWeaponsEnabled": false,
-            "neuralCharacterFocusScale": 0.75,
+      "neuralCharacterFocusScale": 0.75,
       "neuralCharacterDepthAwareFeatherEnabled": false,
       "neuralCharacterDepthThreshold": 0.0020000000949949026,
       "neuralCharacterFaceStrength": 1.0,
       "neuralCharacterFacesEnabled": true,
-			"neuralCharacterHumansEnabled": true,
-			"neuralCharacterOtherHumanoidsEnabled": true,
-			"neuralCharacterCreaturesEnabled": false,
-			"neuralCharacterAnimalsEnabled": false,
-			"neuralCharacterOtherActorsEnabled": false,
+      "neuralCharacterHumansEnabled": true,
+      "neuralCharacterOtherHumanoidsEnabled": true,
+      "neuralCharacterCreaturesEnabled": false,
+      "neuralCharacterAnimalsEnabled": false,
+      "neuralCharacterOtherActorsEnabled": false,
       "neuralCharacterFeatherRadius": 1,
       "neuralCharacterHairEnabled": true,
       "neuralCharacterHairStrength": 0.6499999761581421,
@@ -177,7 +177,6 @@
     }
   },
   "CS Editor": null,
-
   "Performance Overlay": {
     "BackgroundOpacity": 0.5,
     "FrameHistorySize": 600,
@@ -424,7 +423,17 @@
   "Grass Collision": {
     "CollisionStrength": 1.0,
     "EnableGrassCollision": true,
-    "TrackRagdolls": true
+    "TrackRagdolls": true,
+    "CollisionRadiusScale": 1.0,
+    "GrassInteractionRadius": 25.0,
+    "CollisionImpactStrength": 3.0,
+    "SpringStrength": 5.0,
+    "Damping": 7.5,
+    "MaximumBend": 89.0,
+    "MaximumCompression": 0.2,
+    "CompressionHeight": 10.0,
+    "MaximumCompressibleGrassHeight": 40.0,
+    "CompressionRecovery": 0.25
   },
   "Grass Lighting": {
     "BasicGrassBrightness": 0.75,

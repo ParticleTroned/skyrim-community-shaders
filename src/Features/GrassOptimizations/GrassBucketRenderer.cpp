@@ -640,6 +640,7 @@ struct GrassBucketRenderer::Impl
 	bool cullingPrepared = false;
 	bool drawShadersChecked = false, drawShadersReady = false;
 	uint64_t drawShaderRevision = 0;
+	uint32_t drawCollisionFlag = 0;
 	std::array<winrt::com_ptr<ID3D11VertexShader>, 2> drawVertexShaders;
 	std::array<winrt::com_ptr<ID3D11PixelShader>, 8> drawPixelShaders;
 	uint64_t resultBytes = 0;
@@ -675,6 +676,7 @@ struct GrassBucketRenderer::Impl
 	RE::NiPoint3 currentOrigin;
 	GrassPolicy::Settings frameSettings;
 	float frameCollisionStrength = GrassCollision::kDefaultCollisionStrength;
+	bool frameCollisionEnabled = false;
 	struct PreparationJob
 	{
 		std::vector<Source> sources;
@@ -1439,7 +1441,9 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 #endif
 	frameSettings = globals::features::grassOptimizations.GetSettings();
 	const auto& collision = globals::features::grassCollision;
-	frameCollisionStrength = collision.settings.EnableGrassCollision ? collision.GetCollisionStrength() : GrassCollision::kDefaultCollisionStrength;
+	frameCollisionEnabled = collision.NeedsVertexDeformation();
+	// Rotation and compression cannot move a vertex more than twice its root reach.
+	frameCollisionStrength = frameCollisionEnabled ? 1.0f : 0.0f;
 	frameSettings.Enabled &= globals::features::grassOptimizations.loaded;
 	ClearDrawContext();
 	frame = now;
@@ -2195,7 +2199,8 @@ bool GrassBucketRenderer::Impl::PrepareDrawShaders()
 		return drawShadersReady;
 	drawShadersChecked = true;
 	const auto revision = globals::shaderCache->GetGraphicsShaderRevision();
-	if (drawShadersReady && drawShaderRevision == revision)
+	const auto collisionFlag = frameCollisionEnabled ? 0u : uint32_t(SIE::ShaderCache::GrassShaderFlags::NoCollision);
+	if (drawShadersReady && drawShaderRevision == revision && drawCollisionFlag == collisionFlag)
 		return true;
 	drawShadersReady = false;
 	bool ready = true;
@@ -2205,7 +2210,7 @@ bool GrassBucketRenderer::Impl::PrepareDrawShaders()
 	// Admit a frame only after both output layouts are available; no draw may switch to native later.
 	for (uint32_t depth = 0; depth < 2; ++depth) {
 		const auto descriptor = depth ? depthFlag : 0u;
-		drawVertexShaders[depth] = globals::shaderCache->RetainVertexShader(*currentNativeShader, descriptor);
+		drawVertexShaders[depth] = globals::shaderCache->RetainVertexShader(*currentNativeShader, descriptor | collisionFlag);
 		ready &= bool(drawVertexShaders[depth]);
 		for (uint32_t alpha = 0; alpha < 2; ++alpha)
 			for (uint32_t category = 0; category < 2; ++category) {
@@ -2216,6 +2221,7 @@ bool GrassBucketRenderer::Impl::PrepareDrawShaders()
 			}
 	}
 	drawShaderRevision = revision;
+	drawCollisionFlag = collisionFlag;
 	return drawShadersReady = ready && revision == globals::shaderCache->GetGraphicsShaderRevision();
 }
 
@@ -2268,7 +2274,7 @@ void GrassBucketRenderer::Impl::CullSlices(const Bucket& bucket, float radius, u
 			rootsHi[axis] = run.hi[axis] + origin[axis];
 		}
 		const float padding = GrassFrustum::DeformationPadding(world[0], rootsLo, rootsHi, reach, wind,
-			globals::features::grassCollision.loaded ? frameSettings.CollisionDistance : 0,
+			frameCollisionEnabled ? frameSettings.CollisionDistance : 0,
 			frameCollisionStrength);
 		const bool known = run.known && std::isfinite(padding) && padding >= 0;
 		bucketKnown &= known;
@@ -2555,7 +2561,7 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 		frameSettings.MidLODPixelSize, frameSettings.FarLODPixelSize, frameSettings.OcclusionBias, frameHeight,
 		{ currentOrigin.x, currentOrigin.y, currentOrigin.z, 0 },
 		{ representative.bound.center.x, representative.bound.center.y, representative.bound.center.z, radius },
-		0, 0, 0, globals::features::grassCollision.loaded ? 1u : 0u, {},
+		0, 0, 0, frameCollisionEnabled ? 1u : 0u, {},
 		frameSettings.MeshCostBias, frameSettings.CostBiasStartDistance, frameSettings.InvisibleFadeCull,
 		frameSettings.RenderDistanceOverride > 0 ? frameSettings.RenderDistanceOverride : nativeRenderDistance,
 		frameSettings.EdgeFadeStart, frameSettings.SimpleShadingPixelSize, representative.bound.radius,

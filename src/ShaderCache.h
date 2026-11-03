@@ -637,6 +637,10 @@ namespace SIE
 		RE::BSGraphics::VertexShader* GetVertexShaderIfCached(const RE::BSShader& shader, uint32_t descriptor);
 		/** @brief Retain a requested graphics shader under the cache lock, safe against concurrent eviction. */
 		winrt::com_ptr<ID3D11VertexShader> RetainVertexShader(const RE::BSShader& shader, uint32_t descriptor);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** @brief Copy bytecode for an exact retained vertex shader under the cache lock, without compiling. */
+		bool CopyDiagnosticVertexBytecode(RE::BSShader::Type type, ID3D11VertexShader* shader, std::vector<uint8_t>& bytes, uint32_t& descriptor);
+#endif
 		/** @brief Retain the exact requested pixel variant without deferred category fallback. */
 		winrt::com_ptr<ID3D11PixelShader> RetainPixelShader(const RE::BSShader& shader, uint32_t descriptor);
 		/** @brief Changes when cached graphics resources are removed or replaced, including targeted clears. */
@@ -879,6 +883,7 @@ namespace SIE
 
 		enum class GrassShaderFlags
 		{
+			NoCollision = 1u << 10,
 			AlphaTest = 0x10000,
 		};
 

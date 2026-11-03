@@ -1,180 +1,84 @@
+#ifndef GRASS_COLLISION_HLSLI
+#define GRASS_COLLISION_HLSLI
+#include "GrassCollision/GrassCollisionField.hlsli"
+
 namespace GrassCollision
 {
-	Texture2D<float4> Collision : register(t100);
-
-	cbuffer GrassCollisionPerFrame : register(b5)
+	float3 RotateVector(float3 value, float3 axis, float angle)
 	{
-		float2 PosOffset;   // cell origin in camera space
-		uint2 ArrayOrigin;  // xy: array origin (clipmap wrapping)
-
-		int2 ValidMargin;
-		float TimeDelta;
-		uint BoundingBoxCount;
-
-		float CameraHeightDelta;
-		float CollisionStrength;
-		float PreviousCollisionStrength;
+		float sine, cosine;
+		sincos(angle, sine, cosine);
+		return value * cosine + cross(axis, value) * sine + axis * dot(axis, value) * (1 - cosine);
 	}
 
-	const static uint TEXTURE_SIZE = 512;
-	const static float WORLD_SIZE = 4096;
-	const static float CELL_SIZE = WORLD_SIZE / TEXTURE_SIZE;
-	const static float2 ZRANGE = float2(2048.0, -2048.0);
-
-	float ProceduralAnimation(float x, float distanceFromCenter)
+	float CompressionWeight(float normalizedHeight, float bladeHeight, float reach, float maximumHeight)
 	{
-		float fadeRate = 250;
-		x /= fadeRate;
-		x /= distanceFromCenter;
-		x *= 100;
-		float frequency = 4 * Math::PI;
-		return cos(x * frequency) * exp(-x * 4);
+		maximumHeight = max(maximumHeight, 1.0);
+		float heightFade = min(maximumHeight * 0.25, 16.0);
+		return smoothstep(0, max(reach, 0.1), normalizedHeight) *
+		       (1 - smoothstep(maximumHeight - heightFade, maximumHeight, bladeHeight));
 	}
 
-	void GetCollision(float3 worldPosition, float maximumDepth, float distanceFromCenter, out float collisionHeights, out float collisionAmount, out float previousCollisionHeights, out float previousCollisionAmount)
+	float3 CalculateDisplacement(float3 position, float3 root, float4 field, float bendWeight,
+		float compressionWeight, float strength, float maximumBend, float4x4 world,
+		out float3 bendAxis, out float bendAngle, out float compressionScale)
 	{
-		float2 positionMSAdjusted = worldPosition.xy - PosOffset.xy;
-		float2 uv = positionMSAdjusted / WORLD_SIZE + .5;
-
-		float2 cellVxCoord = uv * TEXTURE_SIZE;
-		int2 cell000 = floor(cellVxCoord - 0.5);
-		float2 bilinearPos = cellVxCoord - 0.5 - cell000;
-
-		int2 cellID = cell000;
-
-		collisionHeights = 0.0;
-		collisionAmount = 0.0;
-
-		previousCollisionHeights = 0.0;
-		previousCollisionAmount = 0.0;
-
-		float wsum = 0;
-
-		for (int i = 0; i < 2; i++)
-			for (int j = 0; j < 2; j++) {
-				int2 offset = int2(i, j);
-				int2 cellID = cell000 + offset;
-
-				if (any(cellID < 0) || any((uint2)cellID >= TEXTURE_SIZE))
-					continue;
-
-				float2 cellCentreMS = cellID + 0.5 - TEXTURE_SIZE / 2;
-				cellCentreMS = cellCentreMS * CELL_SIZE;
-
-				float2 bilinearWeights = 1 - abs(offset - bilinearPos);
-				float w = bilinearWeights.x * bilinearWeights.y;
-
-				uint2 cellTexID = (cellID + ArrayOrigin.xy) % TEXTURE_SIZE;
-
-				float4 collisionSample = Collision[cellTexID];
-				collisionSample = lerp(ZRANGE.x, ZRANGE.y, collisionSample);
-
-				collisionHeights += collisionSample.x * w;
-				collisionAmount += max(0, min(maximumDepth, worldPosition.z - collisionSample.x)) * ProceduralAnimation(collisionSample.y - collisionSample.x, distanceFromCenter) * w;
-
-				previousCollisionHeights += collisionSample.z * w;
-				previousCollisionAmount += max(0, min(maximumDepth, worldPosition.z - collisionSample.z)) * ProceduralAnimation(collisionSample.w - collisionSample.z, distanceFromCenter) * w;
-
-				wsum += w;
+		bendAxis = float3(0, 1, 0);
+		bendAngle = 0;
+		compressionScale = 1;
+		float3 relative = position - root;
+		if (strength <= 0 || field.w <= 0 || bendWeight <= 0 || relative.z <= 0 || !all(isfinite(field)))
+			return 0;
+		float3 deformed = relative;
+		float magnitude = length(field.xy);
+		if (magnitude > 1e-6) {
+			float3 direction = mul(transpose((float3x3)world), float3(field.xy / magnitude, 0));
+			direction.z = 0;
+			float directionLength = length(direction);
+			if (directionLength > 1e-6) {
+				bendAxis = cross(float3(0, 0, 1), direction / directionLength);
+				bendAngle = min(magnitude * strength, maximumBend) * bendWeight * field.w;
+				deformed = RotateVector(relative, bendAxis, bendAngle);
 			}
-
-		if (wsum > 0.0) {
-			collisionHeights /= wsum;
-			collisionAmount /= wsum;
-			previousCollisionHeights /= wsum;
-			previousCollisionAmount /= wsum;
-		} else {
-			collisionHeights = TEXTURE_SIZE;
-			collisionAmount = 0.0;
-			previousCollisionHeights = TEXTURE_SIZE;
-			previousCollisionAmount = 0.0;
 		}
+		compressionScale = 1 - saturate(field.z * strength) * compressionWeight * field.w;
+		deformed.z *= compressionScale;
+		// Authored roots stay fixed and bending cannot push a vertex below its root.
+		deformed.z = max(deformed.z, 0);
+		return deformed - relative;
 	}
 
-	float3 ComputeNormalFromHeights(float h0, float hX, float hY, float delta)
+	float3 DeformNormal(float3 normal, float3 axis, float angle, float compressionScale)
 	{
-		// Tangents start at the (-delta, -delta) sample, not the query position.
-		float3 tangentX = float3(2 * delta, delta, hX - h0);
-		float3 tangentY = float3(delta, 2 * delta, hY - h0);
-		float3 crossProd = cross(tangentX, tangentY) * float3(1.0, 1.0, 0.1);
-
-		float lenSq = dot(crossProd, crossProd);
-		return lenSq > 1e-12 ? -crossProd * rsqrt(lenSq) : float3(0, 0, -1);
+		[branch] if (angle == 0 && compressionScale == 1) return normal;
+		float3 result = RotateVector(normal, axis, angle);
+		result.z /= max(compressionScale, 1e-4);
+		return result * rsqrt(max(dot(result, result), 1e-12));
 	}
 
-	void ComputeCollision(float3 worldPosition, float maximumDepth, float distanceFromCenter, float delta, out float3 collision, out float3 previousCollision)
+	void ApplyDeformation(VS_INPUT input, inout float3 currentPosition, inout float3 previousPosition,
+		float distance, out float3 bendAxis, out float bendAngle, out float compressionScale)
 	{
-		// Sample collision at three points forming a small triangle
-		float collisionCenter;
-		float collisionX;
-		float collisionY;
-
-		float collisionCenterAmount;
-		float collisionXAmount;
-		float collisionYAmount;
-
-		float previousCollisionCenter;
-		float previousCollisionX;
-		float previousCollisionY;
-
-		float previousCollisionCenterAmount;
-		float previousCollisionXAmount;
-		float previousCollisionYAmount;
-
-		GetCollision(worldPosition + float3(-delta, -delta, 0), maximumDepth, distanceFromCenter, collisionCenter, collisionCenterAmount, previousCollisionCenter, previousCollisionCenterAmount);
-		GetCollision(worldPosition + float3(delta, 0, 0), maximumDepth, distanceFromCenter, collisionX, collisionXAmount, previousCollisionX, previousCollisionXAmount);
-		GetCollision(worldPosition + float3(0, delta, 0), maximumDepth, distanceFromCenter, collisionY, collisionYAmount, previousCollisionY, previousCollisionYAmount);
-
-		// Process current collision
-		float3 currentAmounts = float3(collisionCenterAmount, collisionXAmount, collisionYAmount);
-		float avgCurrentAmount = dot(currentAmounts, float3(1.0, 1.0, 1.0)) / 3.0;
-		collision = ComputeNormalFromHeights(collisionCenter, collisionX, collisionY, delta) * avgCurrentAmount;
-
-		// Process previous collision
-		float3 previousAmounts = float3(previousCollisionCenterAmount, previousCollisionXAmount, previousCollisionYAmount);
-		float avgPreviousAmount = dot(previousAmounts, float3(1.0, 1.0, 1.0)) / 3.0;
-		previousCollision = ComputeNormalFromHeights(previousCollisionCenter, previousCollisionX, previousCollisionY, delta) * avgPreviousAmount;
-	}
-
-	void GetDisplacedPosition(VS_INPUT input, float3 position, out float3 displacement, out float3 previousDisplacement, float collisionDistance = 2048.0)
-	{
-		if (collisionDistance <= 0.0) {
-			displacement = 0.0;
-			previousDisplacement = 0.0;
+		bendAxis = float3(0, 1, 0);
+		bendAngle = 0;
+		compressionScale = 1;
+		if (input.Color.w <= 0 || distance <= 0 || (CollisionStrength <= 0 && PreviousCollisionStrength <= 0))
 			return;
-		}
-		float3 worldPosition = mul(World[0], float4(position.xyz, 1.0)).xyz;
-		float nearFactor = smoothstep(collisionDistance, 0.0, length(worldPosition));
-
-		if (input.Color.w > 0.0 && nearFactor > 0.0) {
-			float3 worldPositionCentre = mul(World[0], float4(input.InstanceData1.xyz, 1.0)).xyz;
-
-			// Limit stretching
-			float3 remappedWorldPosition = lerp(worldPosition, worldPositionCentre, float3(0.95, 0.95, 0.0));
-
-			float distanceFromCenter = length(worldPosition - worldPositionCentre) + 0.01;
-			float maximumDepth = worldPosition.z - worldPositionCentre.z;
-
-			// Return base collision
-			float3 collision, previousCollision;
-			ComputeCollision(remappedWorldPosition, maximumDepth, distanceFromCenter, CELL_SIZE, collision, previousCollision);
-
-			// Do not let collision move upwards
-			collision.z = -abs(collision.z);
-			previousCollision.z = -abs(previousCollision.z);
-
-			// Scale grass by wind amount (detect rocks and bottom of some grass)
-			float alpha = saturate(input.Color.w * 10.0);
-
-			displacement = collision * alpha * nearFactor * 0.75 * CollisionStrength;
-			previousDisplacement = previousCollision * alpha * nearFactor * 0.75 * PreviousCollisionStrength;
-			// Strength must not push a vertex below its instance root.
-			float minimumDisplacementZ = -max(0.0, maximumDepth);
-			displacement.z = max(displacement.z, minimumDisplacementZ);
-			previousDisplacement.z = max(previousDisplacement.z, minimumDisplacementZ);
-		} else {
-			displacement = 0.0;
-			previousDisplacement = 0.0;
-		}
+		float normalizedHeight = saturate(input.Color.w);
+		float bendWeight = normalizedHeight * normalizedHeight;
+		float instanceUpScale = length(float3(input.InstanceData2.z, input.InstanceData3.z, input.InstanceData3.w));
+		float vertexHeight = abs(input.Position.z * (input.InstanceData4.y * ScaleMask.z + 1)) * instanceUpScale;
+		float bladeHeight = vertexHeight / max(normalizedHeight, 1e-4);
+		float4 currentField, previousField;
+		SampleDeformation(input.InstanceData1.xyz, World[0], PreviousWorld[0], distance, currentField, previousField);
+		currentPosition += CalculateDisplacement(currentPosition, input.InstanceData1.xyz, currentField, bendWeight,
+			CompressionWeight(normalizedHeight, bladeHeight, CompressionHeight, MaximumCompressibleGrassHeight),
+			CollisionStrength, MaximumBend, World[0], bendAxis, bendAngle, compressionScale);
+		float3 previousAxis;
+		float previousAngle, previousCompression;
+		previousPosition += CalculateDisplacement(previousPosition, input.InstanceData1.xyz, previousField, bendWeight,
+			CompressionWeight(normalizedHeight, bladeHeight, PreviousCompressionHeight, PreviousMaximumCompressibleGrassHeight),
+			PreviousCollisionStrength, PreviousMaximumBend, PreviousWorld[0], previousAxis, previousAngle, previousCompression);
 	}
 }
+#endif

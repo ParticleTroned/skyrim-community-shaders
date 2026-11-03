@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.11.03.1",
+    "packageVersion": "d2026.11.03.2",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "CD8B66B2AEC02E58FCC18E6C758A886E82BABA911C3680E29C00A5CE6CE10E67"
+        "sha256": "A86BF5CDE0F37B3F7E97D0D7B925C0D14AE03389FE6378F605571599074EC159"
     },
     "runtimeSettingsContract": {
-        "revision": 31,
-        "sourceTreeSha256": "115247CCEC1141871B16190CA1207FDB0BE83036AADACEE00042D883546A261D",
+        "revision": 32,
+        "sourceTreeSha256": "2E7386EF3C8907D74D5F27CF769B2B232CDE263F3DE6AED23A7D62F0E249EA47",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -852,6 +852,192 @@
             { "path": ["Screenshot", "Sequence", "Schedule", "Basis"], "value": "game_frames" },
             { "path": ["Advanced", "PBR Verbose JSON Logging"], "value": false },
             { "path": ["Adaptive Balance", "volumetricClarity"], "value": 0.0 },
+            { "path": ["Adaptive Balance", "bloomEnabled"], "value": true },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "sceneGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "ambientGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "directionalGammaOffset"
+                ],
+                "value": 0.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "pointLightGammaOffset"
+                ],
+                "value": 0.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "nonlinearPointLightSaturation"
+                ],
+                "value": 1.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "linearPointLightSaturation"
+                ],
+                "value": 1.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "linearPointLightGammaOffset"
+                ],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "spotlightSaturation"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "spotlightGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "linearSpotlightSaturation"
+                ],
+                "value": 1.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "linearSpotlightGammaOffset"
+                ],
+                "value": 0.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "omnidirectionalBulbSaturation"
+                ],
+                "value": 1.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "omnidirectionalBulbGammaOffset"
+                ],
+                "value": 0.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "linearOmnidirectionalBulbSaturation"
+                ],
+                "value": 1.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "linearOmnidirectionalBulbGammaOffset"
+                ],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "emissiveSaturation"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "emissiveGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "glowmapSaturation"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "glowmapGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "effectLightingSaturation"
+                ],
+                "value": 1.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "effectLightingGammaOffset"
+                ],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "effectSaturation"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "effectGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "skyStaticSaturation"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "skyStaticGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "sunGlareSaturation"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "sunGlareGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "fogSaturation"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "volumetricIntensity"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "volumetricSaturation"],
+                "value": 1.0
+            },
             { "path": ["Adaptive Balance", "globalProfile", "advanced"], "value": true },
             { "path": ["Adaptive Balance", "globalProfile", "skySaturation"], "value": 1.0 },
             {

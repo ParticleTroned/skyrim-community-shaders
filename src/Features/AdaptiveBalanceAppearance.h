@@ -52,8 +52,42 @@ struct AdaptiveBalanceAppearanceSettings
 	float auroraIntensity = 1.0f;
 	float auroraCurve = 1.0f;
 	float3 padding{};
+	float sceneGammaOffset = 0.0f;
+	float ambientGammaOffset = 0.0f;
+	float directionalGammaOffset = 0.0f;
+	float pointLightGammaOffset = 0.0f;
+	float linearPointLightSaturation = 1.0f;
+	float linearPointLightGammaOffset = 0.0f;
+	float spotlightSaturation = 1.0f;
+	float spotlightGammaOffset = 0.0f;
+	float linearSpotlightSaturation = 1.0f;
+	float linearSpotlightGammaOffset = 0.0f;
+	float omnidirectionalBulbSaturation = 1.0f;
+	float omnidirectionalBulbGammaOffset = 0.0f;
+	float linearOmnidirectionalBulbSaturation = 1.0f;
+	float linearOmnidirectionalBulbGammaOffset = 0.0f;
+	float emissiveSaturation = 1.0f;
+	float emissiveGammaOffset = 0.0f;
+	float glowmapSaturation = 1.0f;
+	float glowmapGammaOffset = 0.0f;
+	float effectLightingSaturation = 1.0f;
+	float effectLightingGammaOffset = 0.0f;
+	float effectSaturation = 1.0f;
+	float effectGammaOffset = 0.0f;
+	float skyStaticSaturation = 1.0f;
+	float skyStaticGammaOffset = 0.0f;
+	float sunGlareSaturation = 1.0f;
+	float sunGlareGammaOffset = 0.0f;
+	float fogSaturation = 1.0f;
+	float volumetricIntensity = 1.0f;
+	float volumetricSaturation = 1.0f;
+	float nonlinearPointLightSaturation = 1.0f;
+	uint pointLightColorEnabled = 0;  // Derived on upload to bypass subtype work for neutral profiles.
+	float utilityPadding = 0.0f;
 };
-static_assert(sizeof(AdaptiveBalanceAppearanceSettings) == 224);
+static_assert(sizeof(AdaptiveBalanceAppearanceSettings) == 352);
+static_assert(offsetof(AdaptiveBalanceAppearanceSettings, sceneGammaOffset) == 224);
+static_assert(offsetof(AdaptiveBalanceAppearanceSettings, volumetricSaturation) == 336);
 static_assert(offsetof(AdaptiveBalanceAppearanceSettings, godraySaturation) == 192);
 static_assert(offsetof(AdaptiveBalanceAppearanceSettings, eyeSpecularBrightness) == 196);
 static_assert(offsetof(AdaptiveBalanceAppearanceSettings, eyeBrightness) == 200);
@@ -82,6 +116,36 @@ namespace AdaptiveBalanceAppearance
 		float maximum;
 	};
 	inline constexpr std::array kScalars{
+		ScalarField{ "sceneGammaOffset", "Scene Gamma Offset", "Scene Colour", &Settings::sceneGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "ambientGammaOffset", "Ambient Gamma Offset", "Direct and Ambient Lighting", &Settings::ambientGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "directionalGammaOffset", "Directional Gamma Offset", "Direct and Ambient Lighting", &Settings::directionalGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "pointLightGammaOffset", "Nonlinear Point Lights Gamma Offset", "Point Light Colour", &Settings::pointLightGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "nonlinearPointLightSaturation", "Nonlinear Point Lights Saturation", "Point Light Colour", &Settings::nonlinearPointLightSaturation, 0.0f, 2.0f, 1.0f },
+		ScalarField{ "linearPointLightSaturation", "Linear Point Lights Saturation", "Point Light Colour", &Settings::linearPointLightSaturation, 0.0f, 2.0f, 1.0f },
+		ScalarField{ "linearPointLightGammaOffset", "Linear Point Lights Gamma Offset", "Point Light Colour", &Settings::linearPointLightGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "spotlightSaturation", "Spotlights Saturation", "Point Light Colour", &Settings::spotlightSaturation, 0.0f, 2.0f, 1.0f },
+		ScalarField{ "spotlightGammaOffset", "Spotlights Gamma Offset", "Point Light Colour", &Settings::spotlightGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "linearSpotlightSaturation", "Linear Spotlights Saturation", "Point Light Colour", &Settings::linearSpotlightSaturation, 0.0f, 2.0f, 1.0f },
+		ScalarField{ "linearSpotlightGammaOffset", "Linear Spotlights Gamma Offset", "Point Light Colour", &Settings::linearSpotlightGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "omnidirectionalBulbSaturation", "Omnidirectional Bulbs Saturation", "Point Light Colour", &Settings::omnidirectionalBulbSaturation, 0.0f, 2.0f, 1.0f },
+		ScalarField{ "omnidirectionalBulbGammaOffset", "Omnidirectional Bulbs Gamma Offset", "Point Light Colour", &Settings::omnidirectionalBulbGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "linearOmnidirectionalBulbSaturation", "Linear Omnidirectional Bulbs Saturation", "Point Light Colour", &Settings::linearOmnidirectionalBulbSaturation, 0.0f, 2.0f, 1.0f },
+		ScalarField{ "linearOmnidirectionalBulbGammaOffset", "Linear Omnidirectional Bulbs Gamma Offset", "Point Light Colour", &Settings::linearOmnidirectionalBulbGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "emissiveSaturation", "Emissive Saturation", "Material Colour", &Settings::emissiveSaturation, 0.0f, 2.0f, 1.0f },
+		ScalarField{ "emissiveGammaOffset", "Emissive Gamma Offset", "Material Colour", &Settings::emissiveGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "glowmapSaturation", "Glowmaps Saturation", "Material Colour", &Settings::glowmapSaturation, 0.0f, 2.0f, 1.0f },
+		ScalarField{ "glowmapGammaOffset", "Glowmaps Gamma Offset", "Material Colour", &Settings::glowmapGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "effectLightingSaturation", "Effect Lighting Saturation", "Material Colour", &Settings::effectLightingSaturation, 0.0f, 2.0f, 1.0f },
+		ScalarField{ "effectLightingGammaOffset", "Effect Lighting Gamma Offset", "Material Colour", &Settings::effectLightingGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "effectSaturation", "Weather-Lit Effects Saturation", "Atmosphere Colour", &Settings::effectSaturation, 0.0f, 2.0f, 1.0f },
+		ScalarField{ "effectGammaOffset", "Weather-Lit Effects Gamma Offset", "Atmosphere Colour", &Settings::effectGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "skyStaticSaturation", "Sky Statics Saturation", "Atmosphere Colour", &Settings::skyStaticSaturation, 0.0f, 2.0f, 1.0f },
+		ScalarField{ "skyStaticGammaOffset", "Sky Statics Gamma Offset", "Atmosphere Colour", &Settings::skyStaticGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "sunGlareSaturation", "Sun Glare Saturation", "Atmosphere Colour", &Settings::sunGlareSaturation, 0.0f, 2.0f, 1.0f },
+		ScalarField{ "sunGlareGammaOffset", "Sun Glare Gamma Offset", "Atmosphere Colour", &Settings::sunGlareGammaOffset, -1.0f, 1.0f, 0.0f },
+		ScalarField{ "fogSaturation", "Vanilla Fog Saturation", "Fog and Clouds", &Settings::fogSaturation, 0.0f, 2.0f, 1.0f },
+		ScalarField{ "volumetricIntensity", "Volumetric Lighting Intensity", "Godrays and Cloud Shadows", &Settings::volumetricIntensity, 0.0f, 5.0f, 1.0f },
+		ScalarField{ "volumetricSaturation", "Volumetric Lighting Saturation", "Godrays and Cloud Shadows", &Settings::volumetricSaturation, 0.0f, 2.0f, 1.0f },
 		ScalarField{ "eyeSpecularBrightness", "Eye Specular Brightness", "Eyes", &Settings::eyeSpecularBrightness, 0.0f, 5.0f, 1.0f },
 		ScalarField{ "eyeBrightness", "Eye Brightness", "Eyes", &Settings::eyeBrightness, 0.0f, 5.0f, 1.0f },
 		ScalarField{ "directionalSaturation", "Directional Saturation", "Direct and Ambient Lighting", &Settings::directionalSaturation, 0.0f, 2.0f, 1.0f },
@@ -123,6 +187,22 @@ namespace AdaptiveBalanceAppearance
 		TintField{ "godrayTint", "Godray Custom Colour", "Godrays and Cloud Shadows", &Settings::godrayTint, 1.0f }
 	};
 
+	/** Requests vanilla light flags when any authored subtype has a colour adjustment. */
+	inline bool UsesClassifiedPointLights(const Settings& settings)
+	{
+		return settings.nonlinearPointLightSaturation != 1.0f || settings.pointLightGammaOffset != 0.0f ||
+		       settings.linearPointLightSaturation != 1.0f ||
+		       settings.linearPointLightGammaOffset != 0.0f ||
+		       settings.spotlightSaturation != 1.0f ||
+		       settings.spotlightGammaOffset != 0.0f ||
+		       settings.linearSpotlightSaturation != 1.0f ||
+		       settings.linearSpotlightGammaOffset != 0.0f ||
+		       settings.omnidirectionalBulbSaturation != 1.0f ||
+		       settings.omnidirectionalBulbGammaOffset != 0.0f ||
+		       settings.linearOmnidirectionalBulbSaturation != 1.0f ||
+		       settings.linearOmnidirectionalBulbGammaOffset != 0.0f;
+	}
+
 	/** Bounds user input before it reaches profile arithmetic or rendering. */
 	inline void Sanitize(Settings& settings)
 	{
@@ -144,8 +224,12 @@ namespace AdaptiveBalanceAppearance
 		const auto godrayColor = VolumetricLightingTuning::ComposeProfiles(
 			{ .CustomColorContribution = base.godrayTintAmount, .CustomColorRed = base.godrayTint.x, .CustomColorGreen = base.godrayTint.y, .CustomColorBlue = base.godrayTint.z },
 			{ .CustomColorContribution = layer.godrayTintAmount, .CustomColorRed = layer.godrayTint.x, .CustomColorGreen = layer.godrayTint.y, .CustomColorBlue = layer.godrayTint.z });
-		for (const auto& field : kScalars)
-			base.*field.member *= layer.*field.member;
+		for (const auto& field : kScalars) {
+			if (field.neutral == 0.0f)
+				base.*field.member += layer.*field.member;
+			else
+				base.*field.member *= layer.*field.member;
+		}
 		for (const auto& field : kTints) {
 			auto& output = base.*field.member;
 			const auto& input = layer.*field.member;

@@ -75,15 +75,15 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-quality",
-    "presetVersion": "d2026.11.03.1",
+    "presetVersion": "d2026.11.03.2",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
       "maximumVersionExclusive": "3.22"
     },
     "settingsContract": {
-      "revision": 31,
-      "sourceTreeSha256": "115247CCEC1141871B16190CA1207FDB0BE83036AADACEE00042D883546A261D"
+      "revision": 32,
+      "sourceTreeSha256": "2E7386EF3C8907D74D5F27CF769B2B232CDE263F3DE6AED23A7D62F0E249EA47"
     }
   },
   "Upscaling": {
@@ -604,6 +604,82 @@
         "enabled": false,
         "overrideEnabled": true,
         "strongWindWaveMultiplier": 1.350000023841858
+      },
+      "appearance": {
+        "sceneGammaOffset": 0.0,
+        "ambientGammaOffset": 0.0,
+        "directionalGammaOffset": 0.0,
+        "pointLightGammaOffset": 0.0,
+        "nonlinearPointLightSaturation": 1.0,
+        "linearPointLightSaturation": 1.0,
+        "linearPointLightGammaOffset": 0.0,
+        "spotlightSaturation": 1.0,
+        "spotlightGammaOffset": 0.0,
+        "linearSpotlightSaturation": 1.0,
+        "linearSpotlightGammaOffset": 0.0,
+        "omnidirectionalBulbSaturation": 1.0,
+        "omnidirectionalBulbGammaOffset": 0.0,
+        "linearOmnidirectionalBulbSaturation": 1.0,
+        "linearOmnidirectionalBulbGammaOffset": 0.0,
+        "emissiveSaturation": 1.0,
+        "emissiveGammaOffset": 0.0,
+        "glowmapSaturation": 1.0,
+        "glowmapGammaOffset": 0.0,
+        "effectLightingSaturation": 1.0,
+        "effectLightingGammaOffset": 0.0,
+        "effectSaturation": 1.0,
+        "effectGammaOffset": 0.0,
+        "skyStaticSaturation": 1.0,
+        "skyStaticGammaOffset": 0.0,
+        "sunGlareSaturation": 1.0,
+        "sunGlareGammaOffset": 0.0,
+        "fogSaturation": 1.0,
+        "volumetricIntensity": 1.0,
+        "volumetricSaturation": 1.0
+      },
+      "bloomPresets": {
+        "selected": 0,
+        "profiles": [
+          {
+            "BloomSaturation": 1.3,
+            "BloomTint": [
+              1.0,
+              0.9800000190734863,
+              0.9399999976158142
+            ],
+            "CompressionCeiling": 0.67,
+            "CompressionThreshold": 0.0,
+            "EnhancementIntensity": 0.5,
+            "HaloRadius": 5.0,
+            "HaloSpread": 1.0
+          },
+          {
+            "EnhancementIntensity": 4.0,
+            "HaloRadius": 5.0,
+            "HaloSpread": 1.0,
+            "BloomSaturation": 1.2999999523162842,
+            "BloomTint": [
+              1.0,
+              0.9800000190734863,
+              0.9399999976158142
+            ],
+            "CompressionThreshold": 0.0,
+            "CompressionCeiling": 0.6700000166893005
+          },
+          {
+            "EnhancementIntensity": 2.5,
+            "HaloRadius": 4.0,
+            "HaloSpread": 0.7200000286102295,
+            "BloomSaturation": 0.8500000238418579,
+            "BloomTint": [
+              0.6470588445663452,
+              0.8039215803146362,
+              1.0
+            ],
+            "CompressionThreshold": 0.07999999821186066,
+            "CompressionCeiling": 0.8999999761581421
+          }
+        ]
       }
     },
     "locationOverrides": [],
@@ -666,6 +742,82 @@
           "enabled": false,
           "overrideEnabled": false,
           "strongWindWaveMultiplier": 1.0
+        },
+        "appearance": {
+          "sceneGammaOffset": 0.0,
+          "ambientGammaOffset": 0.0,
+          "directionalGammaOffset": 0.0,
+          "pointLightGammaOffset": 0.0,
+          "nonlinearPointLightSaturation": 1.0,
+          "linearPointLightSaturation": 1.0,
+          "linearPointLightGammaOffset": 0.0,
+          "spotlightSaturation": 1.0,
+          "spotlightGammaOffset": 0.0,
+          "linearSpotlightSaturation": 1.0,
+          "linearSpotlightGammaOffset": 0.0,
+          "omnidirectionalBulbSaturation": 1.0,
+          "omnidirectionalBulbGammaOffset": 0.0,
+          "linearOmnidirectionalBulbSaturation": 1.0,
+          "linearOmnidirectionalBulbGammaOffset": 0.0,
+          "emissiveSaturation": 1.0,
+          "emissiveGammaOffset": 0.0,
+          "glowmapSaturation": 1.0,
+          "glowmapGammaOffset": 0.0,
+          "effectLightingSaturation": 1.0,
+          "effectLightingGammaOffset": 0.0,
+          "effectSaturation": 1.0,
+          "effectGammaOffset": 0.0,
+          "skyStaticSaturation": 1.0,
+          "skyStaticGammaOffset": 0.0,
+          "sunGlareSaturation": 1.0,
+          "sunGlareGammaOffset": 0.0,
+          "fogSaturation": 1.0,
+          "volumetricIntensity": 1.0,
+          "volumetricSaturation": 1.0
+        },
+        "bloomPresets": {
+          "selected": 0,
+          "profiles": [
+            {
+              "BloomSaturation": 0.8999999761581421,
+              "BloomTint": [
+                1.0,
+                0.9800000190734863,
+                0.9399999976158142
+              ],
+              "CompressionCeiling": 1.5,
+              "CompressionThreshold": 0.0,
+              "EnhancementIntensity": 0.0,
+              "HaloRadius": 3.5,
+              "HaloSpread": 0.8500000238418579
+            },
+            {
+              "EnhancementIntensity": 4.0,
+              "HaloRadius": 5.0,
+              "HaloSpread": 1.0,
+              "BloomSaturation": 1.2999999523162842,
+              "BloomTint": [
+                1.0,
+                0.9800000190734863,
+                0.9399999976158142
+              ],
+              "CompressionThreshold": 0.0,
+              "CompressionCeiling": 0.6700000166893005
+            },
+            {
+              "EnhancementIntensity": 2.5,
+              "HaloRadius": 4.0,
+              "HaloSpread": 0.7200000286102295,
+              "BloomSaturation": 0.8500000238418579,
+              "BloomTint": [
+                0.6470588445663452,
+                0.8039215803146362,
+                1.0
+              ],
+              "CompressionThreshold": 0.07999999821186066,
+              "CompressionCeiling": 0.8999999761581421
+            }
+          ]
         }
       },
       {
@@ -726,6 +878,82 @@
           "enabled": false,
           "overrideEnabled": false,
           "strongWindWaveMultiplier": 1.0
+        },
+        "appearance": {
+          "sceneGammaOffset": 0.0,
+          "ambientGammaOffset": 0.0,
+          "directionalGammaOffset": 0.0,
+          "pointLightGammaOffset": 0.0,
+          "nonlinearPointLightSaturation": 1.0,
+          "linearPointLightSaturation": 1.0,
+          "linearPointLightGammaOffset": 0.0,
+          "spotlightSaturation": 1.0,
+          "spotlightGammaOffset": 0.0,
+          "linearSpotlightSaturation": 1.0,
+          "linearSpotlightGammaOffset": 0.0,
+          "omnidirectionalBulbSaturation": 1.0,
+          "omnidirectionalBulbGammaOffset": 0.0,
+          "linearOmnidirectionalBulbSaturation": 1.0,
+          "linearOmnidirectionalBulbGammaOffset": 0.0,
+          "emissiveSaturation": 1.0,
+          "emissiveGammaOffset": 0.0,
+          "glowmapSaturation": 1.0,
+          "glowmapGammaOffset": 0.0,
+          "effectLightingSaturation": 1.0,
+          "effectLightingGammaOffset": 0.0,
+          "effectSaturation": 1.0,
+          "effectGammaOffset": 0.0,
+          "skyStaticSaturation": 1.0,
+          "skyStaticGammaOffset": 0.0,
+          "sunGlareSaturation": 1.0,
+          "sunGlareGammaOffset": 0.0,
+          "fogSaturation": 1.0,
+          "volumetricIntensity": 1.0,
+          "volumetricSaturation": 1.0
+        },
+        "bloomPresets": {
+          "selected": 0,
+          "profiles": [
+            {
+              "BloomSaturation": 0.8999999761581421,
+              "BloomTint": [
+                1.0,
+                0.9800000190734863,
+                0.9399999976158142
+              ],
+              "CompressionCeiling": 1.5,
+              "CompressionThreshold": 0.0,
+              "EnhancementIntensity": 0.0,
+              "HaloRadius": 3.5,
+              "HaloSpread": 0.8500000238418579
+            },
+            {
+              "EnhancementIntensity": 4.0,
+              "HaloRadius": 5.0,
+              "HaloSpread": 1.0,
+              "BloomSaturation": 1.2999999523162842,
+              "BloomTint": [
+                1.0,
+                0.9800000190734863,
+                0.9399999976158142
+              ],
+              "CompressionThreshold": 0.0,
+              "CompressionCeiling": 0.6700000166893005
+            },
+            {
+              "EnhancementIntensity": 2.5,
+              "HaloRadius": 4.0,
+              "HaloSpread": 0.7200000286102295,
+              "BloomSaturation": 0.8500000238418579,
+              "BloomTint": [
+                0.6470588445663452,
+                0.8039215803146362,
+                1.0
+              ],
+              "CompressionThreshold": 0.07999999821186066,
+              "CompressionCeiling": 0.8999999761581421
+            }
+          ]
         }
       },
       {
@@ -785,6 +1013,82 @@
           "enabled": false,
           "overrideEnabled": false,
           "strongWindWaveMultiplier": 1.0
+        },
+        "appearance": {
+          "sceneGammaOffset": 0.0,
+          "ambientGammaOffset": 0.0,
+          "directionalGammaOffset": 0.0,
+          "pointLightGammaOffset": 0.0,
+          "nonlinearPointLightSaturation": 1.0,
+          "linearPointLightSaturation": 1.0,
+          "linearPointLightGammaOffset": 0.0,
+          "spotlightSaturation": 1.0,
+          "spotlightGammaOffset": 0.0,
+          "linearSpotlightSaturation": 1.0,
+          "linearSpotlightGammaOffset": 0.0,
+          "omnidirectionalBulbSaturation": 1.0,
+          "omnidirectionalBulbGammaOffset": 0.0,
+          "linearOmnidirectionalBulbSaturation": 1.0,
+          "linearOmnidirectionalBulbGammaOffset": 0.0,
+          "emissiveSaturation": 1.0,
+          "emissiveGammaOffset": 0.0,
+          "glowmapSaturation": 1.0,
+          "glowmapGammaOffset": 0.0,
+          "effectLightingSaturation": 1.0,
+          "effectLightingGammaOffset": 0.0,
+          "effectSaturation": 1.0,
+          "effectGammaOffset": 0.0,
+          "skyStaticSaturation": 1.0,
+          "skyStaticGammaOffset": 0.0,
+          "sunGlareSaturation": 1.0,
+          "sunGlareGammaOffset": 0.0,
+          "fogSaturation": 1.0,
+          "volumetricIntensity": 1.0,
+          "volumetricSaturation": 1.0
+        },
+        "bloomPresets": {
+          "selected": 0,
+          "profiles": [
+            {
+              "BloomSaturation": 0.8999999761581421,
+              "BloomTint": [
+                1.0,
+                0.9800000190734863,
+                0.9399999976158142
+              ],
+              "CompressionCeiling": 1.5,
+              "CompressionThreshold": 0.0,
+              "EnhancementIntensity": 0.0,
+              "HaloRadius": 3.5,
+              "HaloSpread": 0.8500000238418579
+            },
+            {
+              "EnhancementIntensity": 4.0,
+              "HaloRadius": 5.0,
+              "HaloSpread": 1.0,
+              "BloomSaturation": 1.2999999523162842,
+              "BloomTint": [
+                1.0,
+                0.9800000190734863,
+                0.9399999976158142
+              ],
+              "CompressionThreshold": 0.0,
+              "CompressionCeiling": 0.6700000166893005
+            },
+            {
+              "EnhancementIntensity": 2.5,
+              "HaloRadius": 4.0,
+              "HaloSpread": 0.7200000286102295,
+              "BloomSaturation": 0.8500000238418579,
+              "BloomTint": [
+                0.6470588445663452,
+                0.8039215803146362,
+                1.0
+              ],
+              "CompressionThreshold": 0.07999999821186066,
+              "CompressionCeiling": 0.8999999761581421
+            }
+          ]
         }
       },
       {
@@ -844,6 +1148,82 @@
           "enabled": false,
           "overrideEnabled": false,
           "strongWindWaveMultiplier": 1.0
+        },
+        "appearance": {
+          "sceneGammaOffset": 0.0,
+          "ambientGammaOffset": 0.0,
+          "directionalGammaOffset": 0.0,
+          "pointLightGammaOffset": 0.0,
+          "nonlinearPointLightSaturation": 1.0,
+          "linearPointLightSaturation": 1.0,
+          "linearPointLightGammaOffset": 0.0,
+          "spotlightSaturation": 1.0,
+          "spotlightGammaOffset": 0.0,
+          "linearSpotlightSaturation": 1.0,
+          "linearSpotlightGammaOffset": 0.0,
+          "omnidirectionalBulbSaturation": 1.0,
+          "omnidirectionalBulbGammaOffset": 0.0,
+          "linearOmnidirectionalBulbSaturation": 1.0,
+          "linearOmnidirectionalBulbGammaOffset": 0.0,
+          "emissiveSaturation": 1.0,
+          "emissiveGammaOffset": 0.0,
+          "glowmapSaturation": 1.0,
+          "glowmapGammaOffset": 0.0,
+          "effectLightingSaturation": 1.0,
+          "effectLightingGammaOffset": 0.0,
+          "effectSaturation": 1.0,
+          "effectGammaOffset": 0.0,
+          "skyStaticSaturation": 1.0,
+          "skyStaticGammaOffset": 0.0,
+          "sunGlareSaturation": 1.0,
+          "sunGlareGammaOffset": 0.0,
+          "fogSaturation": 1.0,
+          "volumetricIntensity": 1.0,
+          "volumetricSaturation": 1.0
+        },
+        "bloomPresets": {
+          "selected": 0,
+          "profiles": [
+            {
+              "BloomSaturation": 0.8999999761581421,
+              "BloomTint": [
+                1.0,
+                0.9800000190734863,
+                0.9399999976158142
+              ],
+              "CompressionCeiling": 1.5,
+              "CompressionThreshold": 0.0,
+              "EnhancementIntensity": 0.0,
+              "HaloRadius": 3.5,
+              "HaloSpread": 0.8500000238418579
+            },
+            {
+              "EnhancementIntensity": 4.0,
+              "HaloRadius": 5.0,
+              "HaloSpread": 1.0,
+              "BloomSaturation": 1.2999999523162842,
+              "BloomTint": [
+                1.0,
+                0.9800000190734863,
+                0.9399999976158142
+              ],
+              "CompressionThreshold": 0.0,
+              "CompressionCeiling": 0.6700000166893005
+            },
+            {
+              "EnhancementIntensity": 2.5,
+              "HaloRadius": 4.0,
+              "HaloSpread": 0.7200000286102295,
+              "BloomSaturation": 0.8500000238418579,
+              "BloomTint": [
+                0.6470588445663452,
+                0.8039215803146362,
+                1.0
+              ],
+              "CompressionThreshold": 0.07999999821186066,
+              "CompressionCeiling": 0.8999999761581421
+            }
+          ]
         }
       },
       {
@@ -903,6 +1283,82 @@
           "enabled": false,
           "overrideEnabled": false,
           "strongWindWaveMultiplier": 1.0
+        },
+        "appearance": {
+          "sceneGammaOffset": 0.0,
+          "ambientGammaOffset": 0.0,
+          "directionalGammaOffset": 0.0,
+          "pointLightGammaOffset": 0.0,
+          "nonlinearPointLightSaturation": 1.0,
+          "linearPointLightSaturation": 1.0,
+          "linearPointLightGammaOffset": 0.0,
+          "spotlightSaturation": 1.0,
+          "spotlightGammaOffset": 0.0,
+          "linearSpotlightSaturation": 1.0,
+          "linearSpotlightGammaOffset": 0.0,
+          "omnidirectionalBulbSaturation": 1.0,
+          "omnidirectionalBulbGammaOffset": 0.0,
+          "linearOmnidirectionalBulbSaturation": 1.0,
+          "linearOmnidirectionalBulbGammaOffset": 0.0,
+          "emissiveSaturation": 1.0,
+          "emissiveGammaOffset": 0.0,
+          "glowmapSaturation": 1.0,
+          "glowmapGammaOffset": 0.0,
+          "effectLightingSaturation": 1.0,
+          "effectLightingGammaOffset": 0.0,
+          "effectSaturation": 1.0,
+          "effectGammaOffset": 0.0,
+          "skyStaticSaturation": 1.0,
+          "skyStaticGammaOffset": 0.0,
+          "sunGlareSaturation": 1.0,
+          "sunGlareGammaOffset": 0.0,
+          "fogSaturation": 1.0,
+          "volumetricIntensity": 1.0,
+          "volumetricSaturation": 1.0
+        },
+        "bloomPresets": {
+          "selected": 0,
+          "profiles": [
+            {
+              "BloomSaturation": 0.8999999761581421,
+              "BloomTint": [
+                1.0,
+                0.9800000190734863,
+                0.9399999976158142
+              ],
+              "CompressionCeiling": 1.5,
+              "CompressionThreshold": 0.0,
+              "EnhancementIntensity": 0.0,
+              "HaloRadius": 3.5,
+              "HaloSpread": 0.8500000238418579
+            },
+            {
+              "EnhancementIntensity": 4.0,
+              "HaloRadius": 5.0,
+              "HaloSpread": 1.0,
+              "BloomSaturation": 1.2999999523162842,
+              "BloomTint": [
+                1.0,
+                0.9800000190734863,
+                0.9399999976158142
+              ],
+              "CompressionThreshold": 0.0,
+              "CompressionCeiling": 0.6700000166893005
+            },
+            {
+              "EnhancementIntensity": 2.5,
+              "HaloRadius": 4.0,
+              "HaloSpread": 0.7200000286102295,
+              "BloomSaturation": 0.8500000238418579,
+              "BloomTint": [
+                0.6470588445663452,
+                0.8039215803146362,
+                1.0
+              ],
+              "CompressionThreshold": 0.07999999821186066,
+              "CompressionCeiling": 0.8999999761581421
+            }
+          ]
         }
       }
     ],
@@ -926,7 +1382,8 @@
         "Saturation": 1.0,
         "ShaftIntensity": 1.0
       }
-    }
+    },
+    "bloomEnabled": true
   },
   "Foliage Lighting": {
     "EnableFoliageAmbientBoost": 0,

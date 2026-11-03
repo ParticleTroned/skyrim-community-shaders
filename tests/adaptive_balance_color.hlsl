@@ -65,6 +65,14 @@ RWTexture2D<float4> Result : register(u0);
 		graded = color * EyeAppearance::SpecularMultiplier(false);
 	} else if (appearanceParameters.x == 11) {
 		graded = AdaptiveBalanceAppearance::ApplyAurora(color);
+	} else if (appearanceParameters.x == 12) {
+		graded = Color::AdjustUtilityColor(color, appearanceControls.x, appearanceControls.y);
+	} else if (appearanceParameters.x == 13) {
+		graded = AdaptiveBalanceColor::Apply(color, 1.0, 1.0, ENABLE_LL_COLOR_ADJUSTMENTS,
+			SharedData::adaptiveBalanceSettings.appearance.sceneGammaOffset);
+	} else if (appearanceParameters.x == 14) {
+		graded = Color::WeatherEffectLighting(color, appearanceParameters.y != 0) * appearanceMaterial.xyz;
+		original = color * appearanceMaterial.xyz;
 	} else if (appearanceParameters.x == 8 || appearanceParameters.x == 9) {
 		graded = color * EyeAppearance::BrightnessMultiplier(appearanceParameters.x == 8);
 	} else {

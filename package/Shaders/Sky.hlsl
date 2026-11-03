@@ -307,7 +307,10 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif  // OCCLUSION
 
 #	if defined(DITHER) && defined(TEX) && !defined(OCCLUSION)
-	psout.Color.xyz *= SharedData::adaptiveBalanceSettings.sunGlareIntensity;
+	psout.Color.xyz = Color::AdjustUtilityColor(psout.Color.xyz,
+						  SharedData::adaptiveBalanceSettings.appearance.sunGlareSaturation,
+						  SharedData::adaptiveBalanceSettings.appearance.sunGlareGammaOffset) *
+	                  SharedData::adaptiveBalanceSettings.sunGlareIntensity;
 #	endif
 
 #	if !defined(OCCLUSION) && !defined(MOONMASK)

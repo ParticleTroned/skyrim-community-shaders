@@ -90,6 +90,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	waterGammaOffset,
 	vlGammaOffset,
 	bloom,
+	bloomPresets,
 	water,
 	waterWind,
 	appearance)
@@ -106,6 +107,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::Settings,
 	enabled,
+	bloomEnabled,
 	useAmbientEffectLighting,
 	godrayFinalBrightness,
 	volumetricClarity,
@@ -168,7 +170,8 @@ namespace
 		       a_settings.spotlightMult != 1.0f ||
 		       a_settings.linearSpotlightMult != 1.0f ||
 		       a_settings.omnidirectionalBulbMult != 1.0f ||
-		       a_settings.linearOmnidirectionalBulbMult != 1.0f;
+		       a_settings.linearOmnidirectionalBulbMult != 1.0f ||
+		       AdaptiveBalanceAppearance::UsesClassifiedPointLights(a_settings.appearance);
 	}
 
 	constexpr std::array<Profile, AdaptiveBrightness::kProfileCount> kProfileOrder{
@@ -697,6 +700,8 @@ namespace
 		a_profile.waterGammaOffset = ClampGammaOffset(a_profile.waterGammaOffset);
 		a_profile.vlGammaOffset = ClampGammaOffset(a_profile.vlGammaOffset);
 		Bloom::SanitizeProfile(a_profile.bloom);
+		Bloom::SanitizePresets(a_profile.bloomPresets);
+		a_profile.bloomPresets.profiles[a_profile.bloomPresets.selected] = a_profile.bloom;
 		WaterAppearance::SanitizeProfile(a_profile.water);
 		SanitizeWaterWindSettings(a_profile.waterWind);
 	}
@@ -1263,6 +1268,7 @@ namespace
 	{
 		return {
 			{ "useAmbientEffectLighting", a_settings.useAmbientEffectLighting },
+			{ "bloomEnabled", a_settings.bloomEnabled },
 			{ "godrayFinalBrightness", a_settings.godrayFinalBrightness },
 			{ "volumetricClarity", a_settings.volumetricClarity },
 			{ "godrays", a_settings.godrays },
@@ -1403,6 +1409,7 @@ namespace
 				importedSettings.depthOfField = it->get<AdaptiveBalanceDepthOfField::Settings>();
 
 			importedSettings.useAmbientEffectLighting = GetOptionalBool(migratedPreset, "useAmbientEffectLighting", false);
+			importedSettings.bloomEnabled = GetOptionalBool(migratedPreset, "bloomEnabled", true);
 			importedSettings.godrayFinalBrightness = GetOptionalFloat(migratedPreset, "godrayFinalBrightness", AdaptiveBalanceGodray::kDefault);
 			if (const auto it = migratedPreset.find("godrays"); it != migratedPreset.end())
 				importedSettings.godrays = it->get<AdaptiveBalanceGodray::Profiles>();
@@ -1740,6 +1747,7 @@ json AdaptiveBrightness::CapturePerformanceSettingsState() const
 	return {
 		{ "enabled", settings.enabled },
 		{ "useAmbientEffectLighting", settings.useAmbientEffectLighting },
+		{ "bloomEnabled", settings.bloomEnabled },
 		{ "godrayFinalBrightness", settings.godrayFinalBrightness },
 		{ "volumetricClarity", settings.volumetricClarity },
 		{ "godrays", settings.godrays },
@@ -2060,8 +2068,10 @@ namespace
 	void DrawAppearanceSettings(AdaptiveBalanceAppearanceSettings& appearance)
 	{
 		constexpr std::array groups{ "Direct and Ambient Lighting", "Fog and Clouds", "Sky Gradient",
-			"Stars", "Auroras", "Sky Static Mist", "Particles and Glow Sprites", "Godrays and Cloud Shadows", "Eyes" };
+			"Stars", "Auroras", "Sky Static Mist", "Particles and Glow Sprites", "Godrays and Cloud Shadows", "Eyes",
+			"Scene Colour", "Point Light Colour", "Material Colour", "Atmosphere Colour" };
 		MenuUI::SectionHeading("Appearance controls");
+		ImGui::TextWrapped("Gamma offsets are neutral at zero; negative values lift midtones and positive values darken them. Saturation is neutral at one. Point-light subtype adjustments compose with the shared Point Lights controls.");
 		for (const auto* group : groups) {
 			if (!ImGui::CollapsingHeader(group))
 				continue;
@@ -2207,7 +2217,9 @@ void AdaptiveBrightness::DrawBloomSettings(
 	bool a_showAdvancedControls,
 	bool a_globalLayer)
 {
-	Bloom::DrawProfileControls(a_profile.bloom);
+	if (a_globalLayer)
+		Util::Widgets::Checkbox("Enable Bloom Enhancement", &settings.bloomEnabled);
+	Bloom::DrawProfileControls(a_profile.bloom, a_profile.bloomPresets);
 	if (a_globalLayer)
 		ImGui::TextDisabled("Global Bloom strength adds to every active profile; detailed shaping can also adjust inherited Bloom.");
 	if (!a_showAdvancedControls)
@@ -3795,7 +3807,7 @@ SharedLightingSettings AdaptiveBrightness::GetEffectiveSharedLightingSettings() 
 
 Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
 {
-	if (!IsRuntimeEnabled())
+	if (!IsRuntimeEnabled() || !settings.bloomEnabled)
 		return Bloom::GetCommonBufferData(Bloom::Profile{}, 0.0f);
 
 	const auto& globalBloom = settings.globalProfile.bloom;
@@ -3937,6 +3949,7 @@ AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
 	data.fireSaturation = effectiveSettings.fireSaturation;
 	data.fireCurve = effectiveSettings.fireCurve;
 	data.appearance = effectiveSettings.appearance;
+	data.appearance.pointLightColorEnabled = AdaptiveBalanceAppearance::UsesClassifiedPointLights(data.appearance);
 	data.linearPointLightMult = effectiveSettings.linearPointLightMult;
 	data.spotlightMult = effectiveSettings.spotlightMult;
 	data.linearSpotlightMult = effectiveSettings.linearSpotlightMult;

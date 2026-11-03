@@ -5,6 +5,7 @@
 
 #	include "Api/DevBenchMainThreadDispatch.h"
 #	include "BuildProvenance.h"
+#	include "Features/AdaptiveBalanceBloomControls.h"
 #	include "Features/AdaptiveBalanceGodraySettings.h"
 #	include "Features/AdaptiveBrightness.h"
 #	include "Features/DynamicCubemaps.h"
@@ -464,6 +465,11 @@ namespace
 			{ "parallaxStrength", 0.0, 2.0 },
 			{ "parallaxQuality", 4.0, 64.0 } } };
 		for (const auto& [name, value] : a_visuals.items()) {
+			if (name == "bloom") {
+				if (auto error = AdaptiveBalanceBloomControls::Validate(value); !error.empty())
+					return error;
+				continue;
+			}
 			if (name == "godrays") {
 				if (!value.is_object() || value.empty())
 					return "godrays must be a nonempty object";
@@ -510,7 +516,7 @@ namespace
 				}
 				continue;
 			}
-			if (name == "lightingAdvanced" || name == "useAmbientEffectLighting") {
+			if (name == "lightingAdvanced" || name == "useAmbientEffectLighting" || name == "bloomEnabled") {
 				if (!value.is_boolean())
 					return name + " must be boolean";
 				continue;
@@ -559,6 +565,9 @@ namespace
 		configured["fireCurve"] = profile.fireCurve;
 		configured["ambient"] = profile.ambientMult;
 		configured["appearance"] = profile.appearance;
+		configured["bloomEnabled"] = balance.settings.bloomEnabled;
+		configured["bloom"] = profile.bloom;
+		configured["bloomPresets"] = profile.bloomPresets;
 		configured["lightingAdvanced"] = profile.advanced;
 		configured["useAmbientEffectLighting"] = balance.settings.useAmbientEffectLighting;
 		configured["volumetricClarity"] = balance.settings.volumetricClarity;
@@ -585,6 +594,9 @@ namespace
 		effective["fireCurve"] = lighting.fireCurve;
 		effective["ambient"] = lighting.ambientMult;
 		effective["appearance"] = lighting.appearance;
+		const auto bloom = balance.GetEffectiveBloomSettings();
+		effective["bloomEnabled"] = bloom.Enabled != 0;
+		effective["bloomIntensity"] = bloom.EnhancementIntensity;
 		effective["useAmbientEffectLighting"] = balance.IsRuntimeEnabled() && balance.settings.useAmbientEffectLighting;
 		effective["volumetricClarity"] = balance.GetEffectiveVolumetricClarity();
 		effective["godrays"] = { { "exterior", balance.GetEffectiveGodrayProfile(false) }, { "interior", balance.GetEffectiveGodrayProfile(true) } };
@@ -949,6 +961,26 @@ namespace
 				return { { "ok", true }, { "action", "grass_telemetry" }, { "grassOptimizations", grass.GetDiagnostics() }, { "grassCollision", globals::features::grassCollision.GetDiagnostics() }, { "scene", std::move(scene) } };
 			});
 		}
+		if (action == "reset_adaptive_balance_dof") {
+			if (!a_args.contains("dofSection") || !a_args.at("dofSection").is_string())
+				return { { "error", "dofSection must be scene or underwater" }, { "action", action } };
+			const auto section = a_args.at("dofSection").get<std::string>();
+			if (section != "scene" && section != "underwater")
+				return { { "error", "dofSection must be scene or underwater" }, { "action", action } };
+			return RunOnMainThread([section, action]() -> json {
+				if (PerformanceTuningRenderer::HasActiveMeasurements())
+					return { { "error", "Finish or cancel the performance measurement before resetting depth of field" }, { "action", action } };
+				auto& balance = globals::features::adaptiveBrightness;
+				if (!balance.loaded || !globals::menu)
+					return { { "error", "Adaptive Balance or menu unavailable" }, { "action", action } };
+				auto& target = section == "scene" ? balance.settings.depthOfField.sceneDof : balance.settings.depthOfField.underwaterDof;
+				const auto live = section == "scene" ? AdaptiveBalanceDepthOfField::GetLiveSceneSettings() : AdaptiveBalanceDepthOfField::GetLiveUnderwaterSettings();
+				if (!AdaptiveBalanceDepthOfField::ResetOverrideToLive(target, live))
+					return { { "error", "Unlock this DOF section and ensure live image space data is available before resetting" }, { "action", action } };
+				globals::menu->RequestSettingsDirtyCheck();
+				return { { "action", action }, { "persisted", false }, { "depthOfField", AdaptiveBalanceDepthOfFieldStatus() } };
+			});
+		}
 		if (action == "set_adaptive_balance_dof") {
 			const auto patch = a_args.value("depthOfField", json{});
 			std::string error;
@@ -1094,7 +1126,7 @@ namespace
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "status", "configure_grass_collision", "grass_telemetry", "set_grass_collision_strength", "open", "open_vr_fov", "set_fov_enabled", "set_fov_blend_curve", "close", "screenshot", "set_path", "set_layout_unlocked", "reset_menu_layout", "set_menu_placement", "set_wand_settings", "texture_stats", "set_depth_culling_settings", "set_depth_culling_legacy_mode", "set_depth_culling_telemetry_enabled", "reset_depth_culling_telemetry", "set_adaptive_balance_enabled", "set_adaptive_balance_visuals", "set_adaptive_balance_dof", "set_foliage_lighting_enabled", "set_terrain_variation_mesh_enabled", "set_pbr_grass_enabled", "set_pbr_grass_diagnostics_enabled", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "request_dynamic_cubemap_refresh", "prepare_coc", "prepare_tuning", "set_motion_adaptive_sharpening", "set_parallax_strength", "set_sky_sync_sunlight", "set_sky_sync_disabled_worldspaces", "set_grass_optimizations_enabled", "set_grass_optimizations_settings", "set_grass_background_preparation_enabled", "set_grass_hiz_enabled", "set_grass_optimizations_diagnostics_enabled", "ui_status", "open_feature", "select_tab", "set_sidebar_visible", "scroll", "restore_defaults", "set_adaptive_balance_preset_ui" }) },
+				{ "supported", json::array({ "status", "reset_adaptive_balance_dof", "configure_grass_collision", "grass_telemetry", "set_grass_collision_strength", "open", "open_vr_fov", "set_fov_enabled", "set_fov_blend_curve", "close", "screenshot", "set_path", "set_layout_unlocked", "reset_menu_layout", "set_menu_placement", "set_wand_settings", "texture_stats", "set_depth_culling_settings", "set_depth_culling_legacy_mode", "set_depth_culling_telemetry_enabled", "reset_depth_culling_telemetry", "set_adaptive_balance_enabled", "set_adaptive_balance_visuals", "set_adaptive_balance_dof", "set_foliage_lighting_enabled", "set_terrain_variation_mesh_enabled", "set_pbr_grass_enabled", "set_pbr_grass_diagnostics_enabled", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "request_dynamic_cubemap_refresh", "prepare_coc", "prepare_tuning", "set_motion_adaptive_sharpening", "set_parallax_strength", "set_sky_sync_sunlight", "set_sky_sync_disabled_worldspaces", "set_grass_optimizations_enabled", "set_grass_optimizations_settings", "set_grass_background_preparation_enabled", "set_grass_hiz_enabled", "set_grass_optimizations_diagnostics_enabled", "ui_status", "open_feature", "select_tab", "set_sidebar_visible", "scroll", "restore_defaults", "set_adaptive_balance_preset_ui" }) },
 			};
 		}
 		const std::string path = a_args.value("path", std::string());
@@ -1348,6 +1380,10 @@ namespace
 				if (!balance.loaded)
 					return { { "error", "Adaptive Balance is not loaded" }, { "action", action } };
 				auto profile = balance.settings.globalProfile;
+				if (visuals.contains("bloom")) {
+					if (auto error = AdaptiveBalanceBloomControls::Apply(visuals.at("bloom"), profile.bloom, profile.bloomPresets); !error.empty())
+						return { { "error", error }, { "action", action } };
+				}
 				profile.skySaturation = visuals.value("skySaturation", profile.skySaturation);
 				profile.cloudBrightnessMult = visuals.value("cloudBrightness", profile.cloudBrightnessMult);
 				profile.cloudSaturation = visuals.value("cloudSaturation", profile.cloudSaturation);
@@ -1385,6 +1421,7 @@ namespace
 				}
 				balance.settings.godrays = godrays;
 				balance.settings.globalProfile = profile;
+				balance.settings.bloomEnabled = visuals.value("bloomEnabled", balance.settings.bloomEnabled);
 				balance.settings.useAmbientEffectLighting = visuals.value("useAmbientEffectLighting", balance.settings.useAmbientEffectLighting);
 				balance.settings.volumetricClarity = visuals.value("volumetricClarity", balance.settings.volumetricClarity);
 				balance.settings.moonReflectionStrength = visuals.value("moonReflectionStrength", balance.settings.moonReflectionStrength);
@@ -1647,6 +1684,14 @@ namespace MenuDevBenchBridge
 				{ "type", "object" }, { "description", "Main-thread context at the DevBench call, independently framed from the asynchronous grass and profiler samples. Unavailable scene values are omitted." }
 			};
 			document["inputSchema"]["properties"]["visuals"]["properties"]["appearance"] = BuildAdaptiveBalanceAppearanceSchema();
+			document["inputSchema"]["properties"]["visuals"]["properties"]["bloom"] = AdaptiveBalanceBloomControls::Schema();
+			document["inputSchema"]["properties"]["visuals"]["properties"]["bloomEnabled"] = {
+				{ "type", "boolean" }, { "description", "Independently bypass bloom enhancement while retaining every layer and editable preset. Default true; Adaptive Balance must also be enabled." }
+			};
+			document["inputSchema"]["properties"]["action"]["enum"].push_back("reset_adaptive_balance_dof");
+			document["inputSchema"]["properties"]["dofSection"] = { { "type", "string" }, { "enum", { "scene", "underwater" } } };
+			document["description"] = document["description"].get<std::string>() +
+			                          " set_adaptive_balance_visuals accepts bloomEnabled and bloom (preset, reset, profile). Preset selection preserves edits per slot; reset restores only the selected slot. Appearance includes independent light-subtype, material and atmosphere saturation/gamma offsets, scene and ambient gamma, fog saturation and overall volumetric intensity/saturation. Gamma offsets add across profile layers with neutral 0 and bounds -1..1; saturation multiplies with neutral 1 and bounds 0..2. Volumetric intensity is 0..5 and scales haze and shafts together before lens flares. New appearance controls require lightingAdvanced and preserve object previews. reset_adaptive_balance_dof requires dofSection scene or underwater, an unlocked section and live data; it replaces both values and baseline with live values without persisting.";
 			document["inputSchema"]["properties"]["visuals"]["properties"]["godrays"] = BuildAdaptiveBalanceGodraySchema();
 			document["description"] = document["description"].get<std::string>() +
 			                          " set_adaptive_balance_visuals accepts godrays.exterior and godrays.interior partial profiles (ShaftIntensity 0..3, Opacity 0..2, Saturation 0..4, CustomColorContribution/Red/Green/Blue 0..1). These bases work without lightingAdvanced; profile appearance adjustments compose afterward. Disabling Adaptive Balance bypasses both bases, profile tuning and volumetricClarity. Volumetric Lighting owns only coverage and rendering quality. Status global.godrays reports saved bases and effective.godrays reports composed tuning before renderer availability gates.";

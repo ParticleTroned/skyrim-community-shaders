@@ -621,6 +621,187 @@ RWBuffer<float> Output : register(u0);
 			}
 		}
 	}
+	void TestReflectionHits()
+	{
+		using D3D11ShaderTest::Check;
+		winrt::com_ptr<ID3D11Device> device;
+		winrt::com_ptr<ID3D11DeviceContext> context;
+		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+			D3D11_SDK_VERSION, device.put(), nullptr, context.put()));
+		const char* source = R"(
+#include "ISReflectionsRayTracing.hlsl"
+RWBuffer<float4> Output : register(u0);
+[numthreads(2, 1, 1)] void TestReflection(uint3 id : SV_DispatchThreadID) {
+    uint eye = 0;
+#ifdef VR
+    eye = id.x;
+#endif
+    float3 start = float3(0.5, 0.5, 0.99);
+    float3 direction = float3(0, 0.01, 0.02);
+#ifdef REVERSE_Z
+    start.z = 1 - start.z;
+    direction.z = -direction.z;
+#endif
+    Output[id.x] = GetReflectionColor(direction, start, eye, uint2(8, 8)
+#ifdef VR
+        , 64, 6, 1
+#endif
+    );
+})";
+		D3D11_TEXTURE2D_DESC textureDesc{};
+		textureDesc.Width = textureDesc.Height = 8;
+		textureDesc.MipLevels = textureDesc.ArraySize = textureDesc.SampleDesc.Count = 1;
+		textureDesc.Format = DXGI_FORMAT_R32_FLOAT;
+		textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		winrt::com_ptr<ID3D11Texture2D> depth;
+		winrt::com_ptr<ID3D11ShaderResourceView> depthView;
+		Check(device->CreateTexture2D(&textureDesc, nullptr, depth.put()));
+		Util::SetResourceName(depth.get(), "ReverseZDepthTest::ReflectionDepth");
+		Check(device->CreateShaderResourceView(depth.get(), nullptr, depthView.put()));
+		Util::SetResourceName(depthView.get(), "ReverseZDepthTest::ReflectionDepth SRV");
+		std::array<XMFLOAT4, 64> colours;
+		colours.fill({ 0.25f, 0.5f, 0.75f, 0 });
+		textureDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+		D3D11_SUBRESOURCE_DATA colourData{ colours.data(), 8 * sizeof(XMFLOAT4), 0 };
+		winrt::com_ptr<ID3D11Texture2D> colour;
+		winrt::com_ptr<ID3D11ShaderResourceView> colourView;
+		Check(device->CreateTexture2D(&textureDesc, &colourData, colour.put()));
+		Util::SetResourceName(colour.get(), "ReverseZDepthTest::ReflectionColour");
+		Check(device->CreateShaderResourceView(colour.get(), nullptr, colourView.put()));
+		Util::SetResourceName(colourView.get(), "ReverseZDepthTest::ReflectionColour SRV");
+		D3D11_SAMPLER_DESC samplerDesc{};
+		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+		samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+		winrt::com_ptr<ID3D11SamplerState> sampler;
+		Check(device->CreateSamplerState(&samplerDesc, sampler.put()));
+		Util::SetResourceName(sampler.get(), "ReverseZDepthTest::ReflectionSampler");
+		D3D11_BUFFER_DESC bufferDesc{};
+		bufferDesc.ByteWidth = 2 * sizeof(XMFLOAT4);
+		bufferDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+		winrt::com_ptr<ID3D11Buffer> output, staging;
+		Check(device->CreateBuffer(&bufferDesc, nullptr, output.put()));
+		Util::SetResourceName(output.get(), "ReverseZDepthTest::ReflectionOutput");
+		D3D11_UNORDERED_ACCESS_VIEW_DESC outputDesc{};
+		outputDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+		outputDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		outputDesc.Buffer.NumElements = 2;
+		winrt::com_ptr<ID3D11UnorderedAccessView> outputView;
+		Check(device->CreateUnorderedAccessView(output.get(), &outputDesc, outputView.put()));
+		Util::SetResourceName(outputView.get(), "ReverseZDepthTest::ReflectionOutput UAV");
+		bufferDesc.BindFlags = 0;
+		bufferDesc.Usage = D3D11_USAGE_STAGING;
+		bufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		Check(device->CreateBuffer(&bufferDesc, nullptr, staging.put()));
+		Util::SetResourceName(staging.get(), "ReverseZDepthTest::ReflectionReadback");
+		for (bool vr : { false, true }) {
+			for (bool reversed : { false, true }) {
+				for (bool unifiedWater : { false, true }) {
+					D3D_SHADER_MACRO defines[]{ { "PSHADER", "1" }, { "ENABLESSR", "1" }, { unifiedWater ? "UNIFIED_WATER" : "NATIVE_WATER", "1" },
+						{ vr ? "VR" : "FLAT", "1" }, { reversed ? "REVERSE_Z" : "STANDARD_Z", "1" }, { nullptr, nullptr } };
+					PackageIncludes includes{ "package/Shaders" };
+					winrt::com_ptr<ID3DBlob> code, errors;
+					winrt::com_ptr<ID3DBlob> pixelCode;
+					const auto pixelCompiled = D3DCompileFromFile(L"package/Shaders/ISReflectionsRayTracing.hlsl", defines, &includes,
+						"main", "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+						0, pixelCode.put(), errors.put());
+					if (errors)
+						std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+					Check(pixelCompiled);
+					const auto compiled = D3DCompile(source, std::strlen(source), "ReflectionHits", defines, &includes,
+						"TestReflection", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+						0, code.put(), errors.put());
+					if (errors)
+						std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+					Check(compiled);
+					winrt::com_ptr<ID3D11ComputeShader> shader;
+					Check(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, shader.put()));
+					Util::SetResourceName(shader.get(), "ReverseZDepthTest::ReflectionHits");
+					winrt::com_ptr<ID3D11ShaderReflection> reflection;
+					Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.put())));
+					D3D11ShaderTest::ConstantBuffer frame(device.get(), reflection.get(), "FrameBuffer::PerFrame");
+					D3D11ShaderTest::ConstantBuffer geometry(device.get(), reflection.get(), "PerGeometry");
+					auto projection = Store(XMMatrixPerspectiveFovLH(1.5f, 1, 1, 100000));
+					if (reversed)
+						Depth::SetReverseProjection(projection, 1, 100000);
+					const auto uploadedProjection = Store(XMMatrixTranspose(Load(projection)));
+					const auto inverse = Store(XMMatrixTranspose(XMMatrixInverse(nullptr, Load(projection))));
+					const std::array<float, 4> dimensions{ 1, 1, 1, 1 };
+					const auto setMatrices = [&](const char* name, const Matrix& value) {
+						if (vr)
+							frame.SetVariable(name, std::array{ value, value });
+						else
+							frame.SetVariable(name, value);
+					};
+					setMatrices("FrameBuffer::CameraProj", uploadedProjection);
+					setMatrices("FrameBuffer::CameraProjInverse", inverse);
+					setMatrices("FrameBuffer::CameraViewProjInverse", inverse);
+					setMatrices("FrameBuffer::CameraViewProj", uploadedProjection);
+					setMatrices("FrameBuffer::CameraViewProjUnjittered", uploadedProjection);
+					setMatrices("FrameBuffer::CameraPreviousViewProjUnjittered", uploadedProjection);
+					frame.SetVariable("FrameBuffer::DynamicResolutionParams1", dimensions);
+					frame.SetVariable("FrameBuffer::DynamicResolutionParams2", dimensions);
+					geometry.SetVariable("DefaultNormal", std::array{ 0.0f, 1.0f, 0.0f });
+					const auto order = reversed ? Depth::Convention::Reversed : Depth::Convention::Standard;
+					const float ordinaryDepth = reversed ? 0.001f : 0.999f;
+					const float nativeCutoff = reversed ? 1.0f - 0.9999f : 0.9999f;
+					const float infinity = std::numeric_limits<float>::infinity();
+					const float nan = std::numeric_limits<float>::quiet_NaN();
+					struct Sample
+					{
+						float depth, radius;
+						bool hit;
+					};
+					const std::array samples{
+						Sample{ ordinaryDepth, 1, true },
+						Sample{ reversed ? 1e-10f : std::nextafter(1.0f, 0.0f), 1, unifiedWater },
+						Sample{ Depth::Near(order), 1, true },
+						Sample{ Depth::Far(order), 1, false },
+						Sample{ -0.01f, 1, false }, Sample{ 1.01f, 1, false },
+						Sample{ infinity, 1, false }, Sample{ nan, 1, false },
+						Sample{ ordinaryDepth, 0, false }, Sample{ ordinaryDepth, -1, false },
+						Sample{ ordinaryDepth, infinity, false }, Sample{ ordinaryDepth, nan, false },
+						Sample{ nativeCutoff, 1, true },
+						Sample{ std::nextafter(nativeCutoff, Depth::Far(order)), 1, unifiedWater }
+					};
+					for (const auto& sample : samples) {
+						geometry.SetVariable("SSRParams", std::array{ 1.0f, sample.radius, 0.0f, 1.0f });
+						std::array<float, 64> depths;
+						depths.fill(sample.depth);
+						context->UpdateSubresource(depth.get(), 0, nullptr, depths.data(), 8 * sizeof(float), 0);
+						frame.Bind(context.get());
+						geometry.Bind(context.get());
+						ID3D11ShaderResourceView* views[]{ colourView.get(), colourView.get(), depthView.get(), colourView.get() };
+						ID3D11SamplerState* samplers[]{ sampler.get(), sampler.get(), sampler.get(), sampler.get() };
+						auto* destination = outputView.get();
+						context->CSSetShaderResources(0, 4, views);
+						context->CSSetSamplers(0, 4, samplers);
+						context->CSSetUnorderedAccessViews(0, 1, &destination, nullptr);
+						context->CSSetShader(shader.get(), nullptr, 0);
+						context->Dispatch(1, 1, 1);
+						context->ClearState();
+						context->CopyResource(staging.get(), output.get());
+						D3D11_MAPPED_SUBRESOURCE mapped{};
+						Check(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped));
+						std::array<XMFLOAT4, 2> results;
+						std::memcpy(results.data(), mapped.pData, sizeof(results));
+						context->Unmap(staging.get(), 0);
+						for (const auto& actual : results) {
+							Require(std::isfinite(actual.x) && std::isfinite(actual.y) && std::isfinite(actual.z) &&
+										std::isfinite(actual.w) && actual.w >= 0 && actual.w <= 1,
+								"Reflection returned a nonfinite colour or invalid confidence");
+							Require(sample.hit ? actual.w > 0 : actual.w == 0,
+								sample.hit ? "Reflection rejected valid geometry" : "Reflection accepted invalid depth or trace radius");
+							if (sample.hit)
+								Require(actual.x == 0.25f && actual.y == 0.5f && actual.z == 0.75f,
+									"Reflection sampled the wrong source colour");
+						}
+					}
+				}
+			}
+		}
+		std::cout << "SSR: 224 ray checks across depth orders, both eyes and water modes passed\n";
+	}
 	void TestInteriorDepth()
 	{
 		std::ifstream input("package/Shaders/Common/DepthOrder.hlsli");
@@ -691,6 +872,7 @@ int main()
 		TestMaskIdentity();
 		TestSceneVertexShaders();
 		TestInteriorDepth();
+		TestReflectionHits();
 		TestUnderwaterMaskInputs();
 		TestUpscaleDepthKernel();
 	} catch (const std::exception& error) {

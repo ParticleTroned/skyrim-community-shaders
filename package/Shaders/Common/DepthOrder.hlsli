@@ -12,9 +12,18 @@ namespace DepthOrder
 
 	float Near() { return Reversed ? 1.0 : 0.0; }
 	float Far() { return Reversed ? 0.0 : 1.0; }
+	bool IsNormalizedDepth(float value)
+	{
+		return isfinite(value) && value >= 0.0 && value <= 1.0;
+	}
+	/** Finite scene depth includes the near endpoint and excludes the cleared far endpoint. */
+	bool IsSceneDepth(float value)
+	{
+		return IsNormalizedDepth(value) && value != Far();
+	}
 	bool IsInteriorDepth(float value, float nearMargin)
 	{
-		return isfinite(value) && value >= 0.0 && value <= 1.0 && abs(value - Near()) > nearMargin && value != Far();
+		return IsNormalizedDepth(value) && abs(value - Near()) > nearMargin && value != Far();
 	}
 	float Nearest(float first, float second) { return Reversed ? max(first, second) : min(first, second); }
 	bool IsNearer(float first, float second) { return Reversed ? first > second : first < second; }

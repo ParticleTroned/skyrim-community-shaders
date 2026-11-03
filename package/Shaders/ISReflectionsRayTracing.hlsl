@@ -43,6 +43,18 @@ static const float rayLength = 1.0;
 static const float maxValidDepth = 0.9999;
 #	endif
 
+/** Cleared depth cannot establish a reflection hit, including beyond the far plane. */
+bool IsReflectionDepthValid(float rawDepth)
+{
+	if (!DepthOrder::IsSceneDepth(rawDepth))
+		return false;
+#	ifndef UNIFIED_WATER
+	return !FrameBuffer::IsNearerDepth(FrameBuffer::ToNativeDepth(maxValidDepth), rawDepth);
+#	else
+	return true;
+#	endif
+}
+
 #	if defined(VR)
 static const int minFoveatedIterations = 16;
 static const float kSSRFoveationDepthAgreeThreshold = 0.05f;
@@ -115,6 +127,8 @@ float4 GetReflectionColor(
 #	endif
 )
 {
+	if (!isfinite(SSRParams.y) || SSRParams.y <= 0.0)
+		return 0.0;
 	float3 prevRaySample;
 	float3 raySample = projPosition;
 
@@ -138,22 +152,20 @@ float4 GetReflectionColor(
 
 		float2 sampleUV;
 		uint sampleEyeIndex;
-		Stereo::ResolveMonoUVForEye(float3(raySample.xy, FrameBuffer::ToNativeDepth(raySample.z)), eyeIndex, sampleUV, sampleEyeIndex);
+		Stereo::ResolveMonoUVForEye(raySample, eyeIndex, sampleUV, sampleEyeIndex);
 
 		if (FrameBuffer::IsOutsideFrame(sampleUV))
 			return 0.0;
 
-		float iterationDepth = FrameBuffer::ToStandardDepth(DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV, sampleEyeIndex, depthTextureDimensions), 0).x);
-#	ifndef UNIFIED_WATER
-		if (iterationDepth > maxValidDepth)
+		float iterationRawDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV, sampleEyeIndex, depthTextureDimensions), 0).x;
+		if (!IsReflectionDepthValid(iterationRawDepth))
 			continue;
-#	endif
 
-		if (saturate((raySample.z - iterationDepth) / SSRParams.y) > 0.0) {
+		if (FrameBuffer::IsNearerDepth(iterationRawDepth, raySample.z)) {
 			float3 binaryMinRaySample = prevRaySample;
 			float3 binaryMaxRaySample = raySample;
 			float3 binaryRaySample = raySample;
-			float depthThicknessFactor;
+			float depthThicknessFactor = 0.0;
 			uint hitEyeIndex = sampleEyeIndex;
 
 #	if defined(VR)
@@ -163,23 +175,21 @@ float4 GetReflectionColor(
 			{
 				binaryRaySample = lerp(binaryMinRaySample, binaryMaxRaySample, 0.5);
 
-				Stereo::ResolveMonoUVForEye(float3(binaryRaySample.xy, FrameBuffer::ToNativeDepth(binaryRaySample.z)), eyeIndex, sampleUV, hitEyeIndex);
-				iterationDepth = FrameBuffer::ToStandardDepth(DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV, hitEyeIndex, depthTextureDimensions), 0).x);
-#	ifndef UNIFIED_WATER
-				if (iterationDepth > maxValidDepth) {
-					if (iterationDepth < binaryRaySample.z)
+				Stereo::ResolveMonoUVForEye(binaryRaySample, eyeIndex, sampleUV, hitEyeIndex);
+				iterationRawDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV, hitEyeIndex, depthTextureDimensions), 0).x;
+				if (!IsReflectionDepthValid(iterationRawDepth)) {
+					if (FrameBuffer::IsNearerDepth(iterationRawDepth, binaryRaySample.z))
 						binaryMaxRaySample = binaryRaySample;
 					else
 						binaryMinRaySample = binaryRaySample;
 					depthThicknessFactor = 0.0;
 					continue;
 				}
-#	endif
 
 				// Compute expected depth vs actual depth
-				depthThicknessFactor = 1.0 - saturate(abs(binaryRaySample.z - iterationDepth) / SSRParams.y);
+				depthThicknessFactor = 1.0 - saturate(abs(binaryRaySample.z - iterationRawDepth) / SSRParams.y);
 
-				if (iterationDepth < binaryRaySample.z)
+				if (FrameBuffer::IsNearerDepth(iterationRawDepth, binaryRaySample.z))
 					binaryMaxRaySample = binaryRaySample;
 				else
 					binaryMinRaySample = binaryRaySample;
@@ -195,9 +205,8 @@ float4 GetReflectionColor(
 
 			// Make VR fades consistent by taking the closer of the two eyes
 			// Based on concepts from https://cuteloong.github.io/publications/scssr24/
-			// The stereo helpers unproject this depth, so it has to stay in the buffer's own
-			// convention; iterationDepth is standard-space by this point.
-			float2 otherEyeUvResultScreenCenterOffset = Stereo::ConvertMonoUVToOtherEye(float3(binaryRaySample.xy, FrameBuffer::ToNativeDepth(iterationDepth)), eyeIndex).xy - 0.5;
+			// Keep the native sample: a round trip through standard depth loses distant precision.
+			float2 otherEyeUvResultScreenCenterOffset = Stereo::ConvertMonoUVToOtherEye(float3(binaryRaySample.xy, iterationRawDepth), eyeIndex).xy - 0.5;
 			centerDistance = min(centerDistance, abs(otherEyeUvResultScreenCenterOffset * 2.0));
 #	else
 			float2 centerDistance = abs(uvResultScreenCenterOffset.xy * 2.0);
@@ -213,7 +222,7 @@ float4 GetReflectionColor(
 				// Resolve final UV in the eye that owns the hit
 				float2 finalSampleUV;
 				uint finalEyeIndex;
-				Stereo::ResolveMonoUVForEye(float3(binaryRaySample.xy, FrameBuffer::ToNativeDepth(iterationDepth)), eyeIndex, finalSampleUV, finalEyeIndex);
+				Stereo::ResolveMonoUVForEye(float3(binaryRaySample.xy, iterationRawDepth), eyeIndex, finalSampleUV, finalEyeIndex);
 
 				uint2 colorTextureDimensions = uint2(1, 1);
 #	if defined(VR)
@@ -223,7 +232,7 @@ float4 GetReflectionColor(
 				float3 color = ColorTex.SampleLevel(ColorSampler, colorScreenPosition, 0).xyz;
 
 				// Final sample to world-space
-				float4 positionWS = float4(float2(finalSampleUV.x, 1.0 - finalSampleUV.y) * 2.0 - 1.0, FrameBuffer::ToNativeDepth(iterationDepth), 1.0);
+				float4 positionWS = float4(float2(finalSampleUV.x, 1.0 - finalSampleUV.y) * 2.0 - 1.0, iterationRawDepth, 1.0);
 				positionWS = mul(FrameBuffer::CameraViewProjInverse[finalEyeIndex], positionWS);
 				positionWS.xyz = positionWS.xyz / positionWS.w;
 				positionWS.w = 1.0;
@@ -290,13 +299,10 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 viewNormal = DefaultNormal;
 
 	float nativeDepth = DepthTex.SampleLevel(DepthSampler, depthScreenPosition, 0).x;
-	float depth = FrameBuffer::ToStandardDepth(nativeDepth);
-#	ifndef UNIFIED_WATER
-	[branch] if (depth > maxValidDepth)
+	[branch] if (!IsReflectionDepthValid(nativeDepth))
 	{
 		return psout;
 	}
-#	endif
 
 #	if defined(VR)
 	float ssrFoveationMode = SharedData::VRFoveationModes.x;
@@ -347,14 +353,13 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 clipReflectionDirection = mul(FrameBuffer::CameraProj[eyeIndex], float4(reflectionDirection, 0.0));
 	float3 ndcPosition = float3(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), nativeDepth);
 	float3 projReflectionDirection = clipReflectionDirection.xyz - ndcPosition * clipReflectionDirection.w;
-	projReflectionDirection.z *= DepthOrder::Reversed ? -1.0 : 1.0;
 	projReflectionDirection.xy *= float2(0.5, -0.5);
 	float directionLengthSquared = dot(projReflectionDirection, projReflectionDirection);
 	if (!isfinite(directionLengthSquared) || directionLengthSquared <= 0.0)
 		return psout;
 	projReflectionDirection *= rsqrt(directionLengthSquared) * rayLength;
 
-	float3 projPosition = float3(uv, depth);
+	float3 projPosition = float3(uv, nativeDepth);
 
 #	if defined(VR)
 	int raymarchIterations = maxIterations;

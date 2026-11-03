@@ -16,89 +16,112 @@ namespace CSX::RenderMap
 	template <class Signature>
 	using ContextOriginal = REL::Relocation<Signature>;
 #endif
+	namespace
+	{
+		// Skip known-stale metadata; publication rechecks after reentrant getters.
+		bool CaptureCurrent(std::uint64_t a_generation) noexcept
+		{
+			return a_generation != 0 && GetRuntime().ActiveCaptureGeneration() == a_generation;
+		}
+
+		template <class Current>
+		ResourceObservationInput DescribeResourceWhen(ID3D11Resource* a_resource, Current&& a_current) noexcept
+		{
+			ResourceObservationInput result;
+			if (!a_resource || !a_current())
+				return result;
+			result.d3dObject = reinterpret_cast<std::uintptr_t>(a_resource);
+			D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+			a_resource->GetType(&dimension);
+			if (!a_current())
+				return result;
+			switch (dimension) {
+			case D3D11_RESOURCE_DIMENSION_BUFFER:
+				{
+					D3D11_BUFFER_DESC desc{};
+					reinterpret_cast<ID3D11Buffer*>(a_resource)->GetDesc(&desc);
+					result.dimension = ResourceDimension::kBuffer;
+					result.widthOrBytes = desc.ByteWidth;
+					result.usage = desc.Usage;
+					result.bindFlags = desc.BindFlags;
+					result.cpuAccessFlags = desc.CPUAccessFlags;
+					result.miscFlags = desc.MiscFlags;
+					result.structureByteStride = desc.StructureByteStride;
+					break;
+				}
+			case D3D11_RESOURCE_DIMENSION_TEXTURE1D:
+				{
+					D3D11_TEXTURE1D_DESC desc{};
+					reinterpret_cast<ID3D11Texture1D*>(a_resource)->GetDesc(&desc);
+					result.dimension = ResourceDimension::kTexture1D;
+					result.widthOrBytes = desc.Width;
+					result.depthOrArraySize = desc.ArraySize;
+					result.mipLevels = desc.MipLevels;
+					result.format = desc.Format;
+					result.usage = desc.Usage;
+					result.bindFlags = desc.BindFlags;
+					result.cpuAccessFlags = desc.CPUAccessFlags;
+					result.miscFlags = desc.MiscFlags;
+					break;
+				}
+			case D3D11_RESOURCE_DIMENSION_TEXTURE2D:
+				{
+					D3D11_TEXTURE2D_DESC desc{};
+					reinterpret_cast<ID3D11Texture2D*>(a_resource)->GetDesc(&desc);
+					result.dimension = ResourceDimension::kTexture2D;
+					result.widthOrBytes = desc.Width;
+					result.height = desc.Height;
+					result.depthOrArraySize = desc.ArraySize;
+					result.mipLevels = desc.MipLevels;
+					result.format = desc.Format;
+					result.sampleCount = desc.SampleDesc.Count;
+					result.sampleQuality = desc.SampleDesc.Quality;
+					result.usage = desc.Usage;
+					result.bindFlags = desc.BindFlags;
+					result.cpuAccessFlags = desc.CPUAccessFlags;
+					result.miscFlags = desc.MiscFlags;
+					break;
+				}
+			case D3D11_RESOURCE_DIMENSION_TEXTURE3D:
+				{
+					D3D11_TEXTURE3D_DESC desc{};
+					reinterpret_cast<ID3D11Texture3D*>(a_resource)->GetDesc(&desc);
+					result.dimension = ResourceDimension::kTexture3D;
+					result.widthOrBytes = desc.Width;
+					result.height = desc.Height;
+					result.depthOrArraySize = desc.Depth;
+					result.mipLevels = desc.MipLevels;
+					result.format = desc.Format;
+					result.usage = desc.Usage;
+					result.bindFlags = desc.BindFlags;
+					result.cpuAccessFlags = desc.CPUAccessFlags;
+					result.miscFlags = desc.MiscFlags;
+					break;
+				}
+			default:
+				break;
+			}
+			return result;
+		}
+	}
+
 	ResourceObservationInput DescribeResource(ID3D11Resource* a_resource) noexcept
 	{
-		ResourceObservationInput result;
-		if (!a_resource)
-			return result;
-		result.d3dObject = reinterpret_cast<std::uintptr_t>(a_resource);
-		D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
-		a_resource->GetType(&dimension);
-		switch (dimension) {
-		case D3D11_RESOURCE_DIMENSION_BUFFER:
-			{
-				D3D11_BUFFER_DESC desc{};
-				reinterpret_cast<ID3D11Buffer*>(a_resource)->GetDesc(&desc);
-				result.dimension = ResourceDimension::kBuffer;
-				result.widthOrBytes = desc.ByteWidth;
-				result.usage = desc.Usage;
-				result.bindFlags = desc.BindFlags;
-				result.cpuAccessFlags = desc.CPUAccessFlags;
-				result.miscFlags = desc.MiscFlags;
-				result.structureByteStride = desc.StructureByteStride;
-				break;
-			}
-		case D3D11_RESOURCE_DIMENSION_TEXTURE1D:
-			{
-				D3D11_TEXTURE1D_DESC desc{};
-				reinterpret_cast<ID3D11Texture1D*>(a_resource)->GetDesc(&desc);
-				result.dimension = ResourceDimension::kTexture1D;
-				result.widthOrBytes = desc.Width;
-				result.depthOrArraySize = desc.ArraySize;
-				result.mipLevels = desc.MipLevels;
-				result.format = desc.Format;
-				result.usage = desc.Usage;
-				result.bindFlags = desc.BindFlags;
-				result.cpuAccessFlags = desc.CPUAccessFlags;
-				result.miscFlags = desc.MiscFlags;
-				break;
-			}
-		case D3D11_RESOURCE_DIMENSION_TEXTURE2D:
-			{
-				D3D11_TEXTURE2D_DESC desc{};
-				reinterpret_cast<ID3D11Texture2D*>(a_resource)->GetDesc(&desc);
-				result.dimension = ResourceDimension::kTexture2D;
-				result.widthOrBytes = desc.Width;
-				result.height = desc.Height;
-				result.depthOrArraySize = desc.ArraySize;
-				result.mipLevels = desc.MipLevels;
-				result.format = desc.Format;
-				result.sampleCount = desc.SampleDesc.Count;
-				result.sampleQuality = desc.SampleDesc.Quality;
-				result.usage = desc.Usage;
-				result.bindFlags = desc.BindFlags;
-				result.cpuAccessFlags = desc.CPUAccessFlags;
-				result.miscFlags = desc.MiscFlags;
-				break;
-			}
-		case D3D11_RESOURCE_DIMENSION_TEXTURE3D:
-			{
-				D3D11_TEXTURE3D_DESC desc{};
-				reinterpret_cast<ID3D11Texture3D*>(a_resource)->GetDesc(&desc);
-				result.dimension = ResourceDimension::kTexture3D;
-				result.widthOrBytes = desc.Width;
-				result.height = desc.Height;
-				result.depthOrArraySize = desc.Depth;
-				result.mipLevels = desc.MipLevels;
-				result.format = desc.Format;
-				result.usage = desc.Usage;
-				result.bindFlags = desc.BindFlags;
-				result.cpuAccessFlags = desc.CPUAccessFlags;
-				result.miscFlags = desc.MiscFlags;
-				break;
-			}
-		default:
-			break;
-		}
-		return result;
+		return DescribeResourceWhen(a_resource, []() noexcept { return true; });
 	}
 
 	namespace
 	{
+		ResourceObservationInput DescribeCapturedResource(ID3D11Resource* a_resource, std::uint64_t a_generation) noexcept
+		{
+			return DescribeResourceWhen(a_resource, [a_generation]() noexcept { return CaptureCurrent(a_generation); });
+		}
+
 		void RegisterDeferredContextIfNeeded(ID3D11DeviceContext* a_context, std::uint64_t a_expectedCaptureGeneration) noexcept
 		{
-			if (a_context && a_context->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) {
-				GetRuntime().ForCapture(a_expectedCaptureGeneration).RegisterDeferredContext(reinterpret_cast<std::uintptr_t>(a_context), a_context->GetContextFlags(), false);
+			if (CaptureCurrent(a_expectedCaptureGeneration) && a_context && a_context->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) {
+				if (CaptureCurrent(a_expectedCaptureGeneration))
+					GetRuntime().ForCapture(a_expectedCaptureGeneration).RegisterDeferredContext(reinterpret_cast<std::uintptr_t>(a_context), a_context->GetContextFlags(), false);
 			}
 		}
 
@@ -109,25 +132,25 @@ namespace CSX::RenderMap
 		}
 
 		template <class T>
-		ResourceViewInput DescribeViewBase(T* a_view, TargetViewKind a_kind)
+		ResourceViewInput DescribeViewBase(T* a_view, TargetViewKind a_kind, std::uint64_t a_generation)
 		{
 			ResourceViewInput result;
 			result.view.kind = a_kind;
 			result.view.d3dObject = reinterpret_cast<std::uintptr_t>(a_view);
-			if (!a_view)
+			if (!a_view || !CaptureCurrent(a_generation))
 				return result;
 			ID3D11Resource* resource = nullptr;
 			a_view->GetResource(&resource);
-			result.resource = DescribeResource(resource);
+			result.resource = DescribeCapturedResource(resource, a_generation);
 			if (resource)
 				resource->Release();
 			return result;
 		}
 
-		ResourceViewInput DescribeView(ID3D11RenderTargetView* a_view)
+		ResourceViewInput DescribeView(ID3D11RenderTargetView* a_view, std::uint64_t a_generation)
 		{
-			auto result = DescribeViewBase(a_view, TargetViewKind::kRenderTarget);
-			if (!a_view)
+			auto result = DescribeViewBase(a_view, TargetViewKind::kRenderTarget, a_generation);
+			if (!a_view || !CaptureCurrent(a_generation))
 				return result;
 			D3D11_RENDER_TARGET_VIEW_DESC desc{};
 			a_view->GetDesc(&desc);
@@ -169,10 +192,10 @@ namespace CSX::RenderMap
 			return result;
 		}
 
-		ResourceViewInput DescribeView(ID3D11DepthStencilView* a_view)
+		ResourceViewInput DescribeView(ID3D11DepthStencilView* a_view, std::uint64_t a_generation)
 		{
-			auto result = DescribeViewBase(a_view, TargetViewKind::kDepthTarget);
-			if (!a_view)
+			auto result = DescribeViewBase(a_view, TargetViewKind::kDepthTarget, a_generation);
+			if (!a_view || !CaptureCurrent(a_generation))
 				return result;
 			D3D11_DEPTH_STENCIL_VIEW_DESC desc{};
 			a_view->GetDesc(&desc);
@@ -206,10 +229,10 @@ namespace CSX::RenderMap
 			return result;
 		}
 
-		ResourceViewInput DescribeView(ID3D11ShaderResourceView* a_view)
+		ResourceViewInput DescribeView(ID3D11ShaderResourceView* a_view, std::uint64_t a_generation)
 		{
-			auto result = DescribeViewBase(a_view, TargetViewKind::kShaderResource);
-			if (!a_view)
+			auto result = DescribeViewBase(a_view, TargetViewKind::kShaderResource, a_generation);
+			if (!a_view || !CaptureCurrent(a_generation))
 				return result;
 			D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
 			a_view->GetDesc(&desc);
@@ -269,10 +292,10 @@ namespace CSX::RenderMap
 			return result;
 		}
 
-		ResourceViewInput DescribeView(ID3D11UnorderedAccessView* a_view)
+		ResourceViewInput DescribeView(ID3D11UnorderedAccessView* a_view, std::uint64_t a_generation)
 		{
-			auto result = DescribeViewBase(a_view, TargetViewKind::kUnorderedAccess);
-			if (!a_view)
+			auto result = DescribeViewBase(a_view, TargetViewKind::kUnorderedAccess, a_generation);
+			if (!a_view || !CaptureCurrent(a_generation))
 				return result;
 			D3D11_UNORDERED_ACCESS_VIEW_DESC desc{};
 			a_view->GetDesc(&desc);
@@ -324,16 +347,16 @@ namespace CSX::RenderMap
 			bool a_keepTargets = false,
 			TargetBindingSource a_source = TargetBindingSource::kObservedCall)
 		{
-			if (!GetRuntime().IsCapturing())
+			if (!CaptureCurrent(a_expectedCaptureGeneration))
 				return;
 			std::array<ResourceViewInput, kMaximumRenderTargets> views{};
 			if (!a_keepTargets && a_renderTargets) {
 				const auto count = std::min<UINT>(a_renderTargetCount, static_cast<UINT>(views.size()));
 				for (UINT index = 0; index < count; ++index)
-					views[index] = DescribeView(a_renderTargets[index]);
+					views[index] = DescribeView(a_renderTargets[index], a_expectedCaptureGeneration);
 			}
 			const auto depth = DescribeChangedDepthTarget(a_depthTarget, a_keepTargets,
-				[](ID3D11DepthStencilView* a_view) { return DescribeView(a_view); });
+				[a_expectedCaptureGeneration](ID3D11DepthStencilView* a_view) { return DescribeView(a_view, a_expectedCaptureGeneration); });
 			GetRuntime().ForCapture(a_expectedCaptureGeneration).BindRenderTargetViews(reinterpret_cast<std::uintptr_t>(a_context), a_keepTargets ? 0u : a_renderTargetCount, views.data(), a_depthTarget ? &depth : nullptr, a_keepTargets, a_source, a_expectedCaptureGeneration);
 		}
 
@@ -341,21 +364,23 @@ namespace CSX::RenderMap
 			ID3D11DeviceContext* a_context, std::uint64_t a_expectedCaptureGeneration,
 			TargetBindingSource a_source)
 		{
-			if (!a_context || !GetRuntime().IsCapturing())
+			if (!a_context || !CaptureCurrent(a_expectedCaptureGeneration))
 				return;
 
 			std::array<ID3D11RenderTargetView*, kMaximumRenderTargets> targets{};
 			ID3D11DepthStencilView* depth = nullptr;
+			if (!CaptureCurrent(a_expectedCaptureGeneration))
+				return;
 			a_context->OMGetRenderTargets(
 				static_cast<UINT>(targets.size()), targets.data(), &depth);
 			std::array<ResourceViewInput, kMaximumRenderTargets> views{};
 			std::uint32_t targetCount = 0;
 			for (std::size_t index = 0; index < targets.size(); ++index) {
-				views[index] = DescribeView(targets[index]);
+				views[index] = DescribeView(targets[index], a_expectedCaptureGeneration);
 				if (targets[index])
 					targetCount = static_cast<std::uint32_t>(index + 1);
 			}
-			const auto depthView = DescribeView(depth);
+			const auto depthView = DescribeView(depth, a_expectedCaptureGeneration);
 			GetRuntime().ForCapture(a_expectedCaptureGeneration).BindRenderTargetViews(reinterpret_cast<std::uintptr_t>(a_context), targetCount, views.data(), depth ? &depthView : nullptr, false, a_source, a_expectedCaptureGeneration);
 			for (auto* target : targets) {
 				if (target)
@@ -379,7 +404,7 @@ namespace CSX::RenderMap
 			ID3D11DeviceContext* a_context, std::uint64_t a_expectedCaptureGeneration, DrawOperation a_operation, Args... a_arguments)
 		{
 			RegisterDeferredContextIfNeeded(a_context, a_expectedCaptureGeneration);
-			if (a_context && a_context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE)
+			if (CaptureCurrent(a_expectedCaptureGeneration) && a_context && a_context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE)
 				ObserveEffectiveStateBeforeDraw(a_context, a_expectedCaptureGeneration);
 			BeginPostProcessingOperation(a_context, false, static_cast<std::uint32_t>(a_operation), a_expectedCaptureGeneration);
 			ObservePostProcessingState(a_context, false, false, a_expectedCaptureGeneration);
@@ -391,7 +416,7 @@ namespace CSX::RenderMap
 			ID3D11DeviceContext* a_context, std::uint64_t a_expectedCaptureGeneration, DispatchOperation a_operation, Args... a_arguments)
 		{
 			RegisterDeferredContextIfNeeded(a_context, a_expectedCaptureGeneration);
-			if (a_context && a_context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE)
+			if (CaptureCurrent(a_expectedCaptureGeneration) && a_context && a_context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE)
 				ObserveEffectiveStateBeforeDispatch(a_context, a_expectedCaptureGeneration);
 			BeginPostProcessingOperation(a_context, true, static_cast<std::uint32_t>(a_operation), a_expectedCaptureGeneration);
 			ObservePostProcessingState(a_context, true, false, a_expectedCaptureGeneration);
@@ -406,12 +431,12 @@ namespace CSX::RenderMap
 			ID3D11ShaderResourceView* const* a_views,
 			ResourceBindingSource a_source = ResourceBindingSource::kRequestedCall)
 		{
-			if (!GetRuntime().IsCapturing())
+			if (!CaptureCurrent(a_expectedCaptureGeneration))
 				return;
 			std::array<ResourceViewInput, kMaximumShaderResourceSlots> views{};
 			const auto count = std::min<UINT>(a_viewCount, static_cast<UINT>(views.size()));
 			for (UINT index = 0; index < count; ++index)
-				views[index] = DescribeView(a_views ? a_views[index] : nullptr);
+				views[index] = DescribeView(a_views ? a_views[index] : nullptr, a_expectedCaptureGeneration);
 			GetRuntime().ForCapture(a_expectedCaptureGeneration).BindResourceViews(reinterpret_cast<std::uintptr_t>(a_context), ResourceBindingKind::kShaderResource, a_stage, a_startSlot, count, views.data(), false, a_source, a_expectedCaptureGeneration);
 		}
 
@@ -422,7 +447,7 @@ namespace CSX::RenderMap
 			UINT a_viewCount,
 			ResourceBindingSource a_source)
 		{
-			if (!a_context || !GetRuntime().IsCapturing() ||
+			if (!a_context || !CaptureCurrent(a_expectedCaptureGeneration) ||
 				a_startSlot >= kMaximumShaderResourceSlots) {
 				return;
 			}
@@ -480,13 +505,13 @@ namespace CSX::RenderMap
 			ID3D11UnorderedAccessView* const* a_views,
 			bool a_keepViews = false)
 		{
-			if (!GetRuntime().IsCapturing())
+			if (!CaptureCurrent(a_expectedCaptureGeneration))
 				return;
 			std::array<ResourceViewInput, kMaximumUnorderedAccessSlots> views{};
 			if (!a_keepViews) {
 				const auto count = std::min<UINT>(a_viewCount, static_cast<UINT>(views.size()));
 				for (UINT index = 0; index < count; ++index)
-					views[index] = DescribeView(a_views ? a_views[index] : nullptr);
+					views[index] = DescribeView(a_views ? a_views[index] : nullptr, a_expectedCaptureGeneration);
 			}
 			GetRuntime().ForCapture(a_expectedCaptureGeneration).BindResourceViews(reinterpret_cast<std::uintptr_t>(a_context), ResourceBindingKind::kUnorderedAccess, a_stage, a_startSlot, a_viewCount, views.data(), a_keepViews);
 		}
@@ -498,7 +523,7 @@ namespace CSX::RenderMap
 			UINT a_viewCount,
 			ResourceBindingSource a_source)
 		{
-			if (!a_context || !GetRuntime().IsCapturing() ||
+			if (!a_context || !CaptureCurrent(a_expectedCaptureGeneration) ||
 				a_startSlot >= kMaximumUnorderedAccessSlots) {
 				return;
 			}
@@ -506,8 +531,12 @@ namespace CSX::RenderMap
 				a_viewCount, static_cast<UINT>(kMaximumUnorderedAccessSlots - a_startSlot));
 			std::array<ID3D11UnorderedAccessView*, kMaximumUnorderedAccessSlots> views{};
 			if (a_stage == ResourceStage::kCompute) {
+				if (!CaptureCurrent(a_expectedCaptureGeneration))
+					return;
 				a_context->CSGetUnorderedAccessViews(a_startSlot, count, views.data());
 			} else if (a_stage == ResourceStage::kOutputMerger) {
+				if (!CaptureCurrent(a_expectedCaptureGeneration))
+					return;
 				a_context->OMGetRenderTargetsAndUnorderedAccessViews(
 					0, nullptr, nullptr, a_startSlot, count, views.data());
 			} else {
@@ -515,7 +544,7 @@ namespace CSX::RenderMap
 			}
 			std::array<ResourceViewInput, kMaximumUnorderedAccessSlots> described{};
 			for (UINT index = 0; index < count; ++index)
-				described[index] = DescribeView(views[index]);
+				described[index] = DescribeView(views[index], a_expectedCaptureGeneration);
 			GetRuntime().ForCapture(a_expectedCaptureGeneration).BindResourceViews(reinterpret_cast<std::uintptr_t>(a_context), ResourceBindingKind::kUnorderedAccess, a_stage, a_startSlot, count, described.data(), false, a_source, a_expectedCaptureGeneration);
 			for (UINT index = 0; index < count; ++index) {
 				if (views[index])
@@ -581,7 +610,7 @@ namespace CSX::RenderMap
 		void BeginPostProcessingOperation(ID3D11DeviceContext* a_context, bool a_compute, std::uint32_t a_operation,
 			std::uint64_t a_expectedCaptureGeneration, bool a_bootstrap)
 		{
-			if (!a_context || !GetRuntime().IsInsidePostProcessing() ||
+			if (!CaptureCurrent(a_expectedCaptureGeneration) || !a_context || !GetRuntime().IsInsidePostProcessing() ||
 				a_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
 				return;
 			winrt::com_ptr<ID3D11VertexShader> vs;
@@ -590,11 +619,23 @@ namespace CSX::RenderMap
 			winrt::com_ptr<ID3D11GeometryShader> gs;
 			winrt::com_ptr<ID3D11PixelShader> ps;
 			winrt::com_ptr<ID3D11ComputeShader> cs;
+			if (!CaptureCurrent(a_expectedCaptureGeneration))
+				return;
 			a_context->VSGetShader(vs.put(), nullptr, nullptr);
+			if (!CaptureCurrent(a_expectedCaptureGeneration))
+				return;
 			a_context->HSGetShader(hs.put(), nullptr, nullptr);
+			if (!CaptureCurrent(a_expectedCaptureGeneration))
+				return;
 			a_context->DSGetShader(ds.put(), nullptr, nullptr);
+			if (!CaptureCurrent(a_expectedCaptureGeneration))
+				return;
 			a_context->GSGetShader(gs.put(), nullptr, nullptr);
+			if (!CaptureCurrent(a_expectedCaptureGeneration))
+				return;
 			a_context->PSGetShader(ps.put(), nullptr, nullptr);
+			if (!CaptureCurrent(a_expectedCaptureGeneration))
+				return;
 			a_context->CSGetShader(cs.put(), nullptr, nullptr);
 			const std::array<IUnknown*, 6> shaders{ vs.get(), hs.get(), ds.get(), gs.get(), ps.get(), cs.get() };
 			std::array<std::uintptr_t, 6> pointers{};
@@ -610,7 +651,7 @@ namespace CSX::RenderMap
 			std::uint64_t a_expectedCaptureGeneration)
 		{
 			auto& runtime = GetRuntime();
-			if (!a_context || !runtime.IsInsidePostProcessing() ||
+			if (!CaptureCurrent(a_expectedCaptureGeneration) || !a_context || !runtime.IsInsidePostProcessing() ||
 				a_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
 				return;
 			const auto context = reinterpret_cast<std::uintptr_t>(a_context);
@@ -619,12 +660,18 @@ namespace CSX::RenderMap
 				std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> scissors{};
 				UINT viewportCount = static_cast<UINT>(viewports.size());
 				UINT scissorCount = static_cast<UINT>(scissors.size());
+				if (!CaptureCurrent(a_expectedCaptureGeneration))
+					return;
 				a_context->RSGetViewports(&viewportCount, viewports.data());
+				if (!CaptureCurrent(a_expectedCaptureGeneration))
+					return;
 				a_context->RSGetScissorRects(&scissorCount, scissors.data());
 				winrt::com_ptr<ID3D11RasterizerState> rasterizer;
+				if (!CaptureCurrent(a_expectedCaptureGeneration))
+					return;
 				a_context->RSGetState(rasterizer.put());
 				D3D11_RASTERIZER_DESC desc{};
-				if (rasterizer) {
+				if (rasterizer && CaptureCurrent(a_expectedCaptureGeneration)) {
 					rasterizer->GetDesc(&desc);
 				}
 				const auto count = std::max(1u, std::max(viewportCount, scissorCount));
@@ -639,6 +686,8 @@ namespace CSX::RenderMap
 						continue;
 					std::array<ID3D11ShaderResourceView*, kMaximumShaderResourceSlots> views{};
 					const auto slots = static_cast<UINT>(views.size());
+					if (!CaptureCurrent(a_expectedCaptureGeneration))
+						return;
 					switch (stage) {
 					case ResourceStage::kVertex:
 						a_context->VSGetShaderResources(0, slots, views.data());
@@ -667,13 +716,15 @@ namespace CSX::RenderMap
 					for (UINT slot = 0; slot < slots; ++slot) {
 						if (!views[slot])
 							continue;
-						runtime.ForCapture(a_expectedCaptureGeneration).RecordTransferResourceAccess(context, DescribeView(views[slot]), stage, slot, false);
+						runtime.ForCapture(a_expectedCaptureGeneration).RecordTransferResourceAccess(context, DescribeView(views[slot], a_expectedCaptureGeneration), stage, slot, false);
 					}
 				}
 				return;
 			}
 			if (!a_compute) {
 				std::array<ID3D11RenderTargetView*, kMaximumRenderTargets> targets{};
+				if (!CaptureCurrent(a_expectedCaptureGeneration))
+					return;
 				a_context->OMGetRenderTargets(static_cast<UINT>(targets.size()), targets.data(), nullptr);
 				std::array<winrt::com_ptr<ID3D11RenderTargetView>, kMaximumRenderTargets> retained;
 				for (UINT slot = 0; slot < targets.size(); ++slot)
@@ -681,22 +732,27 @@ namespace CSX::RenderMap
 				for (UINT slot = 0; slot < targets.size(); ++slot) {
 					if (!targets[slot])
 						continue;
-					runtime.ForCapture(a_expectedCaptureGeneration).RecordTransferResourceAccess(context, DescribeView(targets[slot]), ResourceStage::kOutputMerger, slot, true);
+					runtime.ForCapture(a_expectedCaptureGeneration).RecordTransferResourceAccess(context, DescribeView(targets[slot], a_expectedCaptureGeneration), ResourceStage::kOutputMerger, slot, true);
 				}
 			}
 			std::array<ID3D11UnorderedAccessView*, kMaximumUnorderedAccessSlots> uavs{};
-			if (a_compute)
+			if (a_compute) {
+				if (!CaptureCurrent(a_expectedCaptureGeneration))
+					return;
 				a_context->CSGetUnorderedAccessViews(0, static_cast<UINT>(uavs.size()), uavs.data());
-			else
+			} else {
+				if (!CaptureCurrent(a_expectedCaptureGeneration))
+					return;
 				a_context->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0,
 					D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, uavs.data());
+			}
 			std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, kMaximumUnorderedAccessSlots> retained;
 			for (UINT slot = 0; slot < uavs.size(); ++slot)
 				retained[slot].attach(uavs[slot]);
 			for (UINT slot = 0; slot < uavs.size(); ++slot) {
 				if (!uavs[slot])
 					continue;
-				runtime.ForCapture(a_expectedCaptureGeneration).RecordTransferResourceAccess(context, DescribeView(uavs[slot]), a_compute ? ResourceStage::kCompute : ResourceStage::kOutputMerger, slot, true);
+				runtime.ForCapture(a_expectedCaptureGeneration).RecordTransferResourceAccess(context, DescribeView(uavs[slot], a_expectedCaptureGeneration), a_compute ? ResourceStage::kCompute : ResourceStage::kOutputMerger, slot, true);
 			}
 		}
 
@@ -981,9 +1037,11 @@ namespace CSX::RenderMap
 				const auto call = GetRuntime().BeginContextCall();
 				call.InvokeNative(func, a_context, a_destination, a_destinationSubresource, a_destinationX, a_destinationY,
 					a_destinationZ, a_source, a_sourceSubresource, a_sourceBox);
-				if (!GetRuntime().IsCapturing())
+				if (!CaptureCurrent(call.Generation()))
 					return;
-				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kCopySubresourceRegion, DescribeResource(a_source), DescribeResource(a_destination), a_sourceSubresource, a_destinationSubresource);
+				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kCopySubresourceRegion, DescribeCapturedResource(a_source, call.Generation()), DescribeCapturedResource(a_destination, call.Generation()), a_sourceSubresource, a_destinationSubresource);
+				if (!CaptureCurrent(call.Generation()))
+					return;
 				const D3D11_BOX box = a_sourceBox ? *a_sourceBox : D3D11_BOX{};
 				GetRuntime().ForCapture(call.Generation()).RecordTransferCopyRegion(reinterpret_cast<std::uintptr_t>(a_context), a_sourceSubresource, a_destinationSubresource, { a_destinationX, a_destinationY, a_destinationZ }, { box.left, box.top, box.front, box.right, box.bottom, box.back }, a_sourceBox != nullptr);
 			}
@@ -997,13 +1055,13 @@ namespace CSX::RenderMap
 				D3D11_MAPPED_SUBRESOURCE* a_mappedResource)
 			{
 				const auto call = GetRuntime().BeginContextCall();
-				const auto generation = GetRuntime().ActiveCaptureGeneration();
+				const auto generation = call.Generation();
 				const auto started = generation != 0 ? ReadQpc() : 0;
 				const auto result = call.InvokeNative(func,
 					a_context, a_resource, a_subresource, a_mapType, a_mapFlags, a_mappedResource);
-				if (generation != 0) {
+				if (CaptureCurrent(generation)) {
 					const auto completed = ReadQpc();
-					GetRuntime().ForCapture(call.Generation()).RecordCpuMap(reinterpret_cast<std::uintptr_t>(a_context), DescribeResource(a_resource), a_subresource, static_cast<std::uint32_t>(a_mapType), a_mapFlags, static_cast<std::int32_t>(result), completed >= started ? completed - started : 0, completed, SUCCEEDED(result) && a_mappedResource ? a_mappedResource->RowPitch : 0, SUCCEEDED(result) && a_mappedResource ? a_mappedResource->DepthPitch : 0, generation);
+					GetRuntime().ForCapture(call.Generation()).RecordCpuMap(reinterpret_cast<std::uintptr_t>(a_context), DescribeCapturedResource(a_resource, call.Generation()), a_subresource, static_cast<std::uint32_t>(a_mapType), a_mapFlags, static_cast<std::int32_t>(result), completed >= started ? completed - started : 0, completed, SUCCEEDED(result) && a_mappedResource ? a_mappedResource->RowPitch : 0, SUCCEEDED(result) && a_mappedResource ? a_mappedResource->DepthPitch : 0, generation);
 				}
 				return result;
 			}
@@ -1016,10 +1074,10 @@ namespace CSX::RenderMap
 				UINT a_subresource)
 			{
 				const auto call = GetRuntime().BeginContextCall();
-				const auto generation = GetRuntime().ActiveCaptureGeneration();
+				const auto generation = call.Generation();
 				call.InvokeNative(func, a_context, a_resource, a_subresource);
-				if (generation != 0) {
-					GetRuntime().ForCapture(call.Generation()).RecordCpuUnmap(reinterpret_cast<std::uintptr_t>(a_context), DescribeResource(a_resource), a_subresource, ReadQpc(), generation);
+				if (CaptureCurrent(generation)) {
+					GetRuntime().ForCapture(call.Generation()).RecordCpuUnmap(reinterpret_cast<std::uintptr_t>(a_context), DescribeCapturedResource(a_resource, call.Generation()), a_subresource, ReadQpc(), generation);
 				}
 			}
 			static inline ContextOriginal<decltype(thunk)> func;
@@ -1031,9 +1089,9 @@ namespace CSX::RenderMap
 			{
 				const auto call = GetRuntime().BeginContextCall();
 				call.InvokeNative(func, a_context, a_destination, a_source);
-				if (!GetRuntime().IsCapturing())
+				if (!CaptureCurrent(call.Generation()))
 					return;
-				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kCopyResource, DescribeResource(a_source), DescribeResource(a_destination));
+				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kCopyResource, DescribeCapturedResource(a_source, call.Generation()), DescribeCapturedResource(a_destination, call.Generation()));
 			}
 			static inline ContextOriginal<decltype(thunk)> func;
 		};
@@ -1045,9 +1103,9 @@ namespace CSX::RenderMap
 			{
 				const auto call = GetRuntime().BeginContextCall();
 				call.InvokeNative(func, a_context, a_destination, a_destinationSubresource, a_source, a_sourceSubresource, a_format);
-				if (!GetRuntime().IsCapturing())
+				if (!CaptureCurrent(call.Generation()))
 					return;
-				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kResolveSubresource, DescribeResource(a_source), DescribeResource(a_destination), a_sourceSubresource, a_destinationSubresource);
+				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kResolveSubresource, DescribeCapturedResource(a_source, call.Generation()), DescribeCapturedResource(a_destination, call.Generation()), a_sourceSubresource, a_destinationSubresource);
 			}
 			static inline ContextOriginal<decltype(thunk)> func;
 		};
@@ -1061,9 +1119,9 @@ namespace CSX::RenderMap
 				const auto call = GetRuntime().BeginContextCall();
 				call.InvokeNative(func, a_context, a_destination, a_destinationSubresource, a_destinationBox,
 					a_sourceData, a_sourceRowPitch, a_sourceDepthPitch);
-				if (!GetRuntime().IsCapturing())
+				if (!CaptureCurrent(call.Generation()))
 					return;
-				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kUpdateSubresource, ResourceObservationInput{}, DescribeResource(a_destination), 0, a_destinationSubresource);
+				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kUpdateSubresource, ResourceObservationInput{}, DescribeCapturedResource(a_destination, call.Generation()), 0, a_destinationSubresource);
 			}
 			static inline ContextOriginal<decltype(thunk)> func;
 		};
@@ -1075,9 +1133,9 @@ namespace CSX::RenderMap
 			{
 				const auto call = GetRuntime().BeginContextCall();
 				call.InvokeNative(func, a_context, a_destination, a_destinationAlignedByteOffset, a_source);
-				if (!GetRuntime().IsCapturing())
+				if (!CaptureCurrent(call.Generation()))
 					return;
-				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kCopyStructureCount, DescribeView(a_source).resource, DescribeResource(a_destination));
+				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kCopyStructureCount, DescribeView(a_source, call.Generation()).resource, DescribeCapturedResource(a_destination, call.Generation()));
 			}
 			static inline ContextOriginal<decltype(thunk)> func;
 		};
@@ -1089,9 +1147,9 @@ namespace CSX::RenderMap
 			{
 				const auto call = GetRuntime().BeginContextCall();
 				call.InvokeNative(func, a_context, a_target, a_colour);
-				if (!GetRuntime().IsCapturing())
+				if (!CaptureCurrent(call.Generation()))
 					return;
-				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearRenderTarget, ResourceObservationInput{}, DescribeView(a_target).resource);
+				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearRenderTarget, ResourceObservationInput{}, DescribeView(a_target, call.Generation()).resource);
 			}
 			static inline ContextOriginal<decltype(thunk)> func;
 		};
@@ -1103,9 +1161,9 @@ namespace CSX::RenderMap
 			{
 				const auto call = GetRuntime().BeginContextCall();
 				call.InvokeNative(func, a_context, a_target, a_values);
-				if (!GetRuntime().IsCapturing())
+				if (!CaptureCurrent(call.Generation()))
 					return;
-				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearUnorderedAccess, ResourceObservationInput{}, DescribeView(a_target).resource);
+				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearUnorderedAccess, ResourceObservationInput{}, DescribeView(a_target, call.Generation()).resource);
 			}
 			static inline ContextOriginal<decltype(thunk)> func;
 		};
@@ -1117,9 +1175,9 @@ namespace CSX::RenderMap
 			{
 				const auto call = GetRuntime().BeginContextCall();
 				call.InvokeNative(func, a_context, a_target, a_values);
-				if (!GetRuntime().IsCapturing())
+				if (!CaptureCurrent(call.Generation()))
 					return;
-				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearUnorderedAccess, ResourceObservationInput{}, DescribeView(a_target).resource);
+				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearUnorderedAccess, ResourceObservationInput{}, DescribeView(a_target, call.Generation()).resource);
 			}
 			static inline ContextOriginal<decltype(thunk)> func;
 		};
@@ -1131,9 +1189,9 @@ namespace CSX::RenderMap
 			{
 				const auto call = GetRuntime().BeginContextCall();
 				call.InvokeNative(func, a_context, a_target, a_clearFlags, a_depth, a_stencil);
-				if (!GetRuntime().IsCapturing())
+				if (!CaptureCurrent(call.Generation()))
 					return;
-				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearDepthStencil, ResourceObservationInput{}, DescribeView(a_target).resource);
+				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearDepthStencil, ResourceObservationInput{}, DescribeView(a_target, call.Generation()).resource);
 			}
 			static inline ContextOriginal<decltype(thunk)> func;
 		};
@@ -1144,9 +1202,9 @@ namespace CSX::RenderMap
 			{
 				const auto call = GetRuntime().BeginContextCall();
 				call.InvokeNative(func, a_context, a_view);
-				if (!GetRuntime().IsCapturing())
+				if (!CaptureCurrent(call.Generation()))
 					return;
-				const auto resource = DescribeView(a_view).resource;
+				const auto resource = DescribeView(a_view, call.Generation()).resource;
 				GetRuntime().ForCapture(call.Generation()).RecordResourceFlow(reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kGenerateMips, resource, resource);
 			}
 			static inline ContextOriginal<decltype(thunk)> func;
@@ -1220,4 +1278,5 @@ namespace CSX::RenderMap
 
 #ifdef CSX_RENDER_MAP_CONTEXT_TESTING
 #	include "render_map_context_hook_test.h"
+#	include "render_map_context_acquisition_test.h"
 #endif

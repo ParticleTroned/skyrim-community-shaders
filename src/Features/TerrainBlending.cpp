@@ -862,6 +862,7 @@ void TerrainBlending::SetupResources()
 		terrainDepth.depthSRV = nullptr;
 	}
 	if (terrainDepth.views[0]) {
+		globals::features::reverseZ.UnregisterSceneDepthView(terrainDepth.views[0]);
 		terrainDepth.views[0]->Release();
 		terrainDepth.views[0] = nullptr;
 	}

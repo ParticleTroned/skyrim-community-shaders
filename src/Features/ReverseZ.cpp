@@ -555,6 +555,14 @@ void ReverseZ::RegisterSceneDepthView(ID3D11DepthStencilView* view)
 	g_viewIsReverse.insert_or_assign(view, std::move(verdict));
 }
 
+void ReverseZ::UnregisterSceneDepthView(ID3D11DepthStencilView* view)
+{
+	if (!view)
+		return;
+	std::unique_lock lock(g_viewMutex);
+	g_viewIsReverse.erase(view);
+}
+
 ID3D11DepthStencilView* ReverseZ::ResolveCubemapFaceDepthView(ID3D11RenderTargetView* a_renderTarget, ID3D11DepthStencilView* a_depthView) const
 {
 	if (!a_renderTarget || !a_depthView || !IsReverseDepthView(a_depthView))

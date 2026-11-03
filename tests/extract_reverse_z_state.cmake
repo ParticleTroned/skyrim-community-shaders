@@ -21,6 +21,6 @@ extract_between("${source}" "\tstd::shared_mutex g_viewMutex;"
 extract_between("${source}" "\tDXGI_FORMAT ToFloatDepthFormat"
     "\n\tD3D11_COMPARISON_FUNC FlipComparison" "reverse_z_state_resources.h")
 extract_between("${source}" "bool ReverseZ::PrepareDepthTargets()"
-    "\nvoid ReverseZ::RegisterSceneDepthView" "reverse_z_state_preparation.h")
+    "\nID3D11DepthStencilView* ReverseZ::ResolveCubemapFaceDepthView" "reverse_z_state_preparation.h")
 extract_between("${source}" "json ReverseZ::GetDiagnostics() const"
     "\nvoid ReverseZ::DrawSettings" "reverse_z_state_diagnostics.h")

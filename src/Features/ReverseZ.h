@@ -49,6 +49,8 @@ struct ReverseZ : Feature
 	bool PrepareDepthTargets();
 	/** Registers feature-owned views in the current scene-depth generation. */
 	void RegisterSceneDepthView(ID3D11DepthStencilView*);
+	/** Releases a feature-owned view's retained identity before its owner recreates it. */
+	void UnregisterSceneDepthView(ID3D11DepthStencilView*);
 	void FixupMappedFrameBuffer(globals::FrameBuffer&);
 	void FixupMappedFrameBufferVR(globals::FrameBufferVR&);
 	void ApplyReverseProjection(void*, const RE::NiCamera*);

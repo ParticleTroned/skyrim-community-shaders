@@ -20,6 +20,7 @@
 #include <unordered_map>
 #include <vector>
 #include <winrt/base.h>
+#include <wrl/implements.h>
 
 using json = nlohmann::json;
 
@@ -69,6 +70,8 @@ struct ReverseZ
 	bool PrepareDepthTargets();
 	bool IsConvertedDepthTarget(uint32_t) const;
 	bool IsReverseDepthView(ID3D11DepthStencilView*) const;
+	void RegisterSceneDepthView(ID3D11DepthStencilView*);
+	void UnregisterSceneDepthView(ID3D11DepthStencilView*);
 	void RecordFailure(const char*, const char*, uint64_t);
 	bool RejectDepthPreparation(const char*);
 	void RejectRendering(const char* reason);
@@ -317,6 +320,50 @@ namespace
 		}
 	}
 
+	struct ViewLifetime final : Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IUnknown>
+	{
+		explicit ViewLifetime(unsigned* count) : destroyed(count) {}
+		~ViewLifetime() { ++*destroyed; }
+		unsigned* destroyed;
+	};
+
+	void TestFeatureViewRetirement(ID3D11Device* device)
+	{
+		ReverseZ reverse;
+		reverse.activeThisBoot = true;
+		g_reversalActive = true;
+		g_viewIsReverse.clear();
+		unsigned destroyed = 0;
+		for (unsigned generation = 0; generation < 32; ++generation) {
+			D3D11_TEXTURE2D_DESC desc{};
+			desc.Width = desc.Height = 4;
+			desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+			desc.Format = DXGI_FORMAT_D32_FLOAT;
+			desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+			winrt::com_ptr<ID3D11Texture2D> texture;
+			winrt::com_ptr<ID3D11DepthStencilView> view;
+			Require(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, texture.put())), "Feature depth allocation failed");
+			Util::SetResourceName(texture.get(), "ReverseZStateTest::FeatureDepth");
+			Require(SUCCEEDED(device->CreateDepthStencilView(texture.get(), nullptr, view.put())), "Feature DSV creation failed");
+			Util::SetResourceName(view.get(), "ReverseZStateTest::FeatureDepth DSV");
+			auto lifetime = Microsoft::WRL::Make<ViewLifetime>(&destroyed);
+			Require(SUCCEEDED(view->SetPrivateDataInterface(__uuidof(IUnknown), lifetime.Get())), "Feature lifetime marker failed");
+			lifetime.Reset();
+			reverse.RegisterSceneDepthView(view.get());
+			reverse.RegisterSceneDepthView(view.get());
+			Require(reverse.IsReverseDepthView(view.get()) && g_viewIsReverse.size() == 1, "Feature view registration lost its identity");
+			// Retirement must work even if rendering has stopped using the depth domain.
+			g_reversalActive = false;
+			reverse.UnregisterSceneDepthView(view.get());
+			reverse.UnregisterSceneDepthView(view.get());
+			reverse.UnregisterSceneDepthView(nullptr);
+			Require(g_viewIsReverse.empty(), "Feature recreation retained a stale classification");
+			view = nullptr;
+			Require(destroyed == generation + 1, "Feature recreation retained the old depth view");
+			g_reversalActive = true;
+		}
+	}
+
 	void CheckFailure(ReverseZ& reverse, bool active, const char* phase, uint64_t failedGeneration)
 	{
 		const auto status = reverse.GetDiagnostics();
@@ -498,6 +545,7 @@ int main()
 		Require(PrepareRejectedDepthState(device.get()), "Rejection fallback preparation failed");
 		TestPreparationAdmission(device.get(), context.get());
 		TestPreparationTransaction(device.get(), context.get());
+		TestFeatureViewRetirement(device.get());
 		TestMenuTargetRefresh(device.get(), context.get());
 
 		D3D11_DEPTH_STENCIL_DESC depthDesc{};

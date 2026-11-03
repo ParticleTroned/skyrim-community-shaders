@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstring>
 #include <d3d11.h>
+#include <d3d11shader.h>
 #include <d3dcompiler.h>
 #include <memory>
 #include <mutex>
@@ -67,6 +68,11 @@ namespace Depth
 	/** Match the fixed near-plane program, never infer HMD identity from draw size. */
 	inline bool IsFixedNearPlaneVertexProgram(const void* bytes, size_t size)
 	{
+		Microsoft::WRL::ComPtr<ID3D11ShaderReflection> reflection;
+		D3D11_SHADER_DESC desc{};
+		// Most scene shaders cannot match the two moves and return of the fixed mask.
+		if (SUCCEEDED(D3DReflect(bytes, size, IID_PPV_ARGS(&reflection))) && SUCCEEDED(reflection->GetDesc(&desc)) && desc.InstructionCount > 3)
+			return false;
 		Microsoft::WRL::ComPtr<ID3DBlob> assembly;
 		if (FAILED(D3DDisassemble(bytes, size, 0, nullptr, &assembly)))
 			return false;

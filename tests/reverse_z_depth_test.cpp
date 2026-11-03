@@ -132,13 +132,20 @@ namespace
 	}
 	void TestMaskIdentity()
 	{
-		for (int variant = 0; variant < 3; ++variant) {
-			const char* shader = variant == 0 ? "float4 main(float3 p:POSITION):SV_Position{return float4(p.xy,0,1);}" :
-			                     variant == 1 ? "float4 main(float3 p:POSITION):SV_Position{return float4(p.xy,1,1);}" :
-			                                    "float4 main(float3 p:POSITION):SV_Position{return float4(p,1);}";
+		for (const auto& [shader, nearPlane] : {
+				 std::pair{ "float4 main(float3 p:POSITION):SV_Position{return float4(p.xy,0,1);}", true },
+				 std::pair{ "float4 main(float3 p:POSITION, float2 unused:TEXCOORD0):SV_Position{return float4(p.xy,0,1);}", true },
+				 std::pair{ "float4 main(float3 p:POSITION):SV_Position{return float4(p.xy,1,1);}", false },
+				 std::pair{ "float4 main(float3 p:POSITION):SV_Position{return float4(p,1);}", false },
+				 std::pair{ "cbuffer C {float4x4 m;} float4 main(float3 p:POSITION):SV_Position{return mul(m,float4(p,1));}", false } }) {
 			Microsoft::WRL::ComPtr<ID3DBlob> code, errors;
 			Require(SUCCEEDED(D3DCompile(shader, std::strlen(shader), nullptr, nullptr, nullptr, "main", "vs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors)), "Mask identity fixture did not compile");
-			Require(Depth::IsFixedNearPlaneVertexProgram(code->GetBufferPointer(), code->GetBufferSize()) == (variant == 0), "Mask adapter matched the wrong vertex program");
+			Require(Depth::IsFixedNearPlaneVertexProgram(code->GetBufferPointer(), code->GetBufferSize()) == nearPlane, "Mask adapter matched the wrong vertex program");
+			Microsoft::WRL::ComPtr<ID3DBlob> stripped;
+			Require(SUCCEEDED(D3DStripShader(code->GetBufferPointer(), code->GetBufferSize(), D3DCOMPILER_STRIP_REFLECTION_DATA, &stripped)),
+				"Mask identity fixture could not strip reflection data");
+			Require(Depth::IsFixedNearPlaneVertexProgram(stripped->GetBufferPointer(), stripped->GetBufferSize()) == nearPlane,
+				"Mask adapter requires optional reflection data");
 		}
 	}
 	std::string WaterFunction(const std::string& source, const char* signature)

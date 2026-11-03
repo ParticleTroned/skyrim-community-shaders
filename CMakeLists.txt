@@ -2941,6 +2941,7 @@ if(BUILD_CONTROLLER_TESTS)
             comparison
             creation
             hooks
+            clear
             getters
             targets
             views

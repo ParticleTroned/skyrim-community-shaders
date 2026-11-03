@@ -112,9 +112,12 @@ namespace
 	}
 
 	winrt::com_ptr<ID3D11DepthStencilState> g_requestedState;
+	// The mapping tables retain both immutable states for the process lifetime.
+	ID3D11DepthStencilState* g_cachedReversedState = nullptr;
 	ID3D11DepthStencilState* g_boundState = nullptr;
 	UINT g_requestedStencilRef = 0;
 	winrt::com_ptr<ID3D11RasterizerState> g_requestedRasterState;
+	ID3D11RasterizerState* g_cachedReversedRasterState = nullptr;
 	ID3D11RasterizerState* g_boundRasterState = nullptr;
 	bool g_reverseTargetBound = false;
 	bool g_projectionReversed = false;
@@ -834,14 +837,39 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	// Only the immediate context uses these mappings; immutable states survive depth-target changes.
+	ID3D11DepthStencilState* ResolveRequestedDepthState()
+	{
+		if (!ShouldFlip())
+			return g_requestedState.get();
+		if (g_renderingRejected.load(std::memory_order_relaxed))
+			return g_rejectedDepthState.get();
+		if (!g_cachedReversedState)
+			g_cachedReversedState = globals::features::reverseZ.GetReversedState(g_requestedState.get());
+		return g_cachedReversedState;
+	}
+
+	ID3D11RasterizerState* ResolveRequestedRasterState()
+	{
+		if (!ShouldFlip())
+			return g_requestedRasterState.get();
+		if (!g_requestedRasterState || g_renderingRejected.load(std::memory_order_relaxed))
+			return nullptr;
+		if (!g_cachedReversedRasterState)
+			g_cachedReversedRasterState = globals::features::reverseZ.GetReversedRasterizerState(g_requestedRasterState.get());
+		return g_cachedReversedRasterState;
+	}
+
 	struct ID3D11DeviceContext_OMSetDepthStencilState
 	{
 		static void thunk(ID3D11DeviceContext* This, ID3D11DepthStencilState* pDepthStencilState, UINT StencilRef)
 		{
 			if (This == globals::d3d::context) {
+				if (g_requestedState.get() != pDepthStencilState)
+					g_cachedReversedState = nullptr;
 				g_requestedState.copy_from(pDepthStencilState);
 				g_requestedStencilRef = StencilRef;
-				g_boundState = ShouldFlip() ? globals::features::reverseZ.GetReversedState(pDepthStencilState) : pDepthStencilState;
+				g_boundState = ResolveRequestedDepthState();
 				func(This, g_boundState, StencilRef);
 				return;
 			}
@@ -855,8 +883,10 @@ namespace
 		static void thunk(ID3D11DeviceContext* This, ID3D11RasterizerState* pRasterizerState)
 		{
 			if (This == globals::d3d::context) {
+				if (g_requestedRasterState.get() != pRasterizerState)
+					g_cachedReversedRasterState = nullptr;
 				g_requestedRasterState.copy_from(pRasterizerState);
-				g_boundRasterState = ShouldFlip() ? globals::features::reverseZ.GetReversedRasterizerState(pRasterizerState) : pRasterizerState;
+				g_boundRasterState = ResolveRequestedRasterState();
 				if (ShouldFlip() && g_renderingRejected.load(std::memory_order_relaxed)) {
 					g_boundState = g_rejectedDepthState.get();
 					ID3D11DeviceContext_OMSetDepthStencilState::func(This, g_boundState, g_requestedStencilRef);
@@ -896,11 +926,11 @@ namespace
 	{
 		const bool flip = ShouldFlip();
 		{
-			g_boundState = flip ? globals::features::reverseZ.GetReversedState(g_requestedState.get()) : g_requestedState.get();
+			g_boundState = ResolveRequestedDepthState();
 			ID3D11DeviceContext_OMSetDepthStencilState::func(This, g_boundState, g_requestedStencilRef);
 		}
 		{
-			g_boundRasterState = flip ? globals::features::reverseZ.GetReversedRasterizerState(g_requestedRasterState.get()) : g_requestedRasterState.get();
+			g_boundRasterState = ResolveRequestedRasterState();
 			ID3D11DeviceContext_RSSetState::func(This, g_boundRasterState);
 			if (flip && g_renderingRejected.load(std::memory_order_relaxed)) {
 				g_boundState = g_rejectedDepthState.get();
@@ -1132,9 +1162,11 @@ namespace
 			if (context != globals::d3d::context)
 				return;
 			g_requestedState = nullptr;
+			g_cachedReversedState = nullptr;
 			g_boundState = nullptr;
 			g_requestedStencilRef = 0;
 			g_requestedRasterState = nullptr;
+			g_cachedReversedRasterState = nullptr;
 			g_boundRasterState = nullptr;
 			g_requestedViewportCount = 0;
 			g_reverseTargetBound = false;

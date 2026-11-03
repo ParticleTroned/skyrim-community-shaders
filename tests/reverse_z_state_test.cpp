@@ -77,6 +77,17 @@ struct ReverseZ
 	void RejectRendering(const char* reason);
 	ID3D11DepthStencilState* GetReversedState(ID3D11DepthStencilState*);
 	ID3D11RasterizerState* GetReversedRasterizerState(ID3D11RasterizerState*);
+	unsigned depthMappings = 0, rasterMappings = 0;
+	ID3D11DepthStencilState* CountedGetReversedState(ID3D11DepthStencilState* state)
+	{
+		++depthMappings;
+		return GetReversedState(state);
+	}
+	ID3D11RasterizerState* CountedGetReversedRasterizerState(ID3D11RasterizerState* state)
+	{
+		++rasterMappings;
+		return GetReversedRasterizerState(state);
+	}
 };
 namespace RE::RENDER_TARGETS_DEPTHSTENCIL
 {
@@ -165,7 +176,15 @@ namespace
 #include "reverse_z_state_views.h"
 	void ReapplyNearPlaneShader(ID3D11DeviceContext*) {}
 #include "reverse_z_state_getters.h"
+// Count slow-path calls without replacing the production hook or mapping bodies.
+#define GetReversedState CountedGetReversedState
+#define GetReversedRasterizerState CountedGetReversedRasterizerState
 #include "reverse_z_state_hooks.h"
+#undef GetReversedRasterizerState
+#undef GetReversedState
+	ID3D11RenderTargetView* g_lastClearedCubeFace = nullptr;
+	ID3D11VertexShader* g_boundVertexShader = nullptr;
+#include "reverse_z_state_clear.h"
 
 	void Require(bool condition, const char* message)
 	{
@@ -226,7 +245,7 @@ namespace
 		g_reversalActive = true;
 		g_viewIsReverse.emplace(depthView.get(), ViewVerdict{ depthView, true });
 		for (bool reversed : { false, true }) {
-			context->ClearState();
+			ID3D11DeviceContext_ClearState::thunk(context);
 			g_reverseTargetBound = false;
 			g_projectionReversed = reversed;
 			auto* target = colorView.get();
@@ -275,7 +294,7 @@ namespace
 		reverse.failureGeneration = 0;
 		g_renderingRejected = false;
 		g_reversalActive = true;
-		context->ClearState();
+		ID3D11DeviceContext_ClearState::thunk(context);
 		g_viewIsReverse.clear();
 		g_reverseTargetBound = g_projectionReversed = false;
 	}
@@ -523,6 +542,133 @@ namespace
 		g_viewIsReverse.clear();
 		globals::game::renderer = nullptr;
 	}
+
+	void CheckBoundStates(ID3D11DeviceContext* context, ID3D11DepthStencilState* depth, ID3D11RasterizerState* raster, UINT expectedRef)
+	{
+		winrt::com_ptr<ID3D11DepthStencilState> actualDepth;
+		winrt::com_ptr<ID3D11RasterizerState> actualRaster;
+		UINT actualRef = 0;
+		context->OMGetDepthStencilState(actualDepth.put(), &actualRef);
+		context->RSGetState(actualRaster.put());
+		Require(actualDepth.get() == depth && actualRaster.get() == raster && actualRef == expectedRef,
+			"Cached mapping changed the physical state or stencil reference");
+	}
+
+	void TestRequestedStateMappingCache(ID3D11Device* device, ID3D11DeviceContext* context,
+		ID3D11DepthStencilState* depth, ID3D11RasterizerState* raster)
+	{
+		auto& reverse = globals::features::reverseZ;
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 21);
+		ID3D11DeviceContext_RSSetState::thunk(context, raster);
+		const auto mappedDepth = g_cachedReversedState;
+		const auto mappedRaster = g_cachedReversedRasterState;
+		Require(mappedDepth && mappedRaster, "Reversed mappings were not retained");
+		const auto depthMappings = reverse.depthMappings, rasterMappings = reverse.rasterMappings;
+		for (UINT ref = 1; ref <= 64; ++ref) {
+			ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, ref);
+			ID3D11DeviceContext_RSSetState::thunk(context, raster);
+			CheckBoundStates(context, mappedDepth, mappedRaster, ref);
+			winrt::com_ptr<ID3D11DepthStencilState> logicalDepth;
+			winrt::com_ptr<ID3D11RasterizerState> logicalRaster;
+			UINT logicalRef = 0;
+			ID3D11DeviceContext_OMGetDepthStencilState::thunk(context, logicalDepth.put(), &logicalRef);
+			ID3D11DeviceContext_RSGetState::thunk(context, logicalRaster.put());
+			Require(logicalDepth.get() == depth && logicalRaster.get() == raster && logicalRef == ref,
+				"Cached bind changed logical state ownership");
+		}
+		struct Domain
+		{
+			bool target, projection, nearMask, reversed;
+		};
+		for (const auto domain : { Domain{ true, false, false, false }, Domain{ false, true, false, false },
+				 Domain{ true, false, true, true }, Domain{ false, false, true, false }, Domain{ true, true, false, true } }) {
+			g_reverseTargetBound = domain.target;
+			g_projectionReversed = domain.projection;
+			g_nearMaskBound = domain.nearMask;
+			ReapplyMappedStates(context);
+			CheckBoundStates(context, domain.reversed ? mappedDepth : depth, domain.reversed ? mappedRaster : raster, 64);
+		}
+		Require(reverse.depthMappings == depthMappings && reverse.rasterMappings == rasterMappings,
+			"Repeated binds or convention transitions repeated the mapping lookup");
+
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, nullptr, 9);
+		ID3D11DeviceContext_RSSetState::thunk(context, nullptr);
+		const auto defaultDepth = g_cachedReversedState;
+		Require(defaultDepth && !g_cachedReversedRasterState, "Default state reused a preceding mapping");
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, nullptr, 10);
+		ID3D11DeviceContext_RSSetState::thunk(context, nullptr);
+		CheckBoundStates(context, defaultDepth, nullptr, 10);
+		Require(reverse.depthMappings == depthMappings + 1 && reverse.rasterMappings == rasterMappings,
+			"Default state lookup was repeated or inherited the preceding cache entry");
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 21);
+		ID3D11DeviceContext_RSSetState::thunk(context, raster);
+		Require(reverse.depthMappings == depthMappings + 2 && reverse.rasterMappings == rasterMappings + 1,
+			"Changing the requested state did not invalidate its mapping");
+		CheckBoundStates(context, mappedDepth, mappedRaster, 21);
+
+		D3D11_RASTERIZER_DESC desc{};
+		raster->GetDesc(&desc);
+		desc.DepthBias = 0;
+		desc.SlopeScaledDepthBias = desc.DepthBiasClamp = 0;
+		winrt::com_ptr<ID3D11RasterizerState> unbiased;
+		Require(SUCCEEDED(device->CreateRasterizerState(&desc, unbiased.put())), "Unbiased rasterizer creation failed");
+		Util::SetResourceName(unbiased.get(), "ReverseZStateTest::UnbiasedRasterizer");
+		ID3D11DeviceContext_RSSetState::thunk(context, unbiased.get());
+		const auto unbiasedMappings = reverse.rasterMappings;
+		ID3D11DeviceContext_RSSetState::thunk(context, unbiased.get());
+		CheckBoundStates(context, mappedDepth, unbiased.get(), 21);
+		Require(reverse.rasterMappings == unbiasedMappings, "Unchanged rasterizer mapping was not cached");
+		ID3D11DeviceContext_RSSetState::thunk(context, raster);
+
+		winrt::com_ptr<ID3D11DeviceContext> other;
+		Require(SUCCEEDED(device->CreateDeferredContext(0, other.put())), "Other context creation failed");
+		Util::SetResourceName(other.get(), "ReverseZStateTest::OtherContext");
+		const auto beforeClearDepth = reverse.depthMappings, beforeClearRaster = reverse.rasterMappings;
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(other.get(), nullptr, 3);
+		ID3D11DeviceContext_RSSetState::thunk(other.get(), nullptr);
+		ID3D11DeviceContext_ClearState::thunk(other.get());
+		ReapplyMappedStates(context);
+		CheckBoundStates(context, mappedDepth, mappedRaster, 21);
+		Require(reverse.depthMappings == beforeClearDepth && reverse.rasterMappings == beforeClearRaster,
+			"Other context changed the immediate-context mapping cache");
+		ID3D11DeviceContext_ClearState::thunk(context);
+		Require(!g_cachedReversedState && !g_cachedReversedRasterState && !g_requestedState && !g_requestedRasterState,
+			"ClearState retained requested mappings");
+		g_reverseTargetBound = g_projectionReversed = true;
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 21);
+		ID3D11DeviceContext_RSSetState::thunk(context, raster);
+		Require(reverse.depthMappings == beforeClearDepth + 1 && reverse.rasterMappings == beforeClearRaster + 1,
+			"ClearState did not invalidate both mapping entries");
+		CheckBoundStates(context, mappedDepth, mappedRaster, 21);
+
+		g_renderingRejected = true;
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 7);
+		ID3D11DeviceContext_RSSetState::thunk(context, raster);
+		CheckBoundStates(context, g_rejectedDepthState.get(), nullptr, 7);
+		g_reverseTargetBound = false;
+		ReapplyMappedStates(context);
+		CheckBoundStates(context, depth, raster, 7);
+		Require(reverse.depthMappings == beforeClearDepth + 1 && reverse.rasterMappings == beforeClearRaster + 1,
+			"Failure handling reused or refreshed a normal mapping");
+		g_renderingRejected = false;
+		g_reverseTargetBound = true;
+		ReapplyMappedStates(context);
+
+		const auto beforeStandardDepth = reverse.depthMappings, beforeStandardRaster = reverse.rasterMappings;
+		g_reverseTargetBound = false;
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, nullptr, 13);
+		ID3D11DeviceContext_RSSetState::thunk(context, unbiased.get());
+		Require(!g_cachedReversedState && !g_cachedReversedRasterState,
+			"A requested-state change in the standard domain retained a preceding mapping");
+		CheckBoundStates(context, nullptr, unbiased.get(), 13);
+		g_reverseTargetBound = true;
+		ReapplyMappedStates(context);
+		CheckBoundStates(context, defaultDepth, unbiased.get(), 13);
+		Require(reverse.depthMappings == beforeStandardDepth + 1 && reverse.rasterMappings == beforeStandardRaster + 1,
+			"Entering the reversed domain did not resolve requests changed in the standard domain");
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 7);
+		ID3D11DeviceContext_RSSetState::thunk(context, raster);
+	}
 }
 
 int main()
@@ -535,8 +681,9 @@ int main()
 			"WARP device creation failed");
 		globals::d3d::device = device.get();
 		globals::d3d::context = context.get();
-		UseNative<ID3D11DeviceContext_OMSetDepthStencilState, 36>(context.get());
-		UseNative<ID3D11DeviceContext_RSSetState, 43>(context.get());
+		ID3D11DeviceContext_OMSetDepthStencilState::func = [](ID3D11DeviceContext* ctx, ID3D11DepthStencilState* state, UINT ref) { ctx->OMSetDepthStencilState(state, ref); };
+		ID3D11DeviceContext_RSSetState::func = [](ID3D11DeviceContext* ctx, ID3D11RasterizerState* state) { ctx->RSSetState(state); };
+		ID3D11DeviceContext_ClearState::func = [](ID3D11DeviceContext* ctx) { ctx->ClearState(); };
 		UseNative<ID3D11DeviceContext_RSSetViewports, 44>(context.get());
 		UseNative<ID3D11DeviceContext_ClearDepthStencilView, 53>(context.get());
 		UseNative<ID3D11DeviceContext_OMGetDepthStencilState, 92>(context.get());
@@ -609,6 +756,7 @@ int main()
 		Require(mappedRaster.DepthBias == -7 && mappedRaster.SlopeScaledDepthBias == -2 && mappedRaster.DepthBiasClamp == -0.25f, "Rasterizer bias was not mirrored");
 		ID3D11DeviceContext_RSGetState::thunk(context.get(), logicalRaster.put());
 		Require(logicalRaster.get() == requestedRaster.get(), "Rasterizer getter lost logical ownership");
+		TestRequestedStateMappingCache(device.get(), context.get(), requestedDepth.get(), requestedRaster.get());
 
 		rasterDesc.DepthBias = std::numeric_limits<INT>::min();
 		requestedRaster = nullptr;

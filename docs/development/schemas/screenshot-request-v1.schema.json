@@ -75,7 +75,7 @@
         "destination": {
           "type": "object",
           "properties": {
-            "policy": { "enum": ["settings_default", "game_relative", "absolute"] },
+            "policy": { "enum": ["settings_default", "game_relative", "absolute"], "description": "Relative sequence destinations retain their approved root and reject reparse components during preparation. Absolute configured or explicit destinations are unrestricted. resolvedDirectory is returned only after handle custody succeeds." },
             "directory": { "type": ["string", "null"] },
             "baseName": { "type": ["string", "null"], "maxLength": 96 },
             "overwrite": { "const": "never" }

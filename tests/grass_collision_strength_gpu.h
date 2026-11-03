@@ -127,25 +127,48 @@ void RunGrassCollisionStrength()
 		}
 		return baseline;
 	};
+	const auto verifyPlaneNormals = [](const std::array<float, 8>& sample, std::array<float, 2> currentSlope, std::array<float, 2> previousSlope) {
+		const std::array<std::array<float, 2>, 2> slopes{ currentSlope, previousSlope };
+		for (size_t history = 0; history < slopes.size(); ++history) {
+			const auto& slope = slopes[history];
+			const std::array<float, 3> expected{ slope[0], slope[1], -.1f };
+			const float expectedLength = std::hypot(expected[0], expected[1], expected[2]);
+			const size_t first = history * 4;
+			const float actualLength = std::hypot(sample[first], sample[first + 1], sample[first + 2]);
+			Require(std::isfinite(actualLength) && actualLength > .001f, "Planar collision field produced no finite response");
+			for (size_t axis = 0; axis < expected.size(); ++axis)
+				Require(std::abs(sample[first + axis] / actualLength - expected[axis] / expectedLength) < .001f,
+					"Collision normal differs from the analytic field gradient");
+		}
+	};
+	const auto setPlaneFields = [&](std::array<float, 2> currentStep, std::array<float, 2> previousStep) {
+		for (UINT y = 0; y < 512; ++y)
+			for (UINT x = 0; x < 512; ++x) {
+				const float currentHeight = -64 + (float(x) - 256) * currentStep[0] + (float(y) - 256) * currentStep[1];
+				const float previousHeight = -72 + (float(x) - 256) * previousStep[0] + (float(y) - 256) * previousStep[1];
+				const auto current = DirectX::PackedVector::XMConvertFloatToHalf((2048 - currentHeight) / 4096);
+				const auto previous = DirectX::PackedVector::XMConvertFloatToHalf((2048 - previousHeight) / 4096);
+				const size_t pixel = (size_t(y) * 512 + x) * 4;
+				pixels[pixel] = pixels[pixel + 1] = current;
+				pixels[pixel + 2] = pixels[pixel + 3] = previous;
+			}
+		context->UpdateSubresource(texture.Get(), 0, nullptr, pixels.data(), 512 * 8, 0);
+	};
 	const auto baseline = verifyStrengths();
 	const double expected = -.75 * 30 * (1 - std::pow(30.0 / 2048, 2) * (3 - 2 * 30.0 / 2048));
 	Require(std::abs(baseline[0][2] - expected) < .001 && baseline[0][2] == baseline[0][6],
 		"1x collision strength differs from the original deformation");
-	for (UINT y = 0; y < 512; ++y)
-		for (UINT x = 0; x < 512; ++x) {
-			const float currentHeight = -64 + (float(x) - 256) * 4;
-			const float previousHeight = -72 + (float(y) - 256) * 2;
-			const auto current = DirectX::PackedVector::XMConvertFloatToHalf((2048 - currentHeight) / 4096);
-			const auto previous = DirectX::PackedVector::XMConvertFloatToHalf((2048 - previousHeight) / 4096);
-			const size_t pixel = (size_t(y) * 512 + x) * 4;
-			pixels[pixel] = pixels[pixel + 1] = current;
-			pixels[pixel + 2] = pixels[pixel + 3] = previous;
-		}
-	context->UpdateSubresource(texture.Get(), 0, nullptr, pixels.data(), 512 * 8, 0);
+	verifyPlaneNormals(baseline[0], { 0, 0 }, { 0, 0 });
+	setPlaneFields({ 4, 0 }, { 0, 2 });
 	const auto sloped = verifyStrengths();
+	verifyPlaneNormals(sloped[0], { .5f, 0 }, { 0, .25f });
 	Require(std::abs(sloped[0][0]) > .01 && std::abs(sloped[0][5]) > .01 &&
 				std::abs(sloped[0][0] - sloped[0][4]) > .01,
 		"Sloped fields did not exercise distinct lateral collision histories");
+	setPlaneFields({ 4, 2 }, { -2, 4 });
+	const auto diagonal = verifyStrengths();
+	verifyPlaneNormals(diagonal[0], { .5f, .25f }, { -.25f, .5f });
+	setPlaneFields({ 4, 0 }, { 0, 2 });
 	identity[3] = 32;
 	identity[7] = -16;
 	identity[11] = 12;

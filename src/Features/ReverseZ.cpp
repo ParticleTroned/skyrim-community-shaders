@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstring>
 #include <format>
+#include <immintrin.h>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -345,15 +346,50 @@ namespace
 			a_frameBuffer.CameraViewProjInverse[a_eye], a_frameBuffer.CameraProjInverse[a_eye], a_frameBuffer.CameraPreviousViewProjUnjittered[a_eye] };
 	}
 
-	/** @brief Normalizes each uploaded camera matrix before deriving its matching inverse. */
-	void FixupUploadedEye(const UploadedEye& eye)
+	/** @brief Retains inverses of exact normalized inputs for one eye on its upload thread. */
+	struct UploadedEyeInverseCache
+	{
+		struct Entry
+		{
+			Matrix input{}, inverse{};
+			bool valid = false;
+
+			const Matrix& Resolve(const Matrix& matrix)
+			{
+				if (!valid || std::memcmp(input.m, matrix.m, sizeof(input.m)) != 0) {
+					input = matrix;
+					inverse = matrix.Invert();
+					valid = true;
+				}
+				return inverse;
+			}
+		};
+		Entry projUnjittered, viewProj, proj;
+		uint64_t generation = 0;
+		unsigned floatingPointControl = 0;
+
+		void Prepare(uint64_t targetGeneration)
+		{
+			// Arithmetic control must match; sticky exception flags are outputs of earlier work.
+			const auto control = _mm_getcsr() & (_MM_MASK_MASK | _MM_ROUND_MASK | _MM_FLUSH_ZERO_MASK | _MM_DENORMALS_ZERO_MASK);
+			if (generation != targetGeneration || floatingPointControl != control) {
+				projUnjittered.valid = viewProj.valid = proj.valid = false;
+				generation = targetGeneration;
+				floatingPointControl = control;
+			}
+		}
+	};
+
+	/** @brief Normalizes every camera/history matrix and reuses only exact matching inverses. */
+	void FixupUploadedEye(const UploadedEye& eye, UploadedEyeInverseCache& cache, uint64_t targetGeneration)
 	{
 		for (auto* matrix : { &eye.proj, &eye.viewProj, &eye.viewProjUnjittered, &eye.projUnjittered, &eye.previousViewProj })
 			if (!AlreadyReversed(*matrix, ZAxis::kCol2))
 				ReverseClipZ(*matrix, ZAxis::kCol2);
-		eye.projUnjitteredInverse = eye.projUnjittered.Invert();
-		eye.viewProjInverse = eye.viewProj.Invert();
-		eye.projInverse = eye.proj.Invert();
+		cache.Prepare(targetGeneration);
+		eye.projUnjitteredInverse = cache.projUnjittered.Resolve(eye.projUnjittered);
+		eye.viewProjInverse = cache.viewProj.Resolve(eye.viewProj);
+		eye.projInverse = cache.proj.Resolve(eye.proj);
 	}
 
 }
@@ -799,14 +835,17 @@ bool ReverseZ::ExpectPublishedReversal(const RE::NiCamera* a_camera, bool a_rend
 void ReverseZ::FixupMappedFrameBuffer(globals::FrameBuffer& buffer)
 {
 	if (activeThisBoot && g_reversalActive.load(std::memory_order_acquire) && g_projectionReversed) {
-		FixupUploadedEye(FlatUploadedEye(buffer));
+		static thread_local UploadedEyeInverseCache cache;
+		FixupUploadedEye(FlatUploadedEye(buffer), cache, GetGeneration());
 	}
 }
 bool ReverseZ::FixupMappedFrameBufferVR(globals::FrameBufferVR& buffer)
 {
 	if (!activeThisBoot || !g_reversalActive.load(std::memory_order_acquire) || !g_projectionReversed)
 		return false;
-	for (uint32_t eye = 0; eye < kStereoEyeCount; ++eye) FixupUploadedEye(VRUploadedEye(buffer, eye));
+	static thread_local std::array<UploadedEyeInverseCache, kStereoEyeCount> caches;
+	const auto targetGeneration = GetGeneration();
+	for (uint32_t eye = 0; eye < kStereoEyeCount; ++eye) FixupUploadedEye(VRUploadedEye(buffer, eye), caches[eye], targetGeneration);
 	return true;
 }
 

@@ -139,20 +139,26 @@ int main() {
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <immintrin.h>
 #include <iostream>
+#include <limits>
 #include <shared_mutex>
 #include <span>
 #include <stdexcept>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 #include "Utils/DepthConvention.h"
 using namespace DirectX;
 struct Matrix {
     float m[4][4];
+    static inline thread_local unsigned inversions = 0;
     Matrix Invert() const {
+        ++inversions;
         Matrix result;
         XMStoreFloat4x4(reinterpret_cast<XMFLOAT4X4*>(&result),
             XMMatrixInverse(nullptr, XMLoadFloat4x4(reinterpret_cast<const XMFLOAT4X4*>(this))));
@@ -201,6 +207,8 @@ unsigned bindingRefreshes = 0;
 void RefreshBoundDepthTarget() { ++bindingRefreshes; }
 struct ReverseZ {
     bool activeThisBoot = true, depthTargetsConverted = true;
+    uint64_t generation = 0;
+    uint64_t GetGeneration() const { return generation; }
     unsigned rejected = 0;
     void RejectRendering(const char*) { ++rejected; }
     void ReversePublishedProjection();
@@ -253,8 +261,140 @@ void CheckReversal(const UploadedEye& eye, const Matrix& before, const Matrix& p
         Require(Equal(identity, Store(XMMatrixIdentity()), 1e-3f), "Reversed upload has a stale inverse");
     }
 }
+void CheckExactInverses(const UploadedEye& eye) {
+    for (const auto pair : {std::pair{eye.proj, eye.projInverse},
+             std::pair{eye.projUnjittered, eye.projUnjitteredInverse},
+             std::pair{eye.viewProj, eye.viewProjInverse}}) {
+        const auto expected = Store(XMMatrixInverse(nullptr, Load(pair.first)));
+        Require(std::memcmp(expected.m, pair.second.m, sizeof(expected.m)) == 0,
+            "Cached inverse differs from a fresh inversion of the normalized matrix");
+    }
+}
+void CheckInverseReuse() {
+    ReverseZ reverse;
+    reverse.generation = 100;
+    g_reversalActive = g_projectionReversed = true;
+    globals::FrameBufferVR original{};
+    for (uint32_t eye = 0; eye < kStereoEyeCount; ++eye)
+        Fill(VRUploadedEye(original, eye), eye ? 0.03f : -0.03f, eye ? 5.0f : 1.0f, 100000);
+    auto frame = original;
+    auto inversions = Matrix::inversions;
+    reverse.FixupMappedFrameBufferVR(frame);
+    Require(Matrix::inversions == inversions + 6, "Cold stereo upload did not invert all six inputs");
+    const auto expected = frame;
+    inversions = Matrix::inversions;
+    for (unsigned repeat = 0; repeat < 64; ++repeat) {
+        frame = original;
+        reverse.FixupMappedFrameBufferVR(frame);
+        Require(std::memcmp(&frame, &expected, sizeof(frame)) == 0,
+            "Repeated upload trusted stale inverses or skipped independent matrix normalization");
+    }
+    Require(Matrix::inversions == inversions, "Identical normalized stereo inputs repeated inversions");
+
+    frame.CameraViewProjUnjittered[0] = original.CameraViewProjUnjittered[0];
+    frame.CameraPreviousViewProjUnjittered[1] = original.CameraPreviousViewProjUnjittered[1];
+    frame.CameraViewProjUnjittered[0].m[0][3] += 3;
+    frame.CameraPreviousViewProjUnjittered[1].m[0][3] += 17;
+    reverse.FixupMappedFrameBufferVR(frame);
+    auto changed = expected;
+    changed.CameraViewProjUnjittered[0].m[0][3] += 3;
+    changed.CameraPreviousViewProjUnjittered[1].m[0][3] += 17;
+    Require(Matrix::inversions == inversions && std::memcmp(&frame, &changed, sizeof(frame)) == 0,
+        "Inverse reuse skipped changed history or an independently standard matrix");
+
+    for (auto* matrix : {&frame.CameraProj[0], &frame.CameraViewProj[0], &frame.CameraProjUnjittered[0], &frame.CameraProj[1]}) {
+        matrix->m[0][0] = std::nextafter(matrix->m[0][0], std::numeric_limits<float>::infinity());
+        reverse.FixupMappedFrameBufferVR(frame);
+        Require(Matrix::inversions == ++inversions, "A one-bit input change did not invalidate exactly its own inverse");
+        for (uint32_t eye = 0; eye < kStereoEyeCount; ++eye) CheckExactInverses(VRUploadedEye(frame, eye));
+    }
+    auto& zero = frame.CameraProj[0].m[0][1];
+    Require(zero == 0, "Signed-zero fixture is not zero");
+    zero = std::bit_cast<float>(std::bit_cast<uint32_t>(zero) ^ 0x80000000u);
+    reverse.FixupMappedFrameBufferVR(frame);
+    Require(Matrix::inversions == ++inversions, "Signed-zero input change was treated as an exact match");
+    CheckExactInverses(VRUploadedEye(frame, 0));
+
+    // Every component belongs to the exact key, even where a denormal barely affects the result.
+    UploadedEyeInverseCache::Entry entry;
+    auto matrix = Store(XMMatrixIdentity());
+    entry.Resolve(matrix);
+    inversions = Matrix::inversions;
+    for (auto& row : matrix.m) for (auto& value : row) {
+        value = std::bit_cast<float>(std::bit_cast<uint32_t>(value) ^ 1u);
+        entry.Resolve(matrix);
+        Require(Matrix::inversions == ++inversions, "Inverse key omitted a matrix component");
+    }
+
+    const auto beforeRecreation = frame;
+    ++reverse.generation;
+    reverse.FixupMappedFrameBufferVR(frame);
+    inversions += 6;
+    Require(Matrix::inversions == inversions && std::memcmp(&frame, &beforeRecreation, sizeof(frame)) == 0,
+        "Target recreation retained cached inverses or changed their results");
+
+    {
+        struct FloatingPointScope {
+            unsigned saved = _mm_getcsr();
+            ~FloatingPointScope() { _mm_setcsr(saved); }
+        } control;
+        for (const auto bit : {_MM_ROUND_DOWN, _MM_FLUSH_ZERO_MASK, _MM_DENORMALS_ZERO_MASK}) {
+            _mm_setcsr(control.saved ^ bit);
+            reverse.FixupMappedFrameBufferVR(frame);
+            inversions += 6;
+            Require(Matrix::inversions == inversions, "Floating-point control change reused a preceding inverse");
+        }
+        _mm_setcsr(control.saved);
+        reverse.FixupMappedFrameBufferVR(frame);
+        inversions += 6;
+        Require(Matrix::inversions == inversions, "Restored floating-point mode reused a different mode's inverse");
+        for (uint32_t eye = 0; eye < kStereoEyeCount; ++eye) CheckExactInverses(VRUploadedEye(frame, eye));
+        _mm_setcsr(_mm_getcsr() ^ _MM_EXCEPT_INEXACT);
+        reverse.FixupMappedFrameBufferVR(frame);
+        Require(Matrix::inversions == inversions, "Sticky exception status invalidated unchanged inverse inputs");
+    }
+
+    g_projectionReversed = false;
+    auto standard = original;
+    reverse.FixupMappedFrameBufferVR(standard);
+    Require(Matrix::inversions == inversions && std::memcmp(&standard, &original, sizeof(standard)) == 0,
+        "Standard camera domain populated the inverse cache or modified its upload");
+    g_projectionReversed = true;
+    reverse.FixupMappedFrameBufferVR(frame);
+    Require(Matrix::inversions == inversions, "Standard domain damaged the retained reversed inputs");
+
+    globals::FrameBuffer flat{};
+    Fill(FlatUploadedEye(flat), 0, 1, 100000);
+    reverse.FixupMappedFrameBuffer(flat);
+    inversions += 3;
+    Require(Matrix::inversions == inversions, "Flat upload did not use its own inverse entries");
+    const auto flatOnce = flat;
+    flat.CameraProjInverse = flat.CameraViewProjInverse = flat.CameraProjUnjitteredInverse = Store(XMMatrixIdentity());
+    reverse.FixupMappedFrameBuffer(flat);
+    reverse.FixupMappedFrameBufferVR(frame);
+    Require(Matrix::inversions == inversions && std::memcmp(&flat, &flatOnce, sizeof(flat)) == 0,
+        "Flat and stereo caches interfered or a cached upload trusted supplied inverses");
+    ++reverse.generation;
+    reverse.FixupMappedFrameBuffer(flat);
+    Require(Matrix::inversions == inversions + 3, "Flat cache ignored target recreation");
+
+    bool threadLocalCache = false;
+    const auto workerControl = _mm_getcsr();
+    std::thread worker([&] {
+        _mm_setcsr(workerControl);
+        auto copy = frame;
+        reverse.FixupMappedFrameBufferVR(copy);
+        const auto cold = Matrix::inversions;
+        reverse.FixupMappedFrameBufferVR(copy);
+        threadLocalCache = cold == 6 && Matrix::inversions == cold && std::memcmp(&copy, &frame, sizeof(copy)) == 0;
+    });
+    worker.join();
+    Require(threadLocalCache, "Upload threads shared inverse entries or produced different results");
+    g_reversalActive = false;
+}
 void CheckMixedCameraMatrices() {
     ReverseZ reverse;
+    std::array<UploadedEyeInverseCache, kStereoEyeCount> caches;
     RE::NiCamera world;
     world.flat.viewFrustum = {5, 100000, false};
     RE::Main::world = &world;
@@ -280,7 +420,7 @@ void CheckMixedCameraMatrices() {
                         expected[matrix] = Store(XMMatrixMultiply(depthReflection, Load(*matrices[matrix])));
                         if (mask & (1u << matrix)) *matrices[matrix] = expected[matrix];
                     }
-                    FixupUploadedEye(eye);
+                    FixupUploadedEye(eye, caches[index], reverse.GetGeneration());
                     for (unsigned matrix = 0; matrix < matrices.size(); ++matrix)
                         Require(Equal(*matrices[matrix], expected[matrix]), "Mixed upload reversed a camera matrix twice or left it standard");
                     const auto point = XMVectorSet(300, 10, 3000, 1);
@@ -318,7 +458,8 @@ void CheckMixedCameraMatrices() {
                     }
                 }
                 const auto before = frame;
-                for (unsigned index = 0; index < 2; ++index) FixupUploadedEye(VRUploadedEye(frame, index));
+                for (unsigned index = 0; index < 2; ++index)
+                    FixupUploadedEye(VRUploadedEye(frame, index), caches[index], reverse.GetGeneration());
                 Require(std::memcmp(&before, &frame, sizeof(frame)) == 0, "Mixed camera upload was not idempotent");
             }
         }
@@ -329,6 +470,7 @@ void CheckMixedCameraMatrices() {
 int main() {
     try {
         CheckMixedCameraMatrices();
+        CheckInverseReuse();
         ReverseZ reverse;
         globals::FrameBuffer flat{};
         Fill(FlatUploadedEye(flat), 0, 1, 100000);
@@ -394,7 +536,8 @@ int main() {
             Fill(VRUploadedEye(vr, eye), eye ? 0.03f : -0.03f, eye ? 5.0f : 1.0f, eye ? 50000.0f : 100000.0f);
         }
         // The native upload may already contain a reversed eye.
-        FixupUploadedEye(VRUploadedEye(vr, 1));
+        UploadedEyeInverseCache rightCache;
+        FixupUploadedEye(VRUploadedEye(vr, 1), rightCache, reverse.GetGeneration());
         const auto right = vr.CameraProj[1];
         const auto left = vr.CameraProj[0], previous = vr.CameraPreviousViewProjUnjittered[0];
         Require(reverse.FixupMappedFrameBufferVR(vr), "Active stereo upload did not request corrected bytes");
@@ -502,7 +645,7 @@ int main() {
             "ZAxis DetectZAxis(", "bool AlreadyReversed(",
             "void ReverseClipZ(Matrix& matrix, ZAxis axis, float", "void ReverseClipZ(Matrix& matrix, ZAxis axis)",
             "struct UploadedEye", "UploadedEye FlatUploadedEye(", "UploadedEye VRUploadedEye(",
-            "void FixupUploadedEye(",
+            "struct UploadedEyeInverseCache", "void FixupUploadedEye(",
         ):
             helpers.append(block(source, signature) + (";" if signature.startswith("struct ") else ""))
         methods = [block(source, signature) for signature in (

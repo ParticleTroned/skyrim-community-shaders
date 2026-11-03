@@ -277,16 +277,20 @@ namespace Color
 #	endif
 	}
 
+#	include "Common/AdaptiveBalanceUtilityColor.hlsli"
+
 	/// Composed Adaptive Balance multiplier, excluding out-of-world object previews.
 	float3 PointLight(float3 color, bool isLinear = false, uint lightFlags = 0, bool preserveHDRIntensity = false)
 	{
 		const float curve = SharedData::adaptiveBalanceSettings.pointLightCurve;
 		const float saturation = SharedData::adaptiveBalanceSettings.pointLightSaturation;
-		const bool grade = IsSceneColorDraw() && (curve != 1.0 || saturation != 1.0);
+		const float2 utility = PointLightUtilityAdjustment(isLinear, lightFlags);
+		const bool grade = IsSceneColorDraw() && (curve != 1.0 || saturation != 1.0 || utility.x != 1.0 || utility.y != 0.0);
 		// Grade authored RGB before light conversion; neutral settings retain signed inputs.
 		[branch] if (IsSceneColorDraw() && curve != 1.0)
 			color = pow(max(color, 0.0), curve);
 		color = Light(color, isLinear, preserveHDRIntensity);
+		color = AdjustUtilityColor(color, utility.x, utility.y);
 		if (grade)
 			color = AdaptiveBalanceColorBounds::Intermediate(color, ENABLE_LL_COLOR_ADJUSTMENTS);
 		// Neutral profiles preserve the authored color without a gamma round trip.
@@ -324,13 +328,15 @@ namespace Color
 #	if defined(LIGHTING)
 	float3 EmitColor(float3 color)
 	{
-		if (ENABLE_LL_COLOR_ADJUSTMENTS) {
-			return pow(abs(color / max(emissiveMult, 1e-5)), SharedData::linearLightingSettings.emitColorGamma) * emissiveMult * SharedData::linearLightingSettings.emitColorMult;
-		}
+		if (ENABLE_LL_COLOR_ADJUSTMENTS)
+			color = pow(abs(color / max(emissiveMult, 1e-5)), SharedData::linearLightingSettings.emitColorGamma);
 
-		// Adaptive Brightness only adjusts the multiplier. Keep the engine-authored
-		// emissive value intact so this path does not depend on LLPerGeometry.
-		return ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS ? color * SharedData::linearLightingSettings.emitColorMult : color;
+		// The vanilla path does not require the Linear Lighting geometry buffer.
+		color = AdjustUtilityColor(color, SharedData::adaptiveBalanceSettings.appearance.emissiveSaturation,
+			SharedData::adaptiveBalanceSettings.appearance.emissiveGammaOffset);
+		if (ENABLE_LL_COLOR_ADJUSTMENTS)
+			color *= emissiveMult;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? color * SharedData::linearLightingSettings.emitColorMult : color;
 	}
 #	endif
 
@@ -344,6 +350,8 @@ namespace Color
 		}
 #	endif
 
+		color = AdjustUtilityColor(color, SharedData::adaptiveBalanceSettings.appearance.glowmapSaturation,
+			SharedData::adaptiveBalanceSettings.appearance.glowmapGammaOffset);
 		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? color * SharedData::linearLightingSettings.glowmapMult : color;
 	}
 

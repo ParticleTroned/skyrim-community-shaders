@@ -353,6 +353,38 @@ namespace SharedData
 		float auroraIntensity;
 		float auroraCurve;
 		float3 padding;
+		float sceneGammaOffset;
+		float ambientGammaOffset;
+		float directionalGammaOffset;
+		float pointLightGammaOffset;
+		float linearPointLightSaturation;
+		float linearPointLightGammaOffset;
+		float spotlightSaturation;
+		float spotlightGammaOffset;
+		float linearSpotlightSaturation;
+		float linearSpotlightGammaOffset;
+		float omnidirectionalBulbSaturation;
+		float omnidirectionalBulbGammaOffset;
+		float linearOmnidirectionalBulbSaturation;
+		float linearOmnidirectionalBulbGammaOffset;
+		float emissiveSaturation;
+		float emissiveGammaOffset;
+		float glowmapSaturation;
+		float glowmapGammaOffset;
+		float effectLightingSaturation;
+		float effectLightingGammaOffset;
+		float effectSaturation;
+		float effectGammaOffset;
+		float skyStaticSaturation;
+		float skyStaticGammaOffset;
+		float sunGlareSaturation;
+		float sunGlareGammaOffset;
+		float fogSaturation;
+		float volumetricIntensity;
+		float volumetricSaturation;
+		float nonlinearPointLightSaturation;
+		uint pointLightColorEnabled;
+		float utilityPadding;
 	};
 
 	struct AdaptiveBalanceSettings

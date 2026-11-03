@@ -28,10 +28,13 @@ struct float3
 {
 	float x, y, z;
 };
+inline void to_json(json& output, const float3& value) { output = { value.x, value.y, value.z }; }
+inline void from_json(const json& input, float3& value) { value = { input.at(0).get<float>(), input.at(1).get<float>(), input.at(2).get<float>() }; }
+#include "Features/Bloom.h"
 #undef NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT
 #define NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(...)
 #define STATIC_ASSERT_ALIGNAS_16(Type) static_assert(alignof(Type) == 16)
-#include "Features/Bloom.h"
+#include "Features/AdaptiveBalanceBloomControls.h"
 #include "Features/SharedLighting.h"
 #include "Features/WaterAppearance.h"
 #include "Features/WeatherColorAdjustment.h"
@@ -1109,6 +1112,26 @@ void CheckAppearanceProfiles()
 			assert(ValidateAdaptiveBalanceVisuals({ { "appearance", { { field.name, value } } } }).empty());
 		for (const auto& value : std::vector<json>{ low - 0.001, high + 0.001, true, "1", nullptr, std::numeric_limits<double>::infinity() })
 			assert(!ValidateAdaptiveBalanceVisuals({ { "appearance", { { field.name, value } } } }).empty());
+		if (field.minimum < 0.0f) {
+			AdaptiveBrightness balance;
+			balance.settings.globalProfile.appearance.*field.member = 0.2f;
+			AdaptiveBrightness::ProfileSettings day, night;
+			day.advanced = night.advanced = true;
+			day.appearance.*field.member = 0.1f;
+			night.appearance.*field.member = 0.5f;
+			balance.testProfileBlend = { &day, &night, 0.25f };
+			assert(Close(balance.GetCommonBufferData().appearance.*field.member, 0.4f));
+			AdaptiveBrightness::LocationOverride location;
+			location.profile.advanced = true;
+			location.profile.appearance.*field.member = -0.1f;
+			balance.testLocationLayers = { &location };
+			assert(Close(balance.GetCommonBufferData().appearance.*field.member, 0.1f));
+			location.layered = true;
+			assert(Close(balance.GetCommonBufferData().appearance.*field.member, 0.3f));
+			balance.SetEnabled(false);
+			assert(balance.GetCommonBufferData().appearance.*field.member == 0.0f);
+			continue;
+		}
 		if (field.neutral == 0.0f)
 			continue;
 		AdaptiveBrightness balance;
@@ -1343,6 +1366,19 @@ void CheckVanillaPointLightRequirements()
 	assert(!balance.NeedsVanillaPointLightData());
 	assert(balance.profileResolutions == 0);
 
+	for (const auto& field : AdaptiveBalanceAppearance::kScalars) {
+		auto authored = AdaptiveBalanceAppearanceSettings{};
+		authored.*field.member = field.maximum;
+		if (!AdaptiveBalanceAppearance::UsesClassifiedPointLights(authored))
+			continue;
+		balance.settings.globalProfile.appearance = authored;
+		assert(balance.GetCommonBufferData().appearance.pointLightColorEnabled == 1);
+		assert(balance.NeedsVanillaPointLightData());
+		balance.settings.globalProfile.appearance = {};
+		assert(balance.GetCommonBufferData().appearance.pointLightColorEnabled == 0);
+		assert(!balance.NeedsVanillaPointLightData());
+	}
+
 	const auto checkDraws = [&](bool expected) {
 		const auto resolutions = balance.profileResolutions;
 		for (unsigned draw = 0; draw < 1000; ++draw)
@@ -1418,8 +1454,48 @@ void CheckVanillaPointLightRequirements()
 	checkDraws(false);
 }
 
+void CheckEditableBloomPresets()
+{
+	AdaptiveBrightness balance;
+	auto& profile = balance.settings.globalProfile;
+	profile.bloom.EnhancementIntensity = 2.25f;
+	profile.bloom.HaloRadius = 7.0f;
+	Bloom::SelectPreset(profile.bloom, profile.bloomPresets, 1);
+	assert(profile.bloom.EnhancementIntensity == 4.0f);
+	profile.bloom.HaloRadius = 8.0f;
+	Bloom::SelectPreset(profile.bloom, profile.bloomPresets, 0);
+	assert(profile.bloom.EnhancementIntensity == 2.25f && profile.bloom.HaloRadius == 7.0f);
+	Bloom::SelectPreset(profile.bloom, profile.bloomPresets, 1);
+	assert(profile.bloom.HaloRadius == 8.0f);
+	Bloom::ResetPreset(profile.bloom, profile.bloomPresets);
+	assert(profile.bloom.HaloRadius == 5.0f);
+	Bloom::SelectPreset(profile.bloom, profile.bloomPresets, 0);
+	assert(profile.bloom.HaloRadius == 7.0f);
+	assert(balance.GetEffectiveBloomSettings().Enabled);
+	balance.settings.bloomEnabled = false;
+	assert(!balance.GetEffectiveBloomSettings().Enabled && profile.bloom.EnhancementIntensity == 2.25f);
+	balance.settings.bloomEnabled = true;
+	assert(balance.GetEffectiveBloomSettings().Enabled);
+	const json patch{ { "preset", 2 }, { "reset", true }, { "profile", { { "HaloRadius", 9.0 }, { "BloomTint", { 0.5, 0.6, 0.7 } } } } };
+	assert(AdaptiveBalanceBloomControls::Apply(patch, profile.bloom, profile.bloomPresets).empty());
+	assert(profile.bloom.HaloRadius == 9.0f && profile.bloomPresets.selected == 2);
+	const json encodedSlots = profile.bloomPresets;
+	const auto restoredSlots = encodedSlots.get<Bloom::PresetSlots>();
+	assert(json(restoredSlots) == encodedSlots);
+	assert(restoredSlots.profiles[0].HaloRadius == 7.0f && restoredSlots.profiles[1].HaloRadius == 5.0f);
+	for (auto invalid : std::vector<json>{ json{ { "preset", -1 } }, json{ { "preset", 3 } }, json{ { "reset", 1 } },
+			 json{ { "profile", { { "HaloRadius", 15 } } } }, json{ { "profile", { { "BloomTint", { 1, true, 1 } } } } },
+			 json{ { "preset", 1 }, { "profile", { { "missing", 1 } } } } }) {
+		assert(!AdaptiveBalanceBloomControls::Apply(invalid, profile.bloom, profile.bloomPresets).empty());
+		assert(profile.bloom.HaloRadius == 9.0f && profile.bloomPresets.selected == 2);
+	}
+	assert(ValidateAdaptiveBalanceVisuals({ { "bloomEnabled", false }, { "bloom", patch } }).empty());
+	std::cout << "Editable bloom slots, reset isolation, bypass retention and atomic API validation passed\n";
+}
+
 int main()
 {
+	CheckEditableBloomPresets();
 	CheckVanillaPointLightRequirements();
 	CheckVolumetricClarity();
 	CheckGodrayContextOwnership();

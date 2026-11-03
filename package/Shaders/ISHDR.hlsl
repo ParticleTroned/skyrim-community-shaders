@@ -235,7 +235,8 @@ PS_OUTPUT main(PS_INPUT input)
 
 #		if defined(ADAPTIVE_BALANCE)
 	outputColor = AdaptiveBalanceColor::Apply(outputColor,
-		SharedData::adaptiveBalanceSettings.contrast, SharedData::adaptiveBalanceSettings.saturation, ENABLE_LL);
+		SharedData::adaptiveBalanceSettings.contrast, SharedData::adaptiveBalanceSettings.saturation, ENABLE_LL,
+		SharedData::adaptiveBalanceSettings.appearance.sceneGammaOffset);
 #		endif
 
 #		if defined(FADE)

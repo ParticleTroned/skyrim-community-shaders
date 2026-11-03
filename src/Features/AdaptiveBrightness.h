@@ -130,6 +130,7 @@ struct AdaptiveBrightness : Feature
 		float vlGammaOffset = 0.0f;
 
 		Bloom::Profile bloom;
+		Bloom::PresetSlots bloomPresets;
 		WaterAppearance::Profile water;
 		WaterWindSettings waterWind;
 		AdaptiveBalanceAppearanceSettings appearance;
@@ -169,6 +170,7 @@ struct AdaptiveBrightness : Feature
 	struct Settings
 	{
 		bool enabled = true;
+		bool bloomEnabled = true;
 		bool useAmbientEffectLighting = false;
 		float godrayFinalBrightness = AdaptiveBalanceGodray::kDefault;  // Legacy preset/API storage; no rendering effect.
 		float volumetricClarity = AdaptiveBalanceGodray::kClarityDefault;
@@ -215,7 +217,7 @@ struct AdaptiveBrightness : Feature
 		AdaptiveBalanceAppearanceSettings appearance;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
-	static_assert(sizeof(PerFrameData) == 336);
+	static_assert(sizeof(PerFrameData) == 464);
 	static_assert(offsetof(PerFrameData, appearance) == 112);
 	static_assert(offsetof(PerFrameData, skySaturation) == 32);
 	static_assert(offsetof(PerFrameData, ambientMult) == 36);

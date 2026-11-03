@@ -752,6 +752,8 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 #		endif
 	}
 
+	color = Color::WeatherEffectLighting(color, (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) != 0);
+
 #		if defined(LIGHT_LIMIT_FIX)
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld))
 #		endif
@@ -874,6 +876,11 @@ PS_OUTPUT main(PS_INPUT input)
 	lightingInfluence = 0;
 #	endif
 
+#	if defined(LIGHTING)
+	propertyColor = Color::AdjustUtilityColor(propertyColor, SharedData::adaptiveBalanceSettings.appearance.effectLightingSaturation,
+		SharedData::adaptiveBalanceSettings.appearance.effectLightingGammaOffset);
+#	endif
+
 	float4 baseTexColor = float4(1, 1, 1, 1);
 	float4 baseColor = float4(1, 1, 1, 1);
 #	if !defined(TEXTURE)
@@ -951,13 +958,17 @@ PS_OUTPUT main(PS_INPUT input)
 		baseColor.xyz = Color::Effect(grayscaleColor);
 	}
 
-	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence.xxx);
-
 #	if !defined(LIGHTING) && defined(VC) && defined(TEXCOORD) && defined(NORMALS) && defined(TEXTURE) && defined(FALLOFF) && defined(SOFT)
 	const bool isSkyStatic = Color::IsSceneColorDraw() && (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) && lightingInfluence == 1.0;
 #	else
 	const bool isSkyStatic = false;
 #	endif
+#	if !defined(LIGHTING) && !defined(MOTIONVECTORS_NORMALS)
+	if (isSkyStatic || (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject))
+		propertyColor = Color::WeatherEffectLighting(propertyColor, true);
+#	endif
+	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence.xxx);
+
 	const float skyStaticTransparency = isSkyStatic ? SharedData::adaptiveBalanceSettings.skyStaticTransparency : 0.0;
 	if (isSkyStatic) {
 		if (skyStaticTransparency == 1.0)
@@ -976,6 +987,7 @@ PS_OUTPUT main(PS_INPUT input)
 		{
 			ambientLighting = GetAmbientEffectLighting(input.WorldPosition.xyz, input.Position.xy, eyeIndex, maxShadowDistance, shadowVariance);
 		}
+		ambientLighting = Color::WeatherEffectLighting(ambientLighting, true);
 		lightColor = lerp(baseColor.xyz, baseColor.xyz * ambientLighting * SharedData::adaptiveBalanceSettings.skyStaticBrightness, lightingInfluence);
 	}
 #	endif

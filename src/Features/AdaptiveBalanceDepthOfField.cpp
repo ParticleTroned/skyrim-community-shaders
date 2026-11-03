@@ -527,6 +527,13 @@ namespace
 		}
 
 		DrawDepthOfFieldLockButton(a_override, a_liveValues, a_popup);
+		if (a_override.locked) {
+			ImGui::SameLine();
+			const Util::DisableGuard missingDataDisabled(!a_liveValues);
+			if (Util::WarningButton("Reset"))
+				AdaptiveBalanceDepthOfField::ResetOverrideToLive(a_override, a_liveValues);
+			DrawDofTooltip("Replace this section's manual values and baseline with the current live image space values.");
+		}
 
 		if (!a_liveValues) {
 			Util::TextUnformattedDisabled(a_missingDataText);

@@ -57,6 +57,8 @@ PS_OUTPUT main(PS_INPUT input)
 			color = hazeColor * hazeAndShafts.x * (1.0 - clarity) + shaftColor * shaftPower * intensity;
 		}
 	}
+	color = Color::AdjustUtilityColor(color, SharedData::adaptiveBalanceSettings.appearance.volumetricSaturation, 0.0) *
+	        SharedData::adaptiveBalanceSettings.appearance.volumetricIntensity;
 #	endif
 
 #	if defined(LENS_FLARE)

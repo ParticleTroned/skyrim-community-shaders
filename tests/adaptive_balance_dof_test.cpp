@@ -352,6 +352,18 @@ void CheckScopedRestoration()
 
 int main()
 {
+	{
+		using namespace AdaptiveBalanceDepthOfField;
+		DepthOfFieldOverride editor;
+		editor.values.distance = 500.0f;
+		DepthOfFieldSettings live;
+		live.distance = 1200.0f;
+		assert(!ResetOverrideToLive(editor, live) && editor.values.distance == 500.0f);
+		editor.locked = true;
+		assert(!ResetOverrideToLive(editor, std::nullopt) && editor.values.distance == 500.0f);
+		assert(ResetOverrideToLive(editor, live));
+		assert(editor.locked && editor.values.distance == 1200.0f && editor.baseline.distance == 1200.0f);
+	}
 	CheckRuntimeGates();
 	CheckSerialization();
 	CheckSanitization();

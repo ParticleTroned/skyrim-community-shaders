@@ -141,6 +141,12 @@ namespace CSX::RenderMap
 			if (auto successor = runtime.StopCapture()) {
 				CheckStaleSnapshot(*successor, Family::Copy);
 				Require(successor->stageShaderObservations.empty(), "stale shader metadata reached successor");
+				Require(std::none_of(successor->events.begin(), successor->events.end(), [](const EventRecord& event) {
+					const auto schema = static_cast<PayloadSchema>(event.payload.schema);
+					return schema == PayloadSchema::kTransferOperation || schema == PayloadSchema::kRasterState ||
+					       schema == PayloadSchema::kTransferResourceAccess || schema == PayloadSchema::kTransferCopyRegion;
+				}),
+					"stale post-processing metadata reached successor");
 			}
 			Require(runtime.StartCapture(Configuration()) == StartResult::kStarted, "fresh acquisition successor did not start");
 			state.mode = Mode::Stable;

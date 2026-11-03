@@ -776,10 +776,10 @@ bool ReverseZ::ExpectPublishedReversal(const RE::NiCamera* a_camera, bool a_rend
 {
 	if (!activeThisBoot || !depthTargetsConverted || !a_camera || !g_reversalActive.load(std::memory_order_acquire))
 		return false;
-	if (a_camera == RE::Main::WorldRootCamera())
-		return true;
 	if (a_renderingCubemap)
 		return false;
+	if (a_camera == RE::Main::WorldRootCamera())
+		return true;
 	if (!IsConvertedDepthTarget(PublishedDepthStencilTarget()))
 		return false;
 	return !a_camera->GetRuntimeData2().viewFrustum.bOrtho;

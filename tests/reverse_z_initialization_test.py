@@ -381,6 +381,7 @@ int main() {
         Require(std::memcmp(reversedStereo.data(), stereoEntry.viewData.data(), 2 * sizeof(ViewData)) == 0,
             "Already reversed world camera was changed during activation");
         Require(reverse.ExpectPublishedReversal(&world, false), "Active world projection was not recognized");
+        Require(!reverse.ExpectPublishedReversal(&world, true), "Cubemap capture inherited the world camera's depth convention");
         const auto flatProjection = flat.CameraProj, flatPrevious = flat.CameraPreviousViewProjUnjittered;
         reverse.FixupMappedFrameBuffer(flat);
         Require(reverse.rejected == 0, "Startup upload blocked rendering because global range is unset");

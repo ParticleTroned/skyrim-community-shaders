@@ -532,13 +532,13 @@ bool ReverseZ::PrepareDepthTargets()
 		convertedTargetMask |= 1u << item.index;
 	}
 	lock.unlock();
-	if (!activeThisBoot && globals::shaderCache)
-		globals::shaderCache->Clear();
 	depthTargetsConverted = true;
 	extraDepthBytesPerPixel = mainPixels ? double(extraBytes) / mainPixels : 0;
 	VRDepthCullingTemporal::InvalidateDepthGeneration();
 	generation.fetch_add(1, std::memory_order_release);
-	activeThisBoot.store(true, std::memory_order_release);
+	// New-generation shader work must observe the committed depth convention.
+	if (!activeThisBoot.exchange(true, std::memory_order_acq_rel) && globals::shaderCache)
+		globals::shaderCache->Clear();
 	if (replacementBoundDepth)
 		globals::d3d::context->OMSetRenderTargets(static_cast<UINT>(colorViews.size()), colorViews.data(), replacementBoundDepth);
 	return true;
@@ -730,21 +730,21 @@ void ReverseZ::ApplyReverseProjection(void* a_cameraStateEntry, const RE::NiCame
 			return;
 		}
 	}
-	bool reversed = false;
+	if (axes[0] == ZAxis::kUnknown)
+		return;
 	uint32_t eyeIndex = 0;
 	for (auto& viewData : eyes) {
 		const auto axis = axes[eyeIndex];
 		const auto& frustum = frusta[eyeIndex++];
-		if (axis == ZAxis::kUnknown || AlreadyReversed(viewData.projMat, axis))
+		if (AlreadyReversed(viewData.projMat, axis))
 			continue;
 
 		ReverseClipZ(viewData.projMat, axis, frustum.fNear, frustum.fFar);
 		ReverseClipZ(viewData.projMatrixUnjittered, axis, frustum.fNear, frustum.fFar);
 		ReverseClipZ(viewData.viewProjMat, axis, frustum.fNear, frustum.fFar);
 		ReverseClipZ(viewData.viewProjMatrixUnjittered, axis, frustum.fNear, frustum.fFar);
-		reversed = true;
 	}
-	if (reversed && !g_reversalActive.exchange(true, std::memory_order_acq_rel)) {
+	if (!g_reversalActive.exchange(true, std::memory_order_acq_rel)) {
 		RefreshBoundDepthTarget();
 		logger::info("ReverseZ: world-camera depth reversal activated");
 	}

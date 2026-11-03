@@ -83,9 +83,14 @@ int main() {
         assert(globals::shaderCache->compilationSet.generation > before);
     };
     feature.onClear = [] {
-        assert(!reverse.HasShaderDefine(RE::BSShader::Type::Water));
+        // Work queued after invalidation must already see the committed depth convention.
+        assert(reverse.HasShaderDefine(RE::BSShader::Type::Water));
         assert(globals::shaderCache->vertexShaders[0].empty());
         assert(globals::shaderCache->pixelShaders[0].empty());
+        const auto current = globals::shaderCache->compilationSet.generation.load();
+        RE::BSShader water;
+        assert(globals::shaderCache->MakeAndAddVertexShader(water, 9, current));
+        assert(globals::shaderCache->MakeAndAddPixelShader(water, 9, current));
     };
     assert(reverse.PublishPreparedTargets());
     assert(reverse.HasShaderDefine(RE::BSShader::Type::Water));
@@ -97,7 +102,8 @@ int main() {
     // A delayed worker must not repopulate cleared descriptor slots or replace new stages.
     assert(!cache.MakeAndAddVertexShader(water, 7, before));
     assert(!cache.MakeAndAddPixelShader(water, 7, before));
-    assert(cache.vertexShaders[0].empty() && cache.pixelShaders[0].empty());
+    assert(cache.vertexShaders[0].size() == 1 && cache.vertexShaders[0].contains(9));
+    assert(cache.pixelShaders[0].size() == 1 && cache.pixelShaders[0].contains(9));
     auto* vertex = cache.MakeAndAddVertexShader(water, 7);
     auto* pixel = cache.MakeAndAddPixelShader(water, 7);
     assert(vertex && pixel);
@@ -108,7 +114,7 @@ int main() {
     assert(reverse.PublishPreparedTargets() && reverse.generation == 2);
     assert(cache.compilationSet.generation == current && feature.clears == 1);
     assert(cache.vertexShaders[0].at(7).get() == vertex && cache.pixelShaders[0].at(7).get() == pixel);
-    assert(testDevice.creates == 4 && resource.releases == 2);
+    assert(testDevice.creates == 6 && resource.releases == 2);
 }
 '''
         driver = driver.replace("REVERSE_METHODS", "\n".join(block(source, signature) for signature in (
@@ -293,6 +299,13 @@ int main() {
         Require(g_reversalActive && bindingRefreshes == 2, "Stereo world projection did not activate reversal");
         for (const auto& eye : stereoEntry.viewData)
             Require(AlreadyReversed(eye.projMat, DetectZAxis(eye.projMat)), "Stereo world eye remained standard");
+        const auto reversedStereo = stereoEntry.viewData;
+        g_reversalActive = false;
+        reverse.ApplyReverseProjection(&stereoEntry, &world);
+        Require(g_reversalActive && bindingRefreshes == 3,
+            "Already reversed world camera did not activate depth-state mapping");
+        Require(std::memcmp(reversedStereo.data(), stereoEntry.viewData.data(), 2 * sizeof(ViewData)) == 0,
+            "Already reversed world camera was changed during activation");
         Require(reverse.ExpectPublishedReversal(&world, false), "Active world projection was not recognized");
         const auto flatProjection = flat.CameraProj, flatPrevious = flat.CameraPreviousViewProjUnjittered;
         reverse.FixupMappedFrameBuffer(flat);

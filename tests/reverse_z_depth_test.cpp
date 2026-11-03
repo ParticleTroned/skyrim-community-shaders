@@ -156,101 +156,137 @@ namespace
 		Require(depth == 0, "Production Water helper is incomplete");
 		return source.substr(start, end - start);
 	}
-	void TestWaterProjection()
+	void TestWaterProjection(bool shadowDepth = false)
 	{
 		using D3D11ShaderTest::Check;
 		std::ifstream waterFile("package/Shaders/Water.hlsl");
 		const std::string water{ std::istreambuf_iterator<char>(waterFile), {} };
-		const auto source = std::string("#include \"Common/ReverseZ.hlsli\"\n") +
-		                    WaterFunction(water, "float CalculateDepthMultFromUV(") +
-		                    WaterFunction(water, "float ResolveScreenDepthWater(") + R"(
+		std::ifstream shadowFile("package/Shaders/Common/ShadowSampling.hlsli");
+		const std::string shadow{ std::istreambuf_iterator<char>(shadowFile), {} };
+		const auto source = (shadowDepth ? std::string("#include \"Common/FrameBuffer.hlsli\"\nnamespace ShadowSampling {\n") +
+											   WaterFunction(shadow, "float GetShadowDepth(") + "\n}\n" :
+										   std::string("#include \"Common/ReverseZ.hlsli\"\n") +
+											   WaterFunction(water, "float CalculateDepthMultFromUV(") +
+											   WaterFunction(water, "float ResolveScreenDepthWater(")) +
+		                    R"(
 cbuffer TestInputs : register(b0) { float4 Samples[8]; };
 RWBuffer<float> Output : register(u0);
 [numthreads(8, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
     float4 sample = Samples[id.x];
+#ifdef TEST_SHADOW_DEPTH
+    Output[id.x] = ShadowSampling::GetShadowDepth(sample.xyz, (uint)sample.w);
+#else
     Output[id.x] = CalculateDepthMultFromUV(sample.xy, ResolveScreenDepthWater(sample.z), (uint)sample.w);
+#endif
 })";
 		winrt::com_ptr<ID3D11Device> device;
 		winrt::com_ptr<ID3D11DeviceContext> context;
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
 			D3D11_SDK_VERSION, device.put(), nullptr, context.put()));
-		for (const auto& [reversed, reverseProjection] : { std::pair{ false, false }, std::pair{ true, true }, std::pair{ true, false } }) {
-			D3D_SHADER_MACRO defines[]{ { "VR", nullptr }, { reversed ? "REVERSE_Z" : "STANDARD_Z", nullptr }, { nullptr, nullptr } };
-			PackageIncludes includes{ "package/Shaders" };
-			winrt::com_ptr<ID3DBlob> code, errors;
-			const auto result = D3DCompile(source.data(), source.size(), "WaterProjection", defines, &includes,
-				"main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, code.put(), errors.put());
-			if (errors)
-				std::cerr << static_cast<const char*>(errors->GetBufferPointer());
-			Check(result);
-			winrt::com_ptr<ID3D11ShaderReflection> reflection;
-			Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.put())));
-			D3D11ShaderTest::ConstantBuffer frame(device.get(), reflection.get(), "FrameBuffer::PerFrame");
-			D3D11ShaderTest::ConstantBuffer inputs(device.get(), reflection.get(), "TestInputs");
-			std::array<Matrix, 2> projections, inverses;
-			std::array<XMFLOAT4, 8> samples;
-			std::array<float, 8> expected;
-			for (unsigned eye = 0; eye < 2; ++eye) {
-				const float offset = eye ? 0.03f : -0.03f;
-				const auto standard = XMMatrixPerspectiveOffCenterLH(-0.8f + offset, 1.2f + offset, -0.7f, 0.9f, 1.0f, 100000.0f);
-				auto native = Store(standard);
-				if (reverseProjection)
-					Depth::SetReverseProjection(native, 1, 100000);
-				projections[eye] = Store(XMMatrixTranspose(Load(native)));
-				inverses[eye] = Store(XMMatrixTranspose(XMMatrixInverse(nullptr, Load(native))));
-				for (unsigned point = 0; point < 4; ++point) {
-					const float distance = std::array{ 1.0f, 10.0f, 1000.0f, 10000.0f }[point];
-					const auto clip = XMVector4Transform(XMVectorSet(offset, 0.2f, distance, 1), standard);
-					const float standardDepth = XMVectorGetZ(clip) / XMVectorGetW(clip);
-					const float x = 0.25f + 0.1f * point, y = 0.35f + 0.05f * eye;
-					samples[eye * 4 + point] = { x, y, reversed ? 1.0f - standardDepth : standardDepth, float(eye) };
-					const auto adjusted = XMVectorSet(2 * x - 1, 2 * y - 1, standardDepth * 1.01f - 0.01f, 1);
-					const auto view = XMVector4Transform(adjusted, XMMatrixInverse(nullptr, standard));
-					expected[eye * 4 + point] = XMVectorGetX(XMVector3Length(XMVectorScale(view, 1.0f / XMVectorGetW(view))));
+		for (bool vr : { false, true })
+			for (const auto& [reversed, reverseProjection] : { std::pair{ false, false }, std::pair{ true, true }, std::pair{ true, false } }) {
+				D3D_SHADER_MACRO defines[]{ { vr ? "VR" : "FLAT", nullptr }, { reversed ? "REVERSE_Z" : "STANDARD_Z", nullptr },
+					{ shadowDepth ? "TEST_SHADOW_DEPTH" : "TEST_WATER_PROJECTION", nullptr }, { nullptr, nullptr } };
+				PackageIncludes includes{ "package/Shaders" };
+				winrt::com_ptr<ID3DBlob> code, errors;
+				const auto result = D3DCompile(source.data(), source.size(), "WaterProjection", defines, &includes,
+					"main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, code.put(), errors.put());
+				if (errors)
+					std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+				Check(result);
+				winrt::com_ptr<ID3D11ShaderReflection> reflection;
+				Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.put())));
+				D3D11ShaderTest::ConstantBuffer frame(device.get(), reflection.get(), "FrameBuffer::PerFrame");
+				D3D11ShaderTest::ConstantBuffer inputs(device.get(), reflection.get(), "TestInputs");
+				const auto setCameraMatrix = [&](const char* name, const std::array<Matrix, 2>& matrices) {
+					if (vr)
+						frame.SetVariable(name, matrices);
+					else
+						frame.SetVariable(name, matrices[0]);
+				};
+				std::array<Matrix, 2> projections, inverses;
+				std::array<Matrix, 2> views, viewProjections;
+				std::array<XMFLOAT4, 8> samples;
+				std::array<float, 8> expected;
+				for (unsigned eye = 0; eye < 2; ++eye) {
+					const auto cameraEye = vr ? eye : 0;
+					const float offset = cameraEye ? 0.03f : -0.03f;
+					const float nearPlane = shadowDepth ? 5.0f : 1.0f, farPlane = shadowDepth ? 50000.0f : 100000.0f;
+					const auto standard = XMMatrixPerspectiveOffCenterLH(-0.8f + offset, 1.2f + offset, -0.7f, 0.9f, nearPlane, farPlane);
+					auto native = Store(standard);
+					if (reverseProjection)
+						Depth::SetReverseProjection(native, nearPlane, farPlane);
+					projections[eye] = Store(XMMatrixTranspose(Load(native)));
+					inverses[eye] = Store(XMMatrixTranspose(XMMatrixInverse(nullptr, Load(native))));
+					const float yaw = 0.3f * cameraEye, pitch = 0.4f * cameraEye;
+					const auto cameraView = XMMatrixLookToLH(XMVectorSet(5.0f * cameraEye, -3.0f * cameraEye, 2.0f * cameraEye, 1),
+						XMVectorSet(std::sin(yaw) * std::cos(pitch), std::sin(pitch), std::cos(yaw) * std::cos(pitch), 0), XMVectorSet(0, 1, 0, 0));
+					views[eye] = Store(XMMatrixTranspose(cameraView));
+					viewProjections[eye] = Store(XMMatrixTranspose(XMMatrixMultiply(cameraView, Load(native))));
+					for (unsigned point = 0; point < 4; ++point) {
+						const float distance = shadowDepth ? std::array{ 0.0f, 10.0f, 10000.0f, 200000.0f }[point] :
+						                                     std::array{ 1.0f, 10.0f, 1000.0f, 10000.0f }[point];
+						if (shadowDepth) {
+							samples[eye * 4 + point] = { 0.3f * distance, 0.2f, distance, float(cameraEye) };
+							expected[eye * 4 + point] = XMVectorGetZ(XMVector3TransformCoord(XMLoadFloat4(&samples[eye * 4 + point]), cameraView));
+							continue;
+						}
+						const auto clip = XMVector4Transform(XMVectorSet(offset, 0.2f, distance, 1), standard);
+						const float standardDepth = XMVectorGetZ(clip) / XMVectorGetW(clip);
+						const float x = 0.25f + 0.1f * point, y = 0.35f + 0.05f * eye;
+						samples[eye * 4 + point] = { x, y, reversed ? 1.0f - standardDepth : standardDepth, float(cameraEye) };
+						const auto adjusted = XMVectorSet(2 * x - 1, 2 * y - 1, standardDepth * 1.01f - 0.01f, 1);
+						const auto view = XMVector4Transform(adjusted, XMMatrixInverse(nullptr, standard));
+						expected[eye * 4 + point] = XMVectorGetX(XMVector3Length(XMVectorScale(view, 1.0f / XMVectorGetW(view))));
+					}
 				}
+				if (reversed)
+					setCameraMatrix("FrameBuffer::CameraProj", projections);
+				if (shadowDepth) {
+					setCameraMatrix("FrameBuffer::CameraView", views);
+					setCameraMatrix("FrameBuffer::CameraViewProj", viewProjections);
+				} else
+					setCameraMatrix("FrameBuffer::CameraProjInverse", inverses);
+				inputs.SetVariable("Samples", samples);
+				frame.Bind(context.get());
+				inputs.Bind(context.get());
+				winrt::com_ptr<ID3D11ComputeShader> shader;
+				Check(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, shader.put()));
+				Util::SetResourceName(shader.get(), "ReverseZDepthTest::WaterProjection");
+				D3D11_BUFFER_DESC desc{};
+				desc.ByteWidth = sizeof(expected);
+				desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+				winrt::com_ptr<ID3D11Buffer> output, staging;
+				Check(device->CreateBuffer(&desc, nullptr, output.put()));
+				Util::SetResourceName(output.get(), "ReverseZDepthTest::WaterOutput");
+				D3D11_UNORDERED_ACCESS_VIEW_DESC view{};
+				view.Format = DXGI_FORMAT_R32_FLOAT;
+				view.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+				view.Buffer.NumElements = static_cast<UINT>(expected.size());
+				winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+				Check(device->CreateUnorderedAccessView(output.get(), &view, uav.put()));
+				Util::SetResourceName(uav.get(), "ReverseZDepthTest::WaterOutput UAV");
+				desc.BindFlags = 0;
+				desc.Usage = D3D11_USAGE_STAGING;
+				desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+				Check(device->CreateBuffer(&desc, nullptr, staging.put()));
+				Util::SetResourceName(staging.get(), "ReverseZDepthTest::WaterReadback");
+				auto* rawView = uav.get();
+				context->CSSetUnorderedAccessViews(0, 1, &rawView, nullptr);
+				context->CSSetShader(shader.get(), nullptr, 0);
+				context->Dispatch(1, 1, 1);
+				context->ClearState();
+				context->CopyResource(staging.get(), output.get());
+				D3D11_MAPPED_SUBRESOURCE mapped{};
+				Check(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped));
+				std::array<float, 8> actual;
+				std::memcpy(actual.data(), mapped.pData, sizeof(actual));
+				context->Unmap(staging.get(), 0);
+				for (size_t i = 0; i < actual.size(); ++i)
+					Require(std::isfinite(actual[i]) && std::abs(actual[i] - expected[i]) <= std::max(1e-4f, std::abs(expected[i]) * (shadowDepth ? 1e-5f : 0.005f)),
+						shadowDepth ? "Shadow cascade distance does not match the receiver's view-space depth" :
+									  "Water adjusted depth is incompatible with its eye inverse");
 			}
-			if (reversed)
-				frame.SetVariable("FrameBuffer::CameraProj", projections);
-			frame.SetVariable("FrameBuffer::CameraProjInverse", inverses);
-			inputs.SetVariable("Samples", samples);
-			frame.Bind(context.get());
-			inputs.Bind(context.get());
-			winrt::com_ptr<ID3D11ComputeShader> shader;
-			Check(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, shader.put()));
-			Util::SetResourceName(shader.get(), "ReverseZDepthTest::WaterProjection");
-			D3D11_BUFFER_DESC desc{};
-			desc.ByteWidth = sizeof(expected);
-			desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-			winrt::com_ptr<ID3D11Buffer> output, staging;
-			Check(device->CreateBuffer(&desc, nullptr, output.put()));
-			Util::SetResourceName(output.get(), "ReverseZDepthTest::WaterOutput");
-			D3D11_UNORDERED_ACCESS_VIEW_DESC view{};
-			view.Format = DXGI_FORMAT_R32_FLOAT;
-			view.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-			view.Buffer.NumElements = static_cast<UINT>(expected.size());
-			winrt::com_ptr<ID3D11UnorderedAccessView> uav;
-			Check(device->CreateUnorderedAccessView(output.get(), &view, uav.put()));
-			Util::SetResourceName(uav.get(), "ReverseZDepthTest::WaterOutput UAV");
-			desc.BindFlags = 0;
-			desc.Usage = D3D11_USAGE_STAGING;
-			desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-			Check(device->CreateBuffer(&desc, nullptr, staging.put()));
-			Util::SetResourceName(staging.get(), "ReverseZDepthTest::WaterReadback");
-			auto* rawView = uav.get();
-			context->CSSetUnorderedAccessViews(0, 1, &rawView, nullptr);
-			context->CSSetShader(shader.get(), nullptr, 0);
-			context->Dispatch(1, 1, 1);
-			context->ClearState();
-			context->CopyResource(staging.get(), output.get());
-			D3D11_MAPPED_SUBRESOURCE mapped{};
-			Check(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped));
-			std::array<float, 8> actual;
-			std::memcpy(actual.data(), mapped.pData, sizeof(actual));
-			context->Unmap(staging.get(), 0);
-			for (size_t i = 0; i < actual.size(); ++i)
-				Require(std::isfinite(actual[i]) && std::abs(actual[i] - expected[i]) <= std::max(1e-4f, expected[i] * 0.005f),
-					"Water adjusted depth is incompatible with its eye inverse");
-		}
 	}
 	void TestWaterShaders()
 	{
@@ -904,6 +940,7 @@ int main()
 	try {
 		TestMatrices();
 		TestWaterProjection();
+		TestWaterProjection(true);
 		TestWaterDepthValidity();
 		TestWaterShaders();
 		TestShaderRegistry();

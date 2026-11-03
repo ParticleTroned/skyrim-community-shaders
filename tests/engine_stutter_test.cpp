@@ -58,6 +58,14 @@ int main()
 		Check(recorder.StillCurrent(fresh.phase, false), "old failed exit invalidated new capture");
 		recorder.End(fresh, 349);
 		Check(drain(349).count == 0, "sub-threshold scope captured");
+		auto observed = recorder.Begin(1, "scratch reuse", 400);
+		Check(drain(460).overdue[observed.slot].id == observed.phase.id, "overdue fixture scope missing");
+		recorder.End(observed, 470);
+		batch = drain(470);
+		Check(batch.count == 1 && batch.events[0].phase.id == observed.phase.id && !Active(batch, 1).id &&
+				  !batch.overdue[observed.slot].id && !batch.activeAssets[observed.slot].id,
+			"reused snapshot retained closed scope state or lost its completed event");
+		Check(drain(480).count == 0, "empty drain replayed its preceding completed event");
 		recorder.Start(50, 1);
 		auto parent = recorder.Begin(1, "parent", 100);
 		auto child = recorder.Begin(1, "lost exit", 110);

@@ -1,9 +1,11 @@
 #include "Diagnostics/EngineStutterCapture.h"
 #include <Windows.h>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <winrt/base.h>
@@ -14,6 +16,45 @@ void Check(bool ok, const char* message)
 	if (!ok)
 		throw std::runtime_error(message);
 }
+// Exact capture assertions need accepted writes; recorder tests cover contended hook losses.
+struct CaptureHookGate
+{
+	std::mutex mutex;
+	std::condition_variable condition;
+	bool requested = false, parked = false;
+	void Poll()
+	{
+		std::unique_lock lock(mutex);
+		if (requested) {
+			parked = true;
+			condition.notify_all();
+			condition.wait(lock, [&] { return !requested; });
+			parked = false;
+		}
+	}
+	struct WriteScope
+	{
+		CaptureHookGate& gate;
+		explicit WriteScope(CaptureHookGate& value) : gate(value)
+		{
+			std::unique_lock lock(gate.mutex);
+			gate.requested = true;
+			if (!gate.condition.wait_for(lock, std::chrono::seconds(4), [&] { return gate.parked; })) {
+				gate.requested = false;
+				gate.condition.notify_all();
+				throw std::runtime_error("fixture worker did not reach its hook-write barrier");
+			}
+		}
+		~WriteScope()
+		{
+			std::lock_guard lock(gate.mutex);
+			gate.requested = false;
+			gate.condition.notify_all();
+		}
+		WriteScope(const WriteScope&) = delete;
+		WriteScope& operator=(const WriteScope&) = delete;
+	};
+};
 template <class Predicate>
 json Await(Capture& capture, Predicate predicate)
 {
@@ -58,6 +99,7 @@ int main()
 		auto directory = std::filesystem::current_path() / ("stutter-fixture-" + std::to_string(GetCurrentProcessId()));
 		std::filesystem::create_directories(directory);
 		std::atomic_bool fixtureShutdown{ false }, fixtureFailure{ false };
+		CaptureHookGate hookGate;
 		Capture capture({ [&] { return std::optional(directory); }, [] { return json{ { "buildId", "fixture" } }; },
 			[](const json& args) -> std::optional<json> {
 				if (args.contains("expectedBuildId") && args.at("expectedBuildId") != "fixture")
@@ -65,6 +107,7 @@ int main()
 				return std::nullopt;
 			},
 			[&] {
+				hookGate.Poll();
 				if (fixtureFailure.load())
 					throw std::runtime_error("fixture watchdog failure");
 				return fixtureShutdown.load();
@@ -97,9 +140,14 @@ int main()
 		auto start = capture.Request(R"({"action":"start","thresholdMs":10,"durationSeconds":2,"expectedBuildId":"fixture"})");
 		Check(start.at("active") == true, "capture failed to start");
 		Check(capture.Dispatch({ { "action", "start" } }).contains("error"), "active capture replaced");
-		auto phase = capture.recorder.Begin(GetCurrentThreadId(), "Fixture::Outer", ReadCounter());
-		auto shortChild = capture.recorder.Begin(GetCurrentThreadId(), "Fixture::ShortChild", ReadCounter());
-		capture.recorder.End(shortChild, ReadCounter());
+		Token phase;
+		{
+			CaptureHookGate::WriteScope write(hookGate);
+			phase = capture.recorder.Begin(GetCurrentThreadId(), "Fixture::Outer", ReadCounter());
+			auto shortChild = capture.recorder.Begin(GetCurrentThreadId(), "Fixture::ShortChild", ReadCounter());
+			Check(phase.phase.id && shortChild.phase.id, "fixture scopes were not accepted");
+			capture.recorder.End(shortChild, ReadCounter());
+		}
 		auto live = Await(capture, [](const json& status) {
 			for (const auto& event : status.at("events"))
 				if (event.at("kind") == "active_stall_sample")
@@ -114,7 +162,10 @@ int main()
 				Check(event.at("waitChain").contains("status") && event.at("threadCpu").contains("status"), "live evidence missing");
 			}
 		Check(sample, "watchdog waited for stalled thread to resume");
-		capture.recorder.End(phase, ReadCounter());
+		{
+			CaptureHookGate::WriteScope write(hookGate);
+			capture.recorder.End(phase, ReadCounter());
+		}
 		Await(capture, [](const json& status) {
 			for (const auto& event : status.at("events"))
 				if (event.at("kind") == "slow_scope")
@@ -140,7 +191,11 @@ int main()
 		Check(capture.Dispatch({ { "action", "start" }, { "thresholdMs", 10 }, { "durationSeconds", 2 } }).at("active") == true, "mutex capture failed");
 		std::atomic<DWORD> blockedThread{ 0 };
 		std::jthread blocked([&] {
-			auto token = capture.recorder.Begin(GetCurrentThreadId(), "Fixture::MutexWait", ReadCounter());
+			Token token;
+			{
+				CaptureHookGate::WriteScope write(hookGate);
+				token = capture.recorder.Begin(GetCurrentThreadId(), "Fixture::MutexWait", ReadCounter());
+			}
 			blockedThread.store(GetCurrentThreadId(), std::memory_order_release);
 			if (WaitForSingleObject(mutex.get(), 2000) == WAIT_OBJECT_0)
 				ReleaseMutex(mutex.get());
@@ -187,12 +242,15 @@ int main()
 		Check(capture.Dispatch({ { "action", "start" }, { "includeAssets", true }, { "includeCodeEvaluation", true }, { "assetThresholdMs", 0 }, { "passThresholdMs", 1 } }).at("active") == true, "asset capture did not start");
 		std::string assetPath = "textures/fixture.dds";
 		AssetRecord asset{ .kind = AssetKind::Texture, .path = assetPath };
-		auto assetToken = capture.recorder.Begin(GetCurrentThreadId(), "Texture::Create", ReadCounter(), Boundary::None, asset);
-		assetToken.phase.asset.resultKnown = assetToken.phase.asset.resultCodeKnown = true;
-		assetToken.phase.asset.success = false;
-		assetToken.phase.asset.resultCode = 0;
-		assetToken.phase.asset.bytesKnown = assetToken.phase.asset.cacheKnown = true;
-		capture.recorder.End(assetToken, ReadCounter());
+		{
+			CaptureHookGate::WriteScope write(hookGate);
+			auto assetToken = capture.recorder.Begin(GetCurrentThreadId(), "Texture::Create", ReadCounter(), Boundary::None, asset);
+			assetToken.phase.asset.resultKnown = assetToken.phase.asset.resultCodeKnown = true;
+			assetToken.phase.asset.success = false;
+			assetToken.phase.asset.resultCode = 0;
+			assetToken.phase.asset.bytesKnown = assetToken.phase.asset.cacheKnown = true;
+			capture.recorder.End(assetToken, ReadCounter());
+		}
 		auto assets = Await(capture, [](const json& status) { return status.at("assetEventCount") == 1; });
 		Check(assets.at("includeCodeEvaluation") == true && capture.recorder.CodeEvaluationEnabled() && assets.at("maximumRecords") == 16384 && assets.at("includeAssets") == true && assets.at("assetThresholdMs") == 0 && assets.at("passThresholdMs") == 1, "asset settings not reported");
 		const auto& assetEvent = assets.at("events").back();
@@ -201,8 +259,11 @@ int main()
 		Check(assetEvent.at("asset").at("queueWaitMs").is_null() && assetEvent.at("asset").at("gpuCompletionMs").is_null() && assetEvent.at("asset").at("width").is_null(), "unobserved stage was fabricated");
 		std::string invalidPath(1, static_cast<char>(0x80));
 		AssetRecord invalidName{ .kind = AssetKind::Texture, .path = invalidPath };
-		auto invalidToken = capture.recorder.Begin(GetCurrentThreadId(), "Texture::InvalidUtf8", ReadCounter(), Boundary::None, invalidName);
-		capture.recorder.End(invalidToken, ReadCounter());
+		{
+			CaptureHookGate::WriteScope write(hookGate);
+			auto invalidToken = capture.recorder.Begin(GetCurrentThreadId(), "Texture::InvalidUtf8", ReadCounter(), Boundary::None, invalidName);
+			capture.recorder.End(invalidToken, ReadCounter());
+		}
 		Await(capture, [](const json& status) { return status.at("assetEventCount") == 2; });
 		capture.Respond(R"({"action":"events"})", &sink, [](void* context, const char* response) {
 			static_cast<Sink*>(context)->response = response;

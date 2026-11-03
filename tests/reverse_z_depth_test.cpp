@@ -802,20 +802,8 @@ RWBuffer<float4> Output : register(u0);
 		}
 		std::cout << "SSR: 224 ray checks across depth orders, both eyes and water modes passed\n";
 	}
-	void TestInteriorDepth()
+	void TestDepthHelper(const std::string& source, uint32_t standardExpected, uint32_t reversedExpected)
 	{
-		std::ifstream input("package/Shaders/Common/DepthOrder.hlsli");
-		Require(input.good(), "Production depth-order shader unavailable");
-		std::string source{ std::istreambuf_iterator<char>(input), {} };
-		source += R"(
-RWBuffer<uint> Output : register(u0);
-[numthreads(1, 1, 1)] void main() {
-    Output[0] = (uint)DepthOrder::IsInteriorDepth(0, 1e-5) |
-        ((uint)DepthOrder::IsInteriorDepth(1, 1e-5) << 1) |
-        ((uint)DepthOrder::IsInteriorDepth(0.5, 1e-5) << 2) |
-        ((uint)DepthOrder::IsInteriorDepth(1e-10, 1e-5) << 3) |
-        ((uint)DepthOrder::IsInteriorDepth(asfloat(0x7fc00000), 1e-5) << 4);
-})";
 		winrt::com_ptr<ID3D11Device> device;
 		winrt::com_ptr<ID3D11DeviceContext> context;
 		Require(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
@@ -824,7 +812,11 @@ RWBuffer<uint> Output : register(u0);
 		for (bool reversed : { false, true }) {
 			D3D_SHADER_MACRO defines[]{ { reversed ? "REVERSE_Z" : "STANDARD_Z", "1" }, { nullptr, nullptr } };
 			winrt::com_ptr<ID3DBlob> code, errors;
-			Require(SUCCEEDED(D3DCompile(source.data(), source.size(), nullptr, defines, nullptr, "main", "cs_5_0", 0, 0, code.put(), errors.put())), "Depth-order shader failed to compile");
+			const auto compiled = D3DCompile(source.data(), source.size(), nullptr, defines, nullptr, "main", "cs_5_0",
+				D3DCOMPILE_IEEE_STRICTNESS, 0, code.put(), errors.put());
+			if (errors)
+				std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+			Require(SUCCEEDED(compiled), "Depth helper shader failed to compile");
 			winrt::com_ptr<ID3D11ComputeShader> shader;
 			Require(SUCCEEDED(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, shader.put())), "Depth-order shader creation failed");
 			Util::SetResourceName(shader.get(), "ReverseZDepthTest::InteriorDepth");
@@ -856,8 +848,54 @@ RWBuffer<uint> Output : register(u0);
 			Require(SUCCEEDED(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped)), "Depth-order readback failed");
 			const auto result = *static_cast<const uint32_t*>(mapped.pData);
 			context->Unmap(staging.get(), 0);
-			Require(result == (reversed ? 12u : 4u), "Depth validation lost reversed far precision or accepted an endpoint");
+			if (result != (reversed ? reversedExpected : standardExpected))
+				throw std::runtime_error("Depth helper returned " + std::to_string(result) + (reversed ? " for reverse depth" : " for standard depth"));
 		}
+	}
+	void TestInteriorDepth()
+	{
+		std::ifstream input("package/Shaders/Common/DepthOrder.hlsli");
+		Require(input.good(), "Production depth-order shader unavailable");
+		std::string source{ std::istreambuf_iterator<char>(input), {} };
+		source += R"(
+RWBuffer<uint> Output : register(u0);
+[numthreads(1, 1, 1)] void main() {
+    Output[0] = (uint)DepthOrder::IsInteriorDepth(0, 1e-5) |
+        ((uint)DepthOrder::IsInteriorDepth(1, 1e-5) << 1) |
+        ((uint)DepthOrder::IsInteriorDepth(0.5, 1e-5) << 2) |
+        ((uint)DepthOrder::IsInteriorDepth(1e-10, 1e-5) << 3) |
+        ((uint)DepthOrder::IsInteriorDepth(asfloat(0x7fc00000), 1e-5) << 4);
+})";
+		TestDepthHelper(source, 4, 12);
+	}
+	void TestUnderwaterGeometryDepth()
+	{
+		std::ifstream orderFile("package/Shaders/Common/DepthOrder.hlsli");
+		std::string source{ std::istreambuf_iterator<char>(orderFile), {} };
+		std::ifstream reverseFile("package/Shaders/Common/ReverseZ.hlsli");
+		const std::string reverse{ std::istreambuf_iterator<char>(reverseFile), {} };
+		std::ifstream maskFile("features/Upscaling/Shaders/Upscaling/UnderwaterMaskUpscalePS.hlsl");
+		const std::string mask{ std::istreambuf_iterator<char>(maskFile), {} };
+		source += "\nnamespace FrameBuffer {\n" + WaterFunction(reverse, "float FarPlaneDepth(") + "\n}\n" +
+		          WaterFunction(mask, "bool IsUnderwaterGeometryDepth(") + R"(
+RWBuffer<uint> Output : register(u0);
+[numthreads(1, 1, 1)] void main() {
+    uint valid = (uint)IsUnderwaterGeometryDepth(0) |
+        ((uint)IsUnderwaterGeometryDepth(1) << 1) |
+        ((uint)IsUnderwaterGeometryDepth(0.5) << 2) |
+        ((uint)IsUnderwaterGeometryDepth(1e-10) << 3) |
+        ((uint)IsUnderwaterGeometryDepth(1e-6) << 4) |
+        ((uint)IsUnderwaterGeometryDepth(2e-6) << 5);
+#ifdef REVERSE_Z
+    valid |= (uint)(!IsUnderwaterGeometryDepth(asfloat(0x7fc00000)) &&
+        !IsUnderwaterGeometryDepth(asfloat(0x7f800000)) &&
+        !IsUnderwaterGeometryDepth(-0.01) && !IsUnderwaterGeometryDepth(1.01)) << 6;
+#else
+    valid |= 64;
+#endif
+    Output[0] = valid;
+})";
+		TestDepthHelper(source, 125, 126);
 	}
 }
 
@@ -873,6 +911,7 @@ int main()
 		TestSceneVertexShaders();
 		TestInteriorDepth();
 		TestReflectionHits();
+		TestUnderwaterGeometryDepth();
 		TestUnderwaterMaskInputs();
 		TestUpscaleDepthKernel();
 	} catch (const std::exception& error) {

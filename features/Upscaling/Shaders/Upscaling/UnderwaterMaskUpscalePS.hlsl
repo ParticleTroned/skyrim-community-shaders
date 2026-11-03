@@ -30,7 +30,15 @@ cbuffer JitterCB : register(b0)
 };
 
 #	if defined(VR)
-static const float kSkyDepthThreshold = 1e-6;
+bool IsUnderwaterGeometryDepth(float depth)
+{
+#		ifdef REVERSE_Z
+	return DepthOrder::IsSceneDepth(depth);
+#		else
+	static const float kSkyDepthThreshold = 1e-6;
+	return abs(depth - FrameBuffer::FarPlaneDepth()) > kSkyDepthThreshold;
+#		endif
+}
 
 #		if defined(RAW_SCENE_DEPTH)
 float SampleRawDepthClamped(int2 coord, int2 maxCoord)
@@ -179,7 +187,7 @@ PS_OUTPUT main(PS_INPUT input)
 		float depth = SceneDepth.Load(int3(depthCoord, 0)).x;
 #		endif
 
-		if (abs(depth - FrameBuffer::FarPlaneDepth()) > kSkyDepthThreshold) {
+		if (IsUnderwaterGeometryDepth(depth)) {
 			// Geometry pixel: reconstruct world position from depth.
 			// CameraViewProjInverse[eyeIndex] maps clip-space back to the per-eye
 			// camera-relative world space.  waterHeight has been adjusted to the same

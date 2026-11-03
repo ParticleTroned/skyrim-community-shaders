@@ -63,6 +63,45 @@ namespace GrassPolicy
 		return CullCapacity{ std::max(current.instances, std::bit_ceil(static_cast<uint32_t>(instances))),
 			std::max(current.slots, static_cast<uint32_t>(slots)) };
 	}
+	inline constexpr uint32_t kCullResultTrimFrames = 300;
+	inline constexpr uint64_t kMinCullResultTrimBytes = 64 * 1024;
+	/** @brief Reclaim sustained excess output capacity, retaining headroom for camera turns. */
+	struct CullCapacityRetention
+	{
+		uint64_t lastFrame = UINT64_MAX;
+		uint32_t lowDemandFrames = 0;
+		CullCapacity peak{};
+
+		/** @brief Suggest trimming after consecutive low-demand frames; zero capacity releases idle output. */
+		std::optional<CullCapacity> Observe(CullCapacity current, CullCapacity needed, uint32_t frame)
+		{
+			if (lastFrame == frame)
+				return std::nullopt;
+			const bool consecutive = lastFrame <= UINT32_MAX && frame - uint32_t(lastFrame) == 1;
+			lastFrame = frame;
+			const uint64_t available = uint64_t(current.instances) * current.slots;
+			const bool low = available * kSurvivorBytes >= kMinCullResultTrimBytes &&
+			                 uint64_t(needed.instances) * needed.slots <= available / 4;
+			if (!consecutive || !low) {
+				lowDemandFrames = 0;
+				peak = {};
+			}
+			if (!low)
+				return std::nullopt;
+			peak.instances = std::max(peak.instances, needed.instances);
+			peak.slots = std::max(peak.slots, needed.slots);
+			lowDemandFrames = std::min(lowDemandFrames + 1, kCullResultTrimFrames);
+			if (lowDemandFrames < kCullResultTrimFrames)
+				return std::nullopt;
+			const auto target = peak.instances ? CullCapacity{ std::min(current.instances, std::max(256u, peak.instances * 2)), peak.slots } : CullCapacity{};
+			if (uint64_t(target.instances) * target.slots > available / 2) {
+				lowDemandFrames = 0;
+				peak = {};
+				return std::nullopt;
+			}
+			return target;
+		}
+	};
 	/** @brief Replacement allocations coexist with retained buffers until the new bundle is complete. */
 	constexpr bool ReplacementFitsBudget(uint64_t resident, uint64_t replacement, uint64_t budget)
 	{

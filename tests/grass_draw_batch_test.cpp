@@ -131,6 +131,29 @@ int main()
 		require(!GrassPolicy::PlanCullCapacity({}, UINT64_MAX, 1));
 		require(!GrassPolicy::PlanCullCapacity({}, 1, 7));
 		require(!GrassPolicy::PlanCullCapacity({ UINT32_MAX, 1 }, 1, 1));
+		{
+			GrassPolicy::CullCapacityRetention retention;
+			const GrassPolicy::CullCapacity current{ 65536, 6 }, small{ 1024, 2 };
+			uint32_t frame = UINT32_MAX - GrassPolicy::kCullResultTrimFrames / 2;
+			for (uint32_t i = 1; i < GrassPolicy::kCullResultTrimFrames; ++i, ++frame)
+				require(!retention.Observe(current, small, frame));
+			require(!retention.Observe(current, current, frame++));
+			for (uint32_t i = 1; i < GrassPolicy::kCullResultTrimFrames; ++i, ++frame)
+				require(!retention.Observe(current, small, frame));
+			frame += 10;
+			for (uint32_t i = 1; i < GrassPolicy::kCullResultTrimFrames; ++i, ++frame)
+				require(!retention.Observe(current, small, frame));
+			require(retention.Observe(current, small, frame) == GrassPolicy::CullCapacity{ 2048, 2 });
+		}
+		{
+			GrassPolicy::CullCapacityRetention retention;
+			const GrassPolicy::CullCapacity current{ 4096, 6 };
+			for (uint32_t frame = 0; frame < GrassPolicy::kCullResultTrimFrames; ++frame)
+				require(!retention.Observe(current, frame % 2 ? GrassPolicy::CullCapacity{ 4096, 1 } : GrassPolicy::CullCapacity{ 1024, 6 }, frame));
+			for (uint32_t frame = GrassPolicy::kCullResultTrimFrames; frame < 2 * GrassPolicy::kCullResultTrimFrames - 1; ++frame)
+				require(!retention.Observe(current, { 1024, 2 }, frame));
+			require(retention.Observe(current, { 1024, 2 }, 2 * GrassPolicy::kCullResultTrimFrames - 1) == GrassPolicy::CullCapacity{ 2048, 2 });
+		}
 		require(GrassPolicy::ReplacementFitsBudget(40, 60, 100));
 		require(!GrassPolicy::ReplacementFitsBudget(40, 61, 100));
 		require(!GrassPolicy::ReplacementFitsBudget(101, 0, 100));

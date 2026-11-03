@@ -255,6 +255,7 @@ namespace
 	{
 		std::unique_ptr<Buffer> output, extras, arguments;
 		uint32_t capacity = 0, slots = 0;
+		GrassPolicy::CullCapacityRetention retention;
 	};
 	struct CullPlan
 	{
@@ -642,6 +643,7 @@ struct GrassBucketRenderer::Impl
 	std::array<winrt::com_ptr<ID3D11VertexShader>, 2> drawVertexShaders;
 	std::array<winrt::com_ptr<ID3D11PixelShader>, 8> drawPixelShaders;
 	uint64_t resultBytes = 0;
+	uint64_t lastResultTrimFrame = UINT64_MAX;
 	GrassLOD::Cache<LODKey, Mesh> lodMeshes;
 	uint64_t lodRevision = UINT64_MAX;
 	uint32_t lodMode = 0;
@@ -741,7 +743,7 @@ struct GrassBucketRenderer::Impl
 	void PrepareFrame();
 	void RefreshFades();
 	void ReuseRecordBuffers(std::vector<Bucket>& previousBuckets);
-	bool EnsureResult(Bucket& bucket, uint32_t slots);
+	bool EnsureResult(Bucket& bucket, uint32_t candidates, uint32_t slots);
 	bool EnsureRecords(Bucket& bucket);
 	bool MakeRecordRoom(uint64_t replacementBytes);
 	/** @brief Retire synchronous draw context without changing retained frame coverage. */
@@ -1976,26 +1978,51 @@ bool GrassBucketRenderer::Impl::EnsureRecords(Bucket& bucket)
 	return true;
 }
 
-bool GrassBucketRenderer::Impl::EnsureResult(Bucket& bucket, uint32_t slots)
+bool GrassBucketRenderer::Impl::EnsureResult(Bucket& bucket, uint32_t candidates, uint32_t slots)
 {
 	auto& result = bucket.result;
-	if (result.capacity >= bucket.instances && result.slots >= slots && result.arguments)
-		return true;
-	const auto planned = GrassPolicy::PlanCullCapacity({ result.capacity, result.slots }, bucket.instances, slots);
-	if (!planned)
+	const auto planned = GrassPolicy::PlanCullCapacity({ result.capacity, result.slots }, std::max(1u, candidates), slots);
+	if (candidates > bucket.instances || !planned)
 		return false;
-	const uint32_t capacity = planned->instances;
-	slots = planned->slots;
+	const bool reusable = !candidates || (result.capacity >= candidates && result.slots >= slots &&
+											 result.output && result.extras && result.arguments);
+	auto target = *planned;
+	if (reusable) {
+		const auto needed = candidates ? *GrassPolicy::PlanCullCapacity({}, candidates, slots) : GrassPolicy::CullCapacity{};
+		const auto trim = result.retention.Observe({ result.capacity, result.slots }, needed, frame);
+		if (!trim || lastResultTrimFrame == frame)
+			return true;
+		target = *trim;
+	}
+	const uint32_t capacity = target.instances;
+	slots = target.slots;
 	const uint64_t previous = uint64_t(result.capacity) * result.slots * GrassPolicy::kSurvivorBytes + (result.arguments ? 192 : 0);
-	const uint64_t next = uint64_t(capacity) * slots * GrassPolicy::kSurvivorBytes + 192;
-	if (previous > resultBytes || !GrassPolicy::ReplacementFitsBudget(resultBytes, next, GrassPolicy::kMaxCullResultBytes))
+	const uint64_t next = capacity ? uint64_t(capacity) * slots * GrassPolicy::kSurvivorBytes + 192 : 0;
+	if (previous > resultBytes)
 		return false;
+	if (!GrassPolicy::ReplacementFitsBudget(resultBytes, next, GrassPolicy::kMaxCullResultBytes)) {
+		result.retention = {};
+		return reusable;
+	}
+	if (reusable) {
+		lastResultTrimFrame = frame;
+		result.retention = {};
+	}
 	CullResult replacement;
-	replacement.output = RawBuffer(capacity * slots * GrassPolicy::kSurvivorIndexBytes, D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_UNORDERED_ACCESS, 0, "GrassOptimizations::Compacted");
-	replacement.extras = Structured<std::array<float, 6>>(capacity * slots, true, false, "GrassOptimizations::Extras");
-	replacement.arguments = RawBuffer(192, D3D11_BIND_UNORDERED_ACCESS, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, "GrassOptimizations::IndirectArgs");
-	replacement.capacity = capacity;
-	replacement.slots = slots;
+	try {
+		if (capacity) {
+			replacement.output = RawBuffer(capacity * slots * GrassPolicy::kSurvivorIndexBytes, D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_UNORDERED_ACCESS, 0, "GrassOptimizations::Compacted");
+			replacement.extras = Structured<std::array<float, 6>>(capacity * slots, true, false, "GrassOptimizations::Extras");
+			replacement.arguments = RawBuffer(192, D3D11_BIND_UNORDERED_ACCESS, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, "GrassOptimizations::IndirectArgs");
+			replacement.capacity = capacity;
+			replacement.slots = slots;
+		}
+	} catch (const std::exception& error) {
+		if (!reusable)
+			throw;
+		logger::warn("Grass output trimming failed; retained usable buffers: {}", error.what());
+		return true;
+	}
 	result = std::move(replacement);
 	resultBytes = resultBytes - previous + next;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -2508,16 +2535,17 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 	uint32_t prefix = 0;
 	CullSlices(bucket, radius, eyes, prefix);
 	bucket.plan.geometry = geometryCPU;
+	const uint32_t tiers = meshes[2].vertices ? 3u : meshes[1].vertices ? 2u :
+	                                                                      1u;
+	// Each candidate can occupy at most one slot in each eye/LOD bin.
+	if (!EnsureResult(bucket, prefix, eyes * tiers))
+		return GRASS_DRAW_REJECT(Capacity);
 	if (cullingSlices.empty()) {
 		bucket.plan.empty = true;
 		bucket.plan.prepared = true;
 		return true;
 	}
 
-	const uint32_t tiers = meshes[2].vertices ? 3u : meshes[1].vertices ? 2u :
-	                                                                      1u;
-	if (!EnsureResult(bucket, eyes * tiers))
-		return GRASS_DRAW_REJECT(Capacity);
 	if (!EnsureRecords(bucket))
 		return GRASS_DRAW_REJECT(Capacity);
 	Parameters params{ prefix, uint32_t(cullingSlices.size()), bucket.result.capacity, eyes,

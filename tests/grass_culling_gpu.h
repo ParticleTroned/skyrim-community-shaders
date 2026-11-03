@@ -370,6 +370,51 @@ void RunCullingShader(bool vr)
 		Require(values[eye * 8 + 4] == 1 && sourceIndex(compacted[eye * capacity], records.size()) == 2, "Filtered slices lost their raw record offset");
 		Require(std::bit_cast<float>(fades[eye * capacity * 6 + 3]) == .625f, "Filtered slice lost its fade");
 	}
+	{
+		const auto retainedOutput = output, retainedExtras = extras;
+		const UINT slots = eyes * 3;
+		output = makeBuffer((slots + 1) * 4, D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, nullptr, "GrassTest::CandidateOutput");
+		extras = makeBuffer((slots + 1) * 24, D3D11_BIND_UNORDERED_ACCESS, 24, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, nullptr, "GrassTest::CandidateExtras");
+		makeOutputViews();
+		params.SetVariable("Capacity", 1u);
+		params.SetVariable("BandPixels", 0.0f);
+		for (UINT tier = 0; tier < 3; ++tier) {
+			params.SetVariable("MidPixels", tier ? 1e6f : 0.0f);
+			params.SetVariable("FarPixels", tier == 2 ? 1e6f : 0.0f);
+			for (UINT eyeMask = 1; eyeMask < (1u << eyes); ++eyeMask) {
+				for (auto& plane : sharedPlanes) plane = { 0, 0, 0, 1 };
+				for (UINT eye = 0; eye < eyes; ++eye)
+					if (!(eyeMask & (1u << eye)))
+						sharedPlanes[eye * 6] = { 0, 0, 0, -1 };
+				frustum.SetVariable("CullingPlanes", sharedPlanes);
+				frustum.SetVariable("CullingPlanesValid", 1u);
+				frustum.Bind(context.Get());
+				const UINT poison[4]{ 0xdeadbeef, 0xdeadbeef, 0xdeadbeef, 0xdeadbeef };
+				context->ClearUnorderedAccessViewUint(views[0].Get(), poison);
+				context->ClearUnorderedAccessViewUint(views[1].Get(), poison);
+				values = dispatch(true, false, false, true);
+				compacted = read(output.Get());
+				fades = read(extras.Get());
+				for (UINT slot = 0; slot < slots; ++slot) {
+					const bool visible = slot / eyes == tier && (eyeMask & (1u << (slot % eyes)));
+					Require(values[slot * 8 + 4] == UINT(visible), "Candidate-sized output changed eye/LOD counts");
+					if (visible) {
+						Require(sourceIndex(compacted[slot], records.size()) == 2, "Source record index was limited by output capacity");
+						Require(std::bit_cast<float>(fades[slot * 6 + 3]) == .625f, "Candidate-sized output lost source fade");
+					} else {
+						Require(compacted[slot] == 0xdeadbeef && fades[slot * 6 + 3] == 0xdeadbeef, "Candidate output overlapped an inactive eye/LOD bin");
+					}
+				}
+				Require(compacted.back() == 0xdeadbeef && fades.back() == 0xdeadbeef, "Candidate-sized output exceeded its allocation");
+			}
+		}
+		output = retainedOutput;
+		extras = retainedExtras;
+		makeOutputViews();
+		params.SetVariable("Capacity", capacity);
+		frustum.SetVariable("CullingPlanesValid", 0u);
+		frustum.Bind(context.Get());
+	}
 	context->UpdateSubresource(table.Get(), 0, nullptr, slices.data(), 0, 0);
 	params.SetVariable("SliceCount", 2u);
 	params.SetVariable("InstanceCount", 3u);

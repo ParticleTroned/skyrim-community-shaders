@@ -1197,7 +1197,7 @@ void LightLimitFix::DrawSettings()
 			ImGui::EndDisabled();
 
 			if (!jsonPlacedLightsSupported) {
-				MenuUI::DetailNote("Placed-light adjustments require Inverse Square Lighting. Enable it in its header, or clear its checkbox in Advanced > Startup, save settings and restart if disabled at startup.");
+				MenuUI::DetailNote("Placed-light adjustments require Inverse Square Lighting. Enable it in its header, or select its checkbox in Advanced > Startup, save settings and restart if disabled at startup.");
 			}
 
 			ImGui::Spacing();

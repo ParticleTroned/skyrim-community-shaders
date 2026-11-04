@@ -57,6 +57,7 @@ struct ReverseZ
 	bool nativeShadersReady = true;
 	unsigned nativePreparations = 0;
 	bool IsActive() const { return activeThisBoot.load(); }
+	bool IsEnabledAtStartup() const { return settings.EnableReverseZBuffer; }
 	uint64_t GetGeneration() const { return generation.load(); }
 	double GetAdditionalDepthBytesPerPixel() const { return extraDepthBytesPerPixel.load(); }
 	void LatchBootState() {}

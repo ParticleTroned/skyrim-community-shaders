@@ -1,3 +1,4 @@
+#include "SettingsMigrations.h"
 #include "Utils/NormalizedCoordinates.h"
 #include "Utils/SettingsOverlay.h"
 
@@ -67,6 +68,28 @@ namespace
 		Check(defaults["Advanced"]["Shader Defines"] == "DEFAULT" && defaults["Advanced"]["Compiler Threads"] == 2 && defaults["Advanced"]["FutureSetting"] == "retained", "Known-value validation discarded valid siblings or owner data");
 		Check(defaults["Disable at Boot"] == Defaults()["Disable at Boot"], "Malformed dynamic boot flags entered live state");
 		Check(defaults["Replace Original Shaders"]["Lighting"].get<bool>() && !defaults["Replace Original Shaders"]["Water"].get<bool>(), "Malformed shader flag discarded a valid sibling");
+	}
+
+	void CheckReverseZStartupMigration()
+	{
+		for (const bool disabled : { false, true }) {
+			for (const bool enabled : { false, true }) {
+				json settings{ { "Disable at Boot", { { "ReverseZ", disabled }, { "CloudShadows", true } } },
+					{ "Reverse Z", { { "EnableReverseZBuffer", enabled } } } };
+				SettingsMigrations::MigrateReverseZStartup(settings);
+				Check(settings["Reverse Z"]["EnableReverseZBuffer"] == (enabled && !disabled), "Reverse Z migration changed the effective boot choice");
+				Check(!settings["Disable at Boot"].contains("ReverseZ") && settings["Disable at Boot"]["CloudShadows"] == true,
+					"Reverse Z migration altered another startup choice or retained its duplicate gate");
+				const auto once = settings;
+				SettingsMigrations::MigrateReverseZStartup(settings);
+				Check(settings == once, "Reverse Z startup migration is not idempotent");
+			}
+		}
+		for (const auto& invalid : { json(nullptr), json(true), json("invalid"), json::array() }) {
+			json settings{ { "Disable at Boot", { { "ReverseZ", true } } }, { "Reverse Z", invalid } };
+			SettingsMigrations::MigrateReverseZStartup(settings);
+			Check(settings["Reverse Z"]["EnableReverseZBuffer"] == false, "Legacy disabled Reverse Z became active with malformed settings");
+		}
 	}
 
 	void CheckNumericBounds()
@@ -155,6 +178,7 @@ int main()
 {
 	try {
 		CheckCoreOverlay();
+		CheckReverseZStartupMigration();
 		CheckNumericBounds();
 		CheckCropPresets();
 	} catch (const std::exception& error) {

@@ -22,7 +22,7 @@ void TerrainVariation::DrawSettings()
 		return;
 
 	ImGui::TextWrapped(
-		"Terrain Variation is enabled when installed. To disable it, check it in Advanced > Startup, save settings and restart.");
+		"Terrain Variation is enabled when installed. To disable it, clear its checkbox in Advanced > Startup, save settings and restart.");
 
 	ImGui::Spacing();
 

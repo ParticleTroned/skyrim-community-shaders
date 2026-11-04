@@ -1343,7 +1343,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 	if (isDisabled) {
 		ImGui::TextColored(themeSettings.StatusPalette.Disable, "Feature settings are hidden because this feature is disabled until restart.");
 		ImGui::Spacing();
-		ImGui::TextWrapped("Clear its checkbox in Advanced > Startup, save settings and restart the game.");
+		ImGui::TextWrapped("Select its checkbox in Advanced > Startup, save settings and restart the game.");
 		if (feat->GetShortName() == "WetnessEffects" && globals::features::wetterness.loaded) {
 			ImGui::Spacing();
 			ImGui::TextColored(

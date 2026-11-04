@@ -11,6 +11,24 @@
 
 namespace SettingsMigrations
 {
+	/** Preserve a legacy Reverse Z startup disable as its single depth-mode setting. */
+	inline void MigrateReverseZStartup(nlohmann::json& settings)
+	{
+		auto disabled = settings.find("Disable at Boot");
+		if (disabled == settings.end() || !disabled->is_object())
+			return;
+		auto entry = disabled->find("ReverseZ");
+		if (entry == disabled->end() || !entry->is_boolean())
+			return;
+		if (entry->get<bool>()) {
+			auto& reverseZ = settings["Reverse Z"];
+			if (!reverseZ.is_object())
+				reverseZ = nlohmann::json::object();
+			reverseZ["EnableReverseZBuffer"] = false;
+		}
+		disabled->erase("ReverseZ");
+	}
+
 	/** Utility numeric fields must remain finite when converted to renderer floats. */
 	inline bool IsFiniteUtilityNumber(const nlohmann::json& a_value)
 	{

@@ -28,6 +28,10 @@ struct ReverseZ : Feature
 	};
 	Settings settings;
 	void DrawSettings() override;
+	/** Requested depth mode for the next boot, including a legacy startup disable. */
+	bool IsEnabledAtStartup() const;
+	/** Set the shared startup/UI depth choice and clear its legacy load gate. */
+	void SetEnabledAtStartup(bool enabled);
 	void LoadSettings(json&) override;
 	void SaveSettings(json&) override;
 	void RestoreDefaultSettings() override;

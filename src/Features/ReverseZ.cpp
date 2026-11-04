@@ -402,14 +402,24 @@ std::pair<std::string, std::vector<std::string>> ReverseZ::GetFeatureSummary()
 void ReverseZ::LoadSettings(json& value) { settings = value; }
 void ReverseZ::SaveSettings(json& value) { value = settings; }
 void ReverseZ::RestoreDefaultSettings() { settings = {}; }
+bool ReverseZ::IsEnabledAtStartup() const
+{
+	return settings.EnableReverseZBuffer && (!globals::state || !globals::state->IsFeatureDisabled("ReverseZ"));
+}
+void ReverseZ::SetEnabledAtStartup(bool enabled)
+{
+	settings.EnableReverseZBuffer = enabled;
+	if (globals::state)
+		globals::state->GetDisabledFeatures().erase("ReverseZ");
+}
 bool ReverseZ::HasPendingBootChange() const
 {
-	return bootLatched && requestedThisBoot != (loaded && settings.EnableReverseZBuffer);
+	return bootLatched && requestedThisBoot != (loaded && IsEnabledAtStartup());
 }
 json ReverseZ::GetDiagnostics() const
 {
 	std::scoped_lock lock(failureMutex);
-	return { { "requested", settings.EnableReverseZBuffer }, { "bootRequested", requestedThisBoot },
+	return { { "requested", IsEnabledAtStartup() }, { "bootRequested", requestedThisBoot },
 		{ "active", IsActive() }, { "renderingBlocked", g_renderingRejected.load(std::memory_order_acquire) },
 		{ "generation", GetGeneration() }, { "additionalDepthBytesPerPixel", GetAdditionalDepthBytesPerPixel() },
 		{ "convertedTargetMask", convertedTargetMask }, { "failure", failure },
@@ -422,11 +432,14 @@ void ReverseZ::DrawSettings()
 	if (!globals::state)
 		return;
 	ImGui::SeparatorText("Depth precision");
-	ImGui::Checkbox("Enable Reverse Z (restart required)", &settings.EnableReverseZBuffer);
-	Util::AddTooltip("Improves distant depth precision. Depending on resolution and scene conditions, Reverse Z can cost up to 1 ms of GPU frame time. Save settings and restart the game to apply a change.");
+	Util::AddTooltip("Depth precision controls the Reverse Z feature.");
+	bool enabled = IsEnabledAtStartup();
+	if (ImGui::Checkbox("Enable Reverse Z (restart required)", &enabled))
+		SetEnabledAtStartup(enabled);
+	Util::AddTooltip("Reverse Z improves depth precision. Uses extra depth memory; GPU cost depends on resolution and scene conditions (up to 1 ms). Save and restart to apply.");
 	if (HasPendingBootChange())
 		Util::Text::WrappedRestartNeeded("Restart required: save settings and restart the game to apply the Reverse Z change.");
-	ImGui::TextUnformatted(activeThisBoot ? "Active: Reverse Z" : "Active: Standard Z");
+	ImGui::TextUnformatted(IsActive() ? "Active: Reverse Z" : "Active: Standard Z");
 	std::scoped_lock lock(failureMutex);
 	if (!failure.empty())
 		ImGui::TextWrapped("%s (phase: %s, target generation: %llu). %s Restart to retry Reverse Z, or disable it and restart.",
@@ -439,7 +452,7 @@ void ReverseZ::LatchBootState()
 	if (bootLatched)
 		return;
 	bootLatched = true;
-	requestedThisBoot = loaded && settings.EnableReverseZBuffer;
+	requestedThisBoot = loaded && IsEnabledAtStartup();
 	logger::info("ReverseZ boot request: {}", requestedThisBoot ? "enabled" : "disabled");
 }
 

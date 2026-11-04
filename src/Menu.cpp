@@ -23,6 +23,7 @@
 #include "FeatureIssues.h"
 #include "FeatureVersions.h"
 #include "Features/RenderDoc.h"
+#include "Features/ReverseZ.h"
 #include "Features/Upscaling.h"
 #include "Menu/AdvancedSettingsRenderer.h"
 #include "Menu/BackgroundBlur.h"
@@ -1254,7 +1255,7 @@ void Menu::DrawDisableAtBootSettings()
 	auto& disabledFeatures = state->GetDisabledFeatures();
 
 	ImGui::Text(
-		"Checked features are disabled at startup, like removing their feature INI. Save settings and restart to apply changes.");
+		"Checked features are enabled at startup. Clear a checkbox to turn a feature off. Save settings and restart to apply changes.");
 
 	ImGui::Spacing();
 
@@ -1271,11 +1272,14 @@ void Menu::DrawDisableAtBootSettings()
 				continue;
 
 			const std::string featureName = feature->GetShortName();
-			bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
+			const bool isReverseZ = feature == &globals::features::reverseZ;
+			bool enabled = isReverseZ ? globals::features::reverseZ.IsEnabledAtStartup() : !state->IsFeatureDisabled(featureName);
 
-			if (Util::Widgets::Checkbox(featureName.c_str(), &isDisabled)) {
-				// Update the disabledFeatures map based on user interaction
-				disabledFeatures[featureName] = isDisabled;
+			if (Util::Widgets::Checkbox(featureName.c_str(), &enabled)) {
+				if (isReverseZ)
+					globals::features::reverseZ.SetEnabledAtStartup(enabled);
+				else
+					disabledFeatures[featureName] = !enabled;
 			}
 		}
 	}

@@ -27,14 +27,21 @@ class ReverseZInitializationTests(unittest.TestCase):
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 namespace globals {
-struct State { bool IsDeveloperMode() const { return false; } } stateStorage;
+struct State {
+    std::unordered_map<std::string, bool> disabled;
+    bool IsDeveloperMode() const { return false; }
+    bool IsFeatureDisabled(const std::string& name) const { return disabled.contains(name) && disabled.at(name); }
+    auto& GetDisabledFeatures() { return disabled; }
+} stateStorage;
 State* state = &stateStorage;
 }
 namespace ImGui {
 unsigned controls = 0;
 unsigned failures = 0;
 std::optional<bool> edit;
+std::string activeLabel;
 void SeparatorText(const char*) {}
 bool Checkbox(const char*, bool* value) {
     ++controls;
@@ -44,7 +51,7 @@ bool Checkbox(const char*, bool* value) {
     edit.reset();
     return changed;
 }
-void TextUnformatted(const char*) {}
+void TextUnformatted(const char* value) { activeLabel = value; }
 template<class... Args> void TextWrapped(const char*, Args...) { ++failures; }
 }
 namespace Util {
@@ -67,6 +74,8 @@ SETTINGS;
     const char* failurePhase = "none";
     uint64_t failureGeneration = 0;
     bool IsActive() const { return activeThisBoot; }
+    bool IsEnabledAtStartup() const;
+    void SetEnabledAtStartup(bool);
     bool HasPendingBootChange() const;
     void RestoreDefaultSettings();
     void DrawSettings();
@@ -82,11 +91,13 @@ int main() {
         assert(ImGui::controls == controls + 1);
         assert(Util::Text::restarts == restarts + unsigned(expectedRestart));
         assert(feature.HasPendingBootChange() == expectedRestart);
+        assert(ImGui::activeLabel == (feature.IsActive() ? "Active: Reverse Z" : "Active: Standard Z"));
     };
     draw(false);
     assert(Util::tooltip.find("resolution") != std::string::npos);
     assert(Util::tooltip.find("scene conditions") != std::string::npos);
-    assert(Util::tooltip.find("1 ms of GPU frame time") != std::string::npos);
+    assert(Util::tooltip.find("Reverse Z") != std::string::npos);
+    assert(Util::tooltip.find("up to 1 ms") != std::string::npos);
     ImGui::edit = true;
     draw(true);
     assert(!feature.activeThisBoot && !feature.requestedThisBoot);
@@ -121,6 +132,14 @@ int main() {
     draw(true);
     feature.RestoreDefaultSettings();
     draw(false);
+    feature.settings.EnableReverseZBuffer = true;
+    globals::state->disabled["ReverseZ"] = true;
+    draw(false);
+    assert(!feature.IsEnabledAtStartup());
+    ImGui::edit = true;
+    draw(true);
+    assert(feature.IsEnabledAtStartup() && !globals::state->disabled.contains("ReverseZ"));
+    assert(!feature.IsActive());
     globals::state = nullptr;
     const auto controls = ImGui::controls;
     feature.DrawSettings();
@@ -130,8 +149,105 @@ int main() {
         driver = driver.replace("SETTINGS", block(header, "struct Settings"))
         driver = driver.replace("METHODS", "\n".join(block(source, signature) for signature in (
             "bool ReverseZ::HasPendingBootChange() const", "void ReverseZ::RestoreDefaultSettings()",
+            "bool ReverseZ::IsEnabledAtStartup() const", "void ReverseZ::SetEnabledAtStartup(bool",
             "void ReverseZ::DrawSettings()")))
         result = compile_fixture(driver)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_startup_checkboxes_use_enabled_state(self):
+        from grass_draw_lifecycle_test import compile_fixture
+
+        menu = (ROOT / "src/Menu.cpp").read_text(encoding="utf-8")
+        source = (ROOT / "src/Features/ReverseZ.cpp").read_text(encoding="utf-8")
+        driver = r'''
+#include <algorithm>
+#include <cassert>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+struct Feature {
+    std::string name;
+    bool hidden = false;
+    virtual ~Feature() = default;
+    virtual std::string GetShortName() { return name; }
+    bool IsHiddenFromUserView() { return hidden; }
+    static std::vector<Feature*> GetFeatureList();
+};
+namespace globals {
+struct State {
+    std::unordered_map<std::string, bool> disabled;
+    bool IsFeatureDisabled(const std::string& name) const { return disabled.contains(name) && disabled.at(name); }
+    auto& GetDisabledFeatures() { return disabled; }
+} storage;
+State* state = &storage;
+}
+struct ReverseZ : Feature {
+    struct { bool EnableReverseZBuffer = false; } settings;
+    bool active = false;
+    bool IsEnabledAtStartup() const;
+    void SetEnabledAtStartup(bool);
+    std::string GetShortName() override { return "ReverseZ"; }
+};
+namespace globals::features { ReverseZ reverseZ; }
+Feature clouds, grass, hidden;
+std::vector<Feature*> Feature::GetFeatureList() { return { &grass, &globals::features::reverseZ, &::hidden, &clouds }; }
+namespace ImGui {
+void Text(const char*) {}
+void Spacing() {}
+bool CollapsingHeader(const char*) { return true; }
+}
+namespace Util::Widgets {
+std::unordered_map<std::string, bool> shown;
+std::optional<std::pair<std::string, bool>> edit;
+bool Checkbox(const char* name, bool* value) {
+    shown[name] = *value;
+    if (!edit || edit->first != name) return false;
+    *value = edit->second;
+    edit.reset();
+    return true;
+}
+}
+struct Menu { void DrawDisableAtBootSettings(); } menu;
+METHODS
+int main() {
+    clouds.name = "CloudShadows";
+    grass.name = "GrassCollision";
+    hidden.name = "Hidden";
+    hidden.hidden = true;
+    globals::state->disabled[clouds.name] = true;
+    menu.DrawDisableAtBootSettings();
+    assert(!Util::Widgets::shown.at(clouds.name));
+    assert(Util::Widgets::shown.at(grass.name));
+    assert(!Util::Widgets::shown.at("ReverseZ"));
+    assert(!Util::Widgets::shown.contains(hidden.name));
+    Util::Widgets::edit = { clouds.name, true };
+    menu.DrawDisableAtBootSettings();
+    assert(!globals::state->IsFeatureDisabled(clouds.name));
+    Util::Widgets::edit = { grass.name, false };
+    menu.DrawDisableAtBootSettings();
+    assert(globals::state->IsFeatureDisabled(grass.name));
+    auto& reverse = globals::features::reverseZ;
+    Util::Widgets::edit = { "ReverseZ", true };
+    menu.DrawDisableAtBootSettings();
+    assert(reverse.settings.EnableReverseZBuffer && !reverse.active);
+    reverse.SetEnabledAtStartup(false);
+    menu.DrawDisableAtBootSettings();
+    assert(!Util::Widgets::shown.at("ReverseZ"));
+    reverse.settings.EnableReverseZBuffer = true;
+    globals::state->disabled["ReverseZ"] = true;
+    menu.DrawDisableAtBootSettings();
+    assert(!Util::Widgets::shown.at("ReverseZ"));
+    Util::Widgets::edit = { "ReverseZ", true };
+    menu.DrawDisableAtBootSettings();
+    assert(reverse.IsEnabledAtStartup() && !globals::state->disabled.contains("ReverseZ") && !reverse.active);
+}
+'''
+        methods = block(menu, "void Menu::DrawDisableAtBootSettings()")
+        methods += block(source, "bool ReverseZ::IsEnabledAtStartup() const")
+        methods += block(source, "void ReverseZ::SetEnabledAtStartup(bool")
+        result = compile_fixture(driver.replace("METHODS", methods))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_failure_diagnostics_schema(self):
@@ -144,6 +260,8 @@ int main() {
         action = bridge[bridge.index('if (action == "reverse_z")'):bridge.index('if (action == "sun_receiver")')]
         self.assertIn("return feature.GetDiagnostics();", action)
         self.assertNotIn('status["restartRequired"]', action)
+        self.assertIn("feature.SetEnabledAtStartup(", action)
+        self.assertIn("Reverse Z defaults off.", descriptor["description"])
 
     def test_activation_rejects_pre_activation_shader_publication(self):
         from grass_draw_lifecycle_test import compile_fixture
@@ -159,6 +277,7 @@ int main() {
 struct ReverseZ {
     bool loaded = true, bootLatched = false, requestedThisBoot = false;
     struct { bool EnableReverseZBuffer = true; } settings;
+    bool IsEnabledAtStartup() const { return settings.EnableReverseZBuffer; }
     std::atomic_bool activeThisBoot{false};
     bool depthTargetsConverted = false;
     double extraDepthBytesPerPixel = 0;

@@ -1594,6 +1594,7 @@ void State::LoadFromJson(
 {
 	PerformanceTuningRenderer::NotifyConfigurationChanging();
 	std::lock_guard<std::mutex> lock(m_mutex);
+	SettingsMigrations::MigrateReverseZStartup(settings);
 	if (a_loadFeatureSettings)
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
 	const auto shaderCache = globals::shaderCache;

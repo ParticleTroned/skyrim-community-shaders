@@ -219,9 +219,9 @@ namespace FurInteractors
 				const float localRadius = capsule.radius / scale;
 				const float recover = DentRecoverBase + DentRecoverPerDepth * press;
 				Dent* dent = nullptr;
-				for (Dent& existing : mesh.dents) {
-					if (existing.bone.get() == bone && existing.local.GetDistance(local) < std::max(localRadius, 0.5f * existing.radius))
-						dent = &existing;
+				for (Dent& existingDent : mesh.dents) {
+					if (existingDent.bone.get() == bone && existingDent.local.GetDistance(local) < std::max(localRadius, 0.5f * existingDent.radius))
+						dent = &existingDent;
 				}
 				if (!dent && mesh.dents.size() < MaxDentsPerMesh)
 					dent = &mesh.dents.emplace_back();

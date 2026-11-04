@@ -109,6 +109,57 @@ if(_fallback_resolve_position GREATER _fallback_request_unlock_position)
         "Fallback resolution occurs after request ownership is released"
     )
 endif()
+
+# Retry admission must remain inside publication ownership and precede any
+# controller mutation, retaining the request when the health proof expires.
+string(FIND "${_fallback_transaction}" "std::scoped_lock lock(vrRenderScaleTransitionControllerMutex)" _retry_lock_position)
+string(FIND "${_fallback_transaction}" "!CanRetryVRStartupNativeFallbackFromSnapshot(" _retry_check_position)
+string(FIND "${_fallback_transaction}" "previousState = vrRenderScaleTransitionController.state;" _retry_publish_position)
+if(_retry_check_position LESS _retry_lock_position OR
+   _retry_check_position GREATER _retry_publish_position)
+    message(FATAL_ERROR "Retry health is not revalidated under publication ownership")
+endif()
+math(EXPR _retry_deferral_length "${_retry_publish_position} - ${_retry_check_position}")
+string(SUBSTRING "${_fallback_transaction}" ${_retry_check_position} ${_retry_deferral_length} _retry_deferral)
+foreach(_required_retry_deferral IN ITEMS
+    "pendingVRRenderScaleRequest.reset()"
+    "StoreDeferredVRRenderScaleRequestLatestWinsLocked(a_request)"
+    "return false;"
+)
+    string(FIND "${_retry_deferral}" "${_required_retry_deferral}" _retry_deferral_position)
+    if(_retry_deferral_position EQUAL -1)
+        message(FATAL_ERROR "Expired retry intent is not retained: ${_required_retry_deferral}")
+    endif()
+endforeach()
+
+string(FIND "${_upscaling_source}" "bool Upscaling::CanRetryVRStartupNativeFallbackFromSnapshot(" _retry_snapshot_start)
+string(FIND "${_upscaling_source}" "bool Upscaling::IsPerfModeActive()" _retry_snapshot_end)
+math(EXPR _retry_snapshot_length "${_retry_snapshot_end} - ${_retry_snapshot_start}")
+string(SUBSTRING "${_upscaling_source}" ${_retry_snapshot_start} ${_retry_snapshot_length} _retry_snapshot)
+foreach(_recursive_retry_read IN ITEMS
+    "GetVRRenderScaleTransitionSnapshot("
+    "HasPendingVRUpscalingTransition("
+    "EnsureRuntimeResolutionStateCurrent("
+)
+    string(FIND "${_retry_snapshot}" "${_recursive_retry_read}" _recursive_retry_position)
+    if(NOT _recursive_retry_position EQUAL -1)
+        message(FATAL_ERROR "Owned retry validation reacquires publication state: ${_recursive_retry_read}")
+    endif()
+endforeach()
+
+foreach(_retained_fallback_wiring IN ITEMS
+    "request.startupNativeFallbackControlAction ="
+    "deferredCandidate->startupNativeFallbackControlAction"
+    "deferredCandidate->requestID"
+    "deferredCandidate->transitionEpoch"
+    "a_left.startupNativeFallbackControlAction == a_right.startupNativeFallbackControlAction"
+    "startupNativeFallbackActive && !enableRenderScaleMode && renderScaleEditDispatch.directMenuEdit"
+)
+    string(FIND "${_upscaling_source}" "${_retained_fallback_wiring}" _fallback_wiring_position)
+    if(_fallback_wiring_position EQUAL -1)
+        message(FATAL_ERROR "Fallback request authority is not retained: ${_retained_fallback_wiring}")
+    endif()
+endforeach()
 string(FIND
     "${_upscaling_source}"
     "ResolveVRStartupNativeFallbackAfterPublication"

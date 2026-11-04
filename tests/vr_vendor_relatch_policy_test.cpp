@@ -2876,13 +2876,26 @@ namespace
 			return false;
 		}
 
-		SetStartupNativeFallbackActive(state, true);
+		// Invalidation after a successful resolution must re-arm terminal fallback.
 		InvalidateStartupNativeFallbackRetry(state);
 		SetStartupNativeFallbackActive(state, false);
 		auto observed = state.load(std::memory_order_acquire);
 		if (!IsStartupNativeFallbackActive(observed) ||
 			!IsStartupNativeFallbackRetryInvalidated(observed) ||
 			TryResolveStartupNativeFallbackAtomic(state)) {
+			return false;
+		}
+
+		// A resolution that follows invalidation must leave the terminal word intact.
+		state.store(kStartupNativeFallbackActive, std::memory_order_release);
+		InvalidateStartupNativeFallbackRetry(state);
+		if (TryResolveStartupNativeFallbackAtomic(state))
+			return false;
+		SetStartupNativeFallbackActive(state, true);
+		SetStartupNativeFallbackActive(state, false);
+		observed = state.load(std::memory_order_acquire);
+		if (!IsStartupNativeFallbackActive(observed) ||
+			!IsStartupNativeFallbackRetryInvalidated(observed)) {
 			return false;
 		}
 

@@ -4138,9 +4138,11 @@ public:
 	void RefreshSubmitStageUnderwaterMask();
 	void RequestHistoryReset() noexcept;
 	[[nodiscard]] bool RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesiredProfile& a_request);
+	/** @brief Validate retry health using caller-owned transition readiness without reacquiring request locks. */
 	[[nodiscard]] bool CanRetryVRStartupNativeFallbackFromSnapshot(
 		const VRRenderScaleTransitionSnapshot& a_controller,
-		bool a_exactPublishedRequest) const;
+		bool a_transitionReady) const;
+	/** @brief Resolve the exact published request while queue, request, and controller ownership are held. */
 	[[nodiscard]] bool TryResolveVRStartupNativeFallbackLocked(
 		const VRRenderScaleDesiredProfile& a_request);
 	bool StoreDeferredVRRenderScaleRequestLatestWinsLocked(

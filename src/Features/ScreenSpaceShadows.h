@@ -3,7 +3,6 @@
 #include "Utils/RuntimeToggle.h"
 
 #include "Buffer.h"
-#include "Features/ScreenSpaceShadowsCachePolicy.h"
 #include "Utils/LazyShader.h"
 
 #include <array>
@@ -109,16 +108,14 @@ public:
 		Util::LazyShader<ID3D11ComputeShader> left;
 		Util::LazyShader<ID3D11ComputeShader> right;
 	};
-	// VR-capable binaries retain native plus every supported render-scale
-	// profile. Flat runtimes retain the established two-entry working set.
+	// Binaries that can run VR retain native plus every supported render-scale
+	// profile. Flat-only builds need only the active variant.
 #ifdef ENABLE_SKYRIM_VR
-	static constexpr std::size_t kRaymarchShaderVariantCapacity =
-		ScreenSpaceShadowsCachePolicy::kVRVariantCount;
+	static constexpr std::size_t kRaymarchShaderVariantCount = 8;
 #else
-	static constexpr std::size_t kRaymarchShaderVariantCapacity =
-		ScreenSpaceShadowsCachePolicy::kFlatVariantCount;
+	static constexpr std::size_t kRaymarchShaderVariantCount = 1;
 #endif
-	std::array<RaymarchShaderVariant, kRaymarchShaderVariantCapacity> raymarchShaderVariants{};
+	std::array<RaymarchShaderVariant, kRaymarchShaderVariantCount> raymarchShaderVariants{};
 	uint64_t raymarchShaderUseCounter = 0;
 	uint compiledSampleCount = 0;
 

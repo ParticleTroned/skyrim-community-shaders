@@ -1611,7 +1611,8 @@ namespace
 		       a_left.fsr4RuntimeEnabled == a_right.fsr4RuntimeEnabled &&
 		       a_left.dlssSharpener == a_right.dlssSharpener &&
 		       a_left.dlssSharpness == a_right.dlssSharpness &&
-		       a_left.fsrSharpness == a_right.fsrSharpness;
+		       a_left.fsrSharpness == a_right.fsrSharpness &&
+		       a_left.startupNativeFallbackControlAction == a_right.startupNativeFallbackControlAction;
 	}
 
 	bool HasSameVRRenderScaleResourceKey(
@@ -24525,12 +24526,14 @@ bool Upscaling::CanRetryVRStartupNativeFallbackFromCSMenu(
 
 	EnsureRuntimeResolutionStateCurrent();
 	const auto controller = GetVRRenderScaleTransitionSnapshot();
-	return CanRetryVRStartupNativeFallbackFromSnapshot(controller, false);
+	return CanRetryVRStartupNativeFallbackFromSnapshot(
+		controller,
+		controller.state == VRRenderScaleTransitionState::Idle && !HasPendingVRUpscalingTransition());
 }
 
 bool Upscaling::CanRetryVRStartupNativeFallbackFromSnapshot(
 	const VRRenderScaleTransitionSnapshot& a_controller,
-	bool a_exactPublishedRequest) const
+	bool a_transitionReady) const
 {
 	if (!REL::Module::IsVR() ||
 		!IsVRStartupNativeFallbackRestartRequired()) {
@@ -24575,9 +24578,7 @@ bool Upscaling::CanRetryVRStartupNativeFallbackFromSnapshot(
 		ClampPositiveDimension(plan.finalOutputSize.x) == expectedWidth &&
 		ClampPositiveDimension(plan.finalOutputSize.y) == expectedHeight;
 	const bool transitionReady =
-		(a_exactPublishedRequest ||
-			(a_controller.state == VRRenderScaleTransitionState::Idle &&
-				!HasPendingVRUpscalingTransition())) &&
+		a_transitionReady &&
 		!a_controller.postLoadRecovery.active &&
 		!pendingPerfModeRenderTargetRecreate.load(
 			std::memory_order_acquire) &&
@@ -57113,21 +57114,8 @@ void Upscaling::ServiceDeferredVRRenderScaleRequestAfterPhysicalRecovery()
 		return;
 	}
 
-	std::optional<VRRenderScaleDesiredProfile> candidate;
-	{
-		std::scoped_lock lock(pendingVRRenderScaleRequestMutex);
-		if (pendingVRRenderScaleRequest ||
-			!deferredVRRenderScaleRequestAfterPhysicalRecovery ||
-			deferredVRRenderScaleRequestAfterPhysicalRecovery->requestID !=
-				deferredCandidate->requestID ||
-			deferredVRRenderScaleRequestAfterPhysicalRecovery->transitionEpoch !=
-				deferredCandidate->transitionEpoch) {
-			return;
-		}
-		candidate = *deferredVRRenderScaleRequestAfterPhysicalRecovery;
-	}
 	const bool retryRevalidated =
-		candidate->startupNativeFallbackControlAction !=
+		deferredCandidate->startupNativeFallbackControlAction !=
 			VRVendorRelatchPolicy::StartupNativeFallbackControlAction::ResolveRetry ||
 		CanRetryVRStartupNativeFallbackFromCSMenu(false);
 	if (!retryRevalidated)
@@ -57139,9 +57127,9 @@ void Upscaling::ServiceDeferredVRRenderScaleRequestAfterPhysicalRecovery()
 		if (pendingVRRenderScaleRequest ||
 			!deferredVRRenderScaleRequestAfterPhysicalRecovery ||
 			deferredVRRenderScaleRequestAfterPhysicalRecovery->requestID !=
-				candidate->requestID ||
+				deferredCandidate->requestID ||
 			deferredVRRenderScaleRequestAfterPhysicalRecovery->transitionEpoch !=
-				candidate->transitionEpoch) {
+				deferredCandidate->transitionEpoch) {
 			return;
 		}
 		replay = *deferredVRRenderScaleRequestAfterPhysicalRecovery;
@@ -57171,7 +57159,7 @@ void Upscaling::ServiceDeferredVRRenderScaleRequestAfterPhysicalRecovery()
 			return;
 		}
 		logger::warn(
-			"[VRRenderScale] Deferred replay id={} epoch={} met a newer unresolved physical boundary and remains suspended.",
+			"[VRRenderScale] Deferred replay id={} epoch={} met an unresolved recovery admission boundary and remains suspended.",
 			replay->requestID,
 			replay->transitionEpoch);
 		return;
@@ -62033,7 +62021,7 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 		}
 		result.disposition = VRRenderScaleRequestQueueDisposition::Deferred;
 		logger::warn(
-			"[VRRenderScale] Deferred request id={} epoch={} origin={} after physical recovery began during controller publication.",
+			"[VRRenderScale] Deferred request id={} epoch={} origin={} after recovery admission changed during controller publication.",
 			request.requestID,
 			request.transitionEpoch,
 			magic_enum::enum_name(request.origin));
@@ -65238,6 +65226,17 @@ bool Upscaling::RecordVRRenderScaleTransitionRequested(
 	bool startupFallbackResolved = false;
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		if (a_request.startupNativeFallbackControlAction ==
+				VRVendorRelatchPolicy::StartupNativeFallbackControlAction::ResolveRetry &&
+			!CanRetryVRStartupNativeFallbackFromSnapshot(
+				vrRenderScaleTransitionController,
+				vrRenderScaleTransitionController.state == VRRenderScaleTransitionState::Idle)) {
+			// Retry admission can expire after the outer check; retain its identity
+			// and intent until recovery is coherent under publication ownership.
+			pendingVRRenderScaleRequest.reset();
+			(void)StoreDeferredVRRenderScaleRequestLatestWinsLocked(a_request);
+			return false;
+		}
 		previousState = vrRenderScaleTransitionController.state;
 		if (!vrRenderScaleTransitionController.stable.valid) {
 			vrRenderScaleTransitionController.stable =
@@ -65299,7 +65298,7 @@ bool Upscaling::RecordVRRenderScaleTransitionRequested(
 	RecordVRRenderScalePreparationRequestQueued(a_request);
 #endif
 	if (startupFallbackResolved) {
-		logger::info(
+		logger::debug(
 			"[VRRenderScale] Accepted explicit CS-menu {} from the coherent startup native fallback. request={} epoch={}.",
 			a_request.startupNativeFallbackControlAction ==
 					VRVendorRelatchPolicy::StartupNativeFallbackControlAction::ResolveRetry ?
@@ -65314,6 +65313,12 @@ bool Upscaling::RecordVRRenderScaleTransitionRequested(
 bool Upscaling::TryResolveVRStartupNativeFallbackLocked(
 	const VRRenderScaleDesiredProfile& a_request)
 {
+	if (a_request.startupNativeFallbackControlAction !=
+			VRVendorRelatchPolicy::StartupNativeFallbackControlAction::ResolveRetry &&
+		a_request.startupNativeFallbackControlAction !=
+			VRVendorRelatchPolicy::StartupNativeFallbackControlAction::ResolveDisabled) {
+		return false;
+	}
 	const auto& controller = vrRenderScaleTransitionController;
 	const bool exactPublishedRequest =
 		controller.state == VRRenderScaleTransitionState::Requested &&

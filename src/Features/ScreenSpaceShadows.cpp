@@ -371,20 +371,38 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
 	Util::ShaderCompileTiming* a_timing)
 {
 	const bool useTerrainBlendingDepth = UseTerrainBlendingDepth();
-	const std::size_t variantCount =
-		ScreenSpaceShadowsCachePolicy::ActiveVariantCount(
-			globals::game::isVR,
-			raymarchShaderVariants.size());
-	const std::size_t selectedIndex =
-		ScreenSpaceShadowsCachePolicy::SelectVariantIndex(
-			raymarchShaderVariants,
-			variantCount,
-			a_sampleCount,
-			useTerrainBlendingDepth);
-	if (selectedIndex == ScreenSpaceShadowsCachePolicy::kNoVariant)
-		return nullptr;
-	RaymarchShaderVariant* selected =
-		std::addressof(raymarchShaderVariants[selectedIndex]);
+	const std::size_t variantCount = globals::game::isVR ?
+	                                     kRaymarchShaderVariantCount :
+	                                     1u;
+	const auto variantEnd = raymarchShaderVariants.begin() + variantCount;
+	RaymarchShaderVariant* selected = nullptr;
+	for (auto variant = raymarchShaderVariants.begin();
+		variant != variantEnd;
+		++variant) {
+		if (variant->valid && variant->sampleCount == a_sampleCount &&
+			variant->usesTerrainBlendingDepth == useTerrainBlendingDepth) {
+			selected = std::addressof(*variant);
+			break;
+		}
+	}
+	if (!selected) {
+		for (auto variant = raymarchShaderVariants.begin();
+			variant != variantEnd;
+			++variant) {
+			if (!variant->valid) {
+				selected = std::addressof(*variant);
+				break;
+			}
+		}
+	}
+	if (!selected) {
+		selected = std::addressof(*std::min_element(
+			raymarchShaderVariants.begin(),
+			variantEnd,
+			[](const auto& a_left, const auto& a_right) {
+				return a_left.lastUse < a_right.lastUse;
+			}));
+	}
 	if (!selected->valid || selected->sampleCount != a_sampleCount ||
 		selected->usesTerrainBlendingDepth != useTerrainBlendingDepth) {
 		selected->left.Reset();
@@ -396,16 +414,10 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
 	selected->lastUse = ++raymarchShaderUseCounter;
 	compiledSampleCount = a_sampleCount;
 	auto& shader = a_rightEye ? selected->right : selected->left;
-	switch (ScreenSpaceShadowsCachePolicy::SelectShaderLookupAction(
-		shader.get() != nullptr,
-		shader.HasFailed())) {
-	case ScreenSpaceShadowsCachePolicy::ShaderLookupAction::ReturnCached:
-		return shader.get();
-	case ScreenSpaceShadowsCachePolicy::ShaderLookupAction::ReturnFailure:
+	if (auto* cached = shader.get())
+		return cached;
+	if (shader.HasFailed())
 		return nullptr;
-	case ScreenSpaceShadowsCachePolicy::ShaderLookupAction::Compile:
-		break;
-	}
 
 	std::string sampleCount = std::format("{}", a_sampleCount);
 	std::vector<std::pair<const char*, const char*>> defines{ { "SAMPLE_COUNT", sampleCount.c_str() } };

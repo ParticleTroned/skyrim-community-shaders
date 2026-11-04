@@ -3328,7 +3328,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #		if defined(DO_ALPHA_TEST) && defined(LOD_BLENDING) && !defined(TREE_ANIM)  // should only match object lod trees (ultra trees), they have no special define
 		float3 snowCardNormal = normalize(cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
-		if (snowActive && HasSoftLighting()) {
+		if (snowActive && Lighting::HasSoftLighting()) {
 			snowBillboard = abs(dot(snowCardNormal, vertexNormal)) < 0.5;
 			[branch] if (SharedData::snowCoverSettings.EnableExpensiveFoliage)
 			{

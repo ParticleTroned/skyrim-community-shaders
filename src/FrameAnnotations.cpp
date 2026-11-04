@@ -7,6 +7,7 @@
 #include "Features/LightLimitFix/ShadowCulling.h"
 #include "Features/LightLimitFix/ShadowCullingDrawScope.h"
 #include "Features/TerrainBlending.h"
+#include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
 #include "Features/Upscaling/NeuralRendering/ExposureCapture.h"
 #include "Globals.h"
@@ -431,6 +432,7 @@ namespace FrameAnnotations
 		{
 			CS_GPU_PASS("Water::RenderWaterEffects");
 			ResetWaterReflectionCubemapOnSceneChange();
+			globals::features::unifiedWater.MaintainReflectionCapture();
 			func();
 		};
 		static inline REL::Relocation<decltype(thunk)> func;

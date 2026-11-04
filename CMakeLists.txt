@@ -4630,6 +4630,35 @@ if(BUILD_CONTROLLER_TESTS)
         unified_water_flowmap_test
         PRIVATE "${_flowmap_test_dir}"
     )
+    set(_reflection_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/unified-water-reflection"
+    )
+    set(_reflection_test_headers
+        "${_reflection_test_dir}/reflection_capture_under_test.h"
+        "${_reflection_test_dir}/reflection_maintenance_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_reflection_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_reflection_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_unified_water_reflection.cmake"
+        DEPENDS
+            src/Features/UnifiedWater/ReflectionCapture.h
+            src/Features/UnifiedWater.cpp
+            tests/extract_unified_water_reflection.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(unified_water_reflection_test UnifiedWaterReflection tests/unified_water_reflection_test.cpp)
+    target_sources(
+        unified_water_reflection_test
+        PRIVATE ${_reflection_test_headers}
+    )
+    target_include_directories(
+        unified_water_reflection_test
+        PRIVATE "${_reflection_test_dir}"
+    )
     add_executable(
         accepted_draw_registry_test
         EXCLUDE_FROM_ALL

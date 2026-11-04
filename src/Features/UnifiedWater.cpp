@@ -7,6 +7,7 @@
 #include "State.h"
 #include "Util.h"
 
+#include "RE/B/BSMultiBound.h"
 #include "RE/L/LoadingMenu.h"
 #include "RE/M/MapMenu.h"
 #include "RE/N/NiRefObject.h"
@@ -1285,6 +1286,126 @@ bool UnifiedWater::IsExteriorWorldspaceActive() const
 	return exteriorWorldspaceActive.load(std::memory_order_acquire) && !IsInteriorCellActive();
 }
 
+namespace
+{
+	RE::BSWaterShaderProperty* GetWaterProperty(RE::BSTriShape* shape)
+	{
+		const auto property = shape ? shape->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
+		if (!property || property->GetRTTI() != globals::rtti::BSWaterShaderPropertyRTTI.get())
+			return nullptr;
+		const auto material = static_cast<RE::BSWaterShaderProperty*>(property)->material;
+		return material && material->GetType() == RE::BSShaderMaterial::Type::kWater ?
+		           static_cast<RE::BSWaterShaderProperty*>(property) :
+		           nullptr;
+	}
+
+	RE::TESWaterReflections* FindDynamicReflection(RE::TESWaterSystem& waterSystem)
+	{
+		for (const auto& reflection : waterSystem.waterReflections) {
+			if (UnifiedWaterReflectionCapture::IsEligible(reflection.get()))
+				return reflection.get();
+		}
+		return nullptr;
+	}
+}
+
+void UnifiedWater::InitializeWaterMaterial(RE::TESWaterSystem& waterSystem, RE::BSTriShape* shape, RE::TESWaterForm* form, float height)
+{
+	const auto count = waterSystem.waterObjects.size();
+	waterSystem.AddWater(shape, form, height, nullptr, true, false);
+	if (waterSystem.waterObjects.size() <= count || !waterSystem.waterObjects.back() ||
+		waterSystem.waterObjects.back()->shape.get() != shape)
+		return;
+
+	const auto reflections = waterSystem.waterObjects.back()->reflections.get();
+	const auto normals = waterSystem.waterObjects.back()->normals.get();
+	// AddWater may borrow another tile's reflection; only pin a verified material.
+	reflectionCapture.Retain(reflections, GetWaterProperty(shape));
+	waterSystem.waterObjects.pop_back();
+	RemoveOrphanedEntry(waterSystem.waterReflections, reflections);
+	RemoveOrphanedEntry(waterSystem.waterNormals, normals);
+}
+
+void UnifiedWater::RetireReflectionCapture(bool clearSources)
+{
+	if (const auto waterSystem = globals::game::waterSystem) {
+		RE::BSSpinLockGuard guard(waterSystem->lock);
+		if (clearSources)
+			reflectionCapture.ClearSources();
+		reflectionRetryFrames = 0;
+		reflectionCapture.RetireUnused(*waterSystem, nullptr, QueueDeferredRelease);
+	}
+}
+
+void UnifiedWater::MaintainReflectionCapture()
+{
+	if (!IsWaterDataReady())
+		return;
+	if (!loaded) {
+		RetireReflectionCapture(true);
+		return;
+	}
+	if (!globals::state || globals::state->IsSaveLoadSafeModeActive())
+		return;
+	const auto waterSystem = globals::game::waterSystem;
+	if (!waterSystem)
+		return;
+
+	RE::BSSpinLockGuard guard(waterSystem->lock);
+	const auto worldSpace = ResolveLODDataWorldSpace(currentPlayerWorldSpace.load(std::memory_order_acquire));
+	const auto source = reflectionCapture.FindSource(worldSpace);
+	if (!worldSpace || !IsExteriorWorldspaceActive() || IsInteriorCellActive() || !source) {
+		reflectionCapture.RetireUnused(*waterSystem, nullptr, QueueDeferredRelease);
+		reflectionRetryFrames = 0;
+		return;
+	}
+
+	auto reflection = FindDynamicReflection(*waterSystem);
+	if (reflection && !reflectionCapture.Contains(reflection)) {
+		for (const auto& object : waterSystem->waterObjects) {
+			if (object && object->reflections.get() == reflection &&
+				reflectionCapture.Retain(reflection, GetWaterProperty(object->shape.get())))
+				break;
+		}
+	}
+	reflectionCapture.RetireUnused(*waterSystem, reflection, QueueDeferredRelease);
+	if (reflection) {
+		reflectionRetryFrames = 0;
+		if (reflectionCapture.Contains(reflection) && !waterSystem->enabled)
+			waterSystem->Enable();
+		return;
+	}
+	if (reflectionRetryFrames != 0) {
+		--reflectionRetryFrames;
+		return;
+	}
+
+	// Native AddWater requires the tile parent's multi-bound even for dynamic captures.
+	constexpr std::uint32_t kReflectionRetryFrames = 60;
+	reflectionRetryFrames = kReflectionRetryFrames;
+	const auto recoverySource = *source;
+	const auto parent = recoverySource.parent.get();
+	const auto& multiBound = parent->GetRuntimeData().multiBound;
+	if (!parent->parent || !multiBound || !multiBound->data) {
+		reflectionCapture.RemoveSource(parent);
+		return;
+	}
+	RE::NiCloningProcess cloningProcess;
+	const RE::NiPointer<RE::NiObject> clone{ waterMesh->CreateClone(cloningProcess) };
+	const auto shape = clone ? clone->AsTriShape() : nullptr;
+	if (!shape)
+		return;
+	shape->local.translate.z = recoverySource.waterHeight;
+	parent->AttachChild(shape, true);
+	const SKSE::stl::scope_exit detachProxy([&] { parent->DetachChild2(shape); });
+	RE::NiUpdateData updateData;
+	shape->UpdateWorldData(&updateData);
+	waterSystem->waterObjects.reserve(waterSystem->waterObjects.size() + 1);
+	InitializeWaterMaterial(*waterSystem, shape, recoverySource.waterType, recoverySource.waterHeight);
+	if (const auto created = FindDynamicReflection(*waterSystem); created && reflectionCapture.Contains(created))
+		reflectionRetryFrames = 0;
+}
+
 void UnifiedWater::UpdateWaterLODCull() const
 {
 	if (!IsWaterDataReady())
@@ -1305,6 +1426,8 @@ void UnifiedWater::TES_SetWorldSpace::thunk(RE::TES* tes, RE::TESWorldSpace* wor
 
 	// Set before func so attachment hooks fired inside func see the new worldspace.
 	auto& uw = globals::features::unifiedWater;
+	if (uw.currentPlayerWorldSpace.load(std::memory_order_acquire) != worldSpace || !isExterior)
+		uw.RetireReflectionCapture(false);
 	uw.currentPlayerWorldSpace.store(worldSpace, std::memory_order_release);
 	uw.cachedTes.store(tes, std::memory_order_release);
 	if (!enteringChild)
@@ -1341,6 +1464,7 @@ void UnifiedWater::TES_SetWorldSpace::thunk(RE::TES* tes, RE::TESWorldSpace* wor
 
 void UnifiedWater::TES_DestroySkyCell::thunk(RE::TES* tes)
 {
+	globals::features::unifiedWater.RetireReflectionCapture(true);
 	func(tes);
 
 	auto& uw = globals::features::unifiedWater;
@@ -1392,6 +1516,10 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	if (block && block->loaded && !block->attached && block->chunk && block->water) {
 		// Keep terrain water alive while moving it out of its owning node
 		water = RE::NiPointer<RE::BSMultiBoundNode>(block->water);
+		{
+			RE::BSSpinLockGuard guard(waterSystem->lock);
+			uw.reflectionCapture.RemoveSource(water.get());
+		}
 		block->chunk->DetachChild2(water.get());
 		water->local.translate = block->chunk->local.translate;
 
@@ -1477,17 +1605,7 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 		{
 			// Shared reflection and normal entries must not outlive their tile's raw material pointer.
 			RE::BSSpinLockGuard guard(waterSystem->lock);
-			const auto waterObjectCount = waterSystem->waterObjects.size();
-			waterSystem->AddWater(shape, instruction->form.ptr, instruction->waterHeight, nullptr, true, false);
-
-			if (waterSystem->waterObjects.size() > waterObjectCount && waterSystem->waterObjects.back() &&
-				waterSystem->waterObjects.back()->shape.get() == shape) {
-				const auto reflections = waterSystem->waterObjects.back()->reflections.get();
-				const auto normals = waterSystem->waterObjects.back()->normals.get();
-				waterSystem->waterObjects.pop_back();
-				RemoveOrphanedEntry(waterSystem->waterReflections, reflections);
-				RemoveOrphanedEntry(waterSystem->waterNormals, normals);
-			}
+			uw.InitializeWaterMaterial(*waterSystem, shape, instruction->form.ptr, instruction->waterHeight);
 		}
 
 		if (const auto prop = shape->GetGeometryRuntimeData().shaderProperty.get(); prop && prop->GetRTTI() == globals::rtti::BSWaterShaderPropertyRTTI.get()) {
@@ -1515,6 +1633,13 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	} else {
 		block->water = nullptr;
 		block->waterAttached = false;
+	}
+	if (water->parent) {
+		RE::BSSpinLockGuard guard(waterSystem->lock);
+		const auto instruction = built.front().second;
+		uw.reflectionCapture.RegisterSource(
+			water.get(), ResolveLODDataWorldSpace(block->node->manager->worldSpace), instruction->form.ptr, instruction->waterHeight);
+		uw.reflectionRetryFrames = 0;
 	}
 	waterSystem->Enable();
 
@@ -1547,6 +1672,12 @@ void UnifiedWater::BGSTerrainBlock_Detach::thunk(RE::BGSTerrainBlock* block)
 
 	RE::NiPointer<RE::BSMultiBoundNode> water(block->water);
 	const bool wasWaterAttached = water && block->waterAttached;
+	if (const auto waterSystem = globals::game::waterSystem) {
+		RE::BSSpinLockGuard guard(waterSystem->lock);
+		uw.reflectionCapture.RemoveSource(water.get());
+		if (!uw.reflectionCapture.HasSources())
+			uw.reflectionCapture.RetireUnused(*waterSystem, nullptr, QueueDeferredRelease);
+	}
 
 	// Hide UW-managed water from vanilla detach so it does not delete it
 	if (wasWaterAttached)

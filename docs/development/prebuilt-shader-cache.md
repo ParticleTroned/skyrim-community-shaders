@@ -34,8 +34,8 @@ The default `shipped` release profile:
     exclusion of legacy `Wetness Effects` sources, metadata and
     `WETNESS_EFFECTS` in both runtimes;
 -   enables `UNIFIED_WATER` globally;
--   derives Reverse Z compiler inputs from the selected cache's feature
-    metadata, including the runtime's distinct Utility macro value;
+-   defaults Reverse Z compiler inputs to off for every cache profile,
+    independently of the loaded feature's metadata and shader ABI;
 -   removes captured global occurrences of file-scoped defines before enabling
     `WETTERNESS` only for `Lighting.hlsl` and `Water.hlsl`;
 -   removes obsolete captured `VANILLA_FRESNEL` and `HDR_OUTPUT` defines;
@@ -67,6 +67,14 @@ same managed layout.
 Named tester profiles are opt-in. Omitting `--profile` always selects
 `shipped`; release workflows and existing maintainer commands therefore keep
 their current behavior.
+
+Both `shipped` and `patka` default to Reverse Z off, matching the runtime and
+bundled presets. Use `--reverse-z` only to build a cache for an enabled
+Reverse Z boot setting; `--no-reverse-z` selects off explicitly. The feature
+remains loaded in `Info.ini` in either case because its shader ABI still
+participates in cache identity. Enabled permutations retain the runtime's
+distinct Utility macro value. A cache compiled for the opposite boot setting
+misses across most shader families and causes a large first-use compilation.
 
 The builder removes the five debug-profile defines itself. Do not replace that
 filter with hlslkit's `--strip-debug-defines`: the pinned implementation also

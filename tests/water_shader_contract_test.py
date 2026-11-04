@@ -212,6 +212,7 @@ int main(int argc, char**) {
                                     ROOT / ".github/configs" / config_name, Path(temporary) / "config.yaml", yaml,
                                     replace(profile, global_defines=("UNIFIED_WATER",) if unified else ()),
                                     feature_states={"ReverseZ": reversed_depth},
+                                    reverse_z_enabled=reversed_depth,
                                     additional_excluded_defines=frozenset({"UNIFIED_WATER", "HORIZON_FIX"}),
                                     additional_file_defines={"Water.hlsl": ("HORIZON_FIX",)} if horizon else {},
                                 )

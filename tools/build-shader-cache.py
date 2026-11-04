@@ -1813,6 +1813,7 @@ def filter_profile_defines(
     profile: CacheProfile,
     *,
     feature_states: dict[str, bool],
+    reverse_z_enabled: bool = False,
     additional_excluded_defines: frozenset[str] = frozenset(),
     additional_file_defines: dict[str, tuple[str, ...]] | None = None,
     add_cross_modlist_variants: bool = False,
@@ -1824,7 +1825,8 @@ def filter_profile_defines(
 
     validate_captured_variant_count(config, config_path)
     additional_file_defines = dict(additional_file_defines or {})
-    if feature_states.get("ReverseZ", False):
+    # Loaded feature metadata retains its ABI even when its boot setting is off.
+    if reverse_z_enabled and feature_states.get("ReverseZ", False):
         for shader in config["shaders"]:
             source = shader["file"]
             # Utility uses the runtime fallback; feature-list macros have empty values.
@@ -2863,6 +2865,7 @@ def build_runtime(
     profile: CacheProfile,
     distribution_profile: DistributionProfile | None = None,
     include_horizon_fix: bool = True,
+    reverse_z_enabled: bool = False,
 ) -> tuple[Path, dict[str, int], int]:
     runtime_root = workspace / runtime
     shader_contract = shader_contract_identity(
@@ -2931,6 +2934,7 @@ def build_runtime(
             yaml,
             profile,
             feature_states=feature_states,
+            reverse_z_enabled=reverse_z_enabled,
             additional_excluded_defines=additional_excluded_defines,
             additional_file_defines=additional_file_defines,
             add_cross_modlist_variants=add_cross_modlist,
@@ -3044,6 +3048,12 @@ def main() -> int:
         help="Include Horizon Fix compatibility cache records (default: included).",
     )
     parser.add_argument(
+        "--reverse-z",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Compile Reverse Z on permutations (default: off for every cache profile).",
+    )
+    parser.add_argument(
         "--source-root",
         help="Repo checkout to take shaders/configs/version from (default: this repo).",
     )
@@ -3110,6 +3120,7 @@ def main() -> int:
     profile = CACHE_PROFILES[args.profile]
     validate_cache_profile(profile, runtimes)
     print(f"cache profile: {profile.display_name} ({profile.name})")
+    print(f"Reverse Z compile setting: {'on' if args.reverse_z else 'off'}")
     configs = configs_for(source_root)
     for runtime in runtimes:
         config_path = configs[runtime]
@@ -3200,6 +3211,7 @@ def main() -> int:
                 profile=profile,
                 distribution_profile=distribution_profile,
                 include_horizon_fix=args.include_horizon_fix,
+                reverse_z_enabled=args.reverse_z,
             )
             archive_candidate = None
             if args.package:

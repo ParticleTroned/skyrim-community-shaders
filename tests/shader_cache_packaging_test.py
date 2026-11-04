@@ -712,18 +712,22 @@ class ShaderCachePackagingTests(unittest.TestCase):
                     {key: [entry["entry"] for entry in stage["entries"]] for key, stage in grass_after.items()},
                 )
 
-    def test_reverse_depth_inputs_match_feature_state_and_runtime_macro_values(self) -> None:
+    def test_reverse_depth_inputs_match_boot_setting_and_runtime_macro_values(self) -> None:
         import yaml
         from hlslkit.compile_shaders import parse_shader_configs
 
         cases = (
-            ("VR", BUILDER.SHIPPED_CACHE_PROFILE, {"ReverseZ": True}),
-            ("VR", BUILDER.PATKA_CACHE_PROFILE, {"ReverseZ": True}),
-            ("VR", BUILDER.SHIPPED_CACHE_PROFILE, {"ReverseZ": False}),
-            ("SE", BUILDER.SHIPPED_CACHE_PROFILE, {}),
+            ("VR", BUILDER.SHIPPED_CACHE_PROFILE, {"ReverseZ": True}, None),
+            ("VR", BUILDER.PATKA_CACHE_PROFILE, {"ReverseZ": True}, None),
+            ("SE", BUILDER.SHIPPED_CACHE_PROFILE, {"ReverseZ": True}, None),
+            ("VR", BUILDER.SHIPPED_CACHE_PROFILE, {"ReverseZ": True}, True),
+            ("SE", BUILDER.SHIPPED_CACHE_PROFILE, {"ReverseZ": True}, True),
+            ("VR", BUILDER.PATKA_CACHE_PROFILE, {"ReverseZ": True}, True),
+            ("VR", BUILDER.SHIPPED_CACHE_PROFILE, {"ReverseZ": False}, True),
+            ("SE", BUILDER.SHIPPED_CACHE_PROFILE, {}, True),
         )
-        for runtime, profile, states in cases:
-            with self.subTest(runtime=runtime, profile=profile.name, states=states), tempfile.TemporaryDirectory() as temporary:
+        for runtime, profile, states, enabled in cases:
+            with self.subTest(runtime=runtime, profile=profile.name, states=states, enabled=enabled), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 config = yaml.safe_load(BUILDER.configs_for(REPO)[runtime].read_text(encoding="utf-8"))
                 config["common_defines"].append("REVERSE_Z=0")
@@ -734,6 +738,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 filtered = BUILDER.filter_profile_defines(
                     captured, root / "filtered.yaml", yaml, profile,
                     feature_states=states,
+                    **({} if enabled is None else {"reverse_z_enabled": enabled}),
                 )
                 tasks = parse_shader_configs(str(filtered))
                 self.assertTrue(tasks)
@@ -741,7 +746,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 for source, stage, entry, defines in tasks:
                     depth_defines = [value for value in defines if value.split("=", 1)[0] == "REVERSE_Z"]
                     expected = []
-                    if states.get("ReverseZ", False):
+                    if enabled and states.get("ReverseZ", False):
                         expected = ["REVERSE_Z=1" if source == "Utility.hlsl" else "REVERSE_Z="]
                     self.assertEqual(depth_defines, expected, (source, stage, entry))
 

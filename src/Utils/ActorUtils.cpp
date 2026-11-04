@@ -165,12 +165,13 @@ namespace Util
 	{
 		if (!a_callback)
 			return;
-		if (auto* player = globals::game::player)
+		const auto player = RE::PlayerCharacter::GetSingleton();
+		if (player)
 			a_callback(player);
 		if (auto* lists = RE::ProcessLists::GetSingleton()) {
 			for (const auto& handle : lists->highActorHandles) {
 				const auto actor = handle.get();
-				if (actor && actor.get() != globals::game::player)
+				if (actor && actor.get() != player)
 					a_callback(actor.get());
 			}
 		}

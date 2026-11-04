@@ -408,7 +408,7 @@ namespace Util::BodyCapsules
 		for (const auto& candidate : candidates)
 			AddActorCapsules(candidate.actor.get(), camera);
 
-		if (auto* player = globals::game::player; globals::game::isVR && player && player->Is3DLoaded()) {
+		if (auto* player = RE::PlayerCharacter::GetSingleton(); globals::game::isVR && player && player->Is3DLoaded()) {
 			RefreshHandNodes(player);
 			if (a_fitHands && handNodesFound > 0 && (fitSignature == 0 || ++updatesSinceFitCheck >= FitCheckInterval)) {
 				updatesSinceFitCheck = 0;

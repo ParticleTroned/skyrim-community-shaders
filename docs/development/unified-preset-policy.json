@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.11.03.2",
+    "packageVersion": "d2026.11.04.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "9D5D3B3BCCC4DD6F83123BEB3FD3194DE8583AD95D85C2160048C914DCF3C19C"
+        "sha256": "1FEFAEBFD85F0B96C04FCA222B3665897B471A3032FDA14D02AD236139D52EBA"
     },
     "runtimeSettingsContract": {
-        "revision": 34,
-        "sourceTreeSha256": "B1C1F7B9AB0776627982BE67B86514214F39AAA9902DACECA8CD24DCCBB85023",
+        "revision": 32,
+        "sourceTreeSha256": "4E62F6AA6BC585966616755B96184CF6C7E913360A5D69398B96380B1951BF61",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -91,6 +91,8 @@
             "src/Features/FoliageLighting.cpp",
             "src/Features/FoliageLighting.h",
             "src/Features/FoveatedCommon.h",
+            "src/Features/FurShells.cpp",
+            "src/Features/FurShells.h",
             "src/Features/GrassCollision.cpp",
             "src/Features/GrassCollision.h",
             "src/Features/GrassLighting.cpp",
@@ -132,6 +134,8 @@
             "src/Features/Skylighting.h",
             "src/Features/SkySync.cpp",
             "src/Features/SkySync.h",
+            "src/Features/SnowCover.cpp",
+            "src/Features/SnowCover.h",
             "src/Features/SubsurfaceScattering.cpp",
             "src/Features/SubsurfaceScattering.h",
             "src/Features/TerrainBlending.cpp",
@@ -244,6 +248,7 @@
         ["Wetterness", "WetternessFadeRange"]
     ],
     "commonOverrides": [
+        { "path": ["Reverse Z", "EnableReverseZBuffer"], "value": false },
         {
             "path": ["Upscaling", "frameGenerationMode"],
             "value": 0,
@@ -777,6 +782,13 @@
             ["Volumetric Lighting", "GodrayShaftIntensity"]
         ],
         "requiredValues": [
+            { "path": ["Upscaling", "antiLag2Enabled"], "value": false },
+            { "path": ["Light Limit Fix", "SkipRedundantLightAttach"], "value": false },
+            { "path": ["Snow Cover", "Enable"], "value": 0 },
+            { "path": ["Fur Shells", "Enabled"], "value": false },
+            { "path": ["Reverse Z", "EnableReverseZBuffer"], "value": false },
+            { "path": ["Disable at Boot", "FurShells"], "value": false },
+            { "path": ["Disable at Boot", "SnowCover"], "value": false },
             { "path": ["Terrain Blending", "LandscapeSeams"], "value": 0 },
             { "path": ["Performance Overlay", "ShowRenderTargets"], "value": false },
             { "path": ["Neural Rendering", "rendering", "neuralRenderingNetwork"], "value": 0 },

@@ -6,7 +6,7 @@ file(READ "${PROJECT_ROOT}/src/Api/FeatureDevBenchBridge.cpp" _bridge)
 file(READ "${PROJECT_ROOT}/src/State.cpp" _state)
 
 string(REGEX MATCH
-    "R\"\\((\\{\"description\":\"Versioned CSX feature.*\\})\\)\""
+    "const char\\* descriptor = R\"\\((\\{[^\r\n]*\\})\\)\";"
     _descriptor_match
     "${_bridge}"
 )

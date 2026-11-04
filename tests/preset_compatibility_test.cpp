@@ -38,6 +38,28 @@ int main(int argc, char** argv)
 {
 	using PresetCompatibility::Disposition;
 	assert(argc == 2);
+	std::size_t profileCount = 0;
+	for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path(argv[1]) / "MGO-Presets")) {
+		const auto path = entry.path() / "SKSE/Plugins/CommunityShaders/SettingsUser.json";
+		if (!entry.is_directory() || !std::filesystem::is_regular_file(path))
+			continue;
+		std::ifstream input(path);
+		assert(input.is_open());
+		const auto preset = nlohmann::json::parse(input);
+		assert(PresetCompatibility::Evaluate(preset, "CSX 3.21.0-VR").disposition == Disposition::kCompatible);
+		for (const auto label : { "CSX 3.20.0-VR", "CSX 3.22.0-VR", "CSX 3.21.0-SE", "CSX 3.21.0-AE" })
+			assert(!PresetCompatibility::Evaluate(preset, label).ShouldApply());
+		assert(preset.at("Version") == "CSX 3.21.0-VR");
+		assert(preset.at("Reverse Z").at("EnableReverseZBuffer") == false);
+		assert(preset.at("Fur Shells").at("Enabled") == false);
+		assert(preset.at("Snow Cover").at("Enable") == 0);
+		for (const auto shortName : { "FurShells", "SnowCover" })
+			assert(preset.at("Disable at Boot").at(shortName) == false);
+		assert(preset.at("Upscaling").at("antiLag2Enabled") == false);
+		assert(preset.at("Light Limit Fix").at("SkipRedundantLightAttach") == false);
+		++profileCount;
+	}
+	assert(profileCount == 10);
 	for (const auto tier : { "Performance", "Balanced", "Quality" }) {
 		const auto path = std::filesystem::path(argv[1]) / "MGO-Presets" /
 		                  (std::string("CSX Unified- ") + tier + " - Press END on PC to Customize") /
@@ -45,11 +67,6 @@ int main(int argc, char** argv)
 		std::ifstream input(path);
 		assert(input.is_open());
 		const auto preset = nlohmann::json::parse(input);
-		const auto result = PresetCompatibility::Evaluate(preset, "CSX 3.21.0-VR");
-		assert(result.disposition == Disposition::kCompatible);
-		assert(result.ShouldApply());
-		assert(preset.at("Version") == "CSX 3.21.0-VR");
-		assert(!PresetCompatibility::Evaluate(preset, "CSX 3.20.0-VR").ShouldApply());
 		assert(preset.at("VR").at("WandAimPitchTrimDegrees") == -26.0);
 		const auto& nr = preset.at("Neural Rendering").at("rendering");
 		assert(nr.at("neuralRenderingEnabled") == false);

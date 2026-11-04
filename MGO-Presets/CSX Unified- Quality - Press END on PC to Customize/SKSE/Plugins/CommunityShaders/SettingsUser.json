@@ -50,7 +50,9 @@
     "Upscaling": false,
     "VolumetricLighting": false,
     "Wetterness": false,
-    "NeuralRendering": false
+    "NeuralRendering": false,
+    "FurShells": false,
+    "SnowCover": false
   },
   "RenderDoc": {
     "Capture Frame Count": 20,
@@ -75,15 +77,15 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-quality",
-    "presetVersion": "d2026.11.03.2",
+    "presetVersion": "d2026.11.04.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
       "maximumVersionExclusive": "3.22"
     },
     "settingsContract": {
-      "revision": 34,
-      "sourceTreeSha256": "B1C1F7B9AB0776627982BE67B86514214F39AAA9902DACECA8CD24DCCBB85023"
+      "revision": 32,
+      "sourceTreeSha256": "4E62F6AA6BC585966616755B96184CF6C7E913360A5D69398B96380B1951BF61"
     }
   },
   "Upscaling": {
@@ -121,7 +123,8 @@
     "sharpnessFSR": 0.699999988079071,
     "streamlineLogLevel": 0,
     "upscaleMethod": 3,
-    "upscaleMethodNoDLSS": 2
+    "upscaleMethodNoDLSS": 2,
+    "antiLag2Enabled": false
   },
   "Texture Streaming": {
     "Enabled": false
@@ -349,7 +352,11 @@
     "kAutoHideSeconds": 30,
     "menuOverlayPath": 0,
     "mouseDeadzone": 0.10000000149011612,
-    "mouseSpeed": 10.0
+    "mouseSpeed": 10.0,
+    "MinOccludeeBoxExtentExterior": 10.0,
+    "MinOccludeeBoxExtentInterior": 10.0,
+    "VRNeuralRenderingToggleKeys": [],
+    "ShowBothWandLasers": false
   },
   "Weather Picker": {
     "Enabled": true,
@@ -1456,7 +1463,9 @@
       "smallActorParts": true
     },
     "StrictContactShadowBudget": 4,
-    "UseParticleLights087LegacyMode": false
+    "UseParticleLights087LegacyMode": false,
+    "SkipRedundantLightAttach": false,
+    "LightAttachRefreshFrames": 60
   },
   "Linear Lighting": {
     "DisableInExteriors": 0,
@@ -1519,7 +1528,8 @@
     "ResourceProfile": 1,
     "Thickness": 32.0,
     "UseStereoReproject": false,
-    "VRCullDistance": 1500.0
+    "VRCullDistance": 1500.0,
+    "ExperimentalOCUEffectFoveation": false
   },
   "Screen Space Shadows": {
     "BilinearThreshold": 0.019999999552965164,
@@ -1569,7 +1579,8 @@
   },
   "Dynamic Cubemaps": {
     "EnabledCreator": 0,
-    "EnabledSSR": 1
+    "EnabledSSR": 1,
+    "CubemapResolution": 128
   },
   "Extended Materials": {
     "EnableComplexMaterial": 1,
@@ -1612,7 +1623,9 @@
     "SunriseEndOffset": 0.0,
     "SunsetBeginOffset": 0.0,
     "SunsetEndOffset": 0.0,
-    "UseAlternateSunPath": false
+    "UseAlternateSunPath": false,
+    "DimSunlightUnderHorizon": true,
+    "HorizonFadeHours": 0.7
   },
   "LOD Blending": {
     "DisableTerrainVertexColors": 0,
@@ -1640,7 +1653,8 @@
   },
   "Terrain Variation": {
     "enableLODTerrainTilingFix": 1,
-    "enableTilingFix": 1
+    "enableTilingFix": 1,
+    "enableMeshSupport": 1
   },
   "Unified Water": {
     "DeepConnectionProbeReachUnits": 768.0,
@@ -1732,5 +1746,61 @@
     "WetFilmSpecularFloorScale": 2.0,
     "WetHighlightReduction": 2.5,
     "WetternessFadeRange": 7500.0
+  },
+  "Fur Shells": {
+    "Enabled": false,
+    "ShellCount": 12,
+    "Length": 1.2,
+    "BodyLength": 0.4,
+    "Droop": 0.15,
+    "RootThreshold": 0.0,
+    "TipThreshold": 1.0,
+    "RootDarkening": 0.6,
+    "ShellColor": 1.0,
+    "FadeStart": 700.0,
+    "FadeEnd": 2500.0,
+    "HideCoveredFur": true,
+    "OverlayFur": true,
+    "MinFurPixels": 0.0,
+    "EnableWind": false,
+    "WindStrength": 1.0,
+    "EnableWetFur": false,
+    "WetStrength": 1.0,
+    "EnableTouch": false,
+    "TouchStrength": 1.0,
+    "EnableDentRecovery": false,
+    "FitHandCapsules": false,
+    "PreciseContactSelection": false,
+    "EnableHeldObjects": false,
+    "ContactLimit": 8,
+    "ContactRange": 800.0,
+    "EnableInertia": false,
+    "InertiaStrength": 1.0,
+    "InertiaPreset": 0,
+    "InertiaFrequency": 3.82,
+    "InertiaGain": 2.0,
+    "InertiaLengthExponent": 0.5,
+    "InertiaDroopExponent": 0.5,
+    "InertiaMaxBend": 1.0,
+    "ShowTouchEdges": false,
+    "DistanceShellBudget": true
+  },
+  "Snow Cover": {
+    "Enable": 0,
+    "EnableExpensiveFoliage": 0,
+    "AffectHavok": 0,
+    "AffectFloraTint": 0,
+    "SnowHeightOffset": 0.0,
+    "RooftopSnow": 3000.0,
+    "RooftopHeight": 192.0,
+    "RooftopExposure": 0.7,
+    "EnableGlints": 0,
+    "EnableRooftops": 0,
+    "EnableFoliageTint": 0,
+    "EnableBoundsCulling": 1,
+    "FireMeltEnabled": false,
+    "FireMeltRadiusScale": 4.0,
+    "FireMeltStrength": 1.0,
+    "SurvivalEnabled": false
   }
 }

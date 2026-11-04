@@ -6,7 +6,6 @@
 #include "Features/Upscaling/NeuralRendering/CropCalibration.h"
 #include "Features/Upscaling/NeuralRendering/Diagnostics.h"
 #include "Features/Upscaling/NeuralRendering/FoveaClip.h"
-#include "Features/Upscaling/NeuralRendering/ModelReconstruction.h"
 #include "Features/Upscaling/NeuralRendering/ModelScale.h"
 #include "Features/Upscaling/NeuralRendering/PeripheralCompression.h"
 #include "Features/Upscaling/NeuralRendering/Runtime.h"
@@ -87,26 +86,22 @@ TEST_CASE("Compressed crop halos contain every reconstruction tap", "[nr][roi][p
 				const auto [lower, upper] = plan.mapping.TargetBounds(
 					{ float(source.x) / extent[0], float(source.y) / extent[1] },
 					{ float(source.x + source.w) / extent[0], float(source.y + source.h) / extent[1] });
-				for (const auto mode : { NR::Reconstruction::Mode::Bilinear, NR::Reconstruction::Mode::BrightnessGuided, NR::Reconstruction::Mode::RgbGuided, NR::Reconstruction::Mode::Lanczos3 }) {
-					const float padding = NR::Reconstruction::SupportRadius(mode);
-					const auto crop = Util::Region::PixelRegionFromBounds({ lower[0], lower[1], upper[0], upper[1] }, plan.width, plan.height,
-						{ 0.0f, padding, padding, padding }, NR::kModelExtentAlignment);
-					for (unsigned y = 0; y <= 10; ++y)
-						for (unsigned x = 0; x <= 10; ++x) {
-							const auto mapped = plan.mapping.Forward({ (std::lerp(float(source.x), float(source.x + source.w - 1), float(x) / 10) + 0.5f) / extent[0],
-								(std::lerp(float(source.y), float(source.y + source.h - 1), float(y) / 10) + 0.5f) / extent[1] });
-							for (unsigned axis = 0; axis < 2; ++axis) {
-								const auto modelExtent = axis ? plan.height : plan.width;
-								const int base = static_cast<int>(std::floor(mapped[axis] * modelExtent - 0.5f));
-								const bool lanczos = mode == NR::Reconstruction::Mode::Lanczos3;
-								const int first = std::clamp(base - (lanczos ? 2 : 0), 0, int(modelExtent) - 1);
-								const int last = std::clamp(base + (lanczos ? 3 : 1), 0, int(modelExtent) - 1);
-								const auto origin = axis ? crop.y : crop.x, size = axis ? crop.h : crop.w;
-								REQUIRE(first >= int(origin));
-								REQUIRE(last < int(origin + size));
-							}
+				const auto crop = Util::Region::PixelRegionFromBounds({ lower[0], lower[1], upper[0], upper[1] }, plan.width, plan.height,
+					{ 0.0f, 1.0f, 1.0f, 1.0f }, NR::kModelExtentAlignment);
+				for (unsigned y = 0; y <= 10; ++y)
+					for (unsigned x = 0; x <= 10; ++x) {
+						const auto mapped = plan.mapping.Forward({ (std::lerp(float(source.x), float(source.x + source.w - 1), float(x) / 10) + 0.5f) / extent[0],
+							(std::lerp(float(source.y), float(source.y + source.h - 1), float(y) / 10) + 0.5f) / extent[1] });
+						for (unsigned axis = 0; axis < 2; ++axis) {
+							const auto modelExtent = axis ? plan.height : plan.width;
+							const int base = static_cast<int>(std::floor(mapped[axis] * modelExtent - 0.5f));
+							const int first = std::clamp(base, 0, int(modelExtent) - 1);
+							const int last = std::clamp(base + 1, 0, int(modelExtent) - 1);
+							const auto origin = axis ? crop.y : crop.x, size = axis ? crop.h : crop.w;
+							REQUIRE(first >= int(origin));
+							REQUIRE(last < int(origin + size));
 						}
-				}
+					}
 			}
 		}
 }

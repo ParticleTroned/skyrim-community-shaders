@@ -2,8 +2,7 @@
 #include "Common/NeuralRenderingReconstruction.hlsli"
 #include "Upscaling/NeuralRendering/ColorTransfer.hlsli"
 #ifdef NR_PERIPHERAL_COMPRESSION
-#	include "Common/NeuralRenderingPeripheral.hlsli"
-#	include "Common/ReverseZ.hlsli"
+#	include "Common/NeuralRenderingPeripheralPreparation.hlsli"
 cbuffer PeripheralData : register(b2)
 {
 	NeuralRenderingPeripheral::Mapping Peripheral;
@@ -40,42 +39,35 @@ void PreparePeripheral(uint2 pixel)
 	const float2 grid = float2(LowWidth, LowHeight);
 	const float2 sourceSize = float2(GuideWidth, GuideHeight);
 	float2 lower, upper;
-	NeuralRenderingPeripheral::SourceBounds(float2(pixel) / grid, (float2(pixel) + 1.0) / grid, Peripheral, lower, upper);
-	lower = clamp(lower * sourceSize, 0.0, sourceSize);
-	upper = clamp(upper * sourceSize, 0.0, sourceSize);
-	bool2 empty = upper <= lower;
-	lower = float2(empty.x ? min(lower.x, sourceSize.x - 1.0) : lower.x, empty.y ? min(lower.y, sourceSize.y - 1.0) : lower.y);
-	upper = float2(empty.x ? lower.x + 1.0 : upper.x, empty.y ? lower.y + 1.0 : upper.y);
+	const NeuralRenderingPeripheral::Footprint footprint = NeuralRenderingPeripheral::BuildFootprint(pixel, grid, sourceSize, Peripheral, lower, upper);
 	const uint2 first = uint2(floor(lower)), end = uint2(ceil(upper));
 	float4 color = 0.0;
-	float area = 0.0, nearest = FrameBuffer::FarPlaneDepth();
-	float2 motion = 0.0;
-	bool foundDepth = false;
+	float area = 0.0;
+	NeuralRenderingPeripheral::GuideDonor donor = NeuralRenderingPeripheral::EmptyGuideDonor();
 	[loop] for (uint y = first.y; y < end.y; ++y)
 	{
+		float rowWeights[NeuralRenderingPeripheral::kFootprintPatchCount];
+		NeuralRenderingPeripheral::RowWeights(footprint, y, rowWeights);
 		[loop] for (uint x = first.x; x < end.x; ++x)
 		{
 			const uint2 source = min(uint2(x, y), uint2(GuideWidth - 1, GuideHeight - 1));
-			const float2 overlap = max(0.0, min(upper, float2(source + 1u)) - max(lower, float2(source)));
-			const float weight = overlap.x * overlap.y;
+			const float weight = NeuralRenderingPeripheral::SourceWeight(footprint, rowWeights, source.x);
 			if (weight <= 0.0)
 				continue;
 			const float4 value = ProxyInput.Load(int3(source, 0));
 			color += (all(NeuralRenderingFinite::IsFinite(value)) ? value : 0.0) * weight;
 			area += weight;
 			const float depth = DepthInput.Load(int3(source, 0));
-			const float2 velocity = MotionInput.Load(int3(source, 0));
-			if (NeuralRenderingFinite::IsFinite(depth) && depth >= 0.0 && depth <= 1.0 && all(NeuralRenderingFinite::IsFinite(velocity)) && (!foundDepth || FrameBuffer::IsNearerDepth(depth, nearest))) {
-				nearest = depth;
-				motion = velocity;
-				foundDepth = true;
+			[branch] if (NeuralRenderingPeripheral::CanReplaceGuide(donor, depth))
+			{
+				const float2 velocity = MotionInput.Load(int3(source, 0));
+				NeuralRenderingPeripheral::AcceptGuide(donor, depth, velocity, source);
 			}
 		}
 	}
 	LowColor[pixel] = area > 0.0 ? color / area : 0.0;
-	LowDepth[pixel] = nearest;
-	const float2 anchor = NeuralRenderingPeripheral::Inverse((float2(pixel) + 0.5) / grid, Peripheral);
-	LowMotion[pixel] = NeuralRenderingPeripheral::Motion(anchor, motion, Peripheral);
+	LowDepth[pixel] = donor.depth;
+	LowMotion[pixel] = NeuralRenderingPeripheral::GuideMotion(donor, sourceSize, Peripheral);
 }
 #endif
 
@@ -143,37 +135,6 @@ bool BilinearModelGain(float2 position, float3 reference, out float gain)
 	return valid && NeuralRenderingFinite::IsFinite(gain);
 }
 
-#ifdef NR_LANCZOS3_RECONSTRUCTION
-bool Lanczos3ModelGain(float2 position, out float gain)
-{
-	const int2 origin = int2(floor(position)) - 2;
-	float weightsX[6], weightsY[6];
-	float2 normalization = 0.0;
-	[unroll] for (int i = 0; i < 6; ++i)
-	{
-		weightsX[i] = NeuralRenderingReconstruction::Lanczos3Weight(position.x - float(origin.x + i));
-		weightsY[i] = NeuralRenderingReconstruction::Lanczos3Weight(position.y - float(origin.y + i));
-		normalization += float2(weightsX[i], weightsY[i]);
-	}
-	gain = 0.0;
-	bool valid = true;
-	[unroll] for (int y = 0; y < 6; ++y)
-	{
-		float row = 0.0;
-		[unroll] for (int x = 0; x < 6; ++x)
-		{
-			float tapGain, inputLog;
-			float3 inputLinear;
-			valid = ReadModelGain(origin + int2(x, y), tapGain, inputLog, inputLinear) && valid;
-			row += tapGain * weightsX[x];
-		}
-		gain += row * weightsY[y];
-	}
-	gain /= normalization.x * normalization.y;
-	return valid && NeuralRenderingFinite::IsFinite(gain);
-}
-#endif
-
 // The composite takes only the model's luminance ratio, so the low-resolution gain is all that has to cross
 // back: the full-resolution proxy scaled by it reads, to the composite, as a model frame of its own size.
 [numthreads(8, 8, 1)] void ExpandGain(uint3 id : SV_DispatchThreadID) {
@@ -193,11 +154,7 @@ bool Lanczos3ModelGain(float2 position, out float gain)
 #endif
 	const float2 lowPosition = sourceUV * float2(LowWidth, LowHeight) - 0.5;
 	float gain;
-#ifdef NR_LANCZOS3_RECONSTRUCTION
-	const bool valid = Lanczos3ModelGain(lowPosition, gain);
-#else
 	const bool valid = BilinearModelGain(lowPosition, currentLinear, gain);
-#endif
 	const float3 candidate = ProxyLinearToSrgb(currentLinear * exp2(gain));
-	ExpandedProxy[id.xy] = valid && all(NeuralRenderingFinite::IsFinite(candidate)) ? float4(candidate, source.a) : source;
+	ExpandedProxy[id.xy] = NeuralRenderingFinite::ResolveHalfOutput(source, candidate, valid);
 }

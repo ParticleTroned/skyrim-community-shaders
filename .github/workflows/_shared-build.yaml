@@ -86,6 +86,7 @@ jobs:
                   ref: ${{ inputs.ref }}
                   repository: ${{ inputs.repository }}
                   submodules: recursive
+                  lfs: true
                   persist-credentials: false
 
             - name: Setup Build Environment

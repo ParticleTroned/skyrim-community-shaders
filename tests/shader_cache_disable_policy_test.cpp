@@ -107,6 +107,113 @@ namespace
 	static_assert(CoversEveryPendingDisableCombination());
 	static_assert(CompletesOnlyAfterNativeRestore());
 	static_assert(ReEnableCancelsDeferredDisable());
+
+	struct DeferredDisableFixture
+	{
+		std::atomic_bool pending{ true };
+		std::atomic_bool requested{ false };
+		std::atomic_bool enabled{ true };
+		bool restored = true;
+		bool statusOwned = true;
+		std::uint32_t statusReads = 0;
+
+		void Enable()
+		{
+			requested.store(true);
+			pending.store(false);
+			enabled.store(true);
+		}
+
+		void Disable()
+		{
+			requested.store(false);
+			pending.store(true);
+		}
+
+		struct Authority
+		{
+			DeferredDisableFixture& state;
+			std::uint32_t enablesBeforeAcquire = 0;
+			bool disableBeforeAcquire = false;
+			bool owned = false;
+			std::uint32_t acquisitions = 0;
+
+			void lock()
+			{
+				// Model publications after the service fast check but before ownership.
+				for (std::uint32_t i = 0; i < enablesBeforeAcquire; ++i)
+					state.Enable();
+				if (disableBeforeAcquire)
+					state.Disable();
+				owned = true;
+				++acquisitions;
+			}
+
+			void unlock() { owned = false; }
+		} authority{ *this };
+
+		PendingDisableAction Service()
+		{
+			return ShaderCacheDisablePolicy::ApplyPendingDisable(
+				authority, pending, requested, enabled, [this] {
+					statusOwned = statusOwned && authority.owned;
+					++statusReads;
+					return restored;
+				});
+		}
+	};
+
+	bool CoversDeferredDisablePublicationOrdering()
+	{
+		DeferredDisableFixture stable;
+		stable.pending.store(false);
+		if (stable.Service() != PendingDisableAction::None ||
+			stable.authority.acquisitions != 0 || stable.statusReads != 0)
+			return false;
+
+		for (std::uint32_t enables = 1; enables <= 2; ++enables) {
+			DeferredDisableFixture newerEnable;
+			newerEnable.authority.enablesBeforeAcquire = enables;
+			if (newerEnable.Service() != PendingDisableAction::None ||
+				!newerEnable.requested.load() || !newerEnable.enabled.load() ||
+				newerEnable.pending.load() || newerEnable.statusReads != 0 ||
+				newerEnable.authority.owned)
+				return false;
+		}
+
+		DeferredDisableFixture serviceFirst;
+		if (serviceFirst.Service() != PendingDisableAction::Complete ||
+			serviceFirst.enabled.load() || serviceFirst.pending.load() ||
+			!serviceFirst.statusOwned || serviceFirst.statusReads != 1)
+			return false;
+		serviceFirst.Enable();
+		serviceFirst.Enable();
+		if (serviceFirst.Service() != PendingDisableAction::None ||
+			!serviceFirst.enabled.load() || !serviceFirst.requested.load())
+			return false;
+
+		DeferredDisableFixture freshDisable;
+		freshDisable.authority.enablesBeforeAcquire = 1;
+		freshDisable.authority.disableBeforeAcquire = true;
+		if (freshDisable.Service() != PendingDisableAction::Complete ||
+			freshDisable.enabled.load() || freshDisable.requested.load() ||
+			freshDisable.pending.load() || !freshDisable.statusOwned)
+			return false;
+
+		DeferredDisableFixture waiting;
+		waiting.restored = false;
+		if (waiting.Service() != PendingDisableAction::None ||
+			!waiting.enabled.load() || !waiting.pending.load() || !waiting.statusOwned)
+			return false;
+		waiting.requested.store(true);
+		if (waiting.Service() != PendingDisableAction::Cancel ||
+			!waiting.enabled.load() || waiting.pending.load() || waiting.statusReads != 1)
+			return false;
+		return true;
+	}
 }
 
-int main() {}
+int main()
+{
+	return CoversDeferredDisablePublicationOrdering() ? 0 : 1;
+}

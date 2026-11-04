@@ -2818,7 +2818,7 @@ namespace
 
 }
 
-void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature)
+void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature, const char* a_tooltip)
 {
 	const bool supported = a_feature->SupportsPerformanceCostMeasurement();
 	bool enabled = supported ? a_feature->IsPerformanceToggleEnabled() : a_feature->loaded;
@@ -2833,6 +2833,7 @@ void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature)
 	}
 	Util::AddTooltip(reason ? reason : busy   ? "Wait for the current measurement to finish." :
 								   !supported ? "No runtime switch. Change startup in Advanced > Startup, save settings and restart." :
+								   a_tooltip  ? a_tooltip :
 												"Turns this feature on or off while keeping your current tuning.");
 }
 

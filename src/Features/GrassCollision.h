@@ -75,23 +75,25 @@ public:
 	};
 	struct Parameter
 	{
+		static constexpr auto kStrengthTooltip = "How strongly grass bends and flattens around characters. 1x is normal; higher values amplify the effect. 0 hides it but keeps collision processing running.";
 		const char* name;
 		const char* label;
 		float Settings::* member;
 		float minimum, maximum;
+		const char* tooltip;
 	};
 	static constexpr std::array parameters{
-		Parameter{ "CollisionStrength", "Deformation strength", &Settings::CollisionStrength, kMinCollisionStrength, kMaxCollisionStrength },
-		Parameter{ "CollisionRadiusScale", "Actor radius scale", &Settings::CollisionRadiusScale, 1.0f, 10.0f },
-		Parameter{ "GrassInteractionRadius", "Interaction radius", &Settings::GrassInteractionRadius, 0.0f, 128.0f },
-		Parameter{ "CollisionImpactStrength", "Impact strength", &Settings::CollisionImpactStrength, 0.0f, 4.0f },
-		Parameter{ "SpringStrength", "Spring strength", &Settings::SpringStrength, 0.05f, 40.0f },
-		Parameter{ "Damping", "Damping", &Settings::Damping, 0.0f, 20.0f },
-		Parameter{ "MaximumBend", "Maximum bend (degrees)", &Settings::MaximumBend, 5.0f, 89.0f },
-		Parameter{ "MaximumCompression", "Maximum compression", &Settings::MaximumCompression, 0.0f, 1.0f },
-		Parameter{ "CompressionHeight", "Compression height (%)", &Settings::CompressionHeight, 10.0f, 100.0f },
-		Parameter{ "MaximumCompressibleGrassHeight", "Maximum compressible height", &Settings::MaximumCompressibleGrassHeight, 16.0f, 512.0f },
-		Parameter{ "CompressionRecovery", "Compression recovery", &Settings::CompressionRecovery, 0.1f, 10.0f }
+		Parameter{ "CollisionStrength", "Deformation strength", &Settings::CollisionStrength, kMinCollisionStrength, kMaxCollisionStrength, Parameter::kStrengthTooltip },
+		Parameter{ "CollisionRadiusScale", "Actor radius scale", &Settings::CollisionRadiusScale, 1.0f, 10.0f, "Widens the area around each body part that pushes grass aside. Higher values make grass give characters more room." },
+		Parameter{ "GrassInteractionRadius", "Interaction radius", &Settings::GrassInteractionRadius, 0.0f, 128.0f, "Adds extra reach around characters. Higher values bend grass farther away; 0 adds no extra reach." },
+		Parameter{ "CollisionImpactStrength", "Impact strength", &Settings::CollisionImpactStrength, 0.0f, 4.0f, "How forcefully contact pushes grass sideways. Higher values make bending more aggressive; 0 stops new sideways pushes but still allows flattening." },
+		Parameter{ "SpringStrength", "Spring strength", &Settings::SpringStrength, 0.05f, 40.0f, "How strongly bent grass tries to stand upright. Higher values make it spring back more firmly; lower values let bends linger." },
+		Parameter{ "Damping", "Damping", &Settings::Damping, 0.0f, 20.0f, "Reduces swaying as bent grass settles. Higher values reduce bounce but can slow recovery; lower values allow more springy motion." },
+		Parameter{ "MaximumBend", "Maximum bend (degrees)", &Settings::MaximumBend, 5.0f, 89.0f, "Limits how far grass can lean from upright. Higher angles allow flatter-looking bends." },
+		Parameter{ "MaximumCompression", "Maximum compression", &Settings::MaximumCompression, 0.0f, 1.0f, "How much grass can be pressed down. Higher values allow more flattening; 0 disables it. Bending strength also scales the result." },
+		Parameter{ "CompressionHeight", "Compression height (%)", &Settings::CompressionHeight, 10.0f, 100.0f, "Height along a blade where full flattening takes effect. Lower values flatten more of the lower stem; higher values preserve it." },
+		Parameter{ "MaximumCompressibleGrassHeight", "Maximum compressible height", &Settings::MaximumCompressibleGrassHeight, 16.0f, 512.0f, "Height limit for flattening. Increase it to let taller grass flatten too; grass above the limit can still bend." },
+		Parameter{ "CompressionRecovery", "Compression recovery", &Settings::CompressionRecovery, 0.1f, 10.0f, "How quickly flattened grass regains its height after contact ends. Higher values recover sooner; lower values leave flattened patches longer." }
 	};
 	/** @brief Apply a partial settings object atomically; reject unknown or invalid values. */
 	bool Configure(const json& values, std::string& error);
@@ -167,6 +169,7 @@ public:
 	/** @brief Release an obsolete backend after a frame with no grass draws. */
 	void Reset() override;
 
+	void DrawSettingsEnabledControl() override;
 	virtual void DrawSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
@@ -232,6 +235,7 @@ public:
 	};
 
 private:
+	void DrawAdvancedControl();
 	void DrawStrengthControl();
 	void NormalizeSettings();
 #ifdef DEVBENCH_BRIDGE_ENABLED

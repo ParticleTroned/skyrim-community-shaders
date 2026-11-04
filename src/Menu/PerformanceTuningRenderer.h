@@ -12,8 +12,8 @@ class PerformanceTuningRenderer
 {
 public:
 	static void Render();
-	/** Draws a shared feature switch through the existing reversible toggle path. */
-	static void RenderFeatureEnabledControl(Feature* a_feature);
+	/** Draws the reversible feature switch; custom help never replaces a blocking reason. */
+	static void RenderFeatureEnabledControl(Feature* a_feature, const char* a_tooltip = nullptr);
 	/** Restores temporary profiling when no tuning panel or comparison is active. */
 	static void NotifyOverviewInactive();
 	/** Draws live counters, measurement controls and results; null compares all features. */

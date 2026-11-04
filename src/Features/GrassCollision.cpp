@@ -1,4 +1,5 @@
 #include "GrassCollision.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsPage.h"
 #include "Utils/UI.h"
 
@@ -33,6 +34,7 @@ static constexpr uint MAX_BASIC_COLLISIONS = MAX_BOUNDING_BOXES * MAX_BASIC_COLL
 static constexpr float MAX_ACTOR_DISTANCE = 4096.0f;
 static constexpr float MAX_ACTOR_SQ_DISTANCE = MAX_ACTOR_DISTANCE * MAX_ACTOR_DISTANCE;
 static constexpr float MIN_COLLISION_RADIUS_DISTANCE_SCALE = 0.001f;
+static constexpr auto kEnabledTooltip = "On: nearby characters and creatures bend grass. Off: stops collision bending and flattening while keeping your settings.";
 
 struct GrassCollisionActorCandidate
 {
@@ -66,25 +68,39 @@ void GrassCollision::DrawSettings()
 {
 	MenuUI::SettingsPage page(GetShortName().c_str(), { { "bending", "Bending", "Adjust how strongly nearby actors bend grass.", "Grass collision strength", true, true, "Adjust grass bending" } });
 	if (page.Is("bending")) {
-		Util::Widgets::Checkbox("Enabled", &settings.EnableGrassCollision);
 		auto guard = Util::DisableGuard(!settings.EnableGrassCollision);
-		Util::Widgets::Checkbox("Enable Advanced Grass Collision", &settings.EnableAdvancedGrassCollision);
-		Util::AddTooltip("Advanced adds swept capsules, persistent bending, compression and spring recovery using about 24 MiB of field memory. Basic uses the original bending field at about 2 MiB. Bending strength applies to both.");
-		Util::Widgets::Checkbox("Track ragdolls", &settings.TrackRagdolls);
+		DrawAdvancedControl();
 		DrawStrengthControl();
-		if (settings.EnableAdvancedGrassCollision)
+		if (settings.EnableAdvancedGrassCollision) {
+			Util::Widgets::Checkbox("Track ragdolls", &settings.TrackRagdolls);
+			Util::AddTooltip("On: dead bodies bend nearby grass. Off: only living characters and creatures affect it. Does not change body physics. Applies to Basic and Advanced.");
 			for (const auto& parameter : parameters)
-				if (parameter.member != &Settings::CollisionStrength)
+				if (parameter.member != &Settings::CollisionStrength) {
 					Util::Widgets::SliderFloat(parameter.label, &(settings.*parameter.member), parameter.minimum, parameter.maximum, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+					Util::AddTooltip(parameter.tooltip);
+				}
+		}
 	}
+}
+
+void GrassCollision::DrawSettingsEnabledControl()
+{
+	PerformanceTuningRenderer::RenderFeatureEnabledControl(this, kEnabledTooltip);
 }
 
 void GrassCollision::DrawPerformanceSettings(bool)
 {
 	Util::Widgets::Checkbox("Enabled", &settings.EnableGrassCollision);
+	Util::AddTooltip(kEnabledTooltip);
 	auto guard = Util::DisableGuard(!settings.EnableGrassCollision);
-	Util::Widgets::Checkbox("Enable Advanced Grass Collision", &settings.EnableAdvancedGrassCollision);
+	DrawAdvancedControl();
 	DrawStrengthControl();
+}
+
+void GrassCollision::DrawAdvancedControl()
+{
+	Util::Widgets::Checkbox("Enable Advanced Grass Collision", &settings.EnableAdvancedGrassCollision);
+	Util::AddTooltip("On: adds flattening, lingering bends and spring recovery. Off: uses simpler Basic bending. Advanced uses about 24 MiB of graphics memory versus 2 MiB for Basic.");
 }
 
 void GrassCollision::DrawStrengthControl()
@@ -92,7 +108,7 @@ void GrassCollision::DrawStrengthControl()
 	float strength = GetCollisionStrength();
 	if (Util::Widgets::SliderFloat("Bending strength", &strength, kMinCollisionStrength, kMaxCollisionStrength, "%.1fx", ImGuiSliderFlags_AlwaysClamp))
 		SetCollisionStrength(strength);
-	Util::AddTooltip("Scale grass bending around the player and other actors. 1x uses the selected backend's response, 0 removes deformation, and higher values amplify it. Roots stay fixed; advanced bending and compression retain their configured limits.");
+	Util::AddTooltip(Parameter::kStrengthTooltip);
 }
 
 float GrassCollision::GetCollisionStrength() const

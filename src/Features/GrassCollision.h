@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "GrassCollisionMode.h"
 #include "Utils/LazyShader.h"
 
 #include <array>
@@ -31,6 +32,7 @@ public:
 	static constexpr float kMinCollisionStrength = 0.0f;
 	static constexpr float kMaxCollisionStrength = 5.0f;
 	static constexpr float kDefaultCollisionStrength = 1.0f;
+	static constexpr float kBasicCollisionDistance = 2048.0f;
 
 	virtual inline std::string GetName() override { return "Grass Collision"; }
 	virtual inline std::string GetShortName() override { return "GrassCollision"; }
@@ -42,12 +44,13 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Bends and compresses grass around actors, with spring recovery.",
-			{ "Swept actor capsules with persistent bend and compression",
+			"Bends grass around actors, with optional advanced collision.",
+			{ "Basic bending with adjustable strength",
+				"Optional swept actor capsules with persistent bend and compression",
 				"Adjustable impact, spring response, damping and recovery",
-				"Up to 64 nearby actors with three colliders per actor",
+				"Advanced tracks up to 64 nearby actors with three colliders each",
 				"Current and previous deformation for motion vectors",
-				"Lighting normals follow the bend direction" }
+				"Advanced lighting normals follow the bend direction" }
 		};
 	}
 
@@ -56,6 +59,7 @@ public:
 	struct Settings
 	{
 		bool EnableGrassCollision = true;
+		bool EnableAdvancedGrassCollision = false;
 		bool TrackRagdolls = true;
 		float CollisionStrength = kDefaultCollisionStrength;
 		float CollisionRadiusScale = 1.0f;
@@ -130,6 +134,17 @@ public:
 		float MaximumBend, MaximumCompression, CompressionRecovery, Padding;
 	};
 	static_assert(sizeof(UpdateConstants) == 64);
+	struct alignas(16) BasicUpdateConstants
+	{
+		float2 PosOffset;
+		DirectX::XMUINT2 ArrayOrigin;
+		DirectX::XMINT2 ValidMargin;
+		float TimeDelta;
+		uint BoundingBoxCount;
+		float CameraHeightDelta;
+		float3 Padding;
+	};
+	static_assert(sizeof(BasicUpdateConstants) == 48);
 
 	Settings settings;
 
@@ -140,13 +155,17 @@ public:
 
 	eastl::vector<BoundingBoxPacked> queuedBoundingBoxes;
 	eastl::vector<CollisionShapePacked> queuedCollisions;
+	eastl::vector<float4> queuedBasicCollisions;
 
 	virtual void ClearShaderCache() override;
 
 	ID3D11ComputeShader* GetCollisionUpdateCS();
 	Util::LazyShader<ID3D11ComputeShader> collisionUpdateCS;
+	Util::LazyShader<ID3D11ComputeShader> basicUpdateCS;
 
 	virtual void SetupResources() override;
+	/** @brief Release an obsolete backend after a frame with no grass draws. */
+	void Reset() override;
 
 	virtual void DrawSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
@@ -159,6 +178,10 @@ public:
 	void Update();
 	/** @brief Keep collision vertex code only while enabled or consuming the final temporal history. */
 	bool NeedsVertexDeformation() const;
+	/** @brief Return the frame's backend, including a retiring backend's final motion history. */
+	GrassCollisionMode::Mode GetVertexMode() const;
+	/** @brief Conservative culling multiplier for the active backend and temporal strength. */
+	float GetCullingStrength() const;
 
 	/** @brief Read the bounded multiplier applied to actor-driven grass displacement. */
 	float GetCollisionStrength() const;
@@ -211,11 +234,24 @@ public:
 private:
 	void DrawStrengthControl();
 	void NormalizeSettings();
-	bool UpdateCollisionTexture(const UpdateConstants& constants);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	struct QueueDiagnostics;
+#endif
+	void QueueBasicActor(RE::NiAVObject* root, float minimumRadius, BoundingBoxPacked& box
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		,
+		QueueDiagnostics* diagnostic
+#endif
+	);
+	bool UpdateCollisionTexture(const UpdateConstants& constants, bool simulate);
+	bool UpdateBasicCollisionTexture(const UpdateConstants& constants);
+	GrassCollisionMode::Mode GetRequestedMode() const;
 	void ClearFields();
 	void ReleaseResources();
 	static constexpr uint32_t kFieldSize = 1024;
 	static constexpr float kWorldSize = 8192.0f;
+	static constexpr uint32_t kBasicFieldSize = 512;
+	static constexpr float kBasicWorldSize = 4096.0f;
 	struct ColliderHistory
 	{
 		RE::NiPoint3 pointA, pointB;
@@ -226,7 +262,11 @@ private:
 	};
 	std::unordered_map<const RE::bhkNiCollisionObject*, ColliderHistory> colliderHistory;
 	RE::NiPoint3 queuedCamera{};
+	GrassCollisionMode::Mode queuedMode = GrassCollisionMode::Mode::Disabled;
+	std::atomic<GrassCollisionMode::Mode> resourceMode{ GrassCollisionMode::Mode::Disabled };
+	std::atomic<GrassCollisionMode::Mode> failedMode{ GrassCollisionMode::Mode::Disabled };
 	float2 previousCell{};
+	float previousCameraHeight = 0;
 	PerFrame published{};
 	std::array<eastl::unique_ptr<Texture2D>, 2> deformation, velocity;
 	eastl::unique_ptr<ConstantBuffer> updateConstants;
@@ -234,13 +274,14 @@ private:
 	winrt::com_ptr<ID3D11DeviceContext1> computeContext;
 	uint32_t fieldIndex = 0, lastUpdateFrame = UINT32_MAX;
 	bool fieldInitialized = false, fieldsCleared = false, vertexResourcesBound = false;
-	std::atomic_bool vertexHistoryActive{ false };
+	std::atomic_bool currentDeformationActive{ false };
+	std::atomic_uint32_t publishedFrame{ UINT32_MAX };
 	std::atomic_bool resourceFailed{ false };
 	std::atomic_bool resetRequested{ true }, historyResetRequested{ true };
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	static constexpr uint32_t kDiagnosticsWindowFrames = GrassCollisionVertexProbe::kCaptureFrames;
-	std::atomic_bool fieldResourcesResident{ false };
+	std::atomic_uint64_t fieldResourceBytes{ 0 };
 	struct QueueDiagnostics
 	{
 		uint32_t frame = 0;
@@ -299,6 +340,7 @@ private:
 	uint64_t readbackRequestGeneration = UINT64_MAX;
 	uint32_t readbackFrame = 0;
 	DirectX::XMUINT2 readbackOrigin{};
+	GrassCollisionMode::Mode readbackMode = GrassCollisionMode::Mode::Disabled;
 	bool readbackPending = false;
 	GrassCollisionVertexProbe vertexProbe;
 	winrt::com_ptr<ID3D11DeviceContext1> vertexProbeContext;

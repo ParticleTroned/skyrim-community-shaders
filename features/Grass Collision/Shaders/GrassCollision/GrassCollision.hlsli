@@ -1,16 +1,13 @@
 #ifndef GRASS_COLLISION_HLSLI
 #define GRASS_COLLISION_HLSLI
-#include "GrassCollision/GrassCollisionField.hlsli"
+#include "GrassCollision/GrassCollisionCommon.hlsli"
+#ifdef GRASS_COLLISION_BASIC
+#	include "GrassCollision/GrassCollisionBasic.hlsli"
+#else
+#	include "GrassCollision/GrassCollisionField.hlsli"
 
 namespace GrassCollision
 {
-	float3 RotateVector(float3 value, float3 axis, float angle)
-	{
-		float sine, cosine;
-		sincos(angle, sine, cosine);
-		return value * cosine + cross(axis, value) * sine + axis * dot(axis, value) * (1 - cosine);
-	}
-
 	float CompressionWeight(float normalizedHeight, float bladeHeight, float reach, float maximumHeight)
 	{
 		maximumHeight = max(maximumHeight, 1.0);
@@ -48,18 +45,6 @@ namespace GrassCollision
 		return deformed - relative;
 	}
 
-	float3 DeformNormal(float3 normal, float3 axis, float angle, float compressionScale)
-	{
-		float3 result = normal;
-		[branch] if (angle != 0 || compressionScale != 1)
-		{
-			result = RotateVector(normal, axis, angle);
-			result.z /= max(compressionScale, 1e-4);
-			result *= rsqrt(max(dot(result, result), 1e-12));
-		}
-		return result;
-	}
-
 	void ApplyDeformation(VS_INPUT input, inout float3 currentPosition, inout float3 previousPosition,
 		float distance, out float3 bendAxis, out float bendAngle, out float compressionScale)
 	{
@@ -85,4 +70,5 @@ namespace GrassCollision
 			PreviousCollisionStrength, PreviousMaximumBend, PreviousWorld[0], previousAxis, previousAngle, previousCompression);
 	}
 }
+#endif
 #endif

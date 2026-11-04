@@ -1,20 +1,12 @@
 #ifndef GRASS_COLLISION_FIELD_HLSLI
 #define GRASS_COLLISION_FIELD_HLSLI
+#include "GrassCollision/GrassCollisionCommon.hlsli"
 
 namespace GrassCollision
 {
 	Texture2D<float4> Deformation : register(t100);
 	Texture2D<float4> PreviousDeformation : register(t101);
 	SamplerState DeformationSampler : register(s15);
-	cbuffer GrassCollisionPerFrame : register(b5)
-	{
-		float2 PosOffset;
-		uint2 ArrayOrigin;
-		float2 PreviousPosOffset;
-		uint2 PreviousArrayOrigin;
-		float CompressionHeight, CollisionStrength, PreviousCollisionStrength, MaximumCompressibleGrassHeight;
-		float MaximumBend, PreviousMaximumBend, PreviousCompressionHeight, PreviousMaximumCompressibleGrassHeight;
-	}
 	static const uint TEXTURE_SIZE = 1024;
 	static const float WORLD_SIZE = 8192.0;
 	static const float FADE_DISTANCE = WORLD_SIZE * 0.5;

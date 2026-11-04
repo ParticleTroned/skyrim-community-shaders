@@ -258,8 +258,10 @@ VS_OUTPUT main(VS_INPUT input)
 #		endif
 
 	float4 previousMsPosition = msPosition;
+#		ifndef GRASS_COLLISION_BASIC
 	msPosition.xyz += windDisplacement;
 	previousMsPosition.xyz += previousWindDisplacement;
+#		endif
 #		ifdef GRASS_COLLISION
 	float3 collisionAxis;
 	float collisionAngle, compressionScale;
@@ -272,6 +274,10 @@ VS_OUTPUT main(VS_INPUT input)
 #			endif
 	GrassCollision::ApplyDeformation(collisionInput, msPosition.xyz, previousMsPosition.xyz,
 		collisionDistance, collisionAxis, collisionAngle, compressionScale);
+#			ifdef GRASS_COLLISION_BASIC
+	msPosition.xyz += windDisplacement;
+	previousMsPosition.xyz += previousWindDisplacement;
+#			endif
 #		endif
 
 	float4 projSpacePosition = mul(WorldViewProj[eyeIndex], msPosition);
@@ -355,8 +361,10 @@ VS_OUTPUT main(VS_INPUT input)
 #		endif
 
 	float4 previousMsPosition = msPosition;
+#		ifndef GRASS_COLLISION_BASIC
 	msPosition.xyz += windDisplacement;
 	previousMsPosition.xyz += previousWindDisplacement;
+#		endif
 #		ifdef GRASS_COLLISION
 	float3 collisionAxis;
 	float collisionAngle, compressionScale;
@@ -369,6 +377,10 @@ VS_OUTPUT main(VS_INPUT input)
 #			endif
 	GrassCollision::ApplyDeformation(collisionInput, msPosition.xyz, previousMsPosition.xyz,
 		collisionDistance, collisionAxis, collisionAngle, compressionScale);
+#			ifdef GRASS_COLLISION_BASIC
+	msPosition.xyz += windDisplacement;
+	previousMsPosition.xyz += previousWindDisplacement;
+#			endif
 #		endif
 
 	float4 projSpacePosition = mul(WorldViewProj[eyeIndex], msPosition);

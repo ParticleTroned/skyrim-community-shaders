@@ -972,7 +972,7 @@ template<class T> struct Retained { T* value = nullptr; explicit operator bool()
 namespace SIE {
 struct ShaderCache {
     enum class GrassShaderTechniques { RenderDepth = 8 };
-    enum class GrassShaderFlags { NoCollision = 0x400, AlphaTest = 0x10000 };
+    enum class GrassShaderFlags { NoCollision = 0x400, BasicCollision = 0x800, AlphaTest = 0x10000 };
     static constexpr uint32_t GetCharacterCategoryFlag(RE::BSShader::Type) { return 0x200; }
     struct Vertex { ID3D11VertexShader* shader; };
     struct Pixel { ID3D11PixelShader* shader; };
@@ -992,8 +992,8 @@ struct ShaderCache {
         for (unsigned i = 0; i < pixels.size(); ++i) pixels[i].shader = &pixelObjects[i];
     }
     Retained<ID3D11VertexShader> RetainVertexShader(RE::BSShader&, uint32_t descriptor) {
-        assert((descriptor & ~(8u | 0x400u)) == 0);
-        lastCollisionFlag = descriptor & 0x400u;
+        assert((descriptor & ~(8u | 0x400u | 0x800u)) == 0);
+        lastCollisionFlag = descriptor & 0xC00u;
         const auto index = (descriptor & 8u) ? 1 : 0;
         ++calls;
         if (calls == mutateAt) ++revision;
@@ -1019,7 +1019,7 @@ public:
         bool drawShadersChecked = false, drawShadersReady = false;
         uint64_t drawShaderRevision = 0;
         uint32_t drawCollisionFlag = 0;
-        bool frameCollisionEnabled = true;
+        bool frameCollisionEnabled = true, frameCollisionBasic = false;
         std::array<Retained<ID3D11VertexShader>, 2> drawVertexShaders;
         std::array<Retained<ID3D11PixelShader>, 8> drawPixelShaders;
         bool PrepareDrawShaders();
@@ -1040,6 +1040,14 @@ int main() {
         renderer.frameCollisionEnabled = true;
         renderer.drawShadersChecked = false;
         assert(renderer.PrepareDrawShaders() && cache.calls == 30 && cache.lastCollisionFlag == 0);
+        renderer.frameCollisionBasic = true;
+        renderer.drawShadersChecked = false;
+        assert(renderer.PrepareDrawShaders() && cache.calls == 40 && cache.lastCollisionFlag == 0x800);
+        renderer.drawShadersChecked = false;
+        assert(renderer.PrepareDrawShaders() && cache.calls == 40);
+        renderer.frameCollisionEnabled = false;
+        renderer.drawShadersChecked = false;
+        assert(renderer.PrepareDrawShaders() && cache.calls == 50 && cache.lastCollisionFlag == 0x400);
     }
     for (unsigned failure = 1; failure <= 10; ++failure) {
         SIE::ShaderCache cache;

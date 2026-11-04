@@ -82,8 +82,8 @@
       "maximumVersionExclusive": "3.22"
     },
     "settingsContract": {
-      "revision": 32,
-      "sourceTreeSha256": "682140F985C671A5C47C8A82397A9A707339A6B09C8F842BA90AE44EA1C7E951"
+      "revision": 33,
+      "sourceTreeSha256": "7AF29AF90FBA94A0FA01B28D82E5AAAE49D8AC2A8416718FDC686512B19FF58E"
     }
   },
   "Upscaling": {
@@ -437,6 +437,7 @@
   "Grass Collision": {
     "CollisionStrength": 1.0,
     "EnableGrassCollision": true,
+    "EnableAdvancedGrassCollision": false,
     "TrackRagdolls": true,
     "CollisionRadiusScale": 1.0,
     "GrassInteractionRadius": 25.0,

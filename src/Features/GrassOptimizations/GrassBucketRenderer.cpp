@@ -676,7 +676,7 @@ struct GrassBucketRenderer::Impl
 	RE::NiPoint3 currentOrigin;
 	GrassPolicy::Settings frameSettings;
 	float frameCollisionStrength = GrassCollision::kDefaultCollisionStrength;
-	bool frameCollisionEnabled = false;
+	bool frameCollisionEnabled = false, frameCollisionBasic = false;
 	struct PreparationJob
 	{
 		std::vector<Source> sources;
@@ -1442,8 +1442,10 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 	frameSettings = globals::features::grassOptimizations.GetSettings();
 	const auto& collision = globals::features::grassCollision;
 	frameCollisionEnabled = collision.NeedsVertexDeformation();
-	// Rotation and compression cannot move a vertex more than twice its root reach.
-	frameCollisionStrength = frameCollisionEnabled ? 1.0f : 0.0f;
+	frameCollisionBasic = collision.GetVertexMode() == GrassCollisionMode::Mode::Basic;
+	if (frameCollisionBasic)
+		frameSettings.CollisionDistance = std::min(frameSettings.CollisionDistance, GrassCollision::kBasicCollisionDistance);
+	frameCollisionStrength = collision.GetCullingStrength();
 	frameSettings.Enabled &= globals::features::grassOptimizations.loaded;
 	ClearDrawContext();
 	frame = now;
@@ -2199,7 +2201,9 @@ bool GrassBucketRenderer::Impl::PrepareDrawShaders()
 		return drawShadersReady;
 	drawShadersChecked = true;
 	const auto revision = globals::shaderCache->GetGraphicsShaderRevision();
-	const auto collisionFlag = frameCollisionEnabled ? 0u : uint32_t(SIE::ShaderCache::GrassShaderFlags::NoCollision);
+	const auto collisionFlag = !frameCollisionEnabled ? uint32_t(SIE::ShaderCache::GrassShaderFlags::NoCollision) :
+	                           frameCollisionBasic    ? uint32_t(SIE::ShaderCache::GrassShaderFlags::BasicCollision) :
+	                                                    0u;
 	if (drawShadersReady && drawShaderRevision == revision && drawCollisionFlag == collisionFlag)
 		return true;
 	drawShadersReady = false;

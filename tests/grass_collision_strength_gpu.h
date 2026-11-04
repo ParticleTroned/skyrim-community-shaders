@@ -1,10 +1,13 @@
-void RunGrassCollisionStrength()
+void RunGrassCollisionStrength(bool basic = false)
 {
 	ComPtr<ID3D11Device> device;
 	ComPtr<ID3D11DeviceContext> context;
 	Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
 		D3D11_SDK_VERSION, device.GetAddressOf(), nullptr, context.GetAddressOf()));
-	auto code = Compile(L"tests/shaders/GrassCollisionStrengthTestCS.hlsl", "cs_5_0");
+	std::vector<D3D_SHADER_MACRO> defines;
+	if (basic)
+		defines.push_back({ "GRASS_COLLISION_BASIC", "1" });
+	auto code = Compile(L"tests/shaders/GrassCollisionStrengthTestCS.hlsl", "cs_5_0", defines);
 	ComPtr<ID3D11ComputeShader> shader;
 	Check(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, shader.GetAddressOf()));
 	Util::SetResourceName(shader.Get(), "GrassTest::CollisionStrengthCS");
@@ -58,15 +61,16 @@ void RunGrassCollisionStrength()
 	Util::SetResourceName(inputs.Get(), "GrassTest::CollisionStrengthCases SRV");
 	Util::SetResourceName(results.Get(), "GrassTest::CollisionStrengthResults UAV");
 	const auto fieldTexture = [&](std::array<float, 4> value, const char* name) {
-		std::vector<DirectX::PackedVector::HALF> pixels(1024 * 1024 * 4);
+		const UINT fieldSize = basic ? 512 : 1024;
+		std::vector<DirectX::PackedVector::HALF> pixels(size_t(fieldSize) * fieldSize * 4);
 		for (size_t i = 0; i < pixels.size(); ++i)
 			pixels[i] = DirectX::PackedVector::XMConvertFloatToHalf(value[i % 4]);
 		D3D11_TEXTURE2D_DESC desc{};
-		desc.Width = desc.Height = 1024;
+		desc.Width = desc.Height = fieldSize;
 		desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
 		desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		D3D11_SUBRESOURCE_DATA initial{ pixels.data(), 1024 * 8, 0 };
+		D3D11_SUBRESOURCE_DATA initial{ pixels.data(), fieldSize * 8, 0 };
 		ComPtr<ID3D11Texture2D> texture;
 		Check(device->CreateTexture2D(&desc, &initial, texture.GetAddressOf()));
 		Util::SetResourceName(texture.Get(), "%s", name);
@@ -75,7 +79,7 @@ void RunGrassCollisionStrength()
 		Util::SetResourceName(view.Get(), "%s SRV", name);
 		return view;
 	};
-	auto currentField = fieldTexture({ .25f, 0, .25f, 0 }, "GrassTest::CurrentField");
+	auto currentField = fieldTexture(basic ? std::array<float, 4>{ .5f, .5f, .49609375f, .49609375f } : std::array<float, 4>{ .25f, 0, .25f, 0 }, "GrassTest::CurrentField");
 	auto previousField = fieldTexture({ 0, .125f, .125f, 0 }, "GrassTest::PreviousField");
 	D3D11_SAMPLER_DESC samplerDesc{};
 	samplerDesc.Filter = D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
@@ -136,6 +140,15 @@ void RunGrassCollisionStrength()
 			if ((i >= 1 && i <= 4) || i == 6)
 				for (size_t axis : { 0u, 1u, 2u, 4u, 5u, 6u })
 					Require(values[i][axis] == 0, "Root, alpha or distance gate failed");
+		}
+		if (basic) {
+			const float fadePosition = 1 - 30.0f / 2048;
+			const float fade = fadePosition * fadePosition * (3 - 2 * fadePosition);
+			Require(std::abs(values[0][2] - std::max(-30.0f, -30 * .75f * fade * strengths[0])) < .001f &&
+						std::abs(values[0][6] - std::max(-30.0f, -14 * .75f * fade * strengths[1])) < .001f,
+				"Basic height response, previous field or strength changed");
+			Require(values[0][0] == 0 && values[0][1] == 0 && values[0][3] == 1, "Uniform Basic field changed lateral position or normal");
+			continue;
 		}
 		// Uniform orthogonal fields give independent analytic current/previous rotations.
 		const float angle = std::min(.25f * strengths[0], 1.0f);

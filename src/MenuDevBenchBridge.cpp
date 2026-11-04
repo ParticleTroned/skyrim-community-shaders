@@ -1566,13 +1566,13 @@ namespace MenuDevBenchBridge
 			json collisionSettingsProperties = json::object();
 			for (const auto& parameter : GrassCollision::parameters)
 				collisionSettingsProperties[parameter.name] = { { "type", "number" }, { "minimum", parameter.minimum }, { "maximum", parameter.maximum } };
-			for (const auto* name : { "EnableGrassCollision", "TrackRagdolls" })
+			for (const auto* name : { "EnableGrassCollision", "EnableAdvancedGrassCollision", "TrackRagdolls" })
 				collisionSettingsProperties[name] = { { "type", "boolean" } };
 			const json collisionSettingsSchema = { { "type", "object" }, { "additionalProperties", false }, { "properties", collisionSettingsProperties } };
 			document["inputSchema"]["properties"]["collisionSettings"] = collisionSettingsSchema;
 			document["outputSchema"]["properties"]["collisionSettings"] = collisionSettingsSchema;
 			document["description"] = document["description"].get<std::string>() +
-			                          " configure_grass_collision applies a partial collisionSettings object atomically on the main thread without saving. All fields use the documented finite ranges; unknown fields are rejected. Applies to SE/AE/VR. EnableGrassCollision controls swept actor capsules and persistent bend/compression, TrackRagdolls controls dead actors, CollisionStrength scales final deformation, CollisionImpactStrength drives field impulses, SpringStrength/Damping control bend recovery, and CompressionRecovery controls compression decay. Active performance measurements block mutation. Use strength 0 for a vertex-consumption baseline while retaining field simulation, or disable the feature for total collision cost. Diagnostic replays perturb timings: measure GPU/CPU cost separately with grass_telemetry requestTelemetry=false after diagnostics settle. Disabled collision retires its final temporal history, then releases its fields and uses a cached vertex permutation without collision code or culling expansion. First use may compile that permutation; steady-state neutrality needs a matched timing comparison. grassCollision.vertexDeformationActive, fieldResourceBytes and drawBindings.disabledShaderChecks identify the settled off path. R5 per-instance caching is not enabled by this port.";
+			                          " configure_grass_collision applies a partial collisionSettings object atomically on the main thread without saving. All fields use the documented finite ranges; unknown fields are rejected. Applies to SE/AE/VR. EnableGrassCollision is the master switch, EnableAdvancedGrassCollision selects Advanced (true) or default Basic (false) independently of GO. Basic restores the 512-square height/age bending field (2 MiB); Advanced uses 1024-square swept-capsule bend/compression and velocity fields (24 MiB). Only the selected backend allocates fields or runs its actor collection and update shader. Mode changes retire the outgoing deformation for one frame, then replace resources and start with zero incoming history. Both backends retain CollisionStrength; advanced response controls are inactive in Basic. TrackRagdolls controls dead actors, CollisionStrength scales final deformation, CollisionImpactStrength drives field impulses, SpringStrength/Damping control bend recovery, and CompressionRecovery controls compression decay. Active performance measurements block mutation. Use strength 0 for a vertex-consumption baseline while retaining field simulation, or disable the feature for total collision cost. Diagnostic replays perturb timings: measure GPU/CPU cost separately with grass_telemetry requestTelemetry=false after diagnostics settle. Disabled collision retires its final temporal history, then releases its fields and uses a cached vertex permutation without collision code or culling expansion. First use may compile that permutation; steady-state neutrality needs a matched timing comparison. grassCollision.requestedMode, activeMode, transitionPending, vertexDeformationActive, fieldResourceBytes and drawBindings.disabledShaderChecks identify the settled off path. R5 per-instance caching is not enabled by this port.";
 			document["inputSchema"]["properties"]["action"]["enum"].push_back("grass_telemetry");
 			document["inputSchema"]["properties"]["action"]["enum"].push_back("set_grass_background_preparation_enabled");
 			document["description"] = document["description"].get<std::string>() +
@@ -1603,7 +1603,7 @@ namespace MenuDevBenchBridge
 				{ "shapeSamplesCameraRelative", { { "type", "array" }, { "maxItems", 8 },
 													{ "items", { { "type", "object" }, { "properties", { { "currentAAndRadius", collisionVectorSchema(4) }, { "currentB", collisionVectorSchema(3) },
 																										   { "previousA", collisionVectorSchema(3) }, { "previousB", collisionVectorSchema(3) } } } } },
-													{ "description", "Up to eight camera-relative swept capsules; currentAAndRadius.w is the scaled radius." } } }
+													{ "description", "Up to eight camera-relative collider samples: swept capsules in Advanced, degenerate capsules representing spheres in Basic. currentAAndRadius.w is the radius." } } }
 			};
 			for (const char* field : { "actorCandidates", "actorRoots", "shapeVisits", "shapeBoundFailures", "radiusRejected",
 					 "playerShapes", "otherActorShapes", "boundingBoxes", "collisionShapes" })
@@ -1626,7 +1626,7 @@ namespace MenuDevBenchBridge
 			for (const char* field : { "worldSize", "maxBendRadians", "maxCompression", "maxNearCameraBendRadians", "maxNearCameraCompression" })
 				collisionTextureProperties[field] = collisionNumberSchema;
 			document["outputSchema"]["properties"]["grassCollision"] = {
-				{ "type", "object" }, { "properties", { { "schemaVersion", { { "type", "integer" }, { "const", 4 } } },
+				{ "type", "object" }, { "properties", { { "schemaVersion", { { "type", "integer" }, { "const", 5 } } },
 														  { "requestGeneration", collisionCountSchema },
 														  { "loaded", { { "type", "boolean" } } }, { "enabled", { { "type", "boolean" } } },
 														  { "requestedFrame", { { "type", { "integer", "null" } } } },
@@ -1665,6 +1665,12 @@ namespace MenuDevBenchBridge
 				{ "type", { "string", "null" } }, { "description", "Observation failure for this request; rendering continues and another request retries diagnostics." }
 			};
 			document["outputSchema"]["properties"]["grassCollision"]["properties"]["settings"] = collisionSettingsSchema;
+			for (const auto* name : { "requestedMode", "activeMode" })
+				document["outputSchema"]["properties"]["grassCollision"]["properties"][name] = { { "type", "string" }, { "enum", { "disabled", "basic", "advanced" } } };
+			document["outputSchema"]["properties"]["grassCollision"]["properties"]["transitionPending"] = { { "type", "boolean" } };
+			document["outputSchema"]["properties"]["grassCollision"]["properties"]["texture"]["properties"]["fieldEncoding"] = { { "type", "string" }, { "enum", { "bend_compression", "current_previous_height_age" } } };
+			for (const auto* name : { "maxBendRadians", "maxCompression", "maxNearCameraBendRadians", "maxNearCameraCompression" })
+				document["outputSchema"]["properties"]["grassCollision"]["properties"]["texture"]["properties"][name]["type"] = { "number", "null" };
 			document["outputSchema"]["properties"]["grassCollision"]["properties"]["resourceFailed"] = { { "type", "boolean" } };
 			document["outputSchema"]["properties"]["grassCollision"]["properties"]["vertexDeformationActive"] = { { "type", "boolean" } };
 			document["outputSchema"]["properties"]["grassCollision"]["properties"]["fieldResourceBytes"] = collisionCountSchema;

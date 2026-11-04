@@ -1618,6 +1618,9 @@ namespace SIE
 				}
 			}
 
+			if (descriptor & uint32_t(ShaderCache::GrassShaderFlags::BasicCollision))
+				defines[lastIndex++] = { "GRASS_COLLISION_BASIC", nullptr };
+
 			defines[lastIndex] = { nullptr, nullptr };
 		}
 

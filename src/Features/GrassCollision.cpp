@@ -28,6 +28,8 @@
 static constexpr uint MAX_BOUNDING_BOXES = 64;
 static constexpr uint MAX_COLLISIONS_PER_BOUNDING_BOX = 3;
 static constexpr uint MAX_COLLISIONS = MAX_BOUNDING_BOXES * MAX_COLLISIONS_PER_BOUNDING_BOX;
+static constexpr uint MAX_BASIC_COLLISIONS_PER_ACTOR = 64;
+static constexpr uint MAX_BASIC_COLLISIONS = MAX_BOUNDING_BOXES * MAX_BASIC_COLLISIONS_PER_ACTOR;
 static constexpr float MAX_ACTOR_DISTANCE = 4096.0f;
 static constexpr float MAX_ACTOR_SQ_DISTANCE = MAX_ACTOR_DISTANCE * MAX_ACTOR_DISTANCE;
 static constexpr float MIN_COLLISION_RADIUS_DISTANCE_SCALE = 0.001f;
@@ -38,9 +40,23 @@ struct GrassCollisionActorCandidate
 	float sqDistance;
 };
 
+template <class Records>
+static void UploadCollisionRecords(ID3D11DeviceContext* context, Buffer& buffer, const Records& values)
+{
+	if (values.empty())
+		return;
+	if (values.size() > buffer.desc.ByteWidth / sizeof(values[0]))
+		throw std::runtime_error("Grass collision upload exceeds its buffer capacity");
+	D3D11_MAPPED_SUBRESOURCE mapped{};
+	DX::ThrowIfFailed(context->Map(buffer.resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+	memcpy(mapped.pData, values.data(), values.size() * sizeof(values[0]));
+	context->Unmap(buffer.resource.get(), 0);
+}
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	GrassCollision::Settings,
 	EnableGrassCollision,
+	EnableAdvancedGrassCollision,
 	TrackRagdolls,
 	CollisionStrength, CollisionRadiusScale, GrassInteractionRadius, CollisionImpactStrength,
 	SpringStrength, Damping, MaximumBend, MaximumCompression, CompressionHeight,
@@ -52,9 +68,14 @@ void GrassCollision::DrawSettings()
 	if (page.Is("bending")) {
 		Util::Widgets::Checkbox("Enabled", &settings.EnableGrassCollision);
 		auto guard = Util::DisableGuard(!settings.EnableGrassCollision);
+		Util::Widgets::Checkbox("Enable Advanced Grass Collision", &settings.EnableAdvancedGrassCollision);
+		Util::AddTooltip("Advanced adds swept capsules, persistent bending, compression and spring recovery using about 24 MiB of field memory. Basic uses the original bending field at about 2 MiB. Bending strength applies to both.");
 		Util::Widgets::Checkbox("Track ragdolls", &settings.TrackRagdolls);
-		for (const auto& parameter : parameters)
-			Util::Widgets::SliderFloat(parameter.label, &(settings.*parameter.member), parameter.minimum, parameter.maximum, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		DrawStrengthControl();
+		if (settings.EnableAdvancedGrassCollision)
+			for (const auto& parameter : parameters)
+				if (parameter.member != &Settings::CollisionStrength)
+					Util::Widgets::SliderFloat(parameter.label, &(settings.*parameter.member), parameter.minimum, parameter.maximum, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	}
 }
 
@@ -62,6 +83,7 @@ void GrassCollision::DrawPerformanceSettings(bool)
 {
 	Util::Widgets::Checkbox("Enabled", &settings.EnableGrassCollision);
 	auto guard = Util::DisableGuard(!settings.EnableGrassCollision);
+	Util::Widgets::Checkbox("Enable Advanced Grass Collision", &settings.EnableAdvancedGrassCollision);
 	DrawStrengthControl();
 }
 
@@ -70,7 +92,7 @@ void GrassCollision::DrawStrengthControl()
 	float strength = GetCollisionStrength();
 	if (Util::Widgets::SliderFloat("Bending strength", &strength, kMinCollisionStrength, kMaxCollisionStrength, "%.1fx", ImGuiSliderFlags_AlwaysClamp))
 		SetCollisionStrength(strength);
-	Util::AddTooltip("Scale grass bending around the player and other actors. 1x uses the simulated response, 0 removes deformation, and higher values amplify it up to the configured bend limit; compression is clamped to full flattening.");
+	Util::AddTooltip("Scale grass bending around the player and other actors. 1x uses the selected backend's response, 0 removes deformation, and higher values amplify it. Roots stay fixed; advanced bending and compression retain their configured limits.");
 }
 
 float GrassCollision::GetCollisionStrength() const
@@ -101,12 +123,17 @@ bool GrassCollision::Configure(const json& values, std::string& error)
 	}
 	auto next = settings;
 	for (const auto& [name, value] : values.items()) {
-		if (name == "EnableGrassCollision" || name == "TrackRagdolls") {
+		if (name == "EnableGrassCollision" || name == "EnableAdvancedGrassCollision" || name == "TrackRagdolls") {
 			if (!value.is_boolean()) {
 				error = name + " must be a boolean";
 				return false;
 			}
-			(name == "EnableGrassCollision" ? next.EnableGrassCollision : next.TrackRagdolls) = value.get<bool>();
+			if (name == "EnableGrassCollision")
+				next.EnableGrassCollision = value.get<bool>();
+			else if (name == "EnableAdvancedGrassCollision")
+				next.EnableAdvancedGrassCollision = value.get<bool>();
+			else
+				next.TrackRagdolls = value.get<bool>();
 			continue;
 		}
 		const auto parameter = std::find_if(parameters.begin(), parameters.end(), [&](const auto& item) { return name == item.name; });
@@ -134,9 +161,11 @@ void GrassCollision::QueueCollisions()
 {
 	queuedBoundingBoxes.clear();
 	queuedCollisions.clear();
-	if (historyResetRequested.exchange(false) || !settings.EnableGrassCollision)
+	queuedBasicCollisions.clear();
+	queuedMode = GetRequestedMode();
+	if (historyResetRequested.exchange(false) || queuedMode != GrassCollisionMode::Mode::Advanced)
 		colliderHistory.clear();
-	if (!loaded || resourceFailed || !settings.EnableGrassCollision) {
+	if (!loaded || (resourceFailed && failedMode.load(std::memory_order_relaxed) == queuedMode) || !settings.EnableGrassCollision) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		const auto frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 		if (DiagnosticsActive(frame)) {
@@ -146,7 +175,8 @@ void GrassCollision::QueueCollisions()
 #endif
 		return;
 	}
-	NormalizeSettings();
+	if (queuedMode == GrassCollisionMode::Mode::Advanced)
+		NormalizeSettings();
 	const auto frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 	queuedCamera = Util::GetEyePosition(0);
 	eastl::vector<GrassCollisionActorCandidate> candidates;
@@ -158,7 +188,7 @@ void GrassCollision::QueueCollisions()
 			(!settings.TrackRagdolls && actor->IsDead()) || !actors.insert(actor->GetFormID()).second)
 			return;
 		const float distance = queuedCamera.GetSquaredDistance(actor->GetPosition());
-		if (std::isfinite(distance) && distance <= MAX_ACTOR_SQ_DISTANCE)
+		if (std::isfinite(distance) && distance <= (queuedMode == GrassCollisionMode::Mode::Advanced ? MAX_ACTOR_SQ_DISTANCE : kBasicWorldSize * kBasicWorldSize * 0.25f))
 			candidates.push_back({ handle, distance });
 	};
 	if (const auto* lists = RE::ProcessLists::GetSingleton())
@@ -168,7 +198,10 @@ void GrassCollision::QueueCollisions()
 		add(player->GetHandle());
 	std::sort(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) { return left.sqDistance < right.sqDistance; });
 	queuedBoundingBoxes.reserve(MAX_BOUNDING_BOXES);
-	queuedCollisions.reserve(MAX_COLLISIONS);
+	if (queuedMode == GrassCollisionMode::Mode::Advanced)
+		queuedCollisions.reserve(MAX_COLLISIONS);
+	else
+		queuedBasicCollisions.reserve(MAX_BASIC_COLLISIONS);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	QueueDiagnostics diagnostic;
 	diagnostic.frame = frame;
@@ -192,6 +225,24 @@ void GrassCollision::QueueCollisions()
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		++diagnostic.actorRoots;
 #endif
+		if (queuedMode == GrassCollisionMode::Mode::Basic) {
+			BoundingBoxPacked box{};
+			QueueBasicActor(root, std::sqrt(candidate.sqDistance) * MIN_COLLISION_RADIUS_DISTANCE_SCALE, box
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				,
+				observe ? &diagnostic : nullptr
+#endif
+			);
+			if (box.IndexEnd > box.IndexStart) {
+				queuedBoundingBoxes.push_back(box);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				(actor.get() == player ? diagnostic.playerShapes : diagnostic.otherActorShapes) += box.IndexEnd - box.IndexStart;
+#endif
+			}
+			if (queuedBoundingBoxes.size() == MAX_BOUNDING_BOXES)
+				break;
+			continue;
+		}
 		std::array<Shape, MAX_COLLISIONS_PER_BOUNDING_BOX> shapes{};
 		size_t shapeCount = 0;
 		const float minimumRadius = std::sqrt(candidate.sqDistance) * MIN_COLLISION_RADIUS_DISTANCE_SCALE;
@@ -274,14 +325,20 @@ void GrassCollision::QueueCollisions()
 		if (queuedBoundingBoxes.size() == MAX_BOUNDING_BOXES)
 			break;
 	}
-	std::erase_if(colliderHistory, [frame](const auto& entry) { return entry.second.frame != frame; });
+	if (queuedMode == GrassCollisionMode::Mode::Advanced)
+		std::erase_if(colliderHistory, [frame](const auto& entry) { return entry.second.frame != frame; });
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (observe) {
 		try {
 			diagnostic.boundingBoxes = queuedBoundingBoxes.size();
-			diagnostic.shapes = queuedCollisions.size();
+			diagnostic.shapes = queuedMode == GrassCollisionMode::Mode::Basic ? queuedBasicCollisions.size() : queuedCollisions.size();
 			for (size_t i = 0; i < std::min<size_t>(queuedCollisions.size(), 8); ++i)
 				diagnostic.shapeSamples.push_back(queuedCollisions[i]);
+			for (size_t i = 0; i < std::min<size_t>(queuedBasicCollisions.size(), 8); ++i) {
+				const auto& sphere = queuedBasicCollisions[i];
+				const float4 center{ sphere.x, sphere.y, sphere.z, 0 };
+				diagnostic.shapeSamples.push_back({ sphere, center, center, center });
+			}
 			std::scoped_lock lock(diagnosticsMutex);
 			queueDiagnostics = std::move(diagnostic);
 		} catch (const std::exception& error) {
@@ -289,6 +346,62 @@ void GrassCollision::QueueCollisions()
 		}
 	}
 #endif
+}
+
+void GrassCollision::QueueBasicActor(RE::NiAVObject* root, float minimumRadius, BoundingBoxPacked& box
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	,
+	QueueDiagnostics* diagnostic
+#endif
+)
+{
+	std::array<float4, MAX_BASIC_COLLISIONS_PER_ACTOR> shapes{};
+	size_t count = 0;
+	RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* object) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (diagnostic)
+			++diagnostic->shapeVisits;
+#endif
+		RE::NiPoint3 center;
+		float radius;
+		if (!Util::GetShapeBound(object, center, radius) || !std::isfinite(radius)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (diagnostic)
+				++diagnostic->boundFailures;
+#endif
+			return RE::BSVisit::BSVisitControl::kContinue;
+		}
+		if (radius < minimumRadius || radius > kBasicWorldSize) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (diagnostic)
+				++diagnostic->radiusRejected;
+#endif
+			return RE::BSVisit::BSVisitControl::kContinue;
+		}
+		center -= queuedCamera;
+		if (std::max({ std::abs(center.x), std::abs(center.y), std::abs(center.z) }) > kBasicWorldSize * 2)
+			return RE::BSVisit::BSVisitControl::kContinue;
+		if (count == shapes.size() && radius <= shapes.back().w)
+			return RE::BSVisit::BSVisitControl::kContinue;
+		size_t index = std::min(count, shapes.size() - 1);
+		count = std::min(count + 1, shapes.size());
+		while (index > 0 && shapes[index - 1].w < radius) {
+			shapes[index] = shapes[index - 1];
+			--index;
+		}
+		shapes[index] = { center.x, center.y, center.z, radius };
+		return RE::BSVisit::BSVisitControl::kContinue;
+	});
+	box.IndexStart = static_cast<uint32_t>(queuedBasicCollisions.size());
+	for (size_t i = 0; i < count; ++i) {
+		const auto& sphere = shapes[i];
+		queuedBasicCollisions.push_back(sphere);
+		box.MinExtent.x = std::min(box.MinExtent.x, sphere.x - sphere.w);
+		box.MinExtent.y = std::min(box.MinExtent.y, sphere.y - sphere.w);
+		box.MaxExtent.x = std::max(box.MaxExtent.x, sphere.x + sphere.w);
+		box.MaxExtent.y = std::max(box.MaxExtent.y, sphere.y + sphere.w);
+	}
+	box.IndexEnd = static_cast<uint32_t>(queuedBasicCollisions.size());
 }
 
 void GrassCollision::ResetRuntimeStateAfterGameLoad()
@@ -302,8 +415,10 @@ void GrassCollision::ClearFields()
 	if (!fieldsCleared) {
 		const float zero[4]{};
 		for (size_t i = 0; i < deformation.size(); ++i) {
-			globals::d3d::context->ClearUnorderedAccessViewFloat(deformation[i]->uav.get(), zero);
-			globals::d3d::context->ClearUnorderedAccessViewFloat(velocity[i]->uav.get(), zero);
+			if (deformation[i])
+				globals::d3d::context->ClearUnorderedAccessViewFloat(deformation[i]->uav.get(), zero);
+			if (velocity[i])
+				globals::d3d::context->ClearUnorderedAccessViewFloat(velocity[i]->uav.get(), zero);
 		}
 		fieldsCleared = true;
 	}
@@ -311,10 +426,39 @@ void GrassCollision::ClearFields()
 	fieldInitialized = false;
 }
 
+GrassCollisionMode::Mode GrassCollision::GetRequestedMode() const
+{
+	return !settings.EnableGrassCollision        ? GrassCollisionMode::Mode::Disabled :
+	       settings.EnableAdvancedGrassCollision ? GrassCollisionMode::Mode::Advanced :
+	                                               GrassCollisionMode::Mode::Basic;
+}
+
+GrassCollisionMode::Mode GrassCollision::GetVertexMode() const
+{
+	const auto requested = GetRequestedMode();
+	if (!loaded || (resourceFailed.load(std::memory_order_relaxed) && failedMode.load(std::memory_order_relaxed) == requested))
+		return GrassCollisionMode::Mode::Disabled;
+	const auto resident = resourceMode.load(std::memory_order_relaxed);
+	if (resident == GrassCollisionMode::Mode::Disabled || resident == requested)
+		return requested;
+	return GrassCollisionMode::Select(requested, resident,
+		currentDeformationActive.load(std::memory_order_relaxed),
+		publishedFrame.load(std::memory_order_relaxed) == globals::state->frameCountAtomic.load(std::memory_order_relaxed));
+}
+
 bool GrassCollision::NeedsVertexDeformation() const
 {
-	return loaded && !resourceFailed.load(std::memory_order_relaxed) &&
-	       (settings.EnableGrassCollision || vertexHistoryActive.load(std::memory_order_relaxed));
+	return GetVertexMode() != GrassCollisionMode::Mode::Disabled;
+}
+
+float GrassCollision::GetCullingStrength() const
+{
+	if (!NeedsVertexDeformation())
+		return 0;
+	// Basic displacement scales with strength; advanced rotation remains bounded by root reach.
+	return GetVertexMode() == GrassCollisionMode::Mode::Basic ?
+	           std::max({ GetCollisionStrength(), published.CollisionStrength, published.PreviousCollisionStrength }) :
+	           1.0f;
 }
 
 void GrassCollision::ReleaseResources()
@@ -339,10 +483,23 @@ void GrassCollision::ReleaseResources()
 	computeContext = nullptr;
 	published = {};
 	fieldInitialized = fieldsCleared = false;
-	vertexHistoryActive.store(false, std::memory_order_relaxed);
+	currentDeformationActive.store(false, std::memory_order_relaxed);
+	resourceMode.store(GrassCollisionMode::Mode::Disabled, std::memory_order_relaxed);
+	publishedFrame.store(UINT32_MAX, std::memory_order_relaxed);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	fieldResourcesResident.store(false, std::memory_order_relaxed);
+	fieldResourceBytes.store(0, std::memory_order_relaxed);
+	diagnosticReadback = nullptr;
+	readbackPending = false;
+	readbackRequestGeneration = UINT64_MAX;
 #endif
+}
+
+void GrassCollision::Reset()
+{
+	// A frame without grass has no deformation output whose motion history must survive.
+	if (perFrame && lastUpdateFrame != globals::state->frameCountAtomic.load(std::memory_order_relaxed) &&
+		resourceMode.load(std::memory_order_relaxed) != GetRequestedMode())
+		ReleaseResources();
 }
 
 void GrassCollision::Update()
@@ -351,7 +508,10 @@ void GrassCollision::Update()
 		return;
 	auto* context = globals::d3d::context;
 	const auto frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
-	if (resourceFailed || (!settings.EnableGrassCollision && !vertexHistoryActive.load(std::memory_order_relaxed))) {
+	const auto mode = GetVertexMode();
+	if (resourceFailed && failedMode.load(std::memory_order_relaxed) != GetRequestedMode())
+		resourceFailed.store(false, std::memory_order_relaxed);
+	if (resourceFailed || mode == GrassCollisionMode::Mode::Disabled) {
 		if (perFrame || vertexResourcesBound)
 			ReleaseResources();
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -362,41 +522,48 @@ void GrassCollision::Update()
 		lastUpdateFrame = frame;
 		return;
 	}
-	if (!perFrame && !resourceFailed)
+	if ((!perFrame || resourceMode.load(std::memory_order_relaxed) != mode) && !resourceFailed)
 		SetupResources();
 	if (!resourceFailed && perFrame && lastUpdateFrame != frame) {
 		const bool consecutive = uint32_t(frame - lastUpdateFrame) == 1;
 		lastUpdateFrame = frame;
 		try {
-			NormalizeSettings();
+			if (resourceMode.load(std::memory_order_relaxed) == GrassCollisionMode::Mode::Advanced)
+				NormalizeSettings();
 			const auto camera = Util::GetEyePosition(0);
 			if (!std::isfinite(camera.x) || !std::isfinite(camera.y) || !std::isfinite(camera.z) ||
 				std::abs(camera.x) > 1e8f || std::abs(camera.y) > 1e8f)
 				throw std::runtime_error("Invalid collision camera position");
-			const float cellSize = kWorldSize / kFieldSize;
+			const bool advanced = resourceMode.load(std::memory_order_relaxed) == GrassCollisionMode::Mode::Advanced;
+			const uint32_t fieldSize = advanced ? kFieldSize : kBasicFieldSize;
+			const float cellSize = (advanced ? kWorldSize : kBasicWorldSize) / fieldSize;
+			const bool simulate = GetRequestedMode() == resourceMode.load(std::memory_order_relaxed);
 			const float2 cell{ std::round(camera.x / cellSize), std::round(camera.y / cellSize) };
 			ID3D11ShaderResourceView* empty[2]{};
 			context->VSSetShaderResources(100, 2, empty);
 			const bool reset = resetRequested.exchange(false);
-			if (reset) {
+			if (reset || queuedMode != resourceMode.load(std::memory_order_relaxed)) {
 				queuedBoundingBoxes.clear();
 				queuedCollisions.clear();
+				queuedBasicCollisions.clear();
 			}
 			if (reset || !consecutive || (!fieldInitialized && settings.EnableGrassCollision))
 				ClearFields();
 			UpdateConstants constants{};
 			constants.PosOffset = cell * cellSize - float2{ camera.x, camera.y };
-			constants.ArrayOrigin = { uint32_t(int32_t(cell.x) - kFieldSize / 2) & (kFieldSize - 1), uint32_t(int32_t(cell.y) - kFieldSize / 2) & (kFieldSize - 1) };
-			constants.ValidMargin = fieldInitialized ? DirectX::XMINT2{ int32_t(previousCell.x - cell.x), int32_t(previousCell.y - cell.y) } : DirectX::XMINT2{ kFieldSize, kFieldSize };
+			constants.ArrayOrigin = { uint32_t(int32_t(cell.x) - fieldSize / 2) & (fieldSize - 1), uint32_t(int32_t(cell.y) - fieldSize / 2) & (fieldSize - 1) };
+			constants.ValidMargin = fieldInitialized ? DirectX::XMINT2{ int32_t(previousCell.x - cell.x), int32_t(previousCell.y - cell.y) } : DirectX::XMINT2{ int32_t(fieldSize), int32_t(fieldSize) };
 			constants.TimeDelta = globals::game::ui->GameIsPaused() ? 0 : Util::ClampFinite(*globals::game::deltaTime, 0.0f, 1.0f / 15.0f, 0.0f);
-			constants.BoundingBoxCount = settings.EnableGrassCollision ? static_cast<uint32_t>(queuedBoundingBoxes.size()) : 0;
-			constants.GrassInteractionRadius = settings.GrassInteractionRadius;
-			constants.CollisionStrength = settings.CollisionImpactStrength;
-			constants.SpringStrength = settings.SpringStrength;
-			constants.Damping = settings.Damping;
-			constants.MaximumBend = DirectX::XMConvertToRadians(settings.MaximumBend);
-			constants.MaximumCompression = settings.MaximumCompression;
-			constants.CompressionRecovery = settings.CompressionRecovery;
+			constants.BoundingBoxCount = simulate ? static_cast<uint32_t>(queuedBoundingBoxes.size()) : 0;
+			if (advanced) {
+				constants.GrassInteractionRadius = settings.GrassInteractionRadius;
+				constants.CollisionStrength = settings.CollisionImpactStrength;
+				constants.SpringStrength = settings.SpringStrength;
+				constants.Damping = settings.Damping;
+				constants.MaximumBend = DirectX::XMConvertToRadians(settings.MaximumBend);
+				constants.MaximumCompression = settings.MaximumCompression;
+				constants.CompressionRecovery = settings.CompressionRecovery;
+			}
 			const auto shift = queuedCamera - camera;
 			for (auto& box : queuedBoundingBoxes) {
 				box.MinExtent += float2{ shift.x, shift.y };
@@ -408,18 +575,23 @@ void GrassCollision::Update()
 					point->y += shift.y;
 					point->z += shift.z;
 				}
+			for (auto& sphere : queuedBasicCollisions) {
+				sphere.x += shift.x;
+				sphere.y += shift.y;
+				sphere.z += shift.z;
+			}
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			const auto shapes = queuedCollisions.size();
+			const auto shapes = advanced ? queuedCollisions.size() : queuedBasicCollisions.size();
 #endif
-			const bool dispatched = UpdateCollisionTexture(constants);
+			const bool dispatched = UpdateCollisionTexture(constants, simulate);
 			PerFrame next{};
 			next.PosOffset = constants.PosOffset;
 			next.ArrayOrigin = constants.ArrayOrigin;
 			// PreviousWorld is relative to the previous camera, so retain its field mapping.
 			next.PreviousPosOffset = published.PosOffset;
 			next.PreviousArrayOrigin = published.ArrayOrigin;
-			next.CollisionStrength = dispatched && settings.EnableGrassCollision ? GetCollisionStrength() : 0;
-			next.PreviousCollisionStrength = (dispatched || !settings.EnableGrassCollision) ? published.CollisionStrength : 0;
+			next.CollisionStrength = dispatched && simulate ? GetCollisionStrength() : 0;
+			next.PreviousCollisionStrength = (dispatched || !simulate) ? published.CollisionStrength : 0;
 			next.CompressionHeight = settings.CompressionHeight * 0.01f;
 			next.MaximumCompressibleGrassHeight = settings.MaximumCompressibleGrassHeight;
 			next.MaximumBend = constants.MaximumBend;
@@ -428,18 +600,22 @@ void GrassCollision::Update()
 			next.PreviousMaximumCompressibleGrassHeight = published.MaximumCompressibleGrassHeight;
 			perFrame->Update(next);
 			published = next;
-			vertexHistoryActive.store(next.CollisionStrength > 0 || next.PreviousCollisionStrength > 0, std::memory_order_relaxed);
+			currentDeformationActive.store(next.CollisionStrength > 0, std::memory_order_relaxed);
+			publishedFrame.store(frame, std::memory_order_relaxed);
+			previousCameraHeight = camera.z;
 			previousCell = cell;
 			fieldInitialized = dispatched;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			ObserveUpdateDiagnostics(frame, &constants, shapes, dispatched);
 #endif
 		} catch (const std::exception& error) {
+			failedMode.store(resourceMode.load(std::memory_order_relaxed), std::memory_order_relaxed);
 			resourceFailed = true;
 			logger::error("Grass collision disabled after resource failure: {}", error.what());
 		}
 		queuedBoundingBoxes.clear();
 		queuedCollisions.clear();
+		queuedBasicCollisions.clear();
 	}
 	if (resourceFailed) {
 		// Initialization can fail before the first bind while a collision permutation is selected.
@@ -449,7 +625,9 @@ void GrassCollision::Update()
 	}
 	auto* buffer = perFrame ? perFrame->CB() : nullptr;
 	context->VSSetConstantBuffers(5, 1, &buffer);
-	ID3D11ShaderResourceView* fields[]{ deformation[fieldIndex] ? deformation[fieldIndex]->srv.get() : nullptr, deformation[1 - fieldIndex] ? deformation[1 - fieldIndex]->srv.get() : nullptr };
+	const bool advanced = resourceMode.load(std::memory_order_relaxed) == GrassCollisionMode::Mode::Advanced;
+	ID3D11ShaderResourceView* fields[]{ deformation[fieldIndex] ? deformation[fieldIndex]->srv.get() : nullptr,
+		advanced && deformation[1 - fieldIndex] ? deformation[1 - fieldIndex]->srv.get() : nullptr };
 	context->VSSetShaderResources(100, 2, fields);
 	auto* sampler = fieldSampler.get();
 	context->VSSetSamplers(15, 1, &sampler);
@@ -477,7 +655,7 @@ void GrassCollision::ObserveUpdateDiagnostics(uint32_t frame, const UpdateConsta
 		if (DiagnosticsActive(frame)) {
 			std::scoped_lock lock(diagnosticsMutex);
 			if (constants)
-				updateDiagnostics = UpdateDiagnostics{ frame, constants->BoundingBoxCount, shapes, collisionUpdateCS.get() != nullptr, dispatched,
+				updateDiagnostics = UpdateDiagnostics{ frame, constants->BoundingBoxCount, shapes, (resourceMode.load(std::memory_order_relaxed) == GrassCollisionMode::Mode::Basic ? basicUpdateCS.get() : collisionUpdateCS.get()) != nullptr, dispatched,
 					constants->TimeDelta, constants->PosOffset, constants->ArrayOrigin, constants->ValidMargin,
 					published.CollisionStrength, published.PreviousCollisionStrength, settings };
 			else {
@@ -554,8 +732,11 @@ json GrassCollision::GetDiagnostics() const
 	const auto& draw = drawDiagnostics;
 	const bool observed = draw.nativeChecks + draw.batchedChecks > 0;
 	return {
-		{ "schemaVersion", 4 }, { "requestGeneration", diagnosticsGeneration.load(std::memory_order_acquire) }, { "loaded", loaded }, { "enabled", settings.EnableGrassCollision }, { "settings", CapturePerformanceSettingsState() }, { "resourceFailed", resourceFailed.load() },
-		{ "vertexDeformationActive", NeedsVertexDeformation() }, { "fieldResourceBytes", fieldResourcesResident.load() ? uint64_t(kFieldSize) * kFieldSize * 24 : 0 },
+		{ "schemaVersion", 5 }, { "requestGeneration", diagnosticsGeneration.load(std::memory_order_acquire) }, { "loaded", loaded }, { "enabled", settings.EnableGrassCollision }, { "settings", CapturePerformanceSettingsState() }, { "resourceFailed", resourceFailed.load() },
+		{ "vertexDeformationActive", NeedsVertexDeformation() }, { "fieldResourceBytes", fieldResourceBytes.load(std::memory_order_relaxed) },
+		{ "requestedMode", GrassCollisionMode::Name(GetRequestedMode()) },
+		{ "activeMode", GrassCollisionMode::Name(resourceMode.load(std::memory_order_relaxed)) },
+		{ "transitionPending", !resourceFailed.load(std::memory_order_relaxed) && resourceMode.load(std::memory_order_relaxed) != GetRequestedMode() },
 		{ "requestedFrame", requested == UINT64_MAX ? json(nullptr) : json(requested) },
 		{ "captureWindowFrames", kDiagnosticsWindowFrames }, { "queue", std::move(queue) }, { "update", std::move(update) },
 		{ "diagnosticsError", diagnosticsError.front() ? json(diagnosticsError.data()) : json(nullptr) },
@@ -603,7 +784,9 @@ try {
 		++draw.disabledShaderChecks;
 		return;
 	}
-	if (shader && shader->inputs == 15 && !NeedsVertexDeformation())
+	const bool basic = shader ? (shader->descriptor & uint32_t(SIE::ShaderCache::GrassShaderFlags::BasicCollision)) != 0 : GetVertexMode() == GrassCollisionMode::Mode::Basic;
+	const uint8_t expectedInputs = basic ? 3 : 15;
+	if (shader && shader->inputs == expectedInputs && !NeedsVertexDeformation())
 		++draw.residualCollisionShaderChecks;
 	if (!buffer)
 		++draw.missingConstantBuffer;
@@ -613,13 +796,13 @@ try {
 		++draw.missingTexture;
 	else if (!deformation[fieldIndex] || texture.get() != deformation[fieldIndex]->srv.get())
 		++draw.wrongTexture;
-	if (!previousTexture)
+	if (!basic && !previousTexture)
 		++draw.missingPreviousTexture;
-	else if (!deformation[1 - fieldIndex] || previousTexture.get() != deformation[1 - fieldIndex]->srv.get())
+	else if (!basic && (!deformation[1 - fieldIndex] || previousTexture.get() != deformation[1 - fieldIndex]->srv.get()))
 		++draw.wrongPreviousTexture;
-	if (!sampler)
+	if (!basic && !sampler)
 		++draw.missingSampler;
-	else if (sampler.get() != fieldSampler.get())
+	else if (!basic && sampler.get() != fieldSampler.get())
 		++draw.wrongSampler;
 	if (!shader)
 		++draw.unidentifiedVertexShaders;
@@ -627,7 +810,7 @@ try {
 		++draw.shaderReflectionFailures;
 	else {
 		++draw.collisionShaderChecks;
-		if (shader->inputs != 15)
+		if (shader->inputs != expectedInputs)
 			++draw.missingCollisionShaderInputs;
 	}
 } catch (const std::exception& error) {
@@ -690,7 +873,10 @@ void GrassCollision::ObserveVertexDraw(ID3D11DeviceContext* a_context, const Gra
 		{
 			std::scoped_lock lock(diagnosticsMutex);
 			auto* shader = GetDiagnosticShader(vertex.get());
-			if (!shader || shader->inputs != 15)
+			if (!shader)
+				return;
+			const auto expectedInputs = (shader->descriptor & uint32_t(SIE::ShaderCache::GrassShaderFlags::BasicCollision)) ? 3u : 15u;
+			if (shader->inputs != expectedInputs)
 				return;
 			copy = *shader;
 		}
@@ -733,11 +919,13 @@ void GrassCollision::ObserveCollisionTexture(uint32_t a_frame, const PerFrame& a
 	readbackRequestGeneration = requested;
 	readbackFrame = a_frame;
 	readbackOrigin = a_constants.ArrayOrigin;
+	readbackMode = resourceMode.load(std::memory_order_relaxed);
+	const uint32_t fieldSize = readbackMode == GrassCollisionMode::Mode::Advanced ? kFieldSize : kBasicFieldSize;
 	const auto* collisionTexture = deformation[fieldIndex].get();
 	D3D11_TEXTURE2D_DESC desc{};
 	collisionTexture->resource->GetDesc(&desc);
 	HRESULT result = S_OK;
-	if (desc.Width != kFieldSize || desc.Height != kFieldSize || desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) {
+	if (desc.Width != fieldSize || desc.Height != fieldSize || desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) {
 		result = E_INVALIDARG;
 	} else if (!diagnosticReadback) {
 		desc.Usage = D3D11_USAGE_STAGING;
@@ -785,25 +973,28 @@ void GrassCollision::PollCollisionTexture(uint32_t a_frame)
 	const SKSE::stl::scope_exit unmap([&]() noexcept { context->Unmap(diagnosticReadback.get(), 0); });
 	size_t nonFinite = 0, nonzero = 0, nearNonzero = 0;
 	float maxBend = 0, maxCompression = 0, nearBend = 0, nearCompression = 0;
-	for (uint32_t y = 0; y < kFieldSize; ++y) {
+	const bool advanced = readbackMode == GrassCollisionMode::Mode::Advanced;
+	const uint32_t fieldSize = advanced ? kFieldSize : kBasicFieldSize;
+	for (uint32_t y = 0; y < fieldSize; ++y) {
 		const auto* row = reinterpret_cast<const DirectX::PackedVector::HALF*>(
 			static_cast<const uint8_t*>(mapped.pData) + size_t(y) * mapped.RowPitch);
-		for (uint32_t x = 0; x < kFieldSize; ++x) {
+		for (uint32_t x = 0; x < fieldSize; ++x) {
 			const float bendX = DirectX::PackedVector::XMConvertHalfToFloat(row[x * 4]);
 			const float bendY = DirectX::PackedVector::XMConvertHalfToFloat(row[x * 4 + 1]);
 			const float compression = DirectX::PackedVector::XMConvertHalfToFloat(row[x * 4 + 2]);
-			if (!std::isfinite(bendX) || !std::isfinite(bendY) || !std::isfinite(compression)) {
+			const float fourth = DirectX::PackedVector::XMConvertHalfToFloat(row[x * 4 + 3]);
+			if (!std::isfinite(bendX) || !std::isfinite(bendY) || !std::isfinite(compression) || !std::isfinite(fourth)) {
 				++nonFinite;
 				continue;
 			}
 			const float bend = std::hypot(bendX, bendY);
-			const bool active = bend > 1e-5f || compression > 1e-5f;
+			const bool active = advanced ? bend > 1e-5f || compression > 1e-5f : bendX > 1e-5f || bendY > 1e-5f;
 			maxBend = std::max(maxBend, bend);
 			maxCompression = std::max(maxCompression, compression);
 			nonzero += active;
-			const auto localX = (x - readbackOrigin.x) & (kFieldSize - 1);
-			const auto localY = (y - readbackOrigin.y) & (kFieldSize - 1);
-			if (localX >= kFieldSize / 2 - 32 && localX < kFieldSize / 2 + 32 && localY >= kFieldSize / 2 - 32 && localY < kFieldSize / 2 + 32) {
+			const auto localX = (x - readbackOrigin.x) & (fieldSize - 1);
+			const auto localY = (y - readbackOrigin.y) & (fieldSize - 1);
+			if (localX >= fieldSize / 2 - 32 && localX < fieldSize / 2 + 32 && localY >= fieldSize / 2 - 32 && localY < fieldSize / 2 + 32) {
 				nearNonzero += active;
 				nearBend = std::max(nearBend, bend);
 				nearCompression = std::max(nearCompression, compression);
@@ -815,10 +1006,11 @@ void GrassCollision::PollCollisionTexture(uint32_t a_frame)
 	if (diagnosticsGeneration.load(std::memory_order_acquire) == readbackRequestGeneration)
 		textureDiagnostics = {
 			{ "status", "completed" }, { "capturedFrame", readbackFrame }, { "completedFrame", a_frame },
-			{ "width", kFieldSize }, { "height", kFieldSize }, { "worldSize", kWorldSize },
+			{ "width", fieldSize }, { "height", fieldSize }, { "worldSize", advanced ? kWorldSize : kBasicWorldSize },
+			{ "fieldEncoding", advanced ? "bend_compression" : "current_previous_height_age" },
 			{ "nonFiniteCells", nonFinite }, { "nonzeroCells", nonzero }, { "nearCameraNonzeroCells", nearNonzero },
-			{ "maxBendRadians", maxBend }, { "maxCompression", maxCompression },
-			{ "maxNearCameraBendRadians", nearBend }, { "maxNearCameraCompression", nearCompression }
+			{ "maxBendRadians", advanced ? json(maxBend) : json(nullptr) }, { "maxCompression", advanced ? json(maxCompression) : json(nullptr) },
+			{ "maxNearCameraBendRadians", advanced ? json(nearBend) : json(nullptr) }, { "maxNearCameraCompression", advanced ? json(nearCompression) : json(nullptr) }
 		};
 }
 #endif
@@ -851,15 +1043,18 @@ void GrassCollision::PostPostLoad()
 void GrassCollision::SetupResources()
 {
 	ReleaseResources();
-	if (!settings.EnableGrassCollision)
+	const auto mode = GetRequestedMode();
+	if (mode == GrassCollisionMode::Mode::Disabled)
 		return;
+	resourceMode.store(mode, std::memory_order_relaxed);
+	const bool advanced = mode == GrassCollisionMode::Mode::Advanced;
 	try {
 		perFrame = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<PerFrame>(), "GrassCollision::PerFrame");
-		updateConstants = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<UpdateConstants>(), "GrassCollision::UpdateConstants");
+		updateConstants = eastl::make_unique<ConstantBuffer>(advanced ? ConstantBufferDesc<UpdateConstants>() : ConstantBufferDesc<BasicUpdateConstants>(), "GrassCollision::UpdateConstants");
 		DX::ThrowIfFailed(globals::d3d::context->QueryInterface(IID_PPV_ARGS(computeContext.put())));
-		for (size_t i = 0; i < deformation.size(); ++i) {
+		for (size_t i = 0; i < (advanced ? deformation.size() : 1); ++i) {
 			D3D11_TEXTURE2D_DESC desc{};
-			desc.Width = desc.Height = kFieldSize;
+			desc.Width = desc.Height = advanced ? kFieldSize : kBasicFieldSize;
 			desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
 			desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -873,19 +1068,23 @@ void GrassCollision::SetupResources()
 			uav.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
 			deformation[i]->CreateSRV(srv);
 			deformation[i]->CreateUAV(uav);
+			if (!advanced)
+				continue;
 			desc.Format = srv.Format = uav.Format = DXGI_FORMAT_R16G16_FLOAT;
 			velocity[i] = eastl::make_unique<Texture2D>(desc, std::format("GrassCollision::Velocity{}", i).c_str());
 			velocity[i]->CreateSRV(srv);
 			velocity[i]->CreateUAV(uav);
 		}
-		D3D11_SAMPLER_DESC sampler{};
-		sampler.Filter = D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
-		sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
-		sampler.ComparisonFunc = D3D11_COMPARISON_NEVER;
-		sampler.MaxAnisotropy = 1;
-		sampler.MaxLOD = D3D11_FLOAT32_MAX;
-		DX::ThrowIfFailed(globals::d3d::device->CreateSamplerState(&sampler, fieldSampler.put()));
-		Util::SetResourceName(fieldSampler.get(), "GrassCollision::FieldSampler");
+		if (advanced) {
+			D3D11_SAMPLER_DESC sampler{};
+			sampler.Filter = D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
+			sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+			sampler.ComparisonFunc = D3D11_COMPARISON_NEVER;
+			sampler.MaxAnisotropy = 1;
+			sampler.MaxLOD = D3D11_FLOAT32_MAX;
+			DX::ThrowIfFailed(globals::d3d::device->CreateSamplerState(&sampler, fieldSampler.put()));
+			Util::SetResourceName(fieldSampler.get(), "GrassCollision::FieldSampler");
+		}
 		const auto makeStructured = [](uint32_t stride, uint32_t count, const char* name) {
 			D3D11_BUFFER_DESC desc{};
 			desc.Usage = D3D11_USAGE_DYNAMIC;
@@ -903,7 +1102,7 @@ void GrassCollision::SetupResources()
 			return buffer;
 		};
 		collisionBoundingBoxes = makeStructured(sizeof(BoundingBoxPacked), MAX_BOUNDING_BOXES, "GrassCollision::BoundingBoxes");
-		collisionInstances = makeStructured(sizeof(CollisionShapePacked), MAX_COLLISIONS, "GrassCollision::Instances");
+		collisionInstances = makeStructured(advanced ? sizeof(CollisionShapePacked) : sizeof(float4), advanced ? MAX_COLLISIONS : MAX_BASIC_COLLISIONS, "GrassCollision::Instances");
 		fieldIndex = 0;
 		fieldsCleared = false;
 		resourceFailed = false;
@@ -912,9 +1111,10 @@ void GrassCollision::SetupResources()
 		ClearFields();
 		perFrame->Update(published);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		fieldResourcesResident.store(true, std::memory_order_relaxed);
+		fieldResourceBytes.store(advanced ? uint64_t(kFieldSize) * kFieldSize * 24 : uint64_t(kBasicFieldSize) * kBasicFieldSize * 8, std::memory_order_relaxed);
 #endif
 	} catch (const std::exception& error) {
+		failedMode.store(mode, std::memory_order_relaxed);
 		resourceFailed = true;
 		logger::error("Grass collision resources unavailable: {}", error.what());
 		ReleaseResources();
@@ -940,7 +1140,9 @@ void GrassCollision::Hooks::MainUpdate_QueueCollisions::thunk()
 	} catch (const std::exception& error) {
 		collision.queuedBoundingBoxes.clear();
 		collision.queuedCollisions.clear();
+		collision.queuedBasicCollisions.clear();
 		collision.colliderHistory.clear();
+		collision.failedMode.store(collision.GetRequestedMode(), std::memory_order_relaxed);
 		collision.resourceFailed = true;
 		logger::error("Grass collision disabled after actor collection failure: {}", error.what());
 	}
@@ -955,6 +1157,7 @@ void GrassCollision::Hooks::BSGrassShader_SetupGeometry::thunk(RE::BSShader* Thi
 void GrassCollision::ClearShaderCache()
 {
 	collisionUpdateCS.Reset();
+	basicUpdateCS.Reset();
 	resourceFailed.store(false, std::memory_order_relaxed);
 }
 
@@ -968,9 +1171,11 @@ ID3D11ComputeShader* GrassCollision::GetCollisionUpdateCS()
 		"GrassCollision::CollisionUpdateCS");
 }
 
-bool GrassCollision::UpdateCollisionTexture(const UpdateConstants& constants)
+bool GrassCollision::UpdateCollisionTexture(const UpdateConstants& constants, bool simulate)
 {
-	if (!settings.EnableGrassCollision) {
+	if (resourceMode.load(std::memory_order_relaxed) == GrassCollisionMode::Mode::Basic)
+		return UpdateBasicCollisionTexture(constants);
+	if (!simulate) {
 		if (!fieldInitialized)
 			return false;
 		const auto next = 1 - fieldIndex;
@@ -982,22 +1187,15 @@ bool GrassCollision::UpdateCollisionTexture(const UpdateConstants& constants)
 	}
 	auto* shader = GetCollisionUpdateCS();
 	if (!shader) {
+		failedMode.store(resourceMode.load(std::memory_order_relaxed), std::memory_order_relaxed);
 		resourceFailed.store(true, std::memory_order_relaxed);
 		logger::error("Grass collision disabled because its update shader is unavailable; clear shaders to retry");
 		return false;
 	}
 	auto* context = computeContext.get();
 	D3DState::ComputeState restore(context, 2, 4);
-	const auto upload = [&](Buffer& buffer, const auto& values) {
-		if (values.empty())
-			return;
-		D3D11_MAPPED_SUBRESOURCE mapped{};
-		DX::ThrowIfFailed(context->Map(buffer.resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-		memcpy(mapped.pData, values.data(), values.size() * sizeof(values[0]));
-		context->Unmap(buffer.resource.get(), 0);
-	};
-	upload(*collisionBoundingBoxes, queuedBoundingBoxes);
-	upload(*collisionInstances, queuedCollisions);
+	UploadCollisionRecords(context, *collisionBoundingBoxes, queuedBoundingBoxes);
+	UploadCollisionRecords(context, *collisionInstances, queuedCollisions);
 	updateConstants->Update(constants);
 	auto* cb = updateConstants->CB();
 	context->CSSetConstantBuffers(0, 1, &cb);
@@ -1011,5 +1209,40 @@ bool GrassCollision::UpdateCollisionTexture(const UpdateConstants& constants)
 	context->Dispatch(kFieldSize / 8, kFieldSize / 8, 1);
 	fieldsCleared = false;
 	fieldIndex = next;
+	return true;
+}
+
+bool GrassCollision::UpdateBasicCollisionTexture(const UpdateConstants& constants)
+{
+	auto* shader = basicUpdateCS.Get(L"Data\\Shaders\\GrassCollision\\BasicCollisionUpdateCS.hlsl",
+		{}, "cs_5_0", "main", "GrassCollision::BasicCollisionUpdateCS");
+	if (!shader) {
+		failedMode.store(GrassCollisionMode::Mode::Basic, std::memory_order_relaxed);
+		resourceFailed.store(true, std::memory_order_relaxed);
+		logger::error("Basic grass collision disabled because its update shader is unavailable; clear shaders to retry");
+		return false;
+	}
+	auto* context = computeContext.get();
+	D3DState::ComputeState restore(context, 1, 2);
+	UploadCollisionRecords(context, *collisionBoundingBoxes, queuedBoundingBoxes);
+	UploadCollisionRecords(context, *collisionInstances, queuedBasicCollisions);
+	BasicUpdateConstants basic{};
+	basic.PosOffset = constants.PosOffset;
+	basic.ArrayOrigin = constants.ArrayOrigin;
+	basic.ValidMargin = constants.ValidMargin;
+	basic.TimeDelta = constants.TimeDelta;
+	basic.BoundingBoxCount = constants.BoundingBoxCount;
+	basic.CameraHeightDelta = fieldInitialized ? previousCameraHeight - Util::GetEyePosition(0).z : 0;
+	updateConstants->Update(basic);
+	auto* cb = updateConstants->CB();
+	context->CSSetConstantBuffers(0, 1, &cb);
+	ID3D11ShaderResourceView* inputs[]{ collisionBoundingBoxes->srv.get(), collisionInstances->srv.get() };
+	context->CSSetShaderResources(0, 2, inputs);
+	auto* output = deformation[0]->uav.get();
+	context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+	context->CSSetShader(shader, nullptr, 0);
+	CS_GPU_PASS("GrassCollision::CollisionUpdate");
+	context->Dispatch(kBasicFieldSize / 8, kBasicFieldSize / 8, 1);
+	fieldsCleared = false;
 	return true;
 }

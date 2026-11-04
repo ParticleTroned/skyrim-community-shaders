@@ -2118,10 +2118,14 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 		case RE::BSShader::Type::Grass:
 			{
 				const auto noCollision = uint32_t(SIE::ShaderCache::GrassShaderFlags::NoCollision);
-				a_vertexDescriptor &= ~noCollision;
-				a_pixelDescriptor &= ~noCollision;
-				if (!globals::features::grassCollision.NeedsVertexDeformation())
+				const auto basicCollision = uint32_t(SIE::ShaderCache::GrassShaderFlags::BasicCollision);
+				a_vertexDescriptor &= ~(noCollision | basicCollision);
+				a_pixelDescriptor &= ~(noCollision | basicCollision);
+				const auto mode = globals::features::grassCollision.GetVertexMode();
+				if (mode == GrassCollisionMode::Mode::Disabled)
 					a_vertexDescriptor |= noCollision;
+				else if (mode == GrassCollisionMode::Mode::Basic)
+					a_vertexDescriptor |= basicCollision;
 			}
 			break;
 		case RE::BSShader::Type::Water:

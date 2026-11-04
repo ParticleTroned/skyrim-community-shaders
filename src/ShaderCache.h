@@ -885,6 +885,7 @@ namespace SIE
 		enum class GrassShaderFlags
 		{
 			NoCollision = 1u << 10,
+			BasicCollision = 1u << 11,
 			AlphaTest = 0x10000,
 		};
 

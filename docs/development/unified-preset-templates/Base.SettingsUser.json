@@ -423,6 +423,7 @@
   "Grass Collision": {
     "CollisionStrength": 1.0,
     "EnableGrassCollision": true,
+    "EnableAdvancedGrassCollision": false,
     "TrackRagdolls": true,
     "CollisionRadiusScale": 1.0,
     "GrassInteractionRadius": 25.0,

@@ -361,18 +361,18 @@ nlohmann::json GrassCollisionVertexProbe::Read() const
 	for (const auto& record : impl->records)
 		if (!record.is_null())
 			samples.push_back(record);
-	size_t sampled = 0, near = 0, moved = 0, failed = 0, pending = 0;
+	size_t sampled = 0, nearCameraVertices = 0, moved = 0, failed = 0, pending = 0;
 	for (const auto& sample : samples) {
 		sampled += sample.value("sampledVertices", size_t(0));
-		near += sample.value("nearCameraVertices", size_t(0));
+		nearCameraVertices += sample.value("nearCameraVertices", size_t(0));
 		moved += sample.value("nearCameraMovedVertices", size_t(0));
 		const auto status = sample.value("status", std::string());
 		pending += status == "pending";
 		failed += status != "pending" && status != "completed" && status != "empty";
 	}
-	return { { "schemaVersion", 2 }, { "coverage", sampled == 0 ? "no_vertices" : near == 0 ? "no_near_vertices" :
-																			  moved         ? "near_deformation_observed" :
-																							  "near_vertices_without_deformation" },
+	return { { "schemaVersion", 2 }, { "coverage", sampled == 0 ? "no_vertices" : nearCameraVertices == 0 ? "no_near_vertices" :
+																			  moved                       ? "near_deformation_observed" :
+																											"near_vertices_without_deformation" },
 		{ "pendingPairs", pending }, { "failedPairs", failed }, { "captureWindowFrames", kCaptureFrames }, { "maximumAttempts", kCaptureFrames * 2 }, { "requestGeneration", impl->requested.load(std::memory_order_acquire) },
 		{ "maximumPairs", kPairLimit }, { "maximumIndices", kIndexLimit }, { "maximumInstances", kInstanceLimit },
 		{ "skippedPipelines", impl->skippedPipelines }, { "samples", std::move(samples) } };

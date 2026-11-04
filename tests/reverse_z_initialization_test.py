@@ -16,6 +16,124 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReverseZInitializationTests(unittest.TestCase):
+    def test_info_controls_and_pending_restart(self):
+        from grass_draw_lifecycle_test import compile_fixture
+
+        header = (ROOT / "src/Features/ReverseZ.h").read_text(encoding="utf-8")
+        source = (ROOT / "src/Features/ReverseZ.cpp").read_text(encoding="utf-8")
+        driver = r'''
+#include <cassert>
+#include <cstdint>
+#include <mutex>
+#include <optional>
+#include <string>
+namespace globals {
+struct State { bool IsDeveloperMode() const { return false; } } stateStorage;
+State* state = &stateStorage;
+}
+namespace ImGui {
+unsigned controls = 0;
+unsigned failures = 0;
+std::optional<bool> edit;
+void SeparatorText(const char*) {}
+bool Checkbox(const char*, bool* value) {
+    ++controls;
+    if (!edit) return false;
+    const bool changed = *value != *edit;
+    *value = *edit;
+    edit.reset();
+    return changed;
+}
+void TextUnformatted(const char*) {}
+template<class... Args> void TextWrapped(const char*, Args...) { ++failures; }
+}
+namespace Util {
+std::string tooltip;
+void AddTooltip(const char* value) { tooltip = value; }
+namespace Text {
+unsigned restarts = 0;
+void WrappedRestartNeeded(const char* value) {
+    assert(std::string(value).find("Restart required") != std::string::npos);
+    ++restarts;
+}
+}
+}
+struct ReverseZ {
+SETTINGS;
+    Settings settings;
+    bool loaded = true, bootLatched = true, requestedThisBoot = false, activeThisBoot = false;
+    std::mutex failureMutex;
+    std::string failure;
+    const char* failurePhase = "none";
+    uint64_t failureGeneration = 0;
+    bool IsActive() const { return activeThisBoot; }
+    bool HasPendingBootChange() const;
+    void RestoreDefaultSettings();
+    void DrawSettings();
+};
+METHODS
+int main() {
+    static_assert(!ReverseZ::Settings{}.EnableReverseZBuffer);
+    ReverseZ feature;
+    const auto draw = [&](bool expectedRestart) {
+        const auto controls = ImGui::controls;
+        const auto restarts = Util::Text::restarts;
+        feature.DrawSettings();
+        assert(ImGui::controls == controls + 1);
+        assert(Util::Text::restarts == restarts + unsigned(expectedRestart));
+        assert(feature.HasPendingBootChange() == expectedRestart);
+    };
+    draw(false);
+    assert(Util::tooltip.find("resolution") != std::string::npos);
+    assert(Util::tooltip.find("scene conditions") != std::string::npos);
+    assert(Util::tooltip.find("1 ms of GPU frame time") != std::string::npos);
+    ImGui::edit = true;
+    draw(true);
+    assert(!feature.activeThisBoot && !feature.requestedThisBoot);
+    draw(true);
+    ImGui::edit = false;
+    draw(false);
+    feature.requestedThisBoot = feature.activeThisBoot = feature.settings.EnableReverseZBuffer = true;
+    draw(false);
+    ImGui::edit = false;
+    draw(true);
+    assert(feature.activeThisBoot && feature.requestedThisBoot);
+    ImGui::edit = true;
+    draw(false);
+    feature.RestoreDefaultSettings();
+    draw(true);
+    assert(feature.activeThisBoot && feature.requestedThisBoot);
+    feature.activeThisBoot = false;
+    feature.failure = "Required depth hooks unavailable";
+    feature.settings.EnableReverseZBuffer = true;
+    const auto failures = ImGui::failures;
+    draw(false);
+    assert(ImGui::failures == failures + 1);
+    ImGui::edit = false;
+    draw(true);
+    assert(ImGui::failures == failures + 2 && !feature.activeThisBoot);
+    feature.failure.clear();
+    feature.bootLatched = false;
+    draw(false);
+    feature.requestedThisBoot = false;
+    feature.bootLatched = true;
+    feature.settings.EnableReverseZBuffer = true;
+    draw(true);
+    feature.RestoreDefaultSettings();
+    draw(false);
+    globals::state = nullptr;
+    const auto controls = ImGui::controls;
+    feature.DrawSettings();
+    assert(ImGui::controls == controls);
+}
+'''
+        driver = driver.replace("SETTINGS", block(header, "struct Settings"))
+        driver = driver.replace("METHODS", "\n".join(block(source, signature) for signature in (
+            "bool ReverseZ::HasPendingBootChange() const", "void ReverseZ::RestoreDefaultSettings()",
+            "void ReverseZ::DrawSettings()")))
+        result = compile_fixture(driver)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_failure_diagnostics_schema(self):
         source = (ROOT / "src/Features/ReverseZ.cpp").read_text(encoding="utf-8")
         bridge = (ROOT / "src/Api/FeatureDevBenchBridge.cpp").read_text(encoding="utf-8")

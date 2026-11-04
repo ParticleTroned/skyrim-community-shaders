@@ -57,7 +57,7 @@
     "Enable RenderDoc Capture": false
   },
   "Reverse Z": {
-    "EnableReverseZBuffer": true
+    "EnableReverseZBuffer": false
   },
   "Replace Original Shaders": {
     "BloodSplatter": true,
@@ -83,7 +83,7 @@
     },
     "settingsContract": {
       "revision": 32,
-      "sourceTreeSha256": "68810A4C4727E3BC2BE557C6B187DA2292EE78960F5654D6C2D19BD2120C5165"
+      "sourceTreeSha256": "682140F985C671A5C47C8A82397A9A707339A6B09C8F842BA90AE44EA1C7E951"
     }
   },
   "Upscaling": {

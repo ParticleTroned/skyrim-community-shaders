@@ -24,7 +24,7 @@ struct ReverseZ : Feature
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
 	struct Settings
 	{
-		bool EnableReverseZBuffer = true;
+		bool EnableReverseZBuffer = false;
 	};
 	Settings settings;
 	void DrawSettings() override;
@@ -64,6 +64,8 @@ struct ReverseZ : Feature
 	ID3D11RasterizerState* GetReversedRasterizerState(ID3D11RasterizerState*);
 
 private:
+	/** Returns whether the requested depth choice differs from this boot's request. */
+	bool HasPendingBootChange() const;
 	void RecordFailure(const char* reason, const char* phase, uint64_t targetGeneration);
 	bool RejectDepthPreparation(const char* reason);
 	void RejectRendering(const char* reason);

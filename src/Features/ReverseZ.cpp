@@ -397,11 +397,15 @@ namespace
 std::pair<std::string, std::vector<std::string>> ReverseZ::GetFeatureSummary()
 {
 	return { "Improves distant depth precision using floating-point reversed scene depth. Requires a restart and additional depth memory/bandwidth.",
-		{ "Reverse Z is enabled by default", "Preserves existing near/far planes and culling modes" } };
+		{ "Reverse Z is disabled by default", "Preserves existing near/far planes and culling modes" } };
 }
 void ReverseZ::LoadSettings(json& value) { settings = value; }
 void ReverseZ::SaveSettings(json& value) { value = settings; }
 void ReverseZ::RestoreDefaultSettings() { settings = {}; }
+bool ReverseZ::HasPendingBootChange() const
+{
+	return bootLatched && requestedThisBoot != (loaded && settings.EnableReverseZBuffer);
+}
 json ReverseZ::GetDiagnostics() const
 {
 	std::scoped_lock lock(failureMutex);
@@ -411,14 +415,17 @@ json ReverseZ::GetDiagnostics() const
 		{ "convertedTargetMask", convertedTargetMask }, { "failure", failure },
 		{ "failurePhase", failurePhase }, { "failureGeneration", failureGeneration },
 		{ "activationRejected", activationRejectedThisBoot },
-		{ "restartRequired", !failure.empty() || (bootLatched && requestedThisBoot != (loaded && settings.EnableReverseZBuffer)) } };
+		{ "restartRequired", !failure.empty() || HasPendingBootChange() } };
 }
 void ReverseZ::DrawSettings()
 {
-	if (!globals::state || !globals::state->IsDeveloperMode())
+	if (!globals::state)
 		return;
 	ImGui::SeparatorText("Depth precision");
 	ImGui::Checkbox("Enable Reverse Z (restart required)", &settings.EnableReverseZBuffer);
+	Util::AddTooltip("Improves distant depth precision. Depending on resolution and scene conditions, Reverse Z can cost up to 1 ms of GPU frame time. Save settings and restart the game to apply a change.");
+	if (HasPendingBootChange())
+		Util::Text::WrappedRestartNeeded("Restart required: save settings and restart the game to apply the Reverse Z change.");
 	ImGui::TextUnformatted(activeThisBoot ? "Active: Reverse Z" : "Active: Standard Z");
 	std::scoped_lock lock(failureMutex);
 	if (!failure.empty())

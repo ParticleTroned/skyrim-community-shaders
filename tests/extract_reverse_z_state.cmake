@@ -24,5 +24,5 @@ extract_between("${source}" "\tDXGI_FORMAT ToFloatDepthFormat"
     "\n\tD3D11_COMPARISON_FUNC FlipComparison" "reverse_z_state_resources.h")
 extract_between("${source}" "bool ReverseZ::PrepareDepthTargets()"
     "\nID3D11DepthStencilView* ReverseZ::ResolveCubemapFaceDepthView" "reverse_z_state_preparation.h")
-extract_between("${source}" "json ReverseZ::GetDiagnostics() const"
+extract_between("${source}" "bool ReverseZ::HasPendingBootChange() const"
     "\nvoid ReverseZ::DrawSettings" "reverse_z_state_diagnostics.h")

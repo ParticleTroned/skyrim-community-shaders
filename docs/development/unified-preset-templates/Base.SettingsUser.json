@@ -57,7 +57,7 @@
     "Enable RenderDoc Capture": false
   },
   "Reverse Z": {
-    "EnableReverseZBuffer": true
+    "EnableReverseZBuffer": false
   },
   "Replace Original Shaders": {
     "BloodSplatter": true,

@@ -67,6 +67,7 @@ struct ReverseZ
 		return nativeShadersReady;
 	}
 	json GetDiagnostics() const;
+	bool HasPendingBootChange() const;
 	bool PrepareDepthTargets();
 	bool IsConvertedDepthTarget(uint32_t) const;
 	bool IsReverseDepthView(ID3D11DepthStencilView*) const;

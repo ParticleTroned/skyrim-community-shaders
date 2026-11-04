@@ -264,7 +264,7 @@ int main() {
         self.assertIn("Reverse Z defaults off.", descriptor["description"])
 
     def test_activation_rejects_pre_activation_shader_publication(self):
-        from grass_draw_lifecycle_test import compile_fixture
+        from grass_draw_lifecycle_test import compile_fixture, publication_generation_methods
 
         source = (ROOT / "src/Features/ReverseZ.cpp").read_text(encoding="utf-8")
         cache = (ROOT / "src/ShaderCache.cpp").read_text(encoding="utf-8")
@@ -359,7 +359,7 @@ int main() {
         methods = "\n".join(block(cache, signature) for signature in (
             "void ShaderCache::Clear()", "RE::BSGraphics::VertexShader* ShaderCache::MakeAndAddVertexShader(",
             "RE::BSGraphics::PixelShader* ShaderCache::MakeAndAddPixelShader("))
-        methods += block(cache_header, "bool IsTaskStale(").replace("bool IsTaskStale(", "bool ShaderCache::IsTaskStale(")
+        methods += publication_generation_methods(cache_header)
         methods += block(cache, "void CompilationSet::BumpGeneration()").replace(
             "CompilationSet::", "ShaderCache::Queue::")
         driver = driver.replace("CACHE_METHODS", methods).replace("PUBLICATION", publication)

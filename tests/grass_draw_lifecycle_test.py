@@ -13,6 +13,17 @@ from skylighting_settings_test import block
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def publication_generation_methods(header: str) -> str:
+    signatures = (
+        ("uint64_t LiveGeneration(", "uint64_t ShaderCache::Queue::LiveGeneration("),
+        ("bool IsCurrentGeneration(RE::BSShader::Type", "bool ShaderCache::Queue::IsCurrentGeneration(RE::BSShader::Type"),
+        ("bool IsTaskStale(std::optional<uint64_t> a_taskGeneration)", "bool ShaderCache::IsTaskStale(std::optional<uint64_t> a_taskGeneration)"),
+        ("bool IsTaskStale(std::optional<uint64_t> a_taskGeneration,", "bool ShaderCache::IsTaskStale(std::optional<uint64_t> a_taskGeneration,"),
+    )
+    return "\n".join(block(header, signature).replace(signature, qualified, 1)
+                     for signature, qualified in signatures)
+
+
 def run_fixture(source: str, devbench: bool) -> subprocess.CompletedProcess:
     runtime = (ROOT / "src/Features/GrassOptimizations/GrassRuntime.h").read_text(encoding="utf-8")
     hooks = (ROOT / "src/Hooks.cpp").read_text(encoding="utf-8")
@@ -915,7 +926,7 @@ int main() {
             "RE::BSGraphics::VertexShader* ShaderCache::MakeAndAddVertexShader(",
             "RE::BSGraphics::PixelShader* ShaderCache::MakeAndAddPixelShader("))
         header = (ROOT / "src/ShaderCache.h").read_text(encoding="utf-8")
-        methods += block(header, "bool IsTaskStale(").replace("bool IsTaskStale(", "bool ShaderCache::IsTaskStale(")
+        methods += publication_generation_methods(header)
         driver = r'''
 #include "shader_publication_fixture.h"
 METHODS
@@ -945,6 +956,10 @@ int main() {
         assert(!publish(8) && testDevice.creates == 2);
         testDevice.fail = false;
         assert(publish(8) && testDevice.creates == 3 && resource.releases == 0);
+        const auto previousGeneration = cache.compilationSet.LiveGeneration(RE::BSShader::Type::Water);
+        cache.compilationSet.typeEpochs[0].fetch_add(1);
+        assert(!publish(7, previousGeneration) && !publish(8, previousGeneration));
+        assert(testDevice.creates == 3);
     }
 }
 '''.replace("METHODS", methods)

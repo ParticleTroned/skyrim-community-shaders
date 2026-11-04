@@ -123,8 +123,11 @@ struct ShaderCache
 	struct Queue
 	{
 		std::atomic_uint64_t generation{ 1 };
+		std::array<std::atomic_uint64_t, 1> typeEpochs{};
 		std::mutex compilationMutex;
 		unsigned clears = 0;
+		uint64_t LiveGeneration(RE::BSShader::Type a_type) const;
+		bool IsCurrentGeneration(RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration) const;
 		void BumpGeneration();
 		void Clear()
 		{
@@ -146,6 +149,7 @@ struct ShaderCache
 	void Clear();
 	bool IsDiskCacheActive() const { return false; }
 	bool IsTaskStale(std::optional<uint64_t> a_taskGeneration) const;
+	bool IsTaskStale(std::optional<uint64_t> a_taskGeneration, RE::BSShader::Type a_type) const;
 	RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = {});
 	RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = {});
 };

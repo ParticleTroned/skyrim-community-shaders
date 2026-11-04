@@ -26,3 +26,15 @@ concrete-thunk qualification. Neither host fixture qualifies ordinary installer
 execution or real rendering; native-source and live capture evidence remain
 separate. Compile both non-default targets through their owning strict recipe,
 then retain actual assertion and resource-cleanup results.
+
+Capture observers recheck the entry capture generation before optional COM
+metadata queries and between reentrant getters. Publication still validates the
+entry generation after the query. Native calls and physical shader binding
+shadows retain their existing behavior.
+
+The context fixture covers draw, dispatch, copy and copy-region acquisition
+turnover through real thunks, including bounded concurrent lifecycle callbacks.
+A concurrent callback that cannot finish within two seconds fails after the
+caller has unwound and joined its worker. The owning process deadline bounds
+the complete assertion run. These authored cases require compiled execution
+before they can establish a test pass.

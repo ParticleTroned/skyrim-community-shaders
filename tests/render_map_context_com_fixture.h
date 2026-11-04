@@ -12,9 +12,11 @@ namespace CSX::RenderMap::ContextHookFixture
 		if (!condition)
 			throw std::runtime_error(message);
 	}
+	inline unsigned getterEntries = 0;
 	inline void (*getterTurnover)() = nullptr;
 	inline void TouchGetter()
 	{
+		++getterEntries;
 		if (auto callback = std::exchange(getterTurnover, nullptr))
 			callback();
 	}
@@ -113,6 +115,8 @@ namespace CSX::RenderMap::ContextHookFixture
 		D3D11_DEVICE_CONTEXT_TYPE type = D3D11_DEVICE_CONTEXT_IMMEDIATE;
 		std::array<ID3D11ShaderResourceView*, 6> resources{};
 		unsigned queries = 0;
+		ID3D11PixelShader* queriedPixel = nullptr;
+		ID3D11ComputeShader* queriedCompute = nullptr;
 		void ReadResources(unsigned stage, UINT start, UINT count, ID3D11ShaderResourceView** output)
 		{
 			TouchGetter();
@@ -583,10 +587,13 @@ namespace CSX::RenderMap::ContextHookFixture
 		}
 		void STDMETHODCALLTYPE PSGetShader(ID3D11PixelShader** ppPixelShader, ID3D11ClassInstance** ppClassInstances, UINT* pNumClassInstances) override
 		{
-			(void)ppPixelShader;
+			TouchGetter();
 			(void)ppClassInstances;
-			(void)pNumClassInstances;
-			throw std::logic_error("unexpected COM method PSGetShader");
+			if (pNumClassInstances)
+				*pNumClassInstances = 0;
+			*ppPixelShader = queriedPixel;
+			if (*ppPixelShader)
+				(*ppPixelShader)->AddRef();
 		}
 		void STDMETHODCALLTYPE PSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState** ppSamplers) override
 		{
@@ -597,10 +604,11 @@ namespace CSX::RenderMap::ContextHookFixture
 		}
 		void STDMETHODCALLTYPE VSGetShader(ID3D11VertexShader** ppVertexShader, ID3D11ClassInstance** ppClassInstances, UINT* pNumClassInstances) override
 		{
-			(void)ppVertexShader;
+			TouchGetter();
 			(void)ppClassInstances;
-			(void)pNumClassInstances;
-			throw std::logic_error("unexpected COM method VSGetShader");
+			if (pNumClassInstances)
+				*pNumClassInstances = 0;
+			*ppVertexShader = nullptr;
 		}
 		void STDMETHODCALLTYPE PSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override
 		{
@@ -639,10 +647,11 @@ namespace CSX::RenderMap::ContextHookFixture
 		}
 		void STDMETHODCALLTYPE GSGetShader(ID3D11GeometryShader** ppGeometryShader, ID3D11ClassInstance** ppClassInstances, UINT* pNumClassInstances) override
 		{
-			(void)ppGeometryShader;
+			TouchGetter();
 			(void)ppClassInstances;
-			(void)pNumClassInstances;
-			throw std::logic_error("unexpected COM method GSGetShader");
+			if (pNumClassInstances)
+				*pNumClassInstances = 0;
+			*ppGeometryShader = nullptr;
 		}
 		void STDMETHODCALLTYPE IAGetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY* pTopology) override
 		{
@@ -714,20 +723,22 @@ namespace CSX::RenderMap::ContextHookFixture
 		}
 		void STDMETHODCALLTYPE RSGetState(ID3D11RasterizerState** ppRasterizerState) override
 		{
-			(void)ppRasterizerState;
-			throw std::logic_error("unexpected COM method RSGetState");
+			TouchGetter();
+			*ppRasterizerState = nullptr;
 		}
 		void STDMETHODCALLTYPE RSGetViewports(UINT* pNumViewports, D3D11_VIEWPORT* pViewports) override
 		{
-			(void)pNumViewports;
-			(void)pViewports;
-			throw std::logic_error("unexpected COM method RSGetViewports");
+			TouchGetter();
+			if (*pNumViewports && pViewports)
+				*pViewports = { 0, 0, 64, 32, 0, 1 };
+			*pNumViewports = 1;
 		}
 		void STDMETHODCALLTYPE RSGetScissorRects(UINT* pNumRects, D3D11_RECT* pRects) override
 		{
-			(void)pNumRects;
-			(void)pRects;
-			throw std::logic_error("unexpected COM method RSGetScissorRects");
+			TouchGetter();
+			if (*pNumRects && pRects)
+				*pRects = { 0, 0, 64, 32 };
+			*pNumRects = 1;
 		}
 		void STDMETHODCALLTYPE HSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView** ppShaderResourceViews) override
 		{
@@ -735,10 +746,11 @@ namespace CSX::RenderMap::ContextHookFixture
 		}
 		void STDMETHODCALLTYPE HSGetShader(ID3D11HullShader** ppHullShader, ID3D11ClassInstance** ppClassInstances, UINT* pNumClassInstances) override
 		{
-			(void)ppHullShader;
+			TouchGetter();
 			(void)ppClassInstances;
-			(void)pNumClassInstances;
-			throw std::logic_error("unexpected COM method HSGetShader");
+			if (pNumClassInstances)
+				*pNumClassInstances = 0;
+			*ppHullShader = nullptr;
 		}
 		void STDMETHODCALLTYPE HSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState** ppSamplers) override
 		{
@@ -760,10 +772,11 @@ namespace CSX::RenderMap::ContextHookFixture
 		}
 		void STDMETHODCALLTYPE DSGetShader(ID3D11DomainShader** ppDomainShader, ID3D11ClassInstance** ppClassInstances, UINT* pNumClassInstances) override
 		{
-			(void)ppDomainShader;
+			TouchGetter();
 			(void)ppClassInstances;
-			(void)pNumClassInstances;
-			throw std::logic_error("unexpected COM method DSGetShader");
+			if (pNumClassInstances)
+				*pNumClassInstances = 0;
+			*ppDomainShader = nullptr;
 		}
 		void STDMETHODCALLTYPE DSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState** ppSamplers) override
 		{
@@ -791,10 +804,13 @@ namespace CSX::RenderMap::ContextHookFixture
 		}
 		void STDMETHODCALLTYPE CSGetShader(ID3D11ComputeShader** ppComputeShader, ID3D11ClassInstance** ppClassInstances, UINT* pNumClassInstances) override
 		{
-			(void)ppComputeShader;
+			TouchGetter();
 			(void)ppClassInstances;
-			(void)pNumClassInstances;
-			throw std::logic_error("unexpected COM method CSGetShader");
+			if (pNumClassInstances)
+				*pNumClassInstances = 0;
+			*ppComputeShader = queriedCompute;
+			if (*ppComputeShader)
+				(*ppComputeShader)->AddRef();
 		}
 		void STDMETHODCALLTYPE CSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState** ppSamplers) override
 		{

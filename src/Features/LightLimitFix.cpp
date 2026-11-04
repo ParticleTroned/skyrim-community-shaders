@@ -4,8 +4,8 @@
 #include "Globals.h"
 #include "GpuPass.h"
 #include "InverseSquareLighting.h"
-#include "LightLimitFix/ShadowCulling.h"
 #include "LightLimitFix/LightAttach.h"
+#include "LightLimitFix/ShadowCulling.h"
 #include "LightLimitFix/VRHookPolicy.h"
 #include "LinearLighting.h"
 #include "LocationContext.h"
@@ -1113,7 +1113,7 @@ void LightLimitFix::DrawSettings()
 		if (page.Is("particles")) {
 			Util::Widgets::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Enables Particle Lights.");
+				ImGui::Text("Lets fire, magic and other compatible effects light nearby surfaces. Off keeps the visible effects but removes their added lighting.");
 			}
 
 			ImGui::Separator();
@@ -1125,17 +1125,17 @@ void LightLimitFix::DrawSettings()
 
 			Util::Widgets::Checkbox("Enable Culling", &settings.EnableParticleLightsCulling);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Significantly improves performance by not rendering empty textures. Only disable if you are encountering issues.");
+				ImGui::Text("Skips drawing effect shapes that a lighting mod marks as hidden, saving rendering work. Off draws them too; try it if part of an effect is missing.");
 			}
 
 			Util::Widgets::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Adds particle lights to the player light level, so that NPCs can detect them for stealth and gameplay.");
+				ImGui::Text("Makes these lights affect how easily NPCs see you while sneaking. Off keeps their appearance without adding them to your detection light level.");
 			}
 
 			Util::Widgets::Checkbox("Enable Optimization", &settings.EnableParticleLightsOptimization);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Merges vertices which are close enough to each other to improve performance.");
+				ImGui::Text("Combines nearby small lights to save work. Off keeps them separate, which can retain finer lighting detail at higher cost.");
 			}
 
 			// NEW: clustering controls
@@ -1148,7 +1148,7 @@ void LightLimitFix::DrawSettings()
 			Util::Widgets::SliderInt("Max Particles per Emitter", &settings.MaxParticlesPerEmitter, kMaxParticlesPerEmitterMin, kMaxParticlesPerEmitterMax);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Particle samples per emitter per frame. Higher better matches the effect but costs CPU time; lower helps dense effects.");
+					"How much of each fire or magic effect is checked for lighting. Higher values follow its shape more closely but cost more processing time.");
 			}
 
 			// NEW: distance cutoff for particle lights
@@ -1165,16 +1165,20 @@ void LightLimitFix::DrawSettings()
 			MenuUI::SectionHeading("Appearance");
 			Util::Widgets::SliderFloat("Saturation", &settings.ParticleLightsSaturation, kParticleLightsSaturationMin, kParticleLightsSaturationMax, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Particle light saturation.");
+				ImGui::Text("Color intensity of particle lighting. Lower values make it more neutral; higher values make it more vivid.");
 			}
 			Util::Widgets::SliderFloat("Particle Brightness", &settings.ParticleBrightness, kParticleBrightnessMin, kParticleBrightnessMax, "%.2f");
+			Util::AddTooltip("Brightness of light from moving particles such as fire and magic. Higher values light nearby surfaces more strongly.");
 			Util::Widgets::SliderFloat("Particle Radius", &settings.ParticleRadius, kParticleRadiusMin, kParticleRadiusMax, "%.2f");
+			Util::AddTooltip("How far moving particles cast light. Higher values illuminate a wider area.");
 			Util::Widgets::SliderFloat("Billboard Brightness", &settings.BillboardBrightness, kBillboardBrightnessMin, kBillboardBrightnessMax, "%.2f");
+			Util::AddTooltip("Brightness of light from flat glow effects supplied by mods. Higher values brighten nearby surfaces.");
 			Util::Widgets::SliderFloat("Billboard Radius", &settings.BillboardRadius, kBillboardRadiusMin, kBillboardRadiusMax, "%.2f");
+			Util::AddTooltip("How far flat glow effects cast light. Higher values illuminate a wider area.");
 			Util::Widgets::Checkbox("Legacy particle appearance", &settings.UseParticleLights087LegacyMode);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Restore the v0.8.7 particle-light alpha model: material/shader/vertex alpha sets brightness; RadiusMult affects only radius. Off uses RadiusMult for intensity and radius. Most visible on billboard lights.");
+					"Uses the older relationship between effect transparency and light brightness. Off uses the newer appearance. Try it if an older effect mod looks too bright or too dim.");
 			}
 
 			ImGui::Spacing();
@@ -1187,7 +1191,7 @@ void LightLimitFix::DrawSettings()
 			Util::Widgets::SliderFloat("Intensity Scale", &settings.JsonPlacedLightIntensity, kJsonPlacedLightIntensityMin, kJsonPlacedLightIntensityMax, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Scale attached lights from light records, mainly Light Placer JSON lights. Requires Inverse Square Lighting metadata to identify them.");
+					"Brightness of compatible placed lights, such as those from Light Placer. Requires Inverse Square Lighting; other lights are unchanged.");
 			}
 
 			Util::Widgets::Checkbox("Interiors Only", &settings.JsonPlacedLightsInteriorsOnly);
@@ -1197,7 +1201,7 @@ void LightLimitFix::DrawSettings()
 
 			Util::Widgets::Checkbox("Portal Strict Only", &settings.JsonPlacedLightsPortalStrictOnly);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Only apply the intensity scale to portal-strict lights.");
+				ImGui::Text("Limits this brightness adjustment to lights restricted to particular rooms. Off also adjusts other supported placed lights.");
 			}
 			ImGui::EndDisabled();
 
@@ -1216,14 +1220,14 @@ void LightLimitFix::DrawSettings()
 				SetContactShadowsEnabled(contactShadows);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Add short screen-space contact shadows to LLF point lights. A cached per-cluster list limits ray marches.");
+					"Adds small shadows where visible objects meet under nearby lights. Off removes these extra shadows to save rendering work.");
 			}
 
 			{
 				const auto shadowsDisabled = Util::DisableGuard(!contactShadows);
 				Util::Widgets::Checkbox("Interiors Only", &settings.ContactShadowsInteriorsOnly);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Only run LLF contact shadows in interior cells.");
+					ImGui::Text("On: these extra contact shadows appear indoors only. Off: they also appear outdoors.");
 				}
 
 				const char* qualityOptions[] = { "Low", "Medium", "High" };
@@ -1237,7 +1241,7 @@ void LightLimitFix::DrawSettings()
 					settings.ContactShadowClusterBudget = static_cast<uint>(contactShadowClusterBudget);
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Maximum cached point/particle contact-shadow lights per cluster. 0 disables clustered contact shadows.");
+					ImGui::Text("Maximum lights casting these shadows in each part of the view. Higher values retain more shadows at extra cost; 0 disables this group of shadows.");
 				}
 
 				int strictContactShadowBudget = static_cast<int>(settings.StrictContactShadowBudget);
@@ -1288,7 +1292,7 @@ void LightLimitFix::DrawSettings()
 	if (page.Is("diagnostics")) {
 		Util::Widgets::Checkbox("Enable Lights Visualisation", &settings.EnableLightsVisualisation);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enables visualization of the light limit\n");
+			ImGui::Text("Replaces the normal picture with a diagnostic view of light coverage and limits. Turn off to return to normal rendering.");
 		}
 
 		{

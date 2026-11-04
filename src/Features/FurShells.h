@@ -19,13 +19,13 @@ struct FurShells : Feature
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return { "Grows layered fur on armors and creatures at draw time from the shell textures that fur mesh mods ship, so the layered meshes themselves are no longer needed.",
-			{ "Uses the _shell.dds texture next to an armor or creature texture",
-				"Works on any body shape, refit or physics mesh",
-				"Shell count drops with distance",
+		return { "Adds fluffy fur to clothing and creatures with compatible fur textures.",
+			{ "Requires compatible fur textures from a mod",
+				"Follows clothing and body movement",
+				"Distant fur can use less detail to save performance",
 				"Adjustable length, density and droop",
-				"Optional weather wind, wet fur, contact, recovering dents and inertia",
-				"Separate contact quality controls and inertia presets" } };
+				"Optional wind, wet fur, touch and movement effects",
+				"Separate controls for touch accuracy and movement style" } };
 	}
 
 	/** @brief Global fur settings, used for every shell texture that has no override. */

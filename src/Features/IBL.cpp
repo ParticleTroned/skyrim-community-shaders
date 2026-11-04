@@ -154,6 +154,9 @@ void IBL::DrawSettingsEnabledControl()
 	bool enabled = settings.EnableIBL != 0;
 	if (Util::WeatherUI::Checkbox("Enabled", this, "EnableIBL", &enabled))
 		SetPerformanceToggleEnabled(enabled);
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled) &&
+		!Util::WeatherUI::IsWeatherControlled(this, "EnableIBL"))
+		Util::AddTooltip("On: shaded surfaces receive color and light from their surroundings. Off: uses the original ambient lighting.");
 }
 
 void IBL::DrawSettings()
@@ -171,27 +174,27 @@ void IBL::DrawSettings()
 	if (page.Is("coverage")) {
 		DrawEnableCheckbox("Enable Interior IBL", settings.DisableInInteriors);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enables IBL in interior cells.");
+			ImGui::Text("On: indoor surfaces receive light and color from their surroundings. Off: uses the usual interior ambient lighting.");
 		}
 		DrawEnableCheckbox("Enable World Map IBL", settings.DisableInWorldMap);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enables IBL while the world map is open.");
+			ImGui::Text("On: environment lighting also affects the world map. Off: keeps its usual lighting.");
 		}
 		DrawEnableCheckbox("Enable Loading Screen IBL", settings.DisableInLoadingScreen);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enables IBL during loading screens and the main menu.");
+			ImGui::Text("On: environment lighting also affects loading-screen objects and the main menu. Off: keeps their usual lighting.");
 		}
 	}
 	if (page.Is("lighting")) {
 		if (Util::WeatherUI::SliderFloat("Env IBL Scale", this, "EnvIBLScale", &settings.EnvIBLScale, kIBLScaleMin, kIBLScaleMax, "%.2f"))
 			changedWeatherBaselines.insert("EnvIBLScale");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Scale ambient lighting from the Dynamic Cubemaps environment cubemap.");
+			ImGui::Text("Brightness of soft light from nearby surroundings. Higher values brighten shaded surfaces. Requires Dynamic Cubemaps.");
 		}
 		if (Util::WeatherUI::SliderFloat("Sky IBL Scale", this, "SkyIBLScale", &settings.SkyIBLScale, kIBLScaleMin, kIBLScaleMax, "%.2f"))
 			changedWeatherBaselines.insert("SkyIBLScale");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Scale ambient lighting from the game's native sky-reflection cubemap.");
+			ImGui::Text("Brightness of soft light from the sky. Higher values brighten surfaces exposed to it.");
 		}
 	}
 	if (page.Is("colour")) {
@@ -205,27 +208,27 @@ void IBL::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Sky IBL saturation: lower gives neutral ambient light; higher gives vivid color.");
 		}
-		if (Util::WeatherUI::SliderFloat("DALC Amount", this, "DALCAmount", &settings.DALCAmount, 0.0f, 1.0f, "%.2f"))
+		if (Util::WeatherUI::SliderFloat("Original ambient matching", this, "DALCAmount", &settings.DALCAmount, 0.0f, 1.0f, "%.2f"))
 			changedWeatherBaselines.insert("DALCAmount");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Match IBL brightness to vanilla ambient (DALC): 0 = pure IBL; 1 = fully matched.");
+				"Matches environment-light brightness to the original scene lighting. 0 keeps the new brightness; 1 fully matches the original.");
 		}
 		{
 			int dalcMode = static_cast<int>(settings.DALCMode);
 			auto _ = Util::DisableGuard(IsDALCModeDisabled(settings));
-			if (Util::Widgets::Combo("DALC Mode", &dalcMode, "Luminance Ratio\0Color Ratio\0DALC + Sky\0DALC + Sky (Directional)\0"))
+			if (Util::Widgets::Combo("Ambient matching style", &dalcMode, "Brightness\0Color\0Original + Sky\0Original + Sky (Directional)\0"))
 				settings.DALCMode = static_cast<uint>(dalcMode);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Choose ambient brightness matching:\nLuminance Ratio: overall ratio; loses vanilla ambient (DALC) tint.\nColor Ratio: per-channel ratio; preserves DALC tint.\nDALC + Sky: vanilla ambient plus sky IBL; Skylighting affects only sky.\nDALC + Sky (Directional): also dims vanilla ambient per direction.");
+					"Brightness matches the original light level; Color also preserves its tint. Original + Sky keeps the original ambient light and adds sky light. Directional also shades that original light by direction.");
 			}
 		}
 	}
 	if (page.Is("colour")) {
 		Util::UIntCheckbox("Use Static IBL For Out-of-World Objects", settings.UseStaticIBL);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Uses pre-baked static IBL cubemap textures for objects rendered outside the game world (e.g. inventory items, loading screens).");
+			ImGui::Text("On: inventory and loading-screen objects use a fixed lighting environment. Off: they use the current environment lighting where available.");
 		}
 		if (Util::WeatherUI::SliderFloat("Fog Mix", this, "FogAmount", &settings.FogAmount, 0.0f, 1.0f, "%.2f"))
 			changedWeatherBaselines.insert("FogAmount");
@@ -234,14 +237,11 @@ void IBL::DrawSettings()
 		}
 		Util::UIntCheckbox("Preserve Fog Luminance", settings.PreserveFogLuminance);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("With Fog Mix, preserve original fog brightness after applying the IBL tint. Prevents overbright or dark fog.");
+			ImGui::Text("On: changing Fog Mix changes fog color without changing its original brightness. Off: the added tint can also brighten or darken fog.");
 		}
 		Util::Widgets::Checkbox("Sync Slider Edits to Weather Fallback", &settings.CaptureWeatherBaselineOnSliderChange);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Default: OFF.");
-			ImGui::Text("When enabled, manual IBL slider edits update the weather fallback baseline.");
-			ImGui::Text("This prevents values from snapping back after interior/exterior transitions");
-			ImGui::Text("when the active weather has no override for that setting.");
+			ImGui::Text("Keeps your slider edits as the default for weather without its own setting. Off: weather changes can restore the previous default.");
 		}
 	}
 	ImGui::EndDisabled();
@@ -325,7 +325,7 @@ void IBL::RegisterWeatherVariables()
 	// How much IBL brightness is matched to vanilla ambient (DALC)
 	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
 		"DALCAmount",
-		"DALC Amount",
+		"Original ambient matching",
 		"Blend factor toward vanilla ambient brightness (0 = pure IBL, 1 = fully matched to DALC)",
 		&settings.DALCAmount,
 		0.0f,

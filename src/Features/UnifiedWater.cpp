@@ -679,7 +679,7 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Shore depth over which the shallow surface cue fades in, measured normal to the water plane. 0 disables this fade; Minimum Edge Fade Width still applies.");
+				"Depth over which the shallow-water surface gradually becomes visible near the shore. Higher values soften the transition; 0 removes this depth-based fade.");
 		}
 
 		Util::Widgets::SliderFloat(
@@ -691,7 +691,7 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Maximum distance for the shallow fallback and connected-depth reads. 0 uses native/Open depth blending everywhere.");
+				"How far away the shallow-water visibility adjustment applies. Lower values save work; 0 disables it everywhere.");
 		}
 
 		ImGui::EndDisabled();
@@ -703,7 +703,7 @@ void UnifiedWater::DrawSettings()
 		Util::Widgets::Checkbox("Use Open Shaders Depth Behaviour", &settings.UseOpenShadersDepthBehaviour);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Use native Open Shaders-like water blending without the shallow surface cue. Saved visibility values resume when turned off.");
+				"On: uses Open Shaders water blending. Off: adds CSX's shallow-water visibility adjustment, helping distinguish clear streams from their beds. Your shore settings are kept.");
 		}
 
 		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
@@ -716,7 +716,7 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Strength of the bounded surface cue used only when native/Open water is visually indistinguishable from the riverbed.");
+				"Makes very shallow, clear water easier to see against the riverbed. Higher values strengthen the surface; 0 removes this adjustment.");
 		}
 		ImGui::EndDisabled();
 

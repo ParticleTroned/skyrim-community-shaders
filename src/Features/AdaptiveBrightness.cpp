@@ -2217,8 +2217,10 @@ void AdaptiveBrightness::DrawBloomSettings(
 	bool a_showAdvancedControls,
 	bool a_globalLayer)
 {
-	if (a_globalLayer)
+	if (a_globalLayer) {
 		Util::Widgets::Checkbox("Enable Bloom Enhancement", &settings.bloomEnabled);
+		Util::AddTooltip("Adds a soft glow around bright areas using your bloom profiles. Off removes this extra glow while keeping the game's original bloom.");
+	}
 	Bloom::DrawProfileControls(a_profile.bloom, a_profile.bloomPresets);
 	if (a_globalLayer)
 		ImGui::TextDisabled("Global Bloom strength adds to every active profile; detailed shaping can also adjust inherited Bloom.");
@@ -2282,8 +2284,7 @@ void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool 
 		ImGui::EndDisabled();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Reads the active Sky wind speed, including weather-record changes made by mods.");
-		ImGui::Text("Interior cells are calm, and response changes are smoothed across weather transitions.");
+		ImGui::Text("On: wave size follows the weather wind; indoors uses the calm-wave setting. Off: keeps your base wave size. Changes blend smoothly.");
 	}
 
 	SanitizeWaterWindSettings(waterWind);

@@ -2047,9 +2047,11 @@ void ScreenshotFeature::DrawSettings()
 			bool fixedCropDisabled = false;
 			ImGui::BeginDisabled();
 			Util::Widgets::Checkbox("Apply crop", &fixedCropDisabled);
+			Util::AddTooltip("This capture mode keeps its fixed eye framing, so a custom crop cannot be applied.");
 			ImGui::EndDisabled();
 		} else {
 			Util::Widgets::Checkbox("Apply crop", &applyCropToScreenshot);
+			Util::AddTooltip("On: saves only the selected crop area. Off: saves the full image from the selected source.");
 		}
 	}
 

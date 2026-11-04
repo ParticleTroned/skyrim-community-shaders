@@ -657,7 +657,9 @@ void Skylighting::DrawSettings()
 	if (page.Is("look")) {
 		MenuUI::DetailText("Diffuse visibility controls object darkness. Specular visibility controls sky reflections.");
 		Util::Widgets::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
+		Util::AddTooltip("Minimum brightness allowed in sheltered areas. Higher values lighten dark corners and covered surfaces.");
 		Util::Widgets::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
+		Util::AddTooltip("Minimum sky reflection allowed under cover. Higher values keep sheltered surfaces shinier.");
 		if (Util::Widgets::Checkbox("Include Marked Roof Occluders", &settings.IncludeMarkedRoofOccluders))
 			QueueResetSkylighting();
 		if (auto _tt = Util::HoverTooltipWrapper())
@@ -697,7 +699,7 @@ void Skylighting::DrawSettings()
 		MenuUI::SectionHeading("Refresh frequency");
 		Util::Widgets::Checkbox("Enable Reduced Update Frequency", &settings.EnableReducedUpdateFrequency);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Updates skylighting less often for a bigger FPS gain. Higher values can react a bit slower.");
+			ImGui::Text("Updates skylighting less often to save work. On may react more slowly to movement and scene changes; off refreshes it every frame.");
 
 		NormalizeSettingsForRuntime(settings);
 		uint stableSliceCount = ClampStableSliceCount(settings.StableSliceCount, probeArrayDims[2]);
@@ -721,7 +723,7 @@ void Skylighting::DrawSettings()
 				settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, static_cast<uint>(probeIntervalUI));
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text(usesIncrementalProbeSlices ?
-								"Minimum equals Occlusion Update Interval. Incremental probes still follow fresh occlusion quadrants." :
+								"With gradual updates enabled, lighting refreshes as each new shadow region becomes ready. It cannot update faster than the shadow checks." :
 								"Skylight refresh interval: 1 = every frame. Higher saves work but reacts slower. Minimum equals Occlusion Update Interval.");
 		}
 		ImGui::EndDisabled();
@@ -744,7 +746,7 @@ void Skylighting::DrawSettings()
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Spreads skylighting work over multiple frames to smooth spikes.");
+			ImGui::Text("Spreads lighting updates across several frames to reduce sudden workloads. Off updates the whole area at once; on may take longer to settle.");
 
 		ImGui::BeginDisabled(!settings.EnableIncrementalProbeUpdates);
 		{

@@ -35,37 +35,48 @@ void HairSpecular::DrawSettings()
 											  });
 
 	if (page.Is("model")) {
-		MenuUI::ChoiceSetting("Hair Mode", (int*)&settings.HairMode, "Kajiya-Kay\0Marschner\0");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Choose hair shading:\nKajiya-Kay: empirical specular highlights.\nMarschner: more physical light interaction; transmission can look too bright without self-shadowing.\nBoth use anisotropic, tangent-based shading.");
-		}
+		static constexpr MenuUI::Choice models[]{
+			{ "kajiya-kay", "Kajiya-Kay", "", "Uses simple highlights along hair strands." },
+			{ "marschner", "Marschner", "", "Adds richer shine and light passing through hair. Enable self-shadowing if it looks too bright." }
+		};
+		int mode = static_cast<int>(settings.HairMode);
+		if (MenuUI::ChoiceSetting("Hair Mode", &mode, models))
+			settings.HairMode = static_cast<uint>(mode);
 		ImGui::Spacing();
 	}
 	if (page.Is("look")) {
 		Util::Widgets::SliderFloat("Glossiness", &settings.HairGlossiness, 0.0f, settings.HairMode == 0 ? 256.0f : 100.0f, "%.0f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Hair glossiness: specular exponent in Kajiya-Kay; surface roughness in Marschner.");
+				"Higher values give tighter, sharper hair highlights. Lower values spread them into a softer shine.");
 		}
 		Util::Widgets::SliderFloat("Specular Multiplier", &settings.SpecularMult, 0.0f, 10.0f, "%.2f");
+		Util::AddTooltip("Brightness of highlights from direct lights. Higher values make hair shine more.");
 		Util::Widgets::SliderFloat("Diffuse Multiplier", &settings.DiffuseMult, 0.0f, 10.0f, "%.2f");
+		Util::AddTooltip("Brightness of the hair beneath its highlights under direct light.");
 		Util::Widgets::SliderFloat("Indirect Specular Multiplier", &settings.SpecularIndirectMult, 0.0f, 10.0f, "%.2f");
+		Util::AddTooltip("Strength of hair shine from its surroundings, rather than direct lights.");
 		Util::Widgets::SliderFloat("Indirect Diffuse Multiplier", &settings.DiffuseIndirectMult, 0.0f, 10.0f, "%.2f");
+		Util::AddTooltip("Brightness of hair in ambient light. Higher values lighten shaded hair.");
 		Util::Widgets::SliderFloat("Hair Base Color Multiplier", &settings.BaseColorMult, 0.0f, 10.0f, "%.2f");
+		Util::AddTooltip("Brightness of the underlying hair color. 1 keeps the texture color; lower values darken it.");
 		Util::Widgets::SliderFloat("Hair Saturation", &settings.HairSaturation, 0.0f, 5.0f, "%.2f");
+		Util::AddTooltip("Strength of hair color. 0 removes color; values above 1 make it more vivid.");
 		Util::Widgets::SliderFloat("Transmission", &settings.Transmission, 0.0f, 1.0f, "%.2f");
+		Util::AddTooltip("Amount of light that passes through hair. Higher values make backlit strands brighter.");
 		ImGui::Spacing();
 	}
 	if (page.Is("highlights")) {
 		Util::UIntCheckbox("Enable Tangent Shift", settings.EnableTangentShift);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Vary strand highlights with a tangent-shift texture. Results depend on the hair model.");
+				"Varies highlights along strands using detail supplied by the hair mod. Off keeps a more uniform highlight direction.");
 		}
 		if (settings.HairMode == 0) {
 			Util::Widgets::SliderFloat("Primary Specular Tangent Shift", &settings.PrimaryTangentShift, -1.0f, 1.0f, "%.2f");
+			Util::AddTooltip("Moves the main highlight along the hair strands. Negative and positive values move it in opposite directions.");
 			Util::Widgets::SliderFloat("Secondary Specular Tangent Shift", &settings.SecondaryTangentShift, -1.0f, 1.0f, "%.2f");
+			Util::AddTooltip("Moves the second highlight along the strands, changing its separation from the main shine.");
 		}
 		ImGui::Spacing();
 	}
@@ -73,12 +84,15 @@ void HairSpecular::DrawSettings()
 		Util::UIntCheckbox("Enable Screen-Space Self Shadow", settings.EnableSelfShadow);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Enable screen-space hair self-shadowing. Without it, Marschner transmission can look too bright.");
+				"Adds small shadows where visible hair overlaps, helping prevent overly bright hair. Off leaves those extra shadows out, reducing rendering work.");
 		}
 		const auto shadowsDisabled = Util::DisableGuard(settings.EnableSelfShadow == 0);
 		Util::Widgets::SliderFloat("Self Shadow Strength", &settings.SelfShadowStrength, 0.0f, 1.0f, "%.2f");
+		Util::AddTooltip("How dark overlapping hair becomes. 0 removes this darkening; 1 applies it fully.");
 		Util::Widgets::SliderFloat("Self Shadow Exponent", &settings.SelfShadowExponent, 0.0f, 10.0f, "%.2f");
+		Util::AddTooltip("Higher values lighten partially shaded hair while keeping fully covered areas dark.");
 		Util::Widgets::SliderFloat("Self Shadow Scale", &settings.SelfShadowScale, 0.0f, 10.0f, "%.2f");
+		Util::AddTooltip("How far nearby hair and surfaces can cast these small shadows. Higher values extend their reach.");
 	}
 }
 

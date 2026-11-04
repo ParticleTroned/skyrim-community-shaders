@@ -111,8 +111,7 @@ void LODBlending::DrawSettings()
 		settings.DisableTerrainVertexColors = disableTerrainVertexColors ? 1u : 0u;
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Disables vertex coloring on nearby terrain. "
-			"Best combined with terrain LOD generated in xLODGen with Vertex Color Intensity set to 0. ");
+			"Removes built-in color tinting from nearby terrain. Can help match distant terrain generated without that tint; off keeps the original coloring.");
 	}
 	ImGui::EndDisabled();
 }

@@ -2831,10 +2831,22 @@ void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature, 
 			g_featureCostUiMessage = applied ? "" : "This feature could not change state. Check its settings and runtime requirements.";
 		}
 	}
-	Util::AddTooltip(reason ? reason : busy   ? "Wait for the current measurement to finish." :
-								   !supported ? "No runtime switch. Change startup in Advanced > Startup, save settings and restart." :
-								   a_tooltip  ? a_tooltip :
-												"Turns this feature on or off while keeping your current tuning.");
+	if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled))
+		return;
+	const char* tooltip = reason ? reason : busy   ? "Wait for the current measurement to finish." :
+	                                    !supported ? "Change startup in Advanced > Startup, save settings and restart to enable or disable this feature." :
+	                                                 a_tooltip;
+	std::string featureHelp;
+	if (!tooltip) {
+		featureHelp = a_feature->GetFeatureSummary().first;
+		if (const auto newline = featureHelp.find_first_of("\r\n"); newline != std::string::npos)
+			featureHelp.resize(newline);
+		if (featureHelp.empty())
+			featureHelp = "Applies " + a_feature->GetName() + " to the scene.";
+		featureHelp += " Turn off to stop these effects while keeping your settings.";
+		tooltip = featureHelp.c_str();
+	}
+	Util::AddTooltip(tooltip);
 }
 
 namespace

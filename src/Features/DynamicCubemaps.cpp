@@ -181,7 +181,7 @@ void DynamicCubemaps::DrawSettings()
 			recompileFlag = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enable Screen Space Reflections on Water");
+			ImGui::Text("On: water reflects nearby objects visible on screen. Off: keeps only the broader environment reflections. Extra detail costs performance.");
 			if (REL::Module::IsVR() && !enabledAtBoot) {
 				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
 				ImGui::Text(
@@ -201,9 +201,12 @@ void DynamicCubemaps::DrawSettings()
 		bool enabledCreator = settings.EnabledCreator != 0;
 		if (Util::Widgets::Checkbox("Enable Creator", &enabledCreator))
 			settings.EnabledCreator = enabledCreator ? 1u : 0u;
+		Util::AddTooltip("Previews custom reflection color and roughness for making texture mods. Off uses the materials supplied by your mods. Requires Creator mode.");
 		if (settings.EnabledCreator) {
 			Util::Widgets::ColorEdit3("Color", reinterpret_cast<float*>(&settings.CubemapColor));
+			Util::AddTooltip("Tint of the reflection texture being created. This affects the creator preview and exported file.");
 			Util::Widgets::SliderFloat("Roughness", &settings.CubemapColor.w, 0.0f, 1.0f, "%.2f");
+			Util::AddTooltip("Higher values make the previewed reflections duller and softer; lower values make them sharper.");
 			if (ImGui::Button("Export")) {
 				auto device = globals::d3d::device;
 				auto context = globals::d3d::context;

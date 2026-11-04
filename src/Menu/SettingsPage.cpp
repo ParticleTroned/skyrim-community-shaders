@@ -395,6 +395,18 @@ namespace MenuUI
 		return clicked;
 	}
 
+	bool ChoiceSetting(const char* a_label, int* a_selected, std::span<const Choice> a_choices)
+	{
+		if (a_choices.empty())
+			return false;
+		SectionHeading(a_label);
+		const int choice = ChoiceCards(a_label, *a_selected, a_choices);
+		if (choice < 0 || choice == *a_selected)
+			return false;
+		*a_selected = choice;
+		return true;
+	}
+
 	bool ChoiceSetting(const char* a_label, int* a_selected, const char* const a_items[], int a_count)
 	{
 		if (a_count <= 0)
@@ -403,12 +415,7 @@ namespace MenuUI
 		choices.reserve(a_count);
 		for (int index = 0; index < a_count; ++index)
 			choices.push_back({ a_items[index], a_items[index], "", a_items[index] });
-		SectionHeading(a_label);
-		const int choice = ChoiceCards(a_label, *a_selected, choices);
-		if (choice < 0 || choice == *a_selected)
-			return false;
-		*a_selected = choice;
-		return true;
+		return ChoiceSetting(a_label, a_selected, choices);
 	}
 
 	bool ChoiceSetting(const char* a_label, int* a_selected, const char* a_items)

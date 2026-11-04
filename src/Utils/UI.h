@@ -256,9 +256,9 @@ namespace Util
 	 * Shows help for the previous item, replacing earlier tooltips in the same frame.
 	 * Wraps only at the viewport width and grows vertically to fit the text.
 	 * @param a_desc Tooltip text
-	 * @param a_flags Hover flags (default: ImGuiHoveredFlags_DelayNormal)
+	 * @param a_flags Hover flags (default: delayed help, including disabled controls)
 	 */
-	void AddTooltip(const char* a_desc, ImGuiHoveredFlags a_flags = ImGuiHoveredFlags_DelayNormal);
+	void AddTooltip(const char* a_desc, ImGuiHoveredFlags a_flags = ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 
 	/**
 	 * Draws a "(?)" help marker with a tooltip on hover.

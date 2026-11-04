@@ -92,10 +92,12 @@ void VolumetricLighting::DrawSettings()
 	std::scoped_lock lock(settingsMutex);
 	if (page.Is("coverage")) {
 		Util::Widgets::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled);
+		Util::AddTooltip("Adds sunbeams and lit haze outdoors. Off removes these outdoor effects. Changes require a restart in VR.");
 		Util::Widgets::Checkbox("Enable in Interiors", &settings.InteriorEnabled);
+		Util::AddTooltip("Adds beams and lit haze in interiors that support them. Off removes these indoor effects. Changes require a restart in VR.");
 		if (globals::game::isVR) {
 			Util::Widgets::Checkbox("Disable during rain", &settings.DisableWeatherInteractionDuringRain);
-			Util::AddTooltip("Disables weather-driven volumetric lighting during rain and restores it afterwards.");
+			Util::AddTooltip("On: hides weather-driven sunbeams and lit haze while it rains, then restores them. Off: lets the weather keep these effects.");
 			MenuUI::DetailNote("In VR, changes to interior and exterior coverage require a game restart.");
 		}
 	}

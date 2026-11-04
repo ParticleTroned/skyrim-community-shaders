@@ -108,7 +108,7 @@ void GrassLighting::DrawSettings()
 		SanitizeSettings();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(
-				"Specular highlight glossiness. This also defines the dry endpoint for Wetterness grass glossiness after rain and grass drying finish.");
+				"Higher values give grass tighter, sharper highlights. Wetterness returns to this look when the grass dries.");
 		}
 
 		Util::Widgets::SliderFloat(
@@ -121,7 +121,7 @@ void GrassLighting::DrawSettings()
 		SanitizeSettings();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(
-				"Specular highlight strength. This also defines the dry endpoint for Wetterness grass specular strength after rain and grass drying finish.");
+				"Brightness of shine on dry grass. Higher values make it shinier; Wetterness returns to this strength after drying.");
 		}
 
 		ImGui::Spacing();
@@ -153,7 +153,7 @@ void GrassLighting::DrawSettings()
 		Util::UIntCheckbox("Wrapped Lighting for Vanilla Grass", settings.EnableWrappedLighting);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Restore legacy wrapped diffuse on vanilla/basic grass to soften the lit/back-face boundary. The newer lighting model stays active; complex grass is unchanged.");
+				"Softens the boundary between lit and shaded sides of basic grass. Off keeps a stronger contrast. Complex grass is unaffected.");
 		}
 		ImGui::Spacing();
 		ImGui::Spacing();
@@ -161,14 +161,14 @@ void GrassLighting::DrawSettings()
 		Util::UIntCheckbox("Override Complex Grass Lighting Settings", settings.OverrideComplexGrassSettings);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Override authored complex-grass brightness with basic-grass settings. Useful when authors did not account for CSX's extra lights. This was the default before Community Shaders 0.7.0.");
+				"On: applies the basic-grass brightness setting to complex grass too. Off: keeps the brightness chosen by the grass mod.");
 		}
 		ImGui::Spacing();
 		ImGui::Spacing();
 		ImGui::TextWrapped("Basic Grass");
 		Util::Widgets::SliderFloat("Brightness", &settings.BasicGrassBrightness, 0.0f, 1.0f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Darkens the grass textures to look better with the new lighting");
+			ImGui::Text("Brightness of basic grass. Lower values darken it; 1 keeps its original color.");
 		}
 	}
 }

@@ -2494,6 +2494,22 @@ int main()
 			blocked = true;
 			click(Util::controls.at("Performance").GetCenter(), choices);
 			require(selection == 1, "primary choice groups respect the feature's disabled state");
+			const MenuUI::Choice describedChoices[]{
+				{ "fast", "Performance", "", "Uses less rendering work." },
+				{ "fine", "Quality", "", "Preserves finer detail." }
+			};
+			const auto drawDescribedChoices = [&] {
+				Util::DisableGuard guard(blocked);
+				MenuUI::ChoiceSetting("Quality", &selection, describedChoices);
+			};
+			blocked = false;
+			frame(drawDescribedChoices);
+			frame(drawDescribedChoices);
+			click(Util::controls.at("Uses less rendering work.").GetCenter(), drawDescribedChoices);
+			require(selection == 0, "choice-specific help belongs to its selectable card");
+			blocked = true;
+			click(Util::controls.at("Preserves finer detail.").GetCenter(), drawDescribedChoices);
+			require(selection == 0, "described choice groups retain their enclosing disabled state");
 
 			unsigned int lightFlags = 0b1001;
 			ImVec2 flagCentre;
@@ -3174,11 +3190,15 @@ int main()
 					"both skin profiles keep colour controls visible while kernel updates are pending");
 			}
 			unsigned int toggle = 256;
-			const auto drawToggle = [&] { Util::UIntCheckbox("Uint control", toggle); };
+			ImRect toggleBounds;
+			const auto drawToggle = [&] {
+				Util::UIntCheckbox("Uint control", toggle);
+				toggleBounds = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+			};
 			frame(drawToggle);
 			frame(drawToggle);
 			require(toggle == 1, "integer-backed toggles normalize the full value");
-			click(Util::controls.at("Turn Uint control on or off.").GetCenter(), drawToggle);
+			click(toggleBounds.GetCenter(), drawToggle);
 			require(toggle == 0, "integer-backed toggles can clear values outside the low byte");
 		}
 

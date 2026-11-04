@@ -271,7 +271,7 @@ void SettingsTabRenderer::RenderShadersTab()
 		shaderCache->SetDiskCache(useDiskCache);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Disables loading shaders from disk and prevents saving compiled shaders to disk cache.");
+		ImGui::Text("On: saves prepared shaders to disk and allows their reuse on later launches. Off: prepares them again each launch, increasing startup work.");
 	}
 
 	bool skipUnchanged = shaderCache->IsSkipUnchangedShaders();
@@ -282,7 +282,7 @@ void SettingsTabRenderer::RenderShadersTab()
 	ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Reuse disk shaders only when source, includes, defines and compatibility match. Compile missing/outdated entries. Off skips disk reads but still updates the cache. Requires Enable Disk Cache.");
+			"Reuses saved shaders when they still match your setup, reducing preparation time. Off rebuilds them even if unchanged. Requires Enable Disk Cache.");
 	}
 
 	bool useAsync = shaderCache->IsAsync();
@@ -290,7 +290,7 @@ void SettingsTabRenderer::RenderShadersTab()
 		shaderCache->SetAsync(useAsync);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Skips a shader being replaced if it hasn't been compiled yet. Also makes compilation blazingly fast!");
+		ImGui::Text("Prepares missing shaders in the background so gameplay can continue. Some effects may appear late. Off waits for preparation, which can cause pauses.");
 	}
 
 	if (shaderCache->GetTotalTasks() > 0) {
@@ -459,7 +459,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
 			globals::menu->pendingIconReload = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Uses monochrome version of the CSX logo");
+			ImGui::Text("On: the CSX logo follows the menu text color. Off: keeps the original colored logo.");
 		}
 		ImGui::Unindent();
 	}

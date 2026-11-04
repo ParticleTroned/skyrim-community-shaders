@@ -77,7 +77,7 @@ public:
 	std::string GetDisplayName() override { return "Snow Cover"; }
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return { "Seasonal snow cover, weather accumulation, foliage tint and melting near placed fires.", {} };
+		return { "Adds seasonal snow, changing plant colors and optional melting around fires.", {} };
 	}
 
 	struct UserSettings

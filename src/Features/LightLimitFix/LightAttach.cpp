@@ -224,12 +224,12 @@ namespace LightLimitFixDetail::LightAttach
 		if (Util::Widgets::Checkbox("Skip Unchanged Light Updates", &a_enabled))
 			Invalidate();
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextWrapped("Default off. Reduces CPU work for eligible world lights. Moving objects or portal changes can leave lighting membership stale between refreshes, including first-person lighting. Visual correctness and CSX performance are unmeasured.");
+			ImGui::TextWrapped("Skips repeated light checks to save work. Moving objects, including your hands, may briefly be lit incorrectly. Off keeps normal updates. Experimental; performance benefit is unmeasured.");
 		const auto intervalDisabled = Util::DisableGuard(!a_enabled);
 		if (Util::Widgets::SliderInt("Light Update Interval (frames)", &a_refreshFrames, MinimumRefreshFrames, MaximumRefreshFrames, "%d", ImGuiSliderFlags_AlwaysClamp))
 			Invalidate();
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextWrapped("1 keeps native updates. Higher values skip more work but delay geometry membership refreshes. Changed lights, shadow lights, strict lights and non-world scenes retain native handling.");
+			ImGui::TextWrapped("How often unchanged lights recheck nearby objects. 1 checks every frame; higher values save work but may delay lighting changes on moving objects.");
 		if (!installed.load(std::memory_order_acquire))
 			ImGui::TextWrapped("Unavailable: %s", installationError.c_str());
 	}

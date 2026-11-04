@@ -718,7 +718,7 @@ void AdaptiveBalanceDepthOfField::DrawSettings()
 	static Util::ConfirmationPopup underwaterLockPopup;
 
 	Util::Widgets::Checkbox("Enable depth-of-field overrides", &settings.enabled);
-	DrawDofTooltip("Apply the unlocked scene and underwater controls globally. Adaptive Balance must also be enabled.");
+	DrawDofTooltip("On: uses your unlocked focus and blur settings throughout the game. Off: follows the game and weather settings. Requires Adaptive Balance.");
 
 	{
 		Util::DisableGuard overridesDisabled(!settings.enabled);
@@ -747,7 +747,7 @@ void AdaptiveBalanceDepthOfField::DrawSettings()
 
 	ImGui::Separator();
 	Util::Widgets::Checkbox("Underwater fog blur correction", &settings.fixUnderwaterFogDofBlur);
-	DrawDofTooltip("Blur underwater fog correctly with vanilla DOF. Applies immediately and controls only the correction. Independent of manual DOF overrides; Adaptive Balance must be enabled.");
+	DrawDofTooltip("Makes underwater fog follow the scene blur correctly. Off keeps the original fog appearance. Works without manual blur overrides; requires Adaptive Balance.");
 }
 
 void AdaptiveBalanceDepthOfField::InstallHooks()

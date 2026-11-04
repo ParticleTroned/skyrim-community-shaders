@@ -124,7 +124,7 @@ void AdvancedSettingsRenderer::RenderShaderCompileFlags()
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Request partial precision with D3DCOMPILE_PARTIAL_PRECISION. Image quality and performance depend on the shader and GPU. Changing this clears the cache; shaders recompile as needed.");
+			"Allows less precise graphics calculations, which may change performance or image quality. Off keeps normal precision. Changing this rebuilds affected shaders.");
 	}
 
 	// Avoid flow control compiler flag (transient — not saved to config because the
@@ -137,7 +137,7 @@ void AdvancedSettingsRenderer::RenderShaderCompileFlags()
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Ask the compiler to avoid flow-control instructions with D3DCOMPILE_AVOID_FLOW_CONTROL. May help short branches but add work when skipped branches are evaluated. Resets each launch. Changing this clears the cache; shaders recompile as needed.");
+			"Asks graphics effects to calculate alternatives instead of skipping unused work. May improve or worsen performance. Resets each launch; changing it rebuilds affected shaders.");
 	}
 }
 
@@ -162,7 +162,7 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 	Util::Widgets::SliderInt("Compiler Threads", &shaderCache->compilationThreadCount, 1, maxThreads, "%d", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Startup compile threads. Default: 75%% of logical CPUs, including E-cores, at cooperative OS priority to leave system headroom. Higher compiles faster but may reduce responsiveness.");
+			"How much processor capacity prepares shaders at startup. Higher values may finish sooner but leave less capacity for other programs.");
 	}
 	Util::Widgets::SliderInt("Background Compiler Threads", &shaderCache->backgroundCompilationThreadCount, 1, maxThreads, "%d", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -605,7 +605,7 @@ void AdvancedSettingsRenderer::RenderRuntimeDebugControls()
 	// Frame annotations toggle
 	Util::Widgets::Checkbox("Frame Annotations", &globals::state->frameAnnotations);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Enable detailed frame annotations for debugging render passes and draw calls.");
+		ImGui::Text("Adds labels to graphics captures so maintainers can identify each effect. Off avoids this extra recording work.");
 	}
 
 #ifdef TRACY_SUPPORT
@@ -613,7 +613,7 @@ void AdvancedSettingsRenderer::RenderRuntimeDebugControls()
 	if (Util::Widgets::Checkbox("Tracy Per-Draw Zones", &perDrawZones))
 		Util::TracyZones::SetPerDrawZones(perDrawZones);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Record State::Draw and its nested CPU zones in Tracy. Off by default to keep traces small. Enable for short captures; detailed traces can consume substantial memory and CPU time. Save settings to retain this choice.");
+		ImGui::TextUnformatted("Records detailed drawing times in Tracy for troubleshooting. Off keeps captures smaller. Use briefly: detailed recording can slow the game and use substantial memory.");
 	}
 #endif
 

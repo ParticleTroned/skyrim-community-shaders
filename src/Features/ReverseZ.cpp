@@ -436,7 +436,7 @@ void ReverseZ::DrawSettings()
 	bool enabled = IsEnabledAtStartup();
 	if (ImGui::Checkbox("Enable Reverse Z (restart required)", &enabled))
 		SetEnabledAtStartup(enabled);
-	Util::AddTooltip("Reverse Z improves depth precision. Uses extra depth memory; GPU cost depends on resolution and scene conditions (up to 1 ms). Save and restart to apply.");
+	Util::AddTooltip("Reduces flickering where distant surfaces overlap. Off uses the original depth handling. Uses extra graphics memory and may cost performance. Save and restart to apply.");
 	if (HasPendingBootChange())
 		Util::Text::WrappedRestartNeeded("Restart required: save settings and restart the game to apply the Reverse Z change.");
 	ImGui::TextUnformatted(IsActive() ? "Active: Reverse Z" : "Active: Standard Z");

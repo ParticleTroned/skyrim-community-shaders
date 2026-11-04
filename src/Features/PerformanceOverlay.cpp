@@ -234,23 +234,29 @@ void PerformanceOverlay::DrawSettings()
 			MenuUI::SectionHeading("Counters and graphs");
 
 			Util::Widgets::Checkbox("Show FPS Counter", &this->settings.ShowFPS);
+			Util::AddTooltip("Shows how many frames the game draws each second. Higher FPS usually means smoother motion.");
 			Util::Widgets::Checkbox("Show Draw Calls", &this->settings.ShowDrawCalls);
+			Util::AddTooltip("Shows how many drawing operations the scene needs. Useful for comparing scene complexity; it is not an FPS reading.");
 			Util::Widgets::Checkbox("Show CSX Render Passes", &this->settings.ShowCSPasses);
+			Util::AddTooltip("Shows how many effect passes CSX draws. Useful for checking which effects add rendering work.");
 			DrawRenderTargetControl();
 			Util::Widgets::Checkbox("Show VRAM Usage", &this->settings.ShowVRAM);
+			Util::AddTooltip("Shows graphics-memory usage so you can see when your settings approach the available capacity.");
 
 			bool isFrameGenerationActive = globals::features::upscaling.IsFrameGenerationActive();
 			if (this->settings.ShowFPS && isFrameGenerationActive) {
 				Util::Widgets::Checkbox("Show Pre-FG Frametime Graph", &this->settings.ShowPreFGFrameTimeGraph);
+				Util::AddTooltip("Graphs the time taken to draw real game frames, before extra generated frames. Spikes reveal uneven motion.");
 
 				Util::Widgets::Checkbox("Show Post-FG Frametime Graph", &this->settings.ShowPostFGFrameTimeGraph);
 				if (ImGui::IsItemHovered()) {
 					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::Text("FSR Frame Generation uses calculated timing data (2x Pre-FG).\nDLSS Frame Generation provides measured timing data.");
+						ImGui::Text("Shows timing including generated frames. FSR estimates this assuming two displayed frames per game frame; DLSS reports measured timing.");
 					}
 				}
 			} else if (this->settings.ShowFPS) {
 				Util::Widgets::Checkbox("Show Frametime Graph", &this->settings.ShowPreFGFrameTimeGraph);
+				Util::AddTooltip("Graphs the time taken to draw each frame. Lower, steadier values mean smoother motion; spikes show stutters.");
 			}
 
 			ImGui::Spacing();
@@ -263,7 +269,9 @@ void PerformanceOverlay::DrawSettings()
 			Util::Widgets::SliderFloat("Text Size", &this->settings.TextSize, 0.8f, 1.2f, "%.2f");
 			Util::Widgets::SliderFloat("Background Opacity", &this->settings.BackgroundOpacity, 0.0f, 1.0f, "%.2f");
 			Util::Widgets::Checkbox("Show Border", &this->settings.ShowBorder);
+			Util::AddTooltip("Adds an outline around the overlay to separate it from the game view.");
 			Util::Widgets::SliderFloat("Update Interval", &this->settings.UpdateInterval, 0.001f, PerformanceOverlay::Settings::kMaxUpdateInterval, "%.2f seconds");
+			Util::AddTooltip("How often the displayed numbers refresh. Longer intervals make them steadier; shorter intervals reveal changes sooner.");
 			Util::Widgets::SliderInt("Frame History Size", &this->settings.FrameHistorySize,
 				this->settings.kMinFrameHistorySize, this->settings.kMaxFrameHistorySize, "%d", ImGuiSliderFlags_AlwaysClamp);
 

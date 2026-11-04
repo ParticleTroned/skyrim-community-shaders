@@ -17815,7 +17815,7 @@ void Upscaling::DrawSettings()
 							SetFSRSharedGuideInputsEnabled(sharedGuides);
 					}
 					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::TextUnformatted("May improve FSR performance by avoiding extra GPU copies.");
+						ImGui::TextUnformatted("Reuses graphics data to reduce FSR processing work. Off makes separate copies for FSR.");
 						ImGui::TextUnformatted("Disable if you notice flickering, ghosting or differences between eyes.");
 					}
 					if (!canChangeSharedGuides)
@@ -17831,12 +17831,13 @@ void Upscaling::DrawSettings()
 				}
 				ImGui::TextWrapped("Runtime FSR tuning. Apply edits together. Disabling or any provider rejection restores the entire profile to vendor defaults.");
 				Util::Widgets::Checkbox("Enable reconstruction overrides", &draft.enabled);
+				Util::AddTooltip("On: uses your custom FSR motion and stability settings. Off: restores standard FSR settings. Use Apply reconstruction tuning to apply either choice.");
 				Util::Widgets::SliderFloat("Velocity factor", &draft.velocityFactor, 0.0f, 1.0f);
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Lower values can stabilize bright pixels in motion.");
 				Util::Widgets::SliderFloat("Reactiveness scale", &draft.reactivenessScale, 0.0f, FSRTemporalTuningPolicy::kMaximumResponseScale);
 				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::TextUnformatted("Higher values reduce history influence where the reactive mask is present.");
+					ImGui::TextUnformatted("Higher values respond sooner where effects change, reducing trails but potentially increasing flicker.");
 				Util::Widgets::SliderFloat("Shading change scale", &draft.shadingChangeScale, 0.0f, FSRTemporalTuningPolicy::kMaximumResponseScale);
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Higher values respond more strongly to lighting changes.");
@@ -18001,7 +18002,7 @@ void Upscaling::DrawSettings()
 				if (Util::Widgets::Checkbox("AMD Anti-Lag 2", &settings.antiLag2Enabled))
 					dx12SwapChain.RequestAntiLag2(settings.antiLag2Enabled);
 				if (auto tooltip = Util::HoverTooltipWrapper())
-					ImGui::TextWrapped("Default off. Reduces input latency on supported AMD hardware with FSR Frame Generation. Adds driver calls and intentional CPU waiting; FPS and latency effects in CSX are unmeasured. Uses no additional FPS cap. Changes apply before the next input poll.");
+					ImGui::TextWrapped("Aims to make controls respond sooner with FSR Frame Generation on supported AMD hardware. Off uses normal timing. May affect FPS; benefits in CSX are not yet measured.");
 			}
 			ImGui::Text("Anti-Lag 2: %s", antiLagStatus.faulted    ? "Failed - restart required" :
 										  antiLagStatus.suspended  ? "Suspended" :
@@ -19110,13 +19111,13 @@ namespace
 	void DrawNeuralExecutionSettings(Upscaling::Settings& settings)
 	{
 		Util::Widgets::Checkbox("Multi-Crop", &settings.neuralCharacterPackedCrops);
-		Util::AddTooltip("Experimental; disabled by default. The saved choice also applies at Info logging. In Actors only mode, find tighter crops around selected material pixels and pack them with surrounding context into one image per eye. Uses completed occupancy to propose tighter crops, with a current-mask GPU coverage check. Keeps the base image in both eyes if a crop misses selected pixels or required context. Uses actor bounds when proposals are unavailable. Uses the NR resolution slider. Parallel Eyes in Debug controls overlaps the two eye models in VR. Requires cropped actor evaluation. Keeps exact output masks. Retains crop context and atlas positions while coverage allows; reserves 16 source pixels of context and requires at least 8 inside the available region. Changing context can still change appearance. Head movement can cause brightness or shading flicker; colour settings are not changed automatically. Uses the enclosing region when packing would save less than 25% of evaluated pixels. Pixel savings do not guarantee faster frames.");
+		Util::AddTooltip("Processes smaller areas around selected actors to try to save work. Off uses one enclosing area. Requires Actors only and cropped evaluation. Experimental: movement may cause brightness flicker; speed gains are not guaranteed.");
 		if (settings.neuralCharacterPackedCrops && (!settings.neuralCharacterRenderingEnabled ||
 													   settings.neuralCharacterCropMode != static_cast<std::uint32_t>(NeuralRendering::CharacterCropMode::Cropped)))
 			MenuUI::DetailNote("Crop packing requires Actors only and cropped actor evaluation.");
 		if (globals::game::isVR) {
 			Util::Widgets::Checkbox("Parallel Eyes", &settings.neuralRenderingParallelEyes);
-			Util::AddTooltip("Overlap both eye models on separate GPU queues. Enabled by default. The saved choice also applies at Info logging. Keeps NR resolution, coverage and strength. Parallel faults disable this option until restart. NR resumes serially only after safe recovery. GPU profiling includes the queue join.");
+			Util::AddTooltip("Processes both eyes at the same time to try to finish NR sooner. Off processes them one after the other. Keeps the same appearance settings; errors disable this option until restart.");
 			const auto parallel = NeuralRendering::Renderer::Instance().GetSnapshot();
 			if (settings.neuralRenderingParallelEyes && parallel.parallelEyesDisabled)
 				MenuUI::DetailNote("Parallel evaluation unavailable this session; NR uses serial evaluation.");
@@ -19127,7 +19128,7 @@ namespace
 				if (Util::Widgets::Checkbox("Prewarm NR while loading", &prewarmEnabled))
 					settings.neuralRenderingPrewarmEnabled = prewarmEnabled;
 			}
-			Util::AddTooltip("Enabled by default for supported configurations, inactive for others. The saved choice also applies at Info logging. Prepare native NR models during the main menu or loading when GPU memory permits and the effective resolution and compression geometry are known. Supports Before DLSS with full coverage and automatic masking, including reduced NR resolution, peripheral compression and pressure-based resolution. Actors only, scene category adjustments and UI correction must be off. Other configurations initialize during gameplay.");
+			Util::AddTooltip("Prepares NR during loading to reduce interruptions when gameplay begins. Off prepares it when first needed. Available only for compatible Before DLSS scene settings and when graphics memory permits.");
 		}
 	}
 
@@ -19164,14 +19165,14 @@ namespace
 			auto guard = Util::DisableGuard(!available);
 			DrawNeuralIntegerSetting("Face detail protection", settings.neuralRenderingFaceDetailProtectionPercent,
 				0, NeuralRendering::kMaximumFaceDetailProtectionPercent, "%d%%");
-			Util::AddTooltip("Shift existing NR samples toward NPC heads to help retain facial detail. 0% is off; 100% requests the strongest redistribution; 75% requests three quarters of that strength, not 75% facial quality or a fixed share of pixels. Background detail may soften. Keeps the same NR model resolution and texture sizes, but adds processing work. Requires Before DLSS, peripheral compression and scene rendering (Actors only off). Protection is limited by safe background sampling and matching head observations in each eye; screen-filling faces may gain little. Applies on release and is saved with NR settings.",
+			Util::AddTooltip("Helps retain NPC face detail by reducing background detail. 0 is off; higher values strengthen protection and add work. Requires Before DLSS, peripheral compression and scene coverage. Applies when released.",
 				ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 		}
 		{
 			auto guard = Util::DisableGuard(!settings.neuralRenderingGuidedReconstruction);
 			DrawNeuralIntegerSetting("NR confidence rejection", settings.neuralRenderingConfidenceRejectionPercent,
 				0, NeuralRendering::kMaximumGuidedConfidenceRejectionPercent, "%d%%");
-			Util::AddTooltip("Fade NR changes where source matches are poor. 0% disables rejection; 100% gives the strongest protection and may reduce enhancement. Requires a working image reduced by NR resolution or compression, and Improve low-resolution NR (enabled by default; toggle visible in Debug). Applies on release.",
+			Util::AddTooltip("Keeps more of the original picture where low-resolution NR is uncertain. 0 is off; higher values protect detail but reduce enhancement. Requires Improve low-resolution NR. Applies when released.",
 				ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 		}
 	}
@@ -19204,14 +19205,14 @@ namespace
 	{
 		Util::Widgets::Checkbox("Lower NR resolution under memory pressure", &settings.neuralRenderingPressureResolutionEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Enabled by default. When GPU memory is scarce, temporarily lower NR resolution by 10-point steps to 30%, then restore it gradually after sustained headroom. The slider keeps your target; scene resolution, textures and strength stay unchanged.");
+			ImGui::TextUnformatted("Temporarily reduces NR detail when graphics memory is tight, then restores it when space is available. Off keeps the requested detail, which can increase memory pressure. Scene resolution and textures stay unchanged.");
 		if (showDebugControls) {
 			Util::Widgets::Checkbox("Improve low-resolution NR", &settings.neuralRenderingGuidedReconstruction);
 			if (auto tooltip = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted("Enabled by default. Improve reconstruction when NR resolution or peripheral compression reduces the working image, including compression at 100% NR resolution. Unsupported inputs use bilinear reconstruction. The saved choice applies at every logging level.");
+				ImGui::TextUnformatted("Preserves more detail when NR works at reduced resolution or compressed edges. Off uses simpler smoothing, which can look softer. Adds processing work where supported.");
 		}
 		Util::Widgets::Checkbox("Pause NR during combat", &settings.neuralRenderingPauseInCombat);
-		Util::AddTooltip("Enabled by default. Pause NR for both eyes during player combat. Normal upscaling continues. Resume after three continuous seconds of unpaused gameplay out of combat, with fresh history. NR resources stay cached while memory permits.");
+		Util::AddTooltip("Pauses NR during combat to save rendering work. Normal upscaling continues. NR returns after three seconds out of combat. Off keeps NR active during combat.");
 	}
 
 	void DrawNeuralCentralAreaSettings(Upscaling::Settings& settings)
@@ -19227,7 +19228,7 @@ namespace
 																 static_cast<int>(NeuralRendering::kMinimumCentralAreaPercent), static_cast<int>(NeuralRendering::kMaximumCentralAreaPercent) - 1)) :
 			                                                 NeuralRendering::kMaximumCentralAreaPercent;
 		}
-		Util::AddTooltip("Run NR only around each saved FOV mask centre, with size and edge softness set below. Normal upscaling continues outside. Off restores 100% NR coverage; enabling restores the last size used in this menu, or starts at 75%. Headset and actor limits still apply.");
+		Util::AddTooltip("Limits enhancement to the centre of the view, reducing NR work. The edges keep normal upscaling. Off removes this extra limit; headset and actor selections still apply.");
 		auto guard = Util::DisableGuard(!limited);
 		DrawNeuralIntegerSetting("NR central area", settings.neuralRenderingCentralAreaPercent,
 			NeuralRendering::kMinimumCentralAreaPercent, NeuralRendering::kMaximumCentralAreaPercent, "%d%%");
@@ -19355,13 +19356,13 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 					settings.neuralRenderingNetwork = network == 1 ? NeuralRendering::kNetworkLegacy : NeuralRendering::kNetworkDefault;
 					runtime.GetTuningLimits(settings.neuralRenderingNetwork).Sanitize(settings);
 				}
-				Util::AddTooltip("Choose the network independently of appearance style. The saved Default selects lightweight preset B; Legacy selects A. NVIDIA's SDK Default is a separate zero-valued hint, fixed by SDK version. Switching clamps values to the selected network's limits and recreates both eye models.");
+				Util::AddTooltip("Lightweight uses the newer, lighter model; Legacy keeps the older model. This changes NR processing separately from appearance style. Switching can briefly interrupt enhancement and adjusts settings to supported ranges.");
 			}
 			if (!runtime.SupportsNetworkSelection())
 				ImGui::TextDisabled("This runtime uses its default network; explicit choices require 310.9.");
 			ImGui::Spacing();
-			std::array<MenuUI::Choice, 2> renderingModes{ { { "full", "After upscaling", "A · Output resolution", "Enhance the finished scene after upscaling. Available with or without Render Scale. In VR, coverage follows VR > FOV." },
-				{ "scaled", "Before DLSS", "C · Render resolution", "Enhance the smaller image before DLSS. Requires scaled DLSS and, in VR, Render Scale. In VR, coverage follows VR > FOV." } } };
+			std::array<MenuUI::Choice, 2> renderingModes{ { { "full", "After upscaling", "Output resolution", "Enhance the finished scene after upscaling. Available with or without Render Scale. In VR, coverage follows VR > FOV." },
+				{ "scaled", "Before DLSS", "Render resolution", "Enhance the smaller image before DLSS. Requires scaled DLSS and, in VR, Render Scale. In VR, coverage follows VR > FOV." } } };
 			for (uint index = 0; index < renderingModes.size(); ++index) {
 				const auto mode = NeuralRendering::kSelectableRenderingModes[index];
 				renderingModes[index].enabled = IsNeuralRenderingUpscalingAvailable(mode);

@@ -1803,6 +1803,7 @@ namespace
 				Util::Widgets::SliderFloatOnRelease("Menu Scale", &settings.VRMenuScale, VR::Config::kMinMenuScale, VR::Config::kMaxMenuScale, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 				ImGui::TextWrapped("Move/resize the desktop window with the mouse. Grip-drag the HMD menu; Menu Scale sets its size.");
 				Util::Widgets::Checkbox("Enable Controller Grip Drag", &settings.EnableDragToReposition);
+				Util::AddTooltip("Hold the controller grip to move the headset menu. Off keeps it in place so grip presses cannot accidentally reposition it.");
 
 				const char* positioningMethods[] = { "HMD Relative", "Fixed World Position" };
 				if (MenuUI::ChoiceSetting("Headset Positioning", &settings.VRMenuPositioningMethod, positioningMethods, IM_ARRAYSIZE(positioningMethods)) &&

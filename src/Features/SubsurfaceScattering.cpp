@@ -83,9 +83,13 @@ namespace
 		ImGui::SeparatorText(a_sectionTitle);
 		ImGui::PushID(a_sectionTitle);
 		Util::Widgets::SliderFloat("SSS Intensity", &a_intensity, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+		Util::AddTooltip("Strength of skin softening. 0 keeps the original lighting; 1 uses the normal effect; higher values exaggerate it.");
 		Util::Widgets::SliderFloat("SSS Saturation", &a_saturation, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+		Util::AddTooltip("Color intensity of the finished skin lighting. Lower values make it more neutral; higher values make it more vivid.");
 		Util::Widgets::SliderFloat("Skin Brightness", &a_brightness, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+		Util::AddTooltip("Brightness of softened skin lighting. Higher values brighten it; its effect also depends on SSS Intensity.");
 		Util::Widgets::SliderFloat("Skin Saturation", &a_baseSaturation, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+		Util::AddTooltip("Color intensity of softened light before it mixes with the original skin lighting. Higher values make this contribution more vivid.");
 		ImGui::PopID();
 	}
 
@@ -130,15 +134,20 @@ void SubsurfaceScattering::DrawSettings()
 	if (page.Is("model")) {
 		Util::UIntCheckbox("Enable Character Lighting", settings.EnableCharacterLighting);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Vanilla feature, not recommended.");
+			ImGui::Text("Adds the original game's extra light on characters. Off lets scene lighting alone determine their brightness, avoiding an artificial glow.");
 		}
 		if (settings.EnableCharacterLighting) {
 			Util::Widgets::SliderFloat("Strength", &settings.CharacterLightingStrength, 0, 5, "%.2f");
+			Util::AddTooltip("Brightness of the extra character light. 0 removes it; higher values brighten characters independently of nearby lights.");
 		}
 	}
 
 	if (page.Is("model")) {
-		MenuUI::ChoiceSetting("Scattering model", &settings.SSMode, "Separable SSS\0Burley\0");
+		static constexpr MenuUI::Choice models[]{
+			{ "separable", "Separable SSS", "", "Softens skin lighting with a simple blur. Tune its spread and strength in Profiles." },
+			{ "burley", "Burley", "", "Spreads light under the skin using a different model. Tune its quality and skin color in Profiles; higher quality costs more rendering work." }
+		};
+		MenuUI::ChoiceSetting("Scattering model", &settings.SSMode, models);
 	}
 
 	if (page.Is("profiles") && settings.SSMode == 0) {
@@ -150,16 +159,18 @@ void SubsurfaceScattering::DrawSettings()
 			ImGui::PushID("Base Profile");
 			Util::Widgets::SliderFloat("Blur Radius", &settings.BaseProfile.BlurRadius, 0, 3, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Blur radius.");
+				ImGui::Text("How widely light spreads through the skin. Higher values soften shadows and small surface detail.");
 			}
 
 			Util::Widgets::SliderFloat("Thickness", &settings.BaseProfile.Thickness, 0, 3, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Blur radius relative to depth.");
+				ImGui::Text("How strongly depth changes limit skin softening. Higher values keep the blur from crossing edges; lower values let it spread farther.");
 			}
 
 			updateKernels |= Util::Widgets::ColorEdit3("Strength", (float*)&settings.BaseProfile.Strength);
+			Util::AddTooltip("How much each color is softened. Higher values spread more of that color; 0 leaves it unchanged.");
 			updateKernels |= Util::Widgets::ColorEdit3("Falloff", (float*)&settings.BaseProfile.Falloff);
+			Util::AddTooltip("How far red, green and blue light spread through the skin. Higher values spread the selected color farther.");
 
 			ImGui::PopID();
 		}
@@ -170,16 +181,18 @@ void SubsurfaceScattering::DrawSettings()
 			ImGui::PushID("Humanoid Profile");
 			Util::Widgets::SliderFloat("Blur Radius", &settings.HumanProfile.BlurRadius, 0, 3, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Blur radius.");
+				ImGui::Text("How widely light spreads through the skin. Higher values soften shadows and small surface detail.");
 			}
 
 			Util::Widgets::SliderFloat("Thickness", &settings.HumanProfile.Thickness, 0, 3, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Blur radius relative to depth.");
+				ImGui::Text("How strongly depth changes limit skin softening. Higher values keep the blur from crossing edges; lower values let it spread farther.");
 			}
 
 			updateKernels |= Util::Widgets::ColorEdit3("Strength", (float*)&settings.HumanProfile.Strength);
+			Util::AddTooltip("How much each color is softened. Higher values spread more of that color; 0 leaves it unchanged.");
 			updateKernels |= Util::Widgets::ColorEdit3("Falloff", (float*)&settings.HumanProfile.Falloff);
+			Util::AddTooltip("How far red, green and blue light spread through the skin. Higher values spread the selected color farther.");
 
 			ImGui::PopID();
 		}
@@ -187,6 +200,7 @@ void SubsurfaceScattering::DrawSettings()
 		int burleySamples = static_cast<int>(settings.BurleySamples);
 		if (Util::Widgets::SliderInt("Burley Samples", &burleySamples, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp))
 			settings.BurleySamples = static_cast<uint>(std::clamp(burleySamples, 1, 64));
+		Util::AddTooltip("Quality of skin softening. Higher values reduce grain and give smoother results, at a higher rendering cost.");
 		MenuUI::DetailGrid profileGrid("BurleyProfiles", 2, ImGui::GetFontSize() * 32);
 		const Util::Widgets::ControlLayout controls(true);
 		{
@@ -199,7 +213,7 @@ void SubsurfaceScattering::DrawSettings()
 			}
 			Util::Widgets::SliderFloat("Mean Free Path Distance", &settings.MeanFreePathBase.w, 0.01f, 10.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Controls the distance that Mean Free Path Color goes into subsurface.");
+				ImGui::Text("How far light travels under the skin. Higher values give a softer, more translucent appearance.");
 			}
 			ImGui::PopID();
 		}
@@ -214,7 +228,7 @@ void SubsurfaceScattering::DrawSettings()
 			}
 			Util::Widgets::SliderFloat("Mean Free Path Distance", &settings.MeanFreePathHuman.w, 0.01f, 10.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Controls the distance that Mean Free Path Color goes into subsurface.");
+				ImGui::Text("How far light travels under the skin. Higher values give a softer, more translucent appearance.");
 			}
 
 			profileGrid.Next();

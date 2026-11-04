@@ -100,42 +100,38 @@ void ExtendedTranslucency::DrawSettings()
 	{
 		MenuUI::SectionHeading("Translucent Material");
 		ImGui::PushID("Translucent Material");
-		static constexpr const char* AlphaModeNames[] = {
-			"0 - Disabled",
-			"1 - Rim Edge",
-			"2 - Isotropic Fabric, Glass, ...",
-			"3 - Anisotropic Fabric",
+		static constexpr MenuUI::Choice materialModels[]{
+			{ "disabled", "0 - Disabled", "", "Keeps the original transparency without this angle-dependent material effect." },
+			{ "rim", "1 - Rim Edge", "", "Makes edges more opaque when viewed at an angle, even on very transparent surfaces." },
+			{ "fabric-glass", "2 - Fabric / Glass", "", "Varies transparency with viewing angle to suggest fabric threads or layered glass." },
+			{ "woven", "3 - Woven Fabric", "", "Varies transparency across two crossing thread directions to suggest woven fabric." },
 		};
 
-		static constexpr int AlphaModeSize = static_cast<int>(std::size(AlphaModeNames));
-
 		bool changed = false;
-		if (MenuUI::ChoiceSetting("Default Material Model", (int*)&settings.AlphaMode, AlphaModeNames, AlphaModeSize)) {
+		int model = static_cast<int>(settings.AlphaMode);
+		if (MenuUI::ChoiceSetting("Default Material Model", &model, materialModels)) {
+			settings.AlphaMode = static_cast<uint32_t>(model);
+			changed = true;
+		}
+		if (Util::Widgets::Checkbox("Animated bodies and clothing only", &settings.SkinnedOnly)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Opacity varies with viewing angle:\n- Disabled: flat alpha.\n- Rim Edge: nonphysical rim; edges stay opaque even at full transparency.\n- Isotropic Fabric: single-direction threads using the normal map; also suits layered glass.\n- Anisotropic Fabric: tangent/bitangent weave; ignores the normal map.");
-		}
-		if (Util::Widgets::Checkbox("Skinned Mesh Only", &settings.SkinnedOnly)) {
-			changed = true;
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Apply only to skinned meshes. Enable if unrelated objects show unwanted effects.");
+			ImGui::Text("On: limits the effect to animated bodies and clothing. Off: also affects other compatible objects. Enable if unrelated objects look wrong.");
 		}
 
 		if (Util::Widgets::SliderFloat("Transparency Increase", &settings.AlphaReduction, 0, 1.f)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Translucency can make materials more opaque than intended. Reduce alpha to compensate and widen the output's dynamic range.");
+			ImGui::Text("Makes the material easier to see through. Increase this if the chosen material style looks too opaque.");
 		}
 
 		if (Util::Widgets::SliderFloat("Softness", &settings.AlphaSoftness, 0.0f, 1.0f)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Soften the alpha increase. Higher softness reduces the added opacity.");
+			ImGui::Text("Softens the added opacity from the selected material style. Higher values keep the material more transparent.");
 		}
 
 		if (Util::Widgets::SliderFloat("Blend Weight", &settings.AlphaStrength, 0.0f, 1.0f)) {

@@ -416,6 +416,7 @@ void WetnessEffects::DrawSettings()
 
 	if (page.Is("rain")) {
 		Util::UIntCheckbox("Enable Raindrop Effects", settings.EnableRaindropFx);
+		Util::AddTooltip("Adds moving splashes and ripple rings during rain. Off keeps wet surfaces and puddles without these extra effects.");
 
 		ImGui::BeginDisabled(!settings.EnableRaindropFx);
 
@@ -562,8 +563,11 @@ void WetnessEffects::DrawSettings()
 
 	if (page.Is("diagnostics")) {
 		Util::Widgets::Checkbox("Enable Wetness Override", &debugSettings.EnableWetnessOverride);
+		Util::AddTooltip("Uses your manual surface-wetness values instead of the current weather. Off restores weather-driven wetness.");
 		Util::Widgets::Checkbox("Enable Puddle Override", &debugSettings.EnablePuddleOverride);
+		Util::AddTooltip("Uses your manual puddle amount instead of weather buildup. Off restores automatic puddle levels.");
 		Util::Widgets::Checkbox("Enable Rain Override", &debugSettings.EnableRainOverride);
+		Util::AddTooltip("Uses your manual rain amount for wet-surface effects. Off follows the current weather; this does not change the weather itself.");
 		Util::Widgets::Checkbox("Enable Interior/Exterior Override", &debugSettings.EnableIntExOverride);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(

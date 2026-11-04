@@ -501,9 +501,6 @@ namespace Util::Widgets
 		if (labelSize.x > 0)
 			ImGui::RenderText({ box.Max.x + style.ItemInnerSpacing.x, origin.y + (height - labelSize.y) * .5f }, label);
 		IMGUI_TEST_ENGINE_ITEM_INFO(id, label, g.LastItemData.StatusFlags | ImGuiItemStatusFlags_Checkable | (*value ? ImGuiItemStatusFlags_Checked : 0));
-		const std::string name(label, ImGui::FindRenderedTextEnd(label));
-		if (!name.empty())
-			Util::AddTooltip(std::format("Turn {} on or off.", name).c_str());
 		return changed;
 	}
 

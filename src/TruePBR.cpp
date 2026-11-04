@@ -222,6 +222,26 @@ namespace
 			ImGui::SetTooltip("Scale focused direct-light highlights on TruePBR metals. Reduce bright hotspots while keeping broad reflections.");
 		}
 	}
+
+	bool DrawGlintSettings(GlintParameters& a_settings, const char* a_enabledLabel)
+	{
+		if (!ImGui::TreeNodeEx("Glint"))
+			return false;
+		const SKSE::stl::scope_exit closeTree([] { ImGui::TreePop(); });
+		bool edited = Util::Widgets::Checkbox(a_enabledLabel, &a_settings.enabled);
+		Util::AddTooltip("Adds tiny sparkling highlights to the selected surface. Off keeps its ordinary shine. Extra sparkles add rendering work.");
+		if (a_settings.enabled) {
+			edited |= Util::Widgets::SliderFloat("Sparkle smoothing", &a_settings.screenSpaceScale, 1.f, 3.f, "%.3f");
+			Util::AddTooltip("Smooths fine sparkle detail. Higher values blend tiny flashes together more strongly.");
+			edited |= Util::Widgets::SliderFloat("Sparkle density", &a_settings.logMicrofacetDensity, 1.f, 40.f, "%.3f");
+			Util::AddTooltip("Density of tiny reflections. Higher values give finer, denser sparkle; lower values give more isolated flashes.");
+			edited |= Util::Widgets::SliderFloat("Sparkle softness", &a_settings.microfacetRoughness, .005f, .3f, "%.3f");
+			Util::AddTooltip("Softness of sparkling highlights. Higher values broaden them.");
+			edited |= Util::Widgets::SliderFloat("Sparkle variation", &a_settings.densityRandomization, 0.f, 5.f, "%.3f");
+			Util::AddTooltip("Variation between sparkling patches. Higher values make the pattern less uniform.");
+		}
+		return edited;
+	}
 }
 
 void TruePBR::DrawSettings()
@@ -241,6 +261,7 @@ void TruePBR::DrawSettings()
 			DrawPBRMetalSliders();
 			DrawGrassCheckbox(settings);
 			Util::Widgets::SliderFloat("Vertex AO Strength", &settings.VertexAOStrength, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			Util::AddTooltip("Strength of shadowing built into compatible models. Lower values lighten these shaded details; 1 keeps the full authored shadowing.");
 		}
 	}
 	if (page.Is("textures")) {
@@ -255,19 +276,24 @@ void TruePBR::DrawSettings()
 			if (Util::Widgets::SliderFloat("Displacement Scale", &selectedPbrTextureSet->displacementScale, 0.f, 3.f, "%.3f")) {
 				wasEdited = true;
 			}
+			Util::AddTooltip("Depth of raised and recessed texture detail. Higher values make the surface relief stronger.");
 			if (Util::Widgets::SliderFloat("Roughness Scale", &selectedPbrTextureSet->roughnessScale, 0.f, 3.f, "%.3f")) {
 				wasEdited = true;
 			}
+			Util::AddTooltip("Scales how dull the selected surface looks. Higher values soften reflections; lower values sharpen them.");
 			if (Util::Widgets::SliderFloat("Specular Level", &selectedPbrTextureSet->specularLevel, 0.f, 3.f, "%.3f")) {
 				wasEdited = true;
 			}
+			Util::AddTooltip("Strength of highlights on the selected surface. Higher values make it shinier.");
 			if (ImGui::TreeNodeEx("Subsurface")) {
 				if (Util::Widgets::ColorEdit3("Subsurface Color", &selectedPbrTextureSet->subsurfaceColor.red)) {
 					wasEdited = true;
 				}
+				Util::AddTooltip("Color of light passing through the selected material, such as leaves or skin.");
 				if (Util::Widgets::SliderFloat("Subsurface Opacity", &selectedPbrTextureSet->subsurfaceOpacity, 0.f, 1.f, "%.3f")) {
 					wasEdited = true;
 				}
+				Util::AddTooltip("How strongly the selected material blocks transmitted light. Higher values make it less translucent.");
 
 				ImGui::TreePop();
 			}
@@ -275,40 +301,26 @@ void TruePBR::DrawSettings()
 				if (Util::Widgets::ColorEdit3("Coat Color", &selectedPbrTextureSet->coatColor.red)) {
 					wasEdited = true;
 				}
+				Util::AddTooltip("Tint of the outer coating on the selected material.");
 				if (Util::Widgets::SliderFloat("Coat Strength", &selectedPbrTextureSet->coatStrength, 0.f, 1.f, "%.3f")) {
 					wasEdited = true;
 				}
+				Util::AddTooltip("How strongly the outer coating affects the surface. 0 removes the coating contribution.");
 				if (Util::Widgets::SliderFloat("Coat Roughness", &selectedPbrTextureSet->coatRoughness, 0.f, 1.f, "%.3f")) {
 					wasEdited = true;
 				}
+				Util::AddTooltip("Softness of reflections from the outer coating. Higher values make it duller.");
 				if (Util::Widgets::SliderFloat("Coat Specular Level", &selectedPbrTextureSet->coatSpecularLevel, 0.f, 1.f, "%.3f")) {
 					wasEdited = true;
 				}
+				Util::AddTooltip("Brightness of shine from the outer coating. Higher values make it shinier.");
 				if (Util::Widgets::SliderFloat("Inner Layer Displacement Offset", &selectedPbrTextureSet->innerLayerDisplacementOffset, 0.f, 3.f, "%.3f")) {
 					wasEdited = true;
 				}
+				Util::AddTooltip("Shifts the apparent depth of the inner layer relative to its outer coating.");
 				ImGui::TreePop();
 			}
-			if (ImGui::TreeNodeEx("Glint")) {
-				if (Util::Widgets::Checkbox("Enabled", &selectedPbrTextureSet->glintParameters.enabled)) {
-					wasEdited = true;
-				}
-				if (selectedPbrTextureSet->glintParameters.enabled) {
-					if (Util::Widgets::SliderFloat("Screenspace Scale", &selectedPbrTextureSet->glintParameters.screenSpaceScale, 0.f, 3.f, "%.3f")) {
-						wasEdited = true;
-					}
-					if (Util::Widgets::SliderFloat("Log Microfacet Density", &selectedPbrTextureSet->glintParameters.logMicrofacetDensity, 0.f, 40.f, "%.3f")) {
-						wasEdited = true;
-					}
-					if (Util::Widgets::SliderFloat("Microfacet Roughness", &selectedPbrTextureSet->glintParameters.microfacetRoughness, 0.f, 1.f, "%.3f")) {
-						wasEdited = true;
-					}
-					if (Util::Widgets::SliderFloat("Density Randomization", &selectedPbrTextureSet->glintParameters.densityRandomization, 0.f, 5.f, "%.3f")) {
-						wasEdited = true;
-					}
-				}
-				ImGui::TreePop();
-			}
+			wasEdited |= DrawGlintSettings(selectedPbrTextureSet->glintParameters, "Sparkles on selected texture");
 			if (wasEdited) {
 				BSLightingShaderMaterialPBR::All.ForEach([&](auto* material, const auto& extensions) {
 					if (extensions.textureSetData == selectedPbrTextureSet) {
@@ -359,29 +371,12 @@ void TruePBR::DrawSettings()
 			if (Util::Widgets::SliderFloat("Roughness", &selectedPbrMaterialObject->roughness, 0.f, 1.f, "%.3f")) {
 				wasEdited = true;
 			}
+			Util::AddTooltip("Softness of reflections on the selected material. Higher values make it duller; lower values make it shinier.");
 			if (Util::Widgets::SliderFloat("Specular Level", &selectedPbrMaterialObject->specularLevel, 0.f, 1.f, "%.3f")) {
 				wasEdited = true;
 			}
-			if (ImGui::TreeNodeEx("Glint")) {
-				if (Util::Widgets::Checkbox("Enabled", &selectedPbrMaterialObject->glintParameters.enabled)) {
-					wasEdited = true;
-				}
-				if (selectedPbrMaterialObject->glintParameters.enabled) {
-					if (Util::Widgets::SliderFloat("Screenspace Scale", &selectedPbrMaterialObject->glintParameters.screenSpaceScale, 0.f, 3.f, "%.3f")) {
-						wasEdited = true;
-					}
-					if (Util::Widgets::SliderFloat("Log Microfacet Density", &selectedPbrMaterialObject->glintParameters.logMicrofacetDensity, 0.f, 40.f, "%.3f")) {
-						wasEdited = true;
-					}
-					if (Util::Widgets::SliderFloat("Microfacet Roughness", &selectedPbrMaterialObject->glintParameters.microfacetRoughness, 0.f, 1.f, "%.3f")) {
-						wasEdited = true;
-					}
-					if (Util::Widgets::SliderFloat("Density Randomization", &selectedPbrMaterialObject->glintParameters.densityRandomization, 0.f, 5.f, "%.3f")) {
-						wasEdited = true;
-					}
-				}
-				ImGui::TreePop();
-			}
+			Util::AddTooltip("Strength of highlights on the selected surface. Higher values make it shinier.");
+			wasEdited |= DrawGlintSettings(selectedPbrMaterialObject->glintParameters, "Sparkles on selected material");
 			if (wasEdited) {
 				BSLightingShaderMaterialPBR::All.ForEach([&](auto* material, const auto& extensions) {
 					if (extensions.materialObjectData == selectedPbrMaterialObject) {

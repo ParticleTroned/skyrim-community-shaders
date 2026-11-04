@@ -1346,7 +1346,7 @@ void Wetterness::DrawSettings()
 	if (page.Is("rain")) {
 		Util::UIntCheckbox("Enable Raindrop Effects", settings.EnableRaindropFx);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Master switch for raindrop splashes and ripple motion. One of the main wetness performance drivers.");
+			ImGui::TextUnformatted("Adds moving splashes and ripple rings during rain. Off keeps wet surfaces and puddles while saving the work of these extra effects.");
 		}
 
 		const bool raindropSettingsDisabled = settings.EnableRaindropFx == 0;

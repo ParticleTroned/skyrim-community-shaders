@@ -530,14 +530,14 @@ void TerrainBlending::DrawSettings()
 	if (Util::Widgets::Checkbox("Landscape Seam Blending", &seams))
 		settings.LandscapeSeams = seams ? 1u : 0u;
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextWrapped("Blends texture borders between terrain quads using up to two neighbouring layers. Requires Terrain Blending and True PBR enabled. Adds GPU and terrain-loading work. Changes apply next frame; off releases seam resources and restores ordinary terrain shading.");
+		ImGui::TextWrapped("Softens visible borders between neighbouring terrain textures. Off keeps ordinary transitions. Requires True PBR; adds rendering and terrain-loading work.");
 	}
 
 	ImGui::Spacing();
 	if (ImGui::TreeNodeEx("Performance Options")) {
 		Util::Widgets::SliderFloat("Terrain Depth Culling Distance", &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Terrain farther than this distance skips TB depth rendering. Set to 0 to disable culling.");
+			ImGui::Text("Limits the distance used to prepare terrain blending. Lower values save work but can reduce distant blending. 0 keeps the full distance.");
 		}
 		ImGui::TreePop();
 	}

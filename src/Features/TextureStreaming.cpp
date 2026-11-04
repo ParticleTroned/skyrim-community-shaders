@@ -1944,7 +1944,7 @@ void TextureStreaming::DrawSettingsEnabledControl()
 	const auto disabled = Util::DisableGuard(conflict || inventorySuspended || !originHookReady.load());
 	if (Util::Widgets::Checkbox("Enabled", &enabled))
 		Configure(enabled, maximum);
-	Util::AddTooltip("Turns texture streaming on or off while keeping your current tuning.", ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+	Util::AddTooltip("On: reduces distant texture detail under the selected conditions to free graphics memory. Off: restores full detail as textures reload.", ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 }
 void TextureStreaming::DrawSettings()
 {
@@ -2016,18 +2016,18 @@ void TextureStreaming::DrawSettings()
 		Util::AddTooltip("Caps eligible textures even nearby and with enough VRAM. Reduces fine detail. Protected textures stay full size; Unlimited preserves source detail.");
 		Util::Widgets::SliderInt("Maximum mip levels removed", &maximum, 1, Policy::MaximumDrop, "%d", ImGuiSliderFlags_AlwaysClamp);
 		maximum = std::clamp(maximum, 1, static_cast<int>(Policy::MaximumDrop));
-		Util::AddTooltip("Limits distance-based reductions. The optional size cap can remove more mips, including nearby. Texture protections still apply.");
+		Util::AddTooltip("Limits how many steps of texture detail may be removed with distance. Higher values save more memory but look softer. The separate size cap can reduce detail further.");
 		if (modes != previousModes || options != previousOptions || maximum != previousMaximum)
 			Configure(enabled, maximum, std::nullopt, modes, options);
 	}
 	if (page.Is("categories")) {
 		const auto previous = categories;
 		const std::array choices{
-			MenuUI::ToggleChoice{ "Landscape", &categories.landscapeStatics, "Landscape-folder textures used by ordinary static meshes." },
-			MenuUI::ToggleChoice{ "Cutouts", &categories.alphaTestedStatics, "Non-animated alpha-tested static surfaces. Lower detail can soften fine edges." },
-			MenuUI::ToggleChoice{ "Emissive", &categories.emissiveStatics, "Diffuse and normal maps on static emissive surfaces. Glow maps remain protected." },
-			MenuUI::ToggleChoice{ "Terrain", &categories.terrain, "Near-terrain diffuse and normal layers. Shared layers keep nearby detail. Parallax terrain also requires Parallax. LOD, overlays and noise remain excluded." },
-			MenuUI::ToggleChoice{ "Parallax", &categories.parallax, "Experimental diffuse and normal streaming on parallax meshes and terrain. For terrain also enable Terrain. Height maps stay full size; appearance may change." },
+			MenuUI::ToggleChoice{ "Landscape", &categories.landscapeStatics, "Allows reduced texture detail on static objects using landscape textures. Off keeps those objects at full texture detail." },
+			MenuUI::ToggleChoice{ "Cutouts", &categories.alphaTestedStatics, "Allows reduced detail on static cutout surfaces such as fences. Fine edges may soften. Off protects their full detail." },
+			MenuUI::ToggleChoice{ "Emissive", &categories.emissiveStatics, "Allows reduced surface detail on glowing static objects. Their glow textures stay full quality. Off protects all of their textures." },
+			MenuUI::ToggleChoice{ "Terrain", &categories.terrain, "Allows reduced detail on nearby terrain textures when eligible. The nearest use keeps needed detail. Terrain with surface depth also needs Parallax enabled." },
+			MenuUI::ToggleChoice{ "Parallax", &categories.parallax, "Allows reduced texture detail on surfaces with depth effects. Off keeps their full detail. Terrain also needs Terrain enabled. Experimental: the appearance may change." },
 		};
 		for (const auto& choice : choices) {
 			Util::Widgets::Checkbox(choice.label, choice.value);

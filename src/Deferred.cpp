@@ -681,6 +681,11 @@ bool Deferred::CopySceneDepth()
 	// Water also consumes this copy, including pixels outside the active scaled area.
 	context->CopyResource(depthCopy.texture, depth.texture);
 	finalSceneDepthFrame = globals::state->frameCount;
+	if (globals::state->inWorld && globals::shaderCache && globals::shaderCache->IsEnabled()) {
+		// Forward screen-space consumers must share the completed depth used by compute passes.
+		ID3D11ShaderResourceView* srv = depthCopy.depthSRV;
+		context->PSSetShaderResources(17, 1, &srv);
+	}
 	return true;
 }
 

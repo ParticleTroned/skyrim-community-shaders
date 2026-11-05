@@ -64,6 +64,12 @@ struct Context
 {
 	int copies = 0;
 	int unbinds = 0;
+	std::array<ID3D11ShaderResourceView*, 32> pixelViews{};
+	void PSSetShaderResources(uint32_t start, uint32_t count, ID3D11ShaderResourceView* const* views)
+	{
+		for (uint32_t i = 0; i < count; ++i)
+			pixelViews.at(start + i) = views[i];
+	}
 	void CopyResource(Texture* destination, Texture* source)
 	{
 		++copies;
@@ -312,6 +318,37 @@ void TestSources()
 	Check(f.context.unbinds == 0, "Copying must preserve existing output bindings");
 }
 
+void TestPixelDepthPublication()
+{
+	for (bool reversed : { false, true }) {
+		for (bool terrainEnabled : { false, true }) {
+			for (bool clobbered : { false, true }) {
+				Fixture f;
+				globals::features::reverseZ.active = reversed;
+				globals::features::terrainBlending.settings.Enabled = terrainEnabled;
+				f.context.pixelViews.fill(&f.alternateSrv);
+				auto* prepass = Util::GetCurrentSceneDepthSRV(true);
+				f.context.PSSetShaderResources(17, 1, &prepass);
+				if (clobbered)
+					f.context.pixelViews[17] = &f.alternateSrv;
+				auto expectedViews = f.context.pixelViews;
+				expectedViews[17] = &f.copySrv;
+
+				Check(f.deferred.CopySceneDepth(), "Pixel depth publication needs a completed copy");
+				Check(f.context.pixelViews[17] == &f.copySrv,
+					"Forward hair must sample completed depth without waiting for a water draw");
+				Check(f.context.pixelViews == expectedViews,
+					"Publishing pixel depth must preserve all other shader resources");
+				auto* beforeWater = f.context.pixelViews[17];
+				auto* waterDepth = Util::GetCurrentSceneDepthSRV(true);
+				f.context.PSSetShaderResources(17, 1, &waterDepth);
+				Check(f.context.pixelViews[17] == beforeWater,
+					"A water draw must not change the depth source seen by forward hair");
+			}
+		}
+	}
+}
+
 void TestInvalidation()
 {
 	Fixture f;
@@ -361,6 +398,30 @@ void TestFallbacks()
 		Check(f.context.copies == 1, "An early copy or fallback must produce exactly one depth copy");
 		Check(f.copy.content == (mode == 0 || mode == 2 || mode == 4 ? 61 : 43), "Copy must follow terrain and native decals");
 		Check(f.deferred.IsSceneDepthFinal(), "Fallback depth must be published for water");
+		Check(f.context.pixelViews[17] == (mode == 1 || mode == 3 ? nullptr : &f.copySrv),
+			"Only an active custom world pass may refresh pixel depth");
+	}
+}
+
+void TestNativePixelBindings()
+{
+	for (bool inWorld : { false, true }) {
+		for (int shaderCacheMode = 0; shaderCacheMode < 3; ++shaderCacheMode) {
+			Fixture f;
+			f.state.inWorld = inWorld;
+			f.shaderCache.enabled = shaderCacheMode == 0;
+			if (shaderCacheMode == 2)
+				globals::shaderCache = nullptr;
+			f.context.pixelViews.fill(&f.alternateSrv);
+			auto expectedViews = f.context.pixelViews;
+			if (inWorld && f.shaderCache.enabled)
+				expectedViews[17] = &f.copySrv;
+			Check(f.deferred.CopySceneDepth(), "Native fallback must retain the completed copy");
+			Check(f.deferred.IsSceneDepthFinal() && f.copy.content == f.main.content,
+				"Native fallback must still publish completed depth for water");
+			Check(f.context.pixelViews == expectedViews,
+				"Native passes must retain all existing pixel bindings");
+		}
 	}
 }
 
@@ -384,6 +445,7 @@ void TestUnavailableResources()
 {
 	for (int missing = 0; missing < 7; ++missing) {
 		Fixture f;
+		f.context.pixelViews[17] = &f.blend16Srv;
 		switch (missing) {
 		case 0:
 			globals::game::renderer = nullptr;
@@ -410,6 +472,7 @@ void TestUnavailableResources()
 		}
 		Check(!f.deferred.CopySceneDepth(), "Unavailable resources must reject the copy");
 		Check(!f.deferred.IsSceneDepthFinal() && f.context.copies == 0, "Rejected copies must not publish final depth");
+		Check(f.context.pixelViews[17] == &f.blend16Srv, "Rejected copies must preserve the existing pixel depth");
 		if (missing == 0)
 			Check(Util::GetCurrentSceneDepthSRV(false) == nullptr, "Missing renderer must return no view");
 	}
@@ -514,13 +577,15 @@ int main()
 {
 	try {
 		TestSources();
+		TestPixelDepthPublication();
 		TestInvalidation();
 		TestFallbacks();
+		TestNativePixelBindings();
 		TestRedirection();
 		TestUnavailableResources();
 		TestCharacterCaptureOrderingAndAdmission();
 		TestCharacterOccupancyAdmission();
-		std::cout << "Scene depth: source selection, invalidation, fallback ordering, restoration and missing resources passed\n";
+		std::cout << "Scene depth: source selection, pixel publication, invalidation, fallback ordering, restoration and missing resources passed\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

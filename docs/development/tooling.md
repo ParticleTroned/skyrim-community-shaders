@@ -23,7 +23,7 @@ GitHub pushes through SSH for every repository.
 The setup is idempotent. It:
 
 -   creates a pinned developer-tool virtual environment under the common Git directory;
--   shares pre-commit hook environments across worktrees;
+-   shares pre-commit hook environments across worktrees for each Windows account;
 -   enables the tracked `.githooks` directory;
 -   validates the pre-commit configuration and pre-installs hook environments;
 -   configures this repository to use OpenSSL for HTTPS and explicit SSH URLs for GitHub remotes.
@@ -33,6 +33,15 @@ an explicit repository-local SSH command. Keep credentials and authentication
 locations local.
 
 The initial hook-environment installation can take several minutes. Let it finish; later commits reuse the same environments.
+
+On Windows, hook caches are separated by account SID because Python creates
+private environment directories. This lets desktop and sandbox accounts use
+the same checkout without reusing inaccessible environments. Existing caches
+are preserved. `CSX_PRE_COMMIT_HOME` still overrides the hook cache location.
+Virtualenv's default metadata cache lives under the common Git tool directory;
+an explicit `VIRTUALENV_OVERRIDE_APP_DATA` is preserved.
+The Prettier hook pins its Node runtime so a new cache does not select an
+unsupported prerelease from Node's download index.
 
 ## Daily commands
 

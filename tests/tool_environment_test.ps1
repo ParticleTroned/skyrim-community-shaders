@@ -85,6 +85,26 @@ try {
         -Actual ([Environment]::GetEnvironmentVariable("GIT_CONFIG_VALUE_$initialConfigCount", "Process")) `
         -Message "The standalone clone was not marked safe."
 
+    $toolEnvironmentSnapshot = [Environment]::GetEnvironmentVariables("Process")
+    try {
+        $env:VIRTUALENV_OVERRIDE_APP_DATA = $null
+        $testToolEnvironment = Initialize-CsxToolEnvironment `
+            -RepositoryRoot $standaloneClone -CommonGitDirectory (Join-Path $standaloneClone ".git")
+        Assert-Equal -Expected (Join-Path $testToolEnvironment.ToolRoot "virtualenv-cache") `
+            -Actual $env:VIRTUALENV_OVERRIDE_APP_DATA `
+            -Message "Virtualenv must use the repository cache instead of the user profile."
+
+        $virtualenvOverride = Join-Path $testRoot "explicit virtualenv cache"
+        $env:VIRTUALENV_OVERRIDE_APP_DATA = $virtualenvOverride
+        Initialize-CsxToolEnvironment `
+            -RepositoryRoot $standaloneClone -CommonGitDirectory (Join-Path $standaloneClone ".git") | Out-Null
+        Assert-Equal -Expected $virtualenvOverride -Actual $env:VIRTUALENV_OVERRIDE_APP_DATA `
+            -Message "An explicit virtualenv cache must be preserved."
+    } finally {
+        Restore-TestEnvironment -Snapshot $toolEnvironmentSnapshot
+    }
+    Assert-TestEnvironment -Snapshot $toolEnvironmentSnapshot
+
     if ($env:OS -eq "Windows_NT") {
         $savedEnvironment = [Environment]::GetEnvironmentVariables("Process")
 

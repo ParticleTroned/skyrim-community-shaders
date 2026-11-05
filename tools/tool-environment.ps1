@@ -307,6 +307,9 @@ function Initialize-CsxToolEnvironment {
     $env:TEMP = $toolTemp
     $env:TMP = $toolTemp
     $env:PIP_CACHE_DIR = Join-Path $toolRoot "pip-cache"
+    if (-not $env:VIRTUALENV_OVERRIDE_APP_DATA) {
+        $env:VIRTUALENV_OVERRIDE_APP_DATA = Join-Path $toolRoot "virtualenv-cache"
+    }
     $env:npm_config_cache = Join-Path $toolRoot "npm-cache"
     $env:PIP_DISABLE_PIP_VERSION_CHECK = "1"
     $env:GIT_TERMINAL_PROMPT = "0"

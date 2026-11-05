@@ -2549,6 +2549,8 @@ public:
 	double refreshRate = 0.0f;
 	float2 resolutionScale = { 1.0f, 1.0f };
 	LARGE_INTEGER qpf;
+	int64_t frameLimitDeadline = 0;
+	int64_t frameLimitInterval = 0;
 
 	// FG FPS Measurement for Overlay
 	bool IsFrameGenerationDx12PathActive() const;
@@ -4512,7 +4514,7 @@ public:
 	 */
 	void ApplySharpening();
 
-	static void TimerSleepQPC(int64_t targetQPC);
+	static void TimerSleepQPC(int64_t targetQPC, int64_t frequency);
 
 	void FrameLimiter();
 

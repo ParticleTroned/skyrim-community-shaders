@@ -3312,7 +3312,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		skylightingShadowVisibility = skylightingSample.Visibility;
 	}
 #			else
-	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal) : Skylighting::UNIT_SH;
+	sh2 skylightingSH = Skylighting::UNIT_SH;
+	[branch] if (inWorld)
+		skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal);
 #			endif
 #		endif
 

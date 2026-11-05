@@ -923,7 +923,11 @@ void State::Reset()
 
 	// Disable "improved" snow shader, unsupported
 	if (!globals::game::isVR) {
-		RE::GetINISetting("bEnableImprovedSnow:Display")->data.b = false;
+		static RE::Setting* improvedSnow = nullptr;
+		if (!improvedSnow)
+			improvedSnow = RE::GetINISetting("bEnableImprovedSnow:Display");
+		if (improvedSnow)
+			improvedSnow->data.b = false;
 	}
 
 	activeReflections = false;

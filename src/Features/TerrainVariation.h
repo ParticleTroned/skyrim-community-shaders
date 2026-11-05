@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
@@ -83,6 +85,7 @@ private:
 	std::unordered_set<std::string> landscapeDiffusePaths;
 	bool landscapeDiffusePathsAvailable = false;
 	std::unordered_map<const char*, CachedTexture> meshTextureCache;
+	std::atomic<uint64_t> meshTextureGeneration{ 0 };
 
 	bool IsLandscapeDiffuseTexture(const RE::BSFixedString& a_name);
 };

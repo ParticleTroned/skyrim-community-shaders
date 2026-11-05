@@ -18,7 +18,7 @@
         "sha256": "1FEFAEBFD85F0B96C04FCA222B3665897B471A3032FDA14D02AD236139D52EBA"
     },
     "runtimeSettingsContract": {
-        "revision": 34,
+        "revision": 32,
         "sourceTreeSha256": "63820DB62FF44C0818DA178E81E22CCBA1ABCA2BB44F4B9EEC62FDE631CF9E55",
         "inventory": {
             "fixedSources": [

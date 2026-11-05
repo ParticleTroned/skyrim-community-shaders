@@ -84,7 +84,7 @@
       "maximumVersionExclusive": "3.22"
     },
     "settingsContract": {
-      "revision": 34,
+      "revision": 32,
       "sourceTreeSha256": "63820DB62FF44C0818DA178E81E22CCBA1ABCA2BB44F4B9EEC62FDE631CF9E55"
     }
   },

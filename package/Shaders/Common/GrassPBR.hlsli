@@ -207,7 +207,8 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		else
 		float snowSkyVisibility = 1.0;
 #		endif
-		SnowCover::ApplyGrassSnow(material.BaseColor, normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, false, eyeIndex, TexBaseSampler, true);
+		SnowCover::CoverageInputs footprint = SnowCover::ApplyGrassSnow(material.BaseColor, normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, false, eyeIndex, TexBaseSampler, true);
+		material.BaseColor = ApplyGrassSnowMeltDarkening(material.BaseColor, footprint);
 	}
 #	endif
 

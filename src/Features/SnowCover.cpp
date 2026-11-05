@@ -11,6 +11,7 @@
 #include "Utils/Finite.h"
 #include "Utils/Serialize.h"
 #include "Utils/StringUtils.h"
+#include "Wetterness/SnowMelt.h"
 #include <DirectXTex.h>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -94,10 +95,13 @@ void SnowCover::UpdateFrame()
 			}
 		}
 	}
+	const float snowRate = snowing ? snowingSpeed : (raining ? -2.0f * meltingSpeed : (timeSnowing > 0.0f ? -meltingSpeed : meltingSpeed));
 	if (auto* calendar = globals::game::calendar) {
-		const float hours = calendar->GetHoursPassed();
-		const float elapsed = lastGameHours >= 0.0f ? std::max(0.0f, hours - lastGameHours) : 0.0f;
-		lastGameHours = hours;
+		const double hours = static_cast<double>(calendar->GetCurrentGameTime()) * 24.0;
+		const float elapsed = std::isfinite(hours) && lastGameHours >= 0.0 ? static_cast<float>(std::max(0.0, hours - lastGameHours)) : 0.0f;
+		if (std::isfinite(hours) && hours < lastGameHours)
+			timeSnowing = 0.0f;
+		lastGameHours = std::isfinite(hours) ? hours : -1.0;
 		timeSnowing = SnowCoverMath::Accumulate(timeSnowing, elapsed, snowing, raining, snowingSpeed, meltingSpeed);
 		perFrame.Month = SnowEnvironment::GetFractionalGameMonth(*calendar);
 	}
@@ -114,6 +118,7 @@ void SnowCover::UpdateFrame()
 	}
 	perFrame.wsettings.EnableSnowCover = wsettings.EnableSnowCover && texturesLoaded;
 	UpdateFireMelt();
+	WetternessSnowMelt::Update(*this, snowRate);
 	UpdateSurvival();
 }
 
@@ -132,8 +137,13 @@ void SnowCover::Reset()
 	const bool requested = settings.Enable != 0;
 	const bool loading = globals::state->IsMainOrLoadingMenuOpen();
 	if (loading && !wasLoading) {
-		lastWorldspace.clear();
-		ResetRuntimeState();
+		// Travel unloads references, but its elapsed game time still belongs to this timeline.
+		trackedFires.clear();
+		fireBaseCache.clear();
+		buildingBaseCache.clear();
+		fireFrame = {};
+		fireScanTimer = FIRE_MELT_SCAN_INTERVAL;
+		fireMeltSnap = true;
 	}
 	wasLoading = loading;
 	if (active.load(std::memory_order_relaxed) == requested)
@@ -147,9 +157,16 @@ void SnowCover::Reset()
 	}
 }
 
+void SnowCover::ResetRuntimeStateAfterGameLoad()
+{
+	lastWorldspace.clear();
+	ResetRuntimeState();
+}
+
 void SnowCover::ResetRuntimeState()
 {
-	lastGameHours = -1.0f;
+	WetternessSnowMelt::Reset();
+	lastGameHours = -1.0;
 	timeSnowing = 0.0f;
 	perFrame = {};
 	frame = {};
@@ -304,13 +321,15 @@ void SnowCover::SaveConfig(bool applyTextureInputs)
 	status = std::string("Worldspace config saved.");
 }
 
-bool SnowCover::LoadWorldConfig(const json& input)
+bool SnowCover::LoadWorldConfig(const json& input, bool worldTransition)
 {
 	SnowConfig::Validate(input, SnowConfig::Schemas().at("world"), "snowWorld");
 	auto config = GetWorldConfig();
 	config.update(input);
 	config["EnableSnowCover"] = input.value("EnableSnowCover", true);
 	SnowConfig::ValidateWorld(config);
+	if (!worldTransition)
+		WetternessSnowMelt::Reset();
 	wsettings.EnableSnowCover = config.value("EnableSnowCover", true);
 	wsettings.AffectGrassTint = config.at("AffectGrassTint");
 	wsettings.AffectTreeTint = config.at("AffectTreeTint");
@@ -433,6 +452,7 @@ void SnowCover::Reload()
 	const auto current = SnowEnvironment::GetCurrentWorldspaceOrCellEditorID();
 	if (current == lastWorldspace)
 		return;
+	WetternessSnowMelt::SuspendWorld();
 	lastWorldspace = current;
 	ResetWorldConfig();
 	ReleaseTextures();
@@ -452,9 +472,10 @@ void SnowCover::Reload()
 			status = "No snow config exists for this worldspace or cell.";
 			return;
 		}
-		LoadWorldConfig(json::parse(file));
+		LoadWorldConfig(json::parse(file), true);
 		if (!TryLoadTextures())
 			return;
+		WetternessSnowMelt::ResumeWorld(*this);
 		status = "Worldspace config loaded.";
 	} catch (const std::exception& e) {
 		wsettings.EnableSnowCover = false;
@@ -532,6 +553,7 @@ void SnowCover::Prepass()
 void SnowCover::LoadSettings(json& o_json)
 {
 	SnowConfig::Validate(o_json, SnowConfig::Schemas().at("settings"), "snowCover");
+	WetternessSnowMelt::Reset();
 	settings = o_json;
 	const FireMeltSettings defaults{};
 	fireMeltSettings.Enabled = o_json.value("FireMeltEnabled", defaults.Enabled);
@@ -554,6 +576,7 @@ void SnowCover::SaveSettings(json& o_json)
 
 void SnowCover::RestoreDefaultSettings()
 {
+	WetternessSnowMelt::Reset();
 	settings = {};
 	fireMeltSettings = {};
 	survivalEnabled = false;
@@ -762,7 +785,7 @@ bool SnowCover::IsSnowFree(const RE::BSRenderPass* pass, uint32_t flags) const
 	using Material = RE::BSShaderMaterial::Feature;
 	const auto* property = pass->shaderProperty;
 	const auto* material = property ? property->material : nullptr;
-	if (!material || perFrame.TimeSnowing > 0.0f)
+	if (!material || perFrame.TimeSnowing > 0.0f || WetternessSnowMelt::HasHistory())
 		return false;
 	const auto feature = material->GetFeature();
 	if (feature == Material::kMultiTexLand || feature == Material::kMultiTexLandLODBlend || feature == Material::kLODLand || feature == Material::kLODLandNoise)
@@ -861,6 +884,7 @@ json SnowCover::GetDiagnostics()
 {
 	json configured;
 	SaveSettings(configured);
+	const auto melt = WetternessSnowMelt::GetCommonBufferData();
 	return {
 		{ "settings", configured },
 		{ "world", GetWorldConfig() },
@@ -873,6 +897,9 @@ json SnowCover::GetDiagnostics()
 		{ "SeasonalAltitude", perFrame.SeasonalAltitude },
 		{ "TimeSnowing", perFrame.TimeSnowing },
 		{ "SnowingDensity", perFrame.SnowingDensity },
+		{ "MeltWetness", { { "Active", melt.enabled != 0 }, { "HistorySamples", melt.count },
+							 { "LightDryingHours", melt.lightDryingHours }, { "HeavyDryingHours", melt.heavyDryingHours },
+							 { "MaximumHistoryHours", WetternessSnowMelt::MaximumDryingHours } } },
 		{ "TrackedFires", trackedFires.size() },
 		{ "FireMeltCount", perFrame.fireMelt.Count },
 		{ "SurvivalAvailable", survivalGlobal != nullptr },

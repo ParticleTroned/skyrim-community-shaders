@@ -1059,6 +1059,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #	if defined(SNOW_COVER)
 #		include "SnowCover/SnowCover.hlsli"
 #	endif
+#	if defined(WETTERNESS)
+#		include "Wetterness/Drying.hlsli"
+#		include "Wetterness/SnowMelt.hlsli"
+#	endif
 
 #	if defined(VR)
 #		include "Common/FoveatedShaderDetail.hlsli"
@@ -1225,7 +1229,8 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 	float3 viewDirection,
 	float waterHeight,
 	bool inWorld,
-	uint eyeIndex
+	uint eyeIndex,
+	float2 snowMeltWetness
 #		if !defined(SKIN) && !defined(HAIR)
 	,
 	float3 surfaceBaseColor,
@@ -1261,7 +1266,6 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 	float rainDarkeningAbsorption = 1.0;
 	float shoreDarkeningAbsorption = 1.0;
 	float waterRoughnessSpecular = 1.0;
-	const bool wetnessEnabled = (CS_WETNESS_SETTINGS.EnableWetnessEffects != 0);
 	float shoreHeightDelta = input.WorldPosition.z - waterHeight;
 	const bool wetSurfaceAllowed = shoreHeightDelta > 0.5;
 	// Keep puddle spawning farther away from the waterline than generic wet film.
@@ -1276,6 +1280,10 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 	float shoreFactorAlbedo = (input.WorldPosition.z < waterHeight) ? 1.0 : shoreFactor;
 	float shoreWetnessAlbedo = saturate(shoreFactorAlbedo * CS_WETNESS_SETTINGS.MaxShoreWetness);
 	float shoreWetnessDarkeningMask = shoreWetnessAlbedo * shoreWetnessAlbedo;
+	const bool wetnessEnabled = (CS_WETNESS_SETTINGS.EnableWetnessEffects != 0) &&
+	                            (CS_WETNESS_SETTINGS.Wetness > 0 || CS_WETNESS_SETTINGS.PuddleWetness > 0 ||
+									CS_WETNESS_SETTINGS.Raining > 0 || any(snowMeltWetness > 0) ||
+									shoreFactor * CS_WETNESS_SETTINGS.MaxShoreWetness > 0);
 
 	[branch] if (wetnessEnabled)
 	{
@@ -1324,9 +1332,10 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 		float stoneFactor = 0.0;
 		float dirtFactor = 1.0;
 #		if !defined(SKIN) && !defined(HAIR)
-		vegetationFactor = smoothstep(0.06, 0.30, surfaceBaseColor.g - max(surfaceBaseColor.r, surfaceBaseColor.b));
-		stoneFactor = saturate((0.62 - surfaceRoughness) * 2.4) * (1.0 - vegetationFactor);
-		dirtFactor = saturate(1.0 - vegetationFactor - stoneFactor);
+		float3 dryingWeights = Wetterness::GetSurfaceDryingWeights(surfaceBaseColor, surfaceRoughness);
+		stoneFactor = dryingWeights.x;
+		vegetationFactor = dryingWeights.y;
+		dirtFactor = dryingWeights.z;
 		float surfaceBrightness = dot(surfaceBaseColor, float3(0.299, 0.587, 0.114));
 		float surfaceMaxChannel = max(surfaceBaseColor.r, max(surfaceBaseColor.g, surfaceBaseColor.b));
 		float surfaceMinChannel = min(surfaceBaseColor.r, min(surfaceBaseColor.g, surfaceBaseColor.b));
@@ -1506,7 +1515,9 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 		// Keep puddle visual persistence decoupled from surface drying sliders.
 		// Puddle timing is controlled by the CPU puddle timeline (manual or weather-driven puddle hours).
 		puddleWetness = saturate(puddleWetness);
-		// Trim residual low-end surface gloss after rain so ground does not look wet forever.
+		rainWetness = max(rainWetness, saturate(snowMeltWetness.x * CS_WETNESS_SETTINGS.MaxRainWetness));
+		puddleWetness = max(puddleWetness, snowMeltWetness.y);
+		// Trim residual low-end surface gloss so drying reaches a visibly dry endpoint.
 		float postRainDryCut = lerp(0.0, 0.08, postRainBlend);
 		rainWetness = saturate((rainWetness - postRainDryCut) / max(1e-3, 1.0 - postRainDryCut));
 		float rainFilmWetness = saturate(max(rainWetness, raindropWetness * inRainBlend));
@@ -3322,6 +3333,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float4 waterData = SharedData::GetWaterData(input.WorldPosition.xyz, eyeIndex);
 	float waterHeight = waterData.w;
+	float2 snowMeltWetness = 0;
 
 #	if defined(SNOW_COVER)
 	bool snowActive = SnowCover::IsActive() && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SnowInactive);
@@ -3410,6 +3422,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SnowRooftop)
 				rooftopLift = SnowCover::GetRooftopLift(input.ModelPosition.z, snowSkyVisibility);
 #		endif
+#		if defined(WETTERNESS) && !defined(SKIN) && !defined(HAIR) && !defined(SKINNED)
+			[branch] if (SharedData::snowMeltSettings.enabled)
+			{
+				float dryRoughness = material.Roughness;
+#			if !defined(TRUE_PBR)
+				dryRoughness = 1.0 - saturate(material.Glossiness);
+#			endif
+				SnowCover::CoverageInputs footprint = SnowCover::GetSurfaceFootprint(snowNormal, disp,
+					adjustedWorldPos, snowOcclusion, input.WorldPosition.z - waterHeight,
+					length(viewPosition.xyz), rooftopLift, snowEnvironment);
+				snowMeltWetness = Wetterness::GetSnowMeltWetness(footprint,
+					Wetterness::GetSurfaceDryingWeights(saturate(material.BaseColor), dryRoughness));
+			}
+#		endif
 #		if defined(TRUE_PBR)
 			snowFactor = SnowCover::ApplySnowPBR(material, snowNormal, disp, adjustedWorldPos, snowOcclusion, input.WorldPosition.z - waterHeight, length(viewPosition.xyz), uv - uvOriginal, rooftopLift, snowEnvironment);
 #		else
@@ -3471,6 +3497,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		waterHeight,
 		inWorld,
 		eyeIndex,
+		snowMeltWetness,
 #		if !defined(SKIN) && !defined(HAIR)
 		wetnessSurfaceBaseColor,
 		wetnessSurfaceRoughness,

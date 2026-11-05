@@ -32,7 +32,7 @@ namespace
 	double Now() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
 	uint32_t Cell()
 	{
-		auto* player = globals::game::player;
+		auto* player = RE::PlayerCharacter::GetSingleton();
 		auto* cell = player ? player->GetParentCell() : nullptr;
 		return cell ? cell->GetFormID() : 0;
 	}

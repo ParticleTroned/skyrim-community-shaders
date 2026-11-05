@@ -125,31 +125,35 @@ namespace FurShells
 		float3 total = 0.0;
 		float press = 0.0;
 		a_debug = 0.0;
-		[branch] if ((previous ? Previous.TouchCount : Current.TouchCount) <= 0.0) return 0.0;
-		float margin = max(a_length * TouchMarginScale, TouchMinMargin);
-		[loop] for (uint index = 0; index < min(uint((previous ? Previous.TouchCount : Current.TouchCount)), 12u); ++index)
+		float3 displacement = 0.0;
+		[branch] if ((previous ? Previous.TouchCount : Current.TouchCount) > 0.0)
 		{
-			float3 pointA = (previous ? Previous.TouchA[index] : Current.TouchA[index]).xyz;
-			float3 axis = (previous ? Previous.TouchB[index] : Current.TouchB[index]).xyz - pointA;
-			float t = saturate(dot(a_absolutePosition - pointA, axis) / max(dot(axis, axis), 1e-4));
-			float3 offset = a_absolutePosition - (pointA + axis * t);
-			float distance = length(offset);
-			float3 direction = offset / max(distance, 1e-4);
-			float radius = (previous ? Previous.TouchA[index] : Current.TouchA[index]).w;
-			float strength = (previous ? Previous.TouchMove[index] : Current.TouchMove[index]).w;
-			float reach = saturate((radius + margin - distance) / margin);
-			float influence = reach * strength;
-			float penetration = max(radius - distance, 0.0) * strength;
-			bool remembered = (previous ? Previous.TouchB[index] : Current.TouchB[index]).w > 0.5;
-			a_debug = float3(remembered ? a_debug.x : max(a_debug.x, influence), remembered ? a_debug.y : max(a_debug.y, step(0.0, radius - distance)), remembered && reach > 0.0 ? max(a_debug.z, strength) : a_debug.z);
-			float stable = saturate(distance / max(radius * TouchStableRadius, 1e-3));
-			total += direction * ((influence * a_length * TouchBend + penetration) * stable) + (previous ? Previous.TouchMove[index] : Current.TouchMove[index]).xyz * (influence * TouchDrag);
-			press = max(press, influence);
+			float margin = max(a_length * TouchMarginScale, TouchMinMargin);
+			[loop] for (uint index = 0; index < min(uint((previous ? Previous.TouchCount : Current.TouchCount)), 12u); ++index)
+			{
+				float3 pointA = (previous ? Previous.TouchA[index] : Current.TouchA[index]).xyz;
+				float3 axis = (previous ? Previous.TouchB[index] : Current.TouchB[index]).xyz - pointA;
+				float t = saturate(dot(a_absolutePosition - pointA, axis) / max(dot(axis, axis), 1e-4));
+				float3 offset = a_absolutePosition - (pointA + axis * t);
+				float distance = length(offset);
+				float3 direction = offset / max(distance, 1e-4);
+				float radius = (previous ? Previous.TouchA[index] : Current.TouchA[index]).w;
+				float strength = (previous ? Previous.TouchMove[index] : Current.TouchMove[index]).w;
+				float reach = saturate((radius + margin - distance) / margin);
+				float influence = reach * strength;
+				float penetration = max(radius - distance, 0.0) * strength;
+				bool remembered = (previous ? Previous.TouchB[index] : Current.TouchB[index]).w > 0.5;
+				a_debug = float3(remembered ? a_debug.x : max(a_debug.x, influence), remembered ? a_debug.y : max(a_debug.y, step(0.0, radius - distance)), remembered && reach > 0.0 ? max(a_debug.z, strength) : a_debug.z);
+				float stable = saturate(distance / max(radius * TouchStableRadius, 1e-3));
+				total += direction * ((influence * a_length * TouchBend + penetration) * stable) + (previous ? Previous.TouchMove[index] : Current.TouchMove[index]).xyz * (influence * TouchDrag);
+				press = max(press, influence);
+			}
+			total *= (previous ? Previous.TouchStrength : Current.TouchStrength);
+			float magnitude = length(total);
+			float3 push = total * (min(magnitude, TouchMaxPush) / max(magnitude, 1e-4)) * (a_shell * a_shell);
+			displacement = push - a_worldNormal * (a_length * a_shell * press * TouchPress * saturate((previous ? Previous.TouchStrength : Current.TouchStrength)));
 		}
-		total *= (previous ? Previous.TouchStrength : Current.TouchStrength);
-		float magnitude = length(total);
-		float3 push = total * (min(magnitude, TouchMaxPush) / max(magnitude, 1e-4)) * (a_shell * a_shell);
-		return push - a_worldNormal * (a_length * a_shell * press * TouchPress * saturate((previous ? Previous.TouchStrength : Current.TouchStrength)));
+		return displacement;
 	}
 
 	/**
@@ -159,13 +163,17 @@ namespace FurShells
 	 */
 	float3 GetWindDisplacement(bool previous, float3 a_worldNormal, float a_shell, float a_worldLength)
 	{
-		[branch] if (all((previous ? Previous.Wind : Current.Wind).xyz == 0.0)) return 0.0;
-		float3 velocity = (previous ? Previous.Wind : Current.Wind).xyz;
-		float speed = length(velocity);
-		float3 direction = velocity / max(speed, 1e-4);
-		float exposure = lerp(WindLeeShare, 1.0, saturate(-dot(a_worldNormal, direction)));
-		float bend = saturate(speed * speed) * exposure * WindMaxBend;
-		return direction * (bend * a_shell * a_shell * a_worldLength);
+		float3 displacement = 0.0;
+		[branch] if (any((previous ? Previous.Wind : Current.Wind).xyz != 0.0))
+		{
+			float3 velocity = (previous ? Previous.Wind : Current.Wind).xyz;
+			float speed = length(velocity);
+			float3 direction = velocity / max(speed, 1e-4);
+			float exposure = lerp(WindLeeShare, 1.0, saturate(-dot(a_worldNormal, direction)));
+			float bend = saturate(speed * speed) * exposure * WindMaxBend;
+			displacement = direction * (bend * a_shell * a_shell * a_worldLength);
+		}
+		return displacement;
 	}
 
 	/** @brief World-space lag of the fur tips behind the mesh's motion, bending quadratically with layer height; wet fur clings and lags less. */
@@ -241,12 +249,17 @@ namespace FurShells
 		float worldLength = (previous ? PreviousShape.x : Length) * length(normalVector);
 		float droop = min((previous ? PreviousShape.z : Droop) * GetWetDroop((previous ? Previous.WetStrength : Current.WetStrength)) * shell * shell, worldLength * wetLength * shell);
 		debug = 0.0;
-		[branch] if ((previous ? Previous.TouchCount : Current.TouchCount) <= 0.0 && all((previous ? Previous.Wind : Current.Wind).xyz == 0.0) && all((previous ? Previous.Inertia : Current.Inertia) == 0.0)) return float3(0.0, 0.0, -droop);
-		float scale = length(normalVector);
-		float3 normal = normalVector / max(scale, 1e-6);
-		float3 touch = GetTouchDisplacement(previous, worldPosition + (previous ? Previous.TouchEye[eyeIndex] : Current.TouchEye[eyeIndex]).xyz, normal, shell, worldLength * wetLength, debug);
-		float3 bend = LimitBend(GetWindDisplacement(previous, normal, shell, worldLength) + GetInertiaDisplacement(previous, shell, (previous ? Previous.WetStrength : Current.WetStrength)), shell, wetLength, worldLength);
-		return float3(0.0, 0.0, -droop) + bend + touch;
+		// Keep every return path defined through FXC's precise vertex calculations.
+		float3 displacement = float3(0.0, 0.0, -droop);
+		[branch] if ((previous ? Previous.TouchCount : Current.TouchCount) > 0.0 || any((previous ? Previous.Wind : Current.Wind).xyz != 0.0) || any((previous ? Previous.Inertia : Current.Inertia) != 0.0))
+		{
+			float scale = length(normalVector);
+			float3 normal = normalVector / max(scale, 1e-6);
+			float3 touch = GetTouchDisplacement(previous, worldPosition + (previous ? Previous.TouchEye[eyeIndex] : Current.TouchEye[eyeIndex]).xyz, normal, shell, worldLength * wetLength, debug);
+			float3 bend = LimitBend(GetWindDisplacement(previous, normal, shell, worldLength) + GetInertiaDisplacement(previous, shell, (previous ? Previous.WetStrength : Current.WetStrength)), shell, wetLength, worldLength);
+			displacement = displacement + bend + touch;
+		}
+		return displacement;
 	}
 #endif
 

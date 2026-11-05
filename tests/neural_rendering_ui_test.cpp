@@ -794,6 +794,7 @@ int main()
 		require(!settings.neuralRenderingPauseInCombat && settings.neuralRenderingModelResolutionPercent == 100, "Combat control must retain NR resolution");
 		require(settings.neuralRenderingPeripheralCompressionPercent == 100, "Peripheral compression must default to 100 percent");
 		require(settings.neuralRenderingFaceDetailProtectionPercent == 0, "Face detail protection must default off");
+		require(settings.neuralRenderingConfidenceRejectionPercent == 0, "Confidence rejection must default off");
 		settings.neuralRenderingMode = static_cast<unsigned>(NeuralRendering::RenderingMode::ReducedResolution);
 		for (bool released : { false, true }) {
 			ImGui::Clear("Face detail protection");
@@ -975,7 +976,9 @@ int main()
 				upscaling.settings.neuralRenderingParallelEyes = enabled;
 				upscaling.settings.neuralRenderingPrewarmEnabled = enabled;
 				upscaling.settings.neuralRenderingGuidedReconstruction = enabled;
-				for (const auto level : { spdlog::level::debug, spdlog::level::info, spdlog::level::off, spdlog::level::trace, spdlog::level::debug }) {
+				upscaling.settings.neuralRenderingConfidenceRejectionPercent = 37;
+				for (const auto level : { spdlog::level::debug, spdlog::level::info, spdlog::level::warn, spdlog::level::err,
+						 spdlog::level::critical, spdlog::level::off, spdlog::level::trace, spdlog::level::debug }) {
 					visibilityState.level = level;
 					ImGui::Clear();
 					upscaling.DrawSelectionControls();
@@ -989,6 +992,12 @@ int main()
 						"Only the guided reconstruction toggle belongs in Debug/Trace");
 					require(upscaling.settings.neuralRenderingGuidedReconstruction == enabled,
 						"Info and logging-off redraws must preserve the guided reconstruction preference");
+					require(ImGui::Seen("NR confidence rejection") == debugControls &&
+								upscaling.settings.neuralRenderingConfidenceRejectionPercent == 37,
+						"Confidence rejection must be visible only in Debug/Trace without resetting its saved value");
+					if (debugControls)
+						require(ImGui::Disabled("NR confidence rejection") == !enabled,
+							"Confidence rejection availability must follow guided reconstruction");
 					const auto position = [](const char* label) { return std::find(ImGui::items.begin(), ImGui::items.end(), label); };
 					require(position("Face detail protection") == position("Peripheral compression") + 1 &&
 								position("Face detail protection") < position("Lower NR resolution under memory pressure") &&
@@ -1002,6 +1011,12 @@ int main()
 			}
 		}
 		globals::state = nullptr;
+		Upscaling::Settings hiddenSettings;
+		hiddenSettings.neuralRenderingConfidenceRejectionPercent = 37;
+		ImGui::Clear();
+		DrawNeuralModelResolutionSettings(hiddenSettings);
+		require(!ImGui::Seen("NR confidence rejection") && hiddenSettings.neuralRenderingConfidenceRejectionPercent == 37,
+			"Missing UI state must hide confidence rejection without changing its saved value");
 	}
 	globals::game::isVR = true;
 	ImGui::Clear();

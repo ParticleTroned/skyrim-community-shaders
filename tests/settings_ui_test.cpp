@@ -125,6 +125,7 @@ namespace globals
 			DEFAULT
 		};
 		bool blocked = false, snapshotFailure = false;
+		bool developerMode = false;
 		bool frameAnnotations = false, useFrameAnnotations = false;
 		void LoadFrameAnnotations(nlohmann::json& advanced)
 		{
@@ -135,6 +136,7 @@ namespace globals
 		void Save() { ++saves; }
 		void Load() { ++loads; }
 		bool IsPersistentMutationBlocked() const { return blocked; }
+		bool IsDeveloperMode() const { return developerMode; }
 		static std::filesystem::path GetConfigPath(ConfigMode) { return "SettingsDefault.json"; }
 		void SaveToJson(nlohmann::json& value, bool)
 		{
@@ -2288,6 +2290,9 @@ int main()
 				 NeuralSliderCase{ "NR confidence rejection", &Upscaling::Settings::neuralRenderingConfidenceRejectionPercent, DrawNeuralModelResolutionSettings, 0, 100 },
 				 NeuralSliderCase{ "NR central area", &Upscaling::Settings::neuralRenderingCentralAreaPercent, DrawNeuralCentralAreaSettings, 25, 100 },
 				 NeuralSliderCase{ "NR central feather", &Upscaling::Settings::neuralRenderingCentralFeatherPixels, DrawNeuralCentralAreaSettings, 0, 256 } }) {
+			const bool previousDeveloperMode = globals::stateStorage.developerMode;
+			globals::stateStorage.developerMode = true;
+			const SKSE::stl::scope_exit restoreDeveloperMode([previousDeveloperMode] { globals::stateStorage.developerMode = previousDeveloperMode; });
 			Upscaling::Settings neuralSettings;
 			neuralSettings.neuralRenderingPeripheralCompressionPercent = 100;
 			neuralSettings.neuralRenderingCentralAreaPercent = 75;

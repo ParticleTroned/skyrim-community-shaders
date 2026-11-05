@@ -85,6 +85,17 @@ int main()
 		Check(settings.neuralRenderingPeripheralCompressionPercent == percent && json(settings).at("neuralRenderingPeripheralCompressionPercent") == percent, "Compression percent did not round-trip");
 	}
 	for (unsigned percent : { 0u, 1u, 75u, 100u }) {
+		Upscaling::Settings settings, restored;
+		settings.neuralRenderingConfidenceRejectionPercent = percent;
+		const auto saved = NeuralRendering::PersistentRenderingSettings(NeuralRendering::RenderingSettings(json(settings)));
+		from_json(saved, restored);
+		Check(saved.at("neuralRenderingConfidenceRejectionPercent") == percent &&
+				  restored.neuralRenderingConfidenceRejectionPercent == percent,
+			"Saved confidence rejection must survive loading independently of UI visibility");
+		from_json(json::object(), restored);
+		Check(restored.neuralRenderingConfidenceRejectionPercent == 0, "Missing confidence rejection must default off");
+	}
+	for (unsigned percent : { 0u, 1u, 75u, 100u }) {
 		Upscaling::Settings settings;
 		from_json({ { "neuralRenderingFaceDetailProtectionPercent", percent } }, settings);
 		Check(settings.neuralRenderingFaceDetailProtectionPercent == percent && json(settings).at("neuralRenderingFaceDetailProtectionPercent") == percent,

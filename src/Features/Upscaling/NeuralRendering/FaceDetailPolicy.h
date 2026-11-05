@@ -35,6 +35,9 @@ namespace NeuralRendering
 		std::array<std::array<float, kFaceDetailBins>, 2> coverage{};
 		for (std::uint32_t face = 0; face < faces.count; ++face) {
 			const auto& source = faces.bounds[face];
+			const float proximityWeight = faces.proximityWeights[face];
+			if (!Util::IsFinite(proximityWeight) || proximityWeight <= 0.0f || proximityWeight > 1.0f)
+				continue;
 			if (!std::ranges::all_of(source, [](float v) { return Util::IsFinite(v) && v >= 0.0f && v <= 1.0f; }) || source[0] >= source[2] || source[1] >= source[3])
 				continue;
 			const auto bounds = FaceDetailModelBounds(plan.mapping, source);
@@ -43,7 +46,7 @@ namespace NeuralRendering
 			for (unsigned axis = 0; axis < 2; ++axis)
 				for (unsigned bin = 0; bin < kFaceDetailBins; ++bin) {
 					const float overlap = std::max(0.0f, std::min(float(bin + 1), bounds[axis + 2] * kFaceDetailBins) - std::max(float(bin), bounds[axis] * kFaceDetailBins));
-					coverage[axis][bin] = std::max(coverage[axis][bin], overlap);
+					coverage[axis][bin] = std::max(coverage[axis][bin], overlap * proximityWeight);
 				}
 		}
 		FaceDetailMapping mapping;

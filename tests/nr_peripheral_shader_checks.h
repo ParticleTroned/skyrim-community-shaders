@@ -316,6 +316,7 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 		base.faceDetailRegions.current = true;
 		base.faceDetailRegions.count = 1;
 		base.faceDetailRegions.bounds[0] = { 0.3f, 0.25f, 0.6f, 0.65f };
+		base.faceDetailRegions.proximityWeights[0] = 1.0f;
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	base.reconstructionTuning = tuning;
@@ -473,6 +474,13 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 			for (const auto& eye : args)
 				Require(eye.peripheralShaders.faceDetailProtection == faceDetailActive,
 					"Inactive protection selected a face preparation shader");
+			auto distant = args;
+			for (auto& eye : distant)
+				eye.faceDetailRegions.proximityWeights = {};
+			Require(adapter.PreparePeripheralCompression(distant, false, result), "Distant-head preparation failed");
+			for (const auto& eye : distant)
+				Require(!eye.peripheralCompression.mapping.faceDetail.enabled && !eye.peripheralShaders.faceDetailProtection,
+					"Distant heads selected face-protection shader work");
 			Require(!mixedGuides || !plan.mapping.faceDetail.enabled, "Face protection escaped the stateless pre-DLSS route");
 			if (!mixedGuides && percent == 100)
 				Require(plan.mapping.faceDetail.enabled != 0, "Face protection did not reach the shaders");

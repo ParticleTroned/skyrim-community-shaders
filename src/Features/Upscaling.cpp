@@ -19165,7 +19165,7 @@ namespace
 			auto guard = Util::DisableGuard(!available);
 			DrawNeuralIntegerSetting("Face detail protection", settings.neuralRenderingFaceDetailProtectionPercent,
 				0, NeuralRendering::kMaximumFaceDetailProtectionPercent, "%d%%");
-			Util::AddTooltip("Helps retain NPC face detail by reducing background detail. 0 is off; higher values strengthen protection and add work. Requires Before DLSS, peripheral compression and scene coverage. Applies when released.",
+			Util::AddTooltip("Helps retain nearby NPC face detail by reducing background detail. Active only within 1 metre of the camera/headset; fades to full strength within 0.75 metres. Distant heads skip projection and face mapping. Basic detection still adds CPU work. 0 is off; higher values strengthen protection. Requires Before DLSS, peripheral compression and scene coverage. Applies when released.",
 				ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 		}
 		{

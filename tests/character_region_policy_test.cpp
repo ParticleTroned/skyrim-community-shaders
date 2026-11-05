@@ -54,6 +54,18 @@ int main()
 			1.0f, std::numeric_limits<float>::quiet_NaN()) != 0.0f) {
 		return 10;
 	}
+	if (ResolveDistanceFadeWidth(1.0f, 0.25f) != 0.25f ||
+		ResolveDistanceFadeWidth(0.1f, 0.25f) != 0.1f ||
+		ResolveDistanceWeight(0.75f, 1.0f, 0.25f) != 1.0f ||
+		ResolveDistanceWeight(0.875f, 1.0f, 0.25f) != 0.5f ||
+		ResolveDistanceWeight(1.0f, 1.0f, 0.25f) != 0.0f) {
+		return 12;
+	}
+	for (float width : { -1.0f, 0.0f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN() }) {
+		if (ResolveDistanceFadeWidth(1.0f, width) != 0.0f ||
+			ResolveDistanceWeight(0.5f, 1.0f, width) != 0.0f)
+			return 13;
+	}
 	if (!NeuralRendering::CharacterRegionPolicy::IsDetailRelevant(8.0f, 1) ||
 		!NeuralRendering::CharacterRegionPolicy::IsDetailRelevant(9.0f, 96) ||
 		NeuralRendering::CharacterRegionPolicy::IsDetailRelevant(9.0f, 95) ||

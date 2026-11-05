@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Utils/Finite.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -90,13 +92,15 @@ namespace NeuralRendering
 
 		/** Returns the hidden fade band immediately inside a nonzero hard cutoff. */
 		[[nodiscard]] inline float ResolveDistanceFadeWidth(
-			float a_maximumDistanceMeters) noexcept
+			float a_maximumDistanceMeters,
+			float a_fadeWidthMeters = kMaximumDistanceFadeWidthMeters) noexcept
 		{
-			return std::isfinite(a_maximumDistanceMeters) &&
-			               a_maximumDistanceMeters > 0.0f ?
+			return Util::IsFinite(a_maximumDistanceMeters) &&
+			               a_maximumDistanceMeters > 0.0f &&
+			               Util::IsFinite(a_fadeWidthMeters) && a_fadeWidthMeters > 0.0f ?
 			           std::min(
 						   a_maximumDistanceMeters,
-						   kMaximumDistanceFadeWidthMeters) :
+						   a_fadeWidthMeters) :
 			           0.0f;
 		}
 
@@ -106,18 +110,21 @@ namespace NeuralRendering
 		 */
 		[[nodiscard]] inline float ResolveDistanceWeight(
 			float a_distanceMeters,
-			float a_maximumDistanceMeters) noexcept
+			float a_maximumDistanceMeters,
+			float a_fadeWidthMeters = kMaximumDistanceFadeWidthMeters) noexcept
 		{
-			if (!std::isfinite(a_maximumDistanceMeters) ||
+			if (!Util::IsFinite(a_maximumDistanceMeters) ||
 				a_maximumDistanceMeters < 0.0f) {
 				return 0.0f;
 			}
 			if (a_maximumDistanceMeters == 0.0f)
 				return 1.0f;
-			if (!std::isfinite(a_distanceMeters) || a_distanceMeters < 0.0f)
+			if (!Util::IsFinite(a_distanceMeters) || a_distanceMeters < 0.0f)
 				return 0.0f;
 			const auto fadeWidth = ResolveDistanceFadeWidth(
-				a_maximumDistanceMeters);
+				a_maximumDistanceMeters, a_fadeWidthMeters);
+			if (fadeWidth <= 0.0f)
+				return 0.0f;
 			return std::clamp(
 				(a_maximumDistanceMeters - a_distanceMeters) / fadeWidth,
 				0.0f,

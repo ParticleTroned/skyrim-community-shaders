@@ -12,11 +12,15 @@ namespace NeuralRendering
 	inline constexpr std::uint32_t kFaceDetailBins = 16;
 	inline constexpr std::uint32_t kFaceDetailMaximumActors = 64;
 	inline constexpr float kFaceDetailMinimumDensity = 0.5f;
+	inline constexpr float kFaceDetailMaximumDistanceMeters = 1.0f;
+	inline constexpr float kFaceDetailDistanceFadeMeters = 0.25f;
 
 	/** Normalized head bounds from one source frame; no actor pointers survive observation. */
 	struct FaceDetailRegions
 	{
 		std::array<std::array<float, 4>, kFaceDetailMaximumActors> bounds{};
+		/** Shared stereo distance fade; zero retains ordinary compression. */
+		std::array<float, kFaceDetailMaximumActors> proximityWeights{};
 		std::uint32_t count = 0;
 		bool current = false;
 	};

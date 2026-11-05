@@ -2528,6 +2528,14 @@ namespace NeuralRendering
 		if (!state_ || frame == std::numeric_limits<std::uint32_t>::max() || !actor || !Util::IsFinite(bound.centerX) || !Util::IsFinite(bound.centerY) ||
 			!Util::IsFinite(bound.centerZ) || !Util::IsFinite(bound.radius) || bound.radius <= 0.0f)
 			return;
+		const auto eyePosition = GetProjectionAverageEyePosition();
+		const float dx = Util::Units::GameUnitsToMeters(bound.centerX - eyePosition.x);
+		const float dy = Util::Units::GameUnitsToMeters(bound.centerY - eyePosition.y);
+		const float dz = Util::Units::GameUnitsToMeters(bound.centerZ - eyePosition.z);
+		const float distanceSquared = dx * dx + dy * dy + dz * dz;
+		// Share one proximity decision across both eyes and reject distant heads before projection.
+		if (!Util::IsFinite(distanceSquared) || distanceSquared >= kFaceDetailMaximumDistanceMeters * kFaceDetailMaximumDistanceMeters)
+			return;
 		std::scoped_lock lock(state_->mutex_);
 		auto& observation = state_->faceDetailFrames_[frame % state_->faceDetailFrames_.size()];
 		if (observation.frame != frame) {
@@ -2537,6 +2545,8 @@ namespace NeuralRendering
 		const auto count = observation.eyes[0].count;
 		if (count >= kFaceDetailMaximumActors || std::find(observation.actors.begin(), observation.actors.begin() + count, actor) != observation.actors.begin() + count)
 			return;
+		const float proximityWeight = CharacterRegionPolicy::ResolveDistanceWeight(
+			std::sqrt(distanceSquared), kFaceDetailMaximumDistanceMeters, kFaceDetailDistanceFadeMeters);
 		observation.actors[count] = actor;
 		const State::Observation sphere{ .center = { bound.centerX, bound.centerY, bound.centerZ }, .radius = bound.radius };
 		constexpr std::uint32_t projectionExtent = 16384;
@@ -2553,6 +2563,7 @@ namespace NeuralRendering
 			else if (result == CharacterProjectionResult::Uncertain)
 				regions.bounds[count] = { 0.0f, 0.0f, 1.0f, 1.0f };
 			regions.current = (count == 0 || regions.current) && result != CharacterProjectionResult::Uncertain;
+			regions.proximityWeights[count] = proximityWeight;
 			regions.count = count + 1;
 		}
 	}

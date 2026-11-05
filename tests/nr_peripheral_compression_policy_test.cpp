@@ -185,6 +185,7 @@ int main()
 		faces.current = true;
 		faces.count = 1;
 		faces.bounds[0] = { 0.3f, 0.25f, 0.6f, 0.65f };
+		faces.proximityWeights[0] = 1.0f;
 		for (const auto faceMask : { PeripheralMask{}, PeripheralMask{ { 0.47f, 0.53f }, { 0.43f, 0.36f }, true } }) {
 			const auto original = Plan({ 1920, 1080 }, 90, {}, { .requested = true, .compressionPercent = 100, .mask = faceMask });
 			auto protectedPlan = original;
@@ -195,6 +196,20 @@ int main()
 				"Face protection increased the model budget");
 			const auto modelBounds = FaceDetailModelBounds(original.mapping, faces.bounds[0]);
 			const auto& warp = protectedPlan.mapping.faceDetail;
+			float previousSpan = 0.0f;
+			for (float weight : { 0.0f, 0.04f, 0.5f, 1.0f }) {
+				auto faded = original;
+				auto region = faces;
+				region.proximityWeights[0] = weight;
+				ApplyFaceDetailProtection(faded, region, 100, 0.5f);
+				Require((faded.mapping.faceDetail.enabled != 0) == (weight > 0.0f),
+					"Zero proximity weight must retain ordinary compression");
+				const auto& fadedMapping = faded.mapping.faceDetail;
+				const float span = fadedMapping.Forward(modelBounds[2], 0) - fadedMapping.Forward(modelBounds[0], 0);
+				Require(span > previousSpan && faded.model == original.model && faded.guides == original.guides,
+					"Approaching a face must increase protection without increasing the grid");
+				previousSpan = span;
+			}
 			for (unsigned axis = 0; axis < 2; ++axis) {
 				const float before = modelBounds[axis + 2] - modelBounds[axis];
 				Require(warp.Forward(modelBounds[axis + 2], axis) - warp.Forward(modelBounds[axis], axis) > before,
@@ -222,7 +237,7 @@ int main()
 							"Adaptive footprint excluded a source sample");
 					}
 				}
-			for (unsigned condition = 0; condition < 10; ++condition) {
+			for (unsigned condition = 0; condition < 15; ++condition) {
 				auto rejected = original;
 				auto region = faces;
 				if (condition == 0)
@@ -241,6 +256,16 @@ int main()
 					region.bounds[0][2] = std::numeric_limits<float>::max();
 				if (condition == 9)
 					region.count = kFaceDetailMaximumActors + 1u;
+				if (condition == 10)
+					region.proximityWeights[0] = -0.1f;
+				if (condition == 11)
+					region.proximityWeights[0] = 1.1f;
+				if (condition == 12)
+					region.proximityWeights[0] = std::numeric_limits<float>::quiet_NaN();
+				if (condition == 13)
+					region.proximityWeights[0] = std::numeric_limits<float>::infinity();
+				if (condition == 14)
+					region.bounds[0] = {};
 				ApplyFaceDetailProtection(rejected, region, condition == 3 ? 0u : 100u, condition == 4 ? 1.0f : 0.5f);
 				Require(rejected.mapping == original.mapping && rejected.model == original.model,
 					"Unavailable, full-screen, over-budget or disabled protection changed the baseline");

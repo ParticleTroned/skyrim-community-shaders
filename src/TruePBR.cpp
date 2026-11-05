@@ -750,11 +750,11 @@ void TruePBR::GenerateShaderPermutations(RE::BSShader* shader)
 			if (pixelShaderDescriptor & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Deferred))
 				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, categories);
 			else
-				std::ignore = shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
+				std::ignore = shaderCache->GetPixelShader(*shader, pixelShaderDescriptor, SIE::ShaderCache::PixelShaderLookup::Precompile);
 		}
 	} else if (shader->shaderType == RE::BSShader::Type::Utility) {
 		for (auto descriptor : Permutations::GeneratePBRUtilityPixelPermutations())
-			std::ignore = shaderCache->GetPixelShader(*shader, descriptor);
+			std::ignore = shaderCache->GetPixelShader(*shader, descriptor, SIE::ShaderCache::PixelShaderLookup::Precompile);
 	}
 }
 

@@ -887,6 +887,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 				"Press {} to proceed without completing shader compilation. ",
 				keyIdToString(menu->GetSettings().SkipCompilationKey));
 			ImGui::TextUnformatted(skipShadersText.c_str());
+			ImGui::TextUnformatted("Background mode compiles shaders as they are requested.");
 			ImGui::TextUnformatted("WARNING: Uncompiled shaders will have visual errors or cause stuttering when loading.");
 		}
 		if (failed && !hide) {

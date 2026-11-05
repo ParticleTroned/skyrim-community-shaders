@@ -95,8 +95,8 @@ namespace SIE
 #include "shader_task_declarations.h"
 #include "shader_task_identity_under_test.h"
 
-	ShaderCompilationTask::ShaderCompilationTask(ShaderClass a_class, const RE::BSShader& a_shader, uint32_t a_descriptor) :
-		shaderClass(a_class), shader(a_shader), descriptor(a_descriptor), cachedPriority(a_shader.shaderType.get() == RE::BSShader::Lighting ? 600 : 1)
+	ShaderCompilationTask::ShaderCompilationTask(ShaderClass a_class, const RE::BSShader& a_shader, uint32_t a_descriptor, bool a_precompile) :
+		shaderClass(a_class), shader(a_shader), descriptor(a_descriptor), cachedPriority(a_shader.shaderType.get() == RE::BSShader::Lighting ? 600 : 1), precompile(a_precompile)
 	{}
 
 	namespace SShaderCache
@@ -149,6 +149,7 @@ namespace SIE
 		LARGE_INTEGER lastReset{}, lastCalculation{};
 		std::unordered_set<size_t> forgotten;
 		void Add(const ShaderCompilationTask& task);
+		void DropPrecompilesLocked();
 		void ClearTypeLocked(RE::BSShader::Type a_type);
 		void ReleaseDispatchSlot(const ShaderCompilationTask& a_task);
 		bool IsInProgress(size_t a_id)
@@ -168,8 +169,9 @@ namespace SIE
 #include "shader_capture_state.h"
 #include "shader_category_flag.h"
 		std::vector<uint32_t> pixelRequests;
-		void GetPixelShader(const RE::BSShader&, uint32_t descriptor) { pixelRequests.push_back(descriptor); }
-		void PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories);
+		std::atomic_bool backgroundCompilation{ false };
+		void GetPixelShader(const RE::BSShader&, uint32_t descriptor, PixelShaderLookup = PixelShaderLookup::Compile) { pixelRequests.push_back(descriptor); }
+		void PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories, bool a_precompile = false);
 		struct Blob
 		{
 			ShaderCompilationTask::Status status = ShaderCompilationTask::Completed;
@@ -365,6 +367,40 @@ namespace
 		queue.Add(second);
 		Require(queue.availableTasks.empty() && queue.totalTasks == 2);
 		Require(queue.lastResetQpc == sessionStart);
+		globals::shaderCache = nullptr;
+	}
+
+	void TestDemandPreservesQueuedWork()
+	{
+		ShaderCache cache;
+		globals::shaderCache = &cache;
+		RE::BSShader shader;
+		auto& queue = cache.compilationSet;
+		ShaderCompilationTask unused(ShaderClass::Pixel, shader, 10, true);
+		ShaderCompilationTask demanded(ShaderClass::Pixel, shader, 11, true);
+		ShaderCompilationTask running(ShaderClass::Pixel, shader, 12, true);
+		queue.Add(unused);
+		queue.Add(demanded);
+		queue.Add(running);
+		const auto original = *queue.availableTasks.find(demanded);
+		queue.Add({ ShaderClass::Pixel, shader, 11 });
+		const auto promoted = *queue.availableTasks.find(demanded);
+		Require(!promoted.IsPrecompile() && promoted.GetGeneration() == original.GetGeneration());
+		Require(promoted.GetEnqueuedQpc() == original.GetEnqueuedQpc() && queue.totalTasks == 3);
+		queue.tasksInProgress.insert(*queue.availableTasks.find(running));
+		queue.availableTasks.erase(running);
+		cache.backgroundCompilation = true;
+		queue.DropPrecompilesLocked();
+		Require(queue.availableTasks.size() == 1 && queue.availableTasks.contains(demanded));
+		Require(queue.tasksInProgress.contains(running) && queue.totalTasks == 2);
+		Require(queue.totalPriorityWeight == 2 * (demanded.GetPriority() + 1));
+		queue.Add(unused);
+		Require(queue.totalTasks == 2);
+		queue.Add({ ShaderClass::Pixel, shader, 10 });
+		Require(queue.totalTasks == 3 && !queue.availableTasks.find(unused)->IsPrecompile());
+		cache.backgroundCompilation = false;
+		queue.Add({ ShaderClass::Vertex, shader, 13, true });
+		Require(queue.totalTasks == 4);
 		globals::shaderCache = nullptr;
 	}
 
@@ -610,6 +646,7 @@ int main()
 		TestTrackingKeyRetention();
 		TestTrackingKeyIntegration();
 		TestQueueWithSharedBytecode();
+		TestDemandPreservesQueuedWork();
 		TestCaptureAndClearVariants(false);
 		TestCaptureAndClearVariants(true);
 		TestProtectedVariants();

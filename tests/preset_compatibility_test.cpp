@@ -38,6 +38,9 @@ int main(int argc, char** argv)
 {
 	using PresetCompatibility::Disposition;
 	assert(argc == 2);
+	std::ifstream policyInput(std::filesystem::path(argv[1]) / "docs/development/unified-preset-policy.json");
+	assert(policyInput.is_open());
+	const auto policy = nlohmann::json::parse(policyInput);
 	std::size_t profileCount = 0;
 	for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path(argv[1]) / "MGO-Presets")) {
 		const auto path = entry.path() / "SKSE/Plugins/CommunityShaders/SettingsUser.json";
@@ -46,6 +49,31 @@ int main(int argc, char** argv)
 		std::ifstream input(path);
 		assert(input.is_open());
 		const auto preset = nlohmann::json::parse(input);
+		const auto& marker = preset.at("Preset Compatibility");
+		assert(marker.at("contractVersion") == policy.at("presetCompatibility").at("contractVersion"));
+		assert(marker.at("presetVersion") == policy.at("packageVersion"));
+		assert(marker.at("target") == policy.at("presetCompatibility").at("target"));
+		assert(marker.at("settingsContract").at("revision") == PresetCompatibility::kSettingsContractRevision);
+		assert(marker.at("settingsContract").at("sourceTreeSha256") == policy.at("runtimeSettingsContract").at("sourceTreeSha256"));
+		std::ifstream metadataInput(entry.path() / "meta.ini");
+		assert(metadataInput.is_open());
+		std::size_t versionCount = 0;
+		for (std::string line; std::getline(metadataInput, line);) {
+			if (!line.empty() && line.back() == '\r')
+				line.pop_back();
+			if (line.starts_with("version=")) {
+				assert(line.substr(8) == marker.at("presetVersion").get<std::string>());
+				++versionCount;
+			}
+		}
+		assert(!metadataInput.bad());
+		assert(versionCount == 1);
+		for (const auto& stalePath : policy.at("validation").at("stalePaths")) {
+			nlohmann::json::json_pointer pointer;
+			for (const auto& segment : stalePath)
+				pointer /= segment.get<std::string>();
+			assert(!preset.contains(pointer));
+		}
 		assert(PresetCompatibility::Evaluate(preset, "CSX 3.21.0-VR").disposition == Disposition::kCompatible);
 		for (const auto label : { "CSX 3.20.0-VR", "CSX 3.22.0-VR", "CSX 3.21.0-SE", "CSX 3.21.0-AE" })
 			assert(!PresetCompatibility::Evaluate(preset, label).ShouldApply());

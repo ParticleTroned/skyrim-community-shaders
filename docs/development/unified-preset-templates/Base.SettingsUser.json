@@ -273,7 +273,6 @@
   },
   "VR": {
     "DepthCullingLegacyMode": false,
-    "DepthCullingPerformanceMode": false,
     "EnableDepthBufferCullingExterior": true,
     "EnableDepthBufferCullingInterior": true,
     "EnableDragToReposition": false,
@@ -290,7 +289,6 @@
     "EnableWetternessFoveation": true,
     "EnableWetternessFoveationHardCutoff": false,
     "KeepDesktopWindowFocusedForVRMenu": true,
-    "MinOccludeeBoxExtent": 10.0,
     "StabilizeRenderScaleDesktopMirror": false,
     "StereoBlendColorThreshold": 0.019999999552965164,
     "StereoBlendDepthSigma": 0.009999999776482582,
@@ -629,7 +627,76 @@
         "sunGlareGammaOffset": 0.0,
         "fogSaturation": 1.0,
         "volumetricIntensity": 1.0,
-        "volumetricSaturation": 1.0
+        "volumetricSaturation": 1.0,
+        "ambientSaturation": 1.0,
+        "auroraCurve": 1.0,
+        "auroraIntensity": 1.0,
+        "cloudOpacity": 1.0,
+        "cloudShadowStrength": 1.0,
+        "cloudTint": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "directionalCurve": 1.0,
+        "directionalSaturation": 1.0,
+        "directionalTint": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "eyeBrightness": 1.0,
+        "eyeSpecularBrightness": 1.0,
+        "fogBrightness": 1.0,
+        "fogTint": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "godrayIntensity": 1.0,
+        "godrayOpacity": 1.0,
+        "godraySaturation": 1.0,
+        "godrayTint": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "godrayTintAmount": 0.0,
+        "lightSpriteCurve": 1.0,
+        "lightSpriteIntensity": 1.0,
+        "particleAmbientInfluence": 1.0,
+        "particleDirectionalInfluence": 1.0,
+        "particleIntensity": 1.0,
+        "particlePointInfluence": 1.0,
+        "skyHorizonCurve": 1.0,
+        "skyHorizonIntensity": 1.0,
+        "skyHorizonTint": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "skyMiddleCurve": 1.0,
+        "skyMiddleIntensity": 1.0,
+        "skyMiddleTint": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "skyStaticCurve": 1.0,
+        "skyStaticTint": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "skyTopCurve": 1.0,
+        "skyTopIntensity": 1.0,
+        "skyTopTint": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "starsCurve": 1.0,
+        "starsIntensity": 1.0
       },
       "bloomPresets": {
         "selected": 0,
@@ -674,7 +741,22 @@
             "CompressionCeiling": 0.8999999761581421
           }
         ]
-      }
+      },
+      "cloudBrightnessMult": 1.0,
+      "cloudGammaOffset": 0.0,
+      "cloudSaturation": 1.0,
+      "contrast": 1.0,
+      "effectBrightness": 1.0,
+      "fireCurve": 1.0,
+      "fireIntensity": 1.0,
+      "fireSaturation": 1.0,
+      "fogIntensity": 1.0,
+      "pointLightCurve": 1.0,
+      "pointLightSaturation": 1.0,
+      "saturation": 1.0,
+      "skyStaticBrightness": 1.0,
+      "skyStaticTransparency": 0.0,
+      "sunGlareIntensity": 1.0
     },
     "locationOverrides": [],
     "nightStartHour": 21.0,
@@ -767,7 +849,76 @@
           "sunGlareGammaOffset": 0.0,
           "fogSaturation": 1.0,
           "volumetricIntensity": 1.0,
-          "volumetricSaturation": 1.0
+          "volumetricSaturation": 1.0,
+          "ambientSaturation": 1.0,
+          "auroraCurve": 1.0,
+          "auroraIntensity": 1.0,
+          "cloudOpacity": 1.0,
+          "cloudShadowStrength": 1.0,
+          "cloudTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "directionalCurve": 1.0,
+          "directionalSaturation": 1.0,
+          "directionalTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "eyeBrightness": 1.0,
+          "eyeSpecularBrightness": 1.0,
+          "fogBrightness": 1.0,
+          "fogTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "godrayIntensity": 1.0,
+          "godrayOpacity": 1.0,
+          "godraySaturation": 1.0,
+          "godrayTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "godrayTintAmount": 0.0,
+          "lightSpriteCurve": 1.0,
+          "lightSpriteIntensity": 1.0,
+          "particleAmbientInfluence": 1.0,
+          "particleDirectionalInfluence": 1.0,
+          "particleIntensity": 1.0,
+          "particlePointInfluence": 1.0,
+          "skyHorizonCurve": 1.0,
+          "skyHorizonIntensity": 1.0,
+          "skyHorizonTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyMiddleCurve": 1.0,
+          "skyMiddleIntensity": 1.0,
+          "skyMiddleTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyStaticCurve": 1.0,
+          "skyStaticTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyTopCurve": 1.0,
+          "skyTopIntensity": 1.0,
+          "skyTopTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "starsCurve": 1.0,
+          "starsIntensity": 1.0
         },
         "bloomPresets": {
           "selected": 0,
@@ -812,7 +963,22 @@
               "CompressionCeiling": 0.8999999761581421
             }
           ]
-        }
+        },
+        "cloudBrightnessMult": 1.0,
+        "cloudGammaOffset": 0.0,
+        "cloudSaturation": 1.0,
+        "contrast": 1.0,
+        "effectBrightness": 1.0,
+        "fireCurve": 1.0,
+        "fireIntensity": 1.0,
+        "fireSaturation": 1.0,
+        "fogIntensity": 1.0,
+        "pointLightCurve": 1.0,
+        "pointLightSaturation": 1.0,
+        "saturation": 1.0,
+        "skyStaticBrightness": 1.0,
+        "skyStaticTransparency": 0.0,
+        "sunGlareIntensity": 1.0
       },
       {
         "advanced": true,
@@ -903,7 +1069,76 @@
           "sunGlareGammaOffset": 0.0,
           "fogSaturation": 1.0,
           "volumetricIntensity": 1.0,
-          "volumetricSaturation": 1.0
+          "volumetricSaturation": 1.0,
+          "ambientSaturation": 1.0,
+          "auroraCurve": 1.0,
+          "auroraIntensity": 1.0,
+          "cloudOpacity": 1.0,
+          "cloudShadowStrength": 1.0,
+          "cloudTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "directionalCurve": 1.0,
+          "directionalSaturation": 1.0,
+          "directionalTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "eyeBrightness": 1.0,
+          "eyeSpecularBrightness": 1.0,
+          "fogBrightness": 1.0,
+          "fogTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "godrayIntensity": 1.0,
+          "godrayOpacity": 1.0,
+          "godraySaturation": 1.0,
+          "godrayTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "godrayTintAmount": 0.0,
+          "lightSpriteCurve": 1.0,
+          "lightSpriteIntensity": 1.0,
+          "particleAmbientInfluence": 1.0,
+          "particleDirectionalInfluence": 1.0,
+          "particleIntensity": 1.0,
+          "particlePointInfluence": 1.0,
+          "skyHorizonCurve": 1.0,
+          "skyHorizonIntensity": 1.0,
+          "skyHorizonTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyMiddleCurve": 1.0,
+          "skyMiddleIntensity": 1.0,
+          "skyMiddleTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyStaticCurve": 1.0,
+          "skyStaticTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyTopCurve": 1.0,
+          "skyTopIntensity": 1.0,
+          "skyTopTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "starsCurve": 1.0,
+          "starsIntensity": 1.0
         },
         "bloomPresets": {
           "selected": 0,
@@ -948,7 +1183,21 @@
               "CompressionCeiling": 0.8999999761581421
             }
           ]
-        }
+        },
+        "cloudBrightnessMult": 1.0,
+        "cloudSaturation": 1.0,
+        "contrast": 1.0,
+        "effectBrightness": 1.0,
+        "fireCurve": 1.0,
+        "fireIntensity": 1.0,
+        "fireSaturation": 1.0,
+        "fogIntensity": 1.0,
+        "pointLightCurve": 1.0,
+        "pointLightSaturation": 1.0,
+        "saturation": 1.0,
+        "skyStaticBrightness": 1.0,
+        "skyStaticTransparency": 0.0,
+        "sunGlareIntensity": 1.0
       },
       {
         "advanced": true,
@@ -1038,7 +1287,76 @@
           "sunGlareGammaOffset": 0.0,
           "fogSaturation": 1.0,
           "volumetricIntensity": 1.0,
-          "volumetricSaturation": 1.0
+          "volumetricSaturation": 1.0,
+          "ambientSaturation": 1.0,
+          "auroraCurve": 1.0,
+          "auroraIntensity": 1.0,
+          "cloudOpacity": 1.0,
+          "cloudShadowStrength": 1.0,
+          "cloudTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "directionalCurve": 1.0,
+          "directionalSaturation": 1.0,
+          "directionalTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "eyeBrightness": 1.0,
+          "eyeSpecularBrightness": 1.0,
+          "fogBrightness": 1.0,
+          "fogTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "godrayIntensity": 1.0,
+          "godrayOpacity": 1.0,
+          "godraySaturation": 1.0,
+          "godrayTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "godrayTintAmount": 0.0,
+          "lightSpriteCurve": 1.0,
+          "lightSpriteIntensity": 1.0,
+          "particleAmbientInfluence": 1.0,
+          "particleDirectionalInfluence": 1.0,
+          "particleIntensity": 1.0,
+          "particlePointInfluence": 1.0,
+          "skyHorizonCurve": 1.0,
+          "skyHorizonIntensity": 1.0,
+          "skyHorizonTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyMiddleCurve": 1.0,
+          "skyMiddleIntensity": 1.0,
+          "skyMiddleTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyStaticCurve": 1.0,
+          "skyStaticTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyTopCurve": 1.0,
+          "skyTopIntensity": 1.0,
+          "skyTopTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "starsCurve": 1.0,
+          "starsIntensity": 1.0
         },
         "bloomPresets": {
           "selected": 0,
@@ -1083,7 +1401,22 @@
               "CompressionCeiling": 0.8999999761581421
             }
           ]
-        }
+        },
+        "cloudBrightnessMult": 1.0,
+        "cloudGammaOffset": 0.0,
+        "cloudSaturation": 1.0,
+        "contrast": 1.0,
+        "effectBrightness": 1.0,
+        "fireCurve": 1.0,
+        "fireIntensity": 1.0,
+        "fireSaturation": 1.0,
+        "fogIntensity": 1.0,
+        "pointLightCurve": 1.0,
+        "pointLightSaturation": 1.0,
+        "saturation": 1.0,
+        "skyStaticBrightness": 1.0,
+        "skyStaticTransparency": 0.0,
+        "sunGlareIntensity": 1.0
       },
       {
         "advanced": true,
@@ -1173,7 +1506,76 @@
           "sunGlareGammaOffset": 0.0,
           "fogSaturation": 1.0,
           "volumetricIntensity": 1.0,
-          "volumetricSaturation": 1.0
+          "volumetricSaturation": 1.0,
+          "ambientSaturation": 1.0,
+          "auroraCurve": 1.0,
+          "auroraIntensity": 1.0,
+          "cloudOpacity": 1.0,
+          "cloudShadowStrength": 1.0,
+          "cloudTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "directionalCurve": 1.0,
+          "directionalSaturation": 1.0,
+          "directionalTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "eyeBrightness": 1.0,
+          "eyeSpecularBrightness": 1.0,
+          "fogBrightness": 1.0,
+          "fogTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "godrayIntensity": 1.0,
+          "godrayOpacity": 1.0,
+          "godraySaturation": 1.0,
+          "godrayTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "godrayTintAmount": 0.0,
+          "lightSpriteCurve": 1.0,
+          "lightSpriteIntensity": 1.0,
+          "particleAmbientInfluence": 1.0,
+          "particleDirectionalInfluence": 1.0,
+          "particleIntensity": 1.0,
+          "particlePointInfluence": 1.0,
+          "skyHorizonCurve": 1.0,
+          "skyHorizonIntensity": 1.0,
+          "skyHorizonTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyMiddleCurve": 1.0,
+          "skyMiddleIntensity": 1.0,
+          "skyMiddleTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyStaticCurve": 1.0,
+          "skyStaticTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyTopCurve": 1.0,
+          "skyTopIntensity": 1.0,
+          "skyTopTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "starsCurve": 1.0,
+          "starsIntensity": 1.0
         },
         "bloomPresets": {
           "selected": 0,
@@ -1218,7 +1620,22 @@
               "CompressionCeiling": 0.8999999761581421
             }
           ]
-        }
+        },
+        "cloudBrightnessMult": 1.0,
+        "cloudGammaOffset": 0.0,
+        "cloudSaturation": 1.0,
+        "contrast": 1.0,
+        "effectBrightness": 1.0,
+        "fireCurve": 1.0,
+        "fireIntensity": 1.0,
+        "fireSaturation": 1.0,
+        "fogIntensity": 1.0,
+        "pointLightCurve": 1.0,
+        "pointLightSaturation": 1.0,
+        "saturation": 1.0,
+        "skyStaticBrightness": 1.0,
+        "skyStaticTransparency": 0.0,
+        "sunGlareIntensity": 1.0
       },
       {
         "advanced": true,
@@ -1308,7 +1725,76 @@
           "sunGlareGammaOffset": 0.0,
           "fogSaturation": 1.0,
           "volumetricIntensity": 1.0,
-          "volumetricSaturation": 1.0
+          "volumetricSaturation": 1.0,
+          "ambientSaturation": 1.0,
+          "auroraCurve": 1.0,
+          "auroraIntensity": 1.0,
+          "cloudOpacity": 1.0,
+          "cloudShadowStrength": 1.0,
+          "cloudTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "directionalCurve": 1.0,
+          "directionalSaturation": 1.0,
+          "directionalTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "eyeBrightness": 1.0,
+          "eyeSpecularBrightness": 1.0,
+          "fogBrightness": 1.0,
+          "fogTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "godrayIntensity": 1.0,
+          "godrayOpacity": 1.0,
+          "godraySaturation": 1.0,
+          "godrayTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "godrayTintAmount": 0.0,
+          "lightSpriteCurve": 1.0,
+          "lightSpriteIntensity": 1.0,
+          "particleAmbientInfluence": 1.0,
+          "particleDirectionalInfluence": 1.0,
+          "particleIntensity": 1.0,
+          "particlePointInfluence": 1.0,
+          "skyHorizonCurve": 1.0,
+          "skyHorizonIntensity": 1.0,
+          "skyHorizonTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyMiddleCurve": 1.0,
+          "skyMiddleIntensity": 1.0,
+          "skyMiddleTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyStaticCurve": 1.0,
+          "skyStaticTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "skyTopCurve": 1.0,
+          "skyTopIntensity": 1.0,
+          "skyTopTint": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "starsCurve": 1.0,
+          "starsIntensity": 1.0
         },
         "bloomPresets": {
           "selected": 0,
@@ -1353,7 +1839,22 @@
               "CompressionCeiling": 0.8999999761581421
             }
           ]
-        }
+        },
+        "cloudBrightnessMult": 1.0,
+        "cloudGammaOffset": 0.0,
+        "cloudSaturation": 1.0,
+        "contrast": 1.0,
+        "effectBrightness": 1.0,
+        "fireCurve": 1.0,
+        "fireIntensity": 1.0,
+        "fireSaturation": 1.0,
+        "fogIntensity": 1.0,
+        "pointLightCurve": 1.0,
+        "pointLightSaturation": 1.0,
+        "saturation": 1.0,
+        "skyStaticBrightness": 1.0,
+        "skyStaticTransparency": 0.0,
+        "sunGlareIntensity": 1.0
       }
     ],
     "transitionHours": 1.0,
@@ -1377,7 +1878,8 @@
         "ShaftIntensity": 1.0
       }
     },
-    "bloomEnabled": true
+    "bloomEnabled": true,
+    "moonReflectionStrength": 1.0
   },
   "Foliage Lighting": {
     "EnableFoliageAmbientBoost": 0,
@@ -1788,5 +2290,35 @@
     "FireMeltRadiusScale": 4.0,
     "FireMeltStrength": 1.0,
     "SurvivalEnabled": false
+  },
+  "Grass Optimizations": {
+    "CollisionDistance": 4096.0,
+    "CostBiasStartDistance": 6000.0,
+    "CrossCellBatching": true,
+    "DensityReduction": true,
+    "EdgeFadeStart": 0.8500000238418579,
+    "EnableFarLOD": true,
+    "EnableMeshLOD": false,
+    "EnableMidLOD": true,
+    "EnableOcclusionCulling": true,
+    "Enabled": true,
+    "FarLODCoverageBias": 1.0,
+    "FarLODMaxDensity": 0.20000000298023224,
+    "FarLODMinDensity": 0.019999999552965164,
+    "FarLODMinPixelSize": 1.0,
+    "FarLODOptimization": false,
+    "FarLODPixelSize": 4.0,
+    "FrustumCulling": true,
+    "FullDetailPixelSize": 16.0,
+    "InvisibleFadeCull": 0.0,
+    "MeshCostBias": 0.4000000059604645,
+    "MeshLODBandPixels": 3.0,
+    "MidLODPixelSize": 8.0,
+    "MinDensity": 0.029999999329447746,
+    "MinPixelSize": 2.0,
+    "OcclusionBias": 0.0010000000474974513,
+    "ProportionalDensityFade": false,
+    "RenderDistanceOverride": 0.0,
+    "SimpleShadingPixelSize": 0.0
   }
 }

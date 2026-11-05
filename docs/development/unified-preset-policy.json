@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.11.04.1",
+    "packageVersion": "d2026.11.05.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "BC31AAD9B26F28DBA603ECE9DB693A9FE626F1A67C13EC92E1D9BD6701DAA001"
+        "sha256": "1023B7FE022186875C396D87527577817CFB28A5624EE6A0424DCC3E522A7F58"
     },
     "runtimeSettingsContract": {
         "revision": 32,
-        "sourceTreeSha256": "39CC46BA1AE737A3EEB6595C69BD0D8F1EBE474F7DDCC7CDE98849070275C3D5",
+        "sourceTreeSha256": "DE60019E2ADC0509C7E9A8B58895D9F86932C6A8BD7E158A064A240F909574AF",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -757,6 +757,9 @@
     ],
     "validation": {
         "stalePaths": [
+            ["VR", "DepthCullingPerformanceMode"],
+            ["VR", "MinOccludeeBoxExtent"],
+            ["CS Utility"],
             ["Skylighting", "EnableFastProbeSampling"],
             ["Advanced", "Background Compiler Threads"],
             ["Advanced", "Compiler Threads"],
@@ -784,6 +787,12 @@
         "requiredValues": [
             { "path": ["Upscaling", "antiLag2Enabled"], "value": false },
             { "path": ["Light Limit Fix", "SkipRedundantLightAttach"], "value": true },
+            { "path": ["Grass Optimizations", "FarLODOptimization"], "value": false },
+            { "path": ["Grass Optimizations", "FarLODMinPixelSize"], "value": 1.0 },
+            { "path": ["Grass Optimizations", "FarLODMinDensity"], "value": 0.019999999552965164 },
+            { "path": ["Grass Optimizations", "FarLODMaxDensity"], "value": 0.20000000298023224 },
+            { "path": ["Grass Optimizations", "FarLODCoverageBias"], "value": 1.0 },
+            { "path": ["Grass Optimizations", "ProportionalDensityFade"], "value": false },
             { "path": ["Snow Cover", "Enable"], "value": 0 },
             { "path": ["Fur Shells", "Enabled"], "value": false },
             { "path": ["Reverse Z", "EnableReverseZBuffer"], "value": false },
@@ -1083,7 +1092,6 @@
             { "path": ["Sky Sync", "EnableSunLensFlare"], "value": true },
             { "path": ["Foliage Lighting", "EnableFoliageScattering"], "value": 1 },
             { "path": ["VR", "DepthCullingLegacyMode"], "value": false },
-            { "path": ["VR", "DepthCullingPerformanceMode"], "value": false },
             { "path": ["VR", "UnlockMenuPositionAndSize"], "value": false },
             { "path": ["Adaptive Balance", "godrays", "exterior", "ShaftIntensity"], "value": 1.0 },
             { "path": ["Adaptive Balance", "godrays", "interior", "ShaftIntensity"], "value": 1.0 },

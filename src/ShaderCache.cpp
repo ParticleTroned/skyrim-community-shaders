@@ -777,6 +777,7 @@ namespace SIE
 		{
 			std::once_flag initialized;
 			Util::ShaderCachePack::LayoutState layoutState = Util::ShaderCachePack::LayoutState::Absent;
+			std::atomic<Util::ShaderCachePack::InstallationIssue> installationIssue{ Util::ShaderCachePack::InstallationIssue::NotChecked };
 			std::unique_ptr<Util::ShaderCachePack::Store> optimized;
 			std::unique_ptr<Util::ShaderCachePack::Store> developer;
 			std::atomic_bool optimizedAvailable{ false };
@@ -793,6 +794,10 @@ namespace SIE
 		{
 			auto& packs = ManagedPacks();
 			std::call_once(packs.initialized, [&] {
+				auto installationIssue = Util::ShaderCachePack::InstallationIssue::InvalidPack;
+				const SKSE::stl::scope_exit publishIssue([&]() noexcept {
+					packs.installationIssue.store(installationIssue, std::memory_order_release);
+				});
 				constexpr std::array<const wchar_t*, 4> packPaths{
 					L"Data/ShaderCache/Optimized.A.csxpack",
 					L"Data/ShaderCache/Optimized.B.csxpack",
@@ -827,8 +832,10 @@ namespace SIE
 				const auto memberState = inspectionFailed && classifiedState != Util::ShaderCachePack::LayoutState::Absent ?
 				                             Util::ShaderCachePack::LayoutState::PartialOrInvalid :
 				                             classifiedState;
-				if (memberState == Util::ShaderCachePack::LayoutState::Absent)
+				if (memberState == Util::ShaderCachePack::LayoutState::Absent) {
+					installationIssue = Util::ShaderCachePack::InstallationIssue::None;
 					return;
+				}
 				packs.layoutState = Util::ShaderCachePack::LayoutState::PartialOrInvalid;
 				if (memberState == Util::ShaderCachePack::LayoutState::PartialOrInvalid) {
 					logger::error(
@@ -858,11 +865,14 @@ namespace SIE
 					manifestStream >> manifest;
 					const auto expectedRuntime = REL::Module::IsVR() ? "VR" : "SE";
 					std::string manifestError;
+					Util::ShaderCachePack::InstallationIssue manifestIssue;
 					const auto contract = Util::ShaderCachePack::ParseManifestContract(
 						manifest,
 						expectedRuntime,
-						&manifestError);
+						&manifestError,
+						&manifestIssue);
 					if (!contract) {
+						installationIssue = manifestIssue;
 						logger::error("Managed shader pack manifest is invalid; compiling from source without disk persistence: {}", manifestError);
 						return;
 					}
@@ -927,6 +937,7 @@ namespace SIE
 						"Managed shader pack layout initialized (optimized={}, developer={})",
 						optimizedOpen,
 						developerOpen);
+					installationIssue = Util::ShaderCachePack::InstallationIssue::None;
 				} catch (const std::exception& e) {
 					packs.optimizedAvailable.store(false, std::memory_order_release);
 					packs.developerAvailable.store(false, std::memory_order_release);
@@ -5156,6 +5167,11 @@ namespace SIE
 		}
 		a_state.previousCacheMismatches = std::move(mismatches);
 		a_state.flags.previousDiskCacheAvailable = available;
+	}
+
+	Util::ShaderCachePack::InstallationIssue ShaderCache::GetDiskCacheInstallationIssue() const
+	{
+		return ManagedPacks().installationIssue.load(std::memory_order_acquire);
 	}
 
 	void ShaderCache::ValidateDiskCache()

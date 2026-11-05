@@ -12,6 +12,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/ShaderCachePack.h"
 #include "Utils/UI.h"
 
 #include <algorithm>
@@ -290,6 +291,33 @@ void HomePageRenderer::RenderCacheMismatchSection()
 	auto* shaderCache = globals::shaderCache;
 	if (!shaderCache) {
 		Util::Text::WrappedWarning("Shader cache status is not available yet.");
+		return;
+	}
+	using InstallationIssue = Util::ShaderCachePack::InstallationIssue;
+	const auto installationIssue = shaderCache->GetDiskCacheInstallationIssue();
+	if (installationIssue == InstallationIssue::NotChecked) {
+		MenuUI::DetailNote("Shader cache installation has not been checked yet.");
+		return;
+	}
+	if (Util::ShaderCachePack::RequiresInstallationRepair(installationIssue)) {
+		if (installationIssue == InstallationIssue::InvalidPack) {
+			MenuUI::SectionHeading("Shader Cache Unavailable");
+			Util::Text::WrappedWarning("CSX could not validate or open the installed shader cache.");
+		} else {
+			MenuUI::SectionHeading("Wrong Shader Cache Installed");
+			Util::Text::WrappedWarning(installationIssue == InstallationIssue::FlatCacheInVR ?
+										   "This shader cache was built for Skyrim SE/AE, but you are running Skyrim VR." :
+										   "This shader cache was built for Skyrim VR, but you are running Skyrim SE/AE.");
+		}
+		ImGui::TextWrapped("%s", "Shaders compiled in this session cannot be saved. They will need to compile again after restarting until the cache installation is repaired.");
+		ImGui::Spacing();
+		if (installationIssue == InstallationIssue::InvalidPack) {
+			ImGui::TextWrapped("%s", "Check CSX.log for the cause. Resolve any file-access or compatibility issue, or reinstall the matching shader cache from the CSX installer, then restart the game.");
+		} else {
+			ImGui::TextWrapped("%s", installationIssue == InstallationIssue::FlatCacheInVR ?
+										 "Reinstall the Skyrim VR shader cache from the CSX installer, then restart the game." :
+										 "Reinstall the Skyrim SE/AE shader cache from the CSX installer, then restart the game.");
+		}
 		return;
 	}
 	const auto flags = shaderCache->GetRollbackFlags();

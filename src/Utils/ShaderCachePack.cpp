@@ -371,8 +371,11 @@ namespace Util::ShaderCachePack
 	std::optional<ManifestContract> ParseManifestContract(
 		const nlohmann::json& a_manifest,
 		std::string_view a_expectedRuntime,
-		std::string* a_error)
+		std::string* a_error,
+		InstallationIssue* a_issue)
 	{
+		if (a_issue)
+			*a_issue = InstallationIssue::InvalidPack;
 		auto reject = [&](std::string a_reason) -> std::optional<ManifestContract> {
 			SetError(a_error, std::move(a_reason));
 			return std::nullopt;
@@ -389,11 +392,13 @@ namespace Util::ShaderCachePack
 				!formatVersion || *formatVersion != kFormatVersion ||
 				a_manifest.value("fileStateSemantics", std::string{}) != "installation-baseline-v1" ||
 				a_manifest.value("hashAlgorithm", std::string{}) != "sha256" ||
-				a_manifest.value("runtime", std::string{}) != a_expectedRuntime ||
 				seedShaderCacheABI == a_manifest.end() || !seedShaderCacheABI->is_string() ||
 				seedShaderCacheABI->get_ref<const std::string&>().empty()) {
-				return reject("managed shader pack manifest metadata does not match this runtime or format");
+				return reject("managed shader pack manifest metadata does not match the required format");
 			}
+			const auto runtime = a_manifest.value("runtime", std::string{});
+			if ((runtime != "SE" && runtime != "VR") || (a_expectedRuntime != "SE" && a_expectedRuntime != "VR"))
+				return reject("managed shader pack manifest has an unknown or missing runtime");
 
 			const auto packSetValue = a_manifest.find("packSetId");
 			if (packSetValue == a_manifest.end() || !packSetValue->is_string())
@@ -481,6 +486,13 @@ namespace Util::ShaderCachePack
 			if (optimizedFileTotal != *optimizedRecordCount || developerFileTotal != *developerRecordCount)
 				return reject("managed shader pack manifest aggregate record counts disagree with its file entries");
 
+			if (runtime != a_expectedRuntime) {
+				if (a_issue)
+					*a_issue = runtime == "VR" ? InstallationIssue::VRCacheInFlat : InstallationIssue::FlatCacheInVR;
+				return reject(std::format("managed shader pack was built for {} but this install requires {}", runtime, a_expectedRuntime));
+			}
+			if (a_issue)
+				*a_issue = InstallationIssue::None;
 			if (a_error)
 				a_error->clear();
 			return ManifestContract{

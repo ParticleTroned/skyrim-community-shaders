@@ -1010,6 +1010,26 @@ place; it preserves partial or invalid managed layouts for installation repair.
 Normal source, feature, and external-contract changes never rotate or blanket
 delete the managed cache.
 
+The Home page's Shader cache section distinguishes a cache built for the other
+runtime from an installation that could not be validated or opened. Runtime
+mismatches require the matching cache from the CSX installer; other failures
+require resolving the installation or access problem reported in `CSX.log`.
+Restart after repair. The feature-cache rebuild action is not offered because
+it cannot repair installed pack files.
+Rejected packs remain untouched, and compilation remains memory-only until
+repair. A missing managed installation does not produce either warning.
+
+DevBench's `communityshaders.shader_api` snapshot exposes the same boot
+diagnosis in `diskCache.installation` without initiating pack admission:
+`issue` is `not_checked` until admission finishes, then remains `none`,
+`wrong_runtime`, or `invalid_pack` for the process lifetime.
+`cachedRuntime` is `SE` or `VR` for a known runtime mismatch
+and otherwise null; `requiredRuntime` is `SE` (including AE) or `VR`; and
+`repairRequired` identifies installations that cannot be rebuilt in place.
+The installation object is null when the shader cache service is unavailable.
+Rebuild preflight and execution reject these installations with
+`cache_installation_repair_required`; held feature caches still permit rebuilds.
+
 A reset barrier becomes authoritative before superseded-file cleanup. If the
 empty generation reopens successfully but cleanup fails, the Store remains
 available with a degraded-cleanup diagnostic. If the first or final reopen

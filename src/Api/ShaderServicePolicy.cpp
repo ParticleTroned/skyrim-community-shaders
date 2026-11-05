@@ -117,6 +117,13 @@ namespace CSX::Api
 		case ShaderAPI::MutationAction::kAcceptCacheRebuild:
 			decision.disruptive = true;
 			decision.shaderRecompileExpected = true;
+			if (a_state.cacheInstallationRepairRequired) {
+				decision.status = ShaderAPI::Status::kBlocked;
+				decision.allowed = false;
+				decision.reasonCode = "cache_installation_repair_required";
+				decision.message = "repair the installed shader cache and restart; rebuilding cannot repair installed pack files";
+				return decision;
+			}
 			if (!a_state.diskCacheHeld) {
 				decision.status = ShaderAPI::Status::kBlocked;
 				decision.allowed = false;

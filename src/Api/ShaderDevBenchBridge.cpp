@@ -10,6 +10,7 @@
 #	include "Globals.h"
 #	include "ShaderCache.h"
 #	include "Utils/FileSystem.h"
+#	include "Utils/ShaderCachePack.h"
 #	include "Utils/StringUtils.h"
 
 #	include <DevBenchAPI.h>
@@ -164,6 +165,25 @@ namespace
 		Snapshot001 snapshot;
 		const auto status = a_api.GetSnapshot(a_api.context, &snapshot);
 		auto snapshotJson = SnapshotJson(snapshot);
+		snapshotJson["diskCache"]["installation"] = nullptr;
+		if (globals::shaderCache) {
+			using Issue = Util::ShaderCachePack::InstallationIssue;
+			const auto issue = globals::shaderCache->GetDiskCacheInstallationIssue();
+			const bool wrongRuntime = issue == Issue::FlatCacheInVR || issue == Issue::VRCacheInFlat;
+			const auto* issueName = "none";
+			if (wrongRuntime)
+				issueName = "wrong_runtime";
+			else if (issue == Issue::InvalidPack)
+				issueName = "invalid_pack";
+			else if (issue == Issue::NotChecked)
+				issueName = "not_checked";
+			snapshotJson["diskCache"]["installation"] = {
+				{ "issue", issueName },
+				{ "cachedRuntime", wrongRuntime ? json(issue == Issue::FlatCacheInVR ? "SE" : "VR") : json(nullptr) },
+				{ "requiredRuntime", globals::game::isVR ? "VR" : "SE" },
+				{ "repairRequired", Util::ShaderCachePack::RequiresInstallationRepair(issue) },
+			};
+		}
 		snapshotJson["compilation"]["contentDedupeTasks"] = globals::shaderCache ? globals::shaderCache->GetContentDedupeTasks() : 0;
 		snapshotJson["compilation"]["activeReuseTasks"] = globals::shaderCache ? globals::shaderCache->GetActiveReuseTasks() : 0;
 		snapshotJson["compilation"]["previousReuseTasks"] = globals::shaderCache ? globals::shaderCache->GetPreviousReuseTasks() : 0;
@@ -442,7 +462,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX shader, feature, compilation, and cache lifecycle API. Disk-cache rollback flags in each snapshot come from one publication; compilation counters remain live. snapshot.compilation.sourceCompiles counts actual compiler invocations; contentDedupeTasks counts tasks reusing identical preprocessed bytecode across different shader keys. activeReuseTasks counts matching content in installed packs or the active loose cache; previousReuseTasks counts matching content in the loose rollback cache. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait and wakes the dispatcher to apply the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
+			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX shader, feature, compilation, and cache lifecycle API. Disk-cache rollback flags in each snapshot come from one publication; compilation counters remain live. snapshot.diskCache.installation reports the boot admission issue (not_checked, none, wrong_runtime, invalid_pack) without triggering cache admission, cachedRuntime when mismatched, requiredRuntime (SE includes AE), and repairRequired. Rejected installations require resolving the installation or access problem and restarting; accept_cache_rebuild is blocked with cache_installation_repair_required. snapshot.compilation.sourceCompiles counts actual compiler invocations; contentDedupeTasks counts tasks reusing identical preprocessed bytecode across different shader keys. activeReuseTasks counts matching content in installed packs or the active loose cache; previousReuseTasks counts matching content in the loose rollback cache. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait and wakes the dispatcher to apply the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
 			"inputSchema":{
 				"type":"object",
 				"required":["contractMajor","clientId","commandId","action"],
@@ -469,7 +489,38 @@ namespace CSX::Api::ShaderDevBenchBridge
 					}
 				}
 			},
-			"outputSchema":{"type":"object","description":"Invalid UTF-8 in output strings is replaced with U+FFFD; valid UTF-8 output is unchanged. Disk-cache rollback flags in each snapshot are coherent; other counters may advance independently."}
+			"outputSchema":{
+				"type":"object",
+				"description":"Invalid UTF-8 in output strings is replaced with U+FFFD; valid UTF-8 output is unchanged. Disk-cache rollback flags in each snapshot are coherent; installation remains not_checked until boot admission finishes, then remains fixed; other counters may advance independently.",
+				"properties":{
+					"result":{
+						"type":"object",
+						"properties":{
+							"snapshot":{
+								"type":"object",
+								"properties":{
+									"diskCache":{
+										"type":"object",
+										"properties":{
+											"installation":{
+												"type":["object","null"],
+												"description":"Null when the shader cache is unavailable. not_checked means admission has not completed. none means no managed installation rejection, including when no managed cache is installed.",
+												"required":["issue","cachedRuntime","requiredRuntime","repairRequired"],
+												"properties":{
+													"issue":{"type":"string","enum":["not_checked","none","wrong_runtime","invalid_pack"]},
+													"cachedRuntime":{"enum":["SE","VR",null],"description":"Known opposite runtime; otherwise null."},
+													"requiredRuntime":{"type":"string","enum":["SE","VR"],"description":"SE covers Skyrim SE and AE."},
+													"repairRequired":{"type":"boolean"}
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
 		})";
 		devBench->RegisterTool("communityshaders.shader_api", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);

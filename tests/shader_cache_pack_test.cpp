@@ -334,7 +334,9 @@ int main(int argc, char** argv)
 	{
 		std::string manifestError;
 		const auto valid = MakePackManifest();
-		const auto contract = ParseManifestContract(valid, "VR", &manifestError);
+		InstallationIssue installationIssue = InstallationIssue::InvalidPack;
+		const auto contract = ParseManifestContract(valid, "VR", &manifestError, &installationIssue);
+		assert(installationIssue == InstallationIssue::None);
 		assert(contract);
 		assert(contract->files[0].lane == Lane::Optimized);
 		assert(contract->files[0].generation == 1);
@@ -344,9 +346,35 @@ int main(int argc, char** argv)
 		assert(ParseManifestContract(previousSeedAbi, "VR", &manifestError));
 		auto expectRejected = [&](nlohmann::json manifest) {
 			manifestError.clear();
-			assert(!ParseManifestContract(manifest, "VR", &manifestError));
+			installationIssue = InstallationIssue::FlatCacheInVR;
+			assert(!ParseManifestContract(manifest, "VR", &manifestError, &installationIssue));
 			assert(!manifestError.empty());
+			assert(installationIssue == InstallationIssue::InvalidPack);
 		};
+
+		for (const auto* runtime : { "SE", "VR" }) {
+			auto manifest = valid;
+			manifest["runtime"] = runtime;
+			const bool cacheIsVR = std::string_view(runtime) == "VR";
+			const auto* otherRuntime = cacheIsVR ? "SE" : "VR";
+			assert(!ParseManifestContract(manifest, otherRuntime, &manifestError, &installationIssue));
+			assert(installationIssue == (cacheIsVR ? InstallationIssue::VRCacheInFlat : InstallationIssue::FlatCacheInVR));
+			assert(manifestError.find("was built for") != std::string::npos);
+			assert(ParseManifestContract(manifest, runtime, &manifestError, &installationIssue));
+			assert(installationIssue == InstallationIssue::None && manifestError.empty());
+		}
+		for (const auto& runtime : { nlohmann::json(nullptr), nlohmann::json(true), nlohmann::json(7), nlohmann::json(""), nlohmann::json("AE") }) {
+			auto invalidRuntime = valid;
+			invalidRuntime["runtime"] = runtime;
+			expectRejected(std::move(invalidRuntime));
+		}
+		auto missingRuntime = valid;
+		missingRuntime.erase("runtime");
+		expectRejected(std::move(missingRuntime));
+		auto damagedOppositeRuntime = valid;
+		damagedOppositeRuntime["runtime"] = "SE";
+		damagedOppositeRuntime["files"].erase("Developer.B.csxpack");
+		expectRejected(std::move(damagedOppositeRuntime));
 
 		auto zeroIdentity = valid;
 		zeroIdentity["packSetId"] = std::string(32, '0');

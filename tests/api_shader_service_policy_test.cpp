@@ -139,6 +139,20 @@ int RunTest()
 		held,
 		Request(MutationAction::kAcceptCacheRebuild, CSX::ShaderAPI::kMutationAllowDisruptive)).reasonCode == "cache_not_held",
 		"cache rebuild accepted a cache that was not held");
+	held.diskCacheHeld = true;
+	Check(EvaluateShaderMutation(
+			  held,
+			  Request(MutationAction::kAcceptCacheRebuild, CSX::ShaderAPI::kMutationAllowDisruptive))
+			  .allowed,
+		"a held feature cache must still permit rebuilding");
+	held.cacheInstallationRepairRequired = true;
+	const auto repair = EvaluateShaderMutation(
+		held,
+		Request(MutationAction::kAcceptCacheRebuild, CSX::ShaderAPI::kMutationAllowDisruptive));
+	Check(!repair.allowed && repair.status == Status::kBlocked && repair.reasonCode == "cache_installation_repair_required",
+		"an invalid managed installation must not produce a successful rebuild preflight or execution");
+	Check(EvaluateShaderMutation(held, Request(MutationAction::kSetDiskCache)).allowed,
+		"installation repair must not block unrelated cache settings");
 
 	return 0;
 }

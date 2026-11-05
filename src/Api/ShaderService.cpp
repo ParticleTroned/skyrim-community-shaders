@@ -9,6 +9,7 @@
 #include "Globals.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Utils/ShaderCachePack.h"
 
 #include <algorithm>
 #include <chrono>
@@ -368,6 +369,7 @@ namespace
 				.compiling = cache && cache->IsCompiling(),
 				.previousCacheAvailable = rollback.previousDiskCacheAvailable,
 				.diskCacheHeld = rollback.diskCacheHeld,
+				.cacheInstallationRepairRequired = cache && Util::ShaderCachePack::RequiresInstallationRepair(cache->GetDiskCacheInstallationIssue()),
 				.featureFound = a_mutation.featureName.empty() ? false : FindFeature(a_mutation.featureName) != nullptr,
 				.persistentMutationBlocked = globals::state && globals::state->IsPersistentMutationBlocked(),
 				.stateRevision = revision,

@@ -39,6 +39,22 @@ namespace Util::ShaderCachePack
 		Complete
 	};
 
+	/** @brief Boot admission outcome; NotChecked also covers admission in progress. */
+	enum class InstallationIssue
+	{
+		NotChecked,
+		None,
+		InvalidPack,
+		FlatCacheInVR,
+		VRCacheInFlat
+	};
+
+	/** @brief Whether the installed files must be repaired before disk caching can resume. */
+	constexpr bool RequiresInstallationRepair(InstallationIssue a_issue)
+	{
+		return a_issue != InstallationIssue::None && a_issue != InstallationIssue::NotChecked;
+	}
+
 	inline constexpr std::size_t kManagedLayoutMemberCount = 6;
 	using LayoutMembers = std::array<bool, kManagedLayoutMemberCount>;
 
@@ -107,10 +123,12 @@ namespace Util::ShaderCachePack
 	};
 
 	bool IsValidPackSetId(const PackSetId& a_packSetId);
+	/** @brief Validate installation metadata and distinguish a known opposite runtime from malformed data. */
 	std::optional<ManifestContract> ParseManifestContract(
 		const nlohmann::json& a_manifest,
 		std::string_view a_expectedRuntime,
-		std::string* a_error = nullptr);
+		std::string* a_error = nullptr,
+		InstallationIssue* a_issue = nullptr);
 	bool ValidateManifestFileStates(
 		const ManifestContract& a_contract,
 		const std::array<PackFileState, 4>& a_files,

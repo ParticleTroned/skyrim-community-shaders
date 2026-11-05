@@ -34,6 +34,11 @@ namespace Util
 	struct StandaloneShaderRequest;
 }
 
+namespace Util::ShaderCachePack
+{
+	enum class InstallationIssue;
+}
+
 namespace ShaderConstants
 {
 	struct LightingPS
@@ -537,6 +542,8 @@ namespace SIE
 		RollbackFlags GetRollbackFlags() const { return rollbackState.GetFlags(); }
 		/** @brief Copy rollback flags and owned mismatch details from one publication. */
 		RollbackState GetRollbackState() const { return rollbackState.GetSnapshot(); }
+		/** @brief Read the boot admission issue without initiating I/O; NotChecked until admission completes. */
+		Util::ShaderCachePack::InstallationIssue GetDiskCacheInstallationIssue() const;
 		bool HasFeatureSetChanges() const { return GetRollbackFlags().featureSetChanged; }
 		bool HasFeatureSetRevertPending() const { return GetRollbackFlags().featureSetRevertPending; }
 		bool HasFeatureSetCacheBackup() const { return GetRollbackFlags().featureSetCacheBackedUp; }

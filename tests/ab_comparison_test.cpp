@@ -77,16 +77,16 @@ namespace
 		intervals[0].closed = true;
 		intervals[1].first = 30;
 		intervals[1].variant = ABVariant::B;
-		Check(Add(intervals, 18, { 12, 8, 3 }), "late sample rejected");
-		Check(Add(intervals, 18, { 12, 8, 3 }), "duplicate should be ignored");
-		Check(Add(intervals, 25, { 900, 900, 900 }), "settling sample should be ignored");
-		Check(Add(intervals, 31, { 12, 0, std::nullopt }), "zero GPU was rejected");
-		Check(Add(intervals, 32, { 0, std::numeric_limits<float>::quiet_NaN(), -1 }), "invalid metrics must be omitted");
+		Check(Add(intervals, 18, { 12.0f, 8.0f, 3.0f }), "late sample rejected");
+		Check(Add(intervals, 18, { 12.0f, 8.0f, 3.0f }), "duplicate should be ignored");
+		Check(Add(intervals, 25, { 900.0f, 900.0f, 900.0f }), "settling sample should be ignored");
+		Check(Add(intervals, 31, { 12.0f, 0.0f, std::nullopt }), "zero GPU was rejected");
+		Check(Add(intervals, 32, { 0.0f, std::numeric_limits<float>::quiet_NaN(), -1.0f }), "invalid metrics must be omitted");
 		Check(intervals[0].samples[0].size() == 1 && intervals[1].samples[0].size() == 1 &&
 				  intervals[1].samples[1].size() == 1 && intervals[1].samples[1][0] == 0 && intervals[1].samples[2].empty(),
 			"late, duplicate, settling or invalid samples contaminated a range");
 		intervals[1].samples[1].resize(MaximumSamples, 1);
-		Check(!Add(intervals, 33, { std::nullopt, 1, std::nullopt }), "storage grew beyond the bound");
+		Check(!Add(intervals, 33, { std::nullopt, 1.0f, std::nullopt }), "storage grew beyond the bound");
 		Check(!Compare(Bracket(10, 8, 10), 3).valid, "invalid metric index accepted");
 		auto overlap = Bracket(10, 8, 10);
 		overlap[1].first = 20;

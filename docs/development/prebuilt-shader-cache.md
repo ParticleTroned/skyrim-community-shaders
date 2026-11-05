@@ -6,6 +6,9 @@ Use `tools/build-shader-cache.py` for cache generation and
 `tools/build-fomod-package.py` for release AIO assembly. Do not assemble cache
 blobs, metadata, or installer mappings by hand.
 
+For compilation that must resume after laptop sleep, application closure
+or reboot, use the [resumable release worker](resumable-release-worker.md).
+
 The runtime log is `CSX.log` in the game's standard SKSE log directory.
 `Plugin::LOG_NAME`, generated from `PLUGIN_LOG_NAME`, controls its basename;
 the DLL, SKSE identity and settings directory remain `CommunityShaders`.

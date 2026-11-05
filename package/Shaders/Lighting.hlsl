@@ -2203,9 +2203,9 @@ void ApplyWetnessDirectLightingOutput(
 #	else
 #		define FUR_EARLY_DEPTH
 #	endif
-FUR_EARLY_DEPTH
 #	include "Common/LightingAlpha.hlsli"
 
+FUR_EARLY_DEPTH
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout;

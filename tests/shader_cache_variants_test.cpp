@@ -353,7 +353,7 @@ namespace
 		queue.Add(first);
 		queue.Add(second);
 		Require(queue.availableTasks.size() == 2 && queue.totalTasks == 2);
-		Require(queue.totalPriorityWeight == 4 && cache.bytecodeQueries == 0);
+		Require(queue.totalPriorityWeight == first.GetPriority() + second.GetPriority() + 2 && cache.bytecodeQueries == 0);
 		for (const auto& task : queue.availableTasks) {
 			Require(task.GetGeneration() == 9 && task.GetEnqueuedQpc() > 0);
 		}

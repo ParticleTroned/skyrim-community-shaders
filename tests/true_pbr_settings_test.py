@@ -76,7 +76,11 @@ EXTRA_FLAGS;
     float pbrMetalReflectionScale = 0.5f;
     float pbrMetalHighlightScale = 1.5f;
 };
+#define SNOW_COVER
+#define PSHADER
 SHADER_EXTRA_FLAGS
+#undef PSHADER
+#undef SNOW_COVER
 FLAG_CHECKS
 static_assert([] {
     uint32_t occupied = 0;

@@ -94,10 +94,9 @@ int main() {
         assert(ImGui::activeLabel == (feature.IsActive() ? "Active: Reverse Z" : "Active: Standard Z"));
     };
     draw(false);
-    assert(Util::tooltip.find("resolution") != std::string::npos);
-    assert(Util::tooltip.find("scene conditions") != std::string::npos);
-    assert(Util::tooltip.find("Reverse Z") != std::string::npos);
-    assert(Util::tooltip.find("up to 1 ms") != std::string::npos);
+    assert(Util::tooltip.find("graphics memory") != std::string::npos);
+    assert(Util::tooltip.find("performance") != std::string::npos);
+    assert(Util::tooltip.find("restart") != std::string::npos);
     ImGui::edit = true;
     draw(true);
     assert(!feature.activeThisBoot && !feature.requestedThisBoot);

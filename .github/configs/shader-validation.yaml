@@ -1,7 +1,7 @@
-captured_shader_variants: 3425
+captured_shader_variants: 3449
 # Inventory includes normalized Lighting keys and explicit feature variants.
 # The captured count retains source provenance.
-normalized_shader_variants: 3132
+normalized_shader_variants: 3156
 common_defines:
     - D3DCOMPILE_DEBUG
     - D3DCOMPILE_SKIP_OPTIMIZATION
@@ -13583,6 +13583,84 @@ shaders:
                         - TRUE_PBR
                         - FUR_SHELLS
                         - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:40000001
+                    defines:
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:40000009
+                    defines:
+                        - FUR_SHELLS
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:40000011
+                    defines:
+                        - DEFERRED
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:40100001
+                    defines:
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:40100009
+                    defines:
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:40100011
+                    defines:
+                        - DEFERRED
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:40100019
+                    defines:
+                        - DEFERRED
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:41000001
+                    defines:
+                        - ENVMAP
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:C0000001
+                    defines:
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:C0000009
+                    defines:
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:C0000011
+                    defines:
+                        - DEFERRED
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:C0100001
+                    defines:
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:C0100009
+                    defines:
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:C0100011
+                    defines:
+                        - DEFERRED
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:C0100019
+                    defines:
+                        - DEFERRED
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:C1000001
+                    defines:
+                        - ENVMAP
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
           VSHADER:
               common_defines:
                   - ADAPTIVE_BALANCE
@@ -13772,6 +13850,22 @@ shaders:
                         - SKINNED
                         - VC
                         - FUR_SHELLS
+                  - entry: Lighting:Vertex:40000000
+                    defines:
+                        - FUR_SHELLS
+                  - entry: Lighting:Vertex:40000001
+                    defines:
+                        - FUR_SHELLS
+                        - VC
+                  - entry: Lighting:Vertex:40000003
+                    defines:
+                        - FUR_SHELLS
+                        - SKINNED
+                        - VC
+                  - entry: Lighting:Vertex:41000000
+                    defines:
+                        - ENVMAP
+                        - FUR_SHELLS
     - file: Particle.hlsl
       configs:
           PSHADER:
@@ -13880,6 +13974,22 @@ shaders:
                     defines: *id001
                   - entry: Grass:Vertex:8
                     defines: *id013
+                  - entry: Grass:Vertex:807
+                    defines:
+                        - GRASS_COLLISION_BASIC
+                  - entry: Grass:Vertex:808
+                    defines:
+                        - GRASS_COLLISION_BASIC
+                        - RENDER_DEPTH
+                  - entry: Grass:Vertex:10807
+                    defines:
+                        - GRASS_COLLISION_BASIC
+                        - DO_ALPHA_TEST
+                  - entry: Grass:Vertex:10808
+                    defines:
+                        - GRASS_COLLISION_BASIC
+                        - DO_ALPHA_TEST
+                        - RENDER_DEPTH
     - file: Sky.hlsl
       configs:
           PSHADER:

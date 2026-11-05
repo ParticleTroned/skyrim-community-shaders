@@ -1,3 +1,4 @@
+#include "../package/Shaders/Common/WetternessDrying.hlsli"
 #include "Features/WetternessLightingPolicy.h"
 
 #include <cstddef>
@@ -12,6 +13,15 @@ struct float2
 {
 	float x, y;
 };
+struct float4
+{
+	float x, y, z, w;
+};
+namespace WetternessSnowMelt
+{
+	bool active = false;
+	bool HasHistory() { return active; }
+}
 namespace REX::W32
 {
 	struct XMFLOAT4X4
@@ -193,6 +203,7 @@ struct Wetterness
 	float UpdateRuntimeClock(bool) const;
 	PerFrame MakeDryPerFrameData() const;
 	bool IsRuntimeProcessingActive() const;
+	float4 GetDryingHours(float) const;
 	PerFrame GetCommonBufferData() const;
 	void Prepass();
 };
@@ -244,6 +255,7 @@ namespace
 			RE::frameDelta = 1.0f / 60.0f;
 			Util::interior = false;
 			weatherUpdates = 0;
+			WetternessSnowMelt::active = false;
 			wetness.ResetRuntimeState();
 			clear.data.flags.value = RE::TESWeather::WeatherDataFlag::kPleasant;
 			rainy.data.flags.value = RE::TESWeather::WeatherDataFlag::kRainy;
@@ -412,6 +424,21 @@ namespace
 		data = f.Step();
 		Require(data.settings.MaxShoreWetness == 0 && !f.wetness.IsRuntimeProcessingActive(), "Unloaded feature retained effects");
 	}
+
+	void CheckSnowMeltLifecycle()
+	{
+		Fixture f;
+		f.Step();
+		WetternessSnowMelt::active = true;
+		auto data = f.Step(3600);
+		Require(data.settings.EnableWetterness && f.wetness.IsRuntimeProcessingActive(), "Local snowmelt did not keep Wetterness shading available");
+		Require(data.Raining == 0 && data.Wetness == 0 && data.PuddleWetness == 0 && data.GrassWetnessPhase == 0 &&
+					!data.settings.EnableRaindropFx,
+			"Local snowmelt created global rain or grass wetness");
+		WetternessSnowMelt::active = false;
+		data = f.Step(24 * 3600);
+		Require(!data.settings.EnableWetterness && !f.wetness.IsRuntimeProcessingActive(), "Expired snowmelt did not restore dry inactivity");
+	}
 }
 
 int main()
@@ -421,6 +448,7 @@ int main()
 		CheckGrassAndClock();
 		CheckTransitionsAndOverrides();
 		CheckRainMetadata();
+		CheckSnowMeltLifecycle();
 		std::cout << "Wetterness runtime lifecycle passed\n";
 		return 0;
 	} catch (const std::exception& error) {

@@ -70,18 +70,67 @@ namespace SnowCover
 		return 1 - smoothstep(fadeStart, fadeEnd, viewDist) * amount;
 	}
 
-	float GetFireMelt(float3 p)
+	float GetFireMelt(float3 p, uint count, float strength, float radiusScale, float4 spheres[8])
 	{
 		float melt = 0;
-		uint fireCount = min(SharedData::snowCoverSettings.FireMeltCount, MaxFireMeltSources);
+		uint fireCount = min(count, MaxFireMeltSources);
 		[loop] for (uint i = 0; i < fireCount; i++)
 		{
-			float4 fire = SharedData::snowCoverSettings.FireMeltSpheres[i];
-			float radius = fire.w * SharedData::snowCoverSettings.FireMeltRadiusScale;
+			float4 fire = spheres[i];
+			float radius = max(0.001, fire.w * radiusScale);
 			float3 delta = p - fire.xyz;
 			melt = max(melt, 1 - smoothstep(radius * radius * 0.25, radius * radius, dot(delta, delta)));
 		}
-		return melt * SharedData::snowCoverSettings.FireMeltStrength;
+		return melt * strength;
+	}
+
+	float GetFireMelt(float3 p)
+	{
+		return GetFireMelt(p, SharedData::snowCoverSettings.FireMeltCount,
+			SharedData::snowCoverSettings.FireMeltStrength, SharedData::snowCoverSettings.FireMeltRadiusScale,
+			SharedData::snowCoverSettings.FireMeltSpheres);
+	}
+
+	struct CoverageInputs
+	{
+		float3 position;
+		float environment;
+		float weatherRange;
+		float weatherUpness;
+		float waterFade;
+		float scale;
+		uint foliage;
+	};
+
+	float GetCoverage(CoverageInputs footprint, float3 state, float fire)
+	{
+		float environment = footprint.environment + state.z / SharedData::snowCoverSettings.BlendSmoothness;
+		float weather = footprint.weatherRange * state.x * max(WeatherDensityScale, state.y) / WeatherDensityScale;
+		float coverage;
+		if (footprint.foliage)
+			coverage = saturate(SharedData::snowCoverSettings.MainTint.a * saturate(environment) + weather);
+		else {
+			weather = clamp(weather * state.x * state.x * footprint.weatherUpness, -1, 1);
+			coverage = saturate(max(environment, weather)) - footprint.waterFade;
+		}
+		return saturate(footprint.scale * coverage * (1 - fire));
+	}
+
+	CoverageInputs GetSurfaceFootprint(float3 normal, float disp, float3 p, float skylight,
+		float waterDist, float viewDist, float lift, float environment)
+	{
+		CoverageInputs footprint;
+		footprint.position = p;
+		footprint.environment = environment + (lift - SharedData::snowCoverSettings.SeasonalAltitude) / SharedData::snowCoverSettings.BlendSmoothness + disp * DisplacementInfluence;
+		footprint.weatherRange = GetWeatherRange(p, viewDist);
+		footprint.weatherUpness = max(SharedData::snowCoverSettings.minAngle, normal.z);
+		footprint.waterFade = smoothstep(-WaterFadeDepth, WaterFadeHeight, -waterDist - disp);
+		footprint.scale = skylight * smoothstep(SharedData::snowCoverSettings.minAngle, SharedData::snowCoverSettings.maxAngle, normal.z);
+#	if !defined(LANDSCAPE) && !defined(LOD) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
+		footprint.scale *= GetObjectFade(viewDist);
+#	endif
+		footprint.foliage = 0;
+		return footprint;
 	}
 
 	float GetHeightMult(float3 p)
@@ -125,6 +174,19 @@ namespace SnowCover
 		float weatherMult = GetWeatherRange(p, viewDist) * SharedData::snowCoverSettings.TimeSnowing * max(WeatherDensityScale, SharedData::snowCoverSettings.SnowingDensity) / WeatherDensityScale;
 		float mult = SharedData::snowCoverSettings.MainTint.a * saturate(env_mult);
 		return distMult * saturate(mult + weatherMult) * smoothstep(SharedData::snowCoverSettings.minAngle, SharedData::snowCoverSettings.maxAngle, worldNormal.z);
+	}
+
+	CoverageInputs GetFoliageFootprint(float3 normal, float3 p, float viewDist, float environment, float scale)
+	{
+		CoverageInputs footprint;
+		footprint.position = p;
+		footprint.environment = environment - SharedData::snowCoverSettings.SeasonalAltitude / SharedData::snowCoverSettings.BlendSmoothness;
+		footprint.weatherRange = GetWeatherRange(p, viewDist);
+		footprint.weatherUpness = 1;
+		footprint.waterFade = 0;
+		footprint.scale = scale * smoothstep(SharedData::snowCoverSettings.minAngle, SharedData::snowCoverSettings.maxAngle, normal.z);
+		footprint.foliage = 1;
+		return footprint;
 	}
 
 	void ApplySnowFoliageBase(inout float3 color, float3 worldNormal, float3 p, float env_mult, float mult, bool pbrMaterial, bool applyDiffuseControls = true)
@@ -177,14 +239,26 @@ namespace SnowCover
 		}
 	}
 
-	void ApplyGrassSnow(inout float3 color, float3 normal, float3 relativeWorldPos, float2 uv, float3 viewPosition, float skyVisibility, bool complex, uint eyeIndex, Texture2D<float4> diffuseTexture, bool pbrMaterial = false, bool applyDiffuseControls = true)
+	struct GrassSnowState
+	{
+		CoverageInputs footprint;
+		float3 normal;
+		float environment;
+		float coverage;
+	};
+
+	GrassSnowState GetGrassSnowState(float3 normal, float3 relativeWorldPos, float2 uv, float3 viewPosition, float skyVisibility, bool complex, uint eyeIndex, Texture2D<float4> diffuseTexture, bool pbrMaterial = false)
 	{
 		float3 snowPosition = relativeWorldPos + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
 		float3 snowNormal = float3(uv, normal.z * (1 - FoliageNormalBias) + FoliageNormalBias);
 		float snowEnvironment;
 		float snowCoverage = GetFoliageSnowBase(snowNormal, snowPosition, length(viewPosition), 1.0, snowEnvironment);
 		float snowOcclusion = smoothstep(0, SkyVisibilityThreshold, skyVisibility) * GrassBaseVisibility;
-		[branch] if (snowCoverage > 0 && SharedData::snowCoverSettings.EnableExpensiveFoliage)
+		bool needsSnowFootprint = snowCoverage > 0;
+#		if defined(WETTERNESS)
+		needsSnowFootprint = needsSnowFootprint || SharedData::snowMeltSettings.enabled != 0;
+#		endif
+		[branch] if (needsSnowFootprint && SharedData::snowCoverSettings.EnableExpensiveFoliage)
 		{
 			float rx;
 			float ry;
@@ -196,23 +270,28 @@ namespace SnowCover
 			}
 		}
 		snowOcclusion *= saturate(relativeWorldPos.z - SharedData::GetWaterData(relativeWorldPos, eyeIndex).w);
-		ApplySnowFoliageBase(color, snowNormal, snowPosition, snowEnvironment, snowCoverage * snowOcclusion, pbrMaterial, applyDiffuseControls);
+		GrassSnowState state;
+		state.footprint = GetFoliageFootprint(snowNormal, snowPosition, length(viewPosition), snowEnvironment, snowOcclusion);
+		state.normal = snowNormal;
+		state.environment = snowEnvironment;
+		state.coverage = snowCoverage * snowOcclusion;
+		return state;
+	}
+
+	void ApplyGrassSnow(inout float3 color, GrassSnowState state, bool pbrMaterial = false, bool applyDiffuseControls = true)
+	{
+		ApplySnowFoliageBase(color, state.normal, state.footprint.position, state.environment, state.coverage, pbrMaterial, applyDiffuseControls);
 	}
 #	endif
 
 #	if !defined(BASIC_SNOW_COVER)
 	float ApplySnowBase(float3 worldNormal, inout float2 uv, out bool alt, float disp, float3 p, float skylight, float waterDist, float viewDist, float lift, float environment)
 	{
-		waterDist = smoothstep(-WaterFadeDepth, WaterFadeHeight, -waterDist - disp);
+		CoverageInputs footprint = GetSurfaceFootprint(worldNormal, disp, p, skylight, waterDist, viewDist, lift, environment);
 		float weatherMult = GetWeatherRange(p, viewDist) * (SharedData::snowCoverSettings.TimeSnowing * SharedData::snowCoverSettings.TimeSnowing * SharedData::snowCoverSettings.TimeSnowing) * max(WeatherDensityScale, SharedData::snowCoverSettings.SnowingDensity) / WeatherDensityScale;
 		weatherMult = clamp((weatherMult)*max(SharedData::snowCoverSettings.minAngle, worldNormal.z), -1, 1);
-		float env_mult = saturate(max((environment + lift / SharedData::snowCoverSettings.BlendSmoothness + disp * DisplacementInfluence), weatherMult)) - waterDist;
-#		if !defined(LANDSCAPE) && !defined(LOD) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
-		float distMult = GetObjectFade(viewDist);
-#		else
-		float distMult = 1;
-#		endif
-		float mult = distMult * skylight * env_mult * smoothstep(SharedData::snowCoverSettings.minAngle, SharedData::snowCoverSettings.maxAngle, worldNormal.z);
+		float3 state = float3(SharedData::snowCoverSettings.TimeSnowing, SharedData::snowCoverSettings.SnowingDensity, SharedData::snowCoverSettings.SeasonalAltitude);
+		float mult = GetCoverage(footprint, state, 0);
 		[branch] if (mult > 0)
 			mult *= 1 - GetFireMelt(p);
 		if (mult <= 0) {

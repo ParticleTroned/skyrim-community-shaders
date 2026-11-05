@@ -80,6 +80,7 @@ namespace Permutation
 		static const uint SnowRooftop = (1u << 26);
 		static const uint SnowLODTree = (1u << 27);
 		static const uint SnowInactive = (1u << 28);
+		static const uint NoSnowMelt = (1u << 29);
 #endif
 		static const uint CharacterFace = (1 << CharacterCategoryShift);
 		static const uint CharacterSkin = (2 << CharacterCategoryShift);

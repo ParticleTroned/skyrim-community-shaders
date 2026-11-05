@@ -1789,6 +1789,35 @@ if(BUILD_CONTROLLER_TESTS)
     endfunction()
 
     add_controller_test(shader_descriptor_test ShaderDescriptor tests/shader_descriptor_test.cpp)
+    add_controller_test(texture_alpha_test TextureAlpha tests/texture_alpha_test.cpp)
+    target_link_libraries(
+        texture_alpha_test
+        PRIVATE Microsoft::DirectXTex ole32 windowscodecs
+    )
+    set(_empty_overlay_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/empty-overlay-test"
+    )
+    add_custom_command(
+        OUTPUT "${_empty_overlay_test_dir}/empty_overlay_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_empty_overlay_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_empty_overlay.cmake"
+        DEPENDS
+            src/EngineFixes/EmptyOverlayCullFix.cpp
+            tests/extract_empty_overlay.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(empty_overlay_test EmptyOverlay tests/empty_overlay_test.cpp)
+    target_sources(
+        empty_overlay_test
+        PRIVATE "${_empty_overlay_test_dir}/empty_overlay_under_test.h"
+    )
+    target_include_directories(
+        empty_overlay_test
+        PRIVATE "${_empty_overlay_test_dir}"
+    )
 
     set(_tooltip_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/tooltip-test")
     add_custom_command(

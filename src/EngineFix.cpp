@@ -3,6 +3,7 @@
 
 #include "EngineFixes/CullPoolExhaustionFix.h"
 #include "EngineFixes/EffectShaderNoDecalsFix.h"
+#include "EngineFixes/EmptyOverlayCullFix.h"
 #include "EngineFixes/LODBlendRingFix.h"
 #include "EngineFixes/LightListSearchFix.h"
 #include "EngineFixes/ShadowmapCascadeCullingFix.h"
@@ -38,7 +39,8 @@ const std::vector<EngineFix*>& EngineFix::GetOnPostPostLoadFixesList()
 
 const std::vector<EngineFix*>& EngineFix::GetOnDataLoadedFixesList()
 {
-	static std::vector<EngineFix*> fixes = {};
+	static EmptyOverlayCullFix emptyOverlayCullFix;
+	static std::vector<EngineFix*> fixes = { &emptyOverlayCullFix };
 
 	return fixes;
 }

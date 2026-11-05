@@ -71,21 +71,149 @@ void Fixture::NativeSetup(RE::BSShader*, RE::BSRenderPass* pass, uint32_t flags)
     const bool available = f.inOriginalSetup ? f.initialSnapshotAvailable : f.recoveredSnapshotAvailable;
     f.vertex.constantBuffers[2].data = available ? f.constants.data() : nullptr;
 }
-void Fixture::Setup(uint32_t flags) {
+void Fixture::Setup(uint32_t flags, RE::BSRenderPass* native) {
     globals::state->currentShader = &shader;
     BSGrassShader_SetupGeometry::func.target = NativeSetup;
     inOriginalSetup = true;
-    BSGrassShader_SetupGeometry::thunk(&shader, &pass, flags);
+    BSGrassShader_SetupGeometry::thunk(&shader, native ? native : &pass, flags);
     inOriginalSetup = false;
 }
-void Fixture::Restore() {
+void Fixture::Restore(RE::BSRenderPass* native) {
     BSGrassShader_RestoreGeometry::func.target = nullptr;
-    BSGrassShader_RestoreGeometry::thunk(&shader, &pass, 0);
+    BSGrassShader_RestoreGeometry::thunk(&shader, native ? native : &pass, 0);
 }
 void Require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
-void CheckQueuedStreamingFallback() {
-    for (unsigned mutation = 0; mutation < 4; ++mutation) {
+void CheckConstantBufferBindings() {
+    FakeContext context;
+    ID3D11Buffer bones, currentBones;
+    std::array<ID3D11Buffer*, 3> buffers{&bones, nullptr, &currentBones};
+    const std::array<UINT, 3> first{16, 0, 32}, count{240, 4096, 16};
+    context.VSSetConstantBuffers1(8, 3, buffers.data(), first.data(), count.data());
+    std::array<ID3D11Buffer*, 3> actual{};
+    std::array<UINT, 3> actualFirst{}, actualCount{};
+    context.VSGetConstantBuffers1(8, 3, actual.data(), actualFirst.data(), actualCount.data());
+    Require(actual == buffers && actualFirst == first && actualCount == count,
+        "Vertex constant-buffer bindings must retain resources, null slots and subranges");
+    context.VSSetConstantBuffers(9, 1, buffers.data());
+    Require(context.vertexConstants[9] == FakeContext::ConstantBinding{&bones, 0, 4096} &&
+            context.vertexConstants[8] == FakeContext::ConstantBinding{&bones, 16, 240} &&
+            context.vertexConstants[10] == FakeContext::ConstantBinding{&currentBones, 32, 16},
+        "Full-buffer binding must replace the slot window without changing adjacent slots");
+    context.VSSetConstantBuffers1(9, 1, &buffers[1], first.data(), count.data());
+    Require(context.vertexConstants[9] == FakeContext::ConstantBinding{},
+        "Unbinding must discard the requested window, matching D3D11 WARP");
+    context.VSSetConstantBuffers(9, 1, nullptr);
+    Require(context.vertexConstants[9] == FakeContext::ConstantBinding{},
+        "A null buffer array must unbind the requested slots");
+}
+enum class ParameterRoute : uint32_t {
+    Batched, ShaderUnavailable, Disabled, Unadmitted, ExpandedFallback,
+    PreparationFailure, AllCulled, SetupFailure, PassFailure, EmptyGroups, FinishFailure
+};
+void CheckGrassParameterRestoration() {
+    using Route = ParameterRoute;
+    for (const auto route : {Route::Batched, Route::ShaderUnavailable, Route::Disabled, Route::Unadmitted,
+            Route::ExpandedFallback, Route::PreparationFailure, Route::AllCulled, Route::SetupFailure,
+            Route::PassFailure, Route::EmptyGroups, Route::FinishFailure})
+    for (bool offsetting : {false, true}) for (unsigned binding = 0; binding < (offsetting ? 3u : 2u); ++binding) {
         Fixture f;
+        ID3D11Buffer bones, currentBones;
+        f.context.constantBufferOffsetting = offsetting;
+        ID3D11Buffer* previous = binding == 0 ? nullptr : &bones;
+        const UINT first = 16, count = 240;
+        if (binding == 2) f.context.VSSetConstantBuffers1(9, 1, &previous, &first, &count);
+        else f.context.VSSetConstantBuffers(9, 1, &previous);
+        auto* current = &currentBones;
+        f.context.VSSetConstantBuffers(10, 1, &current);
+        const auto before = f.context.vertexConstants;
+        const auto reads = f.context.vertexConstantReads[9], writes = f.context.vertexConstantWrites[9];
+        f.renderer.impl->ready = route != Route::ShaderUnavailable;
+        if (route == Route::Disabled) f.renderer.impl->frameSettings.Enabled = false;
+        if (route == Route::Unadmitted) f.renderer.impl->admitted.clear();
+        if (route == Route::ExpandedFallback) f.renderer.impl->nativeFallbackDepth = 1;
+        if (route == Route::PreparationFailure) f.renderer.impl->throwOnPrepare = true;
+        if (route == Route::AllCulled) f.renderer.impl->allCulled = true;
+        if (route == Route::FinishFailure) f.renderer.impl->throwOnDepth = true;
+        bool threw = false;
+        try {
+            f.renderer.DrawRenderPass(&f.pass, 0, false, static_cast<uint32_t>(route),
+                [](RE::BSRenderPass*, uint32_t, bool, uint32_t flags) {
+                    const auto scenario = static_cast<Route>(flags);
+                    auto& active = *Fixture::active;
+                    ++active.nativeRenderPassCalls;
+                    if (scenario == Route::SetupFailure) REL::Relocation<void (*)(uint32_t)>::throwNext = true;
+                    active.Setup();
+                    Require(active.context.vertexConstants[9].buffer == &active.buffer,
+                        "Native grass setup must bind its own zeroed parameters");
+                    if (scenario == Route::PassFailure) throw InjectedDrawFailure("Injected pass failure after setup");
+                    if (scenario != Route::EmptyGroups && scenario != Route::FinishFailure) active.Draw();
+                    active.Restore();
+                });
+        } catch (const InjectedDrawFailure&) {
+            if (route != Route::PassFailure && route != Route::FinishFailure) throw;
+            threw = true;
+        }
+        const bool nativeDraw = route == Route::ShaderUnavailable || route == Route::Disabled ||
+            route == Route::Unadmitted || route == Route::ExpandedFallback ||
+            route == Route::PreparationFailure || route == Route::SetupFailure;
+        Require(f.nativeRenderPassCalls == 1 && GrassBucketRenderer::nativeCalls == (nativeDraw ? 1u : 0u) &&
+                f.renderer.impl->submissions == (route == Route::Batched ? 1u : 0u),
+            "The binding regression must exercise the requested native, batched or empty route");
+        Require(threw == (route == Route::PassFailure || route == Route::FinishFailure),
+            "Expected render-pass failure was not exercised");
+        Require(f.context.vertexConstants == before,
+            "Grass render pass leaked vertex constants into the following skinned draw");
+        Require(f.context.vertexConstantReads[9] == reads + 1 && f.context.vertexConstantWrites[9] == writes + 2,
+            "Grass must save b9 once per pass and restore it after native setup");
+        RE::BSShader skinnedShader;
+        skinnedShader.shaderType = RE::BSShader::Type::Lighting;
+        auto skinnedPass = f.pass;
+        skinnedPass.shader = &skinnedShader;
+        globals::state->currentShader = &skinnedShader;
+        f.renderer.DrawRenderPass(&skinnedPass, 0, false, 0,
+            [](RE::BSRenderPass*, uint32_t, bool, uint32_t) {
+                auto& active = *Fixture::active;
+                active.Draw(false);
+                auto* nextBones = &active.buffer;
+                active.context.VSSetConstantBuffers(9, 1, &nextBones);
+            });
+        auto afterSkinned = before;
+        afterSkinned[9] = {&f.buffer, 0, 4096};
+        Require(f.context.vertexConstants == afterSkinned && f.context.vertexConstantReads[9] == reads + 1 &&
+                f.context.vertexConstantWrites[9] == writes + 3,
+            "A non-grass pass must retain its own binding changes without extra b9 queries or writes");
+    }
+}
+void CheckParameterPassthrough() {
+    for (unsigned unavailable = 0; unavailable < 6; ++unavailable) {
+        Fixture f;
+        auto* pass = &f.pass;
+        if (unavailable == 0) pass = nullptr;
+        if (unavailable == 1) pass->geometry = nullptr;
+        if (unavailable == 2) pass->shader = nullptr;
+        if (unavailable == 3) f.shader.shaderType = RE::BSShader::Type::Lighting;
+        if (unavailable == 4) f.renderer.impl->context = nullptr;
+        if (unavailable == 5) f.renderer.impl->disabled = nullptr;
+        f.renderer.DrawRenderPass(pass, 0, false, 0,
+            [](RE::BSRenderPass*, uint32_t, bool, uint32_t) {
+                auto& active = *Fixture::active;
+                ++active.nativeRenderPassCalls;
+                auto* buffer = &active.buffer;
+                active.context.VSSetConstantBuffers(9, 1, &buffer);
+            });
+        Require(f.nativeRenderPassCalls == 1 && f.context.vertexConstantReads[9] == 0 &&
+                f.context.vertexConstantWrites[9] == 1 && f.context.vertexConstants[9].buffer == &f.buffer,
+            "Unavailable grass passes/resources must not query or restore native buffer changes");
+    }
+}
+void CheckQueuedStreamingFallback() {
+    for (bool failExpanded : {false, true}) for (unsigned mutation = 0; mutation < 4; ++mutation) {
+        Fixture f;
+        ID3D11Buffer bones;
+        auto* previous = &bones;
+        const UINT first = 16, count = 240;
+        f.context.VSSetConstantBuffers1(9, 1, &previous, &first, &count);
+        const auto before = f.context.vertexConstants;
         auto otherShape = f.shape;
         auto otherSource = f.renderer.impl->buckets.front().sources.front();
         otherSource.identity = &otherShape;
@@ -112,13 +240,26 @@ void CheckQueuedStreamingFallback() {
         visit = [&](RE::BSRenderPass* pass) {
             drawn.push_back(pass->geometry);
             if (mutation == 3 && pass->geometry == &f.shape) retire();
+            f.Setup(0, pass);
+            Require(f.context.vertexConstants[9].buffer == &f.buffer,
+                "Each expanded native member must receive grass parameters");
+            if (failExpanded && pass->geometry == &otherShape)
+                throw InjectedDrawFailure("Injected expanded-member failure");
+            f.Draw(pass->geometry == &f.shape);
+            f.Restore(pass);
         };
         for (unsigned pass = 0; pass < 2; ++pass) {
             drawn.clear();
-            f.renderer.DrawRenderPass(&f.pass, 0, false, 0,
-                [](RE::BSRenderPass* native, uint32_t, bool, uint32_t) { visit(native); });
+            bool threw = false;
+            try {
+                f.renderer.DrawRenderPass(&f.pass, 0, false, 0,
+                    [](RE::BSRenderPass* native, uint32_t, bool, uint32_t) { visit(native); });
+            } catch (const InjectedDrawFailure&) { threw = true; }
             Require(drawn == std::vector{&f.shape, &otherShape},
                 "Streaming invalidation lost or duplicated a suppressed native draw");
+            Require(threw == failExpanded && f.renderer.impl->nativeFallbackDepth == 0 &&
+                    f.context.vertexConstants == before,
+                "Expanded fallback must restore the incoming binding and nesting depth, including exceptions");
             ++f.pass.passEnum;
         }
         Require(f.renderer.impl->submissions == 0, "Native fallback unexpectedly submitted a batch");
@@ -126,6 +267,39 @@ void CheckQueuedStreamingFallback() {
         Require(pinned && pinned->members.size() == 2, "Queued sources were not retained for paired passes");
         f.renderer.EndFrame();
         Require(f.renderer.impl->queuedGroups.empty(), "Frame-end retained stale native draw owners");
+    }
+}
+void CheckNestedParameterRestoration() {
+    for (bool unwind : {false, true}) {
+        Fixture f;
+        ID3D11Buffer bones;
+        auto* previous = &bones;
+        const UINT first = 16, count = 240;
+        f.context.VSSetConstantBuffers1(9, 1, &previous, &first, &count);
+        const auto before = f.context.vertexConstants;
+        bool threw = false;
+        try {
+            f.renderer.DrawRenderPass(&f.pass, 0, false, unwind ? 1u : 0u,
+                [](RE::BSRenderPass* pass, uint32_t, bool, uint32_t flags) {
+                    auto& active = *Fixture::active;
+                    active.Setup();
+                    const auto outer = active.context.vertexConstants;
+                    active.renderer.DrawRenderPass(pass, 0, false, flags,
+                        [](RE::BSRenderPass*, uint32_t, bool, uint32_t fail) {
+                            auto& nested = *Fixture::active;
+                            nested.Setup();
+                            nested.Draw();
+                            if (fail) throw InjectedDrawFailure("Injected nested-pass failure");
+                            nested.Restore();
+                        });
+                    Require(active.context.vertexConstants == outer,
+                        "An inner grass pass must restore its outer pass's parameters");
+                    active.Draw();
+                    active.Restore();
+                });
+        } catch (const InjectedDrawFailure&) { threw = true; }
+        Require(threw == unwind && f.context.vertexConstants == before,
+            "Nested grass passes must restore previous bones, including exception unwinding");
     }
 }
 void CheckRenderFamilyIsolation() {
@@ -335,8 +509,12 @@ void CheckRenderFamilyIsolation() {
 }
 int main() {
     try {
+        CheckConstantBufferBindings();
         for (bool vr : {false, true}) {
             globals::game::isVR = vr;
+            CheckParameterPassthrough();
+            CheckGrassParameterRestoration();
+            CheckNestedParameterRestoration();
             CheckRenderFamilyIsolation();
             CheckQueuedStreamingFallback();
             for (bool loaded : {false, true}) for (bool enabled : {false, true}) {

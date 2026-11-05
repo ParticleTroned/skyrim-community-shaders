@@ -20,6 +20,11 @@
 #include <vector>
 
 using UINT = unsigned;
+inline constexpr UINT D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT = 4096;
+struct InjectedDrawFailure : std::runtime_error
+{
+	using std::runtime_error::runtime_error;
+};
 struct D3D11_BUFFER_DESC
 {
 	UINT ByteWidth = 1024;
@@ -61,7 +66,8 @@ namespace RE
 		enum class Type
 		{
 			Grass,
-			DistantTree
+			DistantTree,
+			Lighting
 		};
 		Type shaderType = Type::Grass;
 	};
@@ -304,13 +310,46 @@ struct Bucket
 };
 struct FakeContext
 {
-	ID3D11Buffer stereo;
-	void VSSetConstantBuffers(int, int, ID3D11Buffer* const*) {}
-	void VSGetConstantBuffers1(int, int, ID3D11Buffer** buffer, UINT* first, UINT* count)
+	struct ConstantBinding
 	{
-		*buffer = &stereo;
-		*first = 0;
-		*count = 3;
+		ID3D11Buffer* buffer = nullptr;
+		UINT first = 0, count = D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT;
+		bool operator==(const ConstantBinding&) const = default;
+	};
+	ID3D11Buffer stereo;
+	std::array<ConstantBinding, 14> vertexConstants{};
+	std::array<UINT, 14> vertexConstantReads{}, vertexConstantWrites{};
+	bool constantBufferOffsetting = true;
+	FakeContext() { vertexConstants[13] = { &stereo, 0, 3 }; }
+	void BindVertexConstants(UINT slot, UINT size, ID3D11Buffer* const* buffers, const UINT* first, const UINT* count)
+	{
+		for (UINT i = 0; i < size; ++i) {
+			auto* buffer = buffers ? buffers[i] : nullptr;
+			vertexConstants.at(slot + i) = { buffer, buffer && first ? first[i] : 0, buffer && count ? count[i] : D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT };
+			++vertexConstantWrites.at(slot + i);
+		}
+	}
+	void VSSetConstantBuffers(UINT slot, UINT size, ID3D11Buffer* const* buffers)
+	{
+		BindVertexConstants(slot, size, buffers, nullptr, nullptr);
+	}
+	void VSSetConstantBuffers1(UINT slot, UINT size, ID3D11Buffer* const* buffers, const UINT* first, const UINT* count)
+	{
+		if (constantBufferOffsetting)
+			BindVertexConstants(slot, size, buffers, first, count);
+	}
+	void VSGetConstantBuffers1(UINT slot, UINT size, ID3D11Buffer** buffers, UINT* first, UINT* count)
+	{
+		for (UINT i = 0; i < size; ++i) {
+			const auto& binding = vertexConstants.at(slot + i);
+			++vertexConstantReads.at(slot + i);
+			if (buffers)
+				buffers[i] = binding.buffer;
+			if (first)
+				first[i] = binding.first;
+			if (count)
+				count[i] = binding.count;
+		}
 	}
 	void RSGetViewports(UINT* count, D3D11_VIEWPORT* viewport)
 	{
@@ -466,7 +505,7 @@ public:
 		bool MainDepthBound() const
 		{
 			if (throwOnDepth)
-				throw std::runtime_error("Injected depth-state failure");
+				throw InjectedDrawFailure("Injected depth-state failure");
 			return depthAllowed;
 		}
 		bool PrepareDrawShaders() { return drawShadersReady = pairedShadersAvailable; }
@@ -563,8 +602,8 @@ struct Fixture
 		}
 		renderer.impl->queuedGroups = { queued };
 	}
-	void Setup(uint32_t flags = 0);
-	void Restore();
+	void Setup(uint32_t flags = 0, RE::BSRenderPass* native = nullptr);
+	void Restore(RE::BSRenderPass* native = nullptr);
 	static void NativeSetup(RE::BSShader*, RE::BSRenderPass*, uint32_t);
 	void Draw(bool same = true) { renderer.DrawGroup(nullptr, same ? &mesh : &unrelatedMesh, 0, 2, 4, {}, &instances); }
 };

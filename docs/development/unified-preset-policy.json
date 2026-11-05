@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "1FEFAEBFD85F0B96C04FCA222B3665897B471A3032FDA14D02AD236139D52EBA"
+        "sha256": "BC31AAD9B26F28DBA603ECE9DB693A9FE626F1A67C13EC92E1D9BD6701DAA001"
     },
     "runtimeSettingsContract": {
         "revision": 32,
-        "sourceTreeSha256": "63820DB62FF44C0818DA178E81E22CCBA1ABCA2BB44F4B9EEC62FDE631CF9E55",
+        "sourceTreeSha256": "8291E0A72C305786276DC2561631199D9BB6B605342047FC016FFDECDB74481A",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -783,7 +783,7 @@
         ],
         "requiredValues": [
             { "path": ["Upscaling", "antiLag2Enabled"], "value": false },
-            { "path": ["Light Limit Fix", "SkipRedundantLightAttach"], "value": false },
+            { "path": ["Light Limit Fix", "SkipRedundantLightAttach"], "value": true },
             { "path": ["Snow Cover", "Enable"], "value": 0 },
             { "path": ["Fur Shells", "Enabled"], "value": false },
             { "path": ["Reverse Z", "EnableReverseZBuffer"], "value": false },

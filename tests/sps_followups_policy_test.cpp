@@ -1,5 +1,5 @@
-#include "Features/LightLimitFix/ShadowCullingPolicy.h"
 #include "Features/LightLimitFix/LightAttachPolicy.h"
+#include "Features/LightLimitFix/ShadowCullingPolicy.h"
 #include "Features/TextureStreaming/RestorationPriority.h"
 #include <iostream>
 #include <limits>
@@ -240,7 +240,7 @@ void CheckPerformanceControls()
 	};
 	for (const bool enabled : { false, true }) {
 		Controls controls;
-		Require(!controls.settings.SkipRedundantLightAttach, "Experimental light updates must default off");
+		Require(controls.settings.SkipRedundantLightAttach, "Redundant light update skipping must default on");
 		controls.settings.SkipRedundantLightAttach = enabled;
 		controls.settings.LightAttachRefreshFrames = 17;
 		auto& parts = controls.settings.ShadowCulling;
@@ -252,12 +252,12 @@ void CheckPerformanceControls()
 		controls.SetPerformanceToggleEnabled(false);
 		Require(!parts.smallActorParts && !controls.IsPerformanceToggleEnabled(), "Master off left tiny-part culling enabled");
 		controls.SetPerformanceToggleEnabled(true);
-		Require(!controls.settings.SkipRedundantLightAttach, "Master on must not opt into experimental light updates");
+		Require(controls.settings.SkipRedundantLightAttach, "Master on must restore the light-update default");
 		Require(parts.smallActorParts && controls.IsPerformanceToggleEnabled(), "Master on did not restore the tiny-part default");
 		controls.SetPerformanceCostMeasurementEnabled(false);
 		Require(!parts.smallActorParts && !controls.IsPerformanceCostMeasurementEnabled(), "Measurement off left tiny-part culling enabled");
 		controls.SetPerformanceCostMeasurementEnabled(true);
-		Require(!controls.settings.SkipRedundantLightAttach, "Default cost measurement must not enable the experiment");
+		Require(controls.settings.SkipRedundantLightAttach, "Default cost measurement must restore the light-update default");
 		Require(parts.smallActorParts && controls.IsPerformanceCostMeasurementEnabled(), "Measurement on omitted tiny-part culling");
 		Require(parts.actorPartDistanceMeters == 20 && parts.actorPartReturnDistanceMeters == 10 && parts.actorPartRadiusCentimeters == 25,
 			"Performance switches changed the tuned tiny-part sliders");

@@ -85,7 +85,7 @@
     },
     "settingsContract": {
       "revision": 32,
-      "sourceTreeSha256": "63820DB62FF44C0818DA178E81E22CCBA1ABCA2BB44F4B9EEC62FDE631CF9E55"
+      "sourceTreeSha256": "8291E0A72C305786276DC2561631199D9BB6B605342047FC016FFDECDB74481A"
     }
   },
   "Upscaling": {
@@ -1464,7 +1464,7 @@
     },
     "StrictContactShadowBudget": 4,
     "UseParticleLights087LegacyMode": false,
-    "SkipRedundantLightAttach": false,
+    "SkipRedundantLightAttach": true,
     "LightAttachRefreshFrames": 60
   },
   "Linear Lighting": {

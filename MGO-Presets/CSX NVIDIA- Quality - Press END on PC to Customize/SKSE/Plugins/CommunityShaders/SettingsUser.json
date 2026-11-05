@@ -830,7 +830,7 @@
         "UseParticleLights087LegacyMode": false,
         "ParticleLightsSaturation": 1.0,
         "EnableParticleContactShadows": false,
-        "SkipRedundantLightAttach": false,
+        "SkipRedundantLightAttach": true,
         "LightAttachRefreshFrames": 60,
         "ShadowCulling": {
             "actorPartDistanceMeters": 7.14,

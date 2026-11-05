@@ -432,7 +432,7 @@
         "ParticleRadius": 1.0,
         "StrictContactShadowBudget": 4,
         "UseParticleLights087LegacyMode": false,
-        "SkipRedundantLightAttach": false,
+        "SkipRedundantLightAttach": true,
         "LightAttachRefreshFrames": 60,
         "ShadowCulling": {
             "actorPartDistanceMeters": 7.14,

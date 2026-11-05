@@ -849,14 +849,17 @@ void ScreenSpaceShadows::Prepass()
 		return;
 	}
 
-	float white[4] = { 1, 1, 1, 1 };
-	context->ClearUnorderedAccessViewFloat(screenSpaceShadowsTexture->uav.get(), white);
-
-	if (auto sky = globals::game::sky)
-		if (bendSettings.Enable && sky->mode.get() == RE::Sky::Mode::kFull) {
-			DrawShadows();
-			DrawStereoSync();
-		}
+	auto* sky = globals::game::sky;
+	const bool drawShadows = sky && bendSettings.Enable && sky->mode.get() == RE::Sky::Mode::kFull;
+	if (drawShadows || !shadowTextureCleared) {
+		const float white[4] = { 1, 1, 1, 1 };
+		context->ClearUnorderedAccessViewFloat(screenSpaceShadowsTexture->uav.get(), white);
+	}
+	shadowTextureCleared = !drawShadows;
+	if (drawShadows) {
+		DrawShadows();
+		DrawStereoSync();
+	}
 
 	auto view = screenSpaceShadowsTexture->srv.get();
 	context->PSSetShaderResources(45, 1, &view);
@@ -892,6 +895,7 @@ bool ScreenSpaceShadows::HasShaderDefine(RE::BSShader::Type)
 
 void ScreenSpaceShadows::SetupResources()
 {
+	shadowTextureCleared = false;
 	auto device = globals::d3d::device;
 	static ID3D11Device* shaderDevice = nullptr;
 	if (shaderDevice != device) {

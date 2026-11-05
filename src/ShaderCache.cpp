@@ -39,6 +39,7 @@
 #include "Utils/ContentHash.h"
 #include "Utils/FileSystem.h"
 #include "Utils/GenerationClaim.h"
+#include "Utils/ResourceName.h"
 #include "Utils/ShaderAllocation.h"
 #include "Utils/ShaderCacheManifest.h"
 #include "Utils/ShaderCachePack.h"
@@ -5673,6 +5674,17 @@ namespace SIE
 
 			auto newShader = SShaderCache::CreateVertexShader(*shaderBlob, shader, descriptor);
 
+			winrt::com_ptr<ID3D11VertexShader> driverShader;
+			const auto result = device->CreateVertexShader(shaderBlob->GetBufferPointer(),
+				newShader->byteCodeSize, nullptr, driverShader.put());
+			if (FAILED(result)) {
+				logger::error("Failed to create vertex shader {}::{:X}",
+					magic_enum::enum_name(shader.shaderType.get()), descriptor);
+				return nullptr;
+			}
+			Util::SetResourceName(driverShader.get(), "ShaderCache::Vertex %u:%X",
+				static_cast<unsigned>(shader.shaderType.get()), descriptor);
+
 			std::lock_guard lockGuard(vertexShadersMutex);
 			if (IsTaskStale(a_taskGeneration, shader.shaderType.get())) {
 				logger::debug(
@@ -5686,19 +5698,10 @@ namespace SIE
 			auto& typeCache = vertexShaders[static_cast<size_t>(shader.shaderType.get())];
 			if (const auto existing = typeCache.find(descriptor); existing != typeCache.end())
 				return existing->second.get();
-			const auto result = device->CreateVertexShader(shaderBlob->GetBufferPointer(),
-				newShader->byteCodeSize, nullptr, reinterpret_cast<ID3D11VertexShader**>(&newShader->shader));
-			if (FAILED(result)) {
-				logger::error("Failed to create vertex shader {}::{:X}",
-					magic_enum::enum_name(shader.shaderType.get()), descriptor);
-				if (newShader->shader != nullptr) {
-					newShader->shader->Release();
-				}
-			} else {
-				auto& entry = typeCache[descriptor];
-				entry = std::move(newShader);
-				return entry.get();
-			}
+			auto& entry = typeCache[descriptor];
+			entry = std::move(newShader);
+			entry->shader = reinterpret_cast<decltype(entry->shader)>(driverShader.detach());
+			return entry.get();
 		}
 		return nullptr;
 	}
@@ -5718,6 +5721,17 @@ namespace SIE
 
 			auto newShader = SShaderCache::CreatePixelShader(*shaderBlob, shader, descriptor);
 
+			winrt::com_ptr<ID3D11PixelShader> driverShader;
+			const auto result = device->CreatePixelShader(shaderBlob->GetBufferPointer(),
+				shaderBlob->GetBufferSize(), nullptr, driverShader.put());
+			if (FAILED(result)) {
+				logger::error("Failed to create pixel shader {}::{:X}",
+					magic_enum::enum_name(shader.shaderType.get()), descriptor);
+				return nullptr;
+			}
+			Util::SetResourceName(driverShader.get(), "ShaderCache::Pixel %u:%X",
+				static_cast<unsigned>(shader.shaderType.get()), descriptor);
+
 			std::lock_guard lockGuard(pixelShadersMutex);
 			if (IsTaskStale(a_taskGeneration, shader.shaderType.get())) {
 				logger::debug(
@@ -5730,20 +5744,10 @@ namespace SIE
 			auto& typeCache = pixelShaders[static_cast<size_t>(shader.shaderType.get())];
 			if (const auto existing = typeCache.find(descriptor); existing != typeCache.end())
 				return existing->second.get();
-			const auto result = device->CreatePixelShader(shaderBlob->GetBufferPointer(),
-				shaderBlob->GetBufferSize(), nullptr, reinterpret_cast<ID3D11PixelShader**>(&newShader->shader));
-			if (FAILED(result)) {
-				logger::error("Failed to create pixel shader {}::{:X}",
-					magic_enum::enum_name(shader.shaderType.get()),
-					descriptor);
-				if (newShader->shader != nullptr) {
-					newShader->shader->Release();
-				}
-			} else {
-				auto& entry = typeCache[descriptor];
-				entry = std::move(newShader);
-				return entry.get();
-			}
+			auto& entry = typeCache[descriptor];
+			entry = std::move(newShader);
+			entry->shader = reinterpret_cast<decltype(entry->shader)>(driverShader.detach());
+			return entry.get();
 		}
 		return nullptr;
 	}
@@ -5764,6 +5768,17 @@ namespace SIE
 			auto newShader = SShaderCache::CreateComputeShader(*shaderBlob, shader,
 				descriptor);
 
+			winrt::com_ptr<ID3D11ComputeShader> driverShader;
+			const auto result = device->CreateComputeShader(shaderBlob->GetBufferPointer(),
+				shaderBlob->GetBufferSize(), nullptr, driverShader.put());
+			if (FAILED(result)) {
+				logger::error("Failed to create compute shader {}::{:X}",
+					magic_enum::enum_name(shader.shaderType.get()), descriptor);
+				return nullptr;
+			}
+			Util::SetResourceName(driverShader.get(), "ShaderCache::Compute %u:%X",
+				static_cast<unsigned>(shader.shaderType.get()), descriptor);
+
 			std::lock_guard lockGuard(computeShadersMutex);
 			if (IsTaskStale(a_taskGeneration, shader.shaderType.get())) {
 				logger::debug(
@@ -5772,22 +5787,13 @@ namespace SIE
 					descriptor);
 				return nullptr;
 			}
-			const auto result = device->CreateComputeShader(shaderBlob->GetBufferPointer(),
-				shaderBlob->GetBufferSize(), nullptr, reinterpret_cast<ID3D11ComputeShader**>(&newShader->shader));
-			if (FAILED(result)) {
-				logger::error("Failed to create pixel shader {}::{:X}",
-					magic_enum::enum_name(shader.shaderType.get()),
-					descriptor);
-				if (newShader->shader != nullptr) {
-					newShader->shader->Release();
-				}
-			} else {
-				auto& entry = computeShaders[static_cast<size_t>(shader.shaderType.get())][descriptor];
-				if (entry && entry->shader)
-					entry->shader->Release();
-				entry = std::move(newShader);
-				return entry.get();
-			}
+			auto& typeCache = computeShaders[static_cast<size_t>(shader.shaderType.get())];
+			if (const auto existing = typeCache.find(descriptor); existing != typeCache.end())
+				return existing->second.get();
+			auto& entry = typeCache[descriptor];
+			entry = std::move(newShader);
+			entry->shader = reinterpret_cast<decltype(entry->shader)>(driverShader.detach());
+			return entry.get();
 		}
 		return nullptr;
 	}

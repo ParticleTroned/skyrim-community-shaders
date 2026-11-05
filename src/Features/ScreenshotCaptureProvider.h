@@ -37,7 +37,7 @@ namespace CSX::Screenshot
 		if (prefix.size() > 128 || !ScreenshotPolicy::IsSafeWindowsFilenameSegment(prefix))
 			throw std::invalid_argument("burst prefix must be a safe filename stem of at most 128 characters");
 		const auto directoryText = request.at("outputDir").get<std::string>();
-		const auto directory = std::filesystem::u8path(directoryText).lexically_normal();
+		const auto directory = std::filesystem::path(std::u8string(directoryText.begin(), directoryText.end())).lexically_normal();
 		if (directoryText.find('\0') != std::string::npos || !directory.is_absolute())
 			throw std::invalid_argument("burst outputDir must be absolute");
 		if ((request.contains("scale") && (!request.at("scale").is_number() || request.at("scale") != 1)) ||
@@ -45,7 +45,7 @@ namespace CSX::Screenshot
 			throw std::invalid_argument("burst supports only whole native frames with scale=1");
 		const bool excludeUi = request.value("excludeUi", true);
 		const auto manifestText = request.value("manifestPath", Util::PathToUtf8(directory / (prefix + "_manifest.json")));
-		const auto manifest = std::filesystem::u8path(manifestText).lexically_normal();
+		const auto manifest = std::filesystem::path(std::u8string(manifestText.begin(), manifestText.end())).lexically_normal();
 		const auto filename = Util::PathToUtf8(manifest.filename());
 		if (manifestText.find('\0') != std::string::npos || !manifest.is_absolute() || filename.size() > 200 ||
 			!ScreenshotPolicy::IsSafeWindowsFilenameSegment(filename) || Util::ToLowerAscii(manifest.extension().string()) != ".json")

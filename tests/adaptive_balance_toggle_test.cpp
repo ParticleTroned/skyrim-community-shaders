@@ -229,7 +229,7 @@ namespace logger
 struct WeatherUpdateHook
 {
 #include "adaptive_balance_weather_hook_under_test.h"
-	static inline void (*func)(RE::Sky*, float) = [](RE::Sky*, float) {};
+	static inline void (*func)(RE::Sky*) = [](RE::Sky*) {};
 	static inline WeatherColorAdjustment<RE::NiColor> effect;
 	static inline WeatherColorAdjustment<RE::NiColor> statics;
 	static inline WeatherColorAdjustment<RE::NiColor> upper;
@@ -258,60 +258,59 @@ void CheckWeatherColors()
 	profile.effectBrightness = 0.5f;
 	profile.skyStaticBrightness = 2.0f;
 	for (int i = 0; i < 3; ++i) {
-		WeatherUpdateHook::thunk(&sky, 0.0f);
+		WeatherUpdateHook::thunk(&sky);
 		assert(effect == effectSource * 0.5f && statics == staticSource * 2.0f);
 		assert(sky.skyColor[0] == staticSource);
 	}
 	profile.effectBrightness = 0.0f;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == RE::NiColor{});
 	profile.effectBrightness = 1.5f;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == effectSource * 1.5f);
 	balance.SetEnabled(false);
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == effectSource && statics == staticSource);
 	balance.SetEnabled(true);
 	profile.advanced = false;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == effectSource && statics == staticSource);
 	profile.advanced = true;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
-	WeatherUpdateHook::func = [](RE::Sky* live, float delta) {
-		assert(delta == 0.25f);
+	WeatherUpdateHook::thunk(&sky);
+	WeatherUpdateHook::func = [](RE::Sky* live) {
 		assert((live->skyColor[RE::TESWeather::kEffectLighting] == RE::NiColor{ { 0.2f, 0.4f, 0.6f } }));
 		live->skyColor[RE::TESWeather::kEffectLighting] = { { 0.4f, 0.2f, 0.8f } };
 	};
-	WeatherUpdateHook::thunk(&sky, 0.25f);
+	WeatherUpdateHook::thunk(&sky);
 	const RE::NiColor newWeather{ { 0.4f, 0.2f, 0.8f } };
 	assert(effect == newWeather * 1.5f);
-	WeatherUpdateHook::func = [](RE::Sky*, float) {};
+	WeatherUpdateHook::func = [](RE::Sky*) {};
 	effect = staticSource;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == staticSource * 1.5f);
 	balance.throwProfileResolution = true;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == staticSource && statics == staticSource && logger::weatherWarnings == 1);
 	balance.throwProfileResolution = false;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == staticSource * 1.5f && !WeatherUpdateHook::loggedFailure);
 	for (bool* gate : { &balance.loaded, &balance.performanceCostMeasurementEnabled }) {
 		*gate = false;
-		WeatherUpdateHook::thunk(&sky, 0.0f);
+		WeatherUpdateHook::thunk(&sky);
 		assert(effect == staticSource && statics == staticSource);
 		*gate = true;
-		WeatherUpdateHook::thunk(&sky, 0.0f);
+		WeatherUpdateHook::thunk(&sky);
 	}
 	globals::state->menuOpen = true;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == staticSource && statics == staticSource);
 	globals::state->menuOpen = false;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	sky.currentWeather = nullptr;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == staticSource && statics == staticSource);
-	WeatherUpdateHook::thunk(nullptr, 0.0f);
+	WeatherUpdateHook::thunk(nullptr);
 
 	WeatherColorAdjustment<RE::NiColor> adjustment;
 	RE::Sky otherSky;
@@ -1226,21 +1225,21 @@ void CheckSkyGradientOwnership()
 	appearance.skyTopCurve = 2.0f;
 	appearance.skyTopTint = { 1.0f, 0.5f, 0.0f };
 	for (int frame = 0; frame < 3; ++frame) {
-		WeatherUpdateHook::thunk(&sky, 0);
+		WeatherUpdateHook::thunk(&sky);
 		const auto& color = sky.skyColor[RE::TESWeather::kSkyUpper];
 		assert(Close(color[0], 0.125f) && Close(color[1], 0.25f) && color[2] == 0.0f);
 	}
 	balance.SetEnabled(false);
-	WeatherUpdateHook::thunk(&sky, 0);
+	WeatherUpdateHook::thunk(&sky);
 	assert(sky.skyColor[RE::TESWeather::kSkyUpper] == source);
 	balance.SetEnabled(true);
-	WeatherUpdateHook::thunk(&sky, 0);
+	WeatherUpdateHook::thunk(&sky);
 	const RE::NiColor external{ { 0.3f, 0.3f, 0.3f } };
 	sky.skyColor[RE::TESWeather::kSkyUpper] = external;
 	balance.SetEnabled(false);
-	WeatherUpdateHook::thunk(&sky, 0);
+	WeatherUpdateHook::thunk(&sky);
 	assert(sky.skyColor[RE::TESWeather::kSkyUpper] == external);
-	WeatherUpdateHook::thunk(nullptr, 0);
+	WeatherUpdateHook::thunk(nullptr);
 	balance = {};
 }
 

@@ -23,6 +23,7 @@
 #include <string_view>
 #include <type_traits>
 #include <variant>
+#include <vector>
 
 #include <ClibUtil/detail/SimpleIni.h>
 
@@ -92,6 +93,15 @@ namespace logger
 	template <class... Args>
 	void debug(const char*, Args&&...)
 	{}
+}
+
+namespace REL
+{
+	struct Offset
+	{
+		std::uintptr_t value;
+		std::uintptr_t address() const { return value; }
+	};
 }
 
 #include "game_setting_persistence_under_test.h"

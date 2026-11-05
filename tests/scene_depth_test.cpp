@@ -214,6 +214,15 @@ namespace globals
 	}
 	namespace features
 	{
+		struct
+		{
+			bool loaded = false;
+			struct
+			{
+				bool Enabled = false;
+			} settings;
+			void OnBeforeBlendedDecals() {}
+		} furShells;
 		inline TerrainBlending terrainBlending;
 		inline Upscaling upscaling;
 	}

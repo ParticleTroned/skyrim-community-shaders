@@ -113,6 +113,7 @@ namespace RE
 		struct
 		{
 			Type value = Type::Lighting;
+			bool operator==(Type other) const { return value == other; }
 			Type get() const
 			{
 				++materialProbeReads;
@@ -133,7 +134,8 @@ namespace RE
 	{
 		BSShader* shader = nullptr;
 		BSShaderProperty* shaderProperty = nullptr;
-		std::array<std::byte, 0x38> passRemainingBytes{};
+		void* geometry = nullptr;
+		std::array<std::byte, 0x30> passRemainingBytes{};
 	};
 }
 
@@ -192,6 +194,28 @@ struct TerrainBlending
 
 namespace globals::features
 {
+	struct
+	{
+		bool loaded = false;
+		struct
+		{
+			bool Enabled = false;
+		} settings;
+		template <class Draw>
+		void RenderPass(RE::BSRenderPass*, uint32_t, bool, uint32_t, Draw&& draw)
+		{
+			draw();
+		}
+	} furShells;
+	struct
+	{
+		bool IsActive() const { return false; }
+		template <class Draw>
+		void RenderPass(RE::BSRenderPass*, Draw&& draw)
+		{
+			draw();
+		}
+	} snowCover;
 	struct GrassRenderer
 	{
 		using NativeDraw = void (*)(RE::BSRenderPass*, uint32_t, bool, uint32_t);

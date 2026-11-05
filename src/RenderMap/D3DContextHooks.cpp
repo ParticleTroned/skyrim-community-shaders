@@ -1213,18 +1213,20 @@ namespace CSX::RenderMap
 
 	bool CapturePostProcessingBootstrap(ID3D11DeviceContext* a_context) noexcept
 	{
-		if (!a_context || a_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE ||
-			!GetRuntime().IsInsidePostProcessing() || !GetRuntime().IsCapturing())
+		auto& runtime = GetRuntime();
+		const auto generation = runtime.PostProcessingCaptureGeneration();
+		if (!a_context || !runtime.IsInsidePostProcessing() || !runtime.IsCapturing() ||
+			!CaptureCurrent(generation))
 			return false;
 		try {
-			const auto generation = GetRuntime().PostProcessingCaptureGeneration();
-			if (generation == 0)
+			if (a_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE ||
+				!runtime.IsInsidePostProcessing() || !runtime.IsCapturing() || !CaptureCurrent(generation))
 				return false;
 			ObserveEffectiveStateBeforeDraw(a_context, generation);
 			BeginPostProcessingOperation(a_context, false, 0, generation, true);
 			ObservePostProcessingState(a_context, false, false, generation);
 			ObservePostProcessingState(a_context, true, false, generation);
-			return GetRuntime().IsInsidePostProcessing();
+			return CaptureCurrent(generation) && runtime.IsInsidePostProcessing();
 		} catch (...) {
 			return false;
 		}

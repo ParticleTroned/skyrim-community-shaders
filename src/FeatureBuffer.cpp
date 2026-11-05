@@ -22,6 +22,7 @@
 #include "Features/WaterAppearance.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
+#include "Features/Wetterness/SnowMelt.h"
 #include "TruePBR.h"
 
 #include <array>
@@ -82,6 +83,7 @@ namespace
 		WaterAppearanceSettingsCB waterAppearanceSettings;
 		BloomSettingsCB bloomSettings;
 		SnowCoverSettingsCB snowCoverSettings;
+		WetternessSnowMelt::PerFrame snowMeltSettings;
 	};
 
 	using FeatureDataTuple = std::tuple<
@@ -107,7 +109,8 @@ namespace
 		UnifiedWaterSettingsCB,
 		WaterAppearanceSettingsCB,
 		BloomSettingsCB,
-		SnowCoverSettingsCB>;
+		SnowCoverSettingsCB,
+		WetternessSnowMelt::PerFrame>;
 
 	static_assert(sizeof(GrassLightingSettingsCB) == 32);
 	static_assert(offsetof(GrassLightingSettingsCB, Enabled) == 28);
@@ -213,7 +216,8 @@ namespace
 	static_assert(offsetof(FeatureDataLayout, waterAppearanceSettings) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, bloomSettings) == offsetof(FeatureDataLayout, waterAppearanceSettings) + sizeof(WaterAppearanceSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, snowCoverSettings) == offsetof(FeatureDataLayout, bloomSettings) + sizeof(BloomSettingsCB));
-	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, snowCoverSettings) + sizeof(SnowCoverSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, snowMeltSettings) == offsetof(FeatureDataLayout, snowCoverSettings) + sizeof(SnowCoverSettingsCB));
+	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, snowMeltSettings) + sizeof(WetternessSnowMelt::PerFrame));
 
 	template <class T>
 	void PackField(unsigned char* a_dst, size_t& a_offset, const T& a_value)
@@ -248,6 +252,8 @@ namespace
 std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 {
 	auto grassLightingSettings = globals::features::grassLighting.settings;
+	const auto snowCoverSettings = globals::features::snowCover.GetCommonBufferData(a_inWorld);
+	const auto snowMeltSettings = WetternessSnowMelt::GetCommonBufferData();
 	const auto wetternessSettings = globals::features::wetterness.GetCommonBufferData();
 	grassLightingSettings.Glossiness = globals::features::wetterness.GetEffectiveGrassGlossiness(
 		grassLightingSettings.Glossiness,
@@ -279,5 +285,6 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::unifiedWater.GetCommonBufferData(),
 		globals::features::adaptiveBrightness.GetEffectiveWaterAppearanceSettings(),
 		globals::features::adaptiveBrightness.GetEffectiveBloomSettings(),
-		globals::features::snowCover.GetCommonBufferData(a_inWorld));
+		snowCoverSettings,
+		snowMeltSettings);
 }

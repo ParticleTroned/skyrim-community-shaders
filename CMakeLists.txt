@@ -2930,6 +2930,7 @@ if(BUILD_CONTROLLER_TESTS)
         wetterness_highlights_test WetternessHighlights
         tests/wetterness_highlights_test.cpp
     )
+    include("${PROJECT_SOURCE_DIR}/tests/wetterness_runtime.cmake")
     add_d3d_shader_test(lazy_shader_test LazyShader tests/lazy_shader_test.cpp)
     target_link_libraries(
         lazy_shader_test

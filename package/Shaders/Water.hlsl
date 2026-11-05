@@ -860,63 +860,77 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	// DEBUG_WETNESS_EFFECTS Color Legend:
 	// - BRIGHT MAGENTA: Ripples, BRIGHT GREEN: Splashes, CYAN: Both effects
 	const bool inWorld = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld);
+#				if defined(WETTERNESS)
+	[branch] if (inWorld && finalNormal.z > 0 && CS_WETNESS_SETTINGS.Raining > 0.0f && CS_WETNESS_SETTINGS.EnableRaindropFx)
+	{
+		float maxRainDropDistance = CS_WETNESS_SETTINGS.RaindropFxRange * CS_WETNESS_SETTINGS.RaindropFxRange * 3;
+		float rainDropDistance = dot(input.WPosition.xyz, input.WPosition.xyz);
+		[branch] if (rainDropDistance < maxRainDropDistance)
+		{
+#				endif
 #				if defined(SKYLIGHTING)
 #					if defined(VR)
-	float3 positionMSSkylight = input.WPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
+			float3 positionMSSkylight = input.WPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
 #					else
-	float3 positionMSSkylight = input.WPosition.xyz;
+			float3 positionMSSkylight = input.WPosition.xyz;
 #					endif
-	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, float3(0, 0, 1));
-	float skylighting = SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1));
+			sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, float3(0, 0, 1));
+			float skylighting = SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1));
 
-	float skylightingWetness = saturate(skylighting);
-	float wetnessOcclusion = inWorld ? skylightingWetness * skylightingWetness : 0;
+			float skylightingWetness = saturate(skylighting);
+			float wetnessOcclusion = inWorld ? skylightingWetness * skylightingWetness : 0;
 #				else
 	float wetnessOcclusion = inWorld;
 #				endif
 
-	float4 raindropInfo = float4(0, 0, 1, 0);
-	float maxRainDropDistance = CS_WETNESS_SETTINGS.RaindropFxRange * CS_WETNESS_SETTINGS.RaindropFxRange * 3;
-	float rainDropDistance = dot(input.WPosition.xyz, input.WPosition.xyz);
-	float distanceFadeout = saturate((1 - saturate(rainDropDistance / maxRainDropDistance)) * 3);
-	if (finalNormal.z > 0 && CS_WETNESS_SETTINGS.Raining > 0.0f && CS_WETNESS_SETTINGS.EnableRaindropFx &&
-		(rainDropDistance < maxRainDropDistance) && wetnessOcclusion > 0.05) {
-		float rippleStrengthModifier = (wetnessOcclusion * wetnessOcclusion) * distanceFadeout;
-		float3 rippleWPosition = input.WPosition.xyz + finalNormal * 16;
+			float4 raindropInfo = float4(0, 0, 1, 0);
+#				if !defined(WETTERNESS)
+			float maxRainDropDistance = CS_WETNESS_SETTINGS.RaindropFxRange * CS_WETNESS_SETTINGS.RaindropFxRange * 3;
+			float rainDropDistance = dot(input.WPosition.xyz, input.WPosition.xyz);
+#				endif
+			float distanceFadeout = saturate((1 - saturate(rainDropDistance / maxRainDropDistance)) * 3);
+			if (finalNormal.z > 0 && CS_WETNESS_SETTINGS.Raining > 0.0f && CS_WETNESS_SETTINGS.EnableRaindropFx &&
+				(rainDropDistance < maxRainDropDistance) && wetnessOcclusion > 0.05) {
+				float rippleStrengthModifier = (wetnessOcclusion * wetnessOcclusion) * distanceFadeout;
+				float3 rippleWPosition = input.WPosition.xyz + finalNormal * 16;
 #				if defined(WATER_PARALLAX)
-		rippleWPosition.xy += parallaxOffset;
+				rippleWPosition.xy += parallaxOffset;
 #				endif
 #				if defined(FLOWMAP)
-		// Flow-following ripple enhancement: Makes raindrops follow water current
-		FlowmapData worldFlowData = GetFlowmapDataWorldSpace(input, float2(0, 0));
+				// Flow-following ripple enhancement: Makes raindrops follow water current
+				FlowmapData worldFlowData = GetFlowmapDataWorldSpace(input, float2(0, 0));
 
-		// Calculate flow-aware ripple offset using centralized timing logic
-		// Parameters: avgFlowmapMultiplier=9.26 (average of GetWaterNormal flowmap normal multipliers: 9.92, 10.64, 8, 8.48)
-		// uvToWorldScale=0.125 (1/8 - relates to 64× texture coordinate scaling factor)
-		float2 flowOffset = CS_GET_FLOW_AWARE_RIPPLE_OFFSET(
-			worldFlowData.flowVector,
-			worldFlowData.color.w,      // Flow strength from flowmap alpha
-			0.001 * ReflectionColor.w,  // Reflection timing scale (matches GetFlowmapNormal)
-			9.26,                       // Average flowmap normal multiplier
-			0.125                       // UV-to-world scale factor (1/8)
-		);
+				// Calculate flow-aware ripple offset using centralized timing logic
+				// Parameters: avgFlowmapMultiplier=9.26 (average of GetWaterNormal flowmap normal multipliers: 9.92, 10.64, 8, 8.48)
+				// uvToWorldScale=0.125 (1/8 - relates to 64× texture coordinate scaling factor)
+				float2 flowOffset = CS_GET_FLOW_AWARE_RIPPLE_OFFSET(
+					worldFlowData.flowVector,
+					worldFlowData.color.w,      // Flow strength from flowmap alpha
+					0.001 * ReflectionColor.w,  // Reflection timing scale (matches GetFlowmapNormal)
+					9.26,                       // Average flowmap normal multiplier
+					0.125                       // UV-to-world scale factor (1/8)
+				);
 
-		rippleWPosition.xy += flowOffset;
+				rippleWPosition.xy += flowOffset;
 #				endif
-		raindropInfo = CS_GET_RAIN_DROPS(rippleWPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, CS_WETNESS_SETTINGS.Time, finalNormal, rippleStrengthModifier);
+				raindropInfo = CS_GET_RAIN_DROPS(rippleWPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, CS_WETNESS_SETTINGS.Time, finalNormal, rippleStrengthModifier);
 
-		// Calculate ripple and splash color intensities
-		float rippleIntensity = length(raindropInfo.xy) * rippleStrengthModifier;
-		float splashIntensity = raindropInfo.w * distanceFadeout;
+				// Calculate ripple and splash color intensities
+				float rippleIntensity = length(raindropInfo.xy) * rippleStrengthModifier;
+				float splashIntensity = raindropInfo.w * distanceFadeout;
 
-		// Store ripple and splash information for color effects
-		result.rippleInfo.xyz = raindropInfo.xyz * rippleIntensity;
-		result.rippleInfo.w = splashIntensity;
+				// Store ripple and splash information for color effects
+				result.rippleInfo.xyz = raindropInfo.xyz * rippleIntensity;
+				result.rippleInfo.w = splashIntensity;
+			}
+			if (any(raindropInfo.xyz != float3(0, 0, 1))) {
+				float3 rippleNormal = normalize(raindropInfo.xyz);
+				finalNormal = CS_REORIENT_NORMAL(rippleNormal, finalNormal);
+			}
+#				if defined(WETTERNESS)
+		}
 	}
-	if (any(raindropInfo.xyz != float3(0, 0, 1))) {
-		float3 rippleNormal = normalize(raindropInfo.xyz);
-		finalNormal = CS_REORIENT_NORMAL(rippleNormal, finalNormal);
-	}
+#				endif
 #			endif
 
 	[branch] if (SharedData::waterAppearanceSettings.Enabled)

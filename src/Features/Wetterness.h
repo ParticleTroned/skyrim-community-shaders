@@ -305,6 +305,10 @@ private:
 	void DrawPuddleMaskSettings();
 	void DrawWeatherAnalysis() const;
 	void ResetRuntimeState() const;
+	bool HasPendingDrying() const;
+	void DecayRainHistory(float deltaSeconds) const;
+	float UpdateRuntimeClock(bool gamePaused) const;
+	PerFrame MakeDryPerFrameData() const;
 	void InvalidateSanitizedSettingsCache();
 	const Settings& GetSanitizedSettings() const;
 
@@ -328,4 +332,5 @@ private:
 	mutable Settings sanitizedSettingsCache{};
 	mutable bool sanitizedSettingsCacheValid = false;
 	winrt::com_ptr<ID3D11ShaderResourceView> puddleMaskSrv;
+	bool rainResourcesBound = false;
 };

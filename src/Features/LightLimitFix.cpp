@@ -17,7 +17,6 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/D3D.h"
-#include "Utils/ExternalEmittance.h"
 #include "Utils/Finite.h"
 #include "Utils/StringUtils.h"
 
@@ -41,6 +40,8 @@
 static constexpr uint CLUSTER_MAX_LIGHTS = 256;
 static constexpr uint CONTACT_SHADOW_MAX_LIGHTS = 8;
 static constexpr uint MAX_LIGHTS = 1024;
+// Every light is staged by one lane of ClusterCullingCS's thread group.
+static_assert(MAX_LIGHTS <= 16 * 16 * 4);
 
 namespace
 {
@@ -3269,7 +3270,8 @@ void LightLimitFix::UpdateLights()
 		eyePositionCached[eyeIndex] = { eyePosition.x, eyePosition.y, eyePosition.z };
 	}
 
-	eastl::vector<LightData> lightsData{};
+	auto& lightsData = lightScratch;
+	lightsData.clear();
 	lightsData.reserve(MAX_LIGHTS);
 	const bool isInterior = LocationContext::Get().inInterior;
 	RefreshJsonPlacedLightCacheFrame();
@@ -3753,7 +3755,6 @@ void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* Thi
 	}
 
 	func(This, Pass, RenderFlags);
-	ExternalEmittance::UpdatePermutation(Pass);
 	auto& singleton = globals::features::lightLimitFix;
 	singleton.BSLightingShader_SetupGeometry_Before(Pass);
 	singleton.BSLightingShader_SetupGeometry_After(Pass);

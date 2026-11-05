@@ -7,10 +7,10 @@
 #include "Utils/LazyShader.h"
 #include "Utils/PointLightFlags.h"
 
+#include "Features/LightLimitFix/LightAttach.h"
 #include "Features/LightLimitFix/ParticleLights.h"
 #include "Features/LightLimitFix/SceneLightSnapshot.h"
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
-#include "Features/LightLimitFix/LightAttach.h"
 
 #include <algorithm>
 #include <atomic>
@@ -85,6 +85,8 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(LightData);
 	static_assert(sizeof(LightData) == 96);
+
+	eastl::vector<LightData> lightScratch;
 
 	struct ClusterAABB
 	{

@@ -33,7 +33,7 @@ namespace
 {
 	constexpr uint32_t PassMask = static_cast<uint32_t>(State::ExtraShaderDescriptors::NoSnow) | static_cast<uint32_t>(State::ExtraShaderDescriptors::NoFoliageTint) |
 	                              static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowRooftop) | static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowLODTree) |
-	                              static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowInactive);
+	                              static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowInactive) | static_cast<uint32_t>(State::ExtraShaderDescriptors::NoSnowMelt);
 	constexpr float MaxFrameSeconds = 0.1f;
 	constexpr float MinAngleRange = 0.001f;
 	constexpr float SnowBoundsPadding = 512.0f;
@@ -58,6 +58,7 @@ SnowCover::PerFrame SnowCover::GetCommonBufferData(bool inWorld)
 		return {};
 	// Resolve resource changes before uploading the matching enabled state.
 	if (reloadRequested.exchange(false)) {
+		WetternessSnowMelt::Reset();
 		lastWorldspace.clear();
 		LoadGeometryLists();
 		frame = {};
@@ -95,7 +96,7 @@ void SnowCover::UpdateFrame()
 			}
 		}
 	}
-	const float snowRate = snowing ? snowingSpeed : (raining ? -2.0f * meltingSpeed : (timeSnowing > 0.0f ? -meltingSpeed : meltingSpeed));
+	const float snowRate = SnowCoverMath::AccumulationRate(timeSnowing, snowing, raining, snowingSpeed, meltingSpeed);
 	if (auto* calendar = globals::game::calendar) {
 		const double hours = static_cast<double>(calendar->GetCurrentGameTime()) * 24.0;
 		const float elapsed = std::isfinite(hours) && lastGameHours >= 0.0 ? static_cast<float>(std::max(0.0, hours - lastGameHours)) : 0.0f;
@@ -746,6 +747,8 @@ uint32_t SnowCover::BeginPass(const RE::BSRenderPass* pass)
 	const bool actor = reference && reference->GetFormType() == RE::FormType::ActorCharacter;
 	const bool movable = reference && reference->CanBeMoved();
 	const bool animated = pass->geometry->HasAnimation() || (reference && reference->GetBaseObject() && reference->GetBaseObject()->IsBoundAnimObject());
+	if (actor || animated || movable)
+		flags |= static_cast<uint32_t>(State::ExtraShaderDescriptors::NoSnowMelt);
 	if (actor || blacklist.contains(geometryName) || ((animated || movable) && !whitelist.contains(geometryName) && !(settings.AffectHavok && movable)))
 		flags |= static_cast<uint32_t>(State::ExtraShaderDescriptors::NoSnow);
 	if (!settings.AffectFloraTint && SnowEnvironment::IsHarvestableFlora(reference))
@@ -785,7 +788,11 @@ bool SnowCover::IsSnowFree(const RE::BSRenderPass* pass, uint32_t flags) const
 	using Material = RE::BSShaderMaterial::Feature;
 	const auto* property = pass->shaderProperty;
 	const auto* material = property ? property->material : nullptr;
-	if (!material || perFrame.TimeSnowing > 0.0f || WetternessSnowMelt::HasHistory())
+	float weatherSnow = perFrame.TimeSnowing;
+	float seasonalAltitude = perFrame.SeasonalAltitude;
+	if (!(flags & static_cast<uint32_t>(State::ExtraShaderDescriptors::NoSnowMelt)))
+		WetternessSnowMelt::ExpandSnowBounds(weatherSnow, seasonalAltitude);
+	if (!material || weatherSnow > 0.0f)
 		return false;
 	const auto feature = material->GetFeature();
 	if (feature == Material::kMultiTexLand || feature == Material::kMultiTexLandLODBlend || feature == Material::kLODLand || feature == Material::kLODLandNoise)
@@ -814,7 +821,7 @@ bool SnowCover::IsSnowFree(const RE::BSRenderPass* pass, uint32_t flags) const
 		return false;
 	const float rooftop = (flags & static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowRooftop)) != 0 ? settings.RooftopSnow : 0.0f;
 	const float top = bound.center.z + radius + SnowBoundsPadding + rooftop;
-	const float environment = (top - settings.SnowHeightOffset + (*mapMaximum + MapFilterPadding - 0.5f) * wsettings.mapZscale + perFrame.SeasonalAltitude) / wsettings.BlendSmoothness;
+	const float environment = (top - settings.SnowHeightOffset + (*mapMaximum + MapFilterPadding - 0.5f) * wsettings.mapZscale + seasonalAltitude) / wsettings.BlendSmoothness;
 	if (!(environment + DisplacementInfluence * displacement < 0.0f))
 		return false;
 	return !tree || !settings.EnableFoliageTint || !wsettings.AffectTreeTint || environment < wsettings.FoliageHeightOffset / FoliageTransitionWidth;
@@ -969,6 +976,7 @@ json SnowCover::Control(const json& args)
 		if (status != "Worldspace config saved.")
 			throw std::runtime_error(status);
 	} else if (operation == "world_defaults") {
+		WetternessSnowMelt::Reset();
 		const auto enabled = wsettings.EnableSnowCover;
 		ResetWorldConfig();
 		wsettings.EnableSnowCover = enabled;

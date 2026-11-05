@@ -116,6 +116,24 @@ namespace
 		for (const auto& value : values)
 			Require(value[0] == 0 && value[1] == 0, "Colder arrival weather restored already-dried meltwater");
 
+		WetternessSnowMelt::PerFrame skipped;
+		skipped.enabled = 1;
+		skipped.count = 2;
+		skipped.lightDryingHours = skipped.heavyDryingHours = { 1, 1, 1, 1 };
+		skipped.samples[0].state = { 0, 500, 1, 10 };
+		skipped.samples[1].state = { 0, 500, 0, 0 };
+		setDryingAges(skipped);
+		const auto afterWait = run(skipped);
+		Require(std::abs(afterWait[2][0] - 0.05f) < 0.001f && std::abs(afterWait[2][1] - 0.05f) < 0.001f,
+			"Long wait discarded the water released during its final drying hour");
+		skipped.count = 11;
+		for (uint32_t i = 0; i < skipped.count; ++i)
+			skipped.samples[i].state = { 0, 500, 1.0f - static_cast<float>(i) / 10.0f, 10.0f - static_cast<float>(i) };
+		setDryingAges(skipped);
+		const auto stepped = run(skipped);
+		Require(std::abs(afterWait[2][0] - stepped[2][0]) < 0.001f && std::abs(afterWait[2][1] - stepped[2][1]) < 0.001f,
+			"Waiting and ordinary game-time progression disagree on late meltwater");
+
 		data.count = 2;
 		data.samples[0].state = { 0, 500, 1, 2 };
 		data.samples[1].state = { 0, 500, 1, 0 };

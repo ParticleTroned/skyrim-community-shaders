@@ -2031,7 +2031,7 @@ void State::SetupResources()
 	permutationCB = new ConstantBuffer(ConstantBufferDesc<PermutationCB>());
 	sharedDataCB = new ConstantBuffer(ConstantBufferDesc<SharedDataCB>());
 
-	const auto featureDataSize = GetFeatureBufferData(false).second;
+	const auto featureDataSize = GetFeatureBufferCapacity();
 	featureDataCB = new ConstantBuffer(ConstantBufferDesc((uint32_t)featureDataSize));
 
 	// Grab main texture to get resolution

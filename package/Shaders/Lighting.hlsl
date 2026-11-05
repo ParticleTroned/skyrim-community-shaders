@@ -3423,7 +3423,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				rooftopLift = SnowCover::GetRooftopLift(input.ModelPosition.z, snowSkyVisibility);
 #		endif
 #		if defined(WETTERNESS) && !defined(SKIN) && !defined(HAIR) && !defined(SKINNED)
-			[branch] if (SharedData::snowMeltSettings.enabled)
+			[branch] if (SharedData::snowMeltSettings.enabled && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::NoSnowMelt))
 			{
 				float dryRoughness = material.Roughness;
 #			if !defined(TRUE_PBR)

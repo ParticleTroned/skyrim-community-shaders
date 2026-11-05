@@ -16,6 +16,8 @@ namespace WetternessSnowMelt
 	void Reset();
 	/** Includes recently melted snow when deciding whether a draw can skip snow evaluation. */
 	bool HasHistory();
-	/** Shader history and the same material drying durations used by Wetterness after rain. */
-	PerFrame GetCommonBufferData();
+	/** Extends current bounds to include recently covered surfaces without disabling culling. */
+	void ExpandSnowBounds(float& weatherSnow, float& seasonalAltitude);
+	/** Thread-local snapshot, valid until the next call on this thread; inactive history is shared. */
+	const PerFrame& GetCommonBufferData();
 }

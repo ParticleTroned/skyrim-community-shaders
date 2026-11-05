@@ -782,8 +782,9 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 #			else
 		float snowSkyVisibility = 1.0;
 #			endif
-		SnowCover::CoverageInputs footprint = SnowCover::ApplyGrassSnow(albedo, normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, false, eyeIndex, TexBaseSampler, false, false);
-		albedo = ApplyGrassSnowMeltDarkening(albedo, footprint);
+		SnowCover::GrassSnowState snow = SnowCover::GetGrassSnowState(normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, false, eyeIndex, TexBaseSampler);
+		albedo = ApplyGrassSnowMeltDarkening(albedo, snow.footprint);
+		SnowCover::ApplyGrassSnow(albedo, snow, false, false);
 	}
 #		endif
 
@@ -979,8 +980,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				else
 		float snowSkyVisibility = 1.0;
 #				endif
-		SnowCover::CoverageInputs footprint = SnowCover::ApplyGrassSnow(albedo, normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, complex, eyeIndex, TexBaseSampler);
-		albedo = ApplyGrassSnowMeltDarkening(albedo, footprint);
+		SnowCover::GrassSnowState snow = SnowCover::GetGrassSnowState(normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, complex, eyeIndex, TexBaseSampler);
+		albedo = ApplyGrassSnowMeltDarkening(albedo, snow.footprint);
+		SnowCover::ApplyGrassSnow(albedo, snow);
 	}
 #			endif
 

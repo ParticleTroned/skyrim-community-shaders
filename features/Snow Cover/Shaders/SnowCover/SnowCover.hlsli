@@ -239,7 +239,15 @@ namespace SnowCover
 		}
 	}
 
-	CoverageInputs ApplyGrassSnow(inout float3 color, float3 normal, float3 relativeWorldPos, float2 uv, float3 viewPosition, float skyVisibility, bool complex, uint eyeIndex, Texture2D<float4> diffuseTexture, bool pbrMaterial = false, bool applyDiffuseControls = true)
+	struct GrassSnowState
+	{
+		CoverageInputs footprint;
+		float3 normal;
+		float environment;
+		float coverage;
+	};
+
+	GrassSnowState GetGrassSnowState(float3 normal, float3 relativeWorldPos, float2 uv, float3 viewPosition, float skyVisibility, bool complex, uint eyeIndex, Texture2D<float4> diffuseTexture, bool pbrMaterial = false)
 	{
 		float3 snowPosition = relativeWorldPos + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
 		float3 snowNormal = float3(uv, normal.z * (1 - FoliageNormalBias) + FoliageNormalBias);
@@ -262,8 +270,17 @@ namespace SnowCover
 			}
 		}
 		snowOcclusion *= saturate(relativeWorldPos.z - SharedData::GetWaterData(relativeWorldPos, eyeIndex).w);
-		ApplySnowFoliageBase(color, snowNormal, snowPosition, snowEnvironment, snowCoverage * snowOcclusion, pbrMaterial, applyDiffuseControls);
-		return GetFoliageFootprint(snowNormal, snowPosition, length(viewPosition), snowEnvironment, snowOcclusion);
+		GrassSnowState state;
+		state.footprint = GetFoliageFootprint(snowNormal, snowPosition, length(viewPosition), snowEnvironment, snowOcclusion);
+		state.normal = snowNormal;
+		state.environment = snowEnvironment;
+		state.coverage = snowCoverage * snowOcclusion;
+		return state;
+	}
+
+	void ApplyGrassSnow(inout float3 color, GrassSnowState state, bool pbrMaterial = false, bool applyDiffuseControls = true)
+	{
+		ApplySnowFoliageBase(color, state.normal, state.footprint.position, state.environment, state.coverage, pbrMaterial, applyDiffuseControls);
 	}
 #	endif
 

@@ -51,6 +51,9 @@ int main()
 	Require(data.count == 3 && data.samples[1].state[3] == 8, "Wait moved the end of melting to wake-up");
 	Require(std::abs(data.samples[1].heavyDryingAge[3] - 8.0f / 15.0f) < 0.0001f,
 		"Wait did not advance drying after the actual melting endpoint");
+	Require(WetternessSnowMelt::PackedSize(data) == offsetof(WetternessSnowMelt::PerFrame, samples) + 3 * sizeof(WetternessSnowMelt::Sample),
+		"Short history uploaded unused samples");
+	Require(history.SnowBounds()[0] == 2, "Bounds culling discarded the earlier snowy footprint");
 	Observe(history, Snow(0), 126, -1);
 	Require(!history.HasMelt(), "Wait retained expired meltwater");
 
@@ -81,6 +84,21 @@ int main()
 	Require(!history.HasMelt(), "Time rewind reused another timeline's wetness");
 	Observe(history, Snow(0), std::numeric_limits<double>::quiet_NaN(), 0);
 	Require(!history.HasMelt(), "Invalid clock retained history");
+	Require(WetternessSnowMelt::PackedSize(history.GetData()) == offsetof(WetternessSnowMelt::PerFrame, samples),
+		"Inactive history still uploaded its sample array");
+
+	history.Clear();
+	Observe(history, Snow(2, 1), 100, 0);
+	auto arrival = Snow(0, 1);
+	arrival.fireCount = 1;
+	arrival.fireStrength = 1;
+	arrival.fires[0] = { 0, 0, 0, 10 };
+	Observe(history, arrival, 110, -1);
+	data = history.GetData();
+	Require(data.count >= 3 && data.samples[data.count - 2].fireCount == 0 &&
+				data.samples[data.count - 1].fireCount == 1 && data.samples[data.count - 2].state[3] == 0 &&
+				data.samples[data.count - 1].heavyDryingAge[3] == 0,
+		"Travel backdated newly observed fire melt");
 
 	history.Clear();
 	Observe(history, Snow(1), 0, 0);
@@ -96,7 +114,35 @@ int main()
 	Require(data.count <= WetternessSnowMelt::MaxSamples && data.samples[0].state[3] == 1,
 		"Frequent fire updates evicted the start of local snow history");
 	history.Clear();
+	Observe(history, Snow(1), 0, 0);
+	Observe(history, Snow(0), 0.5, -2);
+	fire.state[0] = 0;
+	for (int i = 2; i <= 40; ++i) {
+		fire.fires[0][3] = static_cast<float>(i);
+		Observe(history, fire, i * 0.5, 0);
+	}
+	data = history.GetData();
+	Require(std::any_of(data.samples.begin(), data.samples.begin() + data.count, [](const auto& sample) {
+		return sample.state[0] == 0 && sample.state[3] == 19.5f;
+	}),
+		"History compression moved the snow-clearing endpoint");
+	history.Clear();
 	Require(!history.HasMelt(), "Reset retained another world's meltwater");
+
+	Observe(history, Snow(1), 0, 0);
+	fire = Snow(1);
+	fire.fireCount = 2;
+	fire.fireStrength = 1;
+	fire.fires[0] = { 0, 0, 0, 100 };
+	fire.fires[1] = { 50, 0, 0, 100 };
+	Observe(history, fire, 1, 0);
+	for (int i = 2; i <= 20; ++i) {
+		std::swap(fire.fires[0], fire.fires[1]);
+		fire.fires[0][3] -= 1;
+		fire.fires[1][3] -= 1;
+		Observe(history, fire, i, 0);
+	}
+	Require(!history.HasMelt(), "Reordered or shrinking fires kept renewing dry history");
 
 	Require(WetternessDrying::Remaining(0, 12) == 1 && WetternessDrying::Remaining(6, 12) == 0.5f &&
 				WetternessDrying::Remaining(12, 12) == 0 && WetternessDrying::Remaining(100, 12) == 0,

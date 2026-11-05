@@ -20,14 +20,25 @@ namespace WetternessSnowMelt
 		History history;
 		std::mutex historyMutex;
 		std::atomic<bool> historyAvailable{ false };
-		SnowCover::UserSettings previousSettings{};
-		SnowCover::WorldSettings previousWorld{};
+		std::atomic<float> maximumWeatherSnow{ 0.0f };
+		std::atomic<float> maximumSeasonalAltitude{ 0.0f };
+		struct CoverageConfiguration
+		{
+			SnowCover::UserSettings settings;
+			SnowCover::WorldSettings world;
+			std::array<float, 9> climateAndFire;
+			bool Matches(const CoverageConfiguration& other) const
+			{
+				return std::memcmp(&settings, &other.settings, sizeof(settings)) == 0 &&
+				       std::memcmp(&world, &other.world, sizeof(world)) == 0 && climateAndFire == other.climateAndFire;
+			}
+		};
+		CoverageConfiguration previousConfiguration{};
 		bool hasConfiguration = false;
 		struct WorldHistory
 		{
 			History history;
-			SnowCover::UserSettings settings;
-			SnowCover::WorldSettings world;
+			CoverageConfiguration configuration;
 		};
 		std::unordered_map<std::string, WorldHistory> worlds;
 		std::string currentWorld;
@@ -55,7 +66,7 @@ namespace WetternessSnowMelt
 				});
 				worlds.erase(oldest);
 			}
-			worlds.insert_or_assign(currentWorld, WorldHistory{ history, previousSettings, previousWorld });
+			worlds.insert_or_assign(currentWorld, WorldHistory{ history, previousConfiguration });
 		}
 		currentWorld.clear();
 		history.Clear();
@@ -73,8 +84,7 @@ namespace WetternessSnowMelt
 		if (found == worlds.end())
 			return;
 		history = found->second.history;
-		previousSettings = found->second.settings;
-		previousWorld = found->second.world;
+		previousConfiguration = found->second.configuration;
 		hasConfiguration = true;
 		worlds.erase(found);
 		if (history.HasSamples()) {
@@ -86,6 +96,14 @@ namespace WetternessSnowMelt
 	{
 		return globals::features::wetterness.IsRuntimeActive() && globals::features::snowCover.IsActive() &&
 		       historyAvailable.load(std::memory_order_relaxed);
+	}
+
+	void ExpandSnowBounds(float& weatherSnow, float& seasonalAltitude)
+	{
+		if (HasHistory()) {
+			weatherSnow = std::max(weatherSnow, maximumWeatherSnow.load(std::memory_order_relaxed));
+			seasonalAltitude = std::max(seasonalAltitude, maximumSeasonalAltitude.load(std::memory_order_relaxed));
+		}
 	}
 
 	void Update(const SnowCover& snow, float snowRate)
@@ -103,15 +121,21 @@ namespace WetternessSnowMelt
 			historyAvailable.store(false, std::memory_order_relaxed);
 		}
 		lastObservedHours = std::isfinite(hours) ? hours : -1.0;
-		if (!snow.IsActive() || Util::IsInterior())
+		if (!snow.IsActive() || Util::IsInterior()) {
+			history.Clear();
+			hasConfiguration = false;
+			historyAvailable.store(false, std::memory_order_relaxed);
 			return;
+		}
 		currentWorld = snow.lastWorldspace;
 		const auto& frame = snow.perFrame;
-		if (hasConfiguration && (std::memcmp(&previousSettings, &frame.settings, sizeof(previousSettings)) != 0 ||
-									std::memcmp(&previousWorld, &frame.wsettings, sizeof(previousWorld)) != 0))
+		const CoverageConfiguration configuration{ frame.settings, frame.wsettings,
+			{ static_cast<float>(snow.MaxSummerMonth), static_cast<float>(snow.MaxWinterMonth),
+				snow.SummerHeightOffset, snow.WinterHeightOffset, snow.snowingSpeed, snow.meltingSpeed,
+				static_cast<float>(snow.fireMeltSettings.Enabled), snow.fireMeltSettings.RadiusScale, snow.fireMeltSettings.Strength } };
+		if (hasConfiguration && !previousConfiguration.Matches(configuration))
 			history.Clear();
-		previousSettings = frame.settings;
-		previousWorld = frame.wsettings;
+		previousConfiguration = configuration;
 		hasConfiguration = true;
 		if (history.HasSamples() && hours == history.LastHours())
 			return;
@@ -128,19 +152,20 @@ namespace WetternessSnowMelt
 		const auto heavy = globals::features::wetterness.GetDryingHours(1.0f);
 		history.Observe(sample, hours, snowRate,
 			{ light.x, light.y, light.z, light.w }, { heavy.x, heavy.y, heavy.z, heavy.w });
+		const auto bounds = history.SnowBounds();
+		maximumWeatherSnow.store(bounds[0], std::memory_order_relaxed);
+		maximumSeasonalAltitude.store(bounds[1], std::memory_order_relaxed);
 		historyAvailable.store(history.HasMelt(), std::memory_order_relaxed);
 	}
 
-	PerFrame GetCommonBufferData()
+	const PerFrame& GetCommonBufferData()
 	{
+		static const PerFrame inactive{};
 		if (!HasHistory() || !globals::features::snowCover.IsActive() || Util::IsInterior())
-			return {};
+			return inactive;
 		const std::scoped_lock lock(historyMutex);
-		auto data = history.GetData();
-		const auto light = globals::features::wetterness.GetDryingHours(0.0f);
-		const auto heavy = globals::features::wetterness.GetDryingHours(1.0f);
-		data.lightDryingHours = { light.x, light.y, light.z, light.w };
-		data.heavyDryingHours = { heavy.x, heavy.y, heavy.z, heavy.w };
+		static thread_local PerFrame data;
+		data = history.GetData();
 		return data;
 	}
 }

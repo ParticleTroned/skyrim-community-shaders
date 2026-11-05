@@ -95,16 +95,19 @@ void Require(bool condition) { if (!condition) throw std::runtime_error("Water c
 int main(int argc, char**) {
     using namespace globals::features;
     constexpr uint32_t native = static_cast<uint32_t>(ShaderCache::WaterShaderFlags::NativeWater);
+    constexpr uint32_t wading = static_cast<uint32_t>(ShaderCache::WaterShaderFlags::Wading);
     RE::BSShader water{RE::BSShader::Type::Water}, other{RE::BSShader::Type::Lighting};
     if (argc > 1) {
         uint32_t descriptor;
-        while (std::cin >> descriptor >> reverseZ.activeThisBoot >> unifiedWater.loaded >> unifiedWater.ready >> horizonFix.loaded) {
+        bool pixelStage;
+        while (std::cin >> descriptor >> reverseZ.activeThisBoot >> unifiedWater.loaded >> unifiedWater.ready >> horizonFix.loaded >> pixelStage) {
             auto vertex = descriptor, pixel = descriptor;
             Normalize(vertex, pixel);
-            Require(vertex == pixel);
+            Require((vertex & ~wading) == pixel);
+            const auto selected = pixelStage ? pixel : vertex;
             std::array<D3D_SHADER_MACRO, 64> macros{};
-            GetWaterShaderDefines(vertex, macros);
-            std::cout << vertex;
+            GetWaterShaderDefines(selected, macros);
+            std::cout << selected;
             for (auto macro : macros) {
                 if (!macro.Name) break;
                 std::cout << ' ' << macro.Name << '=' << (macro.Definition ? macro.Definition : "");
@@ -122,10 +125,10 @@ int main(int argc, char**) {
             uint32_t vertex = descriptor, pixel = descriptor;
             Normalize(vertex, pixel);
             const auto pending = vertex;
-            Require(vertex == pixel && (vertex & native));
+            Require((vertex & ~wading) == pixel && (vertex & native));
             auto warmVertex = vertex, warmPixel = pixel;
             Warm(&water, warmVertex, warmPixel);
-            Require(warmVertex == (vertex & ~native) && warmPixel == warmVertex);
+            Require(warmVertex == (vertex & ~native) && warmPixel == (warmVertex & ~wading));
             Require(UseNativeWaterShaders(water) == !reversed);
             Require(!UseNativeWaterShaders(other));
             std::array<D3D_SHADER_MACRO, 64> fallback{}, ready{}, delayed{};
@@ -135,7 +138,7 @@ int main(int argc, char**) {
             Require(Has(fallback, "HORIZON_FIX") == horizon);
             unifiedWater.ready = true;
             Normalize(vertex, pixel);
-            Require(vertex == pixel && !(vertex & native));
+            Require((vertex & ~wading) == pixel && !(vertex & native));
             Require(!UseNativeWaterShaders(water));
             GetWaterShaderDefines(vertex, ready);
             GetWaterShaderDefines(pending, delayed);
@@ -219,8 +222,8 @@ int main(int argc, char**) {
                                 tasks = [task for task in parse_shader_configs(str(filtered)) if task[0] == "Water.hlsl"]
                                 self.assertTrue(tasks)
                                 requests = "".join(
-                                    f"{int(entry.rsplit(':', 1)[1], 16)} {int(reversed_depth)} {int(unified)} 1 {int(horizon)}\n"
-                                    for _, _, entry, _ in tasks)
+                                    f"{int(entry.rsplit(':', 1)[1], 16)} {int(reversed_depth)} {int(unified)} 1 {int(horizon)} {int(stage == 'PSHADER')}\n"
+                                    for _, stage, entry, _ in tasks)
                                 result = subprocess.run([str(self.executable), "macros"], input=requests,
                                                         capture_output=True, text=True, timeout=30)
                                 self.assertEqual(result.returncode, 0, result.stderr)

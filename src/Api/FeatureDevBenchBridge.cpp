@@ -17,6 +17,7 @@
 #	include "Features/TerrainSeams.h"
 #	include "Features/FurShells.h"
 #	include "Features/SnowCover.h"
+#	include "Features/SeasonalWeather.h"
 #	include "Features/Upscaling.h"
 #	include "TruePBR.h"
 #	include "Features/LightLimitFix/ShadowCulling.h"
@@ -203,6 +204,9 @@ namespace
 	json BuildResult(const json& args)
 	{
 		const auto action = args.value("action", std::string{});
+		for (const auto* field : { "seasonalWeather", "seasonalRegion" })
+			if (args.contains(field) && action != "seasonal_weather")
+				return Foundation().MakeError(args, "invalid_settings", "Seasonal fields require the seasonal_weather action", "validation", false, field);
 		if (args.contains("antiLag2") && action != "anti_lag2")
 			return Foundation().MakeError(args, "invalid_settings", "antiLag2 requires the anti_lag2 action", "validation", false, "antiLag2");
 		if (action == "anti_lag2") {
@@ -270,6 +274,22 @@ namespace
 					result.value("detail", result.at("error").get<std::string>()), "request", false);
 			auto response = Foundation().MakeEnvelope(args, true);
 			response["result"] = std::move(result);
+			return response;
+		}
+		if (action == "seasonal_weather") {
+			auto result = OnMain([args] {
+				try {
+					return globals::features::seasonalWeather.Control(args);
+				} catch (const std::invalid_argument& error) {
+					return json{ { "error", error.what() } };
+				} catch (const json::exception& error) {
+					return json{ { "error", error.what() } };
+				}
+			});
+			if (result.contains("error"))
+				return Foundation().MakeError(args, "seasonal_request_failed", result.at("error").get<std::string>(), "request", false);
+			auto response = Foundation().MakeEnvelope(args, true);
+			response["result"] = json{ { "seasonalWeather", std::move(result) } };
 			return response;
 		}
 		if (action == "snow_cover") {
@@ -640,6 +660,13 @@ namespace CSX::Api::FeatureDevBenchBridge
 									{ "HistorySamples", { { "type", "integer" }, { "minimum", 0 }, { "maximum", 32 } } },
 									{ "MaximumHistoryHours", { { "type", "number" }, { "const", 24 } } },
 									{ "LightDryingHours", dryingHours }, { "HeavyDryingHours", dryingHours } } } };
+			properties["action"]["enum"].push_back("seasonal_weather");
+			properties["seasonalWeather"] = SeasonalWeatherConfig::Schema();
+			properties["seasonalRegion"] = SeasonalWeatherConfig::FormKeySchema();
+			properties["seasonalRegion"]["description"] = "Optional portable region key (0xLOCAL~Plugin.esp); defaults to the sky's region.";
+			spec["outputSchema"]["properties"]["result"]["properties"]["seasonalWeather"] = { { "type", "object" },
+				{ "description", "Availability, fault, settings, region, fractional month, bypassReason, candidate base weights and projected integer chancePercent, adjustedSelections and persistence." } };
+			spec["description"] = spec["description"].get<std::string>() + " seasonal_weather inspects or changes default-off monthly regional weather weighting. Omit seasonalWeather for read-only inspection; optional seasonalRegion selects a portable region key. MonthlyWeights is twelve rows (Morning Star through Evening Star), each in clear/cloudy/rain/snow order, bounded 0..20, smoothly interpolated on the same game calendar as Snow Cover. Weights are relative; projected integer percentages sum to 100. Original entries and global pointers are restored after each native region selection; no weather is forced and no ESP or save records are edited. Quest overrides, editor locks, excluded worlds/regions, ambiguous/invalid lists, invalid clocks/global values and zero-total plans keep native behavior. Global-controlled lists are skipped by default; opt out only after resolving ownership with other seasonal controllers. SnowAssignments uses portable Region/Weather keys and Weight 0.01..100; only snow-flagged records absent from that region are added. Existing zero entries stay excluded. WeatherCategories overrides classification (0 clear, 1 cloudy, 2 rain, 3 snow, 4 unchanged). Missing snow assignments bypass the affected region. Keys are canonicalized across hex padding and case; duplicate identities are rejected. Unchanged missing references do not block disabling or editing unrelated settings. Changes take effect at the next natural weather roll; Menu Save persists them. Climate-only and custom scripted selection retain native behavior. Runtime compatibility and visuals require in-game testing.";
 			return spec.dump();
 		}();
 		host->RegisterTool("communityshaders.feature_api", snowDescriptor.c_str(), &Handler, nullptr);

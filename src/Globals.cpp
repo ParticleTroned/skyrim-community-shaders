@@ -27,6 +27,7 @@
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"
+#include "Features/SeasonalWeather.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
 #include "Features/SnowCover.h"
@@ -87,6 +88,7 @@ namespace globals
 		InteriorSun interiorSun{};
 		FurShells furShells{};
 		SnowCover snowCover{};
+		SeasonalWeather seasonalWeather{};
 		InverseSquareLighting inverseSquareLighting{};
 		ScreenSpaceGI screenSpaceGI{};
 		ScreenSpaceShadows screenSpaceShadows{};

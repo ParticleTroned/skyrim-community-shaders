@@ -32,6 +32,7 @@
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"
+#include "Features/SeasonalWeather.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
 #include "Features/SnowCover.h"
@@ -293,6 +294,7 @@ namespace
 			&globals::features::hairSpecular,
 			&globals::features::furShells,
 			&globals::features::snowCover,
+			&globals::features::seasonalWeather,
 			&globals::features::terrainVariation,
 			&globals::features::ibl,
 			&globals::features::extendedTranslucency,

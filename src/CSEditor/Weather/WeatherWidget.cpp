@@ -9,6 +9,7 @@
 
 #include "../EditorWindow.h"
 #include "FeatureIssues.h"
+#include "Features/SeasonalWeather.h"
 #include "State.h"
 #include "Utils/UI.h"
 #include "WeatherManager.h"
@@ -229,6 +230,13 @@ void WeatherWidget::DrawWidget()
 		if (ImGui::BeginTabItem("Features", nullptr, featuresFlags)) {
 			BeginScrollableContent("##FeaturesScroll");
 			DrawFeatureSettings();
+			EndScrollableContent();
+			ImGui::EndTabItem();
+		}
+
+		if (ImGui::BeginTabItem("Seasons")) {
+			BeginScrollableContent("##SeasonsScroll");
+			globals::features::seasonalWeather.DrawEditorSettings(weather);
 			EndScrollableContent();
 			ImGui::EndTabItem();
 		}

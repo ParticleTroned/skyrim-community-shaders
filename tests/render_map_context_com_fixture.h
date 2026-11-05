@@ -106,6 +106,30 @@ namespace CSX::RenderMap::ContextHookFixture
 			pDesc->Buffer.NumElements = 16;
 		}
 	};
+	template <class Interface, class Description>
+	struct OutputView : DeviceChild<Interface>
+	{
+		Buffer& resource;
+		Description description{};
+		unsigned resourceQueries = 0;
+		unsigned descriptionQueries = 0;
+
+		explicit OutputView(Buffer& input) : resource(input) {}
+
+		void STDMETHODCALLTYPE GetResource(ID3D11Resource** output) override
+		{
+			TouchGetter();
+			++resourceQueries;
+			*output = &resource;
+			resource.AddRef();
+		}
+		void STDMETHODCALLTYPE GetDesc(Description* output) override
+		{
+			TouchGetter();
+			++descriptionQueries;
+			*output = description;
+		}
+	};
 	struct CommandList : DeviceChild<ID3D11CommandList>
 	{
 		UINT STDMETHODCALLTYPE GetContextFlags() override { return 0; }
@@ -115,6 +139,33 @@ namespace CSX::RenderMap::ContextHookFixture
 		D3D11_DEVICE_CONTEXT_TYPE type = D3D11_DEVICE_CONTEXT_IMMEDIATE;
 		std::array<ID3D11ShaderResourceView*, 6> resources{};
 		unsigned queries = 0;
+		static constexpr UINT renderTargetSlot = 2;
+		static constexpr UINT computeOutputSlot = 3;
+		ID3D11RenderTargetView* renderTarget = nullptr;
+		ID3D11UnorderedAccessView* computeOutput = nullptr;
+		void (*outputTurnover)() = nullptr;
+		unsigned outputReferencesReturned = 0;
+		unsigned lastOutputGetterEntry = 0;
+
+		template <class ViewType>
+		void ReadOutputViews(UINT start, UINT count, ViewType** output, UINT slot, ViewType* view)
+		{
+			TouchGetter();
+			bool acquired = false;
+			for (UINT index = 0; index < count; ++index) {
+				output[index] = start + index == slot ? view : nullptr;
+				if (output[index]) {
+					output[index]->AddRef();
+					++outputReferencesReturned;
+					acquired = true;
+				}
+			}
+			if (acquired) {
+				lastOutputGetterEntry = getterEntries;
+				if (auto callback = std::exchange(outputTurnover, nullptr))
+					callback();
+			}
+		}
 		ID3D11PixelShader* queriedPixel = nullptr;
 		ID3D11ComputeShader* queriedCompute = nullptr;
 		void ReadResources(unsigned stage, UINT start, UINT count, ID3D11ShaderResourceView** output)
@@ -688,10 +739,9 @@ namespace CSX::RenderMap::ContextHookFixture
 		}
 		void STDMETHODCALLTYPE OMGetRenderTargets(UINT NumViews, ID3D11RenderTargetView** ppRenderTargetViews, ID3D11DepthStencilView** ppDepthStencilView) override
 		{
-			TouchGetter();
-			for (UINT index = 0; index < NumViews; ++index) ppRenderTargetViews[index] = nullptr;
 			if (ppDepthStencilView)
 				*ppDepthStencilView = nullptr;
+			ReadOutputViews(0, NumViews, ppRenderTargetViews, renderTargetSlot, renderTarget);
 		}
 		void STDMETHODCALLTYPE OMGetRenderTargetsAndUnorderedAccessViews(UINT NumRTVs, ID3D11RenderTargetView** ppRenderTargetViews, ID3D11DepthStencilView** ppDepthStencilView, UINT UAVStartSlot, UINT NumUAVs, ID3D11UnorderedAccessView** ppUnorderedAccessViews) override
 		{
@@ -798,9 +848,7 @@ namespace CSX::RenderMap::ContextHookFixture
 		}
 		void STDMETHODCALLTYPE CSGetUnorderedAccessViews(UINT StartSlot, UINT NumUAVs, ID3D11UnorderedAccessView** ppUnorderedAccessViews) override
 		{
-			TouchGetter();
-			(void)StartSlot;
-			for (UINT index = 0; index < NumUAVs; ++index) ppUnorderedAccessViews[index] = nullptr;
+			ReadOutputViews(StartSlot, NumUAVs, ppUnorderedAccessViews, computeOutputSlot, computeOutput);
 		}
 		void STDMETHODCALLTYPE CSGetShader(ID3D11ComputeShader** ppComputeShader, ID3D11ClassInstance** ppClassInstances, UINT* pNumClassInstances) override
 		{

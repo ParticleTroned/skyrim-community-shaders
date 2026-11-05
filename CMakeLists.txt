@@ -1788,6 +1788,8 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    add_controller_test(shader_descriptor_test ShaderDescriptor tests/shader_descriptor_test.cpp)
+
     set(_tooltip_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/tooltip-test")
     add_custom_command(
         OUTPUT

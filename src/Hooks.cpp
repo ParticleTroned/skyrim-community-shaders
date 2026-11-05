@@ -29,6 +29,7 @@
 #include "State.h"
 #include "TruePBR.h"
 #include "Util.h"
+#include "Utils/ShaderDescriptor.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/D3DTextureLifetimeTracker.h"
@@ -828,7 +829,11 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	}
 
 	// Only check against non-shader bits
-	state->permutationData.PixelShaderDescriptor &= ~state->modifiedPixelDescriptor;
+	const uint32_t runtimePixelBits = shader->shaderType.get() == RE::BSShader::Type::Water ?
+	                                      static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading) :
+	                                      0u;
+	state->permutationData.PixelShaderDescriptor = Util::ShaderDescriptor::UploadedPixelDescriptor(
+		state->permutationData.PixelShaderDescriptor, state->modifiedPixelDescriptor, runtimePixelBits);
 
 	state->techniqueShaderSelection = {};
 	bool shaderFound = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);

@@ -1098,11 +1098,16 @@ void LightLimitFix::DrawSettings()
 												   { "particles", "Particles", "Choose which small light effects illuminate the scene.", "Small effects that emit light", true, true, "Choose light sources" },
 												   { "placed", "Placed lights", "Choose lighting from supported objects.", "Lighting from placed objects", true, true, nullptr, nullptr, nullptr, globals::features::inverseSquareLighting.loaded },
 												   { "shadows", "Shadows", "Refine contact shadows and native shadow-map culling.", "Contact shadows and shadow culling", true, true, "Refine light interaction" },
+												   { "updates", "Light updates", "Choose how often unchanged world lights recheck nearby objects.", "World-light update interval", true, true, nullptr },
 												   { "effects", "Heat distortion", "Refine heat distortion around lights.", "Refraction around lights", true, true, nullptr },
 												   { "diagnostics", "Diagnostics", "Inspect light counts and diagnostic views.", "Light counts and buffer views", true, false, nullptr },
 											   });
 
 	{
+		if (page.Is("updates")) {
+			LightLimitFixDetail::LightAttach::DrawSettings(settings.SkipRedundantLightAttach, settings.LightAttachRefreshFrames);
+		}
+
 		// Heat warp / refraction strength (moved from Advanced Settings)
 		if (page.Is("effects")) {
 			ImGui::Text("ImageSpace Refraction");

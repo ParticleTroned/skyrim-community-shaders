@@ -1860,11 +1860,17 @@ int main()
 				{ "meshes", "Middle LOD size", &GrassPolicy::Settings::MidLODPixelSize },
 				{ "meshes", "Far LOD size", &GrassPolicy::Settings::FarLODPixelSize },
 				{ "meshes", "LOD transition width", &GrassPolicy::Settings::MeshLODBandPixels },
+				{ "meshes", "Smallest far billboard size", &GrassPolicy::Settings::FarLODMinPixelSize },
+				{ "meshes", "Far minimum density", &GrassPolicy::Settings::FarLODMinDensity },
+				{ "meshes", "Far maximum density", &GrassPolicy::Settings::FarLODMaxDensity },
+				{ "meshes", "Billboard coverage bias", &GrassPolicy::Settings::FarLODCoverageBias },
 				{ "distance", "Grass render distance", &GrassPolicy::Settings::RenderDistanceOverride }
 			};
 			for (const auto& test : cases) {
 				GrassOptimizations grass;
 				grass.settings.EnableMeshLOD = true;
+				grass.settings.FarLODOptimization = true;
+				grass.settings.FarLODMinDensity = .013f;
 				// Saved thresholds need not lie on the displayed decimal grid.
 				grass.settings.MinPixelSize = 2.013f;
 				grass.settings.MidLODPixelSize = 8.017f;
@@ -1943,7 +1949,9 @@ int main()
 						require(GImGui->TempInputId != 0, "grass Ctrl-click opens native numeric input");
 						typeNumber(upper ? "1000000" : "-1");
 						const auto actual = grass.GetSettings();
-						require(actual.Valid() && actual.*test.member == (upper ? control.maximum : control.minimum), "native grass threshold input clamps to valid ordered bounds");
+						if (!actual.Valid() || actual.*test.member != (upper ? control.maximum : control.minimum))
+							throw std::runtime_error(std::format("Grass slider '{}' numeric input did not clamp to {}: got {}",
+								test.label, upper ? control.maximum : control.minimum, actual.*test.member));
 					}
 				}
 			}

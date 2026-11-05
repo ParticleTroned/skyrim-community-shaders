@@ -270,6 +270,26 @@ int main()
 		require(GrassPolicy::MeshWeight(24) == 1);
 		require(GrassPolicy::MeshWeight(96) == 2);
 		require(GrassPolicy::MeshWeight(384) == 4);
+		require(GrassPolicy::BillboardCoverageScale(10, 20, 0) == 1);
+		require(GrassPolicy::BillboardCoverageScale(10, 20, 1) == .25f);
+		require(GrassPolicy::BillboardCoverageScale(10, 20, .5f) == .625f);
+		require(GrassPolicy::BillboardCoverageScale(20, 10, 1) == 1);
+		for (float invalid : { 0.f, -1.f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+			require(GrassPolicy::BillboardCoverageScale(invalid, 20, 1) == 1);
+			require(GrassPolicy::BillboardCoverageScale(10, invalid, 1) == 1);
+		}
+		require(!settings.FarLODOptimization && !settings.ProportionalDensityFade);
+		settings.FarLODPixelSize = .5f;
+		require(settings.Valid());
+		settings.FarLODOptimization = true;
+		require(!settings.Valid());
+		settings.FarLODMinPixelSize = .49f;
+		require(settings.Valid());
+		settings.FarLODMinDensity = settings.FarLODMaxDensity;
+		require(settings.Valid());
+		settings.FarLODMinDensity += .01f;
+		require(!settings.Valid());
+		settings = {};
 		require(GrassPolicy::NativeCountMatches(10, 10));
 		require(!GrassPolicy::NativeCountMatches(10, 20));
 		require(!GrassPolicy::NativeCountMatches(10, 21));
@@ -296,7 +316,9 @@ int main()
 		for (float GrassPolicy::Settings::* field : { &GrassPolicy::Settings::MeshCostBias,
 				 &GrassPolicy::Settings::CostBiasStartDistance, &GrassPolicy::Settings::InvisibleFadeCull,
 				 &GrassPolicy::Settings::RenderDistanceOverride, &GrassPolicy::Settings::EdgeFadeStart,
-				 &GrassPolicy::Settings::SimpleShadingPixelSize, &GrassPolicy::Settings::CollisionDistance }) {
+				 &GrassPolicy::Settings::SimpleShadingPixelSize, &GrassPolicy::Settings::CollisionDistance,
+				 &GrassPolicy::Settings::FarLODMinPixelSize, &GrassPolicy::Settings::FarLODMinDensity,
+				 &GrassPolicy::Settings::FarLODMaxDensity, &GrassPolicy::Settings::FarLODCoverageBias }) {
 			settings = {};
 			settings.*field = std::numeric_limits<float>::quiet_NaN();
 			require(!settings.Valid());

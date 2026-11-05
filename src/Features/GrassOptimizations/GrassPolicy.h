@@ -44,6 +44,14 @@ namespace GrassPolicy
 	constexpr uint32_t MeshStride(uint64_t descriptor) { return uint32_t(descriptor & 0xF) * 4; }
 	/** @brief Density and distance costs follow the drawable mesh selected for each LOD slot. */
 	inline float MeshWeight(uint32_t indexCount) { return std::sqrt(std::max(1.0f, indexCount / 24.0f)); }
+	/** @brief Estimate extra billboard area from authored bounds without texture readbacks. */
+	inline float BillboardCoverageScale(float sourceRadius, float billboardRadius, float bias)
+	{
+		if (!std::isfinite(sourceRadius) || !std::isfinite(billboardRadius) || sourceRadius <= 0 || billboardRadius <= sourceRadius)
+			return 1.0f;
+		const float ratio = sourceRadius / billboardRadius;
+		return std::lerp(1.0f, ratio * ratio, bias);
+	}
 	/** @brief Unsupported batch sizes retain native rendering before scratch allocation. */
 	constexpr bool BatchCapacityValid(uint64_t instances, uint64_t slices)
 	{
@@ -202,6 +210,12 @@ namespace GrassPolicy
 		float MidLODPixelSize = 8.0f;
 		float FarLODPixelSize = 4.0f;
 		float MeshLODBandPixels = 3.0f;
+		bool FarLODOptimization = false;
+		float FarLODMinPixelSize = 1.0f;
+		float FarLODMinDensity = 0.02f;
+		float FarLODMaxDensity = 0.2f;
+		float FarLODCoverageBias = 1.0f;
+		bool ProportionalDensityFade = false;
 		bool EnableOcclusionCulling = true;
 		float OcclusionBias = 0.001f;
 
@@ -212,6 +226,9 @@ namespace GrassPolicy
 			       FullDetailPixelSize > MinPixelSize && range(MinDensity, 0.0f, 1.0f) &&
 			       range(MidLODPixelSize, 0.01f, 128.0f) && range(FarLODPixelSize, 0.01f, MidLODPixelSize) &&
 			       range(MeshLODBandPixels, 0.01f, 32.0f) && range(OcclusionBias, 0.0f, 0.05f) &&
+			       range(FarLODMinPixelSize, 0.0f, 64.0f) && (!FarLODOptimization || FarLODMinPixelSize < FarLODPixelSize) &&
+			       range(FarLODMinDensity, 0.0f, 1.0f) && range(FarLODMaxDensity, FarLODMinDensity, 1.0f) &&
+			       range(FarLODCoverageBias, 0.0f, 1.0f) &&
 			       range(MeshCostBias, 0.0f, 1.0f) && range(CostBiasStartDistance, 0.0f, 20000.0f) &&
 			       range(InvisibleFadeCull, 0.0f, 1.0f) && range(RenderDistanceOverride, 0.0f, 100000.0f) &&
 			       range(EdgeFadeStart, 0.0f, 1.0f) && range(SimpleShadingPixelSize, 0.0f, 32.0f) &&

@@ -24,7 +24,11 @@ void RunCullingShader(bool vr)
 	Check(parameterReflection->GetVariableByName("MeshWeights")->GetDesc(&weightLayout));
 	Require(weightLayout.StartOffset == 192 && weightLayout.Size == 16, "Drawable mesh costs changed the CPU parameter layout");
 	Require(strengthLayout.StartOffset == 172 && strengthLayout.Size == sizeof(float), "Collision strength changed the CPU culling layout");
-	Require(parameterLayout.Size == 208 && indexCountLayout.StartOffset == 176 && indexCountLayout.Size == 16, "Indirect index counts changed the CPU parameter layout");
+	Require(parameterLayout.Size == 240 && indexCountLayout.StartOffset == 176 && indexCountLayout.Size == 16, "Indirect index counts changed the CPU parameter layout");
+	D3D11_SHADER_VARIABLE_DESC farLayout{}, policyLayout{};
+	Check(parameterReflection->GetVariableByName("FarDensity")->GetDesc(&farLayout));
+	Check(parameterReflection->GetVariableByName("FarPolicyEnabled")->GetDesc(&policyLayout));
+	Require(farLayout.StartOffset == 208 && farLayout.Size == 16 && policyLayout.StartOffset == 224, "Far billboard policy changed the CPU parameter layout");
 	const UINT eyes = vr ? 2 : 1, capacity = 128;
 	using Record = std::array<uint32_t, 8>;
 	const std::array<Record, 3> records{ Record{ 0, 0x3c003800, 0x3c00, 0, 0x3c000000, 0x3c000000, 0, 0 },
@@ -428,6 +432,116 @@ void RunCullingShader(bool vr)
 		stereo->Bind(context.Get());
 	}
 
+	for (bool diagnostic : { false, true }) {
+		std::vector<D3D_SHADER_MACRO> policyDefines;
+		if (vr)
+			policyDefines.push_back({ "VR", "1" });
+		if (diagnostic)
+			policyDefines.push_back({ "GRASS_DIAGNOSTICS", "1" });
+		auto policyCode = Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassCullingCS.hlsl", "cs_5_0", policyDefines);
+		Check(device->CreateComputeShader(policyCode->GetBufferPointer(), policyCode->GetBufferSize(), nullptr, shader.ReleaseAndGetAddressOf()));
+		Util::SetResourceName(shader.Get(), "GrassTest::PolicyCullCS");
+		constexpr UINT population = 1024;
+		std::vector<Record> billboards(population, records[0]);
+		for (UINT i = 0; i < population; ++i) {
+			const auto half = [](float value) { return UINT(DirectX::PackedVector::XMConvertFloatToHalf(value)); };
+			billboards[i][0] = half((int(i % 32) - 16) * .125f) | (half((int(i / 32) - 16) * .125f) << 16);
+			billboards[i][1] = (billboards[i][1] & 0xffff0000u) | half(4);
+		}
+		auto policyInput = makeBuffer(UINT(billboards.size() * sizeof(Record)), D3D11_BIND_SHADER_RESOURCE, 0,
+			D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, billboards.data(), "GrassTest::PolicyInput");
+		inputView.BufferEx.NumElements = population * 8;
+		Check(device->CreateShaderResourceView(policyInput.Get(), &inputView, inputSRV.ReleaseAndGetAddressOf()));
+		Util::SetResourceName(inputSRV.Get(), "GrassTest::PolicyInput SRV");
+		output = makeBuffer(population * eyes * 3 * 4, D3D11_BIND_UNORDERED_ACCESS, 0,
+			D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, nullptr, "GrassTest::PolicyOutput");
+		extras = makeBuffer(population * eyes * 3 * 24, D3D11_BIND_UNORDERED_ACCESS, 24,
+			D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, nullptr, "GrassTest::PolicyExtras");
+		makeOutputViews();
+		const std::array<Slice, 3> policySlices{ Slice{}, Slice{ 0, population, population, 0, { 0, 0, 0, 1 } }, Slice{} };
+		context->UpdateSubresource(table.Get(), 0, nullptr, policySlices.data(), 0, 0);
+		params.SetVariable("InstanceCount", population);
+		params.SetVariable("SliceCount", 1u);
+		params.SetVariable("Capacity", population);
+		params.SetVariable("BandPixels", 0.0f);
+		params.SetVariable("MidPixels", 8.0f);
+		params.SetVariable("FarPixels", 4.0f);
+		params.SetVariable("MinPixels", 1.0f);
+		params.SetVariable("FarDensity", std::array<float, 4>{ .25f, .03f, .03f, 1 });
+		const auto survivors = [&](bool density = true, bool lod = true) {
+			const auto result = dispatch(false, density, false, lod, population / 64);
+			const auto ids = read(output.Get()), extraValues = read(extras.Get());
+			std::vector<std::pair<UINT, uint32_t>> firstEye;
+			for (UINT eye = 0; eye < eyes; ++eye) {
+				std::vector<std::pair<UINT, uint32_t>> current;
+				for (UINT tier = 0; tier < 3; ++tier) {
+					const UINT bin = tier * eyes + eye;
+					for (UINT i = 0; i < result[bin * 8 + 4]; ++i) {
+						const UINT offset = bin * population + i;
+						current.emplace_back(sourceIndex(ids[offset], population), extraValues[offset * 6 + 3]);
+					}
+				}
+				std::sort(current.begin(), current.end());
+				if (eye == 0)
+					firstEye = current;
+				else
+					Require(current == firstEye, "Far density changed between stereo eyes");
+			}
+			return firstEye;
+		};
+		params.SetVariable("MinPixels", .25f);
+		const auto ordinary = survivors();
+		Require(!ordinary.empty() && ordinary.size() < population, "Ordinary thinning baseline is not populated");
+		params.SetVariable("MinPixels", 1.0f);
+		Require(survivors().empty(), "Ordinary cutoff retained subpixel grass");
+		params.SetVariable("FarPolicyEnabled", 1u);
+		const auto legacy = survivors();
+		Require(!legacy.empty(), "Far policy did not preserve sparse distant billboards");
+		Require(survivors(false).size() == population, "Far policy ignored disabled density reduction");
+		Require(survivors(true, false).empty(), "Far policy affected full meshes");
+		params.SetVariable("FarPixels", .01f);
+		Require(survivors().empty(), "Far policy affected middle meshes");
+		params.SetVariable("FarPixels", 4.0f);
+		params.SetVariable("ProportionalFade", 1u);
+		const auto proportional = survivors();
+		Require(!proportional.empty() && proportional.size() * 3 < legacy.size(), "Proportional fade retained the fixed density tail");
+		params.SetVariable("OverrideDistance", 1u);
+		for (float range : { 10000.f, 40000.f }) {
+			params.SetVariable("RenderDistance", range);
+			Require(survivors() == proportional, "Extending draw range changed inner density or fade");
+		}
+		params.SetVariable("OverrideDistance", 0u);
+		for (float range : { 10000.f, 40000.f }) {
+			params.SetVariable("RenderDistance", range);
+			native.SetVariable("AlphaParam1", range);
+			native.SetVariable("AlphaParam2", 0.0f);
+			native.Bind(context.Get());
+			Require(survivors() == proportional, "Extending native grass range changed inner density or fade");
+		}
+		params.SetVariable("FarDensity", std::array<float, 4>{ .25f, .03f, .03f, .25f });
+		const auto covered = survivors();
+		Require(covered.size() < proportional.size(), "Coverage penalty did not reduce distant work");
+		params.SetVariable("FarDensity", std::array<float, 4>{ .25f, 0, 0, 1 });
+		for (UINT proportionalFade : { 0u, 1u }) {
+			params.SetVariable("ProportionalFade", proportionalFade);
+			Require(survivors().empty(), "Zero far density retained instances");
+		}
+		params.SetVariable("FarPixels", .6251f);
+		params.SetVariable("FarDensity", std::array<float, 4>{ .6241f, 0, 1, 1 });
+		const auto narrow = survivors();
+		Require(std::any_of(narrow.begin(), narrow.end(), [](const auto& entry) { return entry.first == 528; }),
+			"Narrow valid far size range failed to approach the requested maximum density");
+		params.SetVariable("FarPixels", 4.0f);
+		params.SetVariable("FarDensity", std::array<float, 4>{ .25f, 1, 1, 1 });
+		Require(survivors().size() == population, "Full far density lost instances");
+		params.SetVariable("FarPolicyEnabled", 0u);
+		Require(survivors().empty(), "Missing far billboard bypassed the ordinary cutoff");
+		params.SetVariable("ProportionalFade", 0u);
+		params.SetVariable("RenderDistance", 0.0f);
+		params.SetVariable("OverrideDistance", 0u);
+		params.SetVariable("MinPixels", .25f);
+		Require(survivors() == ordinary, "Disabling far controls did not restore ordinary survivors and fades");
+	}
 	// Verify multisets, paired extras and canaries; compaction order is deliberately unspecified.
 	for (const UINT outputCapacity : { 256u, GrassPolicy::kMaxBatchInstances }) {
 		const UINT outputSlots = outputCapacity * eyes * 3 + 1;

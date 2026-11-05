@@ -27,6 +27,9 @@ cbuffer Parameters : register(b0)
 	float CollisionStrength;
 	uint4 IndexCounts;
 	float4 MeshWeights;
+	float4 FarDensity;  // Minimum pixels, minimum/maximum density, authored-bound area scale.
+	uint FarPolicyEnabled, ProportionalFade;
+	uint2 PolicyPadding;
 };
 
 cbuffer FrustumParameters : register(b3)
@@ -245,9 +248,33 @@ uint CullInstance(uint index, uint commonSlice, out uint sourceRecord, out uint 
 	float costBias = MeshCostBias * saturate((distance - CostBiasStartDistance) / max(CostBiasStartDistance, 1e-4));
 	float pixelScale = lerp(1, meshWeight, costBias);
 	float maximumDistance = RenderDistance * lerp(1, 1 / max(meshWeight, 1), costBias);
-	float keep = lerp(MinDensity, 1, saturate((pixels - MinPixels * pixelScale) / max((FullPixels - MinPixels) * pixelScale, .01)));
-	float densityFade = DensityEnabled && pixels < FullPixels * pixelScale ? saturate((keep + .15 - densityHash) / .15) : 1;
-	bool densityReject = valid && DensityEnabled && (pixels < MinPixels * pixelScale || densityFade <= 0);
+	float keep, minimumPixels;
+	bool thin;
+	bool farPolicy = FarPolicyEnabled && tier == 2;
+	[branch] if (farPolicy)
+	{
+		minimumPixels = FarDensity.x * pixelScale;
+		// The validated interval stays positive without widening tightly spaced size limits.
+		float detail = saturate((pixels - minimumPixels) / ((FarPixels - FarDensity.x) * pixelScale));
+		keep = lerp(FarDensity.y, FarDensity.z, detail) * FarDensity.w;
+		thin = true;
+	}
+	else
+	{
+		minimumPixels = MinPixels * pixelScale;
+		keep = lerp(MinDensity, 1, saturate((pixels - minimumPixels) / max((FullPixels - MinPixels) * pixelScale, .01)));
+		thin = pixels < FullPixels * pixelScale;
+	}
+	float densityFade;
+	// Keep the constant-width path free of a per-instance variable division.
+	[branch] if (ProportionalFade)
+	{
+		float fadeBand = .15 * keep;
+		densityFade = saturate((keep + fadeBand - densityHash) / max(fadeBand, 1e-6));
+	}
+	else densityFade = saturate((keep + .15 - densityHash) / .15);
+	densityFade = DensityEnabled && thin ? densityFade : 1;
+	bool densityReject = valid && DensityEnabled && (pixels < minimumPixels || (farPolicy && keep <= 0) || densityFade <= 0);
 	uint eyeMask = 0;
 	bool windComputed = false;
 	float2 wind = 0;

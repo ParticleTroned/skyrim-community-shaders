@@ -52,12 +52,12 @@ struct GrassOptimizations : Feature
 	GrassPolicy::Settings GetSettings() const;
 	/** @brief Validate a complete settings transaction before publishing it. */
 	bool SetSettings(const GrassPolicy::Settings& settings, std::string& error);
-	/** @brief Apply a validated partial settings transaction; unknown fields reject the whole update. */
-	bool UpdateSettings(const json& update, std::string& error);
 	/** @brief Preserve the property wind phase captured before native setup advances it. */
 	void PrepareGeometry(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry, std::optional<uint32_t> nativeWindTimer);
 	GrassBucketRenderer& GetRenderer() { return *renderer; }
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	/** @brief Apply a validated partial settings transaction; unknown fields reject the whole update. */
+	bool UpdateSettings(const json& update, std::string& error);
 	void SetDiagnosticsEnabled(bool enabled);
 	/** @brief Request lightweight cache and frame-work telemetry for DevBench. */
 	void RequestTelemetry();

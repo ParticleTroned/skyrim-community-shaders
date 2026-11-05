@@ -175,9 +175,13 @@ namespace
 		float collisionStrength = GrassCollision::kDefaultCollisionStrength;
 		std::array<uint32_t, 4> indexCounts{};
 		std::array<float, 4> meshWeights{};
+		std::array<float, 4> farDensity{};
+		uint32_t farPolicy = 0, proportionalFade = 0;
+		std::array<uint32_t, 2> policyPadding{};
 	};
-	static_assert(sizeof(Parameters) == 208 && offsetof(Parameters, collisionStrength) == 172 &&
-				  offsetof(Parameters, indexCounts) == 176 && offsetof(Parameters, meshWeights) == 192);
+	static_assert(sizeof(Parameters) == 240 && offsetof(Parameters, collisionStrength) == 172 &&
+				  offsetof(Parameters, indexCounts) == 176 && offsetof(Parameters, meshWeights) == 192 &&
+				  offsetof(Parameters, farDensity) == 208 && offsetof(Parameters, farPolicy) == 224);
 	using LODLookup = std::tuple<std::string_view, uint64_t, uintptr_t, uint32_t>;
 	struct LODKey
 	{
@@ -208,6 +212,7 @@ namespace
 		uint64_t descriptor = 0;
 		uint32_t indexCount = 0;
 		float radius = 0;
+		float coverageRadius = 0;
 		bool farLOD = false;
 	};
 	using Outcome = GrassPassCache::Outcome;
@@ -276,6 +281,7 @@ namespace
 	};
 	inline constexpr uint32_t kFrameSlotBytes = 3072, kSlotsPerPage = 21;
 	inline constexpr uint32_t kParametersOffset = 1024, kFrustumOffset = 1280, kDrawOffset = 1536;
+	static_assert(kParametersOffset + sizeof(Parameters) <= kFrustumOffset);
 	struct Bucket
 	{
 		std::vector<Source> sources;
@@ -2163,6 +2169,7 @@ Mesh GrassBucketRenderer::Impl::LoadLODMesh(const LODKey& key)
 	if (!mesh.indexCount || !Finite(bound.center) || !std::isfinite(bound.radius) || bound.radius <= 0)
 		return {};
 	mesh.radius = bound.center.Length() + bound.radius;
+	mesh.coverageRadius = bound.radius;
 	mesh.farLOD = key.tier == 1;
 	if (!std::isfinite(mesh.radius))
 		return {};
@@ -2574,6 +2581,10 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 	params.meshWeights = { GrassPolicy::MeshWeight(meshes[0].indexCount),
 		GrassPolicy::MeshWeight(meshes[1].indexCount), GrassPolicy::MeshWeight(meshes[2].indexCount), 1 };
 	params.collisionStrength = frameCollisionStrength;
+	params.farPolicy = frameSettings.FarLODOptimization && meshes[2].farLOD;
+	params.proportionalFade = frameSettings.ProportionalDensityFade;
+	params.farDensity = { frameSettings.FarLODMinPixelSize, frameSettings.FarLODMinDensity, frameSettings.FarLODMaxDensity,
+		GrassPolicy::BillboardCoverageScale(representative.bound.radius, meshes[2].coverageRadius, frameSettings.FarLODCoverageBias) };
 	if (cullingSlices.size() > GrassPolicy::kMaxFrameSlices - frameSlices.size())
 		return GRASS_DRAW_REJECT(Capacity);
 	params.sliceOffset = uint32_t(frameSlices.size());

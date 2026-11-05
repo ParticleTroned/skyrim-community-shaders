@@ -93,6 +93,7 @@ public:
 	bool recompileFlag = false;
 	uint outputAoIdx = 0;
 	uint outputIlIdx = 0;
+	bool idleOutputsCleared = false;
 	std::atomic_bool queuedResetHistory{ true };
 
 	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>

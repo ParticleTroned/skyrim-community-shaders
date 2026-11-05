@@ -2818,7 +2818,27 @@ void GrassBucketRenderer::DrawRenderPass(RE::BSRenderPass* pass, uint32_t techni
 {
 	impl->ClearDrawContext();
 	const SKSE::stl::scope_exit finish([&]() noexcept { impl->ClearDrawContext(); });
-	if (!pass || !pass->geometry || !pass->shader || pass->shader->shaderType != RE::BSShader::Type::Grass || impl->nativeFallbackDepth) {
+	if (!pass || !pass->geometry || !pass->shader || pass->shader->shaderType != RE::BSShader::Type::Grass) {
+		draw(pass, technique, alphaTest, flags);
+		return;
+	}
+	const bool restoreParameters = impl->context && impl->disabled;
+	winrt::com_ptr<ID3D11Buffer> previousParameters;
+	UINT previousFirst = 0, previousCount = 0;
+	if (restoreParameters)
+		impl->context->VSGetConstantBuffers1(9, 1, previousParameters.put(), &previousFirst, &previousCount);
+	// Native grass setup also borrows b9, which skinned shaders use for previous bones.
+	const SKSE::stl::scope_exit restoreParametersState([&]() noexcept {
+		if (restoreParameters) {
+			auto* buffer = previousParameters.get();
+			// Whole/null bindings do not require driver support for constant-buffer offsetting.
+			if (buffer && (previousFirst != 0 || previousCount != D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT))
+				impl->context->VSSetConstantBuffers1(9, 1, &buffer, &previousFirst, &previousCount);
+			else
+				impl->context->VSSetConstantBuffers(9, 1, &buffer);
+		}
+	});
+	if (impl->nativeFallbackDepth) {
 		draw(pass, technique, alphaTest, flags);
 		return;
 	}

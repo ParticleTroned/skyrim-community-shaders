@@ -32,7 +32,7 @@ public:
 	/** @brief Queue one compatible representative, retaining native fallback for every member. */
 	bool QueueVisible(RE::BSMultiStreamInstanceTriShape*, RE::NiCullingProcess*, int32_t);
 	using RenderPass = void (*)(RE::BSRenderPass*, uint32_t, bool, uint32_t);
-	/** @brief Expand a failed representative draw through the original native pass route. */
+	/** @brief Preserve shared vertex constants while expanding failed representatives through native passes. */
 	void DrawRenderPass(RE::BSRenderPass*, uint32_t, bool, uint32_t, RenderPass);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	void SetDiagnosticsEnabled(bool enabled);

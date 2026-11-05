@@ -52639,16 +52639,44 @@ void Upscaling::PostDisplay()
 	globals::state->UpdateSharedData(false, false);
 }
 
-void Upscaling::TimerSleepQPC(int64_t targetQPC)
+void Upscaling::TimerSleepQPC(int64_t targetQPC, int64_t frequency)
 {
+	if (frequency <= 0)
+		return;
+	static thread_local winrt::handle timer{ [] {
+		auto handle = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+		return handle ? handle : CreateWaitableTimerW(nullptr, FALSE, nullptr);
+	}() };
 	LARGE_INTEGER currentQPC;
-	do {
+	QueryPerformanceCounter(&currentQPC);
+	const int64_t duration = targetQPC - currentQPC.QuadPart;
+	if (duration <= 0)
+		return;
+	const int64_t spinTicks = frequency / 500 + duration / 6;
+	while (targetQPC - currentQPC.QuadPart > spinTicks) {
+		const auto sleepTicks = targetQPC - currentQPC.QuadPart - spinTicks;
+		LARGE_INTEGER due;
+		due.QuadPart = -static_cast<int64_t>(static_cast<double>(sleepTicks) * 10000000.0 / frequency);
+		if (timer && due.QuadPart < 0 && SetWaitableTimerEx(timer.get(), &due, 0, nullptr, nullptr, nullptr, 0)) {
+			if (WaitForSingleObject(timer.get(), 100) == WAIT_FAILED)
+				Sleep(1);
+		} else {
+			Sleep(1);
+		}
 		QueryPerformanceCounter(&currentQPC);
-	} while (currentQPC.QuadPart < targetQPC);
+	}
+	while (currentQPC.QuadPart < targetQPC) {
+		YieldProcessor();
+		QueryPerformanceCounter(&currentQPC);
+	}
 }
 
 void Upscaling::FrameLimiter()
 {
+	if (!d3d12SwapChainActive || !settings.frameLimitMode) {
+		frameLimitDeadline = 0;
+		frameLimitInterval = 0;
+	}
 	if (d3d12SwapChainActive) {
 		// Use frame latency waitable object if available for better frame pacing
 		HANDLE waitableObject = GetFrameLatencyWaitableObject();
@@ -52668,23 +52696,29 @@ void Upscaling::FrameLimiter()
 		}
 
 		if (settings.frameLimitMode) {
-			// Fall back to the original timing method
-			// Use integer arithmetic for more precise timing
-			static constexpr int64_t kNanosecondsPerSecond = 1000000000LL;
 			static constexpr double kFrameGenerationRateScale = 0.5;
 			const double frameRateScale = ShouldUseFrameGenerationThisFrame() ? kFrameGenerationRateScale : 1.0;
-			int64_t targetFrameTimeNS = int64_t(static_cast<double>(kNanosecondsPerSecond) / (refreshRate * frameRateScale));
-			int64_t targetFrameTicks = (targetFrameTimeNS * qpf.QuadPart) / kNanosecondsPerSecond;
-
-			static LARGE_INTEGER lastFrame = {};
+			const double interval = static_cast<double>(qpf.QuadPart) / (refreshRate * frameRateScale);
+			if (qpf.QuadPart <= 0 || !std::isfinite(interval) || interval < 1.0 || interval > qpf.QuadPart) {
+				frameLimitDeadline = 0;
+				frameLimitInterval = 0;
+				return;
+			}
+			const auto targetFrameTicks = static_cast<int64_t>(interval);
 			LARGE_INTEGER timeNow;
 			QueryPerformanceCounter(&timeNow);
-
-			int64_t delta = timeNow.QuadPart - lastFrame.QuadPart;
-			if (delta < targetFrameTicks) {
-				TimerSleepQPC(lastFrame.QuadPart + targetFrameTicks);
-			}
-			QueryPerformanceCounter(&lastFrame);
+			if (frameLimitDeadline == 0)
+				frameLimitDeadline = timeNow.QuadPart + targetFrameTicks;
+			else
+				frameLimitDeadline += targetFrameTicks - frameLimitInterval;
+			frameLimitInterval = targetFrameTicks;
+			if (timeNow.QuadPart < frameLimitDeadline)
+				TimerSleepQPC(frameLimitDeadline, qpf.QuadPart);
+			QueryPerformanceCounter(&timeNow);
+			// Keep cadence across small overshoots; rebase after a full missed interval.
+			frameLimitDeadline = timeNow.QuadPart < frameLimitDeadline + targetFrameTicks ?
+			                         frameLimitDeadline + targetFrameTicks :
+			                         timeNow.QuadPart + targetFrameTicks;
 		}
 	}
 }

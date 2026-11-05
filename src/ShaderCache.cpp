@@ -39,6 +39,7 @@
 #include "Utils/ContentHash.h"
 #include "Utils/FileSystem.h"
 #include "Utils/GenerationClaim.h"
+#include "Utils/ResourceName.h"
 #include "Utils/ShaderAllocation.h"
 #include "Utils/ShaderCacheManifest.h"
 #include "Utils/ShaderCachePack.h"
@@ -3417,6 +3418,9 @@ namespace SIE
 	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor, VertexShaderLookup a_lookup)
 	{
+		const bool precompile = a_lookup == VertexShaderLookup::Precompile;
+		if (precompile && backgroundCompilation.load(std::memory_order_relaxed))
+			return nullptr;
 		if (!SShaderCache::ResolveImageSpaceDescriptor(shader, descriptor)) {
 			return nullptr;
 		}
@@ -3453,8 +3457,8 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (ShouldUseAsyncCompilation() && (a_lookup == VertexShaderLookup::Compile || !globals::features::reverseZ.IsActive())) {
-			compilationSet.Add({ ShaderClass::Vertex, shader, descriptor });
+		if (ShouldUseAsyncCompilation() && (a_lookup != VertexShaderLookup::Draw || !globals::features::reverseZ.IsActive())) {
+			compilationSet.Add({ ShaderClass::Vertex, shader, descriptor, precompile });
 		} else {
 			return MakeAndAddVertexShader(shader, descriptor);
 		}
@@ -3511,17 +3515,21 @@ namespace SIE
 		return RetainShaderResource<ID3D11PixelShader>(pixelShaders, pixelShadersMutex, shader.shaderType.get(), descriptor);
 	}
 
-	void ShaderCache::PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories)
+	void ShaderCache::PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories, bool a_precompile)
 	{
 		const auto categoryFlag = GetCharacterCategoryFlag(shader.shaderType.get());
-		GetPixelShader(shader, descriptor & ~categoryFlag);
+		const auto lookup = a_precompile ? PixelShaderLookup::Precompile : PixelShaderLookup::Compile;
+		GetPixelShader(shader, descriptor & ~categoryFlag, lookup);
 		if (categories && categoryFlag)
-			GetPixelShader(shader, descriptor | categoryFlag);
+			GetPixelShader(shader, descriptor | categoryFlag, lookup);
 	}
 
 	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor, PixelShaderLookup a_lookup)
 	{
+		const bool precompile = a_lookup == PixelShaderLookup::Precompile;
+		if (precompile && backgroundCompilation.load(std::memory_order_relaxed))
+			return nullptr;
 		auto state = globals::state;
 		if (a_lookup == PixelShaderLookup::Draw)
 			state->deferredPixelShaderMissing = false;
@@ -3563,8 +3571,8 @@ namespace SIE
 		if (a_lookup == PixelShaderLookup::Cached)
 			return nullptr;
 		if (!IsSaveLoadSafeModeActive()) {
-			if (ShouldUseAsyncCompilation() && (a_lookup == PixelShaderLookup::Compile || !globals::features::reverseZ.IsActive())) {
-				compilationSet.Add({ ShaderClass::Pixel, shader, descriptor });
+			if (ShouldUseAsyncCompilation() && (a_lookup != PixelShaderLookup::Draw || !globals::features::reverseZ.IsActive())) {
+				compilationSet.Add({ ShaderClass::Pixel, shader, descriptor, precompile });
 			} else if (auto* compiled = MakeAndAddPixelShader(shader, descriptor)) {
 				return compiled;
 			}
@@ -4615,8 +4623,12 @@ namespace SIE
 			// Serialize mode changes with the predicate check and transition into wait.
 			std::scoped_lock lock{ compilationSet.compilationMutex };
 			previousValue = backgroundCompilation.exchange(value, std::memory_order_relaxed);
+			if (value)
+				compilationSet.DropPrecompilesLocked();
 		}
 		compilationSet.conditionVariable.notify_one();
+		if (value)
+			compilationSet.NotifyIfComplete();
 		return previousValue;
 	}
 
@@ -5673,6 +5685,17 @@ namespace SIE
 
 			auto newShader = SShaderCache::CreateVertexShader(*shaderBlob, shader, descriptor);
 
+			winrt::com_ptr<ID3D11VertexShader> driverShader;
+			const auto result = device->CreateVertexShader(shaderBlob->GetBufferPointer(),
+				newShader->byteCodeSize, nullptr, driverShader.put());
+			if (FAILED(result)) {
+				logger::error("Failed to create vertex shader {}::{:X}",
+					magic_enum::enum_name(shader.shaderType.get()), descriptor);
+				return nullptr;
+			}
+			Util::SetResourceName(driverShader.get(), "ShaderCache::Vertex %u:%X",
+				static_cast<unsigned>(shader.shaderType.get()), descriptor);
+
 			std::lock_guard lockGuard(vertexShadersMutex);
 			if (IsTaskStale(a_taskGeneration, shader.shaderType.get())) {
 				logger::debug(
@@ -5686,19 +5709,10 @@ namespace SIE
 			auto& typeCache = vertexShaders[static_cast<size_t>(shader.shaderType.get())];
 			if (const auto existing = typeCache.find(descriptor); existing != typeCache.end())
 				return existing->second.get();
-			const auto result = device->CreateVertexShader(shaderBlob->GetBufferPointer(),
-				newShader->byteCodeSize, nullptr, reinterpret_cast<ID3D11VertexShader**>(&newShader->shader));
-			if (FAILED(result)) {
-				logger::error("Failed to create vertex shader {}::{:X}",
-					magic_enum::enum_name(shader.shaderType.get()), descriptor);
-				if (newShader->shader != nullptr) {
-					newShader->shader->Release();
-				}
-			} else {
-				auto& entry = typeCache[descriptor];
-				entry = std::move(newShader);
-				return entry.get();
-			}
+			auto& entry = typeCache[descriptor];
+			entry = std::move(newShader);
+			entry->shader = reinterpret_cast<decltype(entry->shader)>(driverShader.detach());
+			return entry.get();
 		}
 		return nullptr;
 	}
@@ -5718,6 +5732,17 @@ namespace SIE
 
 			auto newShader = SShaderCache::CreatePixelShader(*shaderBlob, shader, descriptor);
 
+			winrt::com_ptr<ID3D11PixelShader> driverShader;
+			const auto result = device->CreatePixelShader(shaderBlob->GetBufferPointer(),
+				shaderBlob->GetBufferSize(), nullptr, driverShader.put());
+			if (FAILED(result)) {
+				logger::error("Failed to create pixel shader {}::{:X}",
+					magic_enum::enum_name(shader.shaderType.get()), descriptor);
+				return nullptr;
+			}
+			Util::SetResourceName(driverShader.get(), "ShaderCache::Pixel %u:%X",
+				static_cast<unsigned>(shader.shaderType.get()), descriptor);
+
 			std::lock_guard lockGuard(pixelShadersMutex);
 			if (IsTaskStale(a_taskGeneration, shader.shaderType.get())) {
 				logger::debug(
@@ -5730,20 +5755,10 @@ namespace SIE
 			auto& typeCache = pixelShaders[static_cast<size_t>(shader.shaderType.get())];
 			if (const auto existing = typeCache.find(descriptor); existing != typeCache.end())
 				return existing->second.get();
-			const auto result = device->CreatePixelShader(shaderBlob->GetBufferPointer(),
-				shaderBlob->GetBufferSize(), nullptr, reinterpret_cast<ID3D11PixelShader**>(&newShader->shader));
-			if (FAILED(result)) {
-				logger::error("Failed to create pixel shader {}::{:X}",
-					magic_enum::enum_name(shader.shaderType.get()),
-					descriptor);
-				if (newShader->shader != nullptr) {
-					newShader->shader->Release();
-				}
-			} else {
-				auto& entry = typeCache[descriptor];
-				entry = std::move(newShader);
-				return entry.get();
-			}
+			auto& entry = typeCache[descriptor];
+			entry = std::move(newShader);
+			entry->shader = reinterpret_cast<decltype(entry->shader)>(driverShader.detach());
+			return entry.get();
 		}
 		return nullptr;
 	}
@@ -5764,6 +5779,17 @@ namespace SIE
 			auto newShader = SShaderCache::CreateComputeShader(*shaderBlob, shader,
 				descriptor);
 
+			winrt::com_ptr<ID3D11ComputeShader> driverShader;
+			const auto result = device->CreateComputeShader(shaderBlob->GetBufferPointer(),
+				shaderBlob->GetBufferSize(), nullptr, driverShader.put());
+			if (FAILED(result)) {
+				logger::error("Failed to create compute shader {}::{:X}",
+					magic_enum::enum_name(shader.shaderType.get()), descriptor);
+				return nullptr;
+			}
+			Util::SetResourceName(driverShader.get(), "ShaderCache::Compute %u:%X",
+				static_cast<unsigned>(shader.shaderType.get()), descriptor);
+
 			std::lock_guard lockGuard(computeShadersMutex);
 			if (IsTaskStale(a_taskGeneration, shader.shaderType.get())) {
 				logger::debug(
@@ -5772,22 +5798,13 @@ namespace SIE
 					descriptor);
 				return nullptr;
 			}
-			const auto result = device->CreateComputeShader(shaderBlob->GetBufferPointer(),
-				shaderBlob->GetBufferSize(), nullptr, reinterpret_cast<ID3D11ComputeShader**>(&newShader->shader));
-			if (FAILED(result)) {
-				logger::error("Failed to create pixel shader {}::{:X}",
-					magic_enum::enum_name(shader.shaderType.get()),
-					descriptor);
-				if (newShader->shader != nullptr) {
-					newShader->shader->Release();
-				}
-			} else {
-				auto& entry = computeShaders[static_cast<size_t>(shader.shaderType.get())][descriptor];
-				if (entry && entry->shader)
-					entry->shader->Release();
-				entry = std::move(newShader);
-				return entry.get();
-			}
+			auto& typeCache = computeShaders[static_cast<size_t>(shader.shaderType.get())];
+			if (const auto existing = typeCache.find(descriptor); existing != typeCache.end())
+				return existing->second.get();
+			auto& entry = typeCache[descriptor];
+			entry = std::move(newShader);
+			entry->shader = reinterpret_cast<decltype(entry->shader)>(driverShader.detach());
+			return entry.get();
 		}
 		return nullptr;
 	}
@@ -6546,10 +6563,11 @@ namespace SIE
 
 	ShaderCompilationTask::ShaderCompilationTask(ShaderClass aShaderClass,
 		const RE::BSShader& aShader,
-		uint32_t aDescriptor) :
+		uint32_t aDescriptor, bool a_precompile) :
 		shaderClass(aShaderClass),
 		shader(aShader), descriptor(aDescriptor),
-		cachedPriority(ComputePriority(aShaderClass, aShader, aDescriptor))
+		cachedPriority(ComputePriority(aShaderClass, aShader, aDescriptor)),
+		precompile(a_precompile)
 	{}
 
 	void ShaderCompilationTask::Perform() const
@@ -6723,6 +6741,8 @@ namespace SIE
 	void CompilationSet::Add(const ShaderCompilationTask& task)
 	{
 		std::unique_lock lock(compilationMutex);
+		if (task.IsPrecompile() && globals::shaderCache->backgroundCompilation.load(std::memory_order_relaxed))
+			return;
 		auto inProgressIt = tasksInProgress.find(task);
 		auto processedIt = processedTasks.find(task);
 		// Shared bytecode still needs a runtime shader object for each descriptor.
@@ -6732,7 +6752,12 @@ namespace SIE
 			auto queuedTask = task;
 			queuedTask.SetEnqueuedQpc(now.QuadPart);
 			queuedTask.SetGeneration(LiveGeneration(task.GetType()));
-			auto [_, wasAdded] = availableTasks.insert(queuedTask);
+			auto [queuedIt, wasAdded] = availableTasks.insert(queuedTask);
+			if (!wasAdded && !task.IsPrecompile() && queuedIt->IsPrecompile()) {
+				auto node = availableTasks.extract(queuedIt);
+				node.value().RequireForRendering();
+				availableTasks.insert(std::move(node));
+			}
 			if (wasAdded) {
 				// Increment counters inside the lock so that WaitTake, which reads
 				// IsCompiling() after waking up, sees the updated totalTasks and
@@ -6755,6 +6780,19 @@ namespace SIE
 			if (wasAdded) {
 				conditionVariable.notify_one();
 			}
+		}
+	}
+
+	void CompilationSet::DropPrecompilesLocked()
+	{
+		for (auto it = availableTasks.begin(); it != availableTasks.end();) {
+			if (!it->IsPrecompile()) {
+				++it;
+				continue;
+			}
+			--totalTasks;
+			totalPriorityWeight -= static_cast<uint64_t>(it->GetPriority()) + 1;
+			it = availableTasks.erase(it);
 		}
 	}
 

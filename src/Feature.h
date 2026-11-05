@@ -358,7 +358,7 @@ public:
 		for (auto* feature : GetFeatureList()) {
 			if (feature->loaded) {
 #ifdef TRACY_ENABLE
-				{
+				if (TracyIsConnected) {
 					char zoneNameBuffer[128];
 					const auto* zoneName = FormatZoneName(zoneNameBuffer, feature->GetShortName(), methodName);
 					ZoneTransientN(___tracy_feature_zone, zoneName, true);
@@ -368,6 +368,8 @@ public:
 					} else {
 						callback(feature);
 					}
+				} else {
+					callback(feature);
 				}
 #else
 				callback(feature);

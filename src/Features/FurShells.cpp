@@ -677,19 +677,19 @@ void FurShells::GenerateShaderPermutations(RE::BSShader* a_shader)
 		const uint32_t type = static_cast<uint32_t>(technique) << 24;
 		for (const uint32_t alphaTest : alphaTestFlags)
 			for (const uint32_t deferred : deferredFlags) {
-				std::ignore = shaderCache->GetPixelShader(*a_shader, type | vertexColor | alphaTest | deferred | FurFlag);
-				std::ignore = shaderCache->GetPixelShader(*a_shader, type | vertexColor | alphaTest | deferred | FurDepthFlag);
+				std::ignore = shaderCache->GetPixelShader(*a_shader, type | vertexColor | alphaTest | deferred | FurFlag, SIE::ShaderCache::PixelShaderLookup::Precompile);
+				std::ignore = shaderCache->GetPixelShader(*a_shader, type | vertexColor | alphaTest | deferred | FurDepthFlag, SIE::ShaderCache::PixelShaderLookup::Precompile);
 			}
 		for (const uint32_t color : vertexColorFlags)
 			for (const uint32_t skinned : skinnedFlags)
-				std::ignore = shaderCache->GetVertexShader(*a_shader, type | color | skinned | FurFlag);
+				std::ignore = shaderCache->GetVertexShader(*a_shader, type | color | skinned | FurFlag, SIE::ShaderCache::VertexShaderLookup::Precompile);
 	}
 
 	if (globals::features::truePBR.loaded) {
 		for (const uint32_t alphaTest : alphaTestFlags)
 			for (const uint32_t deferred : deferredFlags) {
-				std::ignore = shaderCache->GetPixelShader(*a_shader, static_cast<uint32_t>(Flags::TruePbr) | vertexColor | alphaTest | deferred | FurFlag);
-				std::ignore = shaderCache->GetPixelShader(*a_shader, static_cast<uint32_t>(Flags::TruePbr) | vertexColor | alphaTest | deferred | FurDepthFlag);
+				std::ignore = shaderCache->GetPixelShader(*a_shader, static_cast<uint32_t>(Flags::TruePbr) | vertexColor | alphaTest | deferred | FurFlag, SIE::ShaderCache::PixelShaderLookup::Precompile);
+				std::ignore = shaderCache->GetPixelShader(*a_shader, static_cast<uint32_t>(Flags::TruePbr) | vertexColor | alphaTest | deferred | FurDepthFlag, SIE::ShaderCache::PixelShaderLookup::Precompile);
 			}
 	}
 }

@@ -22,6 +22,11 @@ RWStructuredBuffer<uint> contactShadowIndexCounter : register(u3);
 RWStructuredBuffer<uint> contactShadowIndexList : register(u4);
 RWStructuredBuffer<LightGrid> contactShadowGrid : register(u5);
 
+groupshared float4 sharedLightsVS[GROUP_SIZE];
+#if defined(VR)
+groupshared float3 sharedLightsVSRight[GROUP_SIZE];
+#endif
+
 bool LightIntersectsCluster(float3 position, float radiusSquared, ClusterAABB cluster)
 {
 	float3 closest = max(cluster.minPoint.xyz, min(position, cluster.maxPoint.xyz));
@@ -128,7 +133,18 @@ void InsertContactShadowCandidate(
 		particleCount++;
 }
 
-[numthreads(NUMTHREAD_X, NUMTHREAD_Y, NUMTHREAD_Z)] void main(uint3 dispatchThreadId : SV_DispatchThreadID) {
+[numthreads(NUMTHREAD_X, NUMTHREAD_Y, NUMTHREAD_Z)] void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex) {
+	const uint lightCount = min(LightCount, GROUP_SIZE);
+	if (groupIndex < lightCount) {
+		Light light = lights[groupIndex];
+		sharedLightsVS[groupIndex] = float4(FrameBuffer::WorldToView(light.positionWS[0].xyz, true, 0), light.radius * light.radius);
+#if defined(VR)
+		sharedLightsVSRight[groupIndex] = FrameBuffer::WorldToView(light.positionWS[1].xyz, true, 1);
+#endif
+	}
+	// Partial edge groups must reach the barrier before inactive lanes leave.
+	GroupMemoryBarrierWithGroupSync();
+
 	if (any(dispatchThreadId >= uint3(ClusterSize.x, ClusterSize.y, ClusterSize.z)))
 		return;
 
@@ -150,22 +166,21 @@ void InsertContactShadowCandidate(
 	const uint contactShadowParticleBudget = ContactShadowParams::ParticleBudget(ContactShadowParamsPacked);
 	const bool contactShadowsEnabled = ContactShadowFlagsPacked != 0 && contactShadowClusterBudget > 0;
 
-	for (uint i = 0; i < LightCount; i++) {
-		Light light = lights[i];
-
-		float radiusSquared = light.radius * light.radius;
+	for (uint i = 0; i < lightCount; i++) {
+		float4 lightVS = sharedLightsVS[i];
+		float radiusSquared = lightVS.w;
 		bool isVisible = false;
 		bool reachedVisibleLightLimit = false;
 
 #if defined(VR)
-		float3 positionVSLeft = FrameBuffer::WorldToView(light.positionWS[0].xyz, true, 0);
-		float3 positionVSRight = FrameBuffer::WorldToView(light.positionWS[1].xyz, true, 1);
+		float3 positionVSLeft = lightVS.xyz;
+		float3 positionVSRight = sharedLightsVSRight[i];
 
 		[branch] if (LightIntersectsCluster(positionVSLeft, radiusSquared, cluster) || LightIntersectsCluster(positionVSRight, radiusSquared, cluster))
 		{
 			isVisible = true;
 #else
-		float3 positionVS = FrameBuffer::WorldToView(light.positionWS[0].xyz, true, 0);
+		float3 positionVS = lightVS.xyz;
 
 		[branch] if (LightIntersectsCluster(positionVS, radiusSquared, cluster))
 		{
@@ -177,23 +192,27 @@ void InsertContactShadowCandidate(
 				reachedVisibleLightLimit = true;
 		}
 
-		if (contactShadowsEnabled && isVisible && IsContactShadowEligible(light, ContactShadowFlagsPacked, contactShadowParticleBudget)) {
+		[branch] if (contactShadowsEnabled && isVisible)
+		{
+			Light light = lights[i];
+			if (IsContactShadowEligible(light, ContactShadowFlagsPacked, contactShadowParticleBudget)) {
 #if defined(VR)
-			float contactShadowScore = max(GetContactShadowScore(light, positionVSLeft, cluster), GetContactShadowScore(light, positionVSRight, cluster));
+				float contactShadowScore = max(GetContactShadowScore(light, positionVSLeft, cluster), GetContactShadowScore(light, positionVSRight, cluster));
 #else
-			float contactShadowScore = GetContactShadowScore(light, positionVS, cluster);
+				float contactShadowScore = GetContactShadowScore(light, positionVS, cluster);
 #endif
-			InsertContactShadowCandidate(
-				i,
-				contactShadowScore,
-				(light.lightFlags & LightFlags::Particle) != 0,
-				contactShadowClusterBudget,
-				contactShadowParticleBudget,
-				contactShadowLightCount,
-				contactShadowParticleCount,
-				contactShadowLightIndices,
-				contactShadowLightScores,
-				contactShadowParticles);
+				InsertContactShadowCandidate(
+					i,
+					contactShadowScore,
+					(light.lightFlags & LightFlags::Particle) != 0,
+					contactShadowClusterBudget,
+					contactShadowParticleBudget,
+					contactShadowLightCount,
+					contactShadowParticleCount,
+					contactShadowLightIndices,
+					contactShadowLightScores,
+					contactShadowParticles);
+			}
 		}
 
 		if (reachedVisibleLightLimit)

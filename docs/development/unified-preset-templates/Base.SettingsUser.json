@@ -1450,7 +1450,7 @@
     },
     "StrictContactShadowBudget": 4,
     "UseParticleLights087LegacyMode": false,
-    "SkipRedundantLightAttach": false,
+    "SkipRedundantLightAttach": true,
     "LightAttachRefreshFrames": 60
   },
   "Linear Lighting": {

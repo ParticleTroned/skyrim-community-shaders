@@ -112,14 +112,17 @@ namespace
 		for (UINT mip = 0; mip < 2; ++mip) {
 			const UINT size = kShadowCopySize >> mip, cascade = 1 - mip;
 			const bool grouped = UsesGroupedDownsample(desc, size);
+			if (width == height && width / size == 32)
+				Require(grouped, "32x reductions must use the grouped path");
 			auto* output = mip == 0 ? feature.shadowCopyMip0UAV : feature.shadowCopyMip1UAV;
 			auto* shader = shaders[mip + (grouped ? 0 : 2)].Get();
 			const std::array<float, 4> poison{ 0, 0, 0, 0 };
 			context->ClearUnorderedAccessViewFloat(output, poison.data());
 			context->CSSetShader(shader, nullptr, 0);
 			context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
-			context->Dispatch(grouped ? (width + 15) / 16 : (size + 7) / 8,
-				grouped ? (height + 15) / 16 : (size + 7) / 8, 1);
+			const UINT span = 16 * std::max(width / size / 16, 1u);
+			context->Dispatch(grouped ? (width + span - 1) / span : (size + 7) / 8,
+				grouped ? (height + span - 1) / span : (size + 7) / 8, 1);
 			ClearComputeUAV(context);
 			const auto pixels = ReadMoments(device, context, feature.shadowCopyTexture, mip);
 			for (UINT y = 0; y < size; ++y)

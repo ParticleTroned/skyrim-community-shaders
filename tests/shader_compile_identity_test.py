@@ -78,6 +78,7 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                         REPO / ".github/configs" / name,
                         Path(temporary) / f"{runtime}-{enabled}.yaml", yaml, profile,
                         feature_states={"ReverseZ": enabled},
+                        reverse_z_enabled=enabled,
                     )
                     for source, _, _, defines in parse_shader_configs(str(filtered)):
                         depth = [value for value in defines if value.partition("=")[0] == "REVERSE_Z"]
@@ -396,6 +397,30 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                 if (descriptor >> 24) & 0x3f not in (9, 18, 13, 15):
                     self.assertEqual(descriptor & mask, 0)
                     self.assertFalse(flags.intersection(entry["defines"]))
+
+    def test_water_pixel_keys_share_wading_without_changing_vertices(self) -> None:
+        config = {"captured_shader_variants": 3, "shaders": [{"file": "Water.hlsl", "configs": {
+            "PSHADER": {"entries": [
+                {"entry": "Water:Pixel:1", "defines": ["VC", "SPECULAR"]},
+                {"entry": "Water:Pixel:41", "defines": ["VC", "SPECULAR", "WADING"]},
+            ]},
+            "VSHADER": {"entries": [{"entry": "Water:Vertex:41", "defines": ["WADING"]}]},
+        }}]}
+        BUILDER.normalize_water_pixel_variants(config)
+        stages = config["shaders"][0]["configs"]
+        self.assertEqual(stages["PSHADER"]["entries"], [
+            {"entry": "Water:Pixel:1", "defines": ["VC", "SPECULAR"]},
+        ])
+        self.assertEqual(stages["VSHADER"]["entries"], [
+            {"entry": "Water:Vertex:41", "defines": ["WADING"]},
+        ])
+        self.assertEqual(config["captured_shader_variants"], 3)
+        stages["PSHADER"]["entries"] = [
+            {"entry": "Water:Pixel:1", "defines": ["MODE=1", "MODE=2"]},
+            {"entry": "Water:Pixel:41", "defines": ["MODE=2", "MODE=1", "WADING"]},
+        ]
+        with self.assertRaisesRegex(SystemExit, "conflicting water pixel"):
+            BUILDER.normalize_water_pixel_variants(config)
 
     def test_normalized_inventory_retains_capture_count_and_fails_closed(self) -> None:
         from copy import deepcopy

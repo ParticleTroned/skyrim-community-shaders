@@ -403,7 +403,13 @@ void IBL::Prepass()
 			CS_GPU_PASS("IBL::EnvDiffuseIBL");
 			context->Dispatch(1, 1, 1);
 		}
+		envIBLWritten = true;
 	} else {
+		if (envIBLWritten) {
+			const float zero[4] = {};
+			context->ClearUnorderedAccessViewFloat(envIBLTexture->uav.get(), zero);
+			envIBLWritten = false;
+		}
 		// Still need to set sampler and shader for sky IBL dispatch below
 		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 		context->CSSetShader(diffuseIBLShader, nullptr, 0);
@@ -472,6 +478,7 @@ void IBL::SetupResources()
 		};
 
 		envIBLTexture = new Texture2D(texDesc);
+		envIBLWritten = true;
 		envIBLTexture->CreateSRV(srvDesc);
 		envIBLTexture->CreateUAV(uavDesc);
 		skyIBLTexture = new Texture2D(texDesc);
@@ -562,6 +569,8 @@ void IBL::ClearShaderCache()
 
 ID3D11ComputeShader* IBL::GetDiffuseIBLCS()
 {
+	if (diffuseIBLCS || diffuseIBLCS.HasFailed())
+		return diffuseIBLCS.get();
 	std::vector<std::pair<const char*, const char*>> defines;
 	if (globals::features::dynamicCubemaps.loaded)
 		defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });

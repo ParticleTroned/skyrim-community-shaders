@@ -2203,6 +2203,8 @@ void ApplyWetnessDirectLightingOutput(
 #	else
 #		define FUR_EARLY_DEPTH
 #	endif
+#	include "Common/LightingAlpha.hlsli"
+
 FUR_EARLY_DEPTH
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
@@ -2895,6 +2897,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	endif  // LOD_LAND_BLEND
 
+#	if defined(EMAT) && defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+	const bool alphaParallax = PBRParallax;
+#	else
+	const bool alphaParallax = false;
+#	endif
+#	if defined(DO_ALPHA_TEST) && !defined(SPARKLE) && !(defined(LANDSCAPE) && !defined(LOD_LAND_BLEND))
+	float alpha = EvaluateMaterialAlpha(input, baseColor.w, uvOriginal, alphaParallax);
+#	endif
+
 #	if defined(SNOW) && !defined(TRUE_PBR)
 	useSnowSpecular = landSnowMask != 0.0;
 #	endif  // SNOW
@@ -3312,7 +3323,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		skylightingShadowVisibility = skylightingSample.Visibility;
 	}
 #			else
-	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal) : Skylighting::UNIT_SH;
+	sh2 skylightingSH = Skylighting::UNIT_SH;
+	[branch] if (inWorld)
+		skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal);
 #			endif
 #		endif
 
@@ -4531,78 +4544,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
 	psout.Diffuse.w = 0;
 #	else
-	float alpha = baseColor.w;
-#		if defined(EMAT) && !defined(LANDSCAPE)
-#			if defined(PARALLAX)
-	alpha = TexColorSampler.SampleBias(SampColorSampler, uvOriginal, SharedData::MipBias).w;
-#			elif defined(TRUE_PBR)
-	[branch] if (PBRParallax)
-	{
-		alpha = TexColorSampler.SampleBias(SampColorSampler, uvOriginal, SharedData::MipBias).w;
-	}
-#			endif
+#		if !defined(DO_ALPHA_TEST) || defined(SPARKLE)
+	float alpha = EvaluateMaterialAlpha(input, baseColor.w, uvOriginal, alphaParallax);
 #		endif
-#		if defined(DO_ALPHA_TEST)
-	[branch] if ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::AdditionalAlphaMask) != 0)
-	{
-		uint2 alphaMask = input.Position.xy;
-		alphaMask.x = ((alphaMask.x << 2) & 12);
-		alphaMask.x = (alphaMask.y & 3) | (alphaMask.x & ~3);
-		const float maskValues[16] = {
-			0.003922,
-			0.533333,
-			0.133333,
-			0.666667,
-			0.800000,
-			0.266667,
-			0.933333,
-			0.400000,
-			0.200000,
-			0.733333,
-			0.066667,
-			0.600000,
-			0.996078,
-			0.466667,
-			0.866667,
-			0.333333,
-		};
-
-		float testTmp = 0;
-		if (MaterialData.z - maskValues[alphaMask.x] < 0) {
-			discard;
-		}
-	}
-	else
-#		endif  // defined(DO_ALPHA_TEST)
-	{
-		alpha *= MaterialData.z;
-	}
-#		if !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
-	alpha *= input.Color.w;
-#		endif  // !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
-#		if defined(DO_ALPHA_TEST)
-#			if defined(DEPTH_WRITE_DECALS)
-	if (alpha - 0.0156862754 < 0) {
-		discard;
-	}
-	alpha = saturate(1.05 * alpha);
-#			endif  // DEPTH_WRITE_DECALS
-#			if defined(TREE_ANIM)
-	// VRS Fix: For TREE_ANIM (full tree models), use a fixed low alpha threshold
-	// instead of the variable AlphaTestRefRS.
-	//
-	// This fixes white outline artifacts caused by VRS coarse shading at alpha edges.
-	// A low threshold (0.1) reduces the "gradient zone" where VRS can misclassify pixels.
-	const float vrsFixedAlphaThreshold = 0.1;
-	if (alpha - vrsFixedAlphaThreshold < 0) {
-		discard;
-	}
-#			else
-	if (alpha - AlphaTestRefRS < 0) {
-		discard;
-	}
-#			endif  // TREE_ANIM
-#		endif      // DO_ALPHA_TEST
 
 #		if defined(ANISOTROPIC_ALPHA)
 	// Uniform alpha material settings

@@ -876,7 +876,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (SharedData::ShouldDisableTerrainVertexColors())
 		input.Color.xyz = 1;
 
-	float4 specColor = GRASS_DETAILED(complex) ? TexBaseSampler.SampleBias(SampBaseSampler, float2(input.TexCoord.x, 0.5 + input.TexCoord.y * 0.5), SharedData::MipBias) : 1;
+	float4 specColor = 1;
+	[branch] if (GRASS_DETAILED(complex))
+		specColor = TexBaseSampler.SampleBias(SampBaseSampler, float2(input.TexCoord.x, 0.5 + input.TexCoord.y * 0.5), SharedData::MipBias);
 
 	uint eyeIndex = Stereo::GetEyeIndexPS(input.HPosition, VPOSOffset);
 	psout.MotionVectors = float4(MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex), 0, 1);

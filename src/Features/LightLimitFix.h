@@ -7,10 +7,10 @@
 #include "Utils/LazyShader.h"
 #include "Utils/PointLightFlags.h"
 
+#include "Features/LightLimitFix/LightAttach.h"
 #include "Features/LightLimitFix/ParticleLights.h"
 #include "Features/LightLimitFix/SceneLightSnapshot.h"
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
-#include "Features/LightLimitFix/LightAttach.h"
 
 #include <algorithm>
 #include <atomic>
@@ -85,6 +85,8 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(LightData);
 	static_assert(sizeof(LightData) == 96);
+
+	eastl::vector<LightData> lightScratch;
 
 	struct ClusterAABB
 	{
@@ -311,16 +313,16 @@ public:
 		settings.ShadowCulling.torch = a_enabled && defaults.ShadowCulling.torch;
 		settings.ShadowCulling.actors = a_enabled && defaults.ShadowCulling.actors;
 		settings.ShadowCulling.smallActorParts = a_enabled && defaults.ShadowCulling.smallActorParts;
-		settings.SkipRedundantLightAttach = false;
+		settings.SkipRedundantLightAttach = a_enabled && defaults.SkipRedundantLightAttach;
 		LightLimitFixDetail::LightAttach::Invalidate();
 	}
 	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableParticleLights || settings.EnableContactShadows || settings.EnableParticleContactShadows || settings.ShadowCulling.Active() || settings.SkipRedundantLightAttach; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
-		settings.SkipRedundantLightAttach = false;
-		LightLimitFixDetail::LightAttach::Invalidate();
 		const Settings defaults{};
+		settings.SkipRedundantLightAttach = a_enabled && defaults.SkipRedundantLightAttach;
+		LightLimitFixDetail::LightAttach::Invalidate();
 		if (a_enabled) {
 			settings.EnableParticleLights = defaults.EnableParticleLights;
 			settings.EnableParticleLightsCulling = defaults.EnableParticleLightsCulling;
@@ -461,7 +463,7 @@ public:
 		uint ParticleContactShadowBudget = 1;
 		uint StrictContactShadowBudget = 4;
 		LightLimitFixDetail::ShadowCulling::Settings ShadowCulling;
-		bool SkipRedundantLightAttach = false;
+		bool SkipRedundantLightAttach = true;
 		int LightAttachRefreshFrames = LightLimitFixDetail::LightAttach::DefaultRefreshFrames;
 	};
 

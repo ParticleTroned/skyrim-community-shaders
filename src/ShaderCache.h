@@ -237,7 +237,7 @@ namespace SIE
 			Completed
 		};
 		ShaderCompilationTask(ShaderClass shaderClass, const RE::BSShader& shader,
-			uint32_t descriptor);
+			uint32_t descriptor, bool a_precompile = false);
 		void Perform() const;
 
 		size_t GetId() const;
@@ -258,6 +258,10 @@ namespace SIE
 		uint64_t GetGeneration() const { return generation; }
 		/** @brief Returns the shader category whose invalidation owns this task. */
 		RE::BSShader::Type GetType() const { return shader.shaderType.get(); }
+		/** @brief True for speculative startup work that rendering has not requested. */
+		bool IsPrecompile() const { return precompile; }
+		/** @brief Retains queued startup work when a draw or explicit compile requests it. */
+		void RequireForRendering() { precompile = false; }
 
 		bool operator==(const ShaderCompilationTask& other) const;
 
@@ -271,6 +275,7 @@ namespace SIE
 		int cachedPriority;
 		int64_t enqueuedQpc = 0;
 		uint64_t generation = 0;
+		bool precompile = false;
 	};
 }
 
@@ -324,6 +329,8 @@ namespace SIE
 
 		std::optional<ShaderCompilationTask> WaitTake(std::stop_token stoken);
 		void Add(const ShaderCompilationTask& task);
+		/** @brief Drops unstarted speculative tasks while compilationMutex is held. */
+		void DropPrecompilesLocked();
 		void Complete(const ShaderCompilationTask& task);
 		/** @brief Frees a dispatch slot and wakes WaitTake(). Call for every
 		 *  dispatched task, including stale-generation and stopped tasks. */
@@ -657,15 +664,16 @@ namespace SIE
 		std::string GetShaderStatsString(bool a_timeOnly = false, bool a_elapsedOnly = false);
 
 		/** @brief Warms AO-only shaders and, when requested, their deferred category variants. */
-		void PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories);
+		void PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories, bool a_precompile = false);
 
 		enum class VertexShaderLookup
 		{
 			Compile,
+			Precompile,
 			Draw
 		};
 
-		/** @brief Compile lookups may queue work; Reverse Z draw lookups require a compatible stage. */
+		/** @brief Precompile lookups skip background mode; Reverse Z draws require a compatible stage. */
 		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor,
 			VertexShaderLookup a_lookup = VertexShaderLookup::Draw);
 		/** Return an existing vertex shader by exact descriptor without compiling or scheduling work. */
@@ -700,6 +708,7 @@ namespace SIE
 		enum class PixelShaderLookup
 		{
 			Compile,
+			Precompile,
 			Draw,
 			Cached
 		};

@@ -17,7 +17,6 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/D3D.h"
-#include "Utils/ExternalEmittance.h"
 #include "Utils/Finite.h"
 #include "Utils/StringUtils.h"
 
@@ -41,6 +40,8 @@
 static constexpr uint CLUSTER_MAX_LIGHTS = 256;
 static constexpr uint CONTACT_SHADOW_MAX_LIGHTS = 8;
 static constexpr uint MAX_LIGHTS = 1024;
+// Every light is staged by one lane of ClusterCullingCS's thread group.
+static_assert(MAX_LIGHTS <= 16 * 16 * 4);
 
 namespace
 {
@@ -1097,11 +1098,16 @@ void LightLimitFix::DrawSettings()
 												   { "particles", "Particles", "Choose which small light effects illuminate the scene.", "Small effects that emit light", true, true, "Choose light sources" },
 												   { "placed", "Placed lights", "Choose lighting from supported objects.", "Lighting from placed objects", true, true, nullptr, nullptr, nullptr, globals::features::inverseSquareLighting.loaded },
 												   { "shadows", "Shadows", "Refine contact shadows and native shadow-map culling.", "Contact shadows and shadow culling", true, true, "Refine light interaction" },
+												   { "updates", "Light updates", "Choose how often unchanged world lights recheck nearby objects.", "World-light update interval", true, true, nullptr },
 												   { "effects", "Heat distortion", "Refine heat distortion around lights.", "Refraction around lights", true, true, nullptr },
 												   { "diagnostics", "Diagnostics", "Inspect light counts and diagnostic views.", "Light counts and buffer views", true, false, nullptr },
 											   });
 
 	{
+		if (page.Is("updates")) {
+			LightLimitFixDetail::LightAttach::DrawSettings(settings.SkipRedundantLightAttach, settings.LightAttachRefreshFrames);
+		}
+
 		// Heat warp / refraction strength (moved from Advanced Settings)
 		if (page.Is("effects")) {
 			ImGui::Text("ImageSpace Refraction");
@@ -3269,7 +3275,8 @@ void LightLimitFix::UpdateLights()
 		eyePositionCached[eyeIndex] = { eyePosition.x, eyePosition.y, eyePosition.z };
 	}
 
-	eastl::vector<LightData> lightsData{};
+	auto& lightsData = lightScratch;
+	lightsData.clear();
 	lightsData.reserve(MAX_LIGHTS);
 	const bool isInterior = LocationContext::Get().inInterior;
 	RefreshJsonPlacedLightCacheFrame();
@@ -3753,7 +3760,6 @@ void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* Thi
 	}
 
 	func(This, Pass, RenderFlags);
-	ExternalEmittance::UpdatePermutation(Pass);
 	auto& singleton = globals::features::lightLimitFix;
 	singleton.BSLightingShader_SetupGeometry_Before(Pass);
 	singleton.BSLightingShader_SetupGeometry_After(Pass);

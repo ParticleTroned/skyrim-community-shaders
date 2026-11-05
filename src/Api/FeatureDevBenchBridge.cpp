@@ -8,6 +8,7 @@
 #	include "Diagnostics/SunReceiverTrace.h"
 #	include "EngineFixes/SunShadowReceiverFix.h"
 #	include "EngineFixes/LightListSearchFix.h"
+#	include "EngineFixes/EmptyOverlayCullFix.h"
 #	include "Api/FeatureService.h"
 #	include "Features/TextureStreaming.h"
 #	include "Features/LightLimitFix.h"
@@ -254,6 +255,23 @@ namespace
 			response["result"] = std::move(result);
 			return response;
 		}
+		if (args.contains("emptyOverlayCull") && action != "empty_overlay_cull")
+			return Foundation().MakeError(args, "invalid_settings", "emptyOverlayCull requires the empty_overlay_cull action", "validation", false, "emptyOverlayCull");
+		if (action == "empty_overlay_cull") {
+			auto result = OnMain([args] {
+				try {
+					return EmptyOverlayCull::Control(args);
+				} catch (const std::invalid_argument& error) {
+					return json{ { "error", error.what() }, { "errorCode", "invalid_settings" } };
+				}
+			});
+			if (result.contains("error"))
+				return Foundation().MakeError(args, result.value("errorCode", std::string("main_thread_dispatch_failed")),
+					result.value("detail", result.at("error").get<std::string>()), "request", false);
+			auto response = Foundation().MakeEnvelope(args, true);
+			response["result"] = std::move(result);
+			return response;
+		}
 		if (action == "snow_cover") {
 			auto result = OnMain([args] {
 				try {
@@ -360,6 +378,7 @@ namespace
 				{ "preflightTokenLifetimeMs", 30000 }, { "actions", json::array({ "reverse_z", "fur_shells", "terrain_seams", "registry", "snapshot", "features", "issues", "preset_compatibility", "settings", "sun_receiver", "sun_receiver_trace", "shadow_culling", "texture_streaming", "texture_streaming_pressure", "constraints", "preflight", "execute" }) },
 				{ "mutations", json::array({ "set_disabled_at_boot" }) }, { "legacyInterfacesPreserved", true } };
 			response["result"]["actions"].push_back("light_list_search");
+			response["result"]["actions"].push_back("empty_overlay_cull");
 			response["result"]["actions"].push_back("light_attach");
 			response["result"]["actions"].push_back("anti_lag2");
 			return response;
@@ -581,7 +600,14 @@ namespace CSX::Api::FeatureDevBenchBridge
 			spec["inputSchema"]["properties"]["action"]["enum"].push_back("light_attach");
 			spec["inputSchema"]["properties"]["lightAttach"] = lightAttachSchemas.at("settings");
 			spec["outputSchema"]["properties"]["result"]["properties"]["lightAttach"] = lightAttachSchemas.at("status");
-			spec["description"] = spec["description"].get<std::string>() + " light_attach inspects the default-off experimental world-light update gate. Optional lightAttach.enabled and refreshFrames (1..600, default 60) change session settings; omit lightAttach for read-only status. Interval 1 keeps native updates. Unsupported hooks cannot be enabled. Shadow lights, engine-path strict lights and non-world scenes retain native updates; loading suspends tracking. Geometry and portal-content changes can leave membership stale until refresh, including first-person lighting. Visual correctness and CSX performance are unmeasured. Counters are cumulative eligible native walks, skips and ineligible bypasses while active; disabled calls are not counted. trackedLights includes references awaiting retirement. Fixed trackingStorageBytes includes retirement storage. A hook call and atomic check remain when disabled; no shader compilation is triggered.";
+			spec["description"] = spec["description"].get<std::string>() + " light_attach inspects the default-on experimental world-light update gate. Optional lightAttach.enabled and refreshFrames (1..600, default 60) change session settings; omit lightAttach for read-only status. Interval 1 keeps native updates. Unsupported hooks cannot be enabled. Shadow lights, engine-path strict lights and non-world scenes retain native updates; loading suspends tracking. Geometry and portal-content changes can leave membership stale until refresh, including first-person lighting. Visual correctness and CSX performance are unmeasured. Counters are cumulative eligible native walks, skips and ineligible bypasses while active; disabled calls are not counted. trackedLights includes references awaiting retirement. Fixed trackingStorageBytes includes retirement storage. A hook call and atomic check remain when disabled; no shader compilation is triggered.";
+			spec["inputSchema"]["properties"]["action"]["enum"].push_back("empty_overlay_cull");
+			spec["inputSchema"]["properties"]["emptyOverlayCull"] = { { "type", "object" }, { "additionalProperties", false },
+				{ "required", { "enabled" } }, { "properties", { { "enabled", { { "type", "boolean" } } } } } };
+			auto& overlayOutput = spec["outputSchema"]["properties"]["result"]["properties"];
+			overlayOutput["verifiedTexture"] = { { "type", "string" } };
+			overlayOutput["culledPassBuilds"] = { { "type", "integer" }, { "minimum", 0 } };
+			spec["description"] = spec["description"].get<std::string>() + " empty_overlay_cull inspects the transparent default-overlay optimization. Optional emptyOverlayCull.enabled toggles an installed hook for session-only comparisons. Reports available, enabled, verifiedTexture, installationError, culledPassBuilds and sessionOnly. Texture verification occurs at DataLoaded; all mips must have zero alpha. Nonstandard materials, depth-writing geometry and other blend modes retain native rendering. Missing, oversized, nontransparent or unsupported textures leave the hook unavailable. Disabling retains hook overhead. No settings are persisted.";
 			spec["inputSchema"]["properties"]["action"]["enum"].push_back("light_list_search");
 			spec["inputSchema"]["properties"]["lightListSearch"] = { { "type", "object" }, { "additionalProperties", false },
 				{ "required", { "enabled" } }, { "properties", { { "enabled", { { "type", "boolean" } } } } } };

@@ -106,6 +106,7 @@ void TerrainVariation::DataLoaded()
 	landscapeDiffusePaths.swap(paths);
 	landscapeDiffusePathsAvailable = pathsAvailable;
 	meshTextureCache.clear();
+	meshTextureGeneration.fetch_add(1, std::memory_order_release);
 	logger::info("TerrainVariation: collected {} landscape diffuse paths", landscapeDiffusePaths.size());
 }
 
@@ -157,7 +158,20 @@ void TerrainVariation::UpdateMeshPermutation(RE::BSRenderPass* a_pass)
 	if (material->textureClampMode != static_cast<int32_t>(RE::BSGraphics::TextureAddressMode::kWrapSWrapT))
 		return;
 	const auto* texture = property->GetBaseTexture();
-	if (!texture || !IsLandscapeDiffuseTexture(texture->name))
+	if (!texture)
+		return;
+	struct TextureMemo
+	{
+		const TerrainVariation* owner = nullptr;
+		RE::BSFixedString name;
+		uint64_t generation = 0;
+		bool landscape = false;
+	};
+	static thread_local TextureMemo memo;
+	const auto generation = meshTextureGeneration.load(std::memory_order_acquire);
+	if (memo.owner != this || memo.name.c_str() != texture->name.c_str() || memo.generation != generation)
+		memo = { this, texture->name, generation, IsLandscapeDiffuseTexture(texture->name) };
+	if (!memo.landscape)
 		return;
 	if (auto* reference = a_pass->geometry->GetUserData(); reference && reference->GetBaseObject() && reference->GetBaseObject()->As<RE::TESObjectTREE>())
 		return;

@@ -925,7 +925,11 @@ void State::Reset()
 
 	// Disable "improved" snow shader, unsupported
 	if (!globals::game::isVR) {
-		RE::GetINISetting("bEnableImprovedSnow:Display")->data.b = false;
+		static RE::Setting* improvedSnow = nullptr;
+		if (!improvedSnow)
+			improvedSnow = RE::GetINISetting("bEnableImprovedSnow:Display");
+		if (improvedSnow)
+			improvedSnow->data.b = false;
 	}
 
 	activeReflections = false;
@@ -2164,6 +2168,8 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 							   (uint32_t)SIE::ShaderCache::WaterShaderFlags::Interior);
 				a_vertexDescriptor &= flags;
 				a_pixelDescriptor &= flags;
+				// Pixel displacement reads the original wading bit from the permutation buffer.
+				a_pixelDescriptor &= ~static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading);
 			}
 			break;
 		case RE::BSShader::Type::Effect:

@@ -722,7 +722,7 @@ void ScreenSpaceGI::DrawSettings()
 			BUFFER_VIEWER_NODE(texNoise, debugRescale)
 			BUFFER_VIEWER_NODE(texWorkingDepth, debugRescale)
 			BUFFER_VIEWER_NODE(texPrevGeo, debugRescale)
-			BUFFER_VIEWER_NODE(texRadiance, debugRescale)
+			BUFFER_VIEWER_NODE_TITLE(texRadianceTemp, "Radiance", debugRescale)
 			BUFFER_VIEWER_NODE(texAo[0], debugRescale)
 			BUFFER_VIEWER_NODE(texAo[1], debugRescale)
 			BUFFER_VIEWER_NODE(texIlY[0], debugRescale)
@@ -1028,6 +1028,7 @@ void ScreenSpaceGI::PostPostLoad()
 
 void ScreenSpaceGI::SetupResources()
 {
+	idleOutputsCleared = false;
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
 
@@ -1731,15 +1732,20 @@ void ScreenSpaceGI::DrawSSGI()
 	};
 
 	auto clearOutputsAndReturn = [&]() {
+		if (idleOutputsCleared)
+			return;
 		FLOAT clr[4] = { 0.f, 0.f, 0.f, 0.f };
 		auto clearOutputIfValid = [&](auto& a_textureArray, uint a_index) {
 			if (a_index < 2 && a_textureArray[a_index] && a_textureArray[a_index]->uav)
 				context->ClearUnorderedAccessViewFloat(a_textureArray[a_index]->uav.get(), clr);
 		};
-		clearOutputIfValid(texAo, outputAoIdx);
-		clearOutputIfValid(texIlY, outputIlIdx);
-		clearOutputIfValid(texIlCoCg, outputIlIdx);
-		clearOutputIfValid(texGiSpecular, outputAoIdx);
+		for (uint i = 0; i < 2; ++i) {
+			clearOutputIfValid(texAo, i);
+			clearOutputIfValid(texIlY, i);
+			clearOutputIfValid(texIlCoCg, i);
+			clearOutputIfValid(texGiSpecular, i);
+		}
+		idleOutputsCleared = true;
 	};
 
 	if (!(settings.Enabled && ssgiOutputNeeded)) {
@@ -1844,6 +1850,7 @@ void ScreenSpaceGI::DrawSSGI()
 		return;
 	}
 
+	idleOutputsCleared = false;
 	CS_GPU_PASS("ScreenSpaceGI::SSGI");
 
 	uint inputAoTexIdx = lastFrameAoTexIdx;

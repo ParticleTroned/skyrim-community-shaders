@@ -1758,6 +1758,14 @@ def character_category_flags(source_root: Path) -> dict[str, int]:
     return flags
 
 
+def pixel_entry_define_identity(source: str, key: str, defines: list[str]) -> dict[tuple[str, str], str]:
+    """Compare captured pixel macros with the compiler's ordering and values."""
+    return compile_task_defines([(
+        source, "PSHADER", key,
+        [value if "=" in value else value + "=" for value in defines],
+    )])
+
+
 def append_character_category_variants(
     config: dict[str, Any], source_root: Path
 ) -> int:
@@ -1810,12 +1818,7 @@ def append_character_category_variants(
             other_key = f"{family}:Pixel:{other_descriptor:X}"
             existing = by_key.get(other_key)
             if existing is not None:
-                def identity(defines: list[str]) -> dict[tuple[str, str], str]:
-                    return compile_task_defines([(
-                        source, "PSHADER", other_key,
-                        [value if "=" in value else value + "=" for value in defines],
-                    )])
-                if identity(existing.get("defines", [])) != identity(other_defines):
+                if pixel_entry_define_identity(source, other_key, existing.get("defines", [])) != pixel_entry_define_identity(source, other_key, other_defines):
                     raise SystemExit(f"conflicting category variant: {other_key}")
                 continue
             other = {**entry, "entry": other_key, "defines": other_defines}
@@ -1823,6 +1826,34 @@ def append_character_category_variants(
             by_key[other_key] = other
             added += 1
     return added
+
+
+def normalize_water_pixel_variants(config: dict[str, Any]) -> None:
+    """Share runtime wading pixel variants while retaining vertex coordinates."""
+    wading = 1 << 6
+    for shader in config["shaders"]:
+        if shader["file"] != "Water.hlsl":
+            continue
+        stage = shader["configs"].get("PSHADER")
+        if stage is None:
+            continue
+        entries: dict[str, dict[str, Any]] = {}
+        for entry in stage["entries"]:
+            match = re.fullmatch(r"Water:Pixel:([0-9A-F]{1,8})", entry["entry"])
+            if match is None:
+                raise SystemExit(f"invalid water pixel entry: {entry['entry']}")
+            key = f"Water:Pixel:{int(match[1], 16) & ~wading:X}"
+            defines = [
+                value for value in entry.get("defines", [])
+                if normalized_define_name(value) != "WADING"
+            ]
+            existing = entries.get(key)
+            if existing is not None:
+                if pixel_entry_define_identity("Water.hlsl", key, existing["defines"]) != pixel_entry_define_identity("Water.hlsl", key, defines):
+                    raise SystemExit(f"conflicting water pixel variant: {key}")
+                continue
+            entries[key] = {**entry, "entry": key, "defines": defines}
+        stage["entries"] = list(entries.values())
 
 
 def filter_profile_defines(
@@ -1860,6 +1891,7 @@ def filter_profile_defines(
         additional_file_defines=additional_file_defines,
         add_cross_modlist_variants=add_cross_modlist_variants,
     )
+    normalize_water_pixel_variants(config)
     category_count = append_character_category_variants(config, source_root)
     print(f"shader config: added {category_count} deferred character category variants")
     prepare_fxc_defines(config)

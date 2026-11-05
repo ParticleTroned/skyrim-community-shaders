@@ -172,7 +172,7 @@ namespace LightLimitFixDetail::LightAttach
 			stl::write_thunk_call<DynamicLightEnable>(call);
 			installationError.clear();
 			installed.store(true, std::memory_order_release);
-			logger::info("[LightLimitFix] Installed optional light update gate (default off)");
+			logger::info("[LightLimitFix] Installed optional light update gate");
 		} catch (const std::exception& error) {
 			installationError = error.what();
 			logger::warn("[LightLimitFix] Light update gate unavailable: {}", installationError);
@@ -284,7 +284,7 @@ namespace LightLimitFixDetail::LightAttach
 	nlohmann::json GetControlSchemas()
 	{
 		using json = nlohmann::json;
-		const json settings{ { "type", "object" }, { "additionalProperties", false }, { "properties", { { "enabled", { { "type", "boolean" }, { "default", false } } }, { "refreshFrames", { { "type", "integer" }, { "minimum", MinimumRefreshFrames }, { "maximum", MaximumRefreshFrames }, { "default", DefaultRefreshFrames } } } } } };
+		const json settings{ { "type", "object" }, { "additionalProperties", false }, { "properties", { { "enabled", { { "type", "boolean" }, { "default", true } } }, { "refreshFrames", { { "type", "integer" }, { "minimum", MinimumRefreshFrames }, { "maximum", MaximumRefreshFrames }, { "default", DefaultRefreshFrames } } } } } };
 		json properties = settings.at("properties");
 		for (const auto* name : { "available", "active", "experimental", "sessionOnly" })
 			properties[name] = { { "type", "boolean" } };

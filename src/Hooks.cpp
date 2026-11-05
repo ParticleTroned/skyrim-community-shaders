@@ -29,6 +29,7 @@
 #include "State.h"
 #include "TruePBR.h"
 #include "Util.h"
+#include "Utils/ShaderDescriptor.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/D3DTextureLifetimeTracker.h"
@@ -729,7 +730,7 @@ struct BSShader_LoadShaders
 
 		const bool precompileGrass = shader->shaderType == RE::BSShader::Type::Grass &&
 		                             globals::features::truePBR.loaded && globals::features::grassLighting.loaded;
-		if (shaderCache->IsDiskCache() || shaderCache->IsDump() || precompileGrass) {
+		if (((shaderCache->IsDiskCache() || precompileGrass) && !shaderCache->backgroundCompilation.load(std::memory_order_relaxed)) || shaderCache->IsDump()) {
 			const auto prepareLookup = [state, shader](uint32_t& vertex, uint32_t& pixel, bool deferred = false) {
 				state->ModifyShaderLookup(*shader, vertex, pixel, deferred);
 				if (shader->shaderType == RE::BSShader::Type::Water) {
@@ -740,7 +741,7 @@ struct BSShader_LoadShaders
 				}
 			};
 			const bool categories = globals::features::upscaling.NeedsCharacterCategoryShaders();
-			if (shaderCache->IsDiskCache()) {
+			if (shaderCache->IsDiskCache() && !shaderCache->backgroundCompilation.load(std::memory_order_relaxed)) {
 				Feature::ForEachLoadedFeature("GenerateShaderPermutations", [shader](Feature* feature) {
 					feature->GenerateShaderPermutations(shader);
 				});
@@ -754,7 +755,7 @@ struct BSShader_LoadShaders
 				auto vertexShaderDesriptor = entry->id;
 				auto pixelShaderDescriptor = entry->id;
 				prepareLookup(vertexShaderDesriptor, pixelShaderDescriptor);
-				shaderCache->GetVertexShader(*shader, vertexShaderDesriptor, SIE::ShaderCache::VertexShaderLookup::Compile);
+				shaderCache->GetVertexShader(*shader, vertexShaderDesriptor, SIE::ShaderCache::VertexShaderLookup::Precompile);
 			}
 			for (const auto& entry : shader->pixelShaders) {
 				if (entry->shader && shaderCache->IsDump()) {
@@ -764,9 +765,9 @@ struct BSShader_LoadShaders
 				auto vertexShaderDesriptor = entry->id;
 				auto pixelShaderDescriptor = entry->id;
 				prepareLookup(vertexShaderDesriptor, pixelShaderDescriptor);
-				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
+				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor, SIE::ShaderCache::PixelShaderLookup::Precompile);
 				prepareLookup(vertexShaderDesriptor, pixelShaderDescriptor, true);
-				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, categories);
+				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, categories, true);
 			}
 		}
 		BSShaderHooks::hk_LoadShaders((REX::BSShader*)shader, stream);
@@ -828,7 +829,11 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	}
 
 	// Only check against non-shader bits
-	state->permutationData.PixelShaderDescriptor &= ~state->modifiedPixelDescriptor;
+	const uint32_t runtimePixelBits = shader->shaderType.get() == RE::BSShader::Type::Water ?
+	                                      static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading) :
+	                                      0u;
+	state->permutationData.PixelShaderDescriptor = Util::ShaderDescriptor::UploadedPixelDescriptor(
+		state->permutationData.PixelShaderDescriptor, state->modifiedPixelDescriptor, runtimePixelBits);
 
 	state->techniqueShaderSelection = {};
 	bool shaderFound = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);

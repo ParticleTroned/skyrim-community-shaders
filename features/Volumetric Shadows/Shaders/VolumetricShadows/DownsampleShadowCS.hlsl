@@ -59,12 +59,8 @@ static const uint CASCADE = 0;
 }
 #else
 [numthreads(8, 8, 1)] void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupThreadID : SV_GroupThreadID) {
-	uint2 pixCoord = dispatchThreadID.xy * 2;
-
 	uint inputW, inputH, inputSlices;
 	InputTexture.GetDimensions(inputW, inputH, inputSlices);
-	uint2 clampedPixCoord = min(pixCoord, uint2(inputW - 1, inputH - 1));
-	float2 uv = (clampedPixCoord + 0.5) / float2(inputW, inputH);
 
 	uint outputW, outputH;
 	OutputTexture.GetDimensions(outputW, outputH);
@@ -79,15 +75,22 @@ static const uint CASCADE = 0;
 	if (totalReduction >= 16)
 		groupReductions = 3;
 
-	// Gather from shadow cascades and mix with ESRAM shadow.
-	float4 depths = InputTexture.GatherRed(LinearSampler, float3(uv, CASCADE));
-	float4 esramDepths = ESRAMShadow.GatherRed(LinearSampler, float3(uv, CASCADE));
-	depths = min(depths, esramDepths);
-
+	// Larger reductions gather multiple quads per lane before the group reduction.
+	uint threadSpan = max(totalReduction / 16, 1);
 	float2 vsmDepth = 0;
-	for (uint i = 0; i < 4; i++)
-		vsmDepth += GetVSMMoments(depths[i]);
-	vsmDepth *= 0.25;
+	for (uint y = 0; y < threadSpan; y++) {
+		for (uint x = 0; x < threadSpan; x++) {
+			uint2 pixCoord = (dispatchThreadID.xy * threadSpan + uint2(x, y)) * 2;
+			uint2 clampedPixCoord = min(pixCoord, uint2(inputW - 1, inputH - 1));
+			float2 uv = (clampedPixCoord + 0.5) / float2(inputW, inputH);
+			float4 depths = InputTexture.GatherRed(LinearSampler, float3(uv, CASCADE));
+			float4 esramDepths = ESRAMShadow.GatherRed(LinearSampler, float3(uv, CASCADE));
+			depths = min(depths, esramDepths);
+			for (uint i = 0; i < 4; i++)
+				vsmDepth += GetVSMMoments(depths[i]);
+		}
+	}
+	vsmDepth /= 4 * threadSpan * threadSpan;
 
 	g_scratchDepths[groupThreadID.x][groupThreadID.y] = vsmDepth;
 
@@ -132,7 +135,7 @@ static const uint CASCADE = 0;
 	}
 
 	// Write output only from threads aligned to the output grid.
-	uint outputDiv = max(totalReduction / 2, 1);
+	uint outputDiv = max(totalReduction / threadSpan / 2, 1);
 	uint2 outputCoord = dispatchThreadID.xy / outputDiv;
 	if (all((groupThreadID.xy % outputDiv) == 0) && outputCoord.x < outputW && outputCoord.y < outputH) {
 		OutputTexture[outputCoord] = g_scratchDepths[groupThreadID.x][groupThreadID.y];

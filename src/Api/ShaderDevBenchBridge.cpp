@@ -56,37 +56,63 @@ namespace
 	const char* StatusName(Status a_status)
 	{
 		switch (a_status) {
-		case Status::kSuccess: return "success";
-		case Status::kInvalidArgument: return "invalid_argument";
-		case Status::kStructureTooSmall: return "structure_too_small";
-		case Status::kUnavailable: return "unavailable";
-		case Status::kWrongThread: return "wrong_thread";
-		case Status::kRevisionConflict: return "revision_conflict";
-		case Status::kPreflightRequired: return "preflight_required";
-		case Status::kPreflightExpired: return "preflight_expired";
-		case Status::kPreflightMismatch: return "preflight_mismatch";
-		case Status::kFeatureNotFound: return "feature_not_found";
-		case Status::kBusy: return "busy";
-		case Status::kBlocked: return "blocked";
-		case Status::kPersistenceFailed: return "persistence_failed";
-		default: return "internal_error";
+		case Status::kSuccess:
+			return "success";
+		case Status::kInvalidArgument:
+			return "invalid_argument";
+		case Status::kStructureTooSmall:
+			return "structure_too_small";
+		case Status::kUnavailable:
+			return "unavailable";
+		case Status::kWrongThread:
+			return "wrong_thread";
+		case Status::kRevisionConflict:
+			return "revision_conflict";
+		case Status::kPreflightRequired:
+			return "preflight_required";
+		case Status::kPreflightExpired:
+			return "preflight_expired";
+		case Status::kPreflightMismatch:
+			return "preflight_mismatch";
+		case Status::kFeatureNotFound:
+			return "feature_not_found";
+		case Status::kBusy:
+			return "busy";
+		case Status::kBlocked:
+			return "blocked";
+		case Status::kPersistenceFailed:
+			return "persistence_failed";
+		default:
+			return "internal_error";
 		}
 	}
 
 	std::optional<MutationAction> ParseAction(std::string_view a_action)
 	{
-		if (a_action == "set_custom_shaders") return MutationAction::kSetCustomShaders;
-		if (a_action == "set_disk_cache") return MutationAction::kSetDiskCache;
-		if (a_action == "set_async_compilation") return MutationAction::kSetAsyncCompilation;
-		if (a_action == "set_skip_unchanged") return MutationAction::kSetSkipUnchangedShaders;
-		if (a_action == "set_feature_disabled_at_boot") return MutationAction::kSetFeatureDisabledAtBoot;
-		if (a_action == "clear_memory_cache") return MutationAction::kClearMemoryCache;
-		if (a_action == "clear_disk_cache") return MutationAction::kClearDiskCache;
-		if (a_action == "clear_all_caches") return MutationAction::kClearAllCaches;
-		if (a_action == "restore_previous_disk_cache") return MutationAction::kRestorePreviousDiskCache;
-		if (a_action == "accept_cache_rebuild") return MutationAction::kAcceptCacheRebuild;
-		if (a_action == "stop_compilation") return MutationAction::kStopCompilation;
-		if (a_action == "capture_active_shaders") return MutationAction::kCaptureActiveShaders;
+		if (a_action == "set_custom_shaders")
+			return MutationAction::kSetCustomShaders;
+		if (a_action == "set_disk_cache")
+			return MutationAction::kSetDiskCache;
+		if (a_action == "set_async_compilation")
+			return MutationAction::kSetAsyncCompilation;
+		if (a_action == "set_skip_unchanged")
+			return MutationAction::kSetSkipUnchangedShaders;
+		if (a_action == "set_feature_disabled_at_boot")
+			return MutationAction::kSetFeatureDisabledAtBoot;
+		if (a_action == "clear_memory_cache")
+			return MutationAction::kClearMemoryCache;
+		if (a_action == "clear_disk_cache")
+			return MutationAction::kClearDiskCache;
+		if (a_action == "clear_all_caches")
+			return MutationAction::kClearAllCaches;
+		if (a_action == "restore_previous_disk_cache")
+			return MutationAction::kRestorePreviousDiskCache;
+		if (a_action == "accept_cache_rebuild")
+			return MutationAction::kAcceptCacheRebuild;
+		if (a_action == "stop_compilation")
+			return MutationAction::kStopCompilation;
+		if (a_action == "capture_active_shaders")
+			return MutationAction::kCaptureActiveShaders;
 		return std::nullopt;
 	}
 
@@ -97,46 +123,46 @@ namespace
 			{ "stateRevision", a_snapshot.stateRevision },
 			{ "capabilities", a_snapshot.capabilities },
 			{ "customShaders", {
-				{ "requested", a_snapshot.customShadersRequested != 0 },
-				{ "effective", a_snapshot.customShadersEffective != 0 },
-				{ "transitionPending", a_snapshot.customShaderTransitionPending != 0 },
-			} },
+								   { "requested", a_snapshot.customShadersRequested != 0 },
+								   { "effective", a_snapshot.customShadersEffective != 0 },
+								   { "transitionPending", a_snapshot.customShaderTransitionPending != 0 },
+							   } },
 			{ "diskCache", {
-				{ "requested", a_snapshot.diskCacheRequested != 0 },
-				{ "active", a_snapshot.diskCacheActive != 0 },
-				{ "held", a_snapshot.diskCacheHeld != 0 },
-				{ "previousAvailable", a_snapshot.previousCacheAvailable != 0 },
-				{ "featureSetChanged", a_snapshot.featureSetChanged != 0 },
-				{ "featureSetRevertPending", a_snapshot.featureSetRevertPending != 0 },
-			} },
+							   { "requested", a_snapshot.diskCacheRequested != 0 },
+							   { "active", a_snapshot.diskCacheActive != 0 },
+							   { "held", a_snapshot.diskCacheHeld != 0 },
+							   { "previousAvailable", a_snapshot.previousCacheAvailable != 0 },
+							   { "featureSetChanged", a_snapshot.featureSetChanged != 0 },
+							   { "featureSetRevertPending", a_snapshot.featureSetRevertPending != 0 },
+						   } },
 			{ "persistence", {
-				{ "mutationBlocked", a_snapshot.persistentMutationBlocked != 0 },
-				{ "saveLoadSafeModeActive", a_snapshot.saveLoadSafeModeActive != 0 },
-			} },
+								 { "mutationBlocked", a_snapshot.persistentMutationBlocked != 0 },
+								 { "saveLoadSafeModeActive", a_snapshot.saveLoadSafeModeActive != 0 },
+							 } },
 			{ "compilation", {
-				{ "active", a_snapshot.compiling != 0 },
-				{ "async", a_snapshot.asyncCompilation != 0 },
-				{ "skipUnchanged", a_snapshot.skipUnchangedShaders != 0 },
-				{ "activeShaderCapture", a_snapshot.activeShaderCapture != 0 },
-				{ "totalTasks", a_snapshot.totalTasks },
-				{ "completedTasks", a_snapshot.completedTasks },
-				{ "failedTasks", a_snapshot.failedTasks },
-				{ "currentFailedShaders", a_snapshot.currentFailedShaders },
-				{ "memoryCacheHits", a_snapshot.memoryCacheHits },
-				{ "diskCacheHits", a_snapshot.diskCacheHits },
-				{ "sourceCompiles", a_snapshot.sourceCompiles },
-				{ "slowTasks", a_snapshot.slowTasks },
-				{ "verySlowTasks", a_snapshot.verySlowTasks },
-				{ "heavyTasksInFlight", a_snapshot.heavyTasksInFlight },
-				{ "foregroundThreadCount", a_snapshot.foregroundThreadCount },
-				{ "backgroundThreadCount", a_snapshot.backgroundThreadCount },
-				{ "statisticsText", a_snapshot.statisticsText ? a_snapshot.statisticsText : "" },
-			} },
+								 { "active", a_snapshot.compiling != 0 },
+								 { "async", a_snapshot.asyncCompilation != 0 },
+								 { "skipUnchanged", a_snapshot.skipUnchangedShaders != 0 },
+								 { "activeShaderCapture", a_snapshot.activeShaderCapture != 0 },
+								 { "totalTasks", a_snapshot.totalTasks },
+								 { "completedTasks", a_snapshot.completedTasks },
+								 { "failedTasks", a_snapshot.failedTasks },
+								 { "currentFailedShaders", a_snapshot.currentFailedShaders },
+								 { "memoryCacheHits", a_snapshot.memoryCacheHits },
+								 { "diskCacheHits", a_snapshot.diskCacheHits },
+								 { "sourceCompiles", a_snapshot.sourceCompiles },
+								 { "slowTasks", a_snapshot.slowTasks },
+								 { "verySlowTasks", a_snapshot.verySlowTasks },
+								 { "heavyTasksInFlight", a_snapshot.heavyTasksInFlight },
+								 { "foregroundThreadCount", a_snapshot.foregroundThreadCount },
+								 { "backgroundThreadCount", a_snapshot.backgroundThreadCount },
+								 { "statisticsText", a_snapshot.statisticsText ? a_snapshot.statisticsText : "" },
+							 } },
 			{ "provenance", {
-				{ "buildId", a_snapshot.buildId ? a_snapshot.buildId : "" },
-				{ "shaderCacheAbiId", a_snapshot.shaderCacheAbiId ? a_snapshot.shaderCacheAbiId : "" },
-				{ "shaderCompilerIdentity", a_snapshot.shaderCompilerIdentity ? a_snapshot.shaderCompilerIdentity : "" },
-			} },
+								{ "buildId", a_snapshot.buildId ? a_snapshot.buildId : "" },
+								{ "shaderCacheAbiId", a_snapshot.shaderCacheAbiId ? a_snapshot.shaderCacheAbiId : "" },
+								{ "shaderCompilerIdentity", a_snapshot.shaderCompilerIdentity ? a_snapshot.shaderCompilerIdentity : "" },
+							} },
 		};
 	}
 
@@ -188,8 +214,8 @@ namespace
 		snapshotJson["compilation"]["activeReuseTasks"] = globals::shaderCache ? globals::shaderCache->GetActiveReuseTasks() : 0;
 		snapshotJson["compilation"]["previousReuseTasks"] = globals::shaderCache ? globals::shaderCache->GetPreviousReuseTasks() : 0;
 		snapshotJson["compilation"]["recentFailures"] = globals::shaderCache ?
-		                                                     RecentFailuresJson(globals::shaderCache->GetRecentCompileFailures()) :
-		                                                     json::array();
+		                                                    RecentFailuresJson(globals::shaderCache->GetRecentCompileFailures()) :
+		                                                    json::array();
 		return { { "status", StatusName(status) }, { "snapshot", std::move(snapshotJson) } };
 	}
 
@@ -205,9 +231,12 @@ namespace
 		if (!mutation.contains("expectedStateRevision") || !mutation["expectedStateRevision"].is_number_unsigned())
 			throw std::runtime_error("mutation.expectedStateRevision is required and must be unsigned");
 		std::uint64_t flags = CSX::ShaderAPI::kMutationNone;
-		if (mutation.value("persist", false)) flags |= CSX::ShaderAPI::kMutationPersist;
-		if (mutation.value("allowDisruptive", false)) flags |= CSX::ShaderAPI::kMutationAllowDisruptive;
-		if (mutation.value("allowDestructive", false)) flags |= CSX::ShaderAPI::kMutationAllowDestructive;
+		if (mutation.value("persist", false))
+			flags |= CSX::ShaderAPI::kMutationPersist;
+		if (mutation.value("allowDisruptive", false))
+			flags |= CSX::ShaderAPI::kMutationAllowDisruptive;
+		if (mutation.value("allowDestructive", false))
+			flags |= CSX::ShaderAPI::kMutationAllowDestructive;
 		a_feature = mutation.value("featureName", std::string{});
 		a_token = mutation.value("preflightToken", std::string{});
 		return {
@@ -225,8 +254,8 @@ namespace
 	{
 		const auto action = a_args.value("action", std::string{});
 		const bool knownAction = action == "registry" || action == "snapshot" || action == "features" ||
-			action == "preflight" || action == "execute" || action == "backgroundCompile" ||
-			action == "exportTrace";
+		                         action == "preflight" || action == "execute" || action == "backgroundCompile" ||
+		                         action == "exportTrace";
 		if (!knownAction)
 			return Foundation().MakeError(a_args, "unknown_action", "action is not supported", "validation", false, "action");
 		if (action == "registry") {
@@ -244,15 +273,35 @@ namespace
 				{ "preflightTokenLifetimeMs", 30000 },
 				{ "actions", json::array({ "registry", "snapshot", "features", "preflight", "execute", "backgroundCompile", "exportTrace" }) },
 				{ "statusCodes", json::array({
-					"success", "invalid_argument", "structure_too_small", "unavailable", "wrong_thread",
-					"revision_conflict", "preflight_required", "preflight_expired", "preflight_mismatch",
-					"feature_not_found", "busy", "blocked", "persistence_failed", "internal_error",
-				}) },
+									 "success",
+									 "invalid_argument",
+									 "structure_too_small",
+									 "unavailable",
+									 "wrong_thread",
+									 "revision_conflict",
+									 "preflight_required",
+									 "preflight_expired",
+									 "preflight_mismatch",
+									 "feature_not_found",
+									 "busy",
+									 "blocked",
+									 "persistence_failed",
+									 "internal_error",
+								 }) },
 				{ "mutations", json::array({
-					"set_custom_shaders", "set_disk_cache", "set_async_compilation", "set_skip_unchanged",
-					"set_feature_disabled_at_boot", "clear_memory_cache", "clear_disk_cache", "clear_all_caches",
-					"restore_previous_disk_cache", "accept_cache_rebuild", "stop_compilation", "capture_active_shaders",
-				}) },
+								   "set_custom_shaders",
+								   "set_disk_cache",
+								   "set_async_compilation",
+								   "set_skip_unchanged",
+								   "set_feature_disabled_at_boot",
+								   "clear_memory_cache",
+								   "clear_disk_cache",
+								   "clear_all_caches",
+								   "restore_previous_disk_cache",
+								   "accept_cache_rebuild",
+								   "stop_compilation",
+								   "capture_active_shaders",
+							   }) },
 			};
 			return response;
 		}
@@ -369,10 +418,13 @@ namespace
 						{ "category", feature.category ? feature.category : "" },
 						{ "shaderDefine", feature.shaderDefine ? feature.shaderDefine : "" },
 						{ "loadFailure", feature.loadFailure ? feature.loadFailure : "" },
-						{ "loaded", feature.loaded != 0 }, { "disabledAtBoot", feature.disabledAtBoot != 0 },
+						{ "loaded", feature.loaded != 0 },
+						{ "disabledAtBoot", feature.disabledAtBoot != 0 },
 						{ "runtimeDisabledByMissingDependency", feature.runtimeDisabledByMissingDependency != 0 },
-						{ "core", feature.core != 0 }, { "visibleInMenu", feature.visibleInMenu != 0 },
-						{ "hiddenFromUser", feature.hiddenFromUser != 0 }, { "supportsVR", feature.supportsVR != 0 },
+						{ "core", feature.core != 0 },
+						{ "visibleInMenu", feature.visibleInMenu != 0 },
+						{ "hiddenFromUser", feature.hiddenFromUser != 0 },
+						{ "supportsVR", feature.supportsVR != 0 },
 						{ "contributesShaderDefines", feature.contributesShaderDefines != 0 },
 					});
 				}
@@ -386,11 +438,14 @@ namespace
 					Preflight001 preflight;
 					const auto status = api->Preflight(api->context, &request, &preflight);
 					return json{
-						{ "status", StatusName(status) }, { "allowed", preflight.allowed != 0 },
-						{ "disruptive", preflight.disruptive != 0 }, { "destructive", preflight.destructive != 0 },
+						{ "status", StatusName(status) },
+						{ "allowed", preflight.allowed != 0 },
+						{ "disruptive", preflight.disruptive != 0 },
+						{ "destructive", preflight.destructive != 0 },
 						{ "restartRequired", preflight.restartRequired != 0 },
 						{ "shaderRecompileExpected", preflight.shaderRecompileExpected != 0 },
-						{ "stateRevision", preflight.stateRevision }, { "requiredFlags", preflight.requiredFlags },
+						{ "stateRevision", preflight.stateRevision },
+						{ "requiredFlags", preflight.requiredFlags },
 						{ "preflightToken", preflight.token ? preflight.token : "" },
 						{ "reasonCode", preflight.reasonCode ? preflight.reasonCode : "" },
 						{ "message", preflight.message ? preflight.message : "" },
@@ -399,14 +454,18 @@ namespace
 				MutationReceipt001 receipt;
 				const auto status = api->Execute(api->context, &request, &receipt);
 				return json{
-					{ "status", StatusName(status) }, { "applied", receipt.applied != 0 },
-					{ "changed", receipt.changed != 0 }, { "pending", receipt.pending != 0 },
+					{ "status", StatusName(status) },
+					{ "applied", receipt.applied != 0 },
+					{ "changed", receipt.changed != 0 },
+					{ "pending", receipt.pending != 0 },
 					{ "restartRequired", receipt.restartRequired != 0 },
 					{ "shaderRecompileExpected", receipt.shaderRecompileExpected != 0 },
 					{ "persistenceRequested", receipt.persistenceRequested != 0 },
 					{ "persisted", receipt.persisted != 0 },
-					{ "previousStateRevision", receipt.previousStateRevision }, { "stateRevision", receipt.stateRevision },
-					{ "message", receipt.message ? receipt.message : "" }, { "current", ReadSnapshot(*api) },
+					{ "previousStateRevision", receipt.previousStateRevision },
+					{ "stateRevision", receipt.stateRevision },
+					{ "message", receipt.message ? receipt.message : "" },
+					{ "current", ReadSnapshot(*api) },
 				};
 			}
 			return json{ { "error", "validated action was not dispatched" } };
@@ -471,7 +530,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 					"clientId":{"type":"string","minLength":1,"maxLength":128},
 					"commandId":{"type":"string","minLength":1,"maxLength":128},
 					"expectedBuildId":{"type":"string"},
-					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile","exportTrace"],"description":"snapshot includes compilation.contentDedupeTasks for shared bytecode and activeReuseTasks/previousReuseTasks for verified disk content reuse. backgroundCompile atomically enables background compilation and wakes the dispatcher; result.changed reports whether the mode changed."},
+					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile","exportTrace"],"description":"snapshot includes compilation.contentDedupeTasks for shared bytecode and activeReuseTasks/previousReuseTasks for verified disk content reuse. backgroundCompile enables demand-only background compilation, drops unstarted startup precompiles that no draw or explicit compile requested, and wakes the dispatcher; result.changed reports whether the mode changed."},
 					"path":{"type":"string","description":"exportTrace only: UTF-8 destination relative to the Community Shaders log directory; defaults to compile-trace.json. The returned path is UTF-8. Null characters, malformed UTF-8 and paths outside that directory are rejected."},
 					"mutation":{
 						"type":"object",

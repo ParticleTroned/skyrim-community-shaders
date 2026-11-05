@@ -56,7 +56,7 @@ int main(int argc, char** argv)
 		for (const auto shortName : { "FurShells", "SnowCover" })
 			assert(preset.at("Disable at Boot").at(shortName) == false);
 		assert(preset.at("Upscaling").at("antiLag2Enabled") == false);
-		assert(preset.at("Light Limit Fix").at("SkipRedundantLightAttach") == false);
+		assert(preset.at("Light Limit Fix").at("SkipRedundantLightAttach") == true);
 		++profileCount;
 	}
 	assert(profileCount == 10);

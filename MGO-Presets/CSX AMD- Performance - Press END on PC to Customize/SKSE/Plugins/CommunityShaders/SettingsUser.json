@@ -1159,6 +1159,7 @@
         "Opacity": 0.800000011920929
     },
     "Disable at Boot": {
+        "SeasonalWeather": false,
         "RenderDoc": false,
         "ScreenSpaceGI": false,
         "ScreenSpaceShadows": false,
@@ -1908,6 +1909,36 @@
     "Reverse Z": {
         "EnableReverseZBuffer": false
     },
+    "Seasonal Weather": {
+        "Enabled": false,
+        "SkipGlobalControlledRegions": true,
+        "MonthlyWeights": [
+            [0.7, 1.0, 0.25, 4.0],
+            [0.8, 1.0, 0.5, 3.0],
+            [1.0, 1.0, 1.5, 1.0],
+            [1.0, 1.0, 1.5, 0.5],
+            [1.2, 1.0, 1.0, 0.25],
+            [1.5, 0.8, 0.8, 0.1],
+            [1.5, 0.8, 0.8, 0.1],
+            [1.3, 1.0, 1.0, 0.25],
+            [1.0, 1.2, 1.3, 0.5],
+            [0.9, 1.3, 1.2, 1.0],
+            [0.8, 1.2, 0.7, 2.5],
+            [0.7, 1.0, 0.25, 4.0]
+        ],
+        "ExcludedWorldspaces": [
+            "blackreach",
+            "alftandworld",
+            "sovngarde",
+            "dlc01soulcairn",
+            "dlc01boneyard",
+            "dlc2apocryphaworld",
+            "dlc2solstheimworld"
+        ],
+        "ExcludedRegions": [],
+        "SnowAssignments": [],
+        "WeatherCategories": []
+    },
     "Snow Cover": {
         "Enable": 0,
         "EnableExpensiveFoliage": 0,
@@ -1932,15 +1963,15 @@
     "Preset Compatibility": {
         "contractVersion": 1,
         "presetId": "csx-amd-performance",
-        "presetVersion": "d2026.11.05.1",
+        "presetVersion": "d2026.11.06.1",
         "target": {
             "runtime": "VR",
             "minimumVersion": "3.21",
             "maximumVersionExclusive": "3.22"
         },
         "settingsContract": {
-            "revision": 32,
-            "sourceTreeSha256": "DE60019E2ADC0509C7E9A8B58895D9F86932C6A8BD7E158A064A240F909574AF"
+            "revision": 33,
+            "sourceTreeSha256": "37C159FBF5A0D16AC47B875309945BFA517E59F2EF1EC1F20774264D4415E2B7"
         }
     },
     "Grass Optimizations": {

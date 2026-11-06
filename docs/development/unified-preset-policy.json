@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.11.05.1",
+    "packageVersion": "d2026.11.06.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "1023B7FE022186875C396D87527577817CFB28A5624EE6A0424DCC3E522A7F58"
+        "sha256": "E9990BBE811A13F32769B2A54AE1D139641D815790300AC1E672AE7064B57209"
     },
     "runtimeSettingsContract": {
-        "revision": 32,
-        "sourceTreeSha256": "DE60019E2ADC0509C7E9A8B58895D9F86932C6A8BD7E158A064A240F909574AF",
+        "revision": 33,
+        "sourceTreeSha256": "37C159FBF5A0D16AC47B875309945BFA517E59F2EF1EC1F20774264D4415E2B7",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -32,6 +32,9 @@
                 "src/Features/FoveatedCommon.h",
                 "src/Features/GrassOptimizations/GrassPolicy.h",
                 "src/Features/LightLimitFix/ShadowCullingPolicy.h",
+                "src/Features/SeasonalWeatherConfig.cpp",
+                "src/Features/SeasonalWeatherConfig.h",
+                "src/Features/SeasonalWeatherPolicy.h",
                 "src/Features/TextureStreaming/Categories.h",
                 "src/Features/TextureStreaming/Policy.h",
                 "src/Features/TextureStreaming/Settings.h",
@@ -130,6 +133,11 @@
             "src/Features/ScreenSpaceGI.h",
             "src/Features/ScreenSpaceShadows.cpp",
             "src/Features/ScreenSpaceShadows.h",
+            "src/Features/SeasonalWeather.cpp",
+            "src/Features/SeasonalWeather.h",
+            "src/Features/SeasonalWeatherConfig.cpp",
+            "src/Features/SeasonalWeatherConfig.h",
+            "src/Features/SeasonalWeatherPolicy.h",
             "src/Features/Skylighting.cpp",
             "src/Features/Skylighting.h",
             "src/Features/SkySync.cpp",
@@ -794,6 +802,9 @@
             { "path": ["Grass Optimizations", "FarLODCoverageBias"], "value": 1.0 },
             { "path": ["Grass Optimizations", "ProportionalDensityFade"], "value": false },
             { "path": ["Snow Cover", "Enable"], "value": 0 },
+            { "path": ["Seasonal Weather", "Enabled"], "value": false },
+            { "path": ["Seasonal Weather", "SkipGlobalControlledRegions"], "value": true },
+            { "path": ["Disable at Boot", "SeasonalWeather"], "value": false },
             { "path": ["Fur Shells", "Enabled"], "value": false },
             { "path": ["Reverse Z", "EnableReverseZBuffer"], "value": false },
             { "path": ["Disable at Boot", "FurShells"], "value": false },

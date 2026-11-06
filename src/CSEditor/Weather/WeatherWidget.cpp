@@ -234,7 +234,7 @@ void WeatherWidget::DrawWidget()
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem("Seasons")) {
+		if (ImGui::BeginTabItem(globals::features::seasonalWeather.GetDisplayName().c_str())) {
 			BeginScrollableContent("##SeasonsScroll");
 			globals::features::seasonalWeather.DrawEditorSettings(weather);
 			EndScrollableContent();

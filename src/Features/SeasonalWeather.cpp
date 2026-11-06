@@ -11,6 +11,7 @@
 #include "Utils/StringUtils.h"
 #include "Utils/VirtualFunctionHook.h"
 
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -86,10 +87,11 @@ struct SeasonalWeather::Plan
 
 std::pair<std::string, std::vector<std::string>> SeasonalWeather::GetFeatureSummary()
 {
-	return { "Changes natural weather chances with the game calendar.",
+	return { "Adjusts regional weather chances throughout the year.",
 		{ "Uses weather mods' regional candidates and normal transitions",
 			"Monthly weights for clear, cloudy, rain and snow",
 			"Optional snow assignments for regions without snowfall",
+			"Yields to Seasonal Weathers Framework in global-controlled regions",
 			"Leaves scripted weather and excluded worlds under native control" } };
 }
 
@@ -98,6 +100,12 @@ void SeasonalWeather::DataLoaded()
 	std::lock_guard lock(mutex);
 	configuredForms.clear();
 	editorIDIndex = {};
+	const auto data = RE::TESDataHandler::GetSingleton();
+	frameworkDetected.store(data && (data->LookupLoadedModByName("Seasonal Weathers Framework.esp") ||
+										data->LookupLoadedLightModByName("Seasonal Weathers Framework.esp")));
+	if (frameworkDetected.load()) {
+		logger::info("{}: Seasonal Weathers Framework detected; retaining global-controlled regions", GetDisplayName());
+	}
 	try {
 		const auto result = Util::InstallDetour(REL::RelocationID(16203, 16449).address(),
 			reinterpret_cast<void**>(&originalSelect), reinterpret_cast<void*>(&SelectWeather));
@@ -108,7 +116,7 @@ void SeasonalWeather::DataLoaded()
 		installationError = error.what();
 	}
 	if (!available.load())
-		logger::error("Seasonal Weather: {}", installationError);
+		logger::error("{}: {}", GetDisplayName(), installationError);
 }
 
 RE::FormID SeasonalWeather::ResolveConfiguredForm(const std::string& key) const
@@ -138,9 +146,18 @@ SeasonalWeather::Plan SeasonalWeather::BuildPlan(RE::TESRegion* region) const
 	const auto worldKey = Util::ToLowerAscii(Util::GetFormEditorID(region->worldSpace, &editorIDIndex));
 	if (std::ranges::find(settings.ExcludedWorldspaces, worldKey) != settings.ExcludedWorldspaces.end())
 		return decline("excluded_worldspace");
-	if (!globals::game::calendar)
+	const auto* calendar = globals::game::calendar;
+	if (!calendar || !calendar->gameMonth || !calendar->gameDay || !calendar->gameHour)
 		return decline("calendar_unavailable");
-	plan.month = SnowEnvironment::GetFractionalGameMonth(*globals::game::calendar);
+	const float month = calendar->gameMonth->value;
+	const float day = calendar->GetDay();
+	const float hour = calendar->GetHour();
+	// Validate before the shared helper clamps months or masks nonfinite dates.
+	if (!Util::IsFinite(month) || !Util::IsFinite(day) || !Util::IsFinite(hour) ||
+		month < 0 || month >= MonthCount || std::floor(month) != month ||
+		hour < 0 || hour >= 24 || day < 1 || day > RE::Calendar::DAYS_IN_MONTH[static_cast<size_t>(month)])
+		return decline("invalid_calendar");
+	plan.month = SnowEnvironment::GetFractionalGameMonth(*calendar);
 	if (!Util::IsFinite(plan.month) || plan.month < 0 || plan.month >= MonthCount)
 		return decline("invalid_calendar");
 	plan.data = WeatherData(region);
@@ -151,8 +168,8 @@ SeasonalWeather::Plan SeasonalWeather::BuildPlan(RE::TESRegion* region) const
 			return decline("invalid_weather_entry");
 		if (plan.entries.size() == MaxCandidates)
 			return decline("candidate_limit");
-		if (entry->global && settings.SkipGlobalControlledRegions)
-			return decline("weather_global_control");
+		if (entry->global && (frameworkDetected.load() || settings.SkipGlobalControlledRegions))
+			return decline(frameworkDetected.load() ? "seasonal_weathers_framework" : "weather_global_control");
 		const double weight = entry->global ? static_cast<double>(entry->global->value) : static_cast<double>(entry->chance);
 		if (!Util::IsFinite(weight) || weight < 0 || weight > 1000000)
 			return decline("invalid_native_weight");
@@ -222,7 +239,7 @@ RE::TESWeather* SeasonalWeather::SelectWeather(RE::TESRegion* region)
 					replacement.push_front(std::addressof(*it));
 	} catch (const std::exception& error) {
 		feature.faulted.store(true);
-		logger::error("Seasonal Weather: retaining native selection after preparation failed: {}", error.what());
+		logger::error("{}: retaining native selection after preparation failed: {}", feature.GetDisplayName(), error.what());
 		return originalSelect(region);
 	}
 	if (!plan->reason.empty()) {
@@ -243,7 +260,7 @@ void SeasonalWeather::Apply(const json& patch)
 	candidate.update(patch);
 	auto validated = SeasonalWeatherConfig::Parse(candidate);
 	if (validated.Enabled && !settings.Enabled && (!available.load() || faulted.load()))
-		throw std::invalid_argument("Seasonal Weather selector is unavailable; inspect installationError and faulted");
+		throw std::invalid_argument(std::format("{} selector is unavailable; inspect installationError and faulted", GetDisplayName()));
 	for (const auto& assignment : validated.SnowAssignments) {
 		if (std::ranges::any_of(settings.SnowAssignments, [&](const auto& old) {
 				return old.Region == assignment.Region && old.Weather == assignment.Weather && old.Weight == assignment.Weight;
@@ -266,6 +283,24 @@ void SeasonalWeather::Apply(const json& patch)
 	settings = std::move(validated);
 	configuredForms.clear();
 	enabled.store(settings.Enabled, std::memory_order_relaxed);
+}
+
+void SeasonalWeather::ApplyEditorEdits(const SeasonalWeatherConfig::Settings& original, const SeasonalWeatherConfig::Settings& edited)
+{
+	const auto before = SeasonalWeatherConfig::Serialize(original);
+	const auto after = SeasonalWeatherConfig::Serialize(edited);
+	const auto current = SeasonalWeatherConfig::Serialize(settings);
+	json patch = json::object();
+	for (const auto& [key, value] : after.items()) {
+		if (value == before.at(key))
+			continue;
+		// Preserve unrelated concurrent changes and reject conflicting edits atomically.
+		if (current.at(key) != before.at(key) && current.at(key) != value)
+			throw std::invalid_argument("Settings changed while editing " + key + "; retry the edit");
+		patch[key] = value;
+	}
+	if (!patch.empty())
+		Apply(patch);
 }
 
 void SeasonalWeather::LoadSettings(json& input)
@@ -302,6 +337,7 @@ json SeasonalWeather::Inspect(RE::TESRegion* region, bool includeSettings) const
 	}
 	const auto reason = !settings.Enabled ? "disabled" : (!available.load() || faulted.load() ? "selector_unavailable" : plan.reason);
 	json result{ { "available", available.load() }, { "faulted", faulted.load() }, { "installationError", installationError },
+		{ "frameworkDetected", frameworkDetected.load() },
 		{ "region", region ? Util::GetFormFileKey(region) : "" },
 		{ "month", plan.month }, { "bypassReason", reason }, { "candidates", std::move(candidates) },
 		{ "eligibilityReason", plan.reason },

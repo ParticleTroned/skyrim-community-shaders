@@ -2955,12 +2955,19 @@ if(BUILD_CONTROLLER_TESTS)
     set(_seasonal_weather_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/tests/seasonal-weather"
     )
+    set(_seasonal_weather_test_headers
+        "${_seasonal_weather_test_dir}/seasonal_weather_list_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_selection_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_native_list_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_apply_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_detection_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_plan_helpers_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_plan_type_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_plan_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_calendar_under_test.h"
+    )
     add_custom_command(
-        OUTPUT
-            "${_seasonal_weather_test_dir}/seasonal_weather_list_under_test.h"
-            "${_seasonal_weather_test_dir}/seasonal_weather_selection_under_test.h"
-            "${_seasonal_weather_test_dir}/seasonal_weather_native_list_under_test.h"
-            "${_seasonal_weather_test_dir}/seasonal_weather_apply_under_test.h"
+        OUTPUT ${_seasonal_weather_test_headers}
         COMMAND
             "${CMAKE_COMMAND}"
             "-DSOURCE_FILE=${PROJECT_SOURCE_DIR}/src/Features/SeasonalWeather.cpp"
@@ -2968,12 +2975,21 @@ if(BUILD_CONTROLLER_TESTS)
             "${PROJECT_SOURCE_DIR}/tests/extract_seasonal_weather.cmake"
         DEPENDS
             src/Features/SeasonalWeather.cpp
+            src/Features/SnowCover/Environment.cpp
             tests/extract_seasonal_weather.cmake
             tests/extract_source_region.cmake
             extern/CommonLibSSE-NG/include/RE/B/BSSimpleList.h
         VERBATIM
     )
+    add_custom_target(
+        seasonal_weather_test_sources
+        DEPENDS ${_seasonal_weather_test_headers}
+    )
     add_controller_test(seasonal_weather_selection_test SeasonalWeatherSelection tests/seasonal_weather_selection_test.cpp)
+    add_dependencies(
+        seasonal_weather_selection_test
+        seasonal_weather_test_sources
+    )
     set_tests_properties(SeasonalWeatherSelection PROPERTIES TIMEOUT 30)
     target_sources(
         seasonal_weather_selection_test
@@ -2982,6 +2998,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_seasonal_weather_test_dir}/seasonal_weather_selection_under_test.h"
             "${_seasonal_weather_test_dir}/seasonal_weather_native_list_under_test.h"
             "${_seasonal_weather_test_dir}/seasonal_weather_apply_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_detection_under_test.h"
             src/Features/SeasonalWeatherConfig.cpp
     )
     target_link_libraries(
@@ -2991,6 +3008,28 @@ if(BUILD_CONTROLLER_TESTS)
     target_include_directories(
         seasonal_weather_selection_test
         PRIVATE "${_seasonal_weather_test_dir}"
+    )
+    add_controller_test(seasonal_weather_plan_test SeasonalWeatherPlan tests/seasonal_weather_plan_test.cpp)
+    add_dependencies(seasonal_weather_plan_test seasonal_weather_test_sources)
+    target_sources(
+        seasonal_weather_plan_test
+        PRIVATE
+            "${_seasonal_weather_test_dir}/seasonal_weather_plan_helpers_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_plan_type_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_plan_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_calendar_under_test.h"
+    )
+    target_link_libraries(
+        seasonal_weather_plan_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    target_include_directories(
+        seasonal_weather_plan_test
+        PRIVATE "${_seasonal_weather_test_dir}"
+    )
+    target_compile_options(
+        seasonal_weather_plan_test
+        PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/fp:fast>"
     )
     target_compile_definitions(
         snow_cover_math_test
@@ -4859,6 +4898,7 @@ if(BUILD_CONTROLLER_TESTS)
         EXCLUDE_FROM_ALL
         tests/preset_compatibility_test.cpp
         src/PresetCompatibility.cpp
+        src/Features/SeasonalWeatherConfig.cpp
     )
     target_compile_features(preset_compatibility_test PRIVATE cxx_std_23)
     target_include_directories(

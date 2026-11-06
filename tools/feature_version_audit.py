@@ -489,7 +489,9 @@ def extract_feature_metadata(feature_headers_dir, nexus_metadata=None):
         display_name = package
         if header:
             content = header.read_text(encoding="utf-8")
-            display_name = (extract_regex(re.compile(r'GetName\s*\([^)]*\)[^{]*\{\s*return\s+"([^"\n]+)"'), content)
+            display_name = (extract_regex(re.compile(r'GetDisplayName\s*\([^)]*\)[^{]*\{\s*return\s+"([^"\n]+)"'), content)
+                            or extract_regex(re.compile(r'kFeatureDisplayName\s*=\s*"([^"\n]+)"'), content)
+                            or extract_regex(re.compile(r'GetName\s*\([^)]*\)[^{]*\{\s*return\s+"([^"\n]+)"'), content)
                             or extract_regex(re.compile(r'kFeatureName\s*=\s*"([^"\n]+)"'), content)
                             or package)
             for source in (header, header.with_suffix(".cpp")):

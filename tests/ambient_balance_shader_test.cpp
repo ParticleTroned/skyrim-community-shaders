@@ -265,6 +265,49 @@ namespace
 		return cases;
 	}
 
+	unsigned VerifyFog(Fixture& fixture)
+	{
+		constexpr Pixel weatherFog{ 0.2f, 0.3f, 0.4f, 1.0f };
+		const auto luminance = [](const Pixel& color) {
+			return color[0] * 0.2125f + color[1] * 0.7154f + color[2] * 0.0721f;
+		};
+		unsigned cases = 0;
+		fixture.permutation->SetVariable("Permutation::ExtraShaderDescriptor", uint32_t(1));
+		for (bool linear : { false, true }) {
+			fixture.feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", uint32_t(linear));
+			for (uint32_t interior : { 0u, 1u }) {
+				fixture.shared->SetVariable("SharedData::InInterior", interior);
+				for (uint32_t mode : { 0u, 1u, 2u, 3u }) {
+					fixture.feature->SetMember("SharedData::iblSettings", "DALCMode", mode);
+					for (float ambient : { 0.0f, 1.0f }) {
+						fixture.feature->SetMember("SharedData::iblSettings", "FogAmount", 0.0f);
+						const auto baseline = fixture.Draw(ambient);
+						if (baseline[9] != weatherFog)
+							throw std::runtime_error("Disabled IBL fog changed the weather color");
+						for (float amount : { 0.4f, 1.0f }) {
+							fixture.feature->SetMember("SharedData::iblSettings", "FogAmount", amount);
+							fixture.feature->SetMember("SharedData::iblSettings", "PreserveFogLuminance", uint32_t(1));
+							const auto actual = fixture.Draw(ambient);
+							for (size_t output = 0; output < 9; ++output)
+								if (actual[output] != baseline[output])
+									throw std::runtime_error("IBL fog changed unrelated lighting");
+							for (const auto value : actual[9])
+								if (!std::isfinite(value))
+									throw std::runtime_error("IBL fog produced a nonfinite color");
+							if (std::abs(luminance(actual[9]) - luminance(weatherFog)) > 2e-5f)
+								throw std::runtime_error("IBL fog did not preserve weather luminance");
+							if (ambient == 0.0f && actual[9] != weatherFog)
+								throw std::runtime_error("Unlit IBL fog did not retain the weather color");
+							++cases;
+						}
+						fixture.feature->SetMember("SharedData::iblSettings", "PreserveFogLuminance", uint32_t(0));
+					}
+				}
+			}
+		}
+		return cases;
+	}
+
 }
 
 int main()
@@ -282,6 +325,7 @@ int main()
 				cases += Verify(fixture);
 				cases += VerifySaturation(fixture);
 			}
+			cases += VerifyFog(fixture);
 		}
 		std::cout << cases << " D3D11 ambient cases passed (SE/AE and VR).\n";
 		return 0;

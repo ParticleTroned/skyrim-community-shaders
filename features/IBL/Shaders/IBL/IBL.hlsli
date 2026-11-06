@@ -208,27 +208,29 @@ namespace ImageBasedLighting
 
 	float3 GetFogIBLColor(float3 fogColor)
 	{
-		[branch] if (SharedData::iblSettings.FogAmount == 0.0) return fogColor;
-
-		float3 iblColor;
-		if (SharedData::iblSettings.DALCMode >= 2) {
-			float3 dalc0 = Color::Ambient(SharedData::GetAmbient(0.f));
-			iblColor = Color::IrradianceToLinear(dalc0 * SharedData::iblSettings.DALCAmount) + GetSkyIBLColor(float3(0, 0, 0));
-		} else {
-			iblColor = GetEnvIBLColor(float3(0, 0, 0)) + GetSkyIBLColor(float3(0, 0, 0));
-		}
-		iblColor = Color::ApplyAmbientBalanceLinear(iblColor);
-		if (SharedData::iblSettings.PreserveFogLuminance) {
-			const float fogLuminance = Color::RGBToLuminance(fogColor);
-			const float iblLuminance = Color::RGBToLuminance(iblColor);
-			if (iblLuminance > 0) {
-				const float scale = fogLuminance / iblLuminance;
-				iblColor *= scale;
+		[branch] if (SharedData::iblSettings.FogAmount != 0.0)
+		{
+			float3 iblColor;
+			if (SharedData::iblSettings.DALCMode >= 2) {
+				float3 dalc0 = Color::Ambient(SharedData::GetAmbient(0.f));
+				iblColor = Color::IrradianceToLinear(dalc0 * SharedData::iblSettings.DALCAmount) + GetSkyIBLColor(float3(0, 0, 0));
 			} else {
-				iblColor = fogColor;
+				iblColor = GetEnvIBLColor(float3(0, 0, 0)) + GetSkyIBLColor(float3(0, 0, 0));
 			}
+			iblColor = Color::ApplyAmbientBalanceLinear(iblColor);
+			if (SharedData::iblSettings.PreserveFogLuminance) {
+				const float fogLuminance = Color::RGBToLuminance(fogColor);
+				const float iblLuminance = Color::RGBToLuminance(iblColor);
+				if (iblLuminance > 0) {
+					const float scale = fogLuminance / iblLuminance;
+					iblColor *= scale;
+				} else {
+					iblColor = fogColor;
+				}
+			}
+			fogColor = lerp(fogColor, iblColor, SharedData::iblSettings.FogAmount);
 		}
-		return lerp(fogColor, iblColor, SharedData::iblSettings.FogAmount);
+		return fogColor;
 	}
 }
 

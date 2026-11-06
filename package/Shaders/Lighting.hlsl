@@ -4517,7 +4517,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting) != 0)
 		fogColor = 0.0;
 	if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z)
-		color.xyz = lerp(color.xyz, fogColor, Color::FogAlpha(input.FogParam.w));
+		color.xyz = FogColor.w * lerp(color.xyz, fogColor, Color::FogAlpha(input.FogParam.w));
 #	endif
 
 	color.xyz = SanitizeFloat3(color.xyz);

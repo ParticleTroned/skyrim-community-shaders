@@ -21,7 +21,6 @@
 
 #include <algorithm>
 #include <array>
-#include <codecvt>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -2294,8 +2293,7 @@ void State::SetPerfMarker(std::string_view title)
 
 void State::SetAdapterDescription(const std::wstring& description)
 {
-	std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-	adapterDescription = converter.to_bytes(description);
+	adapterDescription = stl::utf16_to_utf8(description).value_or("<GPU name conversion failed>");
 }
 
 void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] bool a_prepass)

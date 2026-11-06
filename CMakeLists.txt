@@ -3528,6 +3528,67 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
     )
     target_link_libraries(graphics_driver_info_test PRIVATE dxgi.lib gdi32.lib)
+    set(_graphics_adapter_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/graphics-adapter-initialization"
+    )
+    set(_graphics_adapter_test_headers
+        "${_graphics_adapter_test_dir}/graphics_adapter_initialization_under_test.h"
+        "${_graphics_adapter_test_dir}/graphics_adapter_name_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_graphics_adapter_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_graphics_adapter_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_graphics_adapter_initialization.cmake"
+        DEPENDS
+            src/Hooks.cpp
+            src/State.cpp
+            tests/extract_graphics_adapter_initialization.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        graphics_adapter_initialization_test
+        GraphicsAdapterInitialization
+        tests/graphics_adapter_initialization_test.cpp
+    )
+    target_sources(
+        graphics_adapter_initialization_test
+        PRIVATE ${_graphics_adapter_test_headers}
+    )
+    target_include_directories(
+        graphics_adapter_initialization_test
+        PRIVATE "${_graphics_adapter_test_dir}"
+    )
+    target_link_libraries(
+        graphics_adapter_initialization_test
+        PRIVATE CommonLibSSE::CommonLibSSE spdlog::spdlog windowsapp.lib
+    )
+    foreach(
+        _scenario
+        IN
+        ITEMS
+            quiet_error
+            quiet_warn
+            info
+            unicode
+            empty
+            null_device
+            device_failure
+            adapter_failure
+            description_failure
+            driver_failure
+    )
+        add_test(
+            NAME "GraphicsAdapterInitialization.${_scenario}"
+            COMMAND graphics_adapter_initialization_test "${_scenario}"
+        )
+        set_tests_properties(
+            "GraphicsAdapterInitialization.${_scenario}"
+            PROPERTIES LABELS "ControllerTests"
+        )
+    endforeach()
     set(_vr_recovery_contract_test_header
         "${CMAKE_CURRENT_BINARY_DIR}/generated/vr_recovery_contract_under_test.h"
     )

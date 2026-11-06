@@ -78,13 +78,10 @@ namespace
 {
 	std::shared_mutex g_renderTargetRecreationMutex;
 
-	void LogGraphicsAdapterInfoOnce(ID3D11Device* a_device)
+	void InitializeGraphicsAdapterInfoOnce(ID3D11Device* a_device)
 	{
-		if (!spdlog::should_log(spdlog::level::info))
-			return;
-
-		static std::once_flag logged;
-		std::call_once(logged, [a_device]() {
+		static std::once_flag initialized;
+		std::call_once(initialized, [a_device]() {
 			winrt::com_ptr<IDXGIDevice> dxgiDevice;
 			const auto deviceResult = a_device ? a_device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put())) : E_POINTER;
 			if (FAILED(deviceResult)) {
@@ -106,8 +103,13 @@ namespace
 				return;
 			}
 
+			// UI identity comes from the renderer even when optional backends or logging are disabled.
+			globals::state->SetAdapterDescription(description.Description);
+			if (!spdlog::should_log(spdlog::level::info))
+				return;
+
 			logger::info("[GPU] {} (vendor=0x{:04X}, device=0x{:04X}, dedicated VRAM={} MiB).",
-				stl::utf16_to_utf8(description.Description).value_or("<GPU name conversion failed>"),
+				globals::state->adapterDescription,
 				description.VendorId,
 				description.DeviceId,
 				description.DedicatedVideoMemory / (1024u * 1024u));
@@ -1697,7 +1699,7 @@ namespace Hooks
 
 			logger::info("Accessing render device information");
 			globals::ReInit();
-			LogGraphicsAdapterInfoOnce(globals::d3d::device);
+			InitializeGraphicsAdapterInfoOnce(globals::d3d::device);
 			const auto validationResult = Util::ValidateImmediateContext(globals::d3d::context);
 			if (FAILED(validationResult)) {
 				logger::critical("Renderer immediate-context validation failed: 0x{:08X}", static_cast<uint32_t>(validationResult));

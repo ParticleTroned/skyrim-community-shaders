@@ -1,11 +1,14 @@
 #define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
 #include "Common/EyeAppearance.hlsli"
+#include "Common/FrameBuffer.hlsli"
 
 cbuffer Samples : register(b0)
 {
 	float4 colors[8];
 	float4 reflectionInputs;  // Base sample, wet sample, linear direct specular, wet roughness.
 	float4 reflectionWeights;  // Base weight, wet weight, diffuse visibility, rain suppression.
+	float4 fogInputs;
+	float4 FogColor;
 };
 RWTexture2D<float4> Result : register(u0);
 
@@ -46,7 +49,14 @@ namespace Skylighting
 
 [numthreads(8, 1, 1)] void main(uint3 id : SV_DispatchThreadID)
 {
+#if defined(FORWARD_FOG_TEST)
+	float4 color = colors[id.x % 4];
+#else
 	float4 color = colors[id.x];
+#endif
+	struct Input { float4 FogParam; };
+	Input input;
+	input.FogParam = fogInputs;
 	float3 specularColor = reflectionInputs.z.xxx;
 	float3 envColor = 0;
 	float3 diffuseColor = 0;
@@ -75,5 +85,23 @@ namespace Skylighting
 	float skylightingDiffuse = reflectionWeights.z;
 	float3 vertexColor = 1;
 @COMPOSITION@
+#if defined(FORWARD_FOG_TEST)
+	float4 composedColor = color;
+	{
+		float3 fogColor = AdaptiveBalanceAppearance::ApplyFog(Color::Fog(input.FogParam.xyz));
+		if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting) != 0)
+			fogColor = 0.0;
+		float4 FogNearColor = FogColor;
+		float fogFactor = input.FogParam.w;
+		if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z) {
+@OPAQUE_FOG@
+		}
+	}
+#endif
+@FOG@
+#if defined(FORWARD_FOG_TEST)
+	Result[id.xy] = id.x < 4 ? color : composedColor;
+#else
 	Result[id.xy] = float4(color.xyz, specularColor.x);
+#endif
 }

@@ -35,8 +35,12 @@ add_d3d_shader_test(
     tests/adaptive_balance_color_shader_test.cpp
 )
 
-set(_forward_composition_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/forward-reflection-composition")
-set(_forward_composition_shader "${_forward_composition_dir}/forward_reflection_composition.hlsl")
+set(_forward_composition_dir
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/forward-reflection-composition"
+)
+set(_forward_composition_shader
+    "${_forward_composition_dir}/forward_reflection_composition.hlsl"
+)
 add_custom_command(
     OUTPUT "${_forward_composition_shader}"
     COMMAND
@@ -45,18 +49,46 @@ add_custom_command(
         "${PROJECT_SOURCE_DIR}/tests/extract_forward_reflection_composition.cmake"
     DEPENDS
         package/Shaders/Lighting.hlsl
+        package/Shaders/ISSAOComposite.hlsl
         tests/extract_source_region.cmake
         tests/extract_forward_reflection_composition.cmake
         tests/forward_reflection_composition.hlsl.in
     VERBATIM
 )
-set_source_files_properties("${_forward_composition_shader}" PROPERTIES HEADER_FILE_ONLY TRUE)
-target_sources(adaptive_balance_color_shader_test PRIVATE "${_forward_composition_shader}")
-target_compile_definitions(adaptive_balance_color_shader_test PRIVATE
-    FORWARD_COMPOSITION_TEST_SHADER=L"${_forward_composition_shader}")
-add_test(NAME ForwardReflectionComposition COMMAND adaptive_balance_color_shader_test --reflections)
-set_tests_properties(ForwardReflectionComposition PROPERTIES
-    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" TIMEOUT 60 LABELS ControllerTests)
+set_source_files_properties(
+    "${_forward_composition_shader}"
+    PROPERTIES HEADER_FILE_ONLY TRUE
+)
+target_sources(
+    adaptive_balance_color_shader_test
+    PRIVATE "${_forward_composition_shader}"
+)
+target_compile_definitions(
+    adaptive_balance_color_shader_test
+    PRIVATE FORWARD_COMPOSITION_TEST_SHADER=L"${_forward_composition_shader}"
+)
+add_test(
+    NAME ForwardReflectionComposition
+    COMMAND adaptive_balance_color_shader_test --reflections
+)
+set_tests_properties(
+    ForwardReflectionComposition
+    PROPERTIES
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        TIMEOUT 60
+        LABELS ControllerTests
+)
+add_test(
+    NAME ForwardFogComposition
+    COMMAND adaptive_balance_color_shader_test --fog
+)
+set_tests_properties(
+    ForwardFogComposition
+    PROPERTIES
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        TIMEOUT 60
+        LABELS ControllerTests
+)
 
 add_d3d_shader_test(
     foveated_blend_curve_shader_test

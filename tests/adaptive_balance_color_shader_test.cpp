@@ -81,7 +81,7 @@ namespace
 		ComPtr<ID3D11ShaderReflection> reflection;
 		ComPtr<ID3D11Texture2D> output, staging;
 		ComPtr<ID3D11UnorderedAccessView> uav;
-		std::unique_ptr<ConstantBuffer> feature, inputs, permutation;
+		std::unique_ptr<ConstantBuffer> feature, inputs, permutation, frame;
 
 		Fixture(ID3D11Device* device, bool vr, ShaderMode mode = ShaderMode::Scene, const std::vector<const char*>& extraDefines = {})
 		{
@@ -115,6 +115,8 @@ namespace
 				feature->SetMember("SharedData::adaptiveBalanceSettings", name, 1.0f);
 			if (mode == ShaderMode::Fire || mode == ShaderMode::Appearance || mode == ShaderMode::PointLights || mode == ShaderMode::ReflectionComposition)
 				permutation = std::make_unique<ConstantBuffer>(device, reflection.Get(), "Permutation::PerShader");
+			if (mode == ShaderMode::ReflectionComposition)
+				frame = std::make_unique<ConstantBuffer>(device, reflection.Get(), "FrameBuffer::PerFrame");
 			if (lights || mode == ShaderMode::Appearance) {
 				feature->SetMember("SharedData::linearLightingSettings", "lightGamma", 2.2f);
 				for (auto [name, value] : lightIntensityDefaults)
@@ -250,6 +252,8 @@ namespace
 			inputs->Bind(context);
 			if (permutation)
 				permutation->Bind(context);
+			if (frame)
+				frame->Bind(context);
 			ID3D11UnorderedAccessView* target = uav.Get();
 			context->CSSetUnorderedAccessViews(0, 1, &target, nullptr);
 			context->CSSetShader(shader.Get(), nullptr, 0);
@@ -851,6 +855,43 @@ namespace
 		return checked;
 	}
 
+	unsigned VerifyFogComposition(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
+	{
+		Fixture fixture(device, vr, ShaderMode::ReflectionComposition, { "FORWARD_FOG_TEST" });
+		constexpr Pixels bases{ Pixel{ 0, 0, 0, 0 }, Pixel{ 0.01f, 0.02f, 0.03f, 0.25f },
+			Pixel{ 0.3f, 0.2f, 0.1f, 0.5f }, Pixel{ 2, 4, 8, 1 } };
+		fixture.inputs->SetVariable("colors", bases);
+		fixture.feature->SetMember("SharedData::linearLightingSettings", "fogGamma", 1.8f);
+		fixture.feature->SetMember("SharedData::linearLightingSettings", "fogAlphaGamma", 1.5f);
+		fixture.feature->SetMember("SharedData::adaptiveBalanceSettings", "fogIntensity", 1.0f);
+		unsigned checked = 0;
+		for (bool linear : { false, true }) {
+			fixture.feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", uint32_t(linear));
+			for (uint32_t flags : { 0u, 1u, 2u, 3u }) {
+				fixture.frame->SetVariable("FrameBuffer::FrameParams", Pixel{ 1, float(flags & 1u), float((flags >> 1) & 1u), 0 });
+				for (uint32_t additive : { 0u, 1u }) {
+					fixture.permutation->SetVariable("Permutation::ExtraShaderDescriptor", 1u | (additive << 8));
+					for (float range : { 0.0f, 0.8333333f, 1.0f, 2.0f }) {
+						fixture.inputs->SetVariable("FogColor", Pixel{ 0, 0, 0, range });
+						for (float alpha : { 0.0f, 0.5f, 1.0f }) {
+							fixture.inputs->SetVariable("fogInputs", Pixel{ 0.2f, 0.3f, 0.4f, alpha });
+							const auto actual = fixture.Dispatch(context);
+							for (size_t i = 0; i < 4; ++i) {
+								for (size_t c = 0; c < 3; ++c) {
+									Require(std::isfinite(actual[i][c]), "Nonfinite forward fog output");
+									Require(Close(actual[i][c], actual[i + 4][c]), "Forward fog brightness disagrees with the opaque composite");
+								}
+								Require(actual[i][3] == bases[i][3], "Forward fog changed material alpha");
+								++checked;
+							}
+						}
+					}
+				}
+			}
+		}
+		return checked;
+	}
+
 	unsigned VerifyUtilityControls(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
 	{
 		Fixture appearance(device, vr, ShaderMode::Appearance);
@@ -1297,12 +1338,13 @@ int main(int argc, char** argv)
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
 			D3D11_SDK_VERSION, device.GetAddressOf(), nullptr, context.GetAddressOf()));
 		const bool reflectionsOnly = argc == 2 && std::string_view(argv[1]) == "--reflections";
-		Require(argc == 1 || reflectionsOnly, "Unknown shader test arguments");
-		if (reflectionsOnly) {
+		const bool fogOnly = argc == 2 && std::string_view(argv[1]) == "--fog";
+		Require(argc == 1 || reflectionsOnly || fogOnly, "Unknown shader test arguments");
+		if (reflectionsOnly || fogOnly) {
 			unsigned checked = 0;
 			for (bool vr : { false, true })
-				checked += VerifyReflectionComposition(device.Get(), context.Get(), vr);
-			std::cout << checked << " production forward reflection samples passed on WARP (SE/AE and VR).\n";
+				checked += fogOnly ? VerifyFogComposition(device.Get(), context.Get(), vr) : VerifyReflectionComposition(device.Get(), context.Get(), vr);
+			std::cout << checked << " production forward " << (fogOnly ? "fog" : "reflection") << " samples passed on WARP (SE/AE and VR).\n";
 			return 0;
 		}
 		unsigned lightSamples = 0;

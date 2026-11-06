@@ -2,6 +2,7 @@
 
 #include "GpuPass.h"
 #include "Profiler.h"
+#include "SeasonalWeather.h"
 #include "SnowCover/Config.h"
 #include "SnowCover/Environment.h"
 #include "SnowCoverMath.h"
@@ -118,6 +119,8 @@ void SnowCover::UpdateFrame()
 		perFrame.wsettings.AffectTreeTint = 0;
 	}
 	perFrame.wsettings.EnableSnowCover = wsettings.EnableSnowCover && texturesLoaded;
+	perFrame.snowExclusions = Util::IsInterior() ? SnowExclusions::MaskData{} :
+	                                               globals::features::seasonalWeather.GetSnowCoverExclusions(SnowEnvironment::GetCurrentWorldspaceOrCellEditorID());
 	UpdateFireMelt();
 	WetternessSnowMelt::Update(*this, snowRate);
 	UpdateSurvival();
@@ -860,7 +863,7 @@ void SnowCover::UpdateSurvival()
 		const auto position = player->GetPosition();
 		const float u = position.x * wsettings.mapScale.x + wsettings.mapOffset.x;
 		const float v = position.y * wsettings.mapScale.y + wsettings.mapOffset.y;
-		if (snowMap.ContainsSample(u, v)) {
+		if (snowMap.ContainsSample(u, v) && !SnowExclusions::ContainsAny(perFrame.snowExclusions, position.x, position.y)) {
 			const float map = snowMap.Sample(u, v);
 			const float environment = (position.z - settings.SnowHeightOffset + (map - 0.5f) * wsettings.mapZscale + perFrame.SeasonalAltitude) / wsettings.BlendSmoothness;
 			const float weather = timeSnowing * timeSnowing * timeSnowing * std::max(500.0f, snowingDensity) / 500.0f;

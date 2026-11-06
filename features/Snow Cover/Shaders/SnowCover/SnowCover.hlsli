@@ -102,6 +102,11 @@ namespace SnowCover
 		uint foliage;
 	};
 
+	float GetAreaMask(float3 position)
+	{
+		return SnowExclusions::ContainsAny(SharedData::snowCoverSettings.snowExclusions, position.x, position.y) ? 0 : 1;
+	}
+
 	float GetCoverage(CoverageInputs footprint, float3 state, float fire)
 	{
 		float environment = footprint.environment + state.z / SharedData::snowCoverSettings.BlendSmoothness;
@@ -116,6 +121,7 @@ namespace SnowCover
 		return saturate(footprint.scale * coverage * (1 - fire));
 	}
 
+	// Callers include the shared area mask in skylight for both coverage and melting.
 	CoverageInputs GetSurfaceFootprint(float3 normal, float disp, float3 p, float skylight,
 		float waterDist, float viewDist, float lift, float environment)
 	{
@@ -168,6 +174,7 @@ namespace SnowCover
 		color = Color::HSVtoRGB(hsv);
 	}
 
+	// The visibility factors include the area mask; environmental tint remains independent.
 	float GetFoliageSnowBase(float3 worldNormal, float3 p, float viewDist, float distMult, out float env_mult)
 	{
 		env_mult = GetEnvironmentalMultiplier(p);
@@ -220,7 +227,7 @@ namespace SnowCover
 			float3 snowNormal = normalize(normal + float3(0, 0, FoliageNormalBias));
 			float viewDist = length(mul(FrameBuffer::CameraView[eyeIndex], float4(relativeWorldPos, 1)).xyz);
 			float environment;
-			float coverage = GetFoliageSnowBase(snowNormal, snowPosition, viewDist, GetObjectFade(viewDist), environment);
+			float coverage = GetFoliageSnowBase(snowNormal, snowPosition, viewDist, GetObjectFade(viewDist) * GetAreaMask(snowPosition), environment);
 			float skylight = TreeBaseVisibility;
 			[branch] if (coverage > 0 && SharedData::snowCoverSettings.EnableExpensiveFoliage)
 			{
@@ -252,7 +259,8 @@ namespace SnowCover
 		float3 snowPosition = relativeWorldPos + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
 		float3 snowNormal = float3(uv, normal.z * (1 - FoliageNormalBias) + FoliageNormalBias);
 		float snowEnvironment;
-		float snowCoverage = GetFoliageSnowBase(snowNormal, snowPosition, length(viewPosition), 1.0, snowEnvironment);
+		float areaMask = GetAreaMask(snowPosition);
+		float snowCoverage = GetFoliageSnowBase(snowNormal, snowPosition, length(viewPosition), areaMask, snowEnvironment);
 		float snowOcclusion = smoothstep(0, SkyVisibilityThreshold, skyVisibility) * GrassBaseVisibility;
 		bool needsSnowFootprint = snowCoverage > 0;
 #		if defined(WETTERNESS)
@@ -269,7 +277,7 @@ namespace SnowCover
 				snowOcclusion = max(snowOcclusion, 1 - diffuseTexture.SampleBias(SampColorSampler, uv - float2(0, 1. / ry), SharedData::MipBias).a);
 			}
 		}
-		snowOcclusion *= saturate(relativeWorldPos.z - SharedData::GetWaterData(relativeWorldPos, eyeIndex).w);
+		snowOcclusion *= areaMask * saturate(relativeWorldPos.z - SharedData::GetWaterData(relativeWorldPos, eyeIndex).w);
 		GrassSnowState state;
 		state.footprint = GetFoliageFootprint(snowNormal, snowPosition, length(viewPosition), snowEnvironment, snowOcclusion);
 		state.normal = snowNormal;

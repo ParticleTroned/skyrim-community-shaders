@@ -29,13 +29,15 @@ struct SeasonalWeather : Feature
 	json Control(const json& request);
 	/** Draws the same controls in CS Editor; selected weather can supply regional snow. */
 	void DrawEditorSettings(RE::TESWeather* selectedWeather);
+	/** Snapshots enabled surface masks for one exterior world, independently of monthly selection. */
+	SnowExclusions::MaskData GetSnowCoverExclusions(std::string_view world) const;
 
 private:
 	struct Plan;
 	using SelectFunction = RE::TESWeather* (*)(RE::TESRegion*);
 	static inline SelectFunction originalSelect = nullptr;
 	static RE::TESWeather* SelectWeather(RE::TESRegion* region);
-	Plan BuildPlan(RE::TESRegion* region) const;
+	Plan BuildPlan(RE::TESRegion* region, bool preview = false) const;
 	json Inspect(RE::TESRegion* region, bool includeSettings = true) const;
 	void Apply(const json& patch);
 	void ApplyEditorEdits(const SeasonalWeatherConfig::Settings& original, const SeasonalWeatherConfig::Settings& edited);

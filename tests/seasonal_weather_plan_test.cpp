@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdio>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -85,9 +86,26 @@ namespace RE
 	{
 		TESWeather* overrideWeather = nullptr;
 	};
+	struct PlayerCharacter
+	{
+		TESForm* world = nullptr;
+		struct Position
+		{
+			float x = 0, y = 0;
+		} position;
+		static PlayerCharacter* GetSingleton()
+		{
+			static PlayerCharacter player;
+			return &player;
+		}
+		TESForm* GetWorldspace() const { return world; }
+		Position GetPosition() const { return position; }
+	};
 }
 namespace Util
 {
+	bool interior = false;
+	bool IsInterior() { return interior; }
 	struct FormEditorIDIndex
 	{};
 	std::string GetFormEditorID(const RE::TESForm* form, FormEditorIDIndex*) { return form->editorID; }
@@ -129,7 +147,7 @@ struct SeasonalWeather
 	mutable std::unordered_map<std::string, RE::FormID> configuredForms;
 	mutable Util::FormEditorIDIndex editorIDIndex;
 	RE::FormID ResolveConfiguredForm(const std::string& key) const;
-	Plan BuildPlan(RE::TESRegion* region) const;
+	Plan BuildPlan(RE::TESRegion* region, bool preview = false) const;
 };
 std::unordered_map<std::string, RE::FormID> keys;
 std::unordered_map<RE::FormID, RE::TESWeather*> weathers;
@@ -181,6 +199,7 @@ try {
 	region.dataList = &list;
 	keys.emplace("region", region.id);
 	SeasonalWeather feature;
+	feature.settings.Enabled = true;
 	auto plan = [&] { return feature.BuildPlan(&region); };
 	auto decline = [&](const char* reason) { Require(plan().reason == reason, reason); };
 	const auto winter = plan();
@@ -189,6 +208,47 @@ try {
 	month.value = 6;
 	Require(plan().chances[3] < winter.chances[3], "Summer must reduce snow probability");
 	month.value = 0;
+	RE::PlayerCharacter::GetSingleton()->world = &world;
+	SeasonalWeatherConfig::SnowExclusion area{ "River", "tamriel", true, true, true, { { -10, -10 }, { 10, -10 }, { 10, 10 }, { -10, 10 } } };
+	feature.settings.SnowExclusions.push_back(area);
+	Require(plan().snowExcluded && plan().chances == std::vector<uint32_t>({ 50, 25, 25, 0 }), "Snow-only areas preserve relative non-snow weather weights");
+	feature.settings.Enabled = false;
+	globals::game::calendar = nullptr;
+	Require(plan().chances == std::vector<uint32_t>({ 50, 25, 25, 0 }), "Snow areas work without monthly selection or a calendar");
+	Require(!plan().month, "Calendar-independent snow filtering must not report January");
+	entries[3].chance = 0;
+	decline("no_snow_candidates");
+	Require(plan().chances.empty(), "No-op areas must preserve native chances without renormalizing");
+	entries[3].chance = 20;
+	RE::TESGlobal controlled{ 70 };
+	entries[3].global = &controlled;
+	feature.frameworkDetected = true;
+	feature.settings.SkipGlobalControlledRegions = false;
+	decline("seasonal_weathers_framework");
+	feature.frameworkDetected = false;
+	feature.settings.SkipGlobalControlledRegions = true;
+	decline("weather_global_control");
+	entries[3].global = nullptr;
+	feature.settings.WeatherCategories = { { "4", Category::Clear }, { "1", Category::Snow } };
+	Require(plan().chances == std::vector<uint32_t>({ 50, 25, 25, 0 }), "Snow areas use precipitation flags, not monthly category overrides");
+	feature.settings.WeatherCategories.clear();
+	for (size_t i = 0; i < 3; ++i)
+		entries[i].chance = 0;
+	decline("no_non_snow_candidate");
+	for (size_t i = 0; i < 3; ++i)
+		entries[i].chance = i == 0 ? 40 : 20;
+	RE::PlayerCharacter::GetSingleton()->position.x = 11;
+	decline("disabled");
+	RE::PlayerCharacter::GetSingleton()->position.x = 0;
+	Util::interior = true;
+	decline("disabled");
+	Util::interior = false;
+	RE::PlayerCharacter::GetSingleton()->world = nullptr;
+	decline("disabled");
+	feature.settings.SnowExclusions.clear();
+	globals::game::calendar = &calendar;
+	Require(feature.BuildPlan(&region, true).chances == winter.chances, "Disabled monthly selection retains read-only chance previews");
+	feature.settings.Enabled = true;
 
 	for (auto* field : { &month, &day, &hour }) {
 		const auto original = field->value;

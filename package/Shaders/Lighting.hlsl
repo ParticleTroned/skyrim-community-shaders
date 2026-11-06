@@ -3390,6 +3390,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		else
 			float disp = 0;
 #		endif
+			// Share the polygon result between visible snow and its melt footprint.
+			snowOcclusion *= SnowCover::GetAreaMask(adjustedWorldPos);
 			float snowEnvironment = SnowCover::GetEnvironmentalMultiplier(adjustedWorldPos);
 			float3 snowNormal = worldNormal;
 #		if defined(TREE_ANIM)

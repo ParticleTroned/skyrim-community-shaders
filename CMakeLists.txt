@@ -3018,6 +3018,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_seasonal_weather_test_dir}/seasonal_weather_plan_type_under_test.h"
             "${_seasonal_weather_test_dir}/seasonal_weather_plan_under_test.h"
             "${_seasonal_weather_test_dir}/seasonal_weather_calendar_under_test.h"
+            src/Features/SeasonalWeatherConfig.cpp
     )
     target_link_libraries(
         seasonal_weather_plan_test
@@ -3065,6 +3066,29 @@ if(BUILD_CONTROLLER_TESTS)
     add_controller_test(
         wetterness_snow_history_test WetternessSnowHistory
         tests/wetterness_snow_history_test.cpp
+    )
+    set(_snow_melt_runtime
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/snow_melt_runtime.h"
+    )
+    add_custom_command(
+        OUTPUT "${_snow_melt_runtime}"
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DSOURCE_FILE=${PROJECT_SOURCE_DIR}/src/Features/Wetterness/SnowMelt.cpp"
+            "-DOUTPUT_FILE=${_snow_melt_runtime}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_snow_melt.cmake"
+        DEPENDS
+            src/Features/Wetterness/SnowMelt.cpp
+            tests/extract_snow_melt.cmake
+        VERBATIM
+    )
+    add_controller_test(wetterness_snow_runtime_test WetternessSnowRuntime
+        tests/wetterness_snow_runtime_test.cpp
+    )
+    target_sources(wetterness_snow_runtime_test PRIVATE "${_snow_melt_runtime}")
+    target_include_directories(
+        wetterness_snow_runtime_test
+        PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated"
     )
     add_d3d_shader_test(
         wetterness_snow_melt_test WetternessSnowMelt

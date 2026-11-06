@@ -39,10 +39,10 @@ namespace FeatureVersions
         {"ScreenSpaceGI"sv,        {4,5,0}},
         {"ScreenSpaceShadows"sv,   {2,4,0}},
         {"Screenshot"sv,           {1,5,1}},
-        {"SeasonalWeather"sv,      {1,0,1}},
+        {"SeasonalWeather"sv,      {1,1,1}},
         {"SkySync"sv,              {1,5,1}},
         {"Skylighting"sv,          {1,5,2}},
-        {"SnowCover"sv,            {1,5,1}},
+        {"SnowCover"sv,            {1,6,1}},
         {"SubsurfaceScattering"sv, {3,1,8}},
         {"TerrainBlending"sv,      {1,2,0}},
         {"TerrainHelper"sv,        {1,0,1}},
@@ -57,7 +57,7 @@ namespace FeatureVersions
         {"WaterEffects"sv,         {1,2,1}},
         {"WeatherPicker"sv,        {1,5,0}},
         {"WetnessEffects"sv,       {3,2,0}},
-        {"Wetterness"sv,           {1,8,0}},
+        {"Wetterness"sv,           {1,8,1}},
     };
 
     inline const std::unordered_set<std::string_view> FEATURE_CORE_NAMES{

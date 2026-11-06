@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../package/Shaders/Common/SnowExclusions.hlsli"
 #include "Buffer.h"
 #include "Feature.h"
 #include "State.h"
@@ -158,12 +159,14 @@ public:
 		UserSettings settings;
 		WorldSettings wsettings;
 		FireMeltData fireMelt;
+		SnowExclusions::MaskData snowExclusions;
 	};
 	static_assert(sizeof(PerFrame) % 16 == 0);
-	static_assert(sizeof(PerFrame) == 208 + sizeof(FireMeltData));
+	static_assert(sizeof(PerFrame) == 208 + sizeof(FireMeltData) + sizeof(SnowExclusions::MaskData));
 	static_assert(offsetof(PerFrame, settings) == 16);
 	static_assert(offsetof(PerFrame, wsettings) == 64);
 	static_assert(offsetof(PerFrame, fireMelt) == 208);
+	static_assert(offsetof(PerFrame, snowExclusions) == 208 + sizeof(FireMeltData));
 
 	struct FireMeltSettings
 	{

@@ -1937,7 +1937,8 @@
         ],
         "ExcludedRegions": [],
         "SnowAssignments": [],
-        "WeatherCategories": []
+        "WeatherCategories": [],
+        "SnowExclusions": []
     },
     "Snow Cover": {
         "Enable": 0,
@@ -1963,15 +1964,15 @@
     "Preset Compatibility": {
         "contractVersion": 1,
         "presetId": "csx-nvidia-hoshipa-vr-stabilizer",
-        "presetVersion": "d2026.11.06.1",
+        "presetVersion": "d2026.11.06.3",
         "target": {
             "runtime": "VR",
             "minimumVersion": "3.21",
             "maximumVersionExclusive": "3.22"
         },
         "settingsContract": {
-            "revision": 33,
-            "sourceTreeSha256": "37C159FBF5A0D16AC47B875309945BFA517E59F2EF1EC1F20774264D4415E2B7"
+            "revision": 35,
+            "sourceTreeSha256": "0482B27E1E87DC827C93370AFBFFEDF516E8F443299D9A115BEB75F20AC33DFD"
         }
     },
     "Grass Optimizations": {

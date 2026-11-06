@@ -8,6 +8,7 @@
 #include "SnowCover/Environment.h"
 #include "State.h"
 #include "Utils/Form.h"
+#include "Utils/Game.h"
 #include "Utils/StringUtils.h"
 #include "Utils/VirtualFunctionHook.h"
 
@@ -51,6 +52,22 @@ namespace
 		return result;
 	}
 
+	bool ExcludesSnowfall(const SeasonalWeatherConfig::Settings& settings, RE::TESRegion* region, std::string_view world)
+	{
+		if (settings.SnowExclusions.empty() || Util::IsInterior())
+			return false;
+		const auto* player = RE::PlayerCharacter::GetSingleton();
+		if (!player || player->GetWorldspace() != region->worldSpace)
+			return false;
+		const auto position = player->GetPosition();
+		if (!Util::IsFinite(position.x) || !Util::IsFinite(position.y))
+			return false;
+		return std::ranges::any_of(settings.SnowExclusions, [&](const auto& area) {
+			return area.Snowfall && SeasonalWeatherConfig::MatchesWorld(area, world) &&
+			       SnowExclusions::Contains(SeasonalWeatherConfig::PackArea(area), position.x, position.y);
+		});
+	}
+
 	RE::FormID ResolveFormKey(const std::string& key)
 	{
 		const auto id = Util::SpidToFormId(key);
@@ -79,10 +96,11 @@ struct SeasonalWeather::Plan
 {
 	RE::TESRegionDataWeather* data = nullptr;
 	std::string reason;
-	float month = 0;
+	std::optional<float> month;
 	std::vector<RE::WeatherType> entries;
 	std::vector<double> baseWeights;
 	std::vector<uint32_t> chances;
+	bool snowExcluded = false;
 };
 
 std::pair<std::string, std::vector<std::string>> SeasonalWeather::GetFeatureSummary()
@@ -91,6 +109,7 @@ std::pair<std::string, std::vector<std::string>> SeasonalWeather::GetFeatureSumm
 		{ "Uses weather mods' regional candidates and normal transitions",
 			"Monthly weights for clear, cloudy, rain and snow",
 			"Optional snow assignments for regions without snowfall",
+			"Selectable snow-only polygons for snowfall and ground snow",
 			"Yields to Seasonal Weathers Framework in global-controlled regions",
 			"Leaves scripted weather and excluded worlds under native control" } };
 }
@@ -128,7 +147,7 @@ RE::FormID SeasonalWeather::ResolveConfiguredForm(const std::string& key) const
 	return configuredForms.emplace(key, ResolveFormKey(key)).first->second;
 }
 
-SeasonalWeather::Plan SeasonalWeather::BuildPlan(RE::TESRegion* region) const
+SeasonalWeather::Plan SeasonalWeather::BuildPlan(RE::TESRegion* region, bool preview) const
 {
 	Plan plan;
 	auto decline = [&](const char* reason) { plan.reason = reason; return std::move(plan); };
@@ -139,27 +158,33 @@ SeasonalWeather::Plan SeasonalWeather::BuildPlan(RE::TESRegion* region) const
 	auto* sky = globals::game::sky;
 	if (!sky || sky->overrideWeather || EditorWindow::GetSingleton()->IsWeatherLocked())
 		return decline("weather_override");
-	if (std::ranges::any_of(settings.ExcludedRegions, [&](const auto& key) { return ResolveConfiguredForm(key) == region->GetFormID(); }))
-		return decline("excluded_region");
 	if (!region->worldSpace)
 		return decline("no_worldspace");
 	const auto worldKey = Util::ToLowerAscii(Util::GetFormEditorID(region->worldSpace, &editorIDIndex));
-	if (std::ranges::find(settings.ExcludedWorldspaces, worldKey) != settings.ExcludedWorldspaces.end())
-		return decline("excluded_worldspace");
-	const auto* calendar = globals::game::calendar;
-	if (!calendar || !calendar->gameMonth || !calendar->gameDay || !calendar->gameHour)
-		return decline("calendar_unavailable");
-	const float month = calendar->gameMonth->value;
-	const float day = calendar->GetDay();
-	const float hour = calendar->GetHour();
-	// Validate before the shared helper clamps months or masks nonfinite dates.
-	if (!Util::IsFinite(month) || !Util::IsFinite(day) || !Util::IsFinite(hour) ||
-		month < 0 || month >= MonthCount || std::floor(month) != month ||
-		hour < 0 || hour >= 24 || day < 1 || day > RE::Calendar::DAYS_IN_MONTH[static_cast<size_t>(month)])
-		return decline("invalid_calendar");
-	plan.month = SnowEnvironment::GetFractionalGameMonth(*calendar);
-	if (!Util::IsFinite(plan.month) || plan.month < 0 || plan.month >= MonthCount)
-		return decline("invalid_calendar");
+	plan.snowExcluded = ExcludesSnowfall(settings, region, worldKey);
+	if (!plan.snowExcluded) {
+		if (!settings.Enabled && !preview)
+			return decline("disabled");
+		if (std::ranges::any_of(settings.ExcludedRegions, [&](const auto& key) { return ResolveConfiguredForm(key) == region->GetFormID(); }))
+			return decline("excluded_region");
+		if (std::ranges::find(settings.ExcludedWorldspaces, worldKey) != settings.ExcludedWorldspaces.end())
+			return decline("excluded_worldspace");
+		const auto* calendar = globals::game::calendar;
+		if (!calendar || !calendar->gameMonth || !calendar->gameDay || !calendar->gameHour)
+			return decline("calendar_unavailable");
+		const float month = calendar->gameMonth->value;
+		const float day = calendar->GetDay();
+		const float hour = calendar->GetHour();
+		// Validate before the shared helper clamps months or masks nonfinite dates.
+		if (!Util::IsFinite(month) || !Util::IsFinite(day) || !Util::IsFinite(hour) ||
+			month < 0 || month >= MonthCount || std::floor(month) != month ||
+			hour < 0 || hour >= 24 || day < 1 || day > RE::Calendar::DAYS_IN_MONTH[static_cast<size_t>(month)])
+			return decline("invalid_calendar");
+		const auto fractionalMonth = SnowEnvironment::GetFractionalGameMonth(*calendar);
+		if (!Util::IsFinite(fractionalMonth) || fractionalMonth < 0 || fractionalMonth >= MonthCount)
+			return decline("invalid_calendar");
+		plan.month = fractionalMonth;
+	}
 	plan.data = WeatherData(region);
 	if (!plan.data)
 		return decline("no_unambiguous_region_list");
@@ -179,6 +204,8 @@ SeasonalWeather::Plan SeasonalWeather::BuildPlan(RE::TESRegion* region) const
 	if (plan.entries.empty())
 		return decline("empty_region_list");
 	for (const auto& assignment : settings.SnowAssignments) {
+		if (plan.snowExcluded)
+			break;
 		if (ResolveConfiguredForm(assignment.Region) != region->GetFormID())
 			continue;
 		auto* weather = RE::TESForm::LookupByID<RE::TESWeather>(ResolveConfiguredForm(assignment.Weather));
@@ -195,18 +222,24 @@ SeasonalWeather::Plan SeasonalWeather::BuildPlan(RE::TESRegion* region) const
 	std::vector<double> weights;
 	weights.reserve(plan.entries.size());
 	std::unordered_map<RE::FormID, Category> categories;
-	for (const auto& override : settings.WeatherCategories)
-		categories.emplace(ResolveConfiguredForm(override.Weather), override.Category);
+	if (!plan.snowExcluded)
+		for (const auto& override : settings.WeatherCategories)
+			categories.emplace(ResolveConfiguredForm(override.Weather), override.Category);
+	bool removesSnow = false;
 	for (size_t i = 0; i < plan.entries.size(); ++i) {
 		const auto* weather = plan.entries[i].weather;
 		auto category = Classify(weather);
 		if (const auto found = categories.find(weather->GetFormID()); found != categories.end())
 			category = found->second;
-		weights.push_back(plan.baseWeights[i] * Multiplier(settings.MonthlyWeights, plan.month, category));
+		removesSnow |= category == Category::Snow && plan.baseWeights[i] > 0;
+		const auto multiplier = plan.snowExcluded ? (category == Category::Snow ? 0.0f : 1.0f) : Multiplier(settings.MonthlyWeights, *plan.month, category);
+		weights.push_back(plan.baseWeights[i] * multiplier);
 	}
+	if (plan.snowExcluded && !removesSnow)
+		return decline("no_snow_candidates");
 	plan.chances = Percentages(weights);
 	if (plan.chances.empty())
-		return decline("all_weights_zero");
+		return decline(plan.snowExcluded ? "no_non_snow_candidate" : "all_weights_zero");
 	for (size_t i = 0; i < plan.entries.size(); ++i) {
 		plan.entries[i].chance = plan.chances[i];
 		plan.entries[i].global = nullptr;
@@ -227,7 +260,8 @@ RE::TESWeather* SeasonalWeather::SelectWeather(RE::TESRegion* region)
 		SelectionGuard(bool& value) : active(value) { active = true; }
 		~SelectionGuard() { active = false; }
 	} selectionGuard(selecting);
-	if (!feature.enabled.load(std::memory_order_relaxed) || feature.faulted.load() || !CSX::Api::IsRuntimeMainThread())
+	if (feature.faulted.load() || !CSX::Api::IsRuntimeMainThread() ||
+		(!feature.enabled.load(std::memory_order_relaxed) && std::ranges::none_of(feature.settings.SnowExclusions, [](const auto& area) { return area.Enabled && area.Snowfall; })))
 		return originalSelect(region);
 	std::optional<Plan> plan;
 	WeatherList replacement;
@@ -328,18 +362,19 @@ void SeasonalWeather::RestoreDefaultSettings()
 
 json SeasonalWeather::Inspect(RE::TESRegion* region, bool includeSettings) const
 {
-	const auto plan = BuildPlan(region);
+	const auto plan = BuildPlan(region, true);
 	json candidates = json::array();
 	for (size_t i = 0; i < plan.entries.size(); ++i) {
 		const auto* weather = plan.entries[i].weather;
 		candidates.push_back({ { "weather", Util::GetFormFileKey(weather) }, { "name", Util::GetFormEditorID(weather, &editorIDIndex) },
 			{ "baseWeight", plan.baseWeights[i] }, { "chancePercent", plan.chances.empty() ? json(nullptr) : json(plan.chances[i]) } });
 	}
-	const auto reason = !settings.Enabled ? "disabled" : (!available.load() || faulted.load() ? "selector_unavailable" : plan.reason);
+	const auto reason = !settings.Enabled && !plan.snowExcluded ? "disabled" : (!available.load() || faulted.load() ? "selector_unavailable" : plan.reason);
 	json result{ { "available", available.load() }, { "faulted", faulted.load() }, { "installationError", installationError },
 		{ "frameworkDetected", frameworkDetected.load() },
+		{ "snowExcludedAtPlayer", plan.snowExcluded },
 		{ "region", region ? Util::GetFormFileKey(region) : "" },
-		{ "month", plan.month }, { "bypassReason", reason }, { "candidates", std::move(candidates) },
+		{ "month", plan.month ? json(*plan.month) : json(nullptr) }, { "bypassReason", reason }, { "candidates", std::move(candidates) },
 		{ "eligibilityReason", plan.reason },
 		{ "persistence", "Menu Save settings" } };
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -365,4 +400,14 @@ json SeasonalWeather::Control(const json& request)
 	if (request.contains("seasonalWeather"))
 		Apply(request.at("seasonalWeather"));
 	return Inspect(region);
+}
+
+SnowExclusions::MaskData SeasonalWeather::GetSnowCoverExclusions(std::string_view world) const
+{
+	std::lock_guard lock(mutex);
+	SnowExclusions::MaskData result{};
+	for (const auto& area : settings.SnowExclusions)
+		if (area.SnowCover && SeasonalWeatherConfig::MatchesWorld(area, world))
+			result.areas[result.count++] = SeasonalWeatherConfig::PackArea(area);
+	return result;
 }

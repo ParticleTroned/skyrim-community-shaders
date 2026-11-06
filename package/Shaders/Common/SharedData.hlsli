@@ -4,6 +4,7 @@
 #include "Common/ReverseZ.hlsli"
 
 #include "Common/FrameBuffer.hlsli"
+#include "Common/SnowExclusions.hlsli"
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 #include "Common/VR.hlsli"
 
@@ -585,6 +586,7 @@ namespace SharedData
 		float FireMeltRadiusScale;
 		uint pad3;
 		float4 FireMeltSpheres[8];
+		SnowExclusions::MaskData snowExclusions;
 	};
 #		if defined(WETTERNESS)
 	struct SnowMeltSample

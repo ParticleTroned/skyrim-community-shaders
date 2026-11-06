@@ -12,11 +12,50 @@ namespace SeasonalWeatherConfig
 	using json = nlohmann::json;
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SnowAssignment, Region, Weather, Weight)
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherCategory, Weather, Category)
+	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SnowExclusion, Name, Worldspace, Enabled, Snowfall, SnowCover, Vertices)
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Settings, Enabled, SkipGlobalControlledRegions, MonthlyWeights,
-		ExcludedWorldspaces, ExcludedRegions, SnowAssignments, WeatherCategories)
+		ExcludedWorldspaces, ExcludedRegions, SnowAssignments, WeatherCategories, SnowExclusions)
 
 	namespace
 	{
+		void ValidatePolygon(const SnowExclusion& area)
+		{
+			const auto& points = area.Vertices;
+			auto cross = [](const auto& a, const auto& b, const auto& c) {
+				return (double(b[0]) - a[0]) * (double(c[1]) - a[1]) -
+				       (double(b[1]) - a[1]) * (double(c[0]) - a[0]);
+			};
+			double twiceArea = 0;
+			for (size_t i = 0; i < points.size(); ++i) {
+				const auto next = (i + 1) % points.size();
+				if (points[i] == points[next])
+					throw std::invalid_argument("Snow exclusion has a zero-length edge");
+				const auto& previous = points[(i + points.size() - 1) % points.size()];
+				if (cross(previous, points[i], points[next]) == 0 &&
+					(double(previous[0]) - points[i][0]) * (double(points[next][0]) - points[i][0]) +
+							(double(previous[1]) - points[i][1]) * (double(points[next][1]) - points[i][1]) >
+						0)
+					throw std::invalid_argument("Snow exclusion edges must not overlap");
+				twiceArea += cross(points[0], points[i], points[next]);
+				for (size_t j = i + 1; j < points.size(); ++j) {
+					const auto end = (j + 1) % points.size();
+					if (j == next || end == i)
+						continue;
+					const auto& a = points[i];
+					const auto& b = points[next];
+					const auto& c = points[j];
+					const auto& d = points[end];
+					if (std::max(a[0], b[0]) < std::min(c[0], d[0]) || std::max(c[0], d[0]) < std::min(a[0], b[0]) ||
+						std::max(a[1], b[1]) < std::min(c[1], d[1]) || std::max(c[1], d[1]) < std::min(a[1], b[1]))
+						continue;
+					if (cross(a, b, c) * cross(a, b, d) <= 0 && cross(c, d, a) * cross(c, d, b) <= 0)
+						throw std::invalid_argument("Snow exclusion edges must not cross or touch");
+				}
+			}
+			if (std::abs(twiceArea) < 2.0)
+				throw std::invalid_argument("Snow exclusion must enclose at least one square game unit");
+		}
+
 		void Validate(const json& value, const json& schema, const std::string& path)
 		{
 			const auto type = schema.at("type").get<std::string>();
@@ -94,7 +133,14 @@ namespace SeasonalWeatherConfig
 				{ "properties", { { "Region", form }, { "Weather", form }, { "Weight", { { "type", "number" }, { "minimum", SeasonalWeatherPolicy::MinAssignmentWeight }, { "maximum", SeasonalWeatherPolicy::MaxAssignmentWeight } } } } } };
 			const json category{ { "type", "object" }, { "additionalProperties", false }, { "required", { "Weather", "Category" } },
 				{ "properties", { { "Weather", form }, { "Category", { { "type", "integer" }, { "minimum", 0 }, { "maximum", 4 } } } } } };
-			return json{ { "type", "object" }, { "additionalProperties", false }, { "properties", { { "Enabled", { { "type", "boolean" }, { "default", false } } }, { "SkipGlobalControlledRegions", { { "type", "boolean" }, { "default", true } } }, { "MonthlyWeights", monthly }, { "ExcludedWorldspaces", identifiers }, { "ExcludedRegions", regionIdentifiers }, { "SnowAssignments", { { "type", "array" }, { "maxItems", SeasonalWeatherPolicy::MaxAssignments }, { "items", assignment } } }, { "WeatherCategories", { { "type", "array" }, { "maxItems", SeasonalWeatherPolicy::MaxAssignments }, { "items", category } } } } } };
+			const json point{ { "type", "array" }, { "minItems", 2 }, { "maxItems", 2 },
+				{ "items", { { "type", "number" }, { "minimum", -MaxAreaCoordinate }, { "maximum", MaxAreaCoordinate } } } };
+			const json area{ { "type", "object" }, { "additionalProperties", false },
+				{ "required", { "Name", "Worldspace", "Enabled", "Snowfall", "SnowCover", "Vertices" } },
+				{ "properties", { { "Name", identifier }, { "Worldspace", identifier },
+									{ "Enabled", { { "type", "boolean" } } }, { "Snowfall", { { "type", "boolean" } } }, { "SnowCover", { { "type", "boolean" } } },
+									{ "Vertices", { { "type", "array" }, { "minItems", 3 }, { "maxItems", SnowExclusions::MaxVertices }, { "items", point } } } } } };
+			return json{ { "type", "object" }, { "additionalProperties", false }, { "properties", { { "Enabled", { { "type", "boolean" }, { "default", false } } }, { "SkipGlobalControlledRegions", { { "type", "boolean" }, { "default", true } } }, { "MonthlyWeights", monthly }, { "ExcludedWorldspaces", identifiers }, { "ExcludedRegions", regionIdentifiers }, { "SnowAssignments", { { "type", "array" }, { "maxItems", SeasonalWeatherPolicy::MaxAssignments }, { "items", assignment } } }, { "WeatherCategories", { { "type", "array" }, { "maxItems", SeasonalWeatherPolicy::MaxAssignments }, { "items", category } } }, { "SnowExclusions", { { "type", "array" }, { "maxItems", SnowExclusions::MaxAreas }, { "items", area }, { "description", "Optional snow-only polygons in exterior world XY game units. Independent of monthly Enabled. Snowfall respects other weather controllers; SnowCover masks CSX accumulation only." } } } } } };
 		}();
 		return schema;
 	}
@@ -105,6 +151,10 @@ namespace SeasonalWeatherConfig
 		json complete = Settings{};
 		complete.update(input);
 		auto result = complete.get<Settings>();
+		for (auto& area : result.SnowExclusions) {
+			area.Worldspace = Util::ToLowerAscii(area.Worldspace);
+			ValidatePolygon(area);
+		}
 		for (auto& key : result.ExcludedWorldspaces)
 			key = Util::ToLowerAscii(key);
 		for (auto& key : result.ExcludedRegions)
@@ -133,4 +183,26 @@ namespace SeasonalWeatherConfig
 	}
 
 	json Serialize(const Settings& settings) { return settings; }
+
+	SnowExclusions::Area PackArea(const SnowExclusion& area)
+	{
+		SnowExclusions::Area packed{};
+		packed.count = static_cast<uint32_t>(area.Vertices.size());
+		packed.minX = packed.minY = MaxAreaCoordinate;
+		packed.maxX = packed.maxY = -MaxAreaCoordinate;
+		for (size_t i = 0; i < area.Vertices.size(); ++i) {
+			const auto& p = area.Vertices[i];
+			packed.vertices[i] = { p[0], p[1], 0, 0 };
+			packed.minX = std::min(packed.minX, p[0]);
+			packed.minY = std::min(packed.minY, p[1]);
+			packed.maxX = std::max(packed.maxX, p[0]);
+			packed.maxY = std::max(packed.maxY, p[1]);
+		}
+		return packed;
+	}
+
+	bool MatchesWorld(const SnowExclusion& area, std::string_view world)
+	{
+		return area.Enabled && area.Worldspace.size() == world.size() && Util::IEndsWithAsciiInsensitive(world, area.Worldspace);
+	}
 }

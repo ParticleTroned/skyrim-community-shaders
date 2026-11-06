@@ -22,7 +22,7 @@ namespace FeatureVersions
         {"GrassCollision"sv,       {3,0,6}},
         {"GrassLighting"sv,        {2,0,6}},
         {"GrassOptimizations"sv,   {1,1,0}},
-        {"HairSpecular"sv,         {1,1,3}},
+        {"HairSpecular"sv,         {1,1,4}},
         {"HorizonFix"sv,           {1,0,0}},
         {"ImageBasedLighting"sv,   {1,1,3}},
         {"InteriorSun"sv,          {1,0,5}},

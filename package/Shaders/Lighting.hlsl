@@ -4188,7 +4188,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		if (SharedData::hairSpecularSettings.HairMode == 1)
-			ambientNormal = normalize(viewDirection - hairT * dot(viewDirection, hairT));
+			ambientNormal = Hair::GetViewFacingNormal(hairT, viewDirection, vertexNormal.xyz);
 		else
 			ambientNormal = vertexNormal.xyz;
 		screenSpaceNormal = normalize(FrameBuffer::WorldToView(ambientNormal, false, eyeIndex));
@@ -4322,7 +4322,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	indirectContext = CreateIndirectLightingContext(ambientNormal, vertexNormal.xyz, viewDirection);
 
-	GetIndirectLobeWeights(indirectLobeWeights, indirectContext, material, uvOriginal);
+	IndirectContext lobeContext = indirectContext;
+#	if defined(CS_HAIR_SHADING)
+	// Hair lobes use the strand tangent without changing the ambient/wetness context.
+	if (SharedData::hairSpecularSettings.Enabled)
+		lobeContext.worldNormal = hairT;
+#	endif
+	GetIndirectLobeWeights(indirectLobeWeights, lobeContext, material, uvOriginal);
 
 #	if defined(WETTERNESS)
 #		if defined(DYNAMIC_CUBEMAPS)

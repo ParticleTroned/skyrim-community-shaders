@@ -1,0 +1,64 @@
+#include "Common/FrameBuffer.hlsli"
+#include "Common/LightingCommon.hlsli"
+#include "Common/LightingFlags.hlsli"
+SamplerState SampColorSampler : register(s0);
+#include "Hair/Hair.hlsli"
+@SAFE_NORMALIZE@
+@INDIRECT_FACTORY@
+@INDIRECT_LOBES@
+
+struct Geometry
+{
+	float4 Tangent;
+	float4 Normal;
+	float4 View;
+};
+cbuffer Samples : register(b0)
+{
+	Geometry Geometries[SAMPLE_COUNT];
+};
+RWTexture2D<float4> Output : register(u0);
+
+[numthreads(SAMPLE_COUNT, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID)
+{
+	float3 hairT = normalize(Geometries[id.x].Tangent.xyz);
+	float4 vertexNormal = float4(normalize(Geometries[id.x].Normal.xyz), 0);
+	float3 viewDirection = normalize(Geometries[id.x].View.xyz);
+	float2 uvOriginal = 0.5;
+	MaterialProperties material = (MaterialProperties)0;
+	material.BaseColor = float3(0.4, 0.2, 0.1);
+	material.Shininess = 70;
+	material.Roughness = 0.3;
+	material.F0 = Hair::HairF0();
+	float3 ambientNormal = vertexNormal.xyz;
+	float3 screenSpaceNormal = 0;
+	uint eyeIndex = 0;
+@HAIR_AMBIENT@
+	IndirectContext indirectContext;
+	IndirectLobeWeights indirectLobeWeights;
+@HAIR_CONTEXT@
+	IndirectLobeWeights expected = (IndirectLobeWeights)0;
+#if defined(CS_HAIR_SHADING)
+	if (SharedData::hairSpecularSettings.Enabled) {
+		// The hair model's contract takes the strand tangent independently of ambient sampling.
+		IndirectContext reference = CreateIndirectLightingContext(hairT, vertexNormal.xyz, viewDirection);
+		Hair::GetHairIndirectLobeWeights(expected, reference, material, uvOriginal);
+	} else
+#endif
+		expected.diffuse = material.BaseColor;
+
+	float3 shiftedT = hairT;
+	if (SharedData::hairSpecularSettings.EnableTangentShift) {
+		float shift = Hair::TexTangentShift.SampleLevel(SampColorSampler, uvOriginal, 0).x - 0.5;
+		shiftedT = Hair::ShiftTangent(hairT, vertexNormal.xyz, shift);
+	}
+	float3 projectedNormal = Hair::GetViewFacingNormal(shiftedT, viewDirection, vertexNormal.xyz);
+	Output[uint2(id.x, 0)] = float4(indirectLobeWeights.diffuse, 1);
+	Output[uint2(id.x, 1)] = float4(expected.diffuse, 1);
+	Output[uint2(id.x, 2)] = float4(indirectLobeWeights.specular, 1);
+	Output[uint2(id.x, 3)] = float4(expected.specular, 1);
+	Output[uint2(id.x, 4)] = float4(projectedNormal, dot(projectedNormal, shiftedT));
+	Output[uint2(id.x, 5)] = float4(indirectContext.worldNormal, length(indirectContext.worldNormal - ambientNormal));
+	Output[uint2(id.x, 6)] = float4(ambientNormal, dot(projectedNormal, cross(shiftedT, viewDirection)));
+}

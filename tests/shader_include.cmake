@@ -102,6 +102,37 @@ add_d3d_shader_test(
     tests/foveated_mask_overlay_shader_test.cpp
 )
 
+set(_hair_indirect_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/hair-indirect")
+set(_hair_indirect_shader "${_hair_indirect_dir}/hair_indirect.hlsl")
+add_custom_command(
+    OUTPUT "${_hair_indirect_shader}"
+    COMMAND
+        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_hair_indirect_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_hair_indirect.cmake"
+    DEPENDS
+        package/Shaders/Lighting.hlsl
+        package/Shaders/Common/LightingEval.hlsli
+        tests/extract_source_region.cmake
+        tests/extract_hair_indirect.cmake
+        tests/hair_indirect.hlsl.in
+    VERBATIM
+)
+set_source_files_properties(
+    "${_hair_indirect_shader}"
+    PROPERTIES HEADER_FILE_ONLY TRUE
+)
+add_d3d_shader_test(
+    hair_indirect_shader_test
+    HairIndirectShader
+    tests/hair_indirect_shader_test.cpp
+)
+target_sources(hair_indirect_shader_test PRIVATE "${_hair_indirect_shader}")
+target_compile_definitions(
+    hair_indirect_shader_test
+    PRIVATE HAIR_INDIRECT_TEST_SHADER=L"${_hair_indirect_shader}"
+)
+
 foreach(
     _target
     IN
@@ -110,6 +141,7 @@ foreach(
         adaptive_balance_color_shader_test
         foveated_blend_curve_shader_test
         foveated_mask_overlay_shader_test
+        hair_indirect_shader_test
         ambient_balance_shader_test
         pbr_grass_shader_test
         vr_depth_encode_shader_test

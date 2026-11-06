@@ -182,7 +182,7 @@ jobs:
                     changesInOrder = @(
                       @{ feature = 'Guided model reconstruction'; originalCommit = 'edf95c6253b53aa45e541e6c0b5e730457dc2e68'; prHead = '3038a54688b37542d26fb8ff00561b2af7b0ed16' }
                       @{ feature = 'Peripheral compression'; originalCommit = 'd7d640ac48553310db01d0a8af6d56e70ffe24c6'; prHead = '95f1a62463d8cb19277fc5e0e271712d2dc0137d' }
-                      @{ feature = 'Combat pause'; originalCommit = 'e83a0a72bbdb830757b9da03236809c6952c2553'; prHead = '37b881f0a5e84aa5c04796e55e809aa6ccdf4ccb' }
+                      @{ feature = 'Combat pause'; originalCommit = 'e83a0a72bbdb830757b9da03236809c6952c2553'; prHead = '545ca0a3631b51972d78f35ba58ba8cbd53b900a' }
                       @{ feature = 'Scene selection'; originalCommit = '0a7b11ac2aacbe19bcfc28115548c270adf85088'; prHead = 'c4dd3bd5294f35348d0f42eba4cd0f0ecb4d5f71' }
                     )
                     inputAio = $archive.Name

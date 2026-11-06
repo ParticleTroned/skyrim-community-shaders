@@ -26,8 +26,9 @@ namespace Util
 	/// Resolve a SPID string to a runtime FormID (0 if not found).
 	RE::FormID SpidToFormId(const std::string& spid);
 
-	/// Get a display name: "EditorID (localFormId)" or SPID fallback.
-	std::string GetFormDisplayName(RE::FormID formId);
+	class FormEditorIDIndex;
+	/// Get a display name, optionally reusing a batch snapshot for editor-ID fallback.
+	std::string GetFormDisplayName(RE::FormID formId, FormEditorIDIndex* index = nullptr);
 
 	/// Owns a lazy editor-ID map snapshot for one initialization batch.
 	class FormEditorIDIndex

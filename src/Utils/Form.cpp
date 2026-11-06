@@ -79,13 +79,13 @@ RE::FormID Util::SpidToFormId(const std::string& spid)
 	return 0;
 }
 
-std::string Util::GetFormDisplayName(RE::FormID formId)
+std::string Util::GetFormDisplayName(RE::FormID formId, FormEditorIDIndex* index)
 {
 	auto* form = RE::TESForm::LookupByID(formId);
 	if (!form)
 		return std::format("0x{:X}", formId);
 
-	auto editorId = GetFormEditorID(form);
+	auto editorId = GetFormEditorID(form, index);
 	if (!editorId.empty())
 		return std::format("{} ({:X})", editorId, form->GetLocalFormID());
 

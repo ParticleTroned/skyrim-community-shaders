@@ -2931,6 +2931,67 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(PBRMaterialRegistry PROPERTIES TIMEOUT 30)
     add_controller_test(snow_cover_math_test SnowCoverMath tests/snow_cover_math_test.cpp)
+    add_controller_test(
+        seasonal_weather_policy_test
+        SeasonalWeatherPolicy
+        tests/seasonal_weather_policy_test.cpp
+    )
+    target_sources(
+        seasonal_weather_policy_test
+        PRIVATE src/Features/SeasonalWeatherConfig.cpp
+    )
+    target_link_libraries(
+        seasonal_weather_policy_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    target_compile_definitions(
+        seasonal_weather_policy_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    target_compile_options(
+        seasonal_weather_policy_test
+        PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/fp:fast>"
+    )
+    set(_seasonal_weather_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/tests/seasonal-weather"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_seasonal_weather_test_dir}/seasonal_weather_list_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_selection_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_native_list_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_apply_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DSOURCE_FILE=${PROJECT_SOURCE_DIR}/src/Features/SeasonalWeather.cpp"
+            "-DOUTPUT_DIRECTORY=${_seasonal_weather_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_seasonal_weather.cmake"
+        DEPENDS
+            src/Features/SeasonalWeather.cpp
+            tests/extract_seasonal_weather.cmake
+            tests/extract_source_region.cmake
+            extern/CommonLibSSE-NG/include/RE/B/BSSimpleList.h
+        VERBATIM
+    )
+    add_controller_test(seasonal_weather_selection_test SeasonalWeatherSelection tests/seasonal_weather_selection_test.cpp)
+    set_tests_properties(SeasonalWeatherSelection PROPERTIES TIMEOUT 30)
+    target_sources(
+        seasonal_weather_selection_test
+        PRIVATE
+            "${_seasonal_weather_test_dir}/seasonal_weather_list_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_selection_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_native_list_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_apply_under_test.h"
+            src/Features/SeasonalWeatherConfig.cpp
+    )
+    target_link_libraries(
+        seasonal_weather_selection_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    target_include_directories(
+        seasonal_weather_selection_test
+        PRIVATE "${_seasonal_weather_test_dir}"
+    )
     target_compile_definitions(
         snow_cover_math_test
         PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN

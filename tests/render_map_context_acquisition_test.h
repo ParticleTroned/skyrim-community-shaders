@@ -369,6 +369,78 @@ namespace CSX::RenderMap
 			CheckAcquisitionReferences(state);
 		}
 
+		enum class BootstrapDeadline
+		{
+			Stable,
+			BeforeEntry,
+			DuringVertexShader
+		};
+
+		struct BootstrapClock
+		{
+			static inline std::uint64_t ticks = 0;
+			static inline unsigned expiryGetter = 0;
+
+			BootstrapClock()
+			{
+				ticks = 1;
+				expiryGetter = 0;
+				Collector::SetActivationTestHooks(Read, nullptr);
+			}
+
+			~BootstrapClock() { Collector::SetActivationTestHooks(nullptr, nullptr); }
+
+			static std::uint64_t Read() noexcept { return ticks; }
+
+			static void Expire() noexcept
+			{
+				expiryGetter = getterEntries;
+				ticks += 2 * Collector::ClockFrequencyHz();
+			}
+		};
+
+		void ExerciseBootstrapDeadline(BootstrapDeadline a_case)
+		{
+			BootstrapClock clock;
+			State state;
+			current = &state;
+			auto& runtime = GetRuntime();
+			runtime.SetImmediateContext(reinterpret_cast<std::uintptr_t>(&state.context));
+			auto config = Configuration();
+			config.latePostProcessingWindow = true;
+			config.activationTarget = 9;
+			config.maxDuration = std::chrono::seconds(1);
+			Require(Collector::ClockFrequencyHz() > 0, "bootstrap clock frequency unavailable");
+			Require(runtime.StartCapture(config) == StartResult::kStarted, "deadline capture did not arm");
+			runtime.SetCpuFrame(12);
+			Require(runtime.ActivatePostProcessingWindow(9, 12, 77), "deadline capture did not activate");
+			const auto generation = runtime.ActiveCaptureGeneration();
+			getterEntries = 0;
+			{
+				auto scope = runtime.EnterPostProcessing({}, {}, 9, 77);
+				Require(runtime.IsInsidePostProcessing(), "deadline bootstrap scope did not enter");
+				if (a_case == BootstrapDeadline::BeforeEntry)
+					BootstrapClock::Expire();
+				if (a_case == BootstrapDeadline::DuringVertexShader)
+					state.context.onVertexShaderQuery = BootstrapClock::Expire;
+				const auto accepted = CapturePostProcessingBootstrap(&state.context);
+				if (a_case == BootstrapDeadline::Stable) {
+					Require(accepted && getterEntries > 1, "stable late-window bootstrap did not observe metadata");
+					runtime.CompleteWindowBootstrap(accepted);
+					Require(runtime.GetCaptureWindow().bootstrapComplete, "stable late-window bootstrap did not complete");
+				} else {
+					Require(!accepted && getterEntries == BootstrapClock::expiryGetter,
+						"expired bootstrap accepted or entered another getter");
+					Require(a_case != BootstrapDeadline::DuringVertexShader || BootstrapClock::expiryGetter > 1,
+						"deadline fixture did not reach the vertex shader getter");
+					Require(runtime.ActiveCaptureGeneration() == generation && runtime.IsInsidePostProcessing() &&
+								runtime.GetCaptureWindow().failure == CaptureWindowFailure::kActiveTimeout,
+						"expiry did not retain the original generation and scope");
+				}
+			}
+			Require(runtime.StopCapture().has_value(), "deadline capture did not stop");
+		}
+
 		void ExerciseBootstrapAdmission()
 		{
 			State state;
@@ -432,5 +504,8 @@ namespace CSX::RenderMap
 			ExerciseAcquisition(operation, Mode::Restart, AcquisitionTurnoverPoint::OutputGetter, true);
 		}
 		ExerciseBootstrapAdmission();
+		for (const auto deadline : { BootstrapDeadline::Stable, BootstrapDeadline::BeforeEntry,
+				 BootstrapDeadline::DuringVertexShader })
+			ExerciseBootstrapDeadline(deadline);
 	}
 }

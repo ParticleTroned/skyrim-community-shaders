@@ -166,6 +166,7 @@ namespace CSX::RenderMap::ContextHookFixture
 					callback();
 			}
 		}
+		void (*onVertexShaderQuery)() noexcept = nullptr;
 		ID3D11PixelShader* queriedPixel = nullptr;
 		ID3D11ComputeShader* queriedCompute = nullptr;
 		void ReadResources(unsigned stage, UINT start, UINT count, ID3D11ShaderResourceView** output)
@@ -660,6 +661,8 @@ namespace CSX::RenderMap::ContextHookFixture
 			if (pNumClassInstances)
 				*pNumClassInstances = 0;
 			*ppVertexShader = nullptr;
+			if (auto callback = std::exchange(onVertexShaderQuery, nullptr))
+				callback();
 		}
 		void STDMETHODCALLTYPE PSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override
 		{

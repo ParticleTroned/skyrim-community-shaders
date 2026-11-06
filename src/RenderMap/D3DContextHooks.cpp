@@ -24,6 +24,16 @@ namespace CSX::RenderMap
 			return a_generation != 0 && GetRuntime().ActiveCaptureGeneration() == a_generation;
 		}
 
+		// Bootstrap keeps its generation after the capture window stops accepting queries.
+		bool MetadataCurrent(std::uint64_t a_generation, bool a_bootstrap) noexcept
+		{
+			if (!a_bootstrap)
+				return CaptureCurrent(a_generation);
+			auto& runtime = GetRuntime();
+			return runtime.PostProcessingCaptureGeneration() == a_generation && CaptureCurrent(a_generation) &&
+			       runtime.IsCapturing() && CaptureCurrent(a_generation);
+		}
+
 		template <class Current>
 		ResourceObservationInput DescribeResourceWhen(ID3D11Resource* a_resource, Current&& a_current) noexcept
 		{
@@ -112,9 +122,9 @@ namespace CSX::RenderMap
 
 	namespace
 	{
-		ResourceObservationInput DescribeCapturedResource(ID3D11Resource* a_resource, std::uint64_t a_generation) noexcept
+		ResourceObservationInput DescribeCapturedResource(ID3D11Resource* a_resource, std::uint64_t a_generation, bool a_bootstrap = false) noexcept
 		{
-			return DescribeResourceWhen(a_resource, [a_generation]() noexcept { return CaptureCurrent(a_generation); });
+			return DescribeResourceWhen(a_resource, [a_generation, a_bootstrap]() noexcept { return MetadataCurrent(a_generation, a_bootstrap); });
 		}
 
 		void RegisterDeferredContextIfNeeded(ID3D11DeviceContext* a_context, std::uint64_t a_expectedCaptureGeneration) noexcept
@@ -132,25 +142,25 @@ namespace CSX::RenderMap
 		}
 
 		template <class T>
-		ResourceViewInput DescribeViewBase(T* a_view, TargetViewKind a_kind, std::uint64_t a_generation)
+		ResourceViewInput DescribeViewBase(T* a_view, TargetViewKind a_kind, std::uint64_t a_generation, bool a_bootstrap)
 		{
 			ResourceViewInput result;
 			result.view.kind = a_kind;
 			result.view.d3dObject = reinterpret_cast<std::uintptr_t>(a_view);
-			if (!a_view || !CaptureCurrent(a_generation))
+			if (!a_view || !MetadataCurrent(a_generation, a_bootstrap))
 				return result;
 			ID3D11Resource* resource = nullptr;
 			a_view->GetResource(&resource);
-			result.resource = DescribeCapturedResource(resource, a_generation);
+			result.resource = DescribeCapturedResource(resource, a_generation, a_bootstrap);
 			if (resource)
 				resource->Release();
 			return result;
 		}
 
-		ResourceViewInput DescribeView(ID3D11RenderTargetView* a_view, std::uint64_t a_generation)
+		ResourceViewInput DescribeView(ID3D11RenderTargetView* a_view, std::uint64_t a_generation, bool a_bootstrap = false)
 		{
-			auto result = DescribeViewBase(a_view, TargetViewKind::kRenderTarget, a_generation);
-			if (!a_view || !CaptureCurrent(a_generation))
+			auto result = DescribeViewBase(a_view, TargetViewKind::kRenderTarget, a_generation, a_bootstrap);
+			if (!a_view || !MetadataCurrent(a_generation, a_bootstrap))
 				return result;
 			D3D11_RENDER_TARGET_VIEW_DESC desc{};
 			a_view->GetDesc(&desc);
@@ -192,10 +202,10 @@ namespace CSX::RenderMap
 			return result;
 		}
 
-		ResourceViewInput DescribeView(ID3D11DepthStencilView* a_view, std::uint64_t a_generation)
+		ResourceViewInput DescribeView(ID3D11DepthStencilView* a_view, std::uint64_t a_generation, bool a_bootstrap = false)
 		{
-			auto result = DescribeViewBase(a_view, TargetViewKind::kDepthTarget, a_generation);
-			if (!a_view || !CaptureCurrent(a_generation))
+			auto result = DescribeViewBase(a_view, TargetViewKind::kDepthTarget, a_generation, a_bootstrap);
+			if (!a_view || !MetadataCurrent(a_generation, a_bootstrap))
 				return result;
 			D3D11_DEPTH_STENCIL_VIEW_DESC desc{};
 			a_view->GetDesc(&desc);
@@ -229,10 +239,10 @@ namespace CSX::RenderMap
 			return result;
 		}
 
-		ResourceViewInput DescribeView(ID3D11ShaderResourceView* a_view, std::uint64_t a_generation)
+		ResourceViewInput DescribeView(ID3D11ShaderResourceView* a_view, std::uint64_t a_generation, bool a_bootstrap = false)
 		{
-			auto result = DescribeViewBase(a_view, TargetViewKind::kShaderResource, a_generation);
-			if (!a_view || !CaptureCurrent(a_generation))
+			auto result = DescribeViewBase(a_view, TargetViewKind::kShaderResource, a_generation, a_bootstrap);
+			if (!a_view || !MetadataCurrent(a_generation, a_bootstrap))
 				return result;
 			D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
 			a_view->GetDesc(&desc);
@@ -292,10 +302,10 @@ namespace CSX::RenderMap
 			return result;
 		}
 
-		ResourceViewInput DescribeView(ID3D11UnorderedAccessView* a_view, std::uint64_t a_generation)
+		ResourceViewInput DescribeView(ID3D11UnorderedAccessView* a_view, std::uint64_t a_generation, bool a_bootstrap = false)
 		{
-			auto result = DescribeViewBase(a_view, TargetViewKind::kUnorderedAccess, a_generation);
-			if (!a_view || !CaptureCurrent(a_generation))
+			auto result = DescribeViewBase(a_view, TargetViewKind::kUnorderedAccess, a_generation, a_bootstrap);
+			if (!a_view || !MetadataCurrent(a_generation, a_bootstrap))
 				return result;
 			D3D11_UNORDERED_ACCESS_VIEW_DESC desc{};
 			a_view->GetDesc(&desc);
@@ -362,25 +372,25 @@ namespace CSX::RenderMap
 
 		void ObserveEffectiveRenderTargets(
 			ID3D11DeviceContext* a_context, std::uint64_t a_expectedCaptureGeneration,
-			TargetBindingSource a_source)
+			TargetBindingSource a_source, bool a_bootstrap = false)
 		{
-			if (!a_context || !CaptureCurrent(a_expectedCaptureGeneration))
+			if (!a_context || !MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 				return;
 
 			std::array<ID3D11RenderTargetView*, kMaximumRenderTargets> targets{};
 			ID3D11DepthStencilView* depth = nullptr;
-			if (!CaptureCurrent(a_expectedCaptureGeneration))
+			if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 				return;
 			a_context->OMGetRenderTargets(
 				static_cast<UINT>(targets.size()), targets.data(), &depth);
 			std::array<ResourceViewInput, kMaximumRenderTargets> views{};
 			std::uint32_t targetCount = 0;
 			for (std::size_t index = 0; index < targets.size(); ++index) {
-				views[index] = DescribeView(targets[index], a_expectedCaptureGeneration);
+				views[index] = DescribeView(targets[index], a_expectedCaptureGeneration, a_bootstrap);
 				if (targets[index])
 					targetCount = static_cast<std::uint32_t>(index + 1);
 			}
-			const auto depthView = DescribeView(depth, a_expectedCaptureGeneration);
+			const auto depthView = DescribeView(depth, a_expectedCaptureGeneration, a_bootstrap);
 			GetRuntime().ForCapture(a_expectedCaptureGeneration).BindRenderTargetViews(reinterpret_cast<std::uintptr_t>(a_context), targetCount, views.data(), depth ? &depthView : nullptr, false, a_source, a_expectedCaptureGeneration);
 			for (auto* target : targets) {
 				if (target)
@@ -392,10 +402,10 @@ namespace CSX::RenderMap
 				GetRuntime().ForCapture(a_expectedCaptureGeneration).ClaimRenderTargetStateSeed(reinterpret_cast<std::uintptr_t>(a_context));
 		}
 
-		void ObserveEffectiveStateBeforeDraw(ID3D11DeviceContext* a_context, std::uint64_t a_expectedCaptureGeneration);
+		void ObserveEffectiveStateBeforeDraw(ID3D11DeviceContext* a_context, std::uint64_t a_expectedCaptureGeneration, bool a_bootstrap = false);
 		void ObserveEffectiveStateBeforeDispatch(ID3D11DeviceContext* a_context, std::uint64_t a_expectedCaptureGeneration);
 		void ObservePostProcessingState(ID3D11DeviceContext* a_context, bool a_compute, bool a_after,
-			std::uint64_t a_expectedCaptureGeneration);
+			std::uint64_t a_expectedCaptureGeneration, bool a_bootstrap = false);
 		void BeginPostProcessingOperation(ID3D11DeviceContext* a_context, bool a_compute, std::uint32_t a_operation,
 			std::uint64_t a_expectedCaptureGeneration, bool a_bootstrap = false);
 
@@ -429,14 +439,14 @@ namespace CSX::RenderMap
 			UINT a_startSlot,
 			UINT a_viewCount,
 			ID3D11ShaderResourceView* const* a_views,
-			ResourceBindingSource a_source = ResourceBindingSource::kRequestedCall)
+			ResourceBindingSource a_source = ResourceBindingSource::kRequestedCall, bool a_bootstrap = false)
 		{
-			if (!CaptureCurrent(a_expectedCaptureGeneration))
+			if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 				return;
 			std::array<ResourceViewInput, kMaximumShaderResourceSlots> views{};
 			const auto count = std::min<UINT>(a_viewCount, static_cast<UINT>(views.size()));
 			for (UINT index = 0; index < count; ++index)
-				views[index] = DescribeView(a_views ? a_views[index] : nullptr, a_expectedCaptureGeneration);
+				views[index] = DescribeView(a_views ? a_views[index] : nullptr, a_expectedCaptureGeneration, a_bootstrap);
 			GetRuntime().ForCapture(a_expectedCaptureGeneration).BindResourceViews(reinterpret_cast<std::uintptr_t>(a_context), ResourceBindingKind::kShaderResource, a_stage, a_startSlot, count, views.data(), false, a_source, a_expectedCaptureGeneration);
 		}
 
@@ -445,9 +455,9 @@ namespace CSX::RenderMap
 			ResourceStage a_stage,
 			UINT a_startSlot,
 			UINT a_viewCount,
-			ResourceBindingSource a_source)
+			ResourceBindingSource a_source, bool a_bootstrap = false)
 		{
-			if (!a_context || !CaptureCurrent(a_expectedCaptureGeneration) ||
+			if (!a_context || !MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap) ||
 				a_startSlot >= kMaximumShaderResourceSlots) {
 				return;
 			}
@@ -477,7 +487,7 @@ namespace CSX::RenderMap
 				return;
 			}
 			ObserveShaderResources(
-				a_context, a_expectedCaptureGeneration, a_stage, a_startSlot, count, views.data(), a_source);
+				a_context, a_expectedCaptureGeneration, a_stage, a_startSlot, count, views.data(), a_source, a_bootstrap);
 			for (UINT index = 0; index < count; ++index) {
 				if (views[index])
 					views[index]->Release();
@@ -486,14 +496,14 @@ namespace CSX::RenderMap
 
 		void ObserveAllEffectiveShaderResources(
 			ID3D11DeviceContext* a_context, std::uint64_t a_expectedCaptureGeneration,
-			ResourceBindingSource a_source)
+			ResourceBindingSource a_source, bool a_bootstrap = false)
 		{
 			for (const auto stage : std::array{
 					 ResourceStage::kVertex, ResourceStage::kHull, ResourceStage::kDomain,
 					 ResourceStage::kGeometry, ResourceStage::kPixel, ResourceStage::kCompute }) {
 				ObserveEffectiveShaderResources(
 					a_context, a_expectedCaptureGeneration, stage, 0, static_cast<UINT>(kMaximumShaderResourceSlots),
-					a_source);
+					a_source, a_bootstrap);
 			}
 		}
 
@@ -521,9 +531,9 @@ namespace CSX::RenderMap
 			ResourceStage a_stage,
 			UINT a_startSlot,
 			UINT a_viewCount,
-			ResourceBindingSource a_source)
+			ResourceBindingSource a_source, bool a_bootstrap = false)
 		{
-			if (!a_context || !CaptureCurrent(a_expectedCaptureGeneration) ||
+			if (!a_context || !MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap) ||
 				a_startSlot >= kMaximumUnorderedAccessSlots) {
 				return;
 			}
@@ -531,11 +541,11 @@ namespace CSX::RenderMap
 				a_viewCount, static_cast<UINT>(kMaximumUnorderedAccessSlots - a_startSlot));
 			std::array<ID3D11UnorderedAccessView*, kMaximumUnorderedAccessSlots> views{};
 			if (a_stage == ResourceStage::kCompute) {
-				if (!CaptureCurrent(a_expectedCaptureGeneration))
+				if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 					return;
 				a_context->CSGetUnorderedAccessViews(a_startSlot, count, views.data());
 			} else if (a_stage == ResourceStage::kOutputMerger) {
-				if (!CaptureCurrent(a_expectedCaptureGeneration))
+				if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 					return;
 				a_context->OMGetRenderTargetsAndUnorderedAccessViews(
 					0, nullptr, nullptr, a_startSlot, count, views.data());
@@ -544,7 +554,7 @@ namespace CSX::RenderMap
 			}
 			std::array<ResourceViewInput, kMaximumUnorderedAccessSlots> described{};
 			for (UINT index = 0; index < count; ++index)
-				described[index] = DescribeView(views[index], a_expectedCaptureGeneration);
+				described[index] = DescribeView(views[index], a_expectedCaptureGeneration, a_bootstrap);
 			GetRuntime().ForCapture(a_expectedCaptureGeneration).BindResourceViews(reinterpret_cast<std::uintptr_t>(a_context), ResourceBindingKind::kUnorderedAccess, a_stage, a_startSlot, count, described.data(), false, a_source, a_expectedCaptureGeneration);
 			for (UINT index = 0; index < count; ++index) {
 				if (views[index])
@@ -552,7 +562,7 @@ namespace CSX::RenderMap
 			}
 		}
 
-		void ObserveEffectiveStateBeforeDraw(ID3D11DeviceContext* a_context, std::uint64_t a_expectedCaptureGeneration)
+		void ObserveEffectiveStateBeforeDraw(ID3D11DeviceContext* a_context, std::uint64_t a_expectedCaptureGeneration, bool a_bootstrap)
 		{
 			if (!a_context)
 				return;
@@ -561,20 +571,20 @@ namespace CSX::RenderMap
 			const auto targetGeneration = runtime.ForCapture(a_expectedCaptureGeneration).ClaimRenderTargetStateSeed(context);
 			if (targetGeneration != 0) {
 				ObserveEffectiveRenderTargets(
-					a_context, targetGeneration, TargetBindingSource::kCaptureStateSnapshot);
+					a_context, targetGeneration, TargetBindingSource::kCaptureStateSnapshot, a_bootstrap);
 			}
 			const auto resourceGeneration = runtime.ForCapture(a_expectedCaptureGeneration).ClaimResourceViewStateSeed(context);
 			if (resourceGeneration != 0) {
 				ObserveAllEffectiveShaderResources(
-					a_context, resourceGeneration, ResourceBindingSource::kCaptureStateSnapshot);
+					a_context, resourceGeneration, ResourceBindingSource::kCaptureStateSnapshot, a_bootstrap);
 				ObserveEffectiveUnorderedAccessViews(
 					a_context, resourceGeneration, ResourceStage::kCompute, 0,
 					static_cast<UINT>(kMaximumUnorderedAccessSlots),
-					ResourceBindingSource::kCaptureStateSnapshot);
+					ResourceBindingSource::kCaptureStateSnapshot, a_bootstrap);
 				ObserveEffectiveUnorderedAccessViews(
 					a_context, resourceGeneration, ResourceStage::kOutputMerger, 0,
 					D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,
-					ResourceBindingSource::kCaptureStateSnapshot);
+					ResourceBindingSource::kCaptureStateSnapshot, a_bootstrap);
 			}
 		}
 
@@ -610,7 +620,7 @@ namespace CSX::RenderMap
 		void BeginPostProcessingOperation(ID3D11DeviceContext* a_context, bool a_compute, std::uint32_t a_operation,
 			std::uint64_t a_expectedCaptureGeneration, bool a_bootstrap)
 		{
-			if (!CaptureCurrent(a_expectedCaptureGeneration) || !a_context || !GetRuntime().IsInsidePostProcessing() ||
+			if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap) || !a_context || !GetRuntime().IsInsidePostProcessing() ||
 				a_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
 				return;
 			winrt::com_ptr<ID3D11VertexShader> vs;
@@ -619,24 +629,26 @@ namespace CSX::RenderMap
 			winrt::com_ptr<ID3D11GeometryShader> gs;
 			winrt::com_ptr<ID3D11PixelShader> ps;
 			winrt::com_ptr<ID3D11ComputeShader> cs;
-			if (!CaptureCurrent(a_expectedCaptureGeneration))
+			if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 				return;
 			a_context->VSGetShader(vs.put(), nullptr, nullptr);
-			if (!CaptureCurrent(a_expectedCaptureGeneration))
+			if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 				return;
 			a_context->HSGetShader(hs.put(), nullptr, nullptr);
-			if (!CaptureCurrent(a_expectedCaptureGeneration))
+			if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 				return;
 			a_context->DSGetShader(ds.put(), nullptr, nullptr);
-			if (!CaptureCurrent(a_expectedCaptureGeneration))
+			if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 				return;
 			a_context->GSGetShader(gs.put(), nullptr, nullptr);
-			if (!CaptureCurrent(a_expectedCaptureGeneration))
+			if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 				return;
 			a_context->PSGetShader(ps.put(), nullptr, nullptr);
-			if (!CaptureCurrent(a_expectedCaptureGeneration))
+			if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 				return;
 			a_context->CSGetShader(cs.put(), nullptr, nullptr);
+			if (a_bootstrap && !MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
+				return;
 			const std::array<IUnknown*, 6> shaders{ vs.get(), hs.get(), ds.get(), gs.get(), ps.get(), cs.get() };
 			std::array<std::uintptr_t, 6> pointers{};
 			for (std::size_t index = 0; index < shaders.size(); ++index)
@@ -648,10 +660,10 @@ namespace CSX::RenderMap
 		}
 
 		void ObservePostProcessingState(ID3D11DeviceContext* a_context, bool a_compute, bool a_after,
-			std::uint64_t a_expectedCaptureGeneration)
+			std::uint64_t a_expectedCaptureGeneration, bool a_bootstrap)
 		{
 			auto& runtime = GetRuntime();
-			if (!CaptureCurrent(a_expectedCaptureGeneration) || !a_context || !runtime.IsInsidePostProcessing() ||
+			if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap) || !a_context || !runtime.IsInsidePostProcessing() ||
 				a_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
 				return;
 			const auto context = reinterpret_cast<std::uintptr_t>(a_context);
@@ -660,20 +672,22 @@ namespace CSX::RenderMap
 				std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> scissors{};
 				UINT viewportCount = static_cast<UINT>(viewports.size());
 				UINT scissorCount = static_cast<UINT>(scissors.size());
-				if (!CaptureCurrent(a_expectedCaptureGeneration))
+				if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 					return;
 				a_context->RSGetViewports(&viewportCount, viewports.data());
-				if (!CaptureCurrent(a_expectedCaptureGeneration))
+				if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 					return;
 				a_context->RSGetScissorRects(&scissorCount, scissors.data());
 				winrt::com_ptr<ID3D11RasterizerState> rasterizer;
-				if (!CaptureCurrent(a_expectedCaptureGeneration))
+				if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 					return;
 				a_context->RSGetState(rasterizer.put());
 				D3D11_RASTERIZER_DESC desc{};
-				if (rasterizer && CaptureCurrent(a_expectedCaptureGeneration)) {
+				if (rasterizer && MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap)) {
 					rasterizer->GetDesc(&desc);
 				}
+				if (a_bootstrap && !MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
+					return;
 				const auto count = std::max(1u, std::max(viewportCount, scissorCount));
 				for (UINT index = 0; index < std::min<UINT>(count, static_cast<UINT>(viewports.size())); ++index) {
 					const auto& vp = viewports[index];
@@ -686,7 +700,7 @@ namespace CSX::RenderMap
 						continue;
 					std::array<ID3D11ShaderResourceView*, kMaximumShaderResourceSlots> views{};
 					const auto slots = static_cast<UINT>(views.size());
-					if (!CaptureCurrent(a_expectedCaptureGeneration))
+					if (!MetadataCurrent(a_expectedCaptureGeneration, a_bootstrap))
 						return;
 					switch (stage) {
 					case ResourceStage::kVertex:
@@ -716,7 +730,7 @@ namespace CSX::RenderMap
 					for (UINT slot = 0; slot < slots; ++slot) {
 						if (!views[slot])
 							continue;
-						runtime.ForCapture(a_expectedCaptureGeneration).RecordTransferResourceAccess(context, DescribeView(views[slot], a_expectedCaptureGeneration), stage, slot, false);
+						runtime.ForCapture(a_expectedCaptureGeneration).RecordTransferResourceAccess(context, DescribeView(views[slot], a_expectedCaptureGeneration, a_bootstrap), stage, slot, false);
 					}
 				}
 				return;
@@ -1213,20 +1227,17 @@ namespace CSX::RenderMap
 
 	bool CapturePostProcessingBootstrap(ID3D11DeviceContext* a_context) noexcept
 	{
-		auto& runtime = GetRuntime();
-		const auto generation = runtime.PostProcessingCaptureGeneration();
-		if (!a_context || !runtime.IsInsidePostProcessing() || !runtime.IsCapturing() ||
-			!CaptureCurrent(generation))
+		const auto generation = GetRuntime().PostProcessingCaptureGeneration();
+		if (!a_context || !MetadataCurrent(generation, true))
 			return false;
 		try {
-			if (a_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE ||
-				!runtime.IsInsidePostProcessing() || !runtime.IsCapturing() || !CaptureCurrent(generation))
+			if (a_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE || !MetadataCurrent(generation, true))
 				return false;
-			ObserveEffectiveStateBeforeDraw(a_context, generation);
+			ObserveEffectiveStateBeforeDraw(a_context, generation, true);
 			BeginPostProcessingOperation(a_context, false, 0, generation, true);
-			ObservePostProcessingState(a_context, false, false, generation);
-			ObservePostProcessingState(a_context, true, false, generation);
-			return CaptureCurrent(generation) && runtime.IsInsidePostProcessing();
+			ObservePostProcessingState(a_context, false, false, generation, true);
+			ObservePostProcessingState(a_context, true, false, generation, true);
+			return MetadataCurrent(generation, true);
 		} catch (...) {
 			return false;
 		}

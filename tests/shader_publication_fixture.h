@@ -5,8 +5,11 @@
 #include <barrier>
 #include <cassert>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
+#include <latch>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -25,24 +28,25 @@ struct Resource
 {
 	std::atomic_uint references{ 1 }, releases{ 0 };
 	std::string name;
-	Resource() { ++resource.live; }
-	unsigned AddRef() { return ++references; }
-	unsigned Release()
+	void AddRef()
 	{
-		if (resource.onRelease)
-			resource.onRelease();
+		const auto previous = references.fetch_add(1);
+		assert(previous > 0);
+	}
+	void Release()
+	{
 		const auto previous = references.fetch_sub(1);
 		assert(previous > 0);
+		if (resource.onRelease)
+			resource.onRelease();
 		++releases;
 		++resource.releases;
 		if (previous == 1)
 			--resource.live;
-		return previous - 1;
 	}
 };
 namespace winrt
 {
-	// Retain storage for inspection while modeling COM ownership, including losing candidates.
 	template <class T>
 	class com_ptr
 	{
@@ -50,6 +54,16 @@ namespace winrt
 		com_ptr() = default;
 		com_ptr(const com_ptr&) = delete;
 		com_ptr& operator=(const com_ptr&) = delete;
+		com_ptr(com_ptr&& other) noexcept : value(other.detach()) {}
+		com_ptr& operator=(com_ptr&& other) noexcept
+		{
+			if (this != &other) {
+				if (value)
+					value->Release();
+				value = other.detach();
+			}
+			return *this;
+		}
 		~com_ptr()
 		{
 			if (value)
@@ -66,16 +80,6 @@ namespace winrt
 	private:
 		T* value = nullptr;
 	};
-}
-namespace Util
-{
-	template <class... Args>
-	void SetResourceName(Resource* value, const char* name, Args...)
-	{
-		assert(value && value->references == 1 && value->name.empty());
-		value->name = name;
-		++resource.named;
-	}
 }
 using ID3D11VertexShader = Resource;
 using ID3D11PixelShader = Resource;
@@ -126,17 +130,19 @@ struct Device
 {
 	std::atomic_uint creates{ 0 };
 	bool fail = false;
-	std::function<void()> onCreate;
 	std::mutex resourcesMutex;
 	std::vector<std::unique_ptr<Resource>> resources;
+	std::function<void()> afterCreate;
 	void Reset()
 	{
 		assert(resource.live == 0);
+		for (const auto& created : resources)
+			assert(created->references == 0 && created->releases == 1);
 		resources.clear();
 		creates = resource.releases = resource.named = 0;
-		fail = false;
-		onCreate = nullptr;
 		resource.onRelease = nullptr;
+		fail = false;
+		afterCreate = {};
 	}
 	int CreateVertexShader(const void*, size_t, void*, Resource** output)
 	{
@@ -144,14 +150,15 @@ struct Device
 		*output = nullptr;
 		if (fail)
 			return -1;
-		auto created = std::make_unique<Resource>();
-		*output = created.get();
 		{
 			std::lock_guard lock(resourcesMutex);
+			auto created = std::make_unique<Resource>();
 			resources.push_back(std::move(created));
+			++resource.live;
+			*output = resources.back().get();
 		}
-		if (onCreate)
-			onCreate();
+		if (afterCreate)
+			afterCreate();
 		return 0;
 	}
 	int CreatePixelShader(const void* bytes, size_t size, void* unused, Resource** output)
@@ -159,6 +166,19 @@ struct Device
 		return CreateVertexShader(bytes, size, unused, output);
 	}
 } testDevice;
+namespace Util
+{
+	template <class... Args>
+	void SetResourceName(Resource* shader, const char* format, Args... args)
+	{
+		assert(shader && shader->references > 0 && shader->name.empty());
+		std::array<char, 128> name{};
+		const auto size = std::snprintf(name.data(), name.size(), format, args...);
+		assert(size > 0 && static_cast<size_t>(size) < name.size());
+		shader->name.assign(name.data(), static_cast<size_t>(size));
+		++resource.named;
+	}
+}
 namespace globals::d3d
 {
 	auto* device = &testDevice;
@@ -173,14 +193,14 @@ struct Blob
 	const void* GetBufferPointer() const { return this; }
 	size_t GetBufferSize() const { return 1; }
 } blob;
-std::barrier<> rendezvous{ 2 };
-bool concurrent = false, failCompile = false;
+bool failCompile = false;
+std::function<void()> afterCompile;
 namespace SShaderCache
 {
 	Blob* CompileShader(ShaderClass, const RE::BSShader&, uint32_t, bool, int*, std::optional<uint64_t>)
 	{
-		if (concurrent)
-			rendezvous.arrive_and_wait();
+		if (afterCompile)
+			afterCompile();
 		return failCompile ? nullptr : &blob;
 	}
 	auto CreateVertexShader(const Blob&, const RE::BSShader&, uint32_t)
@@ -194,6 +214,21 @@ namespace SShaderCache
 }
 struct ShaderCache
 {
+	~ShaderCache() { ReleaseResources(); }
+	void ReleaseResources()
+	{
+		const auto release = [](auto& families) {
+			for (auto& shaders : families) {
+				for (auto& [id, shader] : shaders)
+					if (shader->shader)
+						shader->shader->Release();
+				shaders.clear();
+			}
+		};
+		release(vertexShaders);
+		release(pixelShaders);
+		release(computeShaders);
+	}
 	struct Queue
 	{
 		std::atomic_uint64_t generation{ 1 };
@@ -220,20 +255,6 @@ struct ShaderCache
 	std::unordered_map<int, int> shaderMap, hlslToShaderMap;
 	std::unordered_set<int> deferredEvictions;
 	std::atomic_uint64_t deferredEvictionCount{ 0 };
-	~ShaderCache() { ReleaseResources(); }
-	void ReleaseResources()
-	{
-		const auto release = [](auto& families) {
-			for (auto& shaders : families) {
-				for (auto& [id, shader] : shaders)
-					shader->shader->Release();
-				shaders.clear();
-			}
-		};
-		release(vertexShaders);
-		release(pixelShaders);
-		release(computeShaders);
-	}
 	void Clear();
 	bool IsDiskCacheActive() const { return false; }
 	bool IsTaskStale(std::optional<uint64_t> a_taskGeneration) const;

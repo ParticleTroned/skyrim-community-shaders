@@ -1110,26 +1110,31 @@ int main() {
 METHODS
 int main() {
     for (bool vertex : {false, true}) {
+        testDevice.Reset();
+        {
         ShaderCache cache;
         RE::BSShader shader;
         const auto publish = [&](uint32_t descriptor, std::optional<uint64_t> generation = {}) -> const void* {
             if (vertex) return cache.MakeAndAddVertexShader(shader, descriptor, generation);
             return cache.MakeAndAddPixelShader(shader, descriptor, generation);
         };
-        testDevice.Reset();
-        concurrent = true;
+        // Both candidates must own a driver shader before either can win publication.
+        std::barrier<> created{2};
+        testDevice.afterCreate = [&] { created.arrive_and_wait(); };
         const void* workerResult = nullptr;
         std::thread worker([&] { workerResult = publish(7); });
         const void* drawResult = publish(7);
         worker.join();
-        concurrent = false;
+        testDevice.afterCreate = {};
         assert(drawResult && drawResult == workerResult);
-        assert(testDevice.creates == 2 && resource.releases == 1 && resource.live == 1);
-        assert(resource.named == 2 && cache.graphicsShaderRevision == 0);
-        auto* winner = vertex ? cache.vertexShaders[0].at(7)->shader : cache.pixelShaders[0].at(7)->shader;
+        assert(testDevice.creates == 2 && resource.named == 2 && resource.releases == 1 && resource.live == 1);
+        assert(cache.graphicsShaderRevision == 0);
+        const auto* winner = vertex ? cache.vertexShaders[0].at(7)->shader : cache.pixelShaders[0].at(7)->shader;
         assert(winner->references == 1 && winner->releases == 0);
         assert(testDevice.resources[0].get() != testDevice.resources[1].get());
+        const auto expectedName = vertex ? "ShaderCache::Vertex 0:7" : "ShaderCache::Pixel 0:7";
         for (const auto& candidate : testDevice.resources) {
+            assert(candidate->name == expectedName);
             assert(candidate->references == (candidate.get() == winner ? 1u : 0u));
             assert(candidate->releases == (candidate.get() == winner ? 0u : 1u));
         }
@@ -1140,11 +1145,12 @@ int main() {
         assert(!publish(8) && testDevice.creates == 3);
         failCompile = false;
         testDevice.fail = true;
-        assert(!publish(8) && testDevice.creates == 4 && resource.live == 1);
+        assert(!publish(8) && testDevice.creates == 4 && resource.named == 3);
+        assert(resource.releases == 2 && resource.live == 1 && testDevice.resources.size() == 3);
         testDevice.fail = false;
-        assert(publish(8) && testDevice.creates == 5 && resource.releases == 2 && resource.live == 2);
+        assert(publish(8) && testDevice.creates == 5 && resource.named == 4 && resource.releases == 2 && resource.live == 2);
         const auto previousGeneration = cache.compilationSet.LiveGeneration(RE::BSShader::Type::Water);
-        testDevice.onCreate = [&] {
+        testDevice.afterCreate = [&] {
             // Driver work must not hold either publication mutex.
             std::thread lockProbe([&] {
                 assert(cache.vertexShadersMutex.try_lock());
@@ -1156,15 +1162,52 @@ int main() {
             cache.compilationSet.typeEpochs[0].fetch_add(1);
         };
         assert(!publish(9, previousGeneration));
-        testDevice.onCreate = nullptr;
-        assert(testDevice.creates == 6 && resource.releases == 3 && resource.live == 2);
+        testDevice.afterCreate = {};
+        assert(testDevice.creates == 6 && resource.releases == 3 && resource.live == 2 && resource.named == 5);
         assert(!publish(7, previousGeneration) && !publish(8, previousGeneration));
         assert(testDevice.creates == 6 && winner->references == 1 && winner->releases == 0);
-        assert(resource.named == 5);
-        cache.ReleaseResources();
-        assert(resource.live == 0 && resource.releases == 5);
-        for (const auto& candidate : testDevice.resources)
-            assert(candidate->references == 0 && candidate->releases == 1);
+        }
+        assert(resource.releases == 5 && resource.live == 0);
+        testDevice.Reset();
+
+        for (bool scoped : {false, true}) {
+            for (bool afterCreation : {false, true}) {
+                ShaderCache cache;
+                RE::BSShader shader;
+                const auto publish = [&]() -> const void* {
+                    if (vertex) return cache.MakeAndAddVertexShader(shader, 9);
+                    return cache.MakeAndAddPixelShader(shader, 9);
+                };
+                std::latch reached{1}, resume{1};
+                auto& hook = afterCreation ? testDevice.afterCreate : afterCompile;
+                hook = [&] { reached.count_down(); resume.wait(); };
+                const void* result = nullptr;
+                std::thread delayed([&] { result = publish(); });
+                reached.wait();
+                if (scoped)
+                    cache.compilationSet.typeEpochs[0].fetch_add(1);
+                else
+                    cache.compilationSet.generation.fetch_add(1);
+                resume.count_down();
+                delayed.join();
+                hook = {};
+                assert(!result && cache.vertexShaders[0].empty() && cache.pixelShaders[0].empty());
+                const unsigned staleCreates = afterCreation ? 1u : 0u;
+                assert(testDevice.creates == staleCreates && resource.named == staleCreates);
+                assert(resource.releases == staleCreates && resource.live == 0);
+                if (afterCreation) {
+                    assert(testDevice.resources.front()->references == 0);
+                    assert(testDevice.resources.front()->releases == 1);
+                }
+                assert(publish() && testDevice.creates == staleCreates + 1);
+                auto* current = vertex ? cache.vertexShaders[0].at(9)->shader : cache.pixelShaders[0].at(9)->shader;
+                assert(current->references == 1 && current->releases == 0);
+                assert(resource.live == 1);
+                cache.ReleaseResources();
+                assert(resource.live == 0 && resource.releases == staleCreates + 1);
+                testDevice.Reset();
+            }
+        }
     }
 }
 '''.replace("METHODS", methods)

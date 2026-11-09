@@ -43,7 +43,7 @@ namespace
 {
 	using json = nlohmann::json;
 	using namespace CSX::FeatureAPI;
-	constexpr auto DevBenchSchemaRevision = 35;
+	constexpr auto DevBenchSchemaRevision = 33;
 	std::atomic_bool g_registered{ false };
 
 	CSX::Api::ServiceFoundation& Foundation()
@@ -662,13 +662,11 @@ namespace CSX::Api::FeatureDevBenchBridge
 									{ "LightDryingHours", dryingHours }, { "HeavyDryingHours", dryingHours } } } };
 			properties["action"]["enum"].push_back("seasonal_weather");
 			properties["seasonalWeather"] = SeasonalWeatherConfig::Schema();
-			properties["seasonalWeather"]["description"] = "Seasonal Weathers monthly chances and independent snow-only area polygons. SnowExclusions selects exterior worldspace IDs and 3-16 XY vertices, with separate Enabled, Snowfall and SnowCover switches; maximum 8 areas. Omit or empty the array to retain native geographic behavior. Ground masks apply to CSX snow and its melt footprint, without changing rain wetness or foliage colors. Snowfall applies at natural changes, keeps non-snow relative weights and respects protected weather controllers. All-snow candidate lists retain native selection. Lists without positive snow weights also retain native selection (no_snow_candidates); editing ground masks resets incompatible melt history.";
+			properties["seasonalWeather"]["description"] = "Seasonal Weathers settings for monthly regional weather chances.";
 			properties["seasonalRegion"] = SeasonalWeatherConfig::FormKeySchema();
 			properties["seasonalRegion"]["description"] = "Optional portable region key (0xLOCAL~Plugin.esp); defaults to the sky's region.";
 			spec["outputSchema"]["properties"]["result"]["properties"]["seasonalWeather"] = { { "type", "object" },
-				{ "properties", { { "frameworkDetected", { { "type", "boolean" }, { "description", "Seasonal Weathers Framework is loaded; regions with weather globals are always left unchanged." } } },
-									{ "month", { { "type", { "number", "null" } }, { "minimum", 0 }, { "exclusiveMaximum", 12 }, { "description", "Fractional game month for monthly weighting; null when unused or unavailable, including snow-only area filtering." } } },
-									{ "snowExcludedAtPlayer", { { "type", "boolean" }, { "description", "A configured snowfall polygon matches the player and inspected region world. bypassReason still reports controller ownership or unavailable non-snow candidates." } } } } },
+				{ "properties", { { "frameworkDetected", { { "type", "boolean" }, { "description", "Seasonal Weathers Framework is loaded; regions with weather globals are always left unchanged." } } } } },
 				{ "description", "Seasonal Weathers availability, fault, frameworkDetected, settings, region, fractional month, bypassReason, candidate base weights and projected integer chancePercent, adjustedSelections and persistence." } };
 			spec["description"] = spec["description"].get<std::string>() + " seasonal_weather inspects or changes Seasonal Weathers, the default-off monthly regional weather controller. Omit seasonalWeather for read-only inspection; optional seasonalRegion selects a portable region key. MonthlyWeights is twelve rows (Morning Star through Evening Star), each in clear/cloudy/rain/snow order, bounded 0..20, smoothly interpolated on the same game calendar as Snow Cover. Weights are relative; projected integer percentages sum to 100. Original entries and global pointers are restored after each native region selection; no weather is forced and no ESP or save records are edited. Quest overrides, editor locks, excluded worlds/regions, ambiguous/invalid lists, invalid clocks/global values and zero-total plans keep native behavior. Global-controlled lists are skipped by default. When Seasonal Weathers Framework.esp is loaded (full or light), frameworkDetected is true and such lists always retain native candidates and chances, regardless of SkipGlobalControlledRegions; bypassReason/eligibilityReason is seasonal_weathers_framework. Regions without globals can still use CSX monthly weights and snow assignments. Snow Cover, melting and wetness are independent. Without the framework, opt out only after resolving ownership with other seasonal controllers. SnowAssignments uses portable Region/Weather keys and Weight 0.01..100; only snow-flagged records absent from that region are added. Existing zero entries stay excluded. WeatherCategories overrides classification (0 clear, 1 cloudy, 2 rain, 3 snow, 4 unchanged). Missing snow assignments bypass the affected region. Keys are canonicalized across hex padding and case; duplicate identities are rejected. Unchanged missing references do not block disabling or editing unrelated settings. Changes take effect at the next natural weather roll; Menu Save persists them. Climate-only and custom scripted selection retain native behavior. Runtime compatibility and visuals require in-game testing.";
 			return spec.dump();

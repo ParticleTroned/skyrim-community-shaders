@@ -27,12 +27,10 @@ namespace WetternessSnowMelt
 			SnowCover::UserSettings settings;
 			SnowCover::WorldSettings world;
 			std::array<float, 9> climateAndFire;
-			SnowExclusions::MaskData exclusions;
 			bool Matches(const CoverageConfiguration& other) const
 			{
 				return std::memcmp(&settings, &other.settings, sizeof(settings)) == 0 &&
-				       std::memcmp(&world, &other.world, sizeof(world)) == 0 && climateAndFire == other.climateAndFire &&
-				       std::memcmp(&exclusions, &other.exclusions, sizeof(exclusions)) == 0;
+				       std::memcmp(&world, &other.world, sizeof(world)) == 0 && climateAndFire == other.climateAndFire;
 			}
 		};
 		CoverageConfiguration previousConfiguration{};
@@ -134,8 +132,7 @@ namespace WetternessSnowMelt
 		const CoverageConfiguration configuration{ frame.settings, frame.wsettings,
 			{ static_cast<float>(snow.MaxSummerMonth), static_cast<float>(snow.MaxWinterMonth),
 				snow.SummerHeightOffset, snow.WinterHeightOffset, snow.snowingSpeed, snow.meltingSpeed,
-				static_cast<float>(snow.fireMeltSettings.Enabled), snow.fireMeltSettings.RadiusScale, snow.fireMeltSettings.Strength },
-			frame.snowExclusions };
+				static_cast<float>(snow.fireMeltSettings.Enabled), snow.fireMeltSettings.RadiusScale, snow.fireMeltSettings.Strength } };
 		if (hasConfiguration && !previousConfiguration.Matches(configuration))
 			history.Clear();
 		previousConfiguration = configuration;

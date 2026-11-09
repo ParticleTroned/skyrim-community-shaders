@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../../package/Shaders/Common/SnowExclusions.hlsli"
 #include "SeasonalWeatherPolicy.h"
 
 #include <nlohmann/json.hpp>
@@ -10,16 +9,6 @@
 
 namespace SeasonalWeatherConfig
 {
-	inline constexpr float MaxAreaCoordinate = 10000000.0f;
-	struct SnowExclusion
-	{
-		std::string Name = "New area";
-		std::string Worldspace = "tamriel";
-		bool Enabled = false;
-		bool Snowfall = true;
-		bool SnowCover = true;
-		std::vector<std::array<float, 2>> Vertices;
-	};
 	struct SnowAssignment
 	{
 		std::string Region;
@@ -40,12 +29,7 @@ namespace SeasonalWeatherConfig
 		std::vector<std::string> ExcludedRegions;
 		std::vector<SnowAssignment> SnowAssignments;
 		std::vector<WeatherCategory> WeatherCategories;
-		std::vector<SnowExclusion> SnowExclusions;
 	};
-	/** Packs validated polygon coordinates for the shared CPU/shader mask. */
-	SnowExclusions::Area PackArea(const SnowExclusion& area);
-	/** Matches exterior world IDs without case-sensitive user configuration. */
-	bool MatchesWorld(const SnowExclusion& area, std::string_view world);
 
 	/** Validates a complete candidate before publishing any settings change. */
 	Settings Parse(const nlohmann::json& settings);

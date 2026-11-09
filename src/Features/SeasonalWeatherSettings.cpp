@@ -2,12 +2,10 @@
 
 #include "Globals.h"
 #include "Utils/Form.h"
-#include "Utils/Game.h"
 #include "Utils/StringUtils.h"
 #include "Utils/UI.h"
 
 #include <array>
-#include <optional>
 
 namespace
 {
@@ -18,11 +16,7 @@ namespace
 		if (reason.empty())
 			return "Ready for the next natural weather change.";
 		if (reason == "disabled")
-			return "Monthly selection is disabled. Projected seasonal chances are a preview; enabled snow-only areas remain independent.";
-		if (reason == "no_snow_candidates")
-			return "No snowfall candidates need filtering. Native selection is retained.";
-		if (reason == "no_non_snow_candidate")
-			return "This area has no eligible non-snow weather. Native selection is retained; add a suitable non-snow candidate in your weather mod.";
+			return "Preview only. Enable this feature to change natural weather chances.";
 		if (reason == "seasonal_weathers_framework")
 			return "Seasonal Weathers Framework is loaded. This region uses weather globals, so CSX leaves its weather chances and candidates unchanged.";
 		if (reason == "weather_global_control")
@@ -71,161 +65,6 @@ namespace
 			}
 		}
 		return changed;
-	}
-
-	void DrawAreaPreview(const SeasonalWeatherConfig::SnowExclusion& area)
-	{
-		for (const auto& point : area.Vertices)
-			if (!Util::IsFinite(point[0]) || !Util::IsFinite(point[1]) || std::abs(point[0]) > SeasonalWeatherConfig::MaxAreaCoordinate || std::abs(point[1]) > SeasonalWeatherConfig::MaxAreaCoordinate)
-				return;
-		const auto bounds = SeasonalWeatherConfig::PackArea(area);
-		const ImVec2 origin = ImGui::GetCursorScreenPos();
-		const ImVec2 size(std::min(ImGui::GetContentRegionAvail().x, 400.0f), 200.0f);
-		const float scale = std::min((size.x - 20) / std::max(1.0f, bounds.maxX - bounds.minX),
-			(size.y - 20) / std::max(1.0f, bounds.maxY - bounds.minY));
-		auto project = [&](const auto& p) { return ImVec2(origin.x + 10 + (p[0] - bounds.minX) * scale, origin.y + size.y - 10 - (p[1] - bounds.minY) * scale); };
-		auto* draw = ImGui::GetWindowDrawList();
-		for (size_t i = 0; i < area.Vertices.size(); ++i) {
-			const auto point = project(area.Vertices[i]);
-			draw->AddLine(point, project(area.Vertices[(i + 1) % area.Vertices.size()]), ImGui::GetColorU32(ImGuiCol_PlotLines), 2);
-			draw->AddText(point, ImGui::GetColorU32(ImGuiCol_Text), std::to_string(i + 1).c_str());
-		}
-		ImGui::Dummy(size);
-	}
-
-	struct SnowAreaEditor
-	{
-		int selected = 0;
-		std::optional<SeasonalWeatherConfig::SnowExclusion> draft;
-		int editingIndex = -1;
-		json originalAreas;
-		std::string error;
-		bool pending = false;
-	};
-
-	bool DrawSnowAreas(SeasonalWeatherConfig::Settings& edited, SnowAreaEditor& editor)
-	{
-		if (!ImGui::CollapsingHeader("Snow-only areas"))
-			return false;
-		ImGui::TextWrapped("Choose your own exterior areas, independent of hold or region borders. Each polygon has 3-16 corners in world XY game units; up to 8 areas can overlap. These switches work independently of monthly selection.");
-		ImGui::TextWrapped("Ground snow masks CSX Snow Cover on terrain, objects and foliage. Rain, wetness and seasonal plant colors remain active. Baked snow textures and other mods' snow are unchanged. Snowfall removes snow-flagged candidates at the next natural change, preserving other relative weights. Scripted weather and protected weather globals retain control.");
-		auto& [selected, draft, editingIndex, originalAreas, error, pending] = editor;
-		static Util::FormEditorIDIndex editorIDs;
-		const auto* player = RE::PlayerCharacter::GetSingleton();
-		auto* world = player && !Util::IsInterior() ? player->GetWorldspace() : nullptr;
-		const auto worldID = world ? Util::ToLowerAscii(Util::GetFormEditorID(world, &editorIDs)) : "";
-		const auto position = player ? player->GetPosition() : RE::NiPoint3{};
-		selected = std::clamp(selected, 0, std::max(0, static_cast<int>(edited.SnowExclusions.size()) - 1));
-		{
-			Util::DisableGuard busy(draft.has_value());
-			if (ImGui::BeginCombo("Area", edited.SnowExclusions.empty() ? "No areas configured" : edited.SnowExclusions[selected].Name.c_str())) {
-				const SKSE::stl::scope_exit endCombo([] { ImGui::EndCombo(); });
-				for (size_t i = 0; i < edited.SnowExclusions.size(); ++i) {
-					ImGui::PushID(static_cast<int>(i));
-					const SKSE::stl::scope_exit popID([] { ImGui::PopID(); });
-					if (ImGui::Selectable(edited.SnowExclusions[i].Name.c_str(), selected == static_cast<int>(i)))
-						selected = static_cast<int>(i);
-				}
-			}
-		}
-		{
-			Util::DisableGuard busy(draft.has_value());
-			{
-				Util::DisableGuard full(edited.SnowExclusions.size() >= SnowExclusions::MaxAreas);
-				if (ImGui::Button("New area")) {
-					draft.emplace();
-					if (!worldID.empty())
-						draft->Worldspace = worldID;
-					for (const auto& offset : std::array<std::array<float, 2>, 4>{ { { -4096, -4096 }, { 4096, -4096 }, { 4096, 4096 }, { -4096, 4096 } } })
-						draft->Vertices.push_back({ position.x + offset[0], position.y + offset[1] });
-					editingIndex = -1;
-					originalAreas = SeasonalWeatherConfig::Serialize(edited).at("SnowExclusions");
-					error.clear();
-				}
-			}
-			ImGui::SameLine();
-			Util::DisableGuard empty(edited.SnowExclusions.empty());
-			if (ImGui::Button("Edit selected area")) {
-				draft = edited.SnowExclusions[selected];
-				editingIndex = selected;
-				originalAreas = SeasonalWeatherConfig::Serialize(edited).at("SnowExclusions");
-				error.clear();
-			}
-			ImGui::SameLine();
-			if (ImGui::Button("Remove selected area")) {
-				edited.SnowExclusions.erase(edited.SnowExclusions.begin() + selected);
-				return true;
-			}
-		}
-		if (!draft)
-			return false;
-		char name[256]{}, worldName[256]{};
-		std::copy_n(draft->Name.begin(), std::min(draft->Name.size(), sizeof(name) - 1), name);
-		std::copy_n(draft->Worldspace.begin(), std::min(draft->Worldspace.size(), sizeof(worldName) - 1), worldName);
-		if (ImGui::InputText("Area name", name, sizeof(name)))
-			draft->Name = name;
-		if (ImGui::InputText("Worldspace editor ID", worldName, sizeof(worldName)))
-			draft->Worldspace = worldName;
-		{
-			Util::DisableGuard noWorld(worldID.empty());
-			if (ImGui::Button("Use current world"))
-				draft->Worldspace = worldID;
-		}
-		ImGui::Checkbox("Enable this area", &draft->Enabled);
-		ImGui::Checkbox("Exclude ground snow", &draft->SnowCover);
-		ImGui::Checkbox("Exclude natural snowfall", &draft->Snowfall);
-		ImGui::TextWrapped("Place corners around the perimeter in order. Use player XY to trace a boundary in game, or enter coordinates. Apply area validates the complete shape; Save settings persists it.");
-		DrawAreaPreview(*draft);
-		for (size_t i = 0; i < draft->Vertices.size(); ++i) {
-			ImGui::PushID(static_cast<int>(i));
-			const SKSE::stl::scope_exit popID([] { ImGui::PopID(); });
-			ImGui::InputFloat2(std::format("Corner {}", i + 1).c_str(), draft->Vertices[i].data(), "%.0f");
-			{
-				Util::DisableGuard wrongWorld(worldID.empty() || Util::ToLowerAscii(draft->Worldspace) != worldID);
-				if (ImGui::Button("Use player XY"))
-					draft->Vertices[i] = { position.x, position.y };
-			}
-			ImGui::SameLine();
-			{
-				Util::DisableGuard full(draft->Vertices.size() >= SnowExclusions::MaxVertices);
-				if (ImGui::Button("Insert after")) {
-					const auto a = draft->Vertices[i], b = draft->Vertices[(i + 1) % draft->Vertices.size()];
-					draft->Vertices.insert(draft->Vertices.begin() + i + 1, { (a[0] + b[0]) * 0.5f, (a[1] + b[1]) * 0.5f });
-					break;
-				}
-			}
-			ImGui::SameLine();
-			Util::DisableGuard minimum(draft->Vertices.size() <= 3);
-			if (ImGui::Button("Remove corner")) {
-				draft->Vertices.erase(draft->Vertices.begin() + i);
-				break;
-			}
-		}
-		if (ImGui::Button("Apply area")) {
-			try {
-				if (originalAreas != SeasonalWeatherConfig::Serialize(edited).at("SnowExclusions"))
-					throw std::invalid_argument("Areas changed elsewhere. Cancel and reopen the area before applying.");
-				auto candidate = edited;
-				if (editingIndex < 0)
-					candidate.SnowExclusions.push_back(*draft);
-				else
-					candidate.SnowExclusions[editingIndex] = *draft;
-				edited = std::move(candidate);
-				pending = true;
-				error.clear();
-				return true;
-			} catch (const std::exception& failure) {
-				error = failure.what();
-			}
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("Cancel area edit")) {
-			draft.reset();
-			error.clear();
-		}
-		if (!error.empty())
-			ImGui::TextWrapped("%s", error.c_str());
-		return false;
 	}
 
 	RE::TESRegion* DrawRegionPicker()
@@ -362,7 +201,7 @@ void SeasonalWeather::DrawSettingsEnabledControl()
 {
 	bool value = enabled.load();
 	Util::DisableGuard disabled(!value && (!available.load() || faulted.load()));
-	if (Util::Widgets::Checkbox("Monthly weather selection", &value)) {
+	if (Util::Widgets::Checkbox("Enabled", &value)) {
 		std::lock_guard lock(mutex);
 		settings.Enabled = value;
 		enabled.store(value, std::memory_order_relaxed);
@@ -385,10 +224,7 @@ void SeasonalWeather::DrawEditorSettings(RE::TESWeather* selectedWeather)
 		original = settings;
 	}
 	auto edited = original;
-	static SnowAreaEditor areaEditor;
-	areaEditor.pending = false;
 	bool changed = DrawSeasonControls(edited, selectedWeather);
-	changed |= DrawSnowAreas(edited, areaEditor);
 	auto* region = DrawRegionPicker();
 	changed |= DrawRegionSnow(edited, region, selectedWeather);
 	static std::string settingsError;
@@ -396,10 +232,6 @@ void SeasonalWeather::DrawEditorSettings(RE::TESWeather* selectedWeather)
 		try {
 			std::lock_guard lock(mutex);
 			ApplyEditorEdits(original, edited);
-			if (areaEditor.pending) {
-				areaEditor.selected = areaEditor.editingIndex < 0 ? static_cast<int>(edited.SnowExclusions.size()) - 1 : areaEditor.editingIndex;
-				areaEditor.draft.reset();
-			}
 			settingsError.clear();
 		} catch (const std::exception& error) {
 			settingsError = error.what();
@@ -413,8 +245,6 @@ void SeasonalWeather::DrawEditorSettings(RE::TESWeather* selectedWeather)
 		status = Inspect(region, false);
 	}
 	ImGui::TextWrapped("%s", ReasonLabel(status.at("bypassReason").get<std::string>()));
-	if (status.at("snowExcludedAtPlayer").get<bool>())
-		ImGui::TextWrapped("A snow-only area matches the player's position. Snowfall filtering remains subject to the weather ownership and candidate checks above.");
 	if (!status.at("eligibilityReason").get_ref<const std::string&>().empty() && status.at("eligibilityReason") != status.at("bypassReason"))
 		ImGui::TextWrapped("%s", ReasonLabel(status.at("eligibilityReason").get<std::string>()));
 	if (!status.at("installationError").get_ref<const std::string&>().empty())

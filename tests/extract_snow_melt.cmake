@@ -1,7 +1,0 @@
-file(READ "${SOURCE_FILE}" source)
-string(FIND "${source}" "namespace WetternessSnowMelt" start)
-if(start EQUAL -1)
-    message(FATAL_ERROR "Snow melt runtime namespace not found")
-endif()
-string(SUBSTRING "${source}" ${start} -1 runtime)
-file(WRITE "${OUTPUT_FILE}" "${runtime}")

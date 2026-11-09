@@ -2362,8 +2362,7 @@
     ],
     "ExcludedRegions": [],
     "SnowAssignments": [],
-    "WeatherCategories": [],
-    "SnowExclusions": []
+    "WeatherCategories": []
   },
   "Snow Cover": {
     "Enable": 0,

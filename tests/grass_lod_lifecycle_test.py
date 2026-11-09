@@ -281,6 +281,347 @@ int main() {
             "mesh = GrassBucketRenderer::Impl::LoadLODMesh(key); return mesh.vertices && mesh.indices;")
         self._run_driver(driver)
 
+    def test_async_requests_and_retirement(self):
+        source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
+        methods = "\n".join(block(source, signature) for signature in (
+            "void GrassBucketRenderer::Impl::CancelRetiredLODLoads(",
+            "void GrassBucketRenderer::Impl::RequestLODMesh(",
+            "void GrassBucketRenderer::Impl::PollLODLoads(",
+            "GrassBucketRenderer::~GrassBucketRenderer("))
+        driver = r'''
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#include "Features/GrassOptimizations/GrassLODCache.h"
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstdlib>
+#include <deque>
+#include <functional>
+#include <future>
+#include <iostream>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <tuple>
+#include <vector>
+bool failAllocation = false, shuttingDown = false;
+unsigned workersAlive = 0, failedAllocations = 0;
+void* operator new(std::size_t size) {
+    if (failAllocation) { ++failedAllocations; throw std::bad_alloc{}; }
+    if (auto* memory = std::malloc(size ? size : 1)) return memory;
+    throw std::bad_alloc{};
+}
+void operator delete(void* memory) noexcept { std::free(memory); }
+void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
+void Require(bool value, const char* reason) { if (!value) throw std::runtime_error(reason); }
+struct Owner {
+    static inline unsigned alive = 0;
+    static inline std::thread::id lastRetirement;
+    Owner() { ++alive; }
+    ~Owner() {
+        if (shuttingDown && workersAlive) std::abort();
+        lastRetirement = std::this_thread::get_id();
+        --alive;
+    }
+};
+namespace RE {
+    using NiSourceTexture = int;
+    template<class T> using NiPointer = std::shared_ptr<T>;
+}
+struct Mesh { std::shared_ptr<Owner> owner; unsigned serial = 0; };
+using LODLookup = std::tuple<std::string_view, uint64_t, uintptr_t, uint32_t>;
+PRODUCTION_KEY;
+namespace logger {
+    unsigned warnings = 0;
+    template<class... T> void warn(T&&...) { ++warnings; }
+}
+namespace BS {
+    template<unsigned = 0> class thread_pool {
+    public:
+        static inline bool failCreation = false, failSubmission = false;
+        static inline unsigned creations = 0, creationAttempts = 0, submissionAttempts = 0;
+        explicit thread_pool(unsigned count) {
+            ++creationAttempts;
+            Require(count == 1, "LOD loading must use one bounded worker");
+            if (failCreation) throw std::runtime_error("worker creation failure");
+            ++creations;
+            ++workersAlive;
+        }
+        ~thread_pool() { RunAll(); --workersAlive; }
+        template<class Function> std::future<bool> submit_task(Function function) {
+            ++submissionAttempts;
+            if (failSubmission) throw std::runtime_error("submission failure");
+            auto task = std::make_shared<std::packaged_task<bool()>>(std::move(function));
+            auto result = task->get_future();
+            std::scoped_lock lock(mutex);
+            tasks.push_back(std::move(task));
+            return result;
+        }
+        bool RunOne() {
+            std::shared_ptr<std::packaged_task<bool()>> task;
+            {
+                std::scoped_lock lock(mutex);
+                if (tasks.empty()) return false;
+                task = std::move(tasks.front());
+                tasks.pop_front();
+            }
+            (*task)();
+            return true;
+        }
+        void RunAll() { while (RunOne()) {} }
+    private:
+        std::mutex mutex;
+        std::deque<std::shared_ptr<std::packaged_task<bool()>>> tasks;
+    };
+}
+struct GrassBucketRenderer {
+    struct Impl {
+        GrassLOD::Cache<LODKey, Mesh> lodMeshes;
+        PRODUCTION_CONSTANTS
+        PRODUCTION_FRAME_STATE
+        PRODUCTION_LOAD;
+        std::vector<std::unique_ptr<LODLoad>> lodLoads;
+        std::unique_ptr<BS::thread_pool<>> lodWorker;
+        std::unique_ptr<int> preparationWorker, preparationJob;
+        std::vector<int> queuedGroups;
+        static inline unsigned loads = 0;
+        static inline std::function<bool(const LODKey&, Mesh&)> loadBehavior;
+        static bool LoadLODMesh(const LODKey& key, Mesh& mesh) {
+            ++loads;
+            mesh.owner = std::make_shared<Owner>();
+            mesh.serial = loads;
+            return loadBehavior ? loadBehavior(key, mesh) : true;
+        }
+        void CancelRetiredLODLoads();
+        void RequestLODMesh(const LODLookup&);
+        void PollLODLoads();
+        void Demand(std::set<LODKey, std::less<>> keys) {
+            lodMeshes.SetDemand(std::move(keys));
+            CancelRetiredLODLoads();
+        }
+    };
+    std::unique_ptr<Impl> impl = std::make_unique<Impl>();
+    ~GrassBucketRenderer();
+};
+PRODUCTION_METHODS
+LODKey Key(unsigned index) { return {std::to_string(index) + ".nif", 7, std::make_shared<int>(1), 0}; }
+int main() {
+    try {
+        using Impl = GrassBucketRenderer::Impl;
+        const auto key = Key(1);
+        {
+            GrassBucketRenderer renderer;
+            auto& state = *renderer.impl;
+            state.RequestLODMesh(key.Lookup());
+            Require(!state.lodWorker && state.lodLoads.empty(), "No demand created a worker");
+            state.Demand({key});
+            state.RequestLODMesh(key.Lookup());
+            for (unsigned repeat = 0; repeat < 100; ++repeat) {
+                state.RequestLODMesh(key.Lookup());
+                state.PollLODLoads();
+            }
+            Require(state.lodLoads.size() == 1 && !state.lodMeshes.Find(key) && Impl::loads == 0,
+                "Pending work blocked, duplicated, loaded synchronously or published early");
+            state.lodWorker->RunAll();
+            Require(!state.lodMeshes.Find(key) && Owner::alive == 1,
+                "Worker completion published during a draw instead of at a frame boundary");
+            state.PollLODLoads();
+            const auto mesh = state.lodMeshes.Find(key);
+            Require(mesh && mesh->owner && state.lodLoads.empty(), "Completed LOD was not published");
+            const auto loads = Impl::loads;
+            state.RequestLODMesh(key.Lookup());
+            Require(state.lodLoads.empty() && Impl::loads == loads, "Ready mesh loaded twice");
+            auto plan = *mesh;
+            state.Demand({});
+            Require(!state.lodMeshes.Find(key) && Owner::alive == 1 && plan.owner,
+                "Retiring demand invalidated a retained frame plan");
+        }
+        Require(Owner::alive == 0 && workersAlive == 0, "Completed assets leaked");
+        {
+            GrassBucketRenderer renderer;
+            auto& state = *renderer.impl;
+            state.Demand({key});
+            std::promise<void> started, release;
+            auto entered = started.get_future();
+            auto resume = release.get_future();
+            Impl::loadBehavior = [&](const LODKey&, Mesh&) {
+                started.set_value();
+                resume.wait();
+                return true;
+            };
+            state.RequestLODMesh(key.Lookup());
+            std::thread worker([&] { state.lodWorker->RunOne(); });
+            const bool running = entered.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+            state.Demand({});
+            state.PollLODLoads();
+            const bool pending = state.lodLoads.size() == 1 && !state.lodMeshes.Find(key);
+            release.set_value();
+            worker.join();
+            Impl::loadBehavior = {};
+            Require(running && pending && Owner::alive == 1,
+                "Cancelling a running load released its owner before completion");
+            state.PollLODLoads();
+            Require(state.lodLoads.empty() && !state.lodMeshes.Find(key) && Owner::alive == 0 &&
+                    Owner::lastRetirement == std::this_thread::get_id(),
+                "A concurrently cancelled load published or retired away from the render thread");
+        }
+        {
+            GrassBucketRenderer renderer;
+            auto& state = *renderer.impl;
+            state.Demand({key});
+            state.RequestLODMesh(key.Lookup());
+            state.lodWorker->RunAll();
+            const auto oldSerial = Impl::loads;
+            state.Demand({});
+            Require(Owner::alive == 1, "Cancellation released a result before render-thread retirement");
+            state.Demand({key});
+            state.RequestLODMesh(key.Lookup());
+            Require(state.lodLoads.size() == 2, "Returning demand reused a cancelled request");
+            state.PollLODLoads();
+            Require(!state.lodMeshes.Find(key) && Owner::alive == 0, "A stale completion was resurrected");
+            state.lodWorker->RunAll();
+            state.PollLODLoads();
+            Require(state.lodMeshes.Find(key)->serial > oldSerial, "Fresh demand did not publish a fresh result");
+        }
+        {
+            GrassBucketRenderer renderer;
+            auto& state = *renderer.impl;
+            std::set<LODKey, std::less<>> keys;
+            for (unsigned index = 0; index <= Impl::kMaxLODLoads; ++index) keys.insert(Key(index));
+            state.Demand(keys);
+            for (const auto& requested : keys) state.RequestLODMesh(requested.Lookup());
+            Require(state.lodLoads.size() == Impl::kMaxLODLoads, "Pending work exceeded its bound");
+            state.lodWorker->RunAll();
+            state.PollLODLoads();
+            for (const auto& requested : keys) state.RequestLODMesh(requested.Lookup());
+            Require(state.lodLoads.size() == 1, "A full queue permanently lost the remaining request");
+            const auto loads = Impl::loads;
+            state.Demand({});
+            state.lodWorker->RunAll();
+            state.PollLODLoads();
+            Require(Impl::loads == loads && state.lodLoads.empty(), "Cancelled queued work still loaded an asset");
+        }
+        for (unsigned failure = 0; failure < 3; ++failure)
+            for (uint32_t firstFrame : {100u, UINT32_MAX - 59u}) {
+                GrassBucketRenderer renderer;
+                auto& state = *renderer.impl;
+                const auto second = Key(2);
+                state.Demand({key, second});
+                state.frame = firstFrame;
+                const auto warnings = logger::warnings;
+                const auto attempts = [] {
+                    return std::tuple{failedAllocations, BS::thread_pool<>::creationAttempts,
+                        BS::thread_pool<>::submissionAttempts};
+                };
+                failAllocation = failure == 0;
+                BS::thread_pool<>::failCreation = failure == 1;
+                BS::thread_pool<>::failSubmission = failure == 2;
+                state.RequestLODMesh(key.Lookup());
+                const auto firstAttempts = attempts();
+                Require(state.lodLoads.empty() && !state.lodMeshes.Find(key) && logger::warnings == warnings + 1,
+                    "Failed request escaped, retained a dangling job or silently failed");
+                for (uint32_t offset = 0; offset < Impl::kLODRequestRetryFrames; ++offset) {
+                    state.frame = firstFrame + offset;
+                    state.RequestLODMesh(key.Lookup());
+                    state.RequestLODMesh(second.Lookup());
+                }
+                Require(attempts() == firstAttempts && logger::warnings == warnings + 1,
+                    "Request pressure retried or warned within its shared cooldown");
+                state.frame = firstFrame + Impl::kLODRequestRetryFrames;
+                state.RequestLODMesh(second.Lookup());
+                const auto secondAttempts = attempts();
+                Require(secondAttempts != firstAttempts && logger::warnings == warnings + 2,
+                    "Request failure did not retry at the cooldown boundary");
+                state.RequestLODMesh(key.Lookup());
+                Require(attempts() == secondAttempts && logger::warnings == warnings + 2,
+                    "A second key bypassed the renewed failure cooldown");
+                failAllocation = BS::thread_pool<>::failCreation = BS::thread_pool<>::failSubmission = false;
+                state.frame += Impl::kLODRequestRetryFrames - 1;
+                state.RequestLODMesh(key.Lookup());
+                Require(state.lodLoads.empty() && attempts() == secondAttempts,
+                    "Recovery bypassed the failure cooldown");
+                ++state.frame;
+                state.RequestLODMesh(key.Lookup());
+                Require(!state.lodRequestFailureFrame && state.lodLoads.size() == 1,
+                    "Successful submission did not clear the failure latch");
+                state.RequestLODMesh(second.Lookup());
+                state.lodWorker->RunAll();
+                state.PollLODLoads();
+                Require(state.lodMeshes.Find(key)->owner && state.lodMeshes.Find(second)->owner &&
+                        logger::warnings == warnings + 2,
+                    "Request failure prevented later recovery for all keys");
+            }
+        for (bool exception : {false, true}) {
+            GrassBucketRenderer renderer;
+            auto& state = *renderer.impl;
+            state.Demand({key});
+            Impl::loadBehavior = [exception](const LODKey&, Mesh&) {
+                if (exception) throw std::runtime_error("model load failure");
+                return false;
+            };
+            state.RequestLODMesh(key.Lookup());
+            state.lodWorker->RunAll();
+            Require(Owner::alive == 1, "Partial native ownership was released by the worker");
+            state.PollLODLoads();
+            const auto loads = Impl::loads;
+            state.RequestLODMesh(key.Lookup());
+            Require(state.lodMeshes.Find(key) && !state.lodMeshes.Find(key)->owner &&
+                    Owner::alive == 0 && state.lodLoads.empty() && Impl::loads == loads,
+                "A failed load did not retire partial ownership and retain a negative cache entry");
+            Impl::loadBehavior = {};
+        }
+        {
+            GrassBucketRenderer renderer;
+            auto& state = *renderer.impl;
+            state.Demand({key});
+            state.RequestLODMesh(key.Lookup());
+            state.lodWorker->RunAll();
+            const auto warnings = logger::warnings;
+            failAllocation = true;
+            state.PollLODLoads();
+            state.PollLODLoads();
+            failAllocation = false;
+            Require(!state.lodMeshes.Find(key) && state.lodLoads.size() == 1 && Owner::alive == 1 &&
+                    logger::warnings == warnings + 1,
+                "Publication pressure lost ownership, repeated warnings or disabled fallback");
+            state.PollLODLoads();
+            Require(state.lodMeshes.Find(key)->owner && state.lodLoads.empty(), "Publication did not recover");
+        }
+        {
+            auto renderer = std::make_unique<GrassBucketRenderer>();
+            auto& state = *renderer->impl;
+            const auto second = Key(2);
+            state.Demand({key, second});
+            state.RequestLODMesh(key.Lookup());
+            state.lodWorker->RunAll();
+            state.RequestLODMesh(second.Lookup());
+            const auto loads = Impl::loads;
+            shuttingDown = true;
+            renderer.reset();
+            shuttingDown = false;
+            Require(Impl::loads == loads && Owner::alive == 0 && workersAlive == 0,
+                "Shutdown failed to join before retiring results or started cancelled work");
+        }
+        std::cout << "Bounded asynchronous LOD demand, cancellation, publication and shutdown passed\n";
+        return 0;
+    } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+}
+'''.replace("PRODUCTION_METHODS", methods).replace("PRODUCTION_KEY", block(source, "struct LODKey")).replace(
+            "PRODUCTION_LOAD", block(source, "struct LODLoad")).replace("PRODUCTION_CONSTANTS", "\n".join(
+                line.strip() for line in source.splitlines() if any(name in line for name in (
+                    "static constexpr size_t kMaxLODLoads", "static constexpr uint32_t kLODRequestRetryFrames")))).replace(
+            "PRODUCTION_FRAME_STATE", "\n".join(line.strip() for line in source.splitlines() if any(
+                declaration in line for declaration in (
+                    "std::optional<uint32_t> lodRequestFailureFrame;", "uint32_t frame = UINT32_MAX;"))))
+        self._run_driver(driver)
+
     def test_production_retirement(self):
         source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
         methods = "\n".join(block(source, signature) for signature in (
@@ -339,9 +680,9 @@ struct Mesh {
     std::shared_ptr<int> texture;
     uint64_t descriptor = 0;
     uint32_t tier = 0;
-    bool vertices = true, indices = true;
+    bool vertices = false, indices = false;
     Mesh() = default;
-    Mesh(std::shared_ptr<Owner> value) : owner(std::move(value)) {}
+    Mesh(std::shared_ptr<Owner> value) : owner(std::move(value)), vertices(true), indices(true) {}
     explicit operator bool() const { return bool(owner); }
 };
 using LODLookup = std::tuple<std::string_view, uint64_t, uintptr_t, uint32_t>;
@@ -397,6 +738,19 @@ struct GrassBucketRenderer {
         void UpdateLODDemand(const GrassPolicy::Settings&);
         void EndBackgroundPreparation(const GrassPolicy::Settings&) {}
         std::array<const Mesh*, 2> LODMeshes(const Source&);
+        std::vector<LODKey> pendingLoads;
+        void CancelRetiredLODLoads() {
+            std::erase_if(pendingLoads, [&](const auto& key) { return !lodMeshes.Requested(key); });
+        }
+        void RequestLODMesh(const LODLookup& key) {
+            const auto requested = lodMeshes.Requested(key);
+            if (requested && std::none_of(pendingLoads.begin(), pendingLoads.end(), [&](const auto& queued) { return queued.Lookup() == key; }))
+                pendingLoads.push_back(*requested);
+        }
+        void PollLODLoads() {
+            for (const auto& key : pendingLoads) lodMeshes.Publish(key, LoadLODMesh(key));
+            pendingLoads.clear();
+        }
         static inline std::array<unsigned, 2> loadCounts{}, loadModes{};
         static inline Property* changePropertyOnLoad = nullptr;
         static inline uint32_t changePropertyTier = 0;
@@ -434,8 +788,9 @@ void CheckDemandAllocationFailure() {
             state.UpdateLODDemand(settings);
             const auto& source = state.residents[1];
             const LODKey key{source.model, source.descriptor, source.texture, 0};
-            const auto load = [](const LODKey&) { return std::make_shared<Owner>(); };
-            Require(state.lodMeshes.FindOrLoad(key, load) && Owner::alive == 1);
+            Require(state.lodMeshes.Requested(key) && !state.lodMeshes.Find(key));
+            state.lodMeshes.Publish(key, Mesh{std::make_shared<Owner>()});
+            Require(state.lodMeshes.Find(key) && Owner::alive == 1);
             ++state.residentRevision;
             const auto warnings = logger::warnings;
             failAllocation = allocation;
@@ -455,7 +810,9 @@ void CheckDemandAllocationFailure() {
             Require(!selected[0] && !selected[1]);
             state.UpdateLODDemand(settings);
             Require(state.lodRevision == state.residentRevision);
-            Require(state.lodMeshes.FindOrLoad(key, load) && Owner::alive == 1);
+            Require(state.lodMeshes.Requested(key));
+            state.lodMeshes.Publish(key, Mesh{std::make_shared<Owner>()});
+            Require(state.lodMeshes.Find(key) && Owner::alive == 1);
         }
     Require(Owner::alive == 0);
 }
@@ -475,6 +832,10 @@ void CheckLODResolution() {
                     const auto& source = state.residents[1];
                     state.loadCounts = {};
                     state.loadModes = {midMode, farMode};
+                    renderer.EndFrame();
+                    Require(state.LODMeshes(source) == std::array<const Mesh*, 2>{});
+                    renderer.EndFrame();
+                    state.LODMeshes(source);
                     renderer.EndFrame();
                     const auto selected = state.LODMeshes(source);
                     const bool midValid = midMode == 0 || midMode >= 4;
@@ -507,6 +868,8 @@ void CheckLODResolution() {
         state.changePropertyOnLoad = source.property.get();
         state.changePropertyTier = changedTier;
         renderer.EndFrame();
+        state.LODMeshes(source);
+        renderer.EndFrame();
         const auto selected = state.LODMeshes(source);
         state.changePropertyOnLoad = nullptr;
         Require(!selected[0] && !selected[1]);
@@ -533,25 +896,28 @@ int main() {
             return LODKey{s.model, s.descriptor, s.texture, tier};
         };
         const auto key = keyFor(state.residents[1]);
-        int loads = 0;
-        const auto load = [&](const LODKey&) { ++loads; return std::make_shared<Owner>(); };
-        Require(!state.lodMeshes.FindOrLoad(key, load));
+        Require(!state.lodMeshes.Requested(key) && !state.lodMeshes.Find(key));
+        state.lodMeshes.Publish(key, Mesh{std::make_shared<Owner>()});
+        Require(!state.lodMeshes.Find(key) && Owner::alive == 0);
         int activeGeometry = 0, activePass = 0;
         state.current = &activeGeometry;
         state.currentSetupPass = &activePass;
         state.currentMainPass = state.currentDrawObserved = true;
         renderer.EndFrame();
         Require(!state.current && !state.currentSetupPass && !state.currentMainPass && !state.currentDrawObserved);
-        auto mesh = state.lodMeshes.FindOrLoad(key, load);
-        Require(mesh && *mesh && loads == 1 && Owner::alive == 1);
-        Require(state.lodMeshes.FindOrLoad(key, load) == mesh && loads == 1);
+        Require(state.lodMeshes.Requested(key) && !state.lodMeshes.Find(key));
+        state.lodMeshes.Publish(key, Mesh{std::make_shared<Owner>()});
+        auto mesh = state.lodMeshes.Find(key);
+        Require(mesh && *mesh && Owner::alive == 1);
+        const auto originalOwner = mesh->owner.get();
+        state.lodMeshes.Publish(key, Mesh{std::make_shared<Owner>()});
+        Require(state.lodMeshes.Find(key) == mesh && mesh->owner.get() == originalOwner && Owner::alive == 1);
         const auto lookup = key.Lookup();
-        for (int frame = 0; frame < 1000; ++frame)
-            Require(state.lodMeshes.FindOrLoad(lookup, load) == mesh && loads == 1);
         const auto warnings = logger::warnings;
         failAllAllocations = true;
         try {
             for (int frame = 0; frame < 1000; ++frame) {
+                Require(state.lodMeshes.Requested(lookup) && state.lodMeshes.Find(lookup) == mesh);
                 state.UpdateLODDemand(settings);
                 renderer.EndFrame();
             }
@@ -561,10 +927,12 @@ int main() {
         }
         failAllAllocations = false;
         Require(logger::warnings == warnings && Owner::alive == 1);
-        Require(state.lodMeshes.FindOrLoad(lookup, load) == mesh && loads == 1);
+        Require(state.lodMeshes.Find(lookup) == mesh);
         auto absent = lookup;
         std::get<1>(absent) += 1;
-        Require(!state.lodMeshes.FindOrLoad(absent, load) && loads == 1);
+        Require(!state.lodMeshes.Requested(absent) && !state.lodMeshes.Find(absent));
+        state.lodMeshes.Publish(absent, Mesh{std::make_shared<Owner>()});
+        Require(!state.lodMeshes.Find(absent) && Owner::alive == 1);
         state.buckets[0].plan.meshes[1] = *mesh;
         state.dormantBuckets[0].plan.meshes[2] = *mesh;
         auto& plan = state.buckets[0].plan;
@@ -580,28 +948,36 @@ int main() {
         ++state.residentRevision;
         renderer.EndFrame();
         Require(Owner::alive == 0 && state.lodMeshes.Entries().empty());
+        state.lodMeshes.Publish(lookup, Mesh{std::make_shared<Owner>()});
+        Require(!state.lodMeshes.Find(lookup) && Owner::alive == 0);
         state.residents[1] = Source{};
         ++state.residentRevision;
         renderer.EndFrame();
         const auto replacement = keyFor(state.residents[1]);
-        Require(state.lodMeshes.FindOrLoad(replacement, load) && Owner::alive == 1);
+        Require(state.lodMeshes.Requested(replacement));
+        state.lodMeshes.Publish(replacement, Mesh{std::make_shared<Owner>()});
+        Require(state.lodMeshes.Find(replacement) && Owner::alive == 1);
         settings.Enabled = false;
         renderer.EndFrame();
         Require(Owner::alive == 0);
         settings.Enabled = true;
         settings.EnableMeshLOD = false;
         renderer.EndFrame();
-        Require(!state.lodMeshes.FindOrLoad(replacement, load));
+        Require(!state.lodMeshes.Requested(replacement) && !state.lodMeshes.Find(replacement));
         settings.EnableMeshLOD = true;
         settings.EnableMidLOD = false;
         renderer.EndFrame();
-        Require(state.lodMeshes.FindOrLoad(replacement, load) && Owner::alive == 1);
+        Require(state.lodMeshes.Requested(replacement));
+        state.lodMeshes.Publish(replacement, Mesh{std::make_shared<Owner>()});
+        Require(state.lodMeshes.Find(replacement) && Owner::alive == 1);
         const auto farKey = keyFor(state.residents[1], 1);
-        Require(state.lodMeshes.FindOrLoad(farKey, load) && Owner::alive == 2);
+        Require(state.lodMeshes.Requested(farKey));
+        state.lodMeshes.Publish(farKey, Mesh{std::make_shared<Owner>()});
+        Require(state.lodMeshes.Find(farKey) && Owner::alive == 2);
         settings.EnableMidLOD = true;
         settings.EnableFarLOD = false;
         renderer.EndFrame();
-        Require(Owner::alive == 1 && !state.lodMeshes.FindOrLoad(farKey, load));
+        Require(Owner::alive == 1 && !state.lodMeshes.Requested(farKey) && !state.lodMeshes.Find(farKey));
         ++state.residents[1].lifetime->generation;
         ++state.residentRevision;
         renderer.EndFrame();
@@ -609,25 +985,28 @@ int main() {
         state.residents[1].generation = 1;
         ++state.residentRevision;
         renderer.EndFrame();
-        int failures = 0;
-        const auto rejected = [&](const LODKey&) -> Mesh {
-            auto candidate = std::make_shared<Owner>();
-            ++failures;
-            return {};
-        };
-        Require(!*state.lodMeshes.FindOrLoad(replacement, rejected) && Owner::alive == 0);
-        Require(!*state.lodMeshes.FindOrLoad(replacement, rejected) && failures == 1);
+        Require(state.lodMeshes.Requested(replacement));
+        state.lodMeshes.Publish(replacement, {});
+        const auto rejected = state.lodMeshes.Find(replacement);
+        Require(rejected && !*rejected && Owner::alive == 0);
+        state.lodMeshes.Publish(replacement, Mesh{std::make_shared<Owner>()});
+        Require(state.lodMeshes.Find(replacement) == rejected && !*rejected && Owner::alive == 0);
         state.residents[1].model = "replacement.nif";
         ++state.residentRevision;
         renderer.EndFrame();
         Require(state.lodMeshes.Entries().empty());
         const auto newKey = keyFor(state.residents[1]);
-        Require(state.lodMeshes.FindOrLoad(newKey, load) && Owner::alive == 1);
+        Require(state.lodMeshes.Requested(newKey));
+        state.lodMeshes.Publish(newKey, Mesh{std::make_shared<Owner>()});
+        Require(state.lodMeshes.Find(newKey) && Owner::alive == 1);
         state.residents[1].texture = std::make_shared<int>(2);
         ++state.residentRevision;
         renderer.EndFrame();
         Require(Owner::alive == 0);
-        Require(state.lodMeshes.FindOrLoad(keyFor(state.residents[1]), load) && Owner::alive == 1);
+        const auto newTextureKey = keyFor(state.residents[1]);
+        Require(state.lodMeshes.Requested(newTextureKey));
+        state.lodMeshes.Publish(newTextureKey, Mesh{std::make_shared<Owner>()});
+        Require(state.lodMeshes.Find(newTextureKey) && Owner::alive == 1);
         state.residents[1].lifetime->alive = false;
         ++state.residentRevision;
         renderer.EndFrame();
@@ -640,6 +1019,9 @@ int main() {
 }
 '''.replace("PRODUCTION_METHODS", methods).replace("PRODUCTION_KEY", block(source, "struct LODKey")).replace(
             "PRODUCTION_RETIRE", block(source, "void Retire("))
+        self._run_driver(driver)
+
+    def _run_driver(self, driver):
         compiler = os.environ.get("CXX") or shutil.which("cl")
         self.assertIsNotNone(compiler, "Run in the MSVC developer environment")
         with tempfile.TemporaryDirectory(prefix="grass-lod-lifecycle-") as temporary:
@@ -649,9 +1031,9 @@ int main() {
             cpp.write_text(driver, encoding="utf-8")
             command = [compiler, "/nologo", "/std:c++latest", "/EHsc", "/W4", "/WX",
                        "/I" + str(ROOT / "src"), str(cpp), "/Fe:" + str(executable)]
-            result = subprocess.run(command, cwd=directory, capture_output=True, text=True)
+            result = subprocess.run(command, cwd=directory, capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            result = subprocess.run([str(executable)], cwd=directory, capture_output=True, text=True)
+            result = subprocess.run([str(executable)], cwd=directory, capture_output=True, text=True, timeout=15)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 

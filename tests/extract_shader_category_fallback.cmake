@@ -38,7 +38,7 @@ extract_between("${_pbr}" "auto* boundShader = *globals::game::currentPixelShade
     "const auto* pbr = static_cast<const BSLightingShaderMaterialPBR*>" "grass_material_admission.h")
 
 extract_between("${_header}" "enum class LightingShaderTechniques"
-    "enum class BloodSplatterShaderTechniques" "lighting_flags.h")
+    "enum class EffectShaderFlags" "lighting_flags.h")
 extract_between("${_cache}" "void ShaderCache::PrewarmDeferredPixelShaders("
     "RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(" "pixel_prewarm.h")
 extract_between("${_pbr}" "void TruePBR::GenerateShaderPermutations("

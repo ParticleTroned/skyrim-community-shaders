@@ -6,6 +6,7 @@
 #include <cassert>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -13,18 +14,69 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
+struct ResourceCounters
+{
+	std::atomic_uint releases{ 0 }, live{ 0 }, named{ 0 };
+	void (*onRelease)() = nullptr;
+} resource;
 struct Resource
 {
-	unsigned releases = 0;
-	void (*onRelease)() = nullptr;
-	void Release()
+	std::atomic_uint references{ 1 }, releases{ 0 };
+	std::string name;
+	Resource() { ++resource.live; }
+	unsigned AddRef() { return ++references; }
+	unsigned Release()
 	{
-		if (onRelease)
-			onRelease();
+		if (resource.onRelease)
+			resource.onRelease();
+		const auto previous = references.fetch_sub(1);
+		assert(previous > 0);
 		++releases;
+		++resource.releases;
+		if (previous == 1)
+			--resource.live;
+		return previous - 1;
 	}
-} resource;
+};
+namespace winrt
+{
+	// Retain storage for inspection while modeling COM ownership, including losing candidates.
+	template <class T>
+	class com_ptr
+	{
+	public:
+		com_ptr() = default;
+		com_ptr(const com_ptr&) = delete;
+		com_ptr& operator=(const com_ptr&) = delete;
+		~com_ptr()
+		{
+			if (value)
+				value->Release();
+		}
+		T* get() const { return value; }
+		T** put()
+		{
+			assert(!value);
+			return &value;
+		}
+		T* detach() { return std::exchange(value, nullptr); }
+
+	private:
+		T* value = nullptr;
+	};
+}
+namespace Util
+{
+	template <class... Args>
+	void SetResourceName(Resource* value, const char* name, Args...)
+	{
+		assert(value && value->references == 1 && value->name.empty());
+		value->name = name;
+		++resource.named;
+	}
+}
 using ID3D11VertexShader = Resource;
 using ID3D11PixelShader = Resource;
 constexpr bool FAILED(int result) { return result < 0; }
@@ -72,13 +124,35 @@ namespace magic_enum
 }
 struct Device
 {
-	unsigned creates = 0;
+	std::atomic_uint creates{ 0 };
 	bool fail = false;
+	std::function<void()> onCreate;
+	std::mutex resourcesMutex;
+	std::vector<std::unique_ptr<Resource>> resources;
+	void Reset()
+	{
+		assert(resource.live == 0);
+		resources.clear();
+		creates = resource.releases = resource.named = 0;
+		fail = false;
+		onCreate = nullptr;
+		resource.onRelease = nullptr;
+	}
 	int CreateVertexShader(const void*, size_t, void*, Resource** output)
 	{
 		++creates;
-		*output = fail ? nullptr : &resource;
-		return fail ? -1 : 0;
+		*output = nullptr;
+		if (fail)
+			return -1;
+		auto created = std::make_unique<Resource>();
+		*output = created.get();
+		{
+			std::lock_guard lock(resourcesMutex);
+			resources.push_back(std::move(created));
+		}
+		if (onCreate)
+			onCreate();
+		return 0;
 	}
 	int CreatePixelShader(const void* bytes, size_t size, void* unused, Resource** output)
 	{
@@ -146,6 +220,20 @@ struct ShaderCache
 	std::unordered_map<int, int> shaderMap, hlslToShaderMap;
 	std::unordered_set<int> deferredEvictions;
 	std::atomic_uint64_t deferredEvictionCount{ 0 };
+	~ShaderCache() { ReleaseResources(); }
+	void ReleaseResources()
+	{
+		const auto release = [](auto& families) {
+			for (auto& shaders : families) {
+				for (auto& [id, shader] : shaders)
+					shader->shader->Release();
+				shaders.clear();
+			}
+		};
+		release(vertexShaders);
+		release(pixelShaders);
+		release(computeShaders);
+	}
 	void Clear();
 	bool IsDiskCacheActive() const { return false; }
 	bool IsTaskStale(std::optional<uint64_t> a_taskGeneration) const;

@@ -1,3 +1,4 @@
+#include "Utils/ShaderDescriptor.h"
 #include "reverse_z_test_stub.h"
 
 #include <algorithm>
@@ -260,6 +261,7 @@ namespace SIE
 		std::string blockedKey;
 		std::vector<uint32_t> blockedIDs;
 		bool enabled = true, safeLoad = false, async = true, compilationSucceeds = true;
+		std::atomic_bool backgroundCompilation{ false };
 		unsigned compiles = 0, vertexLookups = 0;
 		RE::BSGraphics::VertexShader* vertex = nullptr;
 		auto* GetVertexShader(const RE::BSShader&, uint32_t)
@@ -272,11 +274,17 @@ namespace SIE
 			ShaderClass stage;
 			const RE::BSShader& shader;
 			uint32_t descriptor;
+			bool precompile = false;
 		};
 		struct Queue
 		{
 			std::set<uint32_t> requests;
-			void Add(Task task) { requests.insert(task.descriptor); }
+			std::unordered_map<uint32_t, bool> precompiles;
+			void Add(Task task)
+			{
+				requests.insert(task.descriptor);
+				precompiles[task.descriptor] = task.precompile;
+			}
 		} compilationSet;
 		static bool IsSupportedShader(RE::BSShader::Type) { return true; }
 		static bool IsSupportedShader(const RE::BSShader&);
@@ -299,7 +307,7 @@ namespace SIE
 			++compiles;
 			return compilationSucceeds ? Add(shader, descriptor) : nullptr;
 		}
-		void PrewarmDeferredPixelShaders(const RE::BSShader&, uint32_t, bool);
+		void PrewarmDeferredPixelShaders(const RE::BSShader&, uint32_t, bool, bool a_precompile = false);
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader&, uint32_t, PixelShaderLookup = PixelShaderLookup::Compile);
 	};
 #include "pixel_lookup.h"
@@ -868,6 +876,45 @@ void TestSeamPrewarming()
 		}
 	}
 }
+void TestPrecompileLookupContract()
+{
+	constexpr uint32_t descriptor = 0x10011u;
+	const auto category = SIE::ShaderCache::GetCharacterCategoryFlag(RE::BSShader::Type::Lighting);
+	for (bool background : { false, true }) {
+		for (bool precompile : { false, true }) {
+			for (bool categories : { false, true }) {
+				Fixture f;
+				f.cache.backgroundCompilation = background;
+				f.cache.PrewarmDeferredPixelShaders(f.shader, descriptor, categories, precompile);
+				std::set<uint32_t> expected;
+				if (!(background && precompile)) {
+					expected.insert(descriptor);
+					if (categories)
+						expected.insert(descriptor | category);
+				}
+				Require(f.cache.compilationSet.requests == expected && f.cache.compiles == 0);
+				for (const auto requested : expected)
+					Require(f.cache.compilationSet.precompiles.at(requested) == precompile);
+				Require(!f.state.deferredPixelShaderMissing && f.deferred.captureReady);
+			}
+		}
+	}
+}
+void TestWaterRuntimeDescriptor()
+{
+	constexpr auto wading = static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading);
+	constexpr auto depth = static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Depth);
+	for (const auto type : { RE::BSShader::Type::Water, RE::BSShader::Type::Effect }) {
+		Fixture f;
+		f.shader.shaderType.value = type;
+		f.cache.Add(f.shader, depth | wading);
+		Hooks::BSShader_BeginTechnique::func = NativeTechnique;
+		nativeTechniqueReady = true;
+		nativeTechniquePixel = &f.native;
+		Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, depth | wading, depth | wading, false));
+		Require(f.state.permutationData.PixelShaderDescriptor == (type == RE::BSShader::Type::Water ? wading : 0u));
+	}
+}
 int main()
 {
 	try {
@@ -886,6 +933,8 @@ int main()
 			TestReverseTechniqueSelection();
 			TestPixelFamilyProof();
 			TestSeamTechniqueFallback();
+			TestPrecompileLookupContract();
+			TestWaterRuntimeDescriptor();
 			TestPBRPrewarming();
 			TestSeamPrewarming();
 			TestNativeImageSpaceAdmission();

@@ -351,6 +351,12 @@ int main() {
     assert(cache.compilationSet.generation == current && feature.clears == 1);
     assert(cache.vertexShaders[0].at(7).get() == vertex && cache.pixelShaders[0].at(7).get() == pixel);
     assert(testDevice.creates == 6 && resource.releases == 2);
+    assert(resource.live == 4 && resource.named == 6);
+    resource.onRelease = nullptr;
+    cache.ReleaseResources();
+    assert(resource.live == 0 && resource.releases == 6);
+    for (const auto& candidate : testDevice.resources)
+        assert(candidate->references == 0 && candidate->releases == 1);
 }
 '''
         driver = driver.replace("REVERSE_METHODS", "\n".join(block(source, signature) for signature in (

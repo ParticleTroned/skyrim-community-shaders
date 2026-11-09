@@ -748,7 +748,7 @@ void TruePBR::GenerateShaderPermutations(RE::BSShader* shader)
 			auto pixelShaderDescriptor = descriptor;
 			state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
 			if (pixelShaderDescriptor & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Deferred))
-				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, categories);
+				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, categories, true);
 			else
 				std::ignore = shaderCache->GetPixelShader(*shader, pixelShaderDescriptor, SIE::ShaderCache::PixelShaderLookup::Precompile);
 		}

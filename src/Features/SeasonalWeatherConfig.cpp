@@ -1,4 +1,5 @@
 #include "SeasonalWeatherConfig.h"
+#include "Utils/SettingsValidation.h"
 #include "Utils/StringUtils.h"
 
 #include <charconv>
@@ -14,48 +15,6 @@ namespace SeasonalWeatherConfig
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherCategory, Weather, Category)
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Settings, Enabled, SkipGlobalControlledRegions, MonthlyWeights,
 		ExcludedWorldspaces, ExcludedRegions, SnowAssignments, WeatherCategories)
-
-	namespace
-	{
-		void Validate(const json& value, const json& schema, const std::string& path)
-		{
-			const auto type = schema.at("type").get<std::string>();
-			if (type == "object") {
-				if (!value.is_object())
-					throw std::invalid_argument(path + " must be an object");
-				for (const auto& [key, item] : value.items()) {
-					if (!schema.at("properties").contains(key))
-						throw std::invalid_argument(path + ": unknown setting " + key);
-					Validate(item, schema.at("properties").at(key), path + "." + key);
-				}
-				for (const auto& key : schema.value("required", json::array()))
-					if (!value.contains(key.get<std::string>()))
-						throw std::invalid_argument(path + ": missing " + key.get<std::string>());
-			} else if (type == "array") {
-				if (!value.is_array() || value.size() < schema.value("minItems", size_t{ 0 }) || value.size() > schema.at("maxItems").get<size_t>())
-					throw std::invalid_argument(path + " has an invalid array length");
-				for (const auto& item : value)
-					Validate(item, schema.at("items"), path);
-			} else if (type == "string") {
-				if (!value.is_string())
-					throw std::invalid_argument(path + " must be a string");
-				const auto& text = value.get_ref<const std::string&>();
-				if (text.empty() || text.size() > 255 || text.find('\0') != std::string::npos)
-					throw std::invalid_argument(path + " must be a nonempty bounded identifier");
-				if (schema.contains("pattern"))
-					FormKey(text);
-			} else if (type == "boolean") {
-				if (!value.is_boolean())
-					throw std::invalid_argument(path + " must be boolean");
-			} else {
-				if (!value.is_number() || (type == "integer" && !value.is_number_integer()))
-					throw std::invalid_argument(path + " has the wrong numeric type");
-				const double number = value.get<double>();
-				if (!Util::IsFinite(number) || number < schema.at("minimum").get<double>() || number > schema.at("maximum").get<double>())
-					throw std::invalid_argument(path + " is outside its finite range");
-			}
-		}
-	}
 
 	const json& FormKeySchema()
 	{
@@ -101,7 +60,10 @@ namespace SeasonalWeatherConfig
 
 	Settings Parse(const json& input)
 	{
-		Validate(input, Schema(), "seasonalWeather");
+		Util::ValidateSettingsSchema(input, Schema(), "seasonalWeather", [](const std::string& text, const json& schema) {
+			if (schema.contains("pattern"))
+				FormKey(text);
+		});
 		json complete = Settings{};
 		complete.update(input);
 		auto result = complete.get<Settings>();

@@ -1,4 +1,5 @@
 #include "Features/SeasonalWeatherConfig.h"
+#include "Utils/SettingsValidation.h"
 
 #include <limits>
 #include <stdexcept>
@@ -65,6 +66,15 @@ int main()
 	Reject({ { "Enabled", 1 } });
 	Reject({ { "Unknown", true } });
 	Reject({ { "MonthlyWeights", nlohmann::json::array() } });
+	Reject({ { "WeatherCategories", { { { "Weather", "0x1~Skyrim.esm" }, { "Category", 1.5 } } } } });
+	Reject({ { "SnowAssignments", { { { "Region", "0x1~Skyrim.esm" }, { "Weight", 1 } } } } });
+	Reject({ { "ExcludedWorldspaces", { std::string("Tamriel\0suffix", 14) } } });
+	Reject({ { "ExcludedWorldspaces", { std::string(256, 'x') } } });
+	Reject({ { "ExcludedWorldspaces", std::vector<std::string>(MaxAssignments + 1, "Tamriel") } });
+	const nlohmann::json floatRange{ { "type", "number" }, { "minimum", 0.01 }, { "maximum", 0.95 } };
+	const auto noStringRule = [](const std::string&, const nlohmann::json&) {};
+	Util::ValidateSettingsSchema<float>(0.01f, floatRange, "floatMinimum", noStringRule);
+	Util::ValidateSettingsSchema<float>(0.95f, floatRange, "floatMaximum", noStringRule);
 	auto badWeights = defaults;
 	badWeights["MonthlyWeights"][0][3] = MaxMultiplier + 1;
 	Reject(badWeights);

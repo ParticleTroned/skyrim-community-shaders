@@ -123,8 +123,10 @@ public:
 		DirectX::XMUINT2 PreviousArrayOrigin;
 		float CompressionHeight, CollisionStrength, PreviousCollisionStrength, MaximumCompressibleGrassHeight;
 		float MaximumBend, PreviousMaximumBend, PreviousCompressionHeight, PreviousMaximumCompressibleGrassHeight;
+		float CurrentHeightOffset, PreviousHeightOffset;
+		float2 ContactPadding;
 	};
-	static_assert(sizeof(PerFrame) == 64 && offsetof(PerFrame, CollisionStrength) == 36 && offsetof(PerFrame, PreviousCollisionStrength) == 40);
+	static_assert(sizeof(PerFrame) == 80 && offsetof(PerFrame, CollisionStrength) == 36 && offsetof(PerFrame, PreviousCollisionStrength) == 40);
 	struct alignas(16) UpdateConstants
 	{
 		float2 PosOffset;
@@ -133,7 +135,7 @@ public:
 		float TimeDelta;
 		uint BoundingBoxCount;
 		float GrassInteractionRadius, CollisionStrength, SpringStrength, Damping;
-		float MaximumBend, MaximumCompression, CompressionRecovery, Padding;
+		float MaximumBend, MaximumCompression, CompressionRecovery, HeightOffset;
 	};
 	static_assert(sizeof(UpdateConstants) == 64);
 	struct alignas(16) BasicUpdateConstants
@@ -271,10 +273,10 @@ private:
 	std::atomic<GrassCollisionMode::Mode> failedMode{ GrassCollisionMode::Mode::Disabled };
 	float2 previousCell{};
 	float previousCameraHeight = 0;
+	float fieldHeightOrigin = 0;
 	PerFrame published{};
 	std::array<eastl::unique_ptr<Texture2D>, 2> deformation, velocity;
 	eastl::unique_ptr<ConstantBuffer> updateConstants;
-	winrt::com_ptr<ID3D11SamplerState> fieldSampler;
 	winrt::com_ptr<ID3D11DeviceContext1> computeContext;
 	uint32_t fieldIndex = 0, lastUpdateFrame = UINT32_MAX;
 	bool fieldInitialized = false, fieldsCleared = false, vertexResourcesBound = false;
@@ -312,7 +314,8 @@ private:
 		uint32_t firstFrame = 0, lastFrame = 0;
 		size_t nativeChecks = 0, batchedChecks = 0, disabledShaderChecks = 0, residualCollisionShaderChecks = 0;
 		size_t missingConstantBuffer = 0, wrongConstantBuffer = 0, missingTexture = 0, wrongTexture = 0;
-		size_t missingPreviousTexture = 0, wrongPreviousTexture = 0, missingSampler = 0, wrongSampler = 0;
+		size_t missingPreviousTexture = 0, wrongPreviousTexture = 0;
+		size_t missingContact = 0, wrongContact = 0, missingPreviousContact = 0, wrongPreviousContact = 0;
 		size_t collisionShaderChecks = 0, missingCollisionShaderInputs = 0, unidentifiedVertexShaders = 0, shaderReflectionFailures = 0;
 	};
 	ID3D11DeviceContext1* GetVertexProbeContext();

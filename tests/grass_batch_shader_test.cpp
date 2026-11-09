@@ -104,7 +104,7 @@ namespace
 							Check(reflection->GetConstantBufferByName("GrassBatch")->GetVariableByName("GrassBatchCollisionDistance")->GetDesc(&collisionDistance));
 							Require(collisionDistance.StartOffset == 12 && collisionDistance.Size == sizeof(float), "Batch collision distance layout changed");
 						}
-						for (const auto& [name, slot] : std::array<std::pair<const char*, UINT>, 4>{ { { "GrassCollision::GrassCollisionPerFrame", 5 }, { "GrassCollision::Deformation", 100 }, { "GrassCollision::PreviousDeformation", 101 }, { "GrassCollision::DeformationSampler", 15 } } }) {
+						for (const auto& [name, slot] : std::array<std::pair<const char*, UINT>, 5>{ { { "GrassCollision::GrassCollisionPerFrame", 5 }, { "GrassCollision::Deformation", 100 }, { "GrassCollision::PreviousDeformation", 101 }, { "GrassCollision::ContactMotion", 102 }, { "GrassCollision::PreviousContactMotion", 103 } } }) {
 							const auto result = reflection->GetResourceBindingDescByName(name, &binding);
 							if (mode == 2 || (mode == 1 && slot == 5))
 								Require(SUCCEEDED(result) && binding.BindPoint == slot, "Collision resource changed register");

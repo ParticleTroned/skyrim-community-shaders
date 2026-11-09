@@ -14,8 +14,8 @@ void RunGrassCollisionStrength(bool basic = false)
 	ComPtr<ID3D11ShaderReflection> reflection;
 	Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
 	D3D11ShaderTest::ConstantBuffer collision(device.Get(), reflection.Get(), "GrassCollision::GrassCollisionPerFrame");
-	Require(collision.slot == 5 && collision.bytes.size() == 64 && collision.Offset("GrassCollision::CollisionStrength") == 36 &&
-				collision.Offset("GrassCollision::PreviousCollisionStrength") == 40,
+	Require(collision.slot == 5 && collision.bytes.size() == 80 && collision.Offset("GrassCollision::CollisionStrength") == 36 &&
+				collision.Offset("GrassCollision::PreviousCollisionStrength") == 40 && collision.Offset("GrassCollision::CurrentHeightOffset") == 64,
 		"Collision strength layout differs from the CPU buffer");
 	D3D11ShaderTest::ConstantBuffer geometry(device.Get(), reflection.Get(), "NativeWorld");
 	std::array<float, 16> identity{};
@@ -29,10 +29,10 @@ void RunGrassCollisionStrength(bool basic = false)
 		std::array<float, 4> color{ 1, 1, 1, 1 };
 		std::array<float, 4> root{ 0, 0, 0, 1 };
 		std::array<float, 4> position{ 0, 0, 30, 1 };
-		std::array<float, 4> distance{ 2048, 0, 0, 0 };
+		std::array<float, 4> distance{ 2048, 0, 0, 1 };
 	};
 	static_assert(sizeof(Case) == 64);
-	std::array<Case, 8> cases{};
+	std::array<Case, 11> cases{};
 	cases[1].color[3] = 0;
 	cases[2].distance[0] = 0;
 	cases[3].root[0] = cases[3].position[0] = 8192;
@@ -40,6 +40,12 @@ void RunGrassCollisionStrength(bool basic = false)
 	cases[5].position[2] = .25f;
 	cases[6].position[2] = -1;
 	cases[7].color[3] = .05f;
+	cases[8].root[2] = 256;
+	cases[8].position[2] = 286;
+	cases[9].root[2] = -256;
+	cases[9].position[2] = -226;
+	cases[10].distance[1] = std::sqrt(.75f);
+	cases[10].distance[3] = .5f;
 	const auto makeBuffer = [&](UINT bytes, UINT stride, UINT bind, const void* initial, const char* name) {
 		D3D11_BUFFER_DESC desc{};
 		desc.ByteWidth = bytes;
@@ -60,11 +66,16 @@ void RunGrassCollisionStrength(bool basic = false)
 	Check(device->CreateUnorderedAccessView(output.Get(), nullptr, results.GetAddressOf()));
 	Util::SetResourceName(inputs.Get(), "GrassTest::CollisionStrengthCases SRV");
 	Util::SetResourceName(results.Get(), "GrassTest::CollisionStrengthResults UAV");
-	const auto fieldTexture = [&](std::array<float, 4> value, const char* name) {
+	const auto fieldTexture = [&](std::array<float, 4> value, const char* name, bool splitHeights = false) {
 		const UINT fieldSize = basic ? 512 : 1024;
 		std::vector<DirectX::PackedVector::HALF> pixels(size_t(fieldSize) * fieldSize * 4);
-		for (size_t i = 0; i < pixels.size(); ++i)
-			pixels[i] = DirectX::PackedVector::XMConvertFloatToHalf(value[i % 4]);
+		for (size_t i = 0; i < pixels.size(); ++i) {
+			const auto channel = i % 4;
+			const float component = splitHeights && channel >= 2 ?
+			                            ((i / 4) % fieldSize < fieldSize / 2 ? -256.0f : 256.0f) + (channel == 2 ? -16.0f : 16.0f) :
+			                            value[channel];
+			pixels[i] = DirectX::PackedVector::XMConvertFloatToHalf(component);
+		}
 		D3D11_TEXTURE2D_DESC desc{};
 		desc.Width = desc.Height = fieldSize;
 		desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
@@ -79,19 +90,10 @@ void RunGrassCollisionStrength(bool basic = false)
 		Util::SetResourceName(view.Get(), "%s SRV", name);
 		return view;
 	};
-	auto currentField = fieldTexture(basic ? std::array<float, 4>{ .5f, .5f, .49609375f, .49609375f } : std::array<float, 4>{ .25f, 0, .25f, 0 }, "GrassTest::CurrentField");
-	auto previousField = fieldTexture({ 0, .125f, .125f, 0 }, "GrassTest::PreviousField");
-	D3D11_SAMPLER_DESC samplerDesc{};
-	samplerDesc.Filter = D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
-	samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
-	samplerDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
-	samplerDesc.MaxAnisotropy = 1;
-	samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-	ComPtr<ID3D11SamplerState> sampler;
-	Check(device->CreateSamplerState(&samplerDesc, sampler.GetAddressOf()));
-	Util::SetResourceName(sampler.Get(), "GrassTest::FieldSampler");
-	auto* samplerBinding = sampler.Get();
-	context->CSSetSamplers(15, 1, &samplerBinding);
+	auto currentField = fieldTexture(basic ? std::array<float, 4>{ .5f, .5f, .49609375f, .49609375f } : std::array<float, 4>{ .25f, 0, .25f, 1 }, "GrassTest::CurrentField");
+	auto previousField = fieldTexture({ 0, .125f, .125f, 1 }, "GrassTest::PreviousField");
+	auto currentMotion = fieldTexture({ 0, 0, -16, 16 }, "GrassTest::CurrentContact");
+	auto previousMotion = currentMotion;
 	collision.SetVariable("GrassCollision::CompressionHeight", .1f);
 	collision.SetVariable("GrassCollision::PreviousCompressionHeight", .1f);
 	collision.SetVariable("GrassCollision::MaximumCompressibleGrassHeight", 40.0f);
@@ -112,10 +114,10 @@ void RunGrassCollisionStrength(bool basic = false)
 		collision.SetVariable("GrassCollision::PreviousCollisionStrength", previous);
 		collision.Bind(context.Get());
 		ID3D11ShaderResourceView* inputView = inputs.Get();
-		ID3D11ShaderResourceView* fields[]{ currentField.Get(), previousField.Get() };
+		ID3D11ShaderResourceView* fields[]{ currentField.Get(), previousField.Get(), currentMotion.Get(), previousMotion.Get() };
 		ID3D11UnorderedAccessView* outputView = results.Get();
 		context->CSSetShaderResources(0, 1, &inputView);
-		context->CSSetShaderResources(100, 2, fields);
+		context->CSSetShaderResources(100, 4, fields);
 		context->CSSetUnorderedAccessViews(0, 1, &outputView, nullptr);
 		context->CSSetShader(shader.Get(), nullptr, 0);
 		context->Dispatch(UINT(cases.size()), 1, 1);
@@ -137,7 +139,7 @@ void RunGrassCollisionStrength(bool basic = false)
 			Require(values[i][2] >= -std::max(0.0f, cases[i].position[2] - cases[i].root[2]) - .001f &&
 						values[i][6] >= -std::max(0.0f, cases[i].position[2] - cases[i].root[2]) - .001f,
 				"Collision crossed its root");
-			if ((i >= 1 && i <= 4) || i == 6)
+			if ((i >= 1 && i <= 4) || i == 6 || (!basic && (i == 8 || i == 9)))
 				for (size_t axis : { 0u, 1u, 2u, 4u, 5u, 6u })
 					Require(values[i][axis] == 0, "Root, alpha or distance gate failed");
 		}
@@ -163,6 +165,66 @@ void RunGrassCollisionStrength(bool basic = false)
 			"Previous field or strength was not preserved");
 		const float normalZ = std::cos(angle) / std::max(scale, 1e-4f);
 		Require(std::abs(values[0][3] - normalZ / std::hypot(std::sin(angle), normalZ)) < .001f, "Deformed normal did not follow rotation/compression");
+	}
+	if (!basic) {
+		currentMotion = fieldTexture({ 0, 0, 240, 272 }, "GrassTest::BridgeContact");
+		const auto bridge = dispatch(1, 1);
+		Require(bridge[0][0] == 0 && bridge[0][2] == 0 && bridge[0][5] > 0 &&
+					bridge[8][0] > 0 && bridge[8][5] == 0 && bridge[9][0] == 0 && bridge[7][0] == 0 && bridge[7][2] == 0,
+			"Current and previous contacts affected grass on another floor");
+		currentMotion = fieldTexture({ 0, 0, 16, 48 }, "GrassTest::TipContact");
+		const auto tips = dispatch(1, 1);
+		Require(tips[0][0] > 0 && tips[10][0] == 0, "Contact did not follow the actual vertical reach of a tilted blade");
+		currentMotion = fieldTexture({ 0, 0, -32, 0 }, "GrassTest::FootContact");
+		Require(dispatch(1, 1)[0][0] > 0, "A foot surface touching the grass root lost contact");
+		currentMotion = fieldTexture({ 0, 0, 8160, 8200 }, "GrassTest::HighRootContact");
+		collision.SetVariable("GrassCollision::CurrentHeightOffset", 8195.0f);
+		Require(dispatch(1, 1)[0][0] > 0, "Half-float contact storage rejected a nonrepresentable high root");
+		currentMotion = fieldTexture({ 0, 0, 8216, 8256 }, "GrassTest::HighTipContact");
+		collision.SetVariable("GrassCollision::CurrentHeightOffset", 8191.5f);
+		Require(dispatch(1, 1)[0][0] > 0, "Half-float contact storage rejected a marginal high tip contact");
+		collision.SetVariable("GrassCollision::CurrentHeightOffset", 0.0f);
+		currentMotion = fieldTexture({}, "GrassTest::AdjacentHeightContacts", true);
+		previousMotion = currentMotion;
+		const auto adjacent = dispatch(1, 1);
+		Require(adjacent[0][0] == 0 && adjacent[0][2] == 0 && adjacent[0][5] == 0 && adjacent[0][6] == 0 &&
+					adjacent[8][0] > 0 && adjacent[9][0] > 0,
+			"Filtering adjacent floors invented a contact in the vertical gap");
+		auto currentWorld = identity, previousWorld = identity;
+		currentWorld[11] = -64;
+		previousWorld[11] = -32;
+		geometry.SetVariable("World", currentWorld);
+		geometry.SetVariable("PreviousWorld", previousWorld);
+		geometry.Bind(context.Get());
+		currentMotion = fieldTexture({ 0, 0, -16, 16 }, "GrassTest::AnchoredContact");
+		previousMotion = currentMotion;
+		collision.SetVariable("GrassCollision::CurrentHeightOffset", 64.0f);
+		collision.SetVariable("GrassCollision::PreviousHeightOffset", 32.0f);
+		const auto reprojected = dispatch(1, 1);
+		const float currentFadePosition = 1 - 64.0f / 2048, previousFadePosition = 1 - 32.0f / 2048;
+		const float currentFade = currentFadePosition * currentFadePosition * (3 - 2 * currentFadePosition);
+		const float previousFade = previousFadePosition * previousFadePosition * (3 - 2 * previousFadePosition);
+		Require(std::abs(reprojected[0][0] - 30 * std::sin(.25f * currentFade)) < .001f &&
+					std::abs(reprojected[0][5] - 30 * std::sin(.125f * previousFade)) < .001f,
+			"Vertical camera movement used the wrong contact history for a motion-vector endpoint");
+		cases[0].distance[0] = 4096;
+		context->UpdateSubresource(input.Get(), 0, nullptr, cases.data(), 0, 0);
+		for (unsigned frame = 1; frame <= 100; ++frame) {
+			const float height = 2048 + frame * .25f, previousHeight = height - .25f;
+			currentWorld[11] = -height;
+			previousWorld[11] = -previousHeight;
+			geometry.SetVariable("World", currentWorld);
+			geometry.SetVariable("PreviousWorld", previousWorld);
+			geometry.Bind(context.Get());
+			collision.SetVariable("GrassCollision::CurrentHeightOffset", height);
+			collision.SetVariable("GrassCollision::PreviousHeightOffset", previousHeight);
+			const auto fractional = dispatch(1, 1);
+			const float factor = 1 - height / 4096, previousFactor = 1 - previousHeight / 4096;
+			const float fade = factor * factor * (3 - 2 * factor), oldFade = previousFactor * previousFactor * (3 - 2 * previousFactor);
+			Require(std::abs(fractional[0][0] - 30 * std::sin(.25f * fade)) < .001f &&
+						std::abs(fractional[0][5] - 30 * std::sin(.125f * oldFade)) < .001f,
+				"Repeated fractional camera motion drifted away from a stationary contact layer");
+		}
 	}
 	currentField = fieldTexture({ 0, 0, 0, 0 }, "GrassTest::EmptyField");
 	previousField = currentField;

@@ -55,11 +55,12 @@ namespace GrassCollision
 			return;
 		float normalizedHeight = saturate(input.Color.w);
 		float bendWeight = normalizedHeight * normalizedHeight;
-		float instanceUpScale = length(float3(input.InstanceData2.z, input.InstanceData3.z, input.InstanceData3.w));
-		float vertexHeight = abs(input.Position.z * (input.InstanceData4.y * ScaleMask.z + 1)) * instanceUpScale;
-		float bladeHeight = vertexHeight / max(normalizedHeight, 1e-4);
+		float3 instanceUp = float3(input.InstanceData2.z, input.InstanceData3.z, input.InstanceData3.w);
+		float3 bladeUp = instanceUp * (abs(input.Position.z * (input.InstanceData4.y * ScaleMask.z + 1)) / max(normalizedHeight, 1e-4));
+		float bladeHeight = length(bladeUp);
 		float4 currentField, previousField;
-		SampleDeformation(input.InstanceData1.xyz, World[0], PreviousWorld[0], distance, currentField, previousField);
+		SampleDeformation(input.InstanceData1.xyz, currentPosition - input.InstanceData1.xyz, previousPosition - input.InstanceData1.xyz,
+			World[0], PreviousWorld[0], distance, currentField, previousField);
 		currentPosition += CalculateDisplacement(currentPosition, input.InstanceData1.xyz, currentField, bendWeight,
 			CompressionWeight(normalizedHeight, bladeHeight, CompressionHeight, MaximumCompressibleGrassHeight),
 			CollisionStrength, MaximumBend, World[0], bendAxis, bendAngle, compressionScale);

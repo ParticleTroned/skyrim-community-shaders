@@ -1,3 +1,5 @@
+#include "GrassCollision/GrassCollisionContact.hlsli"
+
 cbuffer PerFrameCB : register(b0)
 {
 	float2 PosOffset;
@@ -12,6 +14,7 @@ cbuffer PerFrameCB : register(b0)
 	float MaximumBend;
 	float MaximumCompression;
 	float CompressionRecovery;
+	float HeightOffset;
 }
 
 struct BoundingBoxPacked
@@ -35,20 +38,20 @@ struct CollisionShapePacked
 
 StructuredBuffer<CollisionShapePacked> CollisionInstances : register(t1);
 Texture2D<float4> PreviousDeformation : register(t2);
-Texture2D<float2> PreviousVelocity : register(t3);
+Texture2D<float4> PreviousVelocity : register(t3);
 RWTexture2D<float4> Deformation : register(u0);
-RWTexture2D<float2> Velocity : register(u1);
+RWTexture2D<float4> Velocity : register(u1);
 
 groupshared BoundingBoxPacked SharedBoundingBoxes[64];
 
-float2 ClosestPointOnSegment(float2 position, float2 pointA, float2 pointB)
+// Negative prefers the candidate; zero leaves only the impulse-direction tie break.
+int CompareContact(float2 bounds, float compression, float2 selectedBounds, float selectedCompression)
 {
-	float2 segment = pointB - pointA;
-	float segmentLengthSquared = dot(segment, segment);
-	float segmentPosition = segmentLengthSquared > 1e-6 ?
-	                            saturate(dot(position - pointA, segment) / segmentLengthSquared) :
-	                            0.0;
-	return pointA + segment * segmentPosition;
+	if (bounds.x != selectedBounds.x)
+		return bounds.x < selectedBounds.x ? -1 : 1;
+	if (bounds.y != selectedBounds.y)
+		return bounds.y < selectedBounds.y ? -1 : 1;
+	return compression > selectedCompression ? -1 : (compression < selectedCompression ? 1 : 0);
 }
 
 [numthreads(8, 8, 1)] void main(
@@ -71,16 +74,32 @@ float2 ClosestPointOnSegment(float2 position, float2 pointA, float2 pointB)
 	float2 bend = 0.0;
 	float2 velocity = 0.0;
 	float compression = 0.0;
+	float2 contactBounds = 0.0;
+	float idleUpdates = 1;
+	bool staleHistory = false;
+	bool hasHistory = false;
 	if (isValid) {
 		float4 previousState = PreviousDeformation.Load(int3(dispatchThreadId.xy, 0));
-		bend = previousState.xy;
-		compression = previousState.z;
-		velocity = PreviousVelocity.Load(int3(dispatchThreadId.xy, 0));
+		float4 previousMotion = PreviousVelocity.Load(int3(dispatchThreadId.xy, 0));
+		contactBounds = previousMotion.zw;
+		hasHistory = previousState.w > 0 && all(isfinite(previousState)) && all(isfinite(previousMotion.xy)) &&
+		             GrassCollisionContact::IsValid(contactBounds);
+		if (hasHistory) {
+			bend = previousState.xy;
+			compression = previousState.z;
+			velocity = previousMotion.xy;
+			idleUpdates = min(previousState.w, GrassCollisionContact::MaximumIdleUpdates);
+			staleHistory = idleUpdates >= GrassCollisionContact::MaximumIdleUpdates;
+		}
 	}
 
 	float deltaTime = clamp(TimeDelta, 0.0, 1.0 / 15.0);
+	if (hasHistory && deltaTime > 0)
+		idleUpdates = min(idleUpdates + 1, GrassCollisionContact::MaximumIdleUpdates);
 	float2 collisionAcceleration = 0.0;
 	float collisionCompression = 0.0;
+	float2 impactBounds = 0.0;
+	bool hasImpact = false;
 	for (uint i = 0; i < BoundingBoxCount; ++i) {
 		BoundingBoxPacked boundingBox = SharedBoundingBoxes[i];
 		if (all(cellCentreMS >= boundingBox.MinExtent && cellCentreMS <= boundingBox.MaxExtent)) {
@@ -92,24 +111,70 @@ float2 ClosestPointOnSegment(float2 position, float2 pointA, float2 pointB)
 				float2 previousB = collider.PreviousPointB.xy;
 				float2 currentCentre = (currentA + currentB) * 0.5;
 				float2 previousCentre = (previousA + previousB) * 0.5;
+				float2 movement = currentCentre - previousCentre;
+				float sweepLengthSquared = dot(movement, movement);
 				float projectedHalfLength = 0.5 * max(length(currentB - currentA), length(previousB - previousA));
 				float radius = collider.CurrentPointAAndRadius.w + projectedHalfLength + max(GrassInteractionRadius, 0.0);
-				float2 closestPoint = ClosestPointOnSegment(cellCentreMS, previousCentre, currentCentre);
+				float lineFraction = sweepLengthSquared > 1e-6 ? dot(cellCentreMS - previousCentre, movement) / sweepLengthSquared : 1;
+				float2 closestPoint = lerp(previousCentre, currentCentre, saturate(lineFraction));
 				float2 delta = cellCentreMS - closestPoint;
 				float distanceToSweep = length(delta);
 				float penetration = radius - distanceToSweep;
 				if (penetration > 0.0 && deltaTime > 0.0) {
+					float2 contactFractions = float2(0, 1);
+					if (sweepLengthSquared > 1e-6) {
+						float2 lineDelta = cellCentreMS - (previousCentre + movement * lineFraction);
+						float halfInterval = sqrt(max(radius * radius - dot(lineDelta, lineDelta), 0) / sweepLengthSquared);
+						contactFractions = saturate(lineFraction + float2(-halfInterval, halfInterval));
+					}
+					float2 previousHeights = float2(collider.PreviousPointA.z, collider.PreviousPointB.z);
+					float2 currentHeights = float2(collider.CurrentPointAAndRadius.z, collider.CurrentPointB.z);
+					float2 firstHeights = lerp(previousHeights, currentHeights, contactFractions.x);
+					float2 lastHeights = lerp(previousHeights, currentHeights, contactFractions.y);
+					float2 bounds = float2(min(min(firstHeights.x, firstHeights.y), min(lastHeights.x, lastHeights.y)),
+										max(max(firstHeights.x, firstHeights.y), max(lastHeights.x, lastHeights.y))) +
+					                HeightOffset + collider.CurrentPointAAndRadius.w * float2(-1, 1);
+					if (!GrassCollisionContact::IsValid(bounds))
+						continue;
 					float penetrationRatio = saturate(penetration / max(radius, 1e-4));
-					float2 movement = currentCentre - previousCentre;
-					float2 fallbackDirection = dot(movement, movement) > 1e-6 ?
+					int priority = hasImpact ? CompareContact(bounds, penetrationRatio, impactBounds, collisionCompression) : -1;
+					if (priority > 0)
+						continue;
+					float2 fallbackDirection = sweepLengthSquared > 1e-6 ?
 					                               normalize(float2(-movement.y, movement.x)) :
 					                               float2(1.0, 0.0);
 					float2 outwardDirection = distanceToSweep > 1e-4 ? delta / distanceToSweep : fallbackDirection;
-					collisionAcceleration += outwardDirection * penetrationRatio;
-					collisionCompression = max(collisionCompression, penetrationRatio);
+					float2 impulse = outwardDirection * penetrationRatio;
+					// One dominant lowest contact avoids order-dependent unions and another field traversal.
+					if (priority == 0 && (impulse.x > collisionAcceleration.x ||
+											 (impulse.x == collisionAcceleration.x && impulse.y >= collisionAcceleration.y)))
+						continue;
+					impactBounds = bounds;
+					collisionAcceleration = impulse;
+					collisionCompression = penetrationRatio;
+					hasImpact = true;
 				}
 			}
 		}
+	}
+
+	// Recent lower history survives higher contacts; stale half-float history can yield when needed.
+	if (hasImpact && hasHistory && contactBounds.y < impactBounds.x && !staleHistory)
+		hasImpact = false;
+	if (hasImpact) {
+		if (!hasHistory || !GrassCollisionContact::Overlaps(contactBounds, impactBounds)) {
+			bend = velocity = 0;
+			compression = 0;
+		}
+		if (!hasHistory || impactBounds.x < contactBounds.x || !GrassCollisionContact::Overlaps(contactBounds, impactBounds))
+			contactBounds = GrassCollisionContact::ConservativeHalfBounds(impactBounds);
+		idleUpdates = 1;
+	} else if (!hasHistory) {
+		contactBounds = 0;
+	}
+	if (!hasImpact) {
+		collisionAcceleration = 0;
+		collisionCompression = 0;
 	}
 
 	collisionAcceleration *= max(CollisionStrength, 0.0) * COLLISION_ACCELERATION;
@@ -132,6 +197,14 @@ float2 ClosestPointOnSegment(float2 position, float2 pointA, float2 pointB)
 	updatedCompression = max(updatedCompression, collisionCompression * max(MaximumCompression, 0.0));
 	compression = updatedCompression;
 	compression = clamp(compression, 0.0, max(MaximumCompression, 0.0));
-	Deformation[dispatchThreadId.xy] = float4(bend, compression, 0.0);
-	Velocity[dispatchThreadId.xy] = velocity;
+	// Half-float recovery must retire imperceptible residuals before they pin a contact layer.
+	const float RECOVERY_EPSILON = 1e-4;
+	bool active = any(abs(bend) > RECOVERY_EPSILON) || any(abs(velocity) > RECOVERY_EPSILON) || compression > RECOVERY_EPSILON;
+	if (!active && deltaTime > 0) {
+		bend = velocity = 0;
+		compression = 0;
+	} else
+		active = any(bend != 0) || any(velocity != 0) || compression > 0;
+	Deformation[dispatchThreadId.xy] = float4(bend, compression, active ? idleUpdates : 0.0);
+	Velocity[dispatchThreadId.xy] = float4(velocity, active ? contactBounds : float2(0, 0));
 }

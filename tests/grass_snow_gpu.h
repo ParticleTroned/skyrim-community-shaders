@@ -2,28 +2,35 @@ struct GrassSnowFixture : GrassAlphaFixture
 {
 	static constexpr Pixel baseColor{ 0.2f, 0.3f, 0.4f, 1 };
 	static constexpr Pixel snowColor{ 0.25f, 0.36f, 0.49f, 1 };
-	ComPtr<ID3D11ShaderResourceView> baseTexture, snowTexture;
+	ComPtr<ID3D11ShaderResourceView> baseTexture, snowTexture, complexTexture;
 
 	GrassSnowFixture()
 	{
-		const auto texture = [&](const Pixel& color, const char* name, ComPtr<ID3D11ShaderResourceView>& view) {
+		const auto texture = [&](const Pixel* colors, UINT height, const char* name, ComPtr<ID3D11ShaderResourceView>& view) {
 			D3D11_TEXTURE2D_DESC desc{};
-			desc.Width = desc.Height = desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+			desc.Width = desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+			desc.Height = height;
 			desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
 			desc.Usage = D3D11_USAGE_IMMUTABLE;
 			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-			D3D11_SUBRESOURCE_DATA initial{ color.data(), sizeof(Pixel), 0 };
+			D3D11_SUBRESOURCE_DATA initial{ colors, sizeof(Pixel), 0 };
 			ComPtr<ID3D11Texture2D> resource;
 			Check(device->CreateTexture2D(&desc, &initial, resource.GetAddressOf()));
 			Util::SetResourceName(resource.Get(), "GrassSnowTest::%s", name);
 			Check(device->CreateShaderResourceView(resource.Get(), nullptr, view.GetAddressOf()));
 			Util::SetResourceName(view.Get(), "GrassSnowTest::%s SRV", name);
 		};
-		texture(baseColor, "Base", baseTexture);
-		texture(snowColor, "Snow", snowTexture);
+		texture(&baseColor, 1, "Base", baseTexture);
+		texture(&snowColor, 1, "Snow", snowTexture);
+		std::array<Pixel, 8> atlas;
+		atlas.fill(baseColor);
+		// Only the diffuse neighbor is transparent; the normal/specular half stays opaque.
+		atlas[2][3] = 0;
+		atlas[7] = { .5f, .5f, 1, 1 };
+		texture(atlas.data(), UINT(atlas.size()), "Complex", complexTexture);
 	}
 
-	unsigned CheckColor(bool vr, bool billboard)
+	unsigned CheckColor(bool vr)
 	{
 		constexpr const char* source = R"(
 #include "RunGrass.hlsl"
@@ -39,9 +46,7 @@ PS_INPUT SnowVertex(uint vertex : SV_VertexID) {
     input.VertexNormal = float4(0, 0, 1, 1);
     input.Color = 1;
     input.TexCoord.xy = float2(0.5, 0.75);
-#ifdef GRASS_SNOW_BILLBOARD
-    input.VertexMult = -2;
-#endif
+    input.VertexMult = texel >= 2 ? -2 : 0;
 #ifdef VR
     input.ClipDistance = input.CullDistance = 1;
 #endif
@@ -53,8 +58,6 @@ float4 SnowPixel(PS_INPUT input, bool frontFace : SV_IsFrontFace) : SV_Target0 {
 )";
 		auto defines = GrassDefines(false, vr, true, true, false, false, false, true);
 		defines.back() = { "SNOW_COVER", "1" };
-		if (billboard)
-			defines.push_back({ "GRASS_SNOW_BILLBOARD", "1" });
 		defines.push_back({ nullptr, nullptr });
 		auto pixelCode = CompileProgram(defines.data(), false, source, "SnowPixel");
 		auto vertexCode = CompileProgram(defines.data(), true, source, "SnowVertex");
@@ -99,32 +102,39 @@ float4 SnowPixel(PS_INPUT input, bool frontFace : SV_IsFrontFace) : SV_Target0 {
 		const D3D11_VIEWPORT viewport{ 0, 0, 4, 1, 0, 1 };
 		context->RSSetViewports(1, &viewport);
 		context->PSSetSamplers(0, 1, sampler.GetAddressOf());
-		context->PSSetShaderResources(0, 1, baseTexture.GetAddressOf());
 		context->PSSetShaderResources(112, 1, snowTexture.GetAddressOf());
 		unsigned cases = 0;
-		for (bool pbr : { false, true })
-			for (bool linear : { false, true }) {
-				permutation->SetVariable("Permutation::ExtraShaderDescriptor", 1u | (pbr ? 1u << 9 : 0u));
-				permutation->Bind(context.Get(), D3D11ShaderTest::Stage::Pixel);
-				features->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", UINT(linear));
-				features->Bind(context.Get(), D3D11ShaderTest::Stage::Pixel);
-				const auto pixels = DrawPixels();
-				for (const auto& actual : pixels)
-					for (UINT channel = 0; channel < 3; ++channel) {
-						const auto srgb = [](float color) { return std::pow(color, 1.0f / 2.2f); };
-						float base = baseColor[channel], snow = srgb(snowColor[channel]);
-						if (billboard) {
-							base = pbr ? (linear ? base : srgb(base)) : (linear ? std::pow(base, 2.2f) * .75f : base);
-							if (linear)
-								snow = snowColor[channel] * (pbr ? 1.0f : .75f);
-						}
-						snow *= linear ? 1.0f : .65f;
-						const float expected = base * .45f + snow * .55f;
-						Require(std::isfinite(actual[channel]) && std::abs(actual[channel] - expected) < 1e-5f,
-							"Snow changed grass material color space or the ordinary basic path");
+		for (bool atlas : { false, true })
+			for (bool expensive : { false, true })
+				for (bool pbr : { false, true })
+					for (bool linear : { false, true }) {
+						auto* texture = atlas ? complexTexture.Get() : baseTexture.Get();
+						context->PSSetShaderResources(0, 1, &texture);
+						permutation->SetVariable("Permutation::ExtraShaderDescriptor", 1u | (pbr ? 1u << 9 : 0u));
+						permutation->Bind(context.Get(), D3D11ShaderTest::Stage::Pixel);
+						features->SetMember("SharedData::snowCoverSettings", "EnableExpensiveFoliage", UINT(expensive));
+						features->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", UINT(linear));
+						features->Bind(context.Get(), D3D11ShaderTest::Stage::Pixel);
+						const auto pixels = DrawPixels();
+						for (UINT texel = 0; texel < pixels.size(); ++texel)
+							for (UINT channel = 0; channel < 3; ++channel) {
+								const bool billboard = texel >= 2;
+								const auto srgb = [](float color) { return std::pow(color, 1.0f / 2.2f); };
+								float base = baseColor[channel], snow = srgb(snowColor[channel]);
+								if (billboard) {
+									base = pbr ? (linear ? base : srgb(base)) : (linear ? std::pow(base, 2.2f) * .75f : base);
+									if (linear)
+										snow = snowColor[channel] * (pbr ? 1.0f : .75f);
+								}
+								snow *= linear ? 1.0f : .65f;
+								const float coverage = atlas && expensive && billboard && !pbr ? 1.0f : .55f;
+								const float expected = base * (1 - coverage) + snow * coverage;
+								Require(std::isfinite(pixels[texel][channel]) && std::abs(pixels[texel][channel] - expected) < 1e-5f,
+									"Snow changed grass material color space, atlas coverage or the ordinary basic path");
+							}
+						// Each draw checks ordinary and billboard shading, with two pixels per path.
+						cases += 2;
 					}
-				++cases;
-			}
 		return cases;
 	}
 };
@@ -134,7 +144,6 @@ unsigned CheckGrassSnowColor()
 	GrassSnowFixture fixture;
 	unsigned cases = 0;
 	for (bool vr : { false, true })
-		for (bool billboard : { false, true })
-			cases += fixture.CheckColor(vr, billboard);
+		cases += fixture.CheckColor(vr);
 	return cases;
 }

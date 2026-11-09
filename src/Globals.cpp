@@ -52,6 +52,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
+#include "Utils/DeviceContextState.h"
 #include "Utils/Game.h"
 #include "Utils/VRFrameBufferUpload.h"
 #include <array>
@@ -489,6 +490,7 @@ namespace globals
 		// Native context dispatch can change after first use without replacing the context.
 		if (installedContext.get() == a_context)
 			return;
+		Util::RegisterDeviceContextStateForHooks(a_context);
 		InstallVRFrameBufferUploadHook();
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);

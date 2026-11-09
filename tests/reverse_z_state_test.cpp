@@ -1,3 +1,4 @@
+#include "Utils/DeviceContextState.h"
 #include "d3d_resource_naming.h"
 
 #include <algorithm>
@@ -5,6 +6,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <d3d11.h>
 #include <d3dcompiler.h>
@@ -12,10 +14,12 @@
 #include <iostream>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <nlohmann/json.hpp>
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
@@ -23,6 +27,26 @@
 #include <wrl/implements.h>
 
 using json = nlohmann::json;
+
+namespace
+{
+	thread_local bool rejectHeapAllocations = false;
+	struct RejectHeapAllocations
+	{
+		RejectHeapAllocations() { rejectHeapAllocations = true; }
+		~RejectHeapAllocations() { rejectHeapAllocations = false; }
+	};
+}
+
+void* operator new(std::size_t size)
+{
+	if (!rejectHeapAllocations)
+		if (void* allocation = std::malloc(size ? size : 1))
+			return allocation;
+	throw std::bad_alloc{};
+}
+void operator delete(void* allocation) noexcept { std::free(allocation); }
+void operator delete(void* allocation, std::size_t) noexcept { std::free(allocation); }
 
 namespace REL
 {
@@ -671,6 +695,115 @@ namespace
 		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 7);
 		ID3D11DeviceContext_RSSetState::thunk(context, raster);
 	}
+
+	void TestIsolatedContextState(ID3D11Device* device, ID3D11DeviceContext* context,
+		ID3D11DepthStencilState* depth, ID3D11RasterizerState* raster)
+	{
+		winrt::com_ptr<ID3D11DeviceContext1> context1, nestedContext;
+		winrt::com_ptr<ID3DDeviceContextState> isolated, nested;
+		Require(Util::CreateIsolatedDeviceContextState(device, context, context1, isolated, "ReverseZStateTest::Isolated"), "Isolated context creation failed");
+		Require(Util::CreateIsolatedDeviceContextState(device, context, nestedContext, nested, "ReverseZStateTest::Nested"), "Nested context creation failed");
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = desc.Height = 4;
+		desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+		desc.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+		desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		winrt::com_ptr<ID3D11DepthStencilView> view;
+		Require(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, texture.put())), "Isolated scene depth creation failed");
+		Util::SetResourceName(texture.get(), "ReverseZStateTest::IsolatedSceneDepth");
+		Require(SUCCEEDED(device->CreateDepthStencilView(texture.get(), nullptr, view.put())), "Isolated scene view creation failed");
+		Util::SetResourceName(view.get(), "ReverseZStateTest::IsolatedSceneDepth DSV");
+		auto& reverse = globals::features::reverseZ;
+		reverse.activeThisBoot = true;
+		g_reversalActive = g_projectionReversed = true;
+		reverse.RegisterSceneDepthView(view.get());
+		context->OMSetRenderTargets(0, nullptr, view.get());
+		UpdateBoundDepthTarget(context, view.get());
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 21);
+		ID3D11DeviceContext_RSSetState::thunk(context, raster);
+		const D3D11_VIEWPORT viewport{ 0, 0, 4, 4, .2f, .7f };
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &viewport);
+		const auto mappedDepth = g_boundState;
+		const auto mappedRaster = g_boundRasterState;
+		auto verify = [&] {
+			CheckBoundStates(context, mappedDepth, mappedRaster, 21);
+			winrt::com_ptr<ID3D11DepthStencilState> logicalDepth;
+			winrt::com_ptr<ID3D11RasterizerState> logicalRaster;
+			ID3D11DeviceContext_OMGetDepthStencilState::thunk(context, logicalDepth.put(), nullptr);
+			ID3D11DeviceContext_RSGetState::thunk(context, logicalRaster.put());
+			Require(logicalDepth.get() == depth && logicalRaster.get() == raster, "Context restoration lost logical state ownership");
+			UINT count = 1;
+			D3D11_VIEWPORT logicalViewport{};
+			ID3D11DeviceContext_RSGetViewports::thunk(context, &count, &logicalViewport);
+			Require(count == 1 && std::memcmp(&logicalViewport, &viewport, sizeof(viewport)) == 0,
+				"Context restoration lost the logical viewport");
+			Require(g_reverseTargetBound && g_projectionReversed && !g_nearMaskBound,
+				"Context restoration lost the depth domain");
+			ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 21);
+			ID3D11DeviceContext_RSSetState::thunk(context, raster);
+			CheckBoundStates(context, mappedDepth, mappedRaster, 21);
+		};
+		Util::captureDeviceContextState = CaptureReverseContextState;
+		{
+			const RejectHeapAllocations rejectAllocations;
+			Util::ScopedDeviceContextState guard(context1.get(), isolated.get());
+			Require(static_cast<bool>(guard), "Allocation-free isolation was unavailable");
+			ID3D11DeviceContext_ClearState::thunk(context);
+			{
+				Util::ScopedDeviceContextState nestedGuard(nestedContext.get(), nested.get());
+				ID3D11DeviceContext_ClearState::thunk(context);
+			}
+			guard.Restore();
+		}
+		verify();
+		for (int iteration = 0; iteration < 3; ++iteration) {
+			try {
+				Util::ScopedDeviceContextState guard(context1.get(), isolated.get());
+				ID3D11DeviceContext_ClearState::thunk(context);
+				const D3D11_VIEWPORT overlayViewport{ 0, 0, 2, 2, 0, 1 };
+				ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &overlayViewport);
+				ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 9);
+				{
+					Util::ScopedDeviceContextState nestedGuard(nestedContext.get(), nested.get());
+					ID3D11DeviceContext_ClearState::thunk(context);
+				}
+				Require(!g_reverseTargetBound && g_requestedState.get() == depth && g_requestedStencilRef == 9,
+					"Nested isolation did not restore the outer logical state");
+				if (iteration == 1) {
+					guard.Restore();
+					verify();
+					guard.Restore();
+				}
+				if (iteration == 2)
+					throw std::runtime_error("Isolated draw aborted");
+			} catch (const std::runtime_error& error) {
+				if (std::string_view(error.what()) != "Isolated draw aborted")
+					throw;
+			}
+			verify();
+		}
+		{
+			const RejectHeapAllocations rejectAllocations;
+			Util::ScopedDeviceContextState guard(context1.get(), isolated.get());
+			g_renderingRejected = true;
+		}
+		CheckBoundStates(context, g_rejectedDepthState.get(), nullptr, 21);
+		Require(g_renderingRejected, "Context restoration cleared a rendering failure");
+		g_renderingRejected = false;
+		ReapplyMappedStates(context);
+		verify();
+		winrt::com_ptr<ID3D11DeviceContext> other;
+		Require(SUCCEEDED(device->CreateDeferredContext(0, other.put())), "Observer other-context creation failed");
+		Util::SetResourceName(other.get(), "ReverseZStateTest::ObserverOtherContext");
+		Util::DeviceContextStateSnapshot unrelatedSnapshot;
+		CaptureReverseContextState(other.get(), unrelatedSnapshot);
+		Require(!unrelatedSnapshot, "Observer captured an unrelated context");
+		verify();
+		Util::captureDeviceContextState = nullptr;
+		reverse.UnregisterSceneDepthView(view.get());
+		context->OMSetRenderTargets(0, nullptr, nullptr);
+	}
 }
 
 int main()
@@ -686,11 +819,12 @@ int main()
 		ID3D11DeviceContext_OMSetDepthStencilState::func = [](ID3D11DeviceContext* ctx, ID3D11DepthStencilState* state, UINT ref) { ctx->OMSetDepthStencilState(state, ref); };
 		ID3D11DeviceContext_RSSetState::func = [](ID3D11DeviceContext* ctx, ID3D11RasterizerState* state) { ctx->RSSetState(state); };
 		ID3D11DeviceContext_ClearState::func = [](ID3D11DeviceContext* ctx) { ctx->ClearState(); };
-		UseNative<ID3D11DeviceContext_RSSetViewports, 44>(context.get());
+		ID3D11DeviceContext_RSSetViewports::func = [](ID3D11DeviceContext* ctx, UINT count, const D3D11_VIEWPORT* viewports) { ctx->RSSetViewports(count, viewports); };
 		UseNative<ID3D11DeviceContext_ClearDepthStencilView, 53>(context.get());
-		UseNative<ID3D11DeviceContext_OMGetDepthStencilState, 92>(context.get());
-		UseNative<ID3D11DeviceContext_RSGetState, 94>(context.get());
-		UseNative<ID3D11DeviceContext_RSGetViewports, 95>(context.get());
+		// Native dispatch can change when the first isolated context state is activated.
+		ID3D11DeviceContext_OMGetDepthStencilState::func = [](ID3D11DeviceContext* ctx, ID3D11DepthStencilState** state, UINT* ref) { ctx->OMGetDepthStencilState(state, ref); };
+		ID3D11DeviceContext_RSGetState::func = [](ID3D11DeviceContext* ctx, ID3D11RasterizerState** state) { ctx->RSGetState(state); };
+		ID3D11DeviceContext_RSGetViewports::func = [](ID3D11DeviceContext* ctx, UINT* count, D3D11_VIEWPORT* viewports) { ctx->RSGetViewports(count, viewports); };
 		Require(PrepareRejectedDepthState(device.get()), "Rejection fallback preparation failed");
 		TestPreparationAdmission(device.get(), context.get());
 		TestPreparationTransaction(device.get(), context.get());
@@ -759,6 +893,7 @@ int main()
 		ID3D11DeviceContext_RSGetState::thunk(context.get(), logicalRaster.put());
 		Require(logicalRaster.get() == requestedRaster.get(), "Rasterizer getter lost logical ownership");
 		TestRequestedStateMappingCache(device.get(), context.get(), requestedDepth.get(), requestedRaster.get());
+		TestIsolatedContextState(device.get(), context.get(), requestedDepth.get(), requestedRaster.get());
 
 		rasterDesc.DepthBias = std::numeric_limits<INT>::min();
 		requestedRaster = nullptr;

@@ -15652,6 +15652,10 @@ bool Upscaling::PrepareVRMenuNativeFallback(ID3D11RenderTargetView* a_target, ui
 
 	// Pin a ready-to-draw fallback before suppression; recovery cannot allocate or map.
 	Util::ScopedDeviceContextState restoreState(vrMenuNativeFallbackContext.get(), vrMenuNativeFallbackState.get());
+	if (!restoreState) {
+		vrMenuNativeFallbackUnavailable = true;
+		return false;
+	}
 	auto* context = vrMenuNativeFallbackContext.get();
 	context->ClearState();
 	context->OMSetRenderTargets(1, &a_target, nullptr);
@@ -15679,15 +15683,20 @@ void Upscaling::RestoreVRMenuNativeDrawOrder(const char* a_reason)
 		CS_GPU_PASS("Upscaling::VRMenuNativeFallback");
 		const CSX::Api::SuppressAcceptedDraw suppressAcceptedDraw;
 		Util::ScopedDeviceContextState restoreState(vrMenuNativeFallbackContext.get(), vrMenuNativeFallbackState.get());
-		vrMenuParallelBridgeDrawInProgress = true;
-		auto restoreReplayFlag = ScopeExit([&]() { vrMenuParallelBridgeDrawInProgress = false; });
-		vrMenuNativeFallbackContext->Draw(3, 0);
-		vrMenuNativeFallbackContext->ClearState();
+		if (restoreState) {
+			vrMenuParallelBridgeDrawInProgress = true;
+			auto restoreReplayFlag = ScopeExit([&]() { vrMenuParallelBridgeDrawInProgress = false; });
+			vrMenuNativeFallbackContext->Draw(3, 0);
+			vrMenuNativeFallbackContext->ClearState();
+		} else {
+			vrMenuNativeFallbackUnavailable = true;
+			logger::warn("[VRMenuComposite] Discarded pending menu fallback because context-state isolation is unavailable");
+		}
 	}
 	vrMenuNativeFallbackPending = false;
 	vrMenuNativeFallbackTarget = 0;
 	InvalidateVRMenuCommittedLayer(a_reason);
-	// The original target now owns the prefix; leave all later draws in native order.
+	// Later draws remain native after the deferred layer is resolved or discarded.
 	vrMenuFrameTransaction.nativeMenuFallback = true;
 	vrMenuFrameTransaction.menuLayerRequired = false;
 	vrMenuFrameTransaction.recognizedOperations = 0;

@@ -12,7 +12,7 @@ extract_between("${source}" "void ReverseZ::RecordFailure("
     "void ReverseZ::ApplyReverseProjection(" "reverse_z_state_creation.h")
 extract_between("${source}" "\tID3D11DepthStencilState* ResolveRequestedDepthState()"
     "\n\tID3D11RenderTargetView* g_lastClearedCubeFace" "reverse_z_state_hooks.h")
-extract_between("${source}" "\tstruct ID3D11DeviceContext_ClearState"
+extract_between("${source}" "\tvoid ResetTrackedContextState()"
     "\n}\n\nvoid ReverseZ::InstallRuntimeHooks" "reverse_z_state_clear.h")
 extract_between("${source}" "\tstruct ID3D11DeviceContext_OMGetDepthStencilState"
     "\n\tthread_local bool t_inOccluderDownscale" "reverse_z_state_getters.h")

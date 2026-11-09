@@ -1,4 +1,5 @@
 #include "VirtualFunctionHook.h"
+#include "DeviceContextState.h"
 
 #include <d3d11_4.h>
 #include <detours/detours.h>
@@ -278,6 +279,13 @@ namespace
 			return { ERROR_LOCK_FAILED };
 		}
 	}
+
+	Util::VirtualHookResult CompleteContextHook(ID3D11DeviceContext* context, Util::VirtualHookResult result)
+	{
+		if (result.method != Util::VirtualHookMethod::Detour)
+			Util::DisableDeviceContextStateIsolation(context);
+		return result;
+	}
 }
 
 Util::DetourAttachResult Util::AttachDetour(void** a_original, void* a_hook)
@@ -313,7 +321,7 @@ Util::VirtualHookResult Util::InstallVirtualFunctionHook(ID3D11Device* a_object,
 
 Util::VirtualHookResult Util::InstallVirtualFunctionHook(ID3D11DeviceContext* a_object, std::size_t a_slot, void** a_original, void* a_hook)
 {
-	return InstallGraphicsHook(a_object, a_slot, kContextSlots, ContextSlots, a_original, a_hook);
+	return CompleteContextHook(a_object, InstallGraphicsHook(a_object, a_slot, kContextSlots, ContextSlots, a_original, a_hook));
 }
 
 Util::VirtualHookResult Util::InstallVirtualFunctionHook(IDXGISwapChain* a_object, std::size_t a_slot, void** a_original, void* a_hook)

@@ -956,13 +956,20 @@ struct Fixture {
     ID3D11DeviceContext context;
     bool engineReady = false, uploadReady = false, active = false;
     bool throwOnPrepare = false, callbackFailed = false, dispatchChanged = false;
-    unsigned hookInstallCalls = 0;
+    unsigned hookInstallCalls = 0, isolationRegistrations = 0;
     unsigned engineCreates = 0, preparations = 0, setups = 0;
     unsigned entered = 0, checkpoints = 0, failedCheckpoints = 0;
 } *fixture;
 std::set<std::pair<ID3D11DeviceContext*, unsigned>> installedSlots;
+namespace Util {
+void RegisterDeviceContextStateForHooks(ID3D11DeviceContext* context) {
+    Require(context == &fixture->context, "Isolation registered the wrong context");
+    ++fixture->isolationRegistrations;
+}
+}
 namespace stl {
 template<unsigned Slot, class> void detour_vfunc(ID3D11DeviceContext* context) {
+    Require(fixture->isolationRegistrations == 1, "Isolation capability was not registered before hooks");
     ++fixture->hookInstallCalls;
     Require(Slot != 12 || !fixture->dispatchChanged,
         "Native draw dispatch changed after initial hook installation");
@@ -1077,6 +1084,7 @@ int main() {
                 !g_renderTargetRecreationMutex.owned, "Failed checkpoint published resources or retained the lock");
             Require(installedSlots.size() == previousSlots + 4, "Recreation reinstalled context hooks");
             Require(fixture->hookInstallCalls == 4, "Context hooks were installed more than once");
+            Require(fixture->isolationRegistrations == 1, "Recreation reset the isolation capability");
         }
         std::cout << "SE/AE/VR cold creation, warm recreation, Init3D hook reuse and failure ownership passed\n";
     } catch (const std::exception& error) {

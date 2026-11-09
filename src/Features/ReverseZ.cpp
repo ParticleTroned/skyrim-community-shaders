@@ -6,6 +6,7 @@
 #include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/DepthConvention.h"
+#include "Utils/DeviceContextState.h"
 #include "Utils/LazyShader.h"
 #include "Utils/NativeDepthShader.h"
 #include "Utils/UI.h"
@@ -1213,6 +1214,85 @@ namespace
 			ID3D11DeviceContext_VSSetShader::func(context, g_reverseTargetBound ? g_hiddenAreaMeshVS.get() : g_boundVertexShader, nullptr, 0);
 	}
 
+	void ResetTrackedContextState()
+	{
+		g_requestedState = nullptr;
+		g_cachedReversedState = nullptr;
+		g_boundState = nullptr;
+		g_requestedStencilRef = 0;
+		g_requestedRasterState = nullptr;
+		g_cachedReversedRasterState = nullptr;
+		g_boundRasterState = nullptr;
+		g_requestedViewportCount = 0;
+		g_reverseTargetBound = false;
+		g_nearMaskBound = false;
+		g_lastClearedCubeFace = nullptr;
+		g_boundVertexShader = nullptr;
+	}
+
+	struct ReverseContextStateSnapshot
+	{
+		explicit ReverseContextStateSnapshot(ID3D11DeviceContext* a_context) noexcept : context(a_context)
+		{
+			vertexShader.copy_from(g_boundVertexShader);
+			std::copy_n(g_requestedViewports, viewportCount, requestedViewports.begin());
+			std::copy_n(g_mappedViewports, viewportCount, mappedViewports.begin());
+			// Isolated overlay states have no scene-depth ownership.
+			ResetTrackedContextState();
+		}
+
+		~ReverseContextStateSnapshot() noexcept
+		{
+			if (context != globals::d3d::context)
+				return;
+			g_requestedState = std::move(requestedState);
+			g_cachedReversedState = cachedReversedState;
+			g_boundState = boundState;
+			g_requestedStencilRef = stencilRef;
+			g_requestedRasterState = std::move(requestedRasterState);
+			g_cachedReversedRasterState = cachedReversedRasterState;
+			g_boundRasterState = boundRasterState;
+			g_requestedViewportCount = viewportCount;
+			std::copy_n(requestedViewports.begin(), viewportCount, g_requestedViewports);
+			std::copy_n(mappedViewports.begin(), viewportCount, g_mappedViewports);
+			g_reverseTargetBound = reverseTargetBound;
+			g_projectionReversed = projectionReversed;
+			g_nearMaskBound = nearMaskBound;
+			g_lastClearedCubeFace = lastClearedCubeFace;
+			g_boundVertexShader = vertexShader.get();
+			if (g_renderingRejected.load(std::memory_order_relaxed) && reverseTargetBound)
+				ReapplyMappedStates(context);
+		}
+
+		ID3D11DeviceContext* context;
+		winrt::com_ptr<ID3D11DepthStencilState> requestedState = g_requestedState;
+		ID3D11DepthStencilState* cachedReversedState = g_cachedReversedState;
+		ID3D11DepthStencilState* boundState = g_boundState;
+		UINT stencilRef = g_requestedStencilRef;
+		winrt::com_ptr<ID3D11RasterizerState> requestedRasterState = g_requestedRasterState;
+		ID3D11RasterizerState* cachedReversedRasterState = g_cachedReversedRasterState;
+		ID3D11RasterizerState* boundRasterState = g_boundRasterState;
+		UINT viewportCount = g_requestedViewportCount;
+		std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> requestedViewports{}, mappedViewports{};
+		bool reverseTargetBound = g_reverseTargetBound;
+		bool projectionReversed = g_projectionReversed;
+		bool nearMaskBound = g_nearMaskBound;
+		ID3D11RenderTargetView* lastClearedCubeFace = g_lastClearedCubeFace;
+		winrt::com_ptr<ID3D11VertexShader> vertexShader;
+	};
+
+	void CaptureReverseContextState(ID3D11DeviceContext* context, Util::DeviceContextStateSnapshot& snapshot) noexcept
+	{
+		if (!context || !globals::d3d::context)
+			return;
+		if (context != globals::d3d::context) {
+			winrt::com_ptr<ID3D11DeviceContext> canonical;
+			if (FAILED(context->QueryInterface(__uuidof(ID3D11DeviceContext), canonical.put_void())) || canonical.get() != globals::d3d::context)
+				return;
+		}
+		snapshot.Emplace<ReverseContextStateSnapshot>(globals::d3d::context);
+	}
+
 	struct ID3D11DeviceContext_ClearState
 	{
 		static void thunk(ID3D11DeviceContext* context)
@@ -1220,18 +1300,7 @@ namespace
 			func(context);
 			if (context != globals::d3d::context)
 				return;
-			g_requestedState = nullptr;
-			g_cachedReversedState = nullptr;
-			g_boundState = nullptr;
-			g_requestedStencilRef = 0;
-			g_requestedRasterState = nullptr;
-			g_cachedReversedRasterState = nullptr;
-			g_boundRasterState = nullptr;
-			g_requestedViewportCount = 0;
-			g_reverseTargetBound = false;
-			g_nearMaskBound = false;
-			g_lastClearedCubeFace = nullptr;
-			g_boundVertexShader = nullptr;
+			ResetTrackedContextState();
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1254,6 +1323,7 @@ void ReverseZ::InstallRuntimeHooks()
 	context->RSGetViewports(&g_requestedViewportCount, g_requestedViewports);
 	std::copy_n(g_requestedViewports, g_requestedViewportCount, g_mappedViewports);
 	runtimeHooksInstalled = true;
+	Util::captureDeviceContextState = CaptureReverseContextState;
 
 	stl::detour_vfunc<33, ID3D11DeviceContext_OMSetRenderTargets>(context);
 	stl::detour_vfunc<34, ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews>(context);

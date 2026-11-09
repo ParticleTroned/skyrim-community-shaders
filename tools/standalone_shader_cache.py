@@ -58,11 +58,12 @@ def compile_digest(request: dict, global_state: str) -> int:
     return combine_hashes(macros, hash_string(inputs))
 
 
-def release_requests(runtime: str, features: dict[str, bool]) -> list[dict]:
+def release_requests(runtime: str, features: dict[str, bool], *, reverse_z_enabled: bool = False) -> list[dict]:
     """Cover shipped feature startup paths and bounded common quality variants.
 
     Other settings, custom defines and developer shaders retain runtime
     compile-on-miss behavior. No permutations are added to the live renderer.
+    Depth macros follow active depth state, separately from feature loading.
     """
     if runtime not in {"SE", "VR"}:
         raise ValueError(f"invalid runtime: {runtime}")
@@ -75,7 +76,7 @@ def release_requests(runtime: str, features: dict[str, bool]) -> list[dict]:
         if runtime == "VR":
             macros.append(("VR", ""))
         macros.extend(((STAGES[profile][0], ""), ("WINPC", ""), ("DX11", "")))
-        if features.get("ReverseZ", False):
+        if reverse_z_enabled and features.get("ReverseZ", False):
             macros.append(("REVERSE_Z", "1"))
         requests.append({"source": validate_source(source), "profile": profile, "entry": entry, "defines": macros})
 
@@ -192,11 +193,11 @@ def release_requests(runtime: str, features: dict[str, bool]) -> list[dict]:
     return requests
 
 
-def resolve_tasks(runtime: str, features: dict[str, bool], global_state: str) -> dict[str, dict]:
+def resolve_tasks(runtime: str, features: dict[str, bool], global_state: str, *, reverse_z_enabled: bool = False) -> dict[str, dict]:
     from hlslkit.shader_digest import to_hex
 
     result = {}
-    for request in release_requests(runtime, features):
+    for request in release_requests(runtime, features, reverse_z_enabled=reverse_z_enabled):
         digest = compile_digest(request, global_state)
         relative = f"Standalone/{to_hex(digest)}.cso"
         if relative in result:

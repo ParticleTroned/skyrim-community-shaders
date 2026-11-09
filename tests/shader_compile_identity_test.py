@@ -57,8 +57,11 @@ class ShaderCompileIdentityTests(unittest.TestCase):
 
     def test_standalone_depth_conventions_have_disjoint_cache_keys(self) -> None:
         for runtime in ("SE", "VR"):
-            standard = standalone.resolve_tasks(runtime, {"ReverseZ": False}, "test-abi")
-            reversed_tasks = standalone.resolve_tasks(runtime, {"ReverseZ": True}, "test-abi")
+            standard = standalone.resolve_tasks(runtime, {"ReverseZ": True}, "test-abi")
+            reversed_tasks = standalone.resolve_tasks(runtime, {"ReverseZ": True}, "test-abi", reverse_z_enabled=True)
+            unloaded = standalone.resolve_tasks(runtime, {"ReverseZ": False}, "test-abi")
+            self.assertEqual(unloaded, standalone.resolve_tasks(runtime, {"ReverseZ": False}, "test-abi", reverse_z_enabled=True))
+            self.assertEqual({key: task for key, task in standard.items() if not task["source"].startswith("ReverseZ/")}, unloaded)
             self.assertTrue(standard.keys().isdisjoint(reversed_tasks))
             self.assertTrue(all(("REVERSE_Z", "1") in task["defines"] for task in reversed_tasks.values()))
             self.assertFalse(any(name == "REVERSE_Z" for task in standard.values() for name, _ in task["defines"]))
@@ -77,7 +80,7 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                     filtered = BUILDER.filter_profile_defines(
                         REPO / ".github/configs" / name,
                         Path(temporary) / f"{runtime}-{enabled}.yaml", yaml, profile,
-                        feature_states={"ReverseZ": enabled},
+                        feature_states={"ReverseZ": True},
                         reverse_z_enabled=enabled,
                     )
                     for source, _, _, defines in parse_shader_configs(str(filtered)):

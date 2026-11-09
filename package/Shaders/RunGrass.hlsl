@@ -615,10 +615,10 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 
 	const bool billboard = GRASS_BILLBOARD;
+	const bool pbrTexture = billboard && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::PBRGrass);
 	float4 baseColor;
 	if (billboard) {
 		bool complex;
-		const bool pbrTexture = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::PBRGrass;
 		baseColor = SampleGrassLightingBaseColor(input.TexCoord.xy, complex, pbrTexture);
 		if (pbrTexture)
 			baseColor.xyz = Color::PBRDiffuse(baseColor.xyz);
@@ -784,7 +784,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 #			endif
 		SnowCover::GrassSnowState snow = SnowCover::GetGrassSnowState(normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, false, eyeIndex, TexBaseSampler);
 		albedo = ApplyGrassSnowMeltDarkening(albedo, snow.footprint);
-		SnowCover::ApplyGrassSnow(albedo, snow, false, false);
+		SnowCover::ApplyGrassSnow(albedo, snow, pbrTexture, billboard);
 	}
 #		endif
 

@@ -237,11 +237,14 @@ PS_OUTPUT VerifyLegacyColor(PS_INPUT input, bool frontFace : SV_IsFrontFace) {
 	}
 
 #include "grass_alpha_gpu.h"
+#include "grass_snow_gpu.h"
 }
 
 int main()
 {
 	try {
+		const auto snowCases = CheckGrassSnowColor();
+		std::cout << snowCases << " WARP grass snow color cases passed" << std::endl;
 		const auto alphaCases = CheckGrassAlphaCoverage();
 		std::cout << alphaCases << " WARP alpha-coverage cases passed" << std::endl;
 		const auto retainedVariants = CheckRetainedShaderPairs();

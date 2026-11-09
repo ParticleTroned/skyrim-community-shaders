@@ -133,6 +133,13 @@ namespace
 		const auto stepped = run(skipped);
 		Require(std::abs(afterWait[2][0] - stepped[2][0]) < 0.001f && std::abs(afterWait[2][1] - stepped[2][1]) < 0.001f,
 			"Waiting and ordinary game-time progression disagree on late meltwater");
+		constants.SetMember("SharedData::snowCoverSettings", "SeasonalAltitude", 1.0f);
+		values = run(skipped);
+		Require(values[2][0] == 0 && values[2][1] == 0, "Complete snow coverage exposed historical meltwater");
+		constants.SetMember("SharedData::snowCoverSettings", "SeasonalAltitude", 0.5f);
+		values = run(skipped);
+		Require(std::abs(values[2][0] - stepped[2][0] * 0.5f) < 0.001f && std::abs(values[2][1] - stepped[2][1] * 0.5f) < 0.001f,
+			"Partial snow coverage discarded or failed to attenuate historical meltwater");
 
 		data.count = 2;
 		data.samples[0].state = { 0, 500, 1, 2 };

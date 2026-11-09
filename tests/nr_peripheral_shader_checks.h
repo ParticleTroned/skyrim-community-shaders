@@ -257,6 +257,153 @@ void CheckPeripheralStereoRounding(ID3D11Device* device, ID3D11DeviceContext* co
 	}
 }
 
+void CheckFaceDetailFastPaths(ID3D11Device* device, ID3D11DeviceContext* context,
+	const std::array<NeuralRendering::RendererApplyArgs, 2>& sourceArgs,
+	const Texture& color, const Texture& depth, const Texture& motion)
+{
+	using namespace NeuralRendering;
+	const auto sourceColor = color.Read<Pixel>(device, context);
+	const auto sourceDepth = depth.Read<float>(device, context);
+	const auto sourceMotion = motion.Read<Motion>(device, context);
+	using Bundle = UpscalingTextures::FoveatedInputBundle;
+	std::array<Bundle, 2> borrowed;
+	std::array<Bundle::Sources, 2> sources;
+	std::array<Bundle::Views, 2> views;
+	auto borrowedArgs = sourceArgs;
+	for (std::size_t eye = 0; eye < borrowed.size(); ++eye) {
+		Texture producerColor(device, color.size, DXGI_FORMAT_R32G32B32A32_FLOAT, sourceColor);
+		Texture producerDepth(device, depth.size, DXGI_FORMAT_R32_FLOAT, sourceDepth);
+		Texture producerMotion(device, motion.size, DXGI_FORMAT_R32G32_FLOAT, sourceMotion);
+		Texture reactive(device, color.size, DXGI_FORMAT_R32_FLOAT, std::vector(sourceDepth.size(), 0.0f));
+		Texture transparency(device, color.size, DXGI_FORMAT_R32_FLOAT, std::vector(sourceDepth.size(), 0.0f));
+		sources[eye] = { producerColor.texture.Get(), producerDepth.texture.Get(), producerMotion.texture.Get(),
+			reactive.texture.Get(), transparency.texture.Get() };
+		views[eye] = { producerColor.srv.Get(), producerDepth.srv.Get(), producerMotion.srv.Get(),
+			reactive.srv.Get(), transparency.srv.Get() };
+		auto& args = borrowedArgs[eye];
+		const Bundle::Stamp stamp{ .content = 1, .neuralGeneration = 2, .depthGeneration = 3, .frame = args.sourceWorldFrame, .sourceFrame = args.sourceWorldFrame, .vendorGeneration = 5, .eye = static_cast<std::uint32_t>(eye), .reversedDepth = args.depthConvention == Depth::Convention::Reversed };
+		Require(borrowed[eye].Capture(device, context, sources[eye], views[eye], color.size[0], color.size[1], stamp),
+			"Face fast-path inputs could not be borrowed");
+		args.colorInput = sources[eye][0];
+		args.depthGuide = sources[eye][1];
+		args.depthGuideSRV = borrowed[eye].views[1].get();
+		args.motionVectors = sources[eye][2];
+		args.frameId = stamp.frame;
+		args.generation = stamp.neuralGeneration;
+		args.depthGeneration = stamp.depthGeneration;
+	}
+	const auto matches = [&](std::size_t eye, const Bundle::Stamp& stamp) {
+		return borrowed[eye].Matches(device, context, sources[eye], views[eye], stamp);
+	};
+	const auto retainedTexture = [&](std::size_t eye, std::size_t role) {
+		Color::Texture retained;
+		Check(sources[eye][role]->QueryInterface(IID_PPV_ARGS(&retained.resource)));
+		retained.srv = borrowed[eye].views[role].get();
+		return Texture(retained, color.size);
+	};
+	for (std::size_t eye = 0; eye < borrowed.size(); ++eye)
+		Require(matches(eye, borrowed[eye].stamp), "Borrowed face inputs did not survive producer release");
+	enum class Faces
+	{
+		Both,
+		None,
+		Distant,
+		OneEye,
+		Stale,
+		CompressionOff
+	};
+	ModelResolution optimized, generic;
+	for (const auto faces : { Faces::Both, Faces::None, Faces::Distant, Faces::OneEye, Faces::Stale, Faces::CompressionOff, Faces::Both }) {
+		auto args = borrowedArgs;
+		for (auto& eye : args) {
+			eye.modelOutputSelection.reset();
+			eye.computeSubrect = { 0, 0, eye.outputWidth, eye.outputHeight };
+			if (faces == Faces::None)
+				eye.faceDetailRegions.count = 0;
+			if (faces == Faces::Distant)
+				eye.faceDetailRegions.proximityWeights = {};
+			if (faces == Faces::Stale)
+				eye.faceDetailRegions.current = false;
+			if (faces == Faces::CompressionOff) {
+				eye.peripheralCompressionPercent = 0;
+				eye.modelResolutionPercent = 50;
+			}
+		}
+		if (faces == Faces::OneEye)
+			args[1].faceDetailRegions.proximityWeights = {};
+		HRESULT result = S_OK;
+		Require(optimized.PreparePeripheralCompression(args, false, result), "Face fast-path planning failed");
+		for (std::size_t eye = 0; eye < args.size(); ++eye) {
+			const bool active = faces == Faces::Both || (faces == Faces::OneEye && eye == 0);
+			Require(bool(args[eye].peripheralCompression.mapping.faceDetail.enabled) == active,
+				"Face fast-path fixture did not produce the expected effective mapping");
+		}
+		ModelResolution::Batch fastBatch, genericBatch;
+		Require(optimized.Prepare(args, fastBatch, result), "Face fast-path preparation failed");
+		Require(bool(fastBatch.sharedPreparationShader) == (faces != Faces::Both),
+			"Shared preparation followed configured face protection instead of the effective eye mapping");
+		AdapterCompiler::sharedPreparationFailure = 1;
+		const bool prepared = generic.Prepare(args, genericBatch, result);
+		AdapterCompiler::sharedPreparationFailure = 0;
+		Require(prepared && !genericBatch.sharedPreparationShader, "Generic face reference preparation failed");
+		for (std::size_t eye = 0; eye < args.size(); ++eye) {
+			const auto& projected = fastBatch.arguments[eye];
+			const Size model{ projected.colorWidth, projected.colorHeight };
+			const Size guides{ projected.guideWidth, projected.guideHeight };
+			const auto& fast = fastBatch.targets[eye];
+			const auto& reference = genericBatch.targets[eye];
+			Require(Texture(fast.color, model).Read<Pixel>(device, context) == Texture(reference.color, model).Read<Pixel>(device, context) &&
+						Texture(fast.depth, guides).Read<float>(device, context) == Texture(reference.depth, guides).Read<float>(device, context) &&
+						Texture(fast.motion, guides).Read<Motion>(device, context) == Texture(reference.motion, guides).Read<Motion>(device, context),
+				"Effective face fast paths changed color, depth or motion preparation");
+			Require(Util::SameIdentity(fastBatch.sources[eye].color.texture.Get(), args[eye].colorInput) &&
+						Util::SameIdentity(fastBatch.sources[eye].depth.texture.Get(), args[eye].depthGuide) &&
+						Util::SameIdentity(fastBatch.sources[eye].motion.texture.Get(), args[eye].motionVectors) &&
+						!Util::SameIdentity(fast.color.resource.Get(), args[eye].colorInput) &&
+						!Util::SameIdentity(fast.depth.resource.Get(), args[eye].depthGuide) &&
+						!Util::SameIdentity(fast.motion.resource.Get(), args[eye].motionVectors),
+				"Face preparation did not preserve borrowed source identity and separate model targets");
+			context->CopyResource(fast.output.resource.Get(), fast.color.resource.Get());
+		}
+		auto changed = args;
+		for (auto& eye : changed) eye.faceDetailProtectionPercent = 0;
+		Require(!optimized.Reconstruct(changed, fastBatch, result) && result == E_INVALIDARG,
+			"Changed face configuration reached a retained preparation");
+		for (std::size_t eye = 0; eye < borrowed.size(); ++eye) {
+			const auto& stamp = borrowed[eye].stamp;
+			for (std::size_t role = 0; role < Bundle::kCount; ++role) {
+				auto changedSources = sources[eye];
+				changedSources[role] = sources[1 - eye][role];
+				Require(!borrowed[eye].Matches(device, context, changedSources, views[eye], stamp) && matches(eye, stamp),
+					"Replaced face source passed retained producer validation");
+				auto changedViews = views[eye];
+				changedViews[role] = views[1 - eye][role];
+				Require(!borrowed[eye].Matches(device, context, sources[eye], changedViews, stamp) && matches(eye, stamp),
+					"Replaced face view passed retained producer validation");
+			}
+			for (const auto field : { &Bundle::Stamp::content, &Bundle::Stamp::neuralGeneration, &Bundle::Stamp::depthGeneration }) {
+				auto stale = stamp;
+				++(stale.*field);
+				Require(!matches(eye, stale) && matches(eye, stamp), "Changed face producer epoch passed resolve validation");
+			}
+			for (const auto field : { &Bundle::Stamp::frame, &Bundle::Stamp::sourceFrame, &Bundle::Stamp::vendorGeneration, &Bundle::Stamp::eye }) {
+				auto stale = stamp;
+				++(stale.*field);
+				Require(!matches(eye, stale) && matches(eye, stamp), "Changed face producer frame or contract passed resolve validation");
+			}
+			auto stale = stamp;
+			stale.reversedDepth = !stale.reversedDepth;
+			Require(!matches(eye, stale) && matches(eye, stamp), "Changed face producer depth convention passed resolve validation");
+		}
+		Require(optimized.Reconstruct(args, fastBatch, result), "Face fast-path reconstruction rejected its staged inputs");
+		for (std::size_t eye = 0; eye < borrowed.size(); ++eye)
+			Require(retainedTexture(eye, 0).Read<Pixel>(device, context) == sourceColor &&
+						retainedTexture(eye, 1).Read<float>(device, context) == sourceDepth &&
+						retainedTexture(eye, 2).Read<Motion>(device, context) == sourceMotion,
+				"Face preparation or reconstruction overwrote borrowed sources");
+	}
+}
+
 void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, bool mixedGuides, bool shaped = false, unsigned compression = 20, bool sceneCategories = false, bool directScene = false, unsigned faceDetailPercent = 0
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	,
@@ -506,6 +653,8 @@ void CheckPeripheralAdapter(ID3D11Device* device, ID3D11DeviceContext* context, 
 							!stale[0].peripheralCompression.mapping.faceDetail.enabled && !stale[1].peripheralCompression.mapping.faceDetail.enabled,
 					"Unmatched or invalid source frames activated face protection");
 			}
+			if (faceDetailPercent == 100 && percent == 100 && !mixedGuides && !shaped && !sceneCategories)
+				CheckFaceDetailFastPaths(device, context, args, input, depth, motion);
 		}
 		if (directScene) {
 			for (bool authored : { false, true }) {

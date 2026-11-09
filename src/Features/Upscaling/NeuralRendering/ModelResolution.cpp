@@ -1627,7 +1627,8 @@ namespace NeuralRendering
 				work->constants.packedCount = geometry->packedCrops.count;
 				work->sharedPreparation = input.renderingMode == RenderingMode::ReducedResolution &&
 				                                  !input.characterVisualIsolation && !input.actorSelection && !input.providerBlending &&
-				                                  !input.packedCropsEnabled && !geometry->packedCrops.count && input.faceDetailProtectionPercent == 0 &&
+				                                  !input.packedCropsEnabled && !geometry->packedCrops.count &&
+				                                  (!peripheral || !input.peripheralCompression.mapping.faceDetail.enabled) &&
 				                                  input.colorWidth == input.guideWidth && input.colorHeight == input.guideHeight &&
 				                                  geometry->modelSize == geometry->modelGuideSize &&
 				                                  source == ComputeSubrect{ 0, 0, sourceSize.width, sourceSize.height } &&

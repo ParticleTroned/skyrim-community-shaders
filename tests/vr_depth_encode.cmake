@@ -21,8 +21,9 @@ add_custom_command(
         tests/extract_source_region.cmake
     VERBATIM
 )
+add_custom_target(vr_depth_encode_test_headers DEPENDS ${_depth_encode_headers})
 add_d3d_shader_test(vr_depth_encode_shader_test VRDepthEncodeShader tests/vr_depth_encode_shader_test.cpp)
-target_sources(vr_depth_encode_shader_test PRIVATE ${_depth_encode_headers})
+add_dependencies(vr_depth_encode_shader_test vr_depth_encode_test_headers)
 target_include_directories(
     vr_depth_encode_shader_test
     PRIVATE "${_depth_encode_test_dir}"

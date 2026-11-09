@@ -45381,8 +45381,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 		!NeuralRendering::RunsBeforeDlss(GetNeuralRenderingArrangement());
 	const bool validateStagedResources =
 		neuralCenterPhase == NeuralCenterPhase::Resolve;
+	// Face redistribution reads these immutable sources into separate model targets.
 	const bool borrowEligible = neuralRenderingRequested &&
-	                            settings.neuralRenderingFaceDetailProtectionPercent == 0 &&
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	                            settings.neuralReconstructionTuning == NeuralRendering::ReconstructionTuning{} &&
 #endif

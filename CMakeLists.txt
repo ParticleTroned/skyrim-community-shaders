@@ -3058,6 +3058,7 @@ if(BUILD_CONTROLLER_TESTS)
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_depth.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/vanilla_ssao.cmake")
     add_d3d_shader_test(
         sss_skin_color_test SSSSkinColor tests/sss_skin_color_test.cpp
     )

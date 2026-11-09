@@ -86,6 +86,8 @@ public:
 	bool PrewarmShaders(Util::ShaderCompileTiming* a_timing = nullptr);
 
 	void DrawSSGI();
+	/** @brief Applies native SSAO compatibility before world rendering, even when this feature is unloaded. */
+	void SyncVanillaSSAO();
 	void UpdateSB();
 
 	//////////////////////////////////////////////////////////////////////////////////

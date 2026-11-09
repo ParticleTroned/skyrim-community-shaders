@@ -806,6 +806,10 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	state->currentShader = shader;
 	state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
 	state->deferredPixelShaderMissing = false;
+	if (shader->shaderType.get() == RE::BSShader::Type::ImageSpace &&
+		std::strcmp(shader->fxpFilename, "ISApplyVolumetricLighting") == 0 &&
+		globals::features::volumetricLighting.IsDepthDispatchRejected())
+		return false;
 
 	state->currentVertexDescriptor = vertexDescriptor;
 	state->currentPixelDescriptor = pixelDescriptor;
@@ -2336,18 +2340,18 @@ namespace Hooks
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		const char* GetVolumetricLightingProfileName(RE::BSComputeShader* shader)
+		const char* GetVolumetricLightingProfileName(const char* name)
 		{
-			if (!shader)
+			if (!name)
 				return nullptr;
 
-			if (shader->name == "ISVolumetricLightingGenerateCS"sv)
+			if (name == "ISVolumetricLightingGenerateCS"sv)
 				return "VolumetricLighting::Generate";
-			if (shader->name == "ISVolumetricLightingRaymarchCS"sv)
+			if (name == "ISVolumetricLightingRaymarchCS"sv)
 				return "VolumetricLighting::Raymarch";
-			if (shader->name == "ISVolumetricLightingBlurHCS"sv)
+			if (name == "ISVolumetricLightingBlurHCS"sv)
 				return "VolumetricLighting::BlurH";
-			if (shader->name == "ISVolumetricLightingBlurVCS"sv)
+			if (name == "ISVolumetricLightingBlurVCS"sv)
 				return "VolumetricLighting::BlurV";
 
 			return nullptr;
@@ -2360,7 +2364,18 @@ namespace Hooks
 				auto state = globals::state;
 				auto shaderCache = globals::shaderCache;
 				auto& vl = globals::features::volumetricLighting;
+				const char* computeName = CurrentlyDispatchedComputeShader ? CurrentlyDispatchedComputeShader->name :
+				                          CurrentlyDispatchedShader        ? CurrentlyDispatchedShader->fxpFilename :
+				                                                             nullptr;
+				const char* volumetricProfile = GetVolumetricLightingProfileName(computeName);
+				const bool reverseVolumetricRequired = globals::features::reverseZ.IsActive() && volumetricProfile;
+				const bool beginsGeneration = computeName && computeName == "ISVolumetricLightingGenerateCS"sv;
+				if (reverseVolumetricRequired && (!vl.loaded || (vl.IsDepthDispatchRejected() && !beginsGeneration))) {
+					vl.AdmitDepthDispatch(false, beginsGeneration);
+					return;
+				}
 				const char* profileName = nullptr;
+				bool replacementSelected = false;
 				bool blurBufferBound = false;
 				winrt::com_ptr<ID3D11Buffer> previousBlurBuffer;
 				winrt::com_ptr<ID3D11DeviceContext1> blurContext1;
@@ -2376,34 +2391,34 @@ namespace Hooks
 					}
 				});
 
-				if (state->ShaderEnabled(RE::BSShader::Type::ImageSpace)) {
+				if (state && shaderCache && state->ShaderEnabled(RE::BSShader::Type::ImageSpace)) {
 					RE::BSImagespaceShader* isShader = CurrentlyDispatchedShader;
 					uint32_t techniqueId = CurrentComputeShaderTechniqueId;
 					bool horizontalBlur = false;
 					bool verticalBlur = false;
-					if (vl.loaded && CurrentlyDispatchedComputeShader) {
-						profileName = GetVolumetricLightingProfileName(CurrentlyDispatchedComputeShader);
-
-						if (CurrentlyDispatchedShader == nullptr) {
-							techniqueId = 0;
-							if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingGenerateCS"sv) {
+					if (vl.loaded && volumetricProfile) {
+						profileName = volumetricProfile;
+						techniqueId = 0;
+						horizontalBlur = computeName == "ISVolumetricLightingBlurHCS"sv;
+						verticalBlur = computeName == "ISVolumetricLightingBlurVCS"sv;
+						if ((horizontalBlur || verticalBlur) && (!vl.HasValidBlurDimensions() || !globals::d3d::context)) {
+							isShader = nullptr;
+						} else if (CurrentlyDispatchedComputeShader) {
+							if (beginsGeneration) {
 								isShader = vl.GetOrCreateGenerateCS(CurrentlyDispatchedComputeShader);
-							} else if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingRaymarchCS"sv) {
+							} else if (computeName == "ISVolumetricLightingRaymarchCS"sv) {
 								isShader = vl.GetOrCreateRaymarchCS(CurrentlyDispatchedComputeShader);
+							} else if (horizontalBlur) {
+								isShader = vl.GetOrCreateBlurHCS(CurrentlyDispatchedComputeShader);
+							} else if (verticalBlur) {
+								isShader = vl.GetOrCreateBlurVCS(CurrentlyDispatchedComputeShader);
 							}
-						} else if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingBlurHCS"sv) {
-							techniqueId = 0;
-							horizontalBlur = true;
-							isShader = vl.HasValidBlurDimensions() ? vl.GetOrCreateBlurHCS(CurrentlyDispatchedComputeShader) : nullptr;
-						} else if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingBlurVCS"sv) {
-							techniqueId = 0;
-							verticalBlur = true;
-							isShader = vl.HasValidBlurDimensions() ? vl.GetOrCreateBlurVCS(CurrentlyDispatchedComputeShader) : nullptr;
 						}
 					}
 					if (isShader != nullptr) {
 						if (auto* computeShader = shaderCache->GetComputeShader(*isShader, techniqueId)) {
 							shader = computeShader;
+							replacementSelected = true;
 							// Native fallback must keep its original dispatch and constant-buffer layout.
 							if (horizontalBlur || verticalBlur) {
 								auto* context = globals::d3d::context;
@@ -2421,6 +2436,8 @@ namespace Hooks
 						}
 					}
 				}
+				if (reverseVolumetricRequired && !vl.AdmitDepthDispatch(replacementSelected, beginsGeneration))
+					return;
 
 				if (profileName) {
 					CS_GPU_PASS_DYNAMIC(profileName);

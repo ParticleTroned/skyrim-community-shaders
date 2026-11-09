@@ -4,8 +4,10 @@
 #include "VolumetricLightingRuntime.h"
 #include "VolumetricLightingTuning.h"
 
+#include <array>
 #include <atomic>
 #include <mutex>
+#include <optional>
 
 struct VolumetricLighting : Feature
 {
@@ -115,6 +117,10 @@ public:
 	RE::BSImagespaceShader* GetOrCreateRaymarchCS(RE::BSComputeShader* computeShader);
 	RE::BSImagespaceShader* GetOrCreateBlurHCS(RE::BSComputeShader* computeShader);
 	RE::BSImagespaceShader* GetOrCreateBlurVCS(RE::BSComputeShader* computeShader);
+	/** Require compatible Reverse Z passes and recover only at a fresh density generation. */
+	bool AdmitDepthDispatch(bool replacementAvailable, bool beginsGeneration);
+	/** Reject application of a volume whose current generation could not complete. */
+	bool IsDepthDispatchRejected() const;
 	/** @brief Whether the current render area and camera are safe for replacement blur dispatch. */
 	bool HasValidBlurDimensions() const { return blurDimensionsValid; }
 	/** @brief Bind active blur bounds and camera data at b1 after selecting a replacement shader. */
@@ -159,7 +165,13 @@ private:
 	bool IsRuntimeTransitionBlocked() const;
 	void ApplyRuntimeTarget(const VolumetricLightingRuntime::Target& target, const VolumetricLightingRuntime::Changes& changes);
 	void UpdateBlurDimensions();
-	void ClearVolumetricLightingTargets();
+	void ClearVolumetricLightingTargets(bool reuseClearedTargets = false);
+	std::optional<uint32_t> depthTargetsClearedFrame;
+	uint64_t depthTargetsClearedGeneration = 0;
+	std::array<ID3D11View*, 14> depthClearedViews{};
+	bool depthDispatchRejected = false;
+	bool depthDispatchWarningLogged = false;
+	uint32_t depthDispatchRejectedFrame = 0;
 	static int32_t ClampQualityIndex(int32_t quality);
 	static TextureSize ClampTextureSize(const TextureSize& size);
 

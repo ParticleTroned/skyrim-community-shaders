@@ -11,6 +11,7 @@
 
 #include "InteriorSun.h"
 #include "LocationContext.h"
+#include "ReverseZ.h"
 #include "SkySync.h"
 #include "State.h"
 #include "Utils/RendererContextAccess.h"
@@ -583,7 +584,38 @@ void VolumetricLighting::ApplyRuntimeTarget(const VolumetricLightingRuntime::Tar
 		ClearVolumetricLightingTargets();
 }
 
-void VolumetricLighting::ClearVolumetricLightingTargets()
+bool VolumetricLighting::IsDepthDispatchRejected() const
+{
+	return globals::features::reverseZ.IsActive() && depthDispatchRejected;
+}
+
+bool VolumetricLighting::AdmitDepthDispatch(bool replacementAvailable, bool beginsGeneration)
+{
+	if (!globals::features::reverseZ.IsActive())
+		return true;
+
+	const auto* state = globals::state;
+	const uint32_t frame = state ? state->frameCount : 0;
+	if (replacementAvailable && state &&
+		(!depthDispatchRejected || (beginsGeneration && frame != depthDispatchRejectedFrame))) {
+		if (depthDispatchRejected)
+			ClearVolumetricLightingTargets();
+		depthDispatchRejected = false;
+		return true;
+	}
+
+	ClearVolumetricLightingTargets(depthDispatchRejected && !beginsGeneration);
+	if (!depthDispatchRejected || beginsGeneration)
+		depthDispatchRejectedFrame = frame;
+	depthDispatchRejected = true;
+	if (!depthDispatchWarningLogged) {
+		logger::warn("Reverse Z volumetric lighting suppressed: a compatible compute pass is unavailable; retrying on the next density generation");
+		depthDispatchWarningLogged = true;
+	}
+	return false;
+}
+
+void VolumetricLighting::ClearVolumetricLightingTargets(bool reuseClearedTargets)
 {
 	auto* context = globals::d3d::context;
 	auto* renderer = globals::game::renderer;
@@ -591,9 +623,25 @@ void VolumetricLighting::ClearVolumetricLightingTargets()
 		return;
 	}
 
+	const auto* state = globals::state;
+	const uint64_t generation = state ? state->GetRenderTargetResourcePublicationGeneration() : 0;
+	// Recreated targets may reuse COM addresses; only a completed publication permits reuse.
+	const bool reuse = reuseClearedTargets && state && depthTargetsClearedFrame == state->frameCount &&
+	                   generation && generation == depthTargetsClearedGeneration &&
+	                   generation == state->GetCompletedRenderTargetResourcePublicationGeneration();
+	depthTargetsClearedFrame = state ? std::optional{ state->frameCount } : std::nullopt;
+	depthTargetsClearedGeneration = generation;
 	const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	size_t viewIndex = 0;
 	auto clearRT = [&](RE::RENDER_TARGET index) {
 		auto& target = renderer->GetRuntimeData().renderTargets[index];
+		auto& previousRTV = depthClearedViews[viewIndex++];
+		auto& previousUAV = depthClearedViews[viewIndex++];
+		const bool unchanged = reuse && previousRTV == target.RTV && previousUAV == target.UAV;
+		previousRTV = target.RTV;
+		previousUAV = target.UAV;
+		if (unchanged)
+			return;
 		if (target.RTV) {
 			context->ClearRenderTargetView(target.RTV, clearColor);
 		}
@@ -602,13 +650,18 @@ void VolumetricLighting::ClearVolumetricLightingTargets()
 		}
 	};
 
-	clearRT(RE::RENDER_TARGETS::kIMAGESPACE_VOLUMETRIC_LIGHTING);
-	clearRT(RE::RENDER_TARGETS::kIMAGESPACE_VOLUMETRIC_LIGHTING_PREVIOUS);
-	clearRT(RE::RENDER_TARGETS::kIMAGESPACE_VOLUMETRIC_LIGHTING_COPY);
-	clearRT(RE::RENDER_TARGETS::kVOLUMETRIC_LIGHTING_HALF_RES);
-	clearRT(RE::RENDER_TARGETS::kVOLUMETRIC_LIGHTING_BLUR_HALF_RES);
-	clearRT(RE::RENDER_TARGETS::kVOLUMETRIC_LIGHTING_QUARTER_RES);
-	clearRT(RE::RENDER_TARGETS::kVOLUMETRIC_LIGHTING_BLUR_QUARTER_RES);
+	constexpr std::array targets{
+		RE::RENDER_TARGETS::kIMAGESPACE_VOLUMETRIC_LIGHTING,
+		RE::RENDER_TARGETS::kIMAGESPACE_VOLUMETRIC_LIGHTING_PREVIOUS,
+		RE::RENDER_TARGETS::kIMAGESPACE_VOLUMETRIC_LIGHTING_COPY,
+		RE::RENDER_TARGETS::kVOLUMETRIC_LIGHTING_HALF_RES,
+		RE::RENDER_TARGETS::kVOLUMETRIC_LIGHTING_BLUR_HALF_RES,
+		RE::RENDER_TARGETS::kVOLUMETRIC_LIGHTING_QUARTER_RES,
+		RE::RENDER_TARGETS::kVOLUMETRIC_LIGHTING_BLUR_QUARTER_RES
+	};
+	static_assert(targets.size() * 2 == std::tuple_size_v<decltype(depthClearedViews)>);
+	for (const auto target : targets)
+		clearRT(target);
 }
 
 VolumetricLighting::VolumetricLightingDescriptor& VolumetricLighting::GetVLDescriptor()

@@ -2004,6 +2004,7 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(SettingsUI PROPERTIES TIMEOUT 30)
 
     add_controller_test(grass_draw_batch_test GrassOptimizationPolicy tests/grass_draw_batch_test.cpp)
+    add_controller_test(depth_pyramid_policy_test DepthPyramidPolicy tests/depth_pyramid_policy_test.cpp)
     add_controller_test(grass_pass_cache_test GrassPassCache tests/grass_pass_cache_test.cpp)
     add_controller_test(grass_bucket_preparation_test GrassBucketPreparation tests/grass_bucket_preparation_test.cpp)
     add_controller_test(grass_telemetry_test GrassTelemetry tests/grass_telemetry_test.cpp)

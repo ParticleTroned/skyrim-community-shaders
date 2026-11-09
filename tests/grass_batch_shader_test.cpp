@@ -130,6 +130,7 @@ namespace
 					}
 	}
 
+#include "grass_active_depth_gpu.h"
 #include "grass_bounds_gpu.h"
 #include "grass_collision_field_gpu.h"
 #include "grass_collision_strength_gpu.h"
@@ -169,6 +170,8 @@ int main()
 		RunDepthReduction(true);
 		RunDepthReduction(false, 4);
 		RunDepthReduction(true, 4);
+		run("Standard active depth reduction", [] { RunActiveDepthReduction(false); });
+		run("Reversed active depth reduction", [] { RunActiveDepthReduction(true); });
 		RunGrassBounds();
 		RunGrassBounds(true);
 		for (bool vr : { false, true })

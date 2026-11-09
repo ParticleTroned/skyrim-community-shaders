@@ -996,6 +996,86 @@ def compile_fixture(driver: str, devbench: bool = False) -> subprocess.Completed
 
 
 class GrassDrawLifecycleTests(unittest.TestCase):
+    def test_hiz_retained_allocation_failure(self):
+        source = (ROOT / "src/Features/GrassOptimizations/GrassHiZ.cpp").read_text(encoding="utf-8")
+        method = block(source, "bool GrassHiZ::Build(")
+        marker = "\tif (pyramid.SRV()" if "\tif (pyramid.SRV()" in method else "\tif (builtFrame =="
+        tail = method[method.index(marker):]
+        driver = r'''
+#include "Features/GrassOptimizations/GrassHiZPolicy.h"
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <stdexcept>
+using UINT = uint32_t;
+constexpr UINT D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION = 16384;
+namespace GrassPolicy { constexpr UINT kCullResultTrimFrames = 3; }
+namespace globals {
+namespace game { constexpr bool isVR = true; }
+namespace features { struct { bool IsActive() const { return true; } } reverseZ; }
+}
+namespace logger { void warn(const char*, const char*) {} }
+struct OutputState { explicit OutputState(void*) {} };
+struct Pyramid {
+    bool allocated = true, valid = true, failBuild = false;
+    int builds = 0;
+    bool Allocated() const { return allocated; }
+    const void* SRV() const { return valid ? this : nullptr; }
+    bool Build(void*, void*, UINT, UINT, UINT, UINT, UINT, UINT, bool) {
+        ++builds; valid = !failBuild; return valid;
+    }
+};
+struct GrassHiZ {
+    Pyramid pyramid;
+    DepthPyramidPolicy::AllocationRetention allocationRetention;
+    UINT width = 1024, height = 1024, builtFrame = 3, activeWidth = 4032, activeHeight = 2240;
+    int sourceIdentity = 1;
+    int allocations = 0;
+    float depthViewportSlack = 0;
+    std::array<float, 4> scale{};
+    void Allocate(UINT, UINT, UINT) { ++allocations; pyramid.valid = false; throw std::runtime_error("resize"); }
+    bool Build(UINT currentWidth, UINT currentHeight, uint64_t candidateIndexWork, int sourceResource = 1, UINT frame = 3) {
+        constexpr UINT eyes = 2;
+        void* context = nullptr;
+        void* source = nullptr;
+        struct { UINT Width = 4032, Height = 2240; } desc;
+        struct { float MaxDepth = 1; } viewport;
+#define GRASS_HIZ_FAIL(reason) return false
+TAIL
+#undef GRASS_HIZ_FAIL
+};
+int main() {
+    GrassHiZ hiz;
+    constexpr DepthPyramidPolicy::Extent full{1024, 1024}, half{512, 512};
+    hiz.allocationRetention.Observe(full, half, 1, 3);
+    hiz.allocationRetention.Observe(full, half, 2, 3);
+    const auto moderate = GrassHiZPolicy::AddCandidateIndexWork(0, 10000, 2, 24);
+    assert(!hiz.Build(2016, 1120, moderate));
+    assert(hiz.pyramid.builds == 0 && !hiz.pyramid.SRV());
+    assert(!hiz.Build(4032, 2240, moderate));
+    assert(hiz.pyramid.builds == 0);
+    assert(hiz.Build(4032, 2240, UINT64_MAX));
+    assert(hiz.pyramid.builds == 1 && hiz.pyramid.SRV());
+    assert(hiz.Build(4032, 2240, 0));
+    assert(hiz.pyramid.builds == 1);
+    hiz.pyramid.valid = false;
+    hiz.pyramid.failBuild = true;
+    assert(!hiz.Build(4032, 2240, UINT64_MAX));
+    assert(hiz.pyramid.builds == 2 && !hiz.pyramid.SRV());
+    assert(!hiz.Build(4032, 2240, 0));
+    GrassHiZ replaced;
+    assert(!replaced.Build(2016, 1120, moderate, 2));
+    assert(replaced.allocations == 1 && replaced.sourceIdentity == 2 && replaced.builtFrame == UINT32_MAX);
+    assert(!replaced.Build(2016, 1120, moderate, 2));
+    assert(!replaced.Build(2016, 1120, moderate, 2, 4));
+    assert(replaced.allocations == 1 && replaced.pyramid.builds == 0);
+    assert(!replaced.Build(2016, 1120, moderate, 2, 5));
+    assert(replaced.allocations == 2 && !replaced.pyramid.SRV());
+}
+'''.replace("TAIL", tail)
+        result = compile_fixture(driver)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_retained_cache_resources(self):
         source = (ROOT / "src/ShaderCache.cpp").read_text(encoding="utf-8")
         methods = "template <typename Interface, typename Cache>\n" + block(source, "winrt::com_ptr<Interface> RetainShaderResource(")

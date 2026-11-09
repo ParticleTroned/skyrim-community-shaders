@@ -10,6 +10,7 @@
 #include "GrassFadeHistory.h"
 #include "GrassFrustum.h"
 #include "GrassHiZ.h"
+#include "GrassHiZPolicy.h"
 #include "GrassLODCache.h"
 #include "GrassPassCache.h"
 #include "GrassRuntime.h"
@@ -2708,10 +2709,14 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 void GrassBucketRenderer::Impl::UploadCulling()
 {
 	cullingBuckets.clear();
+	uint64_t candidateIndexWork = 0;
 	for (auto& bucket : buckets)
 		if (bucket.plan.prepared && !bucket.plan.empty) {
 			bucket.plan.slot = uint32_t(cullingBuckets.size());
 			cullingBuckets.push_back(&bucket);
+			const auto& params = bucket.plan.params;
+			candidateIndexWork = GrassHiZPolicy::AddCandidateIndexWork(candidateIndexWork,
+				params.instances, params.eyes, *std::max_element(params.indexCounts.begin(), params.indexCounts.end()));
 		}
 	const auto slots = uint32_t(cullingBuckets.size());
 	if (!slots)
@@ -2723,7 +2728,7 @@ void GrassBucketRenderer::Impl::UploadCulling()
 	if (diagnostics.load(std::memory_order_relaxed))
 		++cullingUploadMaps;
 #endif
-	const bool useHiZ = frameSettings.EnableOcclusionCulling && hiZ.Build(context.get(), frame);
+	const bool useHiZ = frameSettings.EnableOcclusionCulling && hiZ.Build(context.get(), frame, candidateIndexWork);
 	const uint32_t pages = (slots + kSlotsPerPage - 1) / kSlotsPerPage;
 	while (frameConstants.size() < pages)
 		frameConstants.push_back(std::make_unique<Buffer>(ConstantBufferDesc(kSlotsPerPage * kFrameSlotBytes), nullptr, "GrassOptimizations::FrameConstants"));

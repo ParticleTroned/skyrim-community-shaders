@@ -106,6 +106,15 @@ int main()
 		CheckSpawnFades();
 		CheckWindHistory();
 		const auto require = [](bool condition) {if(!condition)throw std::runtime_error("Grass settings policy failed"); };
+		require(GrassPolicy::MeshAttributesValid(28, 16, 16, 20, 24));
+		require(GrassPolicy::MeshAttributesValid(20, 8, 8, 12, 16));
+		require(GrassPolicy::MeshAttributesValid(32, 16, 16, 24, 28));
+		require(!GrassPolicy::MeshAttributesValid(24, 16, 16, 20, 24));
+		require(!GrassPolicy::MeshAttributesValid(28, 16, 12, 20, 24));
+		require(!GrassPolicy::MeshAttributesValid(28, 16, 16, 20, 20));
+		require(!GrassPolicy::MeshAttributesValid(32, 16, 18, 24, 28));
+		require(!GrassPolicy::MeshAttributesValid(3, 8, 0, 0, 0));
+		require(!GrassPolicy::MeshAttributesValid(32, 16, UINT32_MAX, 24, 28));
 		GrassFrustum::Matrix identity{};
 		for (size_t i = 0; i < 4; ++i) identity[i * 5] = 1;
 		const auto planes = GrassFrustum::Extract(identity);

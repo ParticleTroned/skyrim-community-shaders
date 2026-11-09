@@ -207,7 +207,6 @@ namespace
 	struct Mesh
 	{
 		RE::NiPointer<RE::NiNode> owner;
-		RE::NiPointer<RE::NiSourceTexture> texture;
 		winrt::com_ptr<ID3D11Buffer> vertices, indices;
 		uint64_t descriptor = 0;
 		uint32_t indexCount = 0;
@@ -268,14 +267,14 @@ namespace
 		FrustumParameters frustum;
 		Parameters params{};
 		std::array<Mesh, 3> meshes;
-		winrt::com_ptr<ID3D11InputLayout> layout;
+		std::array<winrt::com_ptr<ID3D11InputLayout>, 3> layouts;
 		uint32_t slot = 0;
 		bool prepared = false, empty = false;
 		/** @brief Release draw owners; constants are overwritten before the plan is prepared again. */
 		void Retire()
 		{
 			meshes = {};
-			layout = nullptr;
+			layouts = {};
 			prepared = empty = false;
 		}
 	};
@@ -403,6 +402,16 @@ namespace
 		return true;
 	}
 	bool Finite(const RE::NiPoint3& point) { return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z); }
+	bool ValidMeshDescriptor(uint64_t descriptor)
+	{
+		const auto desc = std::bit_cast<RE::BSGraphics::VertexDesc>(descriptor);
+		using Vertex = RE::BSGraphics::Vertex;
+		if (!desc.HasFlag(Vertex::VF_VERTEX) || !desc.HasFlag(Vertex::VF_UV) || !desc.HasFlag(Vertex::VF_NORMAL) || !desc.HasFlag(Vertex::VF_COLORS))
+			return false;
+		const bool fullPosition = desc.HasFlag(Vertex::VF_FULLPREC) || desc.GetAttributeOffset(Vertex::VA_TEXCOORD0) >= 16;
+		return GrassPolicy::MeshAttributesValid(GrassPolicy::MeshStride(descriptor), fullPosition ? 16u : 8u,
+			desc.GetAttributeOffset(Vertex::VA_TEXCOORD0), desc.GetAttributeOffset(Vertex::VA_NORMAL), desc.GetAttributeOffset(Vertex::VA_COLOR));
+	}
 	bool Identity(const RE::NiTransform& transform)
 	{
 		if (transform.scale != 1 || !Finite(transform.translate))
@@ -2061,17 +2070,11 @@ ID3D11InputLayout* GrassBucketRenderer::Impl::Layout(uint64_t descriptor)
 {
 	if (auto found = layouts.find(descriptor); found != layouts.end())
 		return found->second.get();
+	if (!ValidMeshDescriptor(descriptor))
+		return nullptr;
 	auto desc = std::bit_cast<RE::BSGraphics::VertexDesc>(descriptor);
 	using Vertex = RE::BSGraphics::Vertex;
-	if (!desc.HasFlag(Vertex::VF_VERTEX) || !desc.HasFlag(Vertex::VF_UV) || !desc.HasFlag(Vertex::VF_NORMAL) || !desc.HasFlag(Vertex::VF_COLORS))
-		return nullptr;
-	const auto stride = GrassPolicy::MeshStride(descriptor);
 	const bool fullPosition = desc.HasFlag(Vertex::VF_FULLPREC) || desc.GetAttributeOffset(Vertex::VA_TEXCOORD0) >= 16;
-	if (stride < (fullPosition ? 16u : 8u) ||
-		desc.GetAttributeOffset(Vertex::VA_TEXCOORD0) + 4 > stride ||
-		desc.GetAttributeOffset(Vertex::VA_NORMAL) + 4 > stride ||
-		desc.GetAttributeOffset(Vertex::VA_COLOR) + 4 > stride)
-		return nullptr;
 	CompileSignature();
 	std::array<D3D11_INPUT_ELEMENT_DESC, 8> elements{};
 	elements[0] = { "POSITION", 0, fullPosition ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 };
@@ -2080,7 +2083,12 @@ ID3D11InputLayout* GrassBucketRenderer::Impl::Layout(uint64_t descriptor)
 	elements[3] = { "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, desc.GetAttributeOffset(Vertex::VA_COLOR), D3D11_INPUT_PER_VERTEX_DATA, 0 };
 	for (UINT i = 0; i < 4; ++i) elements[4 + i] = { "TEXCOORD", 4 + i, DXGI_FORMAT_R32_FLOAT, 1, 0, D3D11_INPUT_PER_INSTANCE_DATA, 1 };
 	winrt::com_ptr<ID3D11InputLayout> result;
-	DX::ThrowIfFailed(globals::d3d::device->CreateInputLayout(elements.data(), UINT(elements.size()), signature->GetBufferPointer(), signature->GetBufferSize(), result.put()));
+	const auto status = globals::d3d::device->CreateInputLayout(elements.data(), UINT(elements.size()), signature->GetBufferPointer(), signature->GetBufferSize(), result.put());
+	if (FAILED(status)) {
+		layouts.emplace(descriptor, winrt::com_ptr<ID3D11InputLayout>{});
+		logger::warn("Grass vertex layout {:X} unavailable; retaining compatible meshes: {:08X}", descriptor, uint32_t(status));
+		return nullptr;
+	}
 	Util::SetResourceName(result.get(), "GrassOptimizations::InputLayout");
 	auto raw = result.get();
 	layouts.emplace(descriptor, std::move(result));
@@ -2126,8 +2134,9 @@ std::array<const Mesh*, 2> GrassBucketRenderer::Impl::LODMeshes(const Source& so
 		return lodMeshes.FindOrLoad(key, [&](const LODKey& requested) { return LoadLODMesh(requested); });
 	};
 	const auto compatible = [&](const Mesh* mesh) {
-		return mesh && mesh->vertices && mesh->indices && mesh->descriptor == source.descriptor &&
-		       mesh->texture && mesh->texture.get() == source.property->GetBaseTexture();
+		// LOD geometry uses the source material; its authored texture object need not match.
+		return mesh && mesh->vertices && mesh->indices && source.texture &&
+		       source.texture.get() == source.property->GetBaseTexture();
 	};
 	const Mesh* midMesh = frameSettings.EnableMidLOD ? find(0) : nullptr;
 	const Mesh* farMesh = frameSettings.EnableFarLOD ? find(1) : nullptr;
@@ -2158,11 +2167,10 @@ Mesh GrassBucketRenderer::Impl::LoadLODMesh(const LODKey& key)
 	if (!shape)
 		return {};
 	auto& geometry = shape->GetGeometryRuntimeData();
-	if (!geometry.rendererData || !geometry.shaderProperty)
+	if (!geometry.rendererData)
 		return {};
-	mesh.texture.reset(geometry.shaderProperty->GetBaseTexture());
 	mesh.descriptor = std::bit_cast<uint64_t>(geometry.vertexDesc) | 0x8000000000000080ull;
-	if (mesh.descriptor != key.descriptor || !mesh.texture || mesh.texture.get() != key.texture.get())
+	if (!ValidMeshDescriptor(mesh.descriptor))
 		return {};
 	mesh.indexCount = shape->GetTrishapeRuntimeData().triangleCount * 3;
 	const auto bound = shape->GetModelData().modelBound;
@@ -2528,20 +2536,24 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 	meshes[0].indices = representative.indices;
 	meshes[0].descriptor = representative.descriptor;
 	meshes[0].indexCount = representative.triangles * 3;
+	std::array<winrt::com_ptr<ID3D11InputLayout>, 3> meshLayouts;
+	meshLayouts[0].copy_from(Layout(representative.descriptor));
+	if (!meshLayouts[0])
+		return GRASS_DRAW_REJECT(Layout);
 	float radius = representative.bound.radius;
 	if (frameSettings.EnableMeshLOD && !representative.model.empty()) {
 		const auto lod = LODMeshes(representative);
 		for (size_t tier = 1; tier < meshes.size(); ++tier) {
 			if (lod[tier - 1]) {
+				meshLayouts[tier].copy_from(Layout(lod[tier - 1]->descriptor));
+				if (!meshLayouts[tier])
+					continue;
 				meshes[tier] = *lod[tier - 1];
 				radius = std::max(radius, meshes[tier].radius + representative.bound.center.Length());
 			}
 		}
 	}
 	const uint32_t eyes = globals::game::isVR ? 2 : 1;
-	auto layout = Layout(representative.descriptor);
-	if (!layout)
-		return GRASS_DRAW_REJECT(Layout);
 	if (!geometryCPUValid)
 		return GRASS_DRAW_REJECT(GeometryConstants);
 	const size_t wind = GrassPolicy::WindVectorOffset(eyes == 2);
@@ -2593,7 +2605,7 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 	bucket.plan.geometry = geometryCPU;
 	bucket.plan.frustum = frustumData;
 	bucket.plan.meshes = std::move(meshes);
-	bucket.plan.layout.copy_from(layout);
+	bucket.plan.layouts = std::move(meshLayouts);
 	bucket.plan.prepared = true;
 	return true;
 #undef GRASS_DRAW_REJECT
@@ -2791,13 +2803,13 @@ void GrassBucketRenderer::Impl::EmitDraws(const Bucket& bucket)
 	auto geometry = frameConstants[bucket.plan.slot / kSlotsPerPage]->resource.get();
 	const UINT geometryFirst = (bucket.plan.slot % kSlotsPerPage) * (kFrameSlotBytes / 16), geometryCount = eyes == 2 ? 48u : 32u;
 	context->VSSetConstantBuffers1(2, 1, &geometry, &geometryFirst, &geometryCount);
-	context->IASetInputLayout(bucket.plan.layout.get());
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	const std::array<ID3D11ShaderResourceView*, 2> sources{ bucket.result.extras->srv.get(), bucket.records->srv.get() };
 	context->VSSetShaderResources(2, UINT(sources.size()), sources.data());
 	for (UINT tier = 0; tier < 3; ++tier) {
 		if (!meshes[tier].vertices || !meshes[tier].indices)
 			continue;
+		context->IASetInputLayout(bucket.plan.layouts[tier].get());
 		const UINT stride = GrassPolicy::MeshStride(meshes[tier].descriptor);
 		auto vertices = meshes[tier].vertices.get();
 		UINT meshOffset = 0;

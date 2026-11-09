@@ -42,6 +42,16 @@ namespace GrassPolicy
 	}
 	/** @brief The native descriptor stores mesh stride in four-byte units in its low nibble. */
 	constexpr uint32_t MeshStride(uint64_t descriptor) { return uint32_t(descriptor & 0xF) * 4; }
+	/** @brief Require disjoint, complete grass attributes within one authored vertex. */
+	constexpr bool MeshAttributesValid(uint32_t stride, uint32_t positionBytes, uint32_t uv, uint32_t normal, uint32_t color)
+	{
+		if ((positionBytes != 8 && positionBytes != 16) || stride < positionBytes)
+			return false;
+		for (const auto offset : { uv, normal, color })
+			if (offset < positionBytes || offset % 4 || offset > stride - 4)
+				return false;
+		return uv != normal && uv != color && normal != color;
+	}
 	/** @brief Density and distance costs follow the drawable mesh selected for each LOD slot. */
 	inline float MeshWeight(uint32_t indexCount) { return std::sqrt(std::max(1.0f, indexCount / 24.0f)); }
 	/** @brief Estimate extra billboard area from authored bounds without texture readbacks. */

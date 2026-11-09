@@ -14,6 +14,273 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class GrassLODLifecycleTests(unittest.TestCase):
+    def test_authored_mesh_layout_and_draw_bindings(self):
+        source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
+        asynchronous = "bool GrassBucketRenderer::Impl::LoadLODMesh(" in source
+        loader = "bool" if asynchronous else "Mesh"
+        methods = "\n".join(block(source, signature) for signature in (
+            "bool ValidMeshDescriptor(", f"{loader} GrassBucketRenderer::Impl::LoadLODMesh(",
+            "ID3D11InputLayout* GrassBucketRenderer::Impl::Layout(",
+            "void GrassBucketRenderer::Impl::EmitDraws("))
+        driver = r'''
+#include "Features/GrassOptimizations/GrassPolicy.h"
+#include "../extern/CommonLibSSE-NG/include/RE/V/VertexDesc.h"
+#include <cstring>
+#include <filesystem>
+#include <iostream>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+using UINT = unsigned;
+void Require(bool condition, const char* reason) { if (!condition) throw std::runtime_error(reason); }
+struct Resource {
+    unsigned references = 1;
+    void AddRef() { Require(references > 0, "Retained a released resource"); ++references; }
+    void Release() { Require(references > 0, "Released a resource twice"); --references; }
+};
+namespace winrt {
+    template<class T> struct com_ptr {
+        T* value = nullptr;
+        com_ptr() = default;
+        com_ptr(const com_ptr& other) { copy_from(other.value); }
+        com_ptr(com_ptr&& other) noexcept : value(std::exchange(other.value, nullptr)) {}
+        com_ptr& operator=(const com_ptr& other) { copy_from(other.value); return *this; }
+        com_ptr& operator=(com_ptr&& other) noexcept {
+            if (this != &other) { if (value) value->Release(); value = std::exchange(other.value, nullptr); }
+            return *this;
+        }
+        ~com_ptr() { if (value) value->Release(); }
+        void copy_from(T* next) { if (next) next->AddRef(); if (value) value->Release(); value = next; }
+        T* get() const { return value; }
+        T* operator->() const { return value; }
+        T** put() { Require(!value, "Overwrote an owned resource"); return &value; }
+        explicit operator bool() const { return value != nullptr; }
+    };
+}
+constexpr UINT D3D11_BIND_VERTEX_BUFFER = 1, D3D11_BIND_INDEX_BUFFER = 2;
+struct D3D11_BUFFER_DESC { UINT ByteWidth = 0, BindFlags = 0; };
+struct ID3D11Buffer : Resource {
+    D3D11_BUFFER_DESC desc;
+    void GetDesc(D3D11_BUFFER_DESC* output) const { *output = desc; }
+};
+enum DXGI_FORMAT { DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT,
+    DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R16_UINT };
+constexpr UINT D3D11_INPUT_PER_VERTEX_DATA = 0, D3D11_INPUT_PER_INSTANCE_DATA = 1;
+constexpr UINT D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST = 4;
+struct D3D11_INPUT_ELEMENT_DESC {
+    const char* SemanticName; UINT SemanticIndex; DXGI_FORMAT Format; UINT InputSlot, AlignedByteOffset, InputSlotClass, InstanceDataStepRate;
+};
+struct ID3D11InputLayout : Resource { std::array<D3D11_INPUT_ELEMENT_DESC, 8> elements; };
+using ID3D11ShaderResourceView = Resource;
+struct Device {
+    unsigned creates = 0, names = 0;
+    bool fail = false;
+    std::vector<std::unique_ptr<ID3D11InputLayout>> layouts;
+    int CreateInputLayout(const D3D11_INPUT_ELEMENT_DESC* elements, UINT count, const void*, size_t, ID3D11InputLayout** output) {
+        ++creates; *output = nullptr;
+        if (fail) return -1;
+        Require(count == 8, "Unexpected input element count");
+        auto layout = std::make_unique<ID3D11InputLayout>();
+        std::copy_n(elements, count, layout->elements.begin());
+        layouts.push_back(std::move(layout)); *output = layouts.back().get();
+        return 0;
+    }
+} device;
+bool FAILED(int status) { return status < 0; }
+namespace logger { template<class... T> void warn(T&&...) {} }
+namespace Util {
+    void SetResourceName(ID3D11InputLayout* layout, const char* name) {
+        Require(layout && std::strcmp(name, "GrassOptimizations::InputLayout") == 0, "Unnamed layout");
+        ++device.names;
+    }
+}
+namespace RE {
+    template<class T> using NiPointer = std::shared_ptr<T>;
+    struct NiPoint3 { float x = 0, y = 0, z = 0; float Length() const { return std::sqrt(x*x + y*y + z*z); } };
+    struct BSTriShape {
+        struct Renderer { ID3D11Buffer* vertexBuffer = nullptr; ID3D11Buffer* indexBuffer = nullptr; } renderer;
+        struct Geometry { Renderer* rendererData = nullptr; BSGraphics::VertexDesc vertexDesc{}; } geometry;
+        struct Counts { uint32_t triangleCount = 1, vertexCount = 3; } counts;
+        struct Model { struct { NiPoint3 center; float radius = 2; } modelBound; } model;
+        auto& GetGeometryRuntimeData() { return geometry; }
+        auto& GetTrishapeRuntimeData() { return counts; }
+        auto& GetModelData() { return model; }
+    };
+    struct NiNode { BSTriShape* shape = nullptr; };
+    namespace BSResource { enum class ErrorCode { kNone, kFailed }; }
+    namespace BSModelDB {
+        struct DBTraits { struct ArgsType { bool unk8 = true, unkA = true, postProcess = true; }; };
+        NiPointer<NiNode> model;
+        std::string requestedPath;
+        BSResource::ErrorCode Demand(const char* path, NiPointer<NiNode>& output, const DBTraits::ArgsType& args) {
+            Require(!args.unk8 && !args.unkA && !args.postProcess, "LOD load enabled model processing");
+            requestedPath = path; output = model;
+            return model ? BSResource::ErrorCode::kNone : BSResource::ErrorCode::kFailed;
+        }
+    }
+    struct BSShader { enum class Type { Grass }; };
+}
+bool Finite(const RE::NiPoint3& point) { return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z); }
+RE::BSTriShape* SingleShape(RE::NiNode* node) { return node ? node->shape : nullptr; }
+PRODUCTION_MESH;
+struct LODKey { std::string model = "meshes/grass/authored.nif"; uint32_t tier = 0; };
+struct Blob { const void* GetBufferPointer() const { return this; } size_t GetBufferSize() const { return 1; } } blob;
+struct Buffer { winrt::com_ptr<ID3D11Buffer> resource; winrt::com_ptr<ID3D11ShaderResourceView> srv; };
+struct Bucket {
+    struct Plan { std::array<Mesh, 3> meshes; std::array<winrt::com_ptr<ID3D11InputLayout>, 3> layouts;
+        struct { UINT eyes = 1; } params; UINT slot = 0; } plan;
+    struct Result { UINT capacity = 8; std::shared_ptr<Buffer> output, arguments, extras; } result;
+    std::shared_ptr<Buffer> records;
+};
+struct Context {
+    struct Draw { ID3D11InputLayout* layout; ID3D11Buffer* vertices; UINT stride, argumentOffset; };
+    ID3D11InputLayout* layout = nullptr;
+    ID3D11Buffer* vertices = nullptr;
+    UINT stride = 0;
+    std::vector<Draw> draws;
+    void VSSetShader(Resource*, void*, UINT) {}
+    void PSSetShader(Resource*, void*, UINT) {}
+    void VSSetConstantBuffers1(UINT, UINT, ID3D11Buffer**, const UINT*, const UINT*) {}
+    void VSSetShaderResources(UINT, UINT, ID3D11ShaderResourceView* const*) {}
+    void IASetPrimitiveTopology(UINT) {}
+    void IASetInputLayout(ID3D11InputLayout* next) { layout = next; }
+    void IASetVertexBuffers(UINT slot, UINT, ID3D11Buffer** buffers, const UINT* strides, const UINT*) {
+        if (slot == 0) { vertices = *buffers; stride = *strides; }
+    }
+    void IASetIndexBuffer(ID3D11Buffer*, DXGI_FORMAT format, UINT) { Require(format == DXGI_FORMAT_R16_UINT, "Wrong index format"); }
+    void DrawIndexedInstancedIndirect(ID3D11Buffer*, UINT offset) { draws.push_back({layout, vertices, stride, offset}); }
+};
+namespace GrassD3D { struct DrawState { explicit DrawState(Context*) {} }; }
+namespace SIE::ShaderCache {
+    enum class GrassShaderTechniques { RenderDepth = 1 };
+    enum class GrassShaderFlags { AlphaTest = 16 };
+    UINT GetCharacterCategoryFlag(RE::BSShader::Type) { return 32; }
+}
+namespace globals {
+    struct State { UINT modifiedPixelDescriptor = 0; } stateStorage;
+    auto* state = &stateStorage;
+    namespace d3d { auto* device = &::device; }
+}
+PRODUCTION_CONSTANTS
+struct GrassBucketRenderer { struct Impl {
+    std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> layouts;
+    Blob* signature = &blob;
+    std::shared_ptr<Context> context = std::make_shared<Context>();
+    std::array<winrt::com_ptr<Resource>, 2> drawVertexShaders;
+    std::array<winrt::com_ptr<Resource>, 8> drawPixelShaders;
+    std::vector<std::shared_ptr<Buffer>> frameConstants{std::make_shared<Buffer>()};
+    void CompileSignature() {}
+    ID3D11InputLayout* Layout(uint64_t);
+    LOADER_DECLARATION
+    void EmitDraws(const Bucket&);
+}; };
+PRODUCTION_METHODS
+bool Load(const LODKey& key, Mesh& mesh) { LOADER_CALL }
+uint64_t Descriptor(UINT stride, bool full, UINT uv, UINT normal, UINT color) {
+    using V = RE::BSGraphics::Vertex;
+    uint64_t value = uint64_t(stride / 4) | (uint64_t(V::VF_VERTEX | V::VF_UV | V::VF_NORMAL | V::VF_COLORS) << 44);
+    auto descriptor = std::bit_cast<RE::BSGraphics::VertexDesc>(value);
+    if (full) descriptor.SetFlag(V::VF_FULLPREC);
+    descriptor.SetAttributeOffset(V::VA_TEXCOORD0, uv);
+    descriptor.SetAttributeOffset(V::VA_NORMAL, normal);
+    descriptor.SetAttributeOffset(V::VA_COLOR, color);
+    return std::bit_cast<uint64_t>(descriptor);
+}
+int main() {
+    try {
+        GrassBucketRenderer::Impl state;
+        RE::BSTriShape shape;
+        ID3D11Buffer halfVertices, fullVertices, paddedVertices, indices;
+        halfVertices.desc = {60, D3D11_BIND_VERTEX_BUFFER};
+        fullVertices.desc = {84, D3D11_BIND_VERTEX_BUFFER};
+        indices.desc = {6, D3D11_BIND_INDEX_BUFFER};
+        shape.geometry.rendererData = &shape.renderer;
+        shape.renderer.indexBuffer = &indices;
+        RE::BSModelDB::model = std::make_shared<RE::NiNode>();
+        RE::BSModelDB::model->shape = &shape;
+        const auto half = Descriptor(20, false, 8, 12, 16);
+        const auto full = Descriptor(28, true, 16, 20, 24);
+        std::array<Mesh, 2> loaded;
+        LODKey key;
+        for (UINT tier = 0; tier < loaded.size(); ++tier) {
+            key.tier = tier;
+            shape.geometry.vertexDesc = std::bit_cast<RE::BSGraphics::VertexDesc>(tier ? full : half);
+            shape.renderer.vertexBuffer = tier ? &fullVertices : &halfVertices;
+            Require(Load(key, loaded[tier]), "Compatible geometry-only LOD rejected");
+            Require(RE::BSModelDB::requestedPath == (tier ? "LOD\\Grass\\authored_LOD1.nif" : "LOD\\Grass\\authored_LOD0.nif"), "Wrong authored LOD path");
+            const auto* layout = state.Layout(loaded[tier].descriptor);
+            Require(layout && layout->elements[0].Format == (tier ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT), "Wrong position precision");
+            Require(layout->elements[1].AlignedByteOffset == (tier ? 16u : 8u) &&
+                layout->elements[2].AlignedByteOffset == (tier ? 20u : 12u) && layout->elements[3].AlignedByteOffset == (tier ? 24u : 16u), "Wrong authored attribute offsets");
+            Require(state.Layout(loaded[tier].descriptor) == layout, "Layout cache did not retain identity");
+        }
+        Require(device.creates == 2 && device.names == 2, "Layout cache duplicated or failed to name resources");
+        const auto* inferred = state.Layout(Descriptor(28, false, 16, 20, 24));
+        Require(inferred && inferred->elements[0].Format == DXGI_FORMAT_R32G32B32A32_FLOAT, "Native full-position heuristic changed");
+        for (const auto bad : {Descriptor(28, true, 12, 20, 24), Descriptor(28, true, 16, 20, 20), Descriptor(24, true, 16, 20, 24)}) {
+            shape.geometry.vertexDesc = std::bit_cast<RE::BSGraphics::VertexDesc>(bad);
+            Mesh rejected;
+            const auto creates = device.creates;
+            Require(!Load(key, rejected) && !state.Layout(bad) && device.creates == creates, "Invalid attributes reached draw layout creation");
+        }
+        shape.geometry.vertexDesc = std::bit_cast<RE::BSGraphics::VertexDesc>(full);
+        for (UINT failure = 0; failure < 4; ++failure) {
+            fullVertices.desc = {84, D3D11_BIND_VERTEX_BUFFER}; indices.desc = {6, D3D11_BIND_INDEX_BUFFER};
+            if (failure == 0) --fullVertices.desc.ByteWidth;
+            if (failure == 1) --indices.desc.ByteWidth;
+            if (failure == 2) fullVertices.desc.BindFlags = 0;
+            if (failure == 3) indices.desc.BindFlags = 0;
+            Mesh rejected; Require(!Load(key, rejected), "Invalid LOD buffers accepted");
+        }
+        fullVertices.desc = {84, D3D11_BIND_VERTEX_BUFFER}; indices.desc = {6, D3D11_BIND_INDEX_BUFFER};
+        paddedVertices.desc = {96, D3D11_BIND_VERTEX_BUFFER};
+        shape.renderer.vertexBuffer = &paddedVertices;
+        shape.geometry.vertexDesc = std::bit_cast<RE::BSGraphics::VertexDesc>(Descriptor(32, true, 16, 24, 28));
+        Mesh padded;
+        Require(Load(key, padded), "Padded authored LOD rejected");
+        const auto* paddedLayout = state.Layout(padded.descriptor);
+        Require(paddedLayout && paddedLayout->elements[2].AlignedByteOffset == 24 && paddedLayout->elements[3].AlignedByteOffset == 28,
+            "Padded authored layout lost its attribute offsets");
+        const auto unsupported = Descriptor(36, true, 16, 24, 28);
+        device.fail = true;
+        Require(!state.Layout(unsupported), "Failed optional layout accepted");
+        const auto attempts = device.creates;
+        device.fail = false;
+        Require(!state.Layout(unsupported) && device.creates == attempts && state.Layout(loaded[0].descriptor), "Optional layout failure poisoned base or retried every draw");
+        Bucket bucket;
+        bucket.plan.meshes = {loaded[0], loaded[1], padded};
+        for (UINT tier = 0; tier < 3; ++tier) bucket.plan.layouts[tier].copy_from(state.Layout(bucket.plan.meshes[tier].descriptor));
+        bucket.result.output = bucket.result.arguments = bucket.result.extras = bucket.records = std::make_shared<Buffer>();
+        const std::array<UINT, 3> expectedStrides{20, 28, 32};
+        for (const UINT eyes : {1u, 2u}) {
+            bucket.plan.params.eyes = eyes; state.context->draws.clear(); state.EmitDraws(bucket);
+            Require(state.context->draws.size() == 3 * eyes, "Wrong per-eye tier draw count");
+            for (UINT tier = 0; tier < 3; ++tier) for (UINT eye = 0; eye < eyes; ++eye) {
+                const auto& draw = state.context->draws[tier * eyes + eye];
+                Require(draw.layout == bucket.plan.layouts[tier].get() && draw.vertices == bucket.plan.meshes[tier].vertices.get() &&
+                    draw.stride == expectedStrides[tier] && draw.argumentOffset == (tier * eyes + eye) * 32 + 12, "Draw mixed a tier layout, stride or eye slot");
+            }
+        }
+        bucket.plan.meshes[1] = {}; bucket.plan.layouts[1] = {};
+        state.context->draws.clear(); state.EmitDraws(bucket);
+        Require(state.context->draws.size() == 4 && state.context->draws[2].argumentOffset == 140, "Missing optional mesh shifted surviving tier slots");
+        std::cout << "Authored LOD loading, layouts, failures and per-eye draw bindings passed\n";
+        return 0;
+    } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+}
+'''.replace("PRODUCTION_METHODS", methods).replace("PRODUCTION_MESH", block(source, "struct Mesh")).replace(
+            "PRODUCTION_CONSTANTS", "\n".join(line.strip() for line in source.splitlines() if
+                                               "inline constexpr uint32_t kFrameSlotBytes" in line or
+                                               "inline constexpr uint32_t kParametersOffset" in line)).replace(
+            "LOADER_DECLARATION", "static bool LoadLODMesh(const LODKey&, Mesh&);" if asynchronous else
+            "static Mesh LoadLODMesh(const LODKey&);").replace(
+            "LOADER_CALL", "return GrassBucketRenderer::Impl::LoadLODMesh(key, mesh);" if asynchronous else
+            "mesh = GrassBucketRenderer::Impl::LoadLODMesh(key); return mesh.vertices && mesh.indices;")
+        self._run_driver(driver)
+
     def test_production_retirement(self):
         source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
         methods = "\n".join(block(source, signature) for signature in (
@@ -95,7 +362,7 @@ struct Source {
 };
 struct Plan {
     std::array<Mesh, 3> meshes;
-    void* layout = nullptr;
+    std::array<void*, 3> layouts{};
     bool prepared = false, empty = false;
     std::array<float, 152> geometry{};
     PRODUCTION_RETIRE
@@ -210,12 +477,14 @@ void CheckLODResolution() {
                     state.loadModes = {midMode, farMode};
                     renderer.EndFrame();
                     const auto selected = state.LODMeshes(source);
-                    Require(bool(selected[0]) == (midEnabled && midMode == 0));
-                    Require(bool(selected[1]) == (farEnabled && (farMode == 0 || midMode == 0)));
+                    const bool midValid = midMode == 0 || midMode >= 4;
+                    const bool farValid = farMode == 0 || farMode >= 4;
+                    Require(bool(selected[0]) == (midEnabled && midValid));
+                    Require(bool(selected[1]) == (farEnabled && (farValid || midValid)));
                     if (selected[0]) Require(selected[0]->tier == 0);
-                    if (selected[1]) Require(selected[1]->tier == (farMode == 0 ? 1u : 0u));
+                    if (selected[1]) Require(selected[1]->tier == (farValid ? 1u : 0u));
                     const std::array<unsigned, 2> expectedLoads{
-                        midEnabled || (farEnabled && farMode != 0) ? 1u : 0u, farEnabled ? 1u : 0u};
+                        midEnabled || (farEnabled && !farValid) ? 1u : 0u, farEnabled ? 1u : 0u};
                     Require(state.loadCounts == expectedLoads);
                     for (unsigned frame = 0; frame < 100; ++frame)
                         Require(state.LODMeshes(source) == selected && state.loadCounts == expectedLoads);
@@ -299,14 +568,14 @@ int main() {
         state.buckets[0].plan.meshes[1] = *mesh;
         state.dormantBuckets[0].plan.meshes[2] = *mesh;
         auto& plan = state.buckets[0].plan;
-        plan.layout = &state;
+        plan.layouts.fill(&state);
         plan.prepared = plan.empty = true;
         plan.geometry.fill(42);
         state.residents.erase(1);
         ++state.residentRevision;
         renderer.EndFrame();
         Require(Owner::alive == 1 && !state.buckets[0].plan.meshes[1] && !state.dormantBuckets[0].plan.meshes[2]);
-        Require(!plan.prepared && !plan.empty && !plan.layout && plan.geometry[0] == 42 && plan.geometry.back() == 42);
+        Require(!plan.prepared && !plan.empty && plan.layouts == std::array<void*, 3>{} && plan.geometry[0] == 42 && plan.geometry.back() == 42);
         state.residents.erase(2);
         ++state.residentRevision;
         renderer.EndFrame();

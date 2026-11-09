@@ -2,6 +2,7 @@
 
 #include "GpuPass.h"
 #include "Profiler.h"
+#include "SnowCover/ColorSource.h"
 #include "SnowCover/Config.h"
 #include "SnowCover/Environment.h"
 #include "SnowCoverMath.h"
@@ -63,6 +64,8 @@ SnowCover::PerFrame SnowCover::GetCommonBufferData(bool inWorld)
 		LoadGeometryLists();
 		frame = {};
 	}
+	if (useLandscapeSnowColor && SnowCoverColorSource::Changed())
+		refreshTextures.store(true);
 	if (refreshTextures.exchange(false)) {
 		if (!lastWorldspace.empty() && SnowEnvironment::GetCurrentWorldspaceOrCellEditorID() == lastWorldspace) {
 			ReleaseTextures();
@@ -222,6 +225,7 @@ void SnowCover::ResetWorldConfig()
 	mapTexture.clear();
 	mainTexture.clear();
 	alternateTexture.clear();
+	useLandscapeSnowColor = false;
 	mapTextureInput[0] = '\0';
 	mainTextureInput[0] = '\0';
 	alternateTextureInput[0] = '\0';
@@ -274,6 +278,7 @@ json SnowCover::GetWorldConfig() const
 		{ "MapMax", mapMax },
 		{ "MainTexture", mainTexture.generic_string() },
 		{ "AltTexture", alternateTexture.generic_string() },
+		{ "UseLandscapeSnowColor", useLandscapeSnowColor },
 		{ "MainTint", wsettings.MainTint },
 		{ "AltTint", wsettings.AltTint },
 		{ "SnowingSpeed", snowingSpeed },
@@ -364,7 +369,9 @@ bool SnowCover::LoadWorldConfig(const json& input, bool worldTransition)
 	wsettings.MaxAngle = config.at("MaxAngle");
 	wsettings.MainSpec = config.at("MainSpec");
 	wsettings.AltSpec = config.at("AltSpec");
-	bool texturesChanged = false;
+	const bool nextLandscapeSnowColor = config.at("UseLandscapeSnowColor");
+	bool texturesChanged = nextLandscapeSnowColor != useLandscapeSnowColor;
+	useLandscapeSnowColor = nextLandscapeSnowColor;
 	auto updatePath = [&](const char* key, std::filesystem::path& path, auto& text) {
 		const auto next = config.at(key).get<std::string>();
 		if (next != path.generic_string()) {
@@ -384,12 +391,18 @@ bool SnowCover::LoadTextures()
 {
 	const auto basePath = Util::PathHelpers::GetShadersPath() / "SnowCover";
 	const auto dataPath = Util::PathHelpers::GetDataPath();
-	auto load = [&](const std::filesystem::path& path, std::string_view name, Util::HeightMap* heightMap = nullptr) {
+	auto load = [&](const std::filesystem::path& path, std::string_view name, Util::HeightMap* heightMap = nullptr, bool legacyLandscapeColor = false) {
 		winrt::com_ptr<ID3D11ShaderResourceView> view;
 		try {
 			const auto resourcePath = path.lexically_relative(dataPath).make_preferred().string();
 			DirectX::ScratchImage image;
 			DX::ThrowIfFailed(Util::LoadDDSImageFromResource(resourcePath.c_str(), image));
+			if (legacyLandscapeColor) {
+				// Match native landscape sampling; hardware sRGB decoding changes color and filtering.
+				const auto format = DirectX::MakeLinear(image.GetMetadata().format);
+				if (!DirectX::IsSRGB(DirectX::MakeSRGB(format)) || !image.OverrideFormat(format))
+					throw std::runtime_error("Unsupported landscape snow color texture format");
+			}
 			view = Util::CreateDDSTextureFromImage(globals::d3d::device, image, std::format("SnowCover::{}", name).c_str());
 			if (heightMap && !Util::LoadR8HeightMapFromDDS(image, *heightMap))
 				logger::warn("Snow Cover: CPU altitude queries disabled; {} requires R8_UNORM or BC4_UNORM", path.generic_string());
@@ -400,7 +413,53 @@ bool SnowCover::LoadTextures()
 	};
 	constexpr std::array suffixes{ ".dds", "_n.dds", "_rmaos.dds" };
 	constexpr std::array names{ "SnowAlbedo", "SnowNormal", "SnowRmaos", "IceAlbedo", "IceNormal", "IceRmaos" };
-	for (size_t i = 0; i < suffixes.size(); ++i) {
+	wsettings.LandscapeSnowColorMask = 0;
+	landscapeSnowColorPaths = {};
+	views[0] = nullptr;
+	views[suffixes.size()] = nullptr;
+	if (useLandscapeSnowColor) {
+		try {
+			const auto sources = SnowCoverColorSource::Resolve();
+			for (size_t i = 0; i < sources.size(); ++i) {
+				if (sources[i].path.empty())
+					continue;
+				const auto index = i * suffixes.size();
+				try {
+					const auto path = Util::JoinRelativePath(dataPath, sources[i].path);
+					if (auto color = load(path, names[index], nullptr, !sources[i].pbr)) {
+						views[index] = std::move(color);
+						wsettings.LandscapeSnowColorMask |= (1u << i) | (sources[i].pbr ? 4u << i : 0u);
+						landscapeSnowColorPaths[i] = sources[i].path.generic_string();
+					}
+				} catch (const std::exception& error) {
+					logger::warn("Snow Cover: invalid landscape snow color path {}: {}", sources[i].path.generic_string(), error.what());
+				}
+			}
+		} catch (const std::exception& error) {
+			logger::warn("Snow Cover: could not resolve landscape snow colors: {}", error.what());
+		}
+	}
+	winrt::com_ptr<ID3D11ShaderResourceView> configuredMainColor;
+	bool configuredMainColorAttempted = false;
+	auto loadConfiguredMainColor = [&]() -> const winrt::com_ptr<ID3D11ShaderResourceView>& {
+		if (!configuredMainColorAttempted) {
+			configuredMainColorAttempted = true;
+			if (!mainTexture.empty())
+				configuredMainColor = load(Util::JoinRelativePath(dataPath, mainTexture).concat(suffixes[0]), names[0]);
+			if (!configuredMainColor)
+				configuredMainColor = load(basePath / "default" / (std::string("main") + suffixes[0]), names[0]);
+		}
+		return configuredMainColor;
+	};
+	if (!views[0])
+		views[0] = loadConfiguredMainColor();
+	if (!views[suffixes.size()]) {
+		if (!alternateTexture.empty())
+			views[suffixes.size()] = load(Util::JoinRelativePath(dataPath, alternateTexture).concat(suffixes[0]), names[suffixes.size()]);
+		if (!views[suffixes.size()])
+			views[suffixes.size()] = loadConfiguredMainColor();
+	}
+	for (size_t i = 1; i < suffixes.size(); ++i) {
 		if (!mainTexture.empty())
 			views[i] = load(Util::JoinRelativePath(dataPath, mainTexture).concat(suffixes[i]), names[i]);
 		if (!views[i])
@@ -425,6 +484,8 @@ bool SnowCover::LoadTextures()
 void SnowCover::ReleaseTextures()
 {
 	texturesLoaded = false;
+	wsettings.LandscapeSnowColorMask = 0;
+	landscapeSnowColorPaths = {};
 	ID3D11ShaderResourceView* empty[std::tuple_size_v<decltype(views)>]{};
 	if (globals::d3d::context)
 		globals::d3d::context->PSSetShaderResources(FIRST_SRV_SLOT, static_cast<uint32_t>(views.size()), empty);
@@ -829,6 +890,7 @@ bool SnowCover::IsSnowFree(const RE::BSRenderPass* pass, uint32_t flags) const
 
 void SnowCover::DataLoaded()
 {
+	SnowCoverColorSource::Discover();
 	if (survivalGlobal)
 		return;
 	auto* handler = RE::TESDataHandler::GetSingleton();
@@ -899,6 +961,8 @@ json SnowCover::GetDiagnostics()
 		{ "Worldspace", lastWorldspace },
 		{ "MasterEnabled", settings.Enable != 0 },
 		{ "Enabled", perFrame.wsettings.EnableSnowCover != 0 },
+		{ "LandscapeSnowColorMask", perFrame.wsettings.LandscapeSnowColorMask },
+		{ "LandscapeSnowColorPaths", landscapeSnowColorPaths },
 		{ "CpuSnowBoundsAvailable", snowMap.IsLoaded() },
 		{ "Month", perFrame.Month },
 		{ "SeasonalAltitude", perFrame.SeasonalAltitude },

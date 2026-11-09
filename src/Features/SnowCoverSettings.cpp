@@ -129,11 +129,14 @@ void SnowCover::DrawWorldSettings()
 
 void SnowCover::DrawMaterialSettings()
 {
+	if (ImGui::Checkbox("Use landscape snow color", &useLandscapeSnowColor))
+		refreshTextures.store(true);
+	Util::AddTooltip("Follows the installed main and alternate snow texture sets, including custom texture paths, seasonal swaps and PBR snow. Uses the standard landscape snow textures when those records are unavailable. Keeps the configured snow detail, shine and tints. Missing or unsupported textures keep the configured color. Save region settings to retain this option.");
 	ImGui::TextWrapped("%s", "Choose texture files supplied by your snow mod. Enter their paths below Data without the .dds ending, then save the region settings to apply them.");
 	ImGui::InputText("Main texture", mainTextureInput, sizeof(mainTextureInput));
-	Util::AddTooltip("Main snow surface supplied by your texture mod. Save region settings after changing the path.");
+	Util::AddTooltip("Main snow surface supplied by your texture mod. Landscape snow color overrides its color when available, while keeping its normal and material maps. Save region settings after changing the path.");
 	ImGui::InputText("Alternative texture", alternateTextureInput, sizeof(alternateTextureInput));
-	Util::AddTooltip("Second snow or ice surface used on different slopes. Save region settings after changing the path.");
+	Util::AddTooltip("Second snow or ice surface used on different slopes. Landscape snow color overrides its color when available, while keeping its normal and material maps. Save region settings after changing the path.");
 	ImGui::ColorEdit4("Main tint", &wsettings.MainTint.x);
 	Util::AddTooltip("Color of the main snow surface. Lower opacity reveals more of the original color and reduces seasonal snow on foliage.");
 	ImGui::ColorEdit4("Alternative tint", &wsettings.AltTint.x);

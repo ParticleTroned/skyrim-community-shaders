@@ -9,6 +9,7 @@
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #if defined(PSHADER)
+#	include "SnowCover/SnowColor.hlsli"
 
 namespace SnowCover
 {
@@ -204,10 +205,8 @@ namespace SnowCover
 			return;
 		float2 uv = frac(SharedData::snowCoverSettings.UVScale * (p.xy + worldNormal.xy) / TextureWorldScale);
 		float3 snowSample = SnowAlbedo.Sample(SampColorSampler, uv).rgb;
-		float3 diffuse = pbrMaterial ? snowSample : Color::LinearToSrgb(snowSample);
-		if (applyDiffuseControls)
-			diffuse = Color::Diffuse(diffuse, pbrMaterial);
-		diffuse *= SharedData::snowCoverSettings.MainTint.rgb * Color::PBRLightingScale;
+		float3 diffuse = SnowDiffuse(snowSample, false, pbrMaterial, true, applyDiffuseControls);
+		diffuse *= SharedData::snowCoverSettings.MainTint.rgb;
 
 		color = lerp(color, diffuse, mult);
 	}
@@ -333,7 +332,7 @@ namespace SnowCover
 		float4 rmaos, tint;
 		float specular;
 		SampleSnowMaterial(alt, uv, albedo, worldNormal, rmaos, tint, specular);
-		material.BaseColor = lerp(material.BaseColor, Color::Diffuse(albedo) * tint.rgb, mult * tint.a);
+		material.BaseColor = lerp(material.BaseColor, SnowDiffuse(albedo, alt, true) * tint.rgb, mult * tint.a);
 		material.F0 = lerp(material.F0, rmaos.w * specular, mult);
 		material.Roughness = lerp(material.Roughness, clamp(rmaos.x, PBR::Constants::MinRoughness, PBR::Constants::MaxRoughness), mult);
 		material.Metallic = lerp(material.Metallic, rmaos.y, mult);
@@ -365,7 +364,7 @@ namespace SnowCover
 		float4 rmaos, tint;
 		float specular;
 		SampleSnowMaterial(alt, uv, albedo, worldNormal, rmaos, tint, specular);
-		albedo = Color::Diffuse(Color::LinearToSrgb(albedo)) * tint.rgb * Color::PBRLightingScale;
+		albedo = SnowDiffuse(albedo, alt, false) * tint.rgb;
 		material.Roughness = lerp(material.Roughness, rmaos.x, mult);
 		material.Shininess = lerp(material.Shininess, LegacySpecularScale * specular * rmaos.w, mult);
 		material.BaseColor = lerp(material.BaseColor, rmaos.z * albedo, mult * tint.a);

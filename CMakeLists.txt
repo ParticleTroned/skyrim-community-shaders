@@ -2932,6 +2932,10 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(PBRMaterialRegistry PROPERTIES TIMEOUT 30)
     add_controller_test(snow_cover_math_test SnowCoverMath tests/snow_cover_math_test.cpp)
     add_controller_test(
+        snow_cover_color_source_test SnowCoverColorSource
+        tests/snow_cover_color_source_test.cpp
+    )
+    add_controller_test(
         seasonal_weather_policy_test
         SeasonalWeatherPolicy
         tests/seasonal_weather_policy_test.cpp
@@ -3069,6 +3073,9 @@ if(BUILD_CONTROLLER_TESTS)
     add_d3d_shader_test(
         wetterness_snow_melt_test WetternessSnowMelt
         tests/wetterness_snow_melt_test.cpp
+    )
+    add_d3d_shader_test(
+        snow_cover_color_test SnowCoverColor tests/snow_cover_color_test.cpp
     )
     add_d3d_shader_test(lazy_shader_test LazyShader tests/lazy_shader_test.cpp)
     target_link_libraries(

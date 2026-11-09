@@ -578,7 +578,8 @@ namespace SharedData
 
 		float ObjectFadeEnd;
 		float ObjectFadeAmount;
-		uint2 pad2;
+		uint LandscapeSnowColorMask;
+		uint pad2;
 
 		uint FireMeltCount;
 		float FireMeltStrength;

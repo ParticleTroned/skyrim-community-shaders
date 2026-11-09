@@ -66,6 +66,7 @@ namespace SnowConfig
 			result["settings"]["properties"]["SurvivalEnabled"] = json::parse(R"({"type":"boolean"})");
 			result["world"] = { { "type", "object" }, { "additionalProperties", false }, { "properties", json::object() } };
 			result["world"]["properties"]["EnableSnowCover"] = json::parse(R"({"type":"boolean"})");
+			result["world"]["properties"]["UseLandscapeSnowColor"] = json::parse(R"({"type":"boolean","default":false,"description":"Follow installed main/alternate snow texture-set paths, seasonal swaps and PBR classification for color, retaining configured normal/material maps and tints. Standard snow01/snow02 paths are used when canonical records are unavailable. Failed color loads retain the configured material color."})");
 			result["world"]["properties"]["AffectGrassTint"] = json::parse(R"({"type":"integer","minimum":0,"maximum":1})");
 			result["world"]["properties"]["AffectTreeTint"] = json::parse(R"({"type":"integer","minimum":0,"maximum":1})");
 			result["world"]["properties"]["MaxSummerMonth"] = json::parse(R"({"type":"integer","minimum":0,"maximum":11})");

@@ -133,10 +133,12 @@ public:
 
 		float ObjectFadeEnd = DEFAULT_OBJECT_FADE_END;
 		float ObjectFadeAmount = DEFAULT_OBJECT_FADE_AMOUNT;
-		uint pad[2]{};
+		uint LandscapeSnowColorMask = 0;
+		uint pad = 0;
 	};
 	static_assert(sizeof(WorldSettings) % 16 == 0);
 	static_assert(sizeof(WorldSettings) == 144);
+	static_assert(offsetof(WorldSettings, LandscapeSnowColorMask) == 136);
 
 	struct FireMeltData
 	{
@@ -219,6 +221,8 @@ public:
 	std::filesystem::path mapTexture;
 	std::filesystem::path mainTexture;
 	std::filesystem::path alternateTexture;
+	bool useLandscapeSnowColor = false;
+	std::array<std::string, 2> landscapeSnowColorPaths{};
 	char mapTextureInput[256] = "";
 	char mainTextureInput[256] = "";
 	char alternateTextureInput[256] = "";
@@ -275,7 +279,7 @@ public:
 		draw();
 	}
 	bool IsActive() const { return loaded && active.load(std::memory_order_relaxed) && texturesLoaded && wsettings.EnableSnowCover; }
-	std::string_view GetShaderCacheAbiVersion() override { return "2"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "3"; }
 	bool SupportsPerformanceCostMeasurement() const override { return true; }
 	bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enable != 0; }
 	void SetPerformanceCostMeasurementEnabled(bool value) override { settings.Enable = value; }

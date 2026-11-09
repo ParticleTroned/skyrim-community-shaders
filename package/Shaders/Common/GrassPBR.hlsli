@@ -171,13 +171,8 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
 	float dirDetailedShadow = 1.0;
-	if (ShadowSampling::HasDirectionalShadows()) {
-#	if defined(GRASS_OPTIMIZATIONS)
-		dirDetailedShadow = shadowColor.x;
-		if (pbrDetail)
-#	endif
-			dirDetailedShadow = shadowColor.x * ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
-	}
+	if (ShadowSampling::HasDirectionalShadows())
+		dirDetailedShadow = shadowColor.x * ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
 
 #	if defined(SCREEN_SPACE_SHADOWS)
 	if (GRASS_DETAILED(ShadowSampling::HasDirectionalShadows() && dot(normal, SharedData::DirLightDirection.xyz) >= 0))

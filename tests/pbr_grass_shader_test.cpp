@@ -1,4 +1,5 @@
 #include "Utils/ShaderInclude.h"
+#include "adaptive_balance_test_settings.h"
 #include "d3d11_shader_test.h"
 
 #include <array>
@@ -237,12 +238,19 @@ PS_OUTPUT VerifyLegacyColor(PS_INPUT input, bool frontFace : SV_IsFrontFace) {
 	}
 
 #include "grass_alpha_gpu.h"
+#include "grass_lighting_gpu.h"
 #include "grass_snow_gpu.h"
 }
 
-int main()
+int main(int argc, char** argv)
 {
 	try {
+		if (argc > 1) {
+			Require(argc == 2 && std::strcmp(argv[1], "--lod-lighting") == 0, "Usage: PBRGrassShaderTest [--lod-lighting]");
+			const auto lightingCases = CheckGrassLODLighting();
+			std::cout << lightingCases << " WARP grass LOD lighting cases passed" << std::endl;
+			return 0;
+		}
 		const auto snowCases = CheckGrassSnowColor();
 		std::cout << snowCases << " WARP grass snow color cases passed" << std::endl;
 		const auto alphaCases = CheckGrassAlphaCoverage();

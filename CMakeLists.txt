@@ -3169,6 +3169,14 @@ if(BUILD_CONTROLLER_TESTS)
         tests/pbr_grass_shader_test.cpp
     )
     set_tests_properties(PBRGrassShader PROPERTIES TIMEOUT 180)
+    add_test(NAME GrassLODLighting COMMAND pbr_grass_shader_test --lod-lighting)
+    set_tests_properties(
+        GrassLODLighting
+        PROPERTIES
+            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+            TIMEOUT 180
+            LABELS ControllerTests
+    )
     add_d3d_shader_test(
         ambient_balance_shader_test
         AmbientBalanceShader

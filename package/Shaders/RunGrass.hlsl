@@ -656,13 +656,13 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 	float dirShadow = ShadowSampling::HasDirectionalShadows() ? shadowColor.x : 1.0;
 	float dirDetailShadow = 1.0;
 
+	if (dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows())
+		dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+
 	if (GRASS_DETAILED(dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows())) {
 #		if defined(SCREEN_SPACE_SHADOWS)
 		dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, eyeIndex);
 #		endif  // SCREEN_SPACE_SHADOWS
-
-		if (dirShadow != 0.0)
-			dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
 
 #		if defined(WATER_LIGHTING)
 		if (dirShadow > 0.0) {
@@ -920,14 +920,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirShadow = ShadowSampling::HasDirectionalShadows() ? shadowColor.x : 1.0;
 	float dirDetailShadow = 1.0;
 
+	if (dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows())
+		dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+
 	if (GRASS_DETAILED(dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows())) {
 #			if defined(SCREEN_SPACE_SHADOWS)
 		if (dirLightAngle >= 0.0 || SharedData::foliageLightingSettings.EnableGrassScattering != 0)
 			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, eyeIndex);
 #			endif  // SCREEN_SPACE_SHADOWS
-
-		if (dirShadow != 0.0)
-			dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
 
 #			if defined(WATER_LIGHTING)
 		if (dirShadow > 0.0) {

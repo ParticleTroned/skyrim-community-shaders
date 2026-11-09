@@ -2,6 +2,7 @@
 #	define NOMINMAX
 #endif
 
+#include "Features/GrassOptimizations/GrassOcclusionPolicy.h"
 #include "Features/GrassOptimizations/GrassPolicy.h"
 #include "Utils/DepthPyramidPolicy.h"
 #include "Utils/ShaderInclude.h"
@@ -135,6 +136,7 @@ namespace
 #include "grass_collision_field_gpu.h"
 #include "grass_collision_strength_gpu.h"
 #include "grass_culling_gpu.h"
+#include "grass_occlusion_gpu.h"
 #include "grass_source_index_gpu.h"
 #include "grass_spd_gpu.h"
 
@@ -166,6 +168,10 @@ int main()
 				}
 		run("Flat grass culling", [] { RunCullingShader(false); });
 		run("VR grass culling", [] { RunCullingShader(true); });
+		run("Flat reversed grass culling", [] { RunCullingShader(false, true); });
+		run("VR reversed grass culling", [] { RunCullingShader(true, true); });
+		run("Standard grass occlusion margin", [] { RunGrassOcclusionMargin(false); });
+		run("Reversed grass occlusion margin", [] { RunGrassOcclusionMargin(true); });
 		RunDepthReduction(false);
 		RunDepthReduction(true);
 		RunDepthReduction(false, 4);

@@ -1532,6 +1532,10 @@ namespace MenuDevBenchBridge
 		static const std::string descriptor = [] {
 			auto document = json::parse(baseDescriptor);
 			auto& grassProperties = document["inputSchema"]["properties"]["grassOptimizations"]["properties"];
+			const std::string grassOcclusionDescription = "Relative view-distance margin for perspective grass occlusion; 0.001 means 0.1%. Orthographic passes retain an absolute depth margin. Conservative bounds, precision and viewport margins remain independent.";
+			grassProperties["OcclusionBias"]["description"] = grassOcclusionDescription;
+			document["description"] = document["description"].get<std::string>() +
+			                          " set_grass_optimizations_settings interprets OcclusionBias as: " + grassOcclusionDescription;
 			const GrassPolicy::Settings grassDefaults;
 			grassProperties["FarLODOptimization"] = { { "type", "boolean" }, { "default", grassDefaults.FarLODOptimization } };
 			grassProperties["ProportionalDensityFade"] = { { "type", "boolean" }, { "default", grassDefaults.ProportionalDensityFade } };

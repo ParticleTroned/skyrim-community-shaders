@@ -12,6 +12,7 @@
 #include "GrassHiZ.h"
 #include "GrassHiZPolicy.h"
 #include "GrassLODCache.h"
+#include "GrassOcclusionPolicy.h"
 #include "GrassPassCache.h"
 #include "GrassRuntime.h"
 #include "GrassTelemetry.h"
@@ -169,7 +170,8 @@ namespace
 		uint32_t depthWidth, depthHeight, depthMips, collision;
 		std::array<float, 4> depthScale;
 		float meshCostBias, costBiasStartDistance, invisibleFadeCull, renderDistance;
-		float edgeFadeStart, simpleShadingPixelSize, qualityRadius, padding;
+		float edgeFadeStart, simpleShadingPixelSize, qualityRadius;
+		uint32_t projectionModes;
 		uint32_t overrideDistance;
 		float collisionDistance;
 		uint32_t sliceOffset = 0;
@@ -178,11 +180,12 @@ namespace
 		std::array<float, 4> meshWeights{};
 		std::array<float, 4> farDensity{};
 		uint32_t farPolicy = 0, proportionalFade = 0;
-		std::array<uint32_t, 2> policyPadding{};
+		std::array<float, 2> projectionAsymptote{};
 	};
-	static_assert(sizeof(Parameters) == 240 && offsetof(Parameters, collisionStrength) == 172 &&
+	static_assert(sizeof(Parameters) == 240 && offsetof(Parameters, projectionModes) == 156 && offsetof(Parameters, collisionStrength) == 172 &&
 				  offsetof(Parameters, indexCounts) == 176 && offsetof(Parameters, meshWeights) == 192 &&
-				  offsetof(Parameters, farDensity) == 208 && offsetof(Parameters, farPolicy) == 224);
+				  offsetof(Parameters, farDensity) == 208 && offsetof(Parameters, farPolicy) == 224 &&
+				  offsetof(Parameters, projectionAsymptote) == 232);
 	using LODLookup = std::tuple<std::string_view, uint64_t, uintptr_t, uint32_t>;
 	struct LODKey
 	{
@@ -2750,7 +2753,14 @@ void GrassBucketRenderer::Impl::UploadCulling()
 				params.depthHeight = hiZ.Height();
 				params.depthMips = hiZ.Mips();
 				params.depthScale = hiZ.Scale();
-				params.bias += hiZ.DepthViewportSlack();
+				params.depthScale[2] = hiZ.DepthViewportSlack();
+				params.projectionModes = 0;
+				for (uint32_t eye = 0; eye < params.eyes; ++eye) {
+					const auto projection = GrassOcclusionPolicy::ClassifyProjection(
+						std::span<const float, 16>{ plan.geometry.data() + eye * 16, 16 });
+					params.projectionModes |= uint32_t(projection.mode) << (eye * 2);
+					params.projectionAsymptote[eye] = projection.asymptote;
+				}
 			}
 			auto bytes = static_cast<uint8_t*>(mapped.pData) + (plan.slot % kSlotsPerPage) * kFrameSlotBytes;
 			std::memset(bytes, 0, kFrameSlotBytes);

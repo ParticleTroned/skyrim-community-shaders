@@ -1,5 +1,6 @@
 #include "ReverseZ.h"
 
+#include "Diagnostics/PerformanceCostExperiments.h"
 #include "Features/VRDepthCullingTemporal.h"
 #include "Globals.h"
 #include "ShaderCache.h"
@@ -985,22 +986,29 @@ namespace
 	void ReapplyMappedStates(ID3D11DeviceContext* This)
 	{
 		const bool flip = ShouldFlip();
-		{
-			g_boundState = ResolveRequestedDepthState();
+		const bool reference = CSX::Diagnostics::PerformanceCosts::ReferenceEnabled(CSX::Diagnostics::PerformanceCosts::Point::ReverseZBindings);
+		auto* depthState = ResolveRequestedDepthState();
+		auto* rasterState = ResolveRequestedRasterState();
+		// Rasterizer conversion may reject rendering after depth resolution.
+		if (flip && g_renderingRejected.load(std::memory_order_relaxed))
+			depthState = g_rejectedDepthState.get();
+		if (reference || g_boundState != depthState) {
+			g_boundState = depthState;
 			ID3D11DeviceContext_OMSetDepthStencilState::func(This, g_boundState, g_requestedStencilRef);
 		}
-		{
-			g_boundRasterState = ResolveRequestedRasterState();
+		if (reference || g_boundRasterState != rasterState) {
+			g_boundRasterState = rasterState;
 			ID3D11DeviceContext_RSSetState::func(This, g_boundRasterState);
-			if (flip && g_renderingRejected.load(std::memory_order_relaxed)) {
-				g_boundState = g_rejectedDepthState.get();
-				ID3D11DeviceContext_OMSetDepthStencilState::func(This, g_boundState, g_requestedStencilRef);
-			}
 		}
 		if (g_requestedViewportCount > 0) {
-			for (UINT i = 0; i < g_requestedViewportCount; ++i)
-				g_mappedViewports[i] = flip ? MirrorViewportDepth(g_requestedViewports[i]) : g_requestedViewports[i];
-			ID3D11DeviceContext_RSSetViewports::func(This, g_requestedViewportCount, g_mappedViewports);
+			bool changed = reference;
+			for (UINT i = 0; i < g_requestedViewportCount; ++i) {
+				const auto mapped = flip ? MirrorViewportDepth(g_requestedViewports[i]) : g_requestedViewports[i];
+				changed |= std::memcmp(&mapped, &g_mappedViewports[i], sizeof(mapped)) != 0;
+				g_mappedViewports[i] = mapped;
+			}
+			if (changed)
+				ID3D11DeviceContext_RSSetViewports::func(This, g_requestedViewportCount, g_mappedViewports);
 		}
 	}
 

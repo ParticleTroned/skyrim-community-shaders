@@ -53,6 +53,15 @@ namespace REL
 	template <class Function>
 	using Relocation = Function*;
 }
+namespace CSX::Diagnostics::PerformanceCosts
+{
+	enum class Point
+	{
+		ReverseZBindings
+	};
+	bool referenceBindings = false;
+	bool ReferenceEnabled(Point) { return referenceBindings; }
+}
 namespace logger
 {
 	unsigned errors = 0;
@@ -217,6 +226,7 @@ namespace
 		if (!condition)
 			throw std::runtime_error(message);
 	}
+	std::array<unsigned, 3> stateForwards{};
 
 	void TestMenuTargetRefresh(ID3D11Device* device, ID3D11DeviceContext* context)
 	{
@@ -616,6 +626,70 @@ namespace
 		}
 		Require(reverse.depthMappings == depthMappings && reverse.rasterMappings == rasterMappings,
 			"Repeated binds or convention transitions repeated the mapping lookup");
+		const auto repeatedForwards = stateForwards;
+		ReapplyMappedStates(context);
+		Require(stateForwards == repeatedForwards, "Unchanged mapped states were rebound");
+		const D3D11_VIEWPORT fullDepthViewport{ 0, 0, 4, 4, 0, 1 };
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &fullDepthViewport);
+		const auto viewportForwards = stateForwards[2];
+		g_reverseTargetBound = false;
+		ReapplyMappedStates(context);
+		CheckBoundStates(context, depth, raster, 64);
+		g_reverseTargetBound = true;
+		ReapplyMappedStates(context);
+		CheckBoundStates(context, mappedDepth, mappedRaster, 64);
+		Require(stateForwards[2] == viewportForwards, "A full-depth viewport was rebound across conventions");
+		const D3D11_VIEWPORT partialDepthViewport{ 0, 0, 4, 4, .2f, .7f };
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &partialDepthViewport);
+		const auto partialForwards = stateForwards[2];
+		g_reverseTargetBound = false;
+		ReapplyMappedStates(context);
+		UINT viewportCount = 1;
+		D3D11_VIEWPORT physicalViewport{};
+		context->RSGetViewports(&viewportCount, &physicalViewport);
+		Require(stateForwards[2] == partialForwards + 1 && std::memcmp(&physicalViewport, &partialDepthViewport, sizeof(physicalViewport)) == 0,
+			"Changed depth convention did not restore a partial-depth viewport");
+		g_reverseTargetBound = true;
+		ReapplyMappedStates(context);
+		Require(stateForwards[2] == partialForwards + 2, "Partial-depth viewport reversal was not rebound");
+		const auto stencilForwards = stateForwards[0];
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 129);
+		Require(stateForwards[0] == stencilForwards + 1, "An explicit stencil-only change was skipped");
+		ReapplyMappedStates(context);
+		CheckBoundStates(context, mappedDepth, mappedRaster, 129);
+		Require(stateForwards[0] == stencilForwards + 1, "An unchanged stencil-only state was rebound");
+		const std::array viewports{ fullDepthViewport, partialDepthViewport };
+		ID3D11DeviceContext_RSSetViewports::thunk(context, UINT(viewports.size()), viewports.data());
+		g_reverseTargetBound = false;
+		ReapplyMappedStates(context);
+		std::array<D3D11_VIEWPORT, 2> actualViewports{};
+		viewportCount = UINT(actualViewports.size());
+		context->RSGetViewports(&viewportCount, actualViewports.data());
+		Require(viewportCount == viewports.size() && std::memcmp(actualViewports.data(), viewports.data(), sizeof(viewports)) == 0,
+			"A changed secondary viewport was skipped when the first viewport stayed unchanged");
+		const auto arrayForwards = stateForwards;
+		CSX::Diagnostics::PerformanceCosts::referenceBindings = true;
+		ReapplyMappedStates(context);
+		CSX::Diagnostics::PerformanceCosts::referenceBindings = false;
+		Require(stateForwards[0] == arrayForwards[0] + 1 && stateForwards[1] == arrayForwards[1] + 1 &&
+					stateForwards[2] == arrayForwards[2] + 1,
+			"Reference reapply skipped an unchanged synthetic binding");
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 0, nullptr);
+		const auto emptyForwards = stateForwards[2];
+		g_reverseTargetBound = true;
+		ReapplyMappedStates(context);
+		viewportCount = 0;
+		context->RSGetViewports(&viewportCount, nullptr);
+		Require(viewportCount == 0 && stateForwards[2] == emptyForwards, "Synthetic reapply resurrected empty viewports");
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 64);
+		const auto beforeReference = stateForwards;
+		CSX::Diagnostics::PerformanceCosts::referenceBindings = true;
+		ReapplyMappedStates(context);
+		CSX::Diagnostics::PerformanceCosts::referenceBindings = false;
+		CheckBoundStates(context, mappedDepth, mappedRaster, 64);
+		Require(stateForwards[0] == beforeReference[0] + 1 && stateForwards[1] == beforeReference[1] + 1 &&
+					stateForwards[2] == beforeReference[2],
+			"Reference reapply failed to bind depth/raster states or resurrected empty viewports");
 
 		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, nullptr, 9);
 		ID3D11DeviceContext_RSSetState::thunk(context, nullptr);
@@ -644,6 +718,12 @@ namespace
 		ID3D11DeviceContext_RSSetState::thunk(context, unbiased.get());
 		CheckBoundStates(context, mappedDepth, unbiased.get(), 21);
 		Require(reverse.rasterMappings == unbiasedMappings, "Unchanged rasterizer mapping was not cached");
+		const auto unbiasedForwards = stateForwards[1];
+		g_reverseTargetBound = false;
+		ReapplyMappedStates(context);
+		g_reverseTargetBound = true;
+		ReapplyMappedStates(context);
+		Require(stateForwards[1] == unbiasedForwards, "An unbiased rasterizer was rebound across conventions");
 		ID3D11DeviceContext_RSSetState::thunk(context, raster);
 
 		winrt::com_ptr<ID3D11DeviceContext> other;
@@ -670,6 +750,10 @@ namespace
 		g_renderingRejected = true;
 		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 7);
 		ID3D11DeviceContext_RSSetState::thunk(context, raster);
+		CheckBoundStates(context, g_rejectedDepthState.get(), nullptr, 7);
+		CSX::Diagnostics::PerformanceCosts::referenceBindings = true;
+		ReapplyMappedStates(context);
+		CSX::Diagnostics::PerformanceCosts::referenceBindings = false;
 		CheckBoundStates(context, g_rejectedDepthState.get(), nullptr, 7);
 		g_reverseTargetBound = false;
 		ReapplyMappedStates(context);
@@ -740,6 +824,9 @@ namespace
 				"Context restoration lost the logical viewport");
 			Require(g_reverseTargetBound && g_projectionReversed && !g_nearMaskBound,
 				"Context restoration lost the depth domain");
+			const auto restoredForwards = stateForwards;
+			ReapplyMappedStates(context);
+			Require(stateForwards == restoredForwards, "Restored physical states were redundantly rebound");
 			ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 21);
 			ID3D11DeviceContext_RSSetState::thunk(context, raster);
 			CheckBoundStates(context, mappedDepth, mappedRaster, 21);
@@ -816,10 +903,10 @@ int main()
 			"WARP device creation failed");
 		globals::d3d::device = device.get();
 		globals::d3d::context = context.get();
-		ID3D11DeviceContext_OMSetDepthStencilState::func = [](ID3D11DeviceContext* ctx, ID3D11DepthStencilState* state, UINT ref) { ctx->OMSetDepthStencilState(state, ref); };
-		ID3D11DeviceContext_RSSetState::func = [](ID3D11DeviceContext* ctx, ID3D11RasterizerState* state) { ctx->RSSetState(state); };
+		ID3D11DeviceContext_OMSetDepthStencilState::func = [](ID3D11DeviceContext* ctx, ID3D11DepthStencilState* state, UINT ref) { ++stateForwards[0]; ctx->OMSetDepthStencilState(state, ref); };
+		ID3D11DeviceContext_RSSetState::func = [](ID3D11DeviceContext* ctx, ID3D11RasterizerState* state) { ++stateForwards[1]; ctx->RSSetState(state); };
 		ID3D11DeviceContext_ClearState::func = [](ID3D11DeviceContext* ctx) { ctx->ClearState(); };
-		ID3D11DeviceContext_RSSetViewports::func = [](ID3D11DeviceContext* ctx, UINT count, const D3D11_VIEWPORT* viewports) { ctx->RSSetViewports(count, viewports); };
+		ID3D11DeviceContext_RSSetViewports::func = [](ID3D11DeviceContext* ctx, UINT count, const D3D11_VIEWPORT* viewports) { ++stateForwards[2]; ctx->RSSetViewports(count, viewports); };
 		UseNative<ID3D11DeviceContext_ClearDepthStencilView, 53>(context.get());
 		// Native dispatch can change when the first isolated context state is activated.
 		ID3D11DeviceContext_OMGetDepthStencilState::func = [](ID3D11DeviceContext* ctx, ID3D11DepthStencilState** state, UINT* ref) { ctx->OMGetDepthStencilState(state, ref); };
@@ -899,7 +986,11 @@ int main()
 		requestedRaster = nullptr;
 		Require(SUCCEEDED(device->CreateRasterizerState(&rasterDesc, requestedRaster.put())), "Extreme rasterizer fixture creation failed");
 		Util::SetResourceName(requestedRaster.get(), "ReverseZStateTest::UnrepresentableBias");
+		g_reverseTargetBound = false;
+		ReapplyMappedStates(context.get());
 		ID3D11DeviceContext_RSSetState::thunk(context.get(), requestedRaster.get());
+		g_reverseTargetBound = true;
+		ReapplyMappedStates(context.get());
 		logicalRaster = nullptr;
 		ID3D11DeviceContext_RSGetState::thunk(context.get(), logicalRaster.put());
 		Require(logicalRaster.get() == requestedRaster.get(), "Rejected rasterizer lost its logical getter state");

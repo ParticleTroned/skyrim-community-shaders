@@ -35,6 +35,8 @@ namespace StreamingTextures::LoadHooks
 	std::optional<ReducedLoad> Poll();
 	/** Report queued ownership transfers without consuming their source references. */
 	bool HasPending();
+	/** Keep normal learning cadence while the catalog is unknown or can admit remembered reductions. */
+	bool NeedsLearningRefresh();
 	/** Store validated distance demand independently of the optional size cap. */
 	void Remember(const std::string& path, const RememberedSize& size);
 	/** Revoke eligibility for the rest of this session and remove the persistent entry. */

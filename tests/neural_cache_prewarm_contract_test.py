@@ -104,6 +104,33 @@ class CacheContracts(unittest.TestCase):
         self.assertIn("bool neuralCharacterPackedCrops = false;", settings)
         self.assertIs(schema["inputSchema"]["properties"]["characterPackedCrops"]["default"], False)
 
+    def test_projection_uses_locked_effective_policy_without_live_progress(self):
+        source = read(NR / "Renderer.cpp")
+        owner = body(source, "bool Renderer::ServicePrewarm(")
+        self.assertLess(owner.index("state_->mutex_"), owner.index("ServicePrewarmLocked("))
+        projection = body(source, "std::optional<PrewarmKey> Renderer::State::ProjectPrewarmLocked(")
+        self.assertIn("auto resolution = memoryResolution_", projection)
+        self.assertIn("resolution.SetEnabled(request.pressureResolutionEnabled)", projection)
+        self.assertIn("resolution.EffectivePercent(request.modelResolutionPercent)", projection)
+        for guard in ("MemoryRecoveryPhase::Ready", "memoryConservation_.active",
+                      "memoryRetirement_.backendRetained", "resolutionRestoration_.active",
+                      "peripheralExperiment_.Status()", "CompactInputsEnabled()"):
+            self.assertIn(guard, projection)
+        for forbidden in ("PrepareMemoryResolutionLocked(", "Resolve(", "ObserveSuccess(",
+                          "resolutionLatches_", "CaptureColorConfiguration("):
+            self.assertNotIn(forbidden, projection)
+        geometry = body(read(NR / "ModelResolution.cpp"),
+                        "std::optional<PrewarmKey> ModelResolution::ProjectPrewarm(")
+        self.assertIn("PlanPeripheralCompression(args, false)", geometry)
+        self.assertIn("Project(input, projected)", geometry)
+        for forbidden in ("PreparePeripheralCompression(", "Prepare(", ".Execute("):
+            self.assertNotIn(forbidden, geometry)
+        service = body(source, "void Renderer::State::ServicePrewarmLocked(")
+        self.assertLess(service.index("ProjectPrewarmLocked("), service.index("const bool changed"))
+        self.assertIn("Color::Work::AllocationExtent(", service)
+        self.assertIn("PrewarmTransportBytes(", service)
+        self.assertIn("sample.priorityWork", service)
+
 
 if __name__ == "__main__":
     unittest.main()

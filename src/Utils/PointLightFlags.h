@@ -41,7 +41,7 @@ namespace PointLightFlags
 		if (!a_bsLight || !a_bsLight->pointLight)
 			return 0;
 
-		auto* shadowLight = skyrim_cast<RE::BSShadowLight*>(a_bsLight);
+		auto* shadowLight = a_bsLight->IsShadowLight() ? static_cast<RE::BSShadowLight*>(a_bsLight) : nullptr;
 		return shadowLight && shadowLight->GetIsFrustumLight() ? ToMask(Flags::Spot) : ToMask(Flags::OmniDirectional);
 	}
 

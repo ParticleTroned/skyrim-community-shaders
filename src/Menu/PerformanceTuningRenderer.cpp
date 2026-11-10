@@ -18,6 +18,9 @@
 #include "CSEditor/EditorWindow.h"
 #include "Feature.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Features/PerformanceOverlay/ABTesting/ABComparisonRunner.h"
+#endif
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Globals.h"
@@ -1553,7 +1556,7 @@ namespace
 				qualityName,
 				Upscaling::GetDLSSPresetName(dlssPreset));
 		} else if (isFSR) {
-			result.label = fmt::format("{} {}", fsr4RuntimeEnabled ? "FSR4" : "FSR3", qualityName);
+			result.label = fmt::format("{} {}", fsr4RuntimeEnabled ? "FSR runtime" : "FSR3", qualityName);
 		}
 
 		result.profile = baseState;
@@ -1809,7 +1812,7 @@ namespace
 					currentTime,
 					UpscalingCostSweepPhase::Failed,
 					fsr4ProviderFallback ?
-						"The FSR4 provider fell back before its measurement could complete." :
+						"The automatic FSR runtime provider fell back before its measurement could complete." :
 						"The active Upscaling profile changed outside the measurement protocol.");
 				return;
 			}
@@ -2001,7 +2004,7 @@ namespace
 		const float textWidth = ImGui::GetFont()->CalcTextSizeA(font * 1.6f, FLT_MAX, 0, text).x;
 		const float textScale = std::min(1.0f, ImGui::GetContentRegionAvail().x / std::max(1.0f, textWidth));
 		{
-			ImGui::PushFont(ImGui::GetFont(), font * 1.6f * textScale);
+			ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * 1.6f * textScale);
 			const SKSE::stl::scope_exit restoreFont([] { ImGui::PopFont(); });
 			if (valid)
 				ImGui::TextUnformatted(text);
@@ -2567,7 +2570,7 @@ namespace
 			{ "renderScale", renderScaleMode ? Upscaling::GetQualityModeResolutionScale(qualityMode) : 1.0f },
 			{ "dlssPreset", isDLSS ? json(dlssPreset) : json(nullptr) },
 			{ "dlssPresetName", isDLSS ? json(Upscaling::GetDLSSPresetName(dlssPreset)) : json(nullptr) },
-			{ "fsrRuntime", isFSR ? json(fsr4RuntimeEnabled ? "FSR4" : "FSR3") : json(nullptr) },
+			{ "fsrRuntime", isFSR ? json(fsr4RuntimeEnabled ? "FSR runtime" : "FSR3") : json(nullptr) },
 		};
 	}
 
@@ -2815,7 +2818,7 @@ namespace
 
 }
 
-void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature)
+void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature, const char* a_tooltip)
 {
 	const bool supported = a_feature->SupportsPerformanceCostMeasurement();
 	bool enabled = supported ? a_feature->IsPerformanceToggleEnabled() : a_feature->loaded;
@@ -2828,9 +2831,22 @@ void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature)
 			g_featureCostUiMessage = applied ? "" : "This feature could not change state. Check its settings and runtime requirements.";
 		}
 	}
-	Util::AddTooltip(reason ? reason : busy   ? "Wait for the current measurement to finish." :
-								   !supported ? "No runtime switch. Change startup in Advanced > Startup, save settings and restart." :
-												"Turns this feature on or off while keeping your current tuning.");
+	if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled))
+		return;
+	const char* tooltip = reason ? reason : busy   ? "Wait for the current measurement to finish." :
+	                                    !supported ? "Change startup in Advanced > Startup, save settings and restart to enable or disable this feature." :
+	                                                 a_tooltip;
+	std::string featureHelp;
+	if (!tooltip) {
+		featureHelp = a_feature->GetFeatureSummary().first;
+		if (const auto newline = featureHelp.find_first_of("\r\n"); newline != std::string::npos)
+			featureHelp.resize(newline);
+		if (featureHelp.empty())
+			featureHelp = "Applies " + a_feature->GetName() + " to the scene.";
+		featureHelp += " Turn off to stop these effects while keeping your settings.";
+		tooltip = featureHelp.c_str();
+	}
+	Util::AddTooltip(tooltip);
 }
 
 namespace
@@ -3240,6 +3256,9 @@ bool PerformanceTuningRenderer::CancelUserMeasurements()
 
 void PerformanceTuningRenderer::NotifyConfigurationChanging()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	ABComparisonRunner::Get().ConfigurationReplacing();
+#endif
 	// Restore owned state before a replacement configuration can take ownership.
 	if (HasActiveMeasurements())
 		CancelActiveMeasurements();
@@ -3315,10 +3334,42 @@ void PerformanceTuningRenderer::NotifyMenuClosed()
 
 bool PerformanceTuningRenderer::HasActiveMeasurements()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (ABComparisonRunner::Get().IsRunning())
+		return true;
+#endif
 	return g_quickScan.controller.Active() || IsAnyFeatureCostMeasurementActive() || IsUpscalingCostSweepRunning() || g_featureCostBatch.active;
 }
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+json PerformanceTuningRenderer::CaptureComparisonSettings()
+{
+	auto result = CaptureQuickScanSettings();
+	result["$blockedShader"] = globals::shaderCache->blockedKeyIndex;
+	result["$shaderDefinesGeneration"] = globals::state->GetShaderDefinesGeneration();
+	result["$shadersRequested"] = globals::shaderCache->IsEnableRequested();
+	return result;
+}
+
+const char* PerformanceTuningRenderer::GetComparisonEnvironmentError()
+{
+	return GetFeatureCostEnvironmentError();
+}
+
+const char* PerformanceTuningRenderer::GetComparisonFeatureBlockReason(Feature* feature)
+{
+	if (!feature || !feature->loaded || !feature->SupportsPerformanceCostMeasurement())
+		return "feature has no reversible runtime comparison state";
+	const auto name = feature->GetShortName();
+	if (name == "Upscaling" || name == "VR")
+		return "use the dedicated upscaling/depth controls; these states share render-scale or other feature ownership";
+	for (const auto& [setting, constraint] : FeatureConstraints::GetAllActiveConstraints()) {
+		if (setting.featureShortName == name && constraint.isConstrained)
+			return "another feature controls this feature's settings";
+	}
+	return GetFeatureToggleBlockReason(feature);
+}
+
 nlohmann::json PerformanceTuningRenderer::StartDevBenchFeatureCostMeasurement(
 	std::string_view a_featureShortName)
 {

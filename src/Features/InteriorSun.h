@@ -135,6 +135,7 @@ private:
 	uint32_t* rasterStateCullMode = nullptr;
 
 	const RE::TESObjectCELL* currentCell = nullptr;
+	RE::NiPointer<RE::BSPortalGraph> currentPortalGraph;
 
 	bool arraysCleared = true;
 	RE::BSTArray<RE::NiPointer<RE::NiAVObject>> currentCellRoomsAndPortals = {};

@@ -28,6 +28,7 @@ public:
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
 	Texture2D* envIBLTexture = nullptr;
+	bool envIBLWritten = true;
 	Texture2D* skyIBLTexture = nullptr;
 	Util::LazyShader<ID3D11ComputeShader> diffuseIBLCS;
 	/** @brief Whether the dynamic IBL textures were written by the current pass. */

@@ -50,9 +50,14 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(result["base"], "csx3.19.10")
 
     def test_first_release_on_next_minor_line(self):
-        result = self.planned("3.20.0", tags=["csx3.18.9", "csx3.19.2"], core=(3, 20))
-        self.assertEqual(result["base"], "csx3.19.2")
-        self.assertEqual(result["tag"], "csx3.20.0")
+        for expected, baseline, core in (
+            ("3.20.0", "csx3.19.2", (3, 20)),
+            ("3.21.0", "csx3.20.1", (3, 21)),
+        ):
+            with self.subTest(expected=expected):
+                result = self.planned(expected, tags=["csx3.18.9", baseline], core=core)
+                self.assertEqual(result["base"], baseline)
+                self.assertEqual(result["tag"], f"csx{expected}")
         for value, core in (("3.20.1", (3, 20)), ("3.21.0", (3, 21)), ("4.0.0", (4, 0))):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 self.planned(value, tags=["csx3.19.2"], core=core)
@@ -71,7 +76,8 @@ class ReleaseTests(unittest.TestCase):
             )
             for value, core, valid in (
                 ("3.19.2", "3.19-VR", True), ("3.15.7", "3.15-SE", True),
-                ("3.20.0", "3.20-VR", True),
+                ("3.20.0", "3.20-VR", True), ("3.21.0", "3.21-VR", True),
+                ("3.20.1", "3.21-VR", False),
                 ("3.19.2", "3.15-SE", False), ("03.19.2", "3.19-VR", False),
                 ("3.19.2-rc.1", "3.19-VR", False), ("3.19.65536", "3.19-VR", False),
             ):

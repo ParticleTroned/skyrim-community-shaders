@@ -112,7 +112,7 @@ namespace
 			D3D11_SHADER_TYPE_DESC ambientDesc{};
 			Check(balance->GetDesc(&balanceDesc));
 			Check(balance->GetType()->GetMemberTypeByName("ambientMult")->GetDesc(&ambientDesc));
-			if (balanceDesc.Size != 320 || ambientDesc.Offset != 36)
+			if (balanceDesc.Size != 464 || ambientDesc.Offset != 36)
 				throw std::runtime_error("Adaptive Balance shader layout differs from the CPU buffer");
 			shared = std::make_unique<ConstantBuffer>(device, reflection.Get(), "SharedData::SharedData");
 			permutation = std::make_unique<ConstantBuffer>(device, reflection.Get(), "Permutation::PerShader");
@@ -265,6 +265,72 @@ namespace
 		return cases;
 	}
 
+	unsigned VerifyFog(Fixture& fixture)
+	{
+		constexpr Pixel weatherFog{ 0.2f, 0.3f, 0.4f, 1.0f };
+		const auto luminance = [](const Pixel& color) {
+			return color[0] * 0.2125f + color[1] * 0.7154f + color[2] * 0.0721f;
+		};
+		unsigned cases = 0;
+		fixture.permutation->SetVariable("Permutation::ExtraShaderDescriptor", uint32_t(1));
+		fixture.feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", AdaptiveBalanceTest::NeutralAppearance());
+		fixture.feature->SetMember("SharedData::iblSettings", "DALCAmount", 0.5f);
+		for (bool linear : { false, true }) {
+			fixture.feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", uint32_t(linear));
+			for (uint32_t interior : { 0u, 1u }) {
+				fixture.shared->SetVariable("SharedData::InInterior", interior);
+				for (uint32_t mode : { 0u, 1u, 2u, 3u }) {
+					fixture.feature->SetMember("SharedData::iblSettings", "DALCMode", mode);
+					for (float ambient : { 0.0f, 1.0f }) {
+						fixture.feature->SetMember("SharedData::iblSettings", "FogAmount", 0.0f);
+						const auto baseline = fixture.Draw(ambient);
+						const auto verify = [&](const Pixels& actual) {
+							for (size_t output = 0; output < 9; ++output)
+								if (actual[output] != baseline[output])
+									throw std::runtime_error("IBL fog changed unrelated lighting");
+							for (const auto value : actual[9])
+								if (!std::isfinite(value))
+									throw std::runtime_error("IBL fog produced a nonfinite color");
+							if (actual[9][3] != weatherFog[3])
+								throw std::runtime_error("IBL fog changed alpha");
+							++cases;
+						};
+						for (uint32_t preserve : { 0u, 1u }) {
+							fixture.feature->SetMember("SharedData::iblSettings", "PreserveFogLuminance", preserve);
+							fixture.feature->SetMember("SharedData::iblSettings", "FogAmount", 0.0f);
+							const auto disabled = fixture.Draw(ambient);
+							if (disabled[9] != weatherFog)
+								throw std::runtime_error("Disabled IBL fog changed the weather color");
+							verify(disabled);
+							fixture.feature->SetMember("SharedData::iblSettings", "FogAmount", 1.0f);
+							const auto full = fixture.Draw(ambient);
+							verify(full);
+							if (ambient == 0.0f && full[9] != (preserve ? weatherFog : Pixel{ 0, 0, 0, 1 }))
+								throw std::runtime_error("Unlit IBL fog did not use the expected fallback");
+							if (preserve && std::abs(luminance(full[9]) - luminance(weatherFog)) > 2e-5f)
+								throw std::runtime_error("IBL fog did not preserve weather luminance");
+							if (ambient != 0.0f && full[9] == weatherFog)
+								throw std::runtime_error("Enabled IBL fog did not replace the weather color");
+							for (size_t channel = 0; channel < 3; ++channel)
+								if (ambient != 0.0f && !(full[9][channel] > 0.0f))
+									throw std::runtime_error("Enabled IBL fog lost its lighting");
+							fixture.feature->SetMember("SharedData::iblSettings", "FogAmount", 0.4f);
+							const auto blended = fixture.Draw(ambient);
+							verify(blended);
+							for (size_t channel = 0; channel < 3; ++channel) {
+								const float expected = weatherFog[channel] * 0.6f + full[9][channel] * 0.4f;
+								if (std::abs(blended[9][channel] - expected) > 2e-5f)
+									throw std::runtime_error("IBL fog disagrees with its blend endpoints");
+							}
+						}
+					}
+				}
+			}
+		}
+		fixture.feature->SetMember("SharedData::iblSettings", "PreserveFogLuminance", uint32_t(0));
+		return cases;
+	}
+
 }
 
 int main()
@@ -277,6 +343,7 @@ int main()
 		unsigned cases = 0;
 		for (bool vr : { false, true }) {
 			Fixture fixture(device.Get(), context.Get(), vr);
+			cases += VerifyFog(fixture);
 			for (uint32_t ibl : { 0u, 1u }) {
 				fixture.feature->SetMember("SharedData::iblSettings", "EnableIBL", ibl);
 				cases += Verify(fixture);

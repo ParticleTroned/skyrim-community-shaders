@@ -2,6 +2,8 @@
 
 #include "../Widget.h"
 
+#include <winrt/base.h>
+
 using TESWeather = RE::TESWeather;
 using ColorTypes = TESWeather::ColorTypes;
 using ColorTimes = TESWeather::ColorTimes;
@@ -97,9 +99,7 @@ public:
 	Settings vanillaSettings;
 
 	// Cloud texture cache (layer index -> SRV)
-	std::map<int, ID3D11ShaderResourceView*> cloudTextureCache;
-
-	~WeatherWidget();
+	std::map<int, winrt::com_ptr<ID3D11ShaderResourceView>> cloudTextureCache;
 
 	void DrawWidget() override;
 	const char* GetWidgetTypeName() const override { return "Weather"; }

@@ -4,6 +4,7 @@
 #include "Globals.h"
 #include "GpuPass.h"
 #include "InverseSquareLighting.h"
+#include "LightLimitFix/LightAttach.h"
 #include "LightLimitFix/ShadowCulling.h"
 #include "LightLimitFix/VRHookPolicy.h"
 #include "LinearLighting.h"
@@ -16,7 +17,6 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/D3D.h"
-#include "Utils/ExternalEmittance.h"
 #include "Utils/Finite.h"
 #include "Utils/StringUtils.h"
 
@@ -40,6 +40,8 @@
 static constexpr uint CLUSTER_MAX_LIGHTS = 256;
 static constexpr uint CONTACT_SHADOW_MAX_LIGHTS = 8;
 static constexpr uint MAX_LIGHTS = 1024;
+// Every light is staged by one lane of ClusterCullingCS's thread group.
+static_assert(MAX_LIGHTS <= 16 * 16 * 4);
 
 namespace
 {
@@ -52,6 +54,7 @@ namespace
 	constexpr uint kContactShadowClusterBudgetMax = CONTACT_SHADOW_MAX_LIGHTS;
 	constexpr uint kParticleContactShadowBudgetMax = 4;
 	constexpr uint kStrictContactShadowBudgetMax = CONTACT_SHADOW_MAX_LIGHTS;
+	constexpr std::uint32_t kShadowMaskChannelCount = 4;
 
 	constexpr float kParticleLightsSaturationMin = 1.0f;
 	constexpr float kParticleLightsSaturationMax = 2.0f;
@@ -698,6 +701,8 @@ namespace
 
 	void SanitizeSettings(LightLimitFix::Settings& a_settings)
 	{
+		a_settings.LightAttachRefreshFrames = std::clamp(a_settings.LightAttachRefreshFrames,
+			LightLimitFixDetail::LightAttach::MinimumRefreshFrames, LightLimitFixDetail::LightAttach::MaximumRefreshFrames);
 		LightLimitFixDetail::ShadowCulling::Validate(a_settings.ShadowCulling);
 		a_settings.LightsVisualisationMode = std::min(a_settings.LightsVisualisationMode, kLightsVisualisationModeMax);
 		a_settings.ContactShadowQuality = std::min(a_settings.ContactShadowQuality, kContactShadowQualityMax);
@@ -1033,6 +1038,17 @@ namespace
 		       std::max(a_tint.blue, 0.0f);
 	}
 
+	bool TryGetShadowMaskChannel(RE::BSShadowLight* a_light, std::uint32_t& a_channel)
+	{
+		GET_INSTANCE_MEMBER(maskIndex, a_light);
+		const std::uint32_t channel = maskIndex;
+		// Shader indexing is bounded by the float4 texture, not the 32-bit membership mask.
+		if (channel >= kShadowMaskChannelCount)
+			return false;
+		a_channel = channel;
+		return true;
+	}
+
 	void SetEngineLightFlags(LightLimitFix::LightData& a_light, RE::BSLight* a_bsLight)
 	{
 		PointLightFlags::SetPointLightTypeFlags(a_light.lightFlags, a_bsLight);
@@ -1072,6 +1088,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ParticleContactShadowBudget,
 	StrictContactShadowBudget,
 	ShadowCulling,
+	SkipRedundantLightAttach,
+	LightAttachRefreshFrames,
 	EnableLightsVisualisation,
 	LightsVisualisationMode)
 void LightLimitFix::DrawSettings()
@@ -1080,11 +1098,16 @@ void LightLimitFix::DrawSettings()
 												   { "particles", "Particles", "Choose which small light effects illuminate the scene.", "Small effects that emit light", true, true, "Choose light sources" },
 												   { "placed", "Placed lights", "Choose lighting from supported objects.", "Lighting from placed objects", true, true, nullptr, nullptr, nullptr, globals::features::inverseSquareLighting.loaded },
 												   { "shadows", "Shadows", "Refine contact shadows and native shadow-map culling.", "Contact shadows and shadow culling", true, true, "Refine light interaction" },
+												   { "updates", "Light updates", "Choose how often unchanged world lights recheck nearby objects.", "World-light update interval", true, true, nullptr },
 												   { "effects", "Heat distortion", "Refine heat distortion around lights.", "Refraction around lights", true, true, nullptr },
 												   { "diagnostics", "Diagnostics", "Inspect light counts and diagnostic views.", "Light counts and buffer views", true, false, nullptr },
 											   });
 
 	{
+		if (page.Is("updates")) {
+			LightLimitFixDetail::LightAttach::DrawSettings(settings.SkipRedundantLightAttach, settings.LightAttachRefreshFrames);
+		}
+
 		// Heat warp / refraction strength (moved from Advanced Settings)
 		if (page.Is("effects")) {
 			ImGui::Text("ImageSpace Refraction");
@@ -1096,7 +1119,7 @@ void LightLimitFix::DrawSettings()
 		if (page.Is("particles")) {
 			Util::Widgets::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Enables Particle Lights.");
+				ImGui::Text("Lets fire, magic and other compatible effects light nearby surfaces. Off keeps the visible effects but removes their added lighting.");
 			}
 
 			ImGui::Separator();
@@ -1108,17 +1131,17 @@ void LightLimitFix::DrawSettings()
 
 			Util::Widgets::Checkbox("Enable Culling", &settings.EnableParticleLightsCulling);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Significantly improves performance by not rendering empty textures. Only disable if you are encountering issues.");
+				ImGui::Text("Skips drawing effect shapes that a lighting mod marks as hidden, saving rendering work. Off draws them too; try it if part of an effect is missing.");
 			}
 
 			Util::Widgets::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Adds particle lights to the player light level, so that NPCs can detect them for stealth and gameplay.");
+				ImGui::Text("Makes these lights affect how easily NPCs see you while sneaking. Off keeps their appearance without adding them to your detection light level.");
 			}
 
 			Util::Widgets::Checkbox("Enable Optimization", &settings.EnableParticleLightsOptimization);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Merges vertices which are close enough to each other to improve performance.");
+				ImGui::Text("Combines nearby small lights to save work. Off keeps them separate, which can retain finer lighting detail at higher cost.");
 			}
 
 			// NEW: clustering controls
@@ -1131,7 +1154,7 @@ void LightLimitFix::DrawSettings()
 			Util::Widgets::SliderInt("Max Particles per Emitter", &settings.MaxParticlesPerEmitter, kMaxParticlesPerEmitterMin, kMaxParticlesPerEmitterMax);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Particle samples per emitter per frame. Higher better matches the effect but costs CPU time; lower helps dense effects.");
+					"How much of each fire or magic effect is checked for lighting. Higher values follow its shape more closely but cost more processing time.");
 			}
 
 			// NEW: distance cutoff for particle lights
@@ -1148,16 +1171,20 @@ void LightLimitFix::DrawSettings()
 			MenuUI::SectionHeading("Appearance");
 			Util::Widgets::SliderFloat("Saturation", &settings.ParticleLightsSaturation, kParticleLightsSaturationMin, kParticleLightsSaturationMax, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Particle light saturation.");
+				ImGui::Text("Color intensity of particle lighting. Lower values make it more neutral; higher values make it more vivid.");
 			}
 			Util::Widgets::SliderFloat("Particle Brightness", &settings.ParticleBrightness, kParticleBrightnessMin, kParticleBrightnessMax, "%.2f");
+			Util::AddTooltip("Brightness of light from moving particles such as fire and magic. Higher values light nearby surfaces more strongly.");
 			Util::Widgets::SliderFloat("Particle Radius", &settings.ParticleRadius, kParticleRadiusMin, kParticleRadiusMax, "%.2f");
+			Util::AddTooltip("How far moving particles cast light. Higher values illuminate a wider area.");
 			Util::Widgets::SliderFloat("Billboard Brightness", &settings.BillboardBrightness, kBillboardBrightnessMin, kBillboardBrightnessMax, "%.2f");
+			Util::AddTooltip("Brightness of light from flat glow effects supplied by mods. Higher values brighten nearby surfaces.");
 			Util::Widgets::SliderFloat("Billboard Radius", &settings.BillboardRadius, kBillboardRadiusMin, kBillboardRadiusMax, "%.2f");
+			Util::AddTooltip("How far flat glow effects cast light. Higher values illuminate a wider area.");
 			Util::Widgets::Checkbox("Legacy particle appearance", &settings.UseParticleLights087LegacyMode);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Restore the v0.8.7 particle-light alpha model: material/shader/vertex alpha sets brightness; RadiusMult affects only radius. Off uses RadiusMult for intensity and radius. Most visible on billboard lights.");
+					"Uses the older relationship between effect transparency and light brightness. Off uses the newer appearance. Try it if an older effect mod looks too bright or too dim.");
 			}
 
 			ImGui::Spacing();
@@ -1170,7 +1197,7 @@ void LightLimitFix::DrawSettings()
 			Util::Widgets::SliderFloat("Intensity Scale", &settings.JsonPlacedLightIntensity, kJsonPlacedLightIntensityMin, kJsonPlacedLightIntensityMax, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Scale attached lights from light records, mainly Light Placer JSON lights. Requires Inverse Square Lighting metadata to identify them.");
+					"Brightness of compatible placed lights, such as those from Light Placer. Requires Inverse Square Lighting; other lights are unchanged.");
 			}
 
 			Util::Widgets::Checkbox("Interiors Only", &settings.JsonPlacedLightsInteriorsOnly);
@@ -1180,12 +1207,12 @@ void LightLimitFix::DrawSettings()
 
 			Util::Widgets::Checkbox("Portal Strict Only", &settings.JsonPlacedLightsPortalStrictOnly);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Only apply the intensity scale to portal-strict lights.");
+				ImGui::Text("Limits this brightness adjustment to lights restricted to particular rooms. Off also adjusts other supported placed lights.");
 			}
 			ImGui::EndDisabled();
 
 			if (!jsonPlacedLightsSupported) {
-				MenuUI::DetailNote("Placed-light adjustments require Inverse Square Lighting. Enable it in its header, or clear its checkbox in Advanced > Startup, save settings and restart if disabled at startup.");
+				MenuUI::DetailNote("Placed-light adjustments require Inverse Square Lighting. Enable it in its header, or select its checkbox in Advanced > Startup, save settings and restart if disabled at startup.");
 			}
 
 			ImGui::Spacing();
@@ -1199,14 +1226,14 @@ void LightLimitFix::DrawSettings()
 				SetContactShadowsEnabled(contactShadows);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
-					"Add short screen-space contact shadows to LLF point lights. A cached per-cluster list limits ray marches.");
+					"Adds small shadows where visible objects meet under nearby lights. Off removes these extra shadows to save rendering work.");
 			}
 
 			{
 				const auto shadowsDisabled = Util::DisableGuard(!contactShadows);
 				Util::Widgets::Checkbox("Interiors Only", &settings.ContactShadowsInteriorsOnly);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Only run LLF contact shadows in interior cells.");
+					ImGui::Text("On: these extra contact shadows appear indoors only. Off: they also appear outdoors.");
 				}
 
 				const char* qualityOptions[] = { "Low", "Medium", "High" };
@@ -1220,7 +1247,7 @@ void LightLimitFix::DrawSettings()
 					settings.ContactShadowClusterBudget = static_cast<uint>(contactShadowClusterBudget);
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Maximum cached point/particle contact-shadow lights per cluster. 0 disables clustered contact shadows.");
+					ImGui::Text("Maximum lights casting these shadows in each part of the view. Higher values retain more shadows at extra cost; 0 disables this group of shadows.");
 				}
 
 				int strictContactShadowBudget = static_cast<int>(settings.StrictContactShadowBudget);
@@ -1271,7 +1298,7 @@ void LightLimitFix::DrawSettings()
 	if (page.Is("diagnostics")) {
 		Util::Widgets::Checkbox("Enable Lights Visualisation", &settings.EnableLightsVisualisation);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enables visualization of the light limit\n");
+			ImGui::Text("Replaces the normal picture with a diagnostic view of light coverage and limits. Turn off to return to normal rendering.");
 		}
 
 		{
@@ -1292,7 +1319,8 @@ void LightLimitFix::DrawSettings()
 	currentEnableLightsVisualisation = settings.EnableLightsVisualisation;
 	if (previousEnableLightsVisualisation != currentEnableLightsVisualisation) {
 		globals::state->SetDefines(settings.EnableLightsVisualisation ? "LLFDEBUG" : "");
-		shaderCache->Clear(RE::BSShader::Type::Lighting);
+		// Global defines also affect grass and effect shaders and their active tasks.
+		shaderCache->Clear();
 		previousEnableLightsVisualisation = currentEnableLightsVisualisation;
 	}
 }
@@ -1310,6 +1338,7 @@ void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 	if (!a_advanced) {
 		return;
 	}
+	LightLimitFixDetail::LightAttach::DrawSettings(settings.SkipRedundantLightAttach, settings.LightAttachRefreshFrames);
 
 	ImGui::SeparatorText("Particle Lights");
 	Util::Widgets::Checkbox("Enable Culling", &settings.EnableParticleLightsCulling);
@@ -1448,15 +1477,6 @@ void LightLimitFix::SetupResources()
 		uavDesc.Buffer.NumElements = numElements;
 		clusters->CreateUAV(uavDesc);
 
-		numElements = 1;
-		sbDesc.StructureByteStride = sizeof(uint32_t);
-		sbDesc.ByteWidth = sizeof(uint32_t) * numElements;
-		lightIndexCounter = eastl::make_unique<Buffer>(sbDesc, nullptr, "LLF::LightIndexCounter");
-		srvDesc.Buffer.NumElements = numElements;
-		lightIndexCounter->CreateSRV(srvDesc);
-		uavDesc.Buffer.NumElements = numElements;
-		lightIndexCounter->CreateUAV(uavDesc);
-
 		numElements = clusterCount * CLUSTER_MAX_LIGHTS;
 		sbDesc.StructureByteStride = sizeof(uint32_t);
 		sbDesc.ByteWidth = sizeof(uint32_t) * numElements;
@@ -1534,6 +1554,8 @@ void LightLimitFix::SetupRenderTargetResources()
 
 void LightLimitFix::Reset()
 {
+	LightLimitFixDetail::LightAttach::Update(settings.SkipRedundantLightAttach, settings.LightAttachRefreshFrames,
+		loaded && !globals::state->IsFeatureDisabled(GetShortName()));
 	LightLimitFixDetail::ShadowCulling::Update(settings.ShadowCulling, loaded && !globals::state->IsFeatureDisabled(GetShortName()));
 	effectLightValidationCache.clear();
 	// Frame and load resets release retained lights outside the engine's queue lock.
@@ -1591,6 +1613,7 @@ void LightLimitFix::LoadSettings(json& o_json)
 {
 	runtimeToggle.ReplaceSettings(settings, o_json.get<Settings>(), &Settings::EnableContactShadows);
 	SanitizeSettings(settings);
+	LightLimitFixDetail::LightAttach::Invalidate();
 }
 
 void LightLimitFix::SaveSettings(json& o_json)
@@ -1604,6 +1627,7 @@ void LightLimitFix::RestoreDefaultSettings()
 {
 	runtimeToggle.ReplaceSettings(settings, Settings{}, &Settings::EnableContactShadows);
 	SanitizeSettings(settings);
+	LightLimitFixDetail::LightAttach::Invalidate();
 }
 
 RE::NiNode* GetParentRoomNode(RE::NiAVObject* object)
@@ -1791,11 +1815,9 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 			if (i < shadowLightCount && bsLight->IsShadowLight()) {
 				auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-				GET_INSTANCE_MEMBER(maskIndex, shadowLight);
-				if (maskIndex < 32) {
-					light.shadowMaskIndex = maskIndex;
-					light.lightFlags.set(LightFlags::Shadow);
-				}
+				if (!TryGetShadowMaskChannel(shadowLight, light.shadowMaskIndex))
+					continue;
+				light.lightFlags.set(LightFlags::Shadow);
 			}
 
 			strictLightDataTemp.StrictLights[outIndex++] = light;
@@ -1810,8 +1832,8 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 				continue;
 			}
 			auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-			GET_INSTANCE_MEMBER(maskIndex, shadowLight);
-			if (maskIndex < 32) {
+			std::uint32_t maskIndex = 0;
+			if (TryGetShadowMaskChannel(shadowLight, maskIndex)) {
 				strictLightDataTemp.ShadowBitMask |= (1u << maskIndex);
 			}
 		}
@@ -3093,6 +3115,7 @@ void LightLimitFix::Hooks::InstallVREffectShaderLightGuards()
 
 void LightLimitFix::PostPostLoad()
 {
+	LightLimitFixDetail::LightAttach::Install();
 	LightLimitFixDetail::ShadowCulling::Install();
 	globals::features::llf::particleLights.GetConfigs();
 	particleLightsReferences.reserve(static_cast<std::size_t>(MAX_LIGHTS) * 4u);
@@ -3252,7 +3275,8 @@ void LightLimitFix::UpdateLights()
 		eyePositionCached[eyeIndex] = { eyePosition.x, eyePosition.y, eyePosition.z };
 	}
 
-	eastl::vector<LightData> lightsData{};
+	auto& lightsData = lightScratch;
+	lightsData.clear();
 	lightsData.reserve(MAX_LIGHTS);
 	const bool isInterior = LocationContext::Get().inInterior;
 	RefreshJsonPlacedLightCacheFrame();
@@ -3321,19 +3345,16 @@ void LightLimitFix::UpdateLights()
 
 					if (bsLight->IsShadowLight()) {
 						auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-						GET_INSTANCE_MEMBER(maskIndex, shadowLight);
-						light.shadowMaskIndex = maskIndex;
+						if (!TryGetShadowMaskChannel(shadowLight, light.shadowMaskIndex))
+							return;
 						light.lightFlags.set(LightFlags::Shadow);
 					}
 
-					// Check for inactive shadow light
-					if (light.shadowMaskIndex != 255) {
-						SetLightPosition(light, niLight->world.translate);
+					SetLightPosition(light, niLight->world.translate);
 
-						if ((light.color.x + light.color.y + light.color.z) * light.fade > 1e-4 && light.radius > 1e-4 &&
-							lightsData.size() < MAX_LIGHTS) {
-							lightsData.push_back(light);
-						}
+					if ((light.color.x + light.color.y + light.color.z) * light.fade > 1e-4 && light.radius > 1e-4 &&
+						lightsData.size() < MAX_LIGHTS) {
+						lightsData.push_back(light);
 					}
 				}
 			}
@@ -3543,7 +3564,7 @@ void LightLimitFix::UpdateStructure()
 {
 	auto context = globals::d3d::context;
 	if (!context || !lightBuildingCB || !lightCullingCB || !clusters || !lights ||
-		!lightIndexCounter || !lightIndexList || !lightGrid ||
+		!lightIndexList || !lightGrid ||
 		!contactShadowIndexCounter || !contactShadowIndexList || !contactShadowGrid) {
 		return;
 	}
@@ -3608,7 +3629,6 @@ void LightLimitFix::UpdateStructure()
 		lightCullingCB->Update(updateData);
 
 		UINT counterReset[4] = { 0, 0, 0, 0 };
-		context->ClearUnorderedAccessViewUint(lightIndexCounter->uav.get(), counterReset);
 		context->ClearUnorderedAccessViewUint(contactShadowIndexCounter->uav.get(), counterReset);
 
 		ID3D11Buffer* buffer = lightCullingCB->CB();
@@ -3618,7 +3638,7 @@ void LightLimitFix::UpdateStructure()
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
 		ID3D11UnorderedAccessView* uavs[] = {
-			lightIndexCounter->uav.get(),
+			nullptr,
 			lightIndexList->uav.get(),
 			lightGrid->uav.get(),
 			contactShadowIndexCounter->uav.get(),
@@ -3681,9 +3701,17 @@ void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* T
 
 void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
+	using EffectFlags = SIE::ShaderCache::EffectShaderFlags;
+	constexpr auto sceneLightMask = static_cast<uint32_t>(EffectFlags::Lighting) | static_cast<uint32_t>(EffectFlags::Membrane);
+	const auto* state = globals::state;
+	// Only confirmed unlit passes bypass validation; either stage's lighting or
+	// membrane flags and unknown shader state retain the full guard.
+	const bool validateSceneLights = !This || !state || state->currentShader != This ||
+	                                 ((state->currentVertexDescriptor | state->currentPixelDescriptor) & sceneLightMask) != 0;
+
 	// Cache validated pairs for this frame, but reread the NiLight pointer so a
 	// recycled BSLight falls back to the full committed-range checks.
-	if (Pass && Pass->sceneLights && Pass->numLights > 0) {
+	if (validateSceneLights && Pass && Pass->sceneLights && Pass->numLights > 0) {
 		std::uint8_t validCount = 0;
 		auto& validationCache = globals::features::lightLimitFix.effectLightValidationCache;
 		for (std::uint8_t i = 0; i < Pass->numLights; ++i) {
@@ -3732,7 +3760,6 @@ void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* Thi
 	}
 
 	func(This, Pass, RenderFlags);
-	ExternalEmittance::UpdatePermutation(Pass);
 	auto& singleton = globals::features::lightLimitFix;
 	singleton.BSLightingShader_SetupGeometry_Before(Pass);
 	singleton.BSLightingShader_SetupGeometry_After(Pass);

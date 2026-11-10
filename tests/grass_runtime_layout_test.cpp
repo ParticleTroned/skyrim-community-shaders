@@ -136,6 +136,73 @@ namespace
 		std::memset(bytes.data() + nativeOffset, 0, sizeof(RE::BSTArray<float>));
 		std::memset(&native->lightData.lights, 0, sizeof(RE::BSTArray<RE::BSLight*>));
 	}
+
+	void CheckGroupLayout()
+	{
+		using Runtime = RE::BSMultiStreamInstanceTriShape::MULTISTREAM_TRISHAPE_RUNTIME_DATA;
+		alignas(Runtime) std::array<std::byte, sizeof(Runtime)> storage{};
+		// Placement storage avoids invoking the game's allocator for the borrowed array.
+		auto& native = *::new (storage.data()) Runtime{};
+		std::array<RE::BSMultiStreamInstanceTriShape::InstanceGroup*, 2> groups{};
+		BorrowArray(native.instanceGroups, groups);
+		native.activeGroupCount = 1;
+		const auto captured = GrassRuntime::CaptureGroupLayout(native);
+		const auto matches = [&]() { return captured == GrassRuntime::CaptureGroupLayout(native); };
+		// Cached-file loading need not maintain the generated-grass instance total.
+		for (uint32_t total : { 0u, 64u, 4096u }) {
+			native.instanceCount = total;
+			if (!matches())
+				throw std::runtime_error("Generated-grass totals invalidated cached group layout");
+		}
+		++native.activeGroupCount;
+		if (matches())
+			throw std::runtime_error("Attachment into a vacant slot retained a stale snapshot");
+		--native.activeGroupCount;
+		std::array<RE::BSMultiStreamInstanceTriShape::InstanceGroup*, 2> replacement{};
+		BorrowArray(native.instanceGroups, replacement);
+		if (matches())
+			throw std::runtime_error("Reallocated group storage retained a stale snapshot");
+		BorrowArray(native.instanceGroups, groups);
+		auto* count = reinterpret_cast<std::byte*>(&native.instanceGroups) + 0x10;
+		const uint32_t one = 1;
+		std::memcpy(count, &one, sizeof(one));
+		if (matches())
+			throw std::runtime_error("Changed native slot count retained a stale snapshot");
+		BorrowArray(native.instanceGroups, groups);
+		if (!matches())
+			throw std::runtime_error("Restored group layout did not match");
+	}
+
+	void CheckInstanceDataBounds()
+	{
+		std::array<std::byte, 32> data{};
+		RE::BSGraphics::VertexBuffer buffer{};
+		for (uint64_t upper : { 0ull, 0xdeadbeef00000000ull })
+			for (uint32_t bytes : { 0u, 31u, 32u, 33u }) {
+				buffer.byteWidth = upper | bytes;
+				for (bool present : { false, true }) {
+					buffer.m_data = present ? data.data() : nullptr;
+					if (GrassRuntime::HasInstanceData(buffer, data.size()) != (present && bytes >= data.size()))
+						throw std::runtime_error("Native header padding authorized an invalid CPU instance read");
+				}
+			}
+	}
+
+	void CheckInstanceLayout()
+	{
+		RE::BSGraphics::VertexBuffer buffer{};
+		for (uint64_t padding : { 0ull, 0xdeadbeef00000000ull })
+			for (uint32_t instances : { 0u, 1u, 2u, 64u })
+				for (uint32_t stride : { 0u, 16u, 24u, 32u, 64u }) {
+					buffer.byteWidth = padding | (instances * stride);
+					if (GrassRuntime::MatchesInstanceBytes(buffer, uint64_t(instances) * 32) != (instances && stride == 32))
+						throw std::runtime_error("Invalid native grass record width was admitted");
+				}
+		buffer.byteWidth = 0xdeadbeef00000020ull;
+		for (uint64_t required : { 0ull, 31ull, 33ull, 0x100000020ull, UINT64_MAX })
+			if (GrassRuntime::MatchesInstanceBytes(buffer, required))
+				throw std::runtime_error("Native width padding or overflow authorized an invalid instance range");
+	}
 }
 
 int main()
@@ -143,6 +210,9 @@ int main()
 	try {
 		CheckLayout(false, 0x160);
 		CheckLayout(true, 0x178);
+		CheckGroupLayout();
+		CheckInstanceDataBounds();
+		CheckInstanceLayout();
 		std::cout << "SE/AE and VR grass layouts, native wind preservation, animated cache reuse and property invalidation passed\n";
 		return 0;
 	} catch (const std::exception& error) {

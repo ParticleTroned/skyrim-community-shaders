@@ -67,6 +67,17 @@ namespace AdaptiveBalanceDepthOfField
 	void SanitizeDepthOfFieldSettings(DepthOfFieldSettings& a_settings);
 	/** Validates both manual values and the baseline used by lock confirmation. */
 	void SanitizeDepthOfFieldOverride(DepthOfFieldOverride& a_override);
+	/** Replace an unlocked editor's values and baseline with the current engine values. */
+	inline bool ResetOverrideToLive(DepthOfFieldOverride& a_override, const std::optional<DepthOfFieldSettings>& a_live)
+	{
+		if (!a_override.locked || !a_live)
+			return false;
+		auto values = *a_live;
+		SanitizeDepthOfFieldSettings(values);
+		a_override.values = values;
+		a_override.baseline = values;
+		return true;
+	}
 	/** Draws the global controls in Adaptive Balance's Depth of field group. */
 	void DrawSettings();
 	/** Installs the shared SE, AE and VR depth-of-field hooks. */

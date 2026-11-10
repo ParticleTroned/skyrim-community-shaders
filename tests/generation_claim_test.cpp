@@ -32,6 +32,7 @@ namespace
 	{
 		static bool IsPending(const Entry& a_entry) { return a_entry.status == EntryStatus::Pending; }
 		static bool IsCompleted(const Entry& a_entry) { return a_entry.status == EntryStatus::Completed; }
+		static bool IsFailed(const Entry& a_entry) { return a_entry.status == EntryStatus::Failed; }
 		static bool HasPayload(const Entry& a_entry) { return a_entry.hasPayload; }
 		static uint64_t GetGeneration(const Entry& a_entry) { return a_entry.generation; }
 	};
@@ -149,15 +150,15 @@ namespace
 		Require(map.at("shader").generation == 5);
 	}
 
-	void TestStaleOwnership()
+	void TestStaleOwnership(bool a_success)
 	{
 		Map map;
 		Require(Claim(map, "shader", 5, 5) == ClaimOutcome::Claimed);
-		Require(Publish(map, "shader", 5, 6, true) == PublishOutcome::RejectedStaleCleanedPending);
+		Require(Publish(map, "shader", 5, 6, a_success) == PublishOutcome::RejectedStaleCleanedPending);
 		Require(!map.contains("shader"));
 
 		Require(Claim(map, "shader", 6, 6) == ClaimOutcome::Claimed);
-		Require(Publish(map, "shader", 5, 6, true) == PublishOutcome::RejectedStale);
+		Require(Publish(map, "shader", 5, 6, a_success) == PublishOutcome::RejectedStale);
 		Require(map.at("shader").status == EntryStatus::Pending);
 		Require(map.at("shader").generation == 6);
 	}
@@ -189,10 +190,13 @@ namespace
 		Require(Claim(map, "failed", std::nullopt, 8) == ClaimOutcome::Claimed);
 		Require(Publish(map, "failed", std::nullopt, 9, false) == PublishOutcome::Published);
 		Require(map.at("failed").generation == 9);
-		Require(Claim(map, "failed", 9, 9) == ClaimOutcome::Claimed);
+		Require(Claim(map, "failed", 9, 9) == ClaimOutcome::Failed);
+		Require(Claim(map, "failed", 10, 10) == ClaimOutcome::Failed);
+		map.erase("failed");
+		Require(Claim(map, "failed", 10, 10) == ClaimOutcome::Claimed);
 	}
 
-	void TestConcurrentClaimers()
+	void TestConcurrentClaimers(bool a_success)
 	{
 		constexpr int threadCount = 8;
 		ClaimTable table;
@@ -204,11 +208,13 @@ namespace
 		for (int i = 0; i < threadCount; ++i) {
 			threads.emplace_back([&] {
 				start.arrive_and_wait();
-				if (table.ClaimBlocking("shader", 1, 1) == ClaimOutcome::Claimed) {
+				const auto outcome = table.ClaimBlocking("shader", 1, 1);
+				if (outcome == ClaimOutcome::Claimed) {
 					claimedCount.fetch_add(1, std::memory_order_relaxed);
 					std::this_thread::yield();
-					table.PublishAndNotify("shader", 1, 1, true);
+					table.PublishAndNotify("shader", 1, 1, a_success);
 				} else {
+					Require(outcome == (a_success ? ClaimOutcome::CacheHit : ClaimOutcome::Failed));
 					cacheHitCount.fetch_add(1, std::memory_order_relaxed);
 				}
 			});
@@ -225,9 +231,11 @@ namespace
 int main()
 {
 	TestBasicLifecycle();
-	TestStaleOwnership();
+	TestStaleOwnership(true);
+	TestStaleOwnership(false);
 	TestStaleClaims();
 	TestCompletedAndFailedEntries();
-	TestConcurrentClaimers();
+	TestConcurrentClaimers(true);
+	TestConcurrentClaimers(false);
 	return 0;
 }

@@ -118,6 +118,12 @@ namespace FoveatedCommon
 		return std::clamp(offset, kMaskOffsetMin, kMaskOffsetMax);
 	}
 
+	/** Normalized distance shared by FOV coverage and mask-relative sampling. */
+	inline float NormalizedMaskDistance(float x, float y)
+	{
+		return std::sqrt(std::sqrt(x * x * x * x + y * y * y * y));
+	}
+
 	/** Shared superellipse distance; one is the FOV boundary in eye-local UVs. */
 	inline float MaskDistanceUV(float uvX, float uvY, float centerScale,
 		float horizontalScale, float offsetX, float offsetY, float relativeScale = 1.0f)
@@ -128,8 +134,7 @@ namespace FoveatedCommon
 								 (centerScale * horizontalScale * 0.5f));
 		const float y = std::abs((uvY - std::clamp(0.5f + offsetY, 0.0f, 1.0f)) /
 								 (centerScale * 0.5f));
-		return std::pow(std::pow(x, kMaskShapePower) + std::pow(y, kMaskShapePower),
-			1.0f / kMaskShapePower);
+		return NormalizedMaskDistance(x, y);
 	}
 
 	inline int AlignDownToThreadGroup(int value)

@@ -1,3 +1,4 @@
+#include "Menu/Layout.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -28,9 +29,9 @@ namespace globals
 class MenuHeaderRenderer
 {
 public:
-	static void RenderSteamVRResizeHandles(float uiScale);
-	static void RenderResizeGrip(float uiScale, bool customResizeControls = false);
-	static void RenderResizeHandles(float uiScale, bool steamVRControls, bool customResizeControls = false);
+	static void RenderSteamVRResizeHandles(float uiScale, ImVec2 minimumSize);
+	static void RenderResizeGrip(float uiScale, ImVec2 minimumSize, bool customResizeControls = false);
+	static void RenderResizeHandles(float uiScale, ImVec2 minimumSize, bool steamVRControls, bool customResizeControls = false);
 };
 
 namespace
@@ -114,8 +115,8 @@ namespace
 	{
 		ImVec2 center;
 		ImVec2 size;
+		bool constrainedByTopStatusWindow = false;
 	};
-	float GetVRMenuSafePadding() { return 4.0f; }
 #include "menu_canvas_under_test.h"
 }
 #include "menu_resize_under_test.h"
@@ -126,7 +127,7 @@ namespace
 	{
 		ImVec2 position{ 100, 100 };
 		ImVec2 size{ 800, 600 };
-		ImVec2 minimum{ 32, 32 };
+		ImVec2 minimum{ 420, 320 };
 		ImVec2 expectedShrink{ 420, 320 };
 	};
 
@@ -149,6 +150,7 @@ namespace
 		const bool vrMenuLayoutUnlocked = !lockVRMenuToCanvas;
 		const bool showSteamVRWindowControls = useSteamVRWindowControls && vrMenuLayoutUnlocked && !isDocked;
 		const float uiScale = 1;
+		const auto minimumWindowSize = layout.minimum;
 #include "menu_resize_dispatch_under_test.h"
 		ImGui::End();
 		return window;
@@ -215,7 +217,9 @@ namespace
 			}
 			if (frame >= 4 && (openComposite || steamVR) &&
 				(window->SizeFull.x < layout.minimum.x || window->SizeFull.y < layout.minimum.y ||
-					window->Pos.x + window->SizeFull.x > io.DisplaySize.x || window->Pos.y + window->SizeFull.y > io.DisplaySize.y)) {
+					window->Pos.x < MenuUI::Layout::CanvasPadding || window->Pos.y < MenuUI::Layout::CanvasPadding ||
+					window->Pos.x + window->SizeFull.x > io.DisplaySize.x - MenuUI::Layout::CanvasPadding ||
+					window->Pos.y + window->SizeFull.y > io.DisplaySize.y - MenuUI::Layout::CanvasPadding)) {
 				std::printf("FAIL: headset resize violated theme/canvas bounds on frame %d (size=%.1f,%.1f)\n", frame, window->SizeFull.x, window->SizeFull.y);
 				passed = false;
 			}
@@ -231,10 +235,19 @@ namespace
 			if (frame > 11 && !locked &&
 				((direction == 1 && (window->Size.x <= layout.size.x || window->Size.y <= layout.size.y)) ||
 					(direction < 0 && (window->Size.x != layout.expectedShrink.x || window->Size.y != layout.expectedShrink.y)) ||
-					(direction > 1 && (window->Size.x != (topLeft ? layout.position.x + layout.size.x : io.DisplaySize.x - layout.position.x) || window->Size.y != (topLeft ? layout.position.y + layout.size.y : io.DisplaySize.y - layout.position.y))) ||
+					(direction > 1 && (window->Size.x != (topLeft ? layout.position.x + layout.size.x : io.DisplaySize.x - layout.position.x) - MenuUI::Layout::CanvasPadding ||
+										  window->Size.y != (topLeft ? layout.position.y + layout.size.y : io.DisplaySize.y - layout.position.y) - MenuUI::Layout::CanvasPadding)) ||
 					window->Size.x != finalSize.x || window->Size.y != finalSize.y)) {
 				std::printf("FAIL: resized geometry did not persist on frame %d (SteamVR=%d)\n", frame, steamVR);
 				passed = false;
+			}
+			if (frame >= 10 && !locked && direction > 1) {
+				ImVec2 center{ window->Pos.x + window->SizeFull.x * .5f, window->Pos.y + window->SizeFull.y * .5f };
+				auto size = window->SizeFull;
+				if (ClampSettingsWindowToCanvas(center, size, { center, size })) {
+					std::puts("FAIL: edge drag produced geometry the next frame would repair");
+					passed = false;
+				}
 			}
 			ImGui::Render();
 			if (frame > 2 && ImGui::GetDrawData()->TotalVtxCount == 0) {
@@ -271,7 +284,7 @@ bool CheckCanvasRecovery()
 	passed = !ClampSettingsWindowToCanvas(center, size, fallback) && passed;
 	viewport->WorkSize = { 20, 20 };
 	ImGui::GetStyle().WindowMinSize = { 100, 100 };
-	passed = ClampSettingsWindowToCanvas(center, size, fallback) && size.x == 12 && size.y == 12 && passed;
+	passed = ClampSettingsWindowToCanvas(center, size, fallback) && size.x == 4 && size.y == 4 && passed;
 	viewport->WorkSize = { 0, 0 };
 	passed = !ClampSettingsWindowToCanvas(center, size, fallback) && passed;
 	ImGui::DestroyContext();
@@ -296,11 +309,11 @@ bool CheckLaserCancelsResize()
 	ImGui::SetActiveID(handle, window);
 	g_menuResizeDragState.activeId = handle;
 	globals::features::vr.inHeadset = true;
-	MenuHeaderRenderer::RenderResizeHandles(1, true, true);
+	MenuHeaderRenderer::RenderResizeHandles(1, { 420, 320 }, true, true);
 	bool passed = ImGui::GetActiveID() == 0 && g_menuResizeDragState.activeId == 0 && window->Size.x == originalSize.x && window->Size.y == originalSize.y;
 	const auto slider = window->GetID("Menu scale");
 	ImGui::SetActiveID(slider, window);
-	MenuHeaderRenderer::RenderResizeHandles(1, true, true);
+	MenuHeaderRenderer::RenderResizeHandles(1, { 420, 320 }, true, true);
 	passed = ImGui::GetActiveID() == slider && passed;
 	globals::features::vr.inHeadset = false;
 	ImGui::End();
@@ -329,7 +342,10 @@ int main()
 					 ResizeLayout{ { 100, 100 }, { 800, 600 }, { 650, 480 }, { 650, 480 } }) &&
 		         passed;
 		passed = CheckDrag(false, steamVR, false, -1, true,
-					 ResizeLayout{ { 1750, 1470 }, { 150, 120 }, { 32, 32 }, { 170, 150 } }) &&
+					 ResizeLayout{ { 1742, 1462 }, { 170, 150 }, { 170, 150 }, { 170, 150 } }) &&
+		         passed;
+		passed = CheckDrag(false, steamVR, false, -1, true,
+					 ResizeLayout{ { 100, 100 }, { 800, 600 }, { 650, 200 }, { 650, 200 } }) &&
 		         passed;
 	}
 	passed = CheckDrag(false, true, false, -1, false,
@@ -337,7 +353,7 @@ int main()
 	         passed;
 	passed = CheckDrag(false, true, false, 2, false, {}, true) && passed;
 	passed = CheckDrag(false, true, false, -1, false,
-				 ResizeLayout{ { 1300, 1100 }, { 600, 500 }, { 32, 32 }, { 420, 320 } }, true) &&
+				 ResizeLayout{ { 1300, 1100 }, { 600, 500 }, { 420, 320 }, { 420, 320 } }, true) &&
 	         passed;
 	if (passed)
 		std::puts("Locked canvas rejects resizing; OCU and SteamVR custom grips retain capture, remain visible, respect minimum/canvas bounds, and persist geometry.");

@@ -1,4 +1,6 @@
 #include "Streamline.h"
+#include "Features/ReverseZ.h"
+#include "NvidiaProject.h"
 #include "StreamlineConstants.h"
 
 #include <algorithm>
@@ -36,6 +38,30 @@ namespace
 	constexpr uint32_t kDLSSDiagnosticRepeatFrameGap = 300;
 	constexpr int32_t kDLSSDiagnosticTextResultCode = std::numeric_limits<int32_t>::min();
 	void* s_streamlineDllDirectoryCookie = nullptr;
+
+	void LogReflexOutcome(const Reflex::Outcome& a_outcome)
+	{
+		if (a_outcome.notice == Reflex::Notice::None)
+			return;
+		const bool failure = a_outcome.notice == Reflex::Notice::Failure || a_outcome.notice == Reflex::Notice::Exhausted;
+		if (!spdlog::should_log(failure ? spdlog::level::warn : spdlog::level::info))
+			return;
+		const auto& state = a_outcome.status;
+		if (failure) {
+			logger::warn(
+				"[Reflex] Native {} failed: NVAPI={} deviceHRESULT={} health={} failures={} retryAtMs={} pending={} requestedMode={} capUs={} markers={}",
+				magic_enum::enum_name(state.failureOperation), static_cast<int>(state.failureStatus),
+				static_cast<int32_t>(state.deviceStatus), magic_enum::enum_name(state.health),
+				state.failures, state.retryAtMs, state.pending, magic_enum::enum_name(state.desired.mode),
+				state.desired.frameLimitUs, state.desired.useMarkersToOptimize);
+		} else {
+			logger::info(
+				"[Reflex] Native {}: health={} acceptedMode={} capUs={} markers={} NVAPI={}",
+				magic_enum::enum_name(a_outcome.notice), magic_enum::enum_name(state.health),
+				magic_enum::enum_name(state.accepted.mode), state.accepted.frameLimitUs,
+				state.accepted.useMarkersToOptimize, static_cast<int>(state.nativeStatus));
+		}
+	}
 
 	struct StreamlineCoreBindings
 	{
@@ -1422,7 +1448,7 @@ bool Streamline::LoadInterposer()
 
 	pref.engine = sl::EngineType::eCustom;
 	pref.engineVersion = "1.0.0";
-	pref.projectId = "f8776929-c969-43bd-ac2b-294b4de58aac";
+	pref.projectId = NvidiaProject::kId;
 
 	pref.renderAPI = sl::RenderAPI::eD3D11;
 	pref.flags = sl::PreferenceFlags::eUseManualHooking | sl::PreferenceFlags::eUseFrameBasedResourceTagging;
@@ -1472,8 +1498,6 @@ bool Streamline::LoadInterposer()
 	slSetD3DDevice = bindings.setD3DDevice;
 	initialized = true;
 	InvalidateDLSSOptionsCache();
-	reflexOptionsCache = {};
-	lastReflexSleepFrame = UINT32_MAX;
 	dlssBudgetWarningThrottle.Reset();
 	lifecycleState.store(LifecycleState::Initialized, std::memory_order_release);
 	logger::info("[Streamline] Successfully initialized Streamline");
@@ -1490,6 +1514,9 @@ void Streamline::Shutdown()
 		return;
 
 	lifecycleState.store(LifecycleState::ShuttingDown, std::memory_order_release);
+	const auto reflexShutdown = reflexBackend.Shutdown();
+	if (reflexShutdown != NVAPI_OK)
+		logger::warn("[Reflex] Native shutdown failed: NVAPI={}; retaining the NVAPI module", static_cast<int>(reflexShutdown));
 	ResetDLSSIdleFences();
 	const bool shutdownWasRequired = initialized;
 	bool shutdownConfirmed = !shutdownWasRequired;
@@ -1528,10 +1555,8 @@ void Streamline::Shutdown()
 	slDLSSGetOptimalSettings = nullptr;
 	slDLSSGetState = nullptr;
 	slDLSSSetOptions = nullptr;
-	slReflexGetState = nullptr;
-	slReflexSleep = nullptr;
-	slReflexSetOptions = nullptr;
 	slPCLSetMarker = nullptr;
+	slPCLSetOptions = nullptr;
 	slInit = nullptr;
 	slShutdown = nullptr;
 	slIsFeatureSupported = nullptr;
@@ -1587,6 +1612,7 @@ bool Streamline::TrySetD3DDevice(ID3D11Device* a_device)
 		return true;
 
 	InvalidateDLSSRelatchDrain();
+	(void)reflexBackend.BindDevice(nullptr, false);
 	const sl::Result result = slSetD3DDevice(a_device);
 	if (result != sl::Result::eOk) {
 		logger::error("[Streamline] D3D device binding failed: {}", magic_enum::enum_name(result));
@@ -1604,6 +1630,26 @@ bool Streamline::TrySetD3DDevice(ID3D11Device* a_device)
 	return true;
 }
 
+void Streamline::BindNativeReflex(ID3D11Device* a_device)
+{
+	// Streamline returns an owned reference to the unwrapped interface.
+	Microsoft::WRL::ComPtr<IUnknown> nativeInterface;
+	const auto unwrapResult = slGetNativeInterface ?
+	                              slGetNativeInterface(a_device, reinterpret_cast<void**>(nativeInterface.GetAddressOf())) :
+	                              sl::Result::eErrorNotInitialized;
+	Microsoft::WRL::ComPtr<ID3D11Device> nativeDevice;
+	const HRESULT queryResult = nativeInterface ? nativeInterface.As(&nativeDevice) : E_NOINTERFACE;
+	if (unwrapResult != sl::Result::eOk || FAILED(queryResult) || !nativeDevice) {
+		(void)reflexBackend.BindDevice(nullptr, false);
+		logger::error("[Reflex] Native device unavailable: Streamline={} HRESULT={}",
+			magic_enum::enum_name(unwrapResult), static_cast<int32_t>(queryResult));
+		return;
+	}
+	const auto result = reflexBackend.BindDevice(nativeDevice.Get(), adapterSupportsReflex);
+	if (result != NVAPI_OK)
+		logger::warn("[Reflex] Native binding unavailable: NVAPI={}", static_cast<int>(result));
+}
+
 void Streamline::MarkAdapterUnavailable(const char* a_reason)
 {
 	adapterSupportsDLSS = false;
@@ -1613,6 +1659,8 @@ void Streamline::MarkAdapterUnavailable(const char* a_reason)
 	featureReflex = false;
 	featurePCL = false;
 	reflexSupportedOnCurrentAdapter = false;
+	boundDeviceIdentity = nullptr;
+	(void)reflexBackend.BindDevice(nullptr, false);
 	featureCheckComplete = true;
 	if (a_reason && *a_reason)
 		logger::info("[Streamline] NVIDIA features unavailable: {}", a_reason);
@@ -1694,8 +1742,6 @@ bool Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 		logger::info("[Streamline] Reflex/PCL disabled on non-NVIDIA adapter");
 	}
 	InvalidateDLSSOptionsCache();
-	reflexOptionsCache = {};
-	lastReflexSleepFrame = UINT32_MAX;
 	return true;
 }
 
@@ -1704,10 +1750,8 @@ bool Streamline::PostDevice()
 	slDLSSGetOptimalSettings = nullptr;
 	slDLSSGetState = nullptr;
 	slDLSSSetOptions = nullptr;
-	slReflexGetState = nullptr;
-	slReflexSleep = nullptr;
-	slReflexSetOptions = nullptr;
 	slPCLSetMarker = nullptr;
+	slPCLSetOptions = nullptr;
 	featureDLSS = false;
 	featureReflex = false;
 	featurePCL = false;
@@ -1752,23 +1796,27 @@ bool Streamline::PostDevice()
 		}
 
 		if (adapterSupportsReflex) {
-			bool reflexFunctionsBound = true;
-			reflexFunctionsBound &= bindFeatureFn(sl::kFeatureReflex, "slReflexGetState", (void*&)slReflexGetState);
-			reflexFunctionsBound &= bindFeatureFn(sl::kFeatureReflex, "slReflexSleep", (void*&)slReflexSleep);
-			reflexFunctionsBound &= bindFeatureFn(sl::kFeatureReflex, "slReflexSetOptions", (void*&)slReflexSetOptions);
-			featureReflex = reflexFunctionsBound;
+			bool loaded = false;
+			featureReflex = slIsFeatureLoaded &&
+			                slIsFeatureLoaded(sl::kFeatureReflex, loaded) == sl::Result::eOk && loaded;
 		}
 
 		if (adapterSupportsReflex && !featureReflex) {
-			logger::warn("[Streamline] Reflex functions are missing; Reflex runtime controls will be disabled");
+			logger::warn("[Streamline] Reflex plugin is unavailable; Reflex runtime controls will be disabled");
 		} else if (featureReflex) {
 			logger::info("[Streamline] Reflex runtime controls are available");
 		} else {
 			logger::info("[Streamline] Reflex is not supported by the current adapter");
 		}
 
-		if (adapterSupportsPCL)
+		if (adapterSupportsPCL) {
 			featurePCL = bindFeatureFn(sl::kFeaturePCL, "slPCLSetMarker", (void*&)slPCLSetMarker);
+			if (bindFeatureFn(sl::kFeaturePCL, "slPCLSetOptions", (void*&)slPCLSetOptions)) {
+				// PCL owns ping-message configuration independently of native pacing.
+				if (SL_FAILED(result, slPCLSetOptions(sl::PCLOptions{})))
+					logger::warn("[Streamline] PCL configuration failed: {}", magic_enum::enum_name(result));
+			}
+		}
 		if (adapterSupportsPCL && !featurePCL) {
 			logger::warn("[Streamline] PCL marker function is unavailable; marker optimization requests will be ignored");
 		} else if (featurePCL) {
@@ -1781,8 +1829,7 @@ bool Streamline::PostDevice()
 	}
 
 	InvalidateDLSSOptionsCache();
-	reflexOptionsCache = {};
-	lastReflexSleepFrame = UINT32_MAX;
+	BindNativeReflex(boundDeviceIdentity);
 	featureCheckComplete = true;
 	return true;
 }
@@ -1902,7 +1949,8 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 	slConstants.cameraUp = { viewMatrix._21, viewMatrix._22, viewMatrix._23 };
 	slConstants.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
 	slConstants.cameraPos = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
-	slConstants.depthInverted = sl::Boolean::eFalse;
+	const auto* depthSnapshot = upscaling.GetSubmitTemporalSnapshotForDispatch();
+	slConstants.depthInverted = (depthSnapshot ? depthSnapshot->key.depthConvention == Depth::Convention::Reversed : globals::features::reverseZ.IsActive()) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 	sl::matrixFullInvert(slConstants.clipToCameraView, slConstants.cameraViewToClip);
 
 	// Preserve each viewport's crop basis around camera-relative reprojection.
@@ -2870,8 +2918,10 @@ void Streamline::InvalidateDLSSCropHistory()
 		}
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	std::scoped_lock lock(dlssViewportCropTelemetryMutex);
 	dlssViewportCropTelemetry = {};
+#endif
 }
 
 void Streamline::ResetDLSSIdleFences()
@@ -3010,20 +3060,16 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	const bool submitStageVRDLSS =
 		globals::game::isVR &&
 		upscaling.IsPresentationUpscalingActive();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	const auto passRoute =
 		(submitStageVRDLSS ||
 			viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter) ?
 			DLSSPassRoute::Submit :
 			DLSSPassRoute::Main;
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	const bool collectDLSSDiagnostics = ShouldLogDLSSDiagnostics() || IsDLSSDevBenchTraceActive();
+	const bool collectPassTelemetry = upscaling.IsNeuralRenderingRequested() || collectDLSSDiagnostics;
 #endif
-	const bool collectPassTelemetry = upscaling.IsNeuralRenderingRequested()
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	                                  || collectDLSSDiagnostics
-#endif
-		;
 	DLSSDispatchDiagnostics diagnostics{};
 	DLSSDispatchDiagnostics* diagnosticsPtr = &diagnostics;
 	diagnostics.label = label ? label : "DLSS Evaluate";
@@ -3081,7 +3127,6 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		diagnostics.optionsCacheHDR = optionsCache.isHDR;
 		diagnostics.optionsCacheLegacyProfile = optionsCache.useLegacyProfile;
 	};
-#endif
 	const auto publishCropTelemetry = [&](bool a_evaluationSucceeded) {
 		if (!collectPassTelemetry)
 			return;
@@ -3111,10 +3156,11 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		dlssViewportCropTelemetry[GetDLSSViewportRoleIndex(viewportRole)][eyeIndex] =
 			snapshot;
 	};
+#endif
 
 	if (!cropDescriptorValid || !motionVectorScale.valid) {
-		publishCropTelemetry(false);
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		publishCropTelemetry(false);
 		LogDLSSDispatchDiagnostics(
 			DLSSDiagnosticStage::SetConstants,
 			"invalid_crop_descriptor",
@@ -3155,8 +3201,8 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	if (!cropHistory || cropGeneration == 0) {
 		diagnostics.cropResetReason =
 			UpscalingDLSS::CropHistoryResetReason::InvalidGeneration;
-		publishCropTelemetry(false);
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		publishCropTelemetry(false);
 		LogDLSSDispatchDiagnostics(
 			DLSSDiagnosticStage::ResolveViewport,
 			"crop_history_unavailable",
@@ -3179,10 +3225,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	diagnostics.historyResetRequested =
 		upscaling.ShouldResetHistoryThisFrame() || cropContinuity.reset;
-#endif
 	publishCropTelemetry(false);
-
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	DLSSDevBenchTraceSignature devBenchFrameConstantsSignature{};
 	auto* devBenchFrameConstantsSignaturePtr = IsDLSSDevBenchTraceActive() ? &devBenchFrameConstantsSignature : nullptr;
 #endif
@@ -3221,11 +3264,17 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	// These markers currently surround only a DLSS evaluation, not Skyrim's
 	// complete render submission. Keep marker-driven scheduling disabled on every
 	// runtime until CSX can publish an authoritative full-frame marker sequence.
+	bool nativeMarkersAccepted = false;
+	if constexpr (ReflexPolicy::kHasAuthoritativeFullFrameMarkerCoverage) {
+		const auto reflexState = reflexBackend.GetStatus();
+		nativeMarkersAccepted = reflexState.acceptedValid && !reflexState.pending &&
+		                        reflexState.accepted.useMarkersToOptimize;
+	}
 	const bool emitPCLMarkers = ReflexPolicy::ResolveCSXMarkerOptimization(
 		featureReflex,
 		featurePCL,
 		upscaling.settings.reflexUseMarkersToOptimize &&
-			reflexOptionsCache.useMarkersToOptimize)
+			nativeMarkersAccepted)
 	                                .enabled;
 	const auto emitPCLMarker = [&](sl::PCLMarker marker, const char* stageName, uint32_t stageIndex) {
 		if (!emitPCLMarkers || !slPCLSetMarker || !frameToken)
@@ -3278,6 +3327,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitStart, "DLSS-EvaluateStart", 0);
 	InvalidateDLSSRelatchDrain();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	if (collectPassTelemetry) {
 		std::scoped_lock lock(dlssPassTelemetryMutex);
 		auto& telemetry = dlssPassTelemetryFrames.GetOrCreate(diagnostics.frame);
@@ -3285,6 +3335,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		                     [static_cast<std::size_t>(passRoute)][eyeIndex];
 		UpscalingTelemetry::SaturatingIncrement(attempts);
 	}
+#endif
 	sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
 	const bool evaluationSucceeded = DLSSResultPolicy::IsEvaluationSuccessful(evalResult);
 	if (evaluationSucceeded) {
@@ -3293,6 +3344,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 			cropGeneration,
 			currentCrop,
 			cropContinuity);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		publishCropTelemetry(true);
 		if (collectPassTelemetry) {
 			std::scoped_lock lock(dlssPassTelemetryMutex);
@@ -3302,6 +3354,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 				UpscalingTelemetry::SaturatingIncrement(successes);
 			}
 		}
+#endif
 	}
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitEnd, "DLSS-EvaluateEnd", 1);
 
@@ -3367,12 +3420,14 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 Streamline::DLSSPassTelemetrySnapshot Streamline::GetDLSSPassTelemetrySnapshot(
 	uint32_t a_frame) const noexcept
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	try {
 		std::scoped_lock lock(dlssPassTelemetryMutex);
 		if (const auto* telemetry = dlssPassTelemetryFrames.Find(a_frame))
 			return *telemetry;
 	} catch (...) {
 	}
+#endif
 
 	DLSSPassTelemetrySnapshot snapshot{};
 	snapshot.frame = a_frame;
@@ -3381,9 +3436,10 @@ Streamline::DLSSPassTelemetrySnapshot Streamline::GetDLSSPassTelemetrySnapshot(
 
 Streamline::DLSSViewportCropTelemetrySnapshot
 Streamline::GetDLSSViewportCropTelemetrySnapshot(
-	DLSSViewportRole a_role,
-	uint32_t a_eyeIndex) const noexcept
+	[[maybe_unused]] DLSSViewportRole a_role,
+	[[maybe_unused]] uint32_t a_eyeIndex) const noexcept
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	try {
 		std::scoped_lock lock(dlssViewportCropTelemetryMutex);
 		const uint32_t eye = std::min<uint32_t>(a_eyeIndex, 1u);
@@ -3391,6 +3447,9 @@ Streamline::GetDLSSViewportCropTelemetrySnapshot(
 	} catch (...) {
 		return {};
 	}
+#else
+	return {};
+#endif
 }
 
 bool Streamline::UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
@@ -3422,7 +3481,8 @@ bool Streamline::UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D1
 		false, 0u, Upscaling::kDLSSPresetK, viewportCrop);
 }
 
-bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)
+bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors,
+	const UpscalingTextures::VRInputSourceDescriptions* a_sourceDescriptions)
 {
 	auto state = globals::state;
 
@@ -3452,9 +3512,8 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		(isVR || upscaling.sharpenerTexture->resource.get() != a_upscalingTexture) &&
 		(!isVR || upscaling.sharpenerTexture->uav);
 
-	// Flat DLSS receives kMAIN as its color input, so writing directly back to it
-	// would alias the Streamline input and output tags. VR first isolates each eye's
-	// input and can retain its direct combined-target path when sharpening is off.
+	// Flat DLSS must keep color input and output distinct. VR isolates its inputs
+	// before writing the combined sharpener target.
 	if (!isVR) {
 		static bool loggedMissingSharpenerOutput = false;
 		if (!sharpenerOutputReady) {
@@ -3484,30 +3543,19 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		uint32_t eyeHeightOut = (uint32_t)screenSize.y;
 		uint32_t eyeWidthIn = (uint32_t)(renderSize.x / 2);
 		uint32_t eyeHeightIn = (uint32_t)renderSize.y;
-		const uint32_t contractGeneration =
-			upscaling.IsVRRenderScaleModeLatched() ?
-				upscaling.GetActiveVRRenderScaleContractGeneration() :
-				0u;
 		const bool vendorLifecycleMutationDeferred =
 			upscaling.ShouldDeferVRVendorLifecycleMutation() || upscaling.ShouldReuseOrdinarySaveResources();
 		const auto existingProvider =
 			vendorLifecycleMutationDeferred ?
 				upscaling.GetExistingVRVendorProviderSnapshot() :
 				Upscaling::VRExistingVendorProviderSnapshot{};
-		if (vendorLifecycleMutationDeferred &&
-			!upscaling.AreActiveVRIntermediateTexturesCompatible(
-				Upscaling::UpscaleMethod::kDLSS,
-				eyeWidthIn,
-				eyeHeightIn,
-				eyeWidthOut,
-				eyeHeightOut,
-				a_upscalingTexture,
-				a_motionVectors,
-				a_reactiveMask,
-				a_transparencyCompositionMask,
-				contractGeneration)) {
-			upscaling.dlssUpscaleOutputInSharpenerTexture = false;
-			return false;
+		UpscalingTextures::VRInputSourceDescriptions localDescriptions;
+		if (!a_sourceDescriptions || !a_sourceDescriptions->Matches(a_upscalingTexture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask)) {
+			if (!localDescriptions.Capture(a_upscalingTexture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask)) {
+				upscaling.dlssUpscaleOutputInSharpenerTexture = false;
+				return false;
+			}
+			a_sourceDescriptions = &localDescriptions;
 		}
 		if (vendorLifecycleMutationDeferred) {
 			if (!existingProvider.valid ||
@@ -3516,6 +3564,21 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				existingProvider.renderEyeHeight != eyeHeightIn ||
 				existingProvider.displayEyeWidth != eyeWidthOut ||
 				existingProvider.displayEyeHeight != eyeHeightOut) {
+				upscaling.dlssUpscaleOutputInSharpenerTexture = false;
+				return false;
+			}
+			// Texture and viewport reuse must share one captured provider generation.
+			if (!upscaling.AreActiveVRIntermediateTexturesCompatible(
+					Upscaling::UpscaleMethod::kDLSS,
+					eyeWidthIn,
+					eyeHeightIn,
+					eyeWidthOut,
+					eyeHeightOut,
+					a_upscalingTexture,
+					a_motionVectors,
+					a_reactiveMask,
+					a_transparencyCompositionMask,
+					existingProvider.contractGeneration, a_sourceDescriptions)) {
 				upscaling.dlssUpscaleOutputInSharpenerTexture = false;
 				return false;
 			}
@@ -3548,9 +3611,8 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				existingProvider.dlssPreset :
 				Upscaling::kDLSSPresetK;
 
-		// Split the combined stereo inputs up front. The direct left-eye path still
-		// uses the native depth buffer, but isolated-output fallback needs valid
-		// per-eye depth for both eyes.
+		// Both eyes need isolated color inputs; only eye zero can address native
+		// depth without an offset.
 		if (!upscaling.PreparePerEyeInputs(
 				a_upscalingTexture,
 				depthTexture.texture,
@@ -3558,7 +3620,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				a_reactiveMask,
 				a_transparencyCompositionMask,
 				false,
-				true)) {
+				true, a_sourceDescriptions)) {
 			static bool loggedPrepareFailure = false;
 			if (!loggedPrepareFailure) {
 				logger::warn("[Streamline] VR DLSS/DLAA skipped because per-eye input preparation failed.");
@@ -3590,68 +3652,15 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			return stretched;
 		};
 
-		const bool canUseDirectEye0 =
-			perEyeResourcesReady;
-
-		if (!canUseDirectEye0) {
-			bool allEvaluated = true;
-			for (uint32_t i = 0; i < 2; ++i) {
-				sl::ViewportHandle vp = (i == 1) ? viewportRight : viewport;
-				const bool eyeEvaluated = EvaluateDLSS(vp, i,
-					upscaling.vrIntermediateColorIn[i]->resource.get(), upscaling.vrIntermediateColorOut[i]->resource.get(),
-					upscaling.vrIntermediateDepth[i]->resource.get(), upscaling.vrIntermediateMotionVectors[i]->resource.get(),
-					upscaling.vrIntermediateReactiveMask[i]->resource.get(), upscaling.vrIntermediateTransparencyMask[i]->resource.get(),
-					extentIn, extentOut, eyeWidthOut,
-					"VR prepared per-eye",
-					DLSSViewportRole::FullEye,
-					useAuthoritativeExistingProfile,
-					authoritativeQualityMode,
-					authoritativeDLSSPreset);
-				upscaling.RecordVRDLSSFullEyeEvaluation(i, eyeEvaluated);
-				allEvaluated &= eyeEvaluated;
-			}
-
-			bool fallbackPresented = false;
-			if (allEvaluated) {
-				upscaling.FinalizePerEyeOutputs(colorOut);
-			} else {
-				upscaling.RequestHistoryReset();
-				fallbackPresented = presentStretchFallback();
-				static bool loggedVREvaluateFailure = false;
-				static bool loggedVRStretchFallbackFailure = false;
-				if (fallbackPresented) {
-					if (!loggedVREvaluateFailure) {
-						logger::warn("[Streamline] VR DLSS/DLAA evaluate did not complete for both eyes; using full-size stretch fallback for this frame.");
-						loggedVREvaluateFailure = true;
-					}
-				} else if (!loggedVRStretchFallbackFailure) {
-					logger::warn("[Streamline] VR DLSS/DLAA evaluate did not complete for both eyes and stretch fallback failed; keeping the current scene texture.");
-					loggedVRStretchFallbackFailure = true;
-				}
-			}
-			upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && (allEvaluated || fallbackPresented);
-			return allEvaluated;
-		}
-
-		// PreparePerEyeInputs already copied both depth halves into distinct resources
-		// before either evaluation. Eye 0 only writes color, so the prepared right-eye
-		// depth remains stable and does not need a second full-eye copy here.
-		const bool canRestoreDirectEye0Output =
-			!outputToSharpener &&
-			upscaling.vrIntermediateColorOut[0] &&
-			upscaling.vrIntermediateColorOut[0]->resource;
-		if (canRestoreDirectEye0Output) {
-			D3D11_BOX leftOutBackup = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
-			context->CopySubresourceRegion(upscaling.vrIntermediateColorOut[0]->resource.get(), 0, 0, 0, 0, colorOut, 0, &leftOutBackup);
-		}
-
-		// Eye 0 writes directly to combined output.
+		// The sharpener target is private until the pair succeeds. Scene output must
+		// stay untouched even if one eye's evaluation or fallback fails.
+		ID3D11Resource* leftColorOut = outputToSharpener ? colorOut : upscaling.vrIntermediateColorOut[0]->resource.get();
 		const bool leftEvaluated = EvaluateDLSS(viewport, 0,
-			upscaling.vrIntermediateColorIn[0]->resource.get(), colorOut,
+			upscaling.vrIntermediateColorIn[0]->resource.get(), leftColorOut,
 			depthTexture.texture, upscaling.vrIntermediateMotionVectors[0]->resource.get(),
 			upscaling.vrIntermediateReactiveMask[0]->resource.get(), upscaling.vrIntermediateTransparencyMask[0]->resource.get(),
 			extentIn, extentOut, eyeWidthOut,
-			"VR direct eye0 combined",
+			outputToSharpener ? "VR direct eye0 combined" : "VR eye0 intermediate",
 			DLSSViewportRole::FullEye,
 			useAuthoritativeExistingProfile,
 			authoritativeQualityMode,
@@ -3673,12 +3682,15 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 		if (leftEvaluated && rightEvaluated) {
 			if (depthTexture.depthSRV) {
-				upscaling.ClearVRDirectUpscaledEyeOutput(0, colorOutUAV, depthTexture.depthSRV, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
+				auto* leftColorOutUAV = outputToSharpener ? colorOutUAV : upscaling.vrIntermediateColorOut[0]->uav.get();
+				upscaling.ClearVRDirectUpscaledEyeOutput(0, leftColorOutUAV, depthTexture.depthSRV, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
 				upscaling.ClearVRDirectUpscaledEyeOutput(1, upscaling.vrIntermediateColorOut[1]->uav.get(), depthTexture.depthSRV, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
 			}
 
-			D3D11_BOX rightOut = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
-			context->CopySubresourceRegion(colorOut, 0, eyeWidthOut, 0, 0, upscaling.vrIntermediateColorOut[1]->resource.get(), 0, &rightOut);
+			D3D11_BOX eyeOut = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
+			if (!outputToSharpener)
+				context->CopySubresourceRegion(colorOut, 0, 0, 0, 0, leftColorOut, 0, &eyeOut);
+			context->CopySubresourceRegion(colorOut, 0, eyeWidthOut, 0, 0, upscaling.vrIntermediateColorOut[1]->resource.get(), 0, &eyeOut);
 		}
 
 		bool fallbackPresented = false;
@@ -3695,10 +3707,6 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			} else if (!loggedVRDirectStretchFallbackFailure) {
 				logger::warn("[Streamline] VR DLSS/DLAA direct-eye evaluate failed and stretch fallback failed; keeping the current scene texture.");
 				loggedVRDirectStretchFallbackFailure = true;
-			}
-			if (!fallbackPresented && canRestoreDirectEye0Output) {
-				D3D11_BOX leftOutBackup = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
-				context->CopySubresourceRegion(colorOut, 0, 0, 0, 0, upscaling.vrIntermediateColorOut[0]->resource.get(), 0, &leftOutBackup);
 			}
 		}
 
@@ -3876,57 +3884,36 @@ Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources(uint64_t
 
 bool Streamline::EnsureReflexDisabledForFrameGeneration()
 {
-	if (!initialized || !reflexSupportedOnCurrentAdapter || !featureReflex || !slReflexSetOptions)
-		return true;
-	if (frameGenerationQuarantinedByReflex.load(std::memory_order_acquire))
-		return false;
-
-	const bool reflexAlreadyOff = reflexOptionsCache.valid &&
-	                              reflexOptionsCache.mode == sl::ReflexMode::eOff &&
-	                              reflexOptionsCache.frameLimitUs == 0 &&
-	                              !reflexOptionsCache.useMarkersToOptimize;
-	if (reflexAlreadyOff)
-		return true;
-
-	sl::ReflexOptions disableOptions{};
-	disableOptions.mode = sl::ReflexMode::eOff;
-	disableOptions.frameLimitUs = 0;
-	disableOptions.useMarkersToOptimize = false;
-	if (SL_FAILED(result, slReflexSetOptions(disableOptions))) {
+	const auto outcome = reflexBackend.Disable(GetTickCount64());
+	LogReflexOutcome(outcome);
+	if (!outcome.disabled && !frameGenerationQuarantinedByReflex.load(std::memory_order_acquire)) {
 		frameGenerationQuarantinedByReflex.store(true, std::memory_order_release);
 		logger::error(
-			"[Streamline] Failed to disable Reflex before Frame Generation: {}. Frame Generation is quarantined until restart.",
-			magic_enum::enum_name(result));
-		return false;
+			"[Streamline] Native Reflex disable is unconfirmed (NVAPI={}, health={}). Frame Generation is quarantined until restart.",
+			static_cast<int>(outcome.status.nativeStatus), magic_enum::enum_name(outcome.status.health));
 	}
-
-	reflexOptionsCache.valid = true;
-	reflexOptionsCache.mode = disableOptions.mode;
-	reflexOptionsCache.frameLimitUs = disableOptions.frameLimitUs;
-	reflexOptionsCache.useMarkersToOptimize = disableOptions.useMarkersToOptimize;
-	return true;
+	return outcome.disabled && !frameGenerationQuarantinedByReflex.load(std::memory_order_acquire);
 }
 
 void Streamline::UpdateReflex()
 {
-	if (!initialized || !reflexSupportedOnCurrentAdapter || !featureReflex || !slReflexSetOptions)
+	if (!initialized || !reflexSupportedOnCurrentAdapter || !featureReflex)
 		return;
 
 	const auto& upscaling = globals::features::upscaling;
 	const bool reflexBlockedByFrameGeneration = upscaling.IsFrameGenerationDx12PathActive();
 	if (reflexBlockedByFrameGeneration) {
 		(void)EnsureReflexDisabledForFrameGeneration();
-		lastReflexSleepFrame = UINT32_MAX;
 		return;
 	}
 
 	auto& settings = globals::features::upscaling.settings;
 
-	sl::ReflexOptions options{};
+	Reflex::Options options{};
 	if (!settings.reflexLowLatencyMode) {
-		options.mode = sl::ReflexMode::eOff;
+		options.mode = Reflex::Mode::Off;
 	} else {
-		options.mode = settings.reflexLowLatencyBoost ? sl::ReflexMode::eLowLatencyWithBoost : sl::ReflexMode::eLowLatency;
+		options.mode = settings.reflexLowLatencyBoost ? Reflex::Mode::Boost : Reflex::Mode::On;
 	}
 
 	const float originalReflexFPSLimit = settings.reflexFPSLimit;
@@ -3944,43 +3931,6 @@ void Streamline::UpdateReflex()
 		settings.reflexUseMarkersToOptimize);
 	options.useMarkersToOptimize = markerOptimization.enabled;
 
-	if (!reflexOptionsCache.valid ||
-		reflexOptionsCache.mode != options.mode ||
-		reflexOptionsCache.frameLimitUs != options.frameLimitUs ||
-		reflexOptionsCache.useMarkersToOptimize != options.useMarkersToOptimize) {
-		if (SL_FAILED(result, slReflexSetOptions(options))) {
-			logger::error("[Streamline] Failed to apply Reflex options: {}", magic_enum::enum_name(result));
-		} else {
-			reflexOptionsCache.valid = true;
-			reflexOptionsCache.mode = options.mode;
-			reflexOptionsCache.frameLimitUs = options.frameLimitUs;
-			reflexOptionsCache.useMarkersToOptimize = options.useMarkersToOptimize;
-			logger::info(
-				"[Streamline] Applied Reflex options: mode={} frameLimitUs={} markersRequested={} markersAvailable={} markersEffective={}",
-				magic_enum::enum_name(options.mode),
-				options.frameLimitUs,
-				settings.reflexUseMarkersToOptimize,
-				markerOptimization.available,
-				options.useMarkersToOptimize);
-		}
-	}
-
-	if (!slReflexSleep)
-		return;
-
-	if (options.mode == sl::ReflexMode::eOff && options.frameLimitUs == 0)
-		return;
-
 	const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0;
-	if (lastReflexSleepFrame == currentFrame)
-		return;
-
-	const auto frameTokenSnapshot = AcquireFrameToken(currentFrame, "reflex");
-	if (!frameTokenSnapshot)
-		return;
-
-	lastReflexSleepFrame = currentFrame;
-	if (SL_FAILED(result, slReflexSleep(*frameTokenSnapshot->token))) {
-		logger::warn("[Streamline] Reflex sleep call failed: {}", magic_enum::enum_name(result));
-	}
+	LogReflexOutcome(reflexBackend.Update(options, currentFrame, GetTickCount64()));
 }

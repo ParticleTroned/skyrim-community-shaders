@@ -3,6 +3,7 @@
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
+#include "SubsurfaceScattering/SkinColor.hlsli"
 
 // [Per H. Christensen, Brent Burley 2015, "Approximate Reflectance Profiles for Efficient Subsurface Scattering"]
 // https://graphics.pixar.com/library/ApproxBSSRDF/paper.pdf
@@ -163,20 +164,12 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssA
 	color = Color::IrradianceToGamma(color);
 
 	if (humanProfile) {
-		float3 base0 = centerColor.xyz;
 		float intensity = clamp(isFemale ? SharedData::SSSHumanFemaleIntensity : SharedData::SSSHumanMaleIntensity, 0.0f, 2.0f);
 		float brightness = clamp(isFemale ? SharedData::SSSHumanFemaleBrightness : SharedData::SSSHumanMaleBrightness, 0.0f, 2.0f);
 		float baseSat = clamp(isFemale ? SharedData::SSSHumanFemaleBaseSaturation : SharedData::SSSHumanMaleBaseSaturation, 0.0f, 2.0f);
 		float finalSat = clamp(isFemale ? SharedData::SSSHumanFemaleSaturation : SharedData::SSSHumanMaleSaturation, 0.0f, 2.0f);
 
-		float luma0 = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
-		float3 base = lerp(luma0.xxx, color, baseSat) * brightness;
-		float3 delta = base - base0;
-		color = base0 + delta * intensity;
-
-		float luma = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
-		color = lerp(luma.xxx, color, finalSat);
-		color = max(color, 0.0f.xxx);
+		color = BurleySkinColor(centerColor.xyz, color, intensity, brightness, baseSat, finalSat, sssAmount);
 	}
 
 	float4 outColor = float4(color, centerColor.w);

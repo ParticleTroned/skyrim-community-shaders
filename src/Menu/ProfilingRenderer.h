@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -9,6 +10,7 @@
 #include <imgui.h>
 
 #include "Profiler.h"
+#include "Utils/GraphSampleGate.h"
 #include "Utils/LegitProfiler.h"
 #include "Utils/VRFrameTiming.h"
 
@@ -80,6 +82,8 @@ public:
 	/** Draws Off/GPU/CPU controls and live timing graphs for one feature. */
 	static void RenderFeatureTimers(const std::string& featurePrefix);
 	static PerformanceTimingSummary CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture = true);
+	/** @brief Reads shared runtime frame identities without calculating feature timing histories. */
+	static PerformanceTimingSummary CaptureFrameTimingSummary(bool requestCapture = true);
 	/** Draws both feature timing views, preserving owned versus shared attribution. */
 	static void RenderFeaturePerformanceSummary(const std::string& featurePrefix);
 
@@ -88,6 +92,7 @@ private:
 	static inline TimingMode timingMode = TimingMode::GPU;
 	static inline float timeSinceLastUpdate = 0.0f;
 	static inline float lastFrameTime = 0.0f;
+	static inline uint64_t statisticsHistoryEpoch = 0;
 
 	struct PassEntry
 	{
@@ -113,11 +118,14 @@ private:
 	static inline std::vector<GroupEntry> cachedGroups;
 
 	static inline ImGuiUtils::ProfilerGraph gpuGraph{ Profiler::kHistorySize };
+	static inline Util::GraphSampleGate gpuGraphGate;
 
 	struct FeatureGraphState
 	{
 		ImGuiUtils::ProfilerGraph gpuGraph{ kFeatureGraphHistorySize };
 		ImGuiUtils::ProfilerGraph cpuGraph{ kFeatureGraphHistorySize };
+		Util::GraphSampleGate gpuGate;
+		Util::GraphSampleGate cpuGate;
 	};
 	struct FeatureTimingEntry
 	{
@@ -144,6 +152,14 @@ private:
 		float maxP95 = 0.0f;
 		float maxP99 = 0.0f;
 	};
+	struct FeatureStatistics
+	{
+		FeatureTimingData data;
+		double updatedAt = -1.0;
+		uint64_t historyEpoch = 0;
+		uint64_t externalEpoch = 0;
+	};
+	static inline std::unordered_map<std::string, std::array<FeatureStatistics, 2>> featureStatistics;
 	static inline std::unordered_map<std::string, FeatureGraphState> featureGraphs;
 	static inline std::unordered_map<std::string, FeatureTimingMode> featureTimingModes;
 
@@ -166,7 +182,7 @@ private:
 		TimingAttribution attribution = TimingAttribution::Feature,
 		bool useSelfTimesForTotal = false,
 		const std::vector<Profiler::TimerResult>* timingResults = nullptr);
-	static bool RenderFeatureTimingGraph(const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, int graphHeight);
-	static bool RenderTimingSection(const std::string& key, const FeatureTimingData& data, bool cpuMode, bool showTable);
+	static bool RenderFeatureTimingGraph(const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, Util::GraphSampleGate& gate, int graphHeight);
+	static bool RenderTimingSection(const std::string& key, const FeatureTimingData& data, bool cpuMode, bool showTable, const FeatureTimingData* statistics = nullptr);
 	static bool RenderFeatureTimingData(const std::string& featurePrefix, FeatureTimingMode featureMode, bool showTable);
 };

@@ -1,0 +1,13 @@
+#pragma once
+
+#include "Features/Upscaling/NeuralRendering/ProviderIdentity.h"
+
+namespace NeuralRendering
+{
+	inline constexpr ProviderReference kProviderReference{
+		"@NEURAL_RENDERING_RUNTIME_SHA256@",
+		"@NEURAL_RENDERING_SDK_PACKAGE@",
+		"@NEURAL_RENDERING_SDK_SOURCE@"
+	};
+	static_assert(ClassifyProviderRelease(kProviderReference.sha256, kProviderReference.sha256) == ProviderReleaseMatch::PinnedReference);
+}

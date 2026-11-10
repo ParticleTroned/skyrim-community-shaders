@@ -13,7 +13,7 @@ extract_between("${_header}"
     "menu_resize_helpers_under_test.h"
 )
 extract_between("${_header}"
-    "void MenuHeaderRenderer::RenderSteamVRResizeHandles(float uiScale)"
+    "void MenuHeaderRenderer::RenderSteamVRResizeHandles("
     "void MenuHeaderRenderer::RenderStableHeader("
     "menu_resize_under_test.h"
 )
@@ -25,7 +25,7 @@ extract_between("${_menu}"
 )
 extract_between("${_menu}"
     "\t// Determine window flags based on docking state"
-    "\tif (ImGui::Begin(title.c_str(), &IsEnabled, windowFlags))"
+    "\tconst bool contentsVisible"
     "menu_resize_flags_under_test.h"
 )
 extract_between("${_menu}"

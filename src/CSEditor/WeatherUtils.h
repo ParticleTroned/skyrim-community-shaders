@@ -173,10 +173,10 @@ namespace PropertyDrawer
 // ============================================================================
 namespace WidgetFactory
 {
-	// Populate a widget container from a form array
-	// WidgetType must have a constructor taking FormType*
+	/// Populate from a form array using a shared initialization-batch name index.
+	/// WidgetType must have a constructor taking FormType*.
 	template <typename WidgetType, typename FormType>
-	void PopulateWidgets(std::vector<std::unique_ptr<Widget>>& widgets)
+	void PopulateWidgets(std::vector<std::unique_ptr<Widget>>& widgets, Util::FormEditorIDIndex& editorIDs)
 	{
 		auto dataHandler = RE::TESDataHandler::GetSingleton();
 		if (!dataHandler)
@@ -188,7 +188,7 @@ namespace WidgetFactory
 		for (auto form : formArray) {
 			if (form) {
 				auto widget = std::make_unique<WidgetType>(form);
-				widget->CacheFormData();
+				widget->CacheFormData(&editorIDs);
 				widget->RestoreRememberedBaseline();
 				widget->Load(false, false);
 				widgets.push_back(std::move(widget));
@@ -196,9 +196,9 @@ namespace WidgetFactory
 		}
 	}
 
-	// Populate a widget container with SimpleFormWidget for cache-only purposes
+	/// Populate cache-only widgets using a shared initialization-batch name index.
 	template <typename FormType>
-	void PopulateSimpleWidgets(std::vector<std::unique_ptr<Widget>>& widgets)
+	void PopulateSimpleWidgets(std::vector<std::unique_ptr<Widget>>& widgets, Util::FormEditorIDIndex& editorIDs)
 	{
 		auto dataHandler = RE::TESDataHandler::GetSingleton();
 		if (!dataHandler)
@@ -211,7 +211,7 @@ namespace WidgetFactory
 			if (form) {
 				auto widget = std::make_unique<SimpleFormWidget>();
 				widget->form = form;
-				widget->CacheFormData();
+				widget->CacheFormData(&editorIDs);
 				widgets.push_back(std::move(widget));
 			}
 		}

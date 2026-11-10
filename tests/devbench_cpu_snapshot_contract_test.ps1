@@ -14,6 +14,8 @@ Assert-GameFtTest ($bridge.Substring($off) -notmatch 'cpu_burst_snapshot|Capture
 $snapshot = [regex]::Match($bridge, '(?s)json BuildCpuBurstSnapshot\(\).*?(?=json BuildOCUEffectFoveationResult)').Value
 Assert-GameFtTest ($snapshot -match 'RunOnMainThread' -and $snapshot -match 'CaptureFeatureSettings') 'snapshot does not use production service on main thread'
 Assert-GameFtTest ($snapshot -notmatch 'RequestCapture|SetUserEnabled|SetOCU|CreateThread') 'snapshot mutates capture/render state'
-$descriptor = [regex]::Match($bridge, 'R"\((\{"description":"Inspect and control the CSX GPU/CPU profiler\.[^\r\n]*)\)";').Groups[1].Value | ConvertFrom-Json
+$descriptorMatch = [regex]::Match($bridge, '(?s)static constexpr const char\* descriptor\s*=\s*R"\((.*?)\)";')
+Assert-GameFtTest $descriptorMatch.Success 'endpoint descriptor missing'
+$descriptor = $descriptorMatch.Groups[1].Value | ConvertFrom-Json
 Assert-GameFtTest ('cpu_burst_snapshot' -in $descriptor.inputSchema.properties.action.enum) 'endpoint schema missing action'
 Write-Output "DevBench CPU snapshot contract: $checks checks passed"

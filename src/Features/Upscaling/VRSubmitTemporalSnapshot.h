@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Utils/DepthConvention.h"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -19,6 +20,8 @@ namespace VRSubmitTemporalSnapshot
 		std::uint32_t outputWidth = 0;
 		std::uint32_t outputHeight = 0;
 		std::uint64_t compositorCycle = 0;
+		Depth::Convention depthConvention = Depth::Convention::Standard;
+		std::uint64_t depthGeneration = 0;
 
 		bool operator==(const Key&) const = default;
 	};
@@ -32,6 +35,7 @@ namespace VRSubmitTemporalSnapshot
 		float verticalFov = 0.0f;
 		float frameTimeMilliseconds = 0.0f;
 		bool historyReset = false;
+		Depth::Convention depthConvention = Depth::Convention::Standard;
 	};
 
 	[[nodiscard]] constexpr bool IsValid(const Key& a_key) noexcept
@@ -63,7 +67,8 @@ namespace VRSubmitTemporalSnapshot
 
 	[[nodiscard]] constexpr bool HasMatchingCameraContract(const Key& a_previous, const Key& a_candidate) noexcept
 	{
-		return a_previous.generation == a_candidate.generation &&
+		return a_previous.depthConvention == a_candidate.depthConvention && a_previous.depthGeneration == a_candidate.depthGeneration &&
+		       a_previous.generation == a_candidate.generation &&
 		       a_previous.method == a_candidate.method &&
 		       a_previous.inputWidth == a_candidate.inputWidth &&
 		       a_previous.inputHeight == a_candidate.inputHeight &&
@@ -195,7 +200,7 @@ namespace VRSubmitTemporalSnapshot
 			valid = false;
 			key = a_key;
 			// Jitter and vendor frame tokens permit one temporal sample per engine frame.
-			if (repeatedLogicalFrame || !IsValid(a_key) || !IsValid(a_scalars))
+			if (repeatedLogicalFrame || !IsValid(a_key) || !IsValid(a_scalars) || a_key.depthConvention != a_scalars.depthConvention)
 				return false;
 
 			scalars = a_scalars;

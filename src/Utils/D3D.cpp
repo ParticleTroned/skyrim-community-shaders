@@ -1,4 +1,5 @@
 #include "D3D.h"
+#include "Features/ReverseZ.h"
 
 #include "Deferred.h"
 #include "Features/TerrainBlending.h"
@@ -6,17 +7,37 @@
 #include "State.h"
 #include "Utils/Format.h"
 #include "Utils/RendererContextAccess.h"
+#include "Utils/ShaderDefines.h"
 #include "Utils/ShaderInclude.h"
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 #include <algorithm>
+#include <cstring>
 #include <d3dcompiler.h>
 #include <limits>
 #include <mutex>
+#include <set>
+#include <string>
 #include <string_view>
+#include <tuple>
 
 namespace Util
 {
+	namespace
+	{
+		using ShaderCompileFailureKey = std::tuple<std::wstring, std::string, std::string, uint32_t, std::string>;
+		std::mutex shaderCompileFailuresMutex;
+		std::set<ShaderCompileFailureKey> shaderCompileFailures;
+		uint64_t shaderCompileFailureGeneration = 0;
+	}
+
+	void ClearShaderCompileFailures()
+	{
+		std::lock_guard lock{ shaderCompileFailuresMutex };
+		++shaderCompileFailureGeneration;
+		shaderCompileFailures.clear();
+	}
+
 	VRDepthLayout DetectVRDepthLayout(uint32_t a_depthWidth, int a_viewportWidthPerEye)
 	{
 		if (!a_depthWidth || a_viewportWidthPerEye <= 0)
@@ -86,7 +107,7 @@ namespace Util
 
 		auto& tb = globals::features::terrainBlending;
 		if (tb.loaded && tb.settings.Enabled) {
-			auto* srv = prefer16bit ? (tb.blendedDepthTexture16 ? tb.blendedDepthTexture16->srv.get() : nullptr) : (tb.blendedDepthTexture ? tb.blendedDepthTexture->srv.get() : nullptr);
+			auto* srv = prefer16bit && !globals::features::reverseZ.IsActive() ? (tb.blendedDepthTexture16 ? tb.blendedDepthTexture16->srv.get() : nullptr) : (tb.blendedDepthTexture ? tb.blendedDepthTexture->srv.get() : nullptr);
 			if (srv)
 				return srv;
 		}
@@ -213,17 +234,19 @@ namespace Util
 
 	void SetResourceName(ID3D11DeviceChild* Resource, const char* Format, ...)
 	{
-		if (!Resource)
+		if (!Resource || !Format)
 			return;
 
-		char buffer[1024];
+		char buffer[1024]{};
 		va_list va;
 
 		va_start(va, Format);
 		int len = _vsnprintf_s(buffer, _TRUNCATE, Format, va);
 		va_end(va);
 
-		Resource->SetPrivateData(WKPDID_D3DDebugObjectNameT, len, buffer);
+		if (len < 0)
+			len = static_cast<int>(strnlen(buffer, sizeof(buffer)));
+		Resource->SetPrivateData(WKPDID_D3DDebugObjectNameT, static_cast<UINT>(len), buffer);
 	}
 
 	ID3D11DeviceChild* CompileShader(
@@ -233,6 +256,19 @@ namespace Util
 		const char* Program,
 		ShaderCompileTiming* a_timing)
 	{
+		HRESULT result;
+		return CompileShader(FilePath, Defines, ProgramType, Program, result, a_timing);
+	}
+
+	ID3D11DeviceChild* CompileShader(
+		const wchar_t* FilePath,
+		const std::vector<std::pair<const char*, const char*>>& Defines,
+		const char* ProgramType,
+		const char* Program,
+		HRESULT& a_result,
+		ShaderCompileTiming* a_timing)
+	{
+		a_result = E_INVALIDARG;
 		const auto queryQpc = []() noexcept {
 			LARGE_INTEGER value{};
 			return QueryPerformanceCounter(&value) && value.QuadPart > 0 ?
@@ -253,6 +289,7 @@ namespace Util
 		if (!FilePath || !*FilePath || !ProgramType || !Program || !*Program)
 			return nullptr;
 		auto device = globals::d3d::device;
+		a_result = E_FAIL;
 		if (!device || !globals::state || !globals::shaderCache)
 			return nullptr;
 		const bool developerMode = globals::state->IsDeveloperMode();
@@ -294,9 +331,13 @@ namespace Util
 			macros.push_back({ "COMPUTESHADER", "" });
 		else if (!_stricmp(ProgramType, "cs_4_0"))
 			macros.push_back({ "COMPUTESHADER", "" });
-		else
+		else {
+			a_result = E_INVALIDARG;
 			return nullptr;
+		}
 
+		if (globals::features::reverseZ.IsActive() && std::ranges::none_of(macros, [](const auto& macro) { return std::strcmp(macro.Name, "REVERSE_Z") == 0; }))
+			macros.push_back({ "REVERSE_Z", "1" });
 		// Add null terminating entry
 		macros.push_back({ "WINPC", "" });
 		macros.push_back({ "DX11", "" });
@@ -314,17 +355,36 @@ namespace Util
 		if (globals::shaderCache->IsDiskCache())
 			flags |= D3DCOMPILE_SKIP_VALIDATION;
 
+		const ShaderCompileFailureKey failureKey{
+			FilePath, ProgramType, Program, flags, ShaderDefines::Serialize(macros)
+		};
+		uint64_t failureGeneration;
+		{
+			std::lock_guard lock{ shaderCompileFailuresMutex };
+			if (shaderCompileFailures.contains(failureKey))
+				return nullptr;
+			failureGeneration = shaderCompileFailureGeneration;
+		}
+		const auto recordFailure = [&] {
+			std::lock_guard lock{ shaderCompileFailuresMutex };
+			// An edit or reset must not inherit an older in-flight failure.
+			if (failureGeneration == shaderCompileFailureGeneration)
+				shaderCompileFailures.insert(failureKey);
+		};
+
 		auto compile = [&]() -> winrt::com_ptr<ID3DBlob> {
+			a_result = E_FAIL;
 			winrt::com_ptr<ID3DBlob> shaderBlob;
 			winrt::com_ptr<ID3DBlob> shaderErrors;
 
 			if (!std::filesystem::exists(FilePath)) {
+				recordFailure();
 				logger::error("Failed to compile shader; {} does not exist", str);
 				return nullptr;
 			}
 			logger::debug("Compiling {} with {}", str, DefinesToString(macros));
 			const uint64_t compilationBegin = a_timing ? queryQpc() : 0;
-			const HRESULT compilationResult = D3DCompileFromFile(
+			const HRESULT compilationResult = a_result = D3DCompileFromFile(
 				FilePath,
 				macros.data(),
 				&include,
@@ -341,6 +401,8 @@ namespace Util
 					queryQpc());
 			}
 			if (FAILED(compilationResult)) {
+				if (compilationResult != E_OUTOFMEMORY)
+					recordFailure();
 				auto errorText = shaderErrors ? std::string_view(static_cast<const char*>(shaderErrors->GetBufferPointer()), shaderErrors->GetBufferSize()) : std::string_view("Unknown error");
 				if (!errorText.empty() && errorText.back() == '\0')
 					errorText.remove_suffix(1);
@@ -404,17 +466,22 @@ namespace Util
 					objectCreationBegin,
 					queryQpc());
 			}
-			return SUCCEEDED(hr) && bool(regShader);
+			a_result = FAILED(hr) ? hr : regShader ? S_OK :
+			                                         E_FAIL;
+			return SUCCEEDED(a_result);
 		};
 
 		const StandaloneShaderRequest request{ FilePath, macros, ProgramType, Program, flags, developerMode };
 		if (!globals::shaderCache->CompileStandaloneShaderCached(request, compile, createShader)) {
 			if (FAILED(hr))
 				logger::error("Failed to create shader object for {}:{} (HRESULT 0x{:08X})", str, Program, static_cast<uint32_t>(hr));
+			if (SUCCEEDED(a_result))
+				a_result = E_FAIL;
 			return nullptr;
 		}
 
 		nameCompiledShader(regShader.get());
+		a_result = S_OK;
 		return regShader.detach();
 	}
 

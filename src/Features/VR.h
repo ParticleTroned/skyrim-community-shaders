@@ -302,7 +302,7 @@ public:
 			InScene = 2
 		};
 		MenuOverlayPath menuOverlayPath = MenuOverlayPath::Auto;  ///< Runtime path used to present the menu in the headset
-		bool KeepDesktopWindowFocusedForVRMenu = true;            ///< Keep the game window centered and foregrounded while the VR menu is open
+		bool KeepDesktopWindowFocusedForVRMenu = true;            ///< Check current placement periodically and restore centering and foreground only when needed
 		bool StabilizeRenderScaleDesktopMirror = false;           ///< Publish render-scale eye outputs to the desktop mirror
 
 		// CSX menu navigation settings
@@ -711,8 +711,9 @@ public:
 
 	bool desktopWindowManagementApplied = false;
 	bool desktopWindowWasTopmost = false;
+	bool desktopWindowManagementReleasePending = false;
 	HWND desktopWindowManagedHandle = nullptr;
-	double lastDesktopWindowManagementAttemptSecs = 0.0;
+	double nextDesktopWindowManagementCheckSecs = 0.0;
 
 	// OpenVR runtime and compatibility information
 	VRDetection::OpenVRDetectionResult openVRInfo;

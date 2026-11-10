@@ -3,6 +3,7 @@
 #include "Features/Upscaling/NeuralRendering/CharacterSettingsJson.h"
 #include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Features/Upscaling/NeuralRendering/Style.h"
 
 #include <cstdlib>
 #include <format>
@@ -43,6 +44,100 @@ void Check(bool condition, const char* message)
 
 int main()
 {
+	for (unsigned style : { 0u, 1u, 2u, 3u }) {
+		Upscaling::Settings settings;
+		from_json({ { "neuralRenderingStyle", style } }, settings);
+		Check(settings.neuralRenderingStyle == std::min(style, 2u) &&
+				  json(settings).at("neuralRenderingStyle") == std::min(style, 2u),
+			"Styles must round-trip and legacy style 3 must migrate to Cinematic");
+	}
+	for (const auto& invalid : { json(-1), json(4), json(1.0), json(true), json("Natural"), json(nullptr), json(0x100000002ULL) }) {
+		Upscaling::Settings settings;
+		bool rejected = false;
+		try {
+			from_json({ { "neuralRenderingStyle", invalid } }, settings);
+		} catch (const std::exception&) {
+			rejected = true;
+		}
+		Check(rejected, "Invalid styles must not reach settings");
+	}
+	{
+		Upscaling::Settings settings;
+		from_json(json::object(), settings);
+		Check(settings.neuralRenderingPressureResolutionEnabled && settings.neuralRenderingGuidedReconstruction &&
+				  settings.neuralRenderingPauseInCombat &&
+				  settings.neuralRenderingPeripheralCompressionPercent == 100 && settings.neuralRenderingModelResolutionPercent == 90 &&
+				  settings.neuralRenderingPreset == 4 && settings.neuralRenderingIntensity == 1.75f &&
+				  settings.neuralRenderingLocalTone == 1.25f && settings.neuralRenderingLocalStructure == 1.5f &&
+				  settings.neuralRenderingSkinStructure == 1.3f && settings.neuralRenderingStyle == 1,
+			"Missing NR settings must use the requested defaults");
+	}
+	for (bool enabled : { false, true }) {
+		Upscaling::Settings settings;
+		from_json({ { "neuralRenderingGuidedReconstruction", enabled } }, settings);
+		Check(settings.neuralRenderingGuidedReconstruction == enabled && json(settings).at("neuralRenderingGuidedReconstruction") == enabled, "Guided option did not round-trip");
+		from_json(json::object(), settings);
+		Check(settings.neuralRenderingGuidedReconstruction, "Missing guided settings must enable automatic reconstruction below native resolution");
+	}
+	for (unsigned percent : { 0u, 1u, 20u, 99u, 100u }) {
+		Upscaling::Settings settings;
+		from_json({ { "neuralRenderingPeripheralCompressionPercent", percent } }, settings);
+		Check(settings.neuralRenderingPeripheralCompressionPercent == percent && json(settings).at("neuralRenderingPeripheralCompressionPercent") == percent, "Compression percent did not round-trip");
+	}
+	for (unsigned percent : { 0u, 1u, 75u, 100u }) {
+		Upscaling::Settings settings, restored;
+		settings.neuralRenderingConfidenceRejectionPercent = percent;
+		const auto saved = NeuralRendering::PersistentRenderingSettings(NeuralRendering::RenderingSettings(json(settings)));
+		from_json(saved, restored);
+		Check(saved.at("neuralRenderingConfidenceRejectionPercent") == percent &&
+				  restored.neuralRenderingConfidenceRejectionPercent == percent,
+			"Saved confidence rejection must survive loading independently of UI visibility");
+		from_json(json::object(), restored);
+		Check(restored.neuralRenderingConfidenceRejectionPercent == 0, "Missing confidence rejection must default off");
+	}
+	for (unsigned percent : { 0u, 1u, 75u, 100u }) {
+		Upscaling::Settings settings;
+		from_json({ { "neuralRenderingFaceDetailProtectionPercent", percent } }, settings);
+		Check(settings.neuralRenderingFaceDetailProtectionPercent == percent && json(settings).at("neuralRenderingFaceDetailProtectionPercent") == percent,
+			"Face protection did not round-trip");
+		from_json(json::object(), settings);
+		Check(settings.neuralRenderingFaceDetailProtectionPercent == 0, "Missing face protection must default off");
+	}
+	for (const auto invalid : { json(-1), json(101), json(0.5), json(true), json(nullptr), json("75"), json(std::uint64_t{ 1 } << 32) }) {
+		Upscaling::Settings settings;
+		settings.neuralRenderingFaceDetailProtectionPercent = 75;
+		bool rejected = false;
+		try {
+			from_json({ { "neuralRenderingFaceDetailProtectionPercent", invalid } }, settings);
+		} catch (const std::exception&) {
+			rejected = true;
+		}
+		Check(rejected && settings.neuralRenderingFaceDetailProtectionPercent == 75, "Invalid face protection mutated settings");
+	}
+	for (bool enabled : { false, true }) {
+		Upscaling::Settings settings;
+		from_json({ { "neuralRenderingPeripheralCompression", enabled } }, settings);
+		Check(settings.neuralRenderingPeripheralCompressionPercent == (enabled ? 20u : 0u), "Legacy compression was not migrated");
+		Check(!json(settings).contains("neuralRenderingPeripheralCompression"), "Legacy toggle was written alongside the slider");
+	}
+	for (const auto invalid : { json(-1), json(101), json(0.5), json(true), json(nullptr), json("20") }) {
+		Upscaling::Settings settings;
+		bool rejected = false;
+		try {
+			from_json({ { "neuralRenderingPeripheralCompressionPercent", invalid } }, settings);
+		} catch (const std::exception&) {
+			rejected = true;
+		}
+		Check(rejected, "Invalid compression reached settings");
+	}
+
+	for (bool enabled : { false, true }) {
+		Upscaling::Settings settings;
+		from_json({ { "neuralRenderingPauseInCombat", enabled } }, settings);
+		Check(settings.neuralRenderingPauseInCombat == enabled && json(settings).at("neuralRenderingPauseInCombat") == enabled, "Combat pause did not round-trip");
+		from_json(json::object(), settings);
+		Check(settings.neuralRenderingPauseInCombat, "Missing combat settings must default on");
+	}
 	for (bool vr : { false, true }) {
 		REL::Module::vr = vr;
 		Upscaling::Settings settings;
@@ -80,6 +175,13 @@ int main()
 			"Legacy coverage above the new maximum must expire its reference without rejecting the profile");
 		Check(settings.foveatedCenterArea == expected.foveatedCenterArea && settings.foveatedMaskSetup == expected.foveatedMaskSetup,
 			"Migrating the old coverage range must preserve the fitted geometry and user confirmation");
+		for (bool automatic : { false, true }) {
+			auto fsrProfile = saved;
+			fsrProfile["fsr4RuntimeEnable"] = automatic;
+			fsrProfile["fsr4RuntimeSelectionSchemaVersion"] = 0;
+			from_json(fsrProfile, settings);
+			Check(settings.fsr4RuntimeEnable == automatic, "loading old FSR settings must preserve either explicit preference");
+		}
 		from_json(json::object(), settings);
 		Check(!settings.foveatedPeripheryMaskVisualization, "Defaults must not enable visualization");
 	}

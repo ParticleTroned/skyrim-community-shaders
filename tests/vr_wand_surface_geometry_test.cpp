@@ -136,6 +136,27 @@ namespace
 		       !TryIntersect(surface, { 0.0f, 0.0f, -2.0f }, { 0.0f, 0.0f, -1.0f }, hit);
 	}
 
+	bool RejectsMalformedSurfaces()
+	{
+		const Surface surface{ { -0.5f, 0.5f, -1.0f }, { 1.0f, 0.0f, 0.0f }, { 0.0f, -1.0f, 0.0f } };
+		const Vector origin{}, direction{ 0.0f, 0.0f, -1.0f };
+		const auto rejects = [](const Surface& candidate, Vector rayOrigin, Vector rayDirection) {
+			Hit hit{ .25f, .75f, 4.0f };
+			return !TryIntersect(candidate, rayOrigin, rayDirection, hit) && hit.u == .25f && hit.v == .75f && hit.distance == 4.0f;
+		};
+		for (const float malformed : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+			auto candidate = surface;
+			candidate.topLeft.z = malformed;
+			if (!rejects(candidate, origin, direction) || !rejects(surface, { malformed, 0, 0 }, direction) ||
+				!rejects(surface, origin, { 0, 0, malformed }))
+				return false;
+		}
+		// Finite extents can overflow the Gram solve even when the hit distance is finite.
+		auto overflowing = surface;
+		overflowing.right.x = 1e20f;
+		return rejects(overflowing, origin, direction);
+	}
+
 	static_assert(CoversScaledSurface());
 	static_assert(CoversSkewedSurface());
 	static_assert(RejectsMisses());
@@ -151,7 +172,7 @@ int main()
 	return CoversScaledSurface() && CoversSkewedSurface() && RejectsMisses() &&
 	               CoversNativeOverlayAspect(1620.0f) && CoversNativeOverlayAspect(1080.0f) &&
 	               CoversHMDPresentationScales() &&
-	               ReproducesDefaultMouseScaleDrift() && RejectsInvalidCoordinateScales() ?
+	               ReproducesDefaultMouseScaleDrift() && RejectsInvalidCoordinateScales() && RejectsMalformedSurfaces() ?
 	           0 :
 	           1;
 }

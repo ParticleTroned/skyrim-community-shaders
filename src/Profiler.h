@@ -1,7 +1,9 @@
 #pragma once
 
+#include "RenderTargetStats.h"
 #include "Utils/FlatFrameTiming.h"
 #include "Utils/PassTimingCapture.h"
+#include "Utils/ProfilerTiming.h"
 
 #include <atomic>
 #include <cstdint>
@@ -59,8 +61,8 @@ public:
 			lastMs = ms;
 		}
 
-		float GetAverage() const;
-		float GetPercentile(float p) const;
+		/** @brief Calculates statistics from this owned history snapshot. */
+		Util::ProfilerTiming::Statistics GetStatistics() const;
 	};
 
 	struct TimerResult
@@ -158,11 +160,22 @@ public:
 	bool IsUserEnabled() const { return userEnabled.load(std::memory_order_acquire); }
 	/** @brief Requests sources for the next frame; concurrent requests combine. */
 	void RequestCapture(CaptureMode a_mode = CaptureMode::Both);
+	/** Render-thread request for the next capture frame; false immediately releases target queries. */
+	void RequestRenderTargetCapture(bool requested);
+	/** Allocation-free draw-path gate; target intervals are independent of pass totals. */
+	bool IsRenderTargetCaptureActive() const { return renderTargetCaptureActive; }
+	/** Record one engine draw using the active profiler frame's shared GPU clock. */
+	void CountRenderTargetDraw(uint32_t depthStencil, uint32_t renderTarget);
+	/** Owner-thread published view, sharing the existing frame clock but no pass slots. */
+	const RenderTargetStats& GetRenderTargetStats() const { return renderTargetStats; }
+	/** Number of retained target timestamps; zero after capture is stopped. */
+	uint32_t GetRenderTargetQueryCount() const;
 	/** Optionally align newly observed scopes with preceding valid inactive frames. */
 	bool StartBoundedCapture(uint32_t a_frameCount, bool a_clearHistory, uint64_t& a_sessionId, bool a_alignInactiveFrames = false);
 	bool CancelBoundedCapture(uint64_t a_sessionId);
 	CaptureSessionProgress GetBoundedCaptureProgress() const;
-	const std::vector<TimerResult>* GetBoundedCaptureResults(uint64_t a_sessionId) const;
+	/** @brief Owner-thread view; false skips statistics for count/history-only readers. */
+	const std::vector<TimerResult>* GetBoundedCaptureResults(uint64_t a_sessionId, bool includeStatistics = true) const;
 	bool IsEnabled() const { return IsUserEnabled() && captureActive.load(std::memory_order_acquire); }
 	bool IsInitialized() const { return initialized; }
 	/** @brief Thread-safe token for active GPU capture; zero disables external queries. */
@@ -178,6 +191,7 @@ public:
 		endPerfEvent = std::move(endCb);
 	}
 
+	/** @brief Attempts GPU acquisition once per frame; refusal lasts until EndFrame without blocking CPU timing. */
 	void BeginFrame();
 	bool BeginPass(std::string_view name, bool fireCallbacks = true, const PassTimingHandle& capture = {});
 	void EndPass(bool fireCallbacks = true);
@@ -194,7 +208,10 @@ public:
 	/** @brief Null on VR; flat history retains source IDs while GPU queries are pending. */
 	const Util::FlatFrameTiming::History* GetFlatTiming() const { return flatTiming ? &flatTiming->history : nullptr; }
 
-	const std::vector<TimerResult>& GetResults() const { return results; }
+	/** @brief Owner-thread view; false leaves statistics unspecified and avoids calculating them. */
+	const std::vector<TimerResult>& GetResults(bool includeStatistics = true) const;
+	/** @brief Changes when live histories are reset or removed, invalidating display caches. */
+	uint64_t GetHistoryEpoch() const { return historyEpoch; }
 	/** @brief Returns the namespace used to group and aggregate a timer name. */
 	static std::string_view GetTimerRootName(std::string_view name);
 	float GetTotalTimeMs() const { return totalTimeMs; }
@@ -205,8 +222,8 @@ public:
 	uint32_t GetAcquiredSlots() const { return acquiredSlots; }
 	uint32_t GetPeakAcquiredSlots() const { return peakAcquiredSlots; }
 	uint32_t GetSlotRefusals() const { return slotRefusals; }
-	/** @brief CPU results published at their own frame boundary, independently of GPU queries. */
-	const std::vector<TimerResult>& GetImmediateCpuResults() const { return immediateCpuResults; }
+	/** @brief Owner-thread CPU view, independent of GPU queries; false skips statistics. */
+	const std::vector<TimerResult>& GetImmediateCpuResults(bool includeStatistics = true) const;
 	/** @brief Engine frame stamped on the retained independent CPU publication. */
 	uint32_t GetCapturedCpuFrameCount() const { return capturedCpuFrameCount; }
 	/** @brief CPU publications since initialization or history reset; zero means no data. */
@@ -267,6 +284,7 @@ private:
 
 	struct FrameQueries
 	{
+		RenderTargetStats::Frame renderTargets;
 		winrt::com_ptr<ID3D11Query> disjoint;
 		winrt::com_ptr<ID3D11Query> wholeFrameBegin;
 		winrt::com_ptr<ID3D11Query> wholeFrameEnd;
@@ -305,6 +323,12 @@ private:
 	};
 
 	ID3D11DeviceContext* context = nullptr;
+	RenderTargetStats renderTargetStats;
+	bool renderTargetCaptureRequested = false;
+	bool renderTargetCaptureActive = false;
+	bool renderTargetCaptureRetained = false;
+	bool renderTargetFrameUnavailable = false;
+	void StopRenderTargetCapture();
 
 	FrameQueries frames[kFrameLatency];
 	struct FlatTiming
@@ -342,6 +366,7 @@ private:
 	std::vector<PendingExternalGpuTiming> externalGpuTimings;
 	void UpdateGpuCaptureEpoch(bool active, bool reset = false);
 	uint64_t activeCaptureSessionId = 0;
+	// Retrying a refused frame at a later pass would record earlier GPU work as zero.
 	bool gpuAcquisitionBlocked = false;
 	// Each successful BeginPass owns either a GPU interval or a CPU fallback scope.
 	std::vector<bool> activePassUsesGpu;
@@ -350,7 +375,9 @@ private:
 	PerfEventCallback beginPerfEvent;
 	PerfEventCallback endPerfEvent;
 
-	std::vector<TimerResult> results;
+	mutable std::vector<TimerResult> results;
+	mutable bool resultsStatisticsDirty = true;
+	uint64_t historyEpoch = 0;
 
 	struct CpuTimer
 	{
@@ -404,7 +431,8 @@ private:
 	bool boundedCaptureAlignInactiveFrames = false;
 	std::vector<CaptureKnownTimer> boundedCaptureTimers;
 	std::unordered_map<std::string, size_t> boundedCaptureTimerIndex;
-	std::vector<TimerResult> boundedCaptureResults;
+	mutable std::vector<TimerResult> boundedCaptureResults;
+	mutable bool boundedStatisticsDirty = true;
 
 	struct ImmediateCpuTimer
 	{
@@ -416,7 +444,8 @@ private:
 	};
 	std::vector<ImmediateCpuTimer> immediateCpuTimers;
 	std::unordered_map<std::string, size_t> immediateCpuTimerIndex;
-	std::vector<TimerResult> immediateCpuResults;
+	mutable std::vector<TimerResult> immediateCpuResults;
+	mutable bool immediateCpuStatisticsDirty = true;
 	uint32_t capturedCpuFrameCount = 0;
 	uint64_t cpuPublicationCount = 0;
 	float immediateCpuTotalMs = 0.0f;

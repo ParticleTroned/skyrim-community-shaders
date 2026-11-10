@@ -990,7 +990,7 @@ namespace NeuralRendering
 		return true;
 	}
 
-	bool D3D12Interop::EndD3D12()
+	bool D3D12Interop::EndD3D12(bool joinD3D11)
 	{
 		std::scoped_lock lock(mutex_);
 		if (!initialized_ || !recording_ || recordingContext_ >= kCommandContextCount ||
@@ -1088,9 +1088,11 @@ namespace NeuralRendering
 				IncrementSaturating(telemetry_.submitStereoCommandSubmissions);
 		}
 
-		const HRESULT waitResult = context11_->Wait(fence11_.Get(), completeValue);
-		if (FAILED(waitResult))
-			return failSubmission(waitResult, "ID3D11DeviceContext4::Wait");
+		if (joinD3D11) {
+			const HRESULT waitResult = context11_->Wait(fence11_.Get(), completeValue);
+			if (FAILED(waitResult))
+				return failSubmission(waitResult, "ID3D11DeviceContext4::Wait");
+		}
 		unfencedSubmission_ = false;
 
 		lastError_ = S_OK;

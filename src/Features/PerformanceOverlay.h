@@ -120,6 +120,16 @@ struct PerformanceOverlay : OverlayFeature
 	virtual void DrawSettings() override;
 	virtual void DataLoaded() override;
 	void DrawOverlay() override;
+	/** Shared opt-in control and view for the main Profiling page. */
+	void DrawRenderTargetProfiling();
+	/** Commit this frame's visible-view requests after the UI, cancelling hidden views. */
+	void UpdateRenderTargetCapture();
+	/** Runtime toggle; disabling immediately releases target queries and histories. */
+	void SetRenderTargetsEnabled(bool enabled);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Owner-thread inspection; does not request background capture. */
+	json GetRenderTargetDiagnostics() const;
+#endif
 	// Settings persistence and defaults
 	void SaveSettings(json& j) override;
 	void LoadSettings(json& j) override;
@@ -263,6 +273,7 @@ struct PerformanceOverlay : OverlayFeature
 		bool ShowInOverlay = true;  // was: Enabled
 		bool ShowDrawCalls = true;
 		bool ShowCSPasses = true;
+		bool ShowRenderTargets = false;
 		bool ShowVRAM = true;
 		bool ShowFPS = true;
 		bool ShowPreFGFrameTimeGraph = true;
@@ -279,6 +290,11 @@ struct PerformanceOverlay : OverlayFeature
 	Settings settings;
 
 private:
+	void DrawRenderTargetControl();
+	void DrawRenderTargets(bool profilingView);
+	bool overlayRenderTargetsRequested = false;
+	bool profilingRenderTargetsRequested = false;
+
 	// ============================================================================
 	// PRIVATE DATA STRUCTURES
 	// ============================================================================

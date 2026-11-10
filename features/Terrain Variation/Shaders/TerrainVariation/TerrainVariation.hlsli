@@ -32,8 +32,9 @@ struct StochasticOffsets
 	float tap1Weight;
 };
 
-// Shared LOD base for the six-way blend (set once per pixel).
-static float g_terrainStochasticLodBase;
+static float2 g_terrainStochasticDdx;
+static float2 g_terrainStochasticDdy;
+static float g_terrainStochasticMipBiasScale;
 
 struct StochasticCorner
 {
@@ -57,22 +58,23 @@ inline float2 hashLOD(float2 p)
 	return frac(float2(dot(p, float2(1.0, 17.0)), dot(p, float2(1.0, 23.0))));
 }
 
-// LOD base from original UV derivatives + MipBias.
-// Hashed offsets break implicit derivatives, so SampleLevel needs an explicit mip.
-inline float ComputeTerrainStochasticLodBase(float2 uv)
+// Capture gradients before parallax and per-layer branches; hashed offsets must not affect filtering.
+inline void InitializeTerrainStochasticGradients(float2 uvDdx, float2 uvDdy)
 {
-	float2 dx = ddx(uv);
-	float2 dy = ddy(uv);
-	float minDeltaSq = min(dot(dx, dx), dot(dy, dy));
-	return 0.5 * log2(max(minDeltaSq, 1e-12)) + SharedData::MipBias;
+	g_terrainStochasticDdx = uvDdx;
+	g_terrainStochasticDdy = uvDdy;
+	g_terrainStochasticMipBiasScale = exp2(SharedData::MipBias);
 }
 
-// Per-texture mip; square landscape maps only shift the shared LOD by log2(size).
-inline float TerrainStochasticMipLevel(Texture2D tex)
+// Match each caller's biased or unbiased sampling while retaining the anisotropic footprint.
+inline void SampleTerrainStochasticTaps(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets,
+	bool applyMipBias, out float4 sample1, out float4 sample2)
 {
-	float2 textureDims;
-	tex.GetDimensions(textureDims.x, textureDims.y);
-	return max(g_terrainStochasticLodBase + log2(max(textureDims.x, textureDims.y)), 0.0);
+	float biasScale = applyMipBias ? g_terrainStochasticMipBiasScale : 1.0;
+	float2 uvDdx = g_terrainStochasticDdx * biasScale;
+	float2 uvDdy = g_terrainStochasticDdy * biasScale;
+	sample1 = tex.SampleGrad(samp, uv + offsets.offset1, uvDdx, uvDdy);
+	sample2 = tex.SampleGrad(samp, uv + offsets.offset2, uvDdx, uvDdy);
 }
 
 // Two highest barycentric corners of the triangular grid.
@@ -174,13 +176,10 @@ inline float4 StochasticSampleLOD(float rnd, Texture2D tex, SamplerState samp, f
 }
 
 // Main stochastic sampling function
-inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets)
+inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, bool applyMipBias)
 {
-	// Calculate custom mip level from original UVs.
-	float mipLevel = TerrainStochasticMipLevel(tex);
-
-	float4 s1 = tex.SampleLevel(samp, uv + offsets.offset1, mipLevel);
-	float4 s2 = tex.SampleLevel(samp, uv + offsets.offset2, mipLevel);
+	float4 s1, s2;
+	SampleTerrainStochasticTaps(tex, samp, uv, offsets, applyMipBias, s1, s2);
 
 	// Height calculation - use luminance for RGB data, alpha when available
 	float h1 = lerp(dot(s1.rgb, LUMINANCE_WEIGHTS), s1.a, step(0.001, s1.a));
@@ -190,21 +189,19 @@ inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, Stoc
 
 // Sample packed material channels without height/luminance weighting so roughness,
 // AO, metallic, and F0 do not acquire high-contrast stochastic cell edges.
-inline float4 StochasticEffectMaterialData(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets)
+inline float4 StochasticEffectMaterialData(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, bool applyMipBias)
 {
-	float mipLevel = TerrainStochasticMipLevel(tex);
-	float4 s1 = tex.SampleLevel(samp, uv + offsets.offset1, mipLevel);
-	float4 s2 = tex.SampleLevel(samp, uv + offsets.offset2, mipLevel);
+	float4 s1, s2;
+	SampleTerrainStochasticTaps(tex, samp, uv, offsets, applyMipBias, s1, s2);
 	return lerp(s2, s1, offsets.tap1Weight);
 }
 
 // Decode and normalize stochastic normal taps before re-encoding them. Blending
 // encoded normals directly shortens them and destabilizes specular lighting.
-inline float4 StochasticEffectNormal(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets)
+inline float4 StochasticEffectNormal(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, bool applyMipBias)
 {
-	float mipLevel = TerrainStochasticMipLevel(tex);
-	float4 s1 = tex.SampleLevel(samp, uv + offsets.offset1, mipLevel);
-	float4 s2 = tex.SampleLevel(samp, uv + offsets.offset2, mipLevel);
+	float4 s1, s2;
+	SampleTerrainStochasticTaps(tex, samp, uv, offsets, applyMipBias, s1, s2);
 	float3 blendedNormal = lerp(s2.xyz * 2.0 - 1.0, s1.xyz * 2.0 - 1.0, offsets.tap1Weight);
 	float normalLengthSq = dot(blendedNormal, blendedNormal);
 	blendedNormal = normalLengthSq > 1e-8 ? blendedNormal * rsqrt(normalLengthSq) : float3(0.0, 0.0, 1.0);

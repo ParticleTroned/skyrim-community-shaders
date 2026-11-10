@@ -93,6 +93,7 @@ public:
 	bool recompileFlag = false;
 	uint outputAoIdx = 0;
 	uint outputIlIdx = 0;
+	bool idleOutputsCleared = false;
 	std::atomic_bool queuedResetHistory{ true };
 
 	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
@@ -172,6 +173,14 @@ public:
 
 	bool HasGIResources() const { return activeResourceProfile == kResourceProfileFullGI; }
 	bool IsResourceProfileRestartPending() const { return settings.ResourceProfile != activeResourceProfile; }
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const char* GetPerformanceComparisonBlockReason(const json& target) const override
+	{
+		return IsResourceProfileRestartPending() || target.value("ResourceProfile", settings.ResourceProfile) != activeResourceProfile ?
+		           "SSGI resource profile requires a restart" :
+		           nullptr;
+	}
+#endif
 	bool IsGIActive() const { return settings.EnableGI && HasGIResources(); }
 	bool IsSpecularGIActive() const { return IsGIActive() && settings.EnableExperimentalSpecularGI; }
 

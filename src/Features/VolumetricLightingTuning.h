@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace VolumetricLightingTuning
@@ -21,6 +22,24 @@ namespace VolumetricLightingTuning
 		float CustomColorBlue = 1.0f;
 
 		bool operator==(const Profile&) const = default;
+	};
+
+	struct ProfileField
+	{
+		const char* name;
+		const char* legacyName;
+		const char* label;
+		float Profile::* member;
+		float maximum;
+	};
+	inline constexpr std::array kProfileFields{
+		ProfileField{ "ShaftIntensity", "GodrayShaftIntensity", "Godray Intensity", &Profile::ShaftIntensity, kShaftIntensityMax },
+		ProfileField{ "Opacity", "GodrayOpacity", "Godray Opacity", &Profile::Opacity, kOpacityMax },
+		ProfileField{ "Saturation", "GodraySaturation", "Godray Saturation", &Profile::Saturation, kSaturationMax },
+		ProfileField{ "CustomColorContribution", "CustomColorContribution", "Custom Colour Contribution", &Profile::CustomColorContribution, 1.0f },
+		ProfileField{ "CustomColorRed", "CustomColorRed", "Custom Colour Red", &Profile::CustomColorRed, 1.0f },
+		ProfileField{ "CustomColorGreen", "CustomColorGreen", "Custom Colour Green", &Profile::CustomColorGreen, 1.0f },
+		ProfileField{ "CustomColorBlue", "CustomColorBlue", "Custom Colour Blue", &Profile::CustomColorBlue, 1.0f }
 	};
 
 	inline float ClampFinite(float a_value, float a_min, float a_max, float a_fallback)

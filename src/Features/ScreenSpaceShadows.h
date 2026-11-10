@@ -120,6 +120,7 @@ public:
 	uint compiledSampleCount = 0;
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
+	bool shadowTextureCleared = false;
 
 	// VR stereo sync resources
 	Texture2D* stereoSyncCopyTex = nullptr;

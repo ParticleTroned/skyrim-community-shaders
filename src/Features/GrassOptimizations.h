@@ -20,8 +20,9 @@ struct GrassOptimizations : Feature
 	std::string_view GetShaderDefineName() override { return "GRASS_OPTIMIZATIONS"; }
 	bool HasShaderDefine(RE::BSShader::Type type) override { return type == RE::BSShader::Type::Grass; }
 	bool SupportsVR() override { return true; }
-	std::string_view GetShaderCacheAbiVersion() override { return "native-cell-buckets-v6"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "native-cell-buckets-v10"; }
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
+	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
 	void DrawSettings() override;
 	bool HasPerformanceSettings() const override { return true; }
 	void DrawPerformanceSettings(bool advanced) override;
@@ -41,6 +42,7 @@ struct GrassOptimizations : Feature
 	void RestoreDefaultSettings() override;
 	void SetupResources() override;
 	void ClearShaderCache() override;
+	void Reset() override;
 	void PostPostLoad() override;
 	/** @brief Stage a toggle; changes take effect at the next grass pass without recompilation. */
 	void SetEnabled(bool enabled);
@@ -50,11 +52,12 @@ struct GrassOptimizations : Feature
 	GrassPolicy::Settings GetSettings() const;
 	/** @brief Validate a complete settings transaction before publishing it. */
 	bool SetSettings(const GrassPolicy::Settings& settings, std::string& error);
-	/** @brief Apply a validated partial settings transaction; unknown fields reject the whole update. */
-	bool UpdateSettings(const json& update, std::string& error);
-	void PrepareGeometry(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry);
+	/** @brief Preserve the property wind phase captured before native setup advances it. */
+	void PrepareGeometry(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry, std::optional<uint32_t> nativeWindTimer);
 	GrassBucketRenderer& GetRenderer() { return *renderer; }
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	/** @brief Apply a validated partial settings transaction; unknown fields reject the whole update. */
+	bool UpdateSettings(const json& update, std::string& error);
 	void SetDiagnosticsEnabled(bool enabled);
 	/** @brief Request lightweight cache and frame-work telemetry for DevBench. */
 	void RequestTelemetry();

@@ -8,23 +8,23 @@
 
 // These macros share the pre-parallax lattice while retaining each map's sampling contract.
 #if defined(TERRAIN_VARIATION_MESH)
-#	define MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, STOCHASTIC, FALLBACK)                \
-		{                                                                               \
-			[branch] if (applyMeshTV) { DEST = STOCHASTIC(TEX, SAMP, UV, meshOffset); } \
-			else                                                                        \
-			{                                                                           \
-				DEST = FALLBACK;                                                        \
-			}                                                                           \
+#	define MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, STOCHASTIC, APPLY_MIP_BIAS, FALLBACK)                \
+		{                                                                                               \
+			[branch] if (applyMeshTV) { DEST = STOCHASTIC(TEX, SAMP, UV, meshOffset, APPLY_MIP_BIAS); } \
+			else                                                                                        \
+			{                                                                                           \
+				DEST = FALLBACK;                                                                        \
+			}                                                                                           \
 		}
 #else
-#	define MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, STOCHASTIC, FALLBACK) DEST = FALLBACK
+#	define MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, STOCHASTIC, APPLY_MIP_BIAS, FALLBACK) DEST = FALLBACK
 #endif
 
-#define MESH_TV_COLOR(DEST, TEX, SAMP, UV) MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, StochasticEffect, TEX.Sample(SAMP, UV))
-#define MESH_TV_COLOR_BIAS(DEST, TEX, SAMP, UV) MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, StochasticEffect, TEX.SampleBias(SAMP, UV, SharedData::MipBias))
-#define MESH_TV_NORMAL(DEST, TEX, SAMP, UV) MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, StochasticEffectNormal, TEX.Sample(SAMP, UV))
-#define MESH_TV_NORMAL_BIAS(DEST, TEX, SAMP, UV) MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, StochasticEffectNormal, TEX.SampleBias(SAMP, UV, SharedData::MipBias))
-#define MESH_TV_DATA(DEST, TEX, SAMP, UV) MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, StochasticEffectMaterialData, TEX.Sample(SAMP, UV))
-#define MESH_TV_DATA_BIAS(DEST, TEX, SAMP, UV) MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, StochasticEffectMaterialData, TEX.SampleBias(SAMP, UV, SharedData::MipBias))
+#define MESH_TV_COLOR(DEST, TEX, SAMP, UV) MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, StochasticEffect, false, TEX.Sample(SAMP, UV))
+#define MESH_TV_COLOR_BIAS(DEST, TEX, SAMP, UV) MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, StochasticEffect, true, TEX.SampleBias(SAMP, UV, SharedData::MipBias))
+#define MESH_TV_NORMAL(DEST, TEX, SAMP, UV) MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, StochasticEffectNormal, false, TEX.Sample(SAMP, UV))
+#define MESH_TV_NORMAL_BIAS(DEST, TEX, SAMP, UV) MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, StochasticEffectNormal, true, TEX.SampleBias(SAMP, UV, SharedData::MipBias))
+#define MESH_TV_DATA(DEST, TEX, SAMP, UV) MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, StochasticEffectMaterialData, false, TEX.Sample(SAMP, UV))
+#define MESH_TV_DATA_BIAS(DEST, TEX, SAMP, UV) MESH_TV_SAMPLE_AS(DEST, TEX, SAMP, UV, StochasticEffectMaterialData, true, TEX.SampleBias(SAMP, UV, SharedData::MipBias))
 
 #endif

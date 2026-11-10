@@ -21,4 +21,6 @@ endfunction()
 
 extract_dispatch_region("void ScreenshotApi::MarkSequenceCancellationLocked(" "void ScreenshotApi::Tick(" _queue_cancellation)
 extract_dispatch_region("void ScreenshotApi::OnFeatureDisabled(" "bool ScreenshotApi::DrainForShutdown(" _lifecycle)
-file(WRITE "${OUTPUT_DIRECTORY}/screenshot_dispatch_under_test.h" "${_queue_cancellation}\n${_lifecycle}")
+extract_dispatch_region("std::optional<ScreenshotApi::DueFrame> ScreenshotApi::PrepareDueFrameLocked(" "std::optional<ScreenshotApi::DispatchEntry> ScreenshotApi::PopDispatchLocked(" _schedule)
+extract_dispatch_region("void ScreenshotApi::FinishSourceLocked(" "void ScreenshotApi::FinishSequenceChildLocked(" _source_terminal)
+file(WRITE "${OUTPUT_DIRECTORY}/screenshot_dispatch_under_test.h" "${_queue_cancellation}\n${_lifecycle}\n${_schedule}\n${_source_terminal}")

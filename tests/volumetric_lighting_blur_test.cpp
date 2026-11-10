@@ -9,6 +9,10 @@ struct float2
 {
 	float x, y;
 };
+struct float4
+{
+	float x, y, z, w;
+};
 constexpr int D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION = 16384;
 struct State
 {
@@ -23,12 +27,17 @@ namespace globals
 		inline bool isVR = false;
 		inline int graphicsStorage = 0;
 		inline int* graphicsState = &graphicsStorage;
+		inline float nearStorage = 1, farStorage = 1000;
+		inline float* cameraNear = &nearStorage;
+		inline float* cameraFar = &farStorage;
 	}
 }
 namespace Util
 {
 	inline float2 renderSize{ 1000, 500 };
 	float2 ConvertToDynamic(float2) { return renderSize; }
+	inline float4 cameraData{ 1000, 1, 0, 999 };
+	float4 GetCameraData() { return cameraData; }
 }
 struct ConstantBuffer
 {
@@ -45,6 +54,7 @@ struct VolumetricLighting
 	{
 		int32_t screenX, screenY, screenXMin1, screenYMin1, eyeWidth;
 		uint32_t horizontalGroupsPerEye, pad[2];
+		float4 cameraData;
 	} vlData{};
 	ConstantBuffer* vlDataCB = nullptr;
 	bool blurDimensionsValid = false;
@@ -155,5 +165,23 @@ int main()
 	globals::state = &globals::storage;
 	lighting.UpdateBlurDimensions();
 	CHECK(lighting.blurDimensionsValid);
+	const auto validCamera = Util::cameraData;
+	const auto cameraUpdates = buffer.updates;
+	for (float4 invalidCamera : { float4{ 1, 1, 0, 1 }, float4{ 1000, 0, 0, 1000 },
+			 float4{ infinity, 1, 0, 1 }, float4{ 1000, nan, 0, 1 }, float4{ 1000, 1, 0, 0 } }) {
+		Util::cameraData = invalidCamera;
+		lighting.UpdateBlurDimensions();
+		CHECK(!lighting.blurDimensionsValid && buffer.updates == cameraUpdates);
+	}
+	Util::cameraData = validCamera;
+	for (auto** missing : { &globals::game::cameraNear, &globals::game::cameraFar }) {
+		const auto saved = *missing;
+		*missing = nullptr;
+		lighting.UpdateBlurDimensions();
+		CHECK(!lighting.blurDimensionsValid && buffer.updates == cameraUpdates);
+		*missing = saved;
+	}
+	lighting.UpdateBlurDimensions();
+	CHECK(lighting.blurDimensionsValid && lighting.vlData.cameraData.x == validCamera.x);
 	std::puts("Volumetric blur bounds, dispatch and cache regression cases passed.");
 }

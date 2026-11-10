@@ -1,4 +1,5 @@
 #include "FileSystem.h"
+#include "StringUtils.h"
 #include <Windows.h>
 #include <atomic>
 #include <cmath>
@@ -201,30 +202,6 @@ namespace Util
 		}
 	}
 
-	bool IsPathWithinDirectory(
-		const std::filesystem::path& basePath,
-		const std::filesystem::path& testPath)
-	{
-		std::error_code error;
-		const auto canonicalBase = std::filesystem::canonical(basePath, error);
-		if (error)
-			return false;
-
-		const auto canonicalTest = std::filesystem::weakly_canonical(testPath, error);
-		if (error)
-			return false;
-
-		auto testPart = canonicalTest.begin();
-		for (auto basePart = canonicalBase.begin(); basePart != canonicalBase.end();
-			++basePart, ++testPart) {
-			if (testPart == canonicalTest.end() ||
-				_wcsicmp(basePart->c_str(), testPart->c_str()) != 0) {
-				return false;
-			}
-		}
-		return true;
-	}
-
 	// File system utilities implementation
 	namespace FileHelpers
 	{
@@ -352,7 +329,7 @@ namespace Util
 			{
 				std::ofstream output(stagingPath, std::ios::binary | std::ios::trunc);
 				if (!output.is_open()) {
-					errorMessage = std::format("Could not open the staging file {}", stagingPath.string());
+					errorMessage = std::format("Could not open the staging file {}", Util::PathToUtf8(stagingPath));
 					return false;
 				}
 
@@ -362,7 +339,7 @@ namespace Util
 				if (!output) {
 					std::error_code cleanupError;
 					std::filesystem::remove(stagingPath, cleanupError);
-					errorMessage = std::format("Could not finish writing the staging file {}", stagingPath.string());
+					errorMessage = std::format("Could not finish writing the staging file {}", Util::PathToUtf8(stagingPath));
 					return false;
 				}
 			}
@@ -377,15 +354,15 @@ namespace Util
 
 				if (!allowDirectFallback || !overwriteExisting) {
 					errorMessage = overwriteExisting ?
-					                   std::format("Could not atomically replace {} (Windows error {}). The original file was retained.", path.string(), windowsError) :
-					                   std::format("Could not create {} (Windows error {}). Existing files were not replaced.", path.string(), windowsError);
+					                   std::format("Could not atomically replace {} (Windows error {}). The original file was retained.", Util::PathToUtf8(path), windowsError) :
+					                   std::format("Could not create {} (Windows error {}). Existing files were not replaced.", Util::PathToUtf8(path), windowsError);
 					return false;
 				}
 
 				// Virtualized filesystems can reject replacement while accepting writes to an existing file.
 				logger::warn(
 					"Could not replace {} atomically (Windows error {}); retrying with a direct write",
-					path.string(),
+					Util::PathToUtf8(path),
 					windowsError);
 				std::string directWriteError;
 				if (!WriteTextFileDirect(path, contents, directWriteError)) {
@@ -395,7 +372,7 @@ namespace Util
 						directWriteError);
 					return false;
 				}
-				logger::info("Saved {} directly after atomic replacement failed", path.string());
+				logger::info("Saved {} directly after atomic replacement failed", Util::PathToUtf8(path));
 			}
 
 			return true;

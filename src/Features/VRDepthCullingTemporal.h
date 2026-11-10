@@ -2,6 +2,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "VRDepthCullingTelemetryPolicy.h"
+#	include "VRDepthCullingSubmissionPolicy.h"
 
 #	include <array>
 #	include <cstddef>
@@ -10,6 +11,8 @@
 
 namespace VRDepthCullingTemporal
 {
+	/** Retire all producer evidence at a scene-depth publication boundary. */
+	void InvalidateDepthGeneration();
 	enum class Mode
 	{
 		Balanced = 0,
@@ -49,6 +52,11 @@ namespace VRDepthCullingTemporal
 		bool cullingEnabled = false;
 		bool telemetryEnabled = true;
 		Mode mode = Mode::Balanced;
+		std::uint64_t recoveryChecks = 0;
+		std::uint64_t coherentEarlyExits = 0;
+		std::uint64_t submissionValidationCalls = 0;
+		std::uint64_t depthEvidenceValidationCalls = 0;
+		std::uint64_t maximumPromotedPerReadback = 0;
 		std::uint64_t envelopeMisses = 0;
 		std::uint64_t recoveryAttempts = 0;
 		std::uint64_t objectsInspected = 0;
@@ -57,6 +65,16 @@ namespace VRDepthCullingTemporal
 		std::uint64_t frustumTests = 0;
 		std::uint64_t totalEligible = 0;
 		std::uint64_t totalPromoted = 0;
+		std::uint64_t motionExpansions = 0;
+		std::uint64_t budgetSaturated = 0;
+		std::uint64_t eligibleUnpromoted = 0;
+		std::uint64_t directEligible = 0;
+		std::uint64_t expandedEligible = 0;
+		std::uint64_t transitionPromoted = 0;
+		std::uint32_t lastProducerAge = 0;
+		bool lastProducerAgeKnown = false;
+		VRDepthCullingSubmissionPolicy::Reason lastSubmissionReason = VRDepthCullingSubmissionPolicy::Reason::MissingProducer;
+		std::array<std::uint64_t, static_cast<std::size_t>(VRDepthCullingSubmissionPolicy::Reason::Count)> submissionReasons{};
 		std::uint64_t totalDurationNanoseconds = 0;
 		std::uint64_t maximumDurationNanoseconds = 0;
 		std::array<std::uint64_t, DurationBinCount> durationHistogram{};

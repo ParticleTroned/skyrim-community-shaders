@@ -56,6 +56,11 @@ namespace globals
 {
 	inline ShaderCache* shaderCache = nullptr;
 }
+namespace LightLimitFixDetail::LightAttach
+{
+	inline std::atomic_uint32_t invalidations{ 0 };
+	void Invalidate() noexcept { invalidations.fetch_add(1); }
+}
 namespace logger
 {
 	inline uint32_t warningCount = 0;
@@ -216,10 +221,13 @@ namespace
 	{
 		for (bool preLoad : { false, true }) {
 			Fixture f;
+			const auto invalidations = LightLimitFixDetail::LightAttach::invalidations.load();
 			if (preLoad)
 				f.state.BeginSaveLoadSafeMode(10);
 			else
 				f.state.ExtendSaveLoadSafeMode(10);
+			Check(LightLimitFixDetail::LightAttach::invalidations.load() > invalidations,
+				"Both load notification paths must revoke cached light attachment decisions");
 			f.Save(11);
 			Check(f.state.GetOrdinarySaveRenderRecoveryToken() == 0,
 				"Preload and postload/new-game notification provenance must survive an overlapping save");

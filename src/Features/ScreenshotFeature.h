@@ -60,7 +60,6 @@ struct ScreenshotFeature : public Feature
 
 	void DrawSettingsEnabledControl() override;
 
-	virtual void DrawSettingsHeaderControls() override;
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override { return { "Captures screenshots or image sequences from the desktop view or headset.", {} }; }
 	virtual void DrawSettings() override;
 	/** Load a settings layer, migrating a supplied legacy eye only when canonical selection is absent. */
@@ -68,6 +67,8 @@ struct ScreenshotFeature : public Feature
 	/** Persist canonical capture choices and their backward-compatible sequence mirror. */
 	virtual void SaveSettings(json& a_json) override;
 	virtual void PostPostLoad() override;
+	/** Release the UI-only preview at Present after the main menu closes. */
+	void Reset() override;
 
 	/** Submits one contract-v1 capture for the native UI or screenshot hotkey. */
 	void RequestUiCapture();
@@ -76,6 +77,8 @@ struct ScreenshotFeature : public Feature
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	/** Capture the host's native reference PNG using the normal screenshot service. */
 	nlohmann::json HandleReferenceCapture(const nlohmann::json& a_request, std::function<void(const nlohmann::json&)> a_completion);
+	/** Share sequence identity, scheduling and cancellation with the generic capture provider. */
+	nlohmann::json HandleProviderBurst(const nlohmann::json& a_request, std::function<void(const nlohmann::json&)> a_notification);
 #endif
 	/** Dispatches a settings-based capture through the public screenshot service and returns its receipt. */
 	nlohmann::json RequestApiCapture(std::string_view a_origin = "csx_menu");

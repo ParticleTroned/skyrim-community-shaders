@@ -2,6 +2,8 @@
 
 #include <BS_thread_pool.hpp>
 #include <cmath>
+#include <limits>
+#include <new>
 #include <unordered_set>
 
 #include "Utils/WinApi.h"
@@ -1015,28 +1017,56 @@ bool WaterCache::TryReadCacheFromFile(const std::string& name, WorldSpaceHeader&
 {
 	namespace fs = std::filesystem;
 	const fs::path path = Util::PathHelpers::GetUnifiedWaterCachePath() / name;
-	if (!fs::exists(path))
+	std::error_code error;
+	if (!fs::exists(path, error)) {
+		if (error)
+			logger::error("[Unified Water] [Cache] Cannot inspect '{}': {}", path.string(), error.message());
 		return false;
+	}
 
-	std::ifstream ifs(path, std::ios::binary);
+	std::ifstream ifs(path, std::ios::binary | std::ios::ate);
 	if (!ifs) {
 		logger::error("[Unified Water] [Cache] Failed to open '{}' for reading", path.string());
 		return false;
 	}
 
-	ifs.read(reinterpret_cast<char*>(&header), sizeof(header));
-	if (!ifs || header.label != Util::FCC("WTCH")) {
+	// Size and payload must come from the same opened file, before allocating from its header.
+	const std::streamoff fileSize = ifs.tellg();
+	if (fileSize < static_cast<std::streamoff>(sizeof(WorldSpaceHeader))) {
+		logger::error("[Unified Water] [Cache] Missing or unreadable header for '{}'", path.string());
+		return false;
+	}
+	ifs.seekg(0, std::ios::beg);
+	WorldSpaceHeader candidateHeader{};
+	ifs.read(reinterpret_cast<char*>(&candidateHeader), sizeof(candidateHeader));
+	if (!ifs || candidateHeader.label != Util::FCC("WTCH") || candidateHeader.dataCount < 0) {
 		logger::error("[Unified Water] [Cache] Invalid or corrupt header for '{}'", path.string());
 		return false;
 	}
 
-	vec.resize(header.dataCount);
-	if (!vec.empty()) {
-		ifs.read(reinterpret_cast<char*>(vec.data()), vec.size() * sizeof(T));
+	const auto count = static_cast<std::uintmax_t>(candidateHeader.dataCount);
+	const auto payloadBytes = static_cast<std::uintmax_t>(fileSize) - sizeof(candidateHeader);
+	if (count > payloadBytes / sizeof(T) || count > vec.max_size() ||
+		count > static_cast<std::uintmax_t>((std::numeric_limits<std::streamsize>::max)()) / sizeof(T)) {
+		logger::error("[Unified Water] [Cache] Payload size mismatch for '{}'", path.string());
+		return false;
+	}
+
+	std::vector<T> candidate;
+	try {
+		candidate.resize(static_cast<std::size_t>(count));
+	} catch (const std::bad_alloc& exception) {
+		logger::error("[Unified Water] [Cache] Cannot allocate payload for '{}': {}", path.string(), exception.what());
+		return false;
+	}
+	if (!candidate.empty()) {
+		ifs.read(reinterpret_cast<char*>(candidate.data()), static_cast<std::streamsize>(count * sizeof(T)));
 		if (!ifs.good()) {
 			logger::error("[Unified Water] [Cache] Failed to read payload for '{}'", path.string());
 			return false;
 		}
 	}
+	header = candidateHeader;
+	vec = std::move(candidate);
 	return true;
 }

@@ -344,7 +344,7 @@ Modular ImGui-based configuration interface with specialized renderers for diffe
 
 ### Adding New Features
 
-1. Use template in `template/` directory as starting point
+1. Use template in `docs/new-feature-template/` directory as starting point
 2. Implement `Feature` interface with required methods:
     - `DrawSettings()` - ImGui configuration UI with performance impact warnings
     - `LoadSettings()` - JSON deserialization

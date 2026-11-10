@@ -1,7 +1,11 @@
 #pragma once
 
+#include <array>
 #include <bit>
 #include <memory>
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include <atomic>
+#endif
 
 #include "Buffer.h"
 #include "Utils/LazyShader.h"
@@ -36,8 +40,8 @@ public:
 	std::unique_ptr<ConstantBuffer> spmapCB;
 	Texture2D* envTexture = nullptr;
 	Texture2D* envReflectionsTexture = nullptr;
-	ID3D11UnorderedAccessView* uavArray[8];
-	ID3D11UnorderedAccessView* uavReflectionsArray[8];
+	std::unique_ptr<Texture2D> envFilteredTexture;
+	std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, 8> filteredUAVs;
 
 	// Reflection capture
 
@@ -45,8 +49,27 @@ public:
 	{
 		float3 CameraPosAdjustDelta;
 		uint CaptureFlags;
+		uint CaptureIndex;
+		float CaptureDeltaTime;
+		uint ResetCapture;
+		uint pad0;
 	};
 	STATIC_ASSERT_ALIGNAS_16(UpdateCubemapCB);
+	static_assert(sizeof(UpdateCubemapCB) == 32);
+
+	struct alignas(16) CaptureLightingState
+	{
+		float ReferenceLuminance;
+		uint PendingResetMask;
+		uint Reset;
+		uint Initialized;
+	};
+	static_assert(sizeof(CaptureLightingState) == 16);
+	std::unique_ptr<StructuredBuffer> captureLightingState;
+	Util::LazyShader<ID3D11ComputeShader> detectCaptureLightingCS;
+	Util::LazyShader<ID3D11ComputeShader> detectCaptureLightingReflectionsCS;
+	float3 previousCaptureAnchor[2]{};
+	float previousCaptureTime[2]{};
 
 	enum CaptureFlagsBits : uint
 	{
@@ -81,6 +104,7 @@ public:
 	bool fakeReflections = false;
 
 	bool resetCapture[2] = { true, true };
+	bool cubemapValid[2]{};
 	bool recompileFlag = false;
 	float previousHoursPassed = 0.0f;
 	uint32_t cadenceFrameCounter = 0;
@@ -123,16 +147,17 @@ public:
 	Util::LazyShader<ID3D11ComputeShader> bc6hEncodeCS;
 	std::unique_ptr<ConstantBuffer> bc6hEncodeCB;
 
-	ID3D11ShaderResourceView* envTextureArraySRV = nullptr;
-	ID3D11ShaderResourceView* envReflectionsTextureArraySRV = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> envFilteredTextureArraySRV;
 
-	Texture2D* envTextureBC6H = nullptr;
-	Texture2D* envReflectionsTextureBC6H = nullptr;
-	Texture2D* bc6hScratchTexture = nullptr;
+	std::unique_ptr<Texture2D> envTextureBC6H;
+	std::unique_ptr<Texture2D> envReflectionsTextureBC6H;
+	std::unique_ptr<Texture2D> bc6hScratchTexture;
+	std::unique_ptr<Texture2D> bc6hTailScratchTexture;
 
 	uint32_t bc6hMipLevels = 0;
+	uint32_t bc6hScratchMipLevels = 0;
 
-	ID3D11UnorderedAccessView* bc6hScratchUAVs[9] = {};
+	std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, 9> bc6hScratchUAVs;
 
 	// Editor window
 
@@ -190,6 +215,7 @@ public:
 		return {
 			"Updates reflections to match the surrounding scene.",
 			{ "Real-time environment capture for realistic reflections",
+				"Refreshes stale captures after substantial lighting changes",
 				"Dynamic cube map generation based on camera position",
 				"Enhanced water reflections with environmental details",
 				"Support for both standard and VR rendering modes",
@@ -226,6 +252,8 @@ public:
 	};
 
 	virtual void ClearShaderCache() override;
+	/** @brief Returns the detector using the capture pass's sky-sampling policy. */
+	ID3D11ComputeShader* GetComputeShaderDetectLighting(bool a_reflections);
 	ID3D11ComputeShader* GetComputeShaderUpdate();
 	ID3D11ComputeShader* GetComputeShaderUpdateReflections();
 	ID3D11ComputeShader* GetComputeShaderUpdateFakeReflections();
@@ -249,11 +277,25 @@ public:
 	bool CompressToBC6H(bool a_reflections);
 
 	ID3D11ComputeShader* GetComputeShaderBC6HEncode();
+	/** @brief Returns a completed float cubemap, or null until first publication. */
+	ID3D11ShaderResourceView* GetPublishedCubemap(bool a_reflections = false) const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** @brief Queues a render-thread reset of both captures without GPU readback. */
+	void RequestCaptureRefresh() { captureRefreshRequested.store(true, std::memory_order_release); }
+#endif
 
 	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; };
 
 private:
+	void SetupResourcesImpl();
+	bool shaderSettingsInitialized = false;
+	bool captureResourcesReady = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::atomic_bool captureRefreshRequested{ false };
+#endif
+	bool SetupCapturePublicationResources(const D3D11_TEXTURE2D_DESC& a_desc, const D3D11_SHADER_RESOURCE_VIEW_DESC& a_srvDesc);
+	bool SetupCompressionResources(const D3D11_TEXTURE2D_DESC& a_desc);
 	static uint32_t SanitizeCubemapResolution(uint32_t a_resolution);
 	void RefreshActiveCubemapResolution();
 

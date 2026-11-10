@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "OverlayFeature.h"
 #include "UnifiedWater/Flowmap.h"
+#include "UnifiedWater/ReflectionCapture.h"
 #include "UnifiedWater/WaterCache.h"
 
 #include <atomic>
@@ -103,7 +104,7 @@ struct UnifiedWater : OverlayFeature
 
 	struct BSWaterShader_SetupGeometry
 	{
-		static void thunk(RE::BSShader* waterShader, RE::BSRenderPass* pass);
+		static void thunk(RE::BSShader* waterShader, RE::BSRenderPass* pass, uint32_t renderFlags);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
@@ -130,6 +131,8 @@ struct UnifiedWater : OverlayFeature
 	virtual void DataLoaded() override;
 	/// Native water remains active until all replacement resources are published.
 	bool RequiresVanillaWaterShaders() const;
+	/// Keeps the native dynamic capture registered before the engine schedules water effects.
+	void MaintainReflectionCapture();
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -160,6 +163,12 @@ private:
 	std::atomic_bool exteriorWorldspaceActive{ false };
 	std::atomic_bool mapMenuOpen{ false };
 	std::atomic_bool waterDataReady{ false };
+	// These fields share the engine water-system lock with native array membership.
+	UnifiedWaterReflectionCapture reflectionCapture;
+	std::uint32_t reflectionRetryFrames = 0;
+
+	void InitializeWaterMaterial(RE::TESWaterSystem& waterSystem, RE::BSTriShape* shape, RE::TESWaterForm* form, float height);
+	void RetireReflectionCapture(bool clearSources);
 
 	void TryCompleteDeferredChildWorldspaceCull(RE::TES* tes = nullptr);
 

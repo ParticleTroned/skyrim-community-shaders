@@ -15,6 +15,9 @@ foreach(
         shader_capture_state.h
         shader_task_identity_under_test.h
         shader_queue_add_under_test.h
+        shader_queue_generation.h
+        shader_queue_clear_type.h
+        shader_queue_release_slot.h
         shader_capture_tracking_under_test.h
         shader_eviction_under_test.h
         shader_capture_under_test.h
@@ -58,7 +61,7 @@ set_tests_properties(ShaderCacheVariants PROPERTIES TIMEOUT 30)
 
 set(_category_fallback_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/category-fallback")
 set(_category_fallback_headers)
-foreach(_header IN ITEMS pixel_lookup.h category_flag.h pixel_binding.h begin_technique.h
+foreach(_header IN ITEMS shader_support.h pixel_lookup.h category_flag.h pixel_binding.h begin_technique.h
     diagnostic_increment.h preparation_failure.h preparation_failure_type.h grass_material_admission.h
     lighting_flags.h pixel_prewarm.h pbr_prewarm.h)
     list(APPEND _category_fallback_headers "${_category_fallback_dir}/${_header}")

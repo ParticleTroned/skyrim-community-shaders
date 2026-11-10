@@ -6,6 +6,8 @@ import re
 import subprocess
 import tempfile
 
+from extract_adaptive_balance_toggle import function
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--compiler", required=True)
 args = parser.parse_args()
@@ -69,8 +71,27 @@ with tempfile.TemporaryDirectory(prefix="csx-nr-bridge-gate-") as temporary:
                     assert prewarm.count("interop_.GetLifetimeSnapshot()") == 1
                     assert prewarm.index("policy.BeginOpportunity(") < prewarm.index("interop_.GetLifetimeSnapshot()")
                     assert "fences.completed >= fences.issued" in prewarm
-                    assert "GetLifetimeSnapshot" not in text[:first] + text[last:recovery_start] + text[recovery_end:prewarm_start] + text[prewarm_end:], (
-                        name, "production fence observation escaped failure capture, recovery and optional prewarm")
+                    remaining = text[:first] + text[last:recovery_start] + text[recovery_end:prewarm_start] + text[prewarm_end:]
+                    startup_scopes = (
+                        ("bool Renderer::State::PollNativeStartupLocked(",
+                         r"if \(!nativeStartup_\.active\)\s*return true;\s*const auto fences ="),
+                        ("bool Renderer::State::AdmitMemoryLocked(",
+                         r"if \(NeedsNativeStartupLocked\(a_args, a_resources\) && interop_\.IsInitialized\(\)\) \{\s*const auto fences ="),
+                        ("bool Renderer::State::ApplyRegionBatchLocked(",
+                         r"if \(startupIndex\) \{\s*const auto fences ="),
+                        ("void Renderer::State::PreparePrewarmFeatureLocked(",
+                         r"\} else \{\s*const auto fences ="),
+                    )
+                    for signature, guard in startup_scopes:
+                        scope = function(text, signature).rstrip("\n")
+                        assert scope.count("interop_.GetLifetimeSnapshot()") == 1, (name, signature)
+                        assert re.search(guard + r"\s*interop_\.GetLifetimeSnapshot\(\);", scope), (name, signature)
+                        if "PreparePrewarmFeatureLocked" in signature:
+                            assert scope.index("interop_.EndD3D12(false)") < scope.index("interop_.GetLifetimeSnapshot()")
+                        assert scope in remaining, (name, signature)
+                        remaining = remaining.replace(scope, "", 1)
+                    assert "GetLifetimeSnapshot" not in remaining, (
+                        name, "production fence observation escaped failure, recovery, startup and prewarm ownership")
                 failure = text[last:text.index("void Renderer::State::SucceedLocked(", last)]
                 quarantine_start = text.index("void Renderer::State::QuarantineAfterUnexpectedFailureLocked(")
                 quarantine = text[quarantine_start:text.index("bool Renderer::State::EnsureBackendLocked(", quarantine_start)]

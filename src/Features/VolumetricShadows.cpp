@@ -45,7 +45,7 @@ namespace
 	{
 		const uint32_t reduction = a_source.Width / a_outputSize;
 		return a_source.Width == a_source.Height && a_source.Width % a_outputSize == 0 &&
-		       reduction >= 2 && reduction <= 2 * kDownsampleGroupSize && (reduction & (reduction - 1)) == 0;
+		       reduction >= 2 && reduction <= 4 * kDownsampleGroupSize && (reduction & (reduction - 1)) == 0;
 	}
 
 	bool TryGetShadowTextureDescription(ID3D11ShaderResourceView* a_srv, D3D11_TEXTURE2D_DESC& a_desc)
@@ -362,7 +362,8 @@ void VolumetricShadows::CopyShadowLightData()
 		CS_GPU_PASS_SELECT(a_mip1, "VolumetricShadows::DownsampleMip1", "VolumetricShadows::DownsampleMip0");
 		const uint32_t dispatchWidth = a_grouped ? srcDesc.Width : a_size;
 		const uint32_t dispatchHeight = a_grouped ? srcDesc.Height : a_size;
-		const uint32_t groupSpan = a_grouped ? 2 * kDownsampleGroupSize : kDownsampleGroupSize;
+		const uint32_t threadSpan = a_grouped ? std::max(srcDesc.Width / a_size / (2 * kDownsampleGroupSize), 1u) : 1u;
+		const uint32_t groupSpan = a_grouped ? 2 * kDownsampleGroupSize * threadSpan : kDownsampleGroupSize;
 		context->Dispatch((dispatchWidth + groupSpan - 1) / groupSpan, (dispatchHeight + groupSpan - 1) / groupSpan, 1);
 	};
 	downsampleMip(downsampleMip0, shadowCopyMip0UAV, kShadowCopySize, groupedMip0, false);
@@ -408,10 +409,23 @@ void VolumetricShadows::SetSharedShadowMapSRV(ID3D11DeviceContext* a_context, ID
 	a_context->PSSetShaderResources(kSharedShadowMapShaderSlot, 1, &a_srv);
 }
 
-void VolumetricShadows::SetShaderResources(ID3D11DeviceContext* a_context)
+void VolumetricShadows::SetShaderResources(ID3D11DeviceContext* a_context, RE::BSShader::Type a_shaderType)
 {
 	if (!a_context)
 		return;
+
+	// These families never sample the shared map. Consumers still rebind after native,
+	// deferred or hazard-driven context changes.
+	switch (a_shaderType) {
+	case RE::BSShader::Type::Grass:
+	case RE::BSShader::Type::Sky:
+	case RE::BSShader::Type::BloodSplatter:
+	case RE::BSShader::Type::Utility:
+	case RE::BSShader::Type::DistantTree:
+		return;
+	default:
+		break;
+	}
 
 	const bool hasDirectionalShadows = settings.Enabled && HasActiveDirectionalShadows();
 	if (hasDirectionalShadows)

@@ -1,11 +1,14 @@
 #include "Wetterness.h"
+#include "Common/WetternessDrying.hlsli"
 #include "GrassLighting.h"
 #include "Menu.h"
 #include "Menu/SettingsPage.h"
 #include "Profiler.h"
 #include "State.h"
+#include "Utils/Game.h"
 #include "Utils/UI.h"
 #include "WeatherPicker.h"
+#include "Wetterness/SnowMelt.h"
 #include "WetternessLightingPolicy.h"
 
 #include <algorithm>
@@ -198,6 +201,18 @@ namespace
 	bool g_hasLastValidOcclusionViewProj = false;
 	uint32_t g_lastValidOcclusionViewProjFrame = 0;
 
+	Wetterness::PerFrame CacheCommonBufferData(const Wetterness::PerFrame& data)
+	{
+		g_lastFrameData = data;
+		g_hasLastFrameData = true;
+		if (globals::state) {
+			g_cachedCommonBufferData = data;
+			g_hasCachedCommonBufferData = true;
+			g_cachedCommonBufferFrame = globals::state->frameCount;
+		}
+		return data;
+	}
+
 	float GetWeatherRainIntensity(RE::TESWeather* weather)
 	{
 		if (!weather || !weather->precipitationData || !weather->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy)) {
@@ -205,7 +220,7 @@ namespace
 		}
 
 		const float maxDensity = weather->precipitationData->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity).f;
-		if (maxDensity <= 0.0f) {
+		if (!std::isfinite(maxDensity) || maxDensity <= 0.0f) {
 			return 0.0f;
 		}
 
@@ -496,7 +511,7 @@ namespace
 			return;
 		}
 
-		const float remaining = std::clamp(1.0f - (elapsedSeconds / durationSeconds), 0.0f, 1.0f);
+		const float remaining = WetternessDrying::Remaining(elapsedSeconds, durationSeconds);
 		const float startCap = std::clamp(startDepth, 0.0f, maxDepth) * remaining;
 		const float globalCap = maxDepth * remaining;
 		const float envelopeCap = std::min(startCap, globalCap);
@@ -945,26 +960,6 @@ namespace
 			RAIN_CONTACT_WETNESS_SCALE_MAX,
 			DEFAULT_RAIN_CONTACT_WETNESS_SCALE);
 	}
-
-	RE::BSParticleShaderRainEmitter* GetRainEmitterFromPrecipGeometry(RE::BSGeometry* precipObject)
-	{
-		if (!precipObject) {
-			return nullptr;
-		}
-
-		auto* shaderProp = precipObject->GetGeometryRuntimeData().shaderProperty.get();
-		auto particleShaderProperty = netimmerse_cast<RE::BSParticleShaderProperty*>(shaderProp);
-		if (!particleShaderProperty || !particleShaderProperty->particleEmitter) {
-			return nullptr;
-		}
-
-		auto* emitter = particleShaderProperty->particleEmitter;
-		if (!emitter->emitterType.any(RE::BSParticleShaderEmitter::EMITTER_TYPE::kRain)) {
-			return nullptr;
-		}
-
-		return static_cast<RE::BSParticleShaderRainEmitter*>(emitter);
-	}
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -1365,7 +1360,7 @@ void Wetterness::DrawSettings()
 	if (page.Is("rain")) {
 		Util::UIntCheckbox("Enable Raindrop Effects", settings.EnableRaindropFx);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Master switch for raindrop splashes and ripple motion. One of the main wetness performance drivers.");
+			ImGui::TextUnformatted("Adds moving splashes and ripple rings during rain. Off keeps wet surfaces and puddles while saving the work of these extra effects.");
 		}
 
 		const bool raindropSettingsDisabled = settings.EnableRaindropFx == 0;
@@ -1532,6 +1527,7 @@ void Wetterness::DrawSettings()
 	}
 
 	if (page.Is("drying")) {
+		ImGui::TextWrapped("These drying controls also apply to melted Snow Cover. Wetness stays where snow was; heavier cover leaves more water and dries later. Waiting, sleeping and travel advance drying in game hours.");
 		const auto drawDryingSlider = [](const char* label, float& value, const char* tooltip) {
 			Util::Widgets::SliderFloat(label, &value, DRYING_HOURS_MIN, DRYING_HOURS_MAX, "%.0f h", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1951,6 +1947,62 @@ void Wetterness::ApplyClimatePreset(ClimatePreset preset)
 	InvalidateSanitizedSettingsCache();
 }
 
+bool Wetterness::HasPendingDrying() const
+{
+	return runtimeState.wasRainingLastFrame ||
+	       runtimeState.wetnessDepth > RUNTIME_DRY_EPSILON ||
+	       runtimeState.puddleDepth > RUNTIME_DRY_EPSILON ||
+	       runtimeState.postRainEventWeight > RUNTIME_DRY_EPSILON;
+}
+
+void Wetterness::DecayRainHistory(float deltaSeconds) const
+{
+	const float memoryDecayPerSecond = RAIN_EVENT_REFERENCE_SECONDS / RAIN_EVENT_DECAY_SECONDS;
+	runtimeState.rainEventExposure = std::max(0.0f, runtimeState.rainEventExposure - memoryDecayPerSecond * deltaSeconds);
+	runtimeState.rainEventWeight = std::clamp(runtimeState.rainEventExposure / RAIN_EVENT_REFERENCE_SECONDS, 0.0f, 1.0f);
+}
+
+float Wetterness::UpdateRuntimeClock(bool gamePaused) const
+{
+	if (const auto* calendar = RE::Calendar::GetSingleton()) {
+		const double currentGameSeconds = static_cast<double>(calendar->GetCurrentGameTime()) * SECONDS_IN_A_DAY;
+		if (std::isfinite(currentGameSeconds)) {
+			double deltaSeconds = 0.0;
+			if (runtimeState.hasLastGameTime) {
+				deltaSeconds = currentGameSeconds - runtimeState.lastGameTimeSeconds;
+				if (deltaSeconds < 0.0) {
+					ResetRuntimeState();
+					deltaSeconds = 0.0;
+				} else {
+					deltaSeconds = std::min(deltaSeconds, MAX_TIME_DELTA_SECONDS);
+				}
+			}
+			runtimeState.lastGameTimeSeconds = currentGameSeconds;
+			runtimeState.hasLastGameTime = true;
+			return static_cast<float>(deltaSeconds);
+		}
+	}
+	// Rebase a returning calendar so fallback frame time is not counted twice.
+	runtimeState.hasLastGameTime = false;
+	const float deltaSeconds = gamePaused ? 0.0f : RE::GetSecondsSinceLastFrame();
+	return std::isfinite(deltaSeconds) ? std::clamp(deltaSeconds, 0.0f, static_cast<float>(MAX_TIME_DELTA_SECONDS)) : 0.0f;
+}
+
+Wetterness::PerFrame Wetterness::MakeDryPerFrameData() const
+{
+	PerFrame data = MakeDisabledPerFrameData();
+	const auto& sanitizedSettings = GetSanitizedSettings();
+	data.settings.MaxShoreWetness = sanitizedSettings.MaxShoreWetness;
+	data.settings.ShoreRange = sanitizedSettings.ShoreRange;
+	data.settings.WetDarkeningStrength = sanitizedSettings.WetDarkeningStrength;
+	data.settings.ShorePersistentDarkeningStrength = ClampFiniteOrDefault(
+		shorePersistentDarkeningStrength,
+		SHORE_PERSISTENT_DARKENING_MIN,
+		SHORE_PERSISTENT_DARKENING_MAX,
+		SHORE_PERSISTENT_DARKENING_DEFAULT);
+	return data;
+}
+
 bool Wetterness::IsRuntimeProcessingActive() const
 {
 	if (!IsRuntimeActive()) {
@@ -1965,21 +2017,29 @@ bool Wetterness::IsRuntimeProcessingActive() const
 		return true;
 	}
 
-	const bool hasActiveTimeline =
-		runtimeState.wasRainingLastFrame ||
-		runtimeState.wetnessDepth > RUNTIME_DRY_EPSILON ||
-		runtimeState.puddleDepth > RUNTIME_DRY_EPSILON ||
-		runtimeState.rainEventExposure > RUNTIME_DRY_EPSILON ||
-		runtimeState.postRainEventWeight > RUNTIME_DRY_EPSILON;
-	if (hasActiveTimeline) {
+	if (HasPendingDrying() || WetternessSnowMelt::HasHistory()) {
 		return true;
 	}
 
 	if (const auto* sky = globals::game::sky) {
-		return sky->mode.get() == RE::Sky::Mode::kFull && sky->IsRaining();
+		// Weather history advances indoors and through outgoing rain transitions too.
+		const float currentWeight = std::clamp(sky->currentWeatherPct, 0.0f, 1.0f);
+		return (currentWeight > 0.0f && GetWeatherRainIntensity(sky->currentWeather) > 0.0f) ||
+		       (currentWeight < 1.0f && GetWeatherRainIntensity(sky->lastWeather) > 0.0f);
 	}
 
 	return false;
+}
+
+float4 Wetterness::GetDryingHours(float precipitationWeight) const
+{
+	const auto* sky = globals::game::sky;
+	const float currentWeight = sky ? std::clamp(sky->currentWeatherPct, 0.0f, 1.0f) : 1.0f;
+	const auto hours = enableWeatherDrivenDryingModel ?
+	                       GetWeatherDrivenDryingHours(sky ? sky->currentWeather : nullptr, sky ? sky->lastWeather : nullptr,
+							   currentWeight, 1.0f - currentWeight, precipitationWeight) :
+	                       GetManualDryingHours(settings, puddleDryingHours);
+	return { hours.stoneHours, hours.grassHours, hours.dirtHours, hours.puddleHours };
 }
 
 float Wetterness::GetEffectiveGrassGlossiness(float dryGlossiness, const PerFrame& frameData) const
@@ -2172,15 +2232,17 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 
 	if (!loaded || settings.EnableWetterness == 0u) {
 		ResetRuntimeState();
-		PerFrame data = MakeDisabledPerFrameData();
-		g_lastFrameData = data;
-		g_hasLastFrameData = true;
-		if (canUseFrameCache) {
-			g_cachedCommonBufferData = data;
-			g_hasCachedCommonBufferData = true;
-			g_cachedCommonBufferFrame = frameIndex;
-		}
-		return data;
+		return CacheCommonBufferData(MakeDisabledPerFrameData());
+	}
+
+	const bool gamePaused = globals::game::ui && globals::game::ui->GameIsPaused();
+	const float timelineDeltaSeconds = UpdateRuntimeClock(gamePaused);
+	const bool canAdvanceWetnessTime = timelineDeltaSeconds > 0.0f;
+	if (!IsRuntimeProcessingActive()) {
+		// Rain history still affects the next storm, but does not keep dry rendering active.
+		if (canAdvanceWetnessTime)
+			DecayRainHistory(timelineDeltaSeconds);
+		return CacheCommonBufferData(MakeDryPerFrameData());
 	}
 
 	CS_PROFILE_CPU_SCOPE("Wetterness::UpdateWeatherState");
@@ -2244,10 +2306,10 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 				RE::BSParticleShaderRainEmitter* currentRainEmitter = nullptr;
 				RE::BSParticleShaderRainEmitter* lastRainEmitter = nullptr;
 				if (precip->currentPrecip) {
-					currentRainEmitter = GetRainEmitterFromPrecipGeometry(precip->currentPrecip.get());
+					currentRainEmitter = Util::GetRainEmitterFromPrecipGeometry(precip->currentPrecip.get());
 				}
 				if (precip->lastPrecip) {
-					lastRainEmitter = GetRainEmitterFromPrecipGeometry(precip->lastPrecip.get());
+					lastRainEmitter = Util::GetRainEmitterFromPrecipGeometry(precip->lastPrecip.get());
 				}
 
 				auto* rainEmitter = currentRainEmitter ? currentRainEmitter : lastRainEmitter;
@@ -2295,72 +2357,12 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 	const bool rainingNow = (blendedRainingVisualSnapped > 0.0f) || rainingByWeatherMetadata;
 	const float rainExposureSource = hasPrecipitationFxSignal ? blendedRainingVisualWeighted : blendedRainingAccum;
 	const auto getEffectiveDryingHours = [&](float rainEventWeight) {
-		if (enableWeatherDrivenDryingModel) {
-			return GetWeatherDrivenDryingHours(currentWeather, lastWeather, currentWeight, lastWeight, rainEventWeight);
-		}
-		return GetManualDryingHours(settings, puddleDryingHours);
+		const auto hours = GetDryingHours(rainEventWeight);
+		return EffectiveDryingHours{ hours.x, hours.y, hours.z, hours.w };
 	};
 	EffectiveDryingHours effectiveDryingHours{};
 
-	double timelineDeltaGameSeconds = 0.0;
-	const bool gamePaused = globals::game::ui && globals::game::ui->GameIsPaused();
-	const auto* calendar = RE::Calendar::GetSingleton();
-	if (calendar) {
-		bool detectedCalendarRewind = false;
-		const double currentGameSeconds = static_cast<double>(calendar->GetCurrentGameTime()) * SECONDS_IN_A_DAY;
-		if (runtimeState.hasLastGameTime) {
-			timelineDeltaGameSeconds = currentGameSeconds - runtimeState.lastGameTimeSeconds;
-			if (timelineDeltaGameSeconds < 0.0) {
-				detectedCalendarRewind = true;
-				timelineDeltaGameSeconds = 0.0;
-			} else if (timelineDeltaGameSeconds > MAX_TIME_DELTA_SECONDS) {
-				timelineDeltaGameSeconds = MAX_TIME_DELTA_SECONDS;
-			}
-		}
-		if (detectedCalendarRewind) {
-			ResetRuntimeState();
-			data.OcclusionViewProj = {};
-			hasValidOcclusionProjection = false;
-		}
-		runtimeState.lastGameTimeSeconds = currentGameSeconds;
-		runtimeState.hasLastGameTime = true;
-	} else if (!gamePaused) {
-		timelineDeltaGameSeconds = RE::GetSecondsSinceLastFrame();
-	}
-
-	// Allow wetness timelines to progress from calendar delta even while the game is paused
-	// (e.g. wait/sleep), but still avoid frame-time updates while paused without calendar data.
-	const float timelineDeltaSeconds = static_cast<float>(timelineDeltaGameSeconds);
-	const bool canAdvanceWetnessTime = timelineDeltaSeconds > 0.0f && (calendar != nullptr || !gamePaused);
-	const bool hasDebugOverrides =
-		debugSettings.EnableWetnessOverride ||
-		debugSettings.EnablePuddleOverride ||
-		debugSettings.EnableRainOverride;
-	const bool dryTimelineSettled =
-		runtimeState.wetnessDepth <= RUNTIME_DRY_EPSILON &&
-		runtimeState.puddleDepth <= RUNTIME_DRY_EPSILON &&
-		runtimeState.rainEventExposure <= RUNTIME_DRY_EPSILON &&
-		runtimeState.postRainEventWeight <= RUNTIME_DRY_EPSILON;
-	bool runtimeInactive = settings.EnableWetterness == 0 ||
-	                       (settings.EnableWetterness != 0 &&
-							   !hasDebugOverrides &&
-							   !rainingNow &&
-							   dryTimelineSettled);
-
-	if (runtimeInactive) {
-		runtimeState.wetnessDepth = 0.0f;
-		runtimeState.puddleDepth = 0.0f;
-		runtimeState.rainEventExposure = 0.0f;
-		runtimeState.rainEventWeight = 0.0f;
-		runtimeState.postRainEventWeight = 0.0f;
-		runtimeState.postRainElapsedSeconds = 0.0f;
-		runtimeState.postRainStartWetnessDepth = 0.0f;
-		runtimeState.postRainStartPuddleDepth = 0.0f;
-		runtimeState.wasRainingLastFrame = false;
-		effectiveDryingHours = getEffectiveDryingHours(0.0f);
-	}
-
-	if (canAdvanceWetnessTime && !runtimeInactive) {
+	if (canAdvanceWetnessTime) {
 		float wetnessCurrentRate = 0.0f;
 		float puddleCurrentRate = 0.0f;
 		float wetnessLastRate = 0.0f;
@@ -2405,12 +2407,7 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 				runtimeState.postRainElapsedSeconds += timelineDeltaSeconds;
 			}
 
-			if (runtimeState.rainEventExposure > 0.0f) {
-				const float memoryDecayPerSecond = RAIN_EVENT_REFERENCE_SECONDS / RAIN_EVENT_DECAY_SECONDS;
-				runtimeState.rainEventExposure = std::max(0.0f, runtimeState.rainEventExposure - memoryDecayPerSecond * timelineDeltaSeconds);
-			}
-
-			runtimeState.rainEventWeight = std::clamp(runtimeState.rainEventExposure / RAIN_EVENT_REFERENCE_SECONDS, 0.0f, 1.0f);
+			DecayRainHistory(timelineDeltaSeconds);
 		}
 
 		// Long rain events slow down drying after rain stops.
@@ -2453,6 +2450,33 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 		}
 
 		runtimeState.wasRainingLastFrame = rainingNow;
+	}
+
+	if (!canAdvanceWetnessTime) {
+		const float dryingEventWeight = rainingNow ? runtimeState.rainEventWeight : runtimeState.postRainEventWeight;
+		effectiveDryingHours = getEffectiveDryingHours(dryingEventWeight);
+	}
+	const float remainingGrassWetness = runtimeState.postRainEventWeight > RUNTIME_DRY_EPSILON ?
+	                                        std::clamp(1.0f - (std::max(0.0f, runtimeState.postRainElapsedSeconds) /
+																  DryingHoursToSeconds(effectiveDryingHours.grassHours)),
+												0.0f, 1.0f) :
+	                                        0.0f;
+	const bool hasDebugOverrides = debugSettings.EnableWetnessOverride ||
+	                               debugSettings.EnablePuddleOverride || debugSettings.EnableRainOverride;
+	if (!hasDebugOverrides && !rainingNow &&
+		runtimeState.wetnessDepth <= RUNTIME_DRY_EPSILON &&
+		runtimeState.puddleDepth <= RUNTIME_DRY_EPSILON && remainingGrassWetness <= RUNTIME_DRY_EPSILON) {
+		runtimeState.wetnessDepth = 0.0f;
+		runtimeState.puddleDepth = 0.0f;
+		runtimeState.postRainEventWeight = 0.0f;
+		runtimeState.postRainElapsedSeconds = 0.0f;
+		runtimeState.postRainStartWetnessDepth = 0.0f;
+		runtimeState.postRainStartPuddleDepth = 0.0f;
+		runtimeState.wasRainingLastFrame = false;
+		runtimeState.grassLightingWetnessPhase = 0.0f;
+		g_hasLastValidOcclusionViewProj = false;
+		if (!WetternessSnowMelt::HasHistory())
+			return CacheCommonBufferData(MakeDryPerFrameData());
 	}
 
 	if (settings.EnableWetterness) {
@@ -2510,16 +2534,8 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 	}
 	data.Time = static_cast<float>(runtimeState.rainTimerSeconds);
 
-	if (!canAdvanceWetnessTime && !runtimeInactive) {
-		const float dryingEventWeight = rainingNow ? runtimeState.rainEventWeight : runtimeState.postRainEventWeight;
-		effectiveDryingHours = getEffectiveDryingHours(dryingEventWeight);
-	}
-
 	const Settings& sanitizedSettings = GetSanitizedSettings();
 	data.settings = MakeShaderSettings(sanitizedSettings);
-	if (runtimeInactive) {
-		data.settings.EnableWetterness = 0u;
-	}
 	// Raindrops should stop when rain weather transition is complete (weight reaches zero),
 	// not immediately when current weather pointer flips.
 	if (weatherRainTransitionWeight <= 0.005f || isInterior) {
@@ -2575,14 +2591,8 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 	if (masterWetnessEnabled && data.settings.EnableWetterness != 0 && !(isInterior && !debugSettings.EnableRainOverride)) {
 		if (grassLightingRainActive) {
 			grassLightingWetnessPhase = 1.0f;
-		} else if (runtimeState.postRainEventWeight > RUNTIME_DRY_EPSILON) {
-			const float grassDryingSeconds = DryingHoursToSeconds(effectiveDryingHours.grassHours);
-			if (grassDryingSeconds > 0.0f) {
-				grassLightingWetnessPhase = std::clamp(
-					1.0f - (std::max(0.0f, runtimeState.postRainElapsedSeconds) / grassDryingSeconds),
-					0.0f,
-					1.0f);
-			}
+		} else {
+			grassLightingWetnessPhase = remainingGrassWetness;
 		}
 	}
 	runtimeState.grassLightingWetnessPhase = grassLightingWetnessPhase;
@@ -2648,15 +2658,7 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 	data.settings.RaindropInterval = 1.0f / safeRaindropInterval;
 	data.settings.RippleLifetime = safeRaindropInterval / safeRippleLifetime;
 
-	g_lastFrameData = data;
-	g_hasLastFrameData = true;
-	if (canUseFrameCache) {
-		g_cachedCommonBufferData = data;
-		g_hasCachedCommonBufferData = true;
-		g_cachedCommonBufferFrame = frameIndex;
-	}
-
-	return data;
+	return CacheCommonBufferData(data);
 }
 
 void Wetterness::Prepass()
@@ -2667,17 +2669,18 @@ void Wetterness::Prepass()
 		return;
 	}
 
-	ID3D11ShaderResourceView* activePuddleMask = (!g_hasLastFrameData || g_lastFrameData.settings.EnableWetterness != 0u) ?
-	                                                 puddleMaskSrv.get() :
-	                                                 nullptr;
-	context->PSSetShaderResources(kWetnessPsSrvPuddleMaskSlot, 1, &activePuddleMask);
-
 	if (g_hasLastFrameData && g_lastFrameData.settings.EnableWetterness == 0u) {
-		ID3D11ShaderResourceView* nullSrv = nullptr;
-		context->PSSetShaderResources(kWetnessPsSrvPrecipOcclusionSlot, 1, &nullSrv);
+		if (rainResourcesBound) {
+			static_assert(kWetnessPsSrvPuddleMaskSlot == kWetnessPsSrvPrecipOcclusionSlot + 1);
+			ID3D11ShaderResourceView* nullSrvs[2]{};
+			context->PSSetShaderResources(kWetnessPsSrvPrecipOcclusionSlot, 2, nullSrvs);
+			rainResourcesBound = false;
+		}
 		return;
 	}
 
+	ID3D11ShaderResourceView* activePuddleMask = puddleMaskSrv.get();
+	context->PSSetShaderResources(kWetnessPsSrvPuddleMaskSlot, 1, &activePuddleMask);
 	ID3D11ShaderResourceView* precipOcclusionSrv = nullptr;
 	auto& precipOcclusionTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
 	if (precipOcclusionTexture.depthSRV) {
@@ -2685,6 +2688,7 @@ void Wetterness::Prepass()
 	}
 
 	context->PSSetShaderResources(kWetnessPsSrvPrecipOcclusionSlot, 1, &precipOcclusionSrv);
+	rainResourcesBound = true;
 }
 
 void Wetterness::LoadSettings(json& o_json)

@@ -47,6 +47,10 @@ public:
 		float& cachedFontSize,
 		float currentFontSize);
 	static bool MoveWindowBelowShaderCompilationStatus(ImVec2& position, const ImVec2& windowSize, const ImVec2& pivot);
+	/** Reserve canvas space only for status windows visible on the menu's presentation surface. */
+	static bool ExcludeTopStatusWindowsFromLayout(ImVec2& availableMin, const ImVec2& availableMax, float& topStatusLeft);
+	/** Stack a status panel below visible peers, excluding its own window. */
+	static float GetTopStatusWindowBottom(float minimumY, const char* excludeWindow);
 	static ImVec2 GetDefaultVRSettingsWindowSize(bool a_excludeShaderCompilationWindow = true);
 	static float GetDefaultVRLeftAnchorX(float a_windowWidth);
 	/**
@@ -66,7 +70,7 @@ private:
 	static bool ShouldDrawFeatureOverlay(const OverlayFeature& overlay, const Menu& menu);
 	static void HandleFontReload(Menu& menu, float& cachedFontSize, float currentFontSize);
 	static bool ApplyVROverlayDisplaySize();
-	static void InitializeImGuiFrame(Menu& menu);
+	static void InitializeImGuiFrame(Menu& menu, bool acceptsInput);
 	static void RenderShaderCompilationStatus(const std::function<const char*(std::vector<InputCombo>)>& keyIdToString);
 	static void RenderShaderBlockingStatus();
 	static void RenderFirstTimeSetupOverlay();

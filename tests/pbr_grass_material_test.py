@@ -136,7 +136,7 @@ int main() {
 struct ID3D11VertexShader {};
 struct ID3D11PixelShader {};
 namespace RE {
-struct BSShader { enum class Type { Grass }; };
+struct BSShader { enum class Type { None, Grass }; };
 namespace BSGraphics {
 enum { DIRTY_VERTEX_DESC };
 struct VertexShader { ID3D11VertexShader* shader; };
@@ -146,6 +146,7 @@ struct PixelShader { ID3D11PixelShader* shader; };
 struct State {
     uint32_t modifiedVertexDescriptor = 1, modifiedPixelDescriptor = 2;
     bool enabled = true, deferredPixelShaderMissing = false;
+    RE::BSShader::Type selectedCustomPixelShaderType = RE::BSShader::Type::None;
     bool ShaderEnabled(RE::BSShader::Type) const { return enabled; }
 };
 struct Cache {
@@ -174,7 +175,7 @@ State stateValue; State* state = &stateValue;
 Cache cacheValue; Cache* shaderCache = &cacheValue;
 Deferred deferredValue; Deferred* deferred = &deferredValue;
 namespace features {
-struct Feature { bool loaded = true; } truePBR, grassLighting;
+struct Feature { bool loaded = true; } truePBR, grassLighting, grassOptimizations;
 }
 namespace d3d { Context contextValue; Context* context = &contextValue; }
 namespace game {
@@ -211,6 +212,7 @@ int main() {
     assert(globals::d3d::contextValue.vertex == &nativeVS);
     assert(globals::d3d::contextValue.pixel == &nativePS);
     assert(globals::game::vertex == &fixtureNativeVertex);
+    assert(globals::state->selectedCustomPixelShaderType == RE::BSShader::Type::None);
     // A ready pixel stage cannot restore native outputs into deferred targets.
     globals::cacheValue.vertex = nullptr;
     globals::cacheValue.pixel = &customPixel;
@@ -222,10 +224,12 @@ int main() {
     globals::cacheValue.vertex = &customVertex;
     assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
     assert(globals::game::vertex == &customVertex && globals::game::pixel == &customPixel);
+    assert(globals::state->selectedCustomPixelShaderType == RE::BSShader::Type::Grass);
     globals::deferred->deferredPass = false;
     globals::cacheValue.vertex = nullptr;
     assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
     assert(globals::d3d::contextValue.pixel == &nativePS);
+    assert(globals::state->selectedCustomPixelShaderType == RE::BSShader::Type::None);
     // Compilation can finish after the original stage-binding hooks run.
     globals::cacheValue.pixel = nullptr;
     publishDuringSetup = true;
@@ -242,9 +246,67 @@ int main() {
     globals::state->deferredPixelShaderMissing = true;
     assert(!BSGrassShader_SetupTechnique::thunk(&shader, 0));
     globals::state->deferredPixelShaderMissing = false;
+    globals::features::grassOptimizations.loaded = false;
     globals::features::truePBR.loaded = false;
     assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
     assert(globals::game::vertex == &fixtureNativeVertex && globals::game::pixel == &fixtureNativePixel);
+    // Optimized grass needs reflected native setup even without PBR or Grass Lighting.
+    constexpr struct { bool pbr, lighting, optimized, custom; } featureCases[] = {
+        {false, false, false, false},
+        {true,  false, false, false},
+        {false, true,  false, false},
+        {true,  true,  false, true},
+        {false, false, true,  true},
+        {true,  false, true,  true},
+        {false, true,  true,  true},
+        {true,  true,  true,  true},
+    };
+    for (const auto& feature : featureCases) {
+        globals::features::truePBR.loaded = feature.pbr;
+        globals::features::grassLighting.loaded = feature.lighting;
+        globals::features::grassOptimizations.loaded = feature.optimized;
+        globals::game::flags.dirty = false;
+        assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
+        assert(globals::game::vertex == (feature.custom ? &customVertex : &fixtureNativeVertex));
+        assert(globals::game::pixel == (feature.custom ? &customPixel : &fixtureNativePixel));
+        assert(globals::game::flags.dirty == feature.custom);
+        if (feature.custom) {
+            assert(globals::d3d::contextValue.vertex == &customVS);
+            assert(globals::d3d::contextValue.pixel == &customPS);
+        }
+    }
+    // Optimization alone retains native fallback while a complete pair is unavailable.
+    globals::features::truePBR.loaded = globals::features::grassLighting.loaded = false;
+    globals::features::grassOptimizations.loaded = true;
+    constexpr struct { bool vertex, pixel; } incompletePairs[] = {
+        {true, false}, {false, false}, {false, true},
+    };
+    for (const auto& pair : incompletePairs) {
+        globals::cacheValue.vertex = pair.vertex ? &customVertex : nullptr;
+        globals::cacheValue.pixel = pair.pixel ? &customPixel : nullptr;
+        assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
+        assert(globals::game::vertex == &fixtureNativeVertex && globals::game::pixel == &fixtureNativePixel);
+        assert(globals::d3d::contextValue.vertex == &nativeVS && globals::d3d::contextValue.pixel == &nativePS);
+    }
+    globals::deferred->deferredPass = true;
+    globals::deferred->captureReady = true;
+    assert(!BSGrassShader_SetupTechnique::thunk(&shader, 0));
+    assert(!globals::deferred->captureReady);
+    assert(globals::d3d::contextValue.pixel == &customPS);
+    globals::cacheValue.vertex = &customVertex;
+    assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
+    assert(globals::game::vertex == &customVertex && globals::game::pixel == &customPixel);
+    globals::deferred->deferredPass = false;
+    constexpr struct { bool ready, cache, stage; } disabledCases[] = {
+        {false, true, true}, {true, false, true}, {true, true, false},
+    };
+    for (const auto& disabled : disabledCases) {
+        nativeReady = disabled.ready;
+        globals::cacheValue.enabled = disabled.cache;
+        globals::state->enabled = disabled.stage;
+        assert(BSGrassShader_SetupTechnique::thunk(&shader, 0) == nativeReady);
+        assert(globals::game::vertex == &fixtureNativeVertex && globals::game::pixel == &fixtureNativePixel);
+    }
 }
 '''.replace("METHOD", method)
         self.compile_and_run(driver, compiler)

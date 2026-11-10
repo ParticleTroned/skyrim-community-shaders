@@ -1,12 +1,14 @@
 #include "Features/ScreenshotManifestSnapshot.h"
 #include "Features/ScreenshotReferencePolicy.h"
 #include "screenshot_burst_test.h"
+#include "screenshot_capture_provider_test.h"
 
 #include <stdexcept>
 
 int main()
 {
 	RunScreenshotBurstTests();
+	RunScreenshotCaptureProviderTests();
 	using json = nlohmann::json;
 	const auto referencePath = std::filesystem::current_path() / std::filesystem::path(L"golden-\u00e4\u773c.png");
 	const json reference = { { "outputPath", Util::PathToUtf8(referencePath) }, { "requestId", "checkpoint-1" } };

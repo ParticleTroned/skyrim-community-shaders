@@ -2,21 +2,13 @@
 
 #include "Settings.h"
 #include "TextureData.h"
+#include "Utils/TexturePath.h"
 #include <algorithm>
-#include <cctype>
 #include <string>
 
 namespace StreamingTextures
 {
-	inline std::string NormalizeTexturePath(std::string path)
-	{
-		std::ranges::transform(path, path.begin(), [](unsigned char c) { return c == '/' ? '\\' : static_cast<char>(std::tolower(c)); });
-		if (path.starts_with("data\\"))
-			path.erase(0, 5);
-		if (!path.starts_with("textures\\"))
-			path = "textures\\" + path;
-		return path;
-	}
+	using Util::NormalizeTexturePath;
 
 	/** Persist only a previously validated source contract, never pointers or GPU resources. */
 	struct RememberedSize

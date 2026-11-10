@@ -6,6 +6,7 @@
 #include <functional>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -64,8 +65,7 @@ namespace
 		std::array<int, 3> backendTokens_{};
 		NVSDK_NGX_Parameter parameterObject_;
 		void* device_ = &backendTokens_[0];
-		void* module_ = &backendTokens_[1];
-		void* coreModule_ = &backendTokens_[2];
+		void* backend_ = &backendTokens_[1];
 		void* parameters_ = &parameterObject_;
 		std::uint64_t successfulFrames_ = 23;
 		std::string detail_ = "initialized";
@@ -111,8 +111,8 @@ namespace
 
 		void RequireBackendRetained() const
 		{
-			Require(device_ == &backendTokens_[0] && module_ == &backendTokens_[1] &&
-						coreModule_ == &backendTokens_[2] && parameters_ == &parameterObject_,
+			Require(device_ == &backendTokens_[0] && backend_ == &backendTokens_[1] &&
+						parameters_ == &parameterObject_,
 				"Warm retirement released initialized backend ownership");
 		}
 	};
@@ -187,7 +187,7 @@ namespace
 			Require(runtime.status_ == status && runtime.failureStage_ == stage, "Rejected state lost its original failure evidence");
 			runtime.RequireBackendRetained();
 		}
-		for (const auto member : { &Runtime::device_, &Runtime::module_, &Runtime::coreModule_, &Runtime::parameters_ }) {
+		for (const auto member : { &Runtime::device_, &Runtime::backend_, &Runtime::parameters_ }) {
 			Runtime runtime;
 			runtime.*member = nullptr;
 			Require(!runtime.ReleasePassResources(), "Incomplete backend allowed warm retirement");
@@ -234,6 +234,9 @@ namespace
 		Require(runtime.nativeReleases_.size() == Runtime::kFeatureSlotCount && runtime.resident_[1] && !runtime.resident_[3],
 			"Warm fail-fast behavior changed cold reset cleanup");
 		Require(runtime.parameterObject_.resetCalls == 0, "Cold feature reset unexpectedly cleared parameter bindings");
+		Require(runtime.status_ == RuntimeStatus::FeatureReleaseFailed && runtime.failureStage_ == RuntimeFailureStage::FeatureRelease &&
+					runtime.ngxResult_ == Runtime::kInjectedResult && runtime.detail_ == "injected native release failure",
+			"Later successful releases concealed the first cold-retirement failure");
 	}
 }
 

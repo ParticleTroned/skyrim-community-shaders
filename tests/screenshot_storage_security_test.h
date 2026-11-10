@@ -41,6 +41,16 @@ inline void RunScreenshotStorageSecurityTests()
 	                  std::format("csx-screenshot-storage-{}-{}", GetCurrentProcessId(), GetTickCount64());
 	std::filesystem::create_directories(root);
 	try {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		{
+			auto output = DirectoryLease::OpenOutputDirectory(root / "provider");
+			output->VerifyDirectChild(output->Path() / "frame_0000.png");
+			ExpectFailure([&] { output->VerifyDirectChild(root / "outside.png"); }, "provider directory accepted an outside file");
+			ExpectFailure([&] { DirectoryLease::OpenOutputDirectory("relative"); }, "provider directory accepted a relative path");
+			if (MoveFileExW(output->Path().c_str(), (root / "renamed-provider").c_str(), 0) || !IsLeaseConflict(GetLastError()))
+				throw std::runtime_error("provider output directory could be renamed during publication");
+		}
+#endif
 		const std::string requestId = "12345678-1234-1234-1234-123456789abc";
 		auto directory = DirectoryLease::CreateExclusive(root, requestId);
 		if (directory->Path().filename() != "CS_sequence_12345678-1234-1234-1234-123456789abc")
@@ -153,6 +163,9 @@ inline void RunScreenshotStorageSecurityTests()
 		ExpectFailure(
 			[&] { DirectoryLease::CreateExclusive(root, "junction-request"); },
 			"a pre-created sequence junction was accepted");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ExpectFailure([&] { DirectoryLease::OpenOutputDirectory(junctionPath); }, "provider output followed a leaf junction");
+#endif
 		RemoveDirectoryW(junctionPath.c_str());
 
 		std::filesystem::remove_all(root);

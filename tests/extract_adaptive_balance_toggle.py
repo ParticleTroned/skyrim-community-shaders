@@ -31,9 +31,13 @@ def extract(root, output):
     water = read("WaterAppearance.cpp")
     menu = (root / "src/MenuDevBenchBridge.cpp").read_text(encoding="utf-8-sig")
     migrations = (root / "src/SettingsMigrations.cpp").read_text(encoding="utf-8-sig")
+    state = (root / "src/State.cpp").read_text(encoding="utf-8-sig")
+    state_header = (root / "src/State.h").read_text(encoding="utf-8-sig")
     output.mkdir(parents=True, exist_ok=True)
     (output / "linear_lighting_members.h").write_text(
         between(linear, "\tstruct Settings", "\tstruct alignas(16) PerFrameData"), encoding="utf-8")
+    (output / "adaptive_balance_effect_permutation_members.h").write_text(
+        between(state_header, "\tenum class ExtraShaderDescriptors", "\tenum class ExtraFeatureDescriptors"), encoding="utf-8")
     (output / "adaptive_balance_members.h").write_text(
         between(header, "\tenum class Profile", "\tstruct LocationOverrideTarget")
         + between(header, "\tstruct Settings", "\tstruct alignas(16) VanillaPointLightData")
@@ -41,10 +45,11 @@ def extract(root, output):
         + between(header, "\tmutable float smoothedWaterWindSpeed", "\n\tvirtual void DrawSettings()")
         + between(header, "\tvirtual bool SupportsPerformanceCostMeasurement()", "\n\tvirtual void LoadSettings").replace(" override", "")
         + between(header, "\tstruct ActiveProfileBlend", "\tProfile GetInteriorProfile()"), encoding="utf-8")
-    weather_hook = source[source.index("\tstruct Sky_UpdateColors\n"):]
+    weather_hook = source[source.index("\tstruct Sky_GetFog\n"):]
     (output / "adaptive_balance_weather_hook_under_test.h").write_text(
         function(weather_hook, "\t\tstatic void thunk("), encoding="utf-8")
     bodies = [
+        function(state, "void State::UpdateEffectShaderPermutation(").replace("State::", "globals::State::"),
         between(source, "AdaptiveBrightness::ProfileSettings AdaptiveBrightness::ProfileSettings::AdjustmentDefaults()", "namespace"),
         between(source, "\tconstexpr float kBrightnessMin", "\tconstexpr std::size_t kMaxOverrideHierarchyDepth"),
         function(source, "\tbool UsesClassifiedPointLightMultipliers("),
@@ -56,16 +61,22 @@ def extract(root, output):
         function(source, "\tvoid MigrateLegacyProfileLighting("),
         function(menu, "\tdouble AdaptiveBalanceAppearanceBound("),
         function(menu, "\tjson BuildAdaptiveBalanceAppearanceSchema("),
+        function(menu, "\tjson BuildAdaptiveBalanceGodraySchema("),
         function(menu, "\tstd::string ValidateAdaptiveBalanceVisuals("),
         function(source, "bool AdaptiveBrightness::IsRuntimeAvailable()"),
         function(source, "void AdaptiveBrightness::SetEnabled("),
         function(source, "void AdaptiveBrightness::SetPerformanceCostMeasurementEnabled("),
         function(source, "bool AdaptiveBrightness::IsRuntimeEnabled()"),
-        function(source, "float AdaptiveBrightness::GetEffectiveGodrayFinalBrightness()"),
+        function(source, "float AdaptiveBrightness::GetEffectiveVolumetricClarity()"),
+        function(source, "VolumetricLightingTuning::Profile AdaptiveBrightness::GetEffectiveGodrayProfile("),
         function(source, "float AdaptiveBrightness::GetEffectiveMoonReflectionStrength()"),
         between(source, "LinearLighting::Settings AdaptiveBrightness::GetNeutralLinearLightingSettings()", "void AdaptiveBrightness::UpdateVanillaPointLightData("),
         between(bloom, "\tconstexpr float kEnhancementIntensityMax", "\tvoid DrawTooltip("),
         function(bloom, "\tvoid SanitizeProfileWithDefaults("),
+        function(bloom, "Bloom::Profile Bloom::GetPresetProfile("),
+        function(bloom, "void Bloom::SanitizePresets("),
+        function(bloom, "void Bloom::SelectPreset("),
+        function(bloom, "void Bloom::ResetPreset("),
         function(bloom, "Bloom::Settings Bloom::GetCommonBufferData("),
         function(bloom, "Bloom::Profile Bloom::LerpProfiles("),
         function(bloom, "void Bloom::SanitizeProfile("),

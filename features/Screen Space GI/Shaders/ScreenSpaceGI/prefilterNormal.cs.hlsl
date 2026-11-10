@@ -16,8 +16,7 @@ float2 NormalMIPFilter(float2 enc0, float2 enc1, float2 enc2, float2 enc3)
 }
 
 groupshared float2 g_scratchNormal[8][8];
-[numthreads(8, 8, 1)] void main(uint2 dispatchThreadID : SV_DispatchThreadID, uint2 groupThreadID : SV_GroupThreadID)
-{
+[numthreads(8, 8, 1)] void main(uint2 dispatchThreadID : SV_DispatchThreadID, uint2 groupThreadID : SV_GroupThreadID) {
 	const float2 frameScale = FrameDim * RcpTexDim;
 
 	// MIP 0
@@ -40,7 +39,9 @@ groupshared float2 g_scratchNormal[8][8];
 
 	// MIP 1
 	float2 nm1 = NormalMIPFilter(normal0, normal1, normal2, normal3);
+#if !defined(HALF_RES) && !defined(QUARTER_RES)
 	outNormal1[baseCoord] = nm1;
+#endif
 	g_scratchNormal[groupThreadID.x][groupThreadID.y] = nm1;
 
 	GroupMemoryBarrierWithGroupSync();
@@ -54,7 +55,9 @@ groupshared float2 g_scratchNormal[8][8];
 		float2 inBR = g_scratchNormal[groupThreadID.x + 1][groupThreadID.y + 1];
 
 		float2 nm2 = NormalMIPFilter(inTL, inTR, inBL, inBR);
+#if !defined(QUARTER_RES)
 		outNormal2[baseCoord / 2] = nm2;
+#endif
 		g_scratchNormal[groupThreadID.x][groupThreadID.y] = nm2;
 	}
 

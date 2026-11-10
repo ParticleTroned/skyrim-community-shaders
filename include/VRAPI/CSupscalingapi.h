@@ -72,11 +72,12 @@ namespace CSX::UpscalingAPI
 		kE = 5
 	};
 
-	/** FSR4 is an FSR runtime selection, not a separate upscale method. */
+	/** Automatic runtime selection permits SDK/driver upgrades; FSR3 remains explicit. */
 	enum class FSRRuntime : std::uint32_t
 	{
 		kFSR3 = 0,
-		kFSR4 = 1
+		kAutomatic = 1,
+		kFSR4 = kAutomatic  // ABI-compatible name for the automatic runtime preference.
 	};
 
 	enum class RenderScaleStatus : std::uint32_t
@@ -258,7 +259,7 @@ namespace CSX::UpscalingAPI
 		std::uint64_t supportedFSRRuntimeMask = 0;
 		/** One entry per Method value (None, TAA, FSR, DLSS). */
 		std::uint64_t methodUnavailableConditions[4]{};
-		/** One entry per FSRRuntime value (FSR3, FSR4). */
+		/** One entry per FSRRuntime value (FSR3, Automatic). */
 		std::uint64_t fsrRuntimeUnavailableConditions[2]{};
 		/** Actual render scale for each QualityMode value. */
 		float qualityResolutionScales[7]{};

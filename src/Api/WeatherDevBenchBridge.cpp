@@ -1,6 +1,7 @@
 #include "Api/WeatherDevBenchBridge.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Api/DevBenchJson.h"
 
 #	include "Api/DevBenchMainThreadDispatch.h"
 #	include "Api/ServiceFoundation.h"
@@ -344,7 +345,7 @@ namespace
 			output = Foundation().MakeError(json::object(), "internal_error", "unknown weather API error", "dispatch", true);
 		}
 		try {
-			const auto serialized = output.dump();
+			const auto serialized = CSX::Api::DumpForDevBench(output);
 			a_write(a_sink, serialized.c_str());
 		} catch (...) {
 			a_write(a_sink, R"({"ok":false,"error":{"code":"serialization_failed"}})");
@@ -364,7 +365,7 @@ namespace CSX::Api::WeatherDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Versioned CSX weather selection, lock, registered-variable, and per-weather feature override API. Forced weather refreshes cached cloud passes and sky models. Mutations require preflight then execute with identical arguments and the returned token.",
+			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX weather selection, lock, registered-variable, and per-weather feature override API. Forced weather refreshes cached cloud passes and sky models. Mutations require preflight then execute with identical arguments and the returned token.",
 			"inputSchema":{"type":"object","required":["contractMajor","clientId","commandId","action"],"properties":{
 				"contractMajor":{"type":"integer","const":1},"clientId":{"type":"string","minLength":1,"maxLength":128},
 				"commandId":{"type":"string","minLength":1,"maxLength":128},"expectedBuildId":{"type":"string"},
@@ -376,7 +377,8 @@ namespace CSX::Api::WeatherDevBenchBridge
 					"value":{},"accelerate":{"type":"boolean"},"persist":{"type":"boolean"},"applyLive":{"type":"boolean"},
 					"allowDisruptive":{"type":"boolean"},"allowDestructive":{"type":"boolean"},"preflightToken":{"type":"string"}
 				}}
-			}}
+			}},
+			"outputSchema":{"type":"object","description":"Invalid UTF-8 in output strings is replaced with U+FFFD; valid UTF-8 output is unchanged."}
 		})";
 		devBench->RegisterTool("communityshaders.weather_api", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);

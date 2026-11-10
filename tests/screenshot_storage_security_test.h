@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -175,8 +176,10 @@ inline void RunScreenshotStorageSecurityTests()
 	const auto root = std::filesystem::temp_directory_path() /
 	                  std::format("csx-screenshot-storage-{}-{}", GetCurrentProcessId(), GetTickCount64());
 	std::filesystem::create_directories(root);
+	std::string phase = "injected commit failures";
 	try {
 		CheckCommittedWriteFailures(root);
+		phase = "restricted destination";
 		const auto approved = root / "approved";
 		std::filesystem::create_directories(approved);
 		const auto nested = approved / "stable" / "parent";
@@ -204,6 +207,7 @@ inline void RunScreenshotStorageSecurityTests()
 			throw std::runtime_error("restricted ancestry prevented atomic artifact publication");
 		restricted->Verify();
 		restricted.reset();
+		phase = "destination parent substitution";
 		g_destinationParent = approved / "substituted";
 		g_destinationDisplaced = approved / "original-parent";
 		g_destinationOutside = root / "outside";
@@ -270,6 +274,7 @@ inline void RunScreenshotStorageSecurityTests()
 		const auto atomicPath = directory->Path() / "atomic.bmp";
 		const auto atomicTemporary = directory->Path() / "atomic.bmp.tmp";
 		const std::string atomicBytes = "producer-owned";
+		phase = "ordinary atomic publication";
 		const auto atomicDescription = CommittedFile::WriteAtomically(
 			atomicTemporary, atomicPath, atomicBytes.data(), atomicBytes.size(), false);
 		if (atomicDescription.bytes != atomicBytes.size() ||
@@ -281,6 +286,7 @@ inline void RunScreenshotStorageSecurityTests()
 		for (int index = 0; index < 64; ++index) {
 			const auto repeatedPath = directory->Path() /
 			                          (std::wstring(index % 24, L'x') + std::format(L"-publication-{}-\u6c34.png", index));
+			phase = std::format("Unicode publication {} ({} UTF-16 path units with temporary suffix)", index, repeatedPath.native().size() + 4);
 			const auto repeated = CommittedFile::WriteAtomically(
 				repeatedPath.native() + L".tmp", repeatedPath,
 				atomicBytes.data(), atomicBytes.size(), false);
@@ -306,6 +312,7 @@ inline void RunScreenshotStorageSecurityTests()
 			"an existing final artifact was replaced without authority");
 		if (std::filesystem::exists(directory->Path() / "collision.tmp"))
 			throw std::runtime_error("failed no-replace commit left its temporary path behind");
+		phase = "atomic replacement";
 		const auto replaced = CommittedFile::WriteAtomically(
 			atomicTemporary, atomicPath, "abc", 3, true);
 		const auto reopenedReplacement = CommittedFile::Open(atomicPath).Describe();
@@ -353,6 +360,7 @@ inline void RunScreenshotStorageSecurityTests()
 		directory.reset();
 		g_creationReplacement = root / "attacker-replacement";
 		g_creationDisplaced = root / "attacker-displaced";
+		phase = "directory creation custody";
 		std::filesystem::create_directories(g_creationReplacement);
 		const auto replacementSentinel = g_creationReplacement / "sentinel.txt";
 		{
@@ -420,6 +428,7 @@ inline void RunScreenshotStorageSecurityTests()
 		RemoveDirectoryW(junctionPath.c_str());
 		std::filesystem::remove_all(root);
 	} catch (...) {
+		std::fprintf(stderr, "Storage fixture failed in %s\n", phase.c_str());
 		CSX::ScreenshotStorage::SetCommittedWriteTestHook(nullptr);
 		g_cleanupReadOnly = false;
 		SetDirectoryCreationTestHook(nullptr);

@@ -776,7 +776,7 @@ struct ScreenshotFinalizationTest
 		std::fprintf(stderr, "CONSTRUCTION lane=%u persistent-nth=%zu PASS\n", lane, allocations);
 	}
 
-	static void ProviderPreparationTerminal(bool cancelled)
+	static void ProviderPreparationTerminal(bool cancelled, bool stopped, bool workerCancelled, std::string_view terminalState)
 	{
 		Case test;
 		auto& sequence = test.Sequence();
@@ -784,13 +784,17 @@ struct ScreenshotFinalizationTest
 		sequence.preparationPending = true;
 		sequence.providerRunId = 7;
 		sequence.nextOrdinal = 1;
+		sequence.packaging["frameManifest"] = { { "requested", true }, { "state", "pending" }, { "path", nullptr } };
+		sequence.packaging["captureManifest"] = { { "requested", true }, { "state", "pending" } };
 		sequence.cancelRequested = cancelled;
+		sequence.stopRequested = stopped;
 		test.Record().expectedArtifacts = 2;
-		test.Record().state = cancelled ? "cancel_requested" : "preparing";
+		test.Record().state = cancelled ? "cancel_requested" : stopped ? "stop_requested" :
+		                                                                 "preparing";
 		unsigned notifications = 0;
 		test.Record().referenceCompletion = [&](const json& status) {
 			Require(status.at("done") == true && status.at("ok") == false && status.at("runId") == 7 &&
-						status.at("state") == (cancelled ? "cancelled" : "failed") && status.at("manifestPath").is_null(),
+						status.at("state") == terminalState && status.at("manifestPath").is_null(),
 				"provider notification did not preserve the terminal run identity");
 			++notifications;
 		};
@@ -800,11 +804,12 @@ struct ScreenshotFinalizationTest
 			"provider became terminal while destination preparation was pending");
 		test.api->preparationWorkerState->preparationResults.push_back({
 			.requestId = "sequence",
-			.cancelled = cancelled,
-			.error = cancelled ? "" : "provider manifest destination unavailable",
+			.cancelled = workerCancelled,
+			.error = workerCancelled ? "" : "provider manifest destination unavailable",
 		});
 		test.api->preparationWorkerState->outstanding = 1;
 		test.api->DrainWorkerResultsLocked();
+		Require(test.Record().state == terminalState, "preparation resolved a different terminal state than the callback");
 		Require(!sequence.preparationPending && sequence.finalizing && test.Record().terminalArtifacts == 2 &&
 					test.api->manifestWorkerState->jobs.empty(),
 			"failed or cancelled provider preparation left work or a manifest outstanding");
@@ -854,8 +859,11 @@ struct ScreenshotFinalizationTest
 		RunCase("construction-terminal", [] { PersistentConstruction(1); });
 		RunCase("construction-receipt", [] { PersistentConstruction(2); });
 		RunCase("construction-notification", [] { PersistentConstruction(3); });
-		RunCase("provider-preparation-failed", [] { ProviderPreparationTerminal(false); });
-		RunCase("provider-preparation-cancelled", [] { ProviderPreparationTerminal(true); });
+		RunCase("provider-preparation-failed", [] { ProviderPreparationTerminal(false, false, false, "failed"); });
+		RunCase("provider-preparation-cancelled", [] { ProviderPreparationTerminal(true, false, true, "cancelled"); });
+		RunCase("provider-in-flight-cancel", [] { ProviderPreparationTerminal(true, false, false, "cancelled"); });
+		RunCase("provider-in-flight-stop", [] { ProviderPreparationTerminal(false, true, false, "stopped"); });
+		RunCase("provider-stop-cancel-overlap", [] { ProviderPreparationTerminal(true, true, false, "cancelled"); });
 		CSX::Api::ServiceFoundation::SetEventAllocationTestHook(nullptr);
 	}
 };

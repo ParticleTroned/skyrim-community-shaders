@@ -2428,7 +2428,7 @@ void ScreenshotApi::DrainWorkerResultsLocked()
 			auto parent = requests.find(result.requestId);
 			if (parent == requests.end() || IsTerminal(parent->second.state))
 				continue;
-			if (result.cancelled) {
+			if (record.cancelRequested || record.stopRequested || result.cancelled) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				if (record.providerRunId != 0)
 					record.packaging["captureManifest"]["state"] = "cancelled";
@@ -2445,7 +2445,8 @@ void ScreenshotApi::DrainWorkerResultsLocked()
 				json payload = json::object();
 				const Util::JsonCleanupGuard cleanup(payload);
 				payload["manifestPath"] = nullptr;
-				TransitionLocked(parent->second, record.stopRequested ? "stopped" : "cancelled", "request.terminal", std::move(payload));
+				const auto state = record.stopRequested && !record.cancelRequested ? "stopped" : "cancelled";
+				TransitionLocked(parent->second, state, "request.terminal", std::move(payload));
 				continue;
 			}
 			bool hasPreparedDestination = result.success && result.directoryLease;

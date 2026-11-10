@@ -19,6 +19,7 @@ function(extract_dispatch_region start end output)
     set(${output} "${_extracted}" PARENT_SCOPE)
 endfunction()
 
+extract_dispatch_region("bool IsTerminal(" "	bool HasCompleteArtifactProvenance(" _terminal)
 extract_dispatch_region("void ScreenshotApi::MarkSequenceCancellationLocked(" "void ScreenshotApi::Tick(" _queue_cancellation)
 extract_dispatch_region("void ScreenshotApi::OnFeatureDisabled(" "bool ScreenshotApi::DrainForShutdown(" _lifecycle)
 extract_dispatch_region("bool ScreenshotApi::CanAdmitPreparationLocked()" "ScreenshotApi::json ScreenshotApi::HandleRequest(" _workers)
@@ -29,4 +30,4 @@ extract_dispatch_region("ScreenshotApi::json ScreenshotApi::MakeSequenceReceipt(
 extract_dispatch_region("void ScreenshotApi::TrimLocked(" "std::size_t ScreenshotApi::CountPendingOperationsLocked(" _trim)
 extract_dispatch_region("std::optional<ScreenshotApi::DueFrame> ScreenshotApi::PrepareDueFrameLocked(" "std::optional<ScreenshotApi::DispatchEntry> ScreenshotApi::PopDispatchLocked(" _schedule)
 extract_dispatch_region("void ScreenshotApi::FinishSourceLocked(" "void ScreenshotApi::FailRequestCompletionLocked(" _source_terminal)
-file(WRITE "${OUTPUT_DIRECTORY}/screenshot_dispatch_under_test.h" "${_workers}\n${_queue_cancellation}\n${_lifecycle}\n${_shutdown_drain}\n${_preparation}\n${_status}\n${_receipt}\n${_trim}\n${_schedule}\n${_source_terminal}")
+file(WRITE "${OUTPUT_DIRECTORY}/screenshot_dispatch_under_test.h" "${_terminal}\n${_workers}\n${_queue_cancellation}\n${_lifecycle}\n${_shutdown_drain}\n${_preparation}\n${_status}\n${_receipt}\n${_trim}\n${_schedule}\n${_source_terminal}")

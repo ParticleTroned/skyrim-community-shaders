@@ -184,6 +184,7 @@ struct ScreenshotApi
 	struct DispatchEntry
 	{
 		std::string requestId;
+		json capture;
 	};
 	struct DirectoryPreparationResult
 	{
@@ -275,7 +276,6 @@ struct ScreenshotApi
 			preparationIo.Wait();
 		return configured;
 	}
-	bool IsTerminal(std::string_view state) const { return state == "failed" || state == "cancelled" || state == "completed" || state == "stopped" || state == "dropped"; }
 	void DrainWorkerResultsLocked();
 	bool IsSequenceRecording() const;
 	json BuildStatus(const ScreenshotFeature&) const;

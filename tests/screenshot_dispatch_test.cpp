@@ -425,9 +425,9 @@ void TestProductionWorkerIsolation()
 		QueuePreparation(api, "parent", "prepared");
 		AwaitResults(api.preparationWorkerState, 1, 0);
 		api.BeginShutdown("shutdown after preparation completed before result publication");
-		if (api.partialManifests != 0 || api.queuedManifests != 1 ||
-			!api.DrainForShutdown(std::chrono::milliseconds(100)))
-			throw std::runtime_error("shutdown published a redundant checkpoint from an undrained preparation result");
+		if (!api.DrainForShutdown(std::chrono::milliseconds(100)) || api.partialManifests != 0 || api.queuedManifests != 0 ||
+			api.requests.at("parent").state != "cancelled" || api.sequences.at("parent").directoryLease)
+			throw std::runtime_error("shutdown adopted or published an undrained preparation result");
 	}
 	{
 		manifestIo.Reset();
@@ -475,8 +475,10 @@ void TestProductionWorkerIsolation()
 			throw std::runtime_error("cancelled synchronous I/O was falsely reported complete");
 		preparationIo.Release();
 		AwaitResults(api.preparationWorkerState, 1, 0);
-		if (!api.DrainForShutdown(std::chrono::milliseconds(100)) || api.partialManifests != 0 || api.queuedManifests != 1)
-			throw std::runtime_error("stopped preparation queued a redundant partial manifest or failed to drain");
+		if (!api.DrainForShutdown(std::chrono::milliseconds(100)) || api.partialManifests != 0 || api.queuedManifests != 0 ||
+			api.requests.at("parent").state != (stop ? "stopped" : "cancelled") || api.sequences.at("parent").directoryLease ||
+			api.requests.at("existing").state != "completed")
+			throw std::runtime_error("stopped or cancelled preparation adopted storage or disturbed an independent publication");
 	}
 	{
 		manifestIo.Reset();

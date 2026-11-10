@@ -1,6 +1,12 @@
 #include "Features/Upscaling/NeuralRendering/CapacityFallback.h"
+#include "Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryRecoveryPolicy.h"
+#include "Features/Upscaling/NeuralRendering/MemoryResolutionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryRetirementPolicy.h"
+#include "Features/Upscaling/NeuralRendering/NativeMemoryPolicy.h"
+#include "Features/Upscaling/NeuralRendering/NetworkSelection.h"
+#include "Features/Upscaling/NeuralRendering/NgxCapabilityInfo.h"
+#include "Features/Upscaling/NeuralRendering/PeripheralCompressionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/RegionCapacity.h"
 #include "Features/Upscaling/NeuralRendering/StallRecoveryPolicy.h"
 #include "Features/Upscaling/NeuralRendering/SubmissionFenceSnapshot.h"
@@ -12,6 +18,7 @@
 #include <format>
 #include <iostream>
 #include <limits>
+#include <spdlog/sinks/callback_sink.h>
 #include <spdlog/spdlog.h>
 #include <stdexcept>
 #include <string>
@@ -97,6 +104,13 @@ namespace NeuralRendering
 		++value;
 	}
 
+	struct RendererApplyOutcome
+	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool reconstructionHistoryReset = false;
+		bool spatialHistoryReset = false;
+#endif
+	};
 	struct Runtime
 	{
 		static constexpr auto kFeatureSlotCount = kPhysicalFeatureSlotCount;
@@ -228,9 +242,23 @@ namespace NeuralRendering
 			InteropFixture interop_;
 			std::array<Slot, Runtime::kFeatureSlotCount> slots_{};
 			MemoryRecoveryPolicy memoryRecovery_;
+			NativeMemoryPolicy nativeMemory_;
+			MemoryResolutionPolicy memoryResolution_;
+			MemoryBudgetSample memorySample_;
+			NativeMemorySnapshot nativeMemorySnapshot_;
+			std::uint32_t pendingMemoryRetirements_ = 0;
+			NativeStartupObservation nativeStartup_;
+			std::uint32_t nativeStartupMask_ = 0;
 			MemoryRetirementPolicy memoryRetirement_;
 			std::atomic<bool> backendMaintenancePending_ = false;
 			bool failureLatched_ = false, quarantined_ = false, abandoned = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			GuidedReconstructionExperiment reconstructionExperiment_;
+			PeripheralCompressionExperiment peripheralExperiment_;
+#endif
+			unsigned capturesFinalized = 0;
+			void FinishCapture(const RendererApplyOutcome&) noexcept { ++capturesFinalized; }
+#include "neural_reconstruction_finish_under_test.h"
 			HRESULT removal = S_OK;
 			RendererStage activeStage_ = RendererStage::None;
 			void SetActiveFeatureSlotLocked(std::uint32_t) {}
@@ -261,6 +289,9 @@ namespace NeuralRendering
 			}
 			bool ServiceStallRecoveryLocked(bool);
 			void LogFailureDiagnosticsLocked(RendererStage, HRESULT, std::uint32_t) noexcept;
+			void LogMemoryLifecycleLocked(const char*, std::uint32_t = 0,
+				spdlog::level::level_enum = spdlog::level::info, const NativeMemoryKey* = nullptr) const noexcept;
+			void FlushMemoryRetirementsLocked() noexcept;
 			bool FailLocked(RendererStage, HRESULT, std::string, std::uint32_t, bool, bool = false, bool = true);
 			void QuarantineAfterUnexpectedFailureLocked(RendererStage, std::uint32_t, bool, std::uint64_t) noexcept;
 			State()
@@ -273,6 +304,7 @@ namespace NeuralRendering
 	};
 #include "neural_failure_diagnostics_under_test.h"
 #include "neural_failure_quarantine_under_test.h"
+#include "neural_memory_lifecycle_under_test.h"
 #include "neural_stall_service_under_test.h"
 }
 #undef GetTickCount64
@@ -282,6 +314,48 @@ int main()
 {
 	using namespace NeuralRendering;
 	try {
+		auto sink = std::make_shared<spdlog::sinks::callback_sink_mt>([](const spdlog::details::log_msg& message) {
+			messages.emplace_back(message.payload.data(), message.payload.size());
+		});
+		spdlog::set_default_logger(std::make_shared<spdlog::logger>("nr-memory-test", sink));
+		spdlog::set_level(spdlog::level::err);
+		Renderer::State lifecycle;
+		lifecycle.memorySample_ = { 16000, 9000, true, 0, false, 1000 };
+		lifecycle.nativeMemorySnapshot_.valid = true;
+		lifecycle.nativeMemorySnapshot_.sampledAtMs = 1000;
+		lifecycle.nativeMemorySnapshot_.provider.allocatedBytes = 0;
+		lifecycle.nativeMemorySnapshot_.provider.callbackQuery = 0;
+		lifecycle.pendingMemoryRetirements_ = 3;
+		lifecycle.FlushMemoryRetirementsLocked();
+		Require(messages.empty() && lifecycle.pendingMemoryRetirements_ == 0 && memoryQueries == 0,
+			"Disabled lifecycle logging formatted records or queried the driver");
+		spdlog::set_level(spdlog::level::info);
+		lifecycle.pendingMemoryRetirements_ = 3;
+		lifecycle.FlushMemoryRetirementsLocked();
+		Require(messages.size() == 1 && Has("retirement-completed slot_mask=0x3") && Has("cached_provider_allocated_bytes=0") &&
+					Has("stats_callback_result=unknown") && Has("budget_fresh=true"),
+			"Lifecycle logging lost coalescing, zero or unknown values");
+		for (unsigned frame = 0; frame < 10000; ++frame)
+			lifecycle.FlushMemoryRetirementsLocked();
+		Require(messages.size() == 1 && memoryQueries == 0 && lifecycle.interop_.captures == 0,
+			"Warm lifecycle service repeated logging, budget sampling or fence queries");
+		observedAt = 1501;
+		lifecycle.LogMemoryLifecycleLocked("configuration");
+		Require(Has("budget_fresh=false budget_age_ms=501") && Has("native_age_ms=501"), "Cached data was presented as current");
+		const NativeMemoryKey capacity{ .creation = { { 100, 100 }, { 100, 100 } }, .color = { 100, 100 } };
+		lifecycle.LogMemoryLifecycleLocked("native-created", 1, spdlog::level::info, &capacity);
+		Require(Has("observed=false, process_growth_bytes=unknown, provider_growth_bytes=unknown, scratch_requested_bytes=unknown"),
+			"Unobserved native capacity was presented as measured zero");
+		lifecycle.nativeMemory_.Observe(capacity, 0);
+		lifecycle.LogMemoryLifecycleLocked("native-created", 1, spdlog::level::info, &capacity);
+		Require(Has("observed=true, process_growth_bytes=0, provider_growth_bytes=unknown, scratch_requested_bytes=unknown"),
+			"Process-only observations invented provider or scratch bytes");
+		lifecycle.nativeMemory_.Observe(capacity, NativeMemoryPolicy::Observation{ 0, 0, 0 });
+		lifecycle.LogMemoryLifecycleLocked("native-created", 1, spdlog::level::info, &capacity);
+		Require(Has("observed=true, process_growth_bytes=0, provider_growth_bytes=0, scratch_requested_bytes=0"),
+			"Known zero provider or scratch observations became unknown");
+		messages.clear();
+		observedAt = 1000;
 		spdlog::set_level(spdlog::level::err);
 		memoryResult.result = S_OK;
 		memoryResult.sampledAtMs = 1000;
@@ -359,8 +433,35 @@ int main()
 
 		messages.clear();
 		Renderer::State unexpected;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		Require(unexpected.reconstructionExperiment_.Configure(GuidedReconstructionOverride::GuidedExperiment, 4, 1), "Comparison setup failed");
+		(void)unexpected.reconstructionExperiment_.Resolve(1, 1);
+#endif
 		unexpected.QuarantineAfterUnexpectedFailureLocked(RendererStage::FeatureEvaluate, 1, true, 0);
 		Require(unexpected.quarantined_ && unexpected.abandoned && Has("issued=109") && Has("color=723x779"), "exception quarantine failed to preserve pre-detach evidence");
+		RendererApplyOutcome unexpectedOutcome;
+		unexpected.FinishApplyLocked(unexpectedOutcome);
+		Require(unexpected.capturesFinalized == 1, "Terminal outcome lost capture finalization");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		Require(unexpected.reconstructionExperiment_.Status().mode == GuidedReconstructionOverride::Auto && unexpectedOutcome.reconstructionHistoryReset &&
+					!unexpected.reconstructionExperiment_.Status().historyResetPending,
+			"Exceptional failure retained its lease or deferred history reset");
+		RendererApplyOutcome nextOutcome;
+		unexpected.FinishApplyLocked(nextOutcome);
+		Require(!nextOutcome.reconstructionHistoryReset, "Exceptional failure repeated its history reset");
+		for (bool failed : { false, true }) {
+			Renderer::State terminal;
+			Require(terminal.reconstructionExperiment_.Configure(GuidedReconstructionOverride::Basic, 4, 1), "Comparison setup failed");
+			(void)terminal.reconstructionExperiment_.Resolve(1, 1);
+			terminal.failureLatched_ = failed;
+			if (!failed)
+				terminal.reconstructionExperiment_.Cancel();
+			RendererApplyOutcome outcome;
+			terminal.FinishApplyLocked(outcome);
+			Require(outcome.reconstructionHistoryReset && terminal.reconstructionExperiment_.Status().mode == GuidedReconstructionOverride::Auto,
+				"Failure or optional fallback deferred its history reset");
+		}
+#endif
 		const auto queriesBeforeRepeat = memoryQueries;
 		unexpected.QuarantineAfterUnexpectedFailureLocked(RendererStage::FeatureEvaluate, 1, true, 0);
 		Require(memoryQueries == queriesBeforeRepeat, "exception quarantine repeats diagnostics");

@@ -9,11 +9,13 @@
 #include <windows.h>
 
 #include "BackgroundBlur.h"
+#include "Features/ReverseZ.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/VR.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "IconLoader.h"
+#include "Layout.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -252,12 +254,16 @@ void SettingsTabRenderer::RenderShadersTab()
 {
 	auto shaderCache = globals::shaderCache;
 
-	bool useCustomShaders = shaderCache->IsEnableRequested();
-	if (Util::Widgets::Checkbox("Use Custom Shaders", &useCustomShaders)) {
-		shaderCache->SetEnabled(useCustomShaders);
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Disabling this effectively disables all features. In VR, native render targets are restored first.");
+	{
+		ImGui::BeginDisabled(globals::features::reverseZ.IsActive());
+		const SKSE::stl::scope_exit restoreDisabled([]() noexcept { ImGui::EndDisabled(); });
+		bool useCustomShaders = shaderCache->IsEnableRequested();
+		if (Util::Widgets::Checkbox("Use Custom Shaders", &useCustomShaders))
+			shaderCache->SetEnabled(useCustomShaders);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(globals::features::reverseZ.IsActive() ?
+									   "Reverse Z requires custom shaders. Disable Reverse Z and restart first." :
+									   "Disabling this effectively disables all features. In VR, native render targets are restored first.");
 	}
 
 	bool useDiskCache = shaderCache->IsDiskCache();
@@ -265,7 +271,7 @@ void SettingsTabRenderer::RenderShadersTab()
 		shaderCache->SetDiskCache(useDiskCache);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Disables loading shaders from disk and prevents saving compiled shaders to disk cache.");
+		ImGui::Text("On: saves prepared shaders to disk and allows their reuse on later launches. Off: prepares them again each launch, increasing startup work.");
 	}
 
 	bool skipUnchanged = shaderCache->IsSkipUnchangedShaders();
@@ -276,7 +282,7 @@ void SettingsTabRenderer::RenderShadersTab()
 	ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Reuse disk shaders only when source, includes, defines and compatibility match. Compile missing/outdated entries. Off skips disk reads but still updates the cache. Requires Enable Disk Cache.");
+			"Reuses saved shaders when they still match your setup, reducing preparation time. Off rebuilds them even if unchanged. Requires Enable Disk Cache.");
 	}
 
 	bool useAsync = shaderCache->IsAsync();
@@ -284,7 +290,7 @@ void SettingsTabRenderer::RenderShadersTab()
 		shaderCache->SetAsync(useAsync);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Skips a shader being replaced if it hasn't been compiled yet. Also makes compilation blazingly fast!");
+		ImGui::Text("Prepares missing shaders in the background so gameplay can continue. Some effects may appear late. Off waits for preparation, which can cause pauses.");
 	}
 
 	if (shaderCache->GetTotalTasks() > 0) {
@@ -364,6 +370,8 @@ void SettingsTabRenderer::RenderShadersTab()
 				(int)Util::GetPerformanceCoreCount());
 		}
 	}
+	if (!globals::game::isVR)
+		globals::features::reverseZ.DrawSettings();
 }
 
 void SettingsTabRenderer::RenderKeybindingsTab(
@@ -416,6 +424,8 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 
 	ImGui::Separator();
 	ImGui::TextUnformatted("Hardcoded Bindings");
+	DrawReadOnlyKeybinding("Reset Menu:", "Ctrl+Shift+End",
+		"Reopen and restore menu geometry, sidebar, zoom and font sizing, including headset placement. Works while the menu is closed or locked.");
 	ImGui::TextWrapped("RenderDoc captures graphics frames for debugging. Requires loaded RenderDoc capture support.");
 	DrawReadOnlyKeybinding(
 		"RenderDoc Capture:",
@@ -449,7 +459,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
 			globals::menu->pendingIconReload = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Uses monochrome version of the CSX logo");
+			ImGui::Text("On: the CSX logo follows the menu text color. Off: keeps the original colored logo.");
 		}
 		ImGui::Unindent();
 	}
@@ -1104,11 +1114,15 @@ void SettingsTabRenderer::RenderStylingTab()
 	RenderSaveInfoText();
 
 	SeparatorTextWithFont("Main", Menu::FontRole::Subheading);
+	if (ImGui::Button("Reset Menu"))
+		globals::menu->RequestLayoutReset();
+	Util::AddTooltip("Restore menu geometry, sidebar, zoom and font sizing. Emergency shortcut: Ctrl+Shift+End.");
 	if (Util::Widgets::SliderFloat("Global Scale", &themeSettings.GlobalScale, -1.f, 1.f, "%.2f")) {
-		float trueScale = exp2(themeSettings.GlobalScale);
-
-		ImGui::GetStyle().FontScaleMain = trueScale;
+		ImGui::GetStyle().FontScaleMain = MenuUI::Layout::EffectiveScale(themeSettings.GlobalScale,
+			ImGui::GetIO().FontDefault->LegacySize, ImGui::GetIO().DisplaySize, ImGui::GetStyle().FontScaleDpi);
 	}
+	ImGui::Text("Effective zoom: %.0f%%", ImGui::GetStyle().FontScaleMain * 100.0f);
+	Util::AddTooltip("Zoom is limited to keep the menu usable on the current display. Zero on the slider means 100%.");
 
 	SeparatorTextWithFont("Layout", Menu::FontRole::Subheading);
 

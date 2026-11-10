@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -295,6 +296,7 @@ namespace globals
 	namespace game
 	{
 		inline Renderer* renderer = nullptr;
+		inline void* shadowState = nullptr;
 		inline RE::Sky* sky = nullptr;
 	}
 	namespace d3d
@@ -404,6 +406,7 @@ struct Fixture
 		Util::eye = {};
 		globals::state = &state;
 		globals::game::renderer = &renderer;
+		globals::game::shadowState = &renderer;
 		globals::game::sky = &sky;
 		globals::deferred = &deferred;
 		deferred.directionalShadowLights = &occlusion;
@@ -465,6 +468,37 @@ struct Fixture
 	}
 	void Publish(bool inWorld = true) { published = feature.GetCommonBufferData(inWorld); }
 };
+void CheckOcclusionCutoff()
+{
+	Fixture f;
+	f.Ready();
+	f.Publish();
+	const auto cutoff = f.feature.GetOcclusionCullBelowZ();
+	Require(cutoff.has_value(), "a current world grid must allow conservative culling");
+	++f.state.frameCount;
+	Require(f.feature.GetOcclusionCullBelowZ() == cutoff, "the previous frame's matching grid remains valid");
+	++f.state.frameCount;
+	Require(!f.feature.GetOcclusionCullBelowZ(), "a stale world grid must not cull occluders");
+	f.Publish();
+	Util::eye.z += f.feature.GetProbeCellSize().z;
+	Require(!f.feature.GetOcclusionCullBelowZ(), "a changed capture height must not use the old grid");
+	Util::eye = {};
+	Util::eye.x = std::numeric_limits<float>::quiet_NaN();
+	Require(!f.feature.GetOcclusionCullBelowZ(), "nonfinite camera data must retain occluders");
+	Util::eye = {};
+	f.state.isMapMenuOpen = true;
+	Require(!f.feature.GetOcclusionCullBelowZ(), "map views must not use the world cutoff");
+	f.state.isMapMenuOpen = false;
+	globals::game::shadowState = nullptr;
+	Require(!f.feature.GetOcclusionCullBelowZ(), "missing camera state must retain occluders");
+	globals::game::shadowState = &f.renderer;
+	f.feature.QueueResetSkylighting();
+	Require(!f.feature.GetOcclusionCullBelowZ(), "a pending reset must invalidate the cutoff");
+	f.feature.occlusionCullBelowZ = cutoff;
+	f.feature.ResetSkylighting();
+	Require(!f.feature.worldProbeGrid && !f.feature.occlusionCullBelowZ, "reset must clear published and active cutoff state");
+}
+
 unsigned CheckCadenceMatrix()
 {
 	unsigned scenarios = 0;
@@ -602,6 +636,7 @@ unsigned CheckDelayedCadenceRecovery()
 
 int main()
 try {
+	CheckOcclusionCutoff();
 	unsigned scenarios = 0;
 	for (unsigned outcome = 0; outcome < 3; ++outcome) {
 		Fixture f;

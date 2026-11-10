@@ -74,4 +74,4 @@ file(REMOVE_RECURSE "${_shader_root}/Experimental")
 file(COPY "${PROJECT_ROOT}/features/Neural Rendering/Shaders/Upscaling/NeuralRendering/"
     DESTINATION "${_shader_root}")
 check(pass "")
-message(STATUS "NR release payload rejects extra files, NR DLLs, modified SDK files and missing files")
+message(STATUS "NR release payload rejects extra files, unapproved NR DLLs, modified SDK files and missing files")

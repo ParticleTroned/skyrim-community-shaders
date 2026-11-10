@@ -54,6 +54,7 @@ namespace MenuUI
 	/** Returns the clicked choice index, or -1. Narrow panels stack the cards. */
 	int ChoiceCards(const char* a_id, int a_selected, std::span<const Choice> a_choices);
 	/** Visible primary choices; changes only the selected index. */
+	bool ChoiceSetting(const char* a_label, int* a_selected, std::span<const Choice> a_choices);
 	bool ChoiceSetting(const char* a_label, int* a_selected, const char* const a_items[], int a_count);
 	bool ChoiceSetting(const char* a_label, int* a_selected, const char* a_items);
 	/** Visible group heading that preserves the page's left alignment. */

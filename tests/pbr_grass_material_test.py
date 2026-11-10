@@ -136,7 +136,7 @@ int main() {
 struct ID3D11VertexShader {};
 struct ID3D11PixelShader {};
 namespace RE {
-struct BSShader { enum class Type { Grass }; };
+struct BSShader { enum class Type { None, Grass }; };
 namespace BSGraphics {
 enum { DIRTY_VERTEX_DESC };
 struct VertexShader { ID3D11VertexShader* shader; };
@@ -146,6 +146,7 @@ struct PixelShader { ID3D11PixelShader* shader; };
 struct State {
     uint32_t modifiedVertexDescriptor = 1, modifiedPixelDescriptor = 2;
     bool enabled = true, deferredPixelShaderMissing = false;
+    RE::BSShader::Type selectedCustomPixelShaderType = RE::BSShader::Type::None;
     bool ShaderEnabled(RE::BSShader::Type) const { return enabled; }
 };
 struct Cache {
@@ -211,6 +212,7 @@ int main() {
     assert(globals::d3d::contextValue.vertex == &nativeVS);
     assert(globals::d3d::contextValue.pixel == &nativePS);
     assert(globals::game::vertex == &fixtureNativeVertex);
+    assert(globals::state->selectedCustomPixelShaderType == RE::BSShader::Type::None);
     // A ready pixel stage cannot restore native outputs into deferred targets.
     globals::cacheValue.vertex = nullptr;
     globals::cacheValue.pixel = &customPixel;
@@ -222,10 +224,12 @@ int main() {
     globals::cacheValue.vertex = &customVertex;
     assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
     assert(globals::game::vertex == &customVertex && globals::game::pixel == &customPixel);
+    assert(globals::state->selectedCustomPixelShaderType == RE::BSShader::Type::Grass);
     globals::deferred->deferredPass = false;
     globals::cacheValue.vertex = nullptr;
     assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
     assert(globals::d3d::contextValue.pixel == &nativePS);
+    assert(globals::state->selectedCustomPixelShaderType == RE::BSShader::Type::None);
     // Compilation can finish after the original stage-binding hooks run.
     globals::cacheValue.pixel = nullptr;
     publishDuringSetup = true;

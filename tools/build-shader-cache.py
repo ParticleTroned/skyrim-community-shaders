@@ -57,6 +57,7 @@ from shader_cache_manifest import (
     prepare_fxc_defines,
 )
 from shader_bytecode import validate_dxbc
+import standalone_shader_cache
 
 REPO = Path(__file__).resolve().parent.parent
 CACHE_DIRECTORY = "ShaderCache"
@@ -738,10 +739,11 @@ def shader_pack_record_identity(
     relative: str,
     content_contract: str,
     registrations: list[dict[str, Any]],
+    source: str | None = None,
 ) -> dict[str, str]:
     family = relative.split("/", 1)[0].lower()
     applicable = applicable_compatibility_registrations(
-        registrations, family, f"Shaders/{family}.hlsl"
+        registrations, family, f"Shaders/{source}" if source else f"Shaders/{family}.hlsl"
     )
     requirement = canonical_compatibility_requirement_set(applicable)
     domain = canonical_compatibility_domain_set(applicable)
@@ -778,7 +780,7 @@ def shader_pack_record_identity(
 class PackagedCompatibilityInventory:
     """Verify exported record identities and the coverage of declared variants."""
 
-    def __init__(self, source_root: Path, declared_variants: list[str]) -> None:
+    def __init__(self, source_root: Path, declared_variants: list[str], standalone_inputs: dict | None = None) -> None:
         variants = compatibility_variant_manifest(source_root)
         if (
             not isinstance(declared_variants, list)
@@ -787,6 +789,7 @@ class PackagedCompatibilityInventory:
         ):
             raise SystemExit("packaged cache declares an unknown compatibility variant")
         self.variants = {name: variants[name] for name in declared_variants}
+        self.standalone_inputs = standalone_shader_cache.validate_pack_inputs(standalone_inputs if standalone_inputs is not None else {})
         self.records: dict[str, dict[str, tuple[str, str, str | None, bytes]]] = {}
 
     def inspector(self, file_name: str) -> Callable[[str, str, str, bytes], None]:
@@ -795,7 +798,10 @@ class PackagedCompatibilityInventory:
         def inspect(logical: str, exact: str, metadata_text: str, bytecode: bytes) -> None:
             error = None
             try:
-                validate_dxbc(bytecode, Path(logical.split("|", 1)[0]).suffix)
+                relative = logical.split("|", 1)[0]
+                task = self.standalone_inputs.get(relative)
+                extension = standalone_shader_cache.STAGES[task["profile"]][1] if task else Path(relative).suffix
+                validate_dxbc(bytecode, extension)
             except ValueError as exc:
                 error = str(exc)
             # Only visible records participate in admission; obsolete generations can be ignored.
@@ -805,7 +811,8 @@ class PackagedCompatibilityInventory:
 
     def identify(self, logical: str, exact: str, metadata_text: str, bytecode_error: str | None) -> tuple[set[str], tuple[str, str]]:
         relative = logical.split("|", 1)[0]
-        if not re.fullmatch(r"[A-Za-z0-9_-]+/[0-9A-F]{1,8}(?:_[0-9A-F]{8})?\.(?:pso|vso|cso)", relative):
+        task = self.standalone_inputs.get(relative)
+        if task is None and not re.fullmatch(r"[A-Za-z0-9_-]+/[0-9A-F]{1,8}(?:_[0-9A-F]{8})?\.(?:pso|vso|cso)", relative):
             raise SystemExit(f"packaged shader record has an invalid cache path: {relative!r}")
         try:
             metadata = json.loads(metadata_text)
@@ -818,7 +825,7 @@ class PackagedCompatibilityInventory:
             raise SystemExit(f"invalid packaged shader bytecode {relative}: {bytecode_error}")
         matching = set()
         for name, variant in self.variants.items():
-            expected = shader_pack_record_identity(relative, content, variant["registrations"])
+            expected = shader_pack_record_identity(relative, content, variant["registrations"], task["source"] if task else None)
             if logical == expected["logicalKey"] and exact == expected["exactKey"] and metadata_text == expected["metadata"]:
                 matching.add(name)
         if not matching:
@@ -844,6 +851,8 @@ class PackagedCompatibilityInventory:
         default = coverage.get("default", {})
         if not default:
             raise SystemExit("packaged cache has no default shader records")
+        if missing := self.standalone_inputs.keys() - default.keys():
+            raise SystemExit(f"standalone pack inventory has no shader records: {sorted(missing)[:5]}")
         for name, artifacts in coverage.items():
             if artifacts.keys() != default.keys() or (len(coverage) > 1 and name not in exclusive):
                 raise SystemExit(
@@ -853,7 +862,8 @@ class PackagedCompatibilityInventory:
             changed = False
             for relative, contents in artifacts.items():
                 shared = contents.keys() & default[relative].keys()
-                source = f"{relative.split('/', 1)[0]}.hlsl"
+                task = self.standalone_inputs.get(relative)
+                source = task["source"] if task else f"{relative.split('/', 1)[0]}.hlsl"
                 changes_defines = bool(self.variants[name].get("shaderDefinesBySource", {}).get(source))
                 if not changes_defines and not shared:
                     raise SystemExit(f"packaged cache compatibility records disagree on content coverage: {name}/{relative}")
@@ -934,12 +944,18 @@ def build_managed_shader_packs(
 ) -> dict[str, int]:
     variants = compatibility_variant_manifest(source_root)
     records: dict[str, dict[str, Any]] = {}
+    standalone_inputs: dict[str, dict] = {}
     variant_counts: dict[str, int] = {}
     inputs = [("standard", standard_cache, False)]
     if horizon_cache is not None:
         inputs.append(("horizon-fix", horizon_cache, True))
     for variant_name, cache_dir, horizon_enabled in inputs:
         manifest = read_cache_manifest_entries(cache_dir, f"{runtime}/{variant_name}")
+        variant_inputs = read_standalone_pack_inputs(cache_dir)
+        for relative, task in variant_inputs.items():
+            if relative in standalone_inputs and standalone_inputs[relative] != task:
+                raise SystemExit(f"standalone cache variants disagree on inputs: {relative}")
+            standalone_inputs[relative] = task
         count = 0
         for blob_path in cache_blob_paths(cache_dir):
             relative = blob_path.relative_to(cache_dir).as_posix()
@@ -951,7 +967,8 @@ def build_managed_shader_packs(
                 if horizon_enabled
                 else variants["default"]["registrations"]
             )
-            identity = shader_pack_record_identity(relative, content_contract, registrations)
+            task = variant_inputs.get(relative)
+            identity = shader_pack_record_identity(relative, content_contract, registrations, task["source"] if task else None)
             exact_key = identity["exactKey"]
             bytecode = blob_path.read_bytes()
             previous = records.get(exact_key)
@@ -1017,6 +1034,8 @@ def build_managed_shader_packs(
             for file_name, (lane, generation, entries) in pack_files.items()
         },
     }
+    if standalone_inputs:
+        pack_manifest["standaloneInputs"] = standalone_inputs
     (standard_cache / PACK_MANIFEST_FILE_NAME).write_text(
         json.dumps(pack_manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -1458,14 +1477,18 @@ def append_missing_defines(defines: object, names: tuple[str, ...]) -> None:
     if not isinstance(defines, list):
         return
 
-    existing = {
-        normalized_define_name(define)
-        for define in defines
-        if isinstance(define, str)
-    }
+    existing: set[str] = set()
+    pending = list(defines)
+    while pending:
+        value = pending.pop()
+        if isinstance(value, list):
+            pending.extend(value)
+        elif isinstance(value, str):
+            existing.add(normalized_define_name(value))
     for name in names:
         if normalized_define_name(name) not in existing:
             defines.append(name)
+            existing.add(normalized_define_name(name))
 
 
 def append_cross_modlist_variants(config: dict[str, object]) -> None:
@@ -1558,14 +1581,14 @@ def apply_cache_profile_defines(
             *defines,
         )
 
-    # Captures may contain older global scopes; reapply only the selected files.
+    # The selected profile owns these macros, including their values and source scope.
     scoped_defines = {
         define for defines in profile_file_defines.values() for define in defines
     }
     excluded_defines = {
         normalized_define_name(define)
         for define in (
-            profile.excluded_defines | additional_excluded_defines | scoped_defines
+            profile.excluded_defines | additional_excluded_defines | scoped_defines | set(profile.global_defines)
         )
     }
 
@@ -1618,7 +1641,9 @@ def apply_cache_profile_defines(
             continue
 
         file_name = shader.get("file")
-        defines_to_add = profile_file_defines.get(file_name)
+        # Utility bypasses the runtime feature-macro list; other stages consume it.
+        feature_defines = profile.global_defines if file_name != "Utility.hlsl" else ()
+        defines_to_add = (*feature_defines, *profile_file_defines.get(file_name, ()))
         if not defines_to_add or not isinstance(file_name, str):
             continue
 
@@ -1733,6 +1758,14 @@ def character_category_flags(source_root: Path) -> dict[str, int]:
     return flags
 
 
+def pixel_entry_define_identity(source: str, key: str, defines: list[str]) -> dict[tuple[str, str], str]:
+    """Compare captured pixel macros with the compiler's ordering and values."""
+    return compile_task_defines([(
+        source, "PSHADER", key,
+        [value if "=" in value else value + "=" for value in defines],
+    )])
+
+
 def append_character_category_variants(
     config: dict[str, Any], source_root: Path
 ) -> int:
@@ -1785,12 +1818,7 @@ def append_character_category_variants(
             other_key = f"{family}:Pixel:{other_descriptor:X}"
             existing = by_key.get(other_key)
             if existing is not None:
-                def identity(defines: list[str]) -> dict[tuple[str, str], str]:
-                    return compile_task_defines([(
-                        source, "PSHADER", other_key,
-                        [value if "=" in value else value + "=" for value in defines],
-                    )])
-                if identity(existing.get("defines", [])) != identity(other_defines):
+                if pixel_entry_define_identity(source, other_key, existing.get("defines", [])) != pixel_entry_define_identity(source, other_key, other_defines):
                     raise SystemExit(f"conflicting category variant: {other_key}")
                 continue
             other = {**entry, "entry": other_key, "defines": other_defines}
@@ -1800,12 +1828,42 @@ def append_character_category_variants(
     return added
 
 
+def normalize_water_pixel_variants(config: dict[str, Any]) -> None:
+    """Share runtime wading pixel variants while retaining vertex coordinates."""
+    wading = 1 << 6
+    for shader in config["shaders"]:
+        if shader["file"] != "Water.hlsl":
+            continue
+        stage = shader["configs"].get("PSHADER")
+        if stage is None:
+            continue
+        entries: dict[str, dict[str, Any]] = {}
+        for entry in stage["entries"]:
+            match = re.fullmatch(r"Water:Pixel:([0-9A-F]{1,8})", entry["entry"])
+            if match is None:
+                raise SystemExit(f"invalid water pixel entry: {entry['entry']}")
+            key = f"Water:Pixel:{int(match[1], 16) & ~wading:X}"
+            defines = [
+                value for value in entry.get("defines", [])
+                if normalized_define_name(value) != "WADING"
+            ]
+            existing = entries.get(key)
+            if existing is not None:
+                if pixel_entry_define_identity("Water.hlsl", key, existing["defines"]) != pixel_entry_define_identity("Water.hlsl", key, defines):
+                    raise SystemExit(f"conflicting water pixel variant: {key}")
+                continue
+            entries[key] = {**entry, "entry": key, "defines": defines}
+        stage["entries"] = list(entries.values())
+
+
 def filter_profile_defines(
     config_path: Path,
     out_path: Path,
     yaml: Any,
     profile: CacheProfile,
     *,
+    feature_states: dict[str, bool],
+    reverse_z_enabled: bool = False,
     additional_excluded_defines: frozenset[str] = frozenset(),
     additional_file_defines: dict[str, tuple[str, ...]] | None = None,
     add_cross_modlist_variants: bool = False,
@@ -1816,13 +1874,24 @@ def filter_profile_defines(
         raise SystemExit(f"shader config must be a YAML mapping: {config_path}")
 
     validate_captured_variant_count(config, config_path)
+    additional_file_defines = dict(additional_file_defines or {})
+    # Loaded feature metadata retains its ABI even when its boot setting is off.
+    if reverse_z_enabled and feature_states.get("ReverseZ", False):
+        for shader in config["shaders"]:
+            source = shader["file"]
+            # Utility uses the runtime fallback; feature-list macros have empty values.
+            depth_define = "REVERSE_Z=1" if source == "Utility.hlsl" else "REVERSE_Z"
+            additional_file_defines[source] = (
+                *additional_file_defines.get(source, ()), depth_define
+            )
     config = apply_cache_profile_defines(
         config,
         profile,
-        additional_excluded_defines=additional_excluded_defines,
+        additional_excluded_defines=additional_excluded_defines | {"REVERSE_Z"},
         additional_file_defines=additional_file_defines,
         add_cross_modlist_variants=add_cross_modlist_variants,
     )
+    normalize_water_pixel_variants(config)
     category_count = append_character_category_variants(config, source_root)
     print(f"shader config: added {category_count} deferred character category variants")
     prepare_fxc_defines(config)
@@ -1885,16 +1954,8 @@ def remap_imagespace_dirs(cache_dir: Path, runtime: str) -> dict[str, str]:
     return renamed
 
 
-def write_shader_cache_manifest(
-    cache_dir: Path,
-    shader_root: Path,
-    runtime: str,
-    imagespace_remap: dict[str, str],
-    write_manifest: Callable[..., int],
-    shader_cache_abi: str,
-    compile_tasks: list[tuple[str, str, str, list[str]]],
-) -> int:
-    """Hash source/include content and the resolved macros for every blob."""
+def shader_cache_global_state(cache_dir: Path, runtime: str, shader_cache_abi: str) -> str:
+    """Share the exact global digest input between engine and helper tasks."""
     global_defines_state = ("VR;" if runtime == "VR" else "") + (
         f"ShaderCacheABI={shader_cache_abi};"
     )
@@ -1916,13 +1977,29 @@ def write_shader_cache_manifest(
     global_defines_state += "".join(
         f"FeatureShaderABI={name}:{abi};" for name, abi in feature_abis
     )
+    return global_defines_state
+
+
+def write_shader_cache_manifest(
+    cache_dir: Path,
+    shader_root: Path,
+    runtime: str,
+    imagespace_remap: dict[str, str],
+    write_manifest: Callable[..., int],
+    shader_cache_abi: str,
+    compile_tasks: list[tuple[str, str, str, list[str]]],
+    standalone_tasks: dict[str, dict] | None = None,
+) -> int:
+    """Hash source/include content and the resolved macros for every blob."""
+    standalone_arguments = {"standalone_tasks": standalone_tasks} if standalone_tasks is not None else {}
     count = write_manifest(
         cache_dir,
         shader_root,
-        global_defines_state,
+        shader_cache_global_state(cache_dir, runtime, shader_cache_abi),
         cache_dir / MANIFEST_FILE_NAME,
         resolve_source_name=lambda name: imagespace_remap.get(name, name),
         compile_tasks=compile_tasks,
+        **standalone_arguments,
     )
     print(
         f"{runtime}: wrote {count} content digests -> "
@@ -2168,6 +2245,11 @@ def read_cache_manifest_entries(cache_dir: Path, runtime: str) -> dict[str, obje
     return manifest["entries"]
 
 
+def read_standalone_pack_inputs(cache_dir: Path) -> dict:
+    manifest = json.loads((cache_dir / MANIFEST_FILE_NAME).read_text(encoding="utf-8"))
+    return standalone_shader_cache.validate_pack_inputs(manifest.get("standaloneInputs", {}))
+
+
 def validate_cache(
     cache_dir: Path,
     runtime: str,
@@ -2203,6 +2285,7 @@ def validate_cache(
         )
 
     entries = read_cache_manifest_entries(cache_dir, runtime)
+    standalone_inputs = read_standalone_pack_inputs(cache_dir)
     blob_paths = cache_blob_paths(cache_dir)
     if not blob_paths:
         raise SystemExit(f"{runtime}: cache contains no compiled shader blobs")
@@ -2223,7 +2306,9 @@ def validate_cache(
             invalid_entries.append(relative_path)
 
         try:
-            validate_dxbc(blob_path.read_bytes(), blob_path.suffix)
+            task = standalone_inputs.get(relative_path)
+            extension = standalone_shader_cache.STAGES[task["profile"]][1] if task else blob_path.suffix
+            validate_dxbc(blob_path.read_bytes(), extension)
         except (OSError, ValueError) as exc:
             invalid_blobs.append(f"{relative_path}: {exc}")
 
@@ -2244,6 +2329,10 @@ def validate_cache(
         )
 
     unexpected_entries = sorted(set(entries) - blob_keys)
+    if missing := standalone_inputs.keys() - blob_keys:
+        raise SystemExit(f"{runtime}: standalone inventory has missing blobs: {sorted(missing)[:5]}")
+    if missing := {key for key in blob_keys if key.startswith("Standalone/")} - standalone_inputs.keys():
+        raise SystemExit(f"{runtime}: standalone blobs have no input inventory: {sorted(missing)[:5]}")
     if unexpected_entries:
         raise SystemExit(
             f"{runtime}: Manifest.json contains {len(unexpected_entries)} entries "
@@ -2545,9 +2634,11 @@ def cache_variants_for(profile: CacheProfile) -> tuple[CacheVariant, ...]:
     return (STANDARD_CACHE_VARIANT,)
 
 
-def compile_variants_for(profile: CacheProfile) -> tuple[CacheVariant, ...]:
+def compile_variants_for(
+    profile: CacheProfile, include_horizon_fix: bool = True
+) -> tuple[CacheVariant, ...]:
     """Return loose variants required as inputs to the managed pack."""
-    if profile.name == SHIPPED_CACHE_PROFILE.name:
+    if include_horizon_fix and profile.name == SHIPPED_CACHE_PROFILE.name:
         return CACHE_VARIANTS
     return (STANDARD_CACHE_VARIANT,)
 
@@ -2668,7 +2759,7 @@ def validate_cache_archive(
             raise SystemExit(f"packaged {runtime} cache pack manifest must be an object")
         pack_set_id = pack_manifest.get("packSetId")
         inventory = PackagedCompatibilityInventory(
-            source_root, pack_manifest.get("compatibilityVariants")
+            source_root, pack_manifest.get("compatibilityVariants"), pack_manifest.get("standaloneInputs", {})
         )
         pack_stats = {
             name: validate_shader_pack(
@@ -2694,6 +2785,8 @@ def validate_cache_archive(
                 f"packaged {runtime} cache pack manifest disagrees with its pack files: {exc}"
             ) from exc
         inventory.validate(pack_stats)
+        if horizon_variants is False and "legacy-horizon-fix" in pack_manifest["compatibilityVariants"]:
+            raise SystemExit("packaged cache contains excluded Horizon Fix records")
 
 
 def prepare_cache_archive(
@@ -2706,10 +2799,11 @@ def prepare_cache_archive(
     *,
     profile: CacheProfile = SHIPPED_CACHE_PROFILE,
     source_root: Path = REPO,
+    include_horizon_fix: bool = True,
 ) -> Path:
     """Create a validated candidate archive without changing published output."""
     variants = cache_variants_for(profile)
-    horizon_variants = HORIZON_FIX_CACHE_VARIANT in compile_variants_for(profile)
+    horizon_variants = HORIZON_FIX_CACHE_VARIANT in compile_variants_for(profile, include_horizon_fix)
     archive_name = f"ShaderCache-{runtime}-{safe_label(label)}.7z"
     temporary_archive = workspace / archive_name
     command = [
@@ -2841,13 +2935,15 @@ def build_runtime(
     write_manifest: Callable[..., int],
     profile: CacheProfile,
     distribution_profile: DistributionProfile | None = None,
+    include_horizon_fix: bool = True,
+    reverse_z_enabled: bool = False,
 ) -> tuple[Path, dict[str, int], int]:
     runtime_root = workspace / runtime
     shader_contract = shader_contract_identity(
         source_root, DEFAULT_SHADER_CONTRACT_FILES
     )
     shader_cache_abi = sha256_bytes(canonical_bytes(shader_contract))
-    variants = compile_variants_for(profile)
+    variants = compile_variants_for(profile, include_horizon_fix)
     compatibility_variants = compatibility_variant_manifest(source_root)
     has_horizon_variant = HORIZON_FIX_CACHE_VARIANT in variants
     if has_horizon_variant and distribution_profile is None:
@@ -2891,11 +2987,25 @@ def build_runtime(
                     )
                 additional_file_defines[HORIZON_FIX_SHADER_FILE] = tuple(declared_defines)
 
+        section_count = write_info_ini(
+            cache_dir,
+            stage,
+            source_root,
+            plugin_version,
+            runtime,
+            profile,
+            shader_cache_abi,
+            excluded_features=excluded_features,
+            enabled_overrides=enabled_overrides,
+        )
+        feature_states = read_feature_states(cache_dir)
         filtered_config = filter_profile_defines(
             config_path,
             workspace / f"config-{runtime}-{variant.name}.yaml",
             yaml,
             profile,
+            feature_states=feature_states,
+            reverse_z_enabled=reverse_z_enabled,
             additional_excluded_defines=additional_excluded_defines,
             additional_file_defines=additional_file_defines,
             add_cross_modlist_variants=add_cross_modlist,
@@ -2934,17 +3044,11 @@ def build_runtime(
 
         prune_non_cache_files(cache_dir)
         imagespace_remap = remap_imagespace_dirs(cache_dir, runtime)
-        section_count = write_info_ini(
-            cache_dir,
-            stage,
-            source_root,
-            plugin_version,
-            runtime,
-            profile,
-            shader_cache_abi,
-            excluded_features=excluded_features,
-            enabled_overrides=enabled_overrides,
+        standalone_tasks = standalone_shader_cache.resolve_tasks(
+            runtime, feature_states,
+            shader_cache_global_state(cache_dir, runtime, shader_cache_abi),
         )
+        standalone_shader_cache.compile_tasks(standalone_tasks, stage, cache_dir, fxc, jobs)
         write_shader_cache_manifest(
             cache_dir,
             stage,
@@ -2953,6 +3057,7 @@ def build_runtime(
             write_manifest,
             shader_cache_abi,
             compile_tasks,
+            standalone_tasks,
         )
         blob_count = validate_cache(
             cache_dir,
@@ -2964,7 +3069,7 @@ def build_runtime(
             cache_dir,
             blob_count,
             section_count,
-            read_feature_states(cache_dir),
+            feature_states,
         )
 
     if has_horizon_variant:
@@ -3012,6 +3117,18 @@ def main() -> int:
             "Cache feature profile (default: shipped). Patka is the persistent "
             "VR profile for the main tester configuration."
         ),
+    )
+    parser.add_argument(
+        "--include-horizon-fix",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include Horizon Fix compatibility cache records (default: included).",
+    )
+    parser.add_argument(
+        "--reverse-z",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Compile Reverse Z on permutations (default: off for every cache profile).",
     )
     parser.add_argument(
         "--source-root",
@@ -3080,6 +3197,7 @@ def main() -> int:
     profile = CACHE_PROFILES[args.profile]
     validate_cache_profile(profile, runtimes)
     print(f"cache profile: {profile.display_name} ({profile.name})")
+    print(f"Reverse Z compile setting: {'on' if args.reverse_z else 'off'}")
     configs = configs_for(source_root)
     for runtime in runtimes:
         config_path = configs[runtime]
@@ -3169,6 +3287,8 @@ def main() -> int:
                 write_manifest=write_manifest,
                 profile=profile,
                 distribution_profile=distribution_profile,
+                include_horizon_fix=args.include_horizon_fix,
+                reverse_z_enabled=args.reverse_z,
             )
             archive_candidate = None
             if args.package:
@@ -3182,6 +3302,7 @@ def main() -> int:
                     cmake,
                     profile=profile,
                     source_root=source_root,
+                    include_horizon_fix=args.include_horizon_fix,
                 )
             prepared.append(
                 (

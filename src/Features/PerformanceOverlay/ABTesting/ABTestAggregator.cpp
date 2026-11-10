@@ -8,9 +8,10 @@
 void ABTestAggregator::FinishInterval(Clock::time_point now)
 {
 	if (currentInterval) {
-		if (!currentInterval->warmup) {
+		if (!currentInterval->warmup && currentInterval->measurementStarted) {
 			currentInterval->endTime = now;
 			intervals.push_back(std::move(*currentInterval));
+			cachedResults.reset();
 		}
 		currentInterval.reset();
 	}
@@ -27,17 +28,28 @@ void ABTestAggregator::OnABSwitch(ABVariant variant, Clock::time_point now)
 		initialBWarmupPending = false;
 
 	currentInterval = std::make_unique<ABInterval>(variant, std::vector<std::vector<DrawCallRow>>{}, now, now, warmup);
+	currentInterval->measurementStarted = !warmup && settleFrames == 0;
 
 	// Initialization costs must not contribute to measured duration.
-	if (!warmup && intervals.empty()) {
+	if (currentInterval->measurementStarted && intervals.empty()) {
 		testStartTime = now;
 	}
 }
 
-void ABTestAggregator::OnFrame(const std::vector<DrawCallRow>& rows)
+void ABTestAggregator::OnFrame(const std::vector<DrawCallRow>& rows, Clock::time_point now)
 {
 	if (!currentInterval || currentInterval->warmup)
 		return;
+	if (currentInterval->framesSeen < settleFrames) {
+		++currentInterval->framesSeen;
+		return;
+	}
+	if (!currentInterval->measurementStarted) {
+		currentInterval->measurementStarted = true;
+		currentInterval->startTime = now;
+		if (intervals.empty())
+			testStartTime = now;
+	}
 
 	const auto total = std::ranges::find_if(rows, [](const auto& row) { return row.shaderType == -1; });
 	if (total == rows.end() || total->frameTime <= 0.0f || total->frameTime > kMaxOutlierFrameTime ||
@@ -59,7 +71,9 @@ void ABTestAggregator::OnFrame(const std::vector<DrawCallRow>& rows)
 		++currentInterval->excludedFrames;
 		return;
 	}
-	currentInterval->frameRows.push_back(rows);
+	auto& stored = currentInterval->frameRows.emplace_back(rows);
+	for (auto& row : stored)
+		std::string().swap(row.tooltip);
 }
 
 void ABTestAggregator::OnTestEnd(Clock::time_point now)
@@ -68,13 +82,14 @@ void ABTestAggregator::OnTestEnd(Clock::time_point now)
 		return;
 	FinishInterval(now);
 	if (!intervals.empty())
-		testEndTime = now;
+		testEndTime = intervals.back().endTime;
 }
 
 void ABTestAggregator::Clear()
 {
 	intervals.clear();
 	currentInterval.reset();
+	cachedResults.reset();
 	for (auto& history : recentFrameTimes)
 		history.clear();
 	testStartTime = {};
@@ -84,6 +99,9 @@ void ABTestAggregator::Clear()
 
 std::vector<AggregatedDrawCallStats> ABTestAggregator::GetAggregatedResults() const
 {
+	if (cachedResults)
+		return *cachedResults;
+
 	// Map: shaderType -> label
 	std::map<int, std::string> labelMap;
 	// Map shader types to their measured times in each configuration.
@@ -136,6 +154,7 @@ std::vector<AggregatedDrawCallStats> ABTestAggregator::GetAggregatedResults() co
 		return a.shaderType < b.shaderType;
 	});
 
+	cachedResults = result;
 	return result;
 }
 

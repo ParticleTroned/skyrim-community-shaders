@@ -131,6 +131,34 @@ int main()
 		require(!GrassPolicy::PlanCullCapacity({}, UINT64_MAX, 1));
 		require(!GrassPolicy::PlanCullCapacity({}, 1, 7));
 		require(!GrassPolicy::PlanCullCapacity({ UINT32_MAX, 1 }, 1, 1));
+		{
+			GrassPolicy::CullCapacityRetention retention;
+			const GrassPolicy::CullCapacity current{ 65536, 6 }, small{ 1024, 2 };
+			uint32_t frame = UINT32_MAX - GrassPolicy::kCullResultTrimFrames / 2;
+			for (uint32_t i = 1; i < GrassPolicy::kCullResultTrimFrames; ++i, ++frame)
+				require(!retention.Observe(current, small, frame));
+			require(!retention.Observe(current, current, frame++));
+			for (uint32_t i = 1; i < GrassPolicy::kCullResultTrimFrames; ++i, ++frame)
+				require(!retention.Observe(current, small, frame));
+			frame += 10;
+			for (uint32_t i = 1; i < GrassPolicy::kCullResultTrimFrames; ++i, ++frame)
+				require(!retention.Observe(current, small, frame));
+			require(retention.Observe(current, small, frame) == GrassPolicy::CullCapacity{ 2048, 2 });
+		}
+		{
+			GrassPolicy::CullCapacityRetention retention;
+			const GrassPolicy::CullCapacity current{ 4096, 6 };
+			for (uint32_t frame = 0; frame < GrassPolicy::kCullResultTrimFrames; ++frame)
+				require(!retention.Observe(current, frame % 2 ? GrassPolicy::CullCapacity{ 4096, 1 } : GrassPolicy::CullCapacity{ 1024, 6 }, frame));
+			for (uint32_t frame = GrassPolicy::kCullResultTrimFrames; frame < 2 * GrassPolicy::kCullResultTrimFrames - 1; ++frame)
+				require(!retention.Observe(current, { 1024, 2 }, frame));
+			require(retention.Observe(current, { 1024, 2 }, 2 * GrassPolicy::kCullResultTrimFrames - 1) == GrassPolicy::CullCapacity{ 2048, 2 });
+		}
+		require(GrassPolicy::ReplacementFitsBudget(40, 60, 100));
+		require(!GrassPolicy::ReplacementFitsBudget(40, 61, 100));
+		require(!GrassPolicy::ReplacementFitsBudget(101, 0, 100));
+		require(GrassPolicy::ReplacementFitsBudget(UINT64_MAX - 1, 1, UINT64_MAX));
+		require(!GrassPolicy::ReplacementFitsBudget(UINT64_MAX, 1, UINT64_MAX));
 		GrassPolicy::FrameQueue<int> queue;
 		std::array<int, 16> shapes{};
 		for (uint32_t frame : { UINT32_MAX - 1, UINT32_MAX, 0u, 1u }) {
@@ -204,7 +232,7 @@ int main()
 		require(settings.Valid());
 		require(settings.Enabled && settings.CrossCellBatching && settings.FrustumCulling &&
 				settings.DensityReduction && settings.EnableOcclusionCulling && !settings.EnableMeshLOD);
-		require(settings.CollisionDistance == 2048.0f);
+		require(settings.CollisionDistance == 4096.0f);
 		for (float distance : { 0.0f, GrassPolicy::kMaxCollisionDistance }) {
 			settings.CollisionDistance = distance;
 			require(settings.Valid());
@@ -238,6 +266,30 @@ int main()
 		require(wrapped.VisibleInFrame(0) && wrapped.IdleFrames(0) == 0);
 		require(GrassPolicy::MeshStride(0x8000000000000087ull) == 28);
 		require(GrassPolicy::MeshStride(0x8000000000000080ull) == 0);
+		require(GrassPolicy::MeshWeight(0) == 1);
+		require(GrassPolicy::MeshWeight(24) == 1);
+		require(GrassPolicy::MeshWeight(96) == 2);
+		require(GrassPolicy::MeshWeight(384) == 4);
+		require(GrassPolicy::BillboardCoverageScale(10, 20, 0) == 1);
+		require(GrassPolicy::BillboardCoverageScale(10, 20, 1) == .25f);
+		require(GrassPolicy::BillboardCoverageScale(10, 20, .5f) == .625f);
+		require(GrassPolicy::BillboardCoverageScale(20, 10, 1) == 1);
+		for (float invalid : { 0.f, -1.f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+			require(GrassPolicy::BillboardCoverageScale(invalid, 20, 1) == 1);
+			require(GrassPolicy::BillboardCoverageScale(10, invalid, 1) == 1);
+		}
+		require(!settings.FarLODOptimization && !settings.ProportionalDensityFade);
+		settings.FarLODPixelSize = .5f;
+		require(settings.Valid());
+		settings.FarLODOptimization = true;
+		require(!settings.Valid());
+		settings.FarLODMinPixelSize = .49f;
+		require(settings.Valid());
+		settings.FarLODMinDensity = settings.FarLODMaxDensity;
+		require(settings.Valid());
+		settings.FarLODMinDensity += .01f;
+		require(!settings.Valid());
+		settings = {};
 		require(GrassPolicy::NativeCountMatches(10, 10));
 		require(!GrassPolicy::NativeCountMatches(10, 20));
 		require(!GrassPolicy::NativeCountMatches(10, 21));
@@ -264,7 +316,9 @@ int main()
 		for (float GrassPolicy::Settings::* field : { &GrassPolicy::Settings::MeshCostBias,
 				 &GrassPolicy::Settings::CostBiasStartDistance, &GrassPolicy::Settings::InvisibleFadeCull,
 				 &GrassPolicy::Settings::RenderDistanceOverride, &GrassPolicy::Settings::EdgeFadeStart,
-				 &GrassPolicy::Settings::SimpleShadingPixelSize, &GrassPolicy::Settings::CollisionDistance }) {
+				 &GrassPolicy::Settings::SimpleShadingPixelSize, &GrassPolicy::Settings::CollisionDistance,
+				 &GrassPolicy::Settings::FarLODMinPixelSize, &GrassPolicy::Settings::FarLODMinDensity,
+				 &GrassPolicy::Settings::FarLODMaxDensity, &GrassPolicy::Settings::FarLODCoverageBias }) {
 			settings = {};
 			settings.*field = std::numeric_limits<float>::quiet_NaN();
 			require(!settings.Valid());

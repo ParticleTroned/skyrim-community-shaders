@@ -1,6 +1,8 @@
 #ifndef SSGI_STEREO_REPROJECT
 #define SSGI_STEREO_REPROJECT
 
+#include "Common/ReverseZ.hlsli"
+
 // Shared view-independent reproject helpers for SSGI. The same exact-surface test
 // gates both the eye-0-only skip and the transfer pass so the hit/miss decisions stay aligned.
 
@@ -10,7 +12,11 @@
 
 float LinearToRawDepth(float d)
 {
-	return (SharedData::CameraData.x - SharedData::CameraData.w / d) / SharedData::CameraData.z;
+	return DepthOrder::Reversed ? (SharedData::CameraData.w / d - SharedData::CameraData.y) / SharedData::CameraData.z : (SharedData::CameraData.x - SharedData::CameraData.w / d) / SharedData::CameraData.z;
+}
+float4 LinearToRawDepth(float4 d)
+{
+	return DepthOrder::Reversed ? (SharedData::CameraData.w / d - SharedData::CameraData.y) / SharedData::CameraData.z : (SharedData::CameraData.x - SharedData::CameraData.w / d) / SharedData::CameraData.z;
 }
 
 #if defined(VR) && defined(FRAMEBUFFER)

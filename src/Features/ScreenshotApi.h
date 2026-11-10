@@ -4,7 +4,9 @@
 #include "Features/ScreenshotApiPolicy.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Features/ScreenshotBurstPolicy.h"
+#	include "Features/ScreenshotCaptureProvider.h"
 #endif
+#include "Features/ScreenshotSequencePolicy.h"
 #include "Features/ScreenshotStorageSecurity.h"
 #include "ScreenshotManifestSnapshot.h"
 #include "ScreenshotNeuralDiagnostics.h"
@@ -22,6 +24,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 struct ScreenshotFeature;
@@ -46,6 +49,8 @@ public:
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	/** Admit a DevBench reference PNG and report its terminal receipt outside service locks. */
 	json HandleReferenceRequest(ScreenshotFeature& a_feature, const json& a_request, std::function<void(const json&)> a_completion);
+	/** Route generic host bursts through the same retained sequence API. */
+	json HandleProviderBurst(ScreenshotFeature& a_feature, const json& a_request, std::function<void(const json&)> a_notification);
 #endif
 	void Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame);
 
@@ -101,7 +106,7 @@ private:
 		json errors = json::array();
 		json error = nullptr;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		std::function<void(const json&)> referenceCompletion;
+		std::function<void(const json&)> completion;
 #endif
 		bool acknowledged = false;
 		bool cancelRequested = false;
@@ -126,6 +131,7 @@ private:
 		uint32_t intervalFrames = 1;
 		uint32_t startDelayFrames = 0;
 		uint32_t intervalMs = 0;
+		uint32_t startDelayMs = 0;
 		uint32_t maximumConsecutiveSkips = 10;
 		uint32_t nextOrdinal = 1;
 		uint32_t scheduled = 0;
@@ -133,6 +139,9 @@ private:
 		ScreenshotBurst::Plan burst;
 		ScreenshotBurst::Continuity continuity;
 		json burstSource = nullptr;
+		std::shared_ptr<const CSX::Screenshot::ProviderBurst> providerBurst;
+		json providerPublication = json::object();
+		std::chrono::steady_clock::time_point lastProviderProgress{};
 #endif
 		uint32_t acquired = 0;
 		uint32_t written = 0;
@@ -141,8 +150,7 @@ private:
 		uint32_t cancelled = 0;
 		uint32_t consecutiveSkips = 0;
 		uint32_t inFlight = 0;
-		uint64_t nextEngineFrame = 0;
-		std::chrono::steady_clock::time_point nextWallClock{};
+		CSX::ScreenshotPolicy::SequenceClock clock;
 		std::string scheduleBasis = "game_frames";
 		std::string backpressurePolicy = "skip";
 		std::string failurePolicy = "continue";
@@ -173,6 +181,9 @@ private:
 		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
 		json header = json::object();
 		std::shared_ptr<const ManifestChildNode> children;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::shared_ptr<const CSX::Screenshot::ProviderBurst> providerBurst;
+#endif
 	};
 
 	struct ManifestResult
@@ -183,6 +194,9 @@ private:
 		bool success = false;
 		std::filesystem::path destination;
 		json artifact = nullptr;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		json providerArtifact = nullptr;
+#endif
 		std::string error;
 	};
 
@@ -217,12 +231,13 @@ private:
 	};
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	struct ReferenceNotification
+	struct CaptureNotification
 	{
 		std::function<void(const json&)> completion;
 		json receipt;
 	};
-	std::vector<ReferenceNotification> referenceNotifications;
+	std::vector<CaptureNotification> captureNotifications;
+	uint64_t nextProviderRunId = 1;
 #endif
 	json DispatchRequest(ScreenshotFeature& a_feature, const json& a_request
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -231,7 +246,7 @@ private:
 #endif
 	);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	void DrainReferenceNotifications();
+	void DrainCaptureNotifications();
 #endif
 	CSX::Api::ServiceFoundation service;
 	mutable std::mutex mutex;
@@ -302,12 +317,17 @@ private:
 	void TrimLocked();
 	std::size_t CountPendingOperationsLocked() const;
 	void FinishSequenceChildLocked(RequestRecord& a_child);
+	void FinishSourceLocked(RequestRecord& a_record, std::string_view a_state, std::string_view a_error);
 	void TryFinalizeSequenceLocked(SequenceRecord& a_sequence);
 	void FinalizeSequenceLocked(SequenceRecord& a_sequence, const ManifestResult* a_manifestResult);
 	void QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool a_final);
 	void DrainManifestResultsLocked();
 	static void ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_state);
-	std::optional<DueFrame> PrepareDueFrameLocked(uint64_t a_engineFrame);
+	/** Accounts for a bounded number of missed slots before admitting a capture. */
+	std::optional<DueFrame> PrepareDueFrameLocked(uint64_t a_engineFrame, std::chrono::steady_clock::time_point a_now);
+	DueFrame CreateSequenceFrameLocked(SequenceRecord& a_sequence, uint64_t a_engineFrame, std::chrono::steady_clock::time_point a_now);
+	/** Holds paused schedules and returns unacquired sources to cancel outside the API lock. */
+	std::vector<std::pair<std::string, std::string>> UpdateSequenceClocksLocked(uint64_t a_engineFrame, std::chrono::steady_clock::time_point a_now);
 	std::optional<DispatchEntry> PopDispatchLocked();
 	void RequeueDispatchLocked(DispatchEntry a_entry, bool a_manual);
 	bool RemoveQueuedDispatchLocked(std::string_view a_requestId);

@@ -10,6 +10,15 @@ private:
 	bool HasProbeUpdateResources() const;
 	float3 GetProbeCellSize() const;
 	float3 GetProbeCell(float3 a_eyePosition) const;
+	/** @brief Returns a cutoff only when the capture height matches a recent world grid. */
+	std::optional<float> GetOcclusionCullBelowZ() const;
+	struct WorldProbeGrid
+	{
+		float bottomZ;
+		uint32_t frame;
+	};
+	std::optional<WorldProbeGrid> worldProbeGrid;
+	std::optional<float> occlusionCullBelowZ;
 	/** @brief Selects a due capture quadrant without consuming pending probe work. */
 	bool PrepareOcclusionCapture();
 	bool probeUpdateBufferEnabled = false;

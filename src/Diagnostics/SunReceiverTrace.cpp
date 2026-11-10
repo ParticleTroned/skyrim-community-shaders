@@ -1,6 +1,7 @@
 #include "Diagnostics/SunReceiverTrace.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Compatibility.h"
 #	include "Diagnostics/BoundedThreadTrace.h"
 #	include "EngineFixes/SunReceiverPolicy.h"
 #	include "Diagnostics/SunReceiverTraceRequest.h"
@@ -154,7 +155,7 @@ namespace Diagnostics::SunReceiverTrace
 				if (!allGeometry && event.lightData != initialLightData)
 					identityChanged.store(true, std::memory_order_relaxed);
 				if (lightData)
-					event.mask = Read<std::uint32_t>(lightData, 0x1C);
+					event.mask = Policy::ReadMask(lightData->activeLightMask);
 			}
 			if (object) {
 				event.bound = Read<std::array<float, 4>>(object, 0xE4);
@@ -352,7 +353,7 @@ namespace Diagnostics::SunReceiverTrace
 			Emit(before);
 			if (decision.reason == Policy::Reason::candidate && repairEnabled) {
 				before.repairApplied = SunShadowReceiver::Repair(property, geometry, input, decision);
-				before.maskAfterRepair = property->lightData ? property->lightData->activeLightMask : 0;
+				before.maskAfterRepair = property->lightData ? Policy::ReadMask(property->lightData->activeLightMask) : 0;
 				if (before.repairApplied) {
 					LARGE_INTEGER now{};
 					QueryPerformanceCounter(&now);
@@ -369,7 +370,7 @@ namespace Diagnostics::SunReceiverTrace
 			after.qpc = now.QuadPart;
 			const auto* lightData = property ? property->lightData : nullptr;
 			after.lightData = reinterpret_cast<std::uintptr_t>(lightData);
-			after.mask = lightData ? lightData->activeLightMask : 0;
+			after.mask = lightData ? Policy::ReadMask(lightData->activeLightMask) : 0;
 			if (!allGeometry && after.lightData != initialLightData)
 				identityChanged.store(true, std::memory_order_relaxed);
 			if (result) {
@@ -492,7 +493,7 @@ namespace Diagnostics::SunReceiverTrace
 				throw std::runtime_error(installationError);
 			if (!journal.Quiescent() || !traceId.empty())
 				throw std::invalid_argument("Finish and release the retained trace before starting another");
-			if (GetModuleHandleW(L"ShadowFixes.dll"))
+			if (Compatibility::IsLoaded(Compatibility::shadowFixes))
 				throw std::invalid_argument("ShadowFixes.dll masks native failures; disable it before tracing");
 			const auto request = ParseStart(args);
 			RE::TESObjectREFR* reference = nullptr;
@@ -585,7 +586,7 @@ namespace Diagnostics::SunReceiverTrace
 			const bool vr = REL::Module::IsVR();
 			if (vr && REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15)
 				throw std::runtime_error("VR receiver diagnostics require verified Skyrim VR 1.4.15");
-			if (GetModuleHandleW(L"ShadowFixes.dll"))
+			if (Compatibility::IsLoaded(Compatibility::shadowFixes))
 				throw std::runtime_error("ShadowFixes.dll owns receiver repair; disable it before using receiver diagnostics");
 			if (!SunShadowReceiver::Available())
 				throw std::runtime_error(SunShadowReceiver::InstallationError());

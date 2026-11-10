@@ -112,14 +112,17 @@ namespace
 		for (UINT mip = 0; mip < 2; ++mip) {
 			const UINT size = kShadowCopySize >> mip, cascade = 1 - mip;
 			const bool grouped = UsesGroupedDownsample(desc, size);
+			if (width == height && width / size == 32)
+				Require(grouped, "32x reductions must use the grouped path");
 			auto* output = mip == 0 ? feature.shadowCopyMip0UAV : feature.shadowCopyMip1UAV;
 			auto* shader = shaders[mip + (grouped ? 0 : 2)].Get();
 			const std::array<float, 4> poison{ 0, 0, 0, 0 };
 			context->ClearUnorderedAccessViewFloat(output, poison.data());
 			context->CSSetShader(shader, nullptr, 0);
 			context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
-			context->Dispatch(grouped ? (width + 15) / 16 : (size + 7) / 8,
-				grouped ? (height + 15) / 16 : (size + 7) / 8, 1);
+			const UINT span = 16 * std::max(width / size / 16, 1u);
+			context->Dispatch(grouped ? (width + span - 1) / span : (size + 7) / 8,
+				grouped ? (height + span - 1) / span : (size + 7) / 8, 1);
 			ClearComputeUAV(context);
 			const auto pixels = ReadMoments(device, context, feature.shadowCopyTexture, mip);
 			for (UINT y = 0; y < size; ++y)
@@ -160,6 +163,65 @@ namespace
 		for (UINT mip = 0; mip < 2; ++mip)
 			for (const auto& pixel : ReadMoments(device, context, feature.fallbackShadowTexture, mip))
 				Require(pixel[0] == 65535 && pixel[1] == 65535, "Fallback moments are not fully lit");
+	}
+
+	void CheckDrawBindings(ID3D11Device* device, ID3D11DeviceContext* context, VolumetricShadows& feature)
+	{
+		using Shader = RE::BSShader::Type;
+		DepthTexture foreign(device, 32, 32);
+		auto* foreignSRV = foreign.srv.Get();
+		const auto requireBinding = [&](ID3D11ShaderResourceView* expected) {
+			ComPtr<ID3D11ShaderResourceView> bound;
+			context->PSGetShaderResources(VolumetricShadows::kSharedShadowMapShaderSlot, 1, bound.GetAddressOf());
+			Require(bound.Get() == expected, "Draw binding differs from the current consumer contract");
+		};
+		const std::array nonconsumers{ Shader::Grass, Shader::Sky, Shader::BloodSplatter, Shader::Utility, Shader::DistantTree };
+		const std::array consumers{ Shader::Water, Shader::Lighting, Shader::Effect, Shader::Particle,
+			Shader::ImageSpace, Shader::None, Shader::Total, static_cast<Shader>(255) };
+
+		const auto allocationCalls = globals::d3d::device->allocationCalls;
+		const auto directionalChecks = globals::stateStorage.directionalChecks;
+		for (const auto shader : nonconsumers) {
+			context->PSSetShaderResources(VolumetricShadows::kSharedShadowMapShaderSlot, 1, &foreignSRV);
+			feature.SetShaderResources(context, shader);
+			requireBinding(foreignSRV);
+		}
+		Require(globals::d3d::device->allocationCalls == allocationCalls &&
+					globals::stateStorage.directionalChecks == directionalChecks,
+			"Nonconsuming draws entered directional/resource setup");
+
+		for (const auto shader : consumers) {
+			feature.settings.Enabled = true;
+			globals::stateStorage.directional = true;
+			context->PSSetShaderResources(VolumetricShadows::kSharedShadowMapShaderSlot, 1, &foreignSRV);
+			feature.SetShaderResources(context, shader);
+			requireBinding(feature.fallbackShadowSRV);
+			context->ClearState();
+			feature.SetShaderResources(context, shader);
+			requireBinding(feature.fallbackShadowSRV);
+
+			feature.settings.Enabled = false;
+			feature.SetShaderResources(context, Shader::Utility);
+			requireBinding(feature.fallbackShadowSRV);
+			feature.SetShaderResources(context, shader);
+			requireBinding(nullptr);
+			feature.settings.Enabled = true;
+			feature.SetShaderResources(context, shader);
+			requireBinding(feature.fallbackShadowSRV);
+			globals::stateStorage.directional = false;
+			feature.SetShaderResources(context, shader);
+			requireBinding(nullptr);
+			globals::stateStorage.directional = true;
+			feature.SetShaderResources(context, shader);
+			requireBinding(feature.fallbackShadowSRV);
+			globals::state = nullptr;
+			feature.SetShaderResources(context, shader);
+			requireBinding(nullptr);
+			globals::state = &globals::stateStorage;
+		}
+		feature.SetShaderResources(nullptr, Shader::Lighting);
+		context->ClearState();
+		std::cout << "Consumer admission, context clobber, same-frame toggles and unknown-shader fallback passed.\n";
 	}
 
 	void CheckPreparation(ID3D11Device* device, ID3D11DeviceContext* context, VolumetricShadows& feature,
@@ -207,6 +269,15 @@ namespace
 		ComPtr<ID3D11ShaderResourceView> bound;
 		context->PSGetShaderResources(18, 1, bound.GetAddressOf());
 		Require(bound.Get() == feature.shadowCopySRV, "Successful preparation did not publish VSM");
+		ID3D11UnorderedAccessView* outputHazard = feature.shadowCopyMip0UAV;
+		context->CSSetUnorderedAccessViews(0, 1, &outputHazard, nullptr);
+		bound.Reset();
+		context->PSGetShaderResources(18, 1, bound.GetAddressOf());
+		Require(!bound, "Writable shadow resource did not unbind the previous read view");
+		ClearComputeUAV(context);
+		feature.SetShaderResources(context, RE::BSShader::Type::Lighting);
+		context->PSGetShaderResources(18, 1, bound.ReleaseAndGetAddressOf());
+		Require(bound.Get() == feature.shadowCopySRV, "Consumer did not restore a hazard-invalidated shadow binding");
 		std::array<std::vector<std::array<uint16_t, 2>>, 2> expectedMoments;
 		for (UINT mip = 0; mip < 2; ++mip)
 			expectedMoments[mip] = ReadMoments(device, context, feature.shadowCopyTexture, mip);
@@ -233,7 +304,7 @@ namespace
 		feature.CopyShadowLightData();
 		Require(!feature.shadowCopyValid, "Missing context retained stale valid moments");
 		globals::d3d::context = context;
-		feature.SetShaderResources(context);
+		feature.SetShaderResources(context, RE::BSShader::Type::Lighting);
 		CheckFallback(device, context, feature);
 		for (size_t missing : { 1u, 2u, 4u, 5u }) {
 			slots[missing]->value = nullptr;
@@ -340,6 +411,7 @@ int main()
 		};
 		VolumetricShadows feature;
 		feature.SetupResources();
+		CheckDrawBindings(device.Get(), context.Get(), feature);
 		for (auto size : { 256u, 512u, 1024u, 2048u, 4096u, 8192u })
 			CheckReduction(device.Get(), context.Get(), feature, shaders, size, size);
 		CheckReduction(device.Get(), context.Get(), feature, shaders, 513, 769);

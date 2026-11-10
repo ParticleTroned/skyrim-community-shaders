@@ -255,8 +255,16 @@ namespace CSX::Diagnostics::Stutters
 		/** Fill caller-owned snapshot storage; large journals never consume the watchdog stack. */
 		Batch& Drain(Tick now, Batch& result) noexcept
 		{
+			result.active = {};
+			result.overdue = {};
+			result.activeAssets = {};
 			Lock();
-			result = data_;
+			result.context = data_.context;
+			result.boundaries = data_.boundaries;
+			result.count = data_.count;
+			result.droppedEvents = data_.droppedEvents;
+			// Only completed entries are observable; unused capacity must not lengthen hook contention.
+			std::copy_n(data_.events.begin(), result.count, result.events.begin());
 			for (unsigned i = 0; i < slots_.size(); ++i) {
 				Prune(i);
 				const auto& slot = slots_[i];

@@ -13,7 +13,7 @@ if(DEVBENCH_BRIDGE)
     list(APPEND VCPKG_MANIFEST_FEATURES "devbench-bridge")
 endif()
 
-set(_CSX_VERSION_DEFAULT "3.20-VR")
+set(_CSX_VERSION_DEFAULT "3.21-VR")
 if(CMAKE_BINARY_DIR MATCHES [[[/\\]build[/\\]AIO-Release$]])
     set(_CSX_VERSION_DEFAULT "3.15-SE")
 elseif(DEFINED ENABLE_SKYRIM_VR AND NOT ENABLE_SKYRIM_VR)
@@ -146,6 +146,18 @@ option(
     OFF
 )
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
+option(NVPERF_SUPPORT "Build developer-only NVIDIA D3D11 hardware counters" OFF)
+set(NVPERF_SDK_ROOT
+    ""
+    CACHE PATH
+    "Nsight Perf SDK directory containing include/nvperf_host.h"
+)
+if(NVPERF_SUPPORT AND NOT DEVBENCH_BRIDGE)
+    message(
+        FATAL_ERROR
+        "NVPERF_SUPPORT requires DEVBENCH_BRIDGE=ON; hardware counters are developer-only"
+    )
+endif()
 option(
     BUILD_SHADER_TESTS
     "Build shader unit tests (runs automatically before packaging)"
@@ -258,6 +270,7 @@ add_custom_target(
         "DEVBENCH_BRIDGE=${DEVBENCH_BRIDGE}" --build-option
         "CSX_RELEASE_VERSION=${CSX_RELEASE_VERSION}" --build-option
         "TRACY_SUPPORT=${TRACY_SUPPORT}" --build-option
+        "NVPERF_SUPPORT=${NVPERF_SUPPORT}" --build-option
         "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}" --build-option
         "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}" --build-option
         "ENABLE_SKYRIM_VR=${ENABLE_SKYRIM_VR}" --build-option
@@ -310,6 +323,7 @@ find_library(DETOURS_LIBRARY detours REQUIRED)
 include(FidelityFX-SDK)
 include(FidelityFX-Runtime)
 include(Streamline-Runtime)
+include(NeuralRendering-Runtime)
 include(ValidateNeuralColor)
 csx_validate_neural_color("${CMAKE_CURRENT_SOURCE_DIR}")
 csx_configure_runtime_payload()
@@ -350,6 +364,18 @@ foreach(_dir IN LISTS FEATURE_SHADER_DIRS)
     )
 endforeach()
 
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/extern/AntiLag2-SDK/ffx_antilag2_dx12.h")
+    message(
+        FATAL_ERROR
+        "Anti-Lag 2 SDK missing: git submodule update --init extern/AntiLag2-SDK"
+    )
+endif()
+target_include_directories(
+    ${PROJECT_NAME}
+    SYSTEM
+    PRIVATE "${CMAKE_SOURCE_DIR}/extern/AntiLag2-SDK"
+)
+
 target_include_directories(
     ${PROJECT_NAME}
     BEFORE
@@ -379,6 +405,7 @@ target_link_libraries(
         xxHash::xxhash
         Streamline
         d3d12.lib
+        gdi32.lib
         bcrypt.lib
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
@@ -388,6 +415,9 @@ if(DEVBENCH_BRIDGE)
     target_link_libraries(${PROJECT_NAME} PRIVATE DevBench::API advapi32)
     target_compile_definitions(${PROJECT_NAME} PRIVATE DEVBENCH_BRIDGE_ENABLED)
 endif()
+
+include(NvPerf)
+csx_configure_nvperf(${PROJECT_NAME})
 
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
 if(MSVC_VERSION GREATER_EQUAL 1936 AND MSVC_IDE) # 17.6+
@@ -431,15 +461,11 @@ foreach(FEATURE_PATH ${FEATURE_CONFIG_FILES})
     string(STRIP "${CONFIG_VALUE}" CONFIG_VALUE)
     if(CONFIG_VALUE)
         string(
-            REGEX MATCH "[Vv]ersion = ([0-9]+)-([0-9]+)-([0-9]+)"
-            _
+            REGEX MATCH "[Vv]ersion[ \t]*=[ \t]*([0-9]+)-([0-9]+)-([0-9]+)"
+            _VERSION_MATCH
             "${CONFIG_VALUE}"
         )
-        if(
-            DEFINED CMAKE_MATCH_1
-            AND DEFINED CMAKE_MATCH_2
-            AND DEFINED CMAKE_MATCH_3
-        )
+        if(_VERSION_MATCH)
             set(ver_major ${CMAKE_MATCH_1})
             set(ver_minor ${CMAKE_MATCH_2})
             set(ver_patch ${CMAKE_MATCH_3})
@@ -959,6 +985,8 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         COMMENT "Copying built DLL and PDB to AIO package"
         VERBATIM
     )
+
+    csx_stage_nvperf(${PROJECT_NAME})
 
     # Copy shader-package content individually so unchanged files keep their
     # timestamps. Track every staged asset (not only HLSL/HLSLI): feature
@@ -1760,6 +1788,37 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    add_controller_test(shader_descriptor_test ShaderDescriptor tests/shader_descriptor_test.cpp)
+    add_controller_test(texture_alpha_test TextureAlpha tests/texture_alpha_test.cpp)
+    target_link_libraries(
+        texture_alpha_test
+        PRIVATE Microsoft::DirectXTex ole32 windowscodecs
+    )
+    set(_empty_overlay_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/empty-overlay-test"
+    )
+    add_custom_command(
+        OUTPUT "${_empty_overlay_test_dir}/empty_overlay_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_empty_overlay_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_empty_overlay.cmake"
+        DEPENDS
+            src/EngineFixes/EmptyOverlayCullFix.cpp
+            tests/extract_empty_overlay.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(empty_overlay_test EmptyOverlay tests/empty_overlay_test.cpp)
+    target_sources(
+        empty_overlay_test
+        PRIVATE "${_empty_overlay_test_dir}/empty_overlay_under_test.h"
+    )
+    target_include_directories(
+        empty_overlay_test
+        PRIVATE "${_empty_overlay_test_dir}"
+    )
+
     set(_tooltip_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/tooltip-test")
     add_custom_command(
         OUTPUT
@@ -1782,6 +1841,32 @@ if(BUILD_CONTROLLER_TESTS)
     target_link_libraries(sun_receiver_trace_test PRIVATE xbyak::xbyak)
     add_controller_test(sun_receiver_policy_test SunReceiverPolicy tests/sun_receiver_policy_test.cpp)
     add_controller_test(sun_receiver_log_test SunReceiverLog tests/sun_receiver_log_test.cpp)
+    set(_plugin_compatibility_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/plugin-compatibility-test"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_plugin_compatibility_test_dir}/plugin_compatibility_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_plugin_compatibility_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_plugin_compatibility.cmake"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/XSEPlugin.cpp"
+            "${PROJECT_SOURCE_DIR}/tests/extract_plugin_compatibility.cmake"
+            "${PROJECT_SOURCE_DIR}/tests/extract_source_region.cmake"
+        VERBATIM
+    )
+    add_controller_test(plugin_compatibility_test PluginCompatibility tests/plugin_compatibility_test.cpp)
+    target_sources(
+        plugin_compatibility_test
+        PRIVATE
+            "${_plugin_compatibility_test_dir}/plugin_compatibility_under_test.h"
+    )
+    target_include_directories(
+        plugin_compatibility_test
+        PRIVATE "${_plugin_compatibility_test_dir}"
+    )
     target_link_libraries(
         sun_receiver_policy_test
         PRIVATE nlohmann_json::nlohmann_json
@@ -1836,6 +1921,8 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_shell_under_test.h"
             "${_settings_ui_dir}/settings_capture_feedback_under_test.h"
             "${_settings_ui_dir}/settings_constraint_warning_under_test.h"
+            "${_settings_ui_dir}/settings_adaptive_presets_under_test.h"
+            "${_settings_ui_dir}/settings_preset_files_under_test.h"
         COMMAND
             "${Python3_EXECUTABLE}"
             "${PROJECT_SOURCE_DIR}/tests/ui_page_inventory.py" --root
@@ -1904,6 +1991,8 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_shell_under_test.h"
             "${_settings_ui_dir}/settings_capture_feedback_under_test.h"
             "${_settings_ui_dir}/settings_constraint_warning_under_test.h"
+            "${_settings_ui_dir}/settings_adaptive_presets_under_test.h"
+            "${_settings_ui_dir}/settings_preset_files_under_test.h"
     )
     target_include_directories(settings_ui_test PRIVATE "${_settings_ui_dir}")
     find_package(fmt CONFIG REQUIRED)
@@ -1916,6 +2005,7 @@ if(BUILD_CONTROLLER_TESTS)
 
     add_controller_test(grass_draw_batch_test GrassOptimizationPolicy tests/grass_draw_batch_test.cpp)
     add_controller_test(grass_pass_cache_test GrassPassCache tests/grass_pass_cache_test.cpp)
+    add_controller_test(grass_bucket_preparation_test GrassBucketPreparation tests/grass_bucket_preparation_test.cpp)
     add_controller_test(grass_telemetry_test GrassTelemetry tests/grass_telemetry_test.cpp)
     target_compile_definitions(
         grass_telemetry_test
@@ -2047,6 +2137,7 @@ if(BUILD_CONTROLLER_TESTS)
     include("${PROJECT_SOURCE_DIR}/tests/gameft_stack_wait.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/engine_stutters.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/game_setting_persistence.cmake")
+    include("${PROJECT_SOURCE_DIR}/cmake/StateDrawTests.cmake")
 
     add_controller_test(
         shadow_batch_submissions_test
@@ -2189,6 +2280,7 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set(_adaptive_balance_test_headers
         "${_adaptive_balance_test_dir}/linear_lighting_members.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_effect_permutation_members.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_members.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_under_test.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_point_lights_under_test.h"
@@ -2210,6 +2302,8 @@ if(BUILD_CONTROLLER_TESTS)
             src/Features/WaterAppearance.cpp
             src/MenuDevBenchBridge.cpp
             src/SettingsMigrations.cpp
+            src/State.cpp
+            src/State.h
             tests/extract_adaptive_balance_toggle.py
         VERBATIM
     )
@@ -2266,6 +2360,12 @@ if(BUILD_CONTROLLER_TESTS)
 
     include("${PROJECT_SOURCE_DIR}/tests/virtual_function_hook.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/engine_overflow_guards.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/light_list_search.cmake")
+    add_controller_test(
+        light_attach_gate_test
+        LightAttachGate
+        tests/light_attach_gate_test.cpp
+    )
     include("${PROJECT_SOURCE_DIR}/tests/hang_guards.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/actor_shape_bounds.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/terrain_variation_mesh.cmake")
@@ -2830,6 +2930,72 @@ if(BUILD_CONTROLLER_TESTS)
         tests/pbr_material_registry_test.cpp
     )
     set_tests_properties(PBRMaterialRegistry PROPERTIES TIMEOUT 30)
+    add_controller_test(snow_cover_math_test SnowCoverMath tests/snow_cover_math_test.cpp)
+    add_controller_test(
+        seasonal_weather_policy_test
+        SeasonalWeatherPolicy
+        tests/seasonal_weather_policy_test.cpp
+    )
+    target_sources(
+        seasonal_weather_policy_test
+        PRIVATE src/Features/SeasonalWeatherConfig.cpp
+    )
+    target_link_libraries(
+        seasonal_weather_policy_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    target_compile_definitions(
+        seasonal_weather_policy_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    target_compile_options(
+        seasonal_weather_policy_test
+        PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/fp:fast>"
+    )
+    set(_seasonal_weather_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/tests/seasonal-weather"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_seasonal_weather_test_dir}/seasonal_weather_list_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_selection_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_native_list_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_apply_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DSOURCE_FILE=${PROJECT_SOURCE_DIR}/src/Features/SeasonalWeather.cpp"
+            "-DOUTPUT_DIRECTORY=${_seasonal_weather_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_seasonal_weather.cmake"
+        DEPENDS
+            src/Features/SeasonalWeather.cpp
+            tests/extract_seasonal_weather.cmake
+            tests/extract_source_region.cmake
+            extern/CommonLibSSE-NG/include/RE/B/BSSimpleList.h
+        VERBATIM
+    )
+    add_controller_test(seasonal_weather_selection_test SeasonalWeatherSelection tests/seasonal_weather_selection_test.cpp)
+    set_tests_properties(SeasonalWeatherSelection PROPERTIES TIMEOUT 30)
+    target_sources(
+        seasonal_weather_selection_test
+        PRIVATE
+            "${_seasonal_weather_test_dir}/seasonal_weather_list_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_selection_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_native_list_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_apply_under_test.h"
+            src/Features/SeasonalWeatherConfig.cpp
+    )
+    target_link_libraries(
+        seasonal_weather_selection_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    target_include_directories(
+        seasonal_weather_selection_test
+        PRIVATE "${_seasonal_weather_test_dir}"
+    )
+    target_compile_definitions(
+        snow_cover_math_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
     include("${PROJECT_SOURCE_DIR}/cmake/PBRTextureEnumerationTests.cmake")
     add_controller_test(
         perf_mode_restart_state_test
@@ -2848,10 +3014,22 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
+    add_d3d_shader_test(
+        sss_skin_color_test SSSSkinColor tests/sss_skin_color_test.cpp
+    )
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_shadows.cmake")
     add_d3d_shader_test(
         wetterness_highlights_test WetternessHighlights
         tests/wetterness_highlights_test.cpp
+    )
+    include("${PROJECT_SOURCE_DIR}/tests/wetterness_runtime.cmake")
+    add_controller_test(
+        wetterness_snow_history_test WetternessSnowHistory
+        tests/wetterness_snow_history_test.cpp
+    )
+    add_d3d_shader_test(
+        wetterness_snow_melt_test WetternessSnowMelt
+        tests/wetterness_snow_melt_test.cpp
     )
     add_d3d_shader_test(lazy_shader_test LazyShader tests/lazy_shader_test.cpp)
     target_link_libraries(
@@ -2873,12 +3051,72 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE spdlog::spdlog windowsapp.lib
     )
     include("${PROJECT_SOURCE_DIR}/tests/vr_depth_encode.cmake")
+    add_d3d_shader_test(reverse_z_depth_test ReverseZDepth tests/reverse_z_depth_test.cpp)
+    target_link_libraries(reverse_z_depth_test PRIVATE windowsapp.lib)
+    set(_reverse_z_state_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/reverse-z-state"
+    )
+    set(_reverse_z_state_headers)
+    foreach(
+        _part
+        IN
+        ITEMS
+            storage
+            comparison
+            creation
+            hooks
+            clear
+            getters
+            targets
+            views
+            resources
+            preparation
+            diagnostics
+    )
+        list(
+            APPEND _reverse_z_state_headers
+            "${_reverse_z_state_dir}/reverse_z_state_${_part}.h"
+        )
+    endforeach()
+    add_custom_command(
+        OUTPUT ${_reverse_z_state_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_reverse_z_state_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_reverse_z_state.cmake"
+        DEPENDS
+            src/Features/ReverseZ.cpp
+            tests/extract_reverse_z_state.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_d3d_shader_test(reverse_z_state_test ReverseZState tests/reverse_z_state_test.cpp)
+    target_sources(reverse_z_state_test PRIVATE ${_reverse_z_state_headers})
+    target_include_directories(
+        reverse_z_state_test
+        PRIVATE "${_reverse_z_state_dir}"
+    )
+    target_compile_definitions(reverse_z_state_test PRIVATE NOMINMAX)
+    target_link_libraries(
+        reverse_z_state_test
+        PRIVATE windowsapp.lib nlohmann_json::nlohmann_json
+    )
+    add_d3d_shader_test(d3d_capture_hook_test D3DCaptureHook tests/d3d_capture_hook_test.cpp)
+    target_include_directories(
+        d3d_capture_hook_test
+        PRIVATE "${DETOURS_INCLUDE_DIRS}"
+    )
+    target_link_libraries(
+        d3d_capture_hook_test
+        PRIVATE xbyak::xbyak "${DETOURS_LIBRARY}"
+    )
     add_d3d_shader_test(grass_d3d_state_test GrassD3DState tests/grass_d3d_state_test.cpp)
     target_link_libraries(grass_d3d_state_test PRIVATE windowsapp.lib)
     target_compile_definitions(grass_d3d_state_test PRIVATE NOMINMAX)
     add_d3d_shader_test(grass_batch_shader_test GrassBatchShader tests/grass_batch_shader_test.cpp)
     target_sources(grass_batch_shader_test PRIVATE src/Utils/ShaderInclude.cpp)
     target_link_libraries(grass_batch_shader_test PRIVATE spdlog::spdlog)
+    set_tests_properties(GrassBatchShader PROPERTIES TIMEOUT 180)
     add_d3d_shader_test(
         pbr_grass_shader_test
         PBRGrassShader
@@ -2917,6 +3155,30 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(
         FeatureIssueScanner
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
+        NAME ReverseZInitialization
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/reverse_z_initialization_test.py"
+    )
+    set_tests_properties(
+        ReverseZInitialization
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
+        NAME WaterShaderContract
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/water_shader_contract_test.py"
+    )
+    set_tests_properties(
+        WaterShaderContract
         PROPERTIES
             LABELS "ControllerTests"
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
@@ -3023,18 +3285,58 @@ if(BUILD_CONTROLLER_TESTS)
             LABELS "ControllerTests"
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
     )
-    add_controller_test(
+    add_test(
+        NAME GrassLODLifecycle
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/grass_lod_lifecycle_test.py"
+    )
+    set_tests_properties(
+        GrassLODLifecycle
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
+        NAME GrassCaptureLifecycle
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/grass_capture_lifecycle_test.py"
+    )
+    set_tests_properties(
+        GrassCaptureLifecycle
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
+        NAME GrassPreparationLifecycle
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/grass_preparation_lifecycle_test.py"
+    )
+    set_tests_properties(
+        GrassPreparationLifecycle
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
+        NAME GrassBufferLifecycle
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/grass_buffer_lifecycle_test.py"
+    )
+    set_tests_properties(
+        GrassBufferLifecycle
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_d3d_shader_test(
         motion_sharpening_runtime_compile_test
         MotionSharpeningRuntimeCompile
         tests/motion_sharpening_runtime_compile_test.cpp
-    )
-    target_link_libraries(
-        motion_sharpening_runtime_compile_test
-        PRIVATE d3dcompiler.lib
-    )
-    set_tests_properties(
-        MotionSharpeningRuntimeCompile
-        PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     )
     set(_core_settings_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/core_settings_test"
@@ -3179,6 +3481,114 @@ if(BUILD_CONTROLLER_TESTS)
         VRVendorRelatchPolicy
         tests/vr_vendor_relatch_policy_test.cpp
     )
+    set(_dlss_provider_reuse_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/dlss-provider-reuse"
+    )
+    set(_dlss_provider_reuse_test_header
+        "${_dlss_provider_reuse_test_dir}/dlss_provider_reuse_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_dlss_provider_reuse_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_dlss_provider_reuse_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_dlss_provider_reuse.cmake"
+        DEPENDS
+            src/Features/Upscaling/Streamline.cpp
+            tests/extract_dlss_provider_reuse.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(dlss_provider_reuse_test DLSSProviderReuse tests/dlss_provider_reuse_test.cpp)
+    target_sources(
+        dlss_provider_reuse_test
+        PRIVATE "${_dlss_provider_reuse_test_header}"
+    )
+    target_include_directories(
+        dlss_provider_reuse_test
+        PRIVATE "${_dlss_provider_reuse_test_dir}"
+    )
+    add_controller_test(
+        system_memory_test
+        SystemMemory
+        tests/system_memory_test.cpp
+    )
+    target_link_libraries(system_memory_test PRIVATE spdlog::spdlog)
+    target_compile_definitions(
+        system_memory_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    add_controller_test(
+        graphics_driver_info_test
+        GraphicsDriverInfo
+        tests/graphics_driver_info_test.cpp
+    )
+    target_compile_definitions(
+        graphics_driver_info_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    target_link_libraries(graphics_driver_info_test PRIVATE dxgi.lib gdi32.lib)
+    set(_graphics_adapter_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/graphics-adapter-initialization"
+    )
+    set(_graphics_adapter_test_headers
+        "${_graphics_adapter_test_dir}/graphics_adapter_initialization_under_test.h"
+        "${_graphics_adapter_test_dir}/graphics_adapter_name_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_graphics_adapter_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_graphics_adapter_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_graphics_adapter_initialization.cmake"
+        DEPENDS
+            src/Hooks.cpp
+            src/State.cpp
+            tests/extract_graphics_adapter_initialization.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        graphics_adapter_initialization_test
+        GraphicsAdapterInitialization
+        tests/graphics_adapter_initialization_test.cpp
+    )
+    target_sources(
+        graphics_adapter_initialization_test
+        PRIVATE ${_graphics_adapter_test_headers}
+    )
+    target_include_directories(
+        graphics_adapter_initialization_test
+        PRIVATE "${_graphics_adapter_test_dir}"
+    )
+    target_link_libraries(
+        graphics_adapter_initialization_test
+        PRIVATE CommonLibSSE::CommonLibSSE spdlog::spdlog windowsapp.lib
+    )
+    foreach(
+        _scenario
+        IN
+        ITEMS
+            quiet_error
+            quiet_warn
+            info
+            unicode
+            empty
+            null_device
+            device_failure
+            adapter_failure
+            description_failure
+            driver_failure
+    )
+        add_test(
+            NAME "GraphicsAdapterInitialization.${_scenario}"
+            COMMAND graphics_adapter_initialization_test "${_scenario}"
+        )
+        set_tests_properties(
+            "GraphicsAdapterInitialization.${_scenario}"
+            PROPERTIES LABELS "ControllerTests"
+        )
+    endforeach()
     set(_vr_recovery_contract_test_header
         "${CMAKE_CURRENT_BINARY_DIR}/generated/vr_recovery_contract_under_test.h"
     )
@@ -3446,6 +3856,37 @@ if(BUILD_CONTROLLER_TESTS)
         VRRenderScaleModePolicy
         tests/vr_render_scale_mode_policy_test.cpp
     )
+    set(_render_scale_menu_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/render_scale_menu_test"
+    )
+    set(_render_scale_menu_test_header
+        "${_render_scale_menu_test_dir}/render_scale_menu_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_render_scale_menu_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_render_scale_menu_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_render_scale_menu.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_render_scale_menu.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        vr_render_scale_menu_test
+        VRRenderScaleMenu
+        tests/vr_render_scale_menu_test.cpp
+    )
+    target_sources(
+        vr_render_scale_menu_test
+        PRIVATE "${_render_scale_menu_test_header}"
+    )
+    target_include_directories(
+        vr_render_scale_menu_test
+        PRIVATE "${_render_scale_menu_test_dir}"
+    )
     set(_upscaling_restore_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/upscaling_restore_test"
     )
@@ -3583,6 +4024,20 @@ if(BUILD_CONTROLLER_TESTS)
         forced_weather_test
         PRIVATE "${_forced_weather_test_dir}"
     )
+    add_test(
+        NAME WeatherDrawUpdates
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/weather_draw_updates_test.py"
+            --json-include
+            "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
+    set_tests_properties(
+        WeatherDrawUpdates
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
     add_controller_test(
         camera_reprojection_test
         CameraReprojection
@@ -3670,15 +4125,127 @@ if(BUILD_CONTROLLER_TESTS)
         VRSubmitInputFreshnessContract
         PROPERTIES LABELS "ControllerTests"
     )
+    add_controller_test(anti_lag2_test AntiLag2 tests/anti_lag2_test.cpp)
+    target_sources(anti_lag2_test PRIVATE src/Features/Upscaling/AntiLag2.cpp)
+    target_include_directories(
+        anti_lag2_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/extern/AntiLag2-SDK"
+    )
+    target_compile_definitions(
+        anti_lag2_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    target_link_libraries(
+        anti_lag2_test
+        PRIVATE Microsoft::DirectX-Headers dxguid
+    )
     add_controller_test(
         reflex_policy_test
         ReflexPolicy
         tests/reflex_policy_test.cpp
     )
     add_controller_test(
+        reflex_backend_test
+        ReflexBackend
+        tests/reflex_backend_test.cpp
+    )
+    set(_reflex_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/reflex")
+    set(_reflex_logging_header
+        "${_reflex_test_dir}/reflex_logging_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_reflex_logging_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_reflex_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_reflex_logging.cmake"
+        DEPENDS
+            src/Features/Upscaling/Streamline.cpp
+            tests/extract_reflex_logging.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    target_sources(
+        reflex_backend_test
+        PRIVATE
+            src/Features/Upscaling/ReflexBackend.cpp
+            "${_reflex_logging_header}"
+    )
+    target_include_directories(
+        reflex_backend_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/extern/nvapi" "${_reflex_test_dir}"
+    )
+    target_compile_definitions(
+        reflex_backend_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    target_link_libraries(reflex_backend_test PRIVATE d3d11 dxguid)
+    add_test(
+        NAME ReflexBackendContract
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/reflex_backend_contract_test.cmake"
+    )
+    set_tests_properties(
+        ReflexBackendContract
+        PROPERTIES LABELS "ControllerTests"
+    )
+    add_controller_test(
         light_limit_fix_vr_hook_policy_test
         LightLimitFixVRHookPolicy
         tests/light_limit_fix_vr_hook_policy_test.cpp
+    )
+    set(_fsr_selection_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-sdk-selection"
+    )
+    set(_fsr_selection_headers "")
+    foreach(
+        _header
+        IN
+        ITEMS
+            fsr_sdk_versions.h
+            fsr_version_under_test.h
+            fsr_version_format_under_test.h
+            fsr_runtime_route_under_test.h
+            fsr_migration_under_test.h
+            fsr_selection_schema.h
+            fsr_runtime_query_under_test.h
+            fsr_runtime_create_calls_under_test.h
+            fsr_runtime_create_under_test.h
+    )
+        list(
+            APPEND _fsr_selection_headers
+            "${_fsr_selection_test_dir}/${_header}"
+        )
+    endforeach()
+    add_custom_command(
+        OUTPUT ${_fsr_selection_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_fsr_selection_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_fsr_sdk_selection.cmake"
+        DEPENDS
+            src/Features/Upscaling/FidelityFX.cpp
+            src/Features/Upscaling/FidelityFX.h
+            src/Features/Upscaling.cpp
+            src/Features/Upscaling.h
+            tests/extract_fsr_sdk_selection.cmake
+        VERBATIM
+    )
+    add_controller_test(fsr_sdk_selection_test FSRSDKSelection tests/fsr_sdk_selection_test.cpp)
+    target_sources(fsr_sdk_selection_test PRIVATE ${_fsr_selection_headers})
+    target_include_directories(
+        fsr_sdk_selection_test
+        PRIVATE
+            "${_fsr_selection_test_dir}"
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/extern/FidelityFX-SDK/sdk/include"
+    )
+    add_controller_test(fsr_runtime_selection_test FSRRuntimeSelection tests/fsr_runtime_selection_test.cpp)
+    target_sources(fsr_runtime_selection_test PRIVATE ${_fsr_selection_headers})
+    target_include_directories(
+        fsr_runtime_selection_test
+        PRIVATE "${_fsr_selection_test_dir}" "${PROJECT_SOURCE_DIR}/include"
     )
     add_controller_test(
         fsr_host_lifecycle_policy_test
@@ -3689,6 +4256,28 @@ if(BUILD_CONTROLLER_TESTS)
         fsr_runtime_lifecycle_policy_test
         FSRRuntimeLifecyclePolicy
         tests/fsr_runtime_lifecycle_policy_test.cpp
+    )
+    set(_vendor_reset_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/vendor-reset"
+    )
+    set(_vendor_reset_headers
+        "${_vendor_reset_test_dir}/vendor_lifecycle_under_test.h"
+        "${_vendor_reset_test_dir}/vendor_reset_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_vendor_reset_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vendor_reset_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vendor_reset.cmake"
+        DEPENDS src/Features/Upscaling.cpp tests/extract_vendor_reset.cmake
+        VERBATIM
+    )
+    add_controller_test(vendor_runtime_reset_test VendorRuntimeReset tests/vendor_runtime_reset_test.cpp)
+    target_sources(vendor_runtime_reset_test PRIVATE ${_vendor_reset_headers})
+    target_include_directories(
+        vendor_runtime_reset_test
+        PRIVATE "${_vendor_reset_test_dir}"
     )
     add_controller_test(
         fsr_shared_guides_policy_test
@@ -3753,6 +4342,10 @@ if(BUILD_CONTROLLER_TESTS)
     set(_fsr_temporal_headers
         "${_fsr_temporal_test_dir}/temporal_settings_load_under_test.h"
         "${_fsr_temporal_test_dir}/temporal_provider_calls_under_test.h"
+        "${_fsr_temporal_test_dir}/temporal_query_under_test.h"
+        "${_fsr_temporal_test_dir}/temporal_provider_identity_under_test.h"
+        "${_fsr_temporal_test_dir}/temporal_quarantine_under_test.h"
+        "${_fsr_temporal_test_dir}/temporal_provider_name_under_test.h"
         "${_fsr_temporal_test_dir}/temporal_provider_result_under_test.h"
         "${_fsr_temporal_test_dir}/temporal_snapshot_under_test.h"
     )
@@ -4021,6 +4614,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/cache_invalidation_test.cpp
     )
     add_controller_test(
+        cache_rollback_state_test
+        CacheRollbackState
+        tests/cache_rollback_state_test.cpp
+    )
+    add_controller_test(
         shader_compilation_scheduling_policy_test
         ShaderCompilationSchedulingPolicy
         tests/shader_compilation_scheduling_policy_test.cpp
@@ -4198,6 +4796,35 @@ if(BUILD_CONTROLLER_TESTS)
     target_include_directories(
         unified_water_flowmap_test
         PRIVATE "${_flowmap_test_dir}"
+    )
+    set(_reflection_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/unified-water-reflection"
+    )
+    set(_reflection_test_headers
+        "${_reflection_test_dir}/reflection_capture_under_test.h"
+        "${_reflection_test_dir}/reflection_maintenance_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_reflection_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_reflection_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_unified_water_reflection.cmake"
+        DEPENDS
+            src/Features/UnifiedWater/ReflectionCapture.h
+            src/Features/UnifiedWater.cpp
+            tests/extract_unified_water_reflection.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(unified_water_reflection_test UnifiedWaterReflection tests/unified_water_reflection_test.cpp)
+    target_sources(
+        unified_water_reflection_test
+        PRIVATE ${_reflection_test_headers}
+    )
+    target_include_directories(
+        unified_water_reflection_test
+        PRIVATE "${_reflection_test_dir}"
     )
     add_executable(
         accepted_draw_registry_test
@@ -4466,12 +5093,30 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(DevBenchMainThreadDispatch PROPERTIES TIMEOUT 10)
 
+    add_controller_test(
+        devbench_json_test
+        DevBenchJson
+        tests/devbench_json_test.cpp
+    )
+    target_compile_definitions(
+        devbench_json_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    target_link_libraries(
+        devbench_json_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
     add_executable(
         screenshot_api_policy_test
         EXCLUDE_FROM_ALL
         tests/screenshot_api_policy_test.cpp
     )
     target_compile_features(screenshot_api_policy_test PRIVATE cxx_std_23)
+    target_compile_definitions(
+        screenshot_api_policy_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
     target_include_directories(
         screenshot_api_policy_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"
@@ -4858,14 +5503,17 @@ if(BUILD_CONTROLLER_TESTS)
         ProfilerTiming
         tests/profiler_timing_test.cpp
     )
-    target_sources(profiler_timing_test PRIVATE src/Profiler.cpp)
+    target_sources(
+        profiler_timing_test
+        PRIVATE src/Profiler.cpp src/RenderTargetStats.cpp
+    )
     target_compile_definitions(
         profiler_timing_test
         PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
     )
     target_link_libraries(
         profiler_timing_test
-        PRIVATE d3d11.lib runtimeobject.lib
+        PRIVATE d3d11.lib runtimeobject.lib spdlog::spdlog
     )
 
     set(_profiling_ui_dir
@@ -4922,6 +5570,17 @@ if(BUILD_CONTROLLER_TESTS)
         ab_test_aggregator_test
         PRIVATE src/Features/PerformanceOverlay/ABTesting/ABTestAggregator.cpp
     )
+
+    add_controller_test(
+        ab_comparison_test
+        ABComparison
+        tests/ab_comparison_test.cpp
+    )
+    target_sources(
+        ab_comparison_test
+        PRIVATE src/Features/PerformanceOverlay/ABTesting/ABComparison.cpp
+    )
+    target_compile_definitions(ab_comparison_test PRIVATE AB_COMPARISON_TEST)
 
     add_executable(
         api_editor_contract_test

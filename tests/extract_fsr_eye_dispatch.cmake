@@ -43,10 +43,10 @@ extract_between("${_fidelity_source}" "bool FidelityFX::AreFSRResourcesCompatibl
 extract_between("${_fidelity_source}" "bool FidelityFX::CanDispatchHostFallbackForRegions(" "FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(" _fallback)
 extract_between("${_fidelity_source}" "FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(" "FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(" _region)
 extract_between("${_fidelity_source}" "FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(" "FidelityFX::UpscaleResult FidelityFX::Upscale(" _stereo)
-extract_between("${_upscaling_source}" "FidelityFX::UpscaleResult Upscaling::DispatchVendorEyeRegion(" "FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(" _vendor)
+extract_between("${_upscaling_source}" "FidelityFX::UpscaleResult Upscaling::DispatchVendorEyeRegion(" "\n}\n" _vendor)
 file(
     WRITE "${OUTPUT_DIRECTORY}/fsr_eye_dispatch_under_test.h"
-    "${_submit_contract}\n${_arm}\n${_resolve_plan}\n${_resources}\n${_compatibility}\n${_fallback}\n${_region}\n${_stereo}\n${_vendor}"
+    "${_submit_contract}\n${_arm}\n${_resolve_plan}\n${_resources}\n${_compatibility}\n${_fallback}\n${_region}\n${_stereo}\n${_vendor}\n}\n"
 )
 
 extract_between("${_fidelity_source}" "const bool runtimeDeferredByGate =" "static bool loggedRuntimeDeferredForShaderCompilation =" _gate)

@@ -1438,18 +1438,20 @@ void EditorWindow::SetupResources()
 	PaletteWindow::GetSingleton()->Load();
 	InvalidateJsonAttachmentCache();
 
+	Util::FormEditorIDIndex editorIDs;
+
 	// Populate all widget collections using WidgetFactory templates
-	WidgetFactory::PopulateWidgets<WeatherWidget, RE::TESWeather>(weatherWidgets);
-	WidgetFactory::PopulateWidgets<LightingTemplateWidget, RE::BGSLightingTemplate>(lightingTemplateWidgets);
-	WidgetFactory::PopulateWidgets<ImageSpaceWidget, RE::TESImageSpace>(imageSpaceWidgets);
-	WidgetFactory::PopulateWidgets<VolumetricLightingWidget, RE::BGSVolumetricLighting>(volumetricLightingWidgets);
-	WidgetFactory::PopulateWidgets<PrecipitationWidget, RE::BGSShaderParticleGeometryData>(precipitationWidgets);
-	WidgetFactory::PopulateWidgets<LensFlareWidget, RE::BGSLensFlare>(lensFlareWidgets);
-	WidgetFactory::PopulateWidgets<ReferenceEffectWidget, RE::BGSReferenceEffect>(referenceEffectWidgets);
+	WidgetFactory::PopulateWidgets<WeatherWidget, RE::TESWeather>(weatherWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<LightingTemplateWidget, RE::BGSLightingTemplate>(lightingTemplateWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<ImageSpaceWidget, RE::TESImageSpace>(imageSpaceWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<VolumetricLightingWidget, RE::BGSVolumetricLighting>(volumetricLightingWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<PrecipitationWidget, RE::BGSShaderParticleGeometryData>(precipitationWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<LensFlareWidget, RE::BGSLensFlare>(lensFlareWidgets, editorIDs);
+	WidgetFactory::PopulateWidgets<ReferenceEffectWidget, RE::BGSReferenceEffect>(referenceEffectWidgets, editorIDs);
 
 	// Cache simple form widgets for form picker performance
-	WidgetFactory::PopulateSimpleWidgets<RE::BGSArtObject>(artObjectWidgets);
-	WidgetFactory::PopulateSimpleWidgets<RE::TESEffectShader>(effectShaderWidgets);
+	WidgetFactory::PopulateSimpleWidgets<RE::BGSArtObject>(artObjectWidgets, editorIDs);
+	WidgetFactory::PopulateSimpleWidgets<RE::TESEffectShader>(effectShaderWidgets, editorIDs);
 
 	resourcesInitialized = true;
 }
@@ -1537,9 +1539,24 @@ void EditorWindow::UpdateOpenState()
 		viewportImageRect = {};
 		RestoreVanityCamera();
 		lastFocusedWidget = nullptr;
+		previewResourceReleasePending.store(true, std::memory_order_release);
 	}
 
 	wasOpen = open;
+}
+
+void EditorWindow::ReleasePendingPreviewResources()
+{
+	if (!previewResourceReleasePending.load(std::memory_order_relaxed) ||
+		!previewResourceReleasePending.exchange(false, std::memory_order_acq_rel))
+		return;
+
+	// Close requests may originate outside rendering or while draw lists still use these SRVs.
+	delete tempTexture;
+	tempTexture = nullptr;
+	for (auto& widget : weatherWidgets)
+		if (auto* weatherWidget = dynamic_cast<WeatherWidget*>(widget.get()))
+			weatherWidget->cloudTextureCache.clear();
 }
 
 void EditorWindow::AdvanceLightEditorDeferredWork()
@@ -1592,7 +1609,7 @@ void EditorWindow::Draw()
 						D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 						framebuffer.SRV->GetDesc(&srvDesc);
 
-						tempTexture = new Texture2D(texDesc);
+						tempTexture = new Texture2D(texDesc, "CSEditor::ViewportCopy");
 						tempTexture->CreateSRV(srvDesc);
 					}
 

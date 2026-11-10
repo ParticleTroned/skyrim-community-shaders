@@ -1422,6 +1422,11 @@ namespace
 		bool a_tonemapSceneHdr)
 	{
 		const DXGI_FORMAT sourceFormat = sourceImage.GetMetadata().format;
+		// Capture colorspace controls transfer; strip the resource tag so DirectXTex
+		// cannot decode display bytes during encoding or the final format conversion.
+		if (DirectX::IsSRGB(sourceFormat) && !sourceImage.OverrideFormat(DirectX::MakeLinear(sourceFormat))) {
+			return nullptr;
+		}
 		if (IsLinearCapture(a_colorSpace, sourceFormat)) {
 			if (!EncodeLinearToSrgb(
 					sourceImage,
@@ -1755,18 +1760,6 @@ void ScreenshotFeature::DrawSettingsEnabledControl()
 	Util::AddTooltip("Controls Community Shaders captures. Vanilla Skyrim screenshots are unaffected.");
 }
 
-void ScreenshotFeature::DrawSettingsHeaderControls()
-{
-	bool runtimeEnabled = enabled.load(std::memory_order_acquire);
-	if (Util::Widgets::Checkbox("Enable Community Shaders Screenshots", &runtimeEnabled)) {
-		SetEnabled(runtimeEnabled);
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Controls the Community Shaders screenshot hotkey and manual capture button.");
-		ImGui::Text("Vanilla Skyrim screenshots are unaffected.");
-	}
-}
-
 void ScreenshotFeature::PostPostLoad()
 {
 	// Seed VR-specific presets here rather than in LoadSettings: Feature::Load
@@ -2054,9 +2047,11 @@ void ScreenshotFeature::DrawSettings()
 			bool fixedCropDisabled = false;
 			ImGui::BeginDisabled();
 			Util::Widgets::Checkbox("Apply crop", &fixedCropDisabled);
+			Util::AddTooltip("This capture mode keeps its fixed eye framing, so a custom crop cannot be applied.");
 			ImGui::EndDisabled();
 		} else {
 			Util::Widgets::Checkbox("Apply crop", &applyCropToScreenshot);
+			Util::AddTooltip("On: saves only the selected crop area. Off: saves the full image from the selected source.");
 		}
 	}
 
@@ -2340,6 +2335,17 @@ void ScreenshotFeature::EnsurePreviewCache(ID3D11Texture2D* sourceTexture)
 	Util::SetResourceName(previewCacheSRV.get(), "Screenshot::PreviewCache SRV");
 }
 
+void ScreenshotFeature::Reset()
+{
+	if ((!previewCacheTexture && !previewCacheSRV) || (globals::menu && globals::menu->IsEnabled))
+		return;
+	const Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
+	if (!ownership)
+		return;
+	previewCacheSRV = nullptr;
+	previewCacheTexture = nullptr;
+}
+
 ScreenshotFeature::CaptureOptions ScreenshotFeature::SnapshotCaptureOptions() const
 {
 	return {
@@ -2438,6 +2444,12 @@ void ScreenshotFeature::EnsureScreenshotApi()
 }
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+nlohmann::json ScreenshotFeature::HandleProviderBurst(const nlohmann::json& a_request, std::function<void(const nlohmann::json&)> a_notification)
+{
+	EnsureScreenshotApi();
+	return screenshotApi->HandleProviderBurst(*this, a_request, std::move(a_notification));
+}
+
 nlohmann::json ScreenshotFeature::HandleReferenceCapture(const nlohmann::json& a_request, std::function<void(const nlohmann::json&)> a_completion)
 {
 	EnsureScreenshotApi();
@@ -2549,6 +2561,12 @@ ScreenshotFeature::CaptureStartResult ScreenshotFeature::TryStartApiCapture(
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (a_effectiveDescriptor.contains("referenceOutputPath")) {
 			plan.outputPath = std::filesystem::u8path(a_effectiveDescriptor.at("referenceOutputPath").get<std::string>());
+			plan.exactPath = true;
+		}
+#endif
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_effectiveDescriptor.contains("providerOutputPath")) {
+			plan.outputPath = std::filesystem::u8path(a_effectiveDescriptor.at("providerOutputPath").get<std::string>());
 			plan.exactPath = true;
 		}
 #endif

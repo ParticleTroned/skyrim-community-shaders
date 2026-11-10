@@ -296,8 +296,7 @@ namespace StreamingTextures
 	{
 		const auto invalid = std::numeric_limits<double>::infinity();
 		const auto* material = StaticMaterial(geometry);
-		if (!material || !globals::state || !demand.eyeCount || demand.eyeCount > demand.eyes.size() || demand.frame == UINT32_MAX ||
-			globals::state->frameCount - demand.frame > 1 || GetTickCount64() - demand.sampledAtMs > 250)
+		if (!material || !globals::state || !demand.Fresh(globals::state->frameCount, GetTickCount64()))
 			return invalid;
 		double uvSpan = 1.0;
 		for (const auto& scale : material->texCoordScale) {

@@ -23,11 +23,13 @@ endfunction()
 extract_between("${_header}" "struct Settings" "static_assert(sizeof(SkylightingCB)" _buffer)
 extract_between("${_header}" "// cached variables" "/** @brief Queues a render-thread" _state)
 extract_between("${_header}" "bool IsRuntimeActive() const" "bool HasCurrentShadowData() const" _active)
+extract_between("${_header}" "std::optional<float> GetOcclusionCullBelowZ() const;" "/** @brief Selects a due capture quadrant" _cull_state)
 file(
     WRITE "${OUTPUT_DIRECTORY}/skylighting_buffer_under_test.h"
-    "${_buffer}\n${_state}\n${_active}"
+    "${_buffer}\n${_state}\n${_active}\n${_cull_state}"
 )
 
+extract_between("${_source}" "constexpr float kOcclusionBelowGridMargin" "struct ProbeGridPreset" _cull_constant)
 extract_between("${_source}" "uint ClampStableSliceCount(" "void ApplyOcclusionCornerFrustum(" _probe_policy)
 extract_between("${_source}" "bool IsUpdateDue(" "void ApplyPlatformDefaults(" _cadence)
 extract_between("${_source}" "void Skylighting::QueueResetSkylighting(" "void Skylighting::SetPerformanceCostMeasurementEnabled(" _lifecycle)
@@ -40,5 +42,5 @@ extract_between("${_source}" "const char* Skylighting::GetPerformanceCostMeasure
 extract_between("${_source}" "void Skylighting::SetupRenderTargetResources()" "\n\tdelete texOcclusion;" _target_policy)
 file(
     WRITE "${OUTPUT_DIRECTORY}/skylighting_lifecycle_under_test.h"
-    "${_probe_policy}\n${_cadence}\n${_reload}\n${_lifecycle}\n${_probe_pass}\n${_resources}\n${_grid}\n${_wait}\n${_target_policy}\n(void)renderer;\n}\n"
+    "${_cull_constant}\n${_probe_policy}\n${_cadence}\n${_reload}\n${_lifecycle}\n${_probe_pass}\n${_resources}\n${_grid}\n${_wait}\n${_target_policy}\n(void)renderer;\n}\n"
 )

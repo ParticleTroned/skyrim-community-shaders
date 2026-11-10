@@ -129,7 +129,8 @@ namespace NeuralRendering
 		void EndEvaluationTiming(ID3D12GraphicsCommandList* a_commandList, std::uint32_t a_region) noexcept;
 		/** Completes a copy-only diagnostic scope without claiming an inference sample. */
 		bool RecordTransportSubmission(const D3D12InteropSubmissionTiming& a_timing);
-		bool EndD3D12();
+		/** Private startup skips the D3D11 join; its caller must poll completion before resource reuse. */
+		bool EndD3D12(bool joinD3D11 = true);
 		bool AbortD3D12();
 		bool WaitForIdle(const std::shared_ptr<ExecutionEvidence>& a_evidence = {});
 		bool Shutdown(const std::shared_ptr<ExecutionEvidence>& a_evidence = {});

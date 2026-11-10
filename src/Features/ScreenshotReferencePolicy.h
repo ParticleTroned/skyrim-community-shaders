@@ -17,12 +17,27 @@ namespace CSX::Screenshot
 			Util::ToLowerAscii(path.extension().string()) != ".png" || id.empty() || id.size() > 128)
 			throw std::invalid_argument("reference capture requires an absolute PNG path and bounded requestId");
 		path = std::filesystem::weakly_canonical(path.parent_path()) / path.filename();
+		json output = { { "view", vr ? "side_by_side" : "source_native" },
+			{ "encoding", { { "format", "png" }, { "colourContract", "sdr_srgb" } } } };
+		if (const auto subrect = request.find("subrect"); subrect != request.end()) {
+			if (!subrect->is_object())
+				throw std::invalid_argument("reference subrect must be an object");
+			for (const auto* field : { "x", "y", "w", "h" }) {
+				const auto value = subrect->find(field);
+				if (value != subrect->end() && !value->is_number())
+					throw std::invalid_argument("reference subrect coordinates must be numbers");
+			}
+			// The shared capture validator checks finite bounds before queue admission.
+			output["crop"] = {
+				{ "x", subrect->value("x", 0.0f) }, { "y", subrect->value("y", 0.0f) },
+				{ "width", subrect->value("w", 1.0f) }, { "height", subrect->value("h", 1.0f) }
+			};
+		}
 		return {
 			{ "contractMajor", 1 }, { "clientId", "devbench.capture" }, { "commandId", id }, { "action", "capture" },
 			{ "useSettings", false }, { "referenceOutputPath", Util::PathToUtf8(path) },
 			{ "capture", { { "source", { { "kind", vr ? "hmd_submission" : "desktop_mirror" }, { "fallback", "reject" } } },
-							 { "outputs", json::array({ { { "view", vr ? "side_by_side" : "source_native" },
-											  { "encoding", { { "format", "png" }, { "colourContract", "sdr_srgb" } } } } }) },
+							 { "outputs", json::array({ output }) },
 							 { "destination", { { "policy", "absolute" }, { "directory", Util::PathToUtf8(path.parent_path()) }, { "overwrite", "never" } } },
 							 { "clipboard", "none" } } }
 		};

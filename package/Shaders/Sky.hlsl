@@ -1,21 +1,24 @@
 #include "Common/CharacterCategoryMask.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/VR.hlsli"
 
+#if defined(VSHADER)
 struct VS_INPUT
 {
 	float4 Position: POSITION0;
 
-#if defined(TEX) || defined(HORIZFADE)
+#	if defined(TEX) || defined(HORIZFADE)
 	float2 TexCoord: TEXCOORD0;
-#endif
+#	endif
 
 	float4 Color: COLOR0;
-#if defined(VR)
+#	if defined(VR)
 	uint InstanceID: SV_INSTANCEID;
-#endif  // VR
+#	endif  // VR
 };
+#endif
 
 struct VS_OUTPUT
 {
@@ -134,7 +137,8 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	endif  // OCCLUSION MOONMASK HORIZFADE
 
-	vsout.Position = mul(WorldViewProj[eyeIndex], inputPosition).xyww;
+	float4 skyClip = mul(WorldViewProj[eyeIndex], inputPosition);
+	vsout.Position = float4(skyClip.xy, FrameBuffer::FarPlaneClipZ(skyClip.w), skyClip.w);
 	vsout.WorldPosition = mul(World[eyeIndex], inputPosition);
 	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], inputPosition);
 
@@ -303,7 +307,10 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif  // OCCLUSION
 
 #	if defined(DITHER) && defined(TEX) && !defined(OCCLUSION)
-	psout.Color.xyz *= SharedData::adaptiveBalanceSettings.sunGlareIntensity;
+	psout.Color.xyz = Color::AdjustUtilityColor(psout.Color.xyz,
+						  SharedData::adaptiveBalanceSettings.appearance.sunGlareSaturation,
+						  SharedData::adaptiveBalanceSettings.appearance.sunGlareGammaOffset) *
+	                  SharedData::adaptiveBalanceSettings.sunGlareIntensity;
 #	endif
 
 #	if !defined(OCCLUSION) && !defined(MOONMASK)

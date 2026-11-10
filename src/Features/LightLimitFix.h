@@ -7,10 +7,12 @@
 #include "Utils/LazyShader.h"
 #include "Utils/PointLightFlags.h"
 
+#include "Features/LightLimitFix/LightAttach.h"
 #include "Features/LightLimitFix/ParticleLights.h"
 #include "Features/LightLimitFix/SceneLightSnapshot.h"
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -83,6 +85,8 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(LightData);
 	static_assert(sizeof(LightData) == 96);
+
+	eastl::vector<LightData> lightScratch;
 
 	struct ClusterAABB
 	{
@@ -164,7 +168,6 @@ public:
 
 	eastl::unique_ptr<Buffer> lights = nullptr;
 	eastl::unique_ptr<Buffer> clusters = nullptr;
-	eastl::unique_ptr<Buffer> lightIndexCounter = nullptr;
 	eastl::unique_ptr<Buffer> lightIndexList = nullptr;
 	eastl::unique_ptr<Buffer> lightGrid = nullptr;
 	eastl::unique_ptr<Buffer> contactShadowIndexCounter = nullptr;
@@ -298,7 +301,7 @@ public:
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	/** Includes deferred contact-shadow requests in the overview state. */
-	bool IsPerformanceToggleEnabled() const override { return settings.EnableParticleLights || IsContactShadowsRequested() || settings.EnableParticleContactShadows || settings.ShadowCulling.Active(); }
+	bool IsPerformanceToggleEnabled() const override { return settings.EnableParticleLights || IsContactShadowsRequested() || settings.EnableParticleContactShadows || settings.ShadowCulling.Active() || settings.SkipRedundantLightAttach; }
 	/** Changes effect switches while retaining particle and shadow quality controls. */
 	void SetPerformanceToggleEnabled(bool a_enabled) override
 	{
@@ -309,12 +312,17 @@ public:
 		settings.ShadowCulling.sun = a_enabled && defaults.ShadowCulling.sun;
 		settings.ShadowCulling.torch = a_enabled && defaults.ShadowCulling.torch;
 		settings.ShadowCulling.actors = a_enabled && defaults.ShadowCulling.actors;
+		settings.ShadowCulling.smallActorParts = a_enabled && defaults.ShadowCulling.smallActorParts;
+		settings.SkipRedundantLightAttach = a_enabled && defaults.SkipRedundantLightAttach;
+		LightLimitFixDetail::LightAttach::Invalidate();
 	}
 	virtual bool IsPerformanceCostMeasurementReady() const override;
-	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableParticleLights || settings.EnableContactShadows || settings.EnableParticleContactShadows || settings.ShadowCulling.Active(); }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableParticleLights || settings.EnableContactShadows || settings.EnableParticleContactShadows || settings.ShadowCulling.Active() || settings.SkipRedundantLightAttach; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
 		const Settings defaults{};
+		settings.SkipRedundantLightAttach = a_enabled && defaults.SkipRedundantLightAttach;
+		LightLimitFixDetail::LightAttach::Invalidate();
 		if (a_enabled) {
 			settings.EnableParticleLights = defaults.EnableParticleLights;
 			settings.EnableParticleLightsCulling = defaults.EnableParticleLightsCulling;
@@ -333,13 +341,14 @@ public:
 			settings.ShadowCulling.sun = defaults.ShadowCulling.sun;
 			settings.ShadowCulling.torch = defaults.ShadowCulling.torch;
 			settings.ShadowCulling.actors = defaults.ShadowCulling.actors;
+			settings.ShadowCulling.smallActorParts = defaults.ShadowCulling.smallActorParts;
 			return;
 		}
 
 		settings.EnableParticleLights = false;
 		SetContactShadowsEnabled(false);
 		settings.EnableParticleContactShadows = false;
-		settings.ShadowCulling.sun = settings.ShadowCulling.torch = settings.ShadowCulling.actors = false;
+		settings.ShadowCulling.sun = settings.ShadowCulling.torch = settings.ShadowCulling.actors = settings.ShadowCulling.smallActorParts = false;
 	}
 	virtual json CapturePerformanceCostMeasurementState() const override
 	{
@@ -358,7 +367,9 @@ public:
 			{ "ContactShadowClusterBudget", settings.ContactShadowClusterBudget },
 			{ "ParticleContactShadowBudget", settings.ParticleContactShadowBudget },
 			{ "StrictContactShadowBudget", settings.StrictContactShadowBudget },
-			{ "ShadowCulling", settings.ShadowCulling }
+			{ "ShadowCulling", settings.ShadowCulling },
+			{ "SkipRedundantLightAttach", settings.SkipRedundantLightAttach },
+			{ "LightAttachRefreshFrames", settings.LightAttachRefreshFrames }
 		};
 	}
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
@@ -382,6 +393,10 @@ public:
 		settings.StrictContactShadowBudget = a_state.value("StrictContactShadowBudget", settings.StrictContactShadowBudget);
 		if (a_state.contains("ShadowCulling"))
 			settings.ShadowCulling = LightLimitFixDetail::ShadowCulling::Parse(a_state.at("ShadowCulling"));
+		settings.SkipRedundantLightAttach = a_state.value("SkipRedundantLightAttach", settings.SkipRedundantLightAttach);
+		settings.LightAttachRefreshFrames = std::clamp(a_state.value("LightAttachRefreshFrames", settings.LightAttachRefreshFrames),
+			LightLimitFixDetail::LightAttach::MinimumRefreshFrames, LightLimitFixDetail::LightAttach::MaximumRefreshFrames);
+		LightLimitFixDetail::LightAttach::Invalidate();
 	}
 	virtual void DrawOverlay() override;
 	virtual bool IsOverlayVisible() const override { return settings.EnableLightsVisualisation; }
@@ -448,6 +463,8 @@ public:
 		uint ParticleContactShadowBudget = 1;
 		uint StrictContactShadowBudget = 4;
 		LightLimitFixDetail::ShadowCulling::Settings ShadowCulling;
+		bool SkipRedundantLightAttach = true;
+		int LightAttachRefreshFrames = LightLimitFixDetail::LightAttach::DefaultRefreshFrames;
 	};
 
 	uint clusterSize[3] = { 16 };

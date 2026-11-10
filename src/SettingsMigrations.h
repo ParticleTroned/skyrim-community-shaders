@@ -11,6 +11,24 @@
 
 namespace SettingsMigrations
 {
+	/** Preserve a legacy Reverse Z startup disable as its single depth-mode setting. */
+	inline void MigrateReverseZStartup(nlohmann::json& settings)
+	{
+		auto disabled = settings.find("Disable at Boot");
+		if (disabled == settings.end() || !disabled->is_object())
+			return;
+		auto entry = disabled->find("ReverseZ");
+		if (entry == disabled->end() || !entry->is_boolean())
+			return;
+		if (entry->get<bool>()) {
+			auto& reverseZ = settings["Reverse Z"];
+			if (!reverseZ.is_object())
+				reverseZ = nlohmann::json::object();
+			reverseZ["EnableReverseZBuffer"] = false;
+		}
+		disabled->erase("ReverseZ");
+	}
+
 	/** Utility numeric fields must remain finite when converted to renderer floats. */
 	inline bool IsFiniteUtilityNumber(const nlohmann::json& a_value)
 	{
@@ -84,6 +102,8 @@ namespace SettingsMigrations
 
 	inline constexpr std::string_view kUnifiedWaterSettingsName = "Unified Water";
 	inline constexpr std::string_view kUnifiedWaterFeatureName = "UnifiedWater";
+	inline constexpr std::string_view kVolumetricLightingSettingsName = "Volumetric Lighting";
+	inline constexpr std::string_view kVolumetricLightingFeatureName = "VolumetricLighting";
 	inline constexpr std::string_view kLegacyWaterAppearanceSettingsKey = "waterAppearance";
 	inline constexpr std::string_view kLegacyWaterAppearanceForceGlobalKey = "forceGlobal";
 	inline constexpr std::string_view kLegacyWaterProfileExplicitKey = "legacyWaterExplicit";
@@ -158,4 +178,7 @@ namespace SettingsMigrations
 	// source layer. The moved fields are removed from a_unifiedWaterLayer and returned
 	// as an AdaptiveBrightness feature patch; all structural water settings remain.
 	nlohmann::json ExtractAdaptiveBalanceWaterFeaturePatch(nlohmann::json& a_unifiedWaterLayer);
+
+	/** Move legacy godray appearance leaves into Adaptive Balance, retaining renderer settings. */
+	nlohmann::json ExtractAdaptiveBalanceGodrayFeaturePatch(nlohmann::json& a_volumetricLayer);
 }

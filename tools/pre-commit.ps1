@@ -35,7 +35,13 @@ $commonGitDirectory = Get-RepositoryPath -Arguments @(
 $cacheRoot = if ($env:CSX_PRE_COMMIT_HOME) {
     $env:CSX_PRE_COMMIT_HOME
 } else {
-    Join-Path $commonGitDirectory "pre-commit-cache"
+    $defaultCacheRoot = Join-Path $commonGitDirectory "pre-commit-cache"
+    if ($onWindows) {
+        # Python creates private hook directories; different Windows accounts cannot share them.
+        Join-Path $defaultCacheRoot ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+    } else {
+        $defaultCacheRoot
+    }
 }
 $toolRoot = Join-Path $commonGitDirectory "csx-tools"
 Initialize-CsxToolEnvironment `

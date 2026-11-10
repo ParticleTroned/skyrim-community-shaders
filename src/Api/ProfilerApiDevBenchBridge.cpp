@@ -1,6 +1,7 @@
 #include "Api/ProfilerApiDevBenchBridge.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Api/DevBenchJson.h"
 
 #	include "Api/DevBenchMainThreadDispatch.h"
 #	include "Api/ProfilerService.h"
@@ -450,7 +451,7 @@ namespace
 			output = Foundation().MakeError(json::object(), "internal_error", "unknown profiler API error", "dispatch", true);
 		}
 		try {
-			const auto serialized = output.dump();
+			const auto serialized = CSX::Api::DumpForDevBench(output);
 			a_write(a_sink, serialized.c_str());
 		} catch (...) {
 			a_write(a_sink, R"({"ok":false,"error":{"code":"serialization_failed"}})");
@@ -470,17 +471,18 @@ namespace CSX::Api::ProfilerApiDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Versioned CSX profiler API with paired snapshots and bounded captures, plus an independent CPU view. All timer values and histories are self time. snapshot/timers/history preserve their paired-frame semantics. cpu_snapshot/cpu_timers/cpu_history publish at each CPU capture frame boundary without waiting for GPU queries; use their own capturedFrameCount and publicationCount, and separate catalog indices. CPU views retain the last publication while idle and do not accept captureId. request_capture queues one next-frame request for mode cpu, gpu or both; requests combine, so another consumer or a bounded capture can require both sources. CPU-only requests issue no GPU timestamps unless another consumer requests GPU work. capture_export returns a bounded page of both CPU/GPU histories from one completed or cancelled capture; offset/limit select up to 128 timers, nextOffset continues the frozen catalog. Missing histories have null statistics. Progress quality distinguishes resolved frames from complete timings; invalid GPU frames prohibit self-time comparison. All inspection is non-mutating. Bounded captures and the legacy communityshaders.profiler tool remain unchanged.",
+			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. If the first D3D11 GPU frame acquisition fails, that entire frame has no D3D11 GPU sample; independent CPU timing continues. Bounded captures can require more rendered frames under query pressure. Versioned CSX profiler API with paired snapshots and bounded captures, plus an independent CPU view. All timer values and histories are self time. snapshot/timers/history preserve their paired-frame semantics. cpu_snapshot/cpu_timers/cpu_history publish at each CPU capture frame boundary without waiting for GPU queries; use their own capturedFrameCount and publicationCount, and separate catalog indices. CPU views retain the last publication while idle and do not accept captureId. request_capture queues one next-frame request for mode cpu, gpu or both; requests combine, so another consumer or a bounded capture can require both sources. CPU-only requests issue no GPU timestamps unless another consumer requests GPU work. capture_export returns a bounded page of both CPU/GPU histories from one completed or cancelled capture; offset/limit select up to 128 timers, nextOffset continues the frozen catalog. Missing histories have null statistics. Progress quality distinguishes resolved frames from complete timings; invalid GPU frames prohibit self-time comparison. All inspection is non-mutating. On VR, VR::NativeDepthReadback records CPU self time around the native visibility-result readback routine, excluding Advanced recovery. It includes native mapping, CPU copy and result-reset work; it does not isolate GPU waiting. VR::DepthCullingRecovery separately records Advanced coherence checks, validation and bounded recovery, including early exits. VR::DepthCullingProducerValidation records producer evidence/projection validation and pose capture after native downscaling; it excludes native downscaling, GPU culling and the separate submission hook. These scopes are available only in DevBench builds and require an active CPU capture; absent scopes do not prove zero cost. The legacy communityshaders.profiler tool remains available.",
 			"inputSchema":{"type":"object","required":["contractMajor","clientId","commandId","action"],"properties":{
 				"contractMajor":{"type":"integer","const":1},"clientId":{"type":"string","minLength":1,"maxLength":128},
 				"commandId":{"type":"string","minLength":1,"maxLength":128},"expectedBuildId":{"type":"string"},
 				"action":{"type":"string","enum":["registry","snapshot","timers","history","set_enabled","clear_history","start_capture","capture_status","cancel_capture","events","acknowledge_events","request_capture","cpu_snapshot","cpu_timers","cpu_history","capture_export"]},
 				"mode":{"type":"string","enum":["cpu","gpu","both"],"default":"both","description":"Sources requested by request_capture for one next frame; concurrent requests combine."},
-				"prefix":{"type":"string"},"timerIndex":{"type":"integer","minimum":0},"domain":{"type":"string","enum":["gpu","cpu"],"description":"Timing domain for self-time history samples."},
+				"prefix":{"type":"string","description":"Timer-name prefix filter; VR::NativeDepthReadback selects native readback, VR::DepthCullingRecovery selects Advanced validation and recovery, and VR::DepthCullingProducerValidation selects post-downscale producer validation."},"timerIndex":{"type":"integer","minimum":0},"domain":{"type":"string","enum":["gpu","cpu"],"description":"Timing domain for self-time history samples."},
 				"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":300,"description":"History samples or export timer page size; capture_export accepts at most 128 timers."},"enabled":{"type":"boolean"},
 				"frameCount":{"type":"integer","minimum":1,"maximum":300},"clearHistory":{"type":"boolean"},"captureId":{"type":"integer","minimum":1},
 				"afterEventId":{"type":"integer","minimum":0},"throughEventId":{"type":"integer","minimum":0}
-			}}
+			}},
+			"outputSchema":{"type":"object","description":"Invalid UTF-8 in output strings is replaced with U+FFFD; valid UTF-8 output is unchanged. If the first D3D11 GPU frame acquisition fails, that entire frame has no D3D11 GPU sample; independent CPU timing continues. Bounded captures can require more rendered frames under query pressure."}
 		})";
 		devBench->RegisterTool("communityshaders.profiler_api", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);

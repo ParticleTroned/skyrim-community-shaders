@@ -4,24 +4,24 @@
   "policyStatus": "provisional-calibration-v2",
   "evidenceDate": "2026-08-30",
   "baseTemplate": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-  "baseSha256": "57DCE96561F1AD9AEC882E26AC12121BD3EAFD4DBA6ABFCC86DAD0FC7D77A09E",
+  "baseSha256": "1023B7FE022186875C396D87527577817CFB28A5624EE6A0424DCC3E522A7F58",
   "runtimeSettingsContract": {
-    "revision": 14,
-    "sourceTreeSha256": "7BBE68C9857F6261476B514A2610AAC64171D0D8FC208F29516741A38710FC31"
+    "revision": 32,
+    "sourceTreeSha256": "DE60019E2ADC0509C7E9A8B58895D9F86932C6A8BD7E158A064A240F909574AF"
   },
   "presetCompatibility": {
     "contractVersion": 1,
     "target": {
       "runtime": "VR",
-      "minimumVersion": "3.20",
-      "maximumVersionExclusive": "3.21"
+      "minimumVersion": "3.21",
+      "maximumVersionExclusive": "3.22"
     }
   },
   "tiers": [
     {
       "tier": "Performance",
       "outputDirectory": "CSX Unified- Performance - Press END on PC to Customize",
-      "settingsSha256": "F0ABB34A565EAF69C28D91C88878A994B310D562FC001169BEF78F423DEDE283",
+      "settingsSha256": "7C50D4A8ADD51EB0520D7A59D59DBF6B8C551778D4C0C7BAB36B8749799AF10C",
       "qualificationRefs": [
         "vendor-capability-selection",
         "runtime-lane-comparison",
@@ -32,7 +32,7 @@
     {
       "tier": "Balanced",
       "outputDirectory": "CSX Unified- Balanced - Press END on PC to Customize",
-      "settingsSha256": "6883C3381CB6C48091C3D710E61D8B0DF1535317F01F8BEDB1BDE08F04915280",
+      "settingsSha256": "4CE965A42FE9886B61E5CE26B1F58AD507388F36DDC75428F420634F1E9B18B2",
       "qualificationRefs": [
         "vendor-capability-selection",
         "runtime-lane-comparison",
@@ -43,7 +43,7 @@
     {
       "tier": "Quality",
       "outputDirectory": "CSX Unified- Quality - Press END on PC to Customize",
-      "settingsSha256": "03B4A335701095281ED45BF39EE16FA7EDE546E32A5518969AE3FF5C12175F78",
+      "settingsSha256": "7301B26E41D64F049ACE93CD3DA12FC46F4D2B71F6E21D168105DFF0A48699F6",
       "qualificationRefs": [
         "vendor-capability-selection",
         "runtime-lane-comparison",

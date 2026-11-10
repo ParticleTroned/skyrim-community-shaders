@@ -4,6 +4,7 @@
 
 class ParticleLights;
 
+struct ReverseZ;
 struct CloudShadows;
 struct AdaptiveBrightness;
 struct Wetterness;
@@ -20,6 +21,9 @@ struct LightLimitFix;
 struct LinearLighting;
 struct LODBlending;
 struct InteriorSun;
+struct FurShells;
+struct SnowCover;
+struct SeasonalWeather;
 struct InverseSquareLighting;
 struct ScreenSpaceGI;
 struct ScreenSpaceShadows;
@@ -59,6 +63,8 @@ namespace SIE
 
 namespace globals
 {
+	/** Reports validated native VR upload hook readiness. */
+	bool IsVRFrameBufferUploadHookReady();
 	namespace d3d
 	{
 		extern ID3D11Device* device;
@@ -69,6 +75,7 @@ namespace globals
 	namespace features
 	{
 		extern AdaptiveBrightness adaptiveBrightness;
+		extern ReverseZ reverseZ;
 		extern CloudShadows cloudShadows;
 		extern Wetterness wetterness;
 		extern DynamicCubemaps dynamicCubemaps;
@@ -84,6 +91,9 @@ namespace globals
 		extern LinearLighting linearLighting;
 		extern LODBlending lodBlending;
 		extern InteriorSun interiorSun;
+		extern FurShells furShells;
+		extern SnowCover snowCover;
+		extern SeasonalWeather seasonalWeather;
 		extern InverseSquareLighting inverseSquareLighting;
 		extern ScreenSpaceGI screenSpaceGI;
 		extern ScreenSpaceShadows screenSpaceShadows;

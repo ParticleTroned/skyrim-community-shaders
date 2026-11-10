@@ -1,6 +1,7 @@
 #pragma once
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "FrameTelemetryRing.h"
 #	include "VRRenderScaleRetryTelemetry.h"
 #endif
 
@@ -8,7 +9,7 @@
 #include "../../State.h"
 #include "DLSSResultPolicy.h"
 #include "DLSSViewportCrop.h"
-#include "FrameTelemetryRing.h"
+#include "ReflexBackend.h"
 #include "StreamlineFrameTokenPublication.h"
 #include "VRRelatchDrainFence.h"
 #include "VRRelatchDrainPolicy.h"
@@ -30,9 +31,14 @@
 #include <sl_consts.h>
 #include <sl_dlss.h>
 #include <sl_matrix_helpers.h>
-#include <sl_reflex.h>
+#include <sl_pcl.h>
 #include <sl_version.h>
 #pragma warning(pop)
+
+namespace UpscalingTextures
+{
+	struct VRInputSourceDescriptions;
+}
 
 class Streamline
 {
@@ -81,6 +87,7 @@ public:
 		std::array<std::array<uint32_t, kDLSSPassEyeCount>, kDLSSPassRouteCount> attempts{};
 		std::array<std::array<uint32_t, kDLSSPassEyeCount>, kDLSSPassRouteCount> successes{};
 	};
+	/** Returns an invalid snapshot when development diagnostics are not built. */
 	[[nodiscard]] DLSSPassTelemetrySnapshot GetDLSSPassTelemetrySnapshot(
 		uint32_t a_frame) const noexcept;
 	struct DLSSViewportCropTelemetrySnapshot
@@ -105,6 +112,7 @@ public:
 		float motionVectorScaleX = 1.0f;
 		float motionVectorScaleY = 1.0f;
 	};
+	/** Returns an invalid snapshot when development diagnostics are not built. */
 	[[nodiscard]] DLSSViewportCropTelemetrySnapshot
 	GetDLSSViewportCropTelemetrySnapshot(
 		DLSSViewportRole a_role,
@@ -120,6 +128,7 @@ public:
 		return roleIndex < kVRDLSSViewportRoleCount ? roleIndex : static_cast<uint32_t>(DLSSViewportRole::FullEye);
 	}
 	static constexpr uint32_t MAX_RESOLUTION = 8192;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	mutable std::mutex dlssPassTelemetryMutex;
 	UpscalingTelemetry::FrameTelemetryRing<
 		DLSSPassTelemetrySnapshot,
@@ -130,6 +139,7 @@ public:
 		std::array<DLSSViewportCropTelemetrySnapshot, kDLSSPassEyeCount>,
 		kVRDLSSViewportRoleCount>
 		dlssViewportCropTelemetry{};
+#endif
 	HMODULE interposer = NULL;
 
 	// SL Interposer Functions
@@ -155,11 +165,9 @@ public:
 	PFun_slDLSSGetState* slDLSSGetState{};
 	PFun_slDLSSSetOptions* slDLSSSetOptions{};
 
-	// Reflex specific functions
-	PFun_slReflexGetState* slReflexGetState{};
-	PFun_slReflexSleep* slReflexSleep{};
-	PFun_slReflexSetOptions* slReflexSetOptions{};
+	// PCL marker delivery remains owned by Streamline.
 	PFun_slPCLSetMarker* slPCLSetMarker{};
+	PFun_slPCLSetOptions* slPCLSetOptions{};
 
 	using FrameTokenCoordinator =
 		StreamlineFrameTokenPublication::Coordinator<sl::FrameToken*>;
@@ -248,15 +256,7 @@ public:
 	};
 	std::array<VRDLSSSlotRecycleFence, kVRDLSSViewportRoleCount> pendingVRDLSSSlotRecycleIdleFences{};
 
-	struct ReflexOptionsCache
-	{
-		bool valid = false;
-		sl::ReflexMode mode = sl::ReflexMode::eOff;
-		uint32_t frameLimitUs = 0;
-		bool useMarkersToOptimize = false;
-	};
-	ReflexOptionsCache reflexOptionsCache{};
-	uint32_t lastReflexSleepFrame = UINT32_MAX;
+	Reflex::Backend reflexBackend;
 	DLSSResultPolicy::BudgetWarningThrottle dlssBudgetWarningThrottle;
 	bool lastDLSSFailureDuplicatedConstants = false;
 
@@ -547,6 +547,8 @@ public:
 	void Shutdown();
 	bool TryUpgradeInterface(void** a_interface);
 	bool TrySetD3DDevice(ID3D11Device* a_device);
+	/// Bind native Reflex to the unwrapped D3D11 rendering device.
+	void BindNativeReflex(ID3D11Device* a_device);
 	void MarkAdapterUnavailable(const char* a_reason);
 
 	bool CheckFeatures(IDXGIAdapter* a_adapter);
@@ -669,7 +671,8 @@ public:
 		const std::array<uint32_t, 2>& a_outputHeights,
 		const std::array<ID3D11Resource*, 2>& a_colorInputs) const noexcept;
 
-	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
+	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors,
+		const UpscalingTextures::VRInputSourceDescriptions* a_sourceDescriptions = nullptr);
 	bool UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 		ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 		uint32_t renderWidth, uint32_t renderHeight, uint32_t outputWidth, uint32_t outputHeight,

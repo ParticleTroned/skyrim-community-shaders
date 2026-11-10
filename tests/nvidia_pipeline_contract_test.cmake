@@ -124,8 +124,8 @@ foreach(_inactive_dlss_retention_contract IN ITEMS
     "exactInactiveFullEyeDLSSAllocationReady"
     "exactInactiveFoveatedCenterDLSSAllocationReady"
     "Streamline::DLSSViewportRole::FoveatedCenter"
-    "foveatedCenterColorIn[0]->resource.get()"
-    "foveatedCenterColorIn[1]->resource.get()"
+    "GetFoveatedCenterInput(0, UpscalingTextures::CenterInput::Color)->resource.get()"
+    "GetFoveatedCenterInput(1, UpscalingTextures::CenterInput::Color)->resource.get()"
 )
     string(FIND "${_upscaling}" "${_inactive_dlss_retention_contract}"
         _inactive_dlss_retention_position)
@@ -200,8 +200,8 @@ foreach(_required IN ITEMS
     "Streamline::DLSSViewportRole::FoveatedCenter"
     "cache.plan.IsValid()"
     "std::array<uint32_t, 2>"
-    "foveatedCenterColorIn[0]->resource.get()"
-    "foveatedCenterColorIn[1]->resource.get()"
+    "GetFoveatedCenterInput(0, UpscalingTextures::CenterInput::Color)->resource.get()"
+    "GetFoveatedCenterInput(1, UpscalingTextures::CenterInput::Color)->resource.get()"
 )
     string(FIND "${_inactive_dlss_proof_body}" "${_required}" _position)
     if(_position EQUAL -1)

@@ -12,8 +12,8 @@ class PerformanceTuningRenderer
 {
 public:
 	static void Render();
-	/** Draws a shared feature switch through the existing reversible toggle path. */
-	static void RenderFeatureEnabledControl(Feature* a_feature);
+	/** Draws the reversible feature switch; custom help never replaces a blocking reason. */
+	static void RenderFeatureEnabledControl(Feature* a_feature, const char* a_tooltip = nullptr);
 	/** Restores temporary profiling when no tuning panel or comparison is active. */
 	static void NotifyOverviewInactive();
 	/** Draws live counters, measurement controls and results; null compares all features. */
@@ -34,6 +34,12 @@ public:
 	static void NotifyMenuClosed();
 	static bool HasActiveMeasurements();
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	/** @brief Captures existing feature settings to invalidate externally changed comparisons. */
+	static nlohmann::json CaptureComparisonSettings();
+	/** @brief Shared gameplay/editor admission check for captured-setting comparisons. */
+	static const char* GetComparisonEnvironmentError();
+	/** @brief Shared scene/weather ownership check for reversible feature controls. */
+	static const char* GetComparisonFeatureBlockReason(Feature* feature);
 	/** Starts one surfaced feature's closed-menu cost comparison. */
 	static nlohmann::json StartDevBenchFeatureCostMeasurement(
 		std::string_view a_featureShortName);

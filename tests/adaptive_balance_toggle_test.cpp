@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -27,10 +28,13 @@ struct float3
 {
 	float x, y, z;
 };
+inline void to_json(json& output, const float3& value) { output = { value.x, value.y, value.z }; }
+inline void from_json(const json& input, float3& value) { value = { input.at(0).get<float>(), input.at(1).get<float>(), input.at(2).get<float>() }; }
+#include "Features/Bloom.h"
 #undef NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT
 #define NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(...)
 #define STATIC_ASSERT_ALIGNAS_16(Type) static_assert(alignof(Type) == 16)
-#include "Features/Bloom.h"
+#include "Features/AdaptiveBalanceBloomControls.h"
 #include "Features/SharedLighting.h"
 #include "Features/WaterAppearance.h"
 #include "Features/WeatherColorAdjustment.h"
@@ -45,6 +49,14 @@ struct LinearLighting
 
 namespace RE
 {
+	struct NiAVObject
+	{
+		NiAVObject* parent = nullptr;
+	};
+	struct BSRenderPass
+	{
+		NiAVObject* geometry = nullptr;
+	};
 	struct NiColor
 	{
 		std::array<float, 3> values{};
@@ -109,6 +121,7 @@ namespace RE
 		NiColor skyColor[17]{};
 		float windSpeed = 0.8f;
 		Weather* currentWeather = nullptr;
+		std::shared_ptr<NiAVObject> auroraRoot;
 		static Sky* GetSingleton()
 		{
 			static Sky sky;
@@ -118,10 +131,24 @@ namespace RE
 	float GetSecondsSinceLastFrame() { return 1.0f / 60.0f; }
 }
 const void* GetCurrentPlayerCell(RE::PlayerCharacter* player) { return player->hasCell ? player : nullptr; }
+namespace SIE::ShaderCache
+{
+	enum class EffectShaderFlags : uint32_t
+	{
+		SkyObject = 1 << 24
+	};
+}
 namespace globals
 {
 	struct State
 	{
+#include "adaptive_balance_effect_permutation_members.h"
+		uint32_t currentVertexDescriptor = 0;
+		struct
+		{
+			uint32_t ExtraShaderDescriptor = 0;
+		} permutationData;
+		void UpdateEffectShaderPermutation(RE::BSRenderPass* pass);
 		bool menuOpen = false;
 		std::atomic<uint32_t> frameCountAtomic{ 1 };
 		bool IsMainOrLoadingMenuOpen() const { return menuOpen; }
@@ -160,7 +187,8 @@ struct AdaptiveBrightness
 
 	bool IsRuntimeAvailable() const;
 	bool IsRuntimeEnabled() const;
-	float GetEffectiveGodrayFinalBrightness() const;
+	float GetEffectiveVolumetricClarity() const;
+	VolumetricLightingTuning::Profile GetEffectiveGodrayProfile(bool) const;
 	float GetEffectiveMoonReflectionStrength() const;
 	void SetEnabled(bool enabled);
 	PerFrameData GetCommonBufferData() const;
@@ -201,7 +229,7 @@ namespace logger
 struct WeatherUpdateHook
 {
 #include "adaptive_balance_weather_hook_under_test.h"
-	static inline void (*func)(RE::Sky*, float) = [](RE::Sky*, float) {};
+	static inline void (*func)(RE::Sky*) = [](RE::Sky*) {};
 	static inline WeatherColorAdjustment<RE::NiColor> effect;
 	static inline WeatherColorAdjustment<RE::NiColor> statics;
 	static inline WeatherColorAdjustment<RE::NiColor> upper;
@@ -230,60 +258,59 @@ void CheckWeatherColors()
 	profile.effectBrightness = 0.5f;
 	profile.skyStaticBrightness = 2.0f;
 	for (int i = 0; i < 3; ++i) {
-		WeatherUpdateHook::thunk(&sky, 0.0f);
+		WeatherUpdateHook::thunk(&sky);
 		assert(effect == effectSource * 0.5f && statics == staticSource * 2.0f);
 		assert(sky.skyColor[0] == staticSource);
 	}
 	profile.effectBrightness = 0.0f;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == RE::NiColor{});
 	profile.effectBrightness = 1.5f;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == effectSource * 1.5f);
 	balance.SetEnabled(false);
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == effectSource && statics == staticSource);
 	balance.SetEnabled(true);
 	profile.advanced = false;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == effectSource && statics == staticSource);
 	profile.advanced = true;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
-	WeatherUpdateHook::func = [](RE::Sky* live, float delta) {
-		assert(delta == 0.25f);
+	WeatherUpdateHook::thunk(&sky);
+	WeatherUpdateHook::func = [](RE::Sky* live) {
 		assert((live->skyColor[RE::TESWeather::kEffectLighting] == RE::NiColor{ { 0.2f, 0.4f, 0.6f } }));
 		live->skyColor[RE::TESWeather::kEffectLighting] = { { 0.4f, 0.2f, 0.8f } };
 	};
-	WeatherUpdateHook::thunk(&sky, 0.25f);
+	WeatherUpdateHook::thunk(&sky);
 	const RE::NiColor newWeather{ { 0.4f, 0.2f, 0.8f } };
 	assert(effect == newWeather * 1.5f);
-	WeatherUpdateHook::func = [](RE::Sky*, float) {};
+	WeatherUpdateHook::func = [](RE::Sky*) {};
 	effect = staticSource;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == staticSource * 1.5f);
 	balance.throwProfileResolution = true;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == staticSource && statics == staticSource && logger::weatherWarnings == 1);
 	balance.throwProfileResolution = false;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == staticSource * 1.5f && !WeatherUpdateHook::loggedFailure);
 	for (bool* gate : { &balance.loaded, &balance.performanceCostMeasurementEnabled }) {
 		*gate = false;
-		WeatherUpdateHook::thunk(&sky, 0.0f);
+		WeatherUpdateHook::thunk(&sky);
 		assert(effect == staticSource && statics == staticSource);
 		*gate = true;
-		WeatherUpdateHook::thunk(&sky, 0.0f);
+		WeatherUpdateHook::thunk(&sky);
 	}
 	globals::state->menuOpen = true;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == staticSource && statics == staticSource);
 	globals::state->menuOpen = false;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	sky.currentWeather = nullptr;
-	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky);
 	assert(effect == staticSource && statics == staticSource);
-	WeatherUpdateHook::thunk(nullptr, 0.0f);
+	WeatherUpdateHook::thunk(nullptr);
 
 	WeatherColorAdjustment<RE::NiColor> adjustment;
 	RE::Sky otherSky;
@@ -1011,15 +1038,63 @@ void CheckAtmosphereMigrationAndValidation()
 	assert(!ValidateAdaptiveBalanceVisuals({ { "cloudBrightness", 1 }, { "unknown", 1 } }).empty());
 }
 
+void CheckAuroraDrawScope()
+{
+	globals::State state;
+	constexpr auto auroraFlag = static_cast<uint32_t>(globals::State::ExtraShaderDescriptors::IsAurora);
+	static_assert(auroraFlag == (1 << 23));
+	constexpr uint32_t otherFlags = ~auroraFlag;
+	static_assert((otherFlags & auroraFlag) == 0);
+	RE::Sky sky;
+	const auto originalRoot = std::make_shared<RE::NiAVObject>();
+	sky.auroraRoot = originalRoot;
+	RE::NiAVObject nested{ sky.auroraRoot.get() }, ribbon{ &nested }, mist;
+	RE::BSRenderPass pass{ &ribbon };
+	const auto previousSky = globals::game::sky;
+	globals::game::sky = &sky;
+	state.currentVertexDescriptor = static_cast<uint32_t>(SIE::ShaderCache::EffectShaderFlags::SkyObject);
+	state.permutationData.ExtraShaderDescriptor = otherFlags;
+	state.UpdateEffectShaderPermutation(&pass);
+	assert(state.permutationData.ExtraShaderDescriptor == (otherFlags | auroraFlag));
+	for (int condition = 0; condition < 6; ++condition) {
+		state.permutationData.ExtraShaderDescriptor = otherFlags | auroraFlag;
+		pass.geometry = condition == 0 ? &mist : condition == 1 ? nullptr :
+		                                                          &ribbon;
+		state.currentVertexDescriptor = condition == 2 ? 0 : static_cast<uint32_t>(SIE::ShaderCache::EffectShaderFlags::SkyObject);
+		globals::game::sky = condition == 3 ? nullptr : &sky;
+		sky.auroraRoot = condition == 4 ? nullptr : originalRoot;
+		state.UpdateEffectShaderPermutation(condition == 5 ? nullptr : &pass);
+		assert(state.permutationData.ExtraShaderDescriptor == otherFlags);
+	}
+	sky.auroraRoot = std::make_shared<RE::NiAVObject>();
+	state.permutationData.ExtraShaderDescriptor |= auroraFlag;
+	state.UpdateEffectShaderPermutation(&pass);
+	assert(state.permutationData.ExtraShaderDescriptor == otherFlags);
+	nested.parent = sky.auroraRoot.get();
+	state.UpdateEffectShaderPermutation(&pass);
+	assert(state.permutationData.ExtraShaderDescriptor == (otherFlags | auroraFlag));
+	globals::game::sky = previousSky;
+	std::cout << "Aurora draw scope: descendants, unrelated draws, absent sky/root/geometry, replaced roots and stale flags passed\n";
+}
+
 void CheckAppearanceProfiles()
 {
 	using namespace AdaptiveBalanceAppearance;
 	const Settings defaults;
 	const json defaultJson = defaults;
 	assert(defaultJson == json(defaultJson.get<Settings>()));
-	assert(!defaultJson.contains("moonIntensity") && !defaultJson.contains("auroraIntensity"));
+	assert(!defaultJson.contains("moonIntensity"));
+	assert(defaultJson.at("auroraIntensity") == 1.0f && defaultJson.at("auroraCurve") == 1.0f);
+	auto legacyJson = defaultJson;
+	legacyJson.erase("auroraIntensity");
+	legacyJson.erase("auroraCurve");
+	assert(json(legacyJson.get<Settings>()) == defaultJson);
 	for (const auto& field : kScalars) {
 		assert(defaults.*field.member == field.neutral);
+		Settings authored;
+		authored.*field.member = field.maximum;
+		const json encoded = authored;
+		assert(encoded.get<Settings>().*field.member == field.maximum);
 		Settings invalid;
 		invalid.*field.member = std::numeric_limits<float>::quiet_NaN();
 		Sanitize(invalid);
@@ -1036,6 +1111,26 @@ void CheckAppearanceProfiles()
 			assert(ValidateAdaptiveBalanceVisuals({ { "appearance", { { field.name, value } } } }).empty());
 		for (const auto& value : std::vector<json>{ low - 0.001, high + 0.001, true, "1", nullptr, std::numeric_limits<double>::infinity() })
 			assert(!ValidateAdaptiveBalanceVisuals({ { "appearance", { { field.name, value } } } }).empty());
+		if (field.minimum < 0.0f) {
+			AdaptiveBrightness balance;
+			balance.settings.globalProfile.appearance.*field.member = 0.2f;
+			AdaptiveBrightness::ProfileSettings day, night;
+			day.advanced = night.advanced = true;
+			day.appearance.*field.member = 0.1f;
+			night.appearance.*field.member = 0.5f;
+			balance.testProfileBlend = { &day, &night, 0.25f };
+			assert(Close(balance.GetCommonBufferData().appearance.*field.member, 0.4f));
+			AdaptiveBrightness::LocationOverride location;
+			location.profile.advanced = true;
+			location.profile.appearance.*field.member = -0.1f;
+			balance.testLocationLayers = { &location };
+			assert(Close(balance.GetCommonBufferData().appearance.*field.member, 0.1f));
+			location.layered = true;
+			assert(Close(balance.GetCommonBufferData().appearance.*field.member, 0.3f));
+			balance.SetEnabled(false);
+			assert(balance.GetCommonBufferData().appearance.*field.member == 0.0f);
+			continue;
+		}
 		if (field.neutral == 0.0f)
 			continue;
 		AdaptiveBrightness balance;
@@ -1071,7 +1166,7 @@ void CheckAppearanceProfiles()
 		const auto decoded = encoded.get<Settings>();
 		assert((decoded.*field.member).y == 0.5f);
 	}
-	for (const auto& value : std::vector<json>{ nullptr, true, json::array(), 1.0, json{ { "missingControl", 1.0 } }, json{ { "moonIntensity", 1.0 } }, json{ { "auroraIntensity", 1.0 } } })
+	for (const auto& value : std::vector<json>{ nullptr, true, json::array(), 1.0, json{ { "missingControl", 1.0 } }, json{ { "moonIntensity", 1.0 } } })
 		assert(!ValidateAdaptiveBalanceVisuals({ { "appearance", value } }).empty());
 
 	for (const auto& malformed : std::vector<json>{ nullptr, true, json::array(),
@@ -1130,31 +1225,85 @@ void CheckSkyGradientOwnership()
 	appearance.skyTopCurve = 2.0f;
 	appearance.skyTopTint = { 1.0f, 0.5f, 0.0f };
 	for (int frame = 0; frame < 3; ++frame) {
-		WeatherUpdateHook::thunk(&sky, 0);
+		WeatherUpdateHook::thunk(&sky);
 		const auto& color = sky.skyColor[RE::TESWeather::kSkyUpper];
 		assert(Close(color[0], 0.125f) && Close(color[1], 0.25f) && color[2] == 0.0f);
 	}
 	balance.SetEnabled(false);
-	WeatherUpdateHook::thunk(&sky, 0);
+	WeatherUpdateHook::thunk(&sky);
 	assert(sky.skyColor[RE::TESWeather::kSkyUpper] == source);
 	balance.SetEnabled(true);
-	WeatherUpdateHook::thunk(&sky, 0);
+	WeatherUpdateHook::thunk(&sky);
 	const RE::NiColor external{ { 0.3f, 0.3f, 0.3f } };
 	sky.skyColor[RE::TESWeather::kSkyUpper] = external;
 	balance.SetEnabled(false);
-	WeatherUpdateHook::thunk(&sky, 0);
+	WeatherUpdateHook::thunk(&sky);
 	assert(sky.skyColor[RE::TESWeather::kSkyUpper] == external);
-	WeatherUpdateHook::thunk(nullptr, 0);
+	WeatherUpdateHook::thunk(nullptr);
 	balance = {};
 }
 
-void CheckFinalGodrayBrightness()
+void CheckGodrayContextOwnership()
+{
+	AdaptiveBrightness balance;
+	balance.settings.godrays.exterior = { .ShaftIntensity = 2.0f, .Opacity = 0.7f, .Saturation = 1.4f, .CustomColorContribution = 0.6f, .CustomColorRed = 0.2f, .CustomColorGreen = 0.4f, .CustomColorBlue = 0.8f };
+	balance.settings.godrays.interior = { .ShaftIntensity = 0.4f, .Opacity = 1.3f, .Saturation = 0.2f, .CustomColorContribution = 0.3f, .CustomColorRed = 0.9f, .CustomColorGreen = 0.1f, .CustomColorBlue = 0.5f };
+	balance.settings.globalProfile.advanced = true;
+	balance.settings.globalProfile.appearance = { .godrayIntensity = 0.8f, .godrayOpacity = 1.2f, .godrayTint = { 1.0f, 0.0f, 0.3f }, .godrayTintAmount = 0.4f, .godraySaturation = 1.3f };
+	auto day = AdaptiveBrightness::ProfileSettings::AdjustmentDefaults();
+	auto night = day;
+	day.advanced = night.advanced = true;
+	day.appearance.godrayIntensity = 0.5f;
+	night.appearance.godrayIntensity = 2.0f;
+	night.appearance.godrayTint = { 0.1f, 0.8f, 0.3f };
+	night.appearance.godrayTintAmount = 0.8f;
+	balance.testProfileBlend = { .from = &day, .to = &night, .factor = 0.35f };
+	const auto saved = balance.settings.godrays;
+	for (const bool interior : { false, true }) {
+		const auto appearance = balance.GetEffectiveSharedLightingSettings().appearance;
+		const VolumetricLightingTuning::Profile layer{
+			.ShaftIntensity = appearance.godrayIntensity,
+			.Opacity = appearance.godrayOpacity,
+			.Saturation = appearance.godraySaturation,
+			.CustomColorContribution = appearance.godrayTintAmount,
+			.CustomColorRed = appearance.godrayTint.x,
+			.CustomColorGreen = appearance.godrayTint.y,
+			.CustomColorBlue = appearance.godrayTint.z
+		};
+		const auto expected = VolumetricLightingTuning::ComposeProfiles(interior ? saved.interior : saved.exterior, layer);
+		assert(balance.GetEffectiveGodrayProfile(interior) == expected);
+	}
+	balance.SetEnabled(false);
+	assert(balance.GetEffectiveGodrayProfile(false) == VolumetricLightingTuning::Profile{});
+	assert(balance.GetEffectiveGodrayProfile(true) == VolumetricLightingTuning::Profile{});
+	assert(balance.settings.godrays == saved);
+	balance.SetEnabled(true);
+	assert(balance.GetEffectiveGodrayProfile(false) != VolumetricLightingTuning::Profile{});
+	const json serialized = saved;
+	assert(serialized.get<AdaptiveBalanceGodray::Profiles>() == saved);
+	const auto schema = BuildAdaptiveBalanceGodraySchema();
+	for (const char* context : { "exterior", "interior" }) {
+		for (const auto& field : VolumetricLightingTuning::kProfileFields) {
+			for (const float value : { 0.0f, field.maximum })
+				assert(ValidateAdaptiveBalanceVisuals({ { "godrays", { { context, { { field.name, value } } } } } }).empty());
+			assert(!ValidateAdaptiveBalanceVisuals({ { "godrays", { { context, { { field.name, field.maximum + 1.0f } } } } } }).empty());
+			assert(!ValidateAdaptiveBalanceVisuals({ { "godrays", { { context, { { field.name, "invalid" } } } } } }).empty());
+			assert(schema["properties"][context]["properties"][field.name]["maximum"] == field.maximum);
+		}
+	}
+	assert(!ValidateAdaptiveBalanceVisuals({ { "godrays", { { "unknown", json::object() } } } }).empty());
+	assert(!ValidateAdaptiveBalanceVisuals({ { "godrays", { { "exterior", { { "ShaftIntensity", std::numeric_limits<double>::infinity() } } } } } }).empty());
+}
+
+void CheckVolumetricClarity()
 {
 	AdaptiveBrightness balance;
 	assert(balance.settings.godrayFinalBrightness == 1.0f);
+	assert(balance.settings.volumetricClarity == 0.0f);
 	balance.settings.globalProfile.advanced = false;
 	balance.throwProfileResolution = true;
 	balance.settings.godrayFinalBrightness = 4.5f;
+	balance.settings.volumetricClarity = 0.75f;
 	for (unsigned flags = 0; flags < 32; ++flags) {
 		balance.loaded = (flags & 1) != 0;
 		balance.SetEnabled((flags & 2) != 0);
@@ -1162,8 +1311,9 @@ void CheckFinalGodrayBrightness()
 		globals::state->menuOpen = (flags & 8) != 0;
 		RE::PlayerCharacter::GetSingleton()->hasCell = (flags & 16) != 0;
 		const bool active = (flags & 7) == 7 && !(flags & 8) && (flags & 16);
-		assert(balance.GetEffectiveGodrayFinalBrightness() == (active ? 4.5f : 1.0f));
+		assert(balance.GetEffectiveVolumetricClarity() == (active ? 0.75f : 0.0f));
 		assert(balance.settings.godrayFinalBrightness == 4.5f);
+		assert(balance.settings.volumetricClarity == 0.75f);
 	}
 	globals::state->menuOpen = false;
 	RE::PlayerCharacter::GetSingleton()->hasCell = true;
@@ -1184,13 +1334,25 @@ void CheckFinalGodrayBrightness()
 		// Runtime inputs keep nonfinite cases meaningful under /fp:fast.
 		volatile float runtimeInput = input;
 		balance.settings.godrayFinalBrightness = runtimeInput;
-		assert(balance.GetEffectiveGodrayFinalBrightness() == expected);
 		assert(AdaptiveBalanceGodray::SanitizeFinalBrightness(runtimeInput) == expected);
 		assert(AdaptiveBalanceGodray::IsValidFinalBrightness(runtimeInput) == valid);
 	}
 	assert(balance.profileResolutions == 0);
+	for (const auto& [input, expected, valid] : std::array<BrightnessCase, 8>{ { { 0.0f, 0.0f, true }, { 0.5f, 0.5f, true }, { 1.0f, 1.0f, true },
+			 { -0.01f, 0.0f, false }, { 1.01f, 1.0f, false },
+			 { std::numeric_limits<float>::infinity(), 0.0f, false },
+			 { -std::numeric_limits<float>::infinity(), 0.0f, false },
+			 { std::numeric_limits<float>::quiet_NaN(), 0.0f, false } } }) {
+		volatile float runtimeInput = input;
+		balance.settings.volumetricClarity = runtimeInput;
+		assert(balance.GetEffectiveVolumetricClarity() == expected);
+		assert(AdaptiveBalanceGodray::SanitizeClarity(runtimeInput) == expected);
+		assert(ValidateAdaptiveBalanceVisuals({ { "volumetricClarity", input } }).empty() == valid);
+	}
+	for (const auto& value : std::vector<json>{ true, nullptr, "1" })
+		assert(!ValidateAdaptiveBalanceVisuals({ { "volumetricClarity", value } }).empty());
 	for (const auto value : { 0.0, 1.0, 5.0 })
-		assert(ValidateAdaptiveBalanceVisuals({ { "godrayFinalBrightness", value } }).empty());
+		assert(!ValidateAdaptiveBalanceVisuals({ { "godrayFinalBrightness", value } }).empty());
 	for (const auto& value : std::vector<json>{ -0.01, 5.01, true, nullptr, "1",
 			 std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN() })
 		assert(!ValidateAdaptiveBalanceVisuals({ { "godrayFinalBrightness", value } }).empty());
@@ -1202,6 +1364,19 @@ void CheckVanillaPointLightRequirements()
 	globals::features::linearLighting.runtimeEnabled = false;
 	assert(!balance.NeedsVanillaPointLightData());
 	assert(balance.profileResolutions == 0);
+
+	for (const auto& field : AdaptiveBalanceAppearance::kScalars) {
+		auto authored = AdaptiveBalanceAppearanceSettings{};
+		authored.*field.member = field.maximum;
+		if (!AdaptiveBalanceAppearance::UsesClassifiedPointLights(authored))
+			continue;
+		balance.settings.globalProfile.appearance = authored;
+		assert(balance.GetCommonBufferData().appearance.pointLightColorEnabled == 1);
+		assert(balance.NeedsVanillaPointLightData());
+		balance.settings.globalProfile.appearance = {};
+		assert(balance.GetCommonBufferData().appearance.pointLightColorEnabled == 0);
+		assert(!balance.NeedsVanillaPointLightData());
+	}
 
 	const auto checkDraws = [&](bool expected) {
 		const auto resolutions = balance.profileResolutions;
@@ -1278,10 +1453,52 @@ void CheckVanillaPointLightRequirements()
 	checkDraws(false);
 }
 
+void CheckEditableBloomPresets()
+{
+	AdaptiveBrightness balance;
+	auto& profile = balance.settings.globalProfile;
+	profile.bloom.EnhancementIntensity = 2.25f;
+	profile.bloom.HaloRadius = 7.0f;
+	Bloom::SelectPreset(profile.bloom, profile.bloomPresets, 1);
+	assert(profile.bloom.EnhancementIntensity == 4.0f);
+	profile.bloom.HaloRadius = 8.0f;
+	Bloom::SelectPreset(profile.bloom, profile.bloomPresets, 0);
+	assert(profile.bloom.EnhancementIntensity == 2.25f && profile.bloom.HaloRadius == 7.0f);
+	Bloom::SelectPreset(profile.bloom, profile.bloomPresets, 1);
+	assert(profile.bloom.HaloRadius == 8.0f);
+	Bloom::ResetPreset(profile.bloom, profile.bloomPresets);
+	assert(profile.bloom.HaloRadius == 5.0f);
+	Bloom::SelectPreset(profile.bloom, profile.bloomPresets, 0);
+	assert(profile.bloom.HaloRadius == 7.0f);
+	assert(balance.GetEffectiveBloomSettings().Enabled);
+	balance.settings.bloomEnabled = false;
+	assert(!balance.GetEffectiveBloomSettings().Enabled && profile.bloom.EnhancementIntensity == 2.25f);
+	balance.settings.bloomEnabled = true;
+	assert(balance.GetEffectiveBloomSettings().Enabled);
+	const json patch{ { "preset", 2 }, { "reset", true }, { "profile", { { "HaloRadius", 9.0 }, { "BloomTint", { 0.5, 0.6, 0.7 } } } } };
+	assert(AdaptiveBalanceBloomControls::Apply(patch, profile.bloom, profile.bloomPresets).empty());
+	assert(profile.bloom.HaloRadius == 9.0f && profile.bloomPresets.selected == 2);
+	const json encodedSlots = profile.bloomPresets;
+	const auto restoredSlots = encodedSlots.get<Bloom::PresetSlots>();
+	assert(json(restoredSlots) == encodedSlots);
+	assert(restoredSlots.profiles[0].HaloRadius == 7.0f && restoredSlots.profiles[1].HaloRadius == 5.0f);
+	for (auto invalid : std::vector<json>{ json{ { "preset", -1 } }, json{ { "preset", 3 } }, json{ { "reset", 1 } },
+			 json{ { "profile", { { "HaloRadius", 15 } } } }, json{ { "profile", { { "BloomTint", { 1, true, 1 } } } } },
+			 json{ { "preset", 1 }, { "profile", { { "missing", 1 } } } } }) {
+		assert(!AdaptiveBalanceBloomControls::Apply(invalid, profile.bloom, profile.bloomPresets).empty());
+		assert(profile.bloom.HaloRadius == 9.0f && profile.bloomPresets.selected == 2);
+	}
+	assert(ValidateAdaptiveBalanceVisuals({ { "bloomEnabled", false }, { "bloom", patch } }).empty());
+	std::cout << "Editable bloom slots, reset isolation, bypass retention and atomic API validation passed\n";
+}
+
 int main()
 {
+	CheckEditableBloomPresets();
 	CheckVanillaPointLightRequirements();
-	CheckFinalGodrayBrightness();
+	CheckVolumetricClarity();
+	CheckGodrayContextOwnership();
+	CheckAuroraDrawScope();
 	CheckAppearanceProfiles();
 	CheckSkyGradientOwnership();
 	CheckWeatherColors();

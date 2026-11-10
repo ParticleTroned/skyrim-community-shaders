@@ -77,7 +77,7 @@ namespace
 				.available = profiler->IsInitialized() ? 1u : 0u,
 				.enabled = profiler->IsUserEnabled() ? 1u : 0u,
 				.capturing = profiler->IsCpuCaptureActive() ? 1u : 0u,
-				.timerCount = static_cast<std::uint32_t>(profiler->GetImmediateCpuResults().size()),
+				.timerCount = static_cast<std::uint32_t>(profiler->GetImmediateCpuResults(false).size()),
 				.capturedFrameCount = profiler->GetCapturedCpuFrameCount(),
 				.publicationCount = profiler->GetCpuPublicationCount(),
 				.historyCapacity = Profiler::kHistorySize,
@@ -92,7 +92,7 @@ namespace
 		std::uint32_t GetCpuTimerCount() const
 		{
 			return IsOwnerThread() && globals::profiler ?
-			           static_cast<std::uint32_t>(globals::profiler->GetImmediateCpuResults().size()) :
+			           static_cast<std::uint32_t>(globals::profiler->GetImmediateCpuResults(false).size()) :
 			           0u;
 		}
 
@@ -111,7 +111,7 @@ namespace
 				return Status::kWrongThread;
 			if (!globals::profiler)
 				return Status::kUnavailable;
-			return ReadHistory(globals::profiler->GetImmediateCpuResults(), a_index, TimingDomain::kCpu, a_sampleIndex, a_output);
+			return ReadHistory(globals::profiler->GetImmediateCpuResults(false), a_index, TimingDomain::kCpu, a_sampleIndex, a_output);
 		}
 
 		Status GetSnapshot(Snapshot001& a_output) const
@@ -126,7 +126,7 @@ namespace
 				.available = profiler->IsInitialized() ? 1u : 0u,
 				.enabled = profiler->IsUserEnabled() ? 1u : 0u,
 				.capturing = profiler->IsEnabled() ? 1u : 0u,
-				.timerCount = static_cast<std::uint32_t>(profiler->GetResults().size()),
+				.timerCount = static_cast<std::uint32_t>(profiler->GetResults(false).size()),
 				.historyCapacity = Profiler::kHistorySize,
 				.maximumTimers = Profiler::kMaxTimers,
 				.frameLatency = Profiler::kFrameLatency,
@@ -147,7 +147,8 @@ namespace
 		std::uint32_t GetTimerCount() const
 		{
 			return IsOwnerThread() && globals::profiler ?
-				static_cast<std::uint32_t>(globals::profiler->GetResults().size()) : 0u;
+			           static_cast<std::uint32_t>(globals::profiler->GetResults(false).size()) :
+			           0u;
 		}
 
 		Status GetTimer(std::uint32_t a_index, TimerDescriptor001& a_output) const
@@ -163,7 +164,7 @@ namespace
 		{
 			if (!IsOwnerThread() || !globals::profiler)
 				return 0;
-			const auto* timers = globals::profiler->GetBoundedCaptureResults(a_captureId);
+			const auto* timers = globals::profiler->GetBoundedCaptureResults(a_captureId, false);
 			return timers ? static_cast<std::uint32_t>(timers->size()) : 0u;
 		}
 
@@ -183,7 +184,7 @@ namespace
 				return Status::kWrongThread;
 			if (!globals::profiler)
 				return Status::kUnavailable;
-			const auto* timers = globals::profiler->GetBoundedCaptureResults(a_captureId);
+			const auto* timers = globals::profiler->GetBoundedCaptureResults(a_captureId, false);
 			return timers ? ReadHistory(*timers, a_timerIndex, a_domain, a_sampleIndex, a_output) : Status::kCaptureNotFound;
 		}
 
@@ -236,14 +237,13 @@ namespace
 		}
 
 	public:
-
 		Status GetHistory(std::uint32_t a_timerIndex, TimingDomain a_domain, std::uint32_t a_sampleIndex, float& a_output) const
 		{
 			if (!IsOwnerThread())
 				return Status::kWrongThread;
 			if (!globals::profiler)
 				return Status::kUnavailable;
-			return ReadHistory(globals::profiler->GetResults(), a_timerIndex, a_domain, a_sampleIndex, a_output);
+			return ReadHistory(globals::profiler->GetResults(false), a_timerIndex, a_domain, a_sampleIndex, a_output);
 		}
 
 		Status SetEnabled(bool a_enabled) const

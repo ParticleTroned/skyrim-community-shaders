@@ -125,12 +125,38 @@ namespace
 			f.Present(40);
 		}
 		const int flatQueryStart = Profiler::kFrameLatency * (1 + 2 * Profiler::kMaxTimers);
-		for (const int failedQuery : { 0, flatQueryStart, flatQueryStart + 1 }) {
+		for (const int failedQuery : { 0, 1, 2, flatQueryStart, flatQueryStart + 1 }) {
 			Fixture f(true, failedQuery);
 			for (uint32_t frame = 0; frame < 20; ++frame)
 				f.Present(frame);
 			Check(std::ranges::any_of(f.profiler.GetFlatTiming()->samples, [](const auto& s) { return s.hasCpu && !s.hasGpu; }), "missing GPU query prevented CPU fallback");
 		}
+	}
+
+	void LateReadinessWaitsForNextPresent()
+	{
+		Fixture f;
+		f.context.pending = true;
+		for (uint32_t frame = 0; frame <= Profiler::kFrameLatency; ++frame)
+			f.Present(frame);
+		const auto reads = f.context.reads;
+		const auto writes = f.context.writes;
+		f.context.pending = false;
+		Check(f.profiler.BeginPass("Flat::Late", false), "refused flat frame lost CPU fallback");
+		f.profiler.EndPass(false);
+		Check(f.context.reads == reads && f.context.writes == writes, "named pass reopened a frame refused at Present");
+		for (uint32_t frame = 4; frame < 12; ++frame)
+			f.Present(frame);
+		bool skipped = false;
+		bool recovered = false;
+		for (const auto& sample : f.profiler.GetFlatTiming()->samples) {
+			if (sample.frame == 4)
+				skipped = sample.hasCpu && sample.resolved && !sample.hasGpu;
+			if (sample.frame == 5)
+				recovered = sample.hasCpu && sample.resolved && sample.hasGpu;
+		}
+		Check(skipped && recovered, "flat timing did not skip the refused frame and recover at the next Present");
+		Check(f.profiler.GetResults().empty(), "late flat pass entered paired GPU history");
 	}
 
 	void SharedPassRingAndUnsupportedPath()
@@ -197,6 +223,22 @@ namespace
 		Check(f.context.activeDisjointQueries == 0, "release left a whole-frame disjoint interval open");
 	}
 
+	void AcceptedPresentCadence()
+	{
+		Util::FlatFrameTiming::History history;
+		history.Complete({}, 100, true);
+		Check(!history.samples.back().hasFrame, "first Present invented frame cadence");
+		history.Complete({}, 125, true);
+		Check(history.samples.back().hasFrame && history.samples.back().frameMs == 25, "Present wait missing from cadence");
+		const auto epoch = history.epoch;
+		history.Complete({}, 120, true);
+		Check(history.epoch > epoch && !history.samples.back().hasFrame, "backward clock reused cadence");
+		history.Complete({}, 145, false);
+		Check(history.samples.empty(), "rejected Present retained cadence");
+		history.Complete({}, 170, true);
+		Check(!history.samples.back().hasFrame, "cadence bridged a rejected Present");
+	}
+
 	void MeasurementAssociation()
 	{
 		using namespace Util::FlatFrameTiming;
@@ -253,8 +295,10 @@ int main()
 		RuntimeIsolation();
 		WholeFrameBoundaries();
 		PendingAndFailure();
+		LateReadinessWaitsForNextPresent();
 		ResetAndDisable();
 		SharedPassRingAndUnsupportedPath();
+		AcceptedPresentCadence();
 		MeasurementAssociation();
 		std::cout << "Flat frame timing and VR isolation cases passed\n";
 		return 0;

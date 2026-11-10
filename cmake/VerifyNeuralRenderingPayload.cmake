@@ -7,15 +7,20 @@ set(_nr_shader_files
     CopyCompactDepthGuideCS.hlsl
     CopyDepthGuideCS.hlsl
     ColorCommon.hlsli
+    NvidiaReferenceColor.hlsli
     ColorExposureCS.hlsl
     ColorMeasureCS.hlsl
     ColorPrepareCS.hlsl
     ColorReconstructCS.hlsl
+    SceneCategorySelection.hlsli
+    PeripheralCompression.hlsli
     ModelResolutionCommon.hlsli
+    ModelResolutionGuided.hlsli
     ModelResolutionCoverageCS.hlsl
     ModelResolutionStorage.hlsli
     ModelResolutionPrepareCS.hlsl
-    ModelResolutionReconstructCS.hlsl)
+    ModelResolutionReconstructCS.hlsl
+    SceneCategorySelection.hlsli)
 file(GLOB_RECURSE _nr_entries LIST_DIRECTORIES TRUE
     RELATIVE "${_nr_shader_root}" "${_nr_shader_root}/*")
 foreach(_entry IN LISTS _nr_entries)

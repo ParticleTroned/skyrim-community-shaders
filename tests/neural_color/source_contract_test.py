@@ -46,10 +46,10 @@ class Contracts(unittest.TestCase):
         observer = source.split("void ObserveVRFrameBufferUpload(", 1)[1].split(
             "void InstallVRFrameBufferUploadHook()", 1)[0]
         self.assertIn("if (context == d3d::context", observer)
-        self.assertIn("if (source)", observer)
-        self.assertLess(observer.index("game::mappedFrameBuffer = nullptr"), observer.index("if (source)"))
+        self.assertIn("if (source && destination)", observer)
+        self.assertLess(observer.index("game::mappedFrameBuffer = nullptr"), observer.index("if (source && destination)"))
         self.assertIn("resource == *game::perFrame && subresource == 0", observer)
-        self.assertLess(observer.index("CacheFramebuffer(source)"), observer.index("context->Unmap("))
+        self.assertLess(observer.index("CacheFramebuffer(&corrected)"), observer.index("context->Unmap("))
         install = source.split("void InstallVRFrameBufferUploadHook()", 1)[1].split("struct ID3D11DeviceContext_Map", 1)[0]
         self.assertIn("if (!game::isVR || installed)", install)
         self.assertIn("SKSE::RUNTIME_VR_1_4_15", install)
@@ -151,12 +151,32 @@ class Contracts(unittest.TestCase):
         self.assertIn("SetPredication(predicate_.Get(), predicateValue_)", guard)
         self.assertIn("for (auto& readback : readbacks) readback.Abandon()", source)
 
+    def test_sdk_comparisons_preserve_face_budget_boundaries(self):
+        import json
+        source = (ROOT / "src/Features/NeuralRenderingFeature.cpp").read_text()
+        descriptor = json.loads(source.split('R"schema(', 1)[1].split(')schema"', 1)[0])
+        experiments = descriptor["inputSchema"]["properties"]["experiments"]["properties"]
+        self.assertIn("sdk_diagnostics", descriptor["inputSchema"]["properties"]["action"]["enum"])
+        self.assertFalse(experiments["nativeControlMask"]["default"])
+        self.assertFalse(experiments["nativeJitter"]["default"])
+        self.assertIn("nvidia_reference", experiments["upscaled_center"]["properties"]["transform"]["enum"])
+        renderer = (NR / "Renderer.cpp").read_text()
+        self.assertIn("NativeControlMaskEnabled()", renderer)
+        self.assertIn("NativeJitterEnabled()", renderer)
+        self.assertIn('defines.emplace_back("NR_NATIVE_CONTROL_MASK", "1")', renderer)
+        preparation = (NR / "ModelResolution.cpp").read_text()
+        self.assertIn("if (input.peripheralCompression.Active() || geometry->packedCrops.count)", preparation)
+        self.assertIn("adapted.jitterPixels = {};", preparation)
+        self.assertIn("mapping.faceDetail = {};", renderer)
+        self.assertIn('shaderDefines.emplace_back("NR_NVIDIA_REFERENCE", "1")', (NR / "ColorPipeline.cpp").read_text())
+        self.assertIn("#ifdef NR_NVIDIA_REFERENCE", (SHADERS / "ColorCommon.hlsli").read_text())
+
     def test_feature_and_packaging(self):
         source = (ROOT / "src/Feature.cpp").read_text()
         self.assertIn("&NeuralRenderingFeature::Instance()", source)
         self.assertTrue((ROOT / "features/Neural Rendering/CORE").exists())
         ini = ROOT / "features/Neural Rendering/Shaders/Features/NeuralRendering.ini"
-        self.assertIn("Version = 1-6-0", ini.read_text())
+        self.assertRegex(ini.read_text(), r"(?m)^Version = \d+-\d+-\d+$")
         ui = (ROOT / "src/Features/NeuralRenderingFeature.cpp").read_text()
         self.assertIn('"communityshaders.nr_color"', ui)
         save = ui[ui.index("void NeuralRenderingFeature::SaveSettings"):ui.index("void NeuralRenderingFeature::RestoreDefaultSettings")]

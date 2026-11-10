@@ -95,9 +95,19 @@ public:
 
 	bool updateShader = true;
 	bool settingCustomShader = false;
+	// Receipts describe the custom stages actually bound during the current technique setup.
+	struct TechniqueShaderSelection
+	{
+		RE::BSGraphics::VertexShader* vertex = nullptr;
+		RE::BSGraphics::PixelShader* pixel = nullptr;
+		uint32_t vertexDescriptor = 0, pixelDescriptor = 0;
+		bool pixelCleared = false;
+	} techniqueShaderSelection;
 	// A deferred draw must be withheld if neither compatible pixel variant is ready.
 	bool deferredPixelShaderMissing = false;
 	RE::BSShader* currentShader = nullptr;
+	// Only an explicitly bound custom pixel stage proves which shared resources it consumes.
+	RE::BSShader::Type selectedCustomPixelShaderType = RE::BSShader::Type::None;
 	std::string adapterDescription = "";
 
 	uint32_t currentVertexDescriptor = 0;
@@ -356,6 +366,14 @@ public:
 		CharacterExcluded = 1 << 14,
 		CharacterFocusFadeShift = 15,
 		CharacterFocusFadeMask = 255 << CharacterFocusFadeShift,
+		IsAurora = 1 << 23,
+		NoSnow = 1u << 24,
+		NoFoliageTint = 1u << 25,
+		SnowRooftop = 1u << 26,
+		SnowLODTree = 1u << 27,
+		SnowInactive = 1u << 28,
+		NoSnowMelt = 1u << 29,
+
 		CharacterFace = 0b01 << CharacterCategoryShift,
 		CharacterSkin = 0b10 << CharacterCategoryShift,
 		CharacterHair = 0b11 << CharacterCategoryShift
@@ -414,6 +432,8 @@ public:
 	 * @param a_pass Lighting render pass to inspect.
 	 */
 	void UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass);
+	/** Flags sky-object draws under the active sky's aurora root; clears stale flags on every effect draw. */
+	void UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass);
 	bool HasDirectionalShadows() const;
 
 	struct PermutationCB
@@ -425,7 +445,8 @@ public:
 
 		bool operator==(const PermutationCB& other) const
 		{
-			return PixelShaderDescriptor == other.PixelShaderDescriptor &&
+			return VertexShaderDescriptor == other.VertexShaderDescriptor &&
+			       PixelShaderDescriptor == other.PixelShaderDescriptor &&
 			       ExtraShaderDescriptor == other.ExtraShaderDescriptor &&
 			       ExtraFeatureDescriptor == other.ExtraFeatureDescriptor;
 		}
@@ -458,7 +479,7 @@ public:
 		float PBRMetalHighlightScale;   // matches HLSL SharedData::PBRMetalHighlightScale
 		uint HasDirectionalShadows;     // Exterior or interior sun directional shadow availability
 		float VolumetricLightingSaturation;
-		float GodrayFinalBrightness;
+		float VolumetricLightingReserved;
 		float SSSHumanMaleIntensity;
 		float SSSHumanMaleSaturation;
 		float SSSHumanMaleBrightness;
@@ -477,6 +498,7 @@ public:
 		float4 VRFoveationCenterOffsets;  // xy=left eye offset, zw=right eye offset
 
 		float4 VolumetricLightingCustomColor;  // rgb=custom color, w=contribution
+		float4 VolumetricLightingClarity;      // x=haze suppression, y=shaft intensity, zw=reserved
 	};
 #ifdef _MSC_VER
 #	pragma warning(pop)
@@ -484,9 +506,10 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(SharedDataCB);
 	static_assert(offsetof(SharedDataCB, RefractionScale) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VolumetricLightingSaturation) % 16 == 0);
-	static_assert(offsetof(SharedDataCB, GodrayFinalBrightness) == 516);
+	static_assert(offsetof(SharedDataCB, VolumetricLightingReserved) == 516);
 	static_assert(offsetof(SharedDataCB, SSSHumanMaleIntensity) == 520);
-	static_assert(sizeof(SharedDataCB) == 672);
+	static_assert(sizeof(SharedDataCB) == 688);
+	static_assert(offsetof(SharedDataCB, VolumetricLightingClarity) == 672);
 	static_assert(offsetof(SharedDataCB, VolumetricShadowsEnabled) == offsetof(SharedDataCB, SSSHumanFemaleBaseSaturation) + sizeof(float));
 	static_assert(offsetof(SharedDataCB, VolumetricLightingOpacity) == offsetof(SharedDataCB, VolumetricShadowsEnabled) + sizeof(uint));
 	static_assert(offsetof(SharedDataCB, AmbientSHR) % 16 == 0);

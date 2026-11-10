@@ -75,6 +75,12 @@ namespace
 		assert(Key(first) != Key(second));
 		assert(StripLineDirectives("").empty());
 		assert(StripLineDirectives("#line 2\r\ncode\r\n") == "code\r\n");
+		const std::string blankLines = "\n \t\r\nfloat x;\n\nfloat y;";
+		assert(StripLineDirectives(blankLines) == "float x;\nfloat y;");
+		assert(Key(StripLineDirectives(blankLines)) == Key(StripLineDirectives(first)));
+		assert(Key(blankLines) != Key(first));
+		assert(StripLineDirectives(" \t\r\n\t ").empty());
+		assert(StripLineDirectives("#pragma line\nx = 1; // #line 3\n") == "#pragma line\nx = 1; // #line 3\n");
 	}
 
 	void ConcurrentOwner()

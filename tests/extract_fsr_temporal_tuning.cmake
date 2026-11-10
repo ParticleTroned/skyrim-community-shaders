@@ -27,3 +27,9 @@ extract_between("${_upscaling}" "void from_json(const json& a_json, Settings& a_
 extract_between("${_fidelity}" "ffxReturnCode_t ConfigureFidelityFXProtected(" "ffxReturnCode_t DispatchFrameGenerationProtected(" "temporal_provider_calls_under_test.h")
 extract_between("${_fidelity}" "FidelityFX::LifecycleResult FidelityFX::RecordRuntimeProviderResult(" "bool FidelityFX::IsRuntimeUpscalerInteropReady(" "temporal_provider_result_under_test.h")
 extract_between("${_fidelity_header}" "struct TemporalTuningSnapshot" "/** Queues validated settings;" "temporal_snapshot_under_test.h")
+
+extract_between("${_fidelity}" "ffxReturnCode_t QueryFidelityFXProtected(" "bool QueryRuntimeUpscalerVersionId(" "temporal_query_under_test.h")
+
+extract_between("${_fidelity}" "bool RuntimeProviderMatchesVersion(" "void RuntimeFfxMessage(" "temporal_provider_identity_under_test.h")
+extract_between("${_fidelity}" "void FidelityFX::QuarantineRuntimeUpscalerForSession(" "FidelityFX::RuntimeUpscalerFramePath FidelityFX::GetRuntimeUpscalerProviderFramePath(" "temporal_quarantine_under_test.h")
+extract_between("${_fidelity}" "std::string FidelityFX::GetRuntimeUpscalerProviderName() const" "std::string FidelityFX::GetRuntimeUpscalerRequestedVersionString() const" "temporal_provider_name_under_test.h")

@@ -740,11 +740,13 @@ namespace
 			output.supportedFSRRuntimeMask =
 				Bit(static_cast<std::uint32_t>(FSRRuntime::kFSR3)) |
 				Bit(static_cast<std::uint32_t>(FSRRuntime::kFSR4));
-			if (!globals::features::upscaling.fidelityFX.IsRuntimeFsr4Available()) {
-				output.fsrRuntimeUnavailableConditions[static_cast<std::uint32_t>(FSRRuntime::kFSR4)] =
-					globals::features::upscaling.fidelityFX.HasRuntimeUpscalerSupportCheckResult() ?
-						kConditionProviderUnavailable :
-						kConditionProviderCheckPending;
+			const auto& fsr = globals::features::upscaling.fidelityFX;
+			if (!fsr.IsRuntimeUpscalerPresent() || fsr.IsRuntimeUpscalerFailureLatched() ||
+				fsr.IsRuntimeFsr4FailureLatched() ||
+				(fsr.HasRuntimeUpscalerSupportCheckResult() && !fsr.IsRuntimeUpscalerSupportConfirmed())) {
+				output.fsrRuntimeUnavailableConditions[static_cast<std::uint32_t>(FSRRuntime::kAutomatic)] = kConditionProviderUnavailable;
+			} else if (!fsr.HasRuntimeUpscalerSupportCheckResult()) {
+				output.fsrRuntimeUnavailableConditions[static_cast<std::uint32_t>(FSRRuntime::kAutomatic)] = kConditionProviderCheckPending;
 			}
 			output.maximumEventPageSize = kMaximumEventPageSize;
 			output.eventRetentionCapacity = static_cast<std::uint32_t>(kMaximumEvents);
@@ -916,8 +918,8 @@ namespace
 				observed |= kConditionProviderCheckPending;
 			else if ((currentCapabilities.availableMethodMask & methodBit) == 0)
 				observed |= kConditionProviderUnavailable;
-			// FSR4 is a preference. FidelityFX keeps the FSR method usable by
-			// selecting its host or FSR3 provider when FSR4 is unavailable.
+			// Automatic runtime is a preference; host FSR3 preserves the FSR method
+			// when the runtime cannot provide compatible contexts.
 			const auto fsrRuntimeFallbackConditions =
 				CSX::Api::ResolveFSRRuntimeFallbackConditions(
 					a_request.target,

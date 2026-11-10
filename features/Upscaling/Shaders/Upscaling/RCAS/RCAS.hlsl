@@ -23,15 +23,13 @@
 
 #define FSR_RCAS_LIMIT (0.25 - (1.0 / 16.0))
 
-#ifdef MOTION_ADAPTIVE
-#	include "Upscaling/MotionSharpening.hlsli"
-#endif
+#include "Upscaling/MotionSharpening.hlsli"
 
 cbuffer RCASConfig : register(b0)
 {
 	float sharpness;
-	float3 pad;
 #ifdef MOTION_ADAPTIVE
+	float3 pad;
 	uint4 outputRect;
 	uint4 motionRect;
 	float2 motionToOutputPixels;
@@ -41,6 +39,10 @@ cbuffer RCASConfig : register(b0)
 	float strengthCap;
 	float maximumGain;
 	float motionPad;
+#else
+	float fixedLimit;
+	uint outputSplitX;
+	float pad;
 #endif
 };
 
@@ -80,11 +82,11 @@ RWTexture2D<float4> Dest : register(u0);
 		strengthCap, Motion.Load(int3(motionPixel, 0)), motionToOutputPixels);
 	float pixelSharpness = MotionSharpeningGain(strength, maximumGain);
 #else
-	float3 b = Source.Load(int3(sp + int2(0, -1), 0)).rgb;
-	float3 d = Source.Load(int3(sp + int2(-1, 0), 0)).rgb;
+	float3 b = Source.Load(int3(FixedSharpeningColorPixel(sp + int2(0, -1), DTid.x, outputSplitX), 0)).rgb;
+	float3 d = Source.Load(int3(FixedSharpeningColorPixel(sp + int2(-1, 0), DTid.x, outputSplitX), 0)).rgb;
 	float3 e = Source.Load(int3(sp, 0)).rgb;
-	float3 f = Source.Load(int3(sp + int2(1, 0), 0)).rgb;
-	float3 h = Source.Load(int3(sp + int2(0, 1), 0)).rgb;
+	float3 f = Source.Load(int3(FixedSharpeningColorPixel(sp + int2(1, 0), DTid.x, outputSplitX), 0)).rgb;
+	float3 h = Source.Load(int3(FixedSharpeningColorPixel(sp + int2(0, 1), DTid.x, outputSplitX), 0)).rgb;
 #endif
 
 	// Rename (32-bit) or regroup (16-bit).

@@ -3,6 +3,9 @@
 #include "Globals.h"
 #include "Profiler.h"
 #include "State.h"
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+#	include "Diagnostics/NvPerf.h"
+#endif
 
 #ifdef TRACY_ENABLE
 ScopedGpuPass::ScopedGpuPass(const tracy::SourceLocationData* a_sourceLocation, std::string_view a_name, const Util::PassTimingHandle& a_capture, bool a_detailOnly) :
@@ -26,7 +29,11 @@ ScopedGpuPass::ScopedGpuPass(const tracy::SourceLocationData* a_sourceLocation, 
 	if (state && state->tracyCtx)
 		gpuZone.emplace(state->tracyCtx, a_sourceLocation, true);
 
-	if (state && state->frameAnnotations) {
+	if (state && (state->frameAnnotations
+#	if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+					 || NvPerf::RangesActive()
+#	endif
+						 )) {
 		state->BeginDrawEvent(a_name);
 		annotationOpen = true;
 	}
@@ -67,7 +74,11 @@ ScopedGpuPass::ScopedGpuPass(std::string_view a_name, const Util::PassTimingHand
 	}
 #endif
 
-	if (state && state->frameAnnotations) {
+	if (state && (state->frameAnnotations
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+					 || NvPerf::RangesActive()
+#endif
+						 )) {
 		state->BeginDrawEvent(a_name);
 		annotationOpen = true;
 	}

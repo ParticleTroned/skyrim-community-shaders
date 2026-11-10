@@ -51,12 +51,14 @@ namespace Skylighting
 		return GetArraySize(params) / float3(GetArrayDims(params));
 	}
 
+	/** Fades at the probe-grid edge using a position relative to eye zero. */
 	float GetFadeOutFactor(float3 positionMS)
 	{
 		if (!IsEnabled())
 			return 0.0;
 
-		float3 uvw = saturate(positionMS / GetArraySize(SharedData::skylightingSettings) + .5);
+		float3 positionMSAdjusted = positionMS - SharedData::skylightingSettings.PosOffset.xyz;
+		float3 uvw = saturate(positionMSAdjusted / GetArraySize(SharedData::skylightingSettings) + .5);
 		float3 dists = min(uvw, 1 - uvw);
 		float edgeDist = min(dists.x, min(dists.y, dists.z));
 		return saturate(edgeDist * 20);

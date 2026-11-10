@@ -51,7 +51,123 @@ int main(int argc, char** argv)
 	std::filesystem::create_directories(users);
 	auto& manager = *SettingsOverrideManager::GetSingleton();
 	const std::string adaptive = "AdaptiveBrightness";
-	if (test == "saved-values") {
+	if (test == "godray-context-migration") {
+		const json exterior = VolumetricLightingTuning::Profile{ .ShaftIntensity = 1.8f, .Opacity = 0.7f, .Saturation = 1.4f, .CustomColorContribution = 0.4f, .CustomColorRed = 0.1f, .CustomColorGreen = 0.3f, .CustomColorBlue = 0.8f };
+		const json interior = VolumetricLightingTuning::Profile{ .ShaftIntensity = 0.6f, .Opacity = 1.2f, .Saturation = 0.4f };
+		json source = { { "ExteriorGodrays", exterior }, { "InteriorGodrays", interior }, { "ExteriorEnabled", false }, { "InteriorQuality", 3 } };
+		json root = { { "Volumetric Lighting", source } };
+		root["Adaptive Balance"] = { { "enabled", false } };
+		root["Adaptive Balance"]["globalProfile"]["appearance"]["godrayIntensity"] = 0.7;
+		Check(SettingsMigrations::MigrateAdaptiveBalanceRootLayer(root), "Context godray migration did not run");
+		Check(root["Adaptive Balance"]["godrays"] == json({ { "exterior", exterior }, { "interior", interior } }), "Context godray values changed");
+		Check(root["Adaptive Balance"]["enabled"] == false && root["Adaptive Balance"]["globalProfile"]["appearance"]["godrayIntensity"] == 0.7, "Migration changed master or profile tuning");
+		Check(root["Volumetric Lighting"] == json({ { "ExteriorEnabled", false }, { "InteriorQuality", 3 } }), "Renderer settings changed or duplicate appearance remains");
+		Check(!SettingsMigrations::MigrateAdaptiveBalanceRootLayer(root), "Godray migration repeats");
+		root["Volumetric Lighting"] = source;
+		root["Adaptive Balance"]["godrays"]["exterior"]["ShaftIntensity"] = 0.25;
+		root["Adaptive Balance"]["godrays"]["interior"]["Opacity"] = "invalid";
+		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(root);
+		Check(root["Adaptive Balance"]["godrays"]["exterior"]["ShaftIntensity"] == 0.25, "Canonical context did not win");
+		Check(root["Adaptive Balance"]["godrays"]["interior"]["Opacity"] == interior["Opacity"], "Malformed destination did not recover");
+		json flat = { { "GodrayIntensity", 1.5 }, { "GodrayShaftIntensity", 2.0 }, { "GodrayOpacity", 0.6 }, { "CustomColorRed", 0.2 }, { "ExteriorQuality", 1 } };
+		const auto patch = SettingsMigrations::ExtractAdaptiveBalanceGodrayFeaturePatch(flat);
+		Check(patch["godrays"]["exterior"] == patch["godrays"]["interior"], "Flat godray settings did not seed both contexts");
+		Check(patch["godrays"]["exterior"]["ShaftIntensity"] == 2.0 && !patch["godrays"]["exterior"].contains("Saturation"), "Flat alias precedence or partial migration changed");
+		Check(flat == json({ { "ExteriorQuality", 1 } }), "Flat legacy fields survived migration");
+	} else if (test == "godray-context-import") {
+		const json legacy = {
+			{ "Adaptive Brightness", { { "profiles", json::array() }, { "volumetricClarity", 0.25 } } },
+			{ "Volumetric Lighting", { { "ExteriorGodrays", { { "Opacity", 0.4 } } }, { "InteriorGodrays", { { "Saturation", 0.3 } } } } }
+		};
+		const auto path = Fixture::root / "old-preset.json";
+		Write(path, legacy);
+		json imported;
+		std::string status;
+		Check(ReadJsonPresetFile(path, imported, status), "Legacy settings preset did not import");
+		Check(imported["Adaptive Balance"]["godrays"] == json({ { "exterior", { { "Opacity", 0.4 } } }, { "interior", { { "Saturation", 0.3 } } } }), "Preset import lost legacy context tuning");
+		Check(imported["Adaptive Balance"]["volumetricClarity"] == 0.25 && imported["Adaptive Balance"].contains("profiles"), "Preset import lost existing Adaptive Balance values");
+		Check(Read(path) == legacy, "Import rewrote the source preset");
+	} else if (test == "godray-context-renderer-reset") {
+		const json appearance = { { "ExteriorGodrays", { { "Opacity", 0.4 } } }, { "InteriorGodrays", { { "Saturation", 0.3 } } } };
+		auto legacy = appearance;
+		legacy["ExteriorQuality"] = 1;
+		Write(users / "VolumetricLighting.user.json", legacy);
+		manager.DiscoverOverrides();
+		json current = json::object();
+		Check(manager.LoadUserOverride(adaptive, current), "Legacy appearance did not load before reset");
+		Fixture::failedWrite = "VolumetricLighting.user.json";
+		Check(!manager.DeleteUserOverride("VolumetricLighting"), "Failed renderer reset reported success");
+		Check(Read(users / "VolumetricLighting.user.json") == legacy, "Failed renderer reset lost settings");
+		Fixture::failedWrite.clear();
+		Check(manager.DeleteUserOverride("VolumetricLighting"), "Renderer reset failed");
+		Check(Read(users / "VolumetricLighting.user.json") == appearance, "Renderer reset discarded pending appearance or retained quality");
+		Check(manager.SaveUserOverride(adaptive, current, json::object()), "Appearance could not migrate after renderer reset");
+		Check(!std::filesystem::exists(users / "VolumetricLighting.user.json"), "Appearance-only legacy source survived retirement");
+		Check(Read(users / "AdaptiveBrightness.user.json")["godrays"] == current["godrays"], "Renderer reset lost durable appearance");
+	} else if (test == "godray-context-disabled") {
+		const json legacy = { { "ExteriorGodrays", { { "Opacity", 0.4 } } } };
+		Write(providers / "Rays_VolumetricLighting.json", { { "_metadata", { { "enabled", false } } }, { "ExteriorGodrays", { { "Opacity", 0.2 } } } });
+		Write(users / "VolumetricLighting.user.json", legacy);
+		manager.DiscoverOverrides();
+		json current = json::object();
+		Check(manager.ApplyOverrides(adaptive, current) == 0 && !manager.LoadUserOverride(adaptive, current), "Disabled godray provider or user layer applied");
+		Check(manager.SaveUserOverride(adaptive, current, json::object()), "Empty destination save failed");
+		Check(Read(users / "VolumetricLighting.user.json") == legacy, "Unapplied legacy godrays were retired");
+	} else if (test == "godray-context-providers") {
+		Write(providers / "Rays_VolumetricLighting.json", { { "ExteriorGodrays", { { "ShaftIntensity", 1.8 }, { "Opacity", 0.4 } } }, { "InteriorGodrays", { { "Saturation", 0.6 } } }, { "ExteriorQuality", 1 } });
+		manager.DiscoverOverrides();
+		Check(manager.HasFeatureOverrides(adaptive), "Volumetric provider did not route to Adaptive Balance");
+		json current;
+		Check(manager.ApplyOverrides(adaptive, current) == 1, "Godray provider did not apply");
+		Check(current["godrays"]["exterior"]["ShaftIntensity"] == 1.8 && current["godrays"]["interior"]["Saturation"] == 0.6, "Routed context values changed");
+		json renderer;
+		manager.ApplyOverrides("VolumetricLighting", renderer);
+		Check(renderer == json({ { "ExteriorQuality", 1 } }), "Appearance remained in renderer provider");
+	} else if (test == "godray-context-users" || test == "godray-context-failure") {
+		const json legacy = { { "ExteriorGodrays", { { "ShaftIntensity", 2.0 }, { "Opacity", 0.4 } } }, { "InteriorGodrays", { { "Saturation", 0.3 } } }, { "ExteriorQuality", 1 } };
+		Write(users / "VolumetricLighting.user.json", legacy);
+		Write(users / "AdaptiveBrightness.user.json", { { "godrays", { { "exterior", { { "ShaftIntensity", 0.5 } } } } } });
+		manager.DiscoverOverrides();
+		manager.CleanupStaleUserOverrides();
+		Check(std::filesystem::exists(users / "VolumetricLighting.user.json"), "Provider cleanup deleted unmigrated godray values");
+		Check(manager.HasUserOverride(adaptive), "Godray user settings are not discoverable");
+		json current = json::object();
+		Check(manager.LoadUserOverride(adaptive, current), "Godray user values were not loaded");
+		Check(current["godrays"]["exterior"]["ShaftIntensity"] == 0.5 && current["godrays"]["exterior"]["Opacity"] == 0.4, "Canonical user precedence changed");
+		Check(Read(users / "VolumetricLighting.user.json") == legacy, "Loading destroyed the legacy source");
+		if (test == "godray-context-failure") {
+			Fixture::failedWrite = "AdaptiveBrightness.user.json";
+			Check(!manager.SaveUserOverride(adaptive, current, json::object()), "Failed destination save was accepted");
+			Check(Read(users / "VolumetricLighting.user.json") == legacy, "Failed destination save lost the source");
+			Fixture::failedWrite.clear();
+			auto edited = legacy;
+			edited["ExteriorGodrays"]["Opacity"] = 0.8;
+			Write(users / "VolumetricLighting.user.json", edited);
+			const auto savedDestination = Read(users / "AdaptiveBrightness.user.json");
+			Check(!manager.SaveUserOverride("VolumetricLighting", { { "ExteriorQuality", 2 } }, { { "ExteriorQuality", 0 } }), "Renderer save accepted a concurrent godray edit");
+			Check(!manager.DeleteUserOverride("VolumetricLighting"), "Renderer reset discarded a concurrent godray edit");
+			Check(!manager.SaveUserOverride(adaptive, current, json::object()), "Concurrent source edit was retired");
+			Check(Read(users / "VolumetricLighting.user.json") == edited, "Concurrent source edit was lost");
+			Check(Read(users / "AdaptiveBrightness.user.json") == savedDestination, "Conflict published stale migrated values");
+			manager.DiscoverOverrides();
+			json reloaded = json::object();
+			manager.LoadUserOverride(adaptive, reloaded);
+			Check(reloaded["godrays"]["exterior"]["Opacity"] == 0.8, "Concurrent source edit did not survive reload");
+		} else {
+			Check(manager.SaveUserOverride("VolumetricLighting", { { "ExteriorQuality", 2 } }, { { "ExteriorQuality", 0 } }), "Renderer save before migration failed");
+			Check(Read(users / "VolumetricLighting.user.json")["ExteriorGodrays"] == legacy["ExteriorGodrays"], "Renderer save lost unmigrated tuning");
+			Check(manager.SaveUserOverride(adaptive, current, json::object()), "Godray destination save failed");
+			Check(Read(users / "VolumetricLighting.user.json") == json({ { "ExteriorQuality", 2 } }), "Retirement changed rendering quality or left tuning");
+			manager.DiscoverOverrides();
+			json reloaded = json::object();
+			manager.LoadUserOverride(adaptive, reloaded);
+			Check(reloaded["godrays"] == current["godrays"], "Migrated godray choices did not survive reload");
+			Check(manager.SaveUserOverride(adaptive, reloaded, json::object()), "Second godray save failed");
+			Check(Read(users / "AdaptiveBrightness.user.json")["godrays"] == current["godrays"], "Second save discarded godray settings");
+			Check(manager.DeleteUserOverride(adaptive), "Godray reset failed");
+			Check(Read(users / "VolumetricLighting.user.json") == json({ { "ExteriorQuality", 2 } }), "Godray reset changed renderer settings");
+		}
+	} else if (test == "saved-values") {
 		const auto legacy = Legacy();
 		json layer = { { "CS Utility", legacy } };
 		Check(SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer), "DOF-only settings were not migrated");

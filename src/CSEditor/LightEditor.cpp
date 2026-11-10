@@ -2664,7 +2664,8 @@ bool LightEditor::MatchesLPFilters(const nlohmann::ordered_json& lightEntry, RE:
 	addForm(refr->GetWorldspace());
 
 	std::unordered_set<RE::BGSLocation*> visitedLocations;
-	auto* location = refr->GetCurrentLocation();
+	// The engine location lookup requires a parent cell.
+	auto* location = cell ? refr->GetCurrentLocation() : nullptr;
 	if (!location && cell)
 		location = cell->GetLocation();
 	for (; location && visitedLocations.insert(location).second; location = location->parentLoc)

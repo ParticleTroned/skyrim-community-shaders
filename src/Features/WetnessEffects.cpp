@@ -2,6 +2,7 @@
 #include "Menu.h"
 #include "Menu/SettingsPage.h"
 #include "State.h"
+#include "Utils/Game.h"
 #include "Utils/UI.h"
 #include "WeatherPicker.h"
 #include "Wetterness.h"
@@ -399,12 +400,6 @@ void WetnessEffects::DrawSettings()
 		ImGui::Spacing();
 	}
 	if (page.Is("surface")) {
-		if (Util::UIntCheckbox("Enabled", settings.EnableWetnessEffects)) {
-			Ripples::UpdateSettings();  // Update cache when settings change
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enables a wetness effect near water and when it is raining.");
-		}
 		Util::Widgets::SliderFloat("Rain Wetness", &settings.MaxRainWetness, 0.0f, 2.5f);
 		if (ImGui::IsItemDeactivatedAfterEdit())
 			DetectCurrentPreset();
@@ -421,6 +416,7 @@ void WetnessEffects::DrawSettings()
 
 	if (page.Is("rain")) {
 		Util::UIntCheckbox("Enable Raindrop Effects", settings.EnableRaindropFx);
+		Util::AddTooltip("Adds moving splashes and ripple rings during rain. Off keeps wet surfaces and puddles without these extra effects.");
 
 		ImGui::BeginDisabled(!settings.EnableRaindropFx);
 
@@ -567,8 +563,11 @@ void WetnessEffects::DrawSettings()
 
 	if (page.Is("diagnostics")) {
 		Util::Widgets::Checkbox("Enable Wetness Override", &debugSettings.EnableWetnessOverride);
+		Util::AddTooltip("Uses your manual surface-wetness values instead of the current weather. Off restores weather-driven wetness.");
 		Util::Widgets::Checkbox("Enable Puddle Override", &debugSettings.EnablePuddleOverride);
+		Util::AddTooltip("Uses your manual puddle amount instead of weather buildup. Off restores automatic puddle levels.");
 		Util::Widgets::Checkbox("Enable Rain Override", &debugSettings.EnableRainOverride);
+		Util::AddTooltip("Uses your manual rain amount for wet-surface effects. Off follows the current weather; this does not change the weather itself.");
 		Util::Widgets::Checkbox("Enable Interior/Exterior Override", &debugSettings.EnableIntExOverride);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
@@ -709,16 +708,7 @@ float WetnessEffects::GetRainIntensity(RE::NiPointer<RE::BSGeometry> precipObjec
 		return 0.0f;
 	}
 
-	auto& effect = precipObject->GetGeometryRuntimeData().shaderProperty;
-	auto shaderProp = effect.get();
-	auto particleShaderProperty = netimmerse_cast<RE::BSParticleShaderProperty*>(shaderProp);
-
-	if (!particleShaderProperty || !particleShaderProperty->particleEmitter) {
-		return 0.0f;
-	}
-
-	auto rain = (RE::BSParticleShaderRainEmitter*)(particleShaderProperty->particleEmitter);
-	if (!rain->emitterType.any(RE::BSParticleShaderEmitter::EMITTER_TYPE::kRain)) {
+	if (!Util::GetRainEmitterFromPrecipGeometry(precipObject.get())) {
 		return 0.0f;
 	}
 
@@ -855,11 +845,7 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData() const
 						if (!precipObject) {
 							precipObject = precip->lastPrecip;
 						}
-						if (precipObject) {
-							auto& effect = precipObject->GetGeometryRuntimeData().shaderProperty;
-							auto shaderProp = effect.get();
-							auto particleShaderProperty = netimmerse_cast<RE::BSParticleShaderProperty*>(shaderProp);
-							auto rain = (RE::BSParticleShaderRainEmitter*)(particleShaderProperty->particleEmitter);
+						if (auto* rain = Util::GetRainEmitterFromPrecipGeometry(precipObject.get())) {
 							data.OcclusionViewProj = rain->occlusionProjection;
 						}
 					}

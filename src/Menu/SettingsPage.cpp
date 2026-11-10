@@ -25,7 +25,6 @@ namespace MenuUI
 			std::function<bool(std::string_view)> canSelect;
 			bool pending = false;
 			std::vector<Section> sections;
-			float contentScrollbarWidth = 0;
 		};
 		std::unordered_map<std::string, Navigation> navigation;
 		Feature* activeFeature = nullptr;
@@ -102,9 +101,9 @@ namespace MenuUI
 		const auto found = navigation.find(a_page);
 		const bool hasCards = found == navigation.end() || std::ranges::any_of(found->second.sections, [](const Section& step) { return step.visible && step.overview; });
 		const float padding = ImGui::GetStyle().WindowPadding.x;
-		const float right = found == navigation.end() ? 0 : found->second.contentScrollbarWidth;
+		const float right = ImGui::GetStyle().ScrollbarSize;
 		const bool detail = found != navigation.end() && found->second.selected != "overview";
-		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - (detail ? ImGui::GetStyle().ScrollbarSize : right) - padding), hasCards);
+		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - right - padding), hasCards);
 		const float left = detail ? (grid.rail > 0 ? ImGui::GetTextLineHeight() * stageGuideInset : 0) : grid.rail;
 		return { padding + left, right };
 	}
@@ -117,7 +116,7 @@ namespace MenuUI
 			return a_panelWidth;
 		const bool hasCards = std::ranges::any_of(found->second.sections, [](const Section& step) { return step.visible && step.overview; });
 		const float padding = ImGui::GetStyle().WindowPadding.x;
-		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - found->second.contentScrollbarWidth - padding), hasCards);
+		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - ImGui::GetStyle().ScrollbarSize - padding), hasCards);
 		return padding + grid.rail + (grid.columns - 1) * (grid.width + grid.gap);
 	}
 
@@ -128,8 +127,7 @@ namespace MenuUI
 		// Match the initial header to the setup grid before its first content frame.
 		const bool hasCards = found == navigation.end() || found->second.sections.empty() || std::ranges::any_of(found->second.sections, [](const Section& step) { return step.visible && step.overview; });
 		const float padding = ImGui::GetStyle().WindowPadding.x;
-		const float right = found == navigation.end() ? 0 : found->second.selected != "overview" ? ImGui::GetStyle().ScrollbarSize :
-		                                                                                           found->second.contentScrollbarWidth;
+		const float right = ImGui::GetStyle().ScrollbarSize;
 		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - right - padding), hasCards);
 		return padding + (grid.rail > 0 ? ImGui::GetTextLineHeight() * stageGuideInset : 0);
 	}
@@ -312,13 +310,13 @@ namespace MenuUI
 		{
 			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0, ImGui::GetStyle().WindowPadding.y });
 			const SKSE::stl::scope_exit restorePadding([] { ImGui::PopStyleVar(); });
-			contentVisible = ImGui::BeginChild(std::format("##SettingsContent/{}", selected).c_str(), { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding);
+			// Conditional controls must not change the available width and reflow neighbouring columns.
+			contentVisible = ImGui::BeginChild(std::format("##SettingsContent/{}", selected).c_str(), { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_AlwaysVerticalScrollbar);
 		}
 		if (contentLeftPadding > 0)
 			ImGui::Indent(contentLeftPadding);
 		if (contentVisible && selected != "overview")
 			controlLayout = std::make_unique<Util::Widgets::ControlLayout>();
-		state.contentScrollbarWidth = ImGui::GetCurrentWindow()->ScrollbarSizes.x;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (contentVisible)
 			devBenchViewport.emplace(pageId, selected, !PerformanceTuningRenderer::HasActiveMeasurements());
@@ -397,6 +395,18 @@ namespace MenuUI
 		return clicked;
 	}
 
+	bool ChoiceSetting(const char* a_label, int* a_selected, std::span<const Choice> a_choices)
+	{
+		if (a_choices.empty())
+			return false;
+		SectionHeading(a_label);
+		const int choice = ChoiceCards(a_label, *a_selected, a_choices);
+		if (choice < 0 || choice == *a_selected)
+			return false;
+		*a_selected = choice;
+		return true;
+	}
+
 	bool ChoiceSetting(const char* a_label, int* a_selected, const char* const a_items[], int a_count)
 	{
 		if (a_count <= 0)
@@ -405,12 +415,7 @@ namespace MenuUI
 		choices.reserve(a_count);
 		for (int index = 0; index < a_count; ++index)
 			choices.push_back({ a_items[index], a_items[index], "", a_items[index] });
-		SectionHeading(a_label);
-		const int choice = ChoiceCards(a_label, *a_selected, choices);
-		if (choice < 0 || choice == *a_selected)
-			return false;
-		*a_selected = choice;
-		return true;
+		return ChoiceSetting(a_label, a_selected, choices);
 	}
 
 	bool ChoiceSetting(const char* a_label, int* a_selected, const char* a_items)
@@ -424,7 +429,7 @@ namespace MenuUI
 	void SectionHeading(const char* a_label)
 	{
 		ImGui::Spacing();
-		ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * cardSummaryScale);
+		ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * cardSummaryScale);
 		const SKSE::stl::scope_exit restore([] { ImGui::PopFont(); });
 		ImGui::TextUnformatted(a_label, ImGui::FindRenderedTextEnd(a_label));
 		ImGui::Separator();
@@ -433,7 +438,7 @@ namespace MenuUI
 
 	void DetailText(const char* a_text)
 	{
-		ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * cardSummaryScale);
+		ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * cardSummaryScale);
 		const SKSE::stl::scope_exit restore([] { ImGui::PopFont(); });
 		ImGui::TextWrapped("%s", a_text);
 	}
@@ -537,7 +542,7 @@ namespace MenuUI
 		                                                                                               "";
 		const float hintWidth = ImGui::CalcTextSize(hint).x;
 		const float guidanceWidth = ImGui::CalcTextSize(guidance).x;
-		ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * overviewTitleScale);
+		ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * overviewTitleScale);
 		const float titleWidth = ImGui::CalcTextSize(overviewTitle.c_str()).x;
 		ImGui::TextUnformatted(overviewTitle.c_str());
 		const float headingBottom = std::floor(ImGui::GetItemRectMin().y) + Util::Widgets::VisibleTextEnd(overviewTitle.c_str()).y;

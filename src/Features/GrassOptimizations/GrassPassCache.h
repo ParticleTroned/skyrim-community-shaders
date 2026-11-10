@@ -4,6 +4,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -30,6 +31,16 @@ namespace GrassPassCache
 		{
 			entries.clear();
 			last = 0;
+			mainOutcome.reset();
+		}
+
+		/** @brief The first main-view draw owns coverage until the next frame. */
+		std::optional<Outcome> MainOutcome() const noexcept { return mainOutcome; }
+		/** @brief Retain the first main-view route instead of overwriting it in later passes. */
+		void CommitMain(Outcome outcome) noexcept
+		{
+			if (!mainOutcome)
+				mainOutcome = outcome;
 		}
 
 		/** @brief Admit each exact pass once; the returned pointer lasts until the next Acquire or Clear. */
@@ -57,5 +68,6 @@ namespace GrassPassCache
 		};
 		std::vector<Entry> entries;
 		std::size_t last = 0;
+		std::optional<Outcome> mainOutcome;
 	};
 }

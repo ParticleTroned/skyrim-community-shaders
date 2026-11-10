@@ -31,7 +31,8 @@ namespace WetternessSnowMelt
 	{
 		uint32_t count = 0;
 		uint32_t enabled = 0;
-		uint32_t padding[2]{};
+		uint32_t unchangedFireMask = 0;
+		uint32_t padding = 0;
 		std::array<float, 4> lightDryingHours{};
 		std::array<float, 4> heavyDryingHours{};
 		std::array<Sample, MaxSamples> samples{};
@@ -125,7 +126,7 @@ namespace WetternessSnowMelt
 				RemoveFirst();
 		}
 
-		PerFrame GetData() const
+		PerFrame GetData(bool reuseFireHistory = true) const
 		{
 			PerFrame data{};
 			if (!HasMelt())
@@ -138,6 +139,8 @@ namespace WetternessSnowMelt
 			}
 			for (uint32_t i = 0; i < count; ++i) {
 				data.samples[i] = nodes[i].sample;
+				if (reuseFireHistory && i && nodes[i].sample.fireCount && SameFireFootprint(nodes[i - 1].sample, nodes[i].sample))
+					data.unchangedFireMask |= 1u << i;
 				data.samples[i].state[3] = static_cast<float>(now - nodes[i].hours);
 				for (uint32_t material = 0; material < 4; ++material) {
 					data.samples[i].lightDryingAge[material] = static_cast<float>(dryingClock[material] - nodes[i].dryingClock[material]);

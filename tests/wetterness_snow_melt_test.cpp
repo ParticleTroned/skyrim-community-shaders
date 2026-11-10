@@ -154,6 +154,31 @@ namespace
 		constants.SetMember("SharedData::snowCoverSettings", "FireMeltSpheres", data.samples[1].fires);
 		values = run(data);
 		Require(values[2][0] > 0.1f && values[5][0] == 0, "Fire melt escaped the actual cleared snow footprint");
+
+		WetternessSnowMelt::History history;
+		WetternessSnowMelt::Sample sample;
+		sample.state = { 0, 500, 1, 0 };
+		history.Observe(sample, 0, 0, data.lightDryingHours, data.heavyDryingHours);
+		sample.state[2] = 0.9f;
+		sample.fireCount = 1;
+		sample.fireStrength = 1;
+		sample.fires[0] = { 0, 0, 0, 10 };
+		history.Observe(sample, 0.25, 0, data.lightDryingHours, data.heavyDryingHours);
+		sample.state[2] = 0.8f;
+		history.Observe(sample, 0.5, 0, data.lightDryingHours, data.heavyDryingHours);
+		sample.state[2] = 0;
+		sample.fires[0][0] = 100;
+		history.Observe(sample, 0.75, 0, data.lightDryingHours, data.heavyDryingHours);
+		auto cachedFires = history.GetData();
+		Require(cachedFires.unchangedFireMask == 4u, "Fire reuse did not distinguish unchanged and moving footprints");
+		constants.SetMember("SharedData::snowCoverSettings", "SeasonalAltitude", 0.0f);
+		constants.SetMember("SharedData::snowCoverSettings", "FireMeltSpheres", cachedFires.samples[cachedFires.count - 1].fires);
+		const auto reused = run(cachedFires);
+		cachedFires.unchangedFireMask = 0;
+		const auto evaluated = run(cachedFires);
+		for (size_t i = 0; i < reused.size(); ++i)
+			Require(reused[i] == evaluated[i], "Fire reuse changed local melt integration");
+		Require(reused[2][0] > 0 && reused[5][0] > 0, "Fire reuse comparison omitted wet footprints");
 		data.enabled = 0;
 		values = run(data);
 		for (const auto& value : values)

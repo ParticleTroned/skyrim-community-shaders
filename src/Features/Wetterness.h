@@ -13,7 +13,7 @@ public:
 	virtual inline std::string GetShortName() override { return "Wetterness"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual inline std::string_view GetShaderDefineName() override { return "WETTERNESS"; }
-	std::string_view GetShaderCacheAbiVersion() override { return "2"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "3"; }
 	virtual std::string_view GetCategory() const override { return "Water"; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override

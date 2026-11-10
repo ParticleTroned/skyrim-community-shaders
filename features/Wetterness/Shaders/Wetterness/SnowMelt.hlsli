@@ -1,6 +1,7 @@
 #ifndef WETTERNESS_SNOW_MELT_HLSLI
 #define WETTERNESS_SNOW_MELT_HLSLI
 
+#include "Common/PerformanceCostReference.hlsli"
 #include "Wetterness/Drying.hlsli"
 
 #if defined(SNOW_COVER) && defined(WETTERNESS) && defined(PSHADER)
@@ -48,8 +49,20 @@ namespace Wetterness
 				[loop] for (uint i = 1; i < count; ++i)
 				{
 					SharedData::SnowMeltSample sample = SharedData::snowMeltSettings.samples[i];
+#	if (CSX_PERF_REFERENCE_FLAGS & CSX_PERF_SNOW_MELT_FIRE_REUSE)
 					float fire = SnowCover::GetFireMelt(footprint.position, sample.fireCount,
 						sample.fireStrength, sample.fireRadiusScale, sample.fires);
+#	else
+					float fire = 0;
+					[branch] if (sample.fireCount != 0)
+					{
+						fire = previousFire;
+						// Weather samples often retain the same fire footprint for the entire interval.
+						[branch] if (!(SharedData::snowMeltSettings.unchangedFireMask & (1u << i)))
+							fire = SnowCover::GetFireMelt(footprint.position, sample.fireCount,
+								sample.fireStrength, sample.fireRadiusScale, sample.fires);
+					}
+#	endif
 					float coverage = SnowCover::GetCoverage(footprint, sample.state.xyz, fire);
 					peak = previous <= 0 && coverage > 0 ? coverage : max(peak, coverage);
 					float melted = max(0.0, previous - coverage);

@@ -3,6 +3,9 @@
 #include "Features/SnowCover.h"
 #include "Features/Wetterness.h"
 #include "Utils/Game.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/PerformanceCostExperiments.h"
+#endif
 
 #include <atomic>
 #include <cstring>
@@ -165,7 +168,12 @@ namespace WetternessSnowMelt
 			return inactive;
 		const std::scoped_lock lock(historyMutex);
 		static thread_local PerFrame data;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		data = history.GetData(!CSX::Diagnostics::PerformanceCosts::ReferenceEnabled(
+			CSX::Diagnostics::PerformanceCosts::Point::SnowMeltFireReuse));
+#else
 		data = history.GetData();
+#endif
 		return data;
 	}
 }

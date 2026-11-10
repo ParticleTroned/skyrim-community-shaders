@@ -603,7 +603,8 @@ namespace SharedData
 	{
 		uint count;
 		uint enabled;
-		uint2 padding;
+		uint unchangedFireMask;
+		uint padding;
 		float4 lightDryingHours;
 		float4 heavyDryingHours;
 		SnowMeltSample samples[32];

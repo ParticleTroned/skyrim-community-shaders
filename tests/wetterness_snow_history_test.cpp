@@ -54,6 +54,7 @@ int main()
 	Require(WetternessSnowMelt::PackedSize(data) == offsetof(WetternessSnowMelt::PerFrame, samples) + 3 * sizeof(WetternessSnowMelt::Sample),
 		"Short history uploaded unused samples");
 	Require(history.SnowBounds()[0] == 2, "Bounds culling discarded the earlier snowy footprint");
+	Require(data.unchangedFireMask == 0, "Empty fire lists retained reuse metadata work");
 	Observe(history, Snow(0), 126, -1);
 	Require(!history.HasMelt(), "Wait retained expired meltwater");
 
@@ -99,6 +100,34 @@ int main()
 				data.samples[data.count - 1].fireCount == 1 && data.samples[data.count - 2].state[3] == 0 &&
 				data.samples[data.count - 1].heavyDryingAge[3] == 0,
 		"Travel backdated newly observed fire melt");
+	Require((data.unchangedFireMask & (1u << (data.count - 1))) == 0,
+		"Arrival reused a different fire footprint");
+
+	history.Clear();
+	auto stableFires = Snow(1, 1);
+	stableFires.fireCount = 2;
+	stableFires.fireStrength = 1;
+	stableFires.fires[0] = { 0, 0, 0, 10 };
+	stableFires.fires[1] = { 50, 0, 0, 10 };
+	Observe(history, stableFires, 0, 0);
+	stableFires.state[2] = .9f;
+	std::swap(stableFires.fires[0], stableFires.fires[1]);
+	Observe(history, stableFires, .25, 0);
+	Require(history.GetData().unchangedFireMask == 2u, "Reordered identical fire sources did not reuse their footprint");
+	const auto referenceFires = history.GetData(false);
+	Require(referenceFires.unchangedFireMask == 0 && referenceFires.count == history.GetData().count && referenceFires.enabled,
+		"Uncached fire history reference changed its active timeline");
+	stableFires.state[2] = .8f;
+	stableFires.fireStrength = .5f;
+	Observe(history, stableFires, .5, 0);
+	stableFires.state[2] = .7f;
+	stableFires.fireRadiusScale = 1.5f;
+	Observe(history, stableFires, .75, 0);
+	Require(history.GetData().unchangedFireMask == 2u, "Changed fire strength or radius reused a different footprint");
+	stableFires.state[2] = .6f;
+	stableFires.fireCount = 0;
+	Observe(history, stableFires, 1, 0);
+	Require(history.GetData().unchangedFireMask == 2u, "Empty fire sources reused an earlier nonempty footprint");
 
 	history.Clear();
 	Observe(history, Snow(1), 0, 0);

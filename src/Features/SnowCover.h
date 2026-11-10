@@ -279,7 +279,7 @@ public:
 		draw();
 	}
 	bool IsActive() const { return loaded && active.load(std::memory_order_relaxed) && texturesLoaded && wsettings.EnableSnowCover; }
-	std::string_view GetShaderCacheAbiVersion() override { return "3"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "4"; }
 	bool SupportsPerformanceCostMeasurement() const override { return true; }
 	bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enable != 0; }
 	void SetPerformanceCostMeasurementEnabled(bool value) override { settings.Enable = value; }

@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include "Diagnostics/PerformanceCostExperiments.h"
 #include "Features/Wetterness/SnowMeltHistory.h"
 #include "ShaderPackageIncludes.h"
 #include "d3d11_shader_test.h"
@@ -6,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <string>
 
 namespace
 {
@@ -20,7 +22,7 @@ namespace
 			throw std::runtime_error(message);
 	}
 
-	void CheckMelt(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool pbr)
+	void CheckMelt(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool pbr, uint32_t referenceFlags)
 	{
 		PackageIncludes includes("package/Shaders", "features/Wetterness/Shaders", "features/Snow Cover/Shaders");
 		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "WETTERNESS", "1" }, { "SNOW_COVER", "1" } };
@@ -28,6 +30,8 @@ namespace
 			defines.push_back({ "VR", "1" });
 		if (pbr)
 			defines.push_back({ "TRUE_PBR", "1" });
+		const auto referenceFlagsText = std::to_string(referenceFlags);
+		defines.push_back({ "CSX_PERF_REFERENCE_FLAGS", referenceFlagsText.c_str() });
 		defines.push_back({ nullptr, nullptr });
 		ComPtr<ID3DBlob> bytecode, errors;
 		const auto result = D3DCompileFromFile(L"tests/wetterness_snow_melt.hlsl", defines.data(), &includes,
@@ -183,6 +187,41 @@ namespace
 		values = run(data);
 		for (const auto& value : values)
 			Require(value[0] == 0 && value[1] == 0, "Disabled melt retained wetness");
+
+		constants.SetMember("SharedData::snowCoverSettings", "WeatherFadeStart", 200.0f);
+		constants.SetMember("SharedData::snowCoverSettings", "WeatherFadeEnd", 1000.0f);
+		constants.SetMember("SharedData::snowCoverSettings", "TimeSnowing", 1.0f);
+		const auto weatherRange = run(data);
+		for (const auto& value : weatherRange)
+			Require(value[3] > 0 && value[3] < 1, "Weather range comparison missed the distance fade");
+		constants.SetMember("SharedData::snowCoverSettings", "TimeSnowing", 0.0f);
+		const auto seasonalOnly = run(data);
+		const auto weatherReference = static_cast<uint32_t>(CSX::Diagnostics::PerformanceCosts::Point::SnowWeatherRange);
+		for (size_t i = 0; i < seasonalOnly.size(); ++i)
+			Require(seasonalOnly[i][3] == ((referenceFlags & weatherReference) ? weatherRange[i][3] : 0),
+				"Seasonal-only snow did not select the requested weather-distance path");
+		data.enabled = 1;
+		const auto historicalWeather = run(data);
+		for (size_t i = 0; i < weatherRange.size(); ++i)
+			Require(historicalWeather[i][3] == weatherRange[i][3], "Stopped snowfall changed the historical weather footprint");
+		data.enabled = 0;
+		constants.SetMember("SharedData::snowCoverSettings", "TimeSnowing", -1.0f);
+		const auto negativeWeather = run(data);
+		for (size_t i = 0; i < weatherRange.size(); ++i)
+			Require(negativeWeather[i][3] == weatherRange[i][3], "Negative accumulation lost its weather footprint");
+
+		data = {};
+		data.enabled = 1;
+		data.count = 2;
+		data.lightDryingHours = data.heavyDryingHours = { 24, 24, 24, 24 };
+		data.samples[0].state = { 1, 500, 0, 1 };
+		data.samples[1].state = { 0, 500, 0, 0 };
+		setDryingAges(data);
+		constants.SetMember("SharedData::snowCoverSettings", "TimeSnowing", 0.0f);
+		constants.SetMember("SharedData::snowCoverSettings", "FireMeltCount", 0u);
+		const auto stoppedWeatherMelt = run(data);
+		Require(stoppedWeatherMelt[2][0] > 0 && stoppedWeatherMelt[2][1] > 0,
+			"Stopped snowfall lost its historical weather snowmelt footprint");
 	}
 }
 
@@ -193,9 +232,13 @@ int main()
 		ComPtr<ID3D11DeviceContext> context;
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION,
 			device.GetAddressOf(), nullptr, context.GetAddressOf()));
+		using CSX::Diagnostics::PerformanceCosts::Point;
+		const auto fireReference = static_cast<uint32_t>(Point::SnowMeltFireReuse);
+		const auto weatherReference = static_cast<uint32_t>(Point::SnowWeatherRange);
 		for (bool vr : { false, true })
 			for (bool pbr : { false, true })
-				CheckMelt(device.Get(), context.Get(), vr, pbr);
+				for (uint32_t referenceFlags : { 0u, fireReference, weatherReference, fireReference | weatherReference })
+					CheckMelt(device.Get(), context.Get(), vr, pbr, referenceFlags);
 		std::cout << "PASS: local snowmelt, material drying, fire footprints and finite retirement\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

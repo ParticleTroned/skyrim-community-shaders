@@ -5,6 +5,7 @@
 #include "Common/ColorHSV.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/LightingCommon.hlsli"
+#include "Common/PerformanceCostReference.hlsli"
 #include "Common/Permutation.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
@@ -56,10 +57,24 @@ namespace SnowCover
 
 	float GetWeatherRange(float3 p, float viewDist)
 	{
-		float fadeStart = SharedData::snowCoverSettings.WeatherFadeStart;
-		float fadeEnd = max(fadeStart + 1, SharedData::snowCoverSettings.WeatherFadeEnd);
-		float wobble = WeatherFadeWobble * sin(p.z * WeatherNoiseScale + cos(p.x * p.y * WeatherNoiseScale));
-		return 1 - smoothstep(fadeStart, max(fadeStart + 1, fadeEnd + wobble), viewDist);
+#	if !(CSX_PERF_REFERENCE_FLAGS & CSX_PERF_SNOW_WEATHER_RANGE)
+		bool needsWeather = SharedData::snowCoverSettings.TimeSnowing != 0;
+#		if defined(WETTERNESS)
+		needsWeather = needsWeather || SharedData::snowMeltSettings.enabled != 0;
+#		endif
+#	endif
+		// Historical coverage still needs its original weather footprint after snowfall stops.
+		float range = 0;
+#	if !(CSX_PERF_REFERENCE_FLAGS & CSX_PERF_SNOW_WEATHER_RANGE)
+		[branch] if (needsWeather)
+#	endif
+		{
+			float fadeStart = SharedData::snowCoverSettings.WeatherFadeStart;
+			float fadeEnd = max(fadeStart + 1, SharedData::snowCoverSettings.WeatherFadeEnd);
+			float wobble = WeatherFadeWobble * sin(p.z * WeatherNoiseScale + cos(p.x * p.y * WeatherNoiseScale));
+			range = 1 - smoothstep(fadeStart, max(fadeStart + 1, fadeEnd + wobble), viewDist);
+		}
+		return range;
 	}
 	float GetObjectFade(float viewDist)
 	{
@@ -287,7 +302,11 @@ namespace SnowCover
 	float ApplySnowBase(float3 worldNormal, inout float2 uv, out bool alt, float disp, float3 p, float skylight, float waterDist, float viewDist, float lift, float environment)
 	{
 		CoverageInputs footprint = GetSurfaceFootprint(worldNormal, disp, p, skylight, waterDist, viewDist, lift, environment);
-		float weatherMult = GetWeatherRange(p, viewDist) * (SharedData::snowCoverSettings.TimeSnowing * SharedData::snowCoverSettings.TimeSnowing * SharedData::snowCoverSettings.TimeSnowing) * max(WeatherDensityScale, SharedData::snowCoverSettings.SnowingDensity) / WeatherDensityScale;
+		float weatherRange = footprint.weatherRange;
+#		if (CSX_PERF_REFERENCE_FLAGS & CSX_PERF_SNOW_WEATHER_RANGE)
+		weatherRange = GetWeatherRange(p, viewDist);
+#		endif
+		float weatherMult = weatherRange * (SharedData::snowCoverSettings.TimeSnowing * SharedData::snowCoverSettings.TimeSnowing * SharedData::snowCoverSettings.TimeSnowing) * max(WeatherDensityScale, SharedData::snowCoverSettings.SnowingDensity) / WeatherDensityScale;
 		weatherMult = clamp((weatherMult)*max(SharedData::snowCoverSettings.minAngle, worldNormal.z), -1, 1);
 		float3 state = float3(SharedData::snowCoverSettings.TimeSnowing, SharedData::snowCoverSettings.SnowingDensity, SharedData::snowCoverSettings.SeasonalAltitude);
 		float mult = GetCoverage(footprint, state, 0);

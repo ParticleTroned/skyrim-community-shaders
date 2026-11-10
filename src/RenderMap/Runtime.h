@@ -467,19 +467,14 @@ namespace CSX::RenderMap
 					return owner.BindResourceViews(std::forward<Args>(a_arguments)...);
 				});
 			}
-			template <class... Args>
-			decltype(auto) ClaimRenderTargetStateSeed(Args&&... a_arguments) const noexcept
+			// The seed helper serializes the generation check and claim.
+			std::uint64_t ClaimRenderTargetStateSeed(std::uintptr_t a_context) const noexcept
 			{
-				return Publish([&]() noexcept -> decltype(auto) {
-					return owner.ClaimRenderTargetStateSeed(std::forward<Args>(a_arguments)...);
-				});
+				return generation == 0 ? 0 : owner.ClaimRenderTargetStateSeed(a_context, generation);
 			}
-			template <class... Args>
-			decltype(auto) ClaimResourceViewStateSeed(Args&&... a_arguments) const noexcept
+			std::uint64_t ClaimResourceViewStateSeed(std::uintptr_t a_context) const noexcept
 			{
-				return Publish([&]() noexcept -> decltype(auto) {
-					return owner.ClaimResourceViewStateSeed(std::forward<Args>(a_arguments)...);
-				});
+				return generation == 0 ? 0 : owner.ClaimResourceViewStateSeed(a_context, generation);
 			}
 			template <class... Args>
 			decltype(auto) RecordFinishCommandList(Args&&... a_arguments) const noexcept

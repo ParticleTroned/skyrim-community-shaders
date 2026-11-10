@@ -1,12 +1,13 @@
 #pragma once
 
+#include "NetworkSelection.h"
 #include "Utils/Finite.h"
 
 #include <cstdint>
 
 namespace NeuralRendering
 {
-	/** Inclusive image-tuning maxima for the detected NR provider. */
+	/** Inclusive image-tuning maxima for the effective NR network. */
 	struct TuningLimits
 	{
 		float intensity = 2.0f;
@@ -25,7 +26,7 @@ namespace NeuralRendering
 		}
 	};
 
-	/** Match reported provider ranges for 310.8/310.9 without restricting unknown versions. */
+	/** Default 310.9 uses newer-network ranges; 310.8 retains legacy ranges, with unknown versions unrestricted. */
 	[[nodiscard]] constexpr TuningLimits GetTuningLimitsForVersion(std::uint32_t major, std::uint32_t minor) noexcept
 	{
 		if (major == 310 && minor == 9)
@@ -33,5 +34,11 @@ namespace NeuralRendering
 		if (major == 310 && minor == 8)
 			return { 1.0f, 2.0f, 2.0f, 2.0f };
 		return {};
+	}
+
+	/** Legacy retains the 310.8 range; default and newer retain the provider's existing range. */
+	[[nodiscard]] constexpr TuningLimits GetTuningLimitsForNetwork(TuningLimits runtimeDefaults, std::uint32_t effectivePreset) noexcept
+	{
+		return effectivePreset == kNetworkLegacy ? GetTuningLimitsForVersion(310, 8) : runtimeDefaults;
 	}
 }

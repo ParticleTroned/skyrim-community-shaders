@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -33,7 +34,7 @@ class FomodPackageTests(unittest.TestCase):
     SHADER_CACHE_ABI = "a" * 64
 
     @staticmethod
-    def _cache_entries() -> list[dict]:
+    def _cache_entries(include_horizon_fix: bool = True) -> list[dict]:
         contract = BUILDER.SHADER_CACHE_CONTRACT
         variants = contract.compatibility_variant_manifest(REPO)
         return [
@@ -43,7 +44,7 @@ class FomodPackageTests(unittest.TestCase):
                 ),
                 "bytecode": make_dxbc(marker=name.encode("utf-8")),
             }
-            for index, name in enumerate(("default", "legacy-horizon-fix"))
+            for index, name in enumerate(("default", "legacy-horizon-fix") if include_horizon_fix else ("default",))
         ]
 
     @staticmethod
@@ -51,6 +52,7 @@ class FomodPackageTests(unittest.TestCase):
         cache_directory: Path,
         runtime: str,
         shader_cache_abi: str,
+        include_horizon_fix: bool = True,
     ) -> None:
         cache_directory.mkdir(parents=True, exist_ok=True)
         contract_runtime = "SE" if runtime == BUILDER.RUNTIME_SE_AE else "VR"
@@ -72,14 +74,14 @@ class FomodPackageTests(unittest.TestCase):
                     "packSetId": pack_set_id,
                     "runtime": contract_runtime,
                     "shaderCacheABI": shader_cache_abi,
-                    "optimizedRecordCount": 2,
+                    "optimizedRecordCount": 2 if include_horizon_fix else 1,
                     "developerRecordCount": 0,
-                    "compatibilityVariants": ["default", "legacy-horizon-fix"],
+                    "compatibilityVariants": ["default", "legacy-horizon-fix"] if include_horizon_fix else ["default"],
                     "files": {
                         "Optimized.A.csxpack": {
                             "lane": 1,
                             "generation": 1,
-                            "recordCount": 2,
+                            "recordCount": 2 if include_horizon_fix else 1,
                         },
                         "Optimized.B.csxpack": {
                             "lane": 1,
@@ -106,7 +108,7 @@ class FomodPackageTests(unittest.TestCase):
                 cache_directory / pack_name,
                 BUILDER.PACK_LANES[pack_name],
                 1 if ".A." in pack_name else 0,
-                FomodPackageTests._cache_entries() if pack_name == "Optimized.A.csxpack" else [],
+                FomodPackageTests._cache_entries(include_horizon_fix) if pack_name == "Optimized.A.csxpack" else [],
                 pack_set_id,
             )
 
@@ -149,6 +151,35 @@ class FomodPackageTests(unittest.TestCase):
     @staticmethod
     def _write_json(path: Path, value: dict) -> None:
         path.write_text(json.dumps(value), encoding="utf-8")
+
+    def test_installer_xml_survives_vortex_validation_transcoding(self) -> None:
+        def vortex_stream(xml_text: str) -> bytes:
+            # Match XmlScriptType.StringStream in Nexus-Mods/fomod-installer.
+            normalized = re.sub(r'^([^>]*)encoding="[^"]+"', r"\1", xml_text)
+            return b"\xfe\xff" + normalized.encode("utf-16-be")
+
+        original = "<?xml version='1.0' encoding='utf-8'?>\n<config />"
+        with self.assertRaises(ET.ParseError):
+            ET.fromstring(vortex_stream(original))
+
+        for include_se_ae in (True, False):
+            with self.subTest(include_se_ae=include_se_ae), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                core, se_cache, vr_cache = self._inputs(root)
+                output = root / "staged"
+                version = "v3.20.1-é & validation"
+                BUILDER.stage_package(
+                    core, se_cache if include_se_ae else None, vr_cache,
+                    output, version, include_se_ae=include_se_ae,
+                )
+                for name in (BUILDER.MODULE_CONFIG_FILE, BUILDER.INFO_FILE):
+                    with self.subTest(file=name):
+                        content = (output / BUILDER.FOMOD_DIRECTORY / name).read_bytes()
+                        direct = ET.fromstring(content)
+                        transcoded = ET.fromstring(vortex_stream(content.decode("utf-8")))
+                        self.assertEqual(ET.tostring(direct), ET.tostring(transcoded))
+                        if name == BUILDER.INFO_FILE:
+                            self.assertEqual(transcoded.findtext("Version"), version)
 
     def test_rejects_missing_empty_or_directory_plugin_before_and_after_staging(self) -> None:
         for include_se_ae in (True, False):
@@ -456,6 +487,37 @@ class FomodPackageTests(unittest.TestCase):
         )
         for plugin in plugins[:2]:
             self.assertIn("with and without Horizon Fix", plugin.findtext("description"))
+
+    def test_standard_only_cli_stages_and_validates_without_horizon(self) -> None:
+        for include_se_ae in (False, True):
+            with self.subTest(include_se_ae=include_se_ae), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                core, se_cache, vr_cache = self._inputs(root)
+                for cache_root, runtime in ((se_cache, BUILDER.RUNTIME_SE_AE), (vr_cache, BUILDER.RUNTIME_VR)):
+                    self._write_cache(cache_root / BUILDER.CACHE_DIRECTORY, runtime, self.SHADER_CACHE_ABI, False)
+                output = root / "staged"
+                args = [sys.executable, str(BUILDER_PATH), "--core", str(core), "--vr-cache", str(vr_cache),
+                        "--output", str(output), "--version", "standard-only", "--no-include-horizon-fix"]
+                args += ["--se-cache", str(se_cache)] if include_se_ae else ["--no-include-se-ae"]
+                result = subprocess.run(args, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                BUILDER.validate_staged_package(output, "standard-only", include_se_ae, False)
+                with self.assertRaisesRegex(SystemExit, "missing required compatibility variants"):
+                    BUILDER.validate_staged_package(output, "standard-only", include_se_ae)
+                config = ET.parse(output / BUILDER.FOMOD_DIRECTORY / BUILDER.MODULE_CONFIG_FILE)
+                descriptions = [item.text for item in config.findall(".//plugin/description")]
+                self.assertIn("standard Water shaders only", descriptions[0])
+                self.assertFalse(any("with and without" in item for item in descriptions))
+
+    def test_standard_only_rejects_extra_horizon_records_before_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core, _, vr_cache = self._inputs(root)
+            output = root / "staged"
+            with self.assertRaisesRegex(SystemExit, "excluded Horizon Fix"):
+                BUILDER.stage_package(core, None, vr_cache, output, "standard-only",
+                                      include_se_ae=False, include_horizon_fix=False)
+            self.assertFalse(output.exists())
 
     def test_rejects_runtime_cache_missing_horizon_coverage(self) -> None:
         for runtime in (BUILDER.RUNTIME_SE_AE, BUILDER.RUNTIME_VR):

@@ -79,26 +79,49 @@ RE::FormID Util::SpidToFormId(const std::string& spid)
 	return 0;
 }
 
-std::string Util::GetFormDisplayName(RE::FormID formId)
+std::string Util::GetFormDisplayName(RE::FormID formId, FormEditorIDIndex* index)
 {
 	auto* form = RE::TESForm::LookupByID(formId);
 	if (!form)
 		return std::format("0x{:X}", formId);
 
-	auto editorId = GetFormEditorID(form);
+	auto editorId = GetFormEditorID(form, index);
 	if (!editorId.empty())
 		return std::format("{} ({:X})", editorId, form->GetLocalFormID());
 
 	return GetFormFileKey(form);
 }
 
-std::string Util::GetFormEditorID(const RE::TESForm* form)
+std::string Util::FormEditorIDIndex::Find(const RE::TESForm* form)
+{
+	if (!form)
+		return "";
+
+	if (!initialized) {
+		auto [map, lock] = RE::TESForm::GetAllFormsByEditorID();
+		if (map) {
+			RE::BSReadLockGuard locker(lock);
+			editorIDs.reserve(map->size());
+			for (const auto& [name, entry] : *map) {
+				editorIDs.try_emplace(entry, name.c_str());
+			}
+		}
+		initialized = true;
+	}
+
+	const auto entry = editorIDs.find(form);
+	return entry != editorIDs.end() ? entry->second : "";
+}
+
+std::string Util::GetFormEditorID(const RE::TESForm* form, FormEditorIDIndex* index)
 {
 	if (!form)
 		return "";
 	const char* editorId = form->GetFormEditorID();
 	if (editorId && editorId[0] != '\0')
 		return std::string(editorId);
+	if (index)
+		return index->Find(form);
 
 	// Search the global EditorID map as fallback
 	auto [map, lock] = RE::TESForm::GetAllFormsByEditorID();

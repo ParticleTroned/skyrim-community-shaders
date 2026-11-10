@@ -1,6 +1,7 @@
 #include "ABTesting.h"
 #include "Features/PerformanceOverlay.h"
 #include "Menu.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
@@ -26,6 +27,10 @@ void ABTestingManager::SetTestInterval(uint32_t interval)
 
 void ABTestingManager::Enable()
 {
+	if (PerformanceTuningRenderer::HasActiveMeasurements()) {
+		logger::warn("A/B testing refused while another measurement owns settings");
+		return;
+	}
 	if (!abTestingEnabled && testInterval > 0) {
 		auto* state = globals::state;
 		auto& performanceOverlay = globals::features::performanceOverlay;
@@ -62,6 +67,7 @@ void ABTestingManager::Enable()
 		performanceOverlay.settings.ShowInOverlay = overlayWasEnabled;
 
 		aggregator.Clear();
+		aggregator.SetSettleFrames(kABSwitchSettleFrames);
 		performanceOverlay.ClearABTestSettingsDiff();
 		aggregator.OnABSwitch(ABVariant::B);
 

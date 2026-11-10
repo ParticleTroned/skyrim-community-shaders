@@ -1,11 +1,14 @@
+#include "Features/Upscaling/NeuralRendering/ComputeStateGuard.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolution.h"
 #include "GpuPass.h"
 #include "ShaderPackageIncludes.h"
+#include "Utils/ComIdentity.h"
 #include "Utils/ShaderCompiler.h"
 #include "d3d11_shader_test.h"
 #include "nr_model_resolution_accounting_under_test.h"
 
 #include <DirectXPackedVector.h>
+#include <d3d11_1.h>
 
 #include <algorithm>
 #include <array>
@@ -14,17 +17,30 @@
 #include <filesystem>
 #include <iostream>
 #include <limits>
+#include <map>
+#include <new>
+#include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
 template <class T>
 concept HasPackedCropDiagnosticField = requires(T value) { value.packedCropPlanning; };
+template <class T>
+concept HasPeripheralDiagnosticField = requires(T value) { value.peripheralCompression; };
+template <class T>
+concept HasReconstructionTuning = requires(T value) { value.reconstructionTuning; };
 #ifdef DEVBENCH_BRIDGE_ENABLED
+static_assert(HasReconstructionTuning<NeuralRendering::RendererApplyArgs>);
 static_assert(HasPackedCropDiagnosticField<NeuralRendering::RendererApplyArgs>);
+static_assert(HasPeripheralDiagnosticField<NeuralRendering::RendererSnapshot>);
 #else
+static_assert(!HasReconstructionTuning<NeuralRendering::RendererApplyArgs>);
 static_assert(!HasPackedCropDiagnosticField<NeuralRendering::RendererApplyArgs>);
+static_assert(!HasPeripheralDiagnosticField<NeuralRendering::RendererSnapshot>);
 #endif
 
 namespace AdapterCompiler
@@ -34,13 +50,87 @@ namespace AdapterCompiler
 	bool vr = false;
 	bool failPacking = false;
 	unsigned packingAttempts = 0;
+	bool guided = false, failGuided = false, throwGuided = false;
+	bool failGuidedAllocation = false, throwGuidedAllocationFailure = false;
+	unsigned guidedAttempts = 0;
+	unsigned ordinarySelectionAttempts = 0;
+	unsigned sharedPreparationFailure = 0, sharedPreparationAttempts = 0;
+	bool failPeripheral = false;
+	unsigned peripheralAttempts = 0;
+	unsigned peripheralAllocationFailureAttempt = 0;
+	bool throwPeripheralAllocationFailure = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	unsigned experimentalAttempts = 0, experimentalFailure = 0;
+#endif
 }
 
 // Substitute only engine compilation/profiling; the adapter and GPU work are production code.
 ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
 	const std::vector<std::pair<const char*, const char*>>& options, const char* target, const char* entry, ShaderCompileTiming*)
 {
+	HRESULT result;
+	return CompileShader(path, options, target, entry, result);
+}
+
+ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
+	const std::vector<std::pair<const char*, const char*>>& options, const char* target, const char* entry, HRESULT& result, ShaderCompileTiming*)
+{
+	result = E_FAIL;
 	++AdapterCompiler::calls;
+	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "NR_SHARED_PREPARATION"; })) {
+		++AdapterCompiler::sharedPreparationAttempts;
+		if (AdapterCompiler::sharedPreparationFailure == 1)
+			return nullptr;
+		if (AdapterCompiler::sharedPreparationFailure == 2)
+			throw std::runtime_error("Shared preparation compile failure");
+		if (AdapterCompiler::sharedPreparationFailure == 3) {
+			result = E_OUTOFMEMORY;
+			return nullptr;
+		}
+	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "DEVBENCH_BRIDGE_ENABLED"; })) {
+		++AdapterCompiler::experimentalAttempts;
+		if (AdapterCompiler::experimentalFailure == 1)
+			return nullptr;
+		if (AdapterCompiler::experimentalFailure == 2)
+			throw std::runtime_error("Experimental shader compilation failed");
+		if (AdapterCompiler::experimentalFailure == 3) {
+			result = E_OUTOFMEMORY;
+			return nullptr;
+		}
+		if (AdapterCompiler::experimentalFailure == 4)
+			throw std::bad_alloc{};
+	}
+#endif
+	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "MODEL_OUTPUT_SELECTION"; }) &&
+		std::ranges::none_of(options, [](const auto& option) { return std::string_view(option.first) == "NR_PERIPHERAL_COMPRESSION" || std::string_view(option.first) == "GUIDED_NR_RECONSTRUCTION"; }))
+		++AdapterCompiler::ordinarySelectionAttempts;
+	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "NR_PERIPHERAL_COMPRESSION"; })) {
+		++AdapterCompiler::peripheralAttempts;
+		if (AdapterCompiler::peripheralAttempts == AdapterCompiler::peripheralAllocationFailureAttempt) {
+			if (AdapterCompiler::throwPeripheralAllocationFailure)
+				throw std::bad_alloc{};
+			result = E_OUTOFMEMORY;
+			return nullptr;
+		}
+		if (AdapterCompiler::failPeripheral)
+			return nullptr;
+	}
+	if (std::ranges::any_of(options, [](const auto& option) { return std::string_view(option.first) == "GUIDED_NR_RECONSTRUCTION"; })) {
+		++AdapterCompiler::guidedAttempts;
+		if (AdapterCompiler::throwGuidedAllocationFailure)
+			throw std::bad_alloc{};
+		if (AdapterCompiler::failGuidedAllocation) {
+			result = E_OUTOFMEMORY;
+			return nullptr;
+		}
+		if (AdapterCompiler::throwGuided)
+			throw std::runtime_error("Optional guided shader compilation failed");
+		if (AdapterCompiler::failGuided)
+			return nullptr;
+	}
 	if (std::filesystem::path(path).filename() == L"ModelResolutionCoverageCS.hlsl") {
 		++AdapterCompiler::packingAttempts;
 		if (AdapterCompiler::failPacking)
@@ -55,14 +145,25 @@ ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
 	if (AdapterCompiler::vr)
 		defines.push_back({ "VR", "1" });
 	defines.push_back({ nullptr, nullptr });
-	Microsoft::WRL::ComPtr<ID3DBlob> code, errors;
-	const auto result = D3DCompileFromFile(shaderPath.c_str(), defines.data(), &includes,
-		entry, target, D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS, 0, &code, &errors);
-	if (errors)
-		std::cerr << static_cast<const char*>(errors->GetBufferPointer());
-	D3D11ShaderTest::Check(result);
+	using Defines = std::vector<std::pair<std::string, std::string>>;
+	static std::map<std::tuple<std::filesystem::path, std::string, std::string, Defines>, Microsoft::WRL::ComPtr<ID3DBlob>> bytecode;
+	Defines key;
+	for (const auto& define : defines)
+		if (define.Name)
+			key.emplace_back(define.Name, define.Definition);
+	// Reuse bytecode across the stereo/filter matrix; every production compilation request still counts.
+	auto& code = bytecode[{ shaderPath, target, entry, std::move(key) }];
+	if (!code) {
+		Microsoft::WRL::ComPtr<ID3DBlob> errors;
+		const auto compilationResult = D3DCompileFromFile(shaderPath.c_str(), defines.data(), &includes,
+			entry, target, D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS, 0, &code, &errors);
+		if (errors)
+			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+		D3D11ShaderTest::Check(compilationResult);
+	}
 	ID3D11ComputeShader* shader = nullptr;
 	D3D11ShaderTest::Check(AdapterCompiler::device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &shader));
+	result = S_OK;
 	return shader;
 }
 ScopedGpuPass::ScopedGpuPass(std::string_view, const Util::PassTimingHandle&, bool) {}
@@ -100,6 +201,39 @@ namespace
 			std::cerr << message << ": expected " << expected << ", observed " << actual << '\n';
 			throw std::runtime_error(message);
 		}
+	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void CheckPreparationEvidence(const NeuralRendering::ModelResolution::Batch& batch,
+		const NeuralRendering::ModelResolution::Targets& native, bool shared)
+	{
+		using namespace NeuralRendering;
+		using Util::SameIdentity;
+		struct Slot
+		{
+			struct Texture
+			{
+				ComPtr<ID3D11Resource> resource11;
+			} color, depth, motionVectors;
+		} slot{ { native.color.resource }, { native.depth.resource }, { native.motion.resource } };
+		const std::array slots{ &slot };
+		const auto a_args = std::span(batch.arguments.data(), batch.count);
+		ExecutionDescriptor descriptor{};
+		descriptor.regionCount = 1;
+		descriptor.regions[0].physicalSlot = a_args.front().featureSlot;
+		ExecutionEvidence preparation(descriptor);
+		preparation.Update([](auto& snapshot) { snapshot.regions[0].newlyAllocatedLogicalBytes = 123; });
+		auto execution = std::make_shared<ExecutionEvidence>(descriptor);
+		const auto MergeModelPreparationEvidenceLocked = [&](ExecutionEvidence& value) { value.MergeResourcePreparation(preparation); };
+#	include "nr_model_preparation_evidence_under_test.h"
+		Require(execution->Snapshot().regions[0].newlyAllocatedLogicalBytes == (shared ? 123u : 0u),
+			"Early preparation allocation evidence was lost or attributed to a private batch");
+	}
+#endif
+
+	void ConfigureGuided(NeuralRendering::RendererApplyArgs& args)
+	{
+		args.guidedReconstructionEnabled = AdapterCompiler::guided;
 	}
 
 	struct Region
@@ -170,12 +304,26 @@ namespace
 		ComPtr<ID3D11ComputeShader> shader;
 		ComPtr<ID3D11ShaderReflection> reflection;
 
-		Shader(ID3D11Device* device, const wchar_t* path, bool vr, const char* featureRoot = "features/Neural Rendering/Shaders")
+		Shader(ID3D11Device* device, const wchar_t* path, bool vr, const char* featureRoot = "features/Neural Rendering/Shaders", bool zeroGuidance = false, [[maybe_unused]] bool legacyOutput = false,
+			std::span<const D3D_SHADER_MACRO> extraDefines = {})
 		{
 			PackageIncludes includes("package/Shaders", featureRoot);
-			const D3D_SHADER_MACRO defines[]{ { "VR", "1" }, { nullptr, nullptr } };
+			std::vector<D3D_SHADER_MACRO> defines;
+			if (vr)
+				defines.push_back({ "VR", "1" });
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			defines.push_back({ "DEVBENCH_BRIDGE_ENABLED", "1" });
+			if (legacyOutput)
+				defines.push_back({ "NR_WHOLE_PIXEL_REJECTION", "1" });
+#endif
+			if (AdapterCompiler::guided && std::filesystem::path(path).filename() == L"ModelResolutionReconstructCS.hlsl")
+				defines.push_back({ "GUIDED_NR_RECONSTRUCTION", "1" });
+			if (zeroGuidance)
+				defines.push_back({ "GUIDED_NR_GUIDANCE_STRENGTH", "0" });
+			defines.insert(defines.end(), extraDefines.begin(), extraDefines.end());
+			defines.push_back({ nullptr, nullptr });
 			ComPtr<ID3DBlob> code, errors;
-			const auto result = D3DCompileFromFile(path, vr ? defines : defines + 1, &includes,
+			const auto result = D3DCompileFromFile(path, defines.data(), &includes,
 				"main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
 				0, &code, &errors);
 			if (errors)
@@ -189,7 +337,12 @@ namespace
 
 	void Configure(ConstantBuffer& constants, Size source, Size model, Region sourceRegion, Region modelRegion, bool hasMask, Motion motionScale)
 	{
-		Require(constants.bytes.size() == 352, "Model resolution cbuffer layout changed");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		Require(constants.bytes.size() == 368, "Bridge model resolution cbuffer layout changed");
+		constants.SetVariable("ExperimentalShadowTransfer", 1.0f);
+#else
+		Require(constants.bytes.size() == 352, "Production model resolution cbuffer layout changed");
+#endif
 		constants.SetVariable("SourceSize", source);
 		constants.SetVariable("ModelSize", model);
 		constants.SetVariable("SourceRegionOffset", sourceRegion.offset);
@@ -267,6 +420,176 @@ namespace
 		}
 	}
 
+	void CheckSharedFootprint(ID3D11Device* device, ID3D11DeviceContext* context, Shader& shader, Shader& shared, bool peripheral, UINT compression)
+	{
+		using namespace NeuralRendering;
+		constexpr Size source{ 27, 15 };
+		const float nan = std::numeric_limits<float>::quiet_NaN();
+		for (UINT percent : { 33u, 50u, 90u, 100u }) {
+			const auto geometry = BuildModelResolutionGeometry(UpscalingDLSS::ViewportCrop::Identity(source[0], source[1], source[0], source[1]),
+				{ source[0], source[1] }, { 0, 0, source[0], source[1] }, percent);
+			Require(geometry.has_value(), "Shared footprint fixture geometry failed");
+			const auto plan = BuildPeripheralCompressionPlan(*geometry, { source[0], source[1] },
+				UpscalingDLSS::ViewportCrop::Identity(source[0], source[1], source[0], source[1]), percent,
+				{ .requested = true, .compressionPercent = compression });
+			const auto modelExtent = peripheral ? plan.model : geometry->modelSize;
+			const Size model{ modelExtent.width, modelExtent.height };
+			std::unique_ptr<ConstantBuffer> mapping;
+			if (peripheral) {
+				Require(plan.Active(), "Shared footprint fixture compression failed");
+				mapping = std::make_unique<ConstantBuffer>(device, shader.reflection.Get(), "PeripheralMappingConstants");
+				std::memcpy(mapping->bytes.data(), &plan.mapping, mapping->bytes.size());
+			}
+			for (UINT eye = 0; eye < 2; ++eye) {
+				std::vector<Pixel> colors(source[0] * source[1]);
+				std::vector<float> depths(colors.size()), masks(colors.size());
+				std::vector<Motion> motions(colors.size());
+				for (UINT i = 0; i < colors.size(); ++i) {
+					colors[i] = { float(i % 17) * .125f + eye, float(i % 5), float(i % 3) * .5f, .375f };
+					if (i % 11 == 0)
+						colors[i][0] = nan;
+					depths[i] = i % 13 == 0 ? nan : float(i % 7) / 6;
+					motions[i] = { i % 9 == 0 ? nan : float(i % 5) * .01f, float(i % 11) * -.02f - eye };
+					masks[i] = i % 13 == 0 ? nan : float(i % 3) * .5f;
+				}
+				Texture color(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, colors);
+				Texture depth(device, source, DXGI_FORMAT_R32_FLOAT, depths);
+				Texture motion(device, source, DXGI_FORMAT_R32G32_FLOAT, motions);
+				Texture mask(device, source, DXGI_FORMAT_R32_FLOAT, masks);
+				Texture proxy(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(model[0] * model[1], sentinel));
+				Texture proxyDepth(device, model, DXGI_FORMAT_R32_FLOAT, std::vector(model[0] * model[1], -11.0f));
+				Texture proxyMotion(device, model, DXGI_FORMAT_R32G32_FLOAT, std::vector(model[0] * model[1], Motion{ -11, -11 }));
+				Texture proxyMask(device, model, DXGI_FORMAT_R32_FLOAT, std::vector(model[0] * model[1], -11.0f));
+				const std::array inputs{ color.srv.Get(), depth.srv.Get(), motion.srv.Get(), eye ? mask.srv.Get() : nullptr };
+				const std::array outputs{ proxy.uav.Get(), proxyDepth.uav.Get(), proxyMotion.uav.Get(), proxyMask.uav.Get() };
+				ConstantBuffer constants(device, shader.reflection.Get(), "ModelResolutionConstants");
+				Configure(constants, source, model, { {}, source }, { {}, model }, eye != 0, { 1, 1 });
+				if (mapping)
+					mapping->Bind(context);
+				Dispatch(context, shader, constants, model, inputs, outputs);
+				const auto baselineColor = proxy.Read<Pixel>(device, context);
+				const auto baselineDepth = proxyDepth.Read<float>(device, context);
+				const auto baselineMotion = proxyMotion.Read<Motion>(device, context);
+				const auto baselineMask = proxyMask.Read<float>(device, context);
+				const std::array untouched{ -11.0f, -11.0f, -11.0f, -11.0f };
+				context->ClearUnorderedAccessViewFloat(proxy.uav.Get(), sentinel.data());
+				for (auto* view : { proxyDepth.uav.Get(), proxyMotion.uav.Get(), proxyMask.uav.Get() })
+					context->ClearUnorderedAccessViewFloat(view, untouched.data());
+				if (mapping)
+					mapping->Bind(context);
+				Dispatch(context, shared, constants, model, inputs, outputs);
+				Require(proxy.Read<Pixel>(device, context) == baselineColor &&
+							proxyDepth.Read<float>(device, context) == baselineDepth &&
+							proxyMotion.Read<Motion>(device, context) == baselineMotion &&
+							proxyMask.Read<float>(device, context) == baselineMask,
+					"Shared traversal changed colour/alpha, depth, motion or mask output");
+			}
+		}
+	}
+
+	void CheckGuideDonors(ID3D11Device* device, ID3D11DeviceContext* context, Shader& shader, bool reversed)
+	{
+		constexpr Size source{ 27, 15 }, model{ 9, 5 };
+		const float nan = std::numeric_limits<float>::quiet_NaN(), infinity = std::numeric_limits<float>::infinity();
+		for (unsigned eye = 0; eye < 2; ++eye) {
+			std::vector<Pixel> colors(source[0] * source[1], Pixel{ 0.25f + eye, 0.5f, 0.75f, 0.375f });
+			std::vector<float> depths(colors.size(), 1.0f), masks(colors.size(), 0.75f);
+			std::vector<Motion> motions(colors.size());
+			for (UINT y = 0; y < source[1]; ++y) {
+				for (UINT x = 0; x < source[0]; ++x) {
+					const auto index = y * source[0] + x, donor = (y % 3) * 3 + x % 3;
+					auto& depth = depths[index];
+					auto& motion = motions[index];
+					motion = { float(eye + 1) * (donor + 1) * 0.01f, -float(y + 1) * 0.01f };
+					switch (x / 3) {
+					case 0:
+						depth = donor == 0 ? 0.1f : 0.6f;
+						if (donor == 0)
+							motion[0] = nan;
+						break;
+					case 1:
+						depth = 0.2f;
+						if (donor == 0)
+							motion[0] = nan;
+						break;
+					case 2:
+						depth = 0.2f;
+						break;
+					case 3:
+						depth = donor == 0 ? nan : donor == 1 ? infinity :
+						                       donor == 2     ? -0.1f :
+						                       donor == 3     ? 1.1f :
+						                                        0.4f;
+						break;
+					case 4:
+						depth = nan;
+						break;
+					case 5:
+						depth = 1.0f;
+						break;
+					case 6:
+						depth = donor == 0 ? 0.1f : 0.5f;
+						if (donor == 0)
+							motion[1] = infinity;
+						break;
+					case 7:
+						depth = donor == 0 ? 0.5f : 0.1f;
+						break;
+					case 8:
+						depth = donor == 8 ? 0.7f : 0.3f;
+						if (donor != 8)
+							motion[0] = nan;
+						break;
+					}
+					if (reversed)
+						depth = 1.0f - depth;
+				}
+			}
+			Texture color(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, colors);
+			Texture depth(device, source, DXGI_FORMAT_R32_FLOAT, depths);
+			Texture motion(device, source, DXGI_FORMAT_R32G32_FLOAT, motions);
+			Texture mask(device, source, DXGI_FORMAT_R32_FLOAT, masks);
+			Texture proxy(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(model[0] * model[1], sentinel));
+			Texture proxyDepth(device, model, DXGI_FORMAT_R32_FLOAT, std::vector(model[0] * model[1], -11.0f));
+			Texture proxyMotion(device, model, DXGI_FORMAT_R32G32_FLOAT, std::vector(model[0] * model[1], Motion{ -11, -11 }));
+			Texture proxyMask(device, model, DXGI_FORMAT_R32_FLOAT, std::vector(model[0] * model[1], -11.0f));
+			ConstantBuffer constants(device, shader.reflection.Get(), "ModelResolutionConstants");
+			Configure(constants, source, model, { {}, source }, { {}, model }, eye != 0, { 1, 1 });
+			const std::array inputs{ color.srv.Get(), depth.srv.Get(), motion.srv.Get(), eye ? mask.srv.Get() : nullptr };
+			const std::array outputs{ proxy.uav.Get(), proxyDepth.uav.Get(), proxyMotion.uav.Get(), proxyMask.uav.Get() };
+			Dispatch(context, shader, constants, model, inputs, outputs);
+			const auto actualDepth = proxyDepth.Read<float>(device, context);
+			const auto actualMotion = proxyMotion.Read<Motion>(device, context);
+			const auto actualColor = proxy.Read<Pixel>(device, context);
+			const auto actualMask = proxyMask.Read<float>(device, context);
+			for (UINT y = 0; y < model[1]; ++y) {
+				for (UINT x = 0; x < model[0]; ++x) {
+					float nearest = reversed ? 0.0f : 1.0f;
+					Motion velocity{};
+					bool found = false;
+					for (UINT sy = y * 3; sy < (y + 1) * 3; ++sy) {
+						for (UINT sx = x * 3; sx < (x + 1) * 3; ++sx) {
+							const auto index = sy * source[0] + sx;
+							const float d = depths[index];
+							const auto v = motions[index];
+							if (std::isfinite(d) && d >= 0 && d <= 1 && std::isfinite(v[0]) && std::isfinite(v[1]) &&
+								(!found || (reversed ? d > nearest : d < nearest))) {
+								nearest = d;
+								velocity = v;
+								found = true;
+							}
+						}
+					}
+					const auto index = y * model[0] + x;
+					Require(actualDepth[index] == nearest && actualMotion[index] == velocity,
+						"Preparation changed first-valid, strict-depth or finite-motion donor selection");
+					Require(actualColor[index] == colors.front() && actualMask[index] == (eye ? 0.75f : -11.0f),
+						"Guide selection changed colour, alpha or optional-mask preparation");
+				}
+			}
+		}
+	}
+
 	void CheckNonIntegerPrepare(ID3D11Device* device, ID3D11DeviceContext* context, Shader& shader, bool fullScale, bool clipped = false)
 	{
 		constexpr Size source{ 13, 9 };
@@ -318,8 +641,22 @@ namespace
 			Near(modelMean[channel], sourceMean[channel], "Odd-size area reduction did not conserve mean color");
 	}
 
-	void CheckReconstruct(ID3D11Device* device, ID3D11DeviceContext* context, Shader& shader, unsigned condition)
+	void CheckReconstruct(ID3D11Device* device, ID3D11DeviceContext* context, Shader& shader, unsigned condition, [[maybe_unused]] bool legacyOutput = false)
 	{
+		struct SaturationCase
+		{
+			UINT format;
+			float neuralRed, neuralBlue, expectedRed, expectedBlue;
+		};
+		constexpr std::array<SaturationCase, 6> saturationCases{ {
+			{ 1u, 70000.0f, 0.25f, 65504.0f, 0.3f },
+			{ 2u, -1.0f, 0.25f, 0.0f, 0.3f },
+			{ 3u, 2.0f, 0.25f, 1.0f, 0.3f },
+			{ 1u, -70000.0f, 0.25f, -65504.0f, 0.3f },
+			{ 2u, 70000.0f, 70000.0f, 65024.0f, 64512.0f },
+			{ 3u, -1.0f, 0.25f, 0.0f, 0.3f },
+		} };
+		const auto* saturation = condition >= 4 ? &saturationCases.at(condition - 4) : nullptr;
 		constexpr Size source{ 14, 10 }, model{ 7, 5 };
 		constexpr Region sourceRegion{ { 2, 2 }, { 10, 6 } }, modelRegion{ { 1, 1 }, { 5, 3 } };
 		std::vector<Pixel> color(source[0] * source[1]);
@@ -338,9 +675,11 @@ namespace
 					neural[index][0] = std::numeric_limits<float>::quiet_NaN();
 				if (condition == 3)
 					neural[index][1] = std::numeric_limits<float>::infinity();
-				if (condition >= 4)
-					neural[index][0] = condition == 4 ? 70000.0f : condition == 5 ? -1.0f :
-					                                                                2.0f;
+				if (saturation) {
+					neural[index][0] = saturation->neuralRed;
+					neural[index][1] += 0.125f;
+					neural[index][2] = saturation->neuralBlue;
+				}
 			}
 		}
 		Texture input(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, color);
@@ -349,7 +688,7 @@ namespace
 		Texture result(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
 		ConstantBuffer constants(device, shader.reflection.Get(), "ModelResolutionConstants");
 		Configure(constants, source, model, sourceRegion, modelRegion, false, { 1, 1 });
-		constants.SetVariable("OutputFormat", condition >= 4 ? condition - 3 : 0u);
+		constants.SetVariable("OutputFormat", saturation ? saturation->format : 0u);
 		const std::array inputs{ input.srv.Get(), proxy.srv.Get(), outputNeural.srv.Get() };
 		const std::array outputs{ result.uav.Get() };
 		Dispatch(context, shader, constants, sourceRegion.size, inputs, outputs);
@@ -361,15 +700,341 @@ namespace
 					Require(pixels[index] == sentinel, "Reconstruction wrote outside its source ROI");
 					continue;
 				}
-				for (UINT channel = 0; channel < 3; ++channel)
-					Near(pixels[index][channel], color[index][channel] + residual, "Residual reconstruction lost base detail, crossed ROI, or failed finite fallback");
+				for (UINT channel = 0; channel < 3; ++channel) {
+					float expected = color[index][channel] + residual;
+					if (saturation)
+						expected = channel == 0 ? saturation->expectedRed : channel == 2 ? saturation->expectedBlue :
+						                                                                   color[index][channel] + 0.125f;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (legacyOutput && saturation)
+						expected = color[index][channel];
+#endif
+					Near(pixels[index][channel], expected, "Residual reconstruction lost detail, finite saturation or corrupt-sample fallback");
+				}
 				Near(pixels[index][3], color[index][3], "Residual reconstruction changed full-resolution alpha");
 			}
 		}
 	}
-	void CheckSharedAdapter(ID3D11Device* device, ID3D11DeviceContext* context)
+	std::optional<std::array<double, 3>> ReferenceResidual(std::span<const Pixel> baseline, std::span<const Pixel> neural,
+		Size model, Region bounds, double px, double py)
+	{
+		const auto kernel = [](double distance) { return std::max(0.0, 1.0 - std::abs(distance)); };
+		std::array<double, 3> residual{};
+		double normalization = 0;
+		for (int sy = int(std::floor(py)); sy <= int(std::floor(py)) + 1; ++sy)
+			for (int sx = int(std::floor(px)); sx <= int(std::floor(px)) + 1; ++sx) {
+				const auto weight = kernel(px - sx) * kernel(py - sy);
+				const auto sampleX = std::clamp(sx, int(bounds.offset[0]), int(bounds.offset[0] + bounds.size[0] - 1));
+				const auto sampleY = std::clamp(sy, int(bounds.offset[1]), int(bounds.offset[1] + bounds.size[1] - 1));
+				const auto sampleIndex = sampleY * model[0] + sampleX;
+				for (unsigned channel = 0; channel < 3; ++channel) {
+					const float change = neural[sampleIndex][channel] - baseline[sampleIndex][channel];
+					if (!std::isfinite(change))
+						return std::nullopt;
+					residual[channel] += weight * change;
+				}
+				normalization += weight;
+			}
+		for (auto& channel : residual)
+			channel /= normalization;
+		return residual;
+	}
+
+	void CheckReconstructionKernel(ID3D11Device* device, ID3D11DeviceContext* context, Shader& shader)
+	{
+		constexpr Size source{ 19, 13 }, model{ 10, 7 };
+		constexpr Region sourceRegion{ { 3, 2 }, { 13, 9 } }, modelRegion{ { 1, 1 }, { 8, 5 } };
+		std::vector<Pixel> colors(source[0] * source[1]);
+		for (unsigned i = 0; i < colors.size(); ++i)
+			colors[i] = { 2.0f + float(i % 2), -0.25f, 8.0f, 0.2f + 0.01f * float(i % 17) };
+		const float invalid = std::numeric_limits<float>::quiet_NaN();
+		std::vector<Pixel> baseline(model[0] * model[1], Pixel{ invalid, invalid, invalid, 1 });
+		auto neural = baseline;
+		for (UINT y = modelRegion.offset[1]; y < modelRegion.offset[1] + modelRegion.size[1]; ++y)
+			for (UINT x = modelRegion.offset[0]; x < modelRegion.offset[0] + modelRegion.size[0]; ++x) {
+				const auto i = y * model[0] + x;
+				baseline[i] = { 0.25f, 0.5f, 1.0f, 1.0f };
+				neural[i] = { 0.25f + (x > 5 ? 0.2f : -0.1f), 0.5f + 0.015f * float((x * 7 + y * 3) % 11), 1.0f - 0.02f * float(y % 3), 0.0f };
+			}
+		Texture input(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, colors);
+		Texture proxy(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, baseline);
+		Texture outputNeural(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, neural);
+		Texture result(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel));
+		ConstantBuffer constants(device, shader.reflection.Get(), "ModelResolutionConstants");
+		Configure(constants, source, model, sourceRegion, modelRegion, false, { 1, 1 });
+		const std::array inputs{ input.srv.Get(), proxy.srv.Get(), outputNeural.srv.Get() };
+		const std::array outputs{ result.uav.Get() };
+		Dispatch(context, shader, constants, sourceRegion.size, inputs, outputs);
+		const auto pixels = result.Read<Pixel>(device, context);
+		for (UINT y = 0; y < source[1]; ++y)
+			for (UINT x = 0; x < source[0]; ++x) {
+				const auto i = y * source[0] + x;
+				if (!sourceRegion.Contains(x, y)) {
+					Require(pixels[i] == sentinel, "Kernel wrote outside the source crop");
+					continue;
+				}
+				const double px = (x + 0.5) * model[0] / source[0] - 0.5, py = (y + 0.5) * model[1] / source[1] - 0.5;
+				const auto residual = ReferenceResidual(baseline, neural, model, modelRegion, px, py);
+				Require(residual.has_value(), "Finite residual fixture produced invalid reference");
+				for (unsigned channel = 0; channel < 3; ++channel)
+					Near(pixels[i][channel], colors[i][channel] + float((*residual)[channel]), "Residual kernel disagrees with the double-precision reference or clamps HDR");
+				Require(pixels[i][3] == colors[i][3], "Residual kernel changed full-resolution alpha");
+			}
+		Texture depth(device, source, DXGI_FORMAT_R32_FLOAT, std::vector(colors.size(), 0.5f));
+		Texture motion(device, source, DXGI_FORMAT_R32G32_FLOAT, std::vector(colors.size(), Motion{}));
+		Texture reconstructed(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel));
+		NeuralRendering::RendererApplyArgs args;
+		ConfigureGuided(args);
+		args.device = device;
+		args.context = context;
+		args.colorInput = input.texture.Get();
+		args.depthGuide = depth.texture.Get();
+		args.depthGuideSRV = depth.srv.Get();
+		args.motionVectors = motion.texture.Get();
+		args.colorOutput = reconstructed.texture.Get();
+		args.colorWidth = args.outputWidth = args.guideWidth = source[0];
+		args.colorHeight = args.outputHeight = args.guideHeight = source[1];
+		args.viewportCrop = UpscalingDLSS::ViewportCrop::Identity(source[0], source[1], source[0], source[1]);
+		args.computeSubrect = { sourceRegion.offset[0], sourceRegion.offset[1], sourceRegion.size[0], sourceRegion.size[1] };
+		args.modelResolutionPercent = 50;
+		args.renderingMode = NeuralRendering::RenderingMode::FullResolution;
+		NeuralRendering::ModelResolution adapter;
+		NeuralRendering::ModelResolution::Batch batch;
+		HRESULT status = S_OK;
+		const auto request = std::span(&args, 1);
+		Require(adapter.Prepare(request, batch, status), "Kernel adapter preparation failed");
+		context->CopyResource(batch.arguments[0].colorInput, proxy.texture.Get());
+		context->CopyResource(batch.arguments[0].colorOutput, outputNeural.texture.Get());
+		Require(adapter.Reconstruct(request, batch, status), "Kernel adapter reconstruction failed");
+		adapter.Commit(request, batch);
+		Dispatch(context, shader, constants, sourceRegion.size, inputs, outputs);
+		const auto direct = result.Read<Pixel>(device, context), adapted = reconstructed.Read<Pixel>(device, context);
+		Require(direct == adapted, "Production adapter differs from direct bilinear reconstruction");
+	}
+
+	void CheckGuidedEdges(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
+	{
+		constexpr Size source{ 8, 4 }, model{ 4, 2 };
+		Shader guided(device, L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", vr);
+		Shader zero(device, L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", vr, "features/Neural Rendering/Shaders", true);
+		D3D11_SHADER_DESC reflection{};
+		Check(guided.reflection->GetDesc(&reflection));
+		Require(reflection.BoundResources == 5, "Guided kernel added a resource binding");
+		for (UINT i = 0; i < reflection.BoundResources; ++i) {
+			D3D11_SHADER_INPUT_BIND_DESC binding{};
+			Check(guided.reflection->GetResourceBindingDesc(i, &binding));
+			Require((binding.Type == D3D_SIT_CBUFFER && binding.BindPoint == 0) ||
+						(binding.Type == D3D_SIT_TEXTURE && binding.BindPoint <= 2) ||
+						(binding.Type == D3D_SIT_UAV_RWTYPED && binding.BindPoint == 0),
+				"Guided kernel changed the host binding contract");
+		}
+		for (float exposure : { 1e-8f, 0.001f, 1.0f, 1000.0f, 1e30f })
+			for (bool zeroStrength : { false, true })
+				for (bool black : { false, true }) {
+					auto& shader = zeroStrength ? zero : guided;
+					std::vector<Pixel> colors(source[0] * source[1]), proxy(model[0] * model[1]), neural(proxy.size());
+					for (unsigned i = 0; i < colors.size(); ++i) {
+						const float value = black ? 0 : i % source[0] < 4 ? -0.25f :
+						                                                    2.0f;
+						colors[i] = { value * exposure, value * exposure, value * exposure, 0.37f };
+					}
+					for (unsigned i = 0; i < proxy.size(); ++i) {
+						const float value = black ? 0 : i % model[0] < 2 ? -0.25f :
+						                                                   2.0f;
+						proxy[i] = { value * exposure, value * exposure, value * exposure, 1 };
+						const float residual = (i % model[0] < 2 ? 0.1f : -0.1f) * exposure;
+						neural[i] = { proxy[i][0] + residual, proxy[i][1] - residual, proxy[i][2] + residual, 0 };
+					}
+					Texture original(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, colors);
+					Texture baseline(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, proxy);
+					Texture output(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, neural);
+					Texture result(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel));
+					ConstantBuffer constants(device, shader.reflection.Get(), "ModelResolutionConstants");
+					Configure(constants, source, model, { {}, source }, { {}, model }, false, { 1, 1 });
+					const std::array inputs{ original.srv.Get(), baseline.srv.Get(), output.srv.Get() };
+					const std::array outputs{ result.uav.Get() };
+					Dispatch(context, shader, constants, source, inputs, outputs);
+					const auto pixels = result.Read<Pixel>(device, context);
+					for (unsigned y = 0; y < source[1]; ++y)
+						for (unsigned x = 0; x < source[0]; ++x) {
+							const unsigned i = y * source[0] + x;
+							const double px = (x + 0.5) / 2 - 0.5, py = (y + 0.5) / 2 - 0.5;
+							double scale = std::abs(colors[i][0]), sum = 0, edit = 0;
+							for (int dy = 0; dy < 2; ++dy)
+								for (int dx = 0; dx < 2; ++dx) {
+									const int sx = std::clamp(int(std::floor(px)) + dx, 0, 3), sy = std::clamp(int(std::floor(py)) + dy, 0, 1);
+									scale = std::max(scale, std::abs(double(proxy[sy * 4 + sx][0])));
+								}
+							for (int dy = 0; dy < 2; ++dy)
+								for (int dx = 0; dx < 2; ++dx) {
+									const int sx = std::clamp(int(std::floor(px)) + dx, 0, 3), sy = std::clamp(int(std::floor(py)) + dy, 0, 1);
+									const double fx = px - std::floor(px), fy = py - std::floor(py);
+									double weight = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy);
+									if (!zeroStrength && scale > 1e-6) {
+										const double difference = (colors[i][0] - proxy[sy * 4 + sx][0]) / scale;
+										weight /= 1 + 16 * difference * difference;
+									}
+									edit += weight * (neural[sy * 4 + sx][0] - proxy[sy * 4 + sx][0]);
+									sum += weight;
+								}
+							const float expected = colors[i][0] + float(edit / sum);
+							Require(std::isfinite(pixels[i][0]) && std::abs(pixels[i][0] - expected) <= 3e-6f * exposure, "Guided edge, signed HDR, exposure or zero-guidance reference failed");
+							Require(pixels[i][3] == colors[i][3], "Guidance changed source alpha");
+						}
+				}
+	}
+
+	void CheckGuidedConfidenceTuning(ID3D11Device* device, ID3D11DeviceContext* context)
 	{
 		using namespace NeuralRendering;
+		constexpr Size source{ 8, 4 }, model{ 4, 2 };
+		const std::vector<Pixel> colors(source[0] * source[1], Pixel{ 1.0f, 1.0f, 1.0f, 0.37f });
+		Texture input(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, colors);
+		Texture depth(device, source, DXGI_FORMAT_R32_FLOAT, std::vector(colors.size(), 0.5f));
+		Texture motion(device, source, DXGI_FORMAT_R32G32_FLOAT, std::vector(colors.size(), Motion{}));
+		Texture output(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel));
+		RendererApplyArgs args;
+		ConfigureGuided(args);
+		args.device = device;
+		args.context = context;
+		args.colorInput = input.texture.Get();
+		args.depthGuide = depth.texture.Get();
+		args.depthGuideSRV = depth.srv.Get();
+		args.motionVectors = motion.texture.Get();
+		args.colorOutput = output.texture.Get();
+		args.colorWidth = args.outputWidth = args.guideWidth = source[0];
+		args.colorHeight = args.outputHeight = args.guideHeight = source[1];
+		args.viewportCrop = UpscalingDLSS::ViewportCrop::Identity(source[0], source[1], source[0], source[1]);
+		args.computeSubrect = { 0, 0, source[0], source[1] };
+		args.modelResolutionPercent = 50;
+		args.renderingMode = RenderingMode::FullResolution;
+		args.insertionPoint = ResolveInsertionPoint(*args.renderingMode);
+		ModelResolution adapter;
+		ComPtr<ID3D11ComputeShader> warmedShader;
+		ComPtr<ID3D11Resource> warmedColor;
+		std::optional<ModelResolutionHistory> history;
+		unsigned compiled = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const auto experimentsBeforeDefaults = AdapterCompiler::experimentalAttempts;
+#endif
+		for (const auto [percent, matched] : { std::pair{ 0u, false }, { 10u, false }, { 25u, false }, { 100u, false }, { 100u, true }, { 0u, false } }) {
+			const float proxyValue = matched ? 1.0f : 0.0f;
+			const std::vector<Pixel> reference(model[0] * model[1], Pixel{ proxyValue, proxyValue, proxyValue, 1.0f });
+			const std::vector<Pixel> neural(model[0] * model[1], Pixel{ proxyValue + 0.25f, proxyValue + 0.25f, proxyValue + 0.25f, 1.0f });
+			args.guidedConfidenceRejectionPercent = percent;
+			ModelResolution::Batch batch;
+			HRESULT status = S_OK;
+			const auto request = std::span(&args, 1);
+			Require(adapter.Prepare(request, batch, status), "Live confidence tuning preparation failed");
+			Require(batch.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution, "Confidence tuning lost guided reconstruction");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			Require(AdapterCompiler::experimentalAttempts == experimentsBeforeDefaults, "Default comparison settings selected an experimental shader");
+			for (unsigned field = 0; field < 4; ++field) {
+				auto stale = args;
+				switch (field) {
+				case 0:
+					stale.reconstructionTuning.shadowTransferPercent = 0;
+					break;
+				case 1:
+					stale.reconstructionTuning.footprintSubdivisions = 1;
+					break;
+				case 2:
+					stale.reconstructionTuning.perChannelClamping = false;
+					break;
+				case 3:
+					stale.reconstructionTuning.depthSampleMotion = false;
+					break;
+				}
+				Require(!adapter.Reconstruct(std::span(&stale, 1), batch, status) && status == E_INVALIDARG,
+					"Changed comparison settings reached an already prepared batch");
+			}
+#endif
+			if (warmedShader) {
+				Require(AdapterCompiler::calls == compiled && batch.reconstructionShader == warmedShader && batch.targets[0].color.resource == warmedColor,
+					"Changing confidence tuning recompiled a shader or replaced its working texture");
+				Require(batch.arguments[0].modelResolutionHistory == history, "Confidence tuning changed native temporal identity");
+			} else {
+				warmedShader = batch.reconstructionShader;
+				warmedColor = batch.targets[0].color.resource;
+				history = batch.arguments[0].modelResolutionHistory;
+				compiled = AdapterCompiler::calls;
+			}
+			context->UpdateSubresource(batch.targets[0].color.resource.Get(), 0, nullptr, reference.data(), model[0] * sizeof(Pixel), 0);
+			context->UpdateSubresource(batch.targets[0].output.resource.Get(), 0, nullptr, neural.data(), model[0] * sizeof(Pixel), 0);
+			Require(adapter.Reconstruct(request, batch, status), "Live confidence tuning reconstruction failed");
+			adapter.Commit(request, batch);
+			float fade = 1.0f;
+			if (percent != 0u && !matched) {
+				const float threshold = float(percent) * 0.01f;
+				const float phase = std::clamp((1.0f / 17.0f - threshold * 0.5f) / (threshold * 0.5f), 0.0f, 1.0f);
+				fade = phase * phase * (3.0f - 2.0f * phase);
+			}
+			for (const auto& pixel : output.Read<Pixel>(device, context)) {
+				for (unsigned channel = 0; channel < 3; ++channel)
+					Near(pixel[channel], 1.0f + 0.25f * fade, "Unreliable guided corrections did not fade continuously or restore at zero");
+				Require(pixel[3] == colors[0][3], "Confidence rejection changed source alpha");
+			}
+			++args.frameId;
+		}
+		ModelResolution::Batch rejected;
+		HRESULT status = S_OK;
+		args.guidedConfidenceRejectionPercent = kMaximumGuidedConfidenceRejectionPercent + 1;
+		Require(!adapter.Prepare(std::span(&args, 1), rejected, status) && status == E_INVALIDARG && AdapterCompiler::calls == compiled,
+			"Invalid confidence tuning reached allocation or shader compilation");
+		auto pair = std::array{ args, args };
+		pair[0].guidedConfidenceRejectionPercent = 0;
+		pair[1].guidedConfidenceRejectionPercent = 50;
+		pair[1].featureSlot = 1;
+		Require(!adapter.Prepare(pair, rejected, status) && status == E_INVALIDARG && AdapterCompiler::calls == compiled,
+			"Different per-eye confidence values escaped the batch boundary");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		args.guidedConfidenceRejectionPercent = 0;
+		for (unsigned invalid : { 0u, 3u, 5u, 100u, std::numeric_limits<unsigned>::max() }) {
+			args.reconstructionTuning.footprintSubdivisions = invalid;
+			Require(!adapter.Prepare(std::span(&args, 1), rejected, status) && status == E_INVALIDARG && AdapterCompiler::calls == compiled,
+				"Invalid footprint reached allocation or compilation");
+		}
+		args.reconstructionTuning = {};
+		args.reconstructionTuning.shadowTransferPercent = 101;
+		Require(!adapter.Prepare(std::span(&args, 1), rejected, status) && status == E_INVALIDARG && AdapterCompiler::calls == compiled,
+			"Invalid shadow transfer reached allocation or compilation");
+		pair = { args, args };
+		pair[0].reconstructionTuning = {};
+		pair[1].featureSlot = 1;
+		pair[1].reconstructionTuning = {};
+		pair[1].reconstructionTuning.depthSampleMotion = false;
+		Require(!adapter.Prepare(pair, rejected, status) && status == E_INVALIDARG && AdapterCompiler::calls == compiled,
+			"Different per-eye experiments escaped the batch boundary");
+		args.reconstructionTuning = {};
+		args.reconstructionTuning.perChannelClamping = false;
+		for (unsigned failure = 1; failure <= 4; ++failure) {
+			adapter.InvalidateShaders();
+			AdapterCompiler::experimentalFailure = failure;
+			const auto expected = failure <= 2 ? E_FAIL : E_OUTOFMEMORY;
+			Require(!adapter.Prepare(std::span(&args, 1), rejected, status) && status == expected,
+				"Experimental shader failure escaped its HRESULT boundary");
+			const auto attempts = AdapterCompiler::experimentalAttempts;
+			Require(!adapter.Prepare(std::span(&args, 1), rejected, status) && status == expected &&
+						AdapterCompiler::experimentalAttempts == attempts + (failure <= 2 ? 0u : 1u),
+				"Experimental shader failure did not retain bounded retry behavior");
+			AdapterCompiler::experimentalFailure = 0;
+			adapter.InvalidateShaders();
+			Require(adapter.Prepare(std::span(&args, 1), rejected, status) && rejected.targets[0].color.resource == warmedColor,
+				"Shader invalidation did not recover the experiment while retaining storage");
+		}
+		const auto warmedCompilations = AdapterCompiler::calls;
+		Require(adapter.Prepare(std::span(&args, 1), rejected, status) && AdapterCompiler::calls == warmedCompilations,
+			"An unchanged experiment recompiled its shader");
+		args.reconstructionTuning = {};
+		Require(adapter.Prepare(std::span(&args, 1), rejected, status) && AdapterCompiler::calls == warmedCompilations,
+			"Returning to production reconstruction recompiled its shader");
+#endif
+	}
+
+	void CheckSharedAdapter(ID3D11Device* device, ID3D11DeviceContext* context, bool guidesOnly)
+	{
+		using namespace NeuralRendering;
+		const auto sharing = guidesOnly ? ModelResolution::Sharing::Guides : ModelResolution::Sharing::All;
 		constexpr Size source{ 17, 11 };
 		std::vector<Pixel> color(source[0] * source[1]), right(color.size());
 		std::vector<float> depths(color.size());
@@ -387,6 +1052,7 @@ namespace
 		Texture leftOutput(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
 		Texture rightOutput(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
 		RendererApplyArgs input;
+		ConfigureGuided(input);
 		input.device = device;
 		input.context = context;
 		input.colorInput = leftInput.texture.Get();
@@ -404,14 +1070,14 @@ namespace
 			input.reset = mode == RenderingMode::ReducedResolution;
 			for (unsigned percent : { 90u, 80u, 50u, 33u, 30u }) {
 				input.modelResolutionPercent = percent;
+				ConfigureGuided(input);
 				std::array args{ input, input };
 				args[1].featureSlot = 3;
 				args[1].colorInput = rightInput.texture.Get();
 				args[1].colorOutput = rightOutput.texture.Get();
-				Require(ModelResolution::CanUseSharedTargets(args, false, false), "Raw A/B/C inputs must accept shared preparation");
-				Require(!ModelResolution::CanUseSharedTargets(args, true, false) && !ModelResolution::CanUseSharedTargets(args, false, true),
-					"Color processing and compact recovery must retain staged inputs");
-				ModelResolution staged, shared;
+				Require(ModelResolution::CanUseSharedTargets(args, false), "Raw A/B/C inputs must accept shared preparation");
+				Require(!ModelResolution::CanUseSharedTargets(args, true), "Compact recovery must retain staged inputs");
+				ModelResolution staged, shared, monoAdapter;
 				RendererApplyArgs projected;
 				Require(ModelResolution::Project(args[0], projected) && projected.reset == input.reset &&
 							projected.modelResolutionHistory == ModelResolutionHistory{ input.viewportCrop, percent, input.computeSubrect },
@@ -428,15 +1094,19 @@ namespace
 						own(Texture(device, model, DXGI_FORMAT_R32_FLOAT, std::vector(count, -1.0f))),
 						own(Texture(device, model, DXGI_FORMAT_R32G32_FLOAT, std::vector(count, Motion{ -1, -1 }))),
 						own(Texture(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(count, sentinel))) };
+					if (guidesOnly) {
+						target.color = {};
+						target.output = {};
+					}
 				}
-				const auto retained = 2u * source[0] * source[1] * sizeof(Pixel);
-				Require(shared.AdditionalBytes(args, true) == retained, "Shared aliases must not enter private allocation admission");
+				const auto retained = (2u * source[0] * source[1] + (guidesOnly ? 4u * count : 0u)) * sizeof(Pixel);
+				Require(shared.AdditionalBytes(args, sharing) == retained, "Shared aliases must not enter private allocation admission");
 				auto bad = targets;
-				bad[1].color.srv = bad[1].depth.srv;
+				bad[1].motion.srv = bad[1].depth.srv;
 				Require(!shared.Prepare(args, invalid, result, bad) && result == E_INVALIDARG && invalid.count == 0,
 					"Mismatched right-eye view must reject the whole batch before preparation");
-				const auto untouched = Texture(targets[0].color, model).Read<Pixel>(device, context);
-				Require(std::ranges::all_of(untouched, [](const auto& value) { return value == sentinel; }),
+				const auto untouched = Texture(targets[0].depth, model).Read<float>(device, context);
+				Require(std::ranges::all_of(untouched, [](const auto& value) { return value == -1.0f; }),
 					"Invalid right-eye target dispatched left-eye preparation");
 				for (bool selectionSource : { false, true }) {
 					auto aliased = args;
@@ -446,9 +1116,12 @@ namespace
 						aliased[1].controlMask = targets[0].depth.resource;
 					Require(!shared.Prepare(aliased, invalid, result, targets) && invalid.count == 0,
 						"An actor source aliased a mutable shared model target");
-					Require(Texture(targets[0].color, model).Read<Pixel>(device, context) == untouched,
+					Require(Texture(targets[0].depth, model).Read<float>(device, context) == untouched,
 						"Aliased actor input dispatched the other eye before rejection");
 				}
+				bad = targets;
+				bad[1].color = guidesOnly ? own(Texture(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(count, sentinel))) : Color::Texture{};
+				Require(!shared.Prepare(args, invalid, result, bad), "Mixed colour ownership must reject both eyes");
 				bad = targets;
 				bad[1] = bad[0];
 				Require(!shared.Prepare(args, invalid, result, bad), "Aliased eyes must not share mutable model targets");
@@ -470,27 +1143,39 @@ namespace
 					Require(!shared.Prepare(malformed, invalid, result, targets) && result == E_INVALIDARG && invalid.count == 0,
 						"Malformed shared-input batch reached preparation");
 				}
-				Require(Texture(targets[0].color, model).Read<Pixel>(device, context) == untouched,
+				Require(Texture(targets[0].depth, model).Read<float>(device, context) == untouched,
 					"Rejected batch changed a valid eye before preflight completed");
 				ModelResolution::Batch mono;
 				const auto monoArgs = std::span(args.data(), 1);
-				Require(shared.Prepare(monoArgs, mono, result, std::span(targets.data(), 1)) && mono.count == 1,
+				Require(monoAdapter.Prepare(monoArgs, mono, result, std::span(targets.data(), 1)) && mono.count == 1,
 					"Direct mono preparation failed");
-				Require(Texture(targets[1].color, model).Read<Pixel>(device, context) == untouched,
+				Require(Texture(targets[1].depth, model).Read<float>(device, context) == untouched,
 					"Mono preparation touched the unused eye");
-				Require(shared.Prepare(args, candidate, result, targets), "Direct shared-target preparation failed");
-				Require(shared.AdditionalBytes(args, true) == 0 && shared.RetainedBytes(2).value() + shared.RetainedBytes(3).value() == retained,
+				ModelResolution::Preparation sharedPlan;
+				Require(shared.PlanPreparation(args, sharing, sharedPlan) && shared.AdditionalBytes(sharedPlan) == retained &&
+							shared.Prepare(sharedPlan, candidate, result, targets),
+					"Planned shared-target preparation failed");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				auto native = targets[0];
+				if (guidesOnly)
+					native.color = baseline.targets[0].color;
+				CheckPreparationEvidence(candidate, native, true);
+				CheckPreparationEvidence(baseline, native, false);
+#endif
+				Require(shared.AdditionalBytes(args, sharing) == 0 && shared.RetainedBytes(2).value() + shared.RetainedBytes(3).value() == retained,
 					"Shared-target cache retains duplicate model-sized allocations");
-				const auto previousColor = candidate.targets[0].color.resource;
+				const auto previousMotion = candidate.targets[0].motion.resource;
 				const auto previousReconstruction = candidate.resources[0];
-				targets[0].color = own(Texture(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(count, sentinel)));
-				Require(shared.Prepare(args, candidate, result, targets) && candidate.arguments[0].colorInput != previousColor.Get() &&
-							candidate.resources[0] == previousReconstruction && shared.AdditionalBytes(args, true) == 0,
+				targets[0].motion = own(Texture(device, model, DXGI_FORMAT_R32G32_FLOAT, std::vector(count, Motion{ -1, -1 })));
+				Require(shared.Prepare(args, candidate, result, targets) && candidate.arguments[0].motionVectors != previousMotion.Get() &&
+							candidate.resources[0] == previousReconstruction && shared.AdditionalBytes(args, sharing) == 0,
 					"Replaced shared views must bind without retaining stale targets or reallocating reconstruction");
 				const auto rect = baseline.arguments[0].computeSubrect;
 				for (std::size_t eye = 0; eye < args.size(); ++eye) {
-					Require(candidate.arguments[eye].colorInput == targets[eye].color.resource.Get() &&
-								candidate.arguments[eye].colorOutput == targets[eye].output.resource.Get(),
+					Require(candidate.arguments[eye].depthGuide == targets[eye].depth.resource.Get() &&
+								candidate.arguments[eye].motionVectors == targets[eye].motion.resource.Get() &&
+								(guidesOnly ? candidate.targets[eye].color.resource && candidate.targets[eye].output.resource :
+											  candidate.arguments[eye].colorInput == targets[eye].color.resource.Get() && candidate.arguments[eye].colorOutput == targets[eye].output.resource.Get()),
 						"Shared target identities were replaced");
 					const auto oldColor = Texture(baseline.targets[eye].color, model).Read<Pixel>(device, context);
 					const auto newColor = Texture(candidate.targets[eye].color, model).Read<Pixel>(device, context);
@@ -508,6 +1193,8 @@ namespace
 						}
 					context->UpdateSubresource(baseline.arguments[eye].colorOutput, 0, nullptr, neural.data(), static_cast<UINT>(model[0] * sizeof(Pixel)), 0);
 					context->UpdateSubresource(candidate.arguments[eye].colorOutput, 0, nullptr, neural.data(), static_cast<UINT>(model[0] * sizeof(Pixel)), 0);
+					if (eye == 0)
+						context->UpdateSubresource(mono.arguments[0].colorOutput, 0, nullptr, neural.data(), static_cast<UINT>(model[0] * sizeof(Pixel)), 0);
 				}
 				Require(staged.Reconstruct(args, baseline, result), "Staged reference reconstruction failed");
 				staged.Commit(args, baseline);
@@ -515,8 +1202,8 @@ namespace
 				const std::vector clear(color.size(), sentinel);
 				context->UpdateSubresource(leftOutput.texture.Get(), 0, nullptr, clear.data(), static_cast<UINT>(source[0] * sizeof(Pixel)), 0);
 				context->UpdateSubresource(rightOutput.texture.Get(), 0, nullptr, clear.data(), static_cast<UINT>(source[0] * sizeof(Pixel)), 0);
-				Require(shared.Reconstruct(monoArgs, mono, result), "Direct mono reconstruction failed");
-				shared.Commit(monoArgs, mono);
+				Require(monoAdapter.Reconstruct(monoArgs, mono, result), "Direct mono reconstruction failed");
+				monoAdapter.Commit(monoArgs, mono);
 				Require(leftOutput.Read<Pixel>(device, context) == expectedLeft && rightOutput.Read<Pixel>(device, context) == clear,
 					"Direct mono output differs or publishes the unused eye");
 				context->UpdateSubresource(leftOutput.texture.Get(), 0, nullptr, clear.data(), static_cast<UINT>(source[0] * sizeof(Pixel)), 0);
@@ -551,9 +1238,9 @@ namespace
 							eye.providerBlending = true;
 						}
 					}
-					Require(ModelResolution::CanUseSharedTargets(actor, false, false), "Raw actors lost shared model preparation");
+					Require(ModelResolution::CanUseSharedTargets(actor, false), "Raw actors lost shared model preparation");
 					const auto expectedBytes = retained + (providerBlending ? 2u * model[0] * model[1] : 0u);
-					Require(shared.AdditionalBytes(actor, true) == expectedBytes,
+					Require(shared.AdditionalBytes(actor, sharing) == expectedBytes,
 						"Shared actor accounting lost the private positive mask or counted aliased model textures");
 				}
 			}
@@ -576,6 +1263,7 @@ namespace
 		Texture motion(device, guides, DXGI_FORMAT_R32G32_FLOAT, velocities);
 		Texture output(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(colors.size(), sentinel));
 		RendererApplyArgs input;
+		ConfigureGuided(input);
 		input.device = device;
 		input.context = context;
 		input.colorInput = color.texture.Get();
@@ -594,6 +1282,7 @@ namespace
 			input.renderingMode = mode;
 			for (unsigned percent : { 30u, 50u, 90u }) {
 				input.modelResolutionPercent = percent;
+				ConfigureGuided(input);
 				const auto args = std::span(&input, 1);
 				ModelResolution adapter;
 				ModelResolution::Batch batch;
@@ -607,9 +1296,15 @@ namespace
 				Require(adapter.Prepare(args, batch, result), "Final-scene NR rejected lower-resolution guides");
 				ModelResolution shared;
 				ModelResolution::Batch direct;
-				Require(ModelResolution::CanUseSharedTargets(args, false, false) &&
+				Require(ModelResolution::CanUseSharedTargets(args, false) &&
 							shared.Prepare(args, direct, result, std::span(batch.targets.data(), 1)),
 					"Shared A/B preparation rejected proportional guide targets");
+				const std::array guideTargets{ ModelResolution::Targets{ {}, batch.targets[0].depth, batch.targets[0].motion, {} } };
+				Require(shared.Prepare(args, direct, result, guideTargets) &&
+							direct.arguments[0].depthGuide == batch.arguments[0].depthGuide &&
+							direct.arguments[0].colorInput != batch.arguments[0].colorInput &&
+							shared.RetainedBytes(input.featureSlot) == expectedBytes - std::uint64_t(guideExtent.width) * guideExtent.height * (sizeof(float) + sizeof(Motion)),
+					"Guide sharing lost independent guide dimensions, private colour or replacement accounting");
 				const auto& projected = batch.arguments[0];
 				Require(!projected.reset && projected.featureUpscaling &&
 							projected.modelResolutionHistory == ModelResolutionHistory{ input.viewportCrop, percent, input.computeSubrect },
@@ -687,7 +1382,7 @@ namespace
 		ModelResolution::Batch first, second;
 		HRESULT result = S_OK;
 		const auto maskedArgs = std::span(&input, 1);
-		Require(ModelResolution::CanUseSharedTargets(maskedArgs, false, false) && masked.Prepare(maskedArgs, first, result),
+		Require(ModelResolution::CanUseSharedTargets(maskedArgs, false) && masked.Prepare(maskedArgs, first, result),
 			"Scaled temporal actors lost shared eligibility or private selection preparation");
 		input.controlMask = replacementSelection.texture;
 		input.actorSelection = replacementSelection.srv;
@@ -736,6 +1431,7 @@ namespace
 		Texture right(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, colors);
 		Texture mask(device, source, DXGI_FORMAT_R8_UNORM, std::vector<std::uint8_t>(colors.size(), 255));
 		RendererApplyArgs input;
+		ConfigureGuided(input);
 		input.device = device;
 		input.context = context;
 		input.colorInput = color.texture.Get();
@@ -755,6 +1451,7 @@ namespace
 			input.centralArea.finalOutput = mode == RenderingMode::ReducedResolution ? UpscalingDLSS::Extent{ 1604, 1204 } : UpscalingDLSS::Extent{ 401, 301 };
 			for (const unsigned percent : { 100u, 80u, 30u }) {
 				input.modelResolutionPercent = percent;
+				ConfigureGuided(input);
 				for (const unsigned feather : { 0u, 64u, 256u }) {
 					input.centralArea.featherPixels = feather;
 					std::array args{ input, input };
@@ -764,7 +1461,7 @@ namespace
 					args[1].colorOutput = right.texture.Get();
 					HRESULT result = S_OK;
 					ModelResolution::Batch batch;
-					Require(ModelResolution::Required(input) && ModelResolution::CanUseSharedTargets(args, false, false), "Independent central area lost the raw shared path at 100% model resolution");
+					Require(ModelResolution::Required(input) && ModelResolution::CanUseSharedTargets(args, false), "Independent central area lost the raw shared path at 100% model resolution");
 					Require(adapter.Prepare(args, batch, result), "Central area preparation failed");
 					const Size model{ batch.arguments[0].outputWidth, batch.arguments[0].outputHeight };
 					for (unsigned eye = 0; eye < 2; ++eye) {
@@ -929,7 +1626,9 @@ namespace
 				selected[(40 + kPackedCropSupportPixels) * source[0] + 32 + kPackedCropSupportPixels] = 255;
 			Texture selection(device, source, DXGI_FORMAT_R8_UNORM, selected);
 			for (unsigned percent : { 30u, 75u, 100u })
-				for (bool sharedTargets : { false, true }) {
+				for (auto sharing : { ModelResolution::Sharing::Private, ModelResolution::Sharing::Guides, ModelResolution::Sharing::All }) {
+					const bool sharedTargets = sharing != ModelResolution::Sharing::Private;
+					const bool sharedColor = sharing == ModelResolution::Sharing::All;
 					std::array<std::vector<Pixel>, 2> colors;
 					for (unsigned eye = 0; eye < 2; ++eye) {
 						colors[eye].resize(source[0] * source[1]);
@@ -964,6 +1663,7 @@ namespace
 						input.featureSlot = eye;
 						input.renderingMode = mode;
 						input.modelResolutionPercent = percent;
+						ConfigureGuided(input);
 						input.featureUpscaling = mode == RenderingMode::FullResolution;
 						input.reset = mode == RenderingMode::ReducedResolution;
 						input.characterVisualIsolation = input.providerBlending = true;
@@ -988,7 +1688,7 @@ namespace
 					HRESULT result = S_OK;
 					std::array<ModelResolution::Targets, 2> targets{};
 					if (sharedTargets) {
-						Require(ModelResolution::CanUseSharedTargets(args, false, false), "Packed actors lost raw shared eligibility");
+						Require(ModelResolution::CanUseSharedTargets(args, false), "Packed actors lost raw shared eligibility");
 						const auto own = [](const Texture& texture) { return Color::Texture{ texture.texture, texture.srv, texture.uav }; };
 						for (unsigned eye = 0; eye < 2; ++eye) {
 							RendererApplyArgs projected;
@@ -1000,6 +1700,12 @@ namespace
 								own(Texture(device, size, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(size[0] * size[1], sentinel))) };
 						}
 					}
+					if (!sharedColor)
+						for (auto& target : targets) {
+							target.color = {};
+							target.output = {};
+						}
+
 					const auto prepare = [&](ModelResolution::Batch& prepared) {
 						return adapter.Prepare(args, prepared, result, sharedTargets ? std::span<const ModelResolution::Targets>(targets) : std::span<const ModelResolution::Targets>{});
 					};
@@ -1022,24 +1728,36 @@ namespace
 					}
 					for (auto& input : args) input.packedCrops = {};
 					ModelResolution::Batch single;
-					const auto bytes = adapter.AdditionalBytes(args, sharedTargets);
+					const auto bytes = adapter.AdditionalBytes(args, sharing);
 					Require(bytes && *bytes && prepare(single), "Initial single-region preparation failed");
-					const auto compileCount = AdapterCompiler::calls;
+					const auto initialCompileCount = AdapterCompiler::calls;
 					args = packedArgs;
-					if (sharedTargets)
+					if (sharedColor)
 						for (auto& target : targets) context->ClearUnorderedAccessViewFloat(target.color.uav.Get(), sentinel.data());
-					Require(adapter.AdditionalBytes(args, sharedTargets) == 0 && prepare(batch) && AdapterCompiler::calls == compileCount,
+					Require(adapter.AdditionalBytes(args, sharing) == 0 && prepare(batch) && AdapterCompiler::calls == initialCompileCount,
 						"First atlas admission allocated or compiled on a moving-actor frame");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (AdapterCompiler::guided && percent == 30 && mode == RenderingMode::ReducedResolution && !sharedTargets) {
+						adapter.InvalidateShaders();
+						Require(prepare(batch), "Packed-first shader warming failed");
+						const auto warmed = AdapterCompiler::calls;
+						for (auto& input : args) input.packedCrops = {};
+						Require(prepare(single) && AdapterCompiler::calls == warmed, "Atlas-to-single actor movement compiled a guided shader");
+						args = packedArgs;
+						Require(prepare(batch) && AdapterCompiler::calls == warmed, "Single-to-atlas actor movement recompiled a guided shader");
+					}
+#endif
+					const auto compileCount = AdapterCompiler::calls;
 					for (unsigned eye = 0; eye < 2; ++eye)
 						Require(batch.targets[eye].color.resource == single.targets[eye].color.resource &&
 									batch.arguments[eye].viewportCrop == single.arguments[eye].viewportCrop,
 							"First atlas admission replaced single-region capacity");
-					Require(adapter.AdditionalBytes(args, sharedTargets) == 0 && adapter.RetainedBytes(0).value() + adapter.RetainedBytes(1).value() == *bytes,
+					Require(adapter.AdditionalBytes(args, sharing) == 0 && adapter.RetainedBytes(0).value() + adapter.RetainedBytes(1).value() == *bytes,
 						"Packed allocation reuse or replacement-peak accounting changed");
 					if (sharedTargets) {
 						std::uint64_t expectedBytes = 2u * std::uint64_t(source[0]) * source[1] * sizeof(Pixel);
 						for (std::size_t eye = 0; eye < batch.count; ++eye)
-							expectedBytes += std::uint64_t(batch.arguments[eye].outputWidth) * batch.arguments[eye].outputHeight;
+							expectedBytes += std::uint64_t(batch.arguments[eye].outputWidth) * batch.arguments[eye].outputHeight * (1u + (sharedColor ? 0u : 2u * sizeof(Pixel)));
 						Require(*bytes == expectedBytes, "Shared packed accounting duplicated native model targets or omitted positive masks");
 					}
 					Require(batch.arguments[0].colorInput != batch.arguments[1].colorInput, "Eye atlases alias");
@@ -1054,7 +1772,8 @@ namespace
 						Check(projected.controlMask.As(&maskView.resource));
 						const auto maskPixels = Texture(maskView, size).Read<std::uint8_t>(device, context);
 						if (sharedTargets) {
-							Require(projected.colorInput == targets[eye].color.resource.Get() && projected.colorOutput == targets[eye].output.resource.Get(),
+							Require(projected.depthGuide == targets[eye].depth.resource.Get() && projected.motionVectors == targets[eye].motion.resource.Get() &&
+										(!sharedColor || (projected.colorInput == targets[eye].color.resource.Get() && projected.colorOutput == targets[eye].output.resource.Get())),
 								"Shared actor model targets were replaced");
 							Require(projected.controlMask != args[eye].controlMask && projected.controlMask.Get() != targets[eye].output.resource.Get() && projected.actorSelection,
 								"Positive actor selection no longer has independent private ownership");
@@ -1065,7 +1784,7 @@ namespace
 						for (unsigned y = 0; y < size[1]; ++y)
 							for (unsigned x = 0; x < size[0]; ++x) {
 								if (!contains(projected.computeSubrect, float(x), float(y))) {
-									if (sharedTargets)
+									if (sharedColor)
 										Require(pixels[y * size[0] + x] == sentinel, "Atlas touched unused backing pixels");
 									continue;
 								}
@@ -1174,7 +1893,7 @@ namespace
 								"Unpacked identity-scale fallback performed unnecessary model preparation");
 						}
 						ModelResolution::Batch transition;
-						Require(adapter.AdditionalBytes(args, sharedTargets) == 0 && prepare(transition) && AdapterCompiler::calls == compileCount,
+						Require(adapter.AdditionalBytes(args, sharing) == 0 && prepare(transition) && AdapterCompiler::calls == compileCount,
 							"Atlas/single/resize transition allocated or compiled");
 						for (unsigned eye = 0; eye < 2; ++eye) {
 							const auto& current = transition.arguments[eye];
@@ -1193,7 +1912,7 @@ namespace
 									"Layout transition preserved incompatible temporal identity");
 						}
 						adapter.ReleaseUnscaledSlots(args);
-						Require(adapter.AdditionalBytes(args, sharedTargets) == 0, "Fallback retired resident preparation");
+						Require(adapter.AdditionalBytes(args, sharing) == 0, "Fallback retired resident preparation");
 					}
 					args = transitionArgs;
 					const auto originalSources = args[0].packedCrops;
@@ -1203,7 +1922,7 @@ namespace
 						args[0].packedCrops.regions[1].height = crops.regions[1].height - (step % 2 ? 0u : 8u);
 						adapter.PlanPackedCrops(args);
 						ModelResolution::Batch moving;
-						Require(adapter.AdditionalBytes(args, sharedTargets) == 0 && prepare(moving) &&
+						Require(adapter.AdditionalBytes(args, sharing) == 0 && prepare(moving) &&
 									moving.targets[0].color.resource == batch.targets[0].color.resource &&
 									moving.targets[1].color.resource == batch.targets[1].color.resource,
 							"Changing actor extents within capacity rebuilt model textures");
@@ -1230,7 +1949,7 @@ namespace
 									!moved.arguments[0].modelResolutionHistory->packedCrops.count && moved.arguments[1].modelResolutionHistory->packedCrops.count,
 							"A one-eye packing fallback must retain a complete stereo transaction");
 						adapter.ReleaseUnscaledSlots(args);
-						Require(adapter.AdditionalBytes(args, sharedTargets) == 0, "An unpacked stereo peer reallocated every frame while packing was active");
+						Require(adapter.AdditionalBytes(args, sharing) == 0, "An unpacked stereo peer reallocated every frame while packing was active");
 						args[0] = original;
 						args[0].characterVisualIsolation = false;
 						Require(!ModelResolution::Required(args[0]), "Ordinary-scene input was packed without actor-only coverage");
@@ -1259,6 +1978,7 @@ namespace
 		using namespace NeuralRendering;
 		for (auto mode : { RenderingMode::FullResolution, RenderingMode::ReducedResolution }) {
 			RendererApplyArgs input;
+			ConfigureGuided(input);
 			input.colorWidth = input.outputWidth = 2048;
 			input.colorHeight = input.outputHeight = 1024;
 			input.guideWidth = mode == RenderingMode::FullResolution ? 1024 : 2048;
@@ -1468,13 +2188,16 @@ namespace
 			                  Texture(batch.targets[eye].color, model).Read<Pixel>(device, context) :
 			                  LoadPixels(Texture(batch.targets[eye].color, model).Read<Stored>(device, context), desc.Format);
 			batch.targets[eye].output.resource->GetDesc(&desc);
+			const auto invalidX = projected.computeSubrect.baseX + projected.computeSubrect.width / 3;
+			const auto invalidY = projected.computeSubrect.baseY + projected.computeSubrect.height / 3;
 			for (std::size_t i = 0; i < pixels.size(); ++i) {
 				pixels[i][0] += 0.07313f + float(eye) * 0.0167f;
 				pixels[i][1] += 0.10937f + float(i % 3) * 0.0011f;
 				pixels[i][2] -= 0.06731f;
 				pixels[i][3] = 0.987f;
-				if (invalidNative && i % 7 < 2)
-					pixels[i][0] = i % 7 == 0 ? std::numeric_limits<float>::quiet_NaN() : std::numeric_limits<float>::infinity();
+				// Localized invalid samples leave both valid and fallback neighbourhoods for either filter.
+				if (invalidNative && i / model[0] == invalidY && i % model[0] >= invalidX && i % model[0] <= invalidX + 1)
+					pixels[i][0] = i % model[0] == invalidX ? std::numeric_limits<float>::quiet_NaN() : std::numeric_limits<float>::infinity();
 			}
 			const auto stored = StorePixels<Stored>(pixels, desc.Format);
 			context->UpdateSubresource(projected.colorOutput, 0, nullptr, stored.data(), model[0] * sizeof(Stored), 0);
@@ -1525,6 +2248,7 @@ namespace
 		context->CopyResource(legacySelected.texture.Get(), typedBaseline.texture.Get());
 
 		RendererApplyArgs arg;
+		ConfigureGuided(arg);
 		arg.device = device;
 		arg.context = context;
 		arg.colorInput = input.texture.Get();
@@ -1632,6 +2356,8 @@ namespace
 					Require(false, "Fused selection left stale pixels outside the native source ROI");
 				}
 		}
+		if (!changed)
+			std::cerr << "No selected residual: format " << format << " invalidNative " << invalidNative << '\n';
 		Require(changed, "Selected-output comparison never applied an NR residual");
 
 		const auto compilations = AdapterCompiler::calls;
@@ -1703,6 +2429,7 @@ namespace
 				Texture(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(leftColors.size(), sentinel))
 			};
 			RendererApplyArgs arg;
+			ConfigureGuided(arg);
 			arg.device = device;
 			arg.context = context;
 			arg.colorInput = leftInput.texture.Get();
@@ -1829,6 +2556,122 @@ namespace
 				}
 	}
 
+	void CheckPreparationPlan(ID3D11Device* device, const std::array<NeuralRendering::RendererApplyArgs, 2>& args)
+	{
+		using namespace NeuralRendering;
+		std::array<ModelResolution::Sources, 2> sources;
+		for (std::size_t index = 0; index < args.size(); ++index) {
+			const auto& input = args[index];
+			auto& source = sources[index];
+			Require(GetTextureInfo(input.colorInput, source.color) && GetTextureInfo(input.depthGuide, source.depth) &&
+						GetTextureInfo(input.motionVectors, source.motion) && GetTextureInfo(input.colorOutput, source.output),
+				"Source metadata capture failed");
+			source.depthView = input.depthGuideSRV;
+			input.depthGuideSRV->GetDesc(&source.depthViewDescription);
+		}
+		ModelResolution adapter, other;
+		ModelResolution::Preparation plan;
+		const auto calls = AdapterCompiler::calls;
+		Require(adapter.PlanPreparation(args, ModelResolution::Sharing::Private, plan, sources) &&
+					adapter.AdditionalBytes(plan).value_or(0) > 0 && adapter.RetainedBytes(0) == 0 && AdapterCompiler::calls == calls,
+			"Pre-admission planning compiled shaders or allocated proxies");
+		Require(plan.Projected()[0].sourceWorldFrame == args[0].sourceWorldFrame && plan.Projected()[0].generation == args[0].generation,
+			"Planning lost source producer identity");
+		ModelResolution::Batch batch, rejected;
+		HRESULT result = S_OK;
+		Require(!other.Prepare(plan, rejected, result), "Another adapter consumed the plan");
+		Require(adapter.Prepare(plan, batch, result), "Owned metadata plan preparation failed");
+		Require(!adapter.Prepare(plan, rejected, result) && !adapter.AdditionalBytes(plan), "Consumed preparation plan was reused");
+		for (unsigned mutation = 0; mutation < 8; ++mutation) {
+			auto changed = args;
+			switch (mutation) {
+			case 0:
+				++changed[0].frameId;
+				break;
+			case 1:
+				++changed[0].sourceWorldFrame;
+				break;
+			case 2:
+				++changed[0].generation;
+				break;
+			case 3:
+				++changed[0].depthGeneration;
+				break;
+			case 4:
+				changed[0].colorInput = args[1].colorInput;
+				break;
+			case 5:
+				changed[0].colorOutput = args[1].colorOutput;
+				break;
+			case 6:
+				changed[0].depthGuideSRV = nullptr;
+				break;
+			case 7:
+				changed[0].depthConvention = args[0].depthConvention == Depth::Convention::Standard ? Depth::Convention::Reversed : Depth::Convention::Standard;
+				break;
+			}
+			Require(!adapter.Reconstruct(changed, batch, result), "Changed producer/source reached reconstruction");
+		}
+		Require(adapter.PlanPreparation(args, ModelResolution::Sharing::Private, plan, sources) && adapter.AdditionalBytes(plan) == 0,
+			"Warm allocation was not reused by the plan");
+		adapter.Reset();
+		Require(!adapter.Prepare(plan, rejected, result) && result == HRESULT_FROM_WIN32(ERROR_RETRY) && adapter.RetainedBytes(0) == 0,
+			"Changed allocation demand bypassed fresh admission");
+		Require(adapter.PlanPreparation(args, ModelResolution::Sharing::Private, plan, sources) && adapter.AdditionalBytes(plan).value_or(0) > 0 &&
+					adapter.Prepare(plan, batch, result),
+			"Replanned allocation failed");
+		for (unsigned mutation = 0; mutation < 4; ++mutation) {
+			auto changed = sources;
+			if (mutation == 0)
+				changed[0].color = changed[1].color;
+			if (mutation == 1)
+				changed[0].depthView = nullptr;
+			if (mutation == 2)
+				changed[0].depthViewDescription.Texture2D.MipLevels = 2;
+			if (mutation == 3)
+				changed[0].motion.desc.Width += 1;
+			Require(!adapter.PlanPreparation(args, ModelResolution::Sharing::Private, plan, changed) && !adapter.AdditionalBytes(plan),
+				"Mismatched source metadata remained reusable");
+		}
+		ComPtr<ID3D11DeviceContext> deferred;
+		Check(device->CreateDeferredContext(0, &deferred));
+		auto changed = args;
+		changed[0].context = changed[1].context = deferred.Get();
+		Require(!adapter.PlanPreparation(changed, ModelResolution::Sharing::Private, plan, sources), "Deferred context accepted an immediate plan");
+	}
+
+	void CheckSharedPreparationCache(std::array<NeuralRendering::RendererApplyArgs, 2> args)
+	{
+		using namespace NeuralRendering;
+		for (auto& input : args) input.computeSubrect = { 0, 0, input.outputWidth, input.outputHeight };
+		for (unsigned failure : { 1u, 2u, 3u }) {
+			ModelResolution adapter;
+			ModelResolution::Batch batch;
+			HRESULT result = S_OK;
+			AdapterCompiler::sharedPreparationFailure = failure;
+			const auto attempts = AdapterCompiler::sharedPreparationAttempts;
+			const bool prepared = adapter.Prepare(args, batch, result);
+			Require(prepared == (failure != 3) && !batch.sharedPreparationShader &&
+						(failure != 3 || result == E_OUTOFMEMORY),
+				"Optional shared shader failure changed recovery policy");
+			Require(AdapterCompiler::sharedPreparationAttempts == attempts + 1, "Shared shader failure was not exercised");
+			AdapterCompiler::sharedPreparationFailure = 0;
+			Require(adapter.Prepare(args, batch, result), "Shared shader recovery preparation failed");
+			Require(bool(batch.sharedPreparationShader) == (failure == 3) &&
+						AdapterCompiler::sharedPreparationAttempts == attempts + (failure == 3 ? 2 : 1),
+				"Shared shader failure latch changed");
+			adapter.InvalidateShaders();
+			Require(adapter.Prepare(args, batch, result) && batch.sharedPreparationShader, "Shared shader invalidation did not rearm compilation");
+		}
+		ModelResolution adapter;
+		ModelResolution::Batch batch;
+		HRESULT result = S_OK;
+		args[1].computeSubrect = { 1, 0, args[1].outputWidth - 1, args[1].outputHeight };
+		Require(adapter.Prepare(args, batch, result) && batch.sharedPreparationShader, "Mixed-region preparation rejected a valid generic eye");
+		for (auto& input : args) input.computeSubrect = args[1].computeSubrect;
+		Require(adapter.Prepare(args, batch, result) && !batch.sharedPreparationShader, "Cropped inputs selected the shared traversal");
+	}
+
 	void CheckAdapter(ID3D11Device* device, ID3D11DeviceContext* context)
 	{
 		using namespace NeuralRendering;
@@ -1842,6 +2685,7 @@ namespace
 		Texture outputLeft(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
 		Texture outputRight(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
 		RendererApplyArgs inputArgs;
+		ConfigureGuided(inputArgs);
 		inputArgs.device = device;
 		inputArgs.context = context;
 		inputArgs.colorInput = input.texture.Get();
@@ -1860,12 +2704,51 @@ namespace
 		args[1].featureSlot = 1;
 		args[1].colorInput = inputRight.texture.Get();
 		args[1].colorOutput = outputRight.texture.Get();
+		CheckPreparationPlan(device, args);
 		ModelResolution adapter;
 		ModelResolution::Batch batch;
 		HRESULT result = S_OK;
+		CheckSharedPreparationCache(args);
 		const auto estimate = adapter.AdditionalBytes(args);
 		Require(estimate && *estimate > 0, "Proxy allocation must be admitted before preparation");
 		Require(adapter.Prepare(args, batch, result), "Production proxy preparation failed");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const auto& evidence = batch.arguments[0].executionContext.modelReconstruction;
+		Require(evidence && evidence->decision == batch.reconstructionDecision && evidence->effectivePercent == 50 &&
+					evidence->target == UpscalingDLSS::Extent{ 13, 9 } && evidence->unpackedModel == UpscalingDLSS::Extent{ 7, 5 },
+			"Frozen capture lost the actual reconstruction decision or sampling grid");
+#endif
+		Require(batch.reconstructionDecision.mode == (AdapterCompiler::guided ? GuidedReconstructionMode::GuidedLowResolution : GuidedReconstructionMode::Basic),
+			"Automatic reconstruction did not respect the guided setting");
+		if (AdapterCompiler::guided) {
+			Require(batch.reconstructionDecision.reason == GuidedReconstructionReason::Eligible, "Automatic reconstruction required a developer override");
+			auto unsupported = args;
+			unsupported[1].guidedReconstructionEnabled = false;
+			ModelResolution::Batch fallback;
+			Require(adapter.Prepare(unsupported, fallback, result) && fallback.reconstructionDecision.mode == GuidedReconstructionMode::Basic, "One unsupported eye did not fall back as a pair");
+			for (bool throws : { false, true }) {
+				AdapterCompiler::throwGuided = throws;
+				AdapterCompiler::failGuided = true;
+				adapter.InvalidateShaders();
+				const auto attempts = AdapterCompiler::guidedAttempts;
+				Require(adapter.Prepare(args, fallback, result) && fallback.reconstructionDecision.reason == GuidedReconstructionReason::ShaderUnavailable, "Optional compile failure poisoned Basic preparation");
+				Require(adapter.Prepare(args, fallback, result) && AdapterCompiler::guidedAttempts == attempts + 1, "Optional compile failure retried every frame");
+				AdapterCompiler::throwGuided = false;
+				AdapterCompiler::failGuided = false;
+				adapter.InvalidateShaders();
+				Require(adapter.Prepare(args, fallback, result) && fallback.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution, "Optional compile failure did not clear on invalidation");
+			}
+			for (bool throws : { false, true }) {
+				adapter.InvalidateShaders();
+				AdapterCompiler::failGuidedAllocation = true;
+				AdapterCompiler::throwGuidedAllocationFailure = throws;
+				Require(!adapter.Prepare(args, fallback, result) && result == E_OUTOFMEMORY, "Guided allocation failure bypassed resource recovery");
+				AdapterCompiler::failGuidedAllocation = false;
+				AdapterCompiler::throwGuidedAllocationFailure = false;
+				Require(adapter.Prepare(args, fallback, result) && fallback.reconstructionDecision.mode == GuidedReconstructionMode::GuidedLowResolution, "Guided allocation failure latched an optional shader failure");
+			}
+		}
+		Require(adapter.Prepare(args, batch, result), "Final adapter preparation failed");
 		Require(adapter.AdditionalBytes(args) == 0, "Unchanged eye allocations must be reused");
 		Require(adapter.RetainedBytes(0).value() + adapter.RetainedBytes(1).value() == *estimate,
 			"Admission and retained-allocation accounting disagree");
@@ -1879,6 +2762,12 @@ namespace
 		Require(std::ranges::all_of(unchanged, [](const auto& pixel) { return pixel == sentinel; }),
 			"Preparation exposed a private eye before pair reconstruction");
 		const auto compilations = AdapterCompiler::calls;
+		for (auto& eye : args) {
+			eye.guidedReconstructionEnabled = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			eye.reconstructionOverride = GuidedReconstructionOverride::Basic;
+#endif
+		}
 		adapter.Reset();
 		Require(adapter.RetainedBytes(0) == 0 && adapter.RetainedBytes(1) == 0, "Reset retained cached proxy allocations");
 		Require(adapter.Reconstruct(args, batch, result), "An admitted batch must survive native backend reset");
@@ -1922,6 +2811,7 @@ namespace
 		adapter.ReleaseUnscaledSlots(args);
 		Require(adapter.RetainedBytes(0) == 0 && adapter.RetainedBytes(1) == 0, "100% retained downscaling caches");
 	}
+#include "nr_peripheral_shader_checks.h"
 }
 
 int main()
@@ -1940,21 +2830,85 @@ int main()
 		static_assert(NeuralRendering::Color::Work::AllocationExtent(wide)[1] == 384);
 		for (bool vr : { false, true }) {
 			AdapterCompiler::vr = vr;
-			CheckAdapter(device.Get(), context.Get());
-			CheckPackedAdapter(device.Get(), context.Get());
-			CheckCentralArea(device.Get(), context.Get());
-			CheckUpscaledGuides(device.Get(), context.Get());
-			CheckSharedAdapter(device.Get(), context.Get());
-			CheckSelectedAdapter(device.Get(), context.Get(), vr);
-			Shader prepare(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl", vr);
-			Shader reconstruct(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", vr);
-			for (bool mask : { false, true })
-				CheckPrepare(device.Get(), context.Get(), prepare, mask);
-			for (bool fullScale : { false, true })
-				CheckNonIntegerPrepare(device.Get(), context.Get(), prepare, fullScale);
-			CheckNonIntegerPrepare(device.Get(), context.Get(), prepare, false, true);
-			for (unsigned condition = 0; condition < 7; ++condition)
-				CheckReconstruct(device.Get(), context.Get(), reconstruct, condition);
+			for (bool reversed : { false, true }) {
+				const std::array<D3D_SHADER_MACRO, 1> depthDefines{ D3D_SHADER_MACRO{ "REVERSE_Z", "1" } };
+				Shader donorShader(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl",
+					vr, "features/Neural Rendering/Shaders", false, false,
+					reversed ? std::span<const D3D_SHADER_MACRO>(depthDefines) : std::span<const D3D_SHADER_MACRO>{});
+				CheckGuideDonors(device.Get(), context.Get(), donorShader, reversed);
+				std::vector<D3D_SHADER_MACRO> sharedDefines{ { "NR_SHARED_PREPARATION", "1" } };
+				if (reversed)
+					sharedDefines.push_back({ "REVERSE_Z", "1" });
+				Shader sharedShader(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl",
+					vr, "features/Neural Rendering/Shaders", false, false, sharedDefines);
+				CheckSharedFootprint(device.Get(), context.Get(), donorShader, sharedShader, false, 0);
+				std::vector<D3D_SHADER_MACRO> peripheralDefines{ { "NR_PERIPHERAL_COMPRESSION", "1" } };
+				if (reversed)
+					peripheralDefines.push_back({ "REVERSE_Z", "1" });
+				Shader peripheralShader(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl",
+					vr, "features/Neural Rendering/Shaders", false, false, peripheralDefines);
+				sharedDefines.push_back({ "NR_PERIPHERAL_COMPRESSION", "1" });
+				Shader sharedPeripheralShader(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl",
+					vr, "features/Neural Rendering/Shaders", false, false, sharedDefines);
+				for (UINT compression : { 25u, 50u, 100u })
+					CheckSharedFootprint(device.Get(), context.Get(), peripheralShader, sharedPeripheralShader, true, compression);
+			}
+			for (bool guided : { false, true }) {
+				AdapterCompiler::guided = guided;
+				CheckPeripheralStereoRounding(device.Get(), context.Get());
+				for (bool mixedGuides : { false, true })
+					for (bool shaped : { false, true })
+						CheckPeripheralAdapter(device.Get(), context.Get(), mixedGuides, shaped);
+				for (bool mixedGuides : { false, true })
+					for (bool shaped : { false, true })
+						CheckPeripheralAdapter(device.Get(), context.Get(), mixedGuides, shaped, 25, true);
+				CheckPeripheralAdapter(device.Get(), context.Get(), false, true, 25, true, true);
+				for (unsigned facePercent : { 75u, 100u }) {
+					CheckPeripheralAdapter(device.Get(), context.Get(), false, false, 100, false, false, facePercent);
+					CheckPeripheralAdapter(device.Get(), context.Get(), false, true, 100, true, true, facePercent);
+					CheckPeripheralAdapter(device.Get(), context.Get(), true, true, 100, false, false, facePercent);
+				}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				for (const auto subdivisions : { 1u, 2u, 4u }) {
+					NeuralRendering::ReconstructionTuning tuning;
+					tuning.footprintSubdivisions = subdivisions;
+					tuning.shadowTransferPercent = subdivisions == 2u ? 50u : 0u;
+					tuning.depthSampleMotion = false;
+					CheckPeripheralAdapter(device.Get(), context.Get(), true, true, 20, false, false, 0, tuning);
+				}
+
+#endif
+				for (bool mixedGuides : { false, true })
+					for (bool shaped : { false, true })
+						CheckPeripheralAdapter(device.Get(), context.Get(), mixedGuides, shaped, 100);
+				if (AdapterCompiler::guided) {
+					CheckGuidedEdges(device.Get(), context.Get(), vr);
+					CheckGuidedConfidenceTuning(device.Get(), context.Get());
+				}
+				CheckAdapter(device.Get(), context.Get());
+				CheckPackedAdapter(device.Get(), context.Get());
+				CheckCentralArea(device.Get(), context.Get());
+				CheckUpscaledGuides(device.Get(), context.Get());
+				CheckSharedAdapter(device.Get(), context.Get(), false);
+				CheckSharedAdapter(device.Get(), context.Get(), true);
+				CheckSelectedAdapter(device.Get(), context.Get(), vr);
+				Shader prepare(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl", vr);
+				Shader reconstruct(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", vr);
+				for (bool mask : { false, true })
+					CheckPrepare(device.Get(), context.Get(), prepare, mask);
+				for (bool fullScale : { false, true })
+					CheckNonIntegerPrepare(device.Get(), context.Get(), prepare, fullScale);
+				CheckNonIntegerPrepare(device.Get(), context.Get(), prepare, false, true);
+				for (unsigned condition = 0; condition < 10; ++condition)
+					CheckReconstruct(device.Get(), context.Get(), reconstruct, condition);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				Shader legacyReconstruct(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", vr,
+					"features/Neural Rendering/Shaders", false, true);
+				for (unsigned condition = 0; condition < 10; ++condition)
+					CheckReconstruct(device.Get(), context.Get(), legacyReconstruct, condition, true);
+#endif
+				CheckReconstructionKernel(device.Get(), context.Get(), reconstruct);
+			}
 		}
 		std::cout << "PASS: NR production adapter and shaders on WARP: shared/staged pixel equivalence, fused/legacy selection, all carrier rounding, mixed precision, provider masks, central feather, packed stereo coverage, alias preflight, allocation reuse, stereo commit, area reduction, guide/mask ownership, odd sizes, identity, residual detail, alpha, ROI isolation and finite fallback (flat/VR)\n";
 	} catch (const std::exception& error) {

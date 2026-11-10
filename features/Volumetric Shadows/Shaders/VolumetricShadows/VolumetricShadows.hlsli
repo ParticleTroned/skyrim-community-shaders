@@ -80,7 +80,7 @@ namespace VolumetricShadows
 
 		// View-space z matches the linear cascade split distances from BSShadowDirectionalLight.
 		float3 midPosition = (startPosition + endPosition) * 0.5;
-		float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(midPosition, eyeIndex));
+		float shadowMapDepth = FrameBuffer::WorldToView(midPosition, true, eyeIndex).z;
 
 		// Cascade projections are world-space; positions come in camera-relative.
 		startPosition += FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
@@ -142,7 +142,7 @@ namespace VolumetricShadows
 	{
 		DirectionalShadowLightData directionalShadowLightData = DirectionalShadowLights[0];
 
-		float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(position, eyeIndex));
+		float shadowMapDepth = FrameBuffer::WorldToView(position, true, eyeIndex).z;
 
 		if (shadowMapDepth >= directionalShadowLightData.EndSplitDistances.y) {
 			detailedShadow = 1.0;

@@ -6,8 +6,10 @@ repos:
       hooks:
           - id: trailing-whitespace
             args: [--markdown-linebreak-ext=md]
+            exclude: ^extern/NeuralRenderingSDK/
           - id: mixed-line-ending
             args: [--fix=lf]
+            exclude: ^extern/NeuralRenderingSDK/
           - id: check-yaml
 
     - repo: https://github.com/pre-commit/mirrors-clang-format
@@ -23,6 +25,7 @@ repos:
       rev: v4.0.0-alpha.8
       hooks:
           - id: prettier
+            language_version: 24.14.1
             additional_dependencies: ["prettier@3.1.0"]
             files: \.(json|md|yml|yaml)$
             exclude: ^(\.\/)?(extern|include|build|dist)\/

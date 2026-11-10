@@ -22,6 +22,8 @@ public:
 #endif
 	/** Resume the user's automatic visibility preference. */
 	static void ResetSidebarVisibility();
+	/** Restore navigation and usable sidebar proportions on the next draw. */
+	static void ResetLayout();
 
 	struct BuiltInMenu
 	{

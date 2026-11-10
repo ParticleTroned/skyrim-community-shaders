@@ -241,16 +241,12 @@ void TerrainHelper::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialB
 		return;
 	}
 
-	ExtendedSlots materialBase;
-	{
-		const std::shared_lock lock(extendedSlotsMutex);
-
-		if (!extendedSlots.contains(material->hashKey)) {
-			// hash does not exists
-			return;
-		}
-		materialBase = extendedSlots[material->hashKey];
-	}
+	// Keep texture references stable without copying the owning slots on every draw.
+	const std::shared_lock lock(extendedSlotsMutex);
+	const auto it = extendedSlots.find(material->hashKey);
+	if (it == extendedSlots.end())
+		return;
+	const auto& materialBase = it->second;
 
 	const auto state = globals::state;
 	const auto& stateData = globals::game::graphicsState->GetRuntimeData();

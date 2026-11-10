@@ -56,7 +56,8 @@ namespace FeatureIssues
 			OBSOLETE,          // Known obsolete feature with replacement info
 			VERSION_MISMATCH,  // Feature exists but version is incompatible
 			OVERRIDE_FAILED,   // Override file failed to load or apply
-			UNKNOWN            // Feature not recognized by this CSX version
+			UNKNOWN,           // Feature not recognized by this CSX version
+			CONFLICT           // Feature disabled because another mod cannot coexist
 		};
 
 		IssueType issueType{ IssueType::UNKNOWN };
@@ -66,6 +67,7 @@ namespace FeatureIssues
 		bool IsVersionMismatch() const { return issueType == IssueType::VERSION_MISMATCH; }
 		bool IsOverrideFailed() const { return issueType == IssueType::OVERRIDE_FAILED; }
 		bool IsUnknown() const { return issueType == IssueType::UNKNOWN; }
+		bool IsConflict() const { return issueType == IssueType::CONFLICT; }
 		bool HasReplacement() const { return !replacementFeature.empty(); }
 		bool ModifiedShaderDirectory() const { return modifiedShaderDirectory; }
 	};
@@ -87,6 +89,8 @@ namespace FeatureIssues
 	 * @return true if there are any feature issues that need attention
 	 */
 	bool HasFeatureIssues();
+	/** @brief Counts failure issues, excluding expected disables caused by incompatible mods. */
+	size_t CountLoadFailures();
 
 	/**
 	 * Check if any obsolete features that modified shader directory are present

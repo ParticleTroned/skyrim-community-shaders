@@ -1,15 +1,39 @@
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/NeuralRendering/CharacterRendering.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/Renderer.h"
 #include "Globals.h"
+
+#include <algorithm>
 
 void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& args,
 	[[maybe_unused]] const UpscalingDLSS::ViewportCrop& dlssCrop, [[maybe_unused]] const std::array<uint32_t, 2>& colorOrigin,
 	[[maybe_unused]] const std::array<uint32_t, 2>& guideOrigin) noexcept
 {
 	args.renderingMode = GetNeuralRenderingMode();
+	args.jitterPixels = {};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (args.renderingMode == NeuralRendering::RenderingMode::ReducedResolution) {
+		const auto dispatchJitter = GetJitterForDispatch();
+		// NGX uses the same sign convention as the Streamline DLSS constants.
+		args.jitterPixels = { -dispatchJitter.x, -dispatchJitter.y };
+	}
+#endif
 	args.modelResolutionPercent = NeuralRendering::EffectiveModelResolutionPercent(
 		*args.renderingMode, settings.neuralRenderingModelResolutionPercent);
+	args.guidedReconstructionEnabled = settings.neuralRenderingGuidedReconstruction;
+	args.guidedConfidenceRejectionPercent = settings.neuralRenderingConfidenceRejectionPercent;
+	args.peripheralCompressionPercent = settings.neuralRenderingPeripheralCompressionPercent;
+	args.peripheralMask = {};
+	if (args.peripheralCompressionPercent && NeuralRendering::RequiresFoveatedMask(*args.renderingMode, settings.neuralRenderingFovOnly,
+												 globals::game::isVR, settings.neuralRenderingRenderscaleFov)) {
+		const auto profile = GetActiveUpscalingFoveatedProfile();
+		const auto& offset = profile.centerOffsets[args.featureSlot % NeuralRendering::kEyeCount];
+		const float scale = profile.available ? profile.sharedVisibleScale : 0.0f;
+		args.peripheralMask = { { std::clamp(0.5f + offset.x, 0.0f, 1.0f), std::clamp(0.5f + offset.y, 0.0f, 1.0f) },
+			{ scale * profile.centerHorizontalScale * 0.5f, scale * 0.5f }, true };
+	}
+
 	args.pressureResolutionEnabled = settings.neuralRenderingPressureResolutionEnabled;
 	args.parallelEyes = globals::game::isVR && settings.neuralRenderingParallelEyes && settings.neuralRenderingBatchedStereo;
 	args.centralArea = {
@@ -22,7 +46,22 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 		const auto& offset = offsets[args.featureSlot % NeuralRendering::kEyeCount];
 		args.centralArea.offset = { offset.x, offset.y };
 	}
+	args.faceDetailProtectionPercent = settings.neuralRenderingFaceDetailProtectionPercent;
+	args.faceDetailRegions = {};
+	if (args.faceDetailProtectionPercent && args.peripheralCompressionPercent &&
+		args.renderingMode == NeuralRendering::RenderingMode::ReducedResolution && !settings.neuralCharacterRenderingEnabled)
+		args.faceDetailRegions = NeuralRendering::CharacterRendering::Instance().GetFaceDetailRegions(
+			args.sourceWorldFrame, args.featureSlot % NeuralRendering::kEyeCount, dlssCrop);
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	args.reconstructionTuning = settings.neuralReconstructionTuning;
+	const auto [peripheralOverride, peripheralChanged] = NeuralRendering::Renderer::Instance().ResolvePeripheralOverride(args.frameId, args.generation);
+	args.peripheralOverride = peripheralOverride;
+	if (peripheralChanged)
+		RequestHistoryReset();
+	const auto [reconstructionOverride, reconstructionChanged] = NeuralRendering::Renderer::Instance().ResolveReconstructionOverride(args.frameId, args.generation);
+	args.reconstructionOverride = reconstructionOverride;
+	if (reconstructionChanged)
+		RequestHistoryReset();
 	SetNeuralCaptureExecutionContext(args, dlssCrop, colorOrigin, guideOrigin);
 #endif
 }
@@ -31,6 +70,7 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 #	include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidence.h"
 #	include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidenceJson.h"
 #	include "Features/Upscaling/NeuralRendering/ExecutionEvidenceJson.h"
+#	include "Features/Upscaling/NeuralRendering/ReconstructionTuningJson.h"
 #	include "State.h"
 #	include "Utils/ContentHash.h"
 #	include <algorithm>
@@ -49,6 +89,7 @@ namespace
 		// Capture fingerprints include transient controls even though saves omit them.
 		values["neuralCharacterDebugView"] = settings.neuralCharacterDebugView;
 		values["neuralCharacterMaskTestMode"] = settings.neuralCharacterMaskTestMode;
+		values["experimentalReconstruction"] = NeuralRendering::ReconstructionTuningJson(settings.neuralReconstructionTuning);
 #	ifdef DEVBENCH_BRIDGE_ENABLED
 		values["neuralCharacterCurrentContextEnabled"] = settings.neuralCharacterCurrentContextEnabled;
 		values["neuralCharacterGpuMaskSupportEnabled"] = settings.neuralCharacterGpuMaskSupportEnabled;

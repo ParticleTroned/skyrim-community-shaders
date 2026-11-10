@@ -123,6 +123,22 @@ namespace PBR
 		return exp(-0.5 * Theta * Theta / (B_safe * B_safe)) / (sqrt(Math::TAU) * B_safe);
 	}
 
+	/** @brief Keeps black hair absorption finite and avoids zero-to-zero powers in fully shadowed scattering. */
+	float3 GetHairScatterTint(float3 baseColor, float luminance, float shadow)
+	{
+		return shadow < 1.0 ? pow(baseColor / max(luminance, EPSILON_DIVISION), 1.0 - shadow) : 1.0;
+	}
+
+	/** @brief Keeps the Marschner transmission denominator positive at opposite axial directions. */
+	float HairCosThetaD(float tangentDotLight, float tangentDotView)
+	{
+		float sinThetaL = clamp(tangentDotLight, -1.0, 1.0);
+		float sinThetaV = clamp(tangentDotView, -1.0, 1.0);
+		float cosThetaL = sqrt(max(0, 1 - sinThetaL * sinThetaL));
+		float cosThetaV = sqrt(max(0, 1 - sinThetaV * sinThetaV));
+		return sqrt(max(EPSILON_DIVISION * EPSILON_DIVISION, (1 + cosThetaL * cosThetaV + sinThetaV * sinThetaL) * 0.5));
+	}
+
 	/// @brief Calculate wetness specular contribution for direct lighting
 	/// @param N Surface normal
 	/// @param V View direction

@@ -12,6 +12,7 @@ namespace Util::GenerationClaim
 	enum class ClaimOutcome
 	{
 		CacheHit,
+		Failed,
 		Claimed,
 		MustWait,
 		RejectedStale
@@ -51,6 +52,9 @@ namespace Util::GenerationClaim
 			}
 			if (Traits::IsCompleted(it->second) && Traits::HasPayload(it->second)) {
 				return { ClaimOutcome::CacheHit, it };
+			}
+			if (Traits::IsFailed(it->second)) {
+				return { ClaimOutcome::Failed, it };
 			}
 		}
 

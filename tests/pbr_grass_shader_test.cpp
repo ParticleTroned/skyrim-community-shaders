@@ -2,6 +2,8 @@
 #include "d3d11_shader_test.h"
 
 #include <array>
+#include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
@@ -39,13 +41,13 @@ namespace
 			throw std::runtime_error(reason);
 	}
 
-	ComPtr<ID3DBlob> CompileProgram(const D3D_SHADER_MACRO* defines, bool vertex, const char* source = nullptr)
+	ComPtr<ID3DBlob> CompileProgram(const D3D_SHADER_MACRO* defines, bool vertex, const char* source = nullptr, const char* entry = "VerifyLegacyColor")
 	{
 		Includes includes;
 		ComPtr<ID3DBlob> bytecode, errors;
 		constexpr UINT options = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3;
 		const auto result = source ?
-		                        D3DCompile(source, std::strlen(source), "grass-color-regression", defines, &includes, "VerifyLegacyColor", "ps_5_0", options, 0, bytecode.GetAddressOf(), errors.GetAddressOf()) :
+		                        D3DCompile(source, std::strlen(source), "grass-color-regression", defines, &includes, entry, vertex ? "vs_5_0" : "ps_5_0", options, 0, bytecode.GetAddressOf(), errors.GetAddressOf()) :
 		                        D3DCompileFromFile(L"package/Shaders/RunGrass.hlsl", defines, &includes, "main", vertex ? "vs_5_0" : "ps_5_0", options, 0, bytecode.GetAddressOf(), errors.GetAddressOf());
 		if (errors)
 			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
@@ -53,7 +55,7 @@ namespace
 		return bytecode;
 	}
 
-	ComPtr<ID3D11ShaderReflection> Compile(bool vertex, bool vr, bool enhanced, bool pbr, bool depth, bool alpha, bool features, bool optimized)
+	std::vector<D3D_SHADER_MACRO> GrassDefines(bool vertex, bool vr, bool enhanced, bool pbr, bool depth, bool alpha, bool features, bool optimized, bool category = false)
 	{
 		std::vector<D3D_SHADER_MACRO> defines{ { vertex ? "VSHADER" : "PSHADER", "1" } };
 		if (optimized)
@@ -68,12 +70,20 @@ namespace
 			defines.push_back({ "RENDER_DEPTH", "1" });
 		if (alpha)
 			defines.push_back({ "DO_ALPHA_TEST", "1" });
+		if (category)
+			defines.push_back({ "CHARACTER_CATEGORY", "1" });
 		if (features) {
 			for (const char* feature : { "LIGHT_LIMIT_FIX", "ISL", "SKYLIGHTING", "IBL", "DYNAMIC_CUBEMAPS",
 					 "SCREEN_SPACE_SHADOWS", "TERRAIN_SHADOWS", "CLOUD_SHADOWS", "WATER_EFFECTS", "GRASS_COLLISION" })
 				defines.push_back({ feature, "1" });
 		}
 		defines.push_back({ nullptr, nullptr });
+		return defines;
+	}
+
+	ComPtr<ID3D11ShaderReflection> Compile(bool vertex, bool vr, bool enhanced, bool pbr, bool depth, bool alpha, bool features, bool optimized)
+	{
+		auto defines = GrassDefines(vertex, vr, enhanced, pbr, depth, alpha, features, optimized);
 		auto bytecode = CompileProgram(defines.data(), vertex);
 		ComPtr<ID3D11ShaderReflection> reflection;
 		Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
@@ -178,14 +188,69 @@ float4 VerifyLegacyColor(float4 input : COLOR0) : SV_Target0 {
 					std::memcmp(legacy->GetBufferPointer(), combined->GetBufferPointer(), legacy->GetBufferSize()) == 0,
 			"Combined PBR grass changed legacy color conversion or light scaling");
 	}
+
+	void CheckBillboardResources(bool vr)
+	{
+		constexpr const char* source = R"(
+#include "RunGrass.hlsl"
+PS_OUTPUT VerifyLegacyColor(PS_INPUT input, bool frontFace : SV_IsFrontFace) {
+    input.VertexMult = -2;
+    return main(input, frontFace);
+}
+)";
+		auto defines = GrassDefines(false, vr, true, true, false, true, true, true);
+		auto bytecode = CompileProgram(defines.data(), false, source);
+		ComPtr<ID3D11ShaderReflection> reflection;
+		Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
+		for (const char* name : { "TexNormalSampler", "TexRMAOSSampler", "TexSubsurfaceSampler", "PerMaterial", "LightLimitFix::lightGrid" }) {
+			D3D11_SHADER_INPUT_BIND_DESC binding{};
+			Require(FAILED(reflection->GetResourceBindingDescByName(name, &binding)), "Far billboard retained detailed lighting resources");
+		}
+		CheckBinding(reflection.Get(), "TexBaseSampler", 0);
+		CheckBinding(reflection.Get(), "TexShadowMaskSampler", 1);
+	}
+
+	unsigned CheckRetainedShaderPairs()
+	{
+		unsigned compiled = 0;
+		for (bool vr : { false, true })
+			for (unsigned mode = 0; mode < 3; ++mode)
+				for (bool depth : { false, true }) {
+					auto defines = GrassDefines(true, vr, mode != 0, mode == 2, depth, false, false, true);
+					auto vertex = CompileProgram(defines.data(), true);
+					defines = GrassDefines(true, vr, mode != 0, mode == 2, depth, true, false, true);
+					auto alphaVertex = CompileProgram(defines.data(), true);
+					Require(vertex->GetBufferSize() == alphaVertex->GetBufferSize() &&
+								std::memcmp(vertex->GetBufferPointer(), alphaVertex->GetBufferPointer(), vertex->GetBufferSize()) == 0,
+						"Retained grass vertices must preserve the alpha-tested variant's geometry");
+					for (bool alpha : { false, true })
+						for (bool category : { false, true }) {
+							defines = GrassDefines(false, vr, mode != 0, mode == 2, depth, alpha, false, true, category);
+							auto pixel = CompileProgram(defines.data(), false);
+							ComPtr<ID3D11ShaderReflection> reflection;
+							Check(D3DReflect(pixel->GetBufferPointer(), pixel->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
+							CheckOutputs(reflection.Get(), mode == 2, depth);
+							++compiled;
+						}
+				}
+		return compiled;
+	}
+
+#include "grass_alpha_gpu.h"
 }
 
 int main()
 {
 	try {
+		const auto alphaCases = CheckGrassAlphaCoverage();
+		std::cout << alphaCases << " WARP alpha-coverage cases passed" << std::endl;
+		const auto retainedVariants = CheckRetainedShaderPairs();
+		std::cout << retainedVariants << " retained-pair variants passed" << std::endl;
 		unsigned compiled = 0;
 		CheckSimplifiedPBR(false);
 		CheckSimplifiedPBR(true);
+		CheckBillboardResources(false);
+		CheckBillboardResources(true);
 		for (bool optimized : { false, true }) {
 			for (bool vr : { false, true }) {
 				CheckLegacyColor(vr);
@@ -223,7 +288,8 @@ int main()
 				}
 			}
 		}
-		std::cout << compiled << " strict grass permutations and material/geometry reflection passed\n";
+		std::cout << compiled << " strict grass permutations and material/geometry reflection passed; "
+				  << alphaCases << " WARP alpha-coverage cases and " << retainedVariants << " retained-pair variants passed\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

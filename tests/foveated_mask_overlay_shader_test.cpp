@@ -97,15 +97,16 @@ namespace
 			Util::SetResourceName(sampler.Get(), "FovOverlayTest::Sampler");
 		}
 
-		std::vector<Pixel> Draw(ID3D11ComputeShader* shader, ConstantBuffer& cb)
+		std::vector<Pixel> Draw(ID3D11ComputeShader* shader, ConstantBuffer& cb,
+			ID3D11ShaderResourceView* first = nullptr, ID3D11ShaderResourceView* second = nullptr)
 		{
 			context->ClearState();
 			cb.Bind(context.Get());
 			context->CSSetShader(shader, nullptr, 0);
-			ID3D11ShaderResourceView* source = srv.Get();
+			ID3D11ShaderResourceView* sources[]{ first ? first : srv.Get(), second };
 			ID3D11UnorderedAccessView* target = uav.Get();
 			ID3D11SamplerState* sample = sampler.Get();
-			context->CSSetShaderResources(0, 1, &source);
+			context->CSSetShaderResources(0, 2, sources);
 			context->CSSetUnorderedAccessViews(0, 1, &target, nullptr);
 			context->CSSetSamplers(0, 1, &sample);
 			context->Dispatch(kWidth / 8, kHeight / 8, 1);
@@ -142,6 +143,93 @@ namespace
 			Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
 		}
 	};
+
+	void CheckPreparedSpatialComposite(Fixture& f, bool vr)
+	{
+		ComputeShader periphery(f.device.Get(), L"features/Upscaling/Shaders/Upscaling/FoveatedPeripheryCS.hlsl", vr,
+			"FovCompositeTest::Periphery CS");
+		ComputeShader blend(f.device.Get(), L"features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl", vr,
+			"FovCompositeTest::Blend CS");
+		ComputeShader fused(f.device.Get(), L"features/Upscaling/Shaders/Upscaling/FoveatedSpatialCompositeCS.hlsl", vr,
+			"FovCompositeTest::Fused CS");
+		ConstantBuffer peripheryCB(f.device.Get(), periphery.reflection.Get(), "FoveatedPeripheryCB");
+		ConstantBuffer blendCB(f.device.Get(), blend.reflection.Get(), "FoveatedCenterBlendCB");
+		ConstantBuffer fusedCB(f.device.Get(), fused.reflection.Get(), "FoveatedSpatialCompositeCB");
+		constexpr UINT centerWidth = 301, centerHeight = 227;
+		std::vector<Pixel> centerPixels(centerWidth * centerHeight);
+		for (UINT y = 0; y < centerHeight; ++y)
+			for (UINT x = 0; x < centerWidth; ++x)
+				centerPixels[y * centerWidth + x] = { x * .01f - .2f, y * .012f, .6f, .15f + float(x % 13) * .05f };
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = centerWidth;
+		desc.Height = centerHeight;
+		desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+		desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		D3D11_SUBRESOURCE_DATA data{ centerPixels.data(), centerWidth * sizeof(Pixel), 0 };
+		ComPtr<ID3D11Texture2D> center;
+		ComPtr<ID3D11ShaderResourceView> centerSRV;
+		Check(f.device->CreateTexture2D(&desc, &data, center.GetAddressOf()));
+		Util::SetResourceName(center.Get(), "FovCompositeTest::PreparedCenter");
+		Check(f.device->CreateShaderResourceView(center.Get(), nullptr, centerSRV.GetAddressOf()));
+		Util::SetResourceName(centerSRV.Get(), "FovCompositeTest::PreparedCenter SRV");
+		const Pair outputDim{ float(kWidth), float(kHeight) }, invOutput{ 1.f / kWidth, 1.f / kHeight };
+		const Pair centerDim{ float(centerWidth), float(centerHeight) }, invCenter{ 1.f / centerWidth, 1.f / centerHeight };
+		peripheryCB.SetVariable("OutputDim", outputDim);
+		peripheryCB.SetVariable("InvOutputDim", invOutput);
+		peripheryCB.SetVariable("InvSourceDim", invOutput);
+		peripheryCB.SetVariable("DispatchDim", outputDim);
+		blendCB.SetVariable("InvOutputDim", invOutput);
+		blendCB.SetVariable("InvSourceDim", invCenter);
+		blendCB.SetVariable("DispatchDim", centerDim);
+		fusedCB.SetVariable("OutputDim", outputDim);
+		fusedCB.SetVariable("InvOutputDim", invOutput);
+		fusedCB.SetVariable("InvPeripherySourceDim", invOutput);
+		fusedCB.SetVariable("CenterRectDim", centerDim);
+		fusedCB.SetVariable("InvCenterSourceDim", invCenter);
+		for (UINT eye = 0; eye < 2; ++eye) {
+			std::vector<Pixel> scene(kWidth * kHeight, Pixel{ 100, -100, 100, -100 });
+			for (UINT y = kHeight / 8; y < kHeight * 7 / 8; ++y)
+				for (UINT x = eye * kWidth / 2; x < (eye + 1) * kWidth / 2; ++x)
+					scene[y * kWidth + x] = { float(x % 19) * .03f, y * .002f, .25f, .8f };
+			f.context->UpdateSubresource(f.input.Get(), 0, nullptr, scene.data(), kWidth * sizeof(Pixel), 0);
+			const Pair sourceScale{ .5f, .75f }, sourceOffset{ eye * .5f, .125f };
+			const Pair jitter{ eye ? -.375f : .375f, -.25f };
+			const Pair centerOffset{ eye ? .04f : -.04f, .015f };
+			const Pair rectOffset{ eye ? 126.f : 85.f, 79.f };
+			peripheryCB.SetVariable("SourceScale", sourceScale);
+			peripheryCB.SetVariable("SourceOffset", sourceOffset);
+			peripheryCB.SetVariable("Jitter", jitter);
+			blendCB.SetVariable("CenterOffset", centerOffset);
+			blendCB.SetVariable("OutputOffset", rectOffset);
+			fusedCB.SetVariable("PeripherySourceScale", sourceScale);
+			fusedCB.SetVariable("PeripherySourceOffset", sourceOffset);
+			fusedCB.SetVariable("Jitter", jitter);
+			fusedCB.SetVariable("CenterOffset", centerOffset);
+			fusedCB.SetVariable("CenterRectOffset", rectOffset);
+			for (float feather : { 0.f, .05f })
+				for (float falloff : { .5f, 1.f, 2.f }) {
+					blendCB.SetVariable("CenterScale", .3f);
+					blendCB.SetVariable("CenterHorizontalScale", 1.1f);
+					blendCB.SetVariable("CenterFeather", feather);
+					blendCB.SetVariable("BlendFalloff", falloff);
+					fusedCB.SetVariable("Tuning", Pixel{ .3f, feather, 1.1f, falloff });
+					const auto underlay = f.Draw(periphery.shader.Get(), peripheryCB);
+					const auto separate = f.Draw(blend.shader.Get(), blendCB, centerSRV.Get());
+					const auto combined = f.Draw(fused.shader.Get(), fusedCB, nullptr, centerSRV.Get());
+					unsigned centerWrites = 0, peripheryWrites = 0;
+					for (std::size_t i = 0; i < separate.size(); ++i) {
+						for (unsigned channel = 0; channel < 4; ++channel)
+							Require(std::isfinite(combined[i][channel]) &&
+										std::abs(combined[i][channel] - separate[i][channel]) < 3e-5f,
+								"Prepared fusion changed colour, alpha, source bounds, jitter or feathering");
+						centerWrites += combined[i] != underlay[i];
+						peripheryWrites += combined[i] == underlay[i];
+					}
+					Require(centerWrites && peripheryWrites, "Composite comparison did not exercise both sources");
+				}
+		}
+	}
 
 	void CheckCalibratedBlend(Fixture& f, bool vr)
 	{
@@ -460,6 +548,8 @@ int main()
 		CheckPreview(fixture, true);
 		CheckCalibratedBlend(fixture, false);
 		CheckCalibratedBlend(fixture, true);
+		CheckPreparedSpatialComposite(fixture, false);
+		CheckPreparedSpatialComposite(fixture, true);
 		std::cout << "PASS: production VR/flat overlay, tints, independent X/Y boundaries, binocular gaps, readout, feather area, full coverage, source bounds and calibrated blend stability\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

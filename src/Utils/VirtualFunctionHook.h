@@ -23,9 +23,11 @@ namespace Util
 		DetourAttachResult AttachDetourTransaction(void** a_original, void* a_hook, const Operations& a_operations)
 		{
 			long result = a_operations.Begin();
-			if (result != NO_ERROR)
+			// A busy transaction belongs to an earlier call; other Begin failures can retain ownership.
+			if (result == ERROR_INVALID_OPERATION)
 				return { result, false };
-			result = a_operations.UpdateThread();
+			if (result == NO_ERROR)
+				result = a_operations.UpdateThread();
 			if (result == NO_ERROR)
 				result = a_operations.Attach(a_original, a_hook);
 			if (result != NO_ERROR) {
@@ -39,6 +41,14 @@ namespace Util
 
 	/** @brief Attach a detour with checked transaction ownership and thread enlistment. */
 	DetourAttachResult AttachDetour(void** a_original, void* a_hook);
+
+	/**
+	 * @brief Install a process-lifetime detour once per target/hook pair; failures remain retryable.
+	 * Call during initialization. Original storage must have process lifetime, start null, and remain
+	 * unchanged after success. Matching repeats preserve its trampoline. Pass null storage only for
+	 * a hook that never calls the original function.
+	 */
+	DetourAttachResult InstallDetour(std::uintptr_t a_target, void** a_original, void* a_hook);
 
 	enum class VirtualHookMethod
 	{

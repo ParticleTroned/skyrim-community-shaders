@@ -554,6 +554,16 @@ bool SettingsMigrations::MigrateAdaptiveBalanceRootLayer(
 	migrated |= MigrateLegacyUtilityBootState(migratedLayer);
 	migrated |= MigrateLegacyAdaptiveBrightnessRoot(migratedLayer);
 	migrated |= MigrateLegacyUnifiedWaterAppearanceRoot(migratedLayer, a_forceLegacyWaterAppearance);
+	if (auto volumetric = migratedLayer.find(kVolumetricLightingSettingsName.data()); volumetric != migratedLayer.end()) {
+		const auto original = *volumetric;
+		auto patch = ExtractAdaptiveBalanceGodrayFeaturePatch(*volumetric);
+		migrated |= *volumetric != original;
+		if (!patch.empty()) {
+			auto& adaptive = migratedLayer[std::string(kAdaptiveBalanceSettingsName)];
+			MergeValidFallback(adaptive, patch, patch);
+			migrated = true;
+		}
+	}
 	migrated |= MigrateLegacyUtilityAppearanceRoot(migratedLayer);
 	migrated |= MigrateLegacyUtilityBloomRoot(migratedLayer);
 	if (auto adaptive = migratedLayer.find(kAdaptiveBalanceSettingsName.data()); adaptive != migratedLayer.end())
@@ -744,4 +754,42 @@ void SettingsMigrations::RetireAdaptiveBalanceFeaturePatch(nlohmann::json& a_leg
 		if (auto bloom = a_legacyLayer.find(kLegacyBloomKey.data()); bloom != a_legacyLayer.end() && bloom->is_object())
 			(*bloom)[std::string(kLegacyBloomMigratedKey)] = true;
 	}
+}
+
+nlohmann::json SettingsMigrations::ExtractAdaptiveBalanceGodrayFeaturePatch(nlohmann::json& a_volumetricLayer)
+{
+	if (!a_volumetricLayer.is_object())
+		return json::object();
+
+	json legacy = json::object();
+	for (const auto& field : VolumetricLightingTuning::kProfileFields) {
+		const char* key = field.legacyName;
+		auto input = a_volumetricLayer.find(key);
+		if (field.member == &VolumetricLightingTuning::Profile::ShaftIntensity &&
+			(input == a_volumetricLayer.end() || !input->is_number()))
+			input = a_volumetricLayer.find("GodrayIntensity");
+		if (input != a_volumetricLayer.end())
+			legacy[field.name] = *input;
+		a_volumetricLayer.erase(key);
+	}
+	a_volumetricLayer.erase("GodrayIntensity");
+
+	json profiles = json::object();
+	for (const auto& [source, destination] : { std::pair{ "ExteriorGodrays", "exterior" }, std::pair{ "InteriorGodrays", "interior" } }) {
+		auto input = a_volumetricLayer.find(source);
+		const auto& values = input != a_volumetricLayer.end() ? *input : legacy;
+		if (!values.empty() || input != a_volumetricLayer.end()) {
+			const auto sanitized = VolumetricLightingTuning::ReadProfile(values);
+			for (const auto& field : VolumetricLightingTuning::kProfileFields) {
+				if (!values.is_object() || values.contains(field.name)) {
+					const auto value = values.is_object() ? values.at(field.name) : json{};
+					profiles[destination][field.name] = IsFiniteUtilityNumber(value) && value.get<double>() >= 0.0 && value.get<double>() <= field.maximum ?
+					                                        value :
+					                                        json(sanitized.*field.member);
+				}
+			}
+		}
+		a_volumetricLayer.erase(source);
+	}
+	return profiles.empty() ? json::object() : json{ { "godrays", std::move(profiles) } };
 }

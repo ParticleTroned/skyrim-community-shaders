@@ -3,7 +3,75 @@
 // Include production PBR math code (constants, flags, and pure math functions)
 // PBRMath.hlsli contains only pure functions with no game-specific dependencies
 #include "/Shaders/Common/PBRMath.hlsli"
+#include "/Shaders/Common/HairScattering.hlsli"
 #include "/Test/STF/ShaderTestFramework.hlsli"
+
+/// @tags pbr, hair, regression
+[numthreads(1, 1, 1)] void TestHairAxialTransmission() {
+	const float2 directions[4] = { float2(1, -1), float2(-1, 1), float2(1.0000001, -1.0000001), float2(0, 0) };
+	for (uint i = 0; i < 4; ++i) {
+		float cosine = PBR::HairCosThetaD(directions[i].x, directions[i].y);
+		ASSERT(IsTrue, isfinite(cosine) && cosine > 0 && cosine <= 1);
+		float exponent = 0.8 / cosine;
+		ASSERT(IsTrue, isfinite(exponent) && isfinite(pow(1.0, exponent)) && isfinite(pow(0.0, exponent)));
+	}
+	ASSERT(IsTrue, abs(PBR::HairCosThetaD(0, 0) - 1.0) < 1e-6);
+}
+
+	/// @tags pbr, hair, black, regression
+	[numthreads(1, 1, 1)] void TestHairAxialDiffuseScattering()
+{
+	const float3 tangent = float3(0, 0, 1);
+	const float3 views[4] = { tangent, -tangent, float3(1e-12, 0, 1), float3(1, 0, 0) };
+	const float3 colors[3] = { float3(0, 0, 0), float3(0, 1e-8, 1e-8), float3(0.1, 0.25, 0.5) };
+	for (uint i = 0; i < 4; ++i) {
+		float factor = HairScattering::DiffuseFactor(tangent, views[i], float3(1, 0, 0), 0, dot(tangent, views[i]));
+		ASSERT(IsTrue, isfinite(factor) && factor >= 0);
+		for (uint j = 0; j < 3; ++j) {
+			float luminance = dot(colors[j], float3(0.2125, 0.7154, 0.0721));
+			float3 scatter = sqrt(colors[j]) * factor * PBR::GetHairScatterTint(colors[j], luminance, 0.5);
+			ASSERT(IsTrue, all(isfinite(scatter)) && all(scatter >= 0));
+			if (j == 0)
+				ASSERT(IsTrue, all(scatter == 0));
+		}
+		float expected = (1 / Math::PI) * lerp(i < 2 ? 0.25 : 0.5, 1.0, 0.33);
+		if (i != 2)
+			ASSERT(IsTrue, abs(factor - expected) < 1e-6);
+	}
+}
+
+/// @tags pbr, hair, black, regression
+[numthreads(1, 1, 1)] void TestHairScatterBlackAlbedo() {
+	const float shadows[3] = { 0.0, 0.5, 1.0 };
+	const float3 colors[3] = { float3(0, 0, 0), float3(1e-8, 0, 0), float3(0, 1e-8, 1e-8) };
+	for (uint i = 0; i < 3; ++i) {
+		float luminance = dot(colors[i], float3(0.2125, 0.7154, 0.0721));
+		for (uint j = 0; j < 3; ++j) {
+			float3 tint = PBR::GetHairScatterTint(colors[i], luminance, shadows[j]);
+			float3 scatter = sqrt(colors[i]) * tint;
+			ASSERT(IsTrue, all(isfinite(tint)) && all(isfinite(scatter)));
+			ASSERT(IsTrue, all(scatter >= 0.0));
+			if (i == 0) {
+				ASSERT(IsTrue, all(scatter == 0.0));
+			}
+			if (j == 2) {
+				ASSERT(IsTrue, all(tint == 1.0));
+			}
+		}
+	}
+}
+
+	/// @tags pbr, hair, regression
+	[numthreads(1, 1, 1)] void TestHairScatterOrdinaryAlbedo()
+{
+	const float3 baseColor = float3(0.1, 0.25, 0.5);
+	const float luminance = dot(baseColor, float3(0.2125, 0.7154, 0.0721));
+	float3 directTint = PBR::GetHairScatterTint(baseColor, luminance, 0.0);
+	ASSERT(IsTrue, all(abs(directTint * luminance - baseColor) < 1e-6));
+	float3 partialTint = PBR::GetHairScatterTint(baseColor, luminance, 0.5);
+	ASSERT(IsTrue, all(abs(partialTint * partialTint * luminance - baseColor) < 1e-6));
+	ASSERT(IsTrue, all(PBR::GetHairScatterTint(baseColor, luminance, 1.0) == 1.0));
+}
 
 /// @tags pbr, ior, material
 [numthreads(1, 1, 1)] void TestIORToF0() {

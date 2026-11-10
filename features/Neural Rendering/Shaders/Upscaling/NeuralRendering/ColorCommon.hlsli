@@ -59,6 +59,10 @@ bool EffectiveExposure(out float exposure)
 	return valid && isfinite(exposure) && exposure >= (1.0 / 256.0) && exposure <= 256.0;
 }
 
+#ifdef NR_NVIDIA_REFERENCE
+#	include "Upscaling/NeuralRendering/NvidiaReferenceColor.hlsli"
+#endif
+
 bool ForwardColor(float3 source, out float3 prepared)
 {
 	prepared = source;
@@ -72,6 +76,12 @@ bool ForwardColor(float3 source, out float3 prepared)
 	prepared = source * exposure;
 	if (!all(isfinite(prepared)))
 		return false;
+#ifdef NR_NVIDIA_REFERENCE
+	if (ColorTransform == 3) {
+		prepared = pow(ReferenceTone(prepared), 1.0 / 2.2);
+		return all(isfinite(prepared));
+	}
+#endif
 	float maximum = Maximum3(prepared);
 	if (ColorTransform == 2)
 		prepared *= ProxyForwardScale(maximum);
@@ -86,6 +96,10 @@ bool InverseColor(float3 model, out float3 source)
 		return false;
 	if (ColorTransform == 0)
 		return true;
+#ifdef NR_NVIDIA_REFERENCE
+	if (ColorTransform == 3)
+		return false;
+#endif
 	float exposure = 1.0;
 	if (any(model < 0.0) || !EffectiveExposure(exposure))
 		return false;
@@ -121,6 +135,24 @@ bool ReconstructCandidate(float3 baseline, float3 prepared, float3 neural, out f
 {
 	result = baseline;
 	float3 check, originalProxy, neuralSource;
+#ifdef NR_NVIDIA_REFERENCE
+	if (ColorTransform == 3) {
+		float exposure;
+		if (!ForwardColor(baseline, check) || !EffectiveExposure(exposure) || !all(isfinite(prepared)) || !all(isfinite(neural)))
+			return false;
+		float3 exposed = baseline * exposure;
+		float3 tone = ReferenceTone(exposed);
+		// Subtract the stored prepared image so an unchanged model output preserves source bits.
+		float3 residual = pow(saturate(neural), 2.2) - pow(saturate(prepared), 2.2);
+		precise float3 candidate = baseline + residual * (baseline / max(tone, 1e-6));
+		float highlight = smoothstep(1.0, 8.0, Maximum3(exposed)) * smoothstep(0.75, 0.99, Maximum3(check));
+		candidate = lerp(candidate, baseline, highlight);
+		if (!RepresentableRGB(candidate))
+			return false;
+		result = candidate;
+		return true;
+	}
+#endif
 	if (!ForwardColor(baseline, check) || !InverseColor(prepared, originalProxy) || !InverseColor(neural, neuralSource))
 		return false;
 	precise float3 candidate = baseline + (neuralSource - originalProxy);

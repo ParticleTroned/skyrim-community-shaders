@@ -1,8 +1,11 @@
+#include "reverse_z_test_stub.h"
+
 #include "Utils/ShaderCacheManifest.h"
 #include "Utils/ShaderCompiler.h"
 #include "Utils/ShaderDefines.h"
 #include "Utils/ShaderInclude.h"
 #include "Utils/ShaderSourceProvenance.h"
+#include "Utils/StringUtils.h"
 
 #include <algorithm>
 #include <atomic>
@@ -16,10 +19,12 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <shared_mutex>
 #include <spdlog/sinks/ostream_sink.h>
 #include <spdlog/spdlog.h>
 #include <sstream>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <winrt/base.h>
@@ -165,9 +170,19 @@ namespace SIE
 namespace
 {
 	bool injectSizedError = false;
+	bool injectAllocationFailure = false, injectInvalidBytecode = false;
+	unsigned compilerCalls = 0;
 	HRESULT CompileForTest(LPCWSTR path, const D3D_SHADER_MACRO* macros, ID3DInclude* include,
 		LPCSTR entry, LPCSTR target, UINT flags, UINT flags2, ID3DBlob** blob, ID3DBlob** errors)
 	{
+		++compilerCalls;
+		if (injectAllocationFailure)
+			return E_OUTOFMEMORY;
+		if (injectInvalidBytecode) {
+			assert(SUCCEEDED(D3DCreateBlob(4, blob)));
+			std::memset((*blob)->GetBufferPointer(), 0, 4);
+			return S_OK;
+		}
 		if (!injectSizedError)
 			return D3DCompileFromFile(path, macros, include, entry, target, flags, flags2, blob, errors);
 		constexpr std::string_view message = "unterminated-error";
@@ -178,6 +193,7 @@ namespace
 }
 namespace Util
 {
+#include "standalone_failures_under_test.h"
 #define D3DCompileFromFile CompileForTest
 #include "standalone_d3d_under_test.h"
 #undef D3DCompileFromFile
@@ -261,6 +277,11 @@ int main()
 	SIE::ShaderCache cache;
 	globals::state = &state;
 	globals::shaderCache = &cache;
+	{
+		std::array<D3D_SHADER_MACRO, 5> macros{ { { "EXTRA", "1" }, { "PSHADER", "" }, { "WINPC", "" }, { "DX11", "" }, { nullptr, nullptr } } };
+		const Util::StandaloneShaderRequest request{ L"Data/Shaders/test.hlsl", macros, "ps_5_0", "main", 34818, false };
+		assert(SIE::BuildStandaloneCompileKey(request).packDigest.ToHex() == "86afdff32904f1c54f253703a78b0748");
+	}
 	winrt::com_ptr<ID3D11Device> device;
 	winrt::com_ptr<ID3D11DeviceContext> context;
 	assert(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
@@ -423,13 +444,31 @@ int main()
 	sizedLogger->set_pattern("%v");
 	spdlog::set_default_logger(sizedLogger);
 	cache.enabled = false;
+	HRESULT reported = S_OK;
+	injectAllocationFailure = true;
+	assert(!Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0", "main", reported) && reported == E_OUTOFMEMORY);
+	injectAllocationFailure = false;
+	winrt::com_ptr<ID3D11DeviceChild> allocationRecovered;
+	allocationRecovered.attach(Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0", "main", reported));
+	assert(allocationRecovered && reported == S_OK);
+	injectInvalidBytecode = true;
+	assert(!Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0", "main", reported) && reported == E_INVALIDARG);
+	injectInvalidBytecode = false;
+	capturedLog.str("");
 	injectSizedError = true;
-	assert(!Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0"));
+	assert(!Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0", "main", reported) && reported == E_FAIL);
 	constexpr std::string_view expectedError = "Shader compilation failed:\n\nunterminated-error";
 	assert(capturedLog.str().starts_with(expectedError));
 	const auto ending = capturedLog.str().substr(expectedError.size());
 	assert(ending == "\n" || ending == "\r\n");
 	injectSizedError = false;
+	const auto failedCompileCalls = compilerCalls;
+	assert(!Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0"));
+	assert(compilerCalls == failedCompileCalls);
+	Util::ClearShaderCompileFailures();
+	winrt::com_ptr<ID3D11DeviceChild> recovered;
+	recovered.attach(Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0"));
+	assert(recovered && compilerCalls == failedCompileCalls + 1);
 	spdlog::set_default_logger(previousLogger);
 	cache.enabled = true;
 	assert(!Util::CompileShader(nullptr, defines, "ps_5_0"));

@@ -118,6 +118,13 @@ auto GetPreparedCharacterSelection(const Settings&, unsigned, unsigned, unsigned
 	return NeuralRendering::CharacterPreparedSelection{ currentMask, { 0, 0, width, height }, currentProviderBlending };
 }
 #define CS_GPU_PASS_CAPTURE(name, capture) (void)(capture)
+namespace UpscalingTextures
+{
+	enum class CenterInput
+	{
+		Color
+	};
+}
 struct Upscaling
 {
 	enum class NeuralStereoRouteRole
@@ -138,6 +145,11 @@ struct Upscaling
 	};
 	Settings settings;
 	std::array<std::unique_ptr<Texture>, 2> foveatedCenterColorIn, foveatedCenterNeuralOut, foveatedCenterNeuralSelected;
+	Texture* preparedInput = nullptr;
+	Texture* GetFoveatedCenterInput(unsigned eye, UpscalingTextures::CenterInput) const
+	{
+		return preparedInput ? preparedInput : foveatedCenterColorIn[eye].get();
+	}
 	unsigned allocations = 0, allocationAttempts = 0, selectedPreparations = 0, dispatches = 0;
 	bool selectedAllocationAllowed = true, blendSucceeds = true;
 	uint64_t measuredPixels = 0;
@@ -218,7 +230,13 @@ int main()
 							                                     provider            ? 12.0f :
 							                                                           6.0f;
 					// Repeat with poisoned storage: skipping a copy must not expose prior-frame pixels.
+					std::unique_ptr<Texture> borrowed;
 					for (unsigned repeat = 0; repeat < 2; ++repeat) {
+						if (repeat) {
+							borrowed = std::move(u.foveatedCenterColorIn[eye]);
+							u.preparedInput = borrowed.get();
+							u.foveatedCenterColorIn[eye] = std::make_unique<Texture>(11, 7, -999.0f);
+						}
 						globals::d3d::instance.copies = 0;
 						u.dispatches = 0;
 						if (u.foveatedCenterNeuralSelected[eye])

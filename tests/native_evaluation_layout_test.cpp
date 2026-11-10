@@ -28,6 +28,8 @@ int main()
 	static_assert(layout.depth == layout.motion);
 	static_assert(layout.motionVectorScale == std::array{ 99.0f, 73.0f });
 	Require(GetNativeEvaluationLayoutViolation(layout, false).empty());
+	Require(layout.jitterPixels == std::array<float, 2>{} && !layout.nativeControlMask);
+	Require(layout.ScalingRatio() == 1.0f);
 
 	// Cropping does not rescale normalized full-input displacements or add its origin twice.
 	Require(std::abs((1.0f / 99.0f) * layout.motionVectorScale[0] - 1.0f) < 1e-6f);
@@ -57,10 +59,13 @@ int main()
 	rejects([](auto& value) { value.motionVectorScale[0] = 0; });
 	rejects([](auto& value) { value.motionVectorScale[1] = std::numeric_limits<float>::quiet_NaN(); });
 	rejects([](auto& value) { value.motionVectorScale[0] = std::numeric_limits<float>::infinity(); });
+	rejects([](auto& value) { value.jitterPixels[0] = std::numeric_limits<float>::quiet_NaN(); });
+	rejects([](auto& value) { value.nativeControlMask = true; });
 	rejects([](auto& value) { value.controlMask.backing.height = 99; });
 	rejects([](auto&) {}, true);
 	auto masked = layout;
 	masked.controlMask = masked.output;
+	masked.nativeControlMask = true;
 	Require(GetNativeEvaluationLayoutViolation(masked, true).empty());
 	Require(!GetNativeEvaluationLayoutViolation(masked, false).empty());
 	masked.controlMask.valid.width--;

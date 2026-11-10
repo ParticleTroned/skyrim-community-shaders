@@ -13,6 +13,7 @@
 #include "Utils/Form.h"
 #include "Utils/Game.h"
 #include "Utils/PointLightFlags.h"
+#include "Utils/StringUtils.h"
 #include "Utils/UI.h"
 #include "WeatherColorAdjustment.h"
 #include "WetternessLightingPolicy.h"
@@ -89,6 +90,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	waterGammaOffset,
 	vlGammaOffset,
 	bloom,
+	bloomPresets,
 	water,
 	waterWind,
 	appearance)
@@ -105,8 +107,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::Settings,
 	enabled,
+	bloomEnabled,
 	useAmbientEffectLighting,
 	godrayFinalBrightness,
+	volumetricClarity,
+	godrays,
 	moonReflectionStrength,
 	dayStartHour,
 	nightStartHour,
@@ -165,7 +170,8 @@ namespace
 		       a_settings.spotlightMult != 1.0f ||
 		       a_settings.linearSpotlightMult != 1.0f ||
 		       a_settings.omnidirectionalBulbMult != 1.0f ||
-		       a_settings.linearOmnidirectionalBulbMult != 1.0f;
+		       a_settings.linearOmnidirectionalBulbMult != 1.0f ||
+		       AdaptiveBalanceAppearance::UsesClassifiedPointLights(a_settings.appearance);
 	}
 
 	constexpr std::array<Profile, AdaptiveBrightness::kProfileCount> kProfileOrder{
@@ -536,27 +542,61 @@ namespace
 		return Util::PathHelpers::GetCommunityShaderPath() / AdaptiveBrightness::kFeatureShortName.data() / "Presets";
 	}
 
-	std::filesystem::path GetPresetPath(std::string_view a_name, PresetKind a_kind)
+	std::filesystem::path GetPresetPath(std::string_view a_name, PresetKind a_kind, const std::filesystem::path& a_exportFolder = {})
 	{
-		return GetPresetDirectory() / GetPresetFilename(a_name, a_kind);
+		return (a_exportFolder.empty() ? GetPresetDirectory() : a_exportFolder) / GetPresetFilename(a_name, a_kind);
 	}
 
-	std::filesystem::path GetLocationOverrideLiveOverridePath(std::string_view a_name)
+	std::array<std::filesystem::path, 2> GetPresetImportDirectories(PresetKind a_kind)
 	{
-		return Util::PathHelpers::GetOverridesPath() / GetPresetFilename(a_name, PresetKind::Location);
+		return { GetPresetDirectory(), a_kind == PresetKind::Location ? Util::PathHelpers::GetOverridesPath() : std::filesystem::path{} };
+	}
+
+	void ReadPresetNames(PresetKind a_kind, std::vector<std::string>& a_names, std::string& a_status)
+	{
+		a_names.clear();
+		a_status.clear();
+		std::unordered_set<std::string> seen;
+		std::size_t skipped = 0;
+		const auto suffix = std::format("{}.json", GetPresetFilenameSuffix(a_kind));
+		for (const auto& directory : GetPresetImportDirectories(a_kind)) {
+			try {
+				if (directory.empty() || !std::filesystem::exists(directory))
+					continue;
+				for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+					const auto filename = Util::PathToUtf8(entry.path().filename());
+					if (!entry.is_regular_file() || !EndsWithCaseInsensitive(filename, suffix))
+						continue;
+					const auto key = Util::ToLowerAscii(filename);
+					// A listed filename must resolve back to itself through the existing importer.
+					if (key != Util::ToLowerAscii(GetPresetFilename(filename, a_kind))) {
+						++skipped;
+						continue;
+					}
+					if (seen.insert(key).second)
+						a_names.push_back(filename);
+				}
+			} catch (const std::filesystem::filesystem_error& error) {
+				if (!a_status.empty())
+					a_status += " ";
+				a_status += std::format("Could not list presets: {}", error.what());
+			}
+		}
+		std::ranges::sort(a_names);
+		if (skipped) {
+			if (!a_status.empty())
+				a_status += " ";
+			a_status += std::format("{} file(s) omitted: use letters, numbers, - or _ before the preset suffix.", skipped);
+		}
 	}
 
 	std::optional<std::filesystem::path> ResolvePresetImportPath(std::string_view a_name, PresetKind a_kind)
 	{
-		std::array paths{
-			GetPresetPath(a_name, a_kind),
-			a_kind == PresetKind::Location ? GetLocationOverrideLiveOverridePath(a_name) : std::filesystem::path{}
-		};
-
-		for (const auto& path : paths) {
-			if (path.empty())
+		for (const auto& directory : GetPresetImportDirectories(a_kind)) {
+			if (directory.empty())
 				continue;
 
+			const auto path = directory / GetPresetFilename(a_name, a_kind);
 			std::error_code ec;
 			if (std::filesystem::exists(path, ec) && !ec)
 				return path;
@@ -581,61 +621,9 @@ namespace
 			GetPresetDirectory().string());
 	}
 
-	bool WriteJsonFileAtomic(const std::filesystem::path& a_path, const json& a_json)
+	bool WriteJsonFileAtomic(const std::filesystem::path& a_path, const json& a_json, std::string& a_error)
 	{
-		auto tempPath = a_path;
-		tempPath += ".tmp";
-		auto backupPath = a_path;
-		backupPath += ".bak";
-
-		std::ofstream file(tempPath, std::ios::out | std::ios::trunc);
-		if (!file.is_open())
-			return false;
-
-		file << a_json.dump(1);
-		file.flush();
-		file.close();
-		if (file.fail()) {
-			std::error_code removeEc;
-			std::filesystem::remove(tempPath, removeEc);
-			return false;
-		}
-
-		std::error_code ec;
-		if (std::filesystem::exists(backupPath, ec) && !ec)
-			std::filesystem::remove(backupPath, ec);
-		if (ec) {
-			std::filesystem::remove(tempPath, ec);
-			return false;
-		}
-
-		const bool hadExistingFile = std::filesystem::exists(a_path, ec) && !ec;
-		if (ec) {
-			std::filesystem::remove(tempPath, ec);
-			return false;
-		}
-
-		if (hadExistingFile) {
-			std::filesystem::rename(a_path, backupPath, ec);
-			if (ec) {
-				std::filesystem::remove(tempPath, ec);
-				return false;
-			}
-		}
-
-		std::filesystem::rename(tempPath, a_path, ec);
-		if (ec) {
-			std::error_code restoreEc;
-			if (hadExistingFile)
-				std::filesystem::rename(backupPath, a_path, restoreEc);
-			std::filesystem::remove(tempPath, ec);
-			return false;
-		}
-
-		if (hadExistingFile)
-			std::filesystem::remove(backupPath, ec);
-
-		return true;
+		return Util::FileHelpers::WriteTextFileAtomic(a_path, a_json.dump(1), a_error, false);
 	}
 
 	bool ReadJsonPresetFile(const std::filesystem::path& a_path, json& o_json, std::string& o_status)
@@ -661,6 +649,7 @@ namespace
 			}
 
 			file >> o_json;
+			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(o_json);
 			return true;
 		} catch (const json::exception& e) {
 			o_status = std::format("Import failed: invalid JSON ({})", e.what());
@@ -711,6 +700,8 @@ namespace
 		a_profile.waterGammaOffset = ClampGammaOffset(a_profile.waterGammaOffset);
 		a_profile.vlGammaOffset = ClampGammaOffset(a_profile.vlGammaOffset);
 		Bloom::SanitizeProfile(a_profile.bloom);
+		Bloom::SanitizePresets(a_profile.bloomPresets);
+		a_profile.bloomPresets.profiles[a_profile.bloomPresets.selected] = a_profile.bloom;
 		WaterAppearance::SanitizeProfile(a_profile.water);
 		SanitizeWaterWindSettings(a_profile.waterWind);
 	}
@@ -803,6 +794,9 @@ namespace
 	void NormalizeBaseSettings(AdaptiveBrightness::Settings& a_settings)
 	{
 		a_settings.godrayFinalBrightness = AdaptiveBalanceGodray::SanitizeFinalBrightness(a_settings.godrayFinalBrightness);
+		a_settings.volumetricClarity = AdaptiveBalanceGodray::SanitizeClarity(a_settings.volumetricClarity);
+		a_settings.godrays.exterior = VolumetricLightingTuning::SanitizeProfile(a_settings.godrays.exterior);
+		a_settings.godrays.interior = VolumetricLightingTuning::SanitizeProfile(a_settings.godrays.interior);
 		a_settings.moonReflectionStrength = Util::ClampFinite(a_settings.moonReflectionStrength,
 			AdaptiveBrightness::kMoonReflectionStrengthMin, AdaptiveBrightness::kMoonReflectionStrengthMax, AdaptiveBrightness::kMoonReflectionStrengthDefault);
 		AdaptiveBalanceDepthOfField::SanitizeSettings(a_settings.depthOfField);
@@ -1274,7 +1268,10 @@ namespace
 	{
 		return {
 			{ "useAmbientEffectLighting", a_settings.useAmbientEffectLighting },
+			{ "bloomEnabled", a_settings.bloomEnabled },
 			{ "godrayFinalBrightness", a_settings.godrayFinalBrightness },
+			{ "volumetricClarity", a_settings.volumetricClarity },
+			{ "godrays", a_settings.godrays },
 			{ "moonReflectionStrength", a_settings.moonReflectionStrength },
 			{ "globalProfile", a_settings.globalProfile },
 			{ "depthOfField", a_settings.depthOfField },
@@ -1412,7 +1409,12 @@ namespace
 				importedSettings.depthOfField = it->get<AdaptiveBalanceDepthOfField::Settings>();
 
 			importedSettings.useAmbientEffectLighting = GetOptionalBool(migratedPreset, "useAmbientEffectLighting", false);
+			importedSettings.bloomEnabled = GetOptionalBool(migratedPreset, "bloomEnabled", true);
 			importedSettings.godrayFinalBrightness = GetOptionalFloat(migratedPreset, "godrayFinalBrightness", AdaptiveBalanceGodray::kDefault);
+			if (const auto it = migratedPreset.find("godrays"); it != migratedPreset.end())
+				importedSettings.godrays = it->get<AdaptiveBalanceGodray::Profiles>();
+
+			importedSettings.volumetricClarity = GetOptionalFloat(migratedPreset, "volumetricClarity", AdaptiveBalanceGodray::kClarityDefault);
 			importedSettings.moonReflectionStrength = GetOptionalFloat(migratedPreset, "moonReflectionStrength", AdaptiveBrightness::kMoonReflectionStrengthDefault);
 			importedSettings.dayStartHour = GetOptionalFloat(migratedPreset, "dayStartHour", importedSettings.dayStartHour);
 			importedSettings.nightStartHour = GetOptionalFloat(migratedPreset, "nightStartHour", importedSettings.nightStartHour);
@@ -1489,32 +1491,6 @@ namespace
 		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
 		ImGui::TextDisabled("%s", a_text);
 		ImGui::PopTextWrapPos();
-	}
-
-	void DrawPresetNameInput(
-		const char* a_label,
-		const char* a_id,
-		std::string& a_name,
-		const std::filesystem::path& a_exportPath,
-		const std::filesystem::path* a_alternateImportPath = nullptr,
-		float a_width = 0.0f)
-	{
-		if (a_label && a_label[0] != '\0') {
-			ImGui::TextUnformatted(a_label);
-			ImGui::SameLine();
-		}
-		const float availableWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
-		const float requestedWidth = a_width > 0.0f ?
-		                                 a_width :
-		                                 std::min(280.0f * Util::GetUIScale(), std::max(120.0f, availableWidth * 0.45f));
-		const float inputWidth = std::clamp(requestedWidth, 1.0f, availableWidth);
-		ImGui::SetNextItemWidth(inputWidth);
-		Util::Widgets::InputTextWithHint(a_id, "Preset name", &a_name);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped("Export path: %s", a_exportPath.string().c_str());
-			if (a_alternateImportPath)
-				ImGui::TextWrapped("Import also accepts: %s", a_alternateImportPath->string().c_str());
-		}
 	}
 
 	int CompareString(const std::string& a_lhs, const std::string& a_rhs)
@@ -1608,10 +1584,13 @@ namespace
 void AdaptiveBrightness::DrawSettingsHeaderControls()
 {
 	const auto contextSectionToSelect = SyncContextSection();
-	if (contextSectionToSelect == ContextSection::Profiles)
-		MenuUI::SettingsPage::Select("AdaptiveBrightness", "profiles");
-	else if (contextSectionToSelect == ContextSection::Locations)
-		MenuUI::SettingsPage::Select("AdaptiveBrightness", "locations");
+	// Keep exchange navigation stable while the player crosses contextual boundaries.
+	if (MenuUI::SettingsPage::Selected("AdaptiveBrightness") != "presets") {
+		if (contextSectionToSelect == ContextSection::Profiles)
+			MenuUI::SettingsPage::Select("AdaptiveBrightness", "profiles");
+		else if (contextSectionToSelect == ContextSection::Locations)
+			MenuUI::SettingsPage::Select("AdaptiveBrightness", "locations");
+	}
 
 	if (settings.enabled) {
 		const auto contextLabel = GetContextLabel();
@@ -1680,25 +1659,8 @@ void AdaptiveBrightness::DrawSettings()
 		DrawLocationOverrides(false, true, settings.enabled);
 	}
 
-	if (page.Is("presets")) {
-		const auto selectionId = ImGui::GetID("PresetCollection");
-		auto* storage = ImGui::GetStateStorage();
-		int selected = std::clamp(storage->GetInt(selectionId), 0, 2);
-		constexpr const char* collections[] = { "Global profiles", "Location overrides", "Complete setup" };
-		if (MenuUI::ChoiceSetting("Preset contents", &selected, collections, IM_ARRAYSIZE(collections)))
-			storage->SetInt(selectionId, selected);
-		switch (selected) {
-		case 0:
-			DrawGlobalPresetControls();
-			break;
-		case 1:
-			DrawLocationOverridePresetControls();
-			break;
-		case 2:
-			DrawFullPresetControls();
-			break;
-		}
-	}
+	if (page.Is("presets"))
+		DrawPresets();
 }
 
 void AdaptiveBrightness::DrawProfileControls(
@@ -1712,9 +1674,9 @@ void AdaptiveBrightness::DrawProfileControls(
 	const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
 	auto* storage = ImGui::GetStateStorage();
 	const auto selectionId = ImGui::GetID("AdjustmentGroup");
-	int selected = std::clamp(storage->GetInt(selectionId), 0, a_globalLayer ? 4 : 3);
-	constexpr const char* groups[] = { "Lighting", "Colour", "Bloom", "Water", "Depth of field" };
-	if (MenuUI::ChoiceSetting("Adjust", &selected, groups, a_globalLayer ? 5 : 4))
+	int selected = std::clamp(storage->GetInt(selectionId), 0, a_globalLayer ? 5 : 3);
+	constexpr const char* groups[] = { "Lighting", "Colour", "Bloom", "Water", "Depth of field", "Godrays" };
+	if (MenuUI::ChoiceSetting("Adjust", &selected, groups, a_globalLayer ? 6 : 4))
 		storage->SetInt(selectionId, selected);
 	const auto disabled = Util::DisableGuard(!a_allowEdits);
 	switch (selected) {
@@ -1733,7 +1695,33 @@ void AdaptiveBrightness::DrawProfileControls(
 	case 4:
 		AdaptiveBalanceDepthOfField::DrawSettings();
 		break;
+	case 5:
+		DrawGodraySettings();
+		break;
 	}
+}
+
+void AdaptiveBrightness::DrawGodraySettings()
+{
+	MenuUI::DetailNote("These exterior and interior bases control separated light shafts. Global, time and location appearance profiles adjust them further. Disabling Adaptive Balance bypasses all godray tuning and Atmospheric Clarity.");
+	Util::Widgets::SliderFloat("Atmospheric Clarity", &settings.volumetricClarity,
+		AdaptiveBalanceGodray::kClarityMin, AdaptiveBalanceGodray::kClarityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextWrapped("Reduce broad volumetric haze independently of godray intensity, opacity, saturation and tint. Zero retains the haze; one removes it. Depth boundaries protect foreground silhouettes. This is a local contrast separation: broad uniform beams may also fade. Vanilla Fog Intensity controls distance fog separately. Missing depth preserves the original lighting. Works without detailed lighting controls.");
+
+	MenuUI::DetailGrid grid("GodrayProfiles", 2, ImGui::GetFontSize() * 32);
+	const Util::Widgets::ControlLayout controls(true);
+	const auto drawProfile = [&](const char* label, VolumetricLightingTuning::Profile& profile) {
+		grid.Next();
+		MenuUI::SectionHeading(label);
+		ImGui::PushID(label);
+		const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
+		for (const auto& field : VolumetricLightingTuning::kProfileFields)
+			Util::Widgets::SliderFloat(field.label, &(profile.*field.member), 0.0f, field.maximum, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		profile = VolumetricLightingTuning::SanitizeProfile(profile);
+	};
+	drawProfile("Exterior Godrays", settings.godrays.exterior);
+	drawProfile("Interior Godrays", settings.godrays.interior);
 }
 
 void AdaptiveBrightness::DrawGlobalSettings(bool a_showAdvancedControls)
@@ -1759,7 +1747,10 @@ json AdaptiveBrightness::CapturePerformanceSettingsState() const
 	return {
 		{ "enabled", settings.enabled },
 		{ "useAmbientEffectLighting", settings.useAmbientEffectLighting },
+		{ "bloomEnabled", settings.bloomEnabled },
 		{ "godrayFinalBrightness", settings.godrayFinalBrightness },
+		{ "volumetricClarity", settings.volumetricClarity },
+		{ "godrays", settings.godrays },
 		{ "moonReflectionStrength", settings.moonReflectionStrength },
 		{ "globalProfile", settings.globalProfile },
 		{ "depthOfField", settings.depthOfField }
@@ -2026,7 +2017,7 @@ void AdaptiveBrightness::DrawCurrentContextProfileControls(
 		if (ImGui::Button(createLabel.c_str()))
 			SaveCurrentLocationOverride(*target);
 		ImGui::EndDisabled();
-		DrawContextProfilePresetControls(a_scope, *target, nullptr, a_allowEdits);
+		DrawPresetShortcut(a_scope);
 		return;
 	}
 
@@ -2038,47 +2029,18 @@ void AdaptiveBrightness::DrawCurrentContextProfileControls(
 		a_allowEdits,
 		"Save Profile",
 		false);
-	DrawContextProfilePresetControls(a_scope, *target, contextProfile, a_allowEdits);
+	DrawPresetShortcut(a_scope);
 }
 
-void AdaptiveBrightness::DrawContextProfilePresetControls(
-	ContextProfileScope a_scope,
-	const LocationOverrideTarget& a_target,
-	const LocationOverride* a_locationOverride,
-	bool a_allowEdits)
+void AdaptiveBrightness::DrawPresetShortcut(ContextProfileScope a_scope)
 {
-	ImGui::SeparatorText("Share Profile");
-	DrawHintText("Export this scope's Lighting, Color, Bloom, Water, wind and layer mode to portable JSON. Import replaces them only for this scope.");
-
-	const auto scopeIndex = ContextScopeIndex(a_scope);
-	auto& presetName = contextPresetNames[scopeIndex];
-	auto& presetStatus = contextPresetStatuses[scopeIndex];
-	const auto presetKind = GetContextScopePresetKind(a_scope);
-	const auto presetPath = GetPresetPath(presetName, presetKind);
-
-	ImGui::PushID(static_cast<int>(scopeIndex));
-	const auto inputLabel = std::format("{} profile", GetContextScopeName(a_scope));
-	DrawPresetNameInput(inputLabel.c_str(), "##ContextProfilePresetName", presetName, presetPath);
-
-	ImGui::BeginDisabled(!a_locationOverride);
-	if (ImGui::Button("Export Profile") && a_locationOverride)
-		ExportContextProfile(a_scope, a_target, *a_locationOverride);
-	ImGui::EndDisabled();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Export the current %s profile to JSON.", GetContextScopeName(a_scope));
-
-	if (ImGui::GetContentRegionAvail().x >= ImGui::CalcTextSize("Export Profile Import Profile").x + ImGui::GetStyle().FramePadding.x * 4 + ImGui::GetStyle().ItemSpacing.x)
-		ImGui::SameLine();
-	ImGui::BeginDisabled(!a_allowEdits);
-	if (ImGui::Button("Import Profile"))
-		ImportContextProfile(a_scope, a_target);
-	ImGui::EndDisabled();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Apply a shared JSON profile to the current %s scope.", GetContextScopeName(a_scope));
-
-	if (!presetStatus.empty())
-		ImGui::TextWrapped("%s", presetStatus.c_str());
-	ImGui::PopID();
+	if (ImGui::Button("Import / export this profile")) {
+		presetUI.collection = static_cast<MenuUI::AdaptiveBalancePresets::Collection>(
+			static_cast<int>(MenuUI::AdaptiveBalancePresets::Collection::Worldspace) + static_cast<int>(a_scope));
+		presetFilesDirty = true;
+		MenuUI::SettingsPage::Select("AdaptiveBrightness", "presets");
+	}
+	Util::AddTooltip("Open the shared Presets screen for this scope. Apply pending profile edits before exporting.");
 }
 
 void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle, bool a_showAdvancedControls, bool a_allowEdits)
@@ -2106,15 +2068,19 @@ namespace
 	void DrawAppearanceSettings(AdaptiveBalanceAppearanceSettings& appearance)
 	{
 		constexpr std::array groups{ "Direct and Ambient Lighting", "Fog and Clouds", "Sky Gradient",
-			"Stars", "Sky Static Mist", "Particles and Glow Sprites", "Godrays and Cloud Shadows", "Eyes" };
+			"Stars", "Auroras", "Sky Static Mist", "Particles and Glow Sprites", "Godrays and Cloud Shadows", "Eyes",
+			"Scene Colour", "Point Light Colour", "Material Colour", "Atmosphere Colour" };
 		MenuUI::SectionHeading("Appearance controls");
+		ImGui::TextWrapped("Gamma offsets are neutral at zero; negative values lift midtones and positive values darken them. Saturation is neutral at one. Point-light subtype adjustments compose with the shared Point Lights controls.");
 		for (const auto* group : groups) {
 			if (!ImGui::CollapsingHeader(group))
 				continue;
 			if (std::string_view(group) == "Eyes")
 				ImGui::TextWrapped("Specular Brightness adjusts eye highlights and reflections. Eye Brightness scales all eye lighting. One preserves the original appearance; zero removes that contribution. Applies to eye materials in the scene, including reflections.");
+			else if (std::string_view(group) == "Auroras")
+				ImGui::TextWrapped("Intensity scales aurora RGB brightness; zero removes its colour contribution while preserving alpha and the model's blend mode. Colour Curve shapes dim colours and HDR highlights before intensity. One preserves the original appearance. Applies to sky objects in the game's aurora slot, including replacement models.");
 			else if (std::string_view(group) == "Godrays and Cloud Shadows")
-				ImGui::TextWrapped("Adjust active Volumetric Lighting and Cloud Shadows. Scale 1 and colour contribution 0 preserve their settings.");
+				ImGui::TextWrapped("Godray profile adjustments compose over the exterior or interior base in Global > Godrays. Scale 1 and colour contribution 0 preserve that base. Atmospheric Clarity controls broad haze separately. Cloud shadow strength adjusts the active Cloud Shadows feature.");
 			else if (std::string_view(group) == "Particles and Glow Sprites")
 				ImGui::TextWrapped("Glow sprites include additive non-fire effects, such as some magic. Particle influence adjusts received light; fire has separate controls.");
 			else
@@ -2153,10 +2119,6 @@ void AdaptiveBrightness::DrawLightingSettings(
 			kMoonReflectionStrengthMin, kMoonReflectionStrengthMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("Scale direct moonlit highlights on materials, wet surfaces and water. Zero removes these highlights; one preserves their strength; two doubles it. Follows the active climate's dusk and dawn. Diffuse moonlight, sky reflections and the moon itself remain independent. This global control works without detailed lighting.");
-		Util::Widgets::SliderFloat("Final Godray Brightness", &settings.godrayFinalBrightness,
-			AdaptiveBalanceGodray::kMin, AdaptiveBalanceGodray::kMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextWrapped("Scale final godray brightness after colour correction. One is neutral; zero hides godrays while retaining lens flare. This global control is independent of detailed lighting.");
 		Util::Widgets::Checkbox("Ambient Lighting for Effects and Sky Statics", &settings.useAmbientEffectLighting);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("Use ambient light (including active IBL) and shadowed directional light instead of weather lighting on effect meshes and sky statics. Their Brightness controls still apply. This global switch works without enabling detailed lighting controls.");
@@ -2255,7 +2217,11 @@ void AdaptiveBrightness::DrawBloomSettings(
 	bool a_showAdvancedControls,
 	bool a_globalLayer)
 {
-	Bloom::DrawProfileControls(a_profile.bloom);
+	if (a_globalLayer) {
+		Util::Widgets::Checkbox("Enable Bloom Enhancement", &settings.bloomEnabled);
+		Util::AddTooltip("Adds a soft glow around bright areas using your bloom profiles. Off removes this extra glow while keeping the game's original bloom.");
+	}
+	Bloom::DrawProfileControls(a_profile.bloom, a_profile.bloomPresets);
 	if (a_globalLayer)
 		ImGui::TextDisabled("Global Bloom strength adds to every active profile; detailed shaping can also adjust inherited Bloom.");
 	if (!a_showAdvancedControls)
@@ -2318,8 +2284,7 @@ void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool 
 		ImGui::EndDisabled();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Reads the active Sky wind speed, including weather-record changes made by mods.");
-		ImGui::Text("Interior cells are calm, and response changes are smoothed across weather transitions.");
+		ImGui::Text("On: wave size follows the weather wind; indoors uses the calm-wave setting. Off: keeps your base wave size. Changes blend smoothly.");
 	}
 
 	SanitizeWaterWindSettings(waterWind);
@@ -2336,53 +2301,6 @@ void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool 
 	const float waveMultiplier = GetWaterWindWaveMultiplier(waterWind, windSpeed);
 	ImGui::TextDisabled("Layer wind: %.0f%%  Wave adjustment: %.2fx", windSpeed * 100.0f, waveMultiplier);
 	ImGui::EndDisabled();
-}
-
-void AdaptiveBrightness::DrawGlobalPresetControls()
-{
-	ImGui::SeparatorText("Global Presets");
-	DrawHintText("Global presets include the shared Lighting, Color, Bloom, Water and wind layer, global lighting and depth of field, five profiles and exterior timing.");
-	DrawHintText("Import replaces these settings. Saved location overrides stay unchanged.");
-	ImGui::PushID("GlobalPresetControls");
-
-	const auto presetPath = GetPresetPath(globalPresetName, PresetKind::Global);
-	const auto& style = ImGui::GetStyle();
-	const float scale = Util::GetUIScale();
-	const float exportButtonWidth = ImGui::CalcTextSize("Export Global").x + style.FramePadding.x * 2.0f;
-	const float importButtonWidth = ImGui::CalcTextSize("Import Global").x + style.FramePadding.x * 2.0f;
-	const float availableWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
-	const float inlineButtonWidth = exportButtonWidth + importButtonWidth + style.ItemSpacing.x * 2.0f;
-	const bool keepButtonsOnOneLine =
-		availableWidth >= exportButtonWidth + importButtonWidth + style.ItemSpacing.x;
-	const float minimumInputWidth = 140.0f * scale;
-	const bool keepControlsOnOneLine = availableWidth >= minimumInputWidth + inlineButtonWidth;
-	const float inputWidth = keepControlsOnOneLine ?
-	                             availableWidth - inlineButtonWidth :
-	                             std::min(280.0f * scale, availableWidth);
-	DrawPresetNameInput(nullptr, "##GlobalPresetName", globalPresetName, presetPath, nullptr, inputWidth);
-
-	if (keepControlsOnOneLine)
-		ImGui::SameLine();
-	if (ImGui::Button("Export Global")) {
-		ExportGlobalPreset();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export the global layer, global lighting and depth of field, exterior timing and five Lighting, Color, Bloom and Water profiles. Excludes location overrides.");
-	}
-
-	if (keepControlsOnOneLine || keepButtonsOnOneLine)
-		ImGui::SameLine();
-	if (ImGui::Button("Import Global")) {
-		ImportGlobalPreset();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace the global layer, global lighting and depth of field, exterior timing and five Lighting, Color, Bloom and Water profiles. Keeps location overrides.");
-	}
-
-	if (!globalPresetStatus.empty())
-		ImGui::TextWrapped("%s", globalPresetStatus.c_str());
-
-	ImGui::PopID();
 }
 
 void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, bool a_showAdvancedControls, bool a_allowEdits)
@@ -2462,7 +2380,11 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 	ImGui::TextDisabled("%zu saved override%s.", settings.locationOverrides.size(), settings.locationOverrides.size() == 1 ? "" : "s");
 
 	if (a_includePresetControls)
-		DrawLocationOverridePresetControls();
+		if (ImGui::Button("Import / export location presets")) {
+			presetUI.collection = MenuUI::AdaptiveBalancePresets::Collection::Locations;
+			presetFilesDirty = true;
+			MenuUI::SettingsPage::Select("AdaptiveBrightness", "presets");
+		}
 	ImGui::SeparatorText("Saved Overrides");
 	DrawHintText(a_allowEdits ?
 					 "Overrides match worldspace, region, city, specific location or cell. Select a row to edit it." :
@@ -2638,80 +2560,135 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 	}
 }
 
-void AdaptiveBrightness::DrawLocationOverridePresetControls()
+void AdaptiveBrightness::DrawPresets()
 {
-	ImGui::SeparatorText("Override Presets");
-	DrawHintText("Override presets contain all worldspace, region, city, location and cell overrides. Excludes the five base profiles.");
-	ImGui::PushID("LocationOverridePresetControls");
-
-	const auto presetPath = GetPresetPath(locationOverridePresetName, PresetKind::Location);
-	const auto overridePath = GetLocationOverrideLiveOverridePath(locationOverridePresetName);
-	DrawPresetNameInput("Override preset", "##LocationOverridePresetName", locationOverridePresetName, presetPath, &overridePath);
-
-	ImGui::BeginDisabled(settings.locationOverrides.empty());
-	if (ImGui::Button("Export Overrides")) {
-		ExportLocationOverrides();
+	namespace Presets = MenuUI::AdaptiveBalancePresets;
+	const auto& theme = globals::menu->GetTheme();
+	const auto palette = [&](bool a_export) {
+		const auto accent = Util::Color::Lift(theme.StatusPalette.InfoColor, a_export ? .10f : -.10f, 1);
+		const auto base = ImGui::GetStyleColorVec4(ImGuiCol_Button);
+		const float tint = a_export ? .30f : .14f;
+		return Presets::Palette{
+			Util::Color::Blend(base, accent, tint, .76f),
+			Util::Color::Blend(base, accent, tint + .12f, .86f),
+			Util::Color::Blend(base, accent, tint + .24f, .94f),
+			Util::Color::Blend(theme.Palette.FrameBorder, accent, .65f, 1)
+		};
+	};
+	const auto exportPalette = palette(true);
+	const auto importPalette = palette(false);
+	const auto targets = GetCurrentLocationOverrideTargets();
+	const std::array contextTargets{
+		targets.worldspace ? &*targets.worldspace : nullptr,
+		targets.region ? &*targets.region : nullptr,
+		targets.city ? &*targets.city : nullptr
+	};
+	Presets::Targets targetNames;
+	for (std::size_t index = 0; index < targetNames.size(); ++index)
+		targetNames[index] = contextTargets[index] ? contextTargets[index]->name : "No current scope";
+	const auto previousFolder = presetExportFolder.directory;
+	Presets::DrawSelection(presetUI, exportPalette, importPalette, targetNames, presetExportFolder, GetPresetDirectory());
+	const bool changed = lastDrawnPresetUI.mode != presetUI.mode || lastDrawnPresetUI.collection != presetUI.collection;
+	lastDrawnPresetUI = presetUI;
+	presetFilesDirty |= changed || ImGui::IsWindowAppearing();
+	constexpr std::array kinds{ PresetKind::Full, PresetKind::Global, PresetKind::Location, PresetKind::Worldspace, PresetKind::Region, PresetKind::City };
+	static_assert(kinds.size() == static_cast<std::size_t>(Presets::Collection::Count));
+	const auto collectionIndex = static_cast<std::size_t>(presetUI.collection);
+	const auto kind = kinds.at(collectionIndex);
+	std::string* name = &fullPresetName;
+	std::string* status = &fullPresetStatus;
+	const LocationOverrideTarget* target = nullptr;
+	const LocationOverride* profile = nullptr;
+	ContextProfileScope scope = ContextProfileScope::Worldspace;
+	if (presetUI.collection == Presets::Collection::Base) {
+		name = &globalPresetName;
+		status = &globalPresetStatus;
+	} else if (presetUI.collection == Presets::Collection::Locations) {
+		name = &locationOverridePresetName;
+		status = &locationOverridePresetStatus;
+	} else if (collectionIndex >= static_cast<std::size_t>(Presets::Collection::Worldspace)) {
+		const auto scopeIndex = collectionIndex - static_cast<std::size_t>(Presets::Collection::Worldspace);
+		scope = static_cast<ContextProfileScope>(scopeIndex);
+		name = &contextPresetNames.at(scopeIndex);
+		status = &contextPresetStatuses.at(scopeIndex);
+		target = contextTargets.at(scopeIndex);
+		profile = target ? FindLocationOverride(target->key) : nullptr;
 	}
-	ImGui::EndDisabled();
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export the saved override list.");
+	if (changed) {
+		status->clear();
+		presetFileStatus.clear();
 	}
-
-	if (ImGui::GetContentRegionAvail().x >= ImGui::CalcTextSize("Export Overrides Import Overrides").x + ImGui::GetStyle().FramePadding.x * 4 + ImGui::GetStyle().ItemSpacing.x)
-		ImGui::SameLine();
-	if (ImGui::Button("Import Overrides")) {
-		ImportLocationOverrides();
+	const bool importing = presetUI.mode == Presets::Mode::Import;
+	if (importing && presetFilesDirty) {
+		ReadPresetNames(kind, presetFiles, presetFileStatus);
+		presetFilesDirty = false;
 	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Add overrides from this preset to the override list below.");
+	const char* unavailable = nullptr;
+	const auto* editedOverride = locationOverrideEditProfile ? FindLocationOverride(locationOverrideEditKey) : nullptr;
+	if (locationOverrideEditProfile && (!editedOverride || json(*locationOverrideEditProfile) != json(editedOverride->profile)))
+		unavailable = "Apply or cancel the open location edit before exchanging presets.";
+	else if (collectionIndex >= static_cast<std::size_t>(Presets::Collection::Worldspace) && !target)
+		unavailable = "The current cell has no matching scope. Choose another box.";
+	else if (!importing && collectionIndex >= static_cast<std::size_t>(Presets::Collection::Worldspace) && !profile)
+		unavailable = "Create and apply this scope's profile before exporting it.";
+	else if (importing && target && !settings.enabled)
+		unavailable = "Enable Adaptive Balance before importing a contextual profile.";
+	else if (!importing && presetUI.collection == Presets::Collection::Locations && settings.locationOverrides.empty())
+		unavailable = "No location overrides are saved. Complete setup is still available.";
+	const auto& colors = importing ? importPalette : exportPalette;
+	const auto feedback = importing && !presetFileStatus.empty() ?
+	                          std::format("{}{}{}", presetFileStatus, status->empty() ? "" : " ", *status) :
+	                          *status;
+	const auto path = GetPresetPath(*name, kind, importing ? std::filesystem::path{} : presetExportFolder.directory);
+	const auto relativePath = GetPresetPath(*name, kind).lexically_relative(Util::PathHelpers::GetDataPath());
+	const auto pathHint = importing ?
+	                          std::format("Import folder (relative to Data): {}\nMod Organizer 2: Put shared presets in this folder inside an enabled mod. Keep the exported filename and use Choose file.\nExpected file: {}{}",
+								  relativePath.parent_path().string(), path.filename().string(),
+								  kind == PresetKind::Location ? std::format("\nAlso accepts location presets in: {}", Util::PathHelpers::GetOverridesPath().lexically_relative(Util::PathHelpers::GetDataPath()).string()) : "") :
+	                      presetExportFolder.directory.empty() ?
+	                          std::format("Export path (relative to Data): {}\nMod Organizer 2: New exports go to Overwrite or the configured output mod.", relativePath.string()) :
+	                          std::format("Export path: {}\nMO2 can still redirect writes if you choose the game's Data folder.", Util::PathToUtf8(path));
+	const bool transfer = Presets::DrawTransfer(presetUI, colors, *name, presetFiles, pathHint, feedback, unavailable, presetFilesDirty);
+	if (previousFolder != presetExportFolder.directory)
+		status->clear();
+	if (!transfer)
+		return;
+	bool succeeded = false;
+	switch (presetUI.collection) {
+	case Presets::Collection::Full:
+		succeeded = importing ? ImportFullPreset() : ExportFullPreset();
+		break;
+	case Presets::Collection::Base:
+		succeeded = importing ? ImportGlobalPreset() : ExportGlobalPreset();
+		break;
+	case Presets::Collection::Locations:
+		succeeded = importing ? ImportLocationOverrides() : ExportLocationOverrides();
+		break;
+	default:
+		if (target) {
+			if (importing)
+				succeeded = ImportContextProfile(scope, *target);
+			else if (profile)
+				succeeded = ExportContextProfile(scope, *target, *profile);
+		}
+		break;
 	}
-
-	if (!locationOverridePresetStatus.empty())
-		ImGui::TextWrapped("%s", locationOverridePresetStatus.c_str());
-
-	ImGui::PopID();
+	if (importing && succeeded)
+		*status = "Imported. Use Save Settings to keep it. " + *status;
+	presetFilesDirty = true;
 }
 
-void AdaptiveBrightness::DrawFullPresetControls()
+std::filesystem::path AdaptiveBrightness::GetPresetExportDirectory() const
 {
-	ImGui::SeparatorText("Full Presets");
-	DrawHintText("Full presets include the global layer, global lighting and depth-of-field settings, exterior timing, five profiles and all location overrides.");
-	DrawHintText("Import replaces these settings and the saved override list.");
-	ImGui::PushID("FullPresetControls");
-
-	const auto presetPath = GetPresetPath(fullPresetName, PresetKind::Full);
-	DrawPresetNameInput("Full preset", "##FullPresetName", fullPresetName, presetPath);
-
-	if (ImGui::Button("Export Full")) {
-		ExportFullPreset();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export global lighting and depth of field, the global layer, exterior timing, five profiles and all saved overrides.");
-	}
-
-	if (ImGui::GetContentRegionAvail().x >= ImGui::CalcTextSize("Export Full Import Full").x + ImGui::GetStyle().FramePadding.x * 4 + ImGui::GetStyle().ItemSpacing.x)
-		ImGui::SameLine();
-	if (ImGui::Button("Import Full")) {
-		ImportFullPreset();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace global lighting and depth of field, the global layer, exterior timing, five profiles and all saved overrides.");
-	}
-
-	if (!fullPresetStatus.empty())
-		ImGui::TextWrapped("%s", fullPresetStatus.c_str());
-
-	ImGui::PopID();
+	return presetExportFolder.directory.empty() ? GetPresetDirectory() : presetExportFolder.directory;
 }
 
 bool AdaptiveBrightness::ExportGlobalPreset()
 {
 	NormalizeBaseSettings(settings);
 
-	const auto path = GetPresetPath(globalPresetName, PresetKind::Global);
+	const auto path = GetPresetPath(globalPresetName, PresetKind::Global, presetExportFolder.directory);
 	try {
-		std::filesystem::create_directories(path.parent_path());
-
 		const auto exportJson = MakeBasePresetJson(
 			settings,
 			globalPresetName,
@@ -2719,12 +2696,13 @@ bool AdaptiveBrightness::ExportGlobalPreset()
 			"global",
 			"Adaptive Balance global preset");
 
-		if (!WriteJsonFileAtomic(path, exportJson)) {
-			globalPresetStatus = std::format("Export failed: could not write {}.", path.string());
+		std::string error;
+		if (!WriteJsonFileAtomic(path, exportJson, error)) {
+			globalPresetStatus = std::format("Export failed: {}", error);
 			return false;
 		}
 
-		globalPresetStatus = std::format("Exported global preset to {}.", path.string());
+		globalPresetStatus = std::format("Exported global preset as {}.", path.filename().string());
 		return true;
 	} catch (const std::exception& e) {
 		globalPresetStatus = std::format("Export failed: {}", e.what());
@@ -2761,10 +2739,8 @@ bool AdaptiveBrightness::ExportLocationOverrides()
 		return false;
 	}
 
-	const auto path = GetPresetPath(locationOverridePresetName, PresetKind::Location);
+	const auto path = GetPresetPath(locationOverridePresetName, PresetKind::Location, presetExportFolder.directory);
 	try {
-		std::filesystem::create_directories(path.parent_path());
-
 		json exportJson;
 		exportJson["locationOverrides"] = settings.locationOverrides;
 		exportJson["_metadata"] = MakePresetMetadata(
@@ -2773,12 +2749,13 @@ bool AdaptiveBrightness::ExportLocationOverrides()
 			"locations",
 			"Adaptive Balance location override preset");
 
-		if (!WriteJsonFileAtomic(path, exportJson)) {
-			locationOverridePresetStatus = std::format("Export failed: could not write {}.", path.string());
+		std::string error;
+		if (!WriteJsonFileAtomic(path, exportJson, error)) {
+			locationOverridePresetStatus = std::format("Export failed: {}", error);
 			return false;
 		}
 
-		locationOverridePresetStatus = std::format("Exported {} location override(s) to {}.", settings.locationOverrides.size(), path.string());
+		locationOverridePresetStatus = std::format("Exported {} location override(s) as {}.", settings.locationOverrides.size(), path.filename().string());
 		return true;
 	} catch (const std::exception& e) {
 		locationOverridePresetStatus = std::format("Export failed: {}", e.what());
@@ -2863,13 +2840,11 @@ bool AdaptiveBrightness::ExportContextProfile(
 	const auto scopeIndex = ContextScopeIndex(a_scope);
 	auto& status = contextPresetStatuses[scopeIndex];
 	const auto presetKind = GetContextScopePresetKind(a_scope);
-	const auto path = GetPresetPath(contextPresetNames[scopeIndex], presetKind);
+	const auto path = GetPresetPath(contextPresetNames[scopeIndex], presetKind, presetExportFolder.directory);
 
 	auto profile = a_locationOverride.profile;
 	ClampProfileSettings(profile);
 	try {
-		std::filesystem::create_directories(path.parent_path());
-
 		json exportJson{
 			{ "profile", profile },
 			{ "layered", a_locationOverride.layered },
@@ -2883,16 +2858,17 @@ bool AdaptiveBrightness::ExportContextProfile(
 							   std::format("Adaptive Balance {} profile", GetContextScopeName(a_scope))) }
 		};
 
-		if (!WriteJsonFileAtomic(path, exportJson)) {
-			status = std::format("Export failed: could not write {}.", path.string());
+		std::string error;
+		if (!WriteJsonFileAtomic(path, exportJson, error)) {
+			status = std::format("Export failed: {}", error);
 			return false;
 		}
 
 		status = std::format(
-			"Exported the {} profile for {} to {}.",
+			"Exported the {} profile for {} as {}.",
 			GetContextScopeName(a_scope),
 			a_target.name,
-			path.string());
+			path.filename().string());
 		return true;
 	} catch (const std::exception& e) {
 		status = std::format("Export failed: {}", e.what());
@@ -2979,10 +2955,8 @@ bool AdaptiveBrightness::ExportFullPreset()
 	NormalizeBaseSettings(settings);
 	NormalizeLocationOverrides();
 
-	const auto path = GetPresetPath(fullPresetName, PresetKind::Full);
+	const auto path = GetPresetPath(fullPresetName, PresetKind::Full, presetExportFolder.directory);
 	try {
-		std::filesystem::create_directories(path.parent_path());
-
 		auto exportJson = MakeBasePresetJson(
 			settings,
 			fullPresetName,
@@ -2991,12 +2965,13 @@ bool AdaptiveBrightness::ExportFullPreset()
 			"Adaptive Balance full preset");
 		exportJson["locationOverrides"] = settings.locationOverrides;
 
-		if (!WriteJsonFileAtomic(path, exportJson)) {
-			fullPresetStatus = std::format("Export failed: could not write {}.", path.string());
+		std::string error;
+		if (!WriteJsonFileAtomic(path, exportJson, error)) {
+			fullPresetStatus = std::format("Export failed: {}", error);
 			return false;
 		}
 
-		fullPresetStatus = std::format("Exported full preset with {} location override(s) to {}.", settings.locationOverrides.size(), path.string());
+		fullPresetStatus = std::format("Exported full preset with {} location override(s) as {}.", settings.locationOverrides.size(), path.filename().string());
 		return true;
 	} catch (const std::exception& e) {
 		fullPresetStatus = std::format("Export failed: {}", e.what());
@@ -3078,9 +3053,26 @@ bool AdaptiveBrightness::IsRuntimeEnabled() const
 	return settings.enabled && performanceCostMeasurementEnabled && IsRuntimeAvailable();
 }
 
-float AdaptiveBrightness::GetEffectiveGodrayFinalBrightness() const
+float AdaptiveBrightness::GetEffectiveVolumetricClarity() const
 {
-	return IsRuntimeEnabled() ? AdaptiveBalanceGodray::SanitizeFinalBrightness(settings.godrayFinalBrightness) : AdaptiveBalanceGodray::kDefault;
+	return IsRuntimeEnabled() ? AdaptiveBalanceGodray::SanitizeClarity(settings.volumetricClarity) : AdaptiveBalanceGodray::kClarityDefault;
+}
+
+VolumetricLightingTuning::Profile AdaptiveBrightness::GetEffectiveGodrayProfile(bool a_interior) const
+{
+	if (!IsRuntimeEnabled())
+		return {};
+	const auto appearance = GetEffectiveSharedLightingSettings().appearance;
+	const VolumetricLightingTuning::Profile layer{
+		.ShaftIntensity = appearance.godrayIntensity,
+		.Opacity = appearance.godrayOpacity,
+		.Saturation = appearance.godraySaturation,
+		.CustomColorContribution = appearance.godrayTintAmount,
+		.CustomColorRed = appearance.godrayTint.x,
+		.CustomColorGreen = appearance.godrayTint.y,
+		.CustomColorBlue = appearance.godrayTint.z,
+	};
+	return VolumetricLightingTuning::ComposeProfiles(a_interior ? settings.godrays.interior : settings.godrays.exterior, layer);
 }
 
 float AdaptiveBrightness::GetEffectiveMoonReflectionStrength() const
@@ -3816,7 +3808,7 @@ SharedLightingSettings AdaptiveBrightness::GetEffectiveSharedLightingSettings() 
 
 Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
 {
-	if (!IsRuntimeEnabled())
+	if (!IsRuntimeEnabled() || !settings.bloomEnabled)
 		return Bloom::GetCommonBufferData(Bloom::Profile{}, 0.0f);
 
 	const auto& globalBloom = settings.globalProfile.bloom;
@@ -3958,6 +3950,7 @@ AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
 	data.fireSaturation = effectiveSettings.fireSaturation;
 	data.fireCurve = effectiveSettings.fireCurve;
 	data.appearance = effectiveSettings.appearance;
+	data.appearance.pointLightColorEnabled = AdaptiveBalanceAppearance::UsesClassifiedPointLights(data.appearance);
 	data.linearPointLightMult = effectiveSettings.linearPointLightMult;
 	data.spotlightMult = effectiveSettings.spotlightMult;
 	data.linearSpotlightMult = effectiveSettings.linearSpotlightMult;
@@ -4066,9 +4059,10 @@ std::string AdaptiveBrightness::GetContextLabel() const
 
 struct AdaptiveBrightness::Hooks
 {
-	struct Sky_UpdateColors
+	// Sky::Update computes sky colors before GetFog, so this hook can apply weather grading.
+	struct Sky_GetFog
 	{
-		static void thunk(RE::Sky* a_sky, float a_delta)
+		static void thunk(RE::Sky* a_sky)
 		{
 			if (a_sky) {
 				effect.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kEffectLighting]);
@@ -4083,7 +4077,7 @@ struct AdaptiveBrightness::Hooks
 				middle = {};
 				horizon = {};
 			}
-			func(a_sky, a_delta);
+			func(a_sky);
 			if (!a_sky || !a_sky->currentWeather)
 				return;
 
@@ -4140,7 +4134,7 @@ struct AdaptiveBrightness::Hooks
 	{
 		stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
 		logger::info("[AdaptiveBalance] Installed shared-light water hook");
-		const auto error = stl::detour_thunk<Sky_UpdateColors>(REL::RelocationID(25686, 26233));
+		const auto error = stl::detour_thunk<Sky_GetFog>(REL::RelocationID(25686, 26233));
 		globals::features::adaptiveBrightness.weatherColorHookInstalled = error == NO_ERROR;
 		if (error == NO_ERROR)
 			logger::info("[AdaptiveBalance] Installed weather color hook");

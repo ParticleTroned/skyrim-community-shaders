@@ -25,11 +25,9 @@ public:
 	{
 		bool ExteriorEnabled = true;
 		bool DisableWeatherInteractionDuringRain = false;
-		GodrayProfile ExteriorGodrays;
 		int32_t ExteriorQuality = 2;
 		TextureSize ExteriorCustomSize;
 		bool InteriorEnabled = true;
-		GodrayProfile InteriorGodrays;
 		int32_t InteriorQuality = 2;
 		TextureSize InteriorCustomSize;
 
@@ -44,7 +42,7 @@ private:
 public:
 	virtual inline std::string GetName() override { return "Volumetric Lighting"; }
 	virtual inline std::string GetShortName() override { return "VolumetricLighting"; }
-	virtual std::string_view GetShaderCacheAbiVersion() override { return "godray-composite-color-1"; }
+	virtual std::string_view GetShaderCacheAbiVersion() override { return "godray-depth-separated-haze-5"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -83,7 +81,7 @@ public:
 	void RequestRuntimeReset();
 	bool IsPerformanceCostMeasurementReady() const override;
 	const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for volumetric lighting transition"; }
-	/** @return Active standalone tuning composed with Adaptive Balance, or neutral when unavailable. */
+	/** @return Adaptive Balance tuning for the active renderer context, or neutral when unavailable. */
 	GodrayProfile GetRuntimeGodrayProfile() const;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
@@ -117,9 +115,9 @@ public:
 	RE::BSImagespaceShader* GetOrCreateRaymarchCS(RE::BSComputeShader* computeShader);
 	RE::BSImagespaceShader* GetOrCreateBlurHCS(RE::BSComputeShader* computeShader);
 	RE::BSImagespaceShader* GetOrCreateBlurVCS(RE::BSComputeShader* computeShader);
-	/** @brief Whether the current render area is safe for replacement blur dispatch. */
+	/** @brief Whether the current render area and camera are safe for replacement blur dispatch. */
 	bool HasValidBlurDimensions() const { return blurDimensionsValid; }
-	/** @brief Bind active blur bounds at b1 after selecting a replacement shader. */
+	/** @brief Bind active blur bounds and camera data at b1 after selecting a replacement shader. */
 	void SetDimensionsCB() const;
 	/** @brief Set both active-area dispatch axes, keeping horizontal VR groups within each eye. */
 	void SetGroupCountsHCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const;
@@ -154,8 +152,6 @@ private:
 	static void SetVLQuality(VolumetricLightingDescriptor& descriptor, std::uint32_t quality);
 	static void RenderVolumetricLighting(VolumetricLightingDescriptor* descriptor, RE::NiCamera* camera, bool flag);
 
-	void DrawGodrayTuningSettings();
-	void DrawGodrayProfileSettings(const char* label, GodrayProfile& profile);
 	void DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, bool isInterior);
 	TextureSize& FetchCurrentSizeInUnits(bool interior);
 	bool TryGetActiveGodrayProfile(GodrayProfile& profile) const;
@@ -204,8 +200,10 @@ private:
 		int32_t eyeWidth;
 		uint32_t horizontalGroupsPerEye;
 		uint32_t pad[2];
+		float4 cameraData;
 	};
 	STATIC_ASSERT_ALIGNAS_16(VLData);
+	static_assert(sizeof(VLData) == 48);
 	VLData vlData = VLData();
 	ConstantBuffer* vlDataCB = nullptr;
 	bool blurDimensionsValid = false;

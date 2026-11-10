@@ -12,6 +12,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/ShaderCachePack.h"
 #include "Utils/UI.h"
 
 #include <algorithm>
@@ -273,6 +274,13 @@ void HomePageRenderer::RenderWelcomeSection()
 
 	feedback.Draw();
 
+	ImGui::Spacing();
+	MenuUI::SectionHeading("Third-party technologies");
+	ImGui::TextWrapped("%s",
+		"Includes NVIDIA DLSS / NGX and NVIDIA Reflex technology. "
+		"NVIDIA GeForce RTX is a trademark of NVIDIA Corporation.");
+	MenuUI::DetailNote("NVIDIA components retain their own license terms, included under Shaders/Upscaling/Streamline.");
+
 	// Pop the style var we pushed at the start
 	ImGui::PopStyleVar();
 	// Close RenderWelcomeSection()
@@ -285,20 +293,49 @@ void HomePageRenderer::RenderCacheMismatchSection()
 		Util::Text::WrappedWarning("Shader cache status is not available yet.");
 		return;
 	}
-	if (!shaderCache->IsDiskCacheHeld() && !shaderCache->HasFeatureSetChanges() &&
-		!shaderCache->HasFeatureSetRevertPending() && !shaderCache->HasPreviousDiskCache()) {
+	using InstallationIssue = Util::ShaderCachePack::InstallationIssue;
+	const auto installationIssue = shaderCache->GetDiskCacheInstallationIssue();
+	if (installationIssue == InstallationIssue::NotChecked) {
+		MenuUI::DetailNote("Shader cache installation has not been checked yet.");
+		return;
+	}
+	if (Util::ShaderCachePack::RequiresInstallationRepair(installationIssue)) {
+		if (installationIssue == InstallationIssue::InvalidPack) {
+			MenuUI::SectionHeading("Shader Cache Unavailable");
+			Util::Text::WrappedWarning("CSX could not validate or open the installed shader cache.");
+		} else {
+			MenuUI::SectionHeading("Wrong Shader Cache Installed");
+			Util::Text::WrappedWarning(installationIssue == InstallationIssue::FlatCacheInVR ?
+										   "This shader cache was built for Skyrim SE/AE, but you are running Skyrim VR." :
+										   "This shader cache was built for Skyrim VR, but you are running Skyrim SE/AE.");
+		}
+		ImGui::TextWrapped("%s", "Shaders compiled in this session cannot be saved. They will need to compile again after restarting until the cache installation is repaired.");
+		ImGui::Spacing();
+		if (installationIssue == InstallationIssue::InvalidPack) {
+			ImGui::TextWrapped("%s", "Check CSX.log for the cause. Resolve any file-access or compatibility issue, or reinstall the matching shader cache from the CSX installer, then restart the game.");
+		} else {
+			ImGui::TextWrapped("%s", installationIssue == InstallationIssue::FlatCacheInVR ?
+										 "Reinstall the Skyrim VR shader cache from the CSX installer, then restart the game." :
+										 "Reinstall the Skyrim SE/AE shader cache from the CSX installer, then restart the game.");
+		}
+		return;
+	}
+	const auto flags = shaderCache->GetRollbackFlags();
+	if (!flags.diskCacheHeld && !flags.featureSetChanged &&
+		!flags.featureSetRevertPending && !flags.previousDiskCacheAvailable) {
 		MenuUI::DetailNote("Your shader cache matches the current feature setup. No cache action is needed.");
 		return;
 	}
 
+	const auto rollback = shaderCache->GetRollbackState();
 	auto* menu = Menu::GetSingleton();
-	const bool featureSetChanged = shaderCache->HasFeatureSetChanges();
-	const bool revertPending = shaderCache->HasFeatureSetRevertPending();
-	const bool featureSetCacheBackedUp = shaderCache->HasFeatureSetCacheBackup();
-	const bool featureSetCacheSelectivelySeeded = shaderCache->HasSelectivelySeededFeatureSetCache();
-	const bool previousCacheAvailable = shaderCache->HasPreviousDiskCache();
-	const bool cacheHeld = shaderCache->IsDiskCacheHeld() && !featureSetChanged && !revertPending;
-	const bool featureChangeHeld = shaderCache->IsDiskCacheHeld() && featureSetChanged && !featureSetCacheBackedUp;
+	const bool featureSetChanged = rollback.flags.featureSetChanged;
+	const bool revertPending = rollback.flags.featureSetRevertPending;
+	const bool featureSetCacheBackedUp = rollback.flags.featureSetCacheBackedUp;
+	const bool featureSetCacheSelectivelySeeded = rollback.flags.featureSetCacheSelectivelySeeded;
+	const bool previousCacheAvailable = rollback.flags.previousDiskCacheAvailable;
+	const bool cacheHeld = rollback.flags.diskCacheHeld && !featureSetChanged && !revertPending;
+	const bool featureChangeHeld = rollback.flags.diskCacheHeld && featureSetChanged && !featureSetCacheBackedUp;
 
 	MenuUI::SectionHeading("Shader Cache Changes");
 
@@ -340,8 +377,8 @@ void HomePageRenderer::RenderCacheMismatchSection()
 	ImGui::Spacing();
 
 	using MismatchKind = Util::CacheInvalidation::CacheMismatch::Kind;
-	const auto& mismatches = (cacheHeld || featureChangeHeld) ? shaderCache->GetCacheMismatches() :
-	                                                            shaderCache->GetPreviousCacheMismatches();
+	const auto& mismatches = (cacheHeld || featureChangeHeld) ? rollback.cacheMismatches :
+	                                                            rollback.previousCacheMismatches;
 	for (const auto& mismatch : mismatches) {
 		const char* detail = mismatch.detail.c_str();
 		if (mismatch.kind == MismatchKind::EnabledFlip) {

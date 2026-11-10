@@ -8,6 +8,10 @@ $policyPath = Join-Path $repositoryRoot 'docs\development\unified-preset-policy.
 $policy = Get-Content -Raw -LiteralPath $policyPath | ConvertFrom-Json -Depth 100
 $scratch = Join-Path ([System.IO.Path]::GetTempPath()) ("csx-unified-preset-test-" + [guid]::NewGuid().ToString('N'))
 $utf8 = [System.Text.UTF8Encoding]::new($false)
+$crashOwner = $null
+$lockOwner = $null
+# Cold PowerShell/.NET startup is separate from the publication hold window.
+$ownerStartupTimeoutSeconds = 30
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -139,9 +143,10 @@ try {
         Assert-True ($compatibility.presetId -ceq "csx-unified-$($tierProperty.Name.ToLowerInvariant())") "Wrong preset identity for $($tierProperty.Name)."
         Assert-True ($compatibility.presetVersion -ceq $policy.packageVersion) "Wrong preset version for $($tierProperty.Name)."
         Assert-True ($compatibility.target.runtime -ceq 'VR') "Wrong runtime target for $($tierProperty.Name)."
-        Assert-True ($compatibility.target.minimumVersion -ceq '3.20') "Wrong minimum CSX version for $($tierProperty.Name)."
-        Assert-True ($compatibility.target.maximumVersionExclusive -ceq '3.21') "Wrong maximum CSX version for $($tierProperty.Name)."
+        Assert-True ($compatibility.target.minimumVersion -ceq '3.21') "Wrong minimum CSX version for $($tierProperty.Name)."
+        Assert-True ($compatibility.target.maximumVersionExclusive -ceq '3.22') "Wrong maximum CSX version for $($tierProperty.Name)."
         Assert-True ($settings.'Weather Picker'.Enabled -eq $true) "Weather Picker was disabled for $($tierProperty.Name)."
+        Assert-True ($settings.'Reverse Z'.EnableReverseZBuffer -eq $false) "Reverse Z was enabled for $($tierProperty.Name)."
         Assert-True ($null -eq $settings.'Disable at Boot'.psobject.Properties['CS Editor']) "CS Editor appeared in Disable at Boot for $($tierProperty.Name)."
         Assert-True ($null -eq $settings.'Disable at Boot'.psobject.Properties['Weather Picker']) "Weather Picker appeared in Disable at Boot for $($tierProperty.Name)."
         foreach ($disabledAtBootEntry in $settings.'Disable at Boot'.psobject.Properties) {
@@ -150,6 +155,8 @@ try {
         $neural = $settings.'Neural Rendering'
         Assert-True ($neural.schemaVersion -eq 1 -and $neural.colour.schemaVersion -eq 1) "Missing independent NR schema for $($tierProperty.Name)."
         Assert-True ($neural.rendering.neuralRenderingEnabled -eq $false) "NR was enabled by a graphics tier: $($tierProperty.Name)."
+        Assert-True ($neural.rendering.neuralRenderingFaceDetailProtectionPercent -eq 0) "Face protection default changed for $($tierProperty.Name)."
+        Assert-True ($neural.rendering.neuralRenderingConfidenceRejectionPercent -eq 0) "Confidence rejection default changed for $($tierProperty.Name)."
         Assert-True ($neural.colour.lightingPreservation -eq 1.0) "Lighting preservation default changed for $($tierProperty.Name)."
         Assert-True ($null -eq $neural.psobject.Properties['experiments']) "Session-only colour experiments leaked into $($tierProperty.Name)."
         Assert-True ($null -eq $settings.'Disable at Boot'.psobject.Properties['NeuralColor']) "Legacy NR boot key appeared in $($tierProperty.Name)."
@@ -283,7 +290,7 @@ try {
     Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
     $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
         OutputRoot = $outputRoot; ReportPath = $reportPath
-    } -Pattern 'JSON path has a non-object parent.*Volumetric Lighting/CustomColorBlue' -Message 'A malformed stale-path ancestor was treated as absent.'
+    } -Pattern 'JSON path has a non-object parent.*Volumetric Lighting/' -Message 'A malformed stale-path ancestor was treated as absent.'
     [System.IO.File]::WriteAllText($isolatedBasePath, $baselineBaseText, $utf8)
     [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
 
@@ -381,16 +388,17 @@ try {
         '-OutputRoot', $outputRoot,
         '-ReportPath', $reportPath,
         '-InternalTestFailurePoint', 'hard-stop-after-publish-1',
-        '-InternalTestCrashSignalPath', $crashSignalPath) -PassThru -RedirectStandardOutput $crashStdoutPath -RedirectStandardError $crashStderrPath
-    $crashDeadline = [DateTime]::UtcNow.AddSeconds(10)
+        '-InternalTestCrashSignalPath', $crashSignalPath) -WindowStyle Hidden -PassThru -RedirectStandardOutput $crashStdoutPath -RedirectStandardError $crashStderrPath
+    $crashDeadline = [DateTime]::UtcNow.AddSeconds($ownerStartupTimeoutSeconds)
     while (-not (Test-Path -LiteralPath $crashSignalPath -PathType Leaf) -and
         -not $crashOwner.HasExited -and [DateTime]::UtcNow -lt $crashDeadline) {
         Start-Sleep -Milliseconds 50
     }
-    Assert-True (Test-Path -LiteralPath $crashSignalPath -PathType Leaf) 'The crash-test process did not reach a partially published generation.'
+    Assert-True (Test-Path -LiteralPath $crashSignalPath -PathType Leaf) "The crash-test process did not reach a partially published generation. stderr: $(Get-Content -Raw -LiteralPath $crashStderrPath) stdout: $(Get-Content -Raw -LiteralPath $crashStdoutPath)"
     Stop-Process -Id $crashOwner.Id -Force
     $crashOwner.WaitForExit()
     $crashOwner.Dispose()
+    $crashOwner = $null
     [System.IO.File]::WriteAllText($isolatedPolicyPath, $baselinePolicyText, $utf8)
     & $isolatedGenerator -OutputRoot $outputRoot -ReportPath $reportPath -Check | Out-Null
     Assert-True $? 'The next run did not recover a hard-stopped publication.'
@@ -412,8 +420,8 @@ try {
         '-OutputRoot', $outputRoot,
         '-ReportPath', $reportPath,
         '-InternalTestLockSignalPath', $lockSignalPath,
-        '-InternalTestLockHoldMilliseconds', '5000') -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
-    $lockDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        '-InternalTestLockHoldMilliseconds', '5000') -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    $lockDeadline = [DateTime]::UtcNow.AddSeconds($ownerStartupTimeoutSeconds)
     while (-not (Test-Path -LiteralPath $lockSignalPath -PathType Leaf) -and
         -not $lockOwner.HasExited -and [DateTime]::UtcNow -lt $lockDeadline) {
         Start-Sleep -Milliseconds 50
@@ -429,6 +437,7 @@ try {
     $lockOwner.WaitForExit()
     $lockOwnerExitCode = $lockOwner.ExitCode
     $lockOwner.Dispose()
+    $lockOwner = $null
     Assert-True ($lockOwnerExitCode -eq 0) "The lock-owner generation failed: $(Get-Content -Raw -LiteralPath $stderrPath)"
     Remove-Item -LiteralPath $fixtureAlias -Force
 
@@ -442,7 +451,20 @@ try {
     Write-Output 'Unified preset generator tests passed.'
 }
 finally {
+    foreach ($owner in @($crashOwner, $lockOwner)) {
+        if ($null -ne $owner) {
+            if (-not $owner.HasExited) {
+                Stop-Process -Id $owner.Id -Force
+                $owner.WaitForExit()
+            }
+            $owner.Dispose()
+        }
+    }
     if (Test-Path -LiteralPath $scratch) {
-        Remove-Item -LiteralPath $scratch -Recurse -Force
+        $resolvedScratch = [System.IO.Path]::GetFullPath($scratch)
+        $scratchParent = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+        Assert-True (([System.IO.Path]::GetDirectoryName($resolvedScratch) -ieq $scratchParent) -and
+            ([System.IO.Path]::GetFileName($resolvedScratch) -match '^csx-unified-preset-test-[0-9a-f]{32}$')) 'Refusing to remove an unexpected test directory.'
+        Remove-Item -LiteralPath $resolvedScratch -Recurse -Force
     }
 }

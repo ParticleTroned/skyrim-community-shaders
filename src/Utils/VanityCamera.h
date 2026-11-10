@@ -1,12 +1,19 @@
 #pragma once
 
+#include <atomic>
+
 namespace Util
 {
+	/** @brief Applies lease ownership before the game-thread camera update. */
+	void UpdateVanityCameraSuppression();
+
 	/**
 	 * @brief Keeps Skyrim's automatic idle camera suppressed while at least one lease is active.
 	 *
-	 * Acquire and release this lease on the game UI thread. The first lease saves the
-	 * current delay and the final lease restores that exact value.
+	 * Ownership is thread-safe. The first lease saves the current delay and the
+	 * final lease restores it and starts a fresh idle interval.
+	 * Camera updates run in the main update hook without changing camera
+	 * permission. Reacquiring is idempotent and never submits a task.
 	 */
 	class VanityCameraSuppressionLease
 	{
@@ -19,13 +26,13 @@ namespace Util
 		VanityCameraSuppressionLease(VanityCameraSuppressionLease&&) = delete;
 		VanityCameraSuppressionLease& operator=(VanityCameraSuppressionLease&&) = delete;
 
-		/** @return True when this lease owns an active suppression request. */
+		/** @return True when owned; false until the game thread finds the INI setting. */
 		bool Acquire();
 		void Release();
 
-		[[nodiscard]] bool IsActive() const { return active; }
+		[[nodiscard]] bool IsActive() const { return active.load(std::memory_order_relaxed); }
 
 	private:
-		bool active = false;
+		std::atomic<bool> active = false;
 	};
 }

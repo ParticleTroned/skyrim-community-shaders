@@ -77,11 +77,11 @@ namespace Util::Subrect
 			return { 0, 0, 0, 0 };
 		}
 
-		const UVRegion normalized = ClampUV(uv);
-		const uint32_t left = NormalizedCoordinates::ResolvePixelBoundary(normalized.x, width);
-		const uint32_t top = NormalizedCoordinates::ResolvePixelBoundary(normalized.y, height);
-		const uint32_t right = NormalizedCoordinates::ResolvePixelBoundary(normalized.x + normalized.w, width);
-		const uint32_t bottom = NormalizedCoordinates::ResolvePixelBoundary(normalized.y + normalized.h, height);
+		// Controller enforces the editor minimum; API crops may be smaller than 1%.
+		const uint32_t left = NormalizedCoordinates::ResolvePixelBoundary(uv.x, width);
+		const uint32_t top = NormalizedCoordinates::ResolvePixelBoundary(uv.y, height);
+		const uint32_t right = NormalizedCoordinates::ResolvePixelBoundary(uv.x + uv.w, width);
+		const uint32_t bottom = NormalizedCoordinates::ResolvePixelBoundary(uv.y + uv.h, height);
 
 		PixelRegion result;
 		result.x = std::min(width - 1, left);

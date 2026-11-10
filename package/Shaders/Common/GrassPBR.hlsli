@@ -199,6 +199,20 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		dirSoftShadow = min(dirSoftShadow, skylightingShadowVisibility);
 #	endif
 
+#	if defined(SNOW_COVER)
+	[branch] if (SnowCover::IsActive())
+	{
+#		if defined(SKYLIGHTING)
+		float snowSkyVisibility = SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1));
+#		else
+		float snowSkyVisibility = 1.0;
+#		endif
+		SnowCover::GrassSnowState snow = SnowCover::GetGrassSnowState(normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, false, eyeIndex, TexBaseSampler, true);
+		material.BaseColor = ApplyGrassSnowMeltDarkening(material.BaseColor, snow.footprint);
+		SnowCover::ApplyGrassSnow(material.BaseColor, snow, true);
+	}
+#	endif
+
 	DirectLightingOutput totalLighting = (DirectLightingOutput)0;
 	DirectContext dirContext = CreateDirectLightingContext(normal, normal, vertexNormal, viewDirection, viewDirection,
 		SharedData::DirLightDirection.xyz, SharedData::DirLightDirection.xyz, dirLightColor, dirDetailedShadow, dirSoftShadow);

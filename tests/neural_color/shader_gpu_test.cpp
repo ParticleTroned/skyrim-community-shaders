@@ -62,11 +62,12 @@ static Texture MakeTexture(ID3D11Device* device, const std::vector<Pixel>& pixel
 }
 static ComPtr<ID3D11ComputeShader> Compile(ID3D11Device* device, const std::filesystem::path& path,
 	const std::filesystem::path& shaderRoot = {},
-	UINT flags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_IEEE_STRICTNESS)
+	UINT flags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_IEEE_STRICTNESS,
+	const D3D_SHADER_MACRO* defines = nullptr)
 {
 	ComPtr<ID3DBlob> bytecode, errors;
 	PackageIncludes includes(shaderRoot.empty() ? path.parent_path().parent_path().parent_path() : shaderRoot);
-	const auto result = D3DCompileFromFile(path.c_str(), nullptr, &includes,
+	const auto result = D3DCompileFromFile(path.c_str(), defines, &includes,
 		"main", "cs_5_0", flags, 0, &bytecode, &errors);
 	if (errors)
 		std::fprintf(stderr, "%.*s\n", static_cast<int>(errors->GetBufferSize()), static_cast<const char*>(errors->GetBufferPointer()));
@@ -395,6 +396,7 @@ static void CheckPackedInvalidCandidates(ID3D11Device* device, ID3D11DeviceConte
 }
 #include "exposure_range_gpu_checks.h"
 #include "lighting_preservation_gpu_checks.h"
+#include "reference_gpu_checks.h"
 
 int main(int argc, char** argv)
 {
@@ -436,6 +438,7 @@ int main(int argc, char** argv)
 	cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 	Check(device->CreateBuffer(&cbDesc, nullptr, &cb));
 	CheckExposureRange(device.Get(), context.Get(), prepare.Get(), reconstruct.Get(), cb.Get());
+	CheckNvidiaReference(device.Get(), context.Get(), directory, cb.Get());
 	std::vector<Pixel> original(4096), sentinel(4096, Pixel{ -7.0f, -7.0f, -7.0f, -7.0f });
 	for (unsigned y = 0; y < 64; ++y)
 		for (unsigned x = 0; x < 64; ++x) {

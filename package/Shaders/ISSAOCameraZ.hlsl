@@ -1,11 +1,12 @@
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/ReverseZ.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float ClippedDepth : SV_Target0;
+	float ClippedDepth: SV_Target0;
 };
 
 #if defined(PSHADER)
@@ -24,7 +25,7 @@ PS_OUTPUT main(PS_INPUT input)
 	PS_OUTPUT psout;
 
 	float2 screenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
-	float depth = DepthTex.Sample(DepthSampler, screenPosition).x;
+	float depth = FrameBuffer::ToStandardDepth(DepthTex.Sample(DepthSampler, screenPosition).x);
 
 	psout.ClippedDepth = clamp(g_ClipInfos.x / (g_ClipInfos.y * depth + g_ClipInfos.z), 0, g_ClipInfos.w);
 

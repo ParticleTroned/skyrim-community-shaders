@@ -6,6 +6,9 @@ Use `tools/build-shader-cache.py` for cache generation and
 `tools/build-fomod-package.py` for release AIO assembly. Do not assemble cache
 blobs, metadata, or installer mappings by hand.
 
+For compilation that must resume after laptop sleep, application closure
+or reboot, use the [resumable release worker](resumable-release-worker.md).
+
 The runtime log is `CSX.log` in the game's standard SKSE log directory.
 `Plugin::LOG_NAME`, generated from `PLUGIN_LOG_NAME`, controls its basename;
 the DLL, SKSE identity and settings directory remain `CommunityShaders`.
@@ -15,7 +18,8 @@ older builds when `CSX.log` is absent, or read an explicit `-LogFile` path.
 ## Purpose and scope
 
 The cache distributes compiled DXBC for CSX' engine-managed
-pixel, vertex, and compute shader permutations. It is not a GPU-driver cache,
+pixel, vertex, and compute shader permutations and standalone helper shaders.
+It is not a GPU-driver cache,
 so it is not tied to a particular GPU vendor. It is tied to all of the
 following:
 
@@ -26,6 +30,37 @@ following:
 -   compiler flags and the resolved stage, feature, descriptor, and custom defines;
 -   the permutation inventory in the matching validation YAML.
 
+`tools/standalone_shader_cache.py` adds helper requests using the existing
+runtime keys, compiler flags and macro serialization. Its inventory covers
+Dynamic Cubemaps, lighting, grass collision/culling, skylighting, terrain,
+subsurface scattering, volumetric shadows, sharpening, deferred composition and shared
+depth/menu helpers. SSGI includes all three resolutions and AO/GI resource
+modes with each runtime's default temporal/adaptive policy. Screen-space
+shadow coverage includes VR per-eye sample counts 1–128 and desktop counts
+8–256 in steps of eight. Custom settings outside this inventory, experimental
+SSGI variants, custom defines and developer shaders compile on demand.
+
+The builder derives active features from each cache's `Info.ini`, verifies
+source/include content, and puts the additional records in the existing
+managed pack. `standaloneInputs` in `PackManifest.json` records their source
+and shader profile for offline compatibility and bytecode-stage validation.
+All helper filenames retain the runtime's `.cso` suffix, including pixel and
+vertex helpers; validators use the recorded profile to check their DXBC stage.
+Do not relabel these files or substitute the engine descriptor-key scheme.
+
+Both bundled profiles target the default Reverse-Z renderer. Engine shaders
+use the feature factory's empty `REVERSE_Z` value, except Utility shaders,
+which use `REVERSE_Z=1`. Standalone helpers also use `REVERSE_Z=1`; the VR
+inventory includes the native occluder and hidden-area-mask adapters. These values must match
+the runtime exactly. A different boot depth convention uses separate cache
+identities and compiles missing entries on demand.
+
+These entries increase offline compilation, package size and cache indexing.
+They avoid matching runtime compilations; they do not change shader rendering
+work or guarantee a frame-rate improvement. Existing archives without a
+standalone inventory remain supported. Measure archive size, cache load cost
+and first-use behavior before release.
+
 The default `shipped` release profile:
 
 -   merges `package/Shaders` and feature `Shaders` trees;
@@ -34,11 +69,20 @@ The default `shipped` release profile:
     exclusion of legacy `Wetness Effects` sources, metadata and
     `WETNESS_EFFECTS` in both runtimes;
 -   enables `UNIFIED_WATER` globally;
+-   defaults Reverse Z compiler inputs to off for every cache profile,
+    independently of the loaded feature's metadata and shader ABI;
 -   removes captured global occurrences of file-scoped defines before enabling
     `WETTERNESS` only for `Lighting.hlsl` and `Water.hlsl`;
 -   removes obsolete captured `VANILLA_FRESNEL` and `HDR_OUTPUT` defines;
 -   omits the VR feature metadata from an SE cache;
 -   compiles optimized release bytecode, without developer/debug defines.
+
+The builder applies profile-wide feature defines to compiler-consumed stage
+lists, including captures without shared YAML aliases. Utility retains its
+runtime exception because it does not consume the feature-macro list.
+Nested captured defines are retained without adding duplicate profile
+entries. Profile-owned macros replace captured values and source scopes;
+top-level define metadata alone does not supply compiler inputs.
 
 `SE` names the shared desktop shader cache for both Special Edition and
 Anniversary Edition. AE uses the SE permutation inventory and cache slot; VR
@@ -58,6 +102,14 @@ same managed layout.
 Named tester profiles are opt-in. Omitting `--profile` always selects
 `shipped`; release workflows and existing maintainer commands therefore keep
 their current behavior.
+
+Both `shipped` and `patka` default to Reverse Z off, matching the runtime and
+bundled presets. Use `--reverse-z` only to build a cache for an enabled
+Reverse Z boot setting; `--no-reverse-z` selects off explicitly. The feature
+remains loaded in `Info.ini` in either case because its shader ABI still
+participates in cache identity. Enabled permutations retain the runtime's
+distinct Utility macro value. A cache compiled for the opposite boot setting
+misses across most shader families and causes a large first-use compilation.
 
 The builder removes the five debug-profile defines itself. Do not replace that
 filter with hlslkit's `--strip-debug-defines`: the pinned implementation also
@@ -104,8 +156,9 @@ Trace/debug logging selects
 the separate developer cache, so release-cache reuse must be tested at Info
 level or above.
 
-The shipped cache inventory does **not** cover feature-specific shaders
-compiled through `Util::CompileShader` or direct `D3DCompile*` paths.
+The shipped cache covers the declared `Util::CompileShader` helper inventory
+above. Other feature-specific requests and direct `D3DCompile*` paths remain
+outside that inventory.
 `Util::CompileShader` persists successful runtime compilations for later
 reuse, using the existing optimized/developer managed lanes or the loose
 cache when no managed layout is installed. Its identity includes the source
@@ -127,8 +180,9 @@ For grass, this separate path covers `GrassCullingCS`, its DevBench
 and `TestBoundsCS`; DevBench additionally compiles its clipping/refinement
 A/B, polygon-baseline and diagnostic variants. Production excludes these
 DevBench variants. Setup warms these shaders in memory; `Util::CompileShader` callers can
-reuse their runtime-generated records on later launches, but the offline
-managed cache builder does not package them. Keep their HLSL and includes in the
+reuse their runtime-generated records on later launches. The offline builder
+packages the default `GrassCullingCS` request; the remaining grass and Hi-Z
+helpers stay on demand. Keep their HLSL and includes in the
 AIO and validate them through `GrassBatchShader` and the Hi-Z shader suite.
 The existing standalone upscaling and foveated validation inventories likewise
 prove compilation, not inclusion in the managed cache pack.
@@ -709,6 +763,23 @@ archive download, and FOMOD payload. The workflow's existing tag and release
 publication rules still apply. Automatic tag/release runs always include
 both runtimes; manual runs include both by default.
 
+### Build an explicitly standard-only package
+
+For a requested package without Horizon Fix compatibility records, pass
+`--no-include-horizon-fix` to both `build-shader-cache.py` and
+`build-fomod-package.py`. Combine it with `--runtime VR` on the cache builder
+and `--no-include-se-ae` on the assembler for a VR-cache-only AIO.
+The cache builder compiles only standard permutations; the assembler rejects
+any supplied cache that still contains Horizon Fix records. Pack integrity,
+canonical record identities, runtime and ABI validation remain required.
+Installer descriptions reflect the selected coverage. Defaults and release
+workflows continue to require both Water compatibility variants.
+
+This option controls cache coverage. To omit the Horizon Fix feature itself,
+configure the core AIO with `-DAIO_EXCLUDED_FEATURE_PACKAGES=HorizonFix` before
+staging it. The universal DLL remains unchanged; without the feature INI,
+its Horizon Fix integration stays unloaded.
+
 ## CI and release workflow
 
 ### Stable main-VR releases
@@ -838,7 +909,9 @@ check to a warning.
 ## Updating the plugin version
 
 1. Update the appropriate `CSX_VERSION` values in
-   `CMakePresets.json`.
+   `CMakePresets.json` and the matching default in `CMakeLists.txt`.
+   Keep the project version derived from these values; release automation
+   supplies the stable patch version.
 2. Confirm the compiled plugin's `Plugin::VERSION_LABEL` will be identical.
 3. Rebuild the caches; do not reuse archives whose `Info.ini` has the previous
    label.
@@ -939,6 +1012,26 @@ managed member is installed. An explicit clear resets admitted pack files in
 place; it preserves partial or invalid managed layouts for installation repair.
 Normal source, feature, and external-contract changes never rotate or blanket
 delete the managed cache.
+
+The Home page's Shader cache section distinguishes a cache built for the other
+runtime from an installation that could not be validated or opened. Runtime
+mismatches require the matching cache from the CSX installer; other failures
+require resolving the installation or access problem reported in `CSX.log`.
+Restart after repair. The feature-cache rebuild action is not offered because
+it cannot repair installed pack files.
+Rejected packs remain untouched, and compilation remains memory-only until
+repair. A missing managed installation does not produce either warning.
+
+DevBench's `communityshaders.shader_api` snapshot exposes the same boot
+diagnosis in `diskCache.installation` without initiating pack admission:
+`issue` is `not_checked` until admission finishes, then remains `none`,
+`wrong_runtime`, or `invalid_pack` for the process lifetime.
+`cachedRuntime` is `SE` or `VR` for a known runtime mismatch
+and otherwise null; `requiredRuntime` is `SE` (including AE) or `VR`; and
+`repairRequired` identifies installations that cannot be rebuilt in place.
+The installation object is null when the shader cache service is unavailable.
+Rebuild preflight and execution reject these installations with
+`cache_installation_repair_required`; held feature caches still permit rebuilds.
 
 A reset barrier becomes authoritative before superseded-file cleanup. If the
 empty generation reopens successfully but cleanup fails, the Store remains

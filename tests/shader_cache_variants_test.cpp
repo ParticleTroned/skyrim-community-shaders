@@ -1,3 +1,5 @@
+#include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
+#include "Utils/ShaderTrackingKeyCache.h"
 #include <Windows.h>
 #include <ankerl/unordered_dense.h>
 
@@ -11,6 +13,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <source_location>
 #include <stdexcept>
@@ -71,6 +74,7 @@ namespace RE
 			Type get() const { return value; }
 		} shaderType{ Lighting };
 		std::string fxpFilename = "Shared";
+		std::array<D3D_SHADER_MACRO, 64> macros{};
 	};
 }
 
@@ -91,15 +95,32 @@ namespace SIE
 #include "shader_task_declarations.h"
 #include "shader_task_identity_under_test.h"
 
-	ShaderCompilationTask::ShaderCompilationTask(ShaderClass a_class, const RE::BSShader& a_shader, uint32_t a_descriptor) :
-		shaderClass(a_class), shader(a_shader), descriptor(a_descriptor), cachedPriority(1)
+	ShaderCompilationTask::ShaderCompilationTask(ShaderClass a_class, const RE::BSShader& a_shader, uint32_t a_descriptor, bool a_precompile) :
+		shaderClass(a_class), shader(a_shader), descriptor(a_descriptor), cachedPriority(a_shader.shaderType.get() == RE::BSShader::Lighting ? 600 : 1), precompile(a_precompile)
 	{}
 
 	namespace SShaderCache
 	{
-		std::string GetShaderString(ShaderClass a_class, const RE::BSShader& a_shader, uint32_t, bool)
+		unsigned keyBuilds = 0;
+		void GetShaderDefines(const RE::BSShader& a_shader, uint32_t, std::span<D3D_SHADER_MACRO> a_defines)
 		{
-			return a_shader.fxpFilename + std::to_string(static_cast<int>(a_class));
+			std::copy(a_shader.macros.begin(), a_shader.macros.end(), a_defines.begin());
+		}
+		std::string GetShaderString(ShaderClass a_class, const RE::BSShader& a_shader, uint32_t, bool,
+			const std::array<D3D_SHADER_MACRO, 64>& a_defines)
+		{
+			++keyBuilds;
+			auto key = a_shader.fxpFilename + std::to_string(static_cast<int>(a_class));
+			for (const auto& macro : a_defines) {
+				if (!macro.Name)
+					break;
+				key += ":" + std::string(macro.Name) + "=" + (macro.Definition ? macro.Definition : "");
+			}
+			return key;
+		}
+		std::string GetShaderString(ShaderClass a_class, const RE::BSShader& a_shader, uint32_t a_descriptor, bool a_hashKey)
+		{
+			return GetShaderString(a_class, a_shader, a_descriptor, a_hashKey, a_shader.macros);
 		}
 		std::wstring GetDiskPath(const std::string& a_name, uint32_t a_descriptor, ShaderClass a_class)
 		{
@@ -112,6 +133,7 @@ namespace SIE
 
 namespace SIE
 {
+	constexpr int kHeavyPriorityThreshold = 500;
 	// Scheduling, engine and disk boundaries are stubbed; the queue admission,
 	// capture declarations, tracking, identity and eviction code comes from source.
 	struct CompilationSet
@@ -120,10 +142,16 @@ namespace SIE
 		std::condition_variable conditionVariable;
 		std::set<ShaderCompilationTask, TaskPriorityLess> availableTasks, tasksInProgress, processedTasks;
 		std::atomic<uint64_t> generation{ 9 }, totalTasks{ 0 }, totalPriorityWeight{ 0 };
+		std::array<std::atomic<uint64_t>, RE::BSShader::Total> typeEpochs{};
+		std::atomic<uint32_t> dispatchedTasksInFlight{ 0 }, heavyTasksInFlight{ 0 };
+#include "shader_queue_generation.h"
 		std::atomic<int64_t> lastResetQpc{ 0 };
 		LARGE_INTEGER lastReset{}, lastCalculation{};
 		std::unordered_set<size_t> forgotten;
 		void Add(const ShaderCompilationTask& task);
+		void DropPrecompilesLocked();
+		void ClearTypeLocked(RE::BSShader::Type a_type);
+		void ReleaseDispatchSlot(const ShaderCompilationTask& a_task);
 		bool IsInProgress(size_t a_id)
 		{
 			std::lock_guard lock(compilationMutex);
@@ -141,8 +169,9 @@ namespace SIE
 #include "shader_capture_state.h"
 #include "shader_category_flag.h"
 		std::vector<uint32_t> pixelRequests;
-		void GetPixelShader(const RE::BSShader&, uint32_t descriptor) { pixelRequests.push_back(descriptor); }
-		void PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories);
+		std::atomic_bool backgroundCompilation{ false };
+		void GetPixelShader(const RE::BSShader&, uint32_t descriptor, PixelShaderLookup = PixelShaderLookup::Compile) { pixelRequests.push_back(descriptor); }
+		void PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories, bool a_precompile = false);
 		struct Blob
 		{
 			ShaderCompilationTask::Status status = ShaderCompilationTask::Completed;
@@ -152,6 +181,7 @@ namespace SIE
 		std::mutex mapMutex, vertexShadersMutex, pixelShadersMutex, computeShadersMutex;
 		using RuntimeMaps = std::array<std::unordered_map<uint32_t, std::unique_ptr<RuntimeShader>>, RE::BSShader::Total>;
 		RuntimeMaps vertexShaders, pixelShaders, computeShaders;
+		std::atomic_uint64_t graphicsShaderRevision{ 0 };
 		CompilationSet compilationSet;
 		std::vector<std::wstring> deletedPaths;
 		unsigned bytecodeQueries = 0;
@@ -176,6 +206,8 @@ namespace globals
 	{
 		bool developer = false;
 		bool IsDeveloperMode() const { return developer; }
+		uint64_t definesGeneration = 0;
+		uint64_t GetShaderDefinesGeneration() const { return definesGeneration; }
 	} stateStorage;
 	struct Deferred
 	{
@@ -194,6 +226,8 @@ namespace SIE
 #include "shader_category_prewarm.h"
 #include "shader_eviction_under_test.h"
 #include "shader_queue_add_under_test.h"
+#include "shader_queue_clear_type.h"
+#include "shader_queue_release_slot.h"
 }
 
 struct Upscaling
@@ -207,6 +241,13 @@ struct Upscaling
 		bool neuralCharacterVisualIsolationEnabled = false;
 	} settings;
 	bool NeedsCharacterCategoryShaders() const;
+	NeuralRendering::CharacterSettings GetCharacterNeuralRenderingSettings() const
+	{
+		NeuralRendering::CharacterSettings policy;
+		policy.enabled = settings.neuralCharacterRenderingEnabled;
+		policy.sceneStrengthsEnabled = settings.neuralCharacterSceneStrengthsEnabled;
+		return policy;
+	}
 };
 #include "shader_category_demand.h"
 
@@ -223,6 +264,84 @@ namespace
 		a_cache.TickActiveShaderCapture(a_menuVisible);
 	}
 
+	void TestTrackingKeyInputs()
+	{
+		Util::ShaderTrackingKeyCache keys;
+		unsigned builds = 0;
+		const auto build = [&] { return std::to_string(++builds); };
+		char name[] = "FEATURE_A";
+		char value[] = "0";
+		std::array<D3D_SHADER_MACRO, 3> macros{ { { name, value }, { nullptr, nullptr }, { "IGNORED", nullptr } } };
+		Require(keys.GetOrCreate(1, "Lighting", macros, build) == "1");
+		Require(keys.GetOrCreate(1, "Lighting", macros, build) == "1");
+		value[0] = '1';
+		Require(keys.GetOrCreate(1, "Lighting", macros, build) == "2");
+		name[8] = 'B';
+		Require(keys.GetOrCreate(1, "Lighting", macros, build) == "3");
+		macros[1] = { "ENABLESSR", nullptr };
+		macros[2] = { nullptr, nullptr };
+		Require(keys.GetOrCreate(1, "Lighting", macros, build) == "4");
+		macros[1].Definition = "";
+		Require(keys.GetOrCreate(1, "Lighting", macros, build) == "4");
+		Require(keys.GetOrCreate(1, "OtherSource", macros, build) == "5");
+		Require(keys.GetOrCreate(2, "OtherSource", macros, build) == "6");
+		macros[1] = { nullptr, nullptr };
+		Require(keys.GetOrCreate(1, "OtherSource", macros, build) == "7");
+		keys.Clear();
+		Require(keys.GetOrCreate(1, "OtherSource", macros, build) == "8");
+	}
+
+	void TestTrackingKeyRetention()
+	{
+		Util::ShaderTrackingKeyCache keys;
+		unsigned builds = 0;
+		const auto build = [&] { return std::to_string(++builds); };
+		for (std::uint64_t id = 0; id < Util::ShaderTrackingKeyCache::kMaxEntries; ++id)
+			keys.GetOrCreate(id, "Lighting", {}, build);
+		bool threw = false;
+		try {
+			keys.GetOrCreate(Util::ShaderTrackingKeyCache::kMaxEntries, "Lighting", {}, []() -> std::string {
+				throw std::runtime_error("injected key-build failure");
+			});
+		} catch (const std::runtime_error&) {
+			threw = true;
+		}
+		Require(threw && keys.GetOrCreate(0, "Lighting", {}, build) == "1");
+		const auto last = keys.GetOrCreate(Util::ShaderTrackingKeyCache::kMaxEntries, "Lighting", {}, build);
+		Require(builds == Util::ShaderTrackingKeyCache::kMaxEntries + 1);
+		keys.GetOrCreate(0, "Lighting", {}, build);
+		Require(builds == Util::ShaderTrackingKeyCache::kMaxEntries + 2);
+		Require(keys.GetOrCreate(Util::ShaderTrackingKeyCache::kMaxEntries, "Lighting", {}, build) == last);
+	}
+
+	void TestTrackingKeyIntegration()
+	{
+		ShaderCache cache;
+		RE::BSShader shader;
+		globals::state->developer = false;
+		SIE::SShaderCache::keyBuilds = 0;
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::keyBuilds == 0 && cache.activeShaders.empty());
+		globals::state->developer = true;
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::keyBuilds == 1 && cache.activeShaders.size() == 1);
+		Require(cache.activeShaders.begin()->second.drawCalls == 2);
+		shader.macros[0] = { "ENABLESSR", nullptr };
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::keyBuilds == 2 && cache.activeShaders.size() == 2);
+		++globals::state->definesGeneration;
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::keyBuilds == 3);
+		globals::state->developer = false;
+		cache.BeginActiveShaderCapture();
+		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
+		Require(SIE::SShaderCache::keyBuilds == 3 && cache.capturedShaders.size() == 1);
+		std::thread bulkLoad([&] { cache.TrackActiveShader(ShaderClass::Pixel, shader, 99); });
+		bulkLoad.join();
+		Require(SIE::SShaderCache::keyBuilds == 3 && cache.capturedShaders.size() == 1);
+	}
+
 	void TestQueueWithSharedBytecode()
 	{
 		ShaderCache cache;
@@ -236,7 +355,7 @@ namespace
 		queue.Add(first);
 		queue.Add(second);
 		Require(queue.availableTasks.size() == 2 && queue.totalTasks == 2);
-		Require(queue.totalPriorityWeight == 4 && cache.bytecodeQueries == 0);
+		Require(queue.totalPriorityWeight == first.GetPriority() + second.GetPriority() + 2 && cache.bytecodeQueries == 0);
 		for (const auto& task : queue.availableTasks) {
 			Require(task.GetGeneration() == 9 && task.GetEnqueuedQpc() > 0);
 		}
@@ -248,6 +367,40 @@ namespace
 		queue.Add(second);
 		Require(queue.availableTasks.empty() && queue.totalTasks == 2);
 		Require(queue.lastResetQpc == sessionStart);
+		globals::shaderCache = nullptr;
+	}
+
+	void TestDemandPreservesQueuedWork()
+	{
+		ShaderCache cache;
+		globals::shaderCache = &cache;
+		RE::BSShader shader;
+		auto& queue = cache.compilationSet;
+		ShaderCompilationTask unused(ShaderClass::Pixel, shader, 10, true);
+		ShaderCompilationTask demanded(ShaderClass::Pixel, shader, 11, true);
+		ShaderCompilationTask running(ShaderClass::Pixel, shader, 12, true);
+		queue.Add(unused);
+		queue.Add(demanded);
+		queue.Add(running);
+		const auto original = *queue.availableTasks.find(demanded);
+		queue.Add({ ShaderClass::Pixel, shader, 11 });
+		const auto promoted = *queue.availableTasks.find(demanded);
+		Require(!promoted.IsPrecompile() && promoted.GetGeneration() == original.GetGeneration());
+		Require(promoted.GetEnqueuedQpc() == original.GetEnqueuedQpc() && queue.totalTasks == 3);
+		queue.tasksInProgress.insert(*queue.availableTasks.find(running));
+		queue.availableTasks.erase(running);
+		cache.backgroundCompilation = true;
+		queue.DropPrecompilesLocked();
+		Require(queue.availableTasks.size() == 1 && queue.availableTasks.contains(demanded));
+		Require(queue.tasksInProgress.contains(running) && queue.totalTasks == 2);
+		Require(queue.totalPriorityWeight == 2 * (demanded.GetPriority() + 1));
+		queue.Add(unused);
+		Require(queue.totalTasks == 2);
+		queue.Add({ ShaderClass::Pixel, shader, 10 });
+		Require(queue.totalTasks == 3 && !queue.availableTasks.find(unused)->IsPrecompile());
+		cache.backgroundCompilation = false;
+		queue.Add({ ShaderClass::Vertex, shader, 13, true });
+		Require(queue.totalTasks == 4);
 		globals::shaderCache = nullptr;
 	}
 
@@ -285,7 +438,7 @@ namespace
 		cache.shaderMap[key] = {};
 		FinishWindow(cache, true);
 		Require(cache.activeShaderCaptureStage == Stage::AwaitingMenuClose);
-		Require(cache.lastScopedClearCount == 2 && releases == 2);
+		Require(cache.lastScopedClearCount == 2 && releases == 2 && cache.graphicsShaderRevision == 2);
 		Require(cache.shaderMap.empty() && cache.clearedBytecodeThisCaptureCycle.size() == 1);
 		Require(cache.compilationSet.forgotten.size() == 2 && cache.deletedPaths.size() == 2);
 		Require(cache.deletedPaths[0] != cache.deletedPaths[1]);
@@ -300,7 +453,7 @@ namespace
 		cache.TrackActiveShader(ShaderClass::Pixel, shader, 12);
 		FinishWindow(cache, false);
 		Require(cache.activeShaderCaptureStage == Stage::Idle);
-		Require(cache.lastScopedClearCount == 1 && releases == 3);
+		Require(cache.lastScopedClearCount == 1 && releases == 3 && cache.graphicsShaderRevision == 3);
 		Require(cache.shaderMap.contains(key) && cache.pixelShaders[RE::BSShader::Lighting].contains(10));
 		Require(cache.compilationSet.forgotten.size() == 3 && cache.deletedPaths.size() == 3);
 		Require(globals::deferred->clears == 1 && loaded.clears == 1);
@@ -308,7 +461,7 @@ namespace
 		Require(cache.clearedThisCaptureCycle.empty() && cache.clearedBytecodeThisCaptureCycle.empty());
 		cache.TrackActiveShader(ShaderClass::Pixel, shader, 10);
 		FinishWindow(cache, true);
-		Require(releases == 4 && cache.shaderMap.empty());
+		Require(releases == 4 && cache.shaderMap.empty() && cache.graphicsShaderRevision == 4);
 		Feature::GetFeatureList().clear();
 	}
 
@@ -342,6 +495,72 @@ namespace
 			FinishWindow(cache, false);
 			Require(releases == 1 && cache.shaderMap.empty());
 		}
+	}
+
+	void TestScopedInvalidation()
+	{
+		RE::BSShader lighting, imageSpace;
+		imageSpace.shaderType.value = RE::BSShader::ImageSpace;
+		SIE::CompilationSet queue;
+		ShaderCompilationTask lightingRequest(ShaderClass::Pixel, lighting, 1);
+		ShaderCompilationTask lightingQueued(ShaderClass::Vertex, lighting, 2);
+		ShaderCompilationTask imageRequest(ShaderClass::Pixel, imageSpace, 3);
+		ShaderCompilationTask imageQueued(ShaderClass::Vertex, imageSpace, 4);
+		ShaderCompilationTask imageFinished(ShaderClass::Pixel, imageSpace, 5);
+		for (const auto& task : { lightingRequest, lightingQueued, imageRequest, imageQueued, imageFinished })
+			queue.Add(task);
+		auto dispatch = [&](const ShaderCompilationTask& task) {
+			auto entry = queue.availableTasks.extract(task);
+			auto dispatched = entry.value();
+			queue.tasksInProgress.insert(std::move(entry));
+			++queue.dispatchedTasksInFlight;
+			if (dispatched.GetPriority() >= SIE::kHeavyPriorityThreshold)
+				++queue.heavyTasksInFlight;
+			return dispatched;
+		};
+		const auto lightingRunning = dispatch(lightingRequest);
+		const auto imageRunning = dispatch(imageRequest);
+		queue.processedTasks.insert(queue.availableTasks.extract(imageFinished));
+		const auto standaloneGeneration = queue.generation.load();
+		{
+			std::lock_guard lock(queue.compilationMutex);
+			queue.ClearTypeLocked(RE::BSShader::ImageSpace);
+		}
+		Require(queue.availableTasks.size() == 1 && queue.availableTasks.contains(lightingQueued));
+		Require(queue.tasksInProgress.size() == 1 && queue.tasksInProgress.contains(lightingRunning));
+		Require(queue.processedTasks.empty());
+		// Finished work stays in cumulative progress; only canceled unfinished work is removed.
+		Require(queue.totalTasks == 3 && queue.totalPriorityWeight == 2 * (lightingRunning.GetPriority() + 1) + imageFinished.GetPriority() + 1);
+		Require(queue.dispatchedTasksInFlight == 2 && queue.heavyTasksInFlight == 1);
+		Require(queue.generation == standaloneGeneration);
+		Require(queue.IsCurrentGeneration(lightingRunning) && !queue.IsCurrentGeneration(imageRunning));
+		queue.Add(imageRunning);
+		const auto replacement = *queue.availableTasks.find(imageRunning);
+		Require(queue.IsCurrentGeneration(replacement));
+		Require(replacement.GetGeneration() != imageRunning.GetGeneration());
+		queue.ReleaseDispatchSlot(imageRunning);
+		Require(queue.tasksInProgress.contains(lightingRunning) && queue.availableTasks.contains(replacement));
+		Require(queue.dispatchedTasksInFlight == 1 && queue.heavyTasksInFlight == 1);
+		queue.ReleaseDispatchSlot(lightingRunning);
+		Require(queue.dispatchedTasksInFlight == 0 && queue.heavyTasksInFlight == 0);
+		++queue.generation;
+		Require(!queue.IsCurrentGeneration(lightingRunning) && !queue.IsCurrentGeneration(replacement));
+		Require(queue.generation != standaloneGeneration);
+	}
+
+	void TestUntruncatedTypeEpoch()
+	{
+		SIE::CompilationSet queue;
+		queue.typeEpochs[RE::BSShader::ImageSpace] = (uint64_t{ 1 } << 24) - 1;
+		const auto previous = queue.LiveGeneration(RE::BSShader::ImageSpace);
+		const auto other = queue.LiveGeneration(RE::BSShader::Lighting);
+		{
+			std::lock_guard lock(queue.compilationMutex);
+			queue.ClearTypeLocked(RE::BSShader::ImageSpace);
+		}
+		Require(queue.LiveGeneration(RE::BSShader::ImageSpace) == previous + 1);
+		Require(queue.LiveGeneration(RE::BSShader::Lighting) == other);
+		Require(queue.totalTasks == 0 && queue.totalPriorityWeight == 0);
 	}
 
 	void TestCategoryVariantIdentity()
@@ -423,11 +642,17 @@ namespace
 int main()
 {
 	try {
+		TestTrackingKeyInputs();
+		TestTrackingKeyRetention();
+		TestTrackingKeyIntegration();
 		TestQueueWithSharedBytecode();
+		TestDemandPreservesQueuedWork();
 		TestCaptureAndClearVariants(false);
 		TestCaptureAndClearVariants(true);
 		TestProtectedVariants();
 		TestStageAndTypeIdentity();
+		TestScopedInvalidation();
+		TestUntruncatedTypeEpoch();
 		TestCategoryVariantIdentity();
 		TestCategoryPrewarm();
 		std::cout << "Shader cache variant checks passed\n";

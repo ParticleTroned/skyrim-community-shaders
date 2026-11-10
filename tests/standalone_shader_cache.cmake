@@ -12,6 +12,7 @@ foreach(
         standalone_compile_key.h
         standalone_cache_under_test.h
         standalone_d3d_under_test.h
+        standalone_failures_under_test.h
 )
     list(APPEND _standalone_cache_headers "${_standalone_cache_dir}/${_header}")
 endforeach()

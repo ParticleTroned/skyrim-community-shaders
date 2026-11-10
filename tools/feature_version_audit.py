@@ -181,7 +181,7 @@ def get_feature_ini_metadata(feature_dir_or_ini_path):
         return {}
     parser = configparser.ConfigParser()
     try:
-        parser.read(ini_path, encoding='utf-8')
+        parser.read(ini_path, encoding='utf-8-sig')
     except Exception:
         return {}
 

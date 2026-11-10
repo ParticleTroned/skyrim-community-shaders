@@ -14,9 +14,20 @@ namespace globals::game
 }
 bool providerInstalled = true;
 bool NeuralRendering::Runtime::IsInstalled() noexcept { return providerInstalled; }
+const NeuralRendering::DriverSupport& NeuralRendering::Runtime::GetDriverSupport() noexcept
+{
+	static const DriverSupport support{ kMinimumNvidiaDriverRelease };
+	return support;
+}
 
 namespace globals::features
 {
+	struct ReverseZFixture
+	{
+		bool active = false;
+		bool IsActive() const { return active; }
+		double GetAdditionalDepthBytesPerPixel() const { return active ? 20.25 : 0; }
+	} reverseZ;
 	struct AdapterFixture
 	{
 		bool IsNeuralRenderingHardwareSupported() const noexcept { return true; }
@@ -62,7 +73,7 @@ struct Upscaling
 		bool runtime = false, failed = false, fsr4 = false, fsr4Failed = false;
 		bool IsNvidiaAdapterDetected() const { return true; }
 		bool IsRuntimeUpscalerFailureLatched() const { return failed; }
-		bool ShouldUseRuntimeUpscalerForFSR() const { return runtime; }
+		bool ShouldUseRuntimeUpscalerForFSR(bool automatic) const { return runtime || (automatic && fsr4); }
 		bool IsRuntimeFsr4FailureLatched() const { return fsr4Failed; }
 		bool IsRuntimeFsr4Available() const { return fsr4; }
 	} fidelityFX;
@@ -146,6 +157,10 @@ int main()
 			Require(upscaling.liveRequestReads == 0, "Resource-key construction reentered the live pending-request query under its lock");
 			Require(key.foveatedVendorDispatch && !key.peripheryTAA, "Full-image reduced NR must reserve its VR dispatch resources");
 		}
+		globals::features::reverseZ.active = true;
+		const auto reversedKey = upscaling.BuildVRRenderScaleResourceKey(profile);
+		Require(reversedKey.reversedDepth && reversedKey.additionalDepthBytesPerPixel > 0, "Depth format and cost are missing from resource identity");
+		globals::features::reverseZ.active = false;
 		// Desired resources must exist before the incoming mode has latched.
 		upscaling.requested = upscaling.latched = upscaling.active = false;
 		Require(upscaling.BuildVRRenderScaleResourceKey(profile).foveatedVendorDispatch, "Target resources must not depend on the previous live latch");
@@ -192,6 +207,13 @@ int main()
 		profile.active = true;
 		profile.method = Method::kFSR;
 		Require(upscaling.BuildVRRenderScaleResourceKey(profile).backend == Backend::FSRHost, "Host FSR selection changed");
+		profile.fsr4RuntimeEnabled = upscaling.fidelityFX.fsr4 = true;
+		Require(upscaling.BuildVRRenderScaleResourceKey(profile).backend == Backend::FSR4Runtime,
+			"NVIDIA host-to-automatic planning must use the target preference");
+		profile.fsr4RuntimeEnabled = false;
+		Require(upscaling.BuildVRRenderScaleResourceKey(profile).backend == Backend::FSRHost,
+			"NVIDIA automatic-to-host planning must use the target preference");
+		upscaling.fidelityFX.fsr4 = false;
 		upscaling.fidelityFX.runtime = true;
 		Require(upscaling.BuildVRRenderScaleResourceKey(profile).backend == Backend::FSRRuntime, "Runtime FSR selection changed");
 		profile.fsr4RuntimeEnabled = upscaling.fidelityFX.fsr4 = true;

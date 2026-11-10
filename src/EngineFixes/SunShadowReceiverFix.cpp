@@ -1,5 +1,6 @@
 #include "EngineFixes/SunShadowReceiverFix.h"
 
+#include "Compatibility.h"
 #include "EngineFixes/SunReceiverLog.h"
 #include "Globals.h"
 #include "State.h"
@@ -94,7 +95,7 @@ namespace SunShadowReceiver
 		if (!input.available)
 			return input;
 		input.flags = property->flags.underlying();
-		input.activeMask = lightData->activeLightMask;
+		input.activeMask = Policy::ReadMask(lightData->activeLightMask);
 		input.shadowsEnabled = !globals::game::smState->interior && runtime->nativeShadowSuppressed && !*runtime->nativeShadowSuppressed &&
 		                       (!runtime->vrDrawShadows || *runtime->vrDrawShadows);
 		if (!(input.flags & Policy::ReceiveShadows) || (input.flags & Policy::ExcludedLod) || !input.shadowsEnabled)
@@ -207,7 +208,7 @@ bool SunShadowReceiverFix::TryInstall()
 		const bool vr = REL::Module::IsVR();
 		if (vr && REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15)
 			throw std::runtime_error("Sun receiver repair requires verified Skyrim VR 1.4.15");
-		if (GetModuleHandleW(L"ShadowFixes.dll"))
+		if (Compatibility::IsLoaded(Compatibility::shadowFixes))
 			throw std::runtime_error("ShadowFixes.dll already owns sun receiver repair; CSX repair is disabled");
 		const auto table = RE::VTABLE_BSLightingShaderProperty[0].address();
 		const auto expected = REL::VariantID(99871, 106516, 0x13045F0).address();

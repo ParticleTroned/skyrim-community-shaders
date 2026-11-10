@@ -2,6 +2,7 @@
 #define __HAIR_MATH_DEPENDENCY_HLSL__
 
 #include "Common/Color.hlsli"
+#include "Common/HairScattering.hlsli"
 #include "Common/Math.hlsli"
 
 namespace Hair
@@ -59,12 +60,7 @@ namespace Hair
 		float NdotV = dot(N, V);
 		float3 S = 0;
 
-		float diffuseKajiya = 1 - abs(NdotL);
-
-		float3 fakeN = normalize(V - N * NdotV);
-		const float wrap = 1;
-		float wrappedNdotL = saturate((dot(fakeN, L) + wrap) / ((1 + wrap) * (1 + wrap)));
-		float diffuseScatter = (1 / Math::PI) * lerp(wrappedNdotL, diffuseKajiya, 0.33);
+		float diffuseScatter = HairScattering::DiffuseFactor(N, V, L, NdotL, NdotV);
 		float luma = max(Color::RGBToLuminance(baseColor), 1e-4);
 		float3 scatterTint = shadow < 1 ? pow(abs(baseColor / luma), 1 - shadow) : 1;
 		S += sqrt(baseColor) * diffuseScatter * scatterTint;

@@ -17,6 +17,7 @@ add_custom_command(
         src/State.cpp
         src/Features/VolumetricLighting.h
         src/Features/VolumetricLighting.cpp
+		src/Features/AdaptiveBrightness.cpp
         tests/extract_volumetric_lighting_shared_data.cmake
     VERBATIM
 )
@@ -25,6 +26,7 @@ add_d3d_shader_test(
     VolumetricLightingComposite
     tests/volumetric_lighting_composite_test.cpp
 )
+target_link_libraries(volumetric_lighting_composite_test PRIVATE nlohmann_json::nlohmann_json)
 target_sources(
     volumetric_lighting_composite_test
     PRIVATE "${_vl_shared_header}" ${_vl_runtime_headers}

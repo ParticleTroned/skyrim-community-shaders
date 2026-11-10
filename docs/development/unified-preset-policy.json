@@ -2,24 +2,24 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.10.15.1",
+    "packageVersion": "d2026.11.05.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
         "target": {
             "runtime": "VR",
-            "minimumVersion": "3.20",
-            "maximumVersionExclusive": "3.21"
+            "minimumVersion": "3.21",
+            "maximumVersionExclusive": "3.22"
         }
     },
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "57DCE96561F1AD9AEC882E26AC12121BD3EAFD4DBA6ABFCC86DAD0FC7D77A09E"
+        "sha256": "1023B7FE022186875C396D87527577817CFB28A5624EE6A0424DCC3E522A7F58"
     },
     "runtimeSettingsContract": {
-        "revision": 14,
-        "sourceTreeSha256": "7BBE68C9857F6261476B514A2610AAC64171D0D8FC208F29516741A38710FC31",
+        "revision": 32,
+        "sourceTreeSha256": "DE60019E2ADC0509C7E9A8B58895D9F86932C6A8BD7E158A064A240F909574AF",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -44,6 +44,7 @@
                 "src/Features/Upscaling/NeuralRendering/DevelopmentDiagnostics.h",
                 "src/Features/Upscaling/NeuralRendering/PipelinePolicy.h",
                 "src/Features/Upscaling/NeuralRendering/RegionCapacity.h",
+                "src/Features/Upscaling/NeuralRendering/Style.h",
                 "src/Features/VolumetricLightingTuning.h",
                 "src/Features/VolumetricLightingTuningMigration.h",
                 "src/Features/VR/MenuPositioningPolicy.h",
@@ -90,6 +91,8 @@
             "src/Features/FoliageLighting.cpp",
             "src/Features/FoliageLighting.h",
             "src/Features/FoveatedCommon.h",
+            "src/Features/FurShells.cpp",
+            "src/Features/FurShells.h",
             "src/Features/GrassCollision.cpp",
             "src/Features/GrassCollision.h",
             "src/Features/GrassLighting.cpp",
@@ -119,6 +122,8 @@
             "src/Features/PerformanceOverlay.h",
             "src/Features/RenderDoc.cpp",
             "src/Features/RenderDoc.h",
+            "src/Features/ReverseZ.cpp",
+            "src/Features/ReverseZ.h",
             "src/Features/ScreenshotFeature.cpp",
             "src/Features/ScreenshotFeature.h",
             "src/Features/ScreenSpaceGI.cpp",
@@ -129,6 +134,8 @@
             "src/Features/Skylighting.h",
             "src/Features/SkySync.cpp",
             "src/Features/SkySync.h",
+            "src/Features/SnowCover.cpp",
+            "src/Features/SnowCover.h",
             "src/Features/SubsurfaceScattering.cpp",
             "src/Features/SubsurfaceScattering.h",
             "src/Features/TerrainBlending.cpp",
@@ -157,6 +164,7 @@
             "src/Features/Upscaling/NeuralRendering/DevelopmentDiagnostics.h",
             "src/Features/Upscaling/NeuralRendering/PipelinePolicy.h",
             "src/Features/Upscaling/NeuralRendering/RegionCapacity.h",
+            "src/Features/Upscaling/NeuralRendering/Style.h",
             "src/Features/VolumetricLighting.cpp",
             "src/Features/VolumetricLighting.h",
             "src/Features/VolumetricLightingTuning.h",
@@ -240,6 +248,7 @@
         ["Wetterness", "WetternessFadeRange"]
     ],
     "commonOverrides": [
+        { "path": ["Reverse Z", "EnableReverseZBuffer"], "value": false },
         {
             "path": ["Upscaling", "frameGenerationMode"],
             "value": 0,
@@ -301,26 +310,26 @@
             "reason": "current normalized interior policy pending a fresh profiler comparison"
         },
         { "path": ["Volumetric Lighting", "DisableWeatherInteractionDuringRain"], "value": false },
-        { "path": ["Volumetric Lighting", "ExteriorGodrays", "ShaftIntensity"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "ExteriorGodrays", "Opacity"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "ExteriorGodrays", "Saturation"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "exterior", "ShaftIntensity"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "exterior", "Opacity"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "exterior", "Saturation"], "value": 1.0 },
         {
-            "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorContribution"],
+            "path": ["Adaptive Balance", "godrays", "exterior", "CustomColorContribution"],
             "value": 1.0
         },
-        { "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorRed"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorGreen"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorBlue"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "InteriorGodrays", "ShaftIntensity"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "InteriorGodrays", "Opacity"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "InteriorGodrays", "Saturation"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "exterior", "CustomColorRed"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "exterior", "CustomColorGreen"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "exterior", "CustomColorBlue"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "interior", "ShaftIntensity"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "interior", "Opacity"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "interior", "Saturation"], "value": 1.0 },
         {
-            "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorContribution"],
+            "path": ["Adaptive Balance", "godrays", "interior", "CustomColorContribution"],
             "value": 1.0
         },
-        { "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorRed"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorGreen"], "value": 1.0 },
-        { "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorBlue"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "interior", "CustomColorRed"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "interior", "CustomColorGreen"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "godrays", "interior", "CustomColorBlue"], "value": 1.0 },
         {
             "path": ["Hair Specular", "Enabled"],
             "value": 1,
@@ -472,7 +481,7 @@
             "reason": "fall back to FSR when DLSS is unavailable"
         },
         { "path": ["Upscaling", "fsr4RuntimeEnable"], "value": true },
-        { "path": ["Upscaling", "fsr4RuntimeSelectionSchemaVersion"], "value": 1 },
+        { "path": ["Upscaling", "fsr4RuntimeSelectionSchemaVersion"], "value": 2 },
         { "path": ["Upscaling", "dlssPreset"], "value": 1 },
         { "path": ["Upscaling", "dlssSharpener"], "value": 1 },
         { "path": ["Upscaling", "sharpnessDLSS"], "value": 0.699999988079071 },
@@ -640,11 +649,11 @@
         { "path": ["Image Based Lighting", "EnableIBL"], "value": 0 },
         { "path": ["Volumetric Shadows", "Enabled"], "value": true },
         {
-            "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorContribution"],
+            "path": ["Adaptive Balance", "godrays", "exterior", "CustomColorContribution"],
             "value": 1.0
         },
         {
-            "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorContribution"],
+            "path": ["Adaptive Balance", "godrays", "interior", "CustomColorContribution"],
             "value": 1.0
         },
         { "path": ["Hair Specular", "Enabled"], "value": 1 },
@@ -748,6 +757,9 @@
     ],
     "validation": {
         "stalePaths": [
+            ["VR", "DepthCullingPerformanceMode"],
+            ["VR", "MinOccludeeBoxExtent"],
+            ["CS Utility"],
             ["Skylighting", "EnableFastProbeSampling"],
             ["Advanced", "Background Compiler Threads"],
             ["Advanced", "Compiler Threads"],
@@ -761,6 +773,8 @@
             ["Adaptive Balance", "globalLightingEnabled"],
             ["Adaptive Balance", "lighting"],
             ["Adaptive Balance", "bloomEnhancement"],
+            ["Volumetric Lighting", "ExteriorGodrays"],
+            ["Volumetric Lighting", "InteriorGodrays"],
             ["Volumetric Lighting", "CustomColorBlue"],
             ["Volumetric Lighting", "CustomColorContribution"],
             ["Volumetric Lighting", "CustomColorGreen"],
@@ -771,6 +785,33 @@
             ["Volumetric Lighting", "GodrayShaftIntensity"]
         ],
         "requiredValues": [
+            { "path": ["Upscaling", "antiLag2Enabled"], "value": false },
+            { "path": ["Light Limit Fix", "SkipRedundantLightAttach"], "value": true },
+            { "path": ["Grass Optimizations", "FarLODOptimization"], "value": false },
+            { "path": ["Grass Optimizations", "FarLODMinPixelSize"], "value": 1.0 },
+            { "path": ["Grass Optimizations", "FarLODMinDensity"], "value": 0.019999999552965164 },
+            { "path": ["Grass Optimizations", "FarLODMaxDensity"], "value": 0.20000000298023224 },
+            { "path": ["Grass Optimizations", "FarLODCoverageBias"], "value": 1.0 },
+            { "path": ["Grass Optimizations", "ProportionalDensityFade"], "value": false },
+            { "path": ["Snow Cover", "Enable"], "value": 0 },
+            { "path": ["Fur Shells", "Enabled"], "value": false },
+            { "path": ["Reverse Z", "EnableReverseZBuffer"], "value": false },
+            { "path": ["Disable at Boot", "FurShells"], "value": false },
+            { "path": ["Disable at Boot", "SnowCover"], "value": false },
+            { "path": ["Terrain Blending", "LandscapeSeams"], "value": 0 },
+            { "path": ["Performance Overlay", "ShowRenderTargets"], "value": false },
+            { "path": ["Neural Rendering", "rendering", "neuralRenderingNetwork"], "value": 0 },
+            {
+                "path": ["Sky Sync", "DisabledWorldspaces"],
+                "value": [
+                    "Blackreach",
+                    "AlftandWorld",
+                    "Sovngarde",
+                    "DLC01SoulCairn",
+                    "DLC01Boneyard",
+                    "DLC2ApocryphaWorld"
+                ]
+            },
             { "path": ["Neural Rendering", "schemaVersion"], "value": 1 },
             { "path": ["Neural Rendering", "rendering", "neuralRenderingEnabled"], "value": false },
             { "path": ["Neural Rendering", "rendering", "neuralRenderingMode"], "value": 2 },
@@ -779,21 +820,245 @@
                 "value": 0
             },
             { "path": ["Neural Rendering", "colour", "schemaVersion"], "value": 1 },
+            {
+                "path": [
+                    "Neural Rendering",
+                    "rendering",
+                    "neuralRenderingFaceDetailProtectionPercent"
+                ],
+                "value": 0
+            },
+            {
+                "path": [
+                    "Neural Rendering",
+                    "rendering",
+                    "neuralRenderingConfidenceRejectionPercent"
+                ],
+                "value": 0
+            },
             { "path": ["Neural Rendering", "colour", "lightingPreservation"], "value": 1.0 },
             { "path": ["Grass Collision", "CollisionStrength"], "value": 1.0 },
+            { "path": ["Grass Collision", "CollisionRadiusScale"], "value": 1.0 },
+            { "path": ["Grass Collision", "GrassInteractionRadius"], "value": 25.0 },
+            { "path": ["Grass Collision", "CollisionImpactStrength"], "value": 3.0 },
+            { "path": ["Grass Collision", "SpringStrength"], "value": 5.0 },
+            { "path": ["Grass Collision", "Damping"], "value": 7.5 },
+            { "path": ["Grass Collision", "MaximumBend"], "value": 89.0 },
+            { "path": ["Grass Collision", "MaximumCompression"], "value": 0.2 },
+            { "path": ["Grass Collision", "CompressionHeight"], "value": 10.0 },
+            { "path": ["Grass Collision", "MaximumCompressibleGrassHeight"], "value": 40.0 },
+            { "path": ["Grass Collision", "CompressionRecovery"], "value": 0.25 },
             { "path": ["Light Limit Fix", "ShadowCulling", "sun"], "value": true },
             { "path": ["Light Limit Fix", "ShadowCulling", "torch"], "value": true },
             { "path": ["Light Limit Fix", "ShadowCulling", "actors"], "value": true },
             { "path": ["Light Limit Fix", "ShadowCulling", "interiorTorches"], "value": true },
+            { "path": ["Light Limit Fix", "ShadowCulling", "sunDistanceMeters"], "value": 20.0 },
+            { "path": ["Light Limit Fix", "ShadowCulling", "torchDistanceMeters"], "value": 15.0 },
+            { "path": ["Light Limit Fix", "ShadowCulling", "actorDistanceMeters"], "value": 50.0 },
+            { "path": ["Light Limit Fix", "ShadowCulling", "smallActorParts"], "value": true },
             {
-                "path": ["Light Limit Fix", "ShadowCulling", "minimumDistanceMeters"],
-                "value": 50.0
+                "path": ["Light Limit Fix", "ShadowCulling", "actorPartDistanceMeters"],
+                "value": 7.14
             },
-            { "path": ["Light Limit Fix", "ShadowCulling", "actorDistanceMeters"], "value": 75.0 },
+            {
+                "path": ["Light Limit Fix", "ShadowCulling", "actorPartReturnDistanceMeters"],
+                "value": 6.426
+            },
+            {
+                "path": ["Light Limit Fix", "ShadowCulling", "actorPartRadiusCentimeters"],
+                "value": 11.424
+            },
             { "path": ["Extended Materials", "ParallaxStrength"], "value": 1.0 },
             { "path": ["Screenshot", "SettingsSchemaVersion"], "value": 2 },
             { "path": ["Screenshot", "Sequence", "Schedule", "Basis"], "value": "game_frames" },
             { "path": ["Advanced", "PBR Verbose JSON Logging"], "value": false },
+            { "path": ["Adaptive Balance", "volumetricClarity"], "value": 0.0 },
+            { "path": ["Adaptive Balance", "bloomEnabled"], "value": true },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "sceneGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "ambientGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "directionalGammaOffset"
+                ],
+                "value": 0.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "pointLightGammaOffset"
+                ],
+                "value": 0.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "nonlinearPointLightSaturation"
+                ],
+                "value": 1.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "linearPointLightSaturation"
+                ],
+                "value": 1.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "linearPointLightGammaOffset"
+                ],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "spotlightSaturation"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "spotlightGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "linearSpotlightSaturation"
+                ],
+                "value": 1.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "linearSpotlightGammaOffset"
+                ],
+                "value": 0.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "omnidirectionalBulbSaturation"
+                ],
+                "value": 1.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "omnidirectionalBulbGammaOffset"
+                ],
+                "value": 0.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "linearOmnidirectionalBulbSaturation"
+                ],
+                "value": 1.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "linearOmnidirectionalBulbGammaOffset"
+                ],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "emissiveSaturation"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "emissiveGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "glowmapSaturation"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "glowmapGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "effectLightingSaturation"
+                ],
+                "value": 1.0
+            },
+            {
+                "path": [
+                    "Adaptive Balance",
+                    "globalProfile",
+                    "appearance",
+                    "effectLightingGammaOffset"
+                ],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "effectSaturation"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "effectGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "skyStaticSaturation"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "skyStaticGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "sunGlareSaturation"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "sunGlareGammaOffset"],
+                "value": 0.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "fogSaturation"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "volumetricIntensity"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "volumetricSaturation"],
+                "value": 1.0
+            },
             { "path": ["Adaptive Balance", "globalProfile", "advanced"], "value": true },
             { "path": ["Adaptive Balance", "globalProfile", "skySaturation"], "value": 1.0 },
             {
@@ -827,10 +1092,9 @@
             { "path": ["Sky Sync", "EnableSunLensFlare"], "value": true },
             { "path": ["Foliage Lighting", "EnableFoliageScattering"], "value": 1 },
             { "path": ["VR", "DepthCullingLegacyMode"], "value": false },
-            { "path": ["VR", "DepthCullingPerformanceMode"], "value": false },
             { "path": ["VR", "UnlockMenuPositionAndSize"], "value": false },
-            { "path": ["Volumetric Lighting", "ExteriorGodrays", "ShaftIntensity"], "value": 1.0 },
-            { "path": ["Volumetric Lighting", "InteriorGodrays", "ShaftIntensity"], "value": 1.0 },
+            { "path": ["Adaptive Balance", "godrays", "exterior", "ShaftIntensity"], "value": 1.0 },
+            { "path": ["Adaptive Balance", "godrays", "interior", "ShaftIntensity"], "value": 1.0 },
             { "path": ["Wetterness", "RainGrassDarkening"], "value": 0.15000000596046448 },
             { "path": ["VR", "WandAimPitchTrimDegrees"], "value": -26.0 }
         ],

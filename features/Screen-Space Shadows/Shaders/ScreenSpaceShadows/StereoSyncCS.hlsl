@@ -1,3 +1,4 @@
+#include "Common/ReverseZ.hlsli"
 // Stereo Sync + Blur - Combined bilateral stereo blend and depth-weighted
 // blur for VR screen-space shadows. Runs as a single compute pass after the
 // raymarch to both synchronize shadow data between eyes and smooth per-pixel
@@ -6,8 +7,8 @@
 // Based on: Shi, Billeter, Eisemann 2022, "Stereo-consistent screen-space
 // ambient occlusion" https://eprints.whiterose.ac.uk/id/eprint/187713/
 
-#include "Common/FrameBuffer.hlsli"
 #include "Common/FoveatedMask.hlsli"
+#include "Common/FrameBuffer.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
@@ -17,11 +18,11 @@
 #ifdef VR
 
 // Match the C++ depth binding format for strict typing.
-// TERRAIN_BLENDING ON  -> R32_FLOAT (no unorm). OFF -> R24_UNORM_X8_TYPELESS (unorm).
+// TERRAIN_BLENDING ON  -> R32_FLOAT (no unorm). OFF -> R24_UNORM_X8_TYPELESS, R32_FLOAT under REVERSE_Z.
 #	if defined(TERRAIN_BLENDING)
 Texture2D<float> SrcDepthTexture : register(t0);
 #	else
-Texture2D<unorm float> SrcDepthTexture : register(t0);
+Texture2D<SCENE_DEPTH_FORMAT> SrcDepthTexture : register(t0);
 #	endif
 Texture2D<unorm float> SrcShadowTexture : register(t1);
 
@@ -33,7 +34,7 @@ cbuffer StereoSyncCB : register(b1)
 	float2 RcpFrameDim;
 	float2 DispatchBase;
 	float2 DispatchExtent;
-	float4 FoveatedData0;      // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=enabled
+	float4 FoveatedData0;  // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=enabled
 	float4 FoveatedCenterOffset;
 };
 
@@ -73,10 +74,10 @@ float BlurShadow(int2 dtid, float centerDepth)
 
 		float sampleDepth = SrcDepthTexture[samplePx];
 
-		if (sampleDepth < 1e-5)
+		if (abs(sampleDepth - DepthOrder::Near()) < 1e-5)
 			continue;
 
-		float attenuation = 1.0 - saturate(100.0 * abs(sampleDepth - centerDepth) / max(centerDepth, 1e-5));
+		float attenuation = 1.0 - saturate(100.0 * abs(sampleDepth - centerDepth) / max(DepthOrder::Reversed ? 1.0 - centerDepth : centerDepth, 1e-5));
 
 		if (attenuation > 0.0) {
 			shadow += SrcShadowTexture[samplePx] * attenuation;
@@ -136,7 +137,7 @@ float ApplyFoveatedOutputFade(float shadow, float centerWeight)
 	float depth = SrcDepthTexture[dtid];
 
 	// depth == 0: VR HMD mask; depth == 1: sky/far plane
-	if (depth < 1e-5 || depth >= 1.0) {
+	if (abs(depth - DepthOrder::Near()) < 1e-5 || depth == DepthOrder::Far()) {
 		OutShadowTexture[dtid] = SrcShadowTexture[dtid];
 		return;
 	}
@@ -173,7 +174,7 @@ float ApplyFoveatedOutputFade(float shadow, float centerWeight)
 	float otherDepth = SrcDepthTexture[r.otherPx];
 
 	// Skip if other eye sees mask, sky, or first-person geometry
-	if (otherDepth < 1e-5 || otherDepth >= 1.0 || SharedData::GetScreenDepth(otherDepth) < VR_FP_Z) {
+	if (abs(otherDepth - DepthOrder::Near()) < 1e-5 || otherDepth == DepthOrder::Far() || SharedData::GetScreenDepth(otherDepth) < VR_FP_Z) {
 		OutShadowTexture[dtid] = ApplyFoveatedOutputFade(myShadow, centerWeight);
 		return;
 	}
@@ -185,7 +186,7 @@ float ApplyFoveatedOutputFade(float shadow, float centerWeight)
 	// reprojection can cross a boundary invisible from this eye's perspective.
 	// Reusing the same four neighbor reads covers both purposes at no extra cost.
 	float4 otherNeighbors = SampleCrossDepths(r.otherPx, kEdgeMargin, 1 - eyeIndex);
-	if (any(otherNeighbors < 1e-5) || Stereo::MaxDepthDiff(otherDepth, otherNeighbors) > kEdgeDepthThreshold) {
+	if (any(abs(otherNeighbors - DepthOrder::Near()) < 1e-5) || Stereo::MaxDepthDiff(otherDepth, otherNeighbors) > kEdgeDepthThreshold) {
 		OutShadowTexture[dtid] = ApplyFoveatedOutputFade(myShadow, centerWeight);
 		return;
 	}

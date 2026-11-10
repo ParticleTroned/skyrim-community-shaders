@@ -5,7 +5,7 @@
 // two eyes visibly disagree. Edge checks from #1948 skip source and destination
 // depth discontinuities to avoid halos at silhouettes and HMD-mask boundaries.
 
-#include "Common/FrameBuffer.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/VR.hlsli"
 #include "Common/VRReproject.hlsli"
 
@@ -37,8 +37,7 @@ float4 SampleCrossDepths(int2 center, int offset, uint eyeIndex)
 		DepthTexture[Stereo::ClampToEyeBounds(center + int2(0, -offset), eyeIndex, FrameDim)]);
 }
 
-[numthreads(8, 8, 1)] void main(uint2 dtid : SV_DispatchThreadID)
-{
+[numthreads(8, 8, 1)] void main(uint2 dtid : SV_DispatchThreadID) {
 	if (any(dtid >= uint2(FrameDim)))
 		return;
 
@@ -49,8 +48,8 @@ float4 SampleCrossDepths(int2 center, int offset, uint eyeIndex)
 	float centerDepth = DepthTexture[dtid];
 	float4 blendedColor = centerColor;
 
-	// depth == 0.0: VR HMD mask. depth == 1.0: sky/far plane.
-	bool skipPixel = centerDepth < 1e-5 || centerDepth >= 1.0;
+	// HMD mask and sky samples cannot establish a stereo correspondence.
+	bool skipPixel = !DepthOrder::IsInteriorDepth(centerDepth, 1e-5);
 	if (!skipPixel) {
 		float4 srcEdgeDepths = SampleCrossDepths(dtid, 1, eyeIndex);
 		if (Stereo::MaxDepthDiff(centerDepth, srcEdgeDepths) <= kEdgeDepthThreshold) {
@@ -59,13 +58,13 @@ float4 SampleCrossDepths(int2 center, int offset, uint eyeIndex)
 				float otherDepth = DepthTexture[r.otherPx];
 				float4 dstEdgeDepths = SampleCrossDepths(r.otherPx, kEdgeMargin, 1 - eyeIndex);
 
-				if (!any(dstEdgeDepths < 1e-5) && Stereo::MaxDepthDiff(otherDepth, dstEdgeDepths) <= kEdgeDepthThreshold) {
+				if (!any(FrameBuffer::ToStandardDepth(dstEdgeDepths) < 1e-5) && Stereo::MaxDepthDiff(otherDepth, dstEdgeDepths) <= kEdgeDepthThreshold) {
 					float4 otherColor = ColorTexture[r.otherPx];
 					Stereo::FinalizeStereoBlend(r, uv, centerDepth, otherDepth, eyeIndex, FrameDim, DepthSigma, MaxBlendFactor, kBackCheckThreshold);
 
 					if (r.backCheckPassed) {
 						float colorDiff = abs(dot(centerColor.rgb, float3(0.2126, 0.7152, 0.0722)) -
-						                      dot(otherColor.rgb, float3(0.2126, 0.7152, 0.0722)));
+											  dot(otherColor.rgb, float3(0.2126, 0.7152, 0.0722)));
 						float colorThreshold = max(ColorDiffThreshold, 1e-5);
 						float colorGate = smoothstep(colorThreshold * 0.5, colorThreshold * 2.0, colorDiff);
 						r.blendWeight *= colorGate;

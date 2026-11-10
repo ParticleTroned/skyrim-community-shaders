@@ -21,6 +21,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#include "Common/DepthOrder.hlsli"
+
 globallycoherent RWTexture2D<float> SpdMip1 : register(u0);
 globallycoherent RWTexture2D<float> SpdMip2 : register(u1);
 globallycoherent RWTexture2D<float> SpdMip3 : register(u2);
@@ -103,7 +105,7 @@ void SpdStore(int2 pix, float value, uint index)
 
 float SpdReduce4(float a, float b, float c, float d)
 {
-	return max(max(a, b), max(c, d));
+	return DepthOrder::Farthest(DepthOrder::Farthest(a, b), DepthOrder::Farthest(c, d));
 }
 
 void SpdStoreIntermediate(uint x, uint y, float value)

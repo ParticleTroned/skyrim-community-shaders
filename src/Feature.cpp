@@ -1,4 +1,5 @@
 #include "Feature.h"
+#include "Features/ReverseZ.h"
 #include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsPage.h"
 
@@ -13,6 +14,7 @@
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/FoliageLighting.h"
+#include "Features/FurShells.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/GrassOptimizations.h"
@@ -30,8 +32,10 @@
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"
+#include "Features/SeasonalWeather.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
+#include "Features/SnowCover.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
@@ -259,6 +263,7 @@ namespace
 	const std::vector<Feature*>& GetAllFeatures()
 	{
 		static std::vector<Feature*> features = {
+			&globals::features::reverseZ,
 			&globals::features::truePBR,
 			&globals::features::foliageLighting,
 			&globals::features::adaptiveBrightness,
@@ -287,6 +292,9 @@ namespace
 			&globals::features::lodBlending,
 			&globals::features::inverseSquareLighting,
 			&globals::features::hairSpecular,
+			&globals::features::furShells,
+			&globals::features::snowCover,
+			&globals::features::seasonalWeather,
 			&globals::features::terrainVariation,
 			&globals::features::ibl,
 			&globals::features::extendedTranslucency,
@@ -372,6 +380,14 @@ std::vector<std::string> Feature::GetLoadedFeatureNames()
 	return names;
 }
 
+void Feature::DisableForConflict(std::string_view a_conflict)
+{
+	loaded = false;
+	conflictMessage = std::format("This feature is disabled because {} was detected. They cannot be used together.", a_conflict);
+	FeatureIssues::AddFeatureIssue(GetShortName(), version, conflictMessage, FeatureIssues::FeatureIssueInfo::IssueType::CONFLICT);
+	logger::warn("[{}] {}", GetDisplayName(), conflictMessage);
+}
+
 bool Feature::ToggleAtBootSetting()
 {
 	auto state = globals::state;
@@ -419,9 +435,10 @@ bool Feature::ReapplyOverrideSettings()
 		return false;
 
 	const auto restoreOriginalSettings = [&]() noexcept {
+		bool settingsRestored = false;
 		try {
 			LoadSettings(originalSettings);
-			synchronizeWeatherBaseline();
+			settingsRestored = true;
 		} catch (const std::exception& e) {
 			logger::error(
 				"Failed to restore settings after applying overrides for {}: {}",
@@ -429,6 +446,36 @@ bool Feature::ReapplyOverrideSettings()
 		} catch (...) {
 			logger::error(
 				"Failed to restore settings after applying overrides for {}",
+				featureName);
+		}
+
+		if (!settingsRestored) {
+			try {
+				RestoreDefaultSettings();
+			} catch (const std::exception& e) {
+				logger::error(
+					"Failed to restore defaults after override recovery failed for {}: {}",
+					featureName, e.what());
+				return;
+			} catch (...) {
+				logger::error(
+					"Failed to restore defaults after override recovery failed for {}",
+					featureName);
+				return;
+			}
+			logger::warn("Restored defaults after override recovery failed for {}", featureName);
+		}
+
+		// A weather refresh failure must not discard successfully recovered settings.
+		try {
+			synchronizeWeatherBaseline();
+		} catch (const std::exception& e) {
+			logger::error(
+				"Failed to synchronize weather after override recovery for {}: {}",
+				featureName, e.what());
+		} catch (...) {
+			logger::error(
+				"Failed to synchronize weather after override recovery for {}",
 				featureName);
 		}
 	};
@@ -466,11 +513,17 @@ void Feature::DrawUnloadedUI()
 	if (!failedLoadedMessage.empty()) {
 		// Use error color for all failure messages
 		auto& themeSettings = Menu::GetSingleton()->GetTheme();
-		ImGui::TextColored(themeSettings.StatusPalette.Error, failedLoadedMessage.c_str());
+		ImGui::TextColored(themeSettings.StatusPalette.Error, "%s", failedLoadedMessage.c_str());
 		return;
 	}
 
-	// Fallback: Always show missing file message when no specific failure message exists
+	if (!conflictMessage.empty()) {
+		auto& themeSettings = Menu::GetSingleton()->GetTheme();
+		ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", conflictMessage.c_str());
+		return;
+	}
+
+	// Missing-file guidance applies only when no specific reason is available.
 	auto& themeSettings = Menu::GetSingleton()->GetTheme();
 	auto ini_filename = std::format("{}.ini", GetShortName());
 	// Get the minimum required version to include in the error message
@@ -480,7 +533,7 @@ void Feature::DrawUnloadedUI()
 		"This feature is not installed or may not yet be available! Version required: {} version {}",
 		ini_filename,
 		requiredVersion);
-	ImGui::TextColored(themeSettings.StatusPalette.Error, missingFileMessage.c_str());
+	ImGui::TextColored(themeSettings.StatusPalette.Error, "%s", missingFileMessage.c_str());
 
 	// Also show feature summary if available
 	auto [description, keyFeatures] = GetFeatureSummary();

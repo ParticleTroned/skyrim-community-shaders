@@ -6,11 +6,13 @@ file(READ "${PROJECT_ROOT}/src/Hooks.cpp" _hooks)
 file(READ "${PROJECT_ROOT}/src/TruePBR.cpp" _pbr)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp" _character)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.h" _character_header)
+extract_between("${_cache}" "bool ShaderCache::IsSupportedShader(const RE::BSShader& shader)"
+    "RE::BSGraphics::VertexShader* ShaderCache::GetVertexShaderIfCached(" "shader_support.h")
 extract_between("${_cache}" "RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader("
     "RE::BSGraphics::ComputeShader* ShaderCache::GetComputeShader(" "pixel_lookup.h")
 extract_between("${_header}" "static constexpr uint32_t GetCharacterCategoryFlag("
     "/** Draw lookups" "category_flag.h")
-extract_between("${_hooks}" "struct BSShader__BeginTechnique_SetPixelShader"
+extract_between("${_hooks}" "struct BSShader__BeginTechnique_SetVertexShader"
     "struct CreateDepthStencil_PrecipitationMask" "pixel_binding.h")
 extract_between("${_character}" "void Increment(std::uint64_t&"
     "void Increment(std::uint32_t&" "diagnostic_increment.h")
@@ -35,7 +37,7 @@ endforeach()
 extract_between("${_pbr}" "auto* boundShader = *globals::game::currentPixelShader;"
     "const auto* pbr = static_cast<const BSLightingShaderMaterialPBR*>" "grass_material_admission.h")
 
-extract_between("${_header}" "enum class LightingShaderFlags"
+extract_between("${_header}" "enum class LightingShaderTechniques"
     "enum class BloodSplatterShaderTechniques" "lighting_flags.h")
 extract_between("${_cache}" "void ShaderCache::PrewarmDeferredPixelShaders("
     "RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(" "pixel_prewarm.h")

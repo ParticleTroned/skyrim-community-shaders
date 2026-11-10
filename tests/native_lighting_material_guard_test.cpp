@@ -24,18 +24,20 @@ namespace
 	bool shadowRejected = false;
 	std::atomic<int> warnings = 0;
 	std::atomic<int> materialProbeReads = 0;
+	std::atomic<int> materialFeatureReads = 0;
 	struct WarningSnapshot
 	{
 		std::uintptr_t material = 0;
 		int32_t index = -1;
 		bool indexRead = false;
 	};
-	std::array<WarningSnapshot, 6> warningSnapshots;
+	std::array<WarningSnapshot, 7> warningSnapshots;
 	int failures = 0;
 	DWORD injectedRuntimeException = 0;
 	DWORD injectedShaderException = 0;
 	DWORD injectedWarningException = 0;
 	DWORD injectedNativeException = 0;
+	DWORD injectedFeatureException = 0;
 	bool particleAccepted = true;
 	bool invalidateAfterNativeDraw = false;
 	bool argumentsPreserved = true;
@@ -56,6 +58,7 @@ namespace
 	{
 		nativeCalls = particleCalls = terrainCalls = interiorCalls = shadowCalls = 0;
 		materialProbeReads = 0;
+		materialFeatureReads = 0;
 		argumentsPreserved = true;
 	}
 }
@@ -93,7 +96,22 @@ namespace RE
 	};
 	struct alignas(8) BSShaderMaterial
 	{
-		std::array<std::byte, 0x38> baseBytes{};
+		enum class Feature
+		{
+			kDefault,
+			kEnvironmentMap,
+			kEye = 16
+		};
+		virtual ~BSShaderMaterial() = default;
+		Feature feature = Feature::kDefault;
+		std::array<std::byte, 0x2C> baseBytes{};
+		virtual Feature GetFeature() const
+		{
+			++materialFeatureReads;
+			if (injectedFeatureException)
+				RaiseException(injectedFeatureException, 0, 0, nullptr);
+			return feature;
+		}
 	};
 	struct BSLightingShaderMaterialBase : BSShaderMaterial
 	{
@@ -294,10 +312,10 @@ static_assert(sizeof(RE::BSShaderProperty) == 0x88);
 static_assert(offsetof(RE::BSRenderPass, shaderProperty) == 8);
 static_assert(sizeof(RE::BSRenderPass) == 0x48);
 
-bool ProbeExceptionReachesCaller(RE::BSRenderPass* pass, DWORD exceptionCode)
+bool ProbeExceptionReachesCaller(RE::BSRenderPass* pass, DWORD exceptionCode, uint32_t drawTechnique = technique)
 {
 	__try {
-		Hooks::ShouldSkipInvalidVRLightingMaterial(pass, technique);
+		Hooks::ShouldSkipInvalidVRLightingMaterial(pass, drawTechnique);
 	} __except (GetExceptionCode() == exceptionCode ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
 		return true;
 	}
@@ -348,6 +366,8 @@ int main()
 			Check(argumentsPreserved, "Accepted draws must preserve all native call arguments");
 			if (allowed && vrRuntime)
 				Check(materialProbeReads == 1, "Ordinary VR admission must probe material validity exactly once per entry");
+			if (!vrRuntime)
+				Check(materialFeatureReads == 0, "SE and AE admission must never call the VR material virtual method");
 		}
 	};
 	auto runIndex = [&](int32_t index, bool allowed, uint32_t drawTechnique = technique) {
@@ -449,6 +469,63 @@ int main()
 	}
 	Check(warnings == 6, "Warnings must be bounded once per rejection reason");
 	runIndex(-1, true);
+	{
+		constexpr uint32_t environmentTechnique = 0x4940022F;
+		using Feature = RE::BSShaderMaterial::Feature;
+		shader.currentRawTechnique = 0;
+		for (const auto index : { -1, 0, 124 }) {
+			runIndex(index, false, environmentTechnique);
+			runIndex(index, false, environmentTechnique);
+		}
+		Check(warnings == 7, "Environment layout mismatches must add one bounded warning");
+		for (int feature = -1; feature <= 19; ++feature) {
+			material.feature = static_cast<Feature>(feature);
+			runIndex(-1, material.feature == Feature::kEnvironmentMap || material.feature == Feature::kEye, environmentTechnique);
+		}
+		material.feature = Feature::kEnvironmentMap;
+		runIndex(-1, true, environmentTechnique);
+		runIndex(0, true, environmentTechnique);
+		material.feature = Feature::kEye;
+		runIndex(-1, true, environmentTechnique);
+		globals::features::lightLimitFix.onCheck = +[](RE::BSRenderPass* currentPass) {
+			currentPass->shaderProperty->material->feature = Feature::kDefault;
+		};
+		ResetCalls();
+		Hooks::BSBatchRenderer_RenderPassImmediately2::thunk(&pass, environmentTechnique, true, renderFlags);
+		Check(nativeCalls == 0 && materialProbeReads == 2,
+			"A material layout changed by particle routing must be rejected before native setup");
+		globals::features::lightLimitFix.onCheck = nullptr;
+		material.feature = Feature::kDefault;
+		constexpr auto pbr = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr);
+		runIndex(-1, true, environmentTechnique + pbr);
+		Check(materialFeatureReads == 0, "Custom PBR setup must bypass native environment layout inspection");
+		globals::features::truePBR.settings.Enabled = 0;
+		runIndex(-1, false, environmentTechnique + pbr);
+		globals::features::truePBR.settings.Enabled = 1;
+		globals::features::truePBR.loaded = false;
+		runIndex(-1, false, environmentTechnique + pbr);
+		globals::features::truePBR.loaded = true;
+		injectedFeatureException = EXCEPTION_ACCESS_VIOLATION;
+		runIndex(-1, false, environmentTechnique);
+		Check(materialFeatureReads == 1, "A fault inside the material virtual call must be contained by the snapshot guard");
+		runIndex(-1, true);
+		Check(materialFeatureReads == 0, "Ordinary lighting must not call the environment material virtual method");
+		runIndex(-1, true, environmentTechnique + pbr);
+		runIndex(125, false, environmentTechnique);
+		Check(materialFeatureReads == 0, "An invalid native target must be rejected before virtual material inspection");
+		material.diffuseRenderTargetSourceIndex = -1;
+		injectedFeatureException = EXCEPTION_INT_DIVIDE_BY_ZERO;
+		Check(ProbeExceptionReachesCaller(&pass, injectedFeatureException, environmentTechnique),
+			"Non-AV exceptions from material virtual methods must propagate");
+		injectedFeatureException = 0;
+		vrRuntime = false;
+		runIndex(-1, true, environmentTechnique);
+		vrRuntime = true;
+		shader.currentRawTechnique = (environmentTechnique - technique);
+		runIndex(-1, true);
+		shader.currentRawTechnique = 0;
+		expectedTechnique = technique;
+	}
 
 	shadowRejected = true;
 	for (const bool runtime : { false, true }) {
@@ -642,6 +719,18 @@ int main()
 		pass.shaderProperty = reinterpret_cast<RE::BSShaderProperty*>(end - 0x78);
 		run(&pass, false);
 		pass.shaderProperty = &property;
+		auto* boundaryMaterial = reinterpret_cast<RE::BSLightingShaderMaterialBase*>(end - sizeof(material));
+		std::memcpy(boundaryMaterial, &material, sizeof(material));
+		property.material = boundaryMaterial;
+		run(&pass, false, 0x4940022F);
+		run(&pass, true);
+		void* savedTable = nullptr;
+		std::memcpy(&savedTable, boundaryMaterial, sizeof(savedTable));
+		void* unreadableTable = end;
+		std::memcpy(boundaryMaterial, &unreadableTable, sizeof(unreadableTable));
+		run(&pass, false, 0x4940022F);
+		run(&pass, true);
+		std::memcpy(boundaryMaterial, &savedTable, sizeof(savedTable));
 		property.material = reinterpret_cast<RE::BSShaderMaterial*>(end - 0x50);
 		run(&pass, false);
 		run(&pass, false, technique + pbrFlag);

@@ -2047,7 +2047,8 @@ namespace Hooks
 		InvalidProperty = 1u << 2,
 		InvalidMaterial = 1u << 3,
 		InvalidRenderTarget = 1u << 4,
-		Unreadable = 1u << 5
+		Unreadable = 1u << 5,
+		InvalidEnvironmentMaterial = 1u << 6
 	};
 
 	struct VRLightingMaterialSnapshot
@@ -2073,14 +2074,26 @@ namespace Hooks
 			return VRLightingMaterialRejection::InvalidMaterial;
 		a_snapshot.renderTargetIndex = a_snapshot.material->diffuseRenderTargetSourceIndex;
 		a_snapshot.indexRead = true;
-		if (a_snapshot.renderTargetIndex == -1 || Util::IsValidRenderTargetIndex(a_snapshot.renderTargetIndex))
+		const bool validRenderTarget = a_snapshot.renderTargetIndex == -1 || Util::IsValidRenderTargetIndex(a_snapshot.renderTargetIndex);
+		const auto rawTechnique = a_technique >= RE::BSLightingShader::kTechniqueIDBase ?
+		                              a_technique - RE::BSLightingShader::kTechniqueIDBase :
+		                              0u;
+		// Admission uses the queued technique; the shader can still describe the previous draw.
+		const bool environmentSetup = ((rawTechnique >> 24) & 0x3F) == static_cast<uint32_t>(SIE::ShaderCache::LightingShaderTechniques::Envmap);
+		if (validRenderTarget && !environmentSetup)
 			return VRLightingMaterialRejection::None;
 
-		// The shader's current technique can still belong to the previous draw at admission.
 		if (a_technique >= RE::BSLightingShader::kTechniqueIDBase &&
-			globals::features::truePBR.UsesCustomMaterialSetup(a_technique - RE::BSLightingShader::kTechniqueIDBase))
+			globals::features::truePBR.UsesCustomMaterialSetup(rawTechnique))
 			return VRLightingMaterialRejection::None;
-		return VRLightingMaterialRejection::InvalidRenderTarget;
+		if (!validRenderTarget)
+			return VRLightingMaterialRejection::InvalidRenderTarget;
+
+		// Eye materials share the environment texture prefix consumed by native setup.
+		const auto feature = a_snapshot.material->GetFeature();
+		return feature == RE::BSShaderMaterial::Feature::kEnvironmentMap || feature == RE::BSShaderMaterial::Feature::kEye ?
+		           VRLightingMaterialRejection::None :
+		           VRLightingMaterialRejection::InvalidEnvironmentMaterial;
 	}
 
 	__declspec(noinline) void LogRejectedVRLightingMaterial(RE::BSRenderPass* a_pass, uint32_t a_technique,

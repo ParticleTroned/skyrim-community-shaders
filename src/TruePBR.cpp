@@ -1199,13 +1199,10 @@ struct BSLightingShaderProperty_GetRenderPasses_LocalMap
 
 bool TruePBR::UsesCustomMaterialSetup(uint32_t rawTechnique) const
 {
-	if (!loaded || !settings.Enabled)
-		return false;
-
 	using enum SIE::ShaderCache::LightingShaderTechniques;
 	const auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((rawTechnique >> 24) & 0x3F);
-	return lightingType != LODLand && lightingType != LODLandNoise &&
-	       (rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0;
+	return (rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0 &&
+	       lightingType != LODLand && lightingType != LODLandNoise && loaded && settings.Enabled;
 }
 
 bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)

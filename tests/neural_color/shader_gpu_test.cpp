@@ -66,7 +66,8 @@ static ComPtr<ID3D11ComputeShader> Compile(ID3D11Device* device, const std::file
 	const D3D_SHADER_MACRO* defines = nullptr)
 {
 	ComPtr<ID3DBlob> bytecode, errors;
-	PackageIncludes includes(shaderRoot.empty() ? path.parent_path().parent_path().parent_path() : shaderRoot);
+	PackageIncludes includes(shaderRoot.empty() ? path.parent_path().parent_path().parent_path() : shaderRoot,
+		std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() / "package/Shaders");
 	const auto result = D3DCompileFromFile(path.c_str(), defines, &includes,
 		"main", "cs_5_0", flags, 0, &bytecode, &errors);
 	if (errors)
@@ -516,6 +517,9 @@ int main(int argc, char** argv)
 			directory.parent_path().parent_path(), flags);
 		std::printf("Packed shader compiler: %s\n", optimized ? "production optimization" : "IEEE strict");
 		CheckLightingPreservation(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get(), optimized);
+		const D3D_SHADER_MACRO referenceDefines[]{ { "CSX_PERF_REFERENCE_FLAGS", "32" }, { nullptr, nullptr } };
+		const auto referenceReconstruct = Compile(device.Get(), directory / "ColorReconstructCS.hlsl", {}, flags, referenceDefines);
+		CheckPreparationReference(device.Get(), context.Get(), packedReconstruct.Get(), referenceReconstruct.Get(), rounding.Get(), cb.Get());
 		CheckPackedLightingPreservation(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get());
 		CheckPackedRounding(device.Get(), context.Get(), rounding.Get(), cb.Get());
 		CheckPackedDetail(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get());

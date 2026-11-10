@@ -8,6 +8,7 @@
 
 #include "BuildProvenance.h"
 #include "Deferred.h"
+#include "Diagnostics/PerformanceCostExperiments.h"
 #include "Features/LightLimitFix.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
@@ -47444,7 +47445,11 @@ bool Upscaling::PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uin
 			profile.centerHorizontalScale, GetRuntimeUpscaleMethod(), false,
 			useSharedFovMask ? &sharedMaskProfile : nullptr))
 		return false;
-	NeuralRendering::ComputeStateGuard<1> stateGuard(context);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::optional<NeuralRendering::ComputeStateGuard<1>> referenceStateGuard;
+	if (CSX::Diagnostics::PerformanceCosts::ReferenceEnabled(CSX::Diagnostics::PerformanceCosts::Point::NeuralPreparation))
+		referenceStateGuard.emplace(context);
+#endif
 	uint32_t emptyEyeMask = 0;
 	for (uint32_t eye = 0; eye < eyeCount; ++eye) {
 		const auto& rect = foveatedRectCache.rects[eye];
@@ -47473,6 +47478,13 @@ bool Upscaling::PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uin
 		}
 	}
 	const auto copyGuides = [&]() {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::optional<NeuralRendering::ComputeStateGuard<1>> stateGuard;
+		if (!referenceStateGuard)
+			stateGuard.emplace(context);
+#else
+		NeuralRendering::ComputeStateGuard<1> stateGuard(context);
+#endif
 		const auto capture = CaptureNeuralStage(role, 2u, globals::state->frameCount,
 			sourceWorldFrame, generation, "full_resolution_guide_preparation");
 		CS_GPU_PASS_CAPTURE("NeuralRendering::PrepareFullResolutionGuides", capture);

@@ -52,7 +52,8 @@ static Texture Make(ID3D11Device* device, UINT size, Pixel value, DXGI_FORMAT fo
 static ComPtr<ID3D11ComputeShader> Compile(ID3D11Device* d, const std::filesystem::path& path)
 {
 	ComPtr<ID3DBlob> bytes, errors;
-	PackageIncludes includes(path.parent_path().parent_path().parent_path());
+	PackageIncludes includes(path.parent_path().parent_path().parent_path(),
+		std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() / "package/Shaders");
 	auto hr = D3DCompileFromFile(path.c_str(), nullptr, &includes, "main", "cs_5_0",
 		D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_IEEE_STRICTNESS, 0, &bytes, &errors);
 	if (errors)

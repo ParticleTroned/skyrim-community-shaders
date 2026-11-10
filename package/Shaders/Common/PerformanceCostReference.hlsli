@@ -1,0 +1,17 @@
+#ifndef __PERFORMANCE_COST_REFERENCE_HLSLI__
+#define __PERFORMANCE_COST_REFERENCE_HLSLI__
+
+#define CSX_PERF_SNOW_MELT_FIRE_REUSE 1
+#define CSX_PERF_GRASS_TILE_FILTER 2
+#define CSX_PERF_FUR_CONTACT_REJECT 4
+#define CSX_PERF_SNOW_WEATHER_RANGE 8
+#define CSX_PERF_POINT_LIGHT_COMPOSITION 16
+#define CSX_PERF_NEURAL_PREPARATION 32
+#define CSX_PERF_REVERSE_Z_BINDINGS 64
+
+// The DevBench renderer owns nonzero reference permutations; shipped shaders use zero.
+#ifndef CSX_PERF_REFERENCE_FLAGS
+#	define CSX_PERF_REFERENCE_FLAGS 0
+#endif
+
+#endif

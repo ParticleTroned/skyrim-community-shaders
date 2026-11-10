@@ -417,6 +417,12 @@ namespace NeuralRendering
 
 		/** Request coalesced shader-only invalidation at the completed-frame maintenance boundary. */
 		void ResetShaderCache();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Queues output-equivalent colour shader references without discarding temporal histories. */
+		void ResetReferenceShaders();
+		/** Reports pending shader invalidation without taking the renderer lifecycle lock. */
+		[[nodiscard]] bool HasPendingShaderInvalidation() const noexcept;
+#endif
 
 		/** Observe output and runtime admission under the shared renderer lifecycle lock. */
 		[[nodiscard]] RendererSnapshot GetSnapshot() const;

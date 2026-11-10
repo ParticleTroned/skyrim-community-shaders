@@ -27,6 +27,7 @@ public:
 	struct ShaderDefinesSnapshot
 	{
 		std::string canonicalText;
+		std::string authoredText;
 		std::vector<std::pair<std::string, std::string>> defines;
 	};
 

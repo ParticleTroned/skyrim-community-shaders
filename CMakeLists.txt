@@ -1788,6 +1788,49 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    set(_performance_cost_defines_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/performance-cost-defines"
+    )
+    set(_performance_cost_defines_header
+        "${_performance_cost_defines_dir}/performance_cost_defines_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_performance_cost_defines_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_performance_cost_defines_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_performance_cost_defines.cmake"
+        DEPENDS
+            src/State.cpp
+            tests/extract_performance_cost_defines.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    foreach(_suffix IN ITEMS on off)
+        add_controller_test(performance_cost_experiments_${_suffix}_test PerformanceCostExperiments_${_suffix} tests/performance_cost_experiments_test.cpp)
+        target_sources(
+            performance_cost_experiments_${_suffix}_test
+            PRIVATE "${_performance_cost_defines_header}"
+        )
+        target_include_directories(
+            performance_cost_experiments_${_suffix}_test
+            PRIVATE "${_performance_cost_defines_dir}"
+        )
+        target_link_libraries(
+            performance_cost_experiments_${_suffix}_test
+            PRIVATE pystring::pystring
+        )
+        if(_suffix STREQUAL "on")
+            target_compile_definitions(
+                performance_cost_experiments_${_suffix}_test
+                PRIVATE DEVBENCH_BRIDGE_ENABLED
+            )
+            target_link_libraries(
+                performance_cost_experiments_${_suffix}_test
+                PRIVATE nlohmann_json::nlohmann_json
+            )
+        endif()
+    endforeach()
     add_controller_test(shader_descriptor_test ShaderDescriptor tests/shader_descriptor_test.cpp)
     add_controller_test(texture_alpha_test TextureAlpha tests/texture_alpha_test.cpp)
     target_link_libraries(

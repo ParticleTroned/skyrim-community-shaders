@@ -1,4 +1,5 @@
 #include "State.h"
+#include "Diagnostics/PerformanceCostExperiments.h"
 #include "Features/ReverseZ.h"
 #include "Features/UnifiedWater.h"
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
@@ -877,6 +878,9 @@ void State::UpdateSaveLoadSafeMode()
 
 void State::Reset()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	CSX::Diagnostics::PerformanceCosts::ProcessPendingChanges();
+#endif
 	selectedCustomPixelShaderType = RE::BSShader::Type::None;
 	if (globals::game::isVR)
 		globals::profiler->EndFrame(frameCount);
@@ -1539,7 +1543,7 @@ void State::SaveToJson(
 	json advanced;
 	advanced["Dump Shaders"] = shaderCache->IsDump();
 	advanced["Log Level"] = logLevel;
-	advanced["Shader Defines"] = GetShaderDefinesSnapshot()->canonicalText;
+	advanced["Shader Defines"] = GetShaderDefinesSnapshot()->authoredText;
 	advanced["Compiler Threads"] = shaderCache->compilationThreadCount;
 	advanced["Background Compiler Threads"] = shaderCache->backgroundCompilationThreadCount;
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
@@ -1879,7 +1883,7 @@ void State::SetDefines(std::string a_defines)
 			continue;
 		}
 		auto name = pystring::strip(token[0]);
-		if (name == "REVERSE_Z" || name.starts_with("CSX_DEPTH_ORDER_TEST_")) {
+		if (name == "REVERSE_Z" || name.starts_with("CSX_DEPTH_ORDER_TEST_") || name == "CSX_PERF_REFERENCE_FLAGS") {
 			logger::warn("Depth convention defines are renderer-owned; ignoring {}", name);
 			continue;
 		}
@@ -1897,6 +1901,16 @@ void State::SetDefines(std::string a_defines)
 		snapshot.defines.emplace_back(std::move(name), std::move(definition));
 	}
 
+	snapshot.authoredText = snapshot.canonicalText;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (const auto reference = CSX::Diagnostics::PerformanceCosts::ShaderReferenceMask()) {
+		const auto definition = std::to_string(reference);
+		if (!snapshot.canonicalText.empty())
+			snapshot.canonicalText += ";";
+		snapshot.canonicalText += "CSX_PERF_REFERENCE_FLAGS=" + definition;
+		snapshot.defines.emplace_back("CSX_PERF_REFERENCE_FLAGS", definition);
+	}
+#endif
 	auto immutableSnapshot =
 		std::make_shared<const ShaderDefinesSnapshot>(std::move(snapshot));
 	shaderDefinesSnapshot.store(immutableSnapshot, std::memory_order_release);

@@ -6,6 +6,7 @@
 
 #	include "Api/DevBenchMainThreadDispatch.h"
 #	include "Diagnostics/SunReceiverTrace.h"
+#	include "Diagnostics/PerformanceCostExperiments.h"
 #	include "EngineFixes/SunShadowReceiverFix.h"
 #	include "EngineFixes/LightListSearchFix.h"
 #	include "EngineFixes/EmptyOverlayCullFix.h"
@@ -43,7 +44,7 @@ namespace
 {
 	using json = nlohmann::json;
 	using namespace CSX::FeatureAPI;
-	constexpr auto DevBenchSchemaRevision = 33;
+	constexpr auto DevBenchSchemaRevision = 34;
 	std::atomic_bool g_registered{ false };
 
 	CSX::Api::ServiceFoundation& Foundation()
@@ -204,6 +205,8 @@ namespace
 	json BuildResult(const json& args)
 	{
 		const auto action = args.value("action", std::string{});
+		if (args.contains("performanceCosts") && action != "performance_costs")
+			return Foundation().MakeError(args, "invalid_settings", "performanceCosts requires the performance_costs action", "validation", false, "performanceCosts");
 		for (const auto* field : { "seasonalWeather", "seasonalRegion" })
 			if (args.contains(field) && action != "seasonal_weather")
 				return Foundation().MakeError(args, "invalid_settings", "Seasonal fields require the seasonal_weather action", "validation", false, field);
@@ -240,6 +243,20 @@ namespace
 					result.value("detail", result.at("error").get<std::string>()), "request", false);
 			auto response = Foundation().MakeEnvelope(args, true);
 			response["result"] = std::move(result);
+			return response;
+		}
+		if (action == "performance_costs") {
+			auto result = OnMain([args] {
+				try {
+					return CSX::Diagnostics::PerformanceCosts::Control(args);
+				} catch (const std::invalid_argument& error) {
+					return json{ { "error", error.what() } };
+				}
+			});
+			if (result.contains("error"))
+				return Foundation().MakeError(args, "performance_reference_request_failed", result.at("error"), "request", false);
+			auto response = Foundation().MakeEnvelope(args, true);
+			response["result"] = json{ { "performanceCosts", std::move(result) } };
 			return response;
 		}
 		if (args.contains("lightListSearch") && action != "light_list_search")
@@ -398,6 +415,7 @@ namespace
 				{ "preflightTokenLifetimeMs", 30000 }, { "actions", json::array({ "reverse_z", "fur_shells", "terrain_seams", "registry", "snapshot", "features", "issues", "preset_compatibility", "settings", "sun_receiver", "sun_receiver_trace", "shadow_culling", "texture_streaming", "texture_streaming_pressure", "constraints", "preflight", "execute" }) },
 				{ "mutations", json::array({ "set_disabled_at_boot" }) }, { "legacyInterfacesPreserved", true } };
 			response["result"]["actions"].push_back("light_list_search");
+			response["result"]["actions"].push_back("performance_costs");
 			response["result"]["actions"].push_back("empty_overlay_cull");
 			response["result"]["actions"].push_back("light_attach");
 			response["result"]["actions"].push_back("anti_lag2");
@@ -617,6 +635,20 @@ namespace CSX::Api::FeatureDevBenchBridge
 			spec["outputSchema"]["properties"]["result"]["properties"]["antiLag2"] = { { "type", "object" }, { "properties", antiLagProperties } };
 			spec["description"] = spec["description"].get<std::string>() + " anti_lag2 inspects optional default-off AMD Anti-Lag 2 for supported SE/AE FSR Frame Generation sessions. Optional antiLag2.enabled changes the session preference; omit antiLag2 for read-only status. Menu Save persists the preference. Driver changes apply before the next physical input poll. Enabling is rejected on VR, unsupported hardware, missing FSR proxy, or a faulted/retired session. Active means the last pre-input driver update succeeded; it is not measured latency reduction. driverEnabled is the last acknowledged driver state; a fault with disableConfirmed=false means actual driver state is uncertain. Failures stop CPU delay calls until restart; context and device ownership survive incomplete presentation retirement. Temporary FSR generation suspension in menus retains session eligibility. No SDK FPS cap is used. Enabled mode adds driver calls and CPU waiting; latency/FPS effects are unmeasured. Supported AMD sessions retain an input hook and atomic checks while disabled, without per-frame driver work. No shader compilation is triggered.";
 			const auto lightAttachSchemas = LightLimitFixDetail::LightAttach::GetControlSchemas();
+			spec["inputSchema"]["properties"]["action"]["enum"].push_back("performance_costs");
+			spec["inputSchema"]["properties"]["performanceCosts"] = CSX::Diagnostics::PerformanceCosts::SettingsSchema();
+			spec["outputSchema"]["properties"]["result"]["properties"]["performanceCosts"] = {
+				{ "type", "object" }, { "properties", { { "settings", { { "type", "object" } } }, { "requestedSettings", { { "type", "object" } } },
+														  { "referenceMask", { { "type", "integer" }, { "minimum", 0 }, { "maximum", 127 } } },
+														  { "pending", { { "type", "boolean" } } }, { "sessionOnly", { { "type", "boolean" } } },
+														  { "shaderCompiling", { { "type", "boolean" } } }, { "ready", { { "type", "boolean" } } },
+														  { "failedShaderTasks", { { "type", "integer" }, { "minimum", 0 } } },
+														  { "transitionEpoch", { { "type", "integer" }, { "minimum", 0 } } },
+														  { "nrShaderInvalidationPending", { { "type", "boolean" } } },
+														  { "requiredConditions", { { "type", "object" } } } } }
+			};
+			spec["description"] = spec["description"].get<std::string>() +
+			                      " performance_costs inspects or stages independent DevBench-only optimization references. Optional performanceCosts is a partial object: true selects the optimized path, false its previous calculation. Settings are session-only and apply together at the next render-frame boundary; active measurements and shader compilation defer application without cancelling work. Feature enablement, visual parameters and temporal histories are preserved. GPU changes invalidate memory shader caches; default optimized permutations reuse production inputs, but first reference use may compile. Wait for pending=false and shaderCompiling=false, then settle before measuring total frame time. ready reports this control/compilation barrier only; requiredConditions explains scene applicability and is not proof of observed work. failedShaderTasks reports compiler failures separately. These controls do not start measurements, change weather, save settings, or clear disk caches.";
 			spec["inputSchema"]["properties"]["action"]["enum"].push_back("light_attach");
 			spec["inputSchema"]["properties"]["lightAttach"] = lightAttachSchemas.at("settings");
 			spec["outputSchema"]["properties"]["result"]["properties"]["lightAttach"] = lightAttachSchemas.at("status");

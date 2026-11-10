@@ -4780,6 +4780,7 @@ if(BUILD_CONTROLLER_TESTS)
         VRDepthCullingTemporalPolicy
         tests/vr_depth_culling_temporal_policy_test.cpp
     )
+    include("${PROJECT_SOURCE_DIR}/tests/vr_depth_culling_map_lifecycle.cmake")
     add_controller_test(
         vr_wand_interaction_policy_test
         VRWandInteractionPolicy

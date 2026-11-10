@@ -86,6 +86,8 @@ namespace VRDepthCullingTemporal
 
 	/** Install the Skyrim VR 1.4.15 producer and readback hooks. */
 	void Install();
+	/** Subscribe to map transitions once the UI is available on Skyrim VR 1.4.15. */
+	void RegisterMapEvents();
 	/** Enable temporal work only while native depth culling is active. */
 	void SetCullingEnabled(bool a_enabled);
 	/** Publish one temporal policy from the main-thread settings path. */

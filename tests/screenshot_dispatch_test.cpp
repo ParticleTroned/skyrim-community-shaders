@@ -294,7 +294,7 @@ struct ScreenshotApi
 	{
 		requests.at(sequence.requestId).state = result && result->success ? "completed" : "failed";
 	}
-	void TransitionLocked(RequestRecord& record, std::string state, std::string_view, json = json::object()) { record.state = std::move(state); }
+	void TransitionLocked(RequestRecord&, std::string, std::string_view, json = json::object());
 	void TryFinalizeSequenceLocked(SequenceRecord& sequence)
 	{
 		if (!sequence.preparationPending && sequence.inFlight == 0 && !sequence.finalizing &&
@@ -361,6 +361,15 @@ struct ScreenshotApi
 };
 
 #include "screenshot_dispatch_under_test.h"
+
+void ScreenshotApi::TransitionLocked(RequestRecord& record, std::string state, std::string_view, json)
+{
+	if (IsTerminal(record.state))
+		return;
+	record.state = std::move(state);
+	if (IsTerminal(record.state))
+		FinishSequenceChildLocked(record);
+}
 #include "screenshot_schedule_test.h"
 
 void AwaitResults(const std::shared_ptr<ScreenshotApi::WorkerState>& state, std::size_t preparation, std::size_t manifest)
